@@ -21,7 +21,7 @@ jobs:
       contents: read
       issues: write
       pull-requests: write
-    uses: jhw7500/automation/.github/workflows/gemini-dispatch.yml@444a7347aee169ed178aae80e8bd8d10eca52e02
+    uses: jhw7500/automation/.github/workflows/gemini-dispatch.yml@a08141d644ab1036cadd8167d48158e827dcd978
     with:
       repo_write_auth: github_app
       app_id: ${{ vars.APP_ID }}
