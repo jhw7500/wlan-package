@@ -18,6 +18,7 @@ jobs:
       issue_body: ${{ steps.issue.outputs.body }}
     steps:
       - name: Validate issue_number
+        shell: bash
         env:
           ISSUE_NUMBER: ${{ inputs.issue_number }}
         run: |
@@ -28,6 +29,7 @@ jobs:
 
       - name: Fetch issue
         id: issue
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -36,13 +38,22 @@ jobs:
           title="$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json title --jq .title)"
           body="$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json body --jq .body)"
 
-          echo "title<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$title" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          write_output() {
+            local name="$1"
+            local value="$2"
+            local delimiter='__AUTOMATION_OUTPUT__'
+            while [[ "$value" == *"$delimiter"* ]]; do
+              delimiter="${delimiter}_X"
+            done
+            {
+              printf '%s<<%s\n' "$name" "$delimiter"
+              printf '%s\n' "$value"
+              printf '%s\n' "$delimiter"
+            } >> "$GITHUB_OUTPUT"
+          }
 
-          echo "body<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$body" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          write_output title "$title"
+          write_output body "$body"
 
   triage:
     needs: prepare
@@ -50,7 +61,7 @@ jobs:
       contents: read
       issues: write
       pull-requests: write
-    uses: jhw7500/automation/.github/workflows/gemini-triage.yml@f1b85510717a681b0db94fd2b764716372c52435
+    uses: jhw7500/automation/.github/workflows/gemini-triage.yml@d3b102e2c1f62f6abf5a9a5a37da810e6ba3e7f5
     with:
       issue_number: ${{ inputs.issue_number }}
       issue_title: ${{ needs.prepare.outputs.issue_title }}
