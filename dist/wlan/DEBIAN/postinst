@@ -70,7 +70,9 @@ customctl() {
 }
 
   customctl systemd-networkd-wait-online masked
-  customctl dhcpcd disabled 
+  customctl dhcpcd disabled
+  customctl psplash-quit disabled
+  customctl weston disabled
 
   #customctl hciattach disabled
   customctl wifi_init enabled
@@ -134,6 +136,7 @@ makeDirectory() {
   cp /opt/wlan/config/logrotate.rsyslog /etc/logrotate.d/
   #cp /opt/wlan/config/rc.local /etc/
   cp /opt/wlan/config/rsyslog.conf /etc/
+  cp /opt/wlan/config/smb.conf /etc/samba/
 
   if [ ! -f /etc/systemd/network/20-mlan0.network ]; then
     logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /etc/systemd/network/20-mlan0.network"
