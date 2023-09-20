@@ -106,5 +106,5 @@ END
 sysctl -w net.ipv4.ip_forward=0
 #relayd -d -I $IFACE -I eth0 -G $GATEWAY
 #dumb eth0 $IFACE
-exec /usr/local/bin/dumb_test eth0 mlan0
+exec /usr/local/bin/dumb eth0 mlan0
 

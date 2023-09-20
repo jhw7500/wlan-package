@@ -1,0 +1,20 @@
+# /etc/systemd/system/switchd.service
+[Unit]
+Description=GPIO switch daemon (auto-compat v2/v1/sysfs)
+#After=multi-user.target
+#Before=wifi_init.service
+
+[Service]
+Type=simple
+#ExecStartPre=/bin/sleep 5
+#ExecStart=/usr/local/logger/switchd.py
+ExecStart=/usr/local/scripts/switchd.sh
+Restart=always
+RestartSec=1s
+User=root
+NoNewPrivileges=yes
+#StandardOutput=null
+#StandardError=null
+
+[Install]
+WantedBy=multi-user.target

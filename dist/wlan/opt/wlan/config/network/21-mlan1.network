@@ -1,5 +1,0 @@
-[Match]
-Name=mlan1
-
-[Network]
-DHCP=yes

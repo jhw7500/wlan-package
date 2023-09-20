@@ -33,7 +33,7 @@ disable_services_if_enabled() {
 case "$1" in
 configure)
   echo "postinst configure"
-  /usr/local/scripts/auto_fs_sizeup.sh 2 2
+  #/usr/local/scripts/auto_fs_sizeup.sh 2 2
 
 :<<'END'
   status=$(df |grep /dev/root |awk '{print $2}')
@@ -80,7 +80,7 @@ set_timezone() {
   fi
 }
 
-  set_timezone Japan
+  #set_timezone Japan
 
 customctl() {
     daemon_name=$1
@@ -104,6 +104,7 @@ customctl() {
 
     status=$(systemctl is-enabled $daemon_name 2>/dev/null)
     echo "$daemon_name is $status"
+    echo "[installer] installing..." > /dev/ttyGS0
 }
   mv /etc/init.d/samba /etc/init.d/samba.disabled
 
@@ -129,9 +130,14 @@ customctl() {
   customctl lighttpd disabled
   customctl nginx disabled
   customctl monkey disabled
+  customctl netdata disabled
   #customctl samba disabled
   #customctl hciattach disabled
 
+  customctl switchd enabled
+  customctl fake-hwclock.service enabled
+  customctl fake-hwclock.timer enabled
+  customctl journald-snapshot.timer enabled
   customctl wifi_init enabled
   customctl wifi_logger enabled
 
@@ -177,6 +183,11 @@ makeDirectory() {
 }
   makeDirectory /etc/wpa_supplicant
   makeDirectory /opt/wlan/mac
+  makeDirectory /usr/local/mfg
+  makeDirectory /usr/local/bin
+  makeDirectory /usr/local/logger
+  makeDirectory /usr/local/scripts
+
   touch /opt/wlan/mac/base0
   touch /opt/wlan/mac/base1
   touch /opt/wlan/mac/target0
@@ -184,7 +195,7 @@ makeDirectory() {
   touch /opt/wlan/mac/wired
   touch /opt/wlan/mac/wired_client
 
-  makeDirectory /var/log/cantops/journal
+  #makeDirectory /var/log/cantops/journal
   #echo "update dtb"
   #makeDirectory /root/boot
   #mount /dev/mmcblk2p1 /root/boot
@@ -211,14 +222,17 @@ makeDirectory() {
   sed -i "2s/.*/127.0.1.1 $hostname/g" -i /etc/hosts
 #  sed -i 's/#kernel.printk = 3 4 1 3/kernel.printk = 2 4 1 3/g' -i /etc/sysctl.conf
 
+  echo "[installer] installing....." > /dev/ttyGS0
+
   #/usr/local/scripts/add_line.sh "00 *      * * *    root        logrotate /etc/logrotate.d/logrotate.rsyslog" /etc/crontab
   #/usr/local/scripts/comment_line.sh "tmpfs                /var/volatile" /etc/fstab
   /usr/local/scripts/change_line.sh "#tmpfs                /var/volatile        tmpfs      defaults              0  0" "tmpfs                /var/volatile" /etc/fstab
   /usr/local/scripts/change_line.sh "ExecStart=/usr/sbin/wpa_supplicant -c/etc/wpa_supplicant/wpa_supplicant-%I.conf -i%I -d" "ExecStart=" /lib/systemd/system/wpa_supplicant@.service
   /usr/local/scripts/change_line.sh "Wants=network.target wifi_bridge@%i.service" "Wants=" /lib/systemd/system/wpa_supplicant@.service
-  /usr/local/scripts/change_line.sh "Storage=persistent" "Storage=" /etc/systemd/journald.conf
+  /usr/local/scripts/change_line.sh "Storage=volatile" "Storage=" /etc/systemd/journald.conf
   /usr/local/scripts/change_line.sh "SyncIntervalSec=1m" "SyncIntervalSec=" /etc/systemd/journald.conf
-  /usr/local/scripts/change_line.sh "RuntimeMaxUse=64M" "RuntimeMaxUse=" /etc/systemd/journald.conf
+  /usr/local/scripts/change_line.sh "RuntimeMaxUse=128M" "RuntimeMaxUse=" /etc/systemd/journald.conf
+  /usr/local/scripts/change_line.sh "RuntimeKeepFree=32M" "RuntimeKeepFree=" /etc/systemd/journald.conf
   /usr/local/scripts/change_line.sh "MaxLevelStore=info" "MaxLevelStore=" /etc/systemd/journald.conf
   /usr/local/scripts/change_line.sh "WatchdogDevice=/dev/watchdog" "WatchdogDevice=" /etc/systemd/system.conf
   /usr/local/scripts/change_line.sh "DefaultTimeoutStartSec=30s" "DefaultTimeoutStartSec=" /etc/systemd/system.conf
@@ -231,7 +245,10 @@ makeDirectory() {
   /usr/local/scripts/add_line.sh "SystemKeepFree=500M" /etc/systemd/journald.conf
   /usr/local/scripts/add_line.sh "watchdog-timeout=30" /etc/watchdog.conf
   /usr/local/scripts/change_line.sh "log-dir=/var/log/cantops" "log-dir" /etc/watchdog.conf
+  /usr/local/scripts/change_line.sh "#root" "root" /etc/vsftpd.ftpusers
+  /usr/local/scripts/change_line.sh "#root" "root" /etc/vsftpd.user_list
 
+  echo "[installer] installing......." >  /dev/ttyGS0
   cp /opt/wlan/config/logrotate.d/logrotate.rsyslog /etc/logrotate.d/
   cp /opt/wlan/config/rc.local /etc/
   cp /opt/wlan/config/rsyslog.conf /etc/
@@ -239,7 +256,9 @@ makeDirectory() {
   #cp /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/
   cp /opt/wlan/config/wifi_mod_para__.conf /lib/firmware/nxp/
   cp /opt/wlan/config/crontab /etc/
-  
+  #cp /opt/wlan/firmware/* /lib/firmware/nxp/
+  #cp /opt/wlan/driver/* /lib/modules/$KERNEL_VERSION/updates/
+
 copyFILE() {
   if [ ! -f $2 ]; then
     logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp $1 $2"
@@ -251,37 +270,31 @@ copyFILE() {
   #  cp /opt/wlan/config/wifi_mod_para__.conf /lib/firmware/nxp/wifi_mod_para__.conf
   #fi
 
+  copyFILE /opt/wlan/mfg/bridge_init.conf /usr/local/mfg/bridge_init.conf
   copyFILE /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/timesyncd.conf
+  copyFILE /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan0.conf /etc/wpa_supplicant/wpa_supplicant-mlan0.conf
+  copyFILE /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan1.conf /etc/wpa_supplicant/wpa_supplicant-mlan1.conf
+  copyFILE /opt/wlan/config/systemd/network/20-mlan0.network /etc/systemd/network/20-mlan0.network
+  copyFILE /opt/wlan/config/systemd/network/21-mlan1.network /etc/systemd/network/21-mlan1.network
+  copyFILE /opt/wlan/config/systemd/network/22-eth0.network /etc/systemd/network/22-eth0.network
+  copyFILE /opt/wlan/config/systemd/network/10-lo.network /etc/systemd/network/10-lo.network
+  copyFILE /opt/wlan/config/systemd/network/20-mlan0.link /etc/systemd/network/20-mlan0.link
+  copyFILE /opt/wlan/config/systemd/network/21-mlan1.link /etc/systemd/network/21-mlan1.link
+  copyFILE /opt/wlan/config/systemd/network/22-eth0.link /etc/systemd/network/22-eth0.link
 
-  if [ ! -f /etc/wpa_supplicant/wpa_supplicant-mlan0.conf ]; then
-    logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
-    cp /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan0.conf /etc/wpa_supplicant/wpa_supplicant-mlan0.conf
-  fi
+  echo "[installer] installing........." > /dev/ttyGS0
+  rm /usr/local/bin/dumb*
+  rm /usr/local/bin/mlan*
+  rm /usr/local/bin/iw*
+  ln -s /opt/wlan/bin/dumb /usr/local/bin/dumb
+  ln -s /opt/wlan/bin/iw /usr/local/bin/iw
+  ln -s /opt/wlan/bin/mlanutl /usr/local/bin/mlanutl
+  ln -s /opt/wlan/bin/mlan2040coex /usr/local/bin/mlan2040coex
+  ln -s /opt/wlan/bin/mlanconfig /usr/local/bin/mlanconfig
+  ln -s /opt/wlan/bin/mlanevent.exe /usr/local/bin/mlanevent
 
-  if [ ! -f /etc/wpa_supplicant/wpa_supplicant-mlan1.conf ]; then
-    logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /etc/wpa_supplicant/wpa_supplicant-mlan1.conf"
-    cp /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan1.conf /etc/wpa_supplicant/wpa_supplicant-mlan1.conf
-  fi
-
-  if [ ! -f /etc/systemd/network/20-mlan0.network ]; then
-    logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /etc/systemd/network/20-mlan0.network"
-    cp /opt/wlan/config/systemd/network/20-mlan0.network /etc/systemd/network/
-  fi
-
-  if [ ! -f /etc/systemd/network/21-mlan1.network ]; then
-    logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /etc/systemd/network/21-mlan1.network"
-    cp /opt/wlan/config/systemd/network/21-mlan1.network /etc/systemd/network/
-  fi
-
-  if [ ! -f /etc/systemd/network/22-eth0.network ]; then
-    logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /etc/systemd/network/22-eth0.network"
-    cp /opt/wlan/config/systemd/network/22-eth0.network /etc/systemd/network/
-  fi
-
-  if [ ! -f /etc/systemd/network/10-lo.network ]; then
-    logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /etc/systemd/network/10-lo.network"
-    cp /opt/wlan/config/systemd/network/10-lo.network /etc/systemd/network/
-  fi
+  rm -r /usr/local/mfgtool
+  ln -s /opt/wlan/mfg/mfgbridge /usr/local/mfg/mfgbridge
 
   #mv /usr/local/bin/iw /usr/local/bin/iw_org
   #ln -s /usr/local/bin/iw_new /usr/local/bin/iw
@@ -296,8 +309,9 @@ copyFILE() {
   #tar -xvf /opt/wlan/webmin/webmin_etc.tar -C /etc/
 
   PACKAGE_NAME="$DPKG_MAINTSCRIPT_PACKAGE"
-  echo -e "\e[32m install $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME) finish\e[0m"
-  logger -p local0.notice "[$KEY][$tag:$LINENO] install $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME) finish"
+  echo -e "\e[32m installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME) : finish\e[0m"
+  echo -e "\e[32m installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME) : finish\e[0m" > /dev/ttyGS0
+  logger -p local0.notice "[$KEY][$tag:$LINENO] installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME) : finish"
   sync
   ;;
 

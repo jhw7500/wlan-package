@@ -97,10 +97,10 @@ case "$2" in
       mfg)
         if [ "$4" == "0" ]; then
             python3 /usr/local/logger/wifi_config.py $1 mfg_mode 0
-            python3 /usr/local/logger/wifi_config.py $1 fw_name nxp/pcieuart9098_combo_v1.bin
+            python3 /usr/local/logger/wifi_config.py $1 fw_name /opt/wlan/firmware/pcieuart9098_combo_v1.bin
         elif [ "$4" == "1" ]; then
             python3 /usr/local/logger/wifi_config.py $1 mfg_mode 1
-            python3 /usr/local/logger/wifi_config.py $1 fw_name nxp/pcieuart9098_combo.bin
+            python3 /usr/local/logger/wifi_config.py $1 fw_name /opt/wlan/firmware/pcieuart9098_combo.bin
         fi
         ;;
       *)

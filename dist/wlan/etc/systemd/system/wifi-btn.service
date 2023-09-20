@@ -1,0 +1,22 @@
+[Unit]
+Description=Short/Long press handler (KEY_PROG1 -> GPIO4_IO29 pulse / factory reset)
+After=multi-user.target
+# 필요하면 suspend에서 깨우기 이후에도 실행되도록 wanted target 조정
+
+[Service]
+Type=simple
+ExecStart=/usr/local/logger/wifi_btn.py \
+  --key-name gpio-keys --key-code KEY_PROG1 \
+  --chip gpiochipX --line Y \
+  --out-active-high \
+  --short-max-sec 2.0 \
+  --long-min-sec 10.0 \
+  --pulse-ms 500 \
+  --factory-cmd "/usr/local/scripts/factory_reset.sh"
+Restart=always
+RestartSec=1
+AmbientCapabilities=CAP_SYS_RAWIO CAP_SYS_ADMIN
+# 보통은 권한 없이도 /dev/input/* 읽기와 /dev/gpiochip* 쓰기가 되도록 udev 권한을 맞추는 것이 더 낫다.
+
+[Install]
+WantedBy=multi-user.target
