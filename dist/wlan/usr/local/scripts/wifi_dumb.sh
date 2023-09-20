@@ -2,7 +2,7 @@
 tag=$(basename "$0")
 key=LOG
 IFACE=$1
-logger -p local0.notice "[$tag:$LINENO] [$IFACE] wifi bridge start"
+logger -p local0.info "[$tag:$LINENO] [$IFACE] wifi bridge(dumb) start"
 
 if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" ]]; then
     logger -p local0.err "[$tag:$LINENO] [$IFACE] interface is wrong!!"
@@ -26,7 +26,7 @@ getMac() {
 
 echo 0 > /proc/sys/net/ipv4/ip_forward
 systemctl stop wifi_bridge@$IFACE
-systemctl start wifi_arping@$IFACE
+#systemctl start wifi_arping@$IFACE
 dumb eth0 $IFACE
 
 #ip route replace default via $IFACE

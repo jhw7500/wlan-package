@@ -1,0 +1,11 @@
+[Unit]
+Description=WiFi Manager Service
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/wifi_manager/main.py
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target

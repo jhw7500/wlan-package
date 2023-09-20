@@ -34,7 +34,7 @@ if ! try_insmod "/lib/modules/$KERNEL_VERSION/updates/mlan_6.12.ko" ""; then
     #exit 1
 fi
 
-if ! try_insmod "/lib/modules/$KERNEL_VERSION/updates/moal_6.12.ko" "mod_para=nxp/wifi_mod_para.conf mfg_mode=0"; then
+if ! try_insmod "/lib/modules/$KERNEL_VERSION/updates/moal_6.12.ko" "mod_para=nxp/wifi_mod_para__.conf mfg_mode=0"; then
     echo "moal module load failed"
     #exit 1
 fi
@@ -106,7 +106,7 @@ sleep 0.2
 #python3 /usr/local/logger/getmac.py
 logger -p local0.info "[$tag:$LINENO] [mlan0] wpa_supplicant start"
 systemctl start wpa_supplicant@mlan0
-#sleep 0.2
+sleep 0.5
 systemctl start wifi_bridge@mlan0
 
 #echo 1 > /proc/sys/kernel/printk

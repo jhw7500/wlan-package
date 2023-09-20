@@ -1,43 +1,135 @@
 #!/bin/bash
 tag=$(basename "$0")
 IFACE=$1
+ERR_CNT=0
+ERR_LIMIT=4
 
-if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" ]]; then
+
+get_state() {
+    wpa_cli -i "$IFACE" status | grep "^wpa_state=" | cut -d= -f2
+}
+
+is_connected() {
+    local state
+    state=$(get_state)
+    [[ "$state" == "COMPLETED" ]]
+}
+
+is_wpa_active() {
+    systemctl is-active --quiet "wpa_supplicant@${IFACE}.service"
+}
+
+get_gateway() {
+    ip route show default dev "$IFACE" | awk '/default/ {print $3}'
+}
+
+get_ipaddr() {
+    ip -4 addr show dev "$IFACE" | awk '/inet / {print $2}' | cut -d/ -f1
+}
+
+GATEWAY=$(grep -E '^Gateway=' "$CONF_FILE" | head -n1 | cut -d= -f2)
+
+if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" && "$IFACE" != "eth0" ]]; then
     logger -p local0.err "[$tag:$LINENO] [$IFACE] interface is wrong!!"
     exit 1
 fi
 
-sleep 1
+if [[ "$IFACE" == "mlan0" ]]; then
+    CONF_FILE=/etc/systemd/network/20-mlan0.network
+fi
 
-IP_ADDR=$(ip -4 addr show dev "$IFACE" | awk '/inet / {print $2}' | cut -d/ -f1)
+if [[ "$IFACE" == "mlan1" ]]; then
+    CONF_FILE=/etc/systemd/network/21-mlan1.network
+fi
 
-GATEWAY=$(ip route show default dev "$IFACE" | awk '/default/ {print $3}')
+if [ ! -f "$CONF_FILE" ]; then
+    echo "Config file not found: $CONF_FILE"
+    exit 1
+fi
 
+#sleep 1
 
-logger -p local0.notice "[$tag:$LINENO] [$IFACE] IP : $IP_ADDR, Gateway : $GATEWAY"
+logger -p local0.info "[$tag:$LINENO] [$IFACE] wifi ping start"
+
+#IP_ADDR=$(ip -4 addr show dev "$IFACE" | awk '/inet / {print $2}' | cut -d/ -f1)
+GATEWAY=$(grep -E '^Gateway=' "$CONF_FILE" | head -n1 | cut -d= -f2)
+IP_ADDR=$(grep -E '^Address=' "$CONF_FILE" | head -n1 | cut -d= -f2)
+SRC_IP=$(grep -E '^Address=' "$CONF_FILE" | head -n1 | cut -d= -f2 | cut -d/ -f1)
+#SRC_IP=$(ip -4 -o addr show dev "$SRC_IFACE" | awk '{print $4}' | cut -d/ -f1)
+#GATEWAY=192.168.4.2
+#IP_ADDR=$(get_ipaddr)
+#GATEWAY=$(get_gateway)
+
+logger -p local0.notice "[$tag:$LINENO] [$IFACE] IP : $IP_ADDR, SRC_IP : $SRC_IP, Gateway : $GATEWAY"
 
 #arping -I $IFACE -s $IP_ADDR $GATEWAY -q
 
 while true; do
-    #IP_ADDR=$(ip -4 addr show dev "$IFACE" | awk '/inet / {print $2}' | cut -d/ -f1)
-    GATEWAY=$(ip route show default dev "$IFACE" | awk '/default/ {print $3}')
+    #sleep 3
+    
+    if [ "$IFACE" != "eth0" ]; then
+        if ! is_wpa_active || ! is_connected; then
+            sleep 3
+            continue
+        #else
+        #    echo "muyaho"
+        fi
+    fi
+
+:<<'END'
+    GATEWAY=$(get_gateway)
+    IP_ADDR=$(get_ipaddr)
+
+    if [ "$GATEWAY" != "$PRE_GATEWAY" ]; then
+        logger -p local1.info "[$tag:$LINENO] [$IFACE] $IP_ADDR Gateway change from $PRE_GATEWAY to $GATEWAY"
+    fi
+
+    PRE_GATEWAY=$GATEWAY
+
     if [ -z "$GATEWAY" ]; then
         sleep 1
         continue
     fi
+END
 
-    if [ "$GATEWAY" != "$PRE_GATEWAY" ]; then
-        logger -p local0.notice "[$tag:$LINENO] [$IFACE] Gateway change from $GATEWAY to $GATEWAY_NEW"
+    if [[ -n "$SRC_IP" ]]; then
+        CMD="arping -I $IFACE -s $SRC_IP -c 1 -w 2 $GATEWAY"
+        #OUTPUT=$(arping -I "$IFACE" -s "$SRC_IP" -c 1 -w 2 "$GATEWAY" 2>&1)
+        #logger -p local1.info "[arping] $IFACE ($SRC_IP)  ^f^r $TARGET_IP : $OUTPUT"
+    else
+        CMD="arping -I $IFACE -c 1 -w 2 $GATEWAY"
+        #OUTPUT=$(arping -I "$IFACE" -c 1 -w 2 "$GATEWAY" 2>&1)
+        #logger -p local1.err "[arping] Failed to get source IP from $IFACE"
     fi
 
-    #for i in $(seq 1 2); do
-    #    arping -c 1 -I $IFACE $GATEWAY
-    #    sleep 1
-    #done
+    OUTPUT=$($CMD 2>&1)
+    RET=$?
 
-    arping -c 1 -I $IFACE $GATEWAY
+    #if echo "$OUTPUT" | grep -q "Received 0"; then
+    if [[ $RET -eq 0 ]]; then
+        logger -p local1.info "[$tag:$LINENO] [$IFACE] $CMD success"
+        ERR_CNT=0
+    else
+        #logger -p local1.err "[$tag:$LINENO] [$IFACE] arping to $IP failed: no reply"
+        if ping -I "$IFACE" -c 1 -W 2 "$GATEWAY" > /dev/null 2>&1; then
+            logger -p local1.info "[$tag:$LINENO] [$IFACE] arping to $GATEWAY failed but ping $GATEWAY success"
+            ERR_CNT=0
+        else
+            ((ERR_CNT++))
+            logger -p local1.info "[$tag:$LINENO] [$IFACE] ping err ($ERR_CNT)"
+            if [ "$ERR_CNT" -gt "$ERR_LIMIT" ]; then
+                logger -p local1.err "[$tag:$LINENO] [$IFACE] wifi bridge reset because ERR_CNT($ERR_CNT) over ERR_LIMIT($ERR_LIMIT)"
+                systemctl restart wifi_bridge@$IFACE
+                ERR_CNT=0
+            fi
+            sleep 1
+            continue
+        fi
+    fi
 
-    PRE_GATEWAY=$GATEWAY
-    
-    sleep 10
+    #logger -p local1.info "[$tag:$LINENO] [$IFACE] ret : $RET"
+
+    #arping -c 1 -w 2 -I $IFACE $GATEWAY
+    sleep 3
+
 done

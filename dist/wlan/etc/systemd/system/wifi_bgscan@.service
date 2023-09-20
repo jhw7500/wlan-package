@@ -1,0 +1,14 @@
+[Unit]
+Description=WiFi Background Scan Service
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/logger/wifi_bgscan.py %i
+#Restart=always
+User=root
+#Type=oneshot
+#RemainAfterExit=true
+
+[Install]
+WantedBy=multi-user.target
+

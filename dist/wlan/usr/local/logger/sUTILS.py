@@ -204,11 +204,21 @@ class Logger():
         if self.log_print == 'on':
             self.logger.addHandler(self.stream_handler)
     
-    def message(self, level, message, _extra=["None", 0]):
+    def message(self, level, message, _extra=None):
         if level in self.levels:
-            self.logger.log(self.levels[level], message, extra={'custom_filename': _extra[0], 'custom_lineno': _extra[1]})
+            if _extra is None:
+                self.logger.log(self.levels[level], message)
+            else:
+                self.logger.log(self.levels[level], message, extra={'custom_filename': _extra[0], 'custom_lineno': _extra[1]})
         else:
-            self.message('err', f"Unknown logging level: {level}", _EXTRA_())
+            if _extra is None:
+                self.logger.log(self.levels[level], message)
+            else:
+                self.message('err', f"Unknown logging level: {level}", _EXTRA_())
+
+    def no_extra(self):
+        formatter = logging.Formatter('%(name)s %(message)s')
+        self.syslog_handler.setFormatter(formatter)
             
     def get_logger(self):
         return self.logger

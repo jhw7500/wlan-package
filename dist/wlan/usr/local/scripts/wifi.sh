@@ -61,6 +61,8 @@ case "$2" in
     if [ "$1" != 2 ]; then
         echo "Checking status $IFACE..."
         systemctl status wpa_supplicant@$IFACE
+    else
+        echo "Usage: $0 {0|1|mlan0|mlan1|2} {start|up|stop|down|restart|status|br|update}"
     fi
     ;;
   br)
@@ -71,6 +73,32 @@ case "$2" in
     else
         systemctl restart wifi_bridge@$IFACE
     fi
+    ;;
+  update)
+    case "$3" in
+      mac)
+        python3 /usr/local/logger/wifi_config.py $1 mac_addr $4
+        ;;
+      txpwr)
+        cp $4 /lib/firmware/nxp/
+        python3 /usr/local/logger/wifi_config.py $1 txpwrlimit_cfg nxp/$4
+        ;;
+      cal)
+        cp $4 /lib/firmware/nxp/
+        python3 /usr/local/logger/wifi_config.py $1 cal_data_cfg nxp/$4
+        ;;
+      mfg)
+        if [ "$4" == "0" ]; then
+            python3 /usr/local/logger/wifi_config.py $1 mfg_mode 0
+            python3 /usr/local/logger/wifi_config.py $1 fw_name nxp/pcieuart9098_combo_v1.bin
+        elif [ "$4" == "1" ]; then
+            python3 /usr/local/logger/wifi_config.py $1 mfg_mode 1
+            python3 /usr/local/logger/wifi_config.py $1 fw_name nxp/pcieuart9098_combo.bin
+        fi
+        ;;
+      *)
+        ;;    
+    esac
     ;;
   *)
     echo "Usage: $0 {0|1|mlan0|mlan1} {start|up|stop|down|restart|status}"

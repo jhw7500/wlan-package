@@ -106,23 +106,25 @@ customctl() {
   #customctl samba disabled
   #customctl hciattach disabled
 
+  customctl wifi_init enabled
+  customctl wifi_logger enabled
+  customctl wifi_capture enabled
+
   customctl wifi_arping@eth0 enabled
   customctl wifi_logger@eth0 enabled
 
-  customctl wifi_init enabled
-  customctl wifi_logger enabled
-
-  customctl wifi_ping@mlan0 disabled
   customctl wifi_arp@mlan0 disabled
+  customctl wifi_arping@mlan0 disabled
 
   customctl wifi_logger@mlan0 enabled
   customctl wifi_checker@mlan0 enabled
-  customctl wifi_arping@mlan0 enabled
+  customctl wifi_ping@mlan0 enabled
 
   customctl wifi_logger@mlan1 disabled
   customctl wifi_checker@mlan1 disabled
   customctl wifi_ping@mlan1 disabled
   customctl wifi_arp@mlan1 disabled
+  customctl wifi_arping@mlan1 disabled
 
   #customctl wpa_supplicant@mlan0 enabled
   #customctl wifi_bridge@mlan0 enabled
@@ -190,6 +192,11 @@ makeDirectory() {
   cp /opt/wlan/driver/moal.ko /lib/modules/$KERNEL_VERSION/updates/moal_6.12.ko
   
   mkdir -p /etc/wpa_supplicant
+
+  if [ ! -f /lib/firmware/nxp/wifi_mod_para__.conf ]; then
+    logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /lib/firmware/nxp/wifi_mod_para__.conf"
+    cp /opt/wlan/config/wifi_mod_para__.conf /lib/firmware/nxp/wifi_mod_para__.conf
+  fi
 
   if [ ! -f /etc/wpa_supplicant/wpa_supplicant-mlan0.conf ]; then
     logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /etc/wpa_supplicant/wpa_supplicant-mlan0.conf"

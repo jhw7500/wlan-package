@@ -39,6 +39,7 @@ fi
 ADDRESS_LINE=$(grep -E '^Address=' "$CONF_FILE" | head -n1 | cut -d= -f2)
 IP_ADDR="${ADDRESS_LINE%%/*}"
 GATEWAY=$(grep -E '^Gateway=' "$CONF_FILE" | head -n1 | cut -d= -f2)
+logger -p local0.info "[$tag:$LINENO] [$IFACE] relayd -d -I $IFACE -I eth0 ($IFACE address : $ADDRESS_LINE, gateway : $GATEWAY)"
 
 :<<'END'
 mac_eth=$(getMac eth0)
@@ -69,29 +70,24 @@ END
 #    ip route replace $ip dev $IFACE
 #done
 
-#echo 1 > /proc/sys/net/ipv4/ip_forward
 #ip route replace default via $IFACE
-
-#systemctl start wifi_ping@$IFACE
-#sleep 5
 
 echo 1 > /proc/sys/net/ipv4/ip_forward
 #echo 1 > /proc/sys/net/ipv4/conf/eth0/proxy_arp
 #echo 1 > /proc/sys/net/ipv4/conf/mlan0/proxy_arp
+relayd -d -I $IFACE -I eth0
 
-#systemctl stop wifi_dumb@$IFACE
-#systemctl restart wifi_arping@$IFACE
-#GATEWAY=$(ip route show default dev "$IFACE" | awk '/default/ {print $3}')
-logger -p local0.info "[$tag:$LINENO] [$IFACE] relayd -d -I $IFACE -I eth0 ($IFACE address : $ADDRESS_LINE, gateway : $GATEWAY)"
-#relayd -d -I $IFACE -I eth0
 #relayd -d -i $IFACE -i eth0 -R $GATEWAY:$ADDRESS_LINE -L $IP_ADDR -G $GATEWAY -B -t 5 -p 3
-relayd -d -I $IFACE -I eth0 -L $IP_ADDR -G $GATEWAY -B
+#relayd -d -I $IFACE -I eth0 -L $IP_ADDR -G $GATEWAY -B
 
 #relayd -d -I $IFACE -I eth0 -G $GATEWAY
 #relayd -d -I $IFACE -I eth0 -L 192.168.4.10
 #systemctl restart wifi_arping@$IFACE
-#dumb eth0 mlan0
 #systemctl restart wifi_ping@$IFACE
-
 #ip route replace default via $IFACE
 
+
+#echo 0 > /proc/sys/net/ipv4/ip_forward
+#echo 1 > /proc/sys/net/ipv4/conf/eth0/proxy_arp
+#echo 1 > /proc/sys/net/ipv4/conf/mlan0/proxy_arp
+#dumb eth0 mlan0

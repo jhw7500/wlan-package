@@ -3,7 +3,7 @@ Description=WiFi Capture Service
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 /usr/local/logger/wifi_logger_cap.py
+ExecStart=/usr/bin/python3 /usr/local/logger/wifi_logger_cap.py 0x0100
 #Restart=always
 User=root
 
