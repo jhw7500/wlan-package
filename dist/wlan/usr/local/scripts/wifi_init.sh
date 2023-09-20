@@ -91,45 +91,53 @@ fi
 #try_insmod "/lib/modules/$KERNEL_VERSION/updates/moal_6.12.ko" "fw_name=nxp/pcieuart9098_combo.bin mfg_mode=1"
 #try_insmod "/lib/modules/$KERNEL_VERSION/kernel/drivers/net/nlmon.ko"
 
+#TXPWRLIMIT_PATH=/lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf
+TXPWRLIMIT_PATH=/lib/firmware/cts/config/txpwrlimit_cfg_9098_low.conf
 sleep 0.5
 logger -p local0.info "[$tag:$LINENO] [mlan0] txpwrlimit set"
-mlanutl mlan0 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_2g_cfg_set > /dev/null 2>&1
-mlanutl mlan0 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub0 > /dev/null 2>&1
-mlanutl mlan0 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub1 > /dev/null 2>&1
-mlanutl mlan0 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub2 > /dev/null 2>&1
-mlanutl mlan0 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub3 > /dev/null 2>&1
+mlanutl mlan0 hostcmd $TXPWRLIMIT_PATH txpwrlimit_2g_cfg_set > /dev/null 2>&1
+mlanutl mlan0 hostcmd $TXPWRLIMIT_PATH txpwrlimit_5g_cfg_set_sub0 > /dev/null 2>&1
+mlanutl mlan0 hostcmd $TXPWRLIMIT_PATH txpwrlimit_5g_cfg_set_sub1 > /dev/null 2>&1
+mlanutl mlan0 hostcmd $TXPWRLIMIT_PATH txpwrlimit_5g_cfg_set_sub2 > /dev/null 2>&1
+mlanutl mlan0 hostcmd $TXPWRLIMIT_PATH txpwrlimit_5g_cfg_set_sub3 > /dev/null 2>&1
 
 sleep 0.2
 logger -p local0.info "[$tag:$LINENO] [mlan1] txpwrlimit set"
-mlanutl mlan1 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_2g_cfg_set > /dev/null 2>&1
-mlanutl mlan1 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub0 > /dev/null 2>&1
-mlanutl mlan1 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub1 > /dev/null 2>&1
-mlanutl mlan1 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub2 > /dev/null 2>&1
-mlanutl mlan1 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub3 > /dev/null 2>&1
+mlanutl mlan1 hostcmd $TXPWRLIMIT_PATH txpwrlimit_2g_cfg_set > /dev/null 2>&1
+mlanutl mlan1 hostcmd $TXPWRLIMIT_PATH txpwrlimit_5g_cfg_set_sub0 > /dev/null 2>&1
+mlanutl mlan1 hostcmd $TXPWRLIMIT_PATH txpwrlimit_5g_cfg_set_sub1 > /dev/null 2>&1
+mlanutl mlan1 hostcmd $TXPWRLIMIT_PATH txpwrlimit_5g_cfg_set_sub2 > /dev/null 2>&1
+mlanutl mlan1 hostcmd $TXPWRLIMIT_PATH txpwrlimit_5g_cfg_set_sub3 > /dev/null 2>&1
 
 sleep 0.2
 logger -p local0.info "[$tag:$LINENO] [mlan0] macctrl 0x00010e13"
+#MAC Control: 0x00010213
 mlanutl mlan0 macctrl 0x00010e13 > /dev/null 2>&1
 logger -p local0.info "[$tag:$LINENO] [mlan1] macctrl 0x00010e13"
-mlanutl mlan1 macctrl 0x00010e13 > /dev/null 2>&1
+#mlanutl mlan1 macctrl 0x00010e13 > /dev/null 2>&1
 
 sleep 0.2
 logger -p local0.info "[$tag:$LINENO] [mlan0] httxcfg 0x00000063"
+#    BG band:  0x00000061
+#     A band:  0x00000063
 mlanutl mlan0 httxcfg 0x00000063 > /dev/null 2>&1
 logger -p local0.info "[$tag:$LINENO] [mlan1] httxcfg 0x00000063"
-mlanutl mlan1 httxcfg 0x00000063 > /dev/null 2>&1
+#mlanutl mlan1 httxcfg 0x00000063 > /dev/null 2>&1
 
 sleep 0.2
 logger -p local0.info "[$tag:$LINENO] [mlan0] htcapinfo 0x05c20000"
+#    BG band:  0x04c00000
+#     A band:  0x05c20000
 mlanutl mlan0 htcapinfo 0x05c20000 > /dev/null 2>&1
 logger -p local0.info "[$tag:$LINENO] [mlan1] htcapinfo 0x05c20000"
-mlanutl mlan1 htcapinfo 0x05c20000 > /dev/null 2>&1
+#mlanutl mlan1 htcapinfo 0x05c20000 > /dev/null 2>&1
 
 sleep 0.2
 logger -p local0.info "[$tag:$LINENO] [mlan0] reassoctrl enable"
+#Re-association is Disabled
 mlanutl mlan0 reassoctrl 1 > /dev/null 2>&1
 logger -p local0.info "[$tag:$LINENO] [mlan1] reassoctrl enable"
-mlanutl mlan1 reassoctrl 1 > /dev/null 2>&1
+#mlanutl mlan1 reassoctrl 1 > /dev/null 2>&1
 
 #mlanutl mlan0 auto_arp 1
 

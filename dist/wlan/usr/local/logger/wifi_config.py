@@ -64,7 +64,7 @@ if __name__ == "__main__":
         conf = sys.argv[2]
         val = sys.argv[3]
 
-    conf_file = "/lib/firmware/nxp/wifi_mod_para__.conf"
+    conf_file = "/lib/firmware/cts/wifi_mod_para.conf"
 
     if IFACE == "mlan0" or IFACE == "0" :
         block = "PCIE9098_0"
