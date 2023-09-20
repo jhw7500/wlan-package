@@ -1,0 +1,12 @@
+[Unit]
+Description=WiFi LED service %i
+Requires=sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-%i.device local-fs.target sysinit.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/scripts/wifi_led.sh %i
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

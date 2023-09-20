@@ -129,12 +129,14 @@ customctl() {
   customctl wifi_init enabled
   customctl wifi_logger enabled
 
+  customctl wifi_led@eth0 enabled
   customctl wifi_arping@eth0 enabled
   customctl wifi_logger@eth0 enabled
 
   customctl wifi_arp@mlan0 disabled
   customctl wifi_arping@mlan0 disabled
 
+  customctl wifi_led@mlan0 enabled
   customctl wifi_logger@mlan0 enabled
   customctl wifi_checker@mlan0 enabled
   customctl wifi_ping@mlan0 enabled
