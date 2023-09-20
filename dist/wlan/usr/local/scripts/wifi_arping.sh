@@ -18,6 +18,13 @@ BAD_IP_CNT_LIMIT=2
 GATEWAY=""
 GATEWAY2=""
 CMD=""
+
+cleanup() {
+    logger -p $local0.info "[$tag:$LINENO] [$IFACE] wifi_arping stop"
+    exit 0
+}
+trap cleanup INT TERM
+
 if [ -z "$BASH_VERSION" ]; then
   echo "This script requires bash." >&2
   exit 1

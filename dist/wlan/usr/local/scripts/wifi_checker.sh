@@ -13,6 +13,13 @@ ERR_CNT=0
 STATE=""
 PRE_STATE=""
 
+cleanup() {
+    logger -p $local0.info "[$tag:$LINENO] [$IFACE] wifi_checker stop"
+    exit 0
+}
+trap cleanup INT TERM
+
+
 LOG_DIR="/var/log/cantops/dmesg"
 
 mkdir -p "$LOG_DIR"

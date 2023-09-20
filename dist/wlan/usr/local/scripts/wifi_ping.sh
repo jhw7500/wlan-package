@@ -11,6 +11,12 @@ RET=0
 OUTPUT=""
 INTERVAL=5
 
+cleanup() {
+    logger -p $local0.info "[$tag:$LINENO] [$IFACE] wifi_ping stop"
+    exit 0
+}
+trap cleanup INT TERM
+
 get_state() {
     wpa_cli -i "$IFACE" status | grep "^wpa_state=" | cut -d= -f2
 }
