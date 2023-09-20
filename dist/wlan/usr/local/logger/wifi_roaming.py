@@ -392,6 +392,7 @@ def main():
         logger.message('info', f"{IFACE} roaming condition : {station['rssi']} < {station['rssi_th']}", _EXTRA_())
 
         #subprocess.run(["iw", IFACE, "scan", "ssid", "FXE5000", "freq", "2412", "5180"])
+        '''
         ssid, freqs = parse_supplicant_conf(WPA_CONF_FILE)
         if ssid and freqs:
             lines = perform_active_scan(ssid, freqs)
@@ -399,7 +400,7 @@ def main():
             chan_lines = extract_channel_table(lines)
             save_with_timestamp(SCAN_LOG_FILE, ap_lines)
             save_with_timestamp(FREQ_LOG_FILE, chan_lines)
-
+        '''
 
         #time.sleep(1)
         entries, timestamp = get_latest_scan(station)
@@ -419,7 +420,7 @@ def main():
         
         if top_ap['bssid'] != station['bssid']:
             if top_ap['rssi'] > top_ap['rssi_th']:   #and rssi_diff >= DIFFERENCE_THRESHOLD:
-                logger.message('info', f"{IFACE} Roaming from {station['bssid']}(ch:{station['freq']}) to {top_ap['bssid']}(ch:{channel_to_freq(top_ap['channel'])})"
+                logger.message('emerg', f"{IFACE} Roaming from {station['bssid']}(ch:{station['freq']}) to {top_ap['bssid']}(ch:{channel_to_freq(top_ap['channel'])})"
                                        f" : {top_ap['ssid']}, {score}, {top_ap['rssi']}>{top_ap['rssi_th']}", _EXTRA_())
                 roam_to_bssid(top_ap['bssid'])
                 time.sleep(1)

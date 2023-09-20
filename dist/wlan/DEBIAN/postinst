@@ -142,15 +142,17 @@ makeDirectory() {
   #cp /opt/wlan/config/rc.local /etc/
   cp /opt/wlan/config/rsyslog.conf /etc/
   cp /opt/wlan/config/smb.conf /etc/samba/
+  
+  mkdir -p /etc/wpa_supplicant
 
   if [ ! -f /etc/wpa_supplicant/wpa_supplicant-mlan0.conf ]; then
     logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
-    cp /opt/wlan/config/wpa_supplicant-mlan0.conf /etc/wpa_supplicant/wpa_supplicant-mlan0.conf
+    cp /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan0.conf /etc/wpa_supplicant/wpa_supplicant-mlan0.conf
   fi
 
   if [ ! -f /etc/wpa_supplicant/wpa_supplicant-mlan1.conf ]; then
     logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /etc/wpa_supplicant/wpa_supplicant-mlan1.conf"
-    cp /opt/wlan/config/wpa_supplicant-mlan1.conf /etc/wpa_supplicant/wpa_supplicant-mlan1.conf
+    cp /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan1.conf /etc/wpa_supplicant/wpa_supplicant-mlan1.conf
   fi
 
   if [ ! -f /etc/systemd/network/20-mlan0.network ]; then
@@ -173,6 +175,7 @@ makeDirectory() {
   ln -s /usr/local/bin/iw_new /usr/local/bin/iw
   ln -s /usr/local/scripts/wifi.sh /usr/local/bin/wifi
   ln -s /var/log/cantops/journal /var/log/journal
+  ln -s /usr/local/scripts/logctl.sh /usr/local/bin/logctl
 
   PACKAGE_NAME="$DPKG_MAINTSCRIPT_PACKAGE"
   echo -e "\e[32m install $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME) finish\e[0m"

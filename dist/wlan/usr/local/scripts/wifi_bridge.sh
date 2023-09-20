@@ -49,7 +49,7 @@ END
 
 #echo 1 > /proc/sys/net/ipv4/ip_forward
 #ip route replace default via $IFACE
-#systemctl restart wifi_ping@$IFACE 
+systemctl restart wifi_ping@$IFACE 
 relayd -I $IFACE -I eth0
 
 #ip route replace default via $IFACE
