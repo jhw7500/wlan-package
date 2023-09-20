@@ -74,21 +74,25 @@ customctl() {
   customctl psplash-quit disabled
   customctl weston disabled
   customctl nfs-server masked
-  customctl proc-nfs-fs-nfsd.mount
+  customctl proc-fs-nfsd.mount masked
   customctl watchdog enabled
   customctl samba disabled
   customctl openvswitch disabled
   customctl openvswitch-switch disabled
+  customctl connman disabled
+  customctl ovsdb-server masked
+  customctl smb disabled
 
   #customctl hciattach disabled
   customctl wifi_init enabled
   customctl wifi_logger enabled
 
   customctl wifi_arping@eth0 enabled
+  customctl wifi_arping@mlan0 enabled
 
   customctl wifi_logger@mlan0 enabled
   customctl wifi_checker@mlan0 enabled
-  customctl wifi_ping@mlan0 enabled
+  customctl wifi_ping@mlan0 disabled
   customctl wifi_arp@mlan0 disabled
 
   customctl wifi_logger@mlan1 disabled

@@ -5,6 +5,7 @@ KERNEL_VERSION=$(uname -r)
 #LOGFILE="/var/log/cantops/module.log"
 #sleep 0.5
 
+logger -p local0.notice "[$tag:$LINENO] wifi module init (Booting)"
 try_insmod() {
     local module_path=$1
     local args=$2

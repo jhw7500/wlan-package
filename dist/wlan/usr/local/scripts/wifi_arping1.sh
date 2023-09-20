@@ -2,8 +2,6 @@
 IFACE=$1
 tag=$(basename "$0")
 
-sleep 2
-
 if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" && "$IFACE" != "eth0" ]]; then
     logger -p local0.err "[$tag:$LINENO] [$IFACE] interface is wrong!!"
     exit 1
@@ -30,15 +28,8 @@ while true; do
         exit 1
     fi
 
-
     for IP in $IP_LIST; do
-        CURRENT_IFACE=$(ip route get "$IP" 2>/dev/null | awk '/dev/ {for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}')
-        
-        if [[ -z "$CURRENT_IFACE" || "$CURRENT_IFACE" != "$IFACE" ]]; then
-            logger -p local0.warn "[$tag:$LINENO] [$IFACE] IP $IP is routed via [$CURRENT_IFACE], correcting to [$IFACE]"
-            ip route replace "$IP" dev "$IFACE" scope link
-        fi
         arping -I "$IFACE" -c 1 "$IP"
     done
-    sleep 5
+    sleep 20
 done
