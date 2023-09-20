@@ -20,7 +20,7 @@ GATEWAY2=""
 CMD=""
 
 cleanup() {
-    logger -p $local0.info "[$tag:$LINENO] [$IFACE] wifi_arping stop"
+    logger -p $local1.info "[$tag:$LINENO] [$IFACE] wifi_arping stop"
     exit 0
 }
 trap cleanup INT TERM
@@ -91,11 +91,11 @@ reset_all_counters() {
 }
 
 
-logger -p local0.info "[$tag:$LINENO] [$IFACE] arping start"
+#logger -p local0.info "[$tag:$LINENO] [$IFACE] arping start"
 logger -p local1.info "[$tag:$LINENO] [$IFACE] arping start"
 
 if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" && "$IFACE" != "eth0" ]]; then
-    logger -p local0.emerg "[$tag:$LINENO] [$IFACE] interface is wrong!!"
+    #logger -p local0.emerg "[$tag:$LINENO] [$IFACE] interface is wrong!!"
     logger -p local1.emerg "[$tag:$LINENO] [$IFACE] interface is wrong!!"
     exit 1
 fi
@@ -107,7 +107,7 @@ IP_LIST=$(ip neigh show dev "$IFACE" | grep 'lladdr' | awk '{print $1}')
 
 if [ -z "$IP_LIST" ]; then
   #echo "No IP found on $iface"
-  logger -p local0.err "[$tag:$LINENO] [$IFACE] No IP found"
+  logger -p local1.err "[$tag:$LINENO] [$IFACE] No IP found"
   #exit 1
 fi
 
@@ -380,11 +380,11 @@ END
                         INIT_CNT_MAP["$IP"]=0
                         if [[ -n "$ACTIVE_BRIDGE" ]]; then
                             if [ ${REBOOT_CNT_MAP["$IP"]:-0} -gt $REBOOT_LIMIT ]; then
-                                logger -p local0.crit "[$tag:$LINENO] [$IFACE] reboot err(${REBOOT_CNT_MAP["$IP"]}) over limit($REBOOT_LIMIT)"
-                                logger -p local1.crit "[$tag:$LINENO] [$IFACE] reboot err(${REBOOT_CNT_MAP["$IP"]}) over limit($REBOOT_LIMIT)"
+                                logger -p local0.crit "[$tag:$LINENO] [$IFACE] reboot flag set"
+                                logger -p local1.crit "[$tag:$LINENO] [$IFACE] reboot flag set(${REBOOT_CNT_MAP["$IP"]}) over limit($REBOOT_LIMIT)"
                                 REBOOT_FLAG=1
                             else
-                                logger -p local0.err "[$tag:$LINENO] [$IFACE] restarting $ACTIVE_BRIDGE (${REBOOT_CNT_MAP["$IP"]})"
+                                logger -p local0.err "[$tag:$LINENO] [$IFACE] restarting $ACTIVE_BRIDGE"
                                 logger -p local1.err "[$tag:$LINENO] [$IFACE] restarting $ACTIVE_BRIDGE (${REBOOT_CNT_MAP["$IP"]})"
                                 systemctl restart "$ACTIVE_BRIDGE"
                             fi
@@ -420,7 +420,7 @@ END
     sleep $INTERVAL
 
     if [ "$REBOOT_FLAG" -eq 1 ]; then
-        logger -p local0.emerg "[$tag:$LINENO] [$IFACE] reboot because arp/route is not recovery"
+        logger -p local0.emerg "[$tag:$LINENO] [$IFACE] reboot"
         logger -p local1.emerg "[$tag:$LINENO] [$IFACE] reboot because arp/route is not recovery"
         sleep $INTERVAL
         reboot

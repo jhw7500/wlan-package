@@ -12,7 +12,7 @@ OUTPUT=""
 INTERVAL=5
 
 cleanup() {
-    logger -p $local0.info "[$tag:$LINENO] [$IFACE] wifi_ping stop"
+    logger -p $local1.info "[$tag:$LINENO] [$IFACE] wifi_ping stop"
     exit 0
 }
 trap cleanup INT TERM
@@ -41,7 +41,7 @@ get_ipaddr() {
 
 
 if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" && "$IFACE" != "eth0" ]]; then
-    logger -p local0.err "[$tag:$LINENO] [$IFACE] interface is wrong!!"
+    logger -p local1.err "[$tag:$LINENO] [$IFACE] interface is wrong!!"
     exit 1
 fi
 
@@ -60,7 +60,7 @@ fi
 
 #sleep 1
 
-logger -p local0.info "[$tag:$LINENO] [$IFACE] wifi ping start"
+logger -p local1.info "[$tag:$LINENO] [$IFACE] wifi ping start"
 
 #IP_ADDR=$(ip -4 addr show dev "$IFACE" | awk '/inet / {print $2}' | cut -d/ -f1)
 GATEWAY=$(grep -E '^Gateway=' "$CONF_FILE" | head -n1 | cut -d= -f2)
@@ -71,7 +71,7 @@ SRC_IP=$(grep -E '^Address=' "$CONF_FILE" | head -n1 | cut -d= -f2 | cut -d/ -f1
 #IP_ADDR=$(get_ipaddr)
 #GATEWAY=$(get_gateway)
 
-logger -p local0.notice "[$tag:$LINENO] [$IFACE] IP : $IP_ADDR, SRC_IP : $SRC_IP, Gateway : $GATEWAY"
+logger -p local1.notice "[$tag:$LINENO] [$IFACE] IP : $IP_ADDR, SRC_IP : $SRC_IP, Gateway : $GATEWAY"
 
 #arping -I $IFACE -s $IP_ADDR $GATEWAY -q
 
@@ -167,7 +167,7 @@ END
                         INIT_CNT=0
                         sleep 1
                     fi
-                    logger -p local0.err "[$tag:$LINENO] [$IFACE] wifi bridge reset because ERR_CNT($ERR_CNT) over ERR_LIMIT($ERR_LIMIT) INIT_CNT($INIT_CNT)"
+                    logger -p local0.err "[$tag:$LINENO] [$IFACE] wifi bridge reset"
                     logger -p local1.err "[$tag:$LINENO] [$IFACE] wifi bridge reset because ERR_CNT($ERR_CNT) over ERR_LIMIT($ERR_LIMIT) INIT_CNT($INIT_CNT)"
                     systemctl restart wifi_bridge@$IFACE
                     ERR_CNT=0

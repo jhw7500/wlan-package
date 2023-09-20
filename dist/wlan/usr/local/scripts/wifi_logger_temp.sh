@@ -2,12 +2,12 @@
 tag=$(basename "$0")
 
 cleanup() {
-    logger -p $local0.info "[$tag:$LINENO] wifi_logger_temp stop"
+    logger -p $local3.info "[$tag:$LINENO] wifi_logger_temp stop"
     exit 0
 }
 trap cleanup INT TERM
 
-logger -p local0.info "[$tag:$LINENO] wifi_logger_temp start"
+logger -p local3.info "[$tag:$LINENO] wifi_logger_temp start"
 
 CPU_TMP_VAL=0
 CPU_TEMP=0
@@ -44,4 +44,4 @@ while true; do
     sleep 5
 done
 
-logger -p local0.info "[$tag:$LINENO] wifi_logger_temp stop"
+logger -p local3.info "[$tag:$LINENO] wifi_logger_temp stop"
