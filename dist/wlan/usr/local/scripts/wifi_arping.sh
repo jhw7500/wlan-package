@@ -304,8 +304,8 @@ END
         #fi
 
         if [[ ! -n "$SRC_IP" ]]; then
-            SRC_IP=$(ip -4 -o addr show dev lo | awk '{print $4}' | cut -d/ -f1 | awk 'NR==2')
-            #logger -p local1.info "lo IP : $SRC_IP"
+            SRC_IP=$(ip -4 -o addr show dev "$IFACE" | awk '{print $4}' | cut -d/ -f1)
+            #logger -p local1.info "IFACE : $IFACE, IP : $SRC_IP"
         fi
 
 
@@ -385,7 +385,7 @@ END
                 fi
             fi
         else
-            logger -p local1.info "[$tag:$LINENO] [$IFACE] arping from $SRC_IP to $IP success($CMD)"
+            logger -p local1.info "[$tag:$LINENO] [$IFACE] success($CMD)"
             ERR_CNT_MAP["$IP"]=0
             INIT_CNT_MAP["$IP"]=0
             REBOOT_CNT_MAP["$IP"]=0

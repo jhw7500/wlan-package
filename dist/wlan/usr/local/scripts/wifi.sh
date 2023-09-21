@@ -76,6 +76,10 @@ case "$2" in
     ;;
   config)
     case "$3" in
+      set)
+        echo "python3 /usr/local/logger/wifi_config.py $1 $4 $5"
+        python3 /usr/local/logger/wifi_config.py $1 $4 $5
+        ;;
       mac)
         echo "python3 /usr/local/logger/wifi_config.py $1 mac_addr $4"
         python3 /usr/local/logger/wifi_config.py $1 mac_addr $4

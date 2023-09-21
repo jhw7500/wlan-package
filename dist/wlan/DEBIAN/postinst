@@ -198,10 +198,10 @@ makeDirectory() {
   
   mkdir -p /etc/wpa_supplicant
 
-  if [ ! -f /lib/firmware/nxp/wifi_mod_para__.conf ]; then
+  #if [ ! -f /lib/firmware/nxp/wifi_mod_para__.conf ]; then
     logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /lib/firmware/nxp/wifi_mod_para__.conf"
     cp /opt/wlan/config/wifi_mod_para__.conf /lib/firmware/nxp/wifi_mod_para__.conf
-  fi
+  #fi
 
   if [ ! -f /etc/wpa_supplicant/wpa_supplicant-mlan0.conf ]; then
     logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
@@ -238,10 +238,9 @@ makeDirectory() {
   ln -s /usr/local/scripts/wifi.sh /usr/local/bin/wifi
   ln -s /var/log/cantops/journal /var/log/journal
   ln -s /usr/local/scripts/logctl.sh /usr/local/bin/logctl
-  ln -s /usr/local/scripts/mlanutl_silent.sh /usr/localbin/mlanutl_silent
+  ln -s /usr/local/scripts/mlanutl_silent.sh /usr/local/bin/mlanutl_silent
 
   rm /usr/local/bin/mfgbridge
-  rm -r /var/log/cantops/module
 
   PACKAGE_NAME="$DPKG_MAINTSCRIPT_PACKAGE"
   echo -e "\e[32m install $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME) finish\e[0m"

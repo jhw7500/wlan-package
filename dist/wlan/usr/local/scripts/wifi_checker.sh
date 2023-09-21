@@ -80,11 +80,12 @@ while true; do
 
     ERR_CNT=0
 
+#:<<'END'
     if ! is_wpa_active; then
         #log "wpa_supplicant@${IFACE}.service not active — waiting..."
         UNSTABLE_START=0
         #sleep $CHECK_INTERVAL
-        #continue
+        continue
     fi
 
     STATE=$(get_state)
@@ -99,29 +100,19 @@ while true; do
 
         if (( DURATION >= MAX_UNSTABLE_DURATION )); then
             logger -p local0.info  "[$tag:$LINENO] [$IFACE] restart wpa_supplicant@$IFACE because wifi is not connected during $MAX_UNSTABLE_DURATION" 
-            wpa_cli disable_network 0
+            #wpa_cli disable_network 0
+            systemctl stop wpa_supplicant@$IFACE
             sleep 1
-            wpa_cli enable_network 0
-            systemctl restart wpa_supplicant@$IFACE
+            #wpa_cli enable_network 0
+            systemctl start wpa_supplicant@$IFACE
             #log "State=$STATE for ${DURATION}s → triggering reconnect on $IFACE"
             #wpa_cli -i "$IFACE" reconnect
             UNSTABLE_START=0
         fi
     else
         UNSTABLE_START=0
-:<<'END'
-        if [[ "$STATE" != "$PRE_STATE" ]] && [[ "$STATE" == "COMPLETED" ]]; then
-            logger -p local0.info "[$tag:$LINENO] [$IFACE] Connected"
-            IFACE_BRIDGE=$(systemctl list-units --type=service --state=running | grep -oP 'wifi_bridge@\K[^\.]+')
-            if [[ "$IFACE_BRIDGE" == "$IFACE" ]]; then
-                sleep 2
-                logger -p local0.info "[$tag:$LINENO] [$IFACE] systemctl restart wifi_bridge@$IFACE"
-                systemctl restart wifi_bridge@$IFACE
-                sleep 3
-            fi
-        fi
-END
     fi
+#END
 
     LINK_OUTPUT=$(iw "$IFACE" link 2>&1)
     if echo "$LINK_OUTPUT" | grep -q "Connected to" && echo "$LINK_OUTPUT" | grep -q "command failed"; then

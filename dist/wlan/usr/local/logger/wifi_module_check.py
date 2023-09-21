@@ -68,17 +68,19 @@ def main():
     logger.message("info", f"init success : {counts['success']}, fail : {counts['fail']}, total : {counts['total']}", _EXTRA_())
     save_counts(counts, LOG_DIR)
     #subprocess.run(["cat", COUNT_FILE])
-    #with open("/dev/ttymxc1", "w") as tty:
-    #    tty.write("===================================================================================================\n")
-    #    subprocess.run(["cat", COUNT_FILE], stdout=tty)
-    #    tty.write("\n==================================================================================================\n")
+    with open("/dev/ttymxc1", "w") as tty:
+        tty.write("===================================================================================================\n")
+        subprocess.run(["cat", f"{LOG_DIR}/{COUNT_FILE}"], stdout=tty)
+        tty.write("\n==================================================================================================\n")
     #print("save", flush=True)
     #time.sleep(10)
     #print("test", flush=True)
     if not retry_success:
-        time.sleep(5)
-        #subprocess.run(["reboot"])
-
+        time.sleep(15)
+        subprocess.run(["reboot"])
+    else:
+        time.sleep(15)
+        subprocess.run(["reboot"])
 
 if __name__ == "__main__":
     logger = Logger(app_name="module_check", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)

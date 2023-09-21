@@ -53,7 +53,7 @@ else
     logger -p local0.err "[$tag:$LINENO] [mlan1] invalid mac address : $MLAN1_MAC"
 fi
 
-#if ! try_insmod "/lib/modules/$KERNEL_VERSION/updates/moal_6.12.ko" "mod_para=nxp/wifi_mod_para__.conf mfg_mode=0"; then
+#if ! try_insmod "/opt/wlan/driver/moal.ko" "fw_name=nxp/pcieuart9098_combo.bin mfg_mode=1"; then
 if ! try_insmod "/opt/wlan/driver/moal.ko" "mod_para=nxp/wifi_mod_para__.conf"; then
     echo "moal module load failed"
     #exit 1
