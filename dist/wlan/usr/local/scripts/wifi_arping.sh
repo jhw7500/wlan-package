@@ -17,7 +17,7 @@ BAD_IP_CNT=0
 BAD_IP_CNT_LIMIT=2
 GATEWAY=""
 GATEWAY2=""
-
+CMD=""
 if [ -z "$BASH_VERSION" ]; then
   echo "This script requires bash." >&2
   exit 1
@@ -310,17 +310,19 @@ END
 
 
         if [[ -n "$SRC_IP" ]]; then
-            OUTPUT=$(arping -I "$IFACE" -s "$SRC_IP" -c 1 -w 2 "$IP" 2>&1)
+            CMD="arping -I "$IFACE" -s "$SRC_IP" -c 1 -w 2 "$IP" 2>&1"
             #logger -p local1.info "[arping] $IFACE ($SRC_IP) → $TARGET_IP : $OUTPUT"
         else
-            OUTPUT=$(arping -I "$IFACE" -c 1 -w 2 "$IP" 2>&1)
+            CMD="arping -I "$IFACE" -c 1 -w 2 "$IP" 2>&1"
             #logger -p local1.err "[arping] Failed to get source IP from $IFACE"
         fi
+
+        OUTPUT=$(eval "$CMD")
 
         if echo "$OUTPUT" | grep -q "Received 0"; then
             #logger -p local1.err "[$tag:$LINENO] [$IFACE] arping to $IP failed: no reply"
             if ping -I "$IFACE" -c 1 -W 2 "$IP" > /dev/null 2>&1; then
-                logger -p local1.info "[$tag:$LINENO] [$IFACE] arping to $IP failed but ping $IP success"
+                logger -p local1.info "[$tag:$LINENO] [$IFACE] arping to $IP failed but ping $IP success(ping -I $IFACE -c 1 -W 2 $IP)"
                 #ERR_CNT_MAP["$IP"]=0
                 #INIT_CNT_MAP["$IP"]=0
                 #REBOOT_CNT_MAP["$IP"]=0
@@ -330,7 +332,7 @@ END
             else
                 if [ ! -z "$GATEWAY" ]; then
                     if ping -I "$IFACE" -c 1 -W 2 "$GATEWAY" > /dev/null 2>&1; then
-                        logger -p local1.info "[$tag:$LINENO] [$IFACE] arping, ping to $IP failed but ping Gateway($GATEWAY) success"
+                        logger -p local1.info "[$tag:$LINENO] [$IFACE] arping, ping to $IP failed but ping Gateway($GATEWAY) success(ping -I $IFACE -c 1 -W 2 $GATEWAY)"
                         ping -I $IFACE -c 1 -w 2 $GATEWAY -q
                         reset_all_counters
                         sleep $INTERVAL
@@ -338,7 +340,7 @@ END
                     else
                         if [ ! -z "$GATEWAY2" ]; then
                             if ping -I "$IFACE" -c 1 -W 2 "$GATEWAY2" > /dev/null 2>&1; then
-                                logger -p local1.info "[$tag:$LINENO] [$IFACE] arping, ping to $IP failed but ping FILE Gateway($GATEWAY2) success"
+                                logger -p local1.info "[$tag:$LINENO] [$IFACE] arping, ping to $IP failed but ping FILE Gateway($GATEWAY2) success(ping -I $IFACE -c 1 -W2 $GATEWAY2)"
                                 ping -I $IFACE -c 1 -w 2 $GATEWAY2 -q
                                 reset_all_counters
                                 sleep $INTERVAL
@@ -383,7 +385,7 @@ END
                 fi
             fi
         else
-            logger -p local1.info "[$tag:$LINENO] [$IFACE] arping from $SRC_IP to $IP success"
+            logger -p local1.info "[$tag:$LINENO] [$IFACE] arping from $SRC_IP to $IP success($CMD)"
             ERR_CNT_MAP["$IP"]=0
             INIT_CNT_MAP["$IP"]=0
             REBOOT_CNT_MAP["$IP"]=0

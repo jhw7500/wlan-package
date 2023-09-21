@@ -119,7 +119,7 @@ END
         fi
     fi
 
-    if [ -n "$GATEWAY2" ]; then
+    if [ -n "$GATEWAY2" ] && [ "$GATEWAY" != "$GATEWAY2" ]; then
         if [[ -n "$SRC_IP" ]]; then
             CMD="arping -I $IFACE -s $SRC_IP -c 1 -w 2 $GATEWAY2"
         else
