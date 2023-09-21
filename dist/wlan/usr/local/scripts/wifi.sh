@@ -18,6 +18,17 @@ case "$1" in
     #systemctl restart wpa_supplicant@mlan0
     #systemctl restart wpa_supplicant@mlan1
     ;;
+  mfg)
+    ifconfig mlan0 down
+    ifconfig mlan1 down
+    rmmod moal
+    rmmod mlan
+    insmod /opt/wlan/driver/mlan.ko
+    insmod /opt/wlan/driver/moal.ko mfg_mode=1 drv_mode=1 fw_name=cts/pcieuart9098_combo.bin
+    cd /usr/local/mfg/
+    ./mfgbridge
+    exit 1
+    ;;
   *)
     echo "Usage: $0 {0|1|mlan0|mlan1} {start|up|stop|down|restart|status}"
     exit 1
@@ -75,6 +86,21 @@ case "$2" in
     else
         systemctl restart wifi_bridge@$IFACE
     fi
+    ;;
+  txpwrlimit)
+    if [ "$3" == "low" ]; then
+        TXPWRLIMIT_PATH=/lib/firmware/cts/config/txpwrlimit_cfg_9098_low.conf
+    elif [ "$3" == "test" ]; then
+        TXPWRLIMIT_PATH=/lib/firmware/cts/config/txpwrlimit_cfg_9098_test.conf
+    else
+        TXPWRLIMIT_PATH=/lib/firmware/cts/config/txpwrlimit_cfg_9098.conf
+    fi
+    echo "$IFACE txpwrlimit set to $TXPWRLIMIT_PATH"
+    mlanutl $IFACE hostcmd $TXPWRLIMIT_PATH txpwrlimit_2g_cfg_set > /dev/null 2>&1
+    mlanutl $IFACE hostcmd $TXPWRLIMIT_PATH txpwrlimit_5g_cfg_set_sub0 > /dev/null 2>&1
+    mlanutl $IFACE hostcmd $TXPWRLIMIT_PATH txpwrlimit_5g_cfg_set_sub1 > /dev/null 2>&1
+    mlanutl $IFACE hostcmd $TXPWRLIMIT_PATH txpwrlimit_5g_cfg_set_sub2 > /dev/null 2>&1
+    mlanutl $IFACE hostcmd $TXPWRLIMIT_PATH txpwrlimit_5g_cfg_set_sub3 > /dev/null 2>&1
     ;;
   config)
     case "$3" in

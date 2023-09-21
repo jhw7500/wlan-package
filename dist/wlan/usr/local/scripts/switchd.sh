@@ -10,10 +10,12 @@ SHORT_MIN=0
 SHORT_MAX=3
 LONG_MIN=10
 LED="/sys/class/leds/5VREG_nEN/brightness"
+#LED="/sys/class/leds/PMIC_nRST/brightness"
 LOGKMSG="/dev/kmsg"
 
+state=$(cat /sys/kernel/debug/regmap/0-004b/registers |grep 2d:|awk '{print $2}')
 sleep 5
-logger -p local0.emerg "[$tag:$LINENO] switchd ready!!"
+logger -p local0.emerg "[$tag:$LINENO] switchd ready : 0x$state"
 
 fifo=/run/switchd.gpio
 [ -p "$fifo" ] || { rm -f "$fifo"; mkfifo -m 600 "$fifo"; }
@@ -48,6 +50,7 @@ while :; do
                 pressed=1; press_t=$now; fired_long=0; elapsed=0
                 #log "press"
                 logger -p local0.info "[$tag:$LINENO] press"
+                echo "press" > /dev/console
             fi
         else
             if [ $pressed -eq 1 ]; then
@@ -59,10 +62,19 @@ while :; do
                 else
                     if [ $dur -ge $SHORT_MIN ] && [ $dur -le $SHORT_MAX ]; then
                         # short 동작: 전원 OFF 전 로그를 확실히 남김
-                        logger -p local0.emerg "[$tag:$LINENO] short press: power off 5VREG"
-                        sync
-                        sleep 0.5
-                        [ -e "$LED" ] && echo 0 > "$LED"
+                        state=$(cat /sys/kernel/debug/regmap/0-004b/registers |grep 2d:|awk '{print $2}')
+                        if [ "$state" == "80" ]; then
+                            logger -p local0.emerg "[$tag:$LINENO] short press: power off : 0x$state"
+                            echo "short press: power off : 0x$state" > /dev/console
+                            #echo "short press: power off : 0x$state" > /dev/kmsg
+                            /usr/local/scripts/journald_snapshot.sh
+                            sleep 0.5
+                            [ -e "$LED" ] && echo 0 > "$LED"
+                            [ -e "$LED" ] && echo 1 > "$LED"
+                        else
+                            logger -p local0.emerg "[$tag:$LINENO] state is not RUN : 0x$state"
+                            echo "state is not RUN : 0x$state" > /dev/console
+                        fi
                     fi
                 fi
             fi

@@ -9,3 +9,4 @@ rsync -a --inplace --no-whole-file --chmod=Fu=rw,Fg=r,Fa=r "$SRC"/ "$DST"/
 
 # 보관 정책(예: 30일)
 find /var/log/cantops/journald -mindepth 1 -maxdepth 1 -type d -mtime +7 -print -exec rm -rf {} +
+sync

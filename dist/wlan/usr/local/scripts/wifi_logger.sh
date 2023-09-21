@@ -18,5 +18,3 @@ logger -p local0.info "[$tag:$LINENO] wifi logger start"
 
 #sleep 5
 #python3 /usr/local/logger/wifi_module_check.py &
-
-

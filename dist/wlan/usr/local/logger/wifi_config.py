@@ -4,7 +4,7 @@ from sUTILS import Logger, _EXTRA_
 
 IFACE = "mlan0"
 
-def insert_mac_addr(conf_path, conf, val, target_block="PCIE9098_0"):
+def insert_config(conf_path, conf, val, target_block="PCIE9098_0"):
     try:
         with open(conf_path, "r") as f:
             lines = f.readlines()
@@ -64,19 +64,19 @@ if __name__ == "__main__":
         conf = sys.argv[2]
         val = sys.argv[3]
 
-    conf_file = "/lib/firmware/cts/wifi_mod_para.conf"
+    conf_file = "/lib/firmware/nxp/wifi_mod_para__.conf"
 
     if IFACE == "mlan0" or IFACE == "0" :
         block = "PCIE9098_0"
-        insert_mac_addr(conf_file, conf, val, block)        
+        insert_config(conf_file, conf, val, block)        
     elif IFACE == "mlan1" or IFACE == "1" :
         block = "PCIE9098_1"
-        insert_mac_addr(conf_file, conf, val, block)
+        insert_config(conf_file, conf, val, block)
     elif IFACE == "2":
         block = "PCIE9098_0"
-        insert_mac_addr(conf_file, conf, val, block)
+        insert_config(conf_file, conf, val, block)
         block = "PCIE9098_1"
-        insert_mac_addr(conf_file, conf, val, block)
+        insert_config(conf_file, conf, val, block)
     else:
         logger.message("info", f"[{IFACE}] interface is wrong", _EXTRA_())
 
