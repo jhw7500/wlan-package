@@ -130,7 +130,7 @@ customctl() {
   customctl wifi_logger enabled
 
   customctl wifi_led@eth0 enabled
-  customctl wifi_arping@eth0 enabled
+  customctl wifi_arping@eth0 disabled
   customctl wifi_logger@eth0 enabled
   customctl wifi_checker@eth0 enabled
 
@@ -140,7 +140,7 @@ customctl() {
   customctl wifi_led@mlan0 enabled
   customctl wifi_logger@mlan0 enabled
   customctl wifi_checker@mlan0 enabled
-  customctl wifi_ping@mlan0 enabled
+  customctl wifi_ping@mlan0 disabled
   customctl wifi_capture@mlan0 disabled
 
   customctl wifi_logger@mlan1 disabled
@@ -167,6 +167,15 @@ makeDirectory() {
         echo "$1 directory already exists."
     fi
 }
+  makeDirectory /etc/wpa_supplicant
+  makeDirectory /opt/wlan/mac
+  touch /opt/wlan/mac/base0
+  touch /opt/wlan/mac/base1
+  touch /opt/wlan/mac/target0
+  touch /opt/wlan/mac/target1
+  touch /opt/wlan/mac/wired
+  touch /opt/wlan/mac/wired_client
+
   makeDirectory /var/log/cantops/journal
   #echo "update dtb"
   #makeDirectory /root/boot
@@ -221,12 +230,18 @@ makeDirectory() {
   cp /opt/wlan/config/wifi_mod_para__.conf /lib/firmware/nxp/
   cp /opt/wlan/config/crontab /etc/
   
-  mkdir -p /etc/wpa_supplicant
-
+copyFILE() {
+  if [ ! -f $2 ]; then
+    logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp $1 $2"
+    cp $1 $2
+  fi
+}
   #if [ ! -f /lib/firmware/nxp/wifi_mod_para__.conf ]; then
   #  logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /lib/firmware/nxp/wifi_mod_para__.conf"
   #  cp /opt/wlan/config/wifi_mod_para__.conf /lib/firmware/nxp/wifi_mod_para__.conf
   #fi
+
+  copyFILE /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/timesyncd.conf
 
   if [ ! -f /etc/wpa_supplicant/wpa_supplicant-mlan0.conf ]; then
     logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /etc/wpa_supplicant/wpa_supplicant-mlan0.conf"

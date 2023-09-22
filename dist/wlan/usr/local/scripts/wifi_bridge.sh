@@ -72,11 +72,6 @@ END
 
 #ip route replace default via $IFACE
 
-echo 1 > /proc/sys/net/ipv4/ip_forward
-#echo 1 > /proc/sys/net/ipv4/conf/eth0/proxy_arp
-#echo 1 > /proc/sys/net/ipv4/conf/mlan0/proxy_arp
-relayd -d -I $IFACE -I eth0
-
 #relayd -d -i $IFACE -i eth0 -R $GATEWAY:$ADDRESS_LINE -L $IP_ADDR -G $GATEWAY -B -t 5 -p 3
 #relayd -d -I $IFACE -I eth0 -L $IP_ADDR -G $GATEWAY -B
 
@@ -86,8 +81,22 @@ relayd -d -I $IFACE -I eth0
 #systemctl restart wifi_ping@$IFACE
 #ip route replace default via $IFACE
 
-
-#echo 0 > /proc/sys/net/ipv4/ip_forward
 #echo 1 > /proc/sys/net/ipv4/conf/eth0/proxy_arp
-#echo 1 > /proc/sys/net/ipv4/conf/mlan0/proxy_arp
-#dumb eth0 mlan0
+#echo 0 > /proc/sys/net/ipv4/conf/eth0/rp_filter
+#echo 1 > /proc/sys/net/ipv4/conf/eth0/arp_accept
+#echo 1 > /proc/sys/net/ipv4/conf/$IFACE/proxy_arp
+#echo 0 > /proc/sys/net/ipv4/conf/$IFACE/rp_filter
+#echo 1 > /proc/sys/net/ipv4/conf/$IFACE/arp_accept
+net.ipv4.conf.all.rp_filter = 0
+net.ipv4.conf.eth0.rp_filter = 0
+net.ipv4.conf.$IFACE.rp_filter = 0
+net.ipv4.conf.all.arp_ignore = 1
+net.ipv4.conf.eth0.arp_ignore = 1
+net.ipv4.conf.$IFACE.arp_ignore = 1
+net.ipv4.conf.all.arp_announce = 2
+net.ipv4.conf.eth0.arp_announce = 2
+net.ipv4.conf.$IFACE.arp_announce = 2
+echo 1 > /proc/sys/net/ipv4/ip_forward
+relayd -d -I $IFACE -I eth0 -G $GATEWAY
+#dumb eth0 $IFACE
+

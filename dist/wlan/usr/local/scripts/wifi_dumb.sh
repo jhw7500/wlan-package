@@ -25,8 +25,12 @@ getMac() {
 
 
 echo 0 > /proc/sys/net/ipv4/ip_forward
+echo 0 > /proc/sys/net/ipv4/conf/eth0/rp_filter
+echo 1 > /proc/sys/net/ipv4/conf/eth0/arp_accept
+echo 1 > /proc/sys/net/ipv4/conf/$IFACE/proxy_arp
+echo 0 > /proc/sys/net/ipv4/conf/$IFACE/rp_filter
+echo 1 > /proc/sys/net/ipv4/conf/$IFACE/arp_accept
 systemctl stop wifi_bridge@$IFACE
-#systemctl start wifi_arping@$IFACE
 dumb eth0 $IFACE
 
 #ip route replace default via $IFACE

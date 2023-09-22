@@ -149,16 +149,16 @@ ifconfig mlan0 up
 ip link set mlan1 up
 ifconfig mlan1 up
 
-while true; do
+for i in {1..3}; do
     sleep 0.5
-    cmd="iw mlan0 scan freq 2412"
+    cmd="iw mlan0 scan freq"
     logger -p local0.info "[$tag:$LINENO] [mlan0] cmd : $cmd"
     result=$(eval "$cmd")
     if [ -n "$result" ]; then
-        logger -p local0.info "[$tag:$LINENO] [mlan0] scan success"
+        logger -p local0.info "[$tag:$LINENO] [mlan0] scan : success"
         break
     else
-        logger -p local0.err "[$tag:$LINENO] [mlan0] scan failed: $result"
+        logger -p local0.err "[$tag:$LINENO] [mlan0] scan : no result"
     fi
 done
 
