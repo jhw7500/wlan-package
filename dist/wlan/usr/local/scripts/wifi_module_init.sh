@@ -128,8 +128,8 @@ ifconfig mlan0 up
 
 #sleep 0.2
 #logger -p local0.info "[$tag:$LINENO] [mlan1] link down" 
-#ip link set mlan1 down
-#ifconfig mlan1 down
+ip link set mlan1 down
+ifconfig mlan1 down
 
 FREQ=$(jq -r '.mlan0.Frequency' "$JSON_FILE")
 if [ "$FREQ" = "5GHz" ]; then
@@ -157,6 +157,7 @@ fi
 #ip link set nlmon0 up
 
 sleep 0.5
+iw mlan0 scan freq 2412
 #python3 /usr/local/logger/getmac.py
 logger -p local0.info "[$tag:$LINENO] [mlan0] wpa_supplicant start"
 systemctl start wpa_supplicant@mlan0

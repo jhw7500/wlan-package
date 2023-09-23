@@ -1,5 +1,5 @@
 Package: wlan-proc
-Version: 0.0.1
+Version: 0.0.3
 Section: test
 Priority: optional
 Architecture: arm64 
@@ -13,3 +13,4 @@ Description: WLAN Application
 0.0.0 : Test version
 0.0.1 : demo version
 0.0.2 : arp update
+0.0.3 : init 2G scan

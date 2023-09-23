@@ -1,6 +1,7 @@
 #!/bin/bash
 tag=$(basename "$0")
 IFACE=$1
+IFACE_BRIDGE=""
 ERR_CNT=0
 ERR_LIMIT=3
 INIT_CNT=0
@@ -40,17 +41,22 @@ get_ipaddr() {
 }
 
 
-if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" && "$IFACE" != "eth0" ]]; then
-    logger -p local1.err "[$tag:$LINENO] [$IFACE] interface is wrong!!"
-    exit 1
-fi
-
 if [[ "$IFACE" == "mlan0" ]]; then
     CONF_FILE=/etc/systemd/network/20-mlan0.network
-fi
-
-if [[ "$IFACE" == "mlan1" ]]; then
+elif [[ "$IFACE" == "mlan1" ]]; then
     CONF_FILE=/etc/systemd/network/21-mlan1.network
+elif [[ "$IFACE" == "eth0" ]]; then
+    IFACE_BRIDGE=$(systemctl list-units --type=service --state=running | grep -oP 'wifi_bridge@\K[^\.]+')
+    if [[ "$IFACE_BRIDGE" == "mlan0" ]]; then
+        CONF_FILE=/etc/systemd/network/20-mlan0.network
+    elif [[ "$IFACE_BRIDGE" == "mlan1" ]]; then
+        CONF_FILE=/etc/systemd/network/21-mlan1.network
+    else
+        logger -p local1.err "[$tag:$LINENO] [$IFACE] wifi_bridge interface($IFACE_BRIDGE) is wrong!"
+    fi
+else
+    logger -p local1.err "[$tag:$LINENO] [$IFACE] interface is wrong!!"
+    exit 1
 fi
 
 if [ ! -f "$CONF_FILE" ]; then

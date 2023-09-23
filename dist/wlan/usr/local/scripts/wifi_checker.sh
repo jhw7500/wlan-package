@@ -20,7 +20,7 @@ cleanup() {
 trap cleanup INT TERM
 
 
-LOG_DIR="/var/log/cantops/dmesg"
+LOG_DIR="/var/log/cantops/err"
 
 mkdir -p "$LOG_DIR"
 
@@ -70,12 +70,13 @@ while true; do
         if [ "$ERR_CNT" -gt "$LIMIT_CNT" ]; then
             logger -p local0.emerg "[$tag:$LINENO] [$IFACE] Reboot because $IFACE is cannot recovery(ERR_CNT:$ERR_CNT > LIMIT_CNT:$LIMIT_CNT)"
             TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-            LOG_FILE="$LOG_DIR/${TIMESTAMP}.log"
+            LOG_FILE="$LOG_DIR/module_${TIMESTAMP}.log"
             #logger -p local0.info "[$tag:$LINENO] [$IFACE] dmesg |tail -1000 > $LOG_FILE"
             #dmesg |tail -1000 > "$LOG_FILE"
             #LOG_FILE="$LOG_DIR/${TIMESTAMP}_jo.log"
             logger -p local0.info "[$tag:$LINENO] [$IFACE] saving kernel logs to '$LOG_FILE'"
-            journalctl -k --since "1 min ago" > "$LOG_FILE"
+            #journalctl -k --since "1 min ago" > "$LOG_FILE"
+            dmesg > $LOG_FILE
             sync
             sleep 3
             reboot
@@ -106,7 +107,7 @@ while true; do
         DURATION=$((TIMESTAMP - UNSTABLE_START))
 
         if (( DURATION >= MAX_UNSTABLE_DURATION )); then
-            logger -p local0.info  "[$tag:$LINENO] [$IFACE] restart wpa_supplicant@$IFACE because wifi is not connected during $MAX_UNSTABLE_DURATION" 
+            logger -p local0.err "[$tag:$LINENO] [$IFACE] restart wpa_supplicant@$IFACE because wifi is not connected during $MAX_UNSTABLE_DURATION" 
             #wpa_cli disable_network 0
             systemctl stop wpa_supplicant@$IFACE
             sleep 1
@@ -123,7 +124,7 @@ while true; do
     PRE_STATE=$STATE
     LINK_OUTPUT=$(iw "$IFACE" link 2>&1)
     if echo "$LINK_OUTPUT" | grep -q "Connected to" && echo "$LINK_OUTPUT" | grep -q "command failed"; then
-        logger -p local0.info "[$tag:$LINENO] [$IFACE] Detected invalid link state. Triggering reconnect..."
+        logger -p local0.err "[$tag:$LINENO] [$IFACE] Detected invalid link state. Triggering reconnect..."
         wpa_cli -i "$IFACE" disconnect
         sleep 1
         wpa_cli -i "$IFACE" reconnect

@@ -400,6 +400,7 @@ END
             ERR_CNT_MAP["$IP"]=0
             INIT_CNT_MAP["$IP"]=0
             REBOOT_CNT_MAP["$IP"]=0
+            sleep 1
         fi
     done
 
