@@ -3,7 +3,7 @@ set -u
 
 tag=$(basename "$0")
 DEV="/sys/bus/iio/devices/iio:device0"
-gain0="1.52439"   # CH0: 전류
+gain0="0.5203"   # CH0: 전류
 gain1="15.6552"   # CH1: 전압
 FACILITY="local3"
 

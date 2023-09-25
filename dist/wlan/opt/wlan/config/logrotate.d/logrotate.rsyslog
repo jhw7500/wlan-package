@@ -16,6 +16,8 @@
 /var/log/cantops/wpa/mlan1/wpa.log
 /var/log/cantops/ping.log
 /var/log/cantops/ui.log
+/var/log/cantops/cpu.log
+/var/log/cantops/link_stat.log
 /var/log/cantops/err/*.log
 {
         rotate 7

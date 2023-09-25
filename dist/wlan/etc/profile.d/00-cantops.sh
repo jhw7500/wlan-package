@@ -61,6 +61,12 @@ alias clogt='cat $LOGDIR/cpu.log | tail -n $1'
 alias clogh='cat $LOGDIR/cpu.log | head -n $1'
 alias clogf='tail -f $LOGDIR/cpu.log'
 
+alias nlog='cat $LOGDIR/link_stat.log'
+alias nlogg='cat $LOGDIR/link_stat.log | grep -i $1 -a'
+alias nlogt='cat $LOGDIR/link_stat.log | tail -n $1'
+alias nlogh='cat $LOGDIR/link_stat.log | head -n $1'
+alias nlogf='tail -f $LOGDIR/link_stat.log'
+
 alias ulog='cat $LOGDIR/ui.log'
 alias ulogg='cat $LOGDIR/ui.log | grep -i $1 -a'
 alias ulogt='cat $LOGDIR/ui.log | tail -n $1'

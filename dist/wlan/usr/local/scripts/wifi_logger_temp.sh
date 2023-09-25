@@ -22,7 +22,7 @@ WARN_MLAN_TEMP=$((WARN_CPU_TEMP-10))
 MLAN0_TEMP=0
 MLAN1_TEMP=0
 LOG_LEVEL=info
-
+max_cpu_temp=0
 sleep 5
 
 while true; do
@@ -30,6 +30,11 @@ while true; do
     CPU_TEMP=$(echo "$CPU_TMP_VAL/1000" | bc)
     MLAN0_TEMP=$(mlanutl mlan0 get_sensor_temp | awk '{print int($4)}')
     MLAN1_TEMP=$(mlanutl mlan1 get_sensor_temp | awk '{print int($4)}')
+    max_cpu_temp=$(cat /var/log/cantops/max_temp)
+        
+    if (( CPU_TEMP > max_cpu_temp )); then
+        echo $CPU_TEMP > /var/log/cantops/max_temp
+    fi
 
     if (( CPU_TEMP >= CRIT_CPU_TEMP || MLAN0_TEMP >= CRIT_MLAN_TEMP || MLAN1_TEMP >= CRIT_MLAN_TEMP )); then
         LOG_LEVEL=crit
@@ -47,6 +52,7 @@ while true; do
     if (( CPU_TEMP >= EMERG_CPU_TEMP )); then
         logger -p local0.emerg "[$tag:$LINENO] temp cpu : $CPU_TEMP, mlan0 : $MLAN0_TEMP, mlan1 : $MLAN1_TEMP"
         logger -p local0.emerg "[$tag:$LINENO] temperature critical reboot..."
+        /usr/local/scripts/journald_snapshot.sh
         sleep 5
         reboot
     fi

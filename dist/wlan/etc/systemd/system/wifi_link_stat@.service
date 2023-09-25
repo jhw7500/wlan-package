@@ -1,0 +1,18 @@
+[Unit]
+Description=WiFi Link Capture for Service %i
+#After=network.target
+#PartOf=wifi_logger.service
+BindsTo=sys-subsystem-net-devices-%i.device
+Requires=sys-subsystem-net-devices-%i.device
+After=wifi_logger@%i.serivce
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/scripts/wifi_link_stat.sh %i
+#RemainAfterExit=true
+#Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
+

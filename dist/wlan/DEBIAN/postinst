@@ -92,9 +92,9 @@ customctl() {
         if [ "$target" = "enabled" ]; then
             systemctl enable $daemon_name
         elif [ "$target" = "disabled" ]; then
-            systemctl disable $daemon_name
+            systemctl disable --now $daemon_name
         elif [ "$target" = "masked" ]; then
-            systemctl disable $daemon_name
+            systemctl disable --now $daemon_name
             systemctl mask $daemon_name
         else
             echo "$target is wrong status"
@@ -131,6 +131,10 @@ customctl() {
   customctl nginx disabled
   customctl monkey disabled
   customctl netdata disabled
+  customctl collectd disabled
+  customctl thttpd disabled
+  customctl named disabled
+  customctl bind disabled
   #customctl samba disabled
   #customctl hciattach disabled
 
@@ -141,27 +145,27 @@ customctl() {
   customctl wifi_init enabled
   customctl wifi_logger enabled
 
+  #customctl wifi_arping@eth0 disabled
+  #customctl arping@eth0 disabled
   customctl wifi_led@eth0 enabled
-  customctl wifi_arping@eth0 disabled
   customctl wifi_logger@eth0 enabled
   customctl wifi_checker@eth0 enabled
-  customctl arping@eth0 disabled
 
-  customctl wifi_arp@mlan0 disabled
-  customctl wifi_arping@mlan0 disabled
-
+  #customctl wifi_arp@mlan0 disabled
+  #customctl wifi_arping@mlan0 disabled
+  #customctl wifi_ping@mlan0 disabled
+  #customctl arping@mlan0 disabled
   customctl wifi_led@mlan0 enabled
   customctl wifi_logger@mlan0 enabled
   customctl wifi_checker@mlan0 enabled
-  customctl wifi_ping@mlan0 disabled
-  customctl wifi_capture@mlan0 disabled
-  customctl arping@mlan0 disabled
+  customctl wifi_link_stat@mlan0.timer enabled
+  #customctl wifi_capture@mlan0 disabled
 
-  customctl wifi_logger@mlan1 disabled
-  customctl wifi_checker@mlan1 disabled
-  customctl wifi_ping@mlan1 disabled
-  customctl wifi_arp@mlan1 disabled
-  customctl wifi_arping@mlan1 disabled
+  #customctl wifi_logger@mlan1 disabled
+  #customctl wifi_checker@mlan1 disabled
+  #customctl wifi_ping@mlan1 disabled
+  #customctl wifi_arp@mlan1 disabled
+  #customctl wifi_arping@mlan1 disabled
 
   #customctl wpa_supplicant@mlan0 enabled
   #customctl wifi_bridge@mlan0 enabled
@@ -231,9 +235,10 @@ makeDirectory() {
   /usr/local/scripts/change_line.sh "Wants=network.target wifi_bridge@%i.service" "Wants=" /lib/systemd/system/wpa_supplicant@.service
   /usr/local/scripts/change_line.sh "Storage=volatile" "Storage=" /etc/systemd/journald.conf
   /usr/local/scripts/change_line.sh "SyncIntervalSec=1m" "SyncIntervalSec=" /etc/systemd/journald.conf
-  /usr/local/scripts/change_line.sh "RuntimeMaxUse=128M" "RuntimeMaxUse=" /etc/systemd/journald.conf
-  /usr/local/scripts/change_line.sh "RuntimeKeepFree=32M" "RuntimeKeepFree=" /etc/systemd/journald.conf
+  /usr/local/scripts/change_line.sh "RuntimeMaxUse=64M" "RuntimeMaxUse=" /etc/systemd/journald.conf
+  /usr/local/scripts/change_line.sh "RuntimeKeepFree=16M" "RuntimeKeepFree=" /etc/systemd/journald.conf
   /usr/local/scripts/change_line.sh "MaxLevelStore=info" "MaxLevelStore=" /etc/systemd/journald.conf
+  /usr/local/scripts/change_line.sh "MaxFileSec=12h" "MaxFileSec=" /etc/systemd/journald.conf
   /usr/local/scripts/change_line.sh "WatchdogDevice=/dev/watchdog" "WatchdogDevice=" /etc/systemd/system.conf
   /usr/local/scripts/change_line.sh "DefaultTimeoutStartSec=30s" "DefaultTimeoutStartSec=" /etc/systemd/system.conf
   /usr/local/scripts/change_line.sh "DefaultTimeoutStopSec=30s" "DefaultTimeoutStopSec=" /etc/systemd/system.conf
