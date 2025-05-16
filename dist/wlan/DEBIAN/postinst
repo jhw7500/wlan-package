@@ -127,6 +127,8 @@ makeDirectory() {
   cp /opt/wlan/config/rc.local /etc/
   cp /opt/wlan/config/rsyslog.conf /etc/
 
+  mv /usr/local/bin/iw /usr/local/bin/iw_org
+  ln -s /usr/local/bin/iw /usr/local/bin/iw_new
   ln -s /usr/local/bin/wifi /usr/local/scripts/wifi.sh
   #systemctl enable wifi_logger@mlan0
   #systemctl enable wifi_logger@mlan1
