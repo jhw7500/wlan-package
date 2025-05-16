@@ -1,0 +1,146 @@
+#!/bin/bash
+
+############################################################
+# config script main
+############################################################
+
+function get_mainboard_type() {
+    local cpu_name=$(cat /proc/device-tree/model | cut -d' ' -f2 )
+    if [ "${cpu_name}" == "i.MX8MPlus" ]; then
+        echo "plus"
+    else
+        echo "mini"
+    fi
+}
+
+function get_daughter_type() {
+    local dbid_gpio=(132 88 107)
+    local sum_id0=0
+    local sum_id1=0
+    local sum_id2=0
+    local id=0
+    local type=""
+
+    if [ "$(get_mainboard_type)" == "plus" ]; then
+        dbid_gpio=(496 497 498)
+    fi
+
+    #gpio init
+    for var in "${dbid_gpio[@]}"
+    do
+        #gpio export
+        if [ ! -d "/sys/class/gpio/gpio$var" ] ; then
+            echo $var > /sys/class/gpio/export
+        fi
+
+        #gpio input direction
+        echo in > /sys/class/gpio/gpio$var/direction
+    done
+
+    #gpio read
+    for i in {0..9}
+    do
+        if [ $(cat /sys/class/gpio/gpio${dbid_gpio[0]}/value) == 1 ]; then
+            sum_id0=`expr $sum_id0 + 1`
+        fi
+
+        if [ $(cat /sys/class/gpio/gpio${dbid_gpio[1]}/value) == 1 ]; then
+            sum_id1=`expr $sum_id1 + 1`
+        fi
+
+        if [ $(cat /sys/class/gpio/gpio${dbid_gpio[2]}/value) == 1 ]; then
+            sum_id2=`expr $sum_id2 + 1`
+        fi
+    done
+
+    if [ $sum_id0 -ge 5 ]; then
+        id=`expr $_id + 1`
+    fi
+
+    if [ $sum_id1 -ge 5 ]; then
+        id=`expr $_id + 2`
+    fi
+
+    if [ $sum_id2 -ge 5 ]; then
+        id=`expr $_id + 4`
+    fi
+
+    if [ $id -eq 1 ]; then
+        type="analog"
+    else
+        type="ethercat"
+    fi
+}
+
+function get_edge_id() {
+    local cnt=0
+	docker ps -a -f "name=edge" --format "table {{.ID}}\t{{.Image}}\t{{.Status}}" | while read line;
+	do
+	if [ $cnt -ge 1 ]; then 
+        local name=`echo $line | cut -d' ' -f2`
+        if [[ ${name} == "sea_app:latest" ]]; then
+            echo $line
+            break;
+        fi
+	fi
+	cnt=`expr $cnt + 1`
+	done
+}
+
+function check_installed_sea() {
+    local ret=0
+    local active=$(systemctl is-active docker 2>/dev/null)
+    if [ "${active}" == "active" ]; then
+        local edge_id=`echo $(get_edge_id) | cut -d' ' -f1`
+        if [ ! -z "${edge_id}" ]; then
+            ret=1
+        fi
+    fi
+    echo "$ret"
+}
+
+function suggest_suitable_model() {
+    if [ "$(check_installed_sea)" == "1" ]; then
+        if [ "$(get_daughter_type)" == "ethercat" ]; then
+            echo "cis-c2"
+        else
+            echo "cis-a2"
+        fi
+    else
+        echo "pim-x4"
+    fi
+}
+
+# Include debconf library.
+. /usr/share/debconf/confmodule
+
+# load debconf database
+db_get pim-mp/model
+model=$RET
+
+if [ -z "$model" ]; then
+    model="none"
+fi
+
+old_model=$model
+if [ "$1" == "reconfigure" ]; then
+    # Ask the question
+    db_input medium pim-mp/model || true
+    db_go
+
+    db_get pim-mp/model
+    model=$RET
+fi
+
+if [ "$model" == "none" ]; then
+    model=$(suggest_suitable_model)
+    db_set pim-mp/model $model
+    db_get pim-mp/model
+    model=$RET
+fi
+
+if [ "$model" != "$old_model" ]; then
+    echo "config $1 ($old_model -> $model)"
+else
+    echo "config $1 ($model)"
+fi

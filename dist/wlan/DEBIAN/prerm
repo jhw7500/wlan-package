@@ -1,0 +1,20 @@
+#!/bin/bash
+
+############################################################
+# prerm script main
+############################################################
+# Include debconf library.
+
+case "$1" in
+upgrade)
+  echo "prerm upgrade"
+  ;;
+
+remove)
+  echo "prerm remove"
+  ;;
+
+*)
+  echo "Unrecognized prerm argument '$1'"
+
+esac

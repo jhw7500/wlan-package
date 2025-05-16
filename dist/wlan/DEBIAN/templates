@@ -1,0 +1,5 @@
+Template: pim-mp/model
+Type: select
+Choices: none, cis-a2, cis-a4, cis-c2, pim-a2, pim-a4, pim-c2, pim-x2, pim-x4
+Description: Select your pim-mp model:
+ This will set the operational mode for pim-mp.

@@ -1,0 +1,13 @@
+[Unit]
+Description=WiFi Logging Service
+After=network.target
+
+[Service]
+ExecStart=/usr/local/scripts/wifi_logger_start.sh %i
+ExecStop=/usr/local/scripts/wifi_logger_stop.sh %i
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
+

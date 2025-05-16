@@ -1,0 +1,12 @@
+[Unit]
+Description=Wifi Bridge Service
+After=network.target
+
+[Service]
+ExecStart=/usr/local/scripts/wifi_bridge.sh
+#Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
+

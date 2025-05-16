@@ -1,0 +1,117 @@
+LOGDIR="/var/log/cantops"
+CAPDIR="$LOGDIR/capture"
+SCANDIR="$LOGDIR/scan"
+STATDIR="$LOGDIR/stat"
+LINKDIR="$LOGDIR/link"
+
+STATDIR0="$STATDIR/mlan0"
+LINKDIR0="$LINKDIR/mlan0"
+SCANDIR0="$SCANDIR/mlan0"
+CAPDIR0="$CAPDIR/mlan0"
+
+STATDIR1="$STATDIR/mlan1"
+LINKDIR1="$LINKDIR/mlan1"
+SCANDIR1="$SCANDIR/mlan1"
+CAPDIR1="$CAPDIR/mlan1"
+
+alias dpkgif='dpkg -i --force-overwrite $1'
+alias dpkglg='dpkg -l |grep $1'
+
+alias slogf='tail -f $LOGDIR/sys.log'
+alias slogg='cat $LOGDIR/sys.log | grep -i $1 -a'
+alias slogt='cat $LOGDIR/sys.log | tail -n $1'
+alias slogh='cat $LOGDIR/sys.log | head -n $1'
+alias klogg='cat $LOGDIR/kern.log | grep -i $1 -a'
+alias klogt='cat $LOGDIR/kern.log | tail -n $1'
+alias klogh='cat $LOGDIR/kern.log | head -n $1'
+alias klogf='tail -f $LOGDIR/kern.log'
+
+alias llogg='cat $LOGDIR/local0.log | grep -i $1 -a'
+alias llogt='cat $LOGDIR/local0.log | tail -n $1'
+alias llogh='cat $LOGDIR/local0.log | head -n $1'
+alias llogf='tail -f $LOGDIR/local0.log'
+
+alias clogg='cat $CAPDIR0/cap.log | grep -i $1 -a'
+alias clogt='cat $CAPDIR0/cap.log |tail -n $1'
+alias clogh='cat $CAPDIR0/cap.log |head -n $1'
+alias clogf='tail -f $CAPDIR0/cap.log'
+alias plogt='tcpdump -r $CAPDIR/pcap.pcap -tttt -e -n |tail -n $1'
+alias plogh='tcpdump -r $CAPDIR/pcap.pcap -tttt -e -n -c $1'
+alias plogg='tcpdump -r $CAPDIR/pcap.pcap -tttt -e- n |grep -i $1 -a'
+
+alias alogg='cat $SCANDIR0/ap.log | grep -i $1 -a'
+alias alogt='cat $SCANDIR0/ap.log | tail -n $1'
+alias alogh='cat $SCANDIR0/ap.log | head -n $1'
+alias alogf='tail -f $SCANDIR0/ap.log'
+alias blog='cat $SCANDIR0/beacon.json'
+alias blogg='cat $SCANDIR0/beacon.json | grep -i $1 -a'
+alias blogt='cat $SCANDIR0/beacon.json | tail -n $1'
+alias blogh='cat $SCANDIR0/beacon.log | head -n $1'
+alias blogf='tail -f $SCANDIR0/beacon.json'
+alias flogg='cat $SCANDIR0/freq.log | grep -i $1 -a'
+alias flogt='cat $SCANDIR0/freq.log | tail -n $1'
+alias flogh='cat $SCANDIR0/freq.log | head -n $1'
+alias flogf='tail -f $SCANDIR0/freq.log'
+
+alias tlogg='cat $STATDIR0/stat.log | grep -i $1 -a'
+alias tlogt='cat $STATDIR0/stat.log | tail -n $1'
+alias tlogh='cat $STATDIR0/stat.log | head -n $1'
+alias tlogf='tail -f $STATDIR0/stat.log'
+
+alias ilog='cat $LINKDIR0/link.json'
+alias ilogg='cat $LINKDIR0/link.json | grep -i $1 -a'
+alias ilogt='cat $LINKDIR0/link.json | tail -n $1'
+alias ilogh='cat $LINKDIR0/link.json | head -n $1'
+alias ilogf='tail -f $LINKDIR0/link.json'
+
+alias tlogg1='cat $STATDIR1/stat.log | grep -i $1 -a'
+alias tlogt1='cat $STATDIR1/stat.log | tail -n $1'
+alias tlogh1='cat $STATDIR1/stat.log | head -n $1'
+alias tlogf1='tail -f $STATDIR1/stat.log'
+
+alias ilog1='cat $LINKDIR1/link.json'
+alias ilogg1='cat $LINKDIR1/link.json | grep -i $1 -a'
+alias ilogt1='cat $LINKDIR1/link.json | tail -n $1'
+alias ilogh1='cat $LINKDIR1/link.json | head -n $1'
+alias ilogf1='tail -f $LINKDIR1/link.json'
+
+alias alogg0='cat $SCANDIR0/ap.log | grep -i $1 -a'
+alias alogt0='cat $SCANDIR0/ap.log | tail -n $1'
+alias alogh0='cat $SCANDIR0/ap.log | head -n $1'
+alias alogf0='tail -f $SCANDIR0/ap.log'
+alias blog0='cat $SCANDIR0/beacon.json'
+alias blogg0='cat $SCANDIR0/beacon.json | grep -i $1 -a'
+alias blogt0='cat $SCANDIR0/beacon.json | tail -n $1'
+alias blogh0='cat $SCANDIR0/beacon.json | head -n $1'
+alias blogf0='tail -f $SCANDIR0/beacon.json'
+alias flogg0='cat $SCANDIR0/freq.log | grep -i $1 -a'
+alias flogt0='cat $SCANDIR0/freq.log | tail -n $1'
+alias flogh0='cat $SCANDIR0/freq.log | head -n $1'
+alias flogf0='tail -f $SCANDIR0/freq.log'
+
+alias alogg1='cat $SCANDIR1/ap.log | grep -i $1 -a'
+alias alogt1='cat $SCANDIR1/ap.log | tail -n $1'
+alias alogh1='cat $SCANDIR1/ap.log | head -n $1'
+alias alogf1='tail -f $SCANDIR1/ap.log'
+alias blog1='cat $SCANDIR1/beacon.json'
+alias blogg1='cat $SCANDIR1/beacon.json | grep -i $1 -a'
+alias blogt1='cat $SCANDIR1/beacon.json | tail -n $1'
+alias blogh1='cat $SCANDIR1/beacon.json | head -n $1'
+alias blogf1='tail -f $SCANDIR1/beacon.log'
+alias flogg1='cat $SCANDIR1/freq.log | grep -i $1 -a'
+alias flogt1='cat $SCANDIR1/freq.log | tail -n $1'
+alias flogh1='cat $SCANDIR1/freq.log | head -n $1'
+alias flogf1='tail -f $SCANDIR1/freq.log'
+
+alias psg='ps -ef |grep -i $1'
+alias sdr='systemctl daemon-reload'
+alias sst='systemctl status $1'
+alias sss='systemctl start $1'
+alias ssp='systemctl stop $1'
+alias ssr='systemctl restart $1'
+alias sse='systemctl enable $1'
+alias ssd='systemctl disable $1'
+alias ssg='systemctl |grep -i $1'
+alias camchk1='i2ctransfer -f -y 1 w2@0x48 0x00 0x13 r1'
+alias camchk2='i2ctransfer -f -y 2 w2@0x48 0x00 0x13 r1'
+alias jo='journalctl -o short-iso-precise'

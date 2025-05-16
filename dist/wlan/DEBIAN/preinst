@@ -1,0 +1,42 @@
+#!/bin/bash
+
+############################################################
+# preinst script main
+############################################################
+# Include debconf library.
+
+PACKAGE_NAME="$DPKG_MAINTSCRIPT_PACKAGE"
+tag=$(basename "$0")
+KEY=PKG
+
+echo "install $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)"
+logger -s -p local0.notice "[$KEY][$tag:$LINENO] install $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME) start"
+#echo "stop cam-operate daemon"
+#systemctl stop cam-operate
+
+case "$1" in
+install)
+  echo "preinst install ($model)"
+  #killall apt apt-get
+  #rm /var/lib/apt/lists/lock
+  #rm /var/cache/apt/archives/lock
+  #rm /var/lib/dpkg/lock*
+  #dpkg --configure -a
+  #dpkg --purge pim
+  #dpkg --purge pim-test
+#  systemctl stop rsyslog
+#  git config --global user.name "hwjo" && git config --global user.email "hwjo@cantops.biz"
+#  /root/SOMBASE_TEST/mfg60n-aarch64-9.32.0.6.sh install
+#  lmu -reg FCC
+#  iw set US
+  ;;
+
+upgrade)
+  echo "preinst upgrade ($model)"
+#  systemctl stop rsyslog
+  ;;
+
+*)
+  echo "Unrecognized preinst argument '$1'"
+
+esac

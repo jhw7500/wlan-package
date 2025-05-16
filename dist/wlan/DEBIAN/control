@@ -1,0 +1,11 @@
+Package: wlan-proc
+Version: 0.0.0
+Section: test
+Priority: optional
+Architecture: arm64 
+Depends: 
+Recommends: 
+Maintainer: jhw <hwjo@cantops.biz> 
+Homepage: 
+Description: WLAN Application 
+0.0.0 : Test version

@@ -1,0 +1,30 @@
+#!/bin/bash
+
+############################################################
+# postrm script main
+############################################################
+# Include debconf library.
+
+case "$1" in
+purge)
+  echo "purge purge"
+  #rm -r /opt/pim
+  #rm -r /root/SOMBASE_TEST
+  #rm -r /root/shared_v
+  #cat /dev/null > /etc/rc.local
+  #systemctl disable cam-operate
+  #systemctl set-default graphical.target
+  ;;
+
+upgrade)
+  echo "purge upgrade ($model)"
+  ;;
+
+remove)
+  echo "postrm remove ($model)"
+  ;;
+
+*)
+  echo "Unrecognized postrm argument '$1'"
+
+esac

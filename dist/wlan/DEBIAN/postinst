@@ -1,0 +1,149 @@
+#!/bin/bash
+
+############################################################
+# postinst script main
+############################################################
+# Include debconf library.
+tag=$(basename "$0")
+KEY=PKG
+PACKAGE_NAME="$DPKG_MAINTSCRIPT_PACKAGE"
+KERNEL_VERSION=$(uname -r)
+#hostname=$(python3 /opt/cis/bin/getconfval.py hostname)
+hostname=Cantops
+
+case "$1" in
+configure)
+  echo "postinst configure"
+  /usr/local/scripts/auto_fs_sizeup.sh 2 2
+
+:<<'END'
+  status=$(df |grep /dev/root |awk '{print $2}')
+  if [ "$status" -ge 30000000 ]; then
+    echo "disk size : $status over 30000000 byte"
+  else
+    echo "emmc auto size up"
+    /opt/pim/bin/auto_fs_sizeup.sh 2 2
+  fi
+
+  status=$(timedatectl |grep NTP|awk '{print $3}')
+  if [ "$status" == "inactive" ]; then
+    echo "ntp is $status"
+  else
+    echo "set-ntp false"
+    timedatectl set-ntp false
+  fi
+
+  status=$(timedatectl |grep Time|awk '{print $3}')
+  if [ "$status" == "Asia/Seoul" ]; then
+    echo "timezone is $status"
+  else
+    echo "set-timezone Asis/Seoul"
+    timedatectl set-timezone Asia/Seoul
+  fi
+
+  #timedatectl set-timezone Etc/UTC
+END
+
+customctl() {
+    target=$1
+    daemon_name=$2
+    status=$(systemctl is-enabled $daemon_name 2>/dev/null)
+
+    if [ "$status" != "$target" ]; then
+        if [ "$target" = "enabled" ]; then
+            systemctl enable $daemon_name
+        elif [ "$target" = "disabled" ]; then
+            systemctl disable $daemon_name
+        elif [ "$target" = "masked" ]; then
+            systemctl disable $daemon_name
+            systemctl mask $daemon_name
+        else
+            echo "$target is wrong status"
+            return 1
+        fi
+    fi
+
+    status=$(systemctl is-enabled $daemon_name 2>/dev/null)
+    echo "$daemon_name is $status"
+}
+
+  customctl systemd-network-wait-online masked
+  customctl dhcpcd disabled 
+
+  #customctl hciattach disabled
+  customctl wifi_logger@mlan0 enabled
+  customctl wifi_logger@mlan1 enabled
+  customctl wifi_checker@mlan0 enabled
+  customctl wifi_checker@mlan1 enabled
+
+
+makeDirectory() {
+    if [ ! -d "$1" ]; then
+        echo "Creating $1 directory..."
+        mkdir -p "$1"
+        if [ $? -eq 0 ]; then
+            echo "Directory $1 created successfully."
+        else
+            #echo "Failed to create $1 directory."
+            logger -s -p local0.err "Failed to create $1 directory."
+            exit 1
+        fi
+    else
+        echo "$1 directory already exists."
+    fi
+}
+
+  #echo "update dtb"
+  #makeDirectory() /root/boot
+  #mount /dev/mmcblk2p1 /root/boot
+  #cp /opt/pim/boot/imx8mp*.dtb /root/boot/
+  #umount /root/boot
+
+  #echo "set id, passwd"
+  #(echo root; echo root;) | passwd root
+  #(echo user; echo user;) | smbpasswd -as user
+  #(echo root; echo root;) | smbpasswd -as root
+  #useradd -m semes && (echo semes; echo semes;) | passwd semes
+
+#  chmod -R 777 /mnt/sd_cam
+#  chmod 777 /share
+#  chmod 777 /shared
+#  echo "set sshd"
+#  sed 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' -i /etc/ssh/sshd_config
+
+  echo "set printk"
+  sed '/kernel.printk/ c\kernel.printk = 2 4 1 3' -i /etc/sysctl.conf
+
+  echo "set hostname"
+  echo $hostname > /etc/hostname
+  sed -i "2s/.*/127.0.1.1 $hostname/g" -i /etc/hosts
+#  sed -i 's/#kernel.printk = 3 4 1 3/kernel.printk = 2 4 1 3/g' -i /etc/sysctl.conf
+
+  #/usr/local/scripts/add_line.sh "00 *      * * *    root        logrotate /etc/logrotate.d/logrotate.rsyslog" /etc/crontab
+  #/usr/local/scripts/comment_line.sh "tmpfs                /var/volatile" /etc/fstab
+  /usr/local/scripts/change_line.sh "#tmpfs                /var/volatile        tmpfs      defaults              0  0" "tmpfs                /var/volatile" /etc/fstab
+
+  cp /opt/wlan/config/logrotate.rsyslog /etc/logrotate.d/
+  cp /opt/wlan/config/rc.local /etc/
+  cp /opt/wlan/config/rsyslog.conf /etc/
+
+  ln -s /usr/local/bin/wifi /usr/local/scripts/wifi.sh
+  #systemctl enable wifi_logger@mlan0
+  #systemctl enable wifi_logger@mlan1
+  #systemctl enable wifi_checker@mlan0
+  #systemctl enable wifi_checker@mlan1
+
+  PACKAGE_NAME="$DPKG_MAINTSCRIPT_PACKAGE"
+  echo -e "\e[32m install $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME) finish\e[0m"
+  logger -p local0.notice "[$KEY][$tag:$LINENO] install $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME) finish"
+  sync
+  ;;
+
+upgrade)
+  echo "postinst upgrade ($model)"
+  ;;
+
+*)
+  echo "Unrecognized postinst argument '$1'"
+
+esac

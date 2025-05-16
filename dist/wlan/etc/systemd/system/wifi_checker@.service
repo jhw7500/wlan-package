@@ -1,0 +1,12 @@
+[Unit]
+Description=WiFi Checker Service
+After=network.target
+
+[Service]
+ExecStart=/usr/local/scripts/wifi_checker.sh %i
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
+
