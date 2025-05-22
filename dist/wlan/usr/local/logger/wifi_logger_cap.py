@@ -14,7 +14,7 @@ LOG_DIR = "/var/log/cantops/capture"
 INTERFACE = "rtap"
 PCAP_DIR = f"{LOG_DIR}/tmp"
 PCAP_FILENAME = f"{INTERFACE}.pcap"
-CAP_FILENAME = "cap.log"
+CAP_FILENAME = "mgmt.log"
 DURATION = 10
 BROADCAST_MAC = "ff:ff:ff:ff:ff:ff"
 IFACE = ""
@@ -22,7 +22,7 @@ IFACE = ""
 parse_thread = 0
 
 def handle_sigterm(signum, frame):
-    logger.message('crit', "IGTERM received! Doing cleanup...", _EXTRA_())
+    logger.message('crit', f"{IFACE} IGTERM?{signum} received! Doing cleanup...", _EXTRA_())
     cleanup()
     sys.exit(0)
 
@@ -47,7 +47,7 @@ def is_ap_connected(interface):
 
         return False
     except Exception as e:
-        logger.message('err', f"Failed to check AP connection: {e}", _EXTRA_())
+        logger.message('err', f"{IFACE} Failed to check AP connection: {e}", _EXTRA_())
         return False
     
 def get_mac_address(iface):
@@ -67,9 +67,10 @@ def capture_tshark():
 
 def parse_capture(mac_mlan):
     #print("??")
-    ether_host = f"ether host {mac_mlan}"
+    #ether_host = f"ether host {mac_mlan}"
+    ether_host = f"ether host {mac_mlan} or ether host {BROADCAST_MAC}"
     display_filter = f"wlan.sa == {mac_mlan} || wlan.da == {mac_mlan} || wlan.bssid == {mac_mlan}"
-    logger.message('info', f"{ether_host}", _EXTRA_())
+    logger.message('info', f"{IFACE} ether host : {ether_host}", _EXTRA_())
     
     tshark_proc = subprocess.Popen([
         "tshark", "-i", INTERFACE,
@@ -92,7 +93,7 @@ def parse_capture(mac_mlan):
         fields = line.strip().split(",")
         expected_fields = 9
         if len(fields) < expected_fields:
-            logger.message('err', f"Skipping incomplete line: {fields}", _EXTRA_())
+            logger.message('err', f"{IFACE} Skipping incomplete line: {fields}", _EXTRA_())
             continue
         
         #logger.message('info', f"sa:{fields[0]}, da:{fields[1]}", _EXTRA_())
@@ -102,13 +103,13 @@ def parse_capture(mac_mlan):
 
         mac_mlan = mac_mlan.lower().strip()
 
-        if da != mac_mlan and sa != mac_mlan:
+        #if da != mac_mlan and sa != mac_mlan and ftype != "0" and fsub != "9":
             #logger.message('info', f"Skipping frame: sa={sa}, da={da}", _EXTRA_())
-            continue
+        #    continue
 
-        if da == BROADCAST_MAC or sa == BROADCAST_MAC:
-            #logger.message('info', f"Skipping frame: sa={sa}, da={da}", _EXTRA_())
-            continue
+        #if da == BROADCAST_MAC or sa == BROADCAST_MAC:
+        #    #logger.message('info', f"Skipping frame: sa={sa}, da={da}", _EXTRA_())
+        #    continue
 
         if ftype == "0" and fsub == "14":
             continue
@@ -130,7 +131,7 @@ def parse_capture(mac_mlan):
         #msg = f"{frame_str} : SA={sa} DA={da} RSSI={rssi} NF={nf} SNR={snr} Retry={retry} Seq={seq}"
         msg = (
             f"{readable} "
-            f"{frame_str:<15} : "
+            f"{frame_str:<16}({fsub:>2}) : "
             f"SA={sa:<17} "
             f"DA={da:<17} "
             f"RSSI={rssi:>4} "
@@ -183,9 +184,9 @@ def main():
     
     time.sleep(1)
 
-    if not is_ap_connected(IFACE):
-        logger.message('warn', f"{IFACE} not connected to any AP. Exiting.", _EXTRA_())
-        sys.exit(1)
+    #if not is_ap_connected(IFACE):
+    #    logger.message('warn', f"{IFACE} not connected to any AP. Exiting.", _EXTRA_())
+    #    sys.exit(1)
     
     subprocess.run(["mlanutl", IFACE, "netmon", "1", "0x41"])
 
@@ -212,11 +213,11 @@ def main():
             #parse_capture(mac_mlan)
                     
     except (KeyboardInterrupt, SystemExit):
-        logger.message('warn', "Sys received KeyboardInterrupt or exit signal.", _EXTRA_())
+        logger.message('warn', "{IFACE} Sys received KeyboardInterrupt or exit signal.", _EXTRA_())
         #cap_thread.join()
         parse_thread.join()
     
-    logger.message('warn', "main loop close", _EXTRA_())
+    logger.message('warn', "{IFACE} main loop close", _EXTRA_())
 
 
 if __name__ == "__main__":
@@ -245,7 +246,7 @@ if __name__ == "__main__":
     '''
     LOG_DIR = f"/var/log/cantops/capture/{IFACE}"
     logger = Logger(app_name='logger_cap', facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
-    logger.message("info", f"version : {VERSION}, IFACE : {IFACE}, LOG_DIR : {LOG_DIR}", _EXTRA_())
+    logger.message("info", f"IFACE : {IFACE}, version : {VERSION}, LOG_DIR : {LOG_DIR}", _EXTRA_())
 
     if IFACE != "mlan0" and IFACE != "mlan1" :
         logger.message("err", f"{IFACE} is not vaild interface", _EXTRA_())

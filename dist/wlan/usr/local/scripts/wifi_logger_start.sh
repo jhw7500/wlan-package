@@ -47,7 +47,6 @@ PREV_RESTART_TIME=$(date +$s)
 RESTART_TIME_LIMIT=$((3600*6))
 
 logger -p local0.notice "[$tag:$LINENO] iface : $IFACE, interval : $INTERVAL, prev restart time : $PREV_RESTART_TIME, restart time limit : $RESTART_TIME_LIMIT" 
-
 systemctl restart wifi_capture
 while true; do
     sleep 10
@@ -74,7 +73,6 @@ while true; do
 
     sleep $INTERVAL
 done
-
 END
 
 else

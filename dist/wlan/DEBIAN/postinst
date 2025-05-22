@@ -43,6 +43,7 @@ configure)
 
   #timedatectl set-timezone Etc/UTC
 END
+  timedatectl set-timezone Asia/Seoul
 
 customctl() {
     target=$1
@@ -92,7 +93,7 @@ makeDirectory() {
         echo "$1 directory already exists."
     fi
 }
-
+  makeDirectory() /var/log/cantops/journal
   #echo "update dtb"
   #makeDirectory() /root/boot
   #mount /dev/mmcblk2p1 /root/boot
@@ -122,14 +123,19 @@ makeDirectory() {
   #/usr/local/scripts/add_line.sh "00 *      * * *    root        logrotate /etc/logrotate.d/logrotate.rsyslog" /etc/crontab
   #/usr/local/scripts/comment_line.sh "tmpfs                /var/volatile" /etc/fstab
   /usr/local/scripts/change_line.sh "#tmpfs                /var/volatile        tmpfs      defaults              0  0" "tmpfs                /var/volatile" /etc/fstab
+  /usr/local/scripts/change_line.sh "ExecStart=/usr/sbin/wpa_supplicant -c/etc/wpa_supplicant/wpa_supplicant-%I.conf -i%I -d" "ExecStart=/usr/sbin/wpa_supplicant" /lib/systemd/system/wpa_supplicant@.service
+  /usr/local/scripts/change_line.sh "Storage=persistent" "Storage=" /etc/systemd/journald.conf
+  /usr/local/scripts/add_line.sh "SystemMaxUse=2000M" /etc/systemd/journald.conf
+  /usr/local/scripts/add_line.sh "SystemKeepFree=500M" /etc/systemd/journald.conf
 
   cp /opt/wlan/config/logrotate.rsyslog /etc/logrotate.d/
   cp /opt/wlan/config/rc.local /etc/
   cp /opt/wlan/config/rsyslog.conf /etc/
 
   mv /usr/local/bin/iw /usr/local/bin/iw_org
-  ln -s /usr/local/bin/iw /usr/local/bin/iw_new
-  ln -s /usr/local/bin/wifi /usr/local/scripts/wifi.sh
+  ln -s /usr/local/bin/iw_new /usr/local/bin/iw
+  ln -s /usr/local/scripts/wifi.sh /usr/local/bin/wifi
+  ln -s /var/log/cantops/journal /var/log/journal
   #systemctl enable wifi_logger@mlan0
   #systemctl enable wifi_logger@mlan1
   #systemctl enable wifi_checker@mlan0

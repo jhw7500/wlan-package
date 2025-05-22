@@ -3,7 +3,7 @@ Description=Wifi Bridge Service
 After=network.target
 
 [Service]
-ExecStart=/usr/local/scripts/wifi_bridge.sh
+ExecStart=/usr/local/scripts/wifi_bridge.sh %i
 #Restart=always
 User=root
 

@@ -1,8 +1,8 @@
 #!/bin/bash
 tag=$(basename "$0")
 key=LOG
-
-logger -p local0.notice "[$tag:$LINENO] wifi bridge start"
+IFACE=$1
+logger -p local0.notice "[$tag:$LINENO] $IFACE wifi bridge start"
 
 getMac() {
     IFACE=$1
@@ -18,7 +18,7 @@ getMac() {
 
 }
 
-
+:<<'END'
 mac_eth=$(getMac eth0)
 mac_org=$(getMac mlan0)
 
@@ -28,12 +28,12 @@ ip link set mlan0 down
 ip link set mlan0 address $mac_new
 ip link set mlan0 up
 
-ip addr flush dev mlan0
-
 #mac_new=$(ip link show mlan0 | awk '/ether/ {print $2}')
 mac_new=$(getMac mlan0)
 logger -p local0.notice "change mlan0 Mac Address : $mac_new"
+END
 
+ip addr flush dev mlan0
 #ip route del 192.168.0.0/24 dev eth0
 #wpa_supplicant -i mlan0 -c /etc/wpa_supplicant.conf -B
 

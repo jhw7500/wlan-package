@@ -56,7 +56,7 @@ def get_last_ap_log_values(log_filename):
                     sec = int(match.group(10))
                     return retry_count, tx_bytes, tx_packets, rx_bytes, rx_packets, sec
     except Exception as e:
-        logger.message("err", f"error reading log file: {e}", _EXTRA_())
+        logger.message("err", f"{IFACE} error reading log file: {e}", _EXTRA_())
         #print(f"Error reading log file: {e}")
 
     return 0, 0, 0, 0, 0, 0  # Default values if no valid log entry found
@@ -65,7 +65,7 @@ def get_last_ap_log_values(log_filename, num_lines=10):
     """AP별 로그 파일에서 최신 로그 데이터를 읽어 파싱"""
 
     if not os.path.exists(log_filename):
-        logger.message("err", f"{log_filename} is not exist", _EXTRA_())
+        logger.message("err", f"{IFACE} {log_filename} is not exist", _EXTRA_())
         #print(f"{log_filename} is not exist")
         return None  # 파일이 존재하지 않으면 None 반환
 
@@ -82,7 +82,7 @@ def get_last_ap_log_values(log_filename, num_lines=10):
 
         if not lines:
             #print(f"{log_filename} is empty")
-            logger.message("err", f"{log_filename} is empty", _EXTRA_())
+            logger.message("err", f"{IFACE} {log_filename} is empty", _EXTRA_())
             return None
 
         for line in reversed(lines):
@@ -280,7 +280,7 @@ def get_mlanutl_log(interface="mlan0"):
     try:
         return subprocess.check_output(["mlanutl", interface, "getlog"], text=True)
     except subprocess.CalledProcessError as e:
-        logger.message("err", f"getlog Failed: {e}", _EXTRA_())
+        logger.message("err", f"{IFACE} getlog Failed: {e}", _EXTRA_())
         return ""
 
 
@@ -533,7 +533,7 @@ if __name__ == "__main__":
         IFACE = sys.argv[1]
         
     LOG_DIR = f"/var/log/cantops/stat/{IFACE}"
-    logger.message("notice", f"version : {VERSION}, IFACE : {IFACE}, LOG_DIR : {LOG_DIR}", _EXTRA_())
+    logger.message("notice", f"IFACE : {IFACE}, version : {VERSION}, LOG_DIR : {LOG_DIR}", _EXTRA_())
     
     if IFACE != "mlan0" and IFACE != "mlan1" :
         logger.message("err", f"{IFACE} is not vaild interface", _EXTRA_())

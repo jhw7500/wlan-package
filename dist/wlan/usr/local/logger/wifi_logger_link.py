@@ -77,7 +77,7 @@ def parse_station_dump(output):
         if stripped.startswith("Station "):
             result["address"] = stripped.split("Station")[1].split("(")[0].strip()
             if result["address"] != address:
-                logger.message("notice", f"AP changed: {address} -> {result['address']}", _EXTRA_())
+                logger.message("notice", f"{IFACE} AP changed: {address} -> {result['address']}", _EXTRA_())
             address = result["address"]
             continue
         key_value = stripped.split(":", 1)
@@ -125,7 +125,7 @@ if __name__ == "__main__":
         IFACE = sys.argv[1]
     
     LOG_DIR = f"/var/log/cantops/link/{IFACE}"
-    logger.message("notice", f"version : {VERSION}, IFACE : {IFACE}, LOG_DIR : {LOG_DIR}", _EXTRA_())
+    logger.message("notice", f"IFACE : {IFACE}, version : {VERSION}, LOG_DIR : {LOG_DIR}", _EXTRA_())
 
     if IFACE == "mlan0" :
         MWLAN_LOG_PATH = "/proc/mwlan/adapter0/mlan0/log"

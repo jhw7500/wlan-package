@@ -27,7 +27,7 @@ def run_setuserscan():
         )
         return result.stdout.splitlines()
     except subprocess.CalledProcessError as e:
-        logger.message("err", f"setuserscan failed: {e}", _EXTRA_())
+        logger.message("err", f"{IFACE} setuserscan failed: {e}", _EXTRA_())
         return []
 
 def run_iwdevscandump(retries=3, delay=1):
@@ -42,11 +42,11 @@ def run_iwdevscandump(retries=3, delay=1):
             )
             return result.stdout.splitlines()
         except subprocess.CalledProcessError as e:
-            logger.message("err", f"[{attempt}/{retries}] scan dump failed: {e}", _EXTRA_())
+            logger.message("err", f"[{attempt}/{retries}] {IFACE} scan dump failed: {e}", _EXTRA_())
             if attempt < retries:
                 time.sleep(delay)
             else:
-                logger.message("err", "All retry attempts for scan dump failed", _EXTRA_())
+                logger.message("err", f"All retry attempts for {IFACE} scan dump failed", _EXTRA_())
                 return "err"
 
 def run_getscanresults(retries=3, delay=1):
@@ -61,11 +61,11 @@ def run_getscanresults(retries=3, delay=1):
             )
             return result.stdout.splitlines()
         except subprocess.CalledProcessError as e:
-            logger.message("err", f"[{attempt}/{retries}] getscantable failed: {e}", _EXTRA_())
+            logger.message("err", f"[{attempt}/{retries}] {IFACE} getscantable failed: {e}", _EXTRA_())
             if attempt < retries:
                 time.sleep(delay)
             else:
-                logger.message("err", "All retry attempts for getscantable failed", _EXTRA_())
+                logger.message("err", "All retry attempts for {IFACE} getscantable failed", _EXTRA_())
                 return []
 
 def extract_ap_table(lines):
@@ -172,7 +172,7 @@ def remove_stale_entries(db, now_ts):
         if now_ts - last_seen_ts < STALE_THRESHOLD_SEC:
             cleaned[bssid] = info
         else:
-            logger.message("notice", f"BSSID {bssid} removed (last seen {info['date']})", _EXTRA_())
+            logger.message("notice", f"{IFACE} BSSID {bssid} removed (last seen {info['date']})", _EXTRA_())
     return cleaned
 
 
@@ -243,14 +243,14 @@ def extract_vht_operation_block(text):
 
 def parse_scan_output(scan_output):
     if scan_output is None:
-        logger.message("warning", "scan_output is None", _EXTRA_())
+        logger.message("warn", f"{IFACE} scan_output is None", _EXTRA_())
         return {}
 
     if isinstance(scan_output, list):
         scan_output = "\n".join(scan_output)
 
     if not scan_output.strip():
-        logger.message("warning", "parse_scan_output received empty scan data", _EXTRA_())
+        logger.message("warn", f"{IFACE} parse_scan_output received empty scan data", _EXTRA_())
         return {}
 
     if not scan_output or not isinstance(scan_output, str):
@@ -344,7 +344,7 @@ def merge_db(old_db, new_db):
     for bssid, data in new_db.items():
         if bssid not in old_db:
             ssid = data.get("ssid", "<unknown>")
-            logger.message("notice", f"New BSSID detected: {bssid} (SSID: {ssid})", _EXTRA_())
+            logger.message("notice", f"{IFACE} New BSSID detected: {bssid} (SSID: {ssid})", _EXTRA_())
         updated[bssid] = data
     return updated
 
@@ -371,7 +371,7 @@ def main_loop():
                 #lines = run_setuserscan()
                 result = run_iwdevscandump()
                 if result == "err":
-                    logger.message("err", "scan result failed!", _EXTRA_())
+                    logger.message("err", f"{IFACE} scan result failed!", _EXTRA_())
                     time.sleep(5)
                     #last_log_time = time.time()
                 else:
@@ -411,7 +411,7 @@ def main_loop():
             time.sleep(5)
 
     except KeyboardInterrupt:
-        logger.message("err", "keyboardInterrupt occurs", _EXTRA_())
+        logger.message("err", f"{IFACE} keyboardInterrupt occurs", _EXTRA_())
 
 if __name__ == "__main__":
     logger = Logger(app_name="logger_scan", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
@@ -423,7 +423,7 @@ if __name__ == "__main__":
         IFACE = sys.argv[1]
         LOG_DIR = f"/var/log/cantops/scan/{IFACE}"
     
-    logger.message("notice", f"version : {VERSION}, IFACE : {IFACE}, LOG_DIR : {LOG_DIR}", _EXTRA_())
+    logger.message("notice", f"IFACE : {IFACE}, "version : {VERSION}, LOG_DIR : {LOG_DIR}", _EXTRA_())
     
     if IFACE != "mlan0" and IFACE != "mlan1" :
         logger.message("err", f"{IFACE} is not vaild interface", _EXTRA_())

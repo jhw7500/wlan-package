@@ -32,10 +32,11 @@ fi
 echo 7 > /proc/sys/kernel/printk
 #echo 0 > /proc/sys/kernel/printk
 
+python3 /usr/local/logger/wifi_module_check.py &
 /usr/local/scripts/wifi_module_init.sh
 
 #initial test
-python3 /usr/local/logger/wifi_module_check.py &
+#python3 /usr/local/logger/wifi_module_check.py &
 
 exit 0
 

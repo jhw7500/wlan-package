@@ -51,7 +51,7 @@ def main():
     retry_success = False
 
     for i in range(5):
-        time.sleep(1)
+        time.sleep(2)
         if interface_exists():
             retry_success = True
             break
