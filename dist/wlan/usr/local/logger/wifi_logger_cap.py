@@ -76,7 +76,7 @@ def parse_capture(mac_mlan):
         "tshark", "-i", INTERFACE,
         "-b", "filesize:20480", #"-b", "files:20",
         "-w", f"{PCAP_DIR}/{PCAP_FILENAME}",
-        "-f", f"{ether_host}",
+        #"-f", f"{ether_host}",
         #"-Y", f"{display_filter}",
         #"-Y", "!(wlan.fc.subtype == 14)",
         "-T", "fields",
@@ -213,11 +213,11 @@ def main():
             #parse_capture(mac_mlan)
                     
     except (KeyboardInterrupt, SystemExit):
-        logger.message('warn', "{IFACE} Sys received KeyboardInterrupt or exit signal.", _EXTRA_())
+        logger.message('warn', f"{IFACE} Sys received KeyboardInterrupt or exit signal.", _EXTRA_())
         #cap_thread.join()
         parse_thread.join()
     
-    logger.message('warn', "{IFACE} main loop close", _EXTRA_())
+    logger.message('warn', f"{IFACE} main loop close", _EXTRA_())
 
 
 if __name__ == "__main__":

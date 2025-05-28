@@ -7,6 +7,8 @@ IFACE=$1
 
 logger -p local0.notice "[$tag:$LINENO] wifi check : $IFACE"
 
+python3 /usr/local/logger/wifi_module_check.py $IFACE
+
 while true; do
     LINK_OUTPUT=$(iw "$IFACE" link 2>&1)
     if echo "$LINK_OUTPUT" | grep -q "Connected to" && echo "$LINK_OUTPUT" | grep -q "command failed"; then

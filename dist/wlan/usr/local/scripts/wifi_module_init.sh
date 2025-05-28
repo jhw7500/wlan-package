@@ -54,7 +54,8 @@ sleep 0.2
 mlanutl mlan0 htcapinfo 0x05c20000
 mlanutl mlan1 htcapinfo 0x05c20000
 
-echo 1 > /proc/sys/net/ipv4/ip_forward
+#echo 1 > /proc/sys/net/ipv4/ip_forward
 
 ifconfig mlan0 up
 ifconfig mlan1 up
+

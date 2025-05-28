@@ -5,9 +5,11 @@ CONF_DIR="/etc/test"
 case "$1" in
   0 | mlan0)
     IFACE="mlan0"
+    NFACE="mlan1"
     ;;
   1 | mlan1)
     IFACE="mlan1"
+    NFACE="mlan0"
     ;;
   2 )
     echo "autoselect mlan0, mlan1"
@@ -57,6 +59,15 @@ case "$2" in
     if [ "$1" != 2 ]; then
         echo "Checking status $IFACE..."
         systemctl status wpa_supplicant@$IFACE
+    fi
+    ;;
+  br)
+    if [ "$1" == 2 ]; then
+        #systemctl stop wifi_bridge@$NFACE
+        systemctl restart wifi_bridge@mlan0
+        systemctl restart wifi_bridge@mlan1
+    else
+        systemctl restart wifi_bridge@$IFACE
     fi
     ;;
   *)

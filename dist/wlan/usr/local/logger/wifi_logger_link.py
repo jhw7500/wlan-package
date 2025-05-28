@@ -114,7 +114,7 @@ def main():
             logger.message("warn", f"{IFACE} is not found", _EXTRA_())
             time.sleep(5)
 
-        time.sleep(3)
+        time.sleep(1)
 
 if __name__ == "__main__":
     logger = Logger(app_name="logger_link", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
