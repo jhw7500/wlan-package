@@ -15,7 +15,6 @@ INTERFACE = "rtap"
 PCAP_DIR = f"{LOG_DIR}/tmp"
 PCAP_FILENAME = f"{INTERFACE}.pcap"
 CAP_FILENAME = "mgmt.log"
-DURATION = 10
 BROADCAST_MAC = "ff:ff:ff:ff:ff:ff"
 IFACE = ""
 
@@ -67,16 +66,16 @@ def capture_tshark():
 
 def parse_capture(mac_mlan):
     #print("??")
-    #ether_host = f"ether host {mac_mlan}"
-    ether_host = f"ether host {mac_mlan} or ether host {BROADCAST_MAC}"
-    display_filter = f"wlan.sa == {mac_mlan} || wlan.da == {mac_mlan} || wlan.bssid == {mac_mlan}"
+    ether_host = f"ether host {mac_mlan}"
+    #ether_host = f"ether host {mac_mlan} or ether host {BROADCAST_MAC}"
+    #display_filter = f"wlan.sa == {mac_mlan} || wlan.da == {mac_mlan} || wlan.bssid == {mac_mlan}"
     logger.message('info', f"{IFACE} ether host : {ether_host}", _EXTRA_())
     
     tshark_proc = subprocess.Popen([
         "tshark", "-i", INTERFACE,
-        "-b", "filesize:20480", #"-b", "files:20",
+        "-b", "filesize:10240", #"-b", "files:20",
         "-w", f"{PCAP_DIR}/{PCAP_FILENAME}",
-        #"-f", f"{ether_host}",
+        "-f", f"{ether_host}",
         #"-Y", f"{display_filter}",
         #"-Y", "!(wlan.fc.subtype == 14)",
         "-T", "fields",
@@ -193,7 +192,7 @@ def main():
     time.sleep(1)
 
     mac_rtap = get_mac_address(INTERFACE)
-    logger.message('info', f"{INTERFACE} MAC: {mac_rtap}", _EXTRA_())
+    #logger.message('info', f"{INTERFACE} MAC: {mac_rtap}", _EXTRA_())
     subprocess.run(["ifconfig", INTERFACE, "up"])
     
     #print("start2")
@@ -246,7 +245,7 @@ if __name__ == "__main__":
     '''
     LOG_DIR = f"/var/log/cantops/capture/{IFACE}"
     logger = Logger(app_name='logger_cap', facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
-    logger.message("info", f"IFACE : {IFACE}, version : {VERSION}, LOG_DIR : {LOG_DIR}", _EXTRA_())
+    logger.message("info", f"VERSION : {VERSION}, LOG_FILE : {LOG_DIR}/{CAP_FILENAME}", _EXTRA_())
 
     if IFACE != "mlan0" and IFACE != "mlan1" :
         logger.message("err", f"{IFACE} is not vaild interface", _EXTRA_())

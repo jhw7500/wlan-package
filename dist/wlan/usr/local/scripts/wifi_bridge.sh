@@ -33,22 +33,24 @@ mac_new=$(getMac mlan0)
 logger -p local0.notice "change mlan0 Mac Address : $mac_new"
 END
 
-logger -p local0.notice "[$tag:$LINENO] $IFACE ip flush"
-ip addr flush dev $IFACE
+#logger -p local0.notice "[$tag:$LINENO] $IFACE ip flush"
+#ip addr flush dev $IFACE
 #ip route del 192.168.0.0/24 dev eth0
 #wpa_supplicant -i mlan0 -c /etc/wpa_supplicant.conf -B
-killall relayd
-logger -p local0.notice "[$tag:$LINENO] $IFACE ip forward, relayd"
-echo 1 > /proc/sys/net/ipv4/ip_forward
+#killall relayd
+#logger -p local0.notice "[$tag:$LINENO] $IFACE ip forward, relayd"
 #relayd -I $IFACE -I eth0 
-
 
 #ip route add 192.168.4.100 dev $IFACE scope link
 
-for ip in 192.168.4.100 192.168.4.101; do
-    ip route replace $ip dev $IFACE
-done
+#for ip in 192.168.4.0 192.168.4.254; do
+#    ip route replace $ip dev $IFACE
+#done
 
-ip route replace default via $IFACE
-
+#echo 1 > /proc/sys/net/ipv4/ip_forward
+#ip route replace default via $IFACE
+systemctl restart wifi_ping@$IFACE 
 relayd -I $IFACE -I eth0
+
+#ip route replace default via $IFACE
+

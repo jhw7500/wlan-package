@@ -40,6 +40,8 @@ if [[ "$IFACE" == "mlan0" ]]; then
 fi
 END
 
+
+:<<'END'
 if [[ "$IFACE" == "mlan0" ]]; then
 INTERVAL=0.5
 PREV_AP=""
@@ -48,11 +50,10 @@ RESTART_TIME_LIMIT=$((3600*6))
 
 logger -p local0.notice "[$tag:$LINENO] iface : $IFACE, interval : $INTERVAL, prev restart time : $PREV_RESTART_TIME, restart time limit : $RESTART_TIME_LIMIT" 
 systemctl restart wifi_capture
-while true; do
-    sleep 10
-done
+#while true; do
+#    sleep 10
+#done
 
-:<<'END'
 while true; do
     #CURRENT_AP=$(iw dev $IFACE link | grep "Connected to" | awk '{print $3}')
     CURRENT_AP=$(iwconfig $IFACE 2>&1 | grep -oP 'Access Point: \K([0-9A-Fa-f:]{17})')
@@ -73,11 +74,11 @@ while true; do
 
     sleep $INTERVAL
 done
-END
 
-else
+#else
     #logger -p local0.notice "[$tag:$LINENO] no capture because $IFACE is not main interface"
-    while true; do
-        sleep 10
-    done
+    #while true; do
+    #    sleep 10
+    #done
 fi
+END

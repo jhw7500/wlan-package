@@ -125,7 +125,7 @@ if __name__ == "__main__":
         IFACE = sys.argv[1]
     
     LOG_DIR = f"/var/log/cantops/link/{IFACE}"
-    logger.message("notice", f"IFACE : {IFACE}, version : {VERSION}, LOG_DIR : {LOG_DIR}", _EXTRA_())
+    logger.message("notice", f"VERSION : {VERSION}, LOG_FILE : {LOG_DIR}/link.json", _EXTRA_())
 
     if IFACE == "mlan0" :
         MWLAN_LOG_PATH = "/proc/mwlan/adapter0/mlan0/log"

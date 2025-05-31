@@ -16,6 +16,42 @@ STALE_THRESHOLD_SEC = 600  #1hour
 VERSION = "0.0"
 IFACE = ""
 
+def get_last_dmesg_line_count():
+    result = subprocess.run(["dmesg"], stdout=subprocess.PIPE, text=True)
+    return len(result.stdout.strip().splitlines())
+
+def scan_event(interface, on_event_callback):
+    last_line_count = get_last_dmesg_line_count()
+
+    with subprocess.Popen(["dmesg", "--follow"], stdout=subprocess.PIPE, text=True, bufsize=1) as dmesg_proc:
+        scan_started = False
+        current_line = 0
+        for line in dmesg_proc.stdout:
+            current_line += 1
+            if current_line <= last_line_count:
+                continue
+
+            if "wlan:" not in line:
+                continue
+
+            #print(line.strip())
+
+            if f"wlan: {interface} START SCAN" in line:
+                scan_started = True
+
+            if scan_started and "wlan: SCAN COMPLETED" in line:
+                #logger.message("info", f"{interface} SCAN COMPLETED", _EXTRA_())
+                on_event_callback(interface)
+                scan_started = False
+
+
+def monitor_nl80211_scan_event(on_event_callback):
+    cmd = ["tshark", "-i", "nlmon0", "-l", "-Y", "nl80211.cmd == 50"]
+    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True) as proc:
+        for line in proc.stdout:
+            if line.strip():
+                on_event_callback()
+
 def run_setuserscan():
     try:
         result = subprocess.run(
@@ -49,7 +85,7 @@ def run_iwdevscandump(retries=3, delay=1):
                 logger.message("err", f"All retry attempts for {IFACE} scan dump failed", _EXTRA_())
                 return "err"
 
-def run_getscanresults(retries=3, delay=1):
+def run_getscantable(retries=3, delay=1):
     for attempt in range(1, retries + 1):
         try:
             result = subprocess.run(
@@ -359,11 +395,39 @@ def save_db(db):
     with open(filename, "w") as f:
         f.write(compacted_json)
 
+def get_scan_result():
+    #logger.message("info", f"{IFACE} get scan result", _EXTRA_())
+    lines = run_getscantable()
+    #print(f"{lines}")
+    ap_lines = extract_ap_table(lines)
+    chan_lines = extract_channel_table(lines)
+    save_with_timestamp("ap", ap_lines)
+    save_with_timestamp("freq", chan_lines)
+
+    result = run_iwdevscandump()
+    if result == "err":
+        logger.message("err", f"{IFACE} scan result failed!", _EXTRA_())
+    else:
+        new_entries = parse_scan_output(result)
+        existing_db = load_existing()
+        merged = merge_db(existing_db, new_entries)
+        now_sec = int(time.time())
+        cleaned = remove_stale_entries(merged, now_sec)
+        save_db(cleaned)
+
+        
 def main_loop():
-    subprocess.run(["ifconfig", IFACE, "up"])
-    last_log_time = time.time()
+    #subprocess.run(["ifconfig", IFACE, "up"])
+    #last_log_time = time.time()
+    def on_scan_event(IFACE):
+        get_scan_result()
+        #time.sleep(3)
+        
+    scan_event(IFACE, on_scan_event)
+    #monitor_nl80211_scan_event(on_scan_event)
+
+    ...
     log_step = 0
-    
     try:
         while True:
             if time.time() - last_log_time >= LOG_INTERVAL -10 and log_step == 0:
@@ -378,7 +442,7 @@ def main_loop():
                     log_step = 1
                     #time.sleep(1)  # getscanresults가 준비될 때까지 대기
             elif time.time() - last_log_time >= LOG_INTERVAL and log_step == 1:
-                lines = run_getscanresults()
+                lines = run_getscantable()
                 #print(f"{lines}")
                 ap_lines = extract_ap_table(lines)
                 chan_lines = extract_channel_table(lines)
@@ -412,6 +476,7 @@ def main_loop():
 
     except KeyboardInterrupt:
         logger.message("err", f"{IFACE} keyboardInterrupt occurs", _EXTRA_())
+    ...
 
 if __name__ == "__main__":
     logger = Logger(app_name="logger_scan", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
@@ -423,7 +488,7 @@ if __name__ == "__main__":
         IFACE = sys.argv[1]
         LOG_DIR = f"/var/log/cantops/scan/{IFACE}"
     
-    logger.message("notice", f"IFACE : {IFACE}, "version : {VERSION}, LOG_DIR : {LOG_DIR}", _EXTRA_())
+    logger.message("notice", f"VERSION : {VERSION}, LOG_FILE : {LOG_DIR}/ap.log, {LOG_DIR}/freq.log, {LOG_DIR}/beacon.json", _EXTRA_())
     
     if IFACE != "mlan0" and IFACE != "mlan1" :
         logger.message("err", f"{IFACE} is not vaild interface", _EXTRA_())

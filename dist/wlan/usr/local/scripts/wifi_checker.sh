@@ -7,7 +7,7 @@ IFACE=$1
 
 logger -p local0.notice "[$tag:$LINENO] wifi check : $IFACE"
 
-python3 /usr/local/logger/wifi_module_check.py $IFACE
+#python3 /usr/local/logger/wifi_module_check.py $IFACE
 
 while true; do
     LINK_OUTPUT=$(iw "$IFACE" link 2>&1)

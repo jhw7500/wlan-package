@@ -1,0 +1,15 @@
+[Unit]
+Description=WiFi Checker Service
+Conflicts=wifi_ping@mlan0.service wifi_ping@mlan1.service
+After=network.target
+
+[Service]
+ExecStart=/usr/local/scripts/wifi_ping.sh %i
+Restart=always
+User=root
+#Type=oneshot
+#RemainAfterExit=true
+
+[Install]
+WantedBy=multi-user.target
+

@@ -3,6 +3,7 @@ CAPDIR="$LOGDIR/capture"
 SCANDIR="$LOGDIR/scan"
 STATDIR="$LOGDIR/stat"
 LINKDIR="$LOGDIR/link"
+SUMDIR="$LOGDIR/summary"
 
 STATDIR0="$STATDIR/mlan0"
 LINKDIR0="$LINKDIR/mlan0"
@@ -26,18 +27,24 @@ alias klogt='cat $LOGDIR/kern.log | tail -n $1'
 alias klogh='cat $LOGDIR/kern.log | head -n $1'
 alias klogf='tail -f $LOGDIR/kern.log'
 
+alias sslogg='cat $SUMDIR/stat.log | grep -i $1 -a'
+alias sslogt='cat $SUMDIR/stat.log | tail -n $1'
+alias sslogh='cat $SUMDIR/stat.log | head -n $1'
+alias sslogf='tail -f $SUMDIR/stat.log'
+
 alias llogg='cat $LOGDIR/local0.log | grep -i $1 -a'
 alias llogt='cat $LOGDIR/local0.log | tail -n $1'
 alias llogh='cat $LOGDIR/local0.log | head -n $1'
 alias llogf='tail -f $LOGDIR/local0.log'
 
-alias clogg='cat $CAPDIR0/cap.log | grep -i $1 -a'
-alias clogt='cat $CAPDIR0/cap.log |tail -n $1'
-alias clogh='cat $CAPDIR0/cap.log |head -n $1'
-alias clogf='tail -f $CAPDIR0/cap.log'
-alias plogt='tcpdump -r $CAPDIR/pcap.pcap -tttt -e -n |tail -n $1'
-alias plogh='tcpdump -r $CAPDIR/pcap.pcap -tttt -e -n -c $1'
-alias plogg='tcpdump -r $CAPDIR/pcap.pcap -tttt -e- n |grep -i $1 -a'
+alias mlogg='cat $CAPDIR0/mgmt.log | grep -i $1 -a'
+alias mlogt='cat $CAPDIR0/mgmt.log |tail -n $1'
+alias mlogh='cat $CAPDIR0/mgmt.log |head -n $1'
+alias mlogf='tail -f $CAPDIR0/mgmt.log'
+
+alias plogt='tcpdump -r $CAPDIR/tmp/pcap.pcap -tttt -e -n |tail -n $1'
+alias plogh='tcpdump -r $CAPDIR/tmp/pcap.pcap -tttt -e -n -c $1'
+alias plogg='tcpdump -r $CAPDIR/tmp/pcap.pcap -tttt -e- n |grep -i $1 -a'
 
 alias alogg='cat $SCANDIR0/ap.log | grep -i $1 -a'
 alias alogt='cat $SCANDIR0/ap.log | tail -n $1'

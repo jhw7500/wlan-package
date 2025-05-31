@@ -1,9 +1,12 @@
 # /etc/logrotate.d/rsyslog - Ported from Debian
 /var/log/cantops/kern.log
-/var/log/cantops/syslog
 /var/log/cantops/sys.log
+/var/log/cantops/local0.log
+/var/log/cantops/summary/stat.log
 /var/log/cantops/capture/mlan0/cap.log
+/var/log/cantops/capture/mlan0/mgmt.log
 /var/log/cantops/capture/mlan1/cap.log
+/var/log/cantops/capture/mlan1/mgmt.log
 /var/log/cantops/scan/mlan0/*.log
 /var/log/cantops/scan/mlan1/*.log
 /var/log/cantops/stat/mlan0/*.log
@@ -16,20 +19,6 @@
         delaycompress
         compress
     	dateext
-        postrotate
-                /usr/bin/pkill -HUP rsyslogd 2> /dev/null || true
-        endscript
-}
-
-/var/log/cantops/capture/mlan0/tmp/*.pcap
-{
-        rotate 10
-        daily
-        missingok
-        notifempty
-        delaycompress
-        compress
-        dateext
         postrotate
                 /usr/bin/pkill -HUP rsyslogd 2> /dev/null || true
         endscript
@@ -48,8 +37,8 @@
 /var/log/debug
 /var/log/messages
 {
-        rotate 4
-        weekly
+        rotate 7
+        daily
         missingok
         notifempty
         compress

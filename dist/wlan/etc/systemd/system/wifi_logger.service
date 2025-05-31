@@ -1,0 +1,13 @@
+[Unit]
+Description=WiFi Logger Controller
+#Requires=wifi_logger@mlan0.service wifi_logger@mlan1.service
+After=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/usr/local/scripts/wifi_logger.sh
+ExecStop=/bin/true
+
+[Install]
+WantedBy=multi-user.target
