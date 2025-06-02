@@ -26,7 +26,7 @@ try_insmod() {
 
 try_insmod "/lib/modules/$KERNEL_VERSION/updates/mlan.ko" ""
 try_insmod "/lib/modules/$KERNEL_VERSION/updates/moal.ko" "mod_para=nxp/wifi_mod_para_.conf mfg_mode=0"
-try_insmod "/lib/modules/$KERNEL_VERSION/kernel/drivers/net/nlmon.ko"
+#try_insmod "/lib/modules/$KERNEL_VERSION/kernel/drivers/net/nlmon.ko"
 
 sleep 0.5
 iw dev mlan0 set power_save off
@@ -45,9 +45,9 @@ mlanutl mlan1 htcapinfo 0x05c20000
 
 echo 1 > /proc/sys/net/ipv4/ip_forward
 
-ip link add nlmon0 type nlmon
+#ip link add nlmon0 type nlmon
 ip link set mlan0 up
 ip link set mlan1 up
-ip link set nlmon0 up
+#ip link set nlmon0 up
 
 echo 1 > /proc/sys/kernel/printk

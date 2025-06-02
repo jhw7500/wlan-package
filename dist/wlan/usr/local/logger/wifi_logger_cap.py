@@ -245,7 +245,7 @@ if __name__ == "__main__":
     '''
     LOG_DIR = f"/var/log/cantops/capture/{IFACE}"
     logger = Logger(app_name='logger_cap', facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
-    logger.message("info", f"VERSION : {VERSION}, LOG_FILE : {LOG_DIR}/{CAP_FILENAME}", _EXTRA_())
+    logger.message("info", f"version : {VERSION}, log_file : {LOG_DIR}/{CAP_FILENAME}", _EXTRA_())
 
     if IFACE != "mlan0" and IFACE != "mlan1" :
         logger.message("err", f"{IFACE} is not vaild interface", _EXTRA_())

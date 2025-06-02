@@ -5,7 +5,7 @@ key=LOG
 IFACE=$1
 
 logger -p local0.notice "[$tag:$LINENO] $IFACE logger start $IFACE"
-sleep 5
+sleep 3
 echo "wifi_logger_stat.py" > /dev/kmsg
 python3 /usr/local/logger/wifi_logger_stat.py $IFACE &
 PID1=$!

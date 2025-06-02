@@ -1,7 +1,8 @@
 [Unit]
 Description=WiFi Logger Controller
 #Requires=wifi_logger@mlan0.service wifi_logger@mlan1.service
-After=network.target
+#After=network.target
+After=wifi_init.service
 
 [Service]
 Type=oneshot

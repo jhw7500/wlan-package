@@ -109,12 +109,13 @@ def main():
             save_db(data)
             #with open(f"{LOG_DIR}/link.json", "w") as f:
             #    json.dump(data, f, indent=4)
+            err_cnt = 0
+            time.sleep(1)
         else:
             #print(f"[WARN] Interface {IFACE} not found")
-            logger.message("warn", f"{IFACE} is not found", _EXTRA_())
+            logger.message("err", f"{IFACE} is not found", _EXTRA_())
+            #subprocess.run(["ifconfig", IFACE, "up"])
             time.sleep(5)
-
-        time.sleep(1)
 
 if __name__ == "__main__":
     logger = Logger(app_name="logger_link", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
@@ -125,7 +126,7 @@ if __name__ == "__main__":
         IFACE = sys.argv[1]
     
     LOG_DIR = f"/var/log/cantops/link/{IFACE}"
-    logger.message("notice", f"VERSION : {VERSION}, LOG_FILE : {LOG_DIR}/link.json", _EXTRA_())
+    logger.message("info", f"version : {VERSION}, log_file : {LOG_DIR}/link.json", _EXTRA_())
 
     if IFACE == "mlan0" :
         MWLAN_LOG_PATH = "/proc/mwlan/adapter0/mlan0/log"

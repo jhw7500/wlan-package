@@ -114,7 +114,7 @@ def get_station_info(json_file):
 
     station = data.get("station_dump")
     if not station:
-        logger.message("err", f"{IFACE} no 'station_dump' field in json", _EXTRA_())
+        #logger.message("err", f"{IFACE} no 'station_dump' field in json", _EXTRA_())
         return None
 
     mac = station.get("address", "00:00:00:00:00:00")
@@ -366,7 +366,7 @@ def log_stats():
             if not wifi_info:
                 #print("not wifi info")
                 #logger.warning("No WiFi info available — possibly disconnected or station dump empty.")
-                time.sleep(1)
+                time.sleep(5)
                 continue
 
             ap_mac = wifi_info['ap_mac']
@@ -491,7 +491,7 @@ if __name__ == "__main__":
         IFACE = sys.argv[1]
         
     LOG_DIR = f"/var/log/cantops/stat/{IFACE}"
-    logger.message("notice", f"VERSION : {VERSION}, LOG_FILE : {LOG_DIR}/stat.log", _EXTRA_())
+    logger.message("info", f"version : {VERSION}, log_file : {LOG_DIR}/stat.log", _EXTRA_())
     
     if IFACE != "mlan0" and IFACE != "mlan1" :
         logger.message("err", f"{IFACE} is not vaild interface", _EXTRA_())

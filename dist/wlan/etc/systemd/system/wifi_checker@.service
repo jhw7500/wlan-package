@@ -1,6 +1,7 @@
 [Unit]
 Description=WiFi Checker Service
-After=network.target
+#After=network.target
+After=wifi_init.service
 
 [Service]
 ExecStart=/usr/local/scripts/wifi_checker.sh %i

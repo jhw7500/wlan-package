@@ -488,7 +488,7 @@ if __name__ == "__main__":
         IFACE = sys.argv[1]
         LOG_DIR = f"/var/log/cantops/scan/{IFACE}"
     
-    logger.message("notice", f"VERSION : {VERSION}, LOG_FILE : {LOG_DIR}/ap.log, {LOG_DIR}/freq.log, {LOG_DIR}/beacon.json", _EXTRA_())
+    logger.message("info", f"version : {VERSION}, log_file : {LOG_DIR}/ap.log, {LOG_DIR}/freq.log, {LOG_DIR}/beacon.json", _EXTRA_())
     
     if IFACE != "mlan0" and IFACE != "mlan1" :
         logger.message("err", f"{IFACE} is not vaild interface", _EXTRA_())
