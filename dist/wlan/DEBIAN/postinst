@@ -138,6 +138,16 @@ makeDirectory() {
   cp /opt/wlan/config/rsyslog.conf /etc/
   cp /opt/wlan/config/smb.conf /etc/samba/
 
+  if [ ! -f /etc/wpa_supplicant/wpa_supplicant-mlan0.conf ]; then
+    logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
+    cp /opt/wlan/config/wpa_supplicant-mlan0.conf /etc/wpa_supplicant/wpa_supplicant-mlan0.conf
+  fi
+
+  if [ ! -f /etc/wpa_supplicant/wpa_supplicant-mlan1.conf ]; then
+    logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /etc/wpa_supplicant/wpa_supplicant-mlan1.conf"
+    cp /opt/wlan/config/wpa_supplicant-mlan1.conf /etc/wpa_supplicant/wpa_supplicant-mlan1.conf
+  fi
+
   if [ ! -f /etc/systemd/network/20-mlan0.network ]; then
     logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /etc/systemd/network/20-mlan0.network"
     cp /opt/wlan/config/network/20-mlan0.network /etc/systemd/network/

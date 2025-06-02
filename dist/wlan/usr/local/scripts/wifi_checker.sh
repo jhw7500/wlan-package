@@ -22,12 +22,14 @@ while true; do
 done
 
 err_cnt=0
+limit_cnt=5
 while true; do
     if [ ! -d /sys/class/net/$IFACE ]; then
         ((err_cnt++))
-        logger -p local0.err "[$tag:$LINEO] $IFACE is not exist becase F/W dump..."        
-        if [ "$err_cnt" -ge 5 ]; then
-            logger -p local0.emerg "[$tag:$LINEO] Reboot because $IFACE is cannot recovery"
+        logger -p local0.err "[$tag:$LINEO] $IFACE is not exist becase F/W dump...(err_cnt:$err_cnt)"
+        if [ "$err_cnt" -gt "$limit_cnt" ]; then
+            logger -p local0.emerg "[$tag:$LINEO] Reboot because $IFACE is cannot recovery(err_cnt:$err_cnt > limit_cnt:$limit_cnt)"
+            sleep 3
             reboot            
         fi
     else
