@@ -3,6 +3,7 @@ import time
 import sys
 import os
 import logging
+import signal
 from sUTILS import Logger, _EXTRA_
 from datetime import datetime
 
@@ -10,6 +11,14 @@ VERSION = "0.0"
 MLAN0_JSON = "/var/log/cantops/link/mlan0/link.json"
 MLAN1_JSON = "/var/log/cantops/link/mlan1/link.json"
 LOG_FILE = "/var/log/cantops/summary/stat.log"
+
+def handle_sigterm(signum, frame):
+    logger.message('crit', f"{IFACE} SIGTERM {signum} received! Cleaning up...", _EXTRA_())
+    cleanup()
+    sys.exit(0)
+
+def cleanup():
+    pass
 
 def safe_get(dct, *keys):
     try:
@@ -32,9 +41,9 @@ def extract_info(path):
     try:
         with open(path, "r") as f:
             data = json.load(f)
-            freq = safe_get(data, "info", "frequency") or "-"
-            addr = safe_get(data, "station_dump", "address") or "-"
-            sig = safe_get(data, "station_dump", "signal") or "-"
+            freq = safe_get(data, "info", "freq") or "-"
+            addr = safe_get(data, "station_info", "address") or "-"
+            sig = safe_get(data, "station_info", "signal") or "-"
             return str(freq), str(addr), str(sig)
     except Exception:
         return "-", "-", "-"
@@ -57,6 +66,7 @@ def main():
         time.sleep(0.998)
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, handle_sigterm)
     program_name = os.path.splitext(os.path.basename(sys.argv[0]))[0]
     logger = Logger(app_name="logger_stat", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
 

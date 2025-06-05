@@ -4,6 +4,7 @@ import time
 import re
 import sys
 import os
+import signal
 from datetime import datetime
 import logging
 from sUTILS import Logger, _EXTRA_
@@ -12,6 +13,14 @@ VERSION = "0.0"
 IFACE = ""
 LOG_DIR = "/var/log/cantops/link"
 MWLAN_LOG_PATH = "/proc/mwlan/adapter0/mlan0/log"
+
+def handle_sigterm(signum, frame):
+    logger.message('crit', f"{IFACE} SIGTERM {signum} received! Cleaning up...", _EXTRA_())
+    cleanup()
+    sys.exit(0)
+
+def cleanup():
+    pass
 
 def save_db(db):
     def compact_lists(text):
@@ -58,11 +67,15 @@ def parse_iw_info(output):
     for line in output.splitlines():
         if "addr" in line:
             result["address"] = line.split()[-1]
+        elif "ssid " in line:
+            parts = line.split(" ", 1)
+            if len(parts) == 2:
+                result["ssid"] = parts[1].strip()
         elif "channel" in line:
             match = re.search(r"channel\s+(\d+)\s+\(([\d]+) MHz\),\s+width:\s+([\d]+ MHz)", line)
             if match:
                 result["channel"] = int(match.group(1))
-                result["frequency"] = int(match.group(2))
+                result["freq"] = int(match.group(2))
                 result["width"] = match.group(3)
         elif "txpower" in line:
             result["txpower"] = line.split()[-2]  # Remove dBm
@@ -87,21 +100,46 @@ def parse_station_dump(output):
             result[key] = value
     return result
 
+def parse_survey_dump(output):
+    lines = output.strip().splitlines()
+    survey_data = {}
+    current_freq = None
+
+    for line in lines:
+        line = line.strip()
+        if line.startswith("frequency:"):
+            freq_mhz = int(re.findall(r'\d+', line)[0])
+            current_freq = str(freq_mhz)
+            survey_data[current_freq] = {}
+        elif line.startswith("noise:"):
+            noise = int(re.findall(r'-?\d+', line)[0])
+            survey_data[current_freq]["noise"] = noise
+        elif line.startswith("channel active time:"):
+            active_time = int(re.findall(r'\d+', line)[0])
+            survey_data[current_freq]["active_time_ms"] = active_time
+        elif line.startswith("channel busy time:"):
+            busy_time = int(re.findall(r'\d+', line)[0])
+            survey_data[current_freq]["busy_time_ms"] = busy_time
+
+    return survey_data
 
 def main():
     while True:
         if os.path.exists(f"/sys/class/net/{IFACE}"):
             info_out = run_command(["iw", IFACE, "info"])
             station_out = run_command(["iw", IFACE, "station", "dump"])
+            channel_out = run_command(["iw", IFACE, "survey", "dump"])
 
             # 파싱은 출력이 유효할 때만
             info_data = parse_iw_info(info_out) if info_out else {}
             station_data = parse_station_dump(station_out) if station_out else {}
+            channel_data = parse_survey_dump(channel_out) if channel_out else {}
 
             data = {
                 "date" : datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "info": info_data,
-                "station_dump": station_data,
+                "station_info": station_data,
+                "channel_info": channel_data,
                 "mwlan_log": parse_mwlan_log()
             }
 
@@ -118,6 +156,7 @@ def main():
             time.sleep(5)
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, handle_sigterm)
     logger = Logger(app_name="logger_link", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
     
     if len(sys.argv) < 2:

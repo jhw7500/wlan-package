@@ -4,6 +4,7 @@ import re
 import subprocess
 import time
 import sys
+import signal
 import logging
 from datetime import datetime
 from sUTILS import Logger, _EXTRA_
@@ -23,6 +24,14 @@ log_interval = 1  # 로그 주기 (초)
 check_interval = 1  # 체크 주기 (초)
 last_log_time = time.time()  # 마지막 로깅 시간
 tx_retrys = {}
+
+def handle_sigterm(signum, frame):
+    logger.message('crit', f"{IFACE} SIGTERM {signum} received! Cleaning up...", _EXTRA_())
+    cleanup()
+    sys.exit(0)
+
+def cleanup():
+    pass
 
 def update_avg(count, avg, new_value):
     #count += 1
@@ -109,12 +118,12 @@ def get_station_info(json_file):
         with open(json_file, "r") as f:
             data = json.load(f)
     except Exception as e:
-        logger.message("err", f"{IFACE} json read error: {e}", _EXTRA_())
+        #logger.message("err", f"{IFACE} json read error: {e}", _EXTRA_())
         return None
 
-    station = data.get("station_dump")
+    station = data.get("station_info")
     if not station:
-        #logger.message("err", f"{IFACE} no 'station_dump' field in json", _EXTRA_())
+        #logger.message("err", f"{IFACE} no 'station_info' field in json", _EXTRA_())
         return None
 
     mac = station.get("address", "00:00:00:00:00:00")
@@ -482,6 +491,7 @@ def log_stats():
         
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, handle_sigterm)
     program_name = os.path.splitext(os.path.basename(sys.argv[0]))[0]
     logger = Logger(app_name="logger_stat", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
     

@@ -1,0 +1,14 @@
+[Unit]
+Description=WiFi Roaming Service
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/logger/wifi_roaming.py %i
+#Restart=always
+User=root
+#Type=oneshot
+#RemainAfterExit=true
+
+[Install]
+WantedBy=multi-user.target
+

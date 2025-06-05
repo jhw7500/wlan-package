@@ -6,6 +6,7 @@ import random
 import logging
 import sys
 import json
+import signal
 from datetime import datetime
 from sUTILS import Logger, _EXTRA_
 
@@ -15,6 +16,14 @@ STALE_THRESHOLD_SEC = 600  #1hour
 #last_log_time = 0
 VERSION = "0.0"
 IFACE = ""
+
+def handle_sigterm(signum, frame):
+    logger.message('crit', f"{IFACE} SIGTERM {signum} received! Cleaning up...", _EXTRA_())
+    cleanup()
+    sys.exit(0)
+
+def cleanup():
+    pass
 
 def get_last_dmesg_line_count():
     result = subprocess.run(["dmesg"], stdout=subprocess.PIPE, text=True)
@@ -85,7 +94,8 @@ def run_iwdevscandump(retries=3, delay=1):
                 logger.message("err", f"All retry attempts for {IFACE} scan dump failed", _EXTRA_())
                 return "err"
 
-def run_getscantable(retries=3, delay=1):
+def run_getscantable(retries=3, delay=0.5):
+    time.sleep(delay)
     for attempt in range(1, retries + 1):
         try:
             result = subprocess.run(
@@ -479,6 +489,7 @@ def main_loop():
     ...
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, handle_sigterm)
     logger = Logger(app_name="logger_scan", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
 
     if len(sys.argv) < 2:

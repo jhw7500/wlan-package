@@ -73,6 +73,9 @@ customctl() {
   customctl dhcpcd disabled
   customctl psplash-quit disabled
   customctl weston disabled
+  customctl nfs-server masked
+  customctl proc-nfs-fs-nfsd.mount
+  customctl watchdog enabled
 
   #customctl hciattach disabled
   customctl wifi_init enabled
@@ -130,6 +133,8 @@ makeDirectory() {
   /usr/local/scripts/change_line.sh "#tmpfs                /var/volatile        tmpfs      defaults              0  0" "tmpfs                /var/volatile" /etc/fstab
   /usr/local/scripts/change_line.sh "ExecStart=/usr/sbin/wpa_supplicant -c/etc/wpa_supplicant/wpa_supplicant-%I.conf -i%I -d" "ExecStart=/usr/sbin/wpa_supplicant" /lib/systemd/system/wpa_supplicant@.service
   /usr/local/scripts/change_line.sh "Storage=persistent" "Storage=" /etc/systemd/journald.conf
+  /usr/local/scripts/add_line.sh "kernel.panic=5" > /etc/sysctl.conf
+  /usr/local/scripts/add_line.sh "kernel.panic_on_oops=1" > /etc/sysctl.conf
   /usr/local/scripts/add_line.sh "SystemMaxUse=2000M" /etc/systemd/journald.conf
   /usr/local/scripts/add_line.sh "SystemKeepFree=500M" /etc/systemd/journald.conf
 

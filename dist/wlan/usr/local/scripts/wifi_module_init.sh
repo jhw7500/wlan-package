@@ -51,3 +51,6 @@ ip link set mlan1 up
 #ip link set nlmon0 up
 
 echo 1 > /proc/sys/kernel/printk
+
+systemctl start wpa_supplicant@mlan0
+systemctl start wifi_bridge@mlan0
