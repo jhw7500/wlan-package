@@ -137,6 +137,7 @@ makeDirectory() {
   /usr/local/scripts/add_line.sh "kernel.panic_on_oops=1" > /etc/sysctl.conf
   /usr/local/scripts/add_line.sh "SystemMaxUse=2000M" /etc/systemd/journald.conf
   /usr/local/scripts/add_line.sh "SystemKeepFree=500M" /etc/systemd/journald.conf
+  /usr/local/scripts/add_line.sh "watchdg-timeout=15" /etc/watchdog.conf
 
   cp /opt/wlan/config/logrotate.rsyslog /etc/logrotate.d/
   #cp /opt/wlan/config/rc.local /etc/
