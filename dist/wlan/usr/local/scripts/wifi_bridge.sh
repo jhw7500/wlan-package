@@ -4,6 +4,11 @@ key=LOG
 IFACE=$1
 logger -p local0.notice "[$tag:$LINENO] $IFACE wifi bridge start"
 
+if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" ]]; then
+    logger -p local0.err "[$tag:$LINENO] $IFACE is wrong!!"
+    exit 1
+fi
+
 getMac() {
     IFACE=$1
 
@@ -49,8 +54,9 @@ END
 
 #echo 1 > /proc/sys/net/ipv4/ip_forward
 #ip route replace default via $IFACE
-systemctl restart wifi_ping@$IFACE 
+systemctl start wifi_ping$IFACE
 relayd -I $IFACE -I eth0
+#systemctl restart wifi_ping@$IFACE
 
 #ip route replace default via $IFACE
 

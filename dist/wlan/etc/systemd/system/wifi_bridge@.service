@@ -5,7 +5,7 @@ Conflicts=wifi_bridge@mlan0.service wifi_bridge@mlan1.service
 
 [Service]
 ExecStart=/usr/local/scripts/wifi_bridge.sh %i
-#ExecStop=/usr/local/scripts/wifi_bridge_stop.sh %i
+ExecStop=/usr/local/scripts/wifi_bridge_stop.sh %i
 RemainAfterExit=yes
 #Restart=always
 User=root

@@ -7,10 +7,14 @@
 /var/log/cantops/capture/mlan0/mgmt.log
 /var/log/cantops/capture/mlan1/cap.log
 /var/log/cantops/capture/mlan1/mgmt.log
-/var/log/cantops/scan/mlan0/*.log
-/var/log/cantops/scan/mlan1/*.log
+/var/log/cantops/scan/mlan0/ap.log
+/var/log/cantops/scan/mlan0/freq.log
+/var/log/cantops/scan/mlan1/ap.log
+/var/log/cantops/scan/mlan1/freq.log
 /var/log/cantops/stat/mlan0/*.log
 /var/log/cantops/stat/mlan1/*.log
+/var/log/cantops/wpa/mlan0/wpa.log
+/var/log/cantops/wpa/mlan1/wpa.log
 {
         rotate 7
         daily

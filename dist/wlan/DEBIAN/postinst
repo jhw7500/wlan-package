@@ -81,9 +81,10 @@ customctl() {
   customctl wifi_init enabled
   customctl wifi_logger enabled
   customctl wifi_logger@mlan0 enabled
-  customctl wifi_logger@mlan1 enabled
+  customctl wifi_logger@mlan1 disabled
   customctl wifi_checker@mlan0 enabled
-  customctl wifi_checker@mlan1 enabled
+  customctl wifi_checker@mlan1 disabled
+  customctl wifi_ping@mlan0 enabled
 
 
 makeDirectory() {
@@ -133,13 +134,13 @@ makeDirectory() {
   /usr/local/scripts/change_line.sh "#tmpfs                /var/volatile        tmpfs      defaults              0  0" "tmpfs                /var/volatile" /etc/fstab
   /usr/local/scripts/change_line.sh "ExecStart=/usr/sbin/wpa_supplicant -c/etc/wpa_supplicant/wpa_supplicant-%I.conf -i%I -d" "ExecStart=/usr/sbin/wpa_supplicant" /lib/systemd/system/wpa_supplicant@.service
   /usr/local/scripts/change_line.sh "Storage=persistent" "Storage=" /etc/systemd/journald.conf
-  /usr/local/scripts/add_line.sh "kernel.panic=5" > /etc/sysctl.conf
-  /usr/local/scripts/add_line.sh "kernel.panic_on_oops=1" > /etc/sysctl.conf
+  /usr/local/scripts/add_line.sh "kernel.panic=5" /etc/sysctl.conf
+  /usr/local/scripts/add_line.sh "kernel.panic_on_oops=1" /etc/sysctl.conf
   /usr/local/scripts/add_line.sh "SystemMaxUse=2000M" /etc/systemd/journald.conf
   /usr/local/scripts/add_line.sh "SystemKeepFree=500M" /etc/systemd/journald.conf
-  /usr/local/scripts/add_line.sh "watchdg-timeout=15" /etc/watchdog.conf
+  /usr/local/scripts/add_line.sh "watchdog-timeout=15" /etc/watchdog.conf
 
-  cp /opt/wlan/config/logrotate.rsyslog /etc/logrotate.d/
+  cp /opt/wlan/config/logrotate.d/logrotate.rsyslog /etc/logrotate.d/
   #cp /opt/wlan/config/rc.local /etc/
   cp /opt/wlan/config/rsyslog.conf /etc/
   cp /opt/wlan/config/smb.conf /etc/samba/
@@ -172,8 +173,8 @@ makeDirectory() {
   fi
 
 
-  mv /usr/local/bin/iw /usr/local/bin/iw_org
-  ln -s /usr/local/bin/iw_new /usr/local/bin/iw
+  #mv /usr/local/bin/iw /usr/local/bin/iw_org
+  #ln -s /usr/local/bin/iw_new /usr/local/bin/iw
   ln -s /usr/local/scripts/wifi.sh /usr/local/bin/wifi
   ln -s /var/log/cantops/journal /var/log/journal
   ln -s /usr/local/scripts/logctl.sh /usr/local/bin/logctl

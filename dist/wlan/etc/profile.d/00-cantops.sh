@@ -4,16 +4,19 @@ SCANDIR="$LOGDIR/scan"
 STATDIR="$LOGDIR/stat"
 LINKDIR="$LOGDIR/link"
 SUMDIR="$LOGDIR/summary"
+WPADIR="$LOGDIR/wpa"
 
 STATDIR0="$STATDIR/mlan0"
 LINKDIR0="$LINKDIR/mlan0"
 SCANDIR0="$SCANDIR/mlan0"
 CAPDIR0="$CAPDIR/mlan0"
+WPADIR0="$WPADIR/mlan0"
 
 STATDIR1="$STATDIR/mlan1"
 LINKDIR1="$LINKDIR/mlan1"
 SCANDIR1="$SCANDIR/mlan1"
 CAPDIR1="$CAPDIR/mlan1"
+WPADIR1="$WPADIR/mlan1"
 
 alias dpkgif='dpkg -i --force-overwrite $1'
 alias dpkglg='dpkg -l |grep $1'
@@ -45,6 +48,21 @@ alias mlogf='tail -f $CAPDIR0/mgmt.log'
 alias plogt='tcpdump -r $CAPDIR/tmp/pcap.pcap -tttt -e -n |tail -n $1'
 alias plogh='tcpdump -r $CAPDIR/tmp/pcap.pcap -tttt -e -n -c $1'
 alias plogg='tcpdump -r $CAPDIR/tmp/pcap.pcap -tttt -e- n |grep -i $1 -a'
+
+alias rlogg='cat $WPADIR0/wpa.log |grep -i -E "ROAM|CTRL-EVENT-CONNECTED|Associated with|Trying to authenticate with|Trying to associate" | grep -i $1 -a'
+alias rlogt='cat $WPADIR0/wpa.log |grep -i -E "ROAM|CTRL-EVENT-CONNECTED|Associated with|Trying to authenticate with|Trying to associate" | tail -n $1'
+alias rlogh='cat $WPADIR0/wpa.log |grep -i -E "ROAM|CTRL-EVENT-CONNECTED|Associated with|Trying to authenticate with|Trying to associate" | head -n $1'
+alias rlogf='tail -f $WPADIR0/mgmt.log |grep -i -E "ROAM|CTRL-EVENT-CONNECTED|Associated with|Trying to authenticate with|Trying to associate"'
+
+alias wlogg='cat $WPADIR0/wpa.log | grep -i $1 -a'
+alias wlogt='cat $WPADIR0/wpa.log |tail -n $1'
+alias wlogh='cat $WPADIR0/wpa.log |head -n $1'
+alias wlogf='tail -f $WPADIR0/wpa.log'
+
+alias wlogg1='cat $WPADIR1/wpa.log | grep -i $1 -a'
+alias wlogt1='cat $WPADIR1/wpa.log |tail -n $1'
+alias wlogh1='cat $WPADIR1/wpa.log |head -n $1'
+alias wlogf1='tail -f $WPADIR1/wpa.log'
 
 alias alogg='cat $SCANDIR0/ap.log | grep -i $1 -a'
 alias alogt='cat $SCANDIR0/ap.log | tail -n $1'
@@ -122,3 +140,4 @@ alias ssg='systemctl |grep -i $1'
 alias camchk1='i2ctransfer -f -y 1 w2@0x48 0x00 0x13 r1'
 alias camchk2='i2ctransfer -f -y 2 w2@0x48 0x00 0x13 r1'
 alias jo='journalctl -o short-iso-precise'
+

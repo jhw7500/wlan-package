@@ -5,6 +5,7 @@ import re
 import sys
 import os
 import signal
+import tempfile
 from datetime import datetime
 import logging
 from sUTILS import Logger, _EXTRA_
@@ -22,6 +23,25 @@ def handle_sigterm(signum, frame):
 def cleanup():
     pass
 
+def compact_lists(text):
+    pattern = re.compile(r'\[\s*\n\s*((?:.+,\s*\n)+)\s*(.+?)\s*\]')
+    return pattern.sub(lambda m: '[' + re.sub(r'\s+', ' ', m.group(1) + m.group(2)).strip() + ']', text)
+
+def save_db(db):
+    raw_json = json.dumps(db, indent=2)
+    compacted_json = compact_lists(raw_json)
+
+    tmp_path = os.path.join(LOG_DIR, "link.json.tmp")
+    final_path = os.path.join(LOG_DIR, "link.json")
+
+    with open(tmp_path, 'w') as f:
+        f.write(compacted_json)
+        f.flush()
+        os.fsync(f.fileno())  # 디스크에 flush 보장
+
+    os.rename(tmp_path, final_path)  # atomic한 rename
+
+'''
 def save_db(db):
     def compact_lists(text):
         pattern = re.compile(r'\[\s*\n\s*((?:.+,\s*\n)+)\s*(.+?)\s*\]')
@@ -32,6 +52,35 @@ def save_db(db):
     
     with open(f"{LOG_DIR}/link.json", "w") as f:
         f.write(compacted_json)
+'''
+
+def validate_station(output):
+    return "Station" in output or "signal" in output
+
+def validate_info(output):
+    return "ssid" in output or "type" in output
+
+def validate_survey(output):
+    return "channel" in output or "frequency" in output
+
+def run_command_with_retry(cmd, retries=3, delay=0.3, validate_fn=None):
+    for attempt in range(1, retries + 1):
+        output = run_command(cmd)
+        
+        if output is None or output.strip() == "":
+            #logger.message("warn", f"{cmd} -> empty result (attempt {attempt})", _EXTRA_())
+            pass
+        elif validate_fn is not None and not validate_fn(output):
+            logger.message("warn", f"{cmd} -> failed validation (attempt {attempt})", _EXTRA_())
+            #pass
+        else:
+            return output
+
+        if attempt < retries:
+            time.sleep(delay)
+
+    logger.message("err", f"{cmd} -> all {retries} attempts failed", _EXTRA_())
+    return None
 
 def run_command(cmd):
     try:
@@ -126,9 +175,13 @@ def parse_survey_dump(output):
 def main():
     while True:
         if os.path.exists(f"/sys/class/net/{IFACE}"):
-            info_out = run_command(["iw", IFACE, "info"])
-            station_out = run_command(["iw", IFACE, "station", "dump"])
+            #info_out = run_command(["iw", IFACE, "info"])
+            #station_out = run_command(["iw", IFACE, "station", "dump"])
+            #channel_out = run_command(["iw", IFACE, "survey", "dump"])
+            station_out = run_command_with_retry(["iw", IFACE, "station", "dump"], validate_fn=validate_station)
+            info_out = run_command_with_retry(["iw", IFACE, "info"], validate_fn=validate_info)
             channel_out = run_command(["iw", IFACE, "survey", "dump"])
+            #channel_out = run_command_with_retry(["iw", IFACE, "survey", "dump"], validate_fn=validate_survey)
 
             # 파싱은 출력이 유효할 때만
             info_data = parse_iw_info(info_out) if info_out else {}

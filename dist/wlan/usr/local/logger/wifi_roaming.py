@@ -16,11 +16,12 @@ LINK_LOG_FILE = f"/var/log/cantops/link/{IFACE}/link.json"
 SCAN_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/ap.log"
 FREQ_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/freq.log"
 WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
-ABSOLUTE_THRESHOLD_2G = -60
-ABSOLUTE_THRESHOLD_5G = -30
-
+DEFAULT_TH_2G = -65
+DEFAULT_TH_5G = -65
+TH_2G = None
+TH_5G = None
 DIFFERENCE_THRESHOLD = 5
-CHECK_INTERVAL = 2
+CHECK_INTERVAL = 1
 
 def handle_sigterm(signum, frame):
     logger.message('crit', f"{IFACE} SIGTERM {signum} received! Cleaning up...", _EXTRA_())
@@ -65,43 +66,50 @@ def log(msg):
 
 FREQ_TO_CHAN = {
     # 2.4GHz
-    2412: "1g", 2437: "6g", 2462: "11g",
+    "2412": "1g", "2417": "2g", "2422": "3g", "2427": "4g", "2432": "5g",
+    "2437": "6g", "2442": "7g", "2447": "8g", "2452": "9g", "2457": "10g", "2462": "11g", 
+    #"2467": "12g", "2472": "13g", "2484": "14",
     # 5GHz
-    5180: "36a", 5200: "40a", 5220: "44a", 5240: "48a",
-    5500: "100a", 5520: "104a", 5540: "108a", 5560: "112a",
-    5745: "149a", 5765: "153a", 5785: "157a", 5805: "161a"
+    "5180": "36a", "5200": "40a", "5220": "44a", "5240": "48a",
+    "5260": "52a", "5280": "56a", "5300": "60a", "5320": "64a",
+    "5500": "100a", "5520": "104a", "5540": "108a", "5560": "112a",
+    "5580": "116a", "5600": "120a", "5620": "124a", "5640": "128a",
+    "5660": "132a", "5680": "136a", "5700": "140a", "5720": "144a",
+    "5745": "149a", "5765": "153a", "5785": "157a", "5805": "161a",
+    "5825": "165a", "5845": "169a", "5865": "173a", "5885": "177a"
 }
 
-def perform_active_scan(ssid, freqs):
+def mlanutl_scan(ssid, freqs):
     try:
         chan_str = ",".join(FREQ_TO_CHAN[f] for f in freqs)
     except KeyError as e:
         print(f"[ERROR] Unknown frequency: {e}")
         return
-
+    '''
     cmd = f"mlanutl mlan0 setuserscan ssid={ssid} chan={chan_str}"
     #print(f"[CMD] {cmd}")
     freq_str = " ".join(str(f) for f in freqs)
     logger.message('info', f"{IFACE} active scan ssid={ssid}, freq={freq_str} cmd={cmd} for roaming", _EXTRA_())
+    '''
+    cmd = f"mlanutl mlan0 setuserscan ssid={ssid} chan={chan_str}"
+    logger.message('info', f"{IFACE} scan : {cmd}", _EXTRA_())
     try:
         result = subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
-        #output = result.stdout.strip()
-        #print(f"[OUTPUT]\n{output}")
+        output = result.stdout.strip()
+        if not output:
+            logger.message('err', f"{IFACE} scan command reutrned no output", _EXTRA_())
+            return None
+
+        #print(f"[OUTPUT]\n{output}")       
         return result.stdout.splitlines()
     except subprocess.CalledProcessError as e:
-        print(f"[ERROR] Scan command failed:\n{e.stderr.strip()}")
+        logger.message('err', f"{IFACE} scan command failed:{e.stderr.strip()}", _EXTRA_())
+        return None
 
-'''
-def perform_active_scan(ssid, freqs):
-    freq_str = " ".join(str(f) for f in freqs)
-    cmd_str = f"iw dev {IFACE} scan ssid {ssid} freq {freq_str}"
-    #logger.message('info', f"{IFACE} active scan ssid={ssid}, freq={freq_str} for roaming", _EXTRA_())
-    logger.message('info', f"{IFACE} active scan : {cmd_str} for roaming", _EXTRA_())
-    try:
-        subprocess.run(cmd_str, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except subprocess.CalledProcessError:
-        logger.message('err', f"{IFACE} Active scan failed for SSID {ssid} on freqs {freq_str}", _EXTRA_())
-'''
+def iw_scan(ssid, freqs):
+    if ssid and freqs:
+        cmd = ["iw", IFACE, "scan", "freq"] + freqs + ["ssid", ssid]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def get_station_info():
     try:
@@ -109,7 +117,7 @@ def get_station_info():
             data = json.load(f)
             result = {
                 "bssid": data['station_info']['address'].strip().lower(),
-                "ssid": data['info']['ssid'].strip(),
+                #"ssid": data['info']['ssid'].strip(),
                 "freq": int(data['info']['freq']),
                 "rssi": int(data['station_info']['signal'].replace(" dBm", ""))
             }
@@ -179,7 +187,7 @@ def get_latest_scan(st):
                     ld = int(fields[3].strip())
                     bssid = fields[4].strip().lower()
                     ssid = fields[6].strip()
-                    rssi_th = ABSOLUTE_THRESHOLD_2G if channel < 36 else ABSOLUTE_THRESHOLD_5G
+                    rssi_th = TH_2G if channel < 36 else TH_5G
 
                     if st['bssid'] != bssid and st['ssid'] == ssid and rssi > rssi_th:
                         entries.append({
@@ -209,39 +217,19 @@ def get_latest_scan(st):
 
     return candidates, timestamp
 
-import re
-
-def parse_supplicant_conf(conf_path):
+def parse_supplicant_conf(path):
     ssid = None
-    freqs = set()
-    in_network_block = False
+    freqs = []
 
-    with open(conf_path, 'r') as f:
+    with open(path, "r") as f:
         for line in f:
             line = line.strip()
-            if not line or line.startswith("#"):
-                continue
+            if line.startswith("ssid=") and not line.startswith("#"):
+                ssid = line.split("=", 1)[1].strip().strip('"')
+            elif line.startswith("scan_freq=") and not line.startswith("#"):
+                freqs = line.split("=", 1)[1].strip().split()
 
-            if line.startswith("network={"):
-                in_network_block = True
-                continue
-            elif line == "}":
-                in_network_block = False
-                continue
-
-            if in_network_block:
-                # SSID 추출
-                match_ssid = re.match(r'ssid="?([^"]+)"?', line)
-                if match_ssid:
-                    ssid = match_ssid.group(1)
-
-                # scan_freq 또는 freq_list 추출
-                match_freqs = re.match(r'(scan_freq|freq_list)\s*=\s*(.+)', line)
-                if match_freqs:
-                    freq_values = match_freqs.group(2).split()
-                    freqs.update(int(f) for f in freq_values if f.isdigit())
-
-    return ssid, sorted(freqs)
+    return ssid, freqs
 
 def roam_to_bssid(bssid):
     #log(f"Roaming to BSSID {bssid}")
@@ -340,6 +328,29 @@ def save_with_timestamp(filename, content_lines):
     #print(f"✔ {filename} 로그에 추가됨")
     return filename
 
+def parse_thresholds(conf_path):
+    th2g = None
+    th5g = None
+
+    with open(conf_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("#TH_2G="):
+                try:
+                    th2g = int(line.split("=")[1])
+                except ValueError:
+                    pass
+            elif line.startswith("#TH_5G="):
+                try:
+                    th5g = int(line.split("=")[1])
+                except ValueError:
+                    pass
+
+    th2g = th2g if th2g is not None else DEFAULT_TH_2G
+    th5g = th5g if th5g is not None else DEFAULT_TH_5G
+
+    return th2g, th5g
+
 def main():
     while True:
 
@@ -367,6 +378,7 @@ def main():
             continue
 
         #bssid, ssid, frequency, signal = get_station_info()
+        '''
         channel_info = load_channel_info()
         for freq, info in channel_info.items():
             noise = info.get('noise')
@@ -377,53 +389,60 @@ def main():
             if station['freq'] == int(freq):
                 station['noise'] = noise
                 station['load'] = round(load, 2)
-
+        '''
 
         if station['freq'] < 5000:
-            station['rssi_th'] = ABSOLUTE_THRESHOLD_2G
+            station['rssi_th'] = TH_2G
         else:
-            station['rssi_th'] = ABSOLUTE_THRESHOLD_5G
+            station['rssi_th'] = TH_5G
 
         #logger.message('info', f"{IFACE} rssi cur : {station['rssi']}, th : {station['rssi_th']}", _EXTRA_())
         if station['rssi'] >= station['rssi_th']:
+            #subprocess.run(["systemctl", "start", "wifi_capture"], check=True)
             time.sleep(CHECK_INTERVAL)
             continue
 
         logger.message('info', f"{IFACE} roaming condition : {station['rssi']} < {station['rssi_th']}", _EXTRA_())
-
-        #subprocess.run(["iw", IFACE, "scan", "ssid", "FXE5000", "freq", "2412", "5180"])
-        '''
+                
         ssid, freqs = parse_supplicant_conf(WPA_CONF_FILE)
         if ssid and freqs:
-            lines = perform_active_scan(ssid, freqs)
-            ap_lines = extract_ap_table(lines)
-            chan_lines = extract_channel_table(lines)
-            save_with_timestamp(SCAN_LOG_FILE, ap_lines)
-            save_with_timestamp(FREQ_LOG_FILE, chan_lines)
-        '''
+            #subprocess.run(["systemctl", "stop", "wifi_capture"], check=True)
+            station['ssid'] = ssid
+            #iw_scan(ssid, freqs)
+            lines = mlanutl_scan(ssid, freqs)
+            if lines:
+                ap_lines = extract_ap_table(lines)
+                chan_lines = extract_channel_table(lines)
+                save_with_timestamp(SCAN_LOG_FILE, ap_lines)
+                save_with_timestamp(FREQ_LOG_FILE, chan_lines)
+            else:
+                logger.message('err', f"{IFACE} scan failed: output : {lines}", _EXTRA_())
+                time.sleep(CHECK_INTERVAL)
+                continue
 
-        #time.sleep(1)
+        time.sleep(0.5)
         entries, timestamp = get_latest_scan(station)
 
         if not entries:
             #log("No APs found in latest scan.")
             logger.message('err', f"{IFACE} No Matching APs found in latest scan", _EXTRA_())
-            time.sleep(5)
+            time.sleep(3)
             continue
 
         top_ap = entries[0]
         rssi_diff = top_ap["rssi"] - station['rssi']
-        score = score_ap(top_ap)
+        #score = score_ap(top_ap)
 
         #log(f"Current signal={signal}dBm (BSSID: {current_bssid}), "
         #    f"Top RSSI={top_rssi}dBm at {top_bssid}, Δ={rssi_diff}dB")
         
         if top_ap['bssid'] != station['bssid']:
-            if top_ap['rssi'] > top_ap['rssi_th']:   #and rssi_diff >= DIFFERENCE_THRESHOLD:
+            if top_ap['rssi'] > top_ap['rssi_th'] and rssi_diff >= DIFFERENCE_THRESHOLD:
                 logger.message('emerg', f"{IFACE} Roaming from {station['bssid']}(ch:{station['freq']}) to {top_ap['bssid']}(ch:{channel_to_freq(top_ap['channel'])})"
-                                       f" : {top_ap['ssid']}, {score}, {top_ap['rssi']}>{top_ap['rssi_th']}", _EXTRA_())
+                                       f" : {top_ap['ssid']}, {top_ap['rssi']}>{top_ap['rssi_th']}", _EXTRA_())
                 roam_to_bssid(top_ap['bssid'])
-                time.sleep(1)
+                time.sleep(5)
+                continue
             else:
                 logger.message('info', f"{IFACE} AP {top_ap['bssid']} not qualified: abs={top_ap['rssi']}, diff={rssi_diff}", _EXTRA_())
                 #log(f"AP {top_bssid} not qualified: "
@@ -448,6 +467,8 @@ if __name__ == "__main__":
     FREQ_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/freq.log"
     WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-{IFACE}.conf"
 
-    logger.message("info", f"version : {VERSION}, iface : {IFACE}, conf_file : {WPA_CONF_FILE}, TH_2G : {ABSOLUTE_THRESHOLD_2G}, TH_5G : {ABSOLUTE_THRESHOLD_5G}", _EXTRA_())
+    TH_2G, TH_5G = parse_thresholds(WPA_CONF_FILE)    
+
+    logger.message("info", f"version : {VERSION}, iface : {IFACE}, conf_file : {WPA_CONF_FILE}, TH_2G : {TH_2G}, TH_5G : {TH_5G}", _EXTRA_())
 
     main()

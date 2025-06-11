@@ -1,8 +1,15 @@
 #!/bin/sh
 IFACE=$1
 
-echo "[*] Stopping WiFi bridge on $IFACE"
-echo 0 > /proc/sys/net/ipv4/conf/$IFACE/proxy_arp
-iptables -t nat -D POSTROUTING -o $IFACE -j MASQUERADE 2>/dev/null
-ip rule del iif eth0 table to5g 2>/dev/null
-ip rule del iif eth0 table to2g 2>/dev/null
+if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" ]]; then
+    logger -p local0.err "[$tag:$LINENO] $IFACE is wrong!!"
+    exit 1
+fi
+
+systemctl stop wifi_ping@$IFACE
+
+#echo "[*] Stopping WiFi bridge on $IFACE"
+#echo 0 > /proc/sys/net/ipv4/conf/$IFACE/proxy_arp
+#iptables -t nat -D POSTROUTING -o $IFACE -j MASQUERADE 2>/dev/null
+#ip rule del iif eth0 table to5g 2>/dev/null
+#ip rule del iif eth0 table to2g 2>/dev/null

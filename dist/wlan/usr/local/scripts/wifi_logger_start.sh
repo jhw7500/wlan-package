@@ -5,6 +5,12 @@ key=LOG
 IFACE=$1
 
 logger -p local0.notice "[$tag:$LINENO] $IFACE logger start $IFACE"
+
+if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" ]]; then
+    logger -p local0.err "[$tag:$LINENO] $IFACE is wrong!!"
+    exit 1
+fi
+
 sleep 3
 echo "wifi_logger_stat.py" > /dev/kmsg
 python3 /usr/local/logger/wifi_logger_stat.py $IFACE &

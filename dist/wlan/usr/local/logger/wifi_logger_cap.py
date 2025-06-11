@@ -21,7 +21,7 @@ IFACE = ""
 parse_proc = None
 
 def handle_sigterm(signum, frame):
-    logger.message('crit', f"{IFACE} SIGTERM {signum} received! Cleaning up...", _EXTRA_())
+    #logger.message('crit', f"{IFACE} SIGTERM {signum} received! Cleaning up...", _EXTRA_())
     cleanup()
     sys.exit(0)
 
@@ -117,14 +117,14 @@ def main():
 
     subprocess.run(["mkfifo", PCAP_FILE])
     mac_mlan = get_mac_address(IFACE)
-    logger.message('info', f"{IFACE} MAC: {mac_mlan}", _EXTRA_())
+    #logger.message('info', f"{IFACE} MAC: {mac_mlan}", _EXTRA_())
     subprocess.run(["mlanutl", IFACE, "netmon", "0"])
-    time.sleep(1)
+    #time.sleep(1)
     subprocess.run(["mlanutl", IFACE, "netmon", "1", "0x41"])
     subprocess.run(["ifconfig", INTERFACE, "up"])
 
     cap_proc = start_capture()
-    time.sleep(1)
+    #time.sleep(1)
     start_parser(mac_mlan)
 
     try:
@@ -147,6 +147,6 @@ if __name__ == "__main__":
     os.makedirs(f"{LOG_DIR}/tmp", exist_ok=True)
 
     logger = Logger(app_name='logger_cap', facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
-    logger.message("info", f"version : {VERSION}, log_file : {LOG_DIR}/{CAP_FILENAME}", _EXTRA_())
+    #logger.message("info", f"version : {VERSION}, log_file : {LOG_DIR}/{CAP_FILENAME}", _EXTRA_())
 
     main()

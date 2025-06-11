@@ -15,6 +15,13 @@ LOG_DIR="/var/log/cantops/module/dmesg"
 
 mkdir -p "$LOG_DIR"
 
+logger -p local0.notice "[$tag:$LINENO] $IFACE wifi_checker"
+
+if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" ]]; then
+    logger -p local0.err "[$tag:$LINENO] $IFACE is wrong!!"
+    exit 1
+fi
+
 get_state() {
     wpa_cli -i "$IFACE" status | grep "^wpa_state=" | cut -d= -f2
 }
@@ -25,13 +32,11 @@ is_wpa_active() {
 
 sleep 3
 
-logger -p local0.notice "[$tag:$LINENO] $IFACE wifi_checker"
-
 #python3 /usr/local/logger/wifi_module_check.py $IFACE
 
 while true; do
     if lsmod |grep -q "^$MODULE_NAME"; then
-        logger -p local0.notice "[$tag:$LINEO] $IFACE $MODULE_NAME is loading..."
+        logger -p local0.notice "[$tag:$LINENO] $IFACE $MODULE_NAME is loading..."
         #sleep 5
         break
     fi
@@ -43,9 +48,9 @@ while true; do
 
     if [ ! -d /sys/class/net/$IFACE ]; then
         ((ERR_CNT++))
-        logger -p local0.err "[$tag:$LINEO] $IFACE is not exist becase F/W dump...(ERR_CNT:$ERR_CNT)"
+        logger -p local0.err "[$tag:$LINENO] $IFACE is not exist becase F/W dump...(ERR_CNT:$ERR_CNT)"
         if [ "$ERR_CNT" -gt "$LIMIT_CNT" ]; then
-            logger -p local0.emerg "[$tag:$LINEO] Reboot because $IFACE is cannot recovery(ERR_CNT:$ERR_CNT > LIMIT_CNT:$LIMIT_CNT)"
+            logger -p local0.emerg "[$tag:$LINENO] Reboot because $IFACE is cannot recovery(ERR_CNT:$ERR_CNT > LIMIT_CNT:$LIMIT_CNT)"
             TIMESTAMP=$(date + "%Y%m%d_%H%M%S")
             LOG_FILE="$LOG_DIR/${TIMESTAMP}.log"
             dmesg |tail -1000 > "$LOF_FILE"
@@ -76,7 +81,7 @@ while true; do
         DURATION=$((TIMESTAMP - UNSTABLE_START))
 
         if (( DURATION >= MAX_UNSTABLE_DURATION )); then
-            logger -p local0.notice  "[$tag:$LINEO] restart wpa_supplicant@$IFACE because $IFACE is not connected during $MAX_UNSTABLE_DURATION" 
+            logger -p local0.notice  "[$tag:$LINENO] restart wpa_supplicant@$IFACE because $IFACE is not connected during $MAX_UNSTABLE_DURATION" 
             systemctl restart wpa_supplicant@$IFACE
             #log "State=$STATE for ${DURATION}s → triggering reconnect on $IFACE"
             #wpa_cli -i "$IFACE" reconnect
