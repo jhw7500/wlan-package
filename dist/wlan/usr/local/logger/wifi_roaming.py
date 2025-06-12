@@ -18,13 +18,15 @@ FREQ_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/freq.log"
 WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
 DEFAULT_TH_2G = -65
 DEFAULT_TH_5G = -65
-TH_2G = None
-TH_5G = None
-DIFFERENCE_THRESHOLD = 5
+WPA_SSID = None
+WPA_FREQ = None
+WPA_TH_2G = None
+WPA_TH_5G = None
+DIFF_TH = 5
 CHECK_INTERVAL = 1
 
 def handle_sigterm(signum, frame):
-    logger.message('crit', f"{IFACE} SIGTERM {signum} received! Cleaning up...", _EXTRA_())
+    logger.message('crit', f"[{IFACE}] SIGTERM {signum} received! Cleaning up...", _EXTRA_())
     cleanup()
     sys.exit(0)
 
@@ -89,21 +91,21 @@ def mlanutl_scan(ssid, freqs):
     cmd = f"mlanutl mlan0 setuserscan ssid={ssid} chan={chan_str}"
     #print(f"[CMD] {cmd}")
     freq_str = " ".join(str(f) for f in freqs)
-    logger.message('info', f"{IFACE} active scan ssid={ssid}, freq={freq_str} cmd={cmd} for roaming", _EXTRA_())
+    logger.message('info', f"[{IFACE}] active scan ssid={ssid}, freq={freq_str} cmd={cmd} for roaming", _EXTRA_())
     '''
-    cmd = f"mlanutl mlan0 setuserscan ssid={ssid} chan={chan_str}"
-    logger.message('info', f"{IFACE} scan : {cmd}", _EXTRA_())
+    cmd = f"mlanutl mlan0 setuserscan chan={chan_str} ssid={ssid}"
+    logger.message('info', f"[{IFACE}] scan : {cmd}", _EXTRA_())
     try:
         result = subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
         output = result.stdout.strip()
         if not output:
-            logger.message('err', f"{IFACE} scan command reutrned no output", _EXTRA_())
+            logger.message('err', f"[{IFACE}] scan command reutrned no output", _EXTRA_())
             return None
 
         #print(f"[OUTPUT]\n{output}")       
         return result.stdout.splitlines()
     except subprocess.CalledProcessError as e:
-        logger.message('err', f"{IFACE} scan command failed:{e.stderr.strip()}", _EXTRA_())
+        logger.message('err', f"[{IFACE}] scan command failed:{e.stderr.strip()}", _EXTRA_())
         return None
 
 def iw_scan(ssid, freqs):
@@ -123,7 +125,7 @@ def get_station_info():
             }
             return result
     except Exception as e:
-        logger.message('err', f"{IFACE} Failed to read station info from link log: {e}", _EXTRA_())
+        logger.message('err', f"[{IFACE}] Failed to read station info from link log: {e}", _EXTRA_())
         return None
 
 def load_channel_info():
@@ -141,7 +143,7 @@ def get_current_ssid():
             data = json.load(f)
             return data['info']['ssid'].strip()
     except Exception as e:
-        logger.message('err', f"{IFACE} Failed to get current SSID from link log: {e}", _EXTRA_())
+        logger.message('err', f"[{IFACE}] Failed to get current SSID from link log: {e}", _EXTRA_())
         return None
 
 def get_current_bssid():
@@ -150,7 +152,7 @@ def get_current_bssid():
             data = json.load(f)
             return data['station_info']['address'].strip().lower()
     except Exception as e:
-        logger.message('err', f"{IFACE} Failed to get current BSSID from link log: {e}", _EXTRA_())
+        logger.message('err', f"[{IFACE}] Failed to get current BSSID from link log: {e}", _EXTRA_())
         return None
 
 def get_latest_scan(st):
@@ -158,13 +160,12 @@ def get_latest_scan(st):
         with open(SCAN_LOG_FILE, 'r') as f:
             lines = f.readlines()
     except Exception as e:
-        logger.message('err', f"{IFACE} Failed to read scan info from ap log: {e}", _EXTRA_())
+        logger.message('err', f"[{IFACE}] Failed to read scan info from ap log: {e}", _EXTRA_())
         return [], None
 
     timestamp = None
     entries = []
 
-    # 역순으로 타임스탬프를 먼저 찾음
     for i in reversed(range(len(lines))):
         line = lines[i]
         match = re.match(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]", line)
@@ -174,9 +175,10 @@ def get_latest_scan(st):
             break
 
     if timestamp is None:
+        logger.message('err', f"[{IFACE}] timestamp is not exist", _EXTRA_())
         return [], None
 
-    # 해당 타임스탬프 이후의 항목만 파싱
+    #logger.message('info', f"[{IFACE}] wpa ssid:{st['ssid']}, freq:{WPA_FREQ}", _EXTRA_())
     for line in lines[start_idx:]:
         if re.match(r"^\d{2}\|", line):
             fields = line.strip().split("|")
@@ -187,9 +189,12 @@ def get_latest_scan(st):
                     ld = int(fields[3].strip())
                     bssid = fields[4].strip().lower()
                     ssid = fields[6].strip()
-                    rssi_th = TH_2G if channel < 36 else TH_5G
-
-                    if st['bssid'] != bssid and st['ssid'] == ssid and rssi > rssi_th:
+                    rssi_th = WPA_TH_2G if channel < 36 else WPA_TH_5G
+                    freq = channel_to_freq(channel)
+                    #logger.message('info', f"[{IFACE}] ssid:{ssid}, bssid:{bssid}, ch:{channel}, freq:{freq}, rssi:{rssi}, th:{rssi_th}, ld:{ld}", _EXTRA_()) 
+                    #if st['bssid'] != bssid and st['ssid'] == ssid and channel in WPA_FREQ: #and rssi > rssi_th:
+                    if st['ssid'] == ssid and str(freq) in WPA_FREQ:
+                        #logger.message('info', f"[{IFACE}] {bssid} append to entry", _EXTRA_()) 
                         entries.append({
                             "timestamp": timestamp,
                             "channel": channel,
@@ -200,15 +205,15 @@ def get_latest_scan(st):
                             "ssid": ssid
                         })
                 except Exception as e:
-                    logger.message('warn', f"{IFACE} scan entry parsing failed: {e}", _EXTRA_())
+                    logger.message('warn', f"[{IFACE}] scan entry parsing failed: {e}", _EXTRA_())
                     continue
 
     candidates = sorted(entries, key=lambda x: x['rssi'], reverse=True)
-    #logger.message('info', f"{IFACE} roam candidates: {candidates}", _EXTRA_())
+    #logger.message('info', f"[{IFACE}] roam candidates: {candidates}", _EXTRA_())
     i = 0
     for entry in candidates:
         logger.message('info',
-            f"{IFACE} roam candidate {i}: "
+            f"[{IFACE}] roam candidate {i}: "
             f"ts={entry['timestamp']}, ssid={entry['ssid']}, bssid={entry['bssid']}, "
             f"ch={entry['channel']}, ld={entry['ld']}, rssi={entry['rssi']}(th={entry['rssi_th']})",
             _EXTRA_()
@@ -220,20 +225,45 @@ def get_latest_scan(st):
 def parse_supplicant_conf(path):
     ssid = None
     freqs = []
+    th2g = None
+    th5g = None
 
     with open(path, "r") as f:
         for line in f:
             line = line.strip()
             if line.startswith("ssid=") and not line.startswith("#"):
-                ssid = line.split("=", 1)[1].strip().strip('"')
+                try:
+                    ssid = line.split("=", 1)[1].strip().strip('"')
+                except ValueError:
+                    logger.message('err', f"[{IFACE}] ssid : {ssid} is invalid in {path}", _EXTRA_())
+                    pass
             elif line.startswith("scan_freq=") and not line.startswith("#"):
-                freqs = line.split("=", 1)[1].strip().split()
+                try:
+                    freqs = line.split("=", 1)[1].strip().split()
+                except ValueError:
+                    logger.message('err', f"[{IFACE}] scan_freq : {freqs} is invalid in {path}", _EXTRA_())
+                    pass
+            elif line.startswith("#!TH_2G="):
+                try:
+                    th2g = int(line.split("=")[1])
+                except ValueError:
+                    logger.message('err', f"[{IFACE}] TH_2G : {th2g} is invalid in {path}", _EXTRA_())
+                    pass
+            elif line.startswith("#!TH_5G="):
+                try:
+                    th5g = int(line.split("=")[1])
+                except ValueError:
+                    logger.message('err', f"[{IFACE}] TG_5G : {tg5g} is invalid in {path}", _EXTRA_())
+                    pass
 
-    return ssid, freqs
+    th2g = th2g if th2g is not None else DEFAULT_TH_2G
+    th5g = th5g if th5g is not None else DEFAULT_TH_5G
+
+    return ssid, freqs, th2g, th5g
 
 def roam_to_bssid(bssid):
     #log(f"Roaming to BSSID {bssid}")
-    #logger.message('info', f"{IFACE} Roaming to BSSID {bssid}", _EXTRA_())
+    #logger.message('info', f"[{IFACE}] Roaming to BSSID {bssid}", _EXTRA_())
     subprocess.run(["wpa_cli", "-i", IFACE, "roam", bssid])
 
 def score_ap(ap, rssi_weight=1.0, ld_weight=1.0):
@@ -335,12 +365,12 @@ def parse_thresholds(conf_path):
     with open(conf_path, "r") as f:
         for line in f:
             line = line.strip()
-            if line.startswith("#TH_2G="):
+            if line.startswith("#!TH_2G="):
                 try:
                     th2g = int(line.split("=")[1])
                 except ValueError:
                     pass
-            elif line.startswith("#TH_5G="):
+            elif line.startswith("#!TH_5G="):
                 try:
                     th5g = int(line.split("=")[1])
                 except ValueError:
@@ -353,23 +383,6 @@ def parse_thresholds(conf_path):
 
 def main():
     while True:
-
-        """
-        signal = get_station_signal()
-        if signal is None:
-            time.sleep(5)
-            continue
-
-        current_bssid = get_current_bssid()
-        if current_bssid is None:
-            time.sleep(5)
-            continue
-
-        current_ssid = get_current_ssid()
-        if current_ssid is None:
-            time.sleep(5)
-            continue
-        """
 
         station = get_station_info()
 
@@ -392,40 +405,41 @@ def main():
         '''
 
         if station['freq'] < 5000:
-            station['rssi_th'] = TH_2G
+            station['rssi_th'] = WPA_TH_2G
         else:
-            station['rssi_th'] = TH_5G
+            station['rssi_th'] = WPA_TH_5G
 
-        #logger.message('info', f"{IFACE} rssi cur : {station['rssi']}, th : {station['rssi_th']}", _EXTRA_())
+        #logger.message('info', f"[{IFACE}] rssi cur : {station['rssi']}, th : {station['rssi_th']}", _EXTRA_())
         if station['rssi'] >= station['rssi_th']:
             #subprocess.run(["systemctl", "start", "wifi_capture"], check=True)
             time.sleep(CHECK_INTERVAL)
             continue
 
-        logger.message('info', f"{IFACE} roaming condition : {station['rssi']} < {station['rssi_th']}", _EXTRA_())
+        logger.message('info', f"[{IFACE}] roaming condition : {station['rssi']} < {station['rssi_th']} ({station['bssid']})", _EXTRA_())
                 
-        ssid, freqs = parse_supplicant_conf(WPA_CONF_FILE)
-        if ssid and freqs:
+        #ssid, freqs = parse_supplicant_conf(WPA_CONF_FILE)
+        if WPA_SSID and WPA_FREQ:
             #subprocess.run(["systemctl", "stop", "wifi_capture"], check=True)
-            station['ssid'] = ssid
-            #iw_scan(ssid, freqs)
-            lines = mlanutl_scan(ssid, freqs)
+            station['ssid'] = WPA_SSID
+            #iw_scan(WPA_SSID, WPA_FREQ)
+            lines = mlanutl_scan(WPA_SSID, WPA_FREQ)
+            #logger.message('info', f"[{IFACE}] scan end", _EXTRA_())
             if lines:
                 ap_lines = extract_ap_table(lines)
                 chan_lines = extract_channel_table(lines)
                 save_with_timestamp(SCAN_LOG_FILE, ap_lines)
                 save_with_timestamp(FREQ_LOG_FILE, chan_lines)
             else:
-                logger.message('err', f"{IFACE} scan failed: output : {lines}", _EXTRA_())
+                logger.message('err', f"[{IFACE}] scan failed: output : {lines}", _EXTRA_())
                 time.sleep(CHECK_INTERVAL)
                 continue
 
-        time.sleep(0.5)
+        #time.sleep(0.1)
         entries, timestamp = get_latest_scan(station)
 
         if not entries:
             #log("No APs found in latest scan.")
-            logger.message('err', f"{IFACE} No Matching APs found in latest scan", _EXTRA_())
+            logger.message('err', f"[{IFACE}] No Matching APs found in latest scan", _EXTRA_())
             time.sleep(3)
             continue
 
@@ -437,19 +451,16 @@ def main():
         #    f"Top RSSI={top_rssi}dBm at {top_bssid}, Δ={rssi_diff}dB")
         
         if top_ap['bssid'] != station['bssid']:
-            if top_ap['rssi'] > top_ap['rssi_th'] and rssi_diff >= DIFFERENCE_THRESHOLD:
-                logger.message('emerg', f"{IFACE} Roaming from {station['bssid']}(ch:{station['freq']}) to {top_ap['bssid']}(ch:{channel_to_freq(top_ap['channel'])})"
+            if top_ap['rssi'] > top_ap['rssi_th'] and rssi_diff >= DIFF_TH:
+                logger.message('emerg', f"[{IFACE}] Roaming from {station['bssid']}(ch:{station['freq']}) to {top_ap['bssid']}(ch:{channel_to_freq(top_ap['channel'])})"
                                        f" : {top_ap['ssid']}, {top_ap['rssi']}>{top_ap['rssi_th']}", _EXTRA_())
                 roam_to_bssid(top_ap['bssid'])
-                time.sleep(5)
+                time.sleep(3)
                 continue
             else:
-                logger.message('info', f"{IFACE} AP {top_ap['bssid']} not qualified: abs={top_ap['rssi']}, diff={rssi_diff}", _EXTRA_())
-                #log(f"AP {top_bssid} not qualified: "
-                #    f"absolute={top_rssi}>{ABSOLUTE_THRESHOLD}, "
-                #    f"diff={rssi_diff}≥{DIFFERENCE_THRESHOLD}")
-        #else:
-        #    log("Top AP is already connected.")
+                logger.message('info', f"[{IFACE}] Top AP is not qualified : bssid={top_ap['bssid']}, rssi={top_ap['rssi']}({top_ap['rssi_th']}), diff={rssi_diff}({DIFF_TH})", _EXTRA_())
+        else:
+            logger.message('info', f"[{IFACE}] Top AP is already connected", _EXTRA_()) 
 
         time.sleep(CHECK_INTERVAL)
 
@@ -459,7 +470,7 @@ if __name__ == "__main__":
 
     IFACE = sys.argv[1] if len(sys.argv) > 1 else "mlan0"
     if IFACE not in ["mlan0", "mlan1"]:
-        logger.message("err", f"{IFACE} is invalid", _EXTRA_())
+        logger.message("err", f"[{IFACE}] interface is invalid", _EXTRA_())
         sys.exit(1)
 
     LINK_LOG_FILE = f"/var/log/cantops/link/{IFACE}/link.json"
@@ -467,8 +478,8 @@ if __name__ == "__main__":
     FREQ_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/freq.log"
     WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-{IFACE}.conf"
 
-    TH_2G, TH_5G = parse_thresholds(WPA_CONF_FILE)    
+    WPA_SSID, WPA_FREQ, WPA_TH_2G, WPA_TH_5G = parse_supplicant_conf(WPA_CONF_FILE)    
 
-    logger.message("info", f"version : {VERSION}, iface : {IFACE}, conf_file : {WPA_CONF_FILE}, TH_2G : {TH_2G}, TH_5G : {TH_5G}", _EXTRA_())
+    logger.message("info", f"[{IFACE}] version : {VERSION}, ssid : {WPA_SSID}, scan_freq : {WPA_FREQ}, TH_2G : {WPA_TH_2G}, TH_5G : {WPA_TH_5G}, conf : {WPA_CONF_FILE}", _EXTRA_())
 
     main()

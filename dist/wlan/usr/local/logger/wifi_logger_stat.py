@@ -26,7 +26,7 @@ last_log_time = time.time()  # 마지막 로깅 시간
 tx_retrys = {}
 
 def handle_sigterm(signum, frame):
-    logger.message('crit', f"{IFACE} SIGTERM {signum} received! Cleaning up...", _EXTRA_())
+    logger.message('crit', f"[{IFACE}] SIGTERM {signum} received! Cleaning up...", _EXTRA_())
     cleanup()
     sys.exit(0)
 
@@ -45,7 +45,7 @@ def get_last_ap_log_values(log_filename, num_lines=10):
     """AP별 로그 파일에서 최신 로그 데이터를 읽어 파싱"""
 
     if not os.path.exists(log_filename):
-        logger.message("err", f"{IFACE} {log_filename} is not exist", _EXTRA_())
+        logger.message("err", f"[{IFACE}] {log_filename} is not exist", _EXTRA_())
         #print(f"{log_filename} is not exist")
         return None  # 파일이 존재하지 않으면 None 반환
 
@@ -62,7 +62,7 @@ def get_last_ap_log_values(log_filename, num_lines=10):
 
         if not lines:
             #print(f"{log_filename} is empty")
-            logger.message("err", f"{IFACE} {log_filename} is empty", _EXTRA_())
+            logger.message("err", f"[{IFACE}] {log_filename} is empty", _EXTRA_())
             return None
 
         for line in reversed(lines):
@@ -111,19 +111,19 @@ def get_last_ap_log_values(log_filename, num_lines=10):
 
 def get_station_info(json_file):
     if not os.path.exists(json_file):
-        logger.message("err", f"{IFACE} {json_file} is not exist", _EXTRA_())
+        logger.message("err", f"[{IFACE}] {json_file} is not exist", _EXTRA_())
         return None
 
     try:
         with open(json_file, "r") as f:
             data = json.load(f)
     except Exception as e:
-        #logger.message("err", f"{IFACE} json read error: {e}", _EXTRA_())
+        #logger.message("err", f"[{IFACE}] json read error: {e}", _EXTRA_())
         return None
 
     station = data.get("station_info")
     if not station:
-        #logger.message("err", f"{IFACE} no 'station_info' field in json", _EXTRA_())
+        #logger.message("err", f"[{IFACE}] no 'station_info' field in json", _EXTRA_())
         return None
 
     mac = station.get("address", "00:00:00:00:00:00")
@@ -170,7 +170,7 @@ def get_station_dump():
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
         output = result.stdout.strip()
     except subprocess.CalledProcessError as e:
-        logger.message("err", f"{IFACE} iw station dump failed: {e}", _EXTRA_())
+        logger.message("err", f"[{IFACE}] iw station dump failed: {e}", _EXTRA_())
         return None
 
     if not output or "Station" not in output:
@@ -303,7 +303,7 @@ def get_mlanutl_log(interface="mlan0"):
     try:
         return subprocess.check_output(["mlanutl", interface, "getlog"], text=True)
     except subprocess.CalledProcessError as e:
-        logger.message("err", f"{IFACE} getlog Failed: {e}", _EXTRA_())
+        logger.message("err", f"[{IFACE}] getlog Failed: {e}", _EXTRA_())
         return ""
 
 
@@ -501,10 +501,10 @@ if __name__ == "__main__":
         IFACE = sys.argv[1]
         
     LOG_DIR = f"/var/log/cantops/stat/{IFACE}"
-    logger.message("info", f"version : {VERSION}, log_file : {LOG_DIR}/stat.log", _EXTRA_())
+    logger.message("info", f"[{IFACE}] version : {VERSION}, log_file : {LOG_DIR}/stat.log", _EXTRA_())
     
     if IFACE != "mlan0" and IFACE != "mlan1" :
-        logger.message("err", f"{IFACE} is not vaild interface", _EXTRA_())
+        logger.message("err", f"[{IFACE}] is not vaild interface", _EXTRA_())
         sys.exit(1)
         
     # 로그 디렉토리 생성

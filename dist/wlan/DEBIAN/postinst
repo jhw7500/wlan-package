@@ -81,11 +81,14 @@ customctl() {
   customctl wifi_init enabled
   customctl wifi_logger enabled
   customctl wifi_logger@mlan0 enabled
-  customctl wifi_logger@mlan1 disabled
   customctl wifi_checker@mlan0 enabled
-  customctl wifi_checker@mlan1 disabled
   customctl wifi_ping@mlan0 enabled
+  customctl wifi_logger@mlan1 disabled
+  customctl wifi_checker@mlan1 disabled
+  customctl wifi_ping@mlan1 disabled
 
+  #customctl wpa_supplicant@mlan0 enabled
+  #customctl wifi_bridge@mlan0 enabled
 
 makeDirectory() {
     if [ ! -d "$1" ]; then

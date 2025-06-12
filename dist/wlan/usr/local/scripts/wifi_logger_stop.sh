@@ -4,16 +4,14 @@ key=LOG
 
 IFACE=$1
 
-logger -p local0.notice "[$tag:$LINENO] $IFACE logger stop"
+logger -p local0.notice "[$tag:$LINENO] [$IFACE] logger stop"
 
 if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" ]]; then
-    logger -p local0.err "[$tag:$LINENO] $IFACE is wrong!!"
+    logger -p local0.err "[$tag:$LINENO] [$IFACE] interface is wrong!!"
     exit 1
 fi
 
 if [ "$IFACE" = "mlan0" ]; then
-    logger -p local0.notice "[$tag:$LINENO] $IFACE systemctl stop wifi_capture"
+    logger -p local0.notice "[$tag:$LINENO] [$IFACE] systemctl stop wifi_capture"
     systemctl stop wifi_capture
-else
-    logger -p local0.notice "[$tag:$LINENO] $IFACE is not capture interface"
 fi

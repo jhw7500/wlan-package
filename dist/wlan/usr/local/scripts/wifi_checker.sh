@@ -15,10 +15,10 @@ LOG_DIR="/var/log/cantops/module/dmesg"
 
 mkdir -p "$LOG_DIR"
 
-logger -p local0.notice "[$tag:$LINENO] $IFACE wifi_checker"
+logger -p local0.notice "[$tag:$LINENO] [$IFACE] wifi_checker"
 
 if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" ]]; then
-    logger -p local0.err "[$tag:$LINENO] $IFACE is wrong!!"
+    logger -p local0.err "[$tag:$LINENO] [$IFACE] interface is wrong!!"
     exit 1
 fi
 
@@ -36,7 +36,7 @@ sleep 3
 
 while true; do
     if lsmod |grep -q "^$MODULE_NAME"; then
-        logger -p local0.notice "[$tag:$LINENO] $IFACE $MODULE_NAME is loading..."
+        logger -p local0.notice "[$tag:$LINENO] [$IFACE] $MODULE_NAME is loading..."
         #sleep 5
         break
     fi
@@ -48,9 +48,9 @@ while true; do
 
     if [ ! -d /sys/class/net/$IFACE ]; then
         ((ERR_CNT++))
-        logger -p local0.err "[$tag:$LINENO] $IFACE is not exist becase F/W dump...(ERR_CNT:$ERR_CNT)"
+        logger -p local0.err "[$tag:$LINENO] [$IFACE] is not exist becase F/W dump...(ERR_CNT:$ERR_CNT)"
         if [ "$ERR_CNT" -gt "$LIMIT_CNT" ]; then
-            logger -p local0.emerg "[$tag:$LINENO] Reboot because $IFACE is cannot recovery(ERR_CNT:$ERR_CNT > LIMIT_CNT:$LIMIT_CNT)"
+            logger -p local0.emerg "[$tag:$LINENO] [$IFACE] Reboot because $IFACE is cannot recovery(ERR_CNT:$ERR_CNT > LIMIT_CNT:$LIMIT_CNT)"
             TIMESTAMP=$(date + "%Y%m%d_%H%M%S")
             LOG_FILE="$LOG_DIR/${TIMESTAMP}.log"
             dmesg |tail -1000 > "$LOF_FILE"
@@ -81,7 +81,7 @@ while true; do
         DURATION=$((TIMESTAMP - UNSTABLE_START))
 
         if (( DURATION >= MAX_UNSTABLE_DURATION )); then
-            logger -p local0.notice  "[$tag:$LINENO] restart wpa_supplicant@$IFACE because $IFACE is not connected during $MAX_UNSTABLE_DURATION" 
+            logger -p local0.notice  "[$tag:$LINENO] [$IFACE] restart wpa_supplicant@$IFACE because wifi is not connected during $MAX_UNSTABLE_DURATION" 
             systemctl restart wpa_supplicant@$IFACE
             #log "State=$STATE for ${DURATION}s → triggering reconnect on $IFACE"
             #wpa_cli -i "$IFACE" reconnect
@@ -94,7 +94,7 @@ while true; do
     if [ -d /sys/class/net/$IFACE ]; then
         LINK_OUTPUT=$(iw "$IFACE" link 2>&1)
         if echo "$LINK_OUTPUT" | grep -q "Connected to" && echo "$LINK_OUTPUT" | grep -q "command failed"; then
-            logger -p local0.notice "[$tag:$LINENO] $IFACE Detected invalid link state. Triggering reconnect..."
+            logger -p local0.notice "[$tag:$LINENO] [$IFACE] Detected invalid link state. Triggering reconnect..."
             wpa_cli -i "$IFACE" disconnect
             sleep 1
             wpa_cli -i "$IFACE" reconnect

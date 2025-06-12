@@ -20,7 +20,7 @@ VERSION = "0.0"
 IFACE = ""
 
 def handle_sigterm(signum, frame):
-    logger.message('crit', f"{IFACE} SIGTERM {signum} received! Cleaning up...", _EXTRA_())
+    logger.message('crit', f"[{IFACE}] SIGTERM {signum} received! Cleaning up...", _EXTRA_())
     cleanup()
     sys.exit(0)
 
@@ -36,26 +36,35 @@ def parse_wpa_supplicant_conf(path):
         for line in f:
             line = line.strip()
             if line.startswith("ssid=") and not line.startswith("#"):
-                ssid = line.split("=", 1)[1].strip().strip('"')
+                try:
+                    ssid = line.split("=", 1)[1].strip().strip('"')
+                except ValueError:
+                    logger.message('err', f"[{IFACE}] ssid : {ssid} is invalid in {path}", _EXTRA_())
+                    pass
             elif line.startswith("scan_freq=") and not line.startswith("#"):
-                freqs = line.split("=", 1)[1].strip().split()
-            elif line.startswith("#bgscan="): #and not line.startswith("#"):
+                try:
+                    freqs = line.split("=", 1)[1].strip().split()
+                except ValueError:
+                    logger.message('err', f"[{IFACE}] scan_freq : {freqs} is invalid in {path}", _EXTRA_())
+                    pass
+            elif line.startswith("#!bgscan="): #and not line.startswith("#"):
                 parts = line.split("=", 1)[1].strip().strip('"').split(":")
                 if len(parts) == 4:  # bgscan="simple:X:Y:Z"
                     try:
                         scan_interval = int(parts[3])
                     except ValueError:
+                        logger.message('err', f"[{IFACE}] scan_interval : {scan_interval} is invalid in {path}", _EXTRA_())
                         pass
 
     return ssid, freqs, scan_interval
 
 def periodic_scan(ssid, freqs, interval):
     if not ssid or not freqs:
-        logger.message("err", f"{IFACE} invalid config: ssid='{ssid}', freqs={freqs}", _EXTRA_())
+        logger.message("err", f"[{IFACE}] invalid config: ssid='{ssid}', freqs={freqs}", _EXTRA_())
         return
 
     if not isinstance(interval, int) or interval <= 0:
-        logger.message("err", f"{IFACE} invalid scan interval: {interval}, using default 30s", _EXTRA_())
+        logger.message("err", f"[{IFACE}] invalid scan interval: {interval}, using default 30s", _EXTRA_())
         interval = 30
 
     while True:
@@ -63,20 +72,20 @@ def periodic_scan(ssid, freqs, interval):
             cmd = ["iw", IFACE, "scan", "freq"] + freqs + ["ssid", ssid]
             result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
         except subprocess.CalledProcessError as e:
-            logger.message("err", f"{IFACE} scan command failed: {e}", _EXTRA_())
+            logger.message("err", f"[{IFACE}] scan command failed: {e}", _EXTRA_())
         except Exception as e:
-            logger.message("err", f"{IFACE} unexpected scan error: {type(e).__name__}: {e}", _EXTRA_())
+            logger.message("err", f"[{IFACE}] unexpected scan error: {type(e).__name__}: {e}", _EXTRA_())
 
         time.sleep(interval)
 
 '''
 def periodic_scan(ssid, freqs, interval):
     if not ssid or not freqs:
-        logger.message("err", f"{IFACE} invalid config: ssid='{ssid}', freqs={freqs}", _EXTRA_())
+        logger.message("err", f"[{IFACE}] invalid config: ssid='{ssid}', freqs={freqs}", _EXTRA_())
         return
 
     if not isinstance(interval, int) or interval <= 0:
-        logger.message("err", f"{IFACE} invalid scan interval: {interval}, using default 30s", _EXTRA_())
+        logger.message("err", f"[{IFACE}] invalid scan interval: {interval}, using default 30s", _EXTRA_())
         interval = 30
 
     while True:
@@ -84,25 +93,25 @@ def periodic_scan(ssid, freqs, interval):
             # mlan0일 때만 systemctl 중지
             if IFACE == "mlan0":
                 subprocess.run(["systemctl", "stop", "wifi_capture"], check=True)
-                #logger.message("info", f"{IFACE} systemctl stop wifi_capture before scan", _EXTRA_())
+                #logger.message("info", f"[{IFACE}] systemctl stop wifi_capture before scan", _EXTRA_())
 
             # 스캔 실행
             cmd = ["iw", IFACE, "scan", "freq"] + freqs + ["ssid", ssid]
             subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-            logger.message("info", f"{IFACE} scan : {cmd}", _EXTRA_())
+            logger.message("info", f"[{IFACE}] scan : {cmd}", _EXTRA_())
 
         except subprocess.CalledProcessError as e:
-            logger.message("err", f"{IFACE} command failed: {e}", _EXTRA_())
+            logger.message("err", f"[{IFACE}] command failed: {e}", _EXTRA_())
         except Exception as e:
-            logger.message("err", f"{IFACE} unexpected error: {type(e).__name__}: {e}", _EXTRA_())
+            logger.message("err", f"[{IFACE}] unexpected error: {type(e).__name__}: {e}", _EXTRA_())
         finally:
             # mlan0일 때만 systemctl 재시작
             if IFACE == "mlan0":
                 try:
                     subprocess.run(["systemctl", "start", "wifi_capture"], check=True)
-                    #logger.message("info", f"{IFACE} systemctl start wifi_capture after scan", _EXTRA_())
+                    #logger.message("info", f"[{IFACE}] systemctl start wifi_capture after scan", _EXTRA_())
                 except subprocess.CalledProcessError as e:
-                    logger.message("err", f"{IFACE} failed to restart wifi_capture: {e}", _EXTRA_())
+                    logger.message("err", f"[{IFACE}] failed to restart wifi_capture: {e}", _EXTRA_())
 
         time.sleep(interval)
 '''
@@ -154,7 +163,7 @@ def run_setuserscan():
         )
         return result.stdout.splitlines()
     except subprocess.CalledProcessError as e:
-        logger.message("err", f"{IFACE} setuserscan failed: {e}", _EXTRA_())
+        logger.message("err", f"[{IFACE}] setuserscan failed: {e}", _EXTRA_())
         return []
 
 def run_iwdevscandump(retries=3, delay=1):
@@ -169,11 +178,11 @@ def run_iwdevscandump(retries=3, delay=1):
             )
             return result.stdout.splitlines()
         except subprocess.CalledProcessError as e:
-            logger.message("err", f"[{attempt}/{retries}] {IFACE} scan dump failed: {e}", _EXTRA_())
+            logger.message("err", f"[{IFACE}] {attempt}/{retries} scan dump failed: {e}", _EXTRA_())
             if attempt < retries:
                 time.sleep(delay)
             else:
-                logger.message("err", f"All retry attempts for {IFACE} scan dump failed", _EXTRA_())
+                logger.message("err", f"[{IFACE}] All retry attempts for scan dump failed", _EXTRA_())
                 return "err"
 
 def run_getscantable(retries=3, delay=1):
@@ -189,11 +198,11 @@ def run_getscantable(retries=3, delay=1):
             )
             return result.stdout.splitlines()
         except subprocess.CalledProcessError as e:
-            logger.message("err", f"[{attempt}/{retries}] {IFACE} getscantable failed: {e}", _EXTRA_())
+            logger.message("err", f"[{IFACE}] {attempt}/{retries} getscantable failed: {e}", _EXTRA_())
             if attempt < retries:
                 time.sleep(delay)
             else:
-                logger.message("err", f"All retry attempts for {IFACE} getscantable failed", _EXTRA_())
+                logger.message("err", f"[{IFACE}] All retry attempts for getscantable failed", _EXTRA_())
                 return []
 
 def extract_ap_table(lines):
@@ -297,7 +306,7 @@ def remove_stale_entries(db, now_ts):
         if now_ts - last_seen_ts < STALE_THRESHOLD_SEC:
             cleaned[bssid] = info
         else:
-            logger.message("notice", f"{IFACE} BSSID {bssid} removed (last seen {info['date']})", _EXTRA_())
+            logger.message("notice", f"[{IFACE}] BSSID {bssid} removed (last seen {info['date']})", _EXTRA_())
     return cleaned
 
 
@@ -368,14 +377,14 @@ def extract_vht_operation_block(text):
 
 def parse_scan_output(scan_output):
     if scan_output is None:
-        logger.message("warn", f"{IFACE} scan_output is None", _EXTRA_())
+        logger.message("warn", f"[{IFACE}] scan_output is None", _EXTRA_())
         return {}
 
     if isinstance(scan_output, list):
         scan_output = "\n".join(scan_output)
 
     if not scan_output.strip():
-        logger.message("warn", f"{IFACE} parse_scan_output received empty scan data", _EXTRA_())
+        logger.message("warn", f"[{IFACE}] parse_scan_output received empty scan data", _EXTRA_())
         return {}
 
     if not scan_output or not isinstance(scan_output, str):
@@ -469,7 +478,7 @@ def merge_db(old_db, new_db):
     for bssid, data in new_db.items():
         if bssid not in old_db:
             ssid = data.get("ssid", "<unknown>")
-            logger.message("notice", f"{IFACE} New BSSID detected: {bssid} (SSID: {ssid})", _EXTRA_())
+            logger.message("notice", f"[{IFACE}] New BSSID detected: {bssid} (SSID: {ssid})", _EXTRA_())
         updated[bssid] = data
     return updated
 
@@ -485,10 +494,10 @@ def save_db(db):
         f.write(compacted_json)
 
 def get_scan_result():
-    #logger.message("info", f"{IFACE} get scan result", _EXTRA_())
+    #logger.message("info", f"[{IFACE}] get scan result", _EXTRA_())
     lines = run_getscantable()
     #print(f"{lines}")
-    #logger.message("info", f"{IFACE} {lines}", _EXTRA_())
+    #logger.message("info", f"[{IFACE}] {lines}", _EXTRA_())
     ap_lines = extract_ap_table(lines)
     chan_lines = extract_channel_table(lines)
     save_with_timestamp("ap", ap_lines)
@@ -496,7 +505,7 @@ def get_scan_result():
 
     result = run_iwdevscandump()
     if result == "err":
-        logger.message("err", f"{IFACE} scan result failed!", _EXTRA_())
+        logger.message("err", f"[{IFACE}] scan result failed!", _EXTRA_())
     else:
         new_entries = parse_scan_output(result)
         existing_db = load_existing()
@@ -509,10 +518,13 @@ def get_scan_result():
 def main_loop():
     #subprocess.run(["ifconfig", IFACE, "up"])
     #last_log_time = time.time()
-
+    
+    #periodic scan when bgscan off
+    '''
     ssid, freqs, interval = parse_wpa_supplicant_conf(WPA_CONF_FILE)
-    logger.message("info", f"{IFACE} wpa conf = ssid : {ssid}, freq : {freqs}, interval : {interval}", _EXTRA_())
+    logger.message("info", f"[{IFACE}] wpa conf = ssid : {ssid}, freq : {freqs}, interval : {interval}", _EXTRA_())
     threading.Thread(target=periodic_scan, args=(ssid, freqs, interval), daemon=True).start()
+    '''
 
     def on_scan_event(IFACE):
         time.sleep(0.1)
@@ -531,7 +543,7 @@ def main_loop():
                 #lines = run_setuserscan()
                 result = run_iwdevscandump()
                 if result == "err":
-                    logger.message("err", f"{IFACE} scan result failed!", _EXTRA_())
+                    logger.message("err", f"[{IFACE}] scan result failed!", _EXTRA_())
                     time.sleep(5)
                     #last_log_time = time.time()
                 else:
@@ -571,7 +583,7 @@ def main_loop():
             time.sleep(5)
 
     except KeyboardInterrupt:
-        logger.message("err", f"{IFACE} keyboardInterrupt occurs", _EXTRA_())
+        logger.message("err", f"[{IFACE}] keyboardInterrupt occurs", _EXTRA_())
     ...
 
 if __name__ == "__main__":
@@ -585,10 +597,10 @@ if __name__ == "__main__":
 
     LOG_DIR = f"/var/log/cantops/scan/{IFACE}"
     WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-{IFACE}.conf"    
-    logger.message("info", f"version : {VERSION}, log_file : {LOG_DIR}/ap.log, {LOG_DIR}/freq.log, {LOG_DIR}/beacon.json", _EXTRA_())
+    logger.message("info", f"[{IFACE}] version : {VERSION}, log_file : {LOG_DIR}/ap.log, {LOG_DIR}/freq.log, {LOG_DIR}/beacon.json", _EXTRA_())
     
     if IFACE != "mlan0" and IFACE != "mlan1" :
-        logger.message("err", f"{IFACE} is not vaild interface", _EXTRA_())
+        logger.message("err", f"[{IFACE}] is not vaild interface", _EXTRA_())
         sys.exit(1)
         
     # 로그 디렉토리 생성

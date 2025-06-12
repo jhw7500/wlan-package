@@ -1,12 +1,13 @@
 [Unit]
-Description=WiFi Capture Service
+Description=WiFi init Service
 After=network.target
 
 [Service]
+#Type=oneshot
 ExecStart=/usr/local/scripts/wifi_module_init.sh
 #Restart=always
+RemainAfterExit=yes
 User=root
 
 [Install]
 WantedBy=multi-user.target
-

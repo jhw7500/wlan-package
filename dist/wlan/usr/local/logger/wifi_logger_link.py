@@ -16,7 +16,7 @@ LOG_DIR = "/var/log/cantops/link"
 MWLAN_LOG_PATH = "/proc/mwlan/adapter0/mlan0/log"
 
 def handle_sigterm(signum, frame):
-    logger.message('crit', f"{IFACE} SIGTERM {signum} received! Cleaning up...", _EXTRA_())
+    logger.message('crit', f"[{IFACE}] SIGTERM {signum} received! Cleaning up...", _EXTRA_())
     cleanup()
     sys.exit(0)
 
@@ -71,7 +71,7 @@ def run_command_with_retry(cmd, retries=3, delay=0.3, validate_fn=None):
             #logger.message("warn", f"{cmd} -> empty result (attempt {attempt})", _EXTRA_())
             pass
         elif validate_fn is not None and not validate_fn(output):
-            logger.message("warn", f"{cmd} -> failed validation (attempt {attempt})", _EXTRA_())
+            logger.message("warn", f"[{IFACE}] {cmd} -> failed validation (attempt {attempt})", _EXTRA_())
             #pass
         else:
             return output
@@ -79,7 +79,7 @@ def run_command_with_retry(cmd, retries=3, delay=0.3, validate_fn=None):
         if attempt < retries:
             time.sleep(delay)
 
-    logger.message("err", f"{cmd} -> all {retries} attempts failed", _EXTRA_())
+    logger.message("err", f"[{IFACE}] {cmd} -> all {retries} attempts failed", _EXTRA_())
     return None
 
 def run_command(cmd):
@@ -139,7 +139,7 @@ def parse_station_dump(output):
         if stripped.startswith("Station "):
             result["address"] = stripped.split("Station")[1].split("(")[0].strip()
             if result["address"] != address:
-                logger.message("notice", f"{IFACE} AP changed: {address} -> {result['address']}", _EXTRA_())
+                logger.message("notice", f"[{IFACE}] AP changed: {address} -> {result['address']}", _EXTRA_())
             address = result["address"]
             continue
         key_value = stripped.split(":", 1)
@@ -204,7 +204,7 @@ def main():
             time.sleep(1)
         else:
             #print(f"[WARN] Interface {IFACE} not found")
-            logger.message("err", f"{IFACE} is not found", _EXTRA_())
+            logger.message("err", f"[{IFACE}] is not found", _EXTRA_())
             #subprocess.run(["ifconfig", IFACE, "up"])
             time.sleep(5)
 
@@ -218,14 +218,14 @@ if __name__ == "__main__":
         IFACE = sys.argv[1]
     
     LOG_DIR = f"/var/log/cantops/link/{IFACE}"
-    logger.message("info", f"version : {VERSION}, log_file : {LOG_DIR}/link.json", _EXTRA_())
+    logger.message("info", f"[{IFACE}] version : {VERSION}, log_file : {LOG_DIR}/link.json", _EXTRA_())
 
     if IFACE == "mlan0" :
         MWLAN_LOG_PATH = "/proc/mwlan/adapter0/mlan0/log"
     elif IFACE == "mlan1" :
         MWLAN_LOG_PATH = "/proc/mwlan/adapter1/mlan1/log"
     else:
-        logger.message("err", f"{IFACE} is not vaild interface", _EXTRA_())
+        logger.message("err", f"[{IFACE}] is not vaild interface", _EXTRA_())
         sys.exit(1)
         
     if not os.path.exists(LOG_DIR):
