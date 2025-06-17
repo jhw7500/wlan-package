@@ -76,13 +76,18 @@ customctl() {
   customctl nfs-server masked
   customctl proc-nfs-fs-nfsd.mount
   customctl watchdog enabled
+  customctl samba disabled
+  customctl openvswitch disabled
+  customctl openvswitch-switch disabled
 
   #customctl hciattach disabled
   customctl wifi_init enabled
   customctl wifi_logger enabled
   customctl wifi_logger@mlan0 enabled
   customctl wifi_checker@mlan0 enabled
-  customctl wifi_ping@mlan0 enabled
+  customctl wifi_ping@mlan0 disabled
+  customctl wifi_arp@mlan0 enabled
+
   customctl wifi_logger@mlan1 disabled
   customctl wifi_checker@mlan1 disabled
   customctl wifi_ping@mlan1 disabled
@@ -147,6 +152,10 @@ makeDirectory() {
   #cp /opt/wlan/config/rc.local /etc/
   cp /opt/wlan/config/rsyslog.conf /etc/
   cp /opt/wlan/config/smb.conf /etc/samba/
+  cp /opt/wlan/config/timesyncd.conf /etc/systemd/
+  cp /opt/wlan/config/wifi_mod_para.conf /lib/firmware/nxp/
+  cp /opt/wlan/driver/mlan_6.12.ko /lib/modules/$KERNEL_VERSION/updates/
+  cp /opt/wlan/driver/moal_6.12.ko /lib/modules/$KERNEL_VERSION/updates/
   
   mkdir -p /etc/wpa_supplicant
 
