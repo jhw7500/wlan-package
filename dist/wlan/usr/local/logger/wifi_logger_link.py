@@ -172,6 +172,71 @@ def parse_survey_dump(output):
 
     return survey_data
 
+def parse_eth_info(iface):
+    stats = {
+        "mac_address": None,
+        "ip_address": None,
+        "netmask": None,
+        "rx_packets": 0,
+        "rx_bytes": 0,
+        "rx_errors": 0,
+        "rx_dropped": 0,
+        "tx_packets": 0,
+        "tx_bytes": 0,
+        "tx_errors": 0,
+        "tx_dropped": 0
+    }
+
+    ip_out = run_command(["ip", "addr", "show", iface])
+    for line in ip_out.splitlines():
+        line = line.strip()
+        if line.startswith("link/ether"):
+            m = re.search(r"link/ether\s+([0-9a-f:]+)", line)
+            if m:
+                stats["mac_address"] = m.group(1)
+        elif line.startswith("inet "):
+            m = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+)/(\d+)", line)
+            if m:
+                stats["ip_address"] = m.group(1)
+                cidr = int(m.group(2))
+                netmask = [str((0xffffffff << (32 - cidr) >> i) & 0xff) for i in (24, 16, 8, 0)]
+                stats["netmask"] = ".".join(netmask)
+
+    # traffic
+    with open("/proc/net/dev") as f:
+        for line in f:
+            if iface + ":" in line:
+                parts = line.split(f"{iface}:", 1)[1].split()
+                stats.update({
+                    "rx_bytes": int(parts[0]),
+                    "rx_packets": int(parts[1]),
+                    "rx_errors": int(parts[2]),
+                    "rx_dropped": int(parts[3]),
+                    "tx_bytes": int(parts[8]),
+                    "tx_packets": int(parts[9]),
+                    "tx_errors": int(parts[10]),
+                    "tx_dropped": int(parts[11])
+                })
+    return stats
+
+def parse_eth_phy(iface):
+    out = run_command(["ethtool", iface])
+    result = {}
+
+    for line in out.splitlines():
+        line = line.strip()
+        if line.startswith("Speed:"):
+            result["speed"] = line.split(":", 1)[1].strip()
+        elif line.startswith("Duplex:"):
+            result["duplex"] = line.split(":", 1)[1].strip()
+        elif line.startswith("Port:"):
+            result["port"] = line.split(":", 1)[1].strip()
+        elif line.startswith("Link detected:"):
+            val = line.split(":", 1)[1].strip()
+            result["link"] = "up" if val == "yes" else "down"
+
+    return result
+
 def main():
     while True:
         if os.path.exists(f"/sys/class/net/{IFACE}"):
@@ -187,13 +252,17 @@ def main():
             info_data = parse_iw_info(info_out) if info_out else {}
             station_data = parse_station_dump(station_out) if station_out else {}
             channel_data = parse_survey_dump(channel_out) if channel_out else {}
-
+            eth_stats = {
+                "info": parse_eth_info("eth0"),
+                "phy": parse_eth_phy("eth0")
+            }
             data = {
-                "date" : datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "info": info_data,
                 "station_info": station_data,
                 "channel_info": channel_data,
-                "mwlan_log": parse_mwlan_log()
+                "mwlan_log": parse_mwlan_log(),
+                "eth_stats": eth_stats
             }
 
             os.makedirs(LOG_DIR, exist_ok=True)
@@ -201,7 +270,8 @@ def main():
             #with open(f"{LOG_DIR}/link.json", "w") as f:
             #    json.dump(data, f, indent=4)
             err_cnt = 0
-            time.sleep(1)
+            #logger.message("info", f"[{IFACE}] loop", _EXTRA_())
+            time.sleep(0.960)
         else:
             #print(f"[WARN] Interface {IFACE} not found")
             logger.message("err", f"[{IFACE}] is not found", _EXTRA_())

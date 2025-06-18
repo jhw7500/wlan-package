@@ -1,0 +1,6 @@
+[Match]
+Name=lo
+
+[Network]
+#Unmanaged=yes
+Address=192.168.10.254/32

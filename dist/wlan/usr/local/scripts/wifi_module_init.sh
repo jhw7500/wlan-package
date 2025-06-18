@@ -28,9 +28,6 @@ try_insmod "/lib/modules/$KERNEL_VERSION/updates/mlan_6.12.ko" ""
 try_insmod "/lib/modules/$KERNEL_VERSION/updates/moal_6.12.ko" "mod_para=nxp/wifi_mod_para.conf mfg_mode=0"
 #try_insmod "/lib/modules/$KERNEL_VERSION/kernel/drivers/net/nlmon.ko"
 
-sleep 0.5
-iw dev mlan0 set power_save off
-
 sleep 0.2
 mlanutl mlan0 macctrl 0x00010e13
 mlanutl mlan1 macctrl 0x00010e13
@@ -43,16 +40,19 @@ sleep 0.2
 mlanutl mlan0 htcapinfo 0x05c20000
 mlanutl mlan1 htcapinfo 0x05c20000
 
+
 echo 1 > /proc/sys/net/ipv4/ip_forward
 echo 1 > /proc/sys/net/ipv4/conf/eth0/proxy_arp
 echo 1 > /proc/sys/net/ipv4/conf/mlan0/proxy_arp
+
+iw dev mlan0 set power_save off
+iw dev mlan1 set power_save off
 
 #ip link add nlmon0 type nlmon
 ip link set mlan0 up
 ip link set mlan1 up
 #ip link set nlmon0 up
-
-echo 1 > /proc/sys/kernel/printk
+#echo 1 > /proc/sys/kernel/printk
 
 systemctl start wpa_supplicant@mlan0
 systemctl start wifi_bridge@mlan0

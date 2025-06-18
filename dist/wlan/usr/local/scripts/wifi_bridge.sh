@@ -57,7 +57,7 @@ END
 
 #systemctl start wifi_ping@$IFACE
 #sleep 5
-relayd -I $IFACE -I eth0
+relayd -d -I $IFACE -I eth0
 #systemctl restart wifi_ping@$IFACE
 
 #ip route replace default via $IFACE

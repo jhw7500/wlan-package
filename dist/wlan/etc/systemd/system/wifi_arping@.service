@@ -1,0 +1,17 @@
+[Unit]
+Description=WiFi arping Service
+#Conflicts=wifi_ping@mlan0.service wifi_ping@mlan1.service
+After=network.target
+#Requires=wpa_supplicant@%i.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/scripts/wifi_arping.sh %i
+Restart=always
+RestartSec=2
+User=root
+#RemainAfterExit=true
+
+[Install]
+WantedBy=multi-user.target
+

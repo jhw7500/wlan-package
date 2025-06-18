@@ -63,7 +63,7 @@ def main():
 
         with open(LOG_FILE, "a") as log:
             log.write(line)
-        time.sleep(0.998)
+        time.sleep(0.999)
 
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_sigterm)

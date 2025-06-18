@@ -83,10 +83,13 @@ customctl() {
   #customctl hciattach disabled
   customctl wifi_init enabled
   customctl wifi_logger enabled
+
+  customctl wifi_arping@eth0 enabled
+
   customctl wifi_logger@mlan0 enabled
   customctl wifi_checker@mlan0 enabled
   customctl wifi_ping@mlan0 disabled
-  customctl wifi_arp@mlan0 enabled
+  customctl wifi_arp@mlan0 disabled
 
   customctl wifi_logger@mlan1 disabled
   customctl wifi_checker@mlan1 disabled
@@ -190,6 +193,8 @@ makeDirectory() {
   ln -s /usr/local/scripts/wifi.sh /usr/local/bin/wifi
   ln -s /var/log/cantops/journal /var/log/journal
   ln -s /usr/local/scripts/logctl.sh /usr/local/bin/logctl
+
+  rm /usr/local/bin/mfgbridge
 
   PACKAGE_NAME="$DPKG_MAINTSCRIPT_PACKAGE"
   echo -e "\e[32m install $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME) finish\e[0m"

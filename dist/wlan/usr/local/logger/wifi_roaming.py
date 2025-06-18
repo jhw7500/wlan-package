@@ -455,7 +455,7 @@ def main():
                 logger.message('emerg', f"[{IFACE}] Roaming from {station['bssid']}(ch:{station['freq']}) to {top_ap['bssid']}(ch:{channel_to_freq(top_ap['channel'])})"
                                        f" : {top_ap['ssid']}, {top_ap['rssi']}>{top_ap['rssi_th']}", _EXTRA_())
                 roam_to_bssid(top_ap['bssid'])
-                time.sleep(3)
+                time.sleep(5)
                 continue
             else:
                 logger.message('info', f"[{IFACE}] Top AP is not qualified : bssid={top_ap['bssid']}, rssi={top_ap['rssi']}({top_ap['rssi_th']}), diff={rssi_diff}({DIFF_TH})", _EXTRA_())

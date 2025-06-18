@@ -7,14 +7,15 @@ if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" ]]; then
     exit 1
 fi
 
-logger -p local0.info "[$tag:$LINENO] WPA Event Detect" 
+logger -p local0.info "[$tag:$LINENO] [$IFACE] WPA Event Detect" 
 
 for i in {1..10}; do
-    ip_info=$(ip -4 addr show dev eth0 | grep inet | awk '{print $2}')
+    ip_info=$(ip -4 addr show dev $IFACE | grep inet | awk '{print $2}')
     if [ -n "$ip_info" ]; then
+        #logger -p local0.info "[$tag:$LINENO] [$IFACE] ip info : $ip_info"
         break
     fi
-    sleep 0.5
+    sleep 1
 done
 
 if [ -z "$ip_info" ]; then

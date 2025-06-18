@@ -33,9 +33,9 @@ case "$1" in
     ;;
   clean)
     rm /var/log/cantops/* -r
-    systemctl wifi_logger
-    systemctl wifi_logger@mlan0
-    systemctl rsyslog
+    systemctl restart wifi_logger
+    systemctl restart wifi_logger@mlan0
+    systemctl restart rsyslog
     #cat /dev/null > /var/log/cantops/kerl.log
     #cat /dev/null > /var/log/cantops/sys.log
     #cat /dev/null > /var/log/cantops/local0.log

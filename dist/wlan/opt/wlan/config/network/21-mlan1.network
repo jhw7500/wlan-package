@@ -2,8 +2,8 @@
 Name=mlan1
 
 [Network]
-Unmanaged=yes
-DHCP=no
+Unmanaged=no
+DHCP=yes
 #Address=169.254.1.254/16
 #IPv4LL=no
 #LinkLocalAddressing=no

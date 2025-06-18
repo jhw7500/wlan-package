@@ -11,10 +11,6 @@
 #
 # By default this script does nothing.
 
-tag=$(basename "$0")
-
-logger -p local0.notice "[$tag:$LINENO] Booting"
-
 # Set THP as madvise mode
 if [ -e /sys/kernel/mm/transparent_hugepage/enabled ]
 then
@@ -33,16 +29,7 @@ then
 fi
 
 # set printk to 7 to dump kernel message to console
-echo 7 > /proc/sys/kernel/printk
-
-#python3 /usr/local/logger/wifi_module_check.py &
-#PID=$!
-#echo "wifi_module_check.py($PID) in rc.local"
-
-#/usr/local/scripts/wifi_module_init.sh &
-
-#initial test
-#python3 /usr/local/logger/wifi_module_check.py &
+echo 1 > /proc/sys/kernel/printk
 
 exit 0
 
