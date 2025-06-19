@@ -29,7 +29,7 @@ try_insmod "/lib/modules/$KERNEL_VERSION/updates/moal_6.12.ko" "mod_para=nxp/wif
 #try_insmod "/lib/modules/$KERNEL_VERSION/kernel/drivers/net/nlmon.ko"
 
 #sleep 0.2
-python3 /usr/local/logger/getmac.py
+#python3 /usr/local/logger/getmac.py
 
 mlanutl mlan0 macctrl 0x00010e13
 mlanutl mlan1 macctrl 0x00010e13
@@ -58,7 +58,7 @@ iw dev mlan1 set power_save off
 
 #ip link add nlmon0 type nlmon
 ip link set mlan0 up
-ip link set mlan1 up
+ip link set mlan1 down
 #ip link set nlmon0 up
 #echo 1 > /proc/sys/kernel/printk
 
