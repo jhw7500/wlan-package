@@ -31,13 +31,13 @@ while true; do
     fi
 
     #for i in $(seq 1 2); do
-    #    arping -c 1 -I mlan0 $GATEWAY
+    #    arping -c 1 -I $IFACE $GATEWAY
     #    sleep 1
     #done
 
-    arping -c 1 -I mlan0 $GATEWAY -q
+    arping -c 1 -I $IFACE $GATEWAY
 
     PRE_GATEWAY=$GATEWAY
     
-    sleep 3
+    sleep 10
 done

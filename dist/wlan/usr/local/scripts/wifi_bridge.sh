@@ -57,7 +57,9 @@ END
 
 #systemctl start wifi_ping@$IFACE
 #sleep 5
+echo 1 > /proc/sys/net/ipv4/ip_forward
 relayd -d -I $IFACE -I eth0
+#dumb eth0 mlan0
 #systemctl restart wifi_ping@$IFACE
 
 #ip route replace default via $IFACE

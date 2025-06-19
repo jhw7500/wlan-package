@@ -152,7 +152,7 @@ makeDirectory() {
   /usr/local/scripts/add_line.sh "watchdog-timeout=15" /etc/watchdog.conf
 
   cp /opt/wlan/config/logrotate.d/logrotate.rsyslog /etc/logrotate.d/
-  #cp /opt/wlan/config/rc.local /etc/
+  cp /opt/wlan/config/rc.local /etc/
   cp /opt/wlan/config/rsyslog.conf /etc/
   cp /opt/wlan/config/smb.conf /etc/samba/
   cp /opt/wlan/config/timesyncd.conf /etc/systemd/
@@ -187,6 +187,10 @@ makeDirectory() {
     cp /opt/wlan/config/network/22-eth0.network /etc/systemd/network/
   fi
 
+  if [ ! -f /etc/systemd/network/10-lo.network ]; then
+    logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /etc/systemd/network/10-lo.network"
+    cp /opt/wlan/config/network/10-lo.network /etc/systemd/network/
+  fi
 
   #mv /usr/local/bin/iw /usr/local/bin/iw_org
   #ln -s /usr/local/bin/iw_new /usr/local/bin/iw

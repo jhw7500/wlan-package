@@ -22,5 +22,5 @@ logger -p local0.info "[$tag:$LINENO] [$IFACE] Found client IP: $target_ip"
 while true; do
   #ping -c 1 -I $iface $target_ip > /dev/null
   arping -c 1 -I $IFACE $target_ip
-  sleep 10
+  sleep 20
 done
