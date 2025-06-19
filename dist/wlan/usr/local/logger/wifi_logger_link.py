@@ -237,9 +237,20 @@ def parse_eth_phy(iface):
 
     return result
 
+def is_wpa_running(interface):
+    result = subprocess.run(
+        ["systemctl", "is-active", f"wpa_supplicant@{interface}"],
+        capture_output=True, text=True
+    )
+    return result.stdout.strip() == "active"
+
 def main():
     while True:
-        if os.path.exists(f"/sys/class/net/{IFACE}"):
+        if not os.path.exists(f"/sys/class/net/{IFACE}"):
+            logger.message("err", f"[{IFACE}] /sys/class/net/{IFACE} is not exist", _EXTRA_())
+            time.sleep(10)
+            continue
+        if is_wpa_running(IFACE):
             #info_out = run_command(["iw", IFACE, "info"])
             #station_out = run_command(["iw", IFACE, "station", "dump"])
             #channel_out = run_command(["iw", IFACE, "survey", "dump"])
@@ -274,9 +285,9 @@ def main():
             time.sleep(0.960)
         else:
             #print(f"[WARN] Interface {IFACE} not found")
-            logger.message("err", f"[{IFACE}] is not found", _EXTRA_())
+            logger.message("err", f"[{IFACE}] wpa_supplicant@{IFACE} is not running", _EXTRA_())
             #subprocess.run(["ifconfig", IFACE, "up"])
-            time.sleep(5)
+            time.sleep(10)
 
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_sigterm)

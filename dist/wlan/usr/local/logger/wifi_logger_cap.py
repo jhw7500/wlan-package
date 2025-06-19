@@ -137,16 +137,16 @@ def main():
 
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_sigterm)
+    logger = Logger(app_name='logger_cap', facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
 
     IFACE = sys.argv[1] if len(sys.argv) > 1 else "mlan0"
     if IFACE not in ["mlan0", "mlan1"]:
-        print(f"Invalid interface {IFACE}")
+        logger.message("info", f"Invalid interface {IFACE}", _EXTRA_())
         sys.exit(1)
 
     LOG_DIR = f"/var/log/cantops/capture/{IFACE}"
     os.makedirs(f"{LOG_DIR}/tmp", exist_ok=True)
 
-    logger = Logger(app_name='logger_cap', facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
     #logger.message("info", f"[{IFACE}] version : {VERSION}, log_file : {LOG_DIR}/{CAP_FILENAME}", _EXTRA_())
 
     main()

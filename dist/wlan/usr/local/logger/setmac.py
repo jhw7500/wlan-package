@@ -84,8 +84,8 @@ def main():
         #print(f"[+] Target MAC detected: {mac}")
         logger.message("info", f"Target MAC detected: {mac}", _EXTRA_())
         save_mac_address("/var/log/cantops/target_mac", mac)
-        #set_mac_address(WLAN_IFACE, mac)
-        #connect_to_ap()
+        set_mac_address(WLAN_IFACE, mac)
+        connect_to_ap()
     else:
         print("[-] Failed to detect any external MAC address.")
 
