@@ -30,7 +30,9 @@ case "$2" in
         systemctl restart wpa_supplicant@mlan1
     else
         echo "Restarting WPA service $IFACE..."
-        systemctl restart wpa_supplicant@$IFACE
+        systemctl stop wpa_supplicant@$IFACE
+        sleep 0.2
+        systemctl start wpa_supplicant@$IFACE
     fi
     ;;
   start | up)

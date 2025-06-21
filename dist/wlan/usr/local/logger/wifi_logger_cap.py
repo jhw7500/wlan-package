@@ -46,7 +46,7 @@ def start_parser(mac_mlan):
     global parse_proc
     ether_filter = f"ether host {mac_mlan}"
     log_path = f"{LOG_DIR}/{CAP_FILENAME}"
-
+    logger.message('err', f"[{IFACE}] ether_filter : {ether_filter}", _EXTRA_())
     parse_proc = subprocess.Popen([
         "stdbuf", "-oL", "tshark",
         "-l", "-r", PCAP_FILE,
@@ -78,7 +78,11 @@ def start_parser(mac_mlan):
                 continue
             
             #beacon
-            if ftype == "0" and fsub == "8":
+            #if ftype == "0" and fsub == "8":
+            #    continue
+
+            #if sa != mac_mlan and (da != mac_mlan or da != BROADCAST_MAC):
+            if sa != mac_mlan and da != mac_mlan:
                 continue
 
             snr = "N/A"
@@ -119,12 +123,12 @@ def main():
     mac_mlan = get_mac_address(IFACE)
     #logger.message('info', f"[{IFACE}] MAC: {mac_mlan}", _EXTRA_())
     subprocess.run(["mlanutl", IFACE, "netmon", "0"])
-    #time.sleep(1)
+    time.sleep(0.5)
     subprocess.run(["mlanutl", IFACE, "netmon", "1", "0x41"])
     subprocess.run(["ifconfig", INTERFACE, "up"])
 
     cap_proc = start_capture()
-    #time.sleep(1)
+    time.sleep(0.5)
     start_parser(mac_mlan)
 
     try:

@@ -1,3 +1,4 @@
+
 #!/bin/bash
 tag=$(basename "$0")
 key=LOG
@@ -62,11 +63,8 @@ echo 1 > /proc/sys/net/ipv4/ip_forward
 #echo 1 > /proc/sys/net/ipv4/conf/eth0/proxy_arp
 #echo 1 > /proc/sys/net/ipv4/conf/mlan0/proxy_arp
 
-#systemctl stop wifi_dumb@$IFACE
-systemctl restart wifi_arping@$IFACE
-relayd -d -I $IFACE -I eth0
-
-#dumb eth0 mlan0
+#relayd -d -I $IFACE -I eth0
+dumb eth0 mlan0
 #systemctl restart wifi_ping@$IFACE
 
 #ip route replace default via $IFACE

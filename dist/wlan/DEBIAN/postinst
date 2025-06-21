@@ -82,6 +82,7 @@ customctl() {
   customctl connman disabled
   customctl ovsdb-server masked
   customctl smb disabled
+  customctl nmb disabled
 
   #customctl hciattach disabled
   customctl wifi_init enabled

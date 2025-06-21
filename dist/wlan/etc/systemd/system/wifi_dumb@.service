@@ -1,15 +1,15 @@
 [Unit]
-Description=Wifi Bridge Service for %i
+Description=Wifi Dumb Service for %i
 After=wifi_init.service
 #After=wpa_supplicant@mlan0
 Requires=wifi_init.service
 #Requires=wpa_supplicant@mlan0
-Conflicts=wifi_bridge@mlan0.service wifi_bridge@mlan1.service
+Conflicts=wifi_dumb@mlan0.service wifi_dumb@mlan1.service
 
 [Service]
 #Type=oneshot
 #ExecStartPre=/bin/bash -c 'for i in {1..10}; do [ -d /sys/class/net/%i ] && exit 0 || sleep 1; done; exit 1'
-ExecStart=/usr/local/scripts/wifi_bridge.sh %i
+ExecStart=/usr/local/scripts/wifi_dumb.sh %i
 #ExecStop=/usr/local/scripts/wifi_bridge_stop.sh %i
 RemainAfterExit=yes
 #Restart=on-failure
