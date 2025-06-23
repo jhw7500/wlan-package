@@ -82,19 +82,22 @@ def main():
 
     if mac:
         print(f"[+] Target MAC detected: {mac}")
-        logger.message("info", f"Target MAC detected: {mac}", _EXTRA_())
+        logger.message("info", f"[{WLAN_IFACE}] Target MAC detected: {mac}", _EXTRA_())
         save_mac_address("/var/log/cantops/target_mac", mac)
         #set_mac_address(WLAN_IFACE, mac)
         #connect_to_ap()
     else:
         print("[-] Failed to detect any external MAC address.")
+        logger.message("err", f"[{WLAN_IFACE}] Failed to detect any extrernal MAC address", _EXTRA_())
 
 if __name__ == "__main__":
     logger = Logger(app_name='logger_getmac', facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
 
     WLAN_IFACE = sys.argv[1] if len(sys.argv) > 1 else "mlan0"
     if WLAN_IFACE not in ["mlan0", "mlan1"]:
-        logger.message("info", f"Invalid interface {WLAN_IFACE}", _EXTRA_())
+        logger.message("info", f"[{WLAN_IFACE}] Invalid interface", _EXTRA_())
         sys.exit(1)
+
+    logger.message("info", f"[{WLAN_IFACE}] {ETH_IFACE} mac sniff...", _EXTRA_())
 
     main()

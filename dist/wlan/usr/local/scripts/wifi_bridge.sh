@@ -65,6 +65,7 @@ echo 1 > /proc/sys/net/ipv4/ip_forward
 #systemctl stop wifi_dumb@$IFACE
 systemctl restart wifi_arping@$IFACE
 relayd -d -I $IFACE -I eth0
+#systemctl restart wifi_arping@$IFACE
 
 #dumb eth0 mlan0
 #systemctl restart wifi_ping@$IFACE

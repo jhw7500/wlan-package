@@ -14,7 +14,7 @@ from sUTILS import Logger, _EXTRA_
 LOG_DIR = "/var/log/cantops/scan"
 WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
 LOG_INTERVAL = 30
-STALE_THRESHOLD_SEC = 600  #1hour
+STALE_THRESHOLD_SEC = 600  #10min
 #last_log_time = 0
 VERSION = "0.0"
 IFACE = ""

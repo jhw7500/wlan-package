@@ -11,23 +11,22 @@ if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" ]]; then
     exit 1
 fi
 
-sleep 3
-echo "wifi_logger_stat.py" > /dev/kmsg
-python3 /usr/local/logger/wifi_logger_stat.py $IFACE &
-PID1=$!
-logger -p local0.notice "[$tag:$LINENO] [$IFACE] wifi_logger_stat.py($PID1)"
+#sleep 3
 
-#sleep 1
+echo "wifi_logger_scan.py" > /dev/kmsg
+python3 /usr/local/logger/wifi_logger_scan.py $IFACE &
+PID3=$!
+logger -p local0.notice "[$tag:$LINENO] [$IFACE] wifi_logger_scan.py($PID3)"
+
 echo "wifi_logger_link.py" > /dev/kmsg
 python3 /usr/local/logger/wifi_logger_link.py $IFACE &
 PID2=$!
 logger -p local0.notice "[$tag:$LINENO] [$IFACE] wifi_logger_link.py($PID2)"
 
-#sleep 1
-echo "wifi_logger_scan.py" > /dev/kmsg
-python3 /usr/local/logger/wifi_logger_scan.py $IFACE &
-PID3=$!
-logger -p local0.notice "[$tag:$LINENO] [$IFACE] wifi_logger_scan.py($PID3)"
+echo "wifi_logger_stat.py" > /dev/kmsg
+python3 /usr/local/logger/wifi_logger_stat.py $IFACE &
+PID1=$!
+logger -p local0.notice "[$tag:$LINENO] [$IFACE] wifi_logger_stat.py($PID1)"
 
 :<<"END"
 if [[ "$IFACE" == "mlan0" ]]; then

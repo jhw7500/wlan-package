@@ -74,16 +74,16 @@ def start_parser(mac_mlan):
             ftype, fsub, retry, seq, rssi, nf = fields[3:9]
 
             #action no ac
-            if ftype == "0" and fsub == "14":
-                continue
+            #if ftype == "0" and fsub == "14":
+            #    continue
             
             #beacon
             #if ftype == "0" and fsub == "8":
             #    continue
 
             #if sa != mac_mlan and (da != mac_mlan or da != BROADCAST_MAC):
-            if sa != mac_mlan and da != mac_mlan:
-                continue
+            #if sa != mac_mlan and da != mac_mlan:
+            #    continue
 
             snr = "N/A"
             try:

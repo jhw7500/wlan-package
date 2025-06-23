@@ -237,12 +237,23 @@ def parse_eth_phy(iface):
 
     return result
 
-def is_wpa_running(interface):
+def is_wpa_running(interface="mlan0"):
     result = subprocess.run(
         ["systemctl", "is-active", f"wpa_supplicant@{interface}"],
         capture_output=True, text=True
     )
     return result.stdout.strip() == "active"
+
+def is_wifi_connected_wpa(interface="mlan0") -> bool:
+    try:
+        result = subprocess.check_output(["wpa_cli", "-i", interface, "status"], encoding="utf-8")
+        for line in result.splitlines():
+            if line.startswith("wpa_state="):
+                state = line.split("=")[1]
+                return state == "COMPLETED"
+        return False
+    except subprocess.CalledProcessError:
+        return False
 
 def main():
     while True:
@@ -250,7 +261,7 @@ def main():
             logger.message("err", f"[{IFACE}] /sys/class/net/{IFACE} is not exist", _EXTRA_())
             time.sleep(10)
             continue
-        if is_wpa_running(IFACE):
+        if is_wifi_connected_wpa(IFACE):
             #info_out = run_command(["iw", IFACE, "info"])
             #station_out = run_command(["iw", IFACE, "station", "dump"])
             #channel_out = run_command(["iw", IFACE, "survey", "dump"])

@@ -29,8 +29,8 @@ try_insmod() {
 #python3 /usr/local/logger/mac_get.py
 #python3 /usr/local/logger/mac_config.py
 
-try_insmod "/lib/modules/$KERNEL_VERSION/updates/mlan_6.12.ko" ""
-try_insmod "/lib/modules/$KERNEL_VERSION/updates/moal_6.12.ko" "mod_para=nxp/wifi_mod_para.conf mfg_mode=0"
+try_insmod "/lib/modules/$KERNEL_VERSION/updates/mlan.ko" ""
+try_insmod "/lib/modules/$KERNEL_VERSION/updates/moal.ko" "mod_para=nxp/wifi_mod_para.conf mfg_mode=0"
 #try_insmod "/lib/modules/$KERNEL_VERSION/updates/moal_6.12.ko" "fw_name=nxp/pcieuart9098_combo.bin mfg_mode=1"
 #try_insmod "/lib/modules/$KERNEL_VERSION/kernel/drivers/net/nlmon.ko"
 
@@ -42,6 +42,7 @@ mlanutl mlan0 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlim
 mlanutl mlan0 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub2
 mlanutl mlan0 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub3
 
+sleep 0.1
 mlanutl mlan1 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_2g_cfg_set
 mlanutl mlan1 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub0
 mlanutl mlan1 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub1
@@ -74,9 +75,9 @@ sleep 0.1
 iw dev mlan0 set power_save off
 iw dev mlan1 set power_save off
 
-sleep 0.2
-
+sleep 0.1
 ip link set mlan0 up
+sleep 0.1
 ip link set mlan1 down
 
 #ip link add nlmon0 type nlmon
@@ -85,6 +86,7 @@ ip link set mlan1 down
 sleep 0.2
 #python3 /usr/local/logger/getmac.py
 systemctl start wpa_supplicant@mlan0
+sleep 0.1
 systemctl start wifi_bridge@mlan0
 
 #echo 1 > /proc/sys/kernel/printk
