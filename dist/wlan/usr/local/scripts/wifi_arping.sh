@@ -3,12 +3,12 @@ IFACE=$1
 tag=$(basename "$0")
 IP_LIST=""
 IP_LIST_NEW=""
-INIT_LIMIT=3
+INIT_LIMIT=2
 ERR_CNT=0
-ERR_LIMIT=3
+ERR_LIMIT=2
 INIT_CNT=0
 REBOOT_CNT=0
-REBOOT_LIMIT=3
+REBOOT_LIMIT=2
 REBOOT_FLAG=0
 
 if [ -z "$BASH_VERSION" ]; then
@@ -47,38 +47,48 @@ END
 
 while true; do
     #IP_LIST=$(ip neigh show dev "$IFACE" | grep 'lladdr' | awk '{print $1}')
-    IP_LIST=$(ip neigh show dev "$IFACE" | grep 'lladdr' | awk '{print $1}' | grep -vE '^224\.')
+    IP_LIST=$(ip neigh show dev "$IFACE" | grep 'lladdr' | awk '{print $1}' | grep -vE '^224\.|^169\.')
     
     if [ -z "$IP_LIST" ]; then
         #echo "No IP found on $iface"
         ((ERR_CNT++))
         logger -p local1.err "[$tag:$LINENO] [$IFACE] No IP found ($ERR_CNT)"
         IP_LIST_NEW=""
-        if [[ "$ERR_CNT" -ge "$ERR_LIMIT" ]]; then
-            logger -p local1.err "[$tag:$LINENO] [$IFACE] arping err($ERR_CNT) over limit($ERR_LIMIT)"
+        if [[ "$ERR_CNT" -gt "$ERR_LIMIT" ]]; then
+            ((INIT_CNT++))
+            logger -p local1.err "[$tag:$LINENO] [$IFACE] arping err($ERR_CNT) over limit($ERR_LIMIT), init err($INIT_CNT)"
             logger -p local1.err "[$tag:$LINENO] [$IFACE] route cache and arp table flush"
             ip neigh flush dev mlan0    
             ip neigh flush dev mlan1
             ip route flush cache
             ERR_CNT=0
-            ((INIT_CNT++))
             #if [[ "$IFACE" == "eth0" ]]; then
-            if [ "$INIT_CNT" -ge "$INIT_LIMIT" ]; then
-                logger -p local1.err "[$tag:$LINENO] [$IFACE] wifi bridge restart because over limit($INIT_LIMIT)"
+            if [ "$INIT_CNT" -gt "$INIT_LIMIT" ]; then
+                ((REBOT_CNT++))
+                logger -p local1.err "[$tag:$LINENO] [$IFACE] init err($INIT_CNT) over limit($INIT_LIMIT), reset err($REBOOT_CNT)"
                 ACTIVE_BRIDGE=$(systemctl list-units --type=service --state=running | grep -oE 'wifi_bridge@[^ ]+')
                 if [[ -n "$ACTIVE_BRIDGE" ]]; then
-                    logger -p local1.info "[$IFACE] restarting $ACTIVE_BRIDGE"
+                    logger -p local1.info "[$tag:$LINENO] [$IFACE] restarting $ACTIVE_BRIDGE"
                     systemctl restart "$ACTIVE_BRIDGE"
                 else
-                    logger -p local1.warn "[$IFACE] no active wifi_bridge@ service found"
+                    logger -p local1.warn "[$tag:$LINENO] [$IFACE] no active wifi_bridge@ service found"                    
                 fi
                 INIT_CNT=0
-                #((REBOOT_CNT++))
+                if [ "$REBOOT_CNT" -gt "$REBOOT_LIMIT" ]; then
+                    logger -p local1.err "[$tag:$LINENO] [$IFACE] reset network because reset err($REBOOT_CNT) over limit($REBOOT_LIMIT)"
+                    systemctl restart systemd-networkd
+                    systemctl restart wifi_bridge@mlan0
+                    REBOOT_CNT=0
+                fi
             fi
         fi
         sleep 3
         continue
     fi
+
+    ERR_CNT=0
+    INIT_CNT=0
+    REBOOT_CNT=0
 
     #if [[ "$IP_LIST" != "$IP_LIST_NEW" ]]; then
     if [[ "$(echo "$IP_LIST" | tr ' ' '\n' | sort)" != "$(echo "$IP_LIST_NEW" | tr ' ' '\n' | sort)" ]]; then
@@ -95,11 +105,33 @@ while true; do
             logger -p local1.warn "[$tag:$LINENO] [$IFACE] IP $IP is routed via [$CURRENT_IFACE], correcting to [$IFACE]"
             ip route replace "$IP" dev "$IFACE" scope link
         fi
-        #arping -I "$IFACE" -c 1 "$IP" 
+        #arping -I "$IFACE" -c 1 "$IP"
+        ACTIVE_BRIDGE=$(systemctl list-units --type=service --state=running | grep -oE 'wifi_bridge@[^ ]+')
+        SRC_IFACE=$(echo "$ACTIVE_BRIDGE" | sed 's/^wifi_bridge@//' | sed 's/.service$//')
+        SRC_IP=$(ip -4 -o addr show dev "$SRC_IFACE" | awk '{print $4}' | cut -d/ -f1)
+        #logger -p local1.info "SRC_IFACE : $SRC_IFACE, SRC_IP : $SRC_IP"
 
-        OUTPUT=$(arping -I "$IFACE" -c 1 -w 2 "$IP" 2>&1)
+        #if [[ ! -n "$SRC_IP" ]]; then
+        #    SRC_IP=$(ip -4 -o addr show dev "$IFACE" | awk '{print $4}' | cut -d/ -f1 | awk 'NR==2')
+        #    #logger -p local1.info "lo IP : $SRC_IP"
+        #fi
+
+        if [[ ! -n "$SRC_IP" ]]; then
+            SRC_IP=$(ip -4 -o addr show dev lo | awk '{print $4}' | cut -d/ -f1 | awk 'NR==2')
+            #logger -p local1.info "lo IP : $SRC_IP"
+        fi
+
+
+        if [[ -n "$SRC_IP" ]]; then
+            OUTPUT=$(arping -I "$IFACE" -s "$SRC_IP" -c 1 -w 2 "$IP" 2>&1)
+            #logger -p local1.info "[arping] $IFACE ($SRC_IP) → $TARGET_IP : $OUTPUT"
+        else
+            OUTPUT=$(arping -I "$IFACE" -c 1 -w 2 "$IP" 2>&1)
+            #logger -p local1.err "[arping] Failed to get source IP from $IFACE"
+        fi
+
         if echo "$OUTPUT" | grep -q "Received 0"; then
-            logger -p local1.err "[$tag:$LINENO] [$IFACE] arping to $IP failed: no reply (${ERR_CNT_MAP["$IP"]})"
+            logger -p local1.err "[$tag:$LINENO] [$IFACE] arping to $IP failed: no reply"
             if ping -I "$IFACE" -c 1 -W 2 "$IP" > /dev/null 2>&1; then
                 logger -p local1.info "[$tag:$LINENO] [$IFACE] arping failed but ping to $IP successful"
                 ERR_CNT_MAP["$IP"]=0
@@ -108,36 +140,39 @@ while true; do
             else
                 #((ERR_CNT_MAP["$IP"]++))
                 ERR_CNT_MAP["$IP"]=$(( ${ERR_CNT_MAP["$IP"]:-0} + 1 ))
-                if [[ "{$ERR_CNT_MAP["$IP"]}" -ge "$ERR_LIMIT" ]]; then
-                    logger -p local1.err "[$tag:$LINENO] [$IFACE] arping err(${ERR_CNT_MAP["$IP"]}) over limit($ERR_LIMIT)"
+                logger -p local1.err "[$tag:$LINENO] [$IFACE] ping to $IP failed: no reply (${ERR_CNT_MAP["$IP"]})"
+                if [[ ${ERR_CNT_MAP[$IP]:-0} -gt $ERR_LIMIT ]]; then
+                    INIT_CNT_MAP["$IP"]=$(( ${INIT_CNT_MAP["$IP"]:-0} + 1 ))
+                    logger -p local1.err "[$tag:$LINENO] [$IFACE] err(${ERR_CNT_MAP["$IP"]}) over limit($ERR_LIMIT), init err(${INIT_CNT_MAP["$IP"]})"
                     logger -p local1.err "[$tag:$LINENO] [$IFACE] route cache & arp table (${INIT_CNT_MAP["$IP"]})"
                     ip neigh flush dev mlan1
                     ip neigh flush dev mlan0
                     ip route flush cache
                     ERR_CNT_MAP["$IP"]=0
                     #((INIT_CNT_MAP["$IP"]++))
-                    INIT_CNT_MAP["$IP"]=$(( ${INIT_CNT_MAP["$IP"]:-0} + 1 ))
-                    if [ "${INIT_CNT_MAP["$IP"]}" -ge "$INIT_LIMIT" ]; then
-                        logger -p local1.err "[$tag:$LINENO] [$IFACE] init err(${INIT_CNT_MAP["$IP"]}) over limit ($INIT_LIMIT)"
+                    if [ ${INIT_CNT_MAP["$IP"]:-0} -gt $INIT_LIMIT ]; then
+                        REBOOT_CNT_MAP["$IP"]=$(( ${REBOOT_CNT_MAP["$IP"]:-0} + 1 ))
+                        logger -p local1.err "[$tag:$LINENO] [$IFACE] init err(${INIT_CNT_MAP["$IP"]}) over limit($INIT_LIMIT), reboot err(${REBOOT_CNT_MAP["$IP"]})"
                         ACTIVE_BRIDGE=$(systemctl list-units --type=service --state=running | grep -oE 'wifi_bridge@[^ ]+')
+                        INIT_CNT_MAP["$IP"]=0
                         if [[ -n "$ACTIVE_BRIDGE" ]]; then
-                            REBOOT_CNT_MAP["$IP"]=$(( ${REBOOT_CNT_MAP["$IP"]:-0} + 1 ))
-                            if [ "${REBOOT_CNT_MAP["$IP"]}" -ge "$REBOOT_LIMIT" ]; then
-                                logger -p local0.crit "[$IFACE] reboot err (${REBOOT_CNT_MAP["$IP"]}) over limit ($REBOOT_LIMIT)"
-                                logger -p local1.crit "[$IFACE] reboot err (${REBOOT_CNT_MAP["$IP"]}) over limit ($REBOOT_LIMIT)"
+                            if [ ${REBOOT_CNT_MAP["$IP"]:-0} -gt $REBOOT_LIMIT ]; then
+                                logger -p local0.crit "[$tag:$LINENO] [$IFACE] reboot err(${REBOOT_CNT_MAP["$IP"]}) over limit($REBOOT_LIMIT)"
+                                logger -p local1.crit "[$tag:$LINENO] [$IFACE] reboot err(${REBOOT_CNT_MAP["$IP"]}) over limit($REBOOT_LIMIT)"
                                 REBOOT_FLAG=1
                             else
-                                logger -p local1.info "[$IFACE] restarting $ACTIVE_BRIDGE (${REBOOT_CNT_MAP["$IP"]})"
+                                logger -p local1.info "[$tag:$LINENO] [$IFACE] restarting $ACTIVE_BRIDGE (${REBOOT_CNT_MAP["$IP"]})"
                                 systemctl restart "$ACTIVE_BRIDGE"
                             fi
                         else
-                            logger -p local1.warn "[$IFACE] no active wifi_bridge@ service found"
+                            logger -p local1.warn "[$tag:$LINENO] [$IFACE] no active wifi_bridge@ service found, reboot err clear"
+                            REBOOT_CNT_MAP["$IP"]=0
                         fi
                     fi
                 fi
             fi
         else
-            logger -p local1.info "[$tag:$LINENO] [$IFACE] arping to $IP successful"
+            logger -p local1.info "[$tag:$LINENO] [$IFACE] arping from $SRC_IP to $IP successful"
             ERR_CNT_MAP["$IP"]=0
             INIT_CNT_MAP["$IP"]=0
             REBOOT_CNT_MAP["$IP"]=0

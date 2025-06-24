@@ -8,9 +8,8 @@ DHCP=no
 #IPv4LL=no
 #LinkLocalAddressing=no
 #ConfigureWithoutCarrier=yes
-#Address=192.168.4.20/24
+
+Address=192.168.4.30/24
 Gateway=192.168.4.1
 #DNS=8.8.8.8
 
-#[Address]
-#Address=169.254.1.254/16

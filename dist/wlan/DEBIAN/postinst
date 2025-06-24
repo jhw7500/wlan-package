@@ -138,8 +138,8 @@ makeDirectory() {
 #  echo "set sshd"
 #  sed 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' -i /etc/ssh/sshd_config
 
-  echo "set printk"
-  sed '/kernel.printk/ c\kernel.printk = 2 4 1 3' -i /etc/sysctl.conf
+  #echo "set printk"
+  #sed '/kernel.printk/ c\kernel.printk = 2 4 1 3' -i /etc/sysctl.conf
 
   echo "set hostname"
   echo $hostname > /etc/hostname
@@ -161,10 +161,10 @@ makeDirectory() {
   cp /opt/wlan/config/rc.local /etc/
   cp /opt/wlan/config/rsyslog.conf /etc/
   cp /opt/wlan/config/smb.conf /etc/samba/
-  cp /opt/wlan/config/timesyncd.conf /etc/systemd/
+  #cp /opt/wlan/config/timesyncd.conf /etc/systemd/
   cp /opt/wlan/config/wifi_mod_para.conf /lib/firmware/nxp/
-  cp /opt/wlan/driver/mlan_6.12.ko /lib/modules/$KERNEL_VERSION/updates/
-  cp /opt/wlan/driver/moal_6.12.ko /lib/modules/$KERNEL_VERSION/updates/
+  cp /opt/wlan/driver/mlan.ko /lib/modules/$KERNEL_VERSION/updates/
+  cp /opt/wlan/driver/moal.ko /lib/modules/$KERNEL_VERSION/updates/
   
   mkdir -p /etc/wpa_supplicant
 

@@ -64,9 +64,12 @@ echo 1 > /proc/sys/net/ipv4/ip_forward
 
 #systemctl stop wifi_dumb@$IFACE
 systemctl restart wifi_arping@$IFACE
+GATEWAY=$(ip route show default dev "$IFACE" | awk '/default/ {print $3}')
+logger -p local0.notice "[$tag:$LINENO] [$IFACE] relayd -d -I $IFACE -I eth0"
 relayd -d -I $IFACE -I eth0
+#relayd -d -I $IFACE -I eth0 -G $GATEWAY
+#relayd -d -I $IFACE -I eth0 -L 192.168.4.10
 #systemctl restart wifi_arping@$IFACE
-
 #dumb eth0 mlan0
 #systemctl restart wifi_ping@$IFACE
 

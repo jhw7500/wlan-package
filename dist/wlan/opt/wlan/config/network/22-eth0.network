@@ -4,7 +4,7 @@ Name=eth0
 [Network]
 #Unmanaged=yes
 DHCP=no
-Address=192.168.1.1/24
+#Address=192.168.1.1/24
 #Address=169.254.9.9/16
 #IPv4LL=no
 #Address=192.168.4.200/24
