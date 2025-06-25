@@ -27,12 +27,12 @@ def compact_lists(text):
     pattern = re.compile(r'\[\s*\n\s*((?:.+,\s*\n)+)\s*(.+?)\s*\]')
     return pattern.sub(lambda m: '[' + re.sub(r'\s+', ' ', m.group(1) + m.group(2)).strip() + ']', text)
 
-def save_db(db):
+def save_db(db, dir=LOG_DIR):
     raw_json = json.dumps(db, indent=2)
     compacted_json = compact_lists(raw_json)
 
-    tmp_path = os.path.join(LOG_DIR, "link.json.tmp")
-    final_path = os.path.join(LOG_DIR, "link.json")
+    tmp_path = os.path.join(dir, "link.json.tmp")
+    final_path = os.path.join(dir, "link.json")
 
     with open(tmp_path, 'w') as f:
         f.write(compacted_json)
@@ -139,7 +139,7 @@ def parse_station_dump(output):
         if stripped.startswith("Station "):
             result["address"] = stripped.split("Station")[1].split("(")[0].strip()
             if result["address"] != address:
-                logger.message("notice", f"[{IFACE}] AP changed: {address} -> {result['address']}", _EXTRA_())
+                logger.message("info", f"[{IFACE}] AP changed: {address} -> {result['address']}", _EXTRA_())
             address = result["address"]
             continue
         key_value = stripped.split(":", 1)
@@ -256,11 +256,27 @@ def is_wifi_connected_wpa(interface="mlan0") -> bool:
         return False
 
 def main():
+    os.makedirs(LOG_DIR, exist_ok=True)
     while True:
         if not os.path.exists(f"/sys/class/net/{IFACE}"):
             logger.message("err", f"[{IFACE}] /sys/class/net/{IFACE} is not exist", _EXTRA_())
-            time.sleep(10)
+            time.sleep(5)
             continue
+
+        if IFACE == "eth0":
+            eth_stats = {
+                "info": parse_eth_info("eth0"),
+                "phy": parse_eth_phy("eth0")
+            }
+            data = {
+                "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "eth_stats": eth_stats
+            }
+            save_db(data, LOG_DIR)
+            #logger.message("info", f"[{IFACE}] loop", _EXTRA_())
+            time.sleep(0.98)
+            continue
+
         if is_wifi_connected_wpa(IFACE):
             #info_out = run_command(["iw", IFACE, "info"])
             #station_out = run_command(["iw", IFACE, "station", "dump"])
@@ -274,31 +290,24 @@ def main():
             info_data = parse_iw_info(info_out) if info_out else {}
             station_data = parse_station_dump(station_out) if station_out else {}
             channel_data = parse_survey_dump(channel_out) if channel_out else {}
-            eth_stats = {
-                "info": parse_eth_info("eth0"),
-                "phy": parse_eth_phy("eth0")
-            }
             data = {
                 "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "info": info_data,
                 "station_info": station_data,
                 "channel_info": channel_data,
-                "mwlan_log": parse_mwlan_log(),
-                "eth_stats": eth_stats
+                "mwlan_log": parse_mwlan_log()
             }
 
             os.makedirs(LOG_DIR, exist_ok=True)
-            save_db(data)
+            save_db(data, LOG_DIR)
             #with open(f"{LOG_DIR}/link.json", "w") as f:
             #    json.dump(data, f, indent=4)
-            err_cnt = 0
             #logger.message("info", f"[{IFACE}] loop", _EXTRA_())
-            time.sleep(0.960)
+            time.sleep(0.965)
         else:
-            #print(f"[WARN] Interface {IFACE} not found")
             logger.message("err", f"[{IFACE}] wpa_supplicant@{IFACE} is not running", _EXTRA_())
             #subprocess.run(["ifconfig", IFACE, "up"])
-            time.sleep(10)
+            time.sleep(3)
 
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_sigterm)
@@ -316,8 +325,10 @@ if __name__ == "__main__":
         MWLAN_LOG_PATH = "/proc/mwlan/adapter0/mlan0/log"
     elif IFACE == "mlan1" :
         MWLAN_LOG_PATH = "/proc/mwlan/adapter1/mlan1/log"
+    elif IFACE == "eth0" :
+        MWLAN_LOG_PATH = ""
     else:
-        logger.message("err", f"[{IFACE}] is not vaild interface", _EXTRA_())
+        logger.message("emerg", f"[{IFACE}] is not vaild interface", _EXTRA_())
         sys.exit(1)
         
     if not os.path.exists(LOG_DIR):

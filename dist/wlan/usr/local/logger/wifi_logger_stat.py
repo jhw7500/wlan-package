@@ -504,7 +504,7 @@ if __name__ == "__main__":
     logger.message("info", f"[{IFACE}] version : {VERSION}, log_file : {LOG_DIR}/stat.log", _EXTRA_())
     
     if IFACE != "mlan0" and IFACE != "mlan1" :
-        logger.message("err", f"[{IFACE}] is not vaild interface", _EXTRA_())
+        logger.message("emerg", f"[{IFACE}] is not vaild interface", _EXTRA_())
         sys.exit(1)
         
     # 로그 디렉토리 생성

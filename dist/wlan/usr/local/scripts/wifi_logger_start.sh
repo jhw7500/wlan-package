@@ -6,27 +6,35 @@ IFACE=$1
 
 logger -p local0.notice "[$tag:$LINENO] [$IFACE] logger start"
 
+if [[ "$IFACE" == "eth0" ]]; then
+    echo "wifi_logger_scan.py $IFACE" > /dev/kmsg
+    python3 /usr/local/logger/wifi_logger_link.py $IFACE &
+    PID=$!
+    logger -p local0.info "[$tag:$LINENO] [$IFACE] wifi_logger_link.py($PID)"
+    exit 0
+fi
+
 if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" ]]; then
-    logger -p local0.err "[$tag:$LINENO] [$IFACE] interface is wrong!!"
+    logger -p local0.emerg "[$tag:$LINENO] [$IFACE] interface is wrong!!"
     exit 1
 fi
 
 #sleep 3
 
-echo "wifi_logger_scan.py" > /dev/kmsg
+echo "wifi_logger_scan.py $IFACE" > /dev/kmsg
 python3 /usr/local/logger/wifi_logger_scan.py $IFACE &
-PID3=$!
-logger -p local0.notice "[$tag:$LINENO] [$IFACE] wifi_logger_scan.py($PID3)"
+PID=$!
+logger -p local0.info "[$tag:$LINENO] [$IFACE] wifi_logger_scan.py($PID)"
 
-echo "wifi_logger_link.py" > /dev/kmsg
+echo "wifi_logger_link.py $IFACE" > /dev/kmsg
 python3 /usr/local/logger/wifi_logger_link.py $IFACE &
-PID2=$!
-logger -p local0.notice "[$tag:$LINENO] [$IFACE] wifi_logger_link.py($PID2)"
+PID=$!
+logger -p local0.info "[$tag:$LINENO] [$IFACE] wifi_logger_link.py($PID)"
 
-echo "wifi_logger_stat.py" > /dev/kmsg
+echo "wifi_logger_stat.py $IFACE" > /dev/kmsg
 python3 /usr/local/logger/wifi_logger_stat.py $IFACE &
-PID1=$!
-logger -p local0.notice "[$tag:$LINENO] [$IFACE] wifi_logger_stat.py($PID1)"
+PID=$!
+logger -p local0.info "[$tag:$LINENO] [$IFACE] wifi_logger_stat.py($PID)"
 
 :<<"END"
 if [[ "$IFACE" == "mlan0" ]]; then

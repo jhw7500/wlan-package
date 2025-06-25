@@ -145,7 +145,7 @@ if __name__ == "__main__":
 
     IFACE = sys.argv[1] if len(sys.argv) > 1 else "mlan0"
     if IFACE not in ["mlan0", "mlan1"]:
-        logger.message("info", f"Invalid interface {IFACE}", _EXTRA_())
+        logger.message("emerg", f"Invalid interface {IFACE}", _EXTRA_())
         sys.exit(1)
 
     LOG_DIR = f"/var/log/cantops/capture/{IFACE}"

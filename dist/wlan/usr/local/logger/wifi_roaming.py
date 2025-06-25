@@ -16,13 +16,13 @@ LINK_LOG_FILE = f"/var/log/cantops/link/{IFACE}/link.json"
 SCAN_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/ap.log"
 FREQ_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/freq.log"
 WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
-DEFAULT_TH_2G = -65
-DEFAULT_TH_5G = -65
+DEFAULT_TH_2G = -75
+DEFAULT_TH_5G = -75
 WPA_SSID = None
 WPA_FREQ = None
 WPA_TH_2G = None
 WPA_TH_5G = None
-DIFF_TH = 5
+DIFF_TH = 10
 CHECK_INTERVAL = 1
 
 def handle_sigterm(signum, frame):
@@ -451,7 +451,8 @@ def main():
         #    f"Top RSSI={top_rssi}dBm at {top_bssid}, Δ={rssi_diff}dB")
         
         if top_ap['bssid'] != station['bssid']:
-            if top_ap['rssi'] > top_ap['rssi_th'] and rssi_diff >= DIFF_TH:
+            #if top_ap['rssi'] > top_ap['rssi_th'] and rssi_diff >= DIFF_TH:
+            if rssi_diff >= DIFF_TH:
                 logger.message('emerg', f"[{IFACE}] Roaming from {station['bssid']}(ch:{station['freq']}) to {top_ap['bssid']}(ch:{channel_to_freq(top_ap['channel'])})"
                                        f" : {top_ap['ssid']}, {top_ap['rssi']}>{top_ap['rssi_th']}", _EXTRA_())
                 roam_to_bssid(top_ap['bssid'])
@@ -470,7 +471,7 @@ if __name__ == "__main__":
 
     IFACE = sys.argv[1] if len(sys.argv) > 1 else "mlan0"
     if IFACE not in ["mlan0", "mlan1"]:
-        logger.message("err", f"[{IFACE}] interface is invalid", _EXTRA_())
+        logger.message("emerg", f"[{IFACE}] interface is invalid", _EXTRA_())
         sys.exit(1)
 
     LINK_LOG_FILE = f"/var/log/cantops/link/{IFACE}/link.json"

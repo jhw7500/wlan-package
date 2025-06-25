@@ -70,6 +70,6 @@ if __name__ == "__main__":
     program_name = os.path.splitext(os.path.basename(sys.argv[0]))[0]
     logger = Logger(app_name="logger_stat", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
 
-    logger.message("notice", f"version : {VERSION}, LOG_FILE : {LOG_FILE}", _EXTRA_())
+    logger.message("info", f"version : {VERSION}, LOG_FILE : {LOG_FILE}", _EXTRA_())
 
     main()

@@ -15,10 +15,10 @@ LOG_DIR="/var/log/cantops/module/dmesg"
 
 mkdir -p "$LOG_DIR"
 
-logger -p local0.notice "[$tag:$LINENO] [$IFACE] wifi_checker"
+logger -p local0.info "[$tag:$LINENO] [$IFACE] wifi_checker"
 
 if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" ]]; then
-    logger -p local0.err "[$tag:$LINENO] [$IFACE] interface is wrong!!"
+    logger -p local0.emerg "[$tag:$LINENO] [$IFACE] interface is wrong!!"
     exit 1
 fi
 
@@ -34,14 +34,18 @@ sleep 3
 
 #python3 /usr/local/logger/wifi_module_check.py $IFACE
 
+:<<"END"
 while true; do
     if lsmod |grep -q "^$MODULE_NAME"; then
-        logger -p local0.notice "[$tag:$LINENO] [$IFACE] $MODULE_NAME is loading..."
+        logger -p local0.info "[$tag:$LINENO] [$IFACE] $MODULE_NAME is loading..."
         #sleep 5
         break
     fi
     sleep 5
 done
+END
+
+sleep 5
 
 while true; do
     sleep 3
@@ -81,7 +85,7 @@ while true; do
         DURATION=$((TIMESTAMP - UNSTABLE_START))
 
         if (( DURATION >= MAX_UNSTABLE_DURATION )); then
-            logger -p local0.notice  "[$tag:$LINENO] [$IFACE] restart wpa_supplicant@$IFACE because wifi is not connected during $MAX_UNSTABLE_DURATION" 
+            logger -p local0.info  "[$tag:$LINENO] [$IFACE] restart wpa_supplicant@$IFACE because wifi is not connected during $MAX_UNSTABLE_DURATION" 
             wpa_cli disable_network 0
             sleep 1
             wpa_cli enable_network 0
@@ -97,7 +101,7 @@ while true; do
     if [ -d /sys/class/net/$IFACE ]; then
         LINK_OUTPUT=$(iw "$IFACE" link 2>&1)
         if echo "$LINK_OUTPUT" | grep -q "Connected to" && echo "$LINK_OUTPUT" | grep -q "command failed"; then
-            logger -p local0.notice "[$tag:$LINENO] [$IFACE] Detected invalid link state. Triggering reconnect..."
+            logger -p local0.info "[$tag:$LINENO] [$IFACE] Detected invalid link state. Triggering reconnect..."
             wpa_cli -i "$IFACE" disconnect
             sleep 1
             wpa_cli -i "$IFACE" reconnect

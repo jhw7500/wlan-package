@@ -24,8 +24,8 @@ logger -p local0.info "[$tag:$LINENO] [$IFACE] arping start"
 logger -p local1.info "[$tag:$LINENO] [$IFACE] arping start"
 
 if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" && "$IFACE" != "eth0" ]]; then
-    logger -p local0.err "[$tag:$LINENO] [$IFACE] interface is wrong!!"
-    logger -p local1.err "[$tag:$LINENO] [$IFACE] interface is wrong!!"
+    logger -p local0.emerg "[$tag:$LINENO] [$IFACE] interface is wrong!!"
+    logger -p local1.emerg "[$tag:$LINENO] [$IFACE] interface is wrong!!"
     exit 1
 fi
 

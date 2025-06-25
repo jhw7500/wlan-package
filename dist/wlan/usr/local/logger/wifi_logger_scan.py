@@ -306,7 +306,7 @@ def remove_stale_entries(db, now_ts):
         if now_ts - last_seen_ts < STALE_THRESHOLD_SEC:
             cleaned[bssid] = info
         else:
-            logger.message("notice", f"[{IFACE}] BSSID {bssid} removed (last seen {info['date']})", _EXTRA_())
+            logger.message("info", f"[{IFACE}] BSSID {bssid} removed (last seen {info['date']})", _EXTRA_())
     return cleaned
 
 
@@ -478,7 +478,7 @@ def merge_db(old_db, new_db):
     for bssid, data in new_db.items():
         if bssid not in old_db:
             ssid = data.get("ssid", "<unknown>")
-            logger.message("notice", f"[{IFACE}] New BSSID detected: {bssid} (SSID: {ssid})", _EXTRA_())
+            logger.message("info", f"[{IFACE}] New BSSID detected: {bssid} (SSID: {ssid})", _EXTRA_())
         updated[bssid] = data
     return updated
 
@@ -600,7 +600,7 @@ if __name__ == "__main__":
     logger.message("info", f"[{IFACE}] version : {VERSION}, log_file : {LOG_DIR}/ap.log, {LOG_DIR}/freq.log, {LOG_DIR}/beacon.json", _EXTRA_())
     
     if IFACE != "mlan0" and IFACE != "mlan1" :
-        logger.message("err", f"[{IFACE}] is not vaild interface", _EXTRA_())
+        logger.message("emerg", f"[{IFACE}] is not vaild interface", _EXTRA_())
         sys.exit(1)
         
     # 로그 디렉토리 생성

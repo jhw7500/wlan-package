@@ -83,18 +83,20 @@ customctl() {
   customctl ovsdb-server masked
   customctl smb disabled
   customctl nmb disabled
-
   #customctl hciattach disabled
+
+  customctl wifi_arping@eth0 enabled
+  customctl wifi_logger@eth0 enabled
+
   customctl wifi_init enabled
   customctl wifi_logger enabled
 
-  customctl wifi_arping@eth0 enabled
-  customctl wifi_arping@mlan0 enabled
+  #customctl wifi_ping@mlan0 disabled
+  #customctl wifi_arp@mlan0 disabled
 
   customctl wifi_logger@mlan0 enabled
   customctl wifi_checker@mlan0 enabled
-  customctl wifi_ping@mlan0 disabled
-  customctl wifi_arp@mlan0 disabled
+  customctl wifi_arping@mlan0 enabled
 
   customctl wifi_logger@mlan1 disabled
   customctl wifi_checker@mlan1 disabled

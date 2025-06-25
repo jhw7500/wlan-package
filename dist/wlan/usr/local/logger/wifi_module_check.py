@@ -54,7 +54,7 @@ def main():
         time.sleep(3)
 
     if retry_success:
-        logger.message("notice", f"module init success", _EXTRA_())
+        logger.message("info", f"module init success", _EXTRA_())
         counts["success"] += 1
         #append_log(True)
     else:
@@ -65,7 +65,7 @@ def main():
         with open(dmesg_logfile, 'w') as df:
             subprocess.run(["dmesg"], stdout=df)
 
-    logger.message("notice", f"init success : {counts['success']}, fail : {counts['fail']}, total : {counts['total']}", _EXTRA_())
+    logger.message("info", f"init success : {counts['success']}, fail : {counts['fail']}, total : {counts['total']}", _EXTRA_())
     save_counts(counts, LOG_DIR)
     #subprocess.run(["cat", COUNT_FILE])
     #with open("/dev/ttymxc1", "w") as tty:
@@ -82,7 +82,7 @@ def main():
 
 if __name__ == "__main__":
     logger = Logger(app_name="module_check", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
-    logger.message("notice", f"VERSION : {VERSION}, LOG_DIR : {LOG_DIR}", _EXTRA_())
+    logger.message("info", f"VERSION : {VERSION}, LOG_DIR : {LOG_DIR}", _EXTRA_())
 
     if not os.path.exists(LOG_DIR):
         os.makedirs(LOG_DIR, exist_ok=True)

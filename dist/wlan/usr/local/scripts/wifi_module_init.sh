@@ -30,11 +30,13 @@ try_insmod() {
 #python3 /usr/local/logger/mac_config.py
 
 if ! try_insmod "/lib/modules/$KERNEL_VERSION/updates/mlan.ko" ""; then
-    exit 1
+    echo "mlan module load failed"  
+    #exit 1
 fi
 
 if ! try_insmod "/lib/modules/$KERNEL_VERSION/updates/moal.ko" "mod_para=nxp/wifi_mod_para.conf mfg_mode=0"; then
-    exit 1
+    echo "moal module load failed"
+    #exit 1
 fi
 
 #try_insmod "/lib/modules/$KERNEL_VERSION/updates/moal_6.12.ko" "fw_name=nxp/pcieuart9098_combo.bin mfg_mode=1"

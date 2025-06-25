@@ -2,10 +2,10 @@
 tag=$(basename "$0")
 key=LOG
 IFACE=$1
-logger -p local0.notice "[$tag:$LINENO] [$IFACE] wifi bridge start"
+logger -p local0.info "[$tag:$LINENO] [$IFACE] wifi bridge start"
 
 if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" ]]; then
-    logger -p local0.err "[$tag:$LINENO] [$IFACE] interface is wrong!!"
+    logger -p local0.emerg "[$tag:$LINENO] [$IFACE] interface is wrong!!"
     exit 1
 fi
 
@@ -14,7 +14,7 @@ getMac() {
 
     if [ -e /sys/class/net/$IFACE/address ]; then
         mac_addr=$(cat /sys/class/net/$IFACE/address)
-        logger -p local1.notice "[$tag:$LINENO] [$IFACE] MAC Address: $mac_addr"
+        logger -p local1.info "[$tag:$LINENO] [$IFACE] MAC Address: $mac_addr"
 		echo "$mac_addr"
     else
         logger -p local1.crit "[$tag:$LINENO] [$IFACE] Interface is not found"
@@ -27,7 +27,7 @@ getMac() {
 mac_eth=$(getMac eth0)
 mac_org=$(getMac mlan0)
 
-logger -p local0.notice "[$tag:$LINENO] [$IFACE] MAC Address: $mac_org, eth0 MAC Address: $mac_eth"
+logger -p local0.info "[$tag:$LINENO] [$IFACE] MAC Address: $mac_org, eth0 MAC Address: $mac_eth"
 
 ip link set mlan0 down
 ip link set mlan0 address $mac_new
@@ -35,7 +35,7 @@ ip link set mlan0 up
 
 #mac_new=$(ip link show mlan0 | awk '/ether/ {print $2}')
 mac_new=$(getMac mlan0)
-logger -p local0.notice "[$tag:$LINENO] [$IFACE] change mlan0 Mac Address : $mac_new"
+logger -p local0.info "[$tag:$LINENO] [$IFACE] change mlan0 Mac Address : $mac_new"
 END
 
 #logger -p local0.notice "[$tag:$LINENO] [$IFACE] ip flush"
@@ -65,7 +65,7 @@ echo 1 > /proc/sys/net/ipv4/ip_forward
 #systemctl stop wifi_dumb@$IFACE
 systemctl restart wifi_arping@$IFACE
 GATEWAY=$(ip route show default dev "$IFACE" | awk '/default/ {print $3}')
-logger -p local0.notice "[$tag:$LINENO] [$IFACE] relayd -d -I $IFACE -I eth0"
+logger -p local0.info "[$tag:$LINENO] [$IFACE] relayd -d -I $IFACE -I eth0 ($IFACE gateway : $GATEWAY)"
 relayd -d -I $IFACE -I eth0
 #relayd -d -I $IFACE -I eth0 -G $GATEWAY
 #relayd -d -I $IFACE -I eth0 -L 192.168.4.10
