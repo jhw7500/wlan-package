@@ -277,6 +277,10 @@ def main():
             time.sleep(0.98)
             continue
 
+        if not is_wpa_running(IFACE):
+            time.sleep(3)
+            continue
+
         if is_wifi_connected_wpa(IFACE):
             #info_out = run_command(["iw", IFACE, "info"])
             #station_out = run_command(["iw", IFACE, "station", "dump"])

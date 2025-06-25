@@ -63,7 +63,7 @@ echo 1 > /proc/sys/net/ipv4/ip_forward
 #echo 1 > /proc/sys/net/ipv4/conf/mlan0/proxy_arp
 
 #systemctl stop wifi_dumb@$IFACE
-systemctl restart wifi_arping@$IFACE
+#systemctl restart wifi_arping@$IFACE
 GATEWAY=$(ip route show default dev "$IFACE" | awk '/default/ {print $3}')
 logger -p local0.info "[$tag:$LINENO] [$IFACE] relayd -d -I $IFACE -I eth0 ($IFACE gateway : $GATEWAY)"
 relayd -d -I $IFACE -I eth0

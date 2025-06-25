@@ -50,7 +50,7 @@ mlanutl mlan0 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlim
 mlanutl mlan0 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub2
 mlanutl mlan0 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub3
 
-sleep 0.1
+sleep 0.2
 logger -p local0.info "[$tag:$LINENO] [mlan1] txpwrlimit set"
 mlanutl mlan1 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_2g_cfg_set
 mlanutl mlan1 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub0
@@ -58,19 +58,19 @@ mlanutl mlan1 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlim
 mlanutl mlan1 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub2
 mlanutl mlan1 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub3
 
-sleep 0.1
+sleep 0.2
 logger -p local0.info "[$tag:$LINENO] [mlan0] macctrl 0x00010e13"
 mlanutl mlan0 macctrl 0x00010e13
 logger -p local0.info "[$tag:$LINENO] [mlan1] macctrl 0x00010e13"
 mlanutl mlan1 macctrl 0x00010e13
 
-sleep 0.1
+sleep 0.2
 logger -p local0.info "[$tag:$LINENO] [mlan0] httxcfg 0x00000063"
 mlanutl mlan0 httxcfg 0x00000063
 logger -p local0.info "[$tag:$LINENO] [mlan1] httxcfg 0x00000063"
 mlanutl mlan1 httxcfg 0x00000063
 
-sleep 0.1
+sleep 0.2
 logger -p local0.info "[$tag:$LINENO] [mlan0] htcapinfo 0x05c20000"
 mlanutl mlan0 htcapinfo 0x05c20000
 logger -p local0.info "[$tag:$LINENO] [mlan1] htcapinfo 0x05c20000"
@@ -106,7 +106,7 @@ sleep 0.2
 #python3 /usr/local/logger/getmac.py
 logger -p local0.info "[$tag:$LINENO] [mlan0] wpa_supplicant start"
 systemctl start wpa_supplicant@mlan0
-sleep 0.1
+#sleep 0.2
 systemctl start wifi_bridge@mlan0
 
 #echo 1 > /proc/sys/kernel/printk
