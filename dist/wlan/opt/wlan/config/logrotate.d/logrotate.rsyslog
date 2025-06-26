@@ -16,6 +16,7 @@
 /var/log/cantops/wpa/mlan0/wpa.log
 /var/log/cantops/wpa/mlan1/wpa.log
 /var/log/cantops/arping.log
+/var/log/cantops/ui.log
 {
         rotate 7
         daily

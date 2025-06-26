@@ -45,6 +45,11 @@ alias llogt='cat $LOGDIR/local0.log | tail -n $1'
 alias llogh='cat $LOGDIR/local0.log | head -n $1'
 alias llogf='tail -f $LOGDIR/local0.log'
 
+alias ulogg='cat $LOGDIR/ui.log | grep -i $1 -a'
+alias ulogt='cat $LOGDIR/ui.log | tail -n $1'
+alias ulogh='cat $LOGDIR/ui.log | head -n $1'
+alias ulogf='tail -f $LOGDIR/ui.log'
+
 alias mlogg='cat $CAPDIR0/mgmt.log | grep -i $1 -a'
 alias mlogt='cat $CAPDIR0/mgmt.log |tail -n $1'
 alias mlogh='cat $CAPDIR0/mgmt.log |head -n $1'

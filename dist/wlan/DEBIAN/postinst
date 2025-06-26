@@ -68,6 +68,7 @@ customctl() {
     status=$(systemctl is-enabled $daemon_name 2>/dev/null)
     echo "$daemon_name is $status"
 }
+  mv /etc/init.d/samba /etc/init.d/samba.disabled
 
   customctl systemd-networkd-wait-online masked
   customctl dhcpcd disabled
@@ -76,13 +77,13 @@ customctl() {
   customctl nfs-server masked
   customctl proc-fs-nfsd.mount masked
   customctl watchdog enabled
-  customctl samba disabled
   customctl openvswitch disabled
   customctl openvswitch-switch disabled
   customctl connman disabled
   customctl ovsdb-server masked
   customctl smb disabled
   customctl nmb disabled
+  #customctl samba disabled
   #customctl hciattach disabled
 
   customctl wifi_arping@eth0 enabled
@@ -91,8 +92,8 @@ customctl() {
   customctl wifi_init enabled
   customctl wifi_logger enabled
 
-  #customctl wifi_ping@mlan0 disabled
-  #customctl wifi_arp@mlan0 disabled
+  customctl wifi_ping@mlan0 disabled
+  customctl wifi_arp@mlan0 disabled
 
   customctl wifi_logger@mlan0 enabled
   customctl wifi_checker@mlan0 enabled
@@ -165,8 +166,8 @@ makeDirectory() {
   cp /opt/wlan/config/smb.conf /etc/samba/
   #cp /opt/wlan/config/timesyncd.conf /etc/systemd/
   cp /opt/wlan/config/wifi_mod_para.conf /lib/firmware/nxp/
-  cp /opt/wlan/driver/mlan.ko /lib/modules/$KERNEL_VERSION/updates/
-  cp /opt/wlan/driver/moal.ko /lib/modules/$KERNEL_VERSION/updates/
+  cp /opt/wlan/driver/mlan.ko /lib/modules/$KERNEL_VERSION/updates/mlan_6.12.ko
+  cp /opt/wlan/driver/moal.ko /lib/modules/$KERNEL_VERSION/updates/moal_6.12.ko
   
   mkdir -p /etc/wpa_supplicant
 

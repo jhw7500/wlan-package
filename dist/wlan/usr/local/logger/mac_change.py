@@ -65,6 +65,7 @@ def save_mac_address(FILE, mac):
 
 def connect_to_ap():
     print("[*] (Placeholder) Connecting to AP...")
+    subprocess.run(["systemctl", "restart", f"wifi_bridge@{WLAN_IFACE}"])
     # 실제 환경에 맞게 수정:
     # subprocess.run(["wpa_supplicant", "-i", WLAN_IFACE, "-c", "/etc/wpa_supplicant.conf", "-B"])
     pass

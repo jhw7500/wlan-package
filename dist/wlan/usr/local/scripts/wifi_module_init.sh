@@ -29,12 +29,12 @@ try_insmod() {
 #python3 /usr/local/logger/mac_get.py
 #python3 /usr/local/logger/mac_config.py
 
-if ! try_insmod "/lib/modules/$KERNEL_VERSION/updates/mlan.ko" ""; then
+if ! try_insmod "/lib/modules/$KERNEL_VERSION/updates/mlan_6.12.ko" ""; then
     echo "mlan module load failed"  
     #exit 1
 fi
 
-if ! try_insmod "/lib/modules/$KERNEL_VERSION/updates/moal.ko" "mod_para=nxp/wifi_mod_para.conf mfg_mode=0"; then
+if ! try_insmod "/lib/modules/$KERNEL_VERSION/updates/moal_6.12.ko" "mod_para=nxp/wifi_mod_para.conf mfg_mode=0"; then
     echo "moal module load failed"
     #exit 1
 fi

@@ -278,6 +278,8 @@ def main():
             continue
 
         if not is_wpa_running(IFACE):
+            #logger.message("info" f"[{IFACE}] flush {LOG_DIR}/link.json", _EXTRA_())
+            subprocess.run(f"echo '{{}}' > {LOG_DIR}/link.json", shell=True)
             time.sleep(3)
             continue
 
@@ -309,7 +311,8 @@ def main():
             #logger.message("info", f"[{IFACE}] loop", _EXTRA_())
             time.sleep(0.965)
         else:
-            logger.message("err", f"[{IFACE}] wpa_supplicant@{IFACE} is not running", _EXTRA_())
+            logger.message("err", f"[{IFACE}] wpa_supplicant@{IFACE} is not connected", _EXTRA_())
+            subprocess.run(f"echo '{{}}' > {LOG_DIR}/link.json", shell=True)
             #subprocess.run(["ifconfig", IFACE, "up"])
             time.sleep(3)
 

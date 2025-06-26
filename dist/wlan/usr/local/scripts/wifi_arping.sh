@@ -11,6 +11,8 @@ REBOOT_CNT=0
 REBOOT_LIMIT=2
 REBOOT_FLAG=0
 INTERVAL=2
+BAD_IP_CNT=0
+BAD_IP_CNT_LIMIT=2
 
 get_state() {
     wpa_cli -i "$IFACE" status | grep "^wpa_state=" | cut -d= -f2
@@ -70,10 +72,18 @@ while true; do
 
     BAD_IP_LIST=$(ip neigh show dev "$IFACE" | awk '!/lladdr/ {print $1}' | grep -vE '^224\.|^169\.')
     
-    for IP in $BAD_IP_LIST; do
-         logger -p local1.info "[$tag:$LINENO] [$IFACE] $IP is del in neigh"
-         ip neigh del "$IP" dev "$IFACE"
-    done
+    if [ -z "$BAD_IP_LIST" ]; then
+        BAD_IP_CNT=0
+    else
+        ((BAD_IP_CNT++))
+    fi
+
+    if [[ "$BAD_IP_CNT" -gt "$BAD_IP_CNT_LIMIT" ]]; then
+        for IP in $BAD_IP_LIST; do
+             logger -p local1.info "[$tag:$LINENO] [$IFACE] $IP is del in neigh"
+             ip neigh del "$IP" dev "$IFACE"
+        done
+    fi
 
     IP_LIST=$(ip neigh show dev "$IFACE" | grep 'lladdr' | awk '{print $1}' | grep -vE '^224\.|^169\.')
 
@@ -101,7 +111,7 @@ while true; do
             ip route flush cache
             ERR_CNT=0
             #if [[ "$IFACE" == "eth0" ]]; then
-            if [ "$INIT_CNT" -gt "$INIT_LIMIT" ]; then
+            if [[ "$INIT_CNT" -gt "$INIT_LIMIT" ]]; then
                 ((REBOOT_CNT++))
                 logger -p local1.err "[$tag:$LINENO] [$IFACE] init err($INIT_CNT) over limit($INIT_LIMIT), reset err($REBOOT_CNT)"
                 ACTIVE_BRIDGE=$(systemctl list-units --type=service --state=running | grep -oE 'wifi_bridge@[^ ]+')

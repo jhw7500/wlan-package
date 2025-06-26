@@ -468,9 +468,16 @@ def parse_scan_output(scan_output):
 
 def load_existing():
     filename = os.path.join(LOG_DIR, "beacon.json")
+    
     if os.path.exists(filename):
-        with open(filename, "r") as f:
-            return json.load(f)
+        try:
+            with open(filename, "r") as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            logger.message("err", f"[{IFACE}] {filename} is empty or malformed. Using empty", _EXTRA_())
+        except Exception as e:
+            logger.message("err", f"[{IFACE}] Failed to read {filename}: {e}", _EXTRA_())
+    
     return {}
 
 def merge_db(old_db, new_db):

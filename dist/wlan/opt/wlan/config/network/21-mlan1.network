@@ -2,15 +2,4 @@
 Name=mlan1
 
 [Network]
-Unmanaged=no
 DHCP=yes
-#Address=169.254.1.254/16
-#IPv4LL=no
-#LinkLocalAddressing=no
-#ConfigureWithoutCarrier=yes
-#Address=192.168.4.11/24
-#Gateway=192.168.4.2
-#DNS=8.8.8.8
-
-#[Address]
-#Address=169.254.1.254/16
