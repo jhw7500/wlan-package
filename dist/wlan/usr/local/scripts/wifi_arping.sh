@@ -3,6 +3,7 @@ IFACE=$1
 tag=$(basename "$0")
 IP_LIST=""
 IP_LIST_NEW=""
+TMP_LIST=()
 INIT_LIMIT=2
 ERR_CNT=0
 ERR_LIMIT=2
@@ -10,9 +11,10 @@ INIT_CNT=0
 REBOOT_CNT=0
 REBOOT_LIMIT=2
 REBOOT_FLAG=0
-INTERVAL=2
+INTERVAL=5
 BAD_IP_CNT=0
 BAD_IP_CNT_LIMIT=2
+
 
 get_state() {
     wpa_cli -i "$IFACE" status | grep "^wpa_state=" | cut -d= -f2
@@ -32,11 +34,32 @@ get_gateway() {
     ip route show default dev "$IFACE" | awk '/default/ {print $3}'
 }
 
+function ip_in_subnet() {
+    local ip=$1
+    local subnet=$2
+    local ip_dec subnet_ip subnet_mask subnet_dec
+
+    IFS=/ read subnet_ip subnet_mask <<< "$subnet"
+
+    ip_dec=$(ip_to_dec "$ip")
+    subnet_dec=$(ip_to_dec "$subnet_ip")
+    mask_dec=$(( 0xFFFFFFFF << (32 - subnet_mask) & 0xFFFFFFFF ))
+
+    [[ $(( ip_dec & mask_dec )) -eq $(( subnet_dec & mask_dec )) ]]
+}
+
+function ip_to_dec() {
+    local IFS=.
+    read -r a b c d <<< "$1"
+    echo $(( (a<<24) + (b<<16) + (c<<8) + d ))
+}
+
 if [ -z "$BASH_VERSION" ]; then
   echo "This script requires bash." >&2
   exit 1
 fi
 
+declare -A uniq_map
 declare -A ERR_CNT_MAP
 declare -A INIT_CNT_MAP
 declare -A REBOOT_CNT_MAP
@@ -70,7 +93,8 @@ while true; do
     #IP_LIST=$(ip neigh show dev "$IFACE" | grep 'lladdr' | awk '{print $1}')
     #IP_LIST=$(ip neigh show dev "$IFACE" | grep 'lladdr' | awk '{print $1}' | grep -vE '^224\.|^169\.')
 
-    BAD_IP_LIST=$(ip neigh show dev "$IFACE" | awk '!/lladdr/ {print $1}' | grep -vE '^224\.|^169\.')
+    #BAD_IP_LIST=$(ip neigh show dev "$IFACE" | awk '!/lladdr/ {print $1}' | grep -vE '^224\.|^169\.')
+    BAD_IP_LIST=$(ip neigh show dev "$IFACE" | awk '!/lladdr/ {print $1}')
     
     if [ -z "$BAD_IP_LIST" ]; then
         BAD_IP_CNT=0
@@ -84,13 +108,37 @@ while true; do
              ip neigh del "$IP" dev "$IFACE"
         done
     fi
-
-    IP_LIST=$(ip neigh show dev "$IFACE" | grep 'lladdr' | awk '{print $1}' | grep -vE '^224\.|^169\.')
-
-    if [[ "$IFACE" != eth0 ]] && ! is_wpa_active && ! is_connected; then
-        sleep $INTERVAL
-        continue
+    
+    if [[ "$IFACE" == "eth0" ]]; then
+        #IFACE_BRIDGE=$(systemctl list-units --type=service --state=running | grep -oP 'wifi_bridge@\K[^\.]+')
+        #SUBNET_CIDR=$(ip -o -f inet addr show "$IFACE_BRIDGE" | awk '{print $4}')
+        #IP_LIST=$(ip neigh show dev "$IFACE_BRIDGE" | grep 'lladdr' | awk '{print $1}')
+        IP_LIST=$(ip neigh show dev "$IFACE" | grep 'lladdr' | awk '{print $1}' | grep -vE '^224\.|^169\.')
+    else
+        if ! is_wpa_active && ! is_connected; then
+            sleep $INTERVAL
+            continue
+        else
+            SUBNET_CIDR=$(ip -o -f inet addr show "$IFACE" | awk '{print $4}')
+            IP_LIST=$(ip neigh show dev "$IFACE" | grep 'lladdr' | awk '{print $1}')
+            for ip in $IP_LIST; do
+                if ip_in_subnet "$ip" "$SUBNET_CIDR"; then
+                    if [[ -z "${uniq_map[$ip]}" ]]; then
+                        TMP_LIST+=("$ip")
+                        uniq_map[$ip]=1
+                    fi
+                fi
+            done
+            IP_LIST="${TMP_LIST[@]}"
+        fi
     fi
+
+    #IP_LIST=$(ip neigh show dev "$IFACE" | grep 'lladdr' | awk '{print $1}' | grep -vE '^224\.|^169\.')
+
+    #if [[ "$IFACE" != eth0 ]] && ! is_wpa_active && ! is_connected; then
+    #    sleep $INTERVAL
+    #    continue
+    #fi
 
     if [ -z "$IP_LIST" ]; then
         #echo "No IP found on $iface"
@@ -114,10 +162,12 @@ while true; do
             if [[ "$INIT_CNT" -gt "$INIT_LIMIT" ]]; then
                 ((REBOOT_CNT++))
                 logger -p local1.err "[$tag:$LINENO] [$IFACE] init err($INIT_CNT) over limit($INIT_LIMIT), reset err($REBOOT_CNT)"
-                ACTIVE_BRIDGE=$(systemctl list-units --type=service --state=running | grep -oE 'wifi_bridge@[^ ]+')
+                #ACTIVE_BRIDGE=$(systemctl list-units --type=service --state=running | grep -oE 'wifi_bridge@[^ ]+')
+                IFACE_BRIDGE=$(systemctl list-units --type=service --state=running | grep -oP 'wifi_bridge@\K[^\.]+')
                 if [[ -n "$ACTIVE_BRIDGE" ]]; then
-                    logger -p local1.info "[$tag:$LINENO] [$IFACE] restarting $ACTIVE_BRIDGE"
-                    systemctl restart "$ACTIVE_BRIDGE"
+                    logger -p local1.info "[$tag:$LINENO] [$IFACE] restarting wifi_bridge@$IFACE_BRIDGE"
+                    #systemctl restart "$ACTIVE_BRIDGE"
+                    systemctl restart wifi_bridge@$IFACE_BRIDGE
                 else
                     logger -p local1.warn "[$tag:$LINENO] [$IFACE] no active wifi_bridge@ service found"                    
                 fi

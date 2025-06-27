@@ -43,7 +43,25 @@ configure)
 
   #timedatectl set-timezone Etc/UTC
 END
-  timedatectl set-timezone Asia/Seoul
+  #timedatectl set-timezone Asia/Seoul
+
+set_timezone() {
+  local target_tz="$1"
+  if [ -z "$target_tz" ]; then
+    echo "Usage: set_timezone <TimeZone>"
+    return 1
+  fi
+
+  current_tz=$(timedatectl | grep 'Time zone' | awk '{print $3}')
+  if [ "$current_tz" == "$target_tz" ]; then
+    echo "Timezone is already set to $current_tz"
+  else
+    echo "Changing timezone from $current_tz to $target_tz"
+    timedatectl set-timezone "$target_tz"
+  fi
+}
+
+  set_timezone Japan
 
 customctl() {
     daemon_name=$1
@@ -83,6 +101,8 @@ customctl() {
   customctl ovsdb-server masked
   customctl smb disabled
   customctl nmb disabled
+  customctl avahi-daemon.socket disabled
+  customctl avahi-daemon disabled
   #customctl samba disabled
   #customctl hciattach disabled
 

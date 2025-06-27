@@ -10,6 +10,8 @@ MAX_UNSTABLE_DURATION=15
 UNSTABLE_START=0
 LIMIT_CNT=5
 ERR_CNT=0
+STATE=""
+PRE_STATE=""
 
 LOG_DIR="/var/log/cantops/module/dmesg"
 
@@ -30,6 +32,12 @@ is_wpa_active() {
     systemctl is-active --quiet "wpa_supplicant@${IFACE}.service"
 }
 
+is_connected() {
+    local state
+    state=$(get_state)
+    [[ "$state" == "COMPLETED" ]]
+}
+
 sleep 3
 
 #python3 /usr/local/logger/wifi_module_check.py $IFACE
@@ -48,7 +56,7 @@ END
 sleep 5
 
 while true; do
-    sleep 3
+    #sleep 3
 
     if [ ! -d /sys/class/net/$IFACE ]; then
         ((ERR_CNT++))
@@ -62,6 +70,7 @@ while true; do
             sleep 3
             reboot
         fi
+        sleep 3
         continue
     fi
 
@@ -71,7 +80,7 @@ while true; do
         #log "wpa_supplicant@${IFACE}.service not active — waiting..."
         UNSTABLE_START=0
         #sleep $CHECK_INTERVAL
-        continue
+        #continue
     fi
 
     STATE=$(get_state)
@@ -96,6 +105,15 @@ while true; do
         fi
     else
         UNSTABLE_START=0
+:<<'END'
+        if [[ "$STATE" != "$PRE_STATE" ]] && [[ "$STATE" == "COMPLETED" ]]; then
+            logger -p local0.info "[$tag:$LINENO] [$IFACE] Connected"
+            IFACE_BRIDGE=$(systemctl list-units --type=service --state=running | grep -oP 'wifi_bridge@\K[^\.]+')
+            if [[ "$IFACE_BRIDGE" == "$IFACE" ]]; then
+                systemctl restart wifi_bridge@$IFACE
+            fi
+        fi
+END
     fi
 
     if [ -d /sys/class/net/$IFACE ]; then
@@ -107,4 +125,7 @@ while true; do
             wpa_cli -i "$IFACE" reconnect
         fi
     fi
+
+    PRE_STATE=$STATE
+    sleep 1
 done

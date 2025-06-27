@@ -2,7 +2,15 @@
 tag=$(basename "$0")
 key=LOG
 IFACE=$1
-logger -p local0.info "[$tag:$LINENO] [$IFACE] wifi bridge start"
+CONF_FILE=""
+if [[ "$IFACE" == "mlan0" ]]; then
+    CONF_FILE=/etc/systemd/network/20-mlan0.network
+fi
+if [[ "$IFACE" == "mlan1" ]]; then
+    CONF_FILE=/etc/systemd/network/21-mlan1.network
+fi
+
+logger -p local0.info "[$tag:$LINENO] [$IFACE] wifi bridge start ($CONF_FILE)"
 
 if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" ]]; then
     logger -p local0.emerg "[$tag:$LINENO] [$IFACE] interface is wrong!!"
@@ -22,6 +30,15 @@ getMac() {
     fi
 
 }
+
+if [ ! -f "$CONF_FILE" ]; then
+    echo "Config file not found: $CONF_FILE"
+    exit 1
+fi
+
+ADDRESS_LINE=$(grep -E '^Address=' "$CONF_FILE" | head -n1 | cut -d= -f2)
+IP_ADDR="${ADDRESS_LINE%%/*}"
+GATEWAY=$(grep -E '^Gateway=' "$CONF_FILE" | head -n1 | cut -d= -f2)
 
 :<<'END'
 mac_eth=$(getMac eth0)
@@ -64,9 +81,12 @@ echo 1 > /proc/sys/net/ipv4/ip_forward
 
 #systemctl stop wifi_dumb@$IFACE
 #systemctl restart wifi_arping@$IFACE
-GATEWAY=$(ip route show default dev "$IFACE" | awk '/default/ {print $3}')
-logger -p local0.info "[$tag:$LINENO] [$IFACE] relayd -d -I $IFACE -I eth0 ($IFACE gateway : $GATEWAY)"
-relayd -d -I $IFACE -I eth0
+#GATEWAY=$(ip route show default dev "$IFACE" | awk '/default/ {print $3}')
+logger -p local0.info "[$tag:$LINENO] [$IFACE] relayd -d -I $IFACE -I eth0 ($IFACE address : $ADDRESS_LINE, gateway : $GATEWAY)"
+#relayd -d -I $IFACE -I eth0
+#relayd -d -i $IFACE -i eth0 -R $GATEWAY:$ADDRESS_LINE -L $IP_ADDR -G $GATEWAY -B -t 5 -p 3
+relayd -d -I $IFACE -I eth0 -L $IP_ADDR -G $GATEWAY -B
+
 #relayd -d -I $IFACE -I eth0 -G $GATEWAY
 #relayd -d -I $IFACE -I eth0 -L 192.168.4.10
 #systemctl restart wifi_arping@$IFACE

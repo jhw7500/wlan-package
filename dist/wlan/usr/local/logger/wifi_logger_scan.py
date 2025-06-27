@@ -534,7 +534,7 @@ def main_loop():
     '''
 
     def on_scan_event(IFACE):
-        time.sleep(0.1)
+        time.sleep(0.2)
         get_scan_result()
         #time.sleep(3)
         

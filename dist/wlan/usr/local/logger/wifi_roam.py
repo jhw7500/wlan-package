@@ -108,24 +108,10 @@ def mlanutl_scan(ssid, freqs):
         logger.message('err', f"[{IFACE}] scan command failed:{e.stderr.strip()}", _EXTRA_())
         return None
 
-def construct_iw_scan_cmd(ssid, scan_freqs):
-    cmd = ["iw", IFACE, "scan"]
-
-    if scan_freqs:
-        cmd += ["freq"] + scan_freqs
-
-    if ssid:
-        cmd += ["ssid", ssid]
-
-    return cmd
-
 def iw_scan(ssid, freqs):
-    cmd = construct_iw_scan_cmd(ssid, freqs)
-    try:
-        logger.message('err', f"[{IFACE}] roaming cmd : {cmd}", _EXTRA_())
-        subprocess.run(cmd, check=True)
-    except subprocess.CalledProcessError as e:
-        logger.message('err', f"[{IFACE}] iw scan failed: {e}", _EXTRA_())
+    if ssid and freqs:
+        cmd = ["iw", IFACE, "scan", "freq"] + freqs + ["ssid", ssid]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def get_station_info():
     try:
@@ -395,21 +381,6 @@ def parse_thresholds(conf_path):
 
     return th2g, th5g
 
-def set_flag(on: bool, path="/tmp/roam_condition"):
-    with open(path, "w") as f:
-        if on:
-            f.write("1")
-        else:
-            f.write("")  # 빈 파일은 OFF 상태
-
-def get_flag(path="/tmp/roam_condition") -> bool:
-    try:
-        with open(path, "r") as f:
-            content = f.read().strip()
-            return content == "1"
-    except FileNotFoundError:
-        return False  # 파일이 없으면 OFF 취급
-
 def main():
     while True:
 
@@ -441,14 +412,8 @@ def main():
         #logger.message('info', f"[{IFACE}] rssi cur : {station['rssi']}, th : {station['rssi_th']}", _EXTRA_())
         if station['rssi'] >= station['rssi_th']:
             #subprocess.run(["systemctl", "start", "wifi_capture"], check=True)
-            if get_flag():
-                set_flag(0)
-
             time.sleep(CHECK_INTERVAL)
             continue
-
-        if not get_flag():
-            set_flag(1)
 
         logger.message('info', f"[{IFACE}] roaming condition : {station['rssi']} < {station['rssi_th']} ({station['bssid']})", _EXTRA_())
                 
@@ -456,8 +421,7 @@ def main():
         if WPA_SSID and WPA_FREQ:
             #subprocess.run(["systemctl", "stop", "wifi_capture"], check=True)
             station['ssid'] = WPA_SSID
-            iw_scan(WPA_SSID, WPA_FREQ)
-            '''
+            #iw_scan(WPA_SSID, WPA_FREQ)
             lines = mlanutl_scan(WPA_SSID, WPA_FREQ)
             #logger.message('info', f"[{IFACE}] scan end", _EXTRA_())
             if lines:
@@ -469,7 +433,6 @@ def main():
                 logger.message('err', f"[{IFACE}] scan failed: output : {lines}", _EXTRA_())
                 time.sleep(CHECK_INTERVAL)
                 continue
-            '''
 
         #time.sleep(0.1)
         entries, timestamp = get_latest_scan(station)
@@ -498,9 +461,7 @@ def main():
             else:
                 logger.message('info', f"[{IFACE}] Top AP is not qualified : bssid={top_ap['bssid']}, rssi={top_ap['rssi']}({top_ap['rssi_th']}), diff={rssi_diff}({DIFF_TH})", _EXTRA_())
         else:
-            logger.message('info', f"[{IFACE}] Top AP is already connected", _EXTRA_())
-            time.sleep(3)
-            continue
+            logger.message('info', f"[{IFACE}] Top AP is already connected", _EXTRA_()) 
 
         time.sleep(CHECK_INTERVAL)
 
