@@ -103,12 +103,12 @@ customctl() {
   customctl nmb disabled
   customctl avahi-daemon.socket disabled
   customctl avahi-daemon disabled
+  customctl wifi_capture disabled
   #customctl samba disabled
   #customctl hciattach disabled
 
   customctl wifi_init enabled
   customctl wifi_logger enabled
-  customctl wifi_capture enabled
 
   customctl wifi_arping@eth0 enabled
   customctl wifi_logger@eth0 enabled
@@ -119,6 +119,7 @@ customctl() {
   customctl wifi_logger@mlan0 enabled
   customctl wifi_checker@mlan0 enabled
   customctl wifi_ping@mlan0 enabled
+  customctl wifi_capture@mlan0 enabled
 
   customctl wifi_logger@mlan1 disabled
   customctl wifi_checker@mlan1 disabled

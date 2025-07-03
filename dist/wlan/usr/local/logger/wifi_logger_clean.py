@@ -1,6 +1,8 @@
 import os
 import glob
+import subprocess
 
+CTS_LOG_DIR = "/var/log/cantops"
 PCAP_DIR = "/var/log/cantops/capture/tmp/"
 MAX_FILES = 20
 
@@ -18,5 +20,9 @@ def cleanup_pcaps():
             print(f"Removing old file: {f}")
             os.remove(f)
 
+def cleanup_all():
+    subprocess.run(["rm", "-r", f"{CTS_LOG_DIR}"])
+
 if __name__ == "__main__":
-    cleanup_pcaps()
+    #cleanup_pcaps()
+    cleanup_all()

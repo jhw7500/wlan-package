@@ -74,7 +74,7 @@ case "$2" in
         systemctl restart wifi_bridge@$IFACE
     fi
     ;;
-  update)
+  config)
     case "$3" in
       mac)
         python3 /usr/local/logger/wifi_config.py $1 mac_addr $4
@@ -97,7 +97,7 @@ case "$2" in
         fi
         ;;
       *)
-        ;;    
+        ;;
     esac
     ;;
   *)

@@ -27,12 +27,14 @@ try_insmod() {
 
 #python3 /usr/local/logger/mac_set.py
 #python3 /usr/local/logger/mac_get.py
-#python3 /usr/local/logger/mac_config.py
+#python3 /usr/local/logger/mac_config.py mlan0 wifi_mod_para__.conf
 
 if ! try_insmod "/lib/modules/$KERNEL_VERSION/updates/mlan_6.12.ko" ""; then
     echo "mlan module load failed"  
     #exit 1
 fi
+
+python3 /usr/local/logger/wifi_mac_save.py mlan0 wifi_mod_para__.conf
 
 if ! try_insmod "/lib/modules/$KERNEL_VERSION/updates/moal_6.12.ko" "mod_para=nxp/wifi_mod_para__.conf mfg_mode=0"; then
     echo "moal module load failed"
@@ -76,6 +78,8 @@ mlanutl mlan0 htcapinfo 0x05c20000
 logger -p local0.info "[$tag:$LINENO] [mlan1] htcapinfo 0x05c20000"
 mlanutl mlan1 htcapinfo 0x05c20000
 
+#mlanutl mlan0 auto_arp 1
+
 #modprobe dummy
 #ip link add dummy0 type dummy
 #ip addr add 192.168.4.254/32 dev dummy0
@@ -106,7 +110,9 @@ sleep 0.2
 #python3 /usr/local/logger/getmac.py
 logger -p local0.info "[$tag:$LINENO] [mlan0] wpa_supplicant start"
 systemctl start wpa_supplicant@mlan0
-sleep 0.5
+
+sleep 1
+
 systemctl start wifi_bridge@mlan0
 
 #echo 1 > /proc/sys/kernel/printk

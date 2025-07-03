@@ -1,5 +1,5 @@
 [Unit]
-Description=WiFi Checker Service
+Description=WiFi Checker Service for %i
 #After=network.target
 After=wifi_init.service
 

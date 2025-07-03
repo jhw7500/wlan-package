@@ -4,6 +4,8 @@ Section: test
 Priority: optional
 Architecture: arm64 
 Depends: 
+Conflicts: wlan-package
+Replaces: wlan-package
 Recommends: 
 Maintainer: jhw <hwjo@cantops.biz> 
 Homepage: 

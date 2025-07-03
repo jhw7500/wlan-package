@@ -1,5 +1,5 @@
 [Unit]
-Description=WiFi Background Scan Service
+Description=WiFi Background Scan Service for %i
 After=network.target
 
 [Service]

@@ -110,7 +110,10 @@ while true; do
             logger -p local0.info "[$tag:$LINENO] [$IFACE] Connected"
             IFACE_BRIDGE=$(systemctl list-units --type=service --state=running | grep -oP 'wifi_bridge@\K[^\.]+')
             if [[ "$IFACE_BRIDGE" == "$IFACE" ]]; then
+                sleep 2
+                logger -p local0.info "[$tag:$LINENO] [$IFACE] systemctl restart wifi_bridge@$IFACE"
                 systemctl restart wifi_bridge@$IFACE
+                sleep 3
             fi
         fi
 END

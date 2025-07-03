@@ -6,7 +6,7 @@ IP_LIST_NEW=""
 TMP_LIST=()
 INIT_LIMIT=1
 ERR_CNT=0
-ERR_LIMIT=1
+ERR_LIMIT=2
 INIT_CNT=0
 REBOOT_CNT=0
 REBOOT_LIMIT=4
@@ -90,7 +90,7 @@ if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" && "$IFACE" != "eth0" ]]; then
     exit 1
 fi
 
-ip neigh flush dev $IFACE
+#ip neigh flush dev $IFACE
 
 :<<'END'
 IP_LIST=$(ip neigh show dev "$IFACE" | grep 'lladdr' | awk '{print $1}')
@@ -105,6 +105,29 @@ for IP in $IP_LIST; do
     logger -p local1.info "[$tag:$LINENO] [$IFACE] Found client IP: $IP"
 done
 END
+
+
+:<<'END'
+for i in {2..254}; do
+    arping -c 1 -I $IFACE 192.168.4.$i &
+done
+wait
+
+TARGET=$(ip neigh show dev eth0 | grep REACHABLE | awk '{print $1}')
+logger -p local1.info "[$tag:$LINENO] [$IFACE] target : $TARGET"
+ip route add $TARGET dev eth0 scope link
+END
+
+:<<'END'
+sleep 5
+TARGET=$(avahi-resolve -n PIM-CAMERA-V016.local |awk '{print $2}')
+logger -p local1.info "[$tag:$LINENO] [$IFACE] target : $TARGET"
+ip route add $TARGET dev eth0 scope link
+arping $TARGET -c 3 -w 2
+END
+
+#ip route del 192.168.1.0/24 dev eth0
+#ip route add 192.168.4.10 dev scope link
 
 while true; do
     GATEWAY=$(get_gateway)

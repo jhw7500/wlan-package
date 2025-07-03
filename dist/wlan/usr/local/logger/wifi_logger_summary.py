@@ -10,7 +10,7 @@ from datetime import datetime
 VERSION = "0.0"
 MLAN0_JSON = "/var/log/cantops/link/mlan0/link.json"
 MLAN1_JSON = "/var/log/cantops/link/mlan1/link.json"
-LOG_FILE = "/var/log/cantops/summary/stat.log"
+LOG_FILE = "/var/log/cantops/summary/summary.log"
 
 def handle_sigterm(signum, frame):
     logger.message('crit', f"{IFACE} SIGTERM {signum} received! Cleaning up...", _EXTRA_())
@@ -68,7 +68,7 @@ def main():
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_sigterm)
     program_name = os.path.splitext(os.path.basename(sys.argv[0]))[0]
-    logger = Logger(app_name="logger_stat", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
+    logger = Logger(app_name="logger_summary", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
 
     logger.message("info", f"version : {VERSION}, LOG_FILE : {LOG_FILE}", _EXTRA_())
 

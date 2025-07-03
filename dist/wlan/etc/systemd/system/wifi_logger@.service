@@ -1,5 +1,5 @@
 [Unit]
-Description=WiFi Logging Service
+Description=WiFi Logging for Service %i
 After=network.target
 #PartOf=wifi_logger.service
 

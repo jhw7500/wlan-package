@@ -1,5 +1,5 @@
 [Unit]
-Description=WiFi Arping Service
+Description=WiFi Arping Service for %i
 #Conflicts=wifi_arping@mlan0.service wifi_arping@mlan1.service
 After=network.target
 #Requires=wpa_supplicant@%i.service

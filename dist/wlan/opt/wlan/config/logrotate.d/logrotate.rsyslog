@@ -1,21 +1,20 @@
 # /etc/logrotate.d/rsyslog - Ported from Debian
 /var/log/cantops/kern.log
 /var/log/cantops/sys.log
-/var/log/cantops/local0.log
-/var/log/cantops/summary/stat.log
-/var/log/cantops/capture/mlan0/cap.log
-/var/log/cantops/capture/mlan0/mgmt.log
-/var/log/cantops/capture/mlan1/cap.log
-/var/log/cantops/capture/mlan1/mgmt.log
+/var/log/cantops/logger.log
+/var/log/cantops/summary/summary.log
+/var/log/cantops/mgmt/mlan0/mgmt.log
+/var/log/cantops/mgmt/mlan1/mgmt.log
 /var/log/cantops/scan/mlan0/ap.log
 /var/log/cantops/scan/mlan0/freq.log
 /var/log/cantops/scan/mlan1/ap.log
 /var/log/cantops/scan/mlan1/freq.log
 /var/log/cantops/stat/mlan0/*.log
 /var/log/cantops/stat/mlan1/*.log
+/var/log/cantops/wpa/wpa.log
 /var/log/cantops/wpa/mlan0/wpa.log
 /var/log/cantops/wpa/mlan1/wpa.log
-/var/log/cantops/arping.log
+/var/log/cantops/ping.log
 /var/log/cantops/ui.log
 {
         rotate 7

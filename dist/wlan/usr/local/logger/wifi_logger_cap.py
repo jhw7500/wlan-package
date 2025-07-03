@@ -10,7 +10,7 @@ from sUTILS import Logger, _EXTRA_
 import sys
 
 VERSION = "0.1"
-LOG_DIR = "/var/log/cantops/capture"
+LOG_DIR = "/var/log/cantops/mgmt"
 INTERFACE = "rtap"
 #PCAP_FILE = f"{LOG_DIR}/tmp/{INTERFACE}.pcap"
 PCAP_FILE = "/tmp/live.pcap"
@@ -158,13 +158,13 @@ def main():
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_sigterm)
     logger = Logger(app_name='logger_cap', facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
-    #IFACE = sys.argv[1] if len(sys.argv) > 1 else "mlan0"
-    #if IFACE not in ["mlan0", "mlan1"]:
-    #    logger.message("emerg", f"Invalid interface {IFACE}", _EXTRA_())
-    #    sys.exit(1)
+    IFACE = sys.argv[1] if len(sys.argv) > 1 else "mlan0"
+    if IFACE not in ["mlan0", "mlan1"]:
+        logger.message("emerg", f"Invalid interface {IFACE}", _EXTRA_())
+        sys.exit(1)
 
-    SUBTYPE_MASK = int(sys.argv[1], 0) if len(sys.argv) > 1 else 0x0000
-    LOG_DIR = f"/var/log/cantops/capture/{IFACE}"
+    SUBTYPE_MASK = int(sys.argv[2], 0) if len(sys.argv) > 2 else 0x0000
+    LOG_DIR = f"/var/log/cantops/mgmt/{IFACE}"
     os.makedirs(f"{LOG_DIR}/tmp", exist_ok=True)
     x = int(SUBTYPE_MASK)
     logger.message("info", f"[{IFACE}] version : {VERSION}, subtype_mask : {x:#04x}, log_file : {LOG_DIR}/{CAP_FILENAME}", _EXTRA_())

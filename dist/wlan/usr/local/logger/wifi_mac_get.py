@@ -8,8 +8,9 @@ from scapy.all import sniff, ARP, Ether, srp, sendp, get_if_hwaddr
 from sUTILS import Logger, _EXTRA_
 
 ETH_IFACE = "eth0"
-WLAN_IFACE = "mlan0"
-PROBE_IP = "192.168.3.100"  # 예상 IP 주소 (ARP 유도 목적)
+IFACE = "mlan0"
+PROBE_IP = "192.168.1.100"  # 예상 IP 주소 (ARP 유도 목적)
+FILE_PATH = "/opt/wlan/mac/target0"
 
 def get_own_mac(interface):
     with open(f"/sys/class/net/{interface}/address", "r") as f:
@@ -66,7 +67,7 @@ def save_mac_address(FILE, mac):
 def connect_to_ap():
     print("[*] (Placeholder) Connecting to AP...")
     # 실제 환경에 맞게 수정:
-    # subprocess.run(["wpa_supplicant", "-i", WLAN_IFACE, "-c", "/etc/wpa_supplicant.conf", "-B"])
+    # subprocess.run(["wpa_supplicant", "-i", IFACE, "-c", "/etc/wpa_supplicant.conf", "-B"])
     pass
 
 def main():
@@ -82,22 +83,32 @@ def main():
 
     if mac:
         print(f"[+] Target MAC detected: {mac}")
-        logger.message("info", f"[{WLAN_IFACE}] Target MAC detected: {mac}", _EXTRA_())
-        save_mac_address("/var/log/cantops/target_mac", mac)
-        #set_mac_address(WLAN_IFACE, mac)
+        logger.message("info", f"[{IFACE}] Target MAC detected: {mac}", _EXTRA_())
+        save_mac_address(FILE_PATH, mac)
+        #set_mac_address(IFACE, mac)
         #connect_to_ap()
     else:
         print("[-] Failed to detect any external MAC address.")
-        logger.message("err", f"[{WLAN_IFACE}] Failed to detect any extrernal MAC address", _EXTRA_())
+        logger.message("err", f"[{IFACE}] Failed to detect any extrernal MAC address", _EXTRA_())
 
 if __name__ == "__main__":
-    logger = Logger(app_name='logger_getmac', facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
+    logger = Logger(app_name='wifi_mac_get', facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
 
-    WLAN_IFACE = sys.argv[1] if len(sys.argv) > 1 else "mlan0"
-    if WLAN_IFACE not in ["mlan0", "mlan1"]:
-        logger.message("info", f"[{WLAN_IFACE}] Invalid interface", _EXTRA_())
+    IFACE = sys.argv[1] if len(sys.argv) > 1 else "mlan0"
+    if IFACE not in ["mlan0", "mlan1"]:
+        logger.message("info", f"[{IFACE}] Invalid interface", _EXTRA_())
         sys.exit(1)
 
-    logger.message("info", f"[{WLAN_IFACE}] {ETH_IFACE} mac sniff...", _EXTRA_())
+    if IFACE == "mlan0" :
+        FILE_PATH = "/opt/wlan/mac/target0"
+    elif IFACE == "mlan1" :
+        FILE_PATH = "/opt/wlan/mac/target1"
+    else:
+        logger.message("info", f"[{IFACE}] interface is wrong", _EXTRA_())
+        sys.exit(1)
+
+    os.makedirs("/opt/wlan/mac", exist_ok=True)
+
+    logger.message("info", f"[{IFACE}] {ETH_IFACE} mac sniff...", _EXTRA_())
 
     main()

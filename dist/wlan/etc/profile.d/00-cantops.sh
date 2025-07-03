@@ -1,5 +1,5 @@
 LOGDIR="/var/log/cantops"
-CAPDIR="$LOGDIR/capture"
+CAPDIR="$LOGDIR/mgmt"
 SCANDIR="$LOGDIR/scan"
 STATDIR="$LOGDIR/stat"
 LINKDIR="$LOGDIR/link"
@@ -30,20 +30,20 @@ alias klogt='cat $LOGDIR/kern.log | tail -n $1'
 alias klogh='cat $LOGDIR/kern.log | head -n $1'
 alias klogf='tail -f $LOGDIR/kern.log'
 
-alias plogg='cat $LOGDIR/arping.log | grep -i $1 -a'
-alias plogt='cat $LOGDIR/arping.log | tail -n $1'
-alias plogh='cat $LOGDIR/arping.log | head -n $1'
-alias plogf='tail -f $LOGDIR/arping.log'
+alias plogg='cat $LOGDIR/ping.log | grep -i $1 -a'
+alias plogt='cat $LOGDIR/ping.log | tail -n $1'
+alias plogh='cat $LOGDIR/ping.log | head -n $1'
+alias plogf='tail -f $LOGDIR/ping.log'
 
-alias sslogg='cat $SUMDIR/stat.log | grep -i $1 -a'
-alias sslogt='cat $SUMDIR/stat.log | tail -n $1'
-alias sslogh='cat $SUMDIR/stat.log | head -n $1'
-alias sslogf='tail -f $SUMDIR/stat.log'
+alias sslogg='cat $SUMDIR/summary.log | grep -i $1 -a'
+alias sslogt='cat $SUMDIR/summary.log | tail -n $1'
+alias sslogh='cat $SUMDIR/summary.log | head -n $1'
+alias sslogf='tail -f $SUMDIR/summary.log'
 
-alias llogg='cat $LOGDIR/local0.log | grep -i $1 -a'
-alias llogt='cat $LOGDIR/local0.log | tail -n $1'
-alias llogh='cat $LOGDIR/local0.log | head -n $1'
-alias llogf='tail -f $LOGDIR/local0.log'
+alias llogg='cat $LOGDIR/logger.log | grep -i $1 -a'
+alias llogt='cat $LOGDIR/logger.log | tail -n $1'
+alias llogh='cat $LOGDIR/logger.log | head -n $1'
+alias llogf='tail -f $LOGDIR/logger.log'
 
 alias ulogg='cat $LOGDIR/ui.log | grep -i $1 -a'
 alias ulogt='cat $LOGDIR/ui.log | tail -n $1'
@@ -68,6 +68,11 @@ alias wlogg='cat $WPADIR0/wpa.log | grep -i $1 -a'
 alias wlogt='cat $WPADIR0/wpa.log |tail -n $1'
 alias wlogh='cat $WPADIR0/wpa.log |head -n $1'
 alias wlogf='tail -f $WPADIR0/wpa.log'
+
+#alias wlogg0='cat $WPADIR0/wpa.log | grep -i $1 -a'
+#alias wlogt0='cat $WPADIR0/wpa.log |tail -n $1'
+#alias wlogh0='cat $WPADIR0/wpa.log |head -n $1'
+#alias wlogf0='tail -f $WPADIR0/wpa.log'
 
 alias wlogg1='cat $WPADIR1/wpa.log | grep -i $1 -a'
 alias wlogt1='cat $WPADIR1/wpa.log |tail -n $1'

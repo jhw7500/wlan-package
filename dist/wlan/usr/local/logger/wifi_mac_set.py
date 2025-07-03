@@ -11,7 +11,7 @@ ETH_IFACE = "eth0"
 WLAN_IFACE = "mlan0"
 PROBE_IP = "192.168.3.100"  # 예상 IP 주소 (ARP 유도 목적)
 MAC_FILE = "/var/log/cantops/target_mac"
-CONF_FILE = "/lib/firmware/nxp/wifi_mod_para.conf"
+CONF_FILE = "/lib/firmware/nxp/wifi_mod_para__.conf"
 BLOCK = "PCIE9098_0"
 
 def get_own_mac(interface):
@@ -203,7 +203,9 @@ if __name__ == "__main__":
 
     if WLAN_IFACE == "mlan0" :
         BLOCK = "PCIE9098_0"
+        MAC_FILE = "/opt/wlan/mac/target0"
     elif WLAN_IFACE == "mlan1" :
         BLOCK = "PCIE9098_1"
+        MAC_FILE = "/opt/wlan/mac/target1"
 
     main()

@@ -1,0 +1,13 @@
+[Unit]
+Description=WiFi Capture Service for %i
+After=network.target
+Conflicts=wifi_capture@mlan0.service wifi_capture@mlan1.service
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/logger/wifi_logger_cap.py %i 0x0100
+#Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
+
