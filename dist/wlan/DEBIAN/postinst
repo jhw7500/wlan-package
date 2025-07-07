@@ -119,7 +119,7 @@ customctl() {
   customctl wifi_logger@mlan0 enabled
   customctl wifi_checker@mlan0 enabled
   customctl wifi_ping@mlan0 enabled
-  customctl wifi_capture@mlan0 enabled
+  customctl wifi_capture@mlan0 disabled
 
   customctl wifi_logger@mlan1 disabled
   customctl wifi_checker@mlan1 disabled
@@ -187,7 +187,7 @@ makeDirectory() {
   cp /opt/wlan/config/rc.local /etc/
   cp /opt/wlan/config/rsyslog.conf /etc/
   cp /opt/wlan/config/smb.conf /etc/samba/
-  #cp /opt/wlan/config/timesyncd.conf /etc/systemd/
+  #cp /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/
   cp /opt/wlan/config/wifi_mod_para.conf /lib/firmware/nxp/
   cp /opt/wlan/driver/mlan.ko /lib/modules/$KERNEL_VERSION/updates/mlan_6.12.ko
   cp /opt/wlan/driver/moal.ko /lib/modules/$KERNEL_VERSION/updates/moal_6.12.ko
@@ -211,22 +211,22 @@ makeDirectory() {
 
   if [ ! -f /etc/systemd/network/20-mlan0.network ]; then
     logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /etc/systemd/network/20-mlan0.network"
-    cp /opt/wlan/config/network/20-mlan0.network /etc/systemd/network/
+    cp /opt/wlan/config/systemd/network/20-mlan0.network /etc/systemd/network/
   fi
 
   if [ ! -f /etc/systemd/network/21-mlan1.network ]; then
     logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /etc/systemd/network/21-mlan1.network"
-    cp /opt/wlan/config/network/21-mlan1.network /etc/systemd/network/
+    cp /opt/wlan/config/systemd/network/21-mlan1.network /etc/systemd/network/
   fi
 
   if [ ! -f /etc/systemd/network/22-eth0.network ]; then
     logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /etc/systemd/network/22-eth0.network"
-    cp /opt/wlan/config/network/22-eth0.network /etc/systemd/network/
+    cp /opt/wlan/config/systemd/network/22-eth0.network /etc/systemd/network/
   fi
 
   if [ ! -f /etc/systemd/network/10-lo.network ]; then
     logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /etc/systemd/network/10-lo.network"
-    cp /opt/wlan/config/network/10-lo.network /etc/systemd/network/
+    cp /opt/wlan/config/systemd/network/10-lo.network /etc/systemd/network/
   fi
 
   #mv /usr/local/bin/iw /usr/local/bin/iw_org

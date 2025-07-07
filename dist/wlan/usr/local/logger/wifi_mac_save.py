@@ -77,12 +77,12 @@ def insert_mac_addr(conf_path, mac_path, target_block="PCIE9098_0"):
         logger.message("err", f"[{IFACE}] {e}", _EXTRA_())
 
 if __name__ == "__main__":
-    logger = Logger(app_name="config_mac", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
+    logger = Logger(app_name="MAC", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
 
     if len(sys.argv) < 2:
-        print(f"[ERR] few arg 1")
+        print(f"[ERR] too few arg 1")
     elif len(sys.argv) < 3:
-        print(f"[ERR] few arg 2")
+        print(f"[ERR] too few arg 2")
         IFACE = sys.argv[1]        
     else:
         IFACE = sys.argv[1]

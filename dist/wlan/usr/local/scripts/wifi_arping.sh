@@ -1,5 +1,6 @@
 #!/bin/bash
 IFACE=$1
+CONF_FILE=""
 tag=$(basename "$0")
 IP_LIST=""
 IP_LIST_NEW=""
@@ -9,11 +10,13 @@ ERR_CNT=0
 ERR_LIMIT=2
 INIT_CNT=0
 REBOOT_CNT=0
-REBOOT_LIMIT=4
+REBOOT_LIMIT=2
 REBOOT_FLAG=0
 INTERVAL=3
 BAD_IP_CNT=0
 BAD_IP_CNT_LIMIT=2
+GATEWAY=""
+GATEWAY2=""
 
 if [ -z "$BASH_VERSION" ]; then
   echo "This script requires bash." >&2
@@ -129,8 +132,26 @@ END
 #ip route del 192.168.1.0/24 dev eth0
 #ip route add 192.168.4.10 dev scope link
 
+if [[ "$IFACE" == "mlan0" ]]; then
+    CONF_FILE=/etc/systemd/network/20-mlan0.network
+fi
+
+if [[ "$IFACE" == "mlan1" ]]; then
+    CONF_FILE=/etc/systemd/network/21-mlan1.network
+fi
+
+if [[ "$IFACE" == "eth0" ]]; then
+    CONF_FILE=/etc/systemd/network/22-eth0.network
+fi
+
+if [ ! -f "$CONF_FILE" ]; then
+    echo "Config file not found: $CONF_FILE"
+    exit 1
+fi
+
 while true; do
     GATEWAY=$(get_gateway)
+    GATEWAY2=$(grep -E '^Gateway=' "$CONF_FILE" | head -n1 | cut -d= -f2)
     IP_LIST_NEW=$IP_LIST
     #BAD_IP_LIST=$(ip neigh show dev "$IFACE" | awk '!/lladdr/ {print $1}' | grep -vE '^224\.|^169\.')
 
@@ -194,9 +215,17 @@ END
     #fi
 
     if [ -z "$IP_LIST" ]; then
-        if [ ! -z "$GATEWAY" ]; then
-            logger -p local1.info "[$tag:$LINENO] [$IFACE] ping to Gateway : $GATEWAY"
-            ping -I $IFACE -c 1 -w 2 $GATEWAY -q
+        if [ ! -z "$GATEWAY" ] || [ ! -z "$GATEWAY2" ]; then
+            if [ ! -z "$GATEWAY" ]; then
+                logger -p local1.info "[$tag:$LINENO] [$IFACE] ping to Gateway : $GATEWAY"
+                ping -I $IFACE -c 1 -w 2 $GATEWAY -q
+            fi
+
+            if [ ! -z "$GATEWAY2" ]; then
+                logger -p local1.info "[$tag:$LINENO] [$IFACE] ping to FILE Gateway : $GATEWAY2"
+                ping -I $IFACE -c 1 -w 2 $GATEWAY2 -q
+            fi
+
             reset_all_counters
             sleep $INTERVAL
             continue
@@ -218,21 +247,25 @@ END
             if [[ "$INIT_CNT" -gt "$INIT_LIMIT" ]]; then
                 ((REBOOT_CNT++))
                 logger -p local1.err "[$tag:$LINENO] [$IFACE] init err($INIT_CNT) over limit($INIT_LIMIT), reset err($REBOOT_CNT)"
+                INIT_CNT=0
                 #ACTIVE_BRIDGE=$(systemctl list-units --type=service --state=running | grep -oE 'wifi_bridge@[^ ]+')
                 IFACE_BRIDGE=$(systemctl list-units --type=service --state=running | grep -oP 'wifi_bridge@\K[^\.]+')
+                if [ "$REBOOT_CNT" -gt "$REBOOT_LIMIT" ]; then
+                    logger -p local0.err "[$tag:$LINENO] [$IFACE] reset network because reset err($REBOOT_CNT) over limit($REBOOT_LIMIT)"
+                    logger -p local1.err "[$tag:$LINENO] [$IFACE] reset network because reset err($REBOOT_CNT) over limit($REBOOT_LIMIT)"
+                    systemctl restart systemd-networkd
+                    REBOOT_CNT=0
+                    sleep 1
+                fi
+
                 if [[ -n "$IFACE_BRIDGE" ]]; then
-                    logger -p local1.info "[$tag:$LINENO] [$IFACE] restarting wifi_bridge@$IFACE_BRIDGE"
+                    logger -p local0.err "[$tag:$LINENO] [$IFACE] restarting wifi_bridge@$IFACE_BRIDGE"
+                    logger -p local1.err "[$tag:$LINENO] [$IFACE] restarting wifi_bridge@$IFACE_BRIDGE"
                     #systemctl restart "$ACTIVE_BRIDGE"
                     systemctl restart wifi_bridge@$IFACE_BRIDGE
                 else
+                    logger -p local0.warn "[$tag:$LINENO] [$IFACE] no active wifi_bridge@ service found"
                     logger -p local1.warn "[$tag:$LINENO] [$IFACE] no active wifi_bridge@ service found"                    
-                fi
-                INIT_CNT=0
-                if [ "$REBOOT_CNT" -gt "$REBOOT_LIMIT" ]; then
-                    logger -p local1.err "[$tag:$LINENO] [$IFACE] reset network because reset err($REBOOT_CNT) over limit($REBOOT_LIMIT)"
-                    systemctl restart systemd-networkd
-                    systemctl restart wifi_bridge@mlan0
-                    REBOOT_CNT=0
                 fi
             fi
         fi
@@ -302,6 +335,16 @@ END
                         reset_all_counters
                         sleep $INTERVAL
                         continue
+                    else
+                        if [ ! -z "$GATEWAY2" ]; then
+                            if ping -I "$IFACE" -c 1 -W 2 "$GATEWAY2" > /dev/null 2>&1; then
+                                logger -p local1.info "[$tag:$LINENO] [$IFACE] arping, ping to $IP failed but ping FILE Gateway($GATEWAY2) success"
+                                ping -I $IFACE -c 1 -w 2 $GATEWAY2 -q
+                                reset_all_counters
+                                sleep $INTERVAL
+                                continue
+                            fi
+                        fi
                     fi
                 fi
 
@@ -328,7 +371,8 @@ END
                                 logger -p local1.crit "[$tag:$LINENO] [$IFACE] reboot err(${REBOOT_CNT_MAP["$IP"]}) over limit($REBOOT_LIMIT)"
                                 REBOOT_FLAG=1
                             else
-                                logger -p local1.info "[$tag:$LINENO] [$IFACE] restarting $ACTIVE_BRIDGE (${REBOOT_CNT_MAP["$IP"]})"
+                                logger -p local0.err "[$tag:$LINENO] [$IFACE] restarting $ACTIVE_BRIDGE (${REBOOT_CNT_MAP["$IP"]})"
+                                logger -p local1.err "[$tag:$LINENO] [$IFACE] restarting $ACTIVE_BRIDGE (${REBOOT_CNT_MAP["$IP"]})"
                                 systemctl restart "$ACTIVE_BRIDGE"
                             fi
                         else
@@ -364,6 +408,7 @@ END
 
     if [ "$REBOOT_FLAG" -eq 1 ]; then
         logger -p local0.emerg "[$tag:$LINENO] [$IFACE] reboot because arp/route is not recovery"
+        logger -p local1.emerg "[$tag:$LINENO] [$IFACE] reboot because arp/route is not recovery"
         sleep $INTERVAL
         reboot
     fi

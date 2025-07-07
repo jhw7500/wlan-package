@@ -3,7 +3,8 @@ tag=$(basename "$0")
 IFACE=$1
 ERR_CNT=0
 ERR_LIMIT=4
-
+INIT_CNT=0
+INIT_LIMIT=2
 
 get_state() {
     wpa_cli -i "$IFACE" status | grep "^wpa_state=" | cut -d= -f2
@@ -27,7 +28,6 @@ get_ipaddr() {
     ip -4 addr show dev "$IFACE" | awk '/inet / {print $2}' | cut -d/ -f1
 }
 
-GATEWAY=$(grep -E '^Gateway=' "$CONF_FILE" | head -n1 | cut -d= -f2)
 
 if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" && "$IFACE" != "eth0" ]]; then
     logger -p local0.err "[$tag:$LINENO] [$IFACE] interface is wrong!!"
@@ -76,6 +76,14 @@ while true; do
         fi
     fi
 
+    if [ -z "$GATEWAY" ]; then
+        GATEWAY=$(grep -E '^Gateway=' "$CONF_FILE" | head -n1 | cut -d= -f2)
+        sleep 5
+        continue
+    fi
+
+    SRC_IP=$(ip -4 -o addr show dev "$IFACE" | awk '{print $4}' | cut -d/ -f1)
+
 :<<'END'
     GATEWAY=$(get_gateway)
     IP_ADDR=$(get_ipaddr)
@@ -116,14 +124,22 @@ END
             ERR_CNT=0
         else
             ((ERR_CNT++))
-            logger -p local1.info "[$tag:$LINENO] [$IFACE] ping err ($ERR_CNT)"
+            logger -p local1.info "[$tag:$LINENO] [$IFACE] ping err to Gateway $GATEWAY ($ERR_CNT)"
             if [ "$ERR_CNT" -gt "$ERR_LIMIT" ]; then
-                logger -p local1.err "[$tag:$LINENO] [$IFACE] wifi bridge reset because ERR_CNT($ERR_CNT) over ERR_LIMIT($ERR_LIMIT)"
+                ((INIT_CNT++))
+                if [ "$INIT_CNT" -gt "$INIT_LIMIT" ]; then
+                    logger -p local0.err "[$tag:$LINENO] [$IFACE] systemd-networkd reset because INIT_CNT($INIT_CNT) over INIT_LIMIT($INIT_LIMIT)"
+                    logger -p local1.err "[$tag:$LINENO] [$IFACE] systemd-networkd reset because INIT_CNT($INIT_CNT) over INIT_LIMIT($INIT_LIMIT)"
+                    systemctl restart systemd-networkd
+                    INIT_CNT=0
+                    sleep 1
+                fi
+                logger -p local0.err "[$tag:$LINENO] [$IFACE] wifi bridge reset because ERR_CNT($ERR_CNT) over ERR_LIMIT($ERR_LIMIT) INIT_CNT($INIT_CNT)"
+                logger -p local1.err "[$tag:$LINENO] [$IFACE] wifi bridge reset because ERR_CNT($ERR_CNT) over ERR_LIMIT($ERR_LIMIT) INIT_CNT($INIT_CNT)"
                 systemctl restart wifi_bridge@$IFACE
                 ERR_CNT=0
             fi
             sleep 1
-            continue
         fi
     fi
 

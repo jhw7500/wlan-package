@@ -259,8 +259,8 @@ def main():
     os.makedirs(LOG_DIR, exist_ok=True)
     while True:
         if not os.path.exists(f"/sys/class/net/{IFACE}"):
-            logger.message("err", f"[{IFACE}] /sys/class/net/{IFACE} is not exist", _EXTRA_())
-            time.sleep(5)
+            logger.message("info", f"[{IFACE}] waiting for interface...", _EXTRA_())
+            time.sleep(1)
             continue
 
         if IFACE == "eth0":
@@ -280,7 +280,7 @@ def main():
         if not is_wpa_running(IFACE):
             #logger.message("info" f"[{IFACE}] flush {LOG_DIR}/link.json", _EXTRA_())
             subprocess.run(f"echo '{{}}' > {LOG_DIR}/link.json", shell=True)
-            time.sleep(3)
+            time.sleep(1)
             continue
 
         if is_wifi_connected_wpa(IFACE):
@@ -311,14 +311,14 @@ def main():
             #logger.message("info", f"[{IFACE}] loop", _EXTRA_())
             time.sleep(0.965)
         else:
-            logger.message("err", f"[{IFACE}] wpa_supplicant@{IFACE} is not connected", _EXTRA_())
+            logger.message("err", f"[{IFACE}] waiting for connection (wpa_supplicant@{IFACE})", _EXTRA_())
             subprocess.run(f"echo '{{}}' > {LOG_DIR}/link.json", shell=True)
             #subprocess.run(["ifconfig", IFACE, "up"])
-            time.sleep(3)
+            time.sleep(1)
 
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_sigterm)
-    logger = Logger(app_name="logger_link", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
+    logger = Logger(app_name="LINK", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
     
     if len(sys.argv) < 2:
         IFACE = "mlan0"

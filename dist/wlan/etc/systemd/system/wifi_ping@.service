@@ -4,8 +4,9 @@ Description=WiFi Ping Service for %i
 After=network.target
 
 [Service]
+Type=simple
 ExecStart=/usr/local/scripts/wifi_ping.sh %i
-Restart=always
+#Restart=always
 User=root
 #Type=oneshot
 #RemainAfterExit=true

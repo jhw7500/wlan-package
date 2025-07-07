@@ -1,5 +1,5 @@
 Package: wlan-proc
-Version: 0.0.0
+Version: 0.0.1
 Section: test
 Priority: optional
 Architecture: arm64 

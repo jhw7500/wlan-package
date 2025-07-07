@@ -1,0 +1,8 @@
+[Match]
+Name=mlan0
+
+[Network]
+DHCP=no
+Address=192.168.4.30/24
+Gateway=192.168.4.1
+

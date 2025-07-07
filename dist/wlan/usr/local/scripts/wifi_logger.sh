@@ -10,8 +10,8 @@ echo '{}' > /var/log/cantops/scan/mlan1/beacon.json
 echo '{}' > /var/log/cantops/link/mlan0/link.json
 echo '{}' > /var/log/cantops/link/mlan1/link.json
 
-python3 /usr/local/logger/wifi_mac_get.py mlan0 &
-python3 /usr/local/logger/wifi_logger_summary.py 
+/bin/python3 /usr/local/logger/wifi_mac_get.py mlan0 &
+/bin/python3 /usr/local/logger/wifi_logger_summary.py 
 
 #sleep 1
 #systemctl restart wifi_capture

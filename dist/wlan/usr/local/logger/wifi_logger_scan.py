@@ -595,7 +595,7 @@ def main_loop():
 
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_sigterm)
-    logger = Logger(app_name="logger_scan", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
+    logger = Logger(app_name="SCAN", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
 
     if len(sys.argv) < 2:
         IFACE = "mlan0"

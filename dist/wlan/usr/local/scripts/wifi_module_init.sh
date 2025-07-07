@@ -78,6 +78,12 @@ mlanutl mlan0 htcapinfo 0x05c20000
 logger -p local0.info "[$tag:$LINENO] [mlan1] htcapinfo 0x05c20000"
 mlanutl mlan1 htcapinfo 0x05c20000
 
+sleep 0.2
+logger -p local0.info "[$tag:$LINENO] [mlan0] reassoctrl enable"
+mlanutl mlan0 reassoctrl 1
+logger -p local0.info "[$tag:$LINENO] [mlan1] reassoctrl enable"
+mlanutl mlan1 reassoctrl 1
+
 #mlanutl mlan0 auto_arp 1
 
 #modprobe dummy
@@ -96,12 +102,16 @@ mlanutl mlan1 htcapinfo 0x05c20000
 #logger -p local0.info "[$tag:$LINENO] [mlan1] power save off"
 #iw dev mlan1 set power_save off
 
-sleep 0.1
+sleep 0.2
 logger -p local0.info "[$tag:$LINENO] [mlan0] link up"
 ip link set mlan0 up
-sleep 0.1
-logger -p local0.info "[$tag:$LINENO] [mlan1] link donw" 
+ifconfig mlan0 up
+
+sleep 0.2
+logger -p local0.info "[$tag:$LINENO] [mlan1] link down" 
 ip link set mlan1 down
+ifconfig mlan1 down
+
 
 #ip link add nlmon0 type nlmon
 #ip link set nlmon0 up
@@ -112,7 +122,7 @@ logger -p local0.info "[$tag:$LINENO] [mlan0] wpa_supplicant start"
 systemctl start wpa_supplicant@mlan0
 
 sleep 1
-
+logger -p local0.info "[$tag:$LINENO] [mlan0] start wifi_bridge@mlan0"
 systemctl start wifi_bridge@mlan0
 
 #echo 1 > /proc/sys/kernel/printk

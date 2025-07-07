@@ -132,14 +132,14 @@ def parse_frame_type(ftype, fsub):
 
 def main():
     while not os.path.exists(f"/sys/class/net/{IFACE}"):
-        logger.message('err', f"[{IFACE}] interface is invalid", _EXTRA_())
-        time.sleep(5)
+        logger.message('info', f"[{IFACE}] waiting for interface...", _EXTRA_())
+        time.sleep(1)
 
     subprocess.run(["mkfifo", PCAP_FILE])
     mac_mlan = get_mac_address(IFACE)
     #logger.message('info', f"[{IFACE}] MAC: {mac_mlan}", _EXTRA_())
     subprocess.run(["mlanutl", IFACE, "netmon", "0"])
-    time.sleep(0.5)
+    #time.sleep(0.5)
     subprocess.run(["mlanutl", IFACE, "netmon", "1", "0x49"])
     subprocess.run(["ifconfig", INTERFACE, "up"])
 
@@ -157,7 +157,7 @@ def main():
 
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_sigterm)
-    logger = Logger(app_name='logger_cap', facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
+    logger = Logger(app_name='MGMT', facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
     IFACE = sys.argv[1] if len(sys.argv) > 1 else "mlan0"
     if IFACE not in ["mlan0", "mlan1"]:
         logger.message("emerg", f"Invalid interface {IFACE}", _EXTRA_())

@@ -375,10 +375,13 @@ def log_stats():
             if not wifi_info:
                 #print("not wifi info")
                 #logger.warning("No WiFi info available — possibly disconnected or station dump empty.")
-                time.sleep(5)
-                continue
+                #time.sleep(5)
+                #continue
+                ap_mac = None
+            else:
+                ap_mac = wifi_info['ap_mac']
+                mac_address = ap_mac.replace(":", "_")
 
-            ap_mac = wifi_info['ap_mac']
             #if ap_mac == "Not" and current_ap != ap_mac:
                 #logger.message("info", f"prev_ap : {current_ap}, cur_ap : {ap_mac}", _EXTRA_())
                 #time.sleep(1)
@@ -391,7 +394,7 @@ def log_stats():
             time.sleep(5)
             continue
 
-        mac_address = ap_mac.replace(":", "_")  # File-safe MAC format        
+        #mac_address = ap_mac.replace(":", "_")  # File-safe MAC format        
         log_filename = f"{LOG_DIR}/{mac_address}.log"
         all_log_filename = f"{LOG_DIR}/stat.log"
 
@@ -405,6 +408,7 @@ def log_stats():
                 f"AP changed: {current_ap} -> {ap_mac}\n"
             )
             current_ap = ap_mac
+            logger.message("info", f"[{IFACE}] AP change: {current_ap} -> {ap_mac}", _EXTRA_())
             #if wifi_info['essid'] != "Unknown":
             with open(log_filename, "a") as log_file:
                 log_file.write(log_entry)
@@ -493,7 +497,7 @@ def log_stats():
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_sigterm)
     program_name = os.path.splitext(os.path.basename(sys.argv[0]))[0]
-    logger = Logger(app_name="logger_stat", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
+    logger = Logger(app_name="STAT", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
     
     if len(sys.argv) < 2:
         IFACE = "mlan0"

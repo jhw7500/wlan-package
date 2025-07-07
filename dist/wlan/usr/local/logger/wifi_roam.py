@@ -22,6 +22,7 @@ WPA_SSID = None
 WPA_FREQ = None
 WPA_TH_2G = None
 WPA_TH_5G = None
+WPA_TH_CONNECT = None
 DIFF_TH = 10
 CHECK_INTERVAL = 1
 
@@ -125,7 +126,8 @@ def get_station_info():
             }
             return result
     except Exception as e:
-        logger.message('err', f"[{IFACE}] Failed to read station info from link log: {e}", _EXTRA_())
+        #logger.message('err', f"[{IFACE}] Failed to read station info from link log: {e}", _EXTRA_())
+        logger.message('info', f"[{IFACE}] waiting for link : {e}", _EXTRA_())
         return None
 
 def load_channel_info():
@@ -227,6 +229,7 @@ def parse_supplicant_conf(path):
     freqs = []
     th2g = None
     th5g = None
+    th_connect = None
 
     with open(path, "r") as f:
         for line in f:
@@ -255,11 +258,17 @@ def parse_supplicant_conf(path):
                 except ValueError:
                     logger.message('err', f"[{IFACE}] TG_5G : {tg5g} is invalid in {path}", _EXTRA_())
                     pass
+            elif line.startswith("#!TH_CONNECT="):
+                try:
+                    th_connect = int(line.split("=")[1])
+                except ValueError:
+                    logger.message('err', f"[{IFACE}] TH_CONNECT : {th_connect} is invalid in {path}", _EXTRA_())
+                    pass
 
     th2g = th2g if th2g is not None else DEFAULT_TH_2G
     th5g = th5g if th5g is not None else DEFAULT_TH_5G
 
-    return ssid, freqs, th2g, th5g
+    return ssid, freqs, th2g, th5g, th_connect
 
 def roam_to_bssid(bssid):
     #log(f"Roaming to BSSID {bssid}")
@@ -387,8 +396,17 @@ def main():
         station = get_station_info()
 
         if not station:
-            time.sleep(5)
+            time.sleep(CHECK_INTERVAL)
             continue
+
+        '''
+        if WPA_TH_CONNECT:
+            if station['rssi'] < WPA_TH_CONNECT:
+                logger.message('info', f"[{IFACE}] disconnect condition : {station['rssi']} < {WPA_TH_CONNECT} ({station['bssid']})", _EXTRA_())
+                subprocess.run(["wpa_cli", "-i", IFACE, "disconnect"])
+                time.sleep(CHECK_INTERVAL)
+                continue
+        '''
 
         #bssid, ssid, frequency, signal = get_station_info()
         '''
@@ -409,7 +427,7 @@ def main():
         else:
             station['rssi_th'] = WPA_TH_5G
 
-        #logger.message('info', f"[{IFACE}] rssi cur : {station['rssi']}, th : {station['rssi_th']}", _EXTRA_())
+        #logger.message('info', f"[{IFACE}] rssi cur : {station['rssi']}, roam_th : {station['rssi_th']}", _EXTRA_())
         if station['rssi'] >= station['rssi_th']:
             #subprocess.run(["systemctl", "start", "wifi_capture"], check=True)
             time.sleep(CHECK_INTERVAL)
@@ -467,7 +485,7 @@ def main():
 
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_sigterm)
-    logger = Logger(app_name='wifi_roaming', facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
+    logger = Logger(app_name='ROAM', facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
 
     IFACE = sys.argv[1] if len(sys.argv) > 1 else "mlan0"
     if IFACE not in ["mlan0", "mlan1"]:
@@ -479,8 +497,8 @@ if __name__ == "__main__":
     FREQ_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/freq.log"
     WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-{IFACE}.conf"
 
-    WPA_SSID, WPA_FREQ, WPA_TH_2G, WPA_TH_5G = parse_supplicant_conf(WPA_CONF_FILE)    
+    WPA_SSID, WPA_FREQ, WPA_TH_2G, WPA_TH_5G, WPA_TH_CONNECT = parse_supplicant_conf(WPA_CONF_FILE)    
 
-    logger.message("info", f"[{IFACE}] version : {VERSION}, ssid : {WPA_SSID}, scan_freq : {WPA_FREQ}, TH_2G : {WPA_TH_2G}, TH_5G : {WPA_TH_5G}, conf : {WPA_CONF_FILE}", _EXTRA_())
+    logger.message("info", f"[{IFACE}] version : {VERSION}, ssid : {WPA_SSID}, scan_freq : {WPA_FREQ}, TH_CONNECT : {WPA_TH_CONNECT}, TH_2G : {WPA_TH_2G}, TH_5G : {WPA_TH_5G}, conf : {WPA_CONF_FILE}", _EXTRA_())
 
     main()

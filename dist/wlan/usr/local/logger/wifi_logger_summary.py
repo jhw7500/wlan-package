@@ -68,7 +68,7 @@ def main():
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_sigterm)
     program_name = os.path.splitext(os.path.basename(sys.argv[0]))[0]
-    logger = Logger(app_name="logger_summary", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
+    logger = Logger(app_name="SUMM", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
 
     logger.message("info", f"version : {VERSION}, LOG_FILE : {LOG_FILE}", _EXTRA_())
 

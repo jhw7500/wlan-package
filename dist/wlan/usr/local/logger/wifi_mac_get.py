@@ -92,7 +92,7 @@ def main():
         logger.message("err", f"[{IFACE}] Failed to detect any extrernal MAC address", _EXTRA_())
 
 if __name__ == "__main__":
-    logger = Logger(app_name='wifi_mac_get', facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
+    logger = Logger(app_name='MAC', facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
 
     IFACE = sys.argv[1] if len(sys.argv) > 1 else "mlan0"
     if IFACE not in ["mlan0", "mlan1"]:

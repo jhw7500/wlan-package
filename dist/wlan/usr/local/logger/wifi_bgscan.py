@@ -21,7 +21,7 @@ VERSION = "0.0"
 IFACE = ""
 
 def handle_sigterm(signum, frame):
-    logger.message('crit', f"{IFACE} SIGTERM {signum} received! Cleaning up...", _EXTRA_())
+    logger.message('crit', f"[{IFACE}] SIGTERM {signum} received! Cleaning up...", _EXTRA_())
     cleanup()
     sys.exit(0)
 
@@ -102,7 +102,7 @@ def periodic_scan(ssid, freqs, interval):
     
     while True:
         if not os.path.exists(f"/sys/class/net/{IFACE}"):
-            logger.message("err", f"[{IFACE}] /sys/class/net/{IFACE} is not exist", _EXTRA_())
+            logger.message("info", f"[{IFACE}] waiting for interface...", _EXTRA_())
             time.sleep(5)
             continue
 
@@ -117,27 +117,27 @@ def periodic_scan(ssid, freqs, interval):
 
         if time.time() - last_time >= interval:
             try:
-                logger.message("info", f"{cmd}", _EXTRA_())
+                logger.message("info", f"[{IFACE}] {cmd}", _EXTRA_())
                 #subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 subprocess.run(cmd, check=True)
                 last_time = time.time()
             except subprocess.CalledProcessError as e:
-                logger.message("err", f"iw scan failed: {e}", _EXTRA_())
+                logger.message("err", f"[{IFACE}] iw scan failed: {e}", _EXTRA_())
 
-        time.sleep(0.5)
+        time.sleep(1)
 
 def main_loop():
     #subprocess.run(["ifconfig", IFACE, "up"])
     #last_log_time = time.time()
 
     ssid, freqs, interval = parse_wpa_supplicant_conf(WPA_CONF_FILE)
-    logger.message("info", f"ssid : {ssid}, freq: {freqs}", _EXTRA_())
+    logger.message("info", f"[{IFACE}] ssid : {ssid}, freq: {freqs}, interval: {interval}", _EXTRA_())
     periodic_scan(ssid, freqs, interval)
     #threading.Thread(target=periodic_scan, args=(ssid, freqs, interval), daemon=True).start()
 
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_sigterm)
-    logger = Logger(app_name="wifi_bgscan", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
+    logger = Logger(app_name="SCAN", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
 
     if len(sys.argv) < 2:
         IFACE = "mlan0"
@@ -145,10 +145,10 @@ if __name__ == "__main__":
         IFACE = sys.argv[1]
 
     WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-{IFACE}.conf"
-    logger.message("info", f"version : {VERSION}", _EXTRA_())
+    logger.message("info", f"[{IFACE}] version : {VERSION}", _EXTRA_())
 
     if IFACE != "mlan0" and IFACE != "mlan1" :
-        logger.message("err", f"{IFACE} is not vaild interface", _EXTRA_())
+        logger.message("err", f"[{IFACE}] invalid interface", _EXTRA_())
         sys.exit(1)
 
     main_loop()
