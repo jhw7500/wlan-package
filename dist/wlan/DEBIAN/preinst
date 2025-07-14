@@ -49,26 +49,6 @@ stop_services_if_running() {
 case "$1" in
 install)
   echo "preinst install ($model)"
-<<<<<<< HEAD
-  systemctl stop wifi_logger
-  systemctl stop wifi_logger@mlan0
-  systemctl stop wifi_logger@mlan1
-  systemctl stop wifi_logger@eth0
-  systemctl stop wifi_checker@mlan0
-  systemctl stop wifi_checker@mlan1
-  systemctl stop wifi_capture@mlan0
-  systemctl stop wifi_capture@mlan1
-  systemctl stop wifi_roam@mlan0
-  systemctl stop wifi_roam@mlan1
-  systemctl stop wifi_bgscan@mlan0
-  systemctl stop wifi_bgscan@mlan1
-  systemctl stop wifi_arping@eth0
-  systemctl stop wifi_arping@mlan0
-  systemctl stop wifi_arping@mlan1
-  systemctl stop wifi_ping@eth0
-  systemctl stop wifi_ping@mlan0
-  systemctl stop wifi_ping@mlan1
-=======
   stop_services_if_running \ 
   		wifi_logger \
   		wifi_logger@mlan0 \
@@ -88,7 +68,6 @@ install)
   		wifi_ping@eth0 \
   		wifi_ping@mlan0 \
   		wifi_ping@mlan1
->>>>>>> 31dd960 (7/14 t)
 
   #killall apt apt-get
   #rm /var/lib/apt/lists/lock
@@ -106,26 +85,6 @@ install)
 
 upgrade)
   echo "preinst upgrade ($model)"
-<<<<<<< HEAD
-  systemctl stop wifi_logger
-  systemctl stop wifi_logger@eth0
-  systemctl stop wifi_logger@mlan0
-  systemctl stop wifi_logger@mlan1
-  systemctl stop wifi_checker@mlan0
-  systemctl stop wifi_checker@mlan1
-  systemctl stop wifi_capture@mlan0
-  systemctl stop wifi_capture@mlan1
-  systemctl stop wifi_roam@mlan0
-  systemctl stop wifi_roam@mlan1
-  systemctl stop wifi_bgscan@mlan0
-  systemctl stop wifi_bgscan@mlan1
-  systemctl stop wifi_arping@eth0
-  systemctl stop wifi_arping@mlan0
-  systemctl stop wifi_arping@mlan1
-  systemctl stop wifi_ping@eth0
-  systemctl stop wifi_ping@mlan0
-  systemctl stop wifi_ping@mlan1
-=======
   stop_services_if_running \
                 wifi_logger \
                 wifi_logger@mlan0 \
@@ -145,7 +104,6 @@ upgrade)
                 wifi_ping@eth0 \
                 wifi_ping@mlan0 \
                 wifi_ping@mlan1
->>>>>>> 31dd960 (7/14 t)
 #  systemctl stop rsyslog
   ;;
 
