@@ -311,7 +311,7 @@ def main():
             #logger.message("info", f"[{IFACE}] loop", _EXTRA_())
             time.sleep(0.965)
         else:
-            logger.message("err", f"[{IFACE}] waiting for connection (wpa_supplicant@{IFACE})", _EXTRA_())
+            #logger.message("err", f"[{IFACE}] waiting for connection (wpa_supplicant@{IFACE})", _EXTRA_())
             subprocess.run(f"echo '{{}}' > {LOG_DIR}/link.json", shell=True)
             #subprocess.run(["ifconfig", IFACE, "up"])
             time.sleep(1)

@@ -51,8 +51,14 @@ def insert_mac_addr(conf_path, conf, val, target_block="PCIE9098_0"):
 if __name__ == "__main__":
     logger = Logger(app_name="wifi_config", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
 
+    if len(sys.argv) < 2:
+        logger.message("err", f"No interface", _EXTRA_())
+    else:
+        IFACE = sys.argv[1]
+
     if len(sys.argv) < 4:
         logger.message("err", f"[{IFACE}] arg is wrong", _EXTRA_())
+        sys.exit(1)
     else:
         IFACE = sys.argv[1]
         conf = sys.argv[2]

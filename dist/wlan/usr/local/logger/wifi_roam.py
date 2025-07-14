@@ -256,7 +256,7 @@ def parse_supplicant_conf(path):
                 try:
                     th5g = int(line.split("=")[1])
                 except ValueError:
-                    logger.message('err', f"[{IFACE}] TG_5G : {tg5g} is invalid in {path}", _EXTRA_())
+                    logger.message('err', f"[{IFACE}] TH_5G : {th5g} is invalid in {path}", _EXTRA_())
                     pass
             elif line.startswith("#!TH_CONNECT="):
                 try:

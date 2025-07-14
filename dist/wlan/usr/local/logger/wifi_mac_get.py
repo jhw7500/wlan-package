@@ -27,6 +27,7 @@ def wait_for_eth_link(timeout=10):
                 return True
         time.sleep(0.5)
     print("[-] Timeout waiting for Ethernet link.")
+    logger.message("err", f"[{IFACE}] Timeout waiting for Ethernet link", _EXTRA_())
     return False
 
 def passive_mac_sniff(timeout=5):

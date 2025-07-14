@@ -14,9 +14,82 @@ logger -s -p local0.notice "[$KEY][$tag:$LINENO] install $PACKAGE_NAME-$(dpkg-qu
 #echo "stop cam-operate daemon"
 #systemctl stop cam-operate
 
+
+stop_services_if_running() {
+    local services=("$@")
+    for svc in "${services[@]}"; do
+        local svc_clean="${svc%.service}"
+        echo "[INFO] Checking service: $svc_clean"
+
+        if command -v systemctl >/dev/null 2>&1; then
+            if systemctl is-active --quiet "$svc_clean"; then
+                echo "[INFO] Stopping $svc_clean (via systemctl)"
+                systemctl stop "$svc_clean"
+            else
+                echo "[INFO] $svc_clean is not active"
+            fi
+        elif command -v pidof >/dev/null 2>&1; then
+            if pidof "$svc_clean" >/dev/null; then
+                echo "[INFO] Killing $svc_clean (via pidof)"
+                killall "$svc_clean"
+            else
+                echo "[INFO] $svc_clean not running"
+            fi
+        else
+            # Fallback to ps
+            if ps aux | grep -v grep | grep -q "$svc_clean"; then
+                echo "[INFO] Killing $svc_clean (via ps)"
+                pkill "$svc_clean"
+            else
+                echo "[INFO] $svc_clean not running"
+            fi
+        fi
+    done
+}
 case "$1" in
 install)
   echo "preinst install ($model)"
+<<<<<<< HEAD
+  systemctl stop wifi_logger
+  systemctl stop wifi_logger@mlan0
+  systemctl stop wifi_logger@mlan1
+  systemctl stop wifi_logger@eth0
+  systemctl stop wifi_checker@mlan0
+  systemctl stop wifi_checker@mlan1
+  systemctl stop wifi_capture@mlan0
+  systemctl stop wifi_capture@mlan1
+  systemctl stop wifi_roam@mlan0
+  systemctl stop wifi_roam@mlan1
+  systemctl stop wifi_bgscan@mlan0
+  systemctl stop wifi_bgscan@mlan1
+  systemctl stop wifi_arping@eth0
+  systemctl stop wifi_arping@mlan0
+  systemctl stop wifi_arping@mlan1
+  systemctl stop wifi_ping@eth0
+  systemctl stop wifi_ping@mlan0
+  systemctl stop wifi_ping@mlan1
+=======
+  stop_services_if_running \ 
+  		wifi_logger \
+  		wifi_logger@mlan0 \
+  		wifi_logger@mlan1 \
+  		wifi_logger@eth0 \
+  		wifi_checker@mlan0 \
+  		wifi_checker@mlan1 \
+  		wifi_capture@mlan0 \
+  		wifi_capture@mlan1 \
+  		wifi_roam@mlan0 \
+  		wifi_roam@mlan1 \
+  		wifi_bgscan@mlan0 \
+  		wifi_bgscan@mlan1 \
+  		wifi_arping@eth0 \
+  		wifi_arping@mlan0 \
+  		wifi_arping@mlan1 \
+  		wifi_ping@eth0 \
+  		wifi_ping@mlan0 \
+  		wifi_ping@mlan1
+>>>>>>> 31dd960 (7/14 t)
+
   #killall apt apt-get
   #rm /var/lib/apt/lists/lock
   #rm /var/cache/apt/archives/lock
@@ -33,6 +106,46 @@ install)
 
 upgrade)
   echo "preinst upgrade ($model)"
+<<<<<<< HEAD
+  systemctl stop wifi_logger
+  systemctl stop wifi_logger@eth0
+  systemctl stop wifi_logger@mlan0
+  systemctl stop wifi_logger@mlan1
+  systemctl stop wifi_checker@mlan0
+  systemctl stop wifi_checker@mlan1
+  systemctl stop wifi_capture@mlan0
+  systemctl stop wifi_capture@mlan1
+  systemctl stop wifi_roam@mlan0
+  systemctl stop wifi_roam@mlan1
+  systemctl stop wifi_bgscan@mlan0
+  systemctl stop wifi_bgscan@mlan1
+  systemctl stop wifi_arping@eth0
+  systemctl stop wifi_arping@mlan0
+  systemctl stop wifi_arping@mlan1
+  systemctl stop wifi_ping@eth0
+  systemctl stop wifi_ping@mlan0
+  systemctl stop wifi_ping@mlan1
+=======
+  stop_services_if_running \
+                wifi_logger \
+                wifi_logger@mlan0 \
+                wifi_logger@mlan1 \
+                wifi_logger@eth0 \
+                wifi_checker@mlan0 \
+                wifi_checker@mlan1 \
+                wifi_capture@mlan0 \
+                wifi_capture@mlan1 \
+                wifi_roam@mlan0 \
+                wifi_roam@mlan1 \
+                wifi_bgscan@mlan0 \
+                wifi_bgscan@mlan1 \
+                wifi_arping@eth0 \
+                wifi_arping@mlan0 \
+                wifi_arping@mlan1 \
+                wifi_ping@eth0 \
+                wifi_ping@mlan0 \
+                wifi_ping@mlan1
+>>>>>>> 31dd960 (7/14 t)
 #  systemctl stop rsyslog
   ;;
 

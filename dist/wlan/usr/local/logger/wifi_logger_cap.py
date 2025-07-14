@@ -30,7 +30,7 @@ def handle_sigterm(signum, frame):
 def cleanup():
     if parse_proc:
         parse_proc.terminate()
-    subprocess.run(["mlanutl", IFACE, "netmon", "0"])
+    subprocess.run(["mlanutl_silent", IFACE, "netmon", "0"])
 
 def get_mac_address(iface):
     path = f"/sys/class/net/{iface}/address"
@@ -138,9 +138,9 @@ def main():
     subprocess.run(["mkfifo", PCAP_FILE])
     mac_mlan = get_mac_address(IFACE)
     #logger.message('info', f"[{IFACE}] MAC: {mac_mlan}", _EXTRA_())
-    subprocess.run(["mlanutl", IFACE, "netmon", "0"])
+    subprocess.run(["mlanutl_silent", IFACE, "netmon", "0"])
     #time.sleep(0.5)
-    subprocess.run(["mlanutl", IFACE, "netmon", "1", "0x49"])
+    subprocess.run(["mlanutl_silent", IFACE, "netmon", "1", "0x49"])
     subprocess.run(["ifconfig", INTERFACE, "up"])
 
     cap_proc = start_capture()

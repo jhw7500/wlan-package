@@ -77,6 +77,7 @@ case "$2" in
   config)
     case "$3" in
       mac)
+        echo "python3 /usr/local/logger/wifi_config.py $1 mac_addr $4"
         python3 /usr/local/logger/wifi_config.py $1 mac_addr $4
         ;;
       txpwr)

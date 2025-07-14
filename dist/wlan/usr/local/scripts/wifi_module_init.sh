@@ -29,14 +29,23 @@ try_insmod() {
 #python3 /usr/local/logger/mac_get.py
 #python3 /usr/local/logger/mac_config.py mlan0 wifi_mod_para__.conf
 
-if ! try_insmod "/lib/modules/$KERNEL_VERSION/updates/mlan_6.12.ko" ""; then
+#if ! try_insmod "/lib/modules/$KERNEL_VERSION/updates/mlan_6.12.ko" ""; then
+if ! try_insmod "/opt/wlan/driver/mlan.ko" ""; then
     echo "mlan module load failed"  
     #exit 1
 fi
 
-python3 /usr/local/logger/wifi_mac_save.py mlan0 wifi_mod_para__.conf
+#python3 /usr/local/logger/wifi_mac_save.py mlan0 wifi_mod_para__.conf
 
-if ! try_insmod "/lib/modules/$KERNEL_VERSION/updates/moal_6.12.ko" "mod_para=nxp/wifi_mod_para__.conf mfg_mode=0"; then
+BASE_MAC0=$(cat /opt/wlan/mac/base0)
+BASE_MAC1=$(cat /opt/wlan/mac/base1)
+logger -p local0.info "[$tag:$LINENO] mlan0 base mac : $BASE_MAC0"
+logger -p local0.info "[$tag:$LINENO] mlan1 base mac : $BASE_MAC1"
+python3 /usr/local/logger/wifi_config.py mlan0 mac_addr $BASE_MAC0
+python3 /usr/local/logger/wifi_config.py mlan1 mac_addr $BASE_MAC1
+
+#if ! try_insmod "/lib/modules/$KERNEL_VERSION/updates/moal_6.12.ko" "mod_para=nxp/wifi_mod_para__.conf mfg_mode=0"; then
+if ! try_insmod "/opt/wlan/driver/moal.ko" "mod_para=nxp/wifi_mod_para__.conf"; then
     echo "moal module load failed"
     #exit 1
 fi
@@ -46,43 +55,43 @@ fi
 
 sleep 0.2
 logger -p local0.info "[$tag:$LINENO] [mlan0] txpwrlimit set"
-mlanutl mlan0 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_2g_cfg_set
-mlanutl mlan0 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub0
-mlanutl mlan0 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub1
-mlanutl mlan0 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub2
-mlanutl mlan0 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub3
+mlanutl mlan0 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_2g_cfg_set > /dev/null 2>&1
+mlanutl mlan0 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub0 > /dev/null 2>&1
+mlanutl mlan0 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub1 > /dev/null 2>&1
+mlanutl mlan0 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub2 > /dev/null 2>&1
+mlanutl mlan0 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub3 > /dev/null 2>&1
 
 sleep 0.2
 logger -p local0.info "[$tag:$LINENO] [mlan1] txpwrlimit set"
-mlanutl mlan1 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_2g_cfg_set
-mlanutl mlan1 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub0
-mlanutl mlan1 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub1
-mlanutl mlan1 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub2
-mlanutl mlan1 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub3
+mlanutl mlan1 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_2g_cfg_set > /dev/null 2>&1
+mlanutl mlan1 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub0 > /dev/null 2>&1
+mlanutl mlan1 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub1 > /dev/null 2>&1
+mlanutl mlan1 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub2 > /dev/null 2>&1
+mlanutl mlan1 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub3 > /dev/null 2>&1
 
 sleep 0.2
 logger -p local0.info "[$tag:$LINENO] [mlan0] macctrl 0x00010e13"
-mlanutl mlan0 macctrl 0x00010e13
+mlanutl mlan0 macctrl 0x00010e13 > /dev/null 2>&1
 logger -p local0.info "[$tag:$LINENO] [mlan1] macctrl 0x00010e13"
-mlanutl mlan1 macctrl 0x00010e13
+mlanutl mlan1 macctrl 0x00010e13 > /dev/null 2>&1
 
 sleep 0.2
 logger -p local0.info "[$tag:$LINENO] [mlan0] httxcfg 0x00000063"
-mlanutl mlan0 httxcfg 0x00000063
+mlanutl mlan0 httxcfg 0x00000063 > /dev/null 2>&1
 logger -p local0.info "[$tag:$LINENO] [mlan1] httxcfg 0x00000063"
-mlanutl mlan1 httxcfg 0x00000063
+mlanutl mlan1 httxcfg 0x00000063 > /dev/null 2>&1
 
 sleep 0.2
 logger -p local0.info "[$tag:$LINENO] [mlan0] htcapinfo 0x05c20000"
-mlanutl mlan0 htcapinfo 0x05c20000
+mlanutl mlan0 htcapinfo 0x05c20000 > /dev/null 2>&1
 logger -p local0.info "[$tag:$LINENO] [mlan1] htcapinfo 0x05c20000"
-mlanutl mlan1 htcapinfo 0x05c20000
+mlanutl mlan1 htcapinfo 0x05c20000 > /dev/null 2>&1
 
 sleep 0.2
 logger -p local0.info "[$tag:$LINENO] [mlan0] reassoctrl enable"
-mlanutl mlan0 reassoctrl 1
+mlanutl mlan0 reassoctrl 1 > /dev/null 2>&1
 logger -p local0.info "[$tag:$LINENO] [mlan1] reassoctrl enable"
-mlanutl mlan1 reassoctrl 1
+mlanutl mlan1 reassoctrl 1 > /dev/null 2>&1
 
 #mlanutl mlan0 auto_arp 1
 

@@ -366,6 +366,9 @@ def log_stats():
     global current_ap, last_log_time
     #global retry_count, tx_frag_count
     #logger.message("err", "test", _EXTRA_())
+    all_log_filename = f"{LOG_DIR}/stat.log"
+    ap_mac = None
+    current_ap = None
 
     while True:
         if os.path.exists(f"/sys/class/net/{IFACE}"):
@@ -378,6 +381,17 @@ def log_stats():
                 #time.sleep(5)
                 #continue
                 ap_mac = None
+                if current_ap != ap_mac:
+                    log_entry = (
+                        f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
+                        f"AP changed: {current_ap} -> {ap_mac}\n"
+                    )
+                    current_ap = ap_mac
+                    logger.message("info", f"[{IFACE}] AP change: {current_ap} -> {ap_mac}", _EXTRA_())
+                    with open(all_log_filename, "a") as all_log_file:
+                        all_log_file.write(log_entry)
+                time.sleep(1)
+                continue
             else:
                 ap_mac = wifi_info['ap_mac']
                 mac_address = ap_mac.replace(":", "_")
@@ -407,8 +421,8 @@ def log_stats():
                 f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
                 f"AP changed: {current_ap} -> {ap_mac}\n"
             )
-            current_ap = ap_mac
             logger.message("info", f"[{IFACE}] AP change: {current_ap} -> {ap_mac}", _EXTRA_())
+            current_ap = ap_mac
             #if wifi_info['essid'] != "Unknown":
             with open(log_filename, "a") as log_file:
                 log_file.write(log_entry)
