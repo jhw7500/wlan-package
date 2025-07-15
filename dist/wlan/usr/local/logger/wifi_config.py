@@ -42,7 +42,7 @@ def insert_mac_addr(conf_path, conf, val, target_block="PCIE9098_0"):
         with open(conf_path, "w") as f:
             f.writelines(updated_lines)
 
-        print(f"[INFO] {conf}={val} successfully written into block {target_block}.")
+        #print(f"[INFO] {conf}={val} successfully written into block {target_block}.")
         logger.message("info", f"[{IFACE}] {conf}={val} successfully written into block {target_block}", _EXTRA_())
 
     except Exception as e:

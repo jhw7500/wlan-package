@@ -101,9 +101,9 @@ if __name__ == "__main__":
         sys.exit(1)
 
     if IFACE == "mlan0" :
-        FILE_PATH = "/opt/wlan/mac/target0"
+        FILE_PATH = "/opt/wlan/mac/wired_client"
     elif IFACE == "mlan1" :
-        FILE_PATH = "/opt/wlan/mac/target1"
+        FILE_PATH = "/opt/wlan/mac/wired_client"
     else:
         logger.message("info", f"[{IFACE}] interface is wrong", _EXTRA_())
         sys.exit(1)

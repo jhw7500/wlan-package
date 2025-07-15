@@ -178,6 +178,11 @@ makeDirectory() {
   /usr/local/scripts/change_line.sh "#tmpfs                /var/volatile        tmpfs      defaults              0  0" "tmpfs                /var/volatile" /etc/fstab
   /usr/local/scripts/change_line.sh "ExecStart=/usr/sbin/wpa_supplicant -c/etc/wpa_supplicant/wpa_supplicant-%I.conf -i%I -d" "ExecStart=/usr/sbin/wpa_supplicant" /lib/systemd/system/wpa_supplicant@.service
   /usr/local/scripts/change_line.sh "Storage=persistent" "Storage=" /etc/systemd/journald.conf
+  /usr/local/scripts/change_line.sh "WatchdogDevice=/dev/watchdog" "WatchdogDevice=" /etc/systemd/system.conf
+  /usr/local/scripts/change_line.sh "DefaultTimeoutStartSec=30s" "DefaultTimeoutStartSec=" /etc/systemd/system.conf
+  /usr/local/scripts/change_line.sh "DefaultTimeoutStopSec=30s" "DefaultTimeoutStopSec=" /etc/systemd/system.conf
+  /usr/local/scripts/change_line.sh "DefaultTimeoutAbortSec=30s" "DefaultTimeoutAbortSec=" /etc/systemd/system.conf
+  /usr/local/scripts/change_line.sh "DefaultDeviceTimeoutSec=30s" "DefaultDeviceTimeoutSec=" /etc/systemd/system.conf
   /usr/local/scripts/add_line.sh "kernel.panic=5" /etc/sysctl.conf
   /usr/local/scripts/add_line.sh "kernel.panic_on_oops=1" /etc/sysctl.conf
   /usr/local/scripts/add_line.sh "SystemMaxUse=2000M" /etc/systemd/journald.conf
@@ -236,6 +241,7 @@ makeDirectory() {
   ln -s /usr/local/scripts/mlanutl_silent.sh /usr/localbin/mlanutl_silent
 
   rm /usr/local/bin/mfgbridge
+  rm -r /var/log/cantops/module
 
   PACKAGE_NAME="$DPKG_MAINTSCRIPT_PACKAGE"
   echo -e "\e[32m install $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME) finish\e[0m"

@@ -16,6 +16,7 @@
 /var/log/cantops/wpa/mlan1/wpa.log
 /var/log/cantops/ping.log
 /var/log/cantops/ui.log
+/var/log/cantops/dmesg/*.log
 {
         rotate 7
         daily

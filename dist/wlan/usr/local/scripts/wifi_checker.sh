@@ -13,7 +13,7 @@ ERR_CNT=0
 STATE=""
 PRE_STATE=""
 
-LOG_DIR="/var/log/cantops/module/dmesg"
+LOG_DIR="/var/log/cantops/dmesg"
 
 mkdir -p "$LOG_DIR"
 
@@ -63,9 +63,13 @@ while true; do
         logger -p local0.err "[$tag:$LINENO] [$IFACE] is not exist becase F/W dump...(ERR_CNT:$ERR_CNT)"
         if [ "$ERR_CNT" -gt "$LIMIT_CNT" ]; then
             logger -p local0.emerg "[$tag:$LINENO] [$IFACE] Reboot because $IFACE is cannot recovery(ERR_CNT:$ERR_CNT > LIMIT_CNT:$LIMIT_CNT)"
-            TIMESTAMP=$(date + "%Y%m%d_%H%M%S")
+            TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
             LOG_FILE="$LOG_DIR/${TIMESTAMP}.log"
-            dmesg |tail -1000 > "$LOF_FILE"
+            #logger -p local0.info "[$tag:$LINENO] [$IFACE] dmesg |tail -1000 > $LOG_FILE"
+            #dmesg |tail -1000 > "$LOG_FILE"
+            #LOG_FILE="$LOG_DIR/${TIMESTAMP}_jo.log"
+            logger -p local0.info "[$tag:$LINENO] [$IFACE] journalctl -k --since '1 min ago' > '$LOG_FILE'"
+            journalctl -k --since "1 min ago" > "$LOG_FILE"
             sync
             sleep 3
             reboot
@@ -119,14 +123,12 @@ while true; do
 END
     fi
 
-    if [ -d /sys/class/net/$IFACE ]; then
-        LINK_OUTPUT=$(iw "$IFACE" link 2>&1)
-        if echo "$LINK_OUTPUT" | grep -q "Connected to" && echo "$LINK_OUTPUT" | grep -q "command failed"; then
-            logger -p local0.info "[$tag:$LINENO] [$IFACE] Detected invalid link state. Triggering reconnect..."
-            wpa_cli -i "$IFACE" disconnect
-            sleep 1
-            wpa_cli -i "$IFACE" reconnect
-        fi
+    LINK_OUTPUT=$(iw "$IFACE" link 2>&1)
+    if echo "$LINK_OUTPUT" | grep -q "Connected to" && echo "$LINK_OUTPUT" | grep -q "command failed"; then
+        logger -p local0.info "[$tag:$LINENO] [$IFACE] Detected invalid link state. Triggering reconnect..."
+        wpa_cli -i "$IFACE" disconnect
+        sleep 1
+        wpa_cli -i "$IFACE" reconnect
     fi
 
     PRE_STATE=$STATE

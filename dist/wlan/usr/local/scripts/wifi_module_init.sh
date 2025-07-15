@@ -37,12 +37,21 @@ fi
 
 #python3 /usr/local/logger/wifi_mac_save.py mlan0 wifi_mod_para__.conf
 
-BASE_MAC0=$(cat /opt/wlan/mac/base0)
-BASE_MAC1=$(cat /opt/wlan/mac/base1)
-logger -p local0.info "[$tag:$LINENO] mlan0 base mac : $BASE_MAC0"
-logger -p local0.info "[$tag:$LINENO] mlan1 base mac : $BASE_MAC1"
-python3 /usr/local/logger/wifi_config.py mlan0 mac_addr $BASE_MAC0
-python3 /usr/local/logger/wifi_config.py mlan1 mac_addr $BASE_MAC1
+MLAN0_MAC=$(cat /opt/wlan/mac/base0)
+if [[ "$MLAN0_MAC" =~ ^([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$ ]]; then
+    logger -p local0.info "[$tag:$LINENO] [mlan0] vaild base mac address : $MLAN0_MAC"
+    python3 /usr/local/logger/wifi_config.py mlan0 mac_addr $MLAN0_MAC
+else
+    logger -p local0.err "[$tag:$LINENO] [mlan0] invalid mac address : $MLAN0_MAC"
+fi
+
+MLAN1_MAC=$(cat /opt/wlan/mac/base1)
+if [[ "$MLAN1_MAC" =~ ^([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$ ]]; then
+    logger -p local0.info "[$tag:$LINENO] [mlan1] vaild base mac address : $MLAN1_MAC"
+    python3 /usr/local/logger/wifi_config.py mlan1 mac_addr $MLAN1_MAC
+else
+    logger -p local0.err "[$tag:$LINENO] [mlan1] invalid mac address : $MLAN1_MAC"
+fi
 
 #if ! try_insmod "/lib/modules/$KERNEL_VERSION/updates/moal_6.12.ko" "mod_para=nxp/wifi_mod_para__.conf mfg_mode=0"; then
 if ! try_insmod "/opt/wlan/driver/moal.ko" "mod_para=nxp/wifi_mod_para__.conf"; then
