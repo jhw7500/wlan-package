@@ -2,7 +2,7 @@
 tag=$(basename "$0")
 IFACE=$1
 ERR_CNT=0
-ERR_LIMIT=4
+ERR_LIMIT=3
 INIT_CNT=0
 INIT_LIMIT=2
 GATEWAY=""
