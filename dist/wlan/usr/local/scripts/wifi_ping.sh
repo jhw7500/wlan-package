@@ -9,6 +9,7 @@ GATEWAY=""
 GATEWAY2=""
 RET=0
 OUTPUT=""
+INTERVAL=5
 
 get_state() {
     wpa_cli -i "$IFACE" status | grep "^wpa_state=" | cut -d= -f2
@@ -115,7 +116,7 @@ END
         OUTPUT=$($CMD 2>&1)
         RET=$?
         if [ $RET -eq 0 ]; then
-            logger -p local1.info "[$tag:$LINENO] [$IFACE] $CMD success"
+            logger -p local1.info "[$tag:$LINENO] [$IFACE] success($CMD)"
         fi
     fi
 
@@ -128,7 +129,7 @@ END
         OUTPUT=$($CMD 2>&1)
         RET=$?
         if [ $RET -eq 0 ]; then
-            logger -p local1.info "[$tag:$LINENO] [$IFACE] $CMD success"
+            logger -p local1.info "[$tag:$LINENO] [$IFACE] success($CMD)"
         fi
     fi
 
@@ -137,16 +138,16 @@ END
 
     #if echo "$OUTPUT" | grep -q "Received 0"; then
     if [ $RET -eq 0 ]; then
-        #logger -p local1.info "[$tag:$LINENO] [$IFACE] $CMD success"
+        #logger -p local1.info "[$tag:$LINENO] [$IFACE] success($CMD)"
         ERR_CNT=0
     else
         #logger -p local1.err "[$tag:$LINENO] [$IFACE] arping to $IP failed: no reply"
         if ping -I "$IFACE" -c 1 -W 2 "$GATEWAY" > /dev/null 2>&1; then
-            logger -p local1.info "[$tag:$LINENO] [$IFACE] arping to $GATEWAY failed but ping $GATEWAY success"
+            logger -p local1.info "[$tag:$LINENO] [$IFACE] arping to $GATEWAY failed but success(ping -I $IFACE -c 1 -W 2 $GATEWAY)"
             ERR_CNT=0
         else
             if ping -I "$IFACE" -c 1 -W 2 "$GATEWAY2" > /dev/null 2>&1; then
-                logger -p local1.info "[$tag:$LINENO] [$IFACE] arping to $GATEWAY2 failed but ping $GATEWAY2 success"
+                logger -p local1.info "[$tag:$LINENO] [$IFACE] arping to $GATEWAY2 failed but success(ping -I $IFACE -c 1 -W 2 $GATEWAY2)"
                 ERR_CNT=0
             else
                 ((ERR_CNT++))
@@ -154,9 +155,9 @@ END
                 if [ "$ERR_CNT" -gt "$ERR_LIMIT" ]; then
                     ((INIT_CNT++))
                     if [ "$INIT_CNT" -gt "$INIT_LIMIT" ]; then
-                        logger -p local0.err "[$tag:$LINENO] [$IFACE] systemd-networkd reset because INIT_CNT($INIT_CNT) over INIT_LIMIT($INIT_LIMIT)"
-                        logger -p local1.err "[$tag:$LINENO] [$IFACE] systemd-networkd reset because INIT_CNT($INIT_CNT) over INIT_LIMIT($INIT_LIMIT)"
-                        systemctl restart systemd-networkd
+                        #logger -p local0.err "[$tag:$LINENO] [$IFACE] systemd-networkd reset because INIT_CNT($INIT_CNT) over INIT_LIMIT($INIT_LIMIT)"
+                        #logger -p local1.err "[$tag:$LINENO] [$IFACE] systemd-networkd reset because INIT_CNT($INIT_CNT) over INIT_LIMIT($INIT_LIMIT)"
+                        #systemctl restart systemd-networkd
                         INIT_CNT=0
                         sleep 1
                     fi
@@ -172,6 +173,6 @@ END
     #logger -p local1.info "[$tag:$LINENO] [$IFACE] ret : $RET"
 
     #arping -c 1 -w 2 -I $IFACE $GATEWAY
-    sleep 3
+    sleep $INTERVAL
 
 done

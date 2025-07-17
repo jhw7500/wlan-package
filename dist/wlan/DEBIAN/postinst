@@ -194,13 +194,14 @@ makeDirectory() {
   cp /opt/wlan/config/rsyslog.conf /etc/
   cp /opt/wlan/config/smb.conf /etc/samba/
   #cp /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/
-  cp /opt/wlan/config/wifi_mod_para.conf /lib/firmware/nxp/
+  cp /opt/wlan/config/wifi_mod_para__.conf /lib/firmware/nxp/
+  cp /opt/wlan/config/crontab /etc/
   
   mkdir -p /etc/wpa_supplicant
 
   #if [ ! -f /lib/firmware/nxp/wifi_mod_para__.conf ]; then
-    logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /lib/firmware/nxp/wifi_mod_para__.conf"
-    cp /opt/wlan/config/wifi_mod_para__.conf /lib/firmware/nxp/wifi_mod_para__.conf
+  #  logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /lib/firmware/nxp/wifi_mod_para__.conf"
+  #  cp /opt/wlan/config/wifi_mod_para__.conf /lib/firmware/nxp/wifi_mod_para__.conf
   #fi
 
   if [ ! -f /etc/wpa_supplicant/wpa_supplicant-mlan0.conf ]; then

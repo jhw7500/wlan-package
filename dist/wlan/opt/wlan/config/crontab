@@ -13,6 +13,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 # 42  7     * * 7    root        cd / && run-parts /etc/cron.weekly
 # 55  7     1 * *    root        cd / && run-parts /etc/cron.monthly
 
-00 *      * * *    root        systemctl restart wifi_capture
+#00 *      * * *    root        systemctl restart wifi_capture
 #00 *      * * *    root        logrotate /etc/logrotate.d/logrotate.rsyslog
 #00 *      * * *    root        python3 /usr/local/logger/wifi_logger_clean.py
+* * *     * * *    root        hwclock -w

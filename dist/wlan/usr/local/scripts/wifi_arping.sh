@@ -5,14 +5,14 @@ tag=$(basename "$0")
 IP_LIST=""
 IP_LIST_NEW=""
 TMP_LIST=()
-INIT_LIMIT=1
+INIT_LIMIT=10
 ERR_CNT=0
-ERR_LIMIT=2
+ERR_LIMIT=1
 INIT_CNT=0
 REBOOT_CNT=0
 REBOOT_LIMIT=2
 REBOOT_FLAG=0
-INTERVAL=3
+INTERVAL=5
 BAD_IP_CNT=0
 BAD_IP_CNT_LIMIT=2
 GATEWAY=""
@@ -238,11 +238,10 @@ END
         if [[ "$ERR_CNT" -gt "$ERR_LIMIT" ]]; then
             ((INIT_CNT++))
             logger -p local1.err "[$tag:$LINENO] [$IFACE] arping err($ERR_CNT) over limit($ERR_LIMIT), init err($INIT_CNT)"
-            logger -p local1.err "[$tag:$LINENO] [$IFACE] route cache and arp table flush"
+            #logger -p local1.err "[$tag:$LINENO] [$IFACE] route cache and arp table flush"
             #ip neigh flush dev $IFACE
             #ip route flush cache
-            ip -s neigh flush dev $IFACE
-            ERR_CNT=0
+            #ip -s neigh flush dev $IFACE
             #if [[ "$IFACE" == "eth0" ]]; then
             if [[ "$INIT_CNT" -gt "$INIT_LIMIT" ]]; then
                 ((REBOOT_CNT++))
@@ -251,9 +250,9 @@ END
                 #ACTIVE_BRIDGE=$(systemctl list-units --type=service --state=running | grep -oE 'wifi_bridge@[^ ]+')
                 IFACE_BRIDGE=$(systemctl list-units --type=service --state=running | grep -oP 'wifi_bridge@\K[^\.]+')
                 if [ "$REBOOT_CNT" -gt "$REBOOT_LIMIT" ]; then
-                    logger -p local0.err "[$tag:$LINENO] [$IFACE] reset network because reset err($REBOOT_CNT) over limit($REBOOT_LIMIT)"
-                    logger -p local1.err "[$tag:$LINENO] [$IFACE] reset network because reset err($REBOOT_CNT) over limit($REBOOT_LIMIT)"
-                    systemctl restart systemd-networkd
+                    #logger -p local0.err "[$tag:$LINENO] [$IFACE] reset network because reset err($REBOOT_CNT) over limit($REBOOT_LIMIT)"
+                    #logger -p local1.err "[$tag:$LINENO] [$IFACE] reset network because reset err($REBOOT_CNT) over limit($REBOOT_LIMIT)"
+                    #systemctl restart systemd-networkd
                     REBOOT_CNT=0
                     sleep 1
                 fi
@@ -261,13 +260,14 @@ END
                 if [[ -n "$IFACE_BRIDGE" ]]; then
                     logger -p local0.err "[$tag:$LINENO] [$IFACE] restarting wifi_bridge@$IFACE_BRIDGE"
                     logger -p local1.err "[$tag:$LINENO] [$IFACE] restarting wifi_bridge@$IFACE_BRIDGE"
-                    #systemctl restart "$ACTIVE_BRIDGE"
                     systemctl restart wifi_bridge@$IFACE_BRIDGE
                 else
                     logger -p local0.warn "[$tag:$LINENO] [$IFACE] no active wifi_bridge@ service found"
                     logger -p local1.warn "[$tag:$LINENO] [$IFACE] no active wifi_bridge@ service found"                    
                 fi
             fi
+            /usr/local/scripts/arping_sweep.sh $IFACE
+            ERR_CNT=0
         fi
         sleep $INTERVAL
         continue
@@ -322,7 +322,7 @@ END
         if echo "$OUTPUT" | grep -q "Received 0"; then
             #logger -p local1.err "[$tag:$LINENO] [$IFACE] arping to $IP failed: no reply"
             if ping -I "$IFACE" -c 1 -W 2 "$IP" > /dev/null 2>&1; then
-                logger -p local1.info "[$tag:$LINENO] [$IFACE] arping to $IP failed but ping $IP success(ping -I $IFACE -c 1 -W 2 $IP)"
+                logger -p local1.info "[$tag:$LINENO] [$IFACE] ($CMD) failed but success(ping -I $IFACE -c 1 -W 2 $IP)"
                 #ERR_CNT_MAP["$IP"]=0
                 #INIT_CNT_MAP["$IP"]=0
                 #REBOOT_CNT_MAP["$IP"]=0
@@ -332,7 +332,7 @@ END
             else
                 if [ ! -z "$GATEWAY" ]; then
                     if ping -I "$IFACE" -c 1 -W 2 "$GATEWAY" > /dev/null 2>&1; then
-                        logger -p local1.info "[$tag:$LINENO] [$IFACE] arping, ping to $IP failed but ping Gateway($GATEWAY) success(ping -I $IFACE -c 1 -W 2 $GATEWAY)"
+                        logger -p local1.info "[$tag:$LINENO] [$IFACE] arping, ping to $IP failed but ping success(ping -I $IFACE -c 1 -W 2 $GATEWAY)"
                         ping -I $IFACE -c 1 -w 2 $GATEWAY -q
                         reset_all_counters
                         sleep $INTERVAL
@@ -340,7 +340,7 @@ END
                     else
                         if [ ! -z "$GATEWAY2" ]; then
                             if ping -I "$IFACE" -c 1 -W 2 "$GATEWAY2" > /dev/null 2>&1; then
-                                logger -p local1.info "[$tag:$LINENO] [$IFACE] arping, ping to $IP failed but ping FILE Gateway($GATEWAY2) success(ping -I $IFACE -c 1 -W2 $GATEWAY2)"
+                                logger -p local1.info "[$tag:$LINENO] [$IFACE] arping, ping to $IP failed but success(ping -I $IFACE -c 1 -W2 $GATEWAY2)"
                                 ping -I $IFACE -c 1 -w 2 $GATEWAY2 -q
                                 reset_all_counters
                                 sleep $INTERVAL

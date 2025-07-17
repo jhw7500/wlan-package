@@ -62,7 +62,7 @@ fi
 #try_insmod "/lib/modules/$KERNEL_VERSION/updates/moal_6.12.ko" "fw_name=nxp/pcieuart9098_combo.bin mfg_mode=1"
 #try_insmod "/lib/modules/$KERNEL_VERSION/kernel/drivers/net/nlmon.ko"
 
-sleep 0.2
+sleep 0.5
 logger -p local0.info "[$tag:$LINENO] [mlan0] txpwrlimit set"
 mlanutl mlan0 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_2g_cfg_set > /dev/null 2>&1
 mlanutl mlan0 hostcmd /lib/firmware/nxp/config/txpwrlimit_cfg_9098.conf txpwrlimit_5g_cfg_set_sub0 > /dev/null 2>&1
@@ -134,7 +134,7 @@ ifconfig mlan1 down
 #ip link add nlmon0 type nlmon
 #ip link set nlmon0 up
 
-sleep 0.2
+sleep 0.5
 #python3 /usr/local/logger/getmac.py
 logger -p local0.info "[$tag:$LINENO] [mlan0] wpa_supplicant start"
 systemctl start wpa_supplicant@mlan0
