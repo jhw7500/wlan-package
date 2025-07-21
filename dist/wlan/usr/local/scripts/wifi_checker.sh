@@ -57,8 +57,7 @@ sleep 5
 
 while true; do
     #sleep 3
-
-    if [ ! -d /sys/class/net/$IFACE ]; then
+    if [[ "$IFACE" ==  "mlan0" && ! -d /sys/class/net/$IFACE ]]; then
         ((ERR_CNT++))
         logger -p local0.err "[$tag:$LINENO] [$IFACE] is not exist becase F/W dump...(ERR_CNT:$ERR_CNT)"
         if [ "$ERR_CNT" -gt "$LIMIT_CNT" ]; then
@@ -68,7 +67,7 @@ while true; do
             #logger -p local0.info "[$tag:$LINENO] [$IFACE] dmesg |tail -1000 > $LOG_FILE"
             #dmesg |tail -1000 > "$LOG_FILE"
             #LOG_FILE="$LOG_DIR/${TIMESTAMP}_jo.log"
-            logger -p local0.info "[$tag:$LINENO] [$IFACE] journalctl -k --since '1 min ago' > '$LOG_FILE'"
+            logger -p local0.info "[$tag:$LINENO] [$IFACE] saving kernel logs to '$LOG_FILE'"
             journalctl -k --since "1 min ago" > "$LOG_FILE"
             sync
             sleep 3
@@ -85,6 +84,7 @@ while true; do
         #log "wpa_supplicant@${IFACE}.service not active — waiting..."
         UNSTABLE_START=0
         #sleep $CHECK_INTERVAL
+        sleep 3
         continue
     fi
 
@@ -113,15 +113,15 @@ while true; do
         UNSTABLE_START=0
     fi
 #END
-
+    PRE_STATE=$STATE
     LINK_OUTPUT=$(iw "$IFACE" link 2>&1)
     if echo "$LINK_OUTPUT" | grep -q "Connected to" && echo "$LINK_OUTPUT" | grep -q "command failed"; then
         logger -p local0.info "[$tag:$LINENO] [$IFACE] Detected invalid link state. Triggering reconnect..."
         wpa_cli -i "$IFACE" disconnect
         sleep 1
         wpa_cli -i "$IFACE" reconnect
+        sleep 2
     fi
 
-    PRE_STATE=$STATE
     sleep 1
 done

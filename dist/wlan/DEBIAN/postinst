@@ -11,6 +11,25 @@ KERNEL_VERSION=$(uname -r)
 #hostname=$(python3 /opt/cis/bin/getconfval.py hostname)
 hostname=Cantops
 
+disable_services_if_enabled() {
+    local services=("$@")
+    for svc in "${services[@]}"; do
+        local svc_clean="${svc%.service}"
+        echo "[INFO] Checking service: $svc_clean"
+
+        if command -v systemctl >/dev/null 2>&1; then
+            if systemctl is-enabled --quiet "$svc_clean"; then
+                echo "[INFO] Disabling $svc_clean (via systemctl)"
+                systemctl disable "$svc_clean"
+            else
+                echo "[INFO] $svc_clean is already disabled"
+            fi
+        else
+            echo "[WARN] systemctl not available, skipping disable for $svc_clean"
+        fi
+    done
+}
+
 case "$1" in
 configure)
   echo "postinst configure"
@@ -104,7 +123,6 @@ customctl() {
   customctl avahi-daemon.socket disabled
   customctl avahi-daemon disabled
   customctl containerd disabled
-  customctl wifi_capture disabled
   #customctl samba disabled
   #customctl hciattach disabled
 
@@ -241,7 +259,7 @@ makeDirectory() {
   ln -s /usr/local/scripts/logctl.sh /usr/local/bin/logctl
   ln -s /usr/local/scripts/mlanutl_silent.sh /usr/local/bin/mlanutl_silent
 
-  rm /usr/local/bin/mfgbridge
+  #rm /usr/local/bin/mfgbridge
 
   PACKAGE_NAME="$DPKG_MAINTSCRIPT_PACKAGE"
   echo -e "\e[32m install $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME) finish\e[0m"
