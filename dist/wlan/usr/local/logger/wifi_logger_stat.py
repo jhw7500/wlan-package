@@ -374,7 +374,7 @@ def log_stats():
         if os.path.exists(f"/sys/class/net/{IFACE}"):
             #wifi_info = get_wifi_info()
             #wifi_info = get_station_dump()
-            wifi_info = get_station_info(f"/var/log/cantops/link/{IFACE}/link.json")
+            wifi_info = get_station_info(f"/var/log/cantops/json/{IFACE}/link.json")
             if not wifi_info:
                 #print("not wifi info")
                 #logger.warning("No WiFi info available — possibly disconnected or station dump empty.")

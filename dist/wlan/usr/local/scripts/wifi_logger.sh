@@ -5,10 +5,10 @@ key=LOG
 logger -p local0.info "[$tag:$LINENO] wifi logger start"
 
 #sleep 2
-echo '{}' > /var/log/cantops/scan/mlan0/beacon.json
-echo '{}' > /var/log/cantops/scan/mlan1/beacon.json
-echo '{}' > /var/log/cantops/link/mlan0/link.json
-echo '{}' > /var/log/cantops/link/mlan1/link.json
+#echo '{}' > /var/log/cantops/scan/mlan0/beacon.json
+#echo '{}' > /var/log/cantops/scan/mlan1/beacon.json
+#echo '{}' > /var/log/cantops/link/mlan0/link.json
+#echo '{}' > /var/log/cantops/link/mlan1/link.json
 
 #/bin/python3 /usr/local/logger/wifi_module_check.py
 /usr/local/scripts/eth_mac_get.sh

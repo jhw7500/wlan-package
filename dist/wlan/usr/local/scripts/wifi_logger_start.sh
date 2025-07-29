@@ -7,7 +7,7 @@ IFACE=$1
 logger -p local0.notice "[$tag:$LINENO] [$IFACE] logger start"
 
 if [[ "$IFACE" == "eth0" ]]; then
-    echo "wifi_logger_scan.py $IFACE" > /dev/kmsg
+    echo "wifi_logger_link.py $IFACE" > /dev/kmsg
     /bin/python3 /usr/local/logger/wifi_logger_link.py $IFACE &
     PID=$!
     logger -p local0.info "[$tag:$LINENO] [$IFACE] wifi_logger_link.py($PID)"

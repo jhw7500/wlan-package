@@ -2,6 +2,7 @@
 
 tag=$(basename "$0")
 KERNEL_VERSION=$(uname -r)
+JSON_FILE="/usr/local/etc/config.json"
 #LOGFILE="/var/log/cantops/module.log"
 #sleep 0.5
 
@@ -30,7 +31,7 @@ try_insmod() {
 #python3 /usr/local/logger/mac_config.py mlan0 wifi_mod_para__.conf
 
 #if ! try_insmod "/lib/modules/$KERNEL_VERSION/updates/mlan_6.12.ko" ""; then
-if ! try_insmod "/opt/wlan/driver/mlan.ko" ""; then
+if ! try_insmod "/opt/wlan/driver/debug/mlan.ko" ""; then
     echo "mlan module load failed"  
     #exit 1
 fi
@@ -53,7 +54,7 @@ else
     logger -p local0.err "[$tag:$LINENO] [mlan1] invalid mac address : $MLAN1_MAC"
 fi
 
-#if ! try_insmod "/opt/wlan/driver/moal.ko" "fw_name=nxp/pcieuart9098_combo.bin mfg_mode=1"; then
+#if ! try_insmod "/opt/wlan/driver/debug/moal.ko" "fw_name=nxp/pcieuart9098_combo.bin mfg_mode=1"; then
 if ! try_insmod "/opt/wlan/driver/moal.ko" "mod_para=nxp/wifi_mod_para__.conf"; then
     echo "moal module load failed"
     #exit 1
@@ -125,11 +126,32 @@ logger -p local0.info "[$tag:$LINENO] [mlan0] link up"
 ip link set mlan0 up
 ifconfig mlan0 up
 
-sleep 0.2
-logger -p local0.info "[$tag:$LINENO] [mlan1] link down" 
-ip link set mlan1 down
-ifconfig mlan1 down
+#sleep 0.2
+#logger -p local0.info "[$tag:$LINENO] [mlan1] link down" 
+#ip link set mlan1 down
+#ifconfig mlan1 down
 
+FREQ=$(jq -r '.mlan0.Frequency' "$JSON_FILE")
+if [ "$FREQ" = "5GHz" ]; then
+    mlanutl mlan0 bandcfg 0x254
+elif [ "$FREQ" = "2.4GHz" ]; then
+    mlanutl mlan0 bandcfg 0x10b
+elif [ "$FREQ" = "auto" ]; then
+    mlanutl mlan0 bandcfg 0x35f
+else
+    mlanutl mlan0 bandcfg 0x00
+fi
+
+FREQ=$(jq -r '.mlan1.Frequency' "$JSON_FILE")
+if [ "$FREQ" = "5GHz" ]; then
+    mlanutl mlan1 bandcfg 0x54
+elif [ "$FREQ" = "2.4GHz" ]; then
+    mlanutl mlan1 bandcfg 0x0b
+elif [ "$FREQ" = "auto" ]; then
+    mlanutl mlan1 bandcfg 0x5f
+else
+    mlanutl mlan1 bandcfg 0x00
+fi
 
 #ip link add nlmon0 type nlmon
 #ip link set nlmon0 up

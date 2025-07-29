@@ -175,7 +175,7 @@ END
         #IFACE_BRIDGE=$(systemctl list-units --type=service --state=running | grep -oP 'wifi_bridge@\K[^\.]+')
         #SUBNET_CIDR=$(ip -o -f inet addr show "$IFACE_BRIDGE" | awk '{print $4}')
         #IP_LIST=$(ip neigh show dev "$IFACE_BRIDGE" | grep 'lladdr' | awk '{print $1}')
-        LINK_STATE=$(jq -r '.eth_stats.phy.link' "/var/log/cantops/link/eth0/link.json")
+        LINK_STATE=$(jq -r '.eth_stats.phy.link' "/var/log/cantops/json/eth0/link.json")
         if [[ "$LINK_STATE" != "up" ]]; then
             logger -p local1.info "[$tag:$LINENO] [$IFACE] link is down"
             reset_global_counters

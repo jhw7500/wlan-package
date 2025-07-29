@@ -141,7 +141,7 @@ customctl() {
   customctl wifi_capture@mlan0 disabled
 
   customctl wifi_logger@mlan1 disabled
-  customctl wifi_checker@mlan1 disabled
+  customctl wifi_checker@mlan1 enabled
   customctl wifi_ping@mlan1 disabled
   customctl wifi_arp@mlan1 disabled
   customctl wifi_arping@mlan1 disabled
@@ -196,6 +196,8 @@ makeDirectory() {
   /usr/local/scripts/change_line.sh "#tmpfs                /var/volatile        tmpfs      defaults              0  0" "tmpfs                /var/volatile" /etc/fstab
   /usr/local/scripts/change_line.sh "ExecStart=/usr/sbin/wpa_supplicant -c/etc/wpa_supplicant/wpa_supplicant-%I.conf -i%I -d" "ExecStart=/usr/sbin/wpa_supplicant" /lib/systemd/system/wpa_supplicant@.service
   /usr/local/scripts/change_line.sh "Storage=persistent" "Storage=" /etc/systemd/journald.conf
+  /usr/local/scripts/change_line.sh "SyncIntervalSec=1m" "SyncIntervalSec=" /etc/systemd/journald.conf
+  /usr/local/scripts/change_line.sh "RuntimeMaxUse=64M" "RuntimeMaxUse=" /etc/systemd/journald.conf
   /usr/local/scripts/change_line.sh "WatchdogDevice=/dev/watchdog" "WatchdogDevice=" /etc/systemd/system.conf
   /usr/local/scripts/change_line.sh "DefaultTimeoutStartSec=30s" "DefaultTimeoutStartSec=" /etc/systemd/system.conf
   /usr/local/scripts/change_line.sh "DefaultTimeoutStopSec=30s" "DefaultTimeoutStopSec=" /etc/systemd/system.conf
@@ -205,7 +207,8 @@ makeDirectory() {
   /usr/local/scripts/add_line.sh "kernel.panic_on_oops=1" /etc/sysctl.conf
   /usr/local/scripts/add_line.sh "SystemMaxUse=2000M" /etc/systemd/journald.conf
   /usr/local/scripts/add_line.sh "SystemKeepFree=500M" /etc/systemd/journald.conf
-  /usr/local/scripts/add_line.sh "watchdog-timeout=15" /etc/watchdog.conf
+  /usr/local/scripts/add_line.sh "watchdog-timeout=30" /etc/watchdog.conf
+  /usr/local/scripts/change_line.sh "log-dir=/var/log/cantops" "log-dir" /etc/watchdog.conf
 
   cp /opt/wlan/config/logrotate.d/logrotate.rsyslog /etc/logrotate.d/
   cp /opt/wlan/config/rc.local /etc/

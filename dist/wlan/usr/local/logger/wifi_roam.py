@@ -12,7 +12,7 @@ from sUTILS import Logger, _EXTRA_
 
 VERSION = "0.0"
 IFACE = "mlan0"
-LINK_LOG_FILE = f"/var/log/cantops/link/{IFACE}/link.json"
+LINK_LOG_FILE = f"/var/log/cantops/json/{IFACE}/link.json"
 SCAN_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/ap.log"
 FREQ_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/freq.log"
 WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
@@ -492,7 +492,7 @@ if __name__ == "__main__":
         logger.message("emerg", f"[{IFACE}] interface is invalid", _EXTRA_())
         sys.exit(1)
 
-    LINK_LOG_FILE = f"/var/log/cantops/link/{IFACE}/link.json"
+    LINK_LOG_FILE = f"/var/log/cantops/json/{IFACE}/link.json"
     SCAN_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/ap.log"
     FREQ_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/freq.log"
     WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-{IFACE}.conf"

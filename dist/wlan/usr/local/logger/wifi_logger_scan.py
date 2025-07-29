@@ -12,6 +12,9 @@ from datetime import datetime
 from sUTILS import Logger, _EXTRA_
 
 LOG_DIR = "/var/log/cantops/scan"
+JSON_DIR = "var/log/cantops/json"
+LINK_PATH = "/var/log/cantops/json"
+TARGET_PATH = "/dev/shm/json"
 WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
 LOG_INTERVAL = 30
 STALE_THRESHOLD_SEC = 600  #10min
@@ -467,7 +470,7 @@ def parse_scan_output(scan_output):
     return result
 
 def load_existing():
-    filename = os.path.join(LOG_DIR, "beacon.json")
+    filename = os.path.join(JSON_DIR, "beacon.json")
     
     if os.path.exists(filename):
         try:
@@ -496,7 +499,7 @@ def save_db(db):
 
     raw_json = json.dumps(db, indent=2)
     compacted_json = compact_lists(raw_json)
-    filename = os.path.join(LOG_DIR, "beacon.json")
+    filename = os.path.join(JSON_DIR, "beacon.json")
     with open(filename, "w") as f:
         f.write(compacted_json)
 
@@ -603,8 +606,9 @@ if __name__ == "__main__":
         IFACE = sys.argv[1]
 
     LOG_DIR = f"/var/log/cantops/scan/{IFACE}"
+    JSON_DIR = f"/var/log/cantops/json/{IFACE}"
     WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-{IFACE}.conf"    
-    logger.message("info", f"[{IFACE}] version : {VERSION}, log_file : {LOG_DIR}/ap.log, {LOG_DIR}/freq.log, {LOG_DIR}/beacon.json", _EXTRA_())
+    logger.message("info", f"[{IFACE}] version : {VERSION}, log_file : {LOG_DIR}/ap.log, {LOG_DIR}/freq.log, {JSON_DIR}/beacon.json", _EXTRA_())
     
     if IFACE != "mlan0" and IFACE != "mlan1" :
         logger.message("emerg", f"[{IFACE}] is not vaild interface", _EXTRA_())
@@ -613,5 +617,16 @@ if __name__ == "__main__":
     # 로그 디렉토리 생성
     if not os.path.exists(LOG_DIR):
         os.makedirs(LOG_DIR, exist_ok=True)
-        
+    
+    if not os.path.exists(TARGET_PATH):
+        os.makedirs(TARGET_PATH, exist_ok=True)
+
+    if not os.path.islink(LINK_PATH):
+        if os.path.lexists(LINK_PATH):
+            raise RuntimeError(f"{LINK_PATH} exists and is not a symlink. Cannot safely overwrite.")
+        os.symlink(TARGET_PATH, LINK_PATH)
+
+    if not os.path.exists(JSON_DIR):
+        os.makedirs(JSON_DIR, exist_ok=True)
+  
     main_loop()

@@ -12,7 +12,9 @@ from sUTILS import Logger, _EXTRA_
 
 VERSION = "0.0"
 IFACE = ""
-LOG_DIR = "/var/log/cantops/link"
+LOG_DIR = "/var/log/cantops/json"
+LINK_PATH = "/var/log/cantops/json"
+TARGET_PATH = "/dev/shm/json"
 MWLAN_LOG_PATH = "/proc/mwlan/adapter0/mlan0/log"
 
 def handle_sigterm(signum, frame):
@@ -325,7 +327,7 @@ if __name__ == "__main__":
     else:
         IFACE = sys.argv[1]
     
-    LOG_DIR = f"/var/log/cantops/link/{IFACE}"
+    LOG_DIR = f"/var/log/cantops/json/{IFACE}"
     logger.message("info", f"[{IFACE}] version : {VERSION}, log_file : {LOG_DIR}/link.json", _EXTRA_())
 
     if IFACE == "mlan0" :
@@ -337,6 +339,14 @@ if __name__ == "__main__":
     else:
         logger.message("emerg", f"[{IFACE}] is not vaild interface", _EXTRA_())
         sys.exit(1)
+
+    if not os.path.exists(TARGET_PATH):
+        os.makedirs(TARGET_PATH, exist_ok=True)
+
+    if not os.path.islink(LINK_PATH):
+        if os.path.lexists(LINK_PATH):
+            raise RuntimeError(f"{LINK_PATH} exists and is not a symlink. Cannot safely overwrite.")
+        os.symlink(TARGET_PATH, LINK_PATH)
         
     if not os.path.exists(LOG_DIR):
         os.makedirs(LOG_DIR, exist_ok=True)
