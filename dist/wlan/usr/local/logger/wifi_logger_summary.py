@@ -8,12 +8,12 @@ from sUTILS import Logger, _EXTRA_
 from datetime import datetime
 
 VERSION = "0.0"
-MLAN0_JSON = "/var/log/cantops/link/mlan0/link.json"
-MLAN1_JSON = "/var/log/cantops/link/mlan1/link.json"
+MLAN0_JSON = "/var/log/cantops/json/mlan0/link.json"
+MLAN1_JSON = "/var/log/cantops/json/mlan1/link.json"
 LOG_FILE = "/var/log/cantops/summary/summary.log"
 
 def handle_sigterm(signum, frame):
-    logger.message('crit', f"{IFACE} SIGTERM {signum} received! Cleaning up...", _EXTRA_())
+    logger.message('crit', f"SIGTERM {signum} received! Cleaning up...", _EXTRA_())
     cleanup()
     sys.exit(0)
 

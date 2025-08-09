@@ -256,7 +256,7 @@ END
                     REBOOT_CNT=0
                     sleep 1
                 fi
-
+:<<END
                 if [[ -n "$IFACE_BRIDGE" ]]; then
                     logger -p local0.err "[$tag:$LINENO] [$IFACE] restarting wifi_bridge@$IFACE_BRIDGE"
                     logger -p local1.err "[$tag:$LINENO] [$IFACE] restarting wifi_bridge@$IFACE_BRIDGE"
@@ -265,6 +265,7 @@ END
                     logger -p local0.warn "[$tag:$LINENO] [$IFACE] no active wifi_bridge@ service found"
                     logger -p local1.warn "[$tag:$LINENO] [$IFACE] no active wifi_bridge@ service found"                    
                 fi
+END
             fi
             /usr/local/scripts/arping_sweep.sh $IFACE
             ERR_CNT=0
@@ -327,7 +328,8 @@ END
                 #INIT_CNT_MAP["$IP"]=0
                 #REBOOT_CNT_MAP["$IP"]=0
                 reset_all_counters
-                sleep $INTERVAL
+                #sleep $INTERVAL
+                sleep 2
                 continue
             else
                 if [ ! -z "$GATEWAY" ]; then
@@ -335,7 +337,8 @@ END
                         logger -p local1.info "[$tag:$LINENO] [$IFACE] arping, ping to $IP failed but ping success(ping -I $IFACE -c 1 -W 2 $GATEWAY)"
                         ping -I $IFACE -c 1 -w 2 $GATEWAY -q
                         reset_all_counters
-                        sleep $INTERVAL
+                        #sleep $INTERVAL
+                        sleep 2
                         continue
                     else
                         if [ ! -z "$GATEWAY2" ]; then
@@ -343,7 +346,8 @@ END
                                 logger -p local1.info "[$tag:$LINENO] [$IFACE] arping, ping to $IP failed but success(ping -I $IFACE -c 1 -W2 $GATEWAY2)"
                                 ping -I $IFACE -c 1 -w 2 $GATEWAY2 -q
                                 reset_all_counters
-                                sleep $INTERVAL
+                                #sleep $INTERVAL
+                                sleep 2
                                 continue
                             fi
                         fi

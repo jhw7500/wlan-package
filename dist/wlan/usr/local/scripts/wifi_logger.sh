@@ -13,7 +13,7 @@ logger -p local0.info "[$tag:$LINENO] wifi logger start"
 #/bin/python3 /usr/local/logger/wifi_module_check.py
 /usr/local/scripts/eth_mac_get.sh
 /bin/python3 /usr/local/logger/wifi_mac_get.py
-/bin/python3 /usr/local/logger/wifi_logger_summary.py 
+/bin/python3 /usr/local/logger/wifi_logger_summary.py &
 
 #sleep 1
 #systemctl restart wifi_capture
