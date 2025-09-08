@@ -25,6 +25,27 @@ check_interval = 1  # 체크 주기 (초)
 last_log_time = time.time()  # 마지막 로깅 시간
 tx_retrys = {}
 
+LOG_LINE_RE = re.compile(r"""
+    ^\[
+        (?P<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})
+    \]\s+
+    MAC:(?P<mac>[0-9A-Fa-f:]+),\s+
+    BW:(?P<bw_val>\d+)\s*(?P<bw_unit>[A-Za-z/]+)?\s*,\s+ 
+    RSSI:(?P<rssi>-?\d+)dBm\(
+        min:(?P<rssi_min>-?\d+)/
+        max:(?P<rssi_max>-?\d+)
+    \),\s+
+    RX:(?P<rx_bytes>\d+)bytes?/(?P<rx_packets>\d+)pkts?/
+       (?P<rx_bps>\d+(?:\.\d+)?)Mb(?:ps|/s)/
+       (?P<rx_avg_bps>\d+(?:\.\d+)?)Mb(?:ps|/s),\s+
+    TX:(?P<tx_bytes>\d+)bytes?/(?P<tx_packets>\d+)pkts?/
+       (?P<tx_bps>\d+(?:\.\d+)?)Mb(?:ps|/s)/
+       (?P<tx_avg_bps>\d+(?:\.\d+)?)Mb(?:ps|/s),\s+
+    FAIL:(?P<tx_fail>\d+),\s+
+    T:(?P<time>\d+)
+    (?:\s*.*)?$            # 끝에 부가 정보가 더 있어도 허용
+""", re.VERBOSE)
+
 def handle_sigterm(signum, frame):
     logger.message('crit', f"[{IFACE}] SIGTERM {signum} received! Cleaning up...", _EXTRA_())
     cleanup()
@@ -46,68 +67,70 @@ def get_last_ap_log_values(log_filename, num_lines=10):
 
     if not os.path.exists(log_filename):
         logger.message("err", f"[{IFACE}] {log_filename} is not exist", _EXTRA_())
-        #print(f"{log_filename} is not exist")
-        return None  # 파일이 존재하지 않으면 None 반환
+        return None
 
     try:
         with open(log_filename, "rb") as file:
-            file.seek(0, os.SEEK_END)  # 파일 끝으로 이동
+            file.seek(0, os.SEEK_END)
             file_size = file.tell()
 
-            # 마지막 4KB를 읽음 (로그가 길어도 충분히 확보)
+            # 마지막 4KB 만 읽기(부족하면 파일 크기만큼)
             read_size = min(4096, file_size)
-            file.seek(file_size - read_size, 0)
+            file.seek(file_size - read_size, os.SEEK_SET)
+            chunk = file.read()
 
-            lines = file.readlines()[-num_lines:]  # 마지막 num_lines 줄만 읽기
-
+        # 바이너리 → 텍스트 라인
+        lines = chunk.splitlines()[-num_lines:]
         if not lines:
-            #print(f"{log_filename} is empty")
             logger.message("err", f"[{IFACE}] {log_filename} is empty", _EXTRA_())
             return None
 
-        for line in reversed(lines):
-            line = line.decode("utf-8", errors="ignore").strip()
+        # 최신 줄부터 역순 탐색
+        for bline in reversed(lines):
+            line = bline.decode("utf-8", errors="ignore").strip()
             if not line:
                 continue
 
-            match = re.match(
-                r"\[(?P<timestamp>[\d-]+\s[\d:]+)\] "
-                r"mac:(?P<mac>[0-9A-Fa-f:]+), "
-                r"rssi:(?P<rssi>[-]?\d+)dBm\(min:(?P<rssi_min>[-]?\d+)/max:(?P<rssi_max>[-]?\d+)\), "
-                r"tx_fail:(?P<tx_fail>\d+)\, "
-                r"tx:(?P<tx_bytes>\d+)byte/(?P<tx_packets>\d+)pkt/(?P<tx_bps>[\d.]+)Mbps/(?P<tx_avg_bps>[\d.]+)Mbps, "
-                r"rx:(?P<rx_bytes>\d+)byte/(?P<rx_packets>\d+)pkt/(?P<rx_bps>[\d.]+)Mbps/(?P<rx_avg_bps>[\d.]+)Mbps, "
-                r"time:(?P<time>\d+)", 
-                line
-            )
+            m = LOG_LINE_RE.search(line)  # 라인 내 아무 위치든 매칭(안전)
+            if not m:
+                continue
 
-            if match:
-                log_data = {
-                    "mac": match.group("mac"),
-                    "rssi": int(match.group("rssi")),
-                    "rssi_min": int(match.group("rssi_min")),
-                    "rssi_max": int(match.group("rssi_max")),
-                    "tx_fail": int(match.group("tx_fail")),
-                    "tx_bytes": int(match.group("tx_bytes")),
-                    "tx_packets": int(match.group("tx_packets")),
-                    "tx_avg_bps": float(match.group("tx_avg_bps")),
-                    "tx_bps": float(match.group("tx_bps")),
-                    "rx_bytes": int(match.group("rx_bytes")),
-                    "rx_packets": int(match.group("rx_packets")),
-                    "rx_avg_bps": float(match.group("rx_avg_bps")),
-                    "rx_bps": float(match.group("rx_bps")),
-                    "time": int(match.group("time"))
-                }
+            g = m.groupdict()
 
-                print(f"log parsing : {log_data}")
-                return log_data
+            bw_val = int(g["bw_val"])
+            bw_unit = (g["bw_unit"] or "").lower()
+            bw_mhz = bw_val if "mhz" in bw_unit else None
+
+            # 타입 캐스팅
+            log_data = {
+                "timestamp": g["timestamp"],
+                "mac": g["mac"].lower(),
+                "bw": bw_val,
+                "bw_unit": g["bw_unit"] or "",
+                "bw_mhz": bw_mhz,
+                "rssi": int(g["rssi"]),
+                "rssi_min": int(g["rssi_min"]),
+                "rssi_max": int(g["rssi_max"]),
+                "rx_bytes": int(g["rx_bytes"]),
+                "rx_packets": int(g["rx_packets"]),
+                "rx_bps": float(g["rx_bps"]),
+                "rx_avg_bps": float(g["rx_avg_bps"]),
+                "tx_bytes": int(g["tx_bytes"]),
+                "tx_packets": int(g["tx_packets"]),
+                "tx_bps": float(g["tx_bps"]),
+                "tx_avg_bps": float(g["tx_avg_bps"]),
+                "tx_fail": int(g["tx_fail"]),
+                "time": int(g["time"]),
+            }
+
+            print(f"log parsing : {log_data}")
+            return log_data
 
     except Exception as e:
         print(f"log file read error: {e}")
 
     print(f"No valid log found : {log_filename}")
-    return None  # 유효한 로그를 찾지 못한 경우
-
+    return None
 
 def get_station_info(json_file):
     if not os.path.exists(json_file):
@@ -146,8 +169,16 @@ def get_station_info(json_file):
     signal_levels[mac]["min"] = min(signal_levels[mac]["min"], signal)
     signal_levels[mac]["max"] = max(signal_levels[mac]["max"], signal)
 
+    ap_info = data.get("info")
+    if not station:
+        #logger.message("err", f"[{IFACE}] no 'info' field in json", _EXTRA_())
+        return None
+
+    bandwidth = ap_info.get("width", "0 MHz")
+
     info = {
         "ap_mac": mac,
+        "bw" : bandwidth,
         "rssi": signal,
         "rssi_min": signal_levels[mac]["min"],
         "rssi_max": signal_levels[mac]["max"],
@@ -334,12 +365,13 @@ def log_stats_write(my_stat, wifi_info):
         
     log_entry = (
         f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
-        f"mac:{wifi_info['ap_mac']}, "
-        f"rssi:{wifi_info['rssi']}dBm(min:{wifi_info['rssi_min']}/max:{wifi_info['rssi_max']}), "
-        f"tx_fail:{my_stat['tx_fail']}, "
-        f"tx:{my_stat['tx_bytes']}byte/{my_stat['tx_packets']}pkt/{wifi_info['tx_bitrate']}Mbps/{my_stat['tx_avg_bps']}Mbps, "
-        f"rx:{my_stat['rx_bytes']}byte/{my_stat['rx_packets']}pkt/{wifi_info['rx_bitrate']}Mbps/{my_stat['rx_avg_bps']}Mbps, "
-        f"time:{my_stat['time']}\n"
+        f"MAC:{wifi_info['ap_mac']}, "
+        f"BW:{wifi_info['bw']}, "
+        f"RSSI:{wifi_info['rssi']}dBm(min:{wifi_info['rssi_min']}/max:{wifi_info['rssi_max']}), "
+        f"RX:{my_stat['rx_bytes']}byte/{my_stat['rx_packets']}pkt/{wifi_info['rx_bitrate']}Mbps/{my_stat['rx_avg_bps']}Mbps, "
+        f"TX:{my_stat['tx_bytes']}byte/{my_stat['tx_packets']}pkt/{wifi_info['tx_bitrate']}Mbps/{my_stat['tx_avg_bps']}Mbps, "
+        f"FAIL:{my_stat['tx_fail']}, "
+        f"T:{my_stat['time']}\n"
     )
     
 

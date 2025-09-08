@@ -3,7 +3,7 @@ tag=$(basename "$0")
 EXT=/sys/kernel/debug/mmc2/mmc2:0001/ext_csd
 
 cleanup() {
-    logger -p $local3.info "[$tag:$LINENO] wifi_logger_mmc stop"
+    logger -p local3.info "[$tag:$LINENO] wifi_logger_mmc stop"
     exit 0
 }
 trap cleanup INT TERM
@@ -71,5 +71,4 @@ while true; do
     sleep 300
 done
 
-logger -p local3.info "[$tag:$LINENO] wifi_logger_mmc stop"
 

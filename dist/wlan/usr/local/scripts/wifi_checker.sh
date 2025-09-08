@@ -26,7 +26,7 @@ mkdir -p "$LOG_DIR"
 
 logger -p local0.info "[$tag:$LINENO] [$IFACE] wifi_checker"
 
-if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" ]]; then
+if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" && "$IFACE" != "eth0" ]]; then
     logger -p local0.emerg "[$tag:$LINENO] [$IFACE] interface is wrong!!"
     exit 1
 fi
@@ -64,7 +64,22 @@ sleep 5
 
 while true; do
     #sleep 3
-    if [[ "$IFACE" ==  "mlan0" && ! -d /sys/class/net/$IFACE ]]; then
+    if [[ "$IFACE" == "eth0" ]]; then
+          STATE=$(jq -r '.eth_stats.phy.link' "/var/log/cantops/json/eth0/link.json")
+          if [[ "$STATE" == "up" && "$PRE_STATE" != "up" ]]; then
+              logger -p local0.info "[$tag:$LINENO] [$IFACE] link change down -> up"
+              ACTIVE_BRIDGE=$(systemctl list-units --type=service --state=running | grep -oE 'wifi_bridge@[^ ]+')
+              if [[ -n "$ACTIVE_BRIDGE" ]]; then
+                  logger -p local0.info "[$tag:$LINENO] [$IFACE] $ACTIVE_BRIDGE restart"
+                  systemctl restart $ACTIVE_BRIDGE
+              fi
+          elif [[ "$STATE" == "down" && "$PRE_STATE" == "up" ]]; then
+              logger -p local0.info "[$tag:$LINENO] [$IFACE] link change up -> down"
+          fi
+          PRE_STATE=$STATE
+          sleep 1
+          continue
+    elif [[ ! -d /sys/class/net/$IFACE ]]; then
         ((ERR_CNT++))
         logger -p local0.err "[$tag:$LINENO] [$IFACE] is not exist becase F/W dump...(ERR_CNT:$ERR_CNT)"
         if [ "$ERR_CNT" -gt "$LIMIT_CNT" ]; then

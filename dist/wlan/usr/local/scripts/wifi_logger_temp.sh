@@ -28,9 +28,9 @@ while true; do
     MLAN1_TEMP=$(mlanutl mlan1 get_sensor_temp | awk '{print int($4)}')
 
     if [ "$CPU_TEMP" -ge "$EMERG_CPU_TEMP" ] || [ "$MLAN0_TEMP" -ge "$EMERG_MLAN_TEMP" ] || [ "$MLAN1_TEMP" -ge "$EMERG_MLAN_TEMP" ]; then
-        LOG_LEVEL=emerg
-    elif [ "$CPU_TEMP" -ge "$CRIT_CPU_TEMP" ] || [ "$MLAN0_TEMP" -ge "$CRIT_MLAN_TEMP" ] || [ "$MLAN1_TEMP" -ge "$CRIT_MLAN_TEMP" ]; then
         LOG_LEVEL=crit
+    elif [ "$CPU_TEMP" -ge "$CRIT_CPU_TEMP" ] || [ "$MLAN0_TEMP" -ge "$CRIT_MLAN_TEMP" ] || [ "$MLAN1_TEMP" -ge "$CRIT_MLAN_TEMP" ]; then
+        LOG_LEVEL=err
     elif [ "$CPU_TEMP" -ge "$WARN_CPU_TEMP" ] || [ "$MLAN0_TEMP" -ge "$EMERG_MLAN_TEMP" ] || [ "$MLAN1_TEMP" -ge "$EMERG_MLAN_TEMP" ]; then
         LOG_LEVEL=warn
     else

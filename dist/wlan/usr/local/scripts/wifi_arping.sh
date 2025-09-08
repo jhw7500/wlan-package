@@ -20,7 +20,7 @@ GATEWAY2=""
 CMD=""
 
 cleanup() {
-    logger -p $local1.info "[$tag:$LINENO] [$IFACE] wifi_arping stop"
+    logger -p local1.info "[$tag:$LINENO] [$IFACE] wifi_arping stop"
     exit 0
 }
 trap cleanup INT TERM

@@ -158,12 +158,13 @@ fi
 
 sleep 0.5
 iw mlan0 scan freq 2412
+sleep 0.5
 #python3 /usr/local/logger/getmac.py
 logger -p local0.info "[$tag:$LINENO] [mlan0] wpa_supplicant start"
 systemctl start wpa_supplicant@mlan0
 
-sleep 1
-logger -p local0.info "[$tag:$LINENO] [mlan0] start wifi_bridge@mlan0"
-systemctl start wifi_bridge@mlan0
+#sleep 1
+#logger -p local0.info "[$tag:$LINENO] [mlan0] start wifi_bridge@mlan0"
+#systemctl start wifi_bridge@mlan0
 
 #echo 1 > /proc/sys/kernel/printk
