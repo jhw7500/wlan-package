@@ -29,6 +29,24 @@ try_insmod() {
 #python3 /usr/local/logger/mac_set.py
 #python3 /usr/local/logger/mac_get.py
 #python3 /usr/local/logger/mac_config.py mlan0 wifi_mod_para__.conf
+wifi 0 down
+wifi 1 down
+cmd=$(ifconfig |grep mlan0)
+if [ -n "$cmd" ]; then
+    ifconfig mlan0 down
+fi
+cmd=$(ifconfig |grep mlan1)
+if [ -n "$cmd" ]; then
+    ifconfig mlan1 down
+fi
+cmd=$(lsmod |grep moal)
+if [ -n "$cmd" ]; then
+    rmmod moal
+fi
+cmd=$(lsmod |grep mlan)
+if [ -n "$cmd" ]; then
+    rmmod mlan
+fi
 
 #if ! try_insmod "/lib/modules/$KERNEL_VERSION/updates/mlan_6.12.ko" ""; then
 if ! try_insmod "/opt/wlan/driver/debug/mlan.ko" ""; then
@@ -128,8 +146,23 @@ ifconfig mlan0 up
 
 #sleep 0.2
 #logger -p local0.info "[$tag:$LINENO] [mlan1] link down" 
-ip link set mlan1 down
-ifconfig mlan1 down
+ip link set mlan1 up
+ifconfig mlan1 up
+
+while true; do
+    sleep 0.5
+    cmd="iw mlan0 scan freq 2412"
+    logger -p local0.info "[$tag:$LINENO] [mlan0] cmd : $cmd"
+    result=$(eval "$cmd")
+    if [ -n "$result" ]; then
+        logger -p local0.info "[$tag:$LINENO] [mlan0] scan success"
+        break
+    else
+        logger -p local0.err "[$tag:$LINENO] [mlan0] scan failed: $result"
+    fi
+done
+
+sleep 0.5
 
 FREQ=$(jq -r '.mlan0.Frequency' "$JSON_FILE")
 if [ "$FREQ" = "5GHz" ]; then
@@ -139,7 +172,8 @@ elif [ "$FREQ" = "2.4GHz" ]; then
 elif [ "$FREQ" = "auto" ]; then
     mlanutl mlan0 bandcfg 0x35f
 else
-    mlanutl mlan0 bandcfg 0x00
+    ip link set mlan0 down
+    ifconfig mlan0 down
 fi
 
 FREQ=$(jq -r '.mlan1.Frequency' "$JSON_FILE")
@@ -150,21 +184,21 @@ elif [ "$FREQ" = "2.4GHz" ]; then
 elif [ "$FREQ" = "auto" ]; then
     mlanutl mlan1 bandcfg 0x5f
 else
-    mlanutl mlan1 bandcfg 0x00
+    ip link set mlan1 down
+    ifconfig mlan1 down
 fi
 
 #ip link add nlmon0 type nlmon
 #ip link set nlmon0 up
 
 sleep 0.5
-iw mlan0 scan freq 2412
-sleep 0.5
 #python3 /usr/local/logger/getmac.py
 logger -p local0.info "[$tag:$LINENO] [mlan0] wpa_supplicant start"
-systemctl start wpa_supplicant@mlan0
+#systemctl start wpa_supplicant@mlan0
+wifi mlan0 up
 
-#sleep 1
+sleep 0.5
 #logger -p local0.info "[$tag:$LINENO] [mlan0] start wifi_bridge@mlan0"
-#systemctl start wifi_bridge@mlan0
+systemctl restart wifi_bridge@mlan0
 
 #echo 1 > /proc/sys/kernel/printk

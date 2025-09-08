@@ -130,7 +130,7 @@ customctl() {
   customctl wifi_logger enabled
 
   customctl wifi_led@eth0 enabled
-  customctl wifi_arping@eth0 disabled
+  customctl wifi_arping@eth0 enabled
   customctl wifi_logger@eth0 enabled
   customctl wifi_checker@eth0 enabled
 

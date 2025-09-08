@@ -161,7 +161,6 @@ while true; do
     GATEWAY2=$(grep -E '^Gateway=' "$CONF_FILE" | head -n1 | cut -d= -f2)
     IP_LIST_NEW=$IP_LIST
     #BAD_IP_LIST=$(ip neigh show dev "$IFACE" | awk '!/lladdr/ {print $1}' | grep -vE '^224\.|^169\.')
-
 :<<'END'
     BAD_IP_LIST=$(ip neigh show dev "$IFACE" | awk '!/lladdr/ {print $1}')
     
@@ -274,7 +273,7 @@ END
                 fi
 END
             fi
-            /usr/local/scripts/arping_sweep.sh $IFACE
+            #/usr/local/scripts/arping_sweep.sh $IFACE
             ERR_CNT=0
         fi
         sleep $INTERVAL
@@ -295,7 +294,6 @@ END
 
     for IP in $IP_LIST; do
         CURRENT_IFACE=$(ip route get "$IP" 2>/dev/null | awk '/dev/ {for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}')
-        
         if [[ -z "$CURRENT_IFACE" || "$CURRENT_IFACE" != "$IFACE" ]]; then
             logger -p local1.warn "[$tag:$LINENO] [$IFACE] IP $IP is routed via [$CURRENT_IFACE], correcting to [$IFACE]"
             ip route replace "$IP" dev "$IFACE" scope link
@@ -305,7 +303,6 @@ END
         SRC_IFACE=$(echo "$ACTIVE_BRIDGE" | sed 's/^wifi_bridge@//' | sed 's/.service$//')
         SRC_IP=$(ip -4 -o addr show dev "$SRC_IFACE" | awk '{print $4}' | cut -d/ -f1)
         #logger -p local1.info "SRC_IFACE : $SRC_IFACE, SRC_IP : $SRC_IP"
-
         #if [[ ! -n "$SRC_IP" ]]; then
         #    SRC_IP=$(ip -4 -o addr show dev "$IFACE" | awk '{print $4}' | cut -d/ -f1 | awk 'NR==2')
         #    #logger -p local1.info "lo IP : $SRC_IP"
@@ -326,7 +323,6 @@ END
         fi
 
         OUTPUT=$(eval "$CMD")
-
         if echo "$OUTPUT" | grep -q "Received 0"; then
             #logger -p local1.err "[$tag:$LINENO] [$IFACE] arping to $IP failed: no reply"
             if ping -I "$IFACE" -c 1 -W 2 "$IP" > /dev/null 2>&1; then
@@ -403,7 +399,6 @@ END
             sleep 1
         fi
     done
-
 
     #IP_LIST_NEW="$IP_LIST"
 
