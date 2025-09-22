@@ -3,6 +3,14 @@ tag=$(basename "$0")
 key=LOG
 IFACE=$1
 CONF_FILE=""
+
+for i in {1..3}; do
+    if [[ -d /sys/class/net/$IFACE ]]; then
+        break
+    fi
+    sleep 5
+done
+
 if [[ "$IFACE" == "mlan0" ]]; then
     CONF_FILE=/etc/systemd/network/20-mlan0.network
 fi
@@ -39,7 +47,7 @@ fi
 ADDRESS_LINE=$(grep -E '^Address=' "$CONF_FILE" | head -n1 | cut -d= -f2)
 IP_ADDR="${ADDRESS_LINE%%/*}"
 GATEWAY=$(grep -E '^Gateway=' "$CONF_FILE" | head -n1 | cut -d= -f2)
-logger -p local0.info "[$tag:$LINENO] [$IFACE] relayd -d -I $IFACE -I eth0 ($IFACE address : $ADDRESS_LINE, gateway : $GATEWAY)"
+#logger -p local0.info "[$tag:$LINENO] [$IFACE] relayd -d -I $IFACE -I eth0 ($IFACE address : $ADDRESS_LINE, gateway : $GATEWAY)"
 
 :<<'END'
 mac_eth=$(getMac eth0)
@@ -87,16 +95,24 @@ END
 #echo 1 > /proc/sys/net/ipv4/conf/$IFACE/proxy_arp
 #echo 0 > /proc/sys/net/ipv4/conf/$IFACE/rp_filter
 #echo 1 > /proc/sys/net/ipv4/conf/$IFACE/arp_accept
-net.ipv4.conf.all.rp_filter = 0
-net.ipv4.conf.eth0.rp_filter = 0
-net.ipv4.conf.$IFACE.rp_filter = 0
-net.ipv4.conf.all.arp_ignore = 1
-net.ipv4.conf.eth0.arp_ignore = 1
-net.ipv4.conf.$IFACE.arp_ignore = 1
-net.ipv4.conf.all.arp_announce = 2
-net.ipv4.conf.eth0.arp_announce = 2
-net.ipv4.conf.$IFACE.arp_announce = 2
-echo 1 > /proc/sys/net/ipv4/ip_forward
+#echo 0 > /proc/sys/net/ipv4/conf/all/rp_filter
+#echo 0 > /proc/sys/net/ipv4/conf/eth0/rp_filter
+#echo 0 > /proc/sys/net/ipv4/conf/$IFACE/rp_filter
+#echo 1 > /proc/sys/net/ipv4/conf/all/arp_ignore
+#echo 1 > /proc/sys/net/ipv4/conf/eth0/arp_ignore
+#echo 1 > /proc/sys/net/ipv4/conf/$IFACE/
+sysctl -w net.ipv4.conf.all.rp_filter=0
+sysctl -w net.ipv4.conf.eth0.rp_filter=0
+sysctl -w net.ipv4.conf.$IFACE.rp_filter=0
+sysctl -w net.ipv4.conf.all.arp_ignore=1
+sysctl -w net.ipv4.conf.eth0.arp_ignore=1
+sysctl -w net.ipv4.conf.$IFACE.arp_ignore=1
+sysctl -w net.ipv4.conf.all.arp_announce=2
+sysctl -w net.ipv4.conf.eth0.arp_announce=2
+sysctl -w net.ipv4.conf.$IFACE.arp_announce=2
+#sysctl -w net.ipv4.conf.all.proxy_arp_pvlan=1
+#sysctl -w net.ipv4.conf.eth0.proxy_arp=1
+#sysctl -w net.ipv4.conf.$IFACE.proxy_arp=1
+sysctl -w net.ipv4.ip_forward=1
 relayd -d -I $IFACE -I eth0 -G $GATEWAY
 #dumb eth0 $IFACE
-

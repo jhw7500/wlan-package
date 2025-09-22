@@ -46,20 +46,34 @@ def extract_info(path):
             sig = safe_get(data, "station_info", "signal") or "-"
             return str(freq), str(addr), str(sig)
     except Exception:
-        return "-", "-", "-"
+        return None
+        #return "-", "-", "-"
 
 def main():
     ensure_log_directory()
     while True:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        freq0, addr0, sig0 = extract_info(MLAN0_JSON)
-        freq1, addr1, sig1 = extract_info(MLAN1_JSON)
+        if now:
+            line = (f"{now}")
 
-        line = (
-            f"{now} || "
-            f"{format_center(freq0, 6)} | {format_center(addr0, 17)} | {format_center(sig0, 8)} || "
-            f"{format_center(freq1, 6)} | {format_center(addr1, 17)} | {format_center(sig1, 8)} \n"
-        )
+        #freq0, addr0, sig0 = extract_info(MLAN0_JSON)
+        #freq1, addr1, sig1 = extract_info(MLAN1_JSON)
+
+        mlan0_info = extract_info(MLAN0_JSON)
+        if mlan0_info:
+            freq0, addr0, sig0 = mlan0_info
+            line += (
+                f" || mlan0 | {format_center(freq0, 6)} | {format_center(addr0, 17)} | {format_center(sig0, 8)}"
+            )
+
+        mlan1_info = extract_info(MLAN1_JSON)
+        if mlan1_info:
+            freq1, addr1, sig1 = mlan1_info
+            line += (
+                f" || mlan1 | {format_center(freq1, 6)} | {format_center(addr1, 17)} | {format_center(sig1, 8)}"
+            )
+
+        line += "\n"
 
         with open(LOG_FILE, "a") as log:
             log.write(line)

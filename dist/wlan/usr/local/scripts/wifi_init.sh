@@ -6,7 +6,7 @@ JSON_FILE="/usr/local/etc/config.json"
 #LOGFILE="/var/log/cantops/module.log"
 #sleep 0.5
 
-logger -p local0.info "[$tag:$LINENO] wifi module init (Booting)"
+logger -p local0.info "[$tag:$LINENO] Booting"
 try_insmod() {
     local module_path=$1
     local args=$2
@@ -29,8 +29,8 @@ try_insmod() {
 #python3 /usr/local/logger/mac_set.py
 #python3 /usr/local/logger/mac_get.py
 #python3 /usr/local/logger/mac_config.py mlan0 wifi_mod_para__.conf
-wifi 0 down
-wifi 1 down
+#wifi 0 down
+#wifi 1 down
 cmd=$(ifconfig |grep mlan0)
 if [ -n "$cmd" ]; then
     ifconfig mlan0 down
@@ -48,6 +48,8 @@ if [ -n "$cmd" ]; then
     rmmod mlan
 fi
 
+python3 /usr/local/logger/wired_mac_ip_get.py
+
 #if ! try_insmod "/lib/modules/$KERNEL_VERSION/updates/mlan_6.12.ko" ""; then
 if ! try_insmod "/opt/wlan/driver/debug/mlan.ko" ""; then
     echo "mlan module load failed"  
@@ -56,7 +58,8 @@ fi
 
 #python3 /usr/local/logger/wifi_mac_save.py mlan0 wifi_mod_para__.conf
 
-MLAN0_MAC=$(cat /opt/wlan/mac/base0)
+#MLAN0_MAC=$(cat /opt/wlan/mac/wired_client)
+MLAN0_MAC=$(cat /tmp/eth0_client_mac)
 if [[ "$MLAN0_MAC" =~ ^([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$ ]]; then
     logger -p local0.info "[$tag:$LINENO] [mlan0] vaild base mac address : $MLAN0_MAC"
     python3 /usr/local/logger/wifi_config.py mlan0 mac_addr $MLAN0_MAC
@@ -151,7 +154,7 @@ ifconfig mlan1 up
 
 for i in {1..3}; do
     sleep 0.5
-    cmd="iw mlan0 scan freq"
+    cmd="iw mlan0 scan freq 2412 2417 2422 2427 2432"
     logger -p local0.info "[$tag:$LINENO] [mlan0] cmd : $cmd"
     result=$(eval "$cmd")
     if [ -n "$result" ]; then
@@ -195,10 +198,11 @@ sleep 0.5
 #python3 /usr/local/logger/getmac.py
 logger -p local0.info "[$tag:$LINENO] [mlan0] wpa_supplicant start"
 #systemctl start wpa_supplicant@mlan0
+systemctl restart systemd-networkd
 wifi mlan0 up
 
-sleep 0.5
+#sleep 0.5
 #logger -p local0.info "[$tag:$LINENO] [mlan0] start wifi_bridge@mlan0"
-systemctl restart wifi_bridge@mlan0
+#systemctl restart wifi_bridge@mlan0
 
 #echo 1 > /proc/sys/kernel/printk

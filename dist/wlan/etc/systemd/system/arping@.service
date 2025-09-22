@@ -1,0 +1,15 @@
+[Unit]
+Description=Arping Service for %i
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/scripts/arping.sh %i
+Restart=on-failure
+RestartSec=5
+User=root
+#RemainAfterExit=true
+
+[Install]
+WantedBy=multi-user.target
+

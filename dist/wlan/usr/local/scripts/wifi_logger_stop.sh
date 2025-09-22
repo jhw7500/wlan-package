@@ -15,3 +15,5 @@ if [ "$IFACE" = "mlan0" ]; then
     logger -p local0.notice "[$tag:$LINENO] [$IFACE] systemctl stop wifi_capture"
     systemctl stop wifi_capture
 fi
+
+rm /dev/shm/json/$IFACE/*

@@ -60,7 +60,7 @@ while true; do
 done
 END
 
-sleep 5
+sleep 10
 
 while true; do
     #sleep 3
@@ -68,11 +68,13 @@ while true; do
           STATE=$(jq -r '.eth_stats.phy.link' "/var/log/cantops/json/eth0/link.json")
           if [[ "$STATE" == "up" && "$PRE_STATE" != "up" ]]; then
               logger -p local0.info "[$tag:$LINENO] [$IFACE] link change down -> up"
-              ACTIVE_BRIDGE=$(systemctl list-units --type=service --state=running | grep -oE 'wifi_bridge@[^ ]+')
-              if [[ -n "$ACTIVE_BRIDGE" ]]; then
-                  logger -p local0.info "[$tag:$LINENO] [$IFACE] $ACTIVE_BRIDGE restart"
-                  systemctl restart $ACTIVE_BRIDGE
-              fi
+              systemctl restart wifi_bridge@mlan0
+              #ACTIVE_BRIDGE=$(systemctl list-units --type=service --state=running | grep -oE 'wifi_bridge@[^ ]+')
+              #if [[ -n "$ACTIVE_BRIDGE" ]]; then
+              #    logger -p local0.info "[$tag:$LINENO] [$IFACE] $ACTIVE_BRIDGE restart"
+              #    touch /tmp/bridge_en
+              #    systemctl restart $ACTIVE_BRIDGE
+              #fi
           elif [[ "$STATE" == "down" && "$PRE_STATE" == "up" ]]; then
               logger -p local0.info "[$tag:$LINENO] [$IFACE] link change up -> down"
           fi
@@ -128,6 +130,7 @@ while true; do
             sleep 1
             #wpa_cli enable_network 0
             systemctl start wpa_supplicant@$IFACE
+            #systemctl restart wifi_bridge@$IFACE
             #log "State=$STATE for ${DURATION}s → triggering reconnect on $IFACE"
             #wpa_cli -i "$IFACE" reconnect
             UNSTABLE_START=0
@@ -136,15 +139,19 @@ while true; do
         UNSTABLE_START=0
     fi
 #END
+
+:<<'END'
     PRE_STATE=$STATE
     LINK_OUTPUT=$(iw "$IFACE" link 2>&1)
-    if echo "$LINK_OUTPUT" | grep -q "Connected to" && echo "$LINK_OUTPUT" | grep -q "command failed"; then
+    #if echo "$LINK_OUTPUT" | grep -q "Connected to" && echo "$LINK_OUTPUT" | grep -q "command failed" && echo "$LINK_OUTPUT" | grep -q "Not connected"; then
+    if echo "$LINK_OUTPUT" | grep -q "command failed" || echo "$LINK_OUTPUT" | grep -q "Not connected"; then
         logger -p local0.err "[$tag:$LINENO] [$IFACE] Detected invalid link state. Triggering reconnect..."
         wpa_cli -i "$IFACE" disconnect
         sleep 1
         wpa_cli -i "$IFACE" reconnect
         sleep 2
+        systemctl restart wifi_bridge@$IFACE
     fi
-
+END
     sleep 1
 done

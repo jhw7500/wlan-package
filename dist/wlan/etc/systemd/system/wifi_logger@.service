@@ -1,7 +1,10 @@
 [Unit]
 Description=WiFi Logging for Service %i
-After=network.target
+#After=network.target
 #PartOf=wifi_logger.service
+BindsTo=sys-subsystem-net-devices-%i.device
+Requires=sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-%i.device
 
 [Service]
 ExecStart=/usr/local/scripts/wifi_logger_start.sh %i

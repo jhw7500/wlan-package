@@ -2,7 +2,11 @@
 Description=WiFi Logger Controller
 #Requires=wifi_logger@mlan0.service wifi_logger@mlan1.service
 #After=network.target
-After=wifi_init.service
+#After=wifi_init.service
+#Before=sysinit.target
+BindsTo=sys-subsystem-net-devices-mlan0.device
+Requires=sys-subsystem-net-devices-mlan0.device
+After=sys-subsystem-net-devices-mlan0.device
 
 [Service]
 Type=oneshot
