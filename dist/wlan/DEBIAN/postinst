@@ -209,7 +209,7 @@ makeDirectory() {
   #/usr/local/scripts/comment_line.sh "tmpfs                /var/volatile" /etc/fstab
   /usr/local/scripts/change_line.sh "#tmpfs                /var/volatile        tmpfs      defaults              0  0" "tmpfs                /var/volatile" /etc/fstab
   #/usr/local/scripts/change_line.sh "ExecStart=/usr/sbin/wpa_supplicant -c/etc/wpa_supplicant/wpa_supplicant-%I.conf -i%I -d" "ExecStart=/usr/sbin/wpa_supplicant" /lib/systemd/system/wpa_supplicant@.service
-  /usr/local/scripts/change_line.sh "ExecStart=/usr/local/scripts/wpa_supplicant.sh %I" "ExecStart=" /etc/systemd/system/wpa_supplicant@.service
+  /usr/local/scripts/change_line.sh "ExecStart=/usr/local/scripts/wpa_supplicant.sh %I" "ExecStart=" /lib/systemd/system/wpa_supplicant@.service
   /usr/local/scripts/change_line.sh "Storage=persistent" "Storage=" /etc/systemd/journald.conf
   /usr/local/scripts/change_line.sh "SyncIntervalSec=1m" "SyncIntervalSec=" /etc/systemd/journald.conf
   /usr/local/scripts/change_line.sh "RuntimeMaxUse=64M" "RuntimeMaxUse=" /etc/systemd/journald.conf
