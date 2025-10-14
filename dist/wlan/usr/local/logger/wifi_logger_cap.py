@@ -51,11 +51,14 @@ def start_parser(mac_mlan, subtype_mask):
     #logger.message('info', f"[{IFACE}] ether_filter : {ether_filter}", _EXTRA_())
     logger.no_extra()
     logger.message('info', "capture start")
+    cap = subprocess.Popen(["tcpdump", "-i", INTERFACE, "-U", "-n", "-s", "128", "type", "mgt", "-w", "-"], stdout=subprocess.PIPE)
+
     parse_proc = subprocess.Popen([
         "stdbuf", "-oL", "tshark",
-        "-l", "-r", PCAP_FILE,
+        "-l", "-r", "-",
+        #"-l", "-r", PCAP_FILE,
         "-n",
-        "-Y", "wlan.fc.type == 0",
+        #"-Y", "wlan.fc.type == 0",
         #"-f", f"{ether_filter}",
         "-T", "fields",
         "-e", "frame.time_epoch",
@@ -70,7 +73,7 @@ def start_parser(mac_mlan, subtype_mask):
         "-E", "separator=,",
         "-o", "tcp.desegment_tcp_streams:FALSE",
         "-o", "tls.desegment_ssl_records:FALSE",
-    ], stdout=subprocess.PIPE, text=True, bufsize=1)
+    ], stdin=cap.stdout, stdout=subprocess.PIPE, text=True, bufsize=1)
 
     for line in parse_proc.stdout:
         fields = line.strip().split(",")
@@ -113,7 +116,7 @@ def start_parser(mac_mlan, subtype_mask):
         #ts_str = ts_fmt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         frame_str = parse_frame_type(ftype, fsub)
 
-        logger.message('info', f"{frame_str:<16}({fsub:>2}) : SA={sa:<17} DA={da:<17} RSSI={rssi:>4} NF={nf:>4} SNR={snr:>3} Retry={retry:<3} Seq={seq}");
+        logger.message('debug', f"{frame_str:<16}({fsub:>2}) : SA={sa:<17} DA={da:<17} RSSI={rssi:>4} NF={nf:>4} SNR={snr:>3} Retry={retry:<3} Seq={seq}");
 
         #msg = (f"{ts_str} {frame_str:<16}({fsub:>2}) : SA={sa:<17} DA={da:<17} "
         #       f"RSSI={rssi:>4} NF={nf:>4} SNR={snr:>3} Retry={retry:<3} Seq={seq}")
@@ -259,7 +262,7 @@ def main():
     subprocess.run(["mlanutl_silent", IFACE, "netmon", "1", "0x49"])
     subprocess.run(["ifconfig", INTERFACE, "up"])
 
-    cap_proc = start_capture()
+    #cap_proc = start_capture()
     #time.sleep(0.5)
     start_parser(mac_mlan, SUBTYPE_MASK)
     #start_pipeline()

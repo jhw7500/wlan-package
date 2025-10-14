@@ -142,19 +142,19 @@ mlanutl mlan1 reassoctrl 1 > /dev/null 2>&1
 #logger -p local0.info "[$tag:$LINENO] [mlan1] power save off"
 #iw dev mlan1 set power_save off
 
-sleep 0.2
-logger -p local0.info "[$tag:$LINENO] [mlan0] link up"
-ip link set mlan0 up
-ifconfig mlan0 up
+#sleep 0.2
+#logger -p local0.info "[$tag:$LINENO] [mlan0] link up"
+#ip link set mlan0 up
+#ifconfig mlan0 up
 
 #sleep 0.2
 #logger -p local0.info "[$tag:$LINENO] [mlan1] link down" 
-ip link set mlan1 up
-ifconfig mlan1 up
+#ip link set mlan1 up
+#ifconfig mlan1 up
 
 for i in {1..3}; do
     sleep 0.5
-    cmd="iw mlan0 scan freq 2412 2417 2422 2427 2432"
+    cmd="iw mlan0 scan"
     logger -p local0.info "[$tag:$LINENO] [mlan0] cmd : $cmd"
     result=$(eval "$cmd")
     if [ -n "$result" ]; then
@@ -165,30 +165,28 @@ for i in {1..3}; do
     fi
 done
 
-sleep 0.5
-
 FREQ=$(jq -r '.mlan0.Frequency' "$JSON_FILE")
 if [ "$FREQ" = "5GHz" ]; then
+    logger -p local0.info "[$tag:$LINENO] [mlan0] freq 5GHz : mlanutl mlan0 bandcfg 0x254"
     mlanutl mlan0 bandcfg 0x254
 elif [ "$FREQ" = "2.4GHz" ]; then
+    logger -p local0.info "[$tag:$LINENO] [mlan0] freq 2.4GHz : mlanutl mlan0 bandcfg 0x10b"
     mlanutl mlan0 bandcfg 0x10b
 elif [ "$FREQ" = "auto" ]; then
+    logger -p local0.info "[$tag:$LINENO] [mlan0] freq Auto : mlanutl mlan0 bandcfg 0x35f"
     mlanutl mlan0 bandcfg 0x35f
-else
-    ip link set mlan0 down
-    ifconfig mlan0 down
 fi
 
 FREQ=$(jq -r '.mlan1.Frequency' "$JSON_FILE")
 if [ "$FREQ" = "5GHz" ]; then
+    logger -p local0.info "[$tag:$LINENO] [mlan1] freq 5GHz : mlanutl mlan1 bandcfg 0x54"
     mlanutl mlan1 bandcfg 0x54
 elif [ "$FREQ" = "2.4GHz" ]; then
+    logger -p local0.info "[$tag:$LINENO] [mlan1] freq 2.4GHz : mlanutl mlan1 bandcfg 0x0b"
     mlanutl mlan1 bandcfg 0x0b
 elif [ "$FREQ" = "auto" ]; then
+    logger -p local0.info "[$tag:$LINENO] [mlan1] freq Auto : mlanutl mlan1 bandcfg 0x5f"
     mlanutl mlan1 bandcfg 0x5f
-else
-    ip link set mlan1 down
-    ifconfig mlan1 down
 fi
 
 #ip link add nlmon0 type nlmon

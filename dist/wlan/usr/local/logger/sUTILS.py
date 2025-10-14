@@ -187,14 +187,14 @@ class Logger():
         self.logger.setLevel(logging.DEBUG)
         
         self.syslog_handler = logging.handlers.SysLogHandler(address='/dev/log', facility=facility)
-        self.syslog_handler.setLevel(logging.INFO)
+        self.syslog_handler.setLevel(logging.DEBUG)
         #self.formatter = logging.Formatter('%(name)s - %(levelname)s - %(message)s')
         formatter = logging.Formatter('%(name)s [%(custom_filename)s:%(custom_lineno)d] %(message)s')
         self.syslog_handler.setFormatter(formatter)
         self.logger.addHandler(self.syslog_handler)
         
         self.stream_handler = logging.StreamHandler()
-        self.stream_handler.setLevel(logging.INFO)
+        self.stream_handler.setLevel(logging.DEBUG)
         log_format = '%(asctime)s.%(msecs)03d [%(name)s][%(levelname)s][%(custom_filename)s:%(custom_lineno)d] %(message)s'
         date_format = '%Y-%m-%d %H:%M:%S'
         formatter = logging.Formatter(log_format, datefmt=date_format)

@@ -89,6 +89,7 @@ END
 #systemctl restart wifi_ping@$IFACE
 #ip route replace default via $IFACE
 
+:<<'END'
 #echo 1 > /proc/sys/net/ipv4/conf/eth0/proxy_arp
 #echo 0 > /proc/sys/net/ipv4/conf/eth0/rp_filter
 #echo 1 > /proc/sys/net/ipv4/conf/eth0/arp_accept
@@ -113,6 +114,9 @@ sysctl -w net.ipv4.conf.$IFACE.arp_announce=2
 #sysctl -w net.ipv4.conf.all.proxy_arp_pvlan=1
 #sysctl -w net.ipv4.conf.eth0.proxy_arp=1
 #sysctl -w net.ipv4.conf.$IFACE.proxy_arp=1
+END
+
+
 sysctl -w net.ipv4.ip_forward=1
 relayd -d -I $IFACE -I eth0 -G $GATEWAY
 #dumb eth0 $IFACE
