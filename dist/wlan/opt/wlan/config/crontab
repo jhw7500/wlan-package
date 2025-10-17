@@ -17,4 +17,5 @@ PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 #00 *      * * *    root        logrotate /etc/logrotate.d/logrotate.rsyslog
 #00 *      * * *    root        python3 /usr/local/logger/wifi_logger_clean.py
 00 * *     * * *    root        hwclock -w
-00  * *     * * *    root        /usr/local/scripts/file_manager.sh /var/log/cantops/err 100 10 module
+00 * *     * * *    root        /usr/local/scripts/file_manager.sh /var/log/cantops/err 100 10 module
+00 * *     * * *    root        /usr/local/scripts/chk_mmc.sh

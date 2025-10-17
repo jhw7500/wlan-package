@@ -17,7 +17,8 @@ PCAP_FILE = "/tmp/live.pcap"
 CAP_FILENAME = "mgmt.log"
 BROADCAST_MAC = "ff:ff:ff:ff:ff:ff"
 IFACE = "mlan0"
-SUBTYPE_MASK=0
+SUBTYPE_MASK = 0
+TSHARK_COUNT = "100000"
 parse_proc = None
 
 def handle_sigterm(signum, frame):
@@ -53,75 +54,85 @@ def start_parser(mac_mlan, subtype_mask):
     logger.message('info', "capture start")
     cap = subprocess.Popen(["tcpdump", "-i", INTERFACE, "-U", "-n", "-s", "128", "type", "mgt", "-w", "-"], stdout=subprocess.PIPE)
 
-    parse_proc = subprocess.Popen([
-        "stdbuf", "-oL", "tshark",
-        "-l", "-r", "-",
-        #"-l", "-r", PCAP_FILE,
-        "-n",
-        #"-Y", "wlan.fc.type == 0",
-        #"-f", f"{ether_filter}",
-        "-T", "fields",
-        "-e", "frame.time_epoch",
-        "-e", "wlan.sa",
-        "-e", "wlan.da",
-        "-e", "wlan.fc.type",
-        "-e", "wlan.fc.subtype",
-        "-e", "wlan.fc.retry",
-        "-e", "wlan.seq",
-        "-e", "radiotap.dbm_antsignal",
-        "-e", "radiotap.dbm_antnoise",
-        "-E", "separator=,",
-        "-o", "tcp.desegment_tcp_streams:FALSE",
-        "-o", "tls.desegment_ssl_records:FALSE",
-    ], stdin=cap.stdout, stdout=subprocess.PIPE, text=True, bufsize=1)
+    def spawn_parser(cap_stdout):
+        logger.message('info', "thsark start")
+        return subprocess.Popen([
+            "stdbuf", "-oL", "tshark",
+            "-l", "-r", "-",
+            #"-l", "-r", PCAP_FILE,
+            "-n", "-c", TSHARK_COUNT,
+            #"-Y", "wlan.fc.type == 0",
+            #"-f", f"{ether_filter}",
+            "-T", "fields",
+            "-e", "frame.time_epoch",
+            "-e", "wlan.sa",
+            "-e", "wlan.da",
+            "-e", "wlan.fc.type",
+            "-e", "wlan.fc.subtype",
+            "-e", "wlan.fc.retry",
+            "-e", "wlan.seq",
+            "-e", "radiotap.dbm_antsignal",
+            "-e", "radiotap.dbm_antnoise",
+            "-E", "separator=,",
+            "-o", "tcp.desegment_tcp_streams:FALSE",
+            "-o", "tls.desegment_ssl_records:FALSE",
+        ], stdin=cap_stdout, stdout=subprocess.PIPE, text=True, bufsize=1)
 
-    for line in parse_proc.stdout:
-        fields = line.strip().split(",")
-        if len(fields) < 9:
-            continue
+    parse_proc = spawn_parser(cap.stdout)
+    cap.stdout.close()
 
-        ts, sa, da = fields[0].strip(), fields[1].lower(), fields[2].lower()
-        ftype, fsub, retry, seq, rssi, nf = fields[3:9]
+    while True:
+        for line in parse_proc.stdout:
+            fields = line.strip().split(",")
+            if len(fields) < 9:
+                continue
 
-        if ftype != "0":
-            continue
+            ts, sa, da = fields[0].strip(), fields[1].lower(), fields[2].lower()
+            ftype, fsub, retry, seq, rssi, nf = fields[3:9]
 
-        #action no ac
-        #if fsub == "14":
-        #    continue
+            if ftype != "0":
+                continue
+
+            #action no ac
+            #if fsub == "14":
+            #    continue
             
-        #beacon
-        #if fsub == "8":
-        #    continue
+            #beacon
+            #if fsub == "8":
+            #    continue
 
-        #if sa != mac_mlan and (da != mac_mlan or da != BROADCAST_MAC):
-        #if sa != mac_mlan and da != mac_mlan:
-        #    continue
+            #if sa != mac_mlan and (da != mac_mlan or da != BROADCAST_MAC):
+            #if sa != mac_mlan and da != mac_mlan:
+            #    continue
 
-        try:
-            subtype = int(fsub)
-        except ValueError:
-            continue
+            try:
+                subtype = int(fsub)
+            except ValueError:
+                continue
 
-        if subtype_mask & (1 << subtype):
-            continue
+            if subtype_mask & (1 << subtype):
+                continue
 
-        snr = "N/A"
-        try:
-            snr = str(int(rssi) - int(nf))
-        except:
-            pass
+            snr = "N/A"
+            try:
+                snr = str(int(rssi) - int(nf))
+            except:
+                pass
 
-        #ts_fmt = datetime.fromtimestamp(float(ts), timezone(timedelta(hours=9)))
-        #ts_str = ts_fmt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        frame_str = parse_frame_type(ftype, fsub)
+            #ts_fmt = datetime.fromtimestamp(float(ts), timezone(timedelta(hours=9)))
+            #ts_str = ts_fmt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            frame_str = parse_frame_type(ftype, fsub)
 
-        logger.message('debug', f"{frame_str:<16}({fsub:>2}) : SA={sa:<17} DA={da:<17} RSSI={rssi:>4} NF={nf:>4} SNR={snr:>3} Retry={retry:<3} Seq={seq}");
+            logger.message('debug', f"{frame_str:<16}({fsub:>2}) : SA={sa:<17} DA={da:<17} RSSI={rssi:>4} NF={nf:>4} SNR={snr:>3} Retry={retry:<3} Seq={seq}");
 
-        #msg = (f"{ts_str} {frame_str:<16}({fsub:>2}) : SA={sa:<17} DA={da:<17} "
-        #       f"RSSI={rssi:>4} NF={nf:>4} SNR={snr:>3} Retry={retry:<3} Seq={seq}")
-        #log_file.write(msg + "\n")
-        #log_file.flush()
+            #msg = (f"{ts_str} {frame_str:<16}({fsub:>2}) : SA={sa:<17} DA={da:<17} "
+            #       f"RSSI={rssi:>4} NF={nf:>4} SNR={snr:>3} Retry={retry:<3} Seq={seq}")
+            #log_file.write(msg + "\n")
+            #log_file.flush()
+
+        cap = subprocess.Popen(["tcpdump", "-i", INTERFACE, "-U", "-n", "-s", "128", "type", "mgt", "-w", "-"], stdout=subprocess.PIPE)
+        parse_proc = spawn_parser(cap.stdout)
+        cap.stdout.close()
 
 def parse_frame_type(ftype, fsub):
     if ftype == "0":

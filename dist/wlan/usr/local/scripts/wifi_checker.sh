@@ -126,10 +126,8 @@ while true; do
         if (( DURATION >= MAX_UNSTABLE_DURATION )); then
             logger -p local0.err "[$tag:$LINENO] [$IFACE] restart wpa_supplicant@$IFACE because wifi is not connected during $MAX_UNSTABLE_DURATION" 
             #wpa_cli disable_network 0
-            systemctl stop wpa_supplicant@$IFACE
-            sleep 1
+            wifi $IFACE restart
             #wpa_cli enable_network 0
-            systemctl start wpa_supplicant@$IFACE
             #systemctl restart wifi_bridge@$IFACE
             #log "State=$STATE for ${DURATION}s → triggering reconnect on $IFACE"
             #wpa_cli -i "$IFACE" reconnect

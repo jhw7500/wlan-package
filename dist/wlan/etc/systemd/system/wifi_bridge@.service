@@ -7,6 +7,9 @@ Requires=wifi_init.service
 Conflicts=wifi_bridge@mlan0.service wifi_bridge@mlan1.service
 #ConditionPathExists=/tmp/bridge_en
 PartOf=wpa_supplicant@%i.service
+StartLimitIntervalSec=30
+StartLimitBurst=5
+#StartLimitAction=reboot
 
 [Service]
 #Type=oneshot
@@ -17,8 +20,6 @@ ExecStart=/usr/local/scripts/wifi_bridge.sh %i
 #Restart=on-failure
 Restart=always
 RestartSec=5s
-StartLimitIntervalSec=1min
-StartLimitBurst=5
 User=root
 
 [Install]

@@ -117,6 +117,6 @@ sysctl -w net.ipv4.conf.$IFACE.arp_announce=2
 END
 
 
-sysctl -w net.ipv4.ip_forward=1
-relayd -d -I $IFACE -I eth0 -G $GATEWAY
-#dumb eth0 $IFACE
+sysctl -w net.ipv4.ip_forward=0
+#relayd -d -I $IFACE -I eth0 -G $GATEWAY
+dumb eth0 $IFACE

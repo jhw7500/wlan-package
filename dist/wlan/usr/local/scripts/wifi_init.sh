@@ -49,16 +49,9 @@ if [ -n "$cmd" ]; then
 fi
 
 python3 /usr/local/logger/wired_mac_ip_get.py
-
-#if ! try_insmod "/lib/modules/$KERNEL_VERSION/updates/mlan_6.12.ko" ""; then
-if ! try_insmod "/opt/wlan/driver/debug/mlan.ko" ""; then
-    echo "mlan module load failed"  
-    #exit 1
-fi
-
 #python3 /usr/local/logger/wifi_mac_save.py mlan0 wifi_mod_para__.conf
 
-#MLAN0_MAC=$(cat /opt/wlan/mac/wired_client)
+#MLAN0_MAC=$(cat /opt/wlan/mac/base0)
 MLAN0_MAC=$(cat /tmp/eth0_client_mac)
 if [[ "$MLAN0_MAC" =~ ^([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$ ]]; then
     logger -p local0.info "[$tag:$LINENO] [mlan0] vaild base mac address : $MLAN0_MAC"
@@ -73,6 +66,12 @@ if [[ "$MLAN1_MAC" =~ ^([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$ ]]; then
     python3 /usr/local/logger/wifi_config.py mlan1 mac_addr $MLAN1_MAC
 else
     logger -p local0.err "[$tag:$LINENO] [mlan1] invalid mac address : $MLAN1_MAC"
+fi
+
+#if ! try_insmod "/lib/modules/$KERNEL_VERSION/updates/mlan_6.12.ko" ""; then
+if ! try_insmod "/opt/wlan/driver/mlan.ko" ""; then
+    echo "mlan module load failed"
+    #exit 1
 fi
 
 #if ! try_insmod "/opt/wlan/driver/debug/moal.ko" "fw_name=nxp/pcieuart9098_combo.bin mfg_mode=1"; then
@@ -195,9 +194,8 @@ fi
 sleep 0.5
 #python3 /usr/local/logger/getmac.py
 logger -p local0.info "[$tag:$LINENO] [mlan0] wpa_supplicant start"
-#systemctl start wpa_supplicant@mlan0
 systemctl restart systemd-networkd
-wifi mlan0 up
+wifi mlan0 restart
 
 #sleep 0.5
 #logger -p local0.info "[$tag:$LINENO] [mlan0] start wifi_bridge@mlan0"

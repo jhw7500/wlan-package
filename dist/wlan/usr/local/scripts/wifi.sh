@@ -31,7 +31,7 @@ case "$2" in
     else
         echo "Restarting WPA service $IFACE..."
         systemctl stop wpa_supplicant@$IFACE
-        sleep 0.3
+        sleep 1
         systemctl start wpa_supplicant@$IFACE
     fi
     ;;
