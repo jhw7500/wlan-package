@@ -11,9 +11,6 @@ KEY=PKG
 
 echo "install $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)"
 logger -s -p local0.notice "[$KEY][$tag:$LINENO] install $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME) start"
-#echo "stop cam-operate daemon"
-#systemctl stop cam-operate
-
 
 stop_services_if_running() {
     local services=("$@")
@@ -50,7 +47,6 @@ case "$1" in
 install)
   echo "preinst install ($model)"
   stop_services_if_running \ 
-  		wifi_logger \
   		wifi_logger@mlan0 \
   		wifi_logger@mlan1 \
   		wifi_logger@eth0 \
@@ -67,7 +63,9 @@ install)
   		wifi_arping@mlan1 \
   		wifi_ping@eth0 \
   		wifi_ping@mlan0 \
-  		wifi_ping@mlan1
+  		wifi_ping@mlan1 \
+        wifi_bridge@mlan0 \
+        wifi_bridge@mlan1
 
   #killall apt apt-get
   #rm /var/lib/apt/lists/lock
@@ -86,7 +84,6 @@ install)
 upgrade)
   echo "preinst upgrade ($model)"
   stop_services_if_running \
-                wifi_logger \
                 wifi_logger@mlan0 \
                 wifi_logger@mlan1 \
                 wifi_logger@eth0 \
@@ -103,7 +100,10 @@ upgrade)
                 wifi_arping@mlan1 \
                 wifi_ping@eth0 \
                 wifi_ping@mlan0 \
-                wifi_ping@mlan1
+                wifi_ping@mlan1 \
+                wifi_bridge@mlan0 \
+                wifi_bridge@mlan1
+
 #  systemctl stop rsyslog
   ;;
 

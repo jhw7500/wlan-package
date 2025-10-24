@@ -1,0 +1,15 @@
+# /etc/systemd/system/fake-hwclock.service
+[Unit]
+Description=Restore and persist clock without RTC (fake-hwclock)
+DefaultDependencies=no
+Before=sysinit.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/scripts/fake-hwclock.sh load
+ExecStop=/usr/local/scripts/fake-hwclock.sh save
+
+[Install]
+WantedBy=sysinit.target

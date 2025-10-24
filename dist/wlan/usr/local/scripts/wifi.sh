@@ -1,5 +1,7 @@
 #!/bin/bash
-
+tag=$(basename "$0")
+IFACE=$1
+logger -p local0.info "[$tag:$LINENO] [$IFACE] wifi $1 $2 $3 $4"
 CONF_DIR="/etc/test"
 
 case "$1" in

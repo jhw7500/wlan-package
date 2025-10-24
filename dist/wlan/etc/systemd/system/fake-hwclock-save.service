@@ -1,0 +1,8 @@
+[Unit]
+Description=Save current clock (fake-hwclock)
+DefaultDependencies=no
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/scripts/fake-hwclock.sh save

@@ -2,18 +2,18 @@
 
 BASEDIR=${PWD}
 echo "Script location: ${BASEDIR}"
+mkdir -p ${BASEDIR}/release
 
+cd ${BASEDIR}/dist
+#rm -rf ${BASEDIR}/release
+#cp -R ${BASEDIR}/dist ${BASEDIR}/release
 
-cd ${BASEDIR}
-rm -rf ${BASEDIR}/release
-cp -R ${BASEDIR}/dist ${BASEDIR}/release
-
-cd ${BASEDIR}/release
+#cd ${BASEDIR}/release
 version=$(cat ../dist/wlan/DEBIAN/control| grep Version |grep -v ^$#| cut -d':' -f2 | cut -d',' -f1 | tr -d '"' | tr -d '\r\n' | tr -d ' ')
 package=$(cat ../dist/wlan/DEBIAN/control| grep Package |grep -v ^$#| cut -d':' -f2 | cut -d',' -f1 | tr -d '"' | tr -d '\r\n' | tr -d ' ')
 echo version:$version
-dpkg -b wlan wlan.deb
-cp wlan.deb $package-$version.deb
+dpkg -b wlan ${BASEDIR}/release/wlan.deb
+cp ${BASEDIR}/release/wlan.deb ${BASEDIR}/release/$package-$version.deb
 
 :<<'END'
 #### create_upgrade_file ######################

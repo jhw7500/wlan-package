@@ -1,26 +1,22 @@
 [Unit]
 Description=Wifi Bridge Service for %i
-After=wifi_init.service
-#After=wpa_supplicant@mlan0
-Requires=wifi_init.service
-#Requires=wpa_supplicant@mlan0
-Conflicts=wifi_bridge@mlan0.service wifi_bridge@mlan1.service
-#ConditionPathExists=/tmp/bridge_en
-PartOf=wpa_supplicant@%i.service
+BindsTo=sys-subsystem-net-devices-eth0.device sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-eth0.device sys-subsystem-net-devices-%i.device
+Wants=network-online.target
 StartLimitIntervalSec=30
-StartLimitBurst=5
-#StartLimitAction=reboot
+StartLimitBurst=10
+StartLimitAction=reboot
 
 [Service]
-#Type=oneshot
-#ExecStartPre=/bin/bash -c 'for i in {1..10}; do [ -d /sys/class/net/%i ] && exit 0 || sleep 1; done; exit 1'
+Type=simple
 ExecStart=/usr/local/scripts/wifi_bridge.sh %i
-#ExecStop=/usr/local/scripts/wifi_bridge_stop.sh %i
-#RemainAfterExit=yes
-#Restart=on-failure
+ExecStop=/usr/local/scripts/wifi_bridge_stop.sh %i
 Restart=always
-RestartSec=5s
-User=root
+#Restart=on-failure
+RestartSec=1s
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+NoNewPrivileges=yes
 
 [Install]
 WantedBy=multi-user.target
