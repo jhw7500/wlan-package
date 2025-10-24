@@ -12,6 +12,7 @@ LIMIT_CNT=5
 ERR_CNT=0
 STATE=""
 PRE_STATE=""
+PCI_BUS=""
 
 cleanup() {
     logger -p $local0.info "[$tag:$LINENO] [$IFACE] wifi_checker stop"
@@ -29,6 +30,10 @@ logger -p local0.info "[$tag:$LINENO] [$IFACE] wifi_checker"
 if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" && "$IFACE" != "eth0" ]]; then
     logger -p local0.emerg "[$tag:$LINENO] [$IFACE] interface is wrong!!"
     exit 1
+elif [ "$IFACE" == "mlan0" ]; then
+    PCI_BUS="/sys/bus/pci/devices/0000:01:00.0"
+elif [ "$IFACE" == "mlan1" ]; then
+    PCI_BUS="/sys/bus/pci/devices/0000:01:00.1"
 fi
 
 get_state() {
@@ -65,10 +70,13 @@ sleep 10
 while true; do
     #sleep 3
     if [[ "$IFACE" == "eth0" ]]; then
-          STATE=$(jq -r '.eth_stats.phy.link' "/var/log/cantops/json/eth0/link.json")
+          #STATE=$(jq -r '.eth_stats.phy.link' "/var/log/cantops/json/eth0/link.json")
+          STATE=$(cat /sys/class/net/eth0/operstate)
           if [[ "$STATE" == "up" && "$PRE_STATE" != "up" ]]; then
               logger -p local0.info "[$tag:$LINENO] [$IFACE] link change down -> up"
-              systemctl restart wifi_bridge@mlan0
+              systemctl stop wifi_bridge@mlan0
+              sleep 0.5
+              systemctl start wifi_bridge@mlan0
               #ACTIVE_BRIDGE=$(systemctl list-units --type=service --state=running | grep -oE 'wifi_bridge@[^ ]+')
               #if [[ -n "$ACTIVE_BRIDGE" ]]; then
               #    logger -p local0.info "[$tag:$LINENO] [$IFACE] $ACTIVE_BRIDGE restart"
@@ -85,9 +93,13 @@ while true; do
         ((ERR_CNT++))
         logger -p local0.err "[$tag:$LINENO] [$IFACE] is not exist becase F/W dump...(ERR_CNT:$ERR_CNT)"
         if [ "$ERR_CNT" -gt "$LIMIT_CNT" ]; then
-            logger -p local0.emerg "[$tag:$LINENO] [$IFACE] Reboot because $IFACE is cannot recovery(ERR_CNT:$ERR_CNT > LIMIT_CNT:$LIMIT_CNT)"
             TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
             LOG_FILE="$LOG_DIR/module_${TIMESTAMP}.log"
+            if [ ! -d "$PCI_BUS" ]; then
+                logger -p local0.emerg "[$tag:$LINENO] [$IFACE] Reboot because PCI link error ($ERR_CNT > $LIMIT_CNT)"
+            else
+                logger -p local0.emerg "[$tag:$LINENO] [$IFACE] Reboot because WiFi F/W error ($ERR_CNT > $LIMIT_CNT)"
+            fi
             #logger -p local0.info "[$tag:$LINENO] [$IFACE] dmesg |tail -1000 > $LOG_FILE"
             #dmesg |tail -1000 > "$LOG_FILE"
             #LOG_FILE="$LOG_DIR/${TIMESTAMP}_jo.log"

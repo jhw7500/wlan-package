@@ -122,7 +122,13 @@ customctl() {
   customctl nmb disabled
   customctl avahi-daemon.socket disabled
   customctl avahi-daemon disabled
+  customctl avahi-daemon masked
+  customctl avahi-autoipd disable
+  customctl avahi-autoipd masked
   customctl containerd disabled
+  customctl lighttpd disabled
+  customctl nginx disabled
+  customctl monkey disabled
   #customctl samba disabled
   #customctl hciattach disabled
 
@@ -285,6 +291,9 @@ copyFILE() {
   ln -s /usr/local/scripts/mlanutl_silent.sh /usr/local/bin/mlanutl_silent
 
   #rm /usr/local/bin/mfgbridge
+
+  #tar -xvf /opt/wlan/webmin/webmin_usr.tar -C /usr/libexec/
+  #tar -xvf /opt/wlan/webmin/webmin_etc.tar -C /etc/
 
   PACKAGE_NAME="$DPKG_MAINTSCRIPT_PACKAGE"
   echo -e "\e[32m install $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME) finish\e[0m"
