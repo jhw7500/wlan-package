@@ -13,6 +13,8 @@ ERR_CNT=0
 STATE=""
 PRE_STATE=""
 PCI_BUS=""
+BRIDGE_PID=""
+BCNT=0
 
 cleanup() {
     logger -p $local0.info "[$tag:$LINENO] [$IFACE] wifi_checker stop"
@@ -112,13 +114,23 @@ while true; do
         fi
         sleep 3
         continue
+    else
+        BRIDGE_PID=$(pgrep wifi_bridge.sh)
+        if [ -z "$BRIDGE_PID" ]; then
+            ((BCNT++))
+            if [ $BCNT -gt 5 ]; then
+                systemctl restart wifi_bridge@mlan0
+            fi
+        else
+            BCNT=0
+        fi
     fi
 
     ERR_CNT=0
 
 #:<<'END'
     if ! is_wpa_active; then
-        #log "wpa_supplicant@${IFACE}.service not active — waiting..."
+        #log "wpa_supplicant@${IFACE}.service not active ? waiting..."
         UNSTABLE_START=0
         #sleep $CHECK_INTERVAL
         sleep 3
