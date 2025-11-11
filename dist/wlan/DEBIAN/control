@@ -1,5 +1,5 @@
 Package: wlan-proc
-Version: 0.0.6
+Version: 0.0.7
 Section: test
 Priority: optional
 Architecture: arm64 
@@ -17,3 +17,4 @@ Description: WLAN Application
 0.0.4 : new kernel test
 0.0.5 : arping, daemon start logic
 0.0.6 : capture, dual roam test, daemon, etc
+0.0.7 : bridge restart daemon, dumb test

@@ -14,6 +14,7 @@ package=$(cat ../dist/wlan/DEBIAN/control| grep Package |grep -v ^$#| cut -d':' 
 echo version:$version
 dpkg -b wlan ${BASEDIR}/release/wlan.deb
 cp ${BASEDIR}/release/wlan.deb ${BASEDIR}/release/$package-$version.deb
+tar -cvf ${BASEDIR}/release/wlan-package.tar ${BASEDIR}
 
 :<<'END'
 #### create_upgrade_file ######################
