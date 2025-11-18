@@ -13,7 +13,6 @@ mkdir -p "$DST"
 rsync -a --inplace --no-whole-file --chmod=Fu=rw,Fg=r,Fa=r "$SRC"/ "$DST"/
 
 cnt=$(find "$DIR" -mindepth 1 -maxdepth 1 -type d | wc -l)
-size=$(du -sb "$DIR" | awk '{print $1}')
 if (( cnt > MAX_CNT )); then
     logger -p local0.info "[$tag:$LINENO] journald file cnt : $cnt > $MAX_CNT"
     del=$((cnt - MAX_CNT))

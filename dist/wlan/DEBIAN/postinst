@@ -324,9 +324,9 @@ copyFILE() {
   #tar -xvf /opt/wlan/webmin/webmin_etc.tar -C /etc/
 
   PACKAGE_NAME="$DPKG_MAINTSCRIPT_PACKAGE"
-  echo -e "\e[32m installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME) : finish\e[0m"
-  echo -e "\e[32m installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME) : finish\e[0m" > /dev/ttyGS0
-  logger -p local0.notice "[$KEY][$tag:$LINENO] installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME) : finish"
+  echo -e "installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)"
+  #echo -e "\e[32m installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME) : finish\e[0m" > /dev/ttyGS0
+  logger -p local0.info "[$KEY][$tag:$LINENO] installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)"
   /usr/local/scripts/fake-hwclock.sh save
   sync
   ;;
