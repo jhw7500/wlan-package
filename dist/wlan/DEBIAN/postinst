@@ -34,6 +34,16 @@ case "$1" in
 configure)
   echo "postinst configure"
   #/usr/local/scripts/auto_fs_sizeup.sh 2 2
+  TARGET_TIME="2025-11-18 15:00:00"
+  CURRENT_TS=$(date +%s)
+  TARGET_TS=$(date -d "$TARGET_TIME" +%s)
+  echo "date : $(date '+%Y-%m-%d %H:%M:%S')"
+  if [ $CURRENT_TS -lt $TARGET_TS ]; then
+    echo "set time $TARGET_TIME"
+    timedatectl set-ntp false
+    timedatectl set-timezone Asia/Seoul
+    timedatectl set-time '2025-11-18 15:00:00'
+  fi
 
 :<<'END'
   status=$(df |grep /dev/root |awk '{print $2}')
@@ -317,6 +327,7 @@ copyFILE() {
   echo -e "\e[32m installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME) : finish\e[0m"
   echo -e "\e[32m installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME) : finish\e[0m" > /dev/ttyGS0
   logger -p local0.notice "[$KEY][$tag:$LINENO] installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME) : finish"
+  /usr/local/scripts/fake-hwclock.sh save
   sync
   ;;
 
