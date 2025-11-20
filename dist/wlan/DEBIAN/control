@@ -20,4 +20,4 @@ Description: WLAN Application
 0.0.7 : bridge restart daemon, dumb test
 0.0.8 : wlan f/w, driver, app, mfg version up
 0.0.9 : txpwrlimit, wifi cmd, link stat, journald
-0.1.0 : 
+0.1.0 : dumb, arping, wpa_cli, usb_print, target mac, switch no delay

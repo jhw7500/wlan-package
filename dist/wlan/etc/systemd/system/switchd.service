@@ -2,7 +2,9 @@
 [Unit]
 Description=GPIO switch daemon (auto-compat v2/v1/sysfs)
 #After=multi-user.target
+After=wifi_init.service
 #Before=wifi_init.service
+#Before=sysinit.target
 
 [Service]
 Type=simple

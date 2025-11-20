@@ -14,7 +14,7 @@ LED="/sys/class/leds/5VREG_nEN/brightness"
 LOGKMSG="/dev/kmsg"
 
 state=$(cat /sys/kernel/debug/regmap/0-004b/registers |grep 2d:|awk '{print $2}')
-sleep 5
+#sleep 5
 logger -p local0.emerg "[$tag:$LINENO] switchd ready : 0x$state"
 
 fifo=/run/switchd.gpio
@@ -68,7 +68,7 @@ while :; do
                             echo "short press: power off : 0x$state" > /dev/console
                             #echo "short press: power off : 0x$state" > /dev/kmsg
                             /usr/local/scripts/journald_snapshot.sh
-                            sleep 0.5
+                            #sleep 0.5
                             [ -e "$LED" ] && echo 0 > "$LED"
                             [ -e "$LED" ] && echo 1 > "$LED"
                         else
