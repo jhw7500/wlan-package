@@ -1,6 +1,8 @@
 [Unit]
 Description=Arping Service for %i
-After=network.target
+BindsTo=sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-%i.device systemd-networkd.service
+#After=network.target
 
 [Service]
 Type=simple

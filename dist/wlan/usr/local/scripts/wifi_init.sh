@@ -55,11 +55,22 @@ python3 /usr/local/logger/wired_mac_ip_get.py
 #MLAN0_MAC=$(cat /opt/wlan/mac/base0)
 MLAN0_MAC=$(cat /tmp/eth0_client_mac)
 if [[ "$MLAN0_MAC" =~ ^([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$ ]]; then
-    logger -p local0.info "[$tag:$LINENO] [mlan0] vaild base mac address : $MLAN0_MAC"
+    logger -p local0.info "[$tag:$LINENO] [mlan0] vaild dynamic mac : $MLAN0_MAC"
+    #echo "$MLAN0_MAC" > /opt/wlan/mac/target0
 else
-    logger -p local0.err "[$tag:$LINENO] [mlan0] invalid mac address : $MLAN0_MAC"
-    MLAN0_MAC=$(cat /opt/wlan/mac/base0)
-    logger -p local0.info "[$tag:$LINENO] [mlan0] fallback base mac address : $MLAN0_MAC" 
+    logger -p local0.err "[$tag:$LINENO] [mlan0] invalid dynamic mac : $MLAN0_MAC"
+    MLAN0_MAC=$(cat /opt/wlan/mac/target0)
+    if [[ "$MLAN0_MAC" =~ ^([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$ ]]; then
+        logger -p local0.info "[$tag:$LINENO] [mlan0] vaild static mac : $MLAN0_MAC"
+    else
+        logger -p local0.err "[$tag:$LINENO] [mlan0] invaild static mac : $MLAN0_MAC"
+        MLAN0_MAC=$(cat /opt/wlan/mac/base0)
+        if [[ "$MLAN0_MAC" =~ ^([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$ ]]; then
+            logger -p local0.info "[$tag:$LINENO] [mlan0] valid base mac : $MLAN0_MAC"
+        else
+            logger -p local0.err "[$tag:$LINENO] [mlan0] invalid base mac : $MLAN0_MAC"
+        fi
+    fi
 fi
 
 /usr/local/scripts/update_mac.sh mlan0 $MLAN0_MAC
@@ -67,11 +78,21 @@ fi
 
 MLAN1_MAC=$(cat /opt/wlan/mac/base1)
 if [[ "$MLAN1_MAC" =~ ^([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$ ]]; then
-    logger -p local0.info "[$tag:$LINENO] [mlan1] vaild base mac address : $MLAN1_MAC"
+    logger -p local0.info "[$tag:$LINENO] [mlan1] vaild dynamic mac : $MLAN1_MAC"
 else
-    logger -p local0.err "[$tag:$LINENO] [mlan1] invalid mac address : $MLAN1_MAC"
-    MLAN1_MAC=$(cat /opt/wlan/mac/base1)
-    logger -p local0.info "[$tag:$LINENO] [mlan1] fallback base mac address : $MLAN1_MAC"
+    logger -p local0.err "[$tag:$LINENO] [mlan1] invalid dynamic mac : $MLAN1_MAC"
+    MLAN1_MAC=$(cat /opt/wlan/mac/target1)
+    if [[ "$MLAN1_MAC" =~ ^([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$ ]]; then
+        logger -p local0.info "[$tag:$LINENO] [mlan1] vaild static mac : $MLAN1_MAC"
+    else
+        logger -p local0.err "[$tag:$LINENO] [mlan1] invaild static mac : $MLAN1_MAC"
+        MLAN1_MAC=$(cat /opt/wlan/mac/base1)
+        if [[ "$MLAN1_MAC" =~ ^([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$ ]]; then
+            logger -p local0.info "[$tag:$LINENO] [mlan1] valid base mac : $MLAN1_MAC"
+        else
+            logger -p local0.err "[$tag:$LINENO] [mlan1] invalid base mac : $MLAN1_MAC"
+        fi
+    fi
 fi
 
 /usr/local/scripts/update_mac.sh mlan1 $MLAN1_MAC

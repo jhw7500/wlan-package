@@ -257,6 +257,20 @@ def is_wifi_connected_wpa(interface="mlan0") -> bool:
     except subprocess.CalledProcessError:
         return False
 
+def is_wifi_connected_iw(interface="mlan0") -> bool:
+    try:
+        # iw <iface> link 실행
+        output = subprocess.check_output(
+            ["iw", interface, "link"],
+            stderr=subprocess.DEVNULL,
+            encoding="utf-8"
+        )
+        
+        return "Connected to" in output
+
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
 def main():
     os.makedirs(LOG_DIR, exist_ok=True)
     while True:
@@ -285,7 +299,8 @@ def main():
             time.sleep(1)
             continue
 
-        if is_wifi_connected_wpa(IFACE):
+        #if is_wifi_connected_wpa(IFACE):
+        if is_wifi_connected_iw(IFACE):
             #info_out = run_command(["iw", IFACE, "info"])
             #station_out = run_command(["iw", IFACE, "station", "dump"])
             #channel_out = run_command(["iw", IFACE, "survey", "dump"])

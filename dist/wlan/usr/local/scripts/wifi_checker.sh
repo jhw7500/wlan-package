@@ -37,7 +37,9 @@ elif [ "$IFACE" == "mlan1" ]; then
 fi
 
 get_state() {
-    wpa_cli -i "$IFACE" status | grep "^wpa_state=" | cut -d= -f2
+    #wpa_cli -i "$IFACE" status | grep "^wpa_state=" | cut -d= -f2
+    #iw "$IFACE" link | grep 'Connected to' >/dev/null && echo "COMPLETED" || echo "DISCONNECTED"
+    cat /sys/class/net/"$IFACE"/operstate
 }
 
 is_wpa_active() {
@@ -128,7 +130,7 @@ while true; do
     STATE=$(get_state)
     TIMESTAMP=$(date +%s)
 
-    if [[ "$STATE" == "DISCONNECTED" || "$STATE" == "SCANNING" ]]; then
+    if [[ "$STATE" == "DISCONNECTED" || "$STATE" == "SCANNING" || "$STATE" == "down" ]]; then
         if [[ $UNSTABLE_START -eq 0 ]]; then
             UNSTABLE_START=$TIMESTAMP
         fi

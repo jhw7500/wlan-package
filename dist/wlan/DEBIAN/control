@@ -1,5 +1,5 @@
 Package: wlan-proc
-Version: 0.0.9
+Version: 0.1.0
 Section: test
 Priority: optional
 Architecture: arm64 
@@ -20,3 +20,4 @@ Description: WLAN Application
 0.0.7 : bridge restart daemon, dumb test
 0.0.8 : wlan f/w, driver, app, mfg version up
 0.0.9 : txpwrlimit, wifi cmd, link stat, journald
+0.1.0 : 

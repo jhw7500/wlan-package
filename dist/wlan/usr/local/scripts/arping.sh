@@ -5,7 +5,7 @@ tag=$(basename "$0")
 FAILS=0
 THRESHOLD=${THRESHOLD:-5}
 COOLDOWN=${COOLDOWN:-10}
-LOOPDELAY=${LOOPDELAY:-5}
+LOOPDELAY=${LOOPDELAY:-10}
 
 get_state() {
     wpa_cli -i "$IFACE" status | grep "^wpa_state=" | cut -d= -f2
@@ -55,13 +55,15 @@ elif [ "$IFACE" = "mlan0" ]; then
         logger -p local1.info "[$tag:$LINENO] [$IFACE] not ready"
         exit 1
     fi
-    TARGET_IP=$(grep -E '^Gateway=' /etc/systemd/network/20-mlan0.network | head -n1 | cut -d= -f2)
+    #TARGET_IP=$(grep -E '^Gateway=' /etc/systemd/network/20-mlan0.network | head -n1 | cut -d= -f2)
+    TARGET_IP=$(ip route | awk '/^default/ && /mlan0/ {print $3}')
 elif [ "$IFACE" = "mlan1" ]; then
     if ! is_wpa_active || ! is_connected; then
         logger -p local1.info "[$tag:$LINENO] [$IFACE] not ready"
         exit 1
     fi
-    TARGET_IP=$(grep -E '^Gateway=' /etc/systemd/network/21-mlan1.network | head -n1 | cut -d= -f2)
+    #TARGET_IP=$(grep -E '^Gateway=' /etc/systemd/network/21-mlan1.network | head -n1 | cut -d= -f2)
+    TARGET_IP=$(ip route | awk '/^default/ && /mlan1/ {print $3}')
 else
     logger -p local1.info "[$tag:$LINENO] [$IFACE] interface is wrong : $IFACE"
     exit 1
@@ -81,7 +83,7 @@ fi
 logger -p local1.info "[$tag:$LINENO] [$IFACE] start : $TARGET_IP"
 
 while true; do
-  if arping -I "$IFACE" -c 1 -w 2 "$TARGET_IP" >/dev/null 2>&1; then
+  if arping -I "$IFACE" -c 1 -w 3 "$TARGET_IP" >/dev/null 2>&1; then
     FAILS=0
     logger -p local1.info "[$tag:$LINENO] [$IFACE] ARP OK: $TARGET_IP"
     sleep "$LOOPDELAY"
@@ -102,7 +104,7 @@ while true; do
       FAILS=0
       sleep "$COOLDOWN"
     else
-      sleep 3
+      sleep "$LOOPDELAY"
     fi
   fi
 done
