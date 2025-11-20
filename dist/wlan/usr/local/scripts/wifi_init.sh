@@ -76,22 +76,16 @@ fi
 /usr/local/scripts/update_mac.sh mlan0 $MLAN0_MAC
 #python3 /usr/local/logger/wifi_config.py mlan0 mac_addr $MLAN0_MAC
 
-MLAN1_MAC=$(cat /opt/wlan/mac/base1)
+MLAN1_MAC=$(cat /opt/wlan/mac/target1)
 if [[ "$MLAN1_MAC" =~ ^([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$ ]]; then
-    logger -p local0.info "[$tag:$LINENO] [mlan1] vaild dynamic mac : $MLAN1_MAC"
+    logger -p local0.info "[$tag:$LINENO] [mlan1] vaild static mac : $MLAN1_MAC"
 else
-    logger -p local0.err "[$tag:$LINENO] [mlan1] invalid dynamic mac : $MLAN1_MAC"
-    MLAN1_MAC=$(cat /opt/wlan/mac/target1)
+    logger -p local0.err "[$tag:$LINENO] [mlan1] invaild static mac : $MLAN1_MAC"
+    MLAN1_MAC=$(cat /opt/wlan/mac/base1)
     if [[ "$MLAN1_MAC" =~ ^([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$ ]]; then
-        logger -p local0.info "[$tag:$LINENO] [mlan1] vaild static mac : $MLAN1_MAC"
+        logger -p local0.info "[$tag:$LINENO] [mlan1] valid base mac : $MLAN1_MAC"
     else
-        logger -p local0.err "[$tag:$LINENO] [mlan1] invaild static mac : $MLAN1_MAC"
-        MLAN1_MAC=$(cat /opt/wlan/mac/base1)
-        if [[ "$MLAN1_MAC" =~ ^([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$ ]]; then
-            logger -p local0.info "[$tag:$LINENO] [mlan1] valid base mac : $MLAN1_MAC"
-        else
-            logger -p local0.err "[$tag:$LINENO] [mlan1] invalid base mac : $MLAN1_MAC"
-        fi
+        logger -p local0.err "[$tag:$LINENO] [mlan1] invalid base mac : $MLAN1_MAC"
     fi
 fi
 
@@ -231,7 +225,7 @@ fi
 
 sleep 0.5
 #python3 /usr/local/logger/getmac.py
-logger -p local0.info "[$tag:$LINENO] [mlan0] wpa_supplicant start"
+#logger -p local0.info "[$tag:$LINENO] [mlan0] wpa_supplicant start"
 systemctl restart systemd-networkd
 wifi mlan0 restart
 
