@@ -8,7 +8,7 @@ After=sys-subsystem-net-devices-%i.device systemd-networkd.service
 Type=simple
 ExecStart=/usr/local/scripts/arping.sh %i
 Restart=on-failure
-RestartSec=5
+RestartSec=10
 User=root
 #RemainAfterExit=true
 

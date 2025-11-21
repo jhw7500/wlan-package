@@ -3,9 +3,10 @@ IFACE=$1
 CONF_FILE=""
 tag=$(basename "$0")
 FAILS=0
-THRESHOLD=${THRESHOLD:-5}
+THRESHOLD=${THRESHOLD:-10}
 COOLDOWN=${COOLDOWN:-10}
 LOOPDELAY=${LOOPDELAY:-10}
+F="local0"
 
 get_state() {
     wpa_cli -i "$IFACE" status | grep "^wpa_state=" | cut -d= -f2
@@ -46,60 +47,60 @@ is_plausible_host_ip() {
 if [ "$IFACE" = "eth0" ]; then
     STATE=$(jq -r '.eth_stats.phy.link' "/var/log/cantops/json/eth0/link.json")
     if [[ "$STATE" != "up" ]]; then
-        logger -p local1.info "[$tag:$LINENO] [$IFACE] not ready"
+        logger -p $F.info "[$tag:$LINENO] [$IFACE] not ready"
         exit 1
     fi
     TARGET_IP=$(cat /tmp/${IFACE}_client_ip)
 elif [ "$IFACE" = "mlan0" ]; then
     if ! is_wpa_active || ! is_connected; then
-        logger -p local1.info "[$tag:$LINENO] [$IFACE] not ready"
+        logger -p $F.info "[$tag:$LINENO] [$IFACE] not ready"
         exit 1
     fi
     #TARGET_IP=$(grep -E '^Gateway=' /etc/systemd/network/20-mlan0.network | head -n1 | cut -d= -f2)
     TARGET_IP=$(ip route | awk '/^default/ && /mlan0/ {print $3}')
 elif [ "$IFACE" = "mlan1" ]; then
     if ! is_wpa_active || ! is_connected; then
-        logger -p local1.info "[$tag:$LINENO] [$IFACE] not ready"
+        logger -p $F.info "[$tag:$LINENO] [$IFACE] not ready"
         exit 1
     fi
     #TARGET_IP=$(grep -E '^Gateway=' /etc/systemd/network/21-mlan1.network | head -n1 | cut -d= -f2)
     TARGET_IP=$(ip route | awk '/^default/ && /mlan1/ {print $3}')
 else
-    logger -p local1.info "[$tag:$LINENO] [$IFACE] interface is wrong : $IFACE"
+    logger -p $F.info "[$tag:$LINENO] [$IFACE] interface is wrong : $IFACE"
     exit 1
 fi
 
 if ! is_ipv4 "$TARGET_IP"; then
-  logger -p local1.err "[$tag:$LINENO] [$IFACE] invalid Target IP : '$TARGET_IP'"
+  logger -p $F.err "[$tag:$LINENO] [$IFACE] invalid Target IP : '$TARGET_IP'"
   exit 1
 fi
 
 if ! is_plausible_host_ip "$TARGET_IP"; then
-  logger -p local1.err "[$tag:$LINENO] [$IFACE] implausible Target IP : '$TARGET_IP'"
+  logger -p $F.err "[$tag:$LINENO] [$IFACE] implausible Target IP : '$TARGET_IP'"
   exit 1
 fi
 
 #TARGET_IP="192.168.0.20"
-logger -p local1.info "[$tag:$LINENO] [$IFACE] start : $TARGET_IP"
+logger -p $F.info "[$tag:$LINENO] [$IFACE] start : $TARGET_IP"
 
 while true; do
   if arping -I "$IFACE" -c 1 -w 3 "$TARGET_IP" >/dev/null 2>&1; then
     FAILS=0
-    logger -p local1.info "[$tag:$LINENO] [$IFACE] ARP OK: $TARGET_IP"
+    logger -p $F.info "[$tag:$LINENO] [$IFACE] ARP OK: $TARGET_IP"
     sleep "$LOOPDELAY"
   else
     FAILS=$((FAILS+1))
     
-    logger -p local1.warning "[$tag:$LINENO] [$IFACE] ARP NO-REPLY ($FAILS/$THRESHOLD): $TARGET_IP"
+    logger -p $F.warning "[$tag:$LINENO] [$IFACE] ARP NO-REPLY ($FAILS/$THRESHOLD): $TARGET_IP"
     if [ "$FAILS" -ge "$THRESHOLD" ]; then
       if [ "$IFACE" = "eth0" ]; then
-        logger -p local1.err "[$tag:$LINENO] [$IFACE] threshold reached  -> wired_get_mac_ip.py"
+        logger -p $F.err "[$tag:$LINENO] [$IFACE] threshold reached  -> wired_get_mac_ip.py"
         python3 /usr/local/logger/wired_mac_ip_get.py
         TARGET_IP=$(cat /tmp/${IFACE}_client_ip)
         #exit 1
       else
-        logger -p local1.err "[$tag:$LINENO] [$IFACE] threshold reached  -> restart systemd-networkd"
-        systemctl restart systemd-networkd
+        logger -p $F.err "[$tag:$LINENO] [$IFACE] threshold reached  -> restart systemd-networkd?"
+        #systemctl restart systemd-networkd
       fi
       FAILS=0
       sleep "$COOLDOWN"

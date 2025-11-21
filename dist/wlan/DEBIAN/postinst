@@ -152,8 +152,8 @@ customctl() {
 
   customctl switchd enabled
   customctl fake-hwclock.service enabled
-  customctl fake-hwclock.timer enabled
-  customctl journald-snapshot.timer enabled
+  customctl fake-hwclock.timer disabled
+  customctl journald-snapshot.timer disabled
   customctl wifi_init enabled
   customctl wifi_logger enabled
 
