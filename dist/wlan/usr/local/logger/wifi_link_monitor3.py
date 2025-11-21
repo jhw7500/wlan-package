@@ -4,7 +4,7 @@ import curses
 import os
 import argparse
 
-FILE_PATH = "/var/log/cantops/link/mlan0/link.json"
+FILE_PATH = "/var/log/cantops/json/mlan0/link.json"
 INTERVAL = 1
 
 def load_json(filepath):
@@ -53,7 +53,7 @@ def draw_screen(stdscr, data):
 
 def main(stdscr):
     parser = argparse.ArgumentParser()
-    parser.add_argument("path", nargs="?", default="/var/log/cantops/link/mlan0/link.json", help="Path to JSON file")
+    parser.add_argument("path", nargs="?", default="/var/log/cantops/json/mlan0/link.json", help="Path to JSON file")
     args = parser.parse_args()
     global FILE_PATH
     FILE_PATH = args.path

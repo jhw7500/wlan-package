@@ -3,14 +3,17 @@ tag=$(basename "$0")
 IFACE=$1
 logger -p local0.info "[$tag:$LINENO] [$IFACE] wifi $1 $2 $3 $4"
 CONF_DIR="/etc/test"
+NUM=""
 
 case "$1" in
   0 | mlan0)
     IFACE="mlan0"
     NFACE="mlan1"
+    NUM=0
     ;;
   1 | mlan1)
     IFACE="mlan1"
+    NUM=1
     NFACE="mlan0"
     ;;
   2 )
@@ -28,6 +31,11 @@ case "$1" in
     cd /usr/local/mfg/
     ./mfgbridge
     exit 1
+    ;;
+  txpwrlimit)
+    cp $2 /lib/firmware/cts/
+    python3 /usr/local/logger/wifi_config.py mlan0 txpwrlimit_cfg cts/$2
+    python3 /usr/local/logger/wifi_config.py mlan1 txpwrlimit_cfg cts/$2
     ;;
   *)
     echo "Usage: $0 {0|1|mlan0|mlan1} {start|up|stop|down|restart|status}"
@@ -103,35 +111,32 @@ case "$2" in
     mlanutl $IFACE hostcmd $TXPWRLIMIT_PATH txpwrlimit_5g_cfg_set_sub3 > /dev/null 2>&1
     ;;
   config)
-    case "$3" in
-      set)
-        echo "python3 /usr/local/logger/wifi_config.py $1 $4 $5"
-        python3 /usr/local/logger/wifi_config.py $1 $4 $5
-        ;;
-      mac)
-        echo "python3 /usr/local/logger/wifi_config.py $1 mac_addr $4"
-        python3 /usr/local/logger/wifi_config.py $1 mac_addr $4
-        ;;
-      txpwr)
-        cp $4 /lib/firmware/nxp/
-        python3 /usr/local/logger/wifi_config.py $1 txpwrlimit_cfg nxp/$4
-        ;;
-      cal)
-        cp $4 /lib/firmware/nxp/
-        python3 /usr/local/logger/wifi_config.py $1 cal_data_cfg nxp/$4
-        ;;
-      mfg)
-        if [ "$4" == "0" ]; then
-            python3 /usr/local/logger/wifi_config.py $1 mfg_mode 0
-            python3 /usr/local/logger/wifi_config.py $1 fw_name cts/pcieuart9098_combo_v1.bin
-        elif [ "$4" == "1" ]; then
-            python3 /usr/local/logger/wifi_config.py $1 mfg_mode 1
-            python3 /usr/local/logger/wifi_config.py $1 fw_name cts/pcieuart9098_combo.bin
-        fi
-        ;;
-      *)
-        ;;
-    esac
+    echo "python3 /usr/local/logger/wifi_config.py $1 $3 $4"
+    python3 /usr/local/logger/wifi_config.py $1 $3 $4
+    ;;
+  mac)
+    echo "python3 /usr/local/logger/wifi_config.py $1 mac_addr $3"
+    python3 /usr/local/logger/wifi_config.py $1 mac_addr $3
+    ;;
+  cal)
+    cp $4 /lib/firmware/cts/
+    python3 /usr/local/logger/wifi_config.py $1 cal_data_cfg cts/$3
+    ;;
+  mfg)
+    if [ "$3" == "0" ]; then
+        python3 /usr/local/logger/wifi_config.py $1 mfg_mode 0
+        python3 /usr/local/logger/wifi_config.py $1 fw_name cts/pcieuart9098_combo_v1.bin
+    elif [ "$3" == "1" ]; then
+        python3 /usr/local/logger/wifi_config.py $1 mfg_mode 1
+        python3 /usr/local/logger/wifi_config.py $1 fw_name cts/pcieuart9098_combo.bin
+    fi
+    ;;
+  spoof)
+    if [ "$3" == "dynamic" ]; then
+        cat /dev/null > "/opt/wlan/mac/target$NUM"
+    elif [ "$3" == "static" ]; then
+        cp /tmp/eth0_client_mac "/opt/wlan/mac/target$NUM"
+    fi
     ;;
   *)
     echo "Usage: $0 {0|1|mlan0|mlan1} {start|up|stop|down|restart|status}"

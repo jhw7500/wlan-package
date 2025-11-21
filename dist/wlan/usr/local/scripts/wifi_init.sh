@@ -57,6 +57,7 @@ MLAN0_MAC=$(cat /tmp/eth0_client_mac)
 if [[ "$MLAN0_MAC" =~ ^([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$ ]]; then
     logger -p local0.info "[$tag:$LINENO] [mlan0] vaild dynamic mac : $MLAN0_MAC"
     #echo "$MLAN0_MAC" > /opt/wlan/mac/target0
+    echo "$MLAN0_MAC" > /opt/wlan/mac/wired_client
 else
     logger -p local0.err "[$tag:$LINENO] [mlan0] invalid dynamic mac : $MLAN0_MAC"
     MLAN0_MAC=$(cat /opt/wlan/mac/target0)
