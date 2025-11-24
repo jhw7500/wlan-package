@@ -57,7 +57,7 @@ while true; do
     elif (( $(echo "$a >= $CRIT_A"  | bc -l) )); then LOG_LEVEL=crit
     elif (( $(echo "$a >= $ERR_A"   | bc -l) )); then LOG_LEVEL=err
     elif (( $(echo "$a >= $WARN_A"  | bc -l) )); then LOG_LEVEL=warn
-    else LOG_LEVEL=info
+    else LOG_LEVEL=debug
     fi
 
     logger -p ${FACILITY}.${LOG_LEVEL} "[$tag:$LINENO] CH0(Current): $(printf '%.3f' "$a")A, CH1(Voltage): $(printf '%.3f' "$v")V"

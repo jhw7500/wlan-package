@@ -247,8 +247,8 @@ makeDirectory() {
   /usr/local/scripts/change_line.sh "Wants=network.target wifi_bridge@%i.service" "Wants=" /lib/systemd/system/wpa_supplicant@.service
   /usr/local/scripts/change_line.sh "Storage=volatile" "Storage=" /etc/systemd/journald.conf
   /usr/local/scripts/change_line.sh "SyncIntervalSec=1m" "SyncIntervalSec=" /etc/systemd/journald.conf
-  /usr/local/scripts/change_line.sh "RuntimeMaxUse=64M" "RuntimeMaxUse=" /etc/systemd/journald.conf
-  /usr/local/scripts/change_line.sh "RuntimeKeepFree=16M" "RuntimeKeepFree=" /etc/systemd/journald.conf
+  #/usr/local/scripts/change_line.sh "RuntimeMaxUse=64M" "RuntimeMaxUse=" /etc/systemd/journald.conf
+  #/usr/local/scripts/change_line.sh "RuntimeKeepFree=16M" "RuntimeKeepFree=" /etc/systemd/journald.conf
   /usr/local/scripts/change_line.sh "MaxLevelStore=info" "MaxLevelStore=" /etc/systemd/journald.conf
   /usr/local/scripts/change_line.sh "MaxFileSec=12h" "MaxFileSec=" /etc/systemd/journald.conf
   /usr/local/scripts/change_line.sh "WatchdogDevice=/dev/watchdog" "WatchdogDevice=" /etc/systemd/system.conf
@@ -258,8 +258,8 @@ makeDirectory() {
   /usr/local/scripts/change_line.sh "DefaultDeviceTimeoutSec=30s" "DefaultDeviceTimeoutSec=" /etc/systemd/system.conf
   /usr/local/scripts/add_line.sh "kernel.panic=5" /etc/sysctl.conf
   /usr/local/scripts/add_line.sh "kernel.panic_on_oops=1" /etc/sysctl.conf
-  /usr/local/scripts/add_line.sh "SystemMaxUse=2000M" /etc/systemd/journald.conf
-  /usr/local/scripts/add_line.sh "SystemKeepFree=500M" /etc/systemd/journald.conf
+  #/usr/local/scripts/add_line.sh "SystemMaxUse=2000M" /etc/systemd/journald.conf
+  #/usr/local/scripts/add_line.sh "SystemKeepFree=500M" /etc/systemd/journald.conf
   /usr/local/scripts/add_line.sh "watchdog-timeout=30" /etc/watchdog.conf
   /usr/local/scripts/change_line.sh "log-dir=/var/log/cantops" "log-dir" /etc/watchdog.conf
   /usr/local/scripts/change_line.sh "#root" "root" /etc/vsftpd.ftpusers

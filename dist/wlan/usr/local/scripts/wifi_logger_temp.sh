@@ -2,19 +2,17 @@
 tag=$(basename "$0")
 
 cleanup() {
-    logger -p $local3.info "[$tag:$LINENO] wifi_logger_temp stop"
+    logger -p local3.info "[$tag:$LINENO] wifi_logger_temp stop"
     exit 0
 }
 trap cleanup INT TERM
-
-logger -p local3.info "[$tag:$LINENO] wifi_logger_temp start"
 
 CPU_TMP_VAL=0
 CPU_TEMP=0
 EMERG_CPU_TEMP=93
 CRIT_CPU_TEMP=90
 ERR_CPU_TEMP=85
-WARN_CPU_TEMP=75
+WARN_CPU_TEMP=80
 EMERG_MLAN_TEMP=$((EMERG_CPU_TEMP-10))
 CRIT_MLAN_TEMP=$((CRIT_CPU_TEMP-10))
 ERR_MLAN_TEMP=$((ERR_CPU_TEMP-10))
@@ -23,6 +21,10 @@ MLAN0_TEMP=0
 MLAN1_TEMP=0
 LOG_LEVEL=info
 max_cpu_temp=0
+emerg_cnt=0
+
+logger -p local3.info "[$tag:$LINENO] cpu_temp warn : $WARN_CPU_TEMP, err : $ERR_CPU_TEMP, crit : $CRIT_CPU_TEMP, emerg : $EMERG_CPU_TEMP"
+
 sleep 5
 
 while true; do
@@ -36,25 +38,29 @@ while true; do
         echo $CPU_TEMP > /var/log/cantops/max_temp
     fi
 
-    if (( CPU_TEMP >= CRIT_CPU_TEMP || MLAN0_TEMP >= CRIT_MLAN_TEMP || MLAN1_TEMP >= CRIT_MLAN_TEMP )); then
+    if (( CPU_TEMP >= EMERG_CPU_TEMP )); then
+        ((emerg_cnt++))
+        if (( emerg_cnt > 2 )); then
+            logger -p local0.emerg "[$tag:$LINENO] temperature critical reboot..."
+            /usr/local/scripts/journald_snapshot.sh
+            sleep 3
+            reboot
+        fi
+    elif (( CPU_TEMP >= CRIT_CPU_TEMP || MLAN0_TEMP >= CRIT_MLAN_TEMP || MLAN1_TEMP >= CRIT_MLAN_TEMP )); then
         LOG_LEVEL=crit
+        emerg_cnt=0
     elif (( CPU_TEMP >= ERR_CPU_TEMP  || MLAN0_TEMP >= ERR_MLAN_TEMP  || MLAN1_TEMP >= ERR_MLAN_TEMP )); then
         LOG_LEVEL=err
+        emerg_cnt=0
     elif (( CPU_TEMP >= WARN_CPU_TEMP  || MLAN0_TEMP >= WARN_MLAN_TEMP  || MLAN1_TEMP >= WARN_MLAN_TEMP )); then
         LOG_LEVEL=warn
+        emerg_cnt=0
     else
-        LOG_LEVEL=info
+        LOG_LEVEL=debug
+        emerg_cnt=0
     fi
-    #if [ "$LOG_LEVEL" != info ]; then
-        logger -p local3.$LOG_LEVEL "[$tag:$LINENO] temp cpu : $CPU_TEMP, mlan0 : $MLAN0_TEMP, mlan1 : $MLAN1_TEMP"
-    #fi
 
-    if (( CPU_TEMP >= EMERG_CPU_TEMP )); then
-        logger -p local0.emerg "[$tag:$LINENO] temp cpu : $CPU_TEMP, mlan0 : $MLAN0_TEMP, mlan1 : $MLAN1_TEMP"
-        logger -p local0.emerg "[$tag:$LINENO] temperature critical reboot..."
-        /usr/local/scripts/journald_snapshot.sh
-        sleep 5
-        reboot
-    fi
+    logger -p local3.$LOG_LEVEL "[$tag:$LINENO] temp cpu : $CPU_TEMP, mlan0 : $MLAN0_TEMP, mlan1 : $MLAN1_TEMP"
+
     sleep 5
 done

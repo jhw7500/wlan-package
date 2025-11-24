@@ -1,6 +1,5 @@
 #!/bin/bash
 tag=$(basename "$0")
-key=LOG
 
 logger -p local0.info "[$tag:$LINENO] wifi logger start"
 

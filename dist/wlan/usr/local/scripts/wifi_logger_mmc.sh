@@ -3,13 +3,13 @@ tag=$(basename "$0")
 EXT=/sys/kernel/debug/mmc2/mmc2:0001/ext_csd
 
 cleanup() {
-    logger -p local3.info "[$tag:$LINENO] wifi_logger_mmc stop"
+    logger -p local0.info "[$tag:$LINENO] wifi_logger_mmc stop"
     exit 0
 }
 trap cleanup INT TERM
 
 
-logger -p local3.info "[$tag:$LINENO] wifi_logger_mmc start"
+logger -p local0.info "[$tag:$LINENO] wifi_logger_mmc start"
 
 to_bucket() {
     v=$1
@@ -58,7 +58,7 @@ while true; do
     BKT_B=$(to_bucket "$LTB")
     EOL_TXT=$(to_eol_text "$PRE_EOL")
 
-    sev="notice"
+    sev="info"
     case "$LTA$LTB" in
         *0A*|*0B*) sev="emerg" ;;
         *09*      ) sev="crit"  ;;
@@ -66,7 +66,7 @@ while true; do
         *07*      ) sev="warning" ;;
     esac
 
-    logger -p local3.$sev "[$tag:$LINENO] PRE_EOL=$EOL_TXT, LifeA=$BKT_A, LifeB=$BKT_B (raw: A=0x$LTA, B=0x$LTB)"
+    logger -p local0.$sev "[$tag:$LINENO] PRE_EOL=$EOL_TXT, LifeA=$BKT_A, LifeB=$BKT_B (raw: A=0x$LTA, B=0x$LTB)"
 
     sleep 300
 done
