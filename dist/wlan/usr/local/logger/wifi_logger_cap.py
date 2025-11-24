@@ -13,7 +13,7 @@ VERSION = "0.1"
 LOG_DIR = "/var/log/cantops/mgmt"
 INTERFACE = "rtap"
 #PCAP_FILE = f"{LOG_DIR}/tmp/{INTERFACE}.pcap"
-PCAP_FILE = "/tmp/live.pcap"
+PCAP_FILE = "/dev/shm/live.pcap"
 CAP_FILENAME = "mgmt.log"
 BROADCAST_MAC = "ff:ff:ff:ff:ff:ff"
 IFACE = "mlan0"
@@ -281,7 +281,7 @@ def main():
 
     try:
         while True:
-            time.sleep(1)
+            time.sleep(5)
     except (KeyboardInterrupt, SystemExit):
         logger.message('warn', "received interrupt")
         cleanup()

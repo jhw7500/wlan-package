@@ -95,17 +95,17 @@ set_timezone() {
   #set_timezone Japan
 
 customctl() {
-    daemon_name=$1
-    target=$2
+    target=$1
+    daemon_name=$2
 
     status=$(systemctl is-enabled $daemon_name 2>/dev/null)
 
-    if [ "$status" != "$target" ]; then
-        if [ "$target" = "enabled" ]; then
+    if [[ $status != ${target}* ]]; then
+        if [[ $target = enable* ]]; then
             systemctl enable $daemon_name
-        elif [ "$target" = "disabled" ]; then
+        elif [[ $target = disable* ]]; then
             systemctl disable --now $daemon_name
-        elif [ "$target" = "masked" ]; then
+        elif [[ $target = mask* ]]; then
             systemctl disable --now $daemon_name
             systemctl mask $daemon_name
         else
@@ -120,58 +120,51 @@ customctl() {
 }
   mv /etc/init.d/samba /etc/init.d/samba.disabled
 
-  customctl systemd-networkd-wait-online masked
-  customctl dhcpcd disabled
-  customctl psplash-quit disabled
-  customctl weston disabled
-  customctl nfs-server masked
-  customctl proc-fs-nfsd.mount masked
-  customctl watchdog enabled
-  customctl openvswitch disabled
-  customctl openvswitch-switch disabled
-  customctl connman disabled
-  customctl ovsdb-server masked
-  customctl smb disabled
-  customctl nmb disabled
-  customctl avahi-daemon.socket disabled
-  customctl avahi-daemon disabled
-  customctl avahi-daemon masked
-  customctl avahi-autoipd disable
-  customctl avahi-autoipd masked
-  customctl containerd disabled
-  customctl lighttpd disabled
-  customctl nginx disabled
-  customctl monkey disabled
-  customctl netdata disabled
-  customctl collectd disabled
-  customctl thttpd disabled
-  customctl named disabled
-  customctl bind disabled
-  #customctl samba disabled
-  #customctl hciattach disabled
+  customctl mask systemd-networkd-wait-online
+  customctl mask nfs-server
+  customctl mask proc-fs-nfsd.mount
+  customctl mask ovsdb-server
+  customctl mask avahi-daemon
+  customctl mask avahi-autoipd
+  customctl disable dhcpcd
+  customctl disable psplash-quit
+  customctl disable weston
+  customctl disable openvswitch
+  customctl disable openvswitch-switch
+  customctl disable connman
+  customctl disable smb
+  customctl disable nmb
+  customctl disable avahi-daemon.socket
+  customctl disable containerd
+  customctl disable lighttpd
+  customctl disable nginx
+  customctl disable monkey
+  customctl disable netdata
+  customctl disable collectd
+  customctl disable thttpd
+  customctl disable named
+  customctl disable bind
+  customctl disable fake-hwclock.timer
+  customctl disable journald-snapshot.timer
+  #customctl disable samba
+  #customctl disable hciattach
 
-  customctl switchd enabled
-  customctl fake-hwclock.service enabled
-  customctl fake-hwclock.timer disabled
-  customctl journald-snapshot.timer disabled
-  customctl wifi_init enabled
-  customctl wifi_logger enabled
+  customctl enable watchdog
+  customctl enable switchd enabled
+  customctl enable fake-hwclock
+  customctl enable wifi_init
+  customctl enable wifi_logger
 
-  #customctl wifi_arping@eth0 disabled
-  #customctl arping@eth0 disabled
-  customctl wifi_led@eth0 enabled
-  customctl wifi_logger@eth0 enabled
-  customctl wifi_checker@eth0 enabled
+  customctl enable wifi_led@eth0
+  customctl enable wifi_logger@eth0
+  customctl enable wifi_checker@eth0
 
-  #customctl wifi_arp@mlan0 disabled
-  #customctl wifi_arping@mlan0 disabled
-  #customctl wifi_ping@mlan0 disabled
-  customctl arping@mlan0 enabled
-  customctl wifi_led@mlan0 enabled
-  customctl wifi_logger@mlan0 enabled
-  customctl wifi_checker@mlan0 enabled
-  customctl wifi_link_stat@mlan0.timer enabled
-  #customctl wifi_capture@mlan0 disabled
+  customctl enable arping@mlan0
+  customctl enable wifi_led@mlan0
+  customctl enable wifi_logger@mlan0
+  customctl enable wifi_checker@mlan0
+  customctl enable wifi_link_stat@mlan0.timer
+  #customctl enable wifi_capture@mlan0
 
   #customctl wifi_logger@mlan1 disabled
   #customctl wifi_checker@mlan1 disabled
@@ -247,8 +240,6 @@ makeDirectory() {
   /usr/local/scripts/change_line.sh "Wants=network.target wifi_bridge@%i.service" "Wants=" /lib/systemd/system/wpa_supplicant@.service
   /usr/local/scripts/change_line.sh "Storage=volatile" "Storage=" /etc/systemd/journald.conf
   /usr/local/scripts/change_line.sh "SyncIntervalSec=1m" "SyncIntervalSec=" /etc/systemd/journald.conf
-  #/usr/local/scripts/change_line.sh "RuntimeMaxUse=64M" "RuntimeMaxUse=" /etc/systemd/journald.conf
-  #/usr/local/scripts/change_line.sh "RuntimeKeepFree=16M" "RuntimeKeepFree=" /etc/systemd/journald.conf
   /usr/local/scripts/change_line.sh "MaxLevelStore=info" "MaxLevelStore=" /etc/systemd/journald.conf
   /usr/local/scripts/change_line.sh "MaxFileSec=12h" "MaxFileSec=" /etc/systemd/journald.conf
   /usr/local/scripts/change_line.sh "WatchdogDevice=/dev/watchdog" "WatchdogDevice=" /etc/systemd/system.conf
@@ -258,8 +249,6 @@ makeDirectory() {
   /usr/local/scripts/change_line.sh "DefaultDeviceTimeoutSec=30s" "DefaultDeviceTimeoutSec=" /etc/systemd/system.conf
   /usr/local/scripts/add_line.sh "kernel.panic=5" /etc/sysctl.conf
   /usr/local/scripts/add_line.sh "kernel.panic_on_oops=1" /etc/sysctl.conf
-  #/usr/local/scripts/add_line.sh "SystemMaxUse=2000M" /etc/systemd/journald.conf
-  #/usr/local/scripts/add_line.sh "SystemKeepFree=500M" /etc/systemd/journald.conf
   /usr/local/scripts/add_line.sh "watchdog-timeout=30" /etc/watchdog.conf
   /usr/local/scripts/change_line.sh "log-dir=/var/log/cantops" "log-dir" /etc/watchdog.conf
   /usr/local/scripts/change_line.sh "#root" "root" /etc/vsftpd.ftpusers
@@ -277,9 +266,9 @@ makeDirectory() {
   #cp /opt/wlan/firmware/* /lib/firmware/nxp/
   #cp /opt/wlan/driver/* /lib/modules/$KERNEL_VERSION/updates/
 
-copyFILE() {
+cpchk() {
   if [ ! -f $2 ]; then
-    logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp $1 $2"
+    logger -s -p local0.info "[$KEY][$tag:$LINENO] cp $1 $2"
     cp $1 $2
   fi
 }
@@ -288,17 +277,17 @@ copyFILE() {
   #  cp /opt/wlan/config/wifi_mod_para__.conf /lib/firmware/nxp/wifi_mod_para__.conf
   #fi
 
-  copyFILE /opt/wlan/mfg/bridge_init.conf /usr/local/mfg/bridge_init.conf
-  copyFILE /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/timesyncd.conf
-  copyFILE /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan0.conf /etc/wpa_supplicant/wpa_supplicant-mlan0.conf
-  copyFILE /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan1.conf /etc/wpa_supplicant/wpa_supplicant-mlan1.conf
-  copyFILE /opt/wlan/config/systemd/network/20-mlan0.network /etc/systemd/network/20-mlan0.network
-  copyFILE /opt/wlan/config/systemd/network/21-mlan1.network /etc/systemd/network/21-mlan1.network
-  copyFILE /opt/wlan/config/systemd/network/22-eth0.network /etc/systemd/network/22-eth0.network
-  copyFILE /opt/wlan/config/systemd/network/10-lo.network /etc/systemd/network/10-lo.network
-  copyFILE /opt/wlan/config/systemd/network/20-mlan0.link /etc/systemd/network/20-mlan0.link
-  copyFILE /opt/wlan/config/systemd/network/21-mlan1.link /etc/systemd/network/21-mlan1.link
-  copyFILE /opt/wlan/config/systemd/network/22-eth0.link /etc/systemd/network/22-eth0.link
+  cpchk /opt/wlan/mfg/bridge_init.conf /usr/local/mfg/bridge_init.conf
+  cpchk /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/timesyncd.conf
+  cpchk /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan0.conf /etc/wpa_supplicant/wpa_supplicant-mlan0.conf
+  cpchk /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan1.conf /etc/wpa_supplicant/wpa_supplicant-mlan1.conf
+  cpchk /opt/wlan/config/systemd/network/20-mlan0.network /etc/systemd/network/20-mlan0.network
+  cpchk /opt/wlan/config/systemd/network/21-mlan1.network /etc/systemd/network/21-mlan1.network
+  cpchk /opt/wlan/config/systemd/network/22-eth0.network /etc/systemd/network/22-eth0.network
+  cpchk /opt/wlan/config/systemd/network/10-lo.network /etc/systemd/network/10-lo.network
+  cpchk /opt/wlan/config/systemd/network/20-mlan0.link /etc/systemd/network/20-mlan0.link
+  cpchk /opt/wlan/config/systemd/network/21-mlan1.link /etc/systemd/network/21-mlan1.link
+  cpchk /opt/wlan/config/systemd/network/22-eth0.link /etc/systemd/network/22-eth0.link
 
   #echo "[installer] installing........." > /dev/ttyGS0
   rm /usr/local/bin/dumb*
