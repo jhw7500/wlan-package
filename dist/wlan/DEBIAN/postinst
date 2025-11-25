@@ -316,7 +316,7 @@ cpchk() {
   ln -s /usr/local/scripts/logctl.sh /usr/local/bin/logctl
   ln -s /usr/local/scripts/mlanutl_silent.sh /usr/local/bin/mlanutl_silent
   ln -s /usr/local/logger/passive_roam.py /usr/local/bin/roaming
-
+  ln -s /usr/local/logger/usb_print.py /usr/local/bin/usb_print
   #rm /usr/local/bin/mfgbridge
 
   #tar -xvf /opt/wlan/webmin/webmin_usr.tar -C /usr/libexec/

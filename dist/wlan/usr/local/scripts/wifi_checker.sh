@@ -98,10 +98,12 @@ while true; do
             TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
             LOG_FILE="$LOG_DIR/module_${TIMESTAMP}.log"
             if [ ! -d "$PCI_BUS" ]; then
-                logger -p local0.emerg "[$tag:$LINENO] [$IFACE] Reboot because PCI link error ($ERR_CNT > $LIMIT_CNT)"
+                CAUSE="PCI link"
             else
-                logger -p local0.emerg "[$tag:$LINENO] [$IFACE] Reboot because WiFi F/W error ($ERR_CNT > $LIMIT_CNT)"
+                CAUSE="Wifi F/W"
             fi
+            logger -p local0.emerg "[$tag:$LINENO] [$IFACE] Reboot because $CAUSE error ($ERR_CNT > $LIMIT_CNT)"
+            print red "Reboot because $CAUSE error ($ERR_CNT > $LIMIT_CNT)"
             #logger -p local0.info "[$tag:$LINENO] [$IFACE] dmesg |tail -1000 > $LOG_FILE"
             #dmesg |tail -1000 > "$LOG_FILE"
             #LOG_FILE="$LOG_DIR/${TIMESTAMP}_jo.log"
