@@ -126,6 +126,7 @@ customctl() {
   customctl mask ovsdb-server
   customctl mask avahi-daemon
   customctl mask avahi-autoipd
+  customctl mask psplash
   customctl disable dhcpcd
   customctl disable psplash-quit
   customctl disable weston
@@ -146,6 +147,10 @@ customctl() {
   customctl disable bind
   customctl disable fake-hwclock.timer
   customctl disable journald-snapshot.timer
+  customctl disable ifplugd
+  customctl disable systemd-resolved
+  customctl disable hiawatha
+  customctl disable netserver
   #customctl disable samba
   #customctl disable hciattach
 

@@ -108,6 +108,7 @@ while true; do
             logger -p local0.info "[$tag:$LINENO] [$IFACE] saving kernel logs to '$LOG_FILE'"
             #journalctl -k --since "1 min ago" > "$LOG_FILE"
             dmesg > $LOG_FILE
+            /usr/local/scripts/journald_snapshot.sh
             sync
             sleep 3
             reboot

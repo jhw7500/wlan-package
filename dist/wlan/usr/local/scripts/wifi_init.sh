@@ -184,6 +184,7 @@ mlanutl mlan1 reassoctrl 1 > /dev/null 2>&1
 #ip link set mlan1 up
 #ifconfig mlan1 up
 
+:<<'END'
 for i in {1..3}; do
     sleep 0.5
     cmd="iw mlan0 scan"
@@ -196,6 +197,7 @@ for i in {1..3}; do
         logger -p local0.err "[$tag:$LINENO] [mlan0] scan : no result"
     fi
 done
+END
 
 FREQ=$(jq -r '.mlan0.Frequency' "$JSON_FILE")
 if [ "$FREQ" = "5GHz" ]; then

@@ -5,6 +5,30 @@ logger -p local0.info "[$tag:$LINENO] [$IFACE] wifi $1 $2 $3 $4"
 CONF_DIR="/etc/test"
 NUM=""
 
+to_freq_mhz() {
+    local v="$1"
+    if ! [[ "$v" =~ ^[0-9]+$ ]]; then
+        echo "$v"
+        return
+    fi
+
+    if (( v < 1000 )); then
+        if (( v >= 1 && v <= 13 )); then
+            echo $((2407 + 5 * v))     # ch1=2412, ch6=2437, ...
+            return
+        elif (( v == 14 )); then
+            echo 2484
+            return
+        else
+            echo $((5000 + 5 * v))
+            return
+        fi
+    else
+        echo "$v"
+        return
+    fi
+}
+
 case "$1" in
   0 | mlan0)
     IFACE="mlan0"
@@ -47,8 +71,11 @@ case "$2" in
   "" | restart)
     if [ "$1" == 2 ]; then
         echo "Restarting WPA service..."
-        systemctl restart wpa_supplicant@mlan0
-        systemctl restart wpa_supplicant@mlan1
+        systemctl stop wpa_supplicant@mlan0
+        systemctl stop wpa_supplicant@mlan1
+        sleep 1
+        systemctl start wpa_supplicant@mlan0
+        systemctl start wpa_supplicant@mlan1
     else
         echo "Restarting WPA service $IFACE..."
         systemctl stop wpa_supplicant@$IFACE
@@ -97,18 +124,18 @@ case "$2" in
     ;;
   txpwrlimit)
     if [ "$3" == "low" ]; then
-        TXPWRLIMIT_PATH=/lib/firmware/cts/config/txpwrlimit_cfg_9098_low.conf
+        CONF=/lib/firmware/cts/config/txpwrlimit_cfg_9098_low.conf
     elif [ "$3" == "test" ]; then
-        TXPWRLIMIT_PATH=/lib/firmware/cts/config/txpwrlimit_cfg_9098_test.conf
+        CONF=/lib/firmware/cts/config/txpwrlimit_cfg_9098_test.conf
     else
-        TXPWRLIMIT_PATH=/lib/firmware/cts/config/txpwrlimit_cfg_9098.conf
+        CONF=/lib/firmware/cts/config/txpwrlimit_cfg_9098.conf
     fi
-    echo "$IFACE txpwrlimit set to $TXPWRLIMIT_PATH"
-    mlanutl $IFACE hostcmd $TXPWRLIMIT_PATH txpwrlimit_2g_cfg_set > /dev/null 2>&1
-    mlanutl $IFACE hostcmd $TXPWRLIMIT_PATH txpwrlimit_5g_cfg_set_sub0 > /dev/null 2>&1
-    mlanutl $IFACE hostcmd $TXPWRLIMIT_PATH txpwrlimit_5g_cfg_set_sub1 > /dev/null 2>&1
-    mlanutl $IFACE hostcmd $TXPWRLIMIT_PATH txpwrlimit_5g_cfg_set_sub2 > /dev/null 2>&1
-    mlanutl $IFACE hostcmd $TXPWRLIMIT_PATH txpwrlimit_5g_cfg_set_sub3 > /dev/null 2>&1
+    echo "$IFACE txpwrlimit set to $CONF"
+    mlanutl $IFACE hostcmd $CONF txpwrlimit_2g_cfg_set > /dev/null 2>&1
+    mlanutl $IFACE hostcmd $CONF txpwrlimit_5g_cfg_set_sub0 > /dev/null 2>&1
+    mlanutl $IFACE hostcmd $CONF txpwrlimit_5g_cfg_set_sub1 > /dev/null 2>&1
+    mlanutl $IFACE hostcmd $CONF txpwrlimit_5g_cfg_set_sub2 > /dev/null 2>&1
+    mlanutl $IFACE hostcmd $CONF txpwrlimit_5g_cfg_set_sub3 > /dev/null 2>&1
     ;;
   config)
     echo "python3 /usr/local/logger/wifi_config.py $1 $3 $4"
@@ -137,6 +164,78 @@ case "$2" in
     elif [ "$3" == "static" ]; then
         cp /tmp/eth0_client_mac "/opt/wlan/mac/target$NUM"
     fi
+    ;;
+  freq)
+    set -euo pipefail
+    shift 2
+    CONF="/etc/wpa_supplicant/wpa_supplicant-${IFACE}.conf"
+    if [ ! -f "$CONF" ]; then
+        echo "not found�: $CONF" >&2
+        exit 1
+    fi
+    FREQS=()
+    for arg in "$@"; do
+        FREQS+=( "$(to_freq_mhz "$arg")" )
+    done
+
+    if [ ${#FREQS[@]} -eq 0 ]; then
+        echo "configure freq not exist" >&2
+        exit 1
+    fi
+
+    FREQ_STR="${FREQS[*]}"   # "5200 5220 5240" 형태
+    TMP_FILE="$(mktemp)"
+
+    awk -v freqs="$FREQ_STR" '
+    BEGIN {
+        found_scan = 0
+        found_list = 0
+    }
+    /^[[:space:]]*#/ {
+        print
+        next
+    }
+    /^[[:space:]]*scan_freq[[:space:]]*=/ {
+        print "    scan_freq=" freqs
+        found_scan = 1
+        next
+    }
+    /^[[:space:]]*freq_list[[:space:]]*=/ {
+        print "freq_list=" freqs
+        found_list = 1
+        next
+    }
+    {
+        print
+    }
+    END {
+        if (!found_scan)
+            print "scan_freq=" freqs
+        if (!found_list)
+            print "freq_list=" freqs
+    }
+    ' "$CONF" > "$TMP_FILE"
+
+    mv "$TMP_FILE" "$CONF"
+
+    echo "scan_freq / freq_list configure $FREQ_STR in $CONF"
+    ;;
+  scan)
+    set -euo pipefail
+    shift 2
+    FREQS=()
+    for arg in "$@"; do
+        FREQS+=( "$(to_freq_mhz "$arg")" )
+    done
+
+    if [ ${#FREQS[@]} -eq 0 ]; then
+        echo "configure freq not exist" >&2
+        exit 1
+    fi
+
+    FREQ_STR="${FREQS[*]}"   # "5200 5220 5240"  ^x^u ^c^|
+    TMP_FILE="$(mktemp)"
+    iw $IFACE scan freq $FREQ_STR
     ;;
   *)
     echo "Usage: $0 {0|1|mlan0|mlan1} {start|up|stop|down|restart|status}"

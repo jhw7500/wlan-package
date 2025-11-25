@@ -1,9 +1,12 @@
 [Unit]
 Description=WiFi Capture Service for %i
-After=network.target
-Conflicts=wifi_capture@mlan0.service wifi_capture@mlan1.service
+BindsTo=sys-subsystem-net-devices-eth0.device sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-eth0.device sys-subsystem-net-devices-%i.device
+Wants=network-online.target
+#Conflicts=wifi_capture@mlan0.service wifi_capture@mlan1.service
 
 [Service]
+ExecStartPre=/bin/sleep 10
 ExecStart=/bin/python3 /usr/local/logger/wifi_logger_cap.py %i 0x4100
 #Restart=always
 User=root

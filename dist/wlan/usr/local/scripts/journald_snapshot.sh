@@ -11,6 +11,7 @@ mkdir -p "$DST"
 
 # 저널 파일들만 증분 복사(덮어쓰기 in-place)
 rsync -a --inplace --no-whole-file --chmod=Fu=rw,Fg=r,Fa=r "$SRC"/ "$DST"/
+#rsync -a --inplace --no-whole-file --chmod=Fu=rw,Fg=r,Fa=r "$SRC"/ "$DIR"/total/
 
 cnt=$(find "$DIR" -mindepth 1 -maxdepth 1 -type d | wc -l)
 if (( cnt > MAX_CNT )); then

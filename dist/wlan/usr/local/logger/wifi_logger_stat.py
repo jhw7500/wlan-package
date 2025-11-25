@@ -523,7 +523,7 @@ def log_stats():
         #print(f"{last_stat[ap_mac]['time']}, {last_stat[ap_mac]['tx_avg_bps']}, {wifi_info['tx_bitrate']}")
         last_stat[ap_mac]['tx_avg_bps'] = update_avg(last_stat[ap_mac]["time"], last_stat[ap_mac]['tx_avg_bps'], wifi_info['tx_bitrate'])
         last_stat[ap_mac]['rx_avg_bps'] = update_avg(last_stat[ap_mac]["time"], last_stat[ap_mac]['rx_avg_bps'], wifi_info['rx_bitrate'])
-	
+	    
         # Log every 5 seconds
         if time.time() - last_log_time >= log_interval:
             #print(f"dot11RetryCount: {retry_count}")
@@ -539,6 +539,33 @@ def log_stats():
         time.sleep(check_interval)  # Check every second
         last_stat[ap_mac]["time"] += check_interval
         
+
+        #'''
+        if last_stat[ap_mac]["time"] > 604800:
+            log_entry = (
+                f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
+                f"[{ap_mac}] init!!\n"
+            )
+            #logger.message("info", f"[{IFACE}] AP change: {current_ap} -> {ap_mac}", _EXTRA_())
+            with open(log_filename, "a") as log_file:
+                log_file.write(log_entry)
+
+            with open(all_log_filename, "a") as all_log_file:
+                all_log_file.write(log_entry)
+
+            prev_log["tx_fail"] = 0
+            prev_log["rssi_min"] = 0
+            prev_log["rssi_max"] = 0
+            last_stat[ap_mac]["tx_bytes"] = 0
+            last_stat[ap_mac]["rx_bytes"] = 0
+            last_stat[ap_mac]["tx_packets"] = 0
+            last_stat[ap_mac]["rx_packets"] = 0
+            last_stat[ap_mac]['tx_avg_bps'] = 0
+            last_stat[ap_mac]['rx_avg_bps'] = 0
+            last_stat[ap_mac]["time"] = 0
+            signal_levels[ap_mac]["min"] = 0
+            signal_levels[ap_mac]["max"] = -100
+        #'''
 
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_sigterm)
