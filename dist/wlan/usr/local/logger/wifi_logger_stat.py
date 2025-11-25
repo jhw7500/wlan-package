@@ -498,6 +498,10 @@ def log_stats():
                 wifi_info["rssi_min"] = signal_levels[ap_mac]["min"]
                 wifi_info["rssi_max"] = signal_levels[ap_mac]["max"]
 
+        cond_time = last_stat[ap_mac]["time"] >= 604800
+        cond_flagfile = os.path.exists("/tmp/wifi_stat_init_f")
+        reset_flag = cond_time or cond_flagfile
+
         #print(f"current_ap : {current_ap} , ap_mac : {ap_mac}")
         # Update RX/TX stats
         last_stat[ap_mac]["tx_th"] = wifi_info["tx_bytes"] - prev_stat[ap_mac]["tx_bytes"]
@@ -541,10 +545,10 @@ def log_stats():
         
 
         #'''
-        if last_stat[ap_mac]["time"] > 604800:
+        if reset_flag:
             log_entry = (
                 f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
-                f"[{ap_mac}] init!!\n"
+                f"MAC:{ap_mac} stat init!!\n"
             )
             #logger.message("info", f"[{IFACE}] AP change: {current_ap} -> {ap_mac}", _EXTRA_())
             with open(log_filename, "a") as log_file:
@@ -565,6 +569,12 @@ def log_stats():
             last_stat[ap_mac]["time"] = 0
             signal_levels[ap_mac]["min"] = 0
             signal_levels[ap_mac]["max"] = -100
+
+            if cond_flagfile:
+                try:
+                    os.remove("/tmp/wifi_stat_init_f")
+                except FileNotFoundError:
+                    pass
         #'''
 
 if __name__ == "__main__":
