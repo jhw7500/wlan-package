@@ -132,7 +132,7 @@ def get_last_ap_log_values(log_filename, num_lines=10):
     print(f"No valid log found : {log_filename}")
     return None
 
-def get_station_info(json_file):
+def get_link_info(json_file):
     if not os.path.exists(json_file):
         logger.message("err", f"[{IFACE}] {json_file} is not exist", _EXTRA_())
         return None
@@ -144,9 +144,9 @@ def get_station_info(json_file):
         #logger.message("err", f"[{IFACE}] json read error: {e}", _EXTRA_())
         return None
 
-    station = data.get("station_info")
+    station = data.get("link")
     if not station:
-        #logger.message("err", f"[{IFACE}] no 'station_info' field in json", _EXTRA_())
+        #logger.message("err", f"[{IFACE}] no 'link' field in json", _EXTRA_())
         return None
 
     mac = station.get("address", "00:00:00:00:00:00")
@@ -406,7 +406,7 @@ def log_stats():
         if os.path.exists(f"/sys/class/net/{IFACE}"):
             #wifi_info = get_wifi_info()
             #wifi_info = get_station_dump()
-            wifi_info = get_station_info(f"/var/log/cantops/json/{IFACE}/link.json")
+            wifi_info = get_link_info(f"/var/log/cantops/json/{IFACE}/link.json")
             if not wifi_info:
                 #print("not wifi info")
                 #logger.warning("No WiFi info available — possibly disconnected or station dump empty.")

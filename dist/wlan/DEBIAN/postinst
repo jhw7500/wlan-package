@@ -160,9 +160,9 @@ customctl() {
   customctl enable wifi_init
   customctl enable wifi_logger
 
+  customctl enable wifi_disable@eth0
   customctl enable wifi_led@eth0
   customctl enable wifi_logger@eth0
-  customctl enable wifi_checker@eth0
 
   customctl enable arping@mlan0
   customctl enable wifi_led@mlan0
@@ -315,6 +315,7 @@ cpchk() {
   ln -s /var/log/cantops/journal /var/log/journal
   ln -s /usr/local/scripts/logctl.sh /usr/local/bin/logctl
   ln -s /usr/local/scripts/mlanutl_silent.sh /usr/local/bin/mlanutl_silent
+  ln -s /usr/local/logger/passive_roam.py /usr/local/bin/roaming
 
   #rm /usr/local/bin/mfgbridge
 

@@ -160,6 +160,12 @@ alias flogt1='cat $SCANDIR1/freq.log | tail -n $1'
 alias flogh1='cat $SCANDIR1/freq.log | head -n $1'
 alias flogf1='tail -f $SCANDIR1/freq.log'
 
+alias ilog2='cat $JSONDIR2/link.json'
+alias ilogg2='cat $JSONDIR2/link.json | grep -i $1 -a'
+alias ilogt2='cat $JSONDIR2/link.json | tail -n $1'
+alias ilogh2='cat $JSONDIR2/link.json | head -n $1'
+alias ilogf2='tail -f $JSONDIR2/link.json'
+
 alias psg='ps -ef |grep -i $1'
 alias sdr='systemctl daemon-reload'
 alias sst='systemctl status $1'

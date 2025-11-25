@@ -114,15 +114,15 @@ def iw_scan(ssid, freqs):
         cmd = ["iw", IFACE, "scan", "freq"] + freqs + ["ssid", ssid]
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-def get_station_info():
+def get_link_info():
     try:
         with open(LINK_LOG_FILE, 'r') as f:
             data = json.load(f)
             result = {
-                "bssid": data['station_info']['address'].strip().lower(),
+                "bssid": data['link']['address'].strip().lower(),
                 #"ssid": data['info']['ssid'].strip(),
                 "freq": int(data['info']['freq']),
-                "rssi": int(data['station_info']['signal'].replace(" dBm", ""))
+                "rssi": int(data['link']['signal'].replace(" dBm", ""))
             }
             return result
     except Exception as e:
@@ -152,7 +152,7 @@ def get_current_bssid():
     try:
         with open(LINK_LOG_FILE, 'r') as f:
             data = json.load(f)
-            return data['station_info']['address'].strip().lower()
+            return data['link']['address'].strip().lower()
     except Exception as e:
         logger.message('err', f"[{IFACE}] Failed to get current BSSID from link log: {e}", _EXTRA_())
         return None
@@ -393,7 +393,7 @@ def parse_thresholds(conf_path):
 def main():
     while True:
 
-        station = get_station_info()
+        station = get_link_info()
 
         if not station:
             time.sleep(CHECK_INTERVAL)
@@ -408,7 +408,7 @@ def main():
                 continue
         '''
 
-        #bssid, ssid, frequency, signal = get_station_info()
+        #bssid, ssid, frequency, signal = get_link_info()
         '''
         channel_info = load_channel_info()
         for freq, info in channel_info.items():

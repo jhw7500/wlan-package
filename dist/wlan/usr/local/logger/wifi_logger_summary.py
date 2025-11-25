@@ -42,8 +42,8 @@ def extract_info(path):
         with open(path, "r") as f:
             data = json.load(f)
             freq = safe_get(data, "info", "freq") or "-"
-            addr = safe_get(data, "station_info", "address") or "-"
-            sig = safe_get(data, "station_info", "signal") or "-"
+            addr = safe_get(data, "link", "address") or "-"
+            sig = safe_get(data, "link", "signal") or "-"
             return str(freq), str(addr), str(sig)
     except Exception:
         return None

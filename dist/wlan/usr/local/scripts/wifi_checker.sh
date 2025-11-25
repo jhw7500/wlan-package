@@ -6,16 +6,16 @@ key=LOG
 IFACE=$1
 MODULE_NAME="moal"
 
-MAX_UNSTABLE_DURATION=15
+MAX_UNSTABLE_DURATION=4
 UNSTABLE_START=0
-LIMIT_CNT=5
+LIMIT_CNT=4
 ERR_CNT=0
 STATE=""
 PRE_STATE=""
 PCI_BUS=""
-
+REBOOT_F=0
 cleanup() {
-    logger -p local0.info "[$tag:$LINENO] [$IFACE] wifi_checker stop"
+    logger -p local0.info "[$tag:$LINENO] [$IFACE] stop"
     exit 0
 }
 trap cleanup INT TERM
@@ -25,7 +25,7 @@ LOG_DIR="/var/log/cantops/err"
 
 mkdir -p "$LOG_DIR"
 
-logger -p local0.info "[$tag:$LINENO] [$IFACE] wifi_checker"
+logger -p local0.info "[$tag:$LINENO] [$IFACE] start"
 
 if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" && "$IFACE" != "eth0" ]]; then
     logger -p local0.emerg "[$tag:$LINENO] [$IFACE] interface is wrong!!"
@@ -110,48 +110,42 @@ while true; do
             dmesg > $LOG_FILE
             /usr/local/scripts/journald_snapshot.sh
             sync
-            sleep 3
-            reboot
-        fi
-        sleep 3
-        continue
-    fi
-
-    ERR_CNT=0
-
-#:<<'END'
-    if ! is_wpa_active; then
-        #log "wpa_supplicant@${IFACE}.service not active — waiting..."
-        UNSTABLE_START=0
-        #sleep $CHECK_INTERVAL
-        sleep 3
-        continue
-    fi
-
-    STATE=$(get_state)
-    TIMESTAMP=$(date +%s)
-
-    if [[ "$STATE" == "DISCONNECTED" || "$STATE" == "SCANNING" || "$STATE" == "down" ]]; then
-        if [[ $UNSTABLE_START -eq 0 ]]; then
-            UNSTABLE_START=$TIMESTAMP
-        fi
-
-        DURATION=$((TIMESTAMP - UNSTABLE_START))
-
-        if (( DURATION >= MAX_UNSTABLE_DURATION )); then
-            logger -p local0.err "[$tag:$LINENO] [$IFACE] restart wpa_supplicant@$IFACE because wifi is not connected during $MAX_UNSTABLE_DURATION" 
-            #wpa_cli disable_network 0
-            wifi $IFACE restart
-            #wpa_cli enable_network 0
-            #systemctl restart wifi_bridge@$IFACE
-            #log "State=$STATE for ${DURATION}s → triggering reconnect on $IFACE"
-            #wpa_cli -i "$IFACE" reconnect
-            UNSTABLE_START=0
+            REBOOT_F=1
         fi
     else
-        UNSTABLE_START=0
+        ERR_CNT=0
+        if ! is_wpa_active; then
+            #log "wpa_supplicant@${IFACE}.service not active  ^`^t waiting..."
+            UNSTABLE_START=0
+            #sleep $CHECK_INTERVAL
+            sleep 3
+            continue
+        fi
+
+        STATE=$(get_state)
+        TIMESTAMP=$(date +%s)
+
+        if [[ "$STATE" == "DISCONNECTED" || "$STATE" == "SCANNING" || "$STATE" == "down" ]]; then
+            if [[ $UNSTABLE_START -eq 0 ]]; then
+                UNSTABLE_START=$TIMESTAMP
+            fi
+
+            DURATION=$((TIMESTAMP - UNSTABLE_START))
+
+            if (( DURATION >= MAX_UNSTABLE_DURATION )); then
+                logger -p local0.err "[$tag:$LINENO] [$IFACE] restart wpa_supplicant@$IFACE because wifi is not connected during $MAX_UNSTABLE_DURATION"
+                #wpa_cli disable_network 0
+                wifi $IFACE restart
+                #wpa_cli enable_network 0
+                #systemctl restart wifi_bridge@$IFACE
+                #log "State=$STATE for ${DURATION}s  ^f^r triggering reconnect on $IFACE"
+                #wpa_cli -i "$IFACE" reconnect
+                UNSTABLE_START=0
+            fi
+        else
+            UNSTABLE_START=0
+        fi
     fi
-#END
 
 :<<'END'
     PRE_STATE=$STATE
@@ -166,5 +160,10 @@ while true; do
         systemctl restart wifi_bridge@$IFACE
     fi
 END
-    sleep 1
+
+    sleep 5
+
+    if (( REBOOT_F == 1 )); then
+        reboot
+    fi
 done

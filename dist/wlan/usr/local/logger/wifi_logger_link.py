@@ -302,21 +302,21 @@ def main():
         #if is_wifi_connected_wpa(IFACE):
         if is_wifi_connected_iw(IFACE):
             #info_out = run_command(["iw", IFACE, "info"])
-            #station_out = run_command(["iw", IFACE, "station", "dump"])
+            #link_out = run_command(["iw", IFACE, "station", "dump"])
             #channel_out = run_command(["iw", IFACE, "survey", "dump"])
-            station_out = run_command_with_retry(["iw", IFACE, "station", "dump"], validate_fn=validate_station)
+            link_out = run_command_with_retry(["iw", IFACE, "station", "dump"], validate_fn=validate_station)
             info_out = run_command_with_retry(["iw", IFACE, "info"], validate_fn=validate_info)
             channel_out = run_command(["iw", IFACE, "survey", "dump"])
             #channel_out = run_command_with_retry(["iw", IFACE, "survey", "dump"], validate_fn=validate_survey)
 
             # 파싱은 출력이 유효할 때만
             info_data = parse_iw_info(info_out) if info_out else {}
-            station_data = parse_station_dump(station_out) if station_out else {}
+            link_data = parse_station_dump(link_out) if link_out else {}
             channel_data = parse_survey_dump(channel_out) if channel_out else {}
             data = {
                 "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "info": info_data,
-                "station_info": station_data,
+                "link": link_data,
                 "channel_info": channel_data,
                 "mwlan_log": parse_mwlan_log()
             }
