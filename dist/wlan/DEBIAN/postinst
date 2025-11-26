@@ -11,6 +11,8 @@ KERNEL_VERSION=$(uname -r)
 #hostname=$(python3 /opt/cis/bin/getconfval.py hostname)
 hostname=Cantops
 
+INSTALL_DOT_COUNT=0
+
 disable_services_if_enabled() {
     local services=("$@")
     for svc in "${services[@]}"; do
@@ -104,7 +106,9 @@ customctl() {
         if [[ $target = enable* ]]; then
             systemctl enable $daemon_name
         elif [[ $target = disable* ]]; then
-            systemctl disable --now $daemon_name
+            if [[ $status != mask* ]]; then
+                systemctl disable --now $daemon_name
+            fi
         elif [[ $target = mask* ]]; then
             systemctl disable --now $daemon_name
             systemctl mask $daemon_name
@@ -116,7 +120,9 @@ customctl() {
 
     status=$(systemctl is-enabled $daemon_name 2>/dev/null)
     echo "$daemon_name is $status"
-    #echo "[installer] installing..." > /dev/ttyGS0
+    INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 1))
+    dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
+    /usr/local/logger/print.py green "\r\n[installer] installing${dots}"
 }
   mv /etc/init.d/samba /etc/init.d/samba.disabled
 
@@ -160,7 +166,7 @@ customctl() {
   customctl enable wifi_init
   customctl enable wifi_logger
 
-  customctl enable wifi_disable@eth0
+  customctl disable wifi_checker@eth0
   customctl enable wifi_led@eth0
   customctl enable wifi_logger@eth0
 
@@ -236,13 +242,15 @@ makeDirectory() {
   sed -i "2s/.*/127.0.1.1 $hostname/g" -i /etc/hosts
 #  sed -i 's/#kernel.printk = 3 4 1 3/kernel.printk = 2 4 1 3/g' -i /etc/sysctl.conf
 
-  #echo "[installer] installing....." > /dev/ttyGS0
+  INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 1))
+  dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
+  /usr/local/logger/print.py green "\r\n[installer] installing${dots}"
 
   #/usr/local/scripts/add_line.sh "00 *      * * *    root        logrotate /etc/logrotate.d/logrotate.rsyslog" /etc/crontab
   #/usr/local/scripts/comment_line.sh "tmpfs                /var/volatile" /etc/fstab
   /usr/local/scripts/change_line.sh "#tmpfs                /var/volatile        tmpfs      defaults              0  0" "tmpfs                /var/volatile" /etc/fstab
-  /usr/local/scripts/change_line.sh "ExecStart=/usr/sbin/wpa_supplicant -c/etc/wpa_supplicant/wpa_supplicant-%I.conf -i%I -d" "ExecStart=" /lib/systemd/system/wpa_supplicant@.service
-  /usr/local/scripts/change_line.sh "Wants=network.target wifi_bridge@%i.service" "Wants=" /lib/systemd/system/wpa_supplicant@.service
+  #/usr/local/scripts/change_line.sh "ExecStart=/usr/sbin/wpa_supplicant -c/etc/wpa_supplicant/wpa_supplicant-%I.conf -i%I -d" "ExecStart=" /lib/systemd/system/wpa_supplicant@.service
+  #/usr/local/scripts/change_line.sh "Wants=network.target wifi_bridge@%i.service" "Wants=" /lib/systemd/system/wpa_supplicant@.service
   /usr/local/scripts/change_line.sh "Storage=volatile" "Storage=" /etc/systemd/journald.conf
   /usr/local/scripts/change_line.sh "SyncIntervalSec=1m" "SyncIntervalSec=" /etc/systemd/journald.conf
   /usr/local/scripts/change_line.sh "MaxLevelStore=info" "MaxLevelStore=" /etc/systemd/journald.conf
@@ -270,6 +278,7 @@ makeDirectory() {
   cp /opt/wlan/config/crontab /etc/
   #cp /opt/wlan/firmware/* /lib/firmware/nxp/
   #cp /opt/wlan/driver/* /lib/modules/$KERNEL_VERSION/updates/
+  cp /opt/wlan/config/wpa_supplicant@.service /lib/systemd/system/
 
 cpchk() {
   if [ ! -f $2 ]; then
@@ -294,7 +303,10 @@ cpchk() {
   cpchk /opt/wlan/config/systemd/network/21-mlan1.link /etc/systemd/network/21-mlan1.link
   cpchk /opt/wlan/config/systemd/network/22-eth0.link /etc/systemd/network/22-eth0.link
 
-  #echo "[installer] installing........." > /dev/ttyGS0
+  INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 1))
+  dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
+  /usr/local/logger/print.py green "\r\n[installer] installing${dots}"
+
   rm /usr/local/bin/dumb*
   rm /usr/local/bin/mlan*
   rm /usr/local/bin/iw*
@@ -326,6 +338,7 @@ cpchk() {
   echo -e "\e[1m installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)\e[0m"
   #echo -e "\e[32m installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME) : finish\e[0m" > /dev/ttyGS0
   logger -p local0.info "[$KEY][$tag:$LINENO] installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)"
+  /usr/local/logger/print.py green "\r\n[installer] installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)"
   /usr/local/scripts/fake-hwclock.sh save
   sync
   ;;

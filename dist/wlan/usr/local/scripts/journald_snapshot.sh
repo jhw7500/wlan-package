@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 tag=$(basename "$0")
 set -euo pipefail
 SRC="/run/log/journal"

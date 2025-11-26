@@ -16,7 +16,7 @@ LOGKMSG="/dev/kmsg"
 state=$(cat /sys/kernel/debug/regmap/0-004b/registers |grep 2d:|awk '{print $2}')
 #sleep 5
 logger -p local0.info "[$tag:$LINENO] switchd ready : 0x$state"
-print cyan "switchd ready : 0x$state"
+/usr/local/logger/print.py cyan "switchd ready : 0x$state"
 
 fifo=/run/switchd.gpio
 [ -p "$fifo" ] || { rm -f "$fifo"; mkfifo -m 600 "$fifo"; }
@@ -68,9 +68,9 @@ while :; do
                             logger -p local0.emerg "[$tag:$LINENO] short press: power off : 0x$state"
                             #echo "short press: power off : 0x$state" > /dev/console
                             #echo "short press: power off : 0x$state" > /dev/kmsg
-                            print megenta "short press: power off : 0x$state"
+                            /usr/local/logger/print.py red "short press: power off : 0x$state"
                             /usr/local/scripts/journald_snapshot.sh
-                            #sleep 0.5
+                            sleep 0.2
                             [ -e "$LED" ] && echo 0 > "$LED"
                             [ -e "$LED" ] && echo 1 > "$LED"
                         else

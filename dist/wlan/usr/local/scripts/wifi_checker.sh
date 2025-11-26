@@ -166,6 +166,8 @@ END
     sleep 5
 
     if (( REBOOT_F == 1 )); then
+        ERR_CNT=0
+        REBOOT_F=0
         reboot
     fi
 done
