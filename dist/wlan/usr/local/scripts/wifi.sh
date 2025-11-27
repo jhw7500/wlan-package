@@ -8,7 +8,7 @@ logger -p local0.info "[$tag:$LINENO] [$IFACE] cmd : wifi $1 $2 $3 $4"
 
 usage() {
     echo "Usage: wifi {0|1|mlan0|mlan1} {start|up|stop|down|restart|status|br}"
-    echo "       wifi {0|1|mlan0|mlan1} txpwrlimit {0|1|2|default|low|test}"
+    echo "       wifi {0|1|mlan0|mlan1} txpwrlimit {0|1|2|default|low|test|custom_file_name}"
     echo "       wifi {0|1|mlan0|mlan1} config {conf} {value} : file"
     echo "       wifi {0|1|mlan0|mlan1} cal {conf_file_name} : file"
     echo "       wifi {0|1|mlan0|mlan1} mfg {0|1|off|on} : file"
@@ -141,6 +141,8 @@ case "$2" in
     elif [ "$3" == "test" ] || [ "$3" == "2" ]; then
         echo "test txpwrlimit for $IFACE"
         CONF=/lib/firmware/cts/config/txpwrlimit_cfg_9098_test.conf
+    elif [[ "$3" == *.conf ]]; then
+        CONF=/lib/firmware/cts/config/$3
     else
         usage
     fi

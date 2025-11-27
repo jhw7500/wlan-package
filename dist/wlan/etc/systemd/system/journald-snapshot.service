@@ -3,7 +3,12 @@ Description=Snapshot volatile journal to eMMC
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/scripts/journald_snapshot.sh
+ExecStart=/bin/true
+ExecStop=/usr/local/scripts/journald_snapshot.sh
+RemainAfterExit=yes
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
+
+[Install]
+WantedBy=multi-user.target

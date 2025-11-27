@@ -193,3 +193,4 @@ alias camchk1='i2ctransfer -f -y 1 w2@0x48 0x00 0x13 r1'
 alias camchk2='i2ctransfer -f -y 2 w2@0x48 0x00 0x13 r1'
 alias jo='journalctl -o short-iso-precise'
 
+alias monitor='python3 /usr/local/logger/wifi_link_monitor.py $1'

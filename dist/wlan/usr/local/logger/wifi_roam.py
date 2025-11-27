@@ -193,7 +193,7 @@ def get_latest_scan(st):
                     ssid = fields[6].strip()
                     rssi_th = WPA_TH_2G if channel < 36 else WPA_TH_5G
                     freq = channel_to_freq(channel)
-                    #logger.message('info', f"[{IFACE}] ssid:{ssid}, bssid:{bssid}, ch:{channel}, freq:{freq}, rssi:{rssi}, th:{rssi_th}, ld:{ld}", _EXTRA_()) 
+                    logger.message('info', f"[{IFACE}] ssid:{ssid}, bssid:{bssid}, ch:{channel}, freq:{freq}, rssi:{rssi}, th:{rssi_th}, ld:{ld}", _EXTRA_()) 
                     #if st['bssid'] != bssid and st['ssid'] == ssid and channel in WPA_FREQ: #and rssi > rssi_th:
                     if st['ssid'] == ssid and str(freq) in WPA_FREQ:
                         #logger.message('info', f"[{IFACE}] {bssid} append to entry", _EXTRA_()) 
@@ -461,25 +461,25 @@ def main():
             time.sleep(3)
             continue
 
-        top_ap = entries[0]
-        rssi_diff = top_ap["rssi"] - station['rssi']
-        #score = score_ap(top_ap)
+        for roam_ap in entries:
+            if roam_ap['bssid'] == station['bssid']:
+                continue
 
-        #log(f"Current signal={signal}dBm (BSSID: {current_bssid}), "
-        #    f"Top RSSI={top_rssi}dBm at {top_bssid}, Δ={rssi_diff}dB")
+            rssi_diff = roam_ap["rssi"] - station['rssi']
+            #score = score_ap(roam_a[)
+
+            #log(f"Current signal={signal}dBm (BSSID: {current_bssid}), "
+            #    f"Top RSSI={top_rssi}dBm at {top_bssid}, Δ={rssi_diff}dB")
         
-        if top_ap['bssid'] != station['bssid']:
             #if top_ap['rssi'] > top_ap['rssi_th'] and rssi_diff >= DIFF_TH:
             if rssi_diff >= DIFF_TH:
-                logger.message('emerg', f"[{IFACE}] Roaming from {station['bssid']}(ch:{station['freq']}) to {top_ap['bssid']}(ch:{channel_to_freq(top_ap['channel'])})"
-                                       f" : {top_ap['ssid']}, {top_ap['rssi']}>{top_ap['rssi_th']}", _EXTRA_())
-                roam_to_bssid(top_ap['bssid'])
+                logger.message('emerg', f"[{IFACE}] Roaming from {station['bssid']}(ch:{station['freq']}) to {roam_ap['bssid']}(ch:{channel_to_freq(roam_ap['channel'])})"
+                                       f" : {roam_ap['ssid']}, {roam_ap['rssi']}>{roam_ap['rssi_th']}", _EXTRA_())
+                roam_to_bssid(roam_ap['bssid'])
                 time.sleep(5)
                 continue
             else:
-                logger.message('info', f"[{IFACE}] Top AP is not qualified : bssid={top_ap['bssid']}, rssi={top_ap['rssi']}({top_ap['rssi_th']}), diff={rssi_diff}({DIFF_TH})", _EXTRA_())
-        else:
-            logger.message('info', f"[{IFACE}] Top AP is already connected", _EXTRA_()) 
+                logger.message('info', f"[{IFACE}] roam AP is not qualified : bssid={roam_ap['bssid']}, rssi={roam_ap['rssi']}({roam_ap['rssi_th']}), diff={rssi_diff}({DIFF_TH})", _EXTRA_())
 
         time.sleep(CHECK_INTERVAL)
 

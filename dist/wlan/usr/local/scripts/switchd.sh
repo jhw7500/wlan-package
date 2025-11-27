@@ -51,7 +51,8 @@ while :; do
                 pressed=1; press_t=$now; fired_long=0; elapsed=0
                 #log "press"
                 logger -p local0.info "[$tag:$LINENO] press"
-                echo "press" > /dev/console
+                /usr/local/logger/print.py green "press"
+                #echo "press" > /dev/console
             fi
         else
             if [ $pressed -eq 1 ]; then
@@ -88,15 +89,20 @@ while :; do
         now=$(date +%s)
         elapsed=$((now - press_t))
         # 1초마다
-        [ $elapsed -gt 0 ] && logger -p local0.info "[$tag:$LINENO] press (${elapsed}s)"
+        #[ $elapsed -gt 0 ] && logger -p local0.info "[$tag:$LINENO] press (${elapsed}s)"
+        #[ $elapsed -gt 0 ] && /usr/local/logger/print.py green "press (${elapsed}s)"        
         # 10초 도달 즉시
         if [ $elapsed -ge $LONG_MIN ] && [ $fired_long -eq 0 ]; then
-            logger -p local0.info "[$tag:$LINENO] long-press action fired (>=${LONG_MIN}s)"
+            #logger -p local0.info "[$tag:$LINENO] long-press action fired (>=${LONG_MIN}s)"
             logger -p local0.emerg "[$tag:$LINENO] long press triggered"
-            sync
             fired_long=1
             # 예: 재부팅/특정 스크립트 실행 등
-            # /usr/local/scripts/longpress.sh &
+            /usr/local/scripts/factory_reset.sh
+            /usr/local/scripts/journald_snapshot.sh
+            sleep 2
+            /usr/local/logger/print.py red "reboot"
+            sleep 1
+            reboot
         fi
     fi
 done
