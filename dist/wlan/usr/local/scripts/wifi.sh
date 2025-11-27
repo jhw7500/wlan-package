@@ -4,20 +4,22 @@ IFACE=$1
 CONF_DIR="/etc/test"
 NUM=""
 
+logger -p local0.info "[$tag:$LINENO] [$IFACE] cmd : wifi $1 $2 $3 $4"
+
 usage() {
-    echo "Usage: $0 {0|1|mlan0|mlan1} {start|up|stop|down|restart|status|br}"
-    echo "       $0 {0|1|mlan0|mlan1} txpwrlimit {default|low|test}"
-    echo "       $0 {0|1|mlan0|mlan1} config {conf} {value} : file"
-    echo "       $0 {0|1|mlan0|mlan1} cal {conf_file_name} : file"
-    echo "       $0 {0|1|mlan0|mlan1} mfg {0|1} : file"
-    echo "       $0 {0|1|mlan0|mlan1} mac {base|target} {mac_address} : file"
-    echo "       $0 {0|1|mlan0|mlan1} spoof {static|dynamic} : file"
-    echo "       $0 {0|1|mlan0|mlan1} standard {4|5|6} : file"
-    echo "       $0 {0|1|mlan0|mlan1} freq {freq_list|channel_list} : file"
-    echo "       $0 {0|1|mlan0|mlan1} scan {freq_list|channel_list}"
-    echo "       $0 txpwrlimit {conf_file_name} :file"
-    echo "       $0 mfg {0|1}"
-    echo "       $0 ant {0|1}"
+    echo "Usage: wifi {0|1|mlan0|mlan1} {start|up|stop|down|restart|status|br}"
+    echo "       wifi {0|1|mlan0|mlan1} txpwrlimit {0|1|2|default|low|test}"
+    echo "       wifi {0|1|mlan0|mlan1} config {conf} {value} : file"
+    echo "       wifi {0|1|mlan0|mlan1} cal {conf_file_name} : file"
+    echo "       wifi {0|1|mlan0|mlan1} mfg {0|1|off|on} : file"
+    echo "       wifi {0|1|mlan0|mlan1} mac {0|1|base|target} {mac_address} : file"
+    echo "       wifi {0|1|mlan0|mlan1} spoof {0|1|dynamic|static} : file"
+    echo "       wifi {0|1|mlan0|mlan1} limit {4|5|6} : file"
+    echo "       wifi {0|1|mlan0|mlan1} freq {freq_list|channel_list} : file"
+    echo "       wifi {0|1|mlan0|mlan1} scan {freq_list|channel_list}"
+    echo "       wifi txpwrlimit {conf_file_name} :file"
+    echo "       wifi mfg {0|1|off|on}"
+    echo "       wifi ant {0|1|internal|external}"
     exit 1
 }
 
@@ -74,22 +76,25 @@ case "$1" in
     exit 1
     ;;
   txpwrlimit)
+    echo "config file is $2 for txpwrlimit"
     cp $2 /lib/firmware/cts/
     python3 /usr/local/logger/wifi_config.py mlan0 txpwrlimit_cfg cts/$2
     python3 /usr/local/logger/wifi_config.py mlan1 txpwrlimit_cfg cts/$2
     exit 1
     ;;
   ant)
-    if [ "$2" == "0" ]; then
+    if [ "$2" == "internal" ] || [ "$2" == "0" ]; then
         wifi 0 down
         wifi 1 down
         sleep 1
+        echo "set to internal antenna mode"
         echo 0 > /sys/class/leds/SW_SEL1/brightness
         echo 1 > /sys/class/leds/SW_SEL2/brightness
-    elif [ "$2" == "1" ]; then
+    elif [ "$2" == "external" ] || [ "$2" == "1" ]; then
         wifi 1 down
         wifi 1 down
         sleep 1
+        echo "set to external antenna mode"
         echo 1 > /sys/class/leds/SW_SEL1/brightness
         echo 0 > /sys/class/leds/SW_SEL2/brightness
     else
@@ -101,8 +106,6 @@ case "$1" in
     usage
     ;;
 esac
-
-logger -p local0.info "[$tag:$LINENO] [$IFACE] cmd : wifi $1 $2 $3 $4"
 
 if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
     usage
@@ -129,12 +132,15 @@ case "$2" in
     systemctl restart wifi_bridge@$IFACE
     ;;
   txpwrlimit)
-    if [ "$3" == "low" ]; then
-        CONF=/lib/firmware/cts/config/txpwrlimit_cfg_9098_low.conf
-    elif [ "$3" == "test" ]; then
-        CONF=/lib/firmware/cts/config/txpwrlimit_cfg_9098_test.conf
-    elif [ "$3" == "default" ]; then
+    if [ "$3" == "default" ] || [ "$3" == "0" ]; then
+        echo "default txpwrlimit for $IFACE"
         CONF=/lib/firmware/cts/config/txpwrlimit_cfg_9098.conf
+    elif [ "$3" == "low" ] || [ "$3" == "1" ]; then
+        echo "low txpwrlimit for $IFACE"
+        CONF=/lib/firmware/cts/config/txpwrlimit_cfg_9098_low.conf
+    elif [ "$3" == "test" ] || [ "$3" == "2" ]; then
+        echo "test txpwrlimit for $IFACE"
+        CONF=/lib/firmware/cts/config/txpwrlimit_cfg_9098_test.conf
     else
         usage
     fi
@@ -146,15 +152,15 @@ case "$2" in
     mlanutl $IFACE hostcmd $CONF txpwrlimit_5g_cfg_set_sub3 > /dev/null 2>&1
     ;;
   config)
-    echo "python3 /usr/local/logger/wifi_config.py $1 $3 $4"
+    echo "config $3 value set to $4 for $IFACE"
     python3 /usr/local/logger/wifi_config.py $1 $3 $4
     ;;
   mac)
-    if [ "$3" == "base" ]; then
-        echo "set base mac to $4 for $IFACE"
+    if [ "$3" == "base" ] || [ "$3" == "0" ]; then
+        echo "base mac set to $4 for $IFACE"
         echo "$4" > /opt/wlan/mac/base$NUM
-    elif [ "$3" == "target" ]; then
-        echo "set target mac to $4 for $IFACE"
+    elif [ "$3" == "target" ] || [ "$3" == "1" ]; then
+        echo "target mac set to $4 for $IFACE"
         echo "$4" > /opt/wlan/mac/target$NUM
     else
         usage
@@ -164,16 +170,16 @@ case "$2" in
     ;;
   cal)
     #cp $4 /lib/firmware/cts/
-    echo "set cal_data_cfg file to $3 for $IFACE"
+    echo "cal_data_cfg file set to $3 for $IFACE"
     python3 /usr/local/logger/wifi_config.py $1 cal_data_cfg cts/$3
     ;;
   mfg)
-    if [ "$3" == "0" ]; then
-        echo "set mfg_mode to $3 for $IFACE" 
+    if [ "$3" == "off" ] || [ "$3" == "0" ]; then
+        echo "mfg_mode set to off for $IFACE" 
         python3 /usr/local/logger/wifi_config.py $1 mfg_mode 0
         python3 /usr/local/logger/wifi_config.py $1 fw_name cts/pcieuart9098_combo_v1.bin
-    elif [ "$3" == "1" ]; then
-        echo "set mfg_mode to $3 for $IFACE"
+    elif [ "$3" == "on" ] || [ "$3" == "1" ]; then
+        echo "mfg_mode set to on for $IFACE"
         python3 /usr/local/logger/wifi_config.py $1 mfg_mode 1
         python3 /usr/local/logger/wifi_config.py $1 fw_name cts/pcieuart9098_combo.bin
     else
@@ -181,11 +187,11 @@ case "$2" in
     fi
     ;;
   spoof)
-    if [ "$3" == "dynamic" ]; then
-        echo "set spoof to $3 for $IFACE"
+    if [ "$3" == "dynamic" ] || [ "$3" == "0" ]; then
+        echo "spoofing mode set to dynamic for $IFACE"
         cat /dev/null > "/opt/wlan/mac/target$NUM"
-    elif [ "$3" == "static" ]; then
-        echo "set spoof to $3 for $IFACE"
+    elif [ "$3" == "static" ] || [ "$3" == "1" ]; then
+        echo "spoofing mode set to static for $IFACE"
         cp /tmp/eth0_client_mac "/opt/wlan/mac/target$NUM"
     else
         usage
@@ -261,14 +267,18 @@ case "$2" in
 
     FREQ_STR="${FREQS[*]}"   # "5200 5220 5240"  ^x^u ^c^|
     TMP_FILE="$(mktemp)"
+    echo "scanning freq_list $FREQ_STR for $IFACE"
     iw $IFACE scan freq $FREQ_STR
     ;;
-  standard)
+  limit)
     if [ "$3" == "4" ]; then
+        echo "limit to wifi4 for $IFACE" 
         python3 /usr/local/logger/wifi_config.py $1 dev_cap_mask 0xfffc07ff
     elif [ "$3" == "5" ]; then
+        echo "limit to wifi5 for $IFACE"
         python3 /usr/local/logger/wifi_config.py $1 dev_cap_mask 0xfffcffff
     elif [ "$3" == "6" ]; then
+        echo "limit to wifi6 for $IFACE"
         python3 /usr/local/logger/wifi_config.py $1 dev_cap_mask 0xffffffff
     else
         usage

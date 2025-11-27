@@ -35,8 +35,23 @@ disable_services_if_enabled() {
 case "$1" in
 configure)
   echo "postinst configure"
+  cp /opt/wlan/config/logrotate.d/logrotate.rsyslog /etc/logrotate.d/
+  cp /opt/wlan/config/rc.local /etc/
+  cp /opt/wlan/config/rsyslog.conf /etc/
+  cp /opt/wlan/config/smb.conf /etc/samba/
+  #cp /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/
+  cp /opt/wlan/config/wifi_mod_para__.conf /lib/firmware/nxp/
+  cp /opt/wlan/config/crontab /etc/
+  #cp /opt/wlan/firmware/* /lib/firmware/nxp/
+  #cp /opt/wlan/driver/* /lib/modules/$KERNEL_VERSION/updates/
+  cp /opt/wlan/config/wpa_supplicant/wpa_supplicant@.service /lib/systemd/system/
+  cp /opt/wlan/config/systemd/journald.conf /etc/systemd/
+
+  systemctl restart rsyslog
+  systemctl restart systemd-journald
+
   #/usr/local/scripts/auto_fs_sizeup.sh 2 2
-  TARGET_TIME="2025-11-18 15:00:00"
+  TARGET_TIME="2025-11-27 12:00:00"
   CURRENT_TS=$(date +%s)
   TARGET_TS=$(date -d "$TARGET_TIME" +%s)
   echo "date : $(date '+%Y-%m-%d %H:%M:%S')"
@@ -44,7 +59,7 @@ configure)
     echo "set time $TARGET_TIME"
     timedatectl set-ntp false
     timedatectl set-timezone Asia/Seoul
-    timedatectl set-time '2025-11-18 15:00:00'
+    timedatectl set-time "$TARGET_TIME"
   fi
 
   /usr/local/scripts/auto_fs_sizeup.sh 2 3
@@ -174,7 +189,6 @@ customctl() {
   customctl enable wifi_led@mlan0
   customctl enable wifi_logger@mlan0
   customctl enable wifi_checker@mlan0
-  customctl enable wifi_link_stat@mlan0.timer
   #customctl enable wifi_capture@mlan0
 
   #customctl wifi_logger@mlan1 disabled
@@ -249,12 +263,6 @@ makeDirectory() {
   #/usr/local/scripts/add_line.sh "00 *      * * *    root        logrotate /etc/logrotate.d/logrotate.rsyslog" /etc/crontab
   #/usr/local/scripts/comment_line.sh "tmpfs                /var/volatile" /etc/fstab
   /usr/local/scripts/change_line.sh "#tmpfs                /var/volatile        tmpfs      defaults              0  0" "tmpfs                /var/volatile" /etc/fstab
-  #/usr/local/scripts/change_line.sh "ExecStart=/usr/sbin/wpa_supplicant -c/etc/wpa_supplicant/wpa_supplicant-%I.conf -i%I -d" "ExecStart=" /lib/systemd/system/wpa_supplicant@.service
-  #/usr/local/scripts/change_line.sh "Wants=network.target wifi_bridge@%i.service" "Wants=" /lib/systemd/system/wpa_supplicant@.service
-  /usr/local/scripts/change_line.sh "Storage=volatile" "Storage=" /etc/systemd/journald.conf
-  /usr/local/scripts/change_line.sh "SyncIntervalSec=1m" "SyncIntervalSec=" /etc/systemd/journald.conf
-  /usr/local/scripts/change_line.sh "MaxLevelStore=info" "MaxLevelStore=" /etc/systemd/journald.conf
-  /usr/local/scripts/change_line.sh "MaxFileSec=12h" "MaxFileSec=" /etc/systemd/journald.conf
   /usr/local/scripts/change_line.sh "WatchdogDevice=/dev/watchdog" "WatchdogDevice=" /etc/systemd/system.conf
   /usr/local/scripts/change_line.sh "DefaultTimeoutStartSec=30s" "DefaultTimeoutStartSec=" /etc/systemd/system.conf
   /usr/local/scripts/change_line.sh "DefaultTimeoutStopSec=30s" "DefaultTimeoutStopSec=" /etc/systemd/system.conf
@@ -267,18 +275,6 @@ makeDirectory() {
   /usr/local/scripts/change_line.sh "#root" "root" /etc/vsftpd.ftpusers
   /usr/local/scripts/change_line.sh "#root" "root" /etc/vsftpd.user_list
   /usr/local/scripts/add_line.sh "/dev/mmcblk2p3      /var/log/cantops  ext4  noatime,nodiratime,lazytime,commit=60,data=ordered  0  2" /etc/fstab
-
-  #echo "[installer] installing......." >  /dev/ttyGS0
-  cp /opt/wlan/config/logrotate.d/logrotate.rsyslog /etc/logrotate.d/
-  cp /opt/wlan/config/rc.local /etc/
-  cp /opt/wlan/config/rsyslog.conf /etc/
-  cp /opt/wlan/config/smb.conf /etc/samba/
-  #cp /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/
-  cp /opt/wlan/config/wifi_mod_para__.conf /lib/firmware/nxp/
-  cp /opt/wlan/config/crontab /etc/
-  #cp /opt/wlan/firmware/* /lib/firmware/nxp/
-  #cp /opt/wlan/driver/* /lib/modules/$KERNEL_VERSION/updates/
-  cp /opt/wlan/config/wpa_supplicant@.service /lib/systemd/system/
 
 cpchk() {
   if [ ! -f $2 ]; then

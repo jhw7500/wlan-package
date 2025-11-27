@@ -36,6 +36,11 @@ echo "wifi_logger_stat.py $IFACE" > /dev/kmsg
 PID=$!
 logger -p local0.info "[$tag:$LINENO] [$IFACE] wifi_logger_stat.py($PID)"
 
+echo "wifi_link_snapshot.sh $IFACE" > /dev/kmsg
+/usr/local/scripts/wifi_link_snapshot.sh $IFACE &
+PID=$!
+logger -p local0.info "[$tag:$LINENO] [$IFACE] wifi_link_snapshot.sh($PID)"
+
 :<<"END"
 if [[ "$IFACE" == "mlan0" ]]; then
     #sleep 1

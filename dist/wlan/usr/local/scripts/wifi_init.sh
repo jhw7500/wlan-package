@@ -229,7 +229,7 @@ fi
 sleep 0.5
 #python3 /usr/local/logger/getmac.py
 #logger -p local0.info "[$tag:$LINENO] [mlan0] wpa_supplicant start"
-systemctl restart wifi_capture@mlan0
+#systemctl restart wifi_capture@mlan0
 sleep 0.5
 systemctl restart systemd-networkd
 #sleep 0.5
