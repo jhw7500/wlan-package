@@ -47,27 +47,27 @@ is_plausible_host_ip() {
 if [ "$IFACE" = "eth0" ]; then
     STATE=$(jq -r '.eth_stats.phy.link' "/var/log/cantops/json/eth0/link.json")
     if [[ "$STATE" != "up" ]]; then
-        logger -p $F.info "[$tag:$LINENO] [$IFACE] not ready"
+        logger -p $F.info "[$tag:$LINENO] [$IFACE] not ready(link down)"
         exit 1
     fi
     TARGET_IP=$(cat /tmp/${IFACE}_client_ip)
 elif [ "$IFACE" = "mlan0" ]; then
     if ! is_wpa_active || ! is_connected; then
-        logger -p $F.info "[$tag:$LINENO] [$IFACE] not ready"
+        logger -p $F.info "[$tag:$LINENO] [$IFACE] not ready(not connected)"
         exit 1
     fi
     #TARGET_IP=$(grep -E '^Gateway=' /etc/systemd/network/20-mlan0.network | head -n1 | cut -d= -f2)
     TARGET_IP=$(ip route | awk '/^default/ && /mlan0/ {print $3}')
 elif [ "$IFACE" = "mlan1" ]; then
     if ! is_wpa_active || ! is_connected; then
-        logger -p $F.info "[$tag:$LINENO] [$IFACE] not ready"
+        logger -p $F.info "[$tag:$LINENO] [$IFACE] not ready(not connected)"
         exit 1
     fi
     #TARGET_IP=$(grep -E '^Gateway=' /etc/systemd/network/21-mlan1.network | head -n1 | cut -d= -f2)
     TARGET_IP=$(ip route | awk '/^default/ && /mlan1/ {print $3}')
 else
     logger -p $F.info "[$tag:$LINENO] [$IFACE] interface is wrong : $IFACE"
-    exit 1
+    exit 0
 fi
 
 if ! is_ipv4 "$TARGET_IP"; then

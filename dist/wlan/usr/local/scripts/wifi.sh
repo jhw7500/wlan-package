@@ -252,6 +252,89 @@ case "$2" in
 
     echo "scan_freq / freq_list configure $FREQ_STR in $CONF"
     ;;
+  ssid)
+    set -euo pipefail
+    shift 2
+    CONF="/etc/wpa_supplicant/wpa_supplicant-${IFACE}.conf"
+
+    if [ ! -f "$CONF" ]; then
+        echo "not found? $CONF" >&2
+        exit 1
+    fi
+
+    if [ $# -lt 1 ]; then
+        echo "usage: wifi <iface> ssid <NEW_SSID>" >&2
+        exit 1
+    fi
+
+    NEW_SSID="$1"
+    TMP_FILE="$(mktemp)"
+
+    if awk -v new_ssid="$NEW_SSID" '
+        BEGIN { changed = 0 }
+        /^[[:space:]]*#/ { print; next }
+        /^[[:space:]]*ssid[[:space:]]*=/ {
+            # 기존 ssid= 라인을 교체
+            print "    ssid=\"" new_ssid "\""
+            changed = 1
+            next
+        }
+        { print }
+        END {
+            if (!changed)
+                exit 1   # ssid= 못 찾으면 에러 코드로 종료
+        }
+    ' "$CONF" > "$TMP_FILE"; then
+        mv "$TMP_FILE" "$CONF"
+        echo "ssid changed to \"$NEW_SSID\" in $CONF"
+    else
+        echo "no ssid= line found, nothing changed in $CONF" >&2
+        rm -f "$TMP_FILE"
+        exit 1
+    fi
+    ;;
+
+  psk)
+    set -euo pipefail
+    shift 2
+    CONF="/etc/wpa_supplicant/wpa_supplicant-${IFACE}.conf"
+
+    if [ ! -f "$CONF" ]; then
+        echo "not found? $CONF" >&2
+        exit 1
+    fi
+
+    if [ $# -lt 1 ]; then
+        echo "usage: wifi <iface> psk <NEW_PSK>" >&2
+        exit 1
+    fi
+
+    NEW_PSK="$1"
+    TMP_FILE="$(mktemp)"
+
+    if awk -v new_psk="$NEW_PSK" '
+        BEGIN { changed = 0 }
+        /^[[:space:]]*#/ { print; next }
+        /^[[:space:]]*psk[[:space:]]*=/ {
+            # 기존 psk= 라인을 교체
+            print "    psk=\"" new_psk "\""
+            changed = 1
+            next
+        }
+        { print }
+        END {
+            if (!changed)
+                exit 1   # psk= 못 찾으면 에러 코드로 종료
+        }
+    ' "$CONF" > "$TMP_FILE"; then
+        mv "$TMP_FILE" "$CONF"
+        echo "psk changed to \"$NEW_PSK\" in $CONF"
+    else
+        echo "no psk= line found, nothing changed in $CONF" >&2
+        rm -f "$TMP_FILE"
+        exit 1
+    fi
+    ;;
   scan)
     set -euo pipefail
     shift 2
