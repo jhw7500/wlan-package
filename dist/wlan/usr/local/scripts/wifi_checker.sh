@@ -8,18 +8,18 @@ MODULE_NAME="moal"
 
 MAX_UNSTABLE_DURATION=4
 UNSTABLE_START=0
-LIMIT_CNT=4
+LIMIT_CNT=3
 ERR_CNT=0
 STATE=""
 PRE_STATE=""
 PCI_BUS=""
 REBOOT_F=0
+
 cleanup() {
     logger -p local0.info "[$tag:$LINENO] [$IFACE] stop"
     exit 0
 }
 trap cleanup INT TERM
-
 
 LOG_DIR="/var/log/cantops/err"
 
@@ -52,22 +52,15 @@ is_connected() {
     [[ "$state" == "COMPLETED" ]]
 }
 
-sleep 3
-
-#python3 /usr/local/logger/wifi_module_check.py $IFACE
-
-:<<"END"
-while true; do
-    if lsmod |grep -q "^$MODULE_NAME"; then
-        logger -p local0.info "[$tag:$LINENO] [$IFACE] $MODULE_NAME is loading..."
-        #sleep 5
-        break
-    fi
-    sleep 5
-done
-END
-
-sleep 10
+if [ "$IFACE" != "eth0" ]; then
+    for i in {1..3}; do
+        if lsmod |grep -q "^$MODULE_NAME"; then
+            logger -p local0.info "[$tag:$LINENO] [$IFACE] $MODULE_NAME is loading..."
+            break
+        fi
+        sleep 5
+    done
+fi
 
 while true; do
     #sleep 3

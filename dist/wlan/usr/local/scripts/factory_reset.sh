@@ -119,18 +119,29 @@ customctl() {
 
 #find /var/log/cantops -mindepth 1 -maxdepth 1 ! -name journald -exec rm -rf {} +
 LOG_DIR=/var/log/cantops
-rm $LOG_DIR/local0.log-*
-rm $LOG_DIR/kern.log-*
-rm $LOG_DIR/sys.log-*
-rm $LOG_DIR/ui.log-*
-rm $LOG_DIR/summary -r
-rm $LOG_DIR/scan -r
-rm $LOG_DIR/stat -r
-rm $LOG_DIR/wpa -r
-rm $LOG_DIR/mgmt -r
-rm $LOG_DIR/err -r
-rm $LOG_DIR/journald -r
+rm -rf $LOG_DIR/local0.log-*
+rm -rf $LOG_DIR/kern.log-*
+rm -rf $LOG_DIR/sys.log-*
+rm -rf $LOG_DIR/ui.log-*
+rm -rf $LOG_DIR/cpu/*
+rm -rf $LOG_DIR/summary/*
+rm -rf $LOG_DIR/scan/mlan0/*
+rm -rf $LOG_DIR/scan/mlan1/*
+rm -rf $LOG_DIR/stat/mlan0/*
+rm -rf $LOG_DIR/stat/mlan1/*
+rm -rf $LOG_DIR/wpa/mlan0/*
+rm -rf $LOG_DIR/wpa/mlan1/*
+rm -rf $LOG_DIR/mgmt/mlan0/*
+rm -rf $LOG_DIR/mgmt/mlan1/*
+rm -rf $LOG_DIR/err/* -r
+rm -rf $LOG_DIR/journald/* -r
 rm $LOG_DIR/max_temp
+rm -rf $LOG_DIR/cpu.log-*
+
+cat /dev/null > $LOG_DIR/local0.log
+cat /dev/null > kern.log
+cat /dev/null > sys.log
+cat /dev/null > ui.log
 
 echo none > /sys/class/leds/status/trigger
 echo none > /sys/class/leds/lan/trigger

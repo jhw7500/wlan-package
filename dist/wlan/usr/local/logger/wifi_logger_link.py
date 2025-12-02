@@ -6,6 +6,7 @@ import sys
 import os
 import signal
 import tempfile
+import shutil
 from datetime import datetime
 import logging
 from sUTILS import Logger, _EXTRA_
@@ -24,6 +25,19 @@ def handle_sigterm(signum, frame):
 
 def cleanup():
     pass
+
+def remove_any(path):
+    if not os.path.lexists(path):
+        return  #     ^~  ^u^x  ^`  ^u^j ^|      ^u^d     ^c ^o^d  ^u^h  ^u
+
+    logger.message('info', f"[{IFACE}] remove {path}", _EXTRA_())
+
+    if os.path.islink(path) or os.path.isfile(path):
+        os.remove(path)          #  ^l^l ^}   ^x^p ^j^t  ^k          ^a ^a   ^b   ^|
+    elif os.path.isdir(path):
+        shutil.rmtree(path)      #  ^t^t  ^i ^d       ^d     ^b   ^|
+    else:
+        os.unlink(path)          #     ^c^`  ^j  ^h^x  ^l^l ^}
 
 def compact_lists(text):
     pattern = re.compile(r'\[\s*\n\s*((?:.+,\s*\n)+)\s*(.+?)\s*\]')
@@ -359,8 +373,8 @@ if __name__ == "__main__":
         os.makedirs(TARGET_PATH, exist_ok=True)
 
     if not os.path.islink(LINK_PATH):
-        if os.path.lexists(LINK_PATH):
-            raise RuntimeError(f"{LINK_PATH} exists and is not a symlink. Cannot safely overwrite.")
+        remove_any(LINK_PATH)
+        logger.message("err", f"[{IFACE}] symbolic link {LINK_PATH} with {TARGET_PATH}", _EXTRA_())
         os.symlink(TARGET_PATH, LINK_PATH)
         
     if not os.path.exists(LOG_DIR):
