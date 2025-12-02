@@ -89,8 +89,9 @@ def passive_mac_sniff(own_mac, timeout=5):
 
     return target_mac[0]
 
-def raw_l2_broadcast_probe(iface):
+def raw_l2_broadcast_probe(iface):    
     print(f"[*] Sending raw L2 broadcast probe on {iface}...")
+    logger.message("info", f"[{iface}] Sending raw L2 broadcast probe", _EXTRA_())
     src_mac = get_if_hwaddr(iface)
     # dummy EtherType + 최소 페이로드로 상대를 깨움
     pkt = Ether(dst="ff:ff:ff:ff:ff:ff", src=src_mac, type=0x0800) / (b'\x00' * 46)
@@ -285,6 +286,8 @@ def main():
 
     # 결과 저장
     save_data(f"/tmp/{ETH_IFACE}_client_mac", mac)
+    save_data(f"/tmp/{ETH_IFACE}_client_ip", ip)
+
     if ip:
         print(f"[+] Wired Client IP resolved: {ip}")
         logger.message("info", f"[{IFACE}] result MAC/IP: {mac} {ip}", _EXTRA_())
