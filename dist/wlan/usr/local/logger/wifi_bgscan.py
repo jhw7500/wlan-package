@@ -13,6 +13,7 @@ from datetime import datetime
 from sUTILS import Logger, _EXTRA_
 
 LOG_DIR = "/var/log/cantops/scan"
+ROAM_CONDITION_FLAG = "/tmp/roam_condition"
 WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
 DEFAULT_INTERVAL = 30
 STALE_THRESHOLD_SEC = 600  #1hour
@@ -28,14 +29,16 @@ def handle_sigterm(signum, frame):
 def cleanup():
     pass
 
-def set_flag(on: bool, path="/tmp/roam_condition"):
+def set_flag(on: bool, path=ROAM_CONDITION_FLAG):
     with open(path, "w") as f:
-        if on:
+        if on == 1:
             f.write("1")
+        elif on == 0:
+            f.write("0")
         else:
             f.write("")  # 빈 파일은 OFF 상태
 
-def get_flag(path="/tmp/roam_condition") -> bool:
+def get_flag(path=ROAM_CONDITION_FLAG) -> bool:
     try:
         with open(path, "r") as f:
             content = f.read().strip()
@@ -119,7 +122,8 @@ def periodic_scan(ssid, freqs, interval):
             try:
                 logger.message("info", f"[{IFACE}] {cmd}", _EXTRA_())
                 #subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                subprocess.run(cmd, check=True)
+                subprocess.run(cmd, stdout=subprocess.DEVNULL, check=True)
+                #subprocess.run(cmd, check=True)
                 last_time = time.time()
             except subprocess.CalledProcessError as e:
                 logger.message("err", f"[{IFACE}] iw scan failed: {e}", _EXTRA_())

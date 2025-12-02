@@ -29,7 +29,7 @@ logger -p local0.info "[$tag:$LINENO] [$IFACE] start"
 
 if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" && "$IFACE" != "eth0" ]]; then
     logger -p local0.emerg "[$tag:$LINENO] [$IFACE] interface is wrong!!"
-    exit 1
+    exit 0
 elif [ "$IFACE" == "mlan0" ]; then
     PCI_BUS="/sys/bus/pci/devices/0000:01:00.0"
 elif [ "$IFACE" == "mlan1" ]; then

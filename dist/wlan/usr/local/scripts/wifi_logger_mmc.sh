@@ -3,13 +3,13 @@ tag=$(basename "$0")
 EXT=/sys/kernel/debug/mmc2/mmc2:0001/ext_csd
 
 cleanup() {
-    logger -p local0.info "[$tag:$LINENO] wifi_logger_mmc stop"
+    logger -p local0.info "[$tag:$LINENO] stop"
     exit 0
 }
 trap cleanup INT TERM
 
 
-logger -p local0.info "[$tag:$LINENO] wifi_logger_mmc start"
+logger -p local0.info "[$tag:$LINENO] start"
 
 to_bucket() {
     v=$1

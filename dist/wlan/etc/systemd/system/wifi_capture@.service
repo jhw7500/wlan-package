@@ -6,8 +6,10 @@ Wants=network-online.target
 #Conflicts=wifi_capture@mlan0.service wifi_capture@mlan1.service
 
 [Service]
-ExecStartPre=/bin/sleep 10
-ExecStart=/bin/python3 /usr/local/logger/wifi_logger_cap.py %i 0x4100
+ExecStartPre=/bin/sleep 3
+#ExecStart=/bin/python3 /usr/local/logger/wifi_logger_cap.py %i 0x4100
+#ExecStart=/usr/local/scripts/wifi_capture.sh %I
+ExecStart=/usr/local/logger/wifi_capture.py %I %I 0x4100
 #Restart=always
 User=root
 

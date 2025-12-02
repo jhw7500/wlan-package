@@ -40,11 +40,6 @@ def get_mac_address(iface):
             return f.read().strip().lower()
     return ""
 
-def start_capture():
-    return subprocess.Popen([
-        "tcpdump", "-i", INTERFACE, "-U", "-n", "-w", PCAP_FILE
-    ])
-
 def start_parser(mac_mlan, subtype_mask):
     global parse_proc
     ether_filter = f"ether host {mac_mlan}"
@@ -148,118 +143,6 @@ def parse_frame_type(ftype, fsub):
         return {"0": "Data", "4": "Null", "8": "QoS Data", "12": "QoS Null"}.get(fsub, "Data")
     return "Unknown"
 
-cap_proc = None
-parse_proc = None
-
-def start_pipeline():
-    global cap_proc, parse_proc
-    # 공통 옵션
-    tcpdump_cmd = [
-        "tcpdump", "-i", INTERFACE, "-U", "-n", "-w", "-"  # 표준출력으로 RAW pcap
-    ]
-    tshark_cmd = [
-        "tshark",
-        "-l",               # 라인 버퍼링
-        "-n",               # 이름해석 금지
-        "-r", "-",          # 표준입력에서 pcap 읽기
-        "-Y", "wlan.fc.type == 0",  # 관리 프레임만
-        "-T", "fields",
-        "-e", "frame.time_epoch",
-        "-e", "wlan.sa",
-        "-e", "wlan.da",
-        "-e", "wlan.fc.type",
-        "-e", "wlan.fc.subtype",
-        "-e", "wlan.fc.retry",
-        "-e", "wlan.seq",
-        "-e", "radiotap.dbm_antsignal",
-        "-e", "radiotap.dbm_antnoise",
-        "-E", "separator=,"
-    ]
-    # 불필요 재조립/버퍼링 끄기(안전한 기본 셋)
-    tshark_cmd += [
-        "-o", "tcp.desegment_tcp_streams:FALSE",
-        "-o", "tls.desegment_ssl_records:FALSE",
-        "-o", "http.reassemble_body:FALSE"
-    ]
-
-    # 프로세스 그룹으로 띄워 한 번에 종료하기 쉽게
-    cap_proc = subprocess.Popen(
-        tcpdump_cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        preexec_fn=os.setsid,
-        bufsize=0
-    )
-    parse_proc = subprocess.Popen(
-        tshark_cmd,
-        stdin=cap_proc.stdout,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-        bufsize=1,
-        preexec_fn=os.setsid
-    )
-
-'''
-def cleanup():
-    # tshark → tcpdump 순서로 종료 신호, 그리고 wait()
-    for p in (parse_proc, cap_proc):
-        if p and p.poll() is None:
-            try:
-                os.killpg(os.getpgid(p.pid), signal.SIGTERM)
-            except Exception:
-                pass
-    time.sleep(0.3)
-    for p in (parse_proc, cap_proc):
-        if p and p.poll() is None:
-            try:
-                os.killpg(os.getpgid(p.pid), signal.SIGKILL)
-            except Exception:
-                pass
-    for p in (parse_proc, cap_proc):
-        if p:
-            try:
-                p.wait(timeout=1)
-            except Exception:
-                pass
-    subprocess.run(["mlanutl_silent", IFACE, "netmon", "0"], check=False)
-'''
-
-def start_parser_loop(mac_mlan, subtype_mask):
-    logger.no_extra()
-    logger.message('info', "capture start")
-
-    # parse_proc.stdout를 라인 단위로 즉시 처리
-    for raw in iter(parse_proc.stdout.readline, ''):
-        line = raw.strip()
-        if not line:
-            continue
-        fields = line.split(",")
-        if len(fields) < 9:
-            continue
-
-        ts, sa, da = fields[0].strip(), fields[1].lower(), fields[2].lower()
-        ftype, fsub, retry, seq, rssi, nf = fields[3:9]
-        if ftype != "0":
-            continue
-        try:
-            subtype = int(fsub)
-        except ValueError:
-            continue
-        if subtype_mask & (1 << subtype):
-            continue
-
-        try:
-            snr = str(int(rssi) - int(nf))
-        except Exception:
-            snr = "N/A"
-
-        frame_str = parse_frame_type(ftype, fsub)
-        logger.message(
-            'info',
-            f"{frame_str:<16}({fsub:>2}) : SA={sa:<17} DA={da:<17} RSSI={rssi:>4} NF={nf:>4} SNR={snr:>3} Retry={retry:<3} Seq={seq}"
-        )
-
 def main():
     while not os.path.exists(f"/sys/class/net/{IFACE}"):
         logger.message('info', f"[{IFACE}] waiting for interface...", _EXTRA_())
@@ -273,11 +156,7 @@ def main():
     subprocess.run(["mlanutl_silent", IFACE, "netmon", "1", "0x49"])
     subprocess.run(["ifconfig", INTERFACE, "up"])
 
-    #cap_proc = start_capture()
-    #time.sleep(0.5)
     start_parser(mac_mlan, SUBTYPE_MASK)
-    #start_pipeline()
-    #start_parser_loop(mac_mlan, SUBTYPE_MASK)
 
     try:
         while True:

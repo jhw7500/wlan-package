@@ -27,27 +27,47 @@ if [ $LIMIT -le 1 ]; then
 fi
 
 if [ -n "$KEY" ]; then
-    FILE_PATH=$INPUT_PATH/$KEY
+    FILE_PATH=$INPUT_PATH/$KEY*
+    #cnt_cmd="ls -lt $FILE_PATH | grep ^- | wc -l"
 else
     FILE_PATH=$INPUT_PATH
-fi
-
-cnt=$(ls -lt $FILE_PATH* | grep ^- | wc -l)
-
-#echo "file_path:$FILE_PATH, file_cnt:$cnt"
-if [ $cnt -gt $LIMIT ]; then
-    logger -p local0.info "[$tag:$LINENO] file cnt $cnt > $LIMIT ($tailcnt)"
-    find $FILE_PATH* -maxdepth 1 -type f -printf '%T+ %p\n' | sort | head -n -$LIMIT | cut -d' ' -f2- | xargs -r rm -f
+    #cnt_cmd="ls -lt $FILE_PATH | grep ^d | wc -l"
 fi
 
 MAX_SIZE=$(($SIZE * 1024 * 1024))
-current_size=$(du -sb $INPUT_PATH | awk '{print $1}')
-if [ $current_size -gt $MAX_SIZE ]; then
-    logger -p local0.err "[$tag:$LINENO] $INPUT_PATH dir $current_size byte over $MAX_SIZE byte!"
-    oldest_file=$(ls $INPUT_PATH | grep -E '\log-[0-9]{8}\.gz$' | sort | head -n 1)
-    #echo "Deleting oldest log file: $oldest_file"
-    logger -p local0.err "[$tag:$LINENO] deleting oldest log file: $oldest_file"
-    rm -f "$INPUT_PATH/$oldest_file"
+#cnt=$(ls -lt $FILE_PATH | grep ^- | wc -l)
+
+while :; do
+    #echo "file_path:$FILE_PATH, file_cnt:$cnt"
+    find $FILE_PATH -mindepth 1 -maxdepth 1 | wc -l
+    #echo "$cnt"
+    if [ $cnt -gt $LIMIT ]; then
+        logger -p local0.info "[$tag:$LINENO] file cnt $cnt > $LIMIT ($tailcnt)"
+        #del=$((cnt - LIMIT))
+        #find $FILE_PATH* -maxdepth 1 -type f -printf '%T+ %p\n' | sort | head -n -$LIMIT | cut -d' ' -f2- | xargs -r rm -f
+        oldest_file=$(ls -tr $FILE_PATH | head -n 1)
+        logger -p local0.info "[$tag:$LINENO] deleting oldest log file: $oldest_file"
+        rm -rf "$oldest_file"
+        cnt=$(ls -lt $FILE_PATH | grep ^- | wc -l)
+        #logger -p local0.info "[$tag:$LINENO] $INPUT_PATH file cnt : $cnt"
+        sleep 5
+        continue
+    fi
+    break
+done
+
+while :; do
     current_size=$(du -sb $INPUT_PATH | awk '{print $1}')
-    logger -p local0.err "[$tag:$LINENO] $INPUT_PATH dir $current_size byte"
-fi
+    if [ $current_size -gt $MAX_SIZE ]; then
+        logger -p local0.info "[$tag:$LINENO] $INPUT_PATH dir $current_size byte over $MAX_SIZE byte!"
+        oldest_file=$(ls -tr $FILE_PATH | head -n 1)
+        #echo "Deleting oldest log file: $oldest_file"
+        logger -p local0.info "[$tag:$LINENO] deleting oldest log file: $oldest_file"
+        rm -rf "$oldest_file"
+        current_size=$(du -sb $INPUT_PATH | awk '{print $1}')
+        #logger -p local0.info "[$tag:$LINENO] $INPUT_PATH dir size : $current_size byte"
+        sleep 5
+        continue
+    fi
+    break
+done

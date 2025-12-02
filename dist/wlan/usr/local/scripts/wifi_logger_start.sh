@@ -16,7 +16,7 @@ fi
 
 if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" ]]; then
     logger -p local0.emerg "[$tag:$LINENO] [$IFACE] interface is wrong!!"
-    exit 1
+    exit 0
 fi
 
 #sleep 3

@@ -7,7 +7,7 @@ logger -p local0.info "[$tag:$LINENO] [$IFACE] wifi bridge start"
 
 if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" ]]; then
     logger -p local0.emerg "[$tag:$LINENO] [$IFACE] interface is wrong!!"
-    exit 1
+    exit 0
 fi
 
 #for i in {1..3}; do
@@ -25,8 +25,6 @@ both_up() {
 }
 
 getMac() {
-    IFACE=$1
-
     if [ -e /sys/class/net/$IFACE/address ]; then
         mac_addr=$(cat /sys/class/net/$IFACE/address)
         logger -p local0.info "[$tag:$LINENO] [$IFACE] MAC Address: $mac_addr"

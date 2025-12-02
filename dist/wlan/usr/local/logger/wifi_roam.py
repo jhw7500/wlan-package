@@ -16,6 +16,7 @@ LINK_LOG_FILE = f"/var/log/cantops/json/{IFACE}/link.json"
 SCAN_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/ap.log"
 FREQ_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/freq.log"
 WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
+ROAM_CONDITION_FLAG = "/tmp/roam_condition"
 DEFAULT_TH_2G = -75
 DEFAULT_TH_5G = -75
 WPA_SSID = None
@@ -81,6 +82,23 @@ FREQ_TO_CHAN = {
     "5745": "149a", "5765": "153a", "5785": "157a", "5805": "161a",
     "5825": "165a", "5845": "169a", "5865": "173a", "5885": "177a"
 }
+
+def set_flag(on: bool, path=ROAM_CONDITION_FLAG):
+    with open(path, "w") as f:
+        if on == 1:
+            f.write("1")
+        elif on == 0:
+            f.write("0")
+        else:
+            f.write("")  #   ^h  ^l^l ^}  ^}^` OFF  ^c^a ^c^|
+
+def get_flag(path=ROAM_CONDITION_FLAG) -> bool:
+    try:
+        with open(path, "r") as f:
+            content = f.read().strip()
+            return content == "1"
+    except FileNotFoundError:
+        return False  #  ^l^l ^}  ^}   ^w^f ^|     OFF      ^i
 
 def mlanutl_scan(ssid, freqs):
     try:
@@ -430,10 +448,12 @@ def main():
         #logger.message('info', f"[{IFACE}] rssi cur : {station['rssi']}, roam_th : {station['rssi_th']}", _EXTRA_())
         if station['rssi'] >= station['rssi_th']:
             #subprocess.run(["systemctl", "start", "wifi_capture"], check=True)
+            set_flag(0, ROAM_CONDITION_FLAG)
             time.sleep(CHECK_INTERVAL)
             continue
 
         logger.message('info', f"[{IFACE}] roaming condition : {station['rssi']} < {station['rssi_th']} ({station['bssid']})", _EXTRA_())
+        set_flag(1, ROAM_CONDITION_FLAG)
                 
         #ssid, freqs = parse_supplicant_conf(WPA_CONF_FILE)
         if WPA_SSID and WPA_FREQ:
