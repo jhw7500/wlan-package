@@ -4,7 +4,7 @@
 /var/log/cantops/logger.log
 /var/log/cantops/ui.log
 {
-        rotate 2
+        rotate 3
         weekly
         missingok
         notifempty
@@ -17,6 +17,7 @@
 }
 
 /var/log/cantops/summary/summary.log
+/var/log/cantops/cpu/cpu.log
 /var/log/cantops/mgmt/mlan0/mgmt.log
 /var/log/cantops/mgmt/mlan1/mgmt.log
 /var/log/cantops/scan/mlan0/ap.log
@@ -25,11 +26,8 @@
 /var/log/cantops/scan/mlan1/freq.log
 /var/log/cantops/stat/mlan0/*.log
 /var/log/cantops/stat/mlan1/*.log
-/var/log/cantops/wpa/wpa.log
 /var/log/cantops/wpa/mlan0/wpa.log
 /var/log/cantops/wpa/mlan1/wpa.log
-/var/log/cantops/ping.log
-/var/log/cantops/cpu.log
 {
         rotate 7
         daily
@@ -56,7 +54,7 @@
 /var/log/debug
 /var/log/messages
 {
-        rotate 7
+        rotate 14
         daily
         missingok
         notifempty

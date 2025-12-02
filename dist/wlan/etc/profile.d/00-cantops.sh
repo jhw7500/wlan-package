@@ -5,6 +5,7 @@ STATDIR="$LOGDIR/stat"
 JSONDIR="$LOGDIR/json"
 SUMDIR="$LOGDIR/summary"
 WPADIR="$LOGDIR/wpa"
+CPUDIR="$LOGDIR/cpu"
 
 STATDIR0="$STATDIR/mlan0"
 JSONDIR0="$JSONDIR/mlan0"
@@ -55,11 +56,11 @@ alias llogt='cat $LOGDIR/logger.log | tail -n $1'
 alias llogh='cat $LOGDIR/logger.log | head -n $1'
 alias llogf='tail -f $LOGDIR/logger.log'
 
-alias clog='cat $LOGDIR/cpu.log'
-alias clogg='cat $LOGDIR/cpu.log | grep -i $1 -a'
-alias clogt='cat $LOGDIR/cpu.log | tail -n $1'
-alias clogh='cat $LOGDIR/cpu.log | head -n $1'
-alias clogf='tail -f $LOGDIR/cpu.log'
+alias clog='cat $CPUDIR/cpu.log'
+alias clogg='cat $CPUDIR/cpu.log | grep -i $1 -a'
+alias clogt='cat $CPUDIR/cpu.log | tail -n $1'
+alias clogh='cat $CPUDIR/cpu.log | head -n $1'
+alias clogf='tail -f $CPUDIR/cpu.log'
 
 alias nlog='cat $LOGDIR/link_stat.log'
 alias nlogg='cat $LOGDIR/link_stat.log | grep -i $1 -a'
