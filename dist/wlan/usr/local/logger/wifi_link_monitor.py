@@ -32,39 +32,78 @@ def load_json(filepath):
 
 def draw_screen(stdscr, data):
     stdscr.clear()
-    stdscr.addstr(0, 2, "Realtime JSON Monitor - 'ilog'", curses.A_BOLD | curses.A_UNDERLINE)
+    max_y, max_x = stdscr.getmaxyx()
 
-    y = 2
+    def safe_addstr(y, x, text, attr=0):
+        # 화면 밖이면 그리기 스킵
+        if y < 0 or y >= max_y:
+            return
+        if x < 0 or x >= max_x:
+            return
+        # 오른쪽으로 넘치는 부분은 잘라냄
+        stdscr.addstr(y, x, text[: max_x - x], attr)
+
+    y = 0
+    safe_addstr(y, 2, "Realtime JSON Monitor", curses.A_BOLD | curses.A_UNDERLINE)
+    y += 2
+
     def print_section(title, content, keys=None):
         nonlocal y
-        stdscr.addstr(y, 2, f"[{title}]", curses.A_BOLD)
+        if y >= max_y - 2:
+            return  # 더 이상 쓸 공간 없음
+
+        safe_addstr(y, 2, f"[{title}]", curses.A_BOLD)
         y += 1
+
         for k, v in content.items():
             if keys and k not in keys:
                 continue
-            # null 값 '-'로 출력
+            if y >= max_y - 1:
+                return
+
             v_str = "-" if v is None else str(v)
-            stdscr.addstr(y, 4, f"{k:<30}: {v_str}")
+            line = f"{k:<30}: {v_str}"
+            safe_addstr(y, 4, line)
             y += 1
+
         y += 1
 
-    if "info" in data: print_section("info", data["info"])
-    if "link" in data: print_section("link", data["link"])
-    if "channel_info" in data: print_section("channel_info", data["channel_info"])
-    if "mwlan_log" in data: print_section("mwlan_log", data["mwlan_log"], keys=["dot11FailedCount", "dot11RetryCount"])
+    if isinstance(data, dict):
+        if "info" in data and isinstance(data["info"], dict):
+            print_section("info", data["info"])
+        if "link" in data and isinstance(data["link"], dict):
+            print_section("link", data["link"])
+        if "channel_info" in data and isinstance(data["channel_info"], dict):
+            print_section("channel_info", data["channel_info"])
+        if "mwlan_log" in data and isinstance(data["mwlan_log"], dict):
+            print_section(
+                "mwlan_log",
+                data["mwlan_log"],
+                keys=["dot11FailedCount", "dot11RetryCount"],
+            )
 
-    # ? 추가: eth_stats 표시
+        if "eth_stats" in data and isinstance(data["eth_stats"], dict):
+            eth = data["eth_stats"]
+            if "info" in eth and isinstance(eth["info"], dict):
+                print_section(
+                    "Eth Interface Info",
+                    eth["info"],
+                    keys=[
+                        "mac_address", "rx_packets", "rx_bytes", "rx_errors",
+                        "rx_dropped", "tx_packets", "tx_bytes",
+                        "tx_errors", "tx_dropped",
+                    ],
+                )
+            if "phy" in eth and isinstance(eth["phy"], dict):
+                print_section(
+                    "Eth PHY Info",
+                    eth["phy"],
+                    keys=["link", "speed", "duplex"],
+                )
 
-    if "eth_stats" in data:
-        if "info" in data["eth_stats"]:
-            #print_section("Eth Interface Info", data["eth_stats"]["info"])
-            print_section("Eth Interface Info", data["eth_stats"]["info"], keys=["mac_address", "rx_packets", "rx_bytes", "rx_errors", "rx_dropped", "tx_packets", "tx_bytes", "tx_errors", "tx_dropped"])
-        if "phy" in data["eth_stats"]:
-            #print_section("Eth PHY Info", data["eth_stats"]["phy"])
-            print_section("Eth PHY Info", data["eth_stats"]["phy"], keys=["link", "speed", "duplex"])
+        if "date" in data and y < max_y:
+            safe_addstr(y, 2, f"[Last Updated] {data['date']}")
 
-    if "date" in data:
-        stdscr.addstr(y, 2, f"[Last Updated] {data['date']}")
     stdscr.refresh()
 
 def main(stdscr, file_path):
@@ -82,9 +121,10 @@ def main(stdscr, file_path):
             break
 
         except Exception as e:
-            # 파일 읽기 실패 같은 예외도 화면 깔끔하게 처리
             stdscr.clear()
-            stdscr.addstr(0, 0, f"Error: {e}")
+            max_y, max_x = stdscr.getmaxyx()
+            msg = f"Error: {e}"
+            stdscr.addstr(0, 0, msg[:max_x - 1])
             stdscr.refresh()
             time.sleep(1)
 
@@ -94,7 +134,7 @@ def main(stdscr, file_path):
 
 if __name__ == "__main__":
     # Ctrl-C / kill 에 안전하게 반응하도록 signal 등록
-    signal.signal(signal.SIGINT, signal_handler)
+    #signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
     parser = argparse.ArgumentParser()

@@ -17,6 +17,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} limit {4|5|6} : file"
     echo "       wifi {0|1|mlan0|mlan1} freq {freq_list|channel_list} : file"
     echo "       wifi {0|1|mlan0|mlan1} scan {freq_list|channel_list}"
+    echo "       wifi {0|1|mlan0|mlan1} mon"
     echo "       wifi txpwrlimit {conf_file_name} :file"
     echo "       wifi mfg {0|1|off|on}"
     echo "       wifi ant {0|1|internal|external}"
@@ -130,6 +131,15 @@ case "$2" in
   br)
     echo "restart bridge for $IFACE..."
     systemctl restart wifi_bridge@$IFACE
+    ;;
+  mon)
+    if [ -z "$3" ]; then
+        interval=1
+    else
+        interval=$3
+    fi
+    echo "monitor link for $IFACE with interval $interval sec"
+    python3 /usr/local/logger/wifi_link_monitor.py $IFACE --interval $interval
     ;;
   txpwrlimit)
     if [ "$3" == "default" ] || [ "$3" == "0" ]; then
