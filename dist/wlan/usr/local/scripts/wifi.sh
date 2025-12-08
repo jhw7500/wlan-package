@@ -11,7 +11,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} txpwrlimit {0|1|2|default|low|test|custom_file_name} : runtime"
     echo "       wifi {0|1|mlan0|mlan1} config {conf} {value} : persist"
     echo "       wifi {0|1|mlan0|mlan1} cal {conf_file_name} : persist"
-    echo "       wifi {0|1|mlan0|mlan1} mfg {0|1|off|on} : persist"
+    #echo "       wifi {0|1|mlan0|mlan1} mfg {0|1|off|on} : persist"
     echo "       wifi {0|1|mlan0|mlan1} mac {0|1|base|target} {mac_address} : persist"
     echo "       wifi {0|1|mlan0|mlan1} spoof {0|1|dynamic|static} : persist"
     echo "       wifi {0|1|mlan0|mlan1} standard {4|5|6} : persist"
@@ -22,7 +22,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} scan {freq_list|channel_list} : runtime"
     echo "       wifi {0|1|mlan0|mlan1} mon : runtime"
     echo "       wifi txpwrlimit {conf_file_name} : persist"
-    echo "       wifi mfg {0|1|off|on} : runtime"
+    echo "       wifi mfg {0|1|off|on} : persist"
     echo "       wifi ant {0|1|internal|external} : runtime"
     exit 1
 }
@@ -63,9 +63,16 @@ case "$1" in
     NFACE="mlan0"
     ;;
   mfg)
+:<<'END'
     if [ "$2" == "0" ]; then
         systemctl restart wifi_init
+        systemctl restart wifi_logger
+        systemctl restart wifi_logger@mlan0
+        systemctl restart wifi_checker@mlan0
     elif [ "$2" == "1" ]; then
+        systemctl stop wifi_logger
+        systemctl stop wifi_logger@mlan0
+        systemctl stop wifi_checker@mlan0
         ifconfig mlan0 down
         ifconfig mlan1 down
         rmmod moal
@@ -77,6 +84,21 @@ case "$1" in
     else
         usage
     fi
+END
+    if [ "$2" == "0" ]; then
+        FW_NAME="cts/pcieuart9098_combo_v1.bin"
+        MFG_MODE="0"
+    elif [ "$2" == "1" ]; then
+        FW_NAME="cts/pcieuart9098_combo.bin"
+        MFG_MODE="1"
+    else
+        usage
+    fi
+    echo "Updated:"
+    echo "  FW_NAME=${FW_NAME}"
+    echo "  MFG_MODE=${MFG_MODE}"
+    sed -i -E "/^[[:space:]]*#/! s|^FW_NAME=.*\$|FW_NAME=${FW_NAME}|" /usr/local/scripts/wifi_init.sh
+    sed -i -E "/^[[:space:]]*#/! s|^MFG_MODE=.*\$|MFG_MODE=${MFG_MODE}|" /usr/local/scripts/wifi_init.sh
     exit 1
     ;;
   txpwrlimit)

@@ -30,8 +30,8 @@ sleep 5
 while true; do
     CPU_TMP_VAL=$(cat /sys/devices/virtual/thermal/thermal_zone0/temp)
     CPU_TEMP=$(echo "$CPU_TMP_VAL/1000" | bc)
-    MLAN0_TEMP=$(mlanutl mlan0 get_sensor_temp | awk '{print int($4)}')
-    MLAN1_TEMP=$(mlanutl mlan1 get_sensor_temp | awk '{print int($4)}')
+    MLAN0_TEMP=$(mlanutl mlan0 get_sensor_temp 2>/dev/null | awk '{print int($4)}')
+    MLAN1_TEMP=$(mlanutl mlan1 get_sensor_temp 2>/dev/null | awk '{print int($4)}')
     max_cpu_temp=$(cat /var/log/cantops/max_temp)
         
     if (( CPU_TEMP > max_cpu_temp )); then

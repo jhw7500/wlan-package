@@ -3,6 +3,9 @@
 tag=$(basename "$0")
 KERNEL_VERSION=$(uname -r)
 JSON_FILE="/usr/local/etc/config.json"
+FW_NAME=cts/pcieuart9098_combo_v1.bin
+MOD_PARA=cts/wifi_mod_para.conf
+MFG_MODE=0
 #LOGFILE="/var/log/cantops/module.log"
 #sleep 0.5
 
@@ -93,24 +96,24 @@ fi
 /usr/local/scripts/update_mac.sh mlan1 $MLAN1_MAC
 #python3 /usr/local/logger/wifi_config.py mlan1 mac_addr $MLAN1_MAC
 
-#if ! try_insmod "/lib/modules/$KERNEL_VERSION/updates/mlan_6.12.ko" ""; then
 if ! try_insmod "/opt/wlan/driver/mlan.ko" ""; then
     echo "mlan module load failed"
-    #exit 1
+    exit 1
 fi
 
-#if ! try_insmod "/opt/wlan/driver/debug/moal.ko" "fw_name=nxp/pcieuart9098_combo.bin mfg_mode=1"; then
-if ! try_insmod "/opt/wlan/driver/moal.ko" "mod_para=cts/wifi_mod_para.conf"; then
+logger -p local0.info "[$tag:$LINENO] mod_para=$MOD_PARA fw_name=$FW_NAME mfg_mode=$MFG_MODE"
+
+if ! try_insmod "/opt/wlan/driver/moal.ko" "mod_para=$MOD_PARA fw_name=$FW_NAME mfg_mode=$MFG_MODE"; then
     echo "moal module load failed"
-    #exit 1
+    exit 1
 fi
 
-#try_insmod "/lib/modules/$KERNEL_VERSION/updates/moal_6.12.ko" "fw_name=nxp/pcieuart9098_combo.bin mfg_mode=1"
-#try_insmod "/lib/modules/$KERNEL_VERSION/kernel/drivers/net/nlmon.ko"
+if [ "$MFG_MODE" == "1" ]; then
+    exit 1
+fi
 
 TXPWRLIMIT_PATH=/lib/firmware/cts/config/txpwrlimit_cfg_9098.conf
 #TXPWRLIMIT_PATH=/lib/firmware/cts/config/txpwrlimit_cfg_9098_low.conf
-#TXPWRLIMIT_PATH=/lib/firmware/cts/config/txpwrlimit_cfg_9098_org.conf
 sleep 0.5
 logger -p local0.info "[$tag:$LINENO] [mlan0] txpwrlimit set"
 mlanutl mlan0 hostcmd $TXPWRLIMIT_PATH txpwrlimit_2g_cfg_set > /dev/null 2>&1

@@ -1,14 +1,15 @@
 [Unit]
-Description=WiFi Arping Service for %i
-#Conflicts=wifi_arping@mlan0.service wifi_arping@mlan1.service
-After=network.target
-#Requires=wpa_supplicant@%i.service
+Description=Arping Service for %i
+BindsTo=sys-subsystem-net-devices-%i.device
+Requires=sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-%i.device systemd-networkd.service
+#After=network.target
 
 [Service]
 Type=simple
 ExecStart=/usr/local/scripts/wifi_arping.sh %i
-#Restart=always
-#RestartSec=2
+Restart=on-failure
+RestartSec=10
 User=root
 #RemainAfterExit=true
 
