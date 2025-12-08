@@ -104,7 +104,7 @@ def parse_frame_type(ftype, fsub):
         return {"0": "Data", "4": "Null", "8": "QoS Data", "12": "QoS Null"}.get(fsub, "Data")
     return "Unknown"
 
-def build_tcpdump_filter(mask: int) -> list:
+def build_tcpdump_bpf(mask: int) -> list:
     expr = ["type", "mgt"]  # 기본은 관리 프레임만
 
     first = True
@@ -120,7 +120,7 @@ def build_tcpdump_filter(mask: int) -> list:
 
     return expr
 
-def build_tshark_display_filter(mask: int) -> str:
+def build_tshark_dpf(mask: int) -> str:
     # 기본: 관리 프레임만
     conds = ["wlan.fc.type == 0"]
 
@@ -148,8 +148,8 @@ def start_parser(mac_mlan, subtype_mask):
     logger.message('info', f"[{IFACE}] capture loop start (mask=0x{subtype_mask:04x})", _EXTRA_())
     while not stop_flag:
         # 1) tcpdump 시작 (관리 프레임만)
-        bpf = build_tcpdump_filter(SUBTYPE_MASK)
-        logger.message('info', f"[tcpdump] bpf : {bpf}", _EXTRA_())
+        bpf = build_tcpdump_bpf(SUBTYPE_MASK)
+        logger.message('info', f"[{IFACE}] tcpdump bypass filter : {bpf}", _EXTRA_())
         cap_proc = subprocess.Popen(
             ["tcpdump", "-i", INTERFACE, "-U", "-n", "-s", "128", "-w", "-"] + bpf,
             #["tcpdump", "-i", INTERFACE, "-U", "-n", "-s", "128", "-w", "-", "type", "mgt", "and", "not", "subtype", "beacon"],
@@ -160,11 +160,11 @@ def start_parser(mac_mlan, subtype_mask):
         #time.sleep(0.5)
         #if cap_proc.poll() is not None:
         #    err = cap_proc.stderr.read().strip()
-        #    logger.message('err', f"[tcpdump] exited {cap_proc.returncode}, stderr={err}", _EXTRA_())
+        #    logger.message('err', f"[{IFACE}] exited {cap_proc.returncode}, stderr={err}", _EXTRA_())
 
         # 2) tshark 시작 (stdin 으로 pcap 스트림 받기)
-        display_filter = build_tshark_display_filter(SUBTYPE_MASK)
-        logger.message('info', f"[tshark] display_filter : {display_filter}", _EXTRA_())
+        dpf = build_tshark_dpf(SUBTYPE_MASK)
+        logger.message('info', f"[{IFACE}] tshark display filter : {dpf}", _EXTRA_())
         parse_proc = subprocess.Popen(
             [
                 "tshark",
@@ -185,7 +185,7 @@ def start_parser(mac_mlan, subtype_mask):
                 "-E", "separator=,",
                 "-o", "tcp.desegment_tcp_streams:FALSE",
                 "-o", "tls.desegment_ssl_records:FALSE",
-                "-Y", display_filter,
+                "-Y", dpf,
             ],
             stdin=cap_proc.stdout,
             stdout=subprocess.PIPE,
