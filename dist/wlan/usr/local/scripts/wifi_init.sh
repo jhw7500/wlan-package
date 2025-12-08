@@ -5,7 +5,10 @@ KERNEL_VERSION=$(uname -r)
 JSON_FILE="/usr/local/etc/config.json"
 FW_NAME=cts/pcieuart9098_combo_v1.bin
 MOD_PARA=cts/wifi_mod_para.conf
+CAL_DATA_CFG=""
+TXPWRLIMIT_PATH=/lib/firmware/cts/txpwrlimit_cfg_9098.conf
 MFG_MODE=0
+
 #LOGFILE="/var/log/cantops/module.log"
 #sleep 0.5
 
@@ -101,9 +104,9 @@ if ! try_insmod "/opt/wlan/driver/mlan.ko" ""; then
     exit 1
 fi
 
-logger -p local0.info "[$tag:$LINENO] mod_para=$MOD_PARA fw_name=$FW_NAME mfg_mode=$MFG_MODE"
+logger -p local0.info "[$tag:$LINENO] mod_para=$MOD_PARA fw_name=$FW_NAME mfg_mode=$MFG_MODE cal_data_cfg=$CAL_DATA_CFG"
 
-if ! try_insmod "/opt/wlan/driver/moal.ko" "mod_para=$MOD_PARA fw_name=$FW_NAME mfg_mode=$MFG_MODE"; then
+if ! try_insmod "/opt/wlan/driver/moal.ko" "mod_para=$MOD_PARA fw_name=$FW_NAME mfg_mode=$MFG_MODE cal_data_cfg=$CAL_DATA_CFG"; then
     echo "moal module load failed"
     exit 1
 fi
@@ -112,10 +115,8 @@ if [ "$MFG_MODE" == "1" ]; then
     exit 1
 fi
 
-TXPWRLIMIT_PATH=/lib/firmware/cts/config/txpwrlimit_cfg_9098.conf
-#TXPWRLIMIT_PATH=/lib/firmware/cts/config/txpwrlimit_cfg_9098_low.conf
 sleep 0.5
-logger -p local0.info "[$tag:$LINENO] [mlan0] txpwrlimit set"
+logger -p local0.info "[$tag:$LINENO] [mlan0] TXPWRLIMIT_PATH : $TXPWRLIMIT_PATH"
 mlanutl mlan0 hostcmd $TXPWRLIMIT_PATH txpwrlimit_2g_cfg_set > /dev/null 2>&1
 mlanutl mlan0 hostcmd $TXPWRLIMIT_PATH txpwrlimit_5g_cfg_set_sub0 > /dev/null 2>&1
 mlanutl mlan0 hostcmd $TXPWRLIMIT_PATH txpwrlimit_5g_cfg_set_sub1 > /dev/null 2>&1

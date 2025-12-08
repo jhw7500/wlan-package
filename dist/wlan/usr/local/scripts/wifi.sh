@@ -8,9 +8,9 @@ logger -p local0.info "[$tag:$LINENO] [$IFACE] cmd : wifi $1 $2 $3 $4"
 usage() {
     echo "Usage: wifi {0|1|mlan0|mlan1} {start|up|stop|down|restart|status} : runtime"
     echo "       wifi {0|1|mlan0|mlan1} br {up|down|start|stop|restart} : runtime"
-    echo "       wifi {0|1|mlan0|mlan1} txpwrlimit {0|1|2|default|low|test|custom_file_name} : runtime"
+    echo "       wifi {0|1|mlan0|mlan1} txpwrlimit {0|1|2|default|low|org|custom_file_name} : runtime"
     echo "       wifi {0|1|mlan0|mlan1} config {conf} {value} : persist"
-    echo "       wifi {0|1|mlan0|mlan1} cal {conf_file_name} : persist"
+    #echo "       wifi {0|1|mlan0|mlan1} cal {conf_file_name} : persist"
     #echo "       wifi {0|1|mlan0|mlan1} mfg {0|1|off|on} : persist"
     echo "       wifi {0|1|mlan0|mlan1} mac {0|1|base|target} {mac_address} : persist"
     echo "       wifi {0|1|mlan0|mlan1} spoof {0|1|dynamic|static} : persist"
@@ -21,7 +21,8 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} freq {freq_list|channel_list} : persist"
     echo "       wifi {0|1|mlan0|mlan1} scan {freq_list|channel_list} : runtime"
     echo "       wifi {0|1|mlan0|mlan1} mon : runtime"
-    echo "       wifi txpwrlimit {conf_file_name} : persist"
+    echo "       wifi txpwrlimit {0|1|2|default|low|org|conf_file_name} : persist"
+    echo "       wifi cal {cal_data_cfg} : persist"
     echo "       wifi mfg {0|1|off|on} : persist"
     echo "       wifi ant {0|1|internal|external} : runtime"
     exit 1
@@ -101,11 +102,38 @@ END
     sed -i -E "/^[[:space:]]*#/! s|^MFG_MODE=.*\$|MFG_MODE=${MFG_MODE}|" /usr/local/scripts/wifi_init.sh
     exit 1
     ;;
+  cal)
+    CAL_DATA_CFG=$2
+    if [[ "$CAL_DATA_CFG" == *.conf ]]; then
+        cp $CAL_DATA_CFG /lib/firmware/cts/$CAL_DATA_CFG
+        CAL_DATA_CFG="cts/$CAL_DATA_CFG"
+    else
+        CAL_DATA_CFG=\"\"
+    fi
+    echo "Updated:"
+    echo "  CAL_DATA_CFG=$CAL_DATA_CFG"
+    sed -i -E "/^[[:space:]]*#/! s|^CAL_DATA_CFG=.*\$|CAL_DATA_CFG=${CAL_DATA_CFG}|" /usr/local/scripts/wifi_init.sh
+    exit 1
+    ;;
   txpwrlimit)
-    echo "config file is $2 for txpwrlimit"
-    cp $2 /lib/firmware/cts/
-    python3 /usr/local/logger/wifi_config.py mlan0 txpwrlimit_cfg cts/$2
-    python3 /usr/local/logger/wifi_config.py mlan1 txpwrlimit_cfg cts/$2
+    if [ "$2" == "default" ] || [ "$2" == "0" ]; then
+        TXPWRLIMIT_PATH="/lib/firmware/cts/txpwrlimit_cfg_9098.conf"
+    elif [ "$2" == "low" ] || [ "$2" == "1" ]; then
+        TXPWRLIMIT_PATH="/lib/firmware/cts/txpwrlimit_cfg_9098_low.conf"
+    elif [ "$2" == "test" ] || [ "$2" == "2" ]; then
+        TXPWRLIMIT_PATH="/lib/firmware/cts/txpwrlimit_cfg_9098_org.conf"
+    elif [[ "$2" == *.conf ]]; then
+        cp $2 /lib/firmware/cts/
+        TXPWRLIMIT_PATH="/lib/firmware/cts/$2"
+    else
+        usage
+    fi
+
+    echo "Updated:"
+    echo "  TXPWRLIMIT_PATH=$TXPWRLIMIT_PATH"
+    sed -i -E "/^[[:space:]]*#/! s|^TXPWRLIMIT_PATH=.*\$|TXPWRLIMIT_PATH=${TXPWRLIMIT_PATH}|" /usr/local/scripts/wifi_init.sh
+    #python3 /usr/local/logger/wifi_config.py mlan0 txpwrlimit_cfg cts/$2
+    #python3 /usr/local/logger/wifi_config.py mlan1 txpwrlimit_cfg cts/$2
     exit 1
     ;;
   ant)
@@ -179,15 +207,16 @@ case "$2" in
   txpwrlimit)
     if [ "$3" == "default" ] || [ "$3" == "0" ]; then
         echo "default txpwrlimit for $IFACE"
-        CONF=/lib/firmware/cts/config/txpwrlimit_cfg_9098.conf
+        CONF=/lib/firmware/cts/txpwrlimit_cfg_9098.conf
     elif [ "$3" == "low" ] || [ "$3" == "1" ]; then
         echo "low txpwrlimit for $IFACE"
-        CONF=/lib/firmware/cts/config/txpwrlimit_cfg_9098_low.conf
+        CONF=/lib/firmware/cts/txpwrlimit_cfg_9098_low.conf
     elif [ "$3" == "test" ] || [ "$3" == "2" ]; then
         echo "test txpwrlimit for $IFACE"
-        CONF=/lib/firmware/cts/config/txpwrlimit_cfg_9098_test.conf
+        CONF=/lib/firmware/cts/txpwrlimit_cfg_9098_org.conf
     elif [[ "$3" == *.conf ]]; then
-        CONF=/lib/firmware/cts/config/$3
+        cp $3 /lib/firmware/cts/
+        CONF=/lib/firmware/cts/$3
     else
         usage
     fi

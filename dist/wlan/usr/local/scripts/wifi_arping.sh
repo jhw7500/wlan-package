@@ -54,7 +54,7 @@ if [ "$IFACE" = "eth0" ]; then
 elif [ "$IFACE" = "mlan0" ]; then
     if ! is_wpa_active; then
         exit 1
-    else ! is_connected; then
+    elif ! is_connected; then
         logger -p $F.info "[$tag:$LINENO] [$IFACE] not ready(not connected)"
         exit 1
     fi
@@ -63,7 +63,7 @@ elif [ "$IFACE" = "mlan0" ]; then
 elif [ "$IFACE" = "mlan1" ]; then
     if ! is_wpa_active; then
         exit 1
-    else ! is_connected; then
+    elif ! is_connected; then
         logger -p $F.info "[$tag:$LINENO] [$IFACE] not ready(not connected)"
         exit 1
     fi
