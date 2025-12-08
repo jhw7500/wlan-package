@@ -1,26 +1,29 @@
 #!/bin/bash
 tag=$(basename "$0")
 IFACE=$1
-CONF_DIR="/etc/test"
 NUM=""
 
 logger -p local0.info "[$tag:$LINENO] [$IFACE] cmd : wifi $1 $2 $3 $4"
 
 usage() {
-    echo "Usage: wifi {0|1|mlan0|mlan1} {start|up|stop|down|restart|status|br}"
-    echo "       wifi {0|1|mlan0|mlan1} txpwrlimit {0|1|2|default|low|test|custom_file_name}"
-    echo "       wifi {0|1|mlan0|mlan1} config {conf} {value} : file"
-    echo "       wifi {0|1|mlan0|mlan1} cal {conf_file_name} : file"
-    echo "       wifi {0|1|mlan0|mlan1} mfg {0|1|off|on} : file"
-    echo "       wifi {0|1|mlan0|mlan1} mac {0|1|base|target} {mac_address} : file"
-    echo "       wifi {0|1|mlan0|mlan1} spoof {0|1|dynamic|static} : file"
-    echo "       wifi {0|1|mlan0|mlan1} limit {4|5|6} : file"
-    echo "       wifi {0|1|mlan0|mlan1} freq {freq_list|channel_list} : file"
-    echo "       wifi {0|1|mlan0|mlan1} scan {freq_list|channel_list}"
-    echo "       wifi {0|1|mlan0|mlan1} mon"
-    echo "       wifi txpwrlimit {conf_file_name} :file"
-    echo "       wifi mfg {0|1|off|on}"
-    echo "       wifi ant {0|1|internal|external}"
+    echo "Usage: wifi {0|1|mlan0|mlan1} {start|up|stop|down|restart|status} : runtime"
+    echo "       wifi {0|1|mlan0|mlan1} br {up|down|start|stop|restart} : runtime"
+    echo "       wifi {0|1|mlan0|mlan1} txpwrlimit {0|1|2|default|low|test|custom_file_name} : runtime"
+    echo "       wifi {0|1|mlan0|mlan1} config {conf} {value} : persist"
+    echo "       wifi {0|1|mlan0|mlan1} cal {conf_file_name} : persist"
+    echo "       wifi {0|1|mlan0|mlan1} mfg {0|1|off|on} : persist"
+    echo "       wifi {0|1|mlan0|mlan1} mac {0|1|base|target} {mac_address} : persist"
+    echo "       wifi {0|1|mlan0|mlan1} spoof {0|1|dynamic|static} : persist"
+    echo "       wifi {0|1|mlan0|mlan1} standard {4|5|6} : persist"
+    echo "       wifi {0|1|mlan0|mlan1} ssid {id} : persist"
+    echo "       wifi {0|1|mlan0|mlan1} psk {password} : persist"
+    echo "       wifi {0|1|mlan0|mlan1} key {0|1|NONE|WPA-PSK|*} : persist"
+    echo "       wifi {0|1|mlan0|mlan1} freq {freq_list|channel_list} : persist"
+    echo "       wifi {0|1|mlan0|mlan1} scan {freq_list|channel_list} : runtime"
+    echo "       wifi {0|1|mlan0|mlan1} mon : runtime"
+    echo "       wifi txpwrlimit {conf_file_name} : persist"
+    echo "       wifi mfg {0|1|off|on} : runtime"
+    echo "       wifi ant {0|1|internal|external} : runtime"
     exit 1
 }
 
@@ -129,8 +132,18 @@ case "$2" in
     systemctl status wpa_supplicant@$IFACE
     ;;
   br)
-    echo "restart bridge for $IFACE..."
-    systemctl restart wifi_bridge@$IFACE
+    if [ "$3" == "0" ] || [ "$3" == "down" ] || [ "$3" == "stop" ]; then
+        echo "stop bridge for $IFACE..."
+        systemctl stop wifi_bridge@$IFACE
+    elif [ "$3" == "1" ] || [ "$3" == "up" ] || [ "$3" == "start" ]; then
+        echo "start bridge for $IFACE..."
+        systemctl start wifi_bridge@$IFACE
+    elif [ "$3" == "restart" ]; then
+        echo "restart bridge for $IFACE..."
+        systemctl restart wifi_bridge@$IFACE
+    else
+        usage
+    fi
     ;;
   mon)
     if [ -z "$3" ]; then
@@ -347,6 +360,55 @@ case "$2" in
         exit 1
     fi
     ;;
+  key)
+    set -euo pipefail
+    shift 2
+    CONF="/etc/wpa_supplicant/wpa_supplicant-${IFACE}.conf"
+
+    if [ ! -f "$CONF" ]; then
+        echo "not found? $CONF" >&2
+        exit 1
+    fi
+
+    if [ $# -lt 1 ]; then
+        echo "usage: wifi <iface> key <0|1|NONE|WPA-PSK>" >&2
+        exit 1
+    fi
+
+    NEW_KEY="$1"
+    if [ "$NEW_KEY" = "0" ]; then
+        NEW_KEY="NONE"
+    elif [ "$NEW_KEY" = "1" ]; then
+        NEW_KEY="WPA-PSK"
+    #else
+    #    echo "usage: wifi <iface> key <0|1|NONE|WPA-PSK>" >&2
+    fi
+
+    TMP_FILE="$(mktemp)"
+
+    if awk -v new_key="$NEW_KEY" '
+        BEGIN { changed = 0 }
+        /^[[:space:]]*#/ { print; next }
+        /^[[:space:]]*key_mgmt[[:space:]]*=/ {
+            # 기존 key_mgmt= 라인을 교체
+            print "    key_mgmt=" new_key ""
+            changed = 1
+            next
+        }
+        { print }
+        END {
+            if (!changed)
+                exit 1   # ssid= 못 찾으면 에러 코드로 종료
+        }
+    ' "$CONF" > "$TMP_FILE"; then
+        mv "$TMP_FILE" "$CONF"
+        echo "key_mgmt changed to $NEW_KEY in $CONF"
+    else
+        echo "no key_mgmt= line found, nothing changed in $CONF" >&2
+        rm -f "$TMP_FILE"
+        exit 1
+    fi
+    ;;
   scan)
     set -euo pipefail
     shift 2
@@ -365,7 +427,7 @@ case "$2" in
     echo "scanning freq_list $FREQ_STR for $IFACE"
     iw $IFACE scan freq $FREQ_STR
     ;;
-  limit)
+  standard)
     if [ "$3" == "4" ]; then
         echo "limit to wifi4 for $IFACE" 
         python3 /usr/local/logger/wifi_config.py $1 dev_cap_mask 0xfffc07ff

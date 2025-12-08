@@ -145,7 +145,7 @@ def get_link_info():
             return result
     except Exception as e:
         #logger.message('err', f"[{IFACE}] Failed to read station info from link log: {e}", _EXTRA_())
-        logger.message('info', f"[{IFACE}] waiting for link : {e}", _EXTRA_())
+        #logger.message('info', f"[{IFACE}] waiting for link : {e}", _EXTRA_())
         return None
 
 def load_channel_info():

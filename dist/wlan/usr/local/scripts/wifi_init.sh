@@ -110,6 +110,7 @@ fi
 
 TXPWRLIMIT_PATH=/lib/firmware/cts/config/txpwrlimit_cfg_9098.conf
 #TXPWRLIMIT_PATH=/lib/firmware/cts/config/txpwrlimit_cfg_9098_low.conf
+#TXPWRLIMIT_PATH=/lib/firmware/cts/config/txpwrlimit_cfg_9098_org.conf
 sleep 0.5
 logger -p local0.info "[$tag:$LINENO] [mlan0] txpwrlimit set"
 mlanutl mlan0 hostcmd $TXPWRLIMIT_PATH txpwrlimit_2g_cfg_set > /dev/null 2>&1

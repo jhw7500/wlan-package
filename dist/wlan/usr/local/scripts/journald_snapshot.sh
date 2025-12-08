@@ -3,8 +3,8 @@ tag=$(basename "$0")
 set -euo pipefail
 SRC="/run/log/journal"
 DIR="/var/log/cantops/journald"
-DST="$DIR/$(date +%Y%m%d)"
-MAX_CNT=7
+DST="$DIR/$(date +%Y%m%d -d '1 min ago')"
+MAX_CNT=14
 MAX_SIZE=4294967296
 #MAX_SIZE=838860800
 mkdir -p "$DST"

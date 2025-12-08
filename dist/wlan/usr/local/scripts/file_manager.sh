@@ -14,7 +14,6 @@ fi
 
 #echo "========================="
 #echo "input path : " $INPUT_PATH
-logger -p local0.info "[$tag:$LINENO] path : $INPUT_PATH, limit cnt : $LIMIT, limit size : $SIZE MB"
 
 if [ ! -d "$INPUT_PATH" ]; then
     logger -p local0.crit "[$tag:$LINENO] failed : $INPUT_PATH is not directory"
@@ -33,6 +32,8 @@ else
     FILE_PATH=$INPUT_PATH
     #cnt_cmd="ls -lt $FILE_PATH | grep ^d | wc -l"
 fi
+
+logger -p local0.info "[$tag:$LINENO] path : $FILE_PATH, limit cnt : $LIMIT, limit size : $SIZE MB"
 
 MAX_SIZE=$(($SIZE * 1024 * 1024))
 #cnt=$(ls -lt $FILE_PATH | grep ^- | wc -l)

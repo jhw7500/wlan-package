@@ -310,7 +310,7 @@ cpchk() {
   rm /usr/local/bin/mlan*
   rm /usr/local/bin/iw*
   #ln -s /opt/wlan/bin/dumb /usr/local/bin/dumb
-  ln -s /usr/local/dumb/dumb /usr/local/bin/dumb
+  ln -s /usr/local/dumb/dumb /usr/local/bin/wifi_dumb
   ln -s /opt/wlan/bin/iw /usr/local/bin/iw
   ln -s /opt/wlan/bin/mlanutl /usr/local/bin/mlanutl
   ln -s /opt/wlan/bin/mlan2040coex /usr/local/bin/mlan2040coex
