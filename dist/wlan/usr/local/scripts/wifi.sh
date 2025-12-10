@@ -225,7 +225,7 @@ case "$2" in
     if [ "$3" == "no" ] || [ "$3" == "0" ]; then
         echo "not change txpwrlimit for $IFACE"
         CONF=""
-    if [ "$3" == "default" ] || [ "$3" == "1" ]; then
+    elif [ "$3" == "default" ] || [ "$3" == "1" ]; then
         echo "default txpwrlimit for $IFACE"
         CONF=/lib/firmware/cts/txpwrlimit_cfg_9098.conf
     elif [ "$3" == "low" ] || [ "$3" == "2" ]; then
@@ -501,7 +501,7 @@ case "$2" in
   standard)
     if [ "$3" == "4" ]; then
         echo "limit to wifi4 for $IFACE" 
-        python3 /usr/local/logger/wifi_config.py $1 dev_cap_mask 0xfffc07ff
+        python3 /usr/local/logger/wifi_config.py $1 dev_cap_mask 0xfffcdfff
     elif [ "$3" == "5" ]; then
         echo "limit to wifi5 for $IFACE"
         python3 /usr/local/logger/wifi_config.py $1 dev_cap_mask 0xfffcffff
