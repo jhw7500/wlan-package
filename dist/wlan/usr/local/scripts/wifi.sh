@@ -12,6 +12,8 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} config {conf} {value} : persist"
     #echo "       wifi {0|1|mlan0|mlan1} cal {conf_file_name} : persist"
     #echo "       wifi {0|1|mlan0|mlan1} mfg {0|1|off|on} : persist"
+    echo "       wifi {0|1|mlan0|mlan1} ip {address/netmask} : persist"
+    echo "       wifi {0|1|mlan0|mlan1} gt {address} : persist"
     echo "       wifi {0|1|mlan0|mlan1} mac {0|1|base|target} {mac_address} : persist"
     echo "       wifi {0|1|mlan0|mlan1} spoof {0|1|dynamic|static} : persist"
     echo "       wifi {0|1|mlan0|mlan1} standard {4|5|6} : persist"
@@ -490,6 +492,86 @@ case "$2" in
         python3 /usr/local/logger/wifi_config.py $1 dev_cap_mask 0xffffffff
     else
         usage
+    fi
+    ;;
+  ip)
+    set -euo pipefail
+    shift 2
+    CONF=$(ls -ptr /etc/systemd/network/*${IFACE}*.network | grep -v '/$'| tail -1 | tr -d '\r\n')
+
+    if [ ! -f "$CONF" ]; then
+        echo "not found? $CONF" >&2
+        exit 1
+    fi
+
+    if [ $# -lt 1 ]; then
+        echo "usage: wifi <iface> ip <address/netmask>" >&2
+        exit 1
+    fi
+
+    NEW_IP="$1"
+    TMP_FILE="$(mktemp)"
+
+    if awk -v new_ip="$NEW_IP" '
+        BEGIN { changed = 0 }
+        /^[[:space:]]*#/ { print; next }
+        /^[[:space:]]*Address[[:space:]]*=/ {
+            print "Address=" new_ip ""
+            changed = 1
+            next
+        }
+        { print }
+        END {
+            if (!changed)
+                exit 1
+        }
+    ' "$CONF" > "$TMP_FILE"; then
+        mv "$TMP_FILE" "$CONF"
+        echo "Address changed to \"$NEW_IP\" in $CONF"
+    else
+        echo "no Address= line found, nothing changed in $CONF" >&2
+        rm -f "$TMP_FILE"
+        exit 1
+    fi
+    ;;
+  gt)
+    set -euo pipefail
+    shift 2
+    CONF=$(ls -ptr /etc/systemd/network/*${IFACE}*.network | grep -v '/$'| tail -1 | tr -d '\r\n')
+
+    if [ ! -f "$CONF" ]; then
+        echo "not found? $CONF" >&2
+        exit 1
+    fi
+
+    if [ $# -lt 1 ]; then
+        echo "usage: wifi <iface> gt <address>" >&2
+        exit 1
+    fi
+
+    NEW_GT="$1"
+    TMP_FILE="$(mktemp)"
+
+    if awk -v new_gt="$NEW_GT" '
+        BEGIN { changed = 0 }
+        /^[[:space:]]*#/ { print; next }
+        /^[[:space:]]*Gateway[[:space:]]*=/ {
+            print "Gateway=" new_gt ""
+            changed = 1
+            next
+        }
+        { print }
+        END {
+            if (!changed)
+                exit 1
+        }
+    ' "$CONF" > "$TMP_FILE"; then
+        mv "$TMP_FILE" "$CONF"
+        echo "Gateway changed to \"$NEW_GT\" in $CONF"
+    else
+        echo "no Gateway= line found, nothing changed in $CONF" >&2
+        rm -f "$TMP_FILE"
+        exit 1
     fi
     ;;
   *)
