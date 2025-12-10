@@ -1,7 +1,13 @@
 #!/bin/bash
 tag=$(basename "$0")
-IFACE=$1
+IFACE=mlan
 NUM=""
+
+if [ "$1" == "0" ] || [ "$1" == "mlan0" ]; then
+    IFACE=mlan0
+elif [ "$1" == "1" ] || [ "$1" == "mlan1" ]; then
+    IFACE=mlan1
+fi
 
 logger -p local0.info "[$tag:$LINENO] [$IFACE] cmd : wifi $1 $2 $3 $4"
 
@@ -62,8 +68,8 @@ case "$1" in
     ;;
   1 | mlan1)
     IFACE="mlan1"
-    NUM=1
     NFACE="mlan0"
+    NUM=1
     ;;
   mfg)
 :<<'END'

@@ -5,7 +5,7 @@ KERNEL_VERSION=$(uname -r)
 JSON_FILE="/usr/local/etc/config.json"
 FW_NAME=cts/pcieuart9098_combo_v1.bin
 MOD_PARA=cts/wifi_mod_para.conf
-CAL_DATA_CFG=WlanCalData_ext_RD.conf
+CAL_DATA_CFG=cts/WlanCalData_ext_RD.conf
 TXPWRLIMIT_PATH=/lib/firmware/cts/txpwrlimit_cfg_9098.conf
 MFG_MODE=0
 
