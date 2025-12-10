@@ -14,7 +14,7 @@ logger -p local0.info "[$tag:$LINENO] [$IFACE] cmd : wifi $1 $2 $3 $4"
 usage() {
     echo "Usage: wifi {0|1|mlan0|mlan1} {start|up|stop|down|restart|status} : runtime"
     echo "       wifi {0|1|mlan0|mlan1} br {up|down|start|stop|restart} : runtime"
-    echo "       wifi {0|1|mlan0|mlan1} txpwrlimit {0|1|2|default|low|org|custom_file_name} : runtime"
+    echo "       wifi {0|1|mlan0|mlan1} txpwr {0|1|2|3|no|default|low|org|custom_file_name} : runtime"
     echo "       wifi {0|1|mlan0|mlan1} config {conf} {value} : persist"
     #echo "       wifi {0|1|mlan0|mlan1} cal {conf_file_name} : persist"
     #echo "       wifi {0|1|mlan0|mlan1} mfg {0|1|off|on} : persist"
@@ -29,7 +29,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} freq {freq_list|channel_list} : persist"
     echo "       wifi {0|1|mlan0|mlan1} scan {freq_list|channel_list} : runtime"
     echo "       wifi {0|1|mlan0|mlan1} mon : runtime"
-    echo "       wifi txpwrlimit {0|1|2|default|low|org|conf_file_name} : persist"
+    echo "       wifi txpwr {0|1|2|3|no|default|low|org|conf_file_name} : persist"
     echo "       wifi cal {cal_data_cfg} : persist"
     echo "       wifi mfg {0|1|off|on} : persist"
     echo "       wifi ant {0|1|internal|external} : runtime"
@@ -123,12 +123,14 @@ END
     sed -i -E "/^[[:space:]]*#/! s|^CAL_DATA_CFG=.*\$|CAL_DATA_CFG=${CAL_DATA_CFG}|" /usr/local/scripts/wifi_init.sh
     exit 1
     ;;
-  txpwrlimit)
-    if [ "$2" == "default" ] || [ "$2" == "0" ]; then
+  txpwr | txpwrlimit)
+    if [ "$2" == "no" ] || [ "$2" == "0" ]; then
+        TXPWRLIMIT_PATH=\"\"
+    elif [ "$2" == "default" ] || [ "$2" == "1" ]; then
         TXPWRLIMIT_PATH="/lib/firmware/cts/txpwrlimit_cfg_9098.conf"
-    elif [ "$2" == "low" ] || [ "$2" == "1" ]; then
+    elif [ "$2" == "low" ] || [ "$2" == "2" ]; then
         TXPWRLIMIT_PATH="/lib/firmware/cts/txpwrlimit_cfg_9098_low.conf"
-    elif [ "$2" == "test" ] || [ "$2" == "2" ]; then
+    elif [ "$2" == "test" ] || [ "$2" == "3" ]; then
         TXPWRLIMIT_PATH="/lib/firmware/cts/txpwrlimit_cfg_9098_org.conf"
     elif [[ "$2" == *.conf ]]; then
         cp $2 /lib/firmware/cts/
@@ -212,14 +214,17 @@ case "$2" in
     echo "monitor link for $IFACE with interval $interval sec"
     python3 /usr/local/logger/wifi_link_monitor.py $IFACE --interval $interval
     ;;
-  txpwrlimit)
-    if [ "$3" == "default" ] || [ "$3" == "0" ]; then
+  txpwr | txpwrlimit)
+    if [ "$3" == "no" ] || [ "$3" == "0" ]; then
+        echo "not change txpwrlimit for $IFACE"
+        CONF=""
+    if [ "$3" == "default" ] || [ "$3" == "1" ]; then
         echo "default txpwrlimit for $IFACE"
         CONF=/lib/firmware/cts/txpwrlimit_cfg_9098.conf
-    elif [ "$3" == "low" ] || [ "$3" == "1" ]; then
+    elif [ "$3" == "low" ] || [ "$3" == "2" ]; then
         echo "low txpwrlimit for $IFACE"
         CONF=/lib/firmware/cts/txpwrlimit_cfg_9098_low.conf
-    elif [ "$3" == "test" ] || [ "$3" == "2" ]; then
+    elif [ "$3" == "test" ] || [ "$3" == "3" ]; then
         echo "test txpwrlimit for $IFACE"
         CONF=/lib/firmware/cts/txpwrlimit_cfg_9098_org.conf
     elif [[ "$3" == *.conf ]]; then
