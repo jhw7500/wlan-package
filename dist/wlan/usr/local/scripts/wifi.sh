@@ -33,6 +33,7 @@ usage() {
     echo "       wifi cal {cal_data_cfg} : persist"
     echo "       wifi mfg {0|1|off|on} : persist"
     echo "       wifi ant {0|1|internal|external} : runtime"
+    echo "       wifi backup : persist"
     exit 1
 }
 
@@ -164,6 +165,12 @@ END
     else
         usage
     fi
+    exit 1
+    ;;
+  backup)
+    BACKUP_DIR=/var/log/cantops/backup
+    echo "backup to $BACKUP_DIR..."
+    /usr/local/scripts/backup.sh $BACKUP_DIR
     exit 1
     ;;
   *)
