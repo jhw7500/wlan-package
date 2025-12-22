@@ -25,7 +25,7 @@ WPA_TH_2G = None
 WPA_TH_5G = None
 WPA_TH_CONNECT = None
 DIFF_TH = 10
-CHECK_INTERVAL = 1
+CHECK_INTERVAL = 5
 
 def handle_sigterm(signum, frame):
     logger.message('crit', f"[{IFACE}] SIGTERM {signum} received! Cleaning up...", _EXTRA_())

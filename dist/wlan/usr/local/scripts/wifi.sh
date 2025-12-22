@@ -10,6 +10,51 @@ elif [ "$1" == "1" ] || [ "$1" == "mlan1" ]; then
 fi
 
 logger -p local0.info "[$tag:$LINENO] [$IFACE] cmd : wifi $1 $2 $3 $4"
+trap 'sync 2>/dev/null || true' EXIT
+
+# ----- safe file update helpers -----
+safe_install_0644_sync() {
+    # $1: src(tmp), $2: dst(real)
+    local src="$1" dst="$2"
+    install -o root -g root -m 0644 "$src" "$dst"
+    sync "$dst" 2>/dev/null || sync
+}
+
+safe_tmp_for() {
+    # $1: target path
+    mktemp "$1.tmp.XXXXXX"
+}
+
+# awk 결과를 안전하게 반영 (권한 0644 고정 + sync)
+apply_awk_update() {
+    # $1: target file, $2..: awk args는 호출부에서 처리
+    local target="$1"
+    local tmp
+    tmp="$(safe_tmp_for "$target")"
+    trap 'rm -f "$tmp"' RETURN
+
+    # 표준입력/출력을 쓰는 awk 호출은 호출부에서 "$target" > "$tmp" 형태로 구성
+    # 여기서는 install+sync만 담당
+    safe_install_0644_sync "$tmp" "$target"
+    rm -f "$tmp"
+    trap - RETURN
+}
+
+# sed -i 대신에도 통일하고 싶으면 사용(권한 보장)
+apply_sed_update() {
+    local target="$1"
+    shift
+    local tmp
+    tmp="$(safe_tmp_for "$target")"
+    trap 'rm -f "$tmp"' RETURN
+
+    sed "$@" "$target" > "$tmp"
+    safe_install_0644_sync "$tmp" "$target"
+
+    rm -f "$tmp"
+    trap - RETURN
+}
+# ------------------------------------
 
 usage() {
     echo "Usage: wifi {0|1|mlan0|mlan1} {start|up|stop|down|restart|status} : runtime"
@@ -344,7 +389,8 @@ case "$2" in
     }
     ' "$CONF" > "$TMP_FILE"
 
-    mv "$TMP_FILE" "$CONF"
+    safe_install_0644_sync "$TMP_FILE" "$CONF"
+    rm -f "$TMP_FILE"
 
     echo "scan_freq / freq_list configure $FREQ_STR in $CONF"
     ;;
@@ -381,8 +427,11 @@ case "$2" in
                 exit 1   # ssid= 못 찾으면 에러 코드로 종료
         }
     ' "$CONF" > "$TMP_FILE"; then
-        mv "$TMP_FILE" "$CONF"
+
+        safe_install_0644_sync "$TMP_FILE" "$CONF"
+        rm -f "$TMP_FILE"
         echo "ssid changed to \"$NEW_SSID\" in $CONF"
+
     else
         echo "no ssid= line found, nothing changed in $CONF" >&2
         rm -f "$TMP_FILE"
@@ -423,8 +472,10 @@ case "$2" in
                 exit 1   # psk= 못 찾으면 에러 코드로 종료
         }
     ' "$CONF" > "$TMP_FILE"; then
-        mv "$TMP_FILE" "$CONF"
-        echo "psk changed to \"$NEW_PSK\" in $CONF"
+
+        safe_install_0644_sync "$TMP_FILE" "$CONF"
+        rm -f "$TMP_FILE"
+        echo "key_mgmt changed to $NEW_KEY in $CONF"
     else
         echo "no psk= line found, nothing changed in $CONF" >&2
         rm -f "$TMP_FILE"
@@ -472,7 +523,9 @@ case "$2" in
                 exit 1   # ssid= 못 찾으면 에러 코드로 종료
         }
     ' "$CONF" > "$TMP_FILE"; then
-        mv "$TMP_FILE" "$CONF"
+
+        safe_install_0644_sync "$TMP_FILE" "$CONF"
+        rm -f "$TMP_FILE"
         echo "key_mgmt changed to $NEW_KEY in $CONF"
     else
         echo "no key_mgmt= line found, nothing changed in $CONF" >&2
@@ -544,7 +597,9 @@ case "$2" in
                 exit 1
         }
     ' "$CONF" > "$TMP_FILE"; then
-        mv "$TMP_FILE" "$CONF"
+
+        safe_install_0644_sync "$TMP_FILE" "$CONF"
+        rm -f "$TMP_FILE"
         echo "Address changed to \"$NEW_IP\" in $CONF"
     else
         echo "no Address= line found, nothing changed in $CONF" >&2
@@ -584,7 +639,9 @@ case "$2" in
                 exit 1
         }
     ' "$CONF" > "$TMP_FILE"; then
-        mv "$TMP_FILE" "$CONF"
+
+        safe_install_0644_sync "$TMP_FILE" "$CONF"
+        rm -f "$TMP_FILE"
         echo "Gateway changed to \"$NEW_GT\" in $CONF"
     else
         echo "no Gateway= line found, nothing changed in $CONF" >&2

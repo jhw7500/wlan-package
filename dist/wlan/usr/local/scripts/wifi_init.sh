@@ -3,11 +3,19 @@
 tag=$(basename "$0")
 KERNEL_VERSION=$(uname -r)
 JSON_FILE="/usr/local/etc/config.json"
-FW_NAME=cts/pcieuart9098_combo_v1.bin
-MOD_PARA=cts/wifi_mod_para.conf
-CAL_DATA_CFG=cts/WlanCalData_ext_RD.conf
-TXPWRLIMIT_PATH=/lib/firmware/cts/txpwrlimit_cfg_9098.conf
+FW_NAME="cts/pcieuart9098_combo_v1.bin"
+MOD_PARA="cts/wifi_mod_para.conf"
+CAL_DATA_CFG="cts/WlanCalData_ext_RD.conf"
+TXPWRLIMIT_PATH="/lib/firmware/cts/txpwrlimit_cfg_9098.conf"
 MFG_MODE=0
+
+/usr/local/scripts/backup_file.sh /lib/firmware/$MOD_PARA PCIE9098_0
+/usr/local/scripts/backup_file.sh $TXPWRLIMIT_PATH txpwrlimit_2g_cfg_set
+/usr/local/scripts/backup_file.sh /etc/systemd/network/20-mlan0.network mlan0
+/usr/local/scripts/backup_file.sh /etc/systemd/network/21-mlan1.network mlan1
+/usr/local/scripts/backup_file.sh /etc/systemd/network/22-eth0.network eth0
+/usr/local/scripts/backup_file.sh /etc/wpa_supplicant/wpa_supplicant-mlan0.conf network=
+/usr/local/scripts/backup_file.sh /etc/wpa_supplicant/wpa_supplicant-mlan1.conf network=
 
 #LOGFILE="/var/log/cantops/module.log"
 #sleep 0.5

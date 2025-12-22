@@ -101,8 +101,15 @@ sysctl -w net.ipv4.conf.$IFACE.arp_announce=2
 #sysctl -w net.ipv4.conf.$IFACE.proxy_arp=1
 END
 
-sysctl -w net.ipv4.ip_forward=0
+#rmmod dumb_kbridge
+#insmod /opt/wlan/driver/dumb_kbridge.ko if0=eth0 if1=mlan0 mode=2 loop_guard=1 mark_bit=29
+
+#sysctl -w net.ipv4.ip_forward=0
 #relayd -d -I $IFACE -I eth0 -G $GATEWAY
 #dumb eth0 $IFACE
-exec /usr/local/bin/wifi_dumb eth0 mlan0
-
+#exec /usr/local/bin/wifi_dumb eth0 mlan0
+#exec /usr/local/bin/wifi_dumb_ eth0 mlan0
+#exec /usr/local/bin/wifi_dumb__ eth0 mlan0
+#exec /usr/local/bin/wifi_dumb___ eth0 mlan0
+#exec /usr/local/bin/dumb-tpacket eth0 mlan0
+exec /usr/local/bin/dumb eth0 mlan0

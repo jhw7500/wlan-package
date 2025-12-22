@@ -190,7 +190,7 @@ customctl() {
   customctl enable wifi_logger@mlan0
   customctl enable wifi_checker@mlan0
   customctl enable wifi_bgscan@mlan0
-  cusotmctl enable wifi_roam@mlan0
+  customctl enable wifi_roam@mlan0
   customctl enable wifi_arping@mlan0
   #customctl enable wifi_capture@mlan0
 

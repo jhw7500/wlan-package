@@ -1,5 +1,5 @@
 Package: wlan-proc
-Version: 0.1.1
+Version: 0.1.2
 Section: test
 Priority: optional
 Architecture: arm64 
@@ -22,3 +22,4 @@ Description: WLAN Application
 0.0.9 : txpwrlimit, wifi cmd, link stat, journald
 0.1.0 : dumb, arping, wpa_cli, usb_print, target mac, switch no delay
 0.1.1 : snmp, capture, roam flag, file manager
+0.1.2 : dumb
