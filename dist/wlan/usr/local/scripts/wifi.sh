@@ -67,7 +67,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} gt {address} : persist"
     echo "       wifi {0|1|mlan0|mlan1} mac {0|1|base|target} {mac_address} : persist"
     echo "       wifi {0|1|mlan0|mlan1} spoof {0|1|dynamic|static} : persist"
-    echo "       wifi {0|1|mlan0|mlan1} standard {4|5|6} : persist"
+    echo "       wifi {0|1|mlan0|mlan1} standard {n|ac|ax|4|5|6} : persist"
     echo "       wifi {0|1|mlan0|mlan1} ssid {id} : persist"
     echo "       wifi {0|1|mlan0|mlan1} psk {password} : persist"
     echo "       wifi {0|1|mlan0|mlan1} key {0|1|NONE|WPA-PSK|*} : persist"
@@ -75,7 +75,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} scan {freq_list|channel_list} : runtime"
     echo "       wifi {0|1|mlan0|mlan1} mon : runtime"
     echo "       wifi txpwr {0|1|2|3|no|default|low|org|conf_file_name} : persist"
-    echo "       wifi cal {cal_data_cfg} : persist"
+    echo "       wifi cal {0|1|None|WlanCalData_ext_RD.conf|*} : persist"
     echo "       wifi mfg {0|1|off|on} : persist"
     echo "       wifi ant {0|1|internal|external} : runtime"
     echo "       wifi backup : persist"
@@ -161,8 +161,12 @@ END
     if [[ "$CAL_DATA_CFG" == *.conf ]]; then
         cp $CAL_DATA_CFG /lib/firmware/cts/$CAL_DATA_CFG
         CAL_DATA_CFG="cts/$CAL_DATA_CFG"
-    else
+    elif [[ "$CAL_DATA_CFG" == "1" ]]; then
+        CAL_DATA_CFG="cts/WlanCalData_ext_RD.conf"
+    elif [[ "$CAL_DATA_CFG" == "0" ]]; then
         CAL_DATA_CFG=\"\"
+    else
+        usage
     fi
     echo "Updated:"
     echo "  CAL_DATA_CFG=$CAL_DATA_CFG"
@@ -552,13 +556,13 @@ case "$2" in
     iw $IFACE scan freq $FREQ_STR
     ;;
   standard)
-    if [ "$3" == "4" ]; then
+    if [[ "$3" == "4" ]] || [[ "$3" == "n" ]] || [[ "$3" == "N" ]]; then
         echo "limit to wifi4 for $IFACE" 
         python3 /usr/local/logger/wifi_config.py $1 dev_cap_mask 0xfffcdfff
-    elif [ "$3" == "5" ]; then
+    elif [[ "$3" == "5" ]] || [[ "$3" == "ac" ]] || [[ "$3" == "AC" ]]; then
         echo "limit to wifi5 for $IFACE"
         python3 /usr/local/logger/wifi_config.py $1 dev_cap_mask 0xfffcffff
-    elif [ "$3" == "6" ]; then
+    elif [[ "$3" == "6" ]] || [[ "$3" == "ax" ]] || [[ "$3" == "AX" ]]; then
         echo "limit to wifi6 for $IFACE"
         python3 /usr/local/logger/wifi_config.py $1 dev_cap_mask 0xffffffff
     else

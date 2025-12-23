@@ -112,4 +112,5 @@ END
 #exec /usr/local/bin/wifi_dumb__ eth0 mlan0
 #exec /usr/local/bin/wifi_dumb___ eth0 mlan0
 #exec /usr/local/bin/dumb-tpacket eth0 mlan0
-exec /usr/local/bin/dumb eth0 mlan0
+#exec /usr/local/bin/dumb eth0 mlan0
+exec /usr/local/bin/wifi-dumb --ip-filter --no-debug eth0 mlan0
