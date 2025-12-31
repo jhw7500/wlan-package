@@ -75,7 +75,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} scan {freq_list|channel_list} : runtime"
     echo "       wifi {0|1|mlan0|mlan1} mon : runtime"
     echo "       wifi txpwr {0|1|2|3|no|default|low|org|conf_file_name} : persist"
-    echo "       wifi cal {0|1|None|WlanCalData_ext_RD.conf|*} : persist"
+    echo "       wifi cal {0|1|2|None|WlanCalData_ext.conf|WlanCalData_ext_RD.conf|*} : persist"
     echo "       wifi mfg {0|1|off|on} : persist"
     echo "       wifi ant {0|1|internal|external} : runtime"
     echo "       wifi backup : persist"
@@ -161,8 +161,10 @@ END
     if [[ "$CAL_DATA_CFG" == *.conf ]]; then
         cp $CAL_DATA_CFG /lib/firmware/cts/$CAL_DATA_CFG
         CAL_DATA_CFG="cts/$CAL_DATA_CFG"
-    elif [[ "$CAL_DATA_CFG" == "1" ]]; then
+    elif [[ "$CAL_DATA_CFG" == "2" ]]; then
         CAL_DATA_CFG="cts/WlanCalData_ext_RD.conf"
+    elif [[ "$CAL_DATA_CFG" == "1" ]]; then
+        CAL_DATA_CFG="cts/WlanCalData_ext.conf"
     elif [[ "$CAL_DATA_CFG" == "0" ]]; then
         CAL_DATA_CFG=\"\"
     else
