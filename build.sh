@@ -2,6 +2,13 @@
 
 BASEDIR=${PWD}
 echo "Script location: ${BASEDIR}"
+mkdir -p ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb
+cp ${BASEDIR}/wlan-bridge/dumb/dumb ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/
+cp ${BASEDIR}/wlan-bridge/dumb/dumb-tpacket ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/
+cp ${BASEDIR}/wlan-bridge/dumb/README.md ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/
+cp ${BASEDIR}/wlan-bridge/dumb/wifi_bridge@.service ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/
+cp -r ${BASEDIR}/wlan-bridge/scripts ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/
+cp -r ${BASEDIR}/wlan-bridge/docs ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/
 mkdir -p ${BASEDIR}/release
 
 cd ${BASEDIR}/dist

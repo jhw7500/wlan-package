@@ -310,7 +310,7 @@ cpchk() {
   rm /usr/local/bin/mlan*
   rm /usr/local/bin/iw*
   #ln -s /opt/wlan/bin/dumb /usr/local/bin/dumb
-  ln -s /usr/local/dumb/dumb /usr/local/bin/wifi_dumb
+  ln -s /usr/local/dumb/dumb /usr/local/bin/dumb
   ln -s /usr/local/wlan-bridge/dumb/dumb /usr/local/bin/wifi-dumb
   ln -s /usr/local/wlan-bridge/dumb/dumb-tpacket /usr/local/bin/wifi-dumb-tpacket
   ln -s /opt/wlan/bin/iw /usr/local/bin/iw
