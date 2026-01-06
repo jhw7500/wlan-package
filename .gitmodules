@@ -1,3 +1,3 @@
 [submodule "wlan-bridge"]
 	path = wlan-bridge
-	url = https://github.com/jhw7500/wlan-bridge.git
+	url = git@github.com:jhw7500/wlan-bridge.git
