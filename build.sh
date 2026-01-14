@@ -5,6 +5,10 @@ echo "Script location: ${BASEDIR}"
 
 # Build wlan-bridge binaries
 echo "Building wlan-bridge binaries..."
+if [ ! -d "${BASEDIR}/wlan-bridge/dumb" ]; then
+    echo "Error: wlan-bridge/dumb directory not found. Please initialize submodule with: git submodule update --init --recursive"
+    exit 1
+fi
 cd ${BASEDIR}/wlan-bridge/dumb
 make clean
 make
@@ -27,8 +31,8 @@ cp ${BASEDIR}/wlan-bridge/dumb/README.md ${BASEDIR}/dist/wlan/usr/local/wlan-bri
 cp ${BASEDIR}/wlan-bridge/dumb/wifi_bridge@.service ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/
 
 # Copy wlan-bridge scripts and docs
-cp -r ${BASEDIR}/wlan-bridge/scripts/* ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/scripts/ 2>/dev/null || true
-cp -r ${BASEDIR}/wlan-bridge/docs/* ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/docs/ 2>/dev/null || true
+cp -a ${BASEDIR}/wlan-bridge/scripts/. ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/scripts/
+cp -a ${BASEDIR}/wlan-bridge/docs/. ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/docs/
 
 # Also update usr/local/bin with latest binaries
 cp ${BASEDIR}/wlan-bridge/dumb/bin/dumb ${BASEDIR}/dist/wlan/usr/local/bin/
@@ -40,11 +44,11 @@ if [ ! -f ${BASEDIR}/dist/wlan/usr/local/etc/config.json ]; then
     cat > ${BASEDIR}/dist/wlan/usr/local/etc/config.json << 'CONFIGEOF'
 {
     "mlan0": {
-        "Frequency": "auto",
+        "Frequency": "5GHz",
         "enabled": true
     },
     "mlan1": {
-        "Frequency": "auto",
+        "Frequency": "2GHz",
         "enabled": false
     },
     "eth0": {
