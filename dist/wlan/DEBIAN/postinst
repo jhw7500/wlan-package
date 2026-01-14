@@ -52,15 +52,18 @@ configure)
   systemctl restart systemd-journald
 
   #/usr/local/scripts/auto_fs_sizeup.sh 2 2
-  TARGET_TIME="2025-11-27 12:00:00"
+  # Minimum time safety - for systems without NTP
+  TARGET_TIME="2026-01-14 12:00:00"
   CURRENT_TS=$(date +%s)
-  TARGET_TS=$(date -d "$TARGET_TIME" +%s)
+  TARGET_TS=$(date -d "$TARGET_TIME" +%s 2>/dev/null || echo 0)
   echo "date : $(date '+%Y-%m-%d %H:%M:%S')"
-  if [ $CURRENT_TS -lt $TARGET_TS ]; then
-    echo "set time $TARGET_TIME"
-    timedatectl set-ntp false
-    timedatectl set-timezone Asia/Seoul
-    timedatectl set-time "$TARGET_TIME"
+  if [ "$TARGET_TS" -gt 0 ] && [ "$CURRENT_TS" -lt "$TARGET_TS" ]; then
+    echo "set time $TARGET_TIME (system time is too old)"
+    timedatectl set-ntp false 2>/dev/null || true
+    timedatectl set-timezone Asia/Seoul 2>/dev/null || true
+    timedatectl set-time "$TARGET_TIME" 2>/dev/null || true
+  else
+    timedatectl set-timezone Asia/Seoul 2>/dev/null || true
   fi
 
   /usr/local/scripts/auto_fs_sizeup.sh 2 3
@@ -306,32 +309,31 @@ cpchk() {
   dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
   /usr/local/logger/print.py green "\r\n[installer] installing${dots}"
 
-  rm /usr/local/bin/dumb*
-  rm /usr/local/bin/mlan*
-  rm /usr/local/bin/iw*
-  #ln -s /opt/wlan/bin/dumb /usr/local/bin/dumb
-  ln -s /usr/local/dumb/dumb /usr/local/bin/dumb
-  ln -s /usr/local/wlan-bridge/dumb/dumb /usr/local/bin/wifi-dumb
-  ln -s /usr/local/wlan-bridge/dumb/dumb-tpacket /usr/local/bin/wifi-dumb-tpacket
-  ln -s /opt/wlan/bin/iw /usr/local/bin/iw
-  ln -s /opt/wlan/bin/mlanutl /usr/local/bin/mlanutl
-  ln -s /opt/wlan/bin/mlan2040coex /usr/local/bin/mlan2040coex
-  ln -s /opt/wlan/bin/mlanconfig /usr/local/bin/mlanconfig
-  ln -s /opt/wlan/bin/mlanevent.exe /usr/local/bin/mlanevent
+  # Create symlinks for wlan-bridge binaries (primary)
+  # ln -sf automatically overwrites existing files/symlinks
+  ln -sf /usr/local/wlan-bridge/dumb/dumb /usr/local/bin/wifi-dumb
+  ln -sf /usr/local/wlan-bridge/dumb/dumb-tpacket /usr/local/bin/wifi-dumb-tpacket
+  # Legacy compatibility: dumb -> wifi-dumb
+  ln -sf /usr/local/bin/wifi-dumb /usr/local/bin/dumb
 
-  rm -r /usr/local/mfgtool
-  ln -s /opt/wlan/mfg/mfgbridge /usr/local/mfg/mfgbridge
+  # NXP WLAN tools
+  ln -sf /opt/wlan/bin/iw /usr/local/bin/iw
+  ln -sf /opt/wlan/bin/mlanutl /usr/local/bin/mlanutl
+  ln -sf /opt/wlan/bin/mlan2040coex /usr/local/bin/mlan2040coex
+  ln -sf /opt/wlan/bin/mlanconfig /usr/local/bin/mlanconfig
+  ln -sf /opt/wlan/bin/mlanevent.exe /usr/local/bin/mlanevent
 
-  #mv /usr/local/bin/iw /usr/local/bin/iw_org
-  #ln -s /usr/local/bin/iw_new /usr/local/bin/iw
-  ln -s /usr/local/scripts/wifi.sh /usr/local/bin/wifi
-  ln -s /var/log/cantops/journal /var/log/journal
-  ln -s /usr/local/scripts/logctl.sh /usr/local/bin/logctl
-  ln -s /usr/local/scripts/mlanutl_silent.sh /usr/local/bin/mlanutl_silent
-  ln -s /usr/local/logger/passive_roam.py /usr/local/bin/roaming
-  ln -s /usr/local/logger/usb_print.py /usr/local/bin/usb_print
-  ln -s /usr/local/scripts/wifi_mfg.sh /usr/local/bin/mfg
-  #rm /usr/local/bin/mfgbridge
+  rm -rf /usr/local/mfgtool 2>/dev/null || true
+  ln -sf /opt/wlan/mfg/mfgbridge /usr/local/mfg/mfgbridge
+
+  # Utility symlinks
+  ln -sf /usr/local/scripts/wifi.sh /usr/local/bin/wifi
+  ln -sf /var/log/cantops/journal /var/log/journal 2>/dev/null || true
+  ln -sf /usr/local/scripts/logctl.sh /usr/local/bin/logctl
+  ln -sf /usr/local/scripts/mlanutl_silent.sh /usr/local/bin/mlanutl_silent
+  ln -sf /usr/local/logger/passive_roam.py /usr/local/bin/roaming
+  ln -sf /usr/local/logger/usb_print.py /usr/local/bin/usb_print
+  ln -sf /usr/local/scripts/wifi_mfg.sh /usr/local/bin/mfg
 
   #tar -xvf /opt/wlan/webmin/webmin_usr.tar -C /usr/libexec/
   #tar -xvf /opt/wlan/webmin/webmin_etc.tar -C /etc/

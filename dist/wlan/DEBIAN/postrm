@@ -1,30 +1,86 @@
 #!/bin/bash
 
 ############################################################
-# postrm script main
+# postrm script - executed after package removal
 ############################################################
-# Include debconf library.
+
+tag=$(basename "$0")
+KEY=PKG
 
 case "$1" in
 purge)
-  echo "purge purge"
-  #rm -r /opt/pim
-  #rm -r /root/SOMBASE_TEST
-  #rm -r /root/shared_v
-  #cat /dev/null > /etc/rc.local
-  #systemctl disable cam-operate
-  #systemctl set-default graphical.target
-  ;;
+    echo "postrm purge"
+    logger -p local0.info "[$KEY][$tag:$LINENO] Purging wlan-proc package"
+
+    # Remove symlinks created by postinst
+    echo "[INFO] Removing symlinks..."
+    rm -f /usr/local/bin/dumb
+    rm -f /usr/local/bin/dumb-tpacket
+    rm -f /usr/local/bin/wifi-dumb
+    rm -f /usr/local/bin/wifi-dumb-tpacket
+    rm -f /usr/local/bin/iw
+    rm -f /usr/local/bin/mlanutl
+    rm -f /usr/local/bin/mlan2040coex
+    rm -f /usr/local/bin/mlanconfig
+    rm -f /usr/local/bin/mlanevent
+    rm -f /usr/local/bin/wifi
+    rm -f /usr/local/bin/logctl
+    rm -f /usr/local/bin/mlanutl_silent
+    rm -f /usr/local/bin/roaming
+    rm -f /usr/local/bin/usb_print
+    rm -f /usr/local/bin/mfg
+    rm -f /usr/local/mfg/mfgbridge
+    rm -f /var/log/journal
+
+    # Clean up directories (only if empty)
+    rmdir /usr/local/wlan-bridge/dumb 2>/dev/null || true
+    rmdir /usr/local/wlan-bridge/scripts 2>/dev/null || true
+    rmdir /usr/local/wlan-bridge/docs 2>/dev/null || true
+    rmdir /usr/local/wlan-bridge 2>/dev/null || true
+
+    # Reload systemd daemon
+    systemctl daemon-reload 2>/dev/null || true
+
+    echo "[INFO] Purge completed"
+    ;;
 
 upgrade)
-  echo "purge upgrade ($model)"
-  ;;
+    echo "postrm upgrade"
+    ;;
 
 remove)
-  echo "postrm remove ($model)"
-  ;;
+    echo "postrm remove"
+    logger -p local0.info "[$KEY][$tag:$LINENO] Remove completed for wlan-proc package"
+
+    # Remove symlinks on remove (not just purge)
+    echo "[INFO] Removing symlinks..."
+    rm -f /usr/local/bin/dumb
+    rm -f /usr/local/bin/dumb-tpacket
+    rm -f /usr/local/bin/wifi-dumb
+    rm -f /usr/local/bin/wifi-dumb-tpacket
+    rm -f /usr/local/bin/iw
+    rm -f /usr/local/bin/mlanutl
+    rm -f /usr/local/bin/mlan2040coex
+    rm -f /usr/local/bin/mlanconfig
+    rm -f /usr/local/bin/mlanevent
+    rm -f /usr/local/bin/wifi
+    rm -f /usr/local/bin/logctl
+    rm -f /usr/local/bin/mlanutl_silent
+    rm -f /usr/local/bin/roaming
+    rm -f /usr/local/bin/usb_print
+    rm -f /usr/local/bin/mfg
+    rm -f /usr/local/mfg/mfgbridge
+
+    systemctl daemon-reload 2>/dev/null || true
+    ;;
+
+failed-upgrade|abort-install|abort-upgrade|disappear)
+    echo "postrm $1"
+    ;;
 
 *)
-  echo "Unrecognized postrm argument '$1'"
-
+    echo "Unrecognized postrm argument '$1'"
+    ;;
 esac
+
+exit 0

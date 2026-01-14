@@ -2,13 +2,57 @@
 
 BASEDIR=${PWD}
 echo "Script location: ${BASEDIR}"
+
+# Build wlan-bridge binaries
+echo "Building wlan-bridge binaries..."
+cd ${BASEDIR}/wlan-bridge/dumb
+make clean
+make
+if [ $? -ne 0 ]; then
+    echo "Error: Failed to build wlan-bridge binaries"
+    exit 1
+fi
+cd ${BASEDIR}
+echo "Build completed successfully"
+
+# Create wlan-bridge directory structure
 mkdir -p ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb
-cp ${BASEDIR}/wlan-bridge/dumb/dumb ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/
-cp ${BASEDIR}/wlan-bridge/dumb/dumb-tpacket ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/
+mkdir -p ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/scripts
+mkdir -p ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/docs
+
+# Copy wlan-bridge binaries
+cp ${BASEDIR}/wlan-bridge/dumb/bin/dumb ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/
+cp ${BASEDIR}/wlan-bridge/dumb/bin/dumb-tpacket ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/
 cp ${BASEDIR}/wlan-bridge/dumb/README.md ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/
 cp ${BASEDIR}/wlan-bridge/dumb/wifi_bridge@.service ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/
-cp -r ${BASEDIR}/wlan-bridge/scripts ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/
-cp -r ${BASEDIR}/wlan-bridge/docs ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/
+
+# Copy wlan-bridge scripts and docs
+cp -r ${BASEDIR}/wlan-bridge/scripts/* ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/scripts/ 2>/dev/null || true
+cp -r ${BASEDIR}/wlan-bridge/docs/* ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/docs/ 2>/dev/null || true
+
+# Also update usr/local/bin with latest binaries
+cp ${BASEDIR}/wlan-bridge/dumb/bin/dumb ${BASEDIR}/dist/wlan/usr/local/bin/
+cp ${BASEDIR}/wlan-bridge/dumb/bin/dumb-tpacket ${BASEDIR}/dist/wlan/usr/local/bin/
+
+# Create config directory and default config.json
+mkdir -p ${BASEDIR}/dist/wlan/usr/local/etc
+if [ ! -f ${BASEDIR}/dist/wlan/usr/local/etc/config.json ]; then
+    cat > ${BASEDIR}/dist/wlan/usr/local/etc/config.json << 'CONFIGEOF'
+{
+    "mlan0": {
+        "Frequency": "auto",
+        "enabled": true
+    },
+    "mlan1": {
+        "Frequency": "auto",
+        "enabled": false
+    },
+    "eth0": {
+        "enabled": true
+    }
+}
+CONFIGEOF
+fi
 mkdir -p ${BASEDIR}/release
 
 cd ${BASEDIR}/dist
