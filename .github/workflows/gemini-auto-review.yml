@@ -25,14 +25,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PR_NUMBER="${{ github.event.pull_request.number }}"
-          PR_DIFF=$(gh pr diff $PR_NUMBER)
-          PR_TITLE="${{ github.event.pull_request.title }}"
-          PR_BODY="${{ github.event.pull_request.body }}"
 
-          # Save to files for easier handling
-          echo "$PR_DIFF" > pr_diff.txt
-          echo "$PR_TITLE" > pr_title.txt
-          echo "$PR_BODY" > pr_body.txt
+          # Save PR details directly to files (safer than variables for large content)
+          gh pr diff $PR_NUMBER > pr_diff.txt || echo "No diff available" > pr_diff.txt
+          echo "${{ github.event.pull_request.title }}" > pr_title.txt
+          cat > pr_body.txt << 'EOF'
+          ${{ github.event.pull_request.body }}
+          EOF
 
       - name: Run Gemini Code Review
         id: gemini-review
