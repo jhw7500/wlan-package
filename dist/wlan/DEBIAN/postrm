@@ -7,30 +7,35 @@
 tag=$(basename "$0")
 KEY=PKG
 
+# Function to remove symlinks created by postinst
+cleanup_symlinks() {
+    echo "[INFO] Removing symlinks..."
+    rm -f \
+        /usr/local/bin/dumb \
+        /usr/local/bin/dumb-tpacket \
+        /usr/local/bin/wifi-dumb \
+        /usr/local/bin/wifi-dumb-tpacket \
+        /usr/local/bin/iw \
+        /usr/local/bin/mlanutl \
+        /usr/local/bin/mlan2040coex \
+        /usr/local/bin/mlanconfig \
+        /usr/local/bin/mlanevent \
+        /usr/local/bin/wifi \
+        /usr/local/bin/logctl \
+        /usr/local/bin/mlanutl_silent \
+        /usr/local/bin/roaming \
+        /usr/local/bin/usb_print \
+        /usr/local/bin/mfg \
+        /usr/local/mfg/mfgbridge \
+        /var/log/journal
+}
+
 case "$1" in
 purge)
     echo "postrm purge"
     logger -p local0.info "[$KEY][$tag:$LINENO] Purging wlan-proc package"
 
-    # Remove symlinks created by postinst
-    echo "[INFO] Removing symlinks..."
-    rm -f /usr/local/bin/dumb
-    rm -f /usr/local/bin/dumb-tpacket
-    rm -f /usr/local/bin/wifi-dumb
-    rm -f /usr/local/bin/wifi-dumb-tpacket
-    rm -f /usr/local/bin/iw
-    rm -f /usr/local/bin/mlanutl
-    rm -f /usr/local/bin/mlan2040coex
-    rm -f /usr/local/bin/mlanconfig
-    rm -f /usr/local/bin/mlanevent
-    rm -f /usr/local/bin/wifi
-    rm -f /usr/local/bin/logctl
-    rm -f /usr/local/bin/mlanutl_silent
-    rm -f /usr/local/bin/roaming
-    rm -f /usr/local/bin/usb_print
-    rm -f /usr/local/bin/mfg
-    rm -f /usr/local/mfg/mfgbridge
-    rm -f /var/log/journal
+    cleanup_symlinks
 
     # Clean up directories (only if empty)
     rmdir /usr/local/wlan-bridge/dumb 2>/dev/null || true
@@ -52,24 +57,7 @@ remove)
     echo "postrm remove"
     logger -p local0.info "[$KEY][$tag:$LINENO] Remove completed for wlan-proc package"
 
-    # Remove symlinks on remove (not just purge)
-    echo "[INFO] Removing symlinks..."
-    rm -f /usr/local/bin/dumb
-    rm -f /usr/local/bin/dumb-tpacket
-    rm -f /usr/local/bin/wifi-dumb
-    rm -f /usr/local/bin/wifi-dumb-tpacket
-    rm -f /usr/local/bin/iw
-    rm -f /usr/local/bin/mlanutl
-    rm -f /usr/local/bin/mlan2040coex
-    rm -f /usr/local/bin/mlanconfig
-    rm -f /usr/local/bin/mlanevent
-    rm -f /usr/local/bin/wifi
-    rm -f /usr/local/bin/logctl
-    rm -f /usr/local/bin/mlanutl_silent
-    rm -f /usr/local/bin/roaming
-    rm -f /usr/local/bin/usb_print
-    rm -f /usr/local/bin/mfg
-    rm -f /usr/local/mfg/mfgbridge
+    cleanup_symlinks
 
     systemctl daemon-reload 2>/dev/null || true
     ;;

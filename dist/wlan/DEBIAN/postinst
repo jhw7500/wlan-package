@@ -53,16 +53,21 @@ configure)
 
   #/usr/local/scripts/auto_fs_sizeup.sh 2 2
   # Minimum time safety - for systems without NTP
-  TARGET_TIME="2026-01-14 12:00:00"
+  # Only set time if system clock is clearly wrong (before 2020-01-01)
+  MINIMUM_TIME="2020-01-01 00:00:00"
   CURRENT_TS=$(date +%s)
-  TARGET_TS=$(date -d "$TARGET_TIME" +%s 2>/dev/null || echo 0)
+  MINIMUM_TS=$(date -d "$MINIMUM_TIME" +%s 2>/dev/null || echo 1577836800)
   echo "date : $(date '+%Y-%m-%d %H:%M:%S')"
-  if [ "$TARGET_TS" -gt 0 ] && [ "$CURRENT_TS" -lt "$TARGET_TS" ]; then
-    echo "set time $TARGET_TIME (system time is too old)"
+
+  if [ "$CURRENT_TS" -lt "$MINIMUM_TS" ]; then
+    # System time is before 2020, set to a reasonable default
+    SAFE_TIME="2024-01-01 00:00:00"
+    echo "WARNING: System time is before $MINIMUM_TIME, setting to $SAFE_TIME"
     timedatectl set-ntp false 2>/dev/null || true
     timedatectl set-timezone Asia/Seoul 2>/dev/null || true
-    timedatectl set-time "$TARGET_TIME" 2>/dev/null || true
+    timedatectl set-time "$SAFE_TIME" 2>/dev/null || true
   else
+    # Time looks reasonable, just set timezone
     timedatectl set-timezone Asia/Seoul 2>/dev/null || true
   fi
 
