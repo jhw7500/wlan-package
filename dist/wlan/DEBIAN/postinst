@@ -60,8 +60,9 @@ configure)
   echo "date : $(date '+%Y-%m-%d %H:%M:%S')"
 
   if [ "$CURRENT_TS" -lt "$MINIMUM_TS" ]; then
-    # System time is before 2020, set to a reasonable default
-    SAFE_TIME="2024-01-01 00:00:00"
+    # System time is before 2020, set to a reasonable default (2026-01-01)
+    # This matches the PR description date (2026-01-14) rounded to start of month
+    SAFE_TIME="2026-01-01 00:00:00"
     echo "WARNING: System time is before $MINIMUM_TIME, setting to $SAFE_TIME"
     timedatectl set-ntp false 2>/dev/null || true
     timedatectl set-timezone Asia/Seoul 2>/dev/null || true
@@ -315,11 +316,28 @@ cpchk() {
   /usr/local/logger/print.py green "\r\n[installer] installing${dots}"
 
   # Create symlinks for wlan-bridge binaries (primary)
+  # Ensure target directory exists
+  mkdir -p /usr/local/bin
+
+  # Verify source files exist before creating symlinks
+  if [ ! -f /usr/local/wlan-bridge/dumb/dumb ]; then
+    echo "ERROR: /usr/local/wlan-bridge/dumb/dumb not found" >&2
+    logger -p local0.err "[$KEY][$tag:$LINENO] Critical: dumb binary not found at /usr/local/wlan-bridge/dumb/dumb"
+    exit 1
+  fi
+  if [ ! -f /usr/local/wlan-bridge/dumb/dumb-tpacket ]; then
+    echo "ERROR: /usr/local/wlan-bridge/dumb/dumb-tpacket not found" >&2
+    logger -p local0.err "[$KEY][$tag:$LINENO] Critical: dumb-tpacket binary not found at /usr/local/wlan-bridge/dumb/dumb-tpacket"
+    exit 1
+  fi
+
   # ln -sf automatically overwrites existing files/symlinks
   ln -sf /usr/local/wlan-bridge/dumb/dumb /usr/local/bin/wifi-dumb
   ln -sf /usr/local/wlan-bridge/dumb/dumb-tpacket /usr/local/bin/wifi-dumb-tpacket
   # Legacy compatibility: dumb -> wifi-dumb
   ln -sf /usr/local/bin/wifi-dumb /usr/local/bin/dumb
+
+  logger -p local0.info "[$KEY][$tag:$LINENO] Successfully created symlinks for wlan-bridge binaries"
 
   # NXP WLAN tools
   ln -sf /opt/wlan/bin/iw /usr/local/bin/iw
