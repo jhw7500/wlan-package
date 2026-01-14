@@ -38,19 +38,34 @@ Automatically reviews pull requests when opened or updated.
 
 ### Gemini Workflows
 
-#### 1. `gemini-dispatch.yml` - Gemini Request Dispatcher
-Central dispatcher for routing Gemini-related requests.
+#### 1. `gemini-auto-review.yml` - Automatic PR Review ⭐ NEW
+**Automatically reviews pull requests when opened or updated** (similar to Claude Code Review).
 
-#### 2. `gemini-invoke.yml` - Direct Gemini Invocation
+**Required Secret:**
+- `GEMINI_API_KEY` - API key from Google AI Studio
+
+**Features:**
+- Overall code assessment
+- Critical issue detection (security, bugs, breaking changes)
+- Code quality suggestions
+- Performance considerations
+- Uses Gemini 2.0 Flash (Experimental) model
+
+**Triggers:** Automatically on PR opened or synchronized (new commits pushed)
+
+#### 2. `gemini-dispatch.yml` - Gemini Request Dispatcher
+Central dispatcher for routing Gemini-related requests (requires `@gemini-cli` mention).
+
+#### 3. `gemini-invoke.yml` - Direct Gemini Invocation
 Handles direct Gemini CLI invocations for code analysis.
 
-#### 3. `gemini-review.yml` - Gemini PR Review
-Provides Gemini-powered code reviews on pull requests.
+#### 4. `gemini-review.yml` - Gemini PR Review
+Provides Gemini-powered code reviews on pull requests (called by dispatch).
 
-#### 4. `gemini-triage.yml` - Issue Triage
+#### 5. `gemini-triage.yml` - Issue Triage
 Automatically triages and categorizes issues using Gemini.
 
-#### 5. `gemini-scheduled-triage.yml` - Scheduled Issue Analysis
+#### 6. `gemini-scheduled-triage.yml` - Scheduled Issue Analysis
 Runs periodic analysis of repository issues.
 
 **Required Secrets:**
@@ -73,25 +88,43 @@ Runs periodic analysis of repository issues.
    - Name: `CLAUDE_CODE_OAUTH_TOKEN`
    - Value: (paste your token)
 
-### 2. Gemini Setup
+### 2. Gemini Auto Review Setup (Recommended)
+
+For automatic PR reviews with Gemini (similar to Claude):
 
 1. Get a Gemini API key:
    - Visit https://aistudio.google.com/app/apikey
-   - Create or use existing API key
+   - Create a new API key or use existing one
+
+2. Add the API key as a repository secret:
+   - Go to repository **Settings** → **Secrets and variables** → **Actions**
+   - Click **New repository secret**
+   - Name: `GEMINI_API_KEY`
+   - Value: (paste your API key)
+
+3. That's it! The `gemini-auto-review.yml` workflow will now automatically review PRs.
+
+### 3. Advanced Gemini Setup (Optional)
+
+For advanced Gemini features (dispatch, triage, scheduled reviews):
+
+1. Get a Gemini API key (same as above)
 
 2. (Optional) Set up Google Cloud Project for Vertex AI:
    - Create a GCP project at https://console.cloud.google.com
    - Enable Vertex AI API
    - Note your project ID and preferred region
 
-3. Add secrets to your repository:
-   - `GEMINI_API_KEY` - Your Gemini API key
+3. Add additional secrets to your repository:
+   - `GEMINI_API_KEY` - Your Gemini API key (required)
    - `GCP_PROJECT_ID` - (if using Vertex AI)
    - `GCP_LOCATION` - (if using Vertex AI, e.g., `us-central1`)
 
-### 3. Verify Setup
+### 4. Verify Setup
 
 After adding secrets, create a test PR or mention `@claude` in an issue to verify the workflows are working.
+
+**Note:** Both Claude and Gemini auto-review workflows will run automatically on new PRs once their respective secrets are configured.
 
 ## Workflow Permissions
 
