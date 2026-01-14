@@ -1,2 +1,5 @@
 release/
 dist/wlan/usr/local/wlan-bridge/
+
+.gemini/
+gha-creds-*.json
