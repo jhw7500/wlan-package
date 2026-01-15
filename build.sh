@@ -50,6 +50,7 @@ cp ${BASEDIR}/wlan-bridge/dumb/bin/dumb ${BASEDIR}/dist/wlan/usr/local/bin/ || {
 cp ${BASEDIR}/wlan-bridge/dumb/bin/dumb-tpacket ${BASEDIR}/dist/wlan/usr/local/bin/ || { echo "Error: Failed to copy dumb-tpacket to /usr/local/bin"; exit 1; }
 
 # Create config directory and default config.json
+# This config is used by wifi_init.sh to configure network interfaces
 mkdir -p ${BASEDIR}/dist/wlan/usr/local/etc
 if [ ! -f ${BASEDIR}/dist/wlan/usr/local/etc/config.json ]; then
     cat > ${BASEDIR}/dist/wlan/usr/local/etc/config.json << 'CONFIGEOF'
@@ -67,6 +68,17 @@ if [ ! -f ${BASEDIR}/dist/wlan/usr/local/etc/config.json ]; then
     }
 }
 CONFIGEOF
+
+    # Validate generated JSON
+    if command -v jq >/dev/null 2>&1; then
+        if ! jq empty ${BASEDIR}/dist/wlan/usr/local/etc/config.json 2>/dev/null; then
+            echo "Error: Generated config.json is invalid JSON"
+            exit 1
+        fi
+        echo "config.json validated successfully"
+    else
+        echo "Warning: jq not found, skipping JSON validation"
+    fi
 fi
 mkdir -p ${BASEDIR}/release
 
