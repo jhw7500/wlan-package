@@ -1,7 +1,10 @@
 #!/bin/sh
 set -eu
-IF0=eth0
-IF1=mlan0
+
+# Read interface names from environment variables or use defaults
+# These can be set in systemd service files based on config.json
+IF0=${BRIDGE_IF0:-eth0}
+IF1=${BRIDGE_IF1:-mlan0}
 
 both_up() {
     ip link show "$IF0" | grep -q "state UP" || return 1
