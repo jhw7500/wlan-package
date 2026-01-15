@@ -10,7 +10,7 @@ if [ ! -d "${BASEDIR}/wlan-bridge/dumb" ]; then
     exit 1
 fi
 cd ${BASEDIR}/wlan-bridge/dumb
-make clean
+make clean || { echo "Warning: make clean failed"; }
 make
 if [ $? -ne 0 ]; then
     echo "Error: Failed to build wlan-bridge binaries"
@@ -45,10 +45,6 @@ cp ${BASEDIR}/wlan-bridge/dumb/wifi_bridge@.service ${BASEDIR}/dist/wlan/usr/loc
 cp -a ${BASEDIR}/wlan-bridge/scripts/. ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/scripts/ || { echo "Error: Failed to copy scripts"; exit 1; }
 cp -a ${BASEDIR}/wlan-bridge/docs/. ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/docs/ || { echo "Error: Failed to copy docs"; exit 1; }
 
-# Also update usr/local/bin with latest binaries
-cp ${BASEDIR}/wlan-bridge/dumb/bin/dumb ${BASEDIR}/dist/wlan/usr/local/bin/ || { echo "Error: Failed to copy dumb to /usr/local/bin"; exit 1; }
-cp ${BASEDIR}/wlan-bridge/dumb/bin/dumb-tpacket ${BASEDIR}/dist/wlan/usr/local/bin/ || { echo "Error: Failed to copy dumb-tpacket to /usr/local/bin"; exit 1; }
-
 # Create config directory and default config.json
 # This config is used by wifi_init.sh to configure network interfaces
 mkdir -p ${BASEDIR}/dist/wlan/usr/local/etc
@@ -68,17 +64,17 @@ if [ ! -f ${BASEDIR}/dist/wlan/usr/local/etc/config.json ]; then
     }
 }
 CONFIGEOF
+fi
 
-    # Validate generated JSON
-    if command -v jq >/dev/null 2>&1; then
-        if ! jq empty ${BASEDIR}/dist/wlan/usr/local/etc/config.json 2>/dev/null; then
-            echo "Error: Generated config.json is invalid JSON"
-            exit 1
-        fi
-        echo "config.json validated successfully"
-    else
-        echo "Warning: jq not found, skipping JSON validation"
+# Always validate config.json (whether newly created or existing)
+if command -v jq >/dev/null 2>&1; then
+    if ! jq empty ${BASEDIR}/dist/wlan/usr/local/etc/config.json 2>/dev/null; then
+        echo "Error: config.json is invalid JSON"
+        exit 1
     fi
+    echo "config.json validated successfully"
+else
+    echo "Warning: jq not found, skipping JSON validation"
 fi
 mkdir -p ${BASEDIR}/release
 
