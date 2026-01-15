@@ -29,6 +29,7 @@ jobs:
           # Save PR details directly to files (safer than variables for large content)
           gh pr diff $PR_NUMBER > pr_diff.txt || echo "No diff available" > pr_diff.txt
           echo "${{ github.event.pull_request.title }}" > pr_title.txt
+          echo "$PR_NUMBER" > pr_number.txt
           cat > pr_body.txt << 'EOF'
           ${{ github.event.pull_request.body }}
           EOF
@@ -52,39 +53,45 @@ jobs:
               print("ERROR: GEMINI_API_KEY not set")
               exit(1)
 
-          genai.configure(api_key=api_key)
-          model = genai.GenerativeModel('gemini-2.0-flash-exp')
+           genai.configure(api_key=api_key)
+           model = genai.GenerativeModel('gemini-3-flash')
 
-          # Read PR details
-          with open('pr_title.txt', 'r') as f:
-              pr_title = f.read().strip()
-          with open('pr_body.txt', 'r') as f:
-              pr_body = f.read().strip()
-          with open('pr_diff.txt', 'r') as f:
-              pr_diff = f.read()
+           # Read PR details
+           with open('pr_title.txt', 'r') as f:
+               pr_title = f.read().strip()
+           with open('pr_body.txt', 'r') as f:
+               pr_body = f.read().strip()
+           with open('pr_number.txt', 'r') as f:
+               pr_number = f.read().strip()
+           with open('pr_diff.txt', 'r') as f:
+               pr_diff = f.read()
 
-          # Create review prompt
-          prompt = f"""Please review this pull request and provide constructive feedback.
+           # Create review prompt
+           prompt = f"""REPO: {os.environ.get('GITHUB_REPOSITORY', '')}
+           PR NUMBER: {pr_number}
 
-          PR Title: {pr_title}
+           You are reviewing a pull request. Focus ONLY on the changes in the diff.
 
-          PR Description:
-          {pr_body}
 
-          Code Changes:
-          ```diff
-          {pr_diff[:50000]}  # Limit to 50k chars to avoid token limits
-          ```
+           PR Title: {pr_title}
 
-          Please provide:
-          1. Overall assessment
-          2. Critical issues (security, bugs, breaking changes)
-          3. Code quality suggestions
-          4. Performance considerations
-          5. Any questions or unclear parts
 
-          Format your response in GitHub-flavored Markdown with clear sections.
-          Be constructive and helpful."""
+           PR Description:
+           {pr_body}
+
+           Code Changes:
+           ```diff
+           {pr_diff[:50000]}  # Limit to 50k chars to avoid token limits
+           ```
+
+           Provide a strong, professional review focused on:
+           1. Side effects, regressions, and hidden risks introduced by the changes
+           2. Missing validations or error handling in the modified code
+           3. Behavioral changes that should be documented
+           4. Tests or checks that should be added specifically for these changes
+
+           Exclude CI/CD commentary and avoid unrelated refactors or style nits.
+           Format in GitHub-flavored Markdown with clear, concise sections."""
 
           # Get review from Gemini
           try:
@@ -113,8 +120,10 @@ jobs:
         run: |
           PR_NUMBER="${{ github.event.pull_request.number }}"
 
-          # Add header to review
-          cat > final_review.md << 'EOF'
+          cat > final_review.md << EOF
+          REPO: ${{ github.repository }}
+          PR NUMBER: ${PR_NUMBER}
+          Reviewer: Gemini Auto (Diff Focus)
           ## 🔎 Gemini Code Review
 
           EOF
@@ -125,7 +134,7 @@ jobs:
           cat >> final_review.md << 'EOF'
 
           ---
-          *Reviewed by Gemini 2.0 Flash (Experimental)*
+          *Reviewed by Gemini 3 Flash*
           EOF
 
           # Post as PR comment
