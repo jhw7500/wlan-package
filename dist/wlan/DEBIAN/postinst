@@ -35,8 +35,36 @@ disable_services_if_enabled() {
 case "$1" in
 configure)
   echo "postinst configure"
+
+  # CRITICAL: Verify binaries and config exist BEFORE making any system changes
+  # This prevents leaving the system in an inconsistent state if installation fails
+  if [ ! -f /usr/local/wlan-bridge/dumb/dumb ]; then
+    echo "ERROR: /usr/local/wlan-bridge/dumb/dumb not found" >&2
+    logger -p local0.err "[$KEY][$tag:$LINENO] Critical: dumb binary not found at /usr/local/wlan-bridge/dumb/dumb"
+    exit 1
+  fi
+  if [ ! -f /usr/local/wlan-bridge/dumb/dumb-tpacket ]; then
+    echo "ERROR: /usr/local/wlan-bridge/dumb/dumb-tpacket not found" >&2
+    logger -p local0.err "[$KEY][$tag:$LINENO] Critical: dumb-tpacket binary not found at /usr/local/wlan-bridge/dumb/dumb-tpacket"
+    exit 1
+  fi
+  # Verify config.json exists (used by wifi_init.sh for interface configuration)
+  if [ ! -f /usr/local/etc/config.json ]; then
+    echo "ERROR: /usr/local/etc/config.json not found" >&2
+    logger -p local0.err "[$KEY][$tag:$LINENO] Critical: config.json not found at /usr/local/etc/config.json"
+    exit 1
+  fi
+  # Validate config.json if jq is available
+  if command -v jq >/dev/null 2>&1; then
+    if ! jq empty /usr/local/etc/config.json 2>/dev/null; then
+      echo "ERROR: /usr/local/etc/config.json is invalid JSON" >&2
+      logger -p local0.err "[$KEY][$tag:$LINENO] Critical: config.json is invalid JSON"
+      exit 1
+    fi
+  fi
+  echo "[INFO] Binary and configuration verification passed"
+
   cp /opt/wlan/config/logrotate.d/logrotate.rsyslog /etc/logrotate.d/
-  cp /opt/wlan/config/rc.local /etc/
   cp /opt/wlan/config/rsyslog.conf /etc/
   cp /opt/wlan/config/smb.conf /etc/samba/
   #cp /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/
@@ -52,23 +80,21 @@ configure)
   systemctl restart systemd-journald
 
   #/usr/local/scripts/auto_fs_sizeup.sh 2 2
-  # Minimum time safety - for systems without NTP
-  # Only set time if system clock is clearly wrong (before 2020-01-01)
-  MINIMUM_TIME="2020-01-01 00:00:00"
+  # Time safety for systems without NTP
+  # Only set time if system clock is before 2026-01-01 (prevents future date issues)
+  SAFE_TIME="2026-01-01 00:00:00"
   CURRENT_TS=$(date +%s)
-  MINIMUM_TS=$(date -d "$MINIMUM_TIME" +%s 2>/dev/null || echo 1577836800)
+  SAFE_TS=$(date -d "$SAFE_TIME" +%s 2>/dev/null || echo 1767225600)
   echo "date : $(date '+%Y-%m-%d %H:%M:%S')"
 
-  if [ "$CURRENT_TS" -lt "$MINIMUM_TS" ]; then
-    # System time is before 2020, set to a reasonable default (2026-01-01)
-    # This matches the PR description date (2026-01-14) rounded to start of month
-    SAFE_TIME="2026-01-01 00:00:00"
-    echo "WARNING: System time is before $MINIMUM_TIME, setting to $SAFE_TIME"
+  if [ "$CURRENT_TS" -lt "$SAFE_TS" ]; then
+    # System time is before 2026-01-01, set to safe time
+    echo "WARNING: System time is before $SAFE_TIME, setting to safe time"
     timedatectl set-ntp false 2>/dev/null || true
     timedatectl set-timezone Asia/Seoul 2>/dev/null || true
     timedatectl set-time "$SAFE_TIME" 2>/dev/null || true
   else
-    # Time looks reasonable, just set timezone
+    # Time looks reasonable (after 2026-01-01), just set timezone
     timedatectl set-timezone Asia/Seoul 2>/dev/null || true
   fi
 
@@ -315,27 +341,16 @@ cpchk() {
   dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
   /usr/local/logger/print.py green "\r\n[installer] installing${dots}"
 
-  # Create symlinks for wlan-bridge binaries (primary)
+  # Create symlinks for wlan-bridge binaries
   # Ensure target directory exists
   mkdir -p /usr/local/bin
-
-  # Verify source files exist before creating symlinks
-  if [ ! -f /usr/local/wlan-bridge/dumb/dumb ]; then
-    echo "ERROR: /usr/local/wlan-bridge/dumb/dumb not found" >&2
-    logger -p local0.err "[$KEY][$tag:$LINENO] Critical: dumb binary not found at /usr/local/wlan-bridge/dumb/dumb"
-    exit 1
-  fi
-  if [ ! -f /usr/local/wlan-bridge/dumb/dumb-tpacket ]; then
-    echo "ERROR: /usr/local/wlan-bridge/dumb/dumb-tpacket not found" >&2
-    logger -p local0.err "[$KEY][$tag:$LINENO] Critical: dumb-tpacket binary not found at /usr/local/wlan-bridge/dumb/dumb-tpacket"
-    exit 1
-  fi
 
   # ln -sf automatically overwrites existing files/symlinks
   ln -sf /usr/local/wlan-bridge/dumb/dumb /usr/local/bin/wifi-dumb
   ln -sf /usr/local/wlan-bridge/dumb/dumb-tpacket /usr/local/bin/wifi-dumb-tpacket
-  # Legacy compatibility: dumb -> wifi-dumb
-  ln -sf /usr/local/bin/wifi-dumb /usr/local/bin/dumb
+  # Legacy compatibility: link dumb directly to actual binary (no chain)
+  ln -sf /usr/local/wlan-bridge/dumb/dumb /usr/local/bin/dumb
+  ln -sf /usr/local/wlan-bridge/dumb/dumb-tpacket /usr/local/bin/dumb-tpacket
 
   logger -p local0.info "[$KEY][$tag:$LINENO] Successfully created symlinks for wlan-bridge binaries"
 

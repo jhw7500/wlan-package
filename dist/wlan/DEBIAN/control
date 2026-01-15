@@ -6,7 +6,7 @@ Architecture: arm64
 Depends:
 Conflicts: wlan-package
 Replaces: wlan-package
-Recommends:
+Recommends: jq
 Maintainer: jhw <hwjo@cantops.biz>
 Homepage:
 Description: WLAN Application
