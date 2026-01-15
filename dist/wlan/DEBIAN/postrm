@@ -1,30 +1,74 @@
 #!/bin/bash
 
 ############################################################
-# postrm script main
+# postrm script - executed after package removal
 ############################################################
-# Include debconf library.
+
+tag=$(basename "$0")
+KEY=PKG
+
+# Function to remove symlinks created by postinst
+cleanup_symlinks() {
+    echo "[INFO] Removing symlinks..."
+    rm -f \
+        /usr/local/bin/dumb \
+        /usr/local/bin/dumb-tpacket \
+        /usr/local/bin/wifi-dumb \
+        /usr/local/bin/wifi-dumb-tpacket \
+        /usr/local/bin/iw \
+        /usr/local/bin/mlanutl \
+        /usr/local/bin/mlan2040coex \
+        /usr/local/bin/mlanconfig \
+        /usr/local/bin/mlanevent \
+        /usr/local/bin/wifi \
+        /usr/local/bin/logctl \
+        /usr/local/bin/mlanutl_silent \
+        /usr/local/bin/roaming \
+        /usr/local/bin/usb_print \
+        /usr/local/bin/mfg \
+        /usr/local/mfg/mfgbridge \
+        /var/log/journal
+}
 
 case "$1" in
 purge)
-  echo "purge purge"
-  #rm -r /opt/pim
-  #rm -r /root/SOMBASE_TEST
-  #rm -r /root/shared_v
-  #cat /dev/null > /etc/rc.local
-  #systemctl disable cam-operate
-  #systemctl set-default graphical.target
-  ;;
+    echo "postrm purge"
+    logger -p local0.info "[$KEY][$tag:$LINENO] Purging wlan-proc package"
+
+    cleanup_symlinks
+
+    # Clean up directories (only if empty)
+    rmdir /usr/local/wlan-bridge/dumb 2>/dev/null || true
+    rmdir /usr/local/wlan-bridge/scripts 2>/dev/null || true
+    rmdir /usr/local/wlan-bridge/docs 2>/dev/null || true
+    rmdir /usr/local/wlan-bridge 2>/dev/null || true
+
+    # Reload systemd daemon
+    systemctl daemon-reload 2>/dev/null || true
+
+    echo "[INFO] Purge completed"
+    ;;
 
 upgrade)
-  echo "purge upgrade ($model)"
-  ;;
+    echo "postrm upgrade"
+    ;;
 
 remove)
-  echo "postrm remove ($model)"
-  ;;
+    echo "postrm remove"
+    logger -p local0.info "[$KEY][$tag:$LINENO] Remove completed for wlan-proc package"
+
+    cleanup_symlinks
+
+    systemctl daemon-reload 2>/dev/null || true
+    ;;
+
+failed-upgrade|abort-install|abort-upgrade|disappear)
+    echo "postrm $1"
+    ;;
 
 *)
-  echo "Unrecognized postrm argument '$1'"
-
+    echo "Unrecognized postrm argument '$1'"
+    ;;
 esac
+
+exit 0

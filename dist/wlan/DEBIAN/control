@@ -1,15 +1,15 @@
 Package: wlan-proc
-Version: 0.1.3
+Version: 0.1.4
 Section: test
 Priority: optional
-Architecture: arm64 
-Depends: 
+Architecture: arm64
+Depends:
 Conflicts: wlan-package
 Replaces: wlan-package
-Recommends: 
-Maintainer: jhw <hwjo@cantops.biz> 
-Homepage: 
-Description: WLAN Application 
+Recommends:
+Maintainer: jhw <hwjo@cantops.biz>
+Homepage:
+Description: WLAN Application
 0.0.0 : Test version
 0.0.1 : demo version
 0.0.2 : arp update
@@ -24,3 +24,4 @@ Description: WLAN Application
 0.1.1 : snmp, capture, roam flag, file manager
 0.1.2 : dumb
 0.1.3 : wlan-bridge submodule
+0.1.4 : fix symlink paths, add config.json, improve prerm/postrm, security fixes
