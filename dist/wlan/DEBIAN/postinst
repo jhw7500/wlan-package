@@ -65,7 +65,6 @@ configure)
   echo "[INFO] Binary and configuration verification passed"
 
   cp /opt/wlan/config/logrotate.d/logrotate.rsyslog /etc/logrotate.d/
-  cp /opt/wlan/config/rc.local /etc/
   cp /opt/wlan/config/rsyslog.conf /etc/
   cp /opt/wlan/config/smb.conf /etc/samba/
   #cp /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/
@@ -85,7 +84,7 @@ configure)
   # Only set time if system clock is before 2026-01-01 (prevents future date issues)
   SAFE_TIME="2026-01-01 00:00:00"
   CURRENT_TS=$(date +%s)
-  SAFE_TS=$(date -d "$SAFE_TIME" +%s 2>/dev/null || echo 1735689600)
+  SAFE_TS=$(date -d "$SAFE_TIME" +%s 2>/dev/null || echo 1767225600)
   echo "date : $(date '+%Y-%m-%d %H:%M:%S')"
 
   if [ "$CURRENT_TS" -lt "$SAFE_TS" ]; then
