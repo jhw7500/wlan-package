@@ -1,20 +1,85 @@
 #!/bin/bash
 
 ############################################################
-# prerm script main
+# prerm script - executed before package removal
 ############################################################
-# Include debconf library.
+
+tag=$(basename "$0")
+KEY=PKG
+
+stop_service_if_active() {
+    local svc="$1"
+    if systemctl is-active --quiet "$svc" 2>/dev/null; then
+        echo "[INFO] Stopping $svc..."
+        systemctl stop "$svc" 2>/dev/null || true
+    fi
+}
+
+disable_service_if_enabled() {
+    local svc="$1"
+    if systemctl is-enabled --quiet "$svc" 2>/dev/null; then
+        echo "[INFO] Disabling $svc..."
+        systemctl disable "$svc" 2>/dev/null || true
+    fi
+}
 
 case "$1" in
 upgrade)
-  echo "prerm upgrade"
-  ;;
+    echo "prerm upgrade"
+    # Stop services before upgrade
+    stop_service_if_active wifi_bridge@mlan0
+    stop_service_if_active wifi_bridge@mlan1
+    ;;
 
-remove)
-  echo "prerm remove"
-  ;;
+remove|deconfigure)
+    echo "prerm remove"
+    logger -p local0.info "[$KEY][$tag:$LINENO] Removing wlan-proc package"
+
+    # Stop all wlan services
+    echo "[INFO] Stopping WLAN services..."
+    stop_service_if_active wifi_bridge@mlan0
+    stop_service_if_active wifi_bridge@mlan1
+    stop_service_if_active wifi_checker@mlan0
+    stop_service_if_active wifi_checker@mlan1
+    stop_service_if_active wifi_logger@mlan0
+    stop_service_if_active wifi_logger@mlan1
+    stop_service_if_active wifi_logger@eth0
+    stop_service_if_active wifi_logger
+    stop_service_if_active wifi_led@mlan0
+    stop_service_if_active wifi_led@eth0
+    stop_service_if_active wifi_roam@mlan0
+    stop_service_if_active wifi_bgscan@mlan0
+    stop_service_if_active wifi_arping@mlan0
+    stop_service_if_active wifi_init
+    stop_service_if_active wpa_supplicant@mlan0
+    stop_service_if_active wpa_supplicant@mlan1
+    stop_service_if_active switchd
+
+    # Disable services
+    echo "[INFO] Disabling WLAN services..."
+    disable_service_if_enabled wifi_bridge@mlan0
+    disable_service_if_enabled wifi_bridge@mlan1
+    disable_service_if_enabled wifi_checker@mlan0
+    disable_service_if_enabled wifi_checker@mlan1
+    disable_service_if_enabled wifi_logger@mlan0
+    disable_service_if_enabled wifi_logger@mlan1
+    disable_service_if_enabled wifi_logger@eth0
+    disable_service_if_enabled wifi_logger
+    disable_service_if_enabled wifi_led@mlan0
+    disable_service_if_enabled wifi_led@eth0
+    disable_service_if_enabled wifi_roam@mlan0
+    disable_service_if_enabled wifi_bgscan@mlan0
+    disable_service_if_enabled wifi_arping@mlan0
+    disable_service_if_enabled wifi_init
+    disable_service_if_enabled switchd
+
+    # Reload systemd daemon
+    systemctl daemon-reload 2>/dev/null || true
+    ;;
 
 *)
-  echo "Unrecognized prerm argument '$1'"
-
+    echo "Unrecognized prerm argument '$1'"
+    ;;
 esac
+
+exit 0

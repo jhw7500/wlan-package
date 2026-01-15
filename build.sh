@@ -2,13 +2,72 @@
 
 BASEDIR=${PWD}
 echo "Script location: ${BASEDIR}"
+
+# Build wlan-bridge binaries
+echo "Building wlan-bridge binaries..."
+if [ ! -d "${BASEDIR}/wlan-bridge/dumb" ]; then
+    echo "Error: wlan-bridge/dumb directory not found. Please initialize submodule with: git submodule update --init --recursive"
+    exit 1
+fi
+cd ${BASEDIR}/wlan-bridge/dumb
+make clean
+make
+if [ $? -ne 0 ]; then
+    echo "Error: Failed to build wlan-bridge binaries"
+    exit 1
+fi
+cd ${BASEDIR}
+echo "Build completed successfully"
+
+# Create wlan-bridge directory structure
 mkdir -p ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb
-cp ${BASEDIR}/wlan-bridge/dumb/dumb ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/
-cp ${BASEDIR}/wlan-bridge/dumb/dumb-tpacket ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/
-cp ${BASEDIR}/wlan-bridge/dumb/README.md ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/
-cp ${BASEDIR}/wlan-bridge/dumb/wifi_bridge@.service ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/
-cp -r ${BASEDIR}/wlan-bridge/scripts ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/
-cp -r ${BASEDIR}/wlan-bridge/docs ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/
+mkdir -p ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/scripts
+mkdir -p ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/docs
+
+# Verify binaries exist before copying
+if [ ! -f "${BASEDIR}/wlan-bridge/dumb/bin/dumb" ]; then
+    echo "Error: dumb binary not found at ${BASEDIR}/wlan-bridge/dumb/bin/dumb"
+    exit 1
+fi
+if [ ! -f "${BASEDIR}/wlan-bridge/dumb/bin/dumb-tpacket" ]; then
+    echo "Error: dumb-tpacket binary not found at ${BASEDIR}/wlan-bridge/dumb/bin/dumb-tpacket"
+    exit 1
+fi
+
+# Copy wlan-bridge binaries
+echo "Copying binaries..."
+cp ${BASEDIR}/wlan-bridge/dumb/bin/dumb ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/ || { echo "Error: Failed to copy dumb binary"; exit 1; }
+cp ${BASEDIR}/wlan-bridge/dumb/bin/dumb-tpacket ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/ || { echo "Error: Failed to copy dumb-tpacket binary"; exit 1; }
+cp ${BASEDIR}/wlan-bridge/dumb/README.md ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/ || { echo "Error: Failed to copy README.md"; exit 1; }
+cp ${BASEDIR}/wlan-bridge/dumb/wifi_bridge@.service ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/ || { echo "Error: Failed to copy wifi_bridge@.service"; exit 1; }
+
+# Copy wlan-bridge scripts and docs
+cp -a ${BASEDIR}/wlan-bridge/scripts/. ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/scripts/ || { echo "Error: Failed to copy scripts"; exit 1; }
+cp -a ${BASEDIR}/wlan-bridge/docs/. ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/docs/ || { echo "Error: Failed to copy docs"; exit 1; }
+
+# Also update usr/local/bin with latest binaries
+cp ${BASEDIR}/wlan-bridge/dumb/bin/dumb ${BASEDIR}/dist/wlan/usr/local/bin/ || { echo "Error: Failed to copy dumb to /usr/local/bin"; exit 1; }
+cp ${BASEDIR}/wlan-bridge/dumb/bin/dumb-tpacket ${BASEDIR}/dist/wlan/usr/local/bin/ || { echo "Error: Failed to copy dumb-tpacket to /usr/local/bin"; exit 1; }
+
+# Create config directory and default config.json
+mkdir -p ${BASEDIR}/dist/wlan/usr/local/etc
+if [ ! -f ${BASEDIR}/dist/wlan/usr/local/etc/config.json ]; then
+    cat > ${BASEDIR}/dist/wlan/usr/local/etc/config.json << 'CONFIGEOF'
+{
+    "mlan0": {
+        "Frequency": "5GHz",
+        "enabled": true
+    },
+    "mlan1": {
+        "Frequency": "2.4GHz",
+        "enabled": false
+    },
+    "eth0": {
+        "enabled": true
+    }
+}
+CONFIGEOF
+fi
 mkdir -p ${BASEDIR}/release
 
 cd ${BASEDIR}/dist
