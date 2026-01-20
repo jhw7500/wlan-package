@@ -34,6 +34,10 @@ workflows:
     enabled: true
     description: "Automatic PR review with Gemini"
 
+  gemini-scheduled-triage:
+    enabled: false
+    description: "Scheduled issue triage (disabled to avoid hourly runs)"
+
   # Shared Claude workflows
   claude:
     enabled: true
