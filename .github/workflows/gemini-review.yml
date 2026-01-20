@@ -107,4 +107,20 @@ jobs:
                 ]
               }
             }
-          prompt: '/gemini-review'
+          prompt: |-
+            Start your response with:
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+            Reviewer: Gemini Dispatch (Broad Review)
+
+            You are performing a deep, professional review that goes BEYOND the current diff.
+            Focus on missing improvements, latent risks, and hardening opportunities in areas touched by this PR.
+            Do NOT repeat change-specific findings that a diff-focused review would cover.
+            Exclude CI/CD commentary.
+
+            Provide:
+            1. Broader risks or gaps not addressed by this PR
+            2. Improvements that should be scheduled soon (not necessarily in this PR)
+            3. Any architectural or operational concerns related to the affected areas
+
+            Keep the response concise and structured with clear headings.
