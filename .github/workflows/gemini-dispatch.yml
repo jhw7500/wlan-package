@@ -134,6 +134,9 @@ jobs:
       issues: 'write'
       pull-requests: 'write'
     with:
+      pr_number: '${{ github.event.pull_request.number || github.event.issue.number }}'
+      issue_title: '${{ github.event.pull_request.title || github.event.issue.title }}'
+      issue_body: '${{ github.event.pull_request.body || github.event.issue.body }}'
       additional_context: '${{ needs.dispatch.outputs.additional_context }}'
     secrets: 'inherit'
 
@@ -148,6 +151,9 @@ jobs:
       issues: 'write'
       pull-requests: 'write'
     with:
+      issue_number: '${{ github.event.issue.number }}'
+      issue_title: '${{ github.event.issue.title }}'
+      issue_body: '${{ github.event.issue.body }}'
       additional_context: '${{ needs.dispatch.outputs.additional_context }}'
     secrets: 'inherit'
 
@@ -162,6 +168,11 @@ jobs:
       issues: 'write'
       pull-requests: 'write'
     with:
+      item_number: '${{ github.event.pull_request.number || github.event.issue.number }}'
+      item_title: '${{ github.event.pull_request.title || github.event.issue.title }}'
+      item_body: '${{ github.event.pull_request.body || github.event.issue.body }}'
+      event_name: '${{ github.event_name }}'
+      is_pull_request: '${{ github.event.pull_request != null }}'
       additional_context: '${{ needs.dispatch.outputs.additional_context }}'
     secrets: 'inherit'
 
