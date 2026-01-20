@@ -67,11 +67,6 @@ configure)
 }
 CONFIGEOF
   fi
-  if [ ! -f /usr/local/etc/config.json ]; then
-    echo "ERROR: /usr/local/etc/config.json not found" >&2
-    logger -p local0.err "[$KEY][$tag:$LINENO] Critical: config.json not found at /usr/local/etc/config.json"
-    exit 1
-  fi
   # Validate config.json if jq is available
   if command -v jq >/dev/null 2>&1; then
     if ! jq empty /usr/local/etc/config.json 2>/dev/null; then
@@ -99,8 +94,6 @@ CONFIGEOF
 
   if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload 2>/dev/null || true
-    systemctl enable cpufreq-min.service 2>/dev/null || true
-    systemctl start cpufreq-min.service 2>/dev/null || true
   fi
 
   #/usr/local/scripts/auto_fs_sizeup.sh 2 2
@@ -324,7 +317,8 @@ makeDirectory() {
 
   #/usr/local/scripts/add_line.sh "00 *      * * *    root        logrotate /etc/logrotate.d/logrotate.rsyslog" /etc/crontab
   #/usr/local/scripts/comment_line.sh "tmpfs                /var/volatile" /etc/fstab
-  /usr/local/scripts/change_line.sh "echo 1 > /proc/sys/kernel/printk" "/proc/sys/kernel/printk" /etc/rc.local
+  #/usr/local/scripts/change_line.sh "echo 1 > /proc/sys/kernel/printk" "/proc/sys/kernel/printk" /etc/rc.local
+  /usr/local/scripts/change_line.sh "kernel.printk = 1 4 1 7" "kernel.printk = " /etc/sysctl.conf
   /usr/local/scripts/change_line.sh "#tmpfs                /var/volatile        tmpfs      defaults              0  0" "tmpfs                /var/volatile" /etc/fstab
   /usr/local/scripts/change_line.sh "WatchdogDevice=/dev/watchdog" "WatchdogDevice=" /etc/systemd/system.conf
   /usr/local/scripts/change_line.sh "DefaultTimeoutStartSec=30s" "DefaultTimeoutStartSec=" /etc/systemd/system.conf
