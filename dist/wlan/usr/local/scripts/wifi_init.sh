@@ -213,27 +213,33 @@ done
 END
 
 FREQ=$(jq -r '.mlan0.Frequency' "$JSON_FILE")
-if [ "$FREQ" = "5GHz" ]; then
+freq_lc=$(printf '%s' "$FREQ" | tr '[:upper:]' '[:lower:]')
+if [ "$freq_lc" = "5ghz" ]; then
     logger -p local0.info "[$tag:$LINENO] [mlan0] freq 5GHz : mlanutl mlan0 bandcfg 0x254"
     mlanutl mlan0 bandcfg 0x254
-elif [ "$FREQ" = "2.4GHz" ]; then
+elif [ "$freq_lc" = "2.4ghz" ]; then
     logger -p local0.info "[$tag:$LINENO] [mlan0] freq 2.4GHz : mlanutl mlan0 bandcfg 0x10b"
     mlanutl mlan0 bandcfg 0x10b
-elif [ "$FREQ" = "auto" ]; then
+elif [ "$freq_lc" = "auto" ]; then
     logger -p local0.info "[$tag:$LINENO] [mlan0] freq Auto : mlanutl mlan0 bandcfg 0x35f"
     mlanutl mlan0 bandcfg 0x35f
+else
+    logger -p local0.err "[$tag:$LINENO] [mlan0] freq not available : $FREQ"
 fi
 
 FREQ=$(jq -r '.mlan1.Frequency' "$JSON_FILE")
-if [ "$FREQ" = "5GHz" ]; then
+freq_lc=$(printf '%s' "$FREQ" | tr '[:upper:]' '[:lower:]')
+if [ "$freq_lc" = "5ghz" ]; then
     logger -p local0.info "[$tag:$LINENO] [mlan1] freq 5GHz : mlanutl mlan1 bandcfg 0x54"
     mlanutl mlan1 bandcfg 0x54
-elif [ "$FREQ" = "2.4GHz" ]; then
+elif [ "$freq_lc" = "2.4ghz" ]; then
     logger -p local0.info "[$tag:$LINENO] [mlan1] freq 2.4GHz : mlanutl mlan1 bandcfg 0x0b"
     mlanutl mlan1 bandcfg 0x0b
-elif [ "$FREQ" = "auto" ]; then
+elif [ "$freq_lc" = "auto" ]; then
     logger -p local0.info "[$tag:$LINENO] [mlan1] freq Auto : mlanutl mlan1 bandcfg 0x5f"
     mlanutl mlan1 bandcfg 0x5f
+else
+    logger -p local0.err "[$tag:$LINENO] [mlan1] freq not available : $FREQ"
 fi
 
 #ip link add nlmon0 type nlmon
