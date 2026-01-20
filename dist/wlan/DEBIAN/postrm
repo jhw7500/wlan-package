@@ -43,6 +43,7 @@ purge)
     rmdir /usr/local/wlan-bridge/docs 2>/dev/null || true
     rmdir /usr/local/wlan-bridge 2>/dev/null || true
 
+    systemctl disable --now cpufreq-min.service 2>/dev/null || true
     # Reload systemd daemon
     systemctl daemon-reload 2>/dev/null || true
 
@@ -59,6 +60,7 @@ remove)
 
     cleanup_symlinks
 
+    systemctl disable --now cpufreq-min.service 2>/dev/null || true
     systemctl daemon-reload 2>/dev/null || true
     ;;
 
