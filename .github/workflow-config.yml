@@ -1,0 +1,44 @@
+# GitHub Actions Workflow Configuration
+#
+# This file controls enable/disable toggles for shared workflows.
+# Workflows default to enabled if this file is missing.
+
+workflows:
+  # Repo-specific
+  shellcheck:
+    enabled: true
+    description: "Shell script static analysis"
+
+  build-test:
+    enabled: true
+    description: "Build and test the package"
+
+  # Shared Gemini workflows
+  gemini-dispatch:
+    enabled: true
+    description: "Central dispatcher for Gemini commands"
+
+  gemini-invoke:
+    enabled: true
+    description: "General Gemini CLI invocation"
+
+  gemini-review:
+    enabled: true
+    description: "PR code review with Gemini"
+
+  gemini-triage:
+    enabled: true
+    description: "Issue triage and labeling"
+
+  gemini-auto-review:
+    enabled: true
+    description: "Automatic PR review with Gemini"
+
+  # Shared Claude workflows
+  claude:
+    enabled: true
+    description: "Claude AI integration"
+
+  claude-code-review:
+    enabled: true
+    description: "Claude automatic PR review"
