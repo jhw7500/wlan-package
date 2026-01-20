@@ -27,6 +27,7 @@ jobs:
     uses: 'jhw7500/automation/.github/workflows/gemini-dispatch.yml@v1.7'
     permissions:
       contents: 'read'
+      id-token: 'write'
       issues: 'write'
       pull-requests: 'write'
     secrets: inherit
