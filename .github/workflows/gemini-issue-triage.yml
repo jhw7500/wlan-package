@@ -17,6 +17,15 @@ jobs:
       issue_title: ${{ steps.issue.outputs.title }}
       issue_body: ${{ steps.issue.outputs.body }}
     steps:
+      - name: Validate issue_number
+        env:
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+        run: |
+          if ! [[ "$ISSUE_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "issue_number must be a positive integer"
+            exit 1
+          fi
+
       - name: Fetch issue
         id: issue
         env:
