@@ -54,10 +54,7 @@ cd "${BASEDIR}"
 echo "Build completed successfully"
 
 # Create wlan-bridge directory structure
-mkdir -p ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb
-mkdir -p ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/debug
-mkdir -p ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/scripts
-mkdir -p ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/docs
+mkdir -p "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/"{dumb,debug,scripts,docs}
 
 # Verify binaries exist before copying
 if [ ! -f "${BASEDIR}/wlan-bridge/dumb/release/dumb" ]; then
@@ -71,34 +68,31 @@ fi
 
 # Copy wlan-bridge binaries
 echo "Copying binaries..."
-cp ${BASEDIR}/wlan-bridge/dumb/release/dumb ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/ || { echo "Error: Failed to copy dumb binary"; exit 1; }
-cp ${BASEDIR}/wlan-bridge/dumb/release/dumb-tpacket ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/ || { echo "Error: Failed to copy dumb-tpacket binary"; exit 1; }
+cp "${BASEDIR}/wlan-bridge/dumb/release/dumb" "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/" || { echo "Error: Failed to copy dumb binary"; exit 1; }
+cp "${BASEDIR}/wlan-bridge/dumb/release/dumb-tpacket" "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/" || { echo "Error: Failed to copy dumb-tpacket binary"; exit 1; }
 
 # Copy debug binaries if present (optional)
-if [ -f "${BASEDIR}/wlan-bridge/dumb/debug/dumb" ]; then
-    cp ${BASEDIR}/wlan-bridge/dumb/debug/dumb ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/debug/ || echo "Warning: Failed to copy debug dumb binary"
-else
-    echo "Warning: debug dumb binary not found, skipping (${BASEDIR}/wlan-bridge/dumb/debug/dumb)"
-fi
+for bin in dumb dumb-tpacket; do
+    src_path="${BASEDIR}/wlan-bridge/dumb/debug/${bin}"
+    if [ -f "${src_path}" ]; then
+        cp "${src_path}" "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/debug/" || echo "Warning: Failed to copy debug ${bin} binary"
+    else
+        echo "Warning: debug ${bin} binary not found, skipping (${src_path})"
+    fi
+done
 
-if [ -f "${BASEDIR}/wlan-bridge/dumb/debug/dumb-tpacket" ]; then
-    cp ${BASEDIR}/wlan-bridge/dumb/debug/dumb-tpacket ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/debug/ || echo "Warning: Failed to copy debug dumb-tpacket binary"
-else
-    echo "Warning: debug dumb-tpacket binary not found, skipping (${BASEDIR}/wlan-bridge/dumb/debug/dumb-tpacket)"
-fi
-
-cp ${BASEDIR}/wlan-bridge/dumb/README.md ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/ || { echo "Error: Failed to copy README.md"; exit 1; }
-cp ${BASEDIR}/wlan-bridge/dumb/wifi_bridge@.service ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/ || { echo "Error: Failed to copy wifi_bridge@.service"; exit 1; }
+cp "${BASEDIR}/wlan-bridge/dumb/README.md" "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/" || { echo "Error: Failed to copy README.md"; exit 1; }
+cp "${BASEDIR}/wlan-bridge/dumb/wifi_bridge@.service" "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/" || { echo "Error: Failed to copy wifi_bridge@.service"; exit 1; }
 
 # Copy wlan-bridge scripts and docs
-cp -a ${BASEDIR}/wlan-bridge/scripts/. ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/scripts/ || { echo "Error: Failed to copy scripts"; exit 1; }
-cp -a ${BASEDIR}/wlan-bridge/docs/. ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/docs/ || { echo "Error: Failed to copy docs"; exit 1; }
+cp -a "${BASEDIR}/wlan-bridge/scripts/." "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/scripts/" || { echo "Error: Failed to copy scripts"; exit 1; }
+cp -a "${BASEDIR}/wlan-bridge/docs/." "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/docs/" || { echo "Error: Failed to copy docs"; exit 1; }
 
 # Create config directory and default config.json
 # This config is used by wifi_init.sh to configure network interfaces
-mkdir -p ${BASEDIR}/dist/wlan/usr/local/etc
-if [ ! -f ${BASEDIR}/dist/wlan/usr/local/etc/config.json ]; then
-    cat > ${BASEDIR}/dist/wlan/usr/local/etc/config.json << 'CONFIGEOF'
+mkdir -p "${BASEDIR}/dist/wlan/usr/local/etc"
+if [ ! -f "${BASEDIR}/dist/wlan/usr/local/etc/config.json" ]; then
+    cat > "${BASEDIR}/dist/wlan/usr/local/etc/config.json" << 'CONFIGEOF'
 {
     "mlan0": {
         "Frequency": "5GHz",
@@ -117,7 +111,7 @@ fi
 
 # Always validate config.json (whether newly created or existing)
 if command -v jq >/dev/null 2>&1; then
-    if ! jq empty ${BASEDIR}/dist/wlan/usr/local/etc/config.json 2>/dev/null; then
+    if ! jq empty "${BASEDIR}/dist/wlan/usr/local/etc/config.json" 2>/dev/null; then
         echo "Error: config.json is invalid JSON"
         exit 1
     fi
@@ -125,21 +119,29 @@ if command -v jq >/dev/null 2>&1; then
 else
     echo "Warning: jq not found, skipping JSON validation"
 fi
-mkdir -p ${BASEDIR}/release
+mkdir -p "${BASEDIR}/release"
 
-cd ${BASEDIR}/dist
+cd "${BASEDIR}/dist" || exit 1
 #rm -rf ${BASEDIR}/release
 #cp -R ${BASEDIR}/dist ${BASEDIR}/release
 
 #cd ${BASEDIR}/release
-version=$(cat ../dist/wlan/DEBIAN/control| grep Version |grep -v ^$#| cut -d':' -f2 | cut -d',' -f1 | tr -d '"' | tr -d '\r\n' | tr -d ' ')
-package=$(cat ../dist/wlan/DEBIAN/control| grep Package |grep -v ^$#| cut -d':' -f2 | cut -d',' -f1 | tr -d '"' | tr -d '\r\n' | tr -d ' ')
-echo version:$version
-dpkg -b wlan ${BASEDIR}/release/wlan.deb
-cp ${BASEDIR}/release/wlan.deb ${BASEDIR}/release/$package-$version.deb
-echo "tar --exclude="release" -cf ${BASEDIR}/release/wlan-package.tar -C ${BASEDIR} ."
-tar --exclude="release" -cf ${BASEDIR}/release/wlan-package.tar -C ${BASEDIR} .
-echo "create ${BASEDIR}/release/wlan-package.tar"
+CONTROL_FILE="${BASEDIR}/dist/wlan/DEBIAN/control"
+version=$(awk -F': *' '$1 == "Version" {print $2; exit}' "${CONTROL_FILE}" | tr -d '"\r\n ')
+package=$(awk -F': *' '$1 == "Package" {print $2; exit}' "${CONTROL_FILE}" | tr -d '"\r\n ')
+
+if [ -z "${version}" ] || [ -z "${package}" ]; then
+    echo "Error: Failed to parse Package/Version from ${CONTROL_FILE}" >&2
+    exit 1
+fi
+
+echo "version:${version}"
+dpkg -b wlan "${BASEDIR}/release/wlan.deb"
+cp "${BASEDIR}/release/wlan.deb" "${BASEDIR}/release/${package}-${version}.deb"
+
+echo "Creating package tarball: ${BASEDIR}/release/wlan-package.tar"
+tar --exclude="release" -cf "${BASEDIR}/release/wlan-package.tar" -C "${BASEDIR}" .
+echo "Created: ${BASEDIR}/release/wlan-package.tar"
 #tar -cvf ${BASEDIR}/release/wlan-package.tar ${BASEDIR}/*
 
 :<<'END'
