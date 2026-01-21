@@ -46,9 +46,32 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: false
+
+      - name: Init submodules (optional)
+        id: submodules
+        env:
+          SUBMODULE_TOKEN: ${{ secrets.SUBMODULE_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SUBMODULE_TOKEN:-}" ]; then
+            echo "submodules=false" >> "$GITHUB_OUTPUT"
+            echo "## Build Package" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Skipped: missing SUBMODULE_TOKEN (required to fetch private submodule wlan-bridge)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "::add-mask::${SUBMODULE_TOKEN}"
+          git config --global url."https://x-access-token:${SUBMODULE_TOKEN}@github.com/".insteadOf "https://github.com/"
+          git config --global url."https://x-access-token:${SUBMODULE_TOKEN}@github.com/".insteadOf "git@github.com:"
+
+          git submodule update --init --recursive
+          echo "submodules=true" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
+        if: steps.submodules.outputs.submodules == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -58,6 +81,7 @@ jobs:
             dpkg-dev
 
       - name: Verify wlan-bridge submodule
+        if: steps.submodules.outputs.submodules == 'true'
         run: |
           if [ ! -d "wlan-bridge/dumb" ]; then
             echo "Error: wlan-bridge submodule not properly initialized"
@@ -65,11 +89,13 @@ jobs:
           fi
 
       - name: Run build script
+        if: steps.submodules.outputs.submodules == 'true'
         run: |
           chmod +x build.sh
           ./build.sh
 
       - name: Verify build artifacts
+        if: steps.submodules.outputs.submodules == 'true'
         run: |
           if [ ! -f release/wlan.deb ]; then
             echo "Error: wlan.deb not found in release/"
@@ -83,6 +109,7 @@ jobs:
           dpkg-deb -c release/wlan.deb | grep "usr/local/etc/config.json" || exit 1
 
       - name: Validate config.json
+        if: steps.submodules.outputs.submodules == 'true'
         run: |
           dpkg-deb -x release/wlan.deb /tmp/wlan-extract
           if [ -f /tmp/wlan-extract/usr/local/etc/config.json ]; then
@@ -94,6 +121,7 @@ jobs:
           fi
 
       - name: Verify DEBIAN scripts
+        if: steps.submodules.outputs.submodules == 'true'
         run: |
           dpkg-deb -e release/wlan.deb /tmp/wlan-debian
           if [ ! -f /tmp/wlan-debian/postinst ]; then
@@ -110,6 +138,7 @@ jobs:
           fi
 
       - name: Upload build artifacts
+        if: steps.submodules.outputs.submodules == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: wlan-package
