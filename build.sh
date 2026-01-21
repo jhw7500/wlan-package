@@ -9,35 +9,84 @@ if [ ! -d "${BASEDIR}/wlan-bridge/dumb" ]; then
     echo "Error: wlan-bridge/dumb directory not found. Please initialize submodule with: git submodule update --init --recursive"
     exit 1
 fi
-cd ${BASEDIR}/wlan-bridge/dumb
+
+DUMB_DIR="${BASEDIR}/wlan-bridge/dumb"
+MAKE_FOR_IMX8="${DUMB_DIR}/make-for-imx8"
+
+cd "${DUMB_DIR}"
 make clean || { echo "Warning: make clean failed"; }
-make
-if [ $? -ne 0 ]; then
-    echo "Error: Failed to build wlan-bridge binaries"
-    exit 1
+
+HOST_ARCH=$(uname -m)
+echo "Host arch: ${HOST_ARCH}"
+
+build_dumb_release() {
+    if make -n release >/dev/null 2>&1; then
+        make release
+    else
+        make
+    fi
+}
+
+build_dumb_debug_optional() {
+    if make -n debug >/dev/null 2>&1; then
+        make debug || echo "Warning: Failed to build debug binaries"
+    fi
+}
+
+if [ "${HOST_ARCH}" = "aarch64" ] || [ "${HOST_ARCH}" = "arm64" ]; then
+    echo "Native build (target arch detected)"
+    build_dumb_release || { echo "Error: Failed to build wlan-bridge binaries"; exit 1; }
+    build_dumb_debug_optional
+else
+    echo "Cross build (host != aarch64); using make-for-imx8"
+    if [ ! -x "${MAKE_FOR_IMX8}" ]; then
+        echo "Error: make-for-imx8 not found or not executable at ${MAKE_FOR_IMX8}" >&2
+        echo "Hint: update submodule (git submodule update --init --recursive)" >&2
+        echo "Hint: or build natively on target (aarch64)" >&2
+        exit 1
+    fi
+
+    "${MAKE_FOR_IMX8}" release || { echo "Error: Failed to cross-build wlan-bridge binaries"; exit 1; }
+    "${MAKE_FOR_IMX8}" debug || echo "Warning: Failed to cross-build debug binaries"
 fi
-cd ${BASEDIR}
+
+cd "${BASEDIR}"
 echo "Build completed successfully"
 
 # Create wlan-bridge directory structure
 mkdir -p ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb
+mkdir -p ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/debug
 mkdir -p ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/scripts
 mkdir -p ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/docs
 
 # Verify binaries exist before copying
-if [ ! -f "${BASEDIR}/wlan-bridge/dumb/bin/dumb" ]; then
-    echo "Error: dumb binary not found at ${BASEDIR}/wlan-bridge/dumb/bin/dumb"
+if [ ! -f "${BASEDIR}/wlan-bridge/dumb/release/dumb" ]; then
+    echo "Error: dumb binary not found at ${BASEDIR}/wlan-bridge/dumb/release/dumb"
     exit 1
 fi
-if [ ! -f "${BASEDIR}/wlan-bridge/dumb/bin/dumb-tpacket" ]; then
-    echo "Error: dumb-tpacket binary not found at ${BASEDIR}/wlan-bridge/dumb/bin/dumb-tpacket"
+if [ ! -f "${BASEDIR}/wlan-bridge/dumb/release/dumb-tpacket" ]; then
+    echo "Error: dumb-tpacket binary not found at ${BASEDIR}/wlan-bridge/dumb/release/dumb-tpacket"
     exit 1
 fi
 
 # Copy wlan-bridge binaries
 echo "Copying binaries..."
-cp ${BASEDIR}/wlan-bridge/dumb/bin/dumb ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/ || { echo "Error: Failed to copy dumb binary"; exit 1; }
-cp ${BASEDIR}/wlan-bridge/dumb/bin/dumb-tpacket ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/ || { echo "Error: Failed to copy dumb-tpacket binary"; exit 1; }
+cp ${BASEDIR}/wlan-bridge/dumb/release/dumb ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/ || { echo "Error: Failed to copy dumb binary"; exit 1; }
+cp ${BASEDIR}/wlan-bridge/dumb/release/dumb-tpacket ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/ || { echo "Error: Failed to copy dumb-tpacket binary"; exit 1; }
+
+# Copy debug binaries if present (optional)
+if [ -f "${BASEDIR}/wlan-bridge/dumb/debug/dumb" ]; then
+    cp ${BASEDIR}/wlan-bridge/dumb/debug/dumb ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/debug/ || echo "Warning: Failed to copy debug dumb binary"
+else
+    echo "Warning: debug dumb binary not found, skipping (${BASEDIR}/wlan-bridge/dumb/debug/dumb)"
+fi
+
+if [ -f "${BASEDIR}/wlan-bridge/dumb/debug/dumb-tpacket" ]; then
+    cp ${BASEDIR}/wlan-bridge/dumb/debug/dumb-tpacket ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/debug/ || echo "Warning: Failed to copy debug dumb-tpacket binary"
+else
+    echo "Warning: debug dumb-tpacket binary not found, skipping (${BASEDIR}/wlan-bridge/dumb/debug/dumb-tpacket)"
+fi
+
 cp ${BASEDIR}/wlan-bridge/dumb/README.md ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/ || { echo "Error: Failed to copy README.md"; exit 1; }
 cp ${BASEDIR}/wlan-bridge/dumb/wifi_bridge@.service ${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb/ || { echo "Error: Failed to copy wifi_bridge@.service"; exit 1; }
 
@@ -88,7 +137,9 @@ package=$(cat ../dist/wlan/DEBIAN/control| grep Package |grep -v ^$#| cut -d':' 
 echo version:$version
 dpkg -b wlan ${BASEDIR}/release/wlan.deb
 cp ${BASEDIR}/release/wlan.deb ${BASEDIR}/release/$package-$version.deb
-tar --exclude="release" -cvf ${BASEDIR}/release/wlan-package.tar -C ${BASEDIR} .
+echo "tar --exclude="release" -cf ${BASEDIR}/release/wlan-package.tar -C ${BASEDIR} ."
+tar --exclude="release" -cf ${BASEDIR}/release/wlan-package.tar -C ${BASEDIR} .
+echo "create ${BASEDIR}/release/wlan-package.tar"
 #tar -cvf ${BASEDIR}/release/wlan-package.tar ${BASEDIR}/*
 
 :<<'END'
