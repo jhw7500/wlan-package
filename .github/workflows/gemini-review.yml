@@ -27,7 +27,7 @@ jobs:
       id-token: 'write'
       issues: 'write'
       pull-requests: 'write'
-    uses: '\1v1.10'
+    uses: 'jhw7500/automation/.github/workflows/gemini-review.yml@v1.10'
     with:
       pr_number: '${{ inputs.pr_number }}'
       issue_title: '${{ inputs.issue_title }}'
