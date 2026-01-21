@@ -50,7 +50,7 @@ git submodule update --init --recursive
 ### 3. Build the Package
 
 The build script will:
-- Compile wlan-bridge binaries (`dumb` and `dumb-tpacket`) into `wlan-bridge/dumb/bin/` directory
+- Compile wlan-bridge binaries (`dumb` and `dumb-tpacket`) into `wlan-bridge/dumb/release/` directory
 - Copy binaries, scripts, and configuration files to `dist/`
 - Create a Debian package in `release/`
 
@@ -59,13 +59,13 @@ The build script will:
 ```
 
 **Output:**
-- `wlan-bridge/dumb/bin/dumb` - libpcap-based bridge binary
-- `wlan-bridge/dumb/bin/dumb-tpacket` - TPACKET_V3 bridge binary
+- `wlan-bridge/dumb/release/dumb` - libpcap-based bridge binary
+- `wlan-bridge/dumb/release/dumb-tpacket` - TPACKET_V3 bridge binary
 - `release/wlan.deb` - Latest build
 - `release/wlan-proc-0.1.4.deb` - Versioned package
 - `release/wlan-package.tar` - Full package archive
 
-**Note:** The `wlan-bridge/dumb/bin/` directory is git-ignored in the submodule to keep the repository clean of compiled binaries.
+**Note:** The `wlan-bridge/dumb/release/` and `wlan-bridge/dumb/debug/` directories are build outputs and should not be committed.
 
 ### 4. (Optional) Update Scripts from System
 
@@ -84,7 +84,10 @@ wlan-package/
 ├── update.sh            # Update scripts from system
 ├── wlan-bridge/         # Git submodule
 │   └── dumb/
-│       ├── bin/         # Compiled binaries (git-ignored in submodule)
+│       ├── release/     # Compiled release binaries (stripped)
+│       │   ├── dumb
+│       │   └── dumb-tpacket
+│       ├── debug/       # Compiled debug binaries (unstripped)
 │       │   ├── dumb
 │       │   └── dumb-tpacket
 │       ├── dumb.c
@@ -161,6 +164,10 @@ High-performance userspace L2 bridge for wired/wireless interfaces. See `wlan-br
 - `/usr/local/bin/wifi-dumb` - Production bridge (libpcap)
 - `/usr/local/bin/wifi-dumb-tpacket` - Experimental high-performance version
 
+**Optional Debug Binaries:**
+- `/usr/local/wlan-bridge/debug/dumb` - Debug build (unstripped, may not be included)
+- `/usr/local/wlan-bridge/debug/dumb-tpacket` - Debug build (unstripped, may not be included)
+
 ### Systemd Services
 
 The package includes multiple systemd services:
@@ -192,7 +199,7 @@ Systemd network configuration files are located in `/etc/systemd/network/`:
 - Ensure `libpcap-dev` is installed
 - Check cross-compiler is in PATH
 - Verify submodule is initialized: `git submodule status`
-- Check if `wlan-bridge/dumb/bin/` directory was created successfully
+- Check if `wlan-bridge/dumb/release/` directory was created successfully
 
 **Error: "Source directory does not exist" (update.sh)**
 - The `update.sh` script requires existing system directories
