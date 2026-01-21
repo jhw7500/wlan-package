@@ -46,23 +46,23 @@ stop_services_if_running() {
 case "$1" in
 install)
   echo "preinst install ($model)"
-  stop_services_if_running \ 
-        wifi_logger
-  		wifi_logger@mlan0 \
-  		wifi_logger@mlan1 \
-  		wifi_logger@eth0 \
-  		wifi_checker@mlan0 \
-  		wifi_checker@mlan1 \
-  		wifi_capture@mlan0 \
-  		wifi_capture@mlan1 \
-  		wifi_roam@mlan0 \
-  		wifi_roam@mlan1 \
-  		wifi_bgscan@mlan0 \
-  		wifi_bgscan@mlan1 \
+  stop_services_if_running \
+        wifi_logger \
+        wifi_logger@mlan0 \
+        wifi_logger@mlan1 \
+        wifi_logger@eth0 \
+        wifi_checker@mlan0 \
+        wifi_checker@mlan1 \
+        wifi_capture@mlan0 \
+        wifi_capture@mlan1 \
+        wifi_roam@mlan0 \
+        wifi_roam@mlan1 \
+        wifi_bgscan@mlan0 \
+        wifi_bgscan@mlan1 \
         wifi_bridge@mlan0 \
-        wifi_bridge@mlan1
+        wifi_bridge@mlan1 \
         arping@mlan0 \
-        arping@mlan1 \
+        arping@mlan1
 
   #killall apt apt-get
   #rm /var/lib/apt/lists/lock
