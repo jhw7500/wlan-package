@@ -54,10 +54,7 @@ cd "${BASEDIR}"
 echo "Build completed successfully"
 
 # Create wlan-bridge directory structure
-mkdir -p "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/dumb"
-mkdir -p "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/debug"
-mkdir -p "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/scripts"
-mkdir -p "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/docs"
+mkdir -p "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/"{dumb,debug,scripts,docs}
 
 # Verify binaries exist before copying
 if [ ! -f "${BASEDIR}/wlan-bridge/dumb/release/dumb" ]; then
