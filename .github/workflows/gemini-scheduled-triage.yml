@@ -8,7 +8,7 @@ jobs:
     permissions:
       contents: 'read'
       id-token: 'write'
-      issues: 'read'
-      pull-requests: 'read'
+      issues: 'write'
+      pull-requests: 'write'
     uses: jhw7500/automation/.github/workflows/gemini-scheduled-triage.yml@v1.8
     secrets: inherit
