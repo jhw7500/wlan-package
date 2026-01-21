@@ -11,7 +11,7 @@ jobs:
       pull-requests: write
       issues: read
       id-token: write
-    uses: '\1v1.10'
+    uses: 'jhw7500/automation/.github/workflows/claude-code-review.yml@v1.10'
     with:
       pr_number: '${{ github.event.pull_request.number }}'
     secrets: 'inherit'
