@@ -21,6 +21,15 @@ jobs:
       pr_title: ${{ steps.pr.outputs.title }}
       pr_body: ${{ steps.pr.outputs.body }}
     steps:
+      - name: Validate pr_number
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "pr_number must be a positive integer"
+            exit 1
+          fi
+
       - name: Fetch PR
         id: pr
         env:
