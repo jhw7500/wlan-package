@@ -45,7 +45,7 @@ stop_services_if_running() {
 }
 case "$1" in
 install)
-  echo "preinst install ($model)"
+  echo "preinst install"
   stop_services_if_running \
         wifi_logger \
         wifi_logger@mlan0 \
@@ -79,7 +79,7 @@ install)
   ;;
 
 upgrade)
-  echo "preinst upgrade ($model)"
+  echo "preinst upgrade"
   stop_services_if_running \
                 wifi_logger@mlan0 \
                 wifi_logger@mlan1 \
