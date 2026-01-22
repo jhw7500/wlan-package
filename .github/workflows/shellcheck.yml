@@ -27,7 +27,7 @@ on:
 jobs:
   shellcheck:
     name: ShellCheck Analysis
-    if: ${{ github.event.inputs.force_run == 'true' || vars.SHELLCHECK_ENABLED != 'false' }}
+    if: ${{ github.event.inputs.force_run == 'true' || vars.SHELLCHECK_ENABLED == 'true' }}
     runs-on: ubuntu-latest
 
     steps:

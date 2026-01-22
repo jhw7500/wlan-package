@@ -39,7 +39,7 @@ on:
 jobs:
   build:
     name: Build Package
-    if: ${{ github.event.inputs.force_run == 'true' || vars.BUILD_TEST_ENABLED != 'false' }}
+    if: ${{ github.event.inputs.force_run == 'true' || vars.BUILD_TEST_ENABLED == 'true' }}
     runs-on: ubuntu-latest
 
     steps:
