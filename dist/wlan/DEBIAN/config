@@ -41,28 +41,28 @@ function get_daughter_type() {
     for i in {0..9}
     do
         if [ $(cat /sys/class/gpio/gpio${dbid_gpio[0]}/value) == 1 ]; then
-            sum_id0=`expr $sum_id0 + 1`
+            sum_id0=$((sum_id0 + 1))
         fi
 
         if [ $(cat /sys/class/gpio/gpio${dbid_gpio[1]}/value) == 1 ]; then
-            sum_id1=`expr $sum_id1 + 1`
+            sum_id1=$((sum_id1 + 1))
         fi
 
         if [ $(cat /sys/class/gpio/gpio${dbid_gpio[2]}/value) == 1 ]; then
-            sum_id2=`expr $sum_id2 + 1`
+            sum_id2=$((sum_id2 + 1))
         fi
     done
 
     if [ $sum_id0 -ge 5 ]; then
-        id=`expr $_id + 1`
+        id=$((id + 1))
     fi
 
     if [ $sum_id1 -ge 5 ]; then
-        id=`expr $_id + 2`
+        id=$((id + 2))
     fi
 
     if [ $sum_id2 -ge 5 ]; then
-        id=`expr $_id + 4`
+        id=$((id + 4))
     fi
 
     if [ $id -eq 1 ]; then
@@ -83,7 +83,7 @@ function get_edge_id() {
             break;
         fi
 	fi
-	cnt=`expr $cnt + 1`
+	cnt=$((cnt + 1))
 	done
 }
 

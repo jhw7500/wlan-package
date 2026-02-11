@@ -8,8 +8,8 @@ tag=$(basename "$0")
 KEY=PKG
 PACKAGE_NAME="$DPKG_MAINTSCRIPT_PACKAGE"
 KERNEL_VERSION=$(uname -r)
-#hostname=$(python3 /opt/cis/bin/getconfval.py hostname)
-hostname=Cantops
+# Get hostname from system or use default
+hostname=$(hostname 2>/dev/null || echo "cantops-device")
 
 INSTALL_DOT_COUNT=0
 
@@ -87,7 +87,8 @@ CONFIGEOF
   #cp /opt/wlan/driver/* /lib/modules/$KERNEL_VERSION/updates/
   cp /opt/wlan/config/wpa_supplicant/wpa_supplicant@.service /lib/systemd/system/
   cp /opt/wlan/config/systemd/journald.conf /etc/systemd/
-  cp /opt/wlan/config/snmp/snmpd.conf /etc/snmp/
+  mkdir -p /etc/snmp
+  cp /opt/wlan/config/snmp/snmpd.conf /etc/snmp/snmpd.conf
 
   systemctl restart rsyslog
   systemctl restart systemd-journald
@@ -116,35 +117,6 @@ CONFIGEOF
   fi
 
   /usr/local/scripts/auto_fs_sizeup.sh 2 3
-
-:<<'END'
-  status=$(df |grep /dev/root |awk '{print $2}')
-  if [ "$status" -ge 30000000 ]; then
-    echo "disk size : $status over 30000000 byte"
-  else
-    echo "emmc auto size up"
-    /opt/pim/bin/auto_fs_sizeup.sh 2 2
-  fi
-
-  status=$(timedatectl |grep NTP|awk '{print $3}')
-  if [ "$status" == "inactive" ]; then
-    echo "ntp is $status"
-  else
-    echo "set-ntp false"
-    timedatectl set-ntp false
-  fi
-
-  status=$(timedatectl |grep Time|awk '{print $3}')
-  if [ "$status" == "Asia/Seoul" ]; then
-    echo "timezone is $status"
-  else
-    echo "set-timezone Asis/Seoul"
-    timedatectl set-timezone Asia/Seoul
-  fi
-
-  #timedatectl set-timezone Etc/UTC
-END
-  #timedatectl set-timezone Asia/Seoul
 
 set_timezone() {
   local target_tz="$1"
@@ -192,68 +164,76 @@ customctl() {
     dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
     /usr/local/logger/print.py green "\r\n[installer] installing${dots}"
 }
-  mv /etc/init.d/samba /etc/init.d/samba.disabled
+  if [ -f /etc/init.d/samba ]; then
+    mv /etc/init.d/samba /etc/init.d/samba.disabled
+  fi
 
-  customctl mask systemd-networkd-wait-online
-  customctl mask nfs-server
-  customctl mask proc-fs-nfsd.mount
-  customctl mask ovsdb-server
-  customctl mask avahi-daemon
-  customctl mask avahi-autoipd
-  customctl mask psplash
-  customctl disable dhcpcd
-  customctl disable psplash-quit
-  customctl disable weston
-  customctl disable openvswitch
-  customctl disable openvswitch-switch
-  customctl disable connman
-  customctl disable smb
-  customctl disable nmb
-  customctl disable avahi-daemon.socket
-  customctl disable containerd
-  customctl disable lighttpd
-  customctl disable nginx
-  customctl disable monkey
-  customctl disable netdata
-  customctl disable collectd
-  customctl disable thttpd
-  customctl disable named
-  customctl disable bind
-  customctl disable fake-hwclock.timer
-  customctl disable journald-snapshot.timer
-  customctl disable ifplugd
-  customctl disable systemd-resolved
-  customctl disable hiawatha
-  customctl disable netserver
-  #customctl disable samba
-  #customctl disable hciattach
+  # Batch processing for better performance (replaces individual customctl calls)
+  echo "[installer] Optimizing service configuration (batch processing)..."
 
-  customctl enable watchdog
-  customctl enable switchd enabled
-  customctl enable fake-hwclock
-  customctl enable wifi_init
-  customctl enable wifi_logger
+  # 1. Mask services
+  systemctl mask \
+    systemd-networkd-wait-online \
+    nfs-server \
+    proc-fs-nfsd.mount \
+    ovsdb-server \
+    avahi-daemon \
+    avahi-autoipd \
+    psplash \
+    || true
 
-  customctl disable wifi_checker@eth0
-  customctl enable wifi_led@eth0
-  customctl enable wifi_logger@eth0
+  # 2. Disable services (stop if running)
+  systemctl disable --now \
+    dhcpcd \
+    psplash-quit \
+    weston \
+    openvswitch \
+    openvswitch-switch \
+    connman \
+    smb \
+    nmb \
+    avahi-daemon.socket \
+    containerd \
+    lighttpd \
+    nginx \
+    monkey \
+    netdata \
+    collectd \
+    thttpd \
+    named \
+    bind \
+    fake-hwclock.timer \
+    journald-snapshot.timer \
+    ifplugd \
+    systemd-resolved \
+    hiawatha \
+    netserver \
+    wifi_checker@eth0 \
+    || true
+    # Note: samba, hciattach, wifi_logger@mlan1, wifi_checker@mlan1, etc. were commented out or disabled in original
 
-  customctl enable wifi_led@mlan0
-  customctl enable wifi_logger@mlan0
-  customctl enable wifi_checker@mlan0
-  customctl enable wifi_bgscan@mlan0
-  customctl enable wifi_roam@mlan0
-  customctl enable wifi_arping@mlan0
-  #customctl enable wifi_capture@mlan0
+  # 3. Enable services
+  systemctl enable \
+    watchdog \
+    switchd \
+    fake-hwclock \
+    wifi_init \
+    wifi_logger \
+    wifi_led@eth0 \
+    wifi_logger@eth0 \
+    wifi_led@mlan0 \
+    wifi_logger@mlan0 \
+    wifi_checker@mlan0 \
+    wifi_bgscan@mlan0 \
+    wifi_roam@mlan0 \
+    wifi_arping@mlan0 \
+    || true
+    # Note: wpa_supplicant@mlan0, wifi_bridge@mlan0 were commented out in original
 
-  #customctl wifi_logger@mlan1 disabled
-  #customctl wifi_checker@mlan1 disabled
-  #customctl wifi_ping@mlan1 disabled
-  #customctl wifi_arp@mlan1 disabled
-  #customctl wifi_arping@mlan1 disabled
-
-  #customctl wpa_supplicant@mlan0 enabled
-  #customctl wifi_bridge@mlan0 enabled
+  # Update progress dots roughly
+  INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 10))
+  dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
+  /usr/local/logger/print.py green "\r\n[installer] installing${dots}"
 
 makeDirectory() {
     if [ ! -d "$1" ]; then
@@ -284,19 +264,6 @@ makeDirectory() {
   touch /opt/wlan/mac/wired
   touch /opt/wlan/mac/wired_client
 
-  #makeDirectory /var/log/cantops/journal
-  #echo "update dtb"
-  #makeDirectory /root/boot
-  #mount /dev/mmcblk2p1 /root/boot
-  #cp /opt/pim/boot/imx8mp*.dtb /root/boot/
-  #umount /root/boot
-
-  #echo "set id, passwd"
-  #(echo root; echo root;) | passwd root
-  #(echo user; echo user;) | smbpasswd -as user
-  #(echo root; echo root;) | smbpasswd -as root
-  #useradd -m semes && (echo semes; echo semes;) | passwd semes
-
 #  chmod -R 777 /mnt/sd_cam
 #  chmod 777 /share
 #  chmod 777 /shared
@@ -308,30 +275,12 @@ makeDirectory() {
 
   echo "set hostname"
   echo $hostname > /etc/hostname
-  sed -i "2s/.*/127.0.1.1 $hostname/g" -i /etc/hosts
+  sed -i "2s/.*/127.0.1.1 $hostname/" /etc/hosts
 #  sed -i 's/#kernel.printk = 3 4 1 3/kernel.printk = 2 4 1 3/g' -i /etc/sysctl.conf
 
   INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 1))
   dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
   /usr/local/logger/print.py green "\r\n[installer] installing${dots}"
-
-  #/usr/local/scripts/add_line.sh "00 *      * * *    root        logrotate /etc/logrotate.d/logrotate.rsyslog" /etc/crontab
-  #/usr/local/scripts/comment_line.sh "tmpfs                /var/volatile" /etc/fstab
-  #/usr/local/scripts/change_line.sh "echo 1 > /proc/sys/kernel/printk" "/proc/sys/kernel/printk" /etc/rc.local
-  /usr/local/scripts/change_line.sh "kernel.printk = 1 4 1 7" "kernel.printk = " /etc/sysctl.conf
-  /usr/local/scripts/change_line.sh "#tmpfs                /var/volatile        tmpfs      defaults              0  0" "tmpfs                /var/volatile" /etc/fstab
-  /usr/local/scripts/change_line.sh "WatchdogDevice=/dev/watchdog" "WatchdogDevice=" /etc/systemd/system.conf
-  /usr/local/scripts/change_line.sh "DefaultTimeoutStartSec=30s" "DefaultTimeoutStartSec=" /etc/systemd/system.conf
-  /usr/local/scripts/change_line.sh "DefaultTimeoutStopSec=30s" "DefaultTimeoutStopSec=" /etc/systemd/system.conf
-  /usr/local/scripts/change_line.sh "DefaultTimeoutAbortSec=30s" "DefaultTimeoutAbortSec=" /etc/systemd/system.conf
-  /usr/local/scripts/change_line.sh "DefaultDeviceTimeoutSec=30s" "DefaultDeviceTimeoutSec=" /etc/systemd/system.conf
-  /usr/local/scripts/add_line.sh "kernel.panic=5" /etc/sysctl.conf
-  /usr/local/scripts/add_line.sh "kernel.panic_on_oops=1" /etc/sysctl.conf
-  /usr/local/scripts/add_line.sh "watchdog-timeout=30" /etc/watchdog.conf
-  /usr/local/scripts/change_line.sh "log-dir=/var/log/cantops" "log-dir" /etc/watchdog.conf
-  /usr/local/scripts/change_line.sh "#root" "root" /etc/vsftpd.ftpusers
-  /usr/local/scripts/change_line.sh "#root" "root" /etc/vsftpd.user_list
-  /usr/local/scripts/add_line.sh "/dev/mmcblk2p3      /var/log/cantops  ext4  noatime,nodiratime,lazytime,commit=60,data=ordered  0  2" /etc/fstab
 
 cpchk() {
   if [ ! -f $2 ]; then
@@ -358,7 +307,7 @@ cpchk() {
 
   INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 1))
   dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
-  /usr/local/logger/print.py green "\r\n[installer] installing${dots}"
+  /usr/local/logger/print.py green "\r\n[installer] create symlinks..."
 
   # Create symlinks for wlan-bridge binaries
   # Ensure target directory exists
@@ -395,6 +344,27 @@ cpchk() {
 
   #tar -xvf /opt/wlan/webmin/webmin_usr.tar -C /usr/libexec/
   #tar -xvf /opt/wlan/webmin/webmin_etc.tar -C /etc/
+
+  /usr/local/logger/print.py green "\r\n[installer] change line..."
+  #/usr/local/scripts/add_line.sh "00 *      * * *    root        logrotate /etc/logrotate.d/logrotate.rsyslog" /etc/crontab
+  #/usr/local/scripts/comment_line.sh "tmpfs                /var/volatile" /etc/fstab
+  #/usr/local/scripts/change_line.sh "echo 1 > /proc/sys/kernel/printk" "/proc/sys/kernel/printk" /etc/rc.local
+  #/usr/local/scripts/comment_line.sh "/proc/sys/kernel/printk" /etc/rc.local
+  /usr/local/scripts/change_line.sh "#echo 7 > /proc/sys/kernel/printk" "/proc/sys/kernel/printk" /etc/rc.local
+  /usr/local/scripts/change_line.sh "kernel.printk = 1 4 1 7" "kernel.printk = " /etc/sysctl.conf
+  /usr/local/scripts/change_line.sh "#tmpfs                /var/volatile        tmpfs      defaults              0  0" "tmpfs                /var/volatile" /etc/fstab
+  /usr/local/scripts/change_line.sh "WatchdogDevice=/dev/watchdog" "WatchdogDevice=" /etc/systemd/system.conf
+  /usr/local/scripts/change_line.sh "DefaultTimeoutStartSec=30s" "DefaultTimeoutStartSec=" /etc/systemd/system.conf
+  /usr/local/scripts/change_line.sh "DefaultTimeoutStopSec=30s" "DefaultTimeoutStopSec=" /etc/systemd/system.conf
+  /usr/local/scripts/change_line.sh "DefaultTimeoutAbortSec=30s" "DefaultTimeoutAbortSec=" /etc/systemd/system.conf
+  /usr/local/scripts/change_line.sh "DefaultDeviceTimeoutSec=30s" "DefaultDeviceTimeoutSec=" /etc/systemd/system.conf
+  /usr/local/scripts/add_line.sh "kernel.panic=5" /etc/sysctl.conf
+  /usr/local/scripts/add_line.sh "kernel.panic_on_oops=1" /etc/sysctl.conf
+  /usr/local/scripts/add_line.sh "watchdog-timeout=30" /etc/watchdog.conf
+  /usr/local/scripts/change_line.sh "log-dir=/var/log/cantops" "log-dir" /etc/watchdog.conf
+  /usr/local/scripts/change_line.sh "#root" "root" /etc/vsftpd.ftpusers
+  /usr/local/scripts/change_line.sh "#root" "root" /etc/vsftpd.user_list
+  /usr/local/scripts/add_line.sh "/dev/mmcblk2p3      /var/log/cantops  ext4  noatime,nodiratime,lazytime,commit=60,data=ordered  0  2" /etc/fstab
 
   PACKAGE_NAME="$DPKG_MAINTSCRIPT_PACKAGE"
   echo -e "\e[1m installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)\e[0m"

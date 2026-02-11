@@ -37,6 +37,9 @@ purge)
 
     cleanup_symlinks
 
+    # Clean up /usr/local/dumb directory (remove even if not empty)
+    rm -rf /usr/local/dumb 2>/dev/null || true
+
     # Clean up directories (only if empty)
     rmdir /usr/local/wlan-bridge/dumb 2>/dev/null || true
     rmdir /usr/local/wlan-bridge/scripts 2>/dev/null || true

@@ -95,11 +95,11 @@ if [ ! -f "${BASEDIR}/dist/wlan/usr/local/etc/config.json" ]; then
     cat > "${BASEDIR}/dist/wlan/usr/local/etc/config.json" << 'CONFIGEOF'
 {
     "mlan0": {
-        "Frequency": "5GHz",
+        "Frequency": "auto",
         "enabled": true
     },
     "mlan1": {
-        "Frequency": "2.4GHz",
+        "Frequency": "auto",
         "enabled": false
     },
     "eth0": {

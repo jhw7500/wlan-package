@@ -1,27 +1,28 @@
 Package: wlan-proc
-Version: 0.1.4
+Version: 0.1.6
 Section: test
 Priority: optional
 Architecture: arm64
-Depends:
+Depends: libpcap0.8 | libpcap, systemd, jq
 Conflicts: wlan-package
 Replaces: wlan-package
 Recommends: jq
 Maintainer: jhw <hwjo@cantops.biz>
-Homepage:
 Description: WLAN Application
-0.0.0 : Test version
-0.0.1 : demo version
-0.0.2 : arp update
-0.0.3 : init 2G scan
-0.0.4 : new kernel test
-0.0.5 : arping, daemon start logic
-0.0.6 : capture, dual roam test, daemon, etc
-0.0.7 : bridge restart daemon, dumb test
-0.0.8 : wlan f/w, driver, app, mfg version up
-0.0.9 : txpwrlimit, wifi cmd, link stat, journald
-0.1.0 : dumb, arping, wpa_cli, usb_print, target mac, switch no delay
-0.1.1 : snmp, capture, roam flag, file manager
-0.1.2 : dumb
-0.1.3 : wlan-bridge submodule
-0.1.4 : fix symlink paths, add config.json, improve prerm/postrm, security fixes
+ 0.0.0 : Test version
+ 0.0.1 : demo version
+ 0.0.2 : arp update
+ 0.0.3 : init 2G scan
+ 0.0.4 : new kernel test
+ 0.0.5 : arping, daemon start logic
+ 0.0.6 : capture, dual roam test, daemon, etc
+ 0.0.7 : bridge restart daemon, dumb test
+ 0.0.8 : wlan f/w, driver, app, mfg version up
+ 0.0.9 : txpwrlimit, wifi cmd, link stat, journald
+ 0.1.0 : dumb, arping, wpa_cli, usb_print, target mac, switch no delay
+ 0.1.1 : snmp, capture, roam flag, file manager
+ 0.1.2 : dumb
+ 0.1.3 : wlan-bridge submodule
+ 0.1.4 : fix symlink paths, add config.json, improve prerm/postrm, security fixes
+ 0.1.5 : code quality improvements, ifconfig→ip migration, reboot safety, dead code removal
+ 0.1.6 : fix wifi_init.sh set -e exit on grep/python failure

@@ -1,4 +1,6 @@
 #!/bin/sh
+set -eu
+
 IFACE=$1
 
 echo "[*] Starting WiFi bridge on $IFACE"
