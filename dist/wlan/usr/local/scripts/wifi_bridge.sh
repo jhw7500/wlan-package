@@ -1,7 +1,11 @@
 #!/bin/bash
+set -euo pipefail
+
 tag=$(basename "$0")
 IFACE=$1
 CONF_FILE=""
+# TODO: Read wired interface from config.json instead of hardcoding eth0
+WIRED_IF="eth0"
 
 logger -p local0.info "[$tag:$LINENO] [$IFACE] wifi bridge start"
 
@@ -18,10 +22,10 @@ fi
 #done
 
 both_up() {
-    ip link show eth0 | grep -q "state UP" || return 1
+    ip link show "$WIRED_IF" | grep -q "state UP" || return 1
     ip link show "$IFACE" | grep -q "state UP" || return 1
-    cat /sys/class/net/eth0/carrier 2>/dev/null | grep -q 1 || return 1
-    cat /sys/class/net/$IFACE/carrier 2>/dev/null | grep -q 1 || return 1
+    cat /sys/class/net/"$WIRED_IF"/carrier 2>/dev/null | grep -q 1 || return 1
+    cat /sys/class/net/"$IFACE"/carrier 2>/dev/null | grep -q 1 || return 1
 }
 
 getMac() {
@@ -53,66 +57,4 @@ if [ ! -f "$CONF_FILE" ]; then
     exit 1
 fi
 
-ADDRESS_LINE=$(grep -E '^Address=' "$CONF_FILE" | head -n1 | cut -d= -f2)
-IP_ADDR="${ADDRESS_LINE%%/*}"
-GATEWAY=$(grep -E '^Gateway=' "$CONF_FILE" | head -n1 | cut -d= -f2)
-#logger -p local0.info "[$tag:$LINENO] [$IFACE] relayd -d -I $IFACE -I eth0 ($IFACE address : $ADDRESS_LINE, gateway : $GATEWAY)"
-
-#logger -p local0.notice "[$tag:$LINENO] [$IFACE] ip flush"
-#ip addr flush dev $IFACE
-#ip route del 192.168.0.0/24 dev eth0
-#ip route add 192.168.4.100 dev $IFACE scope link
-
-#for ip in 192.168.4.0 192.168.4.254; do
-#    ip route replace $ip dev $IFACE
-#done
-
-#ip route replace default via $IFACE
-
-#relayd -d -i $IFACE -i eth0 -R $GATEWAY:$ADDRESS_LINE -L $IP_ADDR -G $GATEWAY -B -t 5 -p 3
-#relayd -d -I $IFACE -I eth0 -L $IP_ADDR -G $GATEWAY -B
-#relayd -d -I $IFACE -I eth0 -G $GATEWAY
-#relayd -d -I $IFACE -I eth0 -L 192.168.4.10
-
-:<<'END'
-#echo 1 > /proc/sys/net/ipv4/conf/eth0/proxy_arp
-#echo 0 > /proc/sys/net/ipv4/conf/eth0/rp_filter
-#echo 1 > /proc/sys/net/ipv4/conf/eth0/arp_accept
-#echo 1 > /proc/sys/net/ipv4/conf/$IFACE/proxy_arp
-#echo 0 > /proc/sys/net/ipv4/conf/$IFACE/rp_filter
-#echo 1 > /proc/sys/net/ipv4/conf/$IFACE/arp_accept
-#echo 0 > /proc/sys/net/ipv4/conf/all/rp_filter
-#echo 0 > /proc/sys/net/ipv4/conf/eth0/rp_filter
-#echo 0 > /proc/sys/net/ipv4/conf/$IFACE/rp_filter
-#echo 1 > /proc/sys/net/ipv4/conf/all/arp_ignore
-#echo 1 > /proc/sys/net/ipv4/conf/eth0/arp_ignore
-#echo 1 > /proc/sys/net/ipv4/conf/$IFACE/
-sysctl -w net.ipv4.conf.all.rp_filter=0
-sysctl -w net.ipv4.conf.eth0.rp_filter=0
-sysctl -w net.ipv4.conf.$IFACE.rp_filter=0
-sysctl -w net.ipv4.conf.all.arp_ignore=1
-sysctl -w net.ipv4.conf.eth0.arp_ignore=1
-sysctl -w net.ipv4.conf.$IFACE.arp_ignore=1
-sysctl -w net.ipv4.conf.all.arp_announce=2
-sysctl -w net.ipv4.conf.eth0.arp_announce=2
-sysctl -w net.ipv4.conf.$IFACE.arp_announce=2
-#sysctl -w net.ipv4.conf.all.proxy_arp_pvlan=1
-#sysctl -w net.ipv4.conf.eth0.proxy_arp=1
-#sysctl -w net.ipv4.conf.$IFACE.proxy_arp=1
-END
-
-#rmmod dumb_kbridge
-#insmod /opt/wlan/driver/dumb_kbridge.ko if0=eth0 if1=mlan0 mode=2 loop_guard=1 mark_bit=29
-
-#sysctl -w net.ipv4.ip_forward=0
-#relayd -d -I $IFACE -I eth0 -G $GATEWAY
-#dumb eth0 $IFACE
-#exec /usr/local/bin/wifi_dumb eth0 mlan0
-#exec /usr/local/bin/wifi_dumb_ eth0 mlan0
-#exec /usr/local/bin/wifi_dumb__ eth0 mlan0
-#exec /usr/local/bin/wifi_dumb___ eth0 mlan0
-#exec /usr/local/bin/dumb-tpacket eth0 mlan0
-exec /usr/local/bin/wifi-dumb --ip-filter --no-debug eth0 mlan0
-#exec /usr/local/bin/dumb eth0 mlan0
-#exec /usr/local/bin/dumb-tpacket eth0 mlan0
-#exec /root/claude/dumb eth0 mlan0
+exec /usr/local/bin/wifi-dumb --ip-filter --no-debug "$WIRED_IF" "$IFACE"

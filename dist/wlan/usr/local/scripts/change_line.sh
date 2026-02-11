@@ -16,6 +16,6 @@ if grep -q "$pattern" "$file_path"; then
     sed -i "s?.*$pattern.*?$new_line?" "$file_path"
 else
     echo "Pattern '$pattern' not found in the file: $file_path"
-    /opt/pim/bin/add_line.sh "$new_line" "$3"
+    /usr/local/scripts/add_line.sh "$new_line" "$3"
 fi
 

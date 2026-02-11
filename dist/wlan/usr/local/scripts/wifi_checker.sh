@@ -15,6 +15,11 @@ PRE_STATE=""
 PCI_BUS=""
 REBOOT_F=0
 
+# Reboot cooldown configuration
+REBOOT_COUNT_FILE="/var/log/cantops/reboot_count_${IFACE}"
+MAX_REBOOT_COUNT=3
+REBOOT_COOLDOWN_SEC=300  # 5 minutes
+
 cleanup() {
     logger -p local0.info "[$tag:$LINENO] [$IFACE] stop"
     exit 0
@@ -142,23 +147,42 @@ while true; do
         fi
     fi
 
-:<<'END'
-    PRE_STATE=$STATE
-    LINK_OUTPUT=$(iw "$IFACE" link 2>&1)
-    #if echo "$LINK_OUTPUT" | grep -q "Connected to" && echo "$LINK_OUTPUT" | grep -q "command failed" && echo "$LINK_OUTPUT" | grep -q "Not connected"; then
-    if echo "$LINK_OUTPUT" | grep -q "command failed" || echo "$LINK_OUTPUT" | grep -q "Not connected"; then
-        logger -p local0.err "[$tag:$LINENO] [$IFACE] Detected invalid link state. Triggering reconnect..."
-        wpa_cli -i "$IFACE" disconnect
-        sleep 1
-        wpa_cli -i "$IFACE" reconnect
-        sleep 2
-        systemctl restart wifi_bridge@$IFACE
-    fi
-END
-
     sleep 5
 
     if (( REBOOT_F == 1 )); then
+        # Check reboot cooldown and count
+        CURRENT_TIME=$(date +%s)
+
+        if [ -f "$REBOOT_COUNT_FILE" ]; then
+            read -r LAST_REBOOT_TIME REBOOT_COUNT < "$REBOOT_COUNT_FILE"
+            TIME_DIFF=$((CURRENT_TIME - LAST_REBOOT_TIME))
+
+            if (( TIME_DIFF < REBOOT_COOLDOWN_SEC )); then
+                REBOOT_COUNT=$((REBOOT_COUNT + 1))
+                logger -p local0.warning "[$tag:$LINENO] [$IFACE] Reboot attempt $REBOOT_COUNT within cooldown period"
+
+                if (( REBOOT_COUNT >= MAX_REBOOT_COUNT )); then
+                    logger -p local0.emerg "[$tag:$LINENO] [$IFACE] Reboot loop detected ($REBOOT_COUNT reboots), disabling auto-reboot"
+                    print red "Reboot loop detected, manual intervention required"
+                    REBOOT_F=0
+                    ERR_CNT=0
+                    sleep 60
+                    continue
+                fi
+            else
+                # Cooldown expired, reset count
+                REBOOT_COUNT=1
+            fi
+        else
+            REBOOT_COUNT=1
+        fi
+
+        # Save reboot info
+        mkdir -p "$(dirname "$REBOOT_COUNT_FILE")"
+        echo "$CURRENT_TIME $REBOOT_COUNT" > "$REBOOT_COUNT_FILE"
+
+        logger -p local0.emerg "[$tag:$LINENO] [$IFACE] Initiating reboot (attempt $REBOOT_COUNT/$MAX_REBOOT_COUNT)"
+        sync
         ERR_CNT=0
         REBOOT_F=0
         reboot

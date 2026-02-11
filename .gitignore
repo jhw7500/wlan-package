@@ -5,3 +5,6 @@ dist/wlan/usr/local/logger/__pycache__/
 
 .gemini/
 gha-creds-*.json
+
+tmp/
+.worktrees/

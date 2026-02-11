@@ -1,15 +1,12 @@
 [Unit]
 Description=WiFi init Service
-#After=network.target
-DefaultDependencies=no
-Before=sysinit.target
+After=local-fs.target
+Wants=local-fs.target
 
 [Service]
-Type=simple
+Type=oneshot
 ExecStart=/usr/local/scripts/wifi_init.sh
-#Restart=always
 RemainAfterExit=yes
-User=root
 
 [Install]
 WantedBy=multi-user.target
