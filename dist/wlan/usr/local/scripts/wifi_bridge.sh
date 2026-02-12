@@ -8,7 +8,11 @@ WIRED_IF="eth0"
 
 OPT_DIR="/usr/local/wlan-bridge/scripts"
 
-logger -p local0.info "[$tag:$LINENO] [$IFACE] wbridge startup sequence initiated"
+# 최적화 활성화 여부 (1: 활성화, 0: 비활성화)
+# 환경 변수 WBRIDGE_OPTIMIZE가 설정되어 있으면 그 값을 따름
+USE_OPTIMIZATION=${WBRIDGE_OPTIMIZE:-0}
+
+logger -p local0.info "[$tag:$LINENO] [$IFACE] wbridge startup sequence initiated (opt: $USE_OPTIMIZATION)"
 
 if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" ]]; then
     logger -p local0.emerg "[$tag:$LINENO] [$IFACE] interface is wrong!!"
@@ -30,17 +34,20 @@ for _ in $(seq 1 200); do
 done
 
 # --- [ 시스템 최적화 단계 ] ---
+if [ "$USE_OPTIMIZATION" -eq 1 ]; then
+    # 1. UDP/네트워크 스택 최적화
+    if [ -x "$OPT_DIR/optimize-for-udp.sh" ]; then
+        logger -p local0.info "[$tag:$LINENO] [$IFACE] Running UDP optimization..."
+        "$OPT_DIR/optimize-for-udp.sh" "$WIRED_IF" "$IFACE" > /dev/null 2>&1 || logger -p local0.warn "Optimization script returned error"
+    fi
 
-# 1. UDP/네트워크 스택 최적화
-if [ -x "$OPT_DIR/optimize-for-udp.sh" ]; then
-    logger -p local0.info "[$tag:$LINENO] [$IFACE] Running UDP optimization..."
-    "$OPT_DIR/optimize-for-udp.sh" "$WIRED_IF" "$IFACE" > /dev/null 2>&1 || logger -p local0.warn "Optimization script returned error"
-fi
-
-# 2. IRQ Affinity 최적화
-if [ -x "$OPT_DIR/setup-irq-affinity.sh" ]; then
-    logger -p local0.info "[$tag:$LINENO] [$IFACE] Setting up IRQ affinity..."
-    "$OPT_DIR/setup-irq-affinity.sh" > /dev/null 2>&1 || logger -p local0.warn "IRQ affinity script returned error"
+    # 2. IRQ Affinity 최적화
+    if [ -x "$OPT_DIR/setup-irq-affinity.sh" ]; then
+        logger -p local0.info "[$tag:$LINENO] [$IFACE] Setting up IRQ affinity..."
+        "$OPT_DIR/setup-irq-affinity.sh" "$WIRED_IF" "$IFACE" > /dev/null 2>&1 || logger -p local0.warn "IRQ affinity script returned error"
+    fi
+else
+    logger -p local0.info "[$tag:$LINENO] [$IFACE] System optimization skipped by user request"
 fi
 
 # --- [ 브리지 실행 ] ---
