@@ -16,7 +16,6 @@ PCI_BUS=""
 REBOOT_F=0
 
 # Reboot cooldown configuration
-REBOOT_COUNT_FILE="/var/log/cantops/reboot_count_${IFACE}"
 MAX_REBOOT_COUNT=3
 REBOOT_COOLDOWN_SEC=300  # 5 minutes
 
@@ -150,41 +149,19 @@ while true; do
     sleep 5
 
     if (( REBOOT_F == 1 )); then
-        # Check reboot cooldown and count
-        CURRENT_TIME=$(date +%s)
-
-        if [ -f "$REBOOT_COUNT_FILE" ]; then
-            read -r LAST_REBOOT_TIME REBOOT_COUNT < "$REBOOT_COUNT_FILE"
-            TIME_DIFF=$((CURRENT_TIME - LAST_REBOOT_TIME))
-
-            if (( TIME_DIFF < REBOOT_COOLDOWN_SEC )); then
-                REBOOT_COUNT=$((REBOOT_COUNT + 1))
-                logger -p local0.warning "[$tag:$LINENO] [$IFACE] Reboot attempt $REBOOT_COUNT within cooldown period"
-
-                if (( REBOOT_COUNT >= MAX_REBOOT_COUNT )); then
-                    logger -p local0.emerg "[$tag:$LINENO] [$IFACE] Reboot loop detected ($REBOOT_COUNT reboots), disabling auto-reboot"
-                    print red "Reboot loop detected, manual intervention required"
-                    REBOOT_F=0
-                    ERR_CNT=0
-                    sleep 60
-                    continue
-                fi
-            else
-                # Cooldown expired, reset count
-                REBOOT_COUNT=1
-            fi
-        else
-            REBOOT_COUNT=1
-        fi
-
-        # Save reboot info
-        mkdir -p "$(dirname "$REBOOT_COUNT_FILE")"
-        echo "$CURRENT_TIME $REBOOT_COUNT" > "$REBOOT_COUNT_FILE"
-
-        logger -p local0.emerg "[$tag:$LINENO] [$IFACE] Initiating reboot (attempt $REBOOT_COUNT/$MAX_REBOOT_COUNT)"
+        reason=${CAUSE:-unknown}
+        logger -p local0.emerg "[$tag:$LINENO] [$IFACE] Requesting reboot via policy (cause=$reason, attempts<=${MAX_REBOOT_COUNT}, cooldown=${REBOOT_COOLDOWN_SEC}s)"
         sync
         ERR_CNT=0
         REBOOT_F=0
-        reboot
+        if ! MAX_REBOOT_COUNT="$MAX_REBOOT_COUNT" REBOOT_COOLDOWN_SEC="$REBOOT_COOLDOWN_SEC" \
+          /usr/local/scripts/wlan_reboot_policy.sh \
+            --source wifi_checker \
+            --iface "$IFACE" \
+            --reason "wifi_checker fatal: $reason"; then
+          rc=$?
+          logger -p local0.warning "[$tag:$LINENO] [$IFACE] Reboot refused by policy (rc=$rc)"
+          sleep 60
+        fi
     fi
 done

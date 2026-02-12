@@ -102,7 +102,11 @@ while :; do
             sleep 2
             /usr/local/logger/print.py red "reboot"
             sleep 1
-            reboot
+            /usr/local/scripts/wlan_reboot_policy.sh \
+              --source switchd \
+              --reason "manual long-press" \
+              --force
+            exit 0
         fi
     fi
 done
