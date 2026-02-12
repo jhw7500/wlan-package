@@ -8,6 +8,20 @@ COOLDOWN=${COOLDOWN:-10}
 LOOPDELAY=${LOOPDELAY:-10}
 F="local0"
 
+get_target_ip() {
+    case "$IFACE" in
+        eth0)
+            cat "/tmp/${IFACE}_client_ip" 2>/dev/null || true
+            ;;
+        mlan0|mlan1)
+            ip route | awk -v dev="$IFACE" '$1=="default" && $0 ~ dev {print $3; exit}'
+            ;;
+        *)
+            echo ""
+            ;;
+    esac
+}
+
 get_state() {
     wpa_cli -i "$IFACE" status | grep "^wpa_state=" | cut -d= -f2
 }
@@ -50,7 +64,7 @@ if [ "$IFACE" = "eth0" ]; then
         logger -p $F.info "[$tag:$LINENO] [$IFACE] not ready(link down)"
         exit 1
     fi
-    TARGET_IP=$(cat /tmp/${IFACE}_client_ip)
+    TARGET_IP=$(get_target_ip)
 elif [ "$IFACE" = "mlan0" ]; then
     if ! is_wpa_active; then
         exit 1
@@ -58,8 +72,7 @@ elif [ "$IFACE" = "mlan0" ]; then
         logger -p $F.info "[$tag:$LINENO] [$IFACE] not ready(not connected)"
         exit 1
     fi
-    #TARGET_IP=$(grep -E '^Gateway=' /etc/systemd/network/20-mlan0.network | head -n1 | cut -d= -f2)
-    TARGET_IP=$(ip route | awk '/^default/ && /mlan0/ {print $3}')
+    TARGET_IP=$(get_target_ip)
 elif [ "$IFACE" = "mlan1" ]; then
     if ! is_wpa_active; then
         exit 1
@@ -67,22 +80,20 @@ elif [ "$IFACE" = "mlan1" ]; then
         logger -p $F.info "[$tag:$LINENO] [$IFACE] not ready(not connected)"
         exit 1
     fi
-    #TARGET_IP=$(grep -E '^Gateway=' /etc/systemd/network/21-mlan1.network | head -n1 | cut -d= -f2)
-    TARGET_IP=$(ip route | awk '/^default/ && /mlan1/ {print $3}')
+    TARGET_IP=$(get_target_ip)
 else
     logger -p $F.info "[$tag:$LINENO] [$IFACE] interface is wrong : $IFACE"
     exit 0
 fi
 
-if ! is_ipv4 "$TARGET_IP"; then
-  logger -p $F.err "[$tag:$LINENO] [$IFACE] invalid Target IP : '$TARGET_IP'"
-  exit 1
-fi
-
-if ! is_plausible_host_ip "$TARGET_IP"; then
-  logger -p $F.err "[$tag:$LINENO] [$IFACE] implausible Target IP : '$TARGET_IP'"
-  exit 1
-fi
+while true; do
+  TARGET_IP=$(get_target_ip)
+  if is_ipv4 "$TARGET_IP" && is_plausible_host_ip "$TARGET_IP"; then
+    break
+  fi
+  logger -p $F.warning "[$tag:$LINENO] [$IFACE] gateway/target not ready; waiting... (target='$TARGET_IP')"
+  sleep "$LOOPDELAY"
+done
 
 #TARGET_IP="192.168.0.20"
 logger -p $F.info "[$tag:$LINENO] [$IFACE] start : $TARGET_IP"
