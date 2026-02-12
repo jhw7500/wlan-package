@@ -112,11 +112,22 @@ function suggest_suitable_model() {
 }
 
 # Include debconf library.
+if [ ! -r /usr/share/debconf/confmodule ]; then
+    echo "debconf not available; skipping interactive config"
+    exit 0
+fi
+
 . /usr/share/debconf/confmodule
 
 # load debconf database
 db_get pim-mp/model
 model=$RET
+
+db_get pim-mp/cal_data_cfg
+cal_data_cfg_file=$RET
+
+db_get pim-mp/txpwrlimit_cfg
+txpwrlimit_cfg_file=$RET
 
 if [ -z "$model" ]; then
     model="none"
@@ -138,6 +149,26 @@ if [ "$model" == "none" ]; then
     db_get pim-mp/model
     model=$RET
 fi
+
+if [ -z "$cal_data_cfg_file" ]; then
+    cal_data_cfg_file="WlanCalData_ext_a0.conf"
+    db_set pim-mp/cal_data_cfg "$cal_data_cfg_file"
+fi
+
+if [ -z "$txpwrlimit_cfg_file" ]; then
+    txpwrlimit_cfg_file="txpwrlimit_cfg_9098_a0.conf"
+    db_set pim-mp/txpwrlimit_cfg "$txpwrlimit_cfg_file"
+fi
+
+db_input medium pim-mp/cal_data_cfg || true
+db_input medium pim-mp/txpwrlimit_cfg || true
+db_go
+
+db_get pim-mp/cal_data_cfg
+cal_data_cfg_file=$RET
+
+db_get pim-mp/txpwrlimit_cfg
+txpwrlimit_cfg_file=$RET
 
 if [ "$model" != "$old_model" ]; then
     echo "config $1 ($old_model -> $model)"
