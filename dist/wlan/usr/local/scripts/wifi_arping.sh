@@ -86,12 +86,17 @@ else
     exit 0
 fi
 
+wait_logged=0
+
 while true; do
   TARGET_IP=$(get_target_ip)
   if is_ipv4 "$TARGET_IP" && is_plausible_host_ip "$TARGET_IP"; then
     break
   fi
-  logger -p $F.warning "[$tag:$LINENO] [$IFACE] gateway/target not ready; waiting... (target='$TARGET_IP')"
+  if [ "$wait_logged" -eq 0 ]; then
+    logger -p $F.warning "[$tag:$LINENO] [$IFACE] gateway/target not ready; waiting... (target='$TARGET_IP')"
+    wait_logged=1
+  fi
   sleep "$LOOPDELAY"
 done
 
