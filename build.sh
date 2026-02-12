@@ -132,5 +132,9 @@ dpkg -b wlan "${BASEDIR}/release/wlan.deb"
 cp "${BASEDIR}/release/wlan.deb" "${BASEDIR}/release/${package}-${version}.deb"
 
 echo "Creating package tarball: ${BASEDIR}/release/wlan-package.tar"
-tar --exclude="release" -cf "${BASEDIR}/release/wlan-package.tar" -C "${BASEDIR}" .
+tar --exclude-vcs \
+  --exclude="./release" \
+  --exclude="./.worktrees" \
+  --exclude="./tmp" \
+  -cf "${BASEDIR}/release/wlan-package.tar" -C "${BASEDIR}" .
 echo "Created: ${BASEDIR}/release/wlan-package.tar"
