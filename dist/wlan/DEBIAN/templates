@@ -3,3 +3,15 @@ Type: select
 Choices: none, cis-a2, cis-a4, cis-c2, pim-a2, pim-a4, pim-c2, pim-x2, pim-x4
 Description: Select your pim-mp model:
  This will set the operational mode for pim-mp.
+
+Template: pim-mp/cal_data_cfg
+Type: select
+Choices: none, WlanCalData_ext_a0.conf, WlanCalData_ext.conf, WlanCalData_ext_RD.conf
+Description: Select cal_data_cfg for WiFi init:
+ This selects the calibration data file used by the WLAN driver.
+
+Template: pim-mp/txpwrlimit_cfg
+Type: select
+Choices: txpwrlimit_cfg_9098_a0.conf, txpwrlimit_cfg_9098_a0_low.conf, txpwrlimit_cfg_9098.conf, txpwrlimit_cfg_9098_low.conf, txpwrlimit_cfg_9098_org.conf
+Description: Select txpowerlimit config for WiFi init:
+ This selects the txpowerlimit hostcmd file applied after driver load.

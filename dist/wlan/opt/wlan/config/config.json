@@ -1,0 +1,8 @@
+{
+    "mlan0": {
+        "Frequency": "auto"
+    },
+    "mlan1": {
+        "Frequency": "auto"
+    }
+}
