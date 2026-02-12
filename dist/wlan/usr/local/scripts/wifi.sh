@@ -370,7 +370,7 @@ case "$1" in
         ;;
       azure)
         CAL_VAL="cts/azure/cal_data.conf"
-        PWR_VAL="/lib/firmware/cts/azure/txpwr_limit_cfg_9098.conf"
+        PWR_VAL="/lib/firmware/cts/azure/txpwrlimit_cfg_9098.conf"
         ;;
       *)
         usage
