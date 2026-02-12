@@ -97,6 +97,23 @@ CONFIGEOF
     systemctl daemon-reload 2>/dev/null || true
   fi
 
+  # wifi_dumb@.service is deprecated (replaced by wifi_bridge@.service).
+  # Enforce disable + mask so it cannot be (re)enabled accidentally on upgraded systems.
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl disable --now \
+      wifi_dumb@mlan0 \
+      wifi_dumb@mlan1 \
+      wifi_dumb@eth0 \
+      2>/dev/null || true
+    systemctl mask wifi_dumb@.service 2>/dev/null || true
+    systemctl reset-failed \
+      wifi_dumb@mlan0 \
+      wifi_dumb@mlan1 \
+      wifi_dumb@eth0 \
+      2>/dev/null || true
+    systemctl daemon-reload 2>/dev/null || true
+  fi
+
   #/usr/local/scripts/auto_fs_sizeup.sh 2 2
   # Time safety for systems without NTP
   # Only set time if system clock is before 2026-01-01 (prevents future date issues)
