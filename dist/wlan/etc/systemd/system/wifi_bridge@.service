@@ -16,7 +16,7 @@ ExecStopPost=/bin/sleep 1
 Restart=on-failure
 RestartSec=5s
 
-# Capabilities for dumb bridge (mlockall + RT scheduling + network)
+# Capabilities for wbridge (mlockall + RT scheduling + network)
 AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN CAP_SYS_NICE CAP_IPC_LOCK
 CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN CAP_SYS_NICE CAP_IPC_LOCK
 NoNewPrivileges=yes

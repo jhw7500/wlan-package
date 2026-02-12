@@ -7,19 +7,12 @@ CONF_FILE=""
 # TODO: Read wired interface from config.json instead of hardcoding eth0
 WIRED_IF="eth0"
 
-logger -p local0.info "[$tag:$LINENO] [$IFACE] wifi bridge start"
+logger -p local0.info "[$tag:$LINENO] [$IFACE] wbridge start"
 
 if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" ]]; then
     logger -p local0.emerg "[$tag:$LINENO] [$IFACE] interface is wrong!!"
     exit 0
 fi
-
-#for i in {1..3}; do
-#    if [[ -d /sys/class/net/$IFACE ]]; then
-#        break
-#    fi
-#    sleep 5
-#done
 
 both_up() {
     ip link show "$WIRED_IF" | grep -q "state UP" || return 1
@@ -37,7 +30,6 @@ getMac() {
         logger -p local0.crit "[$tag:$LINENO] [$IFACE] Interface is not found"
         echo ""
     fi
-
 }
 
 for _ in $(seq 1 200); do
@@ -57,4 +49,7 @@ if [ ! -f "$CONF_FILE" ]; then
     exit 1
 fi
 
-exec /usr/local/bin/wifi-dumb --ip-filter --no-debug "$WIRED_IF" "$IFACE"
+# Use the new wbridge binary via the wifi-wbridge symlink
+# --ip-filter: Skip re-injection for bridge's local IPs
+# --no-debug: Reduce log noise in production
+exec /usr/local/bin/wifi-wbridge --ip-filter --no-debug "$WIRED_IF" "$IFACE"
