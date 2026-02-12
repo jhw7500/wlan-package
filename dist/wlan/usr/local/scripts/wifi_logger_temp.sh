@@ -23,6 +23,16 @@ LOG_LEVEL=info
 max_cpu_temp=0
 emerg_cnt=0
 
+to_int() {
+    local v
+    v=${1:-}
+    if [[ "$v" =~ ^-?[0-9]+$ ]]; then
+        echo "$v"
+    else
+        echo 0
+    fi
+}
+
 COOLDOWN_SEC=${COOLDOWN_SEC:-60}
 RECOVER_CPU_TEMP=${RECOVER_CPU_TEMP:-$CRIT_CPU_TEMP}
 RECOVER_MLAN_TEMP=${RECOVER_MLAN_TEMP:-$CRIT_MLAN_TEMP}
@@ -48,10 +58,10 @@ stop_wifi_and_bridge() {
 }
 
 read_temps() {
-    CPU_TMP_VAL=$(cat /sys/devices/virtual/thermal/thermal_zone0/temp)
-    CPU_TEMP=$(echo "$CPU_TMP_VAL/1000" | bc)
-    MLAN0_TEMP=$(mlanutl mlan0 get_sensor_temp 2>/dev/null | awk '{print int($4)}')
-    MLAN1_TEMP=$(mlanutl mlan1 get_sensor_temp 2>/dev/null | awk '{print int($4)}')
+    CPU_TMP_VAL=$(to_int "$(cat /sys/devices/virtual/thermal/thermal_zone0/temp 2>/dev/null || echo 0)")
+    CPU_TEMP=$((CPU_TMP_VAL / 1000))
+    MLAN0_TEMP=$(to_int "$(mlanutl mlan0 get_sensor_temp 2>/dev/null | awk '{print int($4)}' || true)")
+    MLAN1_TEMP=$(to_int "$(mlanutl mlan1 get_sensor_temp 2>/dev/null | awk '{print int($4)}' || true)")
 }
 
 cooldown_until_recover() {
@@ -83,10 +93,11 @@ sleep 5
 
 while true; do
     read_temps
-    max_cpu_temp=$(cat /var/log/cantops/max_temp)
+    mkdir -p /var/log/cantops 2>/dev/null || true
+    max_cpu_temp=$(to_int "$(cat /var/log/cantops/max_temp 2>/dev/null || echo 0)")
         
     if (( CPU_TEMP > max_cpu_temp )); then
-        echo $CPU_TEMP > /var/log/cantops/max_temp
+        echo "$CPU_TEMP" > /var/log/cantops/max_temp
     fi
 
     if (( CPU_TEMP >= EMERG_CPU_TEMP )); then
