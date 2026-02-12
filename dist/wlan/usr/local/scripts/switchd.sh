@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 tag=$(basename "$0")
 
 logger -p local0.info "[$tag:$LINENO] start"

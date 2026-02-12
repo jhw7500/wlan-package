@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 tag=$(basename "$0")
 set -euo pipefail
 SRC="/run/log/journal"
@@ -29,4 +29,3 @@ fi
 #find "$DIR" -mindepth 1 -maxdepth 1 -type d -mtime +7 -print -exec rm -rf {} +
 
 sync
-

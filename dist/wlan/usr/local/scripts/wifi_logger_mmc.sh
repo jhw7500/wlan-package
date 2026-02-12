@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 tag=$(basename "$0")
 EXT=/sys/kernel/debug/mmc2/mmc2:0001/ext_csd
 
@@ -70,5 +70,4 @@ while true; do
 
     sleep 300
 done
-
 
