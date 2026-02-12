@@ -11,6 +11,12 @@ KERNEL_VERSION=$(uname -r)
 # Get hostname from system or use default
 hostname=$(hostname 2>/dev/null || echo "cantops-device")
 
+DEBCONF_AVAILABLE=0
+if [ -r /usr/share/debconf/confmodule ]; then
+  . /usr/share/debconf/confmodule
+  DEBCONF_AVAILABLE=1
+fi
+
 INSTALL_DOT_COUNT=0
 
 disable_services_if_enabled() {
@@ -47,34 +53,38 @@ configure)
     logger -p local0.err "[$KEY][$tag:$LINENO] Critical: wbridge-tpacket binary not found at /usr/local/wlan-bridge/wbridge/wbridge-tpacket"
     exit 1
   fi
-  # Ensure config.json exists
-  if [ ! -f /usr/local/etc/config.json ]; then
-    mkdir -p /usr/local/etc
-    cat > /usr/local/etc/config.json << 'CONFIGEOF'
-{
-    "mlan0": {
-        "Frequency": "5GHz",
-        "enabled": true
-    },
-    "mlan1": {
-        "Frequency": "2.4GHz",
-        "enabled": false
-    },
-    "eth0": {
-        "enabled": true
-    }
-}
-CONFIGEOF
-  fi
-  # Validate config.json
-  if command -v jq >/dev/null 2>&1; then
-    if ! jq empty /usr/local/etc/config.json 2>/dev/null; then
-      echo "ERROR: /usr/local/etc/config.json is invalid JSON" >&2
-      logger -p local0.err "[$KEY][$tag:$LINENO] Critical: config.json is invalid JSON"
-      exit 1
+
+  cal_data_cfg_file="WlanCalData_ext_a0.conf"
+  txpwrlimit_cfg_file="txpwrlimit_cfg_9098_a0.conf"
+  if [ "$DEBCONF_AVAILABLE" -eq 1 ]; then
+    db_get pim-mp/cal_data_cfg || true
+    if [ -n "${RET:-}" ]; then
+      cal_data_cfg_file=$RET
+    fi
+
+    RET=""
+    db_get pim-mp/txpwrlimit_cfg || true
+    if [ -n "${RET:-}" ]; then
+      txpwrlimit_cfg_file=$RET
     fi
   fi
-  echo "[INFO] Binary and configuration verification passed"
+
+  mkdir -p /usr/local/etc
+
+  WIFI_INIT_CONF="/usr/local/etc/wifi_init.conf"
+  if [ ! -f "$WIFI_INIT_CONF" ]; then
+    if [ "$cal_data_cfg_file" = "none" ]; then
+      cal_data_cfg_value="none"
+    else
+      cal_data_cfg_value="cts/$cal_data_cfg_file"
+    fi
+    txpwrlimit_value="/lib/firmware/cts/$txpwrlimit_cfg_file"
+
+    cat > "$WIFI_INIT_CONF" <<EOF
+CAL_DATA_CFG="$cal_data_cfg_value"
+TXPWRLIMIT_PATH="$txpwrlimit_value"
+EOF
+  fi
 
   cp /opt/wlan/config/logrotate.d/logrotate.rsyslog /etc/logrotate.d/
   cp /opt/wlan/config/rsyslog.conf /etc/
@@ -199,6 +209,7 @@ makeDirectory() {
   makeDirectory /usr/local/bin
   makeDirectory /usr/local/logger
   makeDirectory /usr/local/scripts
+  makeDirectory /usr/local/etc
 
   touch /opt/wlan/mac/base0 /opt/wlan/mac/base1 /opt/wlan/mac/target0 /opt/wlan/mac/target1 /opt/wlan/mac/wired /opt/wlan/mac/wired_client
 
@@ -227,6 +238,7 @@ cpchk() {
   cpchk /opt/wlan/config/systemd/network/20-mlan0.link /etc/systemd/network/20-mlan0.link
   cpchk /opt/wlan/config/systemd/network/21-mlan1.link /etc/systemd/network/21-mlan1.link
   cpchk /opt/wlan/config/systemd/network/22-eth0.link /etc/systemd/network/22-eth0.link
+  cpchk /opt/wlan/config/config.json /usr/local/etc/config.json
 
   INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 1))
   dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
