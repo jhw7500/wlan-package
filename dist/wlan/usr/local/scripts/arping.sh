@@ -419,6 +419,10 @@ END
         logger -p local0.emerg "[$tag:$LINENO] [$IFACE] reboot"
         logger -p local1.emerg "[$tag:$LINENO] [$IFACE] reboot because arp/route is not recovery"
         sleep $INTERVAL
-        reboot
+        /usr/local/scripts/wlan_reboot_policy.sh \
+          --source arping \
+          --iface "$IFACE" \
+          --reason "arp/route unrecoverable"
+        REBOOT_FLAG=0
     fi
 done
