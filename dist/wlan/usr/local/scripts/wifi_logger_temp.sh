@@ -37,22 +37,14 @@ COOLDOWN_SEC=${COOLDOWN_SEC:-60}
 RECOVER_CPU_TEMP=${RECOVER_CPU_TEMP:-$CRIT_CPU_TEMP}
 RECOVER_MLAN_TEMP=${RECOVER_MLAN_TEMP:-$CRIT_MLAN_TEMP}
 
+WIFI_STOP_UNITS=${WIFI_STOP_UNITS:-"wifi_bridge@mlan0 wifi_bridge@mlan1 wifi_checker@mlan0 wifi_checker@mlan1 wifi_arping@mlan0 wifi_arping@mlan1 wifi_bgscan@mlan0 wifi_bgscan@mlan1 wifi_roam@mlan0 wifi_roam@mlan1 wifi_capture@mlan0 wifi_capture@mlan1 wpa_supplicant@mlan0 wpa_supplicant@mlan1 wifi_logger@mlan0 wifi_logger@mlan1 wifi_logger@eth0"}
+
 stop_wifi_and_bridge() {
     if ! command -v systemctl >/dev/null 2>&1; then
         return 0
     fi
 
-    for unit in \
-        "wifi_bridge@mlan0" "wifi_bridge@mlan1" \
-        "wifi_checker@mlan0" "wifi_checker@mlan1" \
-        "wifi_arping@mlan0" "wifi_arping@mlan1" \
-        "wifi_bgscan@mlan0" "wifi_bgscan@mlan1" \
-        "wifi_roam@mlan0" "wifi_roam@mlan1" \
-        "wifi_capture@mlan0" "wifi_capture@mlan1" \
-        "wpa_supplicant@mlan0" "wpa_supplicant@mlan1" \
-        "wifi_logger@mlan0" "wifi_logger@mlan1" \
-        "wifi_logger@eth0" \
-        ; do
+    for unit in $WIFI_STOP_UNITS; do
         systemctl stop "$unit" 2>/dev/null || true
     done
 }
