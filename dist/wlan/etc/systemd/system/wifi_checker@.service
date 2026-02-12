@@ -3,11 +3,14 @@ Description=WiFi Checker Service for %i
 #After=network.target
 After=wifi_init.service
 
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
 [Service]
 ExecStart=/usr/local/scripts/wifi_checker.sh %i
 Restart=always
+RestartSec=5s
 User=root
 
 [Install]
 WantedBy=multi-user.target
-
