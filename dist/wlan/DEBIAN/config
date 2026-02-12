@@ -123,10 +123,12 @@ fi
 db_get pim-mp/model
 model=$RET
 
-db_get pim-mp/cal_data_cfg
+RET=""
+db_get pim-mp/cal_data_cfg || RET=""
 cal_data_cfg_file=$RET
 
-db_get pim-mp/txpwrlimit_cfg
+RET=""
+db_get pim-mp/txpwrlimit_cfg || RET=""
 txpwrlimit_cfg_file=$RET
 
 if [ -z "$model" ]; then
@@ -164,10 +166,12 @@ db_input medium pim-mp/cal_data_cfg || true
 db_input medium pim-mp/txpwrlimit_cfg || true
 db_go
 
-db_get pim-mp/cal_data_cfg
+RET=""
+db_get pim-mp/cal_data_cfg || RET=""
 cal_data_cfg_file=$RET
 
-db_get pim-mp/txpwrlimit_cfg
+RET=""
+db_get pim-mp/txpwrlimit_cfg || RET=""
 txpwrlimit_cfg_file=$RET
 
 if [ "$model" != "$old_model" ]; then
