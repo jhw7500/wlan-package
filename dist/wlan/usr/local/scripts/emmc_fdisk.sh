@@ -1,3 +1,4 @@
+#!/bin/bash
 DISK=/dev/mmcblk2
 P2=${DISK}p2
 P3=${DISK}p3

@@ -1,6 +1,5 @@
-# /usr/local/bin/init_eth0_route.sh
-
 #!/bin/bash
+# /usr/local/bin/init_eth0_route.sh
 IFACE=eth0
 for i in {2..254}; do
     arping -c 1 -I eth0 192.168.4.$i &

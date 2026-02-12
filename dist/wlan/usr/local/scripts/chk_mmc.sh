@@ -1,3 +1,4 @@
+#!/bin/bash
 tag=$(basename "$0")
 RES=$(cat /sys/kernel/debug/mmc2/mmc2:0001/ext_csd)
 typea="${RES:536:2}"
