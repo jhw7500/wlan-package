@@ -371,13 +371,13 @@ END
                     #((INIT_CNT_MAP["$IP"]++))
                     if [ ${INIT_CNT_MAP["$IP"]:-0} -gt $INIT_LIMIT ]; then
                         REBOOT_CNT_MAP["$IP"]=$(( ${REBOOT_CNT_MAP["$IP"]:-0} + 1 ))
-                        logger -p local1.err "[$tag:$LINENO] [$IFACE] init err(${INIT_CNT_MAP["$IP"]}) over limit($INIT_LIMIT), reboot err(${REBOOT_CNT_MAP["$IP"]})"
+                        logger -p local1.err "[$tag:$LINENO] [$IFACE] init err(${INIT_CNT_MAP["$IP"]}) over limit($INIT_LIMIT), policy reboot attempt(${REBOOT_CNT_MAP["$IP"]})"
                         ACTIVE_BRIDGE=$(systemctl list-units --type=service --state=running | grep -oE 'wifi_bridge@[^ ]+')
                         INIT_CNT_MAP["$IP"]=0
                         if [[ -n "$ACTIVE_BRIDGE" ]]; then
                             if [ ${REBOOT_CNT_MAP["$IP"]:-0} -gt $REBOOT_LIMIT ]; then
-                                logger -p local0.crit "[$tag:$LINENO] [$IFACE] reboot flag set"
-                                logger -p local1.crit "[$tag:$LINENO] [$IFACE] reboot flag set(${REBOOT_CNT_MAP["$IP"]}) over limit($REBOOT_LIMIT)"
+                                logger -p local0.crit "[$tag:$LINENO] [$IFACE] policy reboot flag set"
+                                logger -p local1.crit "[$tag:$LINENO] [$IFACE] policy reboot flag set(${REBOOT_CNT_MAP["$IP"]}) over limit($REBOOT_LIMIT)"
                                 REBOOT_FLAG=1
                             else
                                 logger -p local0.err "[$tag:$LINENO] [$IFACE] restarting $ACTIVE_BRIDGE"
@@ -385,7 +385,7 @@ END
                                 systemctl restart "$ACTIVE_BRIDGE"
                             fi
                         else
-                            logger -p local1.warn "[$tag:$LINENO] [$IFACE] no active wifi_bridge@ service found, reboot err clear"
+                            logger -p local1.warn "[$tag:$LINENO] [$IFACE] no active wifi_bridge@ service found, policy reboot err clear"
                             REBOOT_CNT_MAP["$IP"]=0
                         fi
                     fi
@@ -416,8 +416,8 @@ END
     sleep $INTERVAL
 
     if [ "$REBOOT_FLAG" -eq 1 ]; then
-        logger -p local0.emerg "[$tag:$LINENO] [$IFACE] reboot"
-        logger -p local1.emerg "[$tag:$LINENO] [$IFACE] reboot because arp/route is not recovery"
+        logger -p local0.emerg "[$tag:$LINENO] [$IFACE] requesting reboot via policy"
+        logger -p local1.emerg "[$tag:$LINENO] [$IFACE] requesting reboot via policy because arp/route is not recovery"
         sleep $INTERVAL
         /usr/local/scripts/wlan_reboot_policy.sh \
           --source arping \

@@ -99,8 +99,8 @@ while true; do
             else
                 CAUSE="Wifi F/W"
             fi
-            logger -p local0.emerg "[$tag:$LINENO] [$IFACE] Reboot because $CAUSE error ($ERR_CNT > $LIMIT_CNT)"
-            print red "Reboot because $CAUSE error ($ERR_CNT > $LIMIT_CNT)"
+            logger -p local0.emerg "[$tag:$LINENO] [$IFACE] Requesting reboot via policy: $CAUSE error ($ERR_CNT > $LIMIT_CNT)"
+            print red "Requesting reboot via policy: $CAUSE error ($ERR_CNT > $LIMIT_CNT)"
             #logger -p local0.info "[$tag:$LINENO] [$IFACE] dmesg |tail -1000 > $LOG_FILE"
             #dmesg |tail -1000 > "$LOG_FILE"
             #LOG_FILE="$LOG_DIR/${TIMESTAMP}_jo.log"
