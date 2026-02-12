@@ -86,35 +86,6 @@ cp "${BASEDIR}/wlan-bridge/wbridge/wifi_bridge@.service" "${BASEDIR}/dist/wlan/u
 cp -a "${BASEDIR}/wlan-bridge/scripts/." "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/scripts/" || { echo "Error: Failed to copy scripts"; exit 1; }
 cp -a "${BASEDIR}/wlan-bridge/docs/." "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/docs/" || { echo "Error: Failed to copy docs"; exit 1; }
 
-# Create config directory and default config.json
-mkdir -p "${BASEDIR}/dist/wlan/usr/local/etc"
-if [ ! -f "${BASEDIR}/dist/wlan/usr/local/etc/config.json" ]; then
-    cat > "${BASEDIR}/dist/wlan/usr/local/etc/config.json" << 'CONFIGEOF'
-{
-    "mlan0": {
-        "Frequency": "auto",
-        "enabled": true
-    },
-    "mlan1": {
-        "Frequency": "auto",
-        "enabled": false
-    },
-    "eth0": {
-        "enabled": true
-    }
-}
-CONFIGEOF
-fi
-
-# Validate config.json
-if command -v jq >/dev/null 2>&1; then
-    if ! jq empty "${BASEDIR}/dist/wlan/usr/local/etc/config.json" 2>/dev/null; then
-        echo "Error: config.json is invalid JSON"
-        exit 1
-    fi
-    echo "config.json validated successfully"
-fi
-
 mkdir -p "${BASEDIR}/release"
 cd "${BASEDIR}/dist" || exit 1
 
