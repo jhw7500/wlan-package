@@ -62,6 +62,7 @@ configure)
       cal_data_cfg_file=$RET
     fi
 
+    RET=""
     db_get pim-mp/txpwrlimit_cfg || true
     if [ -n "${RET:-}" ]; then
       txpwrlimit_cfg_file=$RET
