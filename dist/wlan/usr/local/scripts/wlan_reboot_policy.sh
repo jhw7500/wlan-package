@@ -33,6 +33,23 @@ log_all() {
   log_kmsg "$msg"
 }
 
+do_reboot() {
+  if command -v /sbin/reboot >/dev/null 2>&1; then
+    /sbin/reboot
+    return $?
+  fi
+  if command -v reboot >/dev/null 2>&1; then
+    reboot
+    return $?
+  fi
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl reboot
+    return $?
+  fi
+
+  return 127
+}
+
 get_uptime_sec() {
   awk '{print int($1)}' /proc/uptime 2>/dev/null || echo 0
 }
@@ -118,4 +135,8 @@ fi
 
 log_all "reboot: approved (attempt ${count}/${MAX_REBOOT_COUNT}, cooldown=${REBOOT_COOLDOWN_SEC}s, uptime=${uptime}s) (source=${SOURCE:-n/a} iface=${IFACE:-n/a} reason=$REASON)"
 sync
-reboot
+if ! do_reboot; then
+  rc=$?
+  log_all "reboot: failed (rc=$rc) (source=${SOURCE:-n/a} iface=${IFACE:-n/a} reason=$REASON)"
+  exit "$rc"
+fi
