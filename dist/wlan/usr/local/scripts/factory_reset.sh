@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 tag=$(basename "$0")
 logger -p local0.info "[$tag:$LINENO] start"
 /usr/local/logger/print.py cyan "[factory] reset start"
@@ -98,7 +98,7 @@ customctl() {
   customctl enable wifi_logger@mlan0
   customctl enable wifi_checker@mlan0
   customctl enable wifi_bgscan@mlan0
-  cusotmctl enable wifi_roam@mlan0
+  customctl enable wifi_roam@mlan0
   customctl enable wifi_capture@mlan0
 
   cat /dev/null > /opt/wlan/mac/target0
