@@ -37,18 +37,17 @@ configure)
   echo "postinst configure"
 
   # CRITICAL: Verify binaries and config exist BEFORE making any system changes
-  # This prevents leaving the system in an inconsistent state if installation fails
-  if [ ! -f /usr/local/wlan-bridge/dumb/dumb ]; then
-    echo "ERROR: /usr/local/wlan-bridge/dumb/dumb not found" >&2
-    logger -p local0.err "[$KEY][$tag:$LINENO] Critical: dumb binary not found at /usr/local/wlan-bridge/dumb/dumb"
+  if [ ! -f /usr/local/wlan-bridge/wbridge/wbridge ]; then
+    echo "ERROR: /usr/local/wlan-bridge/wbridge/wbridge not found" >&2
+    logger -p local0.err "[$KEY][$tag:$LINENO] Critical: wbridge binary not found at /usr/local/wlan-bridge/wbridge/wbridge"
     exit 1
   fi
-  if [ ! -f /usr/local/wlan-bridge/dumb/dumb-tpacket ]; then
-    echo "ERROR: /usr/local/wlan-bridge/dumb/dumb-tpacket not found" >&2
-    logger -p local0.err "[$KEY][$tag:$LINENO] Critical: dumb-tpacket binary not found at /usr/local/wlan-bridge/dumb/dumb-tpacket"
+  if [ ! -f /usr/local/wlan-bridge/wbridge/wbridge-tpacket ]; then
+    echo "ERROR: /usr/local/wlan-bridge/wbridge/wbridge-tpacket not found" >&2
+    logger -p local0.err "[$KEY][$tag:$LINENO] Critical: wbridge-tpacket binary not found at /usr/local/wlan-bridge/wbridge/wbridge-tpacket"
     exit 1
   fi
-  # Ensure config.json exists (used by wifi_init.sh for interface configuration)
+  # Ensure config.json exists
   if [ ! -f /usr/local/etc/config.json ]; then
     mkdir -p /usr/local/etc
     cat > /usr/local/etc/config.json << 'CONFIGEOF'
@@ -67,7 +66,7 @@ configure)
 }
 CONFIGEOF
   fi
-  # Validate config.json if jq is available
+  # Validate config.json
   if command -v jq >/dev/null 2>&1; then
     if ! jq empty /usr/local/etc/config.json 2>/dev/null; then
       echo "ERROR: /usr/local/etc/config.json is invalid JSON" >&2
@@ -80,11 +79,8 @@ CONFIGEOF
   cp /opt/wlan/config/logrotate.d/logrotate.rsyslog /etc/logrotate.d/
   cp /opt/wlan/config/rsyslog.conf /etc/
   cp /opt/wlan/config/smb.conf /etc/samba/
-  #cp /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/
   cp /opt/wlan/config/wifi_mod_para__.conf /lib/firmware/nxp/
   cp /opt/wlan/config/crontab /etc/
-  #cp /opt/wlan/firmware/* /lib/firmware/nxp/
-  #cp /opt/wlan/driver/* /lib/modules/$KERNEL_VERSION/updates/
   cp /opt/wlan/config/wpa_supplicant/wpa_supplicant@.service /lib/systemd/system/
   cp /opt/wlan/config/systemd/journald.conf /etc/systemd/
   mkdir -p /etc/snmp
@@ -98,7 +94,6 @@ CONFIGEOF
   fi
 
   # wifi_dumb@.service is deprecated (replaced by wifi_bridge@.service).
-  # Enforce disable + mask so it cannot be (re)enabled accidentally on upgraded systems.
   if command -v systemctl >/dev/null 2>&1; then
     systemctl disable --now \
       wifi_dumb@mlan0 \
@@ -114,22 +109,17 @@ CONFIGEOF
     systemctl daemon-reload 2>/dev/null || true
   fi
 
-  #/usr/local/scripts/auto_fs_sizeup.sh 2 2
-  # Time safety for systems without NTP
-  # Only set time if system clock is before 2026-01-01 (prevents future date issues)
   SAFE_TIME="2026-01-01 00:00:00"
   CURRENT_TS=$(date +%s)
   SAFE_TS=$(date -d "$SAFE_TIME" +%s 2>/dev/null || echo 1767225600)
   echo "date : $(date '+%Y-%m-%d %H:%M:%S')"
 
   if [ "$CURRENT_TS" -lt "$SAFE_TS" ]; then
-    # System time is before 2026-01-01, set to safe time
     echo "WARNING: System time is before $SAFE_TIME, setting to safe time"
     timedatectl set-ntp false 2>/dev/null || true
     timedatectl set-timezone Asia/Seoul 2>/dev/null || true
     timedatectl set-time "$SAFE_TIME" 2>/dev/null || true
   else
-    # Time looks reasonable (after 2026-01-01), just set timezone
     timedatectl set-timezone Asia/Seoul 2>/dev/null || true
   fi
 
@@ -151,14 +141,10 @@ set_timezone() {
   fi
 }
 
-  #set_timezone Japan
-
 customctl() {
     target=$1
     daemon_name=$2
-
     status=$(systemctl is-enabled $daemon_name 2>/dev/null)
-
     if [[ $status != ${target}* ]]; then
         if [[ $target = enable* ]]; then
             systemctl enable $daemon_name
@@ -174,7 +160,6 @@ customctl() {
             return 1
         fi
     fi
-
     status=$(systemctl is-enabled $daemon_name 2>/dev/null)
     echo "$daemon_name is $status"
     INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 1))
@@ -185,69 +170,11 @@ customctl() {
     mv /etc/init.d/samba /etc/init.d/samba.disabled
   fi
 
-  # Batch processing for better performance (replaces individual customctl calls)
   echo "[installer] Optimizing service configuration (batch processing)..."
+  systemctl mask systemd-networkd-wait-online nfs-server proc-fs-nfsd.mount ovsdb-server avahi-daemon avahi-autoipd psplash || true
+  systemctl disable --now dhcpcd psplash-quit weston openvswitch openvswitch-switch connman smb nmb avahi-daemon.socket containerd lighttpd nginx monkey netdata collectd thttpd named bind fake-hwclock.timer journald-snapshot.timer ifplugd systemd-resolved hiawatha netserver wifi_checker@eth0 || true
+  systemctl enable watchdog switchd fake-hwclock wifi_init wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 wifi_logger@mlan0 wifi_checker@mlan0 wifi_bgscan@mlan0 wifi_roam@mlan0 wifi_arping@mlan0 || true
 
-  # 1. Mask services
-  systemctl mask \
-    systemd-networkd-wait-online \
-    nfs-server \
-    proc-fs-nfsd.mount \
-    ovsdb-server \
-    avahi-daemon \
-    avahi-autoipd \
-    psplash \
-    || true
-
-  # 2. Disable services (stop if running)
-  systemctl disable --now \
-    dhcpcd \
-    psplash-quit \
-    weston \
-    openvswitch \
-    openvswitch-switch \
-    connman \
-    smb \
-    nmb \
-    avahi-daemon.socket \
-    containerd \
-    lighttpd \
-    nginx \
-    monkey \
-    netdata \
-    collectd \
-    thttpd \
-    named \
-    bind \
-    fake-hwclock.timer \
-    journald-snapshot.timer \
-    ifplugd \
-    systemd-resolved \
-    hiawatha \
-    netserver \
-    wifi_checker@eth0 \
-    || true
-    # Note: samba, hciattach, wifi_logger@mlan1, wifi_checker@mlan1, etc. were commented out or disabled in original
-
-  # 3. Enable services
-  systemctl enable \
-    watchdog \
-    switchd \
-    fake-hwclock \
-    wifi_init \
-    wifi_logger \
-    wifi_led@eth0 \
-    wifi_logger@eth0 \
-    wifi_led@mlan0 \
-    wifi_logger@mlan0 \
-    wifi_checker@mlan0 \
-    wifi_bgscan@mlan0 \
-    wifi_roam@mlan0 \
-    wifi_arping@mlan0 \
-    || true
-    # Note: wpa_supplicant@mlan0, wifi_bridge@mlan0 were commented out in original
-
-  # Update progress dots roughly
   INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 10))
   dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
   /usr/local/logger/print.py green "\r\n[installer] installing${dots}"
@@ -259,7 +186,6 @@ makeDirectory() {
         if [ $? -eq 0 ]; then
             echo "Directory $1 created successfully."
         else
-            #echo "Failed to create $1 directory."
             logger -s -p local0.err "Failed to create $1 directory."
             exit 1
         fi
@@ -274,26 +200,11 @@ makeDirectory() {
   makeDirectory /usr/local/logger
   makeDirectory /usr/local/scripts
 
-  touch /opt/wlan/mac/base0
-  touch /opt/wlan/mac/base1
-  touch /opt/wlan/mac/target0
-  touch /opt/wlan/mac/target1
-  touch /opt/wlan/mac/wired
-  touch /opt/wlan/mac/wired_client
-
-#  chmod -R 777 /mnt/sd_cam
-#  chmod 777 /share
-#  chmod 777 /shared
-#  echo "set sshd"
-#  sed 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' -i /etc/ssh/sshd_config
-
-  #echo "set printk"
-  #sed '/kernel.printk/ c\kernel.printk = 2 4 1 3' -i /etc/sysctl.conf
+  touch /opt/wlan/mac/base0 /opt/wlan/mac/base1 /opt/wlan/mac/target0 /opt/wlan/mac/target1 /opt/wlan/mac/wired /opt/wlan/mac/wired_client
 
   echo "set hostname"
   echo $hostname > /etc/hostname
   sed -i "2s/.*/127.0.1.1 $hostname/" /etc/hosts
-#  sed -i 's/#kernel.printk = 3 4 1 3/kernel.printk = 2 4 1 3/g' -i /etc/sysctl.conf
 
   INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 1))
   dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
@@ -305,11 +216,6 @@ cpchk() {
     cp $1 $2
   fi
 }
-  #if [ ! -f /lib/firmware/nxp/wifi_mod_para__.conf ]; then
-  #  logger -s -p local0.notice "[$KEY][$tag:$LINENO] cp /lib/firmware/nxp/wifi_mod_para__.conf"
-  #  cp /opt/wlan/config/wifi_mod_para__.conf /lib/firmware/nxp/wifi_mod_para__.conf
-  #fi
-
   cpchk /opt/wlan/mfg/bridge_init.conf /usr/local/mfg/bridge_init.conf
   cpchk /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/timesyncd.conf
   cpchk /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan0.conf /etc/wpa_supplicant/wpa_supplicant-mlan0.conf
@@ -326,18 +232,20 @@ cpchk() {
   dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
   /usr/local/logger/print.py green "\r\n[installer] create symlinks..."
 
-  # Create symlinks for wlan-bridge binaries
-  # Ensure target directory exists
+  # Create symlinks for wlan-bridge binaries (wbridge)
   mkdir -p /usr/local/bin
+  ln -sf /usr/local/wlan-bridge/wbridge/wbridge /usr/local/bin/wifi-wbridge
+  ln -sf /usr/local/wlan-bridge/wbridge/wbridge-tpacket /usr/local/bin/wifi-wbridge-tpacket
+  #ln -sf /usr/local/wlan-bridge/wbridge/wbridge /usr/local/bin/wbridge
+  #ln -sf /usr/local/wlan-bridge/wbridge/wbridge-tpacket /usr/local/bin/wbridge-tpacket
+  
+  # Legacy compatibility symlinks (keep for old scripts if necessary)
+  #ln -sf /usr/local/wlan-bridge/wbridge/wbridge /usr/local/bin/wifi-dumb
+  #ln -sf /usr/local/wlan-bridge/wbridge/wbridge-tpacket /usr/local/bin/wifi-dumb-tpacket
+  #ln -sf /usr/local/wlan-bridge/wbridge/wbridge /usr/local/bin/dumb
+  #ln -sf /usr/local/wlan-bridge/wbridge/wbridge-tpacket /usr/local/bin/dumb-tpacket
 
-  # ln -sf automatically overwrites existing files/symlinks
-  ln -sf /usr/local/wlan-bridge/dumb/dumb /usr/local/bin/wifi-dumb
-  ln -sf /usr/local/wlan-bridge/dumb/dumb-tpacket /usr/local/bin/wifi-dumb-tpacket
-  # Legacy compatibility: link dumb directly to actual binary (no chain)
-  ln -sf /usr/local/wlan-bridge/dumb/dumb /usr/local/bin/dumb
-  ln -sf /usr/local/wlan-bridge/dumb/dumb-tpacket /usr/local/bin/dumb-tpacket
-
-  logger -p local0.info "[$KEY][$tag:$LINENO] Successfully created symlinks for wlan-bridge binaries"
+  logger -p local0.info "[$KEY][$tag:$LINENO] Successfully created symlinks for wbridge binaries"
 
   # NXP WLAN tools
   ln -sf /opt/wlan/bin/iw /usr/local/bin/iw
@@ -345,11 +253,8 @@ cpchk() {
   ln -sf /opt/wlan/bin/mlan2040coex /usr/local/bin/mlan2040coex
   ln -sf /opt/wlan/bin/mlanconfig /usr/local/bin/mlanconfig
   ln -sf /opt/wlan/bin/mlanevent.exe /usr/local/bin/mlanevent
-
   rm -rf /usr/local/mfgtool 2>/dev/null || true
   ln -sf /opt/wlan/mfg/mfgbridge /usr/local/mfg/mfgbridge
-
-  # Utility symlinks
   ln -sf /usr/local/scripts/wifi.sh /usr/local/bin/wifi
   ln -sf /var/log/cantops/journal /var/log/journal 2>/dev/null || true
   ln -sf /usr/local/scripts/logctl.sh /usr/local/bin/logctl
@@ -359,14 +264,7 @@ cpchk() {
   ln -sf /usr/local/logger/print.py /usr/local/bin/print
   ln -sf /usr/local/scripts/wifi_mfg.sh /usr/local/bin/mfg
 
-  #tar -xvf /opt/wlan/webmin/webmin_usr.tar -C /usr/libexec/
-  #tar -xvf /opt/wlan/webmin/webmin_etc.tar -C /etc/
-
   /usr/local/logger/print.py green "\r\n[installer] change line..."
-  #/usr/local/scripts/add_line.sh "00 *      * * *    root        logrotate /etc/logrotate.d/logrotate.rsyslog" /etc/crontab
-  #/usr/local/scripts/comment_line.sh "tmpfs                /var/volatile" /etc/fstab
-  #/usr/local/scripts/change_line.sh "echo 1 > /proc/sys/kernel/printk" "/proc/sys/kernel/printk" /etc/rc.local
-  #/usr/local/scripts/comment_line.sh "/proc/sys/kernel/printk" /etc/rc.local
   /usr/local/scripts/change_line.sh "#echo 7 > /proc/sys/kernel/printk" "/proc/sys/kernel/printk" /etc/rc.local
   /usr/local/scripts/change_line.sh "kernel.printk = 1 4 1 7" "kernel.printk = " /etc/sysctl.conf
   /usr/local/scripts/change_line.sh "#tmpfs                /var/volatile        tmpfs      defaults              0  0" "tmpfs                /var/volatile" /etc/fstab
@@ -385,7 +283,6 @@ cpchk() {
 
   PACKAGE_NAME="$DPKG_MAINTSCRIPT_PACKAGE"
   echo -e "\e[1m installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)\e[0m"
-  #echo -e "\e[32m installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME) : finish\e[0m" > /dev/ttyGS0
   logger -p local0.info "[$KEY][$tag:$LINENO] installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)"
   /usr/local/logger/print.py green "\r\n[installer] installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)"
   /usr/local/scripts/fake-hwclock.sh save
