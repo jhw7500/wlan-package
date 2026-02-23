@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 import json
 import time
@@ -7,33 +6,584 @@ import re
 import sys
 import signal
 import logging
+import logging.handlers
+import os
+from typing import Any, Dict
 from datetime import datetime
+from collections import deque
 from sUTILS import Logger, _EXTRA_
 
-VERSION = "0.0"
+VERSION = "1.1"
 IFACE = "mlan0"
 LINK_LOG_FILE = f"/var/log/cantops/json/{IFACE}/link.json"
 SCAN_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/ap.log"
 FREQ_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/freq.log"
 WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
 ROAM_CONDITION_FLAG = "/tmp/roam_condition"
-DEFAULT_TH_2G = -75
-DEFAULT_TH_5G = -75
+WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
 WPA_SSID = None
 WPA_FREQ = None
 WPA_TH_2G = None
 WPA_TH_5G = None
 WPA_TH_CONNECT = None
-DIFF_TH = 10
-CHECK_INTERVAL = 5
 
+# ==============================================================================
+# 기본 설정값 (Default Configuration)
+# ==============================================================================
+DEFAULT_TH_2G = -75
+DEFAULT_TH_5G = -75
+DIFF_TH = 10
+CHECK_INTERVAL = 1
+
+
+def is_valid_rssi(rssi) -> bool:
+    if not isinstance(rssi, int):
+        return False
+    return -120 <= rssi <= -1
+
+
+# 개선 설정 기본값 (Default Improvement Configuration)
+DEFAULT_ENABLE_PREDICTIVE_ROAM = True
+DEFAULT_PREDICTIVE_THRESHOLD_BOOST = 5
+DEFAULT_TREND_WINDOW_SIZE = 5
+DEFAULT_TREND_HISTORY_MAX_AGE = 30
+DEFAULT_ENABLE_LOAD_BASED_ROAM = True
+DEFAULT_MAX_ROAM_LOAD = 80
+DEFAULT_LOAD_DIFF_THRESHOLD = 20
+DEFAULT_ENABLE_PING_PONG_PREVENTION = True
+DEFAULT_PING_PONG_WINDOW = 60
+DEFAULT_MAX_ROAMS_IN_WINDOW = 3
+DEFAULT_PING_PONG_DETECTION_TIME = 30
+DEFAULT_ENABLE_ADAPTIVE_INTERVAL = True
+DEFAULT_MIN_CHECK_INTERVAL = 1
+DEFAULT_MAX_CHECK_INTERVAL = 10
+
+# Sleep 기본값
+DEFAULT_SCAN_NO_RESULT_SLEEP = 3   # AP 스캔 결과 없을 때 재시도 대기
+DEFAULT_ROAM_SUCCESS_SLEEP = 5     # 로밍 성공 후 안정화 대기
+
+# Post-Roam ARP 최적화 기본값
+DEFAULT_ENABLE_POST_ROAM_ARP_OPTIMIZATION = True
+DEFAULT_POST_ROAM_GARP_COUNT = 2
+DEFAULT_POST_ROAM_GARP_WAIT = 1
+DEFAULT_ENABLE_POST_ROAM_PEER_WARMUP = True
+DEFAULT_POST_ROAM_PEER_COUNT = 5
+DEFAULT_POST_ROAM_PEER_WAIT = 1
+
+# 현재 설정값 (Current Configuration - will be loaded from JSON)
+ENABLE_PREDICTIVE_ROAM = DEFAULT_ENABLE_PREDICTIVE_ROAM
+PREDICTIVE_THRESHOLD_BOOST = DEFAULT_PREDICTIVE_THRESHOLD_BOOST
+TREND_WINDOW_SIZE = DEFAULT_TREND_WINDOW_SIZE
+TREND_HISTORY_MAX_AGE = DEFAULT_TREND_HISTORY_MAX_AGE
+ENABLE_LOAD_BASED_ROAM = DEFAULT_ENABLE_LOAD_BASED_ROAM
+MAX_ROAM_LOAD = DEFAULT_MAX_ROAM_LOAD
+LOAD_DIFF_THRESHOLD = DEFAULT_LOAD_DIFF_THRESHOLD
+ENABLE_PING_PONG_PREVENTION = DEFAULT_ENABLE_PING_PONG_PREVENTION
+PING_PONG_WINDOW = DEFAULT_PING_PONG_WINDOW
+MAX_ROAMS_IN_WINDOW = DEFAULT_MAX_ROAMS_IN_WINDOW
+PING_PONG_DETECTION_TIME = DEFAULT_PING_PONG_DETECTION_TIME
+ENABLE_ADAPTIVE_INTERVAL = DEFAULT_ENABLE_ADAPTIVE_INTERVAL
+MIN_CHECK_INTERVAL = DEFAULT_MIN_CHECK_INTERVAL
+MAX_CHECK_INTERVAL = DEFAULT_MAX_CHECK_INTERVAL
+
+# Sleep 설정
+SCAN_NO_RESULT_SLEEP = DEFAULT_SCAN_NO_RESULT_SLEEP
+ROAM_SUCCESS_SLEEP = DEFAULT_ROAM_SUCCESS_SLEEP
+
+# Post-Roam ARP 최적화 설정
+ENABLE_POST_ROAM_ARP_OPTIMIZATION = DEFAULT_ENABLE_POST_ROAM_ARP_OPTIMIZATION
+POST_ROAM_GARP_COUNT = DEFAULT_POST_ROAM_GARP_COUNT
+POST_ROAM_GARP_WAIT = DEFAULT_POST_ROAM_GARP_WAIT
+ENABLE_POST_ROAM_PEER_WARMUP = DEFAULT_ENABLE_POST_ROAM_PEER_WARMUP
+POST_ROAM_PEER_COUNT = DEFAULT_POST_ROAM_PEER_COUNT
+POST_ROAM_PEER_WAIT = DEFAULT_POST_ROAM_PEER_WAIT
+
+
+# ==============================================================================
+# 설정 로드 함수 (Configuration Loader)
+# ==============================================================================
+def parse_bool(value):
+    """문자열을 boolean으로 변환"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in ("true", "1", "yes", "on", "enabled")
+    return bool(value)
+
+
+def load_roaming_config(iface):
+    """
+    JSON 형식의 conf 파일에서 인터페이스별 로밍 설정 로드
+
+    Args:
+        iface: 인터페이스 이름 (mlan0 또는 mlan1)
+
+    Returns:
+        dict: 로밍 설정 dictionary
+    """
+    global ENABLE_PREDICTIVE_ROAM, PREDICTIVE_THRESHOLD_BOOST
+    global TREND_WINDOW_SIZE, TREND_HISTORY_MAX_AGE
+    global ENABLE_LOAD_BASED_ROAM, MAX_ROAM_LOAD, LOAD_DIFF_THRESHOLD
+    global ENABLE_PING_PONG_PREVENTION, PING_PONG_WINDOW
+    global MAX_ROAMS_IN_WINDOW, PING_PONG_DETECTION_TIME
+    global ENABLE_ADAPTIVE_INTERVAL, MIN_CHECK_INTERVAL, MAX_CHECK_INTERVAL
+    global DEFAULT_TH_2G, DEFAULT_TH_5G, DIFF_TH, CHECK_INTERVAL
+    global ENABLE_POST_ROAM_ARP_OPTIMIZATION, POST_ROAM_GARP_COUNT
+    global POST_ROAM_GARP_WAIT, ENABLE_POST_ROAM_PEER_WARMUP
+    global POST_ROAM_PEER_COUNT, POST_ROAM_PEER_WAIT
+    global SCAN_NO_RESULT_SLEEP, ROAM_SUCCESS_SLEEP
+
+    config = {
+        "ENABLE_PREDICTIVE_ROAM": DEFAULT_ENABLE_PREDICTIVE_ROAM,
+        "PREDICTIVE_THRESHOLD_BOOST": DEFAULT_PREDICTIVE_THRESHOLD_BOOST,
+        "TREND_WINDOW_SIZE": DEFAULT_TREND_WINDOW_SIZE,
+        "TREND_HISTORY_MAX_AGE": DEFAULT_TREND_HISTORY_MAX_AGE,
+        "ENABLE_LOAD_BASED_ROAM": DEFAULT_ENABLE_LOAD_BASED_ROAM,
+        "MAX_ROAM_LOAD": DEFAULT_MAX_ROAM_LOAD,
+        "LOAD_DIFF_THRESHOLD": DEFAULT_LOAD_DIFF_THRESHOLD,
+        "ENABLE_PING_PONG_PREVENTION": DEFAULT_ENABLE_PING_PONG_PREVENTION,
+        "PING_PONG_WINDOW": DEFAULT_PING_PONG_WINDOW,
+        "MAX_ROAMS_IN_WINDOW": DEFAULT_MAX_ROAMS_IN_WINDOW,
+        "PING_PONG_DETECTION_TIME": DEFAULT_PING_PONG_DETECTION_TIME,
+        "ENABLE_ADAPTIVE_INTERVAL": DEFAULT_ENABLE_ADAPTIVE_INTERVAL,
+        "MIN_CHECK_INTERVAL": DEFAULT_MIN_CHECK_INTERVAL,
+        "MAX_CHECK_INTERVAL": DEFAULT_MAX_CHECK_INTERVAL,
+        "DEFAULT_TH_2G": DEFAULT_TH_2G,
+        "DEFAULT_TH_5G": DEFAULT_TH_5G,
+        "DIFF_TH": DIFF_TH,
+        "CHECK_INTERVAL": CHECK_INTERVAL,
+        "ENABLE_POST_ROAM_ARP_OPTIMIZATION": DEFAULT_ENABLE_POST_ROAM_ARP_OPTIMIZATION,
+        "POST_ROAM_GARP_COUNT": DEFAULT_POST_ROAM_GARP_COUNT,
+        "POST_ROAM_GARP_WAIT": DEFAULT_POST_ROAM_GARP_WAIT,
+        "ENABLE_POST_ROAM_PEER_WARMUP": DEFAULT_ENABLE_POST_ROAM_PEER_WARMUP,
+        "POST_ROAM_PEER_COUNT": DEFAULT_POST_ROAM_PEER_COUNT,
+        "POST_ROAM_PEER_WAIT": DEFAULT_POST_ROAM_PEER_WAIT,
+        "SCAN_NO_RESULT_SLEEP": DEFAULT_SCAN_NO_RESULT_SLEEP,
+        "ROAM_SUCCESS_SLEEP": DEFAULT_ROAM_SUCCESS_SLEEP,
+    }
+
+    # 1. JSON 설정 파일 시도
+    try:
+        with open(WIFI_INIT_CONF_JSON, "r") as f:
+            data = json.load(f)
+
+            if iface in data and "roaming" in data[iface]:
+                roam_config = data[iface]["roaming"]
+
+                predictive = roam_config.get("PREDICTIVE_ROAM")
+                if isinstance(predictive, dict):
+                    enable = predictive.get("enable")
+                    if enable is not None:
+                        config["ENABLE_PREDICTIVE_ROAM"] = parse_bool(enable)
+
+                    threshold_boost = predictive.get("threshold_boost")
+                    if threshold_boost is not None:
+                        config["PREDICTIVE_THRESHOLD_BOOST"] = int(threshold_boost)
+
+                    trend_window_size = predictive.get("trend_window_size")
+                    if trend_window_size is not None:
+                        config["TREND_WINDOW_SIZE"] = int(trend_window_size)
+
+                    trend_history_max_age = predictive.get("trend_history_max_age")
+                    if trend_history_max_age is not None:
+                        config["TREND_HISTORY_MAX_AGE"] = int(trend_history_max_age)
+
+                load_based = roam_config.get("LOAD_BASED_ROAM")
+                if isinstance(load_based, dict):
+                    enable = load_based.get("enable")
+                    if enable is not None:
+                        config["ENABLE_LOAD_BASED_ROAM"] = parse_bool(enable)
+
+                    max_roam_load = load_based.get("max_roam_load")
+                    if max_roam_load is not None:
+                        config["MAX_ROAM_LOAD"] = int(max_roam_load)
+
+                    load_diff_threshold = load_based.get("load_diff_threshold")
+                    if load_diff_threshold is not None:
+                        config["LOAD_DIFF_THRESHOLD"] = int(load_diff_threshold)
+
+                ping_pong = roam_config.get("PING_PONG_PREVENTION")
+                if isinstance(ping_pong, dict):
+                    enable = ping_pong.get("enable")
+                    if enable is not None:
+                        config["ENABLE_PING_PONG_PREVENTION"] = parse_bool(enable)
+
+                    window = ping_pong.get("window")
+                    if window is not None:
+                        config["PING_PONG_WINDOW"] = int(window)
+
+                    max_roams_in_window = ping_pong.get("max_roams_in_window")
+                    if max_roams_in_window is not None:
+                        config["MAX_ROAMS_IN_WINDOW"] = int(max_roams_in_window)
+
+                    detection_time = ping_pong.get("detection_time")
+                    if detection_time is not None:
+                        config["PING_PONG_DETECTION_TIME"] = int(detection_time)
+
+                adaptive = roam_config.get("ADAPTIVE_INTERVAL")
+                if isinstance(adaptive, dict):
+                    enable = adaptive.get("enable")
+                    if enable is not None:
+                        config["ENABLE_ADAPTIVE_INTERVAL"] = parse_bool(enable)
+
+                    min_check_interval = adaptive.get("min_check_interval")
+                    if min_check_interval is not None:
+                        config["MIN_CHECK_INTERVAL"] = int(min_check_interval)
+
+                    max_check_interval = adaptive.get("max_check_interval")
+                    if max_check_interval is not None:
+                        config["MAX_CHECK_INTERVAL"] = int(max_check_interval)
+
+                post_roam = roam_config.get("POST_ROAM_ARP_OPTIMIZATION")
+                if isinstance(post_roam, dict):
+                    enable = post_roam.get("enable")
+                    if enable is not None:
+                        config["ENABLE_POST_ROAM_ARP_OPTIMIZATION"] = parse_bool(enable)
+
+                    garp_count = post_roam.get("garp_count")
+                    if garp_count is not None:
+                        config["POST_ROAM_GARP_COUNT"] = int(garp_count)
+
+                    garp_wait = post_roam.get("garp_wait")
+                    if garp_wait is not None:
+                        config["POST_ROAM_GARP_WAIT"] = int(garp_wait)
+
+                    peer_warmup = post_roam.get("PEER_WARMUP")
+                    if isinstance(peer_warmup, dict):
+                        enable = peer_warmup.get("enable")
+                        if enable is not None:
+                            config["ENABLE_POST_ROAM_PEER_WARMUP"] = parse_bool(enable)
+
+                        peer_count = peer_warmup.get("peer_count")
+                        if peer_count is not None:
+                            config["POST_ROAM_PEER_COUNT"] = int(peer_count)
+
+                        peer_wait = peer_warmup.get("peer_wait")
+                        if peer_wait is not None:
+                            config["POST_ROAM_PEER_WAIT"] = int(peer_wait)
+
+                # 설정 적용
+                for key in config.keys():
+                    if key in roam_config:
+                        config[key] = roam_config[key]
+
+    except FileNotFoundError:
+        if "logger" in globals():
+            logger.message(
+                "warn",
+                f"[{iface}] roaming config not found: {WIFI_INIT_CONF_JSON}",
+                _EXTRA_(),
+            )
+    except json.JSONDecodeError as e:
+        if "logger" in globals():
+            logger.message(
+                "err", f"[{iface}] roaming config JSON decode error: {e}", _EXTRA_()
+            )
+    except Exception as e:
+        if "logger" in globals():
+            logger.message(
+                "err", f"[{iface}] roaming config load error: {e}", _EXTRA_()
+            )
+
+    # 전역 변수 업데이트
+    ENABLE_PREDICTIVE_ROAM = config["ENABLE_PREDICTIVE_ROAM"]
+    PREDICTIVE_THRESHOLD_BOOST = config["PREDICTIVE_THRESHOLD_BOOST"]
+    TREND_WINDOW_SIZE = config["TREND_WINDOW_SIZE"]
+    TREND_HISTORY_MAX_AGE = config["TREND_HISTORY_MAX_AGE"]
+    ENABLE_LOAD_BASED_ROAM = config["ENABLE_LOAD_BASED_ROAM"]
+    MAX_ROAM_LOAD = config["MAX_ROAM_LOAD"]
+    LOAD_DIFF_THRESHOLD = config["LOAD_DIFF_THRESHOLD"]
+    ENABLE_PING_PONG_PREVENTION = config["ENABLE_PING_PONG_PREVENTION"]
+    PING_PONG_WINDOW = config["PING_PONG_WINDOW"]
+    MAX_ROAMS_IN_WINDOW = config["MAX_ROAMS_IN_WINDOW"]
+    PING_PONG_DETECTION_TIME = config["PING_PONG_DETECTION_TIME"]
+    ENABLE_ADAPTIVE_INTERVAL = config["ENABLE_ADAPTIVE_INTERVAL"]
+    MIN_CHECK_INTERVAL = config["MIN_CHECK_INTERVAL"]
+    MAX_CHECK_INTERVAL = config["MAX_CHECK_INTERVAL"]
+    DEFAULT_TH_2G = config.get("DEFAULT_TH_2G", DEFAULT_TH_2G)
+    DEFAULT_TH_5G = config.get("DEFAULT_TH_5G", DEFAULT_TH_5G)
+    DIFF_TH = config["DIFF_TH"]
+    try:
+        CHECK_INTERVAL = int(config["CHECK_INTERVAL"])
+    except Exception:
+        CHECK_INTERVAL = CHECK_INTERVAL
+    ENABLE_POST_ROAM_ARP_OPTIMIZATION = config["ENABLE_POST_ROAM_ARP_OPTIMIZATION"]
+    POST_ROAM_GARP_COUNT = config["POST_ROAM_GARP_COUNT"]
+    POST_ROAM_GARP_WAIT = config["POST_ROAM_GARP_WAIT"]
+    ENABLE_POST_ROAM_PEER_WARMUP = config["ENABLE_POST_ROAM_PEER_WARMUP"]
+    POST_ROAM_PEER_COUNT = config["POST_ROAM_PEER_COUNT"]
+    POST_ROAM_PEER_WAIT = config["POST_ROAM_PEER_WAIT"]
+    SCAN_NO_RESULT_SLEEP = int(config["SCAN_NO_RESULT_SLEEP"])
+    ROAM_SUCCESS_SLEEP = int(config["ROAM_SUCCESS_SLEEP"])
+
+    logger.message(
+        "info",
+        f"[{IFACE}] Roaming config loaded: "
+        f"predictive={ENABLE_PREDICTIVE_ROAM}, load_based={ENABLE_LOAD_BASED_ROAM}, "
+        f"ping_pong={ENABLE_PING_PONG_PREVENTION}, adaptive={ENABLE_ADAPTIVE_INTERVAL}, "
+        f"post_roam_arp={ENABLE_POST_ROAM_ARP_OPTIMIZATION}",
+        _EXTRA_(),
+    )
+
+    logger.message(
+        "info",
+        f"[{IFACE}] Roaming effective values: "
+        f"th_2g={DEFAULT_TH_2G}, th_5g={DEFAULT_TH_5G}, diff_th={DIFF_TH}, check_interval={CHECK_INTERVAL}, "
+        f"predictive(boost={PREDICTIVE_THRESHOLD_BOOST}, window={TREND_WINDOW_SIZE}, max_age={TREND_HISTORY_MAX_AGE}), "
+        f"load(max_roam_load={MAX_ROAM_LOAD}, load_diff_th={LOAD_DIFF_THRESHOLD}), "
+        f"ping_pong(window={PING_PONG_WINDOW}, max_roams={MAX_ROAMS_IN_WINDOW}, detect_time={PING_PONG_DETECTION_TIME}), "
+        f"adaptive(min={MIN_CHECK_INTERVAL}, max={MAX_CHECK_INTERVAL}), "
+        f"post_roam_arp(garp_count={POST_ROAM_GARP_COUNT}, garp_wait={POST_ROAM_GARP_WAIT}, "
+        f"peer_warmup={ENABLE_POST_ROAM_PEER_WARMUP}, peer_count={POST_ROAM_PEER_COUNT}, peer_wait={POST_ROAM_PEER_WAIT})",
+        _EXTRA_(),
+    )
+
+    return config
+
+
+# ==============================================================================
+# RSSI 추적기 (RSSI Trend Tracker)
+# ==============================================================================
+class RSSITrendTracker:
+    """RSSI 추세를 분석하여 예측형 로밍을 지원"""
+
+    TREND_FALLING = -1
+    TREND_STABLE = 0
+    TREND_RISING = 1
+
+    def __init__(self, window_size=TREND_WINDOW_SIZE, max_age=TREND_HISTORY_MAX_AGE):
+        self.window_size = window_size
+        self.max_age = max_age
+        self.rssi_history = []  # [(timestamp, rssi), ...]
+
+    def add_sample(self, rssi):
+        """RSSI 샘플 추가"""
+        now = time.time()
+        self.rssi_history.append((now, rssi))
+
+        # 오래된 샘플 제거
+        self.rssi_history = [
+            (t, r) for t, r in self.rssi_history if now - t < self.max_age
+        ]
+
+    def get_trend(self):
+        """
+        신호 추세 반환
+        -1: 하락 (신호 악화 중)
+        0: 유지
+        1: 상승 (신호 개선 중)
+        """
+        if len(self.rssi_history) < 3:
+            return self.TREND_STABLE
+
+        # 최근 샘플만 사용
+        recent = self.rssi_history[-min(self.window_size, len(self.rssi_history)) :]
+        n = len(recent)
+
+        if n < 2:
+            return self.TREND_STABLE
+
+        # 선형 회귀로 기울기 계산
+        t0 = recent[0][0]
+        sum_x = sum((t - t0) for t, _ in recent)
+        sum_y = sum(r for _, r in recent)
+        sum_xy = sum((t - t0) * r for t, r in recent)
+        sum_x2 = sum((t - t0) * (t - t0) for t, _ in recent)
+
+        denominator = n * sum_x2 - sum_x * sum_x
+        if denominator == 0:
+            return self.TREND_STABLE
+
+        slope = (n * sum_xy - sum_x * sum_y) / denominator
+
+        if slope < -0.5:  # 초당 0.5dB 이상 하락
+            return self.TREND_FALLING
+        elif slope > 0.5:  # 초당 0.5dB 이상 상승
+            return self.TREND_RISING
+        else:
+            return self.TREND_STABLE
+
+    def get_avg_rssi(self):
+        """평균 RSSI 반환"""
+        if not self.rssi_history:
+            return None
+        recent = self.rssi_history[-min(self.window_size, len(self.rssi_history)) :]
+        return sum(r for _, r in recent) / len(recent)
+
+    def is_falling_rapidly(self, threshold=-2.0):
+        """RSSI가 급격히 하락 중인지 확인"""
+        if len(self.rssi_history) < 2:
+            return False
+
+        recent = self.rssi_history[-min(3, len(self.rssi_history)) :]
+        if len(recent) < 2:
+            return False
+
+        # 최근 3샘플의 평균 기울기 확인
+        for i in range(len(recent) - 1):
+            t1, r1 = recent[i]
+            t2, r2 = recent[i + 1]
+            dt = t2 - t1
+            if dt > 0:
+                slope = (r2 - r1) / dt
+                if slope < threshold:
+                    return True
+        return False
+
+
+# ==============================================================================
+# Ping-pong 방지 (Ping-pong Prevention)
+# ==============================================================================
+class PingPongPreventer:
+    """불필요한 반복 로밍 방지"""
+
+    def __init__(self, window_seconds=PING_PONG_WINDOW, max_roams=MAX_ROAMS_IN_WINDOW):
+        self.window_seconds = window_seconds
+        self.max_roams = max_roams
+        self.roam_history = deque()  # [(timestamp, from_bssid, to_bssid), ...]
+
+    def add_roam(self, from_bssid, to_bssid):
+        """로밍 기록 추가"""
+        now = time.time()
+        self.roam_history.append((now, from_bssid, to_bssid))
+
+        # 오래된 기록 제거
+        self.roam_history = deque(
+            [
+                (t, f, t_b)
+                for t, f, t_b in self.roam_history
+                if now - t < self.window_seconds
+            ]
+        )
+
+    def is_ping_pong(self, from_bssid, to_bssid):
+        """
+        Ping-pong 로밍 확인
+        - 최근 로밍 횟수 초과 여부
+        - 왕복 로밍 (A→B→A) 확인
+        """
+        now = time.time()
+
+        # 최근 로밍 횟수 확인
+        recent_roams = [
+            (t, f, t_b)
+            for t, f, t_b in self.roam_history
+            if now - t < self.window_seconds
+        ]
+
+        if len(recent_roams) >= self.max_roams:
+            logger.message(
+                "warn",
+                f"[{IFACE}] Too many roams ({len(recent_roams)}) in {self.window_seconds}s",
+                _EXTRA_(),
+            )
+            return True
+
+        # 반복 로밍 확인 (A→B→A)
+        for t, f, t_b in reversed(list(self.roam_history)):
+            if f == to_bssid and t_b == from_bssid:
+                if now - t < PING_PONG_DETECTION_TIME:
+                    logger.message(
+                        "warn",
+                        f"[{IFACE}] Ping-pong detected: {from_bssid} ↔ {to_bssid}",
+                        _EXTRA_(),
+                    )
+                    return True
+
+        return False
+
+    def get_roam_count(self):
+        """최근 로밍 횟수 반환"""
+        now = time.time()
+        recent = [t for t, _, _ in self.roam_history if now - t < self.window_seconds]
+        return len(recent)
+
+
+# ==============================================================================
+# 적응형 간격 (Adaptive Interval)
+# ==============================================================================
+class AdaptiveInterval:
+    """RSSI 상태에 따라 체크 간격 조정"""
+
+    def __init__(
+        self, min_interval=MIN_CHECK_INTERVAL, max_interval=MAX_CHECK_INTERVAL
+    ):
+        self.min_interval = min_interval
+        self.max_interval = max_interval
+        self.current_interval = CHECK_INTERVAL
+        self.last_rssi = None
+        self.consecutive_low_rssi = 0
+        self.consecutive_high_rssi = 0
+
+    def update(self, current_rssi, threshold, trend):
+        """
+        RSSI와 추세에 따라 간격 조정
+        - 신호가 임계값 근처: 간격 단축
+        - 신호가 안정적이고 좋음: 간격 증가
+        - 하락 추세: 즉시 간격 단축
+        """
+        # RSSI 변화율 계산
+        if self.last_rssi is not None:
+            rssi_change = current_rssi - self.last_rssi
+
+            # 신호가 급격히 악화되면 최소 간격
+            if rssi_change < -5:  # 5dB 이상 하락
+                self.current_interval = self.min_interval
+                self.consecutive_low_rssi += 1
+                self.consecutive_high_rssi = 0
+            # 신호가 개선되면 간격 증가
+            elif rssi_change > 2:
+                self.current_interval = min(
+                    self.max_interval, self.current_interval + 1
+                )
+                self.consecutive_high_rssi += 1
+                self.consecutive_low_rssi = 0
+            else:
+                # 안정 상태
+                self.consecutive_low_rssi = 0
+                self.consecutive_high_rssi = 0
+
+        self.last_rssi = current_rssi
+
+        if threshold is None:
+            return self.current_interval
+
+        # 임계값 근처에서는 간격 단축
+        if current_rssi < threshold + 5:
+            self.current_interval = max(self.min_interval, 2)
+        # 신호가 안정적이고 좋으면 간격 증가
+        elif current_rssi > threshold + 15 and trend == RSSITrendTracker.TREND_STABLE:
+            self.current_interval = min(self.max_interval, self.current_interval + 1)
+
+        # 연속 낮은 RSSI 감지 시 더 빠른 체크
+        if self.consecutive_low_rssi >= 2:
+            self.current_interval = self.min_interval
+
+        return self.current_interval
+
+
+# ==============================================================================
+# 전역 인스턴스 (Global Instances)
+# ==============================================================================
+trend_tracker = None
+ping_pong_preventer = None
+adaptive_interval = None
+
+
+# ==============================================================================
+# 원본 함수들 (Original Functions)
+# ==============================================================================
 def handle_sigterm(signum, frame):
-    logger.message('crit', f"[{IFACE}] SIGTERM {signum} received! Cleaning up...", _EXTRA_())
+    logger.message(
+        "crit", f"[{IFACE}] SIGTERM {signum} received! Cleaning up...", _EXTRA_()
+    )
     cleanup()
     sys.exit(0)
 
+
 def cleanup():
     pass
+
 
 def freq_to_channel(freq):
     freq = int(freq)
@@ -47,6 +597,7 @@ def freq_to_channel(freq):
         return (freq - 5950) // 5
     else:
         return None  # Unknown
+
 
 def channel_to_freq(channel):
     channel = int(channel)
@@ -65,32 +616,68 @@ def channel_to_freq(channel):
     else:
         return None
 
+
 def log(msg):
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
 
+
 FREQ_TO_CHAN = {
     # 2.4GHz
-    "2412": "1g", "2417": "2g", "2422": "3g", "2427": "4g", "2432": "5g",
-    "2437": "6g", "2442": "7g", "2447": "8g", "2452": "9g", "2457": "10g", "2462": "11g", 
-    "2467": "12g", "2472": "13g", "2484": "14",
+    "2412": "1g",
+    "2417": "2g",
+    "2422": "3g",
+    "2427": "4g",
+    "2432": "5g",
+    "2437": "6g",
+    "2442": "7g",
+    "2447": "8g",
+    "2452": "9g",
+    "2457": "10g",
+    "2462": "11g",
+    "2467": "12g",
+    "2472": "13g",
+    "2484": "14",
     # 5GHz
-    "5180": "36a", "5200": "40a", "5220": "44a", "5240": "48a",
-    "5260": "52a", "5280": "56a", "5300": "60a", "5320": "64a",
-    "5500": "100a", "5520": "104a", "5540": "108a", "5560": "112a",
-    "5580": "116a", "5600": "120a", "5620": "124a", "5640": "128a",
-    "5660": "132a", "5680": "136a", "5700": "140a", "5720": "144a",
-    "5745": "149a", "5765": "153a", "5785": "157a", "5805": "161a",
-    "5825": "165a", "5845": "169a", "5865": "173a", "5885": "177a"
+    "5180": "36a",
+    "5200": "40a",
+    "5220": "44a",
+    "5240": "48a",
+    "5260": "52a",
+    "5280": "56a",
+    "5300": "60a",
+    "5320": "64a",
+    "5500": "100a",
+    "5520": "104a",
+    "5540": "108a",
+    "5560": "112a",
+    "5580": "116a",
+    "5600": "120a",
+    "5620": "124a",
+    "5640": "128a",
+    "5660": "132a",
+    "5680": "136a",
+    "5700": "140a",
+    "5720": "144a",
+    "5745": "149a",
+    "5765": "153a",
+    "5785": "157a",
+    "5805": "161a",
+    "5825": "165a",
+    "5845": "169a",
+    "5865": "173a",
+    "5885": "177a",
 }
 
-def set_flag(on: bool, path=ROAM_CONDITION_FLAG):
+
+def set_flag(on, path=ROAM_CONDITION_FLAG):
     with open(path, "w") as f:
-        if on == 1:
+        if on is True or on == 1:
             f.write("1")
-        elif on == 0:
+        elif on is False or on == 0:
             f.write("0")
         else:
-            f.write("")  #   ^h  ^l^l ^}  ^}^` OFF  ^c^a ^c^|
+            f.write("")
+
 
 def get_flag(path=ROAM_CONDITION_FLAG) -> bool:
     try:
@@ -98,7 +685,8 @@ def get_flag(path=ROAM_CONDITION_FLAG) -> bool:
             content = f.read().strip()
             return content == "1"
     except FileNotFoundError:
-        return False  #  ^l^l ^}  ^}   ^w^f ^|     OFF      ^i
+        return False
+
 
 def mlanutl_scan(ssid, freqs):
     try:
@@ -106,85 +694,167 @@ def mlanutl_scan(ssid, freqs):
     except KeyError as e:
         print(f"[ERROR] Unknown frequency: {e}")
         return
-    '''
-    cmd = f"mlanutl mlan0 setuserscan ssid={ssid} chan={chan_str}"
-    #print(f"[CMD] {cmd}")
-    freq_str = " ".join(str(f) for f in freqs)
-    logger.message('info', f"[{IFACE}] active scan ssid={ssid}, freq={freq_str} cmd={cmd} for roaming", _EXTRA_())
-    '''
+
     cmd = f"mlanutl mlan0 setuserscan chan={chan_str} ssid={ssid}"
-    logger.message('info', f"[{IFACE}] scan : {cmd}", _EXTRA_())
+    logger.message("info", f"[{IFACE}] scan : {cmd}", _EXTRA_())
     try:
-        result = subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
+        result = subprocess.run(
+            cmd, shell=True, check=True, capture_output=True, text=True
+        )
         output = result.stdout.strip()
         if not output:
-            logger.message('err', f"[{IFACE}] scan command reutrned no output", _EXTRA_())
+            logger.message(
+                "err", f"[{IFACE}] scan command returned no output", _EXTRA_()
+            )
             return None
 
-        #print(f"[OUTPUT]\n{output}")       
         return result.stdout.splitlines()
     except subprocess.CalledProcessError as e:
-        logger.message('err', f"[{IFACE}] scan command failed:{e.stderr.strip()}", _EXTRA_())
+        logger.message(
+            "err", f"[{IFACE}] scan command failed:{e.stderr.strip()}", _EXTRA_()
+        )
         return None
+
 
 def iw_scan(ssid, freqs):
     if ssid and freqs:
         cmd = ["iw", IFACE, "scan", "freq"] + freqs + ["ssid", ssid]
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-def get_link_info():
+
+# ==============================================================================
+# 개선된 get_link_info_with_load (Load 정보 포함)
+# ==============================================================================
+_LINK_CACHE: Dict[str, Any] = {
+    "mtime_ns": None,
+    "value": None,
+}
+
+
+def get_link_info_with_load():
+    """Load 정보를 포함한 연결 정보 반환"""
     try:
-        with open(LINK_LOG_FILE, 'r') as f:
+        st = os.stat(LINK_LOG_FILE)
+        mtime_ns = st.st_mtime_ns
+        cached_mtime_ns = _LINK_CACHE.get("mtime_ns")
+        if cached_mtime_ns is not None and cached_mtime_ns == mtime_ns:
+            return _LINK_CACHE.get("value")
+
+        with open(LINK_LOG_FILE, "r") as f:
             data = json.load(f)
             result = {
-                "bssid": data['link']['address'].strip().lower(),
-                #"ssid": data['info']['ssid'].strip(),
-                "freq": int(data['info']['freq']),
-                "rssi": int(data['link']['signal'].replace(" dBm", ""))
+                "bssid": data["link"]["address"].strip().lower(),
+                "freq": int(data["info"]["freq"]),
+                "rssi": int(data["link"]["signal"].replace(" dBm", "")),
+            }
+
+            # Load 정보 추가 (활성화됨)
+            if ENABLE_LOAD_BASED_ROAM:
+                channel_info = data.get("channel_info", {})
+                result["channel_info"] = channel_info
+                freq_str = str(result["freq"])
+
+                if freq_str in channel_info:
+                    info = channel_info[freq_str]
+                    noise = info.get("noise", -95)
+                    busy = info.get("busy_time_ms", 0)
+                    active = info.get("active_time_ms", 1)
+
+                    if active > 0:
+                        load = (busy / active) * 100
+                    else:
+                        load = 0
+
+                    result["noise"] = noise
+                    result["load"] = round(load, 2)
+
+                    logger.message(
+                        "debug",
+                        f"[{IFACE}] channel info: freq={freq_str}, noise={noise}, load={load:.1f}%",
+                        _EXTRA_(),
+                    )
+            else:
+                # Load 비활성화 시 기본값 설정
+                result["noise"] = -95
+                result["load"] = 0
+
+            _LINK_CACHE["mtime_ns"] = mtime_ns
+            _LINK_CACHE["value"] = result
+
+            return result
+
+    except Exception as e:
+        return None
+
+
+def get_link_info():
+    """기존 get_link_info (호환성 유지)"""
+    try:
+        with open(LINK_LOG_FILE, "r") as f:
+            data = json.load(f)
+            result = {
+                "bssid": data["link"]["address"].strip().lower(),
+                "freq": int(data["info"]["freq"]),
+                "rssi": int(data["link"]["signal"].replace(" dBm", "")),
             }
             return result
     except Exception as e:
-        #logger.message('err', f"[{IFACE}] Failed to read station info from link log: {e}", _EXTRA_())
-        #logger.message('info', f"[{IFACE}] waiting for link : {e}", _EXTRA_())
         return None
+
 
 def load_channel_info():
     try:
-        with open(LINK_LOG_FILE, 'r') as f:
+        with open(LINK_LOG_FILE, "r") as f:
             data = json.load(f)
             return data.get("channel_info", {})
     except Exception as e:
         print(f"[ERROR] Failed to load channel info from link log: {e}")
         return {}
 
+
 def get_current_ssid():
     try:
-        with open(LINK_LOG_FILE, 'r') as f:
+        with open(LINK_LOG_FILE, "r") as f:
             data = json.load(f)
-            return data['info']['ssid'].strip()
+            return data["info"]["ssid"].strip()
     except Exception as e:
-        logger.message('err', f"[{IFACE}] Failed to get current SSID from link log: {e}", _EXTRA_())
+        logger.message(
+            "err", f"[{IFACE}] Failed to get current SSID from link log: {e}", _EXTRA_()
+        )
         return None
+
 
 def get_current_bssid():
     try:
-        with open(LINK_LOG_FILE, 'r') as f:
+        with open(LINK_LOG_FILE, "r") as f:
             data = json.load(f)
-            return data['link']['address'].strip().lower()
+            return data["link"]["address"].strip().lower()
     except Exception as e:
-        logger.message('err', f"[{IFACE}] Failed to get current BSSID from link log: {e}", _EXTRA_())
+        logger.message(
+            "err",
+            f"[{IFACE}] Failed to get current BSSID from link log: {e}",
+            _EXTRA_(),
+        )
         return None
 
-def get_latest_scan(st):
+
+# ==============================================================================
+# 개선된 get_latest_scan (Load 정보 포함)
+# ==============================================================================
+def get_latest_scan(st, channel_info_data=None):
+    """Load 정보를 포함한 스캔 결과 반환"""
     try:
-        with open(SCAN_LOG_FILE, 'r') as f:
+        with open(SCAN_LOG_FILE, "r") as f:
             lines = f.readlines()
     except Exception as e:
-        logger.message('err', f"[{IFACE}] Failed to read scan info from ap log: {e}", _EXTRA_())
+        logger.message(
+            "err", f"[{IFACE}] Failed to read scan info from ap log: {e}", _EXTRA_()
+        )
         return [], None
 
     timestamp = None
     entries = []
+    start_idx = 0
 
     for i in reversed(range(len(lines))):
         line = lines[i]
@@ -195,10 +865,23 @@ def get_latest_scan(st):
             break
 
     if timestamp is None:
-        logger.message('err', f"[{IFACE}] timestamp is not exist", _EXTRA_())
+        logger.message("err", f"[{IFACE}] timestamp is not exist", _EXTRA_())
         return [], None
 
-    #logger.message('info', f"[{IFACE}] wpa ssid:{st['ssid']}, freq:{WPA_FREQ}", _EXTRA_())
+    # Load 정보 매핑을 위한 사전 준비
+    load_map = {}
+    noise_map = {}
+    if ENABLE_LOAD_BASED_ROAM and channel_info_data:
+        for freq_str, info in channel_info_data.items():
+            noise = info.get("noise", -95)
+            busy = info.get("busy_time_ms", 0)
+            active = info.get("active_time_ms", 1)
+            load = (busy / active) * 100 if active > 0 else 0
+
+            # 채널을 주파수로 변환하여 매핑
+            load_map[freq_str] = round(load, 2)
+            noise_map[freq_str] = noise
+
     for line in lines[start_idx:]:
         if re.match(r"^\d{2}\|", line):
             fields = line.strip().split("|")
@@ -206,43 +889,81 @@ def get_latest_scan(st):
                 try:
                     channel = int(fields[1].strip())
                     rssi = int(fields[2].strip())
-                    ld = int(fields[3].strip())
+                    ld = int(
+                        fields[3].strip()
+                    )  # Load from scan (deprecated, using channel_info)
                     bssid = fields[4].strip().lower()
                     ssid = fields[6].strip()
                     rssi_th = WPA_TH_2G if channel < 36 else WPA_TH_5G
                     freq = channel_to_freq(channel)
-                    logger.message('info', f"[{IFACE}] ssid:{ssid}, bssid:{bssid}, ch:{channel}, freq:{freq}, rssi:{rssi}, th:{rssi_th}, ld:{ld}", _EXTRA_()) 
-                    #if st['bssid'] != bssid and st['ssid'] == ssid and channel in WPA_FREQ: #and rssi > rssi_th:
-                    if st['ssid'] == ssid and str(freq) in WPA_FREQ:
-                        #logger.message('info', f"[{IFACE}] {bssid} append to entry", _EXTRA_()) 
-                        entries.append({
-                            "timestamp": timestamp,
-                            "channel": channel,
-                            "rssi": rssi,
-                            "rssi_th": rssi_th,
-                            "ld": ld,
-                            "bssid": bssid,
-                            "ssid": ssid
-                        })
+
+                    if freq is None:
+                        continue
+
+                    freq_str = str(freq)
+
+                    # Load 정보 추가
+                    ap_load = load_map.get(freq_str, 0)
+                    ap_noise = noise_map.get(freq_str, -95)
+
+                    logger.message(
+                        "info",
+                        f"[{IFACE}] ssid:{ssid}, bssid:{bssid}, ch:{channel}, freq:{freq}, "
+                        f"rssi:{rssi}, th:{rssi_th}, ld:{ld}, load:{ap_load:.1f}%, noise:{ap_noise}",
+                        _EXTRA_(),
+                    )
+
+                    if st["ssid"] == ssid and WPA_FREQ and freq_str in WPA_FREQ:
+                        entries.append(
+                            {
+                                "timestamp": timestamp,
+                                "channel": channel,
+                                "freq": freq,
+                                "rssi": rssi,
+                                "rssi_th": rssi_th,
+                                "ld": ld,
+                                "load": ap_load,
+                                "noise": ap_noise,
+                                "bssid": bssid,
+                                "ssid": ssid,
+                            }
+                        )
                 except Exception as e:
-                    logger.message('warn', f"[{IFACE}] scan entry parsing failed: {e}", _EXTRA_())
+                    logger.message(
+                        "warn", f"[{IFACE}] scan entry parsing failed: {e}", _EXTRA_()
+                    )
                     continue
 
-    candidates = sorted(entries, key=lambda x: x['rssi'], reverse=True)
-    #logger.message('info', f"[{IFACE}] roam candidates: {candidates}", _EXTRA_())
+    candidates = sorted(entries, key=lambda x: x["rssi"], reverse=True)
+
     i = 0
     for entry in candidates:
-        logger.message('info',
+        logger.message(
+            "info",
             f"[{IFACE}] roam candidate {i}: "
             f"ts={entry['timestamp']}, ssid={entry['ssid']}, bssid={entry['bssid']}, "
-            f"ch={entry['channel']}, ld={entry['ld']}, rssi={entry['rssi']}(th={entry['rssi_th']})",
-            _EXTRA_()
+            f"ch={entry['channel']}, freq={entry['freq']}, ld={entry['ld']}, "
+            f"load={entry.get('load', 0):.1f}%, rssi={entry['rssi']}(th={entry['rssi_th']})",
+            _EXTRA_(),
         )
-        i+=1
+        i += 1
 
     return candidates, timestamp
 
-def parse_supplicant_conf(path):
+
+def parse_supplicant_conf(path, def_th2g=None, def_th5g=None):
+    """
+    wpa_supplicant.conf 파싱
+    TH 값이 없으면 인자로 받은 기본값 사용 (JSON 우선)
+
+    Args:
+        path: conf 파일 경로
+        def_th2g: 2.4GHz 기본 임계값 (JSON에서 로드)
+        def_th5g: 5GHz 기본 임계값 (JSON에서 로드)
+
+    Returns:
+        tuple: (ssid, freqs, th2g, th5g, th_connect)
+    """
     ssid = None
     freqs = []
     th2g = None
@@ -256,48 +977,498 @@ def parse_supplicant_conf(path):
                 try:
                     ssid = line.split("=", 1)[1].strip().strip('"')
                 except ValueError:
-                    logger.message('err', f"[{IFACE}] ssid : {ssid} is invalid in {path}", _EXTRA_())
+                    logger.message(
+                        "err",
+                        f"[{IFACE}] ssid : {ssid} is invalid in {path}",
+                        _EXTRA_(),
+                    )
                     pass
             elif line.startswith("scan_freq=") and not line.startswith("#"):
                 try:
                     freqs = line.split("=", 1)[1].strip().split()
                 except ValueError:
-                    logger.message('err', f"[{IFACE}] scan_freq : {freqs} is invalid in {path}", _EXTRA_())
+                    logger.message(
+                        "err",
+                        f"[{IFACE}] scan_freq : {freqs} is invalid in {path}",
+                        _EXTRA_(),
+                    )
                     pass
             elif line.startswith("#!TH_2G="):
                 try:
                     th2g = int(line.split("=")[1])
                 except ValueError:
-                    logger.message('err', f"[{IFACE}] TH_2G : {th2g} is invalid in {path}", _EXTRA_())
+                    logger.message(
+                        "err",
+                        f"[{IFACE}] TH_2G : {th2g} is invalid in {path}",
+                        _EXTRA_(),
+                    )
                     pass
             elif line.startswith("#!TH_5G="):
                 try:
                     th5g = int(line.split("=")[1])
                 except ValueError:
-                    logger.message('err', f"[{IFACE}] TH_5G : {th5g} is invalid in {path}", _EXTRA_())
+                    logger.message(
+                        "err",
+                        f"[{IFACE}] TH_5G : {th5g} is invalid in {path}",
+                        _EXTRA_(),
+                    )
                     pass
             elif line.startswith("#!TH_CONNECT="):
                 try:
                     th_connect = int(line.split("=")[1])
                 except ValueError:
-                    logger.message('err', f"[{IFACE}] TH_CONNECT : {th_connect} is invalid in {path}", _EXTRA_())
+                    logger.message(
+                        "err",
+                        f"[{IFACE}] TH_CONNECT : {th_connect} is invalid in {path}",
+                        _EXTRA_(),
+                    )
                     pass
 
-    th2g = th2g if th2g is not None else DEFAULT_TH_2G
-    th5g = th5g if th5g is not None else DEFAULT_TH_5G
+    # wpa_supplicant.conf에 값이 없으면 JSON 기본값 사용, 없으면 코드 기본값
+    th2g = (
+        th2g
+        if th2g is not None
+        else (def_th2g if def_th2g is not None else DEFAULT_TH_2G)
+    )
+    th5g = (
+        th5g
+        if th5g is not None
+        else (def_th5g if def_th5g is not None else DEFAULT_TH_5G)
+    )
 
     return ssid, freqs, th2g, th5g, th_connect
 
-def roam_to_bssid(bssid):
-    #log(f"Roaming to BSSID {bssid}")
-    #logger.message('info', f"[{IFACE}] Roaming to BSSID {bssid}", _EXTRA_())
-    subprocess.run(["wpa_cli", "-i", IFACE, "roam", bssid])
+
+def get_my_ip(iface):
+    try:
+        result = subprocess.run(
+            ["ip", "-4", "addr", "show", iface],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        for line in result.stdout.splitlines():
+            if "inet " in line:
+                parts = line.strip().split()
+                for part in parts:
+                    if part.startswith("inet"):
+                        ip = parts[parts.index(part) + 1].split("/")[0]
+                        return ip
+        return None
+    except Exception:
+        return None
+
+
+def get_recent_peers(iface, count=5):
+    peers = []
+    try:
+        result = subprocess.run(
+            ["ip", "neigh", "show", "dev", iface],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 1:
+                ip = parts[0]
+                if "." in ip:
+                    peers.append(ip)
+                    if len(peers) >= count:
+                        break
+    except Exception:
+        pass
+    return peers
+
+
+def optimize_post_roam_connectivity(iface):
+    if not ENABLE_POST_ROAM_ARP_OPTIMIZATION:
+        return
+
+    my_ip = get_my_ip(iface)
+    if not my_ip:
+        logger.message(
+            "debug",
+            f"[{iface}] Post-roam optimization skipped: no IP address",
+            _EXTRA_(),
+        )
+        return
+
+    try:
+        logger.message(
+            "info",
+            f"[{iface}] Sending gratuitous ARP ({POST_ROAM_GARP_COUNT} times)",
+            _EXTRA_(),
+        )
+        for i in range(POST_ROAM_GARP_COUNT):
+            subprocess.run(
+                [
+                    "arping",
+                    "-U",
+                    "-c",
+                    "1",
+                    "-w",
+                    str(POST_ROAM_GARP_WAIT),
+                    "-I",
+                    iface,
+                    my_ip,
+                ],
+                capture_output=True,
+                timeout=POST_ROAM_GARP_WAIT + 1,
+            )
+            if i < POST_ROAM_GARP_COUNT - 1:
+                time.sleep(0.1)
+    except Exception as e:
+        logger.message(
+            "debug",
+            f"[{iface}] Gratuitous ARP failed: {e}",
+            _EXTRA_(),
+        )
+
+    if ENABLE_POST_ROAM_PEER_WARMUP:
+        peers = get_recent_peers(iface, POST_ROAM_PEER_COUNT)
+        if peers:
+            logger.message(
+                "info",
+                f"[{iface}] ARP warm-up for {len(peers)} peers",
+                _EXTRA_(),
+            )
+            for peer_ip in peers:
+                try:
+                    subprocess.run(
+                        [
+                            "arping",
+                            "-c",
+                            "1",
+                            "-w",
+                            str(POST_ROAM_PEER_WAIT),
+                            "-I",
+                            iface,
+                            peer_ip,
+                        ],
+                        capture_output=True,
+                        timeout=POST_ROAM_PEER_WAIT + 1,
+                    )
+                except Exception:
+                    pass
+
+
+# ==============================================================================
+# 개선된 roam_to_bssid (Ping-pong 방지 포함)
+# ==============================================================================
+def roam_to_bssid(from_bssid, to_bssid):
+    """
+    Ping-pong 확인 후 로밍 실행
+
+    Args:
+        from_bssid: 현재 연결된 BSSID
+        to_bssid: 로밍할 BSSID
+
+    Returns:
+        bool: 로밍 성공 여부
+    """
+    # Ping-pong 확인
+    if ENABLE_PING_PONG_PREVENTION and ping_pong_preventer:
+        if ping_pong_preventer.is_ping_pong(from_bssid, to_bssid):
+            logger.message(
+                "info",
+                f"[{IFACE}] Roam blocked: ping-pong prevention ({from_bssid} → {to_bssid})",
+                _EXTRA_(),
+            )
+            return False
+
+    logger.message("emerg", f"[{IFACE}] Roaming: {from_bssid} → {to_bssid}", _EXTRA_())
+
+    try:
+        result = subprocess.run(
+            ["wpa_cli", "-i", IFACE, "roam", to_bssid],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        if result.returncode == 0:
+            if ENABLE_PING_PONG_PREVENTION and ping_pong_preventer:
+                ping_pong_preventer.add_roam(from_bssid, to_bssid)
+
+            logger.message("info", f"[{IFACE}] Roam successful: {to_bssid}", _EXTRA_())
+
+            optimize_post_roam_connectivity(IFACE)
+
+            return True
+        else:
+            logger.message(
+                "err", f"[{IFACE}] Roam failed: {result.stderr.strip()}", _EXTRA_()
+            )
+            return False
+
+    except subprocess.TimeoutExpired:
+        logger.message("err", f"[{IFACE}] Roam timeout: {to_bssid}", _EXTRA_())
+        return False
+    except Exception as e:
+        logger.message("err", f"[{IFACE}] Roam error: {e}", _EXTRA_())
+        return False
+
 
 def score_ap(ap, rssi_weight=1.0, ld_weight=1.0):
-    normalized_rssi = ap['rssi'] + 100  # -40 → 60
-    normalized_ld = ap['ld']            # 0~100
+    normalized_rssi = ap["rssi"] + 100  # -40 → 60
+    normalized_ld = ap["ld"]  # 0~100
     score = rssi_weight * normalized_rssi - ld_weight * normalized_ld
     return score
+
+
+# ==============================================================================
+# 개선된 로밍 조건 확인 함수
+# ==============================================================================
+def check_roam_conditions(station, roam_ap, trend):
+    """
+    개선된 로밍 조건 확인
+
+    Args:
+        station: 현재 연결 정보
+        roam_ap: 로밍 후보 AP 정보
+        trend: RSSI 추세
+
+    Returns:
+        tuple: (should_roam, reason)
+    """
+    # 기본 조건: RSSI 차이
+    rssi_diff = roam_ap["rssi"] - station["rssi"]
+
+    if rssi_diff < DIFF_TH:
+        return (False, f"RSSI diff too small: {rssi_diff}dB < {DIFF_TH}dB")
+
+    # Load 조건
+    if ENABLE_LOAD_BASED_ROAM:
+        current_load = station.get("load", 0)
+        roam_load = roam_ap.get("load", 0)
+
+        # 로밍 대상 AP의 Load가 너무 높으면 제외
+        if roam_load > MAX_ROAM_LOAD:
+            return (False, f"Target AP load too high: {roam_load}% > {MAX_ROAM_LOAD}%")
+
+        # 현재 AP보다 Load가 너무 높으면 제외
+        if roam_load > current_load + LOAD_DIFF_THRESHOLD:
+            return (
+                False,
+                f"Target AP load higher: {roam_load}% > {current_load}% + {LOAD_DIFF_THRESHOLD}%",
+            )
+
+    # 추세 기반 조건 완화 (하락 추세면 더 쉽게 로밍)
+    if ENABLE_PREDICTIVE_ROAM and trend == RSSITrendTracker.TREND_FALLING:
+        # 하락 추세면 RSSI 차이 조건을 3dB 완화
+        if rssi_diff >= (DIFF_TH - 3):
+            return (True, f"Falling trend, RSSI diff: {rssi_diff}dB")
+
+    return (True, f"RSSI diff: {rssi_diff}dB")
+
+
+# ==============================================================================
+# 개선된 main 함수
+# ==============================================================================
+def main():
+    global trend_tracker, ping_pong_preventer, adaptive_interval
+
+    # JSON 설정 로드
+    load_roaming_config(IFACE)
+
+    # 초기화
+    if ENABLE_PREDICTIVE_ROAM:
+        trend_tracker = RSSITrendTracker()
+        logger.message(
+            "info",
+            f"[{IFACE}] Predictive roaming enabled (boost={PREDICTIVE_THRESHOLD_BOOST}dB)",
+            _EXTRA_(),
+        )
+
+    if ENABLE_PING_PONG_PREVENTION:
+        ping_pong_preventer = PingPongPreventer()
+        logger.message(
+            "info",
+            f"[{IFACE}] Ping-pong prevention enabled (max={MAX_ROAMS_IN_WINDOW}/{PING_PONG_WINDOW}s)",
+            _EXTRA_(),
+        )
+
+    if ENABLE_ADAPTIVE_INTERVAL:
+        adaptive_interval = AdaptiveInterval()
+        logger.message(
+            "info",
+            f"[{IFACE}] Adaptive interval enabled (min={MIN_CHECK_INTERVAL}s, max={MAX_CHECK_INTERVAL}s)",
+            _EXTRA_(),
+        )
+
+    if ENABLE_LOAD_BASED_ROAM:
+        logger.message(
+            "info",
+            f"[{IFACE}] Load-based roaming enabled (max_load={MAX_ROAM_LOAD}%)",
+            _EXTRA_(),
+        )
+
+    while True:
+        # Load 정보 포함하여 연결 상태 확인
+        station = get_link_info_with_load()
+
+        if not station:
+            time.sleep(CHECK_INTERVAL)
+            continue
+
+        rssi = station.get("rssi")
+        if not is_valid_rssi(rssi):
+            time.sleep(CHECK_INTERVAL)
+            continue
+
+        # RSSI 추적
+        if ENABLE_PREDICTIVE_ROAM and trend_tracker:
+            trend_tracker.add_sample(rssi)
+            trend = trend_tracker.get_trend()
+            avg_rssi = trend_tracker.get_avg_rssi()
+        else:
+            trend = RSSITrendTracker.TREND_STABLE
+            avg_rssi = rssi
+
+        # 대역별 임계값 설정
+        if station["freq"] < 5000:
+            base_threshold = WPA_TH_2G
+        else:
+            base_threshold = WPA_TH_5G
+
+        if base_threshold is None:
+            time.sleep(CHECK_INTERVAL)
+            continue
+
+        # 예측형 로밍: 하락 추세 시 임계값 조정
+        if ENABLE_PREDICTIVE_ROAM and trend == RSSITrendTracker.TREND_FALLING:
+            predictive_threshold = base_threshold + PREDICTIVE_THRESHOLD_BOOST
+            trend_str = "falling"
+        elif ENABLE_PREDICTIVE_ROAM and trend == RSSITrendTracker.TREND_RISING:
+            predictive_threshold = base_threshold
+            trend_str = "rising"
+        else:
+            predictive_threshold = base_threshold
+            trend_str = "stable"
+
+        station["rssi_th"] = base_threshold
+
+        # 로밍 조건 확인
+        if station["rssi"] >= predictive_threshold:
+            set_flag(0, ROAM_CONDITION_FLAG)
+
+            if ENABLE_ADAPTIVE_INTERVAL and adaptive_interval:
+                interval = adaptive_interval.update(rssi, base_threshold, trend)
+            else:
+                interval = CHECK_INTERVAL
+
+            time.sleep(interval)
+            continue
+
+        # 로밍 조건 발생
+        logger.message(
+            "info",
+            f"[{IFACE}] roaming condition: {station['rssi']} < {predictive_threshold} "
+            f"(base={base_threshold}, trend={trend_str}) "
+            f"bssid={station['bssid']}, load={station.get('load', 0):.1f}%",
+            _EXTRA_(),
+        )
+        set_flag(1, ROAM_CONDITION_FLAG)
+
+        # 주변 AP 스캔
+        if WPA_SSID and WPA_FREQ:
+            station["ssid"] = WPA_SSID
+            lines = mlanutl_scan(WPA_SSID, WPA_FREQ)
+
+            if lines:
+                ap_lines = extract_ap_table(lines)
+                chan_lines = extract_channel_table(lines)
+                save_with_timestamp(SCAN_LOG_FILE, ap_lines)
+                save_with_timestamp(FREQ_LOG_FILE, chan_lines)
+            else:
+                logger.message("err", f"[{IFACE}] scan failed", _EXTRA_())
+                time.sleep(CHECK_INTERVAL)
+                continue
+
+        # Load 정보 가져오기
+        channel_info_data = (
+            station.get("channel_info") if ENABLE_LOAD_BASED_ROAM else None
+        )
+
+        # 스캔 결과 파싱
+        entries, timestamp = get_latest_scan(station, channel_info_data)
+
+        if not entries:
+            logger.message(
+                "err", f"[{IFACE}] No Matching APs found in latest scan", _EXTRA_()
+            )
+            time.sleep(SCAN_NO_RESULT_SLEEP)
+            continue
+
+        # 로밍 후보 평가
+        best_ap = None
+        best_reason = ""
+        best_score = 0
+
+        for roam_ap in entries:
+            if roam_ap["bssid"] == station["bssid"]:
+                continue
+
+            # 로밍 조건 확인
+            should_roam, reason = check_roam_conditions(station, roam_ap, trend)
+
+            if should_roam:
+                rssi_diff = roam_ap["rssi"] - station["rssi"]
+
+                # 점수 계산 (RSSI 차이 + Load 개선 정도)
+                score = rssi_diff * 10
+
+                if ENABLE_LOAD_BASED_ROAM:
+                    current_load = station.get("load", 0)
+                    roam_load = roam_ap.get("load", 0)
+                    load_improvement = current_load - roam_load
+                    score += load_improvement * 2
+
+                if score > best_score:
+                    best_ap = roam_ap
+                    best_reason = reason
+                    best_score = score
+
+                logger.message(
+                    "info",
+                    f"[{IFACE}] Roam candidate: {roam_ap['bssid']}, "
+                    f"rssi={roam_ap['rssi']}dB (diff={rssi_diff}dB), "
+                    f"load={roam_ap.get('load', 0):.1f}%, "
+                    f"reason={reason}, score={score:.1f}",
+                    _EXTRA_(),
+                )
+            else:
+                logger.message(
+                    "info",
+                    f"[{IFACE}] Roam skipped: {roam_ap['bssid']}, {reason}",
+                    _EXTRA_(),
+                )
+
+        # 최적 AP로 로밍
+        if best_ap:
+            logger.message(
+                "emerg",
+                f"[{IFACE}] Roaming: {station['bssid']} → {best_ap['bssid']}, "
+                f"reason={best_reason}, score={best_score:.1f}, "
+                f"{best_ap['ssid']}, {best_ap['rssi']}dB (ch={best_ap['freq']})",
+                _EXTRA_(),
+            )
+
+            if roam_to_bssid(station["bssid"], best_ap["bssid"]):
+                time.sleep(ROAM_SUCCESS_SLEEP)
+        else:
+            logger.message(
+                "info", f"[{IFACE}] No suitable roam candidate found", _EXTRA_()
+            )
+
+        if ENABLE_ADAPTIVE_INTERVAL and adaptive_interval:
+            interval = adaptive_interval.update(rssi, base_threshold, trend)
+        else:
+            interval = CHECK_INTERVAL
+
+        time.sleep(interval)
+
 
 def extract_ap_table(lines):
     bss_section = []
@@ -306,18 +1477,18 @@ def extract_ap_table(lines):
         clean = line.strip()
 
         # 채널 테이블 시작되면 종료
-        if '# | Channel' in clean:
+        if "# | Channel" in clean:
             break
 
         # 구분선
-        if re.match(r'^-+$', clean):
+        if re.match(r"^-+$", clean):
             sep_count += 1
             if sep_count <= 2:
                 bss_section.append(line)
             continue
 
         # 헤더 라인 (컬럼 설명)
-        if sep_count == 1 and re.match(r'^#', clean):
+        if sep_count == 1 and re.match(r"^#", clean):
             bss_section.append(line)
             continue
 
@@ -325,13 +1496,10 @@ def extract_ap_table(lines):
         if sep_count < 2:
             continue
 
-        # 본문 중 AC/AX 포함 라인 필터
-        #if re.search(r'AC|AX', clean):
-        #    bss_section.append(line)
-
         bss_section.append(line)
 
     return bss_section
+
 
 def extract_channel_table(lines):
     chan_section = []
@@ -340,14 +1508,14 @@ def extract_channel_table(lines):
         clean = line.strip()
 
         # 헤더 구분선 3~4번째 줄은 그대로 추가
-        if re.match(r'^-+$', clean):
+        if re.match(r"^-+$", clean):
             sep_count += 1
             if 3 <= sep_count <= 4:
                 chan_section.append(line)
             continue
 
         # 헤더 라인 (# | Channel ...)
-        if sep_count == 3 and re.match(r'^#', clean):
+        if sep_count == 3 and re.match(r"^#", clean):
             chan_section.append(line)
             continue
 
@@ -357,35 +1525,32 @@ def extract_channel_table(lines):
 
     return chan_section
 
+
 def save_with_timestamp(filename, content_lines):
-    # 날짜 기반 파일명 생성
-    #date_str = datetime.now().strftime("%Y%m%d")
-    #filename = os.path.join(LOG_DIR, f"{prefix}_{date_str}.log")
-    #filename = os.path.join(LOG_DIR, f"{prefix}.log"
-
-    # 타임스탬프 헤더
     timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    '''
-    header = f"===== [{timestamp_str}] {'=' * (60 - len(timestamp_str) - 10)}"
-
-    # 로그 파일 append
-    with open(filename, 'a') as f:
-        f.write(header + '\n')
-        for line in content_lines:
-            f.write(line.rstrip() + '\n')
-        f.write('\n')  # 블럭 구분용 줄
-    '''
     header = f"[{timestamp_str}]"
-    with open(filename, 'a') as f:
-        f.write(header + '\n')
+    with open(filename, "a") as f:
+        f.write(header + "\n")
         for line in content_lines:
-            f.write(line.rstrip() + '\n')
-        f.write('\n')
+            f.write(line.rstrip() + "\n")
+        f.write("\n")
 
-    #print(f"✔ {filename} 로그에 추가됨")
     return filename
 
-def parse_thresholds(conf_path):
+
+def parse_thresholds(conf_path, def_th2g=None, def_th5g=None):
+    """
+    wpa_supplicant.conf에서 TH 값만 파싱
+    TH 값이 없으면 인자로 받은 기본값 사용 (JSON 우선)
+
+    Args:
+        conf_path: conf 파일 경로
+        def_th2g: 2.4GHz 기본 임계값 (JSON에서 로드)
+        def_th5g: 5GHz 기본 임계값 (JSON에서 로드)
+
+    Returns:
+        tuple: (th2g, th5g)
+    """
     th2g = None
     th5g = None
 
@@ -403,109 +1568,24 @@ def parse_thresholds(conf_path):
                 except ValueError:
                     pass
 
-    th2g = th2g if th2g is not None else DEFAULT_TH_2G
-    th5g = th5g if th5g is not None else DEFAULT_TH_5G
+    # wpa_supplicant.conf에 값이 없으면 JSON 기본값 사용, 없으면 코드 기본값
+    th2g = (
+        th2g
+        if th2g is not None
+        else (def_th2g if def_th2g is not None else DEFAULT_TH_2G)
+    )
+    th5g = (
+        th5g
+        if th5g is not None
+        else (def_th5g if def_th5g is not None else DEFAULT_TH_5G)
+    )
 
     return th2g, th5g
 
-def main():
-    while True:
-
-        station = get_link_info()
-
-        if not station:
-            time.sleep(CHECK_INTERVAL)
-            continue
-
-        '''
-        if WPA_TH_CONNECT:
-            if station['rssi'] < WPA_TH_CONNECT:
-                logger.message('info', f"[{IFACE}] disconnect condition : {station['rssi']} < {WPA_TH_CONNECT} ({station['bssid']})", _EXTRA_())
-                subprocess.run(["wpa_cli", "-i", IFACE, "disconnect"])
-                time.sleep(CHECK_INTERVAL)
-                continue
-        '''
-
-        #bssid, ssid, frequency, signal = get_link_info()
-        '''
-        channel_info = load_channel_info()
-        for freq, info in channel_info.items():
-            noise = info.get('noise')
-            busy = info.get("busy_time_ms", 0)
-            active = info.get("active_time_ms", 1)
-            load = (busy / active) * 100
-            #print(f"frequency {frequency}, freq {freq} MHz: Load={load:.2f}%, Noise={noise} dBm")
-            if station['freq'] == int(freq):
-                station['noise'] = noise
-                station['load'] = round(load, 2)
-        '''
-
-        if station['freq'] < 5000:
-            station['rssi_th'] = WPA_TH_2G
-        else:
-            station['rssi_th'] = WPA_TH_5G
-
-        #logger.message('info', f"[{IFACE}] rssi cur : {station['rssi']}, roam_th : {station['rssi_th']}", _EXTRA_())
-        if station['rssi'] >= station['rssi_th']:
-            #subprocess.run(["systemctl", "start", "wifi_capture"], check=True)
-            set_flag(0, ROAM_CONDITION_FLAG)
-            time.sleep(CHECK_INTERVAL)
-            continue
-
-        logger.message('info', f"[{IFACE}] roaming condition : {station['rssi']} < {station['rssi_th']} ({station['bssid']})", _EXTRA_())
-        set_flag(1, ROAM_CONDITION_FLAG)
-                
-        #ssid, freqs = parse_supplicant_conf(WPA_CONF_FILE)
-        if WPA_SSID and WPA_FREQ:
-            #subprocess.run(["systemctl", "stop", "wifi_capture"], check=True)
-            station['ssid'] = WPA_SSID
-            #iw_scan(WPA_SSID, WPA_FREQ)
-            lines = mlanutl_scan(WPA_SSID, WPA_FREQ)
-            #logger.message('info', f"[{IFACE}] scan end", _EXTRA_())
-            if lines:
-                ap_lines = extract_ap_table(lines)
-                chan_lines = extract_channel_table(lines)
-                save_with_timestamp(SCAN_LOG_FILE, ap_lines)
-                save_with_timestamp(FREQ_LOG_FILE, chan_lines)
-            else:
-                logger.message('err', f"[{IFACE}] scan failed: output : {lines}", _EXTRA_())
-                time.sleep(CHECK_INTERVAL)
-                continue
-
-        #time.sleep(0.1)
-        entries, timestamp = get_latest_scan(station)
-
-        if not entries:
-            #log("No APs found in latest scan.")
-            logger.message('err', f"[{IFACE}] No Matching APs found in latest scan", _EXTRA_())
-            time.sleep(3)
-            continue
-
-        for roam_ap in entries:
-            if roam_ap['bssid'] == station['bssid']:
-                continue
-
-            rssi_diff = roam_ap["rssi"] - station['rssi']
-            #score = score_ap(roam_a[)
-
-            #log(f"Current signal={signal}dBm (BSSID: {current_bssid}), "
-            #    f"Top RSSI={top_rssi}dBm at {top_bssid}, Δ={rssi_diff}dB")
-        
-            #if top_ap['rssi'] > top_ap['rssi_th'] and rssi_diff >= DIFF_TH:
-            if rssi_diff >= DIFF_TH:
-                logger.message('emerg', f"[{IFACE}] Roaming from {station['bssid']}(ch:{station['freq']}) to {roam_ap['bssid']}(ch:{channel_to_freq(roam_ap['channel'])})"
-                                       f" : {roam_ap['ssid']}, {roam_ap['rssi']}>{roam_ap['rssi_th']}", _EXTRA_())
-                roam_to_bssid(roam_ap['bssid'])
-                time.sleep(5)
-                continue
-            else:
-                logger.message('info', f"[{IFACE}] roam AP is not qualified : bssid={roam_ap['bssid']}, rssi={roam_ap['rssi']}({roam_ap['rssi_th']}), diff={rssi_diff}({DIFF_TH})", _EXTRA_())
-
-        time.sleep(CHECK_INTERVAL)
 
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_sigterm)
-    logger = Logger(app_name='ROAM', facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
+    logger = Logger(app_name="ROAM", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
 
     IFACE = sys.argv[1] if len(sys.argv) > 1 else "mlan0"
     if IFACE not in ["mlan0", "mlan1"]:
@@ -517,8 +1597,36 @@ if __name__ == "__main__":
     FREQ_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/freq.log"
     WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-{IFACE}.conf"
 
-    WPA_SSID, WPA_FREQ, WPA_TH_2G, WPA_TH_5G, WPA_TH_CONNECT = parse_supplicant_conf(WPA_CONF_FILE)    
+    # JSON 설정 로드 (IFACE별 설정)
+    load_roaming_config(IFACE)
 
-    logger.message("info", f"[{IFACE}] version : {VERSION}, ssid : {WPA_SSID}, scan_freq : {WPA_FREQ}, TH_CONNECT : {WPA_TH_CONNECT}, TH_2G : {WPA_TH_2G}, TH_5G : {WPA_TH_5G}, conf : {WPA_CONF_FILE}", _EXTRA_())
+    # JSON에서 로드한 TH 값을 기본값으로 wpa_supplicant.conf 파싱
+    # wpa_supplicant.conf에 값이 있으면 덮어쓰기, 없으면 JSON 값 사용
+    json_th_2g = DEFAULT_TH_2G
+    json_th_5g = DEFAULT_TH_5G
+    WPA_SSID, WPA_FREQ, WPA_TH_2G, WPA_TH_5G, WPA_TH_CONNECT = parse_supplicant_conf(
+        WPA_CONF_FILE, def_th2g=json_th_2g, def_th5g=json_th_5g
+    )
+
+    # 최종 적용값 로깅 (JSON → wpa_supplicant.conf 우선순위)
+    th_source = (
+        "wpa_conf" if (WPA_TH_2G != json_th_2g or WPA_TH_5G != json_th_5g) else "json"
+    )
+    logger.message(
+        "info",
+        f"[{IFACE}] TH values: 2G={WPA_TH_2G}, 5G={WPA_TH_5G} (source: {th_source}, json_default: 2G={json_th_2g}, 5G={json_th_5g})",
+        _EXTRA_(),
+    )
+
+    logger.message(
+        "info",
+        f"[{IFACE}] version:{VERSION}, ssid:{WPA_SSID}, scan_freq:{WPA_FREQ}, "
+        f"TH_2G:{WPA_TH_2G}, TH_5G:{WPA_TH_5G}, "
+        f"predictive_roam:{ENABLE_PREDICTIVE_ROAM}, "
+        f"load_based_roam:{ENABLE_LOAD_BASED_ROAM}, "
+        f"ping_pong_prevention:{ENABLE_PING_PONG_PREVENTION}, "
+        f"adaptive_interval:{ENABLE_ADAPTIVE_INTERVAL}",
+        _EXTRA_(),
+    )
 
     main()
