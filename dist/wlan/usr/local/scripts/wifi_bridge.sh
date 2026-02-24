@@ -8,6 +8,9 @@ WIRED_IF="eth0"
 
 OPT_DIR="/usr/local/wlan-bridge/scripts"
 
+if [[ "$IFACE" != "mlan0" ]]; then
+    exit 0
+fi
 # 최적화 활성화 여부 (1: 활성화, 0: 비활성화)
 # 환경 변수 WBRIDGE_OPTIMIZE가 설정되어 있으면 그 값을 따름
 USE_OPTIMIZATION=${WBRIDGE_OPTIMIZE:-0}
