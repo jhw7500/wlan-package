@@ -20,10 +20,10 @@ if [[ "$NEW_MAC" =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]]; then
   # --- MAC 정상 ---
 
   # 백업 파일 없으면 생성
-  #if [ -f "$LINK_FILE" ] && [ ! -f "$BACKUP_FILE" ]; then
-  #  cp "$LINK_FILE" "$BACKUP_FILE"
-  #  logger -p local0.info "[$tag:$LINENO] [$IFACE] backup created: $BACKUP_FILE"
-  #fi
+  if [ -f "$LINK_FILE" ] && [ ! -f "$BACKUP_FILE" ]; then
+    cp "$LINK_FILE" "$BACKUP_FILE"
+    logger -p local0.info "[$tag:$LINENO] [$IFACE] backup created: $BACKUP_FILE"
+  fi
 
   # 현재 .link 파일에 동일 MAC이 있으면 무시
   if [ -f "$LINK_FILE" ]; then
