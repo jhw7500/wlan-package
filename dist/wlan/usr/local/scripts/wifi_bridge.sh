@@ -141,10 +141,17 @@ fi
 # setup-irq-affinity.sh가 생성한 환경변수 파일 로드
 # 모드별(latency/normal/thermal) wbridge 설정이 포함됨
 WBRIDGE_ENV="/run/wbridge.env"
-if [ -f "$WBRIDGE_ENV" ]; then
+if [ "$USE_OPTIMIZATION" -eq 1 ] && [ "$IRQ_OPT_RESULT" = "applied" ] && [ -f "$WBRIDGE_ENV" ]; then
     # shellcheck source=/dev/null
     . "$WBRIDGE_ENV"
     logger -p local0.info "[$tag:$LINENO] [$IFACE] Loaded wbridge env from $WBRIDGE_ENV (req=${WBRIDGE_MODE_REQUESTED:-$REQUESTED_MODE}, eff=${WBRIDGE_PROFILE_EFFECTIVE:-$EFFECTIVE_MODE}, thermal=${WBRIDGE_THERMAL_STATE:-$THERMAL_STATE}, force=${WBRIDGE_MODE_FORCE:-$MODE_FORCE}, budget=$WBRIDGE_DISPATCH_BUDGET, immediate=$WBRIDGE_IMMEDIATE, timeout=$WBRIDGE_TIMEOUT_MS, rt=$WBRIDGE_RT_PRIORITY)"
+elif [ -f "$WBRIDGE_ENV" ]; then
+    if [ "$USE_OPTIMIZATION" -ne 1 ]; then
+        rm -f "$WBRIDGE_ENV" 2>/dev/null || true
+        logger -p local0.info "[$tag:$LINENO] [$IFACE] Ignored and cleared stale $WBRIDGE_ENV because optimization is disabled"
+    else
+        logger -p local0.info "[$tag:$LINENO] [$IFACE] Ignored $WBRIDGE_ENV because setup-irq-affinity was not applied in this run (result=$IRQ_OPT_RESULT)"
+    fi
 else
     logger -p local0.info "[$tag:$LINENO] [$IFACE] No $WBRIDGE_ENV found, using wbridge defaults"
 fi
