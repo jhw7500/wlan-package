@@ -28,8 +28,14 @@ WBRIDGE_LINK_UP_STABLE_SEC=2
 # 링크 불완전 상태에서 폴링 주기(초)
 WBRIDGE_LINK_IDLE_POLL_SEC=2
 
-# 링크 가드 비활성화 시 초기 대기 타임아웃(초)
+# 초기 링크 준비 대기 타임아웃(초)
 WBRIDGE_WAIT_READY_TIMEOUT_SEC=20
+
+# 무선 링크 down을 로밍으로 간주하고 유지하는 grace 시간(초)
+WBRIDGE_WLAN_ROAM_GRACE_SEC=15
+
+# 무선 링크 down이 grace를 넘어도 브리지를 재시작할지 여부 (0: 유지, 1: 재시작)
+WBRIDGE_WLAN_DOWN_RESTART=0
 
 # thermal state updater 동작 (0: 상태만 기록, 1: 상태 변경 시 bridge 재시작)
 WBRIDGE_THERMAL_AUTO_RESTART=1
