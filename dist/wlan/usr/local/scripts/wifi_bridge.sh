@@ -25,6 +25,8 @@ LINK_DOWN_DEBOUNCE_SEC=${WBRIDGE_LINK_DOWN_DEBOUNCE_SEC:-2}
 LINK_UP_STABLE_SEC=${WBRIDGE_LINK_UP_STABLE_SEC:-2}
 LINK_IDLE_POLL_SEC=${WBRIDGE_LINK_IDLE_POLL_SEC:-2}
 WAIT_READY_TIMEOUT_SEC=${WBRIDGE_WAIT_READY_TIMEOUT_SEC:-20}
+WLAN_ROAM_GRACE_SEC=${WBRIDGE_WLAN_ROAM_GRACE_SEC:-15}
+WLAN_DOWN_RESTART=${WBRIDGE_WLAN_DOWN_RESTART:-0}
 
 sanitize_positive_int() {
     local value=${1:-}
@@ -80,6 +82,15 @@ LINK_DOWN_DEBOUNCE_SEC=$(sanitize_positive_int "$LINK_DOWN_DEBOUNCE_SEC" 2)
 LINK_UP_STABLE_SEC=$(sanitize_positive_int "$LINK_UP_STABLE_SEC" 2)
 LINK_IDLE_POLL_SEC=$(sanitize_positive_int "$LINK_IDLE_POLL_SEC" 2)
 WAIT_READY_TIMEOUT_SEC=$(sanitize_positive_int "$WAIT_READY_TIMEOUT_SEC" 20)
+WLAN_ROAM_GRACE_SEC=$(sanitize_positive_int "$WLAN_ROAM_GRACE_SEC" 15)
+
+case "$WLAN_DOWN_RESTART" in
+    0|1) ;;
+    *)
+        logger -p local0.warn "[$tag:$LINENO] [$IFACE] Invalid WBRIDGE_WLAN_DOWN_RESTART='$WLAN_DOWN_RESTART', fallback to 0"
+        WLAN_DOWN_RESTART=0
+        ;;
+esac
 
 BRIDGE_PID=""
 
@@ -111,7 +122,7 @@ if [ "$MODE_FORCE" -eq 1 ]; then
     logger -p local0.warn "[$tag:$LINENO] [$IFACE] WBRIDGE_MODE_FORCE=1 bypasses thermal clamp (requested=$REQUESTED_MODE, thermal=$THERMAL_STATE, effective=$EFFECTIVE_MODE)"
 fi
 
-logger -p local0.info "[$tag:$LINENO] [$IFACE] wbridge startup sequence initiated (opt=$USE_OPTIMIZATION, requested=$REQUESTED_MODE, effective=$EFFECTIVE_MODE, thermal=$THERMAL_STATE, force=$MODE_FORCE, profile_ver=$PROFILE_VERSION, link_guard=$LINK_GUARD, down_debounce=${LINK_DOWN_DEBOUNCE_SEC}s, up_stable=${LINK_UP_STABLE_SEC}s)"
+logger -p local0.info "[$tag:$LINENO] [$IFACE] wbridge startup sequence initiated (opt=$USE_OPTIMIZATION, requested=$REQUESTED_MODE, effective=$EFFECTIVE_MODE, thermal=$THERMAL_STATE, force=$MODE_FORCE, profile_ver=$PROFILE_VERSION, link_guard=$LINK_GUARD, down_debounce=${LINK_DOWN_DEBOUNCE_SEC}s, up_stable=${LINK_UP_STABLE_SEC}s, roam_grace=${WLAN_ROAM_GRACE_SEC}s, wlan_down_restart=$WLAN_DOWN_RESTART)"
 
 UDP_OPT_RESULT="not_requested"
 IRQ_OPT_RESULT="not_requested"
@@ -121,11 +132,19 @@ if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" ]]; then
     exit 0
 fi
 
-both_up() {
+wired_up() {
     ip link show "$WIRED_IF" | grep -q "state UP" || return 1
-    ip link show "$IFACE" | grep -q "state UP" || return 1
     cat /sys/class/net/"$WIRED_IF"/carrier 2>/dev/null | grep -q 1 || return 1
+}
+
+wireless_up() {
+    ip link show "$IFACE" | grep -q "state UP" || return 1
     cat /sys/class/net/"$IFACE"/carrier 2>/dev/null | grep -q 1 || return 1
+}
+
+both_up() {
+    wired_up || return 1
+    wireless_up || return 1
 }
 
 wait_for_link_ready() {
@@ -157,7 +176,7 @@ wait_for_link_ready() {
         fi
         down_elapsed=$((now - down_since))
 
-        if [ "$LINK_GUARD" -eq 0 ] && [ "$down_elapsed" -ge "$WAIT_READY_TIMEOUT_SEC" ]; then
+        if [ "$down_elapsed" -ge "$WAIT_READY_TIMEOUT_SEC" ]; then
             return 1
         fi
 
@@ -259,6 +278,8 @@ cat > "$EFFECTIVE_SNAPSHOT" <<EOF
   "link_up_stable_sec": "${LINK_UP_STABLE_SEC}",
   "link_idle_poll_sec": "${LINK_IDLE_POLL_SEC}",
   "wait_ready_timeout_sec": "${WAIT_READY_TIMEOUT_SEC}",
+  "wlan_roam_grace_sec": "${WLAN_ROAM_GRACE_SEC}",
+  "wlan_down_restart": "${WLAN_DOWN_RESTART}",
   "profile_effective": "${WBRIDGE_PROFILE_EFFECTIVE}",
   "dispatch_budget": "${WBRIDGE_DISPATCH_BUDGET:-}",
   "immediate": "${WBRIDGE_IMMEDIATE:-}",
@@ -311,8 +332,10 @@ stop_bridge_process() {
 }
 
 monitor_bridge_process() {
-    local down_since=0
-    local now down_elapsed rc
+    local wired_down_since=0
+    local wlan_down_since=0
+    local next_wlan_log=0
+    local now wired_down_elapsed wlan_down_elapsed rc
 
     if [ "$LINK_GUARD" -eq 0 ]; then
         if wait "$BRIDGE_PID"; then
@@ -336,19 +359,45 @@ monitor_bridge_process() {
         fi
 
         now=$(date +%s)
-        if both_up; then
-            down_since=0
+
+        if wired_up; then
+            wired_down_since=0
         else
-            if [ "$down_since" -eq 0 ]; then
-                down_since=$now
+            if [ "$wired_down_since" -eq 0 ]; then
+                wired_down_since=$now
             fi
-            down_elapsed=$((now - down_since))
-            if [ "$down_elapsed" -ge "$LINK_DOWN_DEBOUNCE_SEC" ]; then
-                logger -p local0.warn "[$tag:$LINENO] [$IFACE] Link dropped for ${down_elapsed}s, stopping bridge process"
+            wired_down_elapsed=$((now - wired_down_since))
+            if [ "$wired_down_elapsed" -ge "$LINK_DOWN_DEBOUNCE_SEC" ]; then
+                logger -p local0.warn "[$tag:$LINENO] [$IFACE] Wired link down for ${wired_down_elapsed}s, stopping bridge process"
                 stop_bridge_process
                 return 0
             fi
         fi
+
+        if wireless_up; then
+            wlan_down_since=0
+            next_wlan_log=0
+        else
+            if [ "$wlan_down_since" -eq 0 ]; then
+                wlan_down_since=$now
+                next_wlan_log=$now
+            fi
+
+            wlan_down_elapsed=$((now - wlan_down_since))
+            if [ "$wlan_down_elapsed" -ge "$WLAN_ROAM_GRACE_SEC" ]; then
+                if [ "$WLAN_DOWN_RESTART" -eq 1 ]; then
+                    logger -p local0.warn "[$tag:$LINENO] [$IFACE] Wireless link down for ${wlan_down_elapsed}s, restarting bridge process"
+                    stop_bridge_process
+                    return 0
+                fi
+
+                if [ "$now" -ge "$next_wlan_log" ]; then
+                    logger -p local0.info "[$tag:$LINENO] [$IFACE] Wireless link down for ${wlan_down_elapsed}s, keeping bridge process alive for roaming recovery"
+                    next_wlan_log=$((now + LINK_IDLE_POLL_SEC))
+                fi
+            fi
+        fi
+
         sleep 1
     done
 }
@@ -363,6 +412,13 @@ trap stop_bridge_process EXIT
 
 while true; do
     wait_for_links_or_timeout || true
+
+    if ! wired_up; then
+        logger -p local0.info "[$tag:$LINENO] [$IFACE] Wired link is not ready, delaying bridge start"
+        sleep "$LINK_IDLE_POLL_SEC"
+        continue
+    fi
+
     start_bridge_process
     if monitor_bridge_process; then
         logger -p local0.info "[$tag:$LINENO] [$IFACE] Bridge cycle ended, waiting for link recovery"
