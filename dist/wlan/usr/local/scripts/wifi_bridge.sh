@@ -21,10 +21,10 @@ THERMAL_STATE=${WBRIDGE_THERMAL_STATE:-ok}
 PROFILE_VERSION=${WBRIDGE_PROFILE_VERSION:-1}
 MODE_FORCE=${WBRIDGE_MODE_FORCE:-0}
 LINK_GUARD=${WBRIDGE_LINK_GUARD:-1}
-LINK_DOWN_DEBOUNCE_SEC=${WBRIDGE_LINK_DOWN_DEBOUNCE_SEC:-3}
-LINK_UP_STABLE_SEC=${WBRIDGE_LINK_UP_STABLE_SEC:-8}
-LINK_IDLE_POLL_SEC=${WBRIDGE_LINK_IDLE_POLL_SEC:-10}
-WAIT_READY_TIMEOUT_SEC=${WBRIDGE_WAIT_READY_TIMEOUT_SEC:-40}
+LINK_DOWN_DEBOUNCE_SEC=${WBRIDGE_LINK_DOWN_DEBOUNCE_SEC:-2}
+LINK_UP_STABLE_SEC=${WBRIDGE_LINK_UP_STABLE_SEC:-2}
+LINK_IDLE_POLL_SEC=${WBRIDGE_LINK_IDLE_POLL_SEC:-2}
+WAIT_READY_TIMEOUT_SEC=${WBRIDGE_WAIT_READY_TIMEOUT_SEC:-20}
 
 sanitize_positive_int() {
     local value=${1:-}
@@ -76,10 +76,12 @@ case "$LINK_GUARD" in
         ;;
 esac
 
-LINK_DOWN_DEBOUNCE_SEC=$(sanitize_positive_int "$LINK_DOWN_DEBOUNCE_SEC" 3)
-LINK_UP_STABLE_SEC=$(sanitize_positive_int "$LINK_UP_STABLE_SEC" 8)
-LINK_IDLE_POLL_SEC=$(sanitize_positive_int "$LINK_IDLE_POLL_SEC" 10)
-WAIT_READY_TIMEOUT_SEC=$(sanitize_positive_int "$WAIT_READY_TIMEOUT_SEC" 40)
+LINK_DOWN_DEBOUNCE_SEC=$(sanitize_positive_int "$LINK_DOWN_DEBOUNCE_SEC" 2)
+LINK_UP_STABLE_SEC=$(sanitize_positive_int "$LINK_UP_STABLE_SEC" 2)
+LINK_IDLE_POLL_SEC=$(sanitize_positive_int "$LINK_IDLE_POLL_SEC" 2)
+WAIT_READY_TIMEOUT_SEC=$(sanitize_positive_int "$WAIT_READY_TIMEOUT_SEC" 20)
+
+BRIDGE_PID=""
 
 case "$WBRIDGE_ENGINE" in
     pcap|tpacket) ;;
@@ -171,13 +173,15 @@ wait_for_link_ready() {
     done
 }
 
-# 인터페이스가 준비될 때까지 대기
-logger -p local0.info "[$tag:$LINENO] [$IFACE] Waiting for interfaces to be ready..."
-if wait_for_link_ready; then
-    logger -p local0.info "[$tag:$LINENO] [$IFACE] Links are stable for ${LINK_UP_STABLE_SEC}s"
-else
+wait_for_links_or_timeout() {
+    logger -p local0.info "[$tag:$LINENO] [$IFACE] Waiting for interfaces to be ready..."
+    if wait_for_link_ready; then
+        logger -p local0.info "[$tag:$LINENO] [$IFACE] Links are stable for ${LINK_UP_STABLE_SEC}s"
+        return 0
+    fi
     logger -p local0.warn "[$tag:$LINENO] [$IFACE] Link ready timeout (${WAIT_READY_TIMEOUT_SEC}s), continuing without guard"
-fi
+    return 1
+}
 
 # --- [ 시스템 최적화 단계 ] ---
 if [ "$USE_OPTIMIZATION" -eq 1 ]; then
@@ -267,6 +271,7 @@ EOF
 logger -p local0.info "[$tag:$LINENO] [$IFACE] Wrote effective profile snapshot to $EFFECTIVE_SNAPSHOT"
 
 APPLY_SNAPSHOT="/run/wbridge.apply.json"
+write_apply_snapshot() {
 cat > "$APPLY_SNAPSHOT" <<EOF
 {
   "engine": "${WBRIDGE_ENGINE}",
@@ -282,15 +287,90 @@ cat > "$APPLY_SNAPSHOT" <<EOF
 }
 EOF
 logger -p local0.info "[$tag:$LINENO] [$IFACE] Wrote optimization apply snapshot to $APPLY_SNAPSHOT"
+}
 
-if [ "$WBRIDGE_ENGINE" = "tpacket" ]; then
-    logger -p local0.info "[$tag:$LINENO] [$IFACE] Starting wbridge-tpacket binary..."
-    exec /usr/local/bin/wifi-wbridge-tpacket "$WIRED_IF" "$IFACE"
-fi
+start_bridge_process() {
+    write_apply_snapshot
+    if [ "$WBRIDGE_ENGINE" = "tpacket" ]; then
+        logger -p local0.info "[$tag:$LINENO] [$IFACE] Starting wbridge-tpacket binary..."
+        /usr/local/bin/wifi-wbridge-tpacket "$WIRED_IF" "$IFACE" &
+    else
+        logger -p local0.info "[$tag:$LINENO] [$IFACE] Starting wbridge binary..."
+        /usr/local/bin/wifi-wbridge --ip-filter --no-debug "$WIRED_IF" "$IFACE" &
+    fi
+    BRIDGE_PID=$!
+    logger -p local0.info "[$tag:$LINENO] [$IFACE] Bridge process running (pid=$BRIDGE_PID, engine=$WBRIDGE_ENGINE)"
+}
 
-logger -p local0.info "[$tag:$LINENO] [$IFACE] Starting wbridge binary..."
+stop_bridge_process() {
+    if [ -n "${BRIDGE_PID:-}" ] && kill -0 "$BRIDGE_PID" 2>/dev/null; then
+        kill "$BRIDGE_PID" 2>/dev/null || true
+        wait "$BRIDGE_PID" 2>/dev/null || true
+    fi
+    BRIDGE_PID=""
+}
 
-# Use the new wbridge binary via the wifi-wbridge symlink
-# --ip-filter: Skip re-injection for bridge's local IPs
-# --no-debug: Reduce log noise in production
-exec /usr/local/bin/wifi-wbridge --ip-filter --no-debug "$WIRED_IF" "$IFACE"
+monitor_bridge_process() {
+    local down_since=0
+    local now down_elapsed rc
+
+    if [ "$LINK_GUARD" -eq 0 ]; then
+        if wait "$BRIDGE_PID"; then
+            rc=0
+        else
+            rc=$?
+        fi
+        BRIDGE_PID=""
+        return "$rc"
+    fi
+
+    while true; do
+        if ! kill -0 "$BRIDGE_PID" 2>/dev/null; then
+            if wait "$BRIDGE_PID"; then
+                rc=0
+            else
+                rc=$?
+            fi
+            BRIDGE_PID=""
+            return "$rc"
+        fi
+
+        now=$(date +%s)
+        if both_up; then
+            down_since=0
+        else
+            if [ "$down_since" -eq 0 ]; then
+                down_since=$now
+            fi
+            down_elapsed=$((now - down_since))
+            if [ "$down_elapsed" -ge "$LINK_DOWN_DEBOUNCE_SEC" ]; then
+                logger -p local0.warn "[$tag:$LINENO] [$IFACE] Link dropped for ${down_elapsed}s, stopping bridge process"
+                stop_bridge_process
+                return 0
+            fi
+        fi
+        sleep 1
+    done
+}
+
+handle_shutdown() {
+    stop_bridge_process
+    exit 0
+}
+
+trap handle_shutdown TERM INT
+trap stop_bridge_process EXIT
+
+while true; do
+    wait_for_links_or_timeout || true
+    start_bridge_process
+    if monitor_bridge_process; then
+        logger -p local0.info "[$tag:$LINENO] [$IFACE] Bridge cycle ended, waiting for link recovery"
+        sleep 1
+        continue
+    fi
+
+    rc=$?
+    logger -p local0.warn "[$tag:$LINENO] [$IFACE] Bridge process exited with code $rc"
+    exit "$rc"
+done
