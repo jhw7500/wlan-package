@@ -15,6 +15,14 @@ esac
 
 BACKUP_FILE="${LINK_FILE}.bak"
 
+tmp=""
+cleanup_tmp() {
+  if [ -n "${tmp:-}" ]; then
+    rm -f "$tmp"
+  fi
+}
+trap cleanup_tmp EXIT
+
 # MAC 유효성 검사
 if [[ "$NEW_MAC" =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]]; then
   # --- MAC 정상 ---
@@ -51,7 +59,7 @@ if [[ "$NEW_MAC" =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]]; then
   fi
 
   install -o root -g root -m 0644 "$tmp" "$LINK_FILE"
-  rm -f "$tmp"
+  tmp=""
   logger -p local0.info "[$tag:$LINENO] [$IFACE] Updated MACAddress to $NEW_MAC in $LINK_FILE"
 
   # /opt/wlan/mac/ 에도 MAC 기록
