@@ -59,8 +59,8 @@ DEFAULT_MIN_CHECK_INTERVAL = 1
 DEFAULT_MAX_CHECK_INTERVAL = 10
 
 # Sleep 기본값
-DEFAULT_SCAN_NO_RESULT_SLEEP = 3   # AP 스캔 결과 없을 때 재시도 대기
-DEFAULT_ROAM_SUCCESS_SLEEP = 5     # 로밍 성공 후 안정화 대기
+DEFAULT_SCAN_NO_RESULT_SLEEP = 3  # AP 스캔 결과 없을 때 재시도 대기
+DEFAULT_ROAM_SUCCESS_SLEEP = 5  # 로밍 성공 후 안정화 대기
 
 # Post-Roam ARP 최적화 기본값
 DEFAULT_ENABLE_POST_ROAM_ARP_OPTIMIZATION = True
@@ -111,6 +111,71 @@ def parse_bool(value):
     return bool(value)
 
 
+def _set_config_value(config: Dict[str, Any], key: str, raw_value: Any, caster) -> None:
+    if raw_value is None:
+        return
+    try:
+        config[key] = caster(raw_value)
+    except (TypeError, ValueError):
+        if "logger" in globals():
+            logger.message(
+                "warn",
+                f"[{IFACE}] invalid roaming config '{key}': {raw_value} (keep default)",
+                _EXTRA_(),
+            )
+
+
+def _apply_section_values(
+    config: Dict[str, Any], section: Dict[str, Any], mapping
+) -> None:
+    for source_key, config_key, caster in mapping:
+        _set_config_value(config, config_key, section.get(source_key), caster)
+
+
+def _apply_runtime_globals(config: Dict[str, Any]) -> None:
+    current_default_th_2g = globals().get("DEFAULT_TH_2G", DEFAULT_TH_2G)
+    current_default_th_5g = globals().get("DEFAULT_TH_5G", DEFAULT_TH_5G)
+    current_check_interval = globals().get("CHECK_INTERVAL", CHECK_INTERVAL)
+
+    try:
+        check_interval = int(config["CHECK_INTERVAL"])
+    except (TypeError, ValueError):
+        check_interval = int(current_check_interval)
+
+    globals().update(
+        {
+            "ENABLE_PREDICTIVE_ROAM": config["ENABLE_PREDICTIVE_ROAM"],
+            "PREDICTIVE_THRESHOLD_BOOST": config["PREDICTIVE_THRESHOLD_BOOST"],
+            "TREND_WINDOW_SIZE": config["TREND_WINDOW_SIZE"],
+            "TREND_HISTORY_MAX_AGE": config["TREND_HISTORY_MAX_AGE"],
+            "ENABLE_LOAD_BASED_ROAM": config["ENABLE_LOAD_BASED_ROAM"],
+            "MAX_ROAM_LOAD": config["MAX_ROAM_LOAD"],
+            "LOAD_DIFF_THRESHOLD": config["LOAD_DIFF_THRESHOLD"],
+            "ENABLE_PING_PONG_PREVENTION": config["ENABLE_PING_PONG_PREVENTION"],
+            "PING_PONG_WINDOW": config["PING_PONG_WINDOW"],
+            "MAX_ROAMS_IN_WINDOW": config["MAX_ROAMS_IN_WINDOW"],
+            "PING_PONG_DETECTION_TIME": config["PING_PONG_DETECTION_TIME"],
+            "ENABLE_ADAPTIVE_INTERVAL": config["ENABLE_ADAPTIVE_INTERVAL"],
+            "MIN_CHECK_INTERVAL": config["MIN_CHECK_INTERVAL"],
+            "MAX_CHECK_INTERVAL": config["MAX_CHECK_INTERVAL"],
+            "DEFAULT_TH_2G": config.get("DEFAULT_TH_2G", current_default_th_2g),
+            "DEFAULT_TH_5G": config.get("DEFAULT_TH_5G", current_default_th_5g),
+            "DIFF_TH": config["DIFF_TH"],
+            "CHECK_INTERVAL": check_interval,
+            "ENABLE_POST_ROAM_ARP_OPTIMIZATION": config[
+                "ENABLE_POST_ROAM_ARP_OPTIMIZATION"
+            ],
+            "POST_ROAM_GARP_COUNT": config["POST_ROAM_GARP_COUNT"],
+            "POST_ROAM_GARP_WAIT": config["POST_ROAM_GARP_WAIT"],
+            "ENABLE_POST_ROAM_PEER_WARMUP": config["ENABLE_POST_ROAM_PEER_WARMUP"],
+            "POST_ROAM_PEER_COUNT": config["POST_ROAM_PEER_COUNT"],
+            "POST_ROAM_PEER_WAIT": config["POST_ROAM_PEER_WAIT"],
+            "SCAN_NO_RESULT_SLEEP": int(config["SCAN_NO_RESULT_SLEEP"]),
+            "ROAM_SUCCESS_SLEEP": int(config["ROAM_SUCCESS_SLEEP"]),
+        }
+    )
+
+
 def load_roaming_config(iface):
     """
     JSON 형식의 conf 파일에서 인터페이스별 로밍 설정 로드
@@ -121,18 +186,6 @@ def load_roaming_config(iface):
     Returns:
         dict: 로밍 설정 dictionary
     """
-    global ENABLE_PREDICTIVE_ROAM, PREDICTIVE_THRESHOLD_BOOST
-    global TREND_WINDOW_SIZE, TREND_HISTORY_MAX_AGE
-    global ENABLE_LOAD_BASED_ROAM, MAX_ROAM_LOAD, LOAD_DIFF_THRESHOLD
-    global ENABLE_PING_PONG_PREVENTION, PING_PONG_WINDOW
-    global MAX_ROAMS_IN_WINDOW, PING_PONG_DETECTION_TIME
-    global ENABLE_ADAPTIVE_INTERVAL, MIN_CHECK_INTERVAL, MAX_CHECK_INTERVAL
-    global DEFAULT_TH_2G, DEFAULT_TH_5G, DIFF_TH, CHECK_INTERVAL
-    global ENABLE_POST_ROAM_ARP_OPTIMIZATION, POST_ROAM_GARP_COUNT
-    global POST_ROAM_GARP_WAIT, ENABLE_POST_ROAM_PEER_WARMUP
-    global POST_ROAM_PEER_COUNT, POST_ROAM_PEER_WAIT
-    global SCAN_NO_RESULT_SLEEP, ROAM_SUCCESS_SLEEP
-
     config = {
         "ENABLE_PREDICTIVE_ROAM": DEFAULT_ENABLE_PREDICTIVE_ROAM,
         "PREDICTIVE_THRESHOLD_BOOST": DEFAULT_PREDICTIVE_THRESHOLD_BOOST,
@@ -172,95 +225,77 @@ def load_roaming_config(iface):
 
                 predictive = roam_config.get("PREDICTIVE_ROAM")
                 if isinstance(predictive, dict):
-                    enable = predictive.get("enable")
-                    if enable is not None:
-                        config["ENABLE_PREDICTIVE_ROAM"] = parse_bool(enable)
-
-                    threshold_boost = predictive.get("threshold_boost")
-                    if threshold_boost is not None:
-                        config["PREDICTIVE_THRESHOLD_BOOST"] = int(threshold_boost)
-
-                    trend_window_size = predictive.get("trend_window_size")
-                    if trend_window_size is not None:
-                        config["TREND_WINDOW_SIZE"] = int(trend_window_size)
-
-                    trend_history_max_age = predictive.get("trend_history_max_age")
-                    if trend_history_max_age is not None:
-                        config["TREND_HISTORY_MAX_AGE"] = int(trend_history_max_age)
+                    _apply_section_values(
+                        config,
+                        predictive,
+                        [
+                            ("enable", "ENABLE_PREDICTIVE_ROAM", parse_bool),
+                            ("threshold_boost", "PREDICTIVE_THRESHOLD_BOOST", int),
+                            ("trend_window_size", "TREND_WINDOW_SIZE", int),
+                            ("trend_history_max_age", "TREND_HISTORY_MAX_AGE", int),
+                        ],
+                    )
 
                 load_based = roam_config.get("LOAD_BASED_ROAM")
                 if isinstance(load_based, dict):
-                    enable = load_based.get("enable")
-                    if enable is not None:
-                        config["ENABLE_LOAD_BASED_ROAM"] = parse_bool(enable)
-
-                    max_roam_load = load_based.get("max_roam_load")
-                    if max_roam_load is not None:
-                        config["MAX_ROAM_LOAD"] = int(max_roam_load)
-
-                    load_diff_threshold = load_based.get("load_diff_threshold")
-                    if load_diff_threshold is not None:
-                        config["LOAD_DIFF_THRESHOLD"] = int(load_diff_threshold)
+                    _apply_section_values(
+                        config,
+                        load_based,
+                        [
+                            ("enable", "ENABLE_LOAD_BASED_ROAM", parse_bool),
+                            ("max_roam_load", "MAX_ROAM_LOAD", int),
+                            ("load_diff_threshold", "LOAD_DIFF_THRESHOLD", int),
+                        ],
+                    )
 
                 ping_pong = roam_config.get("PING_PONG_PREVENTION")
                 if isinstance(ping_pong, dict):
-                    enable = ping_pong.get("enable")
-                    if enable is not None:
-                        config["ENABLE_PING_PONG_PREVENTION"] = parse_bool(enable)
-
-                    window = ping_pong.get("window")
-                    if window is not None:
-                        config["PING_PONG_WINDOW"] = int(window)
-
-                    max_roams_in_window = ping_pong.get("max_roams_in_window")
-                    if max_roams_in_window is not None:
-                        config["MAX_ROAMS_IN_WINDOW"] = int(max_roams_in_window)
-
-                    detection_time = ping_pong.get("detection_time")
-                    if detection_time is not None:
-                        config["PING_PONG_DETECTION_TIME"] = int(detection_time)
+                    _apply_section_values(
+                        config,
+                        ping_pong,
+                        [
+                            ("enable", "ENABLE_PING_PONG_PREVENTION", parse_bool),
+                            ("window", "PING_PONG_WINDOW", int),
+                            ("max_roams_in_window", "MAX_ROAMS_IN_WINDOW", int),
+                            ("detection_time", "PING_PONG_DETECTION_TIME", int),
+                        ],
+                    )
 
                 adaptive = roam_config.get("ADAPTIVE_INTERVAL")
                 if isinstance(adaptive, dict):
-                    enable = adaptive.get("enable")
-                    if enable is not None:
-                        config["ENABLE_ADAPTIVE_INTERVAL"] = parse_bool(enable)
-
-                    min_check_interval = adaptive.get("min_check_interval")
-                    if min_check_interval is not None:
-                        config["MIN_CHECK_INTERVAL"] = int(min_check_interval)
-
-                    max_check_interval = adaptive.get("max_check_interval")
-                    if max_check_interval is not None:
-                        config["MAX_CHECK_INTERVAL"] = int(max_check_interval)
+                    _apply_section_values(
+                        config,
+                        adaptive,
+                        [
+                            ("enable", "ENABLE_ADAPTIVE_INTERVAL", parse_bool),
+                            ("min_check_interval", "MIN_CHECK_INTERVAL", int),
+                            ("max_check_interval", "MAX_CHECK_INTERVAL", int),
+                        ],
+                    )
 
                 post_roam = roam_config.get("POST_ROAM_ARP_OPTIMIZATION")
                 if isinstance(post_roam, dict):
-                    enable = post_roam.get("enable")
-                    if enable is not None:
-                        config["ENABLE_POST_ROAM_ARP_OPTIMIZATION"] = parse_bool(enable)
-
-                    garp_count = post_roam.get("garp_count")
-                    if garp_count is not None:
-                        config["POST_ROAM_GARP_COUNT"] = int(garp_count)
-
-                    garp_wait = post_roam.get("garp_wait")
-                    if garp_wait is not None:
-                        config["POST_ROAM_GARP_WAIT"] = int(garp_wait)
+                    _apply_section_values(
+                        config,
+                        post_roam,
+                        [
+                            ("enable", "ENABLE_POST_ROAM_ARP_OPTIMIZATION", parse_bool),
+                            ("garp_count", "POST_ROAM_GARP_COUNT", int),
+                            ("garp_wait", "POST_ROAM_GARP_WAIT", int),
+                        ],
+                    )
 
                     peer_warmup = post_roam.get("PEER_WARMUP")
                     if isinstance(peer_warmup, dict):
-                        enable = peer_warmup.get("enable")
-                        if enable is not None:
-                            config["ENABLE_POST_ROAM_PEER_WARMUP"] = parse_bool(enable)
-
-                        peer_count = peer_warmup.get("peer_count")
-                        if peer_count is not None:
-                            config["POST_ROAM_PEER_COUNT"] = int(peer_count)
-
-                        peer_wait = peer_warmup.get("peer_wait")
-                        if peer_wait is not None:
-                            config["POST_ROAM_PEER_WAIT"] = int(peer_wait)
+                        _apply_section_values(
+                            config,
+                            peer_warmup,
+                            [
+                                ("enable", "ENABLE_POST_ROAM_PEER_WARMUP", parse_bool),
+                                ("peer_count", "POST_ROAM_PEER_COUNT", int),
+                                ("peer_wait", "POST_ROAM_PEER_WAIT", int),
+                            ],
+                        )
 
                 # 설정 적용
                 for key in config.keys():
@@ -285,36 +320,7 @@ def load_roaming_config(iface):
                 "err", f"[{iface}] roaming config load error: {e}", _EXTRA_()
             )
 
-    # 전역 변수 업데이트
-    ENABLE_PREDICTIVE_ROAM = config["ENABLE_PREDICTIVE_ROAM"]
-    PREDICTIVE_THRESHOLD_BOOST = config["PREDICTIVE_THRESHOLD_BOOST"]
-    TREND_WINDOW_SIZE = config["TREND_WINDOW_SIZE"]
-    TREND_HISTORY_MAX_AGE = config["TREND_HISTORY_MAX_AGE"]
-    ENABLE_LOAD_BASED_ROAM = config["ENABLE_LOAD_BASED_ROAM"]
-    MAX_ROAM_LOAD = config["MAX_ROAM_LOAD"]
-    LOAD_DIFF_THRESHOLD = config["LOAD_DIFF_THRESHOLD"]
-    ENABLE_PING_PONG_PREVENTION = config["ENABLE_PING_PONG_PREVENTION"]
-    PING_PONG_WINDOW = config["PING_PONG_WINDOW"]
-    MAX_ROAMS_IN_WINDOW = config["MAX_ROAMS_IN_WINDOW"]
-    PING_PONG_DETECTION_TIME = config["PING_PONG_DETECTION_TIME"]
-    ENABLE_ADAPTIVE_INTERVAL = config["ENABLE_ADAPTIVE_INTERVAL"]
-    MIN_CHECK_INTERVAL = config["MIN_CHECK_INTERVAL"]
-    MAX_CHECK_INTERVAL = config["MAX_CHECK_INTERVAL"]
-    DEFAULT_TH_2G = config.get("DEFAULT_TH_2G", DEFAULT_TH_2G)
-    DEFAULT_TH_5G = config.get("DEFAULT_TH_5G", DEFAULT_TH_5G)
-    DIFF_TH = config["DIFF_TH"]
-    try:
-        CHECK_INTERVAL = int(config["CHECK_INTERVAL"])
-    except Exception:
-        CHECK_INTERVAL = CHECK_INTERVAL
-    ENABLE_POST_ROAM_ARP_OPTIMIZATION = config["ENABLE_POST_ROAM_ARP_OPTIMIZATION"]
-    POST_ROAM_GARP_COUNT = config["POST_ROAM_GARP_COUNT"]
-    POST_ROAM_GARP_WAIT = config["POST_ROAM_GARP_WAIT"]
-    ENABLE_POST_ROAM_PEER_WARMUP = config["ENABLE_POST_ROAM_PEER_WARMUP"]
-    POST_ROAM_PEER_COUNT = config["POST_ROAM_PEER_COUNT"]
-    POST_ROAM_PEER_WAIT = config["POST_ROAM_PEER_WAIT"]
-    SCAN_NO_RESULT_SLEEP = int(config["SCAN_NO_RESULT_SLEEP"])
-    ROAM_SUCCESS_SLEEP = int(config["ROAM_SUCCESS_SLEEP"])
+    _apply_runtime_globals(config)
 
     logger.message(
         "info",
