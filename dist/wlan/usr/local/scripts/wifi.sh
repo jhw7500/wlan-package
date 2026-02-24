@@ -55,45 +55,30 @@ apply_sed_update() {
 }
 # ------------------------------------
 
-WIFI_INIT_CONF="/usr/local/etc/wifi_init.conf"
+WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
+
+# JSON global 설정 수정 함수
+update_json_global() {
+    local key="$1"
+    local value="$2"
+
+    if [ ! -f "$WIFI_INIT_CONF_JSON" ]; then
+        echo "Error: $WIFI_INIT_CONF_JSON not found"
+        return 1
+    fi
+
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "Error: jq not installed"
+        return 1
+    fi
+
+    jq --arg k "$key" --arg v "$value" '.global[$k] = $v' "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp"
+    mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
+}
 
 ensure_wifi_init_conf() {
-    mkdir -p "$(dirname "$WIFI_INIT_CONF")"
-
-    if [ ! -f "$WIFI_INIT_CONF" ]; then
-        cat > "$WIFI_INIT_CONF" <<'EOF'
-FW_NAME="cts/pcieuart9098_combo_v1.bin"
-MOD_PARA="cts/wifi_mod_para.conf"
-CAL_DATA_CFG="cts/WlanCalData_ext_RD.conf"
-TXPWRLIMIT_PATH="/lib/firmware/cts/txpwrlimit_cfg_9098.conf"
-MFG_MODE="0"
-STANDARD=""
-DEV_CAP_MASK=""
-EOF
-        return 0
-    fi
-
-    if ! grep -qE '^[[:space:]]*FW_NAME=' "$WIFI_INIT_CONF"; then
-        echo 'FW_NAME="cts/pcieuart9098_combo_v1.bin"' >> "$WIFI_INIT_CONF"
-    fi
-    if ! grep -qE '^[[:space:]]*MOD_PARA=' "$WIFI_INIT_CONF"; then
-        echo 'MOD_PARA="cts/wifi_mod_para.conf"' >> "$WIFI_INIT_CONF"
-    fi
-    if ! grep -qE '^[[:space:]]*CAL_DATA_CFG=' "$WIFI_INIT_CONF"; then
-        echo 'CAL_DATA_CFG="cts/WlanCalData_ext_RD.conf"' >> "$WIFI_INIT_CONF"
-    fi
-    if ! grep -qE '^[[:space:]]*TXPWRLIMIT_PATH=' "$WIFI_INIT_CONF"; then
-        echo 'TXPWRLIMIT_PATH="/lib/firmware/cts/txpwrlimit_cfg_9098.conf"' >> "$WIFI_INIT_CONF"
-    fi
-    if ! grep -qE '^[[:space:]]*MFG_MODE=' "$WIFI_INIT_CONF"; then
-        echo 'MFG_MODE="0"' >> "$WIFI_INIT_CONF"
-    fi
-    if ! grep -qE '^[[:space:]]*STANDARD=' "$WIFI_INIT_CONF"; then
-        echo 'STANDARD=""' >> "$WIFI_INIT_CONF"
-    fi
-    if ! grep -qE '^[[:space:]]*DEV_CAP_MASK=' "$WIFI_INIT_CONF"; then
-        echo 'DEV_CAP_MASK=""' >> "$WIFI_INIT_CONF"
-    fi
+    # JSON config is managed by postinst, no action needed here
+    :
 }
 
 usage() {
@@ -106,7 +91,7 @@ usage() {
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} gt {address} : persist"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} mac {0|1|base|target} {mac_address} : persist"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} spoof {0|1|dynamic|static} : persist"
-    echo "       wifi {0|1|mlan0|mlan1} standard {n|ac|ax|4|5|6} : persist"
+    #echo "       wifi {0|1|mlan0|mlan1} standard {n|ac|ax|4|5|6} : persist"
     echo "       wifi {0|1|mlan0|mlan1} ssid {id} : persist"
     echo "       wifi {0|1|mlan0|mlan1} psk {password} : persist"
     echo "       wifi {0|1|mlan0|mlan1} key {0|1|NONE|WPA-PSK|*} : persist"
@@ -118,6 +103,7 @@ usage() {
     echo "       wifi mfg {0|1|off|on} : persist"
     echo "       wifi ant {0|1|internal|external} : runtime"
     echo "       wifi set {fem|azure} : apply preset configuration profile"
+    echo "       wifi stand {n|ac|ax|4|5|6} : persist"
     echo "       wifi backup : persist"
     exit 1
 }
@@ -235,20 +221,26 @@ PY
         :
     else
         echo "[WiFi Init Summary]"
-    FW_NAME="cts/pcieuart9098_combo_v1.bin"
-    MOD_PARA="cts/wifi_mod_para.conf"
-    CAL_DATA_CFG="cts/azure/cal_data.conf"
-    TXPWRLIMIT_PATH="/lib/firmware/cts/azure/txpwrlimit_cfg_9098.conf"
-    MFG_MODE=0
-    STANDARD=""
-    DEV_CAP_MASK="0xffffffff"
-    
-    WIFI_INIT_CONF="/usr/local/etc/wifi_init.conf"
-    if [ -f "$WIFI_INIT_CONF" ]; then
-        . "$WIFI_INIT_CONF"
-        echo "  Source: $WIFI_INIT_CONF (Overridden)"
+
+    # JSON 설정 읽기
+    if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
+        FW_NAME=$(jq -r '.global.FW_NAME // "cts/pcieuart9098_combo_v1.bin"' "$WIFI_INIT_CONF_JSON")
+        MOD_PARA=$(jq -r '.global.MOD_PARA // "cts/wifi_mod_para.conf"' "$WIFI_INIT_CONF_JSON")
+        CAL_DATA_CFG=$(jq -r '.global.CAL_DATA_CFG // "cts/WlanCalData_ext_RD.conf"' "$WIFI_INIT_CONF_JSON")
+        TXPWRLIMIT_PATH=$(jq -r '.global.TXPWRLIMIT_PATH // "/lib/firmware/cts/txpwrlimit_cfg_9098.conf"' "$WIFI_INIT_CONF_JSON")
+        MFG_MODE=$(jq -r '.global.MFG_MODE // "0"' "$WIFI_INIT_CONF_JSON")
+        STANDARD=$(jq -r ".global.STANDARD // \"\"" "$WIFI_INIT_CONF_JSON")
+        DEV_CAP_MASK=$(jq -r ".global.DEV_CAP_MASK // \"\"" "$WIFI_INIT_CONF_JSON")
+        echo "  Source: $WIFI_INIT_CONF_JSON"
     else
         echo "  Source: Default (Internal)"
+        FW_NAME="cts/pcieuart9098_combo_v1.bin"
+        MOD_PARA="cts/wifi_mod_para.conf"
+        CAL_DATA_CFG="cts/WlanCalData_ext_RD.conf"
+        TXPWRLIMIT_PATH="/lib/firmware/cts/txpwrlimit_cfg_9098.conf"
+        MFG_MODE="0"
+        STANDARD=""
+        DEV_CAP_MASK=""
     fi
     echo "  Standard        : ${STANDARD:-}"
     echo ""
@@ -362,7 +354,6 @@ case "$1" in
     exit 0
     ;;
   set)
-    ensure_wifi_init_conf
     case "$2" in
       fem)
         CAL_VAL="cts/WlanCalData_ext_a0.conf"
@@ -377,15 +368,14 @@ case "$1" in
         ;;
     esac
     echo "Updating configuration to $2 profile..."
-    sed -i -E "/^[[:space:]]*#/! s|^CAL_DATA_CFG=.*\$|CAL_DATA_CFG=${CAL_VAL}|" "$WIFI_INIT_CONF"
-    sed -i -E "/^[[:space:]]*#/! s|^TXPWRLIMIT_PATH=.*\$|TXPWRLIMIT_PATH=${PWR_VAL}|" "$WIFI_INIT_CONF"
-    echo "Updated in $WIFI_INIT_CONF:"
+    update_json_global "CAL_DATA_CFG" "$CAL_VAL"
+    update_json_global "TXPWRLIMIT_PATH" "$PWR_VAL"
+    echo "Updated in $WIFI_INIT_CONF_JSON:"
     echo "  CAL_DATA_CFG    = $CAL_VAL"
     echo "  TXPWRLIMIT_PATH = $PWR_VAL"
     exit 0
     ;;
   mfg)
-    ensure_wifi_init_conf
     if [ "$2" == "0" ]; then
         FW_NAME="cts/pcieuart9098_combo_v1.bin"
         MFG_MODE="0"
@@ -398,12 +388,11 @@ case "$1" in
     echo "Updated:"
     echo "  FW_NAME=${FW_NAME}"
     echo "  MFG_MODE=${MFG_MODE}"
-    sed -i -E "/^[[:space:]]*#/! s|^FW_NAME=.*\$|FW_NAME=${FW_NAME}|" "$WIFI_INIT_CONF"
-    sed -i -E "/^[[:space:]]*#/! s|^MFG_MODE=.*\$|MFG_MODE=${MFG_MODE}|" "$WIFI_INIT_CONF"
+    update_json_global "FW_NAME" "$FW_NAME"
+    update_json_global "MFG_MODE" "$MFG_MODE"
     exit 1
     ;;
   cal)
-    ensure_wifi_init_conf
     CAL_DATA_CFG=$2
     if [[ "$CAL_DATA_CFG" == *.conf ]]; then
         cp $CAL_DATA_CFG /lib/firmware/cts/$CAL_DATA_CFG
@@ -413,19 +402,18 @@ case "$1" in
     elif [[ "$CAL_DATA_CFG" == "1" ]]; then
         CAL_DATA_CFG="cts/WlanCalData_ext.conf"
     elif [[ "$CAL_DATA_CFG" == "0" ]]; then
-        CAL_DATA_CFG=\"\"
+        CAL_DATA_CFG=""
     else
         usage
     fi
     echo "Updated:"
     echo "  CAL_DATA_CFG=$CAL_DATA_CFG"
-    sed -i -E "/^[[:space:]]*#/! s|^CAL_DATA_CFG=.*\$|CAL_DATA_CFG=${CAL_DATA_CFG}|" "$WIFI_INIT_CONF"
+    update_json_global "CAL_DATA_CFG" "$CAL_DATA_CFG"
     exit 1
     ;;
   txpwr | txpwrlimit)
-    ensure_wifi_init_conf
     if [ "$2" == "no" ] || [ "$2" == "0" ]; then
-        TXPWRLIMIT_PATH=\"\"
+        TXPWRLIMIT_PATH=""
     elif [ "$2" == "default" ] || [ "$2" == "1" ]; then
         TXPWRLIMIT_PATH="/lib/firmware/cts/txpwrlimit_cfg_9098.conf"
     elif [ "$2" == "low" ] || [ "$2" == "2" ]; then
@@ -440,7 +428,7 @@ case "$1" in
     fi
     echo "Updated:"
     echo "  TXPWRLIMIT_PATH=$TXPWRLIMIT_PATH"
-    sed -i -E "/^[[:space:]]*#/! s|^TXPWRLIMIT_PATH=.*\$|TXPWRLIMIT_PATH=${TXPWRLIMIT_PATH}|" "$WIFI_INIT_CONF"
+    update_json_global "TXPWRLIMIT_PATH" "$TXPWRLIMIT_PATH"
     exit 1
     ;;
   ant)
@@ -462,6 +450,20 @@ case "$1" in
         usage
     fi
     exit 1
+    ;;
+  stand)
+    if [[ "$2" == "4" ]] || [[ "$2" == "n" ]] || [[ "$2" == "N" ]]; then
+        VAL="n"
+    elif [[ "$2" == "5" ]] || [[ "$2" == "ac" ]] || [[ "$2" == "AC" ]]; then
+        VAL="ac"
+    elif [[ "$2" == "6" ]] || [[ "$2" == "ax" ]] || [[ "$2" == "AX" ]]; then
+        VAL="ax"
+    else
+        usage
+    fi
+
+    update_json_global "STANDARD" "$VAL"
+    echo "STANDARD updated to $VAL in $WIFI_INIT_CONF_JSON"
     ;;
   backup)
     BACKUP_DIR=/var/log/cantops/backup
@@ -554,10 +556,12 @@ case "$2" in
   mac)
     if [ "$3" == "base" ] || [ "$3" == "0" ]; then
         echo "base mac set to $4 for $IFACE"
-        echo "$4" > /opt/wlan/mac/base$NUM
+        #echo "$4" > /opt/wlan/mac/base$NUM
+        /usr/local/scripts/write_mac.sh $IFACE $4
     elif [ "$3" == "target" ] || [ "$3" == "1" ]; then
         echo "target mac set to $4 for $IFACE"
         echo "$4" > /opt/wlan/mac/target$NUM
+        #/usr/local/scripts/update_mac.sh "$IFACE" "$4"
     else
         usage
     fi
@@ -685,7 +689,6 @@ case "$2" in
     iw $IFACE scan freq $FREQ_STR
     ;;
   standard)
-    ensure_wifi_init_conf
     if [[ "$3" == "4" ]] || [[ "$3" == "n" ]] || [[ "$3" == "N" ]]; then
         VAL="n"
     elif [[ "$3" == "5" ]] || [[ "$3" == "ac" ]] || [[ "$3" == "AC" ]]; then
@@ -696,13 +699,8 @@ case "$2" in
         usage
     fi
 
-    if grep -qE '^[[:space:]]*STANDARD=' "$WIFI_INIT_CONF"; then
-        sed -i -E "/^[[:space:]]*#/! s|^STANDARD=.*\$|STANDARD=\"${VAL}\"|" "$WIFI_INIT_CONF"
-    else
-        echo "STANDARD=\"${VAL}\"" >> "$WIFI_INIT_CONF"
-    fi
-
-    echo "STANDARD updated to $VAL in $WIFI_INIT_CONF"
+    update_json_global "STANDARD" "$VAL"
+    echo "STANDARD updated to $VAL in $WIFI_INIT_CONF_JSON"
     ;;
   ip)
     set -euo pipefail

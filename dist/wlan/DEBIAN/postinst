@@ -54,37 +54,7 @@ configure)
     exit 1
   fi
 
-  cal_data_cfg_file="WlanCalData_ext_a0.conf"
-  txpwrlimit_cfg_file="txpwrlimit_cfg_9098_a0.conf"
-  if [ "$DEBCONF_AVAILABLE" -eq 1 ]; then
-    db_get pim-mp/cal_data_cfg || true
-    if [ -n "${RET:-}" ]; then
-      cal_data_cfg_file=$RET
-    fi
-
-    RET=""
-    db_get pim-mp/txpwrlimit_cfg || true
-    if [ -n "${RET:-}" ]; then
-      txpwrlimit_cfg_file=$RET
-    fi
-  fi
-
   mkdir -p /usr/local/etc
-
-  WIFI_INIT_CONF="/usr/local/etc/wifi_init.conf"
-  if [ ! -f "$WIFI_INIT_CONF" ]; then
-    if [ "$cal_data_cfg_file" = "none" ]; then
-      cal_data_cfg_value="none"
-    else
-      cal_data_cfg_value="cts/$cal_data_cfg_file"
-    fi
-    txpwrlimit_value="/lib/firmware/cts/$txpwrlimit_cfg_file"
-
-    cat > "$WIFI_INIT_CONF" <<EOF
-CAL_DATA_CFG="$cal_data_cfg_value"
-TXPWRLIMIT_PATH="$txpwrlimit_value"
-EOF
-  fi
 
   cp /opt/wlan/config/logrotate.d/logrotate.rsyslog /etc/logrotate.d/
   cp /opt/wlan/config/rsyslog.conf /etc/
@@ -210,11 +180,14 @@ makeDirectory() {
   makeDirectory /usr/local/logger
   makeDirectory /usr/local/scripts
   makeDirectory /usr/local/etc
+  makeDirectory /usr/lib/sysctl.d
+  makeDirectory /var/log/cantops/mgmt/mlan0
+  makeDirectory /var/log/cantops/mgmt/mlan1
 
   touch /opt/wlan/mac/base0 /opt/wlan/mac/base1 /opt/wlan/mac/target0 /opt/wlan/mac/target1 /opt/wlan/mac/wired /opt/wlan/mac/wired_client
 
   echo "set hostname"
-  echo $hostname > /etc/hostname
+  echo "$hostname" > /etc/hostname
   sed -i "2s/.*/127.0.1.1 $hostname/" /etc/hosts
 
   INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 1))
@@ -239,6 +212,14 @@ cpchk() {
   cpchk /opt/wlan/config/systemd/network/21-mlan1.link /etc/systemd/network/21-mlan1.link
   cpchk /opt/wlan/config/systemd/network/22-eth0.link /etc/systemd/network/22-eth0.link
   cpchk /opt/wlan/config/config.json /usr/local/etc/config.json
+  cpchk /opt/wlan/config/wifi_init_conf.json /usr/local/etc/wifi_init_conf.json
+
+  if [ -f /opt/wlan/config/sysctl.d/99-wbridge-thermal.conf ]; then
+    cp /opt/wlan/config/sysctl.d/99-wbridge-thermal.conf /usr/lib/sysctl.d/99-wbridge-thermal.conf
+    logger -p local0.info "[$KEY][$tag:$LINENO] Installed /usr/lib/sysctl.d/99-wbridge-thermal.conf"
+  else
+    logger -p local0.warn "[$KEY][$tag:$LINENO] Missing /opt/wlan/config/sysctl.d/99-wbridge-thermal.conf"
+  fi
 
   INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 1))
   dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
@@ -292,6 +273,34 @@ cpchk() {
   /usr/local/scripts/change_line.sh "#root" "root" /etc/vsftpd.ftpusers
   /usr/local/scripts/change_line.sh "#root" "root" /etc/vsftpd.user_list
   /usr/local/scripts/add_line.sh "/dev/mmcblk2p3      /var/log/cantops  ext4  noatime,nodiratime,lazytime,commit=60,data=ordered  0  2" /etc/fstab
+
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload 2>/dev/null || true
+  fi
+
+  if [ -f /etc/default/wbridge ]; then
+    # shellcheck source=/etc/default/wbridge
+    . /etc/default/wbridge
+  fi
+
+  THERMAL_TIMER_ENABLE="${WBRIDGE_THERMAL_TIMER_ENABLE:-1}"
+  if command -v systemctl >/dev/null 2>&1; then
+    case "$THERMAL_TIMER_ENABLE" in
+      1)
+        systemctl enable --now wbridge-thermal-state.timer 2>/dev/null || true
+        logger -p local0.info "[$KEY][$tag:$LINENO] Enabled wbridge-thermal-state.timer"
+        ;;
+      *)
+        systemctl disable --now wbridge-thermal-state.timer wbridge-thermal-state.service 2>/dev/null || true
+        logger -p local0.info "[$KEY][$tag:$LINENO] Thermal timer disabled by WBRIDGE_THERMAL_TIMER_ENABLE=$THERMAL_TIMER_ENABLE"
+        ;;
+    esac
+  fi
+
+  if command -v sysctl >/dev/null 2>&1; then
+    sysctl --system >/dev/null 2>&1 || true
+    logger -p local0.info "[$KEY][$tag:$LINENO] Applied sysctl --system"
+  fi
 
   PACKAGE_NAME="$DPKG_MAINTSCRIPT_PACKAGE"
   echo -e "\e[1m installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)\e[0m"

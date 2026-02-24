@@ -1,0 +1,105 @@
+{
+    "_comment": [
+        "WiFi Configuration File",
+        "This file contains global WiFi settings and per-interface roaming configurations"
+    ],
+    "global": {
+        "FW_NAME": "cts/pcieuart9098_combo_v1.bin",
+        "MOD_PARA": "cts/wifi_mod_para.conf",
+        "CAL_DATA_CFG": "cts/WlanCalData_ext_RD.conf",
+        "TXPWRLIMIT_PATH": "/lib/firmware/cts/txpwrlimit_cfg_9098.conf",
+        "MFG_MODE": "0",
+        "STANDARD": "",
+        "DEV_CAP_MASK": "",
+        "PRIMARY_IFACE": "mlan0",
+        "MAC_MODE": "default"
+    },
+    "mlan0": {
+        "_comment": "mlan0 interface configuration",
+        "roaming": {
+            "_comment": "Roaming configuration for mlan0",
+            "DEFAULT_TH_2G": -75,
+            "DEFAULT_TH_5G": -75,
+            "DIFF_TH": 10,
+            "CHECK_INTERVAL": 5,
+            "PREDICTIVE_ROAM": {
+                "enable": true,
+                "threshold_boost": 5,
+                "trend_window_size": 5,
+                "trend_history_max_age": 30
+            },
+            "LOAD_BASED_ROAM": {
+                "enable": false,
+                "max_roam_load": 80,
+                "load_diff_threshold": 20
+            },
+            "PING_PONG_PREVENTION": {
+                "enable": true,
+                "window": 30,
+                "max_roams_in_window": 3,
+                "detection_time": 10
+            },
+            "ADAPTIVE_INTERVAL": {
+                "enable": true,
+                "min_check_interval": 1,
+                "max_check_interval": 10
+            },
+            "POST_ROAM_ARP_OPTIMIZATION": {
+                "enable": true,
+                "garp_count": 2,
+                "garp_wait": 1,
+                "PEER_WARMUP": {
+                    "enable": true,
+                    "peer_count": 5,
+                    "peer_wait": 1
+                }
+            },
+            "SCAN_NO_RESULT_SLEEP": 3,
+            "ROAM_SUCCESS_SLEEP": 5
+        }
+    },
+    "mlan1": {
+        "_comment": "mlan1 interface configuration",
+        "roaming": {
+            "_comment": "Roaming configuration for mlan1",
+            "DEFAULT_TH_2G": -75,
+            "DEFAULT_TH_5G": -75,
+            "DIFF_TH": 10,
+            "CHECK_INTERVAL": 5,
+            "PREDICTIVE_ROAM": {
+                "enable": true,
+                "threshold_boost": 5,
+                "trend_window_size": 5,
+                "trend_history_max_age": 30
+            },
+            "LOAD_BASED_ROAM": {
+                "enable": true,
+                "max_roam_load": 80,
+                "load_diff_threshold": 20
+            },
+            "PING_PONG_PREVENTION": {
+                "enable": true,
+                "window": 60,
+                "max_roams_in_window": 3,
+                "detection_time": 30
+            },
+            "ADAPTIVE_INTERVAL": {
+                "enable": true,
+                "min_check_interval": 1,
+                "max_check_interval": 10
+            },
+            "POST_ROAM_ARP_OPTIMIZATION": {
+                "enable": true,
+                "garp_count": 2,
+                "garp_wait": 1,
+                "PEER_WARMUP": {
+                    "enable": true,
+                    "peer_count": 5,
+                    "peer_wait": 1
+                }
+            },
+            "SCAN_NO_RESULT_SLEEP": 3,
+            "ROAM_SUCCESS_SLEEP": 5
+        }
+    }
+}

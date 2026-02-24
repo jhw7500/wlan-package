@@ -1,0 +1,29 @@
+# wbridge 서비스 설정
+# wifi_bridge@.service의 EnvironmentFile로 로드됨
+
+# 최적화 활성화 (0: 비활성, 1: 활성)
+WBRIDGE_OPTIMIZE=1
+
+# 최적화 모드 (latency | normal | thermal)
+WBRIDGE_MODE=normal
+
+# 브리지 엔진 선택 (pcap | tpacket)
+WBRIDGE_ENGINE=pcap
+
+# thermal 상태 힌트 (ok | warm | hot)
+WBRIDGE_THERMAL_STATE=ok
+
+# thermal clamp 무시 여부 (0: 안전정책 적용, 1: 요청 모드 강제)
+WBRIDGE_MODE_FORCE=0
+
+# thermal state updater 동작 (0: 상태만 기록, 1: 상태 변경 시 bridge 재시작)
+WBRIDGE_THERMAL_AUTO_RESTART=1
+
+# thermal timer 자동 활성화 (0: 비활성, 1: 활성)
+WBRIDGE_THERMAL_TIMER_ENABLE=0
+
+# thermal state 변경 후 bridge 재시작 최소 간격(초)
+WBRIDGE_THERMAL_RESTART_COOLDOWN_SEC=60
+
+# 프로파일 스키마 버전
+WBRIDGE_PROFILE_VERSION=1
