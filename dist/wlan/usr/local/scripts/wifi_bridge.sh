@@ -20,6 +20,21 @@ REQUESTED_MODE=${WBRIDGE_MODE:-normal}
 THERMAL_STATE=${WBRIDGE_THERMAL_STATE:-ok}
 PROFILE_VERSION=${WBRIDGE_PROFILE_VERSION:-1}
 MODE_FORCE=${WBRIDGE_MODE_FORCE:-0}
+LINK_GUARD=${WBRIDGE_LINK_GUARD:-1}
+LINK_DOWN_DEBOUNCE_SEC=${WBRIDGE_LINK_DOWN_DEBOUNCE_SEC:-3}
+LINK_UP_STABLE_SEC=${WBRIDGE_LINK_UP_STABLE_SEC:-8}
+LINK_IDLE_POLL_SEC=${WBRIDGE_LINK_IDLE_POLL_SEC:-10}
+WAIT_READY_TIMEOUT_SEC=${WBRIDGE_WAIT_READY_TIMEOUT_SEC:-40}
+
+sanitize_positive_int() {
+    local value=${1:-}
+    local fallback=${2:-1}
+    if [[ "$value" =~ ^[0-9]+$ ]] && [ "$value" -gt 0 ]; then
+        echo "$value"
+        return
+    fi
+    echo "$fallback"
+}
 
 case "$USE_OPTIMIZATION" in
     0|1) ;;
@@ -53,6 +68,19 @@ case "$MODE_FORCE" in
         ;;
 esac
 
+case "$LINK_GUARD" in
+    0|1) ;;
+    *)
+        logger -p local0.warn "[$tag:$LINENO] [$IFACE] Invalid WBRIDGE_LINK_GUARD='$LINK_GUARD', fallback to 1"
+        LINK_GUARD=1
+        ;;
+esac
+
+LINK_DOWN_DEBOUNCE_SEC=$(sanitize_positive_int "$LINK_DOWN_DEBOUNCE_SEC" 3)
+LINK_UP_STABLE_SEC=$(sanitize_positive_int "$LINK_UP_STABLE_SEC" 8)
+LINK_IDLE_POLL_SEC=$(sanitize_positive_int "$LINK_IDLE_POLL_SEC" 10)
+WAIT_READY_TIMEOUT_SEC=$(sanitize_positive_int "$WAIT_READY_TIMEOUT_SEC" 40)
+
 case "$WBRIDGE_ENGINE" in
     pcap|tpacket) ;;
     *)
@@ -75,12 +103,13 @@ WBRIDGE_PROFILE_EFFECTIVE="$EFFECTIVE_MODE"
 WBRIDGE_THERMAL_STATE="$THERMAL_STATE"
 WBRIDGE_PROFILE_VERSION="$PROFILE_VERSION"
 WBRIDGE_MODE_FORCE="$MODE_FORCE"
+WBRIDGE_LINK_GUARD="$LINK_GUARD"
 
 if [ "$MODE_FORCE" -eq 1 ]; then
     logger -p local0.warn "[$tag:$LINENO] [$IFACE] WBRIDGE_MODE_FORCE=1 bypasses thermal clamp (requested=$REQUESTED_MODE, thermal=$THERMAL_STATE, effective=$EFFECTIVE_MODE)"
 fi
 
-logger -p local0.info "[$tag:$LINENO] [$IFACE] wbridge startup sequence initiated (opt=$USE_OPTIMIZATION, requested=$REQUESTED_MODE, effective=$EFFECTIVE_MODE, thermal=$THERMAL_STATE, force=$MODE_FORCE, profile_ver=$PROFILE_VERSION)"
+logger -p local0.info "[$tag:$LINENO] [$IFACE] wbridge startup sequence initiated (opt=$USE_OPTIMIZATION, requested=$REQUESTED_MODE, effective=$EFFECTIVE_MODE, thermal=$THERMAL_STATE, force=$MODE_FORCE, profile_ver=$PROFILE_VERSION, link_guard=$LINK_GUARD, down_debounce=${LINK_DOWN_DEBOUNCE_SEC}s, up_stable=${LINK_UP_STABLE_SEC}s)"
 
 UDP_OPT_RESULT="not_requested"
 IRQ_OPT_RESULT="not_requested"
@@ -97,12 +126,58 @@ both_up() {
     cat /sys/class/net/"$IFACE"/carrier 2>/dev/null | grep -q 1 || return 1
 }
 
+wait_for_link_ready() {
+    local down_since=0
+    local up_since=0
+    local next_log_ts=0
+    local now down_elapsed up_elapsed
+
+    while true; do
+        now=$(date +%s)
+
+        if both_up; then
+            down_since=0
+            if [ "$up_since" -eq 0 ]; then
+                up_since=$now
+            fi
+            up_elapsed=$((now - up_since))
+            if [ "$up_elapsed" -ge "$LINK_UP_STABLE_SEC" ]; then
+                return 0
+            fi
+            sleep 1
+            continue
+        fi
+
+        up_since=0
+        if [ "$down_since" -eq 0 ]; then
+            down_since=$now
+            next_log_ts=$now
+        fi
+        down_elapsed=$((now - down_since))
+
+        if [ "$LINK_GUARD" -eq 0 ] && [ "$down_elapsed" -ge "$WAIT_READY_TIMEOUT_SEC" ]; then
+            return 1
+        fi
+
+        if [ "$down_elapsed" -ge "$LINK_DOWN_DEBOUNCE_SEC" ]; then
+            if [ "$now" -ge "$next_log_ts" ]; then
+                logger -p local0.info "[$tag:$LINENO] [$IFACE] Link incomplete for ${down_elapsed}s, waiting (${LINK_IDLE_POLL_SEC}s poll)"
+                next_log_ts=$((now + LINK_IDLE_POLL_SEC))
+            fi
+            sleep "$LINK_IDLE_POLL_SEC"
+        else
+            sleep 1
+        fi
+    done
+}
+
 # 인터페이스가 준비될 때까지 대기
 logger -p local0.info "[$tag:$LINENO] [$IFACE] Waiting for interfaces to be ready..."
-for _ in $(seq 1 200); do
-    if both_up; then break; fi
-    sleep 0.2
-done
+if wait_for_link_ready; then
+    logger -p local0.info "[$tag:$LINENO] [$IFACE] Links are stable for ${LINK_UP_STABLE_SEC}s"
+else
+    logger -p local0.warn "[$tag:$LINENO] [$IFACE] Link ready timeout (${WAIT_READY_TIMEOUT_SEC}s), continuing without guard"
+fi
 
 # --- [ 시스템 최적화 단계 ] ---
 if [ "$USE_OPTIMIZATION" -eq 1 ]; then
@@ -165,7 +240,7 @@ WBRIDGE_THERMAL_STATE=${WBRIDGE_THERMAL_STATE:-$THERMAL_STATE}
 WBRIDGE_PROFILE_VERSION=${WBRIDGE_PROFILE_VERSION:-$PROFILE_VERSION}
 WBRIDGE_MODE_FORCE=${WBRIDGE_MODE_FORCE:-$MODE_FORCE}
 
-export WBRIDGE_PROFILE_VERSION WBRIDGE_MODE_REQUESTED WBRIDGE_PROFILE_EFFECTIVE WBRIDGE_THERMAL_STATE WBRIDGE_MODE_FORCE 2>/dev/null || true
+export WBRIDGE_PROFILE_VERSION WBRIDGE_MODE_REQUESTED WBRIDGE_PROFILE_EFFECTIVE WBRIDGE_THERMAL_STATE WBRIDGE_MODE_FORCE WBRIDGE_LINK_GUARD 2>/dev/null || true
 export WBRIDGE_DISPATCH_BUDGET WBRIDGE_IMMEDIATE WBRIDGE_TIMEOUT_MS WBRIDGE_RT_PRIORITY WBRIDGE_PCAP_BUFFER WBRIDGE_TPACKET_RETIRE_TOV 2>/dev/null || true
 
 EFFECTIVE_SNAPSHOT="/run/wbridge.effective.json"
@@ -175,6 +250,11 @@ cat > "$EFFECTIVE_SNAPSHOT" <<EOF
   "mode_requested": "${WBRIDGE_MODE_REQUESTED}",
   "thermal_state": "${WBRIDGE_THERMAL_STATE}",
   "mode_force": "${WBRIDGE_MODE_FORCE}",
+  "link_guard": "${LINK_GUARD}",
+  "link_down_debounce_sec": "${LINK_DOWN_DEBOUNCE_SEC}",
+  "link_up_stable_sec": "${LINK_UP_STABLE_SEC}",
+  "link_idle_poll_sec": "${LINK_IDLE_POLL_SEC}",
+  "wait_ready_timeout_sec": "${WAIT_READY_TIMEOUT_SEC}",
   "profile_effective": "${WBRIDGE_PROFILE_EFFECTIVE}",
   "dispatch_budget": "${WBRIDGE_DISPATCH_BUDGET:-}",
   "immediate": "${WBRIDGE_IMMEDIATE:-}",
@@ -197,6 +277,7 @@ cat > "$APPLY_SNAPSHOT" <<EOF
   "mode_effective": "${WBRIDGE_PROFILE_EFFECTIVE}",
   "thermal_state": "${WBRIDGE_THERMAL_STATE}",
   "mode_force": "${WBRIDGE_MODE_FORCE}",
+  "link_guard": "${LINK_GUARD}",
   "updated_at": "$(date +%s)"
 }
 EOF
