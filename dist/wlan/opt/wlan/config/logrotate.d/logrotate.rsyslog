@@ -20,6 +20,8 @@
 /var/log/cantops/cpu/cpu.log
 /var/log/cantops/mgmt/mlan0/mgmt.log
 /var/log/cantops/mgmt/mlan1/mgmt.log
+/var/log/cantops/mgmt/mlan0/gmgmt.log
+/var/log/cantops/mgmt/mlan1/gmgmt.log
 /var/log/cantops/scan/mlan0/ap.log
 /var/log/cantops/scan/mlan0/freq.log
 /var/log/cantops/scan/mlan1/ap.log

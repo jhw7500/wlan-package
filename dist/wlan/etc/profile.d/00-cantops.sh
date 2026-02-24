@@ -80,6 +80,12 @@ alias mlogt='cat $CAPDIR0/mgmt.log |tail -n $1'
 alias mlogh='cat $CAPDIR0/mgmt.log |head -n $1'
 alias mlogf='tail -f $CAPDIR0/mgmt.log'
 
+alias glog='cat $CAPDIR0/gmgmt.log'
+alias glogg='cat $CAPDIR0/gmgmt.log | grep -i $1 -a'
+alias glogt='cat $CAPDIR0/gmgmt.log |tail -n $1'
+alias glogh='cat $CAPDIR0/gmgmt.log |head -n $1'
+alias glogf='tail -f $CAPDIR0/gmgmt.log'
+
 #alias plogt='tcpdump -r $CAPDIR/tmp/pcap.pcap -tttt -e -n |tail -n $1'
 #alias plogh='tcpdump -r $CAPDIR/tmp/pcap.pcap -tttt -e -n -c $1'
 #alias plogg='tcpdump -r $CAPDIR/tmp/pcap.pcap -tttt -e- n |grep -i $1 -a'
