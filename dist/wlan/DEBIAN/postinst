@@ -200,8 +200,8 @@ makeDirectory() {
   touch /opt/wlan/mac/base0 /opt/wlan/mac/base1 /opt/wlan/mac/target0 /opt/wlan/mac/target1 /opt/wlan/mac/wired /opt/wlan/mac/wired_client
 
   echo "set hostname"
-  echo "cantops" > /etc/hostname
-  sed -i "2s/.*/127.0.1.1 cantops/" /etc/hosts
+  echo "$hostname" > /etc/hostname
+  sed -i "2s/.*/127.0.1.1 $hostname/" /etc/hosts
 
   INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 1))
   dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
