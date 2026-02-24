@@ -11,10 +11,33 @@ TXPWRLIMIT_PATH="/lib/firmware/cts/txpwrlimit_cfg_9098.conf"
 MFG_MODE=0
 DEV_CAP_MASK=""
 
-WIFI_INIT_CONF="/usr/local/etc/wifi_init.conf"
-if [ -f "$WIFI_INIT_CONF" ]; then
-    . "$WIFI_INIT_CONF"
+WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
+
+# Load JSON config
+if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
+    FW_NAME=$(jq -r '.global.FW_NAME // "cts/pcieuart9098_combo_v1.bin"' "$WIFI_INIT_CONF_JSON")
+    MOD_PARA=$(jq -r '.global.MOD_PARA // "cts/wifi_mod_para.conf"' "$WIFI_INIT_CONF_JSON")
+    CAL_DATA_CFG=$(jq -r '.global.CAL_DATA_CFG // "cts/WlanCalData_ext_RD.conf"' "$WIFI_INIT_CONF_JSON")
+    TXPWRLIMIT_PATH=$(jq -r '.global.TXPWRLIMIT_PATH // "/lib/firmware/cts/txpwrlimit_cfg_9098.conf"' "$WIFI_INIT_CONF_JSON")
+    MFG_MODE=$(jq -r '.global.MFG_MODE // "0"' "$WIFI_INIT_CONF_JSON")
+    STANDARD=$(jq -r '.global.STANDARD // ""' "$WIFI_INIT_CONF_JSON")
+    DEV_CAP_MASK=$(jq -r '.global.DEV_CAP_MASK // ""' "$WIFI_INIT_CONF_JSON")
+    PRIMARY_IFACE=$(jq -r '.global.PRIMARY_IFACE // "mlan0"' "$WIFI_INIT_CONF_JSON")
+    MAC_MODE=$(jq -r '.global.MAC_MODE // "default"' "$WIFI_INIT_CONF_JSON")
 fi
+
+PRIMARY_IFACE="${PRIMARY_IFACE:-mlan0}"
+if [ "$PRIMARY_IFACE" != "mlan0" ] && [ "$PRIMARY_IFACE" != "mlan1" ]; then
+    logger -p local0.err "[$tag:$LINENO] PRIMARY_IFACE invalid: $PRIMARY_IFACE, fallback to mlan0"
+    PRIMARY_IFACE="mlan0"
+fi
+
+MAC_MODE="${MAC_MODE:-default}"
+if [ "$MAC_MODE" != "default" ] && [ "$MAC_MODE" != "dynamic" ] && [ "$MAC_MODE" != "static" ]; then
+    logger -p local0.err "[$tag:$LINENO] MAC_MODE invalid: $MAC_MODE, fallback to default"
+    MAC_MODE="default"
+fi
+logger -p local0.info "[$tag:$LINENO] PRIMARY_IFACE=$PRIMARY_IFACE MAC_MODE=$MAC_MODE"
 
 if [ "${CAL_DATA_CFG:-}" = "none" ]; then
     CAL_DATA_CFG=""
@@ -34,10 +57,10 @@ if [ -n "$STANDARD" ]; then
         standard_lc="ax"
     fi
 
-    if [ "$standard_lc" = "ax" ]; then
-        logger -p local0.warn "[$tag:$LINENO] STANDARD=ax requested but mlan1 does not support ax; using ac"
-        standard_lc="ac"
-    fi
+    #if [ "$standard_lc" = "ax" ]; then
+    #    logger -p local0.warn "[$tag:$LINENO] STANDARD=ax requested but mlan1 does not support ax; using ac"
+    #    standard_lc="ac"
+    #fi
 
     if [ "$standard_lc" = "n" ]; then
         DEV_CAP_MASK="0xfffcdfff"
@@ -96,74 +119,92 @@ if [ -n "$cmd" ]; then
     rmmod mlan
 fi
 
-python3 /usr/local/logger/wired_mac_ip_get.py || true
-WIRED_PY_RESULT=$?
-if [ $WIRED_PY_RESULT -ne 0 ]; then
-    logger -p local0.err "[$tag:$LINENO] wired_mac_ip_get.py failed with code $WIRED_PY_RESULT"
-fi
-logger -p local0.info "[$tag:$LINENO] wired_mac_ip_get.py completed"
+# --- MAC 주소 결정 ---
+# MAC_MODE: default  = 동적 → target → base (3단계)
+#           dynamic  = 동적 → base
+#           static   = target → base
 
-logger -p local0.info "[$tag:$LINENO] Checking /tmp/eth0_client_mac..."
-if [ -f /tmp/eth0_client_mac ]; then
-    MLAN0_MAC=$(cat /tmp/eth0_client_mac)
-    logger -p local0.info "[$tag:$LINENO] Read MAC from /tmp/eth0_client_mac: $MLAN0_MAC"
-else
-    logger -p local0.warn "[$tag:$LINENO] /tmp/eth0_client_mac not found, using static MAC"
-    MLAN0_MAC=""
-fi
+MAC_REGEX='^([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$'
 
-if [[ "$MLAN0_MAC" =~ ^([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$ ]]; then
-    logger -p local0.info "[$tag:$LINENO] [mlan0] vaild dynamic mac : $MLAN0_MAC"
+try_read_mac() {
+    local label=$1
+    local file=$2
+    local iface=$3
+
+    if [ ! -f "$file" ]; then
+        return 1
+    fi
+
+    local val
+    val=$(cat "$file")
+    if [[ "$val" =~ $MAC_REGEX ]]; then
+        logger -p local0.info "[$tag:$LINENO] [$iface] $label mac: $val"
+        echo "$val"
+        return 0
+    else
+        logger -p local0.warn "[$tag:$LINENO] [$iface] invalid $label mac: $val"
+        return 1
+    fi
+}
+
+try_dynamic_mac() {
+    local iface=$1
+    local mac
+    mac=$(try_read_mac "dynamic" /tmp/eth0_client_mac "$iface") || return 1
     mkdir -p /opt/wlan/mac
-    echo "$MLAN0_MAC" > /opt/wlan/mac/wired_client || logger -p local0.err "[$tag:$LINENO] Failed to write wired_client"
+    echo "$mac" > /opt/wlan/mac/wired_client || true
+    echo "$mac"
+}
+
+resolve_mac() {
+    local iface=$1
+    local mode=$2
+    local idx=${iface#mlan}
+    local mac=""
+
+    logger -p local0.info "[$tag:$LINENO] [$iface] MAC_MODE=$mode"
+
+    # 동적 MAC (default, dynamic)
+    if [ -z "$mac" ] && { [ "$mode" = "default" ] || [ "$mode" = "dynamic" ]; }; then
+        mac=$(try_dynamic_mac "$iface") || mac=""
+    fi
+
+    # target MAC (default, static)
+    if [ -z "$mac" ] && { [ "$mode" = "default" ] || [ "$mode" = "static" ]; }; then
+        mac=$(try_read_mac "target" "/opt/wlan/mac/target${idx}" "$iface") || mac=""
+    fi
+
+    # base MAC (공통 최종 fallback)
+    if [ -z "$mac" ]; then
+        mac=$(try_read_mac "base" "/opt/wlan/mac/base${idx}" "$iface") || mac=""
+    fi
+
+    echo "$mac"
+}
+
+# PRIMARY: MAC_MODE에 따라 resolve
+# SECONDARY: base만
+if [ "$PRIMARY_IFACE" = "mlan0" ]; then
+    SECONDARY_IFACE="mlan1"
 else
-    logger -p local0.err "[$tag:$LINENO] [mlan0] invalid dynamic mac : $MLAN0_MAC"
-    if [ -f /opt/wlan/mac/target0 ]; then
-        MLAN0_MAC=$(cat /opt/wlan/mac/target0)
-    else
-        MLAN0_MAC=""
-    fi
-    if [[ "$MLAN0_MAC" =~ ^([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$ ]]; then
-        logger -p local0.info "[$tag:$LINENO] [mlan0] vaild static mac : $MLAN0_MAC"
-    else
-        logger -p local0.err "[$tag:$LINENO] [mlan0] invaild static mac : $MLAN0_MAC"
-        if [ -f /opt/wlan/mac/base0 ]; then
-            MLAN0_MAC=$(cat /opt/wlan/mac/base0)
-        else
-            MLAN0_MAC=""
-        fi
-        if [[ "$MLAN0_MAC" =~ ^([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$ ]]; then
-            logger -p local0.info "[$tag:$LINENO] [mlan0] valid base mac : $MLAN0_MAC"
-        else
-            logger -p local0.err "[$tag:$LINENO] [mlan0] invalid base mac : $MLAN0_MAC"
-        fi
-    fi
+    SECONDARY_IFACE="mlan0"
 fi
 
-/usr/local/scripts/update_mac.sh mlan0 "$MLAN0_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh mlan0 failed"
-
-if [ -f /opt/wlan/mac/target1 ]; then
-    MLAN1_MAC=$(cat /opt/wlan/mac/target1)
-else
-    MLAN1_MAC=""
-fi
-if [[ "$MLAN1_MAC" =~ ^([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$ ]]; then
-    logger -p local0.info "[$tag:$LINENO] [mlan1] vaild static mac : $MLAN1_MAC"
-else
-    logger -p local0.err "[$tag:$LINENO] [mlan1] invaild static mac : $MLAN1_MAC"
-    if [ -f /opt/wlan/mac/base1 ]; then
-        MLAN1_MAC=$(cat /opt/wlan/mac/base1)
-    else
-        MLAN1_MAC=""
-    fi
-    if [[ "$MLAN1_MAC" =~ ^([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$ ]]; then
-        logger -p local0.info "[$tag:$LINENO] [mlan1] valid base mac : $MLAN1_MAC"
-    else
-        logger -p local0.err "[$tag:$LINENO] [mlan1] invalid base mac : $MLAN1_MAC"
-    fi
+# 동적 MAC이 필요한 경우 wired_mac_ip_get.py 먼저 실행
+if [ "$MAC_MODE" = "default" ] || [ "$MAC_MODE" = "dynamic" ]; then
+    logger -p local0.info "[$tag:$LINENO] [$PRIMARY_IFACE] running wired_mac_ip_get.py"
+    python3 /usr/local/logger/wired_mac_ip_get.py || true
 fi
 
-/usr/local/scripts/update_mac.sh mlan1 "$MLAN1_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh mlan1 failed"
+PRIMARY_MAC=$(resolve_mac "$PRIMARY_IFACE" "$MAC_MODE")
+/usr/local/scripts/update_mac.sh "$PRIMARY_IFACE" "$PRIMARY_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh $PRIMARY_IFACE failed"
+
+SECONDARY_MAC=$(try_read_mac "base" "/opt/wlan/mac/base${SECONDARY_IFACE#mlan}" "$SECONDARY_IFACE") || SECONDARY_MAC=""
+/usr/local/scripts/update_mac.sh "$SECONDARY_IFACE" "$SECONDARY_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh $SECONDARY_IFACE failed"
+
+# --- eth0: wired ---
+ETH0_MAC=$(try_read_mac "wired" /opt/wlan/mac/wired eth0) || ETH0_MAC=""
+/usr/local/scripts/update_mac.sh eth0 "$ETH0_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh eth0 failed"
 
 if ! try_insmod "/opt/wlan/driver/mlan.ko" ""; then
     echo "mlan module load failed"

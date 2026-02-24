@@ -1,5 +1,5 @@
 Package: wlan-proc
-Version: 0.1.6
+Version: 0.1.7
 Section: test
 Priority: optional
 Architecture: arm64
@@ -26,3 +26,4 @@ Description: WLAN Application
  0.1.4 : fix symlink paths, add config.json, improve prerm/postrm, security fixes
  0.1.5 : code quality improvements, ifconfig→ip migration, reboot safety, dead code removal
  0.1.6 : fix wifi_init.sh set -e exit on grep/python failure
+ 0.1.7 : wifi_init_conf.json, roam, bridge, etc
