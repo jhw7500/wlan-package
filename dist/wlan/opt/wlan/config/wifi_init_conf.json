@@ -14,10 +14,60 @@
         "PRIMARY_IFACE": "mlan0",
         "MAC_MODE": "default"
     },
+    "mac": {
+        "_comment": "MAC address configuration. /opt/wlan/mac 디렉토리 대체. 빈 문자열이면 해당 소스 생략.",
+        "mlan0": {
+            "base": "",
+            "target": ""
+        },
+        "mlan1": {
+            "base": "",
+            "target": ""
+        },
+        "eth0": {
+            "base": ""
+        }
+    },
+    "wbridge": {
+        "_comment": "wbridge bridge process configuration (WBRIDGE_* env vars). mode: latency|normal|eco|thermal. /etc/default/wbridge takes priority if set.",
+        "optimize": 1,
+        "mode": "normal",
+        "engine": "pcap",
+        "thermal_state": "ok",
+        "mode_force": 0,
+        "link_guard": 1,
+        "link_down_debounce_sec": 2,
+        "link_up_stable_sec": 2,
+        "link_idle_poll_sec": 2,
+        "wait_ready_timeout_sec": 20,
+        "wlan_roam_grace_sec": 15,
+        "wlan_down_restart": 0,
+        "profile_version": 1,
+        "thermal": {
+            "_comment": "thermal state thresholds and management (wbridge_thermal_state_update.sh)",
+            "auto_restart": 1,
+            "timer_enable": 0,
+            "restart_cooldown_sec": 60,
+            "bridge_units": "wifi_bridge@mlan0.service wifi_bridge@mlan1.service",
+            "warm_cpu_enter": 80,
+            "hot_cpu_enter": 90,
+            "warm_cpu_exit": 75,
+            "hot_cpu_exit": 85,
+            "warm_wifi_enter": 70,
+            "hot_wifi_enter": 80,
+            "warm_wifi_exit": 65,
+            "hot_wifi_exit": 75
+        }
+    },
     "mlan0": {
         "_comment": "mlan0 interface configuration",
+        "bgscan": {
+            "_comment": "Background scan configuration for mlan0",
+            "interval": 30
+        },
         "roaming": {
             "_comment": "Roaming configuration for mlan0",
+            "use_signal_avg": false,
             "DEFAULT_TH_2G": -75,
             "DEFAULT_TH_5G": -75,
             "DIFF_TH": 10,
@@ -42,7 +92,13 @@
             "ADAPTIVE_INTERVAL": {
                 "enable": true,
                 "min_check_interval": 1,
-                "max_check_interval": 10
+                "max_check_interval": 10,
+                "rssi_drop_threshold": -5,
+                "rssi_rise_threshold": 2,
+                "near_threshold_offset": 5,
+                "near_threshold_interval": 2,
+                "good_signal_offset": 15,
+                "consecutive_drop_count": 2
             },
             "POST_ROAM_ARP_OPTIMIZATION": {
                 "enable": true,
@@ -60,8 +116,13 @@
     },
     "mlan1": {
         "_comment": "mlan1 interface configuration",
+        "bgscan": {
+            "_comment": "Background scan configuration for mlan1",
+            "interval": 30
+        },
         "roaming": {
             "_comment": "Roaming configuration for mlan1",
+            "use_signal_avg": false,
             "DEFAULT_TH_2G": -75,
             "DEFAULT_TH_5G": -75,
             "DIFF_TH": 10,
@@ -86,7 +147,13 @@
             "ADAPTIVE_INTERVAL": {
                 "enable": true,
                 "min_check_interval": 1,
-                "max_check_interval": 10
+                "max_check_interval": 10,
+                "rssi_drop_threshold": -5,
+                "rssi_rise_threshold": 2,
+                "near_threshold_offset": 5,
+                "near_threshold_interval": 2,
+                "good_signal_offset": 15,
+                "consecutive_drop_count": 2
             },
             "POST_ROAM_ARP_OPTIMIZATION": {
                 "enable": true,
