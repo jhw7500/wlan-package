@@ -7,6 +7,35 @@ IFACE=$1
 WIRED_IF="eth0"
 
 OPT_DIR="/usr/local/wlan-bridge/scripts"
+CONF_JSON="/usr/local/etc/wifi_init_conf.json"
+
+# wifi_init_conf.json에서 wbridge 기본값 로드
+# 우선순위: /etc/default/wbridge (env) > wifi_init_conf.json > 스크립트 기본값
+_load_wbridge_json_defaults() {
+    command -v jq >/dev/null 2>&1 && [ -f "$CONF_JSON" ] || return 0
+    local key val
+    while IFS='=' read -r key val; do
+        [ -n "$key" ] || continue
+        # 이미 환경변수로 설정된 경우(/etc/default/wbridge) 유지
+        [ -z "${!key+set}" ] && export "$key=$val"
+    done < <(jq -r '
+        .wbridge |
+        "WBRIDGE_OPTIMIZE=\(.optimize // 1)",
+        "WBRIDGE_MODE=\(.mode // "normal")",
+        "WBRIDGE_ENGINE=\(.engine // "pcap")",
+        "WBRIDGE_THERMAL_STATE=\(.thermal_state // "ok")",
+        "WBRIDGE_MODE_FORCE=\(.mode_force // 0)",
+        "WBRIDGE_LINK_GUARD=\(.link_guard // 1)",
+        "WBRIDGE_LINK_DOWN_DEBOUNCE_SEC=\(.link_down_debounce_sec // 2)",
+        "WBRIDGE_LINK_UP_STABLE_SEC=\(.link_up_stable_sec // 2)",
+        "WBRIDGE_LINK_IDLE_POLL_SEC=\(.link_idle_poll_sec // 2)",
+        "WBRIDGE_WAIT_READY_TIMEOUT_SEC=\(.wait_ready_timeout_sec // 20)",
+        "WBRIDGE_WLAN_ROAM_GRACE_SEC=\(.wlan_roam_grace_sec // 15)",
+        "WBRIDGE_WLAN_DOWN_RESTART=\(.wlan_down_restart // 0)",
+        "WBRIDGE_PROFILE_VERSION=\(.profile_version // 1)"
+    ' "$CONF_JSON" 2>/dev/null)
+}
+_load_wbridge_json_defaults
 
 if [[ "$IFACE" != "mlan0" ]]; then
     exit 0
@@ -47,7 +76,7 @@ case "$USE_OPTIMIZATION" in
 esac
 
 case "$REQUESTED_MODE" in
-    latency|normal|thermal) ;;
+    latency|normal|eco|thermal) ;;
     *)
         logger -p local0.warn "[$tag:$LINENO] [$IFACE] Invalid WBRIDGE_MODE='$REQUESTED_MODE', fallback to normal"
         REQUESTED_MODE="normal"
