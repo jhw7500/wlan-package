@@ -4,9 +4,9 @@ IFACE=$1
 NEW_MAC=$2
 
 case "$IFACE" in
-  eth0)  LINK_FILE="/etc/systemd/network/22-eth0.link" ; MAC_FILE="/opt/wlan/mac/wired" ;;
-  mlan0) LINK_FILE="/etc/systemd/network/20-mlan0.link"; MAC_FILE="/opt/wlan/mac/target0" ;;
-  mlan1) LINK_FILE="/etc/systemd/network/21-mlan1.link"; MAC_FILE="/opt/wlan/mac/target1" ;;
+  eth0)  LINK_FILE="/etc/systemd/network/22-eth0.link"  ;;
+  mlan0) LINK_FILE="/etc/systemd/network/20-mlan0.link" ;;
+  mlan1) LINK_FILE="/etc/systemd/network/21-mlan1.link" ;;
   *)
     logger -p local0.emerg "[$tag:$LINENO] [$IFACE] interface is wrong!!"
     exit 0
@@ -62,10 +62,6 @@ if [[ "$NEW_MAC" =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]]; then
   tmp=""
   logger -p local0.info "[$tag:$LINENO] [$IFACE] Updated MACAddress to $NEW_MAC in $LINK_FILE"
 
-  # /opt/wlan/mac/ 에도 MAC 기록
-  #mkdir -p "$(dirname "$MAC_FILE")"
-  #echo "$NEW_MAC" > "$MAC_FILE"
-  #logger -p local0.info "[$tag:$LINENO] [$IFACE] Written MAC to $MAC_FILE"
 
 else
   # --- MAC 비정상: 백업에서 복구 ---

@@ -1,18 +1,19 @@
 #!/bin/bash
 # write_mac.sh <iface> <mac>
-# MAC을 강제로 기록:
-#   1. /opt/wlan/mac/ 파일
+# base MAC을 기록:
+#   1. wifi_init_conf.json (.mac.<iface>.base)
 #   2. .link 파일 (새로 씀)
 #   3. .bak 파일 (새로 씀)
 
 tag=$(basename "$0")
 IFACE=$1
 NEW_MAC=$2
+WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
 
 case "$IFACE" in
-  eth0)  LINK_FILE="/etc/systemd/network/22-eth0.link" ; MAC_FILE="/opt/wlan/mac/wired" ;;
-  mlan0) LINK_FILE="/etc/systemd/network/20-mlan0.link"; MAC_FILE="/opt/wlan/mac/base0" ;;
-  mlan1) LINK_FILE="/etc/systemd/network/21-mlan1.link"; MAC_FILE="/opt/wlan/mac/base1" ;;
+  eth0)  LINK_FILE="/etc/systemd/network/22-eth0.link"  ;;
+  mlan0) LINK_FILE="/etc/systemd/network/20-mlan0.link" ;;
+  mlan1) LINK_FILE="/etc/systemd/network/21-mlan1.link" ;;
   *)
     logger -p local0.emerg "[$tag:$LINENO] [$IFACE] interface is wrong!!"
     exit 1
@@ -27,10 +28,14 @@ if ! [[ "$NEW_MAC" =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]]; then
   exit 1
 fi
 
-# 1. /opt/wlan/mac/ 에 MAC 기록
-mkdir -p "$(dirname "$MAC_FILE")"
-echo "$NEW_MAC" > "$MAC_FILE"
-logger -p local0.info "[$tag:$LINENO] [$IFACE] Written MAC to $MAC_FILE"
+# 1. wifi_init_conf.json에 MAC 기록
+if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
+    jq --arg v "$NEW_MAC" ".mac.${IFACE}.base = \$v" "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp"
+    mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
+    logger -p local0.info "[$tag:$LINENO] [$IFACE] Written MAC to JSON: $NEW_MAC"
+else
+    logger -p local0.warn "[$tag:$LINENO] [$IFACE] JSON update skipped (jq or config not found)"
+fi
 
 # link 파일 내용 생성 함수
 link_content() {

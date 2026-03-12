@@ -174,7 +174,6 @@ makeDirectory() {
     fi
 }
   makeDirectory /etc/wpa_supplicant
-  makeDirectory /opt/wlan/mac
   makeDirectory /usr/local/mfg
   makeDirectory /usr/local/bin
   makeDirectory /usr/local/logger
@@ -183,8 +182,6 @@ makeDirectory() {
   makeDirectory /usr/lib/sysctl.d
   makeDirectory /var/log/cantops/mgmt/mlan0
   makeDirectory /var/log/cantops/mgmt/mlan1
-
-  touch /opt/wlan/mac/base0 /opt/wlan/mac/base1 /opt/wlan/mac/target0 /opt/wlan/mac/target1 /opt/wlan/mac/wired /opt/wlan/mac/wired_client
 
   echo "set hostname"
   echo "$hostname" > /etc/hostname
@@ -302,6 +299,14 @@ cpchk() {
     logger -p local0.info "[$KEY][$tag:$LINENO] Applied sysctl --system"
   fi
 
+  # VHL daemon
+  if [ -f /usr/local/vhl_daemon/vhld.service ]; then
+    cp /usr/local/vhl_daemon/vhld.service /etc/systemd/system/
+    #systemctl daemon-reload
+    #systemctl enable vhld.service
+    #systemctl start vhld.service || true
+  fi
+
   PACKAGE_NAME="$DPKG_MAINTSCRIPT_PACKAGE"
   echo -e "\e[1m installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)\e[0m"
   logger -p local0.info "[$KEY][$tag:$LINENO] installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)"
@@ -318,3 +323,4 @@ upgrade)
   echo "Unrecognized postinst argument '$1'"
 
 esac
+

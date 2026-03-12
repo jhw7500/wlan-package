@@ -5,6 +5,7 @@ tag=$(basename "$0")
 STATE_FILE="/run/wbridge.thermal.state"
 ENV_FILE="/run/wbridge.thermal.env"
 RESTART_TS_FILE="/run/wbridge.thermal.restart.ts"
+CONF_JSON="/usr/local/etc/wifi_init_conf.json"
 
 to_int() {
     local v="${1:-}"
@@ -39,6 +40,34 @@ state_from_enter_thresholds() {
         echo ok
     fi
 }
+
+# wifi_init_conf.json에서 wbridge thermal 기본값 로드
+# 우선순위: /etc/default/wbridge (env) > wifi_init_conf.json > 스크립트 기본값
+_load_wbridge_thermal_json_defaults() {
+    command -v jq >/dev/null 2>&1 && [ -f "$CONF_JSON" ] || return 0
+    local key val
+    while IFS='=' read -r key val; do
+        [ -n "$key" ] || continue
+        [ -z "${!key+set}" ] && export "$key=$val"
+    done < <(jq -r '
+        .wbridge |
+        "WBRIDGE_MODE_FORCE=\(.mode_force // 0)",
+        "WBRIDGE_THERMAL_STATE=\(.thermal_state // "ok")",
+        "WBRIDGE_THERMAL_AUTO_RESTART=\(.thermal.auto_restart // 1)",
+        "WBRIDGE_THERMAL_TIMER_ENABLE=\(.thermal.timer_enable // 0)",
+        "WBRIDGE_THERMAL_RESTART_COOLDOWN_SEC=\(.thermal.restart_cooldown_sec // 60)",
+        "WBRIDGE_THERMAL_BRIDGE_UNITS=\(.thermal.bridge_units // "wifi_bridge@mlan0.service wifi_bridge@mlan1.service")",
+        "WBRIDGE_THERMAL_WARM_CPU_ENTER=\(.thermal.warm_cpu_enter // 80)",
+        "WBRIDGE_THERMAL_HOT_CPU_ENTER=\(.thermal.hot_cpu_enter // 90)",
+        "WBRIDGE_THERMAL_WARM_CPU_EXIT=\(.thermal.warm_cpu_exit // 75)",
+        "WBRIDGE_THERMAL_HOT_CPU_EXIT=\(.thermal.hot_cpu_exit // 85)",
+        "WBRIDGE_THERMAL_WARM_WIFI_ENTER=\(.thermal.warm_wifi_enter // 70)",
+        "WBRIDGE_THERMAL_HOT_WIFI_ENTER=\(.thermal.hot_wifi_enter // 80)",
+        "WBRIDGE_THERMAL_WARM_WIFI_EXIT=\(.thermal.warm_wifi_exit // 65)",
+        "WBRIDGE_THERMAL_HOT_WIFI_EXIT=\(.thermal.hot_wifi_exit // 75)"
+    ' "$CONF_JSON" 2>/dev/null)
+}
+_load_wbridge_thermal_json_defaults
 
 MODE_FORCE="${WBRIDGE_MODE_FORCE:-0}"
 AUTO_RESTART="${WBRIDGE_THERMAL_AUTO_RESTART:-1}"

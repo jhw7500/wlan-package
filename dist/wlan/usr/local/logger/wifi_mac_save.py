@@ -1,24 +1,36 @@
 import sys
+import os
 import re
+import json
 import logging
 from sUTILS import Logger, _EXTRA_
 
 IFACE = "mlan0"
 BASE_MAC_PATH = "/var/log/cantops/base_mac"
 CONF_FILE = "/lib/firmware/nxp/wifi_mod_para__.conf"
-MAC_FILE = "/opt/wlan/mac/target0"
+WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
 
 def is_valid_mac(mac: str) -> bool:
     return bool(re.fullmatch(r"([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})", mac))
 
-def insert_mac_addr(conf_path, mac_path, target_block="PCIE9098_0"):
+def get_mac_from_json(iface):
     try:
-        with open(mac_path, "r") as f:
-            mac = f.read().strip()
+        with open(WIFI_INIT_CONF_JSON, "r") as f:
+            conf = json.load(f)
+        mac = conf.get("mac", {}).get(iface, {}).get("target", "")
+        if mac:
+            return mac.strip().lower()
+    except Exception as e:
+        print(f"[ERROR] Failed to read MAC from JSON: {e}")
+    return None
+
+def insert_mac_addr(conf_path, iface, target_block="PCIE9098_0"):
+    try:
+        mac = get_mac_from_json(iface)
 
         if not mac or not is_valid_mac(mac):
-            print(f"{mac} is invalid in {mac_path}")
-            logger.message("err", f"[{IFACE}] {mac} is invalid in {mac_path}", _EXTRA_())
+            print(f"{mac} is invalid in JSON .mac.{iface}.target")
+            logger.message("err", f"[{IFACE}] {mac} is invalid in JSON .mac.{iface}.target", _EXTRA_())
             try:
                 with open(BASE_MAC_PATH, "r") as f:
                     mac = f.read().strip()
@@ -90,14 +102,12 @@ if __name__ == "__main__":
 
     if IFACE == "mlan0" :
         block = "PCIE9098_0"
-        MAC_FILE = "/opt/wlan/mac/target0"
     elif IFACE == "mlan1" :
         block = "PCIE9098_1"
-        MAC_FILE = "/opt/wlan/mac/target1"
     else:
         logger.message("info", f"[{IFACE}] interface is wrong", _EXTRA_())
         block = "PCIE9098_0"
         sys.exit(1)
 
-    print(f"[INFO] iface={IFACE}, conf_file={CONF_FILE}, mac_file={MAC_FILE}, block={block}")
-    insert_mac_addr(CONF_FILE, MAC_FILE, block)
+    print(f"[INFO] iface={IFACE}, conf_file={CONF_FILE}, block={block}")
+    insert_mac_addr(CONF_FILE, IFACE, block)
