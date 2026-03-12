@@ -7,16 +7,20 @@ import os
 import signal
 import tempfile
 import shutil
+import argparse
 from datetime import datetime
 import logging
 from sUTILS import Logger, _EXTRA_
 
-VERSION = "0.0"
+VERSION = "0.1"
 IFACE = ""
 LOG_DIR = "/var/log/cantops/json"
 LINK_PATH = "/var/log/cantops/json"
 TARGET_PATH = "/dev/shm/json"
 MWLAN_LOG_PATH = "/proc/mwlan/adapter0/mlan0/log"
+LOOP_INTERVAL = 0.95	#0.965
+SPIKE_THRESHOLD_FAIL = 1
+SPIKE_THRESHOLD_RETRY = 10
 
 def handle_sigterm(signum, frame):
     logger.message('crit', f"[{IFACE}] SIGTERM {signum} received! Cleaning up...", _EXTRA_())
@@ -285,6 +289,33 @@ def is_wifi_connected_iw(interface="mlan0") -> bool:
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
 
+_prev_tx_failed = None
+_prev_tx_retries = None
+
+def check_tx_spike(link_data):
+    """tx_failed / tx_retries 급증 감지 → syslog 기록"""
+    global _prev_tx_failed, _prev_tx_retries
+
+    try:
+        cur_fail = int(link_data.get("tx_failed", 0))
+        cur_retry = int(link_data.get("tx_retries", 0))
+    except (ValueError, TypeError):
+        return
+
+    if _prev_tx_failed is not None:
+        d_fail = cur_fail - _prev_tx_failed
+        d_retry = cur_retry - _prev_tx_retries
+        if d_fail >= SPIKE_THRESHOLD_FAIL:
+            logger.message("warn",
+                f"[{IFACE}] TX_FAIL spike: +{d_fail} (total {cur_fail})", _EXTRA_())
+        if d_retry >= SPIKE_THRESHOLD_RETRY:
+            logger.message("warn",
+                f"[{IFACE}] TX_RETRY spike: +{d_retry} (total {cur_retry})", _EXTRA_())
+
+    _prev_tx_failed = cur_fail
+    _prev_tx_retries = cur_retry
+
+
 def main():
     os.makedirs(LOG_DIR, exist_ok=True)
     while True:
@@ -303,30 +334,25 @@ def main():
                 "eth_stats": eth_stats
             }
             save_db(data, LOG_DIR)
-            #logger.message("info", f"[{IFACE}] loop", _EXTRA_())
-            time.sleep(0.98)
+            time.sleep(LOOP_INTERVAL)
             continue
 
         if not is_wpa_running(IFACE):
-            #logger.message("info" f"[{IFACE}] flush {LOG_DIR}/link.json", _EXTRA_())
             subprocess.run(f"echo '{{}}' > {LOG_DIR}/link.json", shell=True)
             time.sleep(1)
             continue
 
-        #if is_wifi_connected_wpa(IFACE):
         if is_wifi_connected_iw(IFACE):
-            #info_out = run_command(["iw", IFACE, "info"])
-            #link_out = run_command(["iw", IFACE, "station", "dump"])
-            #channel_out = run_command(["iw", IFACE, "survey", "dump"])
             link_out = run_command_with_retry(["iw", IFACE, "station", "dump"], validate_fn=validate_station)
             info_out = run_command_with_retry(["iw", IFACE, "info"], validate_fn=validate_info)
             channel_out = run_command(["iw", IFACE, "survey", "dump"])
-            #channel_out = run_command_with_retry(["iw", IFACE, "survey", "dump"], validate_fn=validate_survey)
 
-            # 파싱은 출력이 유효할 때만
             info_data = parse_iw_info(info_out) if info_out else {}
             link_data = parse_station_dump(link_out) if link_out else {}
             channel_data = parse_survey_dump(channel_out) if channel_out else {}
+
+            check_tx_spike(link_data)
+
             data = {
                 "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "info": info_data,
@@ -337,36 +363,46 @@ def main():
 
             os.makedirs(LOG_DIR, exist_ok=True)
             save_db(data, LOG_DIR)
-            #with open(f"{LOG_DIR}/link.json", "w") as f:
-            #    json.dump(data, f, indent=4)
-            #logger.message("info", f"[{IFACE}] loop", _EXTRA_())
-            time.sleep(0.965)
+            time.sleep(LOOP_INTERVAL)
         else:
-            #logger.message("err", f"[{IFACE}] waiting for connection (wpa_supplicant@{IFACE})", _EXTRA_())
             subprocess.run(f"echo '{{}}' > {LOG_DIR}/link.json", shell=True)
-            #subprocess.run(["ifconfig", IFACE, "up"])
             time.sleep(1)
 
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_sigterm)
     logger = Logger(app_name="LINK", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
-    
-    if len(sys.argv) < 2:
-        IFACE = "mlan0"
-    else:
-        IFACE = sys.argv[1]
-    
-    LOG_DIR = f"/var/log/cantops/json/{IFACE}"
-    logger.message("info", f"[{IFACE}] version : {VERSION}, log_file : {LOG_DIR}/link.json", _EXTRA_())
 
-    if IFACE == "mlan0" :
+    parser = argparse.ArgumentParser()
+    parser.add_argument("iface", nargs="?", default="mlan0",
+                        choices=["mlan0", "mlan1", "eth0"],
+                        help="Interface name")
+    parser.add_argument("--interval", type=float, default=0.965,
+                        help="Main loop interval in seconds (default: 0.965)")
+    parser.add_argument("--spike-fail", type=int, default=1,
+                        help="TX fail spike threshold per cycle (default: 1)")
+    parser.add_argument("--spike-retry", type=int, default=10,
+                        help="TX retry spike threshold per cycle (default: 10)")
+    args = parser.parse_args()
+
+    IFACE = args.iface
+    LOOP_INTERVAL = args.interval
+    SPIKE_THRESHOLD_FAIL = args.spike_fail
+    SPIKE_THRESHOLD_RETRY = args.spike_retry
+
+    LOG_DIR = f"/var/log/cantops/json/{IFACE}"
+    logger.message("info",
+        f"[{IFACE}] version: {VERSION}, interval: {LOOP_INTERVAL}s, "
+        f"spike_fail: {SPIKE_THRESHOLD_FAIL}, spike_retry: {SPIKE_THRESHOLD_RETRY}, "
+        f"log: {LOG_DIR}/link.json", _EXTRA_())
+
+    if IFACE == "mlan0":
         MWLAN_LOG_PATH = "/proc/mwlan/adapter0/mlan0/log"
-    elif IFACE == "mlan1" :
+    elif IFACE == "mlan1":
         MWLAN_LOG_PATH = "/proc/mwlan/adapter1/mlan1/log"
-    elif IFACE == "eth0" :
+    elif IFACE == "eth0":
         MWLAN_LOG_PATH = ""
     else:
-        logger.message("emerg", f"[{IFACE}] is not vaild interface", _EXTRA_())
+        logger.message("emerg", f"[{IFACE}] is not valid interface", _EXTRA_())
         sys.exit(1)
 
     if not os.path.exists(TARGET_PATH):
@@ -376,7 +412,7 @@ if __name__ == "__main__":
         remove_any(LINK_PATH)
         logger.message("err", f"[{IFACE}] symbolic link {LINK_PATH} with {TARGET_PATH}", _EXTRA_())
         os.symlink(TARGET_PATH, LINK_PATH)
-        
+
     if not os.path.exists(LOG_DIR):
         os.makedirs(LOG_DIR, exist_ok=True)
 

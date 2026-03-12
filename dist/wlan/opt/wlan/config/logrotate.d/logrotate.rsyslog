@@ -3,19 +3,6 @@
 /var/log/cantops/sys.log
 /var/log/cantops/logger.log
 /var/log/cantops/ui.log
-{
-        rotate 3
-        weekly
-        missingok
-        notifempty
-        delaycompress
-        compress
-        dateext
-        postrotate
-                /usr/bin/pkill -HUP rsyslogd 2> /dev/null || true
-        endscript
-}
-
 /var/log/cantops/summary/summary.log
 /var/log/cantops/cpu/cpu.log
 /var/log/cantops/mgmt/mlan0/mgmt.log
@@ -31,7 +18,7 @@
 /var/log/cantops/wpa/mlan0/wpa.log
 /var/log/cantops/wpa/mlan1/wpa.log
 {
-        rotate 7
+        rotate 14
         daily
         missingok
         notifempty
