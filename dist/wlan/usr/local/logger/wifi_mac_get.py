@@ -10,7 +10,7 @@ from sUTILS import Logger, _EXTRA_
 ETH_IFACE = "eth0"
 IFACE = "mlan0"
 PROBE_IP = "192.168.1.100"  # 예상 IP 주소 (ARP 유도 목적)
-FILE_PATH = "/opt/wlan/mac/target0"
+FILE_PATH = "/tmp/eth0_client_mac"
 
 def get_own_mac(interface):
     with open(f"/sys/class/net/{interface}/address", "r") as f:
@@ -101,14 +101,12 @@ if __name__ == "__main__":
         sys.exit(1)
 
     if IFACE == "mlan0" :
-        FILE_PATH = "/opt/wlan/mac/wired_client"
+        FILE_PATH = "/tmp/eth0_client_mac"
     elif IFACE == "mlan1" :
-        FILE_PATH = "/opt/wlan/mac/wired_client"
+        FILE_PATH = "/tmp/eth0_client_mac"
     else:
         logger.message("info", f"[{IFACE}] interface is wrong", _EXTRA_())
         sys.exit(1)
-
-    os.makedirs("/opt/wlan/mac", exist_ok=True)
 
     logger.message("info", f"[{IFACE}] {ETH_IFACE} mac sniff...", _EXTRA_())
 

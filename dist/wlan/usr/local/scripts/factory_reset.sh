@@ -1,5 +1,6 @@
 #!/bin/bash
 tag=$(basename "$0")
+WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
 logger -p local0.info "[$tag:$LINENO] start"
 /usr/local/logger/print.py cyan "[factory] reset start"
 echo none > /sys/class/leds/status/trigger
@@ -101,9 +102,13 @@ customctl() {
   customctl enable wifi_roam@mlan0
   customctl enable wifi_capture@mlan0
 
-  cat /dev/null > /opt/wlan/mac/target0
-  cat /dev/null > /opt/wlan/mac/target1
-  cat /dev/null > /opt/wlan/mac/wired_client
+  if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
+      jq '.mac.mlan0.target = "" | .mac.mlan1.target = ""' "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp"
+      mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
+      logger -p local0.info "[$tag:$LINENO] MAC target reset in JSON"
+  else
+      logger -p local0.warn "[$tag:$LINENO] JSON MAC reset skipped (jq or config not found)"
+  fi
 
   cp /opt/wlan/mfg/bridge_init.conf /usr/local/mfg/bridge_init.conf
   cp /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/timesyncd.conf

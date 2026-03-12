@@ -3,6 +3,7 @@ import subprocess
 import time
 import sys
 import os
+import json
 import logging
 from scapy.all import sniff, ARP, Ether, srp, sendp, get_if_hwaddr
 from sUTILS import Logger, _EXTRA_
@@ -10,9 +11,9 @@ from sUTILS import Logger, _EXTRA_
 ETH_IFACE = "eth0"
 WLAN_IFACE = "mlan0"
 PROBE_IP = "192.168.3.100"  # 예상 IP 주소 (ARP 유도 목적)
-MAC_FILE = "/var/log/cantops/target_mac"
 CONF_FILE = "/lib/firmware/nxp/wifi_mod_para__.conf"
 BLOCK = "PCIE9098_0"
+WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
 
 def get_own_mac(interface):
     with open(f"/sys/class/net/{interface}/address", "r") as f:
@@ -61,10 +62,17 @@ def set_mac_address(interface, mac):
     subprocess.run(["ip", "link", "set", interface, "address", mac])
     subprocess.run(["ip", "link", "set", interface, "up"])
 
-def save_mac_address(FILE, mac):
-    with open(FILE, "w") as log:
-        log.write(mac)
-        log.write("\n")
+def save_mac_to_json(iface, mac):
+    try:
+        with open(WIFI_INIT_CONF_JSON, "r") as f:
+            conf = json.load(f)
+        conf.setdefault("mac", {}).setdefault(iface, {})["target"] = mac
+        with open(WIFI_INIT_CONF_JSON + ".tmp", "w") as f:
+            json.dump(conf, f, indent=4)
+        os.rename(WIFI_INIT_CONF_JSON + ".tmp", WIFI_INIT_CONF_JSON)
+    except Exception as e:
+        print(f"[ERROR] Failed to save MAC to JSON: {e}")
+        logger.message("err", f"[{WLAN_IFACE}] Failed to save MAC to JSON: {e}", _EXTRA_())
 
 def connect_to_ap():
     print("[*] (Placeholder) Connecting to AP...")
@@ -72,10 +80,8 @@ def connect_to_ap():
     # subprocess.run(["wpa_supplicant", "-i", WLAN_IFACE, "-c", "/etc/wpa_supplicant.conf", "-B"])
     pass
 
-def insert_mac_addr(conf_path, mac_path, target_block="PCIE9098_0"):
+def insert_mac_addr(conf_path, mac, target_block="PCIE9098_0"):
     try:
-        with open(mac_path, "r") as f:
-            mac = f.read().strip()
 
         with open(conf_path, "r") as f:
             lines = f.readlines()
@@ -117,18 +123,19 @@ def insert_mac_addr(conf_path, mac_path, target_block="PCIE9098_0"):
     except Exception as e:
         print(f"[ERROR] {e}")
 
-def get_mac_from_file(mac_file_path):
+def get_mac_from_json(iface):
     """
-    /var/log/cantops/target_mac 파일에서 MAC 주소를 읽는다.
+    wifi_init_conf.json에서 .mac.<iface>.target MAC 주소를 읽는다.
     유효하면 문자열을 반환, 없으면 None.
     """
     try:
-        with open(mac_file_path, "r") as f:
-            mac = f.read().strip()
-            if mac:
-                return mac.lower()
+        with open(WIFI_INIT_CONF_JSON, "r") as f:
+            conf = json.load(f)
+        mac = conf.get("mac", {}).get(iface, {}).get("target", "")
+        if mac:
+            return mac.strip().lower()
     except Exception as e:
-        print(f"[ERROR] Failed to read MAC from {mac_file_path}: {e}")
+        print(f"[ERROR] Failed to read MAC from JSON: {e}")
     return None
 
 def is_mac_in_config_block(config_path, block_name, target_mac):
@@ -162,7 +169,7 @@ def main():
     if not wait_for_eth_link():
         return
 
-    mac = get_mac_from_file(MAC_FILE)
+    mac = get_mac_from_json(WLAN_IFACE)
     if mac:
         if is_mac_in_config_block(CONF_FILE, BLOCK, mac):
             print(f"[INFO] MAC {mac} already configured in {BLOCK}")
@@ -171,7 +178,7 @@ def main():
         else:
             print(f"[INFO] MAC {mac} not found in {BLOCK}")
             logger.message("info", f"[{WLAN_IFACE}] MAC {mac} not found in {BLOCK} at {CONF_FILE}", _EXTRA_())
-            insert_mac_addr(CONF_FILE, MAC_FILE, BLOCK)
+            insert_mac_addr(CONF_FILE, mac, BLOCK)
             sys.exit(0)
 
     mac = passive_mac_sniff()
@@ -184,9 +191,9 @@ def main():
     if mac:
         print(f"[+] Target MAC detected: {mac}")
         logger.message("info", f"Target MAC detected: {mac}", _EXTRA_())
-        save_mac_address(MAC_FILE, mac)
+        save_mac_to_json(WLAN_IFACE, mac)
 
-        insert_mac_addr(CONF_FILE, MAC_FILE, BLOCK)
+        insert_mac_addr(CONF_FILE, mac, BLOCK)
 
         #set_mac_address(WLAN_IFACE, mac)
         #connect_to_ap()
@@ -203,9 +210,7 @@ if __name__ == "__main__":
 
     if WLAN_IFACE == "mlan0" :
         BLOCK = "PCIE9098_0"
-        MAC_FILE = "/opt/wlan/mac/target0"
     elif WLAN_IFACE == "mlan1" :
         BLOCK = "PCIE9098_1"
-        MAC_FILE = "/opt/wlan/mac/target1"
 
     main()

@@ -126,6 +126,7 @@ fi
 
 MAC_REGEX='^([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$'
 
+# 런타임 파일(예: /tmp/eth0_client_mac)에서 MAC 읽기
 try_read_mac() {
     local label=$1
     local file=$2
@@ -147,19 +148,38 @@ try_read_mac() {
     fi
 }
 
+# wifi_init_conf.json에서 MAC 읽기 (.mac.<iface>.<key>)
+read_mac_from_json() {
+    local label=$1
+    local iface=$2
+    local key=$3
+
+    [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1 || return 1
+
+    local val
+    val=$(jq -r ".mac.${iface}.${key} // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    [ -z "$val" ] && return 1
+
+    if [[ "$val" =~ $MAC_REGEX ]]; then
+        logger -p local0.info "[$tag:$LINENO] [$iface] $label mac (json): $val"
+        echo "$val"
+        return 0
+    else
+        logger -p local0.warn "[$tag:$LINENO] [$iface] invalid $label mac in json: $val"
+        return 1
+    fi
+}
+
 try_dynamic_mac() {
     local iface=$1
     local mac
     mac=$(try_read_mac "dynamic" /tmp/eth0_client_mac "$iface") || return 1
-    mkdir -p /opt/wlan/mac
-    echo "$mac" > /opt/wlan/mac/wired_client || true
     echo "$mac"
 }
 
 resolve_mac() {
     local iface=$1
     local mode=$2
-    local idx=${iface#mlan}
     local mac=""
 
     logger -p local0.info "[$tag:$LINENO] [$iface] MAC_MODE=$mode"
@@ -169,14 +189,14 @@ resolve_mac() {
         mac=$(try_dynamic_mac "$iface") || mac=""
     fi
 
-    # target MAC (default, static)
+    # target MAC (default, static) → JSON
     if [ -z "$mac" ] && { [ "$mode" = "default" ] || [ "$mode" = "static" ]; }; then
-        mac=$(try_read_mac "target" "/opt/wlan/mac/target${idx}" "$iface") || mac=""
+        mac=$(read_mac_from_json "target" "$iface" "target") || mac=""
     fi
 
-    # base MAC (공통 최종 fallback)
+    # base MAC (공통 최종 fallback) → JSON
     if [ -z "$mac" ]; then
-        mac=$(try_read_mac "base" "/opt/wlan/mac/base${idx}" "$iface") || mac=""
+        mac=$(read_mac_from_json "base" "$iface" "base") || mac=""
     fi
 
     echo "$mac"
@@ -199,11 +219,11 @@ fi
 PRIMARY_MAC=$(resolve_mac "$PRIMARY_IFACE" "$MAC_MODE")
 /usr/local/scripts/update_mac.sh "$PRIMARY_IFACE" "$PRIMARY_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh $PRIMARY_IFACE failed"
 
-SECONDARY_MAC=$(try_read_mac "base" "/opt/wlan/mac/base${SECONDARY_IFACE#mlan}" "$SECONDARY_IFACE") || SECONDARY_MAC=""
+SECONDARY_MAC=$(read_mac_from_json "base" "$SECONDARY_IFACE" "base") || SECONDARY_MAC=""
 /usr/local/scripts/update_mac.sh "$SECONDARY_IFACE" "$SECONDARY_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh $SECONDARY_IFACE failed"
 
-# --- eth0: wired ---
-ETH0_MAC=$(try_read_mac "wired" /opt/wlan/mac/wired eth0) || ETH0_MAC=""
+# --- eth0: base ---
+ETH0_MAC=$(read_mac_from_json "base" "eth0" "base") || ETH0_MAC=""
 /usr/local/scripts/update_mac.sh eth0 "$ETH0_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh eth0 failed"
 
 if ! try_insmod "/opt/wlan/driver/mlan.ko" ""; then

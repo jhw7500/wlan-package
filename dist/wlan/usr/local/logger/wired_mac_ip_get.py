@@ -11,8 +11,6 @@ from sUTILS import Logger, _EXTRA_
 
 ETH_IFACE = "eth0"          # 유선 1:1
 IFACE = "mlan0"             # 무선 (게이트웨이 사용)
-FILE_PATH = "/opt/wlan/mac/wired_client"
-
 # 환경 상 eth0_client가 사실상 고정(192.168.0.10)이라고 했으니, 먼저 이 IP에 유니캐스트 ARP로 확인
 PRIMARY_CANDIDATE_IP = "192.168.0.10"   # 필요시 None 로 두면 생략
 
@@ -304,8 +302,6 @@ if __name__ == "__main__":
         logger.message("info", f"[{IFACE}] invalid interface", _EXTRA_())
         sys.exit(1)
 
-    FILE_PATH = "/opt/wlan/mac/wired_client"
-    os.makedirs("/opt/wlan/mac", exist_ok=True)
     os.makedirs("/opt/wlan/ip", exist_ok=True)
 
     # Scapy 기본 설정

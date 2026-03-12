@@ -1,50 +1,23 @@
-# wbridge 서비스 설정
-# wifi_bridge@.service의 EnvironmentFile로 로드됨
-
-# 최적화 활성화 (0: 비활성, 1: 활성)
-WBRIDGE_OPTIMIZE=1
-
-# 최적화 모드 (latency | normal | thermal)
-WBRIDGE_MODE=normal
-
-# 브리지 엔진 선택 (pcap | tpacket)
-WBRIDGE_ENGINE=pcap
-
-# thermal 상태 힌트 (ok | warm | hot)
-WBRIDGE_THERMAL_STATE=ok
-
-# thermal clamp 무시 여부 (0: 안전정책 적용, 1: 요청 모드 강제)
-WBRIDGE_MODE_FORCE=0
-
-# 링크 가드 (0: 기존 방식(40초 대기 후 진행), 1: 링크 안정화까지 저부하 대기)
-WBRIDGE_LINK_GUARD=1
-
-# 링크 down 판정 debounce 시간(초)
-WBRIDGE_LINK_DOWN_DEBOUNCE_SEC=2
-
-# 링크 up 안정화 판정 시간(초)
-WBRIDGE_LINK_UP_STABLE_SEC=2
-
-# 링크 불완전 상태에서 폴링 주기(초)
-WBRIDGE_LINK_IDLE_POLL_SEC=2
-
-# 초기 링크 준비 대기 타임아웃(초)
-WBRIDGE_WAIT_READY_TIMEOUT_SEC=20
-
-# 무선 링크 down을 로밍으로 간주하고 유지하는 grace 시간(초)
-WBRIDGE_WLAN_ROAM_GRACE_SEC=15
-
-# 무선 링크 down이 grace를 넘어도 브리지를 재시작할지 여부 (0: 유지, 1: 재시작)
-WBRIDGE_WLAN_DOWN_RESTART=0
-
-# thermal state updater 동작 (0: 상태만 기록, 1: 상태 변경 시 bridge 재시작)
-WBRIDGE_THERMAL_AUTO_RESTART=1
-
-# thermal timer 자동 활성화 (0: 비활성, 1: 활성)
-WBRIDGE_THERMAL_TIMER_ENABLE=0
-
-# thermal state 변경 후 bridge 재시작 최소 간격(초)
-WBRIDGE_THERMAL_RESTART_COOLDOWN_SEC=60
-
-# 프로파일 스키마 버전
-WBRIDGE_PROFILE_VERSION=1
+# wbridge 서비스 설정 오버라이드 파일
+# wifi_bridge@.service / wbridge-thermal-state.service 의 EnvironmentFile로 로드됨
+#
+# 기본값은 /usr/local/etc/wifi_init_conf.json 의 "wbridge" 섹션에서 로드됩니다.
+# 이 파일에서 설정 시 JSON 값을 덮어씁니다 (우선순위 높음).
+#
+# 사용 예시 (주석 해제 후 사용):
+# WBRIDGE_OPTIMIZE=1
+# WBRIDGE_MODE=normal               # latency | normal | thermal
+# WBRIDGE_ENGINE=pcap               # pcap | tpacket
+# WBRIDGE_THERMAL_STATE=ok          # ok | warm | hot
+# WBRIDGE_MODE_FORCE=0
+# WBRIDGE_LINK_GUARD=1
+# WBRIDGE_LINK_DOWN_DEBOUNCE_SEC=2
+# WBRIDGE_LINK_UP_STABLE_SEC=2
+# WBRIDGE_LINK_IDLE_POLL_SEC=2
+# WBRIDGE_WAIT_READY_TIMEOUT_SEC=20
+# WBRIDGE_WLAN_ROAM_GRACE_SEC=15
+# WBRIDGE_WLAN_DOWN_RESTART=0
+# WBRIDGE_THERMAL_AUTO_RESTART=1
+# WBRIDGE_THERMAL_TIMER_ENABLE=0
+# WBRIDGE_THERMAL_RESTART_COOLDOWN_SEC=60
+# WBRIDGE_PROFILE_VERSION=1
