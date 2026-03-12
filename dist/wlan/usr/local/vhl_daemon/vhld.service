@@ -1,0 +1,16 @@
+[Unit]
+Description=VHL Protocol Daemon
+After=network.target wifi_init.service
+Wants=wifi_init.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/vhl_daemon/vhld /usr/local/vhl_daemon/vhld.conf
+Restart=on-failure
+RestartSec=5
+StandardOutput=null
+StandardError=journal
+SyslogIdentifier=vhld
+
+[Install]
+WantedBy=multi-user.target
