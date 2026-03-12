@@ -20,6 +20,7 @@ SCAN_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/ap.log"
 FREQ_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/freq.log"
 WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
 ROAM_CONDITION_FLAG = "/tmp/roam_condition"
+LAST_SCAN_TIME_FILE = "/tmp/last_roam_scan_time"
 WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
 WPA_SSID = None
 WPA_FREQ = None
@@ -57,6 +58,13 @@ DEFAULT_PING_PONG_DETECTION_TIME = 30
 DEFAULT_ENABLE_ADAPTIVE_INTERVAL = True
 DEFAULT_MIN_CHECK_INTERVAL = 1
 DEFAULT_MAX_CHECK_INTERVAL = 10
+DEFAULT_ADAPTIVE_RSSI_DROP_THRESHOLD = -5    # Phase 1: 이 값 미만 하락 시 min_interval 전환
+DEFAULT_ADAPTIVE_RSSI_RISE_THRESHOLD = 2     # Phase 1: 이 값 초과 상승 시 간격 증가
+DEFAULT_ADAPTIVE_NEAR_THRESHOLD_OFFSET = 5   # Phase 2: threshold+offset 이하 → 빠른 체크 구간
+DEFAULT_ADAPTIVE_NEAR_THRESHOLD_INTERVAL = 2 # Phase 2: 근접 구간 고정 인터벌 (s)
+DEFAULT_ADAPTIVE_GOOD_SIGNAL_OFFSET = 15     # Phase 2: threshold+offset 초과 → 간격 증가 허용
+DEFAULT_ADAPTIVE_CONSECUTIVE_DROP_COUNT = 2  # Phase 3: 연속 하락 이 횟수 이상 시 min_interval 강제
+DEFAULT_USE_SIGNAL_AVG = False  # True: link 파일의 signal_avg 사용, False: signal 사용
 
 # Sleep 기본값
 DEFAULT_SCAN_NO_RESULT_SLEEP = 3  # AP 스캔 결과 없을 때 재시도 대기
@@ -85,6 +93,13 @@ PING_PONG_DETECTION_TIME = DEFAULT_PING_PONG_DETECTION_TIME
 ENABLE_ADAPTIVE_INTERVAL = DEFAULT_ENABLE_ADAPTIVE_INTERVAL
 MIN_CHECK_INTERVAL = DEFAULT_MIN_CHECK_INTERVAL
 MAX_CHECK_INTERVAL = DEFAULT_MAX_CHECK_INTERVAL
+ADAPTIVE_RSSI_DROP_THRESHOLD = DEFAULT_ADAPTIVE_RSSI_DROP_THRESHOLD
+ADAPTIVE_RSSI_RISE_THRESHOLD = DEFAULT_ADAPTIVE_RSSI_RISE_THRESHOLD
+ADAPTIVE_NEAR_THRESHOLD_OFFSET = DEFAULT_ADAPTIVE_NEAR_THRESHOLD_OFFSET
+ADAPTIVE_NEAR_THRESHOLD_INTERVAL = DEFAULT_ADAPTIVE_NEAR_THRESHOLD_INTERVAL
+ADAPTIVE_GOOD_SIGNAL_OFFSET = DEFAULT_ADAPTIVE_GOOD_SIGNAL_OFFSET
+ADAPTIVE_CONSECUTIVE_DROP_COUNT = DEFAULT_ADAPTIVE_CONSECUTIVE_DROP_COUNT
+USE_SIGNAL_AVG = DEFAULT_USE_SIGNAL_AVG
 
 # Sleep 설정
 SCAN_NO_RESULT_SLEEP = DEFAULT_SCAN_NO_RESULT_SLEEP
@@ -158,6 +173,12 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
             "ENABLE_ADAPTIVE_INTERVAL": config["ENABLE_ADAPTIVE_INTERVAL"],
             "MIN_CHECK_INTERVAL": config["MIN_CHECK_INTERVAL"],
             "MAX_CHECK_INTERVAL": config["MAX_CHECK_INTERVAL"],
+            "ADAPTIVE_RSSI_DROP_THRESHOLD": config["ADAPTIVE_RSSI_DROP_THRESHOLD"],
+            "ADAPTIVE_RSSI_RISE_THRESHOLD": config["ADAPTIVE_RSSI_RISE_THRESHOLD"],
+            "ADAPTIVE_NEAR_THRESHOLD_OFFSET": config["ADAPTIVE_NEAR_THRESHOLD_OFFSET"],
+            "ADAPTIVE_NEAR_THRESHOLD_INTERVAL": config["ADAPTIVE_NEAR_THRESHOLD_INTERVAL"],
+            "ADAPTIVE_GOOD_SIGNAL_OFFSET": config["ADAPTIVE_GOOD_SIGNAL_OFFSET"],
+            "ADAPTIVE_CONSECUTIVE_DROP_COUNT": config["ADAPTIVE_CONSECUTIVE_DROP_COUNT"],
             "DEFAULT_TH_2G": config.get("DEFAULT_TH_2G", current_default_th_2g),
             "DEFAULT_TH_5G": config.get("DEFAULT_TH_5G", current_default_th_5g),
             "DIFF_TH": config["DIFF_TH"],
@@ -172,6 +193,7 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
             "POST_ROAM_PEER_WAIT": config["POST_ROAM_PEER_WAIT"],
             "SCAN_NO_RESULT_SLEEP": int(config["SCAN_NO_RESULT_SLEEP"]),
             "ROAM_SUCCESS_SLEEP": int(config["ROAM_SUCCESS_SLEEP"]),
+            "USE_SIGNAL_AVG": config["USE_SIGNAL_AVG"],
         }
     )
 
@@ -201,6 +223,12 @@ def load_roaming_config(iface):
         "ENABLE_ADAPTIVE_INTERVAL": DEFAULT_ENABLE_ADAPTIVE_INTERVAL,
         "MIN_CHECK_INTERVAL": DEFAULT_MIN_CHECK_INTERVAL,
         "MAX_CHECK_INTERVAL": DEFAULT_MAX_CHECK_INTERVAL,
+        "ADAPTIVE_RSSI_DROP_THRESHOLD": DEFAULT_ADAPTIVE_RSSI_DROP_THRESHOLD,
+        "ADAPTIVE_RSSI_RISE_THRESHOLD": DEFAULT_ADAPTIVE_RSSI_RISE_THRESHOLD,
+        "ADAPTIVE_NEAR_THRESHOLD_OFFSET": DEFAULT_ADAPTIVE_NEAR_THRESHOLD_OFFSET,
+        "ADAPTIVE_NEAR_THRESHOLD_INTERVAL": DEFAULT_ADAPTIVE_NEAR_THRESHOLD_INTERVAL,
+        "ADAPTIVE_GOOD_SIGNAL_OFFSET": DEFAULT_ADAPTIVE_GOOD_SIGNAL_OFFSET,
+        "ADAPTIVE_CONSECUTIVE_DROP_COUNT": DEFAULT_ADAPTIVE_CONSECUTIVE_DROP_COUNT,
         "DEFAULT_TH_2G": DEFAULT_TH_2G,
         "DEFAULT_TH_5G": DEFAULT_TH_5G,
         "DIFF_TH": DIFF_TH,
@@ -213,6 +241,7 @@ def load_roaming_config(iface):
         "POST_ROAM_PEER_WAIT": DEFAULT_POST_ROAM_PEER_WAIT,
         "SCAN_NO_RESULT_SLEEP": DEFAULT_SCAN_NO_RESULT_SLEEP,
         "ROAM_SUCCESS_SLEEP": DEFAULT_ROAM_SUCCESS_SLEEP,
+        "USE_SIGNAL_AVG": DEFAULT_USE_SIGNAL_AVG,
     }
 
     # 1. JSON 설정 파일 시도
@@ -270,6 +299,12 @@ def load_roaming_config(iface):
                             ("enable", "ENABLE_ADAPTIVE_INTERVAL", parse_bool),
                             ("min_check_interval", "MIN_CHECK_INTERVAL", int),
                             ("max_check_interval", "MAX_CHECK_INTERVAL", int),
+                            ("rssi_drop_threshold", "ADAPTIVE_RSSI_DROP_THRESHOLD", int),
+                            ("rssi_rise_threshold", "ADAPTIVE_RSSI_RISE_THRESHOLD", int),
+                            ("near_threshold_offset", "ADAPTIVE_NEAR_THRESHOLD_OFFSET", int),
+                            ("near_threshold_interval", "ADAPTIVE_NEAR_THRESHOLD_INTERVAL", int),
+                            ("good_signal_offset", "ADAPTIVE_GOOD_SIGNAL_OFFSET", int),
+                            ("consecutive_drop_count", "ADAPTIVE_CONSECUTIVE_DROP_COUNT", int),
                         ],
                     )
 
@@ -296,6 +331,12 @@ def load_roaming_config(iface):
                                 ("peer_wait", "POST_ROAM_PEER_WAIT", int),
                             ],
                         )
+
+                # use_signal_avg 옵션 처리
+                _set_config_value(
+                    config, "USE_SIGNAL_AVG",
+                    roam_config.get("use_signal_avg"), parse_bool
+                )
 
                 # 설정 적용
                 for key in config.keys():
@@ -327,7 +368,8 @@ def load_roaming_config(iface):
         f"[{IFACE}] Roaming config loaded: "
         f"predictive={ENABLE_PREDICTIVE_ROAM}, load_based={ENABLE_LOAD_BASED_ROAM}, "
         f"ping_pong={ENABLE_PING_PONG_PREVENTION}, adaptive={ENABLE_ADAPTIVE_INTERVAL}, "
-        f"post_roam_arp={ENABLE_POST_ROAM_ARP_OPTIMIZATION}",
+        f"post_roam_arp={ENABLE_POST_ROAM_ARP_OPTIMIZATION}, "
+        f"rssi_source={'signal_avg' if USE_SIGNAL_AVG else 'signal'}",
         _EXTRA_(),
     )
 
@@ -532,13 +574,13 @@ class AdaptiveInterval:
         if self.last_rssi is not None:
             rssi_change = current_rssi - self.last_rssi
 
-            # 신호가 급격히 악화되면 최소 간격
-            if rssi_change < -5:  # 5dB 이상 하락
+            # Phase 1: 신호가 급격히 악화되면 최소 간격
+            if rssi_change < ADAPTIVE_RSSI_DROP_THRESHOLD:
                 self.current_interval = self.min_interval
                 self.consecutive_low_rssi += 1
                 self.consecutive_high_rssi = 0
-            # 신호가 개선되면 간격 증가
-            elif rssi_change > 2:
+            # Phase 1: 신호가 개선되면 간격 증가
+            elif rssi_change > ADAPTIVE_RSSI_RISE_THRESHOLD:
                 self.current_interval = min(
                     self.max_interval, self.current_interval + 1
                 )
@@ -554,15 +596,15 @@ class AdaptiveInterval:
         if threshold is None:
             return self.current_interval
 
-        # 임계값 근처에서는 간격 단축
-        if current_rssi < threshold + 5:
-            self.current_interval = max(self.min_interval, 2)
-        # 신호가 안정적이고 좋으면 간격 증가
-        elif current_rssi > threshold + 15 and trend == RSSITrendTracker.TREND_STABLE:
+        # Phase 2: 임계값 근처에서는 간격 단축
+        if current_rssi < threshold + ADAPTIVE_NEAR_THRESHOLD_OFFSET:
+            self.current_interval = max(self.min_interval, ADAPTIVE_NEAR_THRESHOLD_INTERVAL)
+        # Phase 2: 신호가 안정적이고 좋으면 간격 증가
+        elif current_rssi > threshold + ADAPTIVE_GOOD_SIGNAL_OFFSET and trend == RSSITrendTracker.TREND_STABLE:
             self.current_interval = min(self.max_interval, self.current_interval + 1)
 
-        # 연속 낮은 RSSI 감지 시 더 빠른 체크
-        if self.consecutive_low_rssi >= 2:
+        # Phase 3: 연속 낮은 RSSI 감지 시 더 빠른 체크
+        if self.consecutive_low_rssi >= ADAPTIVE_CONSECUTIVE_DROP_COUNT:
             self.current_interval = self.min_interval
 
         return self.current_interval
@@ -748,10 +790,15 @@ def get_link_info_with_load():
 
         with open(LINK_LOG_FILE, "r") as f:
             data = json.load(f)
+            link = data["link"]
+            if USE_SIGNAL_AVG and "signal_avg" in link:
+                rssi_raw = link["signal_avg"]
+            else:
+                rssi_raw = link["signal"]
             result = {
-                "bssid": data["link"]["address"].strip().lower(),
+                "bssid": link["address"].strip().lower(),
                 "freq": int(data["info"]["freq"]),
-                "rssi": int(data["link"]["signal"].replace(" dBm", "")),
+                "rssi": int(rssi_raw.replace(" dBm", "")),
             }
 
             # Load 정보 추가 (활성화됨)
@@ -798,10 +845,15 @@ def get_link_info():
     try:
         with open(LINK_LOG_FILE, "r") as f:
             data = json.load(f)
+            link = data["link"]
+            if USE_SIGNAL_AVG and "signal_avg" in link:
+                rssi_raw = link["signal_avg"]
+            else:
+                rssi_raw = link["signal"]
             result = {
-                "bssid": data["link"]["address"].strip().lower(),
+                "bssid": link["address"].strip().lower(),
                 "freq": int(data["info"]["freq"]),
-                "rssi": int(data["link"]["signal"].replace(" dBm", "")),
+                "rssi": int(rssi_raw.replace(" dBm", "")),
             }
             return result
     except Exception as e:
@@ -1377,10 +1429,21 @@ def main():
         )
         set_flag(1, ROAM_CONDITION_FLAG)
 
+        # 인터벌 계산 (루프 내 모든 경로에서 공유)
+        if ENABLE_ADAPTIVE_INTERVAL and adaptive_interval:
+            interval = adaptive_interval.update(rssi, base_threshold, trend)
+        else:
+            interval = CHECK_INTERVAL
+
         # 주변 AP 스캔
         if WPA_SSID and WPA_FREQ:
             station["ssid"] = WPA_SSID
             lines = mlanutl_scan(WPA_SSID, WPA_FREQ)
+            try:
+                with open(LAST_SCAN_TIME_FILE, "w") as f:
+                    f.write(str(time.time()))
+            except Exception:
+                pass
 
             if lines:
                 ap_lines = extract_ap_table(lines)
@@ -1389,7 +1452,7 @@ def main():
                 save_with_timestamp(FREQ_LOG_FILE, chan_lines)
             else:
                 logger.message("err", f"[{IFACE}] scan failed", _EXTRA_())
-                time.sleep(CHECK_INTERVAL)
+                time.sleep(interval)
                 continue
 
         # Load 정보 가져오기
@@ -1404,7 +1467,7 @@ def main():
             logger.message(
                 "err", f"[{IFACE}] No Matching APs found in latest scan", _EXTRA_()
             )
-            time.sleep(SCAN_NO_RESULT_SLEEP)
+            time.sleep(interval)
             continue
 
         # 로밍 후보 평가
@@ -1467,11 +1530,6 @@ def main():
             logger.message(
                 "info", f"[{IFACE}] No suitable roam candidate found", _EXTRA_()
             )
-
-        if ENABLE_ADAPTIVE_INTERVAL and adaptive_interval:
-            interval = adaptive_interval.update(rssi, base_threshold, trend)
-        else:
-            interval = CHECK_INTERVAL
 
         time.sleep(interval)
 

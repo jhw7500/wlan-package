@@ -14,6 +14,8 @@ from sUTILS import Logger, _EXTRA_
 
 LOG_DIR = "/var/log/cantops/scan"
 ROAM_CONDITION_FLAG = "/tmp/roam_condition"
+LAST_SCAN_TIME_FILE = "/tmp/last_roam_scan_time"
+WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
 WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
 DEFAULT_INTERVAL = 30
 STALE_THRESHOLD_SEC = 600  #1hour
@@ -83,6 +85,20 @@ def parse_wpa_supplicant_conf(path):
 
     return ssid, freqs, interval
 
+def load_bgscan_interval(iface, fallback):
+    try:
+        with open(WIFI_INIT_CONF_JSON, "r") as f:
+            data = json.load(f)
+        interval = data.get(iface, {}).get("bgscan", {}).get("interval")
+        if isinstance(interval, int) and interval > 0:
+            logger.message("info", f"[{iface}] bgscan interval from JSON: {interval}s", _EXTRA_())
+            return interval
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        logger.message("err", f"[{iface}] bgscan config load error: {e}", _EXTRA_())
+    return fallback
+
 def construct_iw_scan_cmd(ssid, scan_freqs):
     cmd = ["iw", IFACE, "scan"]
 
@@ -118,6 +134,16 @@ def periodic_scan(ssid, freqs, interval):
             time.sleep(5)
             continue
 
+        # roam 스캔이 발생한 경우 bgscan 주기 초기화
+        try:
+            with open(LAST_SCAN_TIME_FILE, "r") as f:
+                roam_scan_time = float(f.read().strip())
+            if roam_scan_time > last_time:
+                last_time = roam_scan_time
+                logger.message("info", f"[{IFACE}] bgscan timer reset by roam scan", _EXTRA_())
+        except (FileNotFoundError, ValueError):
+            pass
+
         if time.time() - last_time >= interval:
             try:
                 logger.message("info", f"[{IFACE}] {cmd}", _EXTRA_())
@@ -135,6 +161,7 @@ def main_loop():
     #last_log_time = time.time()
 
     ssid, freqs, interval = parse_wpa_supplicant_conf(WPA_CONF_FILE)
+    interval = load_bgscan_interval(IFACE, interval)
     logger.message("info", f"[{IFACE}] ssid : {ssid}, freq: {freqs}, interval: {interval}", _EXTRA_())
     periodic_scan(ssid, freqs, interval)
     #threading.Thread(target=periodic_scan, args=(ssid, freqs, interval), daemon=True).start()

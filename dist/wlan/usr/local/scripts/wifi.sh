@@ -57,6 +57,25 @@ apply_sed_update() {
 
 WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
 
+# JSON mac 설정 수정 함수 (.mac.<iface>.<key>)
+update_json_mac() {
+    local iface="$1"
+    local key="$2"
+    local value="$3"
+
+    if [ ! -f "$WIFI_INIT_CONF_JSON" ]; then
+        echo "Error: $WIFI_INIT_CONF_JSON not found"
+        return 1
+    fi
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "Error: jq not installed"
+        return 1
+    fi
+
+    jq --arg v "$value" ".mac.${iface}.${key} = \$v" "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp"
+    mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
+}
+
 # JSON global 설정 수정 함수
 update_json_global() {
     local key="$1"
@@ -97,7 +116,8 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} key {0|1|NONE|WPA-PSK|*} : persist"
     echo "       wifi {0|1|mlan0|mlan1} freq {freq_list|channel_list} : persist"
     echo "       wifi {0|1|mlan0|mlan1} scan {freq_list|channel_list} : runtime"
-    echo "       wifi {0|1|mlan0|mlan1} mon : runtime"
+    echo "       wifi {0|1|mlan0|mlan1} roam [0|1..N] : 0=auto best, N=Nth AP (RSSI order)"
+    echo "       wifi {0|1|mlan0|mlan1} mon [c|compact] [interval] [--summary-lines N] [--roam-display N]"
     echo "       wifi txpwr {0|1|2|3|no|default|low|org|conf_file_name} : persist"
     echo "       wifi cal {0|1|2|None|WlanCalData_ext.conf|WlanCalData_ext_RD.conf|*} : persist"
     echo "       wifi mfg {0|1|off|on} : persist"
@@ -514,14 +534,33 @@ case "$2" in
         usage
     fi
     ;;
-  mon)
-    if [ -z "$3" ]; then
-        interval=1
+  roam)
+    # wifi 0 roam       → AP 리스트만 표시
+    # wifi 0 roam 0     → 현재 AP 제외 최고 RSSI로 자동 로밍
+    # wifi 0 roam 1~N   → RSSI 순서 N번째 AP로 로밍
+    ROAM_ARG="${3:-}"
+    if [ -z "$ROAM_ARG" ]; then
+        python3 /usr/local/logger/passive_roam.py --iface $IFACE
     else
-        interval=$3
+        python3 /usr/local/logger/passive_roam.py $ROAM_ARG --iface $IFACE
     fi
-    echo "monitor link for $IFACE with interval $interval sec"
-    python3 /usr/local/logger/wifi_link_monitor.py $IFACE --interval $interval
+    ;;
+  mon)
+    shift 2
+    MON_ARGS=""
+    MON_COMPACT=""
+    MON_INTERVAL="1"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            c|compact)   MON_COMPACT="--compact" ;;
+            [0-9]*)      MON_INTERVAL="$1" ;;
+            -*)          MON_ARGS="$MON_ARGS $1" ;;
+            *)           MON_ARGS="$MON_ARGS $1" ;;
+        esac
+        shift
+    done
+    echo "monitor link for $IFACE with interval $MON_INTERVAL sec ${MON_COMPACT:+(compact)}"
+    python3 /usr/local/logger/wifi_link_monitor.py $IFACE --interval $MON_INTERVAL $MON_COMPACT $MON_ARGS
     ;;
   txpwr | txpwrlimit)
     if [ "$3" == "no" ] || [ "$3" == "0" ]; then
@@ -556,12 +595,14 @@ case "$2" in
   mac)
     if [ "$3" == "base" ] || [ "$3" == "0" ]; then
         echo "base mac set to $4 for $IFACE"
-        #echo "$4" > /opt/wlan/mac/base$NUM
         /usr/local/scripts/write_mac.sh $IFACE $4
     elif [ "$3" == "target" ] || [ "$3" == "1" ]; then
+        if [ "$IFACE" == "eth0" ]; then
+            echo "Error: eth0 does not support target mac"
+            exit 1
+        fi
         echo "target mac set to $4 for $IFACE"
-        echo "$4" > /opt/wlan/mac/target$NUM
-        #/usr/local/scripts/update_mac.sh "$IFACE" "$4"
+        update_json_mac "$IFACE" "target" "$4"
     else
         usage
     fi
@@ -586,10 +627,15 @@ case "$2" in
   spoof)
     if [ "$3" == "dynamic" ] || [ "$3" == "0" ]; then
         echo "spoofing mode set to dynamic for $IFACE"
-        cat /dev/null > "/opt/wlan/mac/target$NUM"
+        update_json_mac "$IFACE" "target" ""
     elif [ "$3" == "static" ] || [ "$3" == "1" ]; then
-        echo "spoofing mode set to static for $IFACE"
-        cp /tmp/eth0_client_mac "/opt/wlan/mac/target$NUM"
+        if [ ! -f /tmp/eth0_client_mac ]; then
+            echo "Error: /tmp/eth0_client_mac not found"
+            exit 1
+        fi
+        SPOOF_MAC=$(cat /tmp/eth0_client_mac)
+        echo "spoofing mode set to static for $IFACE (mac=$SPOOF_MAC)"
+        update_json_mac "$IFACE" "target" "$SPOOF_MAC"
     else
         usage
     fi

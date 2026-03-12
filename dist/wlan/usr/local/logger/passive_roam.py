@@ -4,9 +4,9 @@ import os
 import sys
 import subprocess
 
-SCAN_LOG = "/var/log/cantops/scan/mlan0/ap.log"
-LINK_JSON = "/var/log/cantops/json/mlan0/link.json"
 WIFI_IFACE = "mlan0"
+SCAN_LOG = f"/var/log/cantops/scan/{WIFI_IFACE}/ap.log"
+LINK_JSON = f"/var/log/cantops/json/{WIFI_IFACE}/link.json"
 
 
 def read_current_bssid(link_json_path=LINK_JSON):
@@ -161,13 +161,20 @@ def roam_to_best_non_current(interface, candidates):
 
 
 def main():
-    selected_index = None
-    if len(sys.argv) >= 2:
-        try:
-            selected_index = int(sys.argv[1])
-        except ValueError:
-            print(f"Invalid argument: {sys.argv[1]} (must be integer)")
-            sys.exit(1)
+    global WIFI_IFACE, SCAN_LOG, LINK_JSON
+
+    import argparse
+    parser = argparse.ArgumentParser(description="Passive roaming tool")
+    parser.add_argument("index", nargs="?", type=int, default=None,
+                        help="0=best auto, N=roam to Nth AP (RSSI order)")
+    parser.add_argument("--iface", default="mlan0",
+                        choices=["mlan0", "mlan1"],
+                        help="Interface name (default: mlan0)")
+    args = parser.parse_args()
+
+    WIFI_IFACE = args.iface
+    SCAN_LOG = f"/var/log/cantops/scan/{WIFI_IFACE}/ap.log"
+    LINK_JSON = f"/var/log/cantops/json/{WIFI_IFACE}/link.json"
 
     current_bssid, candidates = build_candidate_list()
     if not candidates:
@@ -177,21 +184,21 @@ def main():
     print_candidate_list(current_bssid, candidates)
 
     # No argument: just show list, no roaming
-    if selected_index is None:
+    if args.index is None:
         return
 
     # Argument 0: auto-roam to best AP excluding current
-    if selected_index == 0:
+    if args.index == 0:
         ret = roam_to_best_non_current(WIFI_IFACE, candidates)
         sys.exit(ret)
 
     # Argument > 0: roam to N-th AP in the printed list
-    if selected_index < 0 or selected_index > len(candidates):
-        print(f"Invalid index: {selected_index} (valid 0~{len(candidates)})")
+    if args.index < 0 or args.index > len(candidates):
+        print(f"Invalid index: {args.index} (valid 0~{len(candidates)})")
         sys.exit(1)
 
-    ap = candidates[selected_index - 1]
-    ret = roam_to_ap(WIFI_IFACE, ap, index_label=selected_index)
+    ap = candidates[args.index - 1]
+    ret = roam_to_ap(WIFI_IFACE, ap, index_label=args.index)
     sys.exit(ret)
 
 

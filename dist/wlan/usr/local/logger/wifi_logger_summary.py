@@ -37,17 +37,23 @@ def ensure_log_directory():
 def format_center(value, width):
     return f"{value:^{width}}"[:width]
 
+def strip_dbm(value):
+    """'-65 dBm' → '-65', 없으면 '-'"""
+    if value and value != "---":
+        return str(value).replace(" dBm", "").strip()
+    return "-"
+
 def extract_info(path):
     try:
         with open(path, "r") as f:
             data = json.load(f)
             freq = safe_get(data, "info", "freq") or "-"
             addr = safe_get(data, "link", "address") or "-"
-            sig = safe_get(data, "link", "signal") or "-"
-            return str(freq), str(addr), str(sig)
+            sig = strip_dbm(safe_get(data, "link", "signal"))
+            sig_avg = strip_dbm(safe_get(data, "link", "signal_avg"))
+            return str(freq), str(addr), sig, sig_avg
     except Exception:
         return None
-        #return "-", "-", "-"
 
 def main():
     ensure_log_directory()
@@ -61,16 +67,20 @@ def main():
 
         mlan0_info = extract_info(MLAN0_JSON)
         if mlan0_info:
-            freq0, addr0, sig0 = mlan0_info
+            freq0, addr0, sig0, sig_avg0 = mlan0_info
+            sig_combined0 = f"{sig0}/{sig_avg0} dBm"
             line += (
-                f" || mlan0 | {format_center(freq0, 6)} | {format_center(addr0, 17)} | {format_center(sig0, 8)}"
+                f" || mlan0 | {format_center(freq0, 6)} | {format_center(addr0, 17)}"
+                f" | {format_center(sig_combined0, 18)}"
             )
 
         mlan1_info = extract_info(MLAN1_JSON)
         if mlan1_info:
-            freq1, addr1, sig1 = mlan1_info
+            freq1, addr1, sig1, sig_avg1 = mlan1_info
+            sig_combined1 = f"{sig1}/{sig_avg1} dBm"
             line += (
-                f" || mlan1 | {format_center(freq1, 6)} | {format_center(addr1, 17)} | {format_center(sig1, 8)}"
+                f" || mlan1 | {format_center(freq1, 6)} | {format_center(addr1, 17)}"
+                f" | {format_center(sig_combined1, 18)}"
             )
 
         line += "\n"
