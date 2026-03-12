@@ -8,3 +8,4 @@ gha-creds-*.json
 
 tmp/
 .worktrees/
+/docs/plans/
