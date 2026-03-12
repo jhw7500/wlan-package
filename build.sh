@@ -86,6 +86,23 @@ cp "${BASEDIR}/wlan-bridge/wbridge/wifi_bridge@.service" "${BASEDIR}/dist/wlan/u
 cp -a "${BASEDIR}/wlan-bridge/scripts/." "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/scripts/" || { echo "Error: Failed to copy scripts"; exit 1; }
 cp -a "${BASEDIR}/wlan-bridge/docs/." "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/docs/" || { echo "Error: Failed to copy docs"; exit 1; }
 
+# Build vhld (VHL Protocol Daemon)
+echo "Building vhld..."
+VHLD_DIR="${BASEDIR}/dist/wlan/usr/local/vhl_daemon"
+if [ -f "${VHLD_DIR}/Makefile" ]; then
+    cd "${VHLD_DIR}"
+    make clean
+    if [ "${HOST_ARCH}" = "aarch64" ] || [ "${HOST_ARCH}" = "arm64" ]; then
+        make release || { echo "Error: Failed to build vhld"; exit 1; }
+    else
+        make cross || { echo "Error: Failed to cross-build vhld"; exit 1; }
+    fi
+    cd "${BASEDIR}"
+    echo "vhld build completed"
+else
+    echo "Warning: vhld Makefile not found, skipping"
+fi
+
 mkdir -p "${BASEDIR}/release"
 cd "${BASEDIR}/dist" || exit 1
 
