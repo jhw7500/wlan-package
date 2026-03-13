@@ -1,6 +1,6 @@
 [Unit]
 Description=Wifi Bridge Service for %i
-BindsTo=sys-subsystem-net-devices-eth0.device sys-subsystem-net-devices-%i.device wpa_supplicant@%i.service
+BindsTo=sys-subsystem-net-devices-eth0.device sys-subsystem-net-devices-%i.device
 Requires=sys-subsystem-net-devices-eth0.device sys-subsystem-net-devices-%i.device
 After=sys-subsystem-net-devices-eth0.device sys-subsystem-net-devices-%i.device wpa_supplicant@%i.service
 Wants=network-online.target
