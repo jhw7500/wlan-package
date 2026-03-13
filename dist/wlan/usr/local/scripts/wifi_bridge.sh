@@ -185,7 +185,7 @@ wait_for_link_ready() {
     while true; do
         now=$(date +%s)
 
-        if both_up; then
+        if wired_up; then
             down_since=0
             if [ "$up_since" -eq 0 ]; then
                 up_since=$now

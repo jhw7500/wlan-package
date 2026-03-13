@@ -120,7 +120,7 @@ if [ -n "$cmd" ]; then
 fi
 
 # --- MAC 주소 결정 ---
-# MAC_MODE: default  = 동적 → target → base (3단계)
+# MAC_MODE: default  = base만 사용
 #           dynamic  = 동적 → base
 #           static   = target → base
 
@@ -181,25 +181,32 @@ resolve_mac() {
     local iface=$1
     local mode=$2
     local mac=""
+    local source="none"
 
     logger -p local0.info "[$tag:$LINENO] [$iface] MAC_MODE=$mode"
 
-    # 동적 MAC (default, dynamic)
-    if [ -z "$mac" ] && { [ "$mode" = "default" ] || [ "$mode" = "dynamic" ]; }; then
+    # 동적 MAC (dynamic)
+    if [ -z "$mac" ] && [ "$mode" = "dynamic" ]; then
         mac=$(try_dynamic_mac "$iface") || mac=""
+        [ -n "$mac" ] && source="dynamic"
     fi
 
-    # target MAC (default, static) → JSON
-    if [ -z "$mac" ] && { [ "$mode" = "default" ] || [ "$mode" = "static" ]; }; then
+    # target MAC (static) → JSON
+    if [ -z "$mac" ] && [ "$mode" = "static" ]; then
         mac=$(read_mac_from_json "target" "$iface" "target") || mac=""
+        [ -n "$mac" ] && source="target"
     fi
 
     # base MAC (공통 최종 fallback) → JSON
     if [ -z "$mac" ]; then
         mac=$(read_mac_from_json "base" "$iface" "base") || mac=""
+        [ -n "$mac" ] && source="base"
     fi
 
-    echo "$mac"
+    logger -p local0.info "[$tag:$LINENO] [$iface] mac_source=$source"
+
+    # 결과: "mac source" 형태로 반환
+    echo "$mac $source"
 }
 
 # PRIMARY: MAC_MODE에 따라 resolve
@@ -211,16 +218,39 @@ else
 fi
 
 # 동적 MAC이 필요한 경우 wired_mac_ip_get.py 먼저 실행
-if [ "$MAC_MODE" = "default" ] || [ "$MAC_MODE" = "dynamic" ]; then
+if [ "$MAC_MODE" = "dynamic" ]; then
     logger -p local0.info "[$tag:$LINENO] [$PRIMARY_IFACE] running wired_mac_ip_get.py"
     python3 /usr/local/logger/wired_mac_ip_get.py || true
 fi
 
-PRIMARY_MAC=$(resolve_mac "$PRIMARY_IFACE" "$MAC_MODE")
+# resolve_mac 결과: "mac source"
+PRIMARY_RESULT=$(resolve_mac "$PRIMARY_IFACE" "$MAC_MODE")
+PRIMARY_MAC="${PRIMARY_RESULT% *}"
+PRIMARY_MAC_SOURCE="${PRIMARY_RESULT##* }"
 /usr/local/scripts/update_mac.sh "$PRIMARY_IFACE" "$PRIMARY_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh $PRIMARY_IFACE failed"
 
 SECONDARY_MAC=$(read_mac_from_json "base" "$SECONDARY_IFACE" "base") || SECONDARY_MAC=""
+SECONDARY_MAC_SOURCE="base"
 /usr/local/scripts/update_mac.sh "$SECONDARY_IFACE" "$SECONDARY_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh $SECONDARY_IFACE failed"
+
+# --- wifi_bridge 제어: base MAC 사용 시 bridge 비활성 ---
+control_bridge_service() {
+    local iface=$1
+    local mac_source=$2
+
+    if [ "$mac_source" = "base" ] || [ "$mac_source" = "none" ]; then
+        logger -p local0.info "[$tag:$LINENO] [$iface] mac_source=$mac_source → disable wifi_bridge@$iface"
+        systemctl disable "wifi_bridge@${iface}.service" 2>/dev/null || true
+    else
+        logger -p local0.info "[$tag:$LINENO] [$iface] mac_source=$mac_source → enable wifi_bridge@$iface"
+        systemctl enable "wifi_bridge@${iface}.service" 2>/dev/null || true
+    fi
+}
+
+if command -v systemctl >/dev/null 2>&1; then
+    control_bridge_service "$PRIMARY_IFACE" "$PRIMARY_MAC_SOURCE"
+    control_bridge_service "$SECONDARY_IFACE" "$SECONDARY_MAC_SOURCE"
+fi
 
 # --- eth0: base ---
 ETH0_MAC=$(read_mac_from_json "base" "eth0" "base") || ETH0_MAC=""
