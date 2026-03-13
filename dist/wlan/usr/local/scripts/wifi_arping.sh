@@ -3,10 +3,27 @@ IFACE=$1
 CONF_FILE=""
 tag=$(basename "$0")
 FAILS=0
+F="local0"
+
+# Defaults
+THRESHOLD=10
+COOLDOWN=10
+LOOPDELAY=10
+ARPING_TIMEOUT=3
+
+# Load from JSON config
+WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
+if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
+    THRESHOLD=$(jq -r '.arping.threshold // 10' "$WIFI_INIT_CONF_JSON")
+    COOLDOWN=$(jq -r '.arping.cooldown_sec // 10' "$WIFI_INIT_CONF_JSON")
+    LOOPDELAY=$(jq -r '.arping.loop_delay_sec // 10' "$WIFI_INIT_CONF_JSON")
+    ARPING_TIMEOUT=$(jq -r '.arping.timeout_sec // 3' "$WIFI_INIT_CONF_JSON")
+fi
+
+# Environment variables override JSON (하위 호환)
 THRESHOLD=${THRESHOLD:-10}
 COOLDOWN=${COOLDOWN:-10}
 LOOPDELAY=${LOOPDELAY:-10}
-F="local0"
 
 get_target_ip() {
     case "$IFACE" in
@@ -104,7 +121,7 @@ done
 logger -p $F.info "[$tag:$LINENO] [$IFACE] start : $TARGET_IP"
 
 while true; do
-  if arping -I "$IFACE" -c 1 -w 3 "$TARGET_IP" >/dev/null 2>&1; then
+  if arping -I "$IFACE" -c 1 -w "$ARPING_TIMEOUT" "$TARGET_IP" >/dev/null 2>&1; then
     FAILS=0
     logger -p $F.info "[$tag:$LINENO] [$IFACE] ARP OK: $TARGET_IP"
     sleep "$LOOPDELAY"

@@ -1,6 +1,15 @@
 #!/bin/sh
 tag=$(basename "$0")
 
+# Defaults
+CPU_LOG_INTERVAL=60
+
+# Load from JSON config
+WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
+if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
+    CPU_LOG_INTERVAL=$(jq -r '.logger.cpu_interval_sec // 60' "$WIFI_INIT_CONF_JSON")
+fi
+
 cleanup() {
     logger -p local3.info "[$tag:$LINENO] stop"
     exit 0
@@ -23,5 +32,5 @@ while :; do
         fi
     done
     logger -p local3.debug "[$tag:$LINENO] CPU:$cpu_usage%, MEM:$mem_usage%${clks_log_part}"
-    sleep 60
+    sleep "$CPU_LOG_INTERVAL"
 done

@@ -19,6 +19,15 @@ WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
 WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
 DEFAULT_INTERVAL = 30
 STALE_THRESHOLD_SEC = 600  #1hour
+
+# Load STALE_THRESHOLD_SEC from JSON config
+try:
+    with open(WIFI_INIT_CONF_JSON) as _f:
+        _conf = json.load(_f)
+    STALE_THRESHOLD_SEC = _conf.get("logger", {}).get("bgscan_stale_threshold_sec", STALE_THRESHOLD_SEC)
+except Exception:
+    pass
+
 #last_log_time = 0
 VERSION = "0.0"
 IFACE = ""

@@ -6,18 +6,30 @@ key=LOG
 IFACE=$1
 MODULE_NAME="moal"
 
+WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
+
+# Defaults
 MAX_UNSTABLE_DURATION=10
-UNSTABLE_START=0
 LIMIT_CNT=3
+MAX_REBOOT_COUNT=3
+REBOOT_COOLDOWN_SEC=300
+MIN_UPTIME_SEC=120
+
+# Load from JSON config
+if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
+    LIMIT_CNT=$(jq -r '.checker.LIMIT_CNT // 3' "$WIFI_INIT_CONF_JSON")
+    MAX_UNSTABLE_DURATION=$(jq -r '.checker.MAX_UNSTABLE_DURATION // 10' "$WIFI_INIT_CONF_JSON")
+    MAX_REBOOT_COUNT=$(jq -r '.checker.MAX_REBOOT_COUNT // 3' "$WIFI_INIT_CONF_JSON")
+    REBOOT_COOLDOWN_SEC=$(jq -r '.checker.REBOOT_COOLDOWN_SEC // 300' "$WIFI_INIT_CONF_JSON")
+    MIN_UPTIME_SEC=$(jq -r '.checker.MIN_UPTIME_SEC // 120' "$WIFI_INIT_CONF_JSON")
+fi
+
+UNSTABLE_START=0
 ERR_CNT=0
 STATE=""
 PRE_STATE=""
 PCI_BUS=""
 REBOOT_F=0
-
-# Reboot cooldown configuration
-MAX_REBOOT_COUNT=3
-REBOOT_COOLDOWN_SEC=300  # 5 minutes
 
 cleanup() {
     logger -p local0.info "[$tag:$LINENO] [$IFACE] stop"
@@ -154,7 +166,7 @@ while true; do
         sync
         ERR_CNT=0
         REBOOT_F=0
-        if ! MAX_REBOOT_COUNT="$MAX_REBOOT_COUNT" REBOOT_COOLDOWN_SEC="$REBOOT_COOLDOWN_SEC" \
+        if ! MAX_REBOOT_COUNT="$MAX_REBOOT_COUNT" REBOOT_COOLDOWN_SEC="$REBOOT_COOLDOWN_SEC" MIN_UPTIME_SEC="$MIN_UPTIME_SEC" \
           /usr/local/scripts/wlan_reboot_policy.sh \
             --source wifi_checker \
             --iface "$IFACE" \

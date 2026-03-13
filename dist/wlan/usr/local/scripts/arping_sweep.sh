@@ -2,6 +2,17 @@
 tag=$(basename "$0")
 IFACE=$1
 
+# Defaults
+SWEEP_TIMEOUT=1
+SWEEP_PARALLEL_LIMIT=50
+
+# Load from JSON config
+WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
+if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
+    SWEEP_TIMEOUT=$(jq -r '.arping.sweep_timeout_sec // 1' "$WIFI_INIT_CONF_JSON")
+    SWEEP_PARALLEL_LIMIT=$(jq -r '.arping.sweep_parallel_limit // 50' "$WIFI_INIT_CONF_JSON")
+fi
+
 logger -p local0.info "[$tag:$LINENO] [$IFACE] arping_sweep start"
 
 if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" && "$IFACE" != "eth0" ]]; then
@@ -40,7 +51,7 @@ END=$(ip_to_int "$HostMax")
 # 병렬 arping 함수
 arping_ping() {
     ip=$1
-    arping -I "$IFACE" -c 1 -w 1 "$ip" > /dev/null 2>&1
+    arping -I "$IFACE" -c 1 -w "$SWEEP_TIMEOUT" "$ip" > /dev/null 2>&1
 }
 
 # 병렬 처리 (xargs 없이)
@@ -50,7 +61,7 @@ for (( ip = START; ip <= END; ip++ )); do
     arping_ping "$TARGET" &
     PIDS+=($!)
     # 50개 병렬 제한
-    if (( ${#PIDS[@]} >= 50 )); then
+    if (( ${#PIDS[@]} >= SWEEP_PARALLEL_LIMIT )); then
         wait -n  # 하나 끝날 때까지 대기
         # 제거
         for i in "${!PIDS[@]}"; do
