@@ -12,7 +12,7 @@ from datetime import datetime
 import logging
 from sUTILS import Logger, _EXTRA_
 
-VERSION = "0.1"
+VERSION = "0.2"
 IFACE = ""
 LOG_DIR = "/var/log/cantops/json"
 LINK_PATH = "/var/log/cantops/json"
@@ -83,7 +83,7 @@ def validate_info(output):
 def validate_survey(output):
     return "channel" in output or "frequency" in output
 
-def run_command_with_retry(cmd, retries=3, delay=0.3, validate_fn=None):
+def run_command_with_retry(cmd, retries=2, delay=0.1, validate_fn=None):
     for attempt in range(1, retries + 1):
         output = run_command(cmd)
         
@@ -258,11 +258,7 @@ def parse_eth_phy(iface):
     return result
 
 def is_wpa_running(interface="mlan0"):
-    result = subprocess.run(
-        ["systemctl", "is-active", f"wpa_supplicant@{interface}"],
-        capture_output=True, text=True
-    )
-    return result.stdout.strip() == "active"
+    return os.path.exists(f"/run/wpa_supplicant/{interface}")
 
 def is_wifi_connected_wpa(interface="mlan0") -> bool:
     try:
@@ -316,7 +312,17 @@ def check_tx_spike(link_data):
     _prev_tx_retries = cur_retry
 
 
+_empty_json = b'{}\n'
+_cached_info_data = {}
+_cached_ap_bssid = ""
+
+def _write_empty_link():
+    path = os.path.join(LOG_DIR, "link.json")
+    with open(path, 'wb') as f:
+        f.write(_empty_json)
+
 def main():
+    global _cached_info_data, _cached_ap_bssid
     os.makedirs(LOG_DIR, exist_ok=True)
     while True:
         if not os.path.exists(f"/sys/class/net/{IFACE}"):
@@ -338,35 +344,41 @@ def main():
             continue
 
         if not is_wpa_running(IFACE):
-            subprocess.run(f"echo '{{}}' > {LOG_DIR}/link.json", shell=True)
+            _write_empty_link()
             time.sleep(1)
             continue
 
-        if is_wifi_connected_iw(IFACE):
-            link_out = run_command_with_retry(["iw", IFACE, "station", "dump"], validate_fn=validate_station)
-            info_out = run_command_with_retry(["iw", IFACE, "info"], validate_fn=validate_info)
-            channel_out = run_command(["iw", IFACE, "survey", "dump"])
-
-            info_data = parse_iw_info(info_out) if info_out else {}
-            link_data = parse_station_dump(link_out) if link_out else {}
-            channel_data = parse_survey_dump(channel_out) if channel_out else {}
-
-            check_tx_spike(link_data)
-
-            data = {
-                "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "info": info_data,
-                "link": link_data,
-                "channel_info": channel_data,
-                "mwlan_log": parse_mwlan_log()
-            }
-
-            os.makedirs(LOG_DIR, exist_ok=True)
-            save_db(data, LOG_DIR)
-            time.sleep(LOOP_INTERVAL)
-        else:
-            subprocess.run(f"echo '{{}}' > {LOG_DIR}/link.json", shell=True)
+        # station dump로 연결 판별 (iw link 대체)
+        link_out = run_command_with_retry(["iw", IFACE, "station", "dump"], validate_fn=validate_station)
+        if not link_out:
+            _write_empty_link()
             time.sleep(1)
+            continue
+
+        link_data = parse_station_dump(link_out)
+
+        # AP 변경 시에만 iw info 호출, 그 외에는 캐시 사용
+        current_ap = link_data.get("address", "")
+        if not _cached_info_data or current_ap != _cached_ap_bssid:
+            info_out = run_command_with_retry(["iw", IFACE, "info"], validate_fn=validate_info)
+            _cached_info_data = parse_iw_info(info_out) if info_out else {}
+            _cached_ap_bssid = current_ap
+
+        channel_out = run_command(["iw", IFACE, "survey", "dump"])
+        channel_data = parse_survey_dump(channel_out) if channel_out else {}
+
+        check_tx_spike(link_data)
+
+        data = {
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "info": _cached_info_data,
+            "link": link_data,
+            "channel_info": channel_data,
+            "mwlan_log": parse_mwlan_log()
+        }
+
+        save_db(data, LOG_DIR)
+        time.sleep(LOOP_INTERVAL)
 
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_sigterm)
