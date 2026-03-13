@@ -12,7 +12,7 @@
         "STANDARD": "",
         "DEV_CAP_MASK": "",
         "PRIMARY_IFACE": "mlan0",
-        "MAC_MODE": "default"
+        "MAC_MODE": "dynamic"
     },
     "mac": {
         "_comment": "MAC address configuration. /opt/wlan/mac 디렉토리 대체. 빈 문자열이면 해당 소스 생략.",
@@ -34,18 +34,18 @@
         "mode": "normal",
         "engine": "pcap",
         "thermal_state": "ok",
-        "mode_force": 0,
+        "mode_force": 1,
         "link_guard": 1,
         "link_down_debounce_sec": 2,
         "link_up_stable_sec": 2,
         "link_idle_poll_sec": 2,
-        "wait_ready_timeout_sec": 20,
+        "wait_ready_timeout_sec": 10,
         "wlan_roam_grace_sec": 15,
         "wlan_down_restart": 0,
         "profile_version": 1,
         "thermal": {
             "_comment": "thermal state thresholds and management (wbridge_thermal_state_update.sh)",
-            "auto_restart": 1,
+            "auto_restart": 0,
             "timer_enable": 0,
             "restart_cooldown_sec": 60,
             "bridge_units": "wifi_bridge@mlan0.service wifi_bridge@mlan1.service",
@@ -59,19 +59,82 @@
             "hot_wifi_exit": 75
         }
     },
+    "checker": {
+        "_comment": "wifi_checker / reboot policy configuration",
+        "LIMIT_CNT": 3,
+        "MAX_UNSTABLE_DURATION": 10,
+        "MAX_REBOOT_COUNT": 3,
+        "REBOOT_COOLDOWN_SEC": 300,
+        "MIN_UPTIME_SEC": 30
+    },
+    "temperature": {
+        "_comment": "wifi_logger_temp.sh temperature thresholds and cooldown",
+        "emerg_cpu": 93,
+        "crit_cpu": 90,
+        "error_cpu": 85,
+        "warn_cpu": 80,
+        "emerg_mlan": 85,
+        "crit_mlan": 80,
+        "error_mlan": 75,
+        "warn_mlan": 70,
+        "cooldown_sec": 60,
+        "recover_cpu": 90,
+        "recover_mlan": 80,
+        "check_interval_sec": 5,
+        "emerg_count_threshold": 2
+    },
+    "arping": {
+        "_comment": "wifi_arping.sh / arping_sweep.sh configuration",
+        "threshold": 10,
+        "cooldown_sec": 10,
+        "loop_delay_sec": 10,
+        "timeout_sec": 3,
+        "sweep_timeout_sec": 1,
+        "sweep_parallel_limit": 50
+    },
+    "mmc": {
+        "_comment": "wifi_logger_mmc.sh eMMC health monitoring",
+        "check_interval_sec": 300
+    },
+    "mcp": {
+        "_comment": "wifi_logger_mcp.sh current/voltage sensor configuration",
+        "gain_current": 0.5203,
+        "gain_voltage": 15.6552,
+        "check_interval_sec": 5,
+        "system_5v": {
+            "warn_a": 1.0,
+            "error_a": 1.5,
+            "crit_a": 2.0,
+            "emerg_a": 2.5
+        },
+        "system_24v": {
+            "warn_a": 0.2,
+            "error_a": 0.3,
+            "crit_a": 0.4,
+            "emerg_a": 0.5
+        }
+    },
+    "logger": {
+        "_comment": "logging interval configuration for various logger scripts",
+        "cpu_interval_sec": 60,
+        "stat_log_interval_sec": 1,
+        "stat_check_interval_sec": 1,
+        "stat_reset_interval_sec": 604800,
+        "bgscan_stale_threshold_sec": 600
+    },
     "mlan0": {
         "_comment": "mlan0 interface configuration",
         "bgscan": {
             "_comment": "Background scan configuration for mlan0",
-            "interval": 30
+            "interval": 60
         },
         "roaming": {
             "_comment": "Roaming configuration for mlan0",
-            "use_signal_avg": false,
+            "use_signal_avg": true,
             "DEFAULT_TH_2G": -75,
             "DEFAULT_TH_5G": -75,
             "DIFF_TH": 10,
-            "CHECK_INTERVAL": 5,
+            "CHECK_INTERVAL": 3,
             "PREDICTIVE_ROAM": {
                 "enable": true,
                 "threshold_boost": 5,
@@ -118,11 +181,11 @@
         "_comment": "mlan1 interface configuration",
         "bgscan": {
             "_comment": "Background scan configuration for mlan1",
-            "interval": 30
+            "interval": 60
         },
         "roaming": {
             "_comment": "Roaming configuration for mlan1",
-            "use_signal_avg": false,
+            "use_signal_avg": true,
             "DEFAULT_TH_2G": -75,
             "DEFAULT_TH_5G": -75,
             "DIFF_TH": 10,
