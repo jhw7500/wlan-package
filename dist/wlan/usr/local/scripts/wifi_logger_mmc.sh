@@ -2,6 +2,15 @@
 tag=$(basename "$0")
 EXT=/sys/kernel/debug/mmc2/mmc2:0001/ext_csd
 
+# Defaults
+MMC_CHECK_INTERVAL=300
+
+# Load from JSON config
+WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
+if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
+    MMC_CHECK_INTERVAL=$(jq -r '.mmc.check_interval_sec // 300' "$WIFI_INIT_CONF_JSON")
+fi
+
 cleanup() {
     logger -p local0.info "[$tag:$LINENO] stop"
     exit 0
@@ -68,6 +77,6 @@ while true; do
 
     logger -p local0.$sev "[$tag:$LINENO] PRE_EOL=$EOL_TXT, LifeA=$BKT_A, LifeB=$BKT_B (raw: A=0x$LTA, B=0x$LTB)"
 
-    sleep 300
+    sleep "$MMC_CHECK_INTERVAL"
 done
 

@@ -9,19 +9,40 @@ trap cleanup INT TERM
 
 CPU_TMP_VAL=0
 CPU_TEMP=0
-EMERG_CPU_TEMP=93
-CRIT_CPU_TEMP=90
-ERR_CPU_TEMP=85
-WARN_CPU_TEMP=80
-EMERG_MLAN_TEMP=$((EMERG_CPU_TEMP-8))
-CRIT_MLAN_TEMP=$((CRIT_CPU_TEMP-10))
-ERR_MLAN_TEMP=$((ERR_CPU_TEMP-10))
-WARN_MLAN_TEMP=$((WARN_CPU_TEMP-10))
 MLAN0_TEMP=0
 MLAN1_TEMP=0
 LOG_LEVEL=info
 max_cpu_temp=0
 emerg_cnt=0
+
+# Defaults
+EMERG_CPU_TEMP=93
+CRIT_CPU_TEMP=90
+ERR_CPU_TEMP=85
+WARN_CPU_TEMP=80
+EMERG_MLAN_TEMP=85
+CRIT_MLAN_TEMP=80
+ERR_MLAN_TEMP=75
+WARN_MLAN_TEMP=70
+COOLDOWN_SEC=60
+EMERG_COUNT_THRESHOLD=2
+CHECK_INTERVAL_SEC=5
+
+# Load from JSON config
+WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
+if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
+    EMERG_CPU_TEMP=$(jq -r '.temperature.emerg_cpu // 93' "$WIFI_INIT_CONF_JSON")
+    CRIT_CPU_TEMP=$(jq -r '.temperature.crit_cpu // 90' "$WIFI_INIT_CONF_JSON")
+    ERR_CPU_TEMP=$(jq -r '.temperature.error_cpu // 85' "$WIFI_INIT_CONF_JSON")
+    WARN_CPU_TEMP=$(jq -r '.temperature.warn_cpu // 80' "$WIFI_INIT_CONF_JSON")
+    EMERG_MLAN_TEMP=$(jq -r '.temperature.emerg_mlan // 85' "$WIFI_INIT_CONF_JSON")
+    CRIT_MLAN_TEMP=$(jq -r '.temperature.crit_mlan // 80' "$WIFI_INIT_CONF_JSON")
+    ERR_MLAN_TEMP=$(jq -r '.temperature.error_mlan // 75' "$WIFI_INIT_CONF_JSON")
+    WARN_MLAN_TEMP=$(jq -r '.temperature.warn_mlan // 70' "$WIFI_INIT_CONF_JSON")
+    COOLDOWN_SEC=$(jq -r '.temperature.cooldown_sec // 60' "$WIFI_INIT_CONF_JSON")
+    EMERG_COUNT_THRESHOLD=$(jq -r '.temperature.emerg_count_threshold // 2' "$WIFI_INIT_CONF_JSON")
+    CHECK_INTERVAL_SEC=$(jq -r '.temperature.check_interval_sec // 5' "$WIFI_INIT_CONF_JSON")
+fi
 
 to_int() {
     local v
@@ -33,9 +54,8 @@ to_int() {
     fi
 }
 
-COOLDOWN_SEC=${COOLDOWN_SEC:-60}
-RECOVER_CPU_TEMP=${RECOVER_CPU_TEMP:-$CRIT_CPU_TEMP}
-RECOVER_MLAN_TEMP=${RECOVER_MLAN_TEMP:-$CRIT_MLAN_TEMP}
+RECOVER_CPU_TEMP=${RECOVER_CPU_TEMP:-$(jq -r '.temperature.recover_cpu // empty' "$WIFI_INIT_CONF_JSON" 2>/dev/null || echo "$CRIT_CPU_TEMP")}
+RECOVER_MLAN_TEMP=${RECOVER_MLAN_TEMP:-$(jq -r '.temperature.recover_mlan // empty' "$WIFI_INIT_CONF_JSON" 2>/dev/null || echo "$CRIT_MLAN_TEMP")}
 
 WIFI_STOP_UNITS=${WIFI_STOP_UNITS:-"wifi_bridge@mlan0 wifi_bridge@mlan1 wifi_checker@mlan0 wifi_checker@mlan1 wifi_arping@mlan0 wifi_arping@mlan1 wifi_bgscan@mlan0 wifi_bgscan@mlan1 wifi_roam@mlan0 wifi_roam@mlan1 wifi_capture@mlan0 wifi_capture@mlan1 wpa_supplicant@mlan0 wpa_supplicant@mlan1 wifi_logger@mlan0 wifi_logger@mlan1 wifi_logger@eth0"}
 
@@ -81,7 +101,7 @@ cooldown_until_recover() {
 
 logger -p local3.info "[$tag:$LINENO] cpu_temp warn : $WARN_CPU_TEMP, err : $ERR_CPU_TEMP, crit : $CRIT_CPU_TEMP, emerg : $EMERG_CPU_TEMP"
 
-sleep 5
+sleep "$CHECK_INTERVAL_SEC"
 
 while true; do
     read_temps
@@ -94,7 +114,7 @@ while true; do
 
     if (( CPU_TEMP >= EMERG_CPU_TEMP )); then
         ((emerg_cnt++))
-        if (( emerg_cnt > 2 )); then
+        if (( emerg_cnt > EMERG_COUNT_THRESHOLD )); then
             logger -p local0.emerg "[$tag:$LINENO] temperature critical (cpu=${CPU_TEMP} >= ${EMERG_CPU_TEMP})"
             cooldown_until_recover
         fi
@@ -114,5 +134,5 @@ while true; do
 
     logger -p local3.$LOG_LEVEL "[$tag:$LINENO] temp cpu : $CPU_TEMP, mlan0 : $MLAN0_TEMP, mlan1 : $MLAN1_TEMP"
 
-    sleep 5
+    sleep "$CHECK_INTERVAL_SEC"
 done

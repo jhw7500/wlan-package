@@ -22,8 +22,20 @@ last_stat = {}  # AP별 누적된 RX/TX 값 저장
 current_ap = ""  # 현재 연결된 AP
 log_interval = 1  # 로그 주기 (초)
 check_interval = 1  # 체크 주기 (초)
+STAT_RESET_INTERVAL = 604800  # 통계 리셋 주기 (7일)
 last_log_time = time.time()  # 마지막 로깅 시간
 tx_retrys = {}
+
+# Load from JSON config
+WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
+try:
+    with open(WIFI_INIT_CONF_JSON) as _f:
+        _conf = json.load(_f)
+    log_interval = _conf.get("logger", {}).get("stat_log_interval_sec", log_interval)
+    check_interval = _conf.get("logger", {}).get("stat_check_interval_sec", check_interval)
+    STAT_RESET_INTERVAL = _conf.get("logger", {}).get("stat_reset_interval_sec", STAT_RESET_INTERVAL)
+except Exception:
+    pass
 
 LOG_LINE_RE = re.compile(r"""
     ^\[
@@ -498,7 +510,7 @@ def log_stats():
                 wifi_info["rssi_min"] = signal_levels[ap_mac]["min"]
                 wifi_info["rssi_max"] = signal_levels[ap_mac]["max"]
 
-        cond_time = last_stat[ap_mac]["time"] >= 604800
+        cond_time = last_stat[ap_mac]["time"] >= STAT_RESET_INTERVAL
         cond_flagfile = os.path.exists("/tmp/wifi_stat_init_f")
         reset_flag = cond_time or cond_flagfile
 
