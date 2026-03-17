@@ -103,6 +103,12 @@ configure)
     timedatectl set-timezone Asia/Seoul 2>/dev/null || true
   fi
 
+  # Locale: C → C.UTF-8 (한글 바이트 정상 처리, 별도 로케일 생성 불필요)
+  if [ "$(cat /etc/locale.conf 2>/dev/null)" != "LANG=C.UTF-8" ]; then
+    echo 'LANG=C.UTF-8' > /etc/locale.conf 2>/dev/null || true
+    logger -p local0.info "[$KEY][$tag:$LINENO] Set default locale to C.UTF-8"
+  fi
+
   /usr/local/scripts/auto_fs_sizeup.sh 2 3
 
 set_timezone() {
@@ -150,9 +156,17 @@ customctl() {
     mv /etc/init.d/samba /etc/init.d/samba.disabled
   fi
 
+  # Ensure default target is multi-user.target (services won't auto-start under graphical or other targets)
+  current_target=$(systemctl get-default 2>/dev/null || echo "unknown")
+  if [ "$current_target" != "multi-user.target" ]; then
+    echo "[INFO] Default target is '$current_target', changing to multi-user.target"
+    systemctl set-default multi-user.target 2>/dev/null || true
+    logger -p local0.info "[$KEY][$tag:$LINENO] Changed default target from '$current_target' to multi-user.target"
+  fi
+
   echo "[installer] Optimizing service configuration (batch processing)..."
   systemctl mask systemd-networkd-wait-online nfs-server proc-fs-nfsd.mount ovsdb-server avahi-daemon avahi-autoipd psplash || true
-  systemctl disable --now dhcpcd weston openvswitch openvswitch-switch connman smb nmb avahi-daemon.socket containerd lighttpd nginx monkey netdata collectd thttpd named bind fake-hwclock.timer journald-snapshot.timer ifplugd systemd-resolved hiawatha netserver wifi_checker@eth0 || true
+  systemctl disable --now dhcpcd openvswitch openvswitch-switch connman smb nmb avahi-daemon.socket containerd netdata collectd thttpd named bind fake-hwclock.timer journald-snapshot.timer ifplugd systemd-resolved hiawatha netserver wifi_checker@eth0 || true
   systemctl enable watchdog switchd fake-hwclock wifi_init wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 wifi_logger@mlan0 wifi_checker@mlan0 wifi_bgscan@mlan0 wifi_roam@mlan0 wifi_arping@mlan0 || true
 
   INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 10))
@@ -192,11 +206,32 @@ makeDirectory() {
   /usr/local/logger/print.py green "\r\n[installer] installing${dots}"
 
 cpchk() {
-  if [ ! -f $2 ]; then
+  if [ ! -f "$2" ]; then
     logger -s -p local0.info "[$KEY][$tag:$LINENO] cp $1 $2"
-    cp $1 $2
+    cp "$1" "$2"
   fi
 }
+
+# JSON deep merge: 새 키는 기본값에서 추가, 기존 키는 사용자 값 유지
+json_merge() {
+  local default="$1" active="$2"
+  if [ ! -f "$active" ]; then
+    logger -s -p local0.info "[$KEY][$tag:$LINENO] cp $default $active"
+    cp "$default" "$active"
+  elif command -v jq >/dev/null 2>&1; then
+    local merged
+    merged=$(jq -s '.[0] * .[1]' "$default" "$active" 2>/dev/null)
+    if [ -n "$merged" ]; then
+      echo "$merged" > "$active"
+      logger -p local0.info "[$KEY][$tag:$LINENO] json_merge $default -> $active"
+    else
+      logger -p local0.warn "[$KEY][$tag:$LINENO] json_merge failed; keep existing $active"
+    fi
+  else
+    logger -p local0.warn "[$KEY][$tag:$LINENO] jq not found; skip json_merge for $active"
+  fi
+}
+
   cpchk /opt/wlan/mfg/bridge_init.conf /usr/local/mfg/bridge_init.conf
   cpchk /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/timesyncd.conf
   cpchk /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan0.conf /etc/wpa_supplicant/wpa_supplicant-mlan0.conf
@@ -208,7 +243,7 @@ cpchk() {
   cpchk /opt/wlan/config/systemd/network/20-mlan0.link /etc/systemd/network/20-mlan0.link
   cpchk /opt/wlan/config/systemd/network/21-mlan1.link /etc/systemd/network/21-mlan1.link
   cpchk /opt/wlan/config/systemd/network/22-eth0.link /etc/systemd/network/22-eth0.link
-  cpchk /opt/wlan/config/wifi_init_conf.json /usr/local/etc/wifi_init_conf.json
+  json_merge /opt/wlan/config/wifi_init_conf.json /usr/local/etc/wifi_init_conf.json
 
   if [ -f /opt/wlan/config/sysctl.d/99-wbridge-thermal.conf ]; then
     cp /opt/wlan/config/sysctl.d/99-wbridge-thermal.conf /usr/lib/sysctl.d/99-wbridge-thermal.conf
