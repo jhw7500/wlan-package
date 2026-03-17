@@ -1,0 +1,7 @@
+# WiFi Sniffer Toolkit Configuration
+# Copy to ~/.wifi-sniffer.conf and edit
+#
+# wifi-decrypt.sh 전용 (wifi-capture.sh는 참조하지 않음)
+
+SSID=YourNetworkName
+PSK=YourPassword

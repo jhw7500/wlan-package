@@ -1,0 +1,22 @@
+{
+    "frame_types": {
+        "management": true,
+        "control": true,
+        "data": true
+    },
+    "management_subtypes": {
+        "exclude": ["beacon"]
+    },
+    "protocols": {
+        "mode": "all",
+        "list": ["ARP", "EAPOL", "ICMP", "ICMPv6", "TCP", "UDP"]
+    },
+    "mac": {
+        "mode": "all",
+        "list": []
+    },
+    "ip": {
+        "mode": "all",
+        "list": []
+    }
+}
