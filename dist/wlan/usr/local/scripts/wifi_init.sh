@@ -1,9 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+# shellcheck source=./wifi_init_config_lib.sh
+. "$SCRIPT_DIR/wifi_init_config_lib.sh"
+
 tag=$(basename "$0")
-KERNEL_VERSION=$(uname -r)
-JSON_FILE="/usr/local/etc/config.json"
+JSON_FILE="${JSON_FILE:-/usr/local/etc/config.json}"
 FW_NAME="cts/pcieuart9098_combo_v1.bin"
 MOD_PARA="cts/wifi_mod_para.conf"
 CAL_DATA_CFG="cts/WlanCalData_ext_RD.conf"
@@ -11,7 +14,7 @@ TXPWRLIMIT_PATH="/lib/firmware/cts/txpwrlimit_cfg_9098.conf"
 MFG_MODE=0
 DEV_CAP_MASK=""
 
-WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
+WIFI_INIT_CONF_JSON="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
 
 # Load JSON config
 if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
@@ -26,6 +29,11 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
     MAC_MODE=$(jq -r '.global.MAC_MODE // "default"' "$WIFI_INIT_CONF_JSON")
 fi
 
+MLAN0_ENABLED=$(wifi_init_get_iface_enabled "mlan0" "true")
+MLAN1_ENABLED=$(wifi_init_get_iface_enabled "mlan1" "true")
+MLAN0_FREQ=$(wifi_init_get_iface_frequency "mlan0" "auto")
+MLAN1_FREQ=$(wifi_init_get_iface_frequency "mlan1" "auto")
+
 PRIMARY_IFACE="${PRIMARY_IFACE:-mlan0}"
 if [ "$PRIMARY_IFACE" != "mlan0" ] && [ "$PRIMARY_IFACE" != "mlan1" ]; then
     logger -p local0.err "[$tag:$LINENO] PRIMARY_IFACE invalid: $PRIMARY_IFACE, fallback to mlan0"
@@ -38,6 +46,8 @@ if [ "$MAC_MODE" != "default" ] && [ "$MAC_MODE" != "dynamic" ] && [ "$MAC_MODE"
     MAC_MODE="default"
 fi
 logger -p local0.info "[$tag:$LINENO] PRIMARY_IFACE=$PRIMARY_IFACE MAC_MODE=$MAC_MODE"
+logger -p local0.info "[$tag:$LINENO] mlan0 enabled=$MLAN0_ENABLED freq=$MLAN0_FREQ"
+logger -p local0.info "[$tag:$LINENO] mlan1 enabled=$MLAN1_ENABLED freq=$MLAN1_FREQ"
 
 if [ "${CAL_DATA_CFG:-}" = "none" ]; then
     CAL_DATA_CFG=""
@@ -104,109 +114,114 @@ try_insmod() {
     return $ret
 }
 
-if ip link show mlan0 &>/dev/null; then
-    ip link set mlan0 down
-fi
-if ip link show mlan1 &>/dev/null; then
-    ip link set mlan1 down
-fi
-cmd=$(lsmod |grep moal || true)
-if [ -n "$cmd" ]; then
-    rmmod moal
-fi
-cmd=$(lsmod |grep mlan || true)
-if [ -n "$cmd" ]; then
-    rmmod mlan
-fi
+iface_enabled_value() {
+    local iface="$1"
 
-# --- MAC 주소 결정 ---
-# MAC_MODE: default  = base만 사용
-#           dynamic  = 동적 → base
-#           static   = target → base
+    case "$iface" in
+        mlan0)
+            printf '%s\n' "$MLAN0_ENABLED"
+            ;;
+        mlan1)
+            printf '%s\n' "$MLAN1_ENABLED"
+            ;;
+        *)
+            printf 'true\n'
+            ;;
+    esac
+}
 
-MAC_REGEX='^([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$'
+apply_iface_txpwrlimit() {
+    local iface="$1"
+    local enabled="$2"
 
-# 런타임 파일(예: /tmp/eth0_client_mac)에서 MAC 읽기
-try_read_mac() {
-    local label=$1
-    local file=$2
-    local iface=$3
-
-    if [ ! -f "$file" ]; then
-        return 1
-    fi
-
-    local val
-    val=$(cat "$file")
-    if [[ "$val" =~ $MAC_REGEX ]]; then
-        logger -p local0.info "[$tag:$LINENO] [$iface] $label mac: $val"
-        echo "$val"
+    if [ "$enabled" != "true" ]; then
+        logger -p local0.info "[$tag:$LINENO] [$iface] disabled; skip txpwrlimit"
         return 0
-    else
-        logger -p local0.warn "[$tag:$LINENO] [$iface] invalid $label mac: $val"
-        return 1
     fi
-}
 
-# wifi_init_conf.json에서 MAC 읽기 (.mac.<iface>.<key>)
-read_mac_from_json() {
-    local label=$1
-    local iface=$2
-    local key=$3
-
-    [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1 || return 1
-
-    local val
-    val=$(jq -r ".mac.${iface}.${key} // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-    [ -z "$val" ] && return 1
-
-    if [[ "$val" =~ $MAC_REGEX ]]; then
-        logger -p local0.info "[$tag:$LINENO] [$iface] $label mac (json): $val"
-        echo "$val"
+    if [ -z "${TXPWRLIMIT_PATH:-}" ]; then
+        logger -p local0.warn "[$tag:$LINENO] [$iface] TXPWRLIMIT_PATH empty; skip txpwrlimit hostcmd"
         return 0
+    fi
+
+    logger -p local0.info "[$tag:$LINENO] [$iface] TXPWRLIMIT_PATH : $TXPWRLIMIT_PATH"
+    mlanutl "$iface" hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_2g_cfg_set > /dev/null 2>&1
+    mlanutl "$iface" hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_5g_cfg_set_sub0 > /dev/null 2>&1
+    mlanutl "$iface" hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_5g_cfg_set_sub1 > /dev/null 2>&1
+    mlanutl "$iface" hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_5g_cfg_set_sub2 > /dev/null 2>&1
+    mlanutl "$iface" hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_5g_cfg_set_sub3 > /dev/null 2>&1
+}
+
+apply_iface_radio_defaults() {
+    local iface="$1"
+    local enabled="$2"
+
+    if [ "$enabled" != "true" ]; then
+        logger -p local0.info "[$tag:$LINENO] [$iface] disabled; skip radio defaults"
+        return 0
+    fi
+
+    sleep 0.2
+    logger -p local0.info "[$tag:$LINENO] [$iface] macctrl 0x00010e13"
+    mlanutl "$iface" macctrl 0x00010e13 > /dev/null 2>&1
+
+    sleep 0.2
+    logger -p local0.info "[$tag:$LINENO] [$iface] httxcfg 0x00000063"
+    mlanutl "$iface" httxcfg 0x00000063 > /dev/null 2>&1
+
+    sleep 0.2
+    logger -p local0.info "[$tag:$LINENO] [$iface] htcapinfo 0x05c20000"
+    mlanutl "$iface" htcapinfo 0x05c20000 > /dev/null 2>&1
+
+    sleep 0.2
+    logger -p local0.info "[$tag:$LINENO] [$iface] reassoctrl enable"
+    mlanutl "$iface" reassoctrl 1 > /dev/null 2>&1
+}
+
+apply_iface_bandcfg() {
+    local iface="$1"
+    local enabled="$2"
+    local freq="$3"
+    local freq_lc
+    local bandcfg_5g
+    local bandcfg_24g
+    local bandcfg_auto
+
+    if [ "$enabled" != "true" ]; then
+        logger -p local0.info "[$tag:$LINENO] [$iface] disabled; skip bandcfg"
+        return 0
+    fi
+
+    freq_lc=$(printf '%s' "$freq" | tr '[:upper:]' '[:lower:]')
+    case "$iface" in
+        mlan0)
+            bandcfg_5g="0x254"
+            bandcfg_24g="0x10b"
+            bandcfg_auto="0x35f"
+            ;;
+        mlan1)
+            bandcfg_5g="0x54"
+            bandcfg_24g="0x0b"
+            bandcfg_auto="0x5f"
+            ;;
+        *)
+            logger -p local0.err "[$tag:$LINENO] [$iface] unsupported iface for bandcfg"
+            return 1
+            ;;
+    esac
+
+    if [ "$freq_lc" = "5ghz" ]; then
+        logger -p local0.info "[$tag:$LINENO] [$iface] freq 5GHz"
+        mlanutl "$iface" bandcfg "$bandcfg_5g"
+    elif [ "$freq_lc" = "2.4ghz" ]; then
+        logger -p local0.info "[$tag:$LINENO] [$iface] freq 2.4GHz"
+        mlanutl "$iface" bandcfg "$bandcfg_24g"
+    elif [ "$freq_lc" = "auto" ]; then
+        logger -p local0.info "[$tag:$LINENO] [$iface] freq Auto"
+        mlanutl "$iface" bandcfg "$bandcfg_auto"
     else
-        logger -p local0.warn "[$tag:$LINENO] [$iface] invalid $label mac in json: $val"
-        return 1
+        logger -p local0.err "[$tag:$LINENO] [$iface] freq not available : $freq"
     fi
-}
-
-try_dynamic_mac() {
-    local iface=$1
-    local mac
-    mac=$(try_read_mac "dynamic" /tmp/eth0_client_mac "$iface") || return 1
-    echo "$mac"
-}
-
-resolve_mac() {
-    local iface=$1
-    local mode=$2
-    local mac=""
-    local source="none"
-
-    logger -p local0.info "[$tag:$LINENO] [$iface] MAC_MODE=$mode"
-
-    # 동적 MAC (dynamic)
-    if [ -z "$mac" ] && [ "$mode" = "dynamic" ]; then
-        mac=$(try_dynamic_mac "$iface") || mac=""
-        [ -n "$mac" ] && source="dynamic"
-    fi
-
-    # target MAC (static) → JSON
-    if [ -z "$mac" ] && [ "$mode" = "static" ]; then
-        mac=$(read_mac_from_json "target" "$iface" "target") || mac=""
-        [ -n "$mac" ] && source="target"
-    fi
-
-    # base MAC (공통 최종 fallback) → JSON
-    if [ -z "$mac" ]; then
-        mac=$(read_mac_from_json "base" "$iface" "base") || mac=""
-        [ -n "$mac" ] && source="base"
-    fi
-
-    logger -p local0.info "[$tag:$LINENO] [$iface] mac_source=$source"
-
-    # 결과: "mac source" 형태로 반환
-    echo "$mac $source"
 }
 
 # PRIMARY: MAC_MODE에 따라 resolve
@@ -218,25 +233,43 @@ else
 fi
 
 # 동적 MAC이 필요한 경우 wired_mac_ip_get.py 먼저 실행
-if [ "$MAC_MODE" = "dynamic" ]; then
+if [ "$MAC_MODE" = "dynamic" ] && wifi_init_iface_is_enabled "$PRIMARY_IFACE" "true"; then
     logger -p local0.info "[$tag:$LINENO] [$PRIMARY_IFACE] running wired_mac_ip_get.py"
     python3 /usr/local/logger/wired_mac_ip_get.py || true
 fi
 
 # resolve_mac 결과: "mac source"
-PRIMARY_RESULT=$(resolve_mac "$PRIMARY_IFACE" "$MAC_MODE")
-PRIMARY_MAC="${PRIMARY_RESULT% *}"
-PRIMARY_MAC_SOURCE="${PRIMARY_RESULT##* }"
-/usr/local/scripts/update_mac.sh "$PRIMARY_IFACE" "$PRIMARY_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh $PRIMARY_IFACE failed"
+PRIMARY_ENABLED=$(iface_enabled_value "$PRIMARY_IFACE")
+if [ "$PRIMARY_ENABLED" = "true" ]; then
+    PRIMARY_RESULT=$(resolve_mac "$PRIMARY_IFACE" "$MAC_MODE")
+    PRIMARY_MAC="${PRIMARY_RESULT% *}"
+    PRIMARY_MAC_SOURCE="${PRIMARY_RESULT##* }"
+    /usr/local/scripts/update_mac.sh "$PRIMARY_IFACE" "$PRIMARY_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh $PRIMARY_IFACE failed"
+else
+    PRIMARY_MAC_SOURCE="disabled"
+    logger -p local0.info "[$tag:$LINENO] [$PRIMARY_IFACE] disabled; skip primary MAC update"
+fi
 
-SECONDARY_MAC=$(read_mac_from_json "base" "$SECONDARY_IFACE" "base") || SECONDARY_MAC=""
-SECONDARY_MAC_SOURCE="base"
-/usr/local/scripts/update_mac.sh "$SECONDARY_IFACE" "$SECONDARY_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh $SECONDARY_IFACE failed"
+SECONDARY_ENABLED=$(iface_enabled_value "$SECONDARY_IFACE")
+if [ "$SECONDARY_ENABLED" = "true" ]; then
+    SECONDARY_MAC=$(read_mac_from_json "base" "$SECONDARY_IFACE" "base") || SECONDARY_MAC=""
+    SECONDARY_MAC_SOURCE="base"
+    /usr/local/scripts/update_mac.sh "$SECONDARY_IFACE" "$SECONDARY_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh $SECONDARY_IFACE failed"
+else
+    SECONDARY_MAC_SOURCE="disabled"
+    logger -p local0.info "[$tag:$LINENO] [$SECONDARY_IFACE] disabled; skip secondary MAC update"
+fi
 
 # --- wifi_bridge 제어: base MAC 사용 시 bridge 비활성 ---
 control_bridge_service() {
     local iface=$1
     local mac_source=$2
+
+    if ! wifi_init_iface_is_enabled "$iface" "true"; then
+        logger -p local0.info "[$tag:$LINENO] [$iface] disabled → disable wifi_bridge@$iface"
+        systemctl disable "wifi_bridge@${iface}.service" 2>/dev/null || true
+        return 0
+    fi
 
     if [ "$mac_source" = "base" ] || [ "$mac_source" = "none" ]; then
         logger -p local0.info "[$tag:$LINENO] [$iface] mac_source=$mac_source → disable wifi_bridge@$iface"
@@ -281,89 +314,12 @@ if [ "$MFG_MODE" == "1" ]; then
     exit 1
 fi
 
-sleep 0.5
-if [ -n "${TXPWRLIMIT_PATH:-}" ]; then
-    logger -p local0.info "[$tag:$LINENO] [mlan0] TXPWRLIMIT_PATH : $TXPWRLIMIT_PATH"
-    mlanutl mlan0 hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_2g_cfg_set > /dev/null 2>&1
-    mlanutl mlan0 hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_5g_cfg_set_sub0 > /dev/null 2>&1
-    mlanutl mlan0 hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_5g_cfg_set_sub1 > /dev/null 2>&1
-    mlanutl mlan0 hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_5g_cfg_set_sub2 > /dev/null 2>&1
-    mlanutl mlan0 hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_5g_cfg_set_sub3 > /dev/null 2>&1
-
-    sleep 0.2
-    logger -p local0.info "[$tag:$LINENO] [mlan1] txpwrlimit set"
-    mlanutl mlan1 hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_2g_cfg_set > /dev/null 2>&1
-    mlanutl mlan1 hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_5g_cfg_set_sub0 > /dev/null 2>&1
-    mlanutl mlan1 hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_5g_cfg_set_sub1 > /dev/null 2>&1
-    mlanutl mlan1 hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_5g_cfg_set_sub2 > /dev/null 2>&1
-    mlanutl mlan1 hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_5g_cfg_set_sub3 > /dev/null 2>&1
-else
-    logger -p local0.warn "[$tag:$LINENO] TXPWRLIMIT_PATH empty; skip txpwrlimit hostcmd"
-fi
-
-sleep 0.2
-logger -p local0.info "[$tag:$LINENO] [mlan0] macctrl 0x00010e13"
-#MAC Control: 0x00010213
-mlanutl mlan0 macctrl 0x00010e13 > /dev/null 2>&1
-logger -p local0.info "[$tag:$LINENO] [mlan1] macctrl 0x00010e13"
-mlanutl mlan1 macctrl 0x00010e13 > /dev/null 2>&1
-
-sleep 0.2
-logger -p local0.info "[$tag:$LINENO] [mlan0] httxcfg 0x00000063"
-#    BG band:  0x00000061
-#     A band:  0x00000063
-mlanutl mlan0 httxcfg 0x00000063 > /dev/null 2>&1
-logger -p local0.info "[$tag:$LINENO] [mlan1] httxcfg 0x00000063"
-mlanutl mlan1 httxcfg 0x00000063 > /dev/null 2>&1
-
-sleep 0.2
-logger -p local0.info "[$tag:$LINENO] [mlan0] htcapinfo 0x05c20000"
-#    BG band:  0x04c00000
-#     A band:  0x05c20000
-mlanutl mlan0 htcapinfo 0x05c20000 > /dev/null 2>&1
-logger -p local0.info "[$tag:$LINENO] [mlan1] htcapinfo 0x05c20000"
-mlanutl mlan1 htcapinfo 0x05c20000 > /dev/null 2>&1
-
-sleep 0.2
-logger -p local0.info "[$tag:$LINENO] [mlan0] reassoctrl enable"
-#Re-association is Disabled
-mlanutl mlan0 reassoctrl 1 > /dev/null 2>&1
-logger -p local0.info "[$tag:$LINENO] [mlan1] reassoctrl enable"
-mlanutl mlan1 reassoctrl 1 > /dev/null 2>&1
-
-if command -v jq >/dev/null 2>&1; then
-    FREQ=$(jq -r '.mlan0.Frequency' "$JSON_FILE")
-    freq_lc=$(printf '%s' "$FREQ" | tr '[:upper:]' '[:lower:]')
-    if [ "$freq_lc" = "5ghz" ]; then
-        logger -p local0.info "[$tag:$LINENO] [mlan0] freq 5GHz : mlanutl mlan0 bandcfg 0x254"
-        mlanutl mlan0 bandcfg 0x254
-    elif [ "$freq_lc" = "2.4ghz" ]; then
-        logger -p local0.info "[$tag:$LINENO] [mlan0] freq 2.4GHz : mlanutl mlan0 bandcfg 0x10b"
-        mlanutl mlan0 bandcfg 0x10b
-    elif [ "$freq_lc" = "auto" ]; then
-        logger -p local0.info "[$tag:$LINENO] [mlan0] freq Auto : mlanutl mlan0 bandcfg 0x35f"
-        mlanutl mlan0 bandcfg 0x35f
-    else
-        logger -p local0.err "[$tag:$LINENO] [mlan0] freq not available : $FREQ"
-    fi
-
-    FREQ=$(jq -r '.mlan1.Frequency' "$JSON_FILE")
-    freq_lc=$(printf '%s' "$FREQ" | tr '[:upper:]' '[:lower:]')
-    if [ "$freq_lc" = "5ghz" ]; then
-        logger -p local0.info "[$tag:$LINENO] [mlan1] freq 5GHz : mlanutl mlan1 bandcfg 0x54"
-        mlanutl mlan1 bandcfg 0x54
-    elif [ "$freq_lc" = "2.4ghz" ]; then
-        logger -p local0.info "[$tag:$LINENO] [mlan1] freq 2.4GHz : mlanutl mlan1 bandcfg 0x0b"
-        mlanutl mlan1 bandcfg 0x0b
-    elif [ "$freq_lc" = "auto" ]; then
-        logger -p local0.info "[$tag:$LINENO] [mlan1] freq Auto : mlanutl mlan1 bandcfg 0x5f"
-        mlanutl mlan1 bandcfg 0x5f
-    else
-        logger -p local0.err "[$tag:$LINENO] [mlan1] freq not available : $FREQ"
-    fi
-else
-    logger -p local0.err "[$tag:$LINENO] jq not found; skip bandcfg"
-fi
+apply_iface_txpwrlimit "mlan0" "$MLAN0_ENABLED"
+apply_iface_txpwrlimit "mlan1" "$MLAN1_ENABLED"
+apply_iface_radio_defaults "mlan0" "$MLAN0_ENABLED"
+apply_iface_radio_defaults "mlan1" "$MLAN1_ENABLED"
+apply_iface_bandcfg "mlan0" "$MLAN0_ENABLED" "$MLAN0_FREQ"
+apply_iface_bandcfg "mlan1" "$MLAN1_ENABLED" "$MLAN1_FREQ"
 
 if command -v systemctl >/dev/null 2>&1; then
     systemctl restart systemd-networkd

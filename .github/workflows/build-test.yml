@@ -121,20 +121,24 @@ jobs:
           fi
 
           dpkg-deb -I release/wlan.deb
-          dpkg-deb -c release/wlan.deb | grep -E "(dumb|config.json|postinst|postrm|prerm)"
+          dpkg-deb -c release/wlan.deb | grep -E "(dumb|wifi_init_conf.json|postinst|postrm|prerm)"
           dpkg-deb -c release/wlan.deb | grep "usr/local/wlan-bridge/dumb/dumb" || exit 1
           dpkg-deb -c release/wlan.deb | grep "usr/local/wlan-bridge/dumb/dumb-tpacket" || exit 1
-          dpkg-deb -c release/wlan.deb | grep "usr/local/etc/config.json" || exit 1
+          dpkg-deb -c release/wlan.deb | grep "usr/local/etc/wifi_init_conf.json" || exit 1
+          if dpkg-deb -c release/wlan.deb | grep -q "usr/local/etc/config.json"; then
+            echo "Error: config.json should not be packaged by wlan-package"
+            exit 1
+          fi
 
-      - name: Validate config.json
+      - name: Validate wifi_init_conf.json
         if: steps.submodules.outputs.submodules == 'true' && runner.arch == 'ARM64'
         run: |
           dpkg-deb -x release/wlan.deb /tmp/wlan-extract
-          if [ -f /tmp/wlan-extract/usr/local/etc/config.json ]; then
-            jq empty /tmp/wlan-extract/usr/local/etc/config.json
-            echo "config.json is valid JSON"
+          if [ -f /tmp/wlan-extract/usr/local/etc/wifi_init_conf.json ]; then
+            jq empty /tmp/wlan-extract/usr/local/etc/wifi_init_conf.json
+            echo "wifi_init_conf.json is valid JSON"
           else
-            echo "Error: config.json not found in package"
+            echo "Error: wifi_init_conf.json not found in package"
             exit 1
           fi
 
