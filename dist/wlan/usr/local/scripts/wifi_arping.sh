@@ -76,27 +76,27 @@ is_plausible_host_ip() {
 }
 
 if [ "$IFACE" = "eth0" ]; then
-    STATE=$(jq -r '.eth_stats.phy.link' "/var/log/cantops/json/eth0/link.json")
-    if [[ "$STATE" != "up" ]]; then
-        logger -p $F.info "[$tag:$LINENO] [$IFACE] not ready(link down)"
-        exit 1
-    fi
+    while true; do
+        STATE=$(jq -r '.eth_stats.phy.link' "/var/log/cantops/json/eth0/link.json" 2>/dev/null || echo "down")
+        if [[ "$STATE" == "up" ]]; then
+            break
+        fi
+        logger -p $F.info "[$tag:$LINENO] [$IFACE] not ready(link down), waiting..."
+        sleep "$LOOPDELAY"
+    done
     TARGET_IP=$(get_target_ip)
-elif [ "$IFACE" = "mlan0" ]; then
-    if ! is_wpa_active; then
-        exit 1
-    elif ! is_connected; then
-        logger -p $F.info "[$tag:$LINENO] [$IFACE] not ready(not connected)"
-        exit 1
-    fi
-    TARGET_IP=$(get_target_ip)
-elif [ "$IFACE" = "mlan1" ]; then
-    if ! is_wpa_active; then
-        exit 1
-    elif ! is_connected; then
-        logger -p $F.info "[$tag:$LINENO] [$IFACE] not ready(not connected)"
-        exit 1
-    fi
+elif [ "$IFACE" = "mlan0" ] || [ "$IFACE" = "mlan1" ]; then
+    wait_logged=0
+    while true; do
+        if is_wpa_active && is_connected; then
+            break
+        fi
+        if [ "$wait_logged" -eq 0 ]; then
+            logger -p $F.info "[$tag:$LINENO] [$IFACE] waiting for wpa_supplicant and connection..."
+            wait_logged=1
+        fi
+        sleep "$LOOPDELAY"
+    done
     TARGET_IP=$(get_target_ip)
 else
     logger -p $F.info "[$tag:$LINENO] [$IFACE] interface is wrong : $IFACE"
