@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 LIB="$SCRIPT_DIR/wifi_init_config_lib.sh"
+WIFI_INIT_SH="$SCRIPT_DIR/wifi_init.sh"
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -26,6 +27,18 @@ expect_equal() {
         log_pass "$desc"
     else
         log_fail "$desc (expected=$expected got=$got)"
+    fi
+}
+
+expect_file_contains() {
+    local desc="$1"
+    local file="$2"
+    local pattern="$3"
+
+    if grep -q "$pattern" "$file"; then
+        log_pass "$desc"
+    else
+        log_fail "$desc (missing pattern: $pattern)"
     fi
 }
 
@@ -80,6 +93,9 @@ if [ ! -f "$LIB" ]; then
     echo "missing library: $LIB" >&2
     exit 1
 fi
+
+expect_file_contains "wifi_init.sh defines read_mac_from_json" "$WIFI_INIT_SH" '^read_mac_from_json() {'
+expect_file_contains "wifi_init.sh defines resolve_mac" "$WIFI_INIT_SH" '^resolve_mac() {'
 
 run_case \
     "base values" \
