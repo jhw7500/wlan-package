@@ -114,6 +114,85 @@ try_insmod() {
     return $ret
 }
 
+MAC_REGEX='^([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$'
+
+try_read_mac() {
+    local label=$1
+    local file=$2
+    local iface=$3
+
+    if [ ! -f "$file" ]; then
+        return 1
+    fi
+
+    local val
+    val=$(cat "$file")
+    if [[ "$val" =~ $MAC_REGEX ]]; then
+        logger -p local0.info "[$tag:$LINENO] [$iface] $label mac: $val"
+        echo "$val"
+        return 0
+    fi
+
+    logger -p local0.warn "[$tag:$LINENO] [$iface] invalid $label mac: $val"
+    return 1
+}
+
+read_mac_from_json() {
+    local label=$1
+    local iface=$2
+    local key=$3
+
+    [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1 || return 1
+
+    local val
+    val=$(jq -r ".mac.${iface}.${key} // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    [ -z "$val" ] && return 1
+
+    if [[ "$val" =~ $MAC_REGEX ]]; then
+        logger -p local0.info "[$tag:$LINENO] [$iface] $label mac (json): $val"
+        echo "$val"
+        return 0
+    fi
+
+    logger -p local0.warn "[$tag:$LINENO] [$iface] invalid $label mac in json: $val"
+    return 1
+}
+
+try_dynamic_mac() {
+    local iface=$1
+    local mac
+
+    mac=$(try_read_mac "dynamic" /tmp/eth0_client_mac "$iface") || return 1
+    echo "$mac"
+}
+
+resolve_mac() {
+    local iface=$1
+    local mode=$2
+    local mac=""
+    local source="none"
+
+    logger -p local0.info "[$tag:$LINENO] [$iface] MAC_MODE=$mode"
+
+    if [ -z "$mac" ] && [ "$mode" = "dynamic" ]; then
+        mac=$(try_dynamic_mac "$iface") || mac=""
+        [ -n "$mac" ] && source="dynamic"
+    fi
+
+    if [ -z "$mac" ] && [ "$mode" = "static" ]; then
+        mac=$(read_mac_from_json "target" "$iface" "target") || mac=""
+        [ -n "$mac" ] && source="target"
+    fi
+
+    if [ -z "$mac" ]; then
+        mac=$(read_mac_from_json "base" "$iface" "base") || mac=""
+        [ -n "$mac" ] && source="base"
+    fi
+
+    logger -p local0.info "[$tag:$LINENO] [$iface] mac_source=$source"
+    echo "$mac $source"
+}
+
 iface_enabled_value() {
     local iface="$1"
 
@@ -266,24 +345,22 @@ control_bridge_service() {
     local mac_source=$2
 
     if ! wifi_init_iface_is_enabled "$iface" "true"; then
-        logger -p local0.info "[$tag:$LINENO] [$iface] disabled → disable wifi_bridge@$iface"
+        logger -p local0.info "[$tag:$LINENO] [$iface] disabled → stop+disable wifi_bridge@$iface"
+        systemctl stop "wifi_bridge@${iface}.service" 2>/dev/null || true
         systemctl disable "wifi_bridge@${iface}.service" 2>/dev/null || true
         return 0
     fi
 
     if [ "$mac_source" = "base" ] || [ "$mac_source" = "none" ]; then
-        logger -p local0.info "[$tag:$LINENO] [$iface] mac_source=$mac_source → disable wifi_bridge@$iface"
+        logger -p local0.info "[$tag:$LINENO] [$iface] mac_source=$mac_source → stop+disable wifi_bridge@$iface"
+        systemctl stop "wifi_bridge@${iface}.service" 2>/dev/null || true
         systemctl disable "wifi_bridge@${iface}.service" 2>/dev/null || true
     else
-        logger -p local0.info "[$tag:$LINENO] [$iface] mac_source=$mac_source → enable wifi_bridge@$iface"
+        logger -p local0.info "[$tag:$LINENO] [$iface] mac_source=$mac_source → enable+start wifi_bridge@$iface"
         systemctl enable "wifi_bridge@${iface}.service" 2>/dev/null || true
+        systemctl start "wifi_bridge@${iface}.service" 2>/dev/null || true
     fi
 }
-
-if command -v systemctl >/dev/null 2>&1; then
-    control_bridge_service "$PRIMARY_IFACE" "$PRIMARY_MAC_SOURCE"
-    control_bridge_service "$SECONDARY_IFACE" "$SECONDARY_MAC_SOURCE"
-fi
 
 # --- eth0: base ---
 ETH0_MAC=$(read_mac_from_json "base" "eth0" "base") || ETH0_MAC=""
@@ -321,6 +398,20 @@ apply_iface_radio_defaults "mlan1" "$MLAN1_ENABLED"
 apply_iface_bandcfg "mlan0" "$MLAN0_ENABLED" "$MLAN0_FREQ"
 apply_iface_bandcfg "mlan1" "$MLAN1_ENABLED" "$MLAN1_FREQ"
 
+# .network 파일의 Address=에 서브넷이 없으면 /24 보정
+for nf in /etc/systemd/network/*.network; do
+    [ -f "$nf" ] || continue
+    if grep -qE '^Address=[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' "$nf" 2>/dev/null; then
+        sed -i 's|^\(Address=[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+\)$|\1/24|' "$nf"
+        logger -p local0.warn "[$tag:$LINENO] Added missing /24 subnet to Address in $nf"
+    fi
+done
+
 if command -v systemctl >/dev/null 2>&1; then
     systemctl restart systemd-networkd
+
+    # wifi_bridge 제어는 insmod + networkd restart 이후에 실행
+    # (mlan0/mlan1 디바이스가 존재해야 BindsTo 조건 충족)
+    control_bridge_service "$PRIMARY_IFACE" "$PRIMARY_MAC_SOURCE"
+    control_bridge_service "$SECONDARY_IFACE" "$SECONDARY_MAC_SOURCE"
 fi
