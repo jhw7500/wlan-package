@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic mgmt_log flush
+
+[Timer]
+OnBootSec=60s
+OnUnitActiveSec=10s
+AccuracySec=2s
+Unit=mgmt-log-flush.service
+
+[Install]
+WantedBy=timers.target

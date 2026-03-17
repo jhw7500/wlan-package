@@ -8,6 +8,9 @@ Type=oneshot
 EnvironmentFile=-/etc/default/wbridge
 ExecStart=/usr/local/scripts/wbridge_thermal_state_update.sh
 User=root
+StandardOutput=null
+StandardError=journal
+LogLevelMax=notice
 
 [Install]
 WantedBy=multi-user.target
