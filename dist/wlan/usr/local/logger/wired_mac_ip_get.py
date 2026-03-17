@@ -5,14 +5,23 @@ import sys
 import os
 import logging
 import ipaddress
+import json
 from scapy.all import sniff, ARP, Ether, IP, srp, sendp, get_if_hwaddr, conf
 from scapy.layers.dhcp import DHCP, BOOTP
 from sUTILS import Logger, _EXTRA_
 
 ETH_IFACE = "eth0"          # 유선 1:1
 IFACE = "mlan0"             # 무선 (게이트웨이 사용)
-# 환경 상 eth0_client가 사실상 고정(192.168.0.10)이라고 했으니, 먼저 이 IP에 유니캐스트 ARP로 확인
-PRIMARY_CANDIDATE_IP = "192.168.0.10"   # 필요시 None 로 두면 생략
+
+# ETH_CLIENT_IP: wifi_init_conf.json의 global.ETH_CLIENT_IP에서 읽음
+# 설정이 없거나 빈 문자열이면 빠른 경로(quick_arp_probe) 건너뜀
+ETH_CLIENT_IP = None
+try:
+    with open("/usr/local/etc/wifi_init_conf.json") as f:
+        _cfg = json.load(f)
+    ETH_CLIENT_IP = _cfg.get("global", {}).get("ETH_CLIENT_IP") or None
+except Exception:
+    pass
 
 # ===================== 공통 유틸 =====================
 
@@ -25,37 +34,42 @@ def get_own_mac(interface):
 
 def wait_for_eth_link(timeout=10):
     """
-    요청대로 eth0을 먼저 down/up 리셋하고, carrier/operstate 둘 다 확인.
+    eth0 링크 확인. 이미 up이면 즉시 리턴.
+    down 상태일 때만 리셋 후 대기.
     """
+    carrier_path   = f"/sys/class/net/{ETH_IFACE}/carrier"
+    operstate_path = f"/sys/class/net/{ETH_IFACE}/operstate"
+
+    # 이미 링크가 있는지 확인
+    try:
+        with open(carrier_path, "r") as f:
+            carrier = f.read().strip()
+        with open(operstate_path, "r") as f:
+            oper = f.read().strip()
+        if carrier == "1" and oper == "up":
+            print("[+] Ethernet link already up.")
+            return True
+    except Exception:
+        pass
+
+    # 링크 없으면 리셋
     print(f"[+] Reset {ETH_IFACE} link (down/up) and wait for link up...")
-    # down
     subprocess.run(["ip", "link", "set", ETH_IFACE, "down"], check=False)
     time.sleep(0.2)
-    # up
     subprocess.run(["ip", "link", "set", ETH_IFACE, "up"], check=False)
 
-    carrier_path   = f"/sys/class/net/{ETH_IFACE}/carrier"     # '1'이면 링크
-    operstate_path = f"/sys/class/net/{ETH_IFACE}/operstate"   # 'up'이면 활성
     deadline = time.time() + timeout
-
     while time.time() < deadline:
-        carrier = None
-        oper    = None
         try:
             with open(carrier_path, "r") as f:
                 carrier = f.read().strip()
-        except Exception:
-            pass
-        try:
             with open(operstate_path, "r") as f:
                 oper = f.read().strip()
+            if carrier == "1" and oper == "up":
+                print("[+] Ethernet link is up.")
+                return True
         except Exception:
             pass
-
-        if carrier == "1" and oper == "up":
-            print("[+] Ethernet link is up.")
-            return True
-
         time.sleep(0.3)
 
     print("[-] Timeout waiting for Ethernet link.")
@@ -94,6 +108,31 @@ def raw_l2_broadcast_probe(iface):
     # dummy EtherType + 최소 페이로드로 상대를 깨움
     pkt = Ether(dst="ff:ff:ff:ff:ff:ff", src=src_mac, type=0x0800) / (b'\x00' * 46)
     sendp(pkt, iface=iface, count=3, verbose=0)
+
+def quick_arp_probe(iface, target_ip, own_mac, timeout=1):
+    """
+    알려진 고정 IP에 ARP 요청 → MAC+IP 동시 확보 (~1초).
+    옵션 기능: ETH_CLIENT_IP가 None이면 호출하지 않음.
+    """
+    print(f"[*] Quick ARP probe to {target_ip}...")
+    src_mac = get_if_hwaddr(iface)
+    pkt = Ether(dst="ff:ff:ff:ff:ff:ff", src=src_mac) / ARP(pdst=target_ip)
+    ans, _ = srp(pkt, iface=iface, timeout=timeout, verbose=0)
+    for _, r in ans:
+        if r.haslayer(ARP):
+            a = r[ARP]
+            mac = a.hwsrc.lower()
+            if mac != own_mac:
+                return mac, a.psrc
+    return None, None
+
+def active_mac_sniff(iface, own_mac, timeout=3):
+    """
+    브로드캐스트 프로브 → 짧은 패시브 스니핑 (1회 통합).
+    기존 패시브 2회(10초) 대비 3초로 단축.
+    """
+    raw_l2_broadcast_probe(iface)
+    return passive_mac_sniff(own_mac, timeout=timeout)
 
 # ===================== 2) 타깃 MAC의 IP만 정확히 추출 =====================
 
@@ -232,11 +271,20 @@ def main():
     own_mac = get_own_mac(ETH_IFACE)
     save_data(f"/tmp/{ETH_IFACE}_mac", own_mac)
 
-    # 1) MAC 먼저 확보 (원래 흐름)
-    mac = passive_mac_sniff(own_mac, timeout=5)
+    mac = None
+    ip = None
+
+    # ── 1단계: 빠른 경로 (옵션, ~1초) ──
+    # ETH_CLIENT_IP가 설정되어 있을 때만 시도
+    if ETH_CLIENT_IP:
+        mac, ip = quick_arp_probe(ETH_IFACE, ETH_CLIENT_IP, own_mac, timeout=1)
+        if mac:
+            print(f"[+] Quick path: MAC={mac}, IP={ip}")
+            logger.message("info", f"[{IFACE}] Quick ARP: MAC={mac} IP={ip}", _EXTRA_())
+
+    # ── 2단계: 능동+패시브 MAC 탐색 (~3초) ──
     if not mac:
-        raw_l2_broadcast_probe(ETH_IFACE)
-        mac = passive_mac_sniff(own_mac, timeout=5)
+        mac = active_mac_sniff(ETH_IFACE, own_mac, timeout=3)
 
     if not mac:
         print("[-] Failed to detect any external MAC address.")
@@ -246,50 +294,30 @@ def main():
     print(f"[+] Wired Client MAC detected: {mac}")
     logger.message("info", f"[{IFACE}] Wired Client MAC: {mac}", _EXTRA_())
 
-    # 2) 해당 MAC만 대상으로 IP 확정
-    ip = passive_ip_for_mac(ETH_IFACE, mac, timeout=6)
+    # MAC 확보 → 즉시 저장 (무선 드라이버 등록에 필요)
+    save_data(f"/tmp/{ETH_IFACE}_client_mac", mac)
 
-    # 3) 패시브 실패 시, 우선적으로 '알려진 후보 IP(192.168.0.10)'에 유니캐스트 ARP
-    if not ip and PRIMARY_CANDIDATE_IP:
-        ip = arp_unicast_probe_for_ip(ETH_IFACE, mac, [PRIMARY_CANDIDATE_IP], timeout=1.5)
-
-    # 4) 그래도 없으면, mlan0 대역(/24 등) 전체를 대상으로 유니캐스트→브로드캐스트 순 시도
+    # ── 3단계: IP 확보 (MAC은 이미 저장됨) ──
     if not ip:
-        net = get_mlan_network()  # 예: '192.168.0.0/24'
-        if net:
-            # 유니캐스트로 /24 한 바퀴: NIC/스택에 따라 응답률이 더 좋은 경우가 있음
-            # 성능상 모두 유니캐스트로 돌리기 부담되면 브로드캐스트만으로도 충분
-            try:
-                network = ipaddress.ip_network(net, strict=False)
-                # 유니캐스트 스윕 (속도/부하 조절 가능)
-                batch = []
-                cnt = 0
-                for host_ip in network.hosts():
-                    batch.append(str(host_ip))
-                    cnt += 1
-                    if cnt >= 64:  # 배치 크기 조절
-                        ip = arp_unicast_probe_for_ip(ETH_IFACE, mac, batch, timeout=1.2)
-                        if ip:
-                            break
-                        batch = []
-                        cnt = 0
-                if not ip and batch:
-                    ip = arp_unicast_probe_for_ip(ETH_IFACE, mac, batch, timeout=1.2)
-            except Exception:
-                pass
+        # 3-1) 패시브 관찰 (타임아웃 축소)
+        ip = passive_ip_for_mac(ETH_IFACE, mac, timeout=3)
 
-            # 브로드캐스트 스윕 (최후 수단)
-            if not ip:
-                ip = arp_broadcast_sweep_for_mac(ETH_IFACE, mac, net, timeout=2)
+    if not ip and ETH_CLIENT_IP:
+        # 3-2) 알려진 후보 IP에 유니캐스트 ARP
+        ip = arp_unicast_probe_for_ip(ETH_IFACE, mac, [ETH_CLIENT_IP], timeout=1)
+
+    if not ip:
+        # 3-3) mlan0 대역 스윕 (최후 수단)
+        net = get_mlan_network()
+        if net:
+            ip = arp_broadcast_sweep_for_mac(ETH_IFACE, mac, net, timeout=2)
 
     # 결과 저장
-    save_data(f"/tmp/{ETH_IFACE}_client_mac", mac)
     save_data(f"/tmp/{ETH_IFACE}_client_ip", ip)
 
     if ip:
         print(f"[+] Wired Client IP resolved: {ip}")
         logger.message("info", f"[{IFACE}] result MAC/IP: {mac} {ip}", _EXTRA_())
-        save_data(f"/tmp/{ETH_IFACE}_client_ip", ip)
     else:
         print("[!] MAC only (no IP yet).")
         logger.message("info", f"[{IFACE}] MAC only saved (no IP)", _EXTRA_())
