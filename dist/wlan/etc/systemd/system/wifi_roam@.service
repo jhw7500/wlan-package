@@ -1,6 +1,7 @@
 [Unit]
 Description=WiFi Roam Service for %i
-After=network.target
+Requires=sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-%i.device
 
 [Service]
 ExecStart=/bin/python3 /usr/local/logger/wifi_roam.py %i

@@ -15,7 +15,7 @@ EnvironmentFile=-/etc/default/wbridge
 EnvironmentFile=-/run/wbridge.thermal.env
 ExecStart=/usr/local/scripts/wifi_bridge.sh %i
 ExecStop=/usr/local/scripts/wifi_bridge_stop.sh %i
-ExecStopPost=/bin/sleep 1
+#ExecStopPost=/bin/sleep 1
 Restart=on-failure
 RestartSec=5s
 
