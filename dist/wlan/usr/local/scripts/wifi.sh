@@ -1,4 +1,8 @@
 #!/bin/bash
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+# shellcheck source=./wifi_init_config_lib.sh
+. "$SCRIPT_DIR/wifi_init_config_lib.sh"
+
 tag=$(basename "$0")
 IFACE=mlan
 NUM=""
@@ -55,7 +59,8 @@ apply_sed_update() {
 }
 # ------------------------------------
 
-WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
+WIFI_INIT_CONF_JSON="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
+JSON_FILE="${JSON_FILE:-/usr/local/etc/config.json}"
 
 # JSON mac 설정 수정 함수 (.mac.<iface>.<key>)
 update_json_mac() {
@@ -183,56 +188,16 @@ show_info() {
         :
     else
         echo "[Active Config Summary]"
-    JSON_FILE="/usr/local/etc/config.json"
-    json_get() {
-        local q="$1" fallback="$2"
-        if [ ! -f "$JSON_FILE" ]; then
-            echo "$fallback"
-            return 0
-        fi
-        if command -v jq >/dev/null 2>&1; then
-            jq -r "$q" "$JSON_FILE" 2>/dev/null || echo "$fallback"
-            return 0
-        fi
-        if command -v python3 >/dev/null 2>&1; then
-            python3 - <<PY 2>/dev/null || echo "$fallback"
-import json
-try:
-    with open("$JSON_FILE", "r", encoding="utf-8") as f:
-        data = json.load(f)
-    # Minimal jq-ish support for the queries we use below
-    q = "$q".strip()
-    if q == ".mlan0.Frequency":
-        print(data.get("mlan0", {}).get("Frequency", "$fallback"))
-    elif q == ".mlan1.Frequency":
-        print(data.get("mlan1", {}).get("Frequency", "$fallback"))
-    elif q == ".mlan0.enabled":
-        print(str(data.get("mlan0", {}).get("enabled", "$fallback")).lower())
-    elif q == ".mlan1.enabled":
-        print(str(data.get("mlan1", {}).get("enabled", "$fallback")).lower())
-    else:
-        print("$fallback")
-except Exception:
-    print("$fallback")
-PY
-            return 0
-        fi
-        echo "$fallback"
-    }
 
-        if [ -f "$JSON_FILE" ]; then
-            if [ "$only_iface" = "all" ] || [ "$only_iface" = "mlan0" ]; then
-                mlan0_freq=$(json_get '.mlan0.Frequency' 'N/A')
-                [ "$mlan0_freq" = "null" ] && mlan0_freq="N/A"
-                echo "  mlan0: Frequency=${mlan0_freq}"
-            fi
-            if [ "$only_iface" = "all" ] || [ "$only_iface" = "mlan1" ]; then
-                mlan1_freq=$(json_get '.mlan1.Frequency' 'N/A')
-                [ "$mlan1_freq" = "null" ] && mlan1_freq="N/A"
-                echo "  mlan1: Frequency=${mlan1_freq}"
-            fi
-        else
-            echo "  Config file not found: $JSON_FILE"
+        if [ "$only_iface" = "all" ] || [ "$only_iface" = "mlan0" ]; then
+            mlan0_enabled=$(wifi_init_get_iface_enabled "mlan0" "true")
+            mlan0_freq=$(wifi_init_get_iface_frequency "mlan0" "auto")
+            echo "  mlan0: enabled=${mlan0_enabled} Frequency=${mlan0_freq}"
+        fi
+        if [ "$only_iface" = "all" ] || [ "$only_iface" = "mlan1" ]; then
+            mlan1_enabled=$(wifi_init_get_iface_enabled "mlan1" "true")
+            mlan1_freq=$(wifi_init_get_iface_frequency "mlan1" "auto")
+            echo "  mlan1: enabled=${mlan1_enabled} Frequency=${mlan1_freq}"
         fi
         echo ""
     fi

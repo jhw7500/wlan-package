@@ -124,6 +124,8 @@
     },
     "mlan0": {
         "_comment": "mlan0 interface configuration",
+        "enabled": true,
+        "Frequency": "auto",
         "bgscan": {
             "_comment": "Background scan configuration for mlan0",
             "interval": 60
@@ -179,6 +181,8 @@
     },
     "mlan1": {
         "_comment": "mlan1 interface configuration",
+        "enabled": true,
+        "Frequency": "auto",
         "bgscan": {
             "_comment": "Background scan configuration for mlan1",
             "interval": 60

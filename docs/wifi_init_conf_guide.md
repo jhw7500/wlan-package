@@ -312,13 +312,24 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 **사용 스크립트**: `wifi_bgscan.py`, `wifi_roaming.py`
 
-### 10.1 bgscan - 백그라운드 스캔
+### 10.1 interface defaults - 인터페이스 기본 활성/주파수
+
+**사용 스크립트**: `wifi_init.sh`, `wifi.sh`
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| `enabled` | bool | `true` | 인터페이스별 초기화/적용 여부. `false`면 `wifi_init.sh`가 해당 인터페이스의 radio setup과 bridge enable을 건너뜀 |
+| `Frequency` | string | `"auto"` | 인터페이스별 bandcfg 기본값. `auto`, `2.4GHz`, `5GHz` |
+
+> `config.json`이 별도로 설치된 환경에서는 `.mlan0.enabled`, `.mlan1.enabled`, `.mlan0.Frequency`, `.mlan1.Frequency`가 존재할 때만 이 값을 override한다.
+
+### 10.2 bgscan - 백그라운드 스캔
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
 | `interval` | int | `30` | 백그라운드 스캔 주기 (초) |
 
-### 10.2 roaming - 로밍 알고리즘
+### 10.3 roaming - 로밍 알고리즘
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
