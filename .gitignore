@@ -1,12 +1,12 @@
 release/
 dist/wlan/usr/local/wlan-bridge/
 dist/wlan/usr/local/etc/
-dist/wlan/usr/local/logger/__pycache__/
+__pycache__/
 
 .gemini/
 gha-creds-*.json
 
 tmp/
 .worktrees/
-/docs/plans/
-/docs/superpowers/
+docs/plans/
+docs/superpowers/
