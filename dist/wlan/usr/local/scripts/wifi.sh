@@ -1,7 +1,7 @@
 #!/bin/bash
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 # shellcheck source=./wifi_init_config_lib.sh
-. "$SCRIPT_DIR/wifi_init_config_lib.sh"
+. "/usr/local/scripts/wifi_init_config_lib.sh"
 
 tag=$(basename "$0")
 IFACE=mlan
@@ -174,12 +174,14 @@ show_info() {
 
     for dev in "${devs[@]}"; do
         if [ -d "/sys/class/net/$dev" ]; then
-            addr=$(ip -4 addr show $dev 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
-            mac=$(cat /sys/class/net/$dev/address 2>/dev/null)
-            carrier=$(cat /sys/class/net/$dev/carrier 2>/dev/null || echo "0")
-            state=$(ip link show $dev | grep -oP '(?<=state\s)\w+')
+            cidr=$(ip -4 addr show "$dev" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}/\d+')
+            addr="${cidr%/*}"
+            prefix="${cidr#*/}"
+            mac=$(cat /sys/class/net/"$dev"/address 2>/dev/null)
+            carrier=$(cat /sys/class/net/"$dev"/carrier 2>/dev/null || echo "0")
+            state=$(ip link show "$dev" | grep -oP '(?<=state\s)\w+')
             gw=$(ip -4 route show default dev "$dev" 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="via") {print $(i+1); exit}}')
-            printf "  %-6s: %-15s [%s] MAC:%s Carrier:%s GW:%s\n" "$dev" "${addr:-N/A}" "$state" "$mac" "$carrier" "${gw:-N/A}"
+            printf "  %-6s: %-18s [%s] MAC:%s Carrier:%s GW:%s\n" "$dev" "${cidr:-N/A}" "$state" "$mac" "$carrier" "${gw:-N/A}"
         fi
     done
     echo ""
@@ -720,6 +722,11 @@ case "$2" in
     if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> ip <address/netmask>" >&2; exit 1; fi
     NEW_IP="$1"
+    # subnet mask가 없으면 /24 기본 적용
+    if [[ "$NEW_IP" != */* ]]; then
+        NEW_IP="${NEW_IP}/24"
+        echo "No subnet mask specified, using default /24"
+    fi
     TMP_FILE="$(mktemp)"
     if awk -v new_ip="$NEW_IP" '
         BEGIN { changed = 0 }
