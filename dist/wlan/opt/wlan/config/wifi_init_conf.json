@@ -12,7 +12,8 @@
         "STANDARD": "",
         "DEV_CAP_MASK": "",
         "PRIMARY_IFACE": "mlan0",
-        "MAC_MODE": "dynamic"
+        "MAC_MODE": "dynamic",
+        "ETH_CLIENT_IP": ""
     },
     "mac": {
         "_comment": "MAC address configuration. /opt/wlan/mac 디렉토리 대체. 빈 문자열이면 해당 소스 생략.",
@@ -30,15 +31,15 @@
     },
     "wbridge": {
         "_comment": "wbridge bridge process configuration (WBRIDGE_* env vars). mode: latency|normal|eco|thermal. /etc/default/wbridge takes priority if set.",
-        "optimize": 1,
+        "optimize": 0,
         "mode": "normal",
         "engine": "pcap",
         "thermal_state": "ok",
-        "mode_force": 1,
+        "mode_force": 0,
         "link_guard": 1,
         "link_down_debounce_sec": 2,
         "link_up_stable_sec": 2,
-        "link_idle_poll_sec": 2,
+        "link_idle_poll_sec": 5,
         "wait_ready_timeout_sec": 10,
         "wlan_roam_grace_sec": 15,
         "wlan_down_restart": 0,
