@@ -2,17 +2,13 @@
 #
 # This file controls enable/disable toggles for shared workflows.
 # Workflows default to enabled if this file is missing.
+#
+# - enabled: workflow 자체 활성화 (false면 수동 트리거도 비활성)
+# - auto: PR 생성 시 자동 실행 여부 (없으면 해당 없음, 수동 트리거는 enabled만 체크)
 
 # Shared workflow version pin for jhw7500/automation.
-#
-# NOTE: GitHub Actions does not allow dynamic refs in `uses: ...@ref`, so this value
-# is used by a repo automation workflow that opens a PR updating all `uses:` refs.
-automation_ref: v1.15
-# Global review behavior.
-# - manual triggers (e.g. @gemini-cli /review, @claude) should keep working regardless.
-# - set review.auto=false to disable automatic PR reviews.
-review:
-  auto: false
+automation_ref: v1.24
+
 workflows:
   # Repo-specific
   shellcheck:
@@ -34,7 +30,7 @@ workflows:
 
   gemini-review:
     enabled: true
-    description: "PR code review with Gemini"
+    description: "PR code review with Gemini (manual: @gemini-cli /review)"
 
   gemini-triage:
     enabled: true
@@ -42,6 +38,7 @@ workflows:
 
   gemini-auto-review:
     enabled: true
+    auto: false
     description: "Automatic PR review with Gemini"
 
   gemini-scheduled-triage:
@@ -51,8 +48,9 @@ workflows:
   # Shared Claude workflows
   claude:
     enabled: true
-    description: "Claude AI integration"
+    description: "Claude AI integration (manual: @claude)"
 
   claude-code-review:
     enabled: true
+    auto: true
     description: "Claude automatic PR review"
