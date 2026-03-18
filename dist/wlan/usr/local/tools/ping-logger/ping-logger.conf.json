@@ -1,0 +1,36 @@
+{
+    "_comment": [
+        "ping-logger 설정 파일",
+        "CLI 옵션이 JSON 설정보다 우선합니다",
+        "interfaces: 캡처할 인터페이스 (1개 또는 2개)",
+        "mode: single(1개) 또는 dual(2개) 인터페이스 캡처"
+    ],
+    "interfaces": {
+        "mode": "dual",
+        "primary": "eth0",
+        "secondary": "mlan0"
+    },
+    "filter": {
+        "_comment": "빈 문자열 = 전체 ICMP, IP 지정 시 해당 호스트만",
+        "target_ip": ""
+    },
+    "capture": {
+        "duration": 0,
+        "_comment_duration": "0 = Ctrl+C까지 캡처"
+    },
+    "output": {
+        "dir": "/tmp/ping-logger",
+        "save_pcap": true,
+        "_comment_save_pcap": "true: pcap 파일도 저장, false: 로그만"
+    },
+    "display": {
+        "show_timestamp": true,
+        "show_seq": true,
+        "show_size": false,
+        "color": true
+    },
+    "analysis": {
+        "on_exit": true,
+        "_comment": "종료 시 자동으로 미전달 패킷 분석 수행"
+    }
+}

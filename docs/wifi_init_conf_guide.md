@@ -26,9 +26,11 @@ wifi_init_conf.json
 ├── mcp             # 전류/전압 센서 모니터링
 ├── logger          # 각종 로깅 주기 설정
 ├── mlan0           # mlan0 인터페이스 설정
+│   ├── net_rx      #   MGMT 프레임 로깅 (→ PCIE9098_0)
 │   ├── bgscan      #   백그라운드 스캔
 │   └── roaming     #   로밍 알고리즘
 └── mlan1           # mlan1 인터페이스 설정 (mlan0과 동일 구조)
+    └── net_rx      #   MGMT 프레임 로깅 (→ PCIE9098_1)
 ```
 
 ---
@@ -48,6 +50,7 @@ wifi_init_conf.json
 | `DEV_CAP_MASK` | string | `""` | 디바이스 capability 마스크 |
 | `PRIMARY_IFACE` | string | `"mlan0"` | 기본 인터페이스. `"mlan0"` 또는 `"mlan1"` |
 | `MAC_MODE` | string | `"default"` | MAC 주소 모드. `"default"` (base만), `"dynamic"` (동적→base), `"static"` (target→base) |
+| `ETH_CLIENT_IP` | string | `""` | 유선 클라이언트 고정 IP. 설정 시 `wired_mac_ip_get.py`의 quick ARP probe 활성화. 빈 문자열이면 비활성 |
 
 ---
 
@@ -320,8 +323,30 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 |----|------|--------|------|
 | `enabled` | bool | `true` | 인터페이스별 초기화/적용 여부. `false`면 `wifi_init.sh`가 해당 인터페이스의 radio setup과 bridge enable을 건너뜀 |
 | `Frequency` | string | `"auto"` | 인터페이스별 bandcfg 기본값. `auto`, `2.4GHz`, `5GHz` |
+| `net_rx` | int | `0` | MGMT 프레임 로깅 모드. `wifi_init.sh`가 `wifi_mod_para.conf`의 해당 PCIE9098 블록에 반영. 0=비활성 |
 
 > `config.json`이 별도로 설치된 환경에서는 `.mlan0.enabled`, `.mlan1.enabled`, `.mlan0.Frequency`, `.mlan1.Frequency`가 존재할 때만 이 값을 override한다.
+
+#### net_rx 비트맵
+
+| 값 | bit[1:0] RX 모드 | bit[2] TX 로그 | 설명 |
+|----|-----------------|---------------|------|
+| `0` | 비활성 | 비활성 | MGMT 로깅 없음 |
+| `2` | 로밍 프레임만 | 비활성 | Auth/Assoc/Deauth/Disassoc/Action (Beacon/Probe 제외) |
+| `3` | 전체 프레임 | 비활성 | 모든 MGMT 프레임 (Beacon/Probe 포함) |
+| `6` | 로밍 프레임만 | 활성 | RX 로밍 + TX 로깅 |
+| `7` | 전체 프레임 | 활성 | RX 전체 + TX 로깅 |
+
+> **로그 출력 위치**: dmesg가 아닌 `/proc/mwlan/adapterX/mgmt_log` 커널 링버퍼에 기록됨. `mgmt-log-flush.timer`가 10초 주기로 `/var/log/cantops/mgmt/mlanX/gmgmt.log`에 flush.
+
+#### net_rx → wifi_mod_para.conf 매핑
+
+| JSON 경로 | conf 블록 |
+|-----------|----------|
+| `.mlan0.net_rx` | `PCIE9098_0` |
+| `.mlan1.net_rx` | `PCIE9098_1` |
+
+값이 0이면 conf에서 `net_rx=` 줄이 제거되고, 0보다 크면 `net_rx=값`이 블록 내에 추가/갱신된다.
 
 ### 10.2 bgscan - 백그라운드 스캔
 
@@ -472,8 +497,10 @@ except Exception:
 | `mmc` | `wifi_logger_mmc.sh` | bash |
 | `mcp` | `wifi_logger_mcp.sh` | bash |
 | `logger` | `wifi_logger_cpu.sh`, `wifi_logger_stat.py`, `wifi_bgscan.py` | bash, python |
+| `mlan0.net_rx` | `wifi_init.sh` → `wifi_mod_para.conf` (PCIE9098_0) | bash |
 | `mlan0.bgscan` | `wifi_bgscan.py` | python |
 | `mlan0.roaming` | `wifi_roaming.py` | python |
+| `mlan1.net_rx` | `wifi_init.sh` → `wifi_mod_para.conf` (PCIE9098_1) | bash |
 | `mlan1.bgscan` | `wifi_bgscan.py` | python |
 | `mlan1.roaming` | `wifi_roaming.py` | python |
 
@@ -510,6 +537,19 @@ except Exception:
     "loop_delay_sec": 5
 }
 ```
+
+### MGMT 프레임 디버깅 (로밍 분석)
+
+```json
+"mlan0": {
+    "net_rx": 6
+},
+"mlan1": {
+    "net_rx": 6
+}
+```
+
+> 재부팅 후 `/var/log/cantops/mgmt/mlan0/gmgmt.log`에서 RX/TX MGMT 프레임 확인 가능. 실시간 확인: `cat /proc/mwlan/adapter0/mgmt_log`
 
 ### 디버깅 (로깅 빈도 증가)
 

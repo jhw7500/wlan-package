@@ -93,6 +93,48 @@ logger -p local0.info "[$tag:$LINENO] Starting backup..."
 /usr/local/scripts/backup_file.sh /etc/wpa_supplicant/wpa_supplicant-mlan0.conf network= || logger -p local0.err "[$tag:$LINENO] backup failed: wpa_supplicant-mlan0"
 /usr/local/scripts/backup_file.sh /etc/wpa_supplicant/wpa_supplicant-mlan1.conf network= || logger -p local0.err "[$tag:$LINENO] backup failed: wpa_supplicant-mlan1"
 
+# Apply net_rx from wifi_init_conf.json to wifi_mod_para.conf
+# PCIE9098_0 ← mlan0.net_rx, PCIE9098_1 ← mlan1.net_rx
+apply_net_rx_to_mod_para() {
+    local conf="/lib/firmware/$MOD_PARA"
+    [ -f "$conf" ] || return 0
+
+    local mlan0_net_rx mlan1_net_rx
+    mlan0_net_rx=$(jq -r '.mlan0.net_rx // 0' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    mlan1_net_rx=$(jq -r '.mlan1.net_rx // 0' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+
+    _set_net_rx_in_block() {
+        local block="$1" value="$2"
+        # Remove existing net_rx line in block, then add if value > 0
+        sed -i "/^[[:space:]]*${block}[[:space:]]*=/{
+            :loop
+            n
+            /^[[:space:]]*net_rx=/d
+            /^[[:space:]]*}/!b loop
+        }" "$conf"
+
+        if [ "$value" -gt 0 ] 2>/dev/null; then
+            sed -i "/^[[:space:]]*${block}[[:space:]]*=/{
+                :loop
+                n
+                /^[[:space:]]*}/{
+                    i\\	net_rx=${value}
+                    b done
+                }
+                b loop
+                :done
+            }" "$conf"
+            logger -p local0.info "[$tag:$LINENO] ${block}: net_rx=${value}"
+        else
+            logger -p local0.info "[$tag:$LINENO] ${block}: net_rx removed (disabled)"
+        fi
+    }
+
+    _set_net_rx_in_block "PCIE9098_0" "$mlan0_net_rx"
+    _set_net_rx_in_block "PCIE9098_1" "$mlan1_net_rx"
+}
+apply_net_rx_to_mod_para
+
 logger -p local0.info "[$tag:$LINENO] Booting"
 
 try_insmod() {
