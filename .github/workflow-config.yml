@@ -38,7 +38,7 @@ workflows:
 
   gemini-auto-review:
     enabled: true
-    auto: false
+    auto: true
     description: "Automatic PR review with Gemini"
 
   gemini-scheduled-triage:
