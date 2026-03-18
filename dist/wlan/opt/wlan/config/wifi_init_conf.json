@@ -66,7 +66,10 @@
         "MAX_UNSTABLE_DURATION": 10,
         "MAX_REBOOT_COUNT": 3,
         "REBOOT_COOLDOWN_SEC": 300,
-        "MIN_UPTIME_SEC": 30
+        "MIN_UPTIME_SEC": 30,
+        "FAULT_REASSOC_CNT": 2,
+        "FAULT_RESTART_CNT": 4,
+        "FAULT_REBOOT_CNT": 6
     },
     "temperature": {
         "_comment": "wifi_logger_temp.sh temperature thresholds and cooldown",
@@ -116,17 +119,31 @@
         }
     },
     "logger": {
-        "_comment": "logging interval configuration for various logger scripts",
+        "_comment": "전역 기본값 (인터페이스별 logger가 없으면 이 값 사용)",
         "cpu_interval_sec": 60,
+        "link_interval_sec": 0.95,
         "stat_log_interval_sec": 1,
         "stat_check_interval_sec": 1,
         "stat_reset_interval_sec": 604800,
         "bgscan_stale_threshold_sec": 600
     },
+    "eth0": {
+        "_comment": "eth0 interface configuration",
+        "logger": {
+            "link_interval_sec": 1.0
+        }
+    },
     "mlan0": {
         "_comment": "mlan0 interface configuration",
         "enabled": true,
         "Frequency": "auto",
+        "net_rx": 0,
+        "logger": {
+            "link_interval_sec": 0.95,
+            "stat_log_interval_sec": 1,
+            "stat_check_interval_sec": 1,
+            "stat_reset_interval_sec": 604800
+        },
         "bgscan": {
             "_comment": "Background scan configuration for mlan0",
             "interval": 60
@@ -184,6 +201,13 @@
         "_comment": "mlan1 interface configuration",
         "enabled": true,
         "Frequency": "auto",
+        "net_rx": 0,
+        "logger": {
+            "link_interval_sec": 0.95,
+            "stat_log_interval_sec": 1,
+            "stat_check_interval_sec": 1,
+            "stat_reset_interval_sec": 604800
+        },
         "bgscan": {
             "_comment": "Background scan configuration for mlan1",
             "interval": 60

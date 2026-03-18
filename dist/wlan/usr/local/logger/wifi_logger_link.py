@@ -397,7 +397,18 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     IFACE = args.iface
-    LOOP_INTERVAL = args.interval
+
+    # Load interval from JSON: {iface}.logger.link_interval_sec → logger.link_interval_sec → arg default
+    _link_interval = args.interval
+    try:
+        with open("/usr/local/etc/wifi_init_conf.json") as _f:
+            _conf = json.load(_f)
+        _global = _conf.get("logger", {}).get("link_interval_sec", _link_interval)
+        _link_interval = _conf.get(IFACE, {}).get("logger", {}).get("link_interval_sec", _global)
+    except Exception:
+        pass
+
+    LOOP_INTERVAL = _link_interval
     SPIKE_THRESHOLD_FAIL = args.spike_fail
     SPIKE_THRESHOLD_RETRY = args.spike_retry
 
