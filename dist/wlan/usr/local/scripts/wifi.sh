@@ -175,13 +175,21 @@ show_info() {
     for dev in "${devs[@]}"; do
         if [ -d "/sys/class/net/$dev" ]; then
             cidr=$(ip -4 addr show "$dev" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}/\d+')
-            addr="${cidr%/*}"
-            prefix="${cidr#*/}"
             mac=$(cat /sys/class/net/"$dev"/address 2>/dev/null)
             carrier=$(cat /sys/class/net/"$dev"/carrier 2>/dev/null || echo "0")
             state=$(ip link show "$dev" | grep -oP '(?<=state\s)\w+')
             gw=$(ip -4 route show default dev "$dev" 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="via") {print $(i+1); exit}}')
-            printf "  %-6s: %-18s [%s] MAC:%s Carrier:%s GW:%s\n" "$dev" "${cidr:-N/A}" "$state" "$mac" "$carrier" "${gw:-N/A}"
+            # Read configured IP from .network file
+            cfg_ip=""
+            for nf in /etc/systemd/network/*.network; do
+                [ -f "$nf" ] || continue
+                if grep -q "^Name=${dev}$" "$nf" 2>/dev/null; then
+                    cfg_ip=$(grep -oP '(?<=^Address=)\S+' "$nf" 2>/dev/null)
+                    break
+                fi
+            done
+            printf "  %-6s: %-18s [%s] MAC:%s Carrier:%s GW:%s Conf:%s\n" \
+                "$dev" "${cidr:-N/A}" "$state" "$mac" "$carrier" "${gw:-N/A}" "${cfg_ip:-N/A}"
         fi
     done
     echo ""
@@ -189,48 +197,60 @@ show_info() {
     if [ "$only_iface" = "eth0" ]; then
         :
     else
-        echo "[Active Config Summary]"
+        # Per-interface config from wifi_init_conf.json
+        show_iface_config() {
+            local iface="$1"
+            if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
+                local enabled freq net_rx bgscan_interval
+                local roam_th_2g roam_th_5g roam_diff roam_check
+                local pred_en load_en pingpong_en adaptive_en
 
-        if [ "$only_iface" = "all" ] || [ "$only_iface" = "mlan0" ]; then
-            mlan0_enabled=$(wifi_init_get_iface_enabled "mlan0" "true")
-            mlan0_freq=$(wifi_init_get_iface_frequency "mlan0" "auto")
-            echo "  mlan0: enabled=${mlan0_enabled} Frequency=${mlan0_freq}"
-        fi
-        if [ "$only_iface" = "all" ] || [ "$only_iface" = "mlan1" ]; then
-            mlan1_enabled=$(wifi_init_get_iface_enabled "mlan1" "true")
-            mlan1_freq=$(wifi_init_get_iface_frequency "mlan1" "auto")
-            echo "  mlan1: enabled=${mlan1_enabled} Frequency=${mlan1_freq}"
+                enabled=$(jq -r ".${iface}.enabled // true" "$WIFI_INIT_CONF_JSON")
+                freq=$(jq -r ".${iface}.Frequency // \"auto\"" "$WIFI_INIT_CONF_JSON")
+                net_rx=$(jq -r ".${iface}.net_rx // 0" "$WIFI_INIT_CONF_JSON")
+                bgscan_interval=$(jq -r ".${iface}.bgscan.interval // 60" "$WIFI_INIT_CONF_JSON")
+                roam_th_2g=$(jq -r ".${iface}.roaming.DEFAULT_TH_2G // -75" "$WIFI_INIT_CONF_JSON")
+                roam_th_5g=$(jq -r ".${iface}.roaming.DEFAULT_TH_5G // -75" "$WIFI_INIT_CONF_JSON")
+                roam_diff=$(jq -r ".${iface}.roaming.DIFF_TH // 10" "$WIFI_INIT_CONF_JSON")
+                roam_check=$(jq -r ".${iface}.roaming.CHECK_INTERVAL // 5" "$WIFI_INIT_CONF_JSON")
+                pred_en=$(jq -r ".${iface}.roaming.PREDICTIVE_ROAM.enable // true" "$WIFI_INIT_CONF_JSON")
+                load_en=$(jq -r ".${iface}.roaming.LOAD_BASED_ROAM.enable // false" "$WIFI_INIT_CONF_JSON")
+                pingpong_en=$(jq -r ".${iface}.roaming.PING_PONG_PREVENTION.enable // true" "$WIFI_INIT_CONF_JSON")
+                adaptive_en=$(jq -r ".${iface}.roaming.ADAPTIVE_INTERVAL.enable // true" "$WIFI_INIT_CONF_JSON")
+
+                echo "  [${iface}]"
+                echo "    enabled=$enabled  Frequency=$freq  net_rx=$net_rx"
+                echo "    bgscan_interval=${bgscan_interval}s"
+                echo "    roaming: TH_2G=${roam_th_2g} TH_5G=${roam_th_5g} DIFF=${roam_diff} CHECK=${roam_check}s"
+                echo "    features: predictive=$pred_en load_based=$load_en pingpong=$pingpong_en adaptive=$adaptive_en"
+            else
+                echo "  [${iface}] (no JSON config)"
+            fi
+        }
+
+        echo "[Interface Config]"
+        if [ "$only_iface" = "all" ]; then
+            show_iface_config "mlan0"
+            show_iface_config "mlan1"
+        else
+            show_iface_config "$only_iface"
         fi
         echo ""
-    fi
 
-    if [ "$only_iface" = "eth0" ]; then
-        :
-    else
-        echo "[WiFi Init Summary]"
-
-    # JSON 설정 읽기
-    if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
-        FW_NAME=$(jq -r '.global.FW_NAME // "cts/pcieuart9098_combo_v1.bin"' "$WIFI_INIT_CONF_JSON")
-        MOD_PARA=$(jq -r '.global.MOD_PARA // "cts/wifi_mod_para.conf"' "$WIFI_INIT_CONF_JSON")
-        CAL_DATA_CFG=$(jq -r '.global.CAL_DATA_CFG // "cts/WlanCalData_ext_RD.conf"' "$WIFI_INIT_CONF_JSON")
-        TXPWRLIMIT_PATH=$(jq -r '.global.TXPWRLIMIT_PATH // "/lib/firmware/cts/txpwrlimit_cfg_9098.conf"' "$WIFI_INIT_CONF_JSON")
-        MFG_MODE=$(jq -r '.global.MFG_MODE // "0"' "$WIFI_INIT_CONF_JSON")
-        STANDARD=$(jq -r ".global.STANDARD // \"\"" "$WIFI_INIT_CONF_JSON")
-        DEV_CAP_MASK=$(jq -r ".global.DEV_CAP_MASK // \"\"" "$WIFI_INIT_CONF_JSON")
-        echo "  Source: $WIFI_INIT_CONF_JSON"
-    else
-        echo "  Source: Default (Internal)"
-        FW_NAME="cts/pcieuart9098_combo_v1.bin"
-        MOD_PARA="cts/wifi_mod_para.conf"
-        CAL_DATA_CFG="cts/WlanCalData_ext_RD.conf"
-        TXPWRLIMIT_PATH="/lib/firmware/cts/txpwrlimit_cfg_9098.conf"
-        MFG_MODE="0"
-        STANDARD=""
-        DEV_CAP_MASK=""
-    fi
-    echo "  Standard        : ${STANDARD:-}"
-    echo ""
+        echo "[Driver Config]"
+        if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
+            FW_NAME=$(jq -r '.global.FW_NAME // "cts/pcieuart9098_combo_v1.bin"' "$WIFI_INIT_CONF_JSON")
+            MOD_PARA=$(jq -r '.global.MOD_PARA // "cts/wifi_mod_para.conf"' "$WIFI_INIT_CONF_JSON")
+            CAL_DATA_CFG=$(jq -r '.global.CAL_DATA_CFG // "cts/WlanCalData_ext_RD.conf"' "$WIFI_INIT_CONF_JSON")
+            TXPWRLIMIT_PATH=$(jq -r '.global.TXPWRLIMIT_PATH // "/lib/firmware/cts/txpwrlimit_cfg_9098.conf"' "$WIFI_INIT_CONF_JSON")
+            echo "  FW_NAME       : $FW_NAME"
+            echo "  MOD_PARA      : $MOD_PARA"
+            echo "  CAL_DATA_CFG  : $CAL_DATA_CFG"
+            echo "  TXPWRLIMIT    : $TXPWRLIMIT_PATH"
+        else
+            echo "  (no JSON config)"
+        fi
+        echo ""
     fi
 
     if [ "$only_iface" = "eth0" ]; then
@@ -275,12 +295,14 @@ show_info() {
         key_mgmt=$(wpa_field "$conf" "key_mgmt")
         freq_list=$(wpa_field "$conf" "freq_list")
         scan_freq=$(wpa_field "$conf" "scan_freq")
-        echo "  $dev: country=${country:-N/A} ssid=${ssid:-N/A} psk=${psk:-N/A} key_mgmt=${key_mgmt:-N/A}"
+        local pad
+        pad=$(printf '%*s' $((${#dev} + 4)) "")
+        echo "  ${dev}: country=${country:-N/A} ssid=${ssid:-N/A} psk=${psk:-N/A} key_mgmt=${key_mgmt:-N/A}"
         if [ -n "${freq_list:-}" ]; then
-            echo "       freq_list=${freq_list}"
+            echo "${pad}freq_list=${freq_list}"
         fi
         if [ -n "${scan_freq:-}" ]; then
-            echo "       scan_freq=${scan_freq}"
+            echo "${pad}scan_freq=${scan_freq}"
         fi
     done
     echo ""
@@ -309,10 +331,13 @@ show_info() {
             add_iface_svcs "$only_iface"
         fi
 
+        # Timers (global)
+        svc_list+=("mgmt-log-flush.timer" "wbridge-thermal-state.timer" "journald-snapshot.timer" "fake-hwclock.timer")
+
         for svc in "${svc_list[@]}"; do
             state=$(systemctl is-active "$svc" 2>/dev/null || true)
             [ -z "$state" ] && state="unknown"
-            printf "  %-22s %s\n" "$svc:" "${state^^}"
+            printf "  %-34s %s\n" "$svc:" "${state^^}"
         done
     else
         echo "  systemctl not available"
@@ -472,7 +497,11 @@ case "$2" in
     show_info "$IFACE"
     exit 0
     ;;
-  "" | restart)
+  "")
+    show_info "$IFACE"
+    exit 0
+    ;;
+  restart)
     echo "restart WPA service for $IFACE..."
     systemctl restart wpa_supplicant@$IFACE
     ;;

@@ -14,6 +14,9 @@ LIMIT_CNT=3
 MAX_REBOOT_COUNT=3
 REBOOT_COOLDOWN_SEC=300
 MIN_UPTIME_SEC=120
+FAULT_REASSOC_CNT=2
+FAULT_RESTART_CNT=4
+FAULT_REBOOT_CNT=6
 
 # Load from JSON config
 if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
@@ -22,10 +25,14 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
     MAX_REBOOT_COUNT=$(jq -r '.checker.MAX_REBOOT_COUNT // 3' "$WIFI_INIT_CONF_JSON")
     REBOOT_COOLDOWN_SEC=$(jq -r '.checker.REBOOT_COOLDOWN_SEC // 300' "$WIFI_INIT_CONF_JSON")
     MIN_UPTIME_SEC=$(jq -r '.checker.MIN_UPTIME_SEC // 120' "$WIFI_INIT_CONF_JSON")
+    FAULT_REASSOC_CNT=$(jq -r '.checker.FAULT_REASSOC_CNT // 2' "$WIFI_INIT_CONF_JSON")
+    FAULT_RESTART_CNT=$(jq -r '.checker.FAULT_RESTART_CNT // 4' "$WIFI_INIT_CONF_JSON")
+    FAULT_REBOOT_CNT=$(jq -r '.checker.FAULT_REBOOT_CNT // 6' "$WIFI_INIT_CONF_JSON")
 fi
 
 UNSTABLE_START=0
 ERR_CNT=0
+FAULT_CNT=0
 STATE=""
 PRE_STATE=""
 PCI_BUS=""
@@ -66,6 +73,17 @@ is_connected() {
     local state
     state=$(get_state)
     [[ "$state" == "COMPLETED" ]]
+}
+
+is_wpa_completed() {
+    local s
+    s=$(wpa_cli -i "$IFACE" status 2>/dev/null | grep "^wpa_state=" | cut -d= -f2)
+    [[ "$s" == "COMPLETED" ]]
+}
+
+# Check if station dump works (returns 0=ok, 1=fault)
+check_station_dump() {
+    iw "$IFACE" station dump >/dev/null 2>&1
 }
 
 if [ "$IFACE" != "eth0" ]; then
@@ -126,9 +144,8 @@ while true; do
     else
         ERR_CNT=0
         if ! is_wpa_active; then
-            #log "wpa_supplicant@${IFACE}.service not active  ^`^t waiting..."
             UNSTABLE_START=0
-            #sleep $CHECK_INTERVAL
+            FAULT_CNT=0
             sleep 3
             continue
         fi
@@ -137,6 +154,7 @@ while true; do
         TIMESTAMP=$(date +%s)
 
         if [[ "$STATE" == "DISCONNECTED" || "$STATE" == "SCANNING" || "$STATE" == "down" ]]; then
+            FAULT_CNT=0
             if [[ $UNSTABLE_START -eq 0 ]]; then
                 UNSTABLE_START=$TIMESTAMP
             fi
@@ -145,16 +163,32 @@ while true; do
 
             if (( DURATION >= MAX_UNSTABLE_DURATION )); then
                 logger -p local0.err "[$tag:$LINENO] [$IFACE] restart wpa_supplicant@$IFACE because wifi is not connected during $MAX_UNSTABLE_DURATION"
-                #wpa_cli disable_network 0
                 wifi $IFACE restart
-                #wpa_cli enable_network 0
-                #systemctl restart wifi_bridge@$IFACE
-                #log "State=$STATE for ${DURATION}s  ^f^r triggering reconnect on $IFACE"
-                #wpa_cli -i "$IFACE" reconnect
                 UNSTABLE_START=0
             fi
         else
             UNSTABLE_START=0
+
+            # Station dump fault detection (only when wpa_state=COMPLETED)
+            if is_wpa_completed && ! check_station_dump; then
+                ((FAULT_CNT++))
+                logger -p local0.err "[$tag:$LINENO] [$IFACE] station dump EFAULT (FAULT_CNT=$FAULT_CNT)"
+
+                if (( FAULT_CNT >= FAULT_REBOOT_CNT )); then
+                    logger -p local0.emerg "[$tag:$LINENO] [$IFACE] station dump fault persistent ($FAULT_CNT >= $FAULT_REBOOT_CNT), requesting reboot"
+                    CAUSE="station_dump_fault"
+                    REBOOT_F=1
+                    FAULT_CNT=0
+                elif (( FAULT_CNT >= FAULT_RESTART_CNT )); then
+                    logger -p local0.err "[$tag:$LINENO] [$IFACE] station dump fault ($FAULT_CNT >= $FAULT_RESTART_CNT), restarting wpa_supplicant"
+                    wifi $IFACE restart
+                elif (( FAULT_CNT >= FAULT_REASSOC_CNT )); then
+                    logger -p local0.warning "[$tag:$LINENO] [$IFACE] station dump fault ($FAULT_CNT >= $FAULT_REASSOC_CNT), reassociating"
+                    wpa_cli -i "$IFACE" reassociate >/dev/null 2>&1
+                fi
+            else
+                FAULT_CNT=0
+            fi
         fi
     fi
 
