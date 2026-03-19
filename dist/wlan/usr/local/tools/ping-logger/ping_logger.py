@@ -202,13 +202,13 @@ def main() -> None:
 
     log_file = open(log_path, "w", encoding="utf-8")
     try:
-        _run_session(cfg, log_file, log_path, pcap1_path, pcap2_path)
+        _run_session(cfg, log_file, log_path, pcap1_path, pcap2_path, colors, lock)
     finally:
         if not log_file.closed:
             log_file.close()
 
 
-def _run_session(cfg, log_file, log_path, pcap1_path, pcap2_path) -> None:
+def _run_session(cfg, log_file, log_path, pcap1_path, pcap2_path, colors, lock) -> None:
     """실제 캡처 세션 실행 (log_file은 호출자가 닫음)"""
     # 세션 헤더
     header_lines = [
