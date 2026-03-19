@@ -18,6 +18,7 @@ PCAP_ETH=""
 # --- 유틸리티 ---
 die()  { echo "ERROR: $*" >&2; exit 1; }
 info() { echo "INFO: $*"; }
+warn() { echo "WARN: $*" >&2; }
 
 usage() {
     cat <<'EOF'
@@ -322,7 +323,7 @@ exec_remote() {
         remote_args+=("$arg")
     done
 
-    ssh -t "root@${host}" "bash /tmp/ping-monitor.sh ${remote_args[*]}"
+    ssh -t "root@${host}" bash /tmp/ping-monitor.sh "${remote_args[@]}"
     local exit_code=$?
 
     # pcap 복사

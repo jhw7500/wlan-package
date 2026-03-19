@@ -113,7 +113,7 @@ apply_net_rx_to_mod_para() {
             /^[[:space:]]*}/!b loop
         }" "$conf"
 
-        if [ "$value" -gt 0 ] 2>/dev/null; then
+        if [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
             sed -i "/^[[:space:]]*${block}[[:space:]]*=/{
                 :loop
                 n

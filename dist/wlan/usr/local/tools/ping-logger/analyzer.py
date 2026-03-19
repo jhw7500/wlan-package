@@ -53,7 +53,7 @@ def analyze_undelivered(pcap1: str, pcap2: str,
                         if1: str, if2: str) -> str:
     """
     두 pcap을 비교하여 미전달 패킷 분석.
-    주의: 키(type_id_seq) 중복 시 마지막 값만 유지됨 (ping-monitor.sh와 동일 제한).
+    중복 키(type_id_seq) 감지 시 경고를 출력하고 마지막 값을 유지.
     """
     pkts1 = _run_tshark(pcap1)
     pkts2 = _run_tshark(pcap2)
@@ -61,9 +61,21 @@ def analyze_undelivered(pcap1: str, pcap2: str,
     if not pkts1 and not pkts2:
         return "캡처된 ICMP 패킷 없음"
 
-    # dict 매칭
-    map1 = {_make_key(p): p for p in pkts1}
-    map2 = {_make_key(p): p for p in pkts2}
+    def _build_map(pkts, label: str) -> dict:
+        result: dict = {}
+        for p in pkts:
+            key = _make_key(p)
+            if key in result:
+                print(
+                    f"WARN: [{label}] 중복 키 감지 (type={key[0]} id={key[1]} seq={key[2]})"
+                    f" — 이전 패킷 폐기, 손실률 분석에 오탐 가능",
+                    file=sys.stderr,
+                )
+            result[key] = p
+        return result
+
+    map1 = _build_map(pkts1, if1)
+    map2 = _build_map(pkts2, if2)
 
     keys1 = set(map1.keys())
     keys2 = set(map2.keys())
