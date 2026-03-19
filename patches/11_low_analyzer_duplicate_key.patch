@@ -1,0 +1,47 @@
+From: Code Review Fix <review@fix>
+Subject: [PATCH 11] Low: analyzer.py 중복 키 감지 시 경고 출력
+
+type/id/seq 충돌 시 dict가 조용히 이전 값을 덮어씀.
+빠른 ping에서 중복 발생 → 손실 분석 오탐 가능.
+중복 감지 시 stderr에 경고를 출력하도록 개선.
+
+---
+ dist/wlan/usr/local/tools/ping-logger/analyzer.py | 14 ++++++++++++--
+ 1 file changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/dist/wlan/usr/local/tools/ping-logger/analyzer.py b/dist/wlan/usr/local/tools/ping-logger/analyzer.py
+index 0000001..0000002 100755
+--- a/dist/wlan/usr/local/tools/ping-logger/analyzer.py
++++ b/dist/wlan/usr/local/tools/ping-logger/analyzer.py
+@@ -52,11 +52,21 @@ def analyze_undelivered(pcap1: str, pcap2: str,
+     """
+     두 pcap을 비교하여 미전달 패킷 분석.
+-    주의: 키(type_id_seq) 중복 시 마지막 값만 유지됨 (ping-monitor.sh와 동일 제한).
++    중복 키(type_id_seq) 감지 시 경고를 출력하고 마지막 값을 유지.
+     """
+     pkts1 = _run_tshark(pcap1)
+     pkts2 = _run_tshark(pcap2)
+
+     if not pkts1 and not pkts2:
+         return "캡처된 ICMP 패킷 없음"
+
+-    # dict 매칭
+-    map1 = {_make_key(p): p for p in pkts1}
+-    map2 = {_make_key(p): p for p in pkts2}
++    def _build_map(pkts: List[Dict], label: str) -> Dict:
++        result: Dict = {}
++        for p in pkts:
++            key = _make_key(p)
++            if key in result:
++                print(
++                    f"WARN: [{label}] 중복 키 감지 (type={key[0]} id={key[1]} seq={key[2]})"
++                    f" — 이전 패킷 폐기, 손실률 분석에 오탐 가능",
++                    file=sys.stderr,
++                )
++            result[key] = p
++        return result
++
++    map1 = _build_map(pkts1, if1)
++    map2 = _build_map(pkts2, if2)
+
+     keys1 = set(map1.keys())

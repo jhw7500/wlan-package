@@ -1,0 +1,24 @@
+From: Code Review Fix <review@fix>
+Subject: [PATCH 06] Medium: wifi_init.sh net_rx 숫자 유효성 검사 강화
+
+[ "$value" -gt 0 ] 2>/dev/null 방식은 비숫자 입력 시 에러를 숨기고
+예기치 않은 sed 명령 실행으로 이어질 수 있음.
+정규식 기반 명시적 양의 정수 검사로 교체.
+
+---
+ dist/wlan/usr/local/scripts/wifi_init.sh | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/dist/wlan/usr/local/scripts/wifi_init.sh b/dist/wlan/usr/local/scripts/wifi_init.sh
+index 0000001..0000002 100755
+--- a/dist/wlan/usr/local/scripts/wifi_init.sh
++++ b/dist/wlan/usr/local/scripts/wifi_init.sh
+@@ -113,7 +113,7 @@ apply_net_rx_to_mod_para() {
+             /^[[:space:]]*}/!b loop
+         }" "$conf"
+
+-        if [ "$value" -gt 0 ] 2>/dev/null; then
++        if [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
+             sed -i "/^[[:space:]]*${block}[[:space:]]*=/{
+                 :loop
+                 n

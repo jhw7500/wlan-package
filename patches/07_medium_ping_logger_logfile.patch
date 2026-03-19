@@ -1,0 +1,44 @@
+From: Code Review Fix <review@fix>
+Subject: [PATCH 07] Medium: ping_logger.py 로그파일 예외 시 미닫힘 수정
+
+log_file이 shutdown() 내에서만 닫혀, 시그널 핸들러 등록 전에
+예외 발생 시 파일이 플러시되지 않는 문제.
+try/finally 블록으로 항상 log_file이 닫히도록 보장.
+
+---
+ dist/wlan/usr/local/tools/ping-logger/ping_logger.py | 16 +++++++++-------
+ 1 file changed, 9 insertions(+), 7 deletions(-)
+
+diff --git a/dist/wlan/usr/local/tools/ping-logger/ping_logger.py b/dist/wlan/usr/local/tools/ping-logger/ping_logger.py
+index 0000001..0000002 100755
+--- a/dist/wlan/usr/local/tools/ping-logger/ping_logger.py
++++ b/dist/wlan/usr/local/tools/ping-logger/ping_logger.py
+@@ -200,7 +200,10 @@ def main() -> None:
+     os.makedirs(cfg.output_dir, exist_ok=True)
+     session_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+     log_path = os.path.join(cfg.output_dir, f"ping_{session_ts}.log")
+     pcap1_path = os.path.join(cfg.output_dir, f"icmp_{cfg.primary}_{session_ts}.pcap")
+     pcap2_path = ""
+     if cfg.mode == "dual":
+         pcap2_path = os.path.join(cfg.output_dir, f"icmp_{cfg.secondary}_{session_ts}.pcap")
+
+     log_file = open(log_path, "w", encoding="utf-8")
+
++    try:
++        _run_session(cfg, log_file, log_path, pcap1_path, pcap2_path)
++    finally:
++        if not log_file.closed:
++            log_file.close()
++
++
++def _run_session(cfg, log_file, log_path, pcap1_path, pcap2_path) -> None:
++    """실제 캡처 세션 실행 (log_file은 호출자가 닫음)"""
+     # 세션 헤더
+     header_lines = [
+         "=== ping-logger 세션 시작 ===",
+@@ -267,7 +270,6 @@ def main() -> None:
+         log_file.write(analysis + "\n")
+
+-        log_file.close()
+-
+         # 결과 요약

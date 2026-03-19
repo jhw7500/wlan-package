@@ -1,0 +1,41 @@
+From: Code Review Fix <review@fix>
+Subject: [PATCH 08] Medium: ping_logger.py exec_remote 쉘 인젝션 및 scp 오류 처리
+
+1. remote_args를 단순 join → shlex.quote() 적용으로 공백/특수문자 안전 처리
+2. scp check=False → check=True로 변경하여 파일 전송 실패를 오류로 처리
+
+---
+ dist/wlan/usr/local/tools/ping-logger/ping_logger.py | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/dist/wlan/usr/local/tools/ping-logger/ping_logger.py b/dist/wlan/usr/local/tools/ping-logger/ping_logger.py
+index 0000001..0000002 100755
+--- a/dist/wlan/usr/local/tools/ping-logger/ping_logger.py
++++ b/dist/wlan/usr/local/tools/ping-logger/ping_logger.py
+@@ -14,6 +14,7 @@ import argparse
+ import ipaddress
+ import json
+ import os
++import shlex
+ import shutil
+ import signal
+ import subprocess
+@@ -139,9 +140,10 @@ def exec_remote(cfg: SessionConfig, raw_args: list) -> None:
+     for fname in files_to_copy:
+         local = os.path.join(script_dir, fname)
+         if os.path.exists(local):
+-            subprocess.run(["scp", "-q", local, f"root@{host}:{remote_dir}/"],
+-                           check=False, timeout=30)
++            subprocess.run(["scp", "-q", local, f"root@{host}:{remote_dir}/"],
++                           check=True, timeout=30)
+
+     # -H 제거한 인자 재구성
+     remote_args = []
+@@ -153,7 +155,7 @@ def exec_remote(cfg: SessionConfig, raw_args: list) -> None:
+             skip_next = True
+             continue
+         remote_args.append(arg)
+
+-    cmd = f"cd {remote_dir} && python3 ping_logger.py {' '.join(remote_args)}"
++    cmd = f"cd {shlex.quote(remote_dir)} && python3 ping_logger.py {' '.join(shlex.quote(a) for a in remote_args)}"
+     ret = subprocess.run(["ssh", "-t", f"root@{host}", cmd])
