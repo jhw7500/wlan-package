@@ -405,8 +405,9 @@ if __name__ == "__main__":
             _conf = json.load(_f)
         _global = _conf.get("logger", {}).get("link_interval_sec", _link_interval)
         _link_interval = _conf.get(IFACE, {}).get("logger", {}).get("link_interval_sec", _global)
-    except Exception:
-        pass
+    except (OSError, json.JSONDecodeError) as e:
+        import sys
+        print(f"WARN: [{IFACE}] config load failed, using defaults: {e}", file=sys.stderr)
 
     LOOP_INTERVAL = _link_interval
     SPIKE_THRESHOLD_FAIL = args.spike_fail

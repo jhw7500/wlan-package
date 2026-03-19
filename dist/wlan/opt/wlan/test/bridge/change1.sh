@@ -1,5 +1,5 @@
 #!/bin/bash
-wifi 0 
+wifi 0 restart
 killall relayd
 #relayd -I mlan1 -I eth0 -G 192.168.4.2 -B -D &
 relayd -I eth0 -I mlan1 &

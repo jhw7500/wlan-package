@@ -15,7 +15,7 @@ def read_current_bssid(link_json_path=LINK_JSON):
         with open(link_json_path, "r") as f:
             data = json.load(f)
         return data.get("link", {}).get("address", "").strip().lower()
-    except Exception:
+    except (FileNotFoundError, json.JSONDecodeError, KeyError):
         return ""
 
 
@@ -24,8 +24,8 @@ def read_current_ssid(link_json_path=LINK_JSON):
     try:
         with open(link_json_path, "r") as f:
             data = json.load(f)
-        return data.get("link", {}).get("ssid", "").strip()
-    except Exception:
+        return data.get("info", {}).get("ssid", "").strip()
+    except (FileNotFoundError, json.JSONDecodeError, KeyError):
         return ""
 
 

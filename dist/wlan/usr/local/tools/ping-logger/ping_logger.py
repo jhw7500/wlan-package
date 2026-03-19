@@ -17,6 +17,7 @@ import argparse
 import ipaddress
 import json
 import os
+import shlex
 import shutil
 import signal
 import subprocess
@@ -140,7 +141,7 @@ def exec_remote(cfg: SessionConfig, raw_args: list) -> None:
         local = os.path.join(script_dir, fname)
         if os.path.exists(local):
             subprocess.run(["scp", "-q", local, f"root@{host}:{remote_dir}/"],
-                           check=False, timeout=30)
+                           check=True, timeout=30)
 
     # -H 제거한 인자 재구성
     remote_args = []
@@ -154,7 +155,7 @@ def exec_remote(cfg: SessionConfig, raw_args: list) -> None:
             continue
         remote_args.append(arg)
 
-    cmd = f"cd {remote_dir} && python3 ping_logger.py {' '.join(remote_args)}"
+    cmd = f"cd {shlex.quote(remote_dir)} && python3 ping_logger.py {' '.join(shlex.quote(a) for a in remote_args)}"
     ret = subprocess.run(["ssh", "-t", f"root@{host}", cmd])
 
     # 결과 복사
@@ -200,7 +201,15 @@ def main() -> None:
         pcap2_path = os.path.join(cfg.output_dir, f"icmp_{cfg.secondary}_{session_ts}.pcap")
 
     log_file = open(log_path, "w", encoding="utf-8")
+    try:
+        _run_session(cfg, log_file, log_path, pcap1_path, pcap2_path)
+    finally:
+        if not log_file.closed:
+            log_file.close()
 
+
+def _run_session(cfg, log_file, log_path, pcap1_path, pcap2_path) -> None:
+    """실제 캡처 세션 실행 (log_file은 호출자가 닫음)"""
     # 세션 헤더
     header_lines = [
         "=== ping-logger 세션 시작 ===",
@@ -266,8 +275,6 @@ def main() -> None:
                                            cfg.primary, cfg.secondary)
             print(analysis)
             log_file.write(analysis + "\n")
-
-        log_file.close()
 
         # 결과 요약
         print("")
