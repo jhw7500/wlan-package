@@ -8,7 +8,7 @@ flush_adapter() {
     local adapter="$1" iface="$2"
     local proc_file="${PROC_BASE}/${adapter}/mgmt_log"
     local log_dir="${LOG_BASE}/${iface}"
-    local log_file="${log_dir}/gmgmt.log"
+    local log_file="${log_dir}/mgmt.log"
 
     [ -f "$proc_file" ] || return 0
 

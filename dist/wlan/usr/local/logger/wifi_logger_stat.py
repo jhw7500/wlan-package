@@ -26,16 +26,24 @@ STAT_RESET_INTERVAL = 604800  # 통계 리셋 주기 (7일)
 last_log_time = time.time()  # 마지막 로깅 시간
 tx_retrys = {}
 
-# Load from JSON config
 WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
-try:
-    with open(WIFI_INIT_CONF_JSON) as _f:
-        _conf = json.load(_f)
-    log_interval = _conf.get("logger", {}).get("stat_log_interval_sec", log_interval)
-    check_interval = _conf.get("logger", {}).get("stat_check_interval_sec", check_interval)
-    STAT_RESET_INTERVAL = _conf.get("logger", {}).get("stat_reset_interval_sec", STAT_RESET_INTERVAL)
-except Exception:
-    pass
+
+def load_logger_config(iface):
+    """Load logger config: {iface}.logger.key → logger.key → default"""
+    global log_interval, check_interval, STAT_RESET_INTERVAL
+    try:
+        with open(WIFI_INIT_CONF_JSON) as _f:
+            _conf = json.load(_f)
+        _global = _conf.get("logger", {})
+        _iface = _conf.get(iface, {}).get("logger", {})
+        log_interval = _iface.get("stat_log_interval_sec",
+                       _global.get("stat_log_interval_sec", log_interval))
+        check_interval = _iface.get("stat_check_interval_sec",
+                         _global.get("stat_check_interval_sec", check_interval))
+        STAT_RESET_INTERVAL = _iface.get("stat_reset_interval_sec",
+                              _global.get("stat_reset_interval_sec", STAT_RESET_INTERVAL))
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"WARN: [{iface}] config load failed, using defaults: {e}", file=sys.stderr)
 
 LOG_LINE_RE = re.compile(r"""
     ^\[
@@ -598,7 +606,9 @@ if __name__ == "__main__":
         IFACE = "mlan0"
     else:
         IFACE = sys.argv[1]
-        
+
+    load_logger_config(IFACE)
+
     LOG_DIR = f"/var/log/cantops/stat/{IFACE}"
     logger.message("info", f"[{IFACE}] version : {VERSION}, log_file : {LOG_DIR}/stat.log", _EXTRA_())
     
