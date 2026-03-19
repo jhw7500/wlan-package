@@ -15,7 +15,17 @@ def read_current_bssid(link_json_path=LINK_JSON):
         with open(link_json_path, "r") as f:
             data = json.load(f)
         return data.get("link", {}).get("address", "").strip().lower()
-    except Exception:
+    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+        return ""
+
+
+def read_current_ssid(link_json_path=LINK_JSON):
+    """Read current connected SSID from link.json"""
+    try:
+        with open(link_json_path, "r") as f:
+            data = json.load(f)
+        return data.get("info", {}).get("ssid", "").strip()
+    except (FileNotFoundError, json.JSONDecodeError, KeyError):
         return ""
 
 
@@ -80,6 +90,7 @@ def build_candidate_list():
     Sorted by RSSI (ss) descending (higher is better).
     """
     current_bssid = read_current_bssid()
+    current_ssid = read_current_ssid()
     aps = parse_last_scan_block()
 
     if not aps:
@@ -89,6 +100,10 @@ def build_candidate_list():
     for ap in aps:
         bssid_low = ap["bssid"].strip().lower()
         ap["is_current"] = (bssid_low == current_bssid)
+
+    # Filter by current SSID
+    if current_ssid:
+        aps = [ap for ap in aps if ap["ssid"] == current_ssid]
 
     # Sort by RSSI (higher is better; e.g. -40 > -50)
     aps.sort(key=lambda x: x["ss"], reverse=True)
@@ -147,16 +162,15 @@ def roam_to_ap(interface, ap, index_label=None):
 def roam_to_best_non_current(interface, candidates):
     """
     Find the best AP excluding the current one and roam to it.
+    Candidates are already filtered by same SSID in build_candidate_list.
     """
     others = [ap for ap in candidates if not ap.get("is_current")]
     if not others:
         print("No other APs available to roam.")
         return 1
 
-    # Already sorted by ss in build_candidate_list, but sort again for safety
     others.sort(key=lambda x: x["ss"], reverse=True)
     best_ap = others[0]
-    # index_label is just informational; not the original index
     return roam_to_ap(interface, best_ap, index_label="best_non_current")
 
 

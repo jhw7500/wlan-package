@@ -34,16 +34,18 @@ log_all() {
 }
 
 do_reboot() {
+  # Try graceful reboot first, fall back to forced reboot
+  sync
   if command -v /sbin/reboot >/dev/null 2>&1; then
-    /sbin/reboot
+    /sbin/reboot || /sbin/reboot -f
     return $?
   fi
   if command -v reboot >/dev/null 2>&1; then
-    reboot
+    reboot || reboot -f
     return $?
   fi
   if command -v systemctl >/dev/null 2>&1; then
-    systemctl reboot
+    systemctl reboot || systemctl reboot --force
     return $?
   fi
 

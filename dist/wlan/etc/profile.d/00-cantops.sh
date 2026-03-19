@@ -80,6 +80,12 @@ alias mlogt='cat $CAPDIR0/mgmt.log |tail -n $1'
 alias mlogh='cat $CAPDIR0/mgmt.log |head -n $1'
 alias mlogf='tail -f $CAPDIR0/mgmt.log'
 
+alias mlog1='cat $CAPDIR1/mgmt.log'
+alias mlogg1='cat $CAPDIR1/mgmt.log | grep -i $1 -a'
+alias mlogt1='cat $CAPDIR1/mgmt.log |tail -n $1'
+alias mlogh1='cat $CAPDIR1/mgmt.log |head -n $1'
+alias mlogf1='tail -f $CAPDIR1/mgmt.log'
+
 alias glog='cat $CAPDIR0/gmgmt.log'
 alias glogg='cat $CAPDIR0/gmgmt.log | grep -i $1 -a'
 alias glogt='cat $CAPDIR0/gmgmt.log |tail -n $1'
