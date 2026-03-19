@@ -43,7 +43,6 @@ def load_logger_config(iface):
         STAT_RESET_INTERVAL = _iface.get("stat_reset_interval_sec",
                               _global.get("stat_reset_interval_sec", STAT_RESET_INTERVAL))
     except (OSError, json.JSONDecodeError) as e:
-        import sys
         print(f"WARN: [{iface}] config load failed, using defaults: {e}", file=sys.stderr)
 
 LOG_LINE_RE = re.compile(r"""

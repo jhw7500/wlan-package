@@ -201,22 +201,29 @@ show_info() {
         show_iface_config() {
             local iface="$1"
             if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
+                local iface_json
+                iface_json=$(jq --arg i "$iface" '.[$i]' "$WIFI_INIT_CONF_JSON")
+                if [ -z "$iface_json" ] || [ "$iface_json" = "null" ]; then
+                    echo "  [${iface}] (no JSON config)"
+                    return
+                fi
+
                 local enabled freq net_rx bgscan_interval
                 local roam_th_2g roam_th_5g roam_diff roam_check
                 local pred_en load_en pingpong_en adaptive_en
 
-                enabled=$(jq -r ".${iface}.enabled // true" "$WIFI_INIT_CONF_JSON")
-                freq=$(jq -r ".${iface}.Frequency // \"auto\"" "$WIFI_INIT_CONF_JSON")
-                net_rx=$(jq -r ".${iface}.net_rx // 0" "$WIFI_INIT_CONF_JSON")
-                bgscan_interval=$(jq -r ".${iface}.bgscan.interval // 60" "$WIFI_INIT_CONF_JSON")
-                roam_th_2g=$(jq -r ".${iface}.roaming.DEFAULT_TH_2G // -75" "$WIFI_INIT_CONF_JSON")
-                roam_th_5g=$(jq -r ".${iface}.roaming.DEFAULT_TH_5G // -75" "$WIFI_INIT_CONF_JSON")
-                roam_diff=$(jq -r ".${iface}.roaming.DIFF_TH // 10" "$WIFI_INIT_CONF_JSON")
-                roam_check=$(jq -r ".${iface}.roaming.CHECK_INTERVAL // 5" "$WIFI_INIT_CONF_JSON")
-                pred_en=$(jq -r ".${iface}.roaming.PREDICTIVE_ROAM.enable // true" "$WIFI_INIT_CONF_JSON")
-                load_en=$(jq -r ".${iface}.roaming.LOAD_BASED_ROAM.enable // false" "$WIFI_INIT_CONF_JSON")
-                pingpong_en=$(jq -r ".${iface}.roaming.PING_PONG_PREVENTION.enable // true" "$WIFI_INIT_CONF_JSON")
-                adaptive_en=$(jq -r ".${iface}.roaming.ADAPTIVE_INTERVAL.enable // true" "$WIFI_INIT_CONF_JSON")
+                enabled=$(echo "$iface_json" | jq -r '.enabled // true')
+                freq=$(echo "$iface_json" | jq -r '.Frequency // "auto"')
+                net_rx=$(echo "$iface_json" | jq -r '.net_rx // 0')
+                bgscan_interval=$(echo "$iface_json" | jq -r '.bgscan.interval // 60')
+                roam_th_2g=$(echo "$iface_json" | jq -r '.roaming.DEFAULT_TH_2G // -75')
+                roam_th_5g=$(echo "$iface_json" | jq -r '.roaming.DEFAULT_TH_5G // -75')
+                roam_diff=$(echo "$iface_json" | jq -r '.roaming.DIFF_TH // 10')
+                roam_check=$(echo "$iface_json" | jq -r '.roaming.CHECK_INTERVAL // 5')
+                pred_en=$(echo "$iface_json" | jq -r '.roaming.PREDICTIVE_ROAM.enable // true')
+                load_en=$(echo "$iface_json" | jq -r '.roaming.LOAD_BASED_ROAM.enable // false')
+                pingpong_en=$(echo "$iface_json" | jq -r '.roaming.PING_PONG_PREVENTION.enable // true')
+                adaptive_en=$(echo "$iface_json" | jq -r '.roaming.ADAPTIVE_INTERVAL.enable // true')
 
                 echo "  [${iface}]"
                 echo "    enabled=$enabled  Frequency=$freq  net_rx=$net_rx"
