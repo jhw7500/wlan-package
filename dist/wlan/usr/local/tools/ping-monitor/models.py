@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ping-logger 데이터 모델"""
+"""ping-monitor 데이터 모델"""
 
 from dataclasses import dataclass
 from typing import Optional
@@ -30,7 +30,8 @@ class SessionConfig:
     secondary: str = "mlan0"
     target_ip: str = ""
     duration: int = 0               # 0 = Ctrl+C까지
-    output_dir: str = "/tmp/ping-logger"
+    output_dir: str = "/tmp/ping-monitor"
+    log_file: str = ""                  # 고정 로그 경로 (비어있으면 타임스탬프 파일 생성)
     save_pcap: bool = True
     show_timestamp: bool = True
     show_seq: bool = True
@@ -57,6 +58,7 @@ class SessionConfig:
             target_ip=filt.get("target_ip", defaults.target_ip),
             duration=int(cap.get("duration", defaults.duration)),
             output_dir=out.get("dir", defaults.output_dir),
+            log_file=out.get("log_file", defaults.log_file),
             save_pcap=bool(out.get("save_pcap", defaults.save_pcap)),
             show_timestamp=bool(disp.get("show_timestamp", defaults.show_timestamp)),
             show_seq=bool(disp.get("show_seq", defaults.show_seq)),

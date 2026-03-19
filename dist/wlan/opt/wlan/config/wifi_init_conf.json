@@ -35,7 +35,7 @@
         "mode": "normal",
         "engine": "pcap",
         "thermal_state": "ok",
-        "mode_force": 0,
+        "mode_force": 1,
         "link_guard": 1,
         "link_down_debounce_sec": 2,
         "link_up_stable_sec": 2,
@@ -144,6 +144,11 @@
             "stat_check_interval_sec": 1,
             "stat_reset_interval_sec": 604800
         },
+        "periodic_roam": {
+            "_comment": "Periodic passive roam (roam 0) configuration for mlan0",
+            "enabled": false,
+            "interval": 60
+        },
         "bgscan": {
             "_comment": "Background scan configuration for mlan0",
             "interval": 60
@@ -207,6 +212,11 @@
             "stat_log_interval_sec": 1,
             "stat_check_interval_sec": 1,
             "stat_reset_interval_sec": 604800
+        },
+        "periodic_roam": {
+            "_comment": "Periodic passive roam (roam 0) configuration for mlan1",
+            "enabled": false,
+            "interval": 60
         },
         "bgscan": {
             "_comment": "Background scan configuration for mlan1",

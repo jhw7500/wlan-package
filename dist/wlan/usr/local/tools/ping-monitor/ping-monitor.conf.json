@@ -1,6 +1,6 @@
 {
     "_comment": [
-        "ping-logger 설정 파일",
+        "ping-monitor 설정 파일",
         "CLI 옵션이 JSON 설정보다 우선합니다",
         "interfaces: 캡처할 인터페이스 (1개 또는 2개)",
         "mode: single(1개) 또는 dual(2개) 인터페이스 캡처"
@@ -19,7 +19,7 @@
         "_comment_duration": "0 = Ctrl+C까지 캡처"
     },
     "output": {
-        "dir": "/tmp/ping-logger",
+        "dir": "/tmp/ping-monitor",
         "save_pcap": true,
         "_comment_save_pcap": "true: pcap 파일도 저장, false: 로그만"
     },

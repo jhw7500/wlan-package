@@ -6,18 +6,21 @@ JSONDIR="$LOGDIR/json"
 SUMDIR="$LOGDIR/summary"
 WPADIR="$LOGDIR/wpa"
 CPUDIR="$LOGDIR/cpu"
+PINGDIR="$LOGDIR/ping"
 
 STATDIR0="$STATDIR/mlan0"
 JSONDIR0="$JSONDIR/mlan0"
 SCANDIR0="$SCANDIR/mlan0"
 CAPDIR0="$CAPDIR/mlan0"
 WPADIR0="$WPADIR/mlan0"
+PINGDIR0="$PINGDIR/mlan0"
 
 STATDIR1="$STATDIR/mlan1"
 JSONDIR1="$JSONDIR/mlan1"
 SCANDIR1="$SCANDIR/mlan1"
 CAPDIR1="$CAPDIR/mlan1"
 WPADIR1="$WPADIR/mlan1"
+PINGDIR1="$PINGDIR/mlan1"
 
 JSONDIR2="$JSONDIR/eth0"
 
@@ -37,12 +40,6 @@ alias klogg='cat $LOGDIR/kern.log | grep -i $1 -a'
 alias klogt='cat $LOGDIR/kern.log | tail -n $1'
 alias klogh='cat $LOGDIR/kern.log | head -n $1'
 alias klogf='tail -f $LOGDIR/kern.log'
-
-alias plog='cat $LOGDIR/ping.log'
-alias plogg='cat $LOGDIR/ping.log | grep -i $1 -a'
-alias plogt='cat $LOGDIR/ping.log | tail -n $1'
-alias plogh='cat $LOGDIR/ping.log | head -n $1'
-alias plogf='tail -f $LOGDIR/ping.log'
 
 alias sslog='cat $SUMDIR/summary.log'
 alias sslogg='cat $SUMDIR/summary.log | grep -i $1 -a'
@@ -92,9 +89,17 @@ alias glogt='cat $CAPDIR0/gmgmt.log |tail -n $1'
 alias glogh='cat $CAPDIR0/gmgmt.log |head -n $1'
 alias glogf='tail -f $CAPDIR0/gmgmt.log'
 
-#alias plogt='tcpdump -r $CAPDIR/tmp/pcap.pcap -tttt -e -n |tail -n $1'
-#alias plogh='tcpdump -r $CAPDIR/tmp/pcap.pcap -tttt -e -n -c $1'
-#alias plogg='tcpdump -r $CAPDIR/tmp/pcap.pcap -tttt -e- n |grep -i $1 -a'
+alias plog='cat $PINGDIR0/ping.log'
+alias plogg='cat $PINGDIR0/ping.log | grep -i $1 -a'
+alias plogt='cat $PINGDIR0/ping.log | tail -n $1'
+alias plogh='cat $PINGDIR0/ping.log | head -n $1'
+alias plogf='tail -f $PINGDIR0/ping.log'
+
+alias plog1='cat $PINGDIR1/ping.log'
+alias plogg1='cat $PINGDIR1/ping.log | grep -i $1 -a'
+alias plogt1='cat $PINGDIR1/ping.log | tail -n $1'
+alias plogh1='cat $PINGDIR1/ping.log | head -n $1'
+alias plogf1='tail -f $PINGDIR1/ping.log'
 
 alias rlogg='cat $WPADIR0/wpa.log |grep -i -E "ROAM|CTRL-EVENT-CONNECTED|Associated with|Trying to authenticate with|Trying to associate" | grep -i $1 -a'
 alias rlogt='cat $WPADIR0/wpa.log |grep -i -E "ROAM|CTRL-EVENT-CONNECTED|Associated with|Trying to authenticate with|Trying to associate" | tail -n $1'

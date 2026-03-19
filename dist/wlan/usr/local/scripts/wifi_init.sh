@@ -456,4 +456,56 @@ if command -v systemctl >/dev/null 2>&1; then
     # (mlan0/mlan1 디바이스가 존재해야 BindsTo 조건 충족)
     control_bridge_service "$PRIMARY_IFACE" "$PRIMARY_MAC_SOURCE"
     control_bridge_service "$SECONDARY_IFACE" "$SECONDARY_MAC_SOURCE"
+
+    # wifi_manager 서비스가 없거나 disabled이면 직접 wpa_supplicant 시작
+    wifi_manager_active=false
+    for svc in wifi_manager wifi-manager; do
+        if systemctl is-enabled "$svc" >/dev/null 2>&1; then
+            wifi_manager_active=true
+            logger -p local0.info "[$tag:$LINENO] $svc is enabled; skip manual wpa_supplicant start"
+            break
+        fi
+    done
+
+    if [ "$wifi_manager_active" = "false" ]; then
+        if [ "$PRIMARY_ENABLED" = "true" ]; then
+            logger -p local0.info "[$tag:$LINENO] No wifi_manager service; starting wpa_supplicant@$PRIMARY_IFACE"
+            systemctl start "wpa_supplicant@${PRIMARY_IFACE}" 2>/dev/null || \
+                logger -p local0.err "[$tag:$LINENO] Failed to start wpa_supplicant@$PRIMARY_IFACE"
+        fi
+        if [ "$SECONDARY_ENABLED" = "true" ]; then
+            logger -p local0.info "[$tag:$LINENO] No wifi_manager service; starting wpa_supplicant@$SECONDARY_IFACE"
+            systemctl start "wpa_supplicant@${SECONDARY_IFACE}" 2>/dev/null || \
+                logger -p local0.err "[$tag:$LINENO] Failed to start wpa_supplicant@$SECONDARY_IFACE"
+        fi
+    fi
+
+    # wifi_periodic_roam 서비스 제어 (JSON periodic_roam.enabled 기반)
+    control_periodic_roam_service() {
+        local iface=$1
+        local enabled_val
+
+        if ! wifi_init_iface_is_enabled "$iface" "true"; then
+            logger -p local0.info "[$tag:$LINENO] [$iface] disabled → stop+disable wifi_periodic_roam@$iface"
+            systemctl stop "wifi_periodic_roam@${iface}.service" 2>/dev/null || true
+            systemctl disable "wifi_periodic_roam@${iface}.service" 2>/dev/null || true
+            return 0
+        fi
+
+        enabled_val=$(jq -r ".${iface}.periodic_roam.enabled // false" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+        enabled_val=$(wifi_init_normalize_bool "$enabled_val" "false")
+
+        if [ "$enabled_val" = "true" ]; then
+            logger -p local0.info "[$tag:$LINENO] [$iface] periodic_roam enabled → enable+start wifi_periodic_roam@$iface"
+            systemctl enable "wifi_periodic_roam@${iface}.service" 2>/dev/null || true
+            systemctl start "wifi_periodic_roam@${iface}.service" 2>/dev/null || true
+        else
+            logger -p local0.info "[$tag:$LINENO] [$iface] periodic_roam disabled → stop+disable wifi_periodic_roam@$iface"
+            systemctl stop "wifi_periodic_roam@${iface}.service" 2>/dev/null || true
+            systemctl disable "wifi_periodic_roam@${iface}.service" 2>/dev/null || true
+        fi
+    }
+
+    control_periodic_roam_service "$PRIMARY_IFACE"
+    control_periodic_roam_service "$SECONDARY_IFACE"
 fi
