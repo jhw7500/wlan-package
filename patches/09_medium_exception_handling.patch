@@ -1,0 +1,63 @@
+From: Code Review Fix <review@fix>
+Subject: [PATCH 09] Medium: 광범위 예외 처리(except Exception: pass) 개선
+
+passive_roam.py, wifi_logger_link.py, wifi_logger_stat.py 에서
+except Exception: pass 패턴을 명시적 예외 + 경고 로그로 교체.
+JSON 파싱 오류, 파일 권한 문제 등을 무시하지 않고 경고로 출력.
+
+---
+ dist/wlan/usr/local/logger/passive_roam.py     | 4 ++--
+ dist/wlan/usr/local/logger/wifi_logger_link.py | 3 ++-
+ dist/wlan/usr/local/logger/wifi_logger_stat.py | 3 ++-
+ 3 files changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/dist/wlan/usr/local/logger/passive_roam.py b/dist/wlan/usr/local/logger/passive_roam.py
+index 0000001..0000002 100755
+--- a/dist/wlan/usr/local/logger/passive_roam.py
++++ b/dist/wlan/usr/local/logger/passive_roam.py
+@@ -12,14 +12,14 @@ def read_current_bssid(link_json_path=LINK_JSON):
+     """Read current connected BSSID from link.json"""
+     try:
+         with open(link_json_path, "r") as f:
+             data = json.load(f)
+         return data.get("link", {}).get("address", "").strip().lower()
+-    except Exception:
++    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+         return ""
+
+
+ def read_current_ssid(link_json_path=LINK_JSON):
+     """Read current connected SSID from link.json"""
+     try:
+         with open(link_json_path, "r") as f:
+             data = json.load(f)
+         return data.get("info", {}).get("ssid", "").strip()
+-    except Exception:
++    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+         return ""
+
+diff --git a/dist/wlan/usr/local/logger/wifi_logger_link.py b/dist/wlan/usr/local/logger/wifi_logger_link.py
+index 0000001..0000002 100644
+--- a/dist/wlan/usr/local/logger/wifi_logger_link.py
++++ b/dist/wlan/usr/local/logger/wifi_logger_link.py
+@@ -405,7 +405,8 @@ if __name__ == "__main__":
+         _global = _conf.get("logger", {}).get("link_interval_sec", _link_interval)
+         _link_interval = _conf.get(IFACE, {}).get("logger", {}).get("link_interval_sec", _global)
+-    except Exception:
+-        pass
++    except (OSError, json.JSONDecodeError) as e:
++        import sys
++        print(f"WARN: [{IFACE}] config load failed, using defaults: {e}", file=sys.stderr)
+
+diff --git a/dist/wlan/usr/local/logger/wifi_logger_stat.py b/dist/wlan/usr/local/logger/wifi_logger_stat.py
+index 0000001..0000002 100644
+--- a/dist/wlan/usr/local/logger/wifi_logger_stat.py
++++ b/dist/wlan/usr/local/logger/wifi_logger_stat.py
+@@ -43,5 +43,6 @@ def load_logger_config(iface):
+         STAT_RESET_INTERVAL = _iface.get("stat_reset_interval_sec",
+                               _global.get("stat_reset_interval_sec", STAT_RESET_INTERVAL))
+-    except Exception:
+-        pass
++    except (OSError, json.JSONDecodeError) as e:
++        import sys
++        print(f"WARN: [{iface}] config load failed, using defaults: {e}", file=sys.stderr)

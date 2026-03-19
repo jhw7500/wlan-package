@@ -1,0 +1,26 @@
+From: Code Review Fix <review@fix>
+Subject: [PATCH 04] High: passive_roam.py SSID 읽기 경로 수정 (link → info)
+
+wifi_logger_link.py는 link.json을 {"info": ..., "link": link_data} 형태로 저장.
+parse_station_dump()는 link_data에 ssid를 채우지 않으므로
+data.get("link", {}).get("ssid") 는 항상 "" 반환 → SSID 필터 무효화.
+
+data.get("info", {}).get("ssid") 로 수정하여 SSID 필터가 실제 동작하도록 함.
+
+---
+ dist/wlan/usr/local/logger/passive_roam.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/dist/wlan/usr/local/logger/passive_roam.py b/dist/wlan/usr/local/logger/passive_roam.py
+index 0000001..0000002 100755
+--- a/dist/wlan/usr/local/logger/passive_roam.py
++++ b/dist/wlan/usr/local/logger/passive_roam.py
+@@ -24,7 +24,7 @@ def read_current_ssid(link_json_path=LINK_JSON):
+     """Read current connected SSID from link.json"""
+     try:
+         with open(link_json_path, "r") as f:
+             data = json.load(f)
+-        return data.get("link", {}).get("ssid", "").strip()
++        return data.get("info", {}).get("ssid", "").strip()
+     except Exception:
+         return ""
