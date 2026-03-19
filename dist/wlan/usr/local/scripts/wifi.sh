@@ -324,7 +324,7 @@ show_info() {
             local iface="$1"
             svc_list+=("wifi_logger@${iface}" "wifi_led@${iface}")
             svc_list+=("wifi_checker@${iface}")
-            svc_list+=("wifi_bridge@${iface}" "wifi_arping@${iface}" "wifi_bgscan@${iface}" "wifi_roam@${iface}")
+            svc_list+=("wifi_bridge@${iface}" "wifi_arping@${iface}" "wifi_bgscan@${iface}" "wifi_roam@${iface}" "wifi_periodic_roam@${iface}" "ping_monitor@${iface}")
             if [ "$iface" = "mlan0" ] || [ "$iface" = "mlan1" ]; then
                 svc_list+=("wpa_supplicant@${iface}")
             fi

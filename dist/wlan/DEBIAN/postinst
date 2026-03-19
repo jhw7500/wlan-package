@@ -166,7 +166,7 @@ customctl() {
 
   echo "[installer] Optimizing service configuration (batch processing)..."
   systemctl mask systemd-networkd-wait-online nfs-server proc-fs-nfsd.mount ovsdb-server avahi-daemon avahi-autoipd psplash || true
-  systemctl disable --now dhcpcd openvswitch openvswitch-switch connman smb nmb avahi-daemon.socket containerd netdata collectd named bind fake-hwclock.timer journald-snapshot.timer ifplugd systemd-resolved hiawatha netserver wifi_checker@eth0 || true
+  systemctl disable --now dhcpcd openvswitch openvswitch-switch connman smb nmb avahi-daemon.socket containerd netdata collectd named bind fake-hwclock.timer journald-snapshot.timer ifplugd systemd-resolved netserver wifi_checker@eth0 || true
   systemctl enable watchdog switchd fake-hwclock wifi_init wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 wifi_logger@mlan0 wifi_checker@mlan0 wifi_bgscan@mlan0 wifi_roam@mlan0 wifi_arping@mlan0 || true
 
   INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 10))

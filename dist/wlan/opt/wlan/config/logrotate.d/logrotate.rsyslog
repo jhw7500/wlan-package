@@ -17,14 +17,17 @@
 /var/log/cantops/stat/mlan1/*.log
 /var/log/cantops/wpa/mlan0/wpa.log
 /var/log/cantops/wpa/mlan1/wpa.log
+/var/log/cantops/ping/mlan0/ping.log
+/var/log/cantops/ping/mlan1/ping.log
 {
         rotate 14
         daily
+        maxsize 50M
         missingok
         notifempty
         delaycompress
         compress
-    	dateext
+        dateext
         postrotate
                 /usr/bin/pkill -HUP rsyslogd 2> /dev/null || true
         endscript
