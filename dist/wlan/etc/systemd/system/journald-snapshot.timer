@@ -2,9 +2,8 @@
 Description=Periodic journal snapshot (30?60s)
 
 [Timer]
-OnBootSec=2min
-#OnUnitActiveSec=30s     # 30초 (원하면 60s)
-OnCalendar=*:0/1
+OnBootSec=1min
+OnUnitActiveSec=5min
 AccuracySec=5s
 Persistent=true
 
