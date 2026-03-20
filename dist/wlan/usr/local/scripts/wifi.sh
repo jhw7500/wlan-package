@@ -122,6 +122,8 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} freq {freq_list|channel_list} : persist"
     echo "       wifi {0|1|mlan0|mlan1} scan {freq_list|channel_list} : runtime"
     echo "       wifi {0|1|mlan0|mlan1} roam [0|1..N] : 0=auto best, N=Nth AP (RSSI order)"
+    echo "       wifi {0|1|mlan0|mlan1} stat reset [mac] : reset stat records (all or specific MAC)"
+    echo "       wifi {0|1|mlan0|mlan1} stat interval {seconds} : set stat reset interval (persist)"
     echo "       wifi {0|1|mlan0|mlan1} mon [c|compact] [interval] [--summary-lines N] [--roam-display N]"
     echo "       wifi txpwr {0|1|2|3|no|default|low|org|conf_file_name} : persist"
     echo "       wifi cal {0|1|2|None|WlanCalData_ext.conf|WlanCalData_ext_RD.conf|*} : persist"
@@ -318,16 +320,23 @@ show_info() {
     echo "[Services]"
     if command -v systemctl >/dev/null 2>&1; then
         local svc_list=()
-        svc_list+=(wifi_init wifi_logger switchd)
+
+        # Non-wifi services
+        svc_list+=(switchd)
+        svc_list+=("journald-snapshot.timer" "fake-hwclock.timer" "log-watchdog.timer")
+
+        # WiFi global services
+        svc_list+=(wifi_init wifi_logger wifi_ping_monitor)
+        svc_list+=("wifi_mgmt_log.timer" "wifi_thermal_state.timer")
 
         add_iface_svcs() {
             local iface="$1"
-            svc_list+=("wifi_logger@${iface}" "wifi_led@${iface}")
-            svc_list+=("wifi_checker@${iface}")
-            svc_list+=("wifi_bridge@${iface}" "wifi_arping@${iface}" "wifi_bgscan@${iface}" "wifi_roam@${iface}" "wifi_periodic_roam@${iface}" "ping_monitor@${iface}")
             if [ "$iface" = "mlan0" ] || [ "$iface" = "mlan1" ]; then
                 svc_list+=("wpa_supplicant@${iface}")
             fi
+            svc_list+=("wifi_logger@${iface}" "wifi_led@${iface}")
+            svc_list+=("wifi_checker@${iface}" "wifi_event@${iface}")
+            svc_list+=("wifi_bridge@${iface}" "wifi_arping@${iface}" "wifi_bgscan@${iface}" "wifi_roam@${iface}" "wifi_periodic_roam@${iface}")
         }
 
         if [ "$only_iface" = "all" ]; then
@@ -337,9 +346,6 @@ show_info() {
         else
             add_iface_svcs "$only_iface"
         fi
-
-        # Timers (global)
-        svc_list+=("mgmt-log-flush.timer" "wbridge-thermal-state.timer" "journald-snapshot.timer" "fake-hwclock.timer")
 
         for svc in "${svc_list[@]}"; do
             state=$(systemctl is-active "$svc" 2>/dev/null || true)
@@ -547,6 +553,42 @@ case "$2" in
     else
         python3 /usr/local/logger/passive_roam.py $ROAM_ARG --iface $IFACE
     fi
+    ;;
+  stat)
+    case "${3:-}" in
+      reset)
+        TARGET_MAC="${4:-}"
+        if [ -n "$TARGET_MAC" ]; then
+            touch "/tmp/wifi_stat_reset_${TARGET_MAC}"
+            echo "stat reset requested for MAC $TARGET_MAC on $IFACE"
+        else
+            touch /tmp/wifi_stat_init_f
+            echo "stat reset requested for all records on $IFACE"
+        fi
+        ;;
+      interval)
+        if [ -z "${4:-}" ]; then
+            echo "Usage: wifi <iface> stat interval <seconds>"
+            exit 1
+        fi
+        INTERVAL_SEC="$4"
+        if ! [[ "$INTERVAL_SEC" =~ ^[0-9]+$ ]]; then
+            echo "Error: interval must be a positive integer (seconds)"
+            exit 1
+        fi
+        jq --argjson v "$INTERVAL_SEC" \
+            --arg iface "$IFACE" \
+            '.[$iface].logger.stat_reset_interval_sec = $v' \
+            "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp"
+        mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
+        echo "stat_reset_interval_sec set to ${INTERVAL_SEC}s for $IFACE in $WIFI_INIT_CONF_JSON"
+        ;;
+      *)
+        echo "Usage: wifi <iface> stat reset [mac]"
+        echo "       wifi <iface> stat interval <seconds>"
+        exit 1
+        ;;
+    esac
     ;;
   mon)
     shift 2

@@ -20,8 +20,10 @@
     },
     "output": {
         "dir": "/tmp/ping-monitor",
+        "log_file": "/var/log/cantops/ping/mlan0/ping.log",
         "save_pcap": true,
-        "_comment_save_pcap": "true: pcap 파일도 저장, false: 로그만"
+        "_comment_save_pcap": "true: pcap 파일도 저장, false: 로그만",
+        "_comment_log_file": "고정 로그 경로 (빈 문자열이면 타임스탬프 파일 생성)"
     },
     "display": {
         "show_timestamp": true,

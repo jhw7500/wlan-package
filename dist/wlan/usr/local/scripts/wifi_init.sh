@@ -16,6 +16,8 @@ DEV_CAP_MASK=""
 
 WIFI_INIT_CONF_JSON="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
 
+logger -p local0.info "[$tag:$LINENO] wifi initializing"
+
 # Load JSON config
 if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
     FW_NAME=$(jq -r '.global.FW_NAME // "cts/pcieuart9098_combo_v1.bin"' "$WIFI_INIT_CONF_JSON")
@@ -134,8 +136,6 @@ apply_net_rx_to_mod_para() {
     _set_net_rx_in_block "PCIE9098_1" "$mlan1_net_rx"
 }
 apply_net_rx_to_mod_para
-
-logger -p local0.info "[$tag:$LINENO] Booting"
 
 try_insmod() {
     local module_path=$1
@@ -266,11 +266,11 @@ apply_iface_txpwrlimit() {
     fi
 
     logger -p local0.info "[$tag:$LINENO] [$iface] TXPWRLIMIT_PATH : $TXPWRLIMIT_PATH"
-    mlanutl "$iface" hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_2g_cfg_set > /dev/null 2>&1
-    mlanutl "$iface" hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_5g_cfg_set_sub0 > /dev/null 2>&1
-    mlanutl "$iface" hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_5g_cfg_set_sub1 > /dev/null 2>&1
-    mlanutl "$iface" hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_5g_cfg_set_sub2 > /dev/null 2>&1
-    mlanutl "$iface" hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_5g_cfg_set_sub3 > /dev/null 2>&1
+    mlanutl "$iface" hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_2g_cfg_set > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] txpwrlimit_2g_cfg_set failed"
+    mlanutl "$iface" hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_5g_cfg_set_sub0 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] txpwrlimit_5g_cfg_set_sub0 failed"
+    mlanutl "$iface" hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_5g_cfg_set_sub1 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] txpwrlimit_5g_cfg_set_sub1 failed"
+    mlanutl "$iface" hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_5g_cfg_set_sub2 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] txpwrlimit_5g_cfg_set_sub2 failed"
+    mlanutl "$iface" hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_5g_cfg_set_sub3 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] txpwrlimit_5g_cfg_set_sub3 failed"
 }
 
 apply_iface_radio_defaults() {
@@ -284,19 +284,34 @@ apply_iface_radio_defaults() {
 
     sleep 0.2
     logger -p local0.info "[$tag:$LINENO] [$iface] macctrl 0x00010e13"
-    mlanutl "$iface" macctrl 0x00010e13 > /dev/null 2>&1
+    mlanutl "$iface" macctrl 0x00010e13 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] macctrl failed"
 
     sleep 0.2
     logger -p local0.info "[$tag:$LINENO] [$iface] httxcfg 0x00000063"
-    mlanutl "$iface" httxcfg 0x00000063 > /dev/null 2>&1
+    mlanutl "$iface" httxcfg 0x00000063 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] httxcfg failed"
 
     sleep 0.2
     logger -p local0.info "[$tag:$LINENO] [$iface] htcapinfo 0x05c20000"
-    mlanutl "$iface" htcapinfo 0x05c20000 > /dev/null 2>&1
+    mlanutl "$iface" htcapinfo 0x05c20000 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] htcapinfo failed"
 
     sleep 0.2
     logger -p local0.info "[$tag:$LINENO] [$iface] reassoctrl enable"
-    mlanutl "$iface" reassoctrl 1 > /dev/null 2>&1
+    mlanutl "$iface" reassoctrl 1 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] reassoctrl failed"
+
+    # Apply rate_adapt_cfg from global config (must be set before association)
+    local ra_mode ra_low ra_high ra_interval
+    ra_mode=$(jq -r '.global.rate_adapt.mode // empty' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    if [ -n "$ra_mode" ]; then
+        ra_low=$(jq -r '.global.rate_adapt.low_thresh // 255' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+        ra_high=$(jq -r '.global.rate_adapt.high_thresh // 255' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+        local ra_interval_ms
+        ra_interval_ms=$(jq -r '.global.rate_adapt.interval_ms // 100' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+        ra_interval=$((ra_interval_ms / 10))
+        sleep 0.2
+        logger -p local0.info "[$tag:$LINENO] [$iface] rate_adapt_cfg $ra_mode $ra_low $ra_high $ra_interval (${ra_interval_ms}ms)"
+        mlanutl "$iface" rate_adapt_cfg "$ra_mode" "$ra_low" "$ra_high" "$ra_interval" > /dev/null 2>&1 || \
+            logger -p local0.err "[$tag:$LINENO] [$iface] rate_adapt_cfg failed"
+    fi
 }
 
 apply_iface_bandcfg() {
@@ -333,13 +348,13 @@ apply_iface_bandcfg() {
 
     if [ "$freq_lc" = "5ghz" ]; then
         logger -p local0.info "[$tag:$LINENO] [$iface] freq 5GHz"
-        mlanutl "$iface" bandcfg "$bandcfg_5g"
+        mlanutl "$iface" bandcfg "$bandcfg_5g" > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] bandcfg 5GHz failed"
     elif [ "$freq_lc" = "2.4ghz" ]; then
         logger -p local0.info "[$tag:$LINENO] [$iface] freq 2.4GHz"
-        mlanutl "$iface" bandcfg "$bandcfg_24g"
+        mlanutl "$iface" bandcfg "$bandcfg_24g" > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] bandcfg 2.4GHz failed"
     elif [ "$freq_lc" = "auto" ]; then
         logger -p local0.info "[$tag:$LINENO] [$iface] freq Auto"
-        mlanutl "$iface" bandcfg "$bandcfg_auto"
+        mlanutl "$iface" bandcfg "$bandcfg_auto" > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] bandcfg auto failed"
     else
         logger -p local0.err "[$tag:$LINENO] [$iface] freq not available : $freq"
     fi
@@ -365,7 +380,12 @@ if [ "$PRIMARY_ENABLED" = "true" ]; then
     PRIMARY_RESULT=$(resolve_mac "$PRIMARY_IFACE" "$MAC_MODE")
     PRIMARY_MAC="${PRIMARY_RESULT% *}"
     PRIMARY_MAC_SOURCE="${PRIMARY_RESULT##* }"
-    /usr/local/scripts/update_mac.sh "$PRIMARY_IFACE" "$PRIMARY_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh $PRIMARY_IFACE failed"
+    if [ -n "$PRIMARY_MAC" ]; then
+        /usr/local/scripts/update_mac.sh "$PRIMARY_IFACE" "$PRIMARY_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh $PRIMARY_IFACE failed"
+    else
+        logger -p local0.info "[$tag:$LINENO] [$PRIMARY_IFACE] no MAC resolved; skip update_mac"
+        PRIMARY_MAC_SOURCE="none"
+    fi
 else
     PRIMARY_MAC_SOURCE="disabled"
     logger -p local0.info "[$tag:$LINENO] [$PRIMARY_IFACE] disabled; skip primary MAC update"
@@ -375,7 +395,12 @@ SECONDARY_ENABLED=$(iface_enabled_value "$SECONDARY_IFACE")
 if [ "$SECONDARY_ENABLED" = "true" ]; then
     SECONDARY_MAC=$(read_mac_from_json "base" "$SECONDARY_IFACE" "base") || SECONDARY_MAC=""
     SECONDARY_MAC_SOURCE="base"
-    /usr/local/scripts/update_mac.sh "$SECONDARY_IFACE" "$SECONDARY_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh $SECONDARY_IFACE failed"
+    if [ -n "$SECONDARY_MAC" ]; then
+        /usr/local/scripts/update_mac.sh "$SECONDARY_IFACE" "$SECONDARY_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh $SECONDARY_IFACE failed"
+    else
+        logger -p local0.info "[$tag:$LINENO] [$SECONDARY_IFACE] no base MAC configured; skip update_mac"
+        SECONDARY_MAC_SOURCE="none"
+    fi
 else
     SECONDARY_MAC_SOURCE="disabled"
     logger -p local0.info "[$tag:$LINENO] [$SECONDARY_IFACE] disabled; skip secondary MAC update"
@@ -406,7 +431,11 @@ control_bridge_service() {
 
 # --- eth0: base ---
 ETH0_MAC=$(read_mac_from_json "base" "eth0" "base") || ETH0_MAC=""
-/usr/local/scripts/update_mac.sh eth0 "$ETH0_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh eth0 failed"
+if [ -n "$ETH0_MAC" ]; then
+    /usr/local/scripts/update_mac.sh eth0 "$ETH0_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh eth0 failed"
+else
+    logger -p local0.info "[$tag:$LINENO] [eth0] no base MAC configured; skip update_mac"
+fi
 
 if ! try_insmod "/opt/wlan/driver/mlan.ko" ""; then
     echo "mlan module load failed"
@@ -432,6 +461,10 @@ fi
 if [ "$MFG_MODE" == "1" ]; then
     exit 1
 fi
+
+# insmod 후 wpa_supplicant가 자동 시작되었을 수 있음 → 라디오 설정 전에 중지
+systemctl stop wpa_supplicant@mlan0 2>/dev/null || true
+systemctl stop wpa_supplicant@mlan1 2>/dev/null || true
 
 apply_iface_txpwrlimit "mlan0" "$MLAN0_ENABLED"
 apply_iface_txpwrlimit "mlan1" "$MLAN1_ENABLED"
@@ -470,13 +503,8 @@ if command -v systemctl >/dev/null 2>&1; then
     if [ "$wifi_manager_active" = "false" ]; then
         if [ "$PRIMARY_ENABLED" = "true" ]; then
             logger -p local0.info "[$tag:$LINENO] No wifi_manager service; starting wpa_supplicant@$PRIMARY_IFACE"
-            systemctl start "wpa_supplicant@${PRIMARY_IFACE}" 2>/dev/null || \
+            systemctl start --no-block "wpa_supplicant@${PRIMARY_IFACE}" 2>/dev/null || \
                 logger -p local0.err "[$tag:$LINENO] Failed to start wpa_supplicant@$PRIMARY_IFACE"
-        fi
-        if [ "$SECONDARY_ENABLED" = "true" ]; then
-            logger -p local0.info "[$tag:$LINENO] No wifi_manager service; starting wpa_supplicant@$SECONDARY_IFACE"
-            systemctl start "wpa_supplicant@${SECONDARY_IFACE}" 2>/dev/null || \
-                logger -p local0.err "[$tag:$LINENO] Failed to start wpa_supplicant@$SECONDARY_IFACE"
         fi
     fi
 
@@ -508,4 +536,61 @@ if command -v systemctl >/dev/null 2>&1; then
 
     control_periodic_roam_service "$PRIMARY_IFACE"
     control_periodic_roam_service "$SECONDARY_IFACE"
+
+    # wifi_event 서비스 제어 (JSON on_connect.enabled 기반)
+    control_wifi_event_service() {
+        local iface=$1
+        local enabled_val
+
+        if ! wifi_init_iface_is_enabled "$iface" "true"; then
+            logger -p local0.info "[$tag:$LINENO] [$iface] disabled → stop+disable wifi_event@$iface"
+            systemctl stop "wifi_event@${iface}.service" 2>/dev/null || true
+            systemctl disable "wifi_event@${iface}.service" 2>/dev/null || true
+            return 0
+        fi
+
+        enabled_val=$(jq -r ".${iface}.on_connect.enabled // false" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+        enabled_val=$(wifi_init_normalize_bool "$enabled_val" "false")
+
+        if [ "$enabled_val" = "true" ]; then
+            logger -p local0.info "[$tag:$LINENO] [$iface] wifi_event enabled → enable+start wifi_event@$iface"
+            systemctl enable "wifi_event@${iface}.service" 2>/dev/null || true
+            systemctl start "wifi_event@${iface}.service" 2>/dev/null || true
+        else
+            logger -p local0.info "[$tag:$LINENO] [$iface] wifi_event disabled → stop+disable wifi_event@$iface"
+            systemctl stop "wifi_event@${iface}.service" 2>/dev/null || true
+            systemctl disable "wifi_event@${iface}.service" 2>/dev/null || true
+        fi
+    }
+
+    control_wifi_event_service "$PRIMARY_IFACE"
+    control_wifi_event_service "$SECONDARY_IFACE"
+
+    # ping_monitor 서비스 제어 (JSON global.ping_monitor.enabled 기반)
+    ping_monitor_enabled=$(jq -r '.global.ping_monitor.enabled // false' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    ping_monitor_enabled=$(wifi_init_normalize_bool "$ping_monitor_enabled" "false")
+
+    if [ "$ping_monitor_enabled" = "true" ]; then
+        logger -p local0.info "[$tag:$LINENO] ping_monitor enabled → enable+start"
+        systemctl enable wifi_ping_monitor.service 2>/dev/null || true
+        systemctl start wifi_ping_monitor.service 2>/dev/null || true
+    else
+        logger -p local0.info "[$tag:$LINENO] ping_monitor disabled → stop+disable"
+        systemctl stop wifi_ping_monitor.service 2>/dev/null || true
+        systemctl disable wifi_ping_monitor.service 2>/dev/null || true
+    fi
+
+    # wifi_mgmt_log.timer 제어 (net_rx > 0이면 자동 활성화)
+    mlan0_net_rx=$(jq -r '.mlan0.net_rx // 0' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    mlan1_net_rx=$(jq -r '.mlan1.net_rx // 0' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+
+    if [ "${mlan0_net_rx:-0}" -gt 0 ] 2>/dev/null || [ "${mlan1_net_rx:-0}" -gt 0 ] 2>/dev/null; then
+        logger -p local0.info "[$tag:$LINENO] net_rx active (mlan0=$mlan0_net_rx, mlan1=$mlan1_net_rx) → enable wifi_mgmt_log.timer"
+        systemctl enable wifi_mgmt_log.timer 2>/dev/null || true
+        systemctl start wifi_mgmt_log.timer 2>/dev/null || true
+    else
+        logger -p local0.info "[$tag:$LINENO] net_rx disabled → stop+disable wifi_mgmt_log.timer"
+        systemctl stop wifi_mgmt_log.timer 2>/dev/null || true
+        systemctl disable wifi_mgmt_log.timer 2>/dev/null || true
+    fi
 fi
