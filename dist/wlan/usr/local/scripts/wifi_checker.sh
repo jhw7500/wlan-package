@@ -10,7 +10,7 @@ WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
 
 # Defaults
 MAX_UNSTABLE_DURATION=10
-LIMIT_CNT=3
+LIMIT_CNT=5
 MAX_REBOOT_COUNT=3
 REBOOT_COOLDOWN_SEC=300
 MIN_UPTIME_SEC=120
@@ -89,7 +89,7 @@ check_station_dump() {
 if [ "$IFACE" != "eth0" ]; then
     for i in {1..3}; do
         if lsmod |grep -q "^$MODULE_NAME"; then
-            logger -p local0.info "[$tag:$LINENO] [$IFACE] $MODULE_NAME is loading..."
+            logger -p local0.info "[$tag:$LINENO] [$IFACE] $MODULE_NAME is loading?"
             break
         fi
         sleep 5

@@ -188,9 +188,17 @@ class Logger():
         
         self.syslog_handler = logging.handlers.SysLogHandler(address='/dev/log', facility=facility)
         self.syslog_handler.setLevel(logging.DEBUG)
-        #self.formatter = logging.Formatter('%(name)s - %(levelname)s - %(message)s')
-        formatter = logging.Formatter('%(name)s [%(custom_filename)s:%(custom_lineno)d] %(message)s')
-        self.syslog_handler.setFormatter(formatter)
+        class _SyslogFormatter(logging.Formatter):
+            def format(self, record):
+                fn = getattr(record, 'custom_filename', '')
+                ln = getattr(record, 'custom_lineno', 0)
+                if fn:
+                    prefix = f"{record.name} [{fn}:{ln}]"
+                else:
+                    prefix = record.name
+                return f"{prefix} {record.getMessage()}"
+
+        self.syslog_handler.setFormatter(_SyslogFormatter())
         self.logger.addHandler(self.syslog_handler)
         
         self.stream_handler = logging.StreamHandler()
@@ -205,16 +213,15 @@ class Logger():
             self.logger.addHandler(self.stream_handler)
     
     def message(self, level, message, _extra=None):
-        if level in self.levels:
-            if _extra is None:
-                self.logger.log(self.levels[level], message)
-            else:
-                self.logger.log(self.levels[level], message, extra={'custom_filename': _extra[0], 'custom_lineno': _extra[1]})
+        if _extra is None:
+            extra = {'custom_filename': '', 'custom_lineno': 0}
         else:
-            if _extra is None:
-                self.logger.log(self.levels[level], message)
-            else:
-                self.message('err', f"Unknown logging level: {level}", _EXTRA_())
+            extra = {'custom_filename': _extra[0], 'custom_lineno': _extra[1]}
+
+        if level in self.levels:
+            self.logger.log(self.levels[level], message, extra=extra)
+        else:
+            self.message('err', f"Unknown logging level: {level}", _EXTRA_())
 
     def no_extra(self):
         formatter = logging.Formatter('%(name)s %(message)s')
