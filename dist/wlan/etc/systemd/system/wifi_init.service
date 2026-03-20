@@ -4,7 +4,8 @@ After=local-fs.target
 Wants=local-fs.target
 
 [Service]
-Type=oneshot
+Type=simple
+TimeoutStartSec=120
 ExecStart=/usr/local/scripts/wifi_init.sh
 ExecStop=systemctl stop wpa_supplicant@mlan0
 ExecStop=systemctl stop wpa_supplicant@mlan1
