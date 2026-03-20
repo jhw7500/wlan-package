@@ -1,0 +1,13 @@
+[Unit]
+Description=Ping Monitor Service
+After=wifi_init.service
+Wants=wifi_init.service
+
+[Service]
+ExecStart=/bin/python3 /usr/local/tools/ping-monitor/ping_monitor.py -P
+Restart=on-failure
+RestartSec=10s
+User=root
+
+[Install]
+WantedBy=multi-user.target

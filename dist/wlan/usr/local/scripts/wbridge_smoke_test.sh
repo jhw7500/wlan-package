@@ -6,8 +6,8 @@ IFACE="${1:-mlan0}"
 SVC="wifi_bridge@${IFACE}.service"
 DEFAULT_CFG="/etc/default/wbridge"
 BACKUP_CFG="/tmp/wbridge.default.$$.bak"
-THERMAL_TIMER="wbridge-thermal-state.timer"
-THERMAL_SERVICE="wbridge-thermal-state.service"
+THERMAL_TIMER="wifi_thermal_state.timer"
+THERMAL_SERVICE="wifi_thermal_state.service"
 
 PASS_COUNT=0
 FAIL_COUNT=0

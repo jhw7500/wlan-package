@@ -4,7 +4,7 @@ After=wifi_init.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/scripts/mgmt_log_flush.sh
+ExecStart=/usr/local/scripts/wifi_mgmt_log.sh
 User=root
 StandardOutput=null
 LogLevelMax=notice
