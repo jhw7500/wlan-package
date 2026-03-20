@@ -5,7 +5,7 @@ Description=Periodic mgmt_log flush
 OnBootSec=60s
 OnUnitActiveSec=10s
 AccuracySec=2s
-Unit=mgmt-log-flush.service
+Unit=wifi_mgmt_log.service
 
 [Install]
 WantedBy=timers.target
