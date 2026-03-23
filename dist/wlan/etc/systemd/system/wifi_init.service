@@ -1,11 +1,11 @@
 [Unit]
 Description=WiFi init Service
-After=local-fs.target
+After=local-fs.target getty.target serial-getty@ttymxc1.service serial-getty@ttyGS0.service
 Wants=local-fs.target
 
 [Service]
-Type=simple
-TimeoutStartSec=120
+Type=oneshot
+TimeoutStartSec=180
 ExecStart=/usr/local/scripts/wifi_init.sh
 ExecStop=systemctl stop wpa_supplicant@mlan0
 ExecStop=systemctl stop wpa_supplicant@mlan1
