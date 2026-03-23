@@ -22,12 +22,11 @@ import shutil
 import signal
 import subprocess
 import sys
-import threading
 import time
 from datetime import datetime
 
 from models import SessionConfig
-from capture import CaptureStream, COLORS, NO_COLORS
+from capture import CaptureEngine, COLORS, NO_COLORS
 from analyzer import analyze_undelivered
 
 
@@ -192,7 +191,6 @@ def main() -> None:
     check_prerequisites(cfg)
 
     colors = COLORS if (cfg.color and sys.stdout.isatty()) else NO_COLORS
-    lock = threading.Lock()
 
     # 출력 디렉토리 + 파일 준비
     os.makedirs(cfg.output_dir, exist_ok=True)
@@ -215,13 +213,13 @@ def main() -> None:
 
     log_file = open(log_path, log_open_mode, encoding="utf-8")
     try:
-        _run_session(cfg, log_file, log_path, pcap1_path, pcap2_path, colors, lock)
+        _run_session(cfg, log_file, log_path, pcap1_path, pcap2_path, colors)
     finally:
         if not log_file.closed:
             log_file.close()
 
 
-def _run_session(cfg, log_file, log_path, pcap1_path, pcap2_path, colors, lock) -> None:
+def _run_session(cfg, log_file, log_path, pcap1_path, pcap2_path, colors) -> None:
     """실제 캡처 세션 실행 (log_file은 호출자가 닫음)"""
     # 세션 헤더
     header_lines = [
@@ -248,17 +246,17 @@ def _run_session(cfg, log_file, log_path, pcap1_path, pcap2_path, colors, lock) 
     print("INFO: 종료: Ctrl+C")
     print("")
 
-    # 캡처 스트림 시작
-    streams: list[CaptureStream] = []
-
-    s1 = CaptureStream(cfg.primary, cfg, log_file, colors, lock)
-    s1.start(pcap_path=pcap1_path if cfg.save_pcap else None)
-    streams.append(s1)
+    # 캡처 엔진 시작
+    engine = CaptureEngine(cfg, log_file, colors)
 
     if cfg.mode == "dual":
-        s2 = CaptureStream(cfg.secondary, cfg, log_file, colors, lock)
-        s2.start(pcap_path=pcap2_path if cfg.save_pcap else None)
-        streams.append(s2)
+        ifaces = [cfg.primary, cfg.secondary]
+        pcap_paths = {cfg.primary: pcap1_path, cfg.secondary: pcap2_path}
+    else:
+        ifaces = [cfg.primary]
+        pcap_paths = {cfg.primary: pcap1_path}
+
+    engine.start(ifaces, pcap_paths if cfg.save_pcap else None)
 
     # 종료 처리 (재진입 방지)
     shutdown_called = False
@@ -272,8 +270,7 @@ def _run_session(cfg, log_file, log_path, pcap1_path, pcap2_path, colors, lock) 
         print("")
         print("INFO: 캡처 종료...")
 
-        for s in streams:
-            s.stop()
+        engine.stop()
         time.sleep(0.5)
 
         # 세션 종료 로그
