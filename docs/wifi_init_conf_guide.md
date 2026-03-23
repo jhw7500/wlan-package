@@ -48,7 +48,7 @@ wifi_init_conf.json
 | `MFG_MODE` | string | `"0"` | 제조 모드. `"1"` = MFG 모드 활성화 |
 | `STANDARD` | string | `""` | WiFi 표준 제한 (비어있으면 자동) |
 | `DEV_CAP_MASK` | string | `""` | 디바이스 capability 마스크 |
-| `PRIMARY_IFACE` | string | `"mlan0"` | 기본 인터페이스. `"mlan0"` 또는 `"mlan1"` |
+| `BRIDGE_IFACE` | string | `"mlan0"` | 브릿지 인터페이스. `"mlan0"`, `"mlan1"`, 또는 `"none"` (bridge 비활성) |
 | `MAC_MODE` | string | `"default"` | MAC 주소 모드. `"default"` (base만), `"dynamic"` (동적→base), `"static"` (target→base) |
 | `ETH_CLIENT_IP` | string | `""` | 유선 클라이언트 고정 IP. 설정 시 `wired_mac_ip_get.py`의 quick ARP probe 활성화. 빈 문자열이면 비활성 |
 
