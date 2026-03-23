@@ -11,9 +11,10 @@
         "MFG_MODE": "0",
         "STANDARD": "",
         "DEV_CAP_MASK": "",
-        "PRIMARY_IFACE": "mlan0",
+        "BRIDGE_IFACE": "mlan0",
         "MAC_MODE": "dynamic",
         "ETH_CLIENT_IP": "",
+        "eth_link_wait_sec": 3,
         "rate_adapt": {
             "_comment": "FW rate adaptation config. mode: 0=legacy, 1=SR. For SR: thresh 0xff=dynamic(noise-based), else static(success-rate%). interval_ms: eval period in ms. Must be set before association.",
             "mode": 1,

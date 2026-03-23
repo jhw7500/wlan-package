@@ -27,7 +27,7 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
     MFG_MODE=$(jq -r '.global.MFG_MODE // "0"' "$WIFI_INIT_CONF_JSON")
     STANDARD=$(jq -r '.global.STANDARD // ""' "$WIFI_INIT_CONF_JSON")
     DEV_CAP_MASK=$(jq -r '.global.DEV_CAP_MASK // ""' "$WIFI_INIT_CONF_JSON")
-    PRIMARY_IFACE=$(jq -r '.global.PRIMARY_IFACE // "mlan0"' "$WIFI_INIT_CONF_JSON")
+    BRIDGE_IFACE=$(jq -r '.global.BRIDGE_IFACE // "mlan0"' "$WIFI_INIT_CONF_JSON")
     MAC_MODE=$(jq -r '.global.MAC_MODE // "default"' "$WIFI_INIT_CONF_JSON")
 fi
 
@@ -36,10 +36,14 @@ MLAN1_ENABLED=$(wifi_init_get_iface_enabled "mlan1" "true")
 MLAN0_FREQ=$(wifi_init_get_iface_frequency "mlan0" "auto")
 MLAN1_FREQ=$(wifi_init_get_iface_frequency "mlan1" "auto")
 
-PRIMARY_IFACE="${PRIMARY_IFACE:-mlan0}"
-if [ "$PRIMARY_IFACE" != "mlan0" ] && [ "$PRIMARY_IFACE" != "mlan1" ]; then
-    logger -p local0.err "[$tag:$LINENO] PRIMARY_IFACE invalid: $PRIMARY_IFACE, fallback to mlan0"
-    PRIMARY_IFACE="mlan0"
+BRIDGE_IFACE="${BRIDGE_IFACE:-mlan0}"
+BRIDGE_NONE=false
+if [ "$BRIDGE_IFACE" = "none" ]; then
+    BRIDGE_NONE=true
+    BRIDGE_IFACE="mlan0"
+elif [ "$BRIDGE_IFACE" != "mlan0" ] && [ "$BRIDGE_IFACE" != "mlan1" ]; then
+    logger -p local0.err "[$tag:$LINENO] BRIDGE_IFACE invalid: $BRIDGE_IFACE, fallback to mlan0"
+    BRIDGE_IFACE="mlan0"
 fi
 
 MAC_MODE="${MAC_MODE:-default}"
@@ -47,7 +51,7 @@ if [ "$MAC_MODE" != "default" ] && [ "$MAC_MODE" != "dynamic" ] && [ "$MAC_MODE"
     logger -p local0.err "[$tag:$LINENO] MAC_MODE invalid: $MAC_MODE, fallback to default"
     MAC_MODE="default"
 fi
-logger -p local0.info "[$tag:$LINENO] PRIMARY_IFACE=$PRIMARY_IFACE MAC_MODE=$MAC_MODE"
+logger -p local0.info "[$tag:$LINENO] BRIDGE_IFACE=$BRIDGE_IFACE BRIDGE_NONE=$BRIDGE_NONE MAC_MODE=$MAC_MODE"
 logger -p local0.info "[$tag:$LINENO] mlan0 enabled=$MLAN0_ENABLED freq=$MLAN0_FREQ"
 logger -p local0.info "[$tag:$LINENO] mlan1 enabled=$MLAN1_ENABLED freq=$MLAN1_FREQ"
 
@@ -360,35 +364,35 @@ apply_iface_bandcfg() {
     fi
 }
 
-# PRIMARY: MAC_MODE에 따라 resolve
+# BRIDGE: MAC_MODE에 따라 resolve
 # SECONDARY: base만
-if [ "$PRIMARY_IFACE" = "mlan0" ]; then
+if [ "$BRIDGE_IFACE" = "mlan0" ]; then
     SECONDARY_IFACE="mlan1"
 else
     SECONDARY_IFACE="mlan0"
 fi
 
 # 동적 MAC이 필요한 경우 wired_mac_ip_get.py 먼저 실행
-if [ "$MAC_MODE" = "dynamic" ] && wifi_init_iface_is_enabled "$PRIMARY_IFACE" "true"; then
-    logger -p local0.info "[$tag:$LINENO] [$PRIMARY_IFACE] running wired_mac_ip_get.py"
+if [ "$MAC_MODE" = "dynamic" ] && wifi_init_iface_is_enabled "$BRIDGE_IFACE" "true"; then
+    logger -p local0.info "[$tag:$LINENO] [$BRIDGE_IFACE] running wired_mac_ip_get.py"
     python3 /usr/local/logger/wired_mac_ip_get.py || true
 fi
 
 # resolve_mac 결과: "mac source"
-PRIMARY_ENABLED=$(iface_enabled_value "$PRIMARY_IFACE")
-if [ "$PRIMARY_ENABLED" = "true" ]; then
-    PRIMARY_RESULT=$(resolve_mac "$PRIMARY_IFACE" "$MAC_MODE")
-    PRIMARY_MAC="${PRIMARY_RESULT% *}"
-    PRIMARY_MAC_SOURCE="${PRIMARY_RESULT##* }"
-    if [ -n "$PRIMARY_MAC" ]; then
-        /usr/local/scripts/update_mac.sh "$PRIMARY_IFACE" "$PRIMARY_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh $PRIMARY_IFACE failed"
+BRIDGE_ENABLED=$(iface_enabled_value "$BRIDGE_IFACE")
+if [ "$BRIDGE_ENABLED" = "true" ]; then
+    BRIDGE_RESULT=$(resolve_mac "$BRIDGE_IFACE" "$MAC_MODE")
+    BRIDGE_MAC="${BRIDGE_RESULT% *}"
+    BRIDGE_MAC_SOURCE="${BRIDGE_RESULT##* }"
+    if [ -n "$BRIDGE_MAC" ]; then
+        /usr/local/scripts/update_mac.sh "$BRIDGE_IFACE" "$BRIDGE_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh $BRIDGE_IFACE failed"
     else
-        logger -p local0.info "[$tag:$LINENO] [$PRIMARY_IFACE] no MAC resolved; skip update_mac"
-        PRIMARY_MAC_SOURCE="none"
+        logger -p local0.info "[$tag:$LINENO] [$BRIDGE_IFACE] no MAC resolved; skip update_mac"
+        BRIDGE_MAC_SOURCE="none"
     fi
 else
-    PRIMARY_MAC_SOURCE="disabled"
-    logger -p local0.info "[$tag:$LINENO] [$PRIMARY_IFACE] disabled; skip primary MAC update"
+    BRIDGE_MAC_SOURCE="disabled"
+    logger -p local0.info "[$tag:$LINENO] [$BRIDGE_IFACE] disabled; skip primary MAC update"
 fi
 
 SECONDARY_ENABLED=$(iface_enabled_value "$SECONDARY_IFACE")
@@ -487,8 +491,16 @@ if command -v systemctl >/dev/null 2>&1; then
 
     # wifi_bridge 제어는 insmod + networkd restart 이후에 실행
     # (mlan0/mlan1 디바이스가 존재해야 BindsTo 조건 충족)
-    control_bridge_service "$PRIMARY_IFACE" "$PRIMARY_MAC_SOURCE"
-    control_bridge_service "$SECONDARY_IFACE" "$SECONDARY_MAC_SOURCE"
+    if [ "$BRIDGE_NONE" = "true" ]; then
+        logger -p local0.info "[$tag:$LINENO] BRIDGE_IFACE=none → stop+disable all wifi_bridge services"
+        systemctl stop "wifi_bridge@mlan0.service" 2>/dev/null || true
+        systemctl disable "wifi_bridge@mlan0.service" 2>/dev/null || true
+        systemctl stop "wifi_bridge@mlan1.service" 2>/dev/null || true
+        systemctl disable "wifi_bridge@mlan1.service" 2>/dev/null || true
+    else
+        control_bridge_service "$BRIDGE_IFACE" "$BRIDGE_MAC_SOURCE"
+        control_bridge_service "$SECONDARY_IFACE" "$SECONDARY_MAC_SOURCE"
+    fi
 
     # wifi_manager 서비스가 없거나 disabled이면 직접 wpa_supplicant 시작
     wifi_manager_active=false
@@ -501,10 +513,10 @@ if command -v systemctl >/dev/null 2>&1; then
     done
 
     if [ "$wifi_manager_active" = "false" ]; then
-        if [ "$PRIMARY_ENABLED" = "true" ]; then
-            logger -p local0.info "[$tag:$LINENO] No wifi_manager service; starting wpa_supplicant@$PRIMARY_IFACE"
-            systemctl start --no-block "wpa_supplicant@${PRIMARY_IFACE}" 2>/dev/null || \
-                logger -p local0.err "[$tag:$LINENO] Failed to start wpa_supplicant@$PRIMARY_IFACE"
+        if [ "$BRIDGE_ENABLED" = "true" ]; then
+            logger -p local0.info "[$tag:$LINENO] No wifi_manager service; starting wpa_supplicant@$BRIDGE_IFACE"
+            systemctl start --no-block "wpa_supplicant@${BRIDGE_IFACE}" 2>/dev/null || \
+                logger -p local0.err "[$tag:$LINENO] Failed to start wpa_supplicant@$BRIDGE_IFACE"
         fi
     fi
 
@@ -526,7 +538,7 @@ if command -v systemctl >/dev/null 2>&1; then
         if [ "$enabled_val" = "true" ]; then
             logger -p local0.info "[$tag:$LINENO] [$iface] periodic_roam enabled → enable+start wifi_periodic_roam@$iface"
             systemctl enable "wifi_periodic_roam@${iface}.service" 2>/dev/null || true
-            systemctl start "wifi_periodic_roam@${iface}.service" 2>/dev/null || true
+            systemctl start --no-block "wifi_periodic_roam@${iface}.service" 2>/dev/null || true
         else
             logger -p local0.info "[$tag:$LINENO] [$iface] periodic_roam disabled → stop+disable wifi_periodic_roam@$iface"
             systemctl stop "wifi_periodic_roam@${iface}.service" 2>/dev/null || true
@@ -534,7 +546,7 @@ if command -v systemctl >/dev/null 2>&1; then
         fi
     }
 
-    control_periodic_roam_service "$PRIMARY_IFACE"
+    control_periodic_roam_service "$BRIDGE_IFACE"
     control_periodic_roam_service "$SECONDARY_IFACE"
 
     # wifi_event 서비스 제어 (JSON on_connect.enabled 기반)
@@ -555,7 +567,7 @@ if command -v systemctl >/dev/null 2>&1; then
         if [ "$enabled_val" = "true" ]; then
             logger -p local0.info "[$tag:$LINENO] [$iface] wifi_event enabled → enable+start wifi_event@$iface"
             systemctl enable "wifi_event@${iface}.service" 2>/dev/null || true
-            systemctl start "wifi_event@${iface}.service" 2>/dev/null || true
+            systemctl start --no-block "wifi_event@${iface}.service" 2>/dev/null || true
         else
             logger -p local0.info "[$tag:$LINENO] [$iface] wifi_event disabled → stop+disable wifi_event@$iface"
             systemctl stop "wifi_event@${iface}.service" 2>/dev/null || true
@@ -563,7 +575,7 @@ if command -v systemctl >/dev/null 2>&1; then
         fi
     }
 
-    control_wifi_event_service "$PRIMARY_IFACE"
+    control_wifi_event_service "$BRIDGE_IFACE"
     control_wifi_event_service "$SECONDARY_IFACE"
 
     # ping_monitor 서비스 제어 (JSON global.ping_monitor.enabled 기반)
@@ -573,7 +585,7 @@ if command -v systemctl >/dev/null 2>&1; then
     if [ "$ping_monitor_enabled" = "true" ]; then
         logger -p local0.info "[$tag:$LINENO] ping_monitor enabled → enable+start"
         systemctl enable wifi_ping_monitor.service 2>/dev/null || true
-        systemctl start wifi_ping_monitor.service 2>/dev/null || true
+        systemctl start --no-block wifi_ping_monitor.service 2>/dev/null || true
     else
         logger -p local0.info "[$tag:$LINENO] ping_monitor disabled → stop+disable"
         systemctl stop wifi_ping_monitor.service 2>/dev/null || true
@@ -587,7 +599,7 @@ if command -v systemctl >/dev/null 2>&1; then
     if [ "${mlan0_net_rx:-0}" -gt 0 ] 2>/dev/null || [ "${mlan1_net_rx:-0}" -gt 0 ] 2>/dev/null; then
         logger -p local0.info "[$tag:$LINENO] net_rx active (mlan0=$mlan0_net_rx, mlan1=$mlan1_net_rx) → enable wifi_mgmt_log.timer"
         systemctl enable wifi_mgmt_log.timer 2>/dev/null || true
-        systemctl start wifi_mgmt_log.timer 2>/dev/null || true
+        systemctl start --no-block wifi_mgmt_log.timer 2>/dev/null || true
     else
         logger -p local0.info "[$tag:$LINENO] net_rx disabled → stop+disable wifi_mgmt_log.timer"
         systemctl stop wifi_mgmt_log.timer 2>/dev/null || true
