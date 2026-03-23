@@ -135,6 +135,38 @@ usage() {
     exit 1
 }
 
+freq_to_channel() {
+    local f="$1"
+    if ! [[ "$f" =~ ^[0-9]+$ ]]; then
+        echo "$f"
+        return
+    fi
+    if (( f == 2484 )); then
+        echo 14
+    elif (( f >= 2412 && f <= 2472 )); then
+        echo $(( (f - 2407) / 5 ))
+    elif (( f >= 5000 && f <= 5995 )); then
+        echo $(( (f - 5000) / 5 ))
+    else
+        echo "$f"
+    fi
+}
+
+freqs_with_channels() {
+    local freqs="$1"
+    local result=""
+    for f in $freqs; do
+        local ch
+        ch=$(freq_to_channel "$f")
+        if [ "$ch" != "$f" ]; then
+            result="${result:+$result }${f}(ch${ch})"
+        else
+            result="${result:+$result }${f}"
+        fi
+    done
+    echo "$result"
+}
+
 to_freq_mhz() {
     local v="$1"
     if ! [[ "$v" =~ ^[0-9]+$ ]]; then
@@ -190,8 +222,13 @@ show_info() {
                     break
                 fi
             done
-            printf "  %-6s: %-18s [%s] MAC:%s Carrier:%s GW:%s Conf:%s\n" \
-                "$dev" "${cidr:-N/A}" "$state" "$mac" "$carrier" "${gw:-N/A}" "${cfg_ip:-N/A}"
+            if [ "$only_iface" = "all" ]; then
+                printf "  %-6s: %-18s [%s] MAC:%s Carrier:%s GW:%s Conf:%s\n" \
+                    "$dev" "${cidr:-N/A}" "$state" "$mac" "$carrier" "${gw:-N/A}" "${cfg_ip:-N/A}"
+            else
+                printf "  %-18s [%s] MAC:%s Carrier:%s GW:%s Conf:%s\n" \
+                    "${cidr:-N/A}" "$state" "$mac" "$carrier" "${gw:-N/A}" "${cfg_ip:-N/A}"
+            fi
         fi
     done
     echo ""
@@ -227,11 +264,18 @@ show_info() {
                 pingpong_en=$(echo "$iface_json" | jq -r '.roaming.PING_PONG_PREVENTION.enable // true')
                 adaptive_en=$(echo "$iface_json" | jq -r '.roaming.ADAPTIVE_INTERVAL.enable // true')
 
-                echo "  [${iface}]"
-                echo "    enabled=$enabled  Frequency=$freq  net_rx=$net_rx"
-                echo "    bgscan_interval=${bgscan_interval}s"
-                echo "    roaming: TH_2G=${roam_th_2g} TH_5G=${roam_th_5g} DIFF=${roam_diff} CHECK=${roam_check}s"
-                echo "    features: predictive=$pred_en load_based=$load_en pingpong=$pingpong_en adaptive=$adaptive_en"
+                if [ "$only_iface" = "all" ]; then
+                    echo "  [${iface}]"
+                    echo "    enabled=$enabled  Frequency=$freq  net_rx=$net_rx"
+                    echo "    bgscan_interval=${bgscan_interval}s"
+                    echo "    roaming: TH_2G=${roam_th_2g} TH_5G=${roam_th_5g} DIFF=${roam_diff} CHECK=${roam_check}s"
+                    echo "    features: predictive=$pred_en load_based=$load_en pingpong=$pingpong_en adaptive=$adaptive_en"
+                else
+                    echo "  enabled=$enabled  Frequency=$freq  net_rx=$net_rx"
+                    echo "  bgscan_interval=${bgscan_interval}s"
+                    echo "  roaming: TH_2G=${roam_th_2g} TH_5G=${roam_th_5g} DIFF=${roam_diff} CHECK=${roam_check}s"
+                    echo "  features: predictive=$pred_en load_based=$load_en pingpong=$pingpong_en adaptive=$adaptive_en"
+                fi
             else
                 echo "  [${iface}] (no JSON config)"
             fi
@@ -304,14 +348,20 @@ show_info() {
         key_mgmt=$(wpa_field "$conf" "key_mgmt")
         freq_list=$(wpa_field "$conf" "freq_list")
         scan_freq=$(wpa_field "$conf" "scan_freq")
-        local pad
-        pad=$(printf '%*s' $((${#dev} + 4)) "")
-        echo "  ${dev}: country=${country:-N/A} ssid=${ssid:-N/A} psk=${psk:-N/A} key_mgmt=${key_mgmt:-N/A}"
+        if [ "$only_iface" = "all" ]; then
+            local prefix="  ${dev}: "
+            local pad
+            pad=$(printf '%*s' ${#prefix} "")
+            echo "${prefix}country=${country:-N/A} ssid=${ssid:-N/A} psk=${psk:-N/A} key_mgmt=${key_mgmt:-N/A}"
+        else
+            local pad="  "
+            echo "  country=${country:-N/A} ssid=${ssid:-N/A} psk=${psk:-N/A} key_mgmt=${key_mgmt:-N/A}"
+        fi
         if [ -n "${freq_list:-}" ]; then
-            echo "${pad}freq_list=${freq_list}"
+            echo "${pad}freq_list=$(freqs_with_channels "${freq_list// / }")"
         fi
         if [ -n "${scan_freq:-}" ]; then
-            echo "${pad}scan_freq=${scan_freq}"
+            echo "${pad}scan_freq=$(freqs_with_channels "${scan_freq// / }")"
         fi
     done
     echo ""
