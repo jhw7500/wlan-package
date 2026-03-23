@@ -89,7 +89,7 @@ check_station_dump() {
 if [ "$IFACE" != "eth0" ]; then
     for i in {1..3}; do
         if lsmod |grep -q "^$MODULE_NAME"; then
-            logger -p local0.info "[$tag:$LINENO] [$IFACE] $MODULE_NAME is loading?"
+            #logger -p local0.info "[$tag:$LINENO] [$IFACE] $MODULE_NAME is loading?"
             break
         fi
         sleep 5
