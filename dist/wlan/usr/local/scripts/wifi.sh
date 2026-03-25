@@ -566,7 +566,10 @@ case "$2" in
     ;;
   restart)
     echo "restart WPA service for $IFACE..."
-    systemctl restart wpa_supplicant@$IFACE
+    #systemctl restart wpa_supplicant@$IFACE
+    systemctl stop wpa_supplicant@$IFACE
+    sleep 1
+    systemctl start wpa_supplicant@$IFACE
     ;;
   start | up)
     echo "Starting WPA service for $IFACE..."
@@ -850,23 +853,38 @@ case "$2" in
     if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> ip <address/netmask>" >&2; exit 1; fi
     NEW_IP="$1"
-    # subnet mask가 없으면 /24 기본 적용
-    if [[ "$NEW_IP" != */* ]]; then
-        NEW_IP="${NEW_IP}/24"
-        echo "No subnet mask specified, using default /24"
-    fi
     TMP_FILE="$(mktemp)"
-    if awk -v new_ip="$NEW_IP" '
-        BEGIN { changed = 0 }
-        /^[[:space:]]*#/ { print; next }
-        /^[[:space:]]*Address[[:space:]]*=/ { print "Address=" new_ip; changed = 1; next }
-        { print }
-        END { if (!changed) exit 1 }
-    ' "$CONF" > "$TMP_FILE"; then
-        safe_install_0644_sync "$TMP_FILE" "$CONF"
-        rm -f "$TMP_FILE"
-        echo "Address changed to \"$NEW_IP\" in $CONF"
-    else echo "no Address= line found, nothing changed in $CONF" >&2; rm -f "$TMP_FILE"; exit 1; fi
+    if [ "$NEW_IP" = "0" ]; then
+        # Address 줄 삭제
+        if awk '
+            BEGIN { found = 0 }
+            /^[[:space:]]*#/ { print; next }
+            /^[[:space:]]*Address[[:space:]]*=/ { found = 1; next }
+            { print }
+            END { if (!found) exit 1 }
+        ' "$CONF" > "$TMP_FILE"; then
+            safe_install_0644_sync "$TMP_FILE" "$CONF"
+            rm -f "$TMP_FILE"
+            echo "Address removed from $CONF"
+        else echo "no Address= line found in $CONF" >&2; rm -f "$TMP_FILE"; exit 1; fi
+    else
+        # subnet mask가 없으면 /24 기본 적용
+        if [[ "$NEW_IP" != */* ]]; then
+            NEW_IP="${NEW_IP}/24"
+            echo "No subnet mask specified, using default /24"
+        fi
+        if awk -v new_ip="$NEW_IP" '
+            BEGIN { changed = 0 }
+            /^[[:space:]]*#/ { print; next }
+            /^[[:space:]]*Address[[:space:]]*=/ { print "Address=" new_ip; changed = 1; next }
+            { print }
+            END { if (!changed) exit 1 }
+        ' "$CONF" > "$TMP_FILE"; then
+            safe_install_0644_sync "$TMP_FILE" "$CONF"
+            rm -f "$TMP_FILE"
+            echo "Address changed to \"$NEW_IP\" in $CONF"
+        else echo "no Address= line found, nothing changed in $CONF" >&2; rm -f "$TMP_FILE"; exit 1; fi
+    fi
     ;;
   gt)
     set -euo pipefail

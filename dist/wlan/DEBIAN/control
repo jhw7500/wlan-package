@@ -1,5 +1,5 @@
 Package: wlan-proc
-Version: 0.1.9
+Version: 0.2.0
 Section: test
 Priority: optional
 Architecture: arm64
@@ -29,3 +29,4 @@ Description: WLAN Application
  0.1.7 : wifi_init_conf.json, roam, bridge, etc
  0.1.8 : moal.ko, mlan.ko for mgmt frame capture
  0.1.9 : driver fixed-rate roaming, proc MGMT log, wifi_init_conf.json 통합, wifi-sniff 툴킷
+ 0.2.0 : 서비스 wifi_ prefix 통일, cron→timer 이관, 주기적 로밍/ping 모니터, 스캔 필터링, journald cursor 스냅샷, jq 최적화, 부팅 안정성(moal 재로드/audit·sysv 로그 정리), wpa restart 안정화

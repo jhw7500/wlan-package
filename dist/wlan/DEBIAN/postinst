@@ -171,7 +171,7 @@ customctl() {
   fi
 
   echo "[installer] Optimizing service configuration (batch processing)..."
-  systemctl mask systemd-networkd-wait-online nfs-server proc-fs-nfsd.mount ovsdb-server avahi-daemon avahi-autoipd psplash || true
+  systemctl mask systemd-networkd-wait-online nfs-server proc-fs-nfsd.mount ovsdb-server avahi-daemon avahi-autoipd psplash systemd-journald-audit.socket || true
   systemctl disable --now redis-server dhcpcd openvswitch openvswitch-switch connman smb nmb avahi-daemon.socket containerd netdata collectd named bind ifplugd systemd-resolved netserver wifi_checker@eth0 || true
   systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer wifi_init wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 wifi_logger@mlan0 wifi_checker@mlan0 wifi_bgscan@mlan0 wifi_roam@mlan0 wifi_arping@mlan0 log-watchdog.timer || true
 
@@ -262,6 +262,7 @@ json_merge() {
   dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
   /usr/local/logger/print.py green "\r\n[installer] create symlinks..."
 
+  ln -sf /dev/null /lib/systemd/system-generators/systemd-sysv-generator
   # Create symlinks for wlan-bridge binaries (wbridge)
   mkdir -p /usr/local/bin
   ln -sf /usr/local/wlan-bridge/wbridge/wbridge /usr/local/bin/wifi-wbridge

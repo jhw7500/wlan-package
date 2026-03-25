@@ -441,6 +441,52 @@ else
     logger -p local0.info "[$tag:$LINENO] [eth0] no base MAC configured; skip update_mac"
 fi
 
+# 이미 로드된 모듈이 있으면 사용 프로세스 종료 후 제거
+if lsmod | grep -q "^moal\b" || lsmod | grep -q "^mlan\b"; then
+    logger -p local0.info "[$tag:$LINENO] moal/mlan already loaded → unloading"
+
+    # 의존 서비스 중지
+    for svc in wpa_supplicant@mlan0 wpa_supplicant@mlan1 \
+               wifi_bridge@mlan0 wifi_bridge@mlan1 \
+               wifi_checker@mlan0 wifi_checker@mlan1 \
+               wifi_event@mlan0 wifi_event@mlan1 \
+               wifi_roam@mlan0 wifi_roam@mlan1 \
+               wifi_bgscan@mlan0 wifi_bgscan@mlan1 \
+               wifi_periodic_roam@mlan0 wifi_periodic_roam@mlan1 \
+               wifi_ping_monitor; do
+        systemctl stop "$svc" 2>/dev/null || true
+    done
+
+    # mlan0/mlan1 인터페이스를 사용하는 나머지 프로세스 종료
+    for iface in mlan0 mlan1; do
+        if [ -d "/sys/class/net/$iface" ]; then
+            pids=$(fuser /sys/class/net/"$iface" 2>/dev/null | tr -s ' ') || true
+            if [ -n "$pids" ]; then
+                logger -p local0.info "[$tag:$LINENO] killing processes on $iface: $pids"
+                kill $pids 2>/dev/null || true
+                sleep 0.5
+                kill -9 $pids 2>/dev/null || true
+            fi
+            ip link set "$iface" down 2>/dev/null || true
+        fi
+    done
+
+    # 모듈 제거 (moal → mlan 순서)
+    if lsmod | grep -q "^moal\b"; then
+        rmmod moal 2>/dev/null || logger -p local0.err "[$tag:$LINENO] rmmod moal failed"
+    fi
+    if lsmod | grep -q "^mlan\b"; then
+        rmmod mlan 2>/dev/null || logger -p local0.err "[$tag:$LINENO] rmmod mlan failed"
+    fi
+
+    # 제거 확인
+    if lsmod | grep -q "^moal\b\|^mlan\b"; then
+        logger -p local0.emerg "[$tag:$LINENO] failed to unload moal/mlan modules"
+        exit 1
+    fi
+    logger -p local0.info "[$tag:$LINENO] moal/mlan modules unloaded successfully"
+fi
+
 if ! try_insmod "/opt/wlan/driver/mlan.ko" ""; then
     echo "mlan module load failed"
     exit 1
