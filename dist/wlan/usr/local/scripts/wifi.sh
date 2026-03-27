@@ -869,9 +869,8 @@ case "$2" in
             END { if (!found) exit 1 }
         ' "$CONF" > "$TMP_FILE"; then
             safe_install_0644_sync "$TMP_FILE" "$CONF"
-            rm -f "$TMP_FILE"
             echo "Address removed from $CONF"
-        else echo "no Address= line found in $CONF" >&2; rm -f "$TMP_FILE"; exit 1; fi
+        else echo "no Address= line found in $CONF" >&2; exit 1; fi
     else
         # subnet mask가 없으면 /24 기본 적용
         if [[ "$NEW_IP" != */* ]]; then
@@ -886,9 +885,8 @@ case "$2" in
             END { if (!changed) exit 1 }
         ' "$CONF" > "$TMP_FILE"; then
             safe_install_0644_sync "$TMP_FILE" "$CONF"
-            rm -f "$TMP_FILE"
             echo "Address changed to \"$NEW_IP\" in $CONF"
-        else echo "no Address= line found, nothing changed in $CONF" >&2; rm -f "$TMP_FILE"; exit 1; fi
+        else echo "no Address= line found, nothing changed in $CONF" >&2; exit 1; fi
     fi
     ;;
   gt)

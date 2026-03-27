@@ -30,23 +30,24 @@ cleanup_symlinks() {
         /var/log/journal
 }
 
-case "$1" in
-purge)
-    echo "postrm purge"
-    logger -p local0.info "[$KEY][$tag:$LINENO] Purging wlan-proc package"
-
-    cleanup_symlinks
-
-    # SysV generator 복원
+# SysV generator 복원 + audit socket unmask
+restore_systemd_overrides() {
     if [ -f /lib/systemd/system-generators/systemd-sysv-generator.orig ]; then
         mv /lib/systemd/system-generators/systemd-sysv-generator.orig /lib/systemd/system-generators/systemd-sysv-generator
         logger -p local0.info "[$KEY][$tag:$LINENO] Restored systemd-sysv-generator"
     elif [ -L /lib/systemd/system-generators/systemd-sysv-generator ]; then
         rm -f /lib/systemd/system-generators/systemd-sysv-generator
     fi
-
-    # audit socket unmask
     systemctl unmask systemd-journald-audit.socket 2>/dev/null || true
+}
+
+case "$1" in
+purge)
+    echo "postrm purge"
+    logger -p local0.info "[$KEY][$tag:$LINENO] Purging wlan-proc package"
+
+    cleanup_symlinks
+    restore_systemd_overrides
 
     # Clean up /usr/local/dumb directory (remove even if not empty)
     rm -rf /usr/local/dumb 2>/dev/null || true
@@ -75,14 +76,7 @@ remove)
     logger -p local0.info "[$KEY][$tag:$LINENO] Remove completed for wlan-proc package"
 
     cleanup_symlinks
-
-    # SysV generator 복원
-    if [ -f /lib/systemd/system-generators/systemd-sysv-generator.orig ]; then
-        mv /lib/systemd/system-generators/systemd-sysv-generator.orig /lib/systemd/system-generators/systemd-sysv-generator
-    elif [ -L /lib/systemd/system-generators/systemd-sysv-generator ]; then
-        rm -f /lib/systemd/system-generators/systemd-sysv-generator
-    fi
-    systemctl unmask systemd-journald-audit.socket 2>/dev/null || true
+    restore_systemd_overrides
 
     systemctl disable --now cpufreq-min.service 2>/dev/null || true
     systemctl disable --now wifi_thermal_state.timer wifi_thermal_state.service 2>/dev/null || true
