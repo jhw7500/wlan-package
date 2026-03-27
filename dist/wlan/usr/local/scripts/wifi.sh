@@ -858,7 +858,7 @@ case "$2" in
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> ip <address/netmask>" >&2; exit 1; fi
     NEW_IP="$1"
     TMP_FILE="$(mktemp)"
-    trap 'rm -f "$TMP_FILE"' EXIT
+    trap 'rm -f "$TMP_FILE"; sync 2>/dev/null || true' EXIT
     if [ "$NEW_IP" = "0" ]; then
         # Address 줄 삭제
         if awk '
