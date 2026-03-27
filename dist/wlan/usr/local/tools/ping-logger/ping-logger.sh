@@ -1,12 +1,12 @@
 #!/bin/bash
-# ping-monitor.sh — 유무선 브릿지 ICMP 지연/손실 분석 도구
+# ping-logger.sh — 유무선 브릿지 ICMP 지연/손실 분석 도구
 # 클라이언트 모드에서 동작, 브릿지에 영향 없음
 set -euo pipefail
 
 # --- 설정 ---
 IF_WLAN="mlan0"
 IF_ETH="eth0"
-OUTPUT_DIR="/tmp/ping-monitor"
+OUTPUT_DIR="/tmp/ping-logger"
 DURATION=0          # 0 = Ctrl+C까지
 TARGET_IP=""        # 특정 IP 필터 (빈 값 = 전체 ICMP)
 REMOTE_HOST=""
@@ -22,7 +22,7 @@ warn() { echo "WARN: $*" >&2; }
 
 usage() {
     cat <<'EOF'
-Usage: ping-monitor.sh [OPTIONS]
+Usage: ping-logger.sh [OPTIONS]
 
 유무선 브릿지 ICMP 지연/손실 분석 도구.
 eth0과 mlan0에서 동시에 ICMP 패킷을 캡처하여 브릿지 통과 지연과 손실을 분석합니다.
@@ -33,15 +33,15 @@ Options:
   -d <seconds>     캡처 시간 (기본: 0 = Ctrl+C까지)
   -e <interface>   유선 인터페이스 (기본: eth0)
   -w <interface>   무선 인터페이스 (기본: mlan0)
-  -o <directory>   출력 경로 (기본: /tmp/ping-monitor)
+  -o <directory>   출력 경로 (기본: /tmp/ping-logger)
   -H <host>        원격 타겟 IP (SSH 키 기반)
   -h               도움말
 
 Examples:
-  ping-monitor.sh                              # 전체 ICMP 캡처
-  ping-monitor.sh -t 192.168.1.1               # 특정 IP만
-  ping-monitor.sh -t 192.168.1.1 -d 60         # 60초간 캡처
-  ping-monitor.sh -H 10.0.0.100 -t 192.168.1.1 # 원격 실행
+  ping-logger.sh                              # 전체 ICMP 캡처
+  ping-logger.sh -t 192.168.1.1               # 특정 IP만
+  ping-logger.sh -t 192.168.1.1 -d 60         # 60초간 캡처
+  ping-logger.sh -H 10.0.0.100 -t 192.168.1.1 # 원격 실행
 
 Output:
   캡처 종료 후 자동으로 분석 결과를 출력합니다:
@@ -312,7 +312,7 @@ exec_remote() {
 
     local script_path
     script_path=$(readlink -f "$0")
-    scp -q "$script_path" "root@${host}:/tmp/ping-monitor.sh" || die "scp 실패"
+    scp -q "$script_path" "root@${host}:/tmp/ping-logger.sh" || die "scp 실패"
 
     # -H 제거한 인자 재구성
     local remote_args=()
@@ -323,14 +323,14 @@ exec_remote() {
         remote_args+=("$arg")
     done
 
-    ssh -t "root@${host}" bash /tmp/ping-monitor.sh "${remote_args[@]}"
+    ssh -t "root@${host}" bash /tmp/ping-logger.sh "${remote_args[@]}"
     local exit_code=$?
 
     # pcap 복사
     info "pcap 파일 복사 중..."
     mkdir -p "$OUTPUT_DIR"
     scp -q "root@${host}:${OUTPUT_DIR}/icmp_*.pcap" "${OUTPUT_DIR}/" 2>/dev/null || warn "pcap 복사 실패"
-    ssh "root@${host}" "rm -rf /tmp/ping-monitor.sh ${OUTPUT_DIR}" 2>/dev/null || true
+    ssh "root@${host}" "rm -rf /tmp/ping-logger.sh ${OUTPUT_DIR}" 2>/dev/null || true
 
     exit "$exit_code"
 }

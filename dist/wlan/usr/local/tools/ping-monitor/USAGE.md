@@ -1,4 +1,4 @@
-# ping-logger 사용 가이드
+# ping-monitor 사용 가이드
 
 유무선 브릿지 환경에서 ICMP 패킷의 실시간 흐름을 추적하고,
 인터페이스 간 미전달 패킷을 식별하는 도구입니다.
@@ -30,13 +30,13 @@
 
 | 파일 | 역할 |
 |------|------|
-| `ping_logger.py` | 메인 엔트리포인트 |
+| `ping_monitor.py` | 메인 엔트리포인트 |
 | `capture.py` | tcpdump 캡처 + 실시간 파싱 엔진 |
 | `analyzer.py` | 종료 시 미전달 패킷 분석 |
 | `models.py` | 데이터 모델 (PacketInfo, SessionConfig) |
-| `ping-logger.conf.json` | JSON 설정 파일 |
+| `ping-monitor.conf.json` | JSON 설정 파일 |
 
-경로: `/usr/local/tools/ping-logger/`
+경로: `/usr/local/tools/ping-monitor/`
 
 ---
 
@@ -45,8 +45,8 @@
 ### 기본 실행 (듀얼 모드)
 
 ```bash
-cd /usr/local/tools/ping-logger
-python3 ping_logger.py
+cd /usr/local/tools/ping-monitor
+python3 ping_monitor.py
 ```
 
 eth0 + mlan0에서 동시에 ICMP 패킷을 캡처합니다.
@@ -55,7 +55,7 @@ eth0 + mlan0에서 동시에 ICMP 패킷을 캡처합니다.
 ### 특정 IP만 필터링
 
 ```bash
-python3 ping_logger.py -t 192.168.1.1
+python3 ping_monitor.py -t 192.168.1.1
 ```
 
 게이트웨이나 특정 호스트와의 ping만 추적할 때 유용합니다.
@@ -63,7 +63,7 @@ python3 ping_logger.py -t 192.168.1.1
 ### 시간 제한 캡처
 
 ```bash
-python3 ping_logger.py -t 192.168.1.1 -d 60
+python3 ping_monitor.py -t 192.168.1.1 -d 60
 ```
 
 60초 후 자동 종료 + 분석 결과 출력.
@@ -78,7 +78,7 @@ python3 ping_logger.py -t 192.168.1.1 -d 60
 
 ```bash
 # 1. 듀얼 모드로 캡처 시작
-python3 ping_logger.py -t 192.168.1.1
+python3 ping_monitor.py -t 192.168.1.1
 
 # 2. 다른 터미널에서 ping 실행
 ping -i 0.5 192.168.1.1
@@ -109,7 +109,7 @@ ping -i 0.5 192.168.1.1
 ### 시나리오 2: 브릿지 지연 측정
 
 ```bash
-python3 ping_logger.py -t 192.168.1.1 -d 300
+python3 ping_monitor.py -t 192.168.1.1 -d 300
 ```
 
 5분간 캡처 후 브릿지 통과 지연 통계:
@@ -126,24 +126,24 @@ python3 ping_logger.py -t 192.168.1.1 -d 300
 무선 구간만 확인할 때:
 
 ```bash
-python3 ping_logger.py -s -1 mlan0
+python3 ping_monitor.py -s -1 mlan0
 ```
 
 유선 구간만 확인할 때:
 
 ```bash
-python3 ping_logger.py -s -1 eth0
+python3 ping_monitor.py -s -1 eth0
 ```
 
 단일 모드에서는 미전달 분석이 수행되지 않습니다.
 
 ### 시나리오 4: 원격 타겟에서 실행
 
-개발 PC에서 타겟 보드의 ping-logger를 원격 실행:
+개발 PC에서 타겟 보드의 ping-monitor를 원격 실행:
 
 ```bash
 # 타겟 IP: 10.0.0.100
-python3 ping_logger.py -H 10.0.0.100 -t 192.168.1.1 -d 60
+python3 ping_monitor.py -H 10.0.0.100 -t 192.168.1.1 -d 60
 ```
 
 동작 과정:
@@ -159,7 +159,7 @@ python3 ping_logger.py -H 10.0.0.100 -t 192.168.1.1 -d 60
 디스크 공간이 부족하거나 텍스트 로그만 필요할 때:
 
 ```bash
-python3 ping_logger.py -P -t 192.168.1.1
+python3 ping_monitor.py -P -t 192.168.1.1
 ```
 
 `-P` 옵션으로 pcap 저장을 비활성화합니다.
@@ -171,7 +171,7 @@ python3 ping_logger.py -P -t 192.168.1.1
 
 ### 설정 파일 위치
 
-기본: 스크립트 디렉토리의 `ping-logger.conf.json`
+기본: 스크립트 디렉토리의 `ping-monitor.conf.json`
 커스텀: `-c` 옵션으로 지정
 
 ### 설정 우선순위
@@ -224,7 +224,7 @@ JSON에서 `"duration": 60`으로 설정해도 `-d 30`을 주면 30초가 적용
 
 ```json
 "output": {
-    "dir": "/tmp/ping-logger",  // 출력 디렉토리
+    "dir": "/tmp/ping-monitor",  // 출력 디렉토리
     "save_pcap": true            // pcap 파일 저장 여부
 }
 ```
@@ -265,7 +265,7 @@ JSON에서 `"duration": 60`으로 설정해도 `-d 30`을 주면 30초가 적용
     "interfaces": { "mode": "dual", "primary": "eth0", "secondary": "mlan0" },
     "filter": { "target_ip": "192.168.1.1" },
     "capture": { "duration": 3600 },
-    "output": { "dir": "/tmp/ping-logger", "save_pcap": false },
+    "output": { "dir": "/tmp/ping-monitor", "save_pcap": false },
     "display": { "show_timestamp": true, "show_seq": true, "show_size": false, "color": true },
     "analysis": { "on_exit": false }
 }
@@ -277,7 +277,7 @@ JSON에서 `"duration": 60`으로 설정해도 `-d 30`을 주면 30초가 적용
     "interfaces": { "mode": "dual", "primary": "eth0", "secondary": "mlan0" },
     "filter": { "target_ip": "" },
     "capture": { "duration": 0 },
-    "output": { "dir": "/var/log/ping-logger", "save_pcap": true },
+    "output": { "dir": "/var/log/ping-monitor", "save_pcap": true },
     "display": { "show_timestamp": true, "show_seq": true, "show_size": true, "color": true },
     "analysis": { "on_exit": true }
 }
@@ -289,7 +289,7 @@ JSON에서 `"duration": 60`으로 설정해도 `-d 30`을 주면 30초가 적용
     "interfaces": { "mode": "single", "primary": "mlan0" },
     "filter": { "target_ip": "" },
     "capture": { "duration": 0 },
-    "output": { "dir": "/tmp/ping-logger", "save_pcap": true },
+    "output": { "dir": "/tmp/ping-monitor", "save_pcap": true },
     "display": { "show_timestamp": true, "show_seq": true, "show_size": false, "color": true },
     "analysis": { "on_exit": false }
 }
@@ -301,10 +301,10 @@ JSON에서 `"duration": 60`으로 설정해도 `-d 30`을 주면 30초가 적용
 
 ### 저장 위치
 
-기본: `/tmp/ping-logger/`
+기본: `/tmp/ping-monitor/`
 
 ```
-/tmp/ping-logger/
+/tmp/ping-monitor/
 ├── ping_20260317_143000.log                # 텍스트 로그
 ├── icmp_eth0_20260317_143000.pcap          # eth0 pcap
 └── icmp_mlan0_20260317_143000.pcap         # mlan0 pcap
@@ -313,7 +313,7 @@ JSON에서 `"duration": 60`으로 설정해도 `-d 30`을 주면 30초가 적용
 ### 텍스트 로그 형식
 
 ```
-=== ping-logger 세션 시작 ===
+=== ping-monitor 세션 시작 ===
 시간: 2026-03-17 14:30:00
 모드: dual
 인터페이스: eth0
@@ -342,14 +342,14 @@ pcap 파일은 tshark나 Wireshark로 추가 분석이 가능합니다.
 
 ```bash
 # 패킷 목록 확인
-tshark -r /tmp/ping-logger/icmp_eth0_20260317_143000.pcap
+tshark -r /tmp/ping-monitor/icmp_eth0_20260317_143000.pcap
 
 # 특정 seq만 필터
-tshark -r /tmp/ping-logger/icmp_eth0_20260317_143000.pcap -Y "icmp.seq == 45"
+tshark -r /tmp/ping-monitor/icmp_eth0_20260317_143000.pcap -Y "icmp.seq == 45"
 
 # RTT 분석 (pcap-analyzer 연동)
 cd /usr/local/tools/pcap-analyzer
-python3 pcap_analyzer.py /tmp/ping-logger/icmp_mlan0_20260317_143000.pcap
+python3 pcap_analyzer.py /tmp/ping-monitor/icmp_mlan0_20260317_143000.pcap
 ```
 
 ---
@@ -404,7 +404,7 @@ python3 pcap_analyzer.py /tmp/ping-logger/icmp_mlan0_20260317_143000.pcap
 tcpdump는 raw 소켓을 사용하므로 root 권한이 필수입니다.
 
 ```bash
-sudo python3 ping_logger.py
+sudo python3 ping_monitor.py
 ```
 
 ### "인터페이스 없음: mlan0"
@@ -446,7 +446,7 @@ tcpdump -i eth0 icmp -c 5
 
 ## 8. 기존 도구와의 비교
 
-| 항목 | ping-logger | ping-monitor.sh |
+| 항목 | ping-monitor | ping-logger.sh |
 |------|-------------|-----------------|
 | 언어 | Python 3 | Bash |
 | 실시간 출력 | O (컬러, 파싱) | X (캡처 후 분석) |
@@ -457,5 +457,5 @@ tcpdump -i eth0 icmp -c 5
 | 원격 실행 | O | O |
 | 지연 통계 | O (종료 시) | O (종료 시) |
 
-**ping-monitor.sh**: 캡처 후 일괄 분석에 적합
-**ping-logger**: 실시간 모니터링 + 로깅에 적합
+**ping-logger.sh**: 캡처 후 일괄 분석에 적합
+**ping-monitor**: 실시간 모니터링 + 로깅에 적합

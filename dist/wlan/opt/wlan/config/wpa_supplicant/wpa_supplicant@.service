@@ -10,10 +10,10 @@ Wants=network.target
 [Service]
 Type=simple
 ExecStartPre=/bin/mkdir -p /var/log/cantops/wpa/%I
-ExecStartPre=/bin/sh -c 'echo "$(date "+%%Y-%%m-%%d %%H:%%M:%%S.%%3N") wpa_supplicant[info] mlan0: START" >> /var/log/cantops/wpa/%I/wpa.log'
+ExecStartPre=/bin/sh -c 'echo "$(date "+%%Y-%%m-%%d %%H:%%M:%%S.%%3N") wpa_supplicant[info] %I: START" >> /var/log/cantops/wpa/%I/wpa.log'
 ExecStart=/usr/sbin/wpa_supplicant -c/etc/wpa_supplicant/wpa_supplicant-%I.conf -i%I -d
-ExecStopPost=/bin/sh -c 'echo "$(date "+%%Y-%%m-%%d %%H:%%M:%%S.%%3N") wpa_supplicant[info] mlan0: STOP" >> /var/log/cantops/wpa/%I/wpa.log'
-ExecStopPost=/bin/sleep 1
+ExecStopPost=/bin/sh -c 'echo "$(date "+%%Y-%%m-%%d %%H:%%M:%%S.%%3N") wpa_supplicant[info] %I: STOP" >> /var/log/cantops/wpa/%I/wpa.log'
+#ExecStopPost=/bin/sleep 1
 
 [Install]
 WantedBy=multi-user.target

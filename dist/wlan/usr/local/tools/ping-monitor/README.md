@@ -1,4 +1,4 @@
-# ping-logger — ICMP 실시간 로거
+# ping-monitor — ICMP 실시간 로거
 
 유무선 브릿지 환경에서 클라이언트 모드로 ICMP(ping) 패킷을 실시간 모니터링하고
 로그 파일로 기록하는 도구입니다. 브릿지 동작에 영향을 주지 않습니다.
@@ -22,45 +22,45 @@
 
 ```bash
 # 기본 (eth0 + mlan0 듀얼 캡처)
-python3 ping_logger.py
+python3 ping_monitor.py
 
 # 단일 인터페이스
-python3 ping_logger.py -s -1 mlan0
+python3 ping_monitor.py -s -1 mlan0
 
 # 특정 IP, 60초
-python3 ping_logger.py -t 192.168.1.1 -d 60
+python3 ping_monitor.py -t 192.168.1.1 -d 60
 
 # 커스텀 설정 파일
-python3 ping_logger.py -c /path/to/config.json
+python3 ping_monitor.py -c /path/to/config.json
 
 # 원격 실행
-python3 ping_logger.py -H 10.0.0.100
+python3 ping_monitor.py -H 10.0.0.100
 ```
 
 ## 옵션
 
 | 옵션 | 설명 | 기본값 |
 |------|------|--------|
-| `-c FILE` | JSON 설정 파일 경로 | 스크립트 디렉토리의 `ping-logger.conf.json` |
+| `-c FILE` | JSON 설정 파일 경로 | 스크립트 디렉토리의 `ping-monitor.conf.json` |
 | `-1 IFACE` | 첫 번째 인터페이스 | `eth0` |
 | `-2 IFACE` | 두 번째 인터페이스 | `mlan0` |
 | `-s` | 단일 인터페이스 모드 | 듀얼 |
 | `-t IP` | 특정 IP 필터 | 전체 ICMP |
 | `-d SEC` | 캡처 시간(초) | 0 (무제한) |
-| `-o DIR` | 출력 디렉토리 | `/tmp/ping-logger` |
+| `-o DIR` | 출력 디렉토리 | `/tmp/ping-monitor` |
 | `-P` | pcap 저장 비활성화 | 활성화 |
 | `-H HOST` | 원격 호스트 | - |
 
 ## JSON 설정
 
-`ping-logger.conf.json` 참조. CLI 옵션이 JSON 설정보다 우선합니다.
+`ping-monitor.conf.json` 참조. CLI 옵션이 JSON 설정보다 우선합니다.
 
 ```json
 {
     "interfaces": { "mode": "dual", "primary": "eth0", "secondary": "mlan0" },
     "filter":     { "target_ip": "" },
     "capture":    { "duration": 0 },
-    "output":     { "dir": "/tmp/ping-logger", "save_pcap": true },
+    "output":     { "dir": "/tmp/ping-monitor", "save_pcap": true },
     "display":    { "show_timestamp": true, "show_seq": true, "show_size": false, "color": true },
     "analysis":   { "on_exit": true }
 }
@@ -71,7 +71,7 @@ python3 ping_logger.py -H 10.0.0.100
 ### 실시간 터미널
 
 ```
-=== ping-logger 세션 시작 ===
+=== ping-monitor 세션 시작 ===
 시간: 2026-03-17 14:30:00
 모드: dual
 인터페이스: eth0

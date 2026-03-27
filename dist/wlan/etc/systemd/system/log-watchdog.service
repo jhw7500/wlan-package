@@ -1,0 +1,6 @@
+[Unit]
+Description=Log filesystem usage watchdog
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/scripts/log_watchdog.sh

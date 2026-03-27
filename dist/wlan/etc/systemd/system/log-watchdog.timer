@@ -1,0 +1,9 @@
+[Unit]
+Description=Log filesystem usage watchdog timer
+
+[Timer]
+OnBootSec=15s
+OnUnitActiveSec=10min
+
+[Install]
+WantedBy=timers.target

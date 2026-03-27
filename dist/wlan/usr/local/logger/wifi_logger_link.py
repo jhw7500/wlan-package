@@ -158,8 +158,6 @@ def parse_station_dump(output):
         stripped = line.strip()
         if stripped.startswith("Station "):
             result["address"] = stripped.split("Station")[1].split("(")[0].strip()
-            if result["address"] != address:
-                logger.message("info", f"[{IFACE}] AP changed: {address} -> {result['address']}", _EXTRA_())
             address = result["address"]
             continue
         key_value = stripped.split(":", 1)

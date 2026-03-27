@@ -209,7 +209,8 @@ def run_getscantable(retries=3, delay=1):
                 return []
 
 def extract_ap_table(lines):
-    bss_section = []
+    header_section = []
+    data_lines = []
     sep_count = 0
     for line in lines:
         clean = line.strip()
@@ -222,25 +223,33 @@ def extract_ap_table(lines):
         if re.match(r'^-+$', clean):
             sep_count += 1
             if sep_count <= 2:
-                bss_section.append(line)
+                header_section.append(line)
             continue
 
         # 헤더 라인 (컬럼 설명)
         if sep_count == 1 and re.match(r'^#', clean):
-            bss_section.append(line)
+            header_section.append(line)
             continue
 
         # 본문 이전은 무시
         if sep_count < 2:
             continue
 
-        # 본문 중 AC/AX 포함 라인 필터
-        #if re.search(r'AC|AX', clean):
-        #    bss_section.append(line)
+        # SSID 필터링: 비어있거나 null 바이트(\00)인 항목 제거
+        parts = clean.split('|')
+        if len(parts) >= 7:
+            ssid = parts[6].strip()
+            if not ssid or '\\00' in ssid:
+                continue
 
-        bss_section.append(line)
+        data_lines.append(line)
 
-    return bss_section
+    # 필터링 후 번호를 연속으로 재부여
+    renumbered = []
+    for idx, line in enumerate(data_lines):
+        renumbered.append(re.sub(r'^\s*\d+\|', f'{idx:02d}|', line.strip()))
+
+    return header_section + renumbered
 
 def extract_channel_table(lines):
     chan_section = []

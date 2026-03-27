@@ -15,6 +15,7 @@ RUNNING = True
 COMPACT_MODE = False
 SUMMARY_PATH = "/var/log/cantops/summary/summary.log"
 SUMMARY_LINES = 5
+PING_LINES = 5
 ROAM_DISPLAY_SEC = 5
 
 def signal_handler(signum, frame):
@@ -39,6 +40,18 @@ def load_json(filepath):
 
 
 # ── Compact 모드 유틸 함수/클래스 ──────────────────────────────
+
+def is_service_active(name):
+    """systemd 서비스가 active 상태인지 확인"""
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", name],
+            capture_output=True, text=True, timeout=2
+        )
+        return result.stdout.strip() == "active"
+    except Exception:
+        return False
+
 
 def get_bridge_status():
     """wbridge 모드, thermal state, cpufreq governor 조회"""
@@ -227,7 +240,7 @@ class RoamTracker:
 
 # ── 화면 그리기 ────────────────────────────────────────────────
 
-def draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, summary_path):
+def draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, summary_path, ping_log_path=None):
     """Compact 모드: 최소 라인으로 핵심 WiFi 상태 표시"""
     stdscr.clear()
     max_y, max_x = stdscr.getmaxyx()
@@ -331,6 +344,19 @@ def draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, summary_path):
         safe_addstr(y, 1, line.strip())
         y += 1
 
+    # ping.log 최근 N줄 (ping_monitor 서비스 활성 시)
+    if ping_log_path and y < max_y - 2:
+        safe_addstr(y, 1, sep)
+        y += 1
+        safe_addstr(y, 1, "[Ping Log]", curses.A_BOLD)
+        y += 1
+        plines = read_last_lines(ping_log_path, PING_LINES)
+        for line in plines:
+            if y >= max_y - 1:
+                break
+            safe_addstr(y, 1, line.strip())
+            y += 1
+
     stdscr.refresh()
 
 
@@ -417,6 +443,7 @@ def main(stdscr, file_path):
     # compact 모드 객체 초기화
     wpa_tracker = None
     roam_tracker = None
+    ping_log_path = None
     if COMPACT_MODE:
         iface = "mlan0"
         parts = file_path.split("/")
@@ -427,6 +454,8 @@ def main(stdscr, file_path):
         wpa_log = f"/var/log/cantops/wpa/{iface}/wpa.log"
         wpa_tracker = WpaEventTracker(wpa_log)
         roam_tracker = RoamTracker(display_sec=ROAM_DISPLAY_SEC)
+        if is_service_active("wifi_ping_monitor"):
+            ping_log_path = f"/var/log/cantops/ping/{iface}/ping.log"
 
     while RUNNING:
         try:
@@ -438,7 +467,7 @@ def main(stdscr, file_path):
                 if isinstance(data, dict):
                     ap = data.get("link", {}).get("address")
                 roam_tracker.check(ap)
-                draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, SUMMARY_PATH)
+                draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, SUMMARY_PATH, ping_log_path)
             else:
                 draw_screen(stdscr, data)
 

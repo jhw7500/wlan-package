@@ -15,22 +15,34 @@
 
 ```
 wifi_init_conf.json
-├── global          # 드라이버 초기화 (펌웨어, 모듈 파라미터)
-├── mac             # MAC 주소 설정 (인터페이스별)
-├── wbridge         # wifi_bridge 프로세스 설정
-│   └── thermal     #   브릿지 thermal 상태 관리
-├── checker         # wifi_checker + reboot 정책
-├── temperature     # 온도 모니터링 임계값
-├── arping          # ARP 연결 감시 + sweep
-├── mmc             # eMMC 수명 모니터링
-├── mcp             # 전류/전압 센서 모니터링
-├── logger          # 각종 로깅 주기 설정
-├── mlan0           # mlan0 인터페이스 설정
-│   ├── net_rx      #   MGMT 프레임 로깅 (→ PCIE9098_0)
-│   ├── bgscan      #   백그라운드 스캔
-│   └── roaming     #   로밍 알고리즘
-└── mlan1           # mlan1 인터페이스 설정 (mlan0과 동일 구조)
-    └── net_rx      #   MGMT 프레임 로깅 (→ PCIE9098_1)
+├── global              # 드라이버 초기화 (펌웨어, 모듈 파라미터)
+│   ├── rate_adapt      #   FW rate adaptation 설정
+│   └── ping_monitor    #   ping 모니터 서비스 제어
+├── mac                 # MAC 주소 설정 (인터페이스별)
+├── wbridge             # wifi_bridge 프로세스 설정
+│   └── thermal         #   브릿지 thermal 상태 관리
+├── checker             # wifi_checker + reboot 정책
+├── temperature         # 온도 모니터링 임계값
+├── arping              # ARP 연결 감시 + sweep
+├── mmc                 # eMMC 수명 모니터링
+├── mcp                 # 전류/전압 센서 모니터링
+├── logger              # 각종 로깅 주기 설정 (전역 기본값)
+├── eth0                # eth0 인터페이스 설정
+│   └── logger          #   eth0 전용 로깅 override
+├── mlan0               # mlan0 인터페이스 설정
+│   ├── logger          #   mlan0 전용 로깅 override
+│   ├── net_rx          #   MGMT 프레임 로깅 (→ PCIE9098_0)
+│   ├── periodic_roam   #   주기적 패시브 로밍
+│   ├── bgscan          #   백그라운드 스캔
+│   ├── roaming         #   로밍 알고리즘
+│   └── on_connect      #   AP 연결 후 실행 명령
+└── mlan1               # mlan1 인터페이스 설정 (mlan0과 동일 구조)
+    ├── logger          #   mlan1 전용 로깅 override
+    ├── net_rx          #   MGMT 프레임 로깅 (→ PCIE9098_1)
+    ├── periodic_roam   #   주기적 패시브 로밍
+    ├── bgscan          #   백그라운드 스캔
+    ├── roaming         #   로밍 알고리즘
+    └── on_connect      #   AP 연결 후 실행 명령
 ```
 
 ---
@@ -48,9 +60,27 @@ wifi_init_conf.json
 | `MFG_MODE` | string | `"0"` | 제조 모드. `"1"` = MFG 모드 활성화 |
 | `STANDARD` | string | `""` | WiFi 표준 제한 (비어있으면 자동) |
 | `DEV_CAP_MASK` | string | `""` | 디바이스 capability 마스크 |
-| `PRIMARY_IFACE` | string | `"mlan0"` | 기본 인터페이스. `"mlan0"` 또는 `"mlan1"` |
-| `MAC_MODE` | string | `"default"` | MAC 주소 모드. `"default"` (base만), `"dynamic"` (동적→base), `"static"` (target→base) |
+| `BRIDGE_IFACE` | string | `"mlan0"` | 브릿지 인터페이스. `"mlan0"`, `"mlan1"`, 또는 `"none"` (bridge 비활성) |
+| `MAC_MODE` | string | `"dynamic"` | MAC 주소 모드. `"default"` (base만), `"dynamic"` (동적→base), `"static"` (target→base) |
 | `ETH_CLIENT_IP` | string | `""` | 유선 클라이언트 고정 IP. 설정 시 `wired_mac_ip_get.py`의 quick ARP probe 활성화. 빈 문자열이면 비활성 |
+| `eth_link_wait_sec` | int | `3` | 유선 링크 준비 대기 시간 (초) |
+
+### 1.1 global.rate_adapt - FW Rate Adaptation
+
+**사용 스크립트**: `wifi_init.sh`
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| `mode` | int | `1` | rate adaptation 모드. `0`=legacy, `1`=SR(Success Rate) |
+| `low_thresh` | int | `50` | SR 모드 하한 임계값 (%). `0xff`=dynamic(noise-based) |
+| `high_thresh` | int | `80` | SR 모드 상한 임계값 (%) |
+| `interval_ms` | int | `100` | 평가 주기 (ms). association 전에 설정해야 함 |
+
+### 1.2 global.ping_monitor - Ping 모니터 서비스
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| `enabled` | bool | `false` | `wifi_ping_monitor.service` 활성화 여부 |
 
 ---
 
@@ -83,27 +113,27 @@ wifi_init_conf.json
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `optimize` | int | `1` | 브릿지 최적화 활성화 (0=비활성, 1=활성) |
+| `optimize` | int | `0` | 브릿지 최적화 활성화 (0=비활성, 1=활성) |
 | `mode` | string | `"normal"` | 동작 모드: `"latency"`, `"normal"`, `"eco"`, `"thermal"` |
 | `engine` | string | `"pcap"` | 패킷 캡처 엔진 |
 | `thermal_state` | string | `"ok"` | 현재 thermal 상태 |
-| `mode_force` | int | `0` | 모드 강제 고정 (1=활성) |
+| `mode_force` | int | `1` | 모드 강제 고정 (1=활성) |
 | `link_guard` | int | `1` | 링크 가드 활성화 |
 | `link_down_debounce_sec` | int | `2` | 링크 다운 디바운스 시간 (초) |
 | `link_up_stable_sec` | int | `2` | 링크 업 안정화 대기 시간 (초) |
-| `link_idle_poll_sec` | int | `2` | 링크 유휴 폴링 주기 (초) |
-| `wait_ready_timeout_sec` | int | `20` | 인터페이스 준비 대기 타임아웃 (초) |
+| `link_idle_poll_sec` | int | `5` | 링크 유휴 폴링 주기 (초) |
+| `wait_ready_timeout_sec` | int | `10` | 인터페이스 준비 대기 타임아웃 (초) |
 | `wlan_roam_grace_sec` | int | `15` | 로밍 후 유예 시간 (초) |
 | `wlan_down_restart` | int | `0` | WLAN 다운 시 재시작 (0=비활성) |
 | `profile_version` | int | `1` | 프로파일 버전 |
 
 ### 3.1 wbridge.thermal - 브릿지 Thermal 관리
 
-**사용 스크립트**: `wbridge_thermal_state_update.sh`
+**사용 스크립트**: `wbridge_thermal_state_update.sh`, `wifi_thermal_state_update.sh`
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `auto_restart` | int | `1` | 상태 변경 시 자동 재시작 |
+| `auto_restart` | int | `0` | 상태 변경 시 자동 재시작 (0=비활성) |
 | `timer_enable` | int | `0` | 타이머 기반 thermal 체크 |
 | `restart_cooldown_sec` | int | `60` | 재시작 쿨다운 (초) |
 | `bridge_units` | string | `"wifi_bridge@mlan0.service wifi_bridge@mlan1.service"` | 관리 대상 systemd 유닛 |
@@ -126,11 +156,14 @@ wifi_init_conf.json
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `LIMIT_CNT` | int | `3` | 인터페이스 미존재 허용 횟수. 이 값+1회 연속 실패 시 reboot 요청 |
+| `LIMIT_CNT` | int | `5` | 인터페이스 미존재 허용 횟수. 이 값+1회 연속 실패 시 reboot 요청 |
 | `MAX_UNSTABLE_DURATION` | int | `10` | WiFi 불안정 허용 시간 (초). 초과 시 wpa_supplicant 재시작 |
 | `MAX_REBOOT_COUNT` | int | `3` | 쿨다운 윈도우 내 최대 reboot 횟수. 초과 시 루프 감지 |
 | `REBOOT_COOLDOWN_SEC` | int | `300` | reboot 카운트 리셋 윈도우 (초) |
-| `MIN_UPTIME_SEC` | int | `120` | 부팅 후 최소 대기 시간 (초). 이전에는 reboot 거부 |
+| `MIN_UPTIME_SEC` | int | `30` | 부팅 후 최소 대기 시간 (초). 이전에는 reboot 거부 |
+| `FAULT_REASSOC_CNT` | int | `2` | fault 누적 시 재연결(reassoc) 시도 횟수 임계값 |
+| `FAULT_RESTART_CNT` | int | `4` | fault 누적 시 wpa_supplicant 재시작 횟수 임계값 |
+| `FAULT_REBOOT_CNT` | int | `6` | fault 누적 시 reboot 실행 횟수 임계값 |
 
 ### Reboot 정책 동작 흐름
 
@@ -141,6 +174,14 @@ wifi_init_conf.json
   ├── uptime < MIN_UPTIME_SEC → 거부 (rc=10)
   ├── 쿨다운 내 count >= MAX_REBOOT_COUNT → 거부 (rc=11, 루프 감지)
   └── 통과 → reboot 실행
+```
+
+### Fault 단계적 복구
+
+```
+fault 누적 → FAULT_REASSOC_CNT 도달 → reassoc 시도
+           → FAULT_RESTART_CNT 도달 → wpa_supplicant 재시작
+           → FAULT_REBOOT_CNT 도달 → reboot 실행
 ```
 
 > **주의**: `REBOOT_COOLDOWN_SEC`는 reboot 사이 강제 대기가 아니라 카운트 리셋 윈도우이다. 윈도우 내 요청이 누적되어 MAX_REBOOT_COUNT에 도달하면 차단된다.
@@ -299,15 +340,36 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 **사용 스크립트**: `wifi_logger_cpu.sh`, `wifi_logger_stat.py`, `wifi_bgscan.py`
 
+이 섹션은 **전역 기본값**이다. `eth0.logger`, `mlan0.logger`, `mlan1.logger`에서 인터페이스별로 override할 수 있다.
+
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
 | `cpu_interval_sec` | int | `60` | CPU/MEM 사용률 로깅 주기 (초) |
+| `link_interval_sec` | float | `0.95` | 링크 상태 체크 주기 (초) |
 | `stat_log_interval_sec` | int | `1` | WiFi 통계 로깅 주기 (초) |
 | `stat_check_interval_sec` | int | `1` | WiFi 통계 체크 주기 (초) |
 | `stat_reset_interval_sec` | int | `604800` | 통계 누적 리셋 주기 (초, 기본 7일) |
 | `bgscan_stale_threshold_sec` | int | `600` | bgscan 로그 stale 판정 시간 (초, 기본 10분) |
 
 > `stat_log_interval_sec`과 `stat_check_interval_sec`의 차이: check는 데이터 수집 주기, log는 실제 파일/syslog 기록 주기이다. log >= check 관계를 유지해야 한다.
+
+### per-interface logger override
+
+인터페이스별 `logger` 블록이 존재하면 해당 키만 override된다. 미지정 키는 전역 기본값을 사용한다.
+
+```json
+"eth0": {
+    "logger": { "link_interval_sec": 1.0 }
+},
+"mlan0": {
+    "logger": {
+        "link_interval_sec": 0.95,
+        "stat_log_interval_sec": 1,
+        "stat_check_interval_sec": 1,
+        "stat_reset_interval_sec": 604800
+    }
+}
+```
 
 ---
 
@@ -348,21 +410,31 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 값이 0이면 conf에서 `net_rx=` 줄이 제거되고, 0보다 크면 `net_rx=값`이 블록 내에 추가/갱신된다.
 
-### 10.2 bgscan - 백그라운드 스캔
+### 10.2 periodic_roam - 주기적 패시브 로밍
+
+**사용 스크립트**: `wifi_roaming.py`
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `interval` | int | `30` | 백그라운드 스캔 주기 (초) |
+| `enabled` | bool | `false` | 주기적 패시브 로밍 활성화 |
+| `interval` | int | `60` | 로밍 시도 주기 (초) |
+| `scan_before_roam` | bool | `true` | `true`=roam 전 스캔 수행(최신 RSSI 기반 판단), `false`=기존 ap.log 스캔 데이터 사용 |
 
-### 10.3 roaming - 로밍 알고리즘
+### 10.3 bgscan - 백그라운드 스캔
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `use_signal_avg` | bool | `false` | 평균 신호 사용 여부 |
+| `interval` | int | `60` | 백그라운드 스캔 주기 (초) |
+
+### 10.4 roaming - 로밍 알고리즘
+
+| 키 | 타입 | 기본값 (mlan0/mlan1) | 설명 |
+|----|------|---------------------|------|
+| `use_signal_avg` | bool | `true` | 평균 신호 사용 여부 |
 | `DEFAULT_TH_2G` | int | `-75` | 2.4GHz 로밍 RSSI 임계값 (dBm) |
 | `DEFAULT_TH_5G` | int | `-75` | 5GHz 로밍 RSSI 임계값 (dBm) |
 | `DIFF_TH` | int | `10` | 로밍 결정 RSSI 차이 (dB) |
-| `CHECK_INTERVAL` | int | `5` | 로밍 체크 주기 (초) |
+| `CHECK_INTERVAL` | int | `3` / `5` | 로밍 체크 주기 (초) |
 | `SCAN_NO_RESULT_SLEEP` | int | `3` | 스캔 결과 없을 때 대기 (초) |
 | `ROAM_SUCCESS_SLEEP` | int | `5` | 로밍 성공 후 대기 (초) |
 
@@ -422,6 +494,15 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 | `peer_count` | int | `5` | 워밍업 대상 피어 수 |
 | `peer_wait` | int | `1` | 피어 간 대기 (초) |
 
+### 10.5 on_connect - AP 연결 후 명령 실행
+
+**사용 스크립트**: `wifi_event`
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| `enabled` | bool | `false` | on_connect 기능 활성화 |
+| `commands` | array | `[]` | AP 연결/로밍 후 순서대로 실행할 명령 목록. 실패해도 중단하지 않고 로깅만 수행 |
+
 ---
 
 ## mlan0 vs mlan1 기본값 차이
@@ -430,6 +511,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 | 설정 경로 | mlan0 | mlan1 | 이유 |
 |-----------|-------|-------|------|
+| `roaming.CHECK_INTERVAL` | `3` | `5` | mlan0은 주 채널로 더 빠른 로밍 감지 |
 | `LOAD_BASED_ROAM.enable` | `false` | `true` | mlan1은 보조 채널로 부하 분산 활용 |
 | `PING_PONG_PREVENTION.window` | `30` | `60` | mlan1은 더 넓은 윈도우로 보수적 판단 |
 | `PING_PONG_PREVENTION.detection_time` | `10` | `30` | mlan1은 핑퐁 감지 시 더 오래 대기 |
@@ -442,166 +524,4 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 1. 환경변수 (일부 스크립트, 예: wifi_arping.sh의 THRESHOLD)
 2. wifi_init_conf.json 값
 3. 스크립트 내장 기본값 (JSON 없거나 jq 미설치 시)
-```
-
-> `/etc/default/wbridge` 파일은 wbridge 섹션에서 JSON보다 우선한다.
-
----
-
-## 설정 로드 패턴
-
-### Shell (bash)
-
-```bash
-WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
-
-# 기본값 선언
-MY_VALUE=10
-
-# JSON에서 로드 (jq 사용)
-if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
-    MY_VALUE=$(jq -r '.section.key // 10' "$WIFI_INIT_CONF_JSON")
-fi
-```
-
-- `//` 연산자: 값이 null이면 fallback 값 사용
-- `jq -r`: raw 출력 (따옴표 제거)
-
-### Python
-
-```python
-WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
-MY_VALUE = 10  # 기본값
-
-try:
-    with open(WIFI_INIT_CONF_JSON) as f:
-        conf = json.load(f)
-    MY_VALUE = conf.get("section", {}).get("key", MY_VALUE)
-except Exception:
-    pass
-```
-
----
-
-## 설정값별 사용 스크립트 맵
-
-| 섹션 | 스크립트 | 언어 |
-|------|---------|------|
-| `global` | `wifi_init.sh` | bash |
-| `mac` | `wifi_init.sh`, `wifi_mac_set.py`, `wifi_mac_save.py` | bash, python |
-| `wbridge` | `wifi_bridge.sh` | bash |
-| `wbridge.thermal` | `wbridge_thermal_state_update.sh` | bash |
-| `checker` | `wifi_checker.sh` → `wlan_reboot_policy.sh` | bash |
-| `temperature` | `wifi_logger_temp.sh` | bash |
-| `arping` | `wifi_arping.sh`, `arping_sweep.sh` | bash |
-| `mmc` | `wifi_logger_mmc.sh` | bash |
-| `mcp` | `wifi_logger_mcp.sh` | bash |
-| `logger` | `wifi_logger_cpu.sh`, `wifi_logger_stat.py`, `wifi_bgscan.py` | bash, python |
-| `mlan0.net_rx` | `wifi_init.sh` → `wifi_mod_para.conf` (PCIE9098_0) | bash |
-| `mlan0.bgscan` | `wifi_bgscan.py` | python |
-| `mlan0.roaming` | `wifi_roaming.py` | python |
-| `mlan1.net_rx` | `wifi_init.sh` → `wifi_mod_para.conf` (PCIE9098_1) | bash |
-| `mlan1.bgscan` | `wifi_bgscan.py` | python |
-| `mlan1.roaming` | `wifi_roaming.py` | python |
-
----
-
-## 현장 튜닝 가이드
-
-### 고온 환경 (40C+ 외부 온도)
-
-```json
-"temperature": {
-    "emerg_cpu": 98,
-    "crit_cpu": 95,
-    "error_cpu": 90,
-    "warn_cpu": 85,
-    "emerg_mlan": 90,
-    "crit_mlan": 85,
-    "error_mlan": 80,
-    "warn_mlan": 75
-}
-```
-
-### 불안정한 네트워크 환경
-
-```json
-"checker": {
-    "LIMIT_CNT": 5,
-    "MAX_UNSTABLE_DURATION": 20,
-    "MAX_REBOOT_COUNT": 5,
-    "REBOOT_COOLDOWN_SEC": 600
-},
-"arping": {
-    "threshold": 20,
-    "loop_delay_sec": 5
-}
-```
-
-### MGMT 프레임 디버깅 (로밍 분석)
-
-```json
-"mlan0": {
-    "net_rx": 6
-},
-"mlan1": {
-    "net_rx": 6
-}
-```
-
-> 재부팅 후 `/var/log/cantops/mgmt/mlan0/gmgmt.log`에서 RX/TX MGMT 프레임 확인 가능. 실시간 확인: `cat /proc/mwlan/adapter0/mgmt_log`
-
-### 디버깅 (로깅 빈도 증가)
-
-```json
-"logger": {
-    "cpu_interval_sec": 10,
-    "stat_log_interval_sec": 1,
-    "stat_check_interval_sec": 1
-},
-"temperature": {
-    "check_interval_sec": 2
-},
-"mcp": {
-    "check_interval_sec": 2
-}
-```
-
-### 로깅 부하 감소 (저사양/배터리 환경)
-
-```json
-"logger": {
-    "cpu_interval_sec": 300,
-    "stat_log_interval_sec": 10,
-    "stat_check_interval_sec": 5
-},
-"temperature": {
-    "check_interval_sec": 15
-},
-"mmc": {
-    "check_interval_sec": 3600
-}
-```
-
----
-
-## JSON 검증
-
-설정 파일 수정 후 반드시 문법을 검증한다:
-
-```bash
-jq . /usr/local/etc/wifi_init_conf.json > /dev/null && echo "OK" || echo "FAIL"
-```
-
-런타임에서 값 확인:
-
-```bash
-# 특정 값 조회
-jq '.temperature.emerg_cpu' /usr/local/etc/wifi_init_conf.json
-
-# 섹션 전체 조회
-jq '.checker' /usr/local/etc/wifi_init_conf.json
-
-# 모든 섹션 키 목록
-jq 'keys' /usr/local/etc/wifi_init_conf.json
 ```

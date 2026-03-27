@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-ping-logger — 유무선 브릿지 ICMP 실시간 로거
+ping-monitor — 유무선 브릿지 ICMP 실시간 로거
 
 클라이언트 모드에서 tcpdump를 사용하여 ping 패킷을 실시간 로깅합니다.
 1개 또는 2개 인터페이스 동시 캡처를 지원하며, 브릿지 동작에 영향이 없습니다.
 
 사용법:
-  ping_logger.py                                # 듀얼 모드 (eth0 + mlan0)
-  ping_logger.py -s -1 mlan0                    # mlan0만 캡처
-  ping_logger.py -t 192.168.1.1 -d 60           # 특정 IP, 60초
-  ping_logger.py -c /path/to/config.json        # 커스텀 설정 사용
-  ping_logger.py -H 10.0.0.100                  # 원격 실행
+  ping_monitor.py                                # 듀얼 모드 (eth0 + mlan0)
+  ping_monitor.py -s -1 mlan0                    # mlan0만 캡처
+  ping_monitor.py -t 192.168.1.1 -d 60           # 특정 IP, 60초
+  ping_monitor.py -c /path/to/config.json        # 커스텀 설정 사용
+  ping_monitor.py -H 10.0.0.100                  # 원격 실행
 """
 
 import argparse
@@ -22,12 +22,11 @@ import shutil
 import signal
 import subprocess
 import sys
-import threading
 import time
 from datetime import datetime
 
 from models import SessionConfig
-from capture import CaptureStream, COLORS, NO_COLORS
+from capture import CaptureEngine, COLORS, NO_COLORS
 from analyzer import analyze_undelivered
 
 
@@ -56,6 +55,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-t", "--target", metavar="IP", help="특정 IP만 필터")
     parser.add_argument("-d", "--duration", type=int, metavar="SEC", help="캡처 시간 (초)")
     parser.add_argument("-o", "--output-dir", metavar="DIR", help="출력 디렉토리")
+    parser.add_argument("-l", "--log-file", metavar="FILE", help="고정 로그 파일 경로 (데몬 모드)")
     parser.add_argument("-P", "--no-pcap", action="store_true", help="pcap 저장 비활성화")
     parser.add_argument("-H", "--remote", metavar="HOST", help="원격 타겟 호스트 (SSH)")
     return parser.parse_args()
@@ -68,7 +68,7 @@ def build_config(args: argparse.Namespace) -> SessionConfig:
         cfg = load_config(args.config)
     else:
         default_conf = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                     "ping-logger.conf.json")
+                                     "ping-monitor.conf.json")
         if os.path.exists(default_conf):
             cfg = load_config(default_conf)
         else:
@@ -87,6 +87,8 @@ def build_config(args: argparse.Namespace) -> SessionConfig:
         cfg.duration = args.duration
     if args.output_dir:
         cfg.output_dir = args.output_dir
+    if args.log_file:
+        cfg.log_file = args.log_file
     if args.no_pcap:
         cfg.save_pcap = False
     if args.remote:
@@ -130,11 +132,11 @@ def exec_remote(cfg: SessionConfig, raw_args: list) -> None:
     print(f"INFO: 원격 실행: {host}")
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    files_to_copy = ["ping_logger.py", "capture.py", "analyzer.py", "models.py",
-                     "ping-logger.conf.json"]
+    files_to_copy = ["ping_monitor.py", "capture.py", "analyzer.py", "models.py",
+                     "ping-monitor.conf.json"]
 
     # scp로 파일 전송
-    remote_dir = "/tmp/ping-logger"
+    remote_dir = "/tmp/ping-monitor"
     subprocess.run(["ssh", f"root@{host}", f"mkdir -p {remote_dir}"],
                    check=True, timeout=10)
     for fname in files_to_copy:
@@ -155,7 +157,7 @@ def exec_remote(cfg: SessionConfig, raw_args: list) -> None:
             continue
         remote_args.append(arg)
 
-    cmd = f"cd {shlex.quote(remote_dir)} && python3 ping_logger.py {' '.join(shlex.quote(a) for a in remote_args)}"
+    cmd = f"cd {shlex.quote(remote_dir)} && python3 ping_monitor.py {' '.join(shlex.quote(a) for a in remote_args)}"
     ret = subprocess.run(["ssh", "-t", f"root@{host}", cmd])
 
     # 결과 복사
@@ -189,30 +191,39 @@ def main() -> None:
     check_prerequisites(cfg)
 
     colors = COLORS if (cfg.color and sys.stdout.isatty()) else NO_COLORS
-    lock = threading.Lock()
 
     # 출력 디렉토리 + 파일 준비
     os.makedirs(cfg.output_dir, exist_ok=True)
     session_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = os.path.join(cfg.output_dir, f"ping_{session_ts}.log")
+
+    if cfg.log_file:
+        # 고정 로그 경로 (데몬 모드) — append
+        log_path = cfg.log_file
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        log_open_mode = "a"
+    else:
+        # 타임스탬프 로그 파일 (일회성 실행)
+        log_path = os.path.join(cfg.output_dir, f"ping_{session_ts}.log")
+        log_open_mode = "w"
+
     pcap1_path = os.path.join(cfg.output_dir, f"icmp_{cfg.primary}_{session_ts}.pcap")
     pcap2_path = ""
     if cfg.mode == "dual":
         pcap2_path = os.path.join(cfg.output_dir, f"icmp_{cfg.secondary}_{session_ts}.pcap")
 
-    log_file = open(log_path, "w", encoding="utf-8")
+    log_file = open(log_path, log_open_mode, encoding="utf-8")
     try:
-        _run_session(cfg, log_file, log_path, pcap1_path, pcap2_path, colors, lock)
+        _run_session(cfg, log_file, log_path, pcap1_path, pcap2_path, colors)
     finally:
         if not log_file.closed:
             log_file.close()
 
 
-def _run_session(cfg, log_file, log_path, pcap1_path, pcap2_path, colors, lock) -> None:
+def _run_session(cfg, log_file, log_path, pcap1_path, pcap2_path, colors) -> None:
     """실제 캡처 세션 실행 (log_file은 호출자가 닫음)"""
     # 세션 헤더
     header_lines = [
-        "=== ping-logger 세션 시작 ===",
+        "=== ping-monitor 세션 시작 ===",
         f"시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         f"모드: {cfg.mode}",
         f"인터페이스: {cfg.primary}",
@@ -235,17 +246,17 @@ def _run_session(cfg, log_file, log_path, pcap1_path, pcap2_path, colors, lock) 
     print("INFO: 종료: Ctrl+C")
     print("")
 
-    # 캡처 스트림 시작
-    streams: list[CaptureStream] = []
-
-    s1 = CaptureStream(cfg.primary, cfg, log_file, colors, lock)
-    s1.start(pcap_path=pcap1_path if cfg.save_pcap else None)
-    streams.append(s1)
+    # 캡처 엔진 시작
+    engine = CaptureEngine(cfg, log_file, colors)
 
     if cfg.mode == "dual":
-        s2 = CaptureStream(cfg.secondary, cfg, log_file, colors, lock)
-        s2.start(pcap_path=pcap2_path if cfg.save_pcap else None)
-        streams.append(s2)
+        ifaces = [cfg.primary, cfg.secondary]
+        pcap_paths = {cfg.primary: pcap1_path, cfg.secondary: pcap2_path}
+    else:
+        ifaces = [cfg.primary]
+        pcap_paths = {cfg.primary: pcap1_path}
+
+    engine.start(ifaces, pcap_paths if cfg.save_pcap else None)
 
     # 종료 처리 (재진입 방지)
     shutdown_called = False
@@ -259,8 +270,7 @@ def _run_session(cfg, log_file, log_path, pcap1_path, pcap2_path, colors, lock) 
         print("")
         print("INFO: 캡처 종료...")
 
-        for s in streams:
-            s.stop()
+        engine.stop()
         time.sleep(0.5)
 
         # 세션 종료 로그

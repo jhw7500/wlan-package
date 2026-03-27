@@ -13,18 +13,19 @@
 /var/log/cantops/scan/mlan0/freq.log
 /var/log/cantops/scan/mlan1/ap.log
 /var/log/cantops/scan/mlan1/freq.log
-/var/log/cantops/stat/mlan0/*.log
-/var/log/cantops/stat/mlan1/*.log
 /var/log/cantops/wpa/mlan0/wpa.log
 /var/log/cantops/wpa/mlan1/wpa.log
+/var/log/cantops/ping/mlan0/ping.log
+/var/log/cantops/ping/mlan1/ping.log
 {
         rotate 14
         daily
+        maxsize 50M
         missingok
         notifempty
         delaycompress
         compress
-    	dateext
+        dateext
         postrotate
                 /usr/bin/pkill -HUP rsyslogd 2> /dev/null || true
         endscript
@@ -52,5 +53,22 @@
         sharedscripts
         postrotate
 		/usr/bin/pkill -HUP rsyslogd 2> /dev/null || true
+        endscript
+}
+
+# stat 로그 — rotate 주기를 변경하려면 daily → weekly 등으로 수정
+/var/log/cantops/stat/mlan0/*.log
+/var/log/cantops/stat/mlan1/*.log
+{
+        rotate 14
+        daily
+        maxsize 50M
+        missingok
+        notifempty
+        delaycompress
+        compress
+        dateext
+        postrotate
+                touch /tmp/wifi_stat_init_f
         endscript
 }

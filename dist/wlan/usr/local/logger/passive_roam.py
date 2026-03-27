@@ -137,22 +137,22 @@ def roam_to_ap(interface, ap, index_label=None):
     bssid = ap["bssid"]
     cmd = ["wpa_cli", "-i", interface, "roam", bssid]
 
-    print("\nSelected AP:")
+    print(f"\nSelected AP:")
     if index_label is not None:
         print(f"  No:   {index_label}")
     print(f"  BSSID: {bssid}")
     print(f"  SSID:  {ap['ssid']}")
     print(f"  CH:    {ap['ch']}")
     print(f"  RSSI:  {ap['ss']}")
-    print("\nExecuting: " + " ".join(cmd))
+    print(f"\nExecuting: {' '.join(cmd)}")
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True)
-        print("\nwpa_cli output:")
-        if result.stdout:
-            print(result.stdout.strip())
-        if result.stderr:
-            print(result.stderr.strip())
+        stdout = result.stdout.strip() if result.stdout else ""
+        stderr = result.stderr.strip() if result.stderr else ""
+        print(f"\nwpa_cli output: {stdout} {stderr}".rstrip())
+        # 한줄 요약 (wifi_periodic_roam.sh에서 grep "ROAM_RESULT"로 추출)
+        print(f"ROAM_RESULT: {bssid} ch:{ap['ch']} rssi:{ap['ss']} -> {stdout or stderr or 'unknown'}")
         return result.returncode
     except FileNotFoundError:
         print("wpa_cli not found.")

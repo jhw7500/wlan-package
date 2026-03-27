@@ -143,7 +143,13 @@ def get_last_ap_log_values(log_filename, num_lines=10):
                 "time": int(g["time"]),
             }
 
-            print(f"log parsing : {log_data}")
+            d = log_data
+            logger.message("info",
+                  f"[{IFACE}] {d['timestamp']} | {d['mac']} | BW:{d['bw']} | "
+                  f"RSSI:{d['rssi']}({d['rssi_min']}/{d['rssi_max']}) | "
+                  f"RX:{d['rx_packets']}/{d['rx_bps']}/{d['rx_avg_bps']} | "
+                  f"TX:{d['tx_packets']}/{d['tx_bps']}/{d['tx_avg_bps']} | "
+                  f"FAIL:{d['tx_fail']} T:{d['time']}")
             return log_data
 
     except Exception as e:
@@ -520,7 +526,8 @@ def log_stats():
 
         cond_time = last_stat[ap_mac]["time"] >= STAT_RESET_INTERVAL
         cond_flagfile = os.path.exists("/tmp/wifi_stat_init_f")
-        reset_flag = cond_time or cond_flagfile
+        cond_mac_flagfile = os.path.exists(f"/tmp/wifi_stat_reset_{ap_mac}")
+        reset_flag = cond_time or cond_flagfile or cond_mac_flagfile
 
         #print(f"current_ap : {current_ap} , ap_mac : {ap_mac}")
         # Update RX/TX stats
@@ -593,6 +600,11 @@ def log_stats():
             if cond_flagfile:
                 try:
                     os.remove("/tmp/wifi_stat_init_f")
+                except FileNotFoundError:
+                    pass
+            if cond_mac_flagfile:
+                try:
+                    os.remove(f"/tmp/wifi_stat_reset_{ap_mac}")
                 except FileNotFoundError:
                     pass
         #'''
