@@ -77,8 +77,13 @@ update_json_mac() {
         return 1
     fi
 
-    jq --arg v "$value" ".mac.${iface}.${key} = \$v" "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp"
-    mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
+    if jq --arg v "$value" ".mac.${iface}.${key} = \$v" "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp"; then
+        mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
+    else
+        rm -f "${WIFI_INIT_CONF_JSON}.tmp"
+        echo "Error: JSON update failed for ${iface}.${key}" >&2
+        return 1
+    fi
 }
 
 # JSON global 설정 수정 함수
@@ -96,8 +101,13 @@ update_json_global() {
         return 1
     fi
 
-    jq --arg k "$key" --arg v "$value" '.global[$k] = $v' "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp"
-    mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
+    if jq --arg k "$key" --arg v "$value" '.global[$k] = $v' "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp"; then
+        mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
+    else
+        rm -f "${WIFI_INIT_CONF_JSON}.tmp"
+        echo "Error: JSON global update failed for ${key}" >&2
+        return 1
+    fi
 }
 
 ensure_wifi_init_conf() {
@@ -515,7 +525,7 @@ case "$1" in
         echo 0 > /sys/class/leds/SW_SEL1/brightness
         echo 1 > /sys/class/leds/SW_SEL2/brightness
     elif [ "$2" == "external" ] || [ "$2" == "1" ]; then
-        wifi 1 down
+        wifi 0 down
         wifi 1 down
         sleep 1
         echo "set to external antenna mode"
