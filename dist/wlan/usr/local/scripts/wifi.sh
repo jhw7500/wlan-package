@@ -34,17 +34,6 @@ safe_tmp_for() {
     mktemp "$1.tmp.XXXXXX"
 }
 
-# awk 결과를 안전하게 반영 (권한 0644 고정 + sync)
-apply_awk_update() {
-    local target="$1"
-    local tmp
-    tmp="$(safe_tmp_for "$target")"
-    trap 'rm -f "$tmp"' RETURN
-    safe_install_0644_sync "$tmp" "$target"
-    rm -f "$tmp"
-    trap - RETURN
-}
-
 # sed -i 대신에도 통일하고 싶으면 사용(권한 보장)
 apply_sed_update() {
     local target="$1"
@@ -480,8 +469,9 @@ case "$1" in
   cal)
     CAL_DATA_CFG=$2
     if [[ "$CAL_DATA_CFG" == *.conf ]]; then
-        cp $CAL_DATA_CFG /lib/firmware/cts/$CAL_DATA_CFG
-        CAL_DATA_CFG="cts/$CAL_DATA_CFG"
+        _cal_basename=$(basename "$CAL_DATA_CFG")
+        cp "$CAL_DATA_CFG" "/lib/firmware/cts/$_cal_basename"
+        CAL_DATA_CFG="cts/$_cal_basename"
     elif [[ "$CAL_DATA_CFG" == "2" ]]; then
         CAL_DATA_CFG="cts/WlanCalData_ext_RD.conf"
     elif [[ "$CAL_DATA_CFG" == "1" ]]; then
@@ -506,8 +496,9 @@ case "$1" in
     elif [ "$2" == "test" ] || [ "$2" == "3" ]; then
         TXPWRLIMIT_PATH="/lib/firmware/cts/txpwrlimit_cfg_9098_org.conf"
     elif [[ "$2" == *.conf ]]; then
-        cp $2 /lib/firmware/cts/
-        TXPWRLIMIT_PATH="/lib/firmware/cts/$2"
+        _txpwr_basename=$(basename "$2")
+        cp "$2" "/lib/firmware/cts/$_txpwr_basename"
+        TXPWRLIMIT_PATH="/lib/firmware/cts/$_txpwr_basename"
     else
         usage
     fi
