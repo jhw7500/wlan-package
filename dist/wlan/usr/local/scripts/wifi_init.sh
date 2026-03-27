@@ -520,8 +520,8 @@ apply_iface_txpwrlimit "mlan0" "$MLAN0_ENABLED"
 apply_iface_txpwrlimit "mlan1" "$MLAN1_ENABLED"
 apply_iface_radio_defaults "mlan0" "$MLAN0_ENABLED"
 apply_iface_radio_defaults "mlan1" "$MLAN1_ENABLED"
-apply_iface_bandcfg "mlan0" "$MLAN0_ENABLED" "$MLAN0_FREQ"
-apply_iface_bandcfg "mlan1" "$MLAN1_ENABLED" "$MLAN1_FREQ"
+#apply_iface_bandcfg "mlan0" "$MLAN0_ENABLED" "$MLAN0_FREQ"
+#apply_iface_bandcfg "mlan1" "$MLAN1_ENABLED" "$MLAN1_FREQ"
 
 # .network 파일의 Address=에 서브넷이 없으면 /24 보정
 for nf in /etc/systemd/network/*.network; do

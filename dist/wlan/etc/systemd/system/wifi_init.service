@@ -1,6 +1,6 @@
 [Unit]
 Description=WiFi init Service
-After=local-fs.target getty.target serial-getty@ttymxc1.service serial-getty@ttyGS0.service
+After=local-fs.target
 Wants=local-fs.target
 
 [Service]
