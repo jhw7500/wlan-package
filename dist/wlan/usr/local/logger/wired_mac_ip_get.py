@@ -16,10 +16,12 @@ IFACE = "mlan0"             # 무선 (게이트웨이 사용)
 # ETH_CLIENT_IP: wifi_init_conf.json의 global.ETH_CLIENT_IP에서 읽음
 # 설정이 없거나 빈 문자열이면 빠른 경로(quick_arp_probe) 건너뜀
 ETH_CLIENT_IP = None
+ETH_LINK_TIMEOUT = 3
 try:
     with open("/usr/local/etc/wifi_init_conf.json") as f:
         _cfg = json.load(f)
     ETH_CLIENT_IP = _cfg.get("global", {}).get("ETH_CLIENT_IP") or None
+    ETH_LINK_TIMEOUT = int(_cfg.get("global", {}).get("eth_link_wait_sec", 3))
 except Exception:
     pass
 
@@ -32,7 +34,7 @@ def get_own_mac(interface):
     with open(f"/sys/class/net/{interface}/address", "r") as f:
         return f.read().strip().lower()
 
-def wait_for_eth_link(timeout=10):
+def wait_for_eth_link(timeout=ETH_LINK_TIMEOUT):
     """
     eth0 링크 확인. 이미 up이면 즉시 리턴.
     down 상태일 때만 리셋 후 대기.

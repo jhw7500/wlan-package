@@ -1,0 +1,13 @@
+[Unit]
+Description=WiFi event monitor for %i
+Requires=sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-%i.device wifi_init.service
+
+[Service]
+ExecStart=/usr/local/scripts/wifi_event.sh %i
+Restart=on-failure
+RestartSec=5s
+User=root
+
+[Install]
+WantedBy=multi-user.target

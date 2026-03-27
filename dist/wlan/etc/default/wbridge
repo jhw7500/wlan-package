@@ -1,5 +1,5 @@
 # wbridge 서비스 설정 오버라이드 파일
-# wifi_bridge@.service / wbridge-thermal-state.service 의 EnvironmentFile로 로드됨
+# wifi_bridge@.service / wifi_thermal_state.service 의 EnvironmentFile로 로드됨
 #
 # 기본값은 /usr/local/etc/wifi_init_conf.json 의 "wbridge" 섹션에서 로드됩니다.
 # 이 파일에서 설정 시 JSON 값을 덮어씁니다 (우선순위 높음).

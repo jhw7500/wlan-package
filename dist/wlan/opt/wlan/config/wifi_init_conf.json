@@ -11,9 +11,21 @@
         "MFG_MODE": "0",
         "STANDARD": "",
         "DEV_CAP_MASK": "",
-        "PRIMARY_IFACE": "mlan0",
+        "BRIDGE_IFACE": "mlan0",
         "MAC_MODE": "dynamic",
-        "ETH_CLIENT_IP": ""
+        "ETH_CLIENT_IP": "",
+        "eth_link_wait_sec": 3,
+        "rate_adapt": {
+            "_comment": "FW rate adaptation config. mode: 0=legacy, 1=SR. For SR: thresh 0xff=dynamic(noise-based), else static(success-rate%). interval_ms: eval period in ms. Must be set before association.",
+            "mode": 1,
+            "low_thresh": 50,
+            "high_thresh": 80,
+            "interval_ms": 100
+        },
+        "ping_monitor": {
+            "_comment": "wifi_ping_monitor.service enable/disable control",
+            "enabled": false
+        }
     },
     "mac": {
         "_comment": "MAC address configuration. /opt/wlan/mac 디렉토리 대체. 빈 문자열이면 해당 소스 생략.",
@@ -35,7 +47,7 @@
         "mode": "normal",
         "engine": "pcap",
         "thermal_state": "ok",
-        "mode_force": 0,
+        "mode_force": 1,
         "link_guard": 1,
         "link_down_debounce_sec": 2,
         "link_up_stable_sec": 2,
@@ -45,7 +57,7 @@
         "wlan_down_restart": 0,
         "profile_version": 1,
         "thermal": {
-            "_comment": "thermal state thresholds and management (wbridge_thermal_state_update.sh)",
+            "_comment": "thermal state thresholds and management (wifi_thermal_state_update.sh)",
             "auto_restart": 0,
             "timer_enable": 0,
             "restart_cooldown_sec": 60,
@@ -62,7 +74,7 @@
     },
     "checker": {
         "_comment": "wifi_checker / reboot policy configuration",
-        "LIMIT_CNT": 3,
+        "LIMIT_CNT": 5,
         "MAX_UNSTABLE_DURATION": 10,
         "MAX_REBOOT_COUNT": 3,
         "REBOOT_COOLDOWN_SEC": 300,
@@ -88,7 +100,7 @@
         "emerg_count_threshold": 2
     },
     "arping": {
-        "_comment": "wifi_arping.sh / arping_sweep.sh configuration",
+        "_comment": "wifi_arping.sh / wifi_arping_sweep.sh configuration",
         "threshold": 10,
         "cooldown_sec": 10,
         "loop_delay_sec": 10,
@@ -144,6 +156,12 @@
             "stat_check_interval_sec": 1,
             "stat_reset_interval_sec": 604800
         },
+        "periodic_roam": {
+            "_comment": "Periodic passive roam (roam 0) configuration. scan_before_roam: true=roam 전 스캔 수행(최신 RSSI 기반 판단), false=기존 ap.log 스캔 데이터 사용",
+            "enabled": false,
+            "interval": 60,
+            "scan_before_roam": true
+        },
         "bgscan": {
             "_comment": "Background scan configuration for mlan0",
             "interval": 60
@@ -195,6 +213,11 @@
             },
             "SCAN_NO_RESULT_SLEEP": 3,
             "ROAM_SUCCESS_SLEEP": 5
+        },
+        "on_connect": {
+            "_comment": "Commands to execute after AP connection/roaming (via wifi_event). Runs in order, failures are logged but do not stop execution.",
+            "enabled": false,
+            "commands": []
         }
     },
     "mlan1": {
@@ -207,6 +230,12 @@
             "stat_log_interval_sec": 1,
             "stat_check_interval_sec": 1,
             "stat_reset_interval_sec": 604800
+        },
+        "periodic_roam": {
+            "_comment": "Periodic passive roam (roam 0) configuration. scan_before_roam: true=roam 전 스캔 수행, false=기존 ap.log 사용",
+            "enabled": false,
+            "interval": 60,
+            "scan_before_roam": true
         },
         "bgscan": {
             "_comment": "Background scan configuration for mlan1",
@@ -259,6 +288,11 @@
             },
             "SCAN_NO_RESULT_SLEEP": 3,
             "ROAM_SUCCESS_SLEEP": 5
+        },
+        "on_connect": {
+            "_comment": "Commands to execute after AP connection/roaming (via wifi_event). Runs in order, failures are logged but do not stop execution.",
+            "enabled": false,
+            "commands": []
         }
     }
 }

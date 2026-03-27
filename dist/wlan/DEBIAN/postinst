@@ -57,6 +57,12 @@ configure)
   mkdir -p /usr/local/etc
 
   cp /opt/wlan/config/logrotate.d/logrotate.rsyslog /etc/logrotate.d/
+
+  # logrotate를 hourly로 이동 (maxsize가 실질적으로 동작하도록)
+  if [ -f /etc/cron.daily/logrotate ] && [ ! -f /etc/cron.hourly/logrotate ]; then
+    mv /etc/cron.daily/logrotate /etc/cron.hourly/logrotate
+    echo "[installer] logrotate moved to cron.hourly for maxsize support"
+  fi
   cp /opt/wlan/config/rsyslog.conf /etc/
   cp /opt/wlan/config/smb.conf /etc/samba/
   cp /opt/wlan/config/wifi_mod_para__.conf /lib/firmware/nxp/
@@ -165,9 +171,9 @@ customctl() {
   fi
 
   echo "[installer] Optimizing service configuration (batch processing)..."
-  systemctl mask systemd-networkd-wait-online nfs-server proc-fs-nfsd.mount ovsdb-server avahi-daemon avahi-autoipd psplash || true
-  systemctl disable --now dhcpcd openvswitch openvswitch-switch connman smb nmb avahi-daemon.socket containerd netdata collectd named bind fake-hwclock.timer journald-snapshot.timer ifplugd systemd-resolved hiawatha netserver wifi_checker@eth0 || true
-  systemctl enable watchdog switchd fake-hwclock wifi_init wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 wifi_logger@mlan0 wifi_checker@mlan0 wifi_bgscan@mlan0 wifi_roam@mlan0 wifi_arping@mlan0 || true
+  systemctl mask systemd-networkd-wait-online nfs-server proc-fs-nfsd.mount ovsdb-server avahi-daemon avahi-autoipd psplash systemd-journald-audit.socket || true
+  systemctl disable --now redis-server dhcpcd openvswitch openvswitch-switch connman smb nmb avahi-daemon.socket containerd netdata collectd named bind ifplugd systemd-resolved netserver wifi_checker@eth0 || true
+  systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer wifi_init wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 wifi_logger@mlan0 wifi_checker@mlan0 wifi_bgscan@mlan0 wifi_roam@mlan0 wifi_arping@mlan0 log-watchdog.timer || true
 
   INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 10))
   dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
@@ -245,17 +251,23 @@ json_merge() {
   cpchk /opt/wlan/config/systemd/network/22-eth0.link /etc/systemd/network/22-eth0.link
   json_merge /opt/wlan/config/wifi_init_conf.json /usr/local/etc/wifi_init_conf.json
 
-  if [ -f /opt/wlan/config/sysctl.d/99-wbridge-thermal.conf ]; then
-    cp /opt/wlan/config/sysctl.d/99-wbridge-thermal.conf /usr/lib/sysctl.d/99-wbridge-thermal.conf
-    logger -p local0.info "[$KEY][$tag:$LINENO] Installed /usr/lib/sysctl.d/99-wbridge-thermal.conf"
+  if [ -f /opt/wlan/config/sysctl.d/99-wifi-thermal.conf ]; then
+    cp /opt/wlan/config/sysctl.d/99-wifi-thermal.conf /usr/lib/sysctl.d/99-wifi-thermal.conf
+    logger -p local0.info "[$KEY][$tag:$LINENO] Installed /usr/lib/sysctl.d/99-wifi-thermal.conf"
   else
-    logger -p local0.warn "[$KEY][$tag:$LINENO] Missing /opt/wlan/config/sysctl.d/99-wbridge-thermal.conf"
+    logger -p local0.warn "[$KEY][$tag:$LINENO] Missing /opt/wlan/config/sysctl.d/99-wifi-thermal.conf"
   fi
 
   INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 1))
   dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
   /usr/local/logger/print.py green "\r\n[installer] create symlinks..."
 
+  # SysV generator 비활성화 (부팅 로그 정리)
+  # 원본이 존재하면 백업 후 mask
+  if [ -f /lib/systemd/system-generators/systemd-sysv-generator ] && [ ! -L /lib/systemd/system-generators/systemd-sysv-generator ]; then
+      cp -a /lib/systemd/system-generators/systemd-sysv-generator /lib/systemd/system-generators/systemd-sysv-generator.orig
+  fi
+  ln -sf /dev/null /lib/systemd/system-generators/systemd-sysv-generator
   # Create symlinks for wlan-bridge binaries (wbridge)
   mkdir -p /usr/local/bin
   ln -sf /usr/local/wlan-bridge/wbridge/wbridge /usr/local/bin/wifi-wbridge
@@ -318,11 +330,11 @@ json_merge() {
   if command -v systemctl >/dev/null 2>&1; then
     case "$THERMAL_TIMER_ENABLE" in
       1)
-        systemctl enable --now wbridge-thermal-state.timer 2>/dev/null || true
-        logger -p local0.info "[$KEY][$tag:$LINENO] Enabled wbridge-thermal-state.timer"
+        systemctl enable --now wifi_thermal_state.timer 2>/dev/null || true
+        logger -p local0.info "[$KEY][$tag:$LINENO] Enabled wifi_thermal_state.timer"
         ;;
       *)
-        systemctl disable --now wbridge-thermal-state.timer wbridge-thermal-state.service 2>/dev/null || true
+        systemctl disable --now wifi_thermal_state.timer wifi_thermal_state.service 2>/dev/null || true
         logger -p local0.info "[$KEY][$tag:$LINENO] Thermal timer disabled by WBRIDGE_THERMAL_TIMER_ENABLE=$THERMAL_TIMER_ENABLE"
         ;;
     esac

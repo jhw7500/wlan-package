@@ -77,8 +77,13 @@ update_json_mac() {
         return 1
     fi
 
-    jq --arg v "$value" ".mac.${iface}.${key} = \$v" "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp"
-    mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
+    if jq --arg v "$value" ".mac.${iface}.${key} = \$v" "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp"; then
+        mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
+    else
+        rm -f "${WIFI_INIT_CONF_JSON}.tmp"
+        echo "Error: JSON update failed for ${iface}.${key}" >&2
+        return 1
+    fi
 }
 
 # JSON global 설정 수정 함수
@@ -96,8 +101,13 @@ update_json_global() {
         return 1
     fi
 
-    jq --arg k "$key" --arg v "$value" '.global[$k] = $v' "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp"
-    mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
+    if jq --arg k "$key" --arg v "$value" '.global[$k] = $v' "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp"; then
+        mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
+    else
+        rm -f "${WIFI_INIT_CONF_JSON}.tmp"
+        echo "Error: JSON global update failed for ${key}" >&2
+        return 1
+    fi
 }
 
 ensure_wifi_init_conf() {
@@ -122,6 +132,8 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} freq {freq_list|channel_list} : persist"
     echo "       wifi {0|1|mlan0|mlan1} scan {freq_list|channel_list} : runtime"
     echo "       wifi {0|1|mlan0|mlan1} roam [0|1..N] : 0=auto best, N=Nth AP (RSSI order)"
+    echo "       wifi {0|1|mlan0|mlan1} stat reset [mac] : reset stat records (all or specific MAC)"
+    echo "       wifi {0|1|mlan0|mlan1} stat interval {seconds} : set stat reset interval (persist)"
     echo "       wifi {0|1|mlan0|mlan1} mon [c|compact] [interval] [--summary-lines N] [--roam-display N]"
     echo "       wifi txpwr {0|1|2|3|no|default|low|org|conf_file_name} : persist"
     echo "       wifi cal {0|1|2|None|WlanCalData_ext.conf|WlanCalData_ext_RD.conf|*} : persist"
@@ -131,6 +143,38 @@ usage() {
     echo "       wifi stand {n|ac|ax|4|5|6} : persist"
     echo "       wifi backup : persist"
     exit 1
+}
+
+freq_to_channel() {
+    local f="$1"
+    if ! [[ "$f" =~ ^[0-9]+$ ]]; then
+        echo "$f"
+        return
+    fi
+    if (( f == 2484 )); then
+        echo 14
+    elif (( f >= 2412 && f <= 2472 )); then
+        echo $(( (f - 2407) / 5 ))
+    elif (( f >= 5000 && f <= 5995 )); then
+        echo $(( (f - 5000) / 5 ))
+    else
+        echo "$f"
+    fi
+}
+
+freqs_with_channels() {
+    local freqs="$1"
+    local result=""
+    for f in $freqs; do
+        local ch
+        ch=$(freq_to_channel "$f")
+        if [ "$ch" != "$f" ]; then
+            result="${result:+$result }${f}(ch${ch})"
+        else
+            result="${result:+$result }${f}"
+        fi
+    done
+    echo "$result"
 }
 
 to_freq_mhz() {
@@ -188,8 +232,13 @@ show_info() {
                     break
                 fi
             done
-            printf "  %-6s: %-18s [%s] MAC:%s Carrier:%s GW:%s Conf:%s\n" \
-                "$dev" "${cidr:-N/A}" "$state" "$mac" "$carrier" "${gw:-N/A}" "${cfg_ip:-N/A}"
+            if [ "$only_iface" = "all" ]; then
+                printf "  %-6s: %-18s [%s] MAC:%s Carrier:%s GW:%s Conf:%s\n" \
+                    "$dev" "${cidr:-N/A}" "$state" "$mac" "$carrier" "${gw:-N/A}" "${cfg_ip:-N/A}"
+            else
+                printf "  %-18s [%s] MAC:%s Carrier:%s GW:%s Conf:%s\n" \
+                    "${cidr:-N/A}" "$state" "$mac" "$carrier" "${gw:-N/A}" "${cfg_ip:-N/A}"
+            fi
         fi
     done
     echo ""
@@ -225,11 +274,18 @@ show_info() {
                 pingpong_en=$(echo "$iface_json" | jq -r '.roaming.PING_PONG_PREVENTION.enable // true')
                 adaptive_en=$(echo "$iface_json" | jq -r '.roaming.ADAPTIVE_INTERVAL.enable // true')
 
-                echo "  [${iface}]"
-                echo "    enabled=$enabled  Frequency=$freq  net_rx=$net_rx"
-                echo "    bgscan_interval=${bgscan_interval}s"
-                echo "    roaming: TH_2G=${roam_th_2g} TH_5G=${roam_th_5g} DIFF=${roam_diff} CHECK=${roam_check}s"
-                echo "    features: predictive=$pred_en load_based=$load_en pingpong=$pingpong_en adaptive=$adaptive_en"
+                if [ "$only_iface" = "all" ]; then
+                    echo "  [${iface}]"
+                    echo "    enabled=$enabled  Frequency=$freq  net_rx=$net_rx"
+                    echo "    bgscan_interval=${bgscan_interval}s"
+                    echo "    roaming: TH_2G=${roam_th_2g} TH_5G=${roam_th_5g} DIFF=${roam_diff} CHECK=${roam_check}s"
+                    echo "    features: predictive=$pred_en load_based=$load_en pingpong=$pingpong_en adaptive=$adaptive_en"
+                else
+                    echo "  enabled=$enabled  Frequency=$freq  net_rx=$net_rx"
+                    echo "  bgscan_interval=${bgscan_interval}s"
+                    echo "  roaming: TH_2G=${roam_th_2g} TH_5G=${roam_th_5g} DIFF=${roam_diff} CHECK=${roam_check}s"
+                    echo "  features: predictive=$pred_en load_based=$load_en pingpong=$pingpong_en adaptive=$adaptive_en"
+                fi
             else
                 echo "  [${iface}] (no JSON config)"
             fi
@@ -302,14 +358,20 @@ show_info() {
         key_mgmt=$(wpa_field "$conf" "key_mgmt")
         freq_list=$(wpa_field "$conf" "freq_list")
         scan_freq=$(wpa_field "$conf" "scan_freq")
-        local pad
-        pad=$(printf '%*s' $((${#dev} + 4)) "")
-        echo "  ${dev}: country=${country:-N/A} ssid=${ssid:-N/A} psk=${psk:-N/A} key_mgmt=${key_mgmt:-N/A}"
+        if [ "$only_iface" = "all" ]; then
+            local prefix="  ${dev}: "
+            local pad
+            pad=$(printf '%*s' ${#prefix} "")
+            echo "${prefix}country=${country:-N/A} ssid=${ssid:-N/A} psk=${psk:-N/A} key_mgmt=${key_mgmt:-N/A}"
+        else
+            local pad="  "
+            echo "  country=${country:-N/A} ssid=${ssid:-N/A} psk=${psk:-N/A} key_mgmt=${key_mgmt:-N/A}"
+        fi
         if [ -n "${freq_list:-}" ]; then
-            echo "${pad}freq_list=${freq_list}"
+            echo "${pad}freq_list=$(freqs_with_channels "${freq_list// / }")"
         fi
         if [ -n "${scan_freq:-}" ]; then
-            echo "${pad}scan_freq=${scan_freq}"
+            echo "${pad}scan_freq=$(freqs_with_channels "${scan_freq// / }")"
         fi
     done
     echo ""
@@ -318,16 +380,23 @@ show_info() {
     echo "[Services]"
     if command -v systemctl >/dev/null 2>&1; then
         local svc_list=()
-        svc_list+=(wifi_init wifi_logger switchd)
+
+        # Non-wifi services
+        svc_list+=(switchd)
+        svc_list+=("journald-snapshot.timer" "fake-hwclock.timer" "log-watchdog.timer")
+
+        # WiFi global services
+        svc_list+=(wifi_init wifi_logger wifi_ping_monitor)
+        svc_list+=("wifi_mgmt_log.timer" "wifi_thermal_state.timer")
 
         add_iface_svcs() {
             local iface="$1"
-            svc_list+=("wifi_logger@${iface}" "wifi_led@${iface}")
-            svc_list+=("wifi_checker@${iface}")
-            svc_list+=("wifi_bridge@${iface}" "wifi_arping@${iface}" "wifi_bgscan@${iface}" "wifi_roam@${iface}")
             if [ "$iface" = "mlan0" ] || [ "$iface" = "mlan1" ]; then
                 svc_list+=("wpa_supplicant@${iface}")
             fi
+            svc_list+=("wifi_logger@${iface}" "wifi_led@${iface}")
+            svc_list+=("wifi_checker@${iface}" "wifi_event@${iface}")
+            svc_list+=("wifi_bridge@${iface}" "wifi_arping@${iface}" "wifi_bgscan@${iface}" "wifi_roam@${iface}" "wifi_periodic_roam@${iface}")
         }
 
         if [ "$only_iface" = "all" ]; then
@@ -337,9 +406,6 @@ show_info() {
         else
             add_iface_svcs "$only_iface"
         fi
-
-        # Timers (global)
-        svc_list+=("mgmt-log-flush.timer" "wbridge-thermal-state.timer" "journald-snapshot.timer" "fake-hwclock.timer")
 
         for svc in "${svc_list[@]}"; do
             state=$(systemctl is-active "$svc" 2>/dev/null || true)
@@ -459,7 +525,7 @@ case "$1" in
         echo 0 > /sys/class/leds/SW_SEL1/brightness
         echo 1 > /sys/class/leds/SW_SEL2/brightness
     elif [ "$2" == "external" ] || [ "$2" == "1" ]; then
-        wifi 1 down
+        wifi 0 down
         wifi 1 down
         sleep 1
         echo "set to external antenna mode"
@@ -471,11 +537,11 @@ case "$1" in
     exit 1
     ;;
   stand)
-    if [[ "$2" == "4" ]] || [[ "$2" == "n" ]] || [[ "$2" == "N" ]]; then
+    if [[ "$2" == "4" ]] || [[ "$2" == "n" ]] || [[ "$2" == "N" ]] || [[ "$2" == "ht" ]] || [[ "$2" == "HT" ]]; then
         VAL="n"
-    elif [[ "$2" == "5" ]] || [[ "$2" == "ac" ]] || [[ "$2" == "AC" ]]; then
+    elif [[ "$2" == "5" ]] || [[ "$2" == "ac" ]] || [[ "$2" == "AC" ]] || [[ "$2" == "vht" ]] || [[ "$2" == "VHT" ]]; then
         VAL="ac"
-    elif [[ "$2" == "6" ]] || [[ "$2" == "ax" ]] || [[ "$2" == "AX" ]]; then
+    elif [[ "$2" == "6" ]] || [[ "$2" == "ax" ]] || [[ "$2" == "AX" ]] || [[ "$2" == "he" ]] || [[ "$2" == "HE" ]]; then
         VAL="ax"
     else
         usage
@@ -483,6 +549,7 @@ case "$1" in
 
     update_json_global "STANDARD" "$VAL"
     echo "STANDARD updated to $VAL in $WIFI_INIT_CONF_JSON"
+    exit 1
     ;;
   backup)
     BACKUP_DIR=/var/log/cantops/backup
@@ -510,7 +577,10 @@ case "$2" in
     ;;
   restart)
     echo "restart WPA service for $IFACE..."
-    systemctl restart wpa_supplicant@$IFACE
+    #systemctl restart wpa_supplicant@$IFACE
+    systemctl stop wpa_supplicant@$IFACE
+    sleep 1
+    systemctl start wpa_supplicant@$IFACE
     ;;
   start | up)
     echo "Starting WPA service for $IFACE..."
@@ -547,6 +617,45 @@ case "$2" in
     else
         python3 /usr/local/logger/passive_roam.py $ROAM_ARG --iface $IFACE
     fi
+    ;;
+  stat)
+    case "${3:-}" in
+      reset)
+        TARGET_MAC="${4:-}"
+        if [ -n "$TARGET_MAC" ]; then
+            if ! [[ "$TARGET_MAC" =~ ^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$ ]]; then
+                echo "Error: invalid MAC address '$TARGET_MAC'" >&2; exit 1
+            fi
+            touch "/tmp/wifi_stat_reset_${TARGET_MAC}"
+            echo "stat reset requested for MAC $TARGET_MAC on $IFACE"
+        else
+            touch /tmp/wifi_stat_init_f
+            echo "stat reset requested for all records on $IFACE"
+        fi
+        ;;
+      interval)
+        if [ -z "${4:-}" ]; then
+            echo "Usage: wifi <iface> stat interval <seconds>"
+            exit 1
+        fi
+        INTERVAL_SEC="$4"
+        if ! [[ "$INTERVAL_SEC" =~ ^[0-9]+$ ]]; then
+            echo "Error: interval must be a positive integer (seconds)"
+            exit 1
+        fi
+        jq --argjson v "$INTERVAL_SEC" \
+            --arg iface "$IFACE" \
+            '.[$iface].logger.stat_reset_interval_sec = $v' \
+            "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp"
+        mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
+        echo "stat_reset_interval_sec set to ${INTERVAL_SEC}s for $IFACE in $WIFI_INIT_CONF_JSON"
+        ;;
+      *)
+        echo "Usage: wifi <iface> stat reset [mac]"
+        echo "       wifi <iface> stat interval <seconds>"
+        exit 1
+        ;;
+    esac
     ;;
   mon)
     shift 2
@@ -758,23 +867,37 @@ case "$2" in
     if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> ip <address/netmask>" >&2; exit 1; fi
     NEW_IP="$1"
-    # subnet mask가 없으면 /24 기본 적용
-    if [[ "$NEW_IP" != */* ]]; then
-        NEW_IP="${NEW_IP}/24"
-        echo "No subnet mask specified, using default /24"
-    fi
     TMP_FILE="$(mktemp)"
-    if awk -v new_ip="$NEW_IP" '
-        BEGIN { changed = 0 }
-        /^[[:space:]]*#/ { print; next }
-        /^[[:space:]]*Address[[:space:]]*=/ { print "Address=" new_ip; changed = 1; next }
-        { print }
-        END { if (!changed) exit 1 }
-    ' "$CONF" > "$TMP_FILE"; then
-        safe_install_0644_sync "$TMP_FILE" "$CONF"
-        rm -f "$TMP_FILE"
-        echo "Address changed to \"$NEW_IP\" in $CONF"
-    else echo "no Address= line found, nothing changed in $CONF" >&2; rm -f "$TMP_FILE"; exit 1; fi
+    trap 'rm -f "$TMP_FILE"; sync 2>/dev/null || true' EXIT
+    if [ "$NEW_IP" = "0" ]; then
+        # Address 줄 삭제
+        if awk '
+            BEGIN { found = 0 }
+            /^[[:space:]]*#/ { print; next }
+            /^[[:space:]]*Address[[:space:]]*=/ { found = 1; next }
+            { print }
+            END { if (!found) exit 1 }
+        ' "$CONF" > "$TMP_FILE"; then
+            safe_install_0644_sync "$TMP_FILE" "$CONF"
+            echo "Address removed from $CONF"
+        else echo "no Address= line found in $CONF" >&2; exit 1; fi
+    else
+        # subnet mask가 없으면 /24 기본 적용
+        if [[ "$NEW_IP" != */* ]]; then
+            NEW_IP="${NEW_IP}/24"
+            echo "No subnet mask specified, using default /24"
+        fi
+        if awk -v new_ip="$NEW_IP" '
+            BEGIN { changed = 0 }
+            /^[[:space:]]*#/ { print; next }
+            /^[[:space:]]*Address[[:space:]]*=/ { print "Address=" new_ip; changed = 1; next }
+            { print }
+            END { if (!changed) exit 1 }
+        ' "$CONF" > "$TMP_FILE"; then
+            safe_install_0644_sync "$TMP_FILE" "$CONF"
+            echo "Address changed to \"$NEW_IP\" in $CONF"
+        else echo "no Address= line found, nothing changed in $CONF" >&2; exit 1; fi
+    fi
     ;;
   gt)
     set -euo pipefail

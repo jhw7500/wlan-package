@@ -6,7 +6,7 @@ OnBootSec=45s
 OnUnitActiveSec=10s
 AccuracySec=2s
 Persistent=true
-Unit=wbridge-thermal-state.service
+Unit=wifi_thermal_state.service
 
 [Install]
 WantedBy=timers.target
