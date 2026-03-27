@@ -37,6 +37,17 @@ purge)
 
     cleanup_symlinks
 
+    # SysV generator 복원
+    if [ -f /lib/systemd/system-generators/systemd-sysv-generator.orig ]; then
+        mv /lib/systemd/system-generators/systemd-sysv-generator.orig /lib/systemd/system-generators/systemd-sysv-generator
+        logger -p local0.info "[$KEY][$tag:$LINENO] Restored systemd-sysv-generator"
+    elif [ -L /lib/systemd/system-generators/systemd-sysv-generator ]; then
+        rm -f /lib/systemd/system-generators/systemd-sysv-generator
+    fi
+
+    # audit socket unmask
+    systemctl unmask systemd-journald-audit.socket 2>/dev/null || true
+
     # Clean up /usr/local/dumb directory (remove even if not empty)
     rm -rf /usr/local/dumb 2>/dev/null || true
 

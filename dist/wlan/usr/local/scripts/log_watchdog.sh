@@ -26,7 +26,7 @@ fi
 logger -p local0.warn "[$tag] Log filesystem usage ${usage}% >= ${THRESHOLD}%, starting cleanup"
 
 # 1단계: 강제 logrotate
-logrotate -f /etc/logrotate.d/rsyslog 2>/dev/null || true
+logrotate -f /etc/logrotate.d/logrotate.rsyslog 2>/dev/null || true
 
 usage=$(get_usage)
 if [ "$usage" -lt "$THRESHOLD" ]; then
@@ -37,11 +37,11 @@ fi
 # 2단계: 가장 오래된 압축 로그부터 삭제 (최대 20개씩)
 deleted=0
 while [ "$usage" -ge "$THRESHOLD" ] && [ "$deleted" -lt 100 ]; do
-    oldest=$(find "$LOG_PART" -name "*.gz" -printf '%T+ %p\n' 2>/dev/null | sort | head -20 | awk '{print $2}')
-    if [ -z "$oldest" ]; then
+    mapfile -t oldest_files < <(find "$LOG_PART" -name "*.gz" -printf '%T+ %p\n' 2>/dev/null | sort | head -20 | cut -d' ' -f2-)
+    if [ ${#oldest_files[@]} -eq 0 ]; then
         break
     fi
-    for f in $oldest; do
+    for f in "${oldest_files[@]}"; do
         rm -f "$f"
         deleted=$((deleted + 1))
     done
