@@ -76,6 +76,14 @@ remove)
 
     cleanup_symlinks
 
+    # SysV generator 복원
+    if [ -f /lib/systemd/system-generators/systemd-sysv-generator.orig ]; then
+        mv /lib/systemd/system-generators/systemd-sysv-generator.orig /lib/systemd/system-generators/systemd-sysv-generator
+    elif [ -L /lib/systemd/system-generators/systemd-sysv-generator ]; then
+        rm -f /lib/systemd/system-generators/systemd-sysv-generator
+    fi
+    systemctl unmask systemd-journald-audit.socket 2>/dev/null || true
+
     systemctl disable --now cpufreq-min.service 2>/dev/null || true
     systemctl disable --now wifi_thermal_state.timer wifi_thermal_state.service 2>/dev/null || true
     systemctl daemon-reload 2>/dev/null || true
