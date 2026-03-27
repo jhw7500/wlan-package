@@ -22,7 +22,7 @@ run_on_connect() {
     echo "$cmds" | while IFS= read -r cmd; do
         [ -z "$cmd" ] && continue
         logger -p local0.info "[$tag] [$IFACE] on_connect: $cmd"
-        if eval "$cmd" > /dev/null 2>&1; then
+        if bash -c "$cmd" > /dev/null 2>&1; then
             logger -p local0.info "[$tag] [$IFACE] on_connect: OK"
         else
             logger -p local0.err "[$tag] [$IFACE] on_connect: FAILED ($?)"

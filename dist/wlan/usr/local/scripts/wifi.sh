@@ -527,11 +527,11 @@ case "$1" in
     exit 1
     ;;
   stand)
-    if [[ "$2" == "4" ]] || [[ "$2" == "n" ]] || [[ "$2" == "N" ]]; then
+    if [[ "$2" == "4" ]] || [[ "$2" == "n" ]] || [[ "$2" == "N" ]] || [[ "$2" == "ht" ]] || [[ "$2" == "HT" ]]; then
         VAL="n"
-    elif [[ "$2" == "5" ]] || [[ "$2" == "ac" ]] || [[ "$2" == "AC" ]]; then
+    elif [[ "$2" == "5" ]] || [[ "$2" == "ac" ]] || [[ "$2" == "AC" ]] || [[ "$2" == "vht" ]] || [[ "$2" == "VHT" ]]; then
         VAL="ac"
-    elif [[ "$2" == "6" ]] || [[ "$2" == "ax" ]] || [[ "$2" == "AX" ]]; then
+    elif [[ "$2" == "6" ]] || [[ "$2" == "ax" ]] || [[ "$2" == "AX" ]] || [[ "$2" == "he" ]] || [[ "$2" == "HE" ]]; then
         VAL="ax"
     else
         usage
@@ -539,6 +539,7 @@ case "$1" in
 
     update_json_global "STANDARD" "$VAL"
     echo "STANDARD updated to $VAL in $WIFI_INIT_CONF_JSON"
+    exit 1
     ;;
   backup)
     BACKUP_DIR=/var/log/cantops/backup
@@ -612,6 +613,9 @@ case "$2" in
       reset)
         TARGET_MAC="${4:-}"
         if [ -n "$TARGET_MAC" ]; then
+            if ! [[ "$TARGET_MAC" =~ ^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$ ]]; then
+                echo "Error: invalid MAC address '$TARGET_MAC'" >&2; exit 1
+            fi
             touch "/tmp/wifi_stat_reset_${TARGET_MAC}"
             echo "stat reset requested for MAC $TARGET_MAC on $IFACE"
         else
@@ -854,6 +858,7 @@ case "$2" in
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> ip <address/netmask>" >&2; exit 1; fi
     NEW_IP="$1"
     TMP_FILE="$(mktemp)"
+    trap 'rm -f "$TMP_FILE"' EXIT
     if [ "$NEW_IP" = "0" ]; then
         # Address 줄 삭제
         if awk '

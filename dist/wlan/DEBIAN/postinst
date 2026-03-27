@@ -262,6 +262,11 @@ json_merge() {
   dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
   /usr/local/logger/print.py green "\r\n[installer] create symlinks..."
 
+  # SysV generator 비활성화 (부팅 로그 정리)
+  # 원본이 존재하면 백업 후 mask
+  if [ -f /lib/systemd/system-generators/systemd-sysv-generator ] && [ ! -L /lib/systemd/system-generators/systemd-sysv-generator ]; then
+      cp -a /lib/systemd/system-generators/systemd-sysv-generator /lib/systemd/system-generators/systemd-sysv-generator.orig
+  fi
   ln -sf /dev/null /lib/systemd/system-generators/systemd-sysv-generator
   # Create symlinks for wlan-bridge binaries (wbridge)
   mkdir -p /usr/local/bin
