@@ -34,7 +34,8 @@ run_on_connect() {
 if [ -f "$WIFI_INIT_CONF_JSON" ]; then
     _json_perm=$(stat -c '%a' "$WIFI_INIT_CONF_JSON" 2>/dev/null || echo "000")
     if [ $(( 0${_json_perm} & 022 )) -ne 0 ]; then
-        logger -p local0.warn "[$tag] [$IFACE] WARNING: $WIFI_INIT_CONF_JSON is group/world-writable (perm=${_json_perm}), potential command injection risk"
+        logger -p local0.crit "[$tag] [$IFACE] CRITICAL: $WIFI_INIT_CONF_JSON is group/world-writable (perm=${_json_perm}). Disabling on_connect to prevent command injection."
+        run_on_connect() { :; }
     fi
 fi
 
