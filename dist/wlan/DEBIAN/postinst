@@ -58,11 +58,15 @@ configure)
 
   cp /opt/wlan/config/logrotate.d/logrotate.rsyslog /etc/logrotate.d/
 
-  # logrotate를 hourly로 이동 (maxsize가 실질적으로 동작하도록)
-  if [ -f /etc/cron.daily/logrotate ] && [ ! -f /etc/cron.hourly/logrotate ]; then
-    mv /etc/cron.daily/logrotate /etc/cron.hourly/logrotate
-    echo "[installer] logrotate moved to cron.hourly for maxsize support"
-  fi
+  # wlan 전용 logrotate hourly 실행 스크립트 설치
+  # 시스템 전체 logrotate(/etc/cron.daily/logrotate)는 건드리지 않고
+  # wlan 관련 설정만 hourly로 실행하여 maxsize가 실질적으로 동작하도록 함
+  cat > /etc/cron.hourly/logrotate-wlan << 'EOF'
+#!/bin/sh
+# wlan 전용 hourly logrotate (시스템 전체 logrotate와 독립)
+/usr/sbin/logrotate /etc/logrotate.d/logrotate.rsyslog
+EOF
+  chmod 755 /etc/cron.hourly/logrotate-wlan
   cp /opt/wlan/config/rsyslog.conf /etc/
   cp /opt/wlan/config/smb.conf /etc/samba/
   cp /opt/wlan/config/wifi_mod_para__.conf /lib/firmware/nxp/
@@ -116,22 +120,6 @@ configure)
   fi
 
   /usr/local/scripts/auto_fs_sizeup.sh 2 3
-
-set_timezone() {
-  local target_tz="$1"
-  if [ -z "$target_tz" ]; then
-    echo "Usage: set_timezone <TimeZone>"
-    return 1
-  fi
-
-  current_tz=$(timedatectl | grep 'Time zone' | awk '{print $3}')
-  if [ "$current_tz" == "$target_tz" ]; then
-    echo "Timezone is already set to $current_tz"
-  else
-    echo "Changing timezone from $current_tz to $target_tz"
-    timedatectl set-timezone "$target_tz"
-  fi
-}
 
 customctl() {
     target=$1

@@ -147,6 +147,17 @@ class MQTTClient:
             self.logger.message('warn', "Mqtt disconnected")
             self.connected = False
 
+class _SyslogFormatter(logging.Formatter):
+    def format(self, record):
+        fn = getattr(record, 'custom_filename', '')
+        ln = getattr(record, 'custom_lineno', 0)
+        if fn:
+            prefix = f"{record.name} [{fn}:{ln}]"
+        else:
+            prefix = record.name
+        return f"{prefix} {record.getMessage()}"
+
+
 class Logger():
     def __init__(self, app_name='appName', facility=logging.handlers.SysLogHandler.LOG_LOCAL0, log_level='info', dbg_level='warn', log_print="off"):
 
@@ -188,16 +199,6 @@ class Logger():
         
         self.syslog_handler = logging.handlers.SysLogHandler(address='/dev/log', facility=facility)
         self.syslog_handler.setLevel(logging.DEBUG)
-        class _SyslogFormatter(logging.Formatter):
-            def format(self, record):
-                fn = getattr(record, 'custom_filename', '')
-                ln = getattr(record, 'custom_lineno', 0)
-                if fn:
-                    prefix = f"{record.name} [{fn}:{ln}]"
-                else:
-                    prefix = record.name
-                return f"{prefix} {record.getMessage()}"
-
         self.syslog_handler.setFormatter(_SyslogFormatter())
         self.logger.addHandler(self.syslog_handler)
         

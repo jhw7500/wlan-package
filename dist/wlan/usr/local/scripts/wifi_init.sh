@@ -460,7 +460,7 @@ if lsmod | grep -q "^moal\b" || lsmod | grep -q "^mlan\b"; then
     # mlan0/mlan1 인터페이스를 사용하는 나머지 프로세스 종료
     for iface in mlan0 mlan1; do
         if [ -d "/sys/class/net/$iface" ]; then
-            pids=$(fuser /sys/class/net/"$iface" 2>/dev/null | tr -s ' ') || true
+            pids=$(fuser /sys/class/net/"$iface" 2>/dev/null | grep -oE '[0-9]+' | tr '\n' ' ') || true
             if [ -n "$pids" ]; then
                 logger -p local0.info "[$tag:$LINENO] killing processes on $iface: $pids"
                 kill $pids 2>/dev/null || true
@@ -485,6 +485,8 @@ if lsmod | grep -q "^moal\b" || lsmod | grep -q "^mlan\b"; then
         exit 1
     fi
     logger -p local0.info "[$tag:$LINENO] moal/mlan modules unloaded successfully"
+    # rmmod 직후 PCI 버스 재초기화 등 하드웨어 settling 대기
+    sleep 0.5
 fi
 
 if ! try_insmod "/opt/wlan/driver/mlan.ko" ""; then
@@ -566,63 +568,42 @@ if command -v systemctl >/dev/null 2>&1; then
         fi
     fi
 
-    # wifi_periodic_roam 서비스 제어 (JSON periodic_roam.enabled 기반)
-    control_periodic_roam_service() {
-        local iface=$1
+    # 기능별 서비스 제어 통합 함수
+    # 인자: iface, json_key (e.g. "periodic_roam.enabled"), service_name (e.g. "wifi_periodic_roam")
+    control_feature_service() {
+        local iface="$1"
+        local json_key="$2"
+        local service_name="$3"
         local enabled_val
 
         if ! wifi_init_iface_is_enabled "$iface" "true"; then
-            logger -p local0.info "[$tag:$LINENO] [$iface] disabled → stop+disable wifi_periodic_roam@$iface"
-            systemctl stop "wifi_periodic_roam@${iface}.service" 2>/dev/null || true
-            systemctl disable "wifi_periodic_roam@${iface}.service" 2>/dev/null || true
+            logger -p local0.info "[$tag:$LINENO] [$iface] disabled → stop+disable ${service_name}@$iface"
+            systemctl stop "${service_name}@${iface}.service" 2>/dev/null || true
+            systemctl disable "${service_name}@${iface}.service" 2>/dev/null || true
             return 0
         fi
 
-        enabled_val=$(jq -r ".${iface}.periodic_roam.enabled // false" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+        enabled_val=$(jq -r ".${iface}.${json_key} // false" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
         enabled_val=$(wifi_init_normalize_bool "$enabled_val" "false")
 
         if [ "$enabled_val" = "true" ]; then
-            logger -p local0.info "[$tag:$LINENO] [$iface] periodic_roam enabled → enable+start wifi_periodic_roam@$iface"
-            systemctl enable "wifi_periodic_roam@${iface}.service" 2>/dev/null || true
-            systemctl start --no-block "wifi_periodic_roam@${iface}.service" 2>/dev/null || true
+            logger -p local0.info "[$tag:$LINENO] [$iface] ${json_key} enabled → enable+start ${service_name}@$iface"
+            systemctl enable "${service_name}@${iface}.service" 2>/dev/null || true
+            systemctl start --no-block "${service_name}@${iface}.service" 2>/dev/null || true
         else
-            logger -p local0.info "[$tag:$LINENO] [$iface] periodic_roam disabled → stop+disable wifi_periodic_roam@$iface"
-            systemctl stop "wifi_periodic_roam@${iface}.service" 2>/dev/null || true
-            systemctl disable "wifi_periodic_roam@${iface}.service" 2>/dev/null || true
+            logger -p local0.info "[$tag:$LINENO] [$iface] ${json_key} disabled → stop+disable ${service_name}@$iface"
+            systemctl stop "${service_name}@${iface}.service" 2>/dev/null || true
+            systemctl disable "${service_name}@${iface}.service" 2>/dev/null || true
         fi
     }
 
-    control_periodic_roam_service "$BRIDGE_IFACE"
-    control_periodic_roam_service "$SECONDARY_IFACE"
+    # wifi_periodic_roam 서비스 제어 (JSON periodic_roam.enabled 기반)
+    control_feature_service "$BRIDGE_IFACE"    "periodic_roam.enabled" "wifi_periodic_roam"
+    control_feature_service "$SECONDARY_IFACE" "periodic_roam.enabled" "wifi_periodic_roam"
 
     # wifi_event 서비스 제어 (JSON on_connect.enabled 기반)
-    control_wifi_event_service() {
-        local iface=$1
-        local enabled_val
-
-        if ! wifi_init_iface_is_enabled "$iface" "true"; then
-            logger -p local0.info "[$tag:$LINENO] [$iface] disabled → stop+disable wifi_event@$iface"
-            systemctl stop "wifi_event@${iface}.service" 2>/dev/null || true
-            systemctl disable "wifi_event@${iface}.service" 2>/dev/null || true
-            return 0
-        fi
-
-        enabled_val=$(jq -r ".${iface}.on_connect.enabled // false" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-        enabled_val=$(wifi_init_normalize_bool "$enabled_val" "false")
-
-        if [ "$enabled_val" = "true" ]; then
-            logger -p local0.info "[$tag:$LINENO] [$iface] wifi_event enabled → enable+start wifi_event@$iface"
-            systemctl enable "wifi_event@${iface}.service" 2>/dev/null || true
-            systemctl start --no-block "wifi_event@${iface}.service" 2>/dev/null || true
-        else
-            logger -p local0.info "[$tag:$LINENO] [$iface] wifi_event disabled → stop+disable wifi_event@$iface"
-            systemctl stop "wifi_event@${iface}.service" 2>/dev/null || true
-            systemctl disable "wifi_event@${iface}.service" 2>/dev/null || true
-        fi
-    }
-
-    control_wifi_event_service "$BRIDGE_IFACE"
-    control_wifi_event_service "$SECONDARY_IFACE"
+    control_feature_service "$BRIDGE_IFACE"    "on_connect.enabled" "wifi_event"
+    control_feature_service "$SECONDARY_IFACE" "on_connect.enabled" "wifi_event"
 
     # ping_monitor 서비스 제어 (JSON global.ping_monitor.enabled 기반)
     ping_monitor_enabled=$(jq -r '.global.ping_monitor.enabled // false' "$WIFI_INIT_CONF_JSON" 2>/dev/null)

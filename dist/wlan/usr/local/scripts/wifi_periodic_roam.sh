@@ -6,6 +6,7 @@
 # roam 0 = 현재 AP 제외 최고 RSSI AP로 로밍 시도
 
 set -uo pipefail
+# -e 미사용: while true 루프 내 개별 명령 실패가 데몬 전체 종료로 이어지지 않도록 의도적으로 제외
 
 IFACE="${1:-mlan0}"
 INTERVAL="${2:-}"
@@ -45,7 +46,7 @@ get_freq_list() {
     local ssid
     ssid=$(wpa_cli -i "$IFACE" status 2>/dev/null | grep '^ssid=' | cut -d= -f2)
     if [ -n "$ssid" ]; then
-        iw "$IFACE" scan dump 2>/dev/null | grep -B5 "SSID: $ssid" | grep 'freq:' | awk '{print $2}' | sort -u | tr '\n' ' '
+        iw "$IFACE" scan dump 2>/dev/null | grep -F -B5 "SSID: $ssid" | grep 'freq:' | awk '{print $2}' | sort -u | tr '\n' ' '
     fi
 }
 
@@ -79,6 +80,8 @@ while true; do
             ssid=$(wpa_cli -i "$IFACE" status 2>/dev/null | grep '^ssid=' | cut -d= -f2)
             iw "$IFACE" scan freq $freq_list ssid "$ssid" >/dev/null 2>&1
             sleep 1
+        else
+            logger -p local0.warn "$tag [$IFACE] scan_before_roam=true but freq_list is empty, skipping scan"
         fi
     fi
 
