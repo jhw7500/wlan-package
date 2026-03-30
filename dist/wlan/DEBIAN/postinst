@@ -61,15 +61,12 @@ configure)
   # wlan 전용 logrotate hourly 실행 스크립트 설치
   # 시스템 전체 logrotate(/etc/cron.daily/logrotate)는 건드리지 않고
   # wlan 관련 설정만 hourly로 실행하여 maxsize가 실질적으로 동작하도록 함
-  if [ ! -f /etc/cron.hourly/logrotate-wlan ]; then
-    cat > /etc/cron.hourly/logrotate-wlan << 'EOF'
+  cat > /etc/cron.hourly/logrotate-wlan << 'EOF'
 #!/bin/sh
 # wlan 전용 hourly logrotate (시스템 전체 logrotate와 독립)
 /usr/sbin/logrotate /etc/logrotate.d/logrotate.rsyslog
 EOF
-    chmod 755 /etc/cron.hourly/logrotate-wlan
-    echo "[installer] installed /etc/cron.hourly/logrotate-wlan for wlan maxsize support"
-  fi
+  chmod 755 /etc/cron.hourly/logrotate-wlan
   cp /opt/wlan/config/rsyslog.conf /etc/
   cp /opt/wlan/config/smb.conf /etc/samba/
   cp /opt/wlan/config/wifi_mod_para__.conf /lib/firmware/nxp/

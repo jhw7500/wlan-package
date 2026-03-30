@@ -81,7 +81,7 @@ while true; do
             iw "$IFACE" scan freq $freq_list ssid "$ssid" >/dev/null 2>&1
             sleep 1
         else
-            logger -p local0.warn "$tag scan_before_roam=true but freq_list is empty, skipping scan"
+            logger -p local0.warn "$tag [$IFACE] scan_before_roam=true but freq_list is empty, skipping scan"
         fi
     fi
 
