@@ -48,6 +48,7 @@ purge)
 
     cleanup_symlinks
     restore_systemd_overrides
+    rm -f /etc/cron.hourly/logrotate-wlan
 
     # Clean up /usr/local/dumb directory (remove even if not empty)
     rm -rf /usr/local/dumb 2>/dev/null || true
@@ -77,6 +78,7 @@ remove)
 
     cleanup_symlinks
     restore_systemd_overrides
+    rm -f /etc/cron.hourly/logrotate-wlan
 
     systemctl disable --now cpufreq-min.service 2>/dev/null || true
     systemctl disable --now wifi_thermal_state.timer wifi_thermal_state.service 2>/dev/null || true
