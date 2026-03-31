@@ -64,6 +64,7 @@ LOG_LINE_RE = re.compile(r"""
        (?P<tx_bps>\d+(?:\.\d+)?)Mb(?:ps|/s)/
        (?P<tx_avg_bps>\d+(?:\.\d+)?)Mb(?:ps|/s),\s+
     FAIL:(?P<tx_fail>\d+),\s+
+    (?:RETRY:(?P<retry_delta>\d+)\((?P<retry_pct>\d+(?:\.\d+)?)%\),\s+)?
     T:(?P<time>\d+)
     (?:\s*.*)?$            # 끝에 부가 정보가 더 있어도 허용
 """, re.VERBOSE)
@@ -567,6 +568,15 @@ def log_stats():
             if retry_count is not None and tx_frame_count is not None:
                 delta_retry = retry_count - prev_retry_count
                 delta_tx = tx_frame_count - prev_tx_frame_count
+                # 카운터 리셋/wrap 감지 시 이번 구간은 스킵
+                if delta_retry < 0 or delta_tx < 0:
+                    prev_retry_count = retry_count
+                    prev_tx_frame_count = tx_frame_count
+                    last_stat[ap_mac]["retry_delta"] = 0
+                    last_stat[ap_mac]["retry_pct"] = 0.0
+                    log_stats_write(last_stat[ap_mac], wifi_info)
+                    last_log_time = time.time()
+                    continue
                 retry_pct = round((delta_retry / delta_tx) * 100, 1) if delta_tx > 0 else 0.0
                 last_stat[ap_mac]["retry_delta"] = delta_retry
                 last_stat[ap_mac]["retry_pct"] = retry_pct

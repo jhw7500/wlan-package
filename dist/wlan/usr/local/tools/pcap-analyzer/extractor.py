@@ -146,7 +146,7 @@ def extract_frames(
 
     # 스트리밍 방식: stdout을 한 줄씩 읽어 메모리 사용량을 최소화한다.
     proc = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1
     )
 
     frames: List[FrameType] = []
@@ -167,9 +167,7 @@ def extract_frames(
 
     _ = proc.wait()
     if proc.returncode != 0:
-        stderr = proc.stderr
-        stderr_out = stderr.read() if stderr is not None else ""
-        print(f"[ERROR] tshark 실행 실패: {stderr_out[:500]}", file=sys.stderr)
+        print(f"[ERROR] tshark 실행 실패 (exit code: {proc.returncode})", file=sys.stderr)
         return []
 
     return frames

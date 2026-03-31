@@ -119,7 +119,15 @@ echo "version:${version}"
 
 # Temporarily move tmp directories out of dpkg build tree
 STASH_DIR="${BASEDIR}/dist/.tmp-stash"
+rm -rf "${STASH_DIR}"
 TMP_DIRS=()
+restore_tmp() {
+    for rel in "${TMP_DIRS[@]}"; do
+        [ -d "${STASH_DIR}/${rel}" ] && mv "${STASH_DIR}/${rel}" "${BASEDIR}/dist/wlan/${rel}"
+    done
+    rm -rf "${STASH_DIR}"
+}
+trap restore_tmp EXIT
 while IFS= read -r -d '' d; do
     rel="${d#${BASEDIR}/dist/wlan/}"
     stash="${STASH_DIR}/${rel}"
@@ -129,12 +137,6 @@ while IFS= read -r -d '' d; do
 done < <(find "${BASEDIR}/dist/wlan" -type d -name tmp -print0)
 
 dpkg -b wlan "${BASEDIR}/release/wlan.deb"
-
-# Restore tmp directories
-for rel in "${TMP_DIRS[@]}"; do
-    mv "${STASH_DIR}/${rel}" "${BASEDIR}/dist/wlan/${rel}"
-done
-rm -rf "${STASH_DIR}"
 
 cp "${BASEDIR}/release/wlan.deb" "${BASEDIR}/release/${package}-${version}.deb"
 

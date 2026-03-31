@@ -10,3 +10,4 @@ tmp/
 .worktrees/
 docs/plans/
 docs/superpowers/
+network.json

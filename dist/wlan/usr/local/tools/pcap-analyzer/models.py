@@ -32,7 +32,6 @@ class Frame:
     rssi: str
     ta: str
     ra: str
-    bssid: str
     ip_src: str
     ip_dst: str
     icmp_type: str
@@ -40,6 +39,7 @@ class Frame:
     tcp_len: str
     tcp_flags: str
     seq: str
+    bssid: str = ""
 
     @property
     def subtype_name(self) -> str:

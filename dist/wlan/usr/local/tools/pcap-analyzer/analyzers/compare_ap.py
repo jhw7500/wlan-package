@@ -110,7 +110,8 @@ def analyze(frames: List[Frame], roles: Dict, index=None) -> AnalysisSection:
     for ap in ap_macs:
         name = mac_name(ap, roles)
         header += f" | {name:>10} {'%':>6}"
-    header += f" | {name[:2]+'1비율':>7}"
+    if ap_macs:
+        header += f" | {mac_name(ap_macs[0], roles)[:3]}비율"
     lines.append(header)
     lines.append("-" * len(header))
 
