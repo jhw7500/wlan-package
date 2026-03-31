@@ -86,9 +86,9 @@ def get_temperatures():
                 ["mlanutl", iface, "get_sensor_temp"],
                 timeout=2, stderr=subprocess.DEVNULL
             ).decode()
-            m = re.search(r"=\s*(\d+)", out)
+            m = re.search(r"[\s=]+(\d+(?:\.\d+)?)\s*C", out)
             if m:
-                temps[iface] = m.group(1)
+                temps[iface] = str(int(float(m.group(1))))
         except Exception:
             pass
     return temps
@@ -289,9 +289,10 @@ def draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, summary_path, p
     safe_addstr(y, 1, f"RSSI: {sig_s}/{sig_a} dBm  TX: {tx_s}M  RX: {rx_s}M")
     y += 1
 
-    # tx_failed / tx_retries
+    # tx_failed / tx_retries (mwlan_log에서 dot11RetryCount 사용)
     tx_fail = link.get("tx_failed", "-")
-    tx_retry = link.get("tx_retries", "-")
+    mwlan_log = data.get("mwlan_log", {}) if isinstance(data, dict) else {}
+    tx_retry = mwlan_log.get("dot11RetryCount", link.get("tx_retries", "-"))
     safe_addstr(y, 1, f"FAIL: {tx_fail}  RETRY: {tx_retry}")
     y += 1
 
