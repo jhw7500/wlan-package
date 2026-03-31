@@ -45,9 +45,10 @@ def detect_roles(frames: List[Frame]) -> Dict[str, Dict]:
     # 1단계: Data 프레임에서 AP와 실제 통신한 MAC만 STA 후보로 수집
     #   - Probe Response 대상(지나가는 단말)이 제외됨
     # 2단계: STA 후보의 전체 프레임 수를 카운트
+    # 폴백: beacon/assoc 없는 캡처에서 ap_macs가 비어있으면 bssid 필터 스킵
     sta_candidates = set()
     for f in frames:
-        if f.bssid not in ap_macs:
+        if ap_macs and f.bssid not in ap_macs:
             continue
         if not f.is_data:
             continue

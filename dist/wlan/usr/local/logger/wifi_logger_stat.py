@@ -25,8 +25,8 @@ check_interval = 1  # 체크 주기 (초)
 STAT_RESET_INTERVAL = 604800  # 통계 리셋 주기 (7일)
 last_log_time = time.time()  # 마지막 로깅 시간
 tx_retrys = {}
-prev_retry_count = 0
-prev_tx_frame_count = 0
+prev_retry_count = None
+prev_tx_frame_count = None
 
 WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
 
@@ -566,6 +566,15 @@ def log_stats():
             log = get_mlanutl_log(IFACE)
             retry_count, tx_frame_count = parse_log(log)
             if retry_count is not None and tx_frame_count is not None:
+                # 첫 샘플: baseline 설정만 하고 델타 계산 스킵
+                if prev_retry_count is None or prev_tx_frame_count is None:
+                    prev_retry_count = retry_count
+                    prev_tx_frame_count = tx_frame_count
+                    last_stat[ap_mac]["retry_delta"] = 0
+                    last_stat[ap_mac]["retry_pct"] = 0.0
+                    log_stats_write(last_stat[ap_mac], wifi_info)
+                    last_log_time = time.time()
+                    continue
                 delta_retry = retry_count - prev_retry_count
                 delta_tx = tx_frame_count - prev_tx_frame_count
                 # 카운터 리셋/wrap 감지 시 이번 구간은 스킵
