@@ -19,11 +19,14 @@ WLAN Pcap 종합 분석 도구
     -o OUTPUT_FILE       출력 파일 (기본: <pcap이름>_analysis.txt)
 """
 import argparse
+import json
 import os
 import sys
+from datetime import datetime
 
 from extractor import extract_frames
 from detector import detect_roles
+from indexer import FrameIndex
 from reporter import format_report
 from analyzers import overview, retry_mcs, retry_burst, roaming, ping_rtt
 from analyzers import control_traffic, signal_quality, per_second
@@ -34,8 +37,9 @@ from log_merger import merge_logs
 def main():
     parser = argparse.ArgumentParser(description="WLAN Pcap 종합 분석 도구")
     parser.add_argument("pcap", help="분석할 pcap 파일 경로")
-    parser.add_argument("--ssid", default="", help="WPA 복호화용 SSID")
-    parser.add_argument("--pass", dest="passphrase", default="", help="WPA 복호화용 비밀번호")
+    parser.add_argument("--config", default="", help="네트워크 설정 JSON 파일 경로")
+    parser.add_argument("--ssid", default="", help="WPA 복호화용 SSID (config보다 우선)")
+    parser.add_argument("--pass", dest="passphrase", default="", help="WPA 복호화용 비밀번호 (config보다 우선)")
     parser.add_argument("--start", default="", help="시작 시간 필터")
     parser.add_argument("--end", default="", help="종료 시간 필터")
     parser.add_argument("--mac", default="", help="MAC 필터 (콤마 구분)")
@@ -52,13 +56,42 @@ def main():
         print(f"[ERROR] 파일이 존재하지 않습니다: {args.pcap}", file=sys.stderr)
         sys.exit(1)
 
+    # JSON 설정 로드 → CLI 인자로 덮어쓰기
+    config_path = args.config
+    if not config_path:
+        # pcap과 같은 디렉토리 또는 현재 디렉토리에서 자동 탐색
+        for candidate in [
+            os.path.join(os.path.dirname(args.pcap), "network.json"),
+            "network.json",
+        ]:
+            if os.path.exists(candidate):
+                config_path = candidate
+                break
+
+    if config_path and os.path.exists(config_path):
+        try:
+            with open(config_path) as cf:
+                config = json.load(cf)
+            print(f"  설정 파일 로드: {config_path}")
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"[WARN] 설정 파일 로드 실패, 무시합니다: {e}", file=sys.stderr)
+            config = {}
+        if not args.ssid:
+            args.ssid = config.get("ssid", "")
+        if not args.passphrase:
+            args.passphrase = config.get("passphrase", config.get("pass", ""))
+
     # --sta는 --mac의 alias
     if args.sta:
         args.mac = args.sta
 
     if not args.output:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        tmp_dir = os.path.join(script_dir, "tmp")
+        os.makedirs(tmp_dir, exist_ok=True)
         base = os.path.splitext(os.path.basename(args.pcap))[0]
-        args.output = f"{base}_analysis.txt"
+        date_str = datetime.now().strftime("%Y%m%d")
+        args.output = os.path.join(tmp_dir, f"{base}_analysis_{date_str}.txt")
 
     wpa_used = bool(args.ssid and args.passphrase)
 
@@ -89,8 +122,9 @@ def main():
     stas = [m for m, r in roles.items() if r["role"] == "STA"]
     print(f"  -> AP {len(aps)}대, STA {len(stas)}대 감지")
 
-    # 3. 분석 모듈 실행
-    print("[3/4] 분석 모듈 실행 중...")
+    # 3. 인덱스 구축 + 분석 모듈 실행
+    print("[3/4] 프레임 인덱싱 + 분석 모듈 실행 중...")
+    index = FrameIndex(frames, roles)
     analyzer_list = [
         ("개요", overview),
         ("Retry MCS", retry_mcs),
@@ -111,7 +145,7 @@ def main():
     sections = []
     for name, mod in analyzer_list:
         print(f"  -> {name} 분석...")
-        sections.append(mod.analyze(frames, roles))
+        sections.append(mod.analyze(frames, roles, index))
 
     # 외부 로그 병합
     if args.with_log:

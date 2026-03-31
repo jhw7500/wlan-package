@@ -3,7 +3,7 @@ from typing import List, Dict
 from models import Frame, AnalysisSection
 
 
-def analyze(frames: List[Frame], roles: Dict) -> AnalysisSection:
+def analyze(frames: List[Frame], roles: Dict, index=None) -> AnalysisSection:
     lines = []
     lines.append("연속 3+개 retry burst 후 첫 non-retry 제어 프레임까지 시간:")
     lines.append("")

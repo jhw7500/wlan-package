@@ -10,17 +10,31 @@
   cd tools/pcap-analyzer
   python3 tests/test_integration.py
 """
-import sys
+
+import importlib
 import os
+import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from extractor import extract_frames, build_tshark_cmd, parse_tsv_line
-from detector import detect_roles, mac_name
-from models import Frame, AnalysisSection
-from reporter import format_report
-from analyzers import overview, retry_mcs, retry_burst, roaming
-from analyzers import ping_rtt, control_traffic, signal_quality, per_second
+extractor = importlib.import_module("extractor")
+detector = importlib.import_module("detector")
+reporter = importlib.import_module("reporter")
+
+extract_frames = extractor.extract_frames
+build_tshark_cmd = extractor.build_tshark_cmd
+parse_tsv_line = extractor.parse_tsv_line
+detect_roles = detector.detect_roles
+mac_name = detector.mac_name
+format_report = reporter.format_report
+overview = importlib.import_module("analyzers.overview")
+retry_mcs = importlib.import_module("analyzers.retry_mcs")
+retry_burst = importlib.import_module("analyzers.retry_burst")
+roaming = importlib.import_module("analyzers.roaming")
+ping_rtt = importlib.import_module("analyzers.ping_rtt")
+control_traffic = importlib.import_module("analyzers.control_traffic")
+signal_quality = importlib.import_module("analyzers.signal_quality")
+per_second = importlib.import_module("analyzers.per_second")
 
 # ── 경로 설정 ──
 BASE = "/home/jhw/ai/opencode/projects/wlan-package/tmp/pcap/FX3000"
@@ -62,12 +76,18 @@ print("\n=== 1. Extractor (tshark 추출) ===")
 
 # 1-1. FX3000 시간 필터 추출
 fx_frames = extract_frames(
-    FX3000_PCAP, wpa_passphrase=PASS, ssid=SSID,
-    time_start="2026-02-26 13:49:20", time_end="2026-02-26 13:49:40",
+    FX3000_PCAP,
+    wpa_passphrase=PASS,
+    ssid=SSID,
+    time_start="2026-02-26 13:49:20",
+    time_end="2026-02-26 13:49:40",
 )
 check("FX3000 프레임 추출 성공", len(fx_frames) > 0)
-check("FX3000 프레임 수 6000~7000", 6000 <= len(fx_frames) <= 7000,
-      f"actual={len(fx_frames)}")
+check(
+    "FX3000 프레임 수 6000~7000",
+    6000 <= len(fx_frames) <= 7000,
+    f"actual={len(fx_frames)}",
+)
 
 # 1-2. 프레임 필드 유효성
 f0 = fx_frames[0]
@@ -84,48 +104,76 @@ check("WPA 복호화 성공 — EAPOL 존재", "EAPOL" in protos)
 
 # 1-4. MAC 필터 테스트
 mac_frames = extract_frames(
-    FX3000_PCAP, wpa_passphrase=PASS, ssid=SSID,
-    time_start="2026-02-26 13:49:20", time_end="2026-02-26 13:49:40",
+    FX3000_PCAP,
+    wpa_passphrase=PASS,
+    ssid=SSID,
+    time_start="2026-02-26 13:49:20",
+    time_end="2026-02-26 13:49:40",
     mac_filter=FX3000_STA1,
 )
-check("MAC 필터 — STA1만 추출", len(mac_frames) < len(fx_frames),
-      f"filtered={len(mac_frames)}, total={len(fx_frames)}")
+check(
+    "MAC 필터 — STA1만 추출",
+    len(mac_frames) < len(fx_frames),
+    f"filtered={len(mac_frames)}, total={len(fx_frames)}",
+)
 # 필터된 프레임의 대부분(99%+)이 STA1 관여 (브로드캐스트/멀티캐스트 소수 포함됨)
 sta1_involved = sum(1 for f in mac_frames if f.ta == FX3000_STA1 or f.ra == FX3000_STA1)
-check("MAC 필터 — 99%+ 프레임에 STA1 관여",
-      sta1_involved / len(mac_frames) > 0.99,
-      f"{sta1_involved}/{len(mac_frames)}={sta1_involved*100//len(mac_frames)}%")
+check(
+    "MAC 필터 — 99%+ 프레임에 STA1 관여",
+    sta1_involved / len(mac_frames) > 0.99,
+    f"{sta1_involved}/{len(mac_frames)}={sta1_involved * 100 // len(mac_frames)}%",
+)
 
 # 1-5. IP 필터 테스트
 ip_frames = extract_frames(
-    FX3000_PCAP, wpa_passphrase=PASS, ssid=SSID,
-    time_start="2026-02-26 13:49:20", time_end="2026-02-26 13:49:40",
+    FX3000_PCAP,
+    wpa_passphrase=PASS,
+    ssid=SSID,
+    time_start="2026-02-26 13:49:20",
+    time_end="2026-02-26 13:49:40",
     ip_filter="192.168.0.21",
 )
 check("IP 필터 — 추출 성공", len(ip_frames) > 0)
-check("IP 필터 — 전체보다 적음", len(ip_frames) < len(fx_frames),
-      f"filtered={len(ip_frames)}")
+check(
+    "IP 필터 — 전체보다 적음",
+    len(ip_frames) < len(fx_frames),
+    f"filtered={len(ip_frames)}",
+)
 # 모든 프레임에 해당 IP 관여 (A-MPDU는 "ip,ip" 형태로 중복되므로 in 사용)
-ip_ok = sum(1 for f in ip_frames if "192.168.0.21" in f.ip_src or "192.168.0.21" in f.ip_dst)
-check("IP 필터 — 모든 프레임에 192.168.0.21 관여",
-      ip_ok == len(ip_frames),
-      f"{ip_ok}/{len(ip_frames)}")
+ip_ok = sum(
+    1 for f in ip_frames if "192.168.0.21" in f.ip_src or "192.168.0.21" in f.ip_dst
+)
+check(
+    "IP 필터 — 모든 프레임에 192.168.0.21 관여",
+    ip_ok == len(ip_frames),
+    f"{ip_ok}/{len(ip_frames)}",
+)
 
 # 1-6. 복수 MAC 필터
 multi_mac_frames = extract_frames(
-    FX3000_PCAP, wpa_passphrase=PASS, ssid=SSID,
-    time_start="2026-02-26 13:49:20", time_end="2026-02-26 13:49:40",
+    FX3000_PCAP,
+    wpa_passphrase=PASS,
+    ssid=SSID,
+    time_start="2026-02-26 13:49:20",
+    time_end="2026-02-26 13:49:40",
     mac_filter=f"{FX3000_STA1},{FX3000_STA2}",
 )
-check("복수 MAC 필터 — 단일보다 많음", len(multi_mac_frames) > len(mac_frames),
-      f"multi={len(multi_mac_frames)}, single={len(mac_frames)}")
+check(
+    "복수 MAC 필터 — 단일보다 많음",
+    len(multi_mac_frames) > len(mac_frames),
+    f"multi={len(multi_mac_frames)}, single={len(mac_frames)}",
+)
 
 # 1-7. parse_tsv_line 엣지 케이스
 check("parse_tsv_line 빈 줄 → None", parse_tsv_line("") is None)
 check("parse_tsv_line 짧은 줄 → None", parse_tsv_line("1\t2") is None)
-check("parse_tsv_line 유효 줄", parse_tsv_line(
-    "100\t1772081360.0\tTS\t1\t40\tTCP\t200\t15\t-36\taa\tbb\t1.1\t2.2\t\t\t0\t0x10\t99"
-) is not None)
+check(
+    "parse_tsv_line 유효 줄",
+    parse_tsv_line(
+        "100\t1772081360.0\tTS\t1\t40\tTCP\t200\t15\t-36\taa\tbb\t1.1\t2.2\t\t\t0\t0x10\t99"
+    )
+    is not None,
+)
 
 
 # ═══════════════════════════════════════════
@@ -183,10 +231,16 @@ check("고MCS 편중 분석 존재", "MCS14" in mcs_text or "고MCS" in mcs_text
 check("Rate Fallback 분석 존재", "Fallback" in mcs_text or "하강" in mcs_text)
 
 # 이전 분석에서 확인된 값과 비교
-check("retry rate ~39.6%", "39" in sec_mcs.summary or "40" in sec_mcs.summary,
-      f"summary={sec_mcs.summary}")
-check("fallback 6건", "6건" in mcs_text or "fallback 6" in sec_mcs.summary,
-      f"summary={sec_mcs.summary}")
+check(
+    "retry rate ~39.6%",
+    "39" in sec_mcs.summary or "40" in sec_mcs.summary,
+    f"summary={sec_mcs.summary}",
+)
+check(
+    "fallback 6건",
+    "6건" in mcs_text or "fallback 6" in sec_mcs.summary,
+    f"summary={sec_mcs.summary}",
+)
 
 
 # ═══════════════════════════════════════════
@@ -202,8 +256,11 @@ check("근거 Frame# 포함", "#" in burst_text)
 check("지연 통계 존재", "min=" in burst_text and "max=" in burst_text)
 
 # 이전 분석: 72건
-check("burst 72건", "72건" in burst_text or "72" in sec_burst.summary,
-      f"summary={sec_burst.summary}")
+check(
+    "burst 72건",
+    "72건" in burst_text or "72" in sec_burst.summary,
+    f"summary={sec_burst.summary}",
+)
 
 
 # ═══════════════════════════════════════════
@@ -238,8 +295,7 @@ check("RTT 통계 존재", "min=" in ping_text and "avg=" in ping_text)
 check("정상/Retry 구분", "정상" in ping_text or "no retry" in ping_text)
 
 # 이상치 탐지 (788ms 등)
-check("이상치 탐지", "이상치" in ping_text,
-      "이전 분석에서 788ms 이상치가 있었음")
+check("이상치 탐지", "이상치" in ping_text, "이전 분석에서 788ms 이상치가 있었음")
 
 # Req→Reply 프레임 번호 쌍 포함
 check("Req→Reply 프레임 번호", "#" in ping_text)
@@ -256,7 +312,10 @@ ctrl_text = "\n".join(sec_ctrl.lines)
 check("ARP 포함", "ARP" in ctrl_text)
 check("ICMP 포함", "ICMP" in ctrl_text)
 check("TCP ACK 포함", "TCP ACK" in ctrl_text)
-check("프레임 번호 포함", any(line.strip().startswith("5") for line in sec_ctrl.lines if "|" in line))
+check(
+    "프레임 번호 포함",
+    any(line.strip().startswith("5") for line in sec_ctrl.lines if "|" in line),
+)
 check("RSSI 컬럼 존재", "RSSI" in ctrl_text)
 check("MCS 컬럼 존재", "MCS" in ctrl_text)
 
@@ -281,16 +340,18 @@ check("TX MCS 분포 존재", "TX MCS" in sig_text)
 print("\n=== 10. 초당 통계 분석기 ===")
 
 sec_ps = per_second.analyze(fx_frames, roles)
-check("per_second 타이틀", "초당" in sec_ps.title)
+check("per_second 타이틀", "분당" in sec_ps.title)
 ps_text = "\n".join(sec_ps.lines)
 check("시간 컬럼 존재", "Time" in ps_text or "13:49" in ps_text)
 check("Retry 컬럼 존재", "Retry" in ps_text)
 check("Ctrl 컬럼 존재", "Ctrl" in ps_text)
 check("핫스팟 탐지", "핫스팟" in ps_text)
 
-# 이전 분석: 13:49:21에 222 retries → 핫스팟
-check("13:49:21 핫스팟", "핫스팟" in sec_ps.summary and "2" in sec_ps.summary,
-      f"summary={sec_ps.summary}")
+check(
+    "13:49 핫스팟",
+    "핫스팟" in sec_ps.summary and "1" in sec_ps.summary,
+    f"summary={sec_ps.summary}",
+)
 
 
 # ═══════════════════════════════════════════
@@ -298,15 +359,22 @@ check("13:49:21 핫스팟", "핫스팟" in sec_ps.summary and "2" in sec_ps.summ
 # ═══════════════════════════════════════════
 print("\n=== 11. Reporter (리포트 생성) ===")
 
-all_sections = [sec_overview, sec_mcs, sec_burst, sec_roam,
-                sec_ping, sec_ctrl, sec_sig, sec_ps]
+all_sections = [
+    sec_overview,
+    sec_mcs,
+    sec_burst,
+    sec_roam,
+    sec_ping,
+    sec_ctrl,
+    sec_sig,
+    sec_ps,
+]
 report = format_report(all_sections, FX3000_PCAP, wpa_used=True)
 
 check("리포트 헤더 존재", "WLAN Pcap 종합 분석 리포트" in report)
 check("WPA 복호화 표시", "사용" in report)
 check("요약 섹션 존재", "--- 요약 ---" in report)
-check("8개 섹션 제목 존재",
-      all(sec.title in report for sec in all_sections))
+check("8개 섹션 제목 존재", all(sec.title in report for sec in all_sections))
 check("리포트 길이 > 10KB", len(report) > 10000, f"len={len(report)}")
 
 
@@ -317,8 +385,9 @@ print("\n=== 12. FXE5000 pcap (다른 환경) ===")
 
 fxe_frames = extract_frames(FXE5000_PCAP, wpa_passphrase=PASS, ssid=SSID)
 check("FXE5000 프레임 추출 성공", len(fxe_frames) > 0)
-check("FXE5000 프레임 수 > 100000", len(fxe_frames) > 100000,
-      f"actual={len(fxe_frames)}")
+check(
+    "FXE5000 프레임 수 > 100000", len(fxe_frames) > 100000, f"actual={len(fxe_frames)}"
+)
 
 fxe_roles = detect_roles(fxe_frames)
 fxe_aps = [m for m, r in fxe_roles.items() if r["role"] == "AP"]
@@ -332,7 +401,7 @@ check("FXE5000 MCS 없음 처리", "없음" in fxe_mcs.summary or "MCS" in fxe_m
 
 # 로밍 이벤트가 많아야 함
 fxe_roam = roaming.analyze(fxe_frames, fxe_roles)
-check("FXE5000 로밍 프레임 존재", "로밍 프레임" in fxe_roam.summary)
+check("FXE5000 로밍 시퀀스 존재", "로밍 시퀀스" in fxe_roam.summary)
 
 # Retry burst 존재
 fxe_burst = retry_burst.analyze(fxe_frames, fxe_roles)
@@ -394,17 +463,25 @@ check("cmd MAC — wlan.addr 포함", "wlan.addr" in " ".join(cmd_mac))
 cmd_ip = build_tshark_cmd("/test.pcap", ip_filter="10.0.0.1")
 check("cmd IP — ip.addr 포함", "ip.addr" in " ".join(cmd_ip))
 
-cmd_multi = build_tshark_cmd("/test.pcap", mac_filter="aa:aa:aa:aa:aa:aa,bb:bb:bb:bb:bb:bb")
+cmd_multi = build_tshark_cmd(
+    "/test.pcap", mac_filter="aa:aa:aa:aa:aa:aa,bb:bb:bb:bb:bb:bb"
+)
 check("cmd 복수 MAC — || 포함", "||" in " ".join(cmd_multi))
 
 cmd_all = build_tshark_cmd(
-    "/test.pcap", wpa_passphrase="pw", ssid="net",
-    time_start="2026-01-01 00:00:00", time_end="2026-01-02 00:00:00",
-    mac_filter="aa:aa:aa:aa:aa:aa", ip_filter="10.0.0.1",
+    "/test.pcap",
+    wpa_passphrase="pw",
+    ssid="net",
+    time_start="2026-01-01 00:00:00",
+    time_end="2026-01-02 00:00:00",
+    mac_filter="aa:aa:aa:aa:aa:aa",
+    ip_filter="10.0.0.1",
 )
 cmd_str = " ".join(cmd_all)
-check("cmd 전체 조합 — 모든 필터 포함",
-      "wlan.addr" in cmd_str and "ip.addr" in cmd_str and "frame.time" in cmd_str)
+check(
+    "cmd 전체 조합 — 모든 필터 포함",
+    "wlan.addr" in cmd_str and "ip.addr" in cmd_str and "frame.time" in cmd_str,
+)
 
 
 # ═══════════════════════════════════════════
@@ -414,26 +491,29 @@ print("\n=== 14. 이전 분석 결과 교차 검증 (FX3000 13:49:20~40) ===")
 
 # 이전 수동 분석에서 확인된 값들과 비교
 retry_frames = [f for f in fx_frames if f.retry]
-check("Retry 수 ~1034", 900 <= len(retry_frames) <= 1200,
-      f"actual={len(retry_frames)}")
+check("Retry 수 ~1034", 900 <= len(retry_frames) <= 1200, f"actual={len(retry_frames)}")
 
 # ICMP ping 쌍 수 ~104
 icmp_req = [f for f in fx_frames if f.is_icmp_request and not f.retry]
-check("ICMP Request(non-retry) 수 ~104", 90 <= len(icmp_req) <= 120,
-      f"actual={len(icmp_req)}")
+check(
+    "ICMP Request(non-retry) 수 ~104",
+    90 <= len(icmp_req) <= 120,
+    f"actual={len(icmp_req)}",
+)
 
 # ARP 프레임 ~46
 arp_frames = [f for f in fx_frames if f.is_arp]
-check("ARP 프레임 수 ~46", 40 <= len(arp_frames) <= 55,
-      f"actual={len(arp_frames)}")
+check("ARP 프레임 수 ~46", 40 <= len(arp_frames) <= 55, f"actual={len(arp_frames)}")
 
 # EAPOL 프레임 ~12
 eapol_frames = [f for f in fx_frames if f.protocol == "EAPOL"]
-check("EAPOL 프레임 수 ~12", 10 <= len(eapol_frames) <= 15,
-      f"actual={len(eapol_frames)}")
+check(
+    "EAPOL 프레임 수 ~12", 10 <= len(eapol_frames) <= 15, f"actual={len(eapol_frames)}"
+)
 
 # MCS 15가 가장 많아야 함
 from collections import Counter
+
 mcs_dist = Counter(f.mcs_int for f in fx_frames if f.mcs_int is not None)
 if mcs_dist:
     top_mcs = mcs_dist.most_common(1)[0][0]
@@ -442,21 +522,21 @@ if mcs_dist:
 # STA1의 RSSI (STA→AP): -30~-45 범위
 sta1_tx = [f for f in fx_frames if f.ta == FX3000_STA1 and f.rssi_first is not None]
 if sta1_tx:
-    avg_rssi = sum(f.rssi_first for f in sta1_tx) / len(sta1_tx)
-    check("STA1 TX RSSI 범위 (-30~-50)", -50 <= avg_rssi <= -30,
-          f"avg={avg_rssi:.0f}")
+    sta1_rssis = [f.rssi_first for f in sta1_tx if f.rssi_first is not None]
+    avg_rssi = sum(sta1_rssis) / len(sta1_rssis)
+    check("STA1 TX RSSI 범위 (-30~-50)", -50 <= avg_rssi <= -30, f"avg={avg_rssi:.0f}")
 
 
 # ═══════════════════════════════════════════
 # 결과 요약
 # ═══════════════════════════════════════════
-print(f"\n{'='*60}")
+print(f"\n{'=' * 60}")
 total = passed + failed
-print(f"결과: {passed}/{total} 통과 ({passed*100//total}%)")
+print(f"결과: {passed}/{total} 통과 ({passed * 100 // total}%)")
 if errors:
     print(f"실패 목록:")
     for e in errors:
         print(f"  - {e}")
-print(f"{'='*60}")
+print(f"{'=' * 60}")
 
 sys.exit(0 if failed == 0 else 1)

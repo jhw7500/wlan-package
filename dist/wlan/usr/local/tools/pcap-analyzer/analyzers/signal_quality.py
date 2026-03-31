@@ -4,7 +4,7 @@ from typing import List, Dict
 from models import Frame, AnalysisSection
 
 
-def analyze(frames: List[Frame], roles: Dict) -> AnalysisSection:
+def analyze(frames: List[Frame], roles: Dict, index=None) -> AnalysisSection:
     lines = []
 
     sta_macs = [m for m, r in roles.items() if r["role"] == "STA"]
@@ -13,8 +13,14 @@ def analyze(frames: List[Frame], roles: Dict) -> AnalysisSection:
 
     for sta in sta_macs:
         name = roles[sta]["name"]
-        tx_frames = [f for f in frames if f.ta == sta and f.rssi_first is not None]
-        rx_frames = [f for f in frames if f.ra == sta and f.rssi_first is not None]
+
+        # index 활용: 사전 인덱싱된 TA/RA별 프레임 사용
+        if index:
+            tx_frames = [f for f in index.by_ta.get(sta, []) if f.rssi_first is not None]
+            rx_frames = [f for f in index.by_ra.get(sta, []) if f.rssi_first is not None]
+        else:
+            tx_frames = [f for f in frames if f.ta == sta and f.rssi_first is not None]
+            rx_frames = [f for f in frames if f.ra == sta and f.rssi_first is not None]
 
         lines.append(f"--- {name} ({sta}) ---")
         if tx_frames:

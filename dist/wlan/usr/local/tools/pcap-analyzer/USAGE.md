@@ -9,16 +9,71 @@ python3 pcap_analyzer.py <pcap파일> [옵션]
 
 ---
 
+## pcap 파일 병합
+
+여러 pcap 파일을 시간순으로 하나로 합칠 때 `mergecap`을 사용한다. Wireshark/tshark 패키지에 포함되어 있다.
+
+```bash
+# 기본 사용법 (시간순 병합이 기본 동작)
+mergecap -w merged.pcap file1.pcap file2.pcap file3.pcap
+
+# 파일명 정렬 후 병합
+mergecap -w merged.pcap $(ls -1 *.pcap | sort)
+
+# 병합 결과 확인
+tshark -r merged.pcap -c 1 -T fields -e frame.time   # 첫 패킷 시간
+tshark -r merged.pcap -T fields -e frame.time | tail -1  # 마지막 패킷 시간
+```
+
+분할 캡처된 pcap 파일들을 병합한 후 분석하면 전체 시간대를 한 번에 볼 수 있다.
+
+---
+
 ## 옵션 목록
 
-### WPA 복호화
+### 네트워크 설정 (JSON)
 
-모니터 모드 pcap에서 ARP/ICMP/TCP 등 상위 프로토콜을 분석하려면 WPA 복호화가 필요하다.
+SSID, 비밀번호, 인증 방식을 JSON 파일에 저장하여 반복 입력을 줄인다.
 
 | 옵션 | 설명 |
 |------|------|
-| `--ssid SSID` | AP의 SSID |
-| `--pass PASSPHRASE` | WPA 비밀번호 |
+| `--config FILE` | 네트워크 설정 JSON 파일 경로 |
+
+```json
+{
+    "ssid": "CANTOPS_TEST",
+    "passphrase": "your_wpa_passphrase",
+    "auth": "WPA2-PSK"
+}
+```
+
+**로드 순서**: JSON 먼저 읽고, CLI 인자(`--ssid`, `--pass`)가 있으면 덮어쓴다.
+
+**자동 탐색**: `--config`를 생략하면 아래 경로에서 `network.json`을 자동으로 찾는다.
+1. pcap 파일과 같은 디렉토리
+2. 현재 작업 디렉토리
+
+```bash
+# 명시적 지정
+python3 pcap_analyzer.py capture.pcap --config /path/to/network.json
+
+# 자동 탐색 (pcap 디렉토리 또는 현재 디렉토리에 network.json이 있으면 자동 로드)
+python3 pcap_analyzer.py capture.pcap
+
+# CLI 인자로 덮어쓰기 (JSON의 ssid/pass 대신 CLI 값 사용)
+python3 pcap_analyzer.py capture.pcap --config network.json --ssid OTHER_SSID
+```
+
+예시 파일: `network.json.example`
+
+### WPA 복호화
+
+모니터 모드 pcap에서 ARP/ICMP/TCP 등 상위 프로토콜을 분석하려면 WPA 복호화가 필요하다. `network.json` 또는 CLI 인자로 SSID/비밀번호를 지정한다.
+
+| 옵션 | 설명 |
+|------|------|
+| `--ssid SSID` | AP의 SSID (config보다 우선) |
+| `--pass PASSPHRASE` | WPA 비밀번호 (config보다 우선) |
 
 ```bash
 python3 pcap_analyzer.py capture.pcap --ssid CANTOPS_TEST --pass "mypassword"
@@ -83,7 +138,7 @@ python3 pcap_analyzer.py capture.pcap --ssid ... --pass ... --sta "00:50:43:18:f
 
 ### AP 비교
 
-AP 간 retry rate, RSSI, 로밍 수신 횟수를 비교하는 섹션을 추가한다.
+AP 간 성능 비교와 프레임 분포 분석을 추가한다. 2대 이상의 AP가 감지될 때 유효하다.
 
 | 옵션 | 설명 |
 |------|------|
@@ -93,13 +148,30 @@ AP 간 retry rate, RSSI, 로밍 수신 횟수를 비교하는 섹션을 추가�
 python3 pcap_analyzer.py capture.pcap --ssid ... --pass ... --compare-ap
 ```
 
-출력 예:
+출력 내용:
+
+**1) 성능 비교 (TA/RA 기반)** — 기존 항목
+
 ```
              AP |   프레임 |  Retry% |  RSSI avg |  RSSI min |  로밍 수신
 ----------------------------------------------------------------------
       AP1(09cb) |    3070 |   19.1% |       -49 |       -82 |        0
       AP2(09cc) |    2446 |   18.4% |       -46 |       -93 |        3
 ```
+
+**2) 프레임 분포 (BSSID 기반)** — AP별 패킷 수/비율 분석
+
+```
+             AP |        프레임 |      비율
+--------------------------------------
+      AP1(0624) |      1,771 |   60.7%
+      AP2(0638) |      1,147 |   39.3%
+```
+
+- **프레임 타입별 분해**: Management / Control / Data 비율을 AP별로 비교
+- **서브타입별 상세**: QoS Data, Beacon, Probe Response 등 주요 서브타입의 AP별 개수와 차이
+- **불균형 기여도**: AP간 프레임 차이가 5% 이상일 때, 어떤 서브타입이 불균형에 기여하는지 비율로 표시
+- **Beacon RSSI 비교**: AP별 Beacon 프레임의 평균 RSSI
 
 ### 간결 모드 (현장용)
 
@@ -164,7 +236,7 @@ python3 pcap_analyzer.py capture.pcap -o /tmp/result.txt
 | 9 | 로밍 영향 분석 | 로밍 전후 retry/RSSI/ping 변화 | O |
 | 10 | Ping Loss | 응답 없는 Request + 원인 역추적 | O |
 | 11 | 종합 진단 | STA별 WARNING/INFO + 현장 제안 | O |
-| 12 | AP 비교 | AP 간 retry/RSSI/로밍 성능 비교 | `--compare-ap` |
+| 12 | AP 비교 | AP 간 성능 비교 + BSSID 기반 프레임 분포/불균형 분석 | `--compare-ap` |
 | - | 외부 로그 | 로밍 키워드 필터 타임라인 | `--with-log` |
 
 ---
@@ -208,7 +280,21 @@ python3 pcap_analyzer.py capture.pcap \
   --brief
 ```
 
-출력: AP 비교 테이블 + 진단 요약
+출력: AP 성능 비교 + 프레임 분포 + 불균형 기여도 + 진단 요약
+
+### 3-1. AP 간 패킷 불균형 분석
+
+AP별 패킷 수 차이가 발생하는 원인을 파악할 때 사용한다. 분할 캡처 파일은 먼저 병합한다.
+
+```bash
+# 분할 pcap 병합
+mergecap -w merged.pcap $(ls -1 *.pcap | sort)
+
+# AP 비교 분석
+python3 pcap_analyzer.py merged.pcap --compare-ap -o ap_compare.txt
+```
+
+BSSID 기반으로 Management/Control/Data 타입별 분해, 서브타입별 차이, 불균형 기여도가 자동 산출된다.
 
 ### 4. 외부 로그와 교차 분석
 

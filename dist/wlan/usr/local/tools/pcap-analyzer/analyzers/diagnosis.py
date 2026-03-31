@@ -5,7 +5,7 @@ from models import Frame, AnalysisSection
 from detector import mac_name
 
 
-def analyze(frames: List[Frame], roles: Dict) -> AnalysisSection:
+def analyze(frames: List[Frame], roles: Dict, index=None) -> AnalysisSection:
     lines = []
     sta_macs = [m for m, r in roles.items() if r["role"] == "STA"]
 
@@ -17,7 +17,13 @@ def analyze(frames: List[Frame], roles: Dict) -> AnalysisSection:
 
     for sta in sta_macs:
         name = mac_name(sta, roles)
-        sta_frames = [f for f in frames if f.ta == sta or f.ra == sta]
+
+        # index 활용: 사전 인덱싱된 STA별 프레임
+        if index:
+            sta_frames = index.by_sta.get(sta, [])
+        else:
+            sta_frames = [f for f in frames if f.ta == sta or f.ra == sta]
+
         if not sta_frames:
             continue
 
@@ -33,13 +39,13 @@ def analyze(frames: List[Frame], roles: Dict) -> AnalysisSection:
                          if f.is_roaming_related and f.ta == sta]
         auth_count = sum(1 for f in roaming_frames if f.subtype == "11")
 
-        # Ping loss
+        # Ping loss (STA 프레임 내에서만 검색)
         ping_req = {}
         ping_matched = 0
-        for f in frames:
-            if f.is_icmp_request and not f.retry and (f.ra == sta or f.ta == sta):
+        for f in sta_frames:
+            if f.is_icmp_request and not f.retry:
                 ping_req[(f.ip_src, f.ip_dst)] = f
-            elif f.is_icmp_reply and (f.ra == sta or f.ta == sta):
+            elif f.is_icmp_reply:
                 key = (f.ip_dst, f.ip_src)
                 if key in ping_req:
                     del ping_req[key]
@@ -47,12 +53,12 @@ def analyze(frames: List[Frame], roles: Dict) -> AnalysisSection:
         ping_lost = len(ping_req)
         ping_total = ping_matched + ping_lost
 
-        # 초당 최대 retry
-        sec_retry = Counter()
+        # 분당 최대 retry
+        min_retry = Counter()
         for f in sta_frames:
             if f.retry:
-                sec_retry[int(f.epoch)] += 1
-        max_retry_sec = max(sec_retry.values()) if sec_retry else 0
+                min_retry[int(f.epoch) // 60] += 1
+        max_retry_min = max(min_retry.values()) if min_retry else 0
 
         # 진단
         diags = []
@@ -69,8 +75,8 @@ def analyze(frames: List[Frame], roles: Dict) -> AnalysisSection:
         if rssi_min is not None and rssi_min < -75:
             diags.append(("WARNING", f"RSSI 최저값 {rssi_min}dBm — 신호 약화 구간"))
 
-        if max_retry_sec > 100:
-            diags.append(("WARNING", f"Retry 폭증: 최대 {max_retry_sec}/s"))
+        if max_retry_min > 3000:
+            diags.append(("WARNING", f"Retry 폭증: 최대 {max_retry_min}/min"))
 
         if auth_count > 3:
             diags.append(("INFO", f"잦은 로밍: {auth_count}회"))
@@ -81,7 +87,7 @@ def analyze(frames: List[Frame], roles: Dict) -> AnalysisSection:
         # 출력
         lines.append(f"--- {name} ({sta}) ---")
         rssi_str = f", RSSI avg: {rssi_avg:.0f}dBm" if rssi_avg else ""
-        lines.append(f"  프레임: {total}, Retry: {retry_pct:.1f}%{rssi_str}")
+        lines.append(f"  프레임: {total:,}, Retry: {retry_pct:.1f}%{rssi_str}")
         lines.append(f"  로밍: {auth_count}회, Ping: {ping_matched}성공/{ping_lost}손실")
 
         for level, msg in diags:

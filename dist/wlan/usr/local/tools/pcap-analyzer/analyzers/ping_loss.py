@@ -1,4 +1,5 @@
 """10. Ping Loss 구간 탐지 — 응답 없는 Request + 원인 역추적"""
+from bisect import bisect_left, bisect_right
 from typing import List, Dict
 from models import Frame, AnalysisSection
 from detector import mac_name
@@ -23,10 +24,23 @@ def _find_losses(frames: List[Frame]) -> List[Frame]:
     return [req for _, req in all_requests if id(req) not in matched_ids]
 
 
-def _diagnose_loss(frames: List[Frame], loss_frame: Frame,
-                   roles: Dict, window: float = 1.0) -> Dict:
+def _diagnose_loss(loss_frame: Frame, roles: Dict, index=None,
+                   frames=None, window: float = 1.0) -> Dict:
     t = loss_frame.epoch
-    nearby = [f for f in frames if t - window <= f.epoch <= t + window]
+
+    if index:
+        before_f, after_f = index.frames_in_window(t, window, window)
+        nearby = before_f + after_f
+        roaming_nearby = index.nearest_roaming(t, max_gap=5.0)
+    else:
+        nearby = [f for f in frames if t - window <= f.epoch <= t + window]
+        roaming_nearby = None
+        for f in frames:
+            if f.is_roaming_related and f.subtype in ("11", "0", "2"):
+                gap = abs(f.epoch - t)
+                if gap < 5:
+                    if roaming_nearby is None or gap < abs(roaming_nearby.epoch - t):
+                        roaming_nearby = f
 
     retry_count = sum(1 for f in nearby if f.retry)
     total = len(nearby)
@@ -34,14 +48,6 @@ def _diagnose_loss(frames: List[Frame], loss_frame: Frame,
 
     rssis = [f.rssi_first for f in nearby if f.rssi_first is not None]
     rssi_avg = sum(rssis) / len(rssis) if rssis else None
-
-    roaming_nearby = None
-    for f in frames:
-        if f.is_roaming_related and f.subtype in ("11", "0", "2"):
-            gap = abs(f.epoch - t)
-            if gap < 5:
-                if roaming_nearby is None or gap < abs(roaming_nearby.epoch - t):
-                    roaming_nearby = f
 
     cause = "불명"
     if roaming_nearby and abs(roaming_nearby.epoch - t) < 2:
@@ -62,7 +68,7 @@ def _diagnose_loss(frames: List[Frame], loss_frame: Frame,
     }
 
 
-def analyze(frames: List[Frame], roles: Dict) -> AnalysisSection:
+def analyze(frames: List[Frame], roles: Dict, index=None) -> AnalysisSection:
     lines = []
 
     losses = _find_losses(frames)
@@ -80,7 +86,7 @@ def analyze(frames: List[Frame], roles: Dict) -> AnalysisSection:
 
     cause_counts = {}
     for i, req in enumerate(losses):
-        diag = _diagnose_loss(frames, req, roles)
+        diag = _diagnose_loss(req, roles, index=index, frames=frames)
         cause_key = diag["cause"].split("(")[0].strip()
         cause_counts[cause_key] = cause_counts.get(cause_key, 0) + 1
 
