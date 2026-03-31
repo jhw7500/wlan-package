@@ -528,7 +528,18 @@ def log_stats():
                 wifi_info["rssi_min"] = signal_levels[ap_mac]["min"]
                 wifi_info["rssi_max"] = signal_levels[ap_mac]["max"]
             else:
-                prev_log = {"tx_fail": 0, "rssi_min": 0, "rssi_max": 0}
+                prev_log = {
+                    "tx_fail": 0,
+                    "rx_bytes": 0,
+                    "rx_packets": 0,
+                    "rx_avg_bps": 0,
+                    "tx_bytes": 0,
+                    "tx_packets": 0,
+                    "tx_avg_bps": 0,
+                    "rssi_min": float("inf"),
+                    "rssi_max": float("-inf"),
+                    "time": 0
+                }
                 last_stat.setdefault(ap_mac, {"rx_bytes": 0, "rx_packets": 0, "tx_bytes": 0, "tx_packets": 0, "tx_fail": 0, "time": 0, "tx_avg_bps": 0, "rx_avg_bps": 0, "total_bps": 0})
 
         cond_time = last_stat[ap_mac]["time"] >= STAT_RESET_INTERVAL
