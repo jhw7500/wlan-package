@@ -520,8 +520,8 @@ systemctl stop wpa_supplicant@mlan1 2>/dev/null || true
 
 apply_iface_txpwrlimit "mlan0" "$MLAN0_ENABLED"
 apply_iface_txpwrlimit "mlan1" "$MLAN1_ENABLED"
-apply_iface_radio_defaults "mlan0" "$MLAN0_ENABLED"
-apply_iface_radio_defaults "mlan1" "$MLAN1_ENABLED"
+#apply_iface_radio_defaults "mlan0" "$MLAN0_ENABLED"
+#apply_iface_radio_defaults "mlan1" "$MLAN1_ENABLED"
 #apply_iface_bandcfg "mlan0" "$MLAN0_ENABLED" "$MLAN0_FREQ"
 #apply_iface_bandcfg "mlan1" "$MLAN1_ENABLED" "$MLAN1_FREQ"
 

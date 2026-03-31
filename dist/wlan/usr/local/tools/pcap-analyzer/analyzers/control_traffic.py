@@ -18,7 +18,7 @@ def _detail(f: Frame) -> str:
     return "TCP ACK"
 
 
-def analyze(frames: List[Frame], roles: Dict) -> AnalysisSection:
+def analyze(frames: List[Frame], roles: Dict, index=None) -> AnalysisSection:
     ctrl = [f for f in frames if f.is_control_traffic]
     lines = []
     if not ctrl:

@@ -1,52 +1,53 @@
-"""8. 초당 통계 (retry 수, 제어트래픽 수, 전체 프레임 수)"""
+"""8. 분당 통계 (retry 수, 제어트래픽 수, 전체 프레임 수)"""
 from collections import Counter
 from typing import List, Dict
 from models import Frame, AnalysisSection
 import time as _time
 
 
-def analyze(frames: List[Frame], roles: Dict) -> AnalysisSection:
+def analyze(frames: List[Frame], roles: Dict, index=None) -> AnalysisSection:
     lines = []
     if not frames:
-        return AnalysisSection(title="8. 초당 통계", lines=["프레임 없음"], summary="없음")
+        return AnalysisSection(title="8. 분당 통계", lines=["프레임 없음"], summary="없음")
 
-    sec_total = Counter()
-    sec_retry = Counter()
-    sec_ctrl = Counter()
-    sec_ctrl_retry = Counter()
+    min_total = Counter()
+    min_retry = Counter()
+    min_ctrl = Counter()
+    min_ctrl_retry = Counter()
 
     for f in frames:
-        sec = int(f.epoch)
-        sec_total[sec] += 1
+        minute = int(f.epoch) // 60
+        min_total[minute] += 1
         if f.retry:
-            sec_retry[sec] += 1
+            min_retry[minute] += 1
         if f.is_control_traffic:
-            sec_ctrl[sec] += 1
+            min_ctrl[minute] += 1
             if f.retry:
-                sec_ctrl_retry[sec] += 1
+                min_ctrl_retry[minute] += 1
 
-    all_secs = sorted(sec_total.keys())
+    all_mins = sorted(min_total.keys())
 
-    lines.append(f"{'Time':>12} | {'Total':>6} | {'Retry':>6} | {'R%':>5} | {'Ctrl':>5} | {'Ctrl(R)':>7} | Bar(Retry)")
+    lines.append(f"{'Time':>12} | {'Total':>7} | {'Retry':>7} | {'R%':>5} | {'Ctrl':>5} | {'Ctrl(R)':>7} | Bar(Retry)")
     lines.append("-" * 75)
 
-    for sec in all_secs:
-        ts = _time.strftime("%H:%M:%S", _time.localtime(sec))
-        t = sec_total[sec]
-        r = sec_retry[sec]
-        c = sec_ctrl[sec]
-        cr = sec_ctrl_retry[sec]
+    for minute in all_mins:
+        ts = _time.strftime("%H:%M", _time.localtime(minute * 60))
+        t = min_total[minute]
+        r = min_retry[minute]
+        c = min_ctrl[minute]
+        cr = min_ctrl_retry[minute]
         rpct = r * 100.0 / t if t > 0 else 0
-        bar = "#" * min(int(r / 5), 40)
-        lines.append(f"{ts:>12} | {t:>6} | {r:>6} | {rpct:>4.0f}% | {c:>5} | {cr:>7} | {bar}")
+        bar = "#" * min(int(r / 100), 40)
+        lines.append(f"{ts:>12} | {t:>7,} | {r:>7,} | {rpct:>4.0f}% | {c:>5} | {cr:>7} | {bar}")
 
-    hotspots = [(sec, sec_retry[sec]) for sec in all_secs if sec_retry[sec] > 100]
+    hotspots = [(m, min_retry[m]) for m in all_mins if min_retry[m] > 1000]
     if hotspots:
         lines.append("")
-        lines.append("Retry 핫스팟 (>100/s):")
-        for sec, cnt in hotspots:
-            ts = _time.strftime("%H:%M:%S", _time.localtime(sec))
-            lines.append(f"  {ts}: {cnt} retries/s")
+        lines.append("Retry 핫스팟 (>1000/min):")
+        for minute, cnt in hotspots:
+            ts = _time.strftime("%H:%M", _time.localtime(minute * 60))
+            rpct = cnt * 100.0 / min_total[minute]
+            lines.append(f"  {ts}: {cnt:,} retries ({rpct:.0f}%)")
 
-    summary = f"{len(all_secs)}초, 핫스팟 {len(hotspots) if hotspots else 0}건"
-    return AnalysisSection(title="8. 초당 통계", lines=lines, summary=summary)
+    summary = f"{len(all_mins)}분, 핫스팟 {len(hotspots) if hotspots else 0}건"
+    return AnalysisSection(title="8. 분당 통계", lines=lines, summary=summary)

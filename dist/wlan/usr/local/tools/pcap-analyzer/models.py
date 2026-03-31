@@ -6,12 +6,16 @@ SUBTYPE_NAMES = {
     "0": "AssocReq", "1": "AssocResp", "2": "ReassocReq", "3": "ReassocResp",
     "4": "ProbeReq", "5": "ProbeResp", "8": "Beacon", "10": "DisAssoc",
     "11": "Auth", "12": "DeAuth", "13": "Action",
-    "24": "BAR", "25": "CTS-self", "27": "RTS", "28": "CTS", "29": "ACK",
-    "30": "CF-End", "32": "Data", "40": "QoS Data", "44": "QoS Null",
+    "14": "ActionNoAck",
+    "18": "Trigger", "21": "VHT NDP Ann",
+    "24": "BAR", "25": "BA", "27": "RTS", "28": "CTS", "29": "ACK",
+    "30": "CF-End", "37": "VHT NDP Ann",
+    "32": "Data", "40": "QoS Data", "44": "QoS Null",
 }
 
 DATA_SUBTYPES = {"32", "40", "44"}
-MGMT_SUBTYPES = {"0", "1", "2", "3", "4", "5", "8", "10", "11", "12", "13"}
+MGMT_SUBTYPES = {"0", "1", "2", "3", "4", "5", "8", "10", "11", "12", "13", "14"}
+CTRL_SUBTYPES = {"18", "21", "24", "25", "27", "28", "29", "30", "37"}
 ROAMING_SUBTYPES = {"0", "1", "2", "3", "11", "12"}
 
 
@@ -35,6 +39,7 @@ class Frame:
     tcp_len: str
     tcp_flags: str
     seq: str
+    bssid: str = ""
 
     @property
     def subtype_name(self) -> str:
@@ -47,6 +52,20 @@ class Frame:
     @property
     def is_mgmt(self) -> bool:
         return self.subtype in MGMT_SUBTYPES
+
+    @property
+    def is_ctrl(self) -> bool:
+        return self.subtype in CTRL_SUBTYPES
+
+    @property
+    def frame_type(self) -> str:
+        if self.is_mgmt:
+            return "Management"
+        if self.is_ctrl:
+            return "Control"
+        if self.is_data:
+            return "Data"
+        return "Other"
 
     @property
     def is_roaming_related(self) -> bool:

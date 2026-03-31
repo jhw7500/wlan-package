@@ -25,6 +25,8 @@ check_interval = 1  # 체크 주기 (초)
 STAT_RESET_INTERVAL = 604800  # 통계 리셋 주기 (7일)
 last_log_time = time.time()  # 마지막 로깅 시간
 tx_retrys = {}
+prev_retry_count = None
+prev_tx_frame_count = None
 
 WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
 
@@ -62,6 +64,7 @@ LOG_LINE_RE = re.compile(r"""
        (?P<tx_bps>\d+(?:\.\d+)?)Mb(?:ps|/s)/
        (?P<tx_avg_bps>\d+(?:\.\d+)?)Mb(?:ps|/s),\s+
     FAIL:(?P<tx_fail>\d+),\s+
+    (?:RETRY:(?P<retry_delta>\d+)\((?P<retry_pct>\d+(?:\.\d+)?)%\),\s+)?
     T:(?P<time>\d+)
     (?:\s*.*)?$            # 끝에 부가 정보가 더 있어도 허용
 """, re.VERBOSE)
@@ -397,6 +400,7 @@ def log_stats_write(my_stat, wifi_info):
         f"RX:{my_stat['rx_bytes']}byte/{my_stat['rx_packets']}pkt/{wifi_info['rx_bitrate']}Mbps/{my_stat['rx_avg_bps']}Mbps, "
         f"TX:{my_stat['tx_bytes']}byte/{my_stat['tx_packets']}pkt/{wifi_info['tx_bitrate']}Mbps/{my_stat['tx_avg_bps']}Mbps, "
         f"FAIL:{my_stat['tx_fail']}, "
+        f"RETRY:{my_stat.get('retry_delta', 0)}({my_stat.get('retry_pct', 0.0)}%), "
         f"T:{my_stat['time']}\n"
     )
     
@@ -495,7 +499,7 @@ def log_stats():
                 prev_log = get_last_ap_log_values(log_filename)
                 last_stat.setdefault(ap_mac, {"rx_bytes": 0, "rx_packets": 0, "tx_bytes": 0, "tx_packets": 0, "tx_fail": 0, "time": 0, "tx_avg_bps": 0, "rx_avg_bps": 0, "total_bps": 0})
 
-                if prev_log is None:  # 🔥 None이면 기본값 설정
+                if prev_log is None:
                     prev_log = {
                         "tx_fail": 0,
                         "rx_bytes": 0,
@@ -506,9 +510,9 @@ def log_stats():
                         "tx_avg_bps": 0,
                         "rssi_min": float("inf"),
                         "rssi_max": float("-inf"),
-                        "time": 0  # sec 값이 0이면 나눗셈 오류 가능하므로 1로 설정
+                        "time": 0
                     }
-                
+
                 #prev_retry = prev_log["retry_count"]
                 last_stat[ap_mac]["rx_bytes"] = prev_log["rx_bytes"]
                 last_stat[ap_mac]["rx_packets"] = prev_log["rx_packets"]
@@ -517,12 +521,26 @@ def log_stats():
                 last_stat[ap_mac]["tx_packets"] = prev_log["tx_packets"]
                 last_stat[ap_mac]["tx_avg_bps"] = prev_log["tx_avg_bps"]
                 last_stat[ap_mac]["time"] = prev_log["time"]
-                
+
                 signal_levels[ap_mac]["min"] = min(signal_levels[ap_mac]["min"], prev_log["rssi_min"])
                 signal_levels[ap_mac]["max"] = max(signal_levels[ap_mac]["max"], prev_log["rssi_max"])
-                
+
                 wifi_info["rssi_min"] = signal_levels[ap_mac]["min"]
                 wifi_info["rssi_max"] = signal_levels[ap_mac]["max"]
+            else:
+                prev_log = {
+                    "tx_fail": 0,
+                    "rx_bytes": 0,
+                    "rx_packets": 0,
+                    "rx_avg_bps": 0,
+                    "tx_bytes": 0,
+                    "tx_packets": 0,
+                    "tx_avg_bps": 0,
+                    "rssi_min": float("inf"),
+                    "rssi_max": float("-inf"),
+                    "time": 0
+                }
+                last_stat.setdefault(ap_mac, {"rx_bytes": 0, "rx_packets": 0, "tx_bytes": 0, "tx_packets": 0, "tx_fail": 0, "time": 0, "tx_avg_bps": 0, "rx_avg_bps": 0, "total_bps": 0})
 
         cond_time = last_stat[ap_mac]["time"] >= STAT_RESET_INTERVAL
         cond_flagfile = os.path.exists("/tmp/wifi_stat_init_f")
@@ -555,15 +573,42 @@ def log_stats():
         last_stat[ap_mac]['tx_avg_bps'] = update_avg(last_stat[ap_mac]["time"], last_stat[ap_mac]['tx_avg_bps'], wifi_info['tx_bitrate'])
         last_stat[ap_mac]['rx_avg_bps'] = update_avg(last_stat[ap_mac]["time"], last_stat[ap_mac]['rx_avg_bps'], wifi_info['rx_bitrate'])
 	    
-        # Log every 5 seconds
+        # Log every N seconds
         if time.time() - last_log_time >= log_interval:
-            #print(f"dot11RetryCount: {retry_count}")
-            
-            #print(f"dot11TransmittedFragmentCount: {tx_frag_count}")
+            # Retry rate from mlanutl getlog (cumulative delta)
+            global prev_retry_count, prev_tx_frame_count
+            log = get_mlanutl_log(IFACE)
+            retry_count, tx_frame_count = parse_log(log)
+            if retry_count is not None and tx_frame_count is not None:
+                # 첫 샘플: baseline 설정만 하고 델타 계산 스킵
+                if prev_retry_count is None or prev_tx_frame_count is None:
+                    prev_retry_count = retry_count
+                    prev_tx_frame_count = tx_frame_count
+                    last_stat[ap_mac]["retry_delta"] = 0
+                    last_stat[ap_mac]["retry_pct"] = 0.0
+                    log_stats_write(last_stat[ap_mac], wifi_info)
+                    last_log_time = time.time()
+                    continue
+                delta_retry = retry_count - prev_retry_count
+                delta_tx = tx_frame_count - prev_tx_frame_count
+                # 카운터 리셋/wrap 감지 시 이번 구간은 스킵
+                if delta_retry < 0 or delta_tx < 0:
+                    prev_retry_count = retry_count
+                    prev_tx_frame_count = tx_frame_count
+                    last_stat[ap_mac]["retry_delta"] = 0
+                    last_stat[ap_mac]["retry_pct"] = 0.0
+                    log_stats_write(last_stat[ap_mac], wifi_info)
+                    last_log_time = time.time()
+                    continue
+                retry_pct = round((delta_retry / delta_tx) * 100, 1) if delta_tx > 0 else 0.0
+                last_stat[ap_mac]["retry_delta"] = delta_retry
+                last_stat[ap_mac]["retry_pct"] = retry_pct
+                prev_retry_count = retry_count
+                prev_tx_frame_count = tx_frame_count
+            else:
+                last_stat[ap_mac]["retry_delta"] = 0
+                last_stat[ap_mac]["retry_pct"] = 0.0
 
-            #last_stat[ap_mac]["tx_th_interval"] = round(last_stat[ap_mac]["tx_th"]*8/1024/1024, 2)
-            #last_stat[ap_mac]["rx_th_interval"] = round(last_stat[ap_mac]["rx_th"]*8/1024/1024, 2)
-            #last_stat[ap_mac]["total_bps"] = round((last_stat[ap_mac]["tx_bytes"] + last_stat[ap_mac]["rx_bytes"])*8/last_stat[ap_mac]["time"]/1024/1024, 2)
             log_stats_write(last_stat[ap_mac], wifi_info)
             last_log_time = time.time()
 

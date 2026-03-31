@@ -116,7 +116,28 @@ if [ -z "${version}" ] || [ -z "${package}" ]; then
 fi
 
 echo "version:${version}"
+
+# Temporarily move tmp directories out of dpkg build tree
+STASH_DIR="${BASEDIR}/dist/.tmp-stash"
+rm -rf "${STASH_DIR}"
+TMP_DIRS=()
+restore_tmp() {
+    for rel in "${TMP_DIRS[@]}"; do
+        [ -d "${STASH_DIR}/${rel}" ] && mv "${STASH_DIR}/${rel}" "${BASEDIR}/dist/wlan/${rel}"
+    done
+    rm -rf "${STASH_DIR}"
+}
+trap restore_tmp EXIT
+while IFS= read -r -d '' d; do
+    rel="${d#${BASEDIR}/dist/wlan/}"
+    stash="${STASH_DIR}/${rel}"
+    mkdir -p "$(dirname "${stash}")"
+    mv "$d" "${stash}"
+    TMP_DIRS+=("${rel}")
+done < <(find "${BASEDIR}/dist/wlan" -type d -name tmp -print0)
+
 dpkg -b wlan "${BASEDIR}/release/wlan.deb"
+
 cp "${BASEDIR}/release/wlan.deb" "${BASEDIR}/release/${package}-${version}.deb"
 
 echo "Creating package tarball: ${BASEDIR}/release/wlan-package.tar"
@@ -124,5 +145,6 @@ tar --exclude-vcs \
   --exclude="./release" \
   --exclude="./.worktrees" \
   --exclude="./tmp" \
+  --exclude="*/tmp" \
   -cf "${BASEDIR}/release/wlan-package.tar" -C "${BASEDIR}" .
 echo "Created: ${BASEDIR}/release/wlan-package.tar"
