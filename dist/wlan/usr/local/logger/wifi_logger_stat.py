@@ -499,7 +499,7 @@ def log_stats():
                 prev_log = get_last_ap_log_values(log_filename)
                 last_stat.setdefault(ap_mac, {"rx_bytes": 0, "rx_packets": 0, "tx_bytes": 0, "tx_packets": 0, "tx_fail": 0, "time": 0, "tx_avg_bps": 0, "rx_avg_bps": 0, "total_bps": 0})
 
-                if prev_log is None:  # 🔥 None이면 기본값 설정
+                if prev_log is None:
                     prev_log = {
                         "tx_fail": 0,
                         "rx_bytes": 0,
@@ -510,9 +510,9 @@ def log_stats():
                         "tx_avg_bps": 0,
                         "rssi_min": float("inf"),
                         "rssi_max": float("-inf"),
-                        "time": 0  # sec 값이 0이면 나눗셈 오류 가능하므로 1로 설정
+                        "time": 0
                     }
-                
+
                 #prev_retry = prev_log["retry_count"]
                 last_stat[ap_mac]["rx_bytes"] = prev_log["rx_bytes"]
                 last_stat[ap_mac]["rx_packets"] = prev_log["rx_packets"]
@@ -521,12 +521,15 @@ def log_stats():
                 last_stat[ap_mac]["tx_packets"] = prev_log["tx_packets"]
                 last_stat[ap_mac]["tx_avg_bps"] = prev_log["tx_avg_bps"]
                 last_stat[ap_mac]["time"] = prev_log["time"]
-                
+
                 signal_levels[ap_mac]["min"] = min(signal_levels[ap_mac]["min"], prev_log["rssi_min"])
                 signal_levels[ap_mac]["max"] = max(signal_levels[ap_mac]["max"], prev_log["rssi_max"])
-                
+
                 wifi_info["rssi_min"] = signal_levels[ap_mac]["min"]
                 wifi_info["rssi_max"] = signal_levels[ap_mac]["max"]
+            else:
+                prev_log = {"tx_fail": 0, "rssi_min": 0, "rssi_max": 0}
+                last_stat.setdefault(ap_mac, {"rx_bytes": 0, "rx_packets": 0, "tx_bytes": 0, "tx_packets": 0, "tx_fail": 0, "time": 0, "tx_avg_bps": 0, "rx_avg_bps": 0, "total_bps": 0})
 
         cond_time = last_stat[ap_mac]["time"] >= STAT_RESET_INTERVAL
         cond_flagfile = os.path.exists("/tmp/wifi_stat_init_f")
