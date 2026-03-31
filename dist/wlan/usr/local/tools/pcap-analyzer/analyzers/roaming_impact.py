@@ -30,53 +30,20 @@ def _find_roaming_events(frames: List[Frame], roles: Dict) -> List[Dict]:
     return events
 
 
-def _window_stats(frames: List[Frame], sta: str, center: float,
-                  before_sec: float, after_sec: float) -> Dict:
-    before = [f for f in frames
-              if center - before_sec <= f.epoch < center
-              and (f.ta == sta or f.ra == sta)]
-    after = [f for f in frames
-             if center < f.epoch <= center + after_sec
-             and (f.ta == sta or f.ra == sta)]
-
-    def calc(flist):
-        if not flist:
-            return {"total": 0, "retry": 0, "retry_pct": 0.0, "rssi_avg": None}
-        retries = sum(1 for f in flist if f.retry)
-        rssis = [f.rssi_first for f in flist if f.rssi_first is not None]
-        return {
-            "total": len(flist),
-            "retry": retries,
-            "retry_pct": retries * 100.0 / len(flist),
-            "rssi_avg": sum(rssis) / len(rssis) if rssis else None,
-        }
-
-    return {"before": calc(before), "after": calc(after)}
+def _calc_stats(flist):
+    if not flist:
+        return {"total": 0, "retry": 0, "retry_pct": 0.0, "rssi_avg": None}
+    retries = sum(1 for f in flist if f.retry)
+    rssis = [f.rssi_first for f in flist if f.rssi_first is not None]
+    return {
+        "total": len(flist),
+        "retry": retries,
+        "retry_pct": retries * 100.0 / len(flist),
+        "rssi_avg": sum(rssis) / len(rssis) if rssis else None,
+    }
 
 
-def _ping_around(frames: List[Frame], sta: str, center: float,
-                 window: float) -> Dict:
-    start = center - window
-    end = center + window
-    requests = {}
-    matched = 0
-
-    for f in frames:
-        if f.epoch < start or f.epoch > end:
-            continue
-        if f.is_icmp_request and not f.retry and (f.ta == sta or f.ra == sta):
-            requests[(f.ip_src, f.ip_dst)] = f
-        elif f.is_icmp_reply and (f.ta == sta or f.ra == sta):
-            key = (f.ip_dst, f.ip_src)
-            if key in requests:
-                del requests[key]
-                matched += 1
-
-    lost = len(requests)
-    return {"matched": matched, "lost": lost}
-
-
-def analyze(frames: List[Frame], roles: Dict) -> AnalysisSection:
+def analyze(frames: List[Frame], roles: Dict, index=None) -> AnalysisSection:
     lines = []
     events = _find_roaming_events(frames, roles)
 
@@ -91,12 +58,37 @@ def analyze(frames: List[Frame], roles: Dict) -> AnalysisSection:
     for i, ev in enumerate(events):
         sta = mac_name(ev["sta"], roles)
         ap = mac_name(ev["ap"], roles)
-        stats = _window_stats(frames, ev["sta"], ev["epoch"], WINDOW_SEC, WINDOW_SEC)
-        ping = _ping_around(frames, ev["sta"], ev["epoch"], WINDOW_SEC)
 
-        b = stats["before"]
-        a = stats["after"]
-        has_problem = (a["retry_pct"] > 50 or ping["lost"] > 0)
+        # index 활용: O(log N) 윈도우 조회
+        if index:
+            before_f, after_f = index.sta_frames_in_window(
+                ev["sta"], ev["epoch"], WINDOW_SEC, WINDOW_SEC)
+        else:
+            before_f = [f for f in frames
+                        if ev["epoch"] - WINDOW_SEC <= f.epoch < ev["epoch"]
+                        and (f.ta == ev["sta"] or f.ra == ev["sta"])]
+            after_f = [f for f in frames
+                       if ev["epoch"] < f.epoch <= ev["epoch"] + WINDOW_SEC
+                       and (f.ta == ev["sta"] or f.ra == ev["sta"])]
+
+        b = _calc_stats(before_f)
+        a = _calc_stats(after_f)
+
+        # ping 체크 (전후 윈도우 내에서만)
+        window_frames = before_f + after_f
+        ping_req = {}
+        ping_matched = 0
+        for f in window_frames:
+            if f.is_icmp_request and not f.retry:
+                ping_req[(f.ip_src, f.ip_dst)] = f
+            elif f.is_icmp_reply:
+                key = (f.ip_dst, f.ip_src)
+                if key in ping_req:
+                    del ping_req[key]
+                    ping_matched += 1
+        ping_lost = len(ping_req)
+
+        has_problem = (a["retry_pct"] > 50 or ping_lost > 0)
         if has_problem:
             problem_count += 1
 
@@ -119,8 +111,8 @@ def analyze(frames: List[Frame], roles: Dict) -> AnalysisSection:
         else:
             lines.append(f"  ├─ 후 {WINDOW_SEC}초: 프레임 없음")
 
-        loss_str = f"LOSS {ping['lost']}건 ★" if ping["lost"] else "손실 없음"
-        lines.append(f"  └─ Ping: 성공 {ping['matched']}, {loss_str}")
+        loss_str = f"LOSS {ping_lost}건 ★" if ping_lost else "손실 없음"
+        lines.append(f"  └─ Ping: 성공 {ping_matched}, {loss_str}")
         lines.append("")
 
     summary = f"로밍 {len(events)}건, 문제 {problem_count}건"

@@ -4,7 +4,7 @@ from typing import List, Dict
 from models import Frame, AnalysisSection, SUBTYPE_NAMES
 
 
-def analyze(frames: List[Frame], roles: Dict) -> AnalysisSection:
+def analyze(frames: List[Frame], roles: Dict, index=None) -> AnalysisSection:
     lines = []
     n = len(frames)
     if n == 0:

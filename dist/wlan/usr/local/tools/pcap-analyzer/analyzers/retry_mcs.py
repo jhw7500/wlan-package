@@ -5,7 +5,7 @@ from models import Frame, AnalysisSection
 from detector import mac_name
 
 
-def analyze(frames: List[Frame], roles: Dict) -> AnalysisSection:
+def analyze(frames: List[Frame], roles: Dict, index=None) -> AnalysisSection:
     lines = []
 
     mcs_total = Counter()
