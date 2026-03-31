@@ -69,9 +69,13 @@ def main():
                 break
 
     if config_path and os.path.exists(config_path):
-        with open(config_path) as cf:
-            config = json.load(cf)
-        print(f"  설정 파일 로드: {config_path}")
+        try:
+            with open(config_path) as cf:
+                config = json.load(cf)
+            print(f"  설정 파일 로드: {config_path}")
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"[WARN] 설정 파일 로드 실패, 무시합니다: {e}", file=sys.stderr)
+            config = {}
         if not args.ssid:
             args.ssid = config.get("ssid", "")
         if not args.passphrase:
