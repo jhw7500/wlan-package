@@ -11,3 +11,6 @@ tmp/
 docs/plans/
 docs/superpowers/
 network.json
+.base/
+.claude/
+.paul/
