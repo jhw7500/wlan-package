@@ -1,8 +1,10 @@
 import sys
+import json
 import logging
 from sUTILS import Logger, _EXTRA_
 
 IFACE = "mlan0"
+WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
 
 def insert_config(conf_path, conf, val, target_block="PCIE9098_0"):
     try:
@@ -64,18 +66,31 @@ if __name__ == "__main__":
         conf = sys.argv[2]
         val = sys.argv[3]
 
+    # JSON에서 MOD_PARA, BUS_TYPE 읽기
     conf_file = "/lib/firmware/cts/wifi_mod_para.conf"
+    block_prefix = "PCIE9098"
+    try:
+        with open(WIFI_INIT_CONF_JSON, "r") as f:
+            jcfg = json.load(f)
+        g = jcfg.get("global", {})
+        mod_para = g.get("MOD_PARA", "cts/wifi_mod_para.conf")
+        conf_file = f"/lib/firmware/{mod_para}"
+        bus_type = g.get("BUS_TYPE", "pcie")
+        if bus_type == "sdio":
+            block_prefix = "SD9098"
+    except Exception:
+        pass
 
     if IFACE == "mlan0" or IFACE == "0" :
-        block = "PCIE9098_0"
-        insert_config(conf_file, conf, val, block)        
+        block = f"{block_prefix}_0"
+        insert_config(conf_file, conf, val, block)
     elif IFACE == "mlan1" or IFACE == "1" :
-        block = "PCIE9098_1"
+        block = f"{block_prefix}_1"
         insert_config(conf_file, conf, val, block)
     elif IFACE == "2":
-        block = "PCIE9098_0"
+        block = f"{block_prefix}_0"
         insert_config(conf_file, conf, val, block)
-        block = "PCIE9098_1"
+        block = f"{block_prefix}_1"
         insert_config(conf_file, conf, val, block)
     else:
         logger.message("info", f"[{IFACE}] interface is wrong", _EXTRA_())

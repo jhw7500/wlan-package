@@ -12,11 +12,11 @@ def _find_losses(frames: List[Frame]) -> List[Frame]:
 
     for f in frames:
         if f.is_icmp_request and not f.retry:
-            key = (f.ip_src, f.ip_dst)
+            key = (f.ip_src, f.ip_dst, f.icmp_seq) if f.icmp_seq else (f.ip_src, f.ip_dst)
             requests[key] = f
             all_requests.append((key, f))
         elif f.is_icmp_reply:
-            key = (f.ip_dst, f.ip_src)
+            key = (f.ip_dst, f.ip_src, f.icmp_seq) if f.icmp_seq else (f.ip_dst, f.ip_src)
             if key in requests:
                 matched_ids.add(id(requests[key]))
                 del requests[key]

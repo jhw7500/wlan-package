@@ -128,6 +128,7 @@ usage() {
     echo "       wifi cal {0|1|2|None|WlanCalData_ext.conf|WlanCalData_ext_RD.conf|*} : persist"
     echo "       wifi mfg {0|1|off|on} : persist"
     echo "       wifi ant {0|1|internal|external} : runtime"
+    echo "       wifi {0|1|mlan0|mlan1} mcs [off|reset|ht <7|15> vht <7|8|9> he <7|9|11>] : persist+runtime"
     echo "       wifi set {fem|azure} : apply preset configuration profile"
     echo "       wifi stand {n|ac|ax|4|5|6} : persist"
     echo "       wifi backup : persist"
@@ -291,11 +292,11 @@ show_info() {
 
         echo "[Driver Config]"
         if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
-            FW_NAME=$(jq -r '.global.FW_NAME // "cts/pcieuart9098_combo_v1.bin"' "$WIFI_INIT_CONF_JSON")
+            BUS_TYPE=$(jq -r '.global.BUS_TYPE // "pcie"' "$WIFI_INIT_CONF_JSON")
             MOD_PARA=$(jq -r '.global.MOD_PARA // "cts/wifi_mod_para.conf"' "$WIFI_INIT_CONF_JSON")
             CAL_DATA_CFG=$(jq -r '.global.CAL_DATA_CFG // "cts/WlanCalData_ext_RD.conf"' "$WIFI_INIT_CONF_JSON")
             TXPWRLIMIT_PATH=$(jq -r '.global.TXPWRLIMIT_PATH // "/lib/firmware/cts/txpwrlimit_cfg_9098.conf"' "$WIFI_INIT_CONF_JSON")
-            echo "  FW_NAME       : $FW_NAME"
+            echo "  BUS_TYPE      : $BUS_TYPE"
             echo "  MOD_PARA      : $MOD_PARA"
             echo "  CAL_DATA_CFG  : $CAL_DATA_CFG"
             echo "  TXPWRLIMIT    : $TXPWRLIMIT_PATH"
@@ -450,21 +451,35 @@ case "$1" in
     exit 0
     ;;
   mfg)
-    if [ "$2" == "0" ]; then
-        FW_NAME="cts/pcieuart9098_combo_v1.bin"
-        MFG_MODE="0"
-    elif [ "$2" == "1" ]; then
-        FW_NAME="cts/pcieuart9098_combo.bin"
-        MFG_MODE="1"
+    BUS_TYPE=$(jq -r '.global.BUS_TYPE // "pcie"' "$WIFI_INIT_CONF_JSON" 2>/dev/null || echo "pcie")
+    BT=$(jq -r '.global.BLUETOOTH.enable // false' "$WIFI_INIT_CONF_JSON" 2>/dev/null || echo "false")
+    if [ "$2" == "0" ] || [ "$2" == "off" ]; then
+        if [ "$BUS_TYPE" == "sdio" ]; then
+            if [ "$BT" == "true" ]; then FW_NAME="cts/sduart9098_combo_v1.bin"
+            else FW_NAME="cts/sd9098_wlan_v1.bin"; fi
+        else
+            if [ "$BT" == "true" ]; then FW_NAME="cts/pcieuart9098_combo_v1.bin"
+            else FW_NAME="cts/pcie9098_wlan_v1.bin"; fi
+        fi
+        python3 /usr/local/logger/wifi_config.py 2 mfg_mode 0
+        python3 /usr/local/logger/wifi_config.py 2 fw_name "$FW_NAME"
+    elif [ "$2" == "1" ] || [ "$2" == "on" ]; then
+        if [ "$BUS_TYPE" == "sdio" ]; then
+            if [ "$BT" == "true" ]; then FW_NAME="cts/sduart9098_combo.bin"
+            else FW_NAME="cts/sd9098_wlan.bin"; fi
+        else
+            if [ "$BT" == "true" ]; then FW_NAME="cts/pcieuart9098_combo.bin"
+            else FW_NAME="cts/pcie9098_wlan.bin"; fi
+        fi
+        python3 /usr/local/logger/wifi_config.py 2 mfg_mode 1
+        python3 /usr/local/logger/wifi_config.py 2 fw_name "$FW_NAME"
     else
         usage
     fi
-    echo "Updated:"
-    echo "  FW_NAME=${FW_NAME}"
-    echo "  MFG_MODE=${MFG_MODE}"
-    update_json_global "FW_NAME" "$FW_NAME"
-    update_json_global "MFG_MODE" "$MFG_MODE"
-    exit 1
+    echo "Updated (BUS_TYPE=$BUS_TYPE, BLUETOOTH=$BT):"
+    echo "  fw_name=${FW_NAME}"
+    echo "  mfg_mode=$2"
+    exit 0
     ;;
   cal)
     CAL_DATA_CFG=$2
@@ -715,14 +730,30 @@ case "$2" in
     python3 /usr/local/logger/wifi_config.py $1 cal_data_cfg cts/$3
     ;;
   mfg)
+    BUS_TYPE=$(jq -r '.global.BUS_TYPE // "pcie"' "$WIFI_INIT_CONF_JSON" 2>/dev/null || echo "pcie")
+    BT=$(jq -r '.global.BLUETOOTH.enable // false' "$WIFI_INIT_CONF_JSON" 2>/dev/null || echo "false")
     if [ "$3" == "off" ] || [ "$3" == "0" ]; then
-        echo "mfg_mode set to off for $IFACE" 
+        if [ "$BUS_TYPE" == "sdio" ]; then
+            if [ "$BT" == "true" ]; then FW_NAME="cts/sduart9098_combo_v1.bin"
+            else FW_NAME="cts/sd9098_wlan_v1.bin"; fi
+        else
+            if [ "$BT" == "true" ]; then FW_NAME="cts/pcieuart9098_combo_v1.bin"
+            else FW_NAME="cts/pcie9098_wlan_v1.bin"; fi
+        fi
+        echo "mfg_mode set to off for $IFACE (BUS_TYPE=$BUS_TYPE, BLUETOOTH=$BT)"
         python3 /usr/local/logger/wifi_config.py $1 mfg_mode 0
-        python3 /usr/local/logger/wifi_config.py $1 fw_name cts/pcieuart9098_combo_v1.bin
+        python3 /usr/local/logger/wifi_config.py $1 fw_name "$FW_NAME"
     elif [ "$3" == "on" ] || [ "$3" == "1" ]; then
-        echo "mfg_mode set to on for $IFACE"
+        if [ "$BUS_TYPE" == "sdio" ]; then
+            if [ "$BT" == "true" ]; then FW_NAME="cts/sduart9098_combo.bin"
+            else FW_NAME="cts/sd9098_wlan.bin"; fi
+        else
+            if [ "$BT" == "true" ]; then FW_NAME="cts/pcieuart9098_combo.bin"
+            else FW_NAME="cts/pcie9098_wlan.bin"; fi
+        fi
+        echo "mfg_mode set to on for $IFACE (BUS_TYPE=$BUS_TYPE, BLUETOOTH=$BT)"
         python3 /usr/local/logger/wifi_config.py $1 mfg_mode 1
-        python3 /usr/local/logger/wifi_config.py $1 fw_name cts/pcieuart9098_combo.bin
+        python3 /usr/local/logger/wifi_config.py $1 fw_name "$FW_NAME"
     else
         usage
     fi
@@ -837,6 +868,83 @@ case "$2" in
     echo "scanning freq_list $FREQ_STR for $IFACE"
     iw $IFACE scan freq $FREQ_STR
     ;;
+  mcs)
+    if [ -z "${3:-}" ]; then
+        # GET: show current mcs_tier from JSON + live mcstiercfg
+        echo "--- JSON config ($WIFI_INIT_CONF_JSON) ---"
+        if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
+            jq -r ".${IFACE}.mcs_tier // \"(not configured)\"" "$WIFI_INIT_CONF_JSON"
+        else
+            echo "(JSON or jq not available)"
+        fi
+        echo ""
+        echo "--- Live mcstiercfg ($IFACE) ---"
+        mlanutl "$IFACE" mcstiercfg 2>/dev/null || echo "(mcstiercfg not available)"
+    elif [ "$3" == "off" ] || [ "$3" == "0" ]; then
+        # Disable mcs_tier
+        jq --arg iface "$IFACE" '.[$iface].mcs_tier.enabled = false' \
+            "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp" && \
+            mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
+        echo "mcs_tier disabled for $IFACE in $WIFI_INIT_CONF_JSON"
+        echo "(apply on next boot. To restore live: mlanutl $IFACE mcstiercfg reset)"
+    elif [ "$3" == "reset" ]; then
+        # Reset: disable in JSON + restore live
+        jq --arg iface "$IFACE" '.[$iface].mcs_tier.enabled = false' \
+            "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp" && \
+            mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
+        mlanutl "$IFACE" mcstiercfg reset > /dev/null 2>&1 && \
+            echo "mcs_tier reset for $IFACE (JSON disabled + live restored)" || \
+            echo "mcs_tier JSON disabled (mcstiercfg reset failed — reconnect may be needed)"
+    else
+        # SET: wifi 0 mcs ht 7 vht 7 he 7
+        shift 2  # remove iface and "mcs"
+        MCS_HT="" MCS_VHT="" MCS_HE=""
+        MCS_ARGS=""
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                ht)
+                    [ -z "${2:-}" ] && { echo "Error: ht requires a value (7 or 15)"; exit 1; }
+                    case "$2" in
+                        7|15) MCS_HT="$2"; MCS_ARGS="$MCS_ARGS ht $2" ;;
+                        *) echo "Error: ht must be 7 or 15"; exit 1 ;;
+                    esac
+                    shift 2 ;;
+                vht)
+                    [ -z "${2:-}" ] && { echo "Error: vht requires a value (7/8/9)"; exit 1; }
+                    case "$2" in
+                        7|8|9) MCS_VHT="$2"; MCS_ARGS="$MCS_ARGS vht $2" ;;
+                        *) echo "Error: vht must be 7, 8, or 9"; exit 1 ;;
+                    esac
+                    shift 2 ;;
+                he)
+                    [ -z "${2:-}" ] && { echo "Error: he requires a value (7/9/11)"; exit 1; }
+                    case "$2" in
+                        7|9|11) MCS_HE="$2"; MCS_ARGS="$MCS_ARGS he $2" ;;
+                        *) echo "Error: he must be 7, 9, or 11"; exit 1 ;;
+                    esac
+                    shift 2 ;;
+                *) echo "Error: unknown option '$1'"; usage ;;
+            esac
+        done
+        if [ -z "$MCS_ARGS" ]; then
+            echo "Error: specify at least one of: ht, vht, he"
+            exit 1
+        fi
+        # Update JSON: enable + set values
+        JQ_EXPR=".${IFACE}.mcs_tier.enabled = true"
+        [ -n "$MCS_HT" ] && JQ_EXPR="$JQ_EXPR | .${IFACE}.mcs_tier.ht = $MCS_HT"
+        [ -n "$MCS_VHT" ] && JQ_EXPR="$JQ_EXPR | .${IFACE}.mcs_tier.vht = $MCS_VHT"
+        [ -n "$MCS_HE" ] && JQ_EXPR="$JQ_EXPR | .${IFACE}.mcs_tier.he = $MCS_HE"
+        jq "$JQ_EXPR" "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp" && \
+            mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
+        echo "mcs_tier updated for $IFACE:$MCS_ARGS"
+        echo "JSON: enabled=true$( [ -n "$MCS_HT" ] && echo " ht=$MCS_HT" )$( [ -n "$MCS_VHT" ] && echo " vht=$MCS_VHT" )$( [ -n "$MCS_HE" ] && echo " he=$MCS_HE" )"
+        # Apply live
+        mlanutl "$IFACE" mcstiercfg $MCS_ARGS > /dev/null 2>&1 && \
+            echo "Applied live (reconnect to take effect)" || \
+            echo "Warning: live apply failed (will apply on next boot)"
+    fi
+    ;;
   standard)
     if [[ "$3" == "4" ]] || [[ "$3" == "n" ]] || [[ "$3" == "N" ]]; then
         VAL="n"
@@ -878,16 +986,15 @@ case "$2" in
             NEW_IP="${NEW_IP}/24"
             echo "No subnet mask specified, using default /24"
         fi
-        if awk -v new_ip="$NEW_IP" '
+        awk -v new_ip="$NEW_IP" '
             BEGIN { changed = 0 }
             /^[[:space:]]*#/ { print; next }
             /^[[:space:]]*Address[[:space:]]*=/ { print "Address=" new_ip; changed = 1; next }
             { print }
-            END { if (!changed) exit 1 }
-        ' "$CONF" > "$TMP_FILE"; then
-            safe_install_0644_sync "$TMP_FILE" "$CONF"
-            echo "Address changed to \"$NEW_IP\" in $CONF"
-        else echo "no Address= line found, nothing changed in $CONF" >&2; exit 1; fi
+            END { if (!changed) print "Address=" new_ip }
+        ' "$CONF" > "$TMP_FILE"
+        safe_install_0644_sync "$TMP_FILE" "$CONF"
+        echo "Address set to \"$NEW_IP\" in $CONF"
     fi
     ;;
   gt)
@@ -898,17 +1005,16 @@ case "$2" in
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> gt <address>" >&2; exit 1; fi
     NEW_GT="$1"
     TMP_FILE="$(mktemp)"
-    if awk -v new_gt="$NEW_GT" '
+    awk -v new_gt="$NEW_GT" '
         BEGIN { changed = 0 }
         /^[[:space:]]*#/ { print; next }
         /^[[:space:]]*Gateway[[:space:]]*=/ { print "Gateway=" new_gt; changed = 1; next }
         { print }
-        END { if (!changed) exit 1 }
-    ' "$CONF" > "$TMP_FILE"; then
-        safe_install_0644_sync "$TMP_FILE" "$CONF"
-        rm -f "$TMP_FILE"
-        echo "Gateway changed to \"$NEW_GT\" in $CONF"
-    else echo "no Gateway= line found, nothing changed in $CONF" >&2; rm -f "$TMP_FILE"; exit 1; fi
+        END { if (!changed) print "Gateway=" new_gt }
+    ' "$CONF" > "$TMP_FILE"
+    safe_install_0644_sync "$TMP_FILE" "$CONF"
+    rm -f "$TMP_FILE"
+    echo "Gateway set to \"$NEW_GT\" in $CONF"
     ;;
   *)
     usage

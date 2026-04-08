@@ -14,3 +14,11 @@ network.json
 .base/
 .claude/
 .paul/
+
+# Tool directories
+.bkit/
+.omc/
+.serena/
+.vscode/
+.context/
+dist/wlan/usr/local/scripts/.omc/

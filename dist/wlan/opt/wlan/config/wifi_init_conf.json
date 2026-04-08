@@ -4,11 +4,14 @@
         "This file contains global WiFi settings and per-interface roaming configurations"
     ],
     "global": {
-        "FW_NAME": "cts/pcieuart9098_combo_v1.bin",
+        "BOARD_TYPE": "imx8mm",
+        "BUS_TYPE": "pcie",
+        "BLUETOOTH": {
+            "enable": false
+        },
         "MOD_PARA": "cts/wifi_mod_para.conf",
         "CAL_DATA_CFG": "cts/WlanCalData_ext_RD.conf",
         "TXPWRLIMIT_PATH": "/lib/firmware/cts/txpwrlimit_cfg_9098.conf",
-        "MFG_MODE": "0",
         "STANDARD": "",
         "DEV_CAP_MASK": "",
         "BRIDGE_IFACE": "mlan0",
@@ -46,6 +49,8 @@
         "optimize": 0,
         "mode": "normal",
         "engine": "pcap",
+        "irq_affinity": "none",
+        "_comment_irq_affinity": "IRQ affinity policy: auto=detect by core count, pinned=explicit CPU pin (4core: ETH->CPU2/WLAN->CPU3, 2core: ETH->CPU0/WLAN->CPU1), none=kernel default",
         "thermal_state": "ok",
         "mode_force": 1,
         "link_guard": 1,
@@ -113,7 +118,7 @@
         "check_interval_sec": 300
     },
     "mcp": {
-        "_comment": "wifi_logger_mcp.sh current/voltage sensor configuration",
+        "_comment": "wifi_logger_mcp.sh current/voltage sensor configuration. iio_device is auto-set by wifi_init.sh (iMX8MM=device0, iMX93=device1)",
         "gain_current": 0.5203,
         "gain_voltage": 15.6552,
         "check_interval_sec": 5,
@@ -214,6 +219,13 @@
             "SCAN_NO_RESULT_SLEEP": 3,
             "ROAM_SUCCESS_SLEEP": 5
         },
+        "mcs_tier": {
+            "_comment": "MCS tier capability limit (mcstiercfg). Applied at boot before association. Survives roaming. ht: 7(1x1)|15(2x2), vht: 7|8|9 (MCS 0~N), he: 7|9|11 (MCS 0~N)",
+            "enabled": false,
+            "ht": 7,
+            "vht": 7,
+            "he": 7
+        },
         "on_connect": {
             "_comment": "Commands to execute after AP connection/roaming (via wifi_event). Runs in order, failures are logged but do not stop execution.",
             "enabled": false,
@@ -288,6 +300,13 @@
             },
             "SCAN_NO_RESULT_SLEEP": 3,
             "ROAM_SUCCESS_SLEEP": 5
+        },
+        "mcs_tier": {
+            "_comment": "MCS tier capability limit (mcstiercfg). Applied at boot before association. Survives roaming. ht: 7(1x1)|15(2x2), vht: 7|8|9 (MCS 0~N), he: 7|9|11 (MCS 0~N)",
+            "enabled": false,
+            "ht": 7,
+            "vht": 7,
+            "he": 7
         },
         "on_connect": {
             "_comment": "Commands to execute after AP connection/roaming (via wifi_event). Runs in order, failures are logged but do not stop execution.",
