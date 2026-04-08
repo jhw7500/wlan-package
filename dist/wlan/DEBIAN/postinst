@@ -61,6 +61,7 @@ configure)
   # wlan 전용 logrotate hourly 실행 스크립트 설치
   # 시스템 전체 logrotate(/etc/cron.daily/logrotate)는 건드리지 않고
   # wlan 관련 설정만 hourly로 실행하여 maxsize가 실질적으로 동작하도록 함
+  mkdir -p /etc/cron.hourly
   cat > /etc/cron.hourly/logrotate-wlan << 'EOF'
 #!/bin/sh
 # wlan 전용 hourly logrotate (시스템 전체 logrotate와 독립)
@@ -119,7 +120,29 @@ EOF
     logger -p local0.info "[$KEY][$tag:$LINENO] Set default locale to C.UTF-8"
   fi
 
-  /usr/local/scripts/auto_fs_sizeup.sh 2 3
+  # Detect eMMC block device number
+  # iMX8MM: mmcblk2, iMX93: mmcblk0
+  if [ -d /sys/block/mmcblk2 ]; then
+    EMMC_NUM=2
+    BOARD_TYPE="imx8mm"
+    BUS_TYPE="pcie"
+    MOD_PARA="cts/wifi_mod_para.conf"
+    IIO_DEV="/sys/bus/iio/devices/iio:device0"
+  else
+    EMMC_NUM=0
+    BOARD_TYPE="imx93"
+    BUS_TYPE="sdio"
+    MOD_PARA="cts/wifi_mod_para_.conf"
+    IIO_DEV="/sys/bus/iio/devices/iio:device1"
+  fi
+
+  # p3 파티션이 없으면 emmc_fdisk.sh로 생성
+  if [ ! -b /dev/mmcblk${EMMC_NUM}p3 ]; then
+    logger -p local0.info "[$KEY][postinst:$LINENO] p3 not found, creating via emmc_fdisk.sh"
+    /usr/local/scripts/emmc_fdisk.sh
+  else
+    /usr/local/scripts/auto_fs_sizeup.sh "$EMMC_NUM" 3
+  fi
 
 customctl() {
     target=$1
@@ -159,9 +182,10 @@ customctl() {
   fi
 
   echo "[installer] Optimizing service configuration (batch processing)..."
-  systemctl mask systemd-networkd-wait-online nfs-server proc-fs-nfsd.mount ovsdb-server avahi-daemon avahi-autoipd psplash systemd-journald-audit.socket || true
+  systemctl mask systemd-networkd-wait-online nfs-server proc-fs-nfsd.mount ovsdb-server avahi-daemon avahi-autoipd psplash systemd-journald-audit.socket netplan-ovs-cleanup || true
   systemctl disable --now redis-server dhcpcd openvswitch openvswitch-switch connman smb nmb avahi-daemon.socket containerd netdata collectd named bind ifplugd systemd-resolved netserver wifi_checker@eth0 || true
-  systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer wifi_init wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 wifi_logger@mlan0 wifi_checker@mlan0 wifi_bgscan@mlan0 wifi_roam@mlan0 wifi_arping@mlan0 log-watchdog.timer || true
+  systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer wifi_init wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 wifi_logger@mlan0 wifi_checker@mlan0 wifi_bgscan@mlan0 wifi_roam@mlan0 wifi_arping@mlan0 log-watchdog.timer serial-getty@ttyGS0.service || true
+  systemctl start switchd wifi_led@eth0 serial-getty@ttyGS0.service || true
 
   INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 10))
   dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
@@ -239,6 +263,15 @@ json_merge() {
   cpchk /opt/wlan/config/systemd/network/22-eth0.link /etc/systemd/network/22-eth0.link
   json_merge /opt/wlan/config/wifi_init_conf.json /usr/local/etc/wifi_init_conf.json
 
+  # json_merge 이후 보드별 설정 적용 (첫 설치 시에도 정상 동작)
+  WIFI_CONF="/usr/local/etc/wifi_init_conf.json"
+  if [ -f "$WIFI_CONF" ] && command -v jq >/dev/null 2>&1; then
+    jq --arg b "$BOARD_TYPE" --arg bus "$BUS_TYPE" --arg mod "$MOD_PARA" --arg iio "$IIO_DEV" \
+      '.global.BOARD_TYPE = $b | .global.BUS_TYPE = $bus | .global.MOD_PARA = $mod | .mcp.iio_device = $iio' \
+      "$WIFI_CONF" > "${WIFI_CONF}.tmp" && mv "${WIFI_CONF}.tmp" "$WIFI_CONF"
+    logger -p local0.info "[$KEY][postinst:$LINENO] $BOARD_TYPE detected, BUS_TYPE=$BUS_TYPE, MOD_PARA=$MOD_PARA"
+  fi
+
   if [ -f /opt/wlan/config/sysctl.d/99-wifi-thermal.conf ]; then
     cp /opt/wlan/config/sysctl.d/99-wifi-thermal.conf /usr/lib/sysctl.d/99-wifi-thermal.conf
     logger -p local0.info "[$KEY][$tag:$LINENO] Installed /usr/lib/sysctl.d/99-wifi-thermal.conf"
@@ -303,7 +336,7 @@ json_merge() {
   /usr/local/scripts/change_line.sh "log-dir=/var/log/cantops" "log-dir" /etc/watchdog.conf
   /usr/local/scripts/change_line.sh "#root" "root" /etc/vsftpd.ftpusers
   /usr/local/scripts/change_line.sh "#root" "root" /etc/vsftpd.user_list
-  /usr/local/scripts/add_line.sh "/dev/mmcblk2p3      /var/log/cantops  ext4  noatime,nodiratime,lazytime,commit=60,data=ordered  0  2" /etc/fstab
+  /usr/local/scripts/add_line.sh "/dev/mmcblk${EMMC_NUM}p3      /var/log/cantops  ext4  noatime,nodiratime,lazytime,commit=60,data=ordered  0  2" /etc/fstab
 
   if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload 2>/dev/null || true

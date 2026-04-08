@@ -12,9 +12,10 @@ def analyze(frames: List[Frame], roles: Dict, index=None) -> AnalysisSection:
 
     for f in frames:
         if f.is_icmp_request and not f.retry:
-            requests[(f.ip_src, f.ip_dst)] = f
+            key = (f.ip_src, f.ip_dst, f.icmp_seq) if f.icmp_seq else (f.ip_src, f.ip_dst)
+            requests[key] = f
         elif f.is_icmp_reply:
-            key = (f.ip_dst, f.ip_src)
+            key = (f.ip_dst, f.ip_src, f.icmp_seq) if f.icmp_seq else (f.ip_dst, f.ip_src)
             if key in requests:
                 req = requests.pop(key)
                 rtt = (f.epoch - req.epoch) * 1000

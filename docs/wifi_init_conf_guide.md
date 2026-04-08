@@ -35,6 +35,7 @@ wifi_init_conf.json
 │   ├── periodic_roam   #   주기적 패시브 로밍
 │   ├── bgscan          #   백그라운드 스캔
 │   ├── roaming         #   로밍 알고리즘
+│   ├── mcs_tier        #   MCS tier 능력 제한 (mcstiercfg)
 │   └── on_connect      #   AP 연결 후 실행 명령
 └── mlan1               # mlan1 인터페이스 설정 (mlan0과 동일 구조)
     ├── logger          #   mlan1 전용 로깅 override
@@ -42,6 +43,7 @@ wifi_init_conf.json
     ├── periodic_roam   #   주기적 패시브 로밍
     ├── bgscan          #   백그라운드 스캔
     ├── roaming         #   로밍 알고리즘
+    ├── mcs_tier        #   MCS tier 능력 제한 (mcstiercfg)
     └── on_connect      #   AP 연결 후 실행 명령
 ```
 
@@ -494,7 +496,36 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 | `peer_count` | int | `5` | 워밍업 대상 피어 수 |
 | `peer_wait` | int | `1` | 피어 간 대기 (초) |
 
-### 10.5 on_connect - AP 연결 후 명령 실행
+### 10.5 mcs_tier - MCS Tier 능력 제한
+
+**사용 스크립트**: `wifi_init.sh`
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| `enabled` | bool | `false` | mcstiercfg 적용 활성화 |
+| `ht` | int | — | HT(11n) 최대 MCS. `7`(1x1) 또는 `15`(2x2) |
+| `vht` | int | — | VHT(11ac) 최대 MCS. `7`, `8`, `9` |
+| `he` | int | — | HE(11ax) 최대 MCS. `7`, `9`, `11` |
+
+**적용 시점**: 부팅 시 wpa_supplicant 시작 전 (association 전). 로밍해도 유지됨.
+
+- `enabled: false`(기본)이면 mcstiercfg를 실행하지 않음 (FW 기본값 사용)
+- 개별 키(ht/vht/he)를 생략하면 해당 표준은 건너뜀
+- 인터페이스별 독립 설정 가능 (mlan0과 mlan1에 다른 tier)
+
+> **주의**: VHT는 FW 내부에 MCS 7 하한(floor)이 있어 tier 7이 사실상 최소값.
+> 상세 비교: `wlan-driver/docs/mcs-rate-control-comparison.md` 참조.
+
+```json
+"mcs_tier": {
+    "enabled": true,
+    "ht": 7,
+    "vht": 7,
+    "he": 7
+}
+```
+
+### 10.6 on_connect - AP 연결 후 명령 실행
 
 **사용 스크립트**: `wifi_event`
 

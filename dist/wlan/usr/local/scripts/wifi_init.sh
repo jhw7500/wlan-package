@@ -7,24 +7,69 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 tag=$(basename "$0")
 JSON_FILE="${JSON_FILE:-/usr/local/etc/config.json}"
-FW_NAME="cts/pcieuart9098_combo_v1.bin"
 MOD_PARA="cts/wifi_mod_para.conf"
 CAL_DATA_CFG="cts/WlanCalData_ext_RD.conf"
 TXPWRLIMIT_PATH="/lib/firmware/cts/txpwrlimit_cfg_9098.conf"
-MFG_MODE=0
 DEV_CAP_MASK=""
 
 WIFI_INIT_CONF_JSON="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
 
 logger -p local0.info "[$tag:$LINENO] wifi initializing"
 
-# Load JSON config
+# 보드 자동 감지 및 JSON 갱신
+if [ -d /sys/block/mmcblk2 ]; then
+    _DET_BOARD="imx8mm"; _DET_BUS="pcie"; _DET_MOD="cts/wifi_mod_para.conf"; _DET_IIO="/sys/bus/iio/devices/iio:device0"
+else
+    _DET_BOARD="imx93"; _DET_BUS="sdio"; _DET_MOD="cts/wifi_mod_para_.conf"; _DET_IIO="/sys/bus/iio/devices/iio:device1"
+fi
 if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
-    FW_NAME=$(jq -r '.global.FW_NAME // "cts/pcieuart9098_combo_v1.bin"' "$WIFI_INIT_CONF_JSON")
+    _CUR_BOARD=$(jq -r '.global.BOARD_TYPE // ""' "$WIFI_INIT_CONF_JSON")
+    if [ "$_CUR_BOARD" != "$_DET_BOARD" ]; then
+        jq --arg b "$_DET_BOARD" --arg bus "$_DET_BUS" --arg mod "$_DET_MOD" --arg iio "$_DET_IIO" \
+          '.global.BOARD_TYPE = $b | .global.BUS_TYPE = $bus | .global.MOD_PARA = $mod | .mcp.iio_device = $iio' \
+          "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp" && mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
+        logger -p local0.info "[$tag:$LINENO] board auto-detect: $_CUR_BOARD -> $_DET_BOARD (BUS=$_DET_BUS, MOD=$_DET_MOD)"
+    fi
+fi
+
+# BUS_TYPE/BLUETOOTH 기반 fw_name 자동 갱신
+if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
+    _BUS=$(jq -r '.global.BUS_TYPE // "pcie"' "$WIFI_INIT_CONF_JSON")
+    _BT=$(jq -r '.global.BLUETOOTH.enable // false' "$WIFI_INIT_CONF_JSON")
+    _MOD_FILE="/lib/firmware/$(jq -r '.global.MOD_PARA // "cts/wifi_mod_para.conf"' "$WIFI_INIT_CONF_JSON")"
+    _MFG=$(grep -m1 'mfg_mode=' "$_MOD_FILE" 2>/dev/null | sed 's/.*mfg_mode=//' | tr -d ' ' || echo "0")
+
+    if [ "$_BUS" == "sdio" ]; then
+        if [ "$_BT" == "true" ]; then
+            [ "${_MFG:-0}" == "1" ] && _FW="cts/sduart9098_combo.bin" || _FW="cts/sduart9098_combo_v1.bin"
+        else
+            [ "${_MFG:-0}" == "1" ] && _FW="cts/sd9098_wlan.bin" || _FW="cts/sd9098_wlan_v1.bin"
+        fi
+    else
+        if [ "$_BT" == "true" ]; then
+            [ "${_MFG:-0}" == "1" ] && _FW="cts/pcieuart9098_combo.bin" || _FW="cts/pcieuart9098_combo_v1.bin"
+        else
+            [ "${_MFG:-0}" == "1" ] && _FW="cts/pcie9098_wlan.bin" || _FW="cts/pcie9098_wlan_v1.bin"
+        fi
+    fi
+
+    # 현재 fw_name과 다르면 갱신
+    if [ "$_BUS" == "sdio" ]; then _BLK="SD9098"; else _BLK="PCIE9098"; fi
+    _CUR_FW=$(grep -A20 "^${_BLK}_0 " "$_MOD_FILE" 2>/dev/null | grep -m1 'fw_name=' | sed 's/.*fw_name=//' | tr -d ' ')
+    if [ "${_CUR_FW:-}" != "$_FW" ]; then
+        python3 /usr/local/logger/wifi_config.py 2 fw_name "$_FW"
+        logger -p local0.info "[$tag:$LINENO] fw_name auto-update: $_CUR_FW -> $_FW (BUS=$_BUS, BT=$_BT, MFG=${_MFG:-0})"
+    fi
+fi
+
+# Load JSON config
+BOARD_TYPE="$_DET_BOARD"
+
+if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
+    BOARD_TYPE=$(jq -r '.global.BOARD_TYPE // "imx8mm"' "$WIFI_INIT_CONF_JSON")
     MOD_PARA=$(jq -r '.global.MOD_PARA // "cts/wifi_mod_para.conf"' "$WIFI_INIT_CONF_JSON")
     CAL_DATA_CFG=$(jq -r '.global.CAL_DATA_CFG // "cts/WlanCalData_ext_RD.conf"' "$WIFI_INIT_CONF_JSON")
     TXPWRLIMIT_PATH=$(jq -r '.global.TXPWRLIMIT_PATH // "/lib/firmware/cts/txpwrlimit_cfg_9098.conf"' "$WIFI_INIT_CONF_JSON")
-    MFG_MODE=$(jq -r '.global.MFG_MODE // "0"' "$WIFI_INIT_CONF_JSON")
     STANDARD=$(jq -r '.global.STANDARD // ""' "$WIFI_INIT_CONF_JSON")
     DEV_CAP_MASK=$(jq -r '.global.DEV_CAP_MASK // ""' "$WIFI_INIT_CONF_JSON")
     BRIDGE_IFACE=$(jq -r '.global.BRIDGE_IFACE // "mlan0"' "$WIFI_INIT_CONF_JSON")
@@ -277,6 +322,50 @@ apply_iface_txpwrlimit() {
     mlanutl "$iface" hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_5g_cfg_set_sub3 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] txpwrlimit_5g_cfg_set_sub3 failed"
 }
 
+apply_mcs_tier() {
+    local iface="$1"
+    local enabled ht vht he args=""
+
+    [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1 || return 0
+
+    enabled=$(jq -r ".${iface}.mcs_tier.enabled // false" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    [ "$enabled" = "true" ] || return 0
+
+    ht=$(jq -r ".${iface}.mcs_tier.ht // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    vht=$(jq -r ".${iface}.mcs_tier.vht // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    he=$(jq -r ".${iface}.mcs_tier.he // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+
+    if [ -n "$ht" ]; then
+        case "$ht" in
+            7|15) args="$args ht $ht" ;;
+            *) logger -p local0.err "[$tag:$LINENO] [$iface] mcs_tier: invalid ht=$ht (must be 7 or 15)"; return 1 ;;
+        esac
+    fi
+
+    if [ -n "$vht" ]; then
+        case "$vht" in
+            7|8|9) args="$args vht $vht" ;;
+            *) logger -p local0.err "[$tag:$LINENO] [$iface] mcs_tier: invalid vht=$vht (must be 7/8/9)"; return 1 ;;
+        esac
+    fi
+
+    if [ -n "$he" ]; then
+        case "$he" in
+            7|9|11) args="$args he $he" ;;
+            *) logger -p local0.err "[$tag:$LINENO] [$iface] mcs_tier: invalid he=$he (must be 7/9/11)"; return 1 ;;
+        esac
+    fi
+
+    if [ -z "$args" ]; then
+        logger -p local0.warn "[$tag:$LINENO] [$iface] mcs_tier: enabled but no tier specified"
+        return 0
+    fi
+
+    logger -p local0.info "[$tag:$LINENO] [$iface] mcstiercfg$args"
+    mlanutl "$iface" mcstiercfg $args > /dev/null 2>&1 || \
+        logger -p local0.err "[$tag:$LINENO] [$iface] mcstiercfg failed"
+}
+
 apply_iface_radio_defaults() {
     local iface="$1"
     local enabled="$2"
@@ -316,6 +405,10 @@ apply_iface_radio_defaults() {
         mlanutl "$iface" rate_adapt_cfg "$ra_mode" "$ra_low" "$ra_high" "$ra_interval" > /dev/null 2>&1 || \
             logger -p local0.err "[$tag:$LINENO] [$iface] rate_adapt_cfg failed"
     fi
+
+    # Apply MCS tier capability limit from per-interface config
+    apply_mcs_tier "$iface" || \
+        logger -p local0.err "[$tag:$LINENO] [$iface] apply_mcs_tier failed (continuing)"
 }
 
 apply_iface_bandcfg() {
@@ -441,9 +534,19 @@ else
     logger -p local0.info "[$tag:$LINENO] [eth0] no base MAC configured; skip update_mac"
 fi
 
+# 보드별 커널 모듈 선택
+if [ "$BOARD_TYPE" == "imx93" ]; then
+    MLAN_KO="mlan_.ko"; MOAL_KO="moal_.ko"
+    MLAN_MOD="mlan_"; MOAL_MOD="moal_"
+else
+    MLAN_KO="mlan.ko"; MOAL_KO="moal.ko"
+    MLAN_MOD="mlan"; MOAL_MOD="moal"
+fi
+logger -p local0.info "[$tag:$LINENO] BOARD_TYPE=$BOARD_TYPE, modules=$MLAN_KO/$MOAL_KO"
+
 # 이미 로드된 모듈이 있으면 사용 프로세스 종료 후 제거
-if lsmod | grep -q "^moal\b" || lsmod | grep -q "^mlan\b"; then
-    logger -p local0.info "[$tag:$LINENO] moal/mlan already loaded → unloading"
+if lsmod | grep -q "^${MOAL_MOD}\b" || lsmod | grep -q "^${MLAN_MOD}\b"; then
+    logger -p local0.info "[$tag:$LINENO] $MOAL_MOD/$MLAN_MOD already loaded → unloading"
 
     # 의존 서비스 중지
     for svc in wpa_supplicant@mlan0 wpa_supplicant@mlan1 \
@@ -472,45 +575,43 @@ if lsmod | grep -q "^moal\b" || lsmod | grep -q "^mlan\b"; then
     done
 
     # 모듈 제거 (moal → mlan 순서)
-    if lsmod | grep -q "^moal\b"; then
-        rmmod moal 2>/dev/null || logger -p local0.err "[$tag:$LINENO] rmmod moal failed"
+    if lsmod | grep -q "^${MOAL_MOD}\b"; then
+        rmmod "$MOAL_MOD" 2>/dev/null || logger -p local0.err "[$tag:$LINENO] rmmod $MOAL_MOD failed"
     fi
-    if lsmod | grep -q "^mlan\b"; then
-        rmmod mlan 2>/dev/null || logger -p local0.err "[$tag:$LINENO] rmmod mlan failed"
+    if lsmod | grep -q "^${MLAN_MOD}\b"; then
+        rmmod "$MLAN_MOD" 2>/dev/null || logger -p local0.err "[$tag:$LINENO] rmmod $MLAN_MOD failed"
     fi
 
     # 제거 확인
-    if lsmod | grep -q "^moal\b\|^mlan\b"; then
-        logger -p local0.emerg "[$tag:$LINENO] failed to unload moal/mlan modules"
+    if lsmod | grep -q "^${MOAL_MOD}\b\|^${MLAN_MOD}\b"; then
+        logger -p local0.emerg "[$tag:$LINENO] failed to unload $MOAL_MOD/$MLAN_MOD modules"
         exit 1
     fi
-    logger -p local0.info "[$tag:$LINENO] moal/mlan modules unloaded successfully"
-    # rmmod 직후 PCI 버스 재초기화 등 하드웨어 settling 대기
+    logger -p local0.info "[$tag:$LINENO] $MOAL_MOD/$MLAN_MOD modules unloaded successfully"
+    # rmmod 직후 버스 재초기화 등 하드웨어 settling 대기
     sleep 0.5
 fi
 
-if ! try_insmod "/opt/wlan/driver/mlan.ko" ""; then
-    echo "mlan module load failed"
+if ! try_insmod "/opt/wlan/driver/$MLAN_KO" ""; then
+    echo "$MLAN_KO module load failed"
     exit 1
 fi
 
-if [ -n "${DEV_CAP_MASK:-}" ]; then
-    logger -p local0.info "[$tag:$LINENO] mod_para=$MOD_PARA fw_name=$FW_NAME mfg_mode=$MFG_MODE cal_data_cfg=$CAL_DATA_CFG dev_cap_mask=$DEV_CAP_MASK"
-else
-    logger -p local0.info "[$tag:$LINENO] mod_para=$MOD_PARA fw_name=$FW_NAME mfg_mode=$MFG_MODE cal_data_cfg=$CAL_DATA_CFG"
-fi
-
-moal_args="mod_para=$MOD_PARA fw_name=$FW_NAME mfg_mode=$MFG_MODE cal_data_cfg=$CAL_DATA_CFG"
+moal_args="mod_para=$MOD_PARA cal_data_cfg=$CAL_DATA_CFG"
 if [ -n "${DEV_CAP_MASK:-}" ]; then
     moal_args="$moal_args dev_cap_mask=$DEV_CAP_MASK"
 fi
+logger -p local0.info "[$tag:$LINENO] $moal_args"
 
-if ! try_insmod "/opt/wlan/driver/moal.ko" "$moal_args"; then
-    echo "moal module load failed"
+if ! try_insmod "/opt/wlan/driver/$MOAL_KO" "$moal_args"; then
+    echo "$MOAL_KO module load failed"
     exit 1
 fi
 
-if [ "$MFG_MODE" == "1" ]; then
+# mfg_mode 체크: mod_para.conf에서 읽기
+MFG_MODE=$(grep -m1 'mfg_mode=' "/lib/firmware/$MOD_PARA" 2>/dev/null | sed 's/.*mfg_mode=//' | tr -d ' ' || echo "0")
+if [ "${MFG_MODE:-0}" == "1" ]; then
+    logger -p local0.info "[$tag:$LINENO] mfg_mode=1 detected, skipping post-insmod setup"
     exit 1
 fi
 

@@ -3,6 +3,11 @@ tag=$(basename "$0")
 IFACE=$1
 NEW_MAC=$2
 
+if [ -z "$NEW_MAC" ]; then
+    logger -p local0.info "[$tag:$LINENO] [$IFACE] no MAC provided, skipping"
+    exit 0
+fi
+
 case "$IFACE" in
   eth0)  LINK_FILE="/etc/systemd/network/22-eth0.link"  ;;
   mlan0) LINK_FILE="/etc/systemd/network/20-mlan0.link" ;;

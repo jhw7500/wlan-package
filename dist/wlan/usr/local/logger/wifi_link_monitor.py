@@ -94,6 +94,32 @@ def get_temperatures():
     return temps
 
 
+def get_ip_and_gw(iface):
+    """인터페이스의 IP 주소와 기본 게이트웨이 조회"""
+    ip_addr, gw = "-", "-"
+    try:
+        out = subprocess.check_output(
+            ["ip", "-4", "addr", "show", iface],
+            timeout=2, stderr=subprocess.DEVNULL
+        ).decode()
+        m = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+)", out)
+        if m:
+            ip_addr = m.group(1)
+    except Exception:
+        pass
+    try:
+        out = subprocess.check_output(
+            ["ip", "-4", "route", "show", "default", "dev", iface],
+            timeout=2, stderr=subprocess.DEVNULL
+        ).decode()
+        m = re.search(r"via\s+(\d+\.\d+\.\d+\.\d+)", out)
+        if m:
+            gw = m.group(1)
+    except Exception:
+        pass
+    return ip_addr, gw
+
+
 _prev_cpu = None
 
 def get_cpu_usage():
@@ -240,7 +266,7 @@ class RoamTracker:
 
 # ── 화면 그리기 ────────────────────────────────────────────────
 
-def draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, summary_path, ping_log_path=None):
+def draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, summary_path, ping_log_path=None, ip_gw=None):
     """Compact 모드: 최소 라인으로 핵심 WiFi 상태 표시"""
     stdscr.clear()
     max_y, max_x = stdscr.getmaxyx()
@@ -269,31 +295,45 @@ def draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, summary_path, p
     safe_addstr(y, 1, sep)
     y += 1
 
-    # info: MAC, SSID, AP, CH(freq)
+    # info: MAC, IP, GW / AP, BW, SSID, CH
     my_mac = info.get("address", "-")
     ch_freq = f"{ch}({freq})" if ch != "-" and freq != "-" else str(ch)
-    safe_addstr(y, 1, f"MAC: {my_mac}   SSID: {ssid}   CH: {ch_freq}")
+    ip_addr, gw = ip_gw if ip_gw else ("-", "-")
+    safe_addstr(y, 1, f"MAC: {my_mac}  IP: {ip_addr}  GW: {gw}")
     y += 1
-    safe_addstr(y, 1, f"AP: {ap_addr}   BW: {width}")
+    safe_addstr(y, 1, f"AP: {ap_addr}  BW: {width}  SSID: {ssid}  CH: {ch_freq}")
     y += 1
 
-    # 신호 / 전송률 / 대역폭
-    sig = link.get("signal", "-")
-    sig_avg = link.get("signal_avg", "-")
+    # 전송률 + MCS 정보
     tx_rate = link.get("tx_bitrate", "-")
     rx_rate = link.get("rx_bitrate", "-")
-    sig_s = sig.replace(" dBm", "") if isinstance(sig, str) else str(sig)
-    sig_a = sig_avg.replace(" dBm", "") if isinstance(sig_avg, str) else str(sig_avg)
     tx_s = tx_rate.split(" ")[0] if isinstance(tx_rate, str) else str(tx_rate)
     rx_s = rx_rate.split(" ")[0] if isinstance(rx_rate, str) else str(rx_rate)
-    safe_addstr(y, 1, f"RSSI: {sig_s}/{sig_a} dBm  TX: {tx_s}M  RX: {rx_s}M")
+    def _extract_mcs(rate_str):
+        if not isinstance(rate_str, str):
+            return ""
+        parts = rate_str.split("MBit/s", 1)
+        if len(parts) < 2 or not parts[1].strip():
+            return ""
+        mcs_info = parts[1].strip()
+        mcs_info = mcs_info.replace("VHT-NSS", "NSS").replace("HE-NSS", "NSS").replace("HT-NSS", "NSS")
+        return mcs_info
+    tx_mcs = _extract_mcs(tx_rate)
+    rx_mcs = _extract_mcs(rx_rate)
+    safe_addstr(y, 1, f"TX: {tx_s}M {tx_mcs}")
+    y += 1
+    safe_addstr(y, 1, f"RX: {rx_s}M {rx_mcs}")
     y += 1
 
-    # tx_failed / tx_retries (mwlan_log에서 dot11RetryCount 사용)
+    # RSSI + tx_failed / tx_retries
+    sig = link.get("signal", "-")
+    sig_avg = link.get("signal_avg", "-")
+    sig_s = sig.replace(" dBm", "") if isinstance(sig, str) else str(sig)
+    sig_a = sig_avg.replace(" dBm", "") if isinstance(sig_avg, str) else str(sig_avg)
     tx_fail = link.get("tx_failed", "-")
     mwlan_log = data.get("mwlan_log", {}) if isinstance(data, dict) else {}
     tx_retry = mwlan_log.get("dot11RetryCount", link.get("tx_retries", "-"))
-    safe_addstr(y, 1, f"FAIL: {tx_fail}  RETRY: {tx_retry}")
+    safe_addstr(y, 1, f"RSSI: {sig_s}/{sig_a} dBm  TX_FAIL: {tx_fail}  TX_RETRY: {tx_retry}")
     y += 1
 
     # 온도 + CPU/MEM
@@ -321,15 +361,15 @@ def draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, summary_path, p
     roam_ms_str = f"{wpa_tracker.last_roam_ms}ms" if wpa_tracker.last_roam_ms else "-"
     safe_addstr(y, 1, f"Scan: {scan_str}")
     safe_addstr(y, 22, f"4-Way: {hs_str}")
-    safe_addstr(y, 38, f"Roam: {roam_ms_str}")
+    safe_addstr(y, 38, f"RoamT: {roam_ms_str}")
     y += 1
 
-    # 로밍
+    # 로밍 이벤트 (AP 변경 감지)
     roam_disp = roam_tracker.get_display()
     if roam_disp:
-        safe_addstr(y, 1, f"Roam: * {roam_disp}", curses.A_BOLD)
+        safe_addstr(y, 1, f"RoamAP: * {roam_disp}", curses.A_BOLD)
     else:
-        safe_addstr(y, 1, "Roam: -")
+        safe_addstr(y, 1, "RoamAP: -")
     y += 1
 
     safe_addstr(y, 1, sep)
@@ -445,6 +485,7 @@ def main(stdscr, file_path):
     wpa_tracker = None
     roam_tracker = None
     ping_log_path = None
+    _cached_ip_gw = None
     if COMPACT_MODE:
         iface = "mlan0"
         parts = file_path.split("/")
@@ -457,6 +498,7 @@ def main(stdscr, file_path):
         roam_tracker = RoamTracker(display_sec=ROAM_DISPLAY_SEC)
         if is_service_active("wifi_ping_monitor"):
             ping_log_path = f"/var/log/cantops/ping/{iface}/ping.log"
+        _cached_ip_gw = get_ip_and_gw(iface)
 
     while RUNNING:
         try:
@@ -468,7 +510,7 @@ def main(stdscr, file_path):
                 if isinstance(data, dict):
                     ap = data.get("link", {}).get("address")
                 roam_tracker.check(ap)
-                draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, SUMMARY_PATH, ping_log_path)
+                draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, SUMMARY_PATH, ping_log_path, _cached_ip_gw)
             else:
                 draw_screen(stdscr, data)
 

@@ -3,17 +3,30 @@ tag=$(basename "$0")
 
 logger -p local0.info "[$tag:$LINENO] start"
 
-CHIP=1
-OFF=9
+WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
+BOARD_TYPE="imx8mm"
+if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
+    BOARD_TYPE=$(jq -r '.global.BOARD_TYPE // "imx8mm"' "$WIFI_INIT_CONF_JSON")
+fi
+
+if [ "$BOARD_TYPE" == "imx93" ]; then
+    CHIP=1; OFF=13
+    PMIC_REGMAP="/sys/kernel/debug/regmap/*-0025/registers"
+    PMIC_REG="04:"; PMIC_RUN="04"
+else
+    CHIP=1; OFF=9
+    PMIC_REGMAP="/sys/kernel/debug/regmap/0-004b/registers"
+    PMIC_REG="2d:"; PMIC_RUN="80"
+fi
+
 ACTIVE_LOW=1
 SHORT_MIN=0
 SHORT_MAX=3
 LONG_MIN=10
 LED="/sys/class/leds/5VREG_nEN/brightness"
-#LED="/sys/class/leds/PMIC_nRST/brightness"
 LOGKMSG="/dev/kmsg"
 
-state=$(cat /sys/kernel/debug/regmap/0-004b/registers |grep 2d:|awk '{print $2}')
+state=$(cat $PMIC_REGMAP 2>/dev/null | grep "$PMIC_REG" | awk '{print $2}')
 #sleep 5
 logger -p local0.info "[$tag:$LINENO] switchd ready : 0x$state"
 /usr/local/logger/print.py cyan "switchd ready : 0x$state"
@@ -64,8 +77,8 @@ while :; do
                 else
                     if [ $dur -ge $SHORT_MIN ] && [ $dur -le $SHORT_MAX ]; then
                         # short 동작: 전원 OFF 전 로그를 확실히 남김
-                        state=$(cat /sys/kernel/debug/regmap/0-004b/registers |grep 2d:|awk '{print $2}')
-                        if [ "$state" == "80" ]; then
+                        state=$(cat $PMIC_REGMAP 2>/dev/null | grep "$PMIC_REG" | awk '{print $2}')
+                        if [ "$state" == "$PMIC_RUN" ]; then
                             logger -p local0.emerg "[$tag:$LINENO] short press: power off : 0x$state"
                             #echo "short press: power off : 0x$state" > /dev/console
                             #echo "short press: power off : 0x$state" > /dev/kmsg

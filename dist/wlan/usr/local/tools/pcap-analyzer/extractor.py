@@ -35,6 +35,7 @@ TSHARK_FIELDS = [
     "tcp.len",
     "tcp.flags",
     "wlan.seq",
+    "icmp.seq",
 ]
 
 
@@ -126,6 +127,7 @@ def parse_tsv_line(line: str) -> Optional[FrameType]:
             tcp_len=cols[16],
             tcp_flags=cols[17],
             seq=cols[18] if len(cols) > 18 else "",
+            icmp_seq=cols[19] if len(cols) > 19 else "",
         )
     except (ValueError, IndexError):
         return None

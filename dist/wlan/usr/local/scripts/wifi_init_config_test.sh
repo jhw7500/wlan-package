@@ -118,6 +118,56 @@ run_case \
     "true" \
     "5GHz"
 
+# --- mcs_tier tests ---
+
+echo ""
+echo "=== mcs_tier tests ==="
+
+# T-mcs-01: mcs_tier disabled (default)
+_json='{"mlan0":{"mcs_tier":{"enabled":false,"ht":7,"vht":7,"he":7}}}'
+expect_equal "mcs_tier disabled" \
+    "$(echo "$_json" | jq -r '.mlan0.mcs_tier.enabled // false')" \
+    "false"
+
+# T-mcs-02: mcs_tier enabled, read all tiers
+_json='{"mlan0":{"mcs_tier":{"enabled":true,"ht":7,"vht":8,"he":9}}}'
+expect_equal "mcs_tier enabled" \
+    "$(echo "$_json" | jq -r '.mlan0.mcs_tier.enabled')" \
+    "true"
+expect_equal "mcs_tier ht=7" \
+    "$(echo "$_json" | jq -r '.mlan0.mcs_tier.ht')" \
+    "7"
+expect_equal "mcs_tier vht=8" \
+    "$(echo "$_json" | jq -r '.mlan0.mcs_tier.vht')" \
+    "8"
+expect_equal "mcs_tier he=9" \
+    "$(echo "$_json" | jq -r '.mlan0.mcs_tier.he')" \
+    "9"
+
+# T-mcs-03: partial config (he only)
+_json='{"mlan0":{"mcs_tier":{"enabled":true,"he":11}}}'
+expect_equal "mcs_tier partial ht=empty" \
+    "$(echo "$_json" | jq -r '.mlan0.mcs_tier.ht // empty')" \
+    ""
+expect_equal "mcs_tier partial he=11" \
+    "$(echo "$_json" | jq -r '.mlan0.mcs_tier.he')" \
+    "11"
+
+# T-mcs-04: mcs_tier section missing → default false
+_json='{"mlan0":{"enabled":true}}'
+expect_equal "mcs_tier missing → false" \
+    "$(echo "$_json" | jq -r '.mlan0.mcs_tier.enabled // false')" \
+    "false"
+
+# T-mcs-05: per-interface independence
+_json='{"mlan0":{"mcs_tier":{"enabled":true,"he":7}},"mlan1":{"mcs_tier":{"enabled":true,"he":11}}}'
+expect_equal "mlan0 he=7" \
+    "$(echo "$_json" | jq -r '.mlan0.mcs_tier.he')" \
+    "7"
+expect_equal "mlan1 he=11" \
+    "$(echo "$_json" | jq -r '.mlan1.mcs_tier.he')" \
+    "11"
+
 echo "PASS: $PASS_COUNT"
 echo "FAIL: $FAIL_COUNT"
 

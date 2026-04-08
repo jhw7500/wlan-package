@@ -39,6 +39,7 @@ class Frame:
     tcp_len: str
     tcp_flags: str
     seq: str
+    icmp_seq: str = ""
     bssid: str = ""
 
     @property

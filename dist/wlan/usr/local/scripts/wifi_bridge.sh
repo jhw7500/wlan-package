@@ -32,7 +32,8 @@ _load_wbridge_json_defaults() {
         "WBRIDGE_WAIT_READY_TIMEOUT_SEC=\(.wait_ready_timeout_sec // 20)",
         "WBRIDGE_WLAN_ROAM_GRACE_SEC=\(.wlan_roam_grace_sec // 15)",
         "WBRIDGE_WLAN_DOWN_RESTART=\(.wlan_down_restart // 0)",
-        "WBRIDGE_PROFILE_VERSION=\(.profile_version // 1)"
+        "WBRIDGE_PROFILE_VERSION=\(.profile_version // 1)",
+        "WBRIDGE_IRQ_AFFINITY=\(.irq_affinity // "auto")"
     ' "$CONF_JSON" 2>/dev/null)
 }
 _load_wbridge_json_defaults
@@ -250,8 +251,9 @@ if [ "$USE_OPTIMIZATION" -eq 1 ]; then
 
     # 2. IRQ Affinity 최적화 (모드별)
     if [ -x "$OPT_DIR/setup-irq-affinity.sh" ]; then
-        logger -p local0.info "[$tag:$LINENO] [$IFACE] Setting up IRQ affinity (effective mode: $EFFECTIVE_MODE)..."
-        if "$OPT_DIR/setup-irq-affinity.sh" --mode "$EFFECTIVE_MODE" "$WIRED_IF" "$IFACE" > /dev/null 2>&1; then
+        IRQ_AFFINITY_POLICY=${WBRIDGE_IRQ_AFFINITY:-auto}
+        logger -p local0.info "[$tag:$LINENO] [$IFACE] Setting up IRQ affinity (effective mode: $EFFECTIVE_MODE, affinity: $IRQ_AFFINITY_POLICY)..."
+        if WBRIDGE_IRQ_AFFINITY="$IRQ_AFFINITY_POLICY" "$OPT_DIR/setup-irq-affinity.sh" --mode "$EFFECTIVE_MODE" "$WIRED_IF" "$IFACE" > /dev/null 2>&1; then
             IRQ_OPT_RESULT="applied"
         else
             IRQ_OPT_RESULT="failed"

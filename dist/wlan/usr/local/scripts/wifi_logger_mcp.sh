@@ -4,6 +4,7 @@ set -u
 tag=$(basename "$0")
 DEV="/sys/bus/iio/devices/iio:device0"
 FACILITY="local3"
+WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
 
 # Defaults
 gain0="0.5203"
@@ -16,8 +17,8 @@ EMERG_A_5V=2.5; CRIT_A_5V=2.0; ERR_A_5V=1.5; WARN_A_5V=1.0
 EMERG_A_24V=0.5; CRIT_A_24V=0.4; ERR_A_24V=0.3; WARN_A_24V=0.2
 
 # Load from JSON config
-WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
 if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
+    DEV=$(jq -r '.mcp.iio_device // "/sys/bus/iio/devices/iio:device0"' "$WIFI_INIT_CONF_JSON")
     gain0=$(jq -r '.mcp.gain_current // 0.5203' "$WIFI_INIT_CONF_JSON")
     gain1=$(jq -r '.mcp.gain_voltage // 15.6552' "$WIFI_INIT_CONF_JSON")
     MCP_CHECK_INTERVAL=$(jq -r '.mcp.check_interval_sec // 5' "$WIFI_INIT_CONF_JSON")
