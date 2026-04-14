@@ -152,6 +152,7 @@
     },
     "mlan0": {
         "_comment": "mlan0 interface configuration",
+        "connect_threshold": -100,
         "enabled": true,
         "Frequency": "auto",
         "net_rx": 0,
@@ -234,6 +235,7 @@
     },
     "mlan1": {
         "_comment": "mlan1 interface configuration",
+        "connect_threshold": -100,
         "enabled": true,
         "Frequency": "auto",
         "net_rx": 0,
