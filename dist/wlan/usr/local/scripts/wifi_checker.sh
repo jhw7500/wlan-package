@@ -20,6 +20,7 @@ FAULT_REBOOT_CNT=6
 
 # Load from JSON config
 if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
+    BUS_TYPE=$(jq -r '.global.BUS_TYPE // "pcie"' "$WIFI_INIT_CONF_JSON")
     LIMIT_CNT=$(jq -r '.checker.LIMIT_CNT // 3' "$WIFI_INIT_CONF_JSON")
     MAX_UNSTABLE_DURATION=$(jq -r '.checker.MAX_UNSTABLE_DURATION // 10' "$WIFI_INIT_CONF_JSON")
     MAX_REBOOT_COUNT=$(jq -r '.checker.MAX_REBOOT_COUNT // 3' "$WIFI_INIT_CONF_JSON")
@@ -35,7 +36,7 @@ ERR_CNT=0
 FAULT_CNT=0
 STATE=""
 PRE_STATE=""
-PCI_BUS=""
+BUS_LINK=""
 REBOOT_F=0
 
 cleanup() {
@@ -54,9 +55,17 @@ if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" && "$IFACE" != "eth0" ]]; then
     logger -p local0.emerg "[$tag:$LINENO] [$IFACE] interface is wrong!!"
     exit 0
 elif [ "$IFACE" == "mlan0" ]; then
-    PCI_BUS="/sys/bus/pci/devices/0000:01:00.0"
+    if [ "$BUS_TYPE" == "sdio" ]; then
+        BUS_LINK="/sys/bus/sdio/devices/mmc2:0001:1"
+    else
+        BUS_LINK="/sys/bus/pci/devices/0000:01:00.0"
+    fi
 elif [ "$IFACE" == "mlan1" ]; then
-    PCI_BUS="/sys/bus/pci/devices/0000:01:00.1"
+    if [ "$BUS_TYPE" == "sdio" ]; then
+        BUS_LINK="/sys/bus/sdio/devices/mmc2:0001:2"
+    else
+        BUS_LINK="/sys/bus/pci/devices/0000:01:00.1"
+    fi
 fi
 
 get_state() {
@@ -124,10 +133,10 @@ while true; do
         if [ "$ERR_CNT" -gt "$LIMIT_CNT" ]; then
             TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
             LOG_FILE="$LOG_DIR/module_${TIMESTAMP}.log"
-            if [ ! -d "$PCI_BUS" ]; then
-                CAUSE="PCI link"
+            if [ -n "$BUS_LINK" ] && [ ! -d "$BUS_LINK" ]; then
+                CAUSE="link"
             else
-                CAUSE="Wifi F/W"
+                CAUSE="fw_crash"
             fi
             logger -p local0.emerg "[$tag:$LINENO] [$IFACE] Requesting reboot via policy: $CAUSE error ($ERR_CNT > $LIMIT_CNT)"
             print red "Requesting reboot via policy: $CAUSE error ($ERR_CNT > $LIMIT_CNT)"
@@ -196,7 +205,9 @@ while true; do
 
     if (( REBOOT_F == 1 )); then
         reason=${CAUSE:-unknown}
-        logger -p local0.emerg "[$tag:$LINENO] [$IFACE] Requesting reboot via policy (cause=$reason, attempts<=${MAX_REBOOT_COUNT}, cooldown=${REBOOT_COOLDOWN_SEC}s)"
+        now=$(date +"%Y-%m-%d %H:%M:%S")
+        reboot_at=$(date -d "+${REBOOT_COOLDOWN_SEC} seconds" +"%Y-%m-%d %H:%M:%S")
+        logger -p local0.emerg "[$tag:$LINENO] [$IFACE] Requesting reboot via policy (cause=$reason, attempts<=${MAX_REBOOT_COUNT}, cooldown=${REBOOT_COOLDOWN_SEC}s, now=$now, reboot_at=$reboot_at)"
         sync
         ERR_CNT=0
         REBOOT_F=0
