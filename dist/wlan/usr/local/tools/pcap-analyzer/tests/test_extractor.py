@@ -9,6 +9,20 @@ parse_tsv_line = importlib.import_module("extractor").parse_tsv_line
 
 
 class ParseTsharkLineTests(unittest.TestCase):
+    def test_parse_tsv_line_reads_icmp_ident_and_icmp_seq(self):
+        line = (
+            "3\t1772081362.0\tFeb 26, 2026 13:49:22.006610023 KST\tFalse\t0x0028\tICMP\t222"
+            "\t15\t-36\t00:50:43:18:fe:01\t00:80:4c:e1:09:cb\t00:80:4c:e1:09:cb"
+            "\t192.168.0.21\t192.168.0.10\t8\t\t0\t\t99\t4660\t7"
+        )
+
+        frame = parse_tsv_line(line)
+
+        self.assertIsNotNone(frame)
+        assert frame is not None
+        self.assertEqual(getattr(frame, "icmp_ident", ""), "4660")
+        self.assertEqual(frame.icmp_seq, "7")
+
     def test_parse_tsv_line_normalizes_new_tshark_retry_and_subtype_formats(self):
         line = (
             "1\t1772081360.0\tFeb 26, 2026 13:49:20.006610023 KST\tTrue\t0x0028\tICMP\t222"
