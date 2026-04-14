@@ -30,6 +30,17 @@ cleanup_symlinks() {
         /var/log/journal
 }
 
+# Custom wpa_supplicant 원복
+restore_wpa_supplicant() {
+    for bin in wpa_supplicant wpa_cli; do
+        if dpkg-divert --list "/usr/sbin/$bin" 2>/dev/null | grep -q local; then
+            rm -f "/usr/sbin/$bin"
+            dpkg-divert --local --rename --remove "/usr/sbin/$bin" 2>/dev/null || true
+            logger -p local0.info "[$KEY][$tag:$LINENO] Restored original /usr/sbin/$bin"
+        fi
+    done
+}
+
 # SysV generator 복원 + audit socket unmask
 restore_systemd_overrides() {
     if [ -f /lib/systemd/system-generators/systemd-sysv-generator.orig ]; then
@@ -47,6 +58,7 @@ purge)
     logger -p local0.info "[$KEY][$tag:$LINENO] Purging wlan-proc package"
 
     cleanup_symlinks
+    restore_wpa_supplicant
     restore_systemd_overrides
     rm -f /etc/cron.hourly/logrotate-wlan
 
@@ -77,6 +89,7 @@ remove)
     logger -p local0.info "[$KEY][$tag:$LINENO] Remove completed for wlan-proc package"
 
     cleanup_symlinks
+    restore_wpa_supplicant
     restore_systemd_overrides
     rm -f /etc/cron.hourly/logrotate-wlan
 
