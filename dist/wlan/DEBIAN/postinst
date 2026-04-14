@@ -304,13 +304,18 @@ json_merge() {
 
   logger -p local0.info "[$KEY][$tag:$LINENO] Successfully created symlinks for wbridge binaries"
 
-  # Custom wpa_supplicant (dpkg-divert로 원본 보존, 커스텀으로 교체)
-  if [ -f /opt/wlan/bin/wpa_supplicant ]; then
+  # Custom wpa_supplicant (dpkg-divert로 원본 보존, 보드별 바이너리 선택)
+  if [ "$BOARD_TYPE" = "imx93" ]; then
+    WPA_SUFFIX="imx93"
+  else
+    WPA_SUFFIX="imx8"
+  fi
+  if [ -f /opt/wlan/bin/wpa_supplicant.${WPA_SUFFIX} ]; then
     dpkg-divert --local --rename --add /usr/sbin/wpa_supplicant 2>/dev/null || true
     dpkg-divert --local --rename --add /usr/sbin/wpa_cli 2>/dev/null || true
-    ln -sf /opt/wlan/bin/wpa_supplicant /usr/sbin/wpa_supplicant
-    ln -sf /opt/wlan/bin/wpa_cli /usr/sbin/wpa_cli
-    logger -p local0.info "[$KEY][$tag:$LINENO] Custom wpa_supplicant installed via dpkg-divert"
+    ln -sf /opt/wlan/bin/wpa_supplicant.${WPA_SUFFIX} /usr/sbin/wpa_supplicant
+    ln -sf /opt/wlan/bin/wpa_cli.${WPA_SUFFIX} /usr/sbin/wpa_cli
+    logger -p local0.info "[$KEY][$tag:$LINENO] Custom wpa_supplicant.${WPA_SUFFIX} installed via dpkg-divert"
   fi
 
   # NXP WLAN tools
