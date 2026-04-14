@@ -304,6 +304,15 @@ json_merge() {
 
   logger -p local0.info "[$KEY][$tag:$LINENO] Successfully created symlinks for wbridge binaries"
 
+  # Custom wpa_supplicant (dpkg-divert로 원본 보존, 커스텀으로 교체)
+  if [ -f /opt/wlan/bin/wpa_supplicant ]; then
+    dpkg-divert --local --rename --add /usr/sbin/wpa_supplicant 2>/dev/null || true
+    dpkg-divert --local --rename --add /usr/sbin/wpa_cli 2>/dev/null || true
+    ln -sf /opt/wlan/bin/wpa_supplicant /usr/sbin/wpa_supplicant
+    ln -sf /opt/wlan/bin/wpa_cli /usr/sbin/wpa_cli
+    logger -p local0.info "[$KEY][$tag:$LINENO] Custom wpa_supplicant installed via dpkg-divert"
+  fi
+
   # NXP WLAN tools
   ln -sf /opt/wlan/bin/iw /usr/local/bin/iw
   ln -sf /opt/wlan/bin/mlanutl /usr/local/bin/mlanutl
