@@ -1,6 +1,9 @@
 [Unit]
 Description=WiFi Checker Service for %i
-After=wifi_init.service
+DefaultDependencies=no
+After=wifi_init.service sysinit.target
+Conflicts=shutdown.target
+Before=shutdown.target
 
 StartLimitIntervalSec=300
 StartLimitBurst=3
