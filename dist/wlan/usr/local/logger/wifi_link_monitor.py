@@ -17,6 +17,7 @@ SUMMARY_PATH = "/var/log/cantops/summary/summary.log"
 SUMMARY_LINES = 5
 PING_LINES = 5
 ROAM_DISPLAY_SEC = 5
+CONF_PATH = "/opt/wlan/config/wifi_init_conf.json"
 
 def signal_handler(signum, frame):
     global RUNNING
@@ -542,20 +543,27 @@ if __name__ == "__main__":
                         choices=["mlan0", "mlan1", "eth0"],
                         help="Interface name")
     parser.add_argument("--path", help="Optional JSON path override")
-    parser.add_argument("--interval", type=float, default=1.0,
-                        help="Screen refresh interval")
+    parser.add_argument("--interval", type=float, default=None,
+                        help="Screen refresh interval (default: from conf or 1.0)")
     parser.add_argument("--compact", action="store_true",
                         help="Compact mode: minimal display with essential info")
-    parser.add_argument("--summary-lines", type=int, default=SUMMARY_LINES,
-                        help=f"Number of summary.log lines to show (default: {SUMMARY_LINES})")
-    parser.add_argument("--roam-display", type=int, default=ROAM_DISPLAY_SEC,
-                        help=f"Roam event display duration in seconds (default: {ROAM_DISPLAY_SEC})")
+    parser.add_argument("--summary-lines", type=int, default=None,
+                        help="Number of summary.log lines to show (default: from conf or 5)")
+    parser.add_argument("--ping-lines", type=int, default=None,
+                        help="Number of ping.log lines to show (default: from conf or 5)")
+    parser.add_argument("--roam-display", type=int, default=None,
+                        help="Roam event display duration in seconds (default: from conf or 5)")
     args = parser.parse_args()
 
-    INTERVAL = args.interval
+    # 우선순위: CLI args > wifi_init_conf.json > 하드코딩 기본값
+    conf = load_json(CONF_PATH)
+    mon = conf.get("monitor", {})
+
+    INTERVAL = args.interval if args.interval is not None else mon.get("interval_sec", INTERVAL)
     COMPACT_MODE = args.compact
-    SUMMARY_LINES = args.summary_lines
-    ROAM_DISPLAY_SEC = args.roam_display
+    SUMMARY_LINES = args.summary_lines if args.summary_lines is not None else mon.get("summary_lines", SUMMARY_LINES)
+    PING_LINES = args.ping_lines if args.ping_lines is not None else mon.get("ping_lines", PING_LINES)
+    ROAM_DISPLAY_SEC = args.roam_display if args.roam_display is not None else mon.get("roam_display_sec", ROAM_DISPLAY_SEC)
 
     if args.path:
         FILE_PATH = args.path

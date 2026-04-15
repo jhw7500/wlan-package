@@ -23,18 +23,14 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
     TXPWRLIMIT_PATH=$(jq -r '.global.TXPWRLIMIT_PATH // "/lib/firmware/cts/txpwrlimit_cfg_9098.conf"' "$WIFI_INIT_CONF_JSON")
     STANDARD=$(jq -r '.global.STANDARD // ""' "$WIFI_INIT_CONF_JSON")
     DEV_CAP_MASK=$(jq -r '.global.DEV_CAP_MASK // ""' "$WIFI_INIT_CONF_JSON")
-    BRIDGE_IFACE=$(jq -r '.global.BRIDGE_IFACE // "mlan0"' "$WIFI_INIT_CONF_JSON")
-    MAC_MODE=$(jq -r '.global.MAC_MODE // "default"' "$WIFI_INIT_CONF_JSON")
+    BRIDGE_IFACE=$(jq -r '.wbridge.bridge_iface // .global.BRIDGE_IFACE // "mlan0"' "$WIFI_INIT_CONF_JSON")
+    WBRIDGE_ENABLED=$(jq -r 'if .wbridge.enabled then "true" else "false" end' "$WIFI_INIT_CONF_JSON" 2>/dev/null || echo "true")
+    MAC_MODE=$(jq -r '.wbridge.mac_mode // .global.MAC_MODE // "default"' "$WIFI_INIT_CONF_JSON")
 fi
 
-# 보드별 커널 모듈 선택
-if [ "$BOARD_TYPE" == "imx93" ]; then
-    MLAN_KO="mlan_.ko"; MOAL_KO="moal_.ko"
-    MLAN_MOD="mlan_"; MOAL_MOD="moal_"
-else
-    MLAN_KO="mlan.ko"; MOAL_KO="moal.ko"
-    MLAN_MOD="mlan"; MOAL_MOD="moal"
-fi
+# 커널 모듈 (imx8mm/imx93 공용)
+MLAN_KO="mlan.ko"; MOAL_KO="moal.ko"
+MLAN_MOD="mlan"; MOAL_MOD="moal"
 
 
 if [ "${CAL_DATA_CFG:-}" = "none" ]; then
@@ -115,8 +111,12 @@ MLAN0_FREQ=$(wifi_init_get_iface_frequency "mlan0" "auto")
 MLAN1_FREQ=$(wifi_init_get_iface_frequency "mlan1" "auto")
 
 BRIDGE_IFACE="${BRIDGE_IFACE:-mlan0}"
+WBRIDGE_ENABLED="${WBRIDGE_ENABLED:-true}"
 BRIDGE_NONE=false
-if [ "$BRIDGE_IFACE" = "none" ]; then
+if [ "$WBRIDGE_ENABLED" = "false" ]; then
+    BRIDGE_NONE=true
+    logger -p local0.info "[$tag:$LINENO] wbridge.enabled=false → bridge disabled"
+elif [ "$BRIDGE_IFACE" = "none" ]; then
     BRIDGE_NONE=true
     BRIDGE_IFACE="mlan0"
 elif [ "$BRIDGE_IFACE" != "mlan0" ] && [ "$BRIDGE_IFACE" != "mlan1" ]; then
@@ -219,7 +219,7 @@ apply_net_rx_to_mod_para() {
 
     _set_net_rx_in_block() {
         local block="$1" value="$2"
-        # Remove existing net_rx line in block, then add if value > 0
+        # Remove existing net_rx line in block, then always write value
         sed -i "/^[[:space:]]*${block}[[:space:]]*=/{
             :loop
             n
@@ -227,27 +227,81 @@ apply_net_rx_to_mod_para() {
             /^[[:space:]]*}/!b loop
         }" "$conf"
 
-        if [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
-            sed -i "/^[[:space:]]*${block}[[:space:]]*=/{
-                :loop
-                n
-                /^[[:space:]]*}/{
-                    i\\	net_rx=${value}
-                    b done
-                }
-                b loop
-                :done
-            }" "$conf"
-            logger -p local0.info "[$tag:$LINENO] ${block}: net_rx=${value}"
-        else
-            logger -p local0.info "[$tag:$LINENO] ${block}: net_rx removed (disabled)"
-        fi
+        sed -i "/^[[:space:]]*${block}[[:space:]]*=/{
+            :loop
+            n
+            /^[[:space:]]*}/{
+                i\\	net_rx=${value}
+                b done
+            }
+            b loop
+            :done
+        }" "$conf"
+        logger -p local0.info "[$tag:$LINENO] ${block}: net_rx=${value}"
     }
 
-    _set_net_rx_in_block "PCIE9098_0" "$mlan0_net_rx"
-    _set_net_rx_in_block "PCIE9098_1" "$mlan1_net_rx"
+    local _bus
+    _bus=$(jq -r '.global.BUS_TYPE // "pcie"' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    local blk_prefix
+    if [ "$_bus" = "sdio" ]; then blk_prefix="SD9098"; else blk_prefix="PCIE9098"; fi
+
+    _set_net_rx_in_block "${blk_prefix}_0" "$mlan0_net_rx"
+    _set_net_rx_in_block "${blk_prefix}_1" "$mlan1_net_rx"
 }
 apply_net_rx_to_mod_para
+
+# Apply bridge_mode from wbridge.engine to wifi_mod_para.conf
+# engine=moal → bridge_iface 블록에 bridge_mode=1, 나머지 0
+# engine=pcap|tpacket → 모든 블록 bridge_mode=0 (유저스페이스 bridge)
+apply_bridge_mode_to_mod_para() {
+    local conf="/lib/firmware/$MOD_PARA"
+    [ -f "$conf" ] || return 0
+
+    local engine bridge_iface
+    engine=$(jq -r '.wbridge.engine // "pcap"' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    bridge_iface=$(jq -r '.wbridge.bridge_iface // .global.BRIDGE_IFACE // "mlan0"' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+
+    local _bus
+    _bus=$(jq -r '.global.BUS_TYPE // "pcie"' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    local blk_prefix
+    if [ "$_bus" = "sdio" ]; then blk_prefix="SD9098"; else blk_prefix="PCIE9098"; fi
+
+    _set_bridge_mode_in_block() {
+        local block="$1" value="$2"
+        # Remove existing bridge_mode line in block, then add
+        sed -i "/^[[:space:]]*${block}[[:space:]]*=/{
+            :loop
+            n
+            /^[[:space:]]*bridge_mode=/d
+            /^[[:space:]]*}/!b loop
+        }" "$conf"
+
+        sed -i "/^[[:space:]]*${block}[[:space:]]*=/{
+            :loop
+            n
+            /^[[:space:]]*}/{
+                i\\	bridge_mode=${value}
+                b done
+            }
+            b loop
+            :done
+        }" "$conf"
+        logger -p local0.info "[$tag:$LINENO] ${block}: bridge_mode=${value}"
+    }
+
+    local mode_0=0 mode_1=0
+    if [ "$engine" = "moal" ]; then
+        if [ "$bridge_iface" = "mlan1" ]; then
+            mode_1=1
+        else
+            mode_0=1
+        fi
+    fi
+
+    _set_bridge_mode_in_block "${blk_prefix}_0" "$mode_0"
+    _set_bridge_mode_in_block "${blk_prefix}_1" "$mode_1"
+}
+apply_bridge_mode_to_mod_para
 
 try_insmod() {
     local module_path=$1

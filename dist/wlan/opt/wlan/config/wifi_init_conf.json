@@ -14,10 +14,6 @@
         "TXPWRLIMIT_PATH": "/lib/firmware/cts/txpwrlimit_cfg_9098.conf",
         "STANDARD": "",
         "DEV_CAP_MASK": "",
-        "BRIDGE_IFACE": "mlan0",
-        "MAC_MODE": "dynamic",
-        "ETH_CLIENT_IP": "",
-        "eth_link_wait_sec": 3,
         "rate_adapt": {
             "_comment": "FW rate adaptation config. mode: 0=legacy, 1=SR. For SR: thresh 0xff=dynamic(noise-based), else static(success-rate%). interval_ms: eval period in ms. Must be set before association.",
             "mode": 1,
@@ -45,36 +41,86 @@
         }
     },
     "wbridge": {
-        "_comment": "wbridge bridge process configuration (WBRIDGE_* env vars). mode: latency|normal|eco|thermal. /etc/default/wbridge takes priority if set.",
-        "optimize": 0,
-        "mode": "normal",
+        "_comment": [
+            "WiFi Bridge 프로세스 설정. /etc/default/wbridge 환경변수가 JSON보다 우선.",
+            "enabled: (bool) bridge 전체 ON/OFF. false이면 bridge 서비스 전부 stop+disable",
+            "bridge_iface: (string) mlan0|mlan1 — bridge에 사용할 무선 인터페이스",
+            "mac_mode: (string) default|dynamic|static — bridge 인터페이스 MAC 결정 방식. dynamic=유선측 MAC 동적 획득",
+            "eth_client_ip: (string) 유선 클라이언트 고정 IP. 빈 문자열이면 quick ARP probe 비활성",
+            "eth_link_wait_sec: (int) dynamic MAC 모드에서 유선 링크 대기 시간 (초)",
+            "engine: (string) pcap|tpacket|moal — bridge 엔진. pcap/tpacket=유저스페이스, moal=드라이버 레벨 (mod_para.conf bridge_mode=1)"
+        ],
+        "enabled": true,
+        "bridge_iface": "mlan0",
+        "mac_mode": "dynamic",
+        "eth_client_ip": "",
+        "eth_link_wait_sec": 3,
         "engine": "pcap",
-        "irq_affinity": "none",
-        "_comment_irq_affinity": "IRQ affinity policy: auto=detect by core count, pinned=explicit CPU pin (4core: ETH->CPU2/WLAN->CPU3, 2core: ETH->CPU0/WLAN->CPU1), none=kernel default",
-        "thermal_state": "ok",
-        "mode_force": 1,
-        "link_guard": 1,
-        "link_down_debounce_sec": 2,
-        "link_up_stable_sec": 2,
-        "link_idle_poll_sec": 5,
-        "wait_ready_timeout_sec": 10,
-        "wlan_roam_grace_sec": 15,
-        "wlan_down_restart": 0,
-        "profile_version": 1,
+        "optimize": {
+            "_comment": [
+                "커널 레벨 네트워크 튜닝. false이면 하위 설정 모두 무효, wbridge 바이너리 기본값(RT/mlock/affinity)만 동작.",
+                "enabled: (bool) UDP 버퍼/IRQ/오프로드 등 커널 튜닝 ON/OFF",
+                "mode: (string) latency|normal|eco|thermal — 최적화 프로파일",
+                "  latency: 인터럽트 즉시 처리, GRO OFF, RT pri=80. 최소 지연, 최대 발열",
+                "  normal: coalescing 50us, GRO ON, RT pri=50. 균형 (권장)",
+                "  eco: coalescing 100us, cpufreq=conservative. 저전력+레이턴시 유지",
+                "  thermal: coalescing 150us, cpufreq=powersave, cpuidle deep. 최소 발열",
+                "irq_affinity: (string) auto|pinned|none — IRQ/RPS CPU 핀 정책",
+                "  auto: 코어수 자동판단 (2코어+→pinned, 1코어→none)",
+                "  pinned: 4코어(ETH→CPU2,WLAN→CPU3), 2코어(ETH→CPU0,WLAN→CPU1)",
+                "  none: 커널 기본 분배, IRQ/RPS 설정 skip",
+                "profile_version: (int) 프로파일 스키마 버전 (로깅/메타데이터용)"
+            ],
+            "enabled": false,
+            "mode": "normal",
+            "irq_affinity": "auto",
+            "profile_version": 1
+        },
+        "link_guard": {
+            "_comment": [
+                "유/무선 링크 상태 감시. engine=pcap|tpacket에서만 동작. engine=moal이면 무시.",
+                "enabled: (bool) false이면 wbridge 프로세스를 link 상태 무관하게 실행",
+                "link_down_debounce_sec: (int) 유선 down 감지 후 bridge 중지까지 대기 (초)",
+                "link_up_stable_sec: (int) 유선 up 안정 확인 시간 (초). 이 기간 동안 up 유지되면 bridge 시작",
+                "link_idle_poll_sec: (int) 링크 미준비 시 폴링 주기 (초)",
+                "wait_ready_timeout_sec: (int) 인터페이스 준비 최대 대기 (초). 초과 시 guard 없이 진행",
+                "wlan_roam_grace_sec: (int) 무선 down 시 로밍 복구 대기 (초). 초과 후 wlan_down_restart에 따라 동작",
+                "wlan_down_restart: (bool) true이면 roam grace 초과 시 bridge 재시작, false이면 유지"
+            ],
+            "enabled": true,
+            "link_down_debounce_sec": 2,
+            "link_up_stable_sec": 2,
+            "link_idle_poll_sec": 5,
+            "wait_ready_timeout_sec": 10,
+            "wlan_roam_grace_sec": 15,
+            "wlan_down_restart": false
+        },
         "thermal": {
-            "_comment": "thermal state thresholds and management (wifi_thermal_state_update.sh)",
-            "auto_restart": 0,
-            "timer_enable": 0,
+            "_comment": [
+                "Thermal 상태 관리. wifi_thermal_state_update.sh가 주기적으로 온도를 읽어 상태를 결정.",
+                "mode_force: (bool) true이면 thermal 클램핑 무시. hot 상태에서도 요청 모드 강제 적용",
+                "auto_restart: (bool) thermal 상태 변경 시 bridge 서비스 자동 재시작",
+                "timer_enable: (bool) systemd timer 기반 주기적 thermal 체크 활성화",
+                "restart_cooldown_sec: (int) 재시작 루프 방지 쿨다운 (초)",
+                "bridge_units: (string) thermal 변경 시 재시작할 systemd 유닛 목록 (공백 구분)",
+                "thresholds: 온도 임계값 (°C). enter/exit 사이 5도 갭으로 히스테리시스 적용"
+            ],
+            "mode_force": true,
+            "auto_restart": false,
+            "timer_enable": false,
             "restart_cooldown_sec": 60,
             "bridge_units": "wifi_bridge@mlan0.service wifi_bridge@mlan1.service",
-            "warm_cpu_enter": 80,
-            "hot_cpu_enter": 90,
-            "warm_cpu_exit": 75,
-            "hot_cpu_exit": 85,
-            "warm_wifi_enter": 70,
-            "hot_wifi_enter": 80,
-            "warm_wifi_exit": 65,
-            "hot_wifi_exit": 75
+            "thresholds": {
+                "_comment": "warm: 성능 제한 시작, hot: 최대 발열 억제. enter=진입 온도, exit=해제 온도",
+                "warm_cpu_enter": 80,
+                "hot_cpu_enter": 90,
+                "warm_cpu_exit": 75,
+                "hot_cpu_exit": 85,
+                "warm_wifi_enter": 70,
+                "hot_wifi_enter": 80,
+                "warm_wifi_exit": 65,
+                "hot_wifi_exit": 75
+            }
         }
     },
     "checker": {
@@ -135,6 +181,13 @@
             "emerg_a": 0.5
         }
     },
+    "monitor": {
+        "_comment": "wifi_link_monitor.py display configuration. CLI args take priority over these values.",
+        "interval_sec": 1.0,
+        "summary_lines": 5,
+        "ping_lines": 5,
+        "roam_display_sec": 5
+    },
     "logger": {
         "_comment": "전역 기본값 (인터페이스별 logger가 없으면 이 값 사용)",
         "cpu_interval_sec": 60,
@@ -173,30 +226,71 @@
             "interval": 60
         },
         "roaming": {
-            "_comment": "Roaming configuration for mlan0",
+            "_comment": [
+                "wifi_roam.py 로밍 알고리즘 설정 (mlan0)",
+                "use_signal_avg: (bool) true=signal_avg(평균, 안정적), false=signal(순간값, 즉시 반응)",
+                "DEFAULT_TH_2G: (int) 2.4GHz RSSI 로밍 임계값 (dBm). 이 값 이하이면 로밍 시도",
+                "DEFAULT_TH_5G: (int) 5GHz RSSI 로밍 임계값 (dBm). wpa_supplicant.conf 값이 우선",
+                "DIFF_TH: (int) 현재 AP 대비 후보 AP의 최소 RSSI 차이 (dB). 클수록 보수적",
+                "CHECK_INTERVAL: (int) 로밍 체크 기본 주기 (초). ADAPTIVE_INTERVAL 활성 시 동적 조절됨",
+                "SCAN_NO_RESULT_SLEEP: (int) 스캔 결과 없을 때 대기 (초)",
+                "ROAM_SUCCESS_SLEEP: (int) 로밍 성공 후 재체크 대기 (초)"
+            ],
             "use_signal_avg": true,
             "DEFAULT_TH_2G": -75,
             "DEFAULT_TH_5G": -75,
             "DIFF_TH": 10,
             "CHECK_INTERVAL": 3,
             "PREDICTIVE_ROAM": {
+                "_comment": [
+                    "RSSI 추세 기반 예측 로밍. 하락 추세 감지 시 임계값을 boost만큼 올려 조기 로밍",
+                    "enable: (bool) 예측 로밍 ON/OFF",
+                    "threshold_boost: (int) RSSI 하락 추세 시 임계값에 더하는 부스트 (dB)",
+                    "trend_window_size: (int) 추세 계산에 사용할 RSSI 샘플 수",
+                    "trend_history_max_age: (int) 이 시간(초) 지난 샘플은 폐기"
+                ],
                 "enable": true,
                 "threshold_boost": 5,
                 "trend_window_size": 5,
                 "trend_history_max_age": 30
             },
             "LOAD_BASED_ROAM": {
+                "_comment": [
+                    "AP 채널 부하 기반 로밍. 현재 AP 부하가 높고 후보가 낮으면 로밍",
+                    "enable: (bool) 부하 기반 로밍 ON/OFF",
+                    "max_roam_load: (int) 현재 AP 부하가 이 값(%) 초과 시 로밍 고려",
+                    "load_diff_threshold: (int) 현재 AP와 후보 AP 부하 차이 최소값 (%)"
+                ],
                 "enable": false,
                 "max_roam_load": 80,
                 "load_diff_threshold": 20
             },
             "PING_PONG_PREVENTION": {
+                "_comment": [
+                    "AP 간 반복 로밍(핑퐁) 방지. window 내 로밍 횟수 초과 시 억제",
+                    "enable: (bool) 핑퐁 방지 ON/OFF",
+                    "window: (int) 로밍 횟수 감시 구간 (초)",
+                    "max_roams_in_window: (int) 구간 내 최대 허용 로밍 횟수",
+                    "detection_time: (int) 핑퐁 감지 후 로밍 억제 시간 (초)"
+                ],
                 "enable": true,
                 "window": 30,
                 "max_roams_in_window": 3,
                 "detection_time": 10
             },
             "ADAPTIVE_INTERVAL": {
+                "_comment": [
+                    "RSSI 변화에 따른 체크 주기 자동 조절. 신호 불안정 시 주기 단축, 안정 시 연장",
+                    "enable: (bool) 적응형 주기 ON/OFF. false이면 CHECK_INTERVAL 고정 사용",
+                    "min_check_interval: (int) 최소 체크 주기 (초)",
+                    "max_check_interval: (int) 최대 체크 주기 (초)",
+                    "rssi_drop_threshold: (int) 이 값(dB) 이상 하락 시 주기 단축",
+                    "rssi_rise_threshold: (int) 이 값(dB) 이상 상승 시 주기 연장",
+                    "near_threshold_offset: (int) 로밍 임계값 근처(±offset dB) 판정 기준",
+                    "near_threshold_interval: (int) 임계값 근처일 때 사용할 체크 주기 (초)",
+                    "good_signal_offset: (int) 임계값 + offset 이상이면 신호 양호 판정 (dB)",
+                    "consecutive_drop_count: (int) 연속 하락 이 횟수 이상이면 주기 즉시 단축"
+                ],
                 "enable": true,
                 "min_check_interval": 1,
                 "max_check_interval": 10,
@@ -208,10 +302,22 @@
                 "consecutive_drop_count": 2
             },
             "POST_ROAM_ARP_OPTIMIZATION": {
+                "_comment": [
+                    "로밍 후 ARP 최적화. 새 AP의 MAC 테이블을 빠르게 갱신하여 통신 복구 단축",
+                    "enable: (bool) 로밍 후 ARP 최적화 ON/OFF",
+                    "garp_count: (int) Gratuitous ARP 전송 횟수",
+                    "garp_wait: (int) GARP 전송 간 대기 (초)"
+                ],
                 "enable": true,
                 "garp_count": 2,
                 "garp_wait": 1,
                 "PEER_WARMUP": {
+                    "_comment": [
+                        "로밍 후 주변 피어에 ARP 전송하여 피어 측 MAC 테이블 워밍업",
+                        "enable: (bool) 피어 워밍업 ON/OFF",
+                        "peer_count: (int) ARP 전송 대상 피어 수 (ARP 캐시 기준 상위 N개)",
+                        "peer_wait: (int) 피어 간 ARP 전송 대기 (초)"
+                    ],
                     "enable": true,
                     "peer_count": 5,
                     "peer_wait": 1
@@ -256,30 +362,71 @@
             "interval": 60
         },
         "roaming": {
-            "_comment": "Roaming configuration for mlan1",
+            "_comment": [
+                "wifi_roam.py 로밍 알고리즘 설정 (mlan1)",
+                "use_signal_avg: (bool) true=signal_avg(평균, 안정적), false=signal(순간값, 즉시 반응)",
+                "DEFAULT_TH_2G: (int) 2.4GHz RSSI 로밍 임계값 (dBm). 이 값 이하이면 로밍 시도",
+                "DEFAULT_TH_5G: (int) 5GHz RSSI 로밍 임계값 (dBm). wpa_supplicant.conf 값이 우선",
+                "DIFF_TH: (int) 현재 AP 대비 후보 AP의 최소 RSSI 차이 (dB). 클수록 보수적",
+                "CHECK_INTERVAL: (int) 로밍 체크 기본 주기 (초). ADAPTIVE_INTERVAL 활성 시 동적 조절됨",
+                "SCAN_NO_RESULT_SLEEP: (int) 스캔 결과 없을 때 대기 (초)",
+                "ROAM_SUCCESS_SLEEP: (int) 로밍 성공 후 재체크 대기 (초)"
+            ],
             "use_signal_avg": true,
             "DEFAULT_TH_2G": -75,
             "DEFAULT_TH_5G": -75,
             "DIFF_TH": 10,
             "CHECK_INTERVAL": 5,
             "PREDICTIVE_ROAM": {
+                "_comment": [
+                    "RSSI 추세 기반 예측 로밍. 하락 추세 감지 시 임계값을 boost만큼 올려 조기 로밍",
+                    "enable: (bool) 예측 로밍 ON/OFF",
+                    "threshold_boost: (int) RSSI 하락 추세 시 임계값에 더하는 부스트 (dB)",
+                    "trend_window_size: (int) 추세 계산에 사용할 RSSI 샘플 수",
+                    "trend_history_max_age: (int) 이 시간(초) 지난 샘플은 폐기"
+                ],
                 "enable": true,
                 "threshold_boost": 5,
                 "trend_window_size": 5,
                 "trend_history_max_age": 30
             },
             "LOAD_BASED_ROAM": {
+                "_comment": [
+                    "AP 채널 부하 기반 로밍. 현재 AP 부하가 높고 후보가 낮으면 로밍",
+                    "enable: (bool) 부하 기반 로밍 ON/OFF",
+                    "max_roam_load: (int) 현재 AP 부하가 이 값(%) 초과 시 로밍 고려",
+                    "load_diff_threshold: (int) 현재 AP와 후보 AP 부하 차이 최소값 (%)"
+                ],
                 "enable": true,
                 "max_roam_load": 80,
                 "load_diff_threshold": 20
             },
             "PING_PONG_PREVENTION": {
+                "_comment": [
+                    "AP 간 반복 로밍(핑퐁) 방지. window 내 로밍 횟수 초과 시 억제",
+                    "enable: (bool) 핑퐁 방지 ON/OFF",
+                    "window: (int) 로밍 횟수 감시 구간 (초)",
+                    "max_roams_in_window: (int) 구간 내 최대 허용 로밍 횟수",
+                    "detection_time: (int) 핑퐁 감지 후 로밍 억제 시간 (초)"
+                ],
                 "enable": true,
                 "window": 60,
                 "max_roams_in_window": 3,
                 "detection_time": 30
             },
             "ADAPTIVE_INTERVAL": {
+                "_comment": [
+                    "RSSI 변화에 따른 체크 주기 자동 조절. 신호 불안정 시 주기 단축, 안정 시 연장",
+                    "enable: (bool) 적응형 주기 ON/OFF. false이면 CHECK_INTERVAL 고정 사용",
+                    "min_check_interval: (int) 최소 체크 주기 (초)",
+                    "max_check_interval: (int) 최대 체크 주기 (초)",
+                    "rssi_drop_threshold: (int) 이 값(dB) 이상 하락 시 주기 단축",
+                    "rssi_rise_threshold: (int) 이 값(dB) 이상 상승 시 주기 연장",
+                    "near_threshold_offset: (int) 로밍 임계값 근처(±offset dB) 판정 기준",
+                    "near_threshold_interval: (int) 임계값 근처일 때 사용할 체크 주기 (초)",
+                    "good_signal_offset: (int) 임계값 + offset 이상이면 신호 양호 판정 (dB)",
+                    "consecutive_drop_count: (int) 연속 하락 이 횟수 이상이면 주기 즉시 단축"
+                ],
                 "enable": true,
                 "min_check_interval": 1,
                 "max_check_interval": 10,
@@ -291,10 +438,22 @@
                 "consecutive_drop_count": 2
             },
             "POST_ROAM_ARP_OPTIMIZATION": {
+                "_comment": [
+                    "로밍 후 ARP 최적화. 새 AP의 MAC 테이블을 빠르게 갱신하여 통신 복구 단축",
+                    "enable: (bool) 로밍 후 ARP 최적화 ON/OFF",
+                    "garp_count: (int) Gratuitous ARP 전송 횟수",
+                    "garp_wait: (int) GARP 전송 간 대기 (초)"
+                ],
                 "enable": true,
                 "garp_count": 2,
                 "garp_wait": 1,
                 "PEER_WARMUP": {
+                    "_comment": [
+                        "로밍 후 주변 피어에 ARP 전송하여 피어 측 MAC 테이블 워밍업",
+                        "enable: (bool) 피어 워밍업 ON/OFF",
+                        "peer_count: (int) ARP 전송 대상 피어 수 (ARP 캐시 기준 상위 N개)",
+                        "peer_wait: (int) 피어 간 ARP 전송 대기 (초)"
+                    ],
                     "enable": true,
                     "peer_count": 5,
                     "peer_wait": 1
