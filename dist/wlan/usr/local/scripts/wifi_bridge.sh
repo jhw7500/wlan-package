@@ -19,24 +19,31 @@ _load_wbridge_json_defaults() {
         # 이미 환경변수로 설정된 경우(/etc/default/wbridge) 유지
         [ -z "${!key+set}" ] && export "$key=$val"
     done < <(jq -r '
-        .wbridge |
-        "WBRIDGE_OPTIMIZE=\(.optimize // 1)",
-        "WBRIDGE_MODE=\(.mode // "normal")",
+        "WBRIDGE_BOARD_TYPE=\(.global.BOARD_TYPE // "imx8mm")",
+        "WBRIDGE_BUS_TYPE=\(.global.BUS_TYPE // "pcie")",
+        (.wbridge |
+        "WBRIDGE_ENABLED=\(if .enabled then 1 else 0 end)",
+        "WBRIDGE_OPTIMIZE=\(if .optimize.enabled then 1 else 0 end)",
+        "WBRIDGE_MODE=\(.optimize.mode // "normal")",
         "WBRIDGE_ENGINE=\(.engine // "pcap")",
-        "WBRIDGE_THERMAL_STATE=\(.thermal_state // "ok")",
-        "WBRIDGE_MODE_FORCE=\(.mode_force // 0)",
-        "WBRIDGE_LINK_GUARD=\(.link_guard // 1)",
-        "WBRIDGE_LINK_DOWN_DEBOUNCE_SEC=\(.link_down_debounce_sec // 2)",
-        "WBRIDGE_LINK_UP_STABLE_SEC=\(.link_up_stable_sec // 2)",
-        "WBRIDGE_LINK_IDLE_POLL_SEC=\(.link_idle_poll_sec // 2)",
-        "WBRIDGE_WAIT_READY_TIMEOUT_SEC=\(.wait_ready_timeout_sec // 20)",
-        "WBRIDGE_WLAN_ROAM_GRACE_SEC=\(.wlan_roam_grace_sec // 15)",
-        "WBRIDGE_WLAN_DOWN_RESTART=\(.wlan_down_restart // 0)",
-        "WBRIDGE_PROFILE_VERSION=\(.profile_version // 1)",
-        "WBRIDGE_IRQ_AFFINITY=\(.irq_affinity // "auto")"
+        "WBRIDGE_IRQ_AFFINITY=\(.optimize.irq_affinity // "auto")",
+        "WBRIDGE_MODE_FORCE=\(if .thermal.mode_force then 1 else 0 end)",
+        "WBRIDGE_LINK_GUARD=\(if .link_guard.enabled then 1 else 0 end)",
+        "WBRIDGE_LINK_DOWN_DEBOUNCE_SEC=\(.link_guard.link_down_debounce_sec // 2)",
+        "WBRIDGE_LINK_UP_STABLE_SEC=\(.link_guard.link_up_stable_sec // 2)",
+        "WBRIDGE_LINK_IDLE_POLL_SEC=\(.link_guard.link_idle_poll_sec // 2)",
+        "WBRIDGE_WAIT_READY_TIMEOUT_SEC=\(.link_guard.wait_ready_timeout_sec // 20)",
+        "WBRIDGE_WLAN_ROAM_GRACE_SEC=\(.link_guard.wlan_roam_grace_sec // 15)",
+        "WBRIDGE_WLAN_DOWN_RESTART=\(if .link_guard.wlan_down_restart then 1 else 0 end)",
+        "WBRIDGE_PROFILE_VERSION=\(.optimize.profile_version // 1)")
     ' "$CONF_JSON" 2>/dev/null)
 }
 _load_wbridge_json_defaults
+
+if [ "${WBRIDGE_ENABLED:-1}" -eq 0 ]; then
+    logger -p local0.info "[$tag:$LINENO] [$IFACE] wbridge disabled (WBRIDGE_ENABLED=0)"
+    exit 0
+fi
 
 if [[ "$IFACE" != "mlan0" ]]; then
     exit 0
@@ -125,7 +132,7 @@ esac
 BRIDGE_PID=""
 
 case "$WBRIDGE_ENGINE" in
-    pcap|tpacket) ;;
+    pcap|tpacket|moal) ;;
     *)
         logger -p local0.warn "[$tag:$LINENO] [$IFACE] Invalid WBRIDGE_ENGINE='$WBRIDGE_ENGINE', fallback to pcap"
         WBRIDGE_ENGINE="pcap"
@@ -252,8 +259,9 @@ if [ "$USE_OPTIMIZATION" -eq 1 ]; then
     # 2. IRQ Affinity 최적화 (모드별)
     if [ -x "$OPT_DIR/setup-irq-affinity.sh" ]; then
         IRQ_AFFINITY_POLICY=${WBRIDGE_IRQ_AFFINITY:-auto}
-        logger -p local0.info "[$tag:$LINENO] [$IFACE] Setting up IRQ affinity (effective mode: $EFFECTIVE_MODE, affinity: $IRQ_AFFINITY_POLICY)..."
-        if WBRIDGE_IRQ_AFFINITY="$IRQ_AFFINITY_POLICY" "$OPT_DIR/setup-irq-affinity.sh" --mode "$EFFECTIVE_MODE" "$WIRED_IF" "$IFACE" > /dev/null 2>&1; then
+        BUS_TYPE=${WBRIDGE_BUS_TYPE:-pcie}
+        logger -p local0.info "[$tag:$LINENO] [$IFACE] Setting up IRQ affinity (effective mode: $EFFECTIVE_MODE, affinity: $IRQ_AFFINITY_POLICY, bus: $BUS_TYPE)..."
+        if WBRIDGE_IRQ_AFFINITY="$IRQ_AFFINITY_POLICY" "$OPT_DIR/setup-irq-affinity.sh" --mode "$EFFECTIVE_MODE" --bus-type "$BUS_TYPE" "$WIRED_IF" "$IFACE" > /dev/null 2>&1; then
             IRQ_OPT_RESULT="applied"
         else
             IRQ_OPT_RESULT="failed"
@@ -440,6 +448,18 @@ handle_shutdown() {
 
 trap handle_shutdown TERM INT
 trap stop_bridge_process EXIT
+
+# engine=moal: 드라이버 레벨 bridge — 유저스페이스 프로세스 불필요
+# 최적화는 이미 위에서 실행됨, 서비스 유지를 위해 대기
+if [ "$WBRIDGE_ENGINE" = "moal" ]; then
+    write_apply_snapshot
+    logger -p local0.info "[$tag:$LINENO] [$IFACE] engine=moal: driver-level bridge active, no userspace process needed. Waiting for shutdown signal."
+    while true; do
+        sleep 60 &
+        wait $! || break
+    done
+    exit 0
+fi
 
 while true; do
     wait_for_links_or_timeout || true

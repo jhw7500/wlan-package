@@ -20,12 +20,16 @@ wifi_init_conf.json
 │   └── ping_monitor    #   ping 모니터 서비스 제어
 ├── mac                 # MAC 주소 설정 (인터페이스별)
 ├── wbridge             # wifi_bridge 프로세스 설정
+│   ├── optimize        #   커널 레벨 네트워크 튜닝 (UDP/IRQ/오프로드)
+│   ├── link_guard      #   유/무선 링크 상태 감시
 │   └── thermal         #   브릿지 thermal 상태 관리
+│       └── thresholds  #     온도 임계값 (히스테리시스)
 ├── checker             # wifi_checker + reboot 정책
 ├── temperature         # 온도 모니터링 임계값
 ├── arping              # ARP 연결 감시 + sweep
 ├── mmc                 # eMMC 수명 모니터링
 ├── mcp                 # 전류/전압 센서 모니터링
+├── monitor             # wifi_link_monitor.py 표시 설정
 ├── logger              # 각종 로깅 주기 설정 (전역 기본값)
 ├── eth0                # eth0 인터페이스 설정
 │   └── logger          #   eth0 전용 로깅 override
@@ -62,10 +66,8 @@ wifi_init_conf.json
 | `MFG_MODE` | string | `"0"` | 제조 모드. `"1"` = MFG 모드 활성화 |
 | `STANDARD` | string | `""` | WiFi 표준 제한 (비어있으면 자동) |
 | `DEV_CAP_MASK` | string | `""` | 디바이스 capability 마스크 |
-| `BRIDGE_IFACE` | string | `"mlan0"` | 브릿지 인터페이스. `"mlan0"`, `"mlan1"`, 또는 `"none"` (bridge 비활성) |
-| `MAC_MODE` | string | `"dynamic"` | MAC 주소 모드. `"default"` (base만), `"dynamic"` (동적→base), `"static"` (target→base) |
-| `ETH_CLIENT_IP` | string | `""` | 유선 클라이언트 고정 IP. 설정 시 `wired_mac_ip_get.py`의 quick ARP probe 활성화. 빈 문자열이면 비활성 |
-| `eth_link_wait_sec` | int | `3` | 유선 링크 준비 대기 시간 (초) |
+
+> **참고**: `BRIDGE_IFACE`, `MAC_MODE`, `ETH_CLIENT_IP`, `eth_link_wait_sec`는 `wbridge` 섹션으로 이동되었습니다. 하위 호환을 위해 `global`에 있어도 동작하지만, 새 설정에서는 `wbridge` 섹션을 사용하세요.
 
 ### 1.1 global.rate_adapt - FW Rate Adaptation
 
@@ -109,44 +111,70 @@ wifi_init_conf.json
 
 ## 3. wbridge - WiFi 브릿지 프로세스
 
-**사용 스크립트**: `wifi_bridge.sh`, `/etc/default/wbridge`
+**사용 스크립트**: `wifi_bridge.sh`, `wifi_init.sh`, `wired_mac_ip_get.py`, `/etc/default/wbridge`
 
 > `/etc/default/wbridge` 파일이 존재하면 해당 값이 JSON보다 **우선**한다.
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `optimize` | int | `0` | 브릿지 최적화 활성화 (0=비활성, 1=활성) |
-| `mode` | string | `"normal"` | 동작 모드: `"latency"`, `"normal"`, `"eco"`, `"thermal"` |
-| `engine` | string | `"pcap"` | 패킷 캡처 엔진 |
-| `thermal_state` | string | `"ok"` | 현재 thermal 상태 |
-| `mode_force` | int | `1` | 모드 강제 고정 (1=활성) |
-| `link_guard` | int | `1` | 링크 가드 활성화 |
-| `link_down_debounce_sec` | int | `2` | 링크 다운 디바운스 시간 (초) |
-| `link_up_stable_sec` | int | `2` | 링크 업 안정화 대기 시간 (초) |
-| `link_idle_poll_sec` | int | `5` | 링크 유휴 폴링 주기 (초) |
-| `wait_ready_timeout_sec` | int | `10` | 인터페이스 준비 대기 타임아웃 (초) |
-| `wlan_roam_grace_sec` | int | `15` | 로밍 후 유예 시간 (초) |
-| `wlan_down_restart` | int | `0` | WLAN 다운 시 재시작 (0=비활성) |
-| `profile_version` | int | `1` | 프로파일 버전 |
+| `enabled` | bool | `true` | bridge 기능 마스터 스위치. `false`이면 bridge 서비스 전체 비활성 |
+| `bridge_iface` | string | `"mlan0"` | bridge에 사용할 인터페이스. `"mlan0"` 또는 `"mlan1"` |
+| `mac_mode` | string | `"dynamic"` | MAC 주소 모드. `"default"` (base만), `"dynamic"` (동적→base), `"static"` (target→base) |
+| `eth_client_ip` | string | `""` | 유선 클라이언트 고정 IP. 설정 시 `wired_mac_ip_get.py`의 quick ARP probe 활성화. 빈 문자열이면 비활성 |
+| `eth_link_wait_sec` | int | `3` | 유선 링크 준비 대기 시간 (초). `wired_mac_ip_get.py`에서 사용 |
+| `engine` | string | `"pcap"` | 패킷 캡처 엔진. `"pcap"` 또는 `"tpacket"` |
 
-### 3.1 wbridge.thermal - 브릿지 Thermal 관리
+### 3.1 wbridge.optimize - 커널 레벨 네트워크 튜닝
 
-**사용 스크립트**: `wbridge_thermal_state_update.sh`, `wifi_thermal_state_update.sh`
+**사용 스크립트**: `wifi_bridge.sh` → `optimize-for-udp.sh`, `setup-irq-affinity.sh`
+
+> `enabled=false`이면 하위 설정(`mode`, `irq_affinity` 등) 모두 무효. 커널 튜닝 없이 wbridge 바이너리 기본값으로 동작한다.
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `auto_restart` | int | `0` | 상태 변경 시 자동 재시작 (0=비활성) |
-| `timer_enable` | int | `0` | 타이머 기반 thermal 체크 |
+| `enabled` | bool | `false` | 커널 레벨 최적화 활성화 (UDP 버퍼, IRQ, 오프로드 등) |
+| `mode` | string | `"normal"` | 동작 모드: `"latency"`, `"normal"`, `"eco"`, `"thermal"` |
+| `irq_affinity` | string | `"auto"` | IRQ affinity 정책: `"auto"` (코어수 자동판단), `"pinned"` (명시적 CPU 핀), `"none"` (커널 기본) |
+| `profile_version` | int | `1` | 프로파일 스키마 버전 (로깅/메타데이터용) |
+
+### 3.2 wbridge.link_guard - 링크 상태 감시
+
+**사용 스크립트**: `wifi_bridge.sh`
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| `enabled` | bool | `true` | 링크 감시 활성화. `false`이면 wbridge 프로세스를 wait 없이 방치 |
+| `link_down_debounce_sec` | int | `2` | 유선 링크 다운 디바운스 시간 (초) |
+| `link_up_stable_sec` | int | `2` | 유선 링크 업 안정화 대기 시간 (초) |
+| `link_idle_poll_sec` | int | `5` | 링크 유휴 폴링 주기 (초) |
+| `wait_ready_timeout_sec` | int | `10` | 인터페이스 준비 대기 타임아웃 (초) |
+| `wlan_roam_grace_sec` | int | `15` | 무선 링크 다운 시 로밍 유예 시간 (초) |
+| `wlan_down_restart` | bool | `false` | 무선 링크 다운 유예 초과 시 bridge 재시작 여부 |
+
+### 3.3 wbridge.thermal - 브릿지 Thermal 관리
+
+**사용 스크립트**: `wifi_thermal_state_update.sh`
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| `mode_force` | bool | `true` | `true`이면 thermal 클램핑 무시 (요청 모드 강제 적용) |
+| `auto_restart` | bool | `false` | thermal 상태 변경 시 bridge 자동 재시작 |
+| `timer_enable` | bool | `false` | 타이머 기반 주기적 thermal 체크 |
 | `restart_cooldown_sec` | int | `60` | 재시작 쿨다운 (초) |
 | `bridge_units` | string | `"wifi_bridge@mlan0.service wifi_bridge@mlan1.service"` | 관리 대상 systemd 유닛 |
-| `warm_cpu_enter` | int | `80` | CPU warm 진입 온도 (C) |
-| `hot_cpu_enter` | int | `90` | CPU hot 진입 온도 (C) |
-| `warm_cpu_exit` | int | `75` | CPU warm 해제 온도 (C) |
-| `hot_cpu_exit` | int | `85` | CPU hot 해제 온도 (C) |
-| `warm_wifi_enter` | int | `70` | WiFi warm 진입 온도 (C) |
-| `hot_wifi_enter` | int | `80` | WiFi hot 진입 온도 (C) |
-| `warm_wifi_exit` | int | `65` | WiFi warm 해제 온도 (C) |
-| `hot_wifi_exit` | int | `75` | WiFi hot 해제 온도 (C) |
+
+### 3.4 wbridge.thermal.thresholds - 온도 임계값
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| `warm_cpu_enter` | int | `80` | CPU warm 진입 온도 (°C) |
+| `hot_cpu_enter` | int | `90` | CPU hot 진입 온도 (°C) |
+| `warm_cpu_exit` | int | `75` | CPU warm 해제 온도 (°C) |
+| `hot_cpu_exit` | int | `85` | CPU hot 해제 온도 (°C) |
+| `warm_wifi_enter` | int | `70` | WiFi warm 진입 온도 (°C) |
+| `hot_wifi_enter` | int | `80` | WiFi hot 진입 온도 (°C) |
+| `warm_wifi_exit` | int | `65` | WiFi warm 해제 온도 (°C) |
+| `hot_wifi_exit` | int | `75` | WiFi hot 해제 온도 (°C) |
 
 **히스테리시스 설계**: enter와 exit 사이에 5도 갭을 두어 상태 플리핑을 방지한다.
 
@@ -338,7 +366,24 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 ---
 
-## 9. logger - 로깅 주기 설정
+## 9. monitor - 링크 모니터 표시 설정
+
+**사용 스크립트**: `wifi_link_monitor.py`
+
+`wifi_link_monitor.py`의 화면 갱신 주기와 표시 옵션을 제어한다. CLI 인자가 이 설정보다 우선한다.
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| `interval_sec` | float | `1.0` | 데이터 수집 및 화면 갱신 주기 (초) |
+| `summary_lines` | int | `5` | summary.log 표시 줄 수 |
+| `ping_lines` | int | `5` | ping.log 표시 줄 수 |
+| `roam_display_sec` | int | `5` | 로밍 이벤트 화면 유지 시간 (초) |
+
+> **우선순위**: CLI 인자(`--interval`, `--summary-lines`, `--ping-lines`, `--roam-display`) > `wifi_init_conf.json` > 하드코딩 기본값
+
+---
+
+## 10. logger - 로깅 주기 설정
 
 **사용 스크립트**: `wifi_logger_cpu.sh`, `wifi_logger_stat.py`, `wifi_bgscan.py`
 
@@ -375,11 +420,11 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 ---
 
-## 10. mlan0 / mlan1 - 인터페이스별 설정
+## 11. mlan0 / mlan1 - 인터페이스별 설정
 
 **사용 스크립트**: `wifi_bgscan.py`, `wifi_roaming.py`
 
-### 10.1 interface defaults - 인터페이스 기본 활성/주파수
+### 11.1 interface defaults - 인터페이스 기본 활성/주파수
 
 **사용 스크립트**: `wifi_init.sh`, `wifi.sh`
 
@@ -412,7 +457,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 값이 0이면 conf에서 `net_rx=` 줄이 제거되고, 0보다 크면 `net_rx=값`이 블록 내에 추가/갱신된다.
 
-### 10.2 periodic_roam - 주기적 패시브 로밍
+### 11.2 periodic_roam - 주기적 패시브 로밍
 
 **사용 스크립트**: `wifi_roaming.py`
 
@@ -422,13 +467,13 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 | `interval` | int | `60` | 로밍 시도 주기 (초) |
 | `scan_before_roam` | bool | `true` | `true`=roam 전 스캔 수행(최신 RSSI 기반 판단), `false`=기존 ap.log 스캔 데이터 사용 |
 
-### 10.3 bgscan - 백그라운드 스캔
+### 11.3 bgscan - 백그라운드 스캔
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
 | `interval` | int | `60` | 백그라운드 스캔 주기 (초) |
 
-### 10.4 roaming - 로밍 알고리즘
+### 11.4 roaming - 로밍 알고리즘
 
 | 키 | 타입 | 기본값 (mlan0/mlan1) | 설명 |
 |----|------|---------------------|------|
@@ -496,7 +541,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 | `peer_count` | int | `5` | 워밍업 대상 피어 수 |
 | `peer_wait` | int | `1` | 피어 간 대기 (초) |
 
-### 10.5 mcs_tier - MCS Tier 능력 제한
+### 11.5 mcs_tier - MCS Tier 능력 제한
 
 **사용 스크립트**: `wifi_init.sh`
 
@@ -525,7 +570,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 }
 ```
 
-### 10.6 on_connect - AP 연결 후 명령 실행
+### 11.6 on_connect - AP 연결 후 명령 실행
 
 **사용 스크립트**: `wifi_event`
 

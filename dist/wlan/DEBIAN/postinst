@@ -120,20 +120,23 @@ EOF
     logger -p local0.info "[$KEY][$tag:$LINENO] Set default locale to C.UTF-8"
   fi
 
-  # Detect eMMC block device number
-  # iMX8MM: mmcblk2, iMX93: mmcblk0
-  if [ -d /sys/block/mmcblk2 ]; then
-    EMMC_NUM=2
-    BOARD_TYPE="imx8mm"
-    BUS_TYPE="pcie"
-    MOD_PARA="cts/wifi_mod_para.conf"
-    IIO_DEV="/sys/bus/iio/devices/iio:device0"
-  else
-    EMMC_NUM=0
+  # Detect board type via SoC ID
+  SOC_ID=$(cat /sys/devices/soc0/soc_id 2>/dev/null || echo "")
+  if echo "$SOC_ID" | grep -qi "i\.MX93"; then
     BOARD_TYPE="imx93"
     BUS_TYPE="sdio"
-    MOD_PARA="cts/wifi_mod_para_.conf"
     IIO_DEV="/sys/bus/iio/devices/iio:device1"
+  else
+    BOARD_TYPE="imx8mm"
+    BUS_TYPE="pcie"
+    IIO_DEV="/sys/bus/iio/devices/iio:device0"
+  fi
+
+  # Detect eMMC block device number (iMX8MM: mmcblk2, iMX93: mmcblk0)
+  if [ -d /sys/block/mmcblk2 ]; then
+    EMMC_NUM=2
+  else
+    EMMC_NUM=0
   fi
 
   # p3 파티션이 없으면 emmc_fdisk.sh로 생성
@@ -183,7 +186,7 @@ customctl() {
 
   echo "[installer] Optimizing service configuration (batch processing)..."
   systemctl mask systemd-networkd-wait-online nfs-server proc-fs-nfsd.mount ovsdb-server avahi-daemon avahi-autoipd psplash systemd-journald-audit.socket netplan-ovs-cleanup || true
-  systemctl disable --now redis-server dhcpcd openvswitch openvswitch-switch connman smb nmb avahi-daemon.socket containerd netdata collectd named bind ifplugd systemd-resolved netserver wifi_checker@eth0 || true
+  systemctl disable --now dhcpcd openvswitch openvswitch-switch connman smb nmb avahi-daemon.socket containerd netdata collectd named systemd-resolved netserver wifi_checker@eth0 || true
   systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer wifi_init wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 wifi_logger@mlan0 wifi_checker@mlan0 wifi_bgscan@mlan0 wifi_roam@mlan0 wifi_arping@mlan0 log-watchdog.timer serial-getty@ttyGS0.service || true
   systemctl start switchd wifi_led@eth0 serial-getty@ttyGS0.service || true
 
@@ -266,10 +269,10 @@ json_merge() {
   # json_merge 이후 보드별 설정 적용 (첫 설치 시에도 정상 동작)
   WIFI_CONF="/usr/local/etc/wifi_init_conf.json"
   if [ -f "$WIFI_CONF" ] && command -v jq >/dev/null 2>&1; then
-    jq --arg b "$BOARD_TYPE" --arg bus "$BUS_TYPE" --arg mod "$MOD_PARA" --arg iio "$IIO_DEV" \
-      '.global.BOARD_TYPE = $b | .global.BUS_TYPE = $bus | .global.MOD_PARA = $mod | .mcp.iio_device = $iio' \
+    jq --arg b "$BOARD_TYPE" --arg bus "$BUS_TYPE" --arg iio "$IIO_DEV" \
+      '.global.BOARD_TYPE = $b | .global.BUS_TYPE = $bus | .global.MOD_PARA = "cts/wifi_mod_para.conf" | .mcp.iio_device = $iio' \
       "$WIFI_CONF" > "${WIFI_CONF}.tmp" && mv "${WIFI_CONF}.tmp" "$WIFI_CONF"
-    logger -p local0.info "[$KEY][postinst:$LINENO] $BOARD_TYPE detected, BUS_TYPE=$BUS_TYPE, MOD_PARA=$MOD_PARA"
+    logger -p local0.info "[$KEY][postinst:$LINENO] $BOARD_TYPE detected (soc_id=$SOC_ID), BUS_TYPE=$BUS_TYPE"
   fi
 
   if [ -f /opt/wlan/config/sysctl.d/99-wifi-thermal.conf ]; then

@@ -13,15 +13,17 @@ from sUTILS import Logger, _EXTRA_
 ETH_IFACE = "eth0"          # 유선 1:1
 IFACE = "mlan0"             # 무선 (게이트웨이 사용)
 
-# ETH_CLIENT_IP: wifi_init_conf.json의 global.ETH_CLIENT_IP에서 읽음
+# ETH_CLIENT_IP: wifi_init_conf.json의 wbridge.eth_client_ip에서 읽음
 # 설정이 없거나 빈 문자열이면 빠른 경로(quick_arp_probe) 건너뜀
 ETH_CLIENT_IP = None
 ETH_LINK_TIMEOUT = 3
 try:
     with open("/usr/local/etc/wifi_init_conf.json") as f:
         _cfg = json.load(f)
-    ETH_CLIENT_IP = _cfg.get("global", {}).get("ETH_CLIENT_IP") or None
-    ETH_LINK_TIMEOUT = int(_cfg.get("global", {}).get("eth_link_wait_sec", 3))
+    _wb = _cfg.get("wbridge", {})
+    _gl = _cfg.get("global", {})
+    ETH_CLIENT_IP = _wb.get("eth_client_ip") or _gl.get("ETH_CLIENT_IP") or None
+    ETH_LINK_TIMEOUT = int(_wb.get("eth_link_wait_sec", _gl.get("eth_link_wait_sec", 3)))
 except Exception:
     pass
 

@@ -1327,9 +1327,6 @@ def check_roam_conditions(station, roam_ap, trend):
 def main():
     global trend_tracker, ping_pong_preventer, adaptive_interval
 
-    # JSON 설정 로드
-    load_roaming_config(IFACE)
-
     # 초기화
     if ENABLE_PREDICTIVE_ROAM:
         trend_tracker = RSSITrendTracker()

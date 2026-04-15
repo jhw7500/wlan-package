@@ -51,20 +51,19 @@ _load_wbridge_thermal_json_defaults() {
         [ -z "${!key+set}" ] && export "$key=$val"
     done < <(jq -r '
         .wbridge |
-        "WBRIDGE_MODE_FORCE=\(.mode_force // 0)",
-        "WBRIDGE_THERMAL_STATE=\(.thermal_state // "ok")",
-        "WBRIDGE_THERMAL_AUTO_RESTART=\(.thermal.auto_restart // 1)",
-        "WBRIDGE_THERMAL_TIMER_ENABLE=\(.thermal.timer_enable // 0)",
+        "WBRIDGE_MODE_FORCE=\(if .thermal.mode_force then 1 else 0 end)",
+        "WBRIDGE_THERMAL_AUTO_RESTART=\(if .thermal.auto_restart then 1 else 0 end)",
+        "WBRIDGE_THERMAL_TIMER_ENABLE=\(if .thermal.timer_enable then 1 else 0 end)",
         "WBRIDGE_THERMAL_RESTART_COOLDOWN_SEC=\(.thermal.restart_cooldown_sec // 60)",
         "WBRIDGE_THERMAL_BRIDGE_UNITS=\(.thermal.bridge_units // "wifi_bridge@mlan0.service wifi_bridge@mlan1.service")",
-        "WBRIDGE_THERMAL_WARM_CPU_ENTER=\(.thermal.warm_cpu_enter // 80)",
-        "WBRIDGE_THERMAL_HOT_CPU_ENTER=\(.thermal.hot_cpu_enter // 90)",
-        "WBRIDGE_THERMAL_WARM_CPU_EXIT=\(.thermal.warm_cpu_exit // 75)",
-        "WBRIDGE_THERMAL_HOT_CPU_EXIT=\(.thermal.hot_cpu_exit // 85)",
-        "WBRIDGE_THERMAL_WARM_WIFI_ENTER=\(.thermal.warm_wifi_enter // 70)",
-        "WBRIDGE_THERMAL_HOT_WIFI_ENTER=\(.thermal.hot_wifi_enter // 80)",
-        "WBRIDGE_THERMAL_WARM_WIFI_EXIT=\(.thermal.warm_wifi_exit // 65)",
-        "WBRIDGE_THERMAL_HOT_WIFI_EXIT=\(.thermal.hot_wifi_exit // 75)"
+        "WBRIDGE_THERMAL_WARM_CPU_ENTER=\(.thermal.thresholds.warm_cpu_enter // 80)",
+        "WBRIDGE_THERMAL_HOT_CPU_ENTER=\(.thermal.thresholds.hot_cpu_enter // 90)",
+        "WBRIDGE_THERMAL_WARM_CPU_EXIT=\(.thermal.thresholds.warm_cpu_exit // 75)",
+        "WBRIDGE_THERMAL_HOT_CPU_EXIT=\(.thermal.thresholds.hot_cpu_exit // 85)",
+        "WBRIDGE_THERMAL_WARM_WIFI_ENTER=\(.thermal.thresholds.warm_wifi_enter // 70)",
+        "WBRIDGE_THERMAL_HOT_WIFI_ENTER=\(.thermal.thresholds.hot_wifi_enter // 80)",
+        "WBRIDGE_THERMAL_WARM_WIFI_EXIT=\(.thermal.thresholds.warm_wifi_exit // 65)",
+        "WBRIDGE_THERMAL_HOT_WIFI_EXIT=\(.thermal.thresholds.hot_wifi_exit // 75)"
     ' "$CONF_JSON" 2>/dev/null)
 }
 _load_wbridge_thermal_json_defaults
