@@ -323,7 +323,23 @@ json_merge() {
 
   # NXP WLAN tools
   ln -sf /opt/wlan/bin/iw /usr/local/bin/iw
-  ln -sf /opt/wlan/bin/mlanutl /usr/local/bin/mlanutl
+
+  # mlanutl: board-specific binary (imx8/imx93), fallback to legacy single binary
+  if [ "$BOARD_TYPE" = "imx93" ]; then
+    MLANUTL_SUFFIX="imx93"
+  else
+    MLANUTL_SUFFIX="imx8"
+  fi
+  if [ -f /opt/wlan/bin/mlanutl_${MLANUTL_SUFFIX} ]; then
+    ln -sf /opt/wlan/bin/mlanutl_${MLANUTL_SUFFIX} /usr/local/bin/mlanutl
+    logger -p local0.info "[$KEY][$tag:$LINENO] Linked mlanutl_${MLANUTL_SUFFIX} -> /usr/local/bin/mlanutl"
+  elif [ -f /opt/wlan/bin/mlanutl ]; then
+    ln -sf /opt/wlan/bin/mlanutl /usr/local/bin/mlanutl
+    logger -p local0.warn "[$KEY][$tag:$LINENO] mlanutl_${MLANUTL_SUFFIX} not found; fallback to legacy /opt/wlan/bin/mlanutl"
+  else
+    logger -p local0.err "[$KEY][$tag:$LINENO] No mlanutl binary found (tried mlanutl_${MLANUTL_SUFFIX} and legacy mlanutl)"
+  fi
+
   ln -sf /opt/wlan/bin/mlan2040coex /usr/local/bin/mlan2040coex
   ln -sf /opt/wlan/bin/mlanconfig /usr/local/bin/mlanconfig
   ln -sf /opt/wlan/bin/mlanevent.exe /usr/local/bin/mlanevent
