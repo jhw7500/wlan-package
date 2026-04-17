@@ -2,6 +2,7 @@
 Description=WiFi Periodic Roam Service for %i
 Requires=sys-subsystem-net-devices-%i.device
 After=sys-subsystem-net-devices-%i.device wifi_init.service
+PartOf=wifi_init.service
 
 [Service]
 ExecStart=/usr/local/scripts/wifi_periodic_roam.sh %i

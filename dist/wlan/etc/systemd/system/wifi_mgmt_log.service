@@ -1,6 +1,7 @@
 [Unit]
 Description=Flush mgmt_log ring buffer to file
 After=wifi_init.service
+PartOf=wifi_init.service
 
 [Service]
 Type=oneshot

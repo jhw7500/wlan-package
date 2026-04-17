@@ -2,6 +2,7 @@
 Description=Ping Monitor Service
 After=wifi_init.service
 Wants=wifi_init.service
+PartOf=wifi_init.service
 
 [Service]
 ExecStart=/bin/python3 /usr/local/tools/ping-monitor/ping_monitor.py -P

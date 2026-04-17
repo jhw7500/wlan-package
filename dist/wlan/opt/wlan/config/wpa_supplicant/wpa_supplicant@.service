@@ -1,7 +1,8 @@
 [Unit]
 Description=WPA supplicant daemon (interface-specific version)
 Requires=sys-subsystem-net-devices-%i.device
-After=sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-%i.device wifi_init.service
+PartOf=wifi_init.service
 
 # NetworkManager users will probably want the dbus version instead.
 
