@@ -1,7 +1,8 @@
 [Unit]
 Description=WiFi Background Scan Service for %i
 Requires=sys-subsystem-net-devices-%i.device
-After=sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-%i.device wifi_init.service
+PartOf=wifi_init.service
 
 [Service]
 ExecStart=/bin/python3 /usr/local/logger/wifi_bgscan.py %i

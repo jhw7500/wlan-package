@@ -2,6 +2,7 @@
 Description=WiFi Checker Service for %i
 DefaultDependencies=no
 After=wifi_init.service sysinit.target
+PartOf=wifi_init.service
 Conflicts=shutdown.target
 Before=shutdown.target
 

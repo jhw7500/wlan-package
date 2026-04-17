@@ -10,8 +10,9 @@ Before=shutdown.target
 Type=oneshot
 TimeoutStartSec=180
 ExecStart=/usr/local/scripts/wifi_init.sh
-ExecStop=systemctl stop wpa_supplicant@mlan0
-ExecStop=systemctl stop wpa_supplicant@mlan1
+# stop 시 자식 서비스(wpa_supplicant@*, wifi_event@*, wifi_bridge@*, wifi_checker@*,
+# wifi_periodic_roam@*, wifi_bgscan@*, wifi_roam@*, wifi_ping_monitor, wifi_mgmt_log)는
+# 각 unit의 PartOf=wifi_init.service 설정으로 자동 stop된다.
 RemainAfterExit=yes
 
 [Install]
