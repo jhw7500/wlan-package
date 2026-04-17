@@ -28,8 +28,15 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
     MAC_MODE=$(jq -r '.wbridge.mac_mode // .global.MAC_MODE // "default"' "$WIFI_INIT_CONF_JSON")
 fi
 
-# 커널 모듈 (imx8mm/imx93 공용)
-MLAN_KO="mlan.ko"; MOAL_KO="moal.ko"
+# 커널 모듈 (보드별 드라이버 선택)
+case "${BOARD_TYPE:-imx8mm}" in
+    imx93*)
+        MLAN_KO="mlan_imx93.ko"; MOAL_KO="moal_imx93.ko"
+        ;;
+    *)
+        MLAN_KO="mlan_imx8.ko"; MOAL_KO="moal_imx8.ko"
+        ;;
+esac
 MLAN_MOD="mlan"; MOAL_MOD="moal"
 
 
