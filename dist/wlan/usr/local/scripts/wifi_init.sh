@@ -455,30 +455,14 @@ apply_mcs_tier() {
     enabled=$(jq -r ".${iface}.mcs_tier.enabled // false" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
     [ "$enabled" = "true" ] || return 0
 
-    ht=$(jq -r ".${iface}.mcs_tier.ht // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-    vht=$(jq -r ".${iface}.mcs_tier.vht // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-    he=$(jq -r ".${iface}.mcs_tier.he // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    ht=$(jq -r ".${iface}.mcs_tier.ht // \"\"" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    vht=$(jq -r ".${iface}.mcs_tier.vht // \"\"" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    he=$(jq -r ".${iface}.mcs_tier.he // \"\"" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
 
-    if [ -n "$ht" ]; then
-        case "$ht" in
-            7|15) args="$args ht $ht" ;;
-            *) logger -p local0.err "[$tag:$LINENO] [$iface] mcs_tier: invalid ht=$ht (must be 7 or 15)"; return 1 ;;
-        esac
-    fi
-
-    if [ -n "$vht" ]; then
-        case "$vht" in
-            7|8|9) args="$args vht $vht" ;;
-            *) logger -p local0.err "[$tag:$LINENO] [$iface] mcs_tier: invalid vht=$vht (must be 7/8/9)"; return 1 ;;
-        esac
-    fi
-
-    if [ -n "$he" ]; then
-        case "$he" in
-            7|9|11) args="$args he $he" ;;
-            *) logger -p local0.err "[$tag:$LINENO] [$iface] mcs_tier: invalid he=$he (must be 7/9/11)"; return 1 ;;
-        esac
-    fi
+    # Empty string skips; non-empty passes through verbatim (e.g. "both 7" → "he both 7").
+    [ -n "$ht" ] && args="$args ht $ht"
+    [ -n "$vht" ] && args="$args vht $vht"
+    [ -n "$he" ] && args="$args he $he"
 
     if [ -z "$args" ]; then
         logger -p local0.warn "[$tag:$LINENO] [$iface] mcs_tier: enabled but no tier specified"
@@ -515,14 +499,13 @@ apply_iface_radio_defaults() {
     logger -p local0.info "[$tag:$LINENO] [$iface] reassoctrl enable"
     mlanutl "$iface" reassoctrl 1 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] reassoctrl failed"
 
-    # Apply rate_adapt_cfg from global config (must be set before association)
-    local ra_mode ra_low ra_high ra_interval
-    ra_mode=$(jq -r '.global.rate_adapt.mode // empty' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    # Apply rate_adapt_cfg (per-iface override > global, must be set before association)
+    local ra_mode ra_low ra_high ra_interval ra_interval_ms
+    ra_mode=$(jq -r ".${iface}.rate_adapt.mode // .global.rate_adapt.mode // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
     if [ -n "$ra_mode" ]; then
-        ra_low=$(jq -r '.global.rate_adapt.low_thresh // 255' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-        ra_high=$(jq -r '.global.rate_adapt.high_thresh // 255' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-        local ra_interval_ms
-        ra_interval_ms=$(jq -r '.global.rate_adapt.interval_ms // 100' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+        ra_low=$(jq -r ".${iface}.rate_adapt.low_thresh // .global.rate_adapt.low_thresh // 255" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+        ra_high=$(jq -r ".${iface}.rate_adapt.high_thresh // .global.rate_adapt.high_thresh // 255" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+        ra_interval_ms=$(jq -r ".${iface}.rate_adapt.interval_ms // .global.rate_adapt.interval_ms // 100" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
         ra_interval=$((ra_interval_ms / 10))
         sleep 0.2
         logger -p local0.info "[$tag:$LINENO] [$iface] rate_adapt_cfg $ra_mode $ra_low $ra_high $ra_interval (${ra_interval_ms}ms)"
@@ -722,11 +705,12 @@ if command -v systemctl >/dev/null 2>&1; then
     done
 
     if [ "$wifi_manager_active" = "false" ]; then
-        if [ "$BRIDGE_ENABLED" = "true" ]; then
-            logger -p local0.info "[$tag:$LINENO] No wifi_manager service; starting wpa_supplicant@$BRIDGE_IFACE"
-            systemctl start --no-block "wpa_supplicant@${BRIDGE_IFACE}" 2>/dev/null || \
-                logger -p local0.err "[$tag:$LINENO] Failed to start wpa_supplicant@$BRIDGE_IFACE"
-        fi
+        apply_iface_radio_defaults "mlan0" "$MLAN0_ENABLED"
+        apply_iface_radio_defaults "mlan1" "$MLAN1_ENABLED"
+
+        logger -p local0.info "[$tag:$LINENO] No wifi_manager service; starting wpa_supplicant@$BRIDGE_IFACE"
+        systemctl start --no-block "wpa_supplicant@${BRIDGE_IFACE}" 2>/dev/null || \
+            logger -p local0.err "[$tag:$LINENO] Failed to start wpa_supplicant@$BRIDGE_IFACE"
     fi
 
     # 기능별 서비스 제어 통합 함수
@@ -762,9 +746,35 @@ if command -v systemctl >/dev/null 2>&1; then
     control_feature_service "$BRIDGE_IFACE"    "periodic_roam.enabled" "wifi_periodic_roam"
     control_feature_service "$SECONDARY_IFACE" "periodic_roam.enabled" "wifi_periodic_roam"
 
-    # wifi_event 서비스 제어 (JSON on_connect.enabled 기반)
-    control_feature_service "$BRIDGE_IFACE"    "on_connect.enabled" "wifi_event"
-    control_feature_service "$SECONDARY_IFACE" "on_connect.enabled" "wifi_event"
+    # wifi_event 서비스 제어 (on_connect.enabled 또는 mcs_tier.enabled 중 하나라도 true면 실행)
+    control_wifi_event_service() {
+        local iface="$1"
+        local oc_en mcs_en
+
+        if ! wifi_init_iface_is_enabled "$iface" "true"; then
+            logger -p local0.info "[$tag:$LINENO] [$iface] disabled → stop+disable wifi_event@$iface"
+            systemctl stop "wifi_event@${iface}.service" 2>/dev/null || true
+            systemctl disable "wifi_event@${iface}.service" 2>/dev/null || true
+            return 0
+        fi
+
+        oc_en=$(jq -r ".${iface}.on_connect.enabled // false" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+        oc_en=$(wifi_init_normalize_bool "$oc_en" "false")
+        mcs_en=$(jq -r ".${iface}.mcs_tier.enabled // false" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+        mcs_en=$(wifi_init_normalize_bool "$mcs_en" "false")
+
+        if [ "$oc_en" = "true" ] || [ "$mcs_en" = "true" ]; then
+            logger -p local0.info "[$tag:$LINENO] [$iface] wifi_event needed (on_connect=$oc_en, mcs_tier=$mcs_en) → enable+start"
+            systemctl enable "wifi_event@${iface}.service" 2>/dev/null || true
+            systemctl start --no-block "wifi_event@${iface}.service" 2>/dev/null || true
+        else
+            logger -p local0.info "[$tag:$LINENO] [$iface] wifi_event not needed (both disabled) → stop+disable"
+            systemctl stop "wifi_event@${iface}.service" 2>/dev/null || true
+            systemctl disable "wifi_event@${iface}.service" 2>/dev/null || true
+        fi
+    }
+    control_wifi_event_service "$BRIDGE_IFACE"
+    control_wifi_event_service "$SECONDARY_IFACE"
 
     # ping_monitor 서비스 제어 (JSON global.ping_monitor.enabled 기반)
     ping_monitor_enabled=$(jq -r '.global.ping_monitor.enabled // false' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
