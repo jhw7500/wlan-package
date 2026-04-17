@@ -17,7 +17,7 @@ SUMMARY_PATH = "/var/log/cantops/summary/summary.log"
 SUMMARY_LINES = 5
 PING_LINES = 5
 ROAM_DISPLAY_SEC = 5
-CONF_PATH = "/opt/wlan/config/wifi_init_conf.json"
+CONF_PATH = "/usr/local/etc/wifi_init_conf.json"
 
 def signal_handler(signum, frame):
     global RUNNING
@@ -265,9 +265,109 @@ class RoamTracker:
         return f"{self.roam_from} -> {self.roam_to}  ({int(elapsed)}s ago)"
 
 
+class InterruptTracker:
+    """플랫폼별 WLAN/ETH 인터럽트 추적 (delta/s + avg/s)"""
+
+    # BUS_TYPE → WLAN IRQ 패턴, BOARD_TYPE → ETH IRQ 패턴
+    WLAN_MAP = {"sdio": "mmc2", "pcie": "mrvl_pcie_msi"}
+    ETH_MAP = {"imx93": "eth0", "imx8mm": "30be0000.ethernet"}
+
+    def __init__(self, bus_type, board_type, interval=1.0):
+        self.wlan_name = self.WLAN_MAP.get(bus_type, "mmc2")
+        self.eth_name = self.ETH_MAP.get(board_type, "eth0")
+        self._num_cpus = self._get_num_cpus()
+        self._interval = interval
+        self._eth_lines = self._count_irq_lines(self.eth_name)
+        # WLAN
+        self.start_wlan = self._read_irq_all(self.wlan_name)
+        self.prev_wlan = self.start_wlan
+        self.delta_wlan = 0
+        self.avg_wlan = 0
+        # ETH data (1st line)
+        self.start_eth_data = self._read_irq_nth(self.eth_name, 0)
+        self.prev_eth_data = self.start_eth_data
+        self.delta_eth_data = 0
+        self.avg_eth_data = 0
+        # ETH err (2nd line, if exists)
+        self.start_eth_err = self._read_irq_nth(self.eth_name, 1) if self._eth_lines >= 2 else 0
+        self.prev_eth_err = self.start_eth_err
+        self.delta_eth_err = 0
+        self.start_time = time.time()
+
+    @staticmethod
+    def _get_num_cpus():
+        try:
+            with open("/proc/interrupts", "r") as f:
+                return len(f.readline().split())
+        except Exception:
+            return 4
+
+    def _get_matching_lines(self, name):
+        """name에 매칭되는 모든 라인 반환"""
+        lines = []
+        try:
+            with open("/proc/interrupts", "r") as f:
+                for line in f:
+                    if name in line:
+                        lines.append(line)
+        except Exception:
+            pass
+        return lines
+
+    def _sum_line(self, line):
+        """한 줄의 CPU 카운트 합산"""
+        total = 0
+        parts = line.split()
+        for i in range(1, self._num_cpus + 1):
+            if i < len(parts) and parts[i].isdigit():
+                total += int(parts[i])
+        return total
+
+    def _read_irq_all(self, name):
+        """매칭되는 모든 라인의 CPU 카운트 합산"""
+        return sum(self._sum_line(l) for l in self._get_matching_lines(name))
+
+    def _read_irq_nth(self, name, n):
+        """매칭되는 N번째(0-based) 라인의 CPU 카운트"""
+        lines = self._get_matching_lines(name)
+        if n < len(lines):
+            return self._sum_line(lines[n])
+        return 0
+
+    def _count_irq_lines(self, name):
+        return len(self._get_matching_lines(name))
+
+    def update(self):
+        cur_wlan = self._read_irq_all(self.wlan_name)
+        cur_eth_data = self._read_irq_nth(self.eth_name, 0)
+        cur_eth_err = self._read_irq_nth(self.eth_name, 1) if self._eth_lines >= 2 else 0
+        # 카운터 리셋 감지 (드라이버 재로드 등)
+        if cur_wlan < self.prev_wlan or cur_eth_data < self.prev_eth_data:
+            self.start_wlan = cur_wlan
+            self.start_eth_data = cur_eth_data
+            self.start_eth_err = cur_eth_err
+            self.start_time = time.time()
+            self.delta_wlan = 0
+            self.delta_eth_data = 0
+            self.delta_eth_err = 0
+            self.avg_wlan = 0
+            self.avg_eth_data = 0
+        else:
+            self.delta_wlan = int((cur_wlan - self.prev_wlan) / self._interval)
+            self.delta_eth_data = int((cur_eth_data - self.prev_eth_data) / self._interval)
+            self.delta_eth_err = int((cur_eth_err - self.prev_eth_err) / self._interval)
+            elapsed = int(time.time() - self.start_time)
+            if elapsed > 0:
+                self.avg_wlan = (cur_wlan - self.start_wlan) // elapsed
+                self.avg_eth_data = (cur_eth_data - self.start_eth_data) // elapsed
+        self.prev_wlan = cur_wlan
+        self.prev_eth_data = cur_eth_data
+        self.prev_eth_err = cur_eth_err
+
+
 # ── 화면 그리기 ────────────────────────────────────────────────
 
-def draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, summary_path, ping_log_path=None, ip_gw=None):
+def draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, summary_path, ping_log_path=None, ip_gw=None, irq_tracker=None, start_time=None):
     """Compact 모드: 최소 라인으로 핵심 WiFi 상태 표시"""
     stdscr.clear()
     max_y, max_x = stdscr.getmaxyx()
@@ -290,8 +390,13 @@ def draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, summary_path, p
     ap_addr = link.get("address", "-")
 
     # 헤더
+    runtime_str = ""
+    if start_time:
+        elapsed = int(time.time() - start_time)
+        h, m, s = elapsed // 3600, (elapsed % 3600) // 60, elapsed % 60
+        runtime_str = f"  RT:{h:02d}:{m:02d}:{s:02d}"
     safe_addstr(y, 1, "Compact WiFi Monitor", curses.A_BOLD)
-    safe_addstr(y, 23, date_str)
+    safe_addstr(y, 23, date_str + runtime_str)
     y += 1
     safe_addstr(y, 1, sep)
     y += 1
@@ -352,6 +457,15 @@ def draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, summary_path, p
         mode_str = f"{bs['effective']} (req:{bs['requested']})"
     safe_addstr(y, 1, f"Bridge: {mode_str}  thermal:{bs['thermal']}  gov:{bs['governor']}")
     y += 1
+
+    # 인터럽트 (IRQ)
+    if irq_tracker:
+        t = irq_tracker
+        safe_addstr(y, 1,
+            f"IRQ: {t.wlan_name} {t.prev_wlan} +{t.delta_wlan}/s (avg:{t.avg_wlan})"
+            f"  {t.eth_name} {t.prev_eth_data} +{t.delta_eth_data}/s (avg:{t.avg_eth_data})"
+            f"  err:{t.prev_eth_err} +{t.delta_eth_err}/s")
+        y += 1
 
     safe_addstr(y, 1, sep)
     y += 1
@@ -487,6 +601,8 @@ def main(stdscr, file_path):
     roam_tracker = None
     ping_log_path = None
     _cached_ip_gw = None
+    irq_tracker = None
+    _start_time = time.time()
     if COMPACT_MODE:
         iface = "mlan0"
         parts = file_path.split("/")
@@ -500,6 +616,10 @@ def main(stdscr, file_path):
         if is_service_active("wifi_ping_monitor"):
             ping_log_path = f"/var/log/cantops/ping/{iface}/ping.log"
         _cached_ip_gw = get_ip_and_gw(iface)
+        conf = load_json(CONF_PATH)
+        bus_type = conf.get("global", {}).get("BUS_TYPE", "sdio")
+        board_type = conf.get("global", {}).get("BOARD_TYPE", "imx93")
+        irq_tracker = InterruptTracker(bus_type, board_type, interval=INTERVAL)
 
     while RUNNING:
         try:
@@ -507,11 +627,13 @@ def main(stdscr, file_path):
 
             if COMPACT_MODE:
                 wpa_tracker.update()
+                if irq_tracker:
+                    irq_tracker.update()
                 ap = None
                 if isinstance(data, dict):
                     ap = data.get("link", {}).get("address")
                 roam_tracker.check(ap)
-                draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, SUMMARY_PATH, ping_log_path, _cached_ip_gw)
+                draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, SUMMARY_PATH, ping_log_path, _cached_ip_gw, irq_tracker, _start_time)
             else:
                 draw_screen(stdscr, data)
 
