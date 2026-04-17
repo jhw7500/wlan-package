@@ -14,13 +14,6 @@
         "TXPWRLIMIT_PATH": "/lib/firmware/cts/txpwrlimit_cfg_9098.conf",
         "STANDARD": "",
         "DEV_CAP_MASK": "",
-        "rate_adapt": {
-            "_comment": "FW rate adaptation config. mode: 0=legacy, 1=SR. For SR: thresh 0xff=dynamic(noise-based), else static(success-rate%). interval_ms: eval period in ms. Must be set before association.",
-            "mode": 1,
-            "low_thresh": 50,
-            "high_thresh": 80,
-            "interval_ms": 100
-        },
         "ping_monitor": {
             "_comment": "wifi_ping_monitor.service enable/disable control",
             "enabled": false
@@ -209,6 +202,13 @@
         "enabled": true,
         "Frequency": "auto",
         "net_rx": 0,
+        "rate_adapt": {
+            "_comment": "FW rate adaptation config. mode: 0=legacy, 1=SR. For SR: thresh 0xff=dynamic(noise-based), else static(success-rate%). interval_ms: eval period in ms. Must be set before association.",
+            "mode": 1,
+            "low_thresh": 50,
+            "high_thresh": 80,
+            "interval_ms": 100
+        },
         "logger": {
             "link_interval_sec": 0.95,
             "stat_log_interval_sec": 1,
@@ -327,15 +327,15 @@
             "ROAM_SUCCESS_SLEEP": 5
         },
         "mcs_tier": {
-            "_comment": "MCS tier capability limit (mcstiercfg). Applied at boot before association. Survives roaming. ht: 7(1x1)|15(2x2), vht: 7|8|9 (MCS 0~N), he: 7|9|11 (MCS 0~N)",
+            "_comment": "MCS tier capability limit (mcstiercfg). Applied at boot before association AND reapplied on every connected event (wifi_event.sh). Values are strings passed verbatim after each prefix: ht/vht/he. Empty string skips the prefix. Examples: \"7\", \"15\", \"both 7\".",
             "enabled": false,
-            "ht": 7,
-            "vht": 7,
-            "he": 7
+            "ht": "7",
+            "vht": "7",
+            "he": "both 7"
         },
         "on_connect": {
             "_comment": "Commands to execute after AP connection/roaming (via wifi_event). Runs in order, failures are logged but do not stop execution.",
-            "enabled": false,
+            "enabled": true,
             "commands": []
         }
     },
@@ -345,6 +345,13 @@
         "enabled": true,
         "Frequency": "auto",
         "net_rx": 0,
+        "rate_adapt": {
+            "_comment": "FW rate adaptation config. mode: 0=legacy, 1=SR. For SR: thresh 0xff=dynamic(noise-based), else static(success-rate%). interval_ms: eval period in ms. Must be set before association.",
+            "mode": 1,
+            "low_thresh": 50,
+            "high_thresh": 80,
+            "interval_ms": 100
+        },
         "logger": {
             "link_interval_sec": 0.95,
             "stat_log_interval_sec": 1,
@@ -463,11 +470,11 @@
             "ROAM_SUCCESS_SLEEP": 5
         },
         "mcs_tier": {
-            "_comment": "MCS tier capability limit (mcstiercfg). Applied at boot before association. Survives roaming. ht: 7(1x1)|15(2x2), vht: 7|8|9 (MCS 0~N), he: 7|9|11 (MCS 0~N)",
+            "_comment": "MCS tier capability limit (mcstiercfg). Applied at boot before association AND reapplied on every connected event (wifi_event.sh). Values are strings passed verbatim after each prefix: ht/vht/he. Empty string skips the prefix. Examples: \"7\", \"15\", \"both 7\".",
             "enabled": false,
-            "ht": 7,
-            "vht": 7,
-            "he": 7
+            "ht": "",
+            "vht": "",
+            "he": ""
         },
         "on_connect": {
             "_comment": "Commands to execute after AP connection/roaming (via wifi_event). Runs in order, failures are logged but do not stop execution.",

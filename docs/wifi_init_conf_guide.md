@@ -36,6 +36,7 @@ wifi_init_conf.json
 ├── mlan0               # mlan0 인터페이스 설정
 │   ├── logger          #   mlan0 전용 로깅 override
 │   ├── net_rx          #   MGMT 프레임 로깅 (→ PCIE9098_0)
+│   ├── rate_adapt      #   FW rate adaptation override
 │   ├── periodic_roam   #   주기적 패시브 로밍
 │   ├── bgscan          #   백그라운드 스캔
 │   ├── roaming         #   로밍 알고리즘
@@ -44,6 +45,7 @@ wifi_init_conf.json
 └── mlan1               # mlan1 인터페이스 설정 (mlan0과 동일 구조)
     ├── logger          #   mlan1 전용 로깅 override
     ├── net_rx          #   MGMT 프레임 로깅 (→ PCIE9098_1)
+    ├── rate_adapt      #   FW rate adaptation override
     ├── periodic_roam   #   주기적 패시브 로밍
     ├── bgscan          #   백그라운드 스캔
     ├── roaming         #   로밍 알고리즘
@@ -79,6 +81,8 @@ wifi_init_conf.json
 | `low_thresh` | int | `50` | SR 모드 하한 임계값 (%). `0xff`=dynamic(noise-based) |
 | `high_thresh` | int | `80` | SR 모드 상한 임계값 (%) |
 | `interval_ms` | int | `100` | 평가 주기 (ms). association 전에 설정해야 함 |
+
+> **Per-iface override**: `mlan0.rate_adapt`, `mlan1.rate_adapt`에 동일 키를 두면 해당 인터페이스에만 override 적용된다. 우선순위: `mlanN.rate_adapt.<key>` > `global.rate_adapt.<key>` > 내장 기본값. 자세한 내용은 `11.x rate_adapt` 섹션 참조.
 
 ### 1.2 global.ping_monitor - Ping 모니터 서비스
 
@@ -541,22 +545,56 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 | `peer_count` | int | `5` | 워밍업 대상 피어 수 |
 | `peer_wait` | int | `1` | 피어 간 대기 (초) |
 
-### 11.5 mcs_tier - MCS Tier 능력 제한
+### 11.5 rate_adapt - FW Rate Adaptation (per-iface override)
 
 **사용 스크립트**: `wifi_init.sh`
+
+mlan0 / mlan1에 개별 적용. 블록이 없거나 특정 키가 없으면 `global.rate_adapt`로 fallback.
+
+| 키 | 타입 | 기본값 (현재 JSON) | 설명 |
+|----|------|------------------|------|
+| `mode` | int | `1` | `0`=legacy, `1`=SR(Success Rate) |
+| `low_thresh` | int | `50` | SR 하한 (%). `255`(0xff)=dynamic |
+| `high_thresh` | int | `80` | SR 상한 (%) |
+| `interval_ms` | int | `100` | 평가 주기 (ms) |
+
+**우선순위**: `.mlanN.rate_adapt.<key>` > `.global.rate_adapt.<key>` > 내장 기본값
+
+```json
+"mlan0": {
+    "rate_adapt": { "mode": 1, "low_thresh": 50, "high_thresh": 80, "interval_ms": 100 }
+},
+"mlan1": {
+    "rate_adapt": { "mode": 1, "low_thresh": 40, "high_thresh": 70, "interval_ms": 200 }
+}
+```
+
+> **적용 시점**: `apply_iface_radio_defaults()` 안에서 association 전에 호출. 각 iface 초기화 시 mlanutl rate_adapt_cfg로 전달.
+
+### 11.6 mcs_tier - MCS Tier 능력 제한
+
+**사용 스크립트**: `wifi_init.sh`, `wifi_event.sh`
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
 | `enabled` | bool | `false` | mcstiercfg 적용 활성화 |
-| `ht` | int | — | HT(11n) 최대 MCS. `7`(1x1) 또는 `15`(2x2) |
-| `vht` | int | — | VHT(11ac) 최대 MCS. `7`, `8`, `9` |
-| `he` | int | — | HE(11ax) 최대 MCS. `7`, `9`, `11` |
+| `ht` | string | `""` | HT(11n) 인자. 예: `"7"`(1x1), `"15"`(2x2). `""`이면 건너뜀 |
+| `vht` | string | `""` | VHT(11ac) 인자. 예: `"7"`, `"8"`, `"9"`. `""`이면 건너뜀 |
+| `he` | string | `""` | HE(11ax) 인자. 예: `"7"`, `"9"`, `"11"`, 또는 `"both 7"`. `""`이면 건너뜀 |
 
-**적용 시점**: 부팅 시 wpa_supplicant 시작 전 (association 전). 로밍해도 유지됨.
+**적용 시점**:
+1. **부팅 시** (`wifi_init.sh` → `apply_iface_radio_defaults`): association 전에 1회 적용
+2. **연결 이벤트 시** (`wifi_event.sh`): `iw event`의 `connected to` 감지 시마다 재적용 (로밍/재연결 포함)
+
 
 - `enabled: false`(기본)이면 mcstiercfg를 실행하지 않음 (FW 기본값 사용)
-- 개별 키(ht/vht/he)를 생략하면 해당 표준은 건너뜀
+- 각 키는 **문자열**로 관리. 빈 문자열(`""`)이면 해당 prefix를 명령에서 제외
+- 값 안의 토큰은 공백으로 구분되어 mcstiercfg 인자로 **그대로 전달**됨
+  - `he: "7"` → `mlanutl <iface> mcstiercfg he 7`
+  - `he: "both 7"` → `mlanutl <iface> mcstiercfg he both 7`
+- 유효성 검사를 하지 않으므로 mcstiercfg가 지원하는 문법은 자유롭게 사용 가능 (실패 시 에러 로깅만 수행)
 - 인터페이스별 독립 설정 가능 (mlan0과 mlan1에 다른 tier)
+- 하위호환: 기존 int 값(`"ht": 7`)도 문자열로 읽혀 동일하게 동작
 
 > **주의**: VHT는 FW 내부에 MCS 7 하한(floor)이 있어 tier 7이 사실상 최소값.
 > 상세 비교: `wlan-driver/docs/mcs-rate-control-comparison.md` 참조.
@@ -564,13 +602,13 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 ```json
 "mcs_tier": {
     "enabled": true,
-    "ht": 7,
-    "vht": 7,
-    "he": 7
+    "ht": "7",
+    "vht": "7",
+    "he": "both 7"
 }
 ```
 
-### 11.6 on_connect - AP 연결 후 명령 실행
+### 11.7 on_connect - AP 연결 후 명령 실행
 
 **사용 스크립트**: `wifi_event`
 
