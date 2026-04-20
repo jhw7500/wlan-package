@@ -159,20 +159,6 @@ if lsmod | grep -q "^${MOAL_MOD}\b" || lsmod | grep -q "^${MLAN_MOD}\b"; then
         fi
     done
 
-:<<'END'
-    # 의존 서비스 중지
-    for svc in wpa_supplicant@mlan0 wpa_supplicant@mlan1 \
-               wifi_bridge@mlan0 wifi_bridge@mlan1 \
-               wifi_checker@mlan0 wifi_checker@mlan1 \
-               wifi_event@mlan0 wifi_event@mlan1 \
-               wifi_roam@mlan0 wifi_roam@mlan1 \
-               wifi_bgscan@mlan0 wifi_bgscan@mlan1 \
-               wifi_periodic_roam@mlan0 wifi_periodic_roam@mlan1 \
-               wifi_ping_monitor; do
-        systemctl stop "$svc" 2>/dev/null || true
-    done
-END
-
     # mlan0/mlan1 인터페이스를 사용하는 나머지 프로세스 종료
     for iface in mlan0 mlan1; do
         if [ -d "/sys/class/net/$iface" ]; then
@@ -518,52 +504,6 @@ apply_iface_radio_defaults() {
         logger -p local0.err "[$tag:$LINENO] [$iface] apply_mcs_tier failed (continuing)"
 }
 
-apply_iface_bandcfg() {
-    local iface="$1"
-    local enabled="$2"
-    local freq="$3"
-    local freq_lc
-    local bandcfg_5g
-    local bandcfg_24g
-    local bandcfg_auto
-
-    if [ "$enabled" != "true" ]; then
-        logger -p local0.info "[$tag:$LINENO] [$iface] disabled; skip bandcfg"
-        return 0
-    fi
-
-    freq_lc=$(printf '%s' "$freq" | tr '[:upper:]' '[:lower:]')
-    case "$iface" in
-        mlan0)
-            bandcfg_5g="0x254"
-            bandcfg_24g="0x10b"
-            bandcfg_auto="0x35f"
-            ;;
-        mlan1)
-            bandcfg_5g="0x54"
-            bandcfg_24g="0x0b"
-            bandcfg_auto="0x5f"
-            ;;
-        *)
-            logger -p local0.err "[$tag:$LINENO] [$iface] unsupported iface for bandcfg"
-            return 1
-            ;;
-    esac
-
-    if [ "$freq_lc" = "5ghz" ]; then
-        logger -p local0.info "[$tag:$LINENO] [$iface] freq 5GHz"
-        mlanutl "$iface" bandcfg "$bandcfg_5g" > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] bandcfg 5GHz failed"
-    elif [ "$freq_lc" = "2.4ghz" ]; then
-        logger -p local0.info "[$tag:$LINENO] [$iface] freq 2.4GHz"
-        mlanutl "$iface" bandcfg "$bandcfg_24g" > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] bandcfg 2.4GHz failed"
-    elif [ "$freq_lc" = "auto" ]; then
-        logger -p local0.info "[$tag:$LINENO] [$iface] freq Auto"
-        mlanutl "$iface" bandcfg "$bandcfg_auto" > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] bandcfg auto failed"
-    else
-        logger -p local0.err "[$tag:$LINENO] [$iface] freq not available : $freq"
-    fi
-}
-
 # BRIDGE: MAC_MODE에 따라 resolve
 # SECONDARY: base만
 if [ "$BRIDGE_IFACE" = "mlan0" ]; then
@@ -610,28 +550,9 @@ else
     logger -p local0.info "[$tag:$LINENO] [$SECONDARY_IFACE] disabled; skip secondary MAC update"
 fi
 
-# --- wifi_bridge 제어: base MAC 사용 시 bridge 비활성 ---
-control_bridge_service() {
-    local iface=$1
-    local mac_source=$2
-
-    if ! wifi_init_iface_is_enabled "$iface" "true"; then
-        logger -p local0.info "[$tag:$LINENO] [$iface] disabled → stop+disable wifi_bridge@$iface"
-        systemctl stop "wifi_bridge@${iface}.service" 2>/dev/null || true
-        systemctl disable "wifi_bridge@${iface}.service" 2>/dev/null || true
-        return 0
-    fi
-
-    if [ "$mac_source" = "base" ] || [ "$mac_source" = "none" ]; then
-        logger -p local0.info "[$tag:$LINENO] [$iface] mac_source=$mac_source → stop+disable wifi_bridge@$iface"
-        systemctl stop "wifi_bridge@${iface}.service" 2>/dev/null || true
-        systemctl disable "wifi_bridge@${iface}.service" 2>/dev/null || true
-    else
-        logger -p local0.info "[$tag:$LINENO] [$iface] mac_source=$mac_source → enable+start wifi_bridge@$iface"
-        systemctl enable "wifi_bridge@${iface}.service" 2>/dev/null || true
-        systemctl start "wifi_bridge@${iface}.service" 2>/dev/null || true
-    fi
-}
+# wifi_bridge / wifi_event / wifi_periodic_roam / wifi_ping_monitor / wifi_mgmt_log.timer 등
+# 자식 unit의 enable/disable은 운영자의 systemctl 결정이 진실이며, wifi_init.service의
+# ExecStartPost=/usr/local/scripts/wifi_services.sh start 가 enable된 것만 일괄 start한다.
 
 # --- eth0: base ---
 ETH0_MAC=$(read_mac_from_json "base" "eth0" "base") || ETH0_MAC=""
@@ -658,16 +579,8 @@ if [ "${MFG_MODE:-0}" == "1" ]; then
     exit 1
 fi
 
-# insmod 후 wpa_supplicant가 자동 시작되었을 수 있음 → 라디오 설정 전에 중지
-#systemctl stop wpa_supplicant@mlan0 2>/dev/null || true
-#systemctl stop wpa_supplicant@mlan1 2>/dev/null || true
-
 apply_iface_txpwrlimit "mlan0" "$MLAN0_ENABLED"
 apply_iface_txpwrlimit "mlan1" "$MLAN1_ENABLED"
-#apply_iface_radio_defaults "mlan0" "$MLAN0_ENABLED"
-#apply_iface_radio_defaults "mlan1" "$MLAN1_ENABLED"
-#apply_iface_bandcfg "mlan0" "$MLAN0_ENABLED" "$MLAN0_FREQ"
-#apply_iface_bandcfg "mlan1" "$MLAN1_ENABLED" "$MLAN1_FREQ"
 
 # .network 파일의 Address=에 서브넷이 없으면 /24 보정
 for nf in /etc/systemd/network/*.network; do
@@ -681,20 +594,30 @@ done
 if command -v systemctl >/dev/null 2>&1; then
     systemctl restart systemd-networkd
 
-    # wifi_bridge 제어는 insmod + networkd restart 이후에 실행
-    # (mlan0/mlan1 디바이스가 존재해야 BindsTo 조건 충족)
-    if [ "$BRIDGE_NONE" = "true" ]; then
-        logger -p local0.info "[$tag:$LINENO] BRIDGE_IFACE=none → stop+disable all wifi_bridge services"
-        systemctl stop "wifi_bridge@mlan0.service" 2>/dev/null || true
-        systemctl disable "wifi_bridge@mlan0.service" 2>/dev/null || true
-        systemctl stop "wifi_bridge@mlan1.service" 2>/dev/null || true
-        systemctl disable "wifi_bridge@mlan1.service" 2>/dev/null || true
-    else
-        control_bridge_service "$BRIDGE_IFACE" "$BRIDGE_MAC_SOURCE"
-        control_bridge_service "$SECONDARY_IFACE" "$SECONDARY_MAC_SOURCE"
-    fi
+    # mlan 인터페이스가 udev로 생성될 때까지 대기 (insmod 직후 race 방지).
+    # /sys/class/net/mlanN가 나타나야 mlanutl 호출이 정상 작동.
+    wait_iface() {
+        local iface="$1" enabled="$2" deadline=$((SECONDS + 5))
+        [ "$enabled" = "true" ] || return 0
+        while [ $SECONDS -lt $deadline ]; do
+            [ -d "/sys/class/net/$iface" ] && return 0
+            sleep 0.2
+        done
+        logger -p local0.warn "[$tag:$LINENO] [$iface] device not present after 5s"
+        return 1
+    }
+    wait_iface "mlan0" "$MLAN0_ENABLED" || true
+    wait_iface "mlan1" "$MLAN1_ENABLED" || true
 
-    # wifi_manager 서비스가 없거나 disabled이면 직접 wpa_supplicant 시작
+    # 모듈 로드 + networkd가 mlan 인터페이스를 생성한 직후, association 전에 라디오 기본값 적용.
+    # 그 외 자식 데몬은 ExecStartPost(/usr/local/scripts/wifi_services.sh)가 systemctl enable
+    # 상태에 따라 일괄 start한다.
+    apply_iface_radio_defaults "mlan0" "$MLAN0_ENABLED"
+    apply_iface_radio_defaults "mlan1" "$MLAN1_ENABLED"
+
+    # wifi_manager 계열이 enable되어 있으면 wpa_supplicant는 wifi_manager가 자체 관리하므로
+    # wifi_init이 별도로 시작하지 않는다. 그렇지 않으면 BRIDGE_IFACE의 wpa_supplicant를
+    # 직접 start하여 association이 ExecStartPost 시점 이전에 시작되도록 한다.
     wifi_manager_active=false
     for svc in wifi_manager wifi-manager; do
         if systemctl is-enabled "$svc" >/dev/null 2>&1; then
@@ -703,104 +626,9 @@ if command -v systemctl >/dev/null 2>&1; then
             break
         fi
     done
-
     if [ "$wifi_manager_active" = "false" ]; then
-        apply_iface_radio_defaults "mlan0" "$MLAN0_ENABLED"
-        apply_iface_radio_defaults "mlan1" "$MLAN1_ENABLED"
-
         logger -p local0.info "[$tag:$LINENO] No wifi_manager service; starting wpa_supplicant@$BRIDGE_IFACE"
         systemctl start --no-block "wpa_supplicant@${BRIDGE_IFACE}" 2>/dev/null || \
             logger -p local0.err "[$tag:$LINENO] Failed to start wpa_supplicant@$BRIDGE_IFACE"
-    fi
-
-    # 기능별 서비스 제어 통합 함수
-    # 인자: iface, json_key (e.g. "periodic_roam.enabled"), service_name (e.g. "wifi_periodic_roam")
-    control_feature_service() {
-        local iface="$1"
-        local json_key="$2"
-        local service_name="$3"
-        local enabled_val
-
-        if ! wifi_init_iface_is_enabled "$iface" "true"; then
-            logger -p local0.info "[$tag:$LINENO] [$iface] disabled → stop+disable ${service_name}@$iface"
-            systemctl stop "${service_name}@${iface}.service" 2>/dev/null || true
-            systemctl disable "${service_name}@${iface}.service" 2>/dev/null || true
-            return 0
-        fi
-
-        enabled_val=$(jq -r ".${iface}.${json_key} // false" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-        enabled_val=$(wifi_init_normalize_bool "$enabled_val" "false")
-
-        if [ "$enabled_val" = "true" ]; then
-            logger -p local0.info "[$tag:$LINENO] [$iface] ${json_key} enabled → enable+start ${service_name}@$iface"
-            systemctl enable "${service_name}@${iface}.service" 2>/dev/null || true
-            systemctl start --no-block "${service_name}@${iface}.service" 2>/dev/null || true
-        else
-            logger -p local0.info "[$tag:$LINENO] [$iface] ${json_key} disabled → stop+disable ${service_name}@$iface"
-            systemctl stop "${service_name}@${iface}.service" 2>/dev/null || true
-            systemctl disable "${service_name}@${iface}.service" 2>/dev/null || true
-        fi
-    }
-
-    # wifi_periodic_roam 서비스 제어 (JSON periodic_roam.enabled 기반)
-    control_feature_service "$BRIDGE_IFACE"    "periodic_roam.enabled" "wifi_periodic_roam"
-    control_feature_service "$SECONDARY_IFACE" "periodic_roam.enabled" "wifi_periodic_roam"
-
-    # wifi_event 서비스 제어 (on_connect.enabled 또는 mcs_tier.enabled 중 하나라도 true면 실행)
-    control_wifi_event_service() {
-        local iface="$1"
-        local oc_en mcs_en
-
-        if ! wifi_init_iface_is_enabled "$iface" "true"; then
-            logger -p local0.info "[$tag:$LINENO] [$iface] disabled → stop+disable wifi_event@$iface"
-            systemctl stop "wifi_event@${iface}.service" 2>/dev/null || true
-            systemctl disable "wifi_event@${iface}.service" 2>/dev/null || true
-            return 0
-        fi
-
-        oc_en=$(jq -r ".${iface}.on_connect.enabled // false" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-        oc_en=$(wifi_init_normalize_bool "$oc_en" "false")
-        mcs_en=$(jq -r ".${iface}.mcs_tier.enabled // false" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-        mcs_en=$(wifi_init_normalize_bool "$mcs_en" "false")
-
-        if [ "$oc_en" = "true" ] || [ "$mcs_en" = "true" ]; then
-            logger -p local0.info "[$tag:$LINENO] [$iface] wifi_event needed (on_connect=$oc_en, mcs_tier=$mcs_en) → enable+start"
-            systemctl enable "wifi_event@${iface}.service" 2>/dev/null || true
-            systemctl start --no-block "wifi_event@${iface}.service" 2>/dev/null || true
-        else
-            logger -p local0.info "[$tag:$LINENO] [$iface] wifi_event not needed (both disabled) → stop+disable"
-            systemctl stop "wifi_event@${iface}.service" 2>/dev/null || true
-            systemctl disable "wifi_event@${iface}.service" 2>/dev/null || true
-        fi
-    }
-    control_wifi_event_service "$BRIDGE_IFACE"
-    control_wifi_event_service "$SECONDARY_IFACE"
-
-    # ping_monitor 서비스 제어 (JSON global.ping_monitor.enabled 기반)
-    ping_monitor_enabled=$(jq -r '.global.ping_monitor.enabled // false' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-    ping_monitor_enabled=$(wifi_init_normalize_bool "$ping_monitor_enabled" "false")
-
-    if [ "$ping_monitor_enabled" = "true" ]; then
-        logger -p local0.info "[$tag:$LINENO] ping_monitor enabled → enable+start"
-        systemctl enable wifi_ping_monitor.service 2>/dev/null || true
-        systemctl start --no-block wifi_ping_monitor.service 2>/dev/null || true
-    else
-        logger -p local0.info "[$tag:$LINENO] ping_monitor disabled → stop+disable"
-        systemctl stop wifi_ping_monitor.service 2>/dev/null || true
-        systemctl disable wifi_ping_monitor.service 2>/dev/null || true
-    fi
-
-    # wifi_mgmt_log.timer 제어 (net_rx > 0이면 자동 활성화)
-    mlan0_net_rx=$(jq -r '.mlan0.net_rx // 0' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-    mlan1_net_rx=$(jq -r '.mlan1.net_rx // 0' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-
-    if [ "${mlan0_net_rx:-0}" -gt 0 ] 2>/dev/null || [ "${mlan1_net_rx:-0}" -gt 0 ] 2>/dev/null; then
-        logger -p local0.info "[$tag:$LINENO] net_rx active (mlan0=$mlan0_net_rx, mlan1=$mlan1_net_rx) → enable wifi_mgmt_log.timer"
-        systemctl enable wifi_mgmt_log.timer 2>/dev/null || true
-        systemctl start --no-block wifi_mgmt_log.timer 2>/dev/null || true
-    else
-        logger -p local0.info "[$tag:$LINENO] net_rx disabled → stop+disable wifi_mgmt_log.timer"
-        systemctl stop wifi_mgmt_log.timer 2>/dev/null || true
-        systemctl disable wifi_mgmt_log.timer 2>/dev/null || true
     fi
 fi
