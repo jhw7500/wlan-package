@@ -1,6 +1,11 @@
 #!/bin/bash
 tag=$(basename "$0")
-IFACE=$1
+IFACE="${1:-}"
+if [ -z "$IFACE" ]; then
+    echo "usage: $0 <iface>" >&2
+    logger -p local0.err "[$tag] usage: $0 <iface>"
+    exit 2
+fi
 
 # Defaults
 SWEEP_TIMEOUT=1
@@ -9,8 +14,8 @@ SWEEP_PARALLEL_LIMIT=50
 # Load from JSON config
 WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
 if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
-    SWEEP_TIMEOUT=$(jq -r '.arping.sweep_timeout_sec // 1' "$WIFI_INIT_CONF_JSON")
-    SWEEP_PARALLEL_LIMIT=$(jq -r '.arping.sweep_parallel_limit // 50' "$WIFI_INIT_CONF_JSON")
+    SWEEP_TIMEOUT=$(jq -r ".${IFACE}.arping.sweep_timeout_sec // 1" "$WIFI_INIT_CONF_JSON")
+    SWEEP_PARALLEL_LIMIT=$(jq -r ".${IFACE}.arping.sweep_parallel_limit // 50" "$WIFI_INIT_CONF_JSON")
 fi
 
 logger -p local0.info "[$tag:$LINENO] [$IFACE] arping_sweep start"
