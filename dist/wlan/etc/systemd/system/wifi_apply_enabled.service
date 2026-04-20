@@ -1,0 +1,17 @@
+[Unit]
+Description=Sync wifi *.enabled keys from JSON to systemd enable state on shutdown
+# 시스템 종료/리부트 직전에 ExecStop이 실행되도록 구성한다.
+# JSON 키 변경을 즉시 적용하려면 wifi_apply_enabled.sh를 수동으로 실행하면 된다.
+DefaultDependencies=no
+After=multi-user.target
+Before=shutdown.target reboot.target halt.target poweroff.target
+Conflicts=shutdown.target reboot.target halt.target poweroff.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+ExecStop=/usr/local/scripts/wifi_apply_enabled.sh
+
+[Install]
+WantedBy=multi-user.target

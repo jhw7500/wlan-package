@@ -187,8 +187,16 @@ customctl() {
   echo "[installer] Optimizing service configuration (batch processing)..."
   systemctl mask systemd-networkd-wait-online nfs-server proc-fs-nfsd.mount ovsdb-server avahi-daemon avahi-autoipd psplash systemd-journald-audit.socket netplan-ovs-cleanup || true
   systemctl disable --now dhcpcd openvswitch openvswitch-switch connman smb nmb avahi-daemon.socket containerd netdata collectd named systemd-resolved netserver wifi_checker@eth0 || true
-  systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer wifi_init wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 wifi_logger@mlan0 wifi_checker@mlan0 wifi_bgscan@mlan0 wifi_roam@mlan0 wifi_arping@mlan0 log-watchdog.timer serial-getty@ttyGS0.service || true
+  # 시스템 unit + wifi 진입점(wifi_init/wifi_apply_enabled) + 통제 외 wifi unit
+  # (wifi_logger 글로벌, wifi_led/wifi_logger eth0+mlan0)
+  systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer wifi_init wifi_apply_enabled wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 log-watchdog.timer serial-getty@ttyGS0.service || true
   systemctl start switchd wifi_led@eth0 serial-getty@ttyGS0.service || true
+
+  # wifi 자식 데몬 (wifi_logger@mlanN, wifi_checker@, wifi_bgscan@, wifi_roam@, wifi_arping@,
+  # wifi_periodic_roam@, wifi_event@, wifi_bridge@, wpa_supplicant@, wifi_ping_monitor,
+  # wifi_thermal_state.timer, wifi_mgmt_log.timer)는 wifi_init_conf.json의 *.enabled 키에
+  # 따라 wifi_apply_enabled.sh가 일괄 enable/disable한다.
+  /usr/local/scripts/wifi_apply_enabled.sh 2>/dev/null || true
 
   INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 10))
   dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')

@@ -5,13 +5,22 @@ After=local-fs.target sysinit.target
 Wants=local-fs.target
 Conflicts=shutdown.target
 Before=shutdown.target
+# rmmod/insmod 실패 등 ExecStart 실패 시 짧은 간격으로 재시도. burst를 넘으면 정지.
+StartLimitIntervalSec=600
+StartLimitBurst=3
 
 [Service]
 Type=oneshot
 TimeoutStartSec=180
+# ExecStart 실패(모듈 unload/load 실패 등)에서만 재시도. 정상 종료(success)는 재시도 안 함.
+Restart=on-failure
+RestartSec=10s
+# 1) JSON *.enabled → systemctl enable/disable 동기화 (비정상 종료 후에도 일관 보장).
+#    정상 reboot은 wifi_apply_enabled.service ExecStop도 동기화하므로 변경 없으면 idempotent (~100ms).
+ExecStartPre=/usr/local/scripts/wifi_apply_enabled.sh
+# 2) 모듈 로드 / 펌웨어 / MAC / 라디오 설정
 ExecStart=/usr/local/scripts/wifi_init.sh
-# 모듈 로드/펌웨어/MAC 설정이 끝난 뒤 enable된 자식 unit을 일괄 start한다.
-# 자식 unit은 PartOf=wifi_init.service로 stop 전파만 받으므로, start는 이 스크립트가 책임진다.
+# 3) enable된 자식 unit 일괄 start (stop은 자식 PartOf=wifi_init.service 자동 전파)
 ExecStartPost=/usr/local/scripts/wifi_services.sh start
 RemainAfterExit=yes
 
