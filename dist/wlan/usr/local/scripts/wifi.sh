@@ -251,7 +251,7 @@ show_info() {
                 local roam_th_2g roam_th_5g roam_diff roam_check
                 local pred_en load_en pingpong_en adaptive_en
 
-                enabled=$(echo "$iface_json" | jq -r '.enabled // true')
+                enabled=$(echo "$iface_json" | jq -r 'if .enabled == null then true else .enabled end')
                 freq=$(echo "$iface_json" | jq -r '.Frequency // "auto"')
                 net_rx=$(echo "$iface_json" | jq -r '.net_rx // 0')
                 bgscan_interval=$(echo "$iface_json" | jq -r '.bgscan.interval // 60')
@@ -259,10 +259,10 @@ show_info() {
                 roam_th_5g=$(echo "$iface_json" | jq -r '.roaming.DEFAULT_TH_5G // -75')
                 roam_diff=$(echo "$iface_json" | jq -r '.roaming.DIFF_TH // 10')
                 roam_check=$(echo "$iface_json" | jq -r '.roaming.CHECK_INTERVAL // 5')
-                pred_en=$(echo "$iface_json" | jq -r '.roaming.PREDICTIVE_ROAM.enable // true')
+                pred_en=$(echo "$iface_json" | jq -r 'if .roaming.PREDICTIVE_ROAM.enable == null then true else .roaming.PREDICTIVE_ROAM.enable end')
                 load_en=$(echo "$iface_json" | jq -r '.roaming.LOAD_BASED_ROAM.enable // false')
-                pingpong_en=$(echo "$iface_json" | jq -r '.roaming.PING_PONG_PREVENTION.enable // true')
-                adaptive_en=$(echo "$iface_json" | jq -r '.roaming.ADAPTIVE_INTERVAL.enable // true')
+                pingpong_en=$(echo "$iface_json" | jq -r 'if .roaming.PING_PONG_PREVENTION.enable == null then true else .roaming.PING_PONG_PREVENTION.enable end')
+                adaptive_en=$(echo "$iface_json" | jq -r 'if .roaming.ADAPTIVE_INTERVAL.enable == null then true else .roaming.ADAPTIVE_INTERVAL.enable end')
 
                 if [ "$only_iface" = "all" ]; then
                     echo "  [${iface}]"
