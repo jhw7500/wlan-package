@@ -1,7 +1,8 @@
 [Unit]
 Description=WiFi LED service %i
 Requires=sys-subsystem-net-devices-%i.device
-After=sys-subsystem-net-devices-%i.device local-fs.target sysinit.target
+After=sys-subsystem-net-devices-%i.device local-fs.target sysinit.target wifi_init.service
+PartOf=wifi_init.service
 
 [Service]
 Type=oneshot

@@ -1,7 +1,8 @@
 [Unit]
 Description=WBRIDGE thermal state updater
-After=local-fs.target
+After=local-fs.target wifi_init.service
 Wants=local-fs.target
+PartOf=wifi_init.service
 
 [Service]
 Type=oneshot

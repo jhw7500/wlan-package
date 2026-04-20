@@ -1,5 +1,6 @@
 [Unit]
 Description=Periodic WBRIDGE thermal state update
+PartOf=wifi_init.service
 
 [Timer]
 OnBootSec=45s

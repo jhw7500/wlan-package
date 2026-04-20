@@ -4,7 +4,8 @@ Description=WiFi Logging for Service %i
 #PartOf=wifi_logger.service
 BindsTo=sys-subsystem-net-devices-%i.device
 Requires=sys-subsystem-net-devices-%i.device
-After=sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-%i.device wifi_init.service
+PartOf=wifi_init.service
 
 [Service]
 ExecStart=/usr/local/scripts/wifi_logger_start.sh %i

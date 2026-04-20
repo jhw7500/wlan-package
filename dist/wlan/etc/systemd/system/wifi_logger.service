@@ -6,7 +6,8 @@ Description=WiFi Logger Controller
 #Before=sysinit.target
 #BindsTo=sys-subsystem-net-devices-mlan0.device
 Requires=sys-subsystem-net-devices-mlan0.device
-After=sys-subsystem-net-devices-mlan0.device
+After=sys-subsystem-net-devices-mlan0.device wifi_init.service
+PartOf=wifi_init.service
 
 [Service]
 Type=oneshot
