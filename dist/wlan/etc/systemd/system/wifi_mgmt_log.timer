@@ -1,5 +1,6 @@
 [Unit]
 Description=Periodic mgmt_log flush
+PartOf=wifi_init.service
 
 [Timer]
 OnBootSec=60s

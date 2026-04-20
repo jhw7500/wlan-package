@@ -2,7 +2,8 @@
 Description=Arping Service for %i
 BindsTo=sys-subsystem-net-devices-%i.device
 Requires=sys-subsystem-net-devices-%i.device
-After=sys-subsystem-net-devices-%i.device systemd-networkd.service
+After=sys-subsystem-net-devices-%i.device systemd-networkd.service wifi_init.service
+PartOf=wifi_init.service
 #After=network.target
 
 [Service]

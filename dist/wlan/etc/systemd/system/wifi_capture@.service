@@ -1,8 +1,9 @@
 [Unit]
 Description=WiFi Capture Service for %i
 BindsTo=sys-subsystem-net-devices-eth0.device sys-subsystem-net-devices-%i.device
-After=sys-subsystem-net-devices-eth0.device sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-eth0.device sys-subsystem-net-devices-%i.device wifi_init.service
 Wants=network-online.target
+PartOf=wifi_init.service
 #Conflicts=wifi_capture@mlan0.service wifi_capture@mlan1.service
 
 [Service]

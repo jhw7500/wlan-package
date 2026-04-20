@@ -2,7 +2,8 @@
 Description=WiFi Ping Service for %i
 #Conflicts=wifi_ping@mlan0.service wifi_ping@mlan1.service
 Requires=sys-subsystem-net-devices-%i.device
-After=sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-%i.device wifi_init.service
+PartOf=wifi_init.service
 
 [Service]
 Type=simple
