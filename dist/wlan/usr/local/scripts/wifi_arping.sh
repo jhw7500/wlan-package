@@ -1,7 +1,12 @@
 #!/bin/bash
-IFACE=$1
+IFACE="${1:-}"
 CONF_FILE=""
 tag=$(basename "$0")
+if [ -z "$IFACE" ]; then
+    echo "usage: $0 <iface>" >&2
+    logger -p local0.err "[$tag] usage: $0 <iface>"
+    exit 2
+fi
 FAILS=0
 F="local0"
 
@@ -14,10 +19,10 @@ ARPING_TIMEOUT=3
 # Load from JSON config
 WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
 if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
-    THRESHOLD=$(jq -r '.arping.threshold // 10' "$WIFI_INIT_CONF_JSON")
-    COOLDOWN=$(jq -r '.arping.cooldown_sec // 10' "$WIFI_INIT_CONF_JSON")
-    LOOPDELAY=$(jq -r '.arping.loop_delay_sec // 10' "$WIFI_INIT_CONF_JSON")
-    ARPING_TIMEOUT=$(jq -r '.arping.timeout_sec // 3' "$WIFI_INIT_CONF_JSON")
+    THRESHOLD=$(jq -r ".${IFACE}.arping.threshold // 10" "$WIFI_INIT_CONF_JSON")
+    COOLDOWN=$(jq -r ".${IFACE}.arping.cooldown_sec // 10" "$WIFI_INIT_CONF_JSON")
+    LOOPDELAY=$(jq -r ".${IFACE}.arping.loop_delay_sec // 10" "$WIFI_INIT_CONF_JSON")
+    ARPING_TIMEOUT=$(jq -r ".${IFACE}.arping.timeout_sec // 3" "$WIFI_INIT_CONF_JSON")
 fi
 
 # Environment variables override JSON (하위 호환)

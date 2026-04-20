@@ -4,8 +4,8 @@
         "This file contains global WiFi settings and per-interface roaming configurations"
     ],
     "global": {
-        "BOARD_TYPE": "imx8mm",
-        "BUS_TYPE": "pcie",
+        "BOARD_TYPE": "imx93",
+        "BUS_TYPE": "sdio",
         "BLUETOOTH": {
             "enable": false
         },
@@ -15,7 +15,7 @@
         "STANDARD": "",
         "DEV_CAP_MASK": "",
         "ping_monitor": {
-            "_comment": "wifi_ping_monitor.service enable/disable control",
+            "_comment": "wifi_ping_monitor.service enable/disable. wifi_apply_enabled.sh가 systemctl enable/disable로 동기화한다.",
             "enabled": false
         }
     },
@@ -113,19 +113,9 @@
                 "hot_wifi_enter": 80,
                 "warm_wifi_exit": 65,
                 "hot_wifi_exit": 75
-            }
+            },
+            "enabled": false
         }
-    },
-    "checker": {
-        "_comment": "wifi_checker / reboot policy configuration",
-        "LIMIT_CNT": 5,
-        "MAX_UNSTABLE_DURATION": 10,
-        "MAX_REBOOT_COUNT": 3,
-        "REBOOT_COOLDOWN_SEC": 300,
-        "MIN_UPTIME_SEC": 30,
-        "FAULT_REASSOC_CNT": 2,
-        "FAULT_RESTART_CNT": 4,
-        "FAULT_REBOOT_CNT": 6
     },
     "temperature": {
         "_comment": "wifi_logger_temp.sh temperature thresholds and cooldown",
@@ -143,15 +133,6 @@
         "check_interval_sec": 5,
         "emerg_count_threshold": 2
     },
-    "arping": {
-        "_comment": "wifi_arping.sh / wifi_arping_sweep.sh configuration",
-        "threshold": 10,
-        "cooldown_sec": 10,
-        "loop_delay_sec": 10,
-        "timeout_sec": 3,
-        "sweep_timeout_sec": 1,
-        "sweep_parallel_limit": 50
-    },
     "mmc": {
         "_comment": "wifi_logger_mmc.sh eMMC health monitoring",
         "check_interval_sec": 300
@@ -162,9 +143,9 @@
         "gain_voltage": 15.6552,
         "check_interval_sec": 5,
         "system_5v": {
-            "warn_a": 1.0,
+            "warn_a": 1,
             "error_a": 1.5,
-            "crit_a": 2.0,
+            "crit_a": 2,
             "emerg_a": 2.5
         },
         "system_24v": {
@@ -176,7 +157,7 @@
     },
     "monitor": {
         "_comment": "wifi_link_monitor.py display configuration. CLI args take priority over these values.",
-        "interval_sec": 1.0,
+        "interval_sec": 1,
         "summary_lines": 5,
         "ping_lines": 5,
         "roam_display_sec": 5
@@ -193,7 +174,7 @@
     "eth0": {
         "_comment": "eth0 interface configuration",
         "logger": {
-            "link_interval_sec": 1.0
+            "link_interval_sec": 1
         }
     },
     "mlan0": {
@@ -213,17 +194,19 @@
             "link_interval_sec": 0.95,
             "stat_log_interval_sec": 1,
             "stat_check_interval_sec": 1,
-            "stat_reset_interval_sec": 604800
+            "stat_reset_interval_sec": 604800,
+            "enabled": true
         },
         "periodic_roam": {
-            "_comment": "Periodic passive roam (roam 0) configuration. scan_before_roam: true=roam 전 스캔 수행(최신 RSSI 기반 판단), false=기존 ap.log 스캔 데이터 사용",
-            "enabled": false,
+            "_comment": "Periodic passive roam (roam 0) configuration. scan_before_roam: true=roam 전 스캔 수행(최신 RSSI 기반 판단), false=기존 ap.log 스캔 데이터 사용. 데몬 활성화는 systemctl enable wifi_periodic_roam@mlan0로 결정.",
             "interval": 60,
-            "scan_before_roam": true
+            "scan_before_roam": true,
+            "enabled": false
         },
         "bgscan": {
             "_comment": "Background scan configuration for mlan0",
-            "interval": 60
+            "interval": 60,
+            "enabled": false
         },
         "roaming": {
             "_comment": [
@@ -324,7 +307,8 @@
                 }
             },
             "SCAN_NO_RESULT_SLEEP": 3,
-            "ROAM_SUCCESS_SLEEP": 5
+            "ROAM_SUCCESS_SLEEP": 5,
+            "enabled": false
         },
         "mcs_tier": {
             "_comment": "MCS tier capability limit (mcstiercfg). Applied at boot before association AND reapplied on every connected event (wifi_event.sh). Values are strings passed verbatim after each prefix: ht/vht/he. Empty string skips the prefix. Examples: \"7\", \"15\", \"both 7\".",
@@ -337,6 +321,28 @@
             "_comment": "Commands to execute after AP connection/roaming (via wifi_event). Runs in order, failures are logged but do not stop execution.",
             "enabled": true,
             "commands": []
+        },
+        "checker": {
+            "_comment": "wifi_checker@mlan0 임계값 + 데몬 활성화",
+            "LIMIT_CNT": 5,
+            "MAX_UNSTABLE_DURATION": 10,
+            "MAX_REBOOT_COUNT": 3,
+            "REBOOT_COOLDOWN_SEC": 300,
+            "MIN_UPTIME_SEC": 30,
+            "FAULT_REASSOC_CNT": 2,
+            "FAULT_RESTART_CNT": 4,
+            "FAULT_REBOOT_CNT": 6,
+            "enabled": true
+        },
+        "arping": {
+            "_comment": "wifi_arping@mlan0 임계값 + 데몬 활성화",
+            "threshold": 10,
+            "cooldown_sec": 10,
+            "loop_delay_sec": 10,
+            "timeout_sec": 3,
+            "sweep_timeout_sec": 1,
+            "sweep_parallel_limit": 50,
+            "enabled": false
         }
     },
     "mlan1": {
@@ -356,17 +362,19 @@
             "link_interval_sec": 0.95,
             "stat_log_interval_sec": 1,
             "stat_check_interval_sec": 1,
-            "stat_reset_interval_sec": 604800
+            "stat_reset_interval_sec": 604800,
+            "enabled": false
         },
         "periodic_roam": {
-            "_comment": "Periodic passive roam (roam 0) configuration. scan_before_roam: true=roam 전 스캔 수행, false=기존 ap.log 사용",
-            "enabled": false,
+            "_comment": "Periodic passive roam (roam 0) configuration. scan_before_roam: true=roam 전 스캔 수행, false=기존 ap.log 사용. 데몬 활성화는 systemctl enable wifi_periodic_roam@mlan1로 결정.",
             "interval": 60,
-            "scan_before_roam": true
+            "scan_before_roam": true,
+            "enabled": false
         },
         "bgscan": {
             "_comment": "Background scan configuration for mlan1",
-            "interval": 60
+            "interval": 60,
+            "enabled": false
         },
         "roaming": {
             "_comment": [
@@ -467,7 +475,8 @@
                 }
             },
             "SCAN_NO_RESULT_SLEEP": 3,
-            "ROAM_SUCCESS_SLEEP": 5
+            "ROAM_SUCCESS_SLEEP": 5,
+            "enabled": false
         },
         "mcs_tier": {
             "_comment": "MCS tier capability limit (mcstiercfg). Applied at boot before association AND reapplied on every connected event (wifi_event.sh). Values are strings passed verbatim after each prefix: ht/vht/he. Empty string skips the prefix. Examples: \"7\", \"15\", \"both 7\".",
@@ -480,6 +489,28 @@
             "_comment": "Commands to execute after AP connection/roaming (via wifi_event). Runs in order, failures are logged but do not stop execution.",
             "enabled": false,
             "commands": []
+        },
+        "checker": {
+            "_comment": "wifi_checker@mlan1 임계값 + 데몬 활성화",
+            "LIMIT_CNT": 5,
+            "MAX_UNSTABLE_DURATION": 10,
+            "MAX_REBOOT_COUNT": 3,
+            "REBOOT_COOLDOWN_SEC": 300,
+            "MIN_UPTIME_SEC": 30,
+            "FAULT_REASSOC_CNT": 2,
+            "FAULT_RESTART_CNT": 4,
+            "FAULT_REBOOT_CNT": 6,
+            "enabled": false
+        },
+        "arping": {
+            "_comment": "wifi_arping@mlan1 임계값 + 데몬 활성화",
+            "threshold": 10,
+            "cooldown_sec": 10,
+            "loop_delay_sec": 10,
+            "timeout_sec": 3,
+            "sweep_timeout_sec": 1,
+            "sweep_parallel_limit": 50,
+            "enabled": false
         }
     }
 }
