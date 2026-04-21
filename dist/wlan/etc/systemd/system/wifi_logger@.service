@@ -15,5 +15,5 @@ RemainAfterExit=true
 User=root
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=wifi-stack.target
 
