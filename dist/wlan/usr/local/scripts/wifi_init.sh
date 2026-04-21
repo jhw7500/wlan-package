@@ -592,7 +592,18 @@ for nf in /etc/systemd/network/*.network; do
 done
 
 if command -v systemctl >/dev/null 2>&1; then
-    systemctl restart systemd-networkd
+    # .network 파일 변경 적용 — networkctl reload 가 지원되면 이를 사용하여
+    # eth0/시리얼 네트워크 재초기화를 회피한다 (로그인 경로 보호 목적).
+    # reload 실패 시에만 fallback 으로 systemd-networkd 전체 재시작.
+    if command -v networkctl >/dev/null 2>&1 && networkctl reload 2>/dev/null; then
+        logger -p local0.info "[$tag:$LINENO] networkctl reload ok (eth0 not disrupted)"
+        for _nif in mlan0 mlan1; do
+            [ -d "/sys/class/net/$_nif" ] && networkctl reconfigure "$_nif" 2>/dev/null || true
+        done
+    else
+        logger -p local0.warn "[$tag:$LINENO] networkctl reload unavailable → restart systemd-networkd"
+        systemctl restart systemd-networkd
+    fi
 
     # mlan 인터페이스가 udev로 생성될 때까지 대기 (insmod 직후 race 방지).
     # /sys/class/net/mlanN가 나타나야 mlanutl 호출이 정상 작동.
