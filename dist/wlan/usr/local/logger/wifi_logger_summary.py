@@ -94,6 +94,9 @@ if __name__ == "__main__":
     program_name = os.path.splitext(os.path.basename(sys.argv[0]))[0]
     logger = Logger(app_name="SUMM", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
 
-    logger.message("info", f"version : {VERSION}, LOG_FILE : {LOG_FILE}", _EXTRA_())
+    ensure_log_directory()
+    startup_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    with open(LOG_FILE, "a") as log:
+        log.write(f"{startup_ts} || version : {VERSION}, LOG_FILE : {LOG_FILE}\n")
 
     main()

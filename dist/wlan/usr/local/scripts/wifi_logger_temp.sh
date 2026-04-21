@@ -2,7 +2,7 @@
 tag=$(basename "$0")
 
 cleanup() {
-    logger -p local3.info "[$tag:$LINENO] stop"
+    #logger -p local3.info "[$tag:$LINENO] stop"
     exit 0
 }
 trap cleanup INT TERM
