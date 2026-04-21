@@ -2,7 +2,7 @@
 
 **Feature**: mcs-tier-config
 **Created**: 2026-04-06
-**Status**: Draft
+**Status**: Implemented (wifi_init.sh `apply_mcs_tier` + wifi_event.sh 연결 이벤트 재적용 — 참조: `docs/wifi_init_conf_guide.md` §11.6)
 
 ---
 

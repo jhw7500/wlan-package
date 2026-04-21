@@ -194,7 +194,7 @@ wifi_init_conf.json
 | `MAX_UNSTABLE_DURATION` | int | `10` | WiFi 불안정 허용 시간 (초). 초과 시 wpa_supplicant 재시작 |
 | `MAX_REBOOT_COUNT` | int | `3` | 쿨다운 윈도우 내 최대 reboot 횟수. 초과 시 루프 감지 |
 | `REBOOT_COOLDOWN_SEC` | int | `300` | reboot 카운트 리셋 윈도우 (초) |
-| `MIN_UPTIME_SEC` | int | `30` | 부팅 후 최소 대기 시간 (초). 이전에는 reboot 거부 |
+| `MIN_UPTIME_SEC` | int | `30` | **커널 부팅**(`/proc/uptime`) 후 최소 대기 시간 (초). 이전에는 reboot 거부. 데몬 uptime이 아님 — boot loop 방지용 |
 | `FAULT_REASSOC_CNT` | int | `2` | fault 누적 시 재연결(reassoc) 시도 횟수 임계값 |
 | `FAULT_RESTART_CNT` | int | `4` | fault 누적 시 wpa_supplicant 재시작 횟수 임계값 |
 | `FAULT_REBOOT_CNT` | int | `6` | fault 누적 시 reboot 실행 횟수 임계값 |
@@ -638,3 +638,73 @@ mlan0 / mlan1에 개별 적용. 블록이 없거나 특정 키가 없으면 `glo
 2. wifi_init_conf.json 값
 3. 스크립트 내장 기본값 (JSON 없거나 jq 미설치 시)
 ```
+
+---
+
+## 부록: 서비스 라이프사이클 및 Reboot 경로
+
+### 부팅 흐름
+
+```
+sysinit.target
+    ↓
+multi-user.target ──────→ 🟢 로그인 가능 (getty, sshd, serial-getty)
+    ↓ (After=, 비블로킹)
+wifi-stack.target  ────→ WiFi 스택 기동
+    ├─ wifi_init.service           (Type=oneshot, 모듈 로드)
+    ├─ wifi_apply_enabled.service  (JSON ↔ systemd enable 동기화)
+    └─ 자식 unit들 (wifi_checker@, wifi_logger@, wifi_bridge@ 등)
+```
+
+### 설계 원칙
+
+**1. 로그인 경로와 WiFi 스택의 분리**
+- `wifi-stack.target`에 `DefaultDependencies=no` + `After=multi-user.target` 설정
+- `multi-user.target` 도달(로그인 가능)이 WiFi 스택 기동을 기다리지 않음
+- `wifi_init` hang 중에도 시리얼/SSH 로그인 가능
+
+**2. wifi_checker 독립 실행**
+- `wifi_checker@.service`는 `After=sysinit.target`만 보유 (wifi_init 의존성 제거)
+- `wifi_init`이 모듈 로드 실패/D state hang이어도 `wifi_checker`가 독립적으로 실행되어 상태 감시
+- `PartOf=wifi_init.service`는 유지 → 수동 `systemctl stop wifi_init` 시 함께 stop (관리 편의)
+
+**3. 다중 reboot 경로 (Defense in depth)**
+
+| 경로 | 트리거 | 감지 시간 | 비고 |
+|------|--------|-----------|------|
+| **wifi_checker@mlan** (primary) | `/sys/class/net/mlanN` 부재 × `LIMIT_CNT` 초과 | 30~60초 | 가장 빠름 |
+| **wifi_init.service OnFailure** (backup) | `StartLimit` 소진 (180s × 3회) | 약 9.5분 | `wlan_emergency_reboot.service` 호출 |
+| **temperature 초과** | emerg 온도 연속 감지 | 설정에 따라 | §5 참조 |
+| **HW watchdog** (최종 안전망) | watchdog 데몬 kick 불가 | 30초 | iMX SoC 내장 |
+
+### wlan_reboot_policy.sh 3단계 폴백
+
+모든 reboot 요청은 `wlan_reboot_policy.sh`를 거쳐 uptime/cooldown 정책 검증 후 실행된다:
+
+```
+do_reboot():
+  1차: /sbin/reboot                    → 10초 대기 (graceful, systemd shutdown.target)
+  2차: /sbin/reboot -f                  → 5초 대기 (forced, reboot(2) 직접 호출)
+  3차: echo b > /proc/sysrq-trigger    (kernel emergency_restart)
+  → HW watchdog 30초가 최종 안전망
+```
+
+- **3차 sysrq 경로**는 `device_shutdown()`을 건너뛰어 D state 드라이버 락과 무관하게 HW reset 수행
+- 각 단계는 background 실행으로 block 시에도 다음 단계로 진행
+
+### 연관 JSON 설정 (요약)
+
+reboot 동작을 조정하는 주요 키들 (상세는 §4 checker 참조):
+
+| 키 | 기본값 | 역할 |
+|----|--------|------|
+| `mlanN.checker.LIMIT_CNT` | `5` | 인터페이스 부재 허용 횟수 |
+| `mlanN.checker.MIN_UPTIME_SEC` | `30` | **커널 부팅** 후 reboot 거부 구간 (초, `/proc/uptime` 기준). 데몬 uptime이 아님 |
+| `mlanN.checker.MAX_REBOOT_COUNT` | `3` | cooldown 윈도우 내 최대 reboot |
+| `mlanN.checker.REBOOT_COOLDOWN_SEC` | `300` | reboot 카운트 리셋 윈도우 (초) |
+
+### 업그레이드/제거 시 유닛 상태 동기화
+
+- `postinst`: 구 `multi-user.target.wants/wifi_*` 링크 정리 후 `wifi-stack.target`으로 재등록
+- `prerm`: `wifi-stack.target`부터 stop (PartOf 전파로 자식 일괄 정지)
+- `postrm`: `wifi-stack.target.wants/` 고아 링크 정리, `wlan_emergency_reboot.service` disable
