@@ -33,12 +33,12 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
 fi
 
 cleanup() {
-    logger -p ${FACILITY}.info "[$tag:$LINENO] wifi_logger_mcp stop"
+    #logger -p ${FACILITY}.info "[$tag:$LINENO] wifi_logger_mcp stop"
     exit 0
 }
 trap cleanup INT TERM
 
-logger -p ${FACILITY}.info "[$tag:$LINENO] wifi_logger_mcp start"
+#logger -p ${FACILITY}.info "[$tag:$LINENO] wifi_logger_mcp start"
 
 while true; do
     raw0=$(cat "$DEV/in_voltage0_raw")

@@ -73,6 +73,38 @@ def get_bridge_status():
     return status
 
 
+def get_moal_bridge_stats():
+    """/sys/kernel/moal_bridge/stats (driver-level L2 bridge) 파싱.
+    Returns per-direction fields (w2p_*, p2w_*) + active. 노드/파싱 실패 시 '-'."""
+    directions = ("w2p", "p2w")
+    metrics = ("fwd", "drop", "err", "oom", "qlen")
+    out = {f"{d}_{m}": "-" for d in directions for m in metrics}
+    out["active"] = "-"
+    try:
+        with open("/sys/kernel/moal_bridge/stats", "r") as f:
+            txt = f.read()
+    except Exception:
+        return out
+    try:
+        for line in txt.splitlines():
+            line = line.strip()
+            for d in directions:
+                if line.startswith(d + " "):
+                    for kv in line.split()[1:]:
+                        k, _, v = kv.partition("=")
+                        if k in metrics:
+                            out[f"{d}_{k}"] = v
+                    break
+            if line.startswith("active="):
+                for kv in line.split():
+                    k, _, v = kv.partition("=")
+                    if k == "active":
+                        out["active"] = v
+    except Exception:
+        pass
+    return out
+
+
 def get_temperatures():
     """CPU / mlan0 / mlan1 온도 (°C 정수)"""
     temps = {"cpu": "-", "mlan0": "-", "mlan1": "-"}
@@ -457,6 +489,20 @@ def draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, summary_path, p
         mode_str = f"{bs['effective']} (req:{bs['requested']})"
     safe_addstr(y, 1, f"Bridge: {mode_str}  thermal:{bs['thermal']}  gov:{bs['governor']}")
     y += 1
+
+    # MOAL 커널 브릿지 stats (sysfs: /sys/kernel/moal_bridge/stats)
+    mb = get_moal_bridge_stats()
+    if mb["w2p_fwd"] != "-":
+        safe_addstr(y, 1,
+            f"MoalBr w2p: fwd={mb['w2p_fwd']} drop={mb['w2p_drop']} "
+            f"err={mb['w2p_err']} oom={mb['w2p_oom']} "
+            f"qlen={mb['w2p_qlen']}  [act={mb['active']}]")
+        y += 1
+        safe_addstr(y, 1,
+            f"MoalBr p2w: fwd={mb['p2w_fwd']} drop={mb['p2w_drop']} "
+            f"err={mb['p2w_err']} oom={mb['p2w_oom']} "
+            f"qlen={mb['p2w_qlen']}")
+        y += 1
 
     # 인터럽트 (IRQ)
     if irq_tracker:

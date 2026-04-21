@@ -11,13 +11,13 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
 fi
 
 cleanup() {
-    logger -p local3.info "[$tag:$LINENO] stop"
+    #logger -p local3.info "[$tag:$LINENO] stop"
     exit 0
 }
 trap cleanup INT TERM
 
 
-logger -p local3.info "[$tag:$LINENO] start"
+#logger -p local3.info "[$tag:$LINENO] start"
 
 while :; do
     cpu_usage=$(mpstat 1 1|tail -1 | awk '{print 100-$NF}')

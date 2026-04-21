@@ -1,7 +1,5 @@
 #!/bin/bash
 tag=$(basename "$0")
-EXT=/sys/kernel/debug/mmc2/mmc2:0001/ext_csd
-
 # Defaults
 MMC_CHECK_INTERVAL=300
 
@@ -11,14 +9,21 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
     MMC_CHECK_INTERVAL=$(jq -r '.mmc.check_interval_sec // 300' "$WIFI_INIT_CONF_JSON")
 fi
 
+
+if [ "$BOARD_TYPE" == "imx93" ]; then
+    EXT=/sys/kernel/debug/mmc0/mmc0:0001/ext_csd
+else
+    EXT=/sys/kernel/debug/mmc2/mmc2:0001/ext_csd
+fi
+
 cleanup() {
-    logger -p local0.info "[$tag:$LINENO] stop"
+    #logger -p local0.info "[$tag:$LINENO] stop"
     exit 0
 }
 trap cleanup INT TERM
 
 
-logger -p local0.info "[$tag:$LINENO] start"
+#logger -p local0.info "[$tag:$LINENO] start"
 
 to_bucket() {
     v=$1
@@ -75,7 +80,7 @@ while true; do
         *07*      ) sev="warning" ;;
     esac
 
-    logger -p local0.$sev "[$tag:$LINENO] PRE_EOL=$EOL_TXT, LifeA=$BKT_A, LifeB=$BKT_B (raw: A=0x$LTA, B=0x$LTB)"
+    logger -p local3.$sev "[$tag:$LINENO] PRE_EOL=$EOL_TXT, LifeA=$BKT_A, LifeB=$BKT_B (raw: A=0x$LTA, B=0x$LTB)"
 
     sleep "$MMC_CHECK_INTERVAL"
 done
