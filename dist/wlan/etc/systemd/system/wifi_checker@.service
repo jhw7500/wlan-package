@@ -1,7 +1,11 @@
 [Unit]
 Description=WiFi Checker Service for %i
 DefaultDependencies=no
-After=wifi_init.service sysinit.target
+# wifi_init.service가 hang/실패해도 독립적으로 시작되어 moal 모듈 상태를 감시한다.
+# moal 미로드 → /sys/class/net/mlan* 없음 → ERR_CNT 누적 → wlan_reboot_policy.sh 호출.
+# After=wifi_init.service를 의도적으로 제거 (wifi_init 재시도 9~10분 대기 방지).
+After=sysinit.target
+# wifi_init.service를 수동 stop/restart 하면 함께 stop/restart 됨 (관리 편의).
 PartOf=wifi_init.service
 Conflicts=shutdown.target
 Before=shutdown.target
@@ -16,4 +20,4 @@ RestartSec=5s
 User=root
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=wifi-stack.target

@@ -15,5 +15,5 @@ ExecStart=/bin/python3 /usr/local/logger/wifi_capture.py %i 0x4100
 User=root
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=wifi-stack.target
 

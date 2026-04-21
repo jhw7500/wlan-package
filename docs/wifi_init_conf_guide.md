@@ -426,7 +426,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 ## 11. mlan0 / mlan1 - 인터페이스별 설정
 
-**사용 스크립트**: `wifi_bgscan.py`, `wifi_roaming.py`
+**사용 스크립트**: `wifi_bgscan.py`, `wifi_roam.py`, `wifi_periodic_roam.sh`, `wifi_event.sh`
 
 ### 11.1 interface defaults - 인터페이스 기본 활성/주파수
 
@@ -463,7 +463,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 ### 11.2 periodic_roam - 주기적 패시브 로밍
 
-**사용 스크립트**: `wifi_roaming.py`
+**사용 스크립트**: `wifi_periodic_roam.sh` (service: `wifi_periodic_roam@.service`)
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
@@ -597,7 +597,6 @@ mlan0 / mlan1에 개별 적용. 블록이 없거나 특정 키가 없으면 `glo
 - 하위호환: 기존 int 값(`"ht": 7`)도 문자열로 읽혀 동일하게 동작
 
 > **주의**: VHT는 FW 내부에 MCS 7 하한(floor)이 있어 tier 7이 사실상 최소값.
-> 상세 비교: `wlan-driver/docs/mcs-rate-control-comparison.md` 참조.
 
 ```json
 "mcs_tier": {

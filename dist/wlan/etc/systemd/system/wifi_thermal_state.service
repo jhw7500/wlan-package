@@ -14,4 +14,4 @@ StandardError=journal
 LogLevelMax=notice
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=wifi-stack.target

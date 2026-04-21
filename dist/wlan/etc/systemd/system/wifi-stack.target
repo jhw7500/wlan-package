@@ -1,0 +1,18 @@
+[Unit]
+Description=WiFi Stack Ready
+Documentation=man:systemd.special(7)
+# 로그인 가능 상태(multi-user.target) 이후에 WiFi 스택을 기동한다.
+# DefaultDependencies=no 로 shutdown/sysinit 역의존 외 자동 의존을 끊어
+# multi-user.target 도달을 블로킹하지 않는다.
+DefaultDependencies=no
+# multi-user.target 이후 비블로킹 start. WantedBy=multi-user.target 으로 install 시
+# 자동 activation 되며, multi-user.target 이 wifi-stack.target 을 기다리지는 않는다.
+# Requires= 를 쓰면 multi-user 실패/stop 이 wifi-stack 에 전파되어 강결합 되므로 사용하지 않음.
+After=multi-user.target
+Conflicts=shutdown.target
+Before=shutdown.target
+AllowIsolate=no
+
+[Install]
+# multi-user.target이 activation되면 wifi-stack.target도 자동 start (비블로킹).
+WantedBy=multi-user.target

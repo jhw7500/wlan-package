@@ -15,4 +15,4 @@ ExecStart=/usr/local/scripts/wifi_logger.sh
 ExecStop=/bin/true
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=wifi-stack.target
