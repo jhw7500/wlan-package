@@ -187,9 +187,23 @@ customctl() {
   echo "[installer] Optimizing service configuration (batch processing)..."
   systemctl mask systemd-networkd-wait-online nfs-server proc-fs-nfsd.mount ovsdb-server avahi-daemon avahi-autoipd psplash systemd-journald-audit.socket netplan-ovs-cleanup || true
   systemctl disable --now dhcpcd openvswitch openvswitch-switch connman smb nmb avahi-daemon.socket containerd netdata collectd named systemd-resolved netserver wifi_checker@eth0 || true
+
+  # 업그레이드 경로: 구버전에서 WantedBy=multi-user.target 이었던 wifi_* 유닛들의
+  # 구 심볼릭 링크를 정리한다. 새 버전은 WantedBy=wifi-stack.target.
+  # wifi_apply_enabled.service 는 shutdown ExecStop 동기화 목적으로 multi-user.target 유지.
+  # 정리 후 아래 systemctl enable 이 새 WantedBy 기반으로 링크를 재생성한다.
+  for _old_link in /etc/systemd/system/multi-user.target.wants/wifi_*.service; do
+      [ -L "$_old_link" ] || continue
+      _unit_name=$(basename "$_old_link" 2>/dev/null)
+      [ "$_unit_name" = "wifi_apply_enabled.service" ] && continue
+      rm -f "$_old_link" 2>/dev/null || true
+  done
+  systemctl daemon-reload 2>/dev/null || true
+
   # 시스템 unit + wifi 진입점(wifi_init/wifi_apply_enabled) + 통제 외 wifi unit
-  # (wifi_logger 글로벌, wifi_led/wifi_logger eth0+mlan0)
-  systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer wifi_init wifi_apply_enabled wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 log-watchdog.timer serial-getty@ttyGS0.service || true
+  # (wifi_logger 글로벌, wifi_led/wifi_logger eth0+mlan0) + wifi-stack.target
+  # wifi-stack.target 은 multi-user.target 도달 후 비블로킹으로 wifi 스택을 기동한다.
+  systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer wifi-stack.target wifi_init wifi_apply_enabled wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 log-watchdog.timer serial-getty@ttyGS0.service || true
   systemctl start switchd wifi_led@eth0 serial-getty@ttyGS0.service || true
 
   # wifi 자식 데몬 (wifi_logger@mlanN, wifi_checker@, wifi_bgscan@, wifi_roam@, wifi_arping@,

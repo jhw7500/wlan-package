@@ -73,7 +73,10 @@ purge)
 
     systemctl disable --now cpufreq-min.service 2>/dev/null || true
     systemctl disable --now wifi_thermal_state.timer wifi_thermal_state.service 2>/dev/null || true
+    systemctl disable --now wifi-stack.target wlan_emergency_reboot.service 2>/dev/null || true
     rm -f /usr/lib/sysctl.d/99-wifi-thermal.conf 2>/dev/null || true
+    # wifi-stack.target.wants/ 내부 고아 심볼릭 링크 일괄 정리 (purge 시 systemd 상태 클린업).
+    rm -rf /etc/systemd/system/wifi-stack.target.wants 2>/dev/null || true
     # Reload systemd daemon
     systemctl daemon-reload 2>/dev/null || true
 
@@ -95,6 +98,8 @@ remove)
 
     systemctl disable --now cpufreq-min.service 2>/dev/null || true
     systemctl disable --now wifi_thermal_state.timer wifi_thermal_state.service 2>/dev/null || true
+    # wifi-stack.target / wlan_emergency_reboot 는 prerm 에서 처리되지만 중복 호출은 idempotent.
+    systemctl disable --now wifi-stack.target wlan_emergency_reboot.service 2>/dev/null || true
     systemctl daemon-reload 2>/dev/null || true
     ;;
 
