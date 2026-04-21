@@ -36,41 +36,49 @@ remove|deconfigure)
     logger -p local0.info "[$KEY][$tag:$LINENO] Removing wlan-proc package"
 
     # Stop all wlan services
+    # wifi-stack.target 을 먼저 stop 하면 PartOf=wifi_init.service 로 묶인 자식 유닛이
+    # 자동 stop 된다. 개별 stop 은 누락 방지용 안전망.
     echo "[INFO] Stopping WLAN services..."
-    stop_service_if_active wifi_bridge@mlan0
-    stop_service_if_active wifi_bridge@mlan1
-    stop_service_if_active wifi_checker@mlan0
-    stop_service_if_active wifi_checker@mlan1
-    stop_service_if_active wifi_logger@mlan0
-    stop_service_if_active wifi_logger@mlan1
-    stop_service_if_active wifi_logger@eth0
-    stop_service_if_active wifi_logger
-    stop_service_if_active wifi_led@mlan0
-    stop_service_if_active wifi_led@eth0
-    stop_service_if_active wifi_roam@mlan0
-    stop_service_if_active wifi_bgscan@mlan0
-    stop_service_if_active wifi_arping@mlan0
+    stop_service_if_active wifi-stack.target
     stop_service_if_active wifi_init
-    stop_service_if_active wpa_supplicant@mlan0
-    stop_service_if_active wpa_supplicant@mlan1
+    stop_service_if_active wifi_apply_enabled
+    stop_service_if_active wlan_emergency_reboot.service
+    for _iface in mlan0 mlan1; do
+        for _u in wifi_bridge wifi_checker wifi_logger wifi_led wifi_roam \
+                  wifi_bgscan wifi_arping wifi_event wifi_periodic_roam \
+                  wifi_capture wifi_ping wpa_supplicant; do
+            stop_service_if_active "${_u}@${_iface}"
+        done
+    done
+    stop_service_if_active wifi_logger@eth0
+    stop_service_if_active wifi_led@eth0
+    stop_service_if_active wifi_logger
+    stop_service_if_active wifi_ping_monitor
+    stop_service_if_active wifi_mgmt_log.timer
+    stop_service_if_active wifi_thermal_state.timer
+    stop_service_if_active wifi_thermal_state
     stop_service_if_active switchd
 
     # Disable services
     echo "[INFO] Disabling WLAN services..."
-    disable_service_if_enabled wifi_bridge@mlan0
-    disable_service_if_enabled wifi_bridge@mlan1
-    disable_service_if_enabled wifi_checker@mlan0
-    disable_service_if_enabled wifi_checker@mlan1
-    disable_service_if_enabled wifi_logger@mlan0
-    disable_service_if_enabled wifi_logger@mlan1
-    disable_service_if_enabled wifi_logger@eth0
-    disable_service_if_enabled wifi_logger
-    disable_service_if_enabled wifi_led@mlan0
-    disable_service_if_enabled wifi_led@eth0
-    disable_service_if_enabled wifi_roam@mlan0
-    disable_service_if_enabled wifi_bgscan@mlan0
-    disable_service_if_enabled wifi_arping@mlan0
+    disable_service_if_enabled wifi-stack.target
     disable_service_if_enabled wifi_init
+    disable_service_if_enabled wifi_apply_enabled
+    disable_service_if_enabled wlan_emergency_reboot.service
+    for _iface in mlan0 mlan1; do
+        for _u in wifi_bridge wifi_checker wifi_logger wifi_led wifi_roam \
+                  wifi_bgscan wifi_arping wifi_event wifi_periodic_roam \
+                  wifi_capture wifi_ping wpa_supplicant; do
+            disable_service_if_enabled "${_u}@${_iface}"
+        done
+    done
+    disable_service_if_enabled wifi_logger@eth0
+    disable_service_if_enabled wifi_led@eth0
+    disable_service_if_enabled wifi_logger
+    disable_service_if_enabled wifi_ping_monitor
+    disable_service_if_enabled wifi_mgmt_log.timer
+    disable_service_if_enabled wifi_thermal_state.timer
+    disable_service_if_enabled wifi_thermal_state
     disable_service_if_enabled switchd
 
     # Reload systemd daemon
