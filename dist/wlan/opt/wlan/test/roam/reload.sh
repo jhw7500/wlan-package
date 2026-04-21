@@ -1,8 +1,0 @@
-#!/bin/bash
-wpa_cli -i mlan0 set_network 0 bgscan "";
-wpa_cli -i mlan0 set_network 0 bss_transition_disallow 1;
-wpa_cli -i mlan0 reconfigure;
-wpa_cli -i mlan0 disconnect; sleep 1;
-wpa_cli -i mlan0 set_network 0 freq_list "2412 2472";
-wpa_cli -i mlan0 set_network 0 scan_freq "2412 2472";
-wpa_cli -i mlan0 reassociate;
