@@ -34,21 +34,49 @@ log_all() {
 }
 
 do_reboot() {
-  # Try graceful reboot first, fall back to forced reboot
+  # 점진적 강도 순으로 reboot을 시도한다. 각 단계가 block 되어도 다음 단계로
+  # 넘어갈 수 있도록 background 실행 후 짧은 대기만 한다. 최종 fallback 으로
+  # sysrq-trigger 를 사용하여 kernel emergency_restart() 경로로 직접 reset.
+  # (emergency_restart 는 device_shutdown() 을 건너뛰므로 moal 등 드라이버가
+  #  D state 락을 잡고 있어도 HW reset 이 즉시 수행된다.)
   sync
-  if command -v /sbin/reboot >/dev/null 2>&1; then
-    /sbin/reboot || /sbin/reboot -f
-    return $?
+
+  # 1차: graceful reboot (systemd shutdown.target → unit stop → reboot(2))
+  if [ -x /sbin/reboot ]; then
+    /sbin/reboot 2>/dev/null &
+  elif command -v reboot >/dev/null 2>&1; then
+    reboot 2>/dev/null &
+  elif command -v systemctl >/dev/null 2>&1; then
+    systemctl reboot 2>/dev/null &
   fi
-  if command -v reboot >/dev/null 2>&1; then
-    reboot || reboot -f
-    return $?
+  sleep 10
+
+  # 2차: forced reboot (systemd/shutdown.target 우회, reboot(2) 직접 호출)
+  log_all "graceful reboot did not complete in 10s, escalating to forced reboot"
+  if [ -x /sbin/reboot ]; then
+    /sbin/reboot -f 2>/dev/null &
+  elif command -v reboot >/dev/null 2>&1; then
+    reboot -f 2>/dev/null &
+  elif command -v systemctl >/dev/null 2>&1; then
+    systemctl reboot --force 2>/dev/null &
   fi
-  if command -v systemctl >/dev/null 2>&1; then
-    systemctl reboot || systemctl reboot --force
-    return $?
+  sleep 5
+
+  # 3차: sysrq emergency restart — device_shutdown() 을 건너뛰어 D state
+  # 드라이버와 무관하게 HW reset 을 트리거한다. 커널 스케줄러가 살아있는
+  # 한 확실한 최종 경로.
+  log_all "forced reboot did not complete, escalating to sysrq-trigger"
+  if [ -w /proc/sys/kernel/sysrq ]; then
+    echo 1 > /proc/sys/kernel/sysrq 2>/dev/null || true
+  fi
+  if [ -w /proc/sysrq-trigger ]; then
+    echo b > /proc/sysrq-trigger 2>/dev/null || true
   fi
 
+  # 여기까지 도달했다면 유저스페이스 echo 도 실행 불가 상태
+  # HW watchdog 이 최후의 수단 (30초 timeout).
+  sleep 5
+  log_all "all reboot paths exhausted; awaiting HW watchdog timeout"
   return 127
 }
 
