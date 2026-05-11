@@ -520,6 +520,11 @@ case "$1" in
     echo "Updated:"
     echo "  TXPWRLIMIT_PATH=$TXPWRLIMIT_PATH"
     update_json_global "TXPWRLIMIT_PATH" "$TXPWRLIMIT_PATH"
+    # 새 정책의 .bak을 즉시 동기화하여 다음 부팅의 self-healing 사각지대 제거
+    if [ -n "$TXPWRLIMIT_PATH" ] && [ -s "$TXPWRLIMIT_PATH" ]; then
+        cp "$TXPWRLIMIT_PATH" "${TXPWRLIMIT_PATH}.bak" 2>/dev/null \
+            && sync "${TXPWRLIMIT_PATH}.bak" 2>/dev/null || sync
+    fi
     exit 1
     ;;
   ant)

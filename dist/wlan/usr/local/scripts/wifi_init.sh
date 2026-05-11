@@ -190,15 +190,39 @@ if lsmod | grep -q "^${MOAL_MOD}\b" || lsmod | grep -q "^${MLAN_MOD}\b"; then
     sleep 0.5
 fi
 
-# Backup files with error logging
+# Backup files with self-healing recovery (size>0 + pattern + default fallback)
 logger -p local0.info "[$tag:$LINENO] Starting backup..."
-/usr/local/scripts/backup_file.sh /lib/firmware/$MOD_PARA PCIE9098_0 || logger -p local0.err "[$tag:$LINENO] backup failed: $MOD_PARA"
-/usr/local/scripts/backup_file.sh $TXPWRLIMIT_PATH txpwrlimit_2g_cfg_set || logger -p local0.err "[$tag:$LINENO] backup failed: TXPWRLIMIT"
-/usr/local/scripts/backup_file.sh /etc/systemd/network/20-mlan0.network mlan0 || logger -p local0.err "[$tag:$LINENO] backup failed: 20-mlan0.network"
-/usr/local/scripts/backup_file.sh /etc/systemd/network/21-mlan1.network mlan1 || logger -p local0.err "[$tag:$LINENO] backup failed: 21-mlan1.network"
-/usr/local/scripts/backup_file.sh /etc/systemd/network/22-eth0.network eth0 || logger -p local0.err "[$tag:$LINENO] backup failed: 22-eth0.network"
-/usr/local/scripts/backup_file.sh /etc/wpa_supplicant/wpa_supplicant-mlan0.conf network= || logger -p local0.err "[$tag:$LINENO] backup failed: wpa_supplicant-mlan0"
-/usr/local/scripts/backup_file.sh /etc/wpa_supplicant/wpa_supplicant-mlan1.conf network= || logger -p local0.err "[$tag:$LINENO] backup failed: wpa_supplicant-mlan1"
+_DEFAULT_DIR="/opt/wlan/config"
+
+# BUS_TYPE에 따라 mod_para의 검증 패턴 동적 결정
+if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
+    _BUS_BAK=$(jq -r '.global.BUS_TYPE // "pcie"' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+else
+    _BUS_BAK="pcie"
+fi
+if [ "${_BUS_BAK}" = "sdio" ]; then
+    _MOD_PARA_PATTERN="SD9098_0"
+else
+    _MOD_PARA_PATTERN="PCIE9098_0"
+fi
+
+/usr/local/scripts/backup_file.sh /lib/firmware/$MOD_PARA "$_MOD_PARA_PATTERN" "$_DEFAULT_DIR/wifi_mod_para__.conf" \
+    || logger -p local0.err "[$tag:$LINENO] backup failed: $MOD_PARA"
+# TXPWRLIMIT는 변형이 5개+이고 사용자 정책에 따라 바뀌므로 default 매핑 없이 .bak에만 의존
+if [ -n "${TXPWRLIMIT_PATH:-}" ]; then
+    /usr/local/scripts/backup_file.sh "$TXPWRLIMIT_PATH" txpwrlimit_2g_cfg_set "" \
+        || logger -p local0.err "[$tag:$LINENO] backup failed: TXPWRLIMIT"
+fi
+/usr/local/scripts/backup_file.sh /etc/systemd/network/20-mlan0.network mlan0 "$_DEFAULT_DIR/systemd/network/20-mlan0.network" \
+    || logger -p local0.err "[$tag:$LINENO] backup failed: 20-mlan0.network"
+/usr/local/scripts/backup_file.sh /etc/systemd/network/21-mlan1.network mlan1 "$_DEFAULT_DIR/systemd/network/21-mlan1.network" \
+    || logger -p local0.err "[$tag:$LINENO] backup failed: 21-mlan1.network"
+/usr/local/scripts/backup_file.sh /etc/systemd/network/22-eth0.network eth0 "$_DEFAULT_DIR/systemd/network/22-eth0.network" \
+    || logger -p local0.err "[$tag:$LINENO] backup failed: 22-eth0.network"
+/usr/local/scripts/backup_file.sh /etc/wpa_supplicant/wpa_supplicant-mlan0.conf network= "$_DEFAULT_DIR/wpa_supplicant/wpa_supplicant-mlan0.conf" \
+    || logger -p local0.err "[$tag:$LINENO] backup failed: wpa_supplicant-mlan0"
+/usr/local/scripts/backup_file.sh /etc/wpa_supplicant/wpa_supplicant-mlan1.conf network= "$_DEFAULT_DIR/wpa_supplicant/wpa_supplicant-mlan1.conf" \
+    || logger -p local0.err "[$tag:$LINENO] backup failed: wpa_supplicant-mlan1"
 
 # Apply net_rx from wifi_init_conf.json to wifi_mod_para.conf
 # PCIE9098_0 ← mlan0.net_rx, PCIE9098_1 ← mlan1.net_rx

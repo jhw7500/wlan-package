@@ -249,9 +249,12 @@ makeDirectory() {
   /usr/local/logger/print.py green "\r\n[installer] installing${dots}"
 
 cpchk() {
-  if [ ! -f "$2" ]; then
-    logger -s -p local0.info "[$KEY][$tag:$LINENO] cp $1 $2"
+  # 0바이트 파일도 "없음"으로 간주 (이전 설치의 ext4 power-cut 잔재 자동 복구).
+  # 모든 cp 직후 per-file sync로 ext4 메타/데이터 동기화 갭을 차단한다.
+  if [ ! -s "$2" ]; then
+    logger -s -p local0.info "[$KEY][$tag:$LINENO] cp $1 $2 (target empty or missing)"
     cp "$1" "$2"
+    sync "$2" 2>/dev/null || sync
   fi
 }
 
@@ -433,6 +436,36 @@ json_merge() {
   echo -e "\e[1m installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)\e[0m"
   logger -p local0.info "[$KEY][$tag:$LINENO] installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)"
   /usr/local/logger/print.py green "\r\n[installer] installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)"
+  # backup_file.sh의 self-healing은 .bak이 존재해야 동작한다.
+  # 첫 부팅의 사각지대를 없애기 위해 설치 종료 직전 보호 대상의 .bak을 일괄 선제 생성.
+  init_protect_baks() {
+    local pairs=(
+      "/lib/firmware/cts/wifi_mod_para.conf:PCIE9098_0|SD9098_0"
+      "/lib/firmware/cts/txpwrlimit_cfg_9098.conf:txpwrlimit_2g_cfg_set"
+      "/lib/firmware/cts/txpwrlimit_cfg_9098_low.conf:txpwrlimit_2g_cfg_set"
+      "/lib/firmware/cts/txpwrlimit_cfg_9098_org.conf:txpwrlimit_2g_cfg_set"
+      "/lib/firmware/cts/txpwrlimit_cfg_9098_a0.conf:txpwrlimit_2g_cfg_set"
+      "/etc/systemd/network/20-mlan0.network:mlan0"
+      "/etc/systemd/network/21-mlan1.network:mlan1"
+      "/etc/systemd/network/22-eth0.network:eth0"
+      "/etc/wpa_supplicant/wpa_supplicant-mlan0.conf:network="
+      "/etc/wpa_supplicant/wpa_supplicant-mlan1.conf:network="
+    )
+    local entry f pat
+    for entry in "${pairs[@]}"; do
+      f="${entry%%:*}"
+      pat="${entry#*:}"
+      [ -s "$f" ] || continue
+      if grep -qE "$pat" "$f" 2>/dev/null; then
+        cp "$f" "$f.bak" 2>/dev/null && sync "$f.bak" 2>/dev/null || sync
+        logger -p local0.info "[$KEY][$tag:$LINENO] init .bak: $f.bak"
+      else
+        logger -p local0.warn "[$KEY][$tag:$LINENO] init .bak skipped (pattern miss): $f"
+      fi
+    done
+  }
+  init_protect_baks
+
   /usr/local/scripts/fake-hwclock.sh save
   sync
   ;;
