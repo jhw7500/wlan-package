@@ -8,7 +8,10 @@ gha-creds-*.json
 
 tmp/
 .worktrees/
-docs/plans/
+docs/01-plan/
+docs/02-design/
+docs/04-report/
+docs/05-runbook/
 docs/superpowers/
 network.json
 .base/

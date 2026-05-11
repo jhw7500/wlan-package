@@ -3,7 +3,7 @@
 **작성일:** 2026-03-10
 **플랫폼:** iMX8MM (4x Cortex-A53) + NXP 88W9098 (PCIe)
 **대상 프로젝트:** wlan-package, wlan-bridge, wlan-driver
-**Status:** Implemented (eco 모드로 구현 완료 — 참조: `docs/archive/plans/2026-03-10-eco-mode-implementation.md`)
+**Status:** Implemented (eco 모드로 구현 완료 — 참조: `docs/archive/01-plan/2026-03-10-eco-mode-implementation.md`)
 
 ---
 
