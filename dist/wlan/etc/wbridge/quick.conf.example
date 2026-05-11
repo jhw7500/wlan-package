@@ -1,0 +1,31 @@
+# wbridge-quick 측정 설정 예시
+#
+# 이 파일은 예시(.example)입니다. `wbridge_quick.sh setup` 실행 시
+# /etc/wbridge/quick.conf 가 자동 생성되므로 직접 편집할 필요는 없습니다.
+#
+# 형식: shell key=value (스크립트가 source).
+# 권한: chmod 600 (root only).
+
+# 유선 클라이언트 (PC1) — iperf3 server 역할
+WIRED_HOST=root@192.168.1.10
+WIRED_IFACE=eth0
+
+# 무선 클라이언트 (PC2) — iperf3 client 역할
+WIRELESS_HOST=jhw@192.168.0.50
+WIRELESS_IFACE=mlan0
+
+# iperf3 1회 측정 시간 (초). quick은 30초 권장.
+DURATION=30
+
+# matrix 모드에서 토글할 engine 목록
+DEFAULT_ENGINES="pcap tpacket moal"
+
+# 환경 식별자 — 리포트 제목에 표시
+#   예: wifi5-pure / wifi6-mixed / wifi6-pure
+ENV_LABEL=wifi6-pure
+
+# engine 토글 후 안정화 대기 (초)
+SETTLE_SEC=5
+
+# 결과 디렉토리 (/var/log/wbridge-bench/<phase>/baseline/<engine>/...)
+PHASE=quick
