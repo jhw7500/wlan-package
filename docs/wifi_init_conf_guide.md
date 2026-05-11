@@ -117,7 +117,10 @@ wifi_init_conf.json
 
 **사용 스크립트**: `wifi_bridge.sh`, `wifi_init.sh`, `wired_mac_ip_get.py`, `/etc/default/wbridge`
 
-> `/etc/default/wbridge` 파일이 존재하면 해당 값이 JSON보다 **우선**한다.
+> **우선순위**: `wifi_init_conf.json` (SSoT) > `/etc/default/wbridge` (fallback) > 스크립트 기본값
+>
+> JSON이 정상 파싱되면 JSON 값이 최종 사용된다. JSON이 없거나 파싱에 실패할 때만
+> `/etc/default/wbridge`가 폴백 소스로 사용된다.
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|

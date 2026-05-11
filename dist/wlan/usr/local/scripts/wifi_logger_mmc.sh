@@ -7,6 +7,7 @@ MMC_CHECK_INTERVAL=300
 WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
 if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
     MMC_CHECK_INTERVAL=$(jq -r '.mmc.check_interval_sec // 300' "$WIFI_INIT_CONF_JSON")
+    BOARD_TYPE=$(jq -r '.global.BOARD_TYPE // "imx8mm"' "$WIFI_INIT_CONF_JSON")
 fi
 
 

@@ -35,7 +35,7 @@
     },
     "wbridge": {
         "_comment": [
-            "WiFi Bridge 프로세스 설정. /etc/default/wbridge 환경변수가 JSON보다 우선.",
+            "WiFi Bridge 프로세스 설정. 이 JSON이 SSoT이며, JSON 파싱 실패 시에만 /etc/default/wbridge가 폴백으로 사용됨.",
             "enabled: (bool) bridge 전체 ON/OFF. false이면 bridge 서비스 전부 stop+disable",
             "bridge_iface: (string) mlan0|mlan1 — bridge에 사용할 무선 인터페이스",
             "mac_mode: (string) default|dynamic|static — bridge 인터페이스 MAC 결정 방식. dynamic=유선측 MAC 동적 획득",
@@ -206,7 +206,7 @@
         "bgscan": {
             "_comment": "Background scan configuration for mlan0",
             "interval": 60,
-            "enabled": false
+            "enabled": true
         },
         "roaming": {
             "_comment": [

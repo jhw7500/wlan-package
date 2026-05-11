@@ -10,14 +10,21 @@ OPT_DIR="/usr/local/wlan-bridge/scripts"
 CONF_JSON="/usr/local/etc/wifi_init_conf.json"
 
 # wifi_init_conf.json에서 wbridge 기본값 로드
-# 우선순위: /etc/default/wbridge (env) > wifi_init_conf.json > 스크립트 기본값
+# 우선순위: wifi_init_conf.json (SSoT) > /etc/default/wbridge (fallback) > 스크립트 기본값
+# JSON이 정상 파싱되면 JSON 값을 최종값으로 사용한다. JSON이 없거나 파싱 실패 시
+# systemd EnvironmentFile로 이미 로드된 /etc/default/wbridge 값이 그대로 폴백으로 유지된다.
 _load_wbridge_json_defaults() {
     command -v jq >/dev/null 2>&1 && [ -f "$CONF_JSON" ] || return 0
+    # JSON 파싱 검증 — 실패 시 env 파일 값을 fallback으로 유지
+    if ! jq -e . "$CONF_JSON" >/dev/null 2>&1; then
+        logger -p local0.warn "[$tag] JSON parse failed ($CONF_JSON), falling back to /etc/default/wbridge values"
+        return 0
+    fi
     local key val
     while IFS='=' read -r key val; do
         [ -n "$key" ] || continue
-        # 이미 환경변수로 설정된 경우(/etc/default/wbridge) 유지
-        [ -z "${!key+set}" ] && export "$key=$val"
+        # JSON이 SSoT — env 파일 값을 덮어씀
+        export "$key=$val"
     done < <(jq -r '
         "WBRIDGE_BOARD_TYPE=\(.global.BOARD_TYPE // "imx8mm")",
         "WBRIDGE_BUS_TYPE=\(.global.BUS_TYPE // "pcie")",
