@@ -17,7 +17,7 @@
 # 의존성: tcpdump, iw, ip, awk, (text 모드: jq)
 #
 # Plan SC: 보강 — wbridge VLAN 시나리오 실측
-# Design Ref: docs/reports/wbridge-engine-modes-explained.md §5.1 §D
+# Design Ref: docs/04-report/baseline/wbridge-engine-modes-explained.md §5.1 §D
 
 set -euo pipefail
 TAG=$(basename "$0")
