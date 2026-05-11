@@ -1,0 +1,30 @@
+# wbridge fastpath nftables ruleset template
+# Plan SC: FR-08 (nftables flowtable 룰)
+# Design Ref: §2.2 (Data Flow), §6.3 (Cleanup Guarantees)
+#
+# 적용 (dry-run 우선):
+#   nft -c -f /usr/local/tools/wbridge-bench/lib/_fastpath_nft.template
+#   nft    -f /usr/local/tools/wbridge-bench/lib/_fastpath_nft.template
+#
+# 영구 배포 (선택):
+#   cp /usr/local/tools/wbridge-bench/lib/_fastpath_nft.template /etc/nftables.d/wbridge-flowtable.nft
+#   systemctl reload nftables
+#
+# 제거 (5초 이내 원복 — Plan Risk 회귀 0% 보장):
+#   nft delete table inet wbridge_filter
+#
+# 격리: 별도 table(wbridge_filter)에 정의 → 기존 nft 룰셋과 미간섭
+# 효과: 같은 5-tuple flow의 첫 패킷만 conntrack 거치고 이후는 fastpath로 우회
+
+table inet wbridge_filter {
+    flowtable f {
+        hook ingress priority 0;
+        devices = { eth0, mlan0 };
+    }
+
+    chain forward {
+        type filter hook forward priority 0; policy accept;
+        ip protocol { tcp, udp } flow add @f
+        ip6 nexthdr { tcp, udp } flow add @f
+    }
+}
