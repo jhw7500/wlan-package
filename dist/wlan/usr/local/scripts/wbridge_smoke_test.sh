@@ -6,6 +6,10 @@ IFACE="${1:-mlan0}"
 SVC="wifi_bridge@${IFACE}.service"
 DEFAULT_CFG="/etc/default/wbridge"
 BACKUP_CFG="/tmp/wbridge.default.$$.bak"
+# wifi_init_conf.json이 SSoT. smoke test는 /etc/default/wbridge(env fallback)
+# 경로를 통해 동작을 검증하기 위해 테스트 기간 동안 JSON을 임시 퇴피한다.
+CONF_JSON="/usr/local/etc/wifi_init_conf.json"
+BACKUP_CONF_JSON="/tmp/wifi_init_conf.json.$$.bak"
 THERMAL_TIMER="wifi_thermal_state.timer"
 THERMAL_SERVICE="wifi_thermal_state.service"
 
@@ -249,6 +253,11 @@ cleanup() {
         rm -f "$BACKUP_CFG"
     fi
 
+    # JSON SSoT 복원 (test 중 퇴피했던 파일 되돌림)
+    if [ -f "$BACKUP_CONF_JSON" ]; then
+        mv "$BACKUP_CONF_JSON" "$CONF_JSON"
+    fi
+
     systemctl daemon-reload >/dev/null 2>&1 || true
 
     if [ "${INITIAL_ACTIVE:-unknown}" = "active" ]; then
@@ -267,6 +276,11 @@ main() {
     fi
 
     cp "$DEFAULT_CFG" "$BACKUP_CFG"
+    # JSON SSoT를 테스트 기간 동안 퇴피 — env fallback 경로로 set_kv 변경이 유효해짐
+    if [ -f "$CONF_JSON" ]; then
+        mv "$CONF_JSON" "$BACKUP_CONF_JSON"
+        log_info "Temporarily moved $CONF_JSON to $BACKUP_CONF_JSON (test uses env fallback)"
+    fi
     INITIAL_ACTIVE=$(systemctl is-active "$SVC" 2>/dev/null || true)
     trap cleanup EXIT
 
