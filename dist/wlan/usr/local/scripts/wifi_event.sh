@@ -5,6 +5,7 @@
 IFACE="${1:-mlan0}"
 tag="wifi_event"
 WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
+MCS_REASSOC_MARKER="/tmp/.mcstier_reassoc_${IFACE}"
 
 cleanup() {
     logger -p local0.info "[$tag] [$IFACE] stopped"
@@ -36,6 +37,17 @@ apply_mcs_tier() {
     logger -p local0.info "[$tag] [$IFACE] mcstiercfg$args"
     mlanutl "$IFACE" mcstiercfg $args > /dev/null 2>&1 || \
         logger -p local0.err "[$tag] [$IFACE] mcstiercfg failed"
+
+    # First assoc after boot negotiates with hw default HE cap (MCS11); the SET
+    # above only restores stored user_he_cap. Force one reassoc so the active
+    # link re-advertises the limited cap. Marker in /tmp resets on reboot.
+    if [ ! -f "$MCS_REASSOC_MARKER" ]; then
+        touch "$MCS_REASSOC_MARKER"
+        logger -p local0.info "[$tag] [$IFACE] first mcs_tier apply - forcing reassoc"
+        sleep 1
+        wpa_cli -i "$IFACE" reassociate > /dev/null 2>&1 || \
+            logger -p local0.warning "[$tag] [$IFACE] reassociate failed"
+    fi
 }
 
 run_on_connect() {
