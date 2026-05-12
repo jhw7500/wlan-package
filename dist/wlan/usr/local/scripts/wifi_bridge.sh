@@ -314,7 +314,8 @@ export WBRIDGE_DISPATCH_BUDGET WBRIDGE_IMMEDIATE WBRIDGE_TIMEOUT_MS WBRIDGE_RT_P
 # ethtool 지원여부 (apply.json 노출용)
 export WBRIDGE_ETHTOOL_COALESCE_ETH WBRIDGE_ETHTOOL_COALESCE_WLAN \
        WBRIDGE_ETHTOOL_RING_ETH WBRIDGE_ETHTOOL_RING_WLAN \
-       WBRIDGE_ETHTOOL_OFFLOAD_ETH WBRIDGE_ETHTOOL_OFFLOAD_WLAN 2>/dev/null || true
+       WBRIDGE_ETHTOOL_OFFLOAD_ETH WBRIDGE_ETHTOOL_OFFLOAD_WLAN \
+       WBRIDGE_CPUFREQ_SUPPORTED 2>/dev/null || true
 
 EFFECTIVE_SNAPSHOT="/run/wbridge.effective.json"
 cat > "$EFFECTIVE_SNAPSHOT" <<EOF
@@ -360,6 +361,7 @@ cat > "$APPLY_SNAPSHOT" <<EOF
   "ethtool_ring_wlan": "${WBRIDGE_ETHTOOL_RING_WLAN:-unknown}",
   "ethtool_offload_eth": "${WBRIDGE_ETHTOOL_OFFLOAD_ETH:-unknown}",
   "ethtool_offload_wlan": "${WBRIDGE_ETHTOOL_OFFLOAD_WLAN:-unknown}",
+  "cpufreq_supported": "${WBRIDGE_CPUFREQ_SUPPORTED:-unknown}",
   "updated_at": "$(date +%s)"
 }
 EOF
