@@ -42,15 +42,25 @@ case "$1" in
 configure)
   echo "postinst configure"
 
-  # CRITICAL: Verify binaries and config exist BEFORE making any system changes
-  if [ ! -f /usr/local/wlan-bridge/wbridge/wbridge ]; then
-    echo "ERROR: /usr/local/wlan-bridge/wbridge/wbridge not found" >&2
-    logger -p local0.err "[$KEY][$tag:$LINENO] Critical: wbridge binary not found at /usr/local/wlan-bridge/wbridge/wbridge"
+  # CRITICAL: Verify binaries and config exist BEFORE making any system changes.
+  # 보드별 suffix(_imx8/_imx93) 바이너리 또는 legacy suffix-less 중 하나 이상 필요.
+  # 실제 보드 분기는 아래 BOARD_TYPE detection 후 심볼릭 링크 단계에서 처리.
+  _has_wbridge=0
+  for cand in wbridge wbridge_imx8 wbridge_imx93; do
+    [ -f "/usr/local/wlan-bridge/wbridge/${cand}" ] && _has_wbridge=1 && break
+  done
+  if [ "$_has_wbridge" -ne 1 ]; then
+    echo "ERROR: no wbridge binary in /usr/local/wlan-bridge/wbridge/ (wbridge, wbridge_imx8, wbridge_imx93)" >&2
+    logger -p local0.err "[$KEY][$tag:$LINENO] Critical: no wbridge binary present"
     exit 1
   fi
-  if [ ! -f /usr/local/wlan-bridge/wbridge/wbridge-tpacket ]; then
-    echo "ERROR: /usr/local/wlan-bridge/wbridge/wbridge-tpacket not found" >&2
-    logger -p local0.err "[$KEY][$tag:$LINENO] Critical: wbridge-tpacket binary not found at /usr/local/wlan-bridge/wbridge/wbridge-tpacket"
+  _has_tpacket=0
+  for cand in wbridge-tpacket wbridge-tpacket_imx8 wbridge-tpacket_imx93; do
+    [ -f "/usr/local/wlan-bridge/wbridge/${cand}" ] && _has_tpacket=1 && break
+  done
+  if [ "$_has_tpacket" -ne 1 ]; then
+    echo "ERROR: no wbridge-tpacket binary in /usr/local/wlan-bridge/wbridge/" >&2
+    logger -p local0.err "[$KEY][$tag:$LINENO] Critical: no wbridge-tpacket binary present"
     exit 1
   fi
 
@@ -317,18 +327,27 @@ json_merge() {
       cp -a /lib/systemd/system-generators/systemd-sysv-generator /lib/systemd/system-generators/systemd-sysv-generator.orig
   fi
   ln -sf /dev/null /lib/systemd/system-generators/systemd-sysv-generator
-  # Create symlinks for wlan-bridge binaries (wbridge)
+  # Create symlinks for wlan-bridge binaries (wbridge) — board별 분기.
+  # cross-build 시 wbridge_imx8 / wbridge_imx93 두 가지가 모두 설치되며,
+  # postinst가 보드 감지(BOARD_TYPE)에 따라 /usr/local/bin/wifi-wbridge 가
+  # 해당 보드 바이너리를 가리키도록 심볼릭 링크 생성.
+  # native build(suffix 없음)인 경우 legacy 경로(wbridge) 사용.
   mkdir -p /usr/local/bin
-  ln -sf /usr/local/wlan-bridge/wbridge/wbridge /usr/local/bin/wifi-wbridge
-  ln -sf /usr/local/wlan-bridge/wbridge/wbridge-tpacket /usr/local/bin/wifi-wbridge-tpacket
-  #ln -sf /usr/local/wlan-bridge/wbridge/wbridge /usr/local/bin/wbridge
-  #ln -sf /usr/local/wlan-bridge/wbridge/wbridge-tpacket /usr/local/bin/wbridge-tpacket
-  
-  # Legacy compatibility symlinks (keep for old scripts if necessary)
-  #ln -sf /usr/local/wlan-bridge/wbridge/wbridge /usr/local/bin/wifi-dumb
-  #ln -sf /usr/local/wlan-bridge/wbridge/wbridge-tpacket /usr/local/bin/wifi-dumb-tpacket
-  #ln -sf /usr/local/wlan-bridge/wbridge/wbridge /usr/local/bin/dumb
-  #ln -sf /usr/local/wlan-bridge/wbridge/wbridge-tpacket /usr/local/bin/dumb-tpacket
+  if [ "$BOARD_TYPE" = "imx93" ]; then
+    WBRIDGE_SUFFIX="_imx93"
+  elif [ "$BOARD_TYPE" = "imx8mm" ] || [ "$BOARD_TYPE" = "imx8" ]; then
+    WBRIDGE_SUFFIX="_imx8"
+  else
+    WBRIDGE_SUFFIX=""
+  fi
+  # 보드별 바이너리가 없으면 suffix 없는 legacy로 폴백
+  if [ -n "$WBRIDGE_SUFFIX" ] && [ ! -f "/usr/local/wlan-bridge/wbridge/wbridge${WBRIDGE_SUFFIX}" ]; then
+    logger -p local0.warn "[$KEY][$tag:$LINENO] wbridge${WBRIDGE_SUFFIX} missing, falling back to suffix-less binary"
+    WBRIDGE_SUFFIX=""
+  fi
+  ln -sf "/usr/local/wlan-bridge/wbridge/wbridge${WBRIDGE_SUFFIX}" /usr/local/bin/wifi-wbridge
+  ln -sf "/usr/local/wlan-bridge/wbridge/wbridge-tpacket${WBRIDGE_SUFFIX}" /usr/local/bin/wifi-wbridge-tpacket
+  logger -p local0.info "[$KEY][$tag:$LINENO] wbridge symlinks → suffix='${WBRIDGE_SUFFIX}' (BOARD_TYPE=$BOARD_TYPE)"
 
   logger -p local0.info "[$KEY][$tag:$LINENO] Successfully created symlinks for wbridge binaries"
 

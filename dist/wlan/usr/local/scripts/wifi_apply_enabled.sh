@@ -35,14 +35,14 @@ ENABLED_UNITS=()
 DISABLED_UNITS=()
 FAILED_UNITS=()
 
-[ -f "$JSON" ] || { logger -p local0.warn "[$tag] $JSON not found, skip"; exit 0; }
-command -v jq >/dev/null 2>&1 || { logger -p local0.warn "[$tag] jq not available, skip"; exit 0; }
+[ -f "$JSON" ] || { logger -p local0.warn "[$tag:$LINENO] $JSON not found, skip"; exit 0; }
+command -v jq >/dev/null 2>&1 || { logger -p local0.warn "[$tag:$LINENO] jq not available, skip"; exit 0; }
 
 # JSON parse 검증 — 실패 시 즉시 중단. 그렇지 않으면 모든 키가 null로 평가되어
 # default 값(logger/checker는 true)이 운영자 의도를 덮어쓸 수 있다.
 if ! jq empty "$JSON" 2>/dev/null; then
-    logger -p local0.crit "[$tag] CRITICAL: $JSON parse failed — refusing to apply (would overwrite operator intent with defaults)"
-    printf '[%s] CRITICAL: %s parse failed — aborted\n' "$tag" "$JSON" >&2
+    logger -p local0.crit "[$tag:$LINENO] CRITICAL: $JSON parse failed — refusing to apply (would overwrite operator intent with defaults)"
+    printf '[%s:%s] CRITICAL: %s parse failed — aborted\n' "$tag" "$LINENO" "$JSON" >&2
     exit 1
 fi
 
@@ -70,20 +70,20 @@ apply() {
     local cur="false"
     systemctl is-enabled --quiet "$unit" 2>/dev/null && cur="true"
     if [ "$want" = "true" ] && [ "$cur" = "false" ]; then
-        logger -p local0.info "[$tag] enable $unit"
+        logger -p local0.info "[$tag:$LINENO] enable $unit"
         if systemctl enable "$unit" 2>/dev/null; then
             ENABLED_UNITS+=("$unit")
         else
             FAILED_UNITS+=("enable:$unit")
-            logger -p local0.err "[$tag] enable $unit failed"
+            logger -p local0.err "[$tag:$LINENO] enable $unit failed"
         fi
     elif [ "$want" = "false" ] && [ "$cur" = "true" ]; then
-        logger -p local0.info "[$tag] disable $unit"
+        logger -p local0.info "[$tag:$LINENO] disable $unit"
         if systemctl disable "$unit" 2>/dev/null; then
             DISABLED_UNITS+=("$unit")
         else
             FAILED_UNITS+=("disable:$unit")
-            logger -p local0.err "[$tag] disable $unit failed"
+            logger -p local0.err "[$tag:$LINENO] disable $unit failed"
         fi
     fi
 }
@@ -109,7 +109,7 @@ BRIDGE_IFACE=$(jq -r '.wbridge.bridge_iface // "mlan0"' "$JSON")
 for iface in mlan0 mlan1; do
     iface_en=$(get_bool ".${iface}.enabled" "false")
     if [ "$iface_en" = "false" ]; then
-        logger -p local0.info "[$tag] [$iface] disabled → all child units disable"
+        logger -p local0.info "[$tag:$LINENO] [$iface] disabled → all child units disable"
         for u in wpa_supplicant wifi_logger wifi_checker wifi_event \
                  wifi_bridge wifi_bgscan wifi_roam wifi_periodic_roam wifi_arping; do
             apply "${u}@${iface}.service" "false"
@@ -149,8 +149,10 @@ systemctl daemon-reload 2>/dev/null || true
 # 처리 요약 — logger + stdout (수동 실행 시 즉시 확인 가능)
 _log_summary() {
     local msg="$1"
-    logger -p local0.info "[$tag] $msg"
-    printf '[%s] %s\n' "$tag" "$msg"
+    # BASH_LINENO[0] = 헬퍼 호출자의 라인 (헬퍼 내부 라인이 아닌, summary가 어디서 났는지)
+    local ln=${BASH_LINENO[0]}
+    logger -p local0.info "[$tag:$ln] $msg"
+    printf '[%s:%s] %s\n' "$tag" "$ln" "$msg"
 }
 
 _log_summary "summary: enabled=${#ENABLED_UNITS[@]} disabled=${#DISABLED_UNITS[@]} failed=${#FAILED_UNITS[@]}"
