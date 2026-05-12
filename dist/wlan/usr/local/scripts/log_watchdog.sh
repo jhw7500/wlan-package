@@ -15,7 +15,7 @@ get_usage() {
 
 usage=$(get_usage)
 if [ -z "$usage" ]; then
-    logger -p local0.warn "[$tag] Cannot read filesystem usage for $LOG_PART"
+    logger -p local0.warn "[$tag:$LINENO] Cannot read filesystem usage for $LOG_PART"
     exit 0
 fi
 
@@ -23,14 +23,14 @@ if [ "$usage" -lt "$THRESHOLD" ]; then
     exit 0
 fi
 
-logger -p local0.warn "[$tag] Log filesystem usage ${usage}% >= ${THRESHOLD}%, starting cleanup"
+logger -p local0.warn "[$tag:$LINENO] Log filesystem usage ${usage}% >= ${THRESHOLD}%, starting cleanup"
 
 # 1단계: 강제 logrotate
 logrotate -f /etc/logrotate.d/logrotate.rsyslog 2>/dev/null || true
 
 usage=$(get_usage)
 if [ "$usage" -lt "$THRESHOLD" ]; then
-    logger -p local0.info "[$tag] Cleanup done after forced rotate, usage=${usage}%"
+    logger -p local0.info "[$tag:$LINENO] Cleanup done after forced rotate, usage=${usage}%"
     exit 0
 fi
 
@@ -48,4 +48,4 @@ while [ "$usage" -ge "$THRESHOLD" ] && [ "$deleted" -lt 100 ]; do
     usage=$(get_usage)
 done
 
-logger -p local0.warn "[$tag] Cleanup finished: deleted=${deleted} files, usage=${usage}%"
+logger -p local0.warn "[$tag:$LINENO] Cleanup finished: deleted=${deleted} files, usage=${usage}%"

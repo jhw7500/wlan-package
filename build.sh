@@ -12,6 +12,7 @@ fi
 
 WBRIDGE_DIR="${BASEDIR}/wlan-bridge/wbridge"
 MAKE_FOR_IMX8="${WBRIDGE_DIR}/make-for-imx8"
+MAKE_FOR_IMX93="${WBRIDGE_DIR}/make-for-imx93"
 
 cd "${WBRIDGE_DIR}"
 make clean || { echo "Warning: make clean failed"; }
@@ -19,7 +20,9 @@ make clean || { echo "Warning: make clean failed"; }
 HOST_ARCH=$(uname -m)
 echo "Host arch: ${HOST_ARCH}"
 
-build_wbridge_release() {
+# 산출물: release/wbridge_<board>, release/wbridge-tpacket_<board> 등.
+# postinst가 보드 감지(BOARD_TYPE)해서 적절한 binary로 심볼릭 링크 생성.
+build_wbridge_native() {
     if make -n release >/dev/null 2>&1; then
         make release
     else
@@ -27,25 +30,39 @@ build_wbridge_release() {
     fi
 }
 
-build_wbridge_debug_optional() {
+build_wbridge_debug_native_optional() {
     if make -n debug >/dev/null 2>&1; then
         make debug || echo "Warning: Failed to build debug binaries"
     fi
 }
 
-if [ "${HOST_ARCH}" = "aarch64" ] || [ "${HOST_ARCH}" = "arm64" ]; then
-    echo "Native build (target arch detected)"
-    build_wbridge_release || { echo "Error: Failed to build wbridge binaries"; exit 1; }
-    build_wbridge_debug_optional
-else
-    echo "Cross build (host != aarch64); using make-for-imx8"
-    if [ ! -x "${MAKE_FOR_IMX8}" ]; then
-        echo "Error: make-for-imx8 not found or not executable at ${MAKE_FOR_IMX8}" >&2
+cross_build_board() {
+    local board="$1"            # imx8 | imx93
+    local script="$2"           # make-for-imx8 | make-for-imx93
+    local suffix="_${board}"
+
+    if [ ! -x "${script}" ]; then
+        echo "Error: ${script} not found or not executable" >&2
         exit 1
     fi
 
-    "${MAKE_FOR_IMX8}" release || { echo "Error: Failed to cross-build wbridge binaries"; exit 1; }
-    "${MAKE_FOR_IMX8}" debug || echo "Warning: Failed to cross-build debug binaries"
+    echo "[wbridge] cross-build ${board} (BOARD_SUFFIX=${suffix})"
+    # NOTE: clean 호출하지 않음. Makefile이 OBJDIR_R/OBJDIR_D를 board별로 분리하므로
+    # imx8 산출물(release/wbridge_imx8 등)과 imx93 산출물을 같은 release/에 공존 가능.
+    BOARD_SUFFIX="${suffix}" "${script}" release \
+        || { echo "Error: cross-build ${board} release failed"; exit 1; }
+    BOARD_SUFFIX="${suffix}" "${script}" debug \
+        || echo "Warning: cross-build ${board} debug failed (continuing)"
+}
+
+if [ "${HOST_ARCH}" = "aarch64" ] || [ "${HOST_ARCH}" = "arm64" ]; then
+    echo "Native build (target arch detected) — single board binary (no suffix)"
+    build_wbridge_native || { echo "Error: Failed to build wbridge binaries"; exit 1; }
+    build_wbridge_debug_native_optional
+else
+    echo "Cross build (host != aarch64); building imx8 + imx93"
+    cross_build_board "imx8"  "${MAKE_FOR_IMX8}"
+    cross_build_board "imx93" "${MAKE_FOR_IMX93}"
 fi
 
 cd "${BASEDIR}"
@@ -54,26 +71,37 @@ echo "Build completed successfully"
 # Create wlan-bridge directory structure
 mkdir -p "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/"{wbridge,debug,scripts,docs}
 
-# Verify binaries exist before copying
-if [ ! -f "${BASEDIR}/wlan-bridge/wbridge/release/wbridge" ]; then
-    echo "Error: wbridge binary not found at ${BASEDIR}/wlan-bridge/wbridge/release/wbridge"
-    exit 1
-fi
-if [ ! -f "${BASEDIR}/wlan-bridge/wbridge/release/wbridge-tpacket" ]; then
-    echo "Error: wbridge-tpacket binary not found at ${BASEDIR}/wlan-bridge/wbridge/release/wbridge-tpacket"
-    exit 1
+# Native vs cross 빌드에 따라 산출물 이름이 다르다.
+# - native(aarch64): wbridge, wbridge-tpacket (suffix 없음)
+# - cross: wbridge_imx8/_imx93, wbridge-tpacket_imx8/_imx93 (양쪽 다 빌드)
+if [ "${HOST_ARCH}" = "aarch64" ] || [ "${HOST_ARCH}" = "arm64" ]; then
+    WBRIDGE_BINS=("wbridge" "wbridge-tpacket")
+else
+    WBRIDGE_BINS=("wbridge_imx8" "wbridge-tpacket_imx8" "wbridge_imx93" "wbridge-tpacket_imx93")
 fi
 
-# Copy wbridge binaries
-echo "Copying binaries..."
-cp "${BASEDIR}/wlan-bridge/wbridge/release/wbridge" "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/wbridge/" || { echo "Error: Failed to copy wbridge binary"; exit 1; }
-cp "${BASEDIR}/wlan-bridge/wbridge/release/wbridge-tpacket" "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/wbridge/" || { echo "Error: Failed to copy wbridge-tpacket binary"; exit 1; }
+# Verify binaries exist before copying
+for bin in "${WBRIDGE_BINS[@]}"; do
+    src="${BASEDIR}/wlan-bridge/wbridge/release/${bin}"
+    if [ ! -f "${src}" ]; then
+        echo "Error: ${bin} binary not found at ${src}"
+        exit 1
+    fi
+done
+
+# Copy release binaries
+echo "Copying binaries: ${WBRIDGE_BINS[*]}"
+for bin in "${WBRIDGE_BINS[@]}"; do
+    cp "${BASEDIR}/wlan-bridge/wbridge/release/${bin}" "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/wbridge/" \
+        || { echo "Error: Failed to copy ${bin}"; exit 1; }
+done
 
 # Copy debug binaries if present (optional)
-for bin in wbridge wbridge-tpacket; do
+for bin in "${WBRIDGE_BINS[@]}"; do
     src_path="${BASEDIR}/wlan-bridge/wbridge/debug/${bin}"
     if [ -f "${src_path}" ]; then
-        cp "${src_path}" "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/debug/" || echo "Warning: Failed to copy debug ${bin} binary"
+        cp "${src_path}" "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/debug/" \
+            || echo "Warning: Failed to copy debug ${bin} binary"
     else
         echo "Warning: debug ${bin} binary not found, skipping (${src_path})"
     fi

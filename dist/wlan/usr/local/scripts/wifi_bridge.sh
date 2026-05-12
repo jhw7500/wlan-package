@@ -17,7 +17,7 @@ _load_wbridge_json_defaults() {
     command -v jq >/dev/null 2>&1 && [ -f "$CONF_JSON" ] || return 0
     # JSON 파싱 검증 — 실패 시 env 파일 값을 fallback으로 유지
     if ! jq -e . "$CONF_JSON" >/dev/null 2>&1; then
-        logger -p local0.warn "[$tag] JSON parse failed ($CONF_JSON), falling back to /etc/default/wbridge values"
+        logger -p local0.warn "[$tag:$LINENO] JSON parse failed ($CONF_JSON), falling back to /etc/default/wbridge values"
         return 0
     fi
     local key val
@@ -310,7 +310,7 @@ WBRIDGE_PROFILE_VERSION=${WBRIDGE_PROFILE_VERSION:-$PROFILE_VERSION}
 WBRIDGE_MODE_FORCE=${WBRIDGE_MODE_FORCE:-$MODE_FORCE}
 
 export WBRIDGE_PROFILE_VERSION WBRIDGE_MODE_REQUESTED WBRIDGE_PROFILE_EFFECTIVE WBRIDGE_THERMAL_STATE WBRIDGE_MODE_FORCE WBRIDGE_LINK_GUARD 2>/dev/null || true
-export WBRIDGE_DISPATCH_BUDGET WBRIDGE_IMMEDIATE WBRIDGE_TIMEOUT_MS WBRIDGE_RT_PRIORITY WBRIDGE_PCAP_BUFFER WBRIDGE_TPACKET_RETIRE_TOV 2>/dev/null || true
+export WBRIDGE_DISPATCH_BUDGET WBRIDGE_IMMEDIATE WBRIDGE_TIMEOUT_MS WBRIDGE_RT_PRIORITY WBRIDGE_PCAP_BUFFER WBRIDGE_TPACKET_RETIRE_TOV WBRIDGE_TPACKET_BLOCK_SIZE WBRIDGE_TPACKET_BLOCK_NR WBRIDGE_TPACKET_POLL_TIMEOUT_MS 2>/dev/null || true
 
 EFFECTIVE_SNAPSHOT="/run/wbridge.effective.json"
 cat > "$EFFECTIVE_SNAPSHOT" <<EOF
