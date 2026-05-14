@@ -183,6 +183,7 @@
         "enabled": true,
         "Frequency": "auto",
         "net_rx": 0,
+        "mgmt_hex_dump_enable": false,
         "rate_adapt": {
             "_comment": "FW rate adaptation config. mode: 0=legacy, 1=SR. For SR: thresh 0xff=dynamic(noise-based), else static(success-rate%). interval_ms: eval period in ms. Must be set before association.",
             "mode": 1,
@@ -351,6 +352,7 @@
         "enabled": true,
         "Frequency": "auto",
         "net_rx": 0,
+        "mgmt_hex_dump_enable": false,
         "rate_adapt": {
             "_comment": "FW rate adaptation config. mode: 0=legacy, 1=SR. For SR: thresh 0xff=dynamic(noise-based), else static(success-rate%). interval_ms: eval period in ms. Must be set before association.",
             "mode": 1,

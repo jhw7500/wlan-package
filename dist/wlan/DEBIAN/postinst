@@ -9,8 +9,8 @@ KEY=PKG
 PACKAGE_NAME="$DPKG_MAINTSCRIPT_PACKAGE"
 KERNEL_VERSION=$(uname -r)
 # Get hostname from system or use default
-hostname=$(hostname 2>/dev/null || echo "cantops-device")
-
+#hostname=$(hostname 2>/dev/null || echo "cantops-device")
+hostname="cts-wlan"
 DEBCONF_AVAILABLE=0
 if [ -r /usr/share/debconf/confmodule ]; then
   . /usr/share/debconf/confmodule
@@ -250,7 +250,7 @@ makeDirectory() {
   makeDirectory /var/log/cantops/mgmt/mlan0
   makeDirectory /var/log/cantops/mgmt/mlan1
 
-  echo "set hostname"
+  echo "set hostname:$hostname"
   echo "$hostname" > /etc/hostname
   sed -i "2s/.*/127.0.1.1 $hostname/" /etc/hosts
 
