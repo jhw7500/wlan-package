@@ -224,72 +224,41 @@ fi
 /usr/local/scripts/backup_file.sh /etc/wpa_supplicant/wpa_supplicant-mlan1.conf network= "$_DEFAULT_DIR/wpa_supplicant/wpa_supplicant-mlan1.conf" \
     || logger -p local0.err "[$tag:$LINENO] backup failed: wpa_supplicant-mlan1"
 
-# Apply net_rx from wifi_init_conf.json to wifi_mod_para.conf
-# PCIE9098_0 ← mlan0.net_rx, PCIE9098_1 ← mlan1.net_rx
-apply_net_rx_to_mod_para() {
+# Apply wifi_init_conf.json values to wifi_mod_para.conf
+# Mappings (PCIE9098_0/SD9098_0 ← mlan0, PCIE9098_1/SD9098_1 ← mlan1):
+#   - net_rx        ← mlanN.net_rx (int)
+#   - mgmt_hex_dump ← mlanN.mgmt_hex_dump_enable (bool → 1/0)
+#   - bridge_mode   ← wbridge.engine="moal" → bridge_iface 블록=1, 나머지=0 (else 둘 다 0)
+apply_mod_para_from_json() {
     local conf="/lib/firmware/$MOD_PARA"
     [ -f "$conf" ] || return 0
 
-    local mlan0_net_rx mlan1_net_rx
-    mlan0_net_rx=$(jq -r '.mlan0.net_rx // 0' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-    mlan1_net_rx=$(jq -r '.mlan1.net_rx // 0' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-
-    _set_net_rx_in_block() {
-        local block="$1" value="$2"
-        # Remove existing net_rx line in block, then always write value
-        sed -i "/^[[:space:]]*${block}[[:space:]]*=/{
-            :loop
-            n
-            /^[[:space:]]*net_rx=/d
-            /^[[:space:]]*}/!b loop
-        }" "$conf"
-
-        sed -i "/^[[:space:]]*${block}[[:space:]]*=/{
-            :loop
-            n
-            /^[[:space:]]*}/{
-                i\\	net_rx=${value}
-                b done
-            }
-            b loop
-            :done
-        }" "$conf"
-        logger -p local0.info "[$tag:$LINENO] ${block}: net_rx=${value}"
-    }
-
-    local _bus
+    local _bus blk_prefix
     _bus=$(jq -r '.global.BUS_TYPE // "pcie"' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-    local blk_prefix
     if [ "$_bus" = "sdio" ]; then blk_prefix="SD9098"; else blk_prefix="PCIE9098"; fi
 
-    _set_net_rx_in_block "${blk_prefix}_0" "$mlan0_net_rx"
-    _set_net_rx_in_block "${blk_prefix}_1" "$mlan1_net_rx"
-}
-apply_net_rx_to_mod_para
+    # JSON → mod_para 값 산출
+    local m0_net_rx m1_net_rx m0_mgmt m1_mgmt engine bridge_iface m0_bridge m1_bridge
+    m0_net_rx=$(jq -r '.mlan0.net_rx // 0' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    m1_net_rx=$(jq -r '.mlan1.net_rx // 0' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
 
-# Apply bridge_mode from wbridge.engine to wifi_mod_para.conf
-# engine=moal → bridge_iface 블록에 bridge_mode=1, 나머지 0
-# engine=pcap|tpacket → 모든 블록 bridge_mode=0 (유저스페이스 bridge)
-apply_bridge_mode_to_mod_para() {
-    local conf="/lib/firmware/$MOD_PARA"
-    [ -f "$conf" ] || return 0
+    [ "$(jq -r '.mlan0.mgmt_hex_dump_enable // false' "$WIFI_INIT_CONF_JSON" 2>/dev/null)" = "true" ] && m0_mgmt=1 || m0_mgmt=0
+    [ "$(jq -r '.mlan1.mgmt_hex_dump_enable // false' "$WIFI_INIT_CONF_JSON" 2>/dev/null)" = "true" ] && m1_mgmt=1 || m1_mgmt=0
 
-    local engine bridge_iface
     engine=$(jq -r '.wbridge.engine // "pcap"' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
     bridge_iface=$(jq -r '.wbridge.bridge_iface // .global.BRIDGE_IFACE // "mlan0"' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    m0_bridge=0; m1_bridge=0
+    if [ "$engine" = "moal" ]; then
+        if [ "$bridge_iface" = "mlan1" ]; then m1_bridge=1; else m0_bridge=1; fi
+    fi
 
-    local _bus
-    _bus=$(jq -r '.global.BUS_TYPE // "pcie"' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-    local blk_prefix
-    if [ "$_bus" = "sdio" ]; then blk_prefix="SD9098"; else blk_prefix="PCIE9098"; fi
-
-    _set_bridge_mode_in_block() {
-        local block="$1" value="$2"
-        # Remove existing bridge_mode line in block, then add
+    # 블록 내 key=value 1줄을 idempotent하게 반영 (기존 라인 제거 후 닫는 `}` 직전 삽입)
+    _set_kv_in_block() {
+        local block="$1" key="$2" value="$3"
         sed -i "/^[[:space:]]*${block}[[:space:]]*=/{
             :loop
             n
-            /^[[:space:]]*bridge_mode=/d
+            /^[[:space:]]*${key}=/d
             /^[[:space:]]*}/!b loop
         }" "$conf"
 
@@ -297,28 +266,23 @@ apply_bridge_mode_to_mod_para() {
             :loop
             n
             /^[[:space:]]*}/{
-                i\\	bridge_mode=${value}
+                i\\	${key}=${value}
                 b done
             }
             b loop
             :done
         }" "$conf"
-        logger -p local0.info "[$tag:$LINENO] ${block}: bridge_mode=${value}"
+        logger -p local0.info "[$tag:$LINENO] ${block}: ${key}=${value}"
     }
 
-    local mode_0=0 mode_1=0
-    if [ "$engine" = "moal" ]; then
-        if [ "$bridge_iface" = "mlan1" ]; then
-            mode_1=1
-        else
-            mode_0=1
-        fi
-    fi
-
-    _set_bridge_mode_in_block "${blk_prefix}_0" "$mode_0"
-    _set_bridge_mode_in_block "${blk_prefix}_1" "$mode_1"
+    _set_kv_in_block "${blk_prefix}_0" "net_rx"        "$m0_net_rx"
+    _set_kv_in_block "${blk_prefix}_1" "net_rx"        "$m1_net_rx"
+    _set_kv_in_block "${blk_prefix}_0" "mgmt_hex_dump" "$m0_mgmt"
+    _set_kv_in_block "${blk_prefix}_1" "mgmt_hex_dump" "$m1_mgmt"
+    _set_kv_in_block "${blk_prefix}_0" "bridge_mode"   "$m0_bridge"
+    _set_kv_in_block "${blk_prefix}_1" "bridge_mode"   "$m1_bridge"
 }
-apply_bridge_mode_to_mod_para
+apply_mod_para_from_json
 
 try_insmod() {
     local module_path=$1
