@@ -87,8 +87,10 @@ EOF
   mkdir -p /etc/snmp
   cp /opt/wlan/config/snmp/snmpd.conf /etc/snmp/snmpd.conf
 
-  systemctl restart rsyslog
-  systemctl restart systemd-journald
+  # 부팅 중 oneshot(wifi_install.service) 안에서 journald를 restart하면 이 스크립트의
+  # 로그 소켓이 끊긴다. 새 journald.conf/rsyslog.conf는 다음 부팅에 자연히 적용되므로
+  # journald restart는 제거하고, rsyslog는 --no-block로 잡 대기 없이 재시작한다.
+  systemctl --no-block restart rsyslog 2>/dev/null || true
 
   if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload 2>/dev/null || true
@@ -214,7 +216,9 @@ customctl() {
   # (wifi_logger 글로벌, wifi_led/wifi_logger eth0+mlan0) + wifi-stack.target
   # wifi-stack.target 은 multi-user.target 도달 후 비블로킹으로 wifi 스택을 기동한다.
   systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer wifi-stack.target wifi_init wifi_apply_enabled wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 log-watchdog.timer serial-getty@ttyGS0.service || true
-  systemctl start switchd wifi_led@eth0 serial-getty@ttyGS0.service || true
+  # serial-getty@ttyGS0는 커널 콘솔이자 이 설치 로그 출력 대상이라 동기 start가
+  # 위험하다(PID1 잡 대기와 맞물려 데드락 가능). --no-block로 큐잉만 하고 진행한다.
+  systemctl start --no-block switchd wifi_led@eth0 serial-getty@ttyGS0.service || true
 
   # wifi 자식 데몬 (wifi_logger@mlanN, wifi_checker@, wifi_bgscan@, wifi_roam@, wifi_arping@,
   # wifi_periodic_roam@, wifi_event@, wifi_bridge@, wpa_supplicant@, wifi_ping_monitor,
@@ -415,9 +419,9 @@ json_merge() {
   /usr/local/scripts/change_line.sh "#root" "root" /etc/vsftpd.user_list
   /usr/local/scripts/add_line.sh "/dev/mmcblk${EMMC_NUM}p3      /var/log/cantops  ext4  noatime,nodiratime,lazytime,commit=60,data=ordered  0  2" /etc/fstab
 
-  if command -v systemctl >/dev/null 2>&1; then
-    systemctl daemon-reload 2>/dev/null || true
-  fi
+  # /etc/systemd/system.conf 변경(DefaultTimeout*, WatchdogDevice)은 PID1이 부팅 시
+  # 읽으므로 다음 부팅에 적용된다. 설치 도중 daemon-reload로 system.conf를 다시
+  # 읽게 하지 않는다(WatchdogDevice 재오픈/타이머 재평가 등 부작용 회피).
 
   if [ -f /etc/default/wbridge ]; then
     # shellcheck source=/etc/default/wbridge
@@ -428,7 +432,9 @@ json_merge() {
   if command -v systemctl >/dev/null 2>&1; then
     case "$THERMAL_TIMER_ENABLE" in
       1)
-        systemctl enable --now wifi_thermal_state.timer 2>/dev/null || true
+        # --now(동기 start) 대신 enable + start --no-block로 잡 대기 없이 기동.
+        systemctl enable wifi_thermal_state.timer 2>/dev/null || true
+        systemctl start --no-block wifi_thermal_state.timer 2>/dev/null || true
         logger -p local0.info "[$KEY][$tag:$LINENO] Enabled wifi_thermal_state.timer"
         ;;
       *)
