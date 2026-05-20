@@ -99,6 +99,30 @@ update_json_global() {
     fi
 }
 
+update_json_iface() {
+    local iface="$1"
+    local key="$2"
+    local value="$3"
+
+    if [ ! -f "$WIFI_INIT_CONF_JSON" ]; then
+        echo "Error: $WIFI_INIT_CONF_JSON not found"
+        return 1
+    fi
+
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "Error: jq not installed"
+        return 1
+    fi
+
+    if jq --arg i "$iface" --arg k "$key" --arg v "$value" '.[$i][$k] = $v' "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp"; then
+        mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
+    else
+        rm -f "${WIFI_INIT_CONF_JSON}.tmp"
+        echo "Error: JSON iface update failed for ${iface}.${key}" >&2
+        return 1
+    fi
+}
+
 ensure_wifi_init_conf() {
     # JSON config is managed by postinst, no action needed here
     :
@@ -114,7 +138,7 @@ usage() {
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} gt {address} : persist"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} mac {0|1|base|target} {mac_address} : persist"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} spoof {0|1|dynamic|static} : persist"
-    #echo "       wifi {0|1|mlan0|mlan1} standard {n|ac|ax|4|5|6} : persist"
+    echo "       wifi {0|1|mlan0|mlan1} standard {n|ac|ax|4|5|6} : persist (mlan1은 ax 불가)"
     echo "       wifi {0|1|mlan0|mlan1} ssid {id} : persist"
     echo "       wifi {0|1|mlan0|mlan1} psk {password} : persist"
     echo "       wifi {0|1|mlan0|mlan1} key {0|1|NONE|WPA-PSK|*} : persist"
@@ -961,8 +985,13 @@ case "$2" in
         usage
     fi
 
-    update_json_global "STANDARD" "$VAL"
-    echo "STANDARD updated to $VAL in $WIFI_INIT_CONF_JSON"
+    if [ "$IFACE" = "mlan1" ] && [ "$VAL" = "ax" ]; then
+        echo "Error: mlan1 does not support ax (11ax). Use n or ac." >&2
+        exit 1
+    fi
+
+    update_json_iface "$IFACE" "STANDARD" "$VAL"
+    echo "STANDARD updated to $VAL for $IFACE in $WIFI_INIT_CONF_JSON"
     ;;
   ip)
     set -euo pipefail

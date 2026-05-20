@@ -179,6 +179,7 @@
     },
     "mlan0": {
         "_comment": "mlan0 interface configuration",
+        "STANDARD": "ax",
         "connect_threshold": -100,
         "enabled": true,
         "Frequency": "auto",
@@ -348,6 +349,7 @@
     },
     "mlan1": {
         "_comment": "mlan1 interface configuration",
+        "STANDARD": "ac",
         "connect_threshold": -100,
         "enabled": true,
         "Frequency": "auto",

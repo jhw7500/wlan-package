@@ -10,7 +10,6 @@ JSON_FILE="${JSON_FILE:-/usr/local/etc/config.json}"
 MOD_PARA="cts/wifi_mod_para.conf"
 CAL_DATA_CFG="cts/WlanCalData_ext_RD.conf"
 TXPWRLIMIT_PATH="/lib/firmware/cts/txpwrlimit_cfg_9098.conf"
-DEV_CAP_MASK=""
 
 WIFI_INIT_CONF_JSON="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
 
@@ -21,8 +20,6 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
     MOD_PARA=$(jq -r '.global.MOD_PARA // "cts/wifi_mod_para.conf"' "$WIFI_INIT_CONF_JSON")
     CAL_DATA_CFG=$(jq -r '.global.CAL_DATA_CFG // "cts/WlanCalData_ext_RD.conf"' "$WIFI_INIT_CONF_JSON")
     TXPWRLIMIT_PATH=$(jq -r '.global.TXPWRLIMIT_PATH // "/lib/firmware/cts/txpwrlimit_cfg_9098.conf"' "$WIFI_INIT_CONF_JSON")
-    STANDARD=$(jq -r '.global.STANDARD // ""' "$WIFI_INIT_CONF_JSON")
-    DEV_CAP_MASK=$(jq -r '.global.DEV_CAP_MASK // ""' "$WIFI_INIT_CONF_JSON")
     BRIDGE_IFACE=$(jq -r '.wbridge.bridge_iface // .global.BRIDGE_IFACE // "mlan0"' "$WIFI_INIT_CONF_JSON")
     WBRIDGE_ENABLED=$(jq -r 'if .wbridge.enabled then "true" else "false" end' "$WIFI_INIT_CONF_JSON" 2>/dev/null || echo "true")
     MAC_MODE=$(jq -r '.wbridge.mac_mode // .global.MAC_MODE // "default"' "$WIFI_INIT_CONF_JSON")
@@ -47,38 +44,8 @@ if [ "${TXPWRLIMIT_PATH:-}" = "none" ]; then
     TXPWRLIMIT_PATH=""
 fi
 
-STANDARD="${STANDARD:-}"
-if [ -n "$STANDARD" ]; then
-    standard_lc=$(printf '%s' "$STANDARD" | tr '[:upper:]' '[:lower:]')
-    if [ "$standard_lc" = "4" ]; then
-        standard_lc="n"
-    elif [ "$standard_lc" = "5" ]; then
-        standard_lc="ac"
-    elif [ "$standard_lc" = "6" ]; then
-        standard_lc="ax"
-    fi
-
-    #if [ "$standard_lc" = "ax" ]; then
-    #    logger -p local0.warn "[$tag:$LINENO] STANDARD=ax requested but mlan1 does not support ax; using ac"
-    #    standard_lc="ac"
-    #fi
-
-    if [ "$standard_lc" = "n" ]; then
-        DEV_CAP_MASK="0xfffcdfff"
-    elif [ "$standard_lc" = "ac" ]; then
-        DEV_CAP_MASK="0xfffcffff"
-    elif [ "$standard_lc" = "ax" ]; then
-        DEV_CAP_MASK="0xffffffff"
-    else
-        logger -p local0.err "[$tag:$LINENO] STANDARD invalid: $STANDARD"
-    fi
-fi
-
-# moal 파라미터 구성
+# moal 파라미터 구성 (dev_cap_mask는 인터페이스별로 wifi_mod_para.conf 블록에 주입됨)
 moal_args="mod_para=$MOD_PARA cal_data_cfg=$CAL_DATA_CFG"
-if [ -n "${DEV_CAP_MASK:-}" ]; then
-    moal_args="$moal_args dev_cap_mask=$DEV_CAP_MASK"
-fi
 logger -p local0.info "[$tag:$LINENO] moal_args: $moal_args"
 logger -p local0.info "[$tag:$LINENO] BOARD_TYPE=$BOARD_TYPE, modules=$MLAN_KO/$MOAL_KO"
 
@@ -229,6 +196,7 @@ fi
 #   - net_rx        ← mlanN.net_rx (int)
 #   - mgmt_hex_dump ← mlanN.mgmt_hex_dump_enable (bool → 1/0)
 #   - bridge_mode   ← wbridge.engine="moal" → bridge_iface 블록=1, 나머지=0 (else 둘 다 0)
+#   - dev_cap_mask  ← mlanN.STANDARD (없으면 global.STANDARD) → n/ac만 set, ax/빈값은 라인 삭제(칩 기본값)
 apply_mod_para_from_json() {
     local conf="/lib/firmware/$MOD_PARA"
     [ -f "$conf" ] || return 0
@@ -236,6 +204,11 @@ apply_mod_para_from_json() {
     local _bus blk_prefix
     _bus=$(jq -r '.global.BUS_TYPE // "pcie"' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
     if [ "$_bus" = "sdio" ]; then blk_prefix="SD9098"; else blk_prefix="PCIE9098"; fi
+
+    # dev_cap_mask 산출용 global fallback (인터페이스별 STANDARD가 비었을 때 사용)
+    local g_standard g_devcap
+    g_standard=$(jq -r '.global.STANDARD // ""' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    g_devcap=$(jq -r '.global.DEV_CAP_MASK // ""' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
 
     # JSON → mod_para 값 산출
     local m0_net_rx m1_net_rx m0_mgmt m1_mgmt engine bridge_iface m0_bridge m1_bridge
@@ -275,12 +248,81 @@ apply_mod_para_from_json() {
         logger -p local0.info "[$tag:$LINENO] ${block}: ${key}=${value}"
     }
 
+    # 블록에서 key 라인을 제거 (없으면 no-op)
+    _del_kv_in_block() {
+        local block="$1" key="$2"
+        sed -i "/^[[:space:]]*${block}[[:space:]]*=/{
+            :loop
+            n
+            /^[[:space:]]*${key}=/d
+            /^[[:space:]]*}/!b loop
+        }" "$conf"
+        logger -p local0.info "[$tag:$LINENO] ${block}: ${key} removed"
+    }
+
+    # 표준 레벨: n < ac < ax
+    _std_level() {
+        case "$1" in n) echo 1 ;; ac) echo 2 ;; ax) echo 3 ;; *) echo 0 ;; esac
+    }
+
+    # 인터페이스 STANDARD(없으면 global)를 dev_cap_mask로 변환해 블록에 반영.
+    #   인터페이스 native max 이상이면 라인 삭제(제한 불필요=칩 기본값): mlan0 max=ax, mlan1 max=ac.
+    #   그보다 낮은 표준만 dev_cap_mask 설정. n→0xfffcdfff, ac→0xfffcffff. mlan1 ax는 경고.
+    _apply_dev_cap_mask() {
+        local iface="$1" block="$2"
+        local s mask iface_max
+        s=$(jq -r --arg i "$iface" '.[$i].STANDARD // ""' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+        [ -z "$s" ] && s="$g_standard"
+        s=$(printf '%s' "$s" | tr '[:upper:]' '[:lower:]')
+        case "$s" in
+            4) s="n" ;;
+            5) s="ac" ;;
+            6) s="ax" ;;
+        esac
+
+        # STANDARD 미지정 → raw fallback 또는 라인 삭제
+        if [ -z "$s" ]; then
+            if [ -n "$g_devcap" ]; then
+                _set_kv_in_block "$block" "dev_cap_mask" "$g_devcap"
+            else
+                _del_kv_in_block "$block" "dev_cap_mask"
+            fi
+            return
+        fi
+
+        if [ "$(_std_level "$s")" = "0" ]; then
+            logger -p local0.err "[$tag:$LINENO] ${iface} STANDARD invalid: $s"
+            _del_kv_in_block "$block" "dev_cap_mask"
+            return
+        fi
+
+        # 인터페이스 native 최대 표준 (mlan1은 ax 미지원)
+        if [ "$iface" = "mlan1" ]; then iface_max="ac"; else iface_max="ax"; fi
+
+        if [ "$(_std_level "$s")" -ge "$(_std_level "$iface_max")" ]; then
+            # native max 이상 → 제한 불필요 = 라인 삭제(칩 기본값)
+            if [ "$iface" = "mlan1" ] && [ "$s" = "ax" ]; then
+                logger -p local0.warn "[$tag:$LINENO] ${iface} STANDARD=ax 비권장 — dev_cap_mask 미설정(기본값)"
+            fi
+            _del_kv_in_block "$block" "dev_cap_mask"
+            return
+        fi
+
+        case "$s" in
+            n)  mask="0xfffcdfff" ;;
+            ac) mask="0xfffcffff" ;;
+        esac
+        _set_kv_in_block "$block" "dev_cap_mask" "$mask"
+    }
+
     _set_kv_in_block "${blk_prefix}_0" "net_rx"        "$m0_net_rx"
     _set_kv_in_block "${blk_prefix}_1" "net_rx"        "$m1_net_rx"
     _set_kv_in_block "${blk_prefix}_0" "mgmt_hex_dump" "$m0_mgmt"
     _set_kv_in_block "${blk_prefix}_1" "mgmt_hex_dump" "$m1_mgmt"
     _set_kv_in_block "${blk_prefix}_0" "bridge_mode"   "$m0_bridge"
     _set_kv_in_block "${blk_prefix}_1" "bridge_mode"   "$m1_bridge"
+    _apply_dev_cap_mask "mlan0" "${blk_prefix}_0"
+    _apply_dev_cap_mask "mlan1" "${blk_prefix}_1"
 }
 apply_mod_para_from_json
 
