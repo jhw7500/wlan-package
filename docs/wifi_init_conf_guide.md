@@ -66,8 +66,8 @@ wifi_init_conf.json
 | `CAL_DATA_CFG` | string | `"cts/WlanCalData_ext_RD.conf"` | 캘리브레이션 데이터 파일 |
 | `TXPWRLIMIT_PATH` | string | `"/lib/firmware/cts/txpwrlimit_cfg_9098.conf"` | TX 파워 리밋 설정 파일 (절대 경로) |
 | `MFG_MODE` | string | `"0"` | 제조 모드. `"1"` = MFG 모드 활성화 |
-| `STANDARD` | string | `""` | WiFi 표준 제한 (비어있으면 자동) |
-| `DEV_CAP_MASK` | string | `""` | 디바이스 capability 마스크 |
+| `STANDARD` | string | `""` | WiFi 표준 제한 **fallback**. 인터페이스별 `mlanN.STANDARD`가 우선하며, 비어있을 때만 이 값 사용. `n`/`ac`/`ax`(또는 `4`/`5`/`6`). 자세한 내용은 [11.1 STANDARD → dev_cap_mask 매핑](#standard--wifi_mod_paraconf-매핑) 참고 |
+| `DEV_CAP_MASK` | string | `""` | dev_cap_mask raw fallback. 인터페이스/global `STANDARD`가 모두 비었을 때만 사용 |
 
 > **참고**: `BRIDGE_IFACE`, `MAC_MODE`, `ETH_CLIENT_IP`, `eth_link_wait_sec`는 `wbridge` 섹션으로 이동되었습니다. 하위 호환을 위해 `global`에 있어도 동작하지만, 새 설정에서는 `wbridge` 섹션을 사용하세요.
 
@@ -440,6 +440,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 | `enabled` | bool | `true` | 인터페이스별 초기화/적용 여부. `false`면 `wifi_init.sh`가 해당 인터페이스의 radio setup과 bridge enable을 건너뜀 |
 | `Frequency` | string | `"auto"` | 인터페이스별 bandcfg 기본값. `auto`, `2.4GHz`, `5GHz` |
 | `net_rx` | int | `0` | MGMT 프레임 로깅 모드. `wifi_init.sh`가 `wifi_mod_para.conf`의 해당 PCIE9098 블록에 반영. 0=비활성 |
+| `STANDARD` | string | mlan0 `"ax"`, mlan1 `"ac"` | WiFi 표준 제한. `wifi_init.sh`가 `wifi_mod_para.conf`의 해당 블록에 `dev_cap_mask`로 반영. `n`/`ac`/`ax`(또는 `4`/`5`/`6`). **mlan1은 `ax` 불가**. 아래 [매핑](#standard--wifi_mod_paraconf-매핑) 참고 |
 
 > `config.json`이 별도로 설치된 환경에서는 `.mlan0.enabled`, `.mlan1.enabled`, `.mlan0.Frequency`, `.mlan1.Frequency`가 존재할 때만 이 값을 override한다.
 
@@ -463,6 +464,32 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 | `.mlan1.net_rx` | `PCIE9098_1` |
 
 값이 0이면 conf에서 `net_rx=` 줄이 제거되고, 0보다 크면 `net_rx=값`이 블록 내에 추가/갱신된다.
+
+#### STANDARD → wifi_mod_para.conf 매핑
+
+인터페이스별 `STANDARD`를 `wifi_init.sh`(`apply_mod_para_from_json`)가 `wifi_mod_para.conf`의 해당 블록 `dev_cap_mask=`로 변환한다. 모듈 로드 시 전역 `dev_cap_mask=` 파라미터는 더 이상 전달하지 않고, 블록별 주입으로 대체되었다.
+
+**핵심 규칙**: 인터페이스의 native max 표준(mlan0=`ax`, mlan1=`ac`)과 **같거나 높으면** 제한이 불필요하므로 `dev_cap_mask` 줄을 **삭제**(칩 기본값)한다. 그보다 **낮은** 표준만 마스크를 설정한다.
+
+| STANDARD | dev_cap_mask | mlan0 (max=ax) | mlan1 (max=ac) |
+|----------|--------------|----------------|----------------|
+| `n` (=`4`) | `0xfffcdfff` | set | set |
+| `ac` (=`5`) | `0xfffcffff` | set | **삭제**(=기본값) |
+| `ax` (=`6`) | — | **삭제**(=기본값) | **삭제** + 경고 |
+| `""` (빈값) | fallback | 아래 우선순위로 결정 | 아래 우선순위로 결정 |
+
+| JSON 경로 | conf 블록 (BUS_TYPE에 따라) |
+|-----------|----------|
+| `.mlan0.STANDARD` | `PCIE9098_0` / `SD9098_0` |
+| `.mlan1.STANDARD` | `PCIE9098_1` / `SD9098_1` |
+
+**우선순위**: `mlanN.STANDARD` → (빈값) `global.STANDARD` → (빈값) `global.DEV_CAP_MASK`(raw) → 그래도 없으면 줄 제거(제한 없음)
+
+**제약**: `mlan1`은 `ax`(11ax)를 지원하지 않는다.
+- `wifi mlan1 standard ax` → 거부(미적용)
+- JSON에 `.mlan1.STANDARD="ax"`를 직접 넣으면 `wifi_init.sh`가 경고 로그 후 `dev_cap_mask` 미설정(기본값) 처리
+
+매 부팅 시 idempotent하게 반영된다(기존 줄 삭제 후 재삽입).
 
 ### 11.2 periodic_roam - 주기적 패시브 로밍
 
@@ -627,6 +654,7 @@ mlan0 / mlan1에 개별 적용. 블록이 없거나 특정 키가 없으면 `glo
 
 | 설정 경로 | mlan0 | mlan1 | 이유 |
 |-----------|-------|-------|------|
+| `STANDARD` | `ax` | `ac` | mlan1은 11ax 미지원 |
 | `roaming.CHECK_INTERVAL` | `3` | `5` | mlan0은 주 채널로 더 빠른 로밍 감지 |
 | `LOAD_BASED_ROAM.enable` | `false` | `true` | mlan1은 보조 채널로 부하 분산 활용 |
 | `PING_PONG_PREVENTION.window` | `30` | `60` | mlan1은 더 넓은 윈도우로 보수적 판단 |
