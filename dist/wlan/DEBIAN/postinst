@@ -41,6 +41,7 @@ disable_services_if_enabled() {
 case "$1" in
 configure)
   echo "postinst configure"
+  /usr/local/logger/print.py green "\r\n[installer] start: 설정 복사/점검..."
 
   # CRITICAL: Verify binaries and config exist BEFORE making any system changes.
   # 보드별 suffix(_imx8/_imx93) 바이너리 또는 legacy suffix-less 중 하나 이상 필요.
@@ -151,6 +152,7 @@ EOF
     EMMC_NUM=0
   fi
 
+  /usr/local/logger/print.py green "\r\n[installer] preparing data partition (resize, 시간 소요)..."
   # p3 파티션이 없으면 emmc_fdisk.sh로 생성
   if [ ! -b /dev/mmcblk${EMMC_NUM}p3 ]; then
     logger -p local0.info "[$KEY][postinst:$LINENO] p3 not found, creating via emmc_fdisk.sh"
@@ -215,6 +217,7 @@ customctl() {
   # 시스템 unit + wifi 진입점(wifi_init/wifi_apply_enabled) + 통제 외 wifi unit
   # (wifi_logger 글로벌, wifi_led/wifi_logger eth0+mlan0) + wifi-stack.target
   # wifi-stack.target 은 multi-user.target 도달 후 비블로킹으로 wifi 스택을 기동한다.
+  /usr/local/logger/print.py green "\r\n[installer] enabling services..."
   systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer wifi-stack.target wifi_init wifi_apply_enabled wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 log-watchdog.timer serial-getty@ttyGS0.service || true
   # serial-getty@ttyGS0는 커널 콘솔이자 이 설치 로그 출력 대상이라 동기 start가
   # 위험하다(PID1 잡 대기와 맞물려 데드락 가능). --no-block로 큐잉만 하고 진행한다.
