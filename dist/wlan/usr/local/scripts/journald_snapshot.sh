@@ -17,6 +17,15 @@ mkdir -p "$DST"
 
 journalctl --sync 2>/dev/null || true
 
+# --- 과거 날짜 스냅샷 압축 (당일 파일은 append 중이라 제외) ---
+# logrotate.rsyslog 와 동일하게 gzip 한다. 조회는 zgrep/zcat 사용.
+for f in "$DIR"/*/journal.log; do
+    [ -e "$f" ] || continue
+    if [ "$f" != "$DST/journal.log" ]; then
+        gzip -f "$f" 2>/dev/null || true
+    fi
+done
+
 # --- retention 정리 (디스크 부족 시에도 반드시 실행) ---
 
 # 날짜별 디렉토리 수 제한
@@ -27,12 +36,15 @@ if (( cnt > MAX_CNT )); then
     find "$DIR" -mindepth 1 -maxdepth 1 -type d -printf '%T+ %p\n' | sort | head -n "$del" | cut -d' ' -f2- | xargs -r rm -rf --
 fi
 
-# 전체 크기 제한
+# 전체 크기 제한 — 한도 이하로 내려갈 때까지 오래된 날짜부터 반복 삭제
 size=$(du -sb "$DIR" | awk '{print $1}')
-if (( size > MAX_SIZE )); then
-    logger -p local0.info "[$tag:$LINENO] journald dir size : $size > $MAX_SIZE"
-    find "$DIR" -mindepth 1 -maxdepth 1 -type d -printf '%T+ %p\n' | sort | head -n 1 | cut -d' ' -f2- | xargs -r rm -rf --
-fi
+while (( size > MAX_SIZE )); do
+    oldest=$(find "$DIR" -mindepth 1 -maxdepth 1 -type d -printf '%T+ %p\n' | sort | head -n 1 | cut -d' ' -f2-)
+    [ -z "$oldest" ] && break
+    logger -p local0.info "[$tag:$LINENO] journald dir size : $size > $MAX_SIZE, rm $oldest"
+    rm -rf -- "$oldest"
+    size=$(du -sb "$DIR" | awk '{print $1}')
+done
 
 # --- 디스크 여유 공간 체크 후 스냅샷 ---
 
