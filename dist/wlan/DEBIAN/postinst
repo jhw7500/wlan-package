@@ -397,7 +397,9 @@ json_merge() {
   rm -rf /usr/local/mfgtool 2>/dev/null || true
   ln -sf /opt/wlan/mfg/mfgbridge /usr/local/mfg/mfgbridge
   ln -sf /usr/local/scripts/wifi.sh /usr/local/bin/wifi
-  ln -sf /var/log/cantops/journal /var/log/journal 2>/dev/null || true
+  # /var/log/journal 은 Storage=volatile 에서 journald 가 참조하지 않는다.
+  # 과거 설치가 만든 dangling 심볼릭만 정리한다(영속화는 journald 스냅샷이 담당).
+  [ -L /var/log/journal ] && rm -f /var/log/journal
   ln -sf /usr/local/scripts/logctl.sh /usr/local/bin/logctl
   ln -sf /usr/local/scripts/mlanutl_silent.sh /usr/local/bin/mlanutl_silent
   ln -sf /usr/local/logger/passive_roam.py /usr/local/bin/roaming

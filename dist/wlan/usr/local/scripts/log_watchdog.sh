@@ -48,4 +48,16 @@ while [ "$usage" -ge "$THRESHOLD" ] && [ "$deleted" -lt 100 ]; do
     usage=$(get_usage)
 done
 
+# 3단계: .gz 정리 후에도 임계 이상이면 journald 스냅샷(비압축)을 오래된 날짜부터 삭제.
+# journal.log 는 *.gz 가 아니라 2단계 대상이 아니고 logrotate 대상도 아니므로
+# 디스크 풀 긴급 상황에서 여기서만 정리된다(정상 retention 은 journald_snapshot.sh).
+JOURNALD_DIR="/var/log/cantops/journald"
+while [ "$usage" -ge "$THRESHOLD" ]; do
+    oldest_dir=$(find "$JOURNALD_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%T+ %p\n' 2>/dev/null | sort | head -1 | cut -d' ' -f2-)
+    [ -z "$oldest_dir" ] && break
+    rm -rf -- "$oldest_dir"
+    deleted=$((deleted + 1))
+    usage=$(get_usage)
+done
+
 logger -p local0.warn "[$tag:$LINENO] Cleanup finished: deleted=${deleted} files, usage=${usage}%"
