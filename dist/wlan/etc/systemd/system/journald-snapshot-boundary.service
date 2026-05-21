@@ -1,0 +1,18 @@
+[Unit]
+Description=Snapshot journal at boot completion and shutdown
+# multi-user.target 도달(부팅완료) 이후 ExecStart 실행.
+# 종료 시 기본 의존성에 의해 shutdown.target 이전에 정지되며 ExecStop 실행
+# (journald/파일시스템이 아직 살아있는 시점이라 eMMC 기록 가능).
+After=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/scripts/journald_snapshot.sh
+ExecStop=/usr/local/scripts/journald_snapshot.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+[Install]
+WantedBy=multi-user.target

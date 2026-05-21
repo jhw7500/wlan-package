@@ -1,5 +1,5 @@
 [Unit]
-Description=Periodic journal snapshot (30?60s)
+Description=Periodic journal snapshot (boot+1min, then every 5min)
 
 [Timer]
 OnBootSec=1min

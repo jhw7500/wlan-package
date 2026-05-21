@@ -218,7 +218,7 @@ customctl() {
   # (wifi_logger 글로벌, wifi_led/wifi_logger eth0+mlan0) + wifi-stack.target
   # wifi-stack.target 은 multi-user.target 도달 후 비블로킹으로 wifi 스택을 기동한다.
   /usr/local/logger/print.py green "\r\n[installer] enabling services..."
-  systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer wifi-stack.target wifi_init wifi_apply_enabled wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 log-watchdog.timer serial-getty@ttyGS0.service || true
+  systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer journald-snapshot-boundary.service wifi-stack.target wifi_init wifi_apply_enabled wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 log-watchdog.timer serial-getty@ttyGS0.service || true
   # serial-getty@ttyGS0는 커널 콘솔이자 이 설치 로그 출력 대상이라 동기 start가
   # 위험하다(PID1 잡 대기와 맞물려 데드락 가능). --no-block로 큐잉만 하고 진행한다.
   systemctl start --no-block switchd wifi_led@eth0 serial-getty@ttyGS0.service || true

@@ -8,5 +8,5 @@ Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
 
-[Install]
-WantedBy=multi-user.target
+# 이 유닛은 journald-snapshot.timer 전용(타이머가 트리거)이므로 [Install] 섹션을 두지 않는다.
+# 부팅완료/shutdown 스냅샷은 journald-snapshot-boundary.service가 담당한다.
