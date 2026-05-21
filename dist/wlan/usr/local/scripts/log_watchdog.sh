@@ -1,6 +1,6 @@
 #!/bin/bash
 # log_watchdog.sh — 로그 파일시스템 사용률 감시 + 긴급 정리
-# systemd timer로 5분마다 실행
+# systemd timer로 10분마다 실행 (log-watchdog.timer: OnUnitActiveSec=10min)
 
 set -uo pipefail
 
