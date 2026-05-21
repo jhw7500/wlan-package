@@ -2,6 +2,11 @@
 tag=$(basename "$0")
 set -euo pipefail
 
+# 동시 실행 직렬화: 타이머(5분 주기)/부팅완료/shutdown 트리거가 겹쳐
+# cursor 파일이 깨지거나 로그가 중복/유실되는 것을 방지한다.
+exec 9>/run/journald_snapshot.lock
+flock 9
+
 DIR="/var/log/cantops/journald"
 CURSOR_FILE="$DIR/.cursor"
 DST="$DIR/$(date +%Y%m%d)"
