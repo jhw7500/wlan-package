@@ -42,6 +42,14 @@ if [ "${avail_kb:-0}" -lt 10240 ]; then
     exit 0
 fi
 
+# cursor 유실/손상 시 직전 백업본으로 복구해 과거 로그 재덤프(중복 폭증)를 막는다.
+# (.cursor 와 .cursor.bak 이 동시에 손상된 경우만 head 부터 재덤프되며, 그 1회
+#  중복량은 RuntimeMaxUse 로 제한된다)
+if [ ! -s "$CURSOR_FILE" ] && [ -s "$CURSOR_FILE.bak" ]; then
+    cp -f "$CURSOR_FILE.bak" "$CURSOR_FILE" 2>/dev/null || true
+    logger -p local0.warn "[$tag:$LINENO] cursor missing/empty, restored from backup"
+fi
+
 # 스냅샷 전 크기 기록
 before_size=$(stat -c%s "$DST/journal.log" 2>/dev/null || echo 0)
 
@@ -50,6 +58,11 @@ journalctl --cursor-file="$CURSOR_FILE" \
            --no-pager \
            -o short-iso \
            >> "$DST/journal.log" 2>/dev/null || true
+
+# 갱신된 cursor 를 백업(다음 실행의 유실/손상 대비)
+if [ -s "$CURSOR_FILE" ]; then
+    cp -f "$CURSOR_FILE" "$CURSOR_FILE.bak" 2>/dev/null || true
+fi
 
 after_size=$(stat -c%s "$DST/journal.log" 2>/dev/null || echo 0)
 added=$((after_size - before_size))
