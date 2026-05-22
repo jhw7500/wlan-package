@@ -131,7 +131,7 @@ ensure_wifi_init_conf() {
 usage() {
     echo "Usage: wifi {0|1|2|mlan0|mlan1|eth0} {start|up|stop|down|restart|status} : runtime"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} br {up|down|start|stop|restart} : runtime"
-    echo "       wifi {0|1|2|mlan0|mlan1|eth0} txpwr {0|1|2|3|no|default|low|org|custom_file_name} : runtime"
+    echo "       wifi {0|1|2|mlan0|mlan1|eth0} txpwr {0|1|2|3|no|default|low|org|custom_file_name} : persist+runtime"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} config {conf} {value} : persist"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} info : show current configuration and status"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} ip {address/netmask} : persist"
@@ -139,6 +139,8 @@ usage() {
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} mac {0|1|base|target} {mac_address} : persist"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} spoof {0|1|dynamic|static} : persist"
     echo "       wifi {0|1|mlan0|mlan1} standard {n|ac|ax|4|5|6} : persist (mlan1은 ax 불가)"
+    echo "       wifi {0|1|mlan0|mlan1} cal {0|1|2|none|WlanCalData_ext.conf|*} : persist (인터페이스별)"
+    echo "       wifi {0|1|mlan0|mlan1} log {cp [dir]|compress} : 로그 복사/압축(현재 디렉터리)"
     echo "       wifi {0|1|mlan0|mlan1} ssid {id} : persist"
     echo "       wifi {0|1|mlan0|mlan1} psk {password} : persist"
     echo "       wifi {0|1|mlan0|mlan1} key {0|1|NONE|WPA-PSK|*} : persist"
@@ -155,6 +157,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} mcs [off|reset|ht <7|15> vht <7|8|9> he <7|9|11>] : persist+runtime"
     echo "       wifi set {fem|azure} : apply preset configuration profile"
     echo "       wifi stand {n|ac|ax|4|5|6} : persist"
+    echo "       wifi log all : /var/log/cantops 전체 압축(현재 디렉터리)"
     echo "       wifi backup : persist"
     exit 1
 }
@@ -586,6 +589,29 @@ case "$1" in
     echo "STANDARD updated to $VAL in $WIFI_INIT_CONF_JSON"
     exit 1
     ;;
+  log)
+    if [ "$2" == "all" ]; then
+        LOG_BASE=/var/log/cantops
+        if [ ! -d "$LOG_BASE" ]; then
+            echo "Error: $LOG_BASE not found" >&2
+            exit 1
+        fi
+        if ! command -v zip >/dev/null 2>&1; then
+            echo "Error: zip not installed" >&2
+            exit 1
+        fi
+        ARCHIVE="$(pwd)/cantops_log_$(date +%Y%m%d_%H%M%S).zip"
+        if ( cd "$(dirname "$LOG_BASE")" && zip -r -q "$ARCHIVE" "$(basename "$LOG_BASE")" ); then
+            echo "Compressed $LOG_BASE to $ARCHIVE"
+            exit 0
+        else
+            echo "Error: zip failed" >&2
+            exit 1
+        fi
+    else
+        usage
+    fi
+    ;;
   backup)
     BACKUP_DIR=/var/log/cantops/backup
     echo "backup to $BACKUP_DIR..."
@@ -711,29 +737,38 @@ case "$2" in
     ;;
   txpwr | txpwrlimit)
     if [ "$3" == "no" ] || [ "$3" == "0" ]; then
-        echo "not change txpwrlimit for $IFACE"
-        CONF=""
+        echo "no txpwrlimit for $IFACE"
+        CONF=""; TXPWR_PERSIST="none"
     elif [ "$3" == "default" ] || [ "$3" == "1" ]; then
         echo "default txpwrlimit for $IFACE"
-        CONF=/lib/firmware/cts/txpwrlimit_cfg_9098.conf
+        CONF=/lib/firmware/cts/txpwrlimit_cfg_9098.conf; TXPWR_PERSIST="$CONF"
     elif [ "$3" == "low" ] || [ "$3" == "2" ]; then
         echo "low txpwrlimit for $IFACE"
-        CONF=/lib/firmware/cts/txpwrlimit_cfg_9098_low.conf
+        CONF=/lib/firmware/cts/txpwrlimit_cfg_9098_low.conf; TXPWR_PERSIST="$CONF"
     elif [ "$3" == "test" ] || [ "$3" == "3" ]; then
         echo "test txpwrlimit for $IFACE"
-        CONF=/lib/firmware/cts/txpwrlimit_cfg_9098_org.conf
+        CONF=/lib/firmware/cts/txpwrlimit_cfg_9098_org.conf; TXPWR_PERSIST="$CONF"
     elif [[ "$3" == *.conf ]]; then
-        cp $3 /lib/firmware/cts/
-        CONF=/lib/firmware/cts/$3
+        _txpwr_basename=$(basename "$3")
+        cp "$3" "/lib/firmware/cts/$_txpwr_basename"
+        CONF="/lib/firmware/cts/$_txpwr_basename"; TXPWR_PERSIST="$CONF"
     else
         usage
     fi
-    echo "txpwrlimit set to $CONF for $IFACE"
-    mlanutl $IFACE hostcmd $CONF txpwrlimit_2g_cfg_set > /dev/null 2>&1
-    mlanutl $IFACE hostcmd $CONF txpwrlimit_5g_cfg_set_sub0 > /dev/null 2>&1
-    mlanutl $IFACE hostcmd $CONF txpwrlimit_5g_cfg_set_sub1 > /dev/null 2>&1
-    mlanutl $IFACE hostcmd $CONF txpwrlimit_5g_cfg_set_sub2 > /dev/null 2>&1
-    mlanutl $IFACE hostcmd $CONF txpwrlimit_5g_cfg_set_sub3 > /dev/null 2>&1
+    if [ -n "$CONF" ]; then
+        echo "txpwrlimit set to $CONF for $IFACE"
+        mlanutl $IFACE hostcmd $CONF txpwrlimit_2g_cfg_set > /dev/null 2>&1
+        mlanutl $IFACE hostcmd $CONF txpwrlimit_5g_cfg_set_sub0 > /dev/null 2>&1
+        mlanutl $IFACE hostcmd $CONF txpwrlimit_5g_cfg_set_sub1 > /dev/null 2>&1
+        mlanutl $IFACE hostcmd $CONF txpwrlimit_5g_cfg_set_sub2 > /dev/null 2>&1
+        mlanutl $IFACE hostcmd $CONF txpwrlimit_5g_cfg_set_sub3 > /dev/null 2>&1
+    fi
+    update_json_iface "$IFACE" "TXPWRLIMIT_PATH" "$TXPWR_PERSIST"
+    echo "TXPWRLIMIT_PATH persisted as '$TXPWR_PERSIST' for $IFACE"
+    # 새 정책의 .bak을 즉시 동기화하여 다음 부팅 self-healing 사각지대 제거
+    if [ -n "$CONF" ] && [ -s "$CONF" ]; then
+        cp "$CONF" "${CONF}.bak" 2>/dev/null && sync "${CONF}.bak" 2>/dev/null || sync
+    fi
     ;;
   config)
     echo "config $3 value set to $4 for $IFACE"
@@ -755,8 +790,22 @@ case "$2" in
     fi
     ;;
   cal)
-    echo "cal_data_cfg file set to $3 for $IFACE"
-    python3 /usr/local/logger/wifi_config.py $1 cal_data_cfg cts/$3
+    CAL_VAL="$3"
+    if [[ "$CAL_VAL" == *.conf ]]; then
+        _cal_basename=$(basename "$CAL_VAL")
+        cp "$CAL_VAL" "/lib/firmware/cts/$_cal_basename"
+        CAL_VAL="cts/$_cal_basename"
+    elif [[ "$CAL_VAL" == "2" ]]; then
+        CAL_VAL="cts/WlanCalData_ext_RD.conf"
+    elif [[ "$CAL_VAL" == "1" ]]; then
+        CAL_VAL="cts/WlanCalData_ext.conf"
+    elif [[ "$CAL_VAL" == "0" ]] || [[ "$CAL_VAL" == "none" ]] || [[ "$CAL_VAL" == "None" ]]; then
+        CAL_VAL="none"
+    else
+        usage
+    fi
+    update_json_iface "$IFACE" "CAL_DATA_CFG" "$CAL_VAL"
+    echo "CAL_DATA_CFG updated to '$CAL_VAL' for $IFACE in $WIFI_INIT_CONF_JSON"
     ;;
   mfg)
     BUS_TYPE=$(jq -r '.global.BUS_TYPE // "pcie"' "$WIFI_INIT_CONF_JSON" 2>/dev/null || echo "pcie")
@@ -992,6 +1041,61 @@ case "$2" in
 
     update_json_iface "$IFACE" "STANDARD" "$VAL"
     echo "STANDARD updated to $VAL for $IFACE in $WIFI_INIT_CONF_JSON"
+    ;;
+  log)
+    if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
+        echo "Error: log cp/compress supports mlan0/mlan1 only" >&2
+        exit 1
+    fi
+    LOG_BASE=/var/log/cantops
+    LOG_FILES=(
+        "$LOG_BASE/cpu/cpu.log"
+        "$LOG_BASE/logger.log"
+        "$LOG_BASE/kerl.log"
+        "$LOG_BASE/sys.log"
+        "$LOG_BASE/summary/summary.log"
+        "$LOG_BASE/scan/$IFACE/ap.log"
+        "$LOG_BASE/scan/$IFACE/freq.log"
+        "$LOG_BASE/stat/$IFACE/stat.log"
+        "$LOG_BASE/stat/$IFACE/snap.log"
+        "$LOG_BASE/wpa/$IFACE/wpa.log"
+    )
+    EXIST=(); MISSING=()
+    for _lf in "${LOG_FILES[@]}"; do
+        if [ -f "$_lf" ]; then EXIST+=("$_lf"); else MISSING+=("$(basename "$_lf")"); fi
+    done
+    case "$3" in
+      cp)
+        DEST="${4:-${IFACE}_log_$(date +%Y%m%d_%H%M%S)}"
+        mkdir -p "$DEST" || { echo "Error: cannot create directory $DEST" >&2; exit 1; }
+        for _lf in "${EXIST[@]}"; do
+            cp -a "$_lf" "$DEST/" || echo "Warning: copy failed: $_lf" >&2
+        done
+        echo "Copied ${#EXIST[@]} log(s) for $IFACE to $(pwd)/$DEST"
+        [ ${#MISSING[@]} -gt 0 ] && echo "Skipped ${#MISSING[@]} missing: ${MISSING[*]}"
+        ;;
+      compress)
+        if [ ${#EXIST[@]} -eq 0 ]; then
+            echo "Error: no log files found for $IFACE" >&2
+            exit 1
+        fi
+        if ! command -v zip >/dev/null 2>&1; then
+            echo "Error: zip not installed" >&2
+            exit 1
+        fi
+        ARCHIVE="${IFACE}_log_$(date +%Y%m%d_%H%M%S).zip"
+        if zip -j -q "$ARCHIVE" "${EXIST[@]}"; then
+            echo "Compressed ${#EXIST[@]} log(s) for $IFACE to $(pwd)/$ARCHIVE"
+            [ ${#MISSING[@]} -gt 0 ] && echo "Skipped ${#MISSING[@]} missing: ${MISSING[*]}"
+        else
+            echo "Error: zip failed" >&2
+            exit 1
+        fi
+        ;;
+      *)
+        usage
+        ;;
+    esac
     ;;
   ip)
     set -euo pipefail
