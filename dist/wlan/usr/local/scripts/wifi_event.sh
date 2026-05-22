@@ -3,12 +3,12 @@
 # Usage: wifi_event.sh [interface]
 
 IFACE="${1:-mlan0}"
-tag="wifi_event"
+tag=$(basename "$0")
 WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
 MCS_REASSOC_MARKER="/tmp/.mcstier_reassoc_${IFACE}"
 
 cleanup() {
-    logger -p local0.info "[$tag] [$IFACE] stopped"
+    logger -p local0.info "[$tag:$LINENO] [$IFACE] stopped"
     exit 0
 }
 
@@ -36,17 +36,17 @@ apply_mcs_tier() {
 
     logger -p local0.info "[$tag] [$IFACE] mcstiercfg$args"
     mlanutl "$IFACE" mcstiercfg $args > /dev/null 2>&1 || \
-        logger -p local0.err "[$tag] [$IFACE] mcstiercfg failed"
+        logger -p local0.err "[$tag:$LINENO] [$IFACE] mcstiercfg failed"
 
     # First assoc after boot negotiates with hw default HE cap (MCS11); the SET
     # above only restores stored user_he_cap. Force one reassoc so the active
     # link re-advertises the limited cap. Marker in /tmp resets on reboot.
     if [ ! -f "$MCS_REASSOC_MARKER" ]; then
         touch "$MCS_REASSOC_MARKER"
-        logger -p local0.info "[$tag] [$IFACE] first mcs_tier apply - forcing reassoc"
+        logger -p local0.info "[$tag:$LINENO] [$IFACE] first mcs_tier apply - forcing reassoc"
         sleep 1
         wpa_cli -i "$IFACE" reassociate > /dev/null 2>&1 || \
-            logger -p local0.warning "[$tag] [$IFACE] reassociate failed"
+            logger -p local0.warning "[$tag:$LINENO] [$IFACE] reassociate failed"
     fi
 }
 
@@ -64,11 +64,11 @@ run_on_connect() {
 
     echo "$cmds" | while IFS= read -r cmd; do
         [ -z "$cmd" ] && continue
-        logger -p local0.info "[$tag] [$IFACE] on_connect: $cmd"
+        logger -p local0.info "[$tag:$LINENO] [$IFACE] on_connect: $cmd"
         if bash -c "$cmd" > /dev/null 2>&1; then
-            logger -p local0.info "[$tag] [$IFACE] on_connect: OK"
+            logger -p local0.info "[$tag:$LINENO] [$IFACE] on_connect: OK"
         else
-            logger -p local0.err "[$tag] [$IFACE] on_connect: FAILED ($?)"
+            logger -p local0.err "[$tag:$LINENO] [$IFACE] on_connect: FAILED ($?)"
         fi
     done
 }
@@ -77,18 +77,18 @@ run_on_connect() {
 if [ -f "$WIFI_INIT_CONF_JSON" ]; then
     _json_perm=$(stat -c '%a' "$WIFI_INIT_CONF_JSON" 2>/dev/null || echo "000")
     if [ $(( 0${_json_perm} & 022 )) -ne 0 ]; then
-        logger -p local0.crit "[$tag] [$IFACE] CRITICAL: $WIFI_INIT_CONF_JSON is group/world-writable (perm=${_json_perm}). Disabling on_connect to prevent command injection."
+        logger -p local0.crit "[$tag:$LINENO] [$IFACE] CRITICAL: $WIFI_INIT_CONF_JSON is group/world-writable (perm=${_json_perm}). Disabling on_connect to prevent command injection."
         run_on_connect() { :; }
     fi
 fi
 
-logger -p local0.info "[$tag] [$IFACE] started"
+#logger -p local0.info "[$tag:$LINENO] [$IFACE] started"
 
 # 초기 상태 점검: wifi_event 시작 전에 이미 연결된 경우(첫 부팅 race) 1회 처리.
 # iw event는 구독 이후의 이벤트만 전달하므로, 이미 CONNECTED 상태이면 apply_mcs_tier/run_on_connect가 실행되지 않음.
 initial_bssid=$(iw dev "$IFACE" link 2>/dev/null | awk '/Connected to/ {print $3; exit}')
 if [ -n "$initial_bssid" ]; then
-    logger -p local0.info "[$tag] [$IFACE] INITIAL CONNECTED bssid=$initial_bssid (catch-up)"
+    logger -p local0.info "[$tag:$LINENO] [$IFACE] INITIAL CONNECTED bssid=$initial_bssid (catch-up)"
     apply_mcs_tier
     run_on_connect "$initial_bssid"
 fi
@@ -97,17 +97,17 @@ iw event -t 2>&1 | while IFS= read -r line; do
     case "$line" in
         *"$IFACE"*"connected to"*)
             bssid=$(echo "$line" | grep -oE '([0-9a-f]{2}:){5}[0-9a-f]{2}' | head -1)
-            logger -p local0.info "[$tag] [$IFACE] CONNECTED bssid=$bssid"
+            logger -p local0.info "[$tag:$LINENO] [$IFACE] CONNECTED bssid=$bssid"
             apply_mcs_tier
             run_on_connect "$bssid"
             ;;
         *"$IFACE"*"disconnected"*)
             reason=$(echo "$line" | sed -n 's/.*reason: \([0-9]*\).*/\1/p')
-            logger -p local0.info "[$tag] [$IFACE] DISCONNECTED reason=$reason"
+            logger -p local0.info "[$tag:$LINENO] [$IFACE] DISCONNECTED reason=$reason"
             ;;
         *"$IFACE"*"deauth"*)
             bssid=$(echo "$line" | grep -oE '([0-9a-f]{2}:){5}[0-9a-f]{2}' | head -1)
-            logger -p local0.info "[$tag] [$IFACE] DEAUTH bssid=$bssid"
+            logger -p local0.info "[$tag:$LINENO] [$IFACE] DEAUTH bssid=$bssid"
             ;;
     esac
 done

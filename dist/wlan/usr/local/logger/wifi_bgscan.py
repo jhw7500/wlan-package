@@ -100,7 +100,6 @@ def load_bgscan_interval(iface, fallback):
             data = json.load(f)
         interval = data.get(iface, {}).get("bgscan", {}).get("interval")
         if isinstance(interval, int) and interval > 0:
-            logger.message("info", f"[{iface}] bgscan interval from JSON: {interval}s", _EXTRA_())
             return interval
     except FileNotFoundError:
         pass
@@ -171,7 +170,7 @@ def main_loop():
 
     ssid, freqs, interval = parse_wpa_supplicant_conf(WPA_CONF_FILE)
     interval = load_bgscan_interval(IFACE, interval)
-    logger.message("info", f"[{IFACE}] ssid : {ssid}, freq: {freqs}, interval: {interval}", _EXTRA_())
+    logger.message("info", f"[{IFACE}] version: {VERSION}, ssid: {ssid}, freq: {freqs}, interval: {interval}", _EXTRA_())
     periodic_scan(ssid, freqs, interval)
     #threading.Thread(target=periodic_scan, args=(ssid, freqs, interval), daemon=True).start()
 
@@ -185,7 +184,7 @@ if __name__ == "__main__":
         IFACE = sys.argv[1]
 
     WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-{IFACE}.conf"
-    logger.message("info", f"[{IFACE}] version : {VERSION}", _EXTRA_())
+    #logger.message("info", f"[{IFACE}] version : {VERSION}", _EXTRA_())
 
     if IFACE != "mlan0" and IFACE != "mlan1" :
         logger.message("err", f"[{IFACE}] invalid interface", _EXTRA_())

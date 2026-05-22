@@ -6,8 +6,13 @@ import os
 import logging
 import ipaddress
 import json
-from scapy.all import sniff, ARP, Ether, IP, srp, sendp, get_if_hwaddr, conf
+# scapy.all 전체 로드는 임베디드(ARM)에서 import만 수초 소요 → 필요한 서브모듈만 import (부팅 가속)
+from scapy.config import conf
+from scapy.sendrecv import sniff, srp, sendp
+from scapy.layers.l2 import ARP, Ether
+from scapy.layers.inet import IP
 from scapy.layers.dhcp import DHCP, BOOTP
+from scapy.arch import get_if_hwaddr
 from sUTILS import Logger, _EXTRA_
 
 ETH_IFACE = "eth0"          # 유선 1:1
@@ -53,13 +58,13 @@ def wait_for_eth_link(timeout=ETH_LINK_TIMEOUT):
         with open(operstate_path, "r") as f:
             oper = f.read().strip()
         if carrier == "1" and oper == "up":
-            print("[+] Ethernet link already up.")
+            #logger.message("info", f"[{IFACE}] Ethernet link already up", _EXTRA_())
             return True
     except Exception:
         pass
 
     # 링크 없으면 리셋
-    print(f"[+] Reset {ETH_IFACE} link (down/up) and wait for link up...")
+    logger.message("info", f"[{IFACE}] Reset {ETH_IFACE} link (down/up) and wait for link up...", _EXTRA_())
     subprocess.run(["ip", "link", "set", ETH_IFACE, "down"], check=False)
     time.sleep(0.2)
     subprocess.run(["ip", "link", "set", ETH_IFACE, "up"], check=False)
@@ -72,20 +77,19 @@ def wait_for_eth_link(timeout=ETH_LINK_TIMEOUT):
             with open(operstate_path, "r") as f:
                 oper = f.read().strip()
             if carrier == "1" and oper == "up":
-                print("[+] Ethernet link is up.")
+                logger.message("info", f"[{IFACE}] Ethernet link is up.", _EXTRA_())
                 return True
         except Exception:
             pass
         time.sleep(0.3)
 
-    print("[-] Timeout waiting for Ethernet link.")
     logger.message("err", f"[{IFACE}] Timeout waiting for {ETH_IFACE} link", _EXTRA_())
     return False
 
 # ===================== 1) MAC 획득 (원래 흐름 유지) =====================
 
 def passive_mac_sniff(own_mac, timeout=5):
-    print("[*] Sniffing for incoming ARP/DHCP/IP packets...")
+    logger.message("info", f"[{IFACE}] Sniffing for incoming ARP/DHCP/IP packets...", _EXTRA_())
 
     # ARP/DHCP/IP만 BPF로 받고, 내 MAC이 아닌 첫 송신자 MAC을 타깃으로 선정
     bpf = "arp or (udp and (port 67 or 68)) or ip"
@@ -108,8 +112,8 @@ def passive_mac_sniff(own_mac, timeout=5):
     return target_mac[0]
 
 def raw_l2_broadcast_probe(iface):    
-    print(f"[*] Sending raw L2 broadcast probe on {iface}...")
-    logger.message("info", f"[{iface}] Sending raw L2 broadcast probe", _EXTRA_())
+    #print(f"[*] Sending raw L2 broadcast probe on {iface}...")
+    logger.message("info", f"[{IFACE}] Sending raw L2 broadcast probe on {iface}...", _EXTRA_())
     src_mac = get_if_hwaddr(iface)
     # dummy EtherType + 최소 페이로드로 상대를 깨움
     pkt = Ether(dst="ff:ff:ff:ff:ff:ff", src=src_mac, type=0x0800) / (b'\x00' * 46)
@@ -120,7 +124,7 @@ def quick_arp_probe(iface, target_ip, own_mac, timeout=1):
     알려진 고정 IP에 ARP 요청 → MAC+IP 동시 확보 (~1초).
     옵션 기능: ETH_CLIENT_IP가 None이면 호출하지 않음.
     """
-    print(f"[*] Quick ARP probe to {target_ip}...")
+    logger.message("info", f"[{iface}] Quick ARP probe to {target_ip}...", _EXTRA_())
     src_mac = get_if_hwaddr(iface)
     pkt = Ether(dst="ff:ff:ff:ff:ff:ff", src=src_mac) / ARP(pdst=target_ip)
     ans, _ = srp(pkt, iface=iface, timeout=timeout, verbose=0)
@@ -181,7 +185,7 @@ def passive_ip_for_mac(iface, target_mac, timeout=6):
     """
     target_mac의 트래픽만 잠깐 더 관찰해서 IP를 추출.
     """
-    print(f"[*] MAC fixed: {target_mac} ? watching its packets for IP...")
+    logger.message("info", f"[{iface}] MAC fixed: {target_mac} ? watching its packets for IP...", _EXTRA_())
     result_ip = [None]
     bpf = "arp or (udp and (port 67 or 68)) or ip"
 
@@ -285,7 +289,7 @@ def main():
     if ETH_CLIENT_IP:
         mac, ip = quick_arp_probe(ETH_IFACE, ETH_CLIENT_IP, own_mac, timeout=1)
         if mac:
-            print(f"[+] Quick path: MAC={mac}, IP={ip}")
+            #print(f"[+] Quick path: MAC={mac}, IP={ip}")
             logger.message("info", f"[{IFACE}] Quick ARP: MAC={mac} IP={ip}", _EXTRA_())
 
     # ── 2단계: 능동+패시브 MAC 탐색 (~3초) ──
@@ -293,12 +297,11 @@ def main():
         mac = active_mac_sniff(ETH_IFACE, own_mac, timeout=3)
 
     if not mac:
-        print("[-] Failed to detect any external MAC address.")
-        logger.message("err", f"[{IFACE}] no external MAC", _EXTRA_())
+        #print("[-] Failed to detect any external MAC address.")
+        logger.message("err", f"[{IFACE}] Failed to detect any external MAC address.", _EXTRA_())
         return
 
-    print(f"[+] Wired Client MAC detected: {mac}")
-    logger.message("info", f"[{IFACE}] Wired Client MAC: {mac}", _EXTRA_())
+    logger.message("info", f"[{IFACE}] Wired Client MAC dectected: {mac}", _EXTRA_())
 
     # MAC 확보 → 즉시 저장 (무선 드라이버 등록에 필요)
     save_data(f"/tmp/{ETH_IFACE}_client_mac", mac)
@@ -306,7 +309,6 @@ def main():
     # ── 3단계: IP 확보 (MAC은 이미 저장됨) ──
     # wbridge.ip_discovery=false면 IP 탐색을 생략하고 MAC만 확보한 채 즉시 종료(부팅 가속).
     if not IP_DISCOVERY:
-        print("[*] ip_discovery=false → skip IP discovery (MAC only).")
         logger.message("info", f"[{IFACE}] ip_discovery=false → skip IP discovery (MAC only)", _EXTRA_())
     else:
         if not ip:
@@ -327,10 +329,10 @@ def main():
     save_data(f"/tmp/{ETH_IFACE}_client_ip", ip)
 
     if ip:
-        print(f"[+] Wired Client IP resolved: {ip}")
+        #print(f"[+] Wired Client IP resolved: {ip}")
         logger.message("info", f"[{IFACE}] result MAC/IP: {mac} {ip}", _EXTRA_())
     else:
-        print("[!] MAC only (no IP yet).")
+        #print("[!] MAC only (no IP yet).")
         logger.message("info", f"[{IFACE}] MAC only saved (no IP)", _EXTRA_())
 
 if __name__ == "__main__":
@@ -338,7 +340,7 @@ if __name__ == "__main__":
 
     IFACE = sys.argv[1] if len(sys.argv) > 1 else "mlan0"
     if IFACE not in ["mlan0", "mlan1"]:
-        logger.message("info", f"[{IFACE}] invalid interface", _EXTRA_())
+        logger.message("err", f"[{IFACE}] invalid interface", _EXTRA_())
         sys.exit(1)
 
     os.makedirs("/opt/wlan/ip", exist_ok=True)
@@ -347,5 +349,5 @@ if __name__ == "__main__":
     conf.sniff_promisc = True
     conf.verb = 0
 
-    logger.message("info", f"[{IFACE}] {ETH_IFACE} mac/ip discover start...", _EXTRA_())
+    #logger.message("info", f"[{IFACE}] {ETH_IFACE} mac/ip discover start...", _EXTRA_())
     main()
