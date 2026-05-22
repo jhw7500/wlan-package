@@ -17,6 +17,7 @@ IFACE = "mlan0"             # 무선 (게이트웨이 사용)
 # 설정이 없거나 빈 문자열이면 빠른 경로(quick_arp_probe) 건너뜀
 ETH_CLIENT_IP = None
 ETH_LINK_TIMEOUT = 3
+IP_DISCOVERY = False        # MAC 확보 후 클라이언트 IP까지 탐색할지 (wbridge.ip_discovery, 기본 false)
 try:
     with open("/usr/local/etc/wifi_init_conf.json") as f:
         _cfg = json.load(f)
@@ -24,6 +25,7 @@ try:
     _gl = _cfg.get("global", {})
     ETH_CLIENT_IP = _wb.get("eth_client_ip") or _gl.get("ETH_CLIENT_IP") or None
     ETH_LINK_TIMEOUT = int(_wb.get("eth_link_wait_sec", _gl.get("eth_link_wait_sec", 3)))
+    IP_DISCOVERY = str(_wb.get("ip_discovery", False)).strip().lower() in ("1", "true", "yes", "on")
 except Exception:
     pass
 
@@ -302,19 +304,24 @@ def main():
     save_data(f"/tmp/{ETH_IFACE}_client_mac", mac)
 
     # ── 3단계: IP 확보 (MAC은 이미 저장됨) ──
-    if not ip:
-        # 3-1) 패시브 관찰 (타임아웃 축소)
-        ip = passive_ip_for_mac(ETH_IFACE, mac, timeout=3)
+    # wbridge.ip_discovery=false면 IP 탐색을 생략하고 MAC만 확보한 채 즉시 종료(부팅 가속).
+    if not IP_DISCOVERY:
+        print("[*] ip_discovery=false → skip IP discovery (MAC only).")
+        logger.message("info", f"[{IFACE}] ip_discovery=false → skip IP discovery (MAC only)", _EXTRA_())
+    else:
+        if not ip:
+            # 3-1) 패시브 관찰 (타임아웃 축소)
+            ip = passive_ip_for_mac(ETH_IFACE, mac, timeout=3)
 
-    if not ip and ETH_CLIENT_IP:
-        # 3-2) 알려진 후보 IP에 유니캐스트 ARP
-        ip = arp_unicast_probe_for_ip(ETH_IFACE, mac, [ETH_CLIENT_IP], timeout=1)
+        if not ip and ETH_CLIENT_IP:
+            # 3-2) 알려진 후보 IP에 유니캐스트 ARP
+            ip = arp_unicast_probe_for_ip(ETH_IFACE, mac, [ETH_CLIENT_IP], timeout=1)
 
-    if not ip:
-        # 3-3) mlan0 대역 스윕 (최후 수단)
-        net = get_mlan_network()
-        if net:
-            ip = arp_broadcast_sweep_for_mac(ETH_IFACE, mac, net, timeout=2)
+        if not ip:
+            # 3-3) mlan0 대역 스윕 (최후 수단)
+            net = get_mlan_network()
+            if net:
+                ip = arp_broadcast_sweep_for_mac(ETH_IFACE, mac, net, timeout=2)
 
     # 결과 저장
     save_data(f"/tmp/{ETH_IFACE}_client_ip", ip)

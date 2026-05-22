@@ -4,6 +4,18 @@
         "This file contains global WiFi settings and per-interface roaming configurations"
     ],
     "global": {
+        "_comment": [
+            "드라이버 초기화 전역 설정. wifi_init.sh가 사용. 인터페이스별 값(mlanN)이 있으면 그것이 우선하고 여기 값은 fallback.",
+            "BOARD_TYPE: (string) imx8mm|imx93 — 보드/드라이버 선택 (mlan_imx8/moal_imx8 vs _imx93)",
+            "BUS_TYPE: (string) sdio|pcie — 버스 종류. mod_para 블록 prefix(SD9098/PCIE9098)와 fw_name 자동 선택에 사용",
+            "BLUETOOTH.enable: (bool) BT combo 펌웨어 사용 여부 (fw_name 자동 선택에 반영)",
+            "MOD_PARA: (string) 모듈 파라미터 설정 파일 경로 (/lib/firmware/ 기준)",
+            "CAL_DATA_CFG: (string) 캘리브레이션 데이터 파일 fallback. mlanN.CAL_DATA_CFG가 우선. wifi_mod_para.conf 블록 cal_data_cfg=로 주입",
+            "TXPWRLIMIT_PATH: (string) TX 파워 리밋 파일(절대경로) fallback. mlanN.TXPWRLIMIT_PATH가 우선. 부팅 시 mlanutl hostcmd로 적용",
+            "STANDARD: (string) WiFi 표준 제한 fallback. n|ac|ax(또는 4|5|6). mlanN.STANDARD가 우선. dev_cap_mask로 변환",
+            "DEV_CAP_MASK: (string) dev_cap_mask raw fallback. 인터페이스/global STANDARD가 모두 비었을 때만 사용",
+            "ANT_TYPE: (string) 안테나 경로 부팅 시 설정. internal|external(또는 0|1). 빈값이면 설정 안 함. 드라이버 로드 직전 SW_SEL1/SW_SEL2 GPIO로 적용. 런타임 변경은 wifi ant 명령"
+        ],
         "BOARD_TYPE": "imx93",
         "BUS_TYPE": "sdio",
         "BLUETOOTH": {
@@ -14,6 +26,7 @@
         "TXPWRLIMIT_PATH": "/lib/firmware/cts/txpwrlimit_cfg_9098.conf",
         "STANDARD": "",
         "DEV_CAP_MASK": "",
+        "ANT_TYPE": "",
         "ping_monitor": {
             "_comment": "wifi_ping_monitor.service enable/disable. wifi_apply_enabled.sh가 systemctl enable/disable로 동기화한다.",
             "enabled": false
@@ -39,6 +52,7 @@
             "enabled: (bool) bridge 전체 ON/OFF. false이면 bridge 서비스 전부 stop+disable",
             "bridge_iface: (string) mlan0|mlan1 — bridge에 사용할 무선 인터페이스",
             "mac_mode: (string) default|dynamic|static — bridge 인터페이스 MAC 결정 방식. dynamic=유선측 MAC 동적 획득",
+            "ip_discovery: (bool) dynamic MAC 모드에서 MAC 확보 후 클라이언트 IP까지 탐색할지. false면 MAC만 확보 후 즉시 종료(부팅 가속). 기본 false",
             "eth_client_ip: (string) 유선 클라이언트 고정 IP. 빈 문자열이면 quick ARP probe 비활성",
             "eth_link_wait_sec: (int) dynamic MAC 모드에서 유선 링크 대기 시간 (초)",
             "engine: (string) pcap|tpacket|moal — bridge 엔진. pcap/tpacket=유저스페이스, moal=드라이버 레벨 (mod_para.conf bridge_mode=1)"
@@ -46,6 +60,7 @@
         "enabled": true,
         "bridge_iface": "mlan0",
         "mac_mode": "dynamic",
+        "ip_discovery": false,
         "eth_client_ip": "",
         "eth_link_wait_sec": 3,
         "engine": "pcap",
@@ -180,6 +195,8 @@
     "mlan0": {
         "_comment": "mlan0 interface configuration",
         "STANDARD": "ax",
+        "CAL_DATA_CFG": "",
+        "TXPWRLIMIT_PATH": "",
         "connect_threshold": -100,
         "enabled": true,
         "Frequency": "auto",
@@ -350,6 +367,8 @@
     "mlan1": {
         "_comment": "mlan1 interface configuration",
         "STANDARD": "ac",
+        "CAL_DATA_CFG": "",
+        "TXPWRLIMIT_PATH": "",
         "connect_threshold": -100,
         "enabled": true,
         "Frequency": "auto",

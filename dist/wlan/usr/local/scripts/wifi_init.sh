@@ -8,8 +8,8 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 tag=$(basename "$0")
 JSON_FILE="${JSON_FILE:-/usr/local/etc/config.json}"
 MOD_PARA="cts/wifi_mod_para.conf"
-CAL_DATA_CFG="cts/WlanCalData_ext_RD.conf"
 TXPWRLIMIT_PATH="/lib/firmware/cts/txpwrlimit_cfg_9098.conf"
+ANT_TYPE=""
 
 WIFI_INIT_CONF_JSON="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
 
@@ -18,8 +18,8 @@ logger -p local0.info "[$tag:$LINENO] wifi initializing"
 if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
     BOARD_TYPE=$(jq -r '.global.BOARD_TYPE // "imx8mm"' "$WIFI_INIT_CONF_JSON")
     MOD_PARA=$(jq -r '.global.MOD_PARA // "cts/wifi_mod_para.conf"' "$WIFI_INIT_CONF_JSON")
-    CAL_DATA_CFG=$(jq -r '.global.CAL_DATA_CFG // "cts/WlanCalData_ext_RD.conf"' "$WIFI_INIT_CONF_JSON")
     TXPWRLIMIT_PATH=$(jq -r '.global.TXPWRLIMIT_PATH // "/lib/firmware/cts/txpwrlimit_cfg_9098.conf"' "$WIFI_INIT_CONF_JSON")
+    ANT_TYPE=$(jq -r '.global.ANT_TYPE // ""' "$WIFI_INIT_CONF_JSON")
     BRIDGE_IFACE=$(jq -r '.wbridge.bridge_iface // .global.BRIDGE_IFACE // "mlan0"' "$WIFI_INIT_CONF_JSON")
     WBRIDGE_ENABLED=$(jq -r 'if .wbridge.enabled then "true" else "false" end' "$WIFI_INIT_CONF_JSON" 2>/dev/null || echo "true")
     MAC_MODE=$(jq -r '.wbridge.mac_mode // .global.MAC_MODE // "default"' "$WIFI_INIT_CONF_JSON")
@@ -37,15 +37,12 @@ esac
 MLAN_MOD="mlan"; MOAL_MOD="moal"
 
 
-if [ "${CAL_DATA_CFG:-}" = "none" ]; then
-    CAL_DATA_CFG=""
-fi
 if [ "${TXPWRLIMIT_PATH:-}" = "none" ]; then
     TXPWRLIMIT_PATH=""
 fi
 
-# moal 파라미터 구성 (dev_cap_mask는 인터페이스별로 wifi_mod_para.conf 블록에 주입됨)
-moal_args="mod_para=$MOD_PARA cal_data_cfg=$CAL_DATA_CFG"
+# moal 파라미터 구성 (dev_cap_mask·cal_data_cfg는 인터페이스별로 wifi_mod_para.conf 블록에 주입됨)
+moal_args="mod_para=$MOD_PARA"
 logger -p local0.info "[$tag:$LINENO] moal_args: $moal_args"
 logger -p local0.info "[$tag:$LINENO] BOARD_TYPE=$BOARD_TYPE, modules=$MLAN_KO/$MOAL_KO"
 
@@ -175,11 +172,23 @@ fi
 
 /usr/local/scripts/backup_file.sh /lib/firmware/$MOD_PARA "$_MOD_PARA_PATTERN" "$_DEFAULT_DIR/wifi_mod_para__.conf" \
     || logger -p local0.err "[$tag:$LINENO] backup failed: $MOD_PARA"
-# TXPWRLIMIT는 변형이 5개+이고 사용자 정책에 따라 바뀌므로 default 매핑 없이 .bak에만 의존
-if [ -n "${TXPWRLIMIT_PATH:-}" ]; then
-    /usr/local/scripts/backup_file.sh "$TXPWRLIMIT_PATH" txpwrlimit_2g_cfg_set "" \
-        || logger -p local0.err "[$tag:$LINENO] backup failed: TXPWRLIMIT"
-fi
+# TXPWRLIMIT는 변형이 5개+이고 사용자 정책에 따라 바뀌므로 default 매핑 없이 .bak에만 의존.
+# 인터페이스별 경로(.mlanN.TXPWRLIMIT_PATH // 전역)를 각각 백업하되 동일 경로는 한 번만.
+_txpwr_bak_seen=""
+for _ti in mlan0 mlan1; do
+    if command -v jq >/dev/null 2>&1 && [ -f "$WIFI_INIT_CONF_JSON" ]; then
+        _tp=$(jq -r --arg i "$_ti" '.[$i].TXPWRLIMIT_PATH // ""' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    else
+        _tp=""
+    fi
+    [ -z "$_tp" ] && _tp="${TXPWRLIMIT_PATH:-}"
+    [ "$_tp" = "none" ] && _tp=""
+    [ -z "$_tp" ] && continue
+    case " $_txpwr_bak_seen " in *" $_tp "*) continue ;; esac
+    _txpwr_bak_seen="$_txpwr_bak_seen $_tp"
+    /usr/local/scripts/backup_file.sh "$_tp" txpwrlimit_2g_cfg_set "" \
+        || logger -p local0.err "[$tag:$LINENO] backup failed: TXPWRLIMIT ($_tp)"
+done
 /usr/local/scripts/backup_file.sh /etc/systemd/network/20-mlan0.network mlan0 "$_DEFAULT_DIR/systemd/network/20-mlan0.network" \
     || logger -p local0.err "[$tag:$LINENO] backup failed: 20-mlan0.network"
 /usr/local/scripts/backup_file.sh /etc/systemd/network/21-mlan1.network mlan1 "$_DEFAULT_DIR/systemd/network/21-mlan1.network" \
@@ -197,6 +206,7 @@ fi
 #   - mgmt_hex_dump ← mlanN.mgmt_hex_dump_enable (bool → 1/0)
 #   - bridge_mode   ← wbridge.engine="moal" → bridge_iface 블록=1, 나머지=0 (else 둘 다 0)
 #   - dev_cap_mask  ← mlanN.STANDARD (없으면 global.STANDARD) → n/ac만 set, ax/빈값은 라인 삭제(칩 기본값)
+#   - cal_data_cfg  ← mlanN.CAL_DATA_CFG (없으면 global.CAL_DATA_CFG) → 경로 set, 빈값/none은 cal_data_cfg=none
 apply_mod_para_from_json() {
     local conf="/lib/firmware/$MOD_PARA"
     [ -f "$conf" ] || return 0
@@ -206,9 +216,11 @@ apply_mod_para_from_json() {
     if [ "$_bus" = "sdio" ]; then blk_prefix="SD9098"; else blk_prefix="PCIE9098"; fi
 
     # dev_cap_mask 산출용 global fallback (인터페이스별 STANDARD가 비었을 때 사용)
-    local g_standard g_devcap
+    local g_standard g_devcap g_caldata
     g_standard=$(jq -r '.global.STANDARD // ""' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
     g_devcap=$(jq -r '.global.DEV_CAP_MASK // ""' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    # cal_data_cfg 산출용 global fallback (인터페이스별 CAL_DATA_CFG가 비었을 때 사용)
+    g_caldata=$(jq -r '.global.CAL_DATA_CFG // ""' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
 
     # JSON → mod_para 값 산출
     local m0_net_rx m1_net_rx m0_mgmt m1_mgmt engine bridge_iface m0_bridge m1_bridge
@@ -315,6 +327,19 @@ apply_mod_para_from_json() {
         _set_kv_in_block "$block" "dev_cap_mask" "$mask"
     }
 
+    # 인터페이스 CAL_DATA_CFG(없으면 global)를 블록의 cal_data_cfg로 반영.
+    #   경로가 있으면 그대로 set, 비었거나 none이면 cal_data_cfg=none (외부 cal 파일 미사용).
+    _apply_cal_data_cfg() {
+        local iface="$1" block="$2" v
+        v=$(jq -r --arg i "$iface" '.[$i].CAL_DATA_CFG // ""' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+        [ -z "$v" ] && v="$g_caldata"
+        if [ -z "$v" ] || [ "$v" = "none" ]; then
+            _set_kv_in_block "$block" "cal_data_cfg" "none"
+        else
+            _set_kv_in_block "$block" "cal_data_cfg" "$v"
+        fi
+    }
+
     _set_kv_in_block "${blk_prefix}_0" "net_rx"        "$m0_net_rx"
     _set_kv_in_block "${blk_prefix}_1" "net_rx"        "$m1_net_rx"
     _set_kv_in_block "${blk_prefix}_0" "mgmt_hex_dump" "$m0_mgmt"
@@ -323,6 +348,8 @@ apply_mod_para_from_json() {
     _set_kv_in_block "${blk_prefix}_1" "bridge_mode"   "$m1_bridge"
     _apply_dev_cap_mask "mlan0" "${blk_prefix}_0"
     _apply_dev_cap_mask "mlan1" "${blk_prefix}_1"
+    _apply_cal_data_cfg "mlan0" "${blk_prefix}_0"
+    _apply_cal_data_cfg "mlan1" "${blk_prefix}_1"
 }
 apply_mod_para_from_json
 
@@ -443,23 +470,29 @@ iface_enabled_value() {
 apply_iface_txpwrlimit() {
     local iface="$1"
     local enabled="$2"
+    local path
 
     if [ "$enabled" != "true" ]; then
         logger -p local0.info "[$tag:$LINENO] [$iface] disabled; skip txpwrlimit"
         return 0
     fi
 
-    if [ -z "${TXPWRLIMIT_PATH:-}" ]; then
+    # 인터페이스별 경로 우선, 비었으면 전역 fallback. none/빈값이면 skip.
+    path=$(jq -r --arg i "$iface" '.[$i].TXPWRLIMIT_PATH // ""' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    [ -z "$path" ] && path="${TXPWRLIMIT_PATH:-}"
+    [ "$path" = "none" ] && path=""
+
+    if [ -z "$path" ]; then
         logger -p local0.warn "[$tag:$LINENO] [$iface] TXPWRLIMIT_PATH empty; skip txpwrlimit hostcmd"
         return 0
     fi
 
-    logger -p local0.info "[$tag:$LINENO] [$iface] TXPWRLIMIT_PATH : $TXPWRLIMIT_PATH"
-    mlanutl "$iface" hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_2g_cfg_set > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] txpwrlimit_2g_cfg_set failed"
-    mlanutl "$iface" hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_5g_cfg_set_sub0 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] txpwrlimit_5g_cfg_set_sub0 failed"
-    mlanutl "$iface" hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_5g_cfg_set_sub1 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] txpwrlimit_5g_cfg_set_sub1 failed"
-    mlanutl "$iface" hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_5g_cfg_set_sub2 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] txpwrlimit_5g_cfg_set_sub2 failed"
-    mlanutl "$iface" hostcmd "$TXPWRLIMIT_PATH" txpwrlimit_5g_cfg_set_sub3 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] txpwrlimit_5g_cfg_set_sub3 failed"
+    logger -p local0.info "[$tag:$LINENO] [$iface] TXPWRLIMIT_PATH : $path"
+    mlanutl "$iface" hostcmd "$path" txpwrlimit_2g_cfg_set > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] txpwrlimit_2g_cfg_set failed"
+    mlanutl "$iface" hostcmd "$path" txpwrlimit_5g_cfg_set_sub0 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] txpwrlimit_5g_cfg_set_sub0 failed"
+    mlanutl "$iface" hostcmd "$path" txpwrlimit_5g_cfg_set_sub1 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] txpwrlimit_5g_cfg_set_sub1 failed"
+    mlanutl "$iface" hostcmd "$path" txpwrlimit_5g_cfg_set_sub2 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] txpwrlimit_5g_cfg_set_sub2 failed"
+    mlanutl "$iface" hostcmd "$path" txpwrlimit_5g_cfg_set_sub3 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] txpwrlimit_5g_cfg_set_sub3 failed"
 }
 
 apply_mcs_tier() {
@@ -590,6 +623,26 @@ if [ -n "$ETH0_MAC" ]; then
     /usr/local/scripts/update_mac.sh eth0 "$ETH0_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh eth0 failed"
 else
     logger -p local0.info "[$tag:$LINENO] [eth0] no base MAC configured; skip update_mac"
+fi
+
+# 무선 드라이버 로드 전 안테나 경로(GPIO mux) 설정. ANT_TYPE 비어있으면 건드리지 않음.
+# GPIO 매핑은 wifi.sh의 ant 명령과 동일 (SW_SEL1/SW_SEL2 LED).
+if [ -n "${ANT_TYPE:-}" ]; then
+    _ant_sel1=""; _ant_sel2=""
+    case "$ANT_TYPE" in
+        internal|0) _ant_sel1=0; _ant_sel2=1 ;;
+        external|1) _ant_sel1=1; _ant_sel2=0 ;;
+        *) logger -p local0.err "[$tag:$LINENO] ANT_TYPE invalid: $ANT_TYPE (expected internal|external)" ;;
+    esac
+    if [ -n "$_ant_sel1" ]; then
+        if [ -e /sys/class/leds/SW_SEL1/brightness ] && [ -e /sys/class/leds/SW_SEL2/brightness ]; then
+            echo "$_ant_sel1" > /sys/class/leds/SW_SEL1/brightness 2>/dev/null || logger -p local0.err "[$tag:$LINENO] antenna SW_SEL1 write failed"
+            echo "$_ant_sel2" > /sys/class/leds/SW_SEL2/brightness 2>/dev/null || logger -p local0.err "[$tag:$LINENO] antenna SW_SEL2 write failed"
+            logger -p local0.info "[$tag:$LINENO] antenna set: ANT_TYPE=$ANT_TYPE (SW_SEL1=$_ant_sel1 SW_SEL2=$_ant_sel2)"
+        else
+            logger -p local0.warn "[$tag:$LINENO] SW_SEL leds not present; skip antenna set (ANT_TYPE=$ANT_TYPE)"
+        fi
+    fi
 fi
 
 if ! try_insmod "/opt/wlan/driver/$MLAN_KO" ""; then

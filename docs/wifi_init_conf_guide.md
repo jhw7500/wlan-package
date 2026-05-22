@@ -63,11 +63,12 @@ wifi_init_conf.json
 |----|------|--------|------|
 | `FW_NAME` | string | `"cts/pcieuart9098_combo_v1.bin"` | WiFi 펌웨어 파일 경로 (`/lib/firmware/` 기준) |
 | `MOD_PARA` | string | `"cts/wifi_mod_para.conf"` | 모듈 파라미터 설정 파일 |
-| `CAL_DATA_CFG` | string | `"cts/WlanCalData_ext_RD.conf"` | 캘리브레이션 데이터 파일 |
-| `TXPWRLIMIT_PATH` | string | `"/lib/firmware/cts/txpwrlimit_cfg_9098.conf"` | TX 파워 리밋 설정 파일 (절대 경로) |
+| `CAL_DATA_CFG` | string | `"cts/WlanCalData_ext_RD.conf"` | 캘리브레이션 데이터 파일 **fallback**. 인터페이스별 `mlanN.CAL_DATA_CFG`가 우선하며, 비어있을 때만 이 값 사용. `wifi_init.sh`가 `wifi_mod_para.conf` 블록의 `cal_data_cfg=`로 주입. 자세한 내용은 [CAL_DATA_CFG 매핑](#cal_data_cfg--txpwrlimit_path--인터페이스별-매핑) 참고 |
+| `TXPWRLIMIT_PATH` | string | `"/lib/firmware/cts/txpwrlimit_cfg_9098.conf"` | TX 파워 리밋 설정 파일 (절대 경로) **fallback**. 인터페이스별 `mlanN.TXPWRLIMIT_PATH`가 우선하며, 비어있을 때만 이 값 사용 |
 | `MFG_MODE` | string | `"0"` | 제조 모드. `"1"` = MFG 모드 활성화 |
 | `STANDARD` | string | `""` | WiFi 표준 제한 **fallback**. 인터페이스별 `mlanN.STANDARD`가 우선하며, 비어있을 때만 이 값 사용. `n`/`ac`/`ax`(또는 `4`/`5`/`6`). 자세한 내용은 [11.1 STANDARD → dev_cap_mask 매핑](#standard--wifi_mod_paraconf-매핑) 참고 |
 | `DEV_CAP_MASK` | string | `""` | dev_cap_mask raw fallback. 인터페이스/global `STANDARD`가 모두 비었을 때만 사용 |
+| `ANT_TYPE` | string | `""` | 안테나 경로(GPIO mux) **부팅 시 설정**. `internal`/`external`(또는 `0`/`1`). `wifi_init.sh`가 무선 드라이버 로드 **직전**에 `SW_SEL1`/`SW_SEL2` LED로 적용. **빈값이면 설정하지 않음**(하드웨어/이전 상태 유지). 런타임 변경은 기존 `wifi ant` 명령 사용(persist 안 함) |
 
 > **참고**: `BRIDGE_IFACE`, `MAC_MODE`, `ETH_CLIENT_IP`, `eth_link_wait_sec`는 `wbridge` 섹션으로 이동되었습니다. 하위 호환을 위해 `global`에 있어도 동작하지만, 새 설정에서는 `wbridge` 섹션을 사용하세요.
 
@@ -127,7 +128,7 @@ wifi_init_conf.json
 | `enabled` | bool | `true` | bridge 기능 마스터 스위치. `false`이면 bridge 서비스 전체 비활성 |
 | `bridge_iface` | string | `"mlan0"` | bridge에 사용할 인터페이스. `"mlan0"` 또는 `"mlan1"` |
 | `mac_mode` | string | `"dynamic"` | MAC 주소 모드. `"default"` (base만), `"dynamic"` (동적→base), `"static"` (target→base) |
-| `eth_client_ip` | string | `""` | 유선 클라이언트 고정 IP. 설정 시 `wired_mac_ip_get.py`의 quick ARP probe 활성화. 빈 문자열이면 비활성 |
+| `ip_discovery` | bool | `false` | dynamic MAC 모드에서 MAC 확보 후 클라이언트 IP까지 탐색할지. `false`면 MAC만 확보 후 즉시 종료(IP passive-watch 3초 생략 → 부팅 가속). `true`면 기존대로 IP 탐색(passive→unicast→sweep) |
 | `eth_link_wait_sec` | int | `3` | 유선 링크 준비 대기 시간 (초). `wired_mac_ip_get.py`에서 사용 |
 | `engine` | string | `"pcap"` | 패킷 캡처 엔진. `"pcap"` 또는 `"tpacket"` |
 
@@ -441,6 +442,8 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 | `Frequency` | string | `"auto"` | 인터페이스별 bandcfg 기본값. `auto`, `2.4GHz`, `5GHz` |
 | `net_rx` | int | `0` | MGMT 프레임 로깅 모드. `wifi_init.sh`가 `wifi_mod_para.conf`의 해당 PCIE9098 블록에 반영. 0=비활성 |
 | `STANDARD` | string | mlan0 `"ax"`, mlan1 `"ac"` | WiFi 표준 제한. `wifi_init.sh`가 `wifi_mod_para.conf`의 해당 블록에 `dev_cap_mask`로 반영. `n`/`ac`/`ax`(또는 `4`/`5`/`6`). **mlan1은 `ax` 불가**. 아래 [매핑](#standard--wifi_mod_paraconf-매핑) 참고 |
+| `CAL_DATA_CFG` | string | `""` | 인터페이스별 캘리브레이션 데이터 파일. 비어있으면 `global.CAL_DATA_CFG`로 fallback. `wifi_init.sh`가 `wifi_mod_para.conf` 블록의 `cal_data_cfg=`로 주입. 아래 [매핑](#cal_data_cfg--txpwrlimit_path--인터페이스별-매핑) 참고 |
+| `TXPWRLIMIT_PATH` | string | `""` | 인터페이스별 TX 파워 리밋 파일(절대 경로). 비어있으면 `global.TXPWRLIMIT_PATH`로 fallback. `"none"`이면 이 인터페이스만 미적용. 부팅 시 `mlanutl <iface> hostcmd`로 적용 |
 
 > `config.json`이 별도로 설치된 환경에서는 `.mlan0.enabled`, `.mlan1.enabled`, `.mlan0.Frequency`, `.mlan1.Frequency`가 존재할 때만 이 값을 override한다.
 
@@ -490,6 +493,35 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 - JSON에 `.mlan1.STANDARD="ax"`를 직접 넣으면 `wifi_init.sh`가 경고 로그 후 `dev_cap_mask` 미설정(기본값) 처리
 
 매 부팅 시 idempotent하게 반영된다(기존 줄 삭제 후 재삽입).
+
+#### CAL_DATA_CFG / TXPWRLIMIT_PATH — 인터페이스별 매핑
+
+`STANDARD`와 동일하게 인터페이스별 값이 global보다 우선하며, global은 fallback으로 유지된다. 단 두 키는 적용 메커니즘이 서로 다르다.
+
+**CAL_DATA_CFG — `wifi_mod_para.conf` 블록 주입**
+
+`wifi_init.sh`(`apply_mod_para_from_json`)가 인터페이스별 `CAL_DATA_CFG`(없으면 `global.CAL_DATA_CFG`)를 해당 블록의 `cal_data_cfg=`로 주입한다. 모듈 로드 시 전역 `cal_data_cfg=` 파라미터는 더 이상 전달하지 않고 블록별 주입으로 대체되었다(`dev_cap_mask`와 동일).
+
+| JSON 경로 | conf 블록 (BUS_TYPE에 따라) |
+|-----------|----------|
+| `.mlan0.CAL_DATA_CFG` | `PCIE9098_0` / `SD9098_0` |
+| `.mlan1.CAL_DATA_CFG` | `PCIE9098_1` / `SD9098_1` |
+
+- **우선순위**: `mlanN.CAL_DATA_CFG` → (빈값) `global.CAL_DATA_CFG` → (빈값/`none`) `cal_data_cfg=none` (외부 cal 파일 미사용)
+- 경로가 있으면 `cal_data_cfg=<경로>`, 빈값이거나 `none`이면 `cal_data_cfg=none`을 블록에 기록한다.
+- 매 부팅 시 idempotent하게 반영된다.
+
+**TXPWRLIMIT_PATH — 런타임 `mlanutl hostcmd`**
+
+`wifi_mod_para.conf`와 무관하다. `wifi_init.sh`의 `apply_iface_txpwrlimit`가 인터페이스별로 `mlanutl <iface> hostcmd <경로> txpwrlimit_*_cfg_set`을 실행한다.
+
+- **우선순위**: `mlanN.TXPWRLIMIT_PATH` → (빈값) `global.TXPWRLIMIT_PATH` → (빈값/`none`) 적용 skip
+- `"none"`은 해당 인터페이스만 명시적 미적용(전역으로 fallback하지 않음).
+- 백업(self-healing)은 인터페이스별 경로를 각각 수행하되 동일 경로는 한 번만 백업한다.
+
+**`wifi` 명령** (둘 다 persist + global fallback 유지):
+- `wifi {0|1} cal {0|1|2|none|*.conf}` → `.mlanN.CAL_DATA_CFG` 저장 (다음 부팅에 블록 반영). `wifi cal ...`(인자 없는 최상위)는 `global.CAL_DATA_CFG` 저장.
+- `wifi {0|1} txpwr {0|1|2|3|no|default|low|org|*.conf}` → live 적용 + `.mlanN.TXPWRLIMIT_PATH` 저장. `no/0`은 `"none"`으로 저장(이 인터페이스만 미적용). `wifi txpwr ...`(최상위)는 `global.TXPWRLIMIT_PATH` 저장.
 
 ### 11.2 periodic_roam - 주기적 패시브 로밍
 
