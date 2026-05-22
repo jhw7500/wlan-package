@@ -44,7 +44,7 @@ safe_copy() {
 
 # 1) 대상 정상 → .bak 갱신
 if is_valid "$file_path"; then
-    logger -p local0.info "[$tag:$LINENO] backup to file : $backup_file"
+    #logger -p local0.info "[$tag:$LINENO] backup to file : $backup_file"
     safe_copy "$file_path" "$backup_file" \
         || logger -p local0.err "[$tag:$LINENO] backup write failed : $backup_file"
     exit 0

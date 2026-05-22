@@ -6,7 +6,7 @@ IFACE=$1
 
 logger -p local0.notice "[$tag:$LINENO] [$IFACE] logger stop"
 
-if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" ]]; then
+if [[ "$IFACE" != "mlan0" && "$IFACE" != "mlan1" && "$IFACE" != "eth0" ]]; then
     logger -p local0.err "[$tag:$LINENO] [$IFACE] interface is wrong!!"
     exit 1
 fi

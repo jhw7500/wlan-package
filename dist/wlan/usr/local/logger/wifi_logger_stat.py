@@ -152,7 +152,7 @@ def get_last_ap_log_values(log_filename, num_lines=10):
                   f"RSSI:{d['rssi']}({d['rssi_min']}/{d['rssi_max']}) | "
                   f"RX:{d['rx_packets']}/{d['rx_bps']}/{d['rx_avg_bps']} | "
                   f"TX:{d['tx_packets']}/{d['tx_bps']}/{d['tx_avg_bps']} | "
-                  f"FAIL:{d['tx_fail']} T:{d['time']}")
+                  f"FAIL:{d['tx_fail']} T:{d['time']}", _EXTRA_())
             return log_data
 
     except Exception as e:

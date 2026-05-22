@@ -146,12 +146,13 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} psk {password} : persist"
     echo "       wifi {0|1|mlan0|mlan1} key {0|1|NONE|WPA-PSK|*} : persist"
     echo "       wifi {0|1|mlan0|mlan1} freq {freq_list|channel_list} : persist"
-    echo "       wifi {0|1|mlan0|mlan1} scan {freq_list|channel_list} : runtime"
+    echo "       wifi {0|1|mlan0|mlan1} scan {freq_list|channel_list|2G|5G} : runtime"
+    echo "       wifi {0|1|mlan0|mlan1} mscan {get|channel_list|2G|5G} : runtime (setuserscan/getscantable)"
     echo "       wifi {0|1|mlan0|mlan1} roam [0|1..N] : 0=auto best, N=Nth AP (RSSI order)"
     echo "       wifi {0|1|mlan0|mlan1} stat reset [mac] : reset stat records (all or specific MAC)"
     echo "       wifi {0|1|mlan0|mlan1} stat interval {seconds} : set stat reset interval (persist)"
     echo "       wifi {0|1|mlan0|mlan1} mon [c|compact] [interval] [--summary-lines N] [--roam-display N]"
-    echo "       wifi {0|1|mlan0|mlan1} mcs [off|reset|ht <7|15> vht <7|8|9> he <7|9|11>] : persist+runtime"
+    echo "       wifi {0|1|mlan0|mlan1} mcs [on|off|reset|ht <7|15> vht <7|8|9> he <7|9|11>] : persist+runtime"
     echo "       wifi txpwr {0|1|2|3|no|default|low|org|conf_file_name} : persist"
     echo "       wifi cal {0|1|2|None|WlanCalData_ext.conf|WlanCalData_ext_RD.conf|*} : persist"
     echo "       wifi mfg {0|1|off|on} : persist"
@@ -216,6 +217,30 @@ to_freq_mhz() {
         echo "$v"
         return
     fi
+}
+
+# Expand a band shortcut (2G/5G) to its channel center frequencies (MHz).
+# Empty output means the token is not a band shortcut.
+band_freqs() {
+    case "$1" in
+        2G|2g|2.4G|2.4g)
+            echo "2412 2417 2422 2427 2432 2437 2442 2447 2452 2457 2462 2467 2472 2484" ;;
+        5G|5g)
+            echo "5180 5200 5220 5240 5260 5280 5300 5320 5500 5520 5540 5560 5580 5600 5620 5640 5660 5680 5700 5720 5745 5765 5785 5805 5825" ;;
+    esac
+}
+
+# Expand a band shortcut (2G/5G) to a setuserscan whole-band chan token.
+# chan=0g/0a tells the driver to scan all channels of that band (avoids the
+# MAX_CHAN_SCRATCH=100 char limit that an explicit channel list would hit).
+# Empty output means not a band shortcut.
+band_chans() {
+    case "$1" in
+        2G|2g|2.4G|2.4g)
+            echo "0g" ;;
+        5G|5g)
+            echo "0a" ;;
+    esac
 }
 
 show_info() {
@@ -961,12 +986,64 @@ case "$2" in
   scan)
     set -euo pipefail
     shift 2
+    # Band shortcut: 2G/5G must be used alone (no mixing with channel/freq args)
+    BAND_FREQS="$(band_freqs "${1:-}")"
+    if [ -n "$BAND_FREQS" ]; then
+        if [ $# -ne 1 ]; then
+            echo "Error: 2G/5G must be used alone (no other channel/freq args)" >&2; exit 1
+        fi
+        echo "scanning band $1 for $IFACE: $BAND_FREQS"
+        iw $IFACE scan freq $BAND_FREQS
+        exit 0
+    fi
+    for arg in "$@"; do
+        [ -n "$(band_freqs "$arg")" ] && { echo "Error: 2G/5G must be used alone (no other channel/freq args)" >&2; exit 1; }
+    done
     FREQS=()
     for arg in "$@"; do FREQS+=( "$(to_freq_mhz "$arg")" ); done
     [ ${#FREQS[@]} -eq 0 ] && { echo "configure freq not exist" >&2; exit 1; }
     FREQ_STR="${FREQS[*]}"
     echo "scanning freq_list $FREQ_STR for $IFACE"
     iw $IFACE scan freq $FREQ_STR
+    ;;
+  mscan)
+    set -euo pipefail
+    shift 2
+    # "get" => dump scan results (getscantable)
+    if [ "${1:-}" == "get" ]; then
+        mlanutl "$IFACE" getscantable
+        exit 0
+    fi
+    # mlanutl setuserscan based scan. Same arg style as scan (channels / 2G / 5G),
+    # converted to setuserscan chan tokens (channel#+band: 2.4G->'g', 5G->'a').
+    BAND_CHANS="$(band_chans "${1:-}")"
+    if [ -n "$BAND_CHANS" ]; then
+        if [ $# -ne 1 ]; then
+            echo "Error: 2G/5G must be used alone (no other channel args)" >&2; exit 1
+        fi
+        CHAN_STR="$BAND_CHANS"
+    else
+        for arg in "$@"; do
+            [ -n "$(band_chans "$arg")" ] && { echo "Error: 2G/5G must be used alone (no other channel args)" >&2; exit 1; }
+        done
+        CHANS=()
+        for arg in "$@"; do
+            ch="$(freq_to_channel "$arg")"
+            if ! [[ "$ch" =~ ^[0-9]+$ ]]; then
+                echo "Error: invalid channel/freq '$arg'" >&2; exit 1
+            fi
+            if (( ch <= 14 )); then
+                CHANS+=( "${ch}g" )
+            else
+                CHANS+=( "${ch}a" )
+            fi
+        done
+        [ ${#CHANS[@]} -eq 0 ] && { echo "configure channel not exist" >&2; exit 1; }
+        CHAN_STR="$(IFS=,; echo "${CHANS[*]}")"
+    fi
+    echo "mscan (setuserscan) chan=$CHAN_STR for $IFACE"
+    mlanutl "$IFACE" setuserscan chan="$CHAN_STR"
+    echo "(results: wifi $NUM mscan get)"
     ;;
   mcs)
     if [ -z "${3:-}" ]; then
@@ -987,6 +1064,27 @@ case "$2" in
             mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
         echo "mcs_tier disabled for $IFACE in $WIFI_INIT_CONF_JSON"
         echo "(apply on next boot. To restore live: mlanutl $IFACE mcstiercfg reset)"
+    elif [ "$3" == "on" ] || [ "$3" == "1" ]; then
+        # Enable mcs_tier with stored JSON values (re-apply ht/vht/he)
+        jq --arg iface "$IFACE" '.[$iface].mcs_tier.enabled = true' \
+            "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp" && \
+            mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
+        echo "mcs_tier enabled for $IFACE in $WIFI_INIT_CONF_JSON"
+        # Build live args from stored ht/vht/he
+        MCS_ARGS=""
+        MCS_HT=$(jq -r ".${IFACE}.mcs_tier.ht // empty" "$WIFI_INIT_CONF_JSON")
+        MCS_VHT=$(jq -r ".${IFACE}.mcs_tier.vht // empty" "$WIFI_INIT_CONF_JSON")
+        MCS_HE=$(jq -r ".${IFACE}.mcs_tier.he // empty" "$WIFI_INIT_CONF_JSON")
+        [ -n "$MCS_HT" ] && MCS_ARGS="$MCS_ARGS ht $MCS_HT"
+        [ -n "$MCS_VHT" ] && MCS_ARGS="$MCS_ARGS vht $MCS_VHT"
+        [ -n "$MCS_HE" ] && MCS_ARGS="$MCS_ARGS he $MCS_HE"
+        if [ -n "$MCS_ARGS" ]; then
+            mlanutl "$IFACE" mcstiercfg $MCS_ARGS > /dev/null 2>&1 && \
+                echo "Applied live:$MCS_ARGS (reconnect to take effect)" || \
+                echo "Warning: live apply failed (will apply on next boot)"
+        else
+            echo "(no ht/vht/he stored — set values with: wifi $NUM mcs ht <v> vht <v> he <v>)"
+        fi
     elif [ "$3" == "reset" ]; then
         # Reset: disable in JSON + restore live
         jq --arg iface "$IFACE" '.[$iface].mcs_tier.enabled = false' \

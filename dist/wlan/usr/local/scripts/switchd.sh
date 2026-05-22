@@ -1,7 +1,7 @@
 #!/bin/bash
 tag=$(basename "$0")
 
-logger -p local0.info "[$tag:$LINENO] start"
+#logger -p local0.info "[$tag:$LINENO] start"
 
 WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
 BOARD_TYPE="imx8mm"

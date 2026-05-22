@@ -1,7 +1,7 @@
 #!/bin/bash
 tag=$(basename "$0")
 
-logger -p local0.info "[$tag:$LINENO] start"
+#logger -p local0.info "[$tag:$LINENO] start"
 
 mkdir -p /var/log/cantops/cpu
 

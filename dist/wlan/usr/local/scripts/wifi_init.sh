@@ -49,8 +49,6 @@ fi
 
 # moal 파라미터 구성 (dev_cap_mask·cal_data_cfg는 인터페이스별로 wifi_mod_para.conf 블록에 주입됨)
 moal_args="mod_para=$MOD_PARA"
-logger -p local0.info "[$tag:$LINENO] moal_args: $moal_args"
-logger -p local0.info "[$tag:$LINENO] BOARD_TYPE=$BOARD_TYPE, modules=$MLAN_KO/$MOAL_KO"
 
 # BUS_TYPE/BLUETOOTH 기반 fw_name 자동 갱신
 if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
@@ -106,9 +104,8 @@ if [ "$MAC_MODE" != "default" ] && [ "$MAC_MODE" != "dynamic" ] && [ "$MAC_MODE"
     logger -p local0.err "[$tag:$LINENO] MAC_MODE invalid: $MAC_MODE, fallback to default"
     MAC_MODE="default"
 fi
-logger -p local0.info "[$tag:$LINENO] BRIDGE_IFACE=$BRIDGE_IFACE BRIDGE_NONE=$BRIDGE_NONE MAC_MODE=$MAC_MODE"
-logger -p local0.info "[$tag:$LINENO] mlan0 enabled=$MLAN0_ENABLED freq=$MLAN0_FREQ"
-logger -p local0.info "[$tag:$LINENO] mlan1 enabled=$MLAN1_ENABLED freq=$MLAN1_FREQ"
+logger -p local0.info "[$tag:$LINENO] BOARD_TYPE=$BOARD_TYPE, modules=$MLAN_KO/$MOAL_KO BRIDGE_IFACE=$BRIDGE_IFACE BRIDGE_NONE=$BRIDGE_NONE MAC_MODE=$MAC_MODE"
+logger -p local0.info "[$tag:$LINENO] mlan0: enabled=$MLAN0_ENABLED freq=$MLAN0_FREQ, mlan1: enabled=$MLAN1_ENABLED freq=$MLAN1_FREQ"
 
 # moal 엔진일 때만 bridge 파라미터를 moal insmod args에 추가.
 # bridge_iface가 mlan1이면 bridge_wlan_idx=1, 나머지는 기본값 유지.
@@ -116,6 +113,8 @@ logger -p local0.info "[$tag:$LINENO] mlan1 enabled=$MLAN1_ENABLED freq=$MLAN1_F
 if [ "$WBRIDGE_ENGINE" = "moal" ]; then
     moal_args="$moal_args bridge_mode=1 bridge_debug=$bridge_debug bridge_wlan_idx=$bridge_wlan_idx bridge_keepalive_ms=$bridge_keepalive_ms"
     logger -p local0.info "[$tag:$LINENO] moal engine: bridge params added → $moal_args"
+else
+    logger -p local0.info "[$tag:$LINENO] moal_args: $moal_args"
 fi
 
 # 이미 로드된 모듈이 있으면 사용 프로세스 종료 후 제거
@@ -264,7 +263,7 @@ apply_mod_para_from_json() {
             b loop
             :done
         }" "$conf"
-        logger -p local0.info "[$tag:$LINENO] ${block}: ${key}=${value}"
+        #logger -p local0.info "[$tag:$LINENO] ${block}: ${key}=${value}"
     }
 
     # 블록에서 key 라인을 제거 (없으면 no-op)
@@ -393,7 +392,7 @@ try_read_mac() {
     local val
     val=$(cat "$file")
     if [[ "$val" =~ $MAC_REGEX ]]; then
-        logger -p local0.info "[$tag:$LINENO] [$iface] $label mac: $val"
+        #logger -p local0.info "[$tag:$LINENO] [$iface] $label mac: $val"
         echo "$val"
         return 0
     fi
@@ -437,7 +436,7 @@ resolve_mac() {
     local mac=""
     local source="none"
 
-    logger -p local0.info "[$tag:$LINENO] [$iface] MAC_MODE=$mode"
+    #logger -p local0.info "[$tag:$LINENO] [$iface] MAC_MODE=$mode"
 
     if [ -z "$mac" ] && [ "$mode" = "dynamic" ]; then
         mac=$(try_dynamic_mac "$iface") || mac=""
@@ -454,7 +453,7 @@ resolve_mac() {
         [ -n "$mac" ] && source="base"
     fi
 
-    logger -p local0.info "[$tag:$LINENO] [$iface] mac_source=$source"
+    #logger -p local0.info "[$tag:$LINENO] [$iface] mac_source=$source"
     echo "$mac $source"
 }
 
@@ -540,19 +539,19 @@ apply_iface_radio_defaults() {
     fi
 
     sleep 0.2
-    logger -p local0.info "[$tag:$LINENO] [$iface] macctrl 0x00010e13"
+    #logger -p local0.info "[$tag:$LINENO] [$iface] macctrl 0x00010e13"
     mlanutl "$iface" macctrl 0x00010e13 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] macctrl failed"
 
     sleep 0.2
-    logger -p local0.info "[$tag:$LINENO] [$iface] httxcfg 0x00000063"
+    #logger -p local0.info "[$tag:$LINENO] [$iface] httxcfg 0x00000063"
     mlanutl "$iface" httxcfg 0x00000063 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] httxcfg failed"
 
     sleep 0.2
-    logger -p local0.info "[$tag:$LINENO] [$iface] htcapinfo 0x05c20000"
+    #logger -p local0.info "[$tag:$LINENO] [$iface] htcapinfo 0x05c20000"
     mlanutl "$iface" htcapinfo 0x05c20000 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] htcapinfo failed"
 
     sleep 0.2
-    logger -p local0.info "[$tag:$LINENO] [$iface] reassoctrl enable"
+    logger -p local0.info "[$tag:$LINENO] [$iface] macctrl: 0x00010e13, httxcfg: 0x00000063, htcapinfo: 0x05c20000, reassoctrl: enable"
     mlanutl "$iface" reassoctrl 1 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] reassoctrl failed"
 
     # Apply rate_adapt_cfg (per-iface override > global, must be set before association)
@@ -584,8 +583,10 @@ fi
 
 # 동적 MAC이 필요한 경우 wired_mac_ip_get.py 먼저 실행
 if [ "$MAC_MODE" = "dynamic" ] && wifi_init_iface_is_enabled "$BRIDGE_IFACE" "true"; then
-    logger -p local0.info "[$tag:$LINENO] [$BRIDGE_IFACE] running wired_mac_ip_get.py"
+    #logger -p local0.info "[$tag:$LINENO] [$BRIDGE_IFACE] running wired_mac_ip_get.py"
     python3 /usr/local/logger/wired_mac_ip_get.py || true
+else
+    logger -p local0.info "[$tag:$LINENO] skip wired_mac_ip_get.py"
 fi
 
 # resolve_mac 결과: "mac source"
