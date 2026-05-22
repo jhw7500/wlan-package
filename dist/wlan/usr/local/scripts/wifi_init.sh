@@ -10,6 +10,11 @@ JSON_FILE="${JSON_FILE:-/usr/local/etc/config.json}"
 MOD_PARA="cts/wifi_mod_para.conf"
 TXPWRLIMIT_PATH="/lib/firmware/cts/txpwrlimit_cfg_9098.conf"
 ANT_TYPE=""
+WBRIDGE_ENGINE="pcap"
+# moal 엔진 bridge 파라미터 (전역, engine=moal일 때 moal insmod args에 추가)
+bridge_debug=0
+bridge_wlan_idx=0
+bridge_keepalive_ms=1
 
 WIFI_INIT_CONF_JSON="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
 
@@ -23,6 +28,7 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
     BRIDGE_IFACE=$(jq -r '.wbridge.bridge_iface // .global.BRIDGE_IFACE // "mlan0"' "$WIFI_INIT_CONF_JSON")
     WBRIDGE_ENABLED=$(jq -r 'if .wbridge.enabled then "true" else "false" end' "$WIFI_INIT_CONF_JSON" 2>/dev/null || echo "true")
     MAC_MODE=$(jq -r '.wbridge.mac_mode // .global.MAC_MODE // "default"' "$WIFI_INIT_CONF_JSON")
+    WBRIDGE_ENGINE=$(jq -r '.wbridge.engine // "pcap"' "$WIFI_INIT_CONF_JSON")
 fi
 
 # 커널 모듈 (보드별 드라이버 선택)
@@ -103,6 +109,14 @@ fi
 logger -p local0.info "[$tag:$LINENO] BRIDGE_IFACE=$BRIDGE_IFACE BRIDGE_NONE=$BRIDGE_NONE MAC_MODE=$MAC_MODE"
 logger -p local0.info "[$tag:$LINENO] mlan0 enabled=$MLAN0_ENABLED freq=$MLAN0_FREQ"
 logger -p local0.info "[$tag:$LINENO] mlan1 enabled=$MLAN1_ENABLED freq=$MLAN1_FREQ"
+
+# moal 엔진일 때만 bridge 파라미터를 moal insmod args에 추가.
+# bridge_iface가 mlan1이면 bridge_wlan_idx=1, 나머지는 기본값 유지.
+[ "$BRIDGE_IFACE" = "mlan1" ] && bridge_wlan_idx=1
+if [ "$WBRIDGE_ENGINE" = "moal" ]; then
+    moal_args="$moal_args bridge_mode=1 bridge_debug=$bridge_debug bridge_wlan_idx=$bridge_wlan_idx bridge_keepalive_ms=$bridge_keepalive_ms"
+    logger -p local0.info "[$tag:$LINENO] moal engine: bridge params added → $moal_args"
+fi
 
 # 이미 로드된 모듈이 있으면 사용 프로세스 종료 후 제거
 if lsmod | grep -q "^${MOAL_MOD}\b" || lsmod | grep -q "^${MLAN_MOD}\b"; then
@@ -204,7 +218,7 @@ done
 # Mappings (PCIE9098_0/SD9098_0 ← mlan0, PCIE9098_1/SD9098_1 ← mlan1):
 #   - net_rx        ← mlanN.net_rx (int)
 #   - mgmt_hex_dump ← mlanN.mgmt_hex_dump_enable (bool → 1/0)
-#   - bridge_mode   ← wbridge.engine="moal" → bridge_iface 블록=1, 나머지=0 (else 둘 다 0)
+#   - bridge_mode   ← (블록에서 제거) engine="moal"이면 moal insmod 인자 bridge_mode=1로 전달
 #   - dev_cap_mask  ← mlanN.STANDARD (없으면 global.STANDARD) → n/ac만 set, ax/빈값은 라인 삭제(칩 기본값)
 #   - cal_data_cfg  ← mlanN.CAL_DATA_CFG (없으면 global.CAL_DATA_CFG) → 경로 set, 빈값/none은 cal_data_cfg=none
 apply_mod_para_from_json() {
@@ -223,19 +237,12 @@ apply_mod_para_from_json() {
     g_caldata=$(jq -r '.global.CAL_DATA_CFG // ""' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
 
     # JSON → mod_para 값 산출
-    local m0_net_rx m1_net_rx m0_mgmt m1_mgmt engine bridge_iface m0_bridge m1_bridge
+    local m0_net_rx m1_net_rx m0_mgmt m1_mgmt
     m0_net_rx=$(jq -r '.mlan0.net_rx // 0' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
     m1_net_rx=$(jq -r '.mlan1.net_rx // 0' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
 
     [ "$(jq -r '.mlan0.mgmt_hex_dump_enable // false' "$WIFI_INIT_CONF_JSON" 2>/dev/null)" = "true" ] && m0_mgmt=1 || m0_mgmt=0
     [ "$(jq -r '.mlan1.mgmt_hex_dump_enable // false' "$WIFI_INIT_CONF_JSON" 2>/dev/null)" = "true" ] && m1_mgmt=1 || m1_mgmt=0
-
-    engine=$(jq -r '.wbridge.engine // "pcap"' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-    bridge_iface=$(jq -r '.wbridge.bridge_iface // .global.BRIDGE_IFACE // "mlan0"' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-    m0_bridge=0; m1_bridge=0
-    if [ "$engine" = "moal" ]; then
-        if [ "$bridge_iface" = "mlan1" ]; then m1_bridge=1; else m0_bridge=1; fi
-    fi
 
     # 블록 내 key=value 1줄을 idempotent하게 반영 (기존 라인 제거 후 닫는 `}` 직전 삽입)
     _set_kv_in_block() {
@@ -269,7 +276,6 @@ apply_mod_para_from_json() {
             /^[[:space:]]*${key}=/d
             /^[[:space:]]*}/!b loop
         }" "$conf"
-        logger -p local0.info "[$tag:$LINENO] ${block}: ${key} removed"
     }
 
     # 표준 레벨: n < ac < ax
@@ -344,8 +350,9 @@ apply_mod_para_from_json() {
     _set_kv_in_block "${blk_prefix}_1" "net_rx"        "$m1_net_rx"
     _set_kv_in_block "${blk_prefix}_0" "mgmt_hex_dump" "$m0_mgmt"
     _set_kv_in_block "${blk_prefix}_1" "mgmt_hex_dump" "$m1_mgmt"
-    _set_kv_in_block "${blk_prefix}_0" "bridge_mode"   "$m0_bridge"
-    _set_kv_in_block "${blk_prefix}_1" "bridge_mode"   "$m1_bridge"
+    # bridge_mode는 moal insmod 인자로 전달 → 블록의 기존 라인은 제거(전역 인자 override 방지)
+    _del_kv_in_block "${blk_prefix}_0" "bridge_mode"
+    _del_kv_in_block "${blk_prefix}_1" "bridge_mode"
     _apply_dev_cap_mask "mlan0" "${blk_prefix}_0"
     _apply_dev_cap_mask "mlan1" "${blk_prefix}_1"
     _apply_cal_data_cfg "mlan0" "${blk_prefix}_0"

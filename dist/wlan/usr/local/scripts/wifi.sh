@@ -135,6 +135,7 @@ usage() {
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} gt {address} : persist"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} mac {0|1|base|target} {mac_address} : persist"
     echo "       wifi {0|1|mlan0|mlan1} br {up|down|start|stop|restart} : runtime"
+    echo "       wifi {0|1|mlan0|mlan1} br {moal|pcap|tpacket} : wbridge engine+bridge_iface persist"
     echo "       wifi {0|1|mlan0|mlan1} txpwr {0|1|2|3|no|default|low|org|custom_file_name} : persist+runtime"
     echo "       wifi {0|1|mlan0|mlan1} config {conf} {value} : persist"
     echo "       wifi {0|1|mlan0|mlan1} spoof {0|1|dynamic|static} : persist"
@@ -664,6 +665,27 @@ case "$2" in
     elif [ "$3" == "restart" ]; then
         echo "restart bridge for $IFACE..."
         systemctl restart wifi_bridge@$IFACE
+    elif [ "$3" == "moal" ] || [ "$3" == "pcap" ] || [ "$3" == "tpacket" ]; then
+        if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
+            echo "Error: br {moal|pcap|tpacket} supports mlan0/mlan1 only" >&2
+            exit 1
+        fi
+        if [ ! -f "$WIFI_INIT_CONF_JSON" ]; then
+            echo "Error: $WIFI_INIT_CONF_JSON not found" >&2
+            exit 1
+        fi
+        if ! command -v jq >/dev/null 2>&1; then
+            echo "Error: jq not installed" >&2
+            exit 1
+        fi
+        if jq --arg i "$IFACE" --arg e "$3" '.wbridge.bridge_iface = $i | .wbridge.engine = $e' "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp"; then
+            mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
+            echo "wbridge updated: bridge_iface=$IFACE engine=$3 (다음 wifi up/부팅 시 적용)"
+        else
+            rm -f "${WIFI_INIT_CONF_JSON}.tmp"
+            echo "Error: wbridge JSON update failed" >&2
+            exit 1
+        fi
     else
         usage
     fi

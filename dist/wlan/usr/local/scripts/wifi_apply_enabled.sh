@@ -146,13 +146,12 @@ done
 # enable/disable 결과를 systemd가 즉시 인식하도록 reload
 systemctl daemon-reload 2>/dev/null || true
 
-# 처리 요약 — logger + stdout (수동 실행 시 즉시 확인 가능)
+# 처리 요약 — logger (local0 → /var/log/cantops)
 _log_summary() {
     local msg="$1"
     # BASH_LINENO[0] = 헬퍼 호출자의 라인 (헬퍼 내부 라인이 아닌, summary가 어디서 났는지)
     local ln=${BASH_LINENO[0]}
     logger -p local0.info "[$tag:$ln] $msg"
-    printf '[%s:%s] %s\n' "$tag" "$ln" "$msg"
 }
 
 _log_summary "summary: enabled=${#ENABLED_UNITS[@]} disabled=${#DISABLED_UNITS[@]} failed=${#FAILED_UNITS[@]}"
