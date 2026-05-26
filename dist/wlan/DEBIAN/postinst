@@ -354,6 +354,7 @@ json_merge() {
   fi
   ln -sf "/usr/local/wlan-bridge/wbridge/wbridge${WBRIDGE_SUFFIX}" /usr/local/bin/wifi-wbridge
   ln -sf "/usr/local/wlan-bridge/wbridge/wbridge-tpacket${WBRIDGE_SUFFIX}" /usr/local/bin/wifi-wbridge-tpacket
+  ln -sf "/usr/local/wlan-bridge/wbridge/wifi_bridge@.service" /etc/systemd/system/wifi_bridge@.service
   logger -p local0.info "[$KEY][$tag:$LINENO] wbridge symlinks → suffix='${WBRIDGE_SUFFIX}' (BOARD_TYPE=$BOARD_TYPE)"
 
   logger -p local0.info "[$KEY][$tag:$LINENO] Successfully created symlinks for wbridge binaries"
