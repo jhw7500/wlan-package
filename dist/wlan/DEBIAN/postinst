@@ -463,6 +463,16 @@ json_merge() {
     #systemctl start vhld.service || true
   fi
 
+  # opcd (wlan-opc: OPC-side UDP control plane, spec Rev1.00 §3)
+  # 원본 unit 은 /usr/local/opc/opcd.service 단일 트리에 두고, systemd 표준 위치로
+  # symlink 만 만든다 ("한 곳에 모아 관리"는 wlan-opc 정책, T8 참조).
+  if [ -f /usr/local/opc/opcd.service ]; then
+    ln -sf /usr/local/opc/opcd.service /etc/systemd/system/opcd.service
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable opcd.service 2>/dev/null || true
+    logger -p local0.info "[$KEY][$tag:$LINENO] opcd.service installed via symlink and enabled"
+  fi
+
   PACKAGE_NAME="$DPKG_MAINTSCRIPT_PACKAGE"
   echo -e "\e[1m installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)\e[0m"
   logger -p local0.info "[$KEY][$tag:$LINENO] installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)"

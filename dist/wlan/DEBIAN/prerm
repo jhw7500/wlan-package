@@ -58,6 +58,7 @@ remove|deconfigure)
     stop_service_if_active wifi_thermal_state.timer
     stop_service_if_active wifi_thermal_state
     stop_service_if_active switchd
+    stop_service_if_active opcd
 
     # Disable services
     echo "[INFO] Disabling WLAN services..."
@@ -80,6 +81,7 @@ remove|deconfigure)
     disable_service_if_enabled wifi_thermal_state.timer
     disable_service_if_enabled wifi_thermal_state
     disable_service_if_enabled switchd
+    disable_service_if_enabled opcd
 
     # Reload systemd daemon
     systemctl daemon-reload 2>/dev/null || true
