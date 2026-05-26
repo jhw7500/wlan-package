@@ -27,6 +27,7 @@ cleanup_symlinks() {
         /usr/local/bin/usb_print \
         /usr/local/bin/mfg \
         /usr/local/mfg/mfgbridge \
+        /etc/systemd/system/opcd.service \
         /var/log/journal
 }
 

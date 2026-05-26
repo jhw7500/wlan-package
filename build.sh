@@ -114,6 +114,32 @@ cp "${BASEDIR}/wlan-bridge/wbridge/wifi_bridge@.service" "${BASEDIR}/dist/wlan/u
 cp -a "${BASEDIR}/wlan-bridge/scripts/." "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/scripts/" || { echo "Error: Failed to copy scripts"; exit 1; }
 cp -a "${BASEDIR}/wlan-bridge/docs/." "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/docs/" || { echo "Error: Failed to copy docs"; exit 1; }
 
+# Build wlan-opc (OPC-side control daemon + VHL CLI simulator)
+# 산출물: wlan-opc/opcd/opcd, wlan-opc/vhlctl/vhlctl, wlan-opc/opcd/opcd.service
+# 설치 트리: /usr/local/opc/{bin/opcd, bin/vhlctl, opcd.service}
+# postinst가 /etc/systemd/system/opcd.service symlink + enable 처리한다.
+WLAN_OPC_DIR="${BASEDIR}/wlan-opc"
+if [ -d "${WLAN_OPC_DIR}" ]; then
+    echo "Building wlan-opc..."
+    cd "${WLAN_OPC_DIR}"
+    make clean || true
+    if [ "${HOST_ARCH}" = "aarch64" ] || [ "${HOST_ARCH}" = "arm64" ]; then
+        CC=cc AR=ar make || { echo "Error: Failed to build wlan-opc (native)"; exit 1; }
+    else
+        make || { echo "Error: Failed to cross-build wlan-opc"; exit 1; }
+    fi
+    cd "${BASEDIR}"
+
+    OPC_DEST="${BASEDIR}/dist/wlan/usr/local/opc"
+    mkdir -p "${OPC_DEST}/bin"
+    cp "${WLAN_OPC_DIR}/opcd/opcd"         "${OPC_DEST}/bin/opcd"     || { echo "Error: copy opcd";        exit 1; }
+    cp "${WLAN_OPC_DIR}/vhlctl/vhlctl"     "${OPC_DEST}/bin/vhlctl"   || { echo "Error: copy vhlctl";      exit 1; }
+    cp "${WLAN_OPC_DIR}/opcd/opcd.service" "${OPC_DEST}/opcd.service" || { echo "Error: copy opcd.service"; exit 1; }
+    echo "wlan-opc artifacts staged to ${OPC_DEST}"
+else
+    echo "Warning: wlan-opc submodule not found, skipping"
+fi
+
 # Build vhld (VHL Protocol Daemon)
 echo "Building vhld..."
 VHLD_DIR="${BASEDIR}/dist/wlan/usr/local/vhl_daemon"
