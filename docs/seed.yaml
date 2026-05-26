@@ -1,0 +1,135 @@
+# wlan-opc / VHL ↔ wireless-board UDP control plane — Seed
+# Generated 2026-05-26 via ouroboros interview + seed (Path B, MCP fallback).
+# QA: PASS at iteration 1/5, score 0.95 (threshold 0.90).
+# Audit trail: ~/.ouroboros/seed-revisions/wlan-opc-vhl-protocol-20260526T062050Z.md
+metadata:
+  generated_at: 2026-05-26
+  ambiguity_score: 0.10
+  interview_session: null
+  protocol_spec: "Rev1.00 / 2026-05-25 (CANTOPS送付用)"
+  pass_threshold: 0.90
+  qa_iterations: 1
+  final_qa_score: 0.95
+
+goal: >
+  Implement, in C, a new git submodule `wlan-opc` (internal layout protocol/ +
+  opcd/ + vhlctl/) containing the wireless-board (OPC) side UDP/IP control-plane
+  daemon `opcd` and a companion VHL-side CLI simulator `vhlctl`, both installed
+  under a single /usr/local/opc/ tree with systemd auto-start, supporting all
+  10 Request/Query commands and 7 Indication messages from spec Rev1.00 over a
+  big-endian 64-byte common header, with Single/Dual Station selected at runtime,
+  persistent settings stored under /usr/local/opc/etc/, considered 1st-stage
+  complete when full-command codec, opcd skeleton, and a manual end-to-end
+  vhlctl run-through pass on the ARM64 target.
+
+constraints:
+  - "Language: C99 or later, cross-compiled with aarch64-linux-gnu, same toolchain family as wlan-bridge"
+  - "Code lives in a new git submodule wlan-opc under wlan-package; internal dirs protocol/, opcd/, vhlctl/"
+  - "All install artifacts under /usr/local/opc/{bin,etc} only — no /etc/opc, no /var/lib/opc"
+  - "opcd.service original at /usr/local/opc/opcd.service; dpkg postinst creates /etc/systemd/system/opcd.service symlink + daemon-reload + enable; prerm/purge removes it"
+  - "Wire format: UDP/IP, big-endian, 64-byte common header, payload <= 1360 B (UDP payload <= 1424 B)"
+  - "CommandType: Request=0x01, Acknowledgment=0x02, Indication=0x03; Protocol Version fixed 1"
+  - "Default UDP port 50607, overridable via /usr/local/opc/etc/opc.conf"
+  - "Response-timer policy: reference-class 1 s, NVRAM-write class 2 min"
+  - "Sequence Number duplicate handling: drop if processing in progress, treat-as-new if received after response"
+  - "Login session: single active session, IP-bound, 5-minute idle auto-logout (timeout injectable for tests)"
+  - "List Boundary Flag values follow spec page 22 (start=0x0001, continue=0x0000, end=0x0002, start+end=0x0003); p.24 inconsistency logged as TODO with vendor follow-up"
+  - "IP Config List: 128 slots, max 20 entries per Set IP Config List request; commit on end flag via atomic rename of /usr/local/opc/etc/iplist.cfg"
+  - "Indication Config is volatile — must be re-set after reset / power-on / IP change"
+  - "Station Type Single/Dual chosen at runtime via radio.conf; Dual-only fields gated by Station Type"
+  - "VHL-side checks via CLI simulator vhlctl only (no TUI, no test framework in 1st stage)"
+  - "Persistent-file writes are atomic-rename only — never partial-write the live file"
+  - "Build system: Makefile per-directory; wlan-package build.sh invokes both wlan-bridge and wlan-opc and stages outputs under dist/usr/local/opc/..."
+  - "Logging: stderr/syslog, captured by systemd journal (no custom log file in 1st stage)"
+  - "Password stored as plain text in 1st stage with an explicit FIXME at the storage boundary (hash policy is TODO)"
+  - "All spec TBD/ambiguous items (default port, Boundary Flag values, 802.11r/ai/k/v support, congestion thresholds, vendor max-response-time) tracked in docs/proto-todo.md with file:line back-references in code comments"
+  - "Reset (0x2001) post-ack semantics: opcd exit(0) after Acknowledgment is sent, systemd unit has Restart=always so the daemon comes back up — no in-process re-init in 1st stage"
+  - "ResetNotice (0x0020) is emitted only from explicit code paths (Reset command path + future watchdog hooks); in 1st stage it is a stub-emitter wired to the Reset command path only"
+  - "FaultDetect (0x0010) is a no-op probe in 1st stage with a single TODO probe interface; thresholds for CPU/Mem/Disk/Net live in opc.conf with default values left as TBD"
+  - "/usr/local/opc/etc/password is mode 0600 owned by root (or the opcd service user) regardless of plain/hash storage choice"
+
+acceptance_criteria:
+  - "libopcproto.a packs and unpacks all 10 Request commands, their 10 Acknowledgment responses, and all 7 Indication messages with byte-for-byte round-trip equality against a fixed test-vector set"
+  - "opcd starts via `systemctl start opcd`, listens on UDP port from /usr/local/opc/etc/opc.conf (default 50607), and survives systemctl restart with persistent state intact"
+  - "GetBasicInformation (0x0001) is served before any Login and returns Device Status reflecting current state (0x00 boot / 0x01 ready / 0x02 logged-in)"
+  - "Login (0xF001) from a second source IP while another IP holds the session returns Result=NG, Error Cause=0x0002 (Login condition violation)"
+  - "Login session auto-logs-out after 5 minutes of no Request/Query traffic from the holder IP (timer is injectable down to seconds in tests)"
+  - "SetIpConfigList (0x1002) accumulates entries across multiple requests in /usr/local/opc/etc/temp/ and commits to iplist.cfg only when an end boundary flag is seen, via atomic rename; receiving ChangeIpAddress (0x1003) before end returns Error Cause=0x0012 (conflict)"
+  - "ChangeIpAddress (0x1003) applies the new IP/ESSID only after the Logout response has been sent; on power cycle the device returns to the configuration in iplist.cfg without persisting the change"
+  - "SetPassword (0x1001) and SetRadioConfig (0x1004) persist via atomic rename of /usr/local/opc/etc/{password,radio.conf} and survive reboot"
+  - "While Indication notification is enabled, GetDeviceInformation (0x0002) returns Error Cause=0x0010 (Indication notification setting violation)"
+  - "opcd emits InitComplete state sequence 0x00 → 0x01 → 0x02 to the configured indication recipient and emits all 7 indications (InitComplete, WlanStatusChange, Roaming, ApDisconnect, FaultDetect, ResetNotice, KeepAlive) under their event/period rules; KeepAlive suppressed when Indication Period = 0"
+  - "GetDeviceInformation (0x0002) returns a 408-byte spec-conformant payload; 802.11r/ai/k/v bits default to 0 (unsupported) when platform_hook stubs are present, and Dual-only fields are present only when Station Type = DUAL"
+  - "vhlctl exercises every command (login, logout, basic-info, device-info, set-password, set-ip-list, change-ip, set-radio, set-indication, reset) plus listen, and docs/manual-runthrough.md passes end-to-end on an ARM64 target build against opcd"
+  - "build.sh produces a .deb that installs to /usr/local/opc, creates the systemd symlink at /etc/systemd/system/opcd.service, and dpkg --purge removes the symlink and all installed files"
+
+ontology_schema:
+  name: WlanOpcControlPlane
+  description: >
+    Domain model of the VHL ↔ wireless-board UDP/IP common-control protocol,
+    the OPC-side daemon, its companion VHL-side CLI simulator, and the persistent
+    configuration tree under /usr/local/opc.
+  fields:
+    - name: common_header
+      type: object
+      description: "64-byte big-endian header — protocol_version(u8), command_type(u8), req_indication_id(u16), sequence_number(u16), length(u16), reserve(56B)"
+    - name: request_query_command
+      type: object
+      description: "10 commands — Login 0xF001, Logout 0xF002, GetBasicInformation 0x0001, GetDeviceInformation 0x0002, SetPassword 0x1001, SetIpConfigList 0x1002, ChangeIpAddress 0x1003, SetRadioConfig 0x1004, SetIndicationConfig 0x1005, Reset 0x2001"
+    - name: indication_message
+      type: object
+      description: "7 messages — InitComplete 0x0001, WlanStatusChange 0x0002, Roaming 0x0004, ApDisconnect 0x0008, FaultDetect 0x0010, ResetNotice 0x0020, KeepAlive 0x0080"
+    - name: session
+      type: object
+      description: "Login state — login_state(bool), holder_ip(string), idle_deadline(ts, 5-min sliding), exclusive=true"
+    - name: indication_config
+      type: object
+      description: "Volatile — recipient_ip(string), recipient_port(u16), info_bits(u8 bitfield), period_seconds(u8 0–255)"
+    - name: ip_config_list
+      type: array
+      description: "128 entries each holding ip(string), subnet_mask(string), default_gateway(string), ntp_server(string), essid(<=31 string)"
+    - name: radio_config
+      type: object
+      description: "Persistent radio — station_type(SINGLE|DUAL), priority_ch{band,ch} (Dual-only), wlan1{freq,ch,mode,bw}, wlan2{...} (Dual-only)"
+    - name: persistent_store
+      type: object
+      description: "/usr/local/opc/etc store — opc.conf, password, iplist.cfg, radio.conf, temp/ staging with atomic-rename commit"
+    - name: platform_hook
+      type: object
+      description: "OPC-side platform adapter — MAC/IP/SNR/RSSI/connected-AP MAC/WLAN status/congestion (CPU/Mem/Disk/Net) sources; stubs allowed in 1st stage"
+    - name: error_cause
+      type: object
+      description: "Per-command Result + Error Cause table — common 0x0001 login-violation, 0x0002 login-condition, 0x0003 packet-size, 0x0004 NVRAM, plus command-specific 0x0010+"
+    - name: install_layout
+      type: object
+      description: "/usr/local/opc/{bin/opcd, bin/vhlctl, etc/{opc.conf,password,iplist.cfg,radio.conf,temp/}, opcd.service} + symlink /etc/systemd/system/opcd.service"
+
+evaluation_principles:
+  - "wire_format_correctness:Headers and payloads serialize big-endian, lengths match spec exactly, all multi-byte ints htons/htonl-cleansed:0.25"
+  - "spec_coverage:All 10 Request/Query, all 7 Indication, all listed Result/Error Cause codes implemented or explicitly stubbed with file:line TODO:0.20"
+  - "session_and_exclusion_correctness:5-min idle auto-logout, single-IP exclusion, retransmit dedup, Indication-vs-Query mutual exclusion all hold under concurrent load tests:0.15"
+  - "persistence_atomicity:NVRAM-class writes go via temp/ + rename at the right commit point only (Set IP List end flag, Set Radio Config success):0.10"
+  - "install_tree_integrity:Everything under /usr/local/opc; systemd symlink lifecycle correct across install/upgrade/purge:0.10"
+  - "code_safety:No UB in codec, bounded NULL-terminated strings, length checks before memcpy, no fixed buffer indexed by attacker-controlled length:0.10"
+  - "testability:Manual run-through documented; timers, port, and platform hooks injectable for tests:0.10"
+
+exit_conditions:
+  - "codec_complete:libopcproto.a covers all 10 Request + 10 Acknowledgment + 7 Indication shapes:round-trip test-vector set passes byte-equal"
+  - "opcd_skeleton_complete:opcd serves all 10 commands with in-memory state plus persistent files and emits 7 Indications under correct event/period rules:vhlctl drives every command and observes the spec-defined Result/Error Cause and Indication payloads"
+  - "vhlctl_manual_runthrough:Documented manual end-to-end run on ARM64 target completes full login→config→indication→reset cycle without errors:docs/manual-runthrough.md checklist all ticked on a real target run"
+  - "package_integration:build.sh produces a .deb that installs opcd + vhlctl + opcd.service into /usr/local/opc, creates the systemd symlink, and purge cleans up:`file dist/usr/local/opc/bin/opcd` confirms ARM aarch64, dpkg -i / --purge cycle leaves no stray files outside expected paths"
+
+brownfield_context:
+  project_type: brownfield
+  context_references:
+    - "wlan-bridge/wbridge/:reference:Existing C submodule for L2 bridge — mirror its Makefile layout, cross-compile flags, and submodule discipline"
+    - "build.sh:primary:Top-level build script — extend to invoke wlan-opc submodule build and stage to dist/usr/local/opc"
+    - "tmp/無線基板共通制御通信仕様書_Rev1.00_KO.md:primary:Authoritative protocol spec (Korean translation); cite section numbers in code comments"
+    - "README.md:reference:Project context — NXP88W9098 / i.MX8MM ARM64 / Debian package wlan-proc"
+  existing_patterns:
+    - "C submodule pattern from wlan-bridge (per-directory Makefile, cross-compiler via env)"
+    - "aarch64-linux-gnu cross-toolchain"
+    - "dist/ staging + dpkg-deb packaging via build.sh"
+    - "systemd unit shipped by Debian package"
+  existing_dependencies:
+    - "libc / POSIX networking only (no third-party in 1st stage)"
