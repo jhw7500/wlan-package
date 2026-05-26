@@ -92,5 +92,19 @@ the source so we can grep both ways.
 - **Spec text**: shows the response payload ending at offset 412 with a reserve block "376 ┐ Reserve / 412 ┘"
 - **Reverse-engineering Length=408**: frame size = 408 + 8 = 416, body = 416 - 64 = 352 → the trailing reserve must be 40 bytes (376..415), not the 36 bytes (376..411) the table suggests.
 - **Our choice**: trust the Length=408 number, emit a 352-byte body with a 40-byte trailing reserve.
-- **Call sites**: future `opc_get_device_info_ack_*` in `commands.h/.c`
+- **Call sites**: `wlan-opc/protocol/commands.c::opc_get_device_info_ack_pack`
 - **Resolve when**: vendor confirms reserve area size
+
+## T13. SetRadioConfig (0x1004) — WLAN#2 FREQ/CH order reversed in spec
+
+- **Spec text**: WLAN#1 row shows "FREQ then CH", WLAN#2 row shows "CH then FREQ".
+- **Our choice**: pack on the wire in the order spec literally specifies (W1=FREQ/CH, W2=CH/FREQ). Caller-visible struct (`opc_wlan_radio_cfg_t`) is uniform; the swap happens inside the codec only.
+- **Call sites**: `wlan-opc/protocol/commands.c::opc_set_radio_config_req_pack/unpack`
+- **Resolve when**: vendor confirms whether WLAN#2 ordering is truly different (likely a spec typo)
+
+## T14. Roaming Indication (0x0004) — CH Number offset row table mis-aligned
+
+- **Spec text**: "64 SNR|RSSI / 68 Connect AP MAC (6B) / 72 CH Number" — but a 6-byte MAC starting at body offset 4 ends at offset 9, so the spec row "72 CH Number" (= body offset 8) overlaps the MAC.
+- **Our choice**: SNR(1) + RSSI(1) + reserve(2) at body 0..3, MAC(6) at 4..9, CH Number(2) at body 10..11 (= frame offset 74..75). This matches the spec's overall 12-byte body / Length=68.
+- **Call sites**: `wlan-opc/protocol/indications.c::opc_ind_roaming_pack/unpack`
+- **Resolve when**: vendor publishes a corrected table
