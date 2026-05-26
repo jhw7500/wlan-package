@@ -66,3 +66,31 @@ the source so we can grep both ways.
 - **1st-stage**: only emitted from the Reset command path (stub emitter). Watchdog or fault-driven autonomous reset paths are future work and must be hooked into this same emitter.
 - **Call sites**: `opcd/indication.c::reset_notice_emit`
 - **Resolve when**: watchdog / fault paths land
+
+## T10. Header `Length` field — internally inconsistent across commands
+
+- **Spec evidence**:
+  - Login Req body 128 → Length 184 (i.e. `body + 56`)
+  - Login Ack body 4 → Length 60 (`body + 56`)
+  - Logout Req body 0 → Length 0 (NOT `body + 56`)
+  - GetBasicInfo Req body 0 → Length 0 (NOT `body + 56`)
+  - GetBasicInfo Ack body 16 → Length 72 (`body + 56`)
+- **Our choice**: each per-command codec helper writes the spec-literal Length value, and the frame layer just transports it verbatim. Receivers do not strictly validate Length; they validate the **frame size** vs the expected-size table per command.
+- **Call sites**: `protocol/commands.h` per-command `*_LENGTH` macros, `protocol/frame.c::opc_frame_build` `length_field` parameter
+- **Resolve when**: vendor clarifies which row of the spec is authoritative
+
+## T11. Reset Ack body present but `Length=0`
+
+- **Spec text**: "응답 포맷 (Length=0 ※헤더상 Length=0, Result/Error Cause 포함)"
+- **Reading**: the Acknowledgment carries a 4-byte Result+ErrorCause body in the same offsets as every other Ack, but the Length field on the wire is 0.
+- **Our choice**: pack the 4-byte body in the body area as usual, but write Length=0 in the header per spec. Receivers parse the body from the frame regardless of Length.
+- **Call sites**: future `opc_reset_ack_*` in `commands.h/.c`
+- **Resolve when**: vendor confirms whether Length should be 60 like the other simple Acks
+
+## T12. GetDeviceInfo Ack reserve area trailing length
+
+- **Spec text**: shows the response payload ending at offset 412 with a reserve block "376 ┐ Reserve / 412 ┘"
+- **Reverse-engineering Length=408**: frame size = 408 + 8 = 416, body = 416 - 64 = 352 → the trailing reserve must be 40 bytes (376..415), not the 36 bytes (376..411) the table suggests.
+- **Our choice**: trust the Length=408 number, emit a 352-byte body with a 40-byte trailing reserve.
+- **Call sites**: future `opc_get_device_info_ack_*` in `commands.h/.c`
+- **Resolve when**: vendor confirms reserve area size
