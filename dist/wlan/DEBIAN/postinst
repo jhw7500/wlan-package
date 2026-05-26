@@ -466,11 +466,14 @@ json_merge() {
   # opcd (wlan-opc: OPC-side UDP control plane, spec Rev1.00 §3)
   # 원본 unit 은 /usr/local/opc/opcd.service 단일 트리에 두고, systemd 표준 위치로
   # symlink 만 만든다 ("한 곳에 모아 관리"는 wlan-opc 정책, T8 참조).
+  #
+  # 정책: 1차 단계는 자동 enable 금지. 운영자가 직접 결정한다:
+  #   - 즉시 검증:    systemctl start opcd
+  #   - 부팅 자동:    systemctl enable opcd && systemctl start opcd
   if [ -f /usr/local/opc/opcd.service ]; then
     ln -sf /usr/local/opc/opcd.service /etc/systemd/system/opcd.service
     systemctl daemon-reload 2>/dev/null || true
-    systemctl enable opcd.service 2>/dev/null || true
-    logger -p local0.info "[$KEY][$tag:$LINENO] opcd.service installed via symlink and enabled"
+    logger -p local0.info "[$KEY][$tag:$LINENO] opcd.service installed via symlink (disabled by default — start manually)"
   fi
 
   PACKAGE_NAME="$DPKG_MAINTSCRIPT_PACKAGE"
