@@ -190,11 +190,40 @@ def parse_survey_dump(output):
 
     return survey_data
 
+def get_ip_info(iface):
+    info = {
+        "ip_address": None,
+        "netmask": None,
+        "gateway": None,
+    }
+
+    ip_out = run_command(["ip", "addr", "show", iface])
+    if ip_out:
+        for line in ip_out.splitlines():
+            line = line.strip()
+            if line.startswith("inet "):
+                m = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+)/(\d+)", line)
+                if m:
+                    info["ip_address"] = m.group(1)
+                    cidr = int(m.group(2))
+                    netmask = [str((0xffffffff << (32 - cidr) >> i) & 0xff) for i in (24, 16, 8, 0)]
+                    info["netmask"] = ".".join(netmask)
+                    break
+
+    route_out = run_command(["ip", "route", "show", "default", "dev", iface])
+    if route_out:
+        m = re.search(r"default\s+via\s+(\d+\.\d+\.\d+\.\d+)", route_out)
+        if m:
+            info["gateway"] = m.group(1)
+
+    return info
+
 def parse_eth_info(iface):
     stats = {
         "mac_address": None,
         "ip_address": None,
         "netmask": None,
+        "gateway": None,
         "rx_packets": 0,
         "rx_bytes": 0,
         "rx_errors": 0,
@@ -212,13 +241,8 @@ def parse_eth_info(iface):
             m = re.search(r"link/ether\s+([0-9a-f:]+)", line)
             if m:
                 stats["mac_address"] = m.group(1)
-        elif line.startswith("inet "):
-            m = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+)/(\d+)", line)
-            if m:
-                stats["ip_address"] = m.group(1)
-                cidr = int(m.group(2))
-                netmask = [str((0xffffffff << (32 - cidr) >> i) & 0xff) for i in (24, 16, 8, 0)]
-                stats["netmask"] = ".".join(netmask)
+
+    stats.update(get_ip_info(iface))
 
     # traffic
     with open("/proc/net/dev") as f:
@@ -367,9 +391,12 @@ def main():
 
         check_tx_spike(link_data)
 
+        info_data = dict(_cached_info_data)
+        info_data.update(get_ip_info(IFACE))
+
         data = {
             "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "info": _cached_info_data,
+            "info": info_data,
             "link": link_data,
             "channel_info": channel_data,
             "mwlan_log": parse_mwlan_log()
