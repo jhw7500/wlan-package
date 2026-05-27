@@ -39,7 +39,7 @@ workflows:
   gemini-auto-review:
     enabled: false
     auto: true
-    description: "Automatic PR review with Gemini (현재 API/모델 이슈로 비활성, 후속 fix 후 enable)"
+    description: "Automatic PR review with Gemini (GEMINI_MODEL을 gemini-2.5-flash로 교체 검증 후 재활성 예정)"
 
   gemini-scheduled-triage:
     enabled: false
