@@ -9,6 +9,7 @@ on:
       - '**/postrm'
       - '**/prerm'
       - '.github/workflows/shellcheck.yml'
+      - '.github/workflow-config.yml'
   pull_request:
     branches: [ main, master ]
     paths:
@@ -17,6 +18,7 @@ on:
       - '**/postrm'
       - '**/prerm'
       - '.github/workflows/shellcheck.yml'
+      - '.github/workflow-config.yml'
   workflow_dispatch:
     inputs:
       force_run:
@@ -25,9 +27,30 @@ on:
         default: false
 
 jobs:
+  check-enabled:
+    name: Check if enabled
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      enabled: ${{ steps.check.outputs.enabled }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github
+
+      - name: Check workflow config
+        id: check
+        uses: ./.github/actions/check-workflow-enabled
+        with:
+          workflow-name: shellcheck
+          force-run: ${{ github.event.inputs.force_run || 'false' }}
+
   shellcheck:
     name: ShellCheck Analysis
-    if: ${{ github.event.inputs.force_run == 'true' || vars.SHELLCHECK_ENABLED == 'true' }}
+    needs: check-enabled
+    if: needs.check-enabled.outputs.enabled == 'true'
     runs-on: ubuntu-latest
 
     steps:
