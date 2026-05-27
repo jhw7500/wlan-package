@@ -114,6 +114,13 @@ jobs:
         run: |
           set -euo pipefail
 
+          # App token 발급 step이 silent fail한 경우 GH_TOKEN이 빈 문자열로 들어옴.
+          # APP_ID/APP_PRIVATE_KEY secret이 아직 등록 안 된 환경에서 의미 있는 에러를 띄운다.
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error::APP token is empty. Configure APP_ID and APP_PRIVATE_KEY repository secrets (create-github-app-token step likely failed)."
+            exit 1
+          fi
+
           if git diff --quiet; then
             echo "No changes after rewrite; skipping PR."
             exit 0

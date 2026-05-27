@@ -25,14 +25,21 @@ runs:
       id: check
       shell: bash
       run: |
+        set -euo pipefail
         CONFIG_FILE=".github/workflow-config.yml"
         WORKFLOW_NAME="${{ inputs.workflow-name }}"
         FORCE_RUN="${{ inputs.force-run }}"
 
+        # workflow-name 검증 (yq/grep 표현식에 들어가므로 안전 문자만 허용)
+        if [[ ! "$WORKFLOW_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+          echo "::error::Invalid workflow-name '$WORKFLOW_NAME' (allowed: [a-zA-Z0-9_-]+)"
+          exit 1
+        fi
+
         # force_run이 true면 무조건 enabled
         if [[ "$FORCE_RUN" == "true" ]]; then
-          echo "enabled=true" >> $GITHUB_OUTPUT
-          echo "config={}" >> $GITHUB_OUTPUT
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          echo "config={}" >> "$GITHUB_OUTPUT"
           echo "::notice::Workflow forced to run"
           exit 0
         fi
@@ -40,29 +47,27 @@ runs:
         # 설정 파일 확인
         if [[ ! -f "$CONFIG_FILE" ]]; then
           echo "::warning::Config file not found, defaulting to enabled"
-          echo "enabled=true" >> $GITHUB_OUTPUT
-          echo "config={}" >> $GITHUB_OUTPUT
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          echo "config={}" >> "$GITHUB_OUTPUT"
           exit 0
         fi
 
-        # yq로 설정 읽기 (없으면 grep/sed로 fallback)
-        if command -v yq &> /dev/null; then
-          ENABLED=$(yq ".workflows.${WORKFLOW_NAME}.enabled // true" "$CONFIG_FILE")
-          CONFIG_JSON=$(yq -o=json ".workflows.${WORKFLOW_NAME} // {}" "$CONFIG_FILE")
-        else
-          # yq가 없으면 간단한 grep으로 처리
-          echo "::warning::yq command not found. The 'config' output will be empty."
-          ENABLED=$(grep -A1 "^  ${WORKFLOW_NAME}:" "$CONFIG_FILE" | grep "enabled:" | sed 's/.*enabled: *//' | tr -d ' ')
-          if [[ -z "$ENABLED" ]]; then
-            ENABLED="true"
-          fi
-          CONFIG_JSON="{}"
+        # yq는 ubuntu-latest runner에 기본 설치되어 있음 — 없으면 fail-loud
+        if ! command -v yq &> /dev/null; then
+          echo "::error::yq is required but not installed on this runner"
+          exit 1
         fi
 
-        echo "enabled=$ENABLED" >> $GITHUB_OUTPUT
-        echo "config<<EOF" >> $GITHUB_OUTPUT
-        echo "$CONFIG_JSON" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
+        # bracket notation으로 path 구성 (점/특수문자 안전, 그러나 위의 regex로 이미 제한됨)
+        ENABLED=$(yq -r ".workflows[\"${WORKFLOW_NAME}\"].enabled // true" "$CONFIG_FILE" | tr -d '[:space:]')
+        CONFIG_JSON=$(yq -o=json ".workflows[\"${WORKFLOW_NAME}\"] // {}" "$CONFIG_FILE")
+
+        echo "enabled=$ENABLED" >> "$GITHUB_OUTPUT"
+        {
+          echo "config<<EOF"
+          echo "$CONFIG_JSON"
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
 
         if [[ "$ENABLED" == "false" ]]; then
           echo "::notice::Workflow '$WORKFLOW_NAME' is disabled in config"

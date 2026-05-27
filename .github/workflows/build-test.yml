@@ -15,6 +15,7 @@ on:
       - 'dist/**'
       - 'wlan-bridge/**'
       - '.github/workflows/build-test.yml'
+      - '.github/workflow-config.yml'
   pull_request:
     branches: [ main, master ]
     paths:
@@ -29,6 +30,7 @@ on:
       - 'dist/**'
       - 'wlan-bridge/**'
       - '.github/workflows/build-test.yml'
+      - '.github/workflow-config.yml'
   workflow_dispatch:
     inputs:
       force_run:
