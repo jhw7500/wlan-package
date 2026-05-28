@@ -1,27 +1,60 @@
 #!/bin/bash
 tag=$(basename "$0")
 WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
+
+# === 헬퍼 함수 (LED/print/cp 호출 전에 정의) ===
+
+# 안전한 cp wrapper — 실패 시 logger.err. 모든 인자(와일드카드 포함)를 cp에 전달.
+safe_cp() {
+    if ! cp "$@" 2>/dev/null; then
+        logger -p local0.err "[$tag] cp failed: $*"
+        return 1
+    fi
+}
+
+# 안전한 sysfs write wrapper — LED/brightness 등. 실패는 critical 아님 → logger.warn.
+safe_sysfs_write() {
+    local value="$1" path="$2"
+    if ! echo "$value" > "$path" 2>/dev/null; then
+        logger -p local0.warn "[$tag] sysfs write failed: $value > $path"
+    fi
+}
+
+# 안전한 print.py wrapper — 콘솔 컬러 출력. 도구 호출 실패 시 logger.warn.
+safe_print() {
+    if ! /usr/local/logger/print.py "$@" 2>/dev/null; then
+        logger -p local0.warn "[$tag] print.py failed: $*"
+    fi
+}
+
 logger -p local0.info "[$tag:$LINENO] start"
-/usr/local/logger/print.py cyan "[factory] reset start"
-echo none > /sys/class/leds/status/trigger
-echo none > /sys/class/leds/lan/trigger
-echo none > /sys/class/leds/wlan/trigger
+safe_print cyan "[factory] reset start"
+safe_sysfs_write none /sys/class/leds/status/trigger
+safe_sysfs_write none /sys/class/leds/lan/trigger
+safe_sysfs_write none /sys/class/leds/wlan/trigger
 
-echo heartbeat > /sys/class/leds/status/trigger
-echo heartbeat > /sys/class/leds/lan/trigger
-echo heartbeat > /sys/class/leds/wlan/trigger
+safe_sysfs_write heartbeat /sys/class/leds/status/trigger
+safe_sysfs_write heartbeat /sys/class/leds/lan/trigger
+safe_sysfs_write heartbeat /sys/class/leds/wlan/trigger
 
-cp /opt/wlan/config/logrotate.d/logrotate.rsyslog /etc/logrotate.d/
-cp /opt/wlan/config/rc.local /etc/
-cp /opt/wlan/config/rsyslog.conf /etc/
-cp /opt/wlan/config/smb.conf /etc/samba/
+# === Deprecated 잔재 정리 ===
+# 옛 버전 패키지에서 설치되어 현재는 사용 안 하는 파일들 제거.
+# - 99-bd-arp.conf: peer_route sysctl 정책이 wifi_init.sh의 토글 분기로 통합되기 전(2026-05-27 이전)
+#   /etc/sysctl.d/에 배포되던 파일. 현재는 wifi_init.sh가 wbridge.peer_route.enabled 토글에 따라
+#   sysctl -w로 직접 적용/회수하므로 정적 파일이 남아있으면 토글 일관성을 깨뜨림.
+rm -f /etc/sysctl.d/99-bd-arp.conf
+
+safe_cp /opt/wlan/config/logrotate.d/logrotate.rsyslog /etc/logrotate.d/
+safe_cp /opt/wlan/config/rc.local /etc/
+safe_cp /opt/wlan/config/rsyslog.conf /etc/
+safe_cp /opt/wlan/config/smb.conf /etc/samba/
 #cp /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/
-cp /opt/wlan/config/wifi_mod_para__.conf /lib/firmware/nxp/
-cp /opt/wlan/config/crontab /etc/
+safe_cp /opt/wlan/config/wlan/* /lib/firmware/cts/
+safe_cp /opt/wlan/config/crontab /etc/
 #cp /opt/wlan/firmware/* /lib/firmware/nxp/
 #cp /opt/wlan/driver/* /lib/modules/$KERNEL_VERSION/updates/
-cp /opt/wlan/config/wpa_supplicant/wpa_supplicant@.service /lib/systemd/system/
-cp /opt/wlan/config/systemd/journald.conf /etc/systemd/
+safe_cp /opt/wlan/config/wpa_supplicant/wpa_supplicant@.service /lib/systemd/system/
+safe_cp /opt/wlan/config/systemd/journald.conf /etc/systemd/
 
 customctl() {
     target=$1
@@ -31,15 +64,24 @@ customctl() {
 
     if [[ $status != ${target}* ]]; then
         if [[ $target = enable* ]]; then
-            systemctl enable $daemon_name
+            if ! systemctl enable $daemon_name 2>/dev/null; then
+                logger -p local0.err "[$tag:customctl] systemctl enable failed: $daemon_name"
+            fi
         elif [[ $target = disable* ]]; then
             if [[ $status != mask* ]]; then
-                systemctl disable --now $daemon_name
+                if ! systemctl disable --now $daemon_name 2>/dev/null; then
+                    logger -p local0.err "[$tag:customctl] systemctl disable failed: $daemon_name"
+                fi
             fi
         elif [[ $target = mask* ]]; then
-            systemctl disable --now $daemon_name
-            systemctl mask $daemon_name
+            systemctl disable --now $daemon_name 2>/dev/null || true
+            if ! systemctl mask $daemon_name 2>/dev/null; then
+                logger -p local0.err "[$tag:customctl] systemctl mask failed: $daemon_name"
+            fi
         else
+            # invalid target — typo/오타 즉시 syslog로 발견 (예: 'eanble' 같은 미래 함정)
+            # 기존엔 echo만 남기고 silent return 1이라 발견이 어려웠음.
+            logger -p local0.err "[$tag:customctl] INVALID target='$target' for daemon='$daemon_name' (must match enable*|disable*|mask*)"
             echo "$target is wrong status"
             return 1
         fi
@@ -49,7 +91,7 @@ customctl() {
     echo "$daemon_name is $status"
     INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 1))
     dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
-    /usr/local/logger/print.py green "\r\n[factory] reset${dots}"
+    safe_print green "\r\n[factory] reset${dots}"
 }
 
   customctl mask systemd-networkd-wait-online
@@ -85,44 +127,41 @@ customctl() {
   customctl disable netserver
 
   customctl enable watchdog
-  customctl enable switchd enabled
+  customctl enable switchd
   customctl enable fake-hwclock
   customctl enable wifi_init
   customctl enable wifi_logger
+  customctl enable log-watchdog.timer
+  customctl enable journald-snapshot.timer
 
   customctl disable wifi_checker@eth0
   customctl enable wifi_led@eth0
   customctl enable wifi_logger@eth0
 
-  customctl enable arping@mlan0
+  #customctl enable arping@mlan0
   customctl enable wifi_led@mlan0
   customctl enable wifi_logger@mlan0
   customctl enable wifi_checker@mlan0
   customctl enable wifi_bgscan@mlan0
   customctl enable wifi_roam@mlan0
-  customctl enable wifi_capture@mlan0
+  customctl enable wifi_event@mlan0
+  #customctl enable wifi_capture@mlan0
 
-  if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
-      jq '.mac.mlan0.target = "" | .mac.mlan1.target = ""' "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp"
-      mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
-      logger -p local0.info "[$tag:$LINENO] MAC target reset in JSON"
-  else
-      logger -p local0.warn "[$tag:$LINENO] JSON MAC reset skipped (jq or config not found)"
-  fi
-
-  cp /opt/wlan/mfg/bridge_init.conf /usr/local/mfg/bridge_init.conf
-  cp /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/timesyncd.conf
-  cp /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan0.conf /etc/wpa_supplicant/wpa_supplicant-mlan0.conf
-  cp /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan1.conf /etc/wpa_supplicant/wpa_supplicant-mlan1.conf
-  cp /opt/wlan/config/systemd/network/20-mlan0.network /etc/systemd/network/20-mlan0.network
-  cp /opt/wlan/config/systemd/network/21-mlan1.network /etc/systemd/network/21-mlan1.network
-  cp /opt/wlan/config/systemd/network/22-eth0.network /etc/systemd/network/22-eth0.network
-  cp /opt/wlan/config/systemd/network/10-lo.network /etc/systemd/network/10-lo.network
-  cp /opt/wlan/config/systemd/network/20-mlan0.link /etc/systemd/network/20-mlan0.link
-  cp /opt/wlan/config/systemd/network/21-mlan1.link /etc/systemd/network/21-mlan1.link
-  cp /opt/wlan/config/systemd/network/22-eth0.link /etc/systemd/network/22-eth0.link
+  safe_cp /opt/wlan/mfg/bridge_init.conf /usr/local/mfg/bridge_init.conf
+  safe_cp /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/timesyncd.conf
+  safe_cp /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan0.conf /etc/wpa_supplicant/wpa_supplicant-mlan0.conf
+  safe_cp /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan1.conf /etc/wpa_supplicant/wpa_supplicant-mlan1.conf
+  safe_cp /opt/wlan/config/systemd/network/20-mlan0.network /etc/systemd/network/20-mlan0.network
+  safe_cp /opt/wlan/config/systemd/network/21-mlan1.network /etc/systemd/network/21-mlan1.network
+  safe_cp /opt/wlan/config/systemd/network/22-eth0.network /etc/systemd/network/22-eth0.network
+  safe_cp /opt/wlan/config/systemd/network/10-lo.network /etc/systemd/network/10-lo.network
+  safe_cp /opt/wlan/config/systemd/network/20-mlan0.link /etc/systemd/network/20-mlan0.link
+  safe_cp /opt/wlan/config/systemd/network/21-mlan1.link /etc/systemd/network/21-mlan1.link
+  safe_cp /opt/wlan/config/systemd/network/22-eth0.link /etc/systemd/network/22-eth0.link
+  safe_cp /opt/wlan/config/wifi_init_conf.json /usr/local/etc/
 
 #find /var/log/cantops -mindepth 1 -maxdepth 1 ! -name journald -exec rm -rf {} +
+:<<'END'
 LOG_DIR=/var/log/cantops
 rm -rf $LOG_DIR/local0.log-*
 rm -rf $LOG_DIR/kern.log-*
@@ -147,15 +186,28 @@ cat /dev/null > $LOG_DIR/local0.log
 cat /dev/null > kern.log
 cat /dev/null > sys.log
 cat /dev/null > ui.log
+END
 
-echo none > /sys/class/leds/status/trigger
-echo none > /sys/class/leds/lan/trigger
-echo none > /sys/class/leds/wlan/trigger
+rm -rf /var/log/cantops/* 2>/dev/null \
+    || logger -p local0.warn "[$tag] log cleanup failed: /var/log/cantops/*"
 
-echo 1 > /sys/class/leds/status/brightness
-echo 1 > /sys/class/leds/lan/brightness
-echo 1 > /sys/class/leds/wlan/brightness
+safe_sysfs_write none /sys/class/leds/status/trigger
+safe_sysfs_write none /sys/class/leds/lan/trigger
+safe_sysfs_write none /sys/class/leds/wlan/trigger
+
+safe_sysfs_write 1 /sys/class/leds/status/brightness
+safe_sysfs_write 1 /sys/class/leds/lan/brightness
+safe_sysfs_write 1 /sys/class/leds/wlan/brightness
 
 
 echo "factory reset finish"
-/usr/local/logger/print.py cyan "[factory] reset finish"
+safe_print cyan "[factory] reset finish"
+
+# === 자동 reboot ===
+# 변경된 .network / wpa_supplicant / wifi_init_conf.json / sysctl 등을 cold start로
+# 일관되게 반영. 각 service의 restart를 일일이 호출하는 대신 reboot으로 일원화.
+# 3초 sleep은 logger/print 출력이 콘솔/저널에 flush될 시간 확보.
+logger -p local0.info "[$tag:$LINENO] rebooting in 3s to apply all changes"
+safe_print cyan "[factory] rebooting in 3s..."
+sleep 3
+systemctl reboot

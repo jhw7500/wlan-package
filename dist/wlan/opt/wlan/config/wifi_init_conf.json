@@ -52,9 +52,11 @@
             "enabled: (bool) bridge 전체 ON/OFF. false이면 bridge 서비스 전부 stop+disable",
             "bridge_iface: (string) mlan0|mlan1 — bridge에 사용할 무선 인터페이스",
             "mac_mode: (string) default|dynamic|static — bridge 인터페이스 MAC 결정 방식. dynamic=유선측 MAC 동적 획득",
-            "ip_discovery: (bool) dynamic MAC 모드에서 MAC 확보 후 클라이언트 IP까지 탐색할지. false면 MAC만 확보 후 즉시 종료(부팅 가속). 기본 false",
+            "ip_discovery: (bool) dynamic MAC 모드에서 MAC 확보 후 클라이언트 IP까지 탐색할지. true이면 부팅 시 peer IP 발견 + host route(/32 dev eth0) 자동 등록. false면 MAC만 확보 후 즉시 종료(부팅 가속, host route 등록 X)",
             "eth_client_ip: (string) 유선 클라이언트 고정 IP. 빈 문자열이면 quick ARP probe 비활성",
             "eth_link_wait_sec: (int) dynamic MAC 모드에서 유선 링크 대기 시간 (초)",
+            "eth_sweep_subnet: (string) peer 발견 최후 sweep 대역 (CIDR). 부팅 시 mlan0 init 전 호출되어 mlan0.inet으로 대역 추정이 불가능하므로 정적 값이 안전. 예: \"192.168.0.0/24\". 빈 문자열이면 mlan0.inet 폴백 시도",
+            "peer_route.enabled: (bool) 양방향 peer 라우팅(옵션 X) 마스터 스위치. true(기본)면 wifi_init.sh가 eth0 host scope IP/table 100/fallback route를 부여하고 wired_mac_ip_get.py가 host route를 등록하며 99-bd-arp.conf의 ARP/RPF sysctl이 활성. false면 부팅 시 모든 변경을 revert하고 sysctl을 default로 reset하여 변경 전 동작으로 복원. A/B 테스트용",
             "engine: (string) pcap|tpacket|moal — bridge 엔진. pcap/tpacket=유저스페이스, moal=드라이버 레벨 (mod_para.conf bridge_mode=1)"
         ],
         "enabled": true,
@@ -63,6 +65,11 @@
         "ip_discovery": false,
         "eth_client_ip": "",
         "eth_link_wait_sec": 3,
+        "eth_sweep_subnet": "192.168.0.0/24",
+        "peer_route": {
+            "_comment": "양방향 peer 라우팅(옵션 X) 토글. enabled=false면 변경 전 동작으로 복원 (라우팅/sysctl 모두 revert).",
+            "enabled": false
+        },
         "engine": "pcap",
         "optimize": {
             "_comment": [
