@@ -23,6 +23,11 @@ IFACE = "mlan0"             # 무선 (게이트웨이 사용)
 ETH_CLIENT_IP = None
 ETH_LINK_TIMEOUT = 3
 IP_DISCOVERY = False        # MAC 확보 후 클라이언트 IP까지 탐색할지 (wbridge.ip_discovery, 기본 false)
+# ETH_SWEEP_SUBNET: mlan0 init 전 실행되므로 mlan0의 inet으로 sweep 대역을 못 잡음.
+# wbridge.eth_sweep_subnet에 정적 CIDR(예: "192.168.0.0/24")을 두면 4차 sweep 폴백으로 사용.
+ETH_SWEEP_SUBNET = None
+# PEER_ROUTE_ENABLED: 양방향 peer 라우팅(옵션 X) 마스터 토글. false면 host route 등록 skip.
+PEER_ROUTE_ENABLED = True
 try:
     with open("/usr/local/etc/wifi_init_conf.json") as f:
         _cfg = json.load(f)
@@ -31,6 +36,14 @@ try:
     ETH_CLIENT_IP = _wb.get("eth_client_ip") or _gl.get("ETH_CLIENT_IP") or None
     ETH_LINK_TIMEOUT = int(_wb.get("eth_link_wait_sec", _gl.get("eth_link_wait_sec", 3)))
     IP_DISCOVERY = str(_wb.get("ip_discovery", False)).strip().lower() in ("1", "true", "yes", "on")
+    ETH_SWEEP_SUBNET = _wb.get("eth_sweep_subnet") or _gl.get("eth_sweep_subnet") or None
+    # null/missing → shell wifi_init.sh와 일관되게 default true.
+    # 명시적 None 체크 후 str-based 파싱: bool/string 모두 안전 처리.
+    # 기존 .get("enabled", True) + str() 방식은 "enabled": null 케이스에서
+    # str(None)="None" → False가 되어 wifi_init.sh의 default=true와 split-brain 발생.
+    _pr_v = _wb.get("peer_route", {}).get("enabled")
+    PEER_ROUTE_ENABLED = True if _pr_v is None else \
+        str(_pr_v).strip().lower() in ("1", "true", "yes", "on")
 except Exception:
     pass
 
@@ -111,7 +124,7 @@ def passive_mac_sniff(own_mac, timeout=5):
 
     return target_mac[0]
 
-def raw_l2_broadcast_probe(iface):    
+def raw_l2_broadcast_probe(iface):
     #print(f"[*] Sending raw L2 broadcast probe on {iface}...")
     logger.message("info", f"[{IFACE}] Sending raw L2 broadcast probe on {iface}...", _EXTRA_())
     src_mac = get_if_hwaddr(iface)
@@ -223,6 +236,17 @@ def get_mlan_network():
         pass
     return None
 
+def get_sweep_network():
+    """
+    sweep 대역 결정 우선순위:
+      1) wbridge.eth_sweep_subnet (정적, 부팅 race condition 없음)
+      2) mlan0의 inet (mlan0 init 후 호출되는 케이스 폴백)
+    부팅 시 mlan0 init 전 호출이므로 (2)는 거의 None.
+    """
+    if ETH_SWEEP_SUBNET:
+        return ETH_SWEEP_SUBNET
+    return get_mlan_network()
+
 def arp_unicast_probe_for_ip(iface, target_mac, ip_list, timeout=1.5):
     """
     지정한 ip_list 각각에 대해, target_mac으로 **유니캐스트 ARP 요청**을 보내고,
@@ -272,6 +296,27 @@ def save_data(file_path, data):
         if data:
             f.write(f"{data}\n")
 
+def apply_peer_host_route(peer_ip):
+    """
+    라우팅 비대칭 해소:
+      - mlan0와 eth0가 같은 서브넷일 때 connected route 한쪽으로만 잡혀
+        반대편 응답이 잘못된 인터페이스로 나가는 문제를 host route로 우회.
+      - peer_ip/32 dev eth0 를 main table에 등록하면 longest prefix match로 우선됨.
+      - systemd-networkd 20-eth0.network의 iif policy routing과 함께 동작.
+    """
+    if not peer_ip:
+        return
+    r = subprocess.run(
+        ["ip", "route", "replace", f"{peer_ip}/32", "dev", ETH_IFACE],
+        capture_output=True, text=True, check=False
+    )
+    if r.returncode == 0:
+        logger.message("info", f"[{IFACE}] host route applied: {peer_ip}/32 dev {ETH_IFACE}", _EXTRA_())
+    else:
+        logger.message("err",
+            f"[{IFACE}] host route apply FAILED ({peer_ip}/32 dev {ETH_IFACE}): {r.stderr.strip()}",
+            _EXTRA_())
+
 # ===================== 메인 =====================
 
 def main():
@@ -320,15 +365,26 @@ def main():
             ip = arp_unicast_probe_for_ip(ETH_IFACE, mac, [ETH_CLIENT_IP], timeout=1)
 
         if not ip:
-            # 3-3) mlan0 대역 스윕 (최후 수단)
-            net = get_mlan_network()
+            # 3-3) sweep (최후 수단)
+            # mlan0 init 전 호출되므로 ETH_SWEEP_SUBNET(정적) 우선, mlan0 inet 폴백.
+            net = get_sweep_network()
             if net:
+                logger.message("info", f"[{IFACE}] sweep network: {net}", _EXTRA_())
                 ip = arp_broadcast_sweep_for_mac(ETH_IFACE, mac, net, timeout=2)
+            else:
+                logger.message("err",
+                    f"[{IFACE}] no sweep network (set wbridge.eth_sweep_subnet to enable last-resort sweep)",
+                    _EXTRA_())
 
     # 결과 저장
     save_data(f"/tmp/{ETH_IFACE}_client_ip", ip)
 
     if ip:
+        # 라우팅 비대칭 해소: peer로 가는 트래픽을 eth0로 강제 (peer_route 마스터 토글 체크)
+        if PEER_ROUTE_ENABLED:
+            apply_peer_host_route(ip)
+        else:
+            logger.message("info", f"[{IFACE}] peer_route=off: skip host route for {ip}", _EXTRA_())
         #print(f"[+] Wired Client IP resolved: {ip}")
         logger.message("info", f"[{IFACE}] result MAC/IP: {mac} {ip}", _EXTRA_())
     else:
