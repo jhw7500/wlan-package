@@ -41,7 +41,7 @@ disable_services_if_enabled() {
 case "$1" in
 configure)
   echo "postinst configure"
-  /usr/local/logger/print.py green "\r\n[installer] start: 설정 복사/점검..."
+  /usr/local/logger/print.py green "\r\n[installer] start: configuration copy/verify..."
 
   # CRITICAL: Verify binaries and config exist BEFORE making any system changes.
   # 보드별 suffix(_imx8/_imx93) 바이너리 또는 legacy suffix-less 중 하나 이상 필요.
@@ -152,7 +152,7 @@ EOF
     EMMC_NUM=0
   fi
 
-  /usr/local/logger/print.py green "\r\n[installer] preparing data partition (resize, 시간 소요)..."
+  /usr/local/logger/print.py green "\r\n[installer] preparing data partition (resize, wait)..."
   # p3 파티션이 없으면 emmc_fdisk.sh로 생성
   if [ ! -b /dev/mmcblk${EMMC_NUM}p3 ]; then
     logger -p local0.info "[$KEY][postinst:$LINENO] p3 not found, creating via emmc_fdisk.sh"

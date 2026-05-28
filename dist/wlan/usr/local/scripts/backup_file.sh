@@ -21,6 +21,8 @@ file_path="${1:-}"
 pattern="${2:-}"
 default_src="${3:-}"
 
+logger -p local0.info "[$tag:$LINENO] Starting backup..."
+
 if [ -z "$file_path" ] || [ -z "$pattern" ]; then
     logger -p local0.err "[$tag:$LINENO] usage: $tag <file_path> <pattern> [default_src]"
     exit 64
