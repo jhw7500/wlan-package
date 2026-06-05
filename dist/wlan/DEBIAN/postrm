@@ -66,6 +66,14 @@ purge)
     # Clean up /usr/local/dumb directory (remove even if not empty)
     rm -rf /usr/local/dumb 2>/dev/null || true
 
+    # wlan-opc: remove the entire /usr/local/opc tree on purge. dpkg removes the
+    # packaged files (bin/opcd, bin/vhlctl, opcd.service), but runtime-created
+    # config (etc/{password,iplist.cfg,radio.conf,device_info.json,temp/}) and
+    # the tmpfs snapshot are NOT package-owned — clean them so purge leaves
+    # nothing under /usr/local/opc (manual-runthrough §6).
+    rm -rf /usr/local/opc 2>/dev/null || true
+    rm -rf /dev/shm/opcd 2>/dev/null || true
+
     # Clean up directories (only if empty)
     rmdir /usr/local/wlan-bridge/dumb 2>/dev/null || true
     rmdir /usr/local/wlan-bridge/scripts 2>/dev/null || true
