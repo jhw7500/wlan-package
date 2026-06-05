@@ -70,6 +70,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: false
+          # The private wlan-bridge submodule is fetched with SUBMODULE_TOKEN
+          # below. Don't persist the default GITHUB_TOKEN github.com auth header
+          # (it has no wlan-bridge access and only conflicts with the token).
+          persist-credentials: false
 
       - name: Shell syntax check
         run: |
@@ -98,10 +102,16 @@ jobs:
           fi
 
           echo "::add-mask::${SUBMODULE_TOKEN}"
-          git config --global url."https://x-access-token:${SUBMODULE_TOKEN}@github.com/".insteadOf "https://github.com/"
-          git config --global url."https://x-access-token:${SUBMODULE_TOKEN}@github.com/".insteadOf "git@github.com:"
 
-          git submodule update --init --recursive
+          # Inject the token via a command-scoped insteadOf. `git config --global`
+          # was being shadowed, so the private wlan-bridge clone got no credential
+          # and fell back to an interactive prompt ("could not read Username"),
+          # failing the job. `-c` overrides are exported to the submodule clone
+          # subprocesses (GIT_CONFIG_PARAMETERS) and take precedence over any
+          # repo-local config left by actions/checkout.
+          git submodule sync --recursive
+          git -c "url.https://x-access-token:${SUBMODULE_TOKEN}@github.com/.insteadOf=https://github.com/" \
+              submodule update --init --recursive
           echo "submodules=true" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
