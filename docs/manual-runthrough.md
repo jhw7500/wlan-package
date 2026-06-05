@@ -10,8 +10,8 @@ complete. Until Phase 3 lands, sections marked `[Phase ≥ 3]` are placeholders.
 - [ ] `wlan-package/build.sh` stages outputs into `dist/usr/local/opc/{bin/opcd,bin/vhlctl,etc/...,opcd.service}` and emits a `.deb` (Phase 4)
 - [ ] `file dist/usr/local/opc/bin/opcd` reports `ELF 64-bit LSB ... ARM aarch64`
 - [ ] `dpkg -i wlan-proc_*.deb` on the target succeeds
-- [ ] `/etc/systemd/system/opcd.service` exists as a symlink to `/usr/local/opc/opcd.service`
-- [ ] `systemctl is-enabled opcd` returns `enabled`
+- [ ] `/etc/systemd/system/opcd.service` exists as a symlink to `/usr/local/opc/opcd.service` (created by postinst + `daemon-reload`)
+- [ ] By design the package does **not** auto-enable opcd (postinst policy: "1차 단계 자동 enable 금지 — 운영자 결정"). Operator runs `systemctl enable opcd`, after which `systemctl is-enabled opcd` returns `enabled`
 - [ ] `systemctl start opcd && systemctl is-active opcd` returns `active`
 
 ## 1. Pre-Login [Phase ≥ 2]
