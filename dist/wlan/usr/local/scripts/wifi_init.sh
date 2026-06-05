@@ -18,7 +18,7 @@ bridge_keepalive_ms=1
 
 WIFI_INIT_CONF_JSON="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
 
-logger -p local0.info "[$tag:$LINENO] wifi initializing"
+#logger -p local0.info "[$tag:$LINENO] wifi initializing"
 
 if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
     BOARD_TYPE=$(jq -r '.global.BOARD_TYPE // "imx8mm"' "$WIFI_INIT_CONF_JSON")
@@ -168,7 +168,7 @@ if lsmod | grep -q "^${MOAL_MOD}\b" || lsmod | grep -q "^${MLAN_MOD}\b"; then
 fi
 
 # Backup files with self-healing recovery (size>0 + pattern + default fallback)
-logger -p local0.info "[$tag:$LINENO] Starting backup..."
+#logger -p local0.info "[$tag:$LINENO] Starting backup..."
 _DEFAULT_DIR="/opt/wlan/config"
 
 # BUS_TYPE에 따라 mod_para의 검증 패턴 동적 결정
@@ -710,6 +710,140 @@ if command -v systemctl >/dev/null 2>&1; then
     }
     wait_iface "mlan0" "$MLAN0_ENABLED" || true
     wait_iface "mlan1" "$MLAN1_ENABLED" || true
+
+    # === peer_route (옵션 X) 토글 — wbridge.peer_route.enabled ===
+    # true(기본): eth0 host scope IP / table 100 / fallback route 부여 + sysctl ARP/RPF 정책 활성
+    # false: 모든 변경 사항 revert + sysctl default reset → 변경 전 동작과 동일 (A/B 테스트용)
+    # Degraded 환경(jq 부재 / config 부재 / config 파싱 실패) 시 보수적으로 false:
+    # 사용자가 enabled=false로 운영 중인 시스템에서 jq 깨짐으로 의도 반대 동작(=true) 발동 방지.
+    # 정상 환경에서만 jq 결과 신뢰, key가 invalid/missing이면 그때만 factory default(=true) 적용.
+    _peer_route_enabled=false
+    if command -v jq >/dev/null 2>&1 && [ -f /usr/local/etc/wifi_init_conf.json ]; then
+        # jq의 `//` operator는 null뿐 아니라 false도 alternative 대상이라 (`false // true → true`)
+        # default를 jq 안에서 처리하면 안 됨. raw 값을 가져와서 shell case로 분기.
+        _val=$(jq -r '.wbridge.peer_route.enabled' /usr/local/etc/wifi_init_conf.json 2>/dev/null)
+        case "$_val" in
+            true|false) _peer_route_enabled="$_val" ;;
+            *)          _peer_route_enabled=true ;;  # config 정상 + key invalid/missing → factory default
+        esac
+        unset _val
+    else
+        logger -p local0.warn "[$tag:$LINENO] peer_route degraded fallback: no jq or no /usr/local/etc/wifi_init_conf.json → peer_route=off"
+    fi
+
+    # === 헬퍼: sysctl -w wrapper (양쪽 분기에서 공유) ===
+    # 실패 시 logger.warn으로 가시화. 기존엔 silent fail이라 mlan1 미로드 등 진단 불가.
+    _safe_sysctl() {
+        if ! sysctl -w "$@" >/dev/null 2>&1; then
+            logger -p local0.warn "[$tag:$LINENO] sysctl -w failed: $*"
+        fi
+    }
+
+    if [ "$_peer_route_enabled" = "true" ]; then
+        # === ENABLED: eth0 ↔ mlan0 IP/라우팅 동기화 (옵션 X) ===
+        # 20-mlan0.network의 mlan0 Address를 기준으로 다음을 모두 동적 부여 (정적 부여 시
+        # enabled=false에서 부여 후 제거 패턴이 발생하므로 의도적으로 wifi_init.sh가 일원 관리):
+        #   1) eth0에 <mlan0_ip>/32 (host scope) — connected route 안 만듦, ARP responder 역할만
+        #   2) policy rule iif=eth0 → table 100 — peer 응답을 eth0로 강제
+        #   3) table 100에 <mlan0_subnet> dev eth0 scope link — iif=eth0 응답 전용 link route
+        #   4) sysctl ARP/RPF/Neighbour 정책 (arp_ignore, arp_announce, ignore_routes_with_linkdown 등)
+        # NOTE: 이전 설계의 main table fallback route(<subnet>/24 metric 200)는 carrier flap 시
+        # 전체 subnet 트래픽이 eth0로 redirect되는 부작용 때문에 제거됨. BD→peer 송신은
+        # wired_mac_ip_get.py의 peer host route(<peer>/32 dev eth0)에만 의존.
+        # subshell + set +e + || true로 어떤 ip 명령 실패도 wifi_init.sh를 죽이지 않게 격리.
+        (
+            set +e
+            if [ -r /etc/systemd/network/20-mlan0.network ] && [ -d /sys/class/net/eth0 ]; then
+                _mlan_addr=$(awk -F= '/^[[:space:]]*Address[[:space:]]*=/{gsub(/[[:space:]]/,"",$2); print $2; exit}' \
+                             /etc/systemd/network/20-mlan0.network)
+                _mlan_ip=${_mlan_addr%/*}
+                _mlan_subnet=$(python3 -c "import ipaddress,sys; print(ipaddress.ip_interface(sys.argv[1]).network)" \
+                               "$_mlan_addr" 2>/dev/null)
+                if echo "$_mlan_ip" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' && [ -n "$_mlan_subnet" ]; then
+                    # 1) eth0 host scope IP 갱신 (기존 /32 잔재 제거 후)
+                    ip -4 addr show dev eth0 2>/dev/null | awk '/inet .*\/32/{print $2}' | while read -r _old; do
+                        ip addr del "$_old" dev eth0 2>/dev/null
+                    done
+                    ip addr replace "${_mlan_ip}/32" dev eth0 2>/dev/null \
+                        || logger -p local0.warn "[$tag:$LINENO] eth0 sync: addr replace failed (${_mlan_ip}/32)"
+
+                    # 2) policy rule iif=eth0 → table 100 (22-eth0.network에서 이관)
+                    #    enabled=false에서 부여 후 제거 패턴 회피를 위해 동적 부여
+                    ip rule del iif eth0 table 100 2>/dev/null  # 잔재 정리 후
+                    ip rule add iif eth0 table 100 priority 100 2>/dev/null \
+                        || logger -p local0.warn "[$tag:$LINENO] eth0 sync: ip rule add failed (iif eth0 table 100)"
+
+                    # 3) table 100 link route (iif=eth0 응답 전용)
+                    ip route flush table 100 2>/dev/null
+                    ip route add "$_mlan_subnet" dev eth0 scope link table 100 2>/dev/null \
+                        || logger -p local0.warn "[$tag:$LINENO] eth0 sync: table 100 route add failed ($_mlan_subnet)"
+
+                    # main table fallback route 부여는 의도적으로 제거됨:
+                    # 이전 설계: <subnet>/24 dev eth0 metric 200 부여 → mlan0 driver 미로드 시 fallback 활성.
+                    # 문제: ignore_routes_with_linkdown=1과 결합 시 mlan0 carrier 일시 flap에서
+                    # 전체 subnet 트래픽이 eth0로 redirect됨 (peer 외 무선 클라 응답까지 영향).
+                    # 새 설계: BD→peer 통신은 wired_mac_ip_get.py의 peer host route(<peer>/32 dev eth0)에만
+                    # 의존. peer 발견 실패 시 BD initiated 송신 불가 (peer initiated는 iif 룰로 OK).
+                    # 잔재 정리(이전 부팅의 fallback route)는 enabled=false 분기에서만 수행.
+
+                    logger -p local0.info "[$tag:$LINENO] peer_route=on: eth0 sync addr=${_mlan_ip}/32 subnet=${_mlan_subnet}"
+                else
+                    logger -p local0.warn "[$tag:$LINENO] eth0 sync skipped: invalid mlan0 Address ($_mlan_addr)"
+                fi
+            fi
+
+            # 4) sysctl ARP/RPF/Neighbour 정책 활성 (mlan0 Address 유효성과 무관하게 항상 적용)
+            _safe_sysctl net.ipv4.conf.all.arp_ignore=1
+            _safe_sysctl net.ipv4.conf.all.arp_announce=2
+            _safe_sysctl net.ipv4.conf.eth0.accept_local=1
+            _safe_sysctl net.ipv4.conf.eth0.arp_filter=0
+            _safe_sysctl net.ipv4.neigh.eth0.gc_stale_time=30
+            _safe_sysctl net.ipv4.neigh.eth0.base_reachable_time_ms=15000
+            _safe_sysctl net.ipv4.conf.all.ignore_routes_with_linkdown=1
+            _safe_sysctl net.ipv4.conf.mlan0.ignore_routes_with_linkdown=1
+            _safe_sysctl net.ipv4.conf.mlan1.ignore_routes_with_linkdown=1
+            _safe_sysctl net.ipv4.conf.eth0.ignore_routes_with_linkdown=1
+            logger -p local0.info "[$tag:$LINENO] peer_route=on: sysctl ARP/RPF policies applied"
+        ) || logger -p local0.warn "[$tag:$LINENO] eth0 sync block exited with errors (non-fatal)"
+    else
+        # === DISABLED: 모든 변경 사항 revert (변경 전 동작 복원) ===
+        # 99-bd-arp.conf는 부팅 시 이미 적용됐을 수 있으므로 sysctl을 default 값으로 reset.
+        # wifi_init.sh가 이전 부팅에서 부여한 라우팅도 모두 제거.
+        # 22-eth0.network의 policy rule도 명시적으로 제거 (system이 적용했어도 비활성화).
+        (
+            set +e
+            logger -p local0.info "[$tag:$LINENO] peer_route=off: reverting all changes (eth0 routing + sysctl)"
+
+            # 1) eth0의 host scope IP(/32) 모두 제거
+            ip -4 addr show dev eth0 2>/dev/null | awk '/inet .*\/32/{print $2}' | while read -r _old; do
+                ip addr del "$_old" dev eth0 2>/dev/null
+            done
+
+            # 2) main table의 fallback route(metric 200) 제거
+            ip route show dev eth0 2>/dev/null | awk '/^[0-9].*metric 200/{print $1}' | while read -r _old_r; do
+                ip route del "$_old_r" dev eth0 metric 200 2>/dev/null
+            done
+
+            # 3) policy rule + table 100 cleanup (22-eth0.network가 적용한 것 무력화)
+            ip rule del iif eth0 table 100 2>/dev/null
+            ip route flush table 100 2>/dev/null
+
+            # 4) sysctl을 default 값으로 reset (99-bd-arp.conf 효과 무력화)
+            _safe_sysctl net.ipv4.conf.all.arp_ignore=0
+            _safe_sysctl net.ipv4.conf.all.arp_announce=0
+            _safe_sysctl net.ipv4.conf.eth0.accept_local=0
+            _safe_sysctl net.ipv4.conf.eth0.arp_filter=0
+            _safe_sysctl net.ipv4.conf.all.ignore_routes_with_linkdown=0
+            _safe_sysctl net.ipv4.conf.mlan0.ignore_routes_with_linkdown=0
+            _safe_sysctl net.ipv4.conf.mlan1.ignore_routes_with_linkdown=0
+            _safe_sysctl net.ipv4.conf.eth0.ignore_routes_with_linkdown=0
+            _safe_sysctl net.ipv4.neigh.eth0.gc_stale_time=60
+            _safe_sysctl net.ipv4.neigh.eth0.base_reachable_time_ms=30000
+
+            logger -p local0.info "[$tag:$LINENO] peer_route=off: revert done (legacy behavior restored)"
+        ) || true
+    fi
+    unset _peer_route_enabled
 
     # 모듈 로드 + networkd가 mlan 인터페이스를 생성한 직후, association 전에 라디오 기본값 적용.
     # 그 외 자식 데몬은 ExecStartPost(/usr/local/scripts/wifi_services.sh)가 systemctl enable

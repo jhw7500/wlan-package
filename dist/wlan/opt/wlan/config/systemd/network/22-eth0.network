@@ -3,4 +3,9 @@ Name=eth0
 
 [Network]
 DHCP=no
+# BD default management IP (최초 설치 시 SSH 접속용, 사이트별 변경 가능).
+# peer_route 관련 동적 설정(eth0 host scope IP, table 100 link route, main fallback route,
+# policy rule iif=eth0→table 100)은 모두 wifi_init.sh가 wbridge.peer_route.enabled 토글에 따라
+# 부여/회수한다. systemd-networkd 단계에서 static 부여하면 enabled=false 시 부여 후 제거
+# 패턴이 발생하므로 의도적으로 분리.
 Address=192.168.1.1/24
