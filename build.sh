@@ -123,10 +123,15 @@ if [ -d "${WLAN_OPC_DIR}" ]; then
     echo "Building wlan-opc..."
     cd "${WLAN_OPC_DIR}"
     make clean || true
+    # Device package MUST use the nxp platform backend (real /var/log/cantops JSON
+    # link data, timesyncd NTP, dpkg-query firmware, wifi.sh radio apply). The
+    # Makefile default PLATFORM=stub is host-test only and would ship an opcd that
+    # returns canned/zero device-info and no-ops radio/IP apply. vhlctl is
+    # platform-independent, so PLATFORM only affects opcd.
     if [ "${HOST_ARCH}" = "aarch64" ] || [ "${HOST_ARCH}" = "arm64" ]; then
-        CC=cc AR=ar make || { echo "Error: Failed to build wlan-opc (native)"; exit 1; }
+        CC=cc AR=ar make PLATFORM=nxp || { echo "Error: Failed to build wlan-opc (native)"; exit 1; }
     else
-        make || { echo "Error: Failed to cross-build wlan-opc"; exit 1; }
+        make PLATFORM=nxp || { echo "Error: Failed to cross-build wlan-opc"; exit 1; }
     fi
     cd "${BASEDIR}"
 
