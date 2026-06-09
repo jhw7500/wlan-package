@@ -6,7 +6,7 @@ complete. Until Phase 3 lands, sections marked `[Phase ≥ 3]` are placeholders.
 
 ## 0. Build & install
 
-- [ ] `cd wlan-opc && make` produces `protocol/libopcproto.a`, `opcd/opcd`, `vhlctl/vhlctl` with **no warnings** (ARM64 cross via `aarch64-linux-gnu-*`)
+- [ ] `cd wlan-opc && make` produces `build/arm64/{protocol/libopcproto.a, opcd/opcd, vhlctl/vhlctl}` with **no warnings** (ARM64 cross via `aarch64-linux-gnu-*`). `make both` additionally builds the host (`build/native/`) tree alongside it
 - [ ] `wlan-package/build.sh` stages outputs into `dist/usr/local/opc/{bin/opcd,bin/vhlctl,etc/...,opcd.service}` and emits a `.deb` (Phase 4)
 - [ ] `file dist/usr/local/opc/bin/opcd` reports `ELF 64-bit LSB ... ARM aarch64`
 - [ ] `dpkg -i wlan-proc_*.deb` on the target succeeds
