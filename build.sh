@@ -131,12 +131,30 @@ if [ -d "${WLAN_OPC_DIR}" ]; then
     #
     # Per-arch out-of-tree build: artifacts land in build/<arch>/. On an arm64
     # host the native build already yields target binaries; otherwise cross-build.
-    if [ "${HOST_ARCH}" = "aarch64" ] || [ "${HOST_ARCH}" = "arm64" ]; then
-        make native PLATFORM=nxp || { echo "Error: Failed to build wlan-opc (native)"; exit 1; }
-        OPC_BUILD="build/native"
+    # `make native`/`make arm64` select the toolchain internally (cc vs
+    # aarch64-linux-gnu-*), so the old `CC=cc AR=ar` override is no longer needed.
+    #
+    # Capability probe (cf. build_wbridge_native's `make -n release`): tolerate an
+    # un-bumped wlan-opc submodule that still ships the old in-tree Makefile with
+    # no native/arm64 targets — fall back to the legacy invocation + source-tree
+    # artifact paths so a staged rollout (submodule bumped after this script) works.
+    if make -n native >/dev/null 2>&1; then
+        if [ "${HOST_ARCH}" = "aarch64" ] || [ "${HOST_ARCH}" = "arm64" ]; then
+            make native PLATFORM=nxp || { echo "Error: Failed to build wlan-opc (native)"; exit 1; }
+            OPC_BUILD="build/native"
+        else
+            make arm64 PLATFORM=nxp || { echo "Error: Failed to cross-build wlan-opc"; exit 1; }
+            OPC_BUILD="build/arm64"
+        fi
+        [ -n "${OPC_BUILD}" ] || { echo "Error: OPC_BUILD unset for arch ${HOST_ARCH}"; exit 1; }
     else
-        make arm64 PLATFORM=nxp || { echo "Error: Failed to cross-build wlan-opc"; exit 1; }
-        OPC_BUILD="build/arm64"
+        echo "[wlan-opc] legacy Makefile (no per-arch targets) — in-tree build"
+        if [ "${HOST_ARCH}" = "aarch64" ] || [ "${HOST_ARCH}" = "arm64" ]; then
+            CC=cc AR=ar make PLATFORM=nxp || { echo "Error: Failed to build wlan-opc (native)"; exit 1; }
+        else
+            make PLATFORM=nxp || { echo "Error: Failed to cross-build wlan-opc"; exit 1; }
+        fi
+        OPC_BUILD="."
     fi
     cd "${BASEDIR}"
 
