@@ -26,3 +26,4 @@ network.json
 .vscode/
 .context/
 dist/wlan/usr/local/scripts/.omc/
+.gstack/
