@@ -61,7 +61,6 @@ _load_wbridge_thermal_json_defaults() {
         .wbridge |
         "WBRIDGE_MODE_FORCE=\(if .thermal.mode_force then 1 else 0 end)",
         "WBRIDGE_THERMAL_AUTO_RESTART=\(if .thermal.auto_restart then 1 else 0 end)",
-        "WBRIDGE_THERMAL_TIMER_ENABLE=\(if .thermal.timer_enable then 1 else 0 end)",
         "WBRIDGE_THERMAL_RESTART_COOLDOWN_SEC=\(.thermal.restart_cooldown_sec // 60)",
         "WBRIDGE_THERMAL_BRIDGE_UNITS=\(.thermal.bridge_units // "wifi_bridge@mlan0.service wifi_bridge@mlan1.service")",
         "WBRIDGE_THERMAL_WARM_CPU_ENTER=\(.thermal.thresholds.warm_cpu_enter // 80)",
@@ -77,7 +76,7 @@ _load_wbridge_thermal_json_defaults() {
 _load_wbridge_thermal_json_defaults
 
 MODE_FORCE="${WBRIDGE_MODE_FORCE:-0}"
-AUTO_RESTART="${WBRIDGE_THERMAL_AUTO_RESTART:-1}"
+AUTO_RESTART="${WBRIDGE_THERMAL_AUTO_RESTART:-0}"
 RESTART_COOLDOWN_SEC=$(to_int "${WBRIDGE_THERMAL_RESTART_COOLDOWN_SEC:-60}")
 if (( RESTART_COOLDOWN_SEC < 0 )); then
     RESTART_COOLDOWN_SEC=60

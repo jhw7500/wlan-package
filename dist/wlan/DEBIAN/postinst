@@ -429,26 +429,10 @@ json_merge() {
   # 읽으므로 다음 부팅에 적용된다. 설치 도중 daemon-reload로 system.conf를 다시
   # 읽게 하지 않는다(WatchdogDevice 재오픈/타이머 재평가 등 부작용 회피).
 
-  if [ -f /etc/default/wbridge ]; then
-    # shellcheck source=/etc/default/wbridge
-    . /etc/default/wbridge
-  fi
-
-  THERMAL_TIMER_ENABLE="${WBRIDGE_THERMAL_TIMER_ENABLE:-1}"
-  if command -v systemctl >/dev/null 2>&1; then
-    case "$THERMAL_TIMER_ENABLE" in
-      1)
-        # --now(동기 start) 대신 enable + start --no-block로 잡 대기 없이 기동.
-        systemctl enable wifi_thermal_state.timer 2>/dev/null || true
-        systemctl start --no-block wifi_thermal_state.timer 2>/dev/null || true
-        logger -p local0.info "[$KEY][$tag:$LINENO] Enabled wifi_thermal_state.timer"
-        ;;
-      *)
-        systemctl disable --now wifi_thermal_state.timer wifi_thermal_state.service 2>/dev/null || true
-        logger -p local0.info "[$KEY][$tag:$LINENO] Thermal timer disabled by WBRIDGE_THERMAL_TIMER_ENABLE=$THERMAL_TIMER_ENABLE"
-        ;;
-    esac
-  fi
+  # wifi_thermal_state.timer 의 enable/disable 은 wifi_apply_enabled.sh 가
+  # JSON .wbridge.thermal.enabled (SSoT) 기준으로 전담한다. postinst 내 thermal 전용
+  # 제어 로직만 제거했으며, 설치 시점엔 위에서 호출한 wifi_apply_enabled.sh 가,
+  # 이후 매 부팅엔 wifi_init.service(ExecStartPre) 가 타이머 상태를 동기화한다.
 
   if command -v sysctl >/dev/null 2>&1; then
     sysctl --system >/dev/null 2>&1 || true
