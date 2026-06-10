@@ -909,16 +909,23 @@ case "$2" in
     [ ${#FREQS[@]} -eq 0 ] && { echo "configure freq not exist" >&2; exit 1; }
     FREQ_STR="${FREQS[*]}"
     TMP_FILE="$(mktemp)"
+    trap 'rm -f "$TMP_FILE"; sync 2>/dev/null || true' EXIT
+    # 모든 network={} 블록에 적용 (블록마다 done 플래그 리셋). 블록이 없으면 에러.
     awk -v freqs="$FREQ_STR" '
-    BEGIN { found_scan = 0; found_list = 0 }
+    BEGIN { in_net = 0; blocks = 0 }
     /^[[:space:]]*#/ { print; next }
-    /^[[:space:]]*scan_freq[[:space:]]*=/ { print "    scan_freq=" freqs; found_scan = 1; next }
-    /^[[:space:]]*freq_list[[:space:]]*=/ { print "freq_list=" freqs; found_list = 1; next }
+    /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { in_net = 1; blocks++; done_scan = 0; done_list = 0; print; next }
+    in_net && /^[[:space:]]*\}/ {
+        if (!done_scan) { print "    scan_freq=" freqs; done_scan = 1 }
+        if (!done_list) { print "    freq_list=" freqs; done_list = 1 }
+        in_net = 0; print; next
+    }
+    in_net && /^[[:space:]]*scan_freq[[:space:]]*=/ { if (!done_scan) { print "    scan_freq=" freqs; done_scan = 1 } next }
+    in_net && /^[[:space:]]*freq_list[[:space:]]*=/ { if (!done_list) { print "    freq_list=" freqs; done_list = 1 } next }
     { print }
-    END { if (!found_scan) print "scan_freq=" freqs; if (!found_list) print "freq_list=" freqs }
+    END { if (blocks == 0) { print "error: no network={ block in config" > "/dev/stderr"; exit 1 } }
     ' "$CONF" > "$TMP_FILE"
     safe_install_0644_sync "$TMP_FILE" "$CONF"
-    rm -f "$TMP_FILE"
     echo "scan_freq / freq_list configure $FREQ_STR in $CONF"
     ;;
   ssid)
@@ -1245,11 +1252,24 @@ case "$2" in
             echo "No subnet mask specified, using default /24"
         fi
         awk -v new_ip="$NEW_IP" '
-            BEGIN { changed = 0 }
+            BEGIN { in_net = 0; done = 0 }
             /^[[:space:]]*#/ { print; next }
-            /^[[:space:]]*Address[[:space:]]*=/ { print "Address=" new_ip; changed = 1; next }
+            /^[[:space:]]*\[/ {
+                if (in_net && !done) { print "Address=" new_ip; done = 1 }
+                in_net = ($0 ~ /^[[:space:]]*\[[Nn]etwork\]/)
+                print; next
+            }
+            in_net && /^[[:space:]]*Address[[:space:]]*=/ {
+                if (!done) { print "Address=" new_ip; done = 1 }
+                next
+            }
             { print }
-            END { if (!changed) print "Address=" new_ip }
+            END {
+                if (!done) {
+                    if (in_net) print "Address=" new_ip
+                    else { print "[Network]"; print "Address=" new_ip }
+                }
+            }
         ' "$CONF" > "$TMP_FILE"
         safe_install_0644_sync "$TMP_FILE" "$CONF"
         echo "Address set to \"$NEW_IP\" in $CONF"
@@ -1263,12 +1283,26 @@ case "$2" in
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> gt <address>" >&2; exit 1; fi
     NEW_GT="$1"
     TMP_FILE="$(mktemp)"
+    trap 'rm -f "$TMP_FILE"; sync 2>/dev/null || true' EXIT
     awk -v new_gt="$NEW_GT" '
-        BEGIN { changed = 0 }
+        BEGIN { in_net = 0; done = 0 }
         /^[[:space:]]*#/ { print; next }
-        /^[[:space:]]*Gateway[[:space:]]*=/ { print "Gateway=" new_gt; changed = 1; next }
+        /^[[:space:]]*\[/ {
+            if (in_net && !done) { print "Gateway=" new_gt; done = 1 }
+            in_net = ($0 ~ /^[[:space:]]*\[[Nn]etwork\]/)
+            print; next
+        }
+        in_net && /^[[:space:]]*Gateway[[:space:]]*=/ {
+            if (!done) { print "Gateway=" new_gt; done = 1 }
+            next
+        }
         { print }
-        END { if (!changed) print "Gateway=" new_gt }
+        END {
+            if (!done) {
+                if (in_net) print "Gateway=" new_gt
+                else { print "[Network]"; print "Gateway=" new_gt }
+            }
+        }
     ' "$CONF" > "$TMP_FILE"
     safe_install_0644_sync "$TMP_FILE" "$CONF"
     rm -f "$TMP_FILE"
