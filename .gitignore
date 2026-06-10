@@ -27,3 +27,10 @@ network.json
 .context/
 dist/wlan/usr/local/scripts/.omc/
 .gstack/
+
+# 빌드 산출물 — wlan-driver-v2(mlanutl, *.ko) / wlan-opc(opcd, vhlctl)에서 빌드
+# 배포는 빌드 파이프라인이 dist에 staging (git 추적 제외)
+dist/wlan/opt/wlan/bin/mlanutl_*
+dist/wlan/opt/wlan/driver/*.ko
+dist/wlan/opt/wlan/driver/debug/*.ko
+dist/wlan/usr/local/opc/bin/
