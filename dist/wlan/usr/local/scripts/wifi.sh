@@ -909,10 +909,12 @@ case "$2" in
     [ ${#FREQS[@]} -eq 0 ] && { echo "configure freq not exist" >&2; exit 1; }
     FREQ_STR="${FREQS[*]}"
     TMP_FILE="$(mktemp)"
+    trap 'rm -f "$TMP_FILE"; sync 2>/dev/null || true' EXIT
+    # 모든 network={} 블록에 적용 (블록마다 done 플래그 리셋). 블록이 없으면 에러.
     awk -v freqs="$FREQ_STR" '
-    BEGIN { in_net = 0; done_scan = 0; done_list = 0 }
+    BEGIN { in_net = 0; blocks = 0 }
     /^[[:space:]]*#/ { print; next }
-    /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { in_net = 1; print; next }
+    /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { in_net = 1; blocks++; done_scan = 0; done_list = 0; print; next }
     in_net && /^[[:space:]]*\}/ {
         if (!done_scan) { print "    scan_freq=" freqs; done_scan = 1 }
         if (!done_list) { print "    freq_list=" freqs; done_list = 1 }
@@ -921,9 +923,9 @@ case "$2" in
     in_net && /^[[:space:]]*scan_freq[[:space:]]*=/ { if (!done_scan) { print "    scan_freq=" freqs; done_scan = 1 } next }
     in_net && /^[[:space:]]*freq_list[[:space:]]*=/ { if (!done_list) { print "    freq_list=" freqs; done_list = 1 } next }
     { print }
+    END { if (blocks == 0) { print "error: no network={ block in config" > "/dev/stderr"; exit 1 } }
     ' "$CONF" > "$TMP_FILE"
     safe_install_0644_sync "$TMP_FILE" "$CONF"
-    rm -f "$TMP_FILE"
     echo "scan_freq / freq_list configure $FREQ_STR in $CONF"
     ;;
   ssid)
@@ -1281,6 +1283,7 @@ case "$2" in
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> gt <address>" >&2; exit 1; fi
     NEW_GT="$1"
     TMP_FILE="$(mktemp)"
+    trap 'rm -f "$TMP_FILE"; sync 2>/dev/null || true' EXIT
     awk -v new_gt="$NEW_GT" '
         BEGIN { in_net = 0; done = 0 }
         /^[[:space:]]*#/ { print; next }
