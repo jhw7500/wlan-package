@@ -714,6 +714,11 @@ if command -v systemctl >/dev/null 2>&1; then
     # === peer_route (옵션 X) 토글 — wbridge.peer_route.enabled ===
     # true(기본): eth0 host scope IP / table 100 / fallback route 부여 + sysctl ARP/RPF 정책 활성
     # false: 모든 변경 사항 revert + sysctl default reset → 변경 전 동작과 동일 (A/B 테스트용)
+    # 별도 토글 wbridge.arp_ignore_always.enabled(기본 false)가 true면 peer_route와 무관하게
+    # arp_ignore=1/arp_announce=2를 분기 이후 공통 블록에서 강제한다 — IP를 eth0에 두는
+    # 토폴로지(mlan0 무IP/타서브넷) 전용. 기본 false인 이유: mlan0-IP 배포 토폴로지에서
+    # peer_route=off(A/B·degraded 부팅 fallback) 시 eth0에 /32 미러가 없으므로 arp_ignore=1을
+    # 강제하면 유선→BD ARP가 무응답이 된다 (eth0은 .100 미소유 + 브릿지 필터가 공중 유출 차단).
     # Degraded 환경(jq 부재 / config 부재 / config 파싱 실패) 시 보수적으로 false:
     # 사용자가 enabled=false로 운영 중인 시스템에서 jq 깨짐으로 의도 반대 동작(=true) 발동 방지.
     # 정상 환경에서만 jq 결과 신뢰, key가 invalid/missing이면 그때만 factory default(=true) 적용.
@@ -808,6 +813,7 @@ if command -v systemctl >/dev/null 2>&1; then
     else
         # === DISABLED: 모든 변경 사항 revert (변경 전 동작 복원) ===
         # 99-bd-arp.conf는 부팅 시 이미 적용됐을 수 있으므로 sysctl을 default 값으로 reset.
+        # (arp_ignore_always 토글이 true면 아래 공통 블록이 ARP 정책만 다시 1/2로 덮어쓴다.)
         # wifi_init.sh가 이전 부팅에서 부여한 라우팅도 모두 제거.
         # 22-eth0.network의 policy rule도 명시적으로 제거 (system이 적용했어도 비활성화).
         (
@@ -843,6 +849,31 @@ if command -v systemctl >/dev/null 2>&1; then
             logger -p local0.info "[$tag:$LINENO] peer_route=off: revert done (legacy behavior restored)"
         ) || true
     fi
+
+    # === arp_ignore_always (옵션) — wbridge.arp_ignore_always.enabled, 기본 false ===
+    # IP를 eth0에 두는 토폴로지(mlan0 무IP 또는 타서브넷) 전용 opt-in. 이 토폴로지에서는
+    # mlan0 커널 스택이 weak host model로 eth0 IP에 대한 ARP 요청에도 클론 MAC으로 응답
+    # → eth0 스택의 정상 응답과 이중 응답 레이스 → peer 클라이언트 ARP 캐시 오염/간헐 단절.
+    # moal driver bridge / pcap(wbridge) 어느 구현이든 커널 단에서 공통 차단해야 하므로
+    # 브릿지별 가드가 아닌 sysctl로 잡는다.
+    #   arp_ignore=1: 요청이 들어온 인터페이스에 설정된 IP일 때만 응답 (레이스 원천 차단)
+    #   arp_announce=2: ARP sender 주소를 출구 인터페이스 기준으로 선택 (짝 정책)
+    # 기본 false 유지 필수: mlan0-IP 배포 토폴로지에서 peer_route=off(A/B·degraded fallback)와
+    # 조합되면 eth0이 mlan0 IP를 미소유한 채 arp_ignore=1이 되어 유선→BD ARP 무응답 회귀 발생.
+    # peer_route=on은 자체적으로 arp_ignore=1을 이미 적용하므로 이 토글이 불필요하다.
+    _arp_ignore_always=false
+    if command -v jq >/dev/null 2>&1 && [ -f /usr/local/etc/wifi_init_conf.json ]; then
+        _val=$(jq -r '.wbridge.arp_ignore_always.enabled' /usr/local/etc/wifi_init_conf.json 2>/dev/null)
+        [ "$_val" = "true" ] && _arp_ignore_always=true
+        unset _val
+    fi
+    if [ "$_arp_ignore_always" = "true" ]; then
+        _safe_sysctl net.ipv4.conf.all.arp_ignore=1
+        _safe_sysctl net.ipv4.conf.all.arp_announce=2
+        logger -p local0.info "[$tag:$LINENO] arp_ignore_always=on: ARP policy forced (eth0-IP topology mode)"
+    fi
+    unset _arp_ignore_always
+
     unset _peer_route_enabled
 
     # 모듈 로드 + networkd가 mlan 인터페이스를 생성한 직후, association 전에 라디오 기본값 적용.
