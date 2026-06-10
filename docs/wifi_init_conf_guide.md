@@ -165,9 +165,9 @@ wifi_init_conf.json
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `mode_force` | bool | `true` | `true`이면 thermal 클램핑 무시 (요청 모드 강제 적용) |
+| `enabled` | bool | `false` | thermal 주기 모니터링(`wifi_thermal_state.timer`) ON/OFF. false면 상태 갱신이 멈춰 clamp 비활성 |
+| `mode_force` | bool | `true` | `true`이면 thermal 반응 억제 — 클램핑 무시(요청 모드 강제) + 상태 변경 시 bridge 재시작 skip |
 | `auto_restart` | bool | `false` | thermal 상태 변경 시 bridge 자동 재시작 |
-| `timer_enable` | bool | `false` | 타이머 기반 주기적 thermal 체크 |
 | `restart_cooldown_sec` | int | `60` | 재시작 쿨다운 (초) |
 | `bridge_units` | string | `"wifi_bridge@mlan0.service wifi_bridge@mlan1.service"` | 관리 대상 systemd 유닛 |
 

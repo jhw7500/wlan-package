@@ -1,8 +1,11 @@
-# wbridge 서비스 설정 오버라이드 파일
+# wbridge 서비스 fallback 설정 파일
 # wifi_bridge@.service / wifi_thermal_state.service 의 EnvironmentFile로 로드됨
 #
-# 기본값은 /usr/local/etc/wifi_init_conf.json 의 "wbridge" 섹션에서 로드됩니다.
-# 이 파일에서 설정 시 JSON 값을 덮어씁니다 (우선순위 높음).
+# SSoT 는 /usr/local/etc/wifi_init_conf.json 의 "wbridge" 섹션이다.
+# 우선순위: wifi_init_conf.json > /etc/default/wbridge > 스크립트 기본값
+# systemd 가 이 파일을 EnvironmentFile 로 먼저 로드하지만, 스크립트가 JSON 을
+# 정상 파싱하면 JSON 값으로 덮어쓴다. JSON 이 없거나 파싱 실패할 때만 이 파일의
+# 값이 fallback 으로 유지된다 (아래 주석 예시 참고).
 #
 # --- 마스터 스위치 ---
 # WBRIDGE_ENABLED=1                 # 0=bridge 전체 비활성, 1=활성 (BRIDGE_IFACE와 독립)
@@ -26,7 +29,6 @@
 # WBRIDGE_WLAN_DOWN_RESTART=0
 #
 # --- Thermal (thermal 그룹) ---
-# WBRIDGE_MODE_FORCE=1              # 1=thermal 클램핑 무시
+# WBRIDGE_MODE_FORCE=1              # 1=thermal 반응 억제 (클램핑 무시 + 재시작 skip)
 # WBRIDGE_THERMAL_AUTO_RESTART=0
-# WBRIDGE_THERMAL_TIMER_ENABLE=0
 # WBRIDGE_THERMAL_RESTART_COOLDOWN_SEC=60

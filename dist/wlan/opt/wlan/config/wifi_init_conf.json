@@ -113,16 +113,16 @@
         "thermal": {
             "_comment": [
                 "Thermal 상태 관리. wifi_thermal_state_update.sh가 주기적으로 온도를 읽어 상태를 결정.",
-                "mode_force: (bool) true이면 thermal 클램핑 무시. hot 상태에서도 요청 모드 강제 적용",
+                "enabled: (bool) thermal 주기 모니터링(wifi_thermal_state.timer) ON/OFF. false이면 상태 갱신이 멈춰 thermal clamp가 사실상 비활성",
+                "mode_force: (bool) true이면 thermal 반응 억제 — 클램핑 무시(hot에서도 요청 모드 강제) + 상태 변경 시 bridge 재시작 skip",
                 "auto_restart: (bool) thermal 상태 변경 시 bridge 서비스 자동 재시작",
-                "timer_enable: (bool) systemd timer 기반 주기적 thermal 체크 활성화",
                 "restart_cooldown_sec: (int) 재시작 루프 방지 쿨다운 (초)",
                 "bridge_units: (string) thermal 변경 시 재시작할 systemd 유닛 목록 (공백 구분)",
                 "thresholds: 온도 임계값 (°C). enter/exit 사이 5도 갭으로 히스테리시스 적용"
             ],
+            "enabled": false,
             "mode_force": true,
             "auto_restart": false,
-            "timer_enable": false,
             "restart_cooldown_sec": 60,
             "bridge_units": "wifi_bridge@mlan0.service wifi_bridge@mlan1.service",
             "thresholds": {
@@ -135,8 +135,7 @@
                 "hot_wifi_enter": 80,
                 "warm_wifi_exit": 65,
                 "hot_wifi_exit": 75
-            },
-            "enabled": false
+            }
         }
     },
     "temperature": {
