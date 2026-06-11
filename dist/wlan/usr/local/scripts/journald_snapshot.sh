@@ -62,6 +62,19 @@ if [ ! -s "$CURSOR_FILE" ] && [ -s "$CURSOR_FILE.bak" ]; then
     logger -p local0.warn "[$tag:$LINENO] cursor missing/empty, restored from backup"
 fi
 
+# --- 부팅 경계 마커 ---
+# 시계 리셋(fake-hwclock) 환경에선 서로 다른 부팅의 로그가 같은 날짜 파일에
+# append되어 섞이므로, boot_id가 바뀐 첫 스냅샷에 구분선을 남겨
+# 세션 경계와 당시 패키지 버전을 식별할 수 있게 한다.
+BOOT_ID_FILE="$DIR/.boot_id"
+boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown)
+if [ "$boot_id" != "$(cat "$BOOT_ID_FILE" 2>/dev/null || true)" ]; then
+    pkg_ver=$(dpkg-query -W -f='${Version}' wlan-proc 2>/dev/null || echo unknown)
+    printf '===== BOOT %s @ %s pkg=wlan-proc-%s =====\n' \
+        "$boot_id" "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$pkg_ver" >> "$DST/journal.log"
+    printf '%s\n' "$boot_id" > "$BOOT_ID_FILE"
+fi
+
 # 스냅샷 전 크기 기록
 before_size=$(stat -c%s "$DST/journal.log" 2>/dev/null || echo 0)
 
