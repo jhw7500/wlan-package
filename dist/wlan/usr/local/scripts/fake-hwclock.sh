@@ -1,16 +1,27 @@
 #!/bin/sh
 tag=$(basename "$0")
 #logger -p local0.info "[$tag:$LINENO] $1"
-STATE=/etc/fake-hwclock.data
+# rootfs 재플래시 후에도 시각이 이어지도록 영속 파티션에 저장.
+# /etc(rootfs)에 두면 이미지를 다시 구울 때마다 시계가 기본값으로 리셋되어
+# /var/log/cantops 날짜별 로그가 세션 간에 뒤섞인다.
+STATE=/var/log/cantops/fake-hwclock.data
+LEGACY_STATE=/etc/fake-hwclock.data
 #echo "hwclock $1"
 case "$1" in
   save)
+    mkdir -p "${STATE%/*}"
     date +"%Y-%m-%d %H:%M:%S" > "$STATE"
     ;;
   load)
+    [ -f "$STATE" ] || STATE="$LEGACY_STATE"
     [ -f "$STATE" ] || exit 0
     DATE_STR="$(cat "$STATE")"
-    date -s "$DATE_STR"
+    # 저장 시각이 현재 시계보다 미래일 때만 적용 (시간 역행 방지)
+    SAVED=$(date -d "$DATE_STR" +%s 2>/dev/null) || exit 0
+    NOW=$(date +%s)
+    if [ "$SAVED" -gt "$NOW" ]; then
+        date -s "$DATE_STR"
+    fi
     ;;
   *)
     echo "Usage: fake-hwclock {save|load}"
