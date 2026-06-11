@@ -15,6 +15,8 @@ WBRIDGE_ENGINE="pcap"
 bridge_debug=0
 bridge_wlan_idx=0
 bridge_keepalive_ms=1
+bridge_peer=""               # 빈값=드라이버 기본(eth0). JSON 명시 시에만 insmod 인자 추가
+bridge_consume_link_local="" # 빈값=드라이버 기본(0). JSON 명시 시에만 insmod 인자 추가
 
 WIFI_INIT_CONF_JSON="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
 
@@ -37,6 +39,28 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
         *) bridge_keepalive_ms=$_ka ;;
     esac
     unset _ka
+    # moal.debug: BR_DBG/[DBG-RXDROP] 진단 로그 (0|1만 수용)
+    _bd=$(jq -r '.wbridge.moal.debug // empty' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    case "$_bd" in
+        0|1) bridge_debug=$_bd ;;
+    esac
+    unset _bd
+    # moal.peer: 유선 peer 인터페이스명 (IFNAMSIZ 15자 이내, 인터페이스명 문자만).
+    # 유효하게 명시된 경우에만 insmod 인자로 전달 — 빈값/형식위반은 드라이버 기본(eth0).
+    _bp=$(jq -r '.wbridge.moal.peer // empty' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    if [ -n "$_bp" ] && [ "${#_bp}" -le 15 ]; then
+        case "$_bp" in
+            *[!a-zA-Z0-9._-]*) ;;
+            *) bridge_peer=$_bp ;;
+        esac
+    fi
+    unset _bp
+    # moal.consume_link_local: [DBG-RXDROP] A/B 진단 토글 (0|1만 수용)
+    _cll=$(jq -r '.wbridge.moal.consume_link_local // empty' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    case "$_cll" in
+        0|1) bridge_consume_link_local=$_cll ;;
+    esac
+    unset _cll
 fi
 
 # 커널 모듈 (보드별 드라이버 선택)
@@ -120,6 +144,10 @@ logger -p local0.info "[$tag:$LINENO] mlan0: enabled=$MLAN0_ENABLED freq=$MLAN0_
 [ "$BRIDGE_IFACE" = "mlan1" ] && bridge_wlan_idx=1
 if [ "$WBRIDGE_ENGINE" = "moal" ]; then
     moal_args="$moal_args bridge_mode=1 bridge_debug=$bridge_debug bridge_wlan_idx=$bridge_wlan_idx bridge_keepalive_ms=$bridge_keepalive_ms"
+    # 선택 파라미터: JSON에 유효하게 명시된 경우에만 추가
+    # (해당 param이 없는 구버전 드라이버는 insmod가 실패하므로 기본 미전달)
+    [ -n "$bridge_peer" ] && moal_args="$moal_args bridge_peer=$bridge_peer"
+    [ -n "$bridge_consume_link_local" ] && moal_args="$moal_args bridge_consume_link_local=$bridge_consume_link_local"
     logger -p local0.info "[$tag:$LINENO] moal engine: bridge params added → $moal_args"
 else
     logger -p local0.info "[$tag:$LINENO] moal_args: $moal_args"
