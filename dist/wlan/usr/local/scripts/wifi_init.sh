@@ -29,6 +29,14 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
     WBRIDGE_ENABLED=$(jq -r 'if .wbridge.enabled then "true" else "false" end' "$WIFI_INIT_CONF_JSON" 2>/dev/null || echo "true")
     MAC_MODE=$(jq -r '.wbridge.mac_mode // .global.MAC_MODE // "default"' "$WIFI_INIT_CONF_JSON")
     WBRIDGE_ENGINE=$(jq -r '.wbridge.engine // "pcap"' "$WIFI_INIT_CONF_JSON")
+    # moal keepalive: 발열↔레이턴시 노브 (engine=moal 전용 insmod 인자).
+    # 음이 아닌 정수만 수용 — 그 외(키 없음/잘못된 값)는 스크립트 기본값(1) 유지.
+    _ka=$(jq -r '.wbridge.moal.keepalive_ms // empty' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    case "$_ka" in
+        ''|*[!0-9]*) ;;
+        *) bridge_keepalive_ms=$_ka ;;
+    esac
+    unset _ka
 fi
 
 # 커널 모듈 (보드별 드라이버 선택)

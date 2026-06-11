@@ -58,7 +58,8 @@
             "eth_sweep_subnet: (string) peer 발견 최후 sweep 대역 (CIDR). 부팅 시 mlan0 init 전 호출되어 mlan0.inet으로 대역 추정이 불가능하므로 정적 값이 안전. 예: \"192.168.0.0/24\". 빈 문자열이면 mlan0.inet 폴백 시도",
             "peer_route.enabled: (bool) 양방향 peer 라우팅(옵션 X) 마스터 스위치. true(기본)면 wifi_init.sh가 eth0 host scope IP/table 100/fallback route를 부여하고 wired_mac_ip_get.py가 host route를 등록하며 99-bd-arp.conf의 ARP/RPF sysctl이 활성. false면 부팅 시 모든 변경을 revert하고 sysctl을 default로 reset하여 변경 전 동작으로 복원. A/B 테스트용",
             "arp_ignore_always.enabled: (bool) ARP 정책 강제 토글 (기본 false). true면 peer_route와 무관하게 arp_ignore=1/arp_announce=2 항상 적용. IP를 eth0에 두는 토폴로지(mlan0 무IP/타서브넷) 전용 — mlan0 커널 스택의 weak-host ARP 응답(클론 MAC)이 eth0 IP에 대한 이중 ARP 응답 레이스를 만드는 것을 커널 단에서 차단 (pcap/moal 엔진 공통). 주의: 기본 토폴로지(mlan0-IP)에서 peer_route=off와 조합하면 유선→BD ARP 무응답이 되므로 기본 토폴로지에서는 반드시 false 유지",
-            "engine: (string) pcap|tpacket|moal — bridge 엔진. pcap/tpacket=유저스페이스, moal=드라이버 레벨 (mod_para.conf bridge_mode=1)"
+            "engine: (string) pcap|tpacket|moal — bridge 엔진. pcap/tpacket=유저스페이스, moal=드라이버 레벨 (mod_para.conf bridge_mode=1)",
+            "moal.keepalive_ms: (int) engine=moal 전용 — 드라이버 main_work keepalive hrtimer 주기(ms). 발열↔레이턴시 노브: 1=기본(실측 7ms 레이턴시의 전제), 커질수록 idle wakeup 감소(발열↓)·레이턴시↑, 0=off(트래픽 워밍에만 의존, idle 후 첫 패킷 콜드 스파이크). insmod 인자이므로 변경 반영에는 재부팅/드라이버 리로드 필요. pcap의 optimize.mode에 대응하는 moal측 발열 노브"
         ],
         "enabled": true,
         "bridge_iface": "mlan0",
@@ -73,9 +74,13 @@
         },
         "arp_ignore_always": {
             "_comment": "eth0-IP 토폴로지 전용 ARP 정책 강제 (상단 _comment 참조). 기본 토폴로지(mlan0-IP)에서는 false 유지.",
-            "enabled": false
+            "enabled": true
         },
         "engine": "pcap",
+        "moal": {
+            "_comment": "engine=moal 전용 파라미터. keepalive_ms는 발열↔레이턴시 노브 (상단 _comment 참조).",
+            "keepalive_ms": 1
+        },
         "optimize": {
             "_comment": [
                 "커널 레벨 네트워크 튜닝. false이면 하위 설정 모두 무효, wbridge 바이너리 기본값(RT/mlock/affinity)만 동작.",
@@ -91,7 +96,7 @@
                 "  none: 커널 기본 분배, IRQ/RPS 설정 skip",
                 "profile_version: (int) 프로파일 스키마 버전 (로깅/메타데이터용)"
             ],
-            "enabled": false,
+            "enabled": true,
             "mode": "normal",
             "irq_affinity": "auto",
             "profile_version": 1
