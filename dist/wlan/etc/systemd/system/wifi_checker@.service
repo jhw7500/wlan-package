@@ -10,8 +10,10 @@ PartOf=wifi_init.service
 Conflicts=shutdown.target
 Before=shutdown.target
 
-StartLimitIntervalSec=300
-StartLimitBurst=3
+# 감시 데몬은 어떤 경우에도 영구 포기(start-limit-hit)되면 안 된다.
+# wifi_init 재시작(PartOf 전파) 등으로 단시간에 여러 번 재시작돼도
+# rate limit 없이 항상 되살아나도록 무제한으로 둔다.
+StartLimitIntervalSec=0
 
 [Service]
 ExecStart=/usr/local/scripts/wifi_checker.sh %i
