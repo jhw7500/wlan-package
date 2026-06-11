@@ -27,7 +27,7 @@ vhld [config_file]
 
 - Transport: UDP/IP (Big Endian)
 - 기본 포트: 50000 (vhld.conf에서 변경 가능)
-- 프로토콜 사양: docs/VHL_protocol_260219_Cantops_KR.docx
+- 프로토콜 사양: wlan-opc/docs/VHL_protocol_260219_Cantops_KR.docx (opc 문서는 wlan-opc 서브모듈에서 관리)
 
 ## Test
 
