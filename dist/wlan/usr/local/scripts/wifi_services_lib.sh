@@ -26,5 +26,5 @@ wifi_services_list() {
         svcs+=("wifi_roam@${iface}.service")
         svcs+=("wifi_periodic_roam@${iface}.service")
     done
-    #printf '%s\n' "${svcs[@]}"
+    printf '%s\n' "${svcs[@]}"
 }

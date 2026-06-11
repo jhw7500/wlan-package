@@ -2,6 +2,7 @@
 Description=Save current clock (fake-hwclock)
 DefaultDependencies=no
 Before=shutdown.target
+RequiresMountsFor=/var/log/cantops
 
 [Service]
 Type=oneshot

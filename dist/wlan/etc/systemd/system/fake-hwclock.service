@@ -3,6 +3,9 @@
 Description=Restore and persist clock without RTC (fake-hwclock)
 DefaultDependencies=no
 Before=sysinit.target
+# 상태 파일이 영속 파티션(/var/log/cantops)에 있으므로 마운트 후 load,
+# 종료 시 언마운트 전 save가 보장되도록 마운트 의존을 건다.
+RequiresMountsFor=/var/log/cantops
 Conflicts=shutdown.target
 
 [Service]
