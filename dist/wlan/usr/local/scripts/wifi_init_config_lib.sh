@@ -93,5 +93,25 @@ wifi_init_mode_to_bandcfg_mask() {
         n)  echo 0x1F ;;   # +GN|AN
         ac) echo 0x5F ;;   # +AAC
         ax) echo 0x35F ;;  # +GAX|AAX
+        *)  return 1 ;;    # unknown mode (출력 없음)
+    esac
+}
+
+# 대역폭 → htcapinfo / vhtcfg bwcfg 매핑 — wifi.sh(radio-apply)와
+# wifi_init.sh(부팅 재적용) 공용 단일 정의.
+# 0x05c20000 = 부팅 기본 htcapinfo와 동일, 20은 bit17(20/40 enable)만 클리어.
+wifi_init_bw_to_htcap() {
+    case "$1" in
+        20)         echo 0x05c00000 ;;  # bit17 clear → 20MHz 전용
+        40|80|auto) echo 0x05c20000 ;;
+        *)          return 1 ;;
+    esac
+}
+
+wifi_init_bw_to_vhtbw() {
+    case "$1" in
+        20|40)   echo 0 ;;  # VHT BW는 11N CFG(20/40)를 따름
+        80|auto) echo 1 ;;  # VHT cap BW(80)를 따름
+        *)       return 1 ;;
     esac
 }
