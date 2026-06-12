@@ -189,6 +189,7 @@ usage() {
     echo "Usage: wifi {0|1|2|mlan0|mlan1|eth0} {start|up|stop|down|restart|status} : runtime"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} info : show current configuration and status"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} ip {address/netmask} : persist"
+    echo "       wifi ip apply : runtime (systemctl restart systemd-networkd)"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} gt {address} : persist"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} mac {0|1|base|target} {mac_address} : persist"
     echo "       wifi {0|1|mlan0|mlan1} br {up|down|start|stop|restart} : runtime"
@@ -676,6 +677,21 @@ case "$1" in
     update_json_global "STANDARD" "$VAL"
     echo "STANDARD updated to $VAL in $WIFI_INIT_CONF_JSON"
     exit 1
+    ;;
+  ip)
+    # wifi N ip {addr}로 persist한 .network 설정을 실제 반영
+    if [ "$2" == "apply" ]; then
+        echo "restarting systemd-networkd to apply ip configuration..."
+        if systemctl restart systemd-networkd; then
+            echo "systemd-networkd restarted"
+            exit 0
+        else
+            echo "Error: systemd-networkd restart failed" >&2
+            exit 1
+        fi
+    else
+        usage
+    fi
     ;;
   log)
     if [ "$2" == "all" ]; then
