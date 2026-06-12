@@ -571,7 +571,7 @@ apply_mcs_tier() {
 # (wifi_init.service OnFailure=emergency reboot 방지) — 실패는 logger로만 남긴다.
 apply_radio_mode_bw() {
     local iface="$1"
-    local mode bw mask htcap vhtbw vhtcap ok i eff_std freq_bands
+    local mode bw mask htcap vhtbw vhtcap ok i freq_bands
 
     [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1 || return 0
 
@@ -598,18 +598,9 @@ apply_radio_mode_bw() {
         fi
     fi
 
-    # ax(또는 미설정=칩 기본 ax)가 허용된 상태의 bw 20/40은 HE cap이 BW를 결정해
-    # 강제 불가 — wifi.sh radio-apply의 exit 10 게이트와 동기 유지 (부팅은 skip+log).
-    # 게이트 제외: mlan1(ax 원천 금지), STANDARD=n/ac(이번 부팅의 insmod에서
-    # dev_cap_mask로 이미 11ax 비활성 — 부팅 시점엔 JSON과 fw 상태가 일치).
-    eff_std=$(jq -r ".${iface}.STANDARD // .global.STANDARD // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-    if [ -n "$bw" ] && { [ "$bw" = "20" ] || [ "$bw" = "40" ]; } && \
-       { [ "$mode" = "ax" ] || { [ -z "$mode" ] && [ "$iface" != "mlan1" ] && \
-         [ "$eff_std" != "n" ] && [ "$eff_std" != "ac" ]; }; }; then
-        logger -p local0.err "[$tag:$LINENO] [$iface] radio.bw=$bw not enforceable while mode allows 11ax; skip bw (set radio.mode=ac or lower)"
-        bw=""
-        [ -z "$mode" ] && return 0
-    fi
+    # bw 20/40의 HE(11ax) 연결 클램프는 여기서 처리하지 않는다 — OMI는
+    # per-association 상태라 연결 이벤트마다 wifi_event.sh:apply_he_bw_omi()가
+    # 재전송한다. 부팅 경로는 HT/VHT assoc용 htcapinfo/vhtcfg만 적용.
 
     if [ -n "$mode" ]; then
         # 마스크 테이블은 wifi_init_config_lib.sh 단일 정의 사용
