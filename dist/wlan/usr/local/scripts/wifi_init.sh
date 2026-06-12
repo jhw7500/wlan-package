@@ -594,6 +594,8 @@ apply_radio_mode_bw() {
         if [ "$freq_bands" = "5G" ]; then
             logger -p local0.err "[$tag:$LINENO] [$iface] radio.mode=$mode with 5G-only freq_list — dead combo; skip mode (fix freq or mode, then 'wifi N radio-apply')"
             mode=""
+            # bw는 모드와 독립이라 계속 적용 — 모드 미변경 상태(기존 5G 연결)에서도
+            # HT/VHT BW 제한은 유효하다 (의도된 동작).
             [ -z "$bw" ] && return 0
         fi
     fi
