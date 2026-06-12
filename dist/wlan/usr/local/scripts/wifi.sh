@@ -214,7 +214,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} mode [b|g|a|n|ac|ax] : persist (적용: radio-apply, mlan1은 ax 불가)"
     echo "       wifi {0|1|mlan0|mlan1} bw [20|40|80|auto] : persist (적용: radio-apply)"
     echo "       wifi {0|1|mlan0|mlan1} radio-apply [timeout_s] : runtime (disconnect→bandcfg/htcap/vht→reconfigure→reconnect)"
-    echo "         radio-apply exit: 0=ok 2=usage 3=env 4=bandcfg 5=htcapinfo 6=vhtcfg 7=wpa_cli 8=assoc-timeout 9=json 10=ax+bw<80 11=b/g+5G-freq"
+    echo "         radio-apply exit: 0=ok 2=usage 3=env 4=bandcfg 5=htcapinfo 6=vhtcfg 7=wpa_cli 8=assoc-timeout 9=json 10=he-omi-fail 11=b/g+5G-freq"
     echo "       wifi txpwr {0|1|2|3|no|default|low|org|conf_file_name} : persist"
     echo "       wifi cal {0|1|2|None|WlanCalData_ext.conf|WlanCalData_ext_RD.conf|*} : persist"
     echo "       wifi mfg {0|1|off|on} : persist"
@@ -1333,7 +1333,8 @@ case "$2" in
   radio-apply | radio_apply)
     # persist된 radio.mode/radio.bw를 실제 링크에 적용하는 시퀀스.
     # disconnect → bandcfg(재시도) → htcapinfo/vhtcfg → reconfigure → reconnect → assoc 대기
-    # exit: 0=ok 2=usage 3=env 4=bandcfg 5=htcapinfo 6=vhtcfg 7=wpa_cli 8=assoc-timeout 9=json 10=ax+bw<80 11=b/g+5G-freq
+    #   → (HE 가능 + bw 20/40이면) OMI 전송으로 동작 BW 클램프
+    # exit: 0=ok 2=usage 3=env 4=bandcfg 5=htcapinfo 6=vhtcfg 7=wpa_cli 8=assoc-timeout 9=json 10=he-omi-fail 11=b/g+5G-freq
     if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
         echo "Error: radio-apply supports mlan0/mlan1 only" >&2
         exit 2
@@ -1370,18 +1371,17 @@ case "$2" in
         echo "nothing to apply: radio.mode/radio.bw not configured for $IFACE"
         exit 0
     fi
-    # v1 제약: ax 연결의 BW 제한은 HE cap(11axcfg)/OMI 경로가 필요해 미지원.
-    # mode가 ax(또는 미설정=칩 기본 ax)면 bw 20/40을 강제할 수 없다.
-    # 게이트 제외: mlan1(ax 원천 금지), STANDARD=n/ac(dev_cap_mask로 11ax 비활성).
-    # 단 STANDARD는 부팅 시 적용되므로 변경 후 미리부팅 상태면 이번 적용이
-    # 현재 부팅에서는 발효되지 않을 수 있다(재부팅 후 유효).
+    # HE(11ax) 연결의 bw 20/40은 htcapinfo/vhtcfg로 못 줄인다(HE cap이 BW 결정)
+    # → assoc 완료 후 OMI(11axcmd tx_omi)로 동작 BW를 클램프한다.
+    # HE 가능 조건: mode=ax 또는 (미설정 && mlan1 아님 && STANDARD∉{n,ac}).
+    # OMI는 per-association 상태라 이후 연결/로밍은 wifi_event.sh가 재적용
+    # (apply_he_bw_omi — 조건식 동기 유지).
     R_EFF_STD=$(jq -r ".${IFACE}.STANDARD // .global.STANDARD // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    R_HE_OMI=""
     if { [ "$R_BW" = "20" ] || [ "$R_BW" = "40" ]; } && \
        { [ "$R_MODE" = "ax" ] || { [ -z "$R_MODE" ] && [ "$IFACE" != "mlan1" ] && \
          [ "$R_EFF_STD" != "n" ] && [ "$R_EFF_STD" != "ac" ]; }; }; then
-        echo "Error: bw=$R_BW cannot be enforced while mode allows 11ax." >&2
-        echo "       Set 'wifi $NUM mode ac' (or lower) first, then retry radio-apply." >&2
-        exit 10
+        R_HE_OMI=1
     fi
     # freq↔mode 교차 검증: b/g 마스크(0x1/0x3)는 5G 비트가 없어 freq_list가
     # 5G 전용이면 스캔 채널 0개("Scan: No channel configured")로 영구 SCANNING에
@@ -1481,6 +1481,39 @@ case "$2" in
         echo "Error: association not completed within ${ASSOC_TIMEOUT}s (state=${WPA_STATE:-unknown})" >&2
         logger -p local0.err "[$tag:$LINENO] [$IFACE] radio-apply: assoc timeout (state=${WPA_STATE:-unknown})"
         exit 8
+    fi
+    if [ -n "$R_HE_OMI" ]; then
+        # NSS: htstreamcfg GET(양 칩 동일 포맷) 1순위, BOARD_TYPE 매핑 fallback
+        # (9098/imx8=2x2, IW612/imx93=1x1). 잘못된 NSS는 스트림을 클램프하므로 중요.
+        OMI_NSS=2
+        OMI_OUT=$(mlanutl "$IFACE" htstreamcfg 2>/dev/null)
+        case "$OMI_OUT" in
+            *1x1*) OMI_NSS=1 ;;
+            *2x2*) OMI_NSS=2 ;;
+            *)
+                case "$(jq -r '.global.BOARD_TYPE // "imx8mm"' "$WIFI_INIT_CONF_JSON" 2>/dev/null)" in
+                    imx93*) OMI_NSS=1 ;;
+                esac
+                ;;
+        esac
+        OMI_CW=0
+        [ "$R_BW" = "40" ] && OMI_CW=1
+        # OM Control: B0-2 RxNSS(NSS-1), B3-4 ChWidth(0=20,1=40), B6 TxNSTS(NSS-1)
+        OMI_VAL=$(printf '0x%02X' $(( (OMI_NSS - 1) | (OMI_CW << 3) | ((OMI_NSS - 1) << 6) )))
+        # tx_option=0: FW가 QoS NULL을 자체 전송 — 별도 트래픽 불필요
+        if mlanutl "$IFACE" 11axcmd tx_omi "$OMI_VAL" 0 0 >/dev/null 2>&1; then
+            echo "HE OMI clamp sent: tx_omi $OMI_VAL (bw=$R_BW, nss=$OMI_NSS)"
+        else
+            # 실패가 의미 있는 건 HE assoc일 때뿐 — HT/VHT assoc은 htcapinfo/vhtcfg가
+            # 이미 BW를 강제하므로 OMI 실패가 무해하다.
+            RATE_TYPE=$(mlanutl "$IFACE" getdatarate 2>/dev/null | sed -n 's/.*Type:[[:space:]]*//p' | head -1)
+            if [ "$RATE_TYPE" = "HE" ]; then
+                echo "Error: tx_omi $OMI_VAL failed on HE link — bw=$R_BW clamp not active" >&2
+                logger -p local0.err "[$tag:$LINENO] [$IFACE] radio-apply: tx_omi $OMI_VAL failed (HE)"
+                exit 10
+            fi
+            echo "Notice: tx_omi failed but link is ${RATE_TYPE:-unknown} (non-HE) — bw enforced by htcapinfo/vhtcfg"
+        fi
     fi
     logger -p local0.info "[$tag:$LINENO] [$IFACE] radio-apply: done (mode=${R_MODE:-keep} bw=${R_BW:-keep})"
     echo "radio-apply done for $IFACE (mode=${R_MODE:-keep} bw=${R_BW:-keep})"

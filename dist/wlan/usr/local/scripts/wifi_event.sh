@@ -50,6 +50,54 @@ apply_mcs_tier() {
     fi
 }
 
+apply_he_bw_omi() {
+    # HE(11ax) assoc의 동작 BW 클램프 — OMI는 per-association 상태라 매 연결/
+    # 로밍마다 재전송해야 유지된다. 조건식/OMI 인코딩은 wifi.sh radio-apply의
+    # HE OMI 블록과 동기 유지. (htcapinfo/vhtcfg는 HE 연결의 BW를 못 줄임)
+    local bw mode std nss omi cw out
+
+    [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1 || return 0
+
+    bw=$(jq -r ".${IFACE}.radio.bw // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    case "$bw" in
+        20) cw=0 ;;
+        40) cw=1 ;;
+        *)  return 0 ;;
+    esac
+
+    # HE 가능 조건: mode=ax 또는 (미설정 && mlan1 아님 && STANDARD∉{n,ac})
+    mode=$(jq -r ".${IFACE}.radio.mode // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    if [ "$mode" != "ax" ]; then
+        [ -n "$mode" ] && return 0
+        [ "$IFACE" = "mlan1" ] && return 0
+        std=$(jq -r ".${IFACE}.STANDARD // .global.STANDARD // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+        case "$std" in
+            n|ac) return 0 ;;
+        esac
+    fi
+
+    # NSS: htstreamcfg GET 1순위(양 칩 동일 포맷), BOARD_TYPE fallback
+    # (imx93/IW612=1x1, 그 외/9098=2x2). 잘못된 NSS는 스트림까지 클램프함.
+    nss=2
+    out=$(mlanutl "$IFACE" htstreamcfg 2>/dev/null)
+    case "$out" in
+        *1x1*) nss=1 ;;
+        *2x2*) nss=2 ;;
+        *)
+            case "$(jq -r '.global.BOARD_TYPE // "imx8mm"' "$WIFI_INIT_CONF_JSON" 2>/dev/null)" in
+                imx93*) nss=1 ;;
+            esac
+            ;;
+    esac
+
+    # OM Control: B0-2 RxNSS(NSS-1), B3-4 ChWidth(0=20,1=40), B6 TxNSTS(NSS-1).
+    # tx_option=0: FW가 QoS NULL을 자체 전송하므로 별도 트래픽 불필요.
+    omi=$(printf '0x%02X' $(( (nss - 1) | (cw << 3) | ((nss - 1) << 6) )))
+    logger -p local0.info "[$tag] [$IFACE] he bw clamp: tx_omi $omi (bw=$bw nss=$nss)"
+    mlanutl "$IFACE" 11axcmd tx_omi "$omi" 0 0 > /dev/null 2>&1 || \
+        logger -p local0.err "[$tag:$LINENO] [$IFACE] tx_omi $omi failed (non-HE assoc or FW reject)"
+}
+
 run_on_connect() {
     local bssid="$1"
     local enabled cmds
@@ -90,6 +138,7 @@ initial_bssid=$(iw dev "$IFACE" link 2>/dev/null | awk '/Connected to/ {print $3
 if [ -n "$initial_bssid" ]; then
     logger -p local0.info "[$tag:$LINENO] [$IFACE] INITIAL CONNECTED bssid=$initial_bssid (catch-up)"
     apply_mcs_tier
+    apply_he_bw_omi
     run_on_connect "$initial_bssid"
 fi
 
@@ -99,7 +148,16 @@ iw event -t 2>&1 | while IFS= read -r line; do
             bssid=$(echo "$line" | grep -oE '([0-9a-f]{2}:){5}[0-9a-f]{2}' | head -1)
             logger -p local0.info "[$tag:$LINENO] [$IFACE] CONNECTED bssid=$bssid"
             apply_mcs_tier
+            apply_he_bw_omi
             run_on_connect "$bssid"
+            ;;
+        *"$IFACE"*"roamed to"*)
+            # FW 주도 로밍은 "connected to"가 아닌 "roamed to"로 표면화됨 —
+            # per-association 상태(mcstier FW 상태, OMI 클램프)를 재적용한다.
+            bssid=$(echo "$line" | grep -oE '([0-9a-f]{2}:){5}[0-9a-f]{2}' | head -1)
+            logger -p local0.info "[$tag:$LINENO] [$IFACE] ROAMED bssid=$bssid"
+            apply_mcs_tier
+            apply_he_bw_omi
             ;;
         *"$IFACE"*"disconnected"*)
             reason=$(echo "$line" | sed -n 's/.*reason: \([0-9]*\).*/\1/p')
