@@ -571,7 +571,7 @@ apply_mcs_tier() {
 # (wifi_init.service OnFailure=emergency reboot 방지) — 실패는 logger로만 남긴다.
 apply_radio_mode_bw() {
     local iface="$1"
-    local mode bw mask htcap vhtbw vhtcap ok i eff_std
+    local mode bw mask htcap vhtbw vhtcap ok i eff_std freq_bands
 
     [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1 || return 0
 
@@ -584,6 +584,18 @@ apply_radio_mode_bw() {
     if iw dev "$iface" link 2>/dev/null | grep -q '^Connected'; then
         logger -p local0.info "[$tag:$LINENO] [$iface] connected; skip radio mode/bw re-apply (use 'wifi N radio-apply')"
         return 0
+    fi
+
+    # freq↔mode 교차 검증 (wifi.sh radio-apply exit 11 가드와 동기 유지):
+    # b/g(2.4G 전용 마스크) + 5G 전용 freq_list는 연결 불가 조합 — mode 적용을
+    # 건너뛰어 연결성을 보존한다 (부팅 비치명 원칙, skip+log).
+    if { [ "$mode" = "b" ] || [ "$mode" = "g" ]; }; then
+        freq_bands=$(wifi_init_conf_freq_bands "${WPA_CONF_DIR:-/etc/wpa_supplicant}/wpa_supplicant-${iface}.conf")
+        if [ "$freq_bands" = "5G" ]; then
+            logger -p local0.err "[$tag:$LINENO] [$iface] radio.mode=$mode with 5G-only freq_list — dead combo; skip mode (fix freq or mode, then 'wifi N radio-apply')"
+            mode=""
+            [ -z "$bw" ] && return 0
+        fi
     fi
 
     # ax(또는 미설정=칩 기본 ax)가 허용된 상태의 bw 20/40은 HE cap이 BW를 결정해
