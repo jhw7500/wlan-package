@@ -174,22 +174,39 @@ radio_stage_get() { # $1 iface, $2 key → stdout (없으면 빈값)
 
 # radio-apply 실패 시 적용 전 스냅샷으로 라이브 설정 복원 + 재연결 (best-effort).
 # SNAP_* 전역은 radio-apply가 disconnect 전에 GET으로 채운다.
+# 스냅샷이 비었거나 복원 호출이 실패하면 부분 롤백 — logger로 추적 가능하게 남긴다.
 rollback_radio_live() { # $1 iface
     logger -p local0.warning "[$tag:$LINENO] [$1] radio-apply: rolling back to pre-apply settings"
     echo "rolling back to pre-apply settings..." >&2
-    [ -n "${SNAP_BAND:-}" ] && mlanutl "$1" bandcfg "$SNAP_BAND" >/dev/null 2>&1
-    [ -n "${SNAP_HT_BG:-}" ] && mlanutl "$1" htcapinfo "$SNAP_HT_BG" 1 >/dev/null 2>&1
-    [ -n "${SNAP_HT_A:-}" ] && mlanutl "$1" htcapinfo "$SNAP_HT_A" 2 >/dev/null 2>&1
+    if [ -n "${SNAP_BAND:-}" ]; then
+        mlanutl "$1" bandcfg "$SNAP_BAND" >/dev/null 2>&1 || \
+            logger -p local0.warning "[$tag:$LINENO] [$1] rollback: bandcfg $SNAP_BAND restore failed"
+    else
+        logger -p local0.warning "[$tag:$LINENO] [$1] rollback: SNAP_BAND empty — bandcfg not restored"
+    fi
+    if [ -n "${SNAP_HT_BG:-}" ] && [ -n "${SNAP_HT_A:-}" ]; then
+        mlanutl "$1" htcapinfo "$SNAP_HT_BG" 1 >/dev/null 2>&1 && \
+        mlanutl "$1" htcapinfo "$SNAP_HT_A" 2 >/dev/null 2>&1 || \
+            logger -p local0.warning "[$tag:$LINENO] [$1] rollback: htcapinfo restore failed"
+    else
+        logger -p local0.warning "[$tag:$LINENO] [$1] rollback: htcapinfo snapshot incomplete (BG=${SNAP_HT_BG:-none} A=${SNAP_HT_A:-none}) — not restored"
+    fi
     if [ -n "${SNAP_VHTBW:-}" ] && [ -n "${SNAP_VHTCAP:-}" ]; then
-        mlanutl "$1" vhtcfg 2 2 "$SNAP_VHTBW" "$SNAP_VHTCAP" >/dev/null 2>&1
+        mlanutl "$1" vhtcfg 2 2 "$SNAP_VHTBW" "$SNAP_VHTCAP" >/dev/null 2>&1 || \
+            logger -p local0.warning "[$tag:$LINENO] [$1] rollback: vhtcfg restore failed"
+    else
+        logger -p local0.warning "[$tag:$LINENO] [$1] rollback: vht snapshot incomplete — vhtcfg not restored"
     fi
     wpa_cli -i "$1" reconnect >/dev/null 2>&1
 }
 # ------------------------------------
 
-# .{iface}.radio.{key} = value (문자열) persist
+# .{iface}.radio.{mode,bw}를 단일 jq 호출로 원자 commit (빈 인자는 생략).
+# 두 키를 별도 호출로 쓰면 첫 키만 기록되고 둘째가 실패하는 부분 커밋
+# 윈도우가 생기므로 한 번에 기록한다.
 update_json_radio() {
-    local iface="$1" key="$2" value="$3" tmp
+    local iface="$1" mode="$2" bw="$3" tmp filter
+    [ -z "$mode" ] && [ -z "$bw" ] && return 0
     if [ ! -f "$WIFI_INIT_CONF_JSON" ]; then
         echo "Error: $WIFI_INIT_CONF_JSON not found" >&2
         return 1
@@ -198,12 +215,15 @@ update_json_radio() {
         echo "Error: jq not installed" >&2
         return 1
     fi
-    # 고정 .tmp 대신 고유 tmp — 동시 호출(wifi 0 mode + wifi 1 bw) 시 파손 방지.
+    filter="."
+    [ -n "$mode" ] && filter="$filter | .[\$i].radio.mode = \$m"
+    [ -n "$bw" ] && filter="$filter | .[\$i].radio.bw = \$b"
+    # 고정 .tmp 대신 고유 tmp — 동시 호출(wifi 0 ... + wifi 1 ...) 시 파손 방지.
     # EXIT trap은 22행의 글로벌 sync trap을 덮어쓰므로 RETURN trap 사용
     # (apply_sed_update와 동일 패턴).
     tmp="$(safe_tmp_for "$WIFI_INIT_CONF_JSON")"
     trap 'rm -f "$tmp"' RETURN
-    if jq --arg i "$iface" --arg k "$key" --arg v "$value" '.[$i].radio[$k] = $v' \
+    if jq --arg i "$iface" --arg m "$mode" --arg b "$bw" "$filter" \
         "$WIFI_INIT_CONF_JSON" > "$tmp"; then
         chmod 0644 "$tmp" 2>/dev/null
         mv "$tmp" "$WIFI_INIT_CONF_JSON"
@@ -212,7 +232,7 @@ update_json_radio() {
     else
         rm -f "$tmp"
         trap - RETURN
-        echo "Error: JSON radio update failed for ${iface}.radio.${key}" >&2
+        echo "Error: JSON radio commit failed for ${iface} (mode=${mode:-keep} bw=${bw:-keep})" >&2
         return 1
     fi
 }
@@ -714,6 +734,7 @@ case "$1" in
   ip)
     # wifi N ip {addr}로 persist한 .network 설정을 실제 반영
     if [ "$2" == "apply" ]; then
+        echo "Warning: all networkd-managed interfaces will be briefly interrupted" >&2
         echo "restarting systemd-networkd to apply ip configuration..."
         if systemctl restart systemd-networkd; then
             echo "systemd-networkd restarted"
@@ -1469,7 +1490,7 @@ case "$2" in
     # 실패 시 롤백용 적용 전 스냅샷 (disconnect 전에 GET)
     SNAP_BAND=$(mlanutl "$IFACE" bandcfg 2>/dev/null | sed -n 's/.*Infra Band: \(0x[0-9a-fA-F]*\).*/\1/p' | head -1)
     SNAP_HT_OUT=$(mlanutl "$IFACE" htcapinfo 2>/dev/null)
-    SNAP_HT_BG=$(printf '%s\n' "$SNAP_HT_OUT" | sed -n 's/.*BG band:[[:space:]]*\(0x[0-9a-fA-F]*\).*/\1/p' | head -1)
+    SNAP_HT_BG=$(printf '%s\n' "$SNAP_HT_OUT" | sed -n 's/^[[:space:]]*BG band:[[:space:]]*\(0x[0-9a-fA-F]*\).*/\1/p' | head -1)
     SNAP_HT_A=$(printf '%s\n' "$SNAP_HT_OUT" | sed -n 's/^[[:space:]]*A band:[[:space:]]*\(0x[0-9a-fA-F]*\).*/\1/p' | head -1)
     SNAP_VHT_OUT=$(mlanutl "$IFACE" vhtcfg 2 2 2>/dev/null)
     SNAP_VHTCAP=$(printf '%s\n' "$SNAP_VHT_OUT" | awk '/VHT Capabilities Info/ {print $NF; exit}')
@@ -1595,15 +1616,9 @@ case "$2" in
             exit 10
         fi
     fi
-    # 트랜잭션 커밋: 적용 성공 시에만 staged → JSON persist (부팅 재적용 대상)
-    COMMIT_FAIL=""
-    if [ -n "$R_MODE_PEND" ]; then
-        update_json_radio "$IFACE" "mode" "$R_MODE" || COMMIT_FAIL=1
-    fi
-    if [ -n "$R_BW_PEND" ]; then
-        update_json_radio "$IFACE" "bw" "$R_BW" || COMMIT_FAIL=1
-    fi
-    if [ -n "$COMMIT_FAIL" ]; then
+    # 트랜잭션 커밋: 적용 성공 시에만 staged → JSON persist (부팅 재적용 대상).
+    # pending 키들을 단일 jq 호출로 원자 기록 — 부분 커밋 윈도우 없음.
+    if ! update_json_radio "$IFACE" "${R_MODE_PEND:+$R_MODE}" "${R_BW_PEND:+$R_BW}"; then
         echo "Error: applied live but JSON commit failed — staged kept, retry radio-apply (boot persistence not updated)" >&2
         exit 9
     fi

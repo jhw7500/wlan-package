@@ -119,6 +119,8 @@ wifi_init_bw_to_vhtbw() {
 # wpa_supplicant conf의 freq_list/scan_freq에 등장하는 밴드 집합을 출력.
 # 출력: ""(제한 없음/파일 없음), "2G", "5G", "2G 5G".
 # wifi.sh(radio-apply exit 11 가드)와 wifi_init.sh(부팅 가드) 공용.
+# Note: 6GHz(5925-7125MHz)는 미분류 — 현 칩(9098/IW612)이 6GHz 미지원.
+#       6E 칩 도입 시 분류 추가 필요.
 wifi_init_conf_freq_bands() {
     local conf="$1" f has2="" has5=""
     [ -f "$conf" ] || return 0
