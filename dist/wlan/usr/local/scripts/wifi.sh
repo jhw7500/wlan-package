@@ -214,7 +214,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} mode [b|g|a|n|ac|ax] : persist (적용: radio-apply, mlan1은 ax 불가)"
     echo "       wifi {0|1|mlan0|mlan1} bw [20|40|80|auto] : persist (적용: radio-apply)"
     echo "       wifi {0|1|mlan0|mlan1} radio-apply [timeout_s] : runtime (disconnect→bandcfg/htcap/vht→reconfigure→reconnect)"
-    echo "         radio-apply exit: 0=ok 2=usage 3=env 4=bandcfg 5=htcapinfo 6=vhtcfg 7=wpa_cli 8=assoc-timeout 9=json 10=ax+bw<80"
+    echo "         radio-apply exit: 0=ok 2=usage 3=env 4=bandcfg 5=htcapinfo 6=vhtcfg 7=wpa_cli 8=assoc-timeout 9=json 10=ax+bw<80 11=b/g+5G-freq"
     echo "       wifi txpwr {0|1|2|3|no|default|low|org|conf_file_name} : persist"
     echo "       wifi cal {0|1|2|None|WlanCalData_ext.conf|WlanCalData_ext_RD.conf|*} : persist"
     echo "       wifi mfg {0|1|off|on} : persist"
@@ -1287,6 +1287,15 @@ case "$2" in
         echo "Warning: STANDARD=$EFF_STD caps FW capability below mode=$MODE_VAL." >&2
         echo "         radio-apply will fail (exit 4) until 'wifi $NUM standard $MODE_VAL' + reboot." >&2
     fi
+    # b/g(2.4G 전용 마스크) + 5G 전용 freq_list는 연결 불가 조합 — 사전 경고
+    # (persist는 허용: freq를 이후에 바꿀 수 있으므로. 강제 거부는 radio-apply exit 11)
+    if [ "$MODE_VAL" = "b" ] || [ "$MODE_VAL" = "g" ]; then
+        MODE_FREQ_BANDS=$(wifi_init_conf_freq_bands "${WPA_CONF_DIR:-/etc/wpa_supplicant}/wpa_supplicant-${IFACE}.conf")
+        if [ "$MODE_FREQ_BANDS" = "5G" ]; then
+            echo "Warning: freq_list is 5G-only but mode=$MODE_VAL is 2.4G-only — radio-apply will be rejected (exit 11)." >&2
+            echo "         Change freq with 'wifi $NUM freq <2.4G ch>' before applying." >&2
+        fi
+    fi
     update_json_radio "$IFACE" "mode" "$MODE_VAL" || exit 9
     echo "radio.mode = $MODE_VAL (bandcfg $MODE_MASK) persisted for $IFACE in $WIFI_INIT_CONF_JSON"
     echo "(runtime apply: wifi $NUM radio-apply)"
@@ -1324,7 +1333,7 @@ case "$2" in
   radio-apply | radio_apply)
     # persist된 radio.mode/radio.bw를 실제 링크에 적용하는 시퀀스.
     # disconnect → bandcfg(재시도) → htcapinfo/vhtcfg → reconfigure → reconnect → assoc 대기
-    # exit: 0=ok 2=usage 3=env 4=bandcfg 5=htcapinfo 6=vhtcfg 7=wpa_cli 8=assoc-timeout 9=json 10=ax+bw<80
+    # exit: 0=ok 2=usage 3=env 4=bandcfg 5=htcapinfo 6=vhtcfg 7=wpa_cli 8=assoc-timeout 9=json 10=ax+bw<80 11=b/g+5G-freq
     if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
         echo "Error: radio-apply supports mlan0/mlan1 only" >&2
         exit 2
@@ -1373,6 +1382,21 @@ case "$2" in
         echo "Error: bw=$R_BW cannot be enforced while mode allows 11ax." >&2
         echo "       Set 'wifi $NUM mode ac' (or lower) first, then retry radio-apply." >&2
         exit 10
+    fi
+    # freq↔mode 교차 검증: b/g 마스크(0x1/0x3)는 5G 비트가 없어 freq_list가
+    # 5G 전용이면 스캔 채널 0개("Scan: No channel configured")로 영구 SCANNING에
+    # 빠진다(mlan_scan.c wlan_is_band_compatible 무음 탈락) → 링크를 건드리기
+    # 전에 즉시 거부. 2G+5G 혼합이면 5G만 무음 누락되므로 안내만 출력.
+    if [ "$R_MODE" = "b" ] || [ "$R_MODE" = "g" ]; then
+        R_CONF="${WPA_CONF_DIR:-/etc/wpa_supplicant}/wpa_supplicant-${IFACE}.conf"
+        R_FREQ_BANDS=$(wifi_init_conf_freq_bands "$R_CONF")
+        if [ "$R_FREQ_BANDS" = "5G" ]; then
+            echo "Error: mode=$R_MODE is 2.4G-only but freq_list/scan_freq in $R_CONF is 5G-only — STA can never associate." >&2
+            echo "       Fix with 'wifi $NUM freq <2.4G ch>' or 'wifi $NUM mode a' (or higher), then retry." >&2
+            exit 11
+        elif [ "$R_FREQ_BANDS" = "2G 5G" ]; then
+            echo "Notice: mode=$R_MODE is 2.4G-only — 5G entries in freq_list will be silently ignored."
+        fi
     fi
     if [ -n "$R_MODE" ]; then
         MODE_MASK=$(wifi_init_mode_to_bandcfg_mask "$R_MODE")

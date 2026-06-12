@@ -115,3 +115,29 @@ wifi_init_bw_to_vhtbw() {
         *)       return 1 ;;
     esac
 }
+
+# wpa_supplicant conf의 freq_list/scan_freq에 등장하는 밴드 집합을 출력.
+# 출력: ""(제한 없음/파일 없음), "2G", "5G", "2G 5G".
+# wifi.sh(radio-apply exit 11 가드)와 wifi_init.sh(부팅 가드) 공용.
+wifi_init_conf_freq_bands() {
+    local conf="$1" f has2="" has5=""
+    [ -f "$conf" ] || return 0
+    for f in $(sed -n -e 's/^[[:space:]]*freq_list[[:space:]]*=//p' \
+                      -e 's/^[[:space:]]*scan_freq[[:space:]]*=//p' "$conf"); do
+        case "$f" in
+            *[!0-9]*) continue ;;
+        esac
+        if [ "$f" -ge 2400 ] && [ "$f" -le 2500 ]; then
+            has2=1
+        elif [ "$f" -ge 4900 ] && [ "$f" -le 5925 ]; then
+            has5=1
+        fi
+    done
+    if [ -n "$has2" ] && [ -n "$has5" ]; then
+        echo "2G 5G"
+    elif [ -n "$has2" ]; then
+        echo "2G"
+    elif [ -n "$has5" ]; then
+        echo "5G"
+    fi
+}
