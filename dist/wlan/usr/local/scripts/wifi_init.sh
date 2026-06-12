@@ -607,6 +607,7 @@ apply_radio_mode_bw() {
         mask=$(wifi_init_mode_to_bandcfg_mask "$mode")
         if [ -z "$mask" ]; then
             logger -p local0.err "[$tag:$LINENO] [$iface] radio.mode invalid: $mode (skip)"
+            mask=""
         fi
         if [ "$iface" = "mlan1" ] && [ "$mode" = "ax" ]; then
             logger -p local0.err "[$tag:$LINENO] [$iface] radio.mode=ax not supported on mlan1 (skip)"
