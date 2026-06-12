@@ -189,7 +189,7 @@ usage() {
     echo "Usage: wifi {0|1|2|mlan0|mlan1|eth0} {start|up|stop|down|restart|status} : runtime"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} info : show current configuration and status"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} ip {address/netmask} : persist"
-    echo "       wifi ip apply : runtime (systemctl restart systemd-networkd)"
+    echo "       wifi ip apply : runtime (systemctl restart systemd-networkd; 실패 시 exit 1)"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} gt {address} : persist"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} mac {0|1|base|target} {mac_address} : persist"
     echo "       wifi {0|1|mlan0|mlan1} br {up|down|start|stop|restart} : runtime"
@@ -1410,15 +1410,13 @@ case "$2" in
         echo "bandcfg $MODE_MASK applied (mode=$R_MODE)"
     fi
     if [ -n "$R_BW" ]; then
-        case "$R_BW" in
-            20)      BW_HTCAP=0x05c00000; BW_VHTBW=0 ;;  # bit17(20/40) clear
-            40)      BW_HTCAP=0x05c20000; BW_VHTBW=0 ;;  # 40 허용, VHT는 11N BW 따름
-            80|auto) BW_HTCAP=0x05c20000; BW_VHTBW=1 ;;  # VHT cap BW(80) 따름
-            *)
-                echo "Error: invalid radio.bw '$R_BW' in $WIFI_INIT_CONF_JSON" >&2
-                exit 2
-                ;;
-        esac
+        # BW 매핑 테이블은 wifi_init_config_lib.sh 단일 정의 사용
+        BW_HTCAP=$(wifi_init_bw_to_htcap "$R_BW")
+        BW_VHTBW=$(wifi_init_bw_to_vhtbw "$R_BW")
+        if [ -z "$BW_HTCAP" ] || [ -z "$BW_VHTBW" ]; then
+            echo "Error: invalid radio.bw '$R_BW' in $WIFI_INIT_CONF_JSON" >&2
+            exit 2
+        fi
         if ! mlanutl "$IFACE" htcapinfo "$BW_HTCAP" >/dev/null 2>&1; then
             echo "Error: htcapinfo $BW_HTCAP failed for $IFACE (partial state: mode applied, bw not — retry radio-apply)" >&2
             logger -p local0.err "[$tag:$LINENO] [$IFACE] radio-apply: htcapinfo $BW_HTCAP failed"
@@ -1426,14 +1424,18 @@ case "$2" in
             exit 5
         fi
         BW_VHTCAP=$(get_vht_assoc_cap "$IFACE")
-        if [ -z "$BW_VHTCAP" ] || \
-           ! mlanutl "$IFACE" vhtcfg 2 2 "$BW_VHTBW" "$BW_VHTCAP" >/dev/null 2>&1; then
+        if [ -z "$BW_VHTCAP" ] && [ "$BW_VHTBW" = "0" ]; then
+            # VHT cap 조회 불가 + 20/40 요청: 11N(htcapinfo)만으로 충분 — vhtcfg 생략
+            echo "htcapinfo $BW_HTCAP applied (bw=$R_BW; VHT cap unavailable, vhtcfg skipped)"
+        elif [ -z "$BW_VHTCAP" ] || \
+             ! mlanutl "$IFACE" vhtcfg 2 2 "$BW_VHTBW" "$BW_VHTCAP" >/dev/null 2>&1; then
             echo "Error: vhtcfg 2 2 $BW_VHTBW ${BW_VHTCAP:-(GET failed)} failed for $IFACE (partial state: htcapinfo applied — retry radio-apply)" >&2
             logger -p local0.err "[$tag:$LINENO] [$IFACE] radio-apply: vhtcfg failed"
             wpa_cli -i "$IFACE" reconnect >/dev/null 2>&1
             exit 6
+        else
+            echo "htcapinfo $BW_HTCAP / vhtcfg bwcfg=$BW_VHTBW applied (bw=$R_BW)"
         fi
-        echo "htcapinfo $BW_HTCAP / vhtcfg bwcfg=$BW_VHTBW applied (bw=$R_BW)"
     fi
     # conf(freq_list 등) 변경분 반영 + 재접속
     if ! wpa_cli_ok "$IFACE" reconfigure; then

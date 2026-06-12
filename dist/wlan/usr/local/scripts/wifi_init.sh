@@ -628,15 +628,13 @@ apply_radio_mode_bw() {
     fi
 
     if [ -n "$bw" ]; then
-        case "$bw" in
-            20)      htcap=0x05c00000; vhtbw=0 ;;
-            40)      htcap=0x05c20000; vhtbw=0 ;;
-            80|auto) htcap=0x05c20000; vhtbw=1 ;;
-            *)
-                logger -p local0.err "[$tag:$LINENO] [$iface] radio.bw invalid: $bw (skip)"
-                return 0
-                ;;
-        esac
+        # BW 매핑 테이블은 wifi_init_config_lib.sh 단일 정의 사용
+        htcap=$(wifi_init_bw_to_htcap "$bw")
+        vhtbw=$(wifi_init_bw_to_vhtbw "$bw")
+        if [ -z "$htcap" ] || [ -z "$vhtbw" ]; then
+            logger -p local0.err "[$tag:$LINENO] [$iface] radio.bw invalid: $bw (skip)"
+            return 0
+        fi
         # apply_iface_radio_defaults의 mlanutl 연속 호출 간격 관례와 동일
         sleep 0.2
         mlanutl "$iface" htcapinfo "$htcap" > /dev/null 2>&1 || \
@@ -679,9 +677,9 @@ apply_iface_radio_defaults() {
     logger -p local0.info "[$tag:$LINENO] [$iface] macctrl: 0x00010e13, httxcfg: 0x00000063, htcapinfo: 0x05c20000, reassoctrl: enable"
     mlanutl "$iface" reassoctrl 1 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] reassoctrl failed"
 
-    # Re-apply persisted radio mode/bw (위 htcapinfo 기본값을 의도적으로 덮어씀)
-    apply_radio_mode_bw "$iface" || \
-        logger -p local0.err "[$tag:$LINENO] [$iface] apply_radio_mode_bw failed (continuing)"
+    # Re-apply persisted radio mode/bw (위 htcapinfo 기본값을 의도적으로 덮어씀).
+    # 함수는 부팅 보호를 위해 항상 0을 반환하고 실패는 내부에서 logger로 남긴다.
+    apply_radio_mode_bw "$iface"
 
     # Apply rate_adapt_cfg (per-iface override > global, must be set before association)
     local ra_mode ra_low ra_high ra_interval ra_interval_ms
