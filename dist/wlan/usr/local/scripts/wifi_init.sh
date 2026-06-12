@@ -571,7 +571,7 @@ apply_mcs_tier() {
 # (wifi_init.service OnFailure=emergency reboot 방지) — 실패는 logger로만 남긴다.
 apply_radio_mode_bw() {
     local iface="$1"
-    local mode bw mask htcap vhtbw vhtcap ok i
+    local mode bw mask htcap vhtbw vhtcap ok i eff_std
 
     [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1 || return 0
 
@@ -588,25 +588,23 @@ apply_radio_mode_bw() {
 
     # ax(또는 미설정=칩 기본 ax)가 허용된 상태의 bw 20/40은 HE cap이 BW를 결정해
     # 강제 불가 — wifi.sh radio-apply의 exit 10 게이트와 동기 유지 (부팅은 skip+log).
-    # mlan1은 ax 원천 금지라 미설정이어도 게이트 제외.
+    # 게이트 제외: mlan1(ax 원천 금지), STANDARD=n/ac(이번 부팅의 insmod에서
+    # dev_cap_mask로 이미 11ax 비활성 — 부팅 시점엔 JSON과 fw 상태가 일치).
+    eff_std=$(jq -r ".${iface}.STANDARD // .global.STANDARD // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
     if [ -n "$bw" ] && { [ "$bw" = "20" ] || [ "$bw" = "40" ]; } && \
-       { [ "$mode" = "ax" ] || { [ -z "$mode" ] && [ "$iface" != "mlan1" ]; }; }; then
+       { [ "$mode" = "ax" ] || { [ -z "$mode" ] && [ "$iface" != "mlan1" ] && \
+         [ "$eff_std" != "n" ] && [ "$eff_std" != "ac" ]; }; }; then
         logger -p local0.err "[$tag:$LINENO] [$iface] radio.bw=$bw not enforceable while mode allows 11ax; skip bw (set radio.mode=ac or lower)"
         bw=""
         [ -z "$mode" ] && return 0
     fi
 
     if [ -n "$mode" ]; then
-        case "$mode" in
-            b)  mask=0x1 ;;
-            g)  mask=0x3 ;;
-            a)  mask=0x7 ;;
-            n)  mask=0x1F ;;
-            ac) mask=0x5F ;;
-            ax) mask=0x35F ;;
-            *)  logger -p local0.err "[$tag:$LINENO] [$iface] radio.mode invalid: $mode (skip)"
-                mask="" ;;
-        esac
+        # 마스크 테이블은 wifi_init_config_lib.sh 단일 정의 사용
+        mask=$(wifi_init_mode_to_bandcfg_mask "$mode")
+        if [ -z "$mask" ]; then
+            logger -p local0.err "[$tag:$LINENO] [$iface] radio.mode invalid: $mode (skip)"
+        fi
         if [ "$iface" = "mlan1" ] && [ "$mode" = "ax" ]; then
             logger -p local0.err "[$tag:$LINENO] [$iface] radio.mode=ax not supported on mlan1 (skip)"
             mask=""
@@ -639,6 +637,7 @@ apply_radio_mode_bw() {
                 return 0
                 ;;
         esac
+        # apply_iface_radio_defaults의 mlanutl 연속 호출 간격 관례와 동일
         sleep 0.2
         mlanutl "$iface" htcapinfo "$htcap" > /dev/null 2>&1 || \
             logger -p local0.err "[$tag:$LINENO] [$iface] htcapinfo $htcap failed (bw=$bw)"

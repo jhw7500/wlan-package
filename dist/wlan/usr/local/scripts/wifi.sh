@@ -2,6 +2,10 @@
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 # shellcheck source=./wifi_init_config_lib.sh
 . "/usr/local/scripts/wifi_init_config_lib.sh"
+# 설치 전 환경(개발/테스트)에서는 스크립트 옆의 lib로 보충.
+# 타깃은 /usr/local/bin/wifi 심볼릭 링크라 SCRIPT_DIR을 1차 경로로 못 쓴다.
+declare -f wifi_init_mode_to_bandcfg_mask >/dev/null 2>&1 || \
+    . "$SCRIPT_DIR/wifi_init_config_lib.sh" 2>/dev/null
 
 tag=$(basename "$0")
 IFACE=mlan
@@ -128,19 +132,9 @@ ensure_wifi_init_conf() {
     :
 }
 
-# ----- radio mode/bw helpers (wifi_init.sh:apply_radio_mode_bw와 동기 유지) -----
-# 모드는 "상한(cap)" 모델: 밴드 선택은 freq(freq_list)가 담당하므로 양 밴드 비트를
-# 함께 켠다. GAC(2.4G 11ac, 비표준)은 FW fw_bands 검증 거부 가능성이 있어 제외.
-mode_to_bandcfg_mask() {
-    case "$1" in
-        b)  echo 0x1 ;;    # B
-        g)  echo 0x3 ;;    # B|G
-        a)  echo 0x7 ;;    # B|G|A (legacy 상한: 5G=a, 2.4G=g)
-        n)  echo 0x1F ;;   # +GN|AN
-        ac) echo 0x5F ;;   # +AAC
-        ax) echo 0x35F ;;  # +GAX|AAX
-    esac
-}
+# ----- radio mode/bw helpers -----
+# bandcfg 마스크 테이블은 wifi_init.sh와 공용 —
+# wifi_init_config_lib.sh:wifi_init_mode_to_bandcfg_mask() 사용 (단일 정의).
 
 # 모드 세대 비교용 랭크 (STANDARD n/ac/ax와 radio.mode 모순 감지)
 mode_rank() {
@@ -171,14 +165,20 @@ update_json_radio() {
         echo "Error: jq not installed" >&2
         return 1
     fi
-    # 고정 .tmp 대신 고유 tmp — 동시 호출(wifi 0 mode + wifi 1 bw) 시 파손 방지
+    # 고정 .tmp 대신 고유 tmp — 동시 호출(wifi 0 mode + wifi 1 bw) 시 파손 방지.
+    # EXIT trap은 22행의 글로벌 sync trap을 덮어쓰므로 RETURN trap 사용
+    # (apply_sed_update와 동일 패턴).
     tmp="$(safe_tmp_for "$WIFI_INIT_CONF_JSON")"
+    trap 'rm -f "$tmp"' RETURN
     if jq --arg i "$iface" --arg k "$key" --arg v "$value" '.[$i].radio[$k] = $v' \
         "$WIFI_INIT_CONF_JSON" > "$tmp"; then
         chmod 0644 "$tmp" 2>/dev/null
         mv "$tmp" "$WIFI_INIT_CONF_JSON"
+        sync "$WIFI_INIT_CONF_JSON" 2>/dev/null || sync
+        trap - RETURN
     else
         rm -f "$tmp"
+        trap - RETURN
         echo "Error: JSON radio update failed for ${iface}.radio.${key}" >&2
         return 1
     fi
@@ -221,7 +221,6 @@ usage() {
     echo "       wifi ant {0|1|internal|external} : runtime"
     echo "       wifi set {fem|azure} : apply preset configuration profile"
     echo "       wifi stand {n|ac|ax|4|5|6} : persist"
-    echo "       wifi ip apply : runtime"
     echo "       wifi log all : /var/log/cantops 전체 압축(현재 디렉터리)"
     echo "       wifi backup : persist"
     exit 1
@@ -1273,7 +1272,7 @@ case "$2" in
         mlanutl "$IFACE" bandcfg 2>/dev/null || echo "(bandcfg not available)"
         exit 0
     fi
-    MODE_MASK=$(mode_to_bandcfg_mask "$MODE_VAL")
+    MODE_MASK=$(wifi_init_mode_to_bandcfg_mask "$MODE_VAL")
     if [ -z "$MODE_MASK" ]; then
         echo "Error: mode must be one of b|g|a|n|ac|ax" >&2
         exit 2
@@ -1291,6 +1290,7 @@ case "$2" in
     update_json_radio "$IFACE" "mode" "$MODE_VAL" || exit 9
     echo "radio.mode = $MODE_VAL (bandcfg $MODE_MASK) persisted for $IFACE in $WIFI_INIT_CONF_JSON"
     echo "(runtime apply: wifi $NUM radio-apply)"
+    exit 0
     ;;
   bw)
     # 대역폭(20/40/80MHz) persist. 런타임 적용은 radio-apply.
@@ -1319,6 +1319,7 @@ case "$2" in
     update_json_radio "$IFACE" "bw" "$BW_VAL" || exit 9
     echo "radio.bw = $BW_VAL persisted for $IFACE in $WIFI_INIT_CONF_JSON"
     echo "(runtime apply: wifi $NUM radio-apply)"
+    exit 0
     ;;
   radio-apply | radio_apply)
     # persist된 radio.mode/radio.bw를 실제 링크에 적용하는 시퀀스.
@@ -1362,15 +1363,19 @@ case "$2" in
     fi
     # v1 제약: ax 연결의 BW 제한은 HE cap(11axcfg)/OMI 경로가 필요해 미지원.
     # mode가 ax(또는 미설정=칩 기본 ax)면 bw 20/40을 강제할 수 없다.
-    # 단 mlan1은 ax가 원천 금지라 미설정이어도 ax로 붙지 않음 → 게이트 제외.
+    # 게이트 제외: mlan1(ax 원천 금지), STANDARD=n/ac(dev_cap_mask로 11ax 비활성).
+    # 단 STANDARD는 부팅 시 적용되므로 변경 후 미리부팅 상태면 이번 적용이
+    # 현재 부팅에서는 발효되지 않을 수 있다(재부팅 후 유효).
+    R_EFF_STD=$(jq -r ".${IFACE}.STANDARD // .global.STANDARD // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
     if { [ "$R_BW" = "20" ] || [ "$R_BW" = "40" ]; } && \
-       { [ "$R_MODE" = "ax" ] || { [ -z "$R_MODE" ] && [ "$IFACE" != "mlan1" ]; }; }; then
+       { [ "$R_MODE" = "ax" ] || { [ -z "$R_MODE" ] && [ "$IFACE" != "mlan1" ] && \
+         [ "$R_EFF_STD" != "n" ] && [ "$R_EFF_STD" != "ac" ]; }; }; then
         echo "Error: bw=$R_BW cannot be enforced while mode allows 11ax." >&2
         echo "       Set 'wifi $NUM mode ac' (or lower) first, then retry radio-apply." >&2
         exit 10
     fi
     if [ -n "$R_MODE" ]; then
-        MODE_MASK=$(mode_to_bandcfg_mask "$R_MODE")
+        MODE_MASK=$(wifi_init_mode_to_bandcfg_mask "$R_MODE")
         if [ -z "$MODE_MASK" ]; then
             echo "Error: invalid radio.mode '$R_MODE' in $WIFI_INIT_CONF_JSON" >&2
             exit 2
