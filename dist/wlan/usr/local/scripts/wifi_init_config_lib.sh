@@ -80,3 +80,18 @@ wifi_init_get_iface_frequency() {
 wifi_init_iface_is_enabled() {
     [ "$(wifi_init_get_iface_enabled "$1" "${2:-true}")" = "true" ]
 }
+
+# bandcfg 모드 상한 마스크 — wifi.sh(mode/radio-apply)와 wifi_init.sh(부팅 재적용)
+# 공용 단일 정의. 모드는 "상한(cap)" 모델: 밴드 선택은 freq(freq_list)가 담당하므로
+# 양 밴드 비트를 함께 켠다. GAC(2.4G 11ac, 비표준)은 FW fw_bands 검증 거부
+# 가능성이 있어 제외.
+wifi_init_mode_to_bandcfg_mask() {
+    case "$1" in
+        b)  echo 0x1 ;;    # B
+        g)  echo 0x3 ;;    # B|G
+        a)  echo 0x7 ;;    # B|G|A (legacy 상한: 5G=a, 2.4G=g)
+        n)  echo 0x1F ;;   # +GN|AN
+        ac) echo 0x5F ;;   # +AAC
+        ax) echo 0x35F ;;  # +GAX|AAX
+    esac
+}
