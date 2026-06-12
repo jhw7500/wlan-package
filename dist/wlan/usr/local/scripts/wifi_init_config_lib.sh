@@ -124,6 +124,8 @@ wifi_init_conf_freq_bands() {
     [ -f "$conf" ] || return 0
     for f in $(sed -n -e 's/^[[:space:]]*freq_list[[:space:]]*=//p' \
                       -e 's/^[[:space:]]*scan_freq[[:space:]]*=//p' "$conf"); do
+        # 비숫자 토큰 필터: trailing comment("# ...") 등 word-splitting으로
+        # 들어온 잡토큰도 여기서 걸러진다 (의도된 가드)
         case "$f" in
             *[!0-9]*) continue ;;
         esac

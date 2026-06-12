@@ -222,7 +222,7 @@ usage() {
     echo "Usage: wifi {0|1|2|mlan0|mlan1|eth0} {start|up|stop|down|restart|status} : runtime"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} info : show current configuration and status"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} ip {address/netmask} : persist"
-    echo "       wifi ip apply : runtime (systemctl restart systemd-networkd; 실패 시 exit 1)"
+    echo "       wifi ip apply : runtime (systemctl restart systemd-networkd — 전체 networkd 관리 인터페이스 일시 중단; 실패 시 exit 1)"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} gt {address} : persist"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} mac {0|1|base|target} {mac_address} : persist"
     echo "       wifi {0|1|mlan0|mlan1} br {up|down|start|stop|restart} : runtime"
@@ -1546,6 +1546,7 @@ case "$2" in
     fi
     if ! wpa_cli_ok "$IFACE" reconnect; then
         echo "Error: wpa_cli reconnect failed for $IFACE" >&2
+        rollback_radio_live "$IFACE"
         exit 7
     fi
     WPA_STATE=""
