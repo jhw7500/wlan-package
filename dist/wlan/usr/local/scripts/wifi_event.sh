@@ -152,7 +152,10 @@ iw event -t 2>&1 | while IFS= read -r line; do
             run_on_connect "$bssid"
             ;;
         *"$IFACE"*"roamed to"*)
-            # FW 주도 로밍은 "connected to"가 아닌 "roamed to"로 표면화됨 —
+            # FW 주도 로밍 전용 케이스 — cfg80211_roamed 경로는 "roamed to"로
+            # 표면화된다. 주력인 수동 로밍(wpa_cli roam — wifi_roam.py:1242)은
+            # nl80211 connect 경로(cfg80211_connect_result)라 "connected to"로
+            # 표면화되어 위 케이스가 커버한다.
             # per-association 상태(mcstier FW 상태, OMI 클램프)를 재적용한다.
             bssid=$(echo "$line" | grep -oE '([0-9a-f]{2}:){5}[0-9a-f]{2}' | head -1)
             logger -p local0.info "[$tag:$LINENO] [$IFACE] ROAMED bssid=$bssid"
