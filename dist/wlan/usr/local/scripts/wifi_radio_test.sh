@@ -212,7 +212,6 @@ bash "$WIFI_SH" 0 radio-apply 3 >/dev/null 2>&1; check "T15 vhtcfg fail → 6" 6
 
 echo ""
 echo "RESULT: PASS=$PASS FAIL=$FAIL"
-[ "$FAIL" = "0" ]
 
 # ===== 리뷰 수정 검증 추가 테스트 =====
 # T16: JSON 파손 → radio-apply exit 9
@@ -264,7 +263,6 @@ check "T22 standard downgrade warning" 0 "$rc" $?
 
 echo ""
 echo "FINAL: PASS=$PASS FAIL=$FAIL"
-[ "$FAIL" = "0" ]
 
 # T23: STANDARD=ac(11ax 비활성) + bw 40 (mode 미설정) → 게이트 제외, exit 0
 fresh_json
@@ -285,7 +283,6 @@ check "T24 no-STANDARD + bw40 → 0 (cap+reassoc)" 0 "$rc" $?
 
 echo ""
 echo "FINAL2: PASS=$PASS FAIL=$FAIL"
-[ "$FAIL" = "0" ]
 
 # T25: vhtcfg GET 빈값 + bw 40 (VHT 불필요) → skip + exit 0
 fresh_json
@@ -306,7 +303,6 @@ bash "$WIFI_SH" 0 radio-apply 3 >/dev/null 2>&1; check "T26 vht GET empty + bw80
 
 echo ""
 echo "FINAL3: PASS=$PASS FAIL=$FAIL"
-[ "$FAIL" = "0" ]
 
 # ===== freq↔mode 교차 검증 가드 테스트 =====
 export WPA_CONF_DIR=$TD/wpa
@@ -356,7 +352,6 @@ check "T30 mode b persist warning" 0 "$rc" $?
 
 echo ""
 echo "FINAL4: PASS=$PASS FAIL=$FAIL"
-[ "$FAIL" = "0" ]
 
 # ===== staged-commit 트랜잭션 테스트 =====
 # T35: radio-discard — staged 제거
@@ -388,7 +383,6 @@ check "T38 committed-only reapply" 0 "$rc" $?
 
 echo ""
 echo "FINAL6: PASS=$PASS FAIL=$FAIL"
-[ "$FAIL" = "0" ]
 
 # T39: reconnect 실패 → exit 7 + 롤백 (스냅샷 복원 호출 확인)
 fresh_json
@@ -470,6 +464,19 @@ rm -f "$STATE_DIR/ip_calls.log"
 bash "$WIFI_SH" ip get >/dev/null 2>&1; rc=$?
 [ ! -f "$STATE_DIR/ip_calls.log" ] || ! grep -q "systemctl" "$STATE_DIR/ip_calls.log"
 [ "$rc" != "0" ] && check "T47 ip get → non-zero (usage), no systemctl" "$rc" "$rc" $? || check "T47 ip get → non-zero" 1 "$rc" 1
+
+# T48: wifi ip apply → systemctl restart systemd-networkd 호출 + exit 0
+fresh_json
+rm -f "$STATE_DIR/ip_calls.log" "$STATE_DIR/networkd_fail"
+bash "$WIFI_SH" ip apply >/dev/null 2>&1; rc=$?
+grep -q "systemctl restart systemd-networkd" "$STATE_DIR/ip_calls.log" 2>/dev/null
+check "T48 ip apply → systemctl restart + exit 0" 0 "$rc" $?
+
+# T49: ip apply + networkd restart 실패 → exit 1
+fresh_json
+rm -f "$STATE_DIR/ip_calls.log"
+touch "$STATE_DIR/networkd_fail"
+bash "$WIFI_SH" ip apply >/dev/null 2>&1; check "T49 ip apply networkd fail → 1" 1 $?
 
 echo ""
 echo "RESULT: PASS=$PASS FAIL=$FAIL"
