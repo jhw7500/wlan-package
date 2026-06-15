@@ -166,6 +166,8 @@ apply_bw_caps() { # $1 iface, $2 bw
             echo "htcapinfo $htcap applied (bw=$bw; VHT cap unavailable, vhtcfg skipped)"
             return 0
         }
+        # bwcfg=1(80/auto/default)은 VHT cap이 필수인데 GET 실패 — 원인 명시
+        echo "vhtcfg skipped: VHT cap GET failed (bw=$bw needs bwcfg=1)"
         return 6
     fi
     mlanutl "$iface" vhtcfg 2 2 "$vhtbw" "$vhtcap" >/dev/null 2>&1 || return 6
@@ -199,6 +201,9 @@ radio_stage_get() { # $1 iface, $2 key → stdout (없으면 빈값)
 # radio-apply 실패 시 적용 전 스냅샷으로 라이브 설정 복원 + 재연결 (best-effort).
 # SNAP_* 전역은 radio-apply가 disconnect 전에 GET으로 채운다.
 # 스냅샷이 비었거나 복원 호출이 실패하면 부분 롤백 — logger로 추적 가능하게 남긴다.
+# 이 경로는 HT/VHT cap(htcapinfo/vhtcfg)만 변경하므로 HE cap(user_he_cap) 스냅샷은
+# 의도적으로 없음. 향후 11axcfg로 user_he_cap을 직접 SET하는 코드가 추가되면
+# 여기에 HE cap 스냅샷/복원도 추가할 것.
 rollback_radio_live() { # $1 iface
     logger -p local0.warning "[$tag:$LINENO] [$1] radio-apply: rolling back to pre-apply settings"
     echo "rolling back to pre-apply settings..." >&2
@@ -1484,8 +1489,10 @@ case "$2" in
     R_BW_DEFAULT=""
     R_BW_CAP="$R_BW"
     if [ "$R_BW" = "default" ]; then
-        R_BW_DEFAULT=1
         R_BW_CAP=80
+        # radio.bw 삭제(__del__)는 staged default일 때만 — committed 잔재가
+        # 사용자 미요청 삭제를 유발하지 않도록 staged 입력에 한정.
+        [ "$R_BW_PEND" = "default" ] && R_BW_DEFAULT=1
     fi
     # freq↔mode 교차 검증: b/g 마스크(0x1/0x3)는 5G 비트가 없어 freq_list가
     # 5G 전용이면 스캔 채널 0개("Scan: No channel configured")로 영구 SCANNING에
@@ -1525,11 +1532,23 @@ case "$2" in
         *)                        SNAP_VHTBW="" ;;
     esac
 
-    # mode를 새로 stage한 경우에만 bandcfg(=disconnect 필요)를 한다.
+    # bandcfg(=mode 적용)는 disconnect가 필요하다. mode를 새로 stage했거나,
+    # committed mode가 라이브 bandcfg와 달라 재적용이 필요할 때만 disconnect 경로.
     # bw만 바꾸는 경우는 cap 적용 후 reassociate — 실기에서 HE 80↔40↔20
     # 양방향 전환이 검증된 무중단 경로(disconnect/reconnect는 40에서 SCANNING).
     APPLY_MODE=""
-    [ -n "$R_MODE_PEND" ] && APPLY_MODE=1
+    if [ -n "$R_MODE_PEND" ]; then
+        APPLY_MODE=1
+    elif [ -n "$R_MODE" ] && [ -n "$MODE_MASK" ]; then
+        # committed mode가 라이브와 다르면 bandcfg 재적용 — 부팅 connected-skip
+        # (wifi_init.sh) 후 'wifi N radio-apply' 복구 경로가 mode를 실제 적용하도록.
+        _live_band=$(printf '%s' "${SNAP_BAND:-}" | tr 'ABCDEF' 'abcdef')
+        _want_band=$(printf '%s' "$MODE_MASK" | tr 'ABCDEF' 'abcdef')
+        if [ "$_live_band" != "$_want_band" ]; then
+            APPLY_MODE=1
+            logger -p local0.info "[$tag:$LINENO] [$IFACE] committed mode=$R_MODE not live (band ${_live_band:-none} != $_want_band) — applying via bandcfg"
+        fi
+    fi
     logger -p local0.info "[$tag:$LINENO] [$IFACE] radio-apply: mode=${R_MODE:-keep} bw=${R_BW:-keep} (pending: mode=${R_MODE_PEND:-no} bw=${R_BW_PEND:-no}, path=$([ -n "$APPLY_MODE" ] && echo mode || echo bw-only))"
 
     if [ -n "$APPLY_MODE" ]; then
@@ -1563,6 +1582,7 @@ case "$2" in
                 2) echo "Error: invalid radio.bw '$R_BW'" >&2; rollback_radio_live "$IFACE"; exit 2 ;;
                 5) echo "Error: htcapinfo failed for $IFACE" >&2; logger -p local0.err "[$tag:$LINENO] [$IFACE] htcapinfo failed"; rollback_radio_live "$IFACE"; exit 5 ;;
                 6) echo "Error: vhtcfg failed for $IFACE" >&2; logger -p local0.err "[$tag:$LINENO] [$IFACE] vhtcfg failed"; rollback_radio_live "$IFACE"; exit 6 ;;
+                *) echo "Error: apply_bw_caps unexpected rc=$BW_RC for $IFACE" >&2; rollback_radio_live "$IFACE"; exit 6 ;;
             esac
         fi
         if ! wpa_cli_ok "$IFACE" reconfigure; then
@@ -1585,6 +1605,7 @@ case "$2" in
                 2) echo "Error: invalid radio.bw '$R_BW'" >&2; rollback_radio_live "$IFACE"; exit 2 ;;
                 5) echo "Error: htcapinfo failed for $IFACE" >&2; logger -p local0.err "[$tag:$LINENO] [$IFACE] htcapinfo failed"; rollback_radio_live "$IFACE"; exit 5 ;;
                 6) echo "Error: vhtcfg failed for $IFACE" >&2; logger -p local0.err "[$tag:$LINENO] [$IFACE] vhtcfg failed"; rollback_radio_live "$IFACE"; exit 6 ;;
+                *) echo "Error: apply_bw_caps unexpected rc=$BW_RC for $IFACE" >&2; rollback_radio_live "$IFACE"; exit 6 ;;
             esac
         fi
         if ! wpa_cli_ok "$IFACE" reassociate; then
