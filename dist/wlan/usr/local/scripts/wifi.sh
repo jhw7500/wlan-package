@@ -4,8 +4,11 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 . "/usr/local/scripts/wifi_init_config_lib.sh"
 # 설치 전 환경(개발/테스트)에서는 스크립트 옆의 lib로 보충.
 # 타깃은 /usr/local/bin/wifi 심볼릭 링크라 SCRIPT_DIR을 1차 경로로 못 쓴다.
-declare -f wifi_init_mode_to_bandcfg_mask >/dev/null 2>&1 || \
-    . "$SCRIPT_DIR/wifi_init_config_lib.sh" 2>/dev/null
+if ! declare -f wifi_init_mode_to_bandcfg_mask >/dev/null 2>&1; then
+    # 파일 존재 시에만 source — 없으면 조용히 skip(정상), 있으면 source의
+    # syntax error는 그대로 노출(2>/dev/null로 삼키지 않음).
+    [ -f "$SCRIPT_DIR/wifi_init_config_lib.sh" ] && . "$SCRIPT_DIR/wifi_init_config_lib.sh"
+fi
 
 tag=$(basename "$0")
 IFACE=mlan
@@ -153,6 +156,7 @@ get_vht_assoc_cap() {
 # 실기 검증(2026-06-15, 9098): 20=0x05c00000/bwcfg0, 40=0x05c20000/bwcfg0,
 # 80=0x05c20000/bwcfg1 조합이 HE 링크에서 reassociate로 양방향 전환됨.
 # stdout=결과 메시지, return: 0 ok / 2 invalid bw / 5 htcapinfo / 6 vhtcfg
+# (6은 VHT cap GET 실패와 vhtcfg SET 실패 둘 다 포함 — 호출자 로그로 구분)
 apply_bw_caps() { # $1 iface, $2 bw
     local iface="$1" bw="$2" htcap vhtbw vhtcap
     htcap=$(wifi_init_bw_to_htcap "$bw")
@@ -173,6 +177,22 @@ apply_bw_caps() { # $1 iface, $2 bw
     mlanutl "$iface" vhtcfg 2 2 "$vhtbw" "$vhtcap" >/dev/null 2>&1 || return 6
     echo "htcapinfo $htcap / vhtcfg bwcfg=$vhtbw applied (bw=$bw)"
     return 0
+}
+
+# apply_bw_caps 호출 + 결과 메시지 + 실패 시 rollback/exit를 일원화.
+# mode 경로와 bw-only 경로의 중복 case 블록을 단일 정의로 통합한다.
+# 성공 시 반환, 실패 시 적절한 exit 코드로 스크립트 종료(같은 셸, subshell 아님).
+apply_bw_or_exit() { # $1 iface, $2 bw_cap
+    local iface="$1" bw_cap="$2" msg rc
+    msg=$(apply_bw_caps "$iface" "$bw_cap"); rc=$?
+    [ -n "$msg" ] && echo "$msg"
+    case "$rc" in
+        0) return 0 ;;
+        2) echo "Error: invalid radio.bw '$R_BW'" >&2; rollback_radio_live "$iface"; exit 2 ;;
+        5) echo "Error: htcapinfo failed for $iface" >&2; logger -p local0.err "[$tag:$LINENO] [$iface] htcapinfo failed"; rollback_radio_live "$iface"; exit 5 ;;
+        6) echo "Error: vhtcfg failed for $iface" >&2; logger -p local0.err "[$tag:$LINENO] [$iface] vhtcfg failed"; rollback_radio_live "$iface"; exit 6 ;;
+        *) echo "Error: apply_bw_caps unexpected rc=$rc for $iface" >&2; rollback_radio_live "$iface"; exit 6 ;;
+    esac
 }
 
 # wpa_cli는 데몬 응답이 FAIL이어도 exit 0이므로 출력 문자열로 성공 판정
@@ -214,6 +234,8 @@ rollback_radio_live() { # $1 iface
         logger -p local0.warning "[$tag:$LINENO] [$1] rollback: SNAP_BAND empty — bandcfg not restored"
     fi
     if [ -n "${SNAP_HT_BG:-}" ] && [ -n "${SNAP_HT_A:-}" ]; then
+        # A && B || C: BG 복원(A) 실패 시 B 건너뛰고 C(logger), 또는 A 성공+B 실패 시 C.
+        # 즉 두 밴드 중 하나라도 복원 실패하면 경고 — 의도된 동작.
         mlanutl "$1" htcapinfo "$SNAP_HT_BG" 1 >/dev/null 2>&1 && \
         mlanutl "$1" htcapinfo "$SNAP_HT_A" 2 >/dev/null 2>&1 || \
             logger -p local0.warning "[$tag:$LINENO] [$1] rollback: htcapinfo restore failed"
@@ -768,7 +790,7 @@ case "$1" in
   ip)
     # wifi N ip {addr}로 persist한 .network 설정을 실제 반영
     if [ "$2" = "apply" ]; then
-        echo "Warning: all networkd-managed interfaces will be briefly interrupted" >&2
+        echo "Notice: all networkd-managed interfaces will be briefly interrupted" >&2
         echo "restarting systemd-networkd to apply ip configuration..."
         if systemctl restart systemd-networkd; then
             echo "systemd-networkd restarted"
@@ -1576,17 +1598,7 @@ case "$2" in
             exit 4
         fi
         echo "bandcfg $MODE_MASK applied (mode=$R_MODE)"
-        if [ -n "$R_BW" ]; then
-            BW_MSG=$(apply_bw_caps "$IFACE" "$R_BW_CAP"); BW_RC=$?
-            [ -n "$BW_MSG" ] && echo "$BW_MSG"
-            case "$BW_RC" in
-                0) ;;
-                2) echo "Error: invalid radio.bw '$R_BW'" >&2; rollback_radio_live "$IFACE"; exit 2 ;;
-                5) echo "Error: htcapinfo failed for $IFACE" >&2; logger -p local0.err "[$tag:$LINENO] [$IFACE] htcapinfo failed"; rollback_radio_live "$IFACE"; exit 5 ;;
-                6) echo "Error: vhtcfg failed for $IFACE" >&2; logger -p local0.err "[$tag:$LINENO] [$IFACE] vhtcfg failed"; rollback_radio_live "$IFACE"; exit 6 ;;
-                *) echo "Error: apply_bw_caps unexpected rc=$BW_RC for $IFACE" >&2; rollback_radio_live "$IFACE"; exit 6 ;;
-            esac
-        fi
+        [ -n "$R_BW" ] && apply_bw_or_exit "$IFACE" "$R_BW_CAP"
         if ! wpa_cli_ok "$IFACE" reconfigure; then
             echo "Error: wpa_cli reconfigure failed for $IFACE (check wpa_supplicant conf syntax)" >&2
             rollback_radio_live "$IFACE"
@@ -1605,17 +1617,8 @@ case "$2" in
             echo "nothing to apply for $IFACE (mode already live, no bw change)"
             exit 0
         fi
-        if [ -n "$R_BW" ]; then
-            BW_MSG=$(apply_bw_caps "$IFACE" "$R_BW_CAP"); BW_RC=$?
-            [ -n "$BW_MSG" ] && echo "$BW_MSG"
-            case "$BW_RC" in
-                0) ;;
-                2) echo "Error: invalid radio.bw '$R_BW'" >&2; rollback_radio_live "$IFACE"; exit 2 ;;
-                5) echo "Error: htcapinfo failed for $IFACE" >&2; logger -p local0.err "[$tag:$LINENO] [$IFACE] htcapinfo failed"; rollback_radio_live "$IFACE"; exit 5 ;;
-                6) echo "Error: vhtcfg failed for $IFACE" >&2; logger -p local0.err "[$tag:$LINENO] [$IFACE] vhtcfg failed"; rollback_radio_live "$IFACE"; exit 6 ;;
-                *) echo "Error: apply_bw_caps unexpected rc=$BW_RC for $IFACE" >&2; rollback_radio_live "$IFACE"; exit 6 ;;
-            esac
-        fi
+        # 위 가드로 R_BW는 항상 non-empty — apply_bw_or_exit 무조건 호출
+        apply_bw_or_exit "$IFACE" "$R_BW_CAP"
         if ! wpa_cli_ok "$IFACE" reassociate; then
             echo "Error: wpa_cli reassociate failed for $IFACE" >&2
             rollback_radio_live "$IFACE"
