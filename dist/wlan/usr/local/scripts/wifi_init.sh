@@ -565,6 +565,100 @@ apply_mcs_tier() {
         logger -p local0.err "[$tag:$LINENO] [$iface] mcstiercfg failed"
 }
 
+# .{iface}.radio.{mode,bw} 부팅 재적용 (wifi.sh의 mode/bw/radio-apply와 동기 유지).
+# bandcfg/htcapinfo/vhtcfg는 드라이버 RAM 전용이라 insmod마다 FW 기본값으로
+# 복원되므로 여기서 다시 적용한다. 부팅 경로이므로 실패해도 항상 0을 반환
+# (wifi_init.service OnFailure=emergency reboot 방지) — 실패는 logger로만 남긴다.
+apply_radio_mode_bw() {
+    local iface="$1"
+    local mode bw mask htcap vhtbw vhtcap ok i freq_bands
+
+    [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1 || return 0
+
+    mode=$(jq -r ".${iface}.radio.mode // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    bw=$(jq -r ".${iface}.radio.bw // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    [ -z "$mode" ] && [ -z "$bw" ] && return 0
+
+    # 이미 연결된 상태면 bandcfg는 무조건 실패(-EOPNOTSUPP)하고 htcapinfo/vhtcfg만
+    # 적용돼 mode/bw split-brain이 됨 → 둘 다 건너뛰고 radio-apply 안내만 남긴다.
+    if iw dev "$iface" link 2>/dev/null | grep -q '^Connected'; then
+        logger -p local0.info "[$tag:$LINENO] [$iface] connected; skip radio mode/bw re-apply (use 'wifi N radio-apply')"
+        return 0
+    fi
+
+    # freq↔mode 교차 검증 (wifi.sh radio-apply exit 11 가드와 동기 유지):
+    # b/g(2.4G 전용 마스크) + 5G 전용 freq_list는 연결 불가 조합 — mode 적용을
+    # 건너뛰어 연결성을 보존한다 (부팅 비치명 원칙, skip+log).
+    if { [ "$mode" = "b" ] || [ "$mode" = "g" ]; }; then
+        freq_bands=$(wifi_init_conf_freq_bands "${WPA_CONF_DIR:-/etc/wpa_supplicant}/wpa_supplicant-${iface}.conf")
+        if [ "$freq_bands" = "5G" ]; then
+            logger -p local0.err "[$tag:$LINENO] [$iface] radio.mode=$mode with 5G-only freq_list — dead combo; skip mode (fix freq or mode, then 'wifi N radio-apply')"
+            mode=""
+            # bw는 모드와 독립이라 계속 적용 — 모드 미변경 상태(기존 5G 연결)에서도
+            # HT/VHT BW 제한은 유효하다 (의도된 동작).
+            [ -z "$bw" ] && return 0
+        fi
+    fi
+
+    # bw는 htcapinfo/vhtcfg cap으로 적용한다(아래). 실기 검증(2026-06-15):
+    # HE 연결도 이 cap에서 BW가 파생되며(20=0x05c00000/bwcfg0, 40=0x05c20000/bwcfg0,
+    # 80=0x05c20000/bwcfg1), 부팅 disconnected 상태에서 cap 설정 후 wpa_supplicant
+    # 첫 assoc이 해당 폭으로 협상된다. OMI 경로는 폐기(NXP FW가 STA BW 미반영).
+
+    if [ -n "$mode" ]; then
+        # 마스크 테이블은 wifi_init_config_lib.sh 단일 정의 사용
+        mask=$(wifi_init_mode_to_bandcfg_mask "$mode")
+        if [ -z "$mask" ]; then
+            logger -p local0.err "[$tag:$LINENO] [$iface] radio.mode invalid: $mode (skip)"
+            mask=""
+        fi
+        if [ "$iface" = "mlan1" ] && [ "$mode" = "ax" ]; then
+            logger -p local0.err "[$tag:$LINENO] [$iface] radio.mode=ax not supported on mlan1 (skip)"
+            mask=""
+        fi
+        if [ -n "$mask" ]; then
+            # 부팅 직후 첫 assoc과 경합 가능(-EOPNOTSUPP) → 0.2s×10 재시도
+            ok=""
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+                if mlanutl "$iface" bandcfg "$mask" > /dev/null 2>&1; then
+                    ok=1
+                    break
+                fi
+                sleep 0.2
+            done
+            if [ -n "$ok" ]; then
+                logger -p local0.info "[$tag:$LINENO] [$iface] bandcfg $mask (mode=$mode)"
+            else
+                logger -p local0.err "[$tag:$LINENO] [$iface] bandcfg $mask failed (mode=$mode; run 'wifi N radio-apply' to retry)"
+            fi
+        fi
+    fi
+
+    if [ -n "$bw" ]; then
+        # BW 매핑 테이블은 wifi_init_config_lib.sh 단일 정의 사용
+        htcap=$(wifi_init_bw_to_htcap "$bw")
+        vhtbw=$(wifi_init_bw_to_vhtbw "$bw")
+        if [ -z "$htcap" ] || [ -z "$vhtbw" ]; then
+            logger -p local0.err "[$tag:$LINENO] [$iface] radio.bw invalid: $bw (skip)"
+            return 0
+        fi
+        # apply_iface_radio_defaults의 mlanutl 연속 호출 간격 관례와 동일
+        sleep 0.2
+        mlanutl "$iface" htcapinfo "$htcap" > /dev/null 2>&1 || \
+            logger -p local0.err "[$tag:$LINENO] [$iface] htcapinfo $htcap failed (bw=$bw)"
+        vhtcap=$(mlanutl "$iface" vhtcfg 2 2 2>/dev/null | awk '/VHT Capabilities Info/ {print $NF; exit}')
+        if [ -n "$vhtcap" ]; then
+            mlanutl "$iface" vhtcfg 2 2 "$vhtbw" "$vhtcap" > /dev/null 2>&1 || \
+                logger -p local0.err "[$tag:$LINENO] [$iface] vhtcfg 2 2 $vhtbw $vhtcap failed (bw=$bw)"
+        else
+            logger -p local0.err "[$tag:$LINENO] [$iface] vhtcfg GET failed; skip vht bw (bw=$bw)"
+        fi
+        logger -p local0.info "[$tag:$LINENO] [$iface] radio bw=$bw (htcapinfo $htcap, vht bwcfg=$vhtbw)"
+    fi
+
+    return 0
+}
+
 apply_iface_radio_defaults() {
     local iface="$1"
     local enabled="$2"
@@ -589,6 +683,10 @@ apply_iface_radio_defaults() {
     sleep 0.2
     logger -p local0.info "[$tag:$LINENO] [$iface] macctrl: 0x00010e13, httxcfg: 0x00000063, htcapinfo: 0x05c20000, reassoctrl: enable"
     mlanutl "$iface" reassoctrl 1 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] reassoctrl failed"
+
+    # Re-apply persisted radio mode/bw (위 htcapinfo 기본값을 의도적으로 덮어씀).
+    # 함수는 부팅 보호를 위해 항상 0을 반환하고 실패는 내부에서 logger로 남긴다.
+    apply_radio_mode_bw "$iface"
 
     # Apply rate_adapt_cfg (per-iface override > global, must be set before association)
     local ra_mode ra_low ra_high ra_interval ra_interval_ms

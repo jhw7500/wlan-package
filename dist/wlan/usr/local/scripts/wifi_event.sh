@@ -50,6 +50,11 @@ apply_mcs_tier() {
     fi
 }
 
+# radio.bw(20/40/80) HE 클램프는 OMI 경로를 폐기함(2026-06-15 실기: NXP FW가
+# OMI로 STA 동작 BW를 안 바꿈). BW는 htcapinfo/vhtcfg cap에서 파생되며, cap은
+# 호스트 usr_* 필드라 roam/reconnect 시 새 assoc IE에 자동 반영될 것으로 기대
+# (실기 확인 항목). cap이 roam 후 풀리는 게 확인되면 여기서 cap 재적용 훅 추가.
+
 run_on_connect() {
     local bssid="$1"
     local enabled cmds
@@ -100,6 +105,17 @@ iw event -t 2>&1 | while IFS= read -r line; do
             logger -p local0.info "[$tag:$LINENO] [$IFACE] CONNECTED bssid=$bssid"
             apply_mcs_tier
             run_on_connect "$bssid"
+            ;;
+        *"$IFACE"*"roamed to"*)
+            # FW 주도 로밍 전용 케이스 — cfg80211_roamed 경로는 "roamed to"로
+            # 표면화된다. 주력인 수동 로밍(wpa_cli roam — wifi_roam.py:1242)은
+            # nl80211 connect 경로(cfg80211_connect_result)라 "connected to"로
+            # 표면화되어 위 케이스가 커버한다.
+            # per-association FW 상태(mcstier)를 재적용한다. radio.bw cap은
+            # 호스트 usr_* 필드라 새 assoc IE에 자동 반영될 것으로 기대(실기 확인).
+            bssid=$(echo "$line" | grep -oE '([0-9a-f]{2}:){5}[0-9a-f]{2}' | head -1)
+            logger -p local0.info "[$tag:$LINENO] [$IFACE] ROAMED bssid=$bssid"
+            apply_mcs_tier
             ;;
         *"$IFACE"*"disconnected"*)
             reason=$(echo "$line" | sed -n 's/.*reason: \([0-9]*\).*/\1/p')

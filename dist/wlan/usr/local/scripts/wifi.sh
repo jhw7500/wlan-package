@@ -2,6 +2,13 @@
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 # shellcheck source=./wifi_init_config_lib.sh
 . "/usr/local/scripts/wifi_init_config_lib.sh"
+# 설치 전 환경(개발/테스트)에서는 스크립트 옆의 lib로 보충.
+# 타깃은 /usr/local/bin/wifi 심볼릭 링크라 SCRIPT_DIR을 1차 경로로 못 쓴다.
+if ! declare -f wifi_init_mode_to_bandcfg_mask >/dev/null 2>&1; then
+    # 파일 존재 시에만 source — 없으면 조용히 skip(정상), 있으면 source의
+    # syntax error는 그대로 노출(2>/dev/null로 삼키지 않음).
+    [ -f "$SCRIPT_DIR/wifi_init_config_lib.sh" ] && . "$SCRIPT_DIR/wifi_init_config_lib.sh"
+fi
 
 tag=$(basename "$0")
 IFACE=mlan
@@ -128,10 +135,170 @@ ensure_wifi_init_conf() {
     :
 }
 
+# ----- radio mode/bw helpers -----
+# bandcfg 마스크 테이블은 wifi_init.sh와 공용 —
+# wifi_init_config_lib.sh:wifi_init_mode_to_bandcfg_mask() 사용 (단일 정의).
+
+# 모드 세대 비교용 랭크 (STANDARD n/ac/ax와 radio.mode 모순 감지)
+mode_rank() {
+    case "$1" in
+        b) echo 1 ;; g) echo 2 ;; a) echo 3 ;; n) echo 4 ;; ac) echo 5 ;; ax) echo 6 ;;
+        *) echo 0 ;;
+    esac
+}
+
+# 5G association용 VHT cap GET ("0x........" 또는 빈 문자열)
+get_vht_assoc_cap() {
+    mlanutl "$1" vhtcfg 2 2 2>/dev/null | awk '/VHT Capabilities Info/ {print $NF; exit}'
+}
+
+# bw에 맞춰 htcapinfo(HT40 enable 비트) + vhtcfg(bwcfg)를 적용.
+# 실기 검증(2026-06-15, 9098): 20=0x05c00000/bwcfg0, 40=0x05c20000/bwcfg0,
+# 80=0x05c20000/bwcfg1 조합이 HE 링크에서 reassociate로 양방향 전환됨.
+# stdout=결과 메시지, return: 0 ok / 2 invalid bw / 5 htcapinfo / 6 vhtcfg
+# (6은 VHT cap GET 실패와 vhtcfg SET 실패 둘 다 포함 — 호출자 로그로 구분)
+apply_bw_caps() { # $1 iface, $2 bw
+    local iface="$1" bw="$2" htcap vhtbw vhtcap
+    htcap=$(wifi_init_bw_to_htcap "$bw")
+    vhtbw=$(wifi_init_bw_to_vhtbw "$bw")
+    { [ -z "$htcap" ] || [ -z "$vhtbw" ]; } && return 2
+    mlanutl "$iface" htcapinfo "$htcap" >/dev/null 2>&1 || return 5
+    vhtcap=$(get_vht_assoc_cap "$iface")
+    if [ -z "$vhtcap" ]; then
+        # VHT cap GET 불가 + 20/40(bwcfg=0)이면 11N htcapinfo만으로 충분
+        [ "$vhtbw" = "0" ] && {
+            echo "htcapinfo $htcap applied (bw=$bw; VHT cap unavailable, vhtcfg skipped)"
+            return 0
+        }
+        # bwcfg=1(80/auto/default)은 VHT cap이 필수인데 GET 실패 — 원인 명시
+        echo "vhtcfg skipped: VHT cap GET failed (bw=$bw needs bwcfg=1)"
+        return 6
+    fi
+    mlanutl "$iface" vhtcfg 2 2 "$vhtbw" "$vhtcap" >/dev/null 2>&1 || return 6
+    echo "htcapinfo $htcap / vhtcfg bwcfg=$vhtbw applied (bw=$bw)"
+    return 0
+}
+
+# apply_bw_caps 호출 + 결과 메시지 + 실패 시 rollback/exit를 일원화.
+# mode 경로와 bw-only 경로의 중복 case 블록을 단일 정의로 통합한다.
+# 성공 시 반환, 실패 시 적절한 exit 코드로 스크립트 종료(같은 셸, subshell 아님).
+apply_bw_or_exit() { # $1 iface, $2 bw_cap
+    local iface="$1" bw_cap="$2" msg rc
+    msg=$(apply_bw_caps "$iface" "$bw_cap"); rc=$?
+    [ -n "$msg" ] && echo "$msg"
+    case "$rc" in
+        0) return 0 ;;
+        2) echo "Error: invalid radio.bw '$R_BW'" >&2; rollback_radio_live "$iface"; exit 2 ;;
+        5) echo "Error: htcapinfo failed for $iface" >&2; logger -p local0.err "[$tag:$LINENO] [$iface] htcapinfo failed"; rollback_radio_live "$iface"; exit 5 ;;
+        6) echo "Error: vhtcfg failed for $iface" >&2; logger -p local0.err "[$tag:$LINENO] [$iface] vhtcfg failed"; rollback_radio_live "$iface"; exit 6 ;;
+        *) echo "Error: apply_bw_caps unexpected rc=$rc for $iface" >&2; rollback_radio_live "$iface"; exit 6 ;;
+    esac
+}
+
+# wpa_cli는 데몬 응답이 FAIL이어도 exit 0이므로 출력 문자열로 성공 판정
+wpa_cli_ok() {
+    [ "$(wpa_cli -i "$1" "$2" 2>/dev/null)" = "OK" ]
+}
+
+# ----- radio staged-apply helpers -----
+# mode/bw는 /tmp(휘발)에 stage하고 radio-apply 성공 시에만 JSON에 commit한다.
+# 미커밋 stage는 재부팅 시 자동 소멸 (mcstier 마커와 동일한 /tmp 관례) —
+# 검증 안 된 설정이 부팅 재적용 경로에 들어가 기기가 고립되는 것을 방지.
+radio_pending_path() {
+    echo "/tmp/.radio_pending_${1}.${2}"
+}
+
+radio_stage_set() { # $1 iface, $2 key, $3 value
+    local f
+    f="$(radio_pending_path "$1" "$2")"
+    printf '%s\n' "$3" > "${f}.tmp" && mv "${f}.tmp" "$f"
+}
+
+radio_stage_get() { # $1 iface, $2 key → stdout (없으면 빈값)
+    cat "$(radio_pending_path "$1" "$2")" 2>/dev/null
+}
+
+# radio-apply 실패 시 적용 전 스냅샷으로 라이브 설정 복원 + 재연결 (best-effort).
+# SNAP_* 전역은 radio-apply가 disconnect 전에 GET으로 채운다.
+# 스냅샷이 비었거나 복원 호출이 실패하면 부분 롤백 — logger로 추적 가능하게 남긴다.
+# 이 경로는 HT/VHT cap(htcapinfo/vhtcfg)만 변경하므로 HE cap(user_he_cap) 스냅샷은
+# 의도적으로 없음. 향후 11axcfg로 user_he_cap을 직접 SET하는 코드가 추가되면
+# 여기에 HE cap 스냅샷/복원도 추가할 것.
+rollback_radio_live() { # $1 iface
+    logger -p local0.warning "[$tag:$LINENO] [$1] radio-apply: rolling back to pre-apply settings"
+    echo "rolling back to pre-apply settings..." >&2
+    if [ -n "${SNAP_BAND:-}" ]; then
+        mlanutl "$1" bandcfg "$SNAP_BAND" >/dev/null 2>&1 || \
+            logger -p local0.warning "[$tag:$LINENO] [$1] rollback: bandcfg $SNAP_BAND restore failed"
+    else
+        logger -p local0.warning "[$tag:$LINENO] [$1] rollback: SNAP_BAND empty — bandcfg not restored"
+    fi
+    if [ -n "${SNAP_HT_BG:-}" ] && [ -n "${SNAP_HT_A:-}" ]; then
+        # A && B || C: BG 복원(A) 실패 시 B 건너뛰고 C(logger), 또는 A 성공+B 실패 시 C.
+        # 즉 두 밴드 중 하나라도 복원 실패하면 경고 — 의도된 동작.
+        mlanutl "$1" htcapinfo "$SNAP_HT_BG" 1 >/dev/null 2>&1 && \
+        mlanutl "$1" htcapinfo "$SNAP_HT_A" 2 >/dev/null 2>&1 || \
+            logger -p local0.warning "[$tag:$LINENO] [$1] rollback: htcapinfo restore failed"
+    else
+        logger -p local0.warning "[$tag:$LINENO] [$1] rollback: htcapinfo snapshot incomplete (BG=${SNAP_HT_BG:-none} A=${SNAP_HT_A:-none}) — not restored"
+    fi
+    if [ -n "${SNAP_VHTBW:-}" ] && [ -n "${SNAP_VHTCAP:-}" ]; then
+        mlanutl "$1" vhtcfg 2 2 "$SNAP_VHTBW" "$SNAP_VHTCAP" >/dev/null 2>&1 || \
+            logger -p local0.warning "[$tag:$LINENO] [$1] rollback: vhtcfg restore failed"
+    else
+        logger -p local0.warning "[$tag:$LINENO] [$1] rollback: vht snapshot incomplete — vhtcfg not restored"
+    fi
+    # reassociate가 reconnect보다 부드럽고 cap 변경 반영이 확실 (실기 검증)
+    wpa_cli -i "$1" reassociate >/dev/null 2>&1 || wpa_cli -i "$1" reconnect >/dev/null 2>&1
+}
+# ------------------------------------
+
+# .{iface}.radio.{mode,bw}를 단일 jq 호출로 원자 commit (빈 인자는 생략).
+# 두 키를 별도 호출로 쓰면 첫 키만 기록되고 둘째가 실패하는 부분 커밋
+# 윈도우가 생기므로 한 번에 기록한다.
+update_json_radio() {
+    local iface="$1" mode="$2" bw="$3" tmp filter
+    [ -z "$mode" ] && [ -z "$bw" ] && return 0
+    if [ ! -f "$WIFI_INIT_CONF_JSON" ]; then
+        echo "Error: $WIFI_INIT_CONF_JSON not found" >&2
+        return 1
+    fi
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "Error: jq not installed" >&2
+        return 1
+    fi
+    filter="."
+    [ -n "$mode" ] && filter="$filter | .[\$i].radio.mode = \$m"
+    if [ "$bw" = "__del__" ]; then
+        filter="$filter | del(.[\$i].radio.bw)"   # bw default → committed 제거(AP 따라)
+    elif [ -n "$bw" ]; then
+        filter="$filter | .[\$i].radio.bw = \$b"
+    fi
+    # 고정 .tmp 대신 고유 tmp — 동시 호출(wifi 0 ... + wifi 1 ...) 시 파손 방지.
+    # EXIT trap은 22행의 글로벌 sync trap을 덮어쓰므로 RETURN trap 사용
+    # (apply_sed_update와 동일 패턴).
+    tmp="$(safe_tmp_for "$WIFI_INIT_CONF_JSON")"
+    trap 'rm -f "$tmp"' RETURN
+    if jq --arg i "$iface" --arg m "$mode" --arg b "$bw" "$filter" \
+        "$WIFI_INIT_CONF_JSON" > "$tmp"; then
+        chmod 0644 "$tmp" 2>/dev/null
+        mv "$tmp" "$WIFI_INIT_CONF_JSON"
+        sync "$WIFI_INIT_CONF_JSON" 2>/dev/null || sync
+        trap - RETURN
+    else
+        rm -f "$tmp"
+        trap - RETURN
+        echo "Error: JSON radio commit failed for ${iface} (mode=${mode:-keep} bw=${bw:-keep})" >&2
+        return 1
+    fi
+}
+# ------------------------------------
+
 usage() {
     echo "Usage: wifi {0|1|2|mlan0|mlan1|eth0} {start|up|stop|down|restart|status} : runtime"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} info : show current configuration and status"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} ip {address/netmask} : persist"
+    echo "       wifi ip apply : runtime (systemctl restart systemd-networkd — 전체 networkd 관리 인터페이스 일시 중단; 실패 시 exit 1)"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} gt {address} : persist"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} mac {0|1|base|target} {mac_address} : persist"
     echo "       wifi {0|1|mlan0|mlan1} br {up|down|start|stop|restart} : runtime"
@@ -153,6 +320,11 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} stat interval {seconds} : set stat reset interval (persist)"
     echo "       wifi {0|1|mlan0|mlan1} mon [c|compact] [interval] [--summary-lines N] [--roam-display N]"
     echo "       wifi {0|1|mlan0|mlan1} mcs [on|off|reset|ht <7|15> vht <7|8|9> he <7|9|11>] : persist+runtime"
+    echo "       wifi {0|1|mlan0|mlan1} mode [b|g|a|n|ac|ax] : stage (radio-apply 성공 시 persist, mlan1은 ax 불가)"
+    echo "       wifi {0|1|mlan0|mlan1} bw [20|40|80|auto|default] : stage (radio-apply 성공 시 persist; default=AP 따라)"
+    echo "       wifi {0|1|mlan0|mlan1} radio-apply [timeout_s] : runtime (적용 성공 시 commit, 실패 시 라이브 롤백+재연결)"
+    echo "         radio-apply exit: 0=ok 2=usage 3=env 4=bandcfg 5=htcapinfo 6=vhtcfg 7=wpa_cli 8=assoc-timeout 9=json/commit 11=b/g+5G-freq"
+    echo "       wifi {0|1|mlan0|mlan1} radio-discard : staged mode/bw 변경 취소"
     echo "       wifi txpwr {0|1|2|3|no|default|low|org|conf_file_name} : persist"
     echo "       wifi cal {0|1|2|None|WlanCalData_ext.conf|WlanCalData_ext_RD.conf|*} : persist"
     echo "       wifi mfg {0|1|off|on} : persist"
@@ -614,6 +786,24 @@ case "$1" in
     update_json_global "STANDARD" "$VAL"
     echo "STANDARD updated to $VAL in $WIFI_INIT_CONF_JSON"
     exit 1
+    ;;
+  ip)
+    # wifi N ip {addr}로 persist한 .network 설정을 실제 반영
+    if [ "$2" = "apply" ]; then
+        echo "Notice: all networkd-managed interfaces will be briefly interrupted" >&2
+        echo "restarting systemd-networkd to apply ip configuration..."
+        if systemctl restart systemd-networkd; then
+            echo "systemd-networkd restarted"
+            exit 0
+        else
+            echo "Error: systemd-networkd restart failed" >&2
+            exit 1
+        fi
+    else
+        # usage()는 자체 exit 1 하지만, 명시적 exit로 의도를 못박는다
+        usage
+        exit 2
+    fi
     ;;
   log)
     if [ "$2" == "all" ]; then
@@ -1166,8 +1356,312 @@ case "$2" in
         exit 1
     fi
 
+    # persist/staged radio.mode가 새 STANDARD를 초과하면 부팅 후 bandcfg가 거부됨 — 경고
+    R_MODE_CUR=$(radio_stage_get "$IFACE" mode)
+    [ -z "$R_MODE_CUR" ] && \
+        R_MODE_CUR=$(jq -r ".${IFACE}.radio.mode // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    if [ -n "$R_MODE_CUR" ] && [ "$(mode_rank "$R_MODE_CUR")" -gt "$(mode_rank "$VAL")" ]; then
+        echo "Warning: persisted radio.mode=$R_MODE_CUR exceeds new STANDARD=$VAL." >&2
+        echo "         Lower it with 'wifi $NUM mode $VAL' or bandcfg will fail after reboot." >&2
+    fi
+
     update_json_iface "$IFACE" "STANDARD" "$VAL"
     echo "STANDARD updated to $VAL for $IFACE in $WIFI_INIT_CONF_JSON"
+    ;;
+  mode)
+    # 무선 모드(b/g/a/n/ac/ax) persist. 런타임 적용은 radio-apply.
+    # exit: 0=ok 2=usage 9=json
+    if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
+        echo "Error: mode supports mlan0/mlan1 only" >&2
+        exit 2
+    fi
+    MODE_VAL=$(echo "${3:-}" | tr '[:upper:]' '[:lower:]')
+    if [ -z "$MODE_VAL" ] || [ "$MODE_VAL" = "get" ]; then
+        echo "--- Committed ($WIFI_INIT_CONF_JSON) ---"
+        jq -r ".${IFACE}.radio.mode // \"(not configured: chip default)\"" \
+            "$WIFI_INIT_CONF_JSON" 2>/dev/null || echo "(JSON/jq not available)"
+        MODE_PEND=$(radio_stage_get "$IFACE" mode)
+        echo "--- Staged (radio-apply 대기) ---"
+        echo "${MODE_PEND:-(none)}"
+        echo "--- Effective STANDARD (dev_cap_mask, 부팅 적용) ---"
+        jq -r ".${IFACE}.STANDARD // .global.STANDARD // \"(not set: chip max)\"" \
+            "$WIFI_INIT_CONF_JSON" 2>/dev/null || echo "(JSON/jq not available)"
+        echo "--- Live bandcfg ($IFACE) ---"
+        mlanutl "$IFACE" bandcfg 2>/dev/null || echo "(bandcfg not available)"
+        exit 0
+    fi
+    MODE_MASK=$(wifi_init_mode_to_bandcfg_mask "$MODE_VAL")
+    if [ -z "$MODE_MASK" ]; then
+        echo "Error: mode must be one of b|g|a|n|ac|ax" >&2
+        exit 2
+    fi
+    if [ "$IFACE" = "mlan1" ] && [ "$MODE_VAL" = "ax" ]; then
+        echo "Error: mlan1 does not support ax (11ax). Use n or ac." >&2
+        exit 2
+    fi
+    # STANDARD(dev_cap_mask)가 더 낮으면 FW cap이 잘려 bandcfg가 거부됨 — 사전 경고
+    EFF_STD=$(jq -r ".${IFACE}.STANDARD // .global.STANDARD // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    if [ -n "$EFF_STD" ] && [ "$(mode_rank "$MODE_VAL")" -gt "$(mode_rank "$EFF_STD")" ]; then
+        echo "Warning: STANDARD=$EFF_STD caps FW capability below mode=$MODE_VAL." >&2
+        echo "         radio-apply will fail (exit 4) until 'wifi $NUM standard $MODE_VAL' + reboot." >&2
+    fi
+    # b/g(2.4G 전용 마스크) + 5G 전용 freq_list는 연결 불가 조합 — 사전 경고
+    # (persist는 허용: freq를 이후에 바꿀 수 있으므로. 강제 거부는 radio-apply exit 11)
+    if [ "$MODE_VAL" = "b" ] || [ "$MODE_VAL" = "g" ]; then
+        MODE_FREQ_BANDS=$(wifi_init_conf_freq_bands "${WPA_CONF_DIR:-/etc/wpa_supplicant}/wpa_supplicant-${IFACE}.conf")
+        if [ "$MODE_FREQ_BANDS" = "5G" ]; then
+            echo "Warning: freq_list is 5G-only but mode=$MODE_VAL is 2.4G-only — radio-apply will be rejected (exit 11)." >&2
+            echo "         Change freq with 'wifi $NUM freq <2.4G ch>' before applying." >&2
+        fi
+    fi
+    radio_stage_set "$IFACE" "mode" "$MODE_VAL" || { echo "Error: stage write failed" >&2; exit 9; }
+    echo "radio.mode = $MODE_VAL (bandcfg $MODE_MASK) staged for $IFACE"
+    echo "(apply: 'wifi $NUM radio-apply' — 성공 시에만 JSON persist, 취소: 'wifi $NUM radio-discard')"
+    exit 0
+    ;;
+  bw)
+    # 대역폭(20/40/80MHz) persist. 런타임 적용은 radio-apply.
+    # exit: 0=ok 2=usage 9=json
+    if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
+        echo "Error: bw supports mlan0/mlan1 only" >&2
+        exit 2
+    fi
+    BW_VAL=$(echo "${3:-}" | tr '[:upper:]' '[:lower:]')
+    if [ -z "$BW_VAL" ] || [ "$BW_VAL" = "get" ]; then
+        echo "--- Committed ($WIFI_INIT_CONF_JSON) ---"
+        jq -r ".${IFACE}.radio.bw // \"(not configured: chip default)\"" \
+            "$WIFI_INIT_CONF_JSON" 2>/dev/null || echo "(JSON/jq not available)"
+        BW_PEND=$(radio_stage_get "$IFACE" bw)
+        echo "--- Staged (radio-apply 대기) ---"
+        echo "${BW_PEND:-(none)}"
+        echo "--- Live htcapinfo/vhtcfg ($IFACE) ---"
+        mlanutl "$IFACE" htcapinfo 2>/dev/null || echo "(htcapinfo not available)"
+        mlanutl "$IFACE" vhtcfg 2 2 2>/dev/null || echo "(vhtcfg not available)"
+        exit 0
+    fi
+    case "$BW_VAL" in
+        20|40|80|auto|default) ;;  # default = AP 따라(committed 제거)
+        *)
+            echo "Error: bw must be one of 20|40|80|auto|default" >&2
+            exit 2
+            ;;
+    esac
+    radio_stage_set "$IFACE" "bw" "$BW_VAL" || { echo "Error: stage write failed" >&2; exit 9; }
+    echo "radio.bw = $BW_VAL staged for $IFACE"
+    echo "(apply: 'wifi $NUM radio-apply' — 성공 시에만 JSON persist, 취소: 'wifi $NUM radio-discard')"
+    exit 0
+    ;;
+  radio-discard | radio_discard)
+    if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
+        echo "Error: radio-discard supports mlan0/mlan1 only" >&2
+        exit 2
+    fi
+    rm -f "$(radio_pending_path "$IFACE" mode)" "$(radio_pending_path "$IFACE" bw)"
+    echo "staged radio mode/bw changes discarded for $IFACE"
+    exit 0
+    ;;
+  radio-apply | radio_apply)
+    # staged(pending) radio.mode/radio.bw를 적용하고 성공 시에만 JSON에 commit하는
+    # 트랜잭션 시퀀스. 실패 시 적용 전 스냅샷으로 라이브 롤백 + 재연결.
+    # mode 변경: disconnect → bandcfg(재시도) → cap → reconfigure → reconnect
+    # bw-only: cap(htcapinfo/vhtcfg) → reassociate  (HE 포함 양방향, 무중단)
+    # → assoc 대기 → commit(또는 bw=default면 radio.bw 삭제)
+    # exit: 0=ok 2=usage 3=env 4=bandcfg 5=htcapinfo 6=vhtcfg 7=wpa_cli 8=assoc-timeout 9=json/commit 11=b/g+5G-freq
+    if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
+        echo "Error: radio-apply supports mlan0/mlan1 only" >&2
+        exit 2
+    fi
+    ASSOC_TIMEOUT="${3:-15}"
+    if ! [[ "$ASSOC_TIMEOUT" =~ ^[0-9]+$ ]] || [ "$ASSOC_TIMEOUT" -lt 1 ]; then
+        echo "Error: timeout_s must be a positive integer" >&2
+        exit 2
+    fi
+    for _tool in mlanutl wpa_cli jq; do
+        if ! command -v "$_tool" >/dev/null 2>&1; then
+            echo "Error: $_tool not found" >&2
+            exit 3
+        fi
+    done
+    if [ ! -f "$WIFI_INIT_CONF_JSON" ]; then
+        echo "Error: $WIFI_INIT_CONF_JSON not found" >&2
+        exit 3
+    fi
+    # JSON 파손이 '설정 없음(exit 0)'으로 위장하지 않도록 유효성 선검사
+    if ! jq -e . "$WIFI_INIT_CONF_JSON" >/dev/null 2>&1; then
+        echo "Error: invalid JSON in $WIFI_INIT_CONF_JSON" >&2
+        exit 9
+    fi
+    R_MODE_JSON=$(jq -r ".${IFACE}.radio.mode // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null) || {
+        echo "Error: cannot read .${IFACE}.radio.mode from $WIFI_INIT_CONF_JSON" >&2
+        exit 9
+    }
+    R_BW_JSON=$(jq -r ".${IFACE}.radio.bw // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null) || {
+        echo "Error: cannot read .${IFACE}.radio.bw from $WIFI_INIT_CONF_JSON" >&2
+        exit 9
+    }
+    # 적용 대상 = staged(pending) 우선, 없으면 committed 재적용
+    R_MODE_PEND=$(radio_stage_get "$IFACE" mode)
+    R_BW_PEND=$(radio_stage_get "$IFACE" bw)
+    R_MODE="${R_MODE_PEND:-$R_MODE_JSON}"
+    R_BW="${R_BW_PEND:-$R_BW_JSON}"
+    if [ -z "$R_MODE" ] && [ -z "$R_BW" ]; then
+        echo "nothing to apply: radio.mode/radio.bw not staged or committed for $IFACE"
+        exit 0
+    fi
+    # bw=default: cap은 AP 최대(80=0x05c20000/bwcfg1)로 열어 AP 따라가게 하고,
+    # commit 시 radio.bw를 JSON에서 삭제(부팅 재적용 대상에서 제외 = 디폴트 복귀).
+    R_BW_DEFAULT=""
+    R_BW_CAP="$R_BW"
+    if [ "$R_BW" = "default" ]; then
+        R_BW_CAP=80
+        # radio.bw 삭제(__del__)는 staged default일 때만 — committed 잔재가
+        # 사용자 미요청 삭제를 유발하지 않도록 staged 입력에 한정.
+        [ "$R_BW_PEND" = "default" ] && R_BW_DEFAULT=1
+    fi
+    # freq↔mode 교차 검증: b/g 마스크(0x1/0x3)는 5G 비트가 없어 freq_list가
+    # 5G 전용이면 스캔 채널 0개("Scan: No channel configured")로 영구 SCANNING에
+    # 빠진다 → 링크를 건드리기 전에 즉시 거부. 2G+5G 혼합이면 안내만 출력.
+    if [ "$R_MODE" = "b" ] || [ "$R_MODE" = "g" ]; then
+        R_CONF="${WPA_CONF_DIR:-/etc/wpa_supplicant}/wpa_supplicant-${IFACE}.conf"
+        R_FREQ_BANDS=$(wifi_init_conf_freq_bands "$R_CONF")
+        if [ "$R_FREQ_BANDS" = "5G" ]; then
+            echo "Error: mode=$R_MODE is 2.4G-only but freq_list/scan_freq in $R_CONF is 5G-only — STA can never associate." >&2
+            echo "       Fix with 'wifi $NUM freq <2.4G ch>' or 'wifi $NUM mode a' (or higher), then retry." >&2
+            exit 11
+        elif [ "$R_FREQ_BANDS" = "2G 5G" ]; then
+            echo "Notice: mode=$R_MODE is 2.4G-only — 5G entries in freq_list will be silently ignored."
+        fi
+    fi
+    if [ -n "$R_MODE" ]; then
+        MODE_MASK=$(wifi_init_mode_to_bandcfg_mask "$R_MODE")
+        if [ -z "$MODE_MASK" ]; then
+            echo "Error: invalid radio.mode '$R_MODE' in $WIFI_INIT_CONF_JSON" >&2
+            exit 2
+        fi
+        if [ "$IFACE" = "mlan1" ] && [ "$R_MODE" = "ax" ]; then
+            echo "Error: mlan1 does not support ax (11ax)" >&2
+            exit 2
+        fi
+    fi
+    # 실패 시 롤백용 적용 전 스냅샷
+    SNAP_BAND=$(mlanutl "$IFACE" bandcfg 2>/dev/null | sed -n 's/.*Infra Band: \(0x[0-9a-fA-F]*\).*/\1/p' | head -1)
+    SNAP_HT_OUT=$(mlanutl "$IFACE" htcapinfo 2>/dev/null)
+    SNAP_HT_BG=$(printf '%s\n' "$SNAP_HT_OUT" | sed -n 's/^[[:space:]]*BG band:[[:space:]]*\(0x[0-9a-fA-F]*\).*/\1/p' | head -1)
+    SNAP_HT_A=$(printf '%s\n' "$SNAP_HT_OUT" | sed -n 's/^[[:space:]]*A band:[[:space:]]*\(0x[0-9a-fA-F]*\).*/\1/p' | head -1)
+    SNAP_VHT_OUT=$(mlanutl "$IFACE" vhtcfg 2 2 2>/dev/null)
+    SNAP_VHTCAP=$(printf '%s\n' "$SNAP_VHT_OUT" | awk '/VHT Capabilities Info/ {print $NF; exit}')
+    case "$SNAP_VHT_OUT" in
+        *"Follow BW in the 11N"*) SNAP_VHTBW=0 ;;
+        *"Follow BW in VHT"*)     SNAP_VHTBW=1 ;;
+        *)                        SNAP_VHTBW="" ;;
+    esac
+
+    # bandcfg(=mode 적용)는 disconnect가 필요하다. mode를 새로 stage했거나,
+    # committed mode가 라이브 bandcfg와 달라 재적용이 필요할 때만 disconnect 경로.
+    # bw만 바꾸는 경우는 cap 적용 후 reassociate — 실기에서 HE 80↔40↔20
+    # 양방향 전환이 검증된 무중단 경로(disconnect/reconnect는 40에서 SCANNING).
+    APPLY_MODE=""
+    if [ -n "$R_MODE_PEND" ]; then
+        APPLY_MODE=1
+    elif [ -n "$R_MODE" ] && [ -n "$MODE_MASK" ]; then
+        # committed mode가 라이브와 다르면 bandcfg 재적용 — 부팅 connected-skip
+        # (wifi_init.sh) 후 'wifi N radio-apply' 복구 경로가 mode를 실제 적용하도록.
+        _live_band=$(printf '%s' "${SNAP_BAND:-}" | tr 'ABCDEF' 'abcdef')
+        _want_band=$(printf '%s' "$MODE_MASK" | tr 'ABCDEF' 'abcdef')
+        if [ "$_live_band" != "$_want_band" ]; then
+            APPLY_MODE=1
+            logger -p local0.info "[$tag:$LINENO] [$IFACE] committed mode=$R_MODE not live (band ${_live_band:-none} != $_want_band) — applying via bandcfg"
+        fi
+    fi
+    logger -p local0.info "[$tag:$LINENO] [$IFACE] radio-apply: mode=${R_MODE:-keep} bw=${R_BW:-keep} (pending: mode=${R_MODE_PEND:-no} bw=${R_BW_PEND:-no}, path=$([ -n "$APPLY_MODE" ] && echo mode || echo bw-only))"
+
+    if [ -n "$APPLY_MODE" ]; then
+        # === mode 변경 경로: disconnect → bandcfg(재시도) → cap → reconfigure → reconnect ===
+        if ! wpa_cli_ok "$IFACE" disconnect; then
+            echo "Error: wpa_cli disconnect failed for $IFACE" >&2
+            exit 7
+        fi
+        # disconnect 직후 media_connected 해제가 비동기라 bandcfg가 -EOPNOTSUPP로
+        # 실패할 수 있음 → 최대 3초(0.1s×30) 재시도
+        BANDCFG_OK=""
+        for ((_i = 1; _i <= 30; _i++)); do
+            if mlanutl "$IFACE" bandcfg "$MODE_MASK" >/dev/null 2>&1; then
+                BANDCFG_OK=1
+                break
+            fi
+            sleep 0.1
+        done
+        if [ -z "$BANDCFG_OK" ]; then
+            echo "Error: bandcfg $MODE_MASK failed for $IFACE (still connected, or band unsupported by FW — check 'wifi $NUM mode get' STANDARD)" >&2
+            logger -p local0.err "[$tag:$LINENO] [$IFACE] radio-apply: bandcfg $MODE_MASK failed"
+            rollback_radio_live "$IFACE"
+            exit 4
+        fi
+        echo "bandcfg $MODE_MASK applied (mode=$R_MODE)"
+        [ -n "$R_BW" ] && apply_bw_or_exit "$IFACE" "$R_BW_CAP"
+        if ! wpa_cli_ok "$IFACE" reconfigure; then
+            echo "Error: wpa_cli reconfigure failed for $IFACE (check wpa_supplicant conf syntax)" >&2
+            rollback_radio_live "$IFACE"
+            exit 7
+        fi
+        if ! wpa_cli_ok "$IFACE" reconnect; then
+            echo "Error: wpa_cli reconnect failed for $IFACE" >&2
+            rollback_radio_live "$IFACE"
+            exit 7
+        fi
+    else
+        # === bw-only 경로: cap 적용 → reassociate (무중단, 실기 검증) ===
+        # mode가 이미 라이브 일치 + bw 변경 없음이면 할 일이 없다 — 불필요한
+        # reassociate(링크 끊김)를 막는다. (early-exit 가드는 R_MODE 있으면 통과 못 함)
+        if [ -z "$R_BW" ]; then
+            echo "nothing to apply for $IFACE (mode already live, no bw change)"
+            exit 0
+        fi
+        # 위 가드로 R_BW는 항상 non-empty — apply_bw_or_exit 무조건 호출
+        apply_bw_or_exit "$IFACE" "$R_BW_CAP"
+        if ! wpa_cli_ok "$IFACE" reassociate; then
+            echo "Error: wpa_cli reassociate failed for $IFACE" >&2
+            rollback_radio_live "$IFACE"
+            exit 7
+        fi
+    fi
+
+    WPA_STATE=""
+    for ((_i = 1; _i <= ASSOC_TIMEOUT; _i++)); do
+        WPA_STATE=$(wpa_cli -i "$IFACE" status 2>/dev/null | sed -n 's/^wpa_state=//p')
+        [ "$WPA_STATE" = "COMPLETED" ] && break
+        sleep 1
+    done
+    if [ "$WPA_STATE" != "COMPLETED" ]; then
+        echo "Error: association not completed within ${ASSOC_TIMEOUT}s (state=${WPA_STATE:-unknown})" >&2
+        logger -p local0.err "[$tag:$LINENO] [$IFACE] radio-apply: assoc timeout (state=${WPA_STATE:-unknown})"
+        rollback_radio_live "$IFACE"
+        echo "(previous settings restored; staged changes kept — fix and retry radio-apply, or radio-discard)" >&2
+        exit 8
+    fi
+
+    # 트랜잭션 커밋: 적용 성공 시에만 staged → JSON persist (부팅 재적용 대상).
+    # bw=default면 commit 대신 radio.bw 삭제(__del__). pending 키만 단일 jq로 원자 기록.
+    COMMIT_BW="${R_BW_PEND:+$R_BW}"
+    [ -n "$R_BW_DEFAULT" ] && COMMIT_BW="__del__"
+    if ! update_json_radio "$IFACE" "${R_MODE_PEND:+$R_MODE}" "$COMMIT_BW"; then
+        echo "Error: applied live but JSON commit failed — staged kept, retry radio-apply (boot persistence not updated)" >&2
+        exit 9
+    fi
+    if [ -n "$R_MODE_PEND" ] || [ -n "$R_BW_PEND" ]; then
+        rm -f "$(radio_pending_path "$IFACE" mode)" "$(radio_pending_path "$IFACE" bw)"
+        if [ -n "$R_BW_DEFAULT" ]; then
+            echo "radio.bw reset to default (AP-driven) for $IFACE in $WIFI_INIT_CONF_JSON"
+        else
+            echo "committed to $WIFI_INIT_CONF_JSON (mode=${R_MODE:-keep} bw=${R_BW:-keep})"
+        fi
+    fi
+    logger -p local0.info "[$tag:$LINENO] [$IFACE] radio-apply: done (mode=${R_MODE:-keep} bw=${R_BW:-keep})"
+    echo "radio-apply done for $IFACE (mode=${R_MODE:-keep} bw=${R_BW:-keep})"
+    echo "--- link ---"
+    iw dev "$IFACE" link 2>/dev/null | head -8
+    echo "--- datarate ---"
+    mlanutl "$IFACE" getdatarate 2>/dev/null || true
     ;;
   log)
     if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
