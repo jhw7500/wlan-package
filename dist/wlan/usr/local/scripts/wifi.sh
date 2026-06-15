@@ -767,7 +767,7 @@ case "$1" in
     ;;
   ip)
     # wifi N ip {addr}로 persist한 .network 설정을 실제 반영
-    if [ "$2" == "apply" ]; then
+    if [ "$2" = "apply" ]; then
         echo "Warning: all networkd-managed interfaces will be briefly interrupted" >&2
         echo "restarting systemd-networkd to apply ip configuration..."
         if systemctl restart systemd-networkd; then
@@ -778,7 +778,9 @@ case "$1" in
             exit 1
         fi
     else
+        # usage()는 자체 exit 1 하지만, 명시적 exit로 의도를 못박는다
         usage
+        exit 2
     fi
     ;;
   log)
@@ -1352,7 +1354,7 @@ case "$2" in
         exit 2
     fi
     MODE_VAL=$(echo "${3:-}" | tr '[:upper:]' '[:lower:]')
-    if [ -z "$MODE_VAL" ] || [ "$MODE_VAL" == "get" ]; then
+    if [ -z "$MODE_VAL" ] || [ "$MODE_VAL" = "get" ]; then
         echo "--- Committed ($WIFI_INIT_CONF_JSON) ---"
         jq -r ".${IFACE}.radio.mode // \"(not configured: chip default)\"" \
             "$WIFI_INIT_CONF_JSON" 2>/dev/null || echo "(JSON/jq not available)"
@@ -1403,7 +1405,7 @@ case "$2" in
         exit 2
     fi
     BW_VAL=$(echo "${3:-}" | tr '[:upper:]' '[:lower:]')
-    if [ -z "$BW_VAL" ] || [ "$BW_VAL" == "get" ]; then
+    if [ -z "$BW_VAL" ] || [ "$BW_VAL" = "get" ]; then
         echo "--- Committed ($WIFI_INIT_CONF_JSON) ---"
         jq -r ".${IFACE}.radio.bw // \"(not configured: chip default)\"" \
             "$WIFI_INIT_CONF_JSON" 2>/dev/null || echo "(JSON/jq not available)"
@@ -1597,6 +1599,12 @@ case "$2" in
         fi
     else
         # === bw-only 경로: cap 적용 → reassociate (무중단, 실기 검증) ===
+        # mode가 이미 라이브 일치 + bw 변경 없음이면 할 일이 없다 — 불필요한
+        # reassociate(링크 끊김)를 막는다. (early-exit 가드는 R_MODE 있으면 통과 못 함)
+        if [ -z "$R_BW" ]; then
+            echo "nothing to apply for $IFACE (mode already live, no bw change)"
+            exit 0
+        fi
         if [ -n "$R_BW" ]; then
             BW_MSG=$(apply_bw_caps "$IFACE" "$R_BW_CAP"); BW_RC=$?
             [ -n "$BW_MSG" ] && echo "$BW_MSG"
