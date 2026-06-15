@@ -600,9 +600,10 @@ apply_radio_mode_bw() {
         fi
     fi
 
-    # bw 20/40의 HE(11ax) 연결 클램프는 여기서 처리하지 않는다 — OMI는
-    # per-association 상태라 연결 이벤트마다 wifi_event.sh:apply_he_bw_omi()가
-    # 재전송한다. 부팅 경로는 HT/VHT assoc용 htcapinfo/vhtcfg만 적용.
+    # bw는 htcapinfo/vhtcfg cap으로 적용한다(아래). 실기 검증(2026-06-15):
+    # HE 연결도 이 cap에서 BW가 파생되며(20=0x05c00000/bwcfg0, 40=0x05c20000/bwcfg0,
+    # 80=0x05c20000/bwcfg1), 부팅 disconnected 상태에서 cap 설정 후 wpa_supplicant
+    # 첫 assoc이 해당 폭으로 협상된다. OMI 경로는 폐기(NXP FW가 STA BW 미반영).
 
     if [ -n "$mode" ]; then
         # 마스크 테이블은 wifi_init_config_lib.sh 단일 정의 사용

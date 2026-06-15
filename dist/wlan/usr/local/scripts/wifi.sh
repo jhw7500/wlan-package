@@ -149,6 +149,30 @@ get_vht_assoc_cap() {
     mlanutl "$1" vhtcfg 2 2 2>/dev/null | awk '/VHT Capabilities Info/ {print $NF; exit}'
 }
 
+# bw에 맞춰 htcapinfo(HT40 enable 비트) + vhtcfg(bwcfg)를 적용.
+# 실기 검증(2026-06-15, 9098): 20=0x05c00000/bwcfg0, 40=0x05c20000/bwcfg0,
+# 80=0x05c20000/bwcfg1 조합이 HE 링크에서 reassociate로 양방향 전환됨.
+# stdout=결과 메시지, return: 0 ok / 2 invalid bw / 5 htcapinfo / 6 vhtcfg
+apply_bw_caps() { # $1 iface, $2 bw
+    local iface="$1" bw="$2" htcap vhtbw vhtcap
+    htcap=$(wifi_init_bw_to_htcap "$bw")
+    vhtbw=$(wifi_init_bw_to_vhtbw "$bw")
+    { [ -z "$htcap" ] || [ -z "$vhtbw" ]; } && return 2
+    mlanutl "$iface" htcapinfo "$htcap" >/dev/null 2>&1 || return 5
+    vhtcap=$(get_vht_assoc_cap "$iface")
+    if [ -z "$vhtcap" ]; then
+        # VHT cap GET 불가 + 20/40(bwcfg=0)이면 11N htcapinfo만으로 충분
+        [ "$vhtbw" = "0" ] && {
+            echo "htcapinfo $htcap applied (bw=$bw; VHT cap unavailable, vhtcfg skipped)"
+            return 0
+        }
+        return 6
+    fi
+    mlanutl "$iface" vhtcfg 2 2 "$vhtbw" "$vhtcap" >/dev/null 2>&1 || return 6
+    echo "htcapinfo $htcap / vhtcfg bwcfg=$vhtbw applied (bw=$bw)"
+    return 0
+}
+
 # wpa_cli는 데몬 응답이 FAIL이어도 exit 0이므로 출력 문자열로 성공 판정
 wpa_cli_ok() {
     [ "$(wpa_cli -i "$1" "$2" 2>/dev/null)" = "OK" ]
@@ -197,7 +221,8 @@ rollback_radio_live() { # $1 iface
     else
         logger -p local0.warning "[$tag:$LINENO] [$1] rollback: vht snapshot incomplete — vhtcfg not restored"
     fi
-    wpa_cli -i "$1" reconnect >/dev/null 2>&1
+    # reassociate가 reconnect보다 부드럽고 cap 변경 반영이 확실 (실기 검증)
+    wpa_cli -i "$1" reassociate >/dev/null 2>&1 || wpa_cli -i "$1" reconnect >/dev/null 2>&1
 }
 # ------------------------------------
 
@@ -217,7 +242,11 @@ update_json_radio() {
     fi
     filter="."
     [ -n "$mode" ] && filter="$filter | .[\$i].radio.mode = \$m"
-    [ -n "$bw" ] && filter="$filter | .[\$i].radio.bw = \$b"
+    if [ "$bw" = "__del__" ]; then
+        filter="$filter | del(.[\$i].radio.bw)"   # bw default → committed 제거(AP 따라)
+    elif [ -n "$bw" ]; then
+        filter="$filter | .[\$i].radio.bw = \$b"
+    fi
     # 고정 .tmp 대신 고유 tmp — 동시 호출(wifi 0 ... + wifi 1 ...) 시 파손 방지.
     # EXIT trap은 22행의 글로벌 sync trap을 덮어쓰므로 RETURN trap 사용
     # (apply_sed_update와 동일 패턴).
@@ -265,9 +294,9 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} mon [c|compact] [interval] [--summary-lines N] [--roam-display N]"
     echo "       wifi {0|1|mlan0|mlan1} mcs [on|off|reset|ht <7|15> vht <7|8|9> he <7|9|11>] : persist+runtime"
     echo "       wifi {0|1|mlan0|mlan1} mode [b|g|a|n|ac|ax] : stage (radio-apply 성공 시 persist, mlan1은 ax 불가)"
-    echo "       wifi {0|1|mlan0|mlan1} bw [20|40|80|auto] : stage (radio-apply 성공 시 persist)"
+    echo "       wifi {0|1|mlan0|mlan1} bw [20|40|80|auto|default] : stage (radio-apply 성공 시 persist; default=AP 따라)"
     echo "       wifi {0|1|mlan0|mlan1} radio-apply [timeout_s] : runtime (적용 성공 시 commit, 실패 시 라이브 롤백+재연결)"
-    echo "         radio-apply exit: 0=ok 2=usage 3=env 4=bandcfg 5=htcapinfo 6=vhtcfg 7=wpa_cli 8=assoc-timeout 9=json/commit 10=he-bw-fail 11=b/g+5G-freq"
+    echo "         radio-apply exit: 0=ok 2=usage 3=env 4=bandcfg 5=htcapinfo 6=vhtcfg 7=wpa_cli 8=assoc-timeout 9=json/commit 11=b/g+5G-freq"
     echo "       wifi {0|1|mlan0|mlan1} radio-discard : staged mode/bw 변경 취소"
     echo "       wifi txpwr {0|1|2|3|no|default|low|org|conf_file_name} : persist"
     echo "       wifi cal {0|1|2|None|WlanCalData_ext.conf|WlanCalData_ext_RD.conf|*} : persist"
@@ -1382,9 +1411,9 @@ case "$2" in
         exit 0
     fi
     case "$BW_VAL" in
-        20|40|80|auto) ;;
+        20|40|80|auto|default) ;;  # default = AP 따라(committed 제거)
         *)
-            echo "Error: bw must be one of 20|40|80|auto" >&2
+            echo "Error: bw must be one of 20|40|80|auto|default" >&2
             exit 2
             ;;
     esac
@@ -1405,9 +1434,10 @@ case "$2" in
   radio-apply | radio_apply)
     # staged(pending) radio.mode/radio.bw를 적용하고 성공 시에만 JSON에 commit하는
     # 트랜잭션 시퀀스. 실패 시 적용 전 스냅샷으로 라이브 롤백 + 재연결.
-    # disconnect → bandcfg(재시도) → [HE 타깃 아니면 htcapinfo/vhtcfg] → reconfigure
-    #   → reconnect → assoc 대기 → (HE 타깃이면) OMI 클램프 → commit
-    # exit: 0=ok 2=usage 3=env 4=bandcfg 5=htcapinfo 6=vhtcfg 7=wpa_cli 8=assoc-timeout 9=json/commit 10=he-bw-fail 11=b/g+5G-freq
+    # mode 변경: disconnect → bandcfg(재시도) → cap → reconfigure → reconnect
+    # bw-only: cap(htcapinfo/vhtcfg) → reassociate  (HE 포함 양방향, 무중단)
+    # → assoc 대기 → commit(또는 bw=default면 radio.bw 삭제)
+    # exit: 0=ok 2=usage 3=env 4=bandcfg 5=htcapinfo 6=vhtcfg 7=wpa_cli 8=assoc-timeout 9=json/commit 11=b/g+5G-freq
     if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
         echo "Error: radio-apply supports mlan0/mlan1 only" >&2
         exit 2
@@ -1449,22 +1479,17 @@ case "$2" in
         echo "nothing to apply: radio.mode/radio.bw not staged or committed for $IFACE"
         exit 0
     fi
-    # HE(11ax) 연결의 bw 20/40은 htcapinfo/vhtcfg로 못 줄인다(HE cap이 BW 결정)
-    # → assoc 완료 후 OMI(11axcmd tx_omi)로 동작 BW를 클램프한다.
-    # HE 가능 조건: mode=ax 또는 (미설정 && mlan1 아님 && STANDARD∉{n,ac}).
-    # OMI는 per-association 상태라 이후 연결/로밍은 wifi_event.sh가 재적용
-    # (apply_he_bw_omi — 조건식 동기 유지).
-    R_EFF_STD=$(jq -r ".${IFACE}.STANDARD // .global.STANDARD // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-    R_HE_OMI=""
-    if { [ "$R_BW" = "20" ] || [ "$R_BW" = "40" ]; } && \
-       { [ "$R_MODE" = "ax" ] || { [ -z "$R_MODE" ] && [ "$IFACE" != "mlan1" ] && \
-         [ "$R_EFF_STD" != "n" ] && [ "$R_EFF_STD" != "ac" ]; }; }; then
-        R_HE_OMI=1
+    # bw=default: cap은 AP 최대(80=0x05c20000/bwcfg1)로 열어 AP 따라가게 하고,
+    # commit 시 radio.bw를 JSON에서 삭제(부팅 재적용 대상에서 제외 = 디폴트 복귀).
+    R_BW_DEFAULT=""
+    R_BW_CAP="$R_BW"
+    if [ "$R_BW" = "default" ]; then
+        R_BW_DEFAULT=1
+        R_BW_CAP=80
     fi
     # freq↔mode 교차 검증: b/g 마스크(0x1/0x3)는 5G 비트가 없어 freq_list가
     # 5G 전용이면 스캔 채널 0개("Scan: No channel configured")로 영구 SCANNING에
-    # 빠진다(mlan_scan.c wlan_is_band_compatible 무음 탈락) → 링크를 건드리기
-    # 전에 즉시 거부. 2G+5G 혼합이면 5G만 무음 누락되므로 안내만 출력.
+    # 빠진다 → 링크를 건드리기 전에 즉시 거부. 2G+5G 혼합이면 안내만 출력.
     if [ "$R_MODE" = "b" ] || [ "$R_MODE" = "g" ]; then
         R_CONF="${WPA_CONF_DIR:-/etc/wpa_supplicant}/wpa_supplicant-${IFACE}.conf"
         R_FREQ_BANDS=$(wifi_init_conf_freq_bands "$R_CONF")
@@ -1487,7 +1512,7 @@ case "$2" in
             exit 2
         fi
     fi
-    # 실패 시 롤백용 적용 전 스냅샷 (disconnect 전에 GET)
+    # 실패 시 롤백용 적용 전 스냅샷
     SNAP_BAND=$(mlanutl "$IFACE" bandcfg 2>/dev/null | sed -n 's/.*Infra Band: \(0x[0-9a-fA-F]*\).*/\1/p' | head -1)
     SNAP_HT_OUT=$(mlanutl "$IFACE" htcapinfo 2>/dev/null)
     SNAP_HT_BG=$(printf '%s\n' "$SNAP_HT_OUT" | sed -n 's/^[[:space:]]*BG band:[[:space:]]*\(0x[0-9a-fA-F]*\).*/\1/p' | head -1)
@@ -1499,14 +1524,22 @@ case "$2" in
         *"Follow BW in VHT"*)     SNAP_VHTBW=1 ;;
         *)                        SNAP_VHTBW="" ;;
     esac
-    logger -p local0.info "[$tag:$LINENO] [$IFACE] radio-apply: mode=${R_MODE:-keep} bw=${R_BW:-keep} (pending: mode=${R_MODE_PEND:-no} bw=${R_BW_PEND:-no})"
-    if ! wpa_cli_ok "$IFACE" disconnect; then
-        echo "Error: wpa_cli disconnect failed for $IFACE" >&2
-        exit 7
-    fi
-    if [ -n "$R_MODE" ]; then
-        # disconnect 직후 media_connected 해제가 비동기라 bandcfg SET이
-        # -EOPNOTSUPP로 실패할 수 있음 → 최대 3초(0.1s×30) 재시도
+
+    # mode를 새로 stage한 경우에만 bandcfg(=disconnect 필요)를 한다.
+    # bw만 바꾸는 경우는 cap 적용 후 reassociate — 실기에서 HE 80↔40↔20
+    # 양방향 전환이 검증된 무중단 경로(disconnect/reconnect는 40에서 SCANNING).
+    APPLY_MODE=""
+    [ -n "$R_MODE_PEND" ] && APPLY_MODE=1
+    logger -p local0.info "[$tag:$LINENO] [$IFACE] radio-apply: mode=${R_MODE:-keep} bw=${R_BW:-keep} (pending: mode=${R_MODE_PEND:-no} bw=${R_BW_PEND:-no}, path=$([ -n "$APPLY_MODE" ] && echo mode || echo bw-only))"
+
+    if [ -n "$APPLY_MODE" ]; then
+        # === mode 변경 경로: disconnect → bandcfg(재시도) → cap → reconfigure → reconnect ===
+        if ! wpa_cli_ok "$IFACE" disconnect; then
+            echo "Error: wpa_cli disconnect failed for $IFACE" >&2
+            exit 7
+        fi
+        # disconnect 직후 media_connected 해제가 비동기라 bandcfg가 -EOPNOTSUPP로
+        # 실패할 수 있음 → 최대 3초(0.1s×30) 재시도
         BANDCFG_OK=""
         for ((_i = 1; _i <= 30; _i++)); do
             if mlanutl "$IFACE" bandcfg "$MODE_MASK" >/dev/null 2>&1; then
@@ -1522,54 +1555,45 @@ case "$2" in
             exit 4
         fi
         echo "bandcfg $MODE_MASK applied (mode=$R_MODE)"
-    fi
-    if [ -n "$R_BW" ]; then
-        # BW 매핑 테이블은 wifi_init_config_lib.sh 단일 정의 사용
-        BW_HTCAP=$(wifi_init_bw_to_htcap "$R_BW")
-        BW_VHTBW=$(wifi_init_bw_to_vhtbw "$R_BW")
-        if [ -z "$BW_HTCAP" ] || [ -z "$BW_VHTBW" ]; then
-            echo "Error: invalid radio.bw '$R_BW'" >&2
+        if [ -n "$R_BW" ]; then
+            BW_MSG=$(apply_bw_caps "$IFACE" "$R_BW_CAP"); BW_RC=$?
+            [ -n "$BW_MSG" ] && echo "$BW_MSG"
+            case "$BW_RC" in
+                0) ;;
+                2) echo "Error: invalid radio.bw '$R_BW'" >&2; rollback_radio_live "$IFACE"; exit 2 ;;
+                5) echo "Error: htcapinfo failed for $IFACE" >&2; logger -p local0.err "[$tag:$LINENO] [$IFACE] htcapinfo failed"; rollback_radio_live "$IFACE"; exit 5 ;;
+                6) echo "Error: vhtcfg failed for $IFACE" >&2; logger -p local0.err "[$tag:$LINENO] [$IFACE] vhtcfg failed"; rollback_radio_live "$IFACE"; exit 6 ;;
+            esac
+        fi
+        if ! wpa_cli_ok "$IFACE" reconfigure; then
+            echo "Error: wpa_cli reconfigure failed for $IFACE (check wpa_supplicant conf syntax)" >&2
             rollback_radio_live "$IFACE"
-            exit 2
+            exit 7
         fi
-        if [ -n "$R_HE_OMI" ]; then
-            # HE 타깃의 20/40: htcapinfo/vhtcfg 제한은 HE assoc BW에 무효(HE cap이
-            # 결정)하고, 실기에서 vhtcfg bwcfg=0 + HE 조합이 assoc 자체를 깨는
-            # 사례 확인(2026-06-12 cts-wlan) → cap은 건드리지 않고 OMI로만 클램프.
-            echo "HE target: htcapinfo/vhtcfg untouched (bw=$R_BW clamped via OMI after assoc)"
-        else
-            if ! mlanutl "$IFACE" htcapinfo "$BW_HTCAP" >/dev/null 2>&1; then
-                echo "Error: htcapinfo $BW_HTCAP failed for $IFACE" >&2
-                logger -p local0.err "[$tag:$LINENO] [$IFACE] radio-apply: htcapinfo $BW_HTCAP failed"
-                rollback_radio_live "$IFACE"
-                exit 5
-            fi
-            BW_VHTCAP=$(get_vht_assoc_cap "$IFACE")
-            if [ -z "$BW_VHTCAP" ] && [ "$BW_VHTBW" = "0" ]; then
-                # VHT cap 조회 불가 + 20/40 요청: 11N(htcapinfo)만으로 충분 — vhtcfg 생략
-                echo "htcapinfo $BW_HTCAP applied (bw=$R_BW; VHT cap unavailable, vhtcfg skipped)"
-            elif [ -z "$BW_VHTCAP" ] || \
-                 ! mlanutl "$IFACE" vhtcfg 2 2 "$BW_VHTBW" "$BW_VHTCAP" >/dev/null 2>&1; then
-                echo "Error: vhtcfg 2 2 $BW_VHTBW ${BW_VHTCAP:-(GET failed)} failed for $IFACE" >&2
-                logger -p local0.err "[$tag:$LINENO] [$IFACE] radio-apply: vhtcfg failed"
-                rollback_radio_live "$IFACE"
-                exit 6
-            else
-                echo "htcapinfo $BW_HTCAP / vhtcfg bwcfg=$BW_VHTBW applied (bw=$R_BW)"
-            fi
+        if ! wpa_cli_ok "$IFACE" reconnect; then
+            echo "Error: wpa_cli reconnect failed for $IFACE" >&2
+            rollback_radio_live "$IFACE"
+            exit 7
+        fi
+    else
+        # === bw-only 경로: cap 적용 → reassociate (무중단, 실기 검증) ===
+        if [ -n "$R_BW" ]; then
+            BW_MSG=$(apply_bw_caps "$IFACE" "$R_BW_CAP"); BW_RC=$?
+            [ -n "$BW_MSG" ] && echo "$BW_MSG"
+            case "$BW_RC" in
+                0) ;;
+                2) echo "Error: invalid radio.bw '$R_BW'" >&2; rollback_radio_live "$IFACE"; exit 2 ;;
+                5) echo "Error: htcapinfo failed for $IFACE" >&2; logger -p local0.err "[$tag:$LINENO] [$IFACE] htcapinfo failed"; rollback_radio_live "$IFACE"; exit 5 ;;
+                6) echo "Error: vhtcfg failed for $IFACE" >&2; logger -p local0.err "[$tag:$LINENO] [$IFACE] vhtcfg failed"; rollback_radio_live "$IFACE"; exit 6 ;;
+            esac
+        fi
+        if ! wpa_cli_ok "$IFACE" reassociate; then
+            echo "Error: wpa_cli reassociate failed for $IFACE" >&2
+            rollback_radio_live "$IFACE"
+            exit 7
         fi
     fi
-    # conf(freq_list 등) 변경분 반영 + 재접속
-    if ! wpa_cli_ok "$IFACE" reconfigure; then
-        echo "Error: wpa_cli reconfigure failed for $IFACE (check wpa_supplicant conf syntax)" >&2
-        rollback_radio_live "$IFACE"
-        exit 7
-    fi
-    if ! wpa_cli_ok "$IFACE" reconnect; then
-        echo "Error: wpa_cli reconnect failed for $IFACE" >&2
-        rollback_radio_live "$IFACE"
-        exit 7
-    fi
+
     WPA_STATE=""
     for ((_i = 1; _i <= ASSOC_TIMEOUT; _i++)); do
         WPA_STATE=$(wpa_cli -i "$IFACE" status 2>/dev/null | sed -n 's/^wpa_state=//p')
@@ -1583,53 +1607,27 @@ case "$2" in
         echo "(previous settings restored; staged changes kept — fix and retry radio-apply, or radio-discard)" >&2
         exit 8
     fi
-    if [ -n "$R_HE_OMI" ]; then
-        # NSS: htstreamcfg GET(양 칩 동일 포맷) 1순위, BOARD_TYPE 매핑 fallback
-        # (9098/imx8=2x2, IW612/imx93=1x1). 잘못된 NSS는 스트림을 클램프하므로 중요.
-        OMI_NSS=2
-        OMI_OUT=$(mlanutl "$IFACE" htstreamcfg 2>/dev/null)
-        case "$OMI_OUT" in
-            *1x1*) OMI_NSS=1 ;;
-            *2x2*) OMI_NSS=2 ;;
-            *)
-                case "$(jq -r '.global.BOARD_TYPE // "imx8mm"' "$WIFI_INIT_CONF_JSON" 2>/dev/null)" in
-                    imx93*) OMI_NSS=1 ;;
-                esac
-                ;;
-        esac
-        OMI_CW=0
-        [ "$R_BW" = "40" ] && OMI_CW=1
-        # OM Control: B0-2 RxNSS(NSS-1), B3-4 ChWidth(0=20,1=40), B6 TxNSTS(NSS-1)
-        OMI_VAL=$(printf '0x%02X' $(( (OMI_NSS - 1) | (OMI_CW << 3) | ((OMI_NSS - 1) << 6) )))
-        # tx_option=0: FW가 QoS NULL을 자체 전송 — 별도 트래픽 불필요
-        if mlanutl "$IFACE" 11axcmd tx_omi "$OMI_VAL" 0 0 >/dev/null 2>&1; then
-            echo "HE OMI clamp sent: tx_omi $OMI_VAL (bw=$R_BW, nss=$OMI_NSS)"
-        else
-            # HE 타깃 경로는 cap 제한을 생략했으므로 OMI 실패 = bw 미적용
-            RATE_TYPE=$(mlanutl "$IFACE" getdatarate 2>/dev/null | sed -n 's/.*Type:[[:space:]]*//p' | head -1)
-            echo "Error: tx_omi $OMI_VAL failed (link type: ${RATE_TYPE:-unknown}) — bw=$R_BW not enforced" >&2
-            if [ -n "$RATE_TYPE" ] && [ "$RATE_TYPE" != "HE" ]; then
-                echo "       Non-HE link: 'wifi $NUM mode ac' (or lower) enforces bw via HT/VHT caps" >&2
-            fi
-            logger -p local0.err "[$tag:$LINENO] [$IFACE] radio-apply: tx_omi $OMI_VAL failed (type=${RATE_TYPE:-unknown})"
-            rollback_radio_live "$IFACE"
-            exit 10
-        fi
-    fi
+
     # 트랜잭션 커밋: 적용 성공 시에만 staged → JSON persist (부팅 재적용 대상).
-    # pending 키들을 단일 jq 호출로 원자 기록 — 부분 커밋 윈도우 없음.
-    if ! update_json_radio "$IFACE" "${R_MODE_PEND:+$R_MODE}" "${R_BW_PEND:+$R_BW}"; then
+    # bw=default면 commit 대신 radio.bw 삭제(__del__). pending 키만 단일 jq로 원자 기록.
+    COMMIT_BW="${R_BW_PEND:+$R_BW}"
+    [ -n "$R_BW_DEFAULT" ] && COMMIT_BW="__del__"
+    if ! update_json_radio "$IFACE" "${R_MODE_PEND:+$R_MODE}" "$COMMIT_BW"; then
         echo "Error: applied live but JSON commit failed — staged kept, retry radio-apply (boot persistence not updated)" >&2
         exit 9
     fi
     if [ -n "$R_MODE_PEND" ] || [ -n "$R_BW_PEND" ]; then
         rm -f "$(radio_pending_path "$IFACE" mode)" "$(radio_pending_path "$IFACE" bw)"
-        echo "committed to $WIFI_INIT_CONF_JSON (mode=${R_MODE:-keep} bw=${R_BW:-keep})"
+        if [ -n "$R_BW_DEFAULT" ]; then
+            echo "radio.bw reset to default (AP-driven) for $IFACE in $WIFI_INIT_CONF_JSON"
+        else
+            echo "committed to $WIFI_INIT_CONF_JSON (mode=${R_MODE:-keep} bw=${R_BW:-keep})"
+        fi
     fi
     logger -p local0.info "[$tag:$LINENO] [$IFACE] radio-apply: done (mode=${R_MODE:-keep} bw=${R_BW:-keep})"
     echo "radio-apply done for $IFACE (mode=${R_MODE:-keep} bw=${R_BW:-keep})"
     echo "--- link ---"
-    iw dev "$IFACE" link 2>/dev/null | head -6
+    iw dev "$IFACE" link 2>/dev/null | head -8
     echo "--- datarate ---"
     mlanutl "$IFACE" getdatarate 2>/dev/null || true
     ;;
