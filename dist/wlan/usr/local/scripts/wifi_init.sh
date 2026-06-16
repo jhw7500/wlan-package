@@ -1002,6 +1002,15 @@ if command -v systemctl >/dev/null 2>&1; then
         unset _val
     fi
     if [ "$_arp_ignore_always" = "true" ]; then
+        # [GUARD] 조용한 "유선→BD ARP 무응답" 회귀를 가시화한다 (동작은 바꾸지 않음).
+        # arp_ignore_always=on + peer_route=off 조합은, 유선↔BD(박스) 통신이 필요한 mlan0-IP
+        # 토폴로지에서 eth0이 mlan0 IP 미러(/32)를 갖지 못한 채 arp_ignore=1이 되어 유선→BD ARP가
+        # 무응답이 된다 (위 988-997 주석 참조). eth0-IP 토폴로지(유선↔BD 불필요)에서는 정상이므로
+        # 토폴로지를 추정해 동작을 바꾸지 않고 경고만 남긴다. 유선↔BD가 필요하면 3종 세트로 설정:
+        #   wbridge.peer_route.enabled=true + ip_discovery=true + arp_ignore_always.enabled=false
+        if [ "$_peer_route_enabled" = "false" ]; then
+            logger -p local0.warn "[$tag:$LINENO] [GUARD] arp_ignore_always=on + peer_route=off -> wired->BD ARP UNANSWERED on mlan0-IP topology. If wired<->BD is required, set wbridge.peer_route.enabled=true + ip_discovery=true + arp_ignore_always.enabled=false. (Safe to ignore on eth0-IP topology where wired<->BD is not needed.)" || true
+        fi
         _safe_sysctl net.ipv4.conf.all.arp_ignore=1
         _safe_sysctl net.ipv4.conf.all.arp_announce=2
         logger -p local0.info "[$tag:$LINENO] arp_ignore_always=on: ARP policy forced (eth0-IP topology mode)"
