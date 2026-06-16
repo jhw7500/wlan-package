@@ -136,8 +136,8 @@ def parse_iw_info(output):
     for line in output.splitlines():
         if "addr" in line:
             result["address"] = line.split()[-1]
-        elif "ssid " in line:
-            parts = line.split(" ", 1)
+        elif line.strip().startswith("ssid "):
+            parts = line.split(None, 1)
             if len(parts) == 2:
                 result["ssid"] = parts[1].strip()
         elif "channel" in line:
@@ -335,8 +335,6 @@ def check_tx_spike(link_data):
 
 
 _empty_json = b'{}\n'
-_cached_info_data = {}
-_cached_ap_bssid = ""
 
 def _write_empty_link():
     path = os.path.join(LOG_DIR, "link.json")
@@ -344,7 +342,6 @@ def _write_empty_link():
         f.write(_empty_json)
 
 def main():
-    global _cached_info_data, _cached_ap_bssid
     os.makedirs(LOG_DIR, exist_ok=True)
     while True:
         if not os.path.exists(f"/sys/class/net/{IFACE}"):
@@ -379,19 +376,15 @@ def main():
 
         link_data = parse_station_dump(link_out)
 
-        # AP 변경 시에만 iw info 호출, 그 외에는 캐시 사용
-        current_ap = link_data.get("address", "")
-        if not _cached_info_data or current_ap != _cached_ap_bssid:
-            info_out = run_command_with_retry(["iw", IFACE, "info"], validate_fn=validate_info)
-            _cached_info_data = parse_iw_info(info_out) if info_out else {}
-            _cached_ap_bssid = current_ap
+        # iw info는 매 주기 호출 (ssid·channel·width·txpower가 같은 AP에서도 변할 수 있어 캐시 시 stale)
+        info_out = run_command_with_retry(["iw", IFACE, "info"], validate_fn=validate_info)
 
         channel_out = run_command(["iw", IFACE, "survey", "dump"])
         channel_data = parse_survey_dump(channel_out) if channel_out else {}
 
         check_tx_spike(link_data)
 
-        info_data = dict(_cached_info_data)
+        info_data = parse_iw_info(info_out) if info_out else {}
         info_data.update(get_ip_info(IFACE))
 
         data = {
