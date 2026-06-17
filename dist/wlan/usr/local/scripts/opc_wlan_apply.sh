@@ -42,6 +42,10 @@ wcli ping >/dev/null 2>&1 || { echo "opc_wlan_apply: wpa_cli ctrl unavailable fo
 # scanning to old frequencies on upgraded devices. Best-effort: harmless if unset.
 wcli set freq_list "" >/dev/null 2>&1 || true
 
+# NOTE: on wpa_supplicant v2.10, freq_list is NOT persisted by save_config
+# (verified on-target) — it applies at runtime only. scan_freq carries the
+# persisted (across-reboot) restriction, so we set both: freq_list enforces the
+# current session, scan_freq survives reboot.
 if [ -n "$FREQS" ]; then
     wcli_ok set_network "$NETID" freq_list "$FREQS" || { echo "opc_wlan_apply: set freq_list failed" >&2; exit 4; }
     wcli_ok set_network "$NETID" scan_freq "$FREQS" || { echo "opc_wlan_apply: set scan_freq failed" >&2; exit 4; }
