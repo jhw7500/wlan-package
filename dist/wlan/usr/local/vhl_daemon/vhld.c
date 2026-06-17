@@ -1168,30 +1168,35 @@ static int handle_set_wlan_config(int fd, struct sockaddr_in *src,
                                    0x0001, 0x0003);
     }
 
-    /* Apply via wpa_cli (execvp - no shell interpretation) */
+    /* Apply via opc_wlan_apply.sh (execvp - no shell interpretation):
+     * conf 파일을 직접 편집(ssid/scan_freq/freq_list)하고 wpa_cli reconfigure 로
+     * 영속+동적적용을 한 번에 처리한다. ssid 와 freq 를 한 번의 호출로 묶어 단일
+     * reconfigure(끊김 1회)로 적용한다. 스크립트가 ssid 를 따옴표로 감싸므로
+     * 원문만 전달한다.
+     * (set_network+reassociate 폐기 이유: wpa_supplicant v2.10 save_config 가
+     *  freq_list 를 직렬화하지 않아 영속이 깨지고, reassociate 는 현재 BSS 를
+     *  유지한 채 freq_list 를 재평가하지 않아 freq 변경이 즉시 반영되지 않는다.) */
     {
-        char ssid_arg[VHL_SSID_MAX + 3];
-        snprintf(ssid_arg, sizeof(ssid_arg), "\"%s\"", ssid);
-        const char *argv[] = {"wpa_cli", "-i", cfg->wlan_iface,
-                              "set_network", "0", "ssid", ssid_arg, NULL};
-        if (run_cmd(argv) != 0)
-            syslog(LOG_WARNING, "set_wlan_config: failed to set SSID");
-    }
-
-    if (freq != 0) {
         char freq_str[16];
-        snprintf(freq_str, sizeof(freq_str), "%u", freq);
-        const char *argv[] = {"wpa_cli", "-i", cfg->wlan_iface,
-                              "set_network", "0", "freq_list", freq_str, NULL};
-        if (run_cmd(argv) != 0)
-            syslog(LOG_WARNING, "set_wlan_config: failed to set freq_list");
-    }
-
-    {
-        const char *argv[] = {"wpa_cli", "-i", cfg->wlan_iface,
-                              "reassociate", NULL};
-        if (run_cmd(argv) != 0)
-            syslog(LOG_WARNING, "set_wlan_config: reassociate failed");
+        const char *argv[12];
+        int n = 0;
+        int have_ssid = (ssid[0] != '\0');
+        argv[n++] = "/usr/local/scripts/opc_wlan_apply.sh";
+        argv[n++] = cfg->wlan_iface;
+        if (have_ssid) {        /* 빈 ssid 는 conf 의 ssid 를 비우지 않도록 생략 */
+            argv[n++] = "ssid";
+            argv[n++] = ssid;
+        }
+        if (freq != 0) {
+            snprintf(freq_str, sizeof(freq_str), "%u", freq);
+            argv[n++] = "freq";
+            argv[n++] = freq_str;
+        }
+        argv[n] = NULL;
+        if (!have_ssid && freq == 0)
+            syslog(LOG_INFO, "set_wlan_config: nothing to apply (empty ssid, freq=0)");
+        else if (run_cmd(argv) != 0)
+            syslog(LOG_WARNING, "set_wlan_config: opc_wlan_apply.sh failed");
     }
 
     syslog(LOG_INFO, "set_wlan_config: ssid='%s' freq=%u on %s",
