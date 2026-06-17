@@ -57,10 +57,13 @@ wcli ping >/dev/null 2>&1 || { echo "opc_wlan_apply: wpa_cli ctrl unavailable fo
 # SSID 의 \ 와 " 는 wpa_supplicant conf 문법(C-style escape)에 맞게 이스케이프하여
 # conf 라인 인젝션/따옴표 조기종료를 막는다(신뢰 불가 입력 대비).
 DO_FREQ=0; [ -n "$FREQS" ] && DO_FREQ=1
-BAK="$(mktemp "${CONF}.bak.XXXXXX")" || { echo "opc_wlan_apply: mktemp(bak) failed" >&2; exit 4; }
-cp -p "$CONF" "$BAK" || { rm -f "$BAK"; echo "opc_wlan_apply: backup failed" >&2; exit 4; }
-TMP="$(mktemp "${CONF}.XXXXXX")" || { rm -f "$BAK"; echo "opc_wlan_apply: mktemp failed" >&2; exit 4; }
+# trap 을 mktemp 보다 먼저 등록 — 임시파일 생성과 trap 등록 사이에 시그널이 와도
+# 파일이 남지 않도록(누출 창 제거). 실패 경로는 exit 으로 trap 정리에 위임한다.
+BAK=""; TMP=""
 trap 'rm -f "$TMP" "$BAK"' EXIT
+BAK="$(mktemp "${CONF}.bak.XXXXXX")" || { echo "opc_wlan_apply: mktemp(bak) failed" >&2; exit 4; }
+cp -p "$CONF" "$BAK" || { echo "opc_wlan_apply: backup failed" >&2; exit 4; }
+TMP="$(mktemp "${CONF}.XXXXXX")" || { echo "opc_wlan_apply: mktemp failed" >&2; exit 4; }
 
 # SSID 는 ENVIRON 으로 전달한다 — awk -v 는 값의 \X 를 C-escape 로 해석해(예: \b→
 # 백스페이스) 백슬래시가 든 SSID 를 손상시키므로, raw 보존되는 ENVIRON 을 쓴다.
@@ -69,7 +72,7 @@ OPC_SSID="$SSID" awk -v freqs="$FREQS" -v do_freq="$DO_FREQ" -v do_ssid="$HAVE_S
     BEGIN { in_net = 0; blocks = 0; ssid_done = 0; new_ssid = ENVIRON["OPC_SSID"] }
     /^[[:space:]]*#/ { print; next }
     /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ {
-        in_net = 1; blocks++; done_scan = 0; done_list = 0; print; next
+        in_net = 1; blocks++; done_scan = 0; done_list = 0; ssid_done = 0; print; next
     }
     in_net && /^[[:space:]]*\}/ {
         if (do_freq && !done_scan) { print "    scan_freq=" freqs; done_scan = 1 }
@@ -99,7 +102,9 @@ sync 2>/dev/null || true
 # --- 적용 트리거: 전체 conf 재로드 → freq_list/scan_freq/ssid 모두 반영 -----------
 # reconfigure 실패 시 깨진 conf 가 영속되어 다음 reboot 기동을 막을 수 있으므로,
 # 원본 백업으로 롤백한 뒤 재적용한다(무선 전체 다운 방지).
-if ! wcli reconfigure >/dev/null 2>&1; then
+# wpa_cli 는 제어요청 전달만 성공하면 데몬 응답(OK/FAIL)과 무관하게 exit 0 이므로,
+# exit code 가 아니라 출력이 "OK" 인지로 실패를 판정한다(wifi.sh 의 wpa_cli_ok 와 동일).
+if [ "$(wcli reconfigure 2>/dev/null)" != "OK" ]; then
     mv -f "$BAK" "$CONF"; sync 2>/dev/null || true
     trap - EXIT
     wcli reconfigure >/dev/null 2>&1 || true
