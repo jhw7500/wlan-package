@@ -57,6 +57,9 @@ wcli ping >/dev/null 2>&1 || { echo "opc_wlan_apply: wpa_cli ctrl unavailable fo
 # SSID 의 \ 와 " 는 wpa_supplicant conf 문법(C-style escape)에 맞게 이스케이프하여
 # conf 라인 인젝션/따옴표 조기종료를 막는다(신뢰 불가 입력 대비).
 DO_FREQ=0; [ -n "$FREQS" ] && DO_FREQ=1
+# FREQS 는 숫자/공백만 허용 — 직접 호출 시 awk -v 로 들어가는 값에 개행 등이 섞여
+# conf 라인이 인젝션되는 것을 차단(데몬 경로는 정수만 전달하나 방어적으로 검증).
+case "$FREQS" in *[!0-9\ ]*) echo "opc_wlan_apply: invalid freq '$FREQS' (digits/spaces only)" >&2; exit 2 ;; esac
 # trap 을 mktemp 보다 먼저 등록 — 임시파일 생성과 trap 등록 사이에 시그널이 와도
 # 파일이 남지 않도록(누출 창 제거). 실패 경로는 exit 으로 trap 정리에 위임한다.
 BAK=""; TMP=""
@@ -92,6 +95,7 @@ OPC_SSID="$SSID" awk -v freqs="$FREQS" -v do_freq="$DO_FREQ" -v do_ssid="$HAVE_S
     { print }
     END {
         if (blocks == 0) { print "error: no network={ block in " FILENAME > "/dev/stderr"; exit 1 }
+        if (blocks > 1) { print "warn: " blocks " network blocks present — all modified (single-block assumed)" > "/dev/stderr" }
     }
 ' "$CONF" > "$TMP" || { echo "opc_wlan_apply: conf edit failed" >&2; exit 4; }
 
@@ -99,6 +103,9 @@ OPC_SSID="$SSID" awk -v freqs="$FREQS" -v do_freq="$DO_FREQ" -v do_ssid="$HAVE_S
 # --reference 미지원 환경(busybox 등)은 0600 으로 폴백(노출 최소).
 chmod --reference="$CONF" "$TMP" 2>/dev/null || chmod 0600 "$TMP" 2>/dev/null || true
 mv -f "$TMP" "$CONF" || { echo "opc_wlan_apply: conf install failed" >&2; exit 4; }
+# mv 로 TMP 소진. reconfigure 검증 전까지 BAK(롤백본)는 보존해야 하므로, 이 구간에
+# 시그널이 와도 백업이 지워지지 않도록 trap 에서 BAK 제거를 뺀다.
+trap 'rm -f "$TMP"' EXIT
 sync 2>/dev/null || true
 
 # --- 적용 트리거: 전체 conf 재로드 → freq_list/scan_freq/ssid 모두 반영 -----------
