@@ -21,32 +21,39 @@ SSID=""
 HAVE_SSID=0
 while [ $# -gt 0 ]; do
     case "$1" in
-        --netid) NETID="${2:-0}"; shift 2 ;;
-        freq)    FREQS="${2:-}"; shift 2 ;;
-        ssid)    SSID="${2:-}"; HAVE_SSID=1; shift 2 ;;
+        --netid) [ $# -gt 1 ] || { echo "opc_wlan_apply: --netid requires an argument" >&2; exit 2; }
+                 NETID="$2"; shift 2 ;;
+        freq)    [ $# -gt 1 ] || { echo "opc_wlan_apply: freq requires an argument" >&2; exit 2; }
+                 FREQS="$2"; shift 2 ;;
+        ssid)    [ $# -gt 1 ] || { echo "opc_wlan_apply: ssid requires an argument" >&2; exit 2; }
+                 SSID="$2"; HAVE_SSID=1; shift 2 ;;
         *)       echo "opc_wlan_apply: unknown arg '$1'" >&2; exit 2 ;;
     esac
 done
 [ -n "$FREQS" ] || [ "$HAVE_SSID" = 1 ] || { echo "opc_wlan_apply: nothing to apply (need freq and/or ssid)" >&2; exit 2; }
 
-wc() { wpa_cli -i "$IFACE" "$@"; }
-wc_ok() { [ "$(wc "$@" 2>/dev/null)" = "OK" ]; }
+wcli() { wpa_cli -i "$IFACE" "$@"; }
+wcli_ok() { [ "$(wcli "$@" 2>/dev/null)" = "OK" ]; }
 
 # ctrl interface 가용 확인 (wpa_supplicant 미동작이면 3).
-wc ping >/dev/null 2>&1 || { echo "opc_wlan_apply: wpa_cli ctrl unavailable for $IFACE" >&2; exit 3; }
+wcli ping >/dev/null 2>&1 || { echo "opc_wlan_apply: wpa_cli ctrl unavailable for $IFACE" >&2; exit 3; }
+
+# Clear any stale global (outside-network) freq_list that would otherwise cap
+# scanning to old frequencies on upgraded devices. Best-effort: harmless if unset.
+wcli set freq_list "" >/dev/null 2>&1 || true
 
 if [ -n "$FREQS" ]; then
-    wc_ok set_network "$NETID" freq_list "$FREQS" || { echo "opc_wlan_apply: set freq_list failed" >&2; exit 4; }
-    wc_ok set_network "$NETID" scan_freq "$FREQS" || { echo "opc_wlan_apply: set scan_freq failed" >&2; exit 4; }
+    wcli_ok set_network "$NETID" freq_list "$FREQS" || { echo "opc_wlan_apply: set freq_list failed" >&2; exit 4; }
+    wcli_ok set_network "$NETID" scan_freq "$FREQS" || { echo "opc_wlan_apply: set scan_freq failed" >&2; exit 4; }
 fi
 if [ "$HAVE_SSID" = 1 ]; then
-    wc_ok set_network "$NETID" ssid "\"$SSID\"" || { echo "opc_wlan_apply: set ssid failed" >&2; exit 4; }
+    wcli_ok set_network "$NETID" ssid "\"$SSID\"" || { echo "opc_wlan_apply: set ssid failed" >&2; exit 4; }
 fi
 
 # 비휘발 영속 (update_config=1; conf 재생성 — 주석/포맷 손실 허용).
-wc_ok save_config || { echo "opc_wlan_apply: save_config failed" >&2; exit 5; }
+wcli_ok save_config || { echo "opc_wlan_apply: save_config failed" >&2; exit 5; }
 
 # 적용 트리거 (결과 미확인, 비치명). 끊김 1회.
-wc reassociate >/dev/null 2>&1 || echo "opc_wlan_apply: warn reassociate command failed (non-fatal)" >&2
+wcli reassociate >/dev/null 2>&1 || echo "opc_wlan_apply: warn reassociate command failed (non-fatal)" >&2
 
 exit 0
