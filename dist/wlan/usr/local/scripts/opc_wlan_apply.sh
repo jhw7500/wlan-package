@@ -95,7 +95,9 @@ OPC_SSID="$SSID" awk -v freqs="$FREQS" -v do_freq="$DO_FREQ" -v do_ssid="$HAVE_S
     }
 ' "$CONF" > "$TMP" || { echo "opc_wlan_apply: conf edit failed" >&2; exit 4; }
 
-chmod 0644 "$TMP" 2>/dev/null || true
+# 원본 conf 권한을 보존한다 — psk= 평문이 0644 로 월드리더블 노출되지 않도록.
+# --reference 미지원 환경(busybox 등)은 0600 으로 폴백(노출 최소).
+chmod --reference="$CONF" "$TMP" 2>/dev/null || chmod 0600 "$TMP" 2>/dev/null || true
 mv -f "$TMP" "$CONF" || { echo "opc_wlan_apply: conf install failed" >&2; exit 4; }
 sync 2>/dev/null || true
 
@@ -106,7 +108,7 @@ sync 2>/dev/null || true
 # exit code 가 아니라 출력이 "OK" 인지로 실패를 판정한다(wifi.sh 의 wpa_cli_ok 와 동일).
 if [ "$(wcli reconfigure 2>/dev/null)" != "OK" ]; then
     mv -f "$BAK" "$CONF"; sync 2>/dev/null || true
-    trap - EXIT
+    trap - EXIT   # TMP 는 위 mv 로 이미 소진(rename)됨 — 정리할 임시파일 없음
     wcli reconfigure >/dev/null 2>&1 || true
     echo "opc_wlan_apply: reconfigure failed for $IFACE — conf rolled back" >&2
     exit 5
