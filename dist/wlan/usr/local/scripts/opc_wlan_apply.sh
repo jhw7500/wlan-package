@@ -20,7 +20,7 @@
 #   끊김이 문제가 되면 freq_list 를 런타임 전용(set_network)으로 관리하는 방식으로
 #   후속 전환을 검토한다.
 #
-# exit: 0=ok / 2=usage / 3=ctrl_interface 부재 / 4=conf 편집 실패 / 5=reconfigure 실패
+# exit: 0=ok / 2=usage / 3=ctrl_interface 부재 / 4=conf 편집 실패(awk ENVIRON 미지원 포함) / 5=reconfigure 실패
 set -u
 
 IFACE="${1:-}"
