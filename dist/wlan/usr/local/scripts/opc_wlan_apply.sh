@@ -20,7 +20,7 @@
 #   끊김이 문제가 되면 freq_list 를 런타임 전용(set_network)으로 관리하는 방식으로
 #   후속 전환을 검토한다.
 #
-# exit: 0=ok / 2=usage / 3=ctrl_interface 부재 / 4=conf 편집 실패 / 5=reconfigure 실패
+# exit: 0=ok / 2=usage / 3=ctrl_interface 부재 / 4=conf 편집 실패(awk ENVIRON 미지원 포함) / 5=reconfigure 실패
 set -u
 
 IFACE="${1:-}"
@@ -60,6 +60,14 @@ DO_FREQ=0; [ -n "$FREQS" ] && DO_FREQ=1
 # FREQS 는 숫자/공백만 허용 — 직접 호출 시 awk -v 로 들어가는 값에 개행 등이 섞여
 # conf 라인이 인젝션되는 것을 차단(데몬 경로는 정수만 전달하나 방어적으로 검증).
 case "$FREQS" in *[!0-9\ ]*) echo "opc_wlan_apply: invalid freq '$FREQS' (digits/spaces only)" >&2; exit 2 ;; esac
+# busybox awk 가 ENVIRON 을 미지원하면 아래 SSID 전달이 "" 로 조용히 덮어써져 conf 의
+# ssid 가 빈 값으로 손상된다(awk 는 exit 0 → opcd 는 성공 오인하는 silent failure).
+# SSID 적용 시에만 ENVIRON 지원을 사전 검증하고, 미지원이면 편집 전에 비-0(exit 4)로
+# 실패를 알린다. (freq 경로는 -v 전달이라 ENVIRON 과 무관 — 밴드락은 영향받지 않는다.)
+if [ "$HAVE_SSID" = 1 ]; then
+    OPC_ENVIRON_PROBE=ok awk 'BEGIN { exit(ENVIRON["OPC_ENVIRON_PROBE"] == "ok" ? 0 : 1) }' </dev/null \
+        || { echo "opc_wlan_apply: awk lacks ENVIRON support — cannot apply ssid safely" >&2; exit 4; }
+fi
 # trap 을 mktemp 보다 먼저 등록 — 임시파일 생성과 trap 등록 사이에 시그널이 와도
 # 파일이 남지 않도록(누출 창 제거). 실패 경로는 exit 으로 trap 정리에 위임한다.
 BAK=""; TMP=""
@@ -70,6 +78,7 @@ TMP="$(mktemp "${CONF}.XXXXXX")" || { echo "opc_wlan_apply: mktemp failed" >&2; 
 
 # SSID 는 ENVIRON 으로 전달한다 — awk -v 는 값의 \X 를 C-escape 로 해석해(예: \b→
 # 백스페이스) 백슬래시가 든 SSID 를 손상시키므로, raw 보존되는 ENVIRON 을 쓴다.
+# (ENVIRON 미지원 awk 는 위 probe 에서 걸러져 이 경로에 도달하지 않는다.)
 OPC_SSID="$SSID" awk -v freqs="$FREQS" -v do_freq="$DO_FREQ" -v do_ssid="$HAVE_SSID" '
     function esc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return s }
     BEGIN { in_net = 0; blocks = 0; ssid_done = 0; new_ssid = ENVIRON["OPC_SSID"] }
