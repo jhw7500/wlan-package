@@ -216,7 +216,7 @@ wifi_init_conf.json
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
 | `LIMIT_CNT` | int | `5` | 인터페이스 미존재 허용 횟수. 이 값+1회 연속 실패 시 reboot 요청 |
-| `MAX_UNSTABLE_DURATION` | int | `10` | WiFi 불안정 허용 시간 (초). 초과 시 wpa_supplicant 재시작 |
+| `MAX_UNSTABLE_DURATION` | int | `10` | 미연결 허용 시간 (초). **단계적 복구**: 초과 시 1차 `wpa_cli reassociate`(가벼움), 3배(기본 30s) 초과 시에도 무진행이면 `wpa_supplicant` 재시작. 능동 연결 진행 중(auth/assoc/handshake)이면 개입 보류. AP 부재 시 재시작 루프를 피하려 disconnect 경로는 reboot까지 가지 않음 |
 | `MAX_REBOOT_COUNT` | int | `3` | 쿨다운 윈도우 내 최대 reboot 횟수. 초과 시 루프 감지 |
 | `REBOOT_COOLDOWN_SEC` | int | `300` | reboot 카운트 리셋 윈도우 (초) |
 | `MIN_UPTIME_SEC` | int | `30` | **커널 부팅**(`/proc/uptime`) 후 최소 대기 시간 (초). 이전에는 reboot 거부. 데몬 uptime이 아님 — boot loop 방지용 |

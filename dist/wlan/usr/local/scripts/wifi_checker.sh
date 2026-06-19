@@ -36,7 +36,16 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
     FAULT_REBOOT_CNT=$(jq -r ".${IFACE}.checker.FAULT_REBOOT_CNT // 6" "$WIFI_INIT_CONF_JSON")
 fi
 
+# Disconnect 복구 사다리: MAX_UNSTABLE_DURATION 후 reassociate(가벼움),
+# RESTART_DURATION(=3배) 후에도 무진행이면 wpa_supplicant 재시작. AP 부재로 인한
+# 무한 재시작/재부팅을 피하려 disconnect 경로는 reboot까지 가지 않는다.
+# jq 실패(손상/빈 JSON 등)로 MAX_UNSTABLE_DURATION이 빈 값/비숫자가 되면 산술이 0이 되어
+# 무의미한 즉시 재시작을 유발 → 숫자 검증 후 RESTART_DURATION 계산.
+[[ "$MAX_UNSTABLE_DURATION" =~ ^[0-9]+$ ]] || MAX_UNSTABLE_DURATION=10
+RESTART_DURATION=$((MAX_UNSTABLE_DURATION * 3))
+
 UNSTABLE_START=0
+REASSOC_DONE=0   # 재연결/재시작 시 리셋; 한 unstable 윈도우 내 reassociate 1회만 발화하도록 가드
 ERR_CNT=0
 FAULT_CNT=0
 STATE=""
@@ -93,6 +102,17 @@ is_wpa_completed() {
     local s
     s=$(wpa_cli -i "$IFACE" status 2>/dev/null | grep "^wpa_state=" | cut -d= -f2)
     [[ "$s" == "COMPLETED" ]]
+}
+
+# 능동 연결 진행 중(auth/assoc/handshake) 여부. 이 상태를 reassoc/restart로 끊으면
+# 연결이 무산되므로 개입을 보류한다. SCANNING/DISCONNECTED 등은 진행으로 보지 않음(사다리 적용).
+wpa_handshake_in_progress() {
+    local s
+    s=$(wpa_cli -i "$IFACE" status 2>/dev/null | grep "^wpa_state=" | cut -d= -f2)
+    case "$s" in
+        AUTHENTICATING|ASSOCIATING|ASSOCIATED|4WAY_HANDSHAKE|GROUP_HANDSHAKE) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 # Check if station dump works (returns 0=ok, 1=fault)
@@ -159,6 +179,7 @@ while true; do
         ERR_CNT=0
         if ! is_wpa_active; then
             UNSTABLE_START=0
+            REASSOC_DONE=0
             FAULT_CNT=0
             sleep 3
             continue
@@ -171,17 +192,33 @@ while true; do
             FAULT_CNT=0
             if [[ $UNSTABLE_START -eq 0 ]]; then
                 UNSTABLE_START=$TIMESTAMP
+                REASSOC_DONE=0
             fi
 
             DURATION=$((TIMESTAMP - UNSTABLE_START))
 
-            if (( DURATION >= MAX_UNSTABLE_DURATION )); then
-                logger -p local0.err "[$tag:$LINENO] [$IFACE] restart wpa_supplicant@$IFACE because wifi is not connected during $MAX_UNSTABLE_DURATION"
+            # 능동 연결 진행 중(auth/assoc/handshake)이면 개입 보류 — 진행 중 연결을 끊으면
+            # 오히려 연결이 무산된다. SCANNING/DISCONNECTED 등 무진행 상태에서만 사다리 적용.
+            # 단, RESTART_DURATION을 넘도록 handshake 상태에 멈춰(stuck) 있으면 wedge로 보고
+            # 재시작까지 escalate한다(무한 hold 방지). UNSTABLE_START 타이머는 handshake 동안에도
+            # 계속 누적되므로, handshake 실패/정체 시 적절한 단계로 곧바로 escalate된다.
+            if wpa_handshake_in_progress && (( DURATION < RESTART_DURATION )); then
+                : # 정상 진행 중 → 타이머 유지, 개입 없음
+            elif (( DURATION >= RESTART_DURATION )); then
+                # 2차(무거움): 장시간 미연결·무진행 → wpa_supplicant 재시작
+                logger -p local0.err "[$tag:$LINENO] [$IFACE] restart wpa_supplicant@$IFACE (disconnected ${DURATION}s >= ${RESTART_DURATION}s, no progress)"
                 wifi $IFACE restart
                 UNSTABLE_START=0
+                REASSOC_DONE=0
+            elif (( DURATION >= MAX_UNSTABLE_DURATION )) && (( REASSOC_DONE == 0 )); then
+                # 1차(가벼움): reassociate 먼저 (wpa 프로세스/상태 유지)
+                logger -p local0.warning "[$tag:$LINENO] [$IFACE] reassociate (disconnected ${DURATION}s >= ${MAX_UNSTABLE_DURATION}s, no progress)"
+                wpa_cli -i "$IFACE" reassociate >/dev/null 2>&1
+                REASSOC_DONE=1
             fi
         else
             UNSTABLE_START=0
+            REASSOC_DONE=0
 
             # Station dump fault detection (only when wpa_state=COMPLETED)
             if is_wpa_completed && ! check_station_dump; then
