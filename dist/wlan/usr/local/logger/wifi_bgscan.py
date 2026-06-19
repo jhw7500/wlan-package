@@ -121,20 +121,35 @@ def load_bgscan_interval(iface, fallback):
         logger.message("err", f"[{iface}] bgscan config load error: {e}", _EXTRA_())
     return fallback
 
-def construct_iw_scan_cmd(ssid, scan_freqs):
+def load_bgscan_flag(iface, key, default=True):
+    """`.iface.bgscan.<key>` (bool) 로드. 키 없음/형식오류면 default."""
+    try:
+        with open(WIFI_INIT_CONF_JSON, "r") as f:
+            data = json.load(f)
+        v = data.get(iface, {}).get("bgscan", {}).get(key)
+        if isinstance(v, bool):
+            return v
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        logger.message("err", f"[{iface}] bgscan flag '{key}' load error: {e}", _EXTRA_())
+    return default
+
+def construct_iw_scan_cmd(ssid, scan_freqs, ssid_filter=True, freq_filter=True):
     cmd = ["iw", IFACE, "scan"]
 
-    if scan_freqs:
+    # freq_filter/ssid_filter=false면 해당 필터를 빼고 더 광범위하게 스캔(기본 true).
+    if freq_filter and scan_freqs:
         cmd += ["freq"] + scan_freqs
 
-    if ssid:
+    if ssid_filter and ssid:
         cmd += ["ssid", ssid]
 
     return cmd
 
-def periodic_scan(ssid, freqs, interval):
+def periodic_scan(ssid, freqs, interval, ssid_filter=True, freq_filter=True):
 
-    cmd = construct_iw_scan_cmd(ssid, freqs)
+    cmd = construct_iw_scan_cmd(ssid, freqs, ssid_filter, freq_filter)
 
     if not interval:
         interval=DEFAULT_INTERVAL
@@ -192,8 +207,10 @@ def main_loop():
 
     ssid, freqs, interval = parse_wpa_supplicant_conf(WPA_CONF_FILE)
     interval = load_bgscan_interval(IFACE, interval)
-    logger.message("info", f"[{IFACE}] version: {VERSION}, ssid: {ssid}, freq: {freqs}, interval: {interval}", _EXTRA_())
-    periodic_scan(ssid, freqs, interval)
+    ssid_filter = load_bgscan_flag(IFACE, "ssid_filter", True)
+    freq_filter = load_bgscan_flag(IFACE, "freq_filter", True)
+    logger.message("info", f"[{IFACE}] version: {VERSION}, ssid: {ssid}, freq: {freqs}, interval: {interval}, ssid_filter: {ssid_filter}, freq_filter: {freq_filter}", _EXTRA_())
+    periodic_scan(ssid, freqs, interval, ssid_filter, freq_filter)
     #threading.Thread(target=periodic_scan, args=(ssid, freqs, interval), daemon=True).start()
 
 if __name__ == "__main__":
