@@ -23,8 +23,9 @@ IFACE = "mlan0"             # 무선 (게이트웨이 사용)
 ETH_CLIENT_IP = None
 ETH_LINK_TIMEOUT = 3
 IP_DISCOVERY = False        # MAC 확보 후 클라이언트 IP까지 탐색할지 (wbridge.ip_discovery, 기본 false)
-# ETH_SWEEP_SUBNET: mlan0 init 전 실행되므로 mlan0의 inet으로 sweep 대역을 못 잡음.
-# wbridge.eth_sweep_subnet에 정적 CIDR(예: "192.168.0.0/24")을 두면 4차 sweep 폴백으로 사용.
+# ETH_SWEEP_SUBNET: sweep는 ETH_IFACE(eth0)로 나가므로 대역도 eth0 기준이 맞다. 미설정 시
+# eth0→mlan0 inet 순으로 폴백하지만(get_sweep_network), 부팅 race(특히 mlan0 미초기화)를
+# 피하려면 wbridge.eth_sweep_subnet에 정적 CIDR(예: "192.168.1.0/24")을 두는 게 안전하다.
 ETH_SWEEP_SUBNET = None
 # PEER_ROUTE_ENABLED: 양방향 peer 라우팅(옵션 X) 마스터 토글. false면 host route 등록 skip.
 PEER_ROUTE_ENABLED = True
@@ -220,12 +221,13 @@ def passive_ip_for_mac(iface, target_mac, timeout=6):
 
     return result_ip[0]
 
-def get_mlan_network():
+def get_iface_network(iface):
     """
-    mlan0의 네트워크 대역 추출 (예: '192.168.0.35/24' -> '192.168.0.0/24')
+    지정 인터페이스의 IPv4 네트워크 대역 추출 (예: '192.168.1.1/24' -> '192.168.1.0/24').
+    inet가 없으면(미초기화/무IP) None.
     """
     try:
-        out = sh("ip", "-4", "addr", "show", "dev", IFACE).stdout
+        out = sh("ip", "-4", "addr", "show", "dev", iface).stdout
         for line in out.splitlines():
             line = line.strip()
             if line.startswith("inet "):
@@ -238,14 +240,14 @@ def get_mlan_network():
 
 def get_sweep_network():
     """
-    sweep 대역 결정 우선순위:
-      1) wbridge.eth_sweep_subnet (정적, 부팅 race condition 없음)
-      2) mlan0의 inet (mlan0 init 후 호출되는 케이스 폴백)
-    부팅 시 mlan0 init 전 호출이므로 (2)는 거의 None.
+    sweep 대역 결정 우선순위 (sweep는 ETH_IFACE로 전송됨):
+      1) wbridge.eth_sweep_subnet (정적, 부팅 race condition 없음 — 명시 override)
+      2) eth0(ETH_IFACE)의 inet — peer가 실제 위치하는 대역. static IP면 부팅 초기에도 가용
+      3) mlan0(IFACE)의 inet — flat-bridge(eth0 무IP)/재실행 폴백. 부팅 시엔 보통 None
     """
     if ETH_SWEEP_SUBNET:
         return ETH_SWEEP_SUBNET
-    return get_mlan_network()
+    return get_iface_network(ETH_IFACE) or get_iface_network(IFACE)
 
 def arp_unicast_probe_for_ip(iface, target_mac, ip_list, timeout=1.5):
     """
@@ -366,7 +368,7 @@ def main():
 
         if not ip:
             # 3-3) sweep (최후 수단)
-            # mlan0 init 전 호출되므로 ETH_SWEEP_SUBNET(정적) 우선, mlan0 inet 폴백.
+            # sweep는 eth0로 전송 → ETH_SWEEP_SUBNET(정적) 우선, 미설정 시 eth0→mlan0 inet 폴백.
             net = get_sweep_network()
             if net:
                 logger.message("info", f"[{IFACE}] sweep network: {net}", _EXTRA_())
