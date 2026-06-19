@@ -251,8 +251,10 @@
             "enabled": false
         },
         "bgscan": {
-            "_comment": "Background scan configuration for mlan0",
+            "_comment": "Background scan configuration for mlan0. ssid_filter/freq_filter: bgscan의 iw scan에 ssid/freq 필터 포함 여부(기본 true). false면 해당 필터 없이 더 광범위하게 스캔(스캔 시간·airtime↑).",
             "interval": 60,
+            "ssid_filter": true,
+            "freq_filter": true,
             "enabled": true
         },
         "roaming": {
@@ -427,8 +429,10 @@
             "enabled": false
         },
         "bgscan": {
-            "_comment": "Background scan configuration for mlan1",
+            "_comment": "Background scan configuration for mlan1. ssid_filter/freq_filter: bgscan의 iw scan에 ssid/freq 필터 포함 여부(기본 true). false면 해당 필터 없이 더 광범위하게 스캔(스캔 시간·airtime↑).",
             "interval": 60,
+            "ssid_filter": true,
+            "freq_filter": true,
             "enabled": false
         },
         "roaming": {

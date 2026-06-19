@@ -31,6 +31,7 @@ except Exception:
 #last_log_time = 0
 VERSION = "0.0"
 IFACE = ""
+_WPA_CLI_WARNED = False   # wpa_cli 부재 로그 1회 제한 플래그
 
 def handle_sigterm(signum, frame):
     logger.message('crit', f"[{IFACE}] SIGTERM {signum} received! Cleaning up...", _EXTRA_())
@@ -64,6 +65,32 @@ def is_wpa_running(interface="mlan0"):
     )
     return result.stdout.strip() == "active"
 
+def is_wpa_connected(interface="mlan0"):
+    """wpa_state==COMPLETED(연결 완료)인지. 미연결(스캔/인증/assoc 중)이면 False.
+    wpa_cli 부재/오류는 로그로 가시화 — silent False면 bgscan이 영영 skip돼도 진단 불가."""
+    try:
+        result = subprocess.run(
+            ["wpa_cli", "-i", interface, "status"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode != 0:
+            logger.message("err", f"[{interface}] wpa_cli status exited {result.returncode} — treating as disconnected", _EXTRA_())
+            return False
+        for line in result.stdout.splitlines():
+            if line.startswith("wpa_state="):
+                return line.split("=", 1)[1].strip() == "COMPLETED"
+        # exit 0인데 wpa_state= 라인 부재(소켓 오류 등) — silent False 방지 위해 로그
+        logger.message("err", f"[{interface}] wpa_state not found in wpa_cli output — treating as disconnected", _EXTRA_())
+    except FileNotFoundError:
+        # wpa_cli 부재는 영구 상태 → 매 호출 로그 flood 방지 위해 1회만 남긴다.
+        global _WPA_CLI_WARNED
+        if not _WPA_CLI_WARNED:
+            logger.message("err", f"[{interface}] wpa_cli not found — bgscan cannot verify connection (skipping scans)", _EXTRA_())
+            _WPA_CLI_WARNED = True
+    except Exception as e:
+        logger.message("err", f"[{interface}] wpa_cli status error: {e}", _EXTRA_())
+    return False
+
 def parse_wpa_supplicant_conf(path):
     ssid = None
     freqs = []
@@ -94,39 +121,59 @@ def parse_wpa_supplicant_conf(path):
 
     return ssid, freqs, interval
 
-def load_bgscan_interval(iface, fallback):
+def load_bgscan_json(iface):
+    """`.iface.bgscan`에서 interval/ssid_filter/freq_filter를 한 번의 파일 읽기로 로드.
+    interval은 양의 정수만, 필터는 bool만 수용. 없음/형식오류면 (None, True, True)."""
+    interval, ssid_filter, freq_filter = None, True, True
     try:
         with open(WIFI_INIT_CONF_JSON, "r") as f:
-            data = json.load(f)
-        interval = data.get(iface, {}).get("bgscan", {}).get("interval")
-        if isinstance(interval, int) and interval > 0:
-            return interval
+            bg = json.load(f).get(iface, {}).get("bgscan", {})
+        iv = bg.get("interval")
+        if isinstance(iv, int) and iv > 0:
+            interval = iv
+        if isinstance(bg.get("ssid_filter"), bool):
+            ssid_filter = bg["ssid_filter"]
+        if isinstance(bg.get("freq_filter"), bool):
+            freq_filter = bg["freq_filter"]
     except FileNotFoundError:
         pass
     except Exception as e:
-        logger.message("err", f"[{iface}] bgscan config load error: {e}", _EXTRA_())
-    return fallback
+        logger.message("err", f"[{iface}] bgscan json load error: {e}", _EXTRA_())
+    return interval, ssid_filter, freq_filter
 
-def construct_iw_scan_cmd(ssid, scan_freqs):
+def construct_iw_scan_cmd(ssid, scan_freqs, ssid_filter=True, freq_filter=True):
     cmd = ["iw", IFACE, "scan"]
 
-    if scan_freqs:
+    # freq_filter/ssid_filter=false면 해당 필터를 빼고 더 광범위하게 스캔(기본 true).
+    if freq_filter and scan_freqs:
         cmd += ["freq"] + scan_freqs
 
-    if ssid:
+    if ssid_filter and ssid:
         cmd += ["ssid", ssid]
 
     return cmd
 
-def periodic_scan(ssid, freqs, interval):
+def periodic_scan(conf_path):
 
-    cmd = construct_iw_scan_cmd(ssid, freqs)
+    # 스캔 명령/주기/필터는 매 스캔 직전 wpa_supplicant conf + JSON에서 재구성한다.
+    def build():
+        ssid, freqs, wpa_interval = parse_wpa_supplicant_conf(conf_path)
+        json_interval, ssid_filter, freq_filter = load_bgscan_json(IFACE)
+        interval = json_interval or wpa_interval or DEFAULT_INTERVAL
+        cmd = construct_iw_scan_cmd(ssid, freqs, ssid_filter, freq_filter)
+        return cmd, interval
 
-    if not interval:
-        interval=DEFAULT_INTERVAL
+    # 초기 1회 구성 (실패해도 기동 — 다음 스캔 직전 재시도).
+    cmd = None
+    interval = DEFAULT_INTERVAL
+    try:
+        cmd, interval = build()
+        logger.message("info", f"[{IFACE}] bgscan start: cmd={cmd}, interval={interval}", _EXTRA_())
+    except Exception as e:
+        logger.message("err", f"[{IFACE}] initial bgscan config load failed: {e}", _EXTRA_())
 
     last_time = time.time()
-    
+
     while True:
         if not os.path.exists(f"/sys/class/net/{IFACE}"):
             logger.message("info", f"[{IFACE}] waiting for interface...", _EXTRA_())
@@ -153,14 +200,36 @@ def periodic_scan(ssid, freqs, interval):
             pass
 
         if time.time() - last_time >= interval:
+            # 연결 상태 확인은 스캔 주기 도래 시에만 수행한다(매 tick wpa_cli 서브프로세스 호출 회피).
+            # 미연결(스캔/인증/assoc 중)이면 wpa_supplicant의 재연결 스캔/association과 라디오 경합
+            # (-EBUSY)·off-channel 교란을 피하려 skip하고 다음 주기로 back off한다.
+            # (연결 상태에서 로밍 후보 탐색이 bgscan 본래 목적이라 미연결 스캔은 무의미)
+            if not is_wpa_connected(IFACE):
+                # last_time을 리셋하지 않는다 → 재연결 직후 (대기 없이) 곧바로 첫 스캔이 발생해
+                # 로밍 후보를 빠르게 갱신. 미연결 동안은 5s 간격으로만 재확인하므로 매 tick
+                # wpa_cli 호출은 없다(연결 상태에선 interval마다 1회만 호출됨).
+                time.sleep(5)
+                continue
+
+            # 스캔 직전에 wpa conf + JSON을 다시 읽어 최신 ssid/freq/interval/필터로 스캔한다
+            # (런타임 변경 반영). 재로드 실패 시 직전 cmd/interval 유지.
             try:
-                logger.message("info", f"[{IFACE}] {cmd}", _EXTRA_())
-                #subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                subprocess.run(cmd, stdout=subprocess.DEVNULL, check=True)
-                #subprocess.run(cmd, check=True)
-                last_time = time.time()
-            except subprocess.CalledProcessError as e:
-                logger.message("err", f"[{IFACE}] iw scan failed: {e}", _EXTRA_())
+                cmd, interval = build()
+            except Exception as e:
+                logger.message("err", f"[{IFACE}] bgscan config reload failed (keep last): {e}", _EXTRA_())
+
+            if cmd:
+                try:
+                    logger.message("info", f"[{IFACE}] {cmd}", _EXTRA_())
+                    # stderr는 capture(저널 노이즈 방지)하되 실패 시 로그에 포함 → 진단성 유지.
+                    # timeout으로 드라이버/FW stall 시 데몬이 영구 hang되는 것을 방지(다음 주기 재시도).
+                    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, check=True, timeout=30)
+                except subprocess.TimeoutExpired:
+                    logger.message("err", f"[{IFACE}] iw scan timed out (30s) — driver/FW stall?", _EXTRA_())
+                except subprocess.CalledProcessError as e:
+                    logger.message("err", f"[{IFACE}] iw scan failed: {e} stderr={(e.stderr or '').strip()}", _EXTRA_())
+            # 성공/실패 무관하게 다음 주기까지 back off (실패 시 1s 폭주 재시도 방지)
+            last_time = time.time()
 
         time.sleep(1)
 
@@ -168,11 +237,10 @@ def main_loop():
     #subprocess.run(["ifconfig", IFACE, "up"])
     #last_log_time = time.time()
 
-    ssid, freqs, interval = parse_wpa_supplicant_conf(WPA_CONF_FILE)
-    interval = load_bgscan_interval(IFACE, interval)
-    logger.message("info", f"[{IFACE}] version: {VERSION}, ssid: {ssid}, freq: {freqs}, interval: {interval}", _EXTRA_())
-    periodic_scan(ssid, freqs, interval)
-    #threading.Thread(target=periodic_scan, args=(ssid, freqs, interval), daemon=True).start()
+    # 스캔 파라미터(ssid/freq/interval/필터)는 periodic_scan이 매 스캔 직전 재로드하며,
+    # 초기값은 periodic_scan의 "bgscan start" 로그에 찍힌다(여기서 중복 read 안 함).
+    logger.message("info", f"[{IFACE}] version: {VERSION} (스캔 파라미터는 매 스캔 직전 재로드)", _EXTRA_())
+    periodic_scan(WPA_CONF_FILE)
 
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_sigterm)

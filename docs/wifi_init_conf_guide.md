@@ -559,9 +559,18 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 ### 11.3 bgscan - 백그라운드 스캔
 
+**사용 스크립트**: `wifi_bgscan.py`
+
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
+| `enabled` | bool | mlan0 `true` / mlan1 `false` | bgscan 데몬 활성화 |
 | `interval` | int | `60` | 백그라운드 스캔 주기 (초) |
+| `ssid_filter` | bool | `true` | `iw scan`에 `ssid <wpa_supplicant conf의 ssid>` 필터 포함 여부. `false`면 SSID 필터 없이 스캔 |
+| `freq_filter` | bool | `true` | `iw scan`에 `freq <wpa_supplicant conf의 scan_freq>` 필터 포함 여부. `false`면 freq 제한 없이 전체 대역 스캔(스캔 시간·airtime↑) |
+
+> bgscan은 `wpa_state==COMPLETED`(연결됨)일 때만 `iw <iface> scan`을 수행한다 — 미연결 시엔 wpa_supplicant의 재연결 스캔/association과 라디오 경합을 피하려 skip.
+
+> 스캔 파라미터는 **매 스캔 직전에 다시 읽는다** — `ssid`/`freq`는 `wpa_supplicant-<iface>.conf`에서, `interval`/`ssid_filter`/`freq_filter`는 이 JSON `bgscan` 블록에서. 런타임에 무선설정을 재적용하거나 JSON을 바꾸면 bgscan 재시작 없이 **다음 스캔부터 새 값으로 스캔**한다(읽기 실패 시 직전 값 유지). 연결 상태 확인(`wpa_cli`)도 매 tick이 아니라 스캔 주기 도래 시에만 수행한다.
 
 ### 11.4 roaming - 로밍 알고리즘
 
