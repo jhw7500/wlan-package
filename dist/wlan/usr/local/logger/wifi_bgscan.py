@@ -221,8 +221,11 @@ def periodic_scan(conf_path):
             if cmd:
                 try:
                     logger.message("info", f"[{IFACE}] {cmd}", _EXTRA_())
-                    # stderr는 capture(저널 노이즈 방지)하되 실패 시 로그에 포함 → 진단성 유지
-                    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, check=True)
+                    # stderr는 capture(저널 노이즈 방지)하되 실패 시 로그에 포함 → 진단성 유지.
+                    # timeout으로 드라이버/FW stall 시 데몬이 영구 hang되는 것을 방지(다음 주기 재시도).
+                    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, check=True, timeout=30)
+                except subprocess.TimeoutExpired:
+                    logger.message("err", f"[{IFACE}] iw scan timed out (30s) — driver/FW stall?", _EXTRA_())
                 except subprocess.CalledProcessError as e:
                     logger.message("err", f"[{IFACE}] iw scan failed: {e} stderr={(e.stderr or '').strip()}", _EXTRA_())
             # 성공/실패 무관하게 다음 주기까지 back off (실패 시 1s 폭주 재시도 방지)
