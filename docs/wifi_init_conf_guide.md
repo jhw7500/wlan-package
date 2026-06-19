@@ -22,8 +22,9 @@ wifi_init_conf.json
 ├── wbridge             # wifi_bridge 프로세스 설정
 │   ├── optimize        #   커널 레벨 네트워크 튜닝 (UDP/IRQ/오프로드)
 │   ├── link_guard      #   유/무선 링크 상태 감시
-│   └── thermal         #   브릿지 thermal 상태 관리
-│       └── thresholds  #     온도 임계값 (히스테리시스)
+│   ├── thermal         #   브릿지 thermal 상태 관리
+│   │   └── thresholds  #     온도 임계값 (히스테리시스)
+│   └── moal            #   moal 엔진 파라미터 (engine=moal 전용 insmod 인자)
 ├── checker             # wifi_checker + reboot 정책
 ├── temperature         # 온도 모니터링 임계값
 ├── arping              # ARP 연결 감시 + sweep
@@ -187,6 +188,24 @@ wifi_init_conf.json
 | `hot_wifi_exit` | int | `75` | WiFi hot 해제 온도 (°C) |
 
 **히스테리시스 설계**: enter와 exit 사이에 5도 갭을 두어 상태 플리핑을 방지한다.
+
+### 3.5 wbridge.moal - moal 엔진 파라미터
+
+**사용 스크립트**: `wifi_init.sh` (moal 모듈 insmod 인자)
+
+`wbridge.engine="moal"`(드라이버 레벨 bridge)일 때만 적용된다. 모두 **insmod 인자**로 전달되므로 변경 반영에는 재부팅/드라이버 리로드가 필요하다. `engine=pcap|tpacket`이면 이 블록은 무시된다.
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| `keepalive_ms` | int | `1` | `main_work` keepalive hrtimer 주기(ms). `0`=off(트래픽 워밍 의존, idle 후 첫 패킷 콜드 스파이크), `1`=기본(실측 7ms 레이턴시 전제). 클수록 idle wakeup↓(발열↓)·레이턴시↑. → insmod 인자 `bridge_keepalive_ms`. |
+| `keepalive_idle_ms` | int | `20` | keepalive **idle cutoff**(ms). `0`=free-running(타이머 상시 가동, **드라이버 기본**), `>0`=adaptive(트래픽으로 타이머 arm 후 이 시간만큼 idle 지속 시 자동 정지 → idle 시 wakeup 0). → insmod 인자 `bridge_keepalive_idle_ms`. 아래 ⚠️/capability-gate 참고. |
+| `debug` | int(`0`\|`1`) | `0` | bridge 디버그 로그(`BR_DBG`/`[DBG-RXDROP]`) — dmesg로 패킷 경로·가드 진단. 런타임 변경 가능: `/sys/module/moal/parameters/bridge_debug`. → insmod 인자 `bridge_debug`. |
+| `peer` | string | `""` | 브릿지 유선 peer 인터페이스명. 빈값=드라이버 기본(`eth0`) + 인자 미전달. 유효(IFNAMSIZ 15자 이내)할 때만 → insmod 인자 `bridge_peer`. moal 엔진에만 적용(pcap 트랙·ARP 스크립트는 eth0 하드코딩). |
+| `consume_link_local` | int(`0`\|`1`) | `""` | 차단된 link-local(STP/LLDP) 프레임을 드라이버 내에서 폐기(`1`)하여 mlan `rx_nohandler` 증가를 막는 A/B 진단 토글. 빈값/미설정=드라이버 기본(`0`, 스택 전달 후 폐기). 유효할 때만 → insmod 인자 `bridge_consume_link_local`. |
+
+> **⚠️ `keepalive_idle_ms=20` 기본 동작 변경 주의** (`mlan1.enabled`와 동급의 behavioral change): 드라이버 자체 기본값은 `0`(free-running)이지만 이 패키지의 출하 config는 `20`(adaptive)이다. 따라서 해당 param을 지원하는 드라이버(예: `moal_imx93.ko`)에서는 부팅 시마다 명시적으로 `20`(adaptive idle cutoff)이 적용되어 **idle 발열↓ ↔ idle 후 첫 패킷 콜드 가능**이라는 동작 변화가 생긴다. 드라이버 기본(free-running)을 원하면 `0`으로 설정한다.
+
+> **capability-gate (부팅 안전)**: `keepalive_idle_ms`는 신규 param이라, `wifi_init.sh`가 로드 대상 `.ko`에 해당 param이 선언돼 있는지 `grep -aq`로 확인한 뒤 선언된 경우에만 insmod 인자로 전달한다. 미선언 드라이버(예: 현재 `moal_imx8.ko`)에는 자동으로 전달하지 않아 `insmod` 실패(=Wi-Fi init 붕괴)를 방지하며, 이 경우 드라이버 기본값(`0`)이 쓰인다. `peer`/`consume_link_local`도 빈값이면 동일하게 미전달(구버전 드라이버 호환).
 
 ---
 
