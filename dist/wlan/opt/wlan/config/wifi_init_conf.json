@@ -60,6 +60,7 @@
             "arp_ignore_always.enabled: (bool) ARP 정책 강제 토글 (기본 false). true면 peer_route와 무관하게 arp_ignore=1/arp_announce=2 항상 적용. IP를 eth0에 두는 토폴로지(mlan0 무IP/타서브넷) 전용 — mlan0 커널 스택의 weak-host ARP 응답(클론 MAC)이 eth0 IP에 대한 이중 ARP 응답 레이스를 만드는 것을 커널 단에서 차단 (pcap/moal 엔진 공통). 주의: 기본 토폴로지(mlan0-IP)에서 peer_route=off와 조합하면 유선→BD ARP 무응답이 되므로 기본 토폴로지에서는 반드시 false 유지",
             "engine: (string) pcap|tpacket|moal — bridge 엔진. pcap/tpacket=유저스페이스, moal=드라이버 레벨 (mod_para.conf bridge_mode=1)",
             "moal.keepalive_ms: (int) engine=moal 전용 — 드라이버 main_work keepalive hrtimer 주기(ms). 발열↔레이턴시 노브: 1=기본(실측 7ms 레이턴시의 전제), 커질수록 idle wakeup 감소(발열↓)·레이턴시↑, 0=off(트래픽 워밍에만 의존, idle 후 첫 패킷 콜드 스파이크). insmod 인자이므로 변경 반영에는 재부팅/드라이버 리로드 필요. pcap의 optimize.mode에 대응하는 moal측 발열 노브",
+            "moal.keepalive_idle_ms: (int) engine=moal 전용 — keepalive 타이머의 idle cutoff(ms). 0=free-running(타이머 상시 가동, 드라이버 기본), >0=adaptive(트래픽으로 타이머 arm 후 이 시간만큼 idle 지속 시 자동 정지 → idle 시 wakeup 0). 발열 노브: 작을수록 빨리 정지(발열↓)·idle 후 첫 패킷 콜드 가능, 클수록 늦게 정지(레이턴시 안정). 기본 20. insmod 인자 bridge_keepalive_idle_ms로 전달(해당 param 미선언 드라이버 예: 현 moal_imx8.ko 에는 자동 미전달). 변경 반영에는 재부팅/드라이버 리로드 필요",
             "moal.debug: (int 0|1) bridge 디버그 로그(BR_DBG/[DBG-RXDROP]) — dmesg로 패킷 경로·가드 동작 진단. 평시 0 (runtime 변경도 가능: /sys/module/moal/parameters/bridge_debug)",
             "moal.peer: (string) 브릿지 유선 peer 인터페이스명. 빈 문자열이면 드라이버 기본(eth0) 사용 + insmod 인자 미전달. 주의: moal 엔진에만 적용 — peer_route/ARP sysctl 스크립트와 pcap 트랙은 eth0 하드코딩이라 eth0 외 값은 별도 작업 필요",
             "moal.consume_link_local: (int 0|1) [DBG-RXDROP] 차단된 link-local(STP/LLDP) 프레임을 드라이버 내 폐기(1)하여 mlan rx_nohandler 카운트 증가를 막는 A/B 진단 토글. 빈 문자열/미설정=드라이버 기본(0, 스택 전달 후 폐기)"
@@ -83,6 +84,7 @@
         "moal": {
             "_comment": "engine=moal 전용 파라미터 (키 설명은 상단 _comment). peer/consume_link_local은 빈 문자열이면 insmod 인자로 전달하지 않음(드라이버 기본값 사용 — 구버전 드라이버 호환).",
             "keepalive_ms": 1,
+            "keepalive_idle_ms": 20,
             "debug": 0,
             "peer": "",
             "consume_link_local": ""
@@ -224,6 +226,7 @@
         "Frequency": "auto",
         "net_rx": 0,
         "mgmt_hex_dump_enable": false,
+        "thermal_mgmt": true,
         "rate_adapt": {
             "_comment": "FW rate adaptation config. mode: 0=legacy, 1=SR. For SR: thresh 0xff=dynamic(noise-based), else static(success-rate%). interval_ms: eval period in ms. Must be set before association.",
             "mode": 1,
@@ -392,10 +395,11 @@
         "CAL_DATA_CFG": "",
         "TXPWRLIMIT_PATH": "",
         "connect_threshold": -100,
-        "enabled": true,
+        "enabled": false,
         "Frequency": "auto",
         "net_rx": 0,
         "mgmt_hex_dump_enable": false,
+        "thermal_mgmt": true,
         "rate_adapt": {
             "_comment": "FW rate adaptation config. mode: 0=legacy, 1=SR. For SR: thresh 0xff=dynamic(noise-based), else static(success-rate%). interval_ms: eval period in ms. Must be set before association.",
             "mode": 1,
