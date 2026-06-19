@@ -41,6 +41,7 @@ wifi_init_conf.json
 │   ├── bgscan          #   백그라운드 스캔
 │   ├── roaming         #   로밍 알고리즘
 │   ├── mcs_tier        #   MCS tier 능력 제한 (mcstiercfg)
+│   ├── thermal_mgmt    #   FW thermal 관리 (enable/disable)
 │   └── on_connect      #   AP 연결 후 실행 명령
 └── mlan1               # mlan1 인터페이스 설정 (mlan0과 동일 구조)
     ├── logger          #   mlan1 전용 로깅 override
@@ -50,6 +51,7 @@ wifi_init_conf.json
     ├── bgscan          #   백그라운드 스캔
     ├── roaming         #   로밍 알고리즘
     ├── mcs_tier        #   MCS tier 능력 제한 (mcstiercfg)
+    ├── thermal_mgmt    #   FW thermal 관리 (enable/disable)
     └── on_connect      #   AP 연결 후 실행 명령
 ```
 
@@ -444,6 +446,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 | `STANDARD` | string | mlan0 `"ax"`, mlan1 `"ac"` | WiFi 표준 제한. `wifi_init.sh`가 `wifi_mod_para.conf`의 해당 블록에 `dev_cap_mask`로 반영. `n`/`ac`/`ax`(또는 `4`/`5`/`6`). **mlan1은 `ax` 불가**. 아래 [매핑](#standard--wifi_mod_paraconf-매핑) 참고 |
 | `CAL_DATA_CFG` | string | `""` | 인터페이스별 캘리브레이션 데이터 파일. 비어있으면 `global.CAL_DATA_CFG`로 fallback. `wifi_init.sh`가 `wifi_mod_para.conf` 블록의 `cal_data_cfg=`로 주입. 아래 [매핑](#cal_data_cfg--txpwrlimit_path--인터페이스별-매핑) 참고 |
 | `TXPWRLIMIT_PATH` | string | `""` | 인터페이스별 TX 파워 리밋 파일(절대 경로). 비어있으면 `global.TXPWRLIMIT_PATH`로 fallback. `"none"`이면 이 인터페이스만 미적용. 부팅 시 `mlanutl <iface> hostcmd`로 적용 |
+| `thermal_mgmt` | bool | `true` | FW thermal management 활성화. `true`(기본)=enable, `false`=disable. 부팅 시 `mlanutl <iface> hostcmd`로 적용. 아래 [§11.8](#118-thermal_mgmt---fw-thermal-관리) 참고 |
 
 > `config.json`이 별도로 설치된 환경에서는 `.mlan0.enabled`, `.mlan1.enabled`, `.mlan0.Frequency`, `.mlan1.Frequency`가 존재할 때만 이 값을 override한다.
 
@@ -677,6 +680,21 @@ mlan0 / mlan1에 개별 적용. 블록이 없거나 특정 키가 없으면 `glo
 |----|------|--------|------|
 | `enabled` | bool | `false` | on_connect 기능 활성화 |
 | `commands` | array | `[]` | AP 연결/로밍 후 순서대로 실행할 명령 목록. 실패해도 중단하지 않고 로깅만 수행 |
+
+### 11.8 thermal_mgmt - FW Thermal 관리
+
+**사용 스크립트**: `wifi_init.sh`
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| `thermal_mgmt` | bool | `true` | `.mlanN.thermal_mgmt`. FW thermal management 제어. `true`(기본)=enable, `false`=disable |
+
+**적용 방식**:
+- 부팅 시 `wifi_init.sh` → `apply_iface_thermal_mgmt()`가 insmod 직후(인터페이스 생성 후) per-interface 1회 적용
+- `mlanutl <iface> hostcmd /lib/firmware/cts/config/debug.conf {enable|disable}_thermal_mgmt` 호출
+- hostcmd 정의(`debug.conf`): `CmdCode 0x008b`, `SUBID 0x113`(THERMAL_MANAGEMENT), `Value 1=enable / 0=disable`
+- 키 누락/invalid → factory default(`enable`). 명시적 `false`일 때만 `disable`
+- `.mlanN.enabled=false`이면 해당 인터페이스는 건너뜀 (TXPWRLIMIT과 동일 동작)
 
 ---
 

@@ -9,12 +9,15 @@ tag=$(basename "$0")
 JSON_FILE="${JSON_FILE:-/usr/local/etc/config.json}"
 MOD_PARA="cts/wifi_mod_para.conf"
 TXPWRLIMIT_PATH="/lib/firmware/cts/txpwrlimit_cfg_9098.conf"
+# thermal_mgmt FW hostcmd 정의 파일 (per-interface enable/disable_thermal_mgmt 블록, SUBID 0x113)
+THERMAL_DEBUG_CONF="/lib/firmware/cts/config/debug.conf"
 ANT_TYPE=""
 WBRIDGE_ENGINE="pcap"
 # moal 엔진 bridge 파라미터 (전역, engine=moal일 때 moal insmod args에 추가)
 bridge_debug=0
 bridge_wlan_idx=0
 bridge_keepalive_ms=1
+bridge_keepalive_idle_ms=20  # idle cutoff(ms). 드라이버가 해당 param을 선언한 경우에만 insmod 인자로 전달(아래 moal 블록)
 bridge_peer=""               # 빈값=드라이버 기본(eth0). JSON 명시 시에만 insmod 인자 추가
 bridge_consume_link_local="" # 빈값=드라이버 기본(0). JSON 명시 시에만 insmod 인자 추가
 
@@ -39,6 +42,14 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
         *) bridge_keepalive_ms=$_ka ;;
     esac
     unset _ka
+    # moal keepalive_idle: idle 구간 keepalive 주기 (engine=moal 전용 insmod 인자).
+    # 음이 아닌 정수만 수용 — 그 외(키 없음/잘못된 값)는 스크립트 기본값(20) 유지.
+    _kai=$(jq -r '.wbridge.moal.keepalive_idle_ms // empty' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    case "$_kai" in
+        ''|*[!0-9]*) ;;
+        *) bridge_keepalive_idle_ms=$_kai ;;
+    esac
+    unset _kai
     # moal.debug: BR_DBG/[DBG-RXDROP] 진단 로그 (0|1만 수용)
     _bd=$(jq -r '.wbridge.moal.debug // empty' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
     case "$_bd" in
@@ -144,6 +155,14 @@ logger -p local0.info "[$tag:$LINENO] mlan0: enabled=$MLAN0_ENABLED freq=$MLAN0_
 [ "$BRIDGE_IFACE" = "mlan1" ] && bridge_wlan_idx=1
 if [ "$WBRIDGE_ENGINE" = "moal" ]; then
     moal_args="$moal_args bridge_mode=1 bridge_debug=$bridge_debug bridge_wlan_idx=$bridge_wlan_idx bridge_keepalive_ms=$bridge_keepalive_ms"
+    # bridge_keepalive_idle_ms: 신규 param — 미선언 드라이버(예: 현재 moal_imx8.ko)에 전달하면
+    # insmod가 unknown-parameter로 실패하므로, 로드 대상 .ko가 선언한 경우에만 전달한다.
+    # grep -a는 busybox에서도 동작(modinfo 비의존). 미지원 시 드라이버 기본값(0=free-running) 사용.
+    if grep -aq 'bridge_keepalive_idle_ms' "/opt/wlan/driver/$MOAL_KO" 2>/dev/null; then
+        moal_args="$moal_args bridge_keepalive_idle_ms=$bridge_keepalive_idle_ms"
+    else
+        logger -p local0.warn "[$tag:$LINENO] moal: $MOAL_KO lacks bridge_keepalive_idle_ms param; skip (driver default)"
+    fi
     # 선택 파라미터: JSON에 유효하게 명시된 경우에만 추가
     # (해당 param이 없는 구버전 드라이버는 insmod가 실패하므로 기본 미전달)
     [ -n "$bridge_peer" ] && moal_args="$moal_args bridge_peer=$bridge_peer"
@@ -537,6 +556,39 @@ apply_iface_txpwrlimit() {
     mlanutl "$iface" hostcmd "$path" txpwrlimit_5g_cfg_set_sub3 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] txpwrlimit_5g_cfg_set_sub3 failed"
 }
 
+# thermal_mgmt: FW thermal management 제어 (debug.conf의 SUBID 0x113 hostcmd).
+# .mlanN.thermal_mgmt 기본 true(=enable). 명시적 false일 때만 disable.
+# TXPWRLIMIT처럼 insmod 직후(인터페이스 생성 후) per-interface 1회 적용.
+apply_iface_thermal_mgmt() {
+    local iface="$1"
+    local enabled="$2"
+    local tm block
+
+    if [ "$enabled" != "true" ]; then
+        logger -p local0.info "[$tag:$LINENO] [$iface] disabled; skip thermal_mgmt"
+        return 0
+    fi
+
+    [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1 || return 0
+
+    # jq의 `//`는 false도 alternative 대상이라 raw 값을 가져와 shell case로 분기.
+    # true/누락/invalid → factory default(enable), 명시적 false만 disable.
+    tm=$(jq -r --arg i "$iface" '.[$i].thermal_mgmt' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    case "$tm" in
+        false) block="disable_thermal_mgmt" ;;
+        *)     block="enable_thermal_mgmt" ;;
+    esac
+
+    if [ ! -f "$THERMAL_DEBUG_CONF" ]; then
+        logger -p local0.warn "[$tag:$LINENO] [$iface] thermal_mgmt: $THERMAL_DEBUG_CONF not found; skip"
+        return 0
+    fi
+
+    logger -p local0.info "[$tag:$LINENO] [$iface] thermal_mgmt: $block"
+    mlanutl "$iface" hostcmd "$THERMAL_DEBUG_CONF" "$block" > /dev/null 2>&1 || \
+        logger -p local0.err "[$tag:$LINENO] [$iface] thermal_mgmt $block failed"
+}
+
 apply_mcs_tier() {
     local iface="$1"
     local enabled ht vht he args=""
@@ -806,6 +858,9 @@ fi
 
 apply_iface_txpwrlimit "mlan0" "$MLAN0_ENABLED"
 apply_iface_txpwrlimit "mlan1" "$MLAN1_ENABLED"
+
+apply_iface_thermal_mgmt "mlan0" "$MLAN0_ENABLED"
+apply_iface_thermal_mgmt "mlan1" "$MLAN1_ENABLED"
 
 # .network 파일의 Address=에 서브넷이 없으면 /24 보정
 for nf in /etc/systemd/network/*.network; do
