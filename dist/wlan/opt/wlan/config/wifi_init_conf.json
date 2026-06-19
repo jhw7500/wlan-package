@@ -217,7 +217,10 @@
         }
     },
     "mlan0": {
-        "_comment": "mlan0 interface configuration",
+        "_comment": [
+            "mlan0 interface configuration",
+            "net_rx: (int) MGMT 프레임 로깅 비트맵. wifi_init.sh가 wifi_mod_para.conf의 PCIE9098_0(sdio면 SD9098_0) 블록 net_rx=로 반영(0이면 라인 삭제). bit[1:0]=RX 모드(2=로밍 프레임만 Auth/Assoc/Deauth/Disassoc/Action, 3=전체 Beacon/Probe 포함), bit[2](+4)=TX 로그. 값: 0=비활성, 2=로밍, 3=전체, 6=로밍+TX, 7=전체+TX. 로그는 dmesg가 아닌 /proc/mwlan/adapterX/mgmt_log 커널 링버퍼에 기록되고 mgmt-log-flush.timer가 10초마다 /var/log/cantops/mgmt/mlanX/gmgmt.log로 flush"
+        ],
         "STANDARD": "ax",
         "CAL_DATA_CFG": "",
         "TXPWRLIMIT_PATH": "",
@@ -390,7 +393,10 @@
         }
     },
     "mlan1": {
-        "_comment": "mlan1 interface configuration",
+        "_comment": [
+            "mlan1 interface configuration",
+            "net_rx: (int) MGMT 프레임 로깅 비트맵. wifi_init.sh가 wifi_mod_para.conf의 PCIE9098_1(sdio면 SD9098_1) 블록 net_rx=로 반영(0이면 라인 삭제). bit[1:0]=RX 모드(2=로밍 프레임만 Auth/Assoc/Deauth/Disassoc/Action, 3=전체 Beacon/Probe 포함), bit[2](+4)=TX 로그. 값: 0=비활성, 2=로밍, 3=전체, 6=로밍+TX, 7=전체+TX. 로그는 dmesg가 아닌 /proc/mwlan/adapterX/mgmt_log 커널 링버퍼에 기록되고 mgmt-log-flush.timer가 10초마다 /var/log/cantops/mgmt/mlanX/gmgmt.log로 flush"
+        ],
         "STANDARD": "ac",
         "CAL_DATA_CFG": "",
         "TXPWRLIMIT_PATH": "",
