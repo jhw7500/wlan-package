@@ -147,15 +147,21 @@ def construct_iw_scan_cmd(ssid, scan_freqs, ssid_filter=True, freq_filter=True):
 
     return cmd
 
-def periodic_scan(ssid, freqs, interval, ssid_filter=True, freq_filter=True):
+def periodic_scan(conf_path, ssid_filter=True, freq_filter=True):
 
-    cmd = construct_iw_scan_cmd(ssid, freqs, ssid_filter, freq_filter)
-
-    if not interval:
-        interval=DEFAULT_INTERVAL
+    # 스캔 명령/주기는 매 스캔 직전 wpa_supplicant conf(+JSON)에서 재구성한다.
+    # 초기 1회 구성 (실패해도 기동 — 다음 스캔 직전 재시도).
+    cmd = None
+    interval = DEFAULT_INTERVAL
+    try:
+        ssid, freqs, wpa_interval = parse_wpa_supplicant_conf(conf_path)
+        interval = load_bgscan_interval(IFACE, wpa_interval) or DEFAULT_INTERVAL
+        cmd = construct_iw_scan_cmd(ssid, freqs, ssid_filter, freq_filter)
+    except Exception as e:
+        logger.message("err", f"[{IFACE}] initial wpa conf parse failed: {e}", _EXTRA_())
 
     last_time = time.time()
-    
+
     while True:
         if not os.path.exists(f"/sys/class/net/{IFACE}"):
             logger.message("info", f"[{IFACE}] waiting for interface...", _EXTRA_())
@@ -190,14 +196,22 @@ def periodic_scan(ssid, freqs, interval, ssid_filter=True, freq_filter=True):
             pass
 
         if time.time() - last_time >= interval:
+            # 스캔 직전에 wpa_supplicant conf를 다시 읽어 최신 ssid/freq/interval로 스캔한다
+            # (런타임 conf 직접편집+reconfigure 반영). 파싱 실패 시 직전 cmd/interval 유지.
             try:
-                logger.message("info", f"[{IFACE}] {cmd}", _EXTRA_())
-                #subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                subprocess.run(cmd, stdout=subprocess.DEVNULL, check=True)
-                #subprocess.run(cmd, check=True)
-                last_time = time.time()
-            except subprocess.CalledProcessError as e:
-                logger.message("err", f"[{IFACE}] iw scan failed: {e}", _EXTRA_())
+                ssid, freqs, wpa_interval = parse_wpa_supplicant_conf(conf_path)
+                interval = load_bgscan_interval(IFACE, wpa_interval) or DEFAULT_INTERVAL
+                cmd = construct_iw_scan_cmd(ssid, freqs, ssid_filter, freq_filter)
+            except Exception as e:
+                logger.message("err", f"[{IFACE}] wpa conf reparse failed (keep last): {e}", _EXTRA_())
+
+            if cmd:
+                try:
+                    logger.message("info", f"[{IFACE}] {cmd}", _EXTRA_())
+                    subprocess.run(cmd, stdout=subprocess.DEVNULL, check=True)
+                    last_time = time.time()
+                except subprocess.CalledProcessError as e:
+                    logger.message("err", f"[{IFACE}] iw scan failed: {e}", _EXTRA_())
 
         time.sleep(1)
 
@@ -205,12 +219,10 @@ def main_loop():
     #subprocess.run(["ifconfig", IFACE, "up"])
     #last_log_time = time.time()
 
-    ssid, freqs, interval = parse_wpa_supplicant_conf(WPA_CONF_FILE)
-    interval = load_bgscan_interval(IFACE, interval)
     ssid_filter = load_bgscan_flag(IFACE, "ssid_filter", True)
     freq_filter = load_bgscan_flag(IFACE, "freq_filter", True)
-    logger.message("info", f"[{IFACE}] version: {VERSION}, ssid: {ssid}, freq: {freqs}, interval: {interval}, ssid_filter: {ssid_filter}, freq_filter: {freq_filter}", _EXTRA_())
-    periodic_scan(ssid, freqs, interval, ssid_filter, freq_filter)
+    logger.message("info", f"[{IFACE}] version: {VERSION}, ssid_filter: {ssid_filter}, freq_filter: {freq_filter} (ssid/freq/interval은 매 스캔 직전 wpa conf에서 재로드)", _EXTRA_())
+    periodic_scan(WPA_CONF_FILE, ssid_filter, freq_filter)
     #threading.Thread(target=periodic_scan, args=(ssid, freqs, interval), daemon=True).start()
 
 if __name__ == "__main__":
