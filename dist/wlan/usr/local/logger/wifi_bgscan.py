@@ -72,9 +72,14 @@ def is_wpa_connected(interface="mlan0"):
             ["wpa_cli", "-i", interface, "status"],
             capture_output=True, text=True, timeout=5
         )
+        if result.returncode != 0:
+            logger.message("err", f"[{interface}] wpa_cli status exited {result.returncode} — treating as disconnected", _EXTRA_())
+            return False
         for line in result.stdout.splitlines():
             if line.startswith("wpa_state="):
                 return line.split("=", 1)[1].strip() == "COMPLETED"
+        # exit 0인데 wpa_state= 라인 부재(소켓 오류 등) — silent False 방지 위해 로그
+        logger.message("err", f"[{interface}] wpa_state not found in wpa_cli output — treating as disconnected", _EXTRA_())
     except FileNotFoundError:
         logger.message("err", f"[{interface}] wpa_cli not found — bgscan cannot verify connection (skipping scans)", _EXTRA_())
     except Exception as e:
@@ -158,6 +163,7 @@ def periodic_scan(conf_path):
     interval = DEFAULT_INTERVAL
     try:
         cmd, interval = build()
+        logger.message("info", f"[{IFACE}] bgscan start: cmd={cmd}, interval={interval}", _EXTRA_())
     except Exception as e:
         logger.message("err", f"[{IFACE}] initial bgscan config load failed: {e}", _EXTRA_())
 
@@ -194,8 +200,10 @@ def periodic_scan(conf_path):
             # (-EBUSY)·off-channel 교란을 피하려 skip하고 다음 주기로 back off한다.
             # (연결 상태에서 로밍 후보 탐색이 bgscan 본래 목적이라 미연결 스캔은 무의미)
             if not is_wpa_connected(IFACE):
-                last_time = time.time()
-                time.sleep(1)
+                # last_time을 리셋하지 않는다 → 재연결 직후 (대기 없이) 곧바로 첫 스캔이 발생해
+                # 로밍 후보를 빠르게 갱신. 미연결 동안은 5s 간격으로만 재확인하므로 매 tick
+                # wpa_cli 호출은 없다(연결 상태에선 interval마다 1회만 호출됨).
+                time.sleep(5)
                 continue
 
             # 스캔 직전에 wpa conf + JSON을 다시 읽어 최신 ssid/freq/interval/필터로 스캔한다
@@ -208,7 +216,7 @@ def periodic_scan(conf_path):
             if cmd:
                 try:
                     logger.message("info", f"[{IFACE}] {cmd}", _EXTRA_())
-                    subprocess.run(cmd, stdout=subprocess.DEVNULL, check=True)
+                    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
                 except subprocess.CalledProcessError as e:
                     logger.message("err", f"[{IFACE}] iw scan failed: {e}", _EXTRA_())
             # 성공/실패 무관하게 다음 주기까지 back off (실패 시 1s 폭주 재시도 방지)
