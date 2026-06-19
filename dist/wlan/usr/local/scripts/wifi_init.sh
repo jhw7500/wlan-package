@@ -569,7 +569,13 @@ apply_iface_thermal_mgmt() {
         return 0
     fi
 
-    [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1 || return 0
+    # config/jq 부재(degraded)면 thermal_mgmt 값을 읽을 수 없어 skip — FW는 power-on
+    # 기본 상태(통상 enable)를 유지한다(명시 enable/disable은 config가 있을 때만 송신).
+    # 다른 per-iface 설정과 동일하게 config 없으면 미적용이되, silent가 아니라 로그로 남긴다.
+    if [ ! -f "$WIFI_INIT_CONF_JSON" ] || ! command -v jq >/dev/null 2>&1; then
+        logger -p local0.warn "[$tag:$LINENO] [$iface] thermal_mgmt: config/jq 부재 → skip (FW power-on 기본 유지)"
+        return 0
+    fi
 
     # jq의 `//`는 false도 alternative 대상이라 raw 값을 가져와 shell case로 분기.
     # true/누락/invalid → factory default(enable), 명시적 false만 disable.
