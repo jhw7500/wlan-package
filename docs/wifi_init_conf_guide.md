@@ -570,7 +570,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 > bgscan은 `wpa_state==COMPLETED`(연결됨)일 때만 `iw <iface> scan`을 수행한다 — 미연결 시엔 wpa_supplicant의 재연결 스캔/association과 라디오 경합을 피하려 skip.
 
-> `ssid`/`freq`/`interval`은 **매 스캔 직전 `wpa_supplicant-<iface>.conf`에서 다시 읽는다**. 런타임에 무선설정을 재적용해 conf가 바뀌면(직접편집+reconfigure) bgscan 재시작 없이 **다음 스캔부터 새 값으로 스캔**한다(파싱 실패 시 직전 값 유지).
+> 스캔 파라미터는 **매 스캔 직전에 다시 읽는다** — `ssid`/`freq`는 `wpa_supplicant-<iface>.conf`에서, `interval`/`ssid_filter`/`freq_filter`는 이 JSON `bgscan` 블록에서. 런타임에 무선설정을 재적용하거나 JSON을 바꾸면 bgscan 재시작 없이 **다음 스캔부터 새 값으로 스캔**한다(읽기 실패 시 직전 값 유지). 연결 상태 확인(`wpa_cli`)도 매 tick이 아니라 스캔 주기 도래 시에만 수행한다.
 
 ### 11.4 roaming - 로밍 알고리즘
 
