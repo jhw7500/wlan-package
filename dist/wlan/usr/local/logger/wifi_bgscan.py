@@ -64,6 +64,20 @@ def is_wpa_running(interface="mlan0"):
     )
     return result.stdout.strip() == "active"
 
+def is_wpa_connected(interface="mlan0"):
+    """wpa_state==COMPLETED(연결 완료)인지. 미연결(스캔/인증/assoc 중)이면 False."""
+    try:
+        result = subprocess.run(
+            ["wpa_cli", "-i", interface, "status"],
+            capture_output=True, text=True, timeout=5
+        )
+        for line in result.stdout.splitlines():
+            if line.startswith("wpa_state="):
+                return line.split("=", 1)[1].strip() == "COMPLETED"
+    except Exception:
+        pass
+    return False
+
 def parse_wpa_supplicant_conf(path):
     ssid = None
     freqs = []
@@ -139,6 +153,14 @@ def periodic_scan(ssid, freqs, interval):
 
         if get_flag():
             #logger.message("info", f"[{IFACE}] roam condition on", _EXTRA_())
+            time.sleep(5)
+            continue
+
+        # 미연결(스캔/인증/assoc 중)이면 bgscan skip — wpa_supplicant가 직접 스캔/연결을
+        # 시도 중이라, 외부 iw scan은 라디오 경합(-EBUSY)·association off-channel 교란으로
+        # 재연결을 지연시킬 수 있다. bgscan 본래 목적(연결 상태에서 로밍 후보 탐색)에도
+        # 미연결 스캔은 무의미하므로 wpa_state==COMPLETED일 때만 스캔한다.
+        if not is_wpa_connected(IFACE):
             time.sleep(5)
             continue
 
