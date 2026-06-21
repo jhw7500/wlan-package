@@ -27,6 +27,7 @@ WPA_FREQ = None
 WPA_TH_2G = None
 WPA_TH_5G = None
 WPA_TH_CONNECT = None
+WPA_CONF_MTIME = None  # 마지막으로 파싱한 wpa_supplicant conf 의 mtime (런타임 reconfigure 반영용)
 
 # ==============================================================================
 # 기본 설정값 (Default Configuration)
@@ -1097,6 +1098,41 @@ def parse_supplicant_conf(path, def_th2g=None, def_th5g=None):
     return ssid, freqs, th2g, th5g, th_connect
 
 
+def reload_supplicant_conf_if_changed(path):
+    """wpa_cli reconfigure 등으로 wpa_supplicant conf 가 런타임 변경되면 재파싱해
+    전역 WPA_SSID/WPA_FREQ/WPA_TH_2G/WPA_TH_5G/WPA_TH_CONNECT 를 갱신한다.
+
+    - mtime 이 바뀐 경우에만 파싱한다(1초 고빈도 루프의 매 tick 파일 I/O 회피).
+    - 재파싱 실패 시 직전 캐시 값을 유지한다(wifi_bgscan 의 build() 재로드와 동일 정책).
+    conf 를 시작 시 1회만 읽던 기존 동작은 ssid/scan_freq 변경을 동반한 reconfigure
+    후 옛 SSID 로 스캔(No Matching APs)하는 stale 로밍을 유발했다.
+    """
+    global WPA_SSID, WPA_FREQ, WPA_TH_2G, WPA_TH_5G, WPA_TH_CONNECT, WPA_CONF_MTIME
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return  # conf 접근 불가 — 직전 캐시 유지
+    if mtime == WPA_CONF_MTIME:
+        return  # 변경 없음 — 재파싱 skip
+    try:
+        ssid, freqs, th2g, th5g, th_connect = parse_supplicant_conf(
+            path, def_th2g=DEFAULT_TH_2G, def_th5g=DEFAULT_TH_5G
+        )
+    except Exception as e:
+        logger.message("err", f"[{IFACE}] wpa conf reload failed (keep last): {e}", _EXTRA_())
+        return
+    changed = (ssid, freqs) != (WPA_SSID, WPA_FREQ) or (th2g, th5g) != (WPA_TH_2G, WPA_TH_5G)
+    WPA_SSID, WPA_FREQ, WPA_TH_2G, WPA_TH_5G, WPA_TH_CONNECT = ssid, freqs, th2g, th5g, th_connect
+    WPA_CONF_MTIME = mtime
+    if changed:
+        logger.message(
+            "info",
+            f"[{IFACE}] wpa conf reloaded (runtime reconfigure): ssid={WPA_SSID}, "
+            f"scan_freq={WPA_FREQ}, TH_2G={WPA_TH_2G}, TH_5G={WPA_TH_5G}",
+            _EXTRA_(),
+        )
+
+
 def get_my_ip(iface):
     try:
         result = subprocess.run(
@@ -1360,6 +1396,10 @@ def main():
         )
 
     while True:
+        # wpa_cli reconfigure 등으로 conf 가 런타임 변경됐으면 재파싱(mtime 변화 시에만).
+        # ssid/scan_freq/TH 캐시를 최신화해 옛 SSID 로 스캔하는 stale 로밍을 방지한다.
+        reload_supplicant_conf_if_changed(WPA_CONF_FILE)
+
         # Load 정보 포함하여 연결 상태 확인
         station = get_link_info_with_load()
 
@@ -1668,6 +1708,11 @@ if __name__ == "__main__":
     WPA_SSID, WPA_FREQ, WPA_TH_2G, WPA_TH_5G, WPA_TH_CONNECT = parse_supplicant_conf(
         WPA_CONF_FILE, def_th2g=json_th_2g, def_th5g=json_th_5g
     )
+    # 초기 파싱 시점의 mtime 기록 — 이후 main 루프는 mtime 변화(reconfigure) 시에만 재파싱.
+    try:
+        WPA_CONF_MTIME = os.path.getmtime(WPA_CONF_FILE)
+    except OSError:
+        WPA_CONF_MTIME = None
 
     # 최종 적용값 로깅 (JSON → wpa_supplicant.conf 우선순위)
     th_source = (
