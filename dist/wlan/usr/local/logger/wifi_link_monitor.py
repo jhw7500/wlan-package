@@ -474,6 +474,26 @@ def draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, summary_path, p
     safe_addstr(y, 1, f"RSSI: {sig_s}/{sig_a} dBm  TX_FAIL: {tx_fail}  TX_RETRY: {tx_retry}")
     y += 1
 
+    # channel_info: 현재 연결 채널의 점유율(busy/active) + noise (link.json)
+    # iw survey dump는 in-use 채널에만 busy/active를 채우므로, info.freq(int) → str 매칭 후
+    # 실패 시 busy_time이 채워진 채널을 fallback 선택(주파수 표기/타입 불일치 회피).
+    ch_info = data.get("channel_info", {}) if isinstance(data, dict) else {}
+    ch_disp_freq = str(freq) if freq not in (None, "-") else None
+    ch_cur = ch_info.get(ch_disp_freq) if ch_disp_freq else None
+    if not (isinstance(ch_cur, dict) and ch_cur.get("busy_time_ms") is not None):
+        ch_cur = None
+        for _cf, _cv in ch_info.items():
+            if isinstance(_cv, dict) and _cv.get("busy_time_ms") is not None:
+                ch_disp_freq, ch_cur = _cf, _cv
+                break
+    if isinstance(ch_cur, dict) and ch_cur.get("busy_time_ms") is not None:
+        _busy = ch_cur.get("busy_time_ms", 0)
+        _act = ch_cur.get("active_time_ms", 0) or 0
+        _noise = ch_cur.get("noise", "-")
+        _util = f"{_busy / _act * 100:.0f}%" if _act else "-"
+        safe_addstr(y, 1, f"ChUtil: @{ch_disp_freq}MHz busy {_util} ({_busy}/{_act}ms)  noise {_noise}dBm")
+        y += 1
+
     # 온도 + CPU/MEM
     temps = get_temperatures()
     cpu_u = get_cpu_usage()
