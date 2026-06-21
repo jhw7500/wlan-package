@@ -1188,6 +1188,9 @@ case "$2" in
     # 공통: reassociate(연결/미연결 모두 강제 재연관 → ssid 변경 반영 확실) 우선,
     #       실패 시 reconnect fallback(rollback_radio_live와 동일 규약) → assoc 대기.
     # exit: 0=ok 1=usage/env 7=wpa_cli 8=assoc-timeout
+    # known limitation: reconfigure 성공 후 reassociate/reconnect 실패(7)나 assoc
+    #   타임아웃(8) 시 conf는 새 ssid로 이미 persist된다(라이브는 옛 AP일 수 있음).
+    #   ssid 변경은 의도된 영속이라 rollback하지 않는다 — 다음 재시도/부팅 시 적용.
     set -euo pipefail
     shift 2
     if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
@@ -1201,6 +1204,8 @@ case "$2" in
         # === conf 편집 경로: ssid(+freq) 기록 → reconfigure ===
         if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
         NEW_SSID="$1"; shift
+        # 빈 SSID는 conf에 ssid=""를 써 association 불가(silent exit 8) → 즉시 거부.
+        [ -z "$NEW_SSID" ] && { echo "Error: SSID must not be empty" >&2; exit 1; }
         # SSID 개행/탭 거부 — awk 멀티라인 injection(conf에 임의 directive 주입) 차단.
         # connect는 conf 직접편집 entry point라 여기서 가드한다.
         case "$NEW_SSID" in
