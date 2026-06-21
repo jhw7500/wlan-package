@@ -474,6 +474,31 @@ def draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, summary_path, p
     safe_addstr(y, 1, f"RSSI: {sig_s}/{sig_a} dBm  TX_FAIL: {tx_fail}  TX_RETRY: {tx_retry}")
     y += 1
 
+    # channel_info: 현재 연결 채널의 채널 점유율(busy/active) + noise (link.json)
+    # NXP moal의 survey active/busy time은 cca_scan_duration/cca_busy_duration(스캔 측정 구간,
+    # t_u16 ms)이라 부팅 누적이 아니라 "마지막 스캔 시점의 점유율"이다 → busy/active 자체가 순간값.
+    # 따라서 직전값 Δ 없이 비율을 그대로 쓴다. iw survey dump는 in-use(측정된) 채널에만
+    # cca_scan_duration을 채우므로, info.freq(int)→str 매칭 후 실패 시 그 채널을 fallback.
+    ch_info = data.get("channel_info") if isinstance(data, dict) else None
+    if not isinstance(ch_info, dict):  # 손상/예상외 데이터(list 등)에서 .items() AttributeError 방어
+        ch_info = {}
+    ch_disp_freq = str(freq) if freq not in (None, "-") else None
+    ch_cur = ch_info.get(ch_disp_freq) if ch_disp_freq else None
+    if not (isinstance(ch_cur, dict) and ch_cur.get("busy_time_ms") is not None):
+        ch_cur = None
+        for _cf, _cv in ch_info.items():
+            if isinstance(_cv, dict) and _cv.get("busy_time_ms") is not None:
+                ch_disp_freq, ch_cur = _cf, _cv
+                break
+    if isinstance(ch_cur, dict) and ch_cur.get("busy_time_ms") is not None:
+        _busy = ch_cur.get("busy_time_ms", 0)
+        _act = ch_cur.get("active_time_ms", 0) or 0
+        _noise = ch_cur.get("noise")
+        _noise_s = f"{_noise}dBm" if isinstance(_noise, int) else "-"  # noise 없으면 'noise -dBm' 대신 '-'
+        _util = f"{min(_busy / _act * 100, 100):.0f}%" if _act else "-"
+        safe_addstr(y, 1, f"ChUtil: @{ch_disp_freq}MHz busy {_util}  noise {_noise_s}")
+        y += 1
+
     # 온도 + CPU/MEM
     temps = get_temperatures()
     cpu_u = get_cpu_usage()
