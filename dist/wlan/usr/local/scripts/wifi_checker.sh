@@ -90,10 +90,11 @@ fi
 # checker는 flag mtime이 TTL(RECONFIGURE_GRACE_SEC) 내면 사다리를 억제한다.
 RECONFIGURE_GRACE_FLAG="/run/wifi/${IFACE}.reconfigure-grace"
 reconfigure_grace_active() {
+    # now 를 인자로 받으면 호출자의 루프 타임스탬프를 재사용(매 틱 date fork 회피); 없으면 자체 조회.
     [ -f "$RECONFIGURE_GRACE_FLAG" ] || return 1
     local mt now
     mt=$(stat -c %Y "$RECONFIGURE_GRACE_FLAG" 2>/dev/null) || return 1
-    now=$(date +%s)
+    now="${1:-$(date +%s)}"
     (( now - mt >= 0 && now - mt < RECONFIGURE_GRACE_SEC ))
 }
 
@@ -205,7 +206,7 @@ while true; do
 
         if [[ "$STATE" == "DISCONNECTED" || "$STATE" == "SCANNING" || "$STATE" == "down" ]]; then
             FAULT_CNT=0
-            if reconfigure_grace_active; then
+            if reconfigure_grace_active "$TIMESTAMP"; then
                 # reconfigure 재연결 과도기 — 정당한 재연결을 끊지 않도록 타이머/사다리 억제
                 UNSTABLE_START=0
                 REASSOC_DONE=0
@@ -243,7 +244,7 @@ while true; do
             # 연결완료(operstate up) — 단 grace 윈도(TTL) 안에서는 carrier 가 잠깐 up 으로 튀어도
             # flag 를 지우지 않는다. reconfigure 재연결 중 up→down 토글로 grace 가 조기 해제되어
             # 사다리가 false-trigger 되는 것을 막고, TTL 자연 만료에 해제를 위임한다.
-            if ! reconfigure_grace_active; then
+            if ! reconfigure_grace_active "$TIMESTAMP"; then
                 rm -f "$RECONFIGURE_GRACE_FLAG" 2>/dev/null || true
             fi
 
