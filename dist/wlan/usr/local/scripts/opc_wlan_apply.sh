@@ -122,6 +122,10 @@ sync 2>/dev/null || true
 # 원본 백업으로 롤백한 뒤 재적용한다(무선 전체 다운 방지).
 # wpa_cli 는 제어요청 전달만 성공하면 데몬 응답(OK/FAIL)과 무관하게 exit 0 이므로,
 # exit code 가 아니라 출력이 "OK" 인지로 실패를 판정한다(wifi.sh 의 wpa_cli_ok 와 동일).
+# reconfigure 는 재연결(끊김)을 유발 — wifi_checker 가 과도기를 '불안정'으로 오판해
+# reassociate/restart 하지 않도록 grace flag 를 세운다(TTL 은 checker 의 RECONFIGURE_GRACE_SEC).
+mkdir -p /run/wifi 2>/dev/null || true
+: > "/run/wifi/${IFACE}.reconfigure-grace" 2>/dev/null || true
 if [ "$(wcli reconfigure 2>/dev/null)" != "OK" ]; then
     mv -f "$BAK" "$CONF"; sync 2>/dev/null || true
     trap - EXIT   # TMP 는 위 mv 로 이미 소진(rename)됨 — 정리할 임시파일 없음
