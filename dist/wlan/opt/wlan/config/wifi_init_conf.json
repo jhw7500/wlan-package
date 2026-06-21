@@ -374,7 +374,7 @@
             "commands": []
         },
         "checker": {
-            "_comment": "wifi_checker@mlan0 임계값 + 데몬 활성화",
+            "_comment": "wifi_checker@mlan0 임계값 + 데몬 활성화. RECONFIGURE_GRACE_SEC: reconfigure 재연결 과도기 동안 불안정 사다리 억제(초, flag mtime 기준)",
             "LIMIT_CNT": 5,
             "MAX_UNSTABLE_DURATION": 10,
             "MAX_REBOOT_COUNT": 3,
@@ -383,6 +383,7 @@
             "FAULT_REASSOC_CNT": 2,
             "FAULT_RESTART_CNT": 4,
             "FAULT_REBOOT_CNT": 6,
+            "RECONFIGURE_GRACE_SEC": 20,
             "enabled": true
         },
         "arping": {
@@ -552,7 +553,7 @@
             "commands": []
         },
         "checker": {
-            "_comment": "wifi_checker@mlan1 임계값 + 데몬 활성화",
+            "_comment": "wifi_checker@mlan1 임계값 + 데몬 활성화. RECONFIGURE_GRACE_SEC: reconfigure 재연결 과도기 동안 불안정 사다리 억제(초, flag mtime 기준)",
             "LIMIT_CNT": 5,
             "MAX_UNSTABLE_DURATION": 10,
             "MAX_REBOOT_COUNT": 3,
@@ -561,6 +562,7 @@
             "FAULT_REASSOC_CNT": 2,
             "FAULT_RESTART_CNT": 4,
             "FAULT_REBOOT_CNT": 6,
+            "RECONFIGURE_GRACE_SEC": 20,
             "enabled": false
         },
         "arping": {
