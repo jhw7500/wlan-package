@@ -14,7 +14,8 @@
             "TXPWRLIMIT_PATH: (string) TX 파워 리밋 파일(절대경로) fallback. mlanN.TXPWRLIMIT_PATH가 우선. 부팅 시 mlanutl hostcmd로 적용",
             "STANDARD: (string) WiFi 표준 제한 fallback. n|ac|ax(또는 4|5|6). mlanN.STANDARD가 우선. dev_cap_mask로 변환",
             "DEV_CAP_MASK: (string) dev_cap_mask raw fallback. 인터페이스/global STANDARD가 모두 비었을 때만 사용",
-            "ANT_TYPE: (string) 안테나 경로 부팅 시 설정. internal|external(또는 0|1). 빈값이면 설정 안 함. 드라이버 로드 직전 SW_SEL1/SW_SEL2 GPIO로 적용. 런타임 변경은 wifi ant 명령"
+            "ANT_TYPE: (string) 안테나 경로 부팅 시 설정. internal|external(또는 0|1). 빈값이면 설정 안 함. 드라이버 로드 직전 SW_SEL1/SW_SEL2 GPIO로 적용. 런타임 변경은 wifi ant 명령",
+            "tx_work: (int 0|1) moal 드라이버 데이터 TX 제출 방식 module_param (bridge engine 무관·드라이버 전역). 0=woal_start_xmit 호출자 컨텍스트 동기 제출(홉1), 1=tx_q+queue_work(tx_workqueue) 비동기(홉2, NXP iMX 기본). pcap 엔진은 자체 RT 스레드와 tx_workqueue 중복이라 0이 latency 유리. wifi_init.sh가 moal insmod args로 전달(engine 무관) — 단 드라이버가 tx_work param을 선언한 .ko에만 전달(grep capability-gate), 미선언 .ko면 skip(드라이버 기본). 런타임 sysfs(/sys/module/moal/parameters/tx_work)는 init때 latch라 무효 — 변경은 모듈 reload 필요"
         ],
         "BOARD_TYPE": "imx93",
         "BUS_TYPE": "sdio",
@@ -27,6 +28,7 @@
         "STANDARD": "",
         "DEV_CAP_MASK": "",
         "ANT_TYPE": "",
+        "tx_work": 0,
         "ping_monitor": {
             "_comment": "wifi_ping_monitor.service enable/disable. wifi_apply_enabled.sh가 systemctl enable/disable로 동기화한다.",
             "enabled": false
@@ -372,7 +374,7 @@
             "commands": []
         },
         "checker": {
-            "_comment": "wifi_checker@mlan0 임계값 + 데몬 활성화",
+            "_comment": "wifi_checker@mlan0 임계값 + 데몬 활성화. RECONFIGURE_GRACE_SEC: reconfigure 재연결 과도기 동안 불안정 사다리 억제(초, flag mtime 기준)",
             "LIMIT_CNT": 5,
             "MAX_UNSTABLE_DURATION": 10,
             "MAX_REBOOT_COUNT": 3,
@@ -381,6 +383,7 @@
             "FAULT_REASSOC_CNT": 2,
             "FAULT_RESTART_CNT": 4,
             "FAULT_REBOOT_CNT": 6,
+            "RECONFIGURE_GRACE_SEC": 20,
             "enabled": true
         },
         "arping": {
@@ -550,7 +553,7 @@
             "commands": []
         },
         "checker": {
-            "_comment": "wifi_checker@mlan1 임계값 + 데몬 활성화",
+            "_comment": "wifi_checker@mlan1 임계값 + 데몬 활성화. RECONFIGURE_GRACE_SEC: reconfigure 재연결 과도기 동안 불안정 사다리 억제(초, flag mtime 기준)",
             "LIMIT_CNT": 5,
             "MAX_UNSTABLE_DURATION": 10,
             "MAX_REBOOT_COUNT": 3,
@@ -559,6 +562,7 @@
             "FAULT_REASSOC_CNT": 2,
             "FAULT_RESTART_CNT": 4,
             "FAULT_REBOOT_CNT": 6,
+            "RECONFIGURE_GRACE_SEC": 20,
             "enabled": false
         },
         "arping": {

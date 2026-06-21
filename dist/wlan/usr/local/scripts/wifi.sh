@@ -1697,6 +1697,10 @@ case "$2" in
 
     if [ -n "$APPLY_MODE" ]; then
         # === mode 변경 경로: disconnect → bandcfg(재시도) → cap → reconfigure → reconnect ===
+        # disconnect 는 재연결(끊김)을 유발 — wifi_checker 가 과도기를 '불안정'으로 오판해
+        # reassociate/restart 하지 않도록 grace flag 를 세운다(TTL 은 checker 의 RECONFIGURE_GRACE_SEC).
+        mkdir -p /run/wifi 2>/dev/null || true
+        : > "/run/wifi/${IFACE}.reconfigure-grace" 2>/dev/null || true
         if ! wpa_cli_ok "$IFACE" disconnect; then
             echo "Error: wpa_cli disconnect failed for $IFACE" >&2
             exit 7
@@ -1719,6 +1723,9 @@ case "$2" in
         fi
         echo "bandcfg $MODE_MASK applied (mode=$R_MODE)"
         [ -n "$R_BW" ] && apply_bw_or_exit "$IFACE" "$R_BW_CAP"
+        # 2차 과도기(reconfigure→reconnect)도 grace 로 덮는다 — 1차(disconnect) set 으로부터
+        # bandcfg 재시도+assoc 대기로 TTL 이 소모됐을 수 있어 여기서 flag mtime 을 다시 갱신한다.
+        : > "/run/wifi/${IFACE}.reconfigure-grace" 2>/dev/null || true
         if ! wpa_cli_ok "$IFACE" reconfigure; then
             echo "Error: wpa_cli reconfigure failed for $IFACE (check wpa_supplicant conf syntax)" >&2
             rollback_radio_live "$IFACE"
