@@ -1201,6 +1201,15 @@ case "$2" in
         # === conf 편집 경로: ssid(+freq) 기록 → reconfigure ===
         if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
         NEW_SSID="$1"; shift
+        # SSID 개행/탭 거부 — awk 멀티라인 injection(conf에 임의 directive 주입) 차단.
+        # connect는 conf 직접편집 entry point라 여기서 가드한다.
+        case "$NEW_SSID" in
+            *[$'\n\r\t']*) echo "Error: SSID에 개행/탭 문자 불가" >&2; exit 1 ;;
+        esac
+        # busybox awk가 ENVIRON 미지원이면 SSID가 ""로 silent 손상(awk exit 0 → 성공 오인)
+        # → SSID 적용 전 ENVIRON 지원을 사전 검증(opc_wlan_apply.sh와 동일 규약).
+        CONNECT_ENVIRON_PROBE=ok awk 'BEGIN { exit(ENVIRON["CONNECT_ENVIRON_PROBE"] == "ok" ? 0 : 1) }' </dev/null \
+            || { echo "Error: awk lacks ENVIRON support — cannot apply ssid safely" >&2; exit 1; }
         # freq 인자는 freq 명령과 동일하게 채널/MHz 모두 허용(to_freq_mhz로 MHz 정규화)
         FREQS=()
         for arg in "$@"; do FREQS+=( "$(to_freq_mhz "$arg")" ); done
@@ -1208,15 +1217,20 @@ case "$2" in
         FREQ_STR=""
         if [ ${#FREQS[@]} -gt 0 ]; then SET_FREQ=1; FREQ_STR="${FREQS[*]}"; fi
         # 모든 network={} 블록에 ssid(+freq)를 한 awk 패스로 적용(freq/ssid 명령 동일 규약).
+        # 임시파일은 set -e 중 조기 exit 시에도 정리되도록 EXIT trap 설정(freq 명령 패턴).
         TMP_FILE="$(mktemp)"
-        if awk -v new_ssid="$NEW_SSID" -v freqs="$FREQ_STR" -v set_freq="$SET_FREQ" '
-            BEGIN { in_net = 0; blocks = 0 }
+        trap 'rm -f "$TMP_FILE"; sync 2>/dev/null || true' EXIT
+        # SSID는 ENVIRON으로 raw 전달(awk -v는 값의 \X를 C-escape로 해석해 손상) + esc()로
+        # wpa_supplicant conf 문법(C-style)에 맞춰 \와 "를 이스케이프.
+        if CONNECT_SSID="$NEW_SSID" awk -v freqs="$FREQ_STR" -v set_freq="$SET_FREQ" '
+            function esc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return s }
+            BEGIN { in_net = 0; blocks = 0; new_ssid = ENVIRON["CONNECT_SSID"] }
             /^[[:space:]]*#/ { print; next }
             /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ {
                 in_net = 1; blocks++; done_ssid = 0; done_scan = 0; done_list = 0; print; next
             }
             in_net && /^[[:space:]]*\}/ {
-                if (!done_ssid) { print "    ssid=\"" new_ssid "\""; done_ssid = 1 }
+                if (!done_ssid) { print "    ssid=\"" esc(new_ssid) "\""; done_ssid = 1 }
                 if (set_freq == 1) {
                     if (!done_scan) { print "    scan_freq=" freqs; done_scan = 1 }
                     if (!done_list) { print "    freq_list=" freqs; done_list = 1 }
@@ -1224,7 +1238,7 @@ case "$2" in
                 in_net = 0; print; next
             }
             in_net && /^[[:space:]]*ssid[[:space:]]*=/ {
-                if (!done_ssid) { print "    ssid=\"" new_ssid "\""; done_ssid = 1 } next
+                if (!done_ssid) { print "    ssid=\"" esc(new_ssid) "\""; done_ssid = 1 } next
             }
             in_net && /^[[:space:]]*scan_freq[[:space:]]*=/ {
                 if (set_freq == 1) { if (!done_scan) { print "    scan_freq=" freqs; done_scan = 1 } } else print
