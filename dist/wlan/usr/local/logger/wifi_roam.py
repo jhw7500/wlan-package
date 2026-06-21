@@ -1121,14 +1121,14 @@ def reload_supplicant_conf_if_changed(path):
     except Exception as e:
         logger.message("err", f"[{IFACE}] wpa conf reload failed (keep last): {e}", _EXTRA_())
         return
-    changed = (ssid, freqs) != (WPA_SSID, WPA_FREQ) or (th2g, th5g) != (WPA_TH_2G, WPA_TH_5G)
+    changed = (ssid, freqs) != (WPA_SSID, WPA_FREQ) or (th2g, th5g, th_connect) != (WPA_TH_2G, WPA_TH_5G, WPA_TH_CONNECT)
     WPA_SSID, WPA_FREQ, WPA_TH_2G, WPA_TH_5G, WPA_TH_CONNECT = ssid, freqs, th2g, th5g, th_connect
     WPA_CONF_MTIME = mtime
     if changed:
         logger.message(
             "info",
             f"[{IFACE}] wpa conf reloaded (runtime reconfigure): ssid={WPA_SSID}, "
-            f"scan_freq={WPA_FREQ}, TH_2G={WPA_TH_2G}, TH_5G={WPA_TH_5G}",
+            f"scan_freq={WPA_FREQ}, TH_2G={WPA_TH_2G}, TH_5G={WPA_TH_5G}, TH_CONNECT={WPA_TH_CONNECT}",
             _EXTRA_(),
         )
 
