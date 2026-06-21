@@ -107,15 +107,17 @@ moal_args="mod_para=$MOD_PARA"
 # 게이트는 .modinfo 의 param 전용 토큰(parmtype=tx_work:)으로 정탐한다 — tx_work 어근 함수 심볼
 # (woal_tx_work_handler/woal_pcie_delayed_tx_work)·로그 포맷(tx_work=0x%x)은 param 미선언 .ko 에도
 # 존재해 단순 토큰 검색을 위험측으로 오탐시키므로, param 등록 시에만 나타나는 토큰으로 검사한다.
-# 추출에 strings 를 쓰는 이유: busybox grep -a 는 NUL 이 많은 .ko 바이너리에서 NUL 이후 문자열을
+# 추출에 `tr` 를 쓰는 이유: busybox grep -a 는 NUL 이 많은 .ko 바이너리에서 NUL 이후 문자열을
 # 놓쳐(BusyBox 1.30.1 실측: 실제 .ko 에 grep -a NOMATCH) 게이트가 항상 실패하는 함정이 있다.
-# strings 로 문자열을 뽑은 뒤 일반 grep 으로 검사하면 busybox/GNU 가 일치(실측 검증).
-# strings 부재 시엔 NOMATCH→skip(안전측: 드라이버 기본값 사용).
+# NUL 을 개행으로 바꿔(tr '\000' '\n') 일반 grep 으로 검사하면 busybox/GNU 가 일치(실측 검증).
+# strings 가 아니라 tr 를 쓰는 건 portability — strings 는 binutils/optional applet 이라 minimal
+# production fs 에 없을 수 있으나 tr 는 busybox 핵심 applet 이라 항상 존재. tr 부재 시엔
+# NOMATCH→skip(안전측: 드라이버 기본값 사용).
 if [ -n "$tx_work" ]; then
-    # 주의: `strings | grep -q` + `set -o pipefail` 조합은 grep 의 조기 종료가 strings 에 SIGPIPE 를
-    # 보내 파이프라인 exit 를 비0(실패)으로 만들어 오판한다(실제 param 있는 .ko 도 skip). grep 이
+    # 주의: `tr | grep -q` + `set -o pipefail` 조합은 grep 의 조기 종료가 tr 에 SIGPIPE 를 보내
+    # 파이프라인 exit 를 비0(실패)으로 만들어 오판한다(실제 param 있는 .ko 도 skip). grep 이
     # 입력을 끝까지 읽도록 -q 대신 출력만 버려(>/dev/null) pipefail 오판을 피한다.
-    if strings "/opt/wlan/driver/$MOAL_KO" 2>/dev/null | grep -F 'parmtype=tx_work:' >/dev/null 2>&1; then
+    if tr '\000' '\n' < "/opt/wlan/driver/$MOAL_KO" 2>/dev/null | grep -F 'parmtype=tx_work:' >/dev/null 2>&1; then
         moal_args="$moal_args tx_work=$tx_work"
         logger -p local0.info "[$tag:$LINENO] moal: tx_work=$tx_work added to insmod args"
     else
@@ -189,9 +191,10 @@ if [ "$WBRIDGE_ENGINE" = "moal" ]; then
     # insmod가 unknown-parameter로 실패하므로, 로드 대상 .ko가 선언한 경우에만 전달한다.
     # 게이트는 .modinfo 의 param 전용 토큰(parmtype=...:)으로 정탐한다 — busybox grep -a 는 NUL 이 많은
     # .ko 바이너리에서 NUL 이후 문자열을 놓쳐(BusyBox 1.30.1 실측: 실제 .ko 에 NOMATCH) 게이트가 항상
-    # 실패하는 함정이 있어, strings 로 추출 후 grep 한다(tx_work 게이트와 동일). -q 대신 출력만 버려
-    # (>/dev/null) pipefail 에서 grep 조기종료 SIGPIPE 로 인한 오판을 막는다. 미지원 시 드라이버 기본(0).
-    if strings "/opt/wlan/driver/$MOAL_KO" 2>/dev/null | grep -F 'parmtype=bridge_keepalive_idle_ms:' >/dev/null 2>&1; then
+    # 실패하는 함정이 있어, tr '\000' '\n' 로 NUL 을 개행으로 바꿔 grep 한다(tx_work 게이트와 동일,
+    # tr 는 busybox 핵심 applet 이라 strings 보다 portable). -q 대신 출력만 버려(>/dev/null) pipefail
+    # 에서 grep 조기종료 SIGPIPE 로 인한 오판을 막는다. 미지원 시 드라이버 기본(0).
+    if tr '\000' '\n' < "/opt/wlan/driver/$MOAL_KO" 2>/dev/null | grep -F 'parmtype=bridge_keepalive_idle_ms:' >/dev/null 2>&1; then
         moal_args="$moal_args bridge_keepalive_idle_ms=$bridge_keepalive_idle_ms"
     else
         logger -p local0.warn "[$tag:$LINENO] moal: $MOAL_KO lacks bridge_keepalive_idle_ms param; skip (driver default)"
