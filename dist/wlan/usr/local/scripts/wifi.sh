@@ -62,8 +62,7 @@ JSON_FILE="${JSON_FILE:-/usr/local/etc/config.json}"
 # radio-apply는 인자($3)로 케이스별 override 가능하며, 미지정 시 이 값을 따른다.
 ASSOC_TIMEOUT_DEFAULT="${ASSOC_TIMEOUT_DEFAULT:-15}"
 # env override가 비정수/빈값/0/음수면 connect·radio-apply 폴링 산술이 깨지므로 안전 기본값으로 보정.
-case "$ASSOC_TIMEOUT_DEFAULT" in ''|*[!0-9]*) ASSOC_TIMEOUT_DEFAULT=15 ;; esac
-[ "$ASSOC_TIMEOUT_DEFAULT" -ge 1 ] 2>/dev/null || ASSOC_TIMEOUT_DEFAULT=15
+case "$ASSOC_TIMEOUT_DEFAULT" in ''|0|*[!0-9]*) ASSOC_TIMEOUT_DEFAULT=15 ;; esac
 
 # JSON mac 설정 수정 함수 (.mac.<iface>.<key>)
 update_json_mac() {
@@ -1763,10 +1762,11 @@ case "$2" in
     fi
 
     WPA_STATE=""
-    for ((_i = 1; _i <= ASSOC_TIMEOUT; _i++)); do
+    # 0.1s grid 폴링 — connect와 동일 (상한 ASSOC_TIMEOUT초 유지; ASSOC_TIMEOUT은 위에서 정수 검증됨)
+    for ((_i = 1; _i <= ASSOC_TIMEOUT * 10; _i++)); do
         WPA_STATE=$(wpa_cli -i "$IFACE" status 2>/dev/null | sed -n 's/^wpa_state=//p')
         [ "$WPA_STATE" = "COMPLETED" ] && break
-        sleep 1
+        sleep 0.1
     done
     if [ "$WPA_STATE" != "COMPLETED" ]; then
         echo "Error: association not completed within ${ASSOC_TIMEOUT}s (state=${WPA_STATE:-unknown})" >&2
