@@ -61,6 +61,9 @@ JSON_FILE="${JSON_FILE:-/usr/local/etc/config.json}"
 # wpa assoc 완료(wpa_state=COMPLETED) 대기 상한(초) — connect / radio-apply 공통 기본값.
 # radio-apply는 인자($3)로 케이스별 override 가능하며, 미지정 시 이 값을 따른다.
 ASSOC_TIMEOUT_DEFAULT="${ASSOC_TIMEOUT_DEFAULT:-15}"
+# env override가 비정수/빈값/0/음수면 connect·radio-apply 폴링 산술이 깨지므로 안전 기본값으로 보정.
+case "$ASSOC_TIMEOUT_DEFAULT" in ''|*[!0-9]*) ASSOC_TIMEOUT_DEFAULT=15 ;; esac
+[ "$ASSOC_TIMEOUT_DEFAULT" -ge 1 ] 2>/dev/null || ASSOC_TIMEOUT_DEFAULT=15
 
 # JSON mac 설정 수정 함수 (.mac.<iface>.<key>)
 update_json_mac() {
