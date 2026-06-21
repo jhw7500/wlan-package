@@ -99,7 +99,7 @@ def run_command_with_retry(cmd, retries=2, delay=0.1, validate_fn=None):
         if attempt < retries:
             time.sleep(delay)
 
-    logger.message("err", f"[{IFACE}] {cmd} -> all {retries} attempts failed", _EXTRA_())
+    #logger.message("err", f"[{IFACE}] {cmd} -> all {retries} attempts failed", _EXTRA_())
     return None
 
 def run_command(cmd):
