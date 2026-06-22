@@ -16,7 +16,7 @@ def read_current_bssid(link_json_path=LINK_JSON):
         with open(link_json_path, "r") as f:
             data = json.load(f)
         return data.get("link", {}).get("address", "").strip().lower()
-    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+    except (FileNotFoundError, json.JSONDecodeError, KeyError, AttributeError, TypeError):
         return ""
 
 
@@ -26,7 +26,7 @@ def read_current_ssid(link_json_path=LINK_JSON):
         with open(link_json_path, "r") as f:
             data = json.load(f)
         return data.get("info", {}).get("ssid", "").strip()
-    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+    except (FileNotFoundError, json.JSONDecodeError, KeyError, AttributeError, TypeError):
         return ""
 
 
@@ -38,7 +38,7 @@ def load_extra_ssids(iface, conf_path=WIFI_INIT_CONF_JSON):
         extra = roam.get("extra_ssids")
         if isinstance(extra, list):
             return [str(s).strip() for s in extra if str(s).strip()]
-    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+    except (FileNotFoundError, json.JSONDecodeError, KeyError, AttributeError, TypeError):
         pass
     return []
 
@@ -104,13 +104,13 @@ def build_candidate_list():
     Filtered by allowed SSIDs (current + roaming.extra_ssids).
     Sorted by RSSI (ss) descending (higher is better).
     """
-    current_bssid = read_current_bssid()
-    current_ssid = read_current_ssid()
+    current_bssid = read_current_bssid(LINK_JSON)
+    current_ssid = read_current_ssid(LINK_JSON)
     extra_ssids = load_extra_ssids(WIFI_IFACE)
     allowed = ([current_ssid] if current_ssid else []) + [
         s for s in extra_ssids if s and s != current_ssid
     ]
-    aps = parse_last_scan_block()
+    aps = parse_last_scan_block(SCAN_LOG)
 
     if not aps:
         print("No scan block found in ap.log")
