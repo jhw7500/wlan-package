@@ -151,20 +151,21 @@ def load_bgscan_json(iface):
 def construct_iw_scan_cmd(ssid, scan_freqs, ssid_filter=True, freq_filter=True, extra_ssids=None):
     cmd = ["iw", IFACE, "scan"]
 
-    # freq_filter/ssid_filter=false면 해당 필터를 빼고 더 광범위하게 스캔(기본 true).
+    # freq_filter=false면 freq 필터를 빼고 전체 대역 스캔(기본 true).
     if freq_filter and scan_freqs:
         cmd += ["freq"] + scan_freqs
 
-    if ssid_filter:
-        # conf 기본 ssid + roaming.extra_ssids 모두 directed probe (로밍 후보와 일치).
-        # ssid가 None(conf 미독/ssid= 누락)이어도 extra_ssids는 probe — hidden extra가
-        # 가장 필요한 케이스에서 누락되지 않게 ssid 가드와 분리한다.
-        # iw는 다중 ssid 토큰을 지원. 중복 제거하여 추가.
-        seen = set()
-        for s in ([ssid] if ssid else []) + (extra_ssids or []):
-            if s and s not in seen:
-                seen.add(s)
-                cmd += ["ssid", s]
+    # directed probe(ssid 토큰) 대상 수집:
+    #  - 기본/현재 ssid: ssid_filter=true일 때만 probe. false면 광범위(undirected) 스캔.
+    #  - roaming.extra_ssids: 명시적 로밍 후보이므로 ssid_filter와 무관하게 항상 probe.
+    #    hidden extra SSID는 directed probe로만 발견되므로 ssid_filter=false에서도 누락되면 안 된다.
+    # iw는 다중 ssid 토큰을 지원. 중복 제거하여 추가.
+    seen = set()
+    probe = ([ssid] if (ssid_filter and ssid) else []) + (extra_ssids or [])
+    for s in probe:
+        if s and s not in seen:
+            seen.add(s)
+            cmd += ["ssid", s]
 
     return cmd
 
