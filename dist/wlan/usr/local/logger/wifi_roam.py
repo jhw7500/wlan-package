@@ -762,16 +762,15 @@ def mlanutl_scan(ssids, freqs):
         ssid_list = [ssids] if ssids else []
     else:
         ssid_list = [s for s in (ssids or []) if s]
+    # list 형태 + shell=False로 셸 인젝션 차단 (extra_ssids는 operator 입력값)
+    cmd = ["mlanutl", IFACE, "setuserscan", f"chan={chan_str}"]
     if len(ssid_list) == 1:
-        cmd = f"mlanutl {IFACE} setuserscan chan={chan_str} ssid={ssid_list[0]}"
-    else:
-        # 0개(WPA_SSID 없음) 또는 다중 SSID: ssid= 필터 생략(전체 스캔)
-        # → get_latest_scan이 allowed_ssids로 후보를 거른다.
-        cmd = f"mlanutl {IFACE} setuserscan chan={chan_str}"
-    logger.message("info", f"[{IFACE}] scan : {cmd}", _EXTRA_())
+        cmd.append(f"ssid={ssid_list[0]}")
+    # else: 0개/다중 SSID → ssid= 필터 생략(전체 스캔), get_latest_scan이 allowed_ssids로 거름
+    logger.message("info", f"[{IFACE}] scan : {' '.join(cmd)}", _EXTRA_())
     try:
         result = subprocess.run(
-            cmd, shell=True, check=True, capture_output=True, text=True
+            cmd, check=True, capture_output=True, text=True
         )
         output = result.stdout.strip()
         if not output:
@@ -1364,7 +1363,7 @@ def connect_to_ssid(iface, to_ssid, from_bssid, to_bssid):
             return False
 
     logger.message(
-        "emerg",
+        "notice",
         f"[{IFACE}] Cross-SSID roam: connect ssid={to_ssid} ({from_bssid} → {to_bssid})",
         _EXTRA_(),
     )

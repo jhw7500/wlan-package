@@ -593,6 +593,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 > - **전환 방식**: 후보 SSID가 현재 연결 SSID와 같으면 `wpa_cli roam <bssid>`(무중단), 다르면 `wifi <iface> connect <ssid>`(conf `ssid=` 교체 → `reconfigure` → `reassociate`, **짧은 재연결 끊김** 발생. freq는 넘기지 않아 `scan_freq` 보존).
 > - **스캔 발견**: 추가 SSID AP는 능동 스캔으로 발견된다. non-hidden SSID는 `bgscan.ssid_filter=false`(§11.3, freq만 스캔)로도 충분히 잡히며, 이 경우 `extra_ssids`는 "로밍 후보 허용 화이트리스트"로만 작동한다(스캔과 다른 레이어). **hidden SSID**는 별도 능동 probe가 필요해 현재 미지원.
 > - **채널 전제**: `extra_ssids` AP는 현재 `scan_freq` 대역 안에 있어야 한다. `wifi_roam.py`는 conf의 `scan_freq`로 스캔·필터하므로 다른 채널의 SSID는 후보가 되지 않는다. (SSID 전환 시 `wifi connect`에 freq를 넘기지 않아 `scan_freq`는 보존된다.)
+> - **AP 선택 (v1 한계)**: 다른 SSID 전환은 `wifi connect <ssid>`로 **BSSID를 지정하지 않는다**. 같은 extra SSID에 AP가 여럿이면 로밍 알고리즘이 고른 best AP가 아닌 다른 AP에 붙을 수 있다. (같은 SSID 로밍은 `wpa_cli roam <bssid>`로 BSSID를 지정하므로 해당 없음.)
 
 #### PREDICTIVE_ROAM - 예측 로밍
 
