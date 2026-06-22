@@ -212,6 +212,7 @@ def load_roaming_config(iface):
     Returns:
         dict: 로밍 설정 dictionary
     """
+    global EXTRA_SSIDS
     config = {
         "ENABLE_PREDICTIVE_ROAM": DEFAULT_ENABLE_PREDICTIVE_ROAM,
         "PREDICTIVE_THRESHOLD_BOOST": DEFAULT_PREDICTIVE_THRESHOLD_BOOST,
@@ -345,7 +346,7 @@ def load_roaming_config(iface):
                 # 다중 SSID 로밍: extra_ssids 로드 (str 리스트만 수용, 공백 제거)
                 extra = roam_config.get("extra_ssids")
                 if isinstance(extra, list):
-                    globals()["EXTRA_SSIDS"] = [
+                    EXTRA_SSIDS = [
                         str(s).strip() for s in extra if str(s).strip()
                     ]
 
@@ -1656,6 +1657,8 @@ def main():
 
             # 라우팅 판단을 후보 필터와 동일 소스(라이브 SSID + conf WPA_SSID)로 통일.
             # best_ap가 base SSID 집합에 속하면 무중단 roam, extra SSID면 connect(재연결).
+            # (info.ssid가 cross-SSID connect 직후 일시적으로 stale이면 분기가 한 tick
+            #  어긋날 수 있으나 ROAM_SUCCESS_SLEEP로 bounded — 다음 tick 자가 교정.)
             base_ssids = {s for s in (station.get("ssid"), WPA_SSID) if s}
             if best_ap.get("ssid") and best_ap["ssid"] not in base_ssids:
                 # 다른(extra) SSID → wifi connect. 성공/실패 무관 안정화 대기로 재시도 폭주 방지
