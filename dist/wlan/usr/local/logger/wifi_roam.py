@@ -102,6 +102,9 @@ ADAPTIVE_GOOD_SIGNAL_OFFSET = DEFAULT_ADAPTIVE_GOOD_SIGNAL_OFFSET
 ADAPTIVE_CONSECUTIVE_DROP_COUNT = DEFAULT_ADAPTIVE_CONSECUTIVE_DROP_COUNT
 USE_SIGNAL_AVG = DEFAULT_USE_SIGNAL_AVG
 
+# 다중 SSID 로밍: conf 기본 ssid 외 추가 로밍 후보 SSID (roaming.extra_ssids에서 로드)
+EXTRA_SSIDS = []
+
 # Sleep 설정
 SCAN_NO_RESULT_SLEEP = DEFAULT_SCAN_NO_RESULT_SLEEP
 ROAM_SUCCESS_SLEEP = DEFAULT_ROAM_SUCCESS_SLEEP
@@ -209,6 +212,7 @@ def load_roaming_config(iface):
     Returns:
         dict: 로밍 설정 dictionary
     """
+    global EXTRA_SSIDS
     config = {
         "ENABLE_PREDICTIVE_ROAM": DEFAULT_ENABLE_PREDICTIVE_ROAM,
         "PREDICTIVE_THRESHOLD_BOOST": DEFAULT_PREDICTIVE_THRESHOLD_BOOST,
@@ -338,6 +342,13 @@ def load_roaming_config(iface):
                     config, "USE_SIGNAL_AVG",
                     roam_config.get("use_signal_avg"), parse_bool
                 )
+
+                # 다중 SSID 로밍: extra_ssids 로드 (str 리스트만 수용, 공백 제거).
+                # 키 제거/null 시 이전 값이 stale로 남지 않도록 무조건 재대입.
+                extra = roam_config.get("extra_ssids")
+                EXTRA_SSIDS = [
+                    str(s).strip() for s in extra if str(s).strip()
+                ] if isinstance(extra, list) else []
 
                 # 설정 적용
                 for key in config.keys():
@@ -737,18 +748,29 @@ def get_flag(path=ROAM_CONDITION_FLAG) -> bool:
         return False
 
 
-def mlanutl_scan(ssid, freqs):
+def mlanutl_scan(ssids, freqs):
+    """ssids: 단일 str 또는 SSID 리스트.
+    1개면 기존처럼 ssid= 필터(무회귀), 다중이면 ssid= 생략(전체 스캔) 후
+    get_latest_scan이 allowed_ssids로 필터(mlanutl 다중 ssid 지원 불확실 대비)."""
     try:
         chan_str = ",".join(FREQ_TO_CHAN[f] for f in freqs)
     except KeyError as e:
         print(f"[ERROR] Unknown frequency: {e}")
         return
 
-    cmd = f"mlanutl mlan0 setuserscan chan={chan_str} ssid={ssid}"
-    logger.message("info", f"[{IFACE}] scan : {cmd}", _EXTRA_())
+    if isinstance(ssids, str):
+        ssid_list = [ssids] if ssids else []
+    else:
+        ssid_list = [s for s in (ssids or []) if s]
+    # list 형태 + shell=False로 셸 인젝션 차단 (extra_ssids는 operator 입력값)
+    cmd = ["mlanutl", IFACE, "setuserscan", f"chan={chan_str}"]
+    if len(ssid_list) == 1:
+        cmd.append(f"ssid={ssid_list[0]}")
+    # else: 0개/다중 SSID → ssid= 필터 생략(전체 스캔), get_latest_scan이 allowed_ssids로 거름
+    logger.message("info", f"[{IFACE}] scan : {' '.join(cmd)}", _EXTRA_())
     try:
         result = subprocess.run(
-            cmd, shell=True, check=True, capture_output=True, text=True
+            cmd, check=True, capture_output=True, text=True
         )
         output = result.stdout.strip()
         if not output:
@@ -800,6 +822,7 @@ def get_link_info_with_load():
                 "bssid": link["address"].strip().lower(),
                 "freq": int(data["info"]["freq"]),
                 "rssi": int(rssi_raw.replace(" dBm", "")),
+                "ssid": data["info"].get("ssid", "").strip(),
             }
 
             # Load 정보 추가 (활성화됨)
@@ -897,11 +920,29 @@ def get_current_bssid():
         return None
 
 
+def get_allowed_ssids(live_ssid=None):
+    """로밍 허용 SSID 목록: 라이브 연결 SSID + conf 기본 ssid(WPA_SSID) + roaming.extra_ssids.
+    라이브 SSID를 항상 1차로 포함해 cross-SSID connect 후 conf ssid가 교체되어도 현재
+    네트워크 후보를 잃지 않는다(passive_roam.py와 동일 원칙).
+    extra_ssids가 비고 라이브==WPA_SSID면 [WPA_SSID] → 기존 단일 SSID 동작(무회귀)."""
+    allowed = []
+    for s in (live_ssid, WPA_SSID):
+        if s and s not in allowed:
+            allowed.append(s)
+    for s in EXTRA_SSIDS:
+        if s and s not in allowed:
+            allowed.append(s)
+    return allowed
+
+
 # ==============================================================================
 # 개선된 get_latest_scan (Load 정보 포함)
 # ==============================================================================
-def get_latest_scan(st, channel_info_data=None):
+def get_latest_scan(st, channel_info_data=None, allowed_ssids=None):
     """Load 정보를 포함한 스캔 결과 반환"""
+    if allowed_ssids is None:
+        allowed_ssids = [st.get("ssid")] if st.get("ssid") else []
+    allowed_set = {s for s in allowed_ssids if s}
     try:
         with open(SCAN_LOG_FILE, "r") as f:
             lines = f.readlines()
@@ -972,7 +1013,7 @@ def get_latest_scan(st, channel_info_data=None):
                         _EXTRA_(),
                     )
 
-                    if st["ssid"] == ssid and WPA_FREQ and freq_str in WPA_FREQ:
+                    if ssid in allowed_set and WPA_FREQ and freq_str in WPA_FREQ:
                         entries.append(
                             {
                                 "timestamp": timestamp,
@@ -1304,6 +1345,58 @@ def roam_to_bssid(from_bssid, to_bssid):
         return False
 
 
+def connect_to_ssid(iface, to_ssid, from_bssid, to_bssid):
+    """다른 SSID로 로밍: wifi <iface> connect (conf ssid 교체→reconfigure→reassociate).
+    wpa_cli roam은 같은 network 블록(SSID) 내 BSS만 전환하므로, 다른 SSID 전환은 connect로 처리.
+    - extra_ssids가 현재와 같은 psk/key_mgmt를 공유한다는 전제(아니면 connect 후 인증 실패).
+    - freq 인자는 일부러 생략한다: wifi connect에 단일 freq를 주면 conf의 multi-freq
+      scan_freq/freq_list가 그 한 채널로 collapse되어 이후 스캔 범위가 축소된다. ssid만
+      교체하고 scan_freq는 유지(후보는 이미 WPA_FREQ 내 채널이라 연결 가능).
+    - ping-pong 예산은 same-SSID 로밍과 공유(의도): cross-SSID도 BSSID 기반 카운트에 합산."""
+    if ENABLE_PING_PONG_PREVENTION and ping_pong_preventer:
+        if ping_pong_preventer.is_ping_pong(from_bssid, to_bssid):
+            logger.message(
+                "info",
+                f"[{IFACE}] Cross-SSID roam blocked: ping-pong ({from_bssid} → {to_bssid})",
+                _EXTRA_(),
+            )
+            return False
+
+    logger.message(
+        "notice",
+        f"[{IFACE}] Cross-SSID roam: connect ssid={to_ssid} ({from_bssid} → {to_bssid})",
+        _EXTRA_(),
+    )
+    try:
+        result = subprocess.run(
+            ["/usr/local/bin/wifi", iface, "connect", to_ssid],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            if ENABLE_PING_PONG_PREVENTION and ping_pong_preventer:
+                ping_pong_preventer.add_roam(from_bssid, to_bssid)
+            logger.message(
+                "info", f"[{IFACE}] Cross-SSID connect successful: {to_ssid}", _EXTRA_()
+            )
+            optimize_post_roam_connectivity(IFACE)
+            return True
+        else:
+            logger.message(
+                "err",
+                f"[{IFACE}] Cross-SSID connect failed (conf ssid may diverge from live until next tick): {result.stderr.strip()}",
+                _EXTRA_(),
+            )
+            return False
+    except subprocess.TimeoutExpired:
+        logger.message("err", f"[{IFACE}] Cross-SSID connect timeout: {to_ssid}", _EXTRA_())
+        return False
+    except Exception as e:
+        logger.message("err", f"[{IFACE}] Cross-SSID connect error: {e}", _EXTRA_())
+        return False
+
+
 def score_ap(ap, rssi_weight=1.0, ld_weight=1.0):
     normalized_rssi = ap["rssi"] + 100  # -40 → 60
     normalized_ld = ap["ld"]  # 0~100
@@ -1365,7 +1458,7 @@ def main():
 
     # 초기화
     if ENABLE_PREDICTIVE_ROAM:
-        trend_tracker = RSSITrendTracker()
+        trend_tracker = RSSITrendTracker(TREND_WINDOW_SIZE, TREND_HISTORY_MAX_AGE)
         logger.message(
             "info",
             f"[{IFACE}] Predictive roaming enabled (boost={PREDICTIVE_THRESHOLD_BOOST}dB)",
@@ -1373,7 +1466,7 @@ def main():
         )
 
     if ENABLE_PING_PONG_PREVENTION:
-        ping_pong_preventer = PingPongPreventer()
+        ping_pong_preventer = PingPongPreventer(PING_PONG_WINDOW, MAX_ROAMS_IN_WINDOW)
         logger.message(
             "info",
             f"[{IFACE}] Ping-pong prevention enabled (max={MAX_ROAMS_IN_WINDOW}/{PING_PONG_WINDOW}s)",
@@ -1381,7 +1474,7 @@ def main():
         )
 
     if ENABLE_ADAPTIVE_INTERVAL:
-        adaptive_interval = AdaptiveInterval()
+        adaptive_interval = AdaptiveInterval(MIN_CHECK_INTERVAL, MAX_CHECK_INTERVAL)
         logger.message(
             "info",
             f"[{IFACE}] Adaptive interval enabled (min={MIN_CHECK_INTERVAL}s, max={MAX_CHECK_INTERVAL}s)",
@@ -1474,8 +1567,10 @@ def main():
 
         # 주변 AP 스캔
         if WPA_SSID and WPA_FREQ:
-            station["ssid"] = WPA_SSID
-            lines = mlanutl_scan(WPA_SSID, WPA_FREQ)
+            # station["ssid"]는 get_link_info_with_load가 link.json info.ssid(실제 연결 SSID)로 채움
+            if not station.get("ssid"):
+                station["ssid"] = WPA_SSID
+            lines = mlanutl_scan(get_allowed_ssids(station.get("ssid")), WPA_FREQ)
             try:
                 with open(LAST_SCAN_TIME_FILE, "w") as f:
                     f.write(str(time.time()))
@@ -1498,7 +1593,7 @@ def main():
         )
 
         # 스캔 결과 파싱
-        entries, timestamp = get_latest_scan(station, channel_info_data)
+        entries, timestamp = get_latest_scan(station, channel_info_data, get_allowed_ssids(station.get("ssid")))
 
         if not entries:
             logger.message(
@@ -1561,7 +1656,19 @@ def main():
                 _EXTRA_(),
             )
 
-            if roam_to_bssid(station["bssid"], best_ap["bssid"]):
+            # 라우팅 판단을 후보 필터와 동일 소스(라이브 SSID + conf WPA_SSID)로 통일.
+            # best_ap가 base SSID 집합에 속하면 무중단 roam, extra SSID면 connect(재연결).
+            # (info.ssid가 cross-SSID connect 직후 일시적으로 stale이면 분기가 한 tick
+            #  어긋날 수 있으나 ROAM_SUCCESS_SLEEP로 bounded — 다음 tick 자가 교정.)
+            base_ssids = {s for s in (station.get("ssid"), WPA_SSID) if s}
+            if best_ap.get("ssid") and best_ap["ssid"] not in base_ssids:
+                # 다른(extra) SSID → wifi connect. 성공/실패 무관 안정화 대기로 재시도 폭주 방지
+                # (connect 실패해도 conf ssid는 이미 교체되어, 즉시 재시도하면 링크가 흔들림).
+                connect_to_ssid(
+                    IFACE, best_ap["ssid"], station["bssid"], best_ap["bssid"]
+                )
+                time.sleep(ROAM_SUCCESS_SLEEP)
+            elif roam_to_bssid(station["bssid"], best_ap["bssid"]):
                 time.sleep(ROAM_SUCCESS_SLEEP)
         else:
             logger.message(
