@@ -97,7 +97,7 @@ def parse_last_scan_block(scan_log_path=SCAN_LOG):
 
 def build_candidate_list():
     """
-    Return (current_bssid, current_ssid, candidates)
+    Return (current_bssid, current_ssid, candidates, extra_ssids)
 
     candidates: list of AP dicts with extra key "is_current"
     All APs are included, including the current one.
@@ -114,7 +114,7 @@ def build_candidate_list():
 
     if not aps:
         print("No scan block found in ap.log")
-        return current_bssid, current_ssid, []
+        return current_bssid, current_ssid, [], extra_ssids
 
     for ap in aps:
         bssid_low = ap["bssid"].strip().lower()
@@ -127,7 +127,7 @@ def build_candidate_list():
     # Sort by RSSI (higher is better; e.g. -40 > -50)
     aps.sort(key=lambda x: x["ss"], reverse=True)
 
-    return current_bssid, current_ssid, aps
+    return current_bssid, current_ssid, aps, extra_ssids
 
 
 def print_candidate_list(current_bssid, candidates):
@@ -221,9 +221,8 @@ def main():
     SCAN_LOG = f"/var/log/cantops/scan/{WIFI_IFACE}/ap.log"
     LINK_JSON = f"/var/log/cantops/json/{WIFI_IFACE}/link.json"
 
-    print(f"Allowed SSIDs: current={read_current_ssid(LINK_JSON)} extra_ssids={load_extra_ssids(WIFI_IFACE)}")
-
-    current_bssid, current_ssid, candidates = build_candidate_list()
+    current_bssid, current_ssid, candidates, extra_ssids = build_candidate_list()
+    print(f"Allowed SSIDs: current={current_ssid} extra_ssids={extra_ssids}")
     if not candidates:
         sys.exit(1)
 
