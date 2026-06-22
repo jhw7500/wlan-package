@@ -160,10 +160,16 @@ def construct_iw_scan_cmd(ssid, scan_freqs, ssid_filter=True, freq_filter=True, 
     #  - roaming.extra_ssids: 명시적 로밍 후보이므로 ssid_filter와 무관하게 항상 probe.
     #    hidden extra SSID는 directed probe로만 발견되므로 ssid_filter=false에서도 누락되면 안 된다.
     # iw는 다중 ssid 토큰을 지원. 중복 제거하여 추가.
+    #  - ssid_filter=false인데 extra_ssids가 있으면 directed probe만 남아 와일드카드
+    #    probe가 사라진다(NXP mlan 포함 대부분의 드라이버는 ssid 지정 시 와일드카드를
+    #    보내지 않음) → 광범위 스캔 의도가 깨져 extra 외 일반 AP가 누락될 수 있다.
+    #    빈 문자열 ""(와일드카드 probe)을 함께 넣어 광범위 스캔을 보존한다.
     seen = set()
     probe = ([ssid] if (ssid_filter and ssid) else []) + (extra_ssids or [])
+    if not ssid_filter and extra_ssids:
+        probe.insert(0, "")
     for s in probe:
-        if s and s not in seen:
+        if s is not None and s not in seen:
             seen.add(s)
             cmd += ["ssid", s]
 
