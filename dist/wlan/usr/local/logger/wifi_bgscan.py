@@ -32,6 +32,7 @@ except Exception:
 VERSION = "0.0"
 IFACE = ""
 _WPA_CLI_WARNED = False   # wpa_cli 부재 로그 1회 제한 플래그
+_WILDCARD_PROBE_WARNED = False   # ssid_filter=false+extra_ssids 와일드카드 probe 가정 경고 1회 제한
 
 def handle_sigterm(signum, frame):
     logger.message('crit', f"[{IFACE}] SIGTERM {signum} received! Cleaning up...", _EXTRA_())
@@ -151,20 +152,29 @@ def load_bgscan_json(iface):
 def construct_iw_scan_cmd(ssid, scan_freqs, ssid_filter=True, freq_filter=True, extra_ssids=None):
     cmd = ["iw", IFACE, "scan"]
 
-    # freq_filter/ssid_filter=false면 해당 필터를 빼고 더 광범위하게 스캔(기본 true).
+    # freq_filter=false면 freq 필터를 빼고 전체 대역 스캔(기본 true).
     if freq_filter and scan_freqs:
         cmd += ["freq"] + scan_freqs
 
-    if ssid_filter:
-        # conf 기본 ssid + roaming.extra_ssids 모두 directed probe (로밍 후보와 일치).
-        # ssid가 None(conf 미독/ssid= 누락)이어도 extra_ssids는 probe — hidden extra가
-        # 가장 필요한 케이스에서 누락되지 않게 ssid 가드와 분리한다.
-        # iw는 다중 ssid 토큰을 지원. 중복 제거하여 추가.
-        seen = set()
-        for s in ([ssid] if ssid else []) + (extra_ssids or []):
-            if s and s not in seen:
-                seen.add(s)
-                cmd += ["ssid", s]
+    # directed probe(ssid 토큰) 대상 수집:
+    #  - 기본/현재 ssid: ssid_filter=true일 때만 probe. false면 광범위(undirected) 스캔.
+    #  - roaming.extra_ssids: 명시적 로밍 후보이므로 ssid_filter와 무관하게 항상 probe.
+    #    hidden extra SSID는 directed probe로만 발견되므로 ssid_filter=false에서도 누락되면 안 된다.
+    # iw는 다중 ssid 토큰을 지원. 중복 제거하여 추가.
+    #  - ssid_filter=false인데 extra_ssids가 있으면 directed probe만 남아 와일드카드
+    #    probe가 사라진다(NXP mlan 포함 대부분의 드라이버는 ssid 지정 시 와일드카드를
+    #    보내지 않음) → 광범위 스캔 의도가 깨져 extra 외 일반 AP가 누락될 수 있다.
+    #    빈 문자열 ""(와일드카드 probe)을 함께 넣어 광범위 스캔을 보존한다.
+    #    NOTE: `iw scan ssid ""`의 와일드카드 해석은 표준 API가 아니다. 새 플랫폼/드라이버
+    #    도입 시 extra_ssids 사용 전 실제로 와일드카드 probe가 나가는지(빈 SSID 무시 여부) 검증할 것.
+    seen = set()
+    probe = ([ssid] if (ssid_filter and ssid) else []) + (extra_ssids or [])
+    if not ssid_filter and extra_ssids:
+        probe.insert(0, "")
+    for s in probe:
+        if s is not None and s not in seen:
+            seen.add(s)
+            cmd += ["ssid", s]
 
     return cmd
 
@@ -172,10 +182,23 @@ def periodic_scan(conf_path):
 
     # 스캔 명령/주기/필터는 매 스캔 직전 wpa_supplicant conf + JSON에서 재구성한다.
     def build():
+        global _WILDCARD_PROBE_WARNED
         ssid, freqs, wpa_interval = parse_wpa_supplicant_conf(conf_path)
         json_interval, ssid_filter, freq_filter, extra_ssids = load_bgscan_json(IFACE)
         interval = json_interval or wpa_interval or DEFAULT_INTERVAL
         cmd = construct_iw_scan_cmd(ssid, freqs, ssid_filter, freq_filter, extra_ssids)
+        # ssid_filter=false + extra_ssids면 construct_iw_scan_cmd가 와일드카드("") probe를
+        # 삽입해 광범위 스캔을 보존한다. 빈 SSID를 broadcast probe로 보는 nl80211 동작에
+        # 의존하므로(드라이버/커널 의존), 그 가정을 운영 로그에 1회 노출해 신규 플랫폼에서
+        # 일반 AP 발견 여부를 검증할 수 있게 한다.
+        if not ssid_filter and extra_ssids and not _WILDCARD_PROBE_WARNED:
+            logger.message(
+                "warn",
+                f"[{IFACE}] ssid_filter=false + extra_ssids: 와일드카드(\"\") probe 삽입 "
+                f"— 신규 드라이버/플랫폼에서 일반 AP 발견 동작 확인 필요",
+                _EXTRA_(),
+            )
+            _WILDCARD_PROBE_WARNED = True
         return cmd, interval
 
     # 초기 1회 구성 (실패해도 기동 — 다음 스캔 직전 재시도).
