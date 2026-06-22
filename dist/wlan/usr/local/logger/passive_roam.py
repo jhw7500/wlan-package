@@ -221,6 +221,8 @@ def main():
     SCAN_LOG = f"/var/log/cantops/scan/{WIFI_IFACE}/ap.log"
     LINK_JSON = f"/var/log/cantops/json/{WIFI_IFACE}/link.json"
 
+    print(f"Allowed SSIDs: current={read_current_ssid(LINK_JSON)} extra_ssids={load_extra_ssids(WIFI_IFACE)}")
+
     current_bssid, current_ssid, candidates = build_candidate_list()
     if not candidates:
         sys.exit(1)

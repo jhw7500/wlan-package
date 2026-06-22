@@ -381,7 +381,8 @@ def load_roaming_config(iface):
         f"predictive={ENABLE_PREDICTIVE_ROAM}, load_based={ENABLE_LOAD_BASED_ROAM}, "
         f"ping_pong={ENABLE_PING_PONG_PREVENTION}, adaptive={ENABLE_ADAPTIVE_INTERVAL}, "
         f"post_roam_arp={ENABLE_POST_ROAM_ARP_OPTIMIZATION}, "
-        f"rssi_source={'signal_avg' if USE_SIGNAL_AVG else 'signal'}",
+        f"rssi_source={'signal_avg' if USE_SIGNAL_AVG else 'signal'}, "
+        f"extra_ssids={EXTRA_SSIDS}",
         _EXTRA_(),
     )
 
