@@ -1606,6 +1606,7 @@ case "$2" in
         echo "Error: timeout_s must be a positive integer" >&2
         exit 2
     fi
+    ASSOC_TIMEOUT=$((10#$ASSOC_TIMEOUT))   # 08/09 등 선행 0 → 10진수 정규화 (폴링 *10 산술의 8진수 에러 방지)
     for _tool in mlanutl wpa_cli jq; do
         if ! command -v "$_tool" >/dev/null 2>&1; then
             echo "Error: $_tool not found" >&2
