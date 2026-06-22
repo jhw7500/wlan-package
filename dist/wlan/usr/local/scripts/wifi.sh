@@ -58,6 +58,14 @@ apply_sed_update() {
 WIFI_INIT_CONF_JSON="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
 JSON_FILE="${JSON_FILE:-/usr/local/etc/config.json}"
 
+# wpa assoc 완료(wpa_state=COMPLETED) 대기 상한(초) — connect / radio-apply 공통 기본값.
+# radio-apply는 인자($3)로 케이스별 override 가능하며, 미지정 시 이 값을 따른다.
+ASSOC_TIMEOUT_DEFAULT="${ASSOC_TIMEOUT_DEFAULT:-15}"
+# env override가 비정수/빈값/0/음수면 connect·radio-apply 폴링 산술이 깨지므로 안전 기본값으로 보정.
+case "$ASSOC_TIMEOUT_DEFAULT" in ''|*[!0-9]*) ASSOC_TIMEOUT_DEFAULT=15 ;; esac
+ASSOC_TIMEOUT_DEFAULT=$((10#$ASSOC_TIMEOUT_DEFAULT))   # 선행 0(00/08 등) 10진수 정규화 → 8진수 산술에러·zero 방지
+[ "$ASSOC_TIMEOUT_DEFAULT" -ge 1 ] || ASSOC_TIMEOUT_DEFAULT=15
+
 # JSON mac 설정 수정 함수 (.mac.<iface>.<key>)
 update_json_mac() {
     local iface="$1"
@@ -1282,13 +1290,15 @@ case "$2" in
         echo "Error: wpa_cli reassociate/reconnect failed for $IFACE" >&2
         exit 7
     fi
-    # 연결 완료 대기(best-effort, 최대 15s) — radio-apply와 동일한 assoc 폴링 패턴
-    CONNECT_TIMEOUT=15
+    # 연결 완료 대기(best-effort, 최대 15s) — 0.1s grid 폴링으로 COMPLETED를 빨리 감지.
+    # (실제 association 시간은 물리 과정이라 불변; 폴링 grid만 줄여 끝맺음 반응성 개선)
+    CONNECT_TIMEOUT="$ASSOC_TIMEOUT_DEFAULT"
     WPA_STATE=""
-    for ((_i = 1; _i <= CONNECT_TIMEOUT; _i++)); do
+    # 상한 의미 유지 — CONNECT_TIMEOUT(초)×10 회 × sleep 0.1s = CONNECT_TIMEOUT 초
+    for ((_i = 1; _i <= CONNECT_TIMEOUT * 10; _i++)); do
         WPA_STATE=$(wpa_cli -i "$IFACE" status 2>/dev/null | sed -n 's/^wpa_state=//p') || true
         [ "$WPA_STATE" = "COMPLETED" ] && break
-        sleep 1
+        sleep 0.1
     done
     if [ "$WPA_STATE" = "COMPLETED" ]; then
         CUR_SSID=$(wpa_cli -i "$IFACE" status 2>/dev/null | sed -n 's/^ssid=//p') || true
@@ -1591,11 +1601,12 @@ case "$2" in
         echo "Error: radio-apply supports mlan0/mlan1 only" >&2
         exit 2
     fi
-    ASSOC_TIMEOUT="${3:-15}"
+    ASSOC_TIMEOUT="${3:-$ASSOC_TIMEOUT_DEFAULT}"
     if ! [[ "$ASSOC_TIMEOUT" =~ ^[0-9]+$ ]] || [ "$ASSOC_TIMEOUT" -lt 1 ]; then
         echo "Error: timeout_s must be a positive integer" >&2
         exit 2
     fi
+    ASSOC_TIMEOUT=$((10#$ASSOC_TIMEOUT))   # 08/09 등 선행 0 → 10진수 정규화 (폴링 *10 산술의 8진수 에러 방지)
     for _tool in mlanutl wpa_cli jq; do
         if ! command -v "$_tool" >/dev/null 2>&1; then
             echo "Error: $_tool not found" >&2
@@ -1754,10 +1765,11 @@ case "$2" in
     fi
 
     WPA_STATE=""
-    for ((_i = 1; _i <= ASSOC_TIMEOUT; _i++)); do
+    # 0.1s grid 폴링 — connect와 동일 (상한 ASSOC_TIMEOUT초 유지; ASSOC_TIMEOUT은 위에서 정수 검증됨)
+    for ((_i = 1; _i <= ASSOC_TIMEOUT * 10; _i++)); do
         WPA_STATE=$(wpa_cli -i "$IFACE" status 2>/dev/null | sed -n 's/^wpa_state=//p')
         [ "$WPA_STATE" = "COMPLETED" ] && break
-        sleep 1
+        sleep 0.1
     done
     if [ "$WPA_STATE" != "COMPLETED" ]; then
         echo "Error: association not completed within ${ASSOC_TIMEOUT}s (state=${WPA_STATE:-unknown})" >&2
