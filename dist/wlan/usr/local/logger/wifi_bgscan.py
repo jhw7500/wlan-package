@@ -122,12 +122,15 @@ def parse_wpa_supplicant_conf(path):
     return ssid, freqs, interval
 
 def load_bgscan_json(iface):
-    """`.iface.bgscan`에서 interval/ssid_filter/freq_filter를 한 번의 파일 읽기로 로드.
-    interval은 양의 정수만, 필터는 bool만 수용. 없음/형식오류면 (None, True, True)."""
-    interval, ssid_filter, freq_filter = None, True, True
+    """`.iface.bgscan`에서 interval/ssid_filter/freq_filter를, `.iface.roaming.extra_ssids`에서
+    추가 스캔 SSID를 한 번의 파일 읽기로 로드. interval은 양의 정수만, 필터는 bool만,
+    extra_ssids는 문자열 리스트만 수용. 없음/형식오류면 (None, True, True, [])."""
+    interval, ssid_filter, freq_filter, extra_ssids = None, True, True, []
     try:
         with open(WIFI_INIT_CONF_JSON, "r") as f:
-            bg = json.load(f).get(iface, {}).get("bgscan", {})
+            data = json.load(f)
+        iface_cfg = data.get(iface, {})
+        bg = iface_cfg.get("bgscan", {})
         iv = bg.get("interval")
         if isinstance(iv, int) and iv > 0:
             interval = iv
@@ -135,21 +138,33 @@ def load_bgscan_json(iface):
             ssid_filter = bg["ssid_filter"]
         if isinstance(bg.get("freq_filter"), bool):
             freq_filter = bg["freq_filter"]
+        # 로밍 후보(roaming.extra_ssids)와 bgscan 스캔 대상을 일치시킨다.
+        extra = iface_cfg.get("roaming", {}).get("extra_ssids")
+        if isinstance(extra, list):
+            extra_ssids = [s.strip() for s in extra if isinstance(s, str) and s.strip()]
     except FileNotFoundError:
         pass
     except Exception as e:
         logger.message("err", f"[{iface}] bgscan json load error: {e}", _EXTRA_())
-    return interval, ssid_filter, freq_filter
+    return interval, ssid_filter, freq_filter, extra_ssids
 
-def construct_iw_scan_cmd(ssid, scan_freqs, ssid_filter=True, freq_filter=True):
+def construct_iw_scan_cmd(ssid, scan_freqs, ssid_filter=True, freq_filter=True, extra_ssids=None):
     cmd = ["iw", IFACE, "scan"]
 
     # freq_filter/ssid_filter=false면 해당 필터를 빼고 더 광범위하게 스캔(기본 true).
     if freq_filter and scan_freqs:
         cmd += ["freq"] + scan_freqs
 
-    if ssid_filter and ssid:
-        cmd += ["ssid", ssid]
+    if ssid_filter:
+        # conf 기본 ssid + roaming.extra_ssids 모두 directed probe (로밍 후보와 일치).
+        # ssid가 None(conf 미독/ssid= 누락)이어도 extra_ssids는 probe — hidden extra가
+        # 가장 필요한 케이스에서 누락되지 않게 ssid 가드와 분리한다.
+        # iw는 다중 ssid 토큰을 지원. 중복 제거하여 추가.
+        seen = set()
+        for s in ([ssid] if ssid else []) + (extra_ssids or []):
+            if s and s not in seen:
+                seen.add(s)
+                cmd += ["ssid", s]
 
     return cmd
 
@@ -158,9 +173,9 @@ def periodic_scan(conf_path):
     # 스캔 명령/주기/필터는 매 스캔 직전 wpa_supplicant conf + JSON에서 재구성한다.
     def build():
         ssid, freqs, wpa_interval = parse_wpa_supplicant_conf(conf_path)
-        json_interval, ssid_filter, freq_filter = load_bgscan_json(IFACE)
+        json_interval, ssid_filter, freq_filter, extra_ssids = load_bgscan_json(IFACE)
         interval = json_interval or wpa_interval or DEFAULT_INTERVAL
-        cmd = construct_iw_scan_cmd(ssid, freqs, ssid_filter, freq_filter)
+        cmd = construct_iw_scan_cmd(ssid, freqs, ssid_filter, freq_filter, extra_ssids)
         return cmd, interval
 
     # 초기 1회 구성 (실패해도 기동 — 다음 스캔 직전 재시도).
