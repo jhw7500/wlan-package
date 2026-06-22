@@ -253,7 +253,7 @@
             "enabled": false
         },
         "bgscan": {
-            "_comment": "Background scan configuration for mlan0. ssid_filter/freq_filter: bgscan의 iw scan에 ssid/freq 필터 포함 여부(기본 true). false면 해당 필터 없이 더 광범위하게 스캔(스캔 시간·airtime↑).",
+            "_comment": "Background scan configuration for mlan0. ssid_filter: 기본 ssid의 directed probe 포함 여부(기본 true). freq_filter: freq 필터 포함 여부(기본 true). false면 해당 필터 없이 더 광범위하게 스캔(스캔 시간·airtime↑). roaming.extra_ssids는 ssid_filter와 무관하게 항상 directed probe된다(hidden extra 발견 보장).",
             "interval": 60,
             "ssid_filter": true,
             "freq_filter": true,
@@ -262,7 +262,7 @@
         "roaming": {
             "_comment": [
                 "wifi_roam.py 로밍 알고리즘 설정 (mlan0)",
-                "extra_ssids: (array[str], 기본 []) conf 기본 ssid 외 추가 로밍 후보 SSID. 같은 psk/key_mgmt 전제. 같은 SSID는 wpa_cli roam(무중단), 다른 SSID는 wifi connect(재연결)로 전환. 빈 배열=기존 단일 SSID 동작. 추가 SSID 스캔 발견은 bgscan.ssid_filter=false로 충분(hidden SSID만 예외).",
+                "extra_ssids: (array[str], 기본 []) conf 기본 ssid 외 추가 로밍 후보 SSID. 같은 psk/key_mgmt 전제. 같은 SSID는 wpa_cli roam(무중단), 다른 SSID는 wifi connect(재연결)로 전환. 빈 배열=기존 단일 SSID 동작. extra_ssids는 bgscan이 ssid_filter와 무관하게 항상 directed probe하므로 hidden SSID도 스캔된다.",
                 "use_signal_avg: (bool) true=signal_avg(평균, 안정적), false=signal(순간값, 즉시 반응)",
                 "DEFAULT_TH_2G: (int) 2.4GHz RSSI 로밍 임계값 (dBm). 이 값 이하이면 로밍 시도",
                 "DEFAULT_TH_5G: (int) 5GHz RSSI 로밍 임계값 (dBm). wpa_supplicant.conf 값이 우선",
@@ -434,7 +434,7 @@
             "enabled": false
         },
         "bgscan": {
-            "_comment": "Background scan configuration for mlan1. ssid_filter/freq_filter: bgscan의 iw scan에 ssid/freq 필터 포함 여부(기본 true). false면 해당 필터 없이 더 광범위하게 스캔(스캔 시간·airtime↑).",
+            "_comment": "Background scan configuration for mlan1. ssid_filter: 기본 ssid의 directed probe 포함 여부(기본 true). freq_filter: freq 필터 포함 여부(기본 true). false면 해당 필터 없이 더 광범위하게 스캔(스캔 시간·airtime↑). roaming.extra_ssids는 ssid_filter와 무관하게 항상 directed probe된다(hidden extra 발견 보장).",
             "interval": 60,
             "ssid_filter": true,
             "freq_filter": true,
@@ -443,7 +443,7 @@
         "roaming": {
             "_comment": [
                 "wifi_roam.py 로밍 알고리즘 설정 (mlan1)",
-                "extra_ssids: (array[str], 기본 []) conf 기본 ssid 외 추가 로밍 후보 SSID. 같은 psk/key_mgmt 전제. 같은 SSID는 wpa_cli roam(무중단), 다른 SSID는 wifi connect(재연결)로 전환. 빈 배열=기존 단일 SSID 동작. 추가 SSID 스캔 발견은 bgscan.ssid_filter=false로 충분(hidden SSID만 예외).",
+                "extra_ssids: (array[str], 기본 []) conf 기본 ssid 외 추가 로밍 후보 SSID. 같은 psk/key_mgmt 전제. 같은 SSID는 wpa_cli roam(무중단), 다른 SSID는 wifi connect(재연결)로 전환. 빈 배열=기존 단일 SSID 동작. extra_ssids는 bgscan이 ssid_filter와 무관하게 항상 directed probe하므로 hidden SSID도 스캔된다.",
                 "use_signal_avg: (bool) true=signal_avg(평균, 안정적), false=signal(순간값, 즉시 반응)",
                 "DEFAULT_TH_2G: (int) 2.4GHz RSSI 로밍 임계값 (dBm). 이 값 이하이면 로밍 시도",
                 "DEFAULT_TH_5G: (int) 5GHz RSSI 로밍 임계값 (dBm). wpa_supplicant.conf 값이 우선",
