@@ -3,7 +3,7 @@
 > `scripts/gen_driver_manifest.sh` 자동 생성 — 수동 편집 금지.
 > 바이너리 `.ko` 는 .gitignore 대상이며, 이 파일이 배포된 드라이버의 약식 이력이다.
 
-- 소스(wlan-driver-v2): `lf-6.12.3-1.0.0-95-g8beeb06` (HEAD 8beeb06)
+- 소스(wlan-driver-v2): `lf-6.12.3-1.0.0-96-g3351014` (HEAD 3351014)
 - 대상 디렉토리: `dist/wlan/opt/wlan/driver`
 
 | 파일 | version | srcversion | vermagic |
