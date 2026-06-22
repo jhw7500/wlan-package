@@ -590,7 +590,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 > **다중 SSID 로밍 (`extra_ssids`)**: wpa_supplicant conf는 단일 `network` 블록을 유지하고, `extra_ssids`에 적은 SSID도 스캔·로밍 후보에 포함한다. `wifi_roam.py`(자동 데몬)와 `wifi <iface> roam`(`passive_roam.py`) 모두 적용된다.
 > - **전제**: `extra_ssids`는 현재 network와 **같은 `psk`/`key_mgmt`를 공유**해야 한다. 전환은 conf의 `ssid=`만 교체(`wifi <iface> connect`)하므로 자격증명이 다르면 인증에 실패한다.
 > - **목록 작성**: `extra_ssids`에는 로밍 대상 SSID를 **모두** 나열한다. `wifi connect` 전환 시 conf의 `ssid=`가 바뀌므로, 현재 라이브 SSID는 자동으로 후보에 유지되지만 그 외 대상(원래 기본 SSID 포함)으로 복귀하려면 그 SSID도 `extra_ssids`에 있어야 한다.
-> - **전환 방식**: 후보 SSID가 현재 연결 SSID와 같으면 `wpa_cli roam <bssid>`(무중단), 다르면 `wifi <iface> connect <ssid> <freq>`(conf `ssid=` 교체 → `reconfigure` → `reassociate`, **짧은 재연결 끊김** 발생).
+> - **전환 방식**: 후보 SSID가 현재 연결 SSID와 같으면 `wpa_cli roam <bssid>`(무중단), 다르면 `wifi <iface> connect <ssid>`(conf `ssid=` 교체 → `reconfigure` → `reassociate`, **짧은 재연결 끊김** 발생. freq는 넘기지 않아 `scan_freq` 보존).
 > - **스캔 발견**: 추가 SSID AP는 능동 스캔으로 발견된다. non-hidden SSID는 `bgscan.ssid_filter=false`(§11.3, freq만 스캔)로도 충분히 잡히며, 이 경우 `extra_ssids`는 "로밍 후보 허용 화이트리스트"로만 작동한다(스캔과 다른 레이어). **hidden SSID**는 별도 능동 probe가 필요해 현재 미지원.
 > - **채널 전제**: `extra_ssids` AP는 현재 `scan_freq` 대역 안에 있어야 한다. `wifi_roam.py`는 conf의 `scan_freq`로 스캔·필터하므로 다른 채널의 SSID는 후보가 되지 않는다. (SSID 전환 시 `wifi connect`에 freq를 넘기지 않아 `scan_freq`는 보존된다.)
 
