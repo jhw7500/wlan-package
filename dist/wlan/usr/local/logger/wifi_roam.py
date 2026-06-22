@@ -343,12 +343,12 @@ def load_roaming_config(iface):
                     roam_config.get("use_signal_avg"), parse_bool
                 )
 
-                # 다중 SSID 로밍: extra_ssids 로드 (str 리스트만 수용, 공백 제거)
+                # 다중 SSID 로밍: extra_ssids 로드 (str 리스트만 수용, 공백 제거).
+                # 키 제거/null 시 이전 값이 stale로 남지 않도록 무조건 재대입.
                 extra = roam_config.get("extra_ssids")
-                if isinstance(extra, list):
-                    EXTRA_SSIDS = [
-                        str(s).strip() for s in extra if str(s).strip()
-                    ]
+                EXTRA_SSIDS = [
+                    str(s).strip() for s in extra if str(s).strip()
+                ] if isinstance(extra, list) else []
 
                 # 설정 적용
                 for key in config.keys():
