@@ -6,7 +6,7 @@ Debian package for deploying WLAN application infrastructure on ARM64 embedded s
 
 This package (`wlan-proc`) bundles the wlan-bridge L2 network bridge along with supporting scripts, configuration files, and systemd services for wireless network management on embedded Linux systems.
 
-**Current Version:** 0.1.4
+**Current Version:** 0.4.0
 
 ## Prerequisites
 
@@ -62,7 +62,7 @@ The build script will:
 - `wlan-bridge/dumb/release/dumb` - libpcap-based bridge binary
 - `wlan-bridge/dumb/release/dumb-tpacket` - TPACKET_V3 bridge binary
 - `release/wlan.deb` - Latest build
-- `release/wlan-proc-0.1.4.deb` - Versioned package
+- `release/wlan-proc-0.4.0.deb` - Versioned package
 - `release/wlan-package.tar` - Full package archive
 
 **Note:** The `wlan-bridge/dumb/release/` and `wlan-bridge/dumb/debug/` directories are build outputs and should not be committed.
@@ -118,14 +118,14 @@ wlan-package/
 ### 1. Transfer Package to Target
 
 ```bash
-scp release/wlan-proc-0.1.4.deb root@<target-ip>:/tmp/
+scp release/wlan-proc-0.4.0.deb root@<target-ip>:/tmp/
 ```
 
 ### 2. Install on Target System
 
 ```bash
 ssh root@<target-ip>
-dpkg -i /tmp/wlan-proc-0.1.4.deb
+dpkg -i /tmp/wlan-proc-0.4.0.deb
 ```
 
 The `postinst` script will automatically:
@@ -230,6 +230,10 @@ wifi-dumb -i mlan0 -o eth0 -v
 
 ## Version History
 
+- **0.4.0** - wifi mode/bw/connect/radio-apply 명령 재설계, extra_ssids 다중 SSID 로밍, wpa 런타임 적용(reconfigure), OPC 프로토콜 사양 정합·입력검증(비호환), nl80211 indication·device-info publish·FaultDetect, EAPOL/802.1D 차단. 상세: [`CHANGELOG.md`](CHANGELOG.md)
+- **0.3.1** - opcd nxp 백엔드 패키징, 공통 header 64B/Length, dpkg purge 정리
+- **0.3.0** - wbridge 설정 구조화(optimize/link_guard/thermal), engine=moal 드라이버 bridge, 드라이버/conf 통일, imx93 SDIO IRQ 대응
+- **0.2.0** - 서비스 wifi_ prefix 통일, cron→timer 이관, 주기 로밍/ping 모니터, 스캔 필터링
 - **0.1.3** - Integrated wlan-bridge as submodule
 - **0.1.2** - dumb bridge improvements
 - **0.1.1** - Added SNMP, capture, roam features
