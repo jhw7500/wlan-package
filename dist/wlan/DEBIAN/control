@@ -1,5 +1,5 @@
 Package: wlan-proc
-Version: 0.3.1
+Version: 0.4.0
 Section: test
 Priority: optional
 Architecture: arm64
@@ -32,3 +32,4 @@ Description: WLAN Application
  0.2.0 : 서비스 wifi_ prefix 통일, cron→timer 이관, 주기적 로밍/ping 모니터, 스캔 필터링, journald cursor 스냅샷, jq 최적화, 부팅 안정성(moal 재로드/audit·sysv 로그 정리), wpa restart 안정화
  0.3.0 : wbridge 설정 구조화(optimize/link_guard/thermal), engine=moal(드라이버 bridge), 드라이버/conf 통일(moal_.ko·mlan_.ko 삭제), imx93 SDIO IRQ 대응, net_rx/bridge_mode mod_para 개선
  0.3.1 : wlan-opc opcd를 nxp 백엔드로 패키징(stub 출고 버그 수정), 공통 header 64B/Length(전체−8) + vhlctl --hex 필드덤프, dpkg purge 시 /usr/local/opc 트리·snapshot 정리
+ 0.4.0 : wifi mode/bw/connect/radio-apply 명령 재설계(HE 80↔40↔20 무중단 reassociate), extra_ssids 다중 SSID 스캔·로밍(roam 무중단/connect 재연결), wpa conf 직접편집+reconfigure 런타임 적용(opc_wlan_apply.sh, freq_list 영속), reconfigure 과도기 안정화(grace flag·단계화 복구, reboot 미진입), bgscan 개선(미연결 시 scan skip·ssid/freq_filter), moal thermal_mgmt·keepalive·tx_work 파라미터(capability-gate)+발열 임계 상향·mlan1 기본 비활성, wifi mon ChUtil 점유율·link.json ssid stale 캐시 제거, [opc] OPC 와이어 포맷 사양 정합 정정+입력검증·에러코드 보강(비호환), 무선/IP 런타임 실적용·nl80211 indication 발행·device-info tmpfs publish·FaultDetect·비동기 NVRAM·빈 비밀번호 차단, [bridge] EAPOL·802.1D link-local 무조건 차단(moal 가드 패리티)
