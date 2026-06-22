@@ -164,6 +164,8 @@ def construct_iw_scan_cmd(ssid, scan_freqs, ssid_filter=True, freq_filter=True, 
     #    probe가 사라진다(NXP mlan 포함 대부분의 드라이버는 ssid 지정 시 와일드카드를
     #    보내지 않음) → 광범위 스캔 의도가 깨져 extra 외 일반 AP가 누락될 수 있다.
     #    빈 문자열 ""(와일드카드 probe)을 함께 넣어 광범위 스캔을 보존한다.
+    #    NOTE: `iw scan ssid ""`의 와일드카드 해석은 표준 API가 아니다. 새 플랫폼/드라이버
+    #    도입 시 extra_ssids 사용 전 실제로 와일드카드 probe가 나가는지(빈 SSID 무시 여부) 검증할 것.
     seen = set()
     probe = ([ssid] if (ssid_filter and ssid) else []) + (extra_ssids or [])
     if not ssid_filter and extra_ssids:

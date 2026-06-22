@@ -37,6 +37,9 @@ def _ssid_tokens(cmd):
     (None, False, ["OfficeNet"], ["", "OfficeNet"]),
     # (8) ssid_filter=False, extra_ssids=[] (empty, not None) → no spurious "" wildcard
     ("HomeNet", False, [], []),
+    # (9) dedup in the ssid_filter=False branch: extra equals current SSID
+    #     → wildcard "" + single HomeNet token (base ssid not probed, no dup)
+    ("HomeNet", False, ["HomeNet"], ["", "HomeNet"]),
 ])
 def test_ssid_probe_tokens(ssid, ssid_filter, extra_ssids, expected):
     cmd = construct_iw_scan_cmd(ssid, [], ssid_filter=ssid_filter, freq_filter=False, extra_ssids=extra_ssids)
