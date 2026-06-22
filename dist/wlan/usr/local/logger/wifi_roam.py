@@ -765,6 +765,8 @@ def mlanutl_scan(ssids, freqs):
     if len(ssid_list) == 1:
         cmd = f"mlanutl {IFACE} setuserscan chan={chan_str} ssid={ssid_list[0]}"
     else:
+        # 0개(WPA_SSID 없음) 또는 다중 SSID: ssid= 필터 생략(전체 스캔)
+        # → get_latest_scan이 allowed_ssids로 후보를 거른다.
         cmd = f"mlanutl {IFACE} setuserscan chan={chan_str}"
     logger.message("info", f"[{IFACE}] scan : {cmd}", _EXTRA_())
     try:
@@ -1384,7 +1386,7 @@ def connect_to_ssid(iface, to_ssid, from_bssid, to_bssid):
         else:
             logger.message(
                 "err",
-                f"[{IFACE}] Cross-SSID connect failed: {result.stderr.strip()}",
+                f"[{IFACE}] Cross-SSID connect failed (conf ssid may diverge from live until next tick): {result.stderr.strip()}",
                 _EXTRA_(),
             )
             return False
