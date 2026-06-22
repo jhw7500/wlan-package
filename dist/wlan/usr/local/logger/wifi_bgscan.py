@@ -141,7 +141,7 @@ def load_bgscan_json(iface):
         # 로밍 후보(roaming.extra_ssids)와 bgscan 스캔 대상을 일치시킨다.
         extra = iface_cfg.get("roaming", {}).get("extra_ssids")
         if isinstance(extra, list):
-            extra_ssids = [str(s).strip() for s in extra if str(s).strip()]
+            extra_ssids = [s.strip() for s in extra if isinstance(s, str) and s.strip()]
     except FileNotFoundError:
         pass
     except Exception as e:
@@ -155,13 +155,15 @@ def construct_iw_scan_cmd(ssid, scan_freqs, ssid_filter=True, freq_filter=True, 
     if freq_filter and scan_freqs:
         cmd += ["freq"] + scan_freqs
 
-    if ssid_filter and ssid:
+    if ssid_filter:
         # conf 기본 ssid + roaming.extra_ssids 모두 directed probe (로밍 후보와 일치).
+        # ssid가 None(conf 미독/ssid= 누락)이어도 extra_ssids는 probe — hidden extra가
+        # 가장 필요한 케이스에서 누락되지 않게 ssid 가드와 분리한다.
         # iw는 다중 ssid 토큰을 지원. 중복 제거하여 추가.
-        seen = []
-        for s in [ssid] + (extra_ssids or []):
+        seen = set()
+        for s in ([ssid] if ssid else []) + (extra_ssids or []):
             if s and s not in seen:
-                seen.append(s)
+                seen.add(s)
                 cmd += ["ssid", s]
 
     return cmd
