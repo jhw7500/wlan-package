@@ -12,7 +12,7 @@ from datetime import datetime
 import logging
 from sUTILS import Logger, _EXTRA_
 
-VERSION = "0.2"
+VERSION = "0.3"
 IFACE = ""
 LOG_DIR = "/var/log/cantops/json"
 LINK_PATH = "/var/log/cantops/json"
@@ -21,6 +21,10 @@ MWLAN_LOG_PATH = "/proc/mwlan/adapter0/mlan0/log"
 LOOP_INTERVAL = 0.95	#0.965
 SPIKE_THRESHOLD_FAIL = 1
 SPIKE_THRESHOLD_RETRY = 10
+# reconfigure/select_network 직후 100~200ms 순간 끊김(station dump 일시적 공백)을
+# "끊김"으로 표시하지 않기 위한 빠른 재시도. count*delay 가 끊김 무시 윈도우(기본 ~200ms).
+LINK_RETRY_COUNT = 4
+LINK_RETRY_DELAY = 0.05
 
 def handle_sigterm(signum, frame):
     logger.message('crit', f"[{IFACE}] SIGTERM {signum} received! Cleaning up...", _EXTRA_())
@@ -109,6 +113,20 @@ def run_command(cmd):
     except subprocess.CalledProcessError as e:
         print(f"Command failed: {e}")
         return ""
+
+def fast_retry_station_dump(count, delay):
+    """station dump가 비었을 때(reconfigure/select_network 직후 순간 끊김 의심)
+    짧은 간격(delay)으로 최대 count회 빠르게 재조회한다.
+
+    윈도우(count*delay, 기본 ~200ms) 안에서 station이 회복되면 그 출력을 반환하고,
+    끝까지 비어 있으면 None을 반환한다(진짜 끊김으로 판정). 정상 연결 중에는 호출되지
+    않으므로 주기 오버헤드가 없다."""
+    for _ in range(count):
+        time.sleep(delay)
+        out = run_command(["iw", IFACE, "station", "dump"])
+        if out and validate_station(out):
+            return out
+    return None
 
 def parse_mwlan_log():
     parsed = {}
@@ -370,6 +388,10 @@ def main():
         # station dump로 연결 판별 (iw link 대체)
         link_out = run_command_with_retry(["iw", IFACE, "station", "dump"], validate_fn=validate_station)
         if not link_out:
+            # reconfigure/select_network로 인한 100~200ms 순간 끊김을 끊김으로 표시하지
+            # 않도록 빠르게 재시도. 윈도우 안에서 회복되면 정상 처리로 진행한다.
+            link_out = fast_retry_station_dump(LINK_RETRY_COUNT, LINK_RETRY_DELAY)
+        if not link_out:
             _write_empty_link()
             time.sleep(1)
             continue
@@ -412,28 +434,49 @@ if __name__ == "__main__":
                         help="TX fail spike threshold per cycle (default: 1)")
     parser.add_argument("--spike-retry", type=int, default=10,
                         help="TX retry spike threshold per cycle (default: 10)")
+    parser.add_argument("--link-retry-count", type=int, default=LINK_RETRY_COUNT,
+                        help=f"Fast-retry count when station dump is momentarily empty "
+                             f"(reconfigure/select_network blip suppression, default: {LINK_RETRY_COUNT})")
+    parser.add_argument("--link-retry-delay", type=float, default=LINK_RETRY_DELAY,
+                        help=f"Fast-retry delay between attempts in seconds (default: {LINK_RETRY_DELAY})")
     args = parser.parse_args()
 
     IFACE = args.iface
 
-    # Load interval from JSON: {iface}.logger.link_interval_sec → logger.link_interval_sec → arg default
+    # Load tunables from JSON: {iface}.logger.<key> → logger.<key> → arg default
+    # link_retry_* 키는 아직 기본 JSON에 없어도 무방하다(없으면 arg/모듈 기본값 사용).
     _link_interval = args.interval
+    _retry_count = args.link_retry_count
+    _retry_delay = args.link_retry_delay
     try:
         with open("/usr/local/etc/wifi_init_conf.json") as _f:
             _conf = json.load(_f)
         _global = _conf.get("logger", {}).get("link_interval_sec", _link_interval)
         _link_interval = _conf.get(IFACE, {}).get("logger", {}).get("link_interval_sec", _global)
+        _g_cnt = _conf.get("logger", {}).get("link_retry_count", _retry_count)
+        _retry_count = _conf.get(IFACE, {}).get("logger", {}).get("link_retry_count", _g_cnt)
+        _g_dly = _conf.get("logger", {}).get("link_retry_delay_sec", _retry_delay)
+        _retry_delay = _conf.get(IFACE, {}).get("logger", {}).get("link_retry_delay_sec", _g_dly)
     except (OSError, json.JSONDecodeError) as e:
         print(f"WARN: [{IFACE}] config load failed, using defaults: {e}", file=sys.stderr)
 
     LOOP_INTERVAL = _link_interval
     SPIKE_THRESHOLD_FAIL = args.spike_fail
     SPIKE_THRESHOLD_RETRY = args.spike_retry
+    try:
+        LINK_RETRY_COUNT = max(0, int(_retry_count))
+        LINK_RETRY_DELAY = max(0.0, float(_retry_delay))
+    except (ValueError, TypeError):
+        print(f"WARN: [{IFACE}] invalid link_retry_* config, using defaults "
+              f"({args.link_retry_count}/{args.link_retry_delay})", file=sys.stderr)
+        LINK_RETRY_COUNT = args.link_retry_count
+        LINK_RETRY_DELAY = args.link_retry_delay
 
     LOG_DIR = f"/var/log/cantops/json/{IFACE}"
     logger.message("info",
         f"[{IFACE}] version: {VERSION}, interval: {LOOP_INTERVAL}s, "
         f"spike_fail: {SPIKE_THRESHOLD_FAIL}, spike_retry: {SPIKE_THRESHOLD_RETRY}, "
+        f"link_retry: {LINK_RETRY_COUNT}x{LINK_RETRY_DELAY}s, "
         f"log: {LOG_DIR}/link.json", _EXTRA_())
 
     if IFACE == "mlan0":
