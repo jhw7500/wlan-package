@@ -422,12 +422,16 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 |----|------|--------|------|
 | `cpu_interval_sec` | int | `60` | CPU/MEM 사용률 로깅 주기 (초) |
 | `link_interval_sec` | float | `0.95` | 링크 상태 체크 주기 (초) |
+| `link_retry_count` | int | `4` | 순간 끊김 억제용 station dump 빠른 재시도 횟수 (아래 참고) |
+| `link_retry_delay_sec` | float | `0.05` | 빠른 재시도 간격 (초). `count × delay` 가 끊김 무시 윈도우 |
 | `stat_log_interval_sec` | int | `1` | WiFi 통계 로깅 주기 (초) |
 | `stat_check_interval_sec` | int | `1` | WiFi 통계 체크 주기 (초) |
 | `stat_reset_interval_sec` | int | `604800` | 통계 누적 리셋 주기 (초, 기본 7일) |
 | `bgscan_stale_threshold_sec` | int | `600` | bgscan 로그 stale 판정 시간 (초, 기본 10분) |
 
 > `stat_log_interval_sec`과 `stat_check_interval_sec`의 차이: check는 데이터 수집 주기, log는 실제 파일/syslog 기록 주기이다. log >= check 관계를 유지해야 한다.
+
+> **`link_retry_count` / `link_retry_delay_sec`** (`wifi_logger_link.py`): `wpa_cli reconfigure`·`select_network` 직후 발생하는 100~200ms 순간 끊김 동안 `iw station dump`가 일시적으로 비는데, 이때 곧바로 끊김으로 기록하지 않고 `delay` 간격으로 최대 `count`회 빠르게 재조회한다. 윈도우(`count × delay`, 기본 4×0.05s ≈ 200ms) 안에서 회복되면 끊김으로 표시되지 않는다. 정상 연결 중에는 호출되지 않아 오버헤드가 없다. **기본 JSON에는 아직 키가 없으며**, 없으면 모듈 기본값(4 / 0.05)을 사용한다. 무시 윈도우를 늘리려면 `count`나 `delay`를 키워 설정한다. CLI `--link-retry-count` / `--link-retry-delay` 로도 override 가능하다.
 
 ### per-interface logger override
 
