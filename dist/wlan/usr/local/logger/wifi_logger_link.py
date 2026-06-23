@@ -120,11 +120,14 @@ def fast_retry_station_dump(count, delay):
 
     윈도우(count*delay, 기본 ~200ms) 안에서 station이 회복되면 그 출력을 반환하고,
     끝까지 비어 있으면 None을 반환한다(진짜 끊김으로 판정). 정상 연결 중에는 호출되지
-    않으므로 주기 오버헤드가 없다."""
-    for _ in range(count):
+    않으므로 주기 오버헤드가 없다. 회복(블립 억제) 시 운영 진단용 info 로그를 남긴다."""
+    for attempt in range(1, count + 1):
         time.sleep(delay)
         out = run_command(["iw", IFACE, "station", "dump"])
         if out and validate_station(out):
+            logger.message("info",
+                f"[{IFACE}] link blip suppressed: station recovered on fast-retry "
+                f"{attempt}/{count} (~{int(attempt * delay * 1000)}ms)", _EXTRA_())
             return out
     return None
 
@@ -385,9 +388,12 @@ def main():
             time.sleep(1)
             continue
 
-        # station dump로 연결 판별 (iw link 대체)
-        link_out = run_command_with_retry(["iw", IFACE, "station", "dump"], validate_fn=validate_station)
-        if not link_out:
+        # station dump로 연결 판별 (iw link 대체).
+        # 단일 조회로 시작하고, 공백/무효면 fast-retry로 넘긴다 → 끊김 억제 윈도우가
+        # 설정된 fast-retry(count*delay)와 정확히 일치한다(run_command_with_retry의 추가
+        # 0.1s 재시도가 윈도우를 ~300ms로 늘리던 문제 제거).
+        link_out = run_command(["iw", IFACE, "station", "dump"])
+        if not (link_out and validate_station(link_out)):
             # reconfigure/select_network로 인한 100~200ms 순간 끊김을 끊김으로 표시하지
             # 않도록 빠르게 재시도. 윈도우 안에서 회복되면 정상 처리로 진행한다.
             link_out = fast_retry_station_dump(LINK_RETRY_COUNT, LINK_RETRY_DELAY)

@@ -276,18 +276,26 @@ class WpaEventTracker:
         elif "CTRL-EVENT-CONNECTED" in line:
             ts = self._parse_timestamp(line)
             if ts:
+                # 각 구간은 시작 앵커가 없으면 None으로 초기화한다(Open망/seamless/이벤트 누락 시
+                # 이전 사이클 값이 화면에 잔류하는 stale leak 방지).
                 # ④ 4-Way 구간: RX msg 1 → CONNECTED
                 if self._hs_start:
                     self.last_handshake_ms = self._delta_ms(self._hs_start, ts)
+                else:
+                    self.last_handshake_ms = None   # 4-Way 없음(Open망 등)
                 # ② 연결 시도: Trying to associate → 4-Way 시작(없으면 CONNECTED까지)
                 if self._roam_start:
                     assoc_end = self._hs_start if self._hs_start else ts
                     self.last_assoc_ms = self._delta_ms(self._roam_start, assoc_end)
+                else:
+                    self.last_assoc_ms = None       # associate 미관측(이벤트 누락)
                 # ① 실제 끊긴시간: DISCONNECTED → Trying to associate
                 if self._disc_ts and self._roam_start:
                     self.last_down_ms = self._delta_ms(self._disc_ts, self._roam_start)
                 elif self._roam_start and self._disc_ts is None:
-                    self.last_down_ms = 0   # seamless 로밍(끊김 이벤트 없음)
+                    self.last_down_ms = 0           # seamless 로밍(끊김 이벤트 없음)
+                else:
+                    self.last_down_ms = None         # associate 미관측 → 잔류 방지
             # cycle 리셋
             self._disc_ts = None
             self._roam_start = None
