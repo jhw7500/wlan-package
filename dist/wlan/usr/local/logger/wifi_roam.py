@@ -1757,8 +1757,7 @@ def main():
                 time.sleep(ROAM_SUCCESS_SLEEP)
             elif roam_to_bssid(station["bssid"], best_ap["bssid"]):
                 time.sleep(ROAM_SUCCESS_SLEEP)
-            else:
-                time.sleep(interval)
+            time.sleep(interval)
             continue
 
         # 적합한 후보 없음 → 점증 backoff(연결 중 후보없음 airtime 잠식 억제).
