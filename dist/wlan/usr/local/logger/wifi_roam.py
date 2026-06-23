@@ -22,6 +22,7 @@ WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
 ROAM_CONDITION_FLAG = "/tmp/roam_condition"
 LAST_SCAN_TIME_FILE = "/tmp/last_roam_scan_time"
 WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
+ROAM_HINT_FILE = f"/tmp/wifi_roam_hint_{IFACE}"  # bgscan이 새 후보 AP 발견 시 touch (단방향 신호)
 WPA_SSID = None
 WPA_FREQ = None
 WPA_TH_2G = None
@@ -123,6 +124,20 @@ def compute_no_result_backoff(streak):
         return int(SCAN_NO_RESULT_SLEEP)
     backoff = SCAN_NO_RESULT_SLEEP * (2 ** (streak - 1))
     return int(min(backoff, ROAM_NO_RESULT_MAX_SLEEP))
+
+def roam_hint_touched(state):
+    """bgscan hint 파일 mtime이 직전 관측보다 새로우면 True(+state 갱신).
+
+    파일 없음/stat 실패 → False(state 불변). 단방향(roam read / bgscan write)이라
+    race-free. 호출자는 True일 때 no_candidate streak=0 으로 고속 복귀(spec §4 reset-b)."""
+    try:
+        mtime = os.path.getmtime(ROAM_HINT_FILE)
+    except OSError:
+        return False
+    if state.get("hint_mtime") is None or mtime > state["hint_mtime"]:
+        state["hint_mtime"] = mtime
+        return True
+    return False
 
 # Post-Roam ARP 최적화 설정
 ENABLE_POST_ROAM_ARP_OPTIMIZATION = DEFAULT_ENABLE_POST_ROAM_ARP_OPTIMIZATION

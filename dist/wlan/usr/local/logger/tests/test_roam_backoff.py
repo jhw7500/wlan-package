@@ -45,3 +45,38 @@ def test_backoff_returns_int(monkeypatch):
     _set_sleep(monkeypatch, 3, 30)
     for s in range(0, 8):
         assert isinstance(compute_no_result_backoff(s), int)
+
+# --- roam hint mtime consumer ---
+
+def test_hint_missing_file_returns_false(tmp_path, monkeypatch):
+    monkeypatch.setattr(wifi_roam, "ROAM_HINT_FILE", str(tmp_path / "wifi_roam_hint_mlan0"))
+    state = {"hint_mtime": None}
+    assert wifi_roam.roam_hint_touched(state) is False
+    assert state["hint_mtime"] is None
+
+def test_hint_first_observation_is_touch(tmp_path, monkeypatch):
+    hint = tmp_path / "wifi_roam_hint_mlan0"
+    hint.write_text("")
+    monkeypatch.setattr(wifi_roam, "ROAM_HINT_FILE", str(hint))
+    state = {"hint_mtime": None}
+    # first time the file exists → treated as a fresh touch (reset streak)
+    assert wifi_roam.roam_hint_touched(state) is True
+    assert state["hint_mtime"] == os.path.getmtime(str(hint))
+
+def test_hint_unchanged_mtime_returns_false(tmp_path, monkeypatch):
+    hint = tmp_path / "wifi_roam_hint_mlan0"
+    hint.write_text("")
+    monkeypatch.setattr(wifi_roam, "ROAM_HINT_FILE", str(hint))
+    state = {"hint_mtime": os.path.getmtime(str(hint))}
+    assert wifi_roam.roam_hint_touched(state) is False
+
+def test_hint_newer_mtime_returns_true(tmp_path, monkeypatch):
+    hint = tmp_path / "wifi_roam_hint_mlan0"
+    hint.write_text("")
+    monkeypatch.setattr(wifi_roam, "ROAM_HINT_FILE", str(hint))
+    old = os.path.getmtime(str(hint))
+    # advance mtime explicitly (avoid filesystem timestamp granularity flakiness)
+    os.utime(str(hint), (old + 10, old + 10))
+    state = {"hint_mtime": old}
+    assert wifi_roam.roam_hint_touched(state) is True
+    assert state["hint_mtime"] == old + 10
