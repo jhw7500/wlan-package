@@ -199,6 +199,13 @@ fi
 
 echo "version:${version}"
 
+# README.md Current Version이 control Version과 동기되어 있는지 점검 (경고만, 빌드는 계속).
+# 막지 않는다 — 릴리스 담당자에게 README 갱신 누락을 상기시키는 용도.
+readme_version=$(grep -oE 'Current Version:\*\* [0-9.]+' "${BASEDIR}/README.md" 2>/dev/null | grep -oE '[0-9.]+$')
+if [ -n "${readme_version}" ] && [ "${readme_version}" != "${version}" ]; then
+    echo "Warning: README.md Current Version(${readme_version}) != control Version(${version}) — README 버전 갱신 권장" >&2
+fi
+
 # Temporarily move tmp directories out of dpkg build tree
 STASH_DIR="${BASEDIR}/dist/.tmp-stash"
 rm -rf "${STASH_DIR}"
