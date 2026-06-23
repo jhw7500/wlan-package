@@ -252,6 +252,7 @@ class WpaEventTracker:
         return max(0, int((t_end - t_start).total_seconds() * 1000))
 
     def _parse_line(self, line):
+        # 한 라인은 하나의 이벤트만 매칭(상호배타) — 전체를 elif 체인으로 통일.
         if "CTRL-EVENT-SCAN-STARTED" in line:
             ts = self._parse_timestamp(line)
             if ts:
@@ -262,7 +263,7 @@ class WpaEventTracker:
         # 직전 cycle이 connect 없이 중단(association 실패/handshake timeout/로그 로테이션)되어도
         # stale anchor가 다음 outage로 누수되지 않아 Down 부풀림을 막는다.
         # (정상 단일 끊김 결과 243/58/9는 불변; 다중 드롭 outage는 마지막 레그 기준 = bounded)
-        if "CTRL-EVENT-DISCONNECTED" in line:
+        elif "CTRL-EVENT-DISCONNECTED" in line:
             self._roam_start = None
             self._hs_start = None
             self._disc_ts = self._parse_timestamp(line)
