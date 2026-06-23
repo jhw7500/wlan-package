@@ -70,6 +70,8 @@ DEFAULT_USE_SIGNAL_AVG = False  # True: link 파일의 signal_avg 사용, False:
 # Sleep 기본값
 DEFAULT_SCAN_NO_RESULT_SLEEP = 3  # AP 스캔 결과 없을 때 재시도 대기
 DEFAULT_ROAM_SUCCESS_SLEEP = 5  # 로밍 성공 후 안정화 대기
+DEFAULT_ROAM_NO_RESULT_MAX_SLEEP = 30  # 후보없음 backoff 상한(초)
+DEFAULT_ROAM_NO_RESULT_BACKOFF_RECOVER_SEC = 60  # 상한 도달 후 streak 점감 시작(초)
 
 # Post-Roam ARP 최적화 기본값
 DEFAULT_ENABLE_POST_ROAM_ARP_OPTIMIZATION = True
@@ -108,6 +110,19 @@ EXTRA_SSIDS = []
 # Sleep 설정
 SCAN_NO_RESULT_SLEEP = DEFAULT_SCAN_NO_RESULT_SLEEP
 ROAM_SUCCESS_SLEEP = DEFAULT_ROAM_SUCCESS_SLEEP
+ROAM_NO_RESULT_MAX_SLEEP = DEFAULT_ROAM_NO_RESULT_MAX_SLEEP
+ROAM_NO_RESULT_BACKOFF_RECOVER_SEC = DEFAULT_ROAM_NO_RESULT_BACKOFF_RECOVER_SEC
+
+def compute_no_result_backoff(streak):
+    """후보없음 streak에 대한 sleep 초(지수 backoff, 상한 clamp).
+
+    streak<=0 → 시작값(SCAN_NO_RESULT_SLEEP). streak>=1 → 시작값 * 2**(streak-1),
+    단 ROAM_NO_RESULT_MAX_SLEEP 상한. 끊김 복구는 wpa 네이티브가 담당하므로
+    이 backoff는 '연결 중 후보없음' airtime 잠식만 억제한다(spec §4)."""
+    if streak <= 0:
+        return int(SCAN_NO_RESULT_SLEEP)
+    backoff = SCAN_NO_RESULT_SLEEP * (2 ** (streak - 1))
+    return int(min(backoff, ROAM_NO_RESULT_MAX_SLEEP))
 
 # Post-Roam ARP 최적화 설정
 ENABLE_POST_ROAM_ARP_OPTIMIZATION = DEFAULT_ENABLE_POST_ROAM_ARP_OPTIMIZATION
@@ -197,6 +212,10 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
             "POST_ROAM_PEER_WAIT": config["POST_ROAM_PEER_WAIT"],
             "SCAN_NO_RESULT_SLEEP": int(config["SCAN_NO_RESULT_SLEEP"]),
             "ROAM_SUCCESS_SLEEP": int(config["ROAM_SUCCESS_SLEEP"]),
+            "ROAM_NO_RESULT_MAX_SLEEP": int(config["ROAM_NO_RESULT_MAX_SLEEP"]),
+            "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC": int(
+                config["ROAM_NO_RESULT_BACKOFF_RECOVER_SEC"]
+            ),
             "USE_SIGNAL_AVG": config["USE_SIGNAL_AVG"],
         }
     )
@@ -246,6 +265,8 @@ def load_roaming_config(iface):
         "POST_ROAM_PEER_WAIT": DEFAULT_POST_ROAM_PEER_WAIT,
         "SCAN_NO_RESULT_SLEEP": DEFAULT_SCAN_NO_RESULT_SLEEP,
         "ROAM_SUCCESS_SLEEP": DEFAULT_ROAM_SUCCESS_SLEEP,
+        "ROAM_NO_RESULT_MAX_SLEEP": DEFAULT_ROAM_NO_RESULT_MAX_SLEEP,
+        "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC": DEFAULT_ROAM_NO_RESULT_BACKOFF_RECOVER_SEC,
         "USE_SIGNAL_AVG": DEFAULT_USE_SIGNAL_AVG,
     }
 
@@ -349,6 +370,16 @@ def load_roaming_config(iface):
                 EXTRA_SSIDS = [
                     str(s).strip() for s in extra if str(s).strip()
                 ] if isinstance(extra, list) else []
+
+                # 후보없음 backoff 파라미터(평탄 대문자 키). 양의 정수만 수용, 형식오류 시 기본값 유지.
+                _set_config_value(
+                    config, "ROAM_NO_RESULT_MAX_SLEEP",
+                    roam_config.get("ROAM_NO_RESULT_MAX_SLEEP"), int
+                )
+                _set_config_value(
+                    config, "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC",
+                    roam_config.get("ROAM_NO_RESULT_BACKOFF_RECOVER_SEC"), int
+                )
 
                 # 설정 적용
                 for key in config.keys():
