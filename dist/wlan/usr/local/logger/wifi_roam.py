@@ -1535,10 +1535,20 @@ def main():
             _EXTRA_(),
         )
 
+    # 후보없음 점증 backoff 상태(spec §4). streak=연속 후보없음 tick 수,
+    # last_backoff_cap_ts=상한 첫 도달 시각(시간 기반 점감용), hint_state=bgscan hint mtime 추적.
+    no_candidate_streak = 0
+    last_backoff_cap_ts = None
+    hint_state = {"hint_mtime": None}
+
     while True:
         # wpa_cli reconfigure 등으로 conf 가 런타임 변경됐으면 재파싱(mtime 변화 시에만).
         # ssid/scan_freq/TH 캐시를 최신화해 옛 SSID 로 스캔하는 stale 로밍을 방지한다.
         reload_supplicant_conf_if_changed(WPA_CONF_FILE)
+        # bgscan이 새 후보 AP를 발견(hint touch)하면 즉시 backoff 해제(고속 복귀).
+        if roam_hint_touched(hint_state):
+            no_candidate_streak = 0
+            last_backoff_cap_ts = None
 
         # Load 정보 포함하여 연결 상태 확인
         station = get_link_info_with_load()
@@ -1587,6 +1597,9 @@ def main():
         # 로밍 조건 확인
         if station["rssi"] >= predictive_threshold:
             set_flag(0, ROAM_CONDITION_FLAG)
+            # 신호 양호(로밍 불필요) → 후보없음 streak 해제. 다음 악화 시 시작값부터 backoff.
+            no_candidate_streak = 0
+            last_backoff_cap_ts = None
 
             if ENABLE_ADAPTIVE_INTERVAL and adaptive_interval:
                 interval = adaptive_interval.update(rssi, base_threshold, trend)
@@ -1630,8 +1643,21 @@ def main():
                 save_with_timestamp(SCAN_LOG_FILE, ap_lines)
                 save_with_timestamp(FREQ_LOG_FILE, chan_lines)
             else:
-                logger.message("err", f"[{IFACE}] scan failed", _EXTRA_())
-                time.sleep(interval)
+                no_candidate_streak += 1
+                backoff = compute_no_result_backoff(no_candidate_streak)
+                if backoff >= ROAM_NO_RESULT_MAX_SLEEP:
+                    if last_backoff_cap_ts is None:
+                        last_backoff_cap_ts = time.time()
+                    elif time.time() - last_backoff_cap_ts >= ROAM_NO_RESULT_BACKOFF_RECOVER_SEC:
+                        no_candidate_streak = max(1, no_candidate_streak - 1)
+                        last_backoff_cap_ts = time.time()
+                logger.message(
+                    "err",
+                    f"[{IFACE}] scan failed (no-candidate backoff={backoff}s, "
+                    f"streak={no_candidate_streak})",
+                    _EXTRA_(),
+                )
+                time.sleep(backoff)
                 continue
 
         # Load 정보 가져오기
@@ -1643,10 +1669,21 @@ def main():
         entries, timestamp = get_latest_scan(station, channel_info_data, get_allowed_ssids(station.get("ssid")))
 
         if not entries:
+            no_candidate_streak += 1
+            backoff = compute_no_result_backoff(no_candidate_streak)
+            if backoff >= ROAM_NO_RESULT_MAX_SLEEP:
+                if last_backoff_cap_ts is None:
+                    last_backoff_cap_ts = time.time()
+                elif time.time() - last_backoff_cap_ts >= ROAM_NO_RESULT_BACKOFF_RECOVER_SEC:
+                    no_candidate_streak = max(1, no_candidate_streak - 1)
+                    last_backoff_cap_ts = time.time()
             logger.message(
-                "err", f"[{IFACE}] No Matching APs found in latest scan", _EXTRA_()
+                "err",
+                f"[{IFACE}] No Matching APs found in latest scan "
+                f"(no-candidate backoff={backoff}s, streak={no_candidate_streak})",
+                _EXTRA_(),
             )
-            time.sleep(interval)
+            time.sleep(backoff)
             continue
 
         # 로밍 후보 평가
@@ -1695,6 +1732,9 @@ def main():
 
         # 최적 AP로 로밍
         if best_ap:
+            # 후보 발견 → backoff 리셋(spec §4 reset). 다음 후보없음은 시작값부터.
+            no_candidate_streak = 0
+            last_backoff_cap_ts = None
             logger.message(
                 "emerg",
                 f"[{IFACE}] Roaming: {station['bssid']} → {best_ap['bssid']}, "
@@ -1717,12 +1757,27 @@ def main():
                 time.sleep(ROAM_SUCCESS_SLEEP)
             elif roam_to_bssid(station["bssid"], best_ap["bssid"]):
                 time.sleep(ROAM_SUCCESS_SLEEP)
-        else:
-            logger.message(
-                "info", f"[{IFACE}] No suitable roam candidate found", _EXTRA_()
-            )
+            else:
+                time.sleep(interval)
+            continue
 
-        time.sleep(interval)
+        # 적합한 후보 없음 → 점증 backoff(연결 중 후보없음 airtime 잠식 억제).
+        no_candidate_streak += 1
+        backoff = compute_no_result_backoff(no_candidate_streak)
+        if backoff >= ROAM_NO_RESULT_MAX_SLEEP:
+            if last_backoff_cap_ts is None:
+                last_backoff_cap_ts = time.time()
+            elif time.time() - last_backoff_cap_ts >= ROAM_NO_RESULT_BACKOFF_RECOVER_SEC:
+                no_candidate_streak = max(1, no_candidate_streak - 1)
+                last_backoff_cap_ts = time.time()
+        logger.message(
+            "info",
+            f"[{IFACE}] No suitable roam candidate found "
+            f"(no-candidate backoff={backoff}s, streak={no_candidate_streak})",
+            _EXTRA_(),
+        )
+        time.sleep(backoff)
+        continue
 
 
 def extract_ap_table(lines):
