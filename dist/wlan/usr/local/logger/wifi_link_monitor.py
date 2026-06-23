@@ -212,16 +212,19 @@ def read_last_lines(filepath, n=5):
 
 
 class WpaEventTracker:
-    """wpa.log tail 파싱: 스캔/로밍/4-Way 핸드쉐이크 이벤트 추적"""
+    """wpa.log tail 파싱: 재연결 지연을 3구간(끊김/연결시도/4-Way)으로 분해 추적"""
 
     def __init__(self, wpa_log_path):
         self.path = wpa_log_path
         self.last_pos = 0
         self.last_scan_time = None
-        self.last_handshake_ms = None  # 4-Way만 (RX msg 1 ~ COMPLETED/CONNECTED)
-        self.last_roam_ms = None       # 전체 로밍 (Trying to associate ~ CONNECTED)
-        self._hs_start = None
-        self._roam_start = None
+        # 재연결 지연 3구간 (각 구간 ms). 합 = DISCONNECTED→CONNECTED 전체 outage
+        self.last_down_ms = None       # 실제 끊긴시간: DISCONNECTED → Trying to associate (down+scan)
+        self.last_assoc_ms = None      # 연결 시도: Trying to associate → 4-Way 시작 (auth+assoc)
+        self.last_handshake_ms = None  # 4-Way 구간: RX msg 1 of 4-Way → CONNECTED
+        self._disc_ts = None           # 이번 cycle 첫 CTRL-EVENT-DISCONNECTED 시각
+        self._roam_start = None        # 직전 "Trying to associate" 시각
+        self._hs_start = None          # 직전 "WPA: RX message 1 of 4-Way" 시각
 
     def update(self):
         try:
@@ -244,30 +247,51 @@ class WpaEventTracker:
         except Exception:
             return None
 
+    @staticmethod
+    def _delta_ms(t_start, t_end):
+        return max(0, int((t_end - t_start).total_seconds() * 1000))
+
     def _parse_line(self, line):
         if "CTRL-EVENT-SCAN-STARTED" in line:
             ts = self._parse_timestamp(line)
             if ts:
                 self.last_scan_time = ts.strftime("%H:%M:%S")
-        # 로밍 시작: "Trying to associate with XX:XX:XX"
-        if "Trying to associate with" in line:
+        # 끊김 시작: "CTRL-EVENT-DISCONNECTED" → 최신 드롭으로 anchor.
+        # 주의: "CTRL-EVENT-DISCONNECTED"는 "CTRL-EVENT-CONNECTED" substring과 겹치지 않음.
+        # 모든 끊김에서 진행 중이던(실패한) association 타이밍을 버리고 _disc_ts를 갱신한다.
+        # 직전 cycle이 connect 없이 중단(association 실패/handshake timeout/로그 로테이션)되어도
+        # stale anchor가 다음 outage로 누수되지 않아 Down 부풀림을 막는다.
+        # (정상 단일 끊김 결과 243/58/9는 불변; 다중 드롭 outage는 마지막 레그 기준 = bounded)
+        if "CTRL-EVENT-DISCONNECTED" in line:
+            self._roam_start = None
+            self._hs_start = None
+            self._disc_ts = self._parse_timestamp(line)
+        # 연결 시도 시작: "Trying to associate with <bssid> (SSID='...' ...)"
+        elif "Trying to associate with" in line:
             self._roam_start = self._parse_timestamp(line)
         # 4-Way 시작
-        if "WPA: RX message 1 of 4-Way" in line:
+        elif "WPA: RX message 1 of 4-Way" in line:
             self._hs_start = self._parse_timestamp(line)
-        # 로밍+핸드쉐이크 완료
-        if "CTRL-EVENT-CONNECTED" in line:
+        # 재연결 완료: 3구간 확정
+        elif "CTRL-EVENT-CONNECTED" in line:
             ts = self._parse_timestamp(line)
-            if ts and self._hs_start:
-                self.last_handshake_ms = int(
-                    (ts - self._hs_start).total_seconds() * 1000
-                )
-                self._hs_start = None
-            if ts and self._roam_start:
-                self.last_roam_ms = int(
-                    (ts - self._roam_start).total_seconds() * 1000
-                )
-                self._roam_start = None
+            if ts:
+                # ④ 4-Way 구간: RX msg 1 → CONNECTED
+                if self._hs_start:
+                    self.last_handshake_ms = self._delta_ms(self._hs_start, ts)
+                # ② 연결 시도: Trying to associate → 4-Way 시작(없으면 CONNECTED까지)
+                if self._roam_start:
+                    assoc_end = self._hs_start if self._hs_start else ts
+                    self.last_assoc_ms = self._delta_ms(self._roam_start, assoc_end)
+                # ① 실제 끊긴시간: DISCONNECTED → Trying to associate
+                if self._disc_ts and self._roam_start:
+                    self.last_down_ms = self._delta_ms(self._disc_ts, self._roam_start)
+                elif self._roam_start and self._disc_ts is None:
+                    self.last_down_ms = 0   # seamless 로밍(끊김 이벤트 없음)
+            # cycle 리셋
+            self._disc_ts = None
+            self._roam_start = None
+            self._hs_start = None
 
 
 class RoamTracker:
@@ -541,13 +565,15 @@ def draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, summary_path, p
     safe_addstr(y, 1, sep)
     y += 1
 
-    # 스캔 / 4-Way / 로밍소요
+    # 스캔 시각 / 재연결 지연 3구간 (Down=실제 끊김, Assoc=연결 시도, 4-Way=핸드쉐이크)
     scan_str = wpa_tracker.last_scan_time or "idle"
-    hs_str = f"{wpa_tracker.last_handshake_ms}ms" if wpa_tracker.last_handshake_ms else "-"
-    roam_ms_str = f"{wpa_tracker.last_roam_ms}ms" if wpa_tracker.last_roam_ms else "-"
+    down_str = f"{wpa_tracker.last_down_ms}ms" if wpa_tracker.last_down_ms is not None else "-"
+    assoc_str = f"{wpa_tracker.last_assoc_ms}ms" if wpa_tracker.last_assoc_ms is not None else "-"
+    hs_str = f"{wpa_tracker.last_handshake_ms}ms" if wpa_tracker.last_handshake_ms is not None else "-"
     safe_addstr(y, 1, f"Scan: {scan_str}")
-    safe_addstr(y, 22, f"4-Way: {hs_str}")
-    safe_addstr(y, 38, f"RoamT: {roam_ms_str}")
+    safe_addstr(y, 20, f"Down: {down_str}")
+    safe_addstr(y, 36, f"Assoc: {assoc_str}")
+    safe_addstr(y, 54, f"4-Way: {hs_str}")
     y += 1
 
     # 로밍 이벤트 (AP 변경 감지)
