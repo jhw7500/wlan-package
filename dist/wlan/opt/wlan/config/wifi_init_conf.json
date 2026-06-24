@@ -72,8 +72,8 @@
         "mac_mode": "dynamic",
         "ip_discovery": false,
         "eth_client_ip": "",
-        "eth_link_wait_sec": 3,
-        "eth_sweep_subnet": "192.168.0.0/24",
+        "eth_link_wait_sec": 5,
+        "eth_sweep_subnet": "",
         "peer_route": {
             "_comment": "양방향 peer 라우팅(옵션 X) 토글. enabled=false면 변경 전 동작으로 복원 (라우팅/sysctl 모두 revert).",
             "enabled": false
@@ -287,7 +287,7 @@
                     "trend_window_size: (int) 추세 계산에 사용할 RSSI 샘플 수",
                     "trend_history_max_age: (int) 이 시간(초) 지난 샘플은 폐기"
                 ],
-                "enable": true,
+                "enable": false,
                 "threshold_boost": 5,
                 "trend_window_size": 5,
                 "trend_history_max_age": 30
@@ -329,7 +329,7 @@
                     "good_signal_offset: (int) 임계값 + offset 이상이면 신호 양호 판정 (dB)",
                     "consecutive_drop_count: (int) 연속 하락 이 횟수 이상이면 주기 즉시 단축"
                 ],
-                "enable": true,
+                "enable": false,
                 "min_check_interval": 1,
                 "max_check_interval": 10,
                 "rssi_drop_threshold": -5,
@@ -346,7 +346,7 @@
                     "garp_count: (int) Gratuitous ARP 전송 횟수",
                     "garp_wait: (int) GARP 전송 간 대기 (초)"
                 ],
-                "enable": true,
+                "enable": false,
                 "garp_count": 2,
                 "garp_wait": 1,
                 "PEER_WARMUP": {
@@ -356,14 +356,14 @@
                         "peer_count: (int) ARP 전송 대상 피어 수 (ARP 캐시 기준 상위 N개)",
                         "peer_wait: (int) 피어 간 ARP 전송 대기 (초)"
                     ],
-                    "enable": true,
+                    "enable": false,
                     "peer_count": 5,
                     "peer_wait": 1
                 }
             },
             "SCAN_NO_RESULT_SLEEP": 3,
             "ROAM_SUCCESS_SLEEP": 5,
-            "enabled": false
+            "enabled": true
         },
         "mcs_tier": {
             "_comment": "MCS tier capability limit (mcstiercfg). Applied at boot before association AND reapplied on every connected event (wifi_event.sh). Values are strings passed verbatim after each prefix: ht/vht/he. Empty string skips the prefix. Examples: \"7\", \"15\", \"both 7\".",
@@ -470,7 +470,7 @@
                     "trend_window_size: (int) 추세 계산에 사용할 RSSI 샘플 수",
                     "trend_history_max_age: (int) 이 시간(초) 지난 샘플은 폐기"
                 ],
-                "enable": true,
+                "enable": false,
                 "threshold_boost": 5,
                 "trend_window_size": 5,
                 "trend_history_max_age": 30
@@ -482,7 +482,7 @@
                     "max_roam_load: (int) 현재 AP 부하가 이 값(%) 초과 시 로밍 고려",
                     "load_diff_threshold: (int) 현재 AP와 후보 AP 부하 차이 최소값 (%)"
                 ],
-                "enable": true,
+                "enable": false,
                 "max_roam_load": 80,
                 "load_diff_threshold": 20
             },
@@ -512,7 +512,7 @@
                     "good_signal_offset: (int) 임계값 + offset 이상이면 신호 양호 판정 (dB)",
                     "consecutive_drop_count: (int) 연속 하락 이 횟수 이상이면 주기 즉시 단축"
                 ],
-                "enable": true,
+                "enable": false,
                 "min_check_interval": 1,
                 "max_check_interval": 10,
                 "rssi_drop_threshold": -5,
@@ -529,7 +529,7 @@
                     "garp_count: (int) Gratuitous ARP 전송 횟수",
                     "garp_wait: (int) GARP 전송 간 대기 (초)"
                 ],
-                "enable": true,
+                "enable": false,
                 "garp_count": 2,
                 "garp_wait": 1,
                 "PEER_WARMUP": {
@@ -539,7 +539,7 @@
                         "peer_count: (int) ARP 전송 대상 피어 수 (ARP 캐시 기준 상위 N개)",
                         "peer_wait: (int) 피어 간 ARP 전송 대기 (초)"
                     ],
-                    "enable": true,
+                    "enable": false,
                     "peer_count": 5,
                     "peer_wait": 1
                 }
