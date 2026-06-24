@@ -1916,11 +1916,7 @@ def main():
             # 아니면 무중단 roam. 모드 B(generate=false)는 cross 항상 차단(spec §3.5 2차 게이트).
             # (info.ssid가 cross-SSID connect 직후 일시적으로 stale이어도 게이트로 봉쇄.)
             base_ssids = {s for s in (station.get("ssid"), WPA_SSID) if s}
-            if (
-                GENERATE_NETWORK_BLOCKS
-                and best_ap.get("ssid")
-                and best_ap["ssid"] not in base_ssids
-            ):
+            if should_cross_connect(best_ap.get("ssid"), base_ssids):
                 # 다른(extra) SSID → 모드 A는 select_network(conf 불변), 모드 B는 이 분기
                 # 자체가 비활성(AND 게이트). 성공/실패 무관 안정화 대기로 재시도 폭주 방지.
                 route_cross_ssid_transition(
