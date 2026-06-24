@@ -22,6 +22,7 @@ WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
 ROAM_CONDITION_FLAG = "/tmp/roam_condition"
 LAST_SCAN_TIME_FILE = "/tmp/last_roam_scan_time"
 WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
+ROAM_HINT_FILE = f"/tmp/wifi_roam_hint_{IFACE}"  # bgscan이 새 후보 AP 발견 시 touch (단방향 신호)
 WPA_SSID = None
 WPA_FREQ = None
 WPA_TH_2G = None
@@ -70,6 +71,8 @@ DEFAULT_USE_SIGNAL_AVG = False  # True: link 파일의 signal_avg 사용, False:
 # Sleep 기본값
 DEFAULT_SCAN_NO_RESULT_SLEEP = 3  # AP 스캔 결과 없을 때 재시도 대기
 DEFAULT_ROAM_SUCCESS_SLEEP = 5  # 로밍 성공 후 안정화 대기
+DEFAULT_ROAM_NO_RESULT_MAX_SLEEP = 30  # 후보없음 backoff 상한(초)
+DEFAULT_ROAM_NO_RESULT_BACKOFF_RECOVER_SEC = 60  # 상한 도달 후 streak 점감 시작(초)
 
 # Post-Roam ARP 최적화 기본값
 DEFAULT_ENABLE_POST_ROAM_ARP_OPTIMIZATION = True
@@ -105,9 +108,81 @@ USE_SIGNAL_AVG = DEFAULT_USE_SIGNAL_AVG
 # 다중 SSID 로밍: conf 기본 ssid 외 추가 로밍 후보 SSID (roaming.extra_ssids에서 로드)
 EXTRA_SSIDS = []
 
+# 모드 결정자: true=모드A(다중 network 블록 생성 + select_network cross-SSID),
+# false=모드B(단일 블록, cross-SSID는 외부 wifi connect만). 기본 false(무회귀).
+# extra_ssids는 generate=false면 무시(get_allowed_ssids/메인루프 cross/bgscan 3중 게이트).
+GENERATE_NETWORK_BLOCKS = False
+
 # Sleep 설정
 SCAN_NO_RESULT_SLEEP = DEFAULT_SCAN_NO_RESULT_SLEEP
 ROAM_SUCCESS_SLEEP = DEFAULT_ROAM_SUCCESS_SLEEP
+ROAM_NO_RESULT_MAX_SLEEP = DEFAULT_ROAM_NO_RESULT_MAX_SLEEP
+ROAM_NO_RESULT_BACKOFF_RECOVER_SEC = DEFAULT_ROAM_NO_RESULT_BACKOFF_RECOVER_SEC
+
+def _no_result_max_level():
+    """backoff가 상한(ROAM_NO_RESULT_MAX_SLEEP)에 도달하는 최소 streak 레벨.
+
+    2**(level-1) 거대 정수 연산을 막기 위해 streak를 이 레벨로 clamp한다.
+    시작값*2**(L-1) >= cap 를 만족하는 최소 L. 도달 즉시 상한이므로 그 이상은 무의미.
+    SCAN_NO_RESULT_SLEEP<=0 등 비정상 입력은 1로 방어(무한 루프/0배수 방지)."""
+    start = SCAN_NO_RESULT_SLEEP
+    cap = ROAM_NO_RESULT_MAX_SLEEP
+    if start <= 0:
+        return 1
+    level = 1
+    val = start
+    while val < cap and level < 64:  # level 상한(64)으로 이론적 무한 루프 방어
+        val *= 2
+        level += 1
+    return level
+
+
+def compute_no_result_backoff(streak):
+    """후보없음 streak에 대한 sleep 초(지수 backoff, 상한 clamp).
+
+    streak<=0 → 시작값(SCAN_NO_RESULT_SLEEP). streak>=1 → 시작값 * 2**(eff-1),
+    단 eff=min(streak, max_level)로 clamp(거대 정수 2**streak 방지)하고
+    ROAM_NO_RESULT_MAX_SLEEP 상한. 상한 도달 동작은 보존(streak 큰 값 → MAX_SLEEP).
+    끊김 복구는 wpa 네이티브가 담당하므로 이 backoff는 '연결 중 후보없음'
+    airtime 잠식만 억제한다(spec §4)."""
+    if streak <= 0:
+        return int(SCAN_NO_RESULT_SLEEP)
+    eff = min(streak, _no_result_max_level())
+    backoff = SCAN_NO_RESULT_SLEEP * (2 ** (eff - 1))
+    return int(min(backoff, ROAM_NO_RESULT_MAX_SLEEP))
+
+
+def advance_no_candidate_backoff(streak, cap_ts):
+    """후보없음 1 tick 진행: streak 증가(상한 clamp) → backoff 계산 →
+    상한 도달 시 cap_ts(첫 도달 시각) 기록 및 RECOVER_SEC 경과마다 streak 점감.
+
+    메인루프 3곳(scan 실패 / 결과 0건 / 적합후보 없음)의 동일 로직을 단일화(DRY).
+    streak를 max_level로 cap해 매 tick 무한 증가를 막고(#5), 시간 기반 점감이
+    유효하도록 한다. 반환: (backoff, streak, cap_ts)."""
+    max_level = _no_result_max_level()
+    streak = min(streak + 1, max_level)
+    backoff = compute_no_result_backoff(streak)
+    if backoff >= ROAM_NO_RESULT_MAX_SLEEP:
+        if cap_ts is None:
+            cap_ts = time.time()
+        elif time.time() - cap_ts >= ROAM_NO_RESULT_BACKOFF_RECOVER_SEC:
+            streak = max(1, streak - 1)
+            cap_ts = time.time()
+    return backoff, streak, cap_ts
+
+def roam_hint_touched(state):
+    """bgscan hint 파일 mtime이 직전 관측보다 새로우면 True(+state 갱신).
+
+    파일 없음/stat 실패 → False(state 불변). 단방향(roam read / bgscan write)이라
+    race-free. 호출자는 True일 때 no_candidate streak=0 으로 고속 복귀(spec §4 reset-b)."""
+    try:
+        mtime = os.path.getmtime(ROAM_HINT_FILE)
+    except OSError:
+        return False
+    if state.get("hint_mtime") is None or mtime > state["hint_mtime"]:
+        state["hint_mtime"] = mtime
+        return True
+    return False
 
 # Post-Roam ARP 최적화 설정
 ENABLE_POST_ROAM_ARP_OPTIMIZATION = DEFAULT_ENABLE_POST_ROAM_ARP_OPTIMIZATION
@@ -197,6 +272,10 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
             "POST_ROAM_PEER_WAIT": config["POST_ROAM_PEER_WAIT"],
             "SCAN_NO_RESULT_SLEEP": int(config["SCAN_NO_RESULT_SLEEP"]),
             "ROAM_SUCCESS_SLEEP": int(config["ROAM_SUCCESS_SLEEP"]),
+            "ROAM_NO_RESULT_MAX_SLEEP": int(config["ROAM_NO_RESULT_MAX_SLEEP"]),
+            "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC": int(
+                config["ROAM_NO_RESULT_BACKOFF_RECOVER_SEC"]
+            ),
             "USE_SIGNAL_AVG": config["USE_SIGNAL_AVG"],
         }
     )
@@ -212,7 +291,8 @@ def load_roaming_config(iface):
     Returns:
         dict: 로밍 설정 dictionary
     """
-    global EXTRA_SSIDS
+    global EXTRA_SSIDS, GENERATE_NETWORK_BLOCKS
+    GENERATE_NETWORK_BLOCKS = False
     config = {
         "ENABLE_PREDICTIVE_ROAM": DEFAULT_ENABLE_PREDICTIVE_ROAM,
         "PREDICTIVE_THRESHOLD_BOOST": DEFAULT_PREDICTIVE_THRESHOLD_BOOST,
@@ -246,6 +326,8 @@ def load_roaming_config(iface):
         "POST_ROAM_PEER_WAIT": DEFAULT_POST_ROAM_PEER_WAIT,
         "SCAN_NO_RESULT_SLEEP": DEFAULT_SCAN_NO_RESULT_SLEEP,
         "ROAM_SUCCESS_SLEEP": DEFAULT_ROAM_SUCCESS_SLEEP,
+        "ROAM_NO_RESULT_MAX_SLEEP": DEFAULT_ROAM_NO_RESULT_MAX_SLEEP,
+        "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC": DEFAULT_ROAM_NO_RESULT_BACKOFF_RECOVER_SEC,
         "USE_SIGNAL_AVG": DEFAULT_USE_SIGNAL_AVG,
     }
 
@@ -349,6 +431,22 @@ def load_roaming_config(iface):
                 EXTRA_SSIDS = [
                     str(s).strip() for s in extra if str(s).strip()
                 ] if isinstance(extra, list) else []
+
+                # 후보없음 backoff 파라미터(평탄 대문자 키). 양의 정수만 수용, 형식오류 시 기본값 유지.
+                _set_config_value(
+                    config, "ROAM_NO_RESULT_MAX_SLEEP",
+                    roam_config.get("ROAM_NO_RESULT_MAX_SLEEP"), int
+                )
+                _set_config_value(
+                    config, "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC",
+                    roam_config.get("ROAM_NO_RESULT_BACKOFF_RECOVER_SEC"), int
+                )
+
+                # 모드 결정자 generate_network_blocks 파싱 (bool만 수용, 기본 false).
+                # 키 부재/형식오류 시 false로 수렴해 모드 B(단일 블록) 보장.
+                GENERATE_NETWORK_BLOCKS = parse_bool(
+                    roam_config.get("generate_network_blocks", False)
+                )
 
                 # 설정 적용
                 for key in config.keys():
@@ -925,15 +1023,25 @@ def get_allowed_ssids(live_ssid=None):
     """로밍 허용 SSID 목록: 라이브 연결 SSID + conf 기본 ssid(WPA_SSID) + roaming.extra_ssids.
     라이브 SSID를 항상 1차로 포함해 cross-SSID connect 후 conf ssid가 교체되어도 현재
     네트워크 후보를 잃지 않는다(passive_roam.py와 동일 원칙).
-    extra_ssids가 비고 라이브==WPA_SSID면 [WPA_SSID] → 기존 단일 SSID 동작(무회귀)."""
+    extra_ssids가 비고 라이브==WPA_SSID면 [WPA_SSID] → 기존 단일 SSID 동작(무회귀).
+    GENERATE_NETWORK_BLOCKS=false(모드 B)면 extra_ssids를 무시(1차 게이트, spec §3.5)."""
     allowed = []
     for s in (live_ssid, WPA_SSID):
         if s and s not in allowed:
             allowed.append(s)
-    for s in EXTRA_SSIDS:
-        if s and s not in allowed:
-            allowed.append(s)
+    if GENERATE_NETWORK_BLOCKS:
+        for s in EXTRA_SSIDS:
+            if s and s not in allowed:
+                allowed.append(s)
     return allowed
+
+
+def should_cross_connect(best_ssid, base_ssids):
+    """메인루프 cross-SSID 분기 게이트(spec §3.5, 2차 방어).
+    GENERATE_NETWORK_BLOCKS=false(모드 B)면 best_ap가 extra SSID여도 cross connect
+    진입을 차단 → cross connect 직후/모드 B reload 추격 사이 base_ssids 오판 윈도를
+    명시 게이트로 봉쇄. 모드 A에서 best_ap.ssid가 base 집합 밖일 때만 True."""
+    return bool(GENERATE_NETWORK_BLOCKS and best_ssid and best_ssid not in base_ssids)
 
 
 # ==============================================================================
@@ -1074,6 +1182,11 @@ def parse_supplicant_conf(path, def_th2g=None, def_th5g=None):
     with open(path, "r") as f:
         for line in f:
             line = line.strip()
+            # 다중블록 모드: 자동생성 센티넬 이전(첫=기본 network 블록)까지만 파싱.
+            # 센티넬 이후 extra 블록의 ssid=/scan_freq=/TH 가 기본값을 덮어쓰지 않게 break.
+            # (단일블록=센티넬 없음 → 영향 없음. 센티넬은 wifi_init_config_lib.sh 와 동일 prefix.)
+            if line.startswith("# >>> wifi_extra_ssid"):
+                break
             if line.startswith("ssid=") and not line.startswith("#"):
                 try:
                     ssid = line.split("=", 1)[1].strip().strip('"')
@@ -1398,6 +1511,162 @@ def connect_to_ssid(iface, to_ssid, from_bssid, to_bssid):
         return False
 
 
+def _parse_network_id_for_ssid(list_networks_stdout, to_ssid):
+    """`wpa_cli list_networks` 출력에서 to_ssid와 정확히 일치하는 network id 반환.
+    출력 형식: 첫 줄은 헤더("network id / ssid / bssid / flags"), 이후 탭 구분
+    "<id>\t<ssid>\t<bssid>\t<flags>". ssid 정확 일치만 매칭(부분문자열 금지).
+    여러 블록이 같은 ssid면 첫 번째(파일 순서=우선순위) id 반환. 없으면 None."""
+    for line in list_networks_stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        nid, ssid = parts[0].strip(), parts[1].strip()
+        if not nid.isdigit():
+            continue  # 헤더 줄 skip
+        if ssid == to_ssid:
+            return nid
+    return None
+
+
+def _enable_network_all(iface):
+    """select_network 후 다른(fallback) 블록을 다시 enable해 끊김 시 네이티브 fallback 복원.
+    연결 중 enable_network all은 재스캔을 트리거하지 않음(안전). 실패는 로깅만."""
+    try:
+        en = subprocess.run(
+            ["wpa_cli", "-i", iface, "enable_network", "all"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if en.returncode != 0:
+            logger.message(
+                "err",
+                f"[{iface}] enable_network all failed: {en.stderr.strip()}",
+                _EXTRA_(),
+            )
+    except Exception as e:
+        logger.message("err", f"[{iface}] enable_network all error: {e}", _EXTRA_())
+
+
+def select_network_for_ssid(iface, to_ssid):
+    """모드 A(다중 블록) cross-SSID 전환: conf ssid를 교체하지 않고 메모리 상태만 전환.
+    list_networks로 to_ssid의 network id 조회 → select_network <id> → wpa_state=COMPLETED
+    폴링(최대 ~3s) → enable_network all(fallback 후보 복원). conf 파일 불변(save_config 미호출).
+    id 조회 실패/타임아웃/예외 시 False 반환(절대 ssid 교체 안 함, 다음 tick 재평가).
+    enable_network all은 실패 경로에서도(폴링 중 timeout/예외 포함) 호출해 fallback 블록을 복원한다."""
+    # selected=True 이후 경로(select_network 성공)에서 예외가 나면 다른 블록이 disabled로
+    # 남으므로, except 핸들러에서 반드시 _enable_network_all 로 fallback 후보를 복원한다.
+    selected = False
+    try:
+        lst = subprocess.run(
+            ["wpa_cli", "-i", iface, "list_networks"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if lst.returncode != 0:
+            logger.message(
+                "err",
+                f"[{iface}] select_network: list_networks failed: {lst.stderr.strip()}",
+                _EXTRA_(),
+            )
+            return False
+
+        nid = _parse_network_id_for_ssid(lst.stdout, to_ssid)
+        if nid is None:
+            logger.message(
+                "err",
+                f"[{iface}] select_network: no network block for ssid={to_ssid} "
+                f"(conf unchanged, retry next tick)",
+                _EXTRA_(),
+            )
+            return False
+
+        logger.message(
+            "notice",
+            f"[{iface}] Cross-SSID select_network: id={nid} ssid={to_ssid}",
+            _EXTRA_(),
+        )
+        sel = subprocess.run(
+            ["wpa_cli", "-i", iface, "select_network", nid],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if sel.returncode != 0:
+            logger.message(
+                "err",
+                f"[{iface}] select_network failed (id={nid}): {sel.stderr.strip()}",
+                _EXTRA_(),
+            )
+            # select_network은 다른 블록을 disable시키므로 실패해도 후보 복원 필요
+            _enable_network_all(iface)
+            return False
+        # 이 시점부터 다른 블록이 disabled 상태 → 어떤 경로로 나가든 복원 책임 발생
+        selected = True
+
+        # wpa_state=COMPLETED 폴링 (최대 ~3s: 0.5s × 6회)
+        completed = False
+        for _ in range(6):
+            stt = subprocess.run(
+                ["wpa_cli", "-i", iface, "status"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            state = None
+            for ln in stt.stdout.splitlines():
+                if ln.startswith("wpa_state="):
+                    state = ln.split("=", 1)[1].strip()
+                    break
+            if state == "COMPLETED":
+                completed = True
+                break
+            time.sleep(0.5)
+
+        # 성공/실패 무관 fallback 후보(다른 블록) 복원
+        _enable_network_all(iface)
+
+        if completed:
+            logger.message(
+                "info",
+                f"[{iface}] Cross-SSID select_network successful: {to_ssid} (id={nid})",
+                _EXTRA_(),
+            )
+            optimize_post_roam_connectivity(iface)
+            return True
+
+        logger.message(
+            "err",
+            f"[{iface}] select_network: wpa_state not COMPLETED for {to_ssid} "
+            f"(id={nid}), candidates restored, retry next tick",
+            _EXTRA_(),
+        )
+        return False
+    except subprocess.TimeoutExpired:
+        logger.message(
+            "err", f"[{iface}] select_network timeout: {to_ssid}", _EXTRA_()
+        )
+        # 폴링 중 timeout이면 select_network이 이미 다른 블록을 disable한 상태이므로 복원
+        if selected:
+            _enable_network_all(iface)
+        return False
+    except Exception as e:
+        logger.message("err", f"[{iface}] select_network error: {e}", _EXTRA_())
+        if selected:
+            _enable_network_all(iface)
+        return False
+
+
+def route_cross_ssid_transition(iface, to_ssid, from_bssid, to_bssid):
+    """cross-SSID 전환 수단 라우팅. 모드 A(GENERATE_NETWORK_BLOCKS=True)는 conf 불변
+    select_network_for_ssid, 모드 B(False)는 기존 connect_to_ssid(외부 wifi connect).
+    배타적 2-모드라 한 모드에서 다른 경로는 진입 불가."""
+    if GENERATE_NETWORK_BLOCKS:
+        return select_network_for_ssid(iface, to_ssid)
+    return connect_to_ssid(iface, to_ssid, from_bssid, to_bssid)
+
+
 def score_ap(ap, rssi_weight=1.0, ld_weight=1.0):
     normalized_rssi = ap["rssi"] + 100  # -40 → 60
     normalized_ld = ap["ld"]  # 0~100
@@ -1489,10 +1758,20 @@ def main():
             _EXTRA_(),
         )
 
+    # 후보없음 점증 backoff 상태(spec §4). streak=연속 후보없음 tick 수,
+    # last_backoff_cap_ts=상한 첫 도달 시각(시간 기반 점감용), hint_state=bgscan hint mtime 추적.
+    no_candidate_streak = 0
+    last_backoff_cap_ts = None
+    hint_state = {"hint_mtime": None}
+
     while True:
         # wpa_cli reconfigure 등으로 conf 가 런타임 변경됐으면 재파싱(mtime 변화 시에만).
         # ssid/scan_freq/TH 캐시를 최신화해 옛 SSID 로 스캔하는 stale 로밍을 방지한다.
         reload_supplicant_conf_if_changed(WPA_CONF_FILE)
+        # bgscan이 새 후보 AP를 발견(hint touch)하면 즉시 backoff 해제(고속 복귀).
+        if roam_hint_touched(hint_state):
+            no_candidate_streak = 0
+            last_backoff_cap_ts = None
 
         # Load 정보 포함하여 연결 상태 확인
         station = get_link_info_with_load()
@@ -1541,6 +1820,9 @@ def main():
         # 로밍 조건 확인
         if station["rssi"] >= predictive_threshold:
             set_flag(0, ROAM_CONDITION_FLAG)
+            # 신호 양호(로밍 불필요) → 후보없음 streak 해제. 다음 악화 시 시작값부터 backoff.
+            no_candidate_streak = 0
+            last_backoff_cap_ts = None
 
             if ENABLE_ADAPTIVE_INTERVAL and adaptive_interval:
                 interval = adaptive_interval.update(rssi, base_threshold, trend)
@@ -1584,8 +1866,18 @@ def main():
                 save_with_timestamp(SCAN_LOG_FILE, ap_lines)
                 save_with_timestamp(FREQ_LOG_FILE, chan_lines)
             else:
-                logger.message("err", f"[{IFACE}] scan failed", _EXTRA_())
-                time.sleep(interval)
+                backoff, no_candidate_streak, last_backoff_cap_ts = (
+                    advance_no_candidate_backoff(
+                        no_candidate_streak, last_backoff_cap_ts
+                    )
+                )
+                logger.message(
+                    "err",
+                    f"[{IFACE}] scan failed (no-candidate backoff={backoff}s, "
+                    f"streak={no_candidate_streak})",
+                    _EXTRA_(),
+                )
+                time.sleep(backoff)
                 continue
 
         # Load 정보 가져오기
@@ -1597,10 +1889,16 @@ def main():
         entries, timestamp = get_latest_scan(station, channel_info_data, get_allowed_ssids(station.get("ssid")))
 
         if not entries:
-            logger.message(
-                "err", f"[{IFACE}] No Matching APs found in latest scan", _EXTRA_()
+            backoff, no_candidate_streak, last_backoff_cap_ts = (
+                advance_no_candidate_backoff(no_candidate_streak, last_backoff_cap_ts)
             )
-            time.sleep(interval)
+            logger.message(
+                "err",
+                f"[{IFACE}] No Matching APs found in latest scan "
+                f"(no-candidate backoff={backoff}s, streak={no_candidate_streak})",
+                _EXTRA_(),
+            )
+            time.sleep(backoff)
             continue
 
         # 로밍 후보 평가
@@ -1649,6 +1947,9 @@ def main():
 
         # 최적 AP로 로밍
         if best_ap:
+            # 후보 발견 → backoff 리셋(spec §4 reset). 다음 후보없음은 시작값부터.
+            no_candidate_streak = 0
+            last_backoff_cap_ts = None
             logger.message(
                 "emerg",
                 f"[{IFACE}] Roaming: {station['bssid']} → {best_ap['bssid']}, "
@@ -1658,25 +1959,34 @@ def main():
             )
 
             # 라우팅 판단을 후보 필터와 동일 소스(라이브 SSID + conf WPA_SSID)로 통일.
-            # best_ap가 base SSID 집합에 속하면 무중단 roam, extra SSID면 connect(재연결).
-            # (info.ssid가 cross-SSID connect 직후 일시적으로 stale이면 분기가 한 tick
-            #  어긋날 수 있으나 ROAM_SUCCESS_SLEEP로 bounded — 다음 tick 자가 교정.)
+            # should_cross_connect 게이트(모드 A AND base 밖 SSID)면 cross connect(재연결),
+            # 아니면 무중단 roam. 모드 B(generate=false)는 cross 항상 차단(spec §3.5 2차 게이트).
+            # (info.ssid가 cross-SSID connect 직후 일시적으로 stale이어도 게이트로 봉쇄.)
             base_ssids = {s for s in (station.get("ssid"), WPA_SSID) if s}
-            if best_ap.get("ssid") and best_ap["ssid"] not in base_ssids:
-                # 다른(extra) SSID → wifi connect. 성공/실패 무관 안정화 대기로 재시도 폭주 방지
-                # (connect 실패해도 conf ssid는 이미 교체되어, 즉시 재시도하면 링크가 흔들림).
-                connect_to_ssid(
+            if should_cross_connect(best_ap.get("ssid"), base_ssids):
+                # 다른(extra) SSID → 모드 A는 select_network(conf 불변), 모드 B는 이 분기
+                # 자체가 비활성(AND 게이트). 성공/실패 무관 안정화 대기로 재시도 폭주 방지.
+                route_cross_ssid_transition(
                     IFACE, best_ap["ssid"], station["bssid"], best_ap["bssid"]
                 )
                 time.sleep(ROAM_SUCCESS_SLEEP)
             elif roam_to_bssid(station["bssid"], best_ap["bssid"]):
                 time.sleep(ROAM_SUCCESS_SLEEP)
-        else:
-            logger.message(
-                "info", f"[{IFACE}] No suitable roam candidate found", _EXTRA_()
-            )
+            time.sleep(interval)
+            continue
 
-        time.sleep(interval)
+        # 적합한 후보 없음 → 점증 backoff(연결 중 후보없음 airtime 잠식 억제).
+        backoff, no_candidate_streak, last_backoff_cap_ts = (
+            advance_no_candidate_backoff(no_candidate_streak, last_backoff_cap_ts)
+        )
+        logger.message(
+            "info",
+            f"[{IFACE}] No suitable roam candidate found "
+            f"(no-candidate backoff={backoff}s, streak={no_candidate_streak})",
+            _EXTRA_(),
+        )
+        time.sleep(backoff)
+        continue
 
 
 def extract_ap_table(lines):
@@ -1805,6 +2115,9 @@ if __name__ == "__main__":
     SCAN_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/ap.log"
     FREQ_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/freq.log"
     WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-{IFACE}.conf"
+    # ROAM_HINT_FILE은 모듈 로드 시 기본 IFACE(mlan0)로 평가됨 → IFACE 갱신 직후 재대입해야
+    # bgscan이 touch하는 /tmp/wifi_roam_hint_<iface> 와 경로가 일치(mlan1 불일치 방지).
+    ROAM_HINT_FILE = f"/tmp/wifi_roam_hint_{IFACE}"
 
     # JSON 설정 로드 (IFACE별 설정)
     load_roaming_config(IFACE)

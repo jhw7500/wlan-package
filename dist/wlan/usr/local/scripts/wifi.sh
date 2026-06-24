@@ -1133,6 +1133,12 @@ case "$2" in
     CONF="/etc/wpa_supplicant/wpa_supplicant-${IFACE}.conf"
     if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> ssid <NEW_SSID>" >&2; exit 1; fi
+    if grep -q '^# >>> wifi_extra_ssid' "$CONF"; then
+        echo "Error: $CONF 는 다중블록 모드(generate_network_blocks=true)입니다." >&2
+        echo "       ssid 일괄교체는 기본 SSID를 소실시킵니다 — cross-SSID 전환은" >&2
+        echo "       wpa_cli select_network <id>를 사용하세요." >&2
+        exit 1
+    fi
     NEW_SSID="$1"
     TMP_FILE="$(mktemp)"
     if awk -v new_ssid="$NEW_SSID" '
@@ -1208,6 +1214,15 @@ case "$2" in
         echo "Error: wpa_cli not found" >&2; exit 1
     fi
     CONF="/etc/wpa_supplicant/wpa_supplicant-${IFACE}.conf"
+    # 다중블록 모드 거부 가드: 자동생성 센티넬이 있으면 ssid 일괄교체(conf-edit) 경로를
+    # 차단한다(기본 SSID 영구 소실 방지). ssid 인자가 있을 때만 거부 — 인자 없는
+    # 강제 재연결(reassociate)은 conf를 건드리지 않으므로 허용.
+    if [ $# -ge 1 ] && [ -f "$CONF" ] && grep -q '^# >>> wifi_extra_ssid' "$CONF"; then
+        echo "Error: $CONF 는 다중블록 모드(generate_network_blocks=true)입니다." >&2
+        echo "       ssid 일괄교체는 기본 SSID를 소실시킵니다 — cross-SSID 전환은" >&2
+        echo "       wifi_roam의 select_network(자동) 또는 wpa_cli select_network <id>를 사용하세요." >&2
+        exit 1
+    fi
     if [ $# -ge 1 ]; then
         # === conf 편집 경로: ssid(+freq) 기록 → reconfigure ===
         if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi

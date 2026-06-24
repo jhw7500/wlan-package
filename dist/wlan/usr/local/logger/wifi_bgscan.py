@@ -16,6 +16,7 @@ LOG_DIR = "/var/log/cantops/scan"
 ROAM_CONDITION_FLAG = "/tmp/roam_condition"
 LAST_SCAN_TIME_FILE = "/tmp/last_roam_scan_time"
 WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
+ROAM_HINT_DIR = "/tmp"  # roam backoff hint 파일 디렉터리 (wifi_roam.roam_hint_touched 가 소비)
 WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
 DEFAULT_INTERVAL = 30
 STALE_THRESHOLD_SEC = 600  #1hour
@@ -122,11 +123,26 @@ def parse_wpa_supplicant_conf(path):
 
     return ssid, freqs, interval
 
+def _parse_bool(value):
+    """bool 해석을 roam parse_bool / lib normalize_bool과 통일(true/1/yes/on/enabled → True).
+    JSON 정규 bool뿐 아니라 비정규 truthy 값도 동일 해석해 generate_network_blocks의
+    3-way(roam/lib/bgscan) 모드 정합을 보장한다."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in ("true", "1", "yes", "on", "enabled")
+    return bool(value)
+
+
 def load_bgscan_json(iface):
-    """`.iface.bgscan`에서 interval/ssid_filter/freq_filter를, `.iface.roaming.extra_ssids`에서
-    추가 스캔 SSID를 한 번의 파일 읽기로 로드. interval은 양의 정수만, 필터는 bool만,
-    extra_ssids는 문자열 리스트만 수용. 없음/형식오류면 (None, True, True, [])."""
+    """`.iface.bgscan`에서 interval/ssid_filter/freq_filter/emit_roam_hint를,
+    `.iface.roaming.extra_ssids`에서 추가 스캔 SSID를 한 번의 파일 읽기로 로드.
+    interval은 양의 정수만, 필터/emit_roam_hint는 bool만, extra_ssids는 문자열 리스트만
+    수용. 없음/형식오류면 (None, True, True, [], True).
+    roaming.generate_network_blocks가 비-truthy(모드 B/부재)면 extra_ssids=[] 강제
+    (spec §3.5 3차 게이트, 모드 B airtime 회귀 제거). bool 해석은 roam/lib와 통일(_parse_bool)."""
     interval, ssid_filter, freq_filter, extra_ssids = None, True, True, []
+    emit_roam_hint = True
     try:
         with open(WIFI_INIT_CONF_JSON, "r") as f:
             data = json.load(f)
@@ -139,15 +155,36 @@ def load_bgscan_json(iface):
             ssid_filter = bg["ssid_filter"]
         if isinstance(bg.get("freq_filter"), bool):
             freq_filter = bg["freq_filter"]
+        if isinstance(bg.get("emit_roam_hint"), bool):
+            emit_roam_hint = bg["emit_roam_hint"]
         # 로밍 후보(roaming.extra_ssids)와 bgscan 스캔 대상을 일치시킨다.
-        extra = iface_cfg.get("roaming", {}).get("extra_ssids")
-        if isinstance(extra, list):
-            extra_ssids = [s.strip() for s in extra if isinstance(s, str) and s.strip()]
+        # 단, 모드 결정자 generate_network_blocks가 truthy(모드 A)일 때만 extra를 probe 대상에
+        # 포함한다(spec §3.5 3차 게이트). 모드 B(false/부재)는 extra=[] 강제 →
+        # directed probe에서 extra 제외 → 모드 B airtime 회귀 제거.
+        # bool 해석은 roam parse_bool / lib normalize_bool과 통일(_parse_bool).
+        roaming_cfg = iface_cfg.get("roaming", {})
+        if _parse_bool(roaming_cfg.get("generate_network_blocks")):
+            extra = roaming_cfg.get("extra_ssids")
+            if isinstance(extra, list):
+                extra_ssids = [s.strip() for s in extra if isinstance(s, str) and s.strip()]
     except FileNotFoundError:
         pass
     except Exception as e:
         logger.message("err", f"[{iface}] bgscan json load error: {e}", _EXTRA_())
-    return interval, ssid_filter, freq_filter, extra_ssids
+    return interval, ssid_filter, freq_filter, extra_ssids, emit_roam_hint
+
+def emit_roam_hint_touch(iface):
+    """roam backoff 해제 신호: /tmp/wifi_roam_hint_<iface> 를 touch(mtime 갱신).
+
+    단방향(bgscan write / roam read)이라 race-free. 실패는 조용히 무시(다음 스캔 재시도).
+    호출부는 스캔 성공 직후 emit_roam_hint=True 일 때만 호출한다."""
+    path = os.path.join(ROAM_HINT_DIR, f"wifi_roam_hint_{iface}")
+    try:
+        with open(path, "a"):
+            pass
+        os.utime(path, None)
+    except OSError as e:
+        logger.message("err", f"[{iface}] roam hint touch failed: {e}", _EXTRA_())
 
 def construct_iw_scan_cmd(ssid, scan_freqs, ssid_filter=True, freq_filter=True, extra_ssids=None):
     cmd = ["iw", IFACE, "scan"]
@@ -184,7 +221,7 @@ def periodic_scan(conf_path):
     def build():
         global _WILDCARD_PROBE_WARNED
         ssid, freqs, wpa_interval = parse_wpa_supplicant_conf(conf_path)
-        json_interval, ssid_filter, freq_filter, extra_ssids = load_bgscan_json(IFACE)
+        json_interval, ssid_filter, freq_filter, extra_ssids, emit_roam_hint = load_bgscan_json(IFACE)
         interval = json_interval or wpa_interval or DEFAULT_INTERVAL
         cmd = construct_iw_scan_cmd(ssid, freqs, ssid_filter, freq_filter, extra_ssids)
         # ssid_filter=false + extra_ssids면 construct_iw_scan_cmd가 와일드카드("") probe를
@@ -199,13 +236,14 @@ def periodic_scan(conf_path):
                 _EXTRA_(),
             )
             _WILDCARD_PROBE_WARNED = True
-        return cmd, interval
+        return cmd, interval, emit_roam_hint
 
     # 초기 1회 구성 (실패해도 기동 — 다음 스캔 직전 재시도).
     cmd = None
     interval = DEFAULT_INTERVAL
+    emit_roam_hint = True
     try:
-        cmd, interval = build()
+        cmd, interval, emit_roam_hint = build()
         logger.message("info", f"[{IFACE}] bgscan start: cmd={cmd}, interval={interval}", _EXTRA_())
     except Exception as e:
         logger.message("err", f"[{IFACE}] initial bgscan config load failed: {e}", _EXTRA_())
@@ -252,7 +290,7 @@ def periodic_scan(conf_path):
             # 스캔 직전에 wpa conf + JSON을 다시 읽어 최신 ssid/freq/interval/필터로 스캔한다
             # (런타임 변경 반영). 재로드 실패 시 직전 cmd/interval 유지.
             try:
-                cmd, interval = build()
+                cmd, interval, emit_roam_hint = build()
             except Exception as e:
                 logger.message("err", f"[{IFACE}] bgscan config reload failed (keep last): {e}", _EXTRA_())
 
@@ -262,6 +300,10 @@ def periodic_scan(conf_path):
                     # stderr는 capture(저널 노이즈 방지)하되 실패 시 로그에 포함 → 진단성 유지.
                     # timeout으로 드라이버/FW stall 시 데몬이 영구 hang되는 것을 방지(다음 주기 재시도).
                     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, check=True, timeout=30)
+                    # 스캔 성공(드라이버에 새 BSS 결과 적재) → roam backoff 해제 신호 touch.
+                    # roam이 mtime 변화를 보면 후보없음 streak=0 으로 고속 복귀(spec §4 reset-b).
+                    if emit_roam_hint:
+                        emit_roam_hint_touch(IFACE)
                 except subprocess.TimeoutExpired:
                     logger.message("err", f"[{IFACE}] iw scan timed out (30s) — driver/FW stall?", _EXTRA_())
                 except subprocess.CalledProcessError as e:
