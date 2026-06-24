@@ -80,3 +80,17 @@ def test_hint_newer_mtime_returns_true(tmp_path, monkeypatch):
     state = {"hint_mtime": old}
     assert wifi_roam.roam_hint_touched(state) is True
     assert state["hint_mtime"] == old + 10
+
+# --- #3: ROAM_HINT_FILE 은 IFACE 갱신(__main__) 직후 재대입되어야 함 (mlan1 불일치 방지) ---
+
+def test_roam_hint_file_module_default_uses_iface():
+    # 모듈 로드 시 기본값은 기본 IFACE(mlan0) 기준 경로
+    assert wifi_roam.ROAM_HINT_FILE == "/tmp/wifi_roam_hint_mlan0"
+
+def test_main_reassigns_roam_hint_file_for_iface():
+    # __main__ 블록에서 IFACE 갱신 직후 ROAM_HINT_FILE 을 재대입하는지 소스로 회귀 보장.
+    # (재대입이 없으면 mlan1 으로 떠도 hint 경로가 mlan0 으로 남아 bgscan touch 와 불일치.)
+    src = open(os.path.join(os.path.dirname(__file__), "..", "wifi_roam.py")).read()
+    main_idx = src.index('if __name__ == "__main__"')
+    main_block = src[main_idx:]
+    assert 'ROAM_HINT_FILE = f"/tmp/wifi_roam_hint_{IFACE}"' in main_block
