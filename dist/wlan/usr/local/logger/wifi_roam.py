@@ -1142,6 +1142,11 @@ def parse_supplicant_conf(path, def_th2g=None, def_th5g=None):
     with open(path, "r") as f:
         for line in f:
             line = line.strip()
+            # 다중블록 모드: 자동생성 센티넬 이전(첫=기본 network 블록)까지만 파싱.
+            # 센티넬 이후 extra 블록의 ssid=/scan_freq=/TH 가 기본값을 덮어쓰지 않게 break.
+            # (단일블록=센티넬 없음 → 영향 없음. 센티넬은 wifi_init_config_lib.sh 와 동일 prefix.)
+            if line.startswith("# >>> wifi_extra_ssid"):
+                break
             if line.startswith("ssid=") and not line.startswith("#"):
                 try:
                     ssid = line.split("=", 1)[1].strip().strip('"')
