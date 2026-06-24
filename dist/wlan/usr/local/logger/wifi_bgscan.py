@@ -181,7 +181,8 @@ def emit_roam_hint_touch(iface):
     path = os.path.join(ROAM_HINT_DIR, f"wifi_roam_hint_{iface}")
     try:
         with open(path, "a"):
-            os.utime(path, None)
+            pass
+        os.utime(path, None)
     except OSError as e:
         logger.message("err", f"[{iface}] roam hint touch failed: {e}", _EXTRA_())
 
