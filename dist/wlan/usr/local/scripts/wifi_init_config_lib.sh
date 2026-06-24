@@ -173,7 +173,7 @@ _wifi_extra_ssid_template_field() {
         in_net {
             line = $0
             sub(/^[[:space:]]*/, "", line)
-            if (index(line, key) == 1) {
+            if (match(line, "^" key "[[:space:]]*=")) {
                 rest = substr(line, length(key) + 1)
                 sub(/^[[:space:]]*=[[:space:]]*/, "", rest)
                 print rest
@@ -197,14 +197,16 @@ wifi_init_sync_extra_ssid_blocks() {
 
     local tmp
     tmp=$(mktemp "${conf}.extra.XXXXXX") || return 1
+    local stripfile=""
+    # 함수 종료(정상/비정상 모두) 시 임시파일 자동 정리
+    trap 'rm -f "$tmp" "$stripfile"' RETURN
 
     # 모드 B 또는 generate=false → 자동 블록만 제거 후 설치(무회귀: extra 비면 byte 불변)
     if [ "$gen" != "true" ]; then
-        _wifi_extra_ssid_strip "$conf" > "$tmp" || { rm -f "$tmp"; return 1; }
+        _wifi_extra_ssid_strip "$conf" > "$tmp" || return 1
         if ! cmp -s "$tmp" "$conf"; then
             install -o root -g root -m 0644 "$tmp" "$conf" && sync "$conf" 2>/dev/null
         fi
-        rm -f "$tmp"
         return 0
     fi
 
@@ -214,19 +216,17 @@ wifi_init_sync_extra_ssid_blocks() {
 
     # extra 없으면 자동 블록만 제거
     if [ -z "$extras" ]; then
-        _wifi_extra_ssid_strip "$conf" > "$tmp" || { rm -f "$tmp"; return 1; }
+        _wifi_extra_ssid_strip "$conf" > "$tmp" || return 1
         if ! cmp -s "$tmp" "$conf"; then
             install -o root -g root -m 0644 "$tmp" "$conf" && sync "$conf" 2>/dev/null
         fi
-        rm -f "$tmp"
         return 0
     fi
 
     # 템플릿 필드 상속 (첫 블록 기준)
     local stripped t_keymgmt t_psk t_proto t_pair t_group t_scanssid t_freqlist
     stripped=$(_wifi_extra_ssid_strip "$conf")
-    local stripfile
-    stripfile=$(mktemp "${conf}.strip.XXXXXX") || { rm -f "$tmp"; return 1; }
+    stripfile=$(mktemp "${conf}.strip.XXXXXX") || return 1
     printf '%s\n' "$stripped" > "$stripfile"
 
     t_keymgmt=$(_wifi_extra_ssid_template_field "$stripfile" "key_mgmt")
@@ -239,12 +239,10 @@ wifi_init_sync_extra_ssid_blocks() {
 
     # 템플릿 필수 필드(key_mgmt/psk) 부재 → 안전하게 자동 블록 미생성(제거만)
     if [ -z "$t_keymgmt" ] || [ -z "$t_psk" ]; then
-        rm -f "$stripfile"
         printf '%s\n' "$stripped" > "$tmp"
         if ! cmp -s "$tmp" "$conf"; then
             install -o root -g root -m 0644 "$tmp" "$conf" && sync "$conf" 2>/dev/null
         fi
-        rm -f "$tmp"
         return 0
     fi
 
@@ -273,20 +271,20 @@ $extras
 EOF
         printf '%s\n' "$WIFI_EXTRA_SSID_END"
     } > "$tmp"
-    rm -f "$stripfile"
 
-    # 문법 sanity: network={ 와 } 짝이 맞는지 (최소 1블록, 중괄호 균형)
-    local opens closes
-    opens=$(grep -c '^[[:space:]]*network[[:space:]]*=[[:space:]]*{' "$tmp" 2>/dev/null || echo 0)
-    closes=$(grep -c '^[[:space:]]*}[[:space:]]*$' "$tmp" 2>/dev/null || echo 0)
-    if [ "$opens" -lt 1 ] || [ "$opens" != "$closes" ]; then
-        rm -f "$tmp"
+    # 문법 sanity: 전체 { 와 } 균형 + 최소 1개 network 블록 존재
+    # opens/closes는 network 블록 한정이 아닌 전체 중괄호 집계.
+    # 이렇게 해야 cred={...} 등 다른 블록이 있어도 정상 conf를 오판하지 않는다.
+    local opens closes net_blocks
+    opens=$(grep -c '{' "$tmp" 2>/dev/null || echo 0)
+    closes=$(grep -c '}' "$tmp" 2>/dev/null || echo 0)
+    net_blocks=$(grep -c '^[[:space:]]*network[[:space:]]*=[[:space:]]*{' "$tmp" 2>/dev/null || echo 0)
+    if [ "$net_blocks" -lt 1 ] || [ "$opens" != "$closes" ]; then
         return 1
     fi
 
     if ! cmp -s "$tmp" "$conf"; then
         install -o root -g root -m 0644 "$tmp" "$conf" && sync "$conf" 2>/dev/null
     fi
-    rm -f "$tmp"
     return 0
 }
