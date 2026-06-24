@@ -46,6 +46,14 @@ done
 CONF="${WPA_CONF_DIR:-/etc/wpa_supplicant}/wpa_supplicant-${IFACE}.conf"
 [ -f "$CONF" ] || { echo "opc_wlan_apply: conf not found: $CONF" >&2; exit 4; }
 
+# 다중블록 모드(자동생성 센티넬 존재) 거부: ssid 일괄교체는 기본 SSID를 소실시키므로
+# 거부한다(exit 2=usage). freq 변경은 물리 대역 공통이라 전 블록 동기화 허용(현행 awk).
+if [ "$HAVE_SSID" = 1 ] && grep -q '^# >>> wifi_extra_ssid' "$CONF"; then
+    echo "opc_wlan_apply: $CONF 는 다중블록 모드 — ssid 일괄변경 거부(기본 SSID 소실 방지)." >&2
+    echo "                cross-SSID 전환은 wpa_cli select_network <id>를 사용하세요." >&2
+    exit 2
+fi
+
 wcli() { wpa_cli -i "$IFACE" "$@"; }
 
 # ctrl interface 가용 확인 (wpa_supplicant 미동작이면 reconfigure 불가 → 3).
