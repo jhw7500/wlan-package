@@ -1466,6 +1466,143 @@ def connect_to_ssid(iface, to_ssid, from_bssid, to_bssid):
         return False
 
 
+def _parse_network_id_for_ssid(list_networks_stdout, to_ssid):
+    """`wpa_cli list_networks` 출력에서 to_ssid와 정확히 일치하는 network id 반환.
+    출력 형식: 첫 줄은 헤더("network id / ssid / bssid / flags"), 이후 탭 구분
+    "<id>\t<ssid>\t<bssid>\t<flags>". ssid 정확 일치만 매칭(부분문자열 금지).
+    여러 블록이 같은 ssid면 첫 번째(파일 순서=우선순위) id 반환. 없으면 None."""
+    for line in list_networks_stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        nid, ssid = parts[0].strip(), parts[1].strip()
+        if not nid.isdigit():
+            continue  # 헤더 줄 skip
+        if ssid == to_ssid:
+            return nid
+    return None
+
+
+def _enable_network_all(iface):
+    """select_network 후 다른(fallback) 블록을 다시 enable해 끊김 시 네이티브 fallback 복원.
+    연결 중 enable_network all은 재스캔을 트리거하지 않음(안전). 실패는 로깅만."""
+    try:
+        en = subprocess.run(
+            ["wpa_cli", "-i", iface, "enable_network", "all"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if en.returncode != 0:
+            logger.message(
+                "err",
+                f"[{IFACE}] enable_network all failed: {en.stderr.strip()}",
+                _EXTRA_(),
+            )
+    except Exception as e:
+        logger.message("err", f"[{IFACE}] enable_network all error: {e}", _EXTRA_())
+
+
+def select_network_for_ssid(iface, to_ssid):
+    """모드 A(다중 블록) cross-SSID 전환: conf ssid를 교체하지 않고 메모리 상태만 전환.
+    list_networks로 to_ssid의 network id 조회 → select_network <id> → wpa_state=COMPLETED
+    폴링(최대 ~3s) → enable_network all(fallback 후보 복원). conf 파일 불변(save_config 미호출).
+    id 조회 실패/타임아웃/예외 시 False 반환(절대 ssid 교체 안 함, 다음 tick 재평가).
+    enable_network all은 실패 경로에서도 호출해 fallback 블록을 복원한다."""
+    try:
+        lst = subprocess.run(
+            ["wpa_cli", "-i", iface, "list_networks"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if lst.returncode != 0:
+            logger.message(
+                "err",
+                f"[{IFACE}] select_network: list_networks failed: {lst.stderr.strip()}",
+                _EXTRA_(),
+            )
+            return False
+
+        nid = _parse_network_id_for_ssid(lst.stdout, to_ssid)
+        if nid is None:
+            logger.message(
+                "err",
+                f"[{IFACE}] select_network: no network block for ssid={to_ssid} "
+                f"(conf unchanged, retry next tick)",
+                _EXTRA_(),
+            )
+            return False
+
+        logger.message(
+            "notice",
+            f"[{IFACE}] Cross-SSID select_network: id={nid} ssid={to_ssid}",
+            _EXTRA_(),
+        )
+        sel = subprocess.run(
+            ["wpa_cli", "-i", iface, "select_network", nid],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if sel.returncode != 0:
+            logger.message(
+                "err",
+                f"[{IFACE}] select_network failed (id={nid}): {sel.stderr.strip()}",
+                _EXTRA_(),
+            )
+            # select_network은 다른 블록을 disable시키므로 실패해도 후보 복원 필요
+            _enable_network_all(iface)
+            return False
+
+        # wpa_state=COMPLETED 폴링 (최대 ~3s: 0.5s × 6회)
+        completed = False
+        for _ in range(6):
+            stt = subprocess.run(
+                ["wpa_cli", "-i", iface, "status"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            state = None
+            for ln in stt.stdout.splitlines():
+                if ln.startswith("wpa_state="):
+                    state = ln.split("=", 1)[1].strip()
+                    break
+            if state == "COMPLETED":
+                completed = True
+                break
+            time.sleep(0.5)
+
+        # 성공/실패 무관 fallback 후보(다른 블록) 복원
+        _enable_network_all(iface)
+
+        if completed:
+            logger.message(
+                "info",
+                f"[{IFACE}] Cross-SSID select_network successful: {to_ssid} (id={nid})",
+                _EXTRA_(),
+            )
+            optimize_post_roam_connectivity(IFACE)
+            return True
+
+        logger.message(
+            "err",
+            f"[{IFACE}] select_network: wpa_state not COMPLETED for {to_ssid} "
+            f"(id={nid}), candidates restored, retry next tick",
+            _EXTRA_(),
+        )
+        return False
+    except subprocess.TimeoutExpired:
+        logger.message(
+            "err", f"[{IFACE}] select_network timeout: {to_ssid}", _EXTRA_()
+        )
+        return False
+    except Exception as e:
+        logger.message("err", f"[{IFACE}] select_network error: {e}", _EXTRA_())
+        return False
+
+
 def score_ap(ap, rssi_weight=1.0, ld_weight=1.0):
     normalized_rssi = ap["rssi"] + 100  # -40 → 60
     normalized_ld = ap["ld"]  # 0~100
