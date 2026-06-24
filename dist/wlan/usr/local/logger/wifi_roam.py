@@ -2088,6 +2088,9 @@ if __name__ == "__main__":
     SCAN_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/ap.log"
     FREQ_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/freq.log"
     WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-{IFACE}.conf"
+    # ROAM_HINT_FILE은 모듈 로드 시 기본 IFACE(mlan0)로 평가됨 → IFACE 갱신 직후 재대입해야
+    # bgscan이 touch하는 /tmp/wifi_roam_hint_<iface> 와 경로가 일치(mlan1 불일치 방지).
+    ROAM_HINT_FILE = f"/tmp/wifi_roam_hint_{IFACE}"
 
     # JSON 설정 로드 (IFACE별 설정)
     load_roaming_config(IFACE)
