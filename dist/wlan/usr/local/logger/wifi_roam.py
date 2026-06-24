@@ -1501,11 +1501,11 @@ def _enable_network_all(iface):
         if en.returncode != 0:
             logger.message(
                 "err",
-                f"[{IFACE}] enable_network all failed: {en.stderr.strip()}",
+                f"[{iface}] enable_network all failed: {en.stderr.strip()}",
                 _EXTRA_(),
             )
     except Exception as e:
-        logger.message("err", f"[{IFACE}] enable_network all error: {e}", _EXTRA_())
+        logger.message("err", f"[{iface}] enable_network all error: {e}", _EXTRA_())
 
 
 def select_network_for_ssid(iface, to_ssid):
@@ -1513,7 +1513,10 @@ def select_network_for_ssid(iface, to_ssid):
     list_networks로 to_ssid의 network id 조회 → select_network <id> → wpa_state=COMPLETED
     폴링(최대 ~3s) → enable_network all(fallback 후보 복원). conf 파일 불변(save_config 미호출).
     id 조회 실패/타임아웃/예외 시 False 반환(절대 ssid 교체 안 함, 다음 tick 재평가).
-    enable_network all은 실패 경로에서도 호출해 fallback 블록을 복원한다."""
+    enable_network all은 실패 경로에서도(폴링 중 timeout/예외 포함) 호출해 fallback 블록을 복원한다."""
+    # selected=True 이후 경로(select_network 성공)에서 예외가 나면 다른 블록이 disabled로
+    # 남으므로, except 핸들러에서 반드시 _enable_network_all 로 fallback 후보를 복원한다.
+    selected = False
     try:
         lst = subprocess.run(
             ["wpa_cli", "-i", iface, "list_networks"],
@@ -1524,7 +1527,7 @@ def select_network_for_ssid(iface, to_ssid):
         if lst.returncode != 0:
             logger.message(
                 "err",
-                f"[{IFACE}] select_network: list_networks failed: {lst.stderr.strip()}",
+                f"[{iface}] select_network: list_networks failed: {lst.stderr.strip()}",
                 _EXTRA_(),
             )
             return False
@@ -1533,7 +1536,7 @@ def select_network_for_ssid(iface, to_ssid):
         if nid is None:
             logger.message(
                 "err",
-                f"[{IFACE}] select_network: no network block for ssid={to_ssid} "
+                f"[{iface}] select_network: no network block for ssid={to_ssid} "
                 f"(conf unchanged, retry next tick)",
                 _EXTRA_(),
             )
@@ -1541,7 +1544,7 @@ def select_network_for_ssid(iface, to_ssid):
 
         logger.message(
             "notice",
-            f"[{IFACE}] Cross-SSID select_network: id={nid} ssid={to_ssid}",
+            f"[{iface}] Cross-SSID select_network: id={nid} ssid={to_ssid}",
             _EXTRA_(),
         )
         sel = subprocess.run(
@@ -1553,12 +1556,14 @@ def select_network_for_ssid(iface, to_ssid):
         if sel.returncode != 0:
             logger.message(
                 "err",
-                f"[{IFACE}] select_network failed (id={nid}): {sel.stderr.strip()}",
+                f"[{iface}] select_network failed (id={nid}): {sel.stderr.strip()}",
                 _EXTRA_(),
             )
             # select_network은 다른 블록을 disable시키므로 실패해도 후보 복원 필요
             _enable_network_all(iface)
             return False
+        # 이 시점부터 다른 블록이 disabled 상태 → 어떤 경로로 나가든 복원 책임 발생
+        selected = True
 
         # wpa_state=COMPLETED 폴링 (최대 ~3s: 0.5s × 6회)
         completed = False
@@ -1585,26 +1590,31 @@ def select_network_for_ssid(iface, to_ssid):
         if completed:
             logger.message(
                 "info",
-                f"[{IFACE}] Cross-SSID select_network successful: {to_ssid} (id={nid})",
+                f"[{iface}] Cross-SSID select_network successful: {to_ssid} (id={nid})",
                 _EXTRA_(),
             )
-            optimize_post_roam_connectivity(IFACE)
+            optimize_post_roam_connectivity(iface)
             return True
 
         logger.message(
             "err",
-            f"[{IFACE}] select_network: wpa_state not COMPLETED for {to_ssid} "
+            f"[{iface}] select_network: wpa_state not COMPLETED for {to_ssid} "
             f"(id={nid}), candidates restored, retry next tick",
             _EXTRA_(),
         )
         return False
     except subprocess.TimeoutExpired:
         logger.message(
-            "err", f"[{IFACE}] select_network timeout: {to_ssid}", _EXTRA_()
+            "err", f"[{iface}] select_network timeout: {to_ssid}", _EXTRA_()
         )
+        # 폴링 중 timeout이면 select_network이 이미 다른 블록을 disable한 상태이므로 복원
+        if selected:
+            _enable_network_all(iface)
         return False
     except Exception as e:
-        logger.message("err", f"[{IFACE}] select_network error: {e}", _EXTRA_())
+        logger.message("err", f"[{iface}] select_network error: {e}", _EXTRA_())
+        if selected:
+            _enable_network_all(iface)
         return False
 
 

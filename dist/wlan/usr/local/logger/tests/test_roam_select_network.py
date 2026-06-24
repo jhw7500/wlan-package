@@ -99,6 +99,94 @@ def test_select_network_timeout_polls_then_false_but_restores(monkeypatch):
     assert "enable_network" in calls  # 실패해도 후보 복원
     wifi_roam.optimize_post_roam_connectivity.assert_not_called()
 
+def test_select_network_status_timeout_after_select_still_restores(monkeypatch):
+    # #2 회귀: select_network 성공 후 status 폴링이 TimeoutExpired를 raise해도
+    # enable_network all 로 fallback 후보를 복원해야 한다(다른 블록 영구 disabled 방지).
+    monkeypatch.setattr(wifi_roam, "optimize_post_roam_connectivity", MagicMock())
+    calls = []
+
+    def side_effect(cmd, *a, **k):
+        sub = cmd[3]
+        calls.append(sub)
+        if sub == "list_networks":
+            return _Run(0, _LIST_NETWORKS)
+        if sub == "select_network":
+            return _Run(0, "OK\n")
+        if sub == "status":
+            raise wifi_roam.subprocess.TimeoutExpired(cmd, 10)
+        if sub == "enable_network":
+            return _Run(0, "OK\n")
+        return _Run(1, "")
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        with patch.object(wifi_roam.time, "sleep", MagicMock()):
+            ok = select_network_for_ssid("mlan0", "OfficeNet")
+    assert ok is False
+    assert "select_network" in calls
+    assert "enable_network" in calls  # 폴링 timeout이어도 복원 호출
+    wifi_roam.optimize_post_roam_connectivity.assert_not_called()
+
+
+def test_select_network_status_exception_after_select_still_restores(monkeypatch):
+    # #2 회귀: select_network 성공 후 status 폴링이 일반 Exception을 raise해도 복원
+    monkeypatch.setattr(wifi_roam, "optimize_post_roam_connectivity", MagicMock())
+    calls = []
+
+    def side_effect(cmd, *a, **k):
+        sub = cmd[3]
+        calls.append(sub)
+        if sub == "list_networks":
+            return _Run(0, _LIST_NETWORKS)
+        if sub == "select_network":
+            return _Run(0, "OK\n")
+        if sub == "status":
+            raise RuntimeError("boom")
+        if sub == "enable_network":
+            return _Run(0, "OK\n")
+        return _Run(1, "")
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        with patch.object(wifi_roam.time, "sleep", MagicMock()):
+            ok = select_network_for_ssid("mlan0", "OfficeNet")
+    assert ok is False
+    assert "enable_network" in calls
+    wifi_roam.optimize_post_roam_connectivity.assert_not_called()
+
+
+def test_select_network_list_networks_timeout_does_not_restore(monkeypatch):
+    # select_network 전(list_networks)에서 timeout이면 disable된 블록이 없으므로
+    # enable_network 를 호출하지 않아야 한다(selected=False 경로).
+    calls = []
+
+    def side_effect(cmd, *a, **k):
+        sub = cmd[3]
+        calls.append(sub)
+        if sub == "list_networks":
+            raise wifi_roam.subprocess.TimeoutExpired(cmd, 10)
+        if sub == "enable_network":
+            return _Run(0, "OK\n")
+        return _Run(1, "")
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        with patch.object(wifi_roam.time, "sleep", MagicMock()):
+            ok = select_network_for_ssid("mlan0", "OfficeNet")
+    assert ok is False
+    assert "enable_network" not in calls
+
+
+def test_select_network_uses_iface_param_in_optimize(monkeypatch):
+    # #4: 성공 경로의 optimize_post_roam_connectivity 는 전역 IFACE 가 아니라 iface 인자 사용
+    monkeypatch.setattr(wifi_roam, "IFACE", "mlan0")  # 전역과 다른 iface 로 호출
+    monkeypatch.setattr(wifi_roam, "optimize_post_roam_connectivity", MagicMock())
+    _se = _make_side_effect()
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=_se):
+        with patch.object(wifi_roam.time, "sleep", MagicMock()):
+            ok = select_network_for_ssid("mlan1", "OfficeNet")
+    assert ok is True
+    wifi_roam.optimize_post_roam_connectivity.assert_called_once_with("mlan1")
+
+
 def test_select_network_list_networks_fails_returns_false(monkeypatch):
     with patch.object(wifi_roam.subprocess, "run",
                       side_effect=lambda cmd, *a, **k: _Run(1, "")):
