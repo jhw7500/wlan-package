@@ -1603,6 +1603,15 @@ def select_network_for_ssid(iface, to_ssid):
         return False
 
 
+def route_cross_ssid_transition(iface, to_ssid, from_bssid, to_bssid):
+    """cross-SSID 전환 수단 라우팅. 모드 A(GENERATE_NETWORK_BLOCKS=True)는 conf 불변
+    select_network_for_ssid, 모드 B(False)는 기존 connect_to_ssid(외부 wifi connect).
+    배타적 2-모드라 한 모드에서 다른 경로는 진입 불가."""
+    if GENERATE_NETWORK_BLOCKS:
+        return select_network_for_ssid(iface, to_ssid)
+    return connect_to_ssid(iface, to_ssid, from_bssid, to_bssid)
+
+
 def score_ap(ap, rssi_weight=1.0, ld_weight=1.0):
     normalized_rssi = ap["rssi"] + 100  # -40 → 60
     normalized_ld = ap["ld"]  # 0~100
@@ -1907,10 +1916,14 @@ def main():
             # 아니면 무중단 roam. 모드 B(generate=false)는 cross 항상 차단(spec §3.5 2차 게이트).
             # (info.ssid가 cross-SSID connect 직후 일시적으로 stale이어도 게이트로 봉쇄.)
             base_ssids = {s for s in (station.get("ssid"), WPA_SSID) if s}
-            if should_cross_connect(best_ap.get("ssid"), base_ssids):
-                # 다른(extra) SSID → wifi connect. 성공/실패 무관 안정화 대기로 재시도 폭주 방지
-                # (connect 실패해도 conf ssid는 이미 교체되어, 즉시 재시도하면 링크가 흔들림).
-                connect_to_ssid(
+            if (
+                GENERATE_NETWORK_BLOCKS
+                and best_ap.get("ssid")
+                and best_ap["ssid"] not in base_ssids
+            ):
+                # 다른(extra) SSID → 모드 A는 select_network(conf 불변), 모드 B는 이 분기
+                # 자체가 비활성(AND 게이트). 성공/실패 무관 안정화 대기로 재시도 폭주 방지.
+                route_cross_ssid_transition(
                     IFACE, best_ap["ssid"], station["bssid"], best_ap["bssid"]
                 )
                 time.sleep(ROAM_SUCCESS_SLEEP)

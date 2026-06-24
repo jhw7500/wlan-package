@@ -120,3 +120,32 @@ def test_select_network_exact_ssid_match_not_substring(monkeypatch):
             ok = select_network_for_ssid("mlan0", "Office")
     assert ok is False
     assert "select_network" not in calls
+
+
+# --- cross-SSID 라우팅 헬퍼(메인루프 분기) ---
+
+def test_route_cross_mode_a_uses_select_network(monkeypatch):
+    # GENERATE_NETWORK_BLOCKS=True → select_network_for_ssid 호출, connect_to_ssid 미호출
+    monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", True, raising=False)
+    sel = MagicMock(return_value=True)
+    con = MagicMock(return_value=True)
+    monkeypatch.setattr(wifi_roam, "select_network_for_ssid", sel)
+    monkeypatch.setattr(wifi_roam, "connect_to_ssid", con)
+    wifi_roam.route_cross_ssid_transition(
+        "mlan0", "OfficeNet", "aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"
+    )
+    sel.assert_called_once_with("mlan0", "OfficeNet")
+    con.assert_not_called()
+
+def test_route_cross_mode_b_uses_connect(monkeypatch):
+    # GENERATE_NETWORK_BLOCKS=False → connect_to_ssid 호출, select_network 미호출
+    monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", False, raising=False)
+    sel = MagicMock(return_value=True)
+    con = MagicMock(return_value=True)
+    monkeypatch.setattr(wifi_roam, "select_network_for_ssid", sel)
+    monkeypatch.setattr(wifi_roam, "connect_to_ssid", con)
+    wifi_roam.route_cross_ssid_transition(
+        "mlan0", "OfficeNet", "aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"
+    )
+    con.assert_called_once_with("mlan0", "OfficeNet", "aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66")
+    sel.assert_not_called()
