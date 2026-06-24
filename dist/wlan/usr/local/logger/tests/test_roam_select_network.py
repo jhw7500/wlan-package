@@ -1,0 +1,122 @@
+import sys
+import os
+from unittest.mock import MagicMock, patch
+
+sys.modules.setdefault("sUTILS", MagicMock())
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import wifi_roam
+from wifi_roam import select_network_for_ssid
+
+import pytest
+
+wifi_roam.logger = MagicMock()
+
+class _Run:
+    """subprocess.run stub: returncode + stdout."""
+    def __init__(self, returncode=0, stdout=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = ""
+
+# list_networks 표준 출력: 헤더 1줄 + "network id / ssid / bssid / flags" 탭 구분
+_LIST_NETWORKS = (
+    "network id / ssid / bssid / flags\n"
+    "0\tHomeNet\tany\t[CURRENT]\n"
+    "1\tOfficeNet\tany\t\n"
+    "2\tGuest\tany\t[DISABLED]\n"
+)
+
+def _make_side_effect(list_out=_LIST_NETWORKS, select_rc=0, enable_rc=0,
+                      states=("SCANNING", "COMPLETED")):
+    """wpa_cli 호출 순서: list_networks → select_network → status(폴링)* → enable_network."""
+    state_iter = iter(states)
+
+    def side_effect(cmd, *args, **kwargs):
+        sub = cmd[3]  # ["wpa_cli","-i",IFACE,<sub>,...]
+        if sub == "list_networks":
+            return _Run(0, list_out)
+        if sub == "select_network":
+            return _Run(select_rc, "OK\n")
+        if sub == "status":
+            try:
+                st = next(state_iter)
+            except StopIteration:
+                st = "COMPLETED"
+            return _Run(0, f"bssid=00:11:22:33:44:55\nssid=OfficeNet\nwpa_state={st}\n")
+        if sub == "enable_network":
+            return _Run(enable_rc, "OK\n")
+        return _Run(1, "")
+
+    return side_effect
+
+def test_select_network_success_polls_then_enables(monkeypatch):
+    monkeypatch.setattr(wifi_roam, "optimize_post_roam_connectivity", MagicMock())
+    calls = []
+    _se = _make_side_effect()  # 이터레이터를 한 번만 생성해 호출 간 state 공유
+
+    def side_effect(cmd, *a, **k):
+        calls.append(cmd[3])
+        return _se(cmd, *a, **k)
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        with patch.object(wifi_roam.time, "sleep", MagicMock()):
+            ok = select_network_for_ssid("mlan0", "OfficeNet")
+    assert ok is True
+    assert "select_network" in calls
+    assert calls[-1] == "enable_network"  # fallback 후보 복원이 마지막
+    wifi_roam.optimize_post_roam_connectivity.assert_called_once_with("mlan0")
+
+def test_select_network_ssid_not_found_returns_false_no_select(monkeypatch):
+    # to_ssid가 list_networks에 없으면 select_network 자체를 호출하지 않고 False
+    calls = []
+
+    def side_effect(cmd, *a, **k):
+        calls.append(cmd[3])
+        return _make_side_effect()(cmd, *a, **k)
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        with patch.object(wifi_roam.time, "sleep", MagicMock()):
+            ok = select_network_for_ssid("mlan0", "NoSuchSSID")
+    assert ok is False
+    assert "select_network" not in calls
+    assert "enable_network" not in calls
+
+def test_select_network_timeout_polls_then_false_but_restores(monkeypatch):
+    # COMPLETED에 끝내 도달 못하면 False, 단 enable_network로 fallback 후보는 복원
+    monkeypatch.setattr(wifi_roam, "optimize_post_roam_connectivity", MagicMock())
+    calls = []
+
+    def side_effect(cmd, *a, **k):
+        calls.append(cmd[3])
+        # status는 항상 SCANNING (COMPLETED 미도달)
+        return _make_side_effect(states=("SCANNING",) * 50)(cmd, *a, **k)
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        with patch.object(wifi_roam.time, "sleep", MagicMock()):
+            ok = select_network_for_ssid("mlan0", "OfficeNet")
+    assert ok is False
+    assert "enable_network" in calls  # 실패해도 후보 복원
+    wifi_roam.optimize_post_roam_connectivity.assert_not_called()
+
+def test_select_network_list_networks_fails_returns_false(monkeypatch):
+    with patch.object(wifi_roam.subprocess, "run",
+                      side_effect=lambda cmd, *a, **k: _Run(1, "")):
+        with patch.object(wifi_roam.time, "sleep", MagicMock()):
+            ok = select_network_for_ssid("mlan0", "OfficeNet")
+    assert ok is False
+
+def test_select_network_exact_ssid_match_not_substring(monkeypatch):
+    # "Office"는 "OfficeNet"의 부분문자열이지만 정확히 일치하는 블록이 없으면 False
+    monkeypatch.setattr(wifi_roam, "optimize_post_roam_connectivity", MagicMock())
+    calls = []
+
+    def side_effect(cmd, *a, **k):
+        calls.append(cmd[3])
+        return _make_side_effect()(cmd, *a, **k)
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        with patch.object(wifi_roam.time, "sleep", MagicMock()):
+            ok = select_network_for_ssid("mlan0", "Office")
+    assert ok is False
+    assert "select_network" not in calls
