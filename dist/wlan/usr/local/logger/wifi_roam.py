@@ -119,16 +119,56 @@ ROAM_SUCCESS_SLEEP = DEFAULT_ROAM_SUCCESS_SLEEP
 ROAM_NO_RESULT_MAX_SLEEP = DEFAULT_ROAM_NO_RESULT_MAX_SLEEP
 ROAM_NO_RESULT_BACKOFF_RECOVER_SEC = DEFAULT_ROAM_NO_RESULT_BACKOFF_RECOVER_SEC
 
+def _no_result_max_level():
+    """backoff가 상한(ROAM_NO_RESULT_MAX_SLEEP)에 도달하는 최소 streak 레벨.
+
+    2**(level-1) 거대 정수 연산을 막기 위해 streak를 이 레벨로 clamp한다.
+    시작값*2**(L-1) >= cap 를 만족하는 최소 L. 도달 즉시 상한이므로 그 이상은 무의미.
+    SCAN_NO_RESULT_SLEEP<=0 등 비정상 입력은 1로 방어(무한 루프/0배수 방지)."""
+    start = SCAN_NO_RESULT_SLEEP
+    cap = ROAM_NO_RESULT_MAX_SLEEP
+    if start <= 0:
+        return 1
+    level = 1
+    val = start
+    while val < cap and level < 64:  # level 상한(64)으로 이론적 무한 루프 방어
+        val *= 2
+        level += 1
+    return level
+
+
 def compute_no_result_backoff(streak):
     """후보없음 streak에 대한 sleep 초(지수 backoff, 상한 clamp).
 
-    streak<=0 → 시작값(SCAN_NO_RESULT_SLEEP). streak>=1 → 시작값 * 2**(streak-1),
-    단 ROAM_NO_RESULT_MAX_SLEEP 상한. 끊김 복구는 wpa 네이티브가 담당하므로
-    이 backoff는 '연결 중 후보없음' airtime 잠식만 억제한다(spec §4)."""
+    streak<=0 → 시작값(SCAN_NO_RESULT_SLEEP). streak>=1 → 시작값 * 2**(eff-1),
+    단 eff=min(streak, max_level)로 clamp(거대 정수 2**streak 방지)하고
+    ROAM_NO_RESULT_MAX_SLEEP 상한. 상한 도달 동작은 보존(streak 큰 값 → MAX_SLEEP).
+    끊김 복구는 wpa 네이티브가 담당하므로 이 backoff는 '연결 중 후보없음'
+    airtime 잠식만 억제한다(spec §4)."""
     if streak <= 0:
         return int(SCAN_NO_RESULT_SLEEP)
-    backoff = SCAN_NO_RESULT_SLEEP * (2 ** (streak - 1))
+    eff = min(streak, _no_result_max_level())
+    backoff = SCAN_NO_RESULT_SLEEP * (2 ** (eff - 1))
     return int(min(backoff, ROAM_NO_RESULT_MAX_SLEEP))
+
+
+def advance_no_candidate_backoff(streak, cap_ts):
+    """후보없음 1 tick 진행: streak 증가(상한 clamp) → backoff 계산 →
+    상한 도달 시 cap_ts(첫 도달 시각) 기록 및 RECOVER_SEC 경과마다 streak 점감.
+
+    메인루프 3곳(scan 실패 / 결과 0건 / 적합후보 없음)의 동일 로직을 단일화(DRY).
+    streak를 max_level로 cap해 매 tick 무한 증가를 막고(#5), 시간 기반 점감이
+    유효하도록 한다. 반환: (backoff, streak, cap_ts)."""
+    max_level = _no_result_max_level()
+    streak = min(streak + 1, max_level)
+    backoff = compute_no_result_backoff(streak)
+    if backoff >= ROAM_NO_RESULT_MAX_SLEEP:
+        if cap_ts is None:
+            cap_ts = time.time()
+        elif time.time() - cap_ts >= ROAM_NO_RESULT_BACKOFF_RECOVER_SEC:
+            streak = max(1, streak - 1)
+            cap_ts = time.time()
+    return backoff, streak, cap_ts
 
 def roam_hint_touched(state):
     """bgscan hint 파일 mtime이 직전 관측보다 새로우면 True(+state 갱신).
@@ -1826,14 +1866,11 @@ def main():
                 save_with_timestamp(SCAN_LOG_FILE, ap_lines)
                 save_with_timestamp(FREQ_LOG_FILE, chan_lines)
             else:
-                no_candidate_streak += 1
-                backoff = compute_no_result_backoff(no_candidate_streak)
-                if backoff >= ROAM_NO_RESULT_MAX_SLEEP:
-                    if last_backoff_cap_ts is None:
-                        last_backoff_cap_ts = time.time()
-                    elif time.time() - last_backoff_cap_ts >= ROAM_NO_RESULT_BACKOFF_RECOVER_SEC:
-                        no_candidate_streak = max(1, no_candidate_streak - 1)
-                        last_backoff_cap_ts = time.time()
+                backoff, no_candidate_streak, last_backoff_cap_ts = (
+                    advance_no_candidate_backoff(
+                        no_candidate_streak, last_backoff_cap_ts
+                    )
+                )
                 logger.message(
                     "err",
                     f"[{IFACE}] scan failed (no-candidate backoff={backoff}s, "
@@ -1852,14 +1889,9 @@ def main():
         entries, timestamp = get_latest_scan(station, channel_info_data, get_allowed_ssids(station.get("ssid")))
 
         if not entries:
-            no_candidate_streak += 1
-            backoff = compute_no_result_backoff(no_candidate_streak)
-            if backoff >= ROAM_NO_RESULT_MAX_SLEEP:
-                if last_backoff_cap_ts is None:
-                    last_backoff_cap_ts = time.time()
-                elif time.time() - last_backoff_cap_ts >= ROAM_NO_RESULT_BACKOFF_RECOVER_SEC:
-                    no_candidate_streak = max(1, no_candidate_streak - 1)
-                    last_backoff_cap_ts = time.time()
+            backoff, no_candidate_streak, last_backoff_cap_ts = (
+                advance_no_candidate_backoff(no_candidate_streak, last_backoff_cap_ts)
+            )
             logger.message(
                 "err",
                 f"[{IFACE}] No Matching APs found in latest scan "
@@ -1944,14 +1976,9 @@ def main():
             continue
 
         # 적합한 후보 없음 → 점증 backoff(연결 중 후보없음 airtime 잠식 억제).
-        no_candidate_streak += 1
-        backoff = compute_no_result_backoff(no_candidate_streak)
-        if backoff >= ROAM_NO_RESULT_MAX_SLEEP:
-            if last_backoff_cap_ts is None:
-                last_backoff_cap_ts = time.time()
-            elif time.time() - last_backoff_cap_ts >= ROAM_NO_RESULT_BACKOFF_RECOVER_SEC:
-                no_candidate_streak = max(1, no_candidate_streak - 1)
-                last_backoff_cap_ts = time.time()
+        backoff, no_candidate_streak, last_backoff_cap_ts = (
+            advance_no_candidate_backoff(no_candidate_streak, last_backoff_cap_ts)
+        )
         logger.message(
             "info",
             f"[{IFACE}] No suitable roam candidate found "
