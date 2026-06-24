@@ -30,7 +30,7 @@ def _write_conf(tmp_path, monkeypatch, conf):
 
 def test_extra_ssids_valid_list_stripped(tmp_path, monkeypatch):
     _write_conf(tmp_path, monkeypatch, {
-        "mlan0": {"roaming": {"extra_ssids": ["  OfficeNet  ", "Guest"]}}
+        "mlan0": {"roaming": {"generate_network_blocks": True, "extra_ssids": ["  OfficeNet  ", "Guest"]}}
     })
     assert load_bgscan_json("mlan0")[3] == ["OfficeNet", "Guest"]
 
@@ -38,14 +38,14 @@ def test_extra_ssids_valid_list_stripped(tmp_path, monkeypatch):
 def test_extra_ssids_non_string_entries_filtered(tmp_path, monkeypatch):
     # int / None / dict / list entries are dropped by the isinstance(s, str) gate
     _write_conf(tmp_path, monkeypatch, {
-        "mlan0": {"roaming": {"extra_ssids": ["Good", 123, None, {"x": 1}, ["nested"], "Net2"]}}
+        "mlan0": {"roaming": {"generate_network_blocks": True, "extra_ssids": ["Good", 123, None, {"x": 1}, ["nested"], "Net2"]}}
     })
     assert load_bgscan_json("mlan0")[3] == ["Good", "Net2"]
 
 
 def test_extra_ssids_whitespace_only_dropped(tmp_path, monkeypatch):
     _write_conf(tmp_path, monkeypatch, {
-        "mlan0": {"roaming": {"extra_ssids": ["", "   ", "\t", "Real"]}}
+        "mlan0": {"roaming": {"generate_network_blocks": True, "extra_ssids": ["", "   ", "\t", "Real"]}}
     })
     assert load_bgscan_json("mlan0")[3] == ["Real"]
 
@@ -71,8 +71,8 @@ def test_extra_ssids_not_a_list_returns_empty(tmp_path, monkeypatch):
 def test_extra_ssids_scoped_per_iface(tmp_path, monkeypatch):
     # extra_ssids is read from the requested iface only
     _write_conf(tmp_path, monkeypatch, {
-        "mlan0": {"roaming": {"extra_ssids": ["A"]}},
-        "mlan1": {"roaming": {"extra_ssids": ["B"]}},
+        "mlan0": {"roaming": {"generate_network_blocks": True, "extra_ssids": ["A"]}},
+        "mlan1": {"roaming": {"generate_network_blocks": True, "extra_ssids": ["B"]}},
     })
     assert load_bgscan_json("mlan0")[3] == ["A"]
     assert load_bgscan_json("mlan1")[3] == ["B"]
@@ -127,6 +127,37 @@ def test_emit_roam_hint_non_bool_falls_back_true(tmp_path, monkeypatch):
         "mlan0": {"bgscan": {"interval": 60, "emit_roam_hint": "no"}}
     })
     assert load_bgscan_json("mlan0")[4] is True
+
+# --- generate_network_blocks 게이트 (모드 B는 extra probe 제외) ---
+
+def test_extra_ssids_gated_off_in_mode_b(tmp_path, monkeypatch):
+    # generate_network_blocks=false(기본): extra_ssids가 있어도 [] 강제
+    _write_conf(tmp_path, monkeypatch, {
+        "mlan0": {"roaming": {"generate_network_blocks": False, "extra_ssids": ["Office", "Guest"]}}
+    })
+    assert load_bgscan_json("mlan0")[3] == []
+
+def test_extra_ssids_passed_in_mode_a(tmp_path, monkeypatch):
+    # generate_network_blocks=true(모드 A): 기존대로 extra 파싱
+    _write_conf(tmp_path, monkeypatch, {
+        "mlan0": {"roaming": {"generate_network_blocks": True, "extra_ssids": ["  Office  ", "Guest"]}}
+    })
+    assert load_bgscan_json("mlan0")[3] == ["Office", "Guest"]
+
+def test_extra_ssids_gated_off_when_generate_absent(tmp_path, monkeypatch):
+    # generate 키 부재(기본 모드 B): extra가 있어도 []
+    _write_conf(tmp_path, monkeypatch, {
+        "mlan0": {"roaming": {"extra_ssids": ["Office"]}}
+    })
+    assert load_bgscan_json("mlan0")[3] == []
+
+def test_extra_ssids_gated_off_when_generate_non_bool(tmp_path, monkeypatch):
+    # generate가 bool이 아니면(misconfig) 모드 B로 안전 수렴 → []
+    _write_conf(tmp_path, monkeypatch, {
+        "mlan0": {"roaming": {"generate_network_blocks": "true", "extra_ssids": ["Office"]}}
+    })
+    assert load_bgscan_json("mlan0")[3] == []
+
 
 def test_emit_roam_hint_touch_creates_and_advances(tmp_path, monkeypatch):
     monkeypatch.setattr(wifi_bgscan, "ROAM_HINT_DIR", str(tmp_path))

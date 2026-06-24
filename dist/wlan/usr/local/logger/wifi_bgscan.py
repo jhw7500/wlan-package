@@ -127,7 +127,9 @@ def load_bgscan_json(iface):
     """`.iface.bgscan`에서 interval/ssid_filter/freq_filter/emit_roam_hint를,
     `.iface.roaming.extra_ssids`에서 추가 스캔 SSID를 한 번의 파일 읽기로 로드.
     interval은 양의 정수만, 필터/emit_roam_hint는 bool만, extra_ssids는 문자열 리스트만
-    수용. 없음/형식오류면 (None, True, True, [], True)."""
+    수용. 없음/형식오류면 (None, True, True, [], True).
+    roaming.generate_network_blocks is not True(모드 B/부재/비-bool)면 extra_ssids=[] 강제
+    (spec §3.5 3차 게이트, 모드 B airtime 회귀 제거)."""
     interval, ssid_filter, freq_filter, extra_ssids = None, True, True, []
     emit_roam_hint = True
     try:
@@ -145,9 +147,14 @@ def load_bgscan_json(iface):
         if isinstance(bg.get("emit_roam_hint"), bool):
             emit_roam_hint = bg["emit_roam_hint"]
         # 로밍 후보(roaming.extra_ssids)와 bgscan 스캔 대상을 일치시킨다.
-        extra = iface_cfg.get("roaming", {}).get("extra_ssids")
-        if isinstance(extra, list):
-            extra_ssids = [s.strip() for s in extra if isinstance(s, str) and s.strip()]
+        # 단, 모드 결정자 generate_network_blocks is True(모드 A)일 때만 extra를 probe 대상에
+        # 포함한다(spec §3.5 3차 게이트). 모드 B(false/부재/비-bool)는 extra=[] 강제 →
+        # directed probe에서 extra 제외 → 모드 B airtime 회귀 제거.
+        roaming_cfg = iface_cfg.get("roaming", {})
+        if roaming_cfg.get("generate_network_blocks") is True:
+            extra = roaming_cfg.get("extra_ssids")
+            if isinstance(extra, list):
+                extra_ssids = [s.strip() for s in extra if isinstance(s, str) and s.strip()]
     except FileNotFoundError:
         pass
     except Exception as e:
