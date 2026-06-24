@@ -304,6 +304,16 @@ done
 /usr/local/scripts/backup_file.sh /etc/wpa_supplicant/wpa_supplicant-mlan1.conf network= "$_DEFAULT_DIR/wpa_supplicant/wpa_supplicant-mlan1.conf" \
     || logger -p local0.err "[$tag:$LINENO] backup failed: wpa_supplicant-mlan1"
 
+# backup_file 복원(단일블록 원본 가능) 직후 모드 A extra_ssid 자동 블록을 멱등 재생성.
+# 복원-then-확장 순서 의존: backup_file이 default(단일블록)로 복원해도 여기서 자가 복원.
+# 모드 B/빈 배열은 자동 블록만 제거(무회귀). 함수 부재 시(lib 미source) 조용히 skip.
+if command -v wifi_init_sync_extra_ssid_blocks >/dev/null 2>&1; then
+    wifi_init_sync_extra_ssid_blocks mlan0 /etc/wpa_supplicant/wpa_supplicant-mlan0.conf \
+        || logger -p local0.err "[$tag:$LINENO] extra_ssid block sync failed: mlan0"
+    wifi_init_sync_extra_ssid_blocks mlan1 /etc/wpa_supplicant/wpa_supplicant-mlan1.conf \
+        || logger -p local0.err "[$tag:$LINENO] extra_ssid block sync failed: mlan1"
+fi
+
 # Apply wifi_init_conf.json values to wifi_mod_para.conf
 # Mappings (PCIE9098_0/SD9098_0 ← mlan0, PCIE9098_1/SD9098_1 ← mlan1):
 #   - net_rx        ← mlanN.net_rx (int)
