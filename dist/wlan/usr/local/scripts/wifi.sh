@@ -1133,6 +1133,12 @@ case "$2" in
     CONF="/etc/wpa_supplicant/wpa_supplicant-${IFACE}.conf"
     if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> ssid <NEW_SSID>" >&2; exit 1; fi
+    if grep -q '^# >>> wifi_extra_ssid' "$CONF"; then
+        echo "Error: $CONF 는 다중블록 모드(generate_network_blocks=true)입니다." >&2
+        echo "       ssid 일괄교체는 기본 SSID를 소실시킵니다 — cross-SSID 전환은" >&2
+        echo "       wpa_cli select_network <id>를 사용하세요." >&2
+        exit 1
+    fi
     NEW_SSID="$1"
     TMP_FILE="$(mktemp)"
     if awk -v new_ssid="$NEW_SSID" '
