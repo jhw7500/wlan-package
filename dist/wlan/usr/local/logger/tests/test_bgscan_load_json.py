@@ -151,10 +151,19 @@ def test_extra_ssids_gated_off_when_generate_absent(tmp_path, monkeypatch):
     })
     assert load_bgscan_json("mlan0")[3] == []
 
-def test_extra_ssids_gated_off_when_generate_non_bool(tmp_path, monkeypatch):
-    # generate가 bool이 아니면(misconfig) 모드 B로 안전 수렴 → []
+def test_extra_ssids_included_when_generate_truthy_str(tmp_path, monkeypatch):
+    # 비정규 truthy("true"/1)는 roam parse_bool / lib normalize_bool과 통일되어 모드 A → extra 포함.
+    # (3-way bool 정합: roam/lib/bgscan이 동일 해석 — final review Important-1 해소)
     _write_conf(tmp_path, monkeypatch, {
         "mlan0": {"roaming": {"generate_network_blocks": "true", "extra_ssids": ["Office"]}}
+    })
+    assert load_bgscan_json("mlan0")[3] == ["Office"]
+
+
+def test_extra_ssids_gated_off_when_generate_false(tmp_path, monkeypatch):
+    # 정규 false(모드 B)는 extra 무시 → []
+    _write_conf(tmp_path, monkeypatch, {
+        "mlan0": {"roaming": {"generate_network_blocks": False, "extra_ssids": ["Office"]}}
     })
     assert load_bgscan_json("mlan0")[3] == []
 

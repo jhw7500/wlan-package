@@ -123,13 +123,24 @@ def parse_wpa_supplicant_conf(path):
 
     return ssid, freqs, interval
 
+def _parse_bool(value):
+    """bool 해석을 roam parse_bool / lib normalize_bool과 통일(true/1/yes/on/enabled → True).
+    JSON 정규 bool뿐 아니라 비정규 truthy 값도 동일 해석해 generate_network_blocks의
+    3-way(roam/lib/bgscan) 모드 정합을 보장한다."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in ("true", "1", "yes", "on", "enabled")
+    return bool(value)
+
+
 def load_bgscan_json(iface):
     """`.iface.bgscan`에서 interval/ssid_filter/freq_filter/emit_roam_hint를,
     `.iface.roaming.extra_ssids`에서 추가 스캔 SSID를 한 번의 파일 읽기로 로드.
     interval은 양의 정수만, 필터/emit_roam_hint는 bool만, extra_ssids는 문자열 리스트만
     수용. 없음/형식오류면 (None, True, True, [], True).
-    roaming.generate_network_blocks is not True(모드 B/부재/비-bool)면 extra_ssids=[] 강제
-    (spec §3.5 3차 게이트, 모드 B airtime 회귀 제거)."""
+    roaming.generate_network_blocks가 비-truthy(모드 B/부재)면 extra_ssids=[] 강제
+    (spec §3.5 3차 게이트, 모드 B airtime 회귀 제거). bool 해석은 roam/lib와 통일(_parse_bool)."""
     interval, ssid_filter, freq_filter, extra_ssids = None, True, True, []
     emit_roam_hint = True
     try:
@@ -147,11 +158,12 @@ def load_bgscan_json(iface):
         if isinstance(bg.get("emit_roam_hint"), bool):
             emit_roam_hint = bg["emit_roam_hint"]
         # 로밍 후보(roaming.extra_ssids)와 bgscan 스캔 대상을 일치시킨다.
-        # 단, 모드 결정자 generate_network_blocks is True(모드 A)일 때만 extra를 probe 대상에
-        # 포함한다(spec §3.5 3차 게이트). 모드 B(false/부재/비-bool)는 extra=[] 강제 →
+        # 단, 모드 결정자 generate_network_blocks가 truthy(모드 A)일 때만 extra를 probe 대상에
+        # 포함한다(spec §3.5 3차 게이트). 모드 B(false/부재)는 extra=[] 강제 →
         # directed probe에서 extra 제외 → 모드 B airtime 회귀 제거.
+        # bool 해석은 roam parse_bool / lib normalize_bool과 통일(_parse_bool).
         roaming_cfg = iface_cfg.get("roaming", {})
-        if roaming_cfg.get("generate_network_blocks") is True:
+        if _parse_bool(roaming_cfg.get("generate_network_blocks")):
             extra = roaming_cfg.get("extra_ssids")
             if isinstance(extra, list):
                 extra_ssids = [s.strip() for s in extra if isinstance(s, str) and s.strip()]
