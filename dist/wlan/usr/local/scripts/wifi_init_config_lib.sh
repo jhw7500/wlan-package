@@ -205,7 +205,8 @@ wifi_init_sync_extra_ssid_blocks() {
     if [ "$gen" != "true" ]; then
         _wifi_extra_ssid_strip "$conf" > "$tmp" || return 1
         if ! cmp -s "$tmp" "$conf"; then
-            install -o root -g root -m 0644 "$tmp" "$conf" && sync "$conf" 2>/dev/null
+            chmod --reference="$conf" "$tmp" 2>/dev/null || chmod 0600 "$tmp" 2>/dev/null || true
+            mv -f "$tmp" "$conf" && sync "$conf" 2>/dev/null
         fi
         return 0
     fi
@@ -218,7 +219,8 @@ wifi_init_sync_extra_ssid_blocks() {
     if [ -z "$extras" ]; then
         _wifi_extra_ssid_strip "$conf" > "$tmp" || return 1
         if ! cmp -s "$tmp" "$conf"; then
-            install -o root -g root -m 0644 "$tmp" "$conf" && sync "$conf" 2>/dev/null
+            chmod --reference="$conf" "$tmp" 2>/dev/null || chmod 0600 "$tmp" 2>/dev/null || true
+            mv -f "$tmp" "$conf" && sync "$conf" 2>/dev/null
         fi
         return 0
     fi
@@ -241,7 +243,8 @@ wifi_init_sync_extra_ssid_blocks() {
     if [ -z "$t_keymgmt" ] || [ -z "$t_psk" ]; then
         printf '%s\n' "$stripped" > "$tmp"
         if ! cmp -s "$tmp" "$conf"; then
-            install -o root -g root -m 0644 "$tmp" "$conf" && sync "$conf" 2>/dev/null
+            chmod --reference="$conf" "$tmp" 2>/dev/null || chmod 0600 "$tmp" 2>/dev/null || true
+            mv -f "$tmp" "$conf" && sync "$conf" 2>/dev/null
         fi
         return 0
     fi
@@ -284,7 +287,8 @@ EOF
     fi
 
     if ! cmp -s "$tmp" "$conf"; then
-        install -o root -g root -m 0644 "$tmp" "$conf" && sync "$conf" 2>/dev/null
+        chmod --reference="$conf" "$tmp" 2>/dev/null || chmod 0600 "$tmp" 2>/dev/null || true
+        mv -f "$tmp" "$conf" && sync "$conf" 2>/dev/null
     fi
     return 0
 }
