@@ -108,6 +108,11 @@ USE_SIGNAL_AVG = DEFAULT_USE_SIGNAL_AVG
 # 다중 SSID 로밍: conf 기본 ssid 외 추가 로밍 후보 SSID (roaming.extra_ssids에서 로드)
 EXTRA_SSIDS = []
 
+# 모드 결정자: true=모드A(다중 network 블록 생성 + select_network cross-SSID),
+# false=모드B(단일 블록, cross-SSID는 외부 wifi connect만). 기본 false(무회귀).
+# extra_ssids는 generate=false면 무시(get_allowed_ssids/메인루프 cross/bgscan 3중 게이트).
+GENERATE_NETWORK_BLOCKS = False
+
 # Sleep 설정
 SCAN_NO_RESULT_SLEEP = DEFAULT_SCAN_NO_RESULT_SLEEP
 ROAM_SUCCESS_SLEEP = DEFAULT_ROAM_SUCCESS_SLEEP
@@ -246,7 +251,8 @@ def load_roaming_config(iface):
     Returns:
         dict: 로밍 설정 dictionary
     """
-    global EXTRA_SSIDS
+    global EXTRA_SSIDS, GENERATE_NETWORK_BLOCKS
+    GENERATE_NETWORK_BLOCKS = False
     config = {
         "ENABLE_PREDICTIVE_ROAM": DEFAULT_ENABLE_PREDICTIVE_ROAM,
         "PREDICTIVE_THRESHOLD_BOOST": DEFAULT_PREDICTIVE_THRESHOLD_BOOST,
@@ -394,6 +400,12 @@ def load_roaming_config(iface):
                 _set_config_value(
                     config, "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC",
                     roam_config.get("ROAM_NO_RESULT_BACKOFF_RECOVER_SEC"), int
+                )
+
+                # 모드 결정자 generate_network_blocks 파싱 (bool만 수용, 기본 false).
+                # 키 부재/형식오류 시 false로 수렴해 모드 B(단일 블록) 보장.
+                GENERATE_NETWORK_BLOCKS = parse_bool(
+                    roam_config.get("generate_network_blocks", False)
                 )
 
                 # 설정 적용
@@ -971,14 +983,16 @@ def get_allowed_ssids(live_ssid=None):
     """로밍 허용 SSID 목록: 라이브 연결 SSID + conf 기본 ssid(WPA_SSID) + roaming.extra_ssids.
     라이브 SSID를 항상 1차로 포함해 cross-SSID connect 후 conf ssid가 교체되어도 현재
     네트워크 후보를 잃지 않는다(passive_roam.py와 동일 원칙).
-    extra_ssids가 비고 라이브==WPA_SSID면 [WPA_SSID] → 기존 단일 SSID 동작(무회귀)."""
+    extra_ssids가 비고 라이브==WPA_SSID면 [WPA_SSID] → 기존 단일 SSID 동작(무회귀).
+    GENERATE_NETWORK_BLOCKS=false(모드 B)면 extra_ssids를 무시(1차 게이트, spec §3.5)."""
     allowed = []
     for s in (live_ssid, WPA_SSID):
         if s and s not in allowed:
             allowed.append(s)
-    for s in EXTRA_SSIDS:
-        if s and s not in allowed:
-            allowed.append(s)
+    if GENERATE_NETWORK_BLOCKS:
+        for s in EXTRA_SSIDS:
+            if s and s not in allowed:
+                allowed.append(s)
     return allowed
 
 
