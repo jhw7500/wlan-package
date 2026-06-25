@@ -137,3 +137,42 @@ def test_negative_retry_count_clamped(fake_clock):
     assert cd.retry_count == 0
     cd.register_failure("Office")
     assert cd.is_cooling("Office") is True
+
+
+# --- 메인루프 통합 경로(record_cross_ssid_result / skip 조건) ---
+
+def test_record_cross_result_ok_clears(fake_clock):
+    # 전환 성공(ok=True) → clear → cooldown 해제.
+    cd = CrossSsidCooldown(retry_count=0)
+    cd.register_failure("Office")
+    assert cd.is_cooling("Office") is True
+    wifi_roam.record_cross_ssid_result(cd, "Office", True, 0)
+    assert cd.is_cooling("Office") is False
+
+
+def test_record_cross_result_fail_registers(fake_clock):
+    # 전환 실패(ok=False) → register_failure(post_sleep). retry_count=0, over=1:
+    # until = now + post_sleep(5) + backoff(1)=3 = now+8.
+    cd = CrossSsidCooldown(retry_count=0)
+    wifi_roam.record_cross_ssid_result(cd, "Office", False, 5)
+    assert cd.is_cooling("Office") is True
+    fake_clock["now"] += 8.1
+    assert cd.is_cooling("Office") is False
+
+
+def test_record_cross_result_none_safe(fake_clock):
+    # cooldown None(모드 B)이어도 예외 없이 무동작.
+    wifi_roam.record_cross_ssid_result(None, "Office", False, 5)
+
+
+def test_integration_cooldown_skip_condition(monkeypatch, fake_clock):
+    # 메인루프 skip 조건: 모드 A에서 cross 대상(should_cross_connect) + cooldown(is_cooling) → skip.
+    monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", True)
+    cd = CrossSsidCooldown(retry_count=0)
+    cd.register_failure("Office")
+    base = {"Home"}
+    # extra SSID(cross 대상) + cooldown 중 → 메인루프가 후보에서 skip
+    assert wifi_roam.should_cross_connect("Office", base) is True
+    assert cd.is_cooling("Office") is True
+    # 현재 ESS SSID(same)는 cross 대상이 아님 → cooldown과 무관(skip 안 함)
+    assert wifi_roam.should_cross_connect("Home", base) is False
