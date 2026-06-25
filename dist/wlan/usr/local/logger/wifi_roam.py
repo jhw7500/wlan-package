@@ -706,6 +706,19 @@ class CrossSsidCooldown:
         self.entries.pop(ssid, None)
 
 
+def record_cross_ssid_result(cooldown, ssid, ok, post_sleep):
+    """cross-SSID 전환 결과를 cooldown에 반영(메인루프 분기를 함수로 추출 → 단위 테스트 가능).
+
+    성공(ok=True) → clear, 실패(ok=False) → register_failure(ssid, post_sleep).
+    cooldown이 None(모드 B, cross 자동전환 비활성)이면 무동작."""
+    if cooldown is None:
+        return
+    if ok:
+        cooldown.clear(ssid)
+    else:
+        cooldown.register_failure(ssid, post_sleep)
+
+
 # ==============================================================================
 # 적응형 간격 (Adaptive Interval)
 # ==============================================================================
@@ -1792,12 +1805,17 @@ def main():
             _EXTRA_(),
         )
 
-    cross_ssid_cooldown = CrossSsidCooldown(ROAM_CROSS_FAIL_RETRY_COUNT)
-    logger.message(
-        "info",
-        f"[{IFACE}] Cross-SSID fail cooldown enabled (retry_count={ROAM_CROSS_FAIL_RETRY_COUNT})",
-        _EXTRA_(),
-    )
+    if GENERATE_NETWORK_BLOCKS:
+        cross_ssid_cooldown = CrossSsidCooldown(ROAM_CROSS_FAIL_RETRY_COUNT)
+        logger.message(
+            "info",
+            f"[{IFACE}] Cross-SSID fail cooldown enabled (retry_count={ROAM_CROSS_FAIL_RETRY_COUNT})",
+            _EXTRA_(),
+        )
+    else:
+        # 모드 B(generate_network_blocks=false)는 cross-SSID 자동전환이 비활성(should_cross_connect
+        # 항상 False)이라 cooldown 미사용. 인스턴스를 만들지 않아 'enabled' 오인 로그를 피한다.
+        cross_ssid_cooldown = None
 
     if ENABLE_ADAPTIVE_INTERVAL:
         adaptive_interval = AdaptiveInterval(MIN_CHECK_INTERVAL, MAX_CHECK_INTERVAL)
@@ -2036,15 +2054,12 @@ def main():
                 ok = route_cross_ssid_transition(
                     IFACE, best_ap["ssid"], station["bssid"], best_ap["bssid"]
                 )
-                if cross_ssid_cooldown is not None:
-                    if ok:
-                        cross_ssid_cooldown.clear(best_ap["ssid"])
-                    else:
-                        # post_sleep=실패 후 메인루프가 대기하는 시간(ROAM_SUCCESS_SLEEP+interval)을
-                        # cooldown에 반영 → 그 sleep 동안 cooldown이 만료돼 무효화되는 것 방지.
-                        cross_ssid_cooldown.register_failure(
-                            best_ap["ssid"], ROAM_SUCCESS_SLEEP + interval
-                        )
+                # 전환 결과를 cooldown에 반영(성공→clear / 실패→register). post_sleep=실패 후
+                # 메인루프가 대기하는 시간(ROAM_SUCCESS_SLEEP+interval)을 반영해, 그 sleep 동안
+                # cooldown이 만료돼 무효화되는 것을 방지. cooldown None(모드 B)이면 무동작.
+                record_cross_ssid_result(
+                    cross_ssid_cooldown, best_ap["ssid"], ok, ROAM_SUCCESS_SLEEP + interval
+                )
                 time.sleep(ROAM_SUCCESS_SLEEP)
             elif roam_to_bssid(station["bssid"], best_ap["bssid"]):
                 time.sleep(ROAM_SUCCESS_SLEEP)
