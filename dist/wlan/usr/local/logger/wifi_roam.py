@@ -73,6 +73,7 @@ DEFAULT_SCAN_NO_RESULT_SLEEP = 3  # AP 스캔 결과 없을 때 재시도 대기
 DEFAULT_ROAM_SUCCESS_SLEEP = 5  # 로밍 성공 후 안정화 대기
 DEFAULT_ROAM_NO_RESULT_MAX_SLEEP = 30  # 후보없음 backoff 상한(초)
 DEFAULT_ROAM_NO_RESULT_BACKOFF_RECOVER_SEC = 60  # 상한 도달 후 streak 점감 시작(초)
+DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT = 2  # cross-SSID 전환 실패 시 cooldown 없이 즉시 재시도 허용 횟수(초과 시 backoff)
 
 # Post-Roam ARP 최적화 기본값
 DEFAULT_ENABLE_POST_ROAM_ARP_OPTIMIZATION = True
@@ -118,6 +119,7 @@ SCAN_NO_RESULT_SLEEP = DEFAULT_SCAN_NO_RESULT_SLEEP
 ROAM_SUCCESS_SLEEP = DEFAULT_ROAM_SUCCESS_SLEEP
 ROAM_NO_RESULT_MAX_SLEEP = DEFAULT_ROAM_NO_RESULT_MAX_SLEEP
 ROAM_NO_RESULT_BACKOFF_RECOVER_SEC = DEFAULT_ROAM_NO_RESULT_BACKOFF_RECOVER_SEC
+ROAM_CROSS_FAIL_RETRY_COUNT = DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT
 
 def _no_result_max_level():
     """backoff가 상한(ROAM_NO_RESULT_MAX_SLEEP)에 도달하는 최소 streak 레벨.
@@ -276,6 +278,7 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
             "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC": int(
                 config["ROAM_NO_RESULT_BACKOFF_RECOVER_SEC"]
             ),
+            "ROAM_CROSS_FAIL_RETRY_COUNT": int(config["ROAM_CROSS_FAIL_RETRY_COUNT"]),
             "USE_SIGNAL_AVG": config["USE_SIGNAL_AVG"],
         }
     )
@@ -328,6 +331,7 @@ def load_roaming_config(iface):
         "ROAM_SUCCESS_SLEEP": DEFAULT_ROAM_SUCCESS_SLEEP,
         "ROAM_NO_RESULT_MAX_SLEEP": DEFAULT_ROAM_NO_RESULT_MAX_SLEEP,
         "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC": DEFAULT_ROAM_NO_RESULT_BACKOFF_RECOVER_SEC,
+        "ROAM_CROSS_FAIL_RETRY_COUNT": DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT,
         "USE_SIGNAL_AVG": DEFAULT_USE_SIGNAL_AVG,
     }
 
@@ -440,6 +444,10 @@ def load_roaming_config(iface):
                 _set_config_value(
                     config, "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC",
                     roam_config.get("ROAM_NO_RESULT_BACKOFF_RECOVER_SEC"), int
+                )
+                _set_config_value(
+                    config, "ROAM_CROSS_FAIL_RETRY_COUNT",
+                    roam_config.get("ROAM_CROSS_FAIL_RETRY_COUNT"), int
                 )
 
                 # 모드 결정자 generate_network_blocks 파싱 (bool만 수용, 기본 false).
@@ -658,6 +666,59 @@ class PingPongPreventer:
         return len(recent)
 
 
+class CrossSsidCooldown:
+    """모드 A cross-SSID 전환 실패 SSID의 retry 카운트 + 지수 backoff cooldown 추적.
+
+    PingPongPreventer(성공 roam 빈도, BSSID)와 의미가 달라 별도 클래스로 둔다.
+    backoff 산식은 compute_no_result_backoff를 공유. fails는 성공 clear까지 유지한다
+    (만료 즉시 제거하면 backoff가 리셋되어 영구 실패가 짧은 재시도로 회귀하므로)."""
+
+    def __init__(self, retry_count=DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT):
+        self.retry_count = max(0, retry_count)  # 음수 config 방어(0이면 첫 실패부터 cooldown)
+        self.entries = {}  # {ssid: {"fails": int, "until": float}}
+
+    def register_failure(self, ssid, post_sleep=0.0):
+        """cross-SSID 전환 실패 등록. retry_count 이하면 cooldown 없음(즉시 재시도),
+        초과하면 over=fails-retry_count 로 지수 backoff cooldown 설정.
+
+        post_sleep: 실패 후 메인루프가 추가로 대기하는 시간(ROAM_SUCCESS_SLEEP+interval).
+        cooldown until에 이를 더해, 그 sleep 동안 cooldown이 만료돼 다음 평가에서 무효화되는
+        것을 막는다(Codex P2 / Claude MEDIUM: 첫 backoff 3s < ROAM_SUCCESS_SLEEP 5s 문제)."""
+        if not ssid:
+            return
+        e = self.entries.setdefault(ssid, {"fails": 0, "until": 0.0})
+        e["fails"] += 1
+        if e["fails"] <= self.retry_count:
+            e["until"] = time.time()  # cooldown 없음 → 다음 평가 tick에 재시도 허용
+        else:
+            over = e["fails"] - self.retry_count
+            e["until"] = time.time() + post_sleep + compute_no_result_backoff(over)
+
+    def is_cooling(self, ssid):
+        """ssid가 cooldown 중이면 True. fails는 유지(성공 clear 전까지)."""
+        e = self.entries.get(ssid)
+        if not e:
+            return False
+        return time.time() < e["until"]
+
+    def clear(self, ssid):
+        """cross-SSID 전환 성공 → 해당 ssid의 실패 카운트/ cooldown 해제."""
+        self.entries.pop(ssid, None)
+
+
+def record_cross_ssid_result(cooldown, ssid, ok, post_sleep):
+    """cross-SSID 전환 결과를 cooldown에 반영(메인루프 분기를 함수로 추출 → 단위 테스트 가능).
+
+    성공(ok=True) → clear, 실패(ok=False) → register_failure(ssid, post_sleep).
+    cooldown이 None(모드 B, cross 자동전환 비활성)이면 무동작."""
+    if cooldown is None:
+        return
+    if ok:
+        cooldown.clear(ssid)
+    else:
+        cooldown.register_failure(ssid, post_sleep)
+
+
 # ==============================================================================
 # 적응형 간격 (Adaptive Interval)
 # ==============================================================================
@@ -727,6 +788,7 @@ class AdaptiveInterval:
 trend_tracker = None
 ping_pong_preventer = None
 adaptive_interval = None
+cross_ssid_cooldown = None
 
 
 # ==============================================================================
@@ -1724,7 +1786,7 @@ def check_roam_conditions(station, roam_ap, trend):
 # 개선된 main 함수
 # ==============================================================================
 def main():
-    global trend_tracker, ping_pong_preventer, adaptive_interval
+    global trend_tracker, ping_pong_preventer, adaptive_interval, cross_ssid_cooldown
 
     # 초기화
     if ENABLE_PREDICTIVE_ROAM:
@@ -1742,6 +1804,18 @@ def main():
             f"[{IFACE}] Ping-pong prevention enabled (max={MAX_ROAMS_IN_WINDOW}/{PING_PONG_WINDOW}s)",
             _EXTRA_(),
         )
+
+    if GENERATE_NETWORK_BLOCKS:
+        cross_ssid_cooldown = CrossSsidCooldown(ROAM_CROSS_FAIL_RETRY_COUNT)
+        logger.message(
+            "info",
+            f"[{IFACE}] Cross-SSID fail cooldown enabled (retry_count={ROAM_CROSS_FAIL_RETRY_COUNT})",
+            _EXTRA_(),
+        )
+    else:
+        # 모드 B(generate_network_blocks=false)는 cross-SSID 자동전환이 비활성(should_cross_connect
+        # 항상 False)이라 cooldown 미사용. 인스턴스를 만들지 않아 'enabled' 오인 로그를 피한다.
+        cross_ssid_cooldown = None
 
     if ENABLE_ADAPTIVE_INTERVAL:
         adaptive_interval = AdaptiveInterval(MIN_CHECK_INTERVAL, MAX_CHECK_INTERVAL)
@@ -1906,8 +1980,22 @@ def main():
         best_reason = ""
         best_score = 0
 
+        # cross-SSID 판정 기준(라이브 SSID + conf WPA_SSID). 루프와 아래 로밍 분기에서 공유.
+        base_ssids = {s for s in (station.get("ssid"), WPA_SSID) if s}
+
         for roam_ap in entries:
             if roam_ap["bssid"] == station["bssid"]:
+                continue
+
+            # cross-SSID cooldown(모드 A): 전환 실패한 extra SSID는 일정 시간 후보에서 제외해
+            # select_network 진동을 차단한다. same-SSID(현재 ESS) BSS roam은 should_cross_connect가
+            # cross 대상만 True이므로 영향 없음. cooldown SSID가 유일 후보면 best_ap=None → 후보없음 backoff.
+            ap_ssid = roam_ap.get("ssid", "")  # .get으로 일관 접근(조건 순서 변경 시 KeyError 방지)
+            if (
+                cross_ssid_cooldown is not None
+                and should_cross_connect(ap_ssid, base_ssids)
+                and cross_ssid_cooldown.is_cooling(ap_ssid)
+            ):
                 continue
 
             # 로밍 조건 확인
@@ -1958,16 +2046,20 @@ def main():
                 _EXTRA_(),
             )
 
-            # 라우팅 판단을 후보 필터와 동일 소스(라이브 SSID + conf WPA_SSID)로 통일.
+            # 라우팅 판단은 위에서 선계산한 base_ssids(라이브 SSID + conf WPA_SSID)를 공유.
             # should_cross_connect 게이트(모드 A AND base 밖 SSID)면 cross connect(재연결),
             # 아니면 무중단 roam. 모드 B(generate=false)는 cross 항상 차단(spec §3.5 2차 게이트).
-            # (info.ssid가 cross-SSID connect 직후 일시적으로 stale이어도 게이트로 봉쇄.)
-            base_ssids = {s for s in (station.get("ssid"), WPA_SSID) if s}
             if should_cross_connect(best_ap.get("ssid"), base_ssids):
-                # 다른(extra) SSID → 모드 A는 select_network(conf 불변), 모드 B는 이 분기
-                # 자체가 비활성(AND 게이트). 성공/실패 무관 안정화 대기로 재시도 폭주 방지.
-                route_cross_ssid_transition(
+                # 다른(extra) SSID → 모드 A select_network(conf 불변). 성공/실패를 cooldown에 등록:
+                # 실패 누적 시 그 SSID를 후보에서 제외해 deauth 진동을 차단(spec §3.2).
+                ok = route_cross_ssid_transition(
                     IFACE, best_ap["ssid"], station["bssid"], best_ap["bssid"]
+                )
+                # 전환 결과를 cooldown에 반영(성공→clear / 실패→register). post_sleep=실패 후
+                # 메인루프가 대기하는 시간(ROAM_SUCCESS_SLEEP+interval)을 반영해, 그 sleep 동안
+                # cooldown이 만료돼 무효화되는 것을 방지. cooldown None(모드 B)이면 무동작.
+                record_cross_ssid_result(
+                    cross_ssid_cooldown, best_ap["ssid"], ok, ROAM_SUCCESS_SLEEP + interval
                 )
                 time.sleep(ROAM_SUCCESS_SLEEP)
             elif roam_to_bssid(station["bssid"], best_ap["bssid"]):
