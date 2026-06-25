@@ -771,6 +771,7 @@ class AdaptiveInterval:
 trend_tracker = None
 ping_pong_preventer = None
 adaptive_interval = None
+cross_ssid_cooldown = None
 
 
 # ==============================================================================
@@ -1768,7 +1769,7 @@ def check_roam_conditions(station, roam_ap, trend):
 # 개선된 main 함수
 # ==============================================================================
 def main():
-    global trend_tracker, ping_pong_preventer, adaptive_interval
+    global trend_tracker, ping_pong_preventer, adaptive_interval, cross_ssid_cooldown
 
     # 초기화
     if ENABLE_PREDICTIVE_ROAM:
@@ -1786,6 +1787,13 @@ def main():
             f"[{IFACE}] Ping-pong prevention enabled (max={MAX_ROAMS_IN_WINDOW}/{PING_PONG_WINDOW}s)",
             _EXTRA_(),
         )
+
+    cross_ssid_cooldown = CrossSsidCooldown(ROAM_CROSS_FAIL_RETRY_COUNT)
+    logger.message(
+        "info",
+        f"[{IFACE}] Cross-SSID fail cooldown enabled (retry_count={ROAM_CROSS_FAIL_RETRY_COUNT})",
+        _EXTRA_(),
+    )
 
     if ENABLE_ADAPTIVE_INTERVAL:
         adaptive_interval = AdaptiveInterval(MIN_CHECK_INTERVAL, MAX_CHECK_INTERVAL)
@@ -1950,8 +1958,21 @@ def main():
         best_reason = ""
         best_score = 0
 
+        # cross-SSID 판정 기준(라이브 SSID + conf WPA_SSID). 루프와 아래 로밍 분기에서 공유.
+        base_ssids = {s for s in (station.get("ssid"), WPA_SSID) if s}
+
         for roam_ap in entries:
             if roam_ap["bssid"] == station["bssid"]:
+                continue
+
+            # cross-SSID cooldown(모드 A): 전환 실패한 extra SSID는 일정 시간 후보에서 제외해
+            # select_network 진동을 차단한다. same-SSID(현재 ESS) BSS roam은 should_cross_connect가
+            # cross 대상만 True이므로 영향 없음. cooldown SSID가 유일 후보면 best_ap=None → 후보없음 backoff.
+            if (
+                cross_ssid_cooldown is not None
+                and should_cross_connect(roam_ap.get("ssid"), base_ssids)
+                and cross_ssid_cooldown.is_cooling(roam_ap["ssid"])
+            ):
                 continue
 
             # 로밍 조건 확인
@@ -2002,17 +2023,20 @@ def main():
                 _EXTRA_(),
             )
 
-            # 라우팅 판단을 후보 필터와 동일 소스(라이브 SSID + conf WPA_SSID)로 통일.
+            # 라우팅 판단은 위에서 선계산한 base_ssids(라이브 SSID + conf WPA_SSID)를 공유.
             # should_cross_connect 게이트(모드 A AND base 밖 SSID)면 cross connect(재연결),
             # 아니면 무중단 roam. 모드 B(generate=false)는 cross 항상 차단(spec §3.5 2차 게이트).
-            # (info.ssid가 cross-SSID connect 직후 일시적으로 stale이어도 게이트로 봉쇄.)
-            base_ssids = {s for s in (station.get("ssid"), WPA_SSID) if s}
             if should_cross_connect(best_ap.get("ssid"), base_ssids):
-                # 다른(extra) SSID → 모드 A는 select_network(conf 불변), 모드 B는 이 분기
-                # 자체가 비활성(AND 게이트). 성공/실패 무관 안정화 대기로 재시도 폭주 방지.
-                route_cross_ssid_transition(
+                # 다른(extra) SSID → 모드 A select_network(conf 불변). 성공/실패를 cooldown에 등록:
+                # 실패 누적 시 그 SSID를 후보에서 제외해 deauth 진동을 차단(spec §3.2).
+                ok = route_cross_ssid_transition(
                     IFACE, best_ap["ssid"], station["bssid"], best_ap["bssid"]
                 )
+                if cross_ssid_cooldown is not None:
+                    if ok:
+                        cross_ssid_cooldown.clear(best_ap["ssid"])
+                    else:
+                        cross_ssid_cooldown.register_failure(best_ap["ssid"])
                 time.sleep(ROAM_SUCCESS_SLEEP)
             elif roam_to_bssid(station["bssid"], best_ap["bssid"]):
                 time.sleep(ROAM_SUCCESS_SLEEP)
