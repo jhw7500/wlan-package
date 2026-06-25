@@ -73,6 +73,7 @@ DEFAULT_SCAN_NO_RESULT_SLEEP = 3  # AP 스캔 결과 없을 때 재시도 대기
 DEFAULT_ROAM_SUCCESS_SLEEP = 5  # 로밍 성공 후 안정화 대기
 DEFAULT_ROAM_NO_RESULT_MAX_SLEEP = 30  # 후보없음 backoff 상한(초)
 DEFAULT_ROAM_NO_RESULT_BACKOFF_RECOVER_SEC = 60  # 상한 도달 후 streak 점감 시작(초)
+DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT = 2  # cross-SSID 전환 실패 시 cooldown 없이 즉시 재시도 허용 횟수(초과 시 backoff)
 
 # Post-Roam ARP 최적화 기본값
 DEFAULT_ENABLE_POST_ROAM_ARP_OPTIMIZATION = True
@@ -118,6 +119,7 @@ SCAN_NO_RESULT_SLEEP = DEFAULT_SCAN_NO_RESULT_SLEEP
 ROAM_SUCCESS_SLEEP = DEFAULT_ROAM_SUCCESS_SLEEP
 ROAM_NO_RESULT_MAX_SLEEP = DEFAULT_ROAM_NO_RESULT_MAX_SLEEP
 ROAM_NO_RESULT_BACKOFF_RECOVER_SEC = DEFAULT_ROAM_NO_RESULT_BACKOFF_RECOVER_SEC
+ROAM_CROSS_FAIL_RETRY_COUNT = DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT
 
 def _no_result_max_level():
     """backoff가 상한(ROAM_NO_RESULT_MAX_SLEEP)에 도달하는 최소 streak 레벨.
@@ -276,6 +278,7 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
             "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC": int(
                 config["ROAM_NO_RESULT_BACKOFF_RECOVER_SEC"]
             ),
+            "ROAM_CROSS_FAIL_RETRY_COUNT": int(config["ROAM_CROSS_FAIL_RETRY_COUNT"]),
             "USE_SIGNAL_AVG": config["USE_SIGNAL_AVG"],
         }
     )
@@ -328,6 +331,7 @@ def load_roaming_config(iface):
         "ROAM_SUCCESS_SLEEP": DEFAULT_ROAM_SUCCESS_SLEEP,
         "ROAM_NO_RESULT_MAX_SLEEP": DEFAULT_ROAM_NO_RESULT_MAX_SLEEP,
         "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC": DEFAULT_ROAM_NO_RESULT_BACKOFF_RECOVER_SEC,
+        "ROAM_CROSS_FAIL_RETRY_COUNT": DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT,
         "USE_SIGNAL_AVG": DEFAULT_USE_SIGNAL_AVG,
     }
 
@@ -440,6 +444,10 @@ def load_roaming_config(iface):
                 _set_config_value(
                     config, "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC",
                     roam_config.get("ROAM_NO_RESULT_BACKOFF_RECOVER_SEC"), int
+                )
+                _set_config_value(
+                    config, "ROAM_CROSS_FAIL_RETRY_COUNT",
+                    roam_config.get("ROAM_CROSS_FAIL_RETRY_COUNT"), int
                 )
 
                 # 모드 결정자 generate_network_blocks 파싱 (bool만 수용, 기본 false).
@@ -656,6 +664,42 @@ class PingPongPreventer:
         now = time.time()
         recent = [t for t, _, _ in self.roam_history if now - t < self.window_seconds]
         return len(recent)
+
+
+class CrossSsidCooldown:
+    """모드 A cross-SSID 전환 실패 SSID의 retry 카운트 + 지수 backoff cooldown 추적.
+
+    PingPongPreventer(성공 roam 빈도, BSSID)와 의미가 달라 별도 클래스로 둔다.
+    backoff 산식은 compute_no_result_backoff를 공유. fails는 성공 clear까지 유지한다
+    (만료 즉시 제거하면 backoff가 리셋되어 영구 실패가 짧은 재시도로 회귀하므로)."""
+
+    def __init__(self, retry_count=DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT):
+        self.retry_count = retry_count
+        self.entries = {}  # {ssid: {"fails": int, "until": float}}
+
+    def register_failure(self, ssid):
+        """cross-SSID 전환 실패 등록. retry_count 이하면 cooldown 없음(즉시 재시도),
+        초과하면 over=fails-retry_count 로 지수 backoff cooldown 설정."""
+        if not ssid:
+            return
+        e = self.entries.setdefault(ssid, {"fails": 0, "until": 0.0})
+        e["fails"] += 1
+        if e["fails"] <= self.retry_count:
+            e["until"] = time.time()  # cooldown 없음 → 다음 평가 tick에 재시도 허용
+        else:
+            over = e["fails"] - self.retry_count
+            e["until"] = time.time() + compute_no_result_backoff(over)
+
+    def is_cooling(self, ssid):
+        """ssid가 cooldown 중이면 True. fails는 유지(성공 clear 전까지)."""
+        e = self.entries.get(ssid)
+        if not e:
+            return False
+        return time.time() < e["until"]
+
+    def clear(self, ssid):
+        """cross-SSID 전환 성공 → 해당 ssid의 실패 카운트/ cooldown 해제."""
+        self.entries.pop(ssid, None)
 
 
 # ==============================================================================
