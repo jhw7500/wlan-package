@@ -674,12 +674,16 @@ class CrossSsidCooldown:
     (만료 즉시 제거하면 backoff가 리셋되어 영구 실패가 짧은 재시도로 회귀하므로)."""
 
     def __init__(self, retry_count=DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT):
-        self.retry_count = retry_count
+        self.retry_count = max(0, retry_count)  # 음수 config 방어(0이면 첫 실패부터 cooldown)
         self.entries = {}  # {ssid: {"fails": int, "until": float}}
 
-    def register_failure(self, ssid):
+    def register_failure(self, ssid, post_sleep=0.0):
         """cross-SSID 전환 실패 등록. retry_count 이하면 cooldown 없음(즉시 재시도),
-        초과하면 over=fails-retry_count 로 지수 backoff cooldown 설정."""
+        초과하면 over=fails-retry_count 로 지수 backoff cooldown 설정.
+
+        post_sleep: 실패 후 메인루프가 추가로 대기하는 시간(ROAM_SUCCESS_SLEEP+interval).
+        cooldown until에 이를 더해, 그 sleep 동안 cooldown이 만료돼 다음 평가에서 무효화되는
+        것을 막는다(Codex P2 / Claude MEDIUM: 첫 backoff 3s < ROAM_SUCCESS_SLEEP 5s 문제)."""
         if not ssid:
             return
         e = self.entries.setdefault(ssid, {"fails": 0, "until": 0.0})
@@ -688,7 +692,7 @@ class CrossSsidCooldown:
             e["until"] = time.time()  # cooldown 없음 → 다음 평가 tick에 재시도 허용
         else:
             over = e["fails"] - self.retry_count
-            e["until"] = time.time() + compute_no_result_backoff(over)
+            e["until"] = time.time() + post_sleep + compute_no_result_backoff(over)
 
     def is_cooling(self, ssid):
         """ssid가 cooldown 중이면 True. fails는 유지(성공 clear 전까지)."""
@@ -2036,7 +2040,11 @@ def main():
                     if ok:
                         cross_ssid_cooldown.clear(best_ap["ssid"])
                     else:
-                        cross_ssid_cooldown.register_failure(best_ap["ssid"])
+                        # post_sleep=실패 후 메인루프가 대기하는 시간(ROAM_SUCCESS_SLEEP+interval)을
+                        # cooldown에 반영 → 그 sleep 동안 cooldown이 만료돼 무효화되는 것 방지.
+                        cross_ssid_cooldown.register_failure(
+                            best_ap["ssid"], ROAM_SUCCESS_SLEEP + interval
+                        )
                 time.sleep(ROAM_SUCCESS_SLEEP)
             elif roam_to_bssid(station["bssid"], best_ap["bssid"]):
                 time.sleep(ROAM_SUCCESS_SLEEP)

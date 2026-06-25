@@ -106,3 +106,34 @@ def test_retry_count_zero_immediate_cooldown(fake_clock):
     cd = CrossSsidCooldown(retry_count=0)
     cd.register_failure("Office")
     assert cd.is_cooling("Office") is True
+
+
+def test_post_sleep_extends_cooldown(fake_clock):
+    # post_sleep을 주면 cooldown until에 더해져, 실패 후 메인루프가 sleep하는 동안
+    # cooldown이 만료돼 무효화되는 것을 막는다(Codex P2 / Claude MEDIUM).
+    # retry_count=2, 3회째(over=1): until = now + post_sleep(5) + backoff(1)=3 = now+8.
+    cd = CrossSsidCooldown(retry_count=2)
+    for _ in range(3):
+        cd.register_failure("Office", post_sleep=5)
+    assert cd.is_cooling("Office") is True
+    fake_clock["now"] += 7.9
+    assert cd.is_cooling("Office") is True   # 8s 전 — 여전히 cooldown 유지
+    fake_clock["now"] += 0.2                 # 총 8.1s
+    assert cd.is_cooling("Office") is False
+
+
+def test_post_sleep_ignored_within_retry(fake_clock):
+    # retry 단계(fails<=retry_count)는 post_sleep과 무관하게 cooldown 없음(즉시 재시도 허용).
+    cd = CrossSsidCooldown(retry_count=2)
+    cd.register_failure("Office", post_sleep=5)
+    assert cd.is_cooling("Office") is False
+    cd.register_failure("Office", post_sleep=5)
+    assert cd.is_cooling("Office") is False
+
+
+def test_negative_retry_count_clamped(fake_clock):
+    # retry_count 음수(잘못된 config) → 0으로 clamp → 첫 실패부터 즉시 cooldown.
+    cd = CrossSsidCooldown(retry_count=-5)
+    assert cd.retry_count == 0
+    cd.register_failure("Office")
+    assert cd.is_cooling("Office") is True
