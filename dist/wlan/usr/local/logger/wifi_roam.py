@@ -1990,10 +1990,11 @@ def main():
             # cross-SSID cooldown(모드 A): 전환 실패한 extra SSID는 일정 시간 후보에서 제외해
             # select_network 진동을 차단한다. same-SSID(현재 ESS) BSS roam은 should_cross_connect가
             # cross 대상만 True이므로 영향 없음. cooldown SSID가 유일 후보면 best_ap=None → 후보없음 backoff.
+            ap_ssid = roam_ap.get("ssid", "")  # .get으로 일관 접근(조건 순서 변경 시 KeyError 방지)
             if (
                 cross_ssid_cooldown is not None
-                and should_cross_connect(roam_ap.get("ssid"), base_ssids)
-                and cross_ssid_cooldown.is_cooling(roam_ap["ssid"])
+                and should_cross_connect(ap_ssid, base_ssids)
+                and cross_ssid_cooldown.is_cooling(ap_ssid)
             ):
                 continue
 
