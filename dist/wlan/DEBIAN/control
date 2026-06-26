@@ -6,7 +6,7 @@ Architecture: arm64
 Depends: libpcap0.8 | libpcap, systemd, jq
 Conflicts: wlan-package
 Replaces: wlan-package
-Recommends: jq
+Recommends: jq, snmpd
 Maintainer: jhw <hwjo@cantops.biz>
 Description: WLAN Application
  0.0.0 : Test version
