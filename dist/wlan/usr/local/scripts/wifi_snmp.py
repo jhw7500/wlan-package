@@ -42,7 +42,7 @@ def load_link(path=None):
     if path is None:
         path = _link_json_path()
     try:
-        with open(path, "r") as f:
+        with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
         return {}
@@ -84,7 +84,8 @@ def _mwlan_counter(data, key):
     if val is None:
         return None
     if isinstance(val, list):
-        nums = [v for v in val if isinstance(v, int)]
+        # bool 은 int 서브클래스라 isinstance 로 새면 합이 틀어진다 → 엄격 타입 검사.
+        nums = [v for v in val if type(v) is int]
         return sum(nums) if nums else None
     return _first_int(val)
 
@@ -163,7 +164,7 @@ def m_noise(d):
     # 그것을 쓴다(wifi_link_monitor.py:520-525 와 동일 정책). 단순 len(chans)==1 은
     # 다채널 survey 에서 거의 성립 안 해 폴백이 죽으므로 쓰지 않는다.
     candidates = [v for v in chans.values()
-                  if isinstance(v, dict) and "noise" in v]
+                  if isinstance(v, dict) and v.get("noise") is not None]
     if len(candidates) == 1:
         return _first_int(candidates[0].get("noise"))
     return None
