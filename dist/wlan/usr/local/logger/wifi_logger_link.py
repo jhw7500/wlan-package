@@ -131,24 +131,41 @@ def fast_retry_station_dump(count, delay):
             return out
     return None
 
-def parse_mwlan_log():
+def _parse_mwlan_text(text):
+    """mwlan log 텍스트를 {key: int | [int]} 로 파싱한다. 'key = value'(diag-9098-11ax.sh
+    :179 가 가정하는 /proc 포맷)와 'key  value'(mlanutl getlog 공백정렬) 둘 다 수용한다.
+    /proc 원본 포맷이 레포 증거로 미확정이라 양쪽 robust 파싱(어느 포맷이든 mwlan_log 채움).
+    값이 숫자가 아니거나 키만 있는 잡음/헤더 줄은 무시. 공백구분 다중값(QoS AC별)은 리스트."""
     parsed = {}
+    for line in (text or "").splitlines():
+        if "=" in line:
+            key, rest = line.split("=", 1)
+            key, toks = key.strip(), rest.split()
+        else:
+            toks = line.split()
+            if len(toks) < 2:
+                continue
+            key, toks = toks[0], toks[1:]
+        if not key or not toks:
+            continue
+        # 값 토큰이 전부 정수일 때만 카운터 줄로 인정. int() 가 판단 권위(isdigit 은
+        # 다중 dash '--7'·유니코드 digit '²' 를 통과시켜 ValueError 유발). 하나라도
+        # 비정수면 헤더/요약 잡음 줄로 보고 통째 skip → ValueError 방지 + 잡키 오염 방지.
+        try:
+            nums = [int(t) for t in toks]
+        except ValueError:
+            continue
+        parsed[key] = nums[0] if len(nums) == 1 else nums
+    return parsed
+
+
+def parse_mwlan_log():
+    # 상주 데몬이므로 catch-all 로 어떤 파싱/IO 예외에도 루프를 죽이지 않는다(OLD 동작 복원).
     try:
         with open(MWLAN_LOG_PATH, "r") as f:
-            for line in f:
-                if "=" not in line:
-                    continue
-                key, value = map(str.strip, line.split("=", 1))
-                if " " in value:
-                    values = value.strip().split()
-                    values = [int(v) for v in values if v.isdigit()]
-                    parsed[key] = values
-                else:
-                    parsed[key] = int(value.strip())
+            return _parse_mwlan_text(f.read())
     except Exception as e:
-        parsed["error"] = str(e)
-
-    return parsed
+        return {"error": str(e)}
 
 address = ""
 
