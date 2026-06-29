@@ -18,6 +18,16 @@ Phase1 객체 (mapping.md §9.2 🟢, opcd 게터 재사용 — 글루만):
                 StaLoginState .3.3.1.11.1 / StaApMacAddress .3.3.1.11.2 /
                 StaEssId .3.3.1.11.3 / StaChannel .3.3.1.11.4 / StaRssi .3.3.1.11.7
 
+Phase2a 객체 (mapping.md §9.3 🟡 일부, 파싱/유도 — link.json 재사용):
+  LED(3)      : LedPower .3.1.1(상수 on) / LedLan .3.1.2(유선 carrier) /
+                LedWlan .3.1.3(무선 연결) — on(1)/off(2), 물리 LED 판독 아닌 유도값
+  무선정보(5) : WirelessMode .3.3.1.1(tx_bitrate 프리픽스→11n/ac/ax/be) /
+                WLM .3.3.1.2(managed 고정) / StaTxRate .3.3.1.11.5(Mbps) /
+                StaRxRate .3.3.1.11.6(Mbps) / SupplicantState .3.3.1.11.8
+  SupplicantState(.11.8) 는 wifi_logger_link.py 가 매 주기 wpa_cli 폴링해 기록하는
+  별도 파일 supplicant.json({wpa_state, temp_disabled})에서 invalid(1)/success(2)/
+  failure(3)/authenticating(4) 로 매핑. 부재 시 associated 근사(2/1).
+
 구현 규약 / 한계 (MIB 미정의 → 본 구현에서 확정, 사양 확정 시 정정 필요):
   * IfTable(.3.2.1)은 INDEX 절 없는 degenerate pseudo-table → 유선=인스턴스 .1,
     무선=.2 로 노출. 그 외 그룹은 모두 스칼라 → GET 시 ``.0`` 인스턴스 접미사.
@@ -52,6 +62,10 @@ FXE3000 = CONTEC + ".65"
 DEFAULT_ETH_JSON = "/var/log/cantops/json/eth0/link.json"
 DEFAULT_MLAN_JSON = "/var/log/cantops/json/mlan0/link.json"
 DEFAULT_DEVINFO = "/usr/local/opc/etc/device_info.json"
+# Phase2a: wifi_logger_link.py 가 매 주기 기록하는 supplicant 상태({wpa_state,
+# temp_disabled}). link.json 의 미연결 '{}' 계약(opcd/passive_roam 의존)을
+# 건드리지 않으려 별도 파일로 둔다.
+DEFAULT_SUPP_JSON = "/var/log/cantops/json/mlan0/supplicant.json"
 
 NULL_MAC = "00:00:00:00:00:00"
 NULL_IP = "0.0.0.0"
@@ -96,6 +110,65 @@ def _eth_field(eth, key):
     if v not in (None, ""):
         return v
     return eth.get(key)
+
+
+# ---- Phase2a 파생 헬퍼 (순수 함수) ------------------------------------------
+
+_RATE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*MBit/s")
+_SUPP_IN_PROGRESS = ("AUTHENTICATING", "ASSOCIATING", "ASSOCIATED",
+                     "4WAY_HANDSHAKE", "GROUP_HANDSHAKE")
+
+
+def _wireless_mode(bitrate):
+    """link.tx_bitrate 의 rate_info 프리픽스로 무선규격(11n/ac/ax/be)을 유도한다.
+    EHT-/HE-/VHT- 를 plain "MCS"(HT) 보다 먼저 본다 — "HE-MCS" 도 "MCS" 를 포함하므로.
+    legacy(11a/b/g)는 bitrate 만으론 구분 불가 → 빈 문자열(미연결도 빈 문자열).
+    opcd C 의 parse_bitrate_to_mode 와 동치(프리픽스 우선순위 동일)."""
+    if not bitrate:
+        return ""
+    s = str(bitrate)
+    if "EHT-" in s:
+        return "11be"
+    if "HE-" in s:
+        return "11ax"
+    if "VHT-" in s:
+        return "11ac"
+    if "MCS" in s:
+        return "11n"
+    return ""
+
+
+def _rate_mbps(bitrate):
+    """'143.3 MBit/s ...' → Mbps INTEGER(반올림). 결측/미파싱은 0.
+    단위 Mbps 는 A안 extend 백엔드(wifi_snmp.py m_txrate)와 동일 → 두 SNMP 트리
+    (.8072 extend / .672.65 CONTEC)가 같은 값을 보고한다. MIB SYNTAX 는 단위 미명시
+    bare INTEGER 이고 Mbps 면 INT32 saturate 가 없다(bps 환산은 160MHz/Wi-Fi6E
+    ≥2.15Gbps 에서 넘침)."""
+    if not bitrate:
+        return 0
+    m = _RATE_RE.search(str(bitrate))
+    if not m:
+        return 0
+    return int(round(float(m.group(1))))
+
+
+def _supplicant_state(supplicant, associated):
+    """supplicant.json({wpa_state, temp_disabled}) → MIB enum
+    invalid(1)/success(2)/failure(3)/authenticating(4).
+    COMPLETED=성공(2, temp_disabled 보다 우선). 미접속+temp_disabled(인증 반복실패로
+    네트워크 일시비활성)=실패(3). 핸드셰이크/assoc 진행중=인증중(4). 그 외=무효(1).
+    supplicant 데이터 부재 시 associated 근사(2/1)."""
+    supp = supplicant or {}
+    state = supp.get("wpa_state")
+    if not state:
+        return 2 if associated else 1
+    if state == "COMPLETED":
+        return 2
+    if supp.get("temp_disabled"):
+        return 3
+    if state in _SUPP_IN_PROGRESS:
+        return 4
+    return 1
 
 
 # ---- I/O (데이터 소스 로드) -------------------------------------------------
@@ -156,6 +229,7 @@ def collect_sources():
         eth=load_json(os.environ.get("WIFI_SNMP_ETH_JSON", DEFAULT_ETH_JSON)),
         mlan=load_json(os.environ.get("WIFI_SNMP_MLAN_JSON", DEFAULT_MLAN_JSON)),
         devinfo=load_json(os.environ.get("WIFI_SNMP_DEVINFO", DEFAULT_DEVINFO)),
+        supplicant=load_json(os.environ.get("WIFI_SNMP_SUPP_JSON", DEFAULT_SUPP_JSON)),
         fw=get_fw_version(),
         eth_link_up=get_eth_carrier(),
     )
@@ -166,7 +240,8 @@ def collect_sources():
 
 # ---- OID 맵 구축 (순수 함수 — 테스트 주입 용이) ------------------------------
 
-def build_oid_map(eth=None, mlan=None, devinfo=None, fw=None, eth_link_up=None):
+def build_oid_map(eth=None, mlan=None, devinfo=None, fw=None, eth_link_up=None,
+                  supplicant=None):
     """주입된 데이터 소스로 {full_oid_instance: (type_token, value_str)} 를 만든다.
 
     모든 값은 pass_persist stdout 한 줄로 출력되므로 문자열로 정규화한다.
@@ -197,6 +272,8 @@ def build_oid_map(eth=None, mlan=None, devinfo=None, fw=None, eth_link_up=None):
     channel = ch if ch is not None else 0
     sig = _first_int(link.get("signal_avg") or link.get("signal"))
     rssi = sig if sig is not None else 0
+    tx_bitrate = link.get("tx_bitrate")   # 'NNN.N MBit/s <rate_info>' 또는 결측
+    rx_bitrate = link.get("rx_bitrate")
 
     om = {}
 
@@ -212,6 +289,12 @@ def build_oid_map(eth=None, mlan=None, devinfo=None, fw=None, eth_link_up=None):
     put(".2.7.0", "ipaddress", _fmt_ip(_eth_field(eth, "netmask")))
     put(".2.8.0", "ipaddress", _fmt_ip(_eth_field(eth, "gateway")))
 
+    # LED (.3.1.x StatusInfo 스칼라 → .0) — 물리 LED 판독이 아니라 링크/연결상태 유도.
+    # on(1)/off(2). Power 는 'SNMP 응답=전원ON' 이라 상수 on.
+    put(".3.1.1.0", "integer", 1)                           # LedPower 상수 on
+    put(".3.1.2.0", "integer", 1 if eth_up else 2)          # LedLan = 유선 carrier
+    put(".3.1.3.0", "integer", 1 if associated else 2)      # LedWlan = 무선 연결
+
     # 인터페이스 (.3.2.1 pseudo-table: 유선=인스턴스 1, 무선=2)
     put(".3.2.1.1.1", "integer", 1)            # IfIndex 유선
     put(".3.2.1.1.2", "integer", 2)            # IfIndex 무선
@@ -219,6 +302,8 @@ def build_oid_map(eth=None, mlan=None, devinfo=None, fw=None, eth_link_up=None):
     put(".3.2.1.7.2", "integer", 1 if associated else 2)    # 무선 up(1)/down(2)
 
     # 무선정보 (.3.3.1.x 스칼라 → .0)
+    put(".3.3.1.1.0", "string", _wireless_mode(tx_bitrate))  # WirelessMode(규격)
+    put(".3.3.1.2.0", "string", "managed")     # WLM(Link Mode) STA 고정(사양 확정 대기)
     put(".3.3.1.3.0", "string", "Station")     # UnitType 고정
     put(".3.3.1.4.0", "string", _fmt_mac(wl_mac))
     put(".3.3.1.5.0", "string", bandwidth)
@@ -226,7 +311,10 @@ def build_oid_map(eth=None, mlan=None, devinfo=None, fw=None, eth_link_up=None):
     put(".3.3.1.11.2.0", "string", _fmt_mac(bssid))
     put(".3.3.1.11.3.0", "string", ssid)
     put(".3.3.1.11.4.0", "integer", channel)
+    put(".3.3.1.11.5.0", "integer", _rate_mbps(tx_bitrate))   # StaTxRate (Mbps)
+    put(".3.3.1.11.6.0", "integer", _rate_mbps(rx_bitrate))   # StaRxRate (Mbps)
     put(".3.3.1.11.7.0", "integer", rssi)
+    put(".3.3.1.11.8.0", "integer", _supplicant_state(supplicant, associated))  # SupplicantState
 
     return om
 
