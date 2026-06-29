@@ -314,6 +314,54 @@ def is_wifi_connected_wpa(interface="mlan0") -> bool:
     except subprocess.CalledProcessError:
         return False
 
+# --- supplicant 상태(Phase2a) — SNMP WIFInfoStaSupplicantState 원천 -----------
+# 매 주기 wpa_cli status(+필요시 list_networks)를 폴링해 supplicant.json 에
+# {wpa_state, temp_disabled} 를 기록한다. wpa_state→MIB enum(invalid/success/
+# failure/authenticating) 매핑은 SNMP 소비자(wifi_snmp_pp.py)가 한다. link.json 의
+# 미연결 '{}' 계약(opcd/passive_roam 의존)을 깨지 않으려 별도 파일로 분리.
+SUPP_FILE = "supplicant.json"
+
+def extract_supplicant(status_text, networks_text=""):
+    """wpa_cli status(+list_networks) 출력에서 supplicant '사실'만 추출.
+    {wpa_state: <str>, temp_disabled: <bool>}. temp_disabled 는 인증 반복실패로
+    wpa_supplicant 가 네트워크를 일시비활성([TEMP-DISABLED]) 했는지 — 폴링으로
+    잡히는 실패(3) 신호다(단발 실패는 1Hz 사이로 빠질 수 있음)."""
+    wpa_state = ""
+    for line in (status_text or "").splitlines():
+        if line.startswith("wpa_state="):
+            wpa_state = line.split("=", 1)[1].strip()
+            break
+    # single-station/single-network 전제: list_networks 에 [TEMP-DISABLED] 가 하나라도
+    # 있으면 실패로 본다. TODO(dual-station): 다중 프로파일 시 대상 네트워크 행의 flags 만
+    # 검사해야 타 네트워크 disable 의 오귀속을 막는다.
+    temp_disabled = "[TEMP-DISABLED]" in (networks_text or "")
+    return {"wpa_state": wpa_state, "temp_disabled": temp_disabled}
+
+def write_supplicant_json(log_dir, supp):
+    """supplicant.json 을 atomic(tmp+fsync+rename)으로 기록 — SNMP pass_persist 가
+    동시 read 하므로 torn read 방지(save_db 와 동일 패턴). 보조 파일이므로 기록 실패가
+    주 link 로깅 루프를 죽이지 않도록 OSError 를 삼키고 로그만 남긴다."""
+    try:
+        tmp_path = os.path.join(log_dir, SUPP_FILE + ".tmp")
+        final_path = os.path.join(log_dir, SUPP_FILE)
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(supp, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.rename(tmp_path, final_path)
+    except OSError as e:
+        logger.message("err", f"[{IFACE}] supplicant.json write failed: {e}", _EXTRA_())
+
+def poll_supplicant(interface):
+    """wpa_cli 로 현재 supplicant 상태를 읽어 extract_supplicant dict 반환.
+    list_networks(temp-disable 판정용)는 status 가 유효하고 COMPLETED 가 아닐 때만 호출
+    (wpa 무응답=빈 status 면 list_networks 도 무의미 → 생략, 불필요 subprocess 절감)."""
+    status = run_command(["wpa_cli", "-i", interface, "status"]) or ""
+    networks = ""
+    if status and "wpa_state=COMPLETED" not in status:
+        networks = run_command(["wpa_cli", "-i", interface, "list_networks"]) or ""
+    return extract_supplicant(status, networks)
+
 def is_wifi_connected_iw(interface="mlan0") -> bool:
     try:
         # iw <iface> link 실행
@@ -384,9 +432,15 @@ def main():
             continue
 
         if not is_wpa_running(IFACE):
+            # wpa 미실행 → supplicant 무효. link.json 은 기존대로 '{}'.
+            write_supplicant_json(LOG_DIR, {"wpa_state": "", "temp_disabled": False})
             _write_empty_link()
             time.sleep(1)
             continue
+
+        # supplicant 상태(연결/인증중/실패)를 매 주기 기록 — SNMP SupplicantState 원천.
+        # station dump 분기(미연결 시 '{}' continue)보다 먼저 써, 인증중/실패도 포착한다.
+        write_supplicant_json(LOG_DIR, poll_supplicant(IFACE))
 
         # station dump로 연결 판별 (iw link 대체).
         # 단일 조회로 시작하고, 공백/무효면 fast-retry로 넘긴다 → 끊김 억제 윈도우가
