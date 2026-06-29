@@ -515,9 +515,11 @@ def test_stats_zero_fixed_omitted():
 
 def test_stats_absent_without_mwlan_log():
     # mwlan_log 없으면 9 통계 전부 noSuchInstance(omap 누락) — Counter 0-오염 방지.
+    # mwlan_log 게이트 7개(dot11 기반)만 단언. octet(.3/.10)은 link.bytes 소스라 별개
+    # (test_stats_bytes_present_when_mwlan_log_absent 가 비대칭을 따로 검증).
     om = _connected_map()
-    # 통계 그룹(.3.3.2.*) 이 하나도 없어야 함 — Phase1/2a OID 추가에 견고(len 하드코딩 회피)
-    assert not any(o.startswith(BASE + ".3.3.2.") for o in om)
+    for sub in (".1", ".2", ".5", ".6", ".8", ".9", ".13"):
+        assert BASE + ".3.3.2" + sub + ".0" not in om
 
 
 def test_stats_negative_derivation_clamped():
