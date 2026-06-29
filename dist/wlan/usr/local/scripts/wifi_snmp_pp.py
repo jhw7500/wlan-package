@@ -44,6 +44,7 @@ Phase2a 객체 (mapping.md §9.3 🟡 일부, 파싱/유도 — link.json 재사
     WIFI_SNMP_ETH_JSON   eth0 link.json 경로 직접 지정
     WIFI_SNMP_MLAN_JSON  mlan0 link.json 경로 직접 지정
     WIFI_SNMP_DEVINFO    device_info.json 경로 직접 지정
+    WIFI_SNMP_SUPP_JSON  supplicant.json 경로 직접 지정 (Phase2a)
 """
 
 import json
@@ -167,6 +168,10 @@ def _supplicant_state(supplicant, associated):
         return 2 if associated else 1
     if state == "COMPLETED":
         return 2
+    # temp_disabled 를 _SUPP_IN_PROGRESS 보다 먼저 본다. 로거의 두 wpa_cli 호출
+    # (status→list_networks) 사이 TOCTOU 로 HANDSHAKE 중에도 temp_disabled=True 일 수
+    # 있으나, 그건 인증 반복실패 직후 재시도 첫 사이클이라 failure(3) 로 보는 게 맞고
+    # 다음 폴링 주기에 COMPLETED(2) 또는 authenticating(4) 로 갱신된다.
     if supp.get("temp_disabled"):
         return 3
     if state in _SUPP_IN_PROGRESS:
