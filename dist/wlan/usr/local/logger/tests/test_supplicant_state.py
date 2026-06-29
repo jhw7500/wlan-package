@@ -79,3 +79,47 @@ def test_write_supplicant_json_swallows_io_error(monkeypatch, tmp_path):
     bad_dir = os.path.join(str(tmp_path), "no", "such", "dir")  # 부모 부재 → open 실패
     wl.write_supplicant_json(bad_dir, {"wpa_state": "", "temp_disabled": False})  # raise 금지
     assert wl.logger.message.called
+
+
+# --- poll_supplicant: list_networks 조건부 호출 분기 -------------------------
+
+_LIST_CMD = ["wpa_cli", "-i", "mlan0", "list_networks"]
+
+
+def test_poll_supplicant_skips_list_networks_when_completed(monkeypatch):
+    # COMPLETED 면 temp-disable 판정 불필요 → list_networks 생략
+    calls = []
+
+    def fake_run(cmd):
+        calls.append(cmd)
+        return "ssid=X\nwpa_state=COMPLETED\n" if cmd[-1] == "status" else "UNEXPECTED"
+
+    monkeypatch.setattr(wl, "run_command", fake_run)
+    assert wl.poll_supplicant("mlan0") == {"wpa_state": "COMPLETED", "temp_disabled": False}
+    assert _LIST_CMD not in calls
+
+
+def test_poll_supplicant_skips_list_networks_when_status_empty(monkeypatch):
+    # wpa 무응답(빈 status) → list_networks 무의미하므로 생략(G2 가드)
+    calls = []
+
+    def fake_run(cmd):
+        calls.append(cmd)
+        return ""
+
+    monkeypatch.setattr(wl, "run_command", fake_run)
+    assert wl.poll_supplicant("mlan0") == {"wpa_state": "", "temp_disabled": False}
+    assert _LIST_CMD not in calls
+
+
+def test_poll_supplicant_calls_list_networks_when_not_completed(monkeypatch):
+    # 미연결/인증중(비COMPLETED) → list_networks 로 temp-disable 확인
+    def fake_run(cmd):
+        if cmd[-1] == "status":
+            return "wpa_state=SCANNING\n"
+        if cmd[-1] == "list_networks":
+            return "network id / ssid / bssid / flags\n0\tX\tany\t[TEMP-DISABLED]\n"
+        return ""
+
+    monkeypatch.setattr(wl, "run_command", fake_run)
+    assert wl.poll_supplicant("mlan0") == {"wpa_state": "SCANNING", "temp_disabled": True}
