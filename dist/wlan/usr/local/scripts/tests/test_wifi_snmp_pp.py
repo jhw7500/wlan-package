@@ -431,11 +431,11 @@ MLAN_STATS = {
     "link": dict(MLAN_CONN["link"], tx_bytes="5000000", rx_bytes="9000000"),
     "mwlan_log": {
         "dot11TransmittedFrameCount": 1000,
-        "dot11GroupTransmittedFrameCount": 40,     # TxUnicast=960, TxMulticast=40
+        "dot11MulticastTransmittedFrameCount": 40,  # 실제 getlog 키(README_MLAN). TxUni=960, TxMcast=40
         "dot11RetryCount": 50,                      # TxShortRetries
         "dot11MultipleRetryCount": 12,             # TxLongRetries
         "dot11ReceivedFragmentCount": 800,
-        "dot11GroupReceivedFrameCount": 30,        # RxUnicast=770, RxMulticast=30
+        "dot11MulticastReceivedFrameCount": 30,    # RxUnicast=770, RxMulticast=30
         "dot11FCSErrorCount": 2621,                # RxHwFCSErrors
     },
 }
@@ -479,6 +479,33 @@ def test_stats_present_with_mwlan_log():
     assert om[BASE + ".3.3.2.13.0"] == ("counter", "2621")  # RxHwFCSErrors = FCSError
 
 
+def test_stats_multicast_group_key_fallback():
+    # 일부 펌웨어는 dot11Group* 명칭을 쓸 수 있어 fallback 지원(README 는 dot11Multicast*).
+    mlan = {"link": {"address": "aa:bb:cc:dd:ee:01"},
+            "mwlan_log": {
+                "dot11TransmittedFrameCount": 500,
+                "dot11GroupTransmittedFrameCount": 20,     # Group 명칭(fallback)
+                "dot11ReceivedFragmentCount": 400,
+                "dot11GroupReceivedFrameCount": 10,
+            }}
+    om = pp.build_oid_map(mlan=mlan)
+    assert om[BASE + ".3.3.2.1.0"] == ("counter", "480")   # 500-20
+    assert om[BASE + ".3.3.2.2.0"] == ("counter", "20")
+    assert om[BASE + ".3.3.2.8.0"] == ("counter", "390")   # 400-10
+    assert om[BASE + ".3.3.2.9.0"] == ("counter", "10")
+
+
+def test_stats_bytes_present_when_mwlan_log_absent():
+    # 가용성 비대칭(Claude): octet(.3/.10)은 link.bytes 소스라 mwlan_log 없어도 노출,
+    # dot11 통계 7개는 noSuchInstance. 실운영 경계(/proc 접근 실패) 케이스.
+    mlan = {"link": {"address": "aa:bb:cc:dd:ee:01", "tx_bytes": "1000", "rx_bytes": "2000"}}
+    om = pp.build_oid_map(mlan=mlan)
+    assert om[BASE + ".3.3.2.3.0"] == ("counter", "1000")
+    assert om[BASE + ".3.3.2.10.0"] == ("counter", "2000")
+    assert BASE + ".3.3.2.1.0" not in om
+    assert BASE + ".3.3.2.13.0" not in om
+
+
 def test_stats_zero_fixed_omitted():
     # 소스 영구 부재(.4 TxMultiOctets/.7 TxFifo/.11 RxMultiOctets/.12 RxFifo) → 미노출
     om = _stats_map()
@@ -489,9 +516,8 @@ def test_stats_zero_fixed_omitted():
 def test_stats_absent_without_mwlan_log():
     # mwlan_log 없으면 9 통계 전부 noSuchInstance(omap 누락) — Counter 0-오염 방지.
     om = _connected_map()
-    for sub in (".1", ".2", ".3", ".5", ".6", ".8", ".9", ".10", ".13"):
-        assert BASE + ".3.3.2" + sub + ".0" not in om
-    assert len(om) == 27          # Phase2a invariant 유지(통계 미추가)
+    # 통계 그룹(.3.3.2.*) 이 하나도 없어야 함 — Phase1/2a OID 추가에 견고(len 하드코딩 회피)
+    assert not any(o.startswith(BASE + ".3.3.2.") for o in om)
 
 
 def test_stats_negative_derivation_clamped():
