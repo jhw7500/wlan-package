@@ -496,7 +496,7 @@ def test_stats_multicast_group_key_fallback():
 
 
 def test_stats_bytes_present_when_mwlan_log_absent():
-    # 가용성 비대칭(Claude): octet(.3/.10)은 link.bytes 소스라 mwlan_log 없어도 노출,
+    # 가용성 비대칭: octet(.3/.10)은 link.bytes 소스라 mwlan_log 없어도 노출,
     # dot11 통계 7개는 noSuchInstance. 실운영 경계(/proc 접근 실패) 케이스.
     mlan = {"link": {"address": "aa:bb:cc:dd:ee:01", "tx_bytes": "1000", "rx_bytes": "2000"}}
     om = pp.build_oid_map(mlan=mlan)

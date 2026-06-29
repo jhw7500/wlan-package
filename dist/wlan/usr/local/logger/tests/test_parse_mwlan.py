@@ -80,3 +80,9 @@ def test_skips_lines_with_nonnumeric_value_tokens():
     # 값 토큰에 비숫자가 섞인 헤더/요약 줄은 통째 skip → 잡키 오염 방지(F4)
     out = wl._parse_mwlan_text("Total Tx Packets 100\ndot11Ok 9\n")
     assert out == {"dot11Ok": 9}
+
+
+def test_eq_branch_rejects_nonidentifier_key():
+    # '=' 포함 요약줄(공백·콜론 키)은 잡키로 저장 안 됨 — key.isidentifier 가드(round3 MED#2)
+    out = wl._parse_mwlan_text("IEEE 802.11 statistics: MCS=7\ndot11RetryCount = 3\n")
+    assert out == {"dot11RetryCount": 3}

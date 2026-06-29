@@ -146,7 +146,9 @@ def _parse_mwlan_text(text):
             if len(toks) < 2:
                 continue
             key, toks = toks[0], toks[1:]
-        if not key or not toks:
+        # 키가 단순 식별자(dot11* 등)일 때만 인정 — '=' 포함 요약줄("IEEE 802.11 ... MCS=7")의
+        # 공백·콜론 키나 빈 키를 잡키로 저장하지 않는다(link.json 오염 방지).
+        if not key.isidentifier() or not toks:
             continue
         # 값 토큰이 전부 정수일 때만 카운터 줄로 인정. int() 가 판단 권위(isdigit 은
         # 다중 dash '--7'·유니코드 digit '²' 를 통과시켜 ValueError 유발). 하나라도
