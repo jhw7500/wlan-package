@@ -86,3 +86,10 @@ def test_eq_branch_rejects_nonidentifier_key():
     # '=' 포함 요약줄(공백·콜론 키)은 잡키로 저장 안 됨 — key.isidentifier 가드(round3 MED#2)
     out = wl._parse_mwlan_text("IEEE 802.11 statistics: MCS=7\ndot11RetryCount = 3\n")
     assert out == {"dot11RetryCount": 3}
+
+
+def test_eq_branch_mixed_tokens_skip_whole_line():
+    # '=' 다중값에 비숫자가 섞이면 라인 전체 skip(구 코드의 partial 드롭과 다른 의도된 동작).
+    out = wl._parse_mwlan_text("dot11QosCount = 1 2 N/A 4\ndot11Ok = 3\n")
+    assert "dot11QosCount" not in out
+    assert out["dot11Ok"] == 3
