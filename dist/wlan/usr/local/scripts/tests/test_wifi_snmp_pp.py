@@ -159,7 +159,20 @@ def test_map_has_19_instances():
     # 객체 18개 = 환경7 + 인터페이스3 + 무선8, 인스턴스로는 IfIndex/IfLinkStatus 각 2개
     # → 7 + (2+2) + 8 = 19 인스턴스.
     om = _connected_map()
-    assert len(om) == 19
+    assert len(om) == 19, (
+        "기대 19 인스턴스, 실제 %d. Phase2에서 OID 추가 시 이 기대값 갱신 필요: %s"
+        % (len(om), sorted(om, key=pp.oid_key))
+    )
+
+
+def test_collect_sources_ttl_cache():
+    # snmpwalk 연속 GETNEXT 가 일관된 스냅샷을 보도록 _SOURCE_TTL 초 캐시 — TTL 내
+    # 두 번째 호출은 동일 객체(재읽기 없이)를 반환해야 한다.
+    pp._source_cache["at"] = None
+    pp._source_cache["data"] = None
+    d1 = pp.collect_sources()
+    d2 = pp.collect_sources()
+    assert d1 is d2
 
 
 def test_do_get_hit_and_miss():
