@@ -40,6 +40,7 @@ MLAN_CONN = {
         "address": "00:00:91:08:61:4b",   # AP MAC = BSSID
         "signal_avg": "-43 dBm",
         "tx_bitrate": "143.3 MBit/s HE-MCS 11 HE-NSS 1",
+        "rx_bitrate": "120.0 MBit/s HE-MCS 9 HE-NSS 1",
     },
 }
 
@@ -155,12 +156,12 @@ def test_wireless_info_disconnected():
 
 # --- 맵 크기 / GET / GETNEXT -----------------------------------------------
 
-def test_map_has_19_instances():
-    # 객체 18개 = 환경7 + 인터페이스3 + 무선8, 인스턴스로는 IfIndex/IfLinkStatus 각 2개
-    # → 7 + (2+2) + 8 = 19 인스턴스.
+def test_map_has_27_instances():
+    # Phase1 19 + Phase2a 8(LED3 + WirelessMode + WLM + StaTxRate + StaRxRate +
+    # SupplicantState) = 27 인스턴스.
     om = _connected_map()
-    assert len(om) == 19, (
-        "기대 19 인스턴스, 실제 %d. Phase2에서 OID 추가 시 이 기대값 갱신 필요: %s"
+    assert len(om) == 27, (
+        "기대 27 인스턴스, 실제 %d. Phase2 OID 추가 시 이 기대값 갱신 필요: %s"
         % (len(om), sorted(om, key=pp.oid_key))
     )
 
@@ -206,7 +207,7 @@ def test_getnext_full_walk_covers_all_in_order():
         walked.append(res[0])
         cur = res[0]
     assert walked == sorted_oids          # 전부, 수치 오름차순으로
-    assert len(walked) == 19
+    assert len(walked) == 27
 
 
 def test_getnext_last_oid_returns_none():
@@ -230,3 +231,190 @@ def test_all_getnext_responses_within_subtree():
         res = pp.do_getnext(oid, sorted_oids, om)
         if res != ["NONE"]:
             assert res[0].startswith(BASE + ".")
+
+
+# ============================ Phase2a ============================
+# LED 유도(3) + WLM(1) + WirelessMode(1) + StaTxRate/RxRate(2) +
+# SupplicantState(1) = 8 객체. 모두 link.json/상수 재사용(신규 데이터소스는
+# SupplicantState 의 별도 supplicant.json 한 건뿐, 미존재 시 associated 근사).
+
+# --- WirelessMode 파생 (link.tx_bitrate rate_info 프리픽스) ------------------
+# 프리픽스 우선순위: EHT-/HE-/VHT- 를 plain "MCS"(HT) 보다 먼저 판정해야 한다
+# ("HE-MCS" 도 "MCS" 를 포함하므로). legacy(11a/b/g)는 bitrate 만으론 구분 불가.
+
+def test_wireless_mode_he():
+    assert pp._wireless_mode("143.3 MBit/s HE-MCS 11 HE-NSS 1") == "11ax"
+
+
+def test_wireless_mode_vht():
+    assert pp._wireless_mode("390.0 MBit/s VHT-MCS 9 80MHz VHT-NSS 2") == "11ac"
+
+
+def test_wireless_mode_ht():
+    assert pp._wireless_mode("144.4 MBit/s MCS 15 short GI") == "11n"
+
+
+def test_wireless_mode_eht():
+    assert pp._wireless_mode("1200 MBit/s EHT-MCS 13 EHT-NSS 2") == "11be"
+
+
+def test_wireless_mode_legacy_or_missing():
+    assert pp._wireless_mode("54.0 MBit/s") == ""   # legacy a/b/g 구분 불가
+    assert pp._wireless_mode("") == ""
+    assert pp._wireless_mode(None) == ""
+
+
+# --- rate 문자열 → Mbps INTEGER (A안 m_txrate 와 동일 단위, 반올림) ---------
+
+def test_rate_mbps_basic():
+    assert pp._rate_mbps("143.3 MBit/s HE-MCS 11 HE-NSS 1") == 143
+
+
+def test_rate_mbps_missing():
+    assert pp._rate_mbps("") == 0
+    assert pp._rate_mbps(None) == 0
+
+
+def test_rate_mbps_rounds():
+    # float 절삭이 아니라 반올림(143.7 → 144)
+    assert pp._rate_mbps("143.7 MBit/s HE-MCS 11") == 144
+
+
+def test_rate_mbps_high_rate_no_saturation():
+    # Mbps 는 INT32 클램프 없이 고속(Wi-Fi6E 160MHz ~2402Mbps)도 그대로
+    assert pp._rate_mbps("2402.0 MBit/s EHT-MCS 13 EHT-NSS 2") == 2402
+
+
+# --- SupplicantState 매핑 (supplicant dict → invalid1/success2/failure3/auth4) -
+
+def test_supplicant_state_success():
+    assert pp._supplicant_state({"wpa_state": "COMPLETED", "temp_disabled": False}, True) == 2
+
+
+def test_supplicant_state_failure_temp_disabled():
+    # 인증 반복 실패 → wpa_supplicant 가 네트워크 temp-disable. 미접속 + temp_disabled → failure(3)
+    assert pp._supplicant_state({"wpa_state": "SCANNING", "temp_disabled": True}, False) == 3
+
+
+def test_supplicant_state_authenticating():
+    for s in ("AUTHENTICATING", "ASSOCIATING", "ASSOCIATED", "4WAY_HANDSHAKE", "GROUP_HANDSHAKE"):
+        assert pp._supplicant_state({"wpa_state": s, "temp_disabled": False}, False) == 4
+
+
+def test_supplicant_state_invalid():
+    assert pp._supplicant_state({"wpa_state": "DISCONNECTED", "temp_disabled": False}, False) == 1
+    assert pp._supplicant_state({"wpa_state": "INACTIVE", "temp_disabled": False}, False) == 1
+
+
+def test_supplicant_state_completed_wins_over_temp_disabled():
+    # COMPLETED 면 temp_disabled 플래그와 무관하게 success(2) (현재 연결 우선)
+    assert pp._supplicant_state({"wpa_state": "COMPLETED", "temp_disabled": True}, True) == 2
+
+
+def test_supplicant_state_fallback_to_associated():
+    # supplicant.json 부재(데이터 없음) → associated 근사(2/1)
+    assert pp._supplicant_state(None, True) == 2
+    assert pp._supplicant_state({}, False) == 1
+
+
+# --- LED OID (build_oid_map) -----------------------------------------------
+
+def test_led_connected():
+    om = _connected_map()
+    assert om[BASE + ".3.1.1.0"] == ("integer", "1")   # Power 상수 on
+    assert om[BASE + ".3.1.2.0"] == ("integer", "1")   # LAN: eth up → on
+    assert om[BASE + ".3.1.3.0"] == ("integer", "1")   # WLAN: associated → on
+
+
+def test_led_disconnected():
+    om = _disconnected_map()
+    assert om[BASE + ".3.1.1.0"] == ("integer", "1")   # Power 여전히 on(응답=전원ON)
+    assert om[BASE + ".3.1.2.0"] == ("integer", "2")   # LAN down → off
+    assert om[BASE + ".3.1.3.0"] == ("integer", "2")   # WLAN not assoc → off
+
+
+# --- WLM / WirelessMode / rates / supplicant OID (build_oid_map) ------------
+
+def test_wlm_constant():
+    om = _connected_map()
+    assert om[BASE + ".3.3.1.2.0"] == ("string", "managed")   # STA 고정(사양 확정 대기)
+
+
+def test_wireless_mode_oid_connected():
+    om = _connected_map()
+    assert om[BASE + ".3.3.1.1.0"] == ("string", "11ax")   # HE bitrate → 11ax
+
+
+def test_wireless_mode_oid_disconnected():
+    om = _disconnected_map()
+    assert om[BASE + ".3.3.1.1.0"] == ("string", "")        # 미연결 → 빈값
+
+
+def test_sta_rates_connected():
+    om = _connected_map()
+    assert om[BASE + ".3.3.1.11.5.0"] == ("integer", "143")   # TxRate Mbps
+    assert om[BASE + ".3.3.1.11.6.0"] == ("integer", "120")   # RxRate Mbps
+
+
+def test_sta_rates_disconnected():
+    om = _disconnected_map()
+    assert om[BASE + ".3.3.1.11.5.0"] == ("integer", "0")
+    assert om[BASE + ".3.3.1.11.6.0"] == ("integer", "0")
+
+
+def test_supplicant_oid_from_source():
+    om = pp.build_oid_map(eth=ETH, mlan=MLAN_CONN, devinfo=DEV, fw="x",
+                          eth_link_up=True,
+                          supplicant={"wpa_state": "4WAY_HANDSHAKE", "temp_disabled": False})
+    assert om[BASE + ".3.3.1.11.8.0"] == ("integer", "4")   # 인증중
+
+
+def test_supplicant_oid_fallback():
+    # supplicant 미주입 → associated 근사
+    assert _connected_map()[BASE + ".3.3.1.11.8.0"] == ("integer", "2")
+    assert _disconnected_map()[BASE + ".3.3.1.11.8.0"] == ("integer", "1")
+
+
+# --- main() 라인 프로토콜 (Phase1 미커버 갭 보강) ---------------------------
+
+def _run_main(stdin_lines):
+    import io
+    pp._source_cache.clear()
+    pp._source_cache.update({"at": None, "data": None})
+    stdin, stdout = io.StringIO("".join(stdin_lines)), io.StringIO()
+    old_in, old_out = sys.stdin, sys.stdout
+    sys.stdin, sys.stdout = stdin, stdout
+    try:
+        pp.main()
+    finally:
+        sys.stdin, sys.stdout = old_in, old_out
+    return stdout.getvalue().splitlines()
+
+
+def test_main_ping_pong():
+    assert _run_main(["PING\n", "\n"])[0] == "PONG"
+
+
+def test_main_get_constant_oid():
+    # LedPower 는 데이터소스와 무관한 상수라 호스트(파일 부재)에서도 항상 존재
+    out = _run_main(["get\n", BASE + ".3.1.1.0\n", "\n"])
+    assert out == [BASE + ".3.1.1.0", "integer", "1"]
+
+
+def test_main_get_miss_returns_none():
+    out = _run_main(["get\n", BASE + ".99.0\n", "\n"])
+    assert out == ["NONE"]
+
+
+def test_main_getnext_returns_triple():
+    out = _run_main(["getnext\n", BASE + "\n", "\n"])
+    assert len(out) == 3 and out[0].startswith(BASE + ".")
+
+
+def test_main_set_not_writable():
+    out = _run_main(["set\n", BASE + ".3.1.1.0\n", "integer 5\n", "\n"])
+    assert out == ["not-writable"]
+
+
+def test_main_eof_exits_clean():
+    assert _run_main([]) == []
