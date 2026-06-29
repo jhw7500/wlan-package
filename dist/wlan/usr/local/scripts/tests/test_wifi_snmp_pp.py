@@ -166,13 +166,22 @@ def test_map_has_19_instances():
 
 
 def test_collect_sources_ttl_cache():
-    # snmpwalk 연속 GETNEXT 가 일관된 스냅샷을 보도록 _SOURCE_TTL 초 캐시 — TTL 내
-    # 두 번째 호출은 동일 객체(재읽기 없이)를 반환해야 한다.
-    pp._source_cache["at"] = None
-    pp._source_cache["data"] = None
-    d1 = pp.collect_sources()
-    d2 = pp.collect_sources()
-    assert d1 is d2
+    # snmpwalk 연속 GETNEXT 가 일관된 스냅샷을 보도록 _SOURCE_TTL 초 캐시.
+    # 전역 _source_cache 는 finally 로 원복한다(다른 테스트 오염 방지 — Claude 리뷰).
+    saved = dict(pp._source_cache)
+    try:
+        pp._source_cache["at"] = None
+        pp._source_cache["data"] = None
+        d1 = pp.collect_sources()
+        d2 = pp.collect_sources()
+        assert d1 is d2                      # TTL 내: 캐시 hit(동일 객체)
+        # TTL 만료(캐시 미스) → 갱신 경로: 새 객체 반환
+        pp._source_cache["at"] = pp._source_cache["at"] - pp._SOURCE_TTL - 1.0
+        d3 = pp.collect_sources()
+        assert d3 is not d1
+    finally:
+        pp._source_cache.clear()
+        pp._source_cache.update(saved)
 
 
 def test_do_get_hit_and_miss():
