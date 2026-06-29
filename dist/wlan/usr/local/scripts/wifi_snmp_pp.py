@@ -41,6 +41,8 @@ import os
 import re
 import subprocess
 import sys
+import time
+import traceback
 
 # 등록 서브트리 루트 = CONTEC(672) → fxe3000(65)
 ENTERPRISES = ".1.3.6.1.4.1"
@@ -137,15 +139,29 @@ def get_eth_carrier():
         return None
 
 
+# snmpwalk 한 번은 OID 수만큼 연속 GETNEXT 를 보낸다(Phase1=19회). 매 요청마다
+# 파일 3개 + carrier 를 다시 읽으면 부하가 누적되고, walk 도중 link.json 이 갱신되면
+# OID 간 값이 불일치한다. 짧은 TTL 캐시로 한 walk 가 일관된 스냅샷을 보게 한다.
+_SOURCE_TTL = 0.5  # 초
+_source_cache = {"at": None, "data": None}
+
+
 def collect_sources():
-    """런타임 데이터 소스를 모아 build_oid_map 인자 dict 로 반환."""
-    return dict(
+    """런타임 데이터 소스를 모아 build_oid_map 인자 dict 로 반환. _SOURCE_TTL 초 캐시."""
+    now = time.monotonic()
+    at = _source_cache["at"]
+    if at is not None and _source_cache["data"] is not None and (now - at) < _SOURCE_TTL:
+        return _source_cache["data"]
+    data = dict(
         eth=load_json(os.environ.get("WIFI_SNMP_ETH_JSON", DEFAULT_ETH_JSON)),
         mlan=load_json(os.environ.get("WIFI_SNMP_MLAN_JSON", DEFAULT_MLAN_JSON)),
         devinfo=load_json(os.environ.get("WIFI_SNMP_DEVINFO", DEFAULT_DEVINFO)),
         fw=get_fw_version(),
         eth_link_up=get_eth_carrier(),
     )
+    _source_cache["at"] = now
+    _source_cache["data"] = data
+    return data
 
 
 # ---- OID 맵 구축 (순수 함수 — 테스트 주입 용이) ------------------------------
@@ -272,7 +288,9 @@ def main():
                 _out("not-writable")           # 읽기 전용
             # 그 외(DUMP 등) 알 수 없는 명령은 무시
         except Exception:
-            # 어떤 예외도 프로세스를 죽이지 않게 — snmpd 가 재시작/타임아웃 하지 않도록
+            # 어떤 예외도 프로세스를 죽이지 않게 — snmpd 가 재시작/타임아웃 하지 않도록.
+            # 단 진단을 위해 stderr 로 traceback 출력(snmpd 가 child stderr 를 syslog 로 보냄).
+            traceback.print_exc(file=sys.stderr)
             _out("NONE")
     return 0
 
