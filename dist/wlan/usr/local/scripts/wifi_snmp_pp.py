@@ -115,6 +115,9 @@ def _eth_field(eth, key):
 # ---- Phase2a 파생 헬퍼 (순수 함수) ------------------------------------------
 
 _RATE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*MBit/s")
+# authenticating(4) = 실제 인증/연결 핸드셰이크 단계만. SCANNING/DISCONNECTED/INACTIVE 는
+# 인증 이전(AP 탐색·유휴)이라 의도적으로 제외 → invalid(1)(미접속). SCANNING 을 4 로 올리면
+# 백그라운드 스캔마다 authenticating 으로 보여 NMS 노이즈가 된다.
 _SUPP_IN_PROGRESS = ("AUTHENTICATING", "ASSOCIATING", "ASSOCIATED",
                      "4WAY_HANDSHAKE", "GROUP_HANDSHAKE")
 

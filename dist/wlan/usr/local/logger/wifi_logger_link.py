@@ -314,14 +314,12 @@ def is_wifi_connected_wpa(interface="mlan0") -> bool:
     except subprocess.CalledProcessError:
         return False
 
-
 # --- supplicant 상태(Phase2a) — SNMP WIFInfoStaSupplicantState 원천 -----------
 # 매 주기 wpa_cli status(+필요시 list_networks)를 폴링해 supplicant.json 에
 # {wpa_state, temp_disabled} 를 기록한다. wpa_state→MIB enum(invalid/success/
 # failure/authenticating) 매핑은 SNMP 소비자(wifi_snmp_pp.py)가 한다. link.json 의
 # 미연결 '{}' 계약(opcd/passive_roam 의존)을 깨지 않으려 별도 파일로 분리.
 SUPP_FILE = "supplicant.json"
-
 
 def extract_supplicant(status_text, networks_text=""):
     """wpa_cli status(+list_networks) 출력에서 supplicant '사실'만 추출.
@@ -339,25 +337,28 @@ def extract_supplicant(status_text, networks_text=""):
     temp_disabled = "[TEMP-DISABLED]" in (networks_text or "")
     return {"wpa_state": wpa_state, "temp_disabled": temp_disabled}
 
-
 def write_supplicant_json(log_dir, supp):
     """supplicant.json 을 atomic(tmp+fsync+rename)으로 기록 — SNMP pass_persist 가
-    동시 read 하므로 torn read 방지(save_db 와 동일 패턴)."""
-    tmp_path = os.path.join(log_dir, SUPP_FILE + ".tmp")
-    final_path = os.path.join(log_dir, SUPP_FILE)
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(supp, f)
-        f.flush()
-        os.fsync(f.fileno())
-    os.rename(tmp_path, final_path)
-
+    동시 read 하므로 torn read 방지(save_db 와 동일 패턴). 보조 파일이므로 기록 실패가
+    주 link 로깅 루프를 죽이지 않도록 OSError 를 삼키고 로그만 남긴다."""
+    try:
+        tmp_path = os.path.join(log_dir, SUPP_FILE + ".tmp")
+        final_path = os.path.join(log_dir, SUPP_FILE)
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(supp, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.rename(tmp_path, final_path)
+    except OSError as e:
+        logger.message("err", f"[{IFACE}] supplicant.json write failed: {e}", _EXTRA_())
 
 def poll_supplicant(interface):
     """wpa_cli 로 현재 supplicant 상태를 읽어 extract_supplicant dict 반환.
-    list_networks(temp-disable 판정용)는 COMPLETED 가 아닐 때만 호출해 오버헤드 절감."""
+    list_networks(temp-disable 판정용)는 status 가 유효하고 COMPLETED 가 아닐 때만 호출
+    (wpa 무응답=빈 status 면 list_networks 도 무의미 → 생략, 불필요 subprocess 절감)."""
     status = run_command(["wpa_cli", "-i", interface, "status"]) or ""
     networks = ""
-    if "wpa_state=COMPLETED" not in status:
+    if status and "wpa_state=COMPLETED" not in status:
         networks = run_command(["wpa_cli", "-i", interface, "list_networks"]) or ""
     return extract_supplicant(status, networks)
 

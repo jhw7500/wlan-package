@@ -70,3 +70,12 @@ def test_write_supplicant_json_no_temp_file_left(tmp_path):
     wl.write_supplicant_json(str(tmp_path), {"wpa_state": "", "temp_disabled": False})
     # atomic(tmp+rename) → .tmp 잔재 없어야 함
     assert os.listdir(str(tmp_path)) == ["supplicant.json"]
+
+
+def test_write_supplicant_json_swallows_io_error(monkeypatch, tmp_path):
+    # 보조 파일 기록 실패(부모 디렉터리 없음 등)가 주 link 로깅 루프를 죽이면 안 된다 —
+    # 예외를 삼키고 로그만 남긴다(Gemini 리뷰 반영).
+    monkeypatch.setattr(wl, "logger", MagicMock(), raising=False)
+    bad_dir = os.path.join(str(tmp_path), "no", "such", "dir")  # 부모 부재 → open 실패
+    wl.write_supplicant_json(bad_dir, {"wpa_state": "", "temp_disabled": False})  # raise 금지
+    assert wl.logger.message.called
