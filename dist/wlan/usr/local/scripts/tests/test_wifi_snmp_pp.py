@@ -418,3 +418,148 @@ def test_main_set_not_writable():
 
 def test_main_eof_exits_clean():
     assert _run_main([]) == []
+
+
+# ============================ Phase2b ============================
+# mlan0 무선통계 9개(.3.3.2.x, Counter32). 데이터소스 = link.json 의 mwlan_log
+# (로거 parse_mwlan_log 가 /proc getlog 파싱). 측정 불가 시 noSuchInstance(omap 누락).
+# 0고정 4개(.4/.7/.11/.12)는 소스 영구 부재 → 미노출.
+
+# mwlan_log 채워진 mlan 픽스처(연결+통계). getlog dot11* 카운터 + link bytes.
+MLAN_STATS = {
+    "info": dict(MLAN_CONN["info"]),
+    "link": dict(MLAN_CONN["link"], tx_bytes="5000000", rx_bytes="9000000"),
+    "mwlan_log": {
+        "dot11TransmittedFrameCount": 1000,
+        "dot11MulticastTransmittedFrameCount": 40,  # 실제 getlog 키(README_MLAN). TxUni=960, TxMcast=40
+        "dot11RetryCount": 50,                      # TxShortRetries
+        "dot11MultipleRetryCount": 12,             # TxLongRetries
+        "dot11ReceivedFragmentCount": 800,
+        "dot11MulticastReceivedFrameCount": 30,    # RxUnicast=770, RxMulticast=30
+        "dot11FCSErrorCount": 2621,                # RxHwFCSErrors
+    },
+}
+
+
+def _stats_map():
+    return pp.build_oid_map(eth=ETH, mlan=MLAN_STATS, devinfo=DEV, fw="x", eth_link_up=True)
+
+
+# --- _mwlan_counter (A안에서 이식한 dot11 카운터 추출) -----------------------
+
+def test_mwlan_counter_int_list_missing():
+    mw = {"a": 7, "b": [1, 2, 3], "c": True}
+    assert pp._mwlan_counter(mw, "a") == 7
+    assert pp._mwlan_counter(mw, "b") == 6        # 리스트(QoS AC)는 합산
+    assert pp._mwlan_counter(mw, "c") is None     # bool 배제
+    assert pp._mwlan_counter(mw, "z") is None     # 부재
+    assert pp._mwlan_counter({}, "a") is None
+
+
+# --- _counter_out (32bit wrap + 음수 클램프) --------------------------------
+
+def test_counter_out_normal_negative_wrap():
+    assert pp._counter_out(960) == "960"
+    assert pp._counter_out(-3) == "0"                       # 음수 → 0
+    assert pp._counter_out(4294967296 + 5) == "5"          # 2^32 wrap → 하위32bit
+
+
+# --- 통계 OID (mwlan_log 있을 때) -------------------------------------------
+
+def test_stats_present_with_mwlan_log():
+    om = _stats_map()
+    assert om[BASE + ".3.3.2.1.0"] == ("counter", "960")    # TxUnicast = Trans-Group
+    assert om[BASE + ".3.3.2.2.0"] == ("counter", "40")     # TxMulticast = GroupTrans
+    assert om[BASE + ".3.3.2.3.0"] == ("counter", "5000000")  # TxUniOctets ~ tx_bytes
+    assert om[BASE + ".3.3.2.5.0"] == ("counter", "50")     # TxShortRetries = RetryCount
+    assert om[BASE + ".3.3.2.6.0"] == ("counter", "12")     # TxLongRetries = MultipleRetry
+    assert om[BASE + ".3.3.2.8.0"] == ("counter", "770")    # RxUnicast = RecvFrag-GroupRecv
+    assert om[BASE + ".3.3.2.9.0"] == ("counter", "30")     # RxMulticast = GroupRecv
+    assert om[BASE + ".3.3.2.10.0"] == ("counter", "9000000")  # RxUniOctets ~ rx_bytes
+    assert om[BASE + ".3.3.2.13.0"] == ("counter", "2621")  # RxHwFCSErrors = FCSError
+
+
+def test_stats_multicast_group_key_fallback():
+    # 일부 펌웨어는 dot11Group* 명칭을 쓸 수 있어 fallback 지원(README 는 dot11Multicast*).
+    mlan = {"link": {"address": "aa:bb:cc:dd:ee:01"},
+            "mwlan_log": {
+                "dot11TransmittedFrameCount": 500,
+                "dot11GroupTransmittedFrameCount": 20,     # Group 명칭(fallback)
+                "dot11ReceivedFragmentCount": 400,
+                "dot11GroupReceivedFrameCount": 10,
+            }}
+    om = pp.build_oid_map(mlan=mlan)
+    assert om[BASE + ".3.3.2.1.0"] == ("counter", "480")   # 500-20
+    assert om[BASE + ".3.3.2.2.0"] == ("counter", "20")
+    assert om[BASE + ".3.3.2.8.0"] == ("counter", "390")   # 400-10
+    assert om[BASE + ".3.3.2.9.0"] == ("counter", "10")
+
+
+def test_stats_bytes_present_when_mwlan_log_absent():
+    # 가용성 비대칭: octet(.3/.10)은 link.bytes 소스라 mwlan_log 없어도 노출,
+    # dot11 통계 7개는 noSuchInstance. 실운영 경계(/proc 접근 실패) 케이스.
+    mlan = {"link": {"address": "aa:bb:cc:dd:ee:01", "tx_bytes": "1000", "rx_bytes": "2000"}}
+    om = pp.build_oid_map(mlan=mlan)
+    assert om[BASE + ".3.3.2.3.0"] == ("counter", "1000")
+    assert om[BASE + ".3.3.2.10.0"] == ("counter", "2000")
+    assert BASE + ".3.3.2.1.0" not in om
+    assert BASE + ".3.3.2.13.0" not in om
+
+
+def test_stats_zero_fixed_omitted():
+    # 소스 영구 부재(.4 TxMultiOctets/.7 TxFifo/.11 RxMultiOctets/.12 RxFifo) → 미노출
+    om = _stats_map()
+    for sub in (".3.3.2.4.0", ".3.3.2.7.0", ".3.3.2.11.0", ".3.3.2.12.0"):
+        assert BASE + sub not in om
+
+
+def test_stats_absent_without_mwlan_log():
+    # mwlan_log 없으면 9 통계 전부 noSuchInstance(omap 누락) — Counter 0-오염 방지.
+    # mwlan_log 게이트 7개(dot11 기반)만 단언. octet(.3/.10)은 link.bytes 소스라 별개
+    # (test_stats_bytes_present_when_mwlan_log_absent 가 비대칭을 따로 검증).
+    om = _connected_map()
+    for sub in (".1", ".2", ".5", ".6", ".8", ".9", ".13"):
+        assert BASE + ".3.3.2" + sub + ".0" not in om
+
+
+def test_stats_negative_derivation_clamped():
+    mlan = dict(MLAN_STATS, mwlan_log={
+        "dot11TransmittedFrameCount": 10,
+        "dot11GroupTransmittedFrameCount": 40,    # 10-40 < 0 → clamp 0
+    })
+    om = pp.build_oid_map(mlan=mlan)
+    assert om[BASE + ".3.3.2.1.0"] == ("counter", "0")
+
+
+def test_stats_partial_keys_only_present():
+    # FCS 만 있는 mwlan_log → .13 만 노출, 나머지 통계 omit
+    mlan = {"link": {"address": "aa:bb:cc:dd:ee:01"},
+            "mwlan_log": {"dot11FCSErrorCount": 7}}
+    om = pp.build_oid_map(mlan=mlan)
+    assert om[BASE + ".3.3.2.13.0"] == ("counter", "7")
+    assert BASE + ".3.3.2.1.0" not in om
+    assert BASE + ".3.3.2.2.0" not in om
+
+
+def test_stats_counter_byte_wrap():
+    # 64bit byte 카운터는 하위 32bit 만 노출
+    mlan = {"link": {"address": "aa:bb:cc:dd:ee:01", "tx_bytes": str(4294967296 + 123)},
+            "mwlan_log": {}}
+    om = pp.build_oid_map(mlan=mlan)
+    assert om[BASE + ".3.3.2.3.0"] == ("counter", "123")
+
+
+def test_stats_getnext_walk_includes_stats():
+    om = _stats_map()
+    sorted_oids = sorted(om, key=pp.oid_key)
+    # 통계가 walk 에 정상 포함되고 수치정렬 유지(.3.3.2.13 > .3.3.2.2)
+    assert pp.oid_key(BASE + ".3.3.2.2.0") < pp.oid_key(BASE + ".3.3.2.13.0")
+    assert (BASE + ".3.3.2.13.0") in sorted_oids
+    # 전체 walk 무결성
+    cur, walked = BASE, []
+    for _ in range(len(om) + 5):
+        res = pp.do_getnext(cur, sorted_oids, om)
+        if res == ["NONE"]:
+            break
+        walked.append(res[0]); cur = res[0]
+    assert walked == sorted_oids
