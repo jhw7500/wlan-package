@@ -28,6 +28,21 @@ Phase2a 객체 (mapping.md §9.3 🟡 일부, 파싱/유도 — link.json 재사
   별도 파일 supplicant.json({wpa_state, temp_disabled})에서 invalid(1)/success(2)/
   failure(3)/authenticating(4) 로 매핑. 부재 시 associated 근사(2/1).
 
+Phase2b 객체 (mapping.md §6, mlan0 무선통계 — Counter32):
+  통계(9)     : TxUnicast .3.3.2.1(=dot11Transmitted-Group) / TxMulticast .2(=GroupTrans) /
+                TxUniOctets .3(~tx_bytes 근사) / TxShortRetries .5(=dot11RetryCount) /
+                TxLongRetries .6(=dot11MultipleRetryCount) / RxUnicast .8(=RecvFrag-GroupRecv) /
+                RxMulticast .9(=GroupRecv) / RxUniOctets .10(~rx_bytes 근사) /
+                RxHwFCSErrors .13(=dot11FCSErrorCount)
+  소스 = mlan link.json 의 mwlan_log(로거 parse_mwlan_log 가 /proc getlog 를 양포맷 파싱).
+  측정 불가 시 noSuchInstance(omap 누락) — Counter 0 은 '리셋' 오인이라 미노출(Phase2a
+  always-present 의 의도적 예외). 0고정 4개(.4/.7/.11/.12)는 소스 영구 부재라 미노출.
+  multicast 카운터 키는 dot11Multicast*(README_MLAN) 우선, dot11Group* fallback(펌웨어차).
+  octet(.3/.10)은 mwlan_log 가 아니라 link.tx/rx_bytes 라 /proc 실패 시에도 노출(비대칭).
+  caveat: short/long retry 는 802.11 정의와 1:1 불일치 / octet 은 mcast 포함 근사 +
+  재연결 시 0 리셋되어 Counter32 가짜 wrap 가능(NMS 델타 필터 필요) / TxUnicast(.1)·
+  RxUnicast(.8)은 frame·fragment 기반(관리프레임·단편 포함)이라 순수 유니캐스트 대비 과대계상.
+
 구현 규약 / 한계 (MIB 미정의 → 본 구현에서 확정, 사양 확정 시 정정 필요):
   * IfTable(.3.2.1)은 INDEX 절 없는 degenerate pseudo-table → 유선=인스턴스 .1,
     무선=.2 로 노출. 그 외 그룹은 모두 스칼라 → GET 시 ``.0`` 인스턴스 접미사.
@@ -179,6 +194,34 @@ def _supplicant_state(supplicant, associated):
     return 1
 
 
+def _mwlan_counter(mwlan_log, key):
+    """mlan link.json 의 mwlan_log dict 에서 dot11 카운터를 정수로 반환. 공백구분 다중값
+    (QoS AC별 리스트)은 합산, 스칼라는 _first_int, 부재/비숫자는 None.
+    (A안 wifi_snmp.py _mwlan_counter 이식 — mwlan_log 만 의존하는 순수 함수.)"""
+    if not isinstance(mwlan_log, dict):
+        return None
+    v = mwlan_log.get(key)
+    if isinstance(v, list):
+        nums = [x for x in v if type(x) is int]   # bool 배제(type is int)
+        return sum(nums) if nums else None
+    return _first_int(v)
+
+
+def _mwlan_counter_any(mwlan_log, *keys):
+    """여러 후보 키를 순서대로 시도해 첫 non-None 카운터 반환. multicast frame count 의
+    getlog 명칭이 펌웨어별로 dot11Multicast*(README_MLAN) / dot11Group* 로 갈려 흡수."""
+    for k in keys:
+        v = _mwlan_counter(mwlan_log, k)
+        if v is not None:
+            return v
+    return None
+
+
+def _counter_out(value):
+    """SNMP Counter32 출력 문자열: 음수 유도값은 0 클램프, 64bit(byte 카운터)는 하위 32bit."""
+    return str(max(0, int(value)) & 0xFFFFFFFF)
+
+
 # ---- I/O (데이터 소스 로드) -------------------------------------------------
 
 def load_json(path):
@@ -323,6 +366,43 @@ def build_oid_map(eth=None, mlan=None, devinfo=None, fw=None, eth_link_up=None,
     put(".3.3.1.11.6.0", "integer", _rate_mbps(rx_bitrate))   # StaRxRate (Mbps)
     put(".3.3.1.11.7.0", "integer", rssi)
     put(".3.3.1.11.8.0", "integer", _supplicant_state(supplicant, associated))  # SupplicantState
+
+    # 무선통계 (.3.3.2.x Counter32 스칼라 → .0). 소스 = mlan link.json 의 mwlan_log
+    # (로거 parse_mwlan_log 가 /proc getlog 파싱). 측정 가능할 때만 put → 결측은
+    # noSuchInstance(omap 누락): Counter 의미상 0 반환은 매니저에 '리셋'으로 오인되므로.
+    # 0고정 4개(.4 TxMultiOctets/.7 TxFifo/.11 RxMultiOctets/.12 RxFifo)는 소스 영구
+    # 부재(§6 ❌불가)라 노출 안 함. 유도식 음수는 max(0,·), 출력은 32bit wrap(_counter_out).
+    # caveat: .5/.6 retry 는 dot11Retry/MultipleRetryCount 로 802.11 short/long 정의와
+    # 1:1 불일치, .3/.10 octet 은 tx/rx_bytes(멀티캐스트 포함) 근사, .1/.8 unicast 는
+    # frame/fragment 차감(관리프레임·단편 포함)이라 순수 유니캐스트 패킷수 대비 과대계상 가능.
+    mw = mlan.get("mwlan_log") or {}
+
+    def put_counter(suboid, val):
+        # None=소스 부재 → noSuchInstance(omit). _counter_out 가 음수 클램프+32bit wrap 단일 담당.
+        if val is not None:
+            put(suboid, "counter", _counter_out(val))
+
+    # multicast frame count 는 getlog 명칭이 dot11Multicast*(README_MLAN) 또는 dot11Group* 라
+    # 둘 다 시도. unicast(.1/.8)는 전체-멀티캐스트 차감, 음수는 _counter_out 가 0 클램프.
+    mc_tx = _mwlan_counter_any(mw, "dot11MulticastTransmittedFrameCount", "dot11GroupTransmittedFrameCount")
+    mc_rx = _mwlan_counter_any(mw, "dot11MulticastReceivedFrameCount", "dot11GroupReceivedFrameCount")
+    tx_all = _mwlan_counter(mw, "dot11TransmittedFrameCount")
+    rx_frag = _mwlan_counter(mw, "dot11ReceivedFragmentCount")
+
+    def _diff(total, group):
+        return None if (total is None or group is None) else total - group
+
+    put_counter(".3.3.2.1.0", _diff(tx_all, mc_tx))                            # TxUnicast
+    put_counter(".3.3.2.2.0", mc_tx)                                           # TxMulticast
+    # .3/.10 octet 근사: iw station dump tx/rx_bytes 는 재연결 시 0 리셋 → Counter32 감소를
+    # 매니저가 가짜 wrap 으로 오인할 수 있음(NMS last-seen/델타 이상값 필터 필요).
+    put_counter(".3.3.2.3.0", _first_int(link.get("tx_bytes")))               # TxUniOctets(근사)
+    put_counter(".3.3.2.5.0", _mwlan_counter(mw, "dot11RetryCount"))          # TxShortRetries(≈)
+    put_counter(".3.3.2.6.0", _mwlan_counter(mw, "dot11MultipleRetryCount"))  # TxLongRetries(≈)
+    put_counter(".3.3.2.8.0", _diff(rx_frag, mc_rx))                          # RxUnicast
+    put_counter(".3.3.2.9.0", mc_rx)                                          # RxMulticast
+    put_counter(".3.3.2.10.0", _first_int(link.get("rx_bytes")))             # RxUniOctets(근사)
+    put_counter(".3.3.2.13.0", _mwlan_counter(mw, "dot11FCSErrorCount"))      # RxHwFCSErrors
 
     return om
 
