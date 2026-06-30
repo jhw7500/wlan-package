@@ -587,5 +587,13 @@
             "sweep_parallel_limit": 50,
             "enabled": false
         }
+    },
+    "snmp": {
+        "trap": {
+            "enabled": false,
+            "dest": "",
+            "community": "public",
+            "version": "2c"
+        }
     }
 }
