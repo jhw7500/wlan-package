@@ -44,3 +44,13 @@ def test_link_down_status_2(tmp_path):
 def test_link_bad_arg_noop(tmp_path):
     r = _run(["link", "bogus"], '{"snmp":{"trap":{"enabled":true,"dest":"10.0.0.9"}}}', tmp_path)
     assert "snmptrap" not in r.stdout
+
+def test_channel_varbind(tmp_path):
+    r = _run(["channel", "40"], '{"snmp":{"trap":{"enabled":true,"dest":"10.0.0.9"}}}', tmp_path)
+    out = r.stdout.strip()
+    assert ".1.3.6.1.4.1.672.65.1.1.2" in out               # trap-OID
+    assert ".1.3.6.1.4.1.672.65.3.3.1.10.2.0 i 40" in out    # ApChannel(스칼라 .0)
+
+def test_channel_empty_noop(tmp_path):
+    r = _run(["channel", ""], '{"snmp":{"trap":{"enabled":true,"dest":"10.0.0.9"}}}', tmp_path)
+    assert "snmptrap" not in r.stdout

@@ -43,5 +43,11 @@ case "$1" in
             "$FXE.3.2.1.1.2" i 2 \
             "$FXE.3.2.1.7.2" i "$st"
         ;;
+    channel)
+        ch="$2"
+        [ -n "$ch" ] || exit 0
+        send '' "$FXE.1.1.2" \
+            "$FXE.3.3.1.10.2.0" i "$ch"
+        ;;
     *) exit 0 ;;
 esac
