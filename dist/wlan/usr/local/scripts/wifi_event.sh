@@ -105,6 +105,7 @@ iw event -t 2>&1 | while IFS= read -r line; do
             logger -p local0.info "[$tag:$LINENO] [$IFACE] CONNECTED bssid=$bssid"
             apply_mcs_tier
             run_on_connect "$bssid"
+            /usr/local/scripts/wifi_snmp_trap.sh link up
             ;;
         *"$IFACE"*"roamed to"*)
             # FW 주도 로밍 전용 케이스 — cfg80211_roamed 경로는 "roamed to"로
@@ -117,13 +118,20 @@ iw event -t 2>&1 | while IFS= read -r line; do
             logger -p local0.info "[$tag:$LINENO] [$IFACE] ROAMED bssid=$bssid"
             apply_mcs_tier
             ;;
+        *"$IFACE"*"channel switch"*)
+            ch=$(iw dev "$IFACE" info 2>/dev/null | sed -n 's/.*channel \([0-9]*\).*/\1/p' | head -1)
+            logger -p local0.info "[$tag:$LINENO] [$IFACE] CH_SWITCH channel=$ch"
+            [ -n "$ch" ] && /usr/local/scripts/wifi_snmp_trap.sh channel "$ch"
+            ;;
         *"$IFACE"*"disconnected"*)
             reason=$(echo "$line" | sed -n 's/.*reason: \([0-9]*\).*/\1/p')
             logger -p local0.info "[$tag:$LINENO] [$IFACE] DISCONNECTED reason=$reason"
+            /usr/local/scripts/wifi_snmp_trap.sh link down
             ;;
         *"$IFACE"*"deauth"*)
             bssid=$(echo "$line" | grep -oE '([0-9a-f]{2}:){5}[0-9a-f]{2}' | head -1)
             logger -p local0.info "[$tag:$LINENO] [$IFACE] DEAUTH bssid=$bssid"
+            /usr/local/scripts/wifi_snmp_trap.sh link down
             ;;
     esac
 done
