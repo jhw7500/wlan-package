@@ -118,6 +118,10 @@ iw event -t 2>&1 | while IFS= read -r line; do
             logger -p local0.info "[$tag:$LINENO] [$IFACE] ROAMED bssid=$bssid"
             apply_mcs_tier
             ;;
+        *"$IFACE"*"channel switch started"*)
+            # STARTED 는 전환 개시 알림 — iw dev info 가 아직 구채널을 반환하므로 트랩 생략.
+            # NOTIFY("channel switch", started 없음)에서만 신채널 트랩(stale·이중 방지, 리뷰 합의).
+            ;;
         *"$IFACE"*"channel switch"*)
             ch=$(iw dev "$IFACE" info 2>/dev/null | sed -n 's/.*channel \([0-9]*\).*/\1/p' | head -1)
             logger -p local0.info "[$tag:$LINENO] [$IFACE] CH_SWITCH channel=$ch"
@@ -129,9 +133,10 @@ iw event -t 2>&1 | while IFS= read -r line; do
             /usr/local/scripts/wifi_snmp_trap.sh link down
             ;;
         *"$IFACE"*"deauth"*)
+            # deauth 는 직후 disconnected 이벤트를 동반하므로 LinkDown 트랩은 disconnected
+            # case 에서만 송신(이중 트랩 방지 — Gemini/Claude 리뷰 합의).
             bssid=$(echo "$line" | grep -oE '([0-9a-f]{2}:){5}[0-9a-f]{2}' | head -1)
             logger -p local0.info "[$tag:$LINENO] [$IFACE] DEAUTH bssid=$bssid"
-            /usr/local/scripts/wifi_snmp_trap.sh link down
             ;;
     esac
 done

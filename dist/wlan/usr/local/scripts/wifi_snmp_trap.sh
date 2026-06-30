@@ -31,7 +31,6 @@ send() {
         || logger -p local0.err "[$tag] snmptrap 송신 실패 (dest=$dest)"
 }
 
-# (Task 3 에서 channel case 추가)
 case "$1" in
     link)
         case "$2" in
