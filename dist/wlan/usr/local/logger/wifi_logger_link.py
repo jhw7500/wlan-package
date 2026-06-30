@@ -12,7 +12,7 @@ from datetime import datetime
 import logging
 from sUTILS import Logger, _EXTRA_
 
-VERSION = "0.3"
+VERSION = "0.4"
 IFACE = ""
 LOG_DIR = "/var/log/cantops/json"
 LINK_PATH = "/var/log/cantops/json"
