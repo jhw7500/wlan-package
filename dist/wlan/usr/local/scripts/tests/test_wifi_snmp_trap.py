@@ -6,6 +6,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "wifi_snmp_trap.sh"
 def _run(args, conf_text, tmp_path, dryrun=True):
     conf = tmp_path / "wifi_init_conf.json"
     conf.write_text(conf_text)
+    conf.chmod(0o644)  # 정상 권한 — group/world-writable 퍼미션 가드에 안 걸리도록
     env = {**os.environ, "WIFI_INIT_CONF": str(conf),
            "WIFI_SNMP_TRAP_DRYRUN": "1" if dryrun else "0"}
     return subprocess.run(["sh", str(SCRIPT), *args],
@@ -53,4 +54,15 @@ def test_channel_varbind(tmp_path):
 
 def test_channel_empty_noop(tmp_path):
     r = _run(["channel", ""], '{"snmp":{"trap":{"enabled":true,"dest":"10.0.0.9"}}}', tmp_path)
+    assert "snmptrap" not in r.stdout
+
+def test_world_writable_conf_is_noop(tmp_path):
+    # CONF 가 group/world-writable 이면 dest 변조 위험으로 트랩 비활성(보안 퍼미션 가드).
+    conf = tmp_path / "wifi_init_conf.json"
+    conf.write_text('{"snmp":{"trap":{"enabled":true,"dest":"10.0.0.9"}}}')
+    conf.chmod(0o666)
+    env = {**os.environ, "WIFI_INIT_CONF": str(conf), "WIFI_SNMP_TRAP_DRYRUN": "1"}
+    r = subprocess.run(["sh", str(SCRIPT), "link", "up"], env=env,
+                       capture_output=True, text=True)
+    assert r.returncode == 0
     assert "snmptrap" not in r.stdout

@@ -12,6 +12,11 @@ tag=$(basename "$0")
 # 설정·jq 부재 → no-op
 [ -f "$CONF" ] && command -v jq >/dev/null 2>&1 || exit 0
 
+# CONF 가 group/world-writable 이면 dest/community 변조로 트랩이 임의 호스트로 송신될 수
+# 있어 차단(wifi_event.sh 의 on_connect 퍼미션 가드와 동일 방어 — Claude 리뷰 [MEDIUM]).
+_perm=$(stat -c '%a' "$CONF" 2>/dev/null || echo "000")
+[ $(( 0${_perm} & 022 )) -eq 0 ] || { logger -p local0.crit "[$tag] $CONF group/world-writable — 트랩 비활성(대상 변조 방지)"; exit 0; }
+
 enabled=$(jq -r '.snmp.trap.enabled // false' "$CONF" 2>/dev/null)
 [ "$enabled" = "true" ] || exit 0
 
