@@ -31,7 +31,17 @@ send() {
         || logger -p local0.err "[$tag] snmptrap 송신 실패 (dest=$dest)"
 }
 
-# (Task 2/3 에서 case 추가)
+# (Task 3 에서 channel case 추가)
 case "$1" in
+    link)
+        case "$2" in
+            up)   st=1 ;;
+            down) st=2 ;;
+            *)    exit 0 ;;
+        esac
+        send '' "$FXE.1.1.1" \
+            "$FXE.3.2.1.1.2" i 2 \
+            "$FXE.3.2.1.7.2" i "$st"
+        ;;
     *) exit 0 ;;
 esac
