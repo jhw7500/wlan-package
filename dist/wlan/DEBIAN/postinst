@@ -87,16 +87,25 @@ EOF
   cp /opt/wlan/config/systemd/journald.conf /etc/systemd/
   mkdir -p /etc/snmp
   cp /opt/wlan/config/snmp/snmpd.conf /etc/snmp/snmpd.conf
-  # opt-in: 배포판 snmpd 기본 enable 중화 — 라이프사이클은 wifi_init_conf.json .snmp.enabled
-  # 게이트가 소유(wifi_apply_enabled.sh enable/disable + wifi_services.sh start).
-  disable_services_if_enabled snmpd
-  # 업그레이드 시: 백엔드가 /usr/local/scripts → /usr/local/logger 로 이동하고 snmpd.conf 도
-  # 갱신되지만, 실행 중이던 snmpd 는 구 경로를 메모리에 유지한다. 구 경로가 삭제됐으므로
-  # 정지하지 않으면 (a) 모든 SNMP 쿼리가 No such file 로 실패하거나 (b) stale 설정으로
-  # UDP 161 이 노출된 채 남는다. opt-in(default off) 정책상 정지가 정합 — 다음 부팅에
-  # .snmp.enabled 게이트가 상태를 재적용한다(enabled=true 면 재기동).
+  # snmpd 라이프사이클은 wifi_init_conf.json .snmp.enabled 게이트가 소유
+  # (wifi_apply_enabled.sh enable/disable + wifi_services.sh start).
+  # 업그레이드 시 백엔드가 /usr/local/scripts → /usr/local/logger 로 이동하고 snmpd.conf 도
+  # 갱신되므로, 실행 중이던 snmpd(구 경로를 메모리에 유지)를 .snmp.enabled 에 맞춰 정리한다.
   if command -v systemctl >/dev/null 2>&1; then
-    systemctl stop snmpd 2>/dev/null || true
+    _snmp_on=false
+    if command -v jq >/dev/null 2>&1 && [ -f /usr/local/etc/wifi_init_conf.json ]; then
+      _snmp_on=$(jq -r 'if .snmp.enabled == true then "true" else "false" end' \
+                 /usr/local/etc/wifi_init_conf.json 2>/dev/null || echo false)
+    fi
+    if [ "$_snmp_on" = "true" ]; then
+      # opt-in 유지: 실행 중이면 새 설정(logger 경로)으로 재시작해 모니터링 다운 방지
+      # (enable 복원은 부팅 시 wifi_apply_enabled.sh 가 담당, 정지 상태면 no-op).
+      systemctl try-restart snmpd 2>/dev/null || true
+    else
+      # opt-out(기본): 배포판 기본 enable 중화 + 구 경로 참조/161 노출 제거 위해 정지.
+      disable_services_if_enabled snmpd
+      systemctl stop snmpd 2>/dev/null || true
+    fi
   fi
 
   # 부팅 중 oneshot(wifi_install.service) 안에서 journald를 restart하면 이 스크립트의
