@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """wifi_snmp.py — net-snmp ``extend`` 백엔드.
 
-snmpd.conf 의 ``extend <name> /usr/bin/python3 /usr/local/scripts/wifi_snmp.py <metric>``
+snmpd.conf 의 ``extend <name> /usr/bin/python3 /usr/local/logger/wifi_snmp.py <metric>``
 디렉티브가 호출한다. WiFi 링크 지표 1개를 인자로 받아 그 값을 stdout 한 줄로 출력한다
 (net-snmp 는 첫 줄을 NET-SNMP-EXTEND-MIB 의 nsExtendOutput1Line OID 로 노출한다).
 

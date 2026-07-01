@@ -13,6 +13,7 @@
 wifi_services_list() {
     local svcs=()
     svcs+=(wifi_ping_monitor.service)
+    svcs+=(snmpd.service)   # 글로벌 SNMP 데몬 — .snmp.enabled 토글(wifi_apply_enabled.sh)로 조건부 기동
     svcs+=(wifi_mgmt_log.timer wifi_thermal_state.timer)
     local iface
     for iface in mlan0 mlan1; do

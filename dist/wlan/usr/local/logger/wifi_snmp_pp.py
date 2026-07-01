@@ -2,7 +2,7 @@
 """wifi_snmp_pp.py — net-snmp ``pass_persist`` 백엔드 (CONTEC FXE3000 Private MIB).
 
 B안 Phase1 구현. snmpd.conf 의
-``pass_persist .1.3.6.1.4.1.672.65 /usr/bin/python3 -u /usr/local/scripts/wifi_snmp_pp.py``
+``pass_persist .1.3.6.1.4.1.672.65 /usr/bin/python3 -u /usr/local/logger/wifi_snmp_pp.py``
 디렉티브가 이 스크립트를 상주 프로세스로 띄우고 stdin/stdout 라인 프로토콜로
 ``.1.3.6.1.4.1.672.65``(CONTEC FXE3000) 서브트리 전체를 위임한다.
 
