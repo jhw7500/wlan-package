@@ -59,6 +59,7 @@ remove|deconfigure)
     stop_service_if_active wifi_thermal_state
     stop_service_if_active switchd
     stop_service_if_active opcd
+    stop_service_if_active snmpd
 
     # Disable services
     echo "[INFO] Disabling WLAN services..."
@@ -82,6 +83,8 @@ remove|deconfigure)
     disable_service_if_enabled wifi_thermal_state
     disable_service_if_enabled switchd
     disable_service_if_enabled opcd
+    # snmpd: postinst 가 .snmp.enabled=true 일 때 enable 하므로 제거 시 원복(고아 enable + 161 노출 방지).
+    disable_service_if_enabled snmpd
 
     # Reload systemd daemon
     systemctl daemon-reload 2>/dev/null || true

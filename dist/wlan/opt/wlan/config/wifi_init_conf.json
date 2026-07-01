@@ -589,6 +589,8 @@
         }
     },
     "snmp": {
+        "_comment": "snmpd(net-snmp) 조건부 기동 + 트랩. enabled: wifi_apply_enabled.sh가 .snmp.enabled를 읽어 snmpd.service를 systemctl enable/disable 동기화하고 wifi_services.sh가 start(기본 off, opt-in, UDP 161 보안). trap: wifi_event.sh가 무선 링크/채널 이벤트 시 snmptrap 송신(기본 off).",
+        "enabled": false,
         "trap": {
             "enabled": false,
             "dest": "",
