@@ -92,6 +92,8 @@ EOF
   # 업그레이드 시 백엔드가 /usr/local/scripts → /usr/local/logger 로 이동하고 snmpd.conf 도
   # 갱신되므로, 실행 중이던 snmpd(구 경로를 메모리에 유지)를 .snmp.enabled 에 맞춰 정리한다.
   if command -v systemctl >/dev/null 2>&1; then
+    # 신규 drop-in(snmpd.service.d/override.conf)을 systemd 가 인지하도록 snmpd 제어 전에 reload.
+    systemctl daemon-reload 2>/dev/null || true
     _snmp_on=false
     if command -v jq >/dev/null 2>&1 && [ -f /usr/local/etc/wifi_init_conf.json ]; then
       _snmp_on=$(jq -r 'if .snmp.enabled == true then "true" else "false" end' \
