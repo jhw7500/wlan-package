@@ -87,6 +87,9 @@ EOF
   cp /opt/wlan/config/systemd/journald.conf /etc/systemd/
   mkdir -p /etc/snmp
   cp /opt/wlan/config/snmp/snmpd.conf /etc/snmp/snmpd.conf
+  # opt-in: 배포판 snmpd 기본 enable 중화 — 라이프사이클은 wifi_init_conf.json .snmp.enabled
+  # 게이트가 소유(wifi_apply_enabled.sh enable/disable + wifi_services.sh start).
+  disable_services_if_enabled snmpd
 
   # 부팅 중 oneshot(wifi_install.service) 안에서 journald를 restart하면 이 스크립트의
   # 로그 소켓이 끊긴다. 새 journald.conf/rsyslog.conf는 다음 부팅에 자연히 적용되므로
