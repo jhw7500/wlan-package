@@ -37,7 +37,9 @@ Phase2b 객체 (mapping.md §6, mlan0 무선통계 — Counter32):
   소스 = mlan link.json 의 mwlan_log(로거 parse_mwlan_log 가 /proc getlog 를 양포맷 파싱).
   측정 불가 시 noSuchInstance(omap 누락) — Counter 0 은 '리셋' 오인이라 미노출(Phase2a
   always-present 의 의도적 예외). 0고정 4개(.4/.7/.11/.12)는 소스 영구 부재라 미노출.
-  multicast 카운터 키는 dot11Multicast*(README_MLAN) 우선, dot11Group* fallback(펌웨어차).
+  multicast 카운터 키는 dot11Multicast*/dot11Group* 둘 다 시도(Multicast 우선). ★온타겟 실측
+  (2026-06-30 88W9098/i.MX93)은 dot11Group*만 존재 → Group fallback이 실전 primary(Multicast* 부재).
+  둘 다 시도 유지(타 펌웨어 대비)·Multicast-only 단순화 금지(실기 영구 noSuchInstance).
   octet(.3/.10)은 mwlan_log 가 아니라 link.tx/rx_bytes 라 /proc 실패 시에도 노출(비대칭).
   caveat: short/long retry 는 802.11 정의와 1:1 불일치 / octet 은 mcast 포함 근사 +
   재연결 시 0 리셋되어 Counter32 가짜 wrap 가능(NMS 델타 필터 필요) / TxUnicast(.1)·
@@ -209,7 +211,8 @@ def _mwlan_counter(mwlan_log, key):
 
 def _mwlan_counter_any(mwlan_log, *keys):
     """여러 후보 키를 순서대로 시도해 첫 non-None 카운터 반환. multicast frame count 의
-    getlog 명칭이 펌웨어별로 dot11Multicast*(README_MLAN) / dot11Group* 로 갈려 흡수."""
+    getlog 명칭이 펌웨어별로 dot11Multicast*(README_MLAN) / dot11Group* 로 갈려 흡수.
+    온타겟 실측(2026-06-30 88W9098)은 dot11Group*만 존재 → 둘째 후보(Group)가 실전 primary."""
     for k in keys:
         v = _mwlan_counter(mwlan_log, k)
         if v is not None:
@@ -383,7 +386,9 @@ def build_oid_map(eth=None, mlan=None, devinfo=None, fw=None, eth_link_up=None,
             put(suboid, "counter", _counter_out(val))
 
     # multicast frame count 는 getlog 명칭이 dot11Multicast*(README_MLAN) 또는 dot11Group* 라
-    # 둘 다 시도. unicast(.1/.8)는 전체-멀티캐스트 차감, 음수는 _counter_out 가 0 클램프.
+    # 둘 다 시도. ★온타겟 실측(2026-06-30 88W9098)은 dot11Group*만 존재 → Group(둘째 후보)이
+    # 실전 primary, Multicast* 부재. 둘 다 시도 유지(타 펌웨어 대비)·Multicast-only 단순화 금지.
+    # unicast(.1/.8)는 전체-멀티캐스트 차감, 음수는 _counter_out 가 0 클램프.
     mc_tx = _mwlan_counter_any(mw, "dot11MulticastTransmittedFrameCount", "dot11GroupTransmittedFrameCount")
     mc_rx = _mwlan_counter_any(mw, "dot11MulticastReceivedFrameCount", "dot11GroupReceivedFrameCount")
     tx_all = _mwlan_counter(mw, "dot11TransmittedFrameCount")

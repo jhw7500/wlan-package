@@ -96,6 +96,9 @@ if [ -n "$initial_bssid" ]; then
     logger -p local0.info "[$tag:$LINENO] [$IFACE] INITIAL CONNECTED bssid=$initial_bssid (catch-up)"
     apply_mcs_tier
     run_on_connect "$initial_bssid"
+    # catch-up 에서는 LinkUp 트랩을 송신하지 않는다 — 이는 '상태 변화'가 아니라 기존 연결의
+    # 복구이고, 데몬 재시작마다 중복 up 트랩을 유발한다. NMS 는 SNMP 폴링(IfLinkStatus
+    # .3.2.1.7.2)으로 현재 링크 상태를 조회할 수 있다(트랩은 변화 통지 전용).
 fi
 
 iw event -t 2>&1 | while IFS= read -r line; do
@@ -105,6 +108,10 @@ iw event -t 2>&1 | while IFS= read -r line; do
             logger -p local0.info "[$tag:$LINENO] [$IFACE] CONNECTED bssid=$bssid"
             apply_mcs_tier
             run_on_connect "$bssid"
+            # 트랩은 &(백그라운드) — dest 가 hostname 이면 DNS 지연이 iw event 루프를 블로킹해
+            # 후속 이벤트를 누락시킬 수 있어 분리(Gemini/Claude 리뷰 합의). UDP fire-forget 라
+            # 송신 자체는 즉시, 이벤트 빈도가 낮아 순서 역전 영향 미미.
+            /usr/local/scripts/wifi_snmp_trap.sh link up &
             ;;
         *"$IFACE"*"roamed to"*)
             # FW 주도 로밍 전용 케이스 — cfg80211_roamed 경로는 "roamed to"로
@@ -117,11 +124,23 @@ iw event -t 2>&1 | while IFS= read -r line; do
             logger -p local0.info "[$tag:$LINENO] [$IFACE] ROAMED bssid=$bssid"
             apply_mcs_tier
             ;;
+        *"$IFACE"*"channel switch started"*)
+            # STARTED 는 전환 개시 알림 — iw dev info 가 아직 구채널을 반환하므로 트랩 생략.
+            # NOTIFY("channel switch", started 없음)에서만 신채널 트랩(stale·이중 방지, 리뷰 합의).
+            ;;
+        *"$IFACE"*"channel switch"*)
+            ch=$(iw dev "$IFACE" info 2>/dev/null | sed -n 's/.*channel \([0-9]*\).*/\1/p' | head -1)
+            logger -p local0.info "[$tag:$LINENO] [$IFACE] CH_SWITCH channel=$ch"
+            [ -n "$ch" ] && /usr/local/scripts/wifi_snmp_trap.sh channel "$ch" &
+            ;;
         *"$IFACE"*"disconnected"*)
             reason=$(echo "$line" | sed -n 's/.*reason: \([0-9]*\).*/\1/p')
             logger -p local0.info "[$tag:$LINENO] [$IFACE] DISCONNECTED reason=$reason"
+            /usr/local/scripts/wifi_snmp_trap.sh link down &
             ;;
         *"$IFACE"*"deauth"*)
+            # deauth 는 직후 disconnected 이벤트를 동반하므로 LinkDown 트랩은 disconnected
+            # case 에서만 송신(이중 트랩 방지 — Gemini/Claude 리뷰 합의).
             bssid=$(echo "$line" | grep -oE '([0-9a-f]{2}:){5}[0-9a-f]{2}' | head -1)
             logger -p local0.info "[$tag:$LINENO] [$IFACE] DEAUTH bssid=$bssid"
             ;;
