@@ -1,0 +1,2664 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "wifi_init_conf.json 설정 스키마",
+  "description": "wlan-package WiFi 초기화/로밍/브릿지 설정 파일(wifi_init_conf.json)의 웹 UI 폼 자동 생성·검증용 JSON Schema. 실제 출하 기본값(dist/wlan/opt/wlan/config/wifi_init_conf.json)을 미러링. 커스텀 키워드: x-ui-editable(yes|caution|no) = UI 편집 허용도, x-apply-timing(runtime|daemon-restart|boot|reboot|na) = 변경 반영 시점, x-consumer = 값을 소비하는 스크립트. required는 강제하지 않으며(부분 설정 허용), 각 오브젝트는 additionalProperties=true로 _comment 등 부가 키를 허용한다. mlan0/mlan1은 인터페이스별 기본값이 다르므로 공유 $ref 없이 각각 완전 전개했다. 참고(JSON 키 아님): logger.link_retry_count(기본 4) / logger.link_retry_delay_sec(기본 0.05)는 JSON 실재 키가 아니며 wifi_logger_link.py 모듈/CLI 기본값이므로 스키마에 포함하지 않는다. 필요 시 CLI --link-retry-count / --link-retry-delay로만 조정한다.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "global": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "드라이버 초기화 전역 설정. 인터페이스별 값(mlanN)이 있으면 그것이 우선하고 여기 값은 fallback.",
+      "properties": {
+        "BOARD_TYPE": {
+          "type": "string",
+          "default": "imx93",
+          "enum": ["imx8mm", "imx93"],
+          "description": "보드/드라이버 선택 — imx93*이면 mlan_imx93/moal_imx93, 아니면 mlan_imx8/moal_imx8 .ko 로드",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "reboot",
+          "x-consumer": "wifi_init.sh"
+        },
+        "BUS_TYPE": {
+          "type": "string",
+          "default": "sdio",
+          "enum": ["sdio", "pcie"],
+          "description": "버스 종류 — fw_name 자동선택, mod_para 블록 prefix(SD9098/PCIE9098) 결정에 사용",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "reboot",
+          "x-consumer": "wifi_init.sh"
+        },
+        "BLUETOOTH": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "BT combo 펌웨어 관련 설정",
+          "properties": {
+            "enable": {
+              "type": "boolean",
+              "default": false,
+              "description": "BT combo 펌웨어 사용 여부 — fw_name 자동선택에 반영",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "reboot",
+              "x-consumer": "wifi_init.sh"
+            }
+          }
+        },
+        "MOD_PARA": {
+          "type": "string",
+          "default": "cts/wifi_mod_para.conf",
+          "description": "moal 모듈 파라미터 설정 파일 경로(/lib/firmware/ 기준 상대경로)",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "reboot",
+          "x-consumer": "wifi_init.sh"
+        },
+        "CAL_DATA_CFG": {
+          "type": "string",
+          "default": "cts/WlanCalData_ext_RD.conf",
+          "description": "캘리브레이션 데이터 파일 fallback(/lib/firmware/ 기준). mlanN.CAL_DATA_CFG가 우선. 빈값/none이면 cal_data_cfg=none",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "reboot",
+          "x-consumer": "wifi_init.sh"
+        },
+        "TXPWRLIMIT_PATH": {
+          "type": "string",
+          "default": "/lib/firmware/cts/txpwrlimit_cfg_9098.conf",
+          "description": "TX 파워 리밋 파일(절대경로) fallback. mlanN.TXPWRLIMIT_PATH가 우선. none/빈값이면 미적용",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "boot",
+          "x-consumer": "wifi_init.sh"
+        },
+        "STANDARD": {
+          "type": "string",
+          "default": "",
+          "enum": ["", "n", "ac", "ax", "4", "5", "6"],
+          "description": "WiFi 표준 제한 fallback(dev_cap_mask로 변환). mlanN.STANDARD가 우선. 빈값=칩 기본(제한 없음)",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "reboot",
+          "x-consumer": "wifi_init.sh"
+        },
+        "DEV_CAP_MASK": {
+          "type": "string",
+          "default": "",
+          "description": "dev_cap_mask raw 값 fallback(예: 0xfffcffff). 인터페이스/global STANDARD가 모두 비었을 때만 사용",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "reboot",
+          "x-consumer": "wifi_init.sh"
+        },
+        "ANT_TYPE": {
+          "type": "string",
+          "default": "",
+          "enum": ["", "internal", "external", "0", "1"],
+          "description": "안테나 경로 부팅 시 GPIO(SW_SEL1/SW_SEL2) 설정. 빈값=설정 안 함. 런타임 변경은 'wifi ant' 명령",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "boot",
+          "x-consumer": "wifi_init.sh"
+        },
+        "tx_work": {
+          "type": "integer",
+          "default": 0,
+          "enum": [0, 1],
+          "description": "moal 데이터 TX 제출 방식 module_param — 0=호출자 컨텍스트 동기(홉1), 1=tx_workqueue 비동기(홉2, NXP iMX 기본)",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "reboot",
+          "x-consumer": "wifi_init.sh"
+        },
+        "ping_monitor": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "wifi_ping_monitor.service 관련 설정",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "wifi_ping_monitor.service enable/disable — systemctl로 동기화",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_apply_enabled.sh"
+            }
+          }
+        }
+      }
+    },
+    "mac": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "MAC 주소 설정. 빈 문자열이면 해당 소스 생략.",
+      "properties": {
+        "mlan0": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "mlan0 MAC 설정",
+          "properties": {
+            "base": {
+              "type": "string",
+              "default": "",
+              "description": "mlan0 base MAC — resolve_mac 최종 폴백 소스. 빈값=생략",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh"
+            },
+            "target": {
+              "type": "string",
+              "default": "",
+              "description": "mlan0 target MAC — static 모드 소스 + mod_para 블록 mac_addr= 주입값. 빈값=생략",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "reboot",
+              "x-consumer": "wifi_init.sh, wifi_mac_set.py, wifi_mac_save.py"
+            }
+          }
+        },
+        "mlan1": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "mlan1 MAC 설정",
+          "properties": {
+            "base": {
+              "type": "string",
+              "default": "",
+              "description": "mlan1 base MAC — resolve_mac 최종 폴백 소스. 빈값=생략",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh"
+            },
+            "target": {
+              "type": "string",
+              "default": "",
+              "description": "mlan1 target MAC — static 모드 소스 + mod_para 블록 mac_addr= 주입값. 빈값=생략",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "reboot",
+              "x-consumer": "wifi_init.sh, wifi_mac_set.py, wifi_mac_save.py"
+            }
+          }
+        },
+        "eth0": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "eth0 MAC 설정",
+          "properties": {
+            "base": {
+              "type": "string",
+              "default": "",
+              "description": "eth0 base MAC — 유효 시 update_mac.sh eth0로 설정. 빈값=생략",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh"
+            }
+          }
+        }
+      }
+    },
+    "wbridge": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "WiFi Bridge 프로세스 설정. 이 JSON이 SSoT이며 파싱 실패 시에만 /etc/default/wbridge 폴백.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "브릿지 기능 전체 ON/OFF. false면 bridge 서비스 전부 stop+disable",
+          "x-ui-editable": "yes",
+          "x-apply-timing": "boot",
+          "x-consumer": "wifi_bridge.sh, wifi_init.sh, wifi_apply_enabled.sh"
+        },
+        "bridge_iface": {
+          "type": "string",
+          "default": "mlan0",
+          "enum": ["mlan0", "mlan1"],
+          "description": "브릿지에 사용할 무선 인터페이스",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "boot",
+          "x-consumer": "wifi_init.sh"
+        },
+        "mac_mode": {
+          "type": "string",
+          "default": "dynamic",
+          "enum": ["default", "dynamic", "static"],
+          "description": "브릿지 인터페이스 MAC 결정 방식. dynamic=유선측 MAC 동적 획득",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "boot",
+          "x-consumer": "wifi_init.sh, wired_mac_ip_get.py"
+        },
+        "ip_discovery": {
+          "type": "boolean",
+          "default": false,
+          "description": "dynamic MAC 확보 후 클라이언트 IP 탐색 + host route(/32 dev eth0) 등록 여부. false면 MAC만 확보 후 종료",
+          "x-ui-editable": "yes",
+          "x-apply-timing": "boot",
+          "x-consumer": "wired_mac_ip_get.py"
+        },
+        "eth_client_ip": {
+          "type": "string",
+          "default": "",
+          "description": "유선 클라이언트 고정 IP(IPv4). 빈 문자열이면 quick ARP probe 비활성",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "boot",
+          "x-consumer": "wired_mac_ip_get.py"
+        },
+        "eth_link_wait_sec": {
+          "type": "integer",
+          "default": 5,
+          "minimum": 1,
+          "description": "dynamic MAC 모드에서 유선 링크 up 대기 시간(초)",
+          "x-ui-editable": "yes",
+          "x-apply-timing": "boot",
+          "x-consumer": "wired_mac_ip_get.py"
+        },
+        "eth_sweep_subnet": {
+          "type": "string",
+          "default": "",
+          "description": "peer 발견 최후 sweep 대역(eth0 기준 CIDR, 예: 192.168.1.0/24). 빈값이면 eth0->mlan0 inet 순 폴백",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "boot",
+          "x-consumer": "wired_mac_ip_get.py"
+        },
+        "peer_route": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "양방향 peer 라우팅 마스터 스위치 블록",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "양방향 BD↔유선peer 라우팅(옵션 X) 마스터. false=기본 투명 브릿지(토폴로지 무관 안전). BD가 유선 peer와 직접 통신하는 mlan0-IP 토폴로지에서만 true(+ip_discovery=true, arp_ignore_always=false 권장). 토폴로지(IP 배치)는 이 JSON이 아니라 wifi <iface> ip/webui로 결정",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh"
+            }
+          }
+        },
+        "arp_ignore_always": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "⚠️ 주의: JSON 출하값은 enabled=true(eth0-IP 토폴로지 전제)이나 JSON _comment는 '기본 false, 기본 토폴로지(mlan0-IP)에서는 반드시 false 유지'라고 서술하여 값-주석이 모순됨. 기본 토폴로지(mlan0-IP)에서 사용 시 유선->BD ARP 이중응답 레이스 우려가 있으니 반드시 확인 필요.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "peer_route와 독립. 클론 MAC 이중 ARP 응답 레이스 차단(arp_ignore=1/arp_announce=2). IP 배치(토폴로지) 종속: eth0-IP/동일서브넷=true, 순수 mlan0-IP=false. 토폴로지는 wifi <iface> ip/webui로 결정",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh"
+            }
+          }
+        },
+        "engine": {
+          "type": "string",
+          "default": "pcap",
+          "enum": ["pcap", "tpacket", "moal"],
+          "description": "브릿지 엔진. pcap/tpacket=유저스페이스, moal=드라이버 레벨(mod_para bridge_mode=1)",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_bridge.sh, wifi_init.sh"
+        },
+        "moal": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "engine=moal 전용 파라미터. peer/consume_link_local은 빈 문자열이면 insmod 인자로 전달 안 함(드라이버 기본값 사용).",
+          "properties": {
+            "keepalive_ms": {
+              "type": "integer",
+              "default": 1,
+              "minimum": 0,
+              "description": "engine=moal 전용 — keepalive hrtimer 주기(ms). 발열<->레이턴시 노브(1=기본, 클수록 발열감소/레이턴시증가, 0=off)",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "reboot",
+              "x-consumer": "wifi_init.sh"
+            },
+            "keepalive_idle_ms": {
+              "type": "integer",
+              "default": 20,
+              "minimum": 0,
+              "description": "engine=moal 전용 — keepalive 타이머 idle cutoff(ms). 0=상시가동, >0=idle 지속 시 자동정지(발열감소)",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "reboot",
+              "x-consumer": "wifi_init.sh"
+            },
+            "debug": {
+              "type": "integer",
+              "default": 0,
+              "enum": [0, 1],
+              "description": "engine=moal 전용 — BR_DBG/[DBG-RXDROP] 브릿지 디버그 로그(dmesg) 토글. 평시 0",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "reboot",
+              "x-consumer": "wifi_init.sh"
+            },
+            "peer": {
+              "type": "string",
+              "default": "",
+              "maxLength": 15,
+              "description": "engine=moal 전용 — 브릿지 유선 peer 인터페이스명(<=15자). 빈값이면 드라이버 기본(eth0), insmod 인자 미전달",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "reboot",
+              "x-consumer": "wifi_init.sh"
+            },
+            "consume_link_local": {
+              "type": "string",
+              "default": "",
+              "enum": ["", "0", "1"],
+              "description": "engine=moal 전용 — 차단된 link-local(STP/LLDP) 프레임 드라이버 내 폐기(1) A/B 토글. 빈값=드라이버 기본(0)",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "reboot",
+              "x-consumer": "wifi_init.sh"
+            }
+          }
+        },
+        "optimize": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "커널 레벨 네트워크 튜닝. enabled=false면 하위 설정 무효.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "UDP 버퍼/IRQ/오프로드 등 커널 튜닝 ON/OFF",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_bridge.sh"
+            },
+            "mode": {
+              "type": "string",
+              "default": "normal",
+              "enum": ["latency", "normal", "eco", "thermal"],
+              "description": "최적화 프로파일. latency=최소지연/최대발열, normal=균형(권장), eco=저전력, thermal=최소발열",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_bridge.sh"
+            },
+            "irq_affinity": {
+              "type": "string",
+              "default": "auto",
+              "enum": ["auto", "pinned", "none"],
+              "description": "IRQ/RPS CPU 핀 정책. auto=코어수 자동판단, pinned=ETH/WLAN 코어 고정, none=커널 기본",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_bridge.sh"
+            },
+            "profile_version": {
+              "type": "integer",
+              "default": 1,
+              "description": "프로파일 스키마 버전(로깅/메타데이터용). 동작 영향 없음",
+              "x-ui-editable": "no",
+              "x-apply-timing": "na",
+              "x-consumer": "wifi_bridge.sh"
+            }
+          }
+        },
+        "link_guard": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "유/무선 링크 상태 감시. engine=pcap|tpacket에서만 동작, moal이면 무시.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "false면 링크 상태 무관하게 wbridge 실행",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_bridge.sh"
+            },
+            "link_down_debounce_sec": {
+              "type": "integer",
+              "default": 2,
+              "minimum": 1,
+              "description": "유선 down 감지 후 bridge 중지까지 대기(초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_bridge.sh"
+            },
+            "link_up_stable_sec": {
+              "type": "integer",
+              "default": 2,
+              "minimum": 1,
+              "description": "유선 up이 이 시간 동안 유지되면 bridge 시작(초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_bridge.sh"
+            },
+            "link_idle_poll_sec": {
+              "type": "integer",
+              "default": 5,
+              "minimum": 1,
+              "description": "링크 미준비 시 폴링 주기(초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_bridge.sh"
+            },
+            "wait_ready_timeout_sec": {
+              "type": "integer",
+              "default": 10,
+              "minimum": 1,
+              "description": "인터페이스 준비 최대 대기(초). 초과 시 guard 없이 진행",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_bridge.sh"
+            },
+            "wlan_roam_grace_sec": {
+              "type": "integer",
+              "default": 15,
+              "minimum": 1,
+              "description": "무선 down 시 로밍 복구 대기(초). 초과 후 wlan_down_restart에 따라 동작",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_bridge.sh"
+            },
+            "wlan_down_restart": {
+              "type": "boolean",
+              "default": false,
+              "description": "true면 roam grace 초과 시 bridge 재시작, false면 유지",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_bridge.sh"
+            }
+          }
+        },
+        "thermal": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Thermal 상태 관리. wifi_thermal_state_update.sh가 주기적으로 온도를 읽어 상태 결정.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "thermal 주기 모니터링(wifi_thermal_state.timer) ON/OFF. false면 상태 갱신 정지->thermal clamp 사실상 비활성",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_apply_enabled.sh"
+            },
+            "mode_force": {
+              "type": "boolean",
+              "default": true,
+              "description": "true면 thermal 반응 억제 — 클램핑 무시(hot에서도 요청 모드 강제) + 상태 변경 시 bridge 재시작 skip",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_bridge.sh, wifi_thermal_state_update.sh"
+            },
+            "auto_restart": {
+              "type": "boolean",
+              "default": false,
+              "description": "thermal 상태 변경 시 bridge 서비스 자동 재시작 여부",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_thermal_state_update.sh"
+            },
+            "restart_cooldown_sec": {
+              "type": "integer",
+              "default": 60,
+              "minimum": 1,
+              "description": "thermal 재시작 루프 방지 쿨다운(초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_thermal_state_update.sh"
+            },
+            "bridge_units": {
+              "type": "string",
+              "default": "wifi_bridge@mlan0.service wifi_bridge@mlan1.service",
+              "description": "thermal 상태 변경 시 재시작할 systemd 유닛 목록(공백 구분)",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_thermal_state_update.sh"
+            },
+            "thresholds": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "온도 임계값(°C). enter/exit 사이 5도 갭으로 히스테리시스 적용.",
+              "properties": {
+                "warm_cpu_enter": {
+                  "type": "integer",
+                  "default": 90,
+                  "description": "CPU warm 상태 진입 임계(°C)",
+                  "x-ui-editable": "caution",
+                  "x-apply-timing": "runtime",
+                  "x-consumer": "wifi_thermal_state_update.sh"
+                },
+                "hot_cpu_enter": {
+                  "type": "integer",
+                  "default": 95,
+                  "description": "CPU hot 상태 진입 임계(°C)",
+                  "x-ui-editable": "caution",
+                  "x-apply-timing": "runtime",
+                  "x-consumer": "wifi_thermal_state_update.sh"
+                },
+                "warm_cpu_exit": {
+                  "type": "integer",
+                  "default": 85,
+                  "description": "CPU warm 상태 해제 임계(°C)",
+                  "x-ui-editable": "caution",
+                  "x-apply-timing": "runtime",
+                  "x-consumer": "wifi_thermal_state_update.sh"
+                },
+                "hot_cpu_exit": {
+                  "type": "integer",
+                  "default": 90,
+                  "description": "CPU hot 상태 해제 임계(°C)",
+                  "x-ui-editable": "caution",
+                  "x-apply-timing": "runtime",
+                  "x-consumer": "wifi_thermal_state_update.sh"
+                },
+                "warm_wifi_enter": {
+                  "type": "integer",
+                  "default": 85,
+                  "description": "WiFi(mlan) warm 상태 진입 임계(°C)",
+                  "x-ui-editable": "caution",
+                  "x-apply-timing": "runtime",
+                  "x-consumer": "wifi_thermal_state_update.sh"
+                },
+                "hot_wifi_enter": {
+                  "type": "integer",
+                  "default": 90,
+                  "description": "WiFi(mlan) hot 상태 진입 임계(°C)",
+                  "x-ui-editable": "caution",
+                  "x-apply-timing": "runtime",
+                  "x-consumer": "wifi_thermal_state_update.sh"
+                },
+                "warm_wifi_exit": {
+                  "type": "integer",
+                  "default": 80,
+                  "description": "WiFi(mlan) warm 상태 해제 임계(°C)",
+                  "x-ui-editable": "caution",
+                  "x-apply-timing": "runtime",
+                  "x-consumer": "wifi_thermal_state_update.sh"
+                },
+                "hot_wifi_exit": {
+                  "type": "integer",
+                  "default": 85,
+                  "description": "WiFi(mlan) hot 상태 해제 임계(°C)",
+                  "x-ui-editable": "caution",
+                  "x-apply-timing": "runtime",
+                  "x-consumer": "wifi_thermal_state_update.sh"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "temperature": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "wifi_logger_temp.sh 온도 임계 및 쿨다운 설정",
+      "properties": {
+        "emerg_cpu": {
+          "type": "integer",
+          "default": 100,
+          "description": "CPU 온도가 이 값 이상이면 emerg 카운트 증가, 임계 초과 시 wifi/bridge 정지+쿨다운+강제 재부팅(°C)",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_logger_temp.sh"
+        },
+        "crit_cpu": {
+          "type": "integer",
+          "default": 95,
+          "description": "CPU 온도가 이 값 이상이면 로그 레벨 crit(로깅만, °C)",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_logger_temp.sh"
+        },
+        "error_cpu": {
+          "type": "integer",
+          "default": 90,
+          "description": "CPU 온도가 이 값 이상이면 로그 레벨 err(°C)",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_logger_temp.sh"
+        },
+        "warn_cpu": {
+          "type": "integer",
+          "default": 85,
+          "description": "CPU 온도가 이 값 이상이면 로그 레벨 warn(°C)",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_logger_temp.sh"
+        },
+        "emerg_mlan": {
+          "type": "integer",
+          "default": 95,
+          "description": "mlan 센서 긴급 임계(°C). 현재 emerg 판정은 CPU 온도만 사용, mlan은 crit/err/warn 분기에서만 참조",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_logger_temp.sh"
+        },
+        "crit_mlan": {
+          "type": "integer",
+          "default": 90,
+          "description": "mlan0/mlan1 온도가 이 값 이상이면 로그 레벨 crit(°C)",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_logger_temp.sh"
+        },
+        "error_mlan": {
+          "type": "integer",
+          "default": 85,
+          "description": "mlan0/mlan1 온도가 이 값 이상이면 로그 레벨 err(°C)",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_logger_temp.sh"
+        },
+        "warn_mlan": {
+          "type": "integer",
+          "default": 80,
+          "description": "mlan0/mlan1 온도가 이 값 이상이면 로그 레벨 warn(°C)",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_logger_temp.sh"
+        },
+        "cooldown_sec": {
+          "type": "integer",
+          "default": 60,
+          "description": "과열 감지로 wifi/bridge 정지 후 대기하는 쿨다운 시간(초)",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_logger_temp.sh"
+        },
+        "recover_cpu": {
+          "type": "integer",
+          "default": 90,
+          "description": "쿨다운 후 CPU 온도가 이 값 미만이면 복구 판정 후 재부팅 수행(°C)",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_logger_temp.sh"
+        },
+        "recover_mlan": {
+          "type": "integer",
+          "default": 85,
+          "description": "쿨다운 후 mlan0/mlan1 온도가 모두 이 값 미만이면 복구 판정(°C)",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_logger_temp.sh"
+        },
+        "check_interval_sec": {
+          "type": "integer",
+          "default": 5,
+          "minimum": 1,
+          "description": "온도 폴링 및 로그 주기(초)",
+          "x-ui-editable": "yes",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_logger_temp.sh"
+        },
+        "emerg_count_threshold": {
+          "type": "integer",
+          "default": 2,
+          "description": "CPU가 emerg_cpu 이상인 상태가 이 횟수를 초과하면 과열 대응(정지+재부팅) 발동(엄격 초과 비교)",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_logger_temp.sh"
+        }
+      }
+    },
+    "mmc": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "wifi_logger_mmc.sh eMMC 수명 모니터링",
+      "properties": {
+        "check_interval_sec": {
+          "type": "integer",
+          "default": 300,
+          "minimum": 1,
+          "description": "eMMC 수명(ext_csd PRE_EOL/LifeTime) 점검 및 로그 주기(초)",
+          "x-ui-editable": "yes",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_logger_mmc.sh"
+        }
+      }
+    },
+    "mcp": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "wifi_logger_mcp.sh 전류/전압 센서 설정. iio_device는 wifi_init.sh가 보드별로 자동 주입(JSON 미포함).",
+      "properties": {
+        "gain_current": {
+          "type": "number",
+          "default": 0.5203,
+          "description": "iio CH0 raw*scale에 곱하는 전류(A) 환산 게인. 하드웨어 캘리브레이션 상수 — 임의 변경 금지",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_logger_mcp.sh"
+        },
+        "gain_voltage": {
+          "type": "number",
+          "default": 15.6552,
+          "description": "iio CH1 raw*scale에 곱하는 전압(V) 환산 게인. 5V/24V 시스템 자동 판별에 사용 — 하드웨어 캘리브레이션 상수",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_logger_mcp.sh"
+        },
+        "check_interval_sec": {
+          "type": "integer",
+          "default": 5,
+          "minimum": 1,
+          "description": "전류/전압 센서 폴링 및 로그 주기(초)",
+          "x-ui-editable": "yes",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_logger_mcp.sh"
+        },
+        "system_5v": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "5V 시스템 전류 임계셋(A). 로그 레벨 분류만 수행(차단/재부팅 없음).",
+          "properties": {
+            "warn_a": {
+              "type": "number",
+              "default": 1,
+              "description": "5V계 전류가 이 값 이상이면 로그 레벨 warn(A)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_logger_mcp.sh"
+            },
+            "error_a": {
+              "type": "number",
+              "default": 1.5,
+              "description": "5V계 전류가 이 값 이상이면 로그 레벨 err(A)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_logger_mcp.sh"
+            },
+            "crit_a": {
+              "type": "number",
+              "default": 2,
+              "description": "5V계 전류가 이 값 이상이면 로그 레벨 crit(A)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_logger_mcp.sh"
+            },
+            "emerg_a": {
+              "type": "number",
+              "default": 2.5,
+              "description": "5V계 전류가 이 값 이상이면 로그 레벨 emerg(A)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_logger_mcp.sh"
+            }
+          }
+        },
+        "system_24v": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "24V 시스템 전류 임계셋(A). 로그 레벨 분류만 수행.",
+          "properties": {
+            "warn_a": {
+              "type": "number",
+              "default": 0.2,
+              "description": "24V계 전류가 이 값 이상이면 로그 레벨 warn(A)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_logger_mcp.sh"
+            },
+            "error_a": {
+              "type": "number",
+              "default": 0.3,
+              "description": "24V계 전류가 이 값 이상이면 로그 레벨 err(A)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_logger_mcp.sh"
+            },
+            "crit_a": {
+              "type": "number",
+              "default": 0.4,
+              "description": "24V계 전류가 이 값 이상이면 로그 레벨 crit(A)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_logger_mcp.sh"
+            },
+            "emerg_a": {
+              "type": "number",
+              "default": 0.5,
+              "description": "24V계 전류가 이 값 이상이면 로그 레벨 emerg(A)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_logger_mcp.sh"
+            }
+          }
+        }
+      }
+    },
+    "monitor": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "wifi_link_monitor.py 표시 설정. CLI 인자가 이 값보다 우선.",
+      "properties": {
+        "interval_sec": {
+          "type": "number",
+          "default": 1,
+          "description": "link_monitor 화면 갱신 주기(초)",
+          "x-ui-editable": "yes",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_link_monitor.py"
+        },
+        "summary_lines": {
+          "type": "integer",
+          "default": 5,
+          "description": "summary.log에서 표시할 최근 줄 수",
+          "x-ui-editable": "yes",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_link_monitor.py"
+        },
+        "ping_lines": {
+          "type": "integer",
+          "default": 5,
+          "description": "ping 로그에서 표시할 최근 줄 수",
+          "x-ui-editable": "yes",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_link_monitor.py"
+        },
+        "roam_display_sec": {
+          "type": "integer",
+          "default": 5,
+          "description": "로밍 이벤트를 화면에 강조 표시하는 유지 시간(초)",
+          "x-ui-editable": "yes",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_link_monitor.py"
+        }
+      }
+    },
+    "logger": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "전역 로거 기본값. 인터페이스별 logger(eth0/mlanN.logger)가 override(단 bgscan_stale_threshold_sec는 global-only). 참고: link_retry_count/link_retry_delay_sec는 JSON 실재 키가 아니므로 여기 없음.",
+      "properties": {
+        "cpu_interval_sec": {
+          "type": "integer",
+          "default": 60,
+          "minimum": 1,
+          "description": "CPU/메모리/클럭 로그 주기(초)",
+          "x-ui-editable": "yes",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_logger_cpu.sh"
+        },
+        "link_interval_sec": {
+          "type": "number",
+          "default": 0.95,
+          "description": "iw station/info/survey 링크 상태 폴링 주기(초, 전역 기본)",
+          "x-ui-editable": "yes",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_logger_link.py"
+        },
+        "stat_log_interval_sec": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "통계(tx/rx throughput 등) 로그 기록 주기(초, 전역 기본)",
+          "x-ui-editable": "yes",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_logger_stat.py"
+        },
+        "stat_check_interval_sec": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "통계 수집 루프 체크 주기(초, 전역 기본)",
+          "x-ui-editable": "yes",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_logger_stat.py"
+        },
+        "stat_reset_interval_sec": {
+          "type": "integer",
+          "default": 604800,
+          "description": "AP별 누적 통계를 리셋하는 주기(초, 기본 7일, 전역 기본)",
+          "x-ui-editable": "yes",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_logger_stat.py"
+        },
+        "bgscan_stale_threshold_sec": {
+          "type": "integer",
+          "default": 600,
+          "description": "백그라운드 스캔 결과를 stale로 판정하는 임계(초). global-only(per-iface override 없음)",
+          "x-ui-editable": "yes",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wifi_bgscan.py"
+        }
+      }
+    },
+    "eth0": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "eth0 인터페이스 설정",
+      "properties": {
+        "logger": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "eth0 로거 설정(전역 logger override)",
+          "properties": {
+            "link_interval_sec": {
+              "type": "number",
+              "default": 1,
+              "description": "eth0 인터페이스 링크 상태 폴링 주기(초). 전역 0.95를 eth0에 한해 override",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_logger_link.py"
+            }
+          }
+        }
+      }
+    },
+    "mlan0": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "mlan0 인터페이스 설정(주 인터페이스, 출하 시 활성)",
+      "properties": {
+        "STANDARD": {
+          "type": "string",
+          "default": "ax",
+          "enum": ["", "n", "ac", "ax", "4", "5", "6"],
+          "description": "mlan0가 협상할 최대 WiFi 표준 제한(dev_cap_mask로 변환). native max=ax. 빈값=칩 기본",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "reboot",
+          "x-consumer": "wifi_init.sh"
+        },
+        "CAL_DATA_CFG": {
+          "type": "string",
+          "default": "",
+          "description": "mlan0 캘리브레이션 데이터 파일(빈값/none이면 global fallback 사용)",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "reboot",
+          "x-consumer": "wifi_init.sh"
+        },
+        "TXPWRLIMIT_PATH": {
+          "type": "string",
+          "default": "",
+          "description": "mlan0 TX 파워 리밋 파일(절대경로). 빈값이면 global fallback",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "boot",
+          "x-consumer": "wifi_init.sh"
+        },
+        "connect_threshold": {
+          "type": "integer",
+          "default": -100,
+          "description": "연결 후보 BSS의 신호레벨(RSSI dBm)이 이 값 미만이면 연결 후보에서 제외하는 최소 연결 임계값. -100=사실상 무필터(모든 AP 허용). 커스텀 패치된 wpa_supplicant 바이너리가 /usr/local/etc/wifi_init_conf.json을 직접 읽어 적용(스크립트 아님). 과도하게 높이면 약한 AP를 전부 배제해 미연결 위험",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wpa_supplicant(patched, /opt/wlan/bin/wpa_supplicant.imx8|.imx93)"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "mlan0 인터페이스 전체 ON/OFF. false면 부팅 초기화 및 모든 자식 데몬 disable",
+          "x-ui-editable": "yes",
+          "x-apply-timing": "boot",
+          "x-consumer": "wifi_init.sh, wifi_apply_enabled.sh"
+        },
+        "Frequency": {
+          "type": "string",
+          "default": "auto",
+          "enum": ["auto", "2.4GHz", "5GHz"],
+          "description": "mlan0 동작 대역. 현재는 부팅 로그/상태표시에만 쓰이고 하드웨어 밴드 제한 미적용(밴드 제한은 wpa_supplicant freq_list 담당)",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "boot",
+          "x-consumer": "wifi_init_config_lib.sh"
+        },
+        "net_rx": {
+          "type": "integer",
+          "default": 0,
+          "enum": [0, 2, 3, 6, 7],
+          "description": "MGMT 프레임 로깅 비트맵. bit[1:0]=RX모드(2=로밍프레임만, 3=전체Beacon/Probe포함), bit[2](+4)=TX로그. 0=비활성",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "reboot",
+          "x-consumer": "wifi_init.sh"
+        },
+        "mgmt_hex_dump_enable": {
+          "type": "boolean",
+          "default": false,
+          "description": "관리 프레임 hex dump 로깅 활성화(디버그용, 로그량 증가)",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "reboot",
+          "x-consumer": "wifi_init.sh"
+        },
+        "thermal_mgmt": {
+          "type": "boolean",
+          "default": true,
+          "description": "펌웨어 thermal management(SUBID 0x113) enable/disable. 명시적 false만 disable",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "boot",
+          "x-consumer": "wifi_init.sh"
+        },
+        "rate_adapt": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "FW 레이트 적응 설정. association 전에 설정.",
+          "properties": {
+            "mode": {
+              "type": "integer",
+              "default": 1,
+              "enum": [0, 1],
+              "description": "레이트 적응 알고리즘 모드. 0=legacy, 1=SR(success-rate)",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh"
+            },
+            "low_thresh": {
+              "type": "integer",
+              "default": 50,
+              "description": "SR 모드 하한 성공률 임계(%). 255(0xff)이면 노이즈 기반 동적",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh"
+            },
+            "high_thresh": {
+              "type": "integer",
+              "default": 80,
+              "description": "SR 모드 상한 성공률 임계(%). 255(0xff)이면 동적",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh"
+            },
+            "interval_ms": {
+              "type": "integer",
+              "default": 100,
+              "description": "레이트 적응 평가 주기(ms)",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh"
+            }
+          }
+        },
+        "logger": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "mlan0 로거 설정(전역 logger override)",
+          "properties": {
+            "link_interval_sec": {
+              "type": "number",
+              "default": 0.95,
+              "description": "링크 상태 로깅 주기(초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_logger_link.py"
+            },
+            "stat_log_interval_sec": {
+              "type": "integer",
+              "default": 1,
+              "minimum": 1,
+              "description": "통계 로그 파일 기록 주기(초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_logger_stat.py"
+            },
+            "stat_check_interval_sec": {
+              "type": "integer",
+              "default": 1,
+              "minimum": 1,
+              "description": "통계 수집(체크) 주기(초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_logger_stat.py"
+            },
+            "stat_reset_interval_sec": {
+              "type": "integer",
+              "default": 604800,
+              "description": "누적 통계 리셋 주기(초, 기본 7일)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_logger_stat.py"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "mlan0 로거 데몬(wifi_logger@mlan0) 활성화",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_apply_enabled.sh"
+            }
+          }
+        },
+        "periodic_roam": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "주기적 패시브 로밍(roam 0) 설정",
+          "properties": {
+            "interval": {
+              "type": "integer",
+              "default": 60,
+              "minimum": 10,
+              "description": "passive roam 실행 주기(초). 10 미만은 스크립트가 10초로 강제",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_periodic_roam.sh"
+            },
+            "scan_before_roam": {
+              "type": "boolean",
+              "default": true,
+              "description": "true=로밍 전 스캔(최신 RSSI 기반), false=기존 ap.log 사용",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_periodic_roam.sh"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "wifi_periodic_roam@mlan0.service enable/disable",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_apply_enabled.sh"
+            }
+          }
+        },
+        "bgscan": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "mlan0 백그라운드 스캔 설정",
+          "properties": {
+            "interval": {
+              "type": "integer",
+              "default": 60,
+              "minimum": 1,
+              "description": "background scan 주기(초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_bgscan.py"
+            },
+            "ssid_filter": {
+              "type": "boolean",
+              "default": true,
+              "description": "기본 ssid의 directed probe 포함 여부. false면 광범위 undirected 스캔",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_bgscan.py"
+            },
+            "freq_filter": {
+              "type": "boolean",
+              "default": true,
+              "description": "freq 필터 포함 여부. false면 전체 대역 스캔(airtime 증가)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_bgscan.py"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "wifi_bgscan@mlan0.service enable/disable",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_apply_enabled.sh"
+            }
+          }
+        },
+        "roaming": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "wifi_roam.py 로밍 알고리즘 설정(mlan0). 데몬 시작 시 1회 로드.",
+          "properties": {
+            "use_signal_avg": {
+              "type": "boolean",
+              "default": true,
+              "description": "true=signal_avg(평균, 안정적), false=signal(순간값, 즉시 반응)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_roam.py"
+            },
+            "DEFAULT_TH_2G": {
+              "type": "integer",
+              "default": -75,
+              "description": "2.4GHz RSSI 로밍 임계값(dBm). 이 값 이하이면 로밍 시도",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_roam.py"
+            },
+            "DEFAULT_TH_5G": {
+              "type": "integer",
+              "default": -75,
+              "description": "5GHz RSSI 로밍 임계값(dBm). wpa_supplicant.conf 값이 우선",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_roam.py"
+            },
+            "DIFF_TH": {
+              "type": "integer",
+              "default": 10,
+              "description": "현재 AP 대비 후보 AP의 최소 RSSI 차이(dB). 클수록 보수적",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_roam.py"
+            },
+            "CHECK_INTERVAL": {
+              "type": "integer",
+              "default": 3,
+              "minimum": 1,
+              "description": "로밍 체크 기본 주기(초). ADAPTIVE_INTERVAL 활성 시 동적 조절",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_roam.py"
+            },
+            "extra_ssids": {
+              "type": "array",
+              "default": [],
+              "items": { "type": "string" },
+              "description": "conf 기본 ssid 외 추가 로밍 후보 SSID 목록(같은 psk/key_mgmt 전제). generate_network_blocks=false면 무시",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_roam.py"
+            },
+            "generate_network_blocks": {
+              "type": "boolean",
+              "default": false,
+              "description": "false=모드B(단일 블록, extra_ssids 무시), true=모드A(다중 network 블록+select_network cross-SSID)",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_roam.py"
+            },
+            "ROAM_CROSS_FAIL_RETRY_COUNT": {
+              "type": "integer",
+              "default": 2,
+              "minimum": 0,
+              "description": "모드A cross-SSID 전환 실패 시 즉시 재시도 허용 횟수(모드B 미적용)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_roam.py"
+            },
+            "PREDICTIVE_ROAM": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "RSSI 추세 기반 예측 로밍",
+              "properties": {
+                "enable": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "RSSI 하락 추세 감지 시 임계값 상향으로 조기 로밍 ON/OFF",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "threshold_boost": {
+                  "type": "integer",
+                  "default": 5,
+                  "description": "RSSI 하락 추세 시 임계값에 더하는 부스트(dB)",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "trend_window_size": {
+                  "type": "integer",
+                  "default": 5,
+                  "minimum": 1,
+                  "description": "추세 계산에 사용할 RSSI 샘플 수",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "trend_history_max_age": {
+                  "type": "integer",
+                  "default": 30,
+                  "minimum": 1,
+                  "description": "이 시간(초) 지난 RSSI 샘플은 폐기",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                }
+              }
+            },
+            "LOAD_BASED_ROAM": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "AP 채널 부하 기반 로밍",
+              "properties": {
+                "enable": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "AP 채널 부하 기반 로밍 ON/OFF",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "max_roam_load": {
+                  "type": "integer",
+                  "default": 80,
+                  "minimum": 0,
+                  "maximum": 100,
+                  "description": "현재 AP 부하가 이 값(%) 초과 시 로밍 고려",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "load_diff_threshold": {
+                  "type": "integer",
+                  "default": 20,
+                  "minimum": 0,
+                  "maximum": 100,
+                  "description": "현재 AP와 후보 AP 부하 차이 최소값(%)",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                }
+              }
+            },
+            "PING_PONG_PREVENTION": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "AP 간 반복 로밍(핑퐁) 방지",
+              "properties": {
+                "enable": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "핑퐁 방지 ON/OFF",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "window": {
+                  "type": "integer",
+                  "default": 30,
+                  "minimum": 1,
+                  "description": "로밍 횟수 감시 구간(초)",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "max_roams_in_window": {
+                  "type": "integer",
+                  "default": 3,
+                  "minimum": 1,
+                  "description": "window 내 최대 허용 로밍 횟수",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "detection_time": {
+                  "type": "integer",
+                  "default": 10,
+                  "minimum": 1,
+                  "description": "핑퐁 감지 후 로밍 억제 시간(초)",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                }
+              }
+            },
+            "ADAPTIVE_INTERVAL": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "RSSI 변화에 따른 체크 주기 자동 조절",
+              "properties": {
+                "enable": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "적응형 주기 ON/OFF. false면 CHECK_INTERVAL 고정",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "min_check_interval": {
+                  "type": "integer",
+                  "default": 1,
+                  "minimum": 1,
+                  "description": "적응형 최소 체크 주기(초)",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "max_check_interval": {
+                  "type": "integer",
+                  "default": 10,
+                  "minimum": 1,
+                  "description": "적응형 최대 체크 주기(초)",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "rssi_drop_threshold": {
+                  "type": "integer",
+                  "default": -5,
+                  "description": "이 값(dB) 이상 하락 시 체크 주기 단축",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "rssi_rise_threshold": {
+                  "type": "integer",
+                  "default": 2,
+                  "description": "이 값(dB) 이상 상승 시 체크 주기 연장",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "near_threshold_offset": {
+                  "type": "integer",
+                  "default": 5,
+                  "description": "로밍 임계값 근처(±offset dB) 판정 기준",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "near_threshold_interval": {
+                  "type": "integer",
+                  "default": 2,
+                  "minimum": 1,
+                  "description": "임계값 근처일 때 사용할 체크 주기(초)",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "good_signal_offset": {
+                  "type": "integer",
+                  "default": 15,
+                  "description": "임계값+offset 이상이면 신호 양호 판정(dB)",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "consecutive_drop_count": {
+                  "type": "integer",
+                  "default": 2,
+                  "minimum": 1,
+                  "description": "연속 하락 이 횟수 이상이면 체크 주기 즉시 단축",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                }
+              }
+            },
+            "POST_ROAM_ARP_OPTIMIZATION": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "로밍 후 ARP 최적화(GARP로 MAC 테이블 갱신)",
+              "properties": {
+                "enable": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "로밍 후 ARP 최적화 ON/OFF",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "garp_count": {
+                  "type": "integer",
+                  "default": 2,
+                  "minimum": 1,
+                  "description": "Gratuitous ARP 전송 횟수",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "garp_wait": {
+                  "type": "integer",
+                  "default": 1,
+                  "minimum": 0,
+                  "description": "GARP 전송 간 대기(초)",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "PEER_WARMUP": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "description": "로밍 후 주변 피어에 ARP 전송하여 피어 측 MAC 테이블 워밍업",
+                  "properties": {
+                    "enable": {
+                      "type": "boolean",
+                      "default": false,
+                      "description": "피어 워밍업 ON/OFF",
+                      "x-ui-editable": "yes",
+                      "x-apply-timing": "daemon-restart",
+                      "x-consumer": "wifi_roam.py"
+                    },
+                    "peer_count": {
+                      "type": "integer",
+                      "default": 5,
+                      "minimum": 1,
+                      "description": "ARP 전송 대상 피어 수(ARP 캐시 기준 상위 N개)",
+                      "x-ui-editable": "yes",
+                      "x-apply-timing": "daemon-restart",
+                      "x-consumer": "wifi_roam.py"
+                    },
+                    "peer_wait": {
+                      "type": "integer",
+                      "default": 1,
+                      "minimum": 0,
+                      "description": "피어 간 ARP 전송 대기(초)",
+                      "x-ui-editable": "yes",
+                      "x-apply-timing": "daemon-restart",
+                      "x-consumer": "wifi_roam.py"
+                    }
+                  }
+                }
+              }
+            },
+            "SCAN_NO_RESULT_SLEEP": {
+              "type": "integer",
+              "default": 3,
+              "minimum": 1,
+              "description": "스캔 결과 없을 때 재시도 대기(초). 지수 backoff 시작값",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_roam.py"
+            },
+            "ROAM_SUCCESS_SLEEP": {
+              "type": "integer",
+              "default": 5,
+              "minimum": 1,
+              "description": "로밍 성공 후 재체크 대기(초, 안정화)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_roam.py"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "wifi_roam@mlan0.service enable/disable",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_apply_enabled.sh"
+            }
+          }
+        },
+        "mcs_tier": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "MCS tier capability 제한(mcstiercfg). 부팅 시 + 매 connected 이벤트마다 적용.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "MCS tier 제한 활성화. true인데 ht/vht/he 전부 비면 no-op",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh, wifi_event.sh"
+            },
+            "ht": {
+              "type": "string",
+              "default": "7",
+              "description": "HT(802.11n) MCS tier 제한 인자(문자열 verbatim, 예: \"7\", \"15\"). 빈 문자열=해당 prefix skip",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh, wifi_event.sh"
+            },
+            "vht": {
+              "type": "string",
+              "default": "7",
+              "description": "VHT(802.11ac) MCS tier 제한 인자(문자열 verbatim, 예: \"7\"). 빈 문자열=skip",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh, wifi_event.sh"
+            },
+            "he": {
+              "type": "string",
+              "default": "both 7",
+              "description": "HE(802.11ax) MCS tier 제한 인자(문자열 verbatim, 예: \"both 7\", \"7\"). 빈 문자열=skip",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh, wifi_event.sh"
+            }
+          }
+        },
+        "on_connect": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "AP 연결/로밍 후 실행 명령. 매 connected 이벤트마다 실행.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "AP 연결/로밍 후 commands 실행 여부. commands가 비면 실질 no-op",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_event.sh, wifi_apply_enabled.sh"
+            },
+            "commands": {
+              "type": "array",
+              "default": [],
+              "items": { "type": "string" },
+              "description": "연결/로밍 직후 순서대로 실행할 shell 명령 배열(실패는 로그만). command injection 위험이므로 내용 검증 필요",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_event.sh"
+            }
+          }
+        },
+        "checker": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "wifi_checker@mlan0 임계값 + 데몬 활성화(연결 감시·복구·재부팅 정책 트리거)",
+          "properties": {
+            "LIMIT_CNT": {
+              "type": "integer",
+              "default": 5,
+              "minimum": 1,
+              "description": "인터페이스 sysfs 부재(F/W dump) 연속 감내 횟수. 초과 시 재부팅 정책 트리거",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_checker.sh"
+            },
+            "MAX_UNSTABLE_DURATION": {
+              "type": "integer",
+              "default": 10,
+              "minimum": 1,
+              "description": "DISCONNECTED/SCANNING 무진행 지속이 이 초 초과 시 reassociate. 3배 초과 시 wpa_supplicant 재시작(초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_checker.sh"
+            },
+            "MAX_REBOOT_COUNT": {
+              "type": "integer",
+              "default": 3,
+              "minimum": 1,
+              "description": "쿨다운 창 내 재부팅 시도 누적이 이 값 이상이면 재부팅 루프로 보고 거부",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wlan_reboot_policy.sh"
+            },
+            "REBOOT_COOLDOWN_SEC": {
+              "type": "integer",
+              "default": 300,
+              "minimum": 1,
+              "description": "직전 재부팅으로부터 이 초 이내 재시도는 루프 카운트를 증가시키는 쿨다운 창(초)",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wlan_reboot_policy.sh"
+            },
+            "MIN_UPTIME_SEC": {
+              "type": "integer",
+              "default": 30,
+              "minimum": 0,
+              "description": "커널 uptime이 이 초 미만이면 재부팅 거부. 부팅 직후 무한 재부팅 방지(초)",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wlan_reboot_policy.sh"
+            },
+            "FAULT_REASSOC_CNT": {
+              "type": "integer",
+              "default": 2,
+              "minimum": 1,
+              "description": "station dump EFAULT 누적이 이 값 이상이면 1차로 reassociate(결함 사다리 1단계)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_checker.sh"
+            },
+            "FAULT_RESTART_CNT": {
+              "type": "integer",
+              "default": 4,
+              "minimum": 1,
+              "description": "station dump 결함 누적이 이 값 이상이면 wpa_supplicant 재시작(결함 사다리 2단계)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_checker.sh"
+            },
+            "FAULT_REBOOT_CNT": {
+              "type": "integer",
+              "default": 6,
+              "minimum": 1,
+              "description": "station dump 결함 누적이 이 값 이상이면 재부팅 정책 트리거(결함 사다리 최종)",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_checker.sh"
+            },
+            "RECONFIGURE_GRACE_SEC": {
+              "type": "integer",
+              "default": 20,
+              "minimum": 1,
+              "description": "conf 재로드(reconfigure) 직후 재연결 과도기 동안 불안정 사다리 억제 유예(초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_checker.sh"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "wifi_checker@mlan0.service 데몬 enable 여부",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_apply_enabled.sh"
+            }
+          }
+        },
+        "arping": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "wifi_arping@mlan0 임계값 + 데몬 활성화(게이트웨이 도달성 감시)",
+          "properties": {
+            "threshold": {
+              "type": "integer",
+              "default": 10,
+              "minimum": 1,
+              "description": "게이트웨이 arping 연속 무응답이 이 횟수 도달 시 임계 처리(현재 로그만)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_arping.sh"
+            },
+            "cooldown_sec": {
+              "type": "integer",
+              "default": 10,
+              "minimum": 1,
+              "description": "threshold 도달 후 다음 시도 전 대기(초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_arping.sh"
+            },
+            "loop_delay_sec": {
+              "type": "integer",
+              "default": 10,
+              "minimum": 1,
+              "description": "arping 성공 및 연결/게이트웨이 대기 폴링 주기(초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_arping.sh"
+            },
+            "timeout_sec": {
+              "type": "integer",
+              "default": 3,
+              "minimum": 1,
+              "description": "단건 arping 응답 대기 타임아웃(arping -w 값, 초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_arping.sh"
+            },
+            "sweep_timeout_sec": {
+              "type": "integer",
+              "default": 1,
+              "minimum": 1,
+              "description": "서브넷 스윕 시 개별 대상 응답 타임아웃(초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_arping_sweep.sh"
+            },
+            "sweep_parallel_limit": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "description": "서브넷 스윕 시 동시 실행 arping 프로세스 최대 개수",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_arping_sweep.sh"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "wifi_arping@mlan0.service 데몬 enable 여부",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_apply_enabled.sh"
+            }
+          }
+        }
+      }
+    },
+    "mlan1": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "mlan1 인터페이스 설정(보조 인터페이스, 출하 시 비활성)",
+      "properties": {
+        "STANDARD": {
+          "type": "string",
+          "default": "ac",
+          "enum": ["", "n", "ac", "ax", "4", "5", "6"],
+          "description": "mlan1가 협상할 최대 WiFi 표준 제한. native max=ac(ax 미지원, 지정 시 경고). 빈값=칩 기본",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "reboot",
+          "x-consumer": "wifi_init.sh"
+        },
+        "CAL_DATA_CFG": {
+          "type": "string",
+          "default": "",
+          "description": "mlan1 캘리브레이션 데이터 파일(빈값/none이면 global fallback 사용)",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "reboot",
+          "x-consumer": "wifi_init.sh"
+        },
+        "TXPWRLIMIT_PATH": {
+          "type": "string",
+          "default": "",
+          "description": "mlan1 TX 파워 리밋 파일(절대경로). 빈값이면 global fallback",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "boot",
+          "x-consumer": "wifi_init.sh"
+        },
+        "connect_threshold": {
+          "type": "integer",
+          "default": -100,
+          "description": "연결 후보 BSS의 신호레벨(RSSI dBm)이 이 값 미만이면 연결 후보에서 제외하는 최소 연결 임계값. -100=사실상 무필터(모든 AP 허용). 커스텀 패치된 wpa_supplicant 바이너리가 /usr/local/etc/wifi_init_conf.json을 직접 읽어 적용(스크립트 아님). 과도하게 높이면 약한 AP를 전부 배제해 미연결 위험",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "daemon-restart",
+          "x-consumer": "wpa_supplicant(patched, /opt/wlan/bin/wpa_supplicant.imx8|.imx93)"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "mlan1 인터페이스 전체 ON/OFF. false면 부팅 초기화 및 모든 자식 데몬 disable",
+          "x-ui-editable": "yes",
+          "x-apply-timing": "boot",
+          "x-consumer": "wifi_init.sh, wifi_apply_enabled.sh"
+        },
+        "Frequency": {
+          "type": "string",
+          "default": "auto",
+          "enum": ["auto", "2.4GHz", "5GHz"],
+          "description": "mlan1 동작 대역. 현재는 부팅 로그/상태표시에만 쓰이고 하드웨어 밴드 제한 미적용",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "boot",
+          "x-consumer": "wifi_init_config_lib.sh"
+        },
+        "net_rx": {
+          "type": "integer",
+          "default": 0,
+          "enum": [0, 2, 3, 6, 7],
+          "description": "MGMT 프레임 로깅 비트맵. bit[1:0]=RX모드(2=로밍프레임만, 3=전체), bit[2](+4)=TX로그. 0=비활성",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "reboot",
+          "x-consumer": "wifi_init.sh"
+        },
+        "mgmt_hex_dump_enable": {
+          "type": "boolean",
+          "default": false,
+          "description": "관리 프레임 hex dump 로깅 활성화(디버그용, 로그량 증가)",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "reboot",
+          "x-consumer": "wifi_init.sh"
+        },
+        "thermal_mgmt": {
+          "type": "boolean",
+          "default": true,
+          "description": "펌웨어 thermal management(SUBID 0x113) enable/disable. 명시적 false만 disable",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "boot",
+          "x-consumer": "wifi_init.sh"
+        },
+        "rate_adapt": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "FW 레이트 적응 설정. association 전에 설정.",
+          "properties": {
+            "mode": {
+              "type": "integer",
+              "default": 1,
+              "enum": [0, 1],
+              "description": "레이트 적응 알고리즘 모드. 0=legacy, 1=SR(success-rate)",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh"
+            },
+            "low_thresh": {
+              "type": "integer",
+              "default": 50,
+              "description": "SR 모드 하한 성공률 임계(%). 255(0xff)이면 노이즈 기반 동적",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh"
+            },
+            "high_thresh": {
+              "type": "integer",
+              "default": 80,
+              "description": "SR 모드 상한 성공률 임계(%). 255(0xff)이면 동적",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh"
+            },
+            "interval_ms": {
+              "type": "integer",
+              "default": 100,
+              "description": "레이트 적응 평가 주기(ms)",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh"
+            }
+          }
+        },
+        "logger": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "mlan1 로거 설정(전역 logger override)",
+          "properties": {
+            "link_interval_sec": {
+              "type": "number",
+              "default": 0.95,
+              "description": "링크 상태 로깅 주기(초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_logger_link.py"
+            },
+            "stat_log_interval_sec": {
+              "type": "integer",
+              "default": 1,
+              "minimum": 1,
+              "description": "통계 로그 파일 기록 주기(초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_logger_stat.py"
+            },
+            "stat_check_interval_sec": {
+              "type": "integer",
+              "default": 1,
+              "minimum": 1,
+              "description": "통계 수집(체크) 주기(초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_logger_stat.py"
+            },
+            "stat_reset_interval_sec": {
+              "type": "integer",
+              "default": 604800,
+              "description": "누적 통계 리셋 주기(초, 기본 7일)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_logger_stat.py"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "mlan1 로거 데몬(wifi_logger@mlan1) 활성화",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_apply_enabled.sh"
+            }
+          }
+        },
+        "periodic_roam": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "주기적 패시브 로밍(roam 0) 설정",
+          "properties": {
+            "interval": {
+              "type": "integer",
+              "default": 60,
+              "minimum": 10,
+              "description": "passive roam 실행 주기(초). 10 미만은 스크립트가 10초로 강제",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_periodic_roam.sh"
+            },
+            "scan_before_roam": {
+              "type": "boolean",
+              "default": true,
+              "description": "true=로밍 전 스캔(최신 RSSI 기반), false=기존 ap.log 사용",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_periodic_roam.sh"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "wifi_periodic_roam@mlan1.service enable/disable",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_apply_enabled.sh"
+            }
+          }
+        },
+        "bgscan": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "mlan1 백그라운드 스캔 설정",
+          "properties": {
+            "interval": {
+              "type": "integer",
+              "default": 60,
+              "minimum": 1,
+              "description": "background scan 주기(초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_bgscan.py"
+            },
+            "ssid_filter": {
+              "type": "boolean",
+              "default": true,
+              "description": "기본 ssid의 directed probe 포함 여부. false면 광범위 undirected 스캔",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_bgscan.py"
+            },
+            "freq_filter": {
+              "type": "boolean",
+              "default": true,
+              "description": "freq 필터 포함 여부. false면 전체 대역 스캔(airtime 증가)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_bgscan.py"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "wifi_bgscan@mlan1.service enable/disable",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_apply_enabled.sh"
+            }
+          }
+        },
+        "roaming": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "wifi_roam.py 로밍 알고리즘 설정(mlan1). 데몬 시작 시 1회 로드.",
+          "properties": {
+            "use_signal_avg": {
+              "type": "boolean",
+              "default": true,
+              "description": "true=signal_avg(평균, 안정적), false=signal(순간값, 즉시 반응)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_roam.py"
+            },
+            "DEFAULT_TH_2G": {
+              "type": "integer",
+              "default": -75,
+              "description": "2.4GHz RSSI 로밍 임계값(dBm). 이 값 이하이면 로밍 시도",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_roam.py"
+            },
+            "DEFAULT_TH_5G": {
+              "type": "integer",
+              "default": -75,
+              "description": "5GHz RSSI 로밍 임계값(dBm). wpa_supplicant.conf 값이 우선",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_roam.py"
+            },
+            "DIFF_TH": {
+              "type": "integer",
+              "default": 10,
+              "description": "현재 AP 대비 후보 AP의 최소 RSSI 차이(dB). 클수록 보수적",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_roam.py"
+            },
+            "CHECK_INTERVAL": {
+              "type": "integer",
+              "default": 5,
+              "minimum": 1,
+              "description": "로밍 체크 기본 주기(초). ADAPTIVE_INTERVAL 활성 시 동적 조절",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_roam.py"
+            },
+            "extra_ssids": {
+              "type": "array",
+              "default": [],
+              "items": { "type": "string" },
+              "description": "conf 기본 ssid 외 추가 로밍 후보 SSID 목록(같은 psk/key_mgmt 전제). generate_network_blocks=false면 무시",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_roam.py"
+            },
+            "generate_network_blocks": {
+              "type": "boolean",
+              "default": false,
+              "description": "false=모드B(단일 블록, extra_ssids 무시), true=모드A(다중 network 블록+select_network cross-SSID)",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_roam.py"
+            },
+            "ROAM_CROSS_FAIL_RETRY_COUNT": {
+              "type": "integer",
+              "default": 2,
+              "minimum": 0,
+              "description": "모드A cross-SSID 전환 실패 시 즉시 재시도 허용 횟수(모드B 미적용)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_roam.py"
+            },
+            "PREDICTIVE_ROAM": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "RSSI 추세 기반 예측 로밍",
+              "properties": {
+                "enable": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "RSSI 하락 추세 감지 시 임계값 상향으로 조기 로밍 ON/OFF",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "threshold_boost": {
+                  "type": "integer",
+                  "default": 5,
+                  "description": "RSSI 하락 추세 시 임계값에 더하는 부스트(dB)",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "trend_window_size": {
+                  "type": "integer",
+                  "default": 5,
+                  "minimum": 1,
+                  "description": "추세 계산에 사용할 RSSI 샘플 수",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "trend_history_max_age": {
+                  "type": "integer",
+                  "default": 30,
+                  "minimum": 1,
+                  "description": "이 시간(초) 지난 RSSI 샘플은 폐기",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                }
+              }
+            },
+            "LOAD_BASED_ROAM": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "AP 채널 부하 기반 로밍",
+              "properties": {
+                "enable": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "AP 채널 부하 기반 로밍 ON/OFF",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "max_roam_load": {
+                  "type": "integer",
+                  "default": 80,
+                  "minimum": 0,
+                  "maximum": 100,
+                  "description": "현재 AP 부하가 이 값(%) 초과 시 로밍 고려",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "load_diff_threshold": {
+                  "type": "integer",
+                  "default": 20,
+                  "minimum": 0,
+                  "maximum": 100,
+                  "description": "현재 AP와 후보 AP 부하 차이 최소값(%)",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                }
+              }
+            },
+            "PING_PONG_PREVENTION": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "AP 간 반복 로밍(핑퐁) 방지",
+              "properties": {
+                "enable": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "핑퐁 방지 ON/OFF",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "window": {
+                  "type": "integer",
+                  "default": 60,
+                  "minimum": 1,
+                  "description": "로밍 횟수 감시 구간(초)",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "max_roams_in_window": {
+                  "type": "integer",
+                  "default": 3,
+                  "minimum": 1,
+                  "description": "window 내 최대 허용 로밍 횟수",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "detection_time": {
+                  "type": "integer",
+                  "default": 30,
+                  "minimum": 1,
+                  "description": "핑퐁 감지 후 로밍 억제 시간(초)",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                }
+              }
+            },
+            "ADAPTIVE_INTERVAL": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "RSSI 변화에 따른 체크 주기 자동 조절",
+              "properties": {
+                "enable": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "적응형 주기 ON/OFF. false면 CHECK_INTERVAL 고정",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "min_check_interval": {
+                  "type": "integer",
+                  "default": 1,
+                  "minimum": 1,
+                  "description": "적응형 최소 체크 주기(초)",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "max_check_interval": {
+                  "type": "integer",
+                  "default": 10,
+                  "minimum": 1,
+                  "description": "적응형 최대 체크 주기(초)",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "rssi_drop_threshold": {
+                  "type": "integer",
+                  "default": -5,
+                  "description": "이 값(dB) 이상 하락 시 체크 주기 단축",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "rssi_rise_threshold": {
+                  "type": "integer",
+                  "default": 2,
+                  "description": "이 값(dB) 이상 상승 시 체크 주기 연장",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "near_threshold_offset": {
+                  "type": "integer",
+                  "default": 5,
+                  "description": "로밍 임계값 근처(±offset dB) 판정 기준",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "near_threshold_interval": {
+                  "type": "integer",
+                  "default": 2,
+                  "minimum": 1,
+                  "description": "임계값 근처일 때 사용할 체크 주기(초)",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "good_signal_offset": {
+                  "type": "integer",
+                  "default": 15,
+                  "description": "임계값+offset 이상이면 신호 양호 판정(dB)",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "consecutive_drop_count": {
+                  "type": "integer",
+                  "default": 2,
+                  "minimum": 1,
+                  "description": "연속 하락 이 횟수 이상이면 체크 주기 즉시 단축",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                }
+              }
+            },
+            "POST_ROAM_ARP_OPTIMIZATION": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "로밍 후 ARP 최적화(GARP로 MAC 테이블 갱신)",
+              "properties": {
+                "enable": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "로밍 후 ARP 최적화 ON/OFF",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "garp_count": {
+                  "type": "integer",
+                  "default": 2,
+                  "minimum": 1,
+                  "description": "Gratuitous ARP 전송 횟수",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "garp_wait": {
+                  "type": "integer",
+                  "default": 1,
+                  "minimum": 0,
+                  "description": "GARP 전송 간 대기(초)",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "PEER_WARMUP": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "description": "로밍 후 주변 피어에 ARP 전송하여 피어 측 MAC 테이블 워밍업",
+                  "properties": {
+                    "enable": {
+                      "type": "boolean",
+                      "default": false,
+                      "description": "피어 워밍업 ON/OFF",
+                      "x-ui-editable": "yes",
+                      "x-apply-timing": "daemon-restart",
+                      "x-consumer": "wifi_roam.py"
+                    },
+                    "peer_count": {
+                      "type": "integer",
+                      "default": 5,
+                      "minimum": 1,
+                      "description": "ARP 전송 대상 피어 수(ARP 캐시 기준 상위 N개)",
+                      "x-ui-editable": "yes",
+                      "x-apply-timing": "daemon-restart",
+                      "x-consumer": "wifi_roam.py"
+                    },
+                    "peer_wait": {
+                      "type": "integer",
+                      "default": 1,
+                      "minimum": 0,
+                      "description": "피어 간 ARP 전송 대기(초)",
+                      "x-ui-editable": "yes",
+                      "x-apply-timing": "daemon-restart",
+                      "x-consumer": "wifi_roam.py"
+                    }
+                  }
+                }
+              }
+            },
+            "SCAN_NO_RESULT_SLEEP": {
+              "type": "integer",
+              "default": 3,
+              "minimum": 1,
+              "description": "스캔 결과 없을 때 재시도 대기(초). 지수 backoff 시작값",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_roam.py"
+            },
+            "ROAM_SUCCESS_SLEEP": {
+              "type": "integer",
+              "default": 5,
+              "minimum": 1,
+              "description": "로밍 성공 후 재체크 대기(초, 안정화)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_roam.py"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "wifi_roam@mlan1.service enable/disable",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_apply_enabled.sh"
+            }
+          }
+        },
+        "mcs_tier": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "MCS tier capability 제한(mcstiercfg). 부팅 시 + 매 connected 이벤트마다 적용.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "MCS tier 제한 활성화. true인데 ht/vht/he 전부 비면 no-op",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh, wifi_event.sh"
+            },
+            "ht": {
+              "type": "string",
+              "default": "",
+              "description": "HT(802.11n) MCS tier 제한 인자(문자열 verbatim, 예: \"7\", \"15\"). 빈 문자열=해당 prefix skip",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh, wifi_event.sh"
+            },
+            "vht": {
+              "type": "string",
+              "default": "",
+              "description": "VHT(802.11ac) MCS tier 제한 인자(문자열 verbatim, 예: \"7\"). 빈 문자열=skip",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh, wifi_event.sh"
+            },
+            "he": {
+              "type": "string",
+              "default": "",
+              "description": "HE(802.11ax) MCS tier 제한 인자(문자열 verbatim, 예: \"both 7\", \"7\"). 빈 문자열=skip",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh, wifi_event.sh"
+            }
+          }
+        },
+        "on_connect": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "AP 연결/로밍 후 실행 명령. 매 connected 이벤트마다 실행.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "AP 연결/로밍 후 commands 실행 여부. commands가 비면 실질 no-op",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_event.sh, wifi_apply_enabled.sh"
+            },
+            "commands": {
+              "type": "array",
+              "default": [],
+              "items": { "type": "string" },
+              "description": "연결/로밍 직후 순서대로 실행할 shell 명령 배열(실패는 로그만). command injection 위험이므로 내용 검증 필요",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_event.sh"
+            }
+          }
+        },
+        "checker": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "wifi_checker@mlan1 임계값 + 데몬 활성화(연결 감시·복구·재부팅 정책 트리거)",
+          "properties": {
+            "LIMIT_CNT": {
+              "type": "integer",
+              "default": 5,
+              "minimum": 1,
+              "description": "인터페이스 sysfs 부재(F/W dump) 연속 감내 횟수. 초과 시 재부팅 정책 트리거",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_checker.sh"
+            },
+            "MAX_UNSTABLE_DURATION": {
+              "type": "integer",
+              "default": 10,
+              "minimum": 1,
+              "description": "DISCONNECTED/SCANNING 무진행 지속이 이 초 초과 시 reassociate. 3배 초과 시 wpa_supplicant 재시작(초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_checker.sh"
+            },
+            "MAX_REBOOT_COUNT": {
+              "type": "integer",
+              "default": 3,
+              "minimum": 1,
+              "description": "쿨다운 창 내 재부팅 시도 누적이 이 값 이상이면 재부팅 루프로 보고 거부",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wlan_reboot_policy.sh"
+            },
+            "REBOOT_COOLDOWN_SEC": {
+              "type": "integer",
+              "default": 300,
+              "minimum": 1,
+              "description": "직전 재부팅으로부터 이 초 이내 재시도는 루프 카운트를 증가시키는 쿨다운 창(초)",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wlan_reboot_policy.sh"
+            },
+            "MIN_UPTIME_SEC": {
+              "type": "integer",
+              "default": 30,
+              "minimum": 0,
+              "description": "커널 uptime이 이 초 미만이면 재부팅 거부. 부팅 직후 무한 재부팅 방지(초)",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wlan_reboot_policy.sh"
+            },
+            "FAULT_REASSOC_CNT": {
+              "type": "integer",
+              "default": 2,
+              "minimum": 1,
+              "description": "station dump EFAULT 누적이 이 값 이상이면 1차로 reassociate(결함 사다리 1단계)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_checker.sh"
+            },
+            "FAULT_RESTART_CNT": {
+              "type": "integer",
+              "default": 4,
+              "minimum": 1,
+              "description": "station dump 결함 누적이 이 값 이상이면 wpa_supplicant 재시작(결함 사다리 2단계)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_checker.sh"
+            },
+            "FAULT_REBOOT_CNT": {
+              "type": "integer",
+              "default": 6,
+              "minimum": 1,
+              "description": "station dump 결함 누적이 이 값 이상이면 재부팅 정책 트리거(결함 사다리 최종)",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_checker.sh"
+            },
+            "RECONFIGURE_GRACE_SEC": {
+              "type": "integer",
+              "default": 20,
+              "minimum": 1,
+              "description": "conf 재로드(reconfigure) 직후 재연결 과도기 동안 불안정 사다리 억제 유예(초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_checker.sh"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "wifi_checker@mlan1.service 데몬 enable 여부",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_apply_enabled.sh"
+            }
+          }
+        },
+        "arping": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "wifi_arping@mlan1 임계값 + 데몬 활성화(게이트웨이 도달성 감시). 참고: sweep은 항상 mlan0 CIDR 기준으로 대상 산출.",
+          "properties": {
+            "threshold": {
+              "type": "integer",
+              "default": 10,
+              "minimum": 1,
+              "description": "게이트웨이 arping 연속 무응답이 이 횟수 도달 시 임계 처리(현재 로그만)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_arping.sh"
+            },
+            "cooldown_sec": {
+              "type": "integer",
+              "default": 10,
+              "minimum": 1,
+              "description": "threshold 도달 후 다음 시도 전 대기(초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_arping.sh"
+            },
+            "loop_delay_sec": {
+              "type": "integer",
+              "default": 10,
+              "minimum": 1,
+              "description": "arping 성공 및 연결/게이트웨이 대기 폴링 주기(초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_arping.sh"
+            },
+            "timeout_sec": {
+              "type": "integer",
+              "default": 3,
+              "minimum": 1,
+              "description": "단건 arping 응답 대기 타임아웃(arping -w 값, 초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_arping.sh"
+            },
+            "sweep_timeout_sec": {
+              "type": "integer",
+              "default": 1,
+              "minimum": 1,
+              "description": "서브넷 스윕 시 개별 대상 응답 타임아웃(초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_arping_sweep.sh"
+            },
+            "sweep_parallel_limit": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "description": "서브넷 스윕 시 동시 실행 arping 프로세스 최대 개수",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_arping_sweep.sh"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "wifi_arping@mlan1.service 데몬 enable 여부",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_apply_enabled.sh"
+            }
+          }
+        }
+      }
+    },
+    "snmp": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "snmpd(net-snmp) 조건부 기동 + 트랩 설정. 기본 opt-in off(UDP 161 보안).",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "snmpd.service enable/disable 동기화 + wifi_services.sh start. 기본 off(opt-in, UDP 161 보안)",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "boot",
+          "x-consumer": "wifi_apply_enabled.sh"
+        },
+        "trap": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "SNMP 트랩 설정. wifi_event.sh가 무선 링크/채널 이벤트 시 snmptrap 송신.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "링크/채널 이벤트 시 SNMP 트랩 송신 ON/OFF. 기본 off",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_event.sh"
+            },
+            "dest": {
+              "type": "string",
+              "default": "",
+              "description": "트랩 수신자 주소(host 또는 host:port). 빈값이면 송신 안 함",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_event.sh"
+            },
+            "community": {
+              "type": "string",
+              "default": "public",
+              "description": "SNMP 트랩 community 문자열",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_event.sh"
+            },
+            "version": {
+              "type": "string",
+              "default": "2c",
+              "enum": ["1", "2c"],
+              "description": "SNMP 트랩 프로토콜 버전",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_event.sh"
+            }
+          }
+        }
+      }
+    }
+  }
+}

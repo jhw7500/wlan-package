@@ -15,46 +15,45 @@
 
 ```
 wifi_init_conf.json
-├── global              # 드라이버 초기화 (펌웨어, 모듈 파라미터)
-│   ├── rate_adapt      #   FW rate adaptation 설정
+├── global              # 드라이버 초기화 (보드/버스/펌웨어 자동선택, 모듈 파라미터)
+│   ├── BLUETOOTH       #   BT combo 펌웨어 사용 여부 (enable, fw 자동선택 반영)
 │   └── ping_monitor    #   ping 모니터 서비스 제어
 ├── mac                 # MAC 주소 설정 (인터페이스별)
 ├── wbridge             # wifi_bridge 프로세스 설정
+│   ├── peer_route      #   양방향 peer 라우팅 마스터 스위치 (enabled)
+│   ├── arp_ignore_always #  ARP 정책 (enabled, IP 배치 종속: eth0-IP/동일서브넷=true)
 │   ├── optimize        #   커널 레벨 네트워크 튜닝 (UDP/IRQ/오프로드)
-│   ├── link_guard      #   유/무선 링크 상태 감시
-│   ├── thermal         #   브릿지 thermal 상태 관리
-│   │   └── thresholds  #     온도 임계값 (히스테리시스)
-│   └── moal            #   moal 엔진 파라미터 (engine=moal 전용 insmod 인자)
-├── checker             # wifi_checker + reboot 정책
+│   ├── link_guard      #   유/무선 링크 상태 감시 (engine=pcap|tpacket 전용)
+│   ├── moal            #   moal 엔진 파라미터 (engine=moal 전용 insmod 인자)
+│   └── thermal         #   브릿지 thermal 상태 관리
+│       └── thresholds  #     온도 임계값 (히스테리시스)
 ├── temperature         # 온도 모니터링 임계값
-├── arping              # ARP 연결 감시 + sweep
 ├── mmc                 # eMMC 수명 모니터링
 ├── mcp                 # 전류/전압 센서 모니터링
 ├── monitor             # wifi_link_monitor.py 표시 설정
 ├── logger              # 각종 로깅 주기 설정 (전역 기본값)
+├── snmp                # snmpd 조건부 기동 + 트랩
+│   └── trap            #   SNMP 트랩 송신 설정
 ├── eth0                # eth0 인터페이스 설정
 │   └── logger          #   eth0 전용 로깅 override
 ├── mlan0               # mlan0 인터페이스 설정
-│   ├── logger          #   mlan0 전용 로깅 override
-│   ├── net_rx          #   MGMT 프레임 로깅 (→ PCIE9098_0)
-│   ├── rate_adapt      #   FW rate adaptation override
+│   ├── logger          #   mlan0 전용 로깅 override (enabled 포함)
+│   ├── net_rx          #   MGMT 프레임 로깅 (→ PCIE9098_0 / SD9098_0)
+│   ├── rate_adapt      #   FW rate adaptation
 │   ├── periodic_roam   #   주기적 패시브 로밍
 │   ├── bgscan          #   백그라운드 스캔
 │   ├── roaming         #   로밍 알고리즘
 │   ├── mcs_tier        #   MCS tier 능력 제한 (mcstiercfg)
-│   ├── thermal_mgmt    #   FW thermal 관리 (enable/disable)
-│   └── on_connect      #   AP 연결 후 실행 명령
+│   ├── on_connect      #   AP 연결 후 실행 명령
+│   ├── checker         #   wifi_checker + reboot 정책 (구 최상위 checker에서 이동)
+│   └── arping          #   ARP 연결 감시 + sweep (구 최상위 arping에서 이동)
 └── mlan1               # mlan1 인터페이스 설정 (mlan0과 동일 구조)
-    ├── logger          #   mlan1 전용 로깅 override
-    ├── net_rx          #   MGMT 프레임 로깅 (→ PCIE9098_1)
-    ├── rate_adapt      #   FW rate adaptation override
-    ├── periodic_roam   #   주기적 패시브 로밍
-    ├── bgscan          #   백그라운드 스캔
-    ├── roaming         #   로밍 알고리즘
-    ├── mcs_tier        #   MCS tier 능력 제한 (mcstiercfg)
-    ├── thermal_mgmt    #   FW thermal 관리 (enable/disable)
-    └── on_connect      #   AP 연결 후 실행 명령
+    ├── logger, net_rx, rate_adapt, periodic_roam, bgscan,
+    ├── roaming, mcs_tier, on_connect, checker, arping ...  # mlan0과 동일 구조
+    └── (net_rx → PCIE9098_1 / SD9098_1)
 ```
+
+> **구조 변경 요약** (이전 연동/구 가이드 대비): `checker`·`arping`이 최상위 → **인터페이스별**(`mlan0.checker`, `mlan1.arping` 등)로 이동했다. `global`에서 `FW_NAME`/`MFG_MODE`가 제거되고 펌웨어는 `BOARD_TYPE`+`BUS_TYPE`+`BLUETOOTH.enable`로 자동 선택된다. `global.rate_adapt` 블록은 제거되어 실질적으로 per-iface(`mlanN.rate_adapt`)만 존재한다. `snmp` 섹션이 신규 추가되었다. 인터페이스별 스칼라 키(`connect_threshold`, `mgmt_hex_dump_enable`, `thermal_mgmt`, `enabled`, `Frequency` 등)는 트리 간결성을 위해 생략했다 — §11 참조.
 
 ---
 
@@ -64,29 +63,26 @@ wifi_init_conf.json
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `FW_NAME` | string | `"cts/pcieuart9098_combo_v1.bin"` | WiFi 펌웨어 파일 경로 (`/lib/firmware/` 기준) |
-| `MOD_PARA` | string | `"cts/wifi_mod_para.conf"` | 모듈 파라미터 설정 파일 |
+| `BOARD_TYPE` | enum | `"imx93"` | 보드/드라이버 선택. `imx93*`이면 `mlan_imx93.ko`/`moal_imx93.ko`, 그 외(`imx8mm` 등)면 `mlan_imx8.ko`/`moal_imx8.ko`. insmod할 `.ko` 파일 선택에 사용 (변경 시 드라이버 리로드/재부팅 필요) |
+| `BUS_TYPE` | enum | `"sdio"` | 버스 종류. `sdio`\|`pcie`. **fw_name 자동선택**, `mod_para` 블록 prefix(`sdio`→`SD9098_N`, `pcie`→`PCIE9098_N`), 검증 패턴 결정에 사용. 하드웨어와 반드시 일치 |
+| `BLUETOOTH.enable` | bool | `false` | BT combo 펌웨어 사용 여부. **fw_name 자동선택에 반영**(`true`면 `*_combo*.bin`). fw_name이 바뀌면 `wifi_config.py`가 `mod_para.conf`에 자동 기입 |
+| `MOD_PARA` | string | `"cts/wifi_mod_para.conf"` | 모듈 파라미터 설정 파일 (`/lib/firmware/` 기준). moal insmod 인자 `mod_para=`로 전달. dev_cap_mask/cal_data_cfg/mac_addr/net_rx/fw_name 주입 대상 파일 |
 | `CAL_DATA_CFG` | string | `"cts/WlanCalData_ext_RD.conf"` | 캘리브레이션 데이터 파일 **fallback**. 인터페이스별 `mlanN.CAL_DATA_CFG`가 우선하며, 비어있을 때만 이 값 사용. `wifi_init.sh`가 `wifi_mod_para.conf` 블록의 `cal_data_cfg=`로 주입. 자세한 내용은 [CAL_DATA_CFG 매핑](#cal_data_cfg--txpwrlimit_path--인터페이스별-매핑) 참고 |
 | `TXPWRLIMIT_PATH` | string | `"/lib/firmware/cts/txpwrlimit_cfg_9098.conf"` | TX 파워 리밋 설정 파일 (절대 경로) **fallback**. 인터페이스별 `mlanN.TXPWRLIMIT_PATH`가 우선하며, 비어있을 때만 이 값 사용 |
-| `MFG_MODE` | string | `"0"` | 제조 모드. `"1"` = MFG 모드 활성화 |
 | `STANDARD` | string | `""` | WiFi 표준 제한 **fallback**. 인터페이스별 `mlanN.STANDARD`가 우선하며, 비어있을 때만 이 값 사용. `n`/`ac`/`ax`(또는 `4`/`5`/`6`). 자세한 내용은 [11.1 STANDARD → dev_cap_mask 매핑](#standard--wifi_mod_paraconf-매핑) 참고 |
 | `DEV_CAP_MASK` | string | `""` | dev_cap_mask raw fallback. 인터페이스/global `STANDARD`가 모두 비었을 때만 사용 |
-| `ANT_TYPE` | string | `""` | 안테나 경로(GPIO mux) **부팅 시 설정**. `internal`/`external`(또는 `0`/`1`). `wifi_init.sh`가 무선 드라이버 로드 **직전**에 `SW_SEL1`/`SW_SEL2` LED로 적용. **빈값이면 설정하지 않음**(하드웨어/이전 상태 유지). 런타임 변경은 기존 `wifi ant` 명령 사용(persist 안 함) |
+| `ANT_TYPE` | string | `""` | 안테나 경로(GPIO mux) **부팅 시 설정**. `internal`/`external`(또는 `0`/`1`). `wifi_init.sh`가 무선 드라이버 로드 **직전**에 `SW_SEL1`/`SW_SEL2` GPIO로 적용. **빈값이면 설정하지 않음**(하드웨어/이전 상태 유지). 런타임 변경은 기존 `wifi ant` 명령 사용(persist 안 함) |
+| `tx_work` | int | `0` | moal 데이터 TX 제출 방식 module_param. `0`=호출자 컨텍스트 동기 제출(홉1), `1`=`tx_workqueue` 비동기(홉2, NXP iMX 기본). moal insmod 인자로 전달(bridge engine 무관·드라이버 전역). **capability-gate**: `.ko`가 `tx_work` param을 선언한 경우에만 전달, 미선언 `.ko`면 skip. 런타임 sysfs는 init 때 latch라 무효 → 모듈 reload 필요 |
 
-> **참고**: `BRIDGE_IFACE`, `MAC_MODE`, `ETH_CLIENT_IP`, `eth_link_wait_sec`는 `wbridge` 섹션으로 이동되었습니다. 하위 호환을 위해 `global`에 있어도 동작하지만, 새 설정에서는 `wbridge` 섹션을 사용하세요.
+> **펌웨어 자동 선택 (FW_NAME/MFG_MODE 제거됨)**: 구 가이드의 `FW_NAME`·`MFG_MODE`는 **더 이상 JSON 필드가 아니다**.
+> - **fw**: `wifi_init.sh`가 `BOARD_TYPE`+`BUS_TYPE`+`BLUETOOTH.enable`(+ mod_para 파일의 `mfg_mode=` 값)을 조합해 `fw_name`을 자동 산출하고, 현재 `mod_para.conf`의 `fw_name`과 다르면 `wifi_config.py`로 자동 기입한다.
+> - **MFG_MODE**: JSON이 아니라 `mod_para.conf`의 `mfg_mode=` 라인에서 읽는다.
 
-### 1.1 global.rate_adapt - FW Rate Adaptation
+> **참고**: `BRIDGE_IFACE`, `MAC_MODE`, `ETH_CLIENT_IP`, `eth_link_wait_sec`는 `wbridge` 섹션으로 이동되었습니다. 하위 호환을 위해 `global`에 있어도 동작하지만(레거시 fallback 키), 새 설정에서는 `wbridge` 섹션을 사용하세요.
 
-**사용 스크립트**: `wifi_init.sh`
+### 1.1 rate_adapt 안내 (global.rate_adapt는 제거됨)
 
-| 키 | 타입 | 기본값 | 설명 |
-|----|------|--------|------|
-| `mode` | int | `1` | rate adaptation 모드. `0`=legacy, `1`=SR(Success Rate) |
-| `low_thresh` | int | `50` | SR 모드 하한 임계값 (%). `0xff`=dynamic(noise-based) |
-| `high_thresh` | int | `80` | SR 모드 상한 임계값 (%) |
-| `interval_ms` | int | `100` | 평가 주기 (ms). association 전에 설정해야 함 |
-
-> **Per-iface override**: `mlan0.rate_adapt`, `mlan1.rate_adapt`에 동일 키를 두면 해당 인터페이스에만 override 적용된다. 우선순위: `mlanN.rate_adapt.<key>` > `global.rate_adapt.<key>` > 내장 기본값. 자세한 내용은 `11.x rate_adapt` 섹션 참조.
+> **⚠️ `global.rate_adapt` 블록은 현재 JSON에 존재하지 않는다.** `wifi_init.sh`는 `.mlanN.rate_adapt.<key> // .global.rate_adapt.<key> // empty` 형태로 global을 fallback으로 **읽도록 코딩되어 있으나, JSON에 데이터가 없으므로** 실질적으로는 항상 **인터페이스별 값(`mlanN.rate_adapt`)** 또는 내장 기본값으로 귀결된다. 즉 rate_adapt는 per-iface 설정만 유효하다 — [§11.5 rate_adapt](#115-rate_adapt---fw-rate-adaptation-per-iface-override) 참조.
 
 ### 1.2 global.ping_monitor - Ping 모니터 서비스
 
@@ -128,12 +124,18 @@ wifi_init_conf.json
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `enabled` | bool | `true` | bridge 기능 마스터 스위치. `false`이면 bridge 서비스 전체 비활성 |
-| `bridge_iface` | string | `"mlan0"` | bridge에 사용할 인터페이스. `"mlan0"` 또는 `"mlan1"` |
-| `mac_mode` | string | `"dynamic"` | MAC 주소 모드. `"default"` (base만), `"dynamic"` (동적→base), `"static"` (target→base) |
-| `ip_discovery` | bool | `false` | dynamic MAC 모드에서 MAC 확보 후 클라이언트 IP까지 탐색할지. `false`면 MAC만 확보 후 즉시 종료(IP passive-watch 3초 생략 → 부팅 가속). `true`면 기존대로 IP 탐색(passive→unicast→sweep) |
-| `eth_link_wait_sec` | int | `3` | 유선 링크 준비 대기 시간 (초). `wired_mac_ip_get.py`에서 사용 |
-| `engine` | string | `"pcap"` | 패킷 캡처 엔진. `"pcap"` 또는 `"tpacket"` |
+| `enabled` | bool | `true` | bridge 기능 마스터 스위치. `false`이면 bridge 서비스 전체 stop+disable |
+| `bridge_iface` | string | `"mlan0"` | bridge에 사용할 인터페이스. `"mlan0"` 또는 `"mlan1"`. `mlan1`이면 moal insmod `bridge_wlan_idx=1`로 전달(engine=moal 시). pcap 트랙은 `wifi_bridge@mlan0`에 하드코딩 |
+| `mac_mode` | string | `"dynamic"` | MAC 주소 모드. `"default"` (base만), `"dynamic"` (유선측 MAC 동적 획득→base), `"static"` (target→base) |
+| `ip_discovery` | bool | `false` | dynamic MAC 모드에서 MAC 확보 후 클라이언트 IP까지 탐색할지. `false`면 MAC만 확보 후 즉시 종료(부팅 가속, host route 미등록). `true`면 IP 탐색(passive→unicast→sweep) + host route(`/32 dev eth0`) 자동 등록. 양방향 라우팅 완성에는 `peer_route.enabled=true` 필요 |
+| `eth_client_ip` | string | `""` | 유선 클라이언트 고정 IP. 빈 문자열이면 quick ARP probe 비활성. 네트워크 토폴로지 종속 |
+| `eth_link_wait_sec` | int | `5` | dynamic MAC 모드에서 유선 링크 준비 대기 시간 (초). `wired_mac_ip_get.py`에서 사용 (구 기본값 3 → **5**) |
+| `eth_sweep_subnet` | string | `""` | peer 발견 최후 sweep 대역 (eth0 기준 CIDR, 예: `"192.168.1.0/24"`). 빈값이면 eth0→mlan0 inet 순 폴백하나, 부팅 race(mlan0 미초기화) 회피 위해 정적 CIDR 권장 |
+| `peer_route.enabled` | bool | `false` | 양방향 BD↔유선peer 라우팅(eth0 host scope IP/table 100 + host route + ARP/RPF sysctl) **마스터 스위치**(옵션 X). `false`면 부팅 시 모든 변경을 revert(기본 투명 브릿지 — 토폴로지 무관 안전). BD가 유선 peer와 **직접** 통신해야 하는 mlan0-IP 토폴로지에서만 `true`(+ `ip_discovery=true`, `arp_ignore_always.enabled=false` 권장). **토폴로지(IP 배치)는 이 JSON이 아니라 `wifi <iface> ip`/webui로 결정.** invalid/missing이면 factory default=`true` |
+| `arp_ignore_always.enabled` | bool | `true` | `peer_route`와 **독립**으로 `arp_ignore=1`/`arp_announce=2`를 적용해 클론 MAC 이중 ARP 응답 레이스를 차단. **IP 배치에 종속**: eth0-IP(또는 eth0/mlan0 동일 서브넷) 구성에서 `true`, 순수 mlan0-IP에서 `false`. ⚠️ 아래 주의 박스 참고 |
+| `engine` | string | `"pcap"` | 브릿지 엔진. `pcap`\|`tpacket`(유저스페이스) \| `moal`(드라이버 레벨, `mod_para` `bridge_mode=1`). invalid면 pcap 폴백. moal↔그 외 전환은 드라이버 리로드/재부팅 필요. engine=moal이면 `link_guard` 무시 |
+
+> **⚠️ `arp_ignore_always.enabled`는 IP 배치(토폴로지)에 종속**: 출하 기본값 **`true`**는 eth0에 IP를 두거나 eth0/mlan0가 동일 서브넷이라 클론 MAC 이중 ARP 응답이 문제되는 구성을 전제로 한다. **토폴로지(IP 배치)는 이 JSON이 아니라 `wifi <iface> ip`/webui로 결정**되므로, 배치를 바꾸면 이 값도 함께 점검해야 한다. 순수 mlan0-IP에서 BD↔유선peer 직접통신이 필요하면 `peer_route.enabled=true` + `ip_discovery=true` + `arp_ignore_always.enabled=false` 3종 세트로 설정한다(이때 mlan0 IP 배치도 `wifi mlan0 ip`/webui로 수행). `arp_ignore_always=true` + `peer_route=off` 조합에서 mlan0-IP + 유선↔BD가 필요하면 `wifi_init.sh`가 `[GUARD]` 경고를 남긴다.
 
 ### 3.1 wbridge.optimize - 커널 레벨 네트워크 튜닝
 
@@ -178,14 +180,14 @@ wifi_init_conf.json
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `warm_cpu_enter` | int | `80` | CPU warm 진입 온도 (°C) |
-| `hot_cpu_enter` | int | `90` | CPU hot 진입 온도 (°C) |
-| `warm_cpu_exit` | int | `75` | CPU warm 해제 온도 (°C) |
-| `hot_cpu_exit` | int | `85` | CPU hot 해제 온도 (°C) |
-| `warm_wifi_enter` | int | `70` | WiFi warm 진입 온도 (°C) |
-| `hot_wifi_enter` | int | `80` | WiFi hot 진입 온도 (°C) |
-| `warm_wifi_exit` | int | `65` | WiFi warm 해제 온도 (°C) |
-| `hot_wifi_exit` | int | `75` | WiFi hot 해제 온도 (°C) |
+| `warm_cpu_enter` | int | `90` | CPU warm 진입 온도 (°C) |
+| `hot_cpu_enter` | int | `95` | CPU hot 진입 온도 (°C) |
+| `warm_cpu_exit` | int | `85` | CPU warm 해제 온도 (°C) |
+| `hot_cpu_exit` | int | `90` | CPU hot 해제 온도 (°C) |
+| `warm_wifi_enter` | int | `85` | WiFi warm 진입 온도 (°C) |
+| `hot_wifi_enter` | int | `90` | WiFi hot 진입 온도 (°C) |
+| `warm_wifi_exit` | int | `80` | WiFi warm 해제 온도 (°C) |
+| `hot_wifi_exit` | int | `85` | WiFi hot 해제 온도 (°C) |
 
 **히스테리시스 설계**: enter와 exit 사이에 5도 갭을 두어 상태 플리핑을 방지한다.
 
@@ -209,12 +211,15 @@ wifi_init_conf.json
 
 ---
 
-## 4. checker - WiFi 체커 + Reboot 정책
+## 4. checker - WiFi 체커 + Reboot 정책 (인터페이스별: `mlanN.checker`)
 
 **사용 스크립트**: `wifi_checker.sh`, `wlan_reboot_policy.sh`
 
+> **⚠️ 구조 변경**: 이 설정은 최상위 `checker`에서 **인터페이스별**(`mlan0.checker`, `mlan1.checker`)로 이동했다. 각 인터페이스에 동일 키가 존재하며 `enabled`로 데몬(`wifi_checker@<iface>`) 활성화를 제어한다.
+
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
+| `enabled` | bool | mlan0 `true` / mlan1 `false` | `wifi_checker@<iface>` 데몬 활성화. `wifi_apply_enabled.sh`가 systemd enable/disable로 동기화 |
 | `LIMIT_CNT` | int | `5` | 인터페이스 미존재 허용 횟수. 이 값+1회 연속 실패 시 reboot 요청 |
 | `MAX_UNSTABLE_DURATION` | int | `10` | 미연결 허용 시간 (초). **단계적 복구**: 초과 시 1차 `wpa_cli reassociate`(가벼움), 3배(기본 30s) 초과 시에도 무진행이면 `wpa_supplicant` 재시작. 능동 연결 진행 중(auth/assoc/handshake)이면 개입 보류. AP 부재 시 재시작 루프를 피하려 disconnect 경로는 reboot까지 가지 않음 |
 | `MAX_REBOOT_COUNT` | int | `3` | 쿨다운 윈도우 내 최대 reboot 횟수. 초과 시 루프 감지 |
@@ -223,6 +228,7 @@ wifi_init_conf.json
 | `FAULT_REASSOC_CNT` | int | `2` | fault 누적 시 재연결(reassoc) 시도 횟수 임계값 |
 | `FAULT_RESTART_CNT` | int | `4` | fault 누적 시 wpa_supplicant 재시작 횟수 임계값 |
 | `FAULT_REBOOT_CNT` | int | `6` | fault 누적 시 reboot 실행 횟수 임계값 |
+| `RECONFIGURE_GRACE_SEC` | int | `20` | reconfigure 재연결 과도기 동안 불안정 사다리(reassoc/restart/reboot) 억제 시간 (초, flag mtime 기준) |
 
 ### Reboot 정책 동작 흐름
 
@@ -253,17 +259,17 @@ fault 누적 → FAULT_REASSOC_CNT 도달 → reassoc 시도
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `emerg_cpu` | int | `93` | CPU 긴급 온도 (C). `emerg_count_threshold`+1회 연속 초과 시 cooldown+reboot |
-| `crit_cpu` | int | `90` | CPU 심각 온도 (C) |
-| `error_cpu` | int | `85` | CPU 에러 온도 (C) |
-| `warn_cpu` | int | `80` | CPU 경고 온도 (C) |
-| `emerg_mlan` | int | `85` | WiFi 칩 긴급 온도 (C) |
-| `crit_mlan` | int | `80` | WiFi 칩 심각 온도 (C) |
-| `error_mlan` | int | `75` | WiFi 칩 에러 온도 (C) |
-| `warn_mlan` | int | `70` | WiFi 칩 경고 온도 (C) |
+| `emerg_cpu` | int | `100` | CPU 긴급 온도 (C). `emerg_count_threshold`+1회 연속 초과 시 cooldown+reboot |
+| `crit_cpu` | int | `95` | CPU 심각 온도 (C) |
+| `error_cpu` | int | `90` | CPU 에러 온도 (C) |
+| `warn_cpu` | int | `85` | CPU 경고 온도 (C) |
+| `emerg_mlan` | int | `95` | WiFi 칩 긴급 온도 (C) |
+| `crit_mlan` | int | `90` | WiFi 칩 심각 온도 (C) |
+| `error_mlan` | int | `85` | WiFi 칩 에러 온도 (C) |
+| `warn_mlan` | int | `80` | WiFi 칩 경고 온도 (C) |
 | `cooldown_sec` | int | `60` | 과열 시 서비스 중지 후 대기 시간 (초) |
 | `recover_cpu` | int | `90` | CPU 복구 판정 온도 (C). 이하로 내려가면 reboot |
-| `recover_mlan` | int | `80` | WiFi 칩 복구 판정 온도 (C) |
+| `recover_mlan` | int | `85` | WiFi 칩 복구 판정 온도 (C) |
 | `check_interval_sec` | int | `5` | 온도 체크 주기 (초) |
 | `emerg_count_threshold` | int | `2` | emerg 연속 횟수 임계값. 초과 시 cooldown 진입 |
 
@@ -271,16 +277,18 @@ fault 누적 → FAULT_REASSOC_CNT 도달 → reassoc 시도
 
 | 레벨 | CPU 임계값 | MLAN 임계값 | syslog 레벨 | 동작 |
 |------|-----------|------------|-------------|------|
-| debug | < 80 | < 70 | local3.debug | 정상 |
-| warn | >= 80 | >= 70 | local3.warn | 경고 로깅 |
-| error | >= 85 | >= 75 | local3.err | 에러 로깅 |
-| crit | >= 90 | >= 80 | local3.crit | 심각 로깅 |
-| emerg | >= 93 (연속 3회) | - | local0.emerg | WiFi 서비스 중지 → cooldown → reboot |
+| debug | < 85 | < 80 | local3.debug | 정상 |
+| warn | >= 85 | >= 80 | local3.warn | 경고 로깅 |
+| error | >= 90 | >= 85 | local3.err | 에러 로깅 |
+| crit | >= 95 | >= 90 | local3.crit | 심각 로깅 |
+| emerg | >= 100 (연속 3회) | - | local0.emerg | WiFi 서비스 중지 → cooldown → reboot |
+
+> **참고**: emerg 판정 분기는 **CPU 온도만** 사용하며, `emerg_mlan`은 crit/err/warn 로깅 분류에서만 참조된다(emerg 분기 미사용).
 
 ### 과열 복구 시퀀스
 
 ```
-CPU >= 93C (연속 emerg_count_threshold+1회)
+CPU >= 100C (연속 emerg_count_threshold+1회)
 → WiFi/Bridge 전체 서비스 중지
 → cooldown_sec 동안 대기
 → 온도 폴링 (5초 간격)
@@ -290,12 +298,15 @@ CPU >= 93C (연속 emerg_count_threshold+1회)
 
 ---
 
-## 6. arping - ARP 연결 감시
+## 6. arping - ARP 연결 감시 (인터페이스별: `mlanN.arping`)
 
 **사용 스크립트**: `wifi_arping.sh`, `arping_sweep.sh`
 
+> **⚠️ 구조 변경**: 이 설정은 최상위 `arping`에서 **인터페이스별**(`mlan0.arping`, `mlan1.arping`)로 이동했다. `enabled`로 데몬(`wifi_arping@<iface>`) 활성화를 제어한다(양쪽 기본 `false`).
+
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
+| `enabled` | bool | `false` | `wifi_arping@<iface>` 데몬 활성화 (mlan0/mlan1 모두 기본 `false`). `wifi_apply_enabled.sh`가 systemd enable/disable로 동기화 |
 | `threshold` | int | `10` | ARP 연속 실패 허용 횟수 |
 | `cooldown_sec` | int | `10` | 임계값 도달 후 대기 시간 (초) |
 | `loop_delay_sec` | int | `10` | ARP 체크 주기 (초) |
@@ -422,8 +433,6 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 |----|------|--------|------|
 | `cpu_interval_sec` | int | `60` | CPU/MEM 사용률 로깅 주기 (초) |
 | `link_interval_sec` | float | `0.95` | 링크 상태 체크 주기 (초) |
-| `link_retry_count` | int | `4` | 순간 끊김 억제용 station dump 빠른 재시도 횟수 (아래 참고) |
-| `link_retry_delay_sec` | float | `0.05` | 빠른 재시도 간격 (초). `count × delay` 가 끊김 무시 윈도우 |
 | `stat_log_interval_sec` | int | `1` | WiFi 통계 로깅 주기 (초) |
 | `stat_check_interval_sec` | int | `1` | WiFi 통계 체크 주기 (초) |
 | `stat_reset_interval_sec` | int | `604800` | 통계 누적 리셋 주기 (초, 기본 7일) |
@@ -431,7 +440,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 > `stat_log_interval_sec`과 `stat_check_interval_sec`의 차이: check는 데이터 수집 주기, log는 실제 파일/syslog 기록 주기이다. log >= check 관계를 유지해야 한다.
 
-> **`link_retry_count` / `link_retry_delay_sec`** (`wifi_logger_link.py`): `wpa_cli reconfigure`·`select_network` 직후 발생하는 100~200ms 순간 끊김 동안 `iw station dump`가 일시적으로 비는데, 이때 곧바로 끊김으로 기록하지 않고 `delay` 간격으로 최대 `count`회 빠르게 재조회한다. 윈도우(`count × delay`, 기본 4×0.05s ≈ 200ms) 안에서 회복되면 끊김으로 표시되지 않는다. 정상 연결 중에는 호출되지 않아 오버헤드가 없다. **기본 JSON에는 아직 키가 없으며**, 없으면 모듈 기본값(4 / 0.05)을 사용한다. 무시 윈도우를 늘리려면 `count`나 `delay`를 키워 설정한다. CLI `--link-retry-count` / `--link-retry-delay` 로도 override 가능하다.
+> **⚠️ `link_retry_count` / `link_retry_delay_sec` 는 JSON 키가 아니다 (유령 키)**: 구 가이드에는 이 두 키가 `logger` 표에 있었으나 **현재 JSON에는 실재하지 않으며, JSON Schema에도 넣지 말 것**. `wifi_logger_link.py`의 순간 끊김 억제 로직(`wpa_cli reconfigure`·`select_network` 직후 100~200ms 동안 `iw station dump`가 비는 것을 곧바로 끊김으로 기록하지 않고 재조회)은 **모듈/CLI 기본값 `4` / `0.05`(초)로만 동작**한다. 조정이 필요하면 JSON이 아니라 CLI `--link-retry-count` / `--link-retry-delay`로만 가능하다.
 
 ### per-interface logger override
 
@@ -463,9 +472,11 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `enabled` | bool | `true` | 인터페이스별 초기화/적용 여부. `false`면 `wifi_init.sh`가 해당 인터페이스의 radio setup과 bridge enable을 건너뜀 |
+| `enabled` | bool | mlan0 `true` / mlan1 `false` | 인터페이스별 초기화/적용 여부. `false`면 `wifi_init.sh`가 해당 인터페이스의 radio setup과 bridge enable을 건너뜀 |
 | `Frequency` | string | `"auto"` | 인터페이스별 bandcfg 기본값. `auto`, `2.4GHz`, `5GHz` |
-| `net_rx` | int | `0` | MGMT 프레임 로깅 모드. `wifi_init.sh`가 `wifi_mod_para.conf`의 해당 PCIE9098 블록에 반영. 0=비활성 |
+| `connect_threshold` | int | `-100` | 연결 후보 BSS의 신호레벨이 이 값(dBm) 미만이면 연결 후보에서 제외하는 최소 연결 임계값. `-100`=사실상 무필터. **커스텀 패치 wpa_supplicant 바이너리**(`/opt/wlan/bin/wpa_supplicant.imx8`/`.imx93`)가 `/usr/local/etc/wifi_init_conf.json`을 직접 읽어 적용(shell/python 스크립트 경유 아님). 로그: `BSS: … level N < connect threshold M` |
+| `net_rx` | int | `0` | MGMT 프레임 로깅 모드. `wifi_init.sh`가 `wifi_mod_para.conf`의 해당 블록(`PCIE9098_N` / `SD9098_N`)에 반영. 0=비활성 |
+| `mgmt_hex_dump_enable` | bool | `false` | MGMT 프레임 hex dump 로깅 활성화 |
 | `STANDARD` | string | mlan0 `"ax"`, mlan1 `"ac"` | WiFi 표준 제한. `wifi_init.sh`가 `wifi_mod_para.conf`의 해당 블록에 `dev_cap_mask`로 반영. `n`/`ac`/`ax`(또는 `4`/`5`/`6`). **mlan1은 `ax` 불가**. 아래 [매핑](#standard--wifi_mod_paraconf-매핑) 참고 |
 | `CAL_DATA_CFG` | string | `""` | 인터페이스별 캘리브레이션 데이터 파일. 비어있으면 `global.CAL_DATA_CFG`로 fallback. `wifi_init.sh`가 `wifi_mod_para.conf` 블록의 `cal_data_cfg=`로 주입. 아래 [매핑](#cal_data_cfg--txpwrlimit_path--인터페이스별-매핑) 참고 |
 | `TXPWRLIMIT_PATH` | string | `""` | 인터페이스별 TX 파워 리밋 파일(절대 경로). 비어있으면 `global.TXPWRLIMIT_PATH`로 fallback. `"none"`이면 이 인터페이스만 미적용. 부팅 시 `mlanutl <iface> hostcmd`로 적용 |
@@ -589,7 +600,10 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 | `CHECK_INTERVAL` | int | `3` / `5` | 로밍 체크 주기 (초) |
 | `SCAN_NO_RESULT_SLEEP` | int | `3` | 스캔 결과 없을 때 대기 (초) |
 | `ROAM_SUCCESS_SLEEP` | int | `5` | 로밍 성공 후 대기 (초) |
+| `enabled` | bool | mlan0 `true` / mlan1 `false` | 로밍 데몬(`wifi_roam@<iface>`) 활성화. `wifi_apply_enabled.sh`가 systemd enable/disable로 동기화. **mlan0 로밍이 기본 활성화됨** |
 | `extra_ssids` | array[str] | `[]` | conf 기본 ssid 외 추가 로밍 후보 SSID 목록. 빈 배열=기존 단일 SSID 동작(무회귀) |
+| `generate_network_blocks` | bool | `false` | 모드 결정자. `false`=모드B(단일 블록, cross-SSID는 외부 `wifi connect`만, `extra_ssids` 무시), `true`=모드A(다중 network 블록 + `select_network` cross-SSID). 기본 `false`로 기존 단일 SSID 동작 무회귀 |
+| `ROAM_CROSS_FAIL_RETRY_COUNT` | int | `2` | 모드A cross-SSID(`select_network`) 전환 실패 시 cooldown 없이 즉시 재시도 허용 횟수. 초과 시 지수 backoff로 해당 SSID를 후보에서 제외(진동 차단). 모드B에선 미적용 |
 
 > **다중 SSID 로밍 (`extra_ssids`)**: wpa_supplicant conf는 단일 `network` 블록을 유지하고, `extra_ssids`에 적은 SSID도 스캔·로밍 후보에 포함한다. `wifi_roam.py`(자동 데몬)와 `wifi <iface> roam`(`passive_roam.py`) 모두 적용된다.
 > - **전제**: `extra_ssids`는 현재 network와 **같은 `psk`/`key_mgmt`를 공유**해야 한다. 전환은 conf의 `ssid=`만 교체(`wifi <iface> connect`)하므로 자격증명이 다르면 인증에 실패한다.
@@ -603,16 +617,16 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `enable` | bool | `true` | 예측 로밍 활성화 |
+| `enable` | bool | `false` | 예측 로밍 활성화 (**plain-mode화로 기본 off**, 구 기본 true) |
 | `threshold_boost` | int | `5` | 신호 하락 추세 시 임계값 상향 (dB) |
 | `trend_window_size` | int | `5` | 추세 분석 윈도우 크기 (샘플 수) |
 | `trend_history_max_age` | int | `30` | 추세 기록 최대 보존 시간 (초) |
 
 #### LOAD_BASED_ROAM - 부하 기반 로밍
 
-| 키 | 타입 | 기본값 (mlan0/mlan1) | 설명 |
-|----|------|---------------------|------|
-| `enable` | bool | `false` / `true` | 부하 기반 로밍 활성화 |
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| `enable` | bool | `false` | 부하 기반 로밍 활성화 (**mlan0/mlan1 모두 기본 false** — 이제 인터페이스 간 차이 아님) |
 | `max_roam_load` | int | `80` | 채널 부하 임계값 (%) |
 | `load_diff_threshold` | int | `20` | 채널 간 부하 차이 임계값 (%) |
 
@@ -629,7 +643,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `enable` | bool | `true` | 적응형 주기 활성화 |
+| `enable` | bool | `false` | 적응형 주기 활성화 (**plain-mode화로 기본 off**, 구 기본 true). `false`이면 `CHECK_INTERVAL` 고정 사용 |
 | `min_check_interval` | int | `1` | 최소 체크 주기 (초) |
 | `max_check_interval` | int | `10` | 최대 체크 주기 (초) |
 | `rssi_drop_threshold` | int | `-5` | 신호 하락 감지 임계값 (dB) |
@@ -643,7 +657,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `enable` | bool | `true` | 활성화 |
+| `enable` | bool | `false` | 활성화 (**plain-mode화로 기본 off**, 구 기본 true) |
 | `garp_count` | int | `2` | Gratuitous ARP 전송 횟수 |
 | `garp_wait` | int | `1` | GARP 전송 간 대기 (초) |
 
@@ -651,7 +665,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `enable` | bool | `true` | 활성화 |
+| `enable` | bool | `false` | 활성화 (**plain-mode화로 기본 off**, 구 기본 true) |
 | `peer_count` | int | `5` | 워밍업 대상 피어 수 |
 | `peer_wait` | int | `1` | 피어 간 대기 (초) |
 
@@ -659,7 +673,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 **사용 스크립트**: `wifi_init.sh`
 
-mlan0 / mlan1에 개별 적용. 블록이 없거나 특정 키가 없으면 `global.rate_adapt`로 fallback.
+mlan0 / mlan1에 개별 적용. 코드상 `global.rate_adapt`로 fallback하도록 되어 있으나 **현재 JSON global에는 `rate_adapt` 블록이 없으므로**(§1.1 참조) 실질적으로는 인터페이스별 값 또는 내장 기본값만 유효하다.
 
 | 키 | 타입 | 기본값 (현재 JSON) | 설명 |
 |----|------|------------------|------|
@@ -687,10 +701,12 @@ mlan0 / mlan1에 개별 적용. 블록이 없거나 특정 키가 없으면 `glo
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `enabled` | bool | `false` | mcstiercfg 적용 활성화 |
-| `ht` | string | `""` | HT(11n) 인자. 예: `"7"`(1x1), `"15"`(2x2). `""`이면 건너뜀 |
-| `vht` | string | `""` | VHT(11ac) 인자. 예: `"7"`, `"8"`, `"9"`. `""`이면 건너뜀 |
-| `he` | string | `""` | HE(11ax) 인자. 예: `"7"`, `"9"`, `"11"`, 또는 `"both 7"`. `""`이면 건너뜀 |
+| `enabled` | bool | `false` (양쪽) | mcstiercfg 적용 활성화 |
+| `ht` | string | mlan0 `"7"` / mlan1 `""` | HT(11n) 인자. 예: `"7"`(1x1), `"15"`(2x2). `""`이면 건너뜀 |
+| `vht` | string | mlan0 `"7"` / mlan1 `""` | VHT(11ac) 인자. 예: `"7"`, `"8"`, `"9"`. `""`이면 건너뜀 |
+| `he` | string | mlan0 `"both 7"` / mlan1 `""` | HE(11ax) 인자. 예: `"7"`, `"9"`, `"11"`, 또는 `"both 7"`. `""`이면 건너뜀 |
+
+> **인터페이스별 기본값 주의**: 출하 JSON은 mlan0에만 tier 값(`ht="7"`, `vht="7"`, `he="both 7"`)이 설정돼 있고 mlan1은 모두 빈 문자열(`""`)이다. 단 `mcs_tier.enabled`는 **양쪽 모두 `false`**이므로 기본 상태에서는 실제로 적용되지 않는다(값만 preset).
 
 **적용 시점**:
 1. **부팅 시** (`wifi_init.sh` → `apply_iface_radio_defaults`): association 전에 1회 적용
@@ -723,8 +739,8 @@ mlan0 / mlan1에 개별 적용. 블록이 없거나 특정 키가 없으면 `glo
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `enabled` | bool | `false` | on_connect 기능 활성화 |
-| `commands` | array | `[]` | AP 연결/로밍 후 순서대로 실행할 명령 목록. 실패해도 중단하지 않고 로깅만 수행 |
+| `enabled` | bool | mlan0 `true` / mlan1 `false` | on_connect 기능 활성화 |
+| `commands` | array | `[]` (양쪽) | AP 연결/로밍 후 순서대로 실행할 명령 목록. 실패해도 중단하지 않고 로깅만 수행 |
 
 ### 11.8 thermal_mgmt - FW Thermal 관리
 
@@ -741,19 +757,58 @@ mlan0 / mlan1에 개별 적용. 블록이 없거나 특정 키가 없으면 `glo
 - 키 누락/invalid → factory default(`enable`). 명시적 `false`일 때만 `disable`
 - `.mlanN.enabled=false`이면 해당 인터페이스는 건너뜀 (TXPWRLIMIT과 동일 동작)
 
+### 11.9 checker - WiFi 체커 + Reboot 정책 (per-iface)
+
+`mlan0.checker` / `mlan1.checker`. 최상위에서 인터페이스별로 이동했다. 키·기본값·동작 흐름은 [§4 checker](#4-checker---wifi-체커--reboot-정책-인터페이스별-mlannchecker) 참조. `enabled`(mlan0 `true` / mlan1 `false`)로 데몬 활성화, `RECONFIGURE_GRACE_SEC`(20)로 재연결 과도기 사다리 억제.
+
+### 11.10 arping - ARP 연결 감시 (per-iface)
+
+`mlan0.arping` / `mlan1.arping`. 최상위에서 인터페이스별로 이동했다. 키·기본값은 [§6 arping](#6-arping---arp-연결-감시-인터페이스별-mlannarping) 참조. `enabled`는 양쪽 기본 `false`.
+
+---
+
+## 12. snmp - SNMP 조건부 기동 + 트랩
+
+**사용 스크립트**: `wifi_apply_enabled.sh`(snmpd enable/disable 동기화), `wifi_services.sh`(start), `wifi_event.sh`(트랩 송신)
+
+SNMP는 **기본 off(opt-in)**이다. `snmp.enabled=true`일 때만 `wifi_apply_enabled.sh`가 `snmpd.service`를 systemd enable/disable로 동기화하고 `wifi_services.sh`가 기동한다(UDP 161 노출 → 보안상 opt-in). 트랩은 별도로 `trap.enabled=true`일 때 `wifi_event.sh`가 무선 링크/채널 이벤트 시 `snmptrap`을 송신한다.
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| `enabled` | bool | `false` | `snmpd.service` enable/disable + 기동 마스터 스위치. `true`면 UDP 161 노출 |
+| `trap.enabled` | bool | `false` | SNMP 트랩 송신 활성화. `true`면 링크/채널 이벤트 시 `wifi_event.sh`가 `snmptrap` 송신 |
+| `trap.dest` | string | `""` | 트랩 수신지. `host` 또는 `host:port` 형식. 빈 문자열이면 트랩 미송신 |
+| `trap.community` | string | `"public"` | 트랩 community 문자열 |
+| `trap.version` | enum | `"2c"` | SNMP 트랩 버전. `1` \| `2c` |
+
+```json
+"snmp": {
+    "enabled": false,
+    "trap": { "enabled": false, "dest": "", "community": "public", "version": "2c" }
+}
+```
+
 ---
 
 ## mlan0 vs mlan1 기본값 차이
 
-대부분 동일하지만 다음 값이 다르다:
+대부분 동일하지만 다음 값이 다르다 (현재 출하 JSON 기준):
 
 | 설정 경로 | mlan0 | mlan1 | 이유 |
 |-----------|-------|-------|------|
+| `enabled` | `true` | `false` | **mlan1은 기본적으로 초기화되지 않음** (radio setup·bridge enable skip) |
 | `STANDARD` | `ax` | `ac` | mlan1은 11ax 미지원 |
 | `roaming.CHECK_INTERVAL` | `3` | `5` | mlan0은 주 채널로 더 빠른 로밍 감지 |
-| `LOAD_BASED_ROAM.enable` | `false` | `true` | mlan1은 보조 채널로 부하 분산 활용 |
-| `PING_PONG_PREVENTION.window` | `30` | `60` | mlan1은 더 넓은 윈도우로 보수적 판단 |
-| `PING_PONG_PREVENTION.detection_time` | `10` | `30` | mlan1은 핑퐁 감지 시 더 오래 대기 |
+| `roaming.PING_PONG_PREVENTION.window` | `30` | `60` | mlan1은 더 넓은 윈도우로 보수적 판단 |
+| `roaming.PING_PONG_PREVENTION.detection_time` | `10` | `30` | mlan1은 핑퐁 감지 시 더 오래 대기 |
+| `roaming.enabled` | `true` | `false` | mlan0 로밍 기본 활성화 |
+| `bgscan.enabled` | `true` | `false` | mlan1 비활성 인터페이스 |
+| `checker.enabled` | `true` | `false` | mlan1 비활성 인터페이스 |
+| `on_connect.enabled` | `true` | `false` | mlan1 비활성 인터페이스 |
+| `logger.enabled` | `true` | `false` | mlan1 비활성 인터페이스 |
+| `mcs_tier.ht` / `.vht` / `.he` | `"7"` / `"7"` / `"both 7"` | `""` / `""` / `""` | mlan0만 MCS tier 제한값 설정(단 `mcs_tier.enabled`는 양쪽 `false`) |
+
+> **더 이상 차이 아님**: `LOAD_BASED_ROAM.enable`은 이제 mlan0/mlan1 **모두 `false`**로 동일하다(구 가이드의 mlan1=true 는 stale). `PREDICTIVE_ROAM`/`ADAPTIVE_INTERVAL`/`POST_ROAM_ARP_OPTIMIZATION`/`PEER_WARMUP`도 양쪽 `false`로 동일하다.
 
 ---
 
