@@ -55,6 +55,7 @@ STATE=""
 PRE_STATE=""
 BUS_LINK=""
 REBOOT_F=0
+BGSCAN_GUARD_TS=0   # bgscan 가드 최종 점검 시각(300s 주기, mlan0 전용)
 
 cleanup() {
     logger -p local0.info "[$tag:$LINENO] [$IFACE] stop"
@@ -203,6 +204,26 @@ while true; do
 
         STATE=$(get_state)
         TIMESTAMP=$(date +%s)
+
+        # bgscan 가드(경고-only, 300s 주기, mlan0 전용): wpa_supplicant 내부 bgscan 활성은
+        # 자율 로밍으로 Roaming(0x04) notify(3훅)를 우회한다 — 운영 전제 감시
+        # (wlan-opc docs/implementation/design-roam-indication-notify.md §8.3/§8.4).
+        # 전 network id 순회(모드A extra 블록 포함). 한계: 전역 `wpa_cli set bgscan`은 ctrl
+        # 조회 불가(hostap 2.10 전역 getter 없음) → wpa.log의 모듈 초기화 로그로 보조 탐지.
+        # mlan1은 스코프 제외 결정(DBDC 도입 시 재평가)이라 검사하지 않는다.
+        if [[ "$IFACE" == "mlan0" ]] && (( TIMESTAMP - BGSCAN_GUARD_TS >= 300 )); then
+            BGSCAN_GUARD_TS=$TIMESTAMP
+            while read -r _nid _; do
+                [[ "$_nid" =~ ^[0-9]+$ ]] || continue
+                _bg=$(wpa_cli -i "$IFACE" get_network "$_nid" bgscan 2>/dev/null)
+                if [[ -n "$_bg" && "$_bg" != "FAIL" && "$_bg" != '""' ]]; then
+                    logger -p local0.warning "[$tag:$LINENO] [$IFACE] network $_nid bgscan=$_bg active — autonomous roaming bypasses Roaming(0x04) notify (design §8.4)"
+                fi
+            done < <(wpa_cli -i "$IFACE" list_networks 2>/dev/null | tail -n +2)
+            if grep -q "bgscan: Initialized module" "/var/log/cantops/wpa/$IFACE/wpa.log" 2>/dev/null; then
+                logger -p local0.warning "[$tag:$LINENO] [$IFACE] wpa.log: bgscan module initialized — runtime global 'set bgscan' suspected (ctrl-undetectable, design §8.3)"
+            fi
+        fi
 
         if [[ "$STATE" == "DISCONNECTED" || "$STATE" == "SCANNING" || "$STATE" == "down" ]]; then
             FAULT_CNT=0
