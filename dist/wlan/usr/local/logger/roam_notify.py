@@ -8,8 +8,10 @@ post-roam link.json(/var/log/cantops/json/<iface>/link.json)을 재독해
 WIRE CONTRACT (opcd 파서와 정확히 일치해야 함):
   transport : UDP/IPv4 → 127.0.0.1:50608 (opcd OPC_DEFAULT_ROAM_NOTIFY_PORT)
   format    : 1 datagram = JSON object 1개, UTF-8, <=512 bytes
-  keys      : iface(str) ap_mac(str) from(str) rssi(int) snr(int)
-              channel(int) freq(int) band(str "2.4G"|"5G")
+  keys      : iface(str) ap_mac(str) 는 항상 포함. from/rssi/snr/channel/freq/band 는
+              값이 있을 때만 포함(생략 가능). opcd 파서 기준 ap_mac/channel/freq 는
+              필수(누락 시 datagram drop), rssi/snr 은 선택(부재→0), iface/from/band 는
+              opcd에서 log 전용.
 
 전 구간 try/except로 감싸 절대 raise 하지 않는다(로밍 return 경로 보호).
 미연결(link.json == "{}" 또는 link.address 없음)이면 조용히 skip(전송 없음).
@@ -188,6 +190,8 @@ def notify_roam(iface, from_bssid, to_bssid, port=DEFAULT_PORT):
 
         msg = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         if len(msg) > MAX_DATAGRAM:
+            print(f"[roam_notify] datagram {len(msg)}B > {MAX_DATAGRAM}B cap — dropped",
+                  file=sys.stderr)
             return False
 
         sock = None
@@ -202,7 +206,14 @@ def notify_roam(iface, from_bssid, to_bssid, port=DEFAULT_PORT):
                 except OSError:
                     pass
     except Exception:
-        # 로밍 return 경로 보호 — 무슨 일이 있어도 raise 안 함
+        # 로밍 return 경로 보호 — 무슨 일이 있어도 raise 안 함. 단, 무음 실패로 묻히지
+        # 않게 traceback을 stderr에 남긴다(진단 로그 자체도 절대 raise 안 하도록 가드).
+        try:
+            import traceback
+            print(f"[roam_notify] unexpected error: {traceback.format_exc()}",
+                  file=sys.stderr)
+        except Exception:
+            pass
         return False
 
 

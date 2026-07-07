@@ -1729,10 +1729,15 @@ def route_cross_ssid_transition(iface, to_ssid, from_bssid, to_bssid):
     배타적 2-모드라 한 모드에서 다른 경로는 진입 불가."""
     if GENERATE_NETWORK_BLOCKS:
         ok = select_network_for_ssid(iface, to_ssid)
+        # 모드 A는 SSID 단위로 연결 — 실제 결합 BSSID가 to_bssid와 다를 수 있어,
+        # to_bssid를 그대로 넘기면 notify_roam의 settle-poll이 무의미하게
+        # 2초 timeout까지 대기한다. 빈 값을 넘겨 폴링을 skip한다.
+        notify_to_bssid = ""
     else:
         ok = connect_to_ssid(iface, to_ssid, from_bssid, to_bssid)
+        notify_to_bssid = to_bssid
     if ok:
-        notify_roam(iface, from_bssid, to_bssid)
+        notify_roam(iface, from_bssid, notify_to_bssid)
     return ok
 
 
