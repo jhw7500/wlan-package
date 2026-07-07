@@ -4,7 +4,7 @@ import os
 import sys
 import subprocess
 
-from roam_notify import notify_roam
+from roam_notify import notify_roam, get_associated_bssid
 
 WIFI_IFACE = "mlan0"
 SCAN_LOG = f"/var/log/cantops/scan/{WIFI_IFACE}/ap.log"
@@ -191,9 +191,12 @@ def roam_to_ap(interface, ap, index_label=None, current_ssid=None):
         if result.returncode == 0:
             # same-SSID(wpa_cli roam)는 bssid가 목표 BSS이고 스캔의 ch/rssi가 권위값이므로
             # 함께 넘겨 정확히 발행한다. cross-SSID(wifi connect)는 펌웨어가 BSS를 자율
-            # 선택하므로 ""를 넘겨 link.json(실 결합 BSS)을 쓰게 한다.
+            # 선택하므로 wpa_cli status(권위)로 실 결합 BSS를 조회해 넘긴다 — link.json은
+            # 비동기 갱신이라 직후엔 이전 AP가 남을 수 있다. 실패 시 "" → link.address
+            # 폴백(종전 동작), 무회귀.
             if cross_ssid:
-                notify_roam(interface, from_bssid, "")
+                notify_roam(interface, from_bssid,
+                            get_associated_bssid(interface))
             else:
                 notify_roam(interface, from_bssid, bssid,
                             channel=ap["ch"], rssi=ap["ss"])
