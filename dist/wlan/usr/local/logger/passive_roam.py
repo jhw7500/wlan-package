@@ -2,7 +2,10 @@
 import json
 import os
 import sys
+import socket
 import subprocess
+
+from roam_notify import notify_roam
 
 WIFI_IFACE = "mlan0"
 SCAN_LOG = f"/var/log/cantops/scan/{WIFI_IFACE}/ap.log"
@@ -181,6 +184,8 @@ def roam_to_ap(interface, ap, index_label=None, current_ssid=None):
         print(f"\noutput: {stdout} {stderr}".rstrip())
         # 한줄 요약 (wifi_periodic_roam.sh에서 grep "ROAM_RESULT"로 추출)
         print(f"ROAM_RESULT: {bssid} ch:{ap['ch']} rssi:{ap['ss']} -> {stdout or stderr or 'unknown'}")
+        if result.returncode == 0:
+            notify_roam(interface, read_current_bssid(), bssid)
         return result.returncode
     except subprocess.TimeoutExpired:
         print(f"ROAM_RESULT: {bssid} ch:{ap['ch']} rssi:{ap['ss']} -> timeout")

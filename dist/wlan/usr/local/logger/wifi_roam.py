@@ -12,6 +12,7 @@ from typing import Any, Dict
 from datetime import datetime
 from collections import deque
 from sUTILS import Logger, _EXTRA_
+from roam_notify import notify_roam
 
 VERSION = "1.1"
 IFACE = "mlan0"
@@ -1506,6 +1507,8 @@ def roam_to_bssid(from_bssid, to_bssid):
 
             optimize_post_roam_connectivity(IFACE)
 
+            notify_roam(IFACE, from_bssid, to_bssid)
+
             return True
         else:
             logger.message(
@@ -1725,8 +1728,12 @@ def route_cross_ssid_transition(iface, to_ssid, from_bssid, to_bssid):
     select_network_for_ssid, 모드 B(False)는 기존 connect_to_ssid(외부 wifi connect).
     배타적 2-모드라 한 모드에서 다른 경로는 진입 불가."""
     if GENERATE_NETWORK_BLOCKS:
-        return select_network_for_ssid(iface, to_ssid)
-    return connect_to_ssid(iface, to_ssid, from_bssid, to_bssid)
+        ok = select_network_for_ssid(iface, to_ssid)
+    else:
+        ok = connect_to_ssid(iface, to_ssid, from_bssid, to_bssid)
+    if ok:
+        notify_roam(iface, from_bssid, to_bssid)
+    return ok
 
 
 def score_ap(ap, rssi_weight=1.0, ld_weight=1.0):
