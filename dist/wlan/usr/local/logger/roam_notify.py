@@ -58,17 +58,15 @@ def _parse_rssi(raw):
             return None
         if isinstance(raw, (int, float)):
             return int(raw)
-        s = str(raw).replace("dBm", "").strip()
-        if not s:
-            return None
-        # 대괄호 안테나 형태 방어: '[' ']' 제거 후 첫 콤마 토큰
-        s = s.replace("[", " ").replace("]", " ")
-        if "," in s:
-            s = s.split(",")[0]
-        s = s.strip()
-        if not s:
-            return None
-        return int(float(s))
+        # 'dBm'/괄호/콤마를 공백으로 정규화하고 첫 파싱 가능한 정수 토큰을 취한다
+        # (안테나별 '-66 [-68,-70]' 조합에서도 결합 평균 -66을 반환).
+        s = str(raw).replace("dBm", "").replace("[", " ").replace("]", " ").replace(",", " ")
+        for tok in s.split():
+            try:
+                return int(float(tok))
+            except ValueError:
+                continue
+        return None
     except (ValueError, TypeError):
         return None
 
@@ -152,8 +150,9 @@ def notify_roam(iface, from_bssid, to_bssid, port=DEFAULT_PORT):
     Returns True on datagram sent, False otherwise(미연결/에러/skip).
     """
     try:
-        # link.address가 to_bssid(새 AP)로 정착할 때까지 짧게 폴링해, 비동기로
-        # 갱신되는 link.json의 이전 AP 값을 그대로 싣는 것을 방지한다.
+        # link.json 1회 읽기(폴링 없음). ap_mac은 build_payload에서 to_bssid를 우선
+        # 사용하므로 link.json 비동기 지연에도 정확하다(same-SSID). cross-SSID는
+        # 호출자가 to_bssid=""를 넘겨 link.address(실 결합 BSS)를 쓴다.
         data = _read_link_json(iface)
         if data is None:
             # 미연결/파일없음
