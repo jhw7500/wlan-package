@@ -203,6 +203,11 @@ def roam_to_ap(interface, ap, index_label=None, current_ssid=None):
         return result.returncode
     except subprocess.TimeoutExpired:
         print(f"ROAM_RESULT: {bssid} ch:{ap['ch']} rssi:{ap['ss']} -> timeout")
+        # timeout이어도 로밍이 뒤늦게 성공했을 수 있다(설계 §8.1 미세갭): 실 결합 BSS가
+        # from과 다르면 통지. 조회 실패("")나 미변경이면 통지 생략 — 오발행 없음.
+        cur = get_associated_bssid(interface)
+        if cur and cur.lower() != (from_bssid or "").lower():
+            notify_roam(interface, from_bssid, cur)
         return 1
     except FileNotFoundError:
         print("roam command not found.")
