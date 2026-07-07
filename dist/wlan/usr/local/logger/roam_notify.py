@@ -21,16 +21,11 @@ import json
 import os
 import socket
 import sys
-import time
 
 DEFAULT_PORT = 50608
 OPCD_HOST = "127.0.0.1"
 LINK_JSON_FMT = "/var/log/cantops/json/{iface}/link.json"
 MAX_DATAGRAM = 512  # opcd 와이어계약 상한과 일치(opcd가 >512B 드롭). MTU 제한 아님.
-# link.json은 재결합 후 비동기로 갱신된다. roam 직후 바로 읽으면 이전 AP를 담고
-# 있을 수 있어(리뷰 PR #83), 새 AP(to_bssid)로 정착할 때까지 잠깐 폴링한다.
-SETTLE_TIMEOUT_S = 2.0
-SETTLE_INTERVAL_S = 0.2
 
 
 def _link_json_path(iface):
@@ -50,28 +45,6 @@ def _read_link_json(iface):
         return json.loads(raw)
     except (ValueError, TypeError):
         return None
-
-
-def _read_link_json_settled(iface, to_bssid,
-                            timeout=SETTLE_TIMEOUT_S, interval=SETTLE_INTERVAL_S):
-    """link.json을 읽되, to_bssid가 주어지면 link.address가 그 BSSID로 정착(로밍
-    완료)할 때까지 짧게 폴링한다. 타임아웃까지 미정착이면 마지막으로 읽은 값을
-    반환한다(ap_mac은 build_payload의 to_bssid 폴백이 처리). to_bssid가 비면
-    폴링 없이 1회 읽는다(예: cross-SSID select_network 경로)."""
-    data = _read_link_json(iface)
-    target = (to_bssid or "").strip().lower()
-    if not target:
-        return data
-    deadline = time.monotonic() + timeout
-    while True:
-        link = data.get("link") if isinstance(data, dict) else None
-        addr = link.get("address") if isinstance(link, dict) else None
-        if isinstance(addr, str) and addr.strip().lower() == target:
-            return data                      # 정착 완료
-        if time.monotonic() >= deadline:
-            return data                      # 타임아웃 — 마지막 값
-        time.sleep(interval)
-        data = _read_link_json(iface)
 
 
 def _parse_rssi(raw):
@@ -112,12 +85,14 @@ def build_payload(data, iface, from_bssid, to_bssid):
     if not isinstance(link, dict):
         return None
 
-    ap_mac = link.get("address")
-    if isinstance(ap_mac, str):
-        ap_mac = ap_mac.strip()
+    # ap_mac: same-SSID 로밍은 to_bssid가 목표 BSS(정확)이므로 우선 사용 — link.json이
+    # 아직 이전 AP를 담고 있어도 정확하고, 블로킹 폴링도 불필요. cross-SSID는 펌웨어가
+    # BSS를 자율 선택하므로 호출자가 to_bssid=""를 넘기며, 이때 link.address(실 결합
+    # BSS)로 폴백한다. (rssi/snr/channel은 link.json 1회 읽기 — 소폭 staleness 허용)
+    ap_mac = (to_bssid or "").strip()
     if not ap_mac:
-        # 미연결: link는 있으나 address 없음 → to_bssid로 폴백
-        ap_mac = (to_bssid or "").strip()
+        addr = link.get("address")
+        ap_mac = addr.strip() if isinstance(addr, str) else ""
     if not ap_mac:
         return None
 
@@ -179,7 +154,7 @@ def notify_roam(iface, from_bssid, to_bssid, port=DEFAULT_PORT):
     try:
         # link.address가 to_bssid(새 AP)로 정착할 때까지 짧게 폴링해, 비동기로
         # 갱신되는 link.json의 이전 AP 값을 그대로 싣는 것을 방지한다.
-        data = _read_link_json_settled(iface, to_bssid)
+        data = _read_link_json(iface)
         if data is None:
             # 미연결/파일없음
             return False
