@@ -176,10 +176,11 @@ def roam_to_ap(interface, ap, index_label=None, current_ssid=None):
     print(f"  MODE:  {'connect (cross-SSID)' if cross_ssid else 'roam (same-SSID)'}")
     print(f"\nExecuting: {' '.join(cmd)}")
 
-    # from_bssid는 roam 실행 '전'에 캡처한다. read_current_bssid()는 link.json을 읽는데,
-    # 이 파일은 재결합 후 비동기로 갱신되어 roam 이후 호출하면 이미 새 AP를 반환해
-    # from==to가 되어버린다(리뷰 PR #83 HIGH).
-    from_bssid = read_current_bssid()
+    # from_bssid는 roam 실행 전에 캡처한다: read_current_bssid()가 읽는 link.json은
+    # 재결합 후 비동기로 갱신되므로, roam 이후 호출하면 이미 새 AP를 반환해 from==to가
+    # 된다. LINK_JSON을 명시 전달 — 기본인자는 def 시점 값(mlan0)으로 고정되어
+    # --iface 변경(모듈변수 갱신)을 반영하지 못한다.
+    from_bssid = read_current_bssid(LINK_JSON)
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         stdout = result.stdout.strip() if result.stdout else ""
