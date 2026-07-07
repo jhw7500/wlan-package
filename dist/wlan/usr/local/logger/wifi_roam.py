@@ -12,7 +12,7 @@ from typing import Any, Dict
 from datetime import datetime
 from collections import deque
 from sUTILS import Logger, _EXTRA_
-from roam_notify import notify_roam
+from roam_notify import notify_roam, get_associated_bssid
 
 VERSION = "1.1"
 IFACE = "mlan0"
@@ -1732,10 +1732,12 @@ def route_cross_ssid_transition(iface, to_ssid, from_bssid, to_bssid):
         ok = select_network_for_ssid(iface, to_ssid)
     else:
         ok = connect_to_ssid(iface, to_ssid, from_bssid, to_bssid)
-    # cross-SSID는 두 모드 모두 펌웨어가 실제 결합 BSS를 자율 선택하므로 to_bssid가
-    # 실 BSS와 다를 수 있다. notify_roam엔 ""를 넘겨 link.address(실 BSS)를 쓰게 한다.
+    # cross-SSID는 두 모드 모두 펌웨어가 실제 결합 BSS를 자율 선택하므로 to_bssid를
+    # 미리 알 수 없다. link.json은 ~1s 주기 비동기 갱신이라 전환 직후엔 이전 AP가
+    # 남을 수 있어(stale ap_mac), 성공 직후 wpa_cli status(권위)로 실 결합 BSS를
+    # 조회해 넘긴다. 조회 실패 시 "" → link.address 폴백(종전 동작), 무회귀.
     if ok:
-        notify_roam(iface, from_bssid, "")
+        notify_roam(iface, from_bssid, get_associated_bssid(iface))
     return ok
 
 

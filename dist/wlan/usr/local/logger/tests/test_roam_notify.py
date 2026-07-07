@@ -7,7 +7,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from roam_notify import build_payload, _parse_rssi
+from roam_notify import build_payload, _parse_rssi, _bssid_from_status
 
 
 def _data(address="04:ba:d6:ec:0b:08", signal_avg="-66 dBm", signal=None,
@@ -144,3 +144,51 @@ def test_channel_to_freq_helper():
     assert _channel_to_freq(149) == 5745
     assert _channel_to_freq(0) is None
     assert _channel_to_freq("x") is None
+
+
+# ---- cross-SSID 실 결합 BSS 조회 (wpa_cli status 권위) ----
+def test_bssid_from_status_completed():
+    out = ("bssid=04:ba:d6:ec:0b:08\nfreq=5180\nssid=jhw_wlan\n"
+           "wpa_state=COMPLETED\naddress=00:e0:4c:68:2b:1f\n")
+    assert _bssid_from_status(out) == "04:ba:d6:ec:0b:08"
+
+
+def test_bssid_from_status_not_completed():
+    # 결합 미완료 시점의 bssid 줄은 신뢰하지 않는다
+    assert _bssid_from_status("bssid=04:ba:d6:ec:0b:08\nwpa_state=SCANNING\n") is None
+    assert _bssid_from_status("wpa_state=COMPLETED\n") is None   # bssid 줄 없음
+    assert _bssid_from_status("") is None
+    assert _bssid_from_status(None) is None
+
+
+def _stub_status_run(stdout_text):
+    class _R:
+        stdout = stdout_text
+    return lambda *a, **k: _R()
+
+
+def test_get_associated_bssid_success(monkeypatch):
+    import roam_notify
+    monkeypatch.setattr(roam_notify.subprocess, "run",
+                        _stub_status_run("bssid=aa:bb:cc:dd:ee:ff\nwpa_state=COMPLETED\n"))
+    assert roam_notify.get_associated_bssid("mlan0", wait_s=0.1, poll_s=0.01) \
+        == "aa:bb:cc:dd:ee:ff"
+
+
+def test_get_associated_bssid_timeout_empty(monkeypatch):
+    # COMPLETED 미도달 → wait_s 소진 후 "" (호출자는 link.address 폴백 = 무회귀)
+    import roam_notify
+    monkeypatch.setattr(roam_notify.subprocess, "run",
+                        _stub_status_run("wpa_state=SCANNING\n"))
+    assert roam_notify.get_associated_bssid("mlan0", wait_s=0.05, poll_s=0.01) == ""
+
+
+def test_get_associated_bssid_exception_empty(monkeypatch):
+    # wpa_cli 부재 등 예외에도 절대 raise 하지 않고 ""
+    import roam_notify
+
+    def _boom(*a, **k):
+        raise OSError("no wpa_cli")
+
+    monkeypatch.setattr(roam_notify.subprocess, "run", _boom)
+    assert roam_notify.get_associated_bssid("mlan0", wait_s=0.05, poll_s=0.01) == ""

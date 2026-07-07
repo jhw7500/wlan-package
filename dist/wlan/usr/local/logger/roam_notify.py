@@ -20,7 +20,9 @@ import argparse
 import json
 import os
 import socket
+import subprocess
 import sys
+import time
 
 DEFAULT_PORT = 50608
 OPCD_HOST = "127.0.0.1"
@@ -221,6 +223,58 @@ def notify_roam(iface, from_bssid, to_bssid, port=DEFAULT_PORT,
         except Exception:
             pass
         return False
+
+
+def _bssid_from_status(text):
+    """`wpa_cli status` 출력에서 결합 BSSID를 추출하는 순수 함수.
+
+    wpa_state=COMPLETED 이고 bssid 줄이 있을 때만 그 값을 반환, 아니면 None
+    (결합 미완료 시점의 bssid 줄은 신뢰하지 않는다).
+    """
+    state = None
+    bssid = None
+    for ln in (text or "").splitlines():
+        if ln.startswith("wpa_state="):
+            state = ln.split("=", 1)[1].strip()
+        elif ln.startswith("bssid="):
+            bssid = ln.split("=", 1)[1].strip()
+    if state == "COMPLETED" and bssid:
+        return bssid
+    return None
+
+
+def get_associated_bssid(iface, wait_s=3.0, poll_s=0.5):
+    """현재 결합 BSSID를 wpa_cli status(권위)로 조회하는 **호출자용** 헬퍼.
+
+    cross-SSID 전환은 펌웨어가 BSS를 자율 선택해 호출자가 목표 BSSID를 모르고,
+    link.json은 비동기(~1s 주기) 갱신이라 전환 직후엔 이전 AP가 남을 수 있다.
+    → 전환 성공 직후 이 헬퍼로 실 결합 BSS를 얻어 notify_roam(to_bssid=..)에 넘긴다.
+
+    wifi connect 가 결합 완료 전에 rc==0 을 반환할 수 있어 wpa_state=COMPLETED 까지
+    wait_s 한도로 poll_s 간격 재시도한다(이미 결합 상태면 첫 호출에서 즉시 반환).
+    실패/미결합/예외는 "" — 호출자가 그대로 to_bssid 로 넘기면 link.address 폴백
+    (종전 동작)이라 무회귀. 절대 raise 하지 않는다.
+
+    notify_roam 자체는 이 함수를 호출하지 않는다(전송 경로는 subprocess 없이 유지).
+    """
+    try:
+        deadline = time.monotonic() + max(0.0, float(wait_s))
+        while True:
+            try:
+                st = subprocess.run(
+                    ["wpa_cli", "-i", iface, "status"],
+                    capture_output=True, text=True, timeout=2,
+                )
+                bssid = _bssid_from_status(st.stdout)
+                if bssid:
+                    return bssid
+            except Exception:
+                pass  # 개별 시도 실패는 재시도가 흡수
+            if time.monotonic() >= deadline:
+                return ""
+            time.sleep(poll_s)
+    except Exception:
+        return ""
 
 
 def main(argv=None):
