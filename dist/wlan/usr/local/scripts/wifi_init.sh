@@ -314,6 +314,17 @@ if command -v wifi_init_sync_extra_ssid_blocks >/dev/null 2>&1; then
         || logger -p local0.err "[$tag:$LINENO] extra_ssid block sync failed: mlan1"
 fi
 
+# bgscan 가드(경고-only): mlan0 conf의 비주석 bgscan=는 wpa_supplicant 자율 로밍을 켜
+# Roaming(0x04) notify(3훅)를 우회한다 — 운영 전제 위반 감시
+# (wlan-opc docs/implementation/design-roam-indication-notify.md §8.3/§8.4).
+# mlan1은 스코프 제외 결정(DBDC 도입 시 재평가)이라 검사하지 않는다. 런타임 wpa_cli set
+# 경로는 wifi_checker.sh의 주기 가드가 보조한다. (set -e: grep 무매치는 || true로 흡수)
+_bgscan_line=$(grep -E '^[[:space:]]*bgscan[[:space:]]*=' /etc/wpa_supplicant/wpa_supplicant-mlan0.conf 2>/dev/null | head -1) || true
+if [ -n "${_bgscan_line:-}" ]; then
+    logger -p local0.warning "[$tag:$LINENO] [mlan0] active wpa_supplicant bgscan in conf ('${_bgscan_line}') — autonomous roaming bypasses Roaming(0x04) notify (design §8.4)"
+fi
+unset _bgscan_line
+
 # Apply wifi_init_conf.json values to wifi_mod_para.conf
 # Mappings (PCIE9098_0/SD9098_0 ← mlan0, PCIE9098_1/SD9098_1 ← mlan1):
 #   - net_rx        ← mlanN.net_rx (int)
