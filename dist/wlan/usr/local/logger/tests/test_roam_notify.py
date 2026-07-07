@@ -117,3 +117,30 @@ def test_rssi_falls_back_to_signal():
 def test_from_omitted_when_empty():
     p = build_payload(_data(), "mlan0", "", "04:ba:d6:ec:0b:08")
     assert "from" not in p
+
+
+# ---- option D: 호출자 권위값(스캔) 우선 ----
+def test_authoritative_channel_freq_rssi_override():
+    # link.json엔 이전 AP(ch40/5200/-66)가 남아 있어도 호출자 스캔값(ch36/5180/-49)이 우선
+    d = _data(freq=5200, channel=40, signal_avg="-66 dBm", noise=-96)
+    p = build_payload(d, "mlan0", "", "04:ba:d6:ec:0b:08",
+                      channel=36, freq=5180, rssi=-49)
+    assert p["channel"] == 36 and p["freq"] == 5180 and p["band"] == "5G"
+    assert p["rssi"] == -49
+
+
+def test_channel_only_derives_freq():
+    # passive_roam은 channel만 넘김 → freq 파생(ch36→5180)
+    d = _data(freq=None, channel=None, noise=None)
+    p = build_payload(d, "mlan0", "", "00:80:4c:c7:7d:dd", channel=36, rssi=-50)
+    assert p["channel"] == 36 and p["freq"] == 5180 and p["band"] == "5G"
+
+
+def test_channel_to_freq_helper():
+    from roam_notify import _channel_to_freq
+    assert _channel_to_freq(1) == 2412
+    assert _channel_to_freq(36) == 5180
+    assert _channel_to_freq(40) == 5200
+    assert _channel_to_freq(149) == 5745
+    assert _channel_to_freq(0) is None
+    assert _channel_to_freq("x") is None

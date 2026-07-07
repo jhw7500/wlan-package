@@ -189,9 +189,14 @@ def roam_to_ap(interface, ap, index_label=None, current_ssid=None):
         # 한줄 요약 (wifi_periodic_roam.sh에서 grep "ROAM_RESULT"로 추출)
         print(f"ROAM_RESULT: {bssid} ch:{ap['ch']} rssi:{ap['ss']} -> {stdout or stderr or 'unknown'}")
         if result.returncode == 0:
-            # same-SSID(wpa_cli roam)는 bssid가 목표 BSS(정확). cross-SSID(wifi connect)는
-            # 펌웨어가 BSS를 자율 선택하므로 ""를 넘겨 link.address(실 BSS)를 쓰게 한다.
-            notify_roam(interface, from_bssid, "" if cross_ssid else bssid)
+            # same-SSID(wpa_cli roam)는 bssid가 목표 BSS이고 스캔의 ch/rssi가 권위값이므로
+            # 함께 넘겨 정확히 발행한다. cross-SSID(wifi connect)는 펌웨어가 BSS를 자율
+            # 선택하므로 ""를 넘겨 link.json(실 결합 BSS)을 쓰게 한다.
+            if cross_ssid:
+                notify_roam(interface, from_bssid, "")
+            else:
+                notify_roam(interface, from_bssid, bssid,
+                            channel=ap["ch"], rssi=ap["ss"])
         return result.returncode
     except subprocess.TimeoutExpired:
         print(f"ROAM_RESULT: {bssid} ch:{ap['ch']} rssi:{ap['ss']} -> timeout")

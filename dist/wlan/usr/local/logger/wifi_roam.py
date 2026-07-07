@@ -1468,9 +1468,9 @@ def optimize_post_roam_connectivity(iface):
 # ==============================================================================
 # 개선된 roam_to_bssid (Ping-pong 방지 포함)
 # ==============================================================================
-def roam_to_bssid(from_bssid, to_bssid):
+def roam_to_bssid(from_bssid, to_bssid, channel=None, freq=None, rssi=None):
     """
-    Ping-pong 확인 후 로밍 실행
+    Ping-pong 확인 후 로밍 실행 (channel/freq/rssi=대상 AP 스캔 권위값)
 
     Args:
         from_bssid: 현재 연결된 BSSID
@@ -1507,7 +1507,8 @@ def roam_to_bssid(from_bssid, to_bssid):
 
             optimize_post_roam_connectivity(IFACE)
 
-            notify_roam(IFACE, from_bssid, to_bssid)
+            notify_roam(IFACE, from_bssid, to_bssid,
+                        channel=channel, freq=freq, rssi=rssi)
 
             return True
         else:
@@ -2071,7 +2072,10 @@ def main():
                     cross_ssid_cooldown, best_ap["ssid"], ok, ROAM_SUCCESS_SLEEP + interval
                 )
                 time.sleep(ROAM_SUCCESS_SLEEP)
-            elif roam_to_bssid(station["bssid"], best_ap["bssid"]):
+            elif roam_to_bssid(station["bssid"], best_ap["bssid"],
+                               channel=best_ap.get("channel"),
+                               freq=best_ap.get("freq"),
+                               rssi=best_ap.get("rssi")):
                 time.sleep(ROAM_SUCCESS_SLEEP)
             time.sleep(interval)
             continue

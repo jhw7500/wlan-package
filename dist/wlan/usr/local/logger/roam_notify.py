@@ -71,8 +71,28 @@ def _parse_rssi(raw):
         return None
 
 
-def build_payload(data, iface, from_bssid, to_bssid):
+def _channel_to_freq(ch):
+    """802.11 채널번호 → 중심주파수(MHz). 2.4G(1-14)/5G(36-177)만 지원, 불명 시 None.
+    (passive_roam 스캔 데이터는 channel만 있고 freq가 없어 파생에 사용.)"""
+    try:
+        ch = int(ch)
+    except (ValueError, TypeError):
+        return None
+    if 1 <= ch <= 13:
+        return 2412 + (ch - 1) * 5
+    if ch == 14:
+        return 2484
+    if 36 <= ch <= 177:
+        return 5000 + ch * 5
+    return None
+
+
+def build_payload(data, iface, from_bssid, to_bssid,
+                  channel=None, freq=None, rssi=None):
     """link.json dict → opcd wire 페이로드 dict. 미연결이면 None.
+
+    channel/freq/rssi가 주어지면(호출자의 대상 AP 스캔값=권위) link.json보다 우선한다
+    — 로밍 직후 비동기로 지연되는 link.json이 이전 AP 값을 담고 있어도 정확하게 발행.
 
     파일 read와 분리한 순수 함수(self-test 용이).
     """
@@ -96,19 +116,27 @@ def build_payload(data, iface, from_bssid, to_bssid):
 
     info = data.get("info") if isinstance(data.get("info"), dict) else {}
 
-    # RSSI: signal_avg 우선, 없으면 signal
-    rssi = _parse_rssi(link.get("signal_avg"))
+    # channel/freq/rssi: 호출자가 대상 AP 스캔값(권위)을 주면 우선 — 로밍 직후 link.json이
+    # 아직 이전 AP를 담고 있어도 정확. 없으면 link.json에서 읽는다.
     if rssi is None:
-        rssi = _parse_rssi(link.get("signal"))
-
-    # freq / channel
-    freq = info.get("freq")
+        rssi = _parse_rssi(link.get("signal_avg"))
+        if rssi is None:
+            rssi = _parse_rssi(link.get("signal"))
+    if channel is None:
+        channel = info.get("channel")
+    if freq is None:
+        freq = info.get("freq")
+    # 채널만 있고 freq가 없으면(예: passive_roam 스캔은 ch만) 채널→freq 파생
+    if freq is None and channel is not None:
+        freq = _channel_to_freq(channel)
+    try:
+        rssi = int(rssi) if rssi is not None else None
+    except (ValueError, TypeError):
+        rssi = None
     try:
         freq = int(freq) if freq is not None else None
     except (ValueError, TypeError):
         freq = None
-
-    channel = info.get("channel")
     try:
         channel = int(channel) if channel is not None else None
     except (ValueError, TypeError):
@@ -144,8 +172,11 @@ def build_payload(data, iface, from_bssid, to_bssid):
     return payload
 
 
-def notify_roam(iface, from_bssid, to_bssid, port=DEFAULT_PORT):
+def notify_roam(iface, from_bssid, to_bssid, port=DEFAULT_PORT,
+                channel=None, freq=None, rssi=None):
     """로밍 완료를 opcd에 통지한다. 절대 raise 하지 않는다.
+
+    channel/freq/rssi: 호출자가 아는 대상 AP 스캔값(권위). 주면 link.json보다 우선.
 
     Returns True on datagram sent, False otherwise(미연결/에러/skip).
     """
@@ -158,7 +189,8 @@ def notify_roam(iface, from_bssid, to_bssid, port=DEFAULT_PORT):
             # 미연결/파일없음
             return False
 
-        payload = build_payload(data, iface, from_bssid, to_bssid)
+        payload = build_payload(data, iface, from_bssid, to_bssid,
+                                channel=channel, freq=freq, rssi=rssi)
         if not payload:
             return False
 
@@ -201,9 +233,16 @@ def main(argv=None):
                         help="대상 AP BSSID (link.address 폴백)")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT,
                         help=f"opcd UDP 포트 (기본 {DEFAULT_PORT})")
+    parser.add_argument("--channel", type=int, default=None,
+                        help="대상 AP 채널 (권위값; 생략 시 link.json)")
+    parser.add_argument("--freq", type=int, default=None,
+                        help="대상 AP 주파수 MHz (권위값; 생략 시 channel 파생/link.json)")
+    parser.add_argument("--rssi", type=int, default=None,
+                        help="대상 AP RSSI dBm (권위값; 생략 시 link.json)")
     args = parser.parse_args(argv)
 
-    ok = notify_roam(args.iface, args.from_bssid, args.to_bssid, args.port)
+    ok = notify_roam(args.iface, args.from_bssid, args.to_bssid, args.port,
+                     channel=args.channel, freq=args.freq, rssi=args.rssi)
     return 0 if ok else 1
 
 
