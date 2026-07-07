@@ -2,7 +2,6 @@
 import json
 import os
 import sys
-import socket
 import subprocess
 
 from roam_notify import notify_roam
@@ -177,6 +176,10 @@ def roam_to_ap(interface, ap, index_label=None, current_ssid=None):
     print(f"  MODE:  {'connect (cross-SSID)' if cross_ssid else 'roam (same-SSID)'}")
     print(f"\nExecuting: {' '.join(cmd)}")
 
+    # from_bssid는 roam 실행 '전'에 캡처한다. read_current_bssid()는 link.json을 읽는데,
+    # 이 파일은 재결합 후 비동기로 갱신되어 roam 이후 호출하면 이미 새 AP를 반환해
+    # from==to가 되어버린다(리뷰 PR #83 HIGH).
+    from_bssid = read_current_bssid()
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         stdout = result.stdout.strip() if result.stdout else ""
@@ -185,7 +188,7 @@ def roam_to_ap(interface, ap, index_label=None, current_ssid=None):
         # 한줄 요약 (wifi_periodic_roam.sh에서 grep "ROAM_RESULT"로 추출)
         print(f"ROAM_RESULT: {bssid} ch:{ap['ch']} rssi:{ap['ss']} -> {stdout or stderr or 'unknown'}")
         if result.returncode == 0:
-            notify_roam(interface, read_current_bssid(), bssid)
+            notify_roam(interface, from_bssid, bssid)
         return result.returncode
     except subprocess.TimeoutExpired:
         print(f"ROAM_RESULT: {bssid} ch:{ap['ch']} rssi:{ap['ss']} -> timeout")

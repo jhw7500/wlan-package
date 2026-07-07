@@ -23,7 +23,7 @@ import sys
 DEFAULT_PORT = 50608
 OPCD_HOST = "127.0.0.1"
 LINK_JSON_FMT = "/var/log/cantops/json/{iface}/link.json"
-MAX_DATAGRAM = 512
+MAX_DATAGRAM = 512  # opcd 와이어계약 상한과 일치(opcd가 >512B 드롭). MTU 제한 아님.
 
 
 def _link_json_path(iface):
@@ -106,7 +106,7 @@ def build_payload(data, iface, from_bssid, to_bssid):
         payload["channel"] = channel
     if freq is not None:
         payload["freq"] = freq
-        payload["band"] = "5G" if freq >= 2500 else "2.4G"
+        payload["band"] = "5G" if freq >= 5000 else "2.4G"
 
     # SNR = rssi - noise (noise는 channel_info[str(freq)].noise)
     noise = None
@@ -119,7 +119,8 @@ def build_payload(data, iface, from_bssid, to_bssid):
         noise = int(noise) if noise is not None else None
     except (ValueError, TypeError):
         noise = None
-    # noise 부재/0이면 snr omit
+    # noise 부재/0이면 snr omit. 이 드라이버에서 noise=0은 survey 미초기화(측정불가)를
+    # 의미하며 실측 0 dBm이 아니므로, 잘못된 snr(=rssi)을 보내지 않도록 생략한다.
     if rssi is not None and noise not in (None, 0):
         payload["snr"] = rssi - noise
 
