@@ -34,3 +34,12 @@ dist/wlan/opt/wlan/bin/mlanutl_*
 dist/wlan/opt/wlan/driver/*.ko
 dist/wlan/opt/wlan/driver/debug/*.ko
 dist/wlan/usr/local/opc/bin/
+
+# 특허 출원 전 자기공개 방지 — 발명/특허 문서는 PUBLIC repo에 커밋 금지 (2026-06-24)
+# wlan-package는 PUBLIC이므로 아래 문서 커밋 시 신규성 상실 위험
+docs/04-report/wbridge-patent-prior-art-*.md
+docs/04-report/wbridge-invention-disclosure-*.md
+
+# 로컬 툴/에이전트 세션 artifact (추적 제외)
+.playwright-mcp/
+.superpowers/
