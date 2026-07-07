@@ -4,6 +4,8 @@ import os
 import sys
 import subprocess
 
+from roam_notify import notify_roam
+
 WIFI_IFACE = "mlan0"
 SCAN_LOG = f"/var/log/cantops/scan/{WIFI_IFACE}/ap.log"
 LINK_JSON = f"/var/log/cantops/json/{WIFI_IFACE}/link.json"
@@ -174,6 +176,11 @@ def roam_to_ap(interface, ap, index_label=None, current_ssid=None):
     print(f"  MODE:  {'connect (cross-SSID)' if cross_ssid else 'roam (same-SSID)'}")
     print(f"\nExecuting: {' '.join(cmd)}")
 
+    # from_bssid는 roam 실행 전에 캡처한다: read_current_bssid()가 읽는 link.json은
+    # 재결합 후 비동기로 갱신되므로, roam 이후 호출하면 이미 새 AP를 반환해 from==to가
+    # 된다. LINK_JSON을 명시 전달 — 기본인자는 def 시점 값(mlan0)으로 고정되어
+    # --iface 변경(모듈변수 갱신)을 반영하지 못한다.
+    from_bssid = read_current_bssid(LINK_JSON)
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         stdout = result.stdout.strip() if result.stdout else ""
@@ -181,6 +188,15 @@ def roam_to_ap(interface, ap, index_label=None, current_ssid=None):
         print(f"\noutput: {stdout} {stderr}".rstrip())
         # 한줄 요약 (wifi_periodic_roam.sh에서 grep "ROAM_RESULT"로 추출)
         print(f"ROAM_RESULT: {bssid} ch:{ap['ch']} rssi:{ap['ss']} -> {stdout or stderr or 'unknown'}")
+        if result.returncode == 0:
+            # same-SSID(wpa_cli roam)는 bssid가 목표 BSS이고 스캔의 ch/rssi가 권위값이므로
+            # 함께 넘겨 정확히 발행한다. cross-SSID(wifi connect)는 펌웨어가 BSS를 자율
+            # 선택하므로 ""를 넘겨 link.json(실 결합 BSS)을 쓰게 한다.
+            if cross_ssid:
+                notify_roam(interface, from_bssid, "")
+            else:
+                notify_roam(interface, from_bssid, bssid,
+                            channel=ap["ch"], rssi=ap["ss"])
         return result.returncode
     except subprocess.TimeoutExpired:
         print(f"ROAM_RESULT: {bssid} ch:{ap['ch']} rssi:{ap['ss']} -> timeout")
