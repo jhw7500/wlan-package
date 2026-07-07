@@ -12,6 +12,7 @@ from typing import Any, Dict
 from datetime import datetime
 from collections import deque
 from sUTILS import Logger, _EXTRA_
+from roam_notify import notify_roam
 
 VERSION = "1.1"
 IFACE = "mlan0"
@@ -1467,9 +1468,9 @@ def optimize_post_roam_connectivity(iface):
 # ==============================================================================
 # 개선된 roam_to_bssid (Ping-pong 방지 포함)
 # ==============================================================================
-def roam_to_bssid(from_bssid, to_bssid):
+def roam_to_bssid(from_bssid, to_bssid, channel=None, freq=None, rssi=None):
     """
-    Ping-pong 확인 후 로밍 실행
+    Ping-pong 확인 후 로밍 실행 (channel/freq/rssi=대상 AP 스캔 권위값)
 
     Args:
         from_bssid: 현재 연결된 BSSID
@@ -1505,6 +1506,9 @@ def roam_to_bssid(from_bssid, to_bssid):
             logger.message("info", f"[{IFACE}] Roam successful: {to_bssid}", _EXTRA_())
 
             optimize_post_roam_connectivity(IFACE)
+
+            notify_roam(IFACE, from_bssid, to_bssid,
+                        channel=channel, freq=freq, rssi=rssi)
 
             return True
         else:
@@ -1725,8 +1729,14 @@ def route_cross_ssid_transition(iface, to_ssid, from_bssid, to_bssid):
     select_network_for_ssid, 모드 B(False)는 기존 connect_to_ssid(외부 wifi connect).
     배타적 2-모드라 한 모드에서 다른 경로는 진입 불가."""
     if GENERATE_NETWORK_BLOCKS:
-        return select_network_for_ssid(iface, to_ssid)
-    return connect_to_ssid(iface, to_ssid, from_bssid, to_bssid)
+        ok = select_network_for_ssid(iface, to_ssid)
+    else:
+        ok = connect_to_ssid(iface, to_ssid, from_bssid, to_bssid)
+    # cross-SSID는 두 모드 모두 펌웨어가 실제 결합 BSS를 자율 선택하므로 to_bssid가
+    # 실 BSS와 다를 수 있다. notify_roam엔 ""를 넘겨 link.address(실 BSS)를 쓰게 한다.
+    if ok:
+        notify_roam(iface, from_bssid, "")
+    return ok
 
 
 def score_ap(ap, rssi_weight=1.0, ld_weight=1.0):
@@ -2062,7 +2072,10 @@ def main():
                     cross_ssid_cooldown, best_ap["ssid"], ok, ROAM_SUCCESS_SLEEP + interval
                 )
                 time.sleep(ROAM_SUCCESS_SLEEP)
-            elif roam_to_bssid(station["bssid"], best_ap["bssid"]):
+            elif roam_to_bssid(station["bssid"], best_ap["bssid"],
+                               channel=best_ap.get("channel"),
+                               freq=best_ap.get("freq"),
+                               rssi=best_ap.get("rssi")):
                 time.sleep(ROAM_SUCCESS_SLEEP)
             time.sleep(interval)
             continue
