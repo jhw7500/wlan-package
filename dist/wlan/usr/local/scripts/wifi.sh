@@ -538,6 +538,34 @@ show_info() {
             echo "  (no JSON config)"
         fi
         echo ""
+
+        # MFG 상태 — SoT는 mod_para.conf의 mfg_mode= (wifi_init.sh 등 정책 스크립트와 동일
+        # 라인앵커 grep). fw_name은 활성 버스 블록(_0)에서, mfg_loaded flag는 "현재 드라이버가
+        # mfg 모드로 로드됨"(wifi_init.sh 멱등 가드 기준)을 뜻한다.
+        echo "[MFG]"
+        local _mfg_mp _mfg_mode _mfg_blk _mfg_fw _mfg_loaded _mfg_bus
+        _mfg_mp="cts/wifi_mod_para.conf"
+        _mfg_bus="pcie"
+        if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
+            _mfg_mp=$(jq -r '.global.MOD_PARA // "cts/wifi_mod_para.conf"' "$WIFI_INIT_CONF_JSON" 2>/dev/null) || _mfg_mp="cts/wifi_mod_para.conf"
+            [ -n "$_mfg_mp" ] || _mfg_mp="cts/wifi_mod_para.conf"
+            _mfg_bus=$(jq -r '.global.BUS_TYPE // "pcie"' "$WIFI_INIT_CONF_JSON" 2>/dev/null) || _mfg_bus="pcie"
+        fi
+        _mfg_mode=$(grep -m1 '^[[:space:]]*mfg_mode=' "/lib/firmware/$_mfg_mp" 2>/dev/null | sed 's/.*mfg_mode=//' | tr -d ' ')
+        _mfg_mode=${_mfg_mode:-0}
+        if [ "$_mfg_bus" == "sdio" ]; then _mfg_blk="SD9098"; else _mfg_blk="PCIE9098"; fi
+        _mfg_fw=$(grep -A20 "^${_mfg_blk}_0 " "/lib/firmware/$_mfg_mp" 2>/dev/null | grep -m1 'fw_name=' | sed 's/.*fw_name=//' | tr -d ' ')
+        _mfg_loaded="no"
+        [ -f /run/wifi/mfg_loaded ] && _mfg_loaded="yes"
+        echo "  mfg_mode      : $_mfg_mode (SoT: /lib/firmware/$_mfg_mp)"
+        echo "  fw_name       : ${_mfg_fw:-N/A} (${_mfg_blk}_0)"
+        echo "  mfg_loaded    : $_mfg_loaded (/run/wifi/mfg_loaded)"
+        if [ "$_mfg_mode" == "1" ]; then
+            echo "  profile       : MFG — STA/FW 유닛 disable+stop, checker idle, 재부팅 정책 거부(비상/과열 제외)"
+        else
+            echo "  profile       : normal"
+        fi
+        echo ""
     fi
 
     if [ "$only_iface" = "eth0" ]; then
@@ -612,6 +640,9 @@ show_info() {
         # WiFi global services
         svc_list+=(wifi_init wifi_logger wifi_ping_monitor)
         svc_list+=("wifi_mgmt_log.timer" "wifi_thermal_state.timer")
+
+        # 부가 데몬 (SNMP 관리 / OPC 제어 — MFG 프로파일 disable+stop 대상)
+        svc_list+=(snmpd opcd)
 
         add_iface_svcs() {
             local iface="$1"

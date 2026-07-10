@@ -3,6 +3,14 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.4.2 (2026-07-10)
+
+> SemVer **patch** — `wifi info` 관측성 개선 (런타임 동작 변경 없음).
+
+### wlan-package (메인)
+
+- **wifi info에 [MFG] 섹션·부가 데몬 표시** — `wifi info` 출력에 MFG 상태 섹션(mfg_mode SoT 판독, 활성 버스 블록의 fw_name, `/run/wifi/mfg_loaded` 멱등 flag, 프로파일 요약)과 [Services]의 snmpd/opcd 상태 표시를 추가. mfg 판정은 정책 스크립트 5종과 동일한 라인앵커 grep(`^[[:space:]]*mfg_mode=`)·동일 SoT(mod_para.conf)를 사용해 표시와 정책 간 판정 불일치를 방지.
+
 ## 0.4.1 (2026-07-10)
 
 > SemVer **patch** — MFG(제조) 모드 정책 전환 버그픽스. 신규 설정 키/와이어 포맷 없음.
