@@ -96,6 +96,22 @@ def test_env_missing_defaults():
     assert om[BASE + ".2.3.0"] == ("string", "")                  # hw 없음
     assert om[BASE + ".2.4.0"] == ("string", pp.NULL_MAC)         # eth MAC 없음
     assert om[BASE + ".2.6.0"] == ("ipaddress", pp.NULL_IP)       # IP 없음
+    assert om[BASE + ".2.9.0"] == ("integer", "0")               # ProductNumber 없음→0
+
+
+def test_product_number_hex_and_default():
+    # ProductNumber(.2.9): device_info product_code 는 '0x..' hex 문자열 → INTEGER 파싱
+    om = pp.build_oid_map(eth={}, mlan={}, devinfo={"product_code": "0xFE03"},
+                          fw="", eth_link_up=False)
+    assert om[BASE + ".2.9.0"] == ("integer", "65027")           # 0xFE03 = 65027
+    # 십진 문자열도 허용
+    om2 = pp.build_oid_map(eth={}, mlan={}, devinfo={"product_code": "1234"},
+                           fw="", eth_link_up=False)
+    assert om2[BASE + ".2.9.0"] == ("integer", "1234")
+    # 결측/파싱실패 → 0
+    om3 = pp.build_oid_map(eth={}, mlan={}, devinfo={"product_code": "junk"},
+                           fw="", eth_link_up=False)
+    assert om3[BASE + ".2.9.0"] == ("integer", "0")
 
 
 # --- 인터페이스 (pseudo-table 인스턴스) --------------------------------------
@@ -156,12 +172,12 @@ def test_wireless_info_disconnected():
 
 # --- 맵 크기 / GET / GETNEXT -----------------------------------------------
 
-def test_map_has_27_instances():
+def test_map_has_28_instances():
     # Phase1 19 + Phase2a 8(LED3 + WirelessMode + WLM + StaTxRate + StaRxRate +
-    # SupplicantState) = 27 인스턴스.
+    # SupplicantState) + ProductNumber(.2.9) = 28 인스턴스.
     om = _connected_map()
-    assert len(om) == 27, (
-        "기대 27 인스턴스, 실제 %d. Phase2 OID 추가 시 이 기대값 갱신 필요: %s"
+    assert len(om) == 28, (
+        "기대 28 인스턴스, 실제 %d. Phase2 OID 추가 시 이 기대값 갱신 필요: %s"
         % (len(om), sorted(om, key=pp.oid_key))
     )
 
@@ -207,7 +223,7 @@ def test_getnext_full_walk_covers_all_in_order():
         walked.append(res[0])
         cur = res[0]
     assert walked == sorted_oids          # 전부, 수치 오름차순으로
-    assert len(walked) == 27
+    assert len(walked) == 28
 
 
 def test_getnext_last_oid_returns_none():

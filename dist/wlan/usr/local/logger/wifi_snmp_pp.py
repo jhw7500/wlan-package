@@ -103,6 +103,18 @@ def _first_int(value):
     return int(m.group()) if m else None
 
 
+def _hex_or_dec_int(value):
+    """'0xFE03'(hex)·'123'(dec) → int. device_info 의 product_code 등은 '0x..' 문자열이라
+    _first_int(십진 정규식)로는 '0' 만 잡혀 오작동 → int(s, 0) 으로 접두사 자동 판별.
+    결측/파싱실패는 None."""
+    if value is None:
+        return None
+    try:
+        return int(str(value).strip(), 0)
+    except (ValueError, TypeError):
+        return None
+
+
 def _fmt_mac(value):
     """MAC 문자열을 콜론 hex 그대로. 결측이면 00:00:00:00:00:00."""
     if value is None:
@@ -342,6 +354,10 @@ def build_oid_map(eth=None, mlan=None, devinfo=None, fw=None, eth_link_up=None,
     put(".2.6.0", "ipaddress", _fmt_ip(_eth_field(eth, "ip_address")))
     put(".2.7.0", "ipaddress", _fmt_ip(_eth_field(eth, "netmask")))
     put(".2.8.0", "ipaddress", _fmt_ip(_eth_field(eth, "gateway")))
+    # ProductNumber(.2.9, INTEGER): device_info 의 product_code('0xFE03' 등 hex 문자열)를
+    # 정수로 노출. 결측/파싱실패는 0 (환경 그룹은 always-present 스칼라).
+    _prod = _hex_or_dec_int(devinfo.get("product_code"))
+    put(".2.9.0", "integer", _prod if _prod is not None else 0)
 
     # LED (.3.1.x StatusInfo 스칼라 → .0) — 물리 LED 판독이 아니라 링크/연결상태 유도.
     # on(1)/off(2). Power 는 'SNMP 응답=전원ON' 이라 상수 on.
