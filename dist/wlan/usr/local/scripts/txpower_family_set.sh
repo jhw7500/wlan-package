@@ -28,6 +28,7 @@ STATUS=0
 RESET_BEFORE_SET=1
 CLAMP=0
 CURRENT=0
+CURRENT_DETECTED=0
 CLAMPED_COUNT=0
 MISSING_LIMIT_COUNT=0
 FAILED_COUNT=0
@@ -148,9 +149,13 @@ save_state() {
         return 1
     }
 
-    tmp="${STATE_FILE}.tmp.$$"
-    umask 077
-    {
+    # mktemp 로 예측 불가한 이름 + 0600 파일을 원자적으로 생성한다($$ 기반 고정 이름은
+    # /run 에서 symlink 선점 공격에 노출된다). 실패 경로마다 tmp 를 정리한다.
+    tmp="$(mktemp "${STATE_FILE}.XXXXXX")" || {
+        echo "error: cannot create temporary state file in $STATE_DIR" >&2
+        return 1
+    }
+    if ! {
         echo "version 1"
         echo "mode ${STATE_MODE:-unknown}"
         echo "updated $(date +%s)"
@@ -159,8 +164,16 @@ save_state() {
                 echo "power ${key%%:*} ${key#*:} ${STATE_POWER[$key]}"
             done | sort -k2,2n -k3,3n
         fi
-    } > "$tmp"
-    mv -f -- "$tmp" "$STATE_FILE"
+    } > "$tmp"; then
+        rm -f -- "$tmp"
+        echo "error: failed to write state file" >&2
+        return 1
+    fi
+    if ! mv -f -- "$tmp" "$STATE_FILE"; then
+        rm -f -- "$tmp"
+        echo "error: failed to install state file" >&2
+        return 1
+    fi
     STATE_DIRTY=0
 }
 
@@ -531,10 +544,14 @@ detect_current_group() {
     local group
     local max_rate
 
+    # 멱등: preflight 에서 먼저 감지하면 apply 단계는 재실행(iw 재호출) 없이 캐시 사용.
+    [ "$CURRENT_DETECTED" -eq 0 ] || return 0
+
+    # 실패는 die 하지 않고 return 1 — 호출자(preflight/apply 는 die, --status 는 graceful)가 결정.
     link="$("$IW" dev "$IFACE" link)"
     info="$("$IW" dev "$IFACE" info)"
     txline="$(printf '%s\n' "$link" | awk '/tx bitrate:/ { sub(/^[[:space:]]*/, ""); print; exit }')"
-    [ -n "$txline" ] || die "failed to read current tx bitrate from iw"
+    [ -n "$txline" ] || { echo "warn: cannot read tx bitrate from iw (interface not associated?)" >&2; return 1; }
 
     if printf '%s\n' "$txline" | grep -q "HE-MCS"; then
         fmt="he"
@@ -552,6 +569,7 @@ detect_current_group() {
         CURRENT_GROUP=0
         CURRENT_RATE_MAX=11
         CURRENT_LABEL="legacy 20 MHz"
+        CURRENT_DETECTED=1
         return
     fi
 
@@ -559,7 +577,7 @@ detect_current_group() {
     if [ -z "$bw" ]; then
         bw="$(printf '%s\n' "$info" | sed -n 's/.*width:[[:space:]]*\([0-9][0-9]*\)[[:space:]]*MHz.*/\1/p' | head -1)"
     fi
-    [ -n "$bw" ] || die "failed to detect current channel bandwidth from iw"
+    [ -n "$bw" ] || { echo "warn: cannot detect current channel bandwidth from iw" >&2; return 1; }
 
     nss=1
     if [ "$fmt" = "he" ]; then
@@ -586,17 +604,19 @@ detect_current_group() {
     he:80:1) group=13 ;;
     he:80:2) group=14 ;;
     *)
-        die "unsupported current mode: format=${fmt}, bandwidth=${bw}MHz, nss=${nss}"
+        echo "warn: unsupported current mode: format=${fmt}, bandwidth=${bw}MHz, nss=${nss}" >&2
+        return 1
         ;;
     esac
 
     CURRENT_GROUP="$group"
     CURRENT_RATE_MAX="$max_rate"
     CURRENT_LABEL="${fmt} ${bw} MHz NSS ${nss}"
+    CURRENT_DETECTED=1
 }
 
 apply_current_group() {
-    detect_current_group
+    detect_current_group || die "cannot apply --current: interface not associated or unsupported mode"
     echo "detected current mode: ${CURRENT_LABEL}, group ${CURRENT_GROUP}"
     set_group "current ${CURRENT_LABEL}" "$CURRENT_GROUP" 0 "$CURRENT_RATE_MAX"
 }
@@ -610,7 +630,9 @@ show_status() {
 
     load_txpower_mode
     load_limits
-    detect_current_group
+    # --status 는 진단 명령 — 미연결이면 die 대신 current-group 섹션만 생략한다.
+    local have_current=1
+    detect_current_group || have_current=0
 
     load_state
     if [ "$STATE_MODE" = "manual" ]; then
@@ -624,11 +646,16 @@ show_status() {
     echo "== txpower status =="
     echo "firmware mode field: ${TXPOWER_MODE_TEXT} (${TXPOWER_MODE}); informational only"
     echo "script state: ${STATE_MODE:-not recorded}${STATE_UPDATED:+, updated epoch ${STATE_UPDATED}}"
-    echo "current link: ${CURRENT_LABEL}, group ${CURRENT_GROUP}"
+    if [ "$have_current" -eq 1 ]; then
+        echo "current link: ${CURRENT_LABEL}, group ${CURRENT_GROUP}"
+    else
+        echo "current link: not associated (current-group section skipped)"
+    fi
     echo "value source: ${source}"
     if [ "$TXPOWER_MODE" = "not-exposed" ]; then
         echo "hint: run \"$MLANUTL $IFACE txpowercfg\" and check whether it prints \"Mode:\""
     fi
+    [ "$have_current" -eq 1 ] || return 0
     echo "group ${CURRENT_GROUP} values:"
     for rate in $(seq 0 "$CURRENT_RATE_MAX"); do
         if [ "$STATE_MODE" = "manual" ]; then
@@ -737,11 +764,10 @@ fi
 
 [ -n "$POWER_DBM" ] || die "-p power_dbm is required"
 
-case "$POWER_DBM" in
-*[!0-9]* | "")
+# 음수 dBm 도 유효(저출력 설정) — 선행 '-' 허용. 소수/빈값/비정수는 거부.
+if ! [[ "$POWER_DBM" =~ ^-?[0-9]+$ ]]; then
     die "power must be an integer dBm value"
-    ;;
-esac
+fi
 
 if [ "$CURRENT" -eq 1 ] && [ "$#" -gt 0 ]; then
     die "--current cannot be used with family arguments"
@@ -750,6 +776,21 @@ fi
 if [ "$CURRENT" -eq 0 ] && [ "$#" -eq 0 ]; then
     usage >&2
     die "family is required: legacy, ht, vht, he, all, or --current"
+fi
+
+# Preflight: reset(0xFF) 이전에 대상 유효성을 검증한다. 오타 family 나 미연결
+# --current 는 종전엔 reset 이후에야 실패해, 기존 수동 TX 설정을 0xFF 로 지우고
+# auto state 를 남긴 뒤 죽었다(진행 중 파워 테스트 무효화). 검증 실패 시 reset 전에 die.
+# --current 의 링크 감지는 여기서 1회 수행되고 이후 apply 단계는 캐시를 재사용한다.
+if [ "$CURRENT" -eq 1 ]; then
+    detect_current_group || die "cannot use --current: interface not associated or unsupported mode"
+else
+    for family in "$@"; do
+        case "$(printf '%s' "$family" | tr '[:upper:]' '[:lower:]')" in
+        legacy | ht | vht | he | all) ;;
+        *) die "unknown family '$family'. Use legacy, ht, vht, he, or all" ;;
+        esac
+    done
 fi
 
 if [ "$RESET_BEFORE_SET" -eq 1 ]; then
