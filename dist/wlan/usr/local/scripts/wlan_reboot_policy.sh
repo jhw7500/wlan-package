@@ -121,6 +121,21 @@ if [[ "$REASON" == *overtemp* ]] || [[ "$SOURCE" == "wifi_logger_temp" ]]; then
   MIN_UPTIME_SEC=0
 fi
 
+# MFG 안전망: mfg_mode=1(SoT: mod_para.conf)이면 재부팅 요청을 거부한다 —
+# MFG FW에서는 checker 등의 헬스체크가 오판해 재부팅을 요청할 수 있다.
+# 과열 보호(overtemp/wifi_logger_temp)와 --force는 통과시킨다.
+_mod_para="cts/wifi_mod_para.conf"
+if command -v jq >/dev/null 2>&1 && [ -f /usr/local/etc/wifi_init_conf.json ]; then
+  _mod_para=$(jq -r '.global.MOD_PARA // "cts/wifi_mod_para.conf"' /usr/local/etc/wifi_init_conf.json 2>/dev/null) || _mod_para="cts/wifi_mod_para.conf"
+  [ -n "$_mod_para" ] || _mod_para="cts/wifi_mod_para.conf"
+fi
+_mfg_mode=$(grep -m1 '^[[:space:]]*mfg_mode=' "/lib/firmware/$_mod_para" 2>/dev/null | sed 's/.*mfg_mode=//' | tr -d ' ' || echo "0")
+if [ "$FORCE" -ne 1 ] && [ "${_mfg_mode:-0}" = "1" ] \
+   && [[ "$REASON" != *overtemp* ]] && [ "$SOURCE" != "wifi_logger_temp" ]; then
+  log_all "refuse: mfg_mode=1 (MFG profile) (source=${SOURCE:-n/a} iface=${IFACE:-n/a} reason=$REASON)"
+  exit 12
+fi
+
 mkdir -p "$RUN_DIR" 2>/dev/null || true
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 
