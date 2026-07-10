@@ -90,6 +90,41 @@ apply() {
     fi
 }
 
+# MFG 프로파일: mfg_mode=1(SoT: mod_para.conf)이면 STA/FW 접촉 유닛을 일괄
+# disable+stop 하고 종료한다. MFG FW에서는 scan/connect가 동작하지 않아
+# checker/roam 등이 오판 → 복구 사다리/재부팅 요청이 오발되므로 systemd 레벨에서
+# 차단한다 (wifi_init.sh의 MFG 가드와 세트). disable ≠ stop이라 이미 떠 있는
+# 유닛은 명시적으로 stop한다. mfg_mode=0 복귀 후 재실행되면 아래 정상 경로가
+# JSON 기준으로 재-enable한다(자기치유).
+_MOD_PARA=$(jq -r '.global.MOD_PARA // "cts/wifi_mod_para.conf"' "$JSON" 2>/dev/null) || _MOD_PARA="cts/wifi_mod_para.conf"
+[ -n "$_MOD_PARA" ] || _MOD_PARA="cts/wifi_mod_para.conf"
+MFG_MODE=$(grep -m1 '^[[:space:]]*mfg_mode=' "/lib/firmware/$_MOD_PARA" 2>/dev/null | sed 's/.*mfg_mode=//' | tr -d ' ' || echo "0")
+if [ "${MFG_MODE:-0}" = "1" ]; then
+    logger -p local0.info "[$tag:$LINENO] mfg_mode=1 → MFG profile: disable+stop STA/FW-touching units"
+    MFG_UNITS=(wifi_ping_monitor.service wifi_thermal_state.timer wifi_mgmt_log.timer
+               snmpd.service opcd.service)
+    for iface in mlan0 mlan1; do
+        for u in wpa_supplicant wifi_logger wifi_checker wifi_event \
+                 wifi_bridge wifi_bgscan wifi_roam wifi_periodic_roam wifi_arping; do
+            MFG_UNITS+=("${u}@${iface}.service")
+        done
+    done
+    for u in "${MFG_UNITS[@]}"; do
+        apply "$u" "false"
+        # 무조건 stop — is-active 게이트는 After=wifi_init로 큐에 대기 중인 start/restart
+        # job을 놓친다(그 시점 유닛은 inactive, disable은 큐된 job을 취소하지 못함).
+        # stop은 job-mode=replace로 대기 job을 취소하며 inactive 유닛에는 무비용 no-op.
+        # 유닛 파일 자체가 없는 선택 유닛(snmpd/opcd 미설치 이미지)은 큐 job도 존재할 수
+        # 없으므로 skip — 존재하지 않는 유닛 stop의 err 오탐 로그 방지.
+        if systemctl cat "$u" >/dev/null 2>&1; then
+            systemctl stop "$u" 2>/dev/null || logger -p local0.err "[$tag:$LINENO] stop $u failed"
+        fi
+    done
+    systemctl daemon-reload 2>/dev/null || true
+    logger -p local0.info "[$tag:$LINENO] MFG profile applied: disabled=${#DISABLED_UNITS[@]} failed=${#FAILED_UNITS[@]}"
+    exit 0
+fi
+
 # 글로벌 데몬
 apply wifi_ping_monitor.service     "$(get_bool ".global.ping_monitor.enabled" "false")"
 apply wifi_thermal_state.timer      "$(get_bool ".wbridge.thermal.enabled"     "false")"

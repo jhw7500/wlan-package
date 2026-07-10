@@ -14,6 +14,7 @@ MODULE_NAME="moal"
 WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
 
 # Defaults
+MOD_PARA="cts/wifi_mod_para.conf"
 MAX_UNSTABLE_DURATION=10
 LIMIT_CNT=5
 MAX_REBOOT_COUNT=3
@@ -27,6 +28,8 @@ RECONFIGURE_GRACE_SEC=20
 # Load from JSON config
 if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
     BUS_TYPE=$(jq -r '.global.BUS_TYPE // "pcie"' "$WIFI_INIT_CONF_JSON")
+    MOD_PARA=$(jq -r '.global.MOD_PARA // "cts/wifi_mod_para.conf"' "$WIFI_INIT_CONF_JSON" 2>/dev/null) || MOD_PARA="cts/wifi_mod_para.conf"
+    [ -n "$MOD_PARA" ] || MOD_PARA="cts/wifi_mod_para.conf"
     LIMIT_CNT=$(jq -r ".${IFACE}.checker.LIMIT_CNT // 3" "$WIFI_INIT_CONF_JSON")
     MAX_UNSTABLE_DURATION=$(jq -r ".${IFACE}.checker.MAX_UNSTABLE_DURATION // 10" "$WIFI_INIT_CONF_JSON")
     MAX_REBOOT_COUNT=$(jq -r ".${IFACE}.checker.MAX_REBOOT_COUNT // 3" "$WIFI_INIT_CONF_JSON")
@@ -137,6 +140,15 @@ check_station_dump() {
     iw "$IFACE" station dump >/dev/null 2>&1
 }
 
+# MFG 프로파일 판정 (SoT: mod_para.conf의 mfg_mode=). MFG FW에서는 scan/connect가
+# 동작하지 않아 모든 헬스체크가 오판이 되므로 루프에서 감시를 보류하는 데 쓴다.
+is_mfg_mode() {
+    local m
+    m=$(grep -m1 '^[[:space:]]*mfg_mode=' "/lib/firmware/$MOD_PARA" 2>/dev/null | sed 's/.*mfg_mode=//' | tr -d ' ')
+    [ "${m:-0}" = "1" ]
+}
+MFG_IDLE_LOGGED=0
+
 if [ "$IFACE" != "eth0" ]; then
     for i in {1..3}; do
         if lsmod |grep -q "^$MODULE_NAME"; then
@@ -149,6 +161,19 @@ fi
 
 while true; do
     #sleep 3
+    # MFG 가드: mfg_mode=1이면 헬스체크/복구 사다리 전체를 보류하고 idle 대기.
+    # exit하면 Restart=always(StartLimitIntervalSec=0)가 즉시 재스폰하므로
+    # 스크립트 내부에서 대기한다. 모드 해제 시 다음 틱부터 정상 감시 재개.
+    if [[ "$IFACE" != "eth0" ]] && is_mfg_mode; then
+        if (( MFG_IDLE_LOGGED == 0 )); then
+            logger -p local0.info "[$tag:$LINENO] [$IFACE] mfg_mode=1 → checker idle (MFG profile)"
+            MFG_IDLE_LOGGED=1
+        fi
+        ERR_CNT=0; FAULT_CNT=0; UNSTABLE_START=0; REASSOC_DONE=0; REBOOT_F=0
+        sleep 10
+        continue
+    fi
+    MFG_IDLE_LOGGED=0
     if [[ "$IFACE" == "eth0" ]]; then
           #STATE=$(jq -r '.eth_stats.phy.link' "/var/log/cantops/json/eth0/link.json")
           STATE=$(cat /sys/class/net/eth0/operstate)
@@ -302,12 +327,15 @@ while true; do
         sync
         ERR_CNT=0
         REBOOT_F=0
-        if ! MAX_REBOOT_COUNT="$MAX_REBOOT_COUNT" REBOOT_COOLDOWN_SEC="$REBOOT_COOLDOWN_SEC" MIN_UPTIME_SEC="$MIN_UPTIME_SEC" \
+        MAX_REBOOT_COUNT="$MAX_REBOOT_COUNT" REBOOT_COOLDOWN_SEC="$REBOOT_COOLDOWN_SEC" MIN_UPTIME_SEC="$MIN_UPTIME_SEC" \
           /usr/local/scripts/wlan_reboot_policy.sh \
             --source wifi_checker \
             --iface "$IFACE" \
-            --reason "wifi_checker fatal: $reason"; then
-          rc=$?
+            --reason "wifi_checker fatal: $reason"
+        rc=$?
+        # `if ! cmd; then rc=$?`는 부정된 상태(항상 0)를 캡처하므로 직접 $?를 받는다
+        # — 정책의 실제 거부 코드(10/11/12)가 로그에 남아야 진단 가능.
+        if [ "$rc" -ne 0 ]; then
           logger -p local0.warning "[$tag:$LINENO] [$IFACE] Reboot refused by policy (rc=$rc)"
           sleep 60
         fi

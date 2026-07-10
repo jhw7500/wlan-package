@@ -125,12 +125,19 @@ if [ -n "$tx_work" ]; then
     fi
 fi
 
+# mfg_mode 판정 (SoT: mod_para.conf의 mfg_mode=). 스크립트 전체에서 단 1회만 판독 —
+# fw_name 선택과 MFG 프로파일 분기(bridge 인자/mod_para 운영키/MAC/unload 멱등 가드/
+# mfg_loaded flag)가 모두 이 한 값에서 파생되어야 flag("현재 드라이버가 mfg로 로드됨")와
+# 실제 로드된 FW가 어긋나는 TOCTOU가 구조적으로 불가능해진다.
+MFG_MODE=$(grep -m1 '^[[:space:]]*mfg_mode=' "/lib/firmware/$MOD_PARA" 2>/dev/null | sed 's/.*mfg_mode=//' | tr -d ' ' || echo "0")
+MFG_LOADED_FLAG="/run/wifi/mfg_loaded"
+
 # BUS_TYPE/BLUETOOTH 기반 fw_name 자동 갱신
 if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
     _BUS=$(jq -r '.global.BUS_TYPE // "pcie"' "$WIFI_INIT_CONF_JSON")
     _BT=$(jq -r '.global.BLUETOOTH.enable // false' "$WIFI_INIT_CONF_JSON")
     _MOD_FILE="/lib/firmware/$(jq -r '.global.MOD_PARA // "cts/wifi_mod_para.conf"' "$WIFI_INIT_CONF_JSON")"
-    _MFG=$(grep -m1 'mfg_mode=' "$_MOD_FILE" 2>/dev/null | sed 's/.*mfg_mode=//' | tr -d ' ' || echo "0")
+    _MFG="$MFG_MODE"
 
     if [ "$_BUS" == "sdio" ]; then
         if [ "$_BT" == "true" ]; then
@@ -185,7 +192,11 @@ logger -p local0.info "[$tag:$LINENO] mlan0: enabled=$MLAN0_ENABLED freq=$MLAN0_
 # moal 엔진일 때만 bridge 파라미터를 moal insmod args에 추가.
 # bridge_iface가 mlan1이면 bridge_wlan_idx=1, 나머지는 기본값 유지.
 [ "$BRIDGE_IFACE" = "mlan1" ] && bridge_wlan_idx=1
-if [ "$WBRIDGE_ENGINE" = "moal" ]; then
+# MFG 프로파일: moal bridge 인자(bridge_mode=1 등) 미전달 — MFG FW에서 브릿지는
+# 무의미하고, moal bridge가 eth0에 attach(promisc)해 labtool 이더넷 링크를 건드릴 수 있다.
+if [ "${MFG_MODE:-0}" == "1" ] && [ "$WBRIDGE_ENGINE" = "moal" ]; then
+    logger -p local0.info "[$tag:$LINENO] MFG profile: skip moal bridge params (moal_args: $moal_args)"
+elif [ "$WBRIDGE_ENGINE" = "moal" ]; then
     moal_args="$moal_args bridge_mode=1 bridge_debug=$bridge_debug bridge_wlan_idx=$bridge_wlan_idx bridge_keepalive_ms=$bridge_keepalive_ms"
     # bridge_keepalive_idle_ms: 신규 param — 미선언 드라이버(예: 현재 moal_imx8.ko)에 전달하면
     # insmod가 unknown-parameter로 실패하므로, 로드 대상 .ko가 선언한 경우에만 전달한다.
@@ -206,6 +217,15 @@ if [ "$WBRIDGE_ENGINE" = "moal" ]; then
     logger -p local0.info "[$tag:$LINENO] moal engine: bridge params added → $moal_args"
 else
     logger -p local0.info "[$tag:$LINENO] moal_args: $moal_args"
+fi
+
+# MFG 프로파일 멱등 가드: mfg 모드로 이미 로드된 드라이버는 건드리지 않고 성공 종료.
+# 재실행마다 아래 rmmod/insmod + wpa kill/fuser kill이 수행되면 mlan을 점유한
+# mfgbridge 제조 테스트가 끊긴다. flag는 mfg 모드 insmod 성공 시에만 생성되므로,
+# mfg_mode=1이어도 flag가 없으면(일반 FW로 로드된 상태) 재로드 경로로 MFG FW 전환된다.
+if [ "${MFG_MODE:-0}" == "1" ] && [ -f "$MFG_LOADED_FLAG" ] && lsmod | grep "^${MOAL_MOD}\b" >/dev/null 2>&1; then
+    logger -p local0.info "[$tag:$LINENO] mfg_mode=1, driver already loaded in mfg mode → no-op (MFG profile)"
+    exit 0
 fi
 
 # 이미 로드된 모듈이 있으면 사용 프로세스 종료 후 제거
@@ -456,6 +476,23 @@ apply_mod_para_from_json() {
             _set_kv_in_block "$block" "cal_data_cfg" "$v"
         fi
     }
+
+    # MFG 프로파일: 운영용 키 주입을 건너뛰고 기존 라인을 제거(드라이버/FW 기본값 사용),
+    # cal_data_cfg=none 강제. 제조에서는 labtool/mfgbridge가 cal data를 직접 관리(로드/OTP
+    # 기록)하므로 드라이버의 호스트 cal 선주입은 OTP 실제 상태 검증을 가리고 캘 기록과
+    # 충돌할 수 있다. dev_cap_mask/net_rx 등 STA 운영값은 MFG 계측에 불필요.
+    if [ "${MFG_MODE:-0}" == "1" ]; then
+        local _blk
+        for _blk in "${blk_prefix}_0" "${blk_prefix}_1"; do
+            _del_kv_in_block "$_blk" "bridge_mode"
+            _del_kv_in_block "$_blk" "net_rx"
+            _del_kv_in_block "$_blk" "mgmt_hex_dump"
+            _del_kv_in_block "$_blk" "dev_cap_mask"
+            _set_kv_in_block "$_blk" "cal_data_cfg" "none"
+        done
+        logger -p local0.info "[$tag:$LINENO] MFG profile: mod_para operational keys removed (net_rx/mgmt_hex_dump/dev_cap_mask), cal_data_cfg=none"
+        return 0
+    fi
 
     _set_kv_in_block "${blk_prefix}_0" "net_rx"        "$m0_net_rx"
     _set_kv_in_block "${blk_prefix}_1" "net_rx"        "$m1_net_rx"
@@ -830,6 +867,13 @@ else
     SECONDARY_IFACE="mlan0"
 fi
 
+# MFG 프로파일: MAC 설정 전체 skip — 동적/정적 MAC spoofing(update_mac), 유선 IP/MAC
+# discovery(wired_mac_ip_get.py), eth0 base MAC까지. 제조 테스트에서 MAC 변경은 불필요하고
+# eth0 MAC 변경은 진행 중인 labtool 이더넷 연결을 끊을 수 있다.
+if [ "${MFG_MODE:-0}" == "1" ]; then
+    logger -p local0.info "[$tag:$LINENO] MFG profile: skip MAC setup (wired_mac_ip_get/update_mac)"
+else
+
 # 동적 MAC이 필요한 경우 wired_mac_ip_get.py 먼저 실행
 if [ "$MAC_MODE" = "dynamic" ] && wifi_init_iface_is_enabled "$BRIDGE_IFACE" "true"; then
     #logger -p local0.info "[$tag:$LINENO] [$BRIDGE_IFACE] running wired_mac_ip_get.py"
@@ -882,7 +926,10 @@ else
     logger -p local0.info "[$tag:$LINENO] [eth0] no base MAC configured; skip update_mac"
 fi
 
+fi  # MFG profile: MAC setup skip 끝
+
 # 무선 드라이버 로드 전 안테나 경로(GPIO mux) 설정. ANT_TYPE 비어있으면 건드리지 않음.
+# (MFG 프로파일에서도 유지 — 안테나 mux는 제조 RF 측정 경로에 영향)
 # GPIO 매핑은 wifi.sh의 ant 명령과 동일 (SW_SEL1/SW_SEL2 LED).
 if [ -n "${ANT_TYPE:-}" ]; then
     _ant_sel1=""; _ant_sel2=""
@@ -912,12 +959,23 @@ if ! try_insmod "/opt/wlan/driver/$MOAL_KO" "$moal_args"; then
     exit 1
 fi
 
-# mfg_mode 체크: mod_para.conf에서 읽기
-MFG_MODE=$(grep -m1 'mfg_mode=' "/lib/firmware/$MOD_PARA" 2>/dev/null | sed 's/.*mfg_mode=//' | tr -d ' ' || echo "0")
+# mfg_mode는 여기서 재판독하지 않는다 — insmod 인자/fw_name을 결정한 판정값(MFG_MODE)과
+# 플래그("현재 드라이버가 mfg로 로드됨")가 항상 일치해야 한다(재판독 시 FW 다운로드 수 초
+# 사이의 토글로 플래그-실제 FW 불일치가 고착되는 TOCTOU). 실행 중 conf 토글은 다음
+# wifi_init 재실행에서 올바른 재로드로 수렴한다.
 if [ "${MFG_MODE:-0}" == "1" ]; then
-    logger -p local0.info "[$tag:$LINENO] mfg_mode=1 detected, skipping post-insmod setup"
-    exit 1
+    # MFG 프로파일: post-insmod 설정을 건너뛰고 성공 종료. exit 1이면 유닛의
+    # Restart=on-failure가 10초마다 재실행해 rmmod/insmod 루프가 되고 StartLimit
+    # 소진 시 OnFailure=wlan_emergency_reboot까지 이어진다. exit 0이면
+    # ExecStartPost(wifi_services.sh start)가 실행되지만, MFG 프로파일에서는
+    # wifi_apply_enabled.sh(ExecStartPre)가 STA 유닛을 disable+stop해 두고
+    # wifi_services.sh도 start를 skip하므로 STA 데몬은 기동되지 않는다.
+    mkdir -p /run/wifi
+    : > "$MFG_LOADED_FLAG"
+    logger -p local0.info "[$tag:$LINENO] mfg_mode=1 detected, skipping post-insmod setup (MFG profile, exit 0)"
+    exit 0
 fi
+rm -f "$MFG_LOADED_FLAG" 2>/dev/null || true
 
 apply_iface_txpwrlimit "mlan0" "$MLAN0_ENABLED"
 apply_iface_txpwrlimit "mlan1" "$MLAN1_ENABLED"
