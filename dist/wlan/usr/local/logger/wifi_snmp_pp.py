@@ -354,10 +354,13 @@ def build_oid_map(eth=None, mlan=None, devinfo=None, fw=None, eth_link_up=None,
     put(".2.6.0", "ipaddress", _fmt_ip(_eth_field(eth, "ip_address")))
     put(".2.7.0", "ipaddress", _fmt_ip(_eth_field(eth, "netmask")))
     put(".2.8.0", "ipaddress", _fmt_ip(_eth_field(eth, "gateway")))
-    # ProductNumber(.2.9, INTEGER): device_info 의 product_code('0xFE03' 등 hex 문자열)를
-    # 정수로 노출. 결측/파싱실패는 0 (환경 그룹은 always-present 스칼라).
+    # ProductNumber(.2.9, INTEGER=Integer32): device_info 의 product_code('0xFE03' 등 hex
+    # 문자열)를 정수로 노출. 결측/파싱실패, 또는 Integer32(±2^31) 범위 밖(예: 0x80000000↑ —
+    # snmpd 가 out-of-range INTEGER 를 거부)이면 0 (환경 그룹은 always-present 스칼라).
     _prod = _hex_or_dec_int(devinfo.get("product_code"))
-    put(".2.9.0", "integer", _prod if _prod is not None else 0)
+    if _prod is None or not (-2**31 <= _prod <= 2**31 - 1):
+        _prod = 0
+    put(".2.9.0", "integer", _prod)
 
     # LED (.3.1.x StatusInfo 스칼라 → .0) — 물리 LED 판독이 아니라 링크/연결상태 유도.
     # on(1)/off(2). Power 는 'SNMP 응답=전원ON' 이라 상수 on.
