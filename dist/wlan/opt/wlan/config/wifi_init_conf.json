@@ -603,5 +603,9 @@
             "community": "public",
             "version": "2c"
         }
+    },
+    "opc": {
+        "_comment": "opcd(wlan-opc OPC 제어 데몬) 조건부 기동. enabled: wifi_apply_enabled.sh가 .opc.enabled를 읽어 opcd.service를 systemctl enable/disable 동기화하고 wifi_services.sh가 start(기본 off, opt-in).",
+        "enabled": false
     }
 }
