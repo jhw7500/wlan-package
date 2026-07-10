@@ -112,6 +112,14 @@ def test_product_number_hex_and_default():
     om3 = pp.build_oid_map(eth={}, mlan={}, devinfo={"product_code": "junk"},
                            fw="", eth_link_up=False)
     assert om3[BASE + ".2.9.0"] == ("integer", "0")
+    # Integer32(±2^31) 범위 밖 → 0 (snmpd out-of-range 거부 방지)
+    om4 = pp.build_oid_map(eth={}, mlan={}, devinfo={"product_code": "0x80000000"},
+                           fw="", eth_link_up=False)
+    assert om4[BASE + ".2.9.0"] == ("integer", "0")           # 2147483648 > int32_max
+    # 경계값 int32_max(2147483647) 는 허용
+    om5 = pp.build_oid_map(eth={}, mlan={}, devinfo={"product_code": "0x7FFFFFFF"},
+                           fw="", eth_link_up=False)
+    assert om5[BASE + ".2.9.0"] == ("integer", "2147483647")
 
 
 # --- 인터페이스 (pseudo-table 인스턴스) --------------------------------------
