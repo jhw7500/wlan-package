@@ -121,6 +121,26 @@ if [[ "$REASON" == *overtemp* ]] || [[ "$SOURCE" == "wifi_logger_temp" ]]; then
   MIN_UPTIME_SEC=0
 fi
 
+# MFG 안전망: mfg_mode=1(SoT: mod_para.conf)이면 재부팅 요청을 거부한다 —
+# MFG FW에서는 checker 등의 헬스체크가 오판해 재부팅을 요청할 수 있다.
+# 통과 예외: 과열 보호(overtemp/wifi_logger_temp), --force, wifi_init emergency
+# (--source wifi_init) — wifi_init 경로는 mfg 오탐(exit 1 루프)이 wifi_init.sh의
+# mfg 성공 종료로 제거된 뒤에는 실제 드라이버 로드 실패에서만 발생하며, FW wedge
+# ('get fw info failed' 류)는 재부팅(카드 파워사이클)이 유일한 자동 복구다.
+# 남용은 아래 uptime/count 게이트가 계속 바운드한다.
+_mod_para="cts/wifi_mod_para.conf"
+if command -v jq >/dev/null 2>&1 && [ -f /usr/local/etc/wifi_init_conf.json ]; then
+  _mod_para=$(jq -r '.global.MOD_PARA // "cts/wifi_mod_para.conf"' /usr/local/etc/wifi_init_conf.json 2>/dev/null) || _mod_para="cts/wifi_mod_para.conf"
+  [ -n "$_mod_para" ] || _mod_para="cts/wifi_mod_para.conf"
+fi
+_mfg_mode=$(grep -m1 '^[[:space:]]*mfg_mode=' "/lib/firmware/$_mod_para" 2>/dev/null | sed 's/.*mfg_mode=//' | tr -d ' ' || echo "0")
+if [ "$FORCE" -ne 1 ] && [ "${_mfg_mode:-0}" = "1" ] \
+   && [[ "$REASON" != *overtemp* ]] && [ "$SOURCE" != "wifi_logger_temp" ] \
+   && [ "$SOURCE" != "wifi_init" ]; then
+  log_all "refuse: mfg_mode=1 (MFG profile) (source=${SOURCE:-n/a} iface=${IFACE:-n/a} reason=$REASON)"
+  exit 12
+fi
+
 mkdir -p "$RUN_DIR" 2>/dev/null || true
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 
