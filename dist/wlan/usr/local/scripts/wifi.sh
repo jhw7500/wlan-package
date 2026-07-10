@@ -1141,17 +1141,30 @@ case "$2" in
     fi
     NEW_SSID="$1"
     TMP_FILE="$(mktemp)"
+    # active ssid= → 치환 / #ssid=(주석)만 있으면 주석 해제 후 설정 / 둘 다 없으면 network 블록 끝에 append.
+    # (블록 인지 방식은 connect 경로와 동일 — 주석처리된 설정도 확실히 반영. 블록당 done 1회.)
     if awk -v new_ssid="$NEW_SSID" '
-        BEGIN { changed = 0 }
+        BEGIN { in_net = 0; changed = 0 }
+        /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { in_net = 1; done = 0; print; next }
+        in_net && /^[[:space:]]*\}/ {
+            if (!done) { print "    ssid=\"" new_ssid "\""; changed = 1; done = 1 }
+            in_net = 0; print; next
+        }
+        in_net && /^[[:space:]]*ssid[[:space:]]*=/ {
+            if (!done) { print "    ssid=\"" new_ssid "\""; changed = 1; done = 1 } next
+        }
+        in_net && /^[[:space:]]*#[[:space:]]*ssid[[:space:]]*=/ {
+            if (!done) { print "    ssid=\"" new_ssid "\""; changed = 1; done = 1; next }
+            print; next
+        }
         /^[[:space:]]*#/ { print; next }
-        /^[[:space:]]*ssid[[:space:]]*=/ { print "    ssid=\"" new_ssid "\""; changed = 1; next }
         { print }
         END { if (!changed) exit 1 }
     ' "$CONF" > "$TMP_FILE"; then
         safe_install_0644_sync "$TMP_FILE" "$CONF"
         rm -f "$TMP_FILE"
         echo "ssid changed to \"$NEW_SSID\" in $CONF"
-    else echo "no ssid= line found, nothing changed in $CONF" >&2; rm -f "$TMP_FILE"; exit 1; fi
+    else echo "no network={ block found, nothing changed in $CONF" >&2; rm -f "$TMP_FILE"; exit 1; fi
     ;;
   psk)
     set -euo pipefail
@@ -1161,17 +1174,30 @@ case "$2" in
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> psk <NEW_PSK>" >&2; exit 1; fi
     NEW_PSK="$1"
     TMP_FILE="$(mktemp)"
+    # active psk= → 치환 / #psk=(주석)만 있으면 주석 해제 후 설정 / 둘 다 없으면 network 블록 끝에 append.
+    # (블록 인지 방식은 connect 경로와 동일 — 주석처리된 설정도 확실히 반영. 블록당 done 1회.)
     if awk -v new_psk="$NEW_PSK" '
-        BEGIN { changed = 0 }
+        BEGIN { in_net = 0; changed = 0 }
+        /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { in_net = 1; done = 0; print; next }
+        in_net && /^[[:space:]]*\}/ {
+            if (!done) { print "    psk=\"" new_psk "\""; changed = 1; done = 1 }
+            in_net = 0; print; next
+        }
+        in_net && /^[[:space:]]*psk[[:space:]]*=/ {
+            if (!done) { print "    psk=\"" new_psk "\""; changed = 1; done = 1 } next
+        }
+        in_net && /^[[:space:]]*#[[:space:]]*psk[[:space:]]*=/ {
+            if (!done) { print "    psk=\"" new_psk "\""; changed = 1; done = 1; next }
+            print; next
+        }
         /^[[:space:]]*#/ { print; next }
-        /^[[:space:]]*psk[[:space:]]*=/ { print "    psk=\"" new_psk "\""; changed = 1; next }
         { print }
         END { if (!changed) exit 1 }
     ' "$CONF" > "$TMP_FILE"; then
         safe_install_0644_sync "$TMP_FILE" "$CONF"
         rm -f "$TMP_FILE"
         echo "psk changed in $CONF"
-    else echo "no psk= line found, nothing changed in $CONF" >&2; rm -f "$TMP_FILE"; exit 1; fi
+    else echo "no network={ block found, nothing changed in $CONF" >&2; rm -f "$TMP_FILE"; exit 1; fi
     ;;
   key)
     set -euo pipefail
@@ -1183,17 +1209,30 @@ case "$2" in
     [ "$NEW_KEY" = "0" ] && NEW_KEY="NONE"
     [ "$NEW_KEY" = "1" ] && NEW_KEY="WPA-PSK"
     TMP_FILE="$(mktemp)"
+    # active key_mgmt= → 치환 / #key_mgmt=(주석)만 있으면 주석 해제 후 설정 / 둘 다 없으면 network 블록 끝에 append.
+    # (블록 인지 방식은 connect 경로와 동일 — 주석처리된 설정도 확실히 반영. 블록당 done 1회.)
     if awk -v new_key="$NEW_KEY" '
-        BEGIN { changed = 0 }
+        BEGIN { in_net = 0; changed = 0 }
+        /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { in_net = 1; done = 0; print; next }
+        in_net && /^[[:space:]]*\}/ {
+            if (!done) { print "    key_mgmt=" new_key; changed = 1; done = 1 }
+            in_net = 0; print; next
+        }
+        in_net && /^[[:space:]]*key_mgmt[[:space:]]*=/ {
+            if (!done) { print "    key_mgmt=" new_key; changed = 1; done = 1 } next
+        }
+        in_net && /^[[:space:]]*#[[:space:]]*key_mgmt[[:space:]]*=/ {
+            if (!done) { print "    key_mgmt=" new_key; changed = 1; done = 1; next }
+            print; next
+        }
         /^[[:space:]]*#/ { print; next }
-        /^[[:space:]]*key_mgmt[[:space:]]*=/ { print "    key_mgmt=" new_key; changed = 1; next }
         { print }
         END { if (!changed) exit 1 }
     ' "$CONF" > "$TMP_FILE"; then
         safe_install_0644_sync "$TMP_FILE" "$CONF"
         rm -f "$TMP_FILE"
         echo "key_mgmt changed to $NEW_KEY in $CONF"
-    else echo "no key_mgmt= line found, nothing changed in $CONF" >&2; rm -f "$TMP_FILE"; exit 1; fi
+    else echo "no network={ block found, nothing changed in $CONF" >&2; rm -f "$TMP_FILE"; exit 1; fi
     ;;
   connect)
     # 인자 있음: ssid(+scan_freq/freq_list)를 conf에 기록 → wpa_cli reconfigure로 재로드.
