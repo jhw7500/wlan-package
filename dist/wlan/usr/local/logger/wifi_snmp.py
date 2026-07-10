@@ -192,20 +192,39 @@ def get_metric(metric, data=None):
     return getter(data)
 
 
+def _log_err(msg):
+    """best-effort local0(→ /var/log/cantops/logger.log) 에러 로깅 — 다른 cantops 데몬 규약.
+
+    sUTILS 는 top-level 에서 무거운 선택적 의존성을 import 하므로 여기서 lazy import 하고,
+    실패(의존성/dev-log 부재)해도 SNMP 응답을 막지 않도록 조용히 무시한다. 정상(값 출력)
+    경로는 호출하지 않아 GET 핫패스에 오버헤드/소음이 없다.
+    """
+    try:
+        import logging.handlers
+        from sUTILS import Logger, _EXTRA_
+        Logger(app_name="wifi_snmp",
+               facility=logging.handlers.SysLogHandler.LOG_LOCAL0).message("err", msg, _EXTRA_())
+    except Exception:
+        pass
+
+
 def main(argv):
     if len(argv) != 2:
         sys.stderr.write(
             "usage: wifi_snmp.py <%s>\n" % "|".join(METRICS)
         )
+        _log_err("usage: expected 1 metric arg, got %d" % (len(argv) - 1))
         return 1
     metric = argv[1].strip()
     if metric not in METRICS:
         sys.stderr.write("wifi_snmp.py: unknown metric %r\n" % metric)
+        _log_err("unknown metric %r" % metric)
         return 1
     try:
         value = get_metric(metric)
     except Exception as e:  # 견고성: 어떤 예외도 SNMP 응답을 막지 않게 빈 값 처리
         sys.stderr.write("wifi_snmp.py: %s\n" % e)
+        _log_err("metric %r error: %s" % (metric, e))
         print("")
         return 0
     print(_fmt(value))
