@@ -130,7 +130,7 @@ load_state() {
             STATE_UPDATED="$a"
             ;;
         power)
-            if [[ "$a" =~ ^[0-9]+$ && "$b" =~ ^[0-9]+$ && "$c" =~ ^[0-9]+$ ]]; then
+            if [[ "$a" =~ ^[0-9]+$ && "$b" =~ ^[0-9]+$ && "$c" =~ ^-?[0-9]+$ ]]; then
                 STATE_POWER["${a}:${b}"]="$c"
             fi
             ;;
@@ -627,12 +627,12 @@ show_status() {
     local source
     local unknown_count=0
     local total_count=0
+    local have_current=1
 
     load_txpower_mode
     # --status 는 진단 명령 — limits/link 를 못 읽어도 die 하지 않고 가능한 정보만 낸다.
     # (드라이버 초기화 직후 txpowercfg 테이블이 비었거나 포맷이 다른 경우 대비.)
     load_limits || echo "warn: txpowercfg limit table unavailable (driver not ready?)" >&2
-    local have_current=1
     detect_current_group || have_current=0
 
     load_state
