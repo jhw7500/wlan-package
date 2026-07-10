@@ -361,7 +361,7 @@ load_limits() {
         count=$((count + 1))
     done < <(read_limits)
 
-    [ "$count" -gt 0 ] || die "failed to read txpower limits"
+    [ "$count" -gt 0 ] || { echo "warn: failed to read txpower limits (empty txpowercfg table)" >&2; return 1; }
     echo "loaded ${count} group/rate limits"
 }
 
@@ -629,8 +629,9 @@ show_status() {
     local total_count=0
 
     load_txpower_mode
-    load_limits
-    # --status 는 진단 명령 — 미연결이면 die 대신 current-group 섹션만 생략한다.
+    # --status 는 진단 명령 — limits/link 를 못 읽어도 die 하지 않고 가능한 정보만 낸다.
+    # (드라이버 초기화 직후 txpowercfg 테이블이 비었거나 포맷이 다른 경우 대비.)
+    load_limits || echo "warn: txpowercfg limit table unavailable (driver not ready?)" >&2
     local have_current=1
     detect_current_group || have_current=0
 
@@ -768,6 +769,10 @@ fi
 if ! [[ "$POWER_DBM" =~ ^-?[0-9]+$ ]]; then
     die "power must be an integer dBm value"
 fi
+# 물리적으로 비정상적인 값은 경고만(거부 안 함 — MFG 툴 특성상 상한 강제는 부적절, mlanutl 이 최종 검증).
+if [ "$POWER_DBM" -lt -30 ] || [ "$POWER_DBM" -gt 40 ]; then
+    echo "warn: ${POWER_DBM} dBm is outside the typical -30..40 dBm range; passing through to mlanutl" >&2
+fi
 
 if [ "$CURRENT" -eq 1 ] && [ "$#" -gt 0 ]; then
     die "--current cannot be used with family arguments"
@@ -800,7 +805,7 @@ if [ "$RESET_BEFORE_SET" -eq 1 ]; then
 fi
 
 if [ "$CLAMP" -eq 1 ]; then
-    load_limits
+    load_limits || die "failed to read txpower limits (required for --clamp)"
 fi
 
 if [ "$CURRENT" -eq 1 ]; then
