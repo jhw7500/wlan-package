@@ -249,6 +249,17 @@ customctl() {
   # wifi_periodic_roam@, wifi_event@, wifi_bridge@, wpa_supplicant@, wifi_ping_monitor,
   # wifi_thermal_state.timer, wifi_mgmt_log.timer)는 wifi_init_conf.json의 *.enabled 키에
   # 따라 wifi_apply_enabled.sh가 일괄 enable/disable한다.
+  #
+  # opcd (wlan-opc: OPC-side UDP control plane, spec Rev1.00 §3): 원본 unit 은
+  # /usr/local/opc/opcd.service 단일 트리에 두고 systemd 표준 위치로 symlink 만 만든다.
+  # 라이프사이클(enable/disable/start)은 wifi_init_conf.json .opc.enabled 게이트가 소유한다
+  # (아래 wifi_apply_enabled.sh enable/disable + 부팅 wifi_services.sh start). 심링크는
+  # apply_enabled 호출 전에 존재해야 설치 시점 enable/disable 이 동작하므로 이 위치에 둔다.
+  if [ -f /usr/local/opc/opcd.service ]; then
+    ln -sf /usr/local/opc/opcd.service /etc/systemd/system/opcd.service
+    systemctl daemon-reload 2>/dev/null || true
+    logger -p local0.info "[$KEY][$tag:$LINENO] opcd.service installed via symlink (.opc.enabled 게이트로 제어)"
+  fi
   /usr/local/scripts/wifi_apply_enabled.sh 2>/dev/null || true
 
   INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 10))
@@ -467,19 +478,6 @@ json_merge() {
     #systemctl daemon-reload
     #systemctl enable vhld.service
     #systemctl start vhld.service || true
-  fi
-
-  # opcd (wlan-opc: OPC-side UDP control plane, spec Rev1.00 §3)
-  # 원본 unit 은 /usr/local/opc/opcd.service 단일 트리에 두고, systemd 표준 위치로
-  # symlink 만 만든다 ("한 곳에 모아 관리"는 wlan-opc 정책, T8 참조).
-  #
-  # 정책: 1차 단계는 자동 enable 금지. 운영자가 직접 결정한다:
-  #   - 즉시 검증:    systemctl start opcd
-  #   - 부팅 자동:    systemctl enable opcd && systemctl start opcd
-  if [ -f /usr/local/opc/opcd.service ]; then
-    ln -sf /usr/local/opc/opcd.service /etc/systemd/system/opcd.service
-    systemctl daemon-reload 2>/dev/null || true
-    logger -p local0.info "[$KEY][$tag:$LINENO] opcd.service installed via symlink (disabled by default — start manually)"
   fi
 
   PACKAGE_NAME="$DPKG_MAINTSCRIPT_PACKAGE"

@@ -13,6 +13,7 @@
 #   .mlan0.net_rx + .mlan1.net_rx > 0         → wifi_mgmt_log.timer
 #   .wbridge.thermal.enabled                  → wifi_thermal_state.timer
 #   .snmp.enabled                             → snmpd.service (배포판 net-snmp 유닛)
+#   .opc.enabled                              → opcd.service (wlan-opc OPC 제어 데몬)
 #   .mlanN.enabled (인터페이스 자체)          → wpa_supplicant@mlanN.service
 #   .mlanN.logger.enabled                     → wifi_logger@mlanN.service
 #   .mlanN.checker.enabled                    → wifi_checker@mlanN.service
@@ -93,6 +94,7 @@ apply() {
 apply wifi_ping_monitor.service     "$(get_bool ".global.ping_monitor.enabled" "false")"
 apply wifi_thermal_state.timer      "$(get_bool ".wbridge.thermal.enabled"     "false")"
 apply snmpd.service                 "$(get_bool ".snmp.enabled"                "false")"
+apply opcd.service                  "$(get_bool ".opc.enabled"                 "false")"
 
 # wifi_mgmt_log.timer: net_rx 값이 어느 한 쪽이라도 양수면 enable
 _m0_rx=$(jq -r '.mlan0.net_rx // 0' "$JSON")

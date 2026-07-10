@@ -443,6 +443,23 @@ def _out(line):
 
 
 def main():
+    # 다른 cantops 데몬과 동일하게 로그를 local0(→ /var/log/cantops/logger.log)에 남긴다.
+    # sUTILS 는 top-level 에서 무거운 선택적 의존성(paho/numpy/serial)을 import 하므로,
+    # 순수 함수 테스트/의존성 없는 환경을 깨지 않도록 여기서 lazy import 한다. Logger 생성이
+    # 실패해도(백엔드는 계속 서빙해야 하므로) best-effort 로 로깅만 비활성화한다.
+    logger = None
+    _extra = None
+    try:
+        import logging.handlers
+        from sUTILS import Logger, _EXTRA_
+        logger = Logger(app_name="wifi_snmp_pp",
+                        facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
+        _extra = _EXTRA_
+    except Exception:
+        logger = None
+
+    if logger:
+        logger.message("info", "pass_persist backend start (.1.3.6.1.4.1.672.65)", _extra())
     while True:
         try:
             line = sys.stdin.readline()
@@ -470,9 +487,13 @@ def main():
             # 그 외(DUMP 등) 알 수 없는 명령은 무시
         except Exception:
             # 어떤 예외도 프로세스를 죽이지 않게 — snmpd 가 재시작/타임아웃 하지 않도록.
-            # 단 진단을 위해 stderr 로 traceback 출력(snmpd 가 child stderr 를 syslog 로 보냄).
+            # 진단: stderr traceback(snmpd→syslog 상관용) + local0(logger.log) 병행 기록.
             traceback.print_exc(file=sys.stderr)
+            if logger:
+                logger.message("err", "exception: " + traceback.format_exc().strip().replace("\n", " | "), _extra())
             _out("NONE")
+    if logger:
+        logger.message("info", "pass_persist backend stop (EOF/empty)", _extra())
     return 0
 
 
