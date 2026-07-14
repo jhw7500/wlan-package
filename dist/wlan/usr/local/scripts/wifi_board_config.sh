@@ -15,9 +15,11 @@ tag=$(basename "$0")
 WIFI_CONF_DEFAULT="/usr/local/etc/wifi_init_conf.json"
 
 SOC_ID=$(cat /sys/devices/soc0/soc_id 2>/dev/null || echo "")
-# --detect 출력은 postinst가 root 컨텍스트에서 eval한다. soc_id는 커널이 주는 값이라 지금은
-# 안전하지만, 값에 작은따옴표가 섞이면 인용이 깨져 임의 셸 코드로 해석될 수 있다. 취약 계층을
-# 남기지 않도록 안전한 문자만 남긴다 (BOARD_TYPE/BUS_TYPE/IIO_DEV는 이 스크립트 내부 상수).
+# --detect 출력은 postinst가 root 컨텍스트에서 eval한다. 값에 작은따옴표가 섞이면 인용이 깨져
+# 임의 셸 코드로 해석될 수 있으므로, 외부에서 들어오는 값은 안전한 문자만 남긴다.
+# soc_id는 커널이 주는 값이고 IIO_DEV도 sysfs 경로라 실질 위험은 없지만, 둘 다 이 스크립트가
+# 만든 상수가 아니므로(IIO_DEV는 detect_iio_dev가 반환한 경로일 수 있다) 살균 대상이다.
+# BOARD_TYPE/BUS_TYPE만이 내부 상수다.
 SOC_ID=$(printf '%s' "$SOC_ID" | tr -cd 'A-Za-z0-9._ :-')
 
 if echo "$SOC_ID" | grep -qi "i\.MX93"; then
@@ -65,6 +67,9 @@ else
     logger -p local0.warn "[$tag:$LINENO] $_why; falling back to $IIO_DEV"
 fi
 
+# IIO_DEV도 --detect 출력을 거쳐 eval되므로 경로 문자만 남긴다 (위 살균 주석 참고).
+IIO_DEV=$(printf '%s' "$IIO_DEV" | tr -cd 'A-Za-z0-9/:._-')
+
 if [ "${1:-}" = "--detect" ]; then
     printf "SOC_ID='%s'\nBOARD_TYPE='%s'\nBUS_TYPE='%s'\nIIO_DEV='%s'\n" \
         "$SOC_ID" "$BOARD_TYPE" "$BUS_TYPE" "$IIO_DEV"
@@ -84,9 +89,12 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 tmp="${WIFI_CONF}.tmp"
-if jq --arg b "$BOARD_TYPE" --arg bus "$BUS_TYPE" --arg iio "$IIO_DEV" \
-      '.global.BOARD_TYPE = $b | .global.BUS_TYPE = $bus | .global.MOD_PARA = "cts/wifi_mod_para.conf" | .mcp.iio_device = $iio' \
-      "$WIFI_CONF" > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+# jq의 stderr는 버리지 않고 캡처해 실패 원인(JSON 구문 오류 등)을 로그로 남긴다.
+# `2>&1 > file`은 stderr를 명령치환으로, stdout을 파일로 보낸다 (순서 중요).
+jq_err=$(jq --arg b "$BOARD_TYPE" --arg bus "$BUS_TYPE" --arg iio "$IIO_DEV" \
+            '.global.BOARD_TYPE = $b | .global.BUS_TYPE = $bus | .global.MOD_PARA = "cts/wifi_mod_para.conf" | .mcp.iio_device = $iio' \
+            "$WIFI_CONF" 2>&1 > "$tmp")
+if [ -z "$jq_err" ] && [ -s "$tmp" ]; then
     mv "$tmp" "$WIFI_CONF"
     # factory_reset은 곧바로 reboot하므로, 전원이 끊겨도 보드 설정이 유실되지 않도록 동기화한다
     # (postinst의 cpchk도 같은 이유로 cp 직후 sync한다).
@@ -94,6 +102,6 @@ if jq --arg b "$BOARD_TYPE" --arg bus "$BUS_TYPE" --arg iio "$IIO_DEV" \
     logger -p local0.info "[$tag:$LINENO] $BOARD_TYPE detected (soc_id=$SOC_ID), BUS_TYPE=$BUS_TYPE, iio_device=$IIO_DEV [$IIO_SOURCE] -> $WIFI_CONF"
 else
     rm -f "$tmp"
-    logger -p local0.err "[$tag:$LINENO] jq update failed; keep existing $WIFI_CONF"
+    logger -p local0.err "[$tag:$LINENO] jq update failed; keep existing $WIFI_CONF: ${jq_err:-empty output}"
     exit 1
 fi

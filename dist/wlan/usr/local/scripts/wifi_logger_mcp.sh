@@ -45,17 +45,26 @@ fi
 
 # 설정값 방어. 비숫자/0 이하를 그대로 흘려보내면 sleep이 실패해 busy loop가 되거나
 # (check_interval_sec), 정수 비교가 에러나서 종료 조건이 영영 성립하지 않는다(max_probe_fail).
+_bad_interval=""; _bad_maxfail=""
 case "$MCP_CHECK_INTERVAL" in
-    ''|*[!0-9.]*) MCP_CHECK_INTERVAL=5 ;;
+    ''|*[!0-9.]*) _bad_interval="$MCP_CHECK_INTERVAL"; MCP_CHECK_INTERVAL=5 ;;
 esac
 if [ "$(echo "$MCP_CHECK_INTERVAL > 0" | bc -l 2>/dev/null)" != "1" ]; then
-    logger -p ${FACILITY}.warn "[$tag:$LINENO] invalid mcp.check_interval_sec; using 5"
+    _bad_interval="$MCP_CHECK_INTERVAL"
     MCP_CHECK_INTERVAL=5
 fi
+[ -n "$_bad_interval" ] && \
+    logger -p ${FACILITY}.warn "[$tag:$LINENO] invalid mcp.check_interval_sec '$_bad_interval'; using $MCP_CHECK_INTERVAL"
+
 case "$MCP_MAX_PROBE_FAIL" in
-    ''|*[!0-9]*) MCP_MAX_PROBE_FAIL=12 ;;
+    ''|*[!0-9]*) _bad_maxfail="$MCP_MAX_PROBE_FAIL"; MCP_MAX_PROBE_FAIL=12 ;;
 esac
-[ "$MCP_MAX_PROBE_FAIL" -ge 1 ] || MCP_MAX_PROBE_FAIL=12
+if [ "$MCP_MAX_PROBE_FAIL" -lt 1 ] 2>/dev/null; then
+    _bad_maxfail="$MCP_MAX_PROBE_FAIL"
+    MCP_MAX_PROBE_FAIL=12
+fi
+[ -n "$_bad_maxfail" ] && \
+    logger -p ${FACILITY}.warn "[$tag:$LINENO] invalid mcp.max_probe_fail '$_bad_maxfail'; using $MCP_MAX_PROBE_FAIL"
 
 cleanup() {
     #logger -p ${FACILITY}.info "[$tag:$LINENO] wifi_logger_mcp stop"
