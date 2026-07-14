@@ -185,10 +185,15 @@
         "check_interval_sec": 300
     },
     "mcp": {
-        "_comment": "wifi_logger_mcp.sh current/voltage sensor configuration. iio_device is auto-set by wifi_init.sh (iMX8MM=device0, iMX93=device1)",
+        "_comment": [
+            "wifi_logger_mcp.sh current/voltage sensor configuration.",
+            "iio_device: 이 템플릿에는 없다. wifi_board_config.sh가 SoC를 감지해 활성 설정(/usr/local/etc/wifi_init_conf.json)에 주입한다 (iMX8MM=iio:device0, iMX93=iio:device1). postinst와 factory_reset.sh가 각각 호출한다. 키가 없으면 스크립트는 iio:device0으로 fallback하므로 iMX93에서는 ADC를 못 읽는다.",
+            "max_probe_fail: (int) ADC 읽기 실패나 5V/24V 미매칭이 연속 이 횟수만큼 이어지면 감시를 포기하고 종료한다. 설정/HW 문제는 재시도로 풀리지 않으므로 무한 로그를 막는다."
+        ],
         "gain_current": 0.5203,
         "gain_voltage": 15.6552,
         "check_interval_sec": 5,
+        "max_probe_fail": 12,
         "system_5v": {
             "warn_a": 1,
             "error_a": 1.5,
