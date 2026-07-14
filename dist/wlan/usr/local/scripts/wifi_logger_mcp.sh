@@ -36,6 +36,13 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
     WARN_A_24V=$(jq -r '.mcp.system_24v.warn_a // 0.2' "$WIFI_INIT_CONF_JSON")
 fi
 
+# bc는 이 스크립트의 모든 계산과 비교에 쓰인다(패키지 Depends에는 없는 암묵적 의존).
+# 없으면 계산이 전부 빈 값이 되고 sleep이 실패해 busy loop로 CPU를 태우므로, 여기서 끊는다.
+if ! command -v bc >/dev/null 2>&1; then
+    logger -p ${FACILITY}.err "[$tag:$LINENO] bc not found; current/voltage monitoring disabled"
+    exit 0
+fi
+
 # 설정값 방어. 비숫자/0 이하를 그대로 흘려보내면 sleep이 실패해 busy loop가 되거나
 # (check_interval_sec), 정수 비교가 에러나서 종료 조건이 영영 성립하지 않는다(max_probe_fail).
 case "$MCP_CHECK_INTERVAL" in
@@ -74,10 +81,12 @@ read_adc() {
 }
 
 # 실패 반복 시 로그 간격을 늘린다 (상한 60s). MCP_CHECK_INTERVAL이 소수여도 되도록 bc 사용.
+# bc 계산이 어떤 이유로든 빈 값을 내면 sleep이 실패해 busy loop가 되므로 반드시 유효한 값으로 떨군다.
 backoff_sleep() {
     local n="$1" sec
-    sec=$(echo "$MCP_CHECK_INTERVAL * $n" | bc -l)
-    if (( $(echo "$sec > 60" | bc -l) )); then sec=60; fi
+    sec=$(echo "$MCP_CHECK_INTERVAL * $n" | bc -l 2>/dev/null)
+    [ -n "$sec" ] || sec="$MCP_CHECK_INTERVAL"
+    if [ "$(echo "$sec > 60" | bc -l 2>/dev/null)" = "1" ]; then sec=60; fi
     sleep "$sec"
 }
 

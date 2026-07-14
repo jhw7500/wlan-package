@@ -15,6 +15,11 @@ tag=$(basename "$0")
 WIFI_CONF_DEFAULT="/usr/local/etc/wifi_init_conf.json"
 
 SOC_ID=$(cat /sys/devices/soc0/soc_id 2>/dev/null || echo "")
+# --detect 출력은 postinst가 root 컨텍스트에서 eval한다. soc_id는 커널이 주는 값이라 지금은
+# 안전하지만, 값에 작은따옴표가 섞이면 인용이 깨져 임의 셸 코드로 해석될 수 있다. 취약 계층을
+# 남기지 않도록 안전한 문자만 남긴다 (BOARD_TYPE/BUS_TYPE/IIO_DEV는 이 스크립트 내부 상수).
+SOC_ID=$(printf '%s' "$SOC_ID" | tr -cd 'A-Za-z0-9._ :-')
+
 if echo "$SOC_ID" | grep -qi "i\.MX93"; then
     BOARD_TYPE="imx93"
     BUS_TYPE="sdio"
@@ -30,6 +35,7 @@ fi
 # 0x68)가 device1로 밀리며, IMU가 붙은 보드에서는 번호가 더 밀린다. 내장 imx93-adc는 채널별
 # scale(in_voltage0_scale)이 없고 공용 in_voltage_scale만 있어 이 검사에서 자연히 걸러진다.
 # 후보가 정확히 하나일 때만 채택하고, 없거나 여럿이면 보드별 인덱스로 폴백한다.
+# 후보가 없으면 1, 둘 이상이면 2를 반환한다 — 폴백 사유를 로그에서 구분하기 위함.
 detect_iio_dev() {
     local d found="" n=0
     for d in /sys/bus/iio/devices/iio:device*; do
@@ -42,16 +48,21 @@ detect_iio_dev() {
         n=$((n + 1))
     done
 
-    [ "$n" -eq 1 ] || return 1
+    [ "$n" -eq 0 ] && return 1
+    [ "$n" -gt 1 ] && return 2
     printf '%s\n' "$found"
 }
 
 if IIO_DEV=$(detect_iio_dev); then
     IIO_SOURCE="probe($(cat "$IIO_DEV/name" 2>/dev/null))"
 else
+    case "$?" in
+        2) _why="multiple iio devices match in_voltage0/1_raw+scale (ambiguous)" ;;
+        *) _why="no iio device matches in_voltage0/1_raw+scale" ;;
+    esac
     IIO_DEV="$IIO_DEV_FALLBACK"
     IIO_SOURCE="fallback($BOARD_TYPE default)"
-    logger -p local0.warn "[$tag:$LINENO] no unique iio device with in_voltage0/1_raw+scale; using $IIO_DEV"
+    logger -p local0.warn "[$tag:$LINENO] $_why; falling back to $IIO_DEV"
 fi
 
 if [ "${1:-}" = "--detect" ]; then
