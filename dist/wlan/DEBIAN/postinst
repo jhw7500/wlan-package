@@ -379,15 +379,18 @@ json_merge() {
   # 헬퍼가 없을 때뿐 아니라 '있는데 실패한' 경우에도 인라인으로 재시도한다. 이 단계를 건너뛰면
   # JSON에 .mcp.iio_device가 없는 채로 남아 원 버그(Invalid Voltage 무한 로깅)가 조용히 재현된다.
   if [ "$board_applied" -ne 1 ] && [ -f "$WIFI_CONF" ] && command -v jq >/dev/null 2>&1; then
-    if jq --arg b "$BOARD_TYPE" --arg bus "$BUS_TYPE" --arg iio "$IIO_DEV" \
-         '.global.BOARD_TYPE = $b | .global.BUS_TYPE = $bus | .global.MOD_PARA = "cts/wifi_mod_para.conf" | .mcp.iio_device = $iio' \
-         "$WIFI_CONF" > "${WIFI_CONF}.tmp" 2>/dev/null && [ -s "${WIFI_CONF}.tmp" ]; then
+    # jq의 stderr는 버리지 않고 캡처해 실패 원인(JSON 구문 오류 등)을 로그로 남긴다.
+    # `2>&1 > file`은 stderr를 명령치환으로, stdout을 파일로 보낸다 (순서 중요).
+    jq_err=$(jq --arg b "$BOARD_TYPE" --arg bus "$BUS_TYPE" --arg iio "$IIO_DEV" \
+               '.global.BOARD_TYPE = $b | .global.BUS_TYPE = $bus | .global.MOD_PARA = "cts/wifi_mod_para.conf" | .mcp.iio_device = $iio' \
+               "$WIFI_CONF" 2>&1 > "${WIFI_CONF}.tmp")
+    if [ -z "$jq_err" ] && [ -s "${WIFI_CONF}.tmp" ]; then
       mv "${WIFI_CONF}.tmp" "$WIFI_CONF"
       sync "$WIFI_CONF" 2>/dev/null || sync
       logger -p local0.warn "[$KEY][postinst:$LINENO] board config injected inline ($BOARD_TYPE); helper unavailable or failed"
     else
       rm -f "${WIFI_CONF}.tmp"
-      logger -p local0.err "[$KEY][postinst:$LINENO] inline board config injection failed: $WIFI_CONF"
+      logger -p local0.err "[$KEY][postinst:$LINENO] inline board config injection failed: $WIFI_CONF: ${jq_err:-empty output}"
     fi
   fi
 
