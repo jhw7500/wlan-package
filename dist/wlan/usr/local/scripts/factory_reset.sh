@@ -179,6 +179,21 @@ customctl() {
       logger -p local0.err "[$tag:$LINENO] missing wifi_board_config.sh; board settings not restored"
   fi
 
+  # 후조건 검증. 헬퍼가 없든, 실패했든, 조용히 잘못 썼든 결과는 하나다 — .mcp.iio_device가
+  # 없는 채로 reboot하면 이 버그가 그대로 재현된다. 여기서 확인해 최소한 원인이 드러나게 한다.
+  # (인라인 jq 폴백을 두지 않는 이유: 헬퍼는 이 스크립트와 같은 .deb로 원자적으로 배포되고,
+  #  헬퍼의 실패 원인(jq 부재·JSON 손상)은 인라인 jq도 똑같이 겪으므로 실익이 없다.
+  #  감지 로직을 세 번째로 복제하면 드리프트만 늘어난다.)
+  if command -v jq >/dev/null 2>&1; then
+      _iio=$(jq -r '.mcp.iio_device // empty' /usr/local/etc/wifi_init_conf.json 2>/dev/null)
+      if [ -z "$_iio" ]; then
+          logger -p local0.err "[$tag:$LINENO] .mcp.iio_device missing after board config; wifi_logger_mcp will fall back and fail to read the ADC"
+          safe_print red "\r\n[factory] WARNING: board config not applied (.mcp.iio_device missing)"
+      else
+          logger -p local0.info "[$tag:$LINENO] board config verified: iio_device=$_iio"
+      fi
+  fi
+
 #find /var/log/cantops -mindepth 1 -maxdepth 1 ! -name journald -exec rm -rf {} +
 :<<'END'
 LOG_DIR=/var/log/cantops
