@@ -1,5 +1,5 @@
 Package: wlan-proc
-Version: 0.4.2
+Version: 0.4.3
 Section: test
 Priority: optional
 Architecture: arm64
@@ -35,3 +35,4 @@ Description: WLAN Application
  0.4.0 : wifi mode/bw/connect/radio-apply 명령 재설계(HE 80↔40↔20 무중단 reassociate), extra_ssids 다중 SSID 스캔·로밍(roam 무중단/connect 재연결), wpa conf 직접편집+reconfigure 런타임 적용(opc_wlan_apply.sh, freq_list 영속), reconfigure 과도기 안정화(grace flag·단계화 복구, reboot 미진입), bgscan 개선(미연결 시 scan skip·ssid/freq_filter), moal thermal_mgmt·keepalive·tx_work 파라미터(capability-gate)+발열 임계 상향·mlan1 기본 비활성, wifi mon ChUtil 점유율·link.json ssid stale 캐시 제거, [opc] OPC 와이어 포맷 사양 정합 정정+입력검증·에러코드 보강(비호환), 무선/IP 런타임 실적용·nl80211 indication 발행·device-info tmpfs publish·FaultDetect·비동기 NVRAM·빈 비밀번호 차단, [bridge] EAPOL·802.1D link-local 무조건 차단(moal 가드 패리티)
  0.4.1 : MFG 모드 정책 전환 — mfg_mode=1에서 wifi_init exit 1 재시작 루프(반복 rmmod/insmod로 mfgbridge 테스트 간헐 실패) 수정: mfg 로드 성공 종료+멱등 가드(/run/wifi/mfg_loaded), STA/FW 접촉 유닛+snmpd/opcd disable+stop, checker idle, 재부팅 정책 mfg 거부(exit 12, overtemp/--force/wifi_init emergency 통과), moal bridge 인자·MAC spoofing/IP discovery·mod_para 운영키(net_rx/mgmt/dev_cap_mask) skip, cal_data_cfg=none 강제(안테나 mux는 유지)
  0.4.2 : wifi info에 [MFG] 상태 섹션(mfg_mode/fw_name/mfg_loaded/profile) + snmpd/opcd 데몬 상태 표시
+ 0.4.3 : factory_reset이 보드 감지 결과를 날려 Invalid Voltage가 무한 emerg 브로드캐스트되던 버그 수정 — SoC 감지+주입을 wifi_board_config.sh로 분리해 postinst/factory_reset이 공유(템플릿엔 .mcp.iio_device가 없고 .global.BOARD_TYPE이 고정값이라 덮어쓰면 iMX93이 iio:device0으로, iMX8MM이 BOARD_TYPE=imx93으로 어긋남), wifi_logger_mcp.sh는 ADC 읽기 실패를 감지해 emerg→err 강등·backoff·max_probe_fail(12회) 후 종료
