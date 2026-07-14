@@ -158,7 +158,41 @@ customctl() {
   safe_cp /opt/wlan/config/systemd/network/20-mlan0.link /etc/systemd/network/20-mlan0.link
   safe_cp /opt/wlan/config/systemd/network/21-mlan1.link /etc/systemd/network/21-mlan1.link
   safe_cp /opt/wlan/config/systemd/network/22-eth0.link /etc/systemd/network/22-eth0.link
+  # 활성 설정을 템플릿으로 되돌린다. postinst는 json_merge(기존 값 우선)로 쓰지만 여기서는
+  # 통째로 덮어쓴다 — 사용자 런타임 설정(.global/.mlanN/.wbridge 등)을 지우는 것이 초기화의 목적.
+  #
+  # .mac.* (mlan0/mlan1/eth0의 base·target)도 템플릿의 빈 문자열로 리셋된다. 의도된 동작이다
+  # (신규 설치 상태와 동일하게 맞춘다). 리셋 후 MAC은 드라이버 기본값을 쓰며, 지정이 필요하면
+  # `wifi mac <iface> <base|target> <MAC>`으로 다시 설정한다. 자동 복구 경로는 없다.
   safe_cp /opt/wlan/config/wifi_init_conf.json /usr/local/etc/
+
+  # 단, 보드 감지 결과는 사용자 설정이 아니라 하드웨어 사실이므로 반드시 되살린다.
+  # 템플릿에는 .mcp.iio_device 키가 없고 .global.BOARD_TYPE은 고정값("imx93")이라, 위 복사만으로
+  # 끝내면 postinst가 주입해 둔 값이 사라진다. 그러면 wifi_logger_mcp.sh가 iio:device0
+  # fallback으로 떨어져(iMX93은 device1) ADC를 못 읽고 Invalid Voltage를 무한 로깅하며,
+  # iMX8MM에서는 BOARD_TYPE이 imx93으로 뒤바뀌어 드라이버 선택까지 어긋난다.
+  # 이 호출로 factory_reset 결과 == 신규 설치 결과(템플릿 + 보드 감지)가 된다.
+  if [ -x /usr/local/scripts/wifi_board_config.sh ]; then
+      /usr/local/scripts/wifi_board_config.sh /usr/local/etc/wifi_init_conf.json \
+          || logger -p local0.err "[$tag:$LINENO] board config apply failed"
+  else
+      logger -p local0.err "[$tag:$LINENO] missing wifi_board_config.sh; board settings not restored"
+  fi
+
+  # 후조건 검증. 헬퍼가 없든, 실패했든, 조용히 잘못 썼든 결과는 하나다 — .mcp.iio_device가
+  # 없는 채로 reboot하면 이 버그가 그대로 재현된다. 여기서 확인해 최소한 원인이 드러나게 한다.
+  # (인라인 jq 폴백을 두지 않는 이유: 헬퍼는 이 스크립트와 같은 .deb로 원자적으로 배포되고,
+  #  헬퍼의 실패 원인(jq 부재·JSON 손상)은 인라인 jq도 똑같이 겪으므로 실익이 없다.
+  #  감지 로직을 세 번째로 복제하면 드리프트만 늘어난다.)
+  if command -v jq >/dev/null 2>&1; then
+      _iio=$(jq -r '.mcp.iio_device // empty' /usr/local/etc/wifi_init_conf.json 2>/dev/null)
+      if [ -z "$_iio" ]; then
+          logger -p local0.err "[$tag:$LINENO] .mcp.iio_device missing after board config; wifi_logger_mcp will fall back and fail to read the ADC"
+          safe_print red "\r\n[factory] WARNING: board config not applied (.mcp.iio_device missing)"
+      else
+          logger -p local0.info "[$tag:$LINENO] board config verified: iio_device=$_iio"
+      fi
+  fi
 
 #find /var/log/cantops -mindepth 1 -maxdepth 1 ! -name journald -exec rm -rf {} +
 :<<'END'

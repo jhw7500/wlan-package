@@ -6,7 +6,7 @@ Debian package for deploying WLAN application infrastructure on ARM64 embedded s
 
 This package (`wlan-proc`) bundles the wlan-bridge L2 network bridge along with supporting scripts, configuration files, and systemd services for wireless network management on embedded Linux systems.
 
-**Current Version:** 0.4.2
+**Current Version:** 0.4.3
 
 ## Prerequisites
 

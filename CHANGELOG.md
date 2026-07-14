@@ -3,6 +3,19 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.4.3 (2026-07-13)
+
+> SemVer **patch** — factory_reset 버그픽스. 신규 설정 키 1개(`.mcp.max_probe_fail`), 와이어 포맷 변경 없음.
+
+### wlan-package (메인)
+
+- **factory_reset이 보드 감지 결과를 날리던 버그 수정** — `.mcp.iio_device`는 postinst가 SoC를 감지해 활성 설정에 주입하는 값인데(iMX93=`iio:device1`, iMX8MM=`iio:device0`), `factory_reset.sh`가 템플릿을 `json_merge` 없이 통째로 덮어써 이 키가 사라졌다. 템플릿에는 해당 키가 아예 없다. 그 결과 iMX93에서 `wifi_logger_mcp.sh`가 `iio:device0`으로 fallback해 ADC를 못 읽고, 빈 값이 `printf '%.3f'`를 거쳐 `0.000`으로 찍히면서 전원 규격(5V/24V) 판별 루프를 영영 빠져나오지 못한 채 `Invalid Voltage!!`를 **emerg로 5초마다 무한 로깅**했다(emerg는 journald가 모든 콘솔에 wall broadcast). 온타겟 실측 결과 설치본과 리셋본의 유일한 내용 차이가 `.mcp.iio_device`였음을 확인. 부수적으로 템플릿의 `.global.BOARD_TYPE`이 `imx93` 고정값이라 **iMX8MM에서 factory_reset 시 BOARD_TYPE이 뒤바뀌어 드라이버 선택이 어긋나는** 잠복 버그도 함께 해소.
+  - SoC 감지 + JSON 주입을 신규 `wifi_board_config.sh`로 분리해 postinst와 `factory_reset.sh`가 공유. 이로써 **factory_reset 결과 == 신규 설치 결과**(템플릿 + 보드 감지)가 된다.
+  - **iio 디바이스를 인덱스가 아니라 capability로 탐색** — `in_voltage0/1_raw`와 `in_voltage0/1_scale` 4개를 모두 가진 디바이스를 찾는다. iMX93 실기기 실측 결과 SoC 내장 `imx93-adc`가 `device0`, 외장 ADC(I2C `0-0068`)가 `device1`이며, 내장 ADC는 채널별 scale 없이 공용 `in_voltage_scale`만 있어 이 검사에서 걸러진다. 인덱스는 프로브 순서·IMU 유무에 밀리므로(i.MX93 EVK에서는 `device1`이 `lsm6dso_gyro`) 하드코딩은 취약하다. 후보가 유일하지 않으면 기존 보드별 인덱스로 폴백.
+  - 원 버그의 기전도 실기기에서 확정: fallback한 `device0`(내장 ADC)은 `in_voltage0_scale`이 없어 `cat`이 실패 → `bc`가 빈 값을 받아 계산 실패 → `printf '%.3f' ""`가 `0.000` 출력 → 전원 규격 판별 실패 → 무한 emerg.
+  - `.mac.*`(mlan0/mlan1/eth0)은 factory_reset이 템플릿의 빈 값으로 되돌린다. 의도된 동작이며, 필요 시 `wifi mac <iface> <base|target> <MAC>`으로 재설정한다(자동 복구 경로 없음).
+- **wifi_logger_mcp.sh 방어** — `read_adc()`로 sysfs/bc 실패를 감지해 빈 값이 `0.000`으로 흘러 "0V 이상전압"으로 오인되던 경로를 차단. `Invalid Voltage`/읽기 실패 로그를 emerg→err로 강등(콘솔 wall broadcast 방지)하고 backoff 적용. 전원 규격 판별 루프는 `max_probe_fail`(기본 12회, ≈5.5분) 후 종료하고, **과전류 감시 루프는 종료하지 않는다** — `wifi_logger.service`가 `Type=oneshot`이라 exit하면 재부팅 전까지 재시작되지 않아 emerg 감시를 영구히 잃기 때문. ADC 복구 시 감시가 자동 재개된다.
+
 ## 0.4.2 (2026-07-10)
 
 > SemVer **patch** — `wifi info` 관측성 개선 (런타임 동작 변경 없음).
