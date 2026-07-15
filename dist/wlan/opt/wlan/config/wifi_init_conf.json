@@ -65,7 +65,8 @@
             "moal.keepalive_idle_ms: (int) engine=moal 전용 — keepalive 타이머의 idle cutoff(ms). 0=free-running(타이머 상시 가동, 드라이버 기본), >0=adaptive(트래픽으로 타이머 arm 후 이 시간만큼 idle 지속 시 자동 정지 → idle 시 wakeup 0). 발열 노브: 작을수록 빨리 정지(발열↓)·idle 후 첫 패킷 콜드 가능, 클수록 늦게 정지(레이턴시 안정). 기본 20. insmod 인자 bridge_keepalive_idle_ms로 전달(해당 param 미선언 드라이버 예: 현 moal_imx8.ko 에는 자동 미전달). 변경 반영에는 재부팅/드라이버 리로드 필요",
             "moal.debug: (int 0|1) bridge 디버그 로그(BR_DBG/[DBG-RXDROP]) — dmesg로 패킷 경로·가드 동작 진단. 평시 0 (runtime 변경도 가능: /sys/module/moal/parameters/bridge_debug)",
             "moal.peer: (string) 브릿지 유선 peer 인터페이스명. 빈 문자열이면 드라이버 기본(eth0) 사용 + insmod 인자 미전달. 주의: moal 엔진에만 적용 — peer_route/ARP sysctl 스크립트와 pcap 트랙은 eth0 하드코딩이라 eth0 외 값은 별도 작업 필요",
-            "moal.consume_link_local: (int 0|1) [DBG-RXDROP] 차단된 link-local(STP/LLDP) 프레임을 드라이버 내 폐기(1)하여 mlan rx_nohandler 카운트 증가를 막는 A/B 진단 토글. 빈 문자열/미설정=드라이버 기본(0, 스택 전달 후 폐기)"
+            "moal.consume_link_local: (int 0|1) [DBG-RXDROP] 차단된 link-local(STP/LLDP) 프레임을 드라이버 내 폐기(1)하여 mlan rx_nohandler 카운트 증가를 막는 A/B 진단 토글. 빈 문자열/미설정=드라이버 기본(0, 스택 전달 후 폐기)",
+            "moal.deliver_rt_prio: (int) engine=moal 전용 — RX deliver leg(NAPI woal_netdev_poll_rx) RT 우선순위. 0=off(deliver가 ksoftirqd/CFS에서 실행 → sparse/idle 시 최대 ~80ms 디스패치 지연 = 다운스트림 RX jitter), 1-99=드라이버가 NAPI를 전용 kthread로 threaded화 + 그 kthread를 SCHED_FIFO:prio로 고정(Direction B fix). 기본 45(pull IRQ FIFO:50 아래). wq_sched_policy=1 wq_sched_prio=<val>로 전달 — main/tx/bridge kthread도 동일 FIFO:prio로 올라감. 드라이버가 wq_sched_policy param 선언한 .ko에만 전달(capability-gate). 실측: RTT 82ms→9.3ms(pcap 근접). 변경 반영에는 재부팅/드라이버 리로드 필요"
         ],
         "enabled": true,
         "bridge_iface": "mlan0",
@@ -93,6 +94,7 @@
             "_comment": "engine=moal 전용 파라미터 (키 설명은 상단 _comment). peer/consume_link_local은 빈 문자열이면 insmod 인자로 전달하지 않음(드라이버 기본값 사용 — 구버전 드라이버 호환).",
             "keepalive_ms": 1,
             "keepalive_idle_ms": 20,
+            "deliver_rt_prio": 45,
             "debug": 0,
             "peer": "",
             "consume_link_local": ""
