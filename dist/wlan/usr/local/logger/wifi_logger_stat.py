@@ -667,7 +667,7 @@ if __name__ == "__main__":
 
     # iface 검증을 먼저 (락 파일 경로에 IFACE를 쓰기 전 — path traversal 방지)
     if IFACE != "mlan0" and IFACE != "mlan1":
-        logger.message("emerg", f"[{IFACE}] is not vaild interface", _EXTRA_())
+        logger.message("emerg", f"[{IFACE}] is not valid interface", _EXTRA_())
         sys.exit(1)
 
     # 단일 인스턴스 락(iface별): 재시작 중복 실행 시 stat.log 동시 write(라인 겹침) 방지.
