@@ -317,6 +317,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} standard {n|ac|ax|4|5|6} : persist (mlan1은 ax 불가)"
     echo "       wifi {0|1|mlan0|mlan1} cal {0|1|2|none|WlanCalData_ext.conf|*} : persist (인터페이스별)"
     echo "       wifi {0|1|mlan0|mlan1} log {cp [dir]|compress} : 로그 복사/압축(현재 디렉터리)"
+    echo "       wifi {0|1|mlan0|mlan1} log reset : iface 로그 truncate (scan/stat/wpa/mgmt/ping + rsyslog HUP)"
     echo "       wifi {0|1|mlan0|mlan1} ssid {id} : persist"
     echo "       wifi {0|1|mlan0|mlan1} psk {password} : persist"
     echo "       wifi {0|1|mlan0|mlan1} key {0|1|NONE|WPA-PSK|*} : persist"
@@ -340,8 +341,9 @@ usage() {
     echo "       wifi ant {0|1|internal|external} : runtime"
     echo "       wifi set {fem|azure} : apply preset configuration profile"
     echo "       wifi stand {n|ac|ax|4|5|6} : persist"
-    echo "       wifi log all : /var/log/cantops 전체 압축(현재 디렉터리)"
-    echo "       wifi backup : persist"
+    echo "       wifi log dump : /var/log/cantops 전체 압축(현재 디렉터리)"
+    echo "       wifi log reset : 전체 로그 초기화(전역+모든 iface truncate + rsyslog HUP)"
+    echo "       wifi backup : 로그·설정 백업(/var/log/cantops/backup)"
     exit 1
 }
 
@@ -846,24 +848,73 @@ case "$1" in
     fi
     ;;
   log)
-    if [ "$2" == "all" ]; then
-        LOG_BASE=/var/log/cantops
+    LOG_BASE=/var/log/cantops
+    if [ "$2" == "dump" ]; then
         if [ ! -d "$LOG_BASE" ]; then
             echo "Error: $LOG_BASE not found" >&2
             exit 1
         fi
-        if ! command -v zip >/dev/null 2>&1; then
-            echo "Error: zip not installed" >&2
+        if ! command -v tar >/dev/null 2>&1; then
+            echo "Error: tar not installed" >&2
             exit 1
         fi
-        ARCHIVE="$(pwd)/cantops_log_$(date +%Y%m%d_%H%M%S).zip"
-        if ( cd "$(dirname "$LOG_BASE")" && zip -r -q "$ARCHIVE" "$(basename "$LOG_BASE")" ); then
+        ARCHIVE="$(pwd)/cantops_log_$(date +%Y%m%d_%H%M%S).tar.gz"
+        # --exclude: pwd가 cantops 하위일 때 생성 중인 아카이브 자신만 제외(기존 덤프는 보존).
+        # pwd가 cantops 하위면 디렉터리 변경으로 tar가 rc=1(경고) 반환 — 아카이브는 정상이므로 허용,
+        # rc>=2(fatal)만 실패로 처리한다.
+        tar -czf "$ARCHIVE" --exclude="$(basename "$ARCHIVE")" -C "$(dirname "$LOG_BASE")" "$(basename "$LOG_BASE")"
+        rc=$?
+        if [ "$rc" -le 1 ]; then
             echo "Compressed $LOG_BASE to $ARCHIVE"
             exit 0
         else
-            echo "Error: zip failed" >&2
+            rm -f "$ARCHIVE"
+            echo "Error: tar failed (rc=$rc)" >&2
             exit 1
         fi
+    elif [ "$2" == "reset" ]; then
+        # 전체 로그 초기화: 전역 + 모든 iface 로그 truncate. 파일 유지(inode 보존), 서비스 재시작 없음.
+        # rsyslog 소유(cpu/logger/kern/sys)는 HUP으로 재오픈해야 sparse hole 없이 비워짐.
+        # 대상 = cantops 로그 전체(logrotate.rsyslog 관리분 + rsyslog.conf omfile).
+        # 전역 ping.log는 wifi_ping local1 라우팅으로 실재하나 logrotate 미등록이라 별도 포함.
+        RESET_ALL=(
+            "$LOG_BASE/kern.log"
+            "$LOG_BASE/sys.log"
+            "$LOG_BASE/logger.log"
+            "$LOG_BASE/ui.log"
+            "$LOG_BASE/summary/summary.log"
+            "$LOG_BASE/cpu/cpu.log"
+            "$LOG_BASE/ping.log"
+        )
+        for _if in mlan0 mlan1; do
+            RESET_ALL+=(
+                "$LOG_BASE/scan/$_if/ap.log"
+                "$LOG_BASE/scan/$_if/freq.log"
+                "$LOG_BASE/stat/$_if/stat.log"
+                "$LOG_BASE/stat/$_if/snap.log"
+                "$LOG_BASE/wpa/$_if/wpa.log"
+                "$LOG_BASE/mgmt/$_if/mgmt.log"
+                "$LOG_BASE/mgmt/$_if/gmgmt.log"
+                "$LOG_BASE/ping/$_if/ping.log"
+            )
+        done
+        _rn=0; _rmiss=()
+        for _lf in "${RESET_ALL[@]}"; do
+            if [ -f "$_lf" ]; then
+                if : > "$_lf"; then _rn=$((_rn+1)); else echo "Warning: truncate failed: $_lf" >&2; fi
+            else
+                _rmiss+=("${_lf#"$LOG_BASE"/}")
+            fi
+        done
+        # rsyslog 소유 로그(cpu/logger/kern/sys/ui/wpa/mgmt/ping)를 재오픈시켜 truncate 반영
+        if systemctl kill -s HUP rsyslog 2>/dev/null; then
+            echo "Reset $_rn log(s) (rsyslog reopened, HUP)"
+        else
+            echo "Reset $_rn log(s)"
+            echo "Warning: rsyslog HUP failed — rsyslog-owned logs may need manual reopen" >&2
+        fi
+        [ ${#_rmiss[@]} -gt 0 ] && echo "Skipped ${#_rmiss[@]} missing: ${_rmiss[*]}"
+        exit 0
     else
         usage
     fi
@@ -871,8 +922,8 @@ case "$1" in
   backup)
     BACKUP_DIR=/var/log/cantops/backup
     echo "backup to $BACKUP_DIR..."
-    /usr/local/scripts/backup.sh $BACKUP_DIR
-    exit 1
+    /usr/local/scripts/backup.sh "$BACKUP_DIR"
+    exit $?
     ;;
   *)
     usage
@@ -1889,14 +1940,16 @@ case "$2" in
     ;;
   log)
     if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
-        echo "Error: log cp/compress supports mlan0/mlan1 only" >&2
+        echo "Error: log cp/compress/reset supports mlan0/mlan1 only" >&2
         exit 1
     fi
     LOG_BASE=/var/log/cantops
+    # cp/compress 대상: 진단 편의로 전역 로그(cpu/logger/kern/sys/summary)도 함께 수집.
+    # (log reset은 iface별 초기화라 전역 제외 — 전역 초기화는 'wifi log reset'이 담당)
     LOG_FILES=(
         "$LOG_BASE/cpu/cpu.log"
         "$LOG_BASE/logger.log"
-        "$LOG_BASE/kerl.log"
+        "$LOG_BASE/kern.log"
         "$LOG_BASE/sys.log"
         "$LOG_BASE/summary/summary.log"
         "$LOG_BASE/scan/$IFACE/ap.log"
@@ -1924,18 +1977,53 @@ case "$2" in
             echo "Error: no log files found for $IFACE" >&2
             exit 1
         fi
-        if ! command -v zip >/dev/null 2>&1; then
-            echo "Error: zip not installed" >&2
+        if ! command -v tar >/dev/null 2>&1; then
+            echo "Error: tar not installed" >&2
             exit 1
         fi
-        ARCHIVE="${IFACE}_log_$(date +%Y%m%d_%H%M%S).zip"
-        if zip -j -q "$ARCHIVE" "${EXIST[@]}"; then
+        ARCHIVE="${IFACE}_log_$(date +%Y%m%d_%H%M%S).tar.gz"
+        REL=()
+        for _lf in "${EXIST[@]}"; do REL+=("${_lf#"$LOG_BASE"/}"); done
+        if tar -czf "$ARCHIVE" -C "$LOG_BASE" "${REL[@]}"; then
             echo "Compressed ${#EXIST[@]} log(s) for $IFACE to $(pwd)/$ARCHIVE"
             [ ${#MISSING[@]} -gt 0 ] && echo "Skipped ${#MISSING[@]} missing: ${MISSING[*]}"
         else
-            echo "Error: zip failed" >&2
+            rm -f "$ARCHIVE"
+            echo "Error: tar failed" >&2
             exit 1
         fi
+        ;;
+      reset)
+        # iface 전용 로그만 truncate(파일 유지, 내용만 비움).
+        # scan/stat은 파이썬 append(재오픈 불필요), wpa/mgmt/ping은 rsyslog omfile이라
+        # truncate 후 HUP로 재오픈해야 sparse hole 없이 비워짐(HUP은 연결에 영향 없음).
+        # 대상은 logrotate.rsyslog의 iface별 cantops 로그와 동기화.
+        RESET_FILES=(
+            "$LOG_BASE/scan/$IFACE/ap.log"
+            "$LOG_BASE/scan/$IFACE/freq.log"
+            "$LOG_BASE/stat/$IFACE/stat.log"
+            "$LOG_BASE/stat/$IFACE/snap.log"
+            "$LOG_BASE/wpa/$IFACE/wpa.log"
+            "$LOG_BASE/mgmt/$IFACE/mgmt.log"
+            "$LOG_BASE/mgmt/$IFACE/gmgmt.log"
+            "$LOG_BASE/ping/$IFACE/ping.log"
+        )
+        _rn=0; _rmiss=()
+        for _lf in "${RESET_FILES[@]}"; do
+            if [ -f "$_lf" ]; then
+                if : > "$_lf"; then _rn=$((_rn+1)); else echo "Warning: truncate failed: $_lf" >&2; fi
+            else
+                _rmiss+=("$(basename "$_lf")")
+            fi
+        done
+        # wpa/mgmt/ping은 rsyslog 소유 → HUP로 재오픈(WiFi 연결엔 영향 없음)
+        if systemctl kill -s HUP rsyslog 2>/dev/null; then
+            echo "Reset $_rn log(s) for $IFACE, rsyslog reopened (HUP)"
+        else
+            echo "Reset $_rn log(s) for $IFACE"
+            echo "Warning: rsyslog HUP failed — wpa/mgmt/ping may need manual reopen" >&2
+        fi
+        [ ${#_rmiss[@]} -gt 0 ] && echo "Skipped ${#_rmiss[@]} missing: ${_rmiss[*]}"
         ;;
       *)
         usage
