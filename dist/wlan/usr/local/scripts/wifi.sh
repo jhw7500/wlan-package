@@ -871,7 +871,8 @@ case "$1" in
     elif [ "$2" == "reset" ]; then
         # 전체 로그 초기화: 전역 + 모든 iface 로그 truncate. 파일 유지(inode 보존), 서비스 재시작 없음.
         # rsyslog 소유(cpu/logger/kern/sys)는 HUP으로 재오픈해야 sparse hole 없이 비워짐.
-        # 대상은 logrotate.rsyslog(opt/wlan/config/logrotate.d)의 cantops 로그와 동기화.
+        # 대상 = cantops 로그 전체(logrotate.rsyslog 관리분 + rsyslog.conf omfile).
+        # 전역 ping.log는 wifi_ping local1 라우팅으로 실재하나 logrotate 미등록이라 별도 포함.
         RESET_ALL=(
             "$LOG_BASE/kern.log"
             "$LOG_BASE/sys.log"
@@ -893,21 +894,22 @@ case "$1" in
                 "$LOG_BASE/ping/$_if/ping.log"
             )
         done
-        _rn=0; _rmiss=0
+        _rn=0; _rmiss=()
         for _lf in "${RESET_ALL[@]}"; do
             if [ -f "$_lf" ]; then
                 if : > "$_lf"; then _rn=$((_rn+1)); else echo "Warning: truncate failed: $_lf" >&2; fi
             else
-                _rmiss=$((_rmiss+1))
+                _rmiss+=("${_lf#"$LOG_BASE"/}")
             fi
         done
-        # rsyslog가 소유한 로그(cpu/logger/kern/sys)를 재오픈시켜 truncate 반영
+        # rsyslog 소유 로그(cpu/logger/kern/sys/ui/wpa/mgmt/ping)를 재오픈시켜 truncate 반영
         if systemctl kill -s HUP rsyslog 2>/dev/null; then
-            echo "Reset $_rn log(s), skipped $_rmiss missing, rsyslog reopened (HUP)"
+            echo "Reset $_rn log(s) (rsyslog reopened, HUP)"
         else
-            echo "Reset $_rn log(s), skipped $_rmiss missing"
-            echo "Warning: rsyslog HUP failed — cpu/logger/kern/sys may need manual reopen" >&2
+            echo "Reset $_rn log(s)"
+            echo "Warning: rsyslog HUP failed — rsyslog-owned logs may need manual reopen" >&2
         fi
+        [ ${#_rmiss[@]} -gt 0 ] && echo "Skipped ${#_rmiss[@]} missing: ${_rmiss[*]}"
         exit 0
     else
         usage
