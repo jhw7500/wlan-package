@@ -20,6 +20,10 @@ bridge_keepalive_ms=1
 bridge_keepalive_idle_ms=20  # idle cutoff(ms). 드라이버가 해당 param을 선언한 경우에만 insmod 인자로 전달(아래 moal 블록)
 bridge_peer=""               # 빈값=드라이버 기본(eth0). JSON 명시 시에만 insmod 인자 추가
 bridge_consume_link_local="" # 빈값=드라이버 기본(0). JSON 명시 시에만 insmod 인자 추가
+# deliver_rt_prio: RX deliver leg RT 우선순위 (Direction B — threaded NAPI + FIFO fix).
+# 0=off(deliver가 CFS→moal 다운스트림 RX jitter), 1-99=FIFO prio. 드라이버가 wq_sched_policy
+# param 선언 시에만 전달(아래 moal 블록). 실측: RTT 82ms→9.3ms.
+bridge_deliver_rt_prio=45
 # tx_work: moal 데이터 TX 제출 방식 module_param (bridge 무관·드라이버 전역, engine과 무관하게 전달).
 # 빈값=미전달(드라이버 기본, iMX는 1). 0|1만 수용. 아래 moal insmod 블록에서 param 선언 확인 후 추가.
 tx_work=""
@@ -53,6 +57,14 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
         *) bridge_keepalive_idle_ms=$_kai ;;
     esac
     unset _kai
+    # moal.deliver_rt_prio: RX deliver leg RT 우선순위 (Direction B — threaded NAPI FIFO).
+    # 0=off(deliver CFS=jitter), 1-99=FIFO prio. 그 외(키 없음/비정수/>99)=기본(45) 유지.
+    _drp=$(jq -r '.wbridge.moal.deliver_rt_prio // empty' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    case "$_drp" in
+        ''|*[!0-9]*) ;;
+        *) [ "$_drp" -le 99 ] && bridge_deliver_rt_prio=$_drp ;;
+    esac
+    unset _drp
     # moal.debug: BR_DBG/[DBG-RXDROP] 진단 로그 (0|1만 수용)
     _bd=$(jq -r '.wbridge.moal.debug // empty' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
     case "$_bd" in
@@ -214,6 +226,15 @@ elif [ "$WBRIDGE_ENGINE" = "moal" ]; then
     # (해당 param이 없는 구버전 드라이버는 insmod가 실패하므로 기본 미전달)
     [ -n "$bridge_peer" ] && moal_args="$moal_args bridge_peer=$bridge_peer"
     [ -n "$bridge_consume_link_local" ] && moal_args="$moal_args bridge_consume_link_local=$bridge_consume_link_local"
+    # deliver_rt_prio>0: Direction B — RX deliver leg를 RT화(threaded NAPI FIFO:prio)해 moal
+    # 다운스트림 RX jitter 해결(실측 RTT 82ms→9.3ms). wq_sched_policy=1(FIFO)+wq_sched_prio 전달;
+    # main/tx/bridge kthread도 동일 FIFO:prio로 올라감(pull IRQ FIFO:50 아래 권장). 게이트는
+    # bridge_keepalive_idle_ms와 동일 방식(parmtype 토큰) — 미선언 .ko면 skip(insmod 실패 방지).
+    if [ "${bridge_deliver_rt_prio:-0}" -gt 0 ] 2>/dev/null && \
+       tr '\000' '\n' < "/opt/wlan/driver/$MOAL_KO" 2>/dev/null | grep -F 'parmtype=wq_sched_policy:' >/dev/null 2>&1; then
+        moal_args="$moal_args wq_sched_policy=1 wq_sched_prio=$bridge_deliver_rt_prio"
+        logger -p local0.info "[$tag:$LINENO] moal: deliver_rt_prio=$bridge_deliver_rt_prio → wq_sched_policy=1 wq_sched_prio=$bridge_deliver_rt_prio added"
+    fi
     logger -p local0.info "[$tag:$LINENO] moal engine: bridge params added → $moal_args"
 else
     logger -p local0.info "[$tag:$LINENO] moal_args: $moal_args"
