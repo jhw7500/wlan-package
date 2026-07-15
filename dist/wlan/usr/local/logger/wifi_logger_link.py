@@ -524,7 +524,13 @@ if __name__ == "__main__":
     IFACE = args.iface
 
     # 단일 인스턴스 락(iface별): 재시작 중복 실행 시 로그 동시 write 방지.
-    _lock_fp = open(f"/tmp/wifi_logger_link_{IFACE}.lock", "w")
+    # IFACE는 argparse choices(mlan0/mlan1/eth0)로 이미 검증됨.
+    # 락은 /run(root 전용, non-world-writable)에 둬 /tmp 심링크 truncate 공격을 차단한다.
+    try:
+        _lock_fp = open(f"/run/wifi_logger_link_{IFACE}.lock", "w")
+    except OSError as e:
+        logger.message("warning", f"[{IFACE}] lock file open failed: {e} — exit", _EXTRA_())
+        sys.exit(0)
     _locked = False
     for _ in range(5):
         try:
