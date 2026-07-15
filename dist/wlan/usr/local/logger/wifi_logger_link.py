@@ -5,6 +5,7 @@ import re
 import sys
 import os
 import signal
+import fcntl
 import tempfile
 import shutil
 import argparse
@@ -521,6 +522,20 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     IFACE = args.iface
+
+    # 단일 인스턴스 락(iface별): 재시작 중복 실행 시 로그 동시 write 방지.
+    _lock_fp = open(f"/tmp/wifi_logger_link_{IFACE}.lock", "w")
+    _locked = False
+    for _ in range(5):
+        try:
+            fcntl.flock(_lock_fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _locked = True
+            break
+        except OSError:
+            time.sleep(1)
+    if not _locked:
+        logger.message("warning", f"[{IFACE}] another wifi_logger_link already running — exit", _EXTRA_())
+        sys.exit(0)
 
     # Load tunables from JSON: {iface}.logger.<key> → logger.<key> → arg default
     # link_retry_* 키는 아직 기본 JSON에 없어도 무방하다(없으면 arg/모듈 기본값 사용).
