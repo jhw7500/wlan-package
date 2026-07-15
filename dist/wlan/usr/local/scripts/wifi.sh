@@ -317,7 +317,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} standard {n|ac|ax|4|5|6} : persist (mlan1은 ax 불가)"
     echo "       wifi {0|1|mlan0|mlan1} cal {0|1|2|none|WlanCalData_ext.conf|*} : persist (인터페이스별)"
     echo "       wifi {0|1|mlan0|mlan1} log {cp [dir]|compress} : 로그 복사/압축(현재 디렉터리)"
-    echo "       wifi {0|1|mlan0|mlan1} log reset : iface 로그 truncate (scan/stat/wpa, 서비스 재시작 없음)"
+    echo "       wifi {0|1|mlan0|mlan1} log reset : iface 로그 truncate (scan/stat/wpa/mgmt/ping + rsyslog HUP)"
     echo "       wifi {0|1|mlan0|mlan1} ssid {id} : persist"
     echo "       wifi {0|1|mlan0|mlan1} psk {password} : persist"
     echo "       wifi {0|1|mlan0|mlan1} key {0|1|NONE|WPA-PSK|*} : persist"
@@ -859,22 +859,27 @@ case "$1" in
             exit 1
         fi
         ARCHIVE="$(pwd)/cantops_log_$(date +%Y%m%d_%H%M%S).tar.gz"
-        if tar -czf "$ARCHIVE" -C "$(dirname "$LOG_BASE")" "$(basename "$LOG_BASE")"; then
+        # --exclude: pwd가 cantops 하위일 때 생성 중인 아카이브를 자기 자신이 담지 않도록 제외
+        if tar -czf "$ARCHIVE" --exclude='cantops_log_*.tar.gz' -C "$(dirname "$LOG_BASE")" "$(basename "$LOG_BASE")"; then
             echo "Compressed $LOG_BASE to $ARCHIVE"
             exit 0
         else
+            rm -f "$ARCHIVE"
             echo "Error: tar failed" >&2
             exit 1
         fi
     elif [ "$2" == "reset" ]; then
         # 전체 로그 초기화: 전역 + 모든 iface 로그 truncate. 파일 유지(inode 보존), 서비스 재시작 없음.
         # rsyslog 소유(cpu/logger/kern/sys)는 HUP으로 재오픈해야 sparse hole 없이 비워짐.
+        # 대상은 logrotate.rsyslog(opt/wlan/config/logrotate.d)의 cantops 로그와 동기화.
         RESET_ALL=(
-            "$LOG_BASE/summary/summary.log"
-            "$LOG_BASE/cpu/cpu.log"
-            "$LOG_BASE/logger.log"
             "$LOG_BASE/kern.log"
             "$LOG_BASE/sys.log"
+            "$LOG_BASE/logger.log"
+            "$LOG_BASE/ui.log"
+            "$LOG_BASE/summary/summary.log"
+            "$LOG_BASE/cpu/cpu.log"
+            "$LOG_BASE/ping.log"
         )
         for _if in mlan0 mlan1; do
             RESET_ALL+=(
@@ -883,6 +888,9 @@ case "$1" in
                 "$LOG_BASE/stat/$_if/stat.log"
                 "$LOG_BASE/stat/$_if/snap.log"
                 "$LOG_BASE/wpa/$_if/wpa.log"
+                "$LOG_BASE/mgmt/$_if/mgmt.log"
+                "$LOG_BASE/mgmt/$_if/gmgmt.log"
+                "$LOG_BASE/ping/$_if/ping.log"
             )
         done
         _rn=0; _rmiss=0
@@ -908,7 +916,7 @@ case "$1" in
   backup)
     BACKUP_DIR=/var/log/cantops/backup
     echo "backup to $BACKUP_DIR..."
-    /usr/local/scripts/backup.sh $BACKUP_DIR
+    /usr/local/scripts/backup.sh "$BACKUP_DIR"
     exit $?
     ;;
   *)
@@ -1972,19 +1980,25 @@ case "$2" in
             echo "Compressed ${#EXIST[@]} log(s) for $IFACE to $(pwd)/$ARCHIVE"
             [ ${#MISSING[@]} -gt 0 ] && echo "Skipped ${#MISSING[@]} missing: ${MISSING[*]}"
         else
+            rm -f "$ARCHIVE"
             echo "Error: tar failed" >&2
             exit 1
         fi
         ;;
       reset)
-        # iface 전용 로그만 truncate(파일 유지, 내용만 비움). 생산자가 append 모드라
-        # 서비스 재시작 없이 안전 — wpa_supplicant 재시작 회피로 연결 유지.
+        # iface 전용 로그만 truncate(파일 유지, 내용만 비움).
+        # scan/stat은 파이썬 append(재오픈 불필요), wpa/mgmt/ping은 rsyslog omfile이라
+        # truncate 후 HUP로 재오픈해야 sparse hole 없이 비워짐(HUP은 연결에 영향 없음).
+        # 대상은 logrotate.rsyslog의 iface별 cantops 로그와 동기화.
         RESET_FILES=(
             "$LOG_BASE/scan/$IFACE/ap.log"
             "$LOG_BASE/scan/$IFACE/freq.log"
             "$LOG_BASE/stat/$IFACE/stat.log"
             "$LOG_BASE/stat/$IFACE/snap.log"
             "$LOG_BASE/wpa/$IFACE/wpa.log"
+            "$LOG_BASE/mgmt/$IFACE/mgmt.log"
+            "$LOG_BASE/mgmt/$IFACE/gmgmt.log"
+            "$LOG_BASE/ping/$IFACE/ping.log"
         )
         _rn=0; _rmiss=()
         for _lf in "${RESET_FILES[@]}"; do
@@ -1994,7 +2008,13 @@ case "$2" in
                 _rmiss+=("$(basename "$_lf")")
             fi
         done
-        echo "Reset $_rn log(s) for $IFACE (truncated, services kept running)"
+        # wpa/mgmt/ping은 rsyslog 소유 → HUP로 재오픈(WiFi 연결엔 영향 없음)
+        if systemctl kill -s HUP rsyslog 2>/dev/null; then
+            echo "Reset $_rn log(s) for $IFACE, rsyslog reopened (HUP)"
+        else
+            echo "Reset $_rn log(s) for $IFACE"
+            echo "Warning: rsyslog HUP failed — wpa/mgmt/ping may need manual reopen" >&2
+        fi
         [ ${#_rmiss[@]} -gt 0 ] && echo "Skipped ${#_rmiss[@]} missing: ${_rmiss[*]}"
         ;;
       *)
