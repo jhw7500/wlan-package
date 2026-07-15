@@ -859,13 +859,17 @@ case "$1" in
             exit 1
         fi
         ARCHIVE="$(pwd)/cantops_log_$(date +%Y%m%d_%H%M%S).tar.gz"
-        # --exclude: pwd가 cantops 하위일 때 생성 중인 아카이브를 자기 자신이 담지 않도록 제외
-        if tar -czf "$ARCHIVE" --exclude='cantops_log_*.tar.gz' -C "$(dirname "$LOG_BASE")" "$(basename "$LOG_BASE")"; then
+        # --exclude: pwd가 cantops 하위일 때 생성 중인 아카이브 자신만 제외(기존 덤프는 보존).
+        # pwd가 cantops 하위면 디렉터리 변경으로 tar가 rc=1(경고) 반환 — 아카이브는 정상이므로 허용,
+        # rc>=2(fatal)만 실패로 처리한다.
+        tar -czf "$ARCHIVE" --exclude="$(basename "$ARCHIVE")" -C "$(dirname "$LOG_BASE")" "$(basename "$LOG_BASE")"
+        rc=$?
+        if [ "$rc" -le 1 ]; then
             echo "Compressed $LOG_BASE to $ARCHIVE"
             exit 0
         else
             rm -f "$ARCHIVE"
-            echo "Error: tar failed" >&2
+            echo "Error: tar failed (rc=$rc)" >&2
             exit 1
         fi
     elif [ "$2" == "reset" ]; then
@@ -1940,6 +1944,8 @@ case "$2" in
         exit 1
     fi
     LOG_BASE=/var/log/cantops
+    # cp/compress 대상: 진단 편의로 전역 로그(cpu/logger/kern/sys/summary)도 함께 수집.
+    # (log reset은 iface별 초기화라 전역 제외 — 전역 초기화는 'wifi log reset'이 담당)
     LOG_FILES=(
         "$LOG_BASE/cpu/cpu.log"
         "$LOG_BASE/logger.log"
