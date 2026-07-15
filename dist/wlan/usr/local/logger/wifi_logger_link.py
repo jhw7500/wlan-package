@@ -530,7 +530,7 @@ if __name__ == "__main__":
         _lock_fp = open(f"/run/wifi_logger_link_{IFACE}.lock", "w")
     except OSError as e:
         logger.message("warning", f"[{IFACE}] lock file open failed: {e} — exit", _EXTRA_())
-        sys.exit(0)
+        sys.exit(1)   # open 실패는 운영 에러(권한/mount) — 중복 회피 exit 0과 구분
     _locked = False
     for _ in range(5):
         try:
