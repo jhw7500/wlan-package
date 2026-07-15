@@ -7,6 +7,7 @@ import logging
 import sys
 import json
 import signal
+import fcntl
 import threading
 from datetime import datetime
 from sUTILS import Logger, _EXTRA_
@@ -613,6 +614,20 @@ if __name__ == "__main__":
         IFACE = "mlan0"
     else:
         IFACE = sys.argv[1]
+
+    # 단일 인스턴스 락(iface별): 재시작 중복 실행 시 로그 동시 write 방지.
+    _lock_fp = open(f"/tmp/wifi_logger_scan_{IFACE}.lock", "w")
+    _locked = False
+    for _ in range(5):
+        try:
+            fcntl.flock(_lock_fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _locked = True
+            break
+        except OSError:
+            time.sleep(1)
+    if not _locked:
+        logger.message("warning", f"[{IFACE}] another wifi_logger_scan already running — exit", _EXTRA_())
+        sys.exit(0)
 
     LOG_DIR = f"/var/log/cantops/scan/{IFACE}"
     JSON_DIR = f"/var/log/cantops/json/{IFACE}"

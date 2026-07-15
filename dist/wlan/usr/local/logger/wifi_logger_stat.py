@@ -5,6 +5,7 @@ import subprocess
 import time
 import sys
 import signal
+import fcntl
 import logging
 from datetime import datetime
 from sUTILS import Logger, _EXTRA_
@@ -663,6 +664,21 @@ if __name__ == "__main__":
         IFACE = "mlan0"
     else:
         IFACE = sys.argv[1]
+
+    # 단일 인스턴스 락(iface별): 재시작 중복 실행 시 stat.log 동시 write(라인 겹침) 방지.
+    # 이전 인스턴스 종료 지연에 대비해 최대 5초 재시도, 그래도 못 얻으면 중복으로 보고 종료.
+    _lock_fp = open(f"/tmp/wifi_logger_stat_{IFACE}.lock", "w")
+    _locked = False
+    for _ in range(5):
+        try:
+            fcntl.flock(_lock_fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _locked = True
+            break
+        except OSError:
+            time.sleep(1)
+    if not _locked:
+        logger.message("warning", f"[{IFACE}] another wifi_logger_stat already running — exit", _EXTRA_())
+        sys.exit(0)
 
     load_logger_config(IFACE)
 
