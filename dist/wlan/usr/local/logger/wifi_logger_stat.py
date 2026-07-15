@@ -665,9 +665,19 @@ if __name__ == "__main__":
     else:
         IFACE = sys.argv[1]
 
+    # iface 검증을 먼저 (락 파일 경로에 IFACE를 쓰기 전 — path traversal 방지)
+    if IFACE != "mlan0" and IFACE != "mlan1":
+        logger.message("emerg", f"[{IFACE}] is not vaild interface", _EXTRA_())
+        sys.exit(1)
+
     # 단일 인스턴스 락(iface별): 재시작 중복 실행 시 stat.log 동시 write(라인 겹침) 방지.
     # 이전 인스턴스 종료 지연에 대비해 최대 5초 재시도, 그래도 못 얻으면 중복으로 보고 종료.
-    _lock_fp = open(f"/tmp/wifi_logger_stat_{IFACE}.lock", "w")
+    # 락은 /run(root 전용, non-world-writable)에 둬 /tmp 심링크 truncate 공격을 차단한다.
+    try:
+        _lock_fp = open(f"/run/wifi_logger_stat_{IFACE}.lock", "w")
+    except OSError as e:
+        logger.message("warning", f"[{IFACE}] lock file open failed: {e} — exit", _EXTRA_())
+        sys.exit(0)
     _locked = False
     for _ in range(5):
         try:
@@ -684,10 +694,6 @@ if __name__ == "__main__":
 
     LOG_DIR = f"/var/log/cantops/stat/{IFACE}"
     logger.message("info", f"[{IFACE}] version : {VERSION}, log_file : {LOG_DIR}/stat.log", _EXTRA_())
-    
-    if IFACE != "mlan0" and IFACE != "mlan1" :
-        logger.message("emerg", f"[{IFACE}] is not vaild interface", _EXTRA_())
-        sys.exit(1)
         
     # 로그 디렉토리 생성
     if not os.path.exists(LOG_DIR):
