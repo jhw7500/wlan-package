@@ -13,4 +13,4 @@
 | mlan_imx8.ko | 505.p14 | C313A4C1BA94176BBBF91E7 | 6.6.3-lts-next-g9bc88c3c4469-dirty SMP preempt mod_unload modversions aarch64 |
 | mlan_imx93.ko | 505.p14 | C313A4C1BA94176BBBF91E7 | 6.6.3-lts-next-gccf0a99701a7-dirty SMP preempt mod_unload modversions aarch64 |
 | moal_imx8.ko | 505.p14 | AFFC67A300D3A67AAF3B62C | 6.6.3-lts-next-g9bc88c3c4469-dirty SMP preempt mod_unload modversions aarch64 |
-| moal_imx93.ko | 505.p14 | AFFC67A300D3A67AAF3B62C | 6.6.3-lts-next-gccf0a99701a7-dirty SMP preempt mod_unload modversions aarch64 |
+| moal_imx93.ko | 505.p14 | 04F2FC72D371CF796CA24CE | 6.6.3-lts-next-gccf0a99701a7-dirty SMP preempt mod_unload modversions aarch64 |
