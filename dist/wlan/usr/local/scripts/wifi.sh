@@ -688,7 +688,7 @@ _bridge_status() {
     echo "  WiFi Bridge / peer_route Status"
     echo "=========================================================="
 
-    local engine bridge_iface mac_mode ip_disc sweep client_ip enabled pr_raw pr aia_raw aia
+    local engine bridge_iface mac_mode ip_disc sweep client_ip enabled enabled_raw pr_raw pr aia_raw aia
     if [ "$have_jq" = "1" ]; then
         engine=$(jq -r '.wbridge.engine // "pcap"' "$J")
         bridge_iface=$(jq -r '.wbridge.bridge_iface // "mlan0"' "$J")
@@ -696,14 +696,22 @@ _bridge_status() {
         ip_disc=$(jq -r '.wbridge.ip_discovery // false' "$J")
         sweep=$(jq -r '.wbridge.eth_sweep_subnet // ""' "$J")
         client_ip=$(jq -r '.wbridge.eth_client_ip // ""' "$J")
-        enabled=$(jq -r '.wbridge.enabled // true' "$J")
+        enabled_raw=$(jq -r '.wbridge.enabled' "$J")
         pr_raw=$(jq -r '.wbridge.peer_route.enabled' "$J")
         aia_raw=$(jq -r '.wbridge.arp_ignore_always.enabled' "$J")
     else
         echo "  (no jq or $J — config fields unavailable, runtime only)"
-        engine="?"; bridge_iface="mlan0"; mac_mode="?"; ip_disc="?"; sweep=""; client_ip=""; enabled="?"
+        engine="?"; bridge_iface="mlan0"; mac_mode="?"; ip_disc="?"; sweep=""; client_ip=""; enabled_raw="?"
         pr_raw="?"; aia_raw="?"
     fi
+    # wbridge.enabled 실효값 (기본 true). jq의 //는 false도 흡수하므로(`false // true` → true)
+    # raw로 읽어 case로 분기 — enabled=false 상태를 진단에서 정확히 표기.
+    case "$enabled_raw" in
+        false)   enabled=false ;;
+        true)    enabled=true ;;
+        null|"") enabled=true ;;
+        *)       enabled="$enabled_raw" ;;
+    esac
     # peer_route 실효값 (wifi_init.sh와 동일: true/false 외 invalid/missing → factory default true)
     case "$pr_raw" in
         true|false) pr="$pr_raw" ;;
