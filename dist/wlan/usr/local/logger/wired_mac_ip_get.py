@@ -23,9 +23,11 @@ IFACE = "mlan0"             # 무선 (게이트웨이 사용)
 ETH_CLIENT_IP = None
 ETH_LINK_TIMEOUT = 3
 IP_DISCOVERY = False        # MAC 확보 후 클라이언트 IP까지 탐색할지 (wbridge.ip_discovery, 기본 false)
-# ETH_SWEEP_SUBNET: sweep는 ETH_IFACE(eth0)로 나가므로 대역도 eth0 기준이 맞다. 미설정 시
-# eth0→mlan0 inet 순으로 폴백하지만(get_sweep_network), 부팅 race(특히 mlan0 미초기화)를
-# 피하려면 wbridge.eth_sweep_subnet에 정적 CIDR(예: "192.168.1.0/24")을 두는 게 안전하다.
+# ETH_SWEEP_SUBNET: sweep는 ETH_IFACE(eth0)로 전송되지만, peer는 mlan0-IP 토폴로지에서 mlan0와
+# 같은 대역에 있다. 미설정 시 mlan0→eth0 inet 순으로 폴백한다(get_sweep_network) — eth0는 관리
+# IP(예: 192.168.1.0/24)를 가질 수 있어 peer 대역과 다를 수 있으므로 mlan0를 우선 참조한다.
+# 부팅 race(특히 mlan0 미초기화)를 피하려면 wbridge.eth_sweep_subnet에 정적 CIDR(mlan0와 같은
+# 대역, 예: "192.168.0.0/24")을 두는 게 안전하다.
 ETH_SWEEP_SUBNET = None
 # PEER_ROUTE_ENABLED: 양방향 peer 라우팅(옵션 X) 마스터 토글. false면 host route 등록 skip.
 PEER_ROUTE_ENABLED = True
@@ -242,12 +244,13 @@ def get_sweep_network():
     """
     sweep 대역 결정 우선순위 (sweep는 ETH_IFACE로 전송됨):
       1) wbridge.eth_sweep_subnet (정적, 부팅 race condition 없음 — 명시 override)
-      2) eth0(ETH_IFACE)의 inet — peer가 실제 위치하는 대역. static IP면 부팅 초기에도 가용
-      3) mlan0(IFACE)의 inet — flat-bridge(eth0 무IP)/재실행 폴백. 부팅 시엔 보통 None
+      2) mlan0(IFACE)의 inet — peer_route/mlan0-IP 토폴로지에서 peer가 실제 위치하는 대역.
+         eth0는 관리 IP(예: 192.168.1.0/24)를 가질 수 있어 peer 대역과 다를 수 있으므로 mlan0 우선.
+      3) eth0(ETH_IFACE)의 inet — mlan0 무IP(flat-bridge/eth0-IP)일 때 폴백.
     """
     if ETH_SWEEP_SUBNET:
         return ETH_SWEEP_SUBNET
-    return get_iface_network(ETH_IFACE) or get_iface_network(IFACE)
+    return get_iface_network(IFACE) or get_iface_network(ETH_IFACE)
 
 def arp_unicast_probe_for_ip(iface, target_mac, ip_list, timeout=1.5):
     """

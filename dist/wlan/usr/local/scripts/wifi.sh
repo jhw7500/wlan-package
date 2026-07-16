@@ -310,6 +310,7 @@ usage() {
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} gt {address} : persist"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} mac {0|1|base|target} {mac_address} : persist"
     echo "       wifi {0|1|mlan0|mlan1} br {up|down|start|stop|restart} : runtime"
+    echo "       wifi {0|1|mlan0|mlan1} br status : peer_route/브릿지 설정·런타임·정합성 진단 (읽기 전용)"
     echo "       wifi {0|1|mlan0|mlan1} br {moal|pcap|tpacket} : wbridge engine+bridge_iface persist"
     echo "       wifi {0|1|mlan0|mlan1} txpwr {0|1|2|3|no|default|low|org|custom_file_name} : persist+runtime"
     echo "       wifi {0|1|mlan0|mlan1} config {conf} {value} : persist"
@@ -675,6 +676,115 @@ show_info() {
     echo "=========================================================="
 }
 
+# wifi <0|1|mlan0|mlan1> br status : peer_route/브릿지 설정·런타임·정합성 진단 (읽기 전용, 어떤 값도 변경 안 함)
+_bridge_status() {
+    local iface="${1:-mlan0}"
+    local eth="eth0"
+    local J="$WIFI_INIT_CONF_JSON"
+    local have_jq=0
+    command -v jq >/dev/null 2>&1 && [ -f "$J" ] && have_jq=1
+
+    echo "=========================================================="
+    echo "  WiFi Bridge / peer_route Status"
+    echo "=========================================================="
+
+    local engine bridge_iface mac_mode ip_disc sweep client_ip enabled pr_raw pr aia_raw aia
+    if [ "$have_jq" = "1" ]; then
+        engine=$(jq -r '.wbridge.engine // "pcap"' "$J")
+        bridge_iface=$(jq -r '.wbridge.bridge_iface // "mlan0"' "$J")
+        mac_mode=$(jq -r '.wbridge.mac_mode // "dynamic"' "$J")
+        ip_disc=$(jq -r '.wbridge.ip_discovery // false' "$J")
+        sweep=$(jq -r '.wbridge.eth_sweep_subnet // ""' "$J")
+        client_ip=$(jq -r '.wbridge.eth_client_ip // ""' "$J")
+        enabled=$(jq -r '.wbridge.enabled // true' "$J")
+        pr_raw=$(jq -r '.wbridge.peer_route.enabled' "$J")
+        aia_raw=$(jq -r '.wbridge.arp_ignore_always.enabled' "$J")
+    else
+        echo "  (no jq or $J — config fields unavailable, runtime only)"
+        engine="?"; bridge_iface="mlan0"; mac_mode="?"; ip_disc="?"; sweep=""; client_ip=""; enabled="?"
+        pr_raw="?"; aia_raw="?"
+    fi
+    # peer_route 실효값 (wifi_init.sh와 동일: true/false 외 invalid/missing → factory default true)
+    case "$pr_raw" in
+        true|false) pr="$pr_raw" ;;
+        *)          pr="true" ;;
+    esac
+    # arp_ignore_always 실효값 (기본 false)
+    case "$aia_raw" in
+        true) aia="true" ;;
+        *)    aia="false" ;;
+    esac
+    # br status는 무선 브릿지 iface 기준. eth0 등으로 불리면 JSON bridge_iface로 대체.
+    if [ "$iface" != "mlan0" ] && [ "$iface" != "mlan1" ]; then
+        iface="$bridge_iface"
+    fi
+
+    echo "[Config: wbridge]  (source: $J)"
+    printf "  %-24s %s\n" "enabled:"            "$enabled"
+    printf "  %-24s %s\n" "engine:"             "$engine"
+    printf "  %-24s %s\n" "bridge_iface:"       "$bridge_iface"
+    printf "  %-24s %s\n" "mac_mode:"           "$mac_mode"
+    printf "  %-24s %s\n" "peer_route.enabled:" "$pr (json=$pr_raw)"
+    printf "  %-24s %s\n" "ip_discovery:"       "$ip_disc"
+    printf "  %-24s %s\n" "arp_ignore_always:"  "$aia (json=$aia_raw)"
+    printf "  %-24s %s\n" "eth_sweep_subnet:"   "${sweep:-<empty>}"
+    printf "  %-24s %s\n" "eth_client_ip:"      "${client_ip:-<empty>}"
+    echo ""
+
+    # --- Runtime (measured; peer_route on일 때 wifi_init.sh가 부여한 것) ---
+    local mlan_inet eth_mirror rule_cnt arp_ignore host_route t100_cnt topo
+    mlan_inet=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}/\d+' | head -1)
+    eth_mirror=$(ip -4 addr show "$eth" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}/32' | head -1)
+    rule_cnt=$(ip rule show 2>/dev/null | grep -c "iif $eth")
+    arp_ignore=$(sysctl -n net.ipv4.conf.all.arp_ignore 2>/dev/null || echo "?")
+    host_route=$(ip -4 route show dev "$eth" 2>/dev/null | awk '$1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/{print $1; exit}')
+    t100_cnt=$(ip route show table 100 2>/dev/null | grep -c .)
+
+    echo "[Runtime: measured]"
+    printf "  %-24s %s\n" "$iface inet:"        "${mlan_inet:-<none>}"
+    printf "  %-24s %s\n" "$eth /32 mirror:"    "${eth_mirror:-<none>}"
+    printf "  %-24s %s\n" "ip rule iif $eth:"   "$([ "${rule_cnt:-0}" -gt 0 ] && echo present || echo absent)"
+    printf "  %-24s %s\n" "arp_ignore(all):"    "$arp_ignore"
+    printf "  %-24s %s\n" "peer host route:"    "${host_route:-<none>}"
+    printf "  %-24s %s\n" "table 100 routes:"   "${t100_cnt:-0}"
+    echo ""
+
+    # 토폴로지 추정 (참고용 — 판정 표시에만 쓰고 어떤 동작도 바꾸지 않음)
+    if [ -n "$mlan_inet" ]; then topo="mlan0-IP (est: $iface has inet)"; else topo="eth0-IP (est: $iface no inet)"; fi
+    printf "  %-24s %s\n" "topology (estimated):" "$topo"
+    echo ""
+
+    # --- Consistency (진단만; 사람이 판단. 자동 교정 없음) ---
+    echo "[Consistency]"
+    local warn=0
+    if [ "$aia" = "true" ] && [ "$pr" = "false" ] && [ -n "$mlan_inet" ]; then
+        echo "  [WARN] arp_ignore_always=on + peer_route=off on mlan0-IP -> wired->BD ARP UNANSWERED."
+        echo "         Fix: peer_route.enabled=true + ip_discovery=true + arp_ignore_always.enabled=false"
+        warn=1
+    fi
+    if [ "$pr" = "true" ] && [ "$ip_disc" != "true" ]; then
+        echo "  [WARN] peer_route=on but ip_discovery=off -> BD->peer host route not registered (one-way)."
+        echo "         Fix: wbridge.ip_discovery=true"
+        warn=1
+    fi
+    if [ "$pr" = "true" ] && [ "$aia" = "true" ]; then
+        echo "  [INFO] arp_ignore_always redundant (peer_route=on already applies arp_ignore=1)."
+    fi
+    if [ "$mac_mode" = "dynamic" ] && [ "$ip_disc" = "true" ] && [ -z "$sweep" ]; then
+        echo "  [INFO] eth_sweep_subnet empty -> last-resort sweep falls back to $iface net (${mlan_inet:-<none>}). Set it to pin the range."
+    fi
+    if [ "$pr" = "true" ] && [ -z "$eth_mirror" ]; then
+        echo "  [WARN] peer_route=on but no /32 mirror on $eth (runtime). Reboot or 'wifi <0|1> br restart'."
+        warn=1
+    fi
+    if [ "$pr" = "false" ] && [ -n "$eth_mirror" ]; then
+        echo "  [WARN] peer_route=off but /32 mirror present on $eth ($eth_mirror). Stale; reboot to revert."
+        warn=1
+    fi
+    [ "$warn" = "0" ] && echo "  [OK] no blocking issues detected."
+    echo "=========================================================="
+}
+
 case "$1" in
   0 | mlan0)
     IFACE="mlan0"
@@ -971,6 +1081,8 @@ case "$2" in
     elif [ "$3" == "restart" ]; then
         echo "restart bridge for $IFACE..."
         systemctl restart wifi_bridge@$IFACE
+    elif [ "$3" == "status" ]; then
+        _bridge_status "$IFACE"
     elif [ "$3" == "moal" ] || [ "$3" == "pcap" ] || [ "$3" == "tpacket" ]; then
         if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
             echo "Error: br {moal|pcap|tpacket} supports mlan0/mlan1 only" >&2
