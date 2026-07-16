@@ -247,6 +247,9 @@ def get_sweep_network():
       2) mlan0(IFACE)의 inet — peer_route/mlan0-IP 토폴로지에서 peer가 실제 위치하는 대역.
          eth0는 관리 IP(예: 192.168.1.0/24)를 가질 수 있어 peer 대역과 다를 수 있으므로 mlan0 우선.
       3) eth0(ETH_IFACE)의 inet — mlan0 무IP(flat-bridge/eth0-IP)일 때 폴백.
+    주의: eth0-IP 토폴로지인데 mlan0에도 별도 IP가 있는 dual-IP 구성에서 peer가 eth0 대역에
+    있으면, 2순위에서 mlan0 대역이 선택되어 sweep가 빗나간다(폴백은 mlan0 무IP를 eth0-IP의
+    신호로 삼는다). 이 구성에서는 eth_sweep_subnet을 명시해 폴백(2·3순위)을 우회하라.
     """
     if ETH_SWEEP_SUBNET:
         return ETH_SWEEP_SUBNET
