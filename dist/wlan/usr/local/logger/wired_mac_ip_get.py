@@ -6,6 +6,7 @@ import os
 import logging
 import ipaddress
 import json
+import glob
 # scapy.all 전체 로드는 임베디드(ARM)에서 import만 수초 소요 → 필요한 서브모듈만 import (부팅 가속)
 from scapy.config import conf
 from scapy.sendrecv import sniff, srp, sendp
@@ -240,41 +241,47 @@ def get_iface_network(iface):
         pass
     return None
 
-def get_mlan0_config_addr():
+def get_iface_config_addr(iface, netdir="/etc/systemd/network"):
     """
-    20-mlan0.network의 Address= 설정값에서 (ip, network)를 추출.
-    런타임 inet(get_iface_network)과 달리 부팅 race(mlan0 IP 미부여 시점)와 무관하다 —
-    wifi_init.sh가 eth0 미러(ip addr replace ${mlan_ip}/32)에 쓰는 바로 그 설정값이라
-    부팅 어느 시점에 읽어도 일관된 mlan0 대역/IP를 준다. 파일/Address 없으면 (None, None).
+    {iface}의 systemd .network(예: 20-mlan0.network, 21-mlan1.network)에서 Address= 설정값의
+    (ip, network)를 추출. 런타임 inet(get_iface_network)과 달리 부팅 race(IP 미부여 시점)와
+    무관하다 — wifi_init.sh가 eth0 미러(ip addr replace ${mlan_ip}/32)에 쓰는 바로 그 값이라
+    부팅 어느 시점에 읽어도 일관. 파일/Address 없으면 (None, None).
+      - 파일명 접두 번호가 iface마다 다르므로(20-/21-) glob으로 찾는다.
+      - systemd .network 키는 대소문자 무관이라 case-insensitive 매칭. 정확히 'address=' 만
+        잡아 AddressFamily=/AddressPolicy= 등 유사 키의 오파싱(ValueError→race 재발)을 피한다.
     """
     try:
-        with open("/etc/systemd/network/20-mlan0.network") as f:
-            for line in f:
-                s = line.strip()
-                if s.startswith("Address") and "=" in s:
-                    obj = ipaddress.ip_interface(s.split("=", 1)[1].strip())
-                    return str(obj.ip), str(obj.network)
+        for path in sorted(glob.glob(os.path.join(netdir, "*-%s.network" % iface))):
+            with open(path) as f:
+                for line in f:
+                    s = line.strip()
+                    if s.lower().startswith("address="):
+                        obj = ipaddress.ip_interface(s.split("=", 1)[1].strip())
+                        return str(obj.ip), str(obj.network)
     except Exception:
         pass
     return None, None
 
 def get_sweep_network():
     """
-    sweep 대역 결정 우선순위 (sweep는 ETH_IFACE로 전송되나, peer는 mlan0 대역에 있다):
+    sweep 대역 결정 우선순위 (sweep는 ETH_IFACE로 전송되나, peer는 IFACE 대역에 있다):
       1) wbridge.eth_sweep_subnet (정적 명시 override)
-      2) mlan0 config Address 대역 (20-mlan0.network) — 부팅 race 무관. mlan0 IP가 아직
-         부여 전(런타임 inet=None)이어도 설정값에서 mlan0 대역을 얻으므로 eth0 관리대역으로
-         잘못 폴백하지 않는다. (이 함수가 mac_mode=dynamic 부팅 경로에서 mlan0 IP 부여보다
-         먼저 실행되는 race 를 닫는다.)
-      3) mlan0(IFACE) 런타임 inet — 20-mlan0.network가 없을 때 폴백
-      4) eth0(ETH_IFACE) 런타임 inet — mlan0 무IP(flat-bridge/eth0-IP)일 때 최후 폴백
-    주의: 순수 eth0-IP 토폴로지라도 20-mlan0.network에 Address가 남아 있으면 2순위가 mlan0
+      2) IFACE config Address 대역 (systemd .network) — 부팅 race 무관. IFACE IP가 아직
+         부여 전(런타임 inet=None)이어도 설정값에서 대역을 얻으므로 eth0 관리대역으로 잘못
+         폴백하지 않는다. (mac_mode=dynamic 부팅 경로에서 IFACE IP 부여보다 먼저 실행되는
+         race 를 닫는다.) 단 /32(호스트 단일)면 sweep 대상이 없으므로 런타임으로 폴백한다.
+      3) IFACE 런타임 inet — config 파일이 없을 때 폴백
+      4) eth0(ETH_IFACE) 런타임 inet — IFACE 무IP(flat-bridge/eth0-IP)일 때 최후 폴백
+    주의: 순수 eth0-IP 토폴로지라도 {IFACE}.network에 Address가 남아 있으면 2순위가 IFACE
     대역을 반환하므로, 그런 구성에서는 eth_sweep_subnet을 명시해 우회하라.
     """
     if ETH_SWEEP_SUBNET:
         return ETH_SWEEP_SUBNET
-    _ip, _net = get_mlan0_config_addr()
-    return _net or get_iface_network(IFACE) or get_iface_network(ETH_IFACE)
+    _ip, _net = get_iface_config_addr(IFACE)
+    if _net and not _net.endswith("/32"):   # /32는 sweep 대상 호스트가 없음 → 런타임 폴백
+        return _net
+    return get_iface_network(IFACE) or get_iface_network(ETH_IFACE)
 
 def arp_unicast_probe_for_ip(iface, target_mac, ip_list, timeout=1.5):
     """
@@ -285,7 +292,7 @@ def arp_unicast_probe_for_ip(iface, target_mac, ip_list, timeout=1.5):
     # psrc를 mlan0 IP로 고정: probe/sweep는 ETH_IFACE(eth0)로 나가므로 scapy 기본 psrc는
     # eth0 primary IP가 된다. eth0 primary가 관리 IP(peer와 다른 대역)면 source가 peer 대역
     # 밖이 되어 응답을 못 받을 수 있다. mlan0 IP(peer와 동일 대역, eth0에 /32 미러됨)로 고정한다.
-    src_ip, _ = get_mlan0_config_addr()
+    src_ip, _ = get_iface_config_addr(IFACE)
     reqs = []
     for ip in ip_list:
         # 유니캐스트 ARP request
@@ -311,7 +318,7 @@ def arp_broadcast_sweep_for_mac(iface, target_mac, network_cidr, timeout=2):
         return None
 
     src_mac = get_if_hwaddr(iface)
-    src_ip, _ = get_mlan0_config_addr()  # psrc: mlan0 IP 고정 (eth0 primary 의존 제거 — 위 unicast 주석 참조)
+    src_ip, _ = get_iface_config_addr(IFACE)  # psrc: mlan0 IP 고정 (eth0 primary 의존 제거 — 위 unicast 주석 참조)
     reqs = []
     for ip in net.hosts():
         _arp = ARP(pdst=str(ip), psrc=src_ip) if src_ip else ARP(pdst=str(ip))
