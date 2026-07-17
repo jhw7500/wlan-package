@@ -20,6 +20,10 @@ bridge_keepalive_ms=1
 bridge_keepalive_idle_ms=20  # idle cutoff(ms). 드라이버가 해당 param을 선언한 경우에만 insmod 인자로 전달(아래 moal 블록)
 bridge_peer=""               # 빈값=드라이버 기본(eth0). JSON 명시 시에만 insmod 인자 추가
 bridge_consume_link_local="" # 빈값=드라이버 기본(0). JSON 명시 시에만 insmod 인자 추가
+# local_hairpin: 로컬발 TX(dst==클론 MAC) 유선 divert + ARP tee/inject — BD↔유선peer 통신을
+# peer IP 인지(peer_route/ip_discovery) 없이 성립시킴 (AP intra-BSS 무반사 환경 대응).
+# 빈값=미전달(드라이버 기본 0=off). 신규 param이므로 parmtype 게이트 후에만 insmod 인자 추가.
+bridge_local_hairpin=""
 # deliver_rt_prio: RX deliver leg RT 우선순위 (Direction B — threaded NAPI + FIFO fix).
 # 0=off(deliver가 CFS→moal 다운스트림 RX jitter), 1-99=FIFO prio. 드라이버가 wq_sched_policy
 # param 선언 시에만 전달(아래 moal 블록). 실측: RTT 82ms→9.3ms.
@@ -87,6 +91,12 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
         0|1) bridge_consume_link_local=$_cll ;;
     esac
     unset _cll
+    # moal.local_hairpin: 로컬 hairpin — BD↔유선peer 통신을 peer IP 인지 없이 성립 (0|1만 수용).
+    _lhp=$(jq -r '.wbridge.moal.local_hairpin // empty' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    case "$_lhp" in
+        0|1) bridge_local_hairpin=$_lhp ;;
+    esac
+    unset _lhp
     # global.tx_work: moal 데이터 TX 제출 방식 (0|1만 수용). 빈값/형식위반은 미전달(드라이버 기본).
     _tw=$(jq -r '.global.tx_work // empty' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
     case "$_tw" in
@@ -226,6 +236,16 @@ elif [ "$WBRIDGE_ENGINE" = "moal" ]; then
     # (해당 param이 없는 구버전 드라이버는 insmod가 실패하므로 기본 미전달)
     [ -n "$bridge_peer" ] && moal_args="$moal_args bridge_peer=$bridge_peer"
     [ -n "$bridge_consume_link_local" ] && moal_args="$moal_args bridge_consume_link_local=$bridge_consume_link_local"
+    # bridge_local_hairpin: 신규 param — 미선언 .ko 에 전달하면 insmod 실패(부팅 붕괴)하므로
+    # parmtype 게이트(keepalive_idle_ms와 동일 방식) 통과 시에만 추가. runtime 변경도 가능:
+    # /sys/module/moal/parameters/bridge_local_hairpin
+    if [ -n "$bridge_local_hairpin" ]; then
+        if tr '\000' '\n' < "/opt/wlan/driver/$MOAL_KO" 2>/dev/null | grep -F 'parmtype=bridge_local_hairpin:' >/dev/null 2>&1; then
+            moal_args="$moal_args bridge_local_hairpin=$bridge_local_hairpin"
+        else
+            logger -p local0.warn "[$tag:$LINENO] moal: $MOAL_KO lacks bridge_local_hairpin param; skip (driver default)"
+        fi
+    fi
     # deliver_rt_prio>0: Direction B — RX deliver leg를 RT화(threaded NAPI FIFO:prio)해 moal
     # 다운스트림 RX jitter 해결(실측 RTT 82ms→9.3ms). wq_sched_policy=1(FIFO)+wq_sched_prio 전달;
     # main/tx/bridge kthread도 동일 FIFO:prio로 올라감(pull IRQ FIFO:50 아래 권장). 게이트는
@@ -1119,7 +1139,11 @@ if command -v systemctl >/dev/null 2>&1; then
                     # 문제: ignore_routes_with_linkdown=1과 결합 시 mlan0 carrier 일시 flap에서
                     # 전체 subnet 트래픽이 eth0로 redirect됨 (peer 외 무선 클라 응답까지 영향).
                     # 새 설계: BD→peer 통신은 wired_mac_ip_get.py의 peer host route(<peer>/32 dev eth0)에만
-                    # 의존. peer 발견 실패 시 BD initiated 송신 불가 (peer initiated는 iif 룰로 OK).
+                    # 의존. peer 발견 실패 시 BD→peer 송신 불가 — [정정 2026-07-17 실측] "peer
+                    # initiated는 iif 룰로 OK"는 사실 아님: iif rule/table 100은 인바운드
+                    # rp_filter 검증용이고 로컬 생성 응답은 조향하지 않아, host route 부재 시
+                    # peer발신 응답도 main 라우트(mlan0)로 가서 neigh 미해소로 전멸한다.
+                    # 대안: moal.local_hairpin=1 (드라이버 로컬 hairpin — peer IP 인지 불요).
                     # 잔재 정리(이전 부팅의 fallback route)는 enabled=false 분기에서만 수행.
 
                     logger -p local0.info "[$tag:$LINENO] peer_route=on: eth0 sync addr=${_mlan_ip}/32 subnet=${_mlan_subnet}"

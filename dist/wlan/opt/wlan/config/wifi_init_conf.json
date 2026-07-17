@@ -97,7 +97,9 @@
             "deliver_rt_prio": 45,
             "debug": 0,
             "peer": "",
-            "consume_link_local": ""
+            "consume_link_local": "",
+            "_comment_local_hairpin": "local_hairpin: (0|1, 빈값=드라이버 기본 0) 로컬발 TX(dst==클론 MAC)를 공중 대신 유선 peer로 divert + ARP tee/inject. BD↔유선peer IP 통신을 peer_route/ip_discovery(=peer IP 인지) 없이 성립시킨다. AP가 intra-BSS 반사를 안 하는 현장에서 BD발신의 유일 경로 (2026-07-17 실기 검증). runtime 변경: /sys/module/moal/parameters/bridge_local_hairpin",
+            "local_hairpin": ""
         },
         "optimize": {
             "_comment": [
