@@ -883,7 +883,10 @@ _bridge_status() {
 
     # --- Consistency (진단만; 사람이 판단. 자동 교정 없음) ---
     echo "[Consistency]"
-    local warn=0 hp_on=0 lhp_exp
+    local warn=0 hp_on=0 lhp_exp ef_json ef_rt
+    # eth_fallback(B-2) 상태 — 아래 규칙 다수가 참조 (/32 소유 판정 포함)
+    ef_json=$([ "$have_jq" = "1" ] && jq -r '.wbridge.eth_fallback.enabled // false' "$J" || echo "?")
+    ef_rt=$(ip route show dev "$eth" 2>/dev/null | grep -c "metric 200")
     # hairpin 실효값: runtime param 기준 (JSON은 부팅 시 전달 여부일 뿐)
     [ "$lhp_rt" = "1" ] && hp_on=1
     if [ "$aia" = "true" ] && [ "$pr" = "false" ] && [ -n "$mlan_inet" ]; then
@@ -946,6 +949,14 @@ _bridge_status() {
         echo "         Fix: 구버전 wifi_init.sh 의심 — per-interface 봉인 포함 버전 배포 후 재부팅, 임시: sysctl net.ipv4.conf.$iface.arp_ignore=1"
         warn=1
     fi
+    # eth_fallback(B-2) 정합성: JSON on인데 fallback route(metric 200) 부재면 미반영
+    if [ "$ef_json" = "true" ] && [ "${ef_rt:-0}" -eq 0 ]; then
+        echo "  [WARN] eth_fallback=on(JSON) but no metric-200 route on $eth -> 미반영 (재부팅 필요) — 무선 down 시 유선 절체 불가 상태."
+        warn=1
+    fi
+    if [ "$hp_on" = "1" ] && [ "$ef_json" != "true" ] && [ -n "$mlan_inet" ]; then
+        echo "  [INFO] hairpin on + eth_fallback off: 무선 down 중 유선 BD<->peer 통신 코너 열림 (G2). 필요 시 profile {hairpin|dual} apply."
+    fi
     if [ "$pr" = "true" ] && [ "$aia" = "true" ]; then
         echo "  [INFO] arp_ignore_always redundant (peer_route=on already applies arp_ignore=1)."
     fi
@@ -956,7 +967,8 @@ _bridge_status() {
         echo "  [WARN] peer_route=on but no /32 mirror on $eth (runtime). Reboot or 'wifi <0|1> br restart'."
         warn=1
     fi
-    if [ "$pr" = "false" ] && [ -n "$eth_mirror" ]; then
+    if [ "$pr" = "false" ] && [ -n "$eth_mirror" ] && [ "$ef_json" != "true" ]; then
+        # eth_fallback=on 이면 /32 는 fallback 의 정당한 산출물 — stale 아님
         echo "  [WARN] peer_route=off but /32 mirror present on $eth ($eth_mirror). Stale; reboot to revert."
         warn=1
     fi
@@ -972,26 +984,28 @@ _bridge_status() {
 _bridge_profile() {
     local name="${1:-}" do_apply="${2:-}"
     local J="$WIFI_INIT_CONF_JSON"
-    local pr disc aia lhp engine lhp_disp
+    local pr disc aia lhp ef engine lhp_disp
     if ! command -v jq >/dev/null 2>&1 || [ ! -f "$J" ]; then
         echo "Error: jq or $J not found" >&2; return 1
     fi
+    # ef(eth_fallback/B-2): mlan0 IP를 eth0에 병행 부여 — 무선 down 시 eth0 직결 자동
+    # 절체 (G2 무선단절 유선 VHL 해소). hairpin/dual에 기본 포함.
     case "$name" in
-        hairpin)    pr=false; disc=false; aia=false; lhp=1 ;;
-        dual)       pr=true;  disc=true;  aia=false; lhp=1 ;;
-        peer-route) pr=true;  disc=true;  aia=false; lhp="" ;;
-        eth0-ip)    pr=false; disc=false; aia=true;  lhp="" ;;
+        hairpin)    pr=false; disc=false; aia=false; lhp=1;  ef=true ;;
+        dual)       pr=true;  disc=true;  aia=false; lhp=1;  ef=true ;;
+        peer-route) pr=true;  disc=true;  aia=false; lhp=""; ef=false ;;
+        eth0-ip)    pr=false; disc=false; aia=true;  lhp=""; ef=false ;;
         ""|show|list)
             echo "Usage: wifi {0|1} br profile {hairpin|dual|peer-route|eth0-ip} [apply]"
             echo "  (apply 없으면 dry-run — 변경될 값만 표시. 적용은 다음 부팅부터)"
             echo ""
-            echo "  hairpin    : peer_route=off disc=off aia=off hairpin=1  — BD<->유선peer를 드라이버가 처리, peer IP 인지 불요 (moal 전용)"
-            echo "  dual       : peer_route=on  disc=on  aia=off hairpin=1  — 기존 방식 + hairpin 보험 (moal 전용, 도입기 권장)"
-            echo "  peer-route : peer_route=on  disc=on  aia=off hairpin=-  — 기존 방식 (엔진 무관)"
-            echo "  eth0-ip    : peer_route=off disc=off aia=on  hairpin=-  — eth0-IP 토폴로지 (docs/bridge-eth0-ip-topology.md §6)"
+            echo "  hairpin    : peer_route=off disc=off aia=off hairpin=1 ethfb=on  — peer IP 인지 불요 + 무선down 유선 절체 (moal 전용)"
+            echo "  dual       : peer_route=on  disc=on  aia=off hairpin=1 ethfb=on  — 기존 방식 + hairpin 보험 + 절체 (moal 전용, 권장)"
+            echo "  peer-route : peer_route=on  disc=on  aia=off hairpin=-  ethfb=off — 기존 방식 (엔진 무관)"
+            echo "  eth0-ip    : peer_route=off disc=off aia=on  hairpin=-  ethfb=off — eth0-IP 토폴로지 (docs/bridge-eth0-ip-topology.md §6)"
             echo ""
             echo "[Current]"
-            jq -r '.wbridge | "  engine=\(.engine // "pcap") peer_route=\(.peer_route.enabled) ip_discovery=\(.ip_discovery) arp_ignore_always=\(.arp_ignore_always.enabled) local_hairpin=\(.moal.local_hairpin // "-")"' "$J"
+            jq -r '.wbridge | "  engine=\(.engine // "pcap") peer_route=\(.peer_route.enabled) ip_discovery=\(.ip_discovery) arp_ignore_always=\(.arp_ignore_always.enabled) local_hairpin=\(.moal.local_hairpin // "-") eth_fallback=\(.eth_fallback.enabled // "-")"' "$J"
             return 0 ;;
         *)  echo "Error: unknown profile '$name' (hairpin|dual|peer-route|eth0-ip)" >&2; return 1 ;;
     esac
@@ -1008,15 +1022,18 @@ _bridge_profile() {
     printf "  %-24s %s -> %s\n" "ip_discovery:"       "$(jq -r '.wbridge.ip_discovery' "$J")" "$disc"
     printf "  %-24s %s -> %s\n" "arp_ignore_always:"  "$(jq -r '.wbridge.arp_ignore_always.enabled' "$J")" "$aia"
     printf "  %-24s %s -> %s\n" "moal.local_hairpin:" "$(jq -r '.wbridge.moal.local_hairpin // "-"' "$J")" "$lhp_disp"
+    printf "  %-24s %s -> %s\n" "eth_fallback:"       "$(jq -r '.wbridge.eth_fallback.enabled // "-"' "$J")" "$ef"
     if [ "$do_apply" != "apply" ]; then
         echo "  (dry-run — 적용: wifi {0|1} br profile $name apply)"
         return 0
     fi
     cp "$J" "${J}.bak-profile" 2>/dev/null || true
     if jq --argjson pr "$pr" --argjson disc "$disc" --argjson aia "$aia" --arg lhp "$lhp" \
+        --argjson ef "$ef" \
         '.wbridge.peer_route.enabled=$pr | .wbridge.ip_discovery=$disc |
          .wbridge.arp_ignore_always.enabled=$aia |
-         .wbridge.moal.local_hairpin=(if $lhp=="" then "" else ($lhp|tonumber) end)' \
+         .wbridge.moal.local_hairpin=(if $lhp=="" then "" else ($lhp|tonumber) end) |
+         .wbridge.eth_fallback.enabled=$ef' \
         "$J" > "${J}.tmp"; then
         mv "${J}.tmp" "$J"
         echo "  applied (backup: ${J}.bak-profile). 다음 부팅 시 적용."
