@@ -3,6 +3,22 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.4.4 (2026-07-17)
+
+> SemVer **patch** — peer_route 진단·안정화 + 부팅 race 수리 + tpacket 배리어 + 로그 명령. 와이어 포맷·설정키 호환 변경 없음.
+
+### wlan-package (메인)
+
+- **peer_route 진단·안정화** (#100) — `wifi <0|1> br status` 진단 명령 신설(3종 토글 `peer_route.enabled`/`ip_discovery`/`arp_ignore_always` + 런타임 실측 + 정합성 판정, 읽기 전용). `eth_sweep_subnet` 미설정 시 sweep 폴백을 mlan0 대역 우선으로 정정(기존 eth0 관리대역 오판). `br status`의 `wbridge.enabled=false`가 jq `//`에 흡수돼 `true`로 오표시되던 버그 픽스.
+- **부팅 race OHT 미발견 수리** (#101) — `mac_mode=dynamic` 부팅 경로에서 `wired_mac_ip_get.py`가 mlan0 IP 부여 **전**에 sweep를 실행하면 런타임 폴백이 `None`→eth0 관리대역(`192.168.1.0/24`)을 sweep해 OHT(유선 peer)를 못 찾았다. sweep 대역/source를 `mlanN.network`의 `Address` **설정값** 기반(`get_iface_config_addr`, glob·case-insensitive)으로 바꿔 부팅 타이밍과 무관하게 만들고, arp `psrc`를 mlan0 IP로 고정(eth0 primary/secondary 순서 의존 제거). 파싱 실패는 로깅. 온타겟 실측으로 OHT 발견 확인, 단위테스트 11개 추가.
+- **moal deliver_rt_prio 노브** — RX deliver leg(NAPI `woal_netdev_poll_rx`)를 전용 kthread `SCHED_FIFO`로 올려 sparse/idle 시 다운스트림 RX jitter를 저감(Direction B). `wq_sched_policy`/`wq_sched_prio`로 전달(capability-gate).
+- **로그 명령 정비** (#98) — 로그 수집 tar.gz 전환, `wifi log reset`(iface/전역 truncate + rsyslog HUP) 신설.
+- **stat.log 손상 수리** (#99) — 로거 단일 인스턴스 락 + stop 종료로 라인 겹침 제거.
+
+### wlan-bridge (서브모듈)
+
+- **tpacket TX/RX 링버퍼 메모리 배리어** (#29) — ARM(weak-memory) + `-O3 -flto`에서 TPACKET v2 공유 링버퍼 `status`에 atomic acquire/release 적용(4곳). user↔kernel 레이스로 미완성 프레임/블록을 읽거나 덮어쓰는 것을 차단. `tx_frame_is_available`은 `const` 계약을 `(__u32 *)` 캐스트로 유지.
+
 ## 0.4.3 (2026-07-13)
 
 > SemVer **patch** — factory_reset 버그픽스. 신규 설정 키 1개(`.mcp.max_probe_fail`), 와이어 포맷 변경 없음.

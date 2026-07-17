@@ -1,5 +1,5 @@
 Package: wlan-proc
-Version: 0.4.3
+Version: 0.4.4
 Section: test
 Priority: optional
 Architecture: arm64
@@ -36,3 +36,4 @@ Description: WLAN Application
  0.4.1 : MFG 모드 정책 전환 — mfg_mode=1에서 wifi_init exit 1 재시작 루프(반복 rmmod/insmod로 mfgbridge 테스트 간헐 실패) 수정: mfg 로드 성공 종료+멱등 가드(/run/wifi/mfg_loaded), STA/FW 접촉 유닛+snmpd/opcd disable+stop, checker idle, 재부팅 정책 mfg 거부(exit 12, overtemp/--force/wifi_init emergency 통과), moal bridge 인자·MAC spoofing/IP discovery·mod_para 운영키(net_rx/mgmt/dev_cap_mask) skip, cal_data_cfg=none 강제(안테나 mux는 유지)
  0.4.2 : wifi info에 [MFG] 상태 섹션(mfg_mode/fw_name/mfg_loaded/profile) + snmpd/opcd 데몬 상태 표시
  0.4.3 : factory_reset이 보드 감지 결과를 날려 Invalid Voltage가 무한 emerg 브로드캐스트되던 버그 수정 — SoC 감지+주입을 wifi_board_config.sh로 분리해 postinst/factory_reset이 공유(템플릿엔 .mcp.iio_device가 없고 .global.BOARD_TYPE이 고정값이라 덮어쓰면 iMX93이 iio:device0으로, iMX8MM이 BOARD_TYPE=imx93으로 어긋남), wifi_logger_mcp.sh는 ADC 읽기 실패를 감지해 emerg→err 강등·backoff·max_probe_fail(12회) 후 종료
+ 0.4.4 : peer_route 진단·안정화(wifi br status 진단 명령 신설, sweep 폴백·psrc를 mlanN.network 설정값 기반으로=mac_mode=dynamic 부팅 race OHT 미발견 수리, br status의 enabled=false 오표시 픽스), moal deliver_rt_prio 노브(RX deliver leg RT화·Direction B), wbridge tpacket TX/RX 링버퍼 메모리 배리어(ARM weak-memory), 로그 명령 정비(tar.gz·log reset)·stat.log 손상 수리
