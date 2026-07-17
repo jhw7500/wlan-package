@@ -1,0 +1,10 @@
+[Match]
+Name=mlan0
+
+[Network]
+DHCP=no
+Address=192.168.0.100/24
+
+# [S1 test 2026-07-17] carrier 상실 시 정적 IP/route 유지 (G2-③ 해소)
+ConfigureWithoutCarrier=yes
+KeepConfiguration=static
