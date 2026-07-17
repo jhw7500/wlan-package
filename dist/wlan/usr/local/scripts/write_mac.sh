@@ -22,6 +22,13 @@ esac
 
 BACKUP_FILE="${LINK_FILE}.bak"
 
+# 임시파일 정리는 EXIT trap 하나로 모은다. bash의 trap은 누적이 아니라 교체라,
+# 구간마다 trap을 다시 걸면 앞의 것이 무효화되어 그 임시파일이 영영 남는다
+# (실제로 타깃 /etc/systemd/network에 .link.tmp.* 고아가 쌓여 있었다).
+tmp=""
+tmp_bak=""
+trap 'rm -f -- ${tmp:+"$tmp"} ${tmp_bak:+"$tmp_bak"}' EXIT
+
 # MAC 유효성 검사
 if ! [[ "$NEW_MAC" =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]]; then
   logger -p local0.err "[$tag:$LINENO] [$IFACE] invalid MAC: '$NEW_MAC'"
@@ -45,7 +52,6 @@ link_content() {
 # 2. .link 파일 새로 쓰기
 if [ -f "$LINK_FILE" ]; then
   tmp="$(mktemp "${LINK_FILE}.tmp.XXXXXX")"
-  trap 'rm -f "$tmp"' EXIT
   link_content > "$tmp"
   install -o root -g root -m 0644 "$tmp" "$LINK_FILE"
   logger -p local0.info "[$tag:$LINENO] [$IFACE] Written $LINK_FILE → $NEW_MAC"
@@ -55,7 +61,6 @@ fi
 
 # 3. .bak 파일 새로 쓰기
 tmp_bak="$(mktemp "${BACKUP_FILE}.tmp.XXXXXX")"
-trap 'rm -f "$tmp_bak"' EXIT
 link_content > "$tmp_bak"
 install -o root -g root -m 0644 "$tmp_bak" "$BACKUP_FILE"
 logger -p local0.info "[$tag:$LINENO] [$IFACE] Written $BACKUP_FILE → $NEW_MAC"
