@@ -259,8 +259,16 @@ def get_iface_config_addr(iface, netdir="/etc/systemd/network"):
                     if s.lower().startswith("address="):
                         obj = ipaddress.ip_interface(s.split("=", 1)[1].strip())
                         return str(obj.ip), str(obj.network)
-    except Exception:
-        pass
+    except Exception as e:
+        # 조용한 (None,None) 폴백은 잘못된 .network/파싱 오류를 숨겨 부팅 race를 다시 열 수
+        # 있으므로 진단용으로 남긴다. logger는 main()에서 할당되므로 부팅 경로에선 기록되고,
+        # import(단위테스트)에선 미정의라 내부 except로 조용히 무시된다.
+        try:
+            logger.message("warning",
+                           "[%s] get_iface_config_addr(%s) parse failed: %s" % (IFACE, iface, e),
+                           _EXTRA_())
+        except Exception:
+            pass
     return None, None
 
 def get_sweep_network():
