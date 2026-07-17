@@ -1205,6 +1205,23 @@ if command -v systemctl >/dev/null 2>&1; then
         ) || true
     fi
 
+    # === 무선 인터페이스 weak-host ARP 봉인 (per-interface, 무조건 적용) ===
+    # 커널 실효값 = max(conf.all, conf.dev)이므로, mlan0/mlan1에 arp_ignore=1을
+    # 인터페이스 단위로 고정하면 peer_route/arp_ignore_always 토글과 무관하게
+    # "무선발 who-has <eth0-IP>에 클론 MAC으로 weak-host 응답"하는 구멍이 항상 닫힌다.
+    # 플릿(전 BD 공통 eth0 관리IP + 플랫 L2)에서 이 구멍은 중복 IP/DAI 위반 →
+    # exclusion 제재로 이어질 수 있다 (2026-07-17 리뷰 지적, 근본해소).
+    # - mlan0 자신의 IP에 대한 공중 ARP 응답은 유지된다 (target이 수신 iface에
+    #   설정된 경우만 응답하는 것이 arp_ignore=1의 정의 — 무선↔BD 통신 무영향).
+    # - eth0의 weak-host 응답(유선→BD ARP, peer_route=off 구성의 전제)은 conf.all/
+    #   conf.eth0 지배라 영향 없음.
+    # - arp_announce=2 짝: mlan0발 ARP 요청의 sender IP가 eth0-IP로 광고되는
+    #   corner case 차단 (정상 플로우는 어차피 mlan0 IP 선택 — 방어적).
+    _safe_sysctl net.ipv4.conf.mlan0.arp_ignore=1
+    _safe_sysctl net.ipv4.conf.mlan0.arp_announce=2
+    _safe_sysctl net.ipv4.conf.mlan1.arp_ignore=1
+    _safe_sysctl net.ipv4.conf.mlan1.arp_announce=2
+
     # === arp_ignore_always (옵션) — wbridge.arp_ignore_always.enabled, 기본 false ===
     # IP를 eth0에 두는 토폴로지(mlan0 무IP 또는 타서브넷) 전용 opt-in. 이 토폴로지에서는
     # mlan0 커널 스택이 weak host model로 eth0 IP에 대한 ARP 요청에도 클론 MAC으로 응답

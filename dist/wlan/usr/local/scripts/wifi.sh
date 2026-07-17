@@ -753,6 +753,7 @@ _bridge_status() {
     # local hairpin runtime: param 파일 부재("-")는 moal 미로드 또는 구버전 드라이버
     lhp_rt=$(cat /sys/module/moal/parameters/bridge_local_hairpin 2>/dev/null || echo "-")
     rpf_eth=$(sysctl -n net.ipv4.conf.$eth.rp_filter 2>/dev/null || echo "?")
+    arp_ignore_if=$(sysctl -n net.ipv4.conf.$iface.arp_ignore 2>/dev/null || echo "?")
     hp_stats=$(grep '^hairpin' /sys/kernel/moal_bridge/stats 2>/dev/null || echo "-")
 
     echo "[Runtime: measured]"
@@ -760,6 +761,7 @@ _bridge_status() {
     printf "  %-24s %s\n" "$eth /32 mirror:"    "${eth_mirror:-<none>}"
     printf "  %-24s %s\n" "ip rule iif $eth:"   "$([ "${rule_cnt:-0}" -gt 0 ] && echo present || echo absent)"
     printf "  %-24s %s\n" "arp_ignore(all):"    "$arp_ignore"
+    printf "  %-24s %s\n" "arp_ignore($iface):" "$arp_ignore_if"
     printf "  %-24s %s\n" "rp_filter($eth):"    "$rpf_eth"
     printf "  %-24s %s\n" "peer host route:"    "${host_route:-<none>}"
     printf "  %-24s %s\n" "table 100 routes:"   "${t100_cnt:-0}"
@@ -827,6 +829,14 @@ _bridge_status() {
     if [ "$pr" = "false" ] && [ -n "$mlan_inet" ] && [ "$rpf_eth" = "1" ]; then
         echo "  [WARN] $eth rp_filter=1(strict) + peer_route=off -> wired->BD($iface IP행) inbound martian drop 위험."
         echo "         Fix: sysctl net.ipv4.conf.$eth.rp_filter=2"
+        warn=1
+    fi
+    # 무선 weak-host ARP 개방: 실효 arp_ignore(max(all,iface))가 0이면 무선발
+    # who-has <eth0-IP>에 클론 MAC으로 응답 — 플릿(공통 관리IP+플랫 L2)에서
+    # 중복 IP/DAI 위반 위험. per-interface 봉인(wifi_init.sh)이 적용되면 항상 ≥1.
+    if [ "$arp_ignore" = "0" ] && [ "$arp_ignore_if" = "0" ]; then
+        echo "  [WARN] $iface weak-host ARP 개방 (arp_ignore all=0, $iface=0) -> 무선발 eth0-IP ARP에 클론 MAC 응답 위험(플릿 DAI)."
+        echo "         Fix: 구버전 wifi_init.sh 의심 — per-interface 봉인 포함 버전 배포 후 재부팅, 임시: sysctl net.ipv4.conf.$iface.arp_ignore=1"
         warn=1
     fi
     if [ "$pr" = "true" ] && [ "$aia" = "true" ]; then
