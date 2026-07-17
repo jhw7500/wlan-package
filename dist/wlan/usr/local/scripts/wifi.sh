@@ -2017,17 +2017,18 @@ case "$2" in
         # 임시파일은 set -e 중 조기 exit 시에도 정리되도록 EXIT trap 설정(freq 명령 패턴).
         TMP_FILE="$(mktemp)"
         trap 'rm -f "$TMP_FILE"; sync 2>/dev/null || true' EXIT
-        # SSID는 ENVIRON으로 raw 전달(awk -v는 값의 \X를 C-escape로 해석해 손상) + esc()로
-        # wpa_supplicant conf 문법(C-style)에 맞춰 \와 "를 이스케이프.
+        # SSID는 ENVIRON으로 raw 전달 — awk -v는 값의 \X를 C-escape로 해석해 손상시킨다.
+        # 값은 이스케이프하지 않고 그대로 쓴다: wpa_supplicant의 따옴표 형식 ssid="..."는
+        # raw 바이트다(wpa_config_parse_string이 마지막 "까지를 그대로 복사). C-escape를
+        # 디코드하는 건 P"..." 형식뿐이라, \를 \\로 바꿔 쓰면 리터럴 백슬래시가 저장된다.
         if CONNECT_SSID="$NEW_SSID" awk -v freqs="$FREQ_STR" -v set_freq="$SET_FREQ" '
-            function esc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return s }
             BEGIN { in_net = 0; blocks = 0; new_ssid = ENVIRON["CONNECT_SSID"] }
             /^[[:space:]]*#/ { print; next }
             /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ {
                 in_net = 1; blocks++; done_ssid = 0; done_scan = 0; done_list = 0; print; next
             }
             in_net && /^[[:space:]]*\}/ {
-                if (!done_ssid) { print "    ssid=\"" esc(new_ssid) "\""; done_ssid = 1 }
+                if (!done_ssid) { print "    ssid=\"" new_ssid "\""; done_ssid = 1 }
                 if (set_freq == 1) {
                     if (!done_scan) { print "    scan_freq=" freqs; done_scan = 1 }
                     if (!done_list) { print "    freq_list=" freqs; done_list = 1 }
@@ -2035,7 +2036,7 @@ case "$2" in
                 in_net = 0; print; next
             }
             in_net && /^[[:space:]]*ssid[[:space:]]*=/ {
-                if (!done_ssid) { print "    ssid=\"" esc(new_ssid) "\""; done_ssid = 1 } next
+                if (!done_ssid) { print "    ssid=\"" new_ssid "\""; done_ssid = 1 } next
             }
             in_net && /^[[:space:]]*scan_freq[[:space:]]*=/ {
                 if (set_freq == 1) { if (!done_scan) { print "    scan_freq=" freqs; done_scan = 1 } } else print
