@@ -87,9 +87,13 @@
         },
         "arp_ignore_always": {
             "_comment": "arp_ignore_always.enabled: 클론 MAC의 weak-host 이중 ARP 응답 레이스를 커널 단에서 차단(arp_ignore=1/arp_announce=2). peer_route와 독립적으로 적용되는 개별 토글이다. IP 배치(토폴로지)에 종속: eth0에 IP를 두거나 eth0/mlan0가 동일 서브넷이라 이중응답이 문제인 구성에서 true, BD↔유선peer를 peer_route로 처리하는 순수 mlan0-IP 구성에서는 false. 토폴로지는 이 JSON이 아니라 `wifi <iface> ip`/webui로 결정. peer_route=on은 자체적으로 arp_ignore=1을 적용하므로 이 토글이 불필요.",
-            "enabled": true
+            "enabled": false
         },
-        "engine": "pcap",
+        "eth_fallback": {
+            "_comment": "eth_fallback.enabled (B-2): mlan0 IP를 eth0에 /32 미러+공유 서브넷 fallback route(metric 200)로 병행 부여. 평시엔 mlan0 route(metric 0)가 우선해 잠복하고, 무선 down 시 networkd의 mlan0 주소/라우트 철회를 절체 트리거로 활용해 BD↔유선peer 통신을 eth0 직결로 자동 인계·복귀 시 자동 환원 (OHT IP 인지 불요 — 무선단절 중 유선 VHL 생존, 2026-07-17 실기 검증). mlan0-IP 토폴로지 전용. hairpin/dual 프로파일에 기본 포함 (wifi br profile). 20-mlan0.network의 KeepConfiguration/ConfigureWithoutCarrier(S1)와 병용 가능 — 철회가 없는 구성에서는 함께 적용되는 mlan0.ignore_routes_with_linkdown=1이 linkdown 라우트를 제외해 동일하게 절체된다(실기 검증).",
+            "enabled": false
+        },
+        "engine": "moal",
         "moal": {
             "_comment": "engine=moal 전용 파라미터 (키 설명은 상단 _comment). peer/consume_link_local은 빈 문자열이면 insmod 인자로 전달하지 않음(드라이버 기본값 사용 — 구버전 드라이버 호환).",
             "keepalive_ms": 1,
@@ -99,7 +103,7 @@
             "peer": "",
             "consume_link_local": "",
             "_comment_local_hairpin": "local_hairpin: (0|1, 빈값=드라이버 기본 0) 로컬발 TX(dst==클론 MAC)를 공중 대신 유선 peer로 divert + ARP tee/inject. BD↔유선peer IP 통신을 peer_route/ip_discovery(=peer IP 인지) 없이 성립시킨다. AP가 intra-BSS 반사를 안 하는 현장에서 BD발신의 유일 경로 (2026-07-17 실기 검증). runtime 변경: /sys/module/moal/parameters/bridge_local_hairpin",
-            "local_hairpin": ""
+            "local_hairpin": "1"
         },
         "optimize": {
             "_comment": [

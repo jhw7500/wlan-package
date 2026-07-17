@@ -1205,6 +1205,52 @@ if command -v systemctl >/dev/null 2>&1; then
         ) || true
     fi
 
+    # === eth_fallback (B-2) — wbridge.eth_fallback.enabled, 기본 false ===
+    # mlan0 IP를 eth0에 /32 미러 + 공유 서브넷 fallback route(metric 200)로 병행 부여.
+    # 평시엔 mlan0 connected route(metric 0)가 우선해 잠복, 무선 down 시 networkd의
+    # mlan0 주소/라우트 철회가 절체 트리거가 되어 BD↔유선peer 통신이 eth0 직결로
+    # 자동 인계·복귀 시 자동 환원 (OHT IP 인지 불요 — G2 무선단절 유선 VHL 해소).
+    # 2026-07-17 실기: 절체 후 BD↔OHT 0.44ms(hairpin 미경유), 복귀 자동 환원 확인.
+    # 절체 트리거 2계층: ① networkd의 주소/라우트 철회(기본), ② S1 구성
+    # (KeepConfiguration/ConfigureWithoutCarrier — 철회 없음)에서는 아래
+    # mlan0.ignore_routes_with_linkdown=1 이 linkdown 라우트를 FIB에서 제외해
+    # 동일하게 절체(2026-07-17 실기: S1 병용 상태에서 절체 0.41ms 확인).
+    # peer_route=off 분기의 /32 일괄 제거보다 뒤에 실행되어 재부여가 유효하다.
+    _ef_enabled=false
+    if command -v jq >/dev/null 2>&1 && [ -f "$WIFI_INIT_CONF_JSON" ]; then
+        _val=$(jq -r '.wbridge.eth_fallback.enabled' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+        [ "$_val" = "true" ] && _ef_enabled=true
+        unset _val
+    fi
+    if [ "$_ef_enabled" = "true" ]; then
+        (
+            set +e
+            if [ -r /etc/systemd/network/20-mlan0.network ] && [ -d /sys/class/net/eth0 ]; then
+                _m_addr=$(awk -F= '/^[[:space:]]*Address[[:space:]]*=/{gsub(/[[:space:]]/,"",$2); print $2; exit}' \
+                          /etc/systemd/network/20-mlan0.network)
+                _m_ip=${_m_addr%/*}
+                _m_net=$(python3 -c "import ipaddress,sys; print(ipaddress.ip_interface(sys.argv[1]).network)" \
+                         "$_m_addr" 2>/dev/null)
+                if echo "$_m_ip" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' && [ -n "$_m_net" ]; then
+                    ip addr replace "${_m_ip}/32" dev eth0 2>/dev/null
+                    ip route replace "$_m_net" dev eth0 metric 200 src "$_m_ip" 2>/dev/null
+                    # S1 병용 대응: 철회가 없는 구성에서도 linkdown 라우트 제외로 절체 성립
+                    _safe_sysctl net.ipv4.conf.mlan0.ignore_routes_with_linkdown=1
+                    logger -p local0.info "[$tag:$LINENO] eth_fallback=on: ${_m_ip}/32 + $_m_net metric 200 + mlan0 linkdown-skip → eth0"
+                else
+                    logger -p local0.warn "[$tag:$LINENO] eth_fallback skipped: invalid mlan0 Address ($_m_addr)"
+                fi
+            fi
+        ) || true
+    else
+        # 잔재 정리: 이전 부팅의 fallback route(metric 200 한정)만 제거 —
+        # peer_route 산출물(/32·host route)은 건드리지 않는다.
+        ip route show dev eth0 2>/dev/null | awk '/metric 200/{print $1}' | while read -r _r; do
+            ip route del "$_r" dev eth0 metric 200 2>/dev/null
+        done
+    fi
+    unset _ef_enabled
+
     # === 무선 인터페이스 weak-host ARP 봉인 (per-interface, 무조건 적용) ===
     # 커널 실효값 = max(conf.all, conf.dev)이므로, mlan0/mlan1에 arp_ignore=1을
     # 인터페이스 단위로 고정하면 peer_route/arp_ignore_always 토글과 무관하게
