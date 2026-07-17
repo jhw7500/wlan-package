@@ -240,20 +240,41 @@ def get_iface_network(iface):
         pass
     return None
 
+def get_mlan0_config_addr():
+    """
+    20-mlan0.network의 Address= 설정값에서 (ip, network)를 추출.
+    런타임 inet(get_iface_network)과 달리 부팅 race(mlan0 IP 미부여 시점)와 무관하다 —
+    wifi_init.sh가 eth0 미러(ip addr replace ${mlan_ip}/32)에 쓰는 바로 그 설정값이라
+    부팅 어느 시점에 읽어도 일관된 mlan0 대역/IP를 준다. 파일/Address 없으면 (None, None).
+    """
+    try:
+        with open("/etc/systemd/network/20-mlan0.network") as f:
+            for line in f:
+                s = line.strip()
+                if s.startswith("Address") and "=" in s:
+                    obj = ipaddress.ip_interface(s.split("=", 1)[1].strip())
+                    return str(obj.ip), str(obj.network)
+    except Exception:
+        pass
+    return None, None
+
 def get_sweep_network():
     """
-    sweep 대역 결정 우선순위 (sweep는 ETH_IFACE로 전송됨):
-      1) wbridge.eth_sweep_subnet (정적, 부팅 race condition 없음 — 명시 override)
-      2) mlan0(IFACE)의 inet — peer_route/mlan0-IP 토폴로지에서 peer가 실제 위치하는 대역.
-         eth0는 관리 IP(예: 192.168.1.0/24)를 가질 수 있어 peer 대역과 다를 수 있으므로 mlan0 우선.
-      3) eth0(ETH_IFACE)의 inet — mlan0 무IP(flat-bridge/eth0-IP)일 때 폴백.
-    주의: eth0-IP 토폴로지인데 mlan0에도 별도 IP가 있는 dual-IP 구성에서 peer가 eth0 대역에
-    있으면, 2순위에서 mlan0 대역이 선택되어 sweep가 빗나간다(폴백은 mlan0 무IP를 eth0-IP의
-    신호로 삼는다). 이 구성에서는 eth_sweep_subnet을 명시해 폴백(2·3순위)을 우회하라.
+    sweep 대역 결정 우선순위 (sweep는 ETH_IFACE로 전송되나, peer는 mlan0 대역에 있다):
+      1) wbridge.eth_sweep_subnet (정적 명시 override)
+      2) mlan0 config Address 대역 (20-mlan0.network) — 부팅 race 무관. mlan0 IP가 아직
+         부여 전(런타임 inet=None)이어도 설정값에서 mlan0 대역을 얻으므로 eth0 관리대역으로
+         잘못 폴백하지 않는다. (이 함수가 mac_mode=dynamic 부팅 경로에서 mlan0 IP 부여보다
+         먼저 실행되는 race 를 닫는다.)
+      3) mlan0(IFACE) 런타임 inet — 20-mlan0.network가 없을 때 폴백
+      4) eth0(ETH_IFACE) 런타임 inet — mlan0 무IP(flat-bridge/eth0-IP)일 때 최후 폴백
+    주의: 순수 eth0-IP 토폴로지라도 20-mlan0.network에 Address가 남아 있으면 2순위가 mlan0
+    대역을 반환하므로, 그런 구성에서는 eth_sweep_subnet을 명시해 우회하라.
     """
     if ETH_SWEEP_SUBNET:
         return ETH_SWEEP_SUBNET
-    return get_iface_network(IFACE) or get_iface_network(ETH_IFACE)
+    _ip, _net = get_mlan0_config_addr()
+    return _net or get_iface_network(IFACE) or get_iface_network(ETH_IFACE)
 
 def arp_unicast_probe_for_ip(iface, target_mac, ip_list, timeout=1.5):
     """
@@ -261,10 +282,15 @@ def arp_unicast_probe_for_ip(iface, target_mac, ip_list, timeout=1.5):
     응답의 hwsrc가 target_mac과 일치할 때만 그 psrc(IP)를 정답으로 채택.
     """
     src_mac = get_if_hwaddr(iface)
+    # psrc를 mlan0 IP로 고정: probe/sweep는 ETH_IFACE(eth0)로 나가므로 scapy 기본 psrc는
+    # eth0 primary IP가 된다. eth0 primary가 관리 IP(peer와 다른 대역)면 source가 peer 대역
+    # 밖이 되어 응답을 못 받을 수 있다. mlan0 IP(peer와 동일 대역, eth0에 /32 미러됨)로 고정한다.
+    src_ip, _ = get_mlan0_config_addr()
     reqs = []
     for ip in ip_list:
         # 유니캐스트 ARP request
-        reqs.append(Ether(dst=target_mac, src=src_mac, type=0x0806) / ARP(pdst=ip))
+        _arp = ARP(pdst=ip, psrc=src_ip) if src_ip else ARP(pdst=ip)
+        reqs.append(Ether(dst=target_mac, src=src_mac, type=0x0806) / _arp)
     ans, _ = srp(reqs, iface=iface, timeout=timeout, verbose=0)
     for _, r in ans:
         if r.haslayer(ARP):
@@ -285,9 +311,11 @@ def arp_broadcast_sweep_for_mac(iface, target_mac, network_cidr, timeout=2):
         return None
 
     src_mac = get_if_hwaddr(iface)
+    src_ip, _ = get_mlan0_config_addr()  # psrc: mlan0 IP 고정 (eth0 primary 의존 제거 — 위 unicast 주석 참조)
     reqs = []
     for ip in net.hosts():
-        reqs.append(Ether(dst="ff:ff:ff:ff:ff:ff", src=src_mac, type=0x0806) / ARP(pdst=str(ip)))
+        _arp = ARP(pdst=str(ip), psrc=src_ip) if src_ip else ARP(pdst=str(ip))
+        reqs.append(Ether(dst="ff:ff:ff:ff:ff:ff", src=src_mac, type=0x0806) / _arp)
     ans, _ = srp(reqs, iface=iface, timeout=timeout, verbose=0)
     for _, r in ans:
         if r.haslayer(ARP):
