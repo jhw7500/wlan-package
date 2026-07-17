@@ -1,0 +1,9 @@
+# 무선 인터페이스 weak-host ARP 봉인 — netdev 재생성 내구성 보장
+#
+# wifi_init.sh의 per-interface 봉인(mlan*.arp_ignore=1/arp_announce=2)은 부팅 시
+# 1회 적용이라, moal FW 복구(woal_post_reset의 remove/add interface 분기)나 수동
+# 드라이버 재로드로 netdev가 재생성되면 conf.default 값으로 초기화되어 봉인이
+# 소실된다. 이 rule이 mlan* 생성 시마다 자동 재적용하여 이중화한다.
+# 근거/설계: wlan-driver-v2 docs/moal-bridge-local-hairpin.design.md §10
+# 점검: wifi {0|1} br status 의 arp_ignore(iface) 표시 및 개방 WARN
+ACTION=="add", SUBSYSTEM=="net", KERNEL=="mlan[0-9]*", RUN+="/usr/sbin/sysctl -q -w net.ipv4.conf.%k.arp_ignore=1 net.ipv4.conf.%k.arp_announce=2"
