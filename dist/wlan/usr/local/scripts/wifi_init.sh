@@ -1221,6 +1221,15 @@ if command -v systemctl >/dev/null 2>&1; then
     _safe_sysctl net.ipv4.conf.mlan0.arp_announce=2
     _safe_sysctl net.ipv4.conf.mlan1.arp_ignore=1
     _safe_sysctl net.ipv4.conf.mlan1.arp_announce=2
+    # netdev 재생성(FW 복구 remove/add, 드라이버 재로드) 시 재적용은
+    # /etc/udev/rules.d/99-wlan-arp-seal.rules 가 담당 (이중화).
+
+    # eth0 rp_filter=loose 고정 (프로비저닝 명시): hairpin/peer_route=off 계열은
+    # 유선 peer발 패킷이 eth0으로 들어오지만 peer IP의 라우팅 경로는 mlan0을
+    # 가리켜(공유 서브넷) strict(1)면 역경로 불일치로 martian drop 된다.
+    # 이미지 기본이 loose였더라도 여기서 고정해 이미지 드리프트를 차단.
+    # peer_route=on/eth0-IP 토폴로지에는 무해(iif rule/직접 소유가 각각 커버).
+    _safe_sysctl net.ipv4.conf.eth0.rp_filter=2
 
     # === arp_ignore_always (옵션) — wbridge.arp_ignore_always.enabled, 기본 false ===
     # IP를 eth0에 두는 토폴로지(mlan0 무IP 또는 타서브넷) 전용 opt-in. 이 토폴로지에서는
