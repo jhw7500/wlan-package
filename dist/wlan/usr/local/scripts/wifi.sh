@@ -310,7 +310,8 @@ usage() {
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} gt {address} : persist"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} mac {0|1|base|target} {mac_address} : persist"
     echo "       wifi {0|1|mlan0|mlan1} br {up|down|start|stop|restart} : runtime"
-    echo "       wifi {0|1|mlan0|mlan1} br status : peer_route/브릿지 설정·런타임·정합성 진단 (읽기 전용)"
+    echo "       wifi {0|1|mlan0|mlan1} br status : peer_route/hairpin/브릿지 설정·런타임·정합성 진단 (읽기 전용)"
+    echo "       wifi {0|1|mlan0|mlan1} br profile {hairpin|dual|peer-route|eth0-ip} [apply] : 연계 설정 묶음 조회/적용 (dry-run 기본)"
     echo "       wifi {0|1|mlan0|mlan1} br {moal|pcap|tpacket} : wbridge engine+bridge_iface persist"
     echo "       wifi {0|1|mlan0|mlan1} txpwr {0|1|2|3|no|default|low|org|custom_file_name} : persist+runtime"
     echo "       wifi {0|1|mlan0|mlan1} config {conf} {value} : persist"
@@ -688,7 +689,7 @@ _bridge_status() {
     echo "  WiFi Bridge / peer_route Status"
     echo "=========================================================="
 
-    local engine bridge_iface mac_mode ip_disc sweep client_ip enabled enabled_raw pr_raw pr aia_raw aia
+    local engine bridge_iface mac_mode ip_disc sweep client_ip enabled enabled_raw pr_raw pr aia_raw aia lhp_raw
     if [ "$have_jq" = "1" ]; then
         engine=$(jq -r '.wbridge.engine // "pcap"' "$J")
         bridge_iface=$(jq -r '.wbridge.bridge_iface // "mlan0"' "$J")
@@ -699,10 +700,11 @@ _bridge_status() {
         enabled_raw=$(jq -r '.wbridge.enabled' "$J")
         pr_raw=$(jq -r '.wbridge.peer_route.enabled' "$J")
         aia_raw=$(jq -r '.wbridge.arp_ignore_always.enabled' "$J")
+        lhp_raw=$(jq -r '.wbridge.moal.local_hairpin // ""' "$J")
     else
         echo "  (no jq or $J — config fields unavailable, runtime only)"
         engine="?"; bridge_iface="mlan0"; mac_mode="?"; ip_disc="?"; sweep=""; client_ip=""; enabled_raw="?"
-        pr_raw="?"; aia_raw="?"
+        pr_raw="?"; aia_raw="?"; lhp_raw="?"
     fi
     # wbridge.enabled 실효값 (기본 true). jq의 //는 false도 흡수하므로(`false // true` → true)
     # raw로 읽어 case로 분기 — enabled=false 상태를 진단에서 정확히 표기.
@@ -735,26 +737,34 @@ _bridge_status() {
     printf "  %-24s %s\n" "peer_route.enabled:" "$pr (json=$pr_raw)"
     printf "  %-24s %s\n" "ip_discovery:"       "$ip_disc"
     printf "  %-24s %s\n" "arp_ignore_always:"  "$aia (json=$aia_raw)"
+    printf "  %-24s %s\n" "moal.local_hairpin:" "${lhp_raw:-<empty>=driver default 0}"
     printf "  %-24s %s\n" "eth_sweep_subnet:"   "${sweep:-<empty>}"
     printf "  %-24s %s\n" "eth_client_ip:"      "${client_ip:-<empty>}"
     echo ""
 
     # --- Runtime (measured; peer_route on일 때 wifi_init.sh가 부여한 것) ---
-    local mlan_inet eth_mirror rule_cnt arp_ignore host_route t100_cnt topo
+    local mlan_inet eth_mirror rule_cnt arp_ignore host_route t100_cnt topo lhp_rt rpf_eth hp_stats
     mlan_inet=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}/\d+' | head -1)
     eth_mirror=$(ip -4 addr show "$eth" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}/32' | head -1)
     rule_cnt=$(ip rule show 2>/dev/null | grep -c "iif $eth")
     arp_ignore=$(sysctl -n net.ipv4.conf.all.arp_ignore 2>/dev/null || echo "?")
     host_route=$(ip -4 route show dev "$eth" 2>/dev/null | awk '$1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/{print $1; exit}')
     t100_cnt=$(ip route show table 100 2>/dev/null | grep -c .)
+    # local hairpin runtime: param 파일 부재("-")는 moal 미로드 또는 구버전 드라이버
+    lhp_rt=$(cat /sys/module/moal/parameters/bridge_local_hairpin 2>/dev/null || echo "-")
+    rpf_eth=$(sysctl -n net.ipv4.conf.$eth.rp_filter 2>/dev/null || echo "?")
+    hp_stats=$(grep '^hairpin' /sys/kernel/moal_bridge/stats 2>/dev/null || echo "-")
 
     echo "[Runtime: measured]"
     printf "  %-24s %s\n" "$iface inet:"        "${mlan_inet:-<none>}"
     printf "  %-24s %s\n" "$eth /32 mirror:"    "${eth_mirror:-<none>}"
     printf "  %-24s %s\n" "ip rule iif $eth:"   "$([ "${rule_cnt:-0}" -gt 0 ] && echo present || echo absent)"
     printf "  %-24s %s\n" "arp_ignore(all):"    "$arp_ignore"
+    printf "  %-24s %s\n" "rp_filter($eth):"    "$rpf_eth"
     printf "  %-24s %s\n" "peer host route:"    "${host_route:-<none>}"
     printf "  %-24s %s\n" "table 100 routes:"   "${t100_cnt:-0}"
+    printf "  %-24s %s\n" "local_hairpin(rt):"  "$lhp_rt"
+    printf "  %-24s %s\n" "hairpin counters:"   "$hp_stats"
     echo ""
 
     # 토폴로지 추정 (참고용 — 판정 표시에만 쓰고 어떤 동작도 바꾸지 않음)
@@ -764,15 +774,59 @@ _bridge_status() {
 
     # --- Consistency (진단만; 사람이 판단. 자동 교정 없음) ---
     echo "[Consistency]"
-    local warn=0
+    local warn=0 hp_on=0 lhp_exp
+    # hairpin 실효값: runtime param 기준 (JSON은 부팅 시 전달 여부일 뿐)
+    [ "$lhp_rt" = "1" ] && hp_on=1
     if [ "$aia" = "true" ] && [ "$pr" = "false" ] && [ -n "$mlan_inet" ]; then
         echo "  [WARN] arp_ignore_always=on + peer_route=off on mlan0-IP -> wired->BD ARP UNANSWERED."
-        echo "         Fix: peer_route.enabled=true + ip_discovery=true + arp_ignore_always.enabled=false"
+        echo "         Fix: wifi {0|1} br profile {hairpin|peer-route} apply"
         warn=1
     fi
     if [ "$pr" = "true" ] && [ "$ip_disc" != "true" ]; then
-        echo "  [WARN] peer_route=on but ip_discovery=off -> BD->peer host route not registered (one-way)."
-        echo "         Fix: wbridge.ip_discovery=true"
+        if [ "$hp_on" = "1" ]; then
+            echo "  [INFO] peer_route=on + ip_discovery=off: host route는 미등록이지만 local_hairpin이 BD->peer를 커버."
+        else
+            echo "  [WARN] peer_route=on but ip_discovery=off -> BD->peer host route not registered (one-way)."
+            echo "         Fix: wbridge.ip_discovery=true  또는 wifi {0|1} br profile hairpin apply"
+            warn=1
+        fi
+    fi
+    # --- local hairpin 정합성 (moal 전용 기능) ---
+    if [ "$lhp_raw" = "1" ] && [ "$engine" != "moal" ]; then
+        echo "  [WARN] local_hairpin=1 but engine=$engine -> ineffective (hairpin은 moal 전용, pcap은 tap이라 TX 가로채기 불가)."
+        echo "         Fix: wifi {0|1} br moal  후 재부팅, 또는 profile peer-route apply"
+        warn=1
+    fi
+    if [ "$hp_on" = "1" ] && [ -z "$mlan_inet" ]; then
+        echo "  [WARN] local_hairpin active but $iface has no inet -> ARP REPLY inject(tip==self) 판정 불발, BD->peer ARP 미해소."
+        echo "         Fix: $iface 에 공유 서브넷 IP 부여 (wifi $iface ip <addr/mask>)"
+        warn=1
+    fi
+    if [ "$pr" = "false" ] && [ "$ip_disc" != "true" ] && [ "$hp_on" = "0" ] && [ -n "$mlan_inet" ]; then
+        echo "  [WARN] peer_route=off + ip_discovery=off + hairpin off on mlan0-IP -> BD<->wired peer IP 통신 경로 없음."
+        echo "         Fix: wifi {0|1} br profile {hairpin|peer-route} apply"
+        warn=1
+    fi
+    if [ "$engine" = "moal" ] && [ "$lhp_raw" != "?" ]; then
+        if [ "$lhp_rt" = "-" ]; then
+            # param 파일 부재 = 로드된 .ko 가 bridge_local_hairpin 미선언(구버전 드라이버).
+            # wifi_init.sh parmtype 게이트가 인자를 skip 하므로 부팅은 무사하나 hairpin 미적용.
+            if [ "$lhp_raw" = "1" ]; then
+                echo "  [WARN] local_hairpin=1(JSON) but loaded driver lacks the param (구버전 .ko) -> hairpin 미적용."
+                echo "         Fix: hairpin 지원 드라이버(.ko) 배포 후 재부팅 (parmtype 게이트가 현재 인자를 skip 중)"
+                warn=1
+            fi
+        else
+            lhp_exp="${lhp_raw:-0}"
+            if [ "$lhp_exp" != "$lhp_rt" ]; then
+                echo "  [WARN] local_hairpin JSON(${lhp_raw:-<empty>=0}) != runtime($lhp_rt) -> 재부팅 미반영 또는 runtime 수동 토글 상태."
+                warn=1
+            fi
+        fi
+    fi
+    if [ "$pr" = "false" ] && [ -n "$mlan_inet" ] && [ "$rpf_eth" = "1" ]; then
+        echo "  [WARN] $eth rp_filter=1(strict) + peer_route=off -> wired->BD($iface IP행) inbound martian drop 위험."
+        echo "         Fix: sysctl net.ipv4.conf.$eth.rp_filter=2"
         warn=1
     fi
     if [ "$pr" = "true" ] && [ "$aia" = "true" ]; then
@@ -791,6 +845,71 @@ _bridge_status() {
     fi
     [ "$warn" = "0" ] && echo "  [OK] no blocking issues detected."
     echo "=========================================================="
+}
+
+# wifi <0|1> br profile [<name> [apply]] : 연계 설정 묶음(프로파일) 조회/적용
+# peer_route/ip_discovery/arp_ignore_always/moal.local_hairpin 은 서로 함정 조합이
+# 있어(예: aia=on+peer_route=off → 유선→BD ARP 무응답) 개별 수정 시 실수하기 쉽다.
+# 검증된 조합만 원자적으로 기록한다. 기본 dry-run — 'apply'를 붙여야 실제 기록.
+# 적용 후 정합성은 br status 로 확인.
+_bridge_profile() {
+    local name="${1:-}" do_apply="${2:-}"
+    local J="$WIFI_INIT_CONF_JSON"
+    local pr disc aia lhp engine lhp_disp
+    if ! command -v jq >/dev/null 2>&1 || [ ! -f "$J" ]; then
+        echo "Error: jq or $J not found" >&2; return 1
+    fi
+    case "$name" in
+        hairpin)    pr=false; disc=false; aia=false; lhp=1 ;;
+        dual)       pr=true;  disc=true;  aia=false; lhp=1 ;;
+        peer-route) pr=true;  disc=true;  aia=false; lhp="" ;;
+        eth0-ip)    pr=false; disc=false; aia=true;  lhp="" ;;
+        ""|show|list)
+            echo "Usage: wifi {0|1} br profile {hairpin|dual|peer-route|eth0-ip} [apply]"
+            echo "  (apply 없으면 dry-run — 변경될 값만 표시. 적용은 다음 부팅부터)"
+            echo ""
+            echo "  hairpin    : peer_route=off disc=off aia=off hairpin=1  — BD<->유선peer를 드라이버가 처리, peer IP 인지 불요 (moal 전용)"
+            echo "  dual       : peer_route=on  disc=on  aia=off hairpin=1  — 기존 방식 + hairpin 보험 (moal 전용, 도입기 권장)"
+            echo "  peer-route : peer_route=on  disc=on  aia=off hairpin=-  — 기존 방식 (엔진 무관)"
+            echo "  eth0-ip    : peer_route=off disc=off aia=on  hairpin=-  — eth0-IP 토폴로지 (docs/bridge-eth0-ip-topology.md §6)"
+            echo ""
+            echo "[Current]"
+            jq -r '.wbridge | "  engine=\(.engine // "pcap") peer_route=\(.peer_route.enabled) ip_discovery=\(.ip_discovery) arp_ignore_always=\(.arp_ignore_always.enabled) local_hairpin=\(.moal.local_hairpin // "-")"' "$J"
+            return 0 ;;
+        *)  echo "Error: unknown profile '$name' (hairpin|dual|peer-route|eth0-ip)" >&2; return 1 ;;
+    esac
+    engine=$(jq -r '.wbridge.engine // "pcap"' "$J")
+    # hairpin 계열은 moal 엔진 전제 — pcap 은 tap 이라 TX 가로채기 불가
+    if [ -n "$lhp" ] && [ "$engine" != "moal" ]; then
+        echo "Error: profile '$name' requires engine=moal (current: $engine)." >&2
+        echo "       switch first: wifi {0|1} br moal" >&2
+        return 1
+    fi
+    lhp_disp="${lhp:-\"\" (driver default 0)}"
+    echo "[Profile: $name]  ($J)"
+    printf "  %-24s %s -> %s\n" "peer_route.enabled:" "$(jq -r '.wbridge.peer_route.enabled' "$J")" "$pr"
+    printf "  %-24s %s -> %s\n" "ip_discovery:"       "$(jq -r '.wbridge.ip_discovery' "$J")" "$disc"
+    printf "  %-24s %s -> %s\n" "arp_ignore_always:"  "$(jq -r '.wbridge.arp_ignore_always.enabled' "$J")" "$aia"
+    printf "  %-24s %s -> %s\n" "moal.local_hairpin:" "$(jq -r '.wbridge.moal.local_hairpin // "-"' "$J")" "$lhp_disp"
+    if [ "$do_apply" != "apply" ]; then
+        echo "  (dry-run — 적용: wifi {0|1} br profile $name apply)"
+        return 0
+    fi
+    cp "$J" "${J}.bak-profile" 2>/dev/null || true
+    if jq --argjson pr "$pr" --argjson disc "$disc" --argjson aia "$aia" --arg lhp "$lhp" \
+        '.wbridge.peer_route.enabled=$pr | .wbridge.ip_discovery=$disc |
+         .wbridge.arp_ignore_always.enabled=$aia |
+         .wbridge.moal.local_hairpin=(if $lhp=="" then "" else ($lhp|tonumber) end)' \
+        "$J" > "${J}.tmp"; then
+        mv "${J}.tmp" "$J"
+        echo "  applied (backup: ${J}.bak-profile). 다음 부팅 시 적용."
+        echo "  hairpin 은 runtime 즉시 반영 가능: echo ${lhp:-0} > /sys/module/moal/parameters/bridge_local_hairpin"
+        echo "  적용 후 점검: wifi {0|1} br status"
+    else
+        rm -f "${J}.tmp"
+        echo "Error: JSON update failed (config unchanged)" >&2
+        return 1
+    fi
 }
 
 case "$1" in
@@ -1091,6 +1210,8 @@ case "$2" in
         systemctl restart wifi_bridge@$IFACE
     elif [ "$3" == "status" ]; then
         _bridge_status "$IFACE"
+    elif [ "$3" == "profile" ]; then
+        _bridge_profile "${4:-}" "${5:-}"
     elif [ "$3" == "moal" ] || [ "$3" == "pcap" ] || [ "$3" == "tpacket" ]; then
         if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
             echo "Error: br {moal|pcap|tpacket} supports mlan0/mlan1 only" >&2
