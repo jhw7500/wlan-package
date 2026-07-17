@@ -1815,21 +1815,22 @@ case "$2" in
     TMP_FILE="$(mktemp)"
     # active ssid= → 치환 / #ssid=(주석)만 있으면 주석 해제 후 설정 / 둘 다 없으면 network 블록 끝에 append.
     # (블록 인지 방식은 connect 경로와 동일 — 주석처리된 설정도 확실히 반영. 블록당 done 1회.)
-    # SSID는 ENVIRON으로 raw 전달(awk -v는 값의 \X를 C-escape로 해석해 손상) + esc()로
-    # wpa_supplicant conf 문법(C-style)에 맞춰 \와 "를 이스케이프 — connect 경로와 동일.
+    # SSID는 ENVIRON으로 raw 전달 — awk -v는 값의 \X를 C-escape로 해석해 손상시킨다.
+    # 값은 이스케이프하지 않고 그대로 쓴다: wpa_supplicant의 따옴표 형식 ssid="..."는
+    # raw 바이트다(wpa_config_parse_string이 마지막 "까지를 그대로 복사). C-escape를
+    # 디코드하는 건 P"..." 형식뿐이라, \를 \\로 바꿔 쓰면 리터럴 백슬래시가 저장된다.
     if WIFI_NEW_SSID="$NEW_SSID" awk '
-        function esc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return s }
         BEGIN { in_net = 0; changed = 0; new_ssid = ENVIRON["WIFI_NEW_SSID"] }
         /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { in_net = 1; done = 0; print; next }
         in_net && /^[[:space:]]*\}/ {
-            if (!done) { print "    ssid=\"" esc(new_ssid) "\""; changed = 1; done = 1 }
+            if (!done) { print "    ssid=\"" new_ssid "\""; changed = 1; done = 1 }
             in_net = 0; print; next
         }
         in_net && /^[[:space:]]*ssid[[:space:]]*=/ {
-            if (!done) { print "    ssid=\"" esc(new_ssid) "\""; changed = 1; done = 1 } next
+            if (!done) { print "    ssid=\"" new_ssid "\""; changed = 1; done = 1 } next
         }
         in_net && /^[[:space:]]*#[[:space:]]*ssid[[:space:]]*=/ {
-            if (!done) { print "    ssid=\"" esc(new_ssid) "\""; changed = 1; done = 1; next }
+            if (!done) { print "    ssid=\"" new_ssid "\""; changed = 1; done = 1; next }
             print; next
         }
         /^[[:space:]]*#/ { print; next }
@@ -1868,21 +1869,23 @@ case "$2" in
     TMP_FILE="$(mktemp)"
     # active psk= → 치환 / #psk=(주석)만 있으면 주석 해제 후 설정 / 둘 다 없으면 network 블록 끝에 append.
     # (블록 인지 방식은 connect 경로와 동일 — 주석처리된 설정도 확실히 반영. 블록당 done 1회.)
-    # psk는 ENVIRON으로 raw 전달(awk -v는 값의 \X를 C-escape로 해석해 손상) + esc()로
-    # wpa_supplicant conf 문법(C-style)에 맞춰 \와 "를 이스케이프 — connect 경로와 동일.
+    # psk는 ENVIRON으로 raw 전달 — awk -v는 값의 \X를 C-escape로 해석해 손상시킨다.
+    # 값은 이스케이프하지 않고 그대로 쓴다: wpa_supplicant의 따옴표 형식 psk="..."는
+    # raw 바이트다(wpa_config_parse_psk가 os_strrchr로 마지막 "까지를 그대로 취함).
+    # \를 \\로 바꿔 쓰면 리터럴 백슬래시가 저장되고, 위 byte_len은 이스케이프 전
+    # 길이를 재므로 63바이트 경계에서 conf 전체 로드가 깨진다.
     if WIFI_NEW_PSK="$NEW_PSK" awk '
-        function esc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return s }
         BEGIN { in_net = 0; changed = 0; new_psk = ENVIRON["WIFI_NEW_PSK"] }
         /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { in_net = 1; done = 0; print; next }
         in_net && /^[[:space:]]*\}/ {
-            if (!done) { print "    psk=\"" esc(new_psk) "\""; changed = 1; done = 1 }
+            if (!done) { print "    psk=\"" new_psk "\""; changed = 1; done = 1 }
             in_net = 0; print; next
         }
         in_net && /^[[:space:]]*psk[[:space:]]*=/ {
-            if (!done) { print "    psk=\"" esc(new_psk) "\""; changed = 1; done = 1 } next
+            if (!done) { print "    psk=\"" new_psk "\""; changed = 1; done = 1 } next
         }
         in_net && /^[[:space:]]*#[[:space:]]*psk[[:space:]]*=/ {
-            if (!done) { print "    psk=\"" esc(new_psk) "\""; changed = 1; done = 1; next }
+            if (!done) { print "    psk=\"" new_psk "\""; changed = 1; done = 1; next }
             print; next
         }
         /^[[:space:]]*#/ { print; next }
