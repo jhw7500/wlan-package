@@ -305,9 +305,12 @@ update_json_radio() {
 usage() {
     echo "Usage: wifi {0|1|2|mlan0|mlan1|eth0} {start|up|stop|down|restart|status} : runtime"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} info : show current configuration and status"
-    echo "       wifi {0|1|2|mlan0|mlan1|eth0} ip {address/netmask} : persist"
-    echo "       wifi ip apply : runtime (systemctl restart systemd-networkd — 전체 networkd 관리 인터페이스 일시 중단; 실패 시 exit 1)"
-    echo "       wifi {0|1|2|mlan0|mlan1|eth0} gt {address} : persist"
+    echo "       wifi {0|1|2|mlan0|mlan1|eth0} ip {address/netmask|0} : persist (0=Address 삭제, netmask 생략 시 /24)"
+    echo "       wifi net apply [iface] : runtime — .network 반영. iface 지정 시 해당 링크만 reconfigure(나머지 안 끊김); systemd<244면 전체 재시작 폴백"
+    echo "       wifi net restart : runtime (systemctl restart systemd-networkd — 전체 networkd 관리 인터페이스 일시 중단; 실패 시 exit 1)"
+    echo "       wifi net status [iface] : persist(.network) vs runtime 주소/게이트웨이 대조 (읽기 전용)"
+    echo "       wifi ip apply : deprecated → wifi net restart 와 동일 (별칭 유지)"
+    echo "       wifi {0|1|2|mlan0|mlan1|eth0} gt {address|0} : persist (0=Gateway 삭제, netmask 없는 순수 주소)"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} mac {0|1|base|target} {mac_address} : persist"
     echo "       wifi {0|1|mlan0|mlan1} br {up|down|start|stop|restart} : runtime"
     echo "       wifi {0|1|mlan0|mlan1} br status : peer_route/hairpin/브릿지 설정·런타임·정합성 진단 (읽기 전용)"
@@ -322,7 +325,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} log reset : iface 로그 truncate (scan/stat/wpa/mgmt/ping + rsyslog HUP)"
     echo "       wifi {0|1|mlan0|mlan1} ssid {id} : persist"
     echo "       wifi {0|1|mlan0|mlan1} psk {password} : persist"
-    echo "       wifi {0|1|mlan0|mlan1} key {0|1|NONE|WPA-PSK|*} : persist"
+    echo "       wifi {0|1|mlan0|mlan1} key {0|1|NONE|WPA-PSK|SAE|OWE|FT-PSK|WPA-EAP|...} : persist (wpa_supplicant 인식 토큰만; 공백구분 다중 지정 가능)"
     echo "       wifi {0|1|mlan0|mlan1} freq {freq_list|channel_list} : persist"
     echo "       wifi {0|1|mlan0|mlan1} connect [ssid] [freq_list|channel_list] : ssid+scan_freq+freq_list 변경 후 reconfigure 적용(재연결); 인자 없으면 현재 설정으로 재연결(reassociate)"
     echo "       wifi {0|1|mlan0|mlan1} scan {freq_list|channel_list|2G|5G} : runtime"
@@ -347,6 +350,110 @@ usage() {
     echo "       wifi log reset : 전체 로그 초기화(전역+모든 iface truncate + rsyslog HUP)"
     echo "       wifi backup : 로그·설정 백업(/var/log/cantops/backup)"
     exit 1
+}
+
+# === 입력 검증 헬퍼 ===
+# persist 계열 커맨드가 오타/범위오류 값을 conf에 그대로 쓰는 것을 막는 공용 어휘.
+# 새 가드는 정규식을 재정의하지 말고 여기를 호출한다. 반환 0=유효.
+
+# wpa_supplicant는 SSID/passphrase를 바이트 길이로 검사한다(os_strlen).
+# ${#var}는 UTF-8 로케일에서 문자 수를 세어 바이트 수와 어긋나므로(한글 1자=3바이트)
+# LC_ALL=C로 고정해 바이트로 센다. ssh가 LANG을 forward하면 같은 명령이 로케일에
+# 따라 다르게 동작하는 것을 막는다.
+byte_len() {
+    local LC_ALL=C
+    printf '%s' "${#1}"
+}
+
+is_valid_ipv4() {
+    local ip="$1" o
+    local -a octets
+    [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || return 1
+    IFS='.' read -r -a octets <<< "$ip"
+    for o in "${octets[@]}"; do
+        # leading zero(010.011.1.1)를 거부한다 — systemd는 inet_pton으로 파싱하고
+        # inet_pton은 leading zero octet을 거부하므로, 통과시키면 networkd가 그
+        # 줄을 조용히 버려서 가드가 막으려던 바로 그 상태가 된다.
+        [[ "$o" =~ ^(0|[1-9][0-9]{0,2})$ ]] || return 1
+        [ "$o" -le 255 ] || return 1
+    done
+    return 0
+}
+
+# A.B.C.D/0-32 형식. Address=는 prefix 필수(호출부에서 기본 /24를 붙인다).
+is_valid_ipv4_cidr() {
+    local v="$1" addr prefix
+    case "$v" in
+        */*/*) return 1 ;;
+        */*)   addr="${v%/*}"; prefix="${v#*/}" ;;
+        *)     return 1 ;;
+    esac
+    is_valid_ipv4 "$addr" || return 1
+    # prefix도 동일하게 leading zero 거부(/08) — 주소부와 규칙을 맞춘다.
+    [[ "$prefix" =~ ^(0|[1-9][0-9]?)$ ]] || return 1
+    [ "$prefix" -le 32 ] || return 1
+    return 0
+}
+
+is_valid_mac() {
+    [[ "$1" =~ ^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$ ]]
+}
+
+# iface 셀렉터(0|1|2|mlan0|mlan1|eth0) → 커널 iface 이름.
+# 최상단 $1 해석(17-26행)과 같은 매핑이지만, net 커맨드는 iface가 $3에 오므로
+# 위치에 묶이지 않은 해석기가 따로 필요하다. 알 수 없으면 출력 없이 rc=1.
+resolve_iface() {
+    case "$1" in
+        0|mlan0) echo mlan0 ;;
+        1|mlan1) echo mlan1 ;;
+        2|eth0)  echo eth0 ;;
+        *)       return 1 ;;
+    esac
+}
+
+# iface에 해당하는 .network 파일 경로. 같은 iface에 여러 개면 가장 최근(mtime) 것 —
+# ip/gt/net status가 같은 규약을 복제하고 있어 한 곳으로 모은다.
+# glob+루프를 쓰는 이유: `ls -ptr ... | grep -v '/$' | tail -1`은 glob 미매치 시
+# 빈 경로를 흘려 "not found: " 같은 메시지를 냈다. 없으면 출력 없이 rc=1.
+find_network_conf() {
+    local iface="$1" f newest=""
+    for f in /etc/systemd/network/*"$iface"*.network; do
+        [ -f "$f" ] || continue
+        if [ -z "$newest" ] || [ "$f" -nt "$newest" ]; then
+            newest="$f"
+        fi
+    done
+    [ -n "$newest" ] || return 1
+    echo "$newest"
+}
+
+# MHz 값이 9098이 지원하는 대역(2.4G/5G) 안에 있는지 검사.
+# to_freq_mhz는 1000 미만 정수를 무조건 5000+5*v로 매핑하므로(예: 200→6000,
+# 0→5000) 변환 후 이 검사가 없으면 존재하지 않는 채널이 conf에 박힌다.
+# 대역 범위만 보는 이유: 채널별 허용 여부는 regdomain이 결정하므로 여기서
+# 좁히면 정상 채널을 거부하게 된다.
+is_valid_wifi_freq() {
+    local f="$1"
+    [[ "$f" =~ ^[0-9]+$ ]] || return 1
+    (( f >= 2412 && f <= 2484 )) && return 0
+    (( f >= 5180 && f <= 5825 )) && return 0
+    return 1
+}
+
+# 채널/MHz 토큰 하나를 MHz로 정규화하며 검증. 유효하면 MHz를 stdout으로,
+# 아니면 메시지를 stderr로 내고 1을 반환(mscan:1746의 convert-then-recheck 규약).
+to_freq_mhz_checked() {
+    local arg="$1" f
+    f="$(to_freq_mhz "$arg")"
+    if ! [[ "$f" =~ ^[0-9]+$ ]]; then
+        echo "Error: invalid channel/freq '$arg'" >&2
+        return 1
+    fi
+    if ! is_valid_wifi_freq "$f"; then
+        echo "Error: channel/freq '$arg' resolves to ${f}MHz — outside 2.4G(2412-2484)/5G(5180-5825)" >&2
+        return 1
+    fi
+    echo "$f"
 }
 
 freq_to_channel() {
@@ -998,8 +1105,21 @@ case "$1" in
   cal)
     CAL_DATA_CFG=$2
     if [[ "$CAL_DATA_CFG" == *.conf ]]; then
+        # cp 실패를 무시하면 존재한 적 없는 파일 경로가 그대로 persist되어
+        # 다음 부팅에 드라이버가 없는 calibration 파일을 가리킨다.
+        if [ ! -f "$CAL_DATA_CFG" ]; then
+            echo "Error: cal conf not found: '$CAL_DATA_CFG'" >&2
+            exit 1
+        fi
         _cal_basename=$(basename "$CAL_DATA_CFG")
-        cp "$CAL_DATA_CFG" "/lib/firmware/cts/$_cal_basename"
+        # 이미 /lib/firmware/cts 안의 파일을 가리키면 cp가 "same file"로 1을 반환한다
+        # → -ef로 걸러내지 않으면 프리셋 없는 a0 칩 변종 파일을 제자리 지정하는
+        # 정상 워크플로우가 거부된다.
+        if [ ! "$CAL_DATA_CFG" -ef "/lib/firmware/cts/$_cal_basename" ] \
+            && ! cp "$CAL_DATA_CFG" "/lib/firmware/cts/$_cal_basename"; then
+            echo "Error: failed to stage '$CAL_DATA_CFG' into /lib/firmware/cts" >&2
+            exit 1
+        fi
         CAL_DATA_CFG="cts/$_cal_basename"
     elif [[ "$CAL_DATA_CFG" == "2" ]]; then
         CAL_DATA_CFG="cts/WlanCalData_ext_RD.conf"
@@ -1012,8 +1132,10 @@ case "$1" in
     fi
     echo "Updated:"
     echo "  CAL_DATA_CFG=$CAL_DATA_CFG"
-    update_json_global "CAL_DATA_CFG" "$CAL_DATA_CFG"
-    exit 1
+    # 종전엔 성공/실패 무관하게 exit 1이라 종료코드가 아무것도 구분하지 못했다 →
+    # update_json_global의 실제 결과를 전파한다.
+    update_json_global "CAL_DATA_CFG" "$CAL_DATA_CFG" || exit 1
+    exit 0
     ;;
   txpwr | txpwrlimit)
     if [ "$2" == "no" ] || [ "$2" == "0" ]; then
@@ -1025,21 +1147,32 @@ case "$1" in
     elif [ "$2" == "test" ] || [ "$2" == "3" ]; then
         TXPWRLIMIT_PATH="/lib/firmware/cts/txpwrlimit_cfg_9098_org.conf"
     elif [[ "$2" == *.conf ]]; then
+        # cp 실패를 무시하면 없는 파일을 가리키는 송신출력 정책이 persist된다.
+        if [ ! -f "$2" ]; then
+            echo "Error: txpwrlimit conf not found: '$2'" >&2
+            exit 1
+        fi
         _txpwr_basename=$(basename "$2")
-        cp "$2" "/lib/firmware/cts/$_txpwr_basename"
+        # 이미 /lib/firmware/cts 안의 파일이면 cp가 "same file"로 1을 반환 → -ef로 제외.
+        if [ ! "$2" -ef "/lib/firmware/cts/$_txpwr_basename" ] \
+            && ! cp "$2" "/lib/firmware/cts/$_txpwr_basename"; then
+            echo "Error: failed to stage '$2' into /lib/firmware/cts" >&2
+            exit 1
+        fi
         TXPWRLIMIT_PATH="/lib/firmware/cts/$_txpwr_basename"
     else
         usage
     fi
     echo "Updated:"
     echo "  TXPWRLIMIT_PATH=$TXPWRLIMIT_PATH"
-    update_json_global "TXPWRLIMIT_PATH" "$TXPWRLIMIT_PATH"
+    # 종전엔 성공/실패 무관하게 exit 1 → 실제 결과를 전파한다.
+    update_json_global "TXPWRLIMIT_PATH" "$TXPWRLIMIT_PATH" || exit 1
     # 새 정책의 .bak을 즉시 동기화하여 다음 부팅의 self-healing 사각지대 제거
     if [ -n "$TXPWRLIMIT_PATH" ] && [ -s "$TXPWRLIMIT_PATH" ]; then
         cp "$TXPWRLIMIT_PATH" "${TXPWRLIMIT_PATH}.bak" 2>/dev/null \
             && sync "${TXPWRLIMIT_PATH}.bak" 2>/dev/null || sync
     fi
-    exit 1
+    exit 0
     ;;
   ant)
     if [ "$2" == "internal" ] || [ "$2" == "0" ]; then
@@ -1059,7 +1192,7 @@ case "$1" in
     else
         usage
     fi
-    exit 1
+    exit 0
     ;;
   stand)
     if [[ "$2" == "4" ]] || [[ "$2" == "n" ]] || [[ "$2" == "N" ]] || [[ "$2" == "ht" ]] || [[ "$2" == "HT" ]]; then
@@ -1072,13 +1205,110 @@ case "$1" in
         usage
     fi
 
-    update_json_global "STANDARD" "$VAL"
+    # 종전엔 성공/실패 무관하게 exit 1 → 실제 결과를 전파한다.
+    update_json_global "STANDARD" "$VAL" || exit 1
     echo "STANDARD updated to $VAL in $WIFI_INIT_CONF_JSON"
-    exit 1
+    exit 0
+    ;;
+  net)
+    # 'ip'가 전역(ip apply)과 per-iface(ip <addr>)로 중복돼 'wifi 0 ip apply'가
+    # 주소 슬롯으로 떨어지던 문제를 네임스페이스 분리로 해소한다.
+    case "${2:-}" in
+      apply)
+        # 지정 iface만 반영 — networkctl reload로 .network를 다시 읽고 해당 링크만
+        # reconfigure한다. 전체 재시작(net restart)과 달리 다른 인터페이스가 끊기지
+        # 않는다(무선으로 붙어 작업 중일 때 스스로 끊기는 사고 방지).
+        NET_IFACE=""
+        if [ -n "${3:-}" ]; then
+            NET_IFACE=$(resolve_iface "$3") || {
+                echo "Error: unknown iface '$3' (0|1|2|mlan0|mlan1|eth0)" >&2
+                exit 1
+            }
+        fi
+        # networkctl reconfigure는 systemd v244+ — 구버전에서 무작정 부르면 실패하므로
+        # capability-gate 후 전체 재시작으로 폴백한다.
+        if command -v networkctl >/dev/null 2>&1 \
+            && networkctl --help 2>&1 | grep -q reconfigure; then
+            if ! networkctl reload; then
+                echo "Error: networkctl reload failed" >&2
+                exit 1
+            fi
+            if [ -n "$NET_IFACE" ]; then
+                if networkctl reconfigure "$NET_IFACE"; then
+                    echo "$NET_IFACE reconfigured (other interfaces untouched)"
+                    exit 0
+                fi
+                echo "Error: networkctl reconfigure $NET_IFACE failed" >&2
+                exit 1
+            fi
+            echo "networkd config reloaded (no iface given — use 'wifi net apply <iface>' to reconfigure a link)"
+            exit 0
+        fi
+        echo "Notice: networkctl reconfigure unavailable (systemd < 244) — falling back to full restart" >&2
+        echo "Notice: all networkd-managed interfaces will be briefly interrupted" >&2
+        if systemctl restart systemd-networkd; then
+            echo "systemd-networkd restarted"
+            exit 0
+        fi
+        echo "Error: systemd-networkd restart failed" >&2
+        exit 1
+        ;;
+      restart)
+        echo "Notice: all networkd-managed interfaces will be briefly interrupted" >&2
+        echo "restarting systemd-networkd to apply ip configuration..."
+        if systemctl restart systemd-networkd; then
+            echo "systemd-networkd restarted"
+            exit 0
+        fi
+        echo "Error: systemd-networkd restart failed" >&2
+        exit 1
+        ;;
+      status)
+        # persist(.network) vs runtime 대조 — 이 둘이 어긋나는 것이 ip/gt 오타의
+        # 증상이다(파일에는 써졌지만 networkd가 무효값이라 버린 상태).
+        NET_IFACE=""
+        if [ -n "${3:-}" ]; then
+            NET_IFACE=$(resolve_iface "$3") || {
+                echo "Error: unknown iface '$3' (0|1|2|mlan0|mlan1|eth0)" >&2
+                exit 1
+            }
+        fi
+        for _if in ${NET_IFACE:-mlan0 mlan1 eth0}; do
+            _nconf=$(find_network_conf "$_if") || _nconf=""
+            _p_addr=""; _p_gw=""
+            if [ -n "$_nconf" ]; then
+                _p_addr=$(grep -oP '(?<=^Address=).*' "$_nconf" 2>/dev/null | head -1)
+                _p_gw=$(grep -oP '(?<=^Gateway=).*' "$_nconf" 2>/dev/null | head -1)
+            fi
+            _r_addr=$(ip -4 addr show "$_if" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}/\d+' | head -1)
+            _r_gw=$(ip -4 route show default dev "$_if" 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="via") {print $(i+1); exit}}')
+            echo "$_if:"
+            printf "  %-8s persist=%-22s runtime=%s\n" "Address" "${_p_addr:--}" "${_r_addr:--}"
+            printf "  %-8s persist=%-22s runtime=%s\n" "Gateway" "${_p_gw:--}" "${_r_gw:--}"
+            if [ -n "$_p_addr" ] && ! is_valid_ipv4_cidr "$_p_addr"; then
+                echo "  WARN     persist된 Address '$_p_addr'는 유효하지 않음 — networkd가 이 줄을 버린다"
+            fi
+            if [ -n "$_p_gw" ] && ! is_valid_ipv4 "$_p_gw"; then
+                echo "  WARN     persist된 Gateway '$_p_gw'는 유효하지 않음 — networkd가 이 줄을 버린다"
+            fi
+        done
+        exit 0
+        ;;
+      *)
+        echo "Usage: wifi net apply [iface] : .network 반영 — iface 지정 시 해당 링크만 (systemd<244면 전체 재시작 폴백)" >&2
+        echo "       wifi net restart        : systemd-networkd 전체 재시작 (전체 networkd 관리 인터페이스 일시 중단)" >&2
+        echo "       wifi net status [iface] : persist(.network) vs runtime 주소/게이트웨이 대조" >&2
+        exit 1
+        ;;
+    esac
     ;;
   ip)
     # wifi N ip {addr}로 persist한 .network 설정을 실제 반영
     if [ "$2" = "apply" ]; then
+        # net 네임스페이스로 이관됨 — 기존 스크립트/손버릇이 깨지지 않도록 별칭 유지.
+        # 동작은 종전과 동일한 전체 재시작(= net restart)이다.
+        echo "Notice: 'wifi ip apply'는 deprecated — 'wifi net restart'(동일 동작) 또는" >&2
+        echo "        'wifi net apply <iface>'(해당 iface만 반영, 나머지 안 끊김)를 사용하세요." >&2
         echo "Notice: all networkd-managed interfaces will be briefly interrupted" >&2
         echo "restarting systemd-networkd to apply ip configuration..."
         if systemctl restart systemd-networkd; then
@@ -1279,10 +1509,13 @@ case "$2" in
             exit 1
         fi
         INTERVAL_SEC="$4"
-        if ! [[ "$INTERVAL_SEC" =~ ^[0-9]+$ ]]; then
-            echo "Error: interval must be a positive integer (seconds)"
+        # 0은 매 iteration마다 통계를 리셋시켜 stat.log가 영영 누적되지 않는다
+        # ("positive"라고 안내하면서 0을 통과시키던 버그). 10#은 08 같은 8진수 오인 방지.
+        if ! [[ "$INTERVAL_SEC" =~ ^[0-9]+$ ]] || [ "$((10#$INTERVAL_SEC))" -lt 1 ]; then
+            echo "Error: interval must be a positive integer (seconds)" >&2
             exit 1
         fi
+        INTERVAL_SEC=$((10#$INTERVAL_SEC))
         jq --argjson v "$INTERVAL_SEC" \
             --arg iface "$IFACE" \
             '.[$iface].logger.stat_reset_interval_sec = $v' \
@@ -1328,8 +1561,18 @@ case "$2" in
         echo "test txpwrlimit for $IFACE"
         CONF=/lib/firmware/cts/txpwrlimit_cfg_9098_org.conf; TXPWR_PERSIST="$CONF"
     elif [[ "$3" == *.conf ]]; then
+        # cp 실패를 무시하면 없는 파일을 가리키는 송신출력 정책이 persist된다.
+        if [ ! -f "$3" ]; then
+            echo "Error: txpwrlimit conf not found: '$3'" >&2
+            exit 1
+        fi
         _txpwr_basename=$(basename "$3")
-        cp "$3" "/lib/firmware/cts/$_txpwr_basename"
+        # 이미 /lib/firmware/cts 안의 파일이면 cp가 "same file"로 1을 반환 → -ef로 제외.
+        if [ ! "$3" -ef "/lib/firmware/cts/$_txpwr_basename" ] \
+            && ! cp "$3" "/lib/firmware/cts/$_txpwr_basename"; then
+            echo "Error: failed to stage '$3' into /lib/firmware/cts" >&2
+            exit 1
+        fi
         CONF="/lib/firmware/cts/$_txpwr_basename"; TXPWR_PERSIST="$CONF"
     else
         usage
@@ -1350,16 +1593,59 @@ case "$2" in
     fi
     ;;
   config)
-    echo "config $3 value set to $4 for $IFACE"
-    python3 /usr/local/logger/wifi_config.py $1 $3 $4
+    # 임의 moal 파라미터를 쓰는 탈출구라 키 allowlist는 두지 않는다(미지의 키는
+    # 드라이버 conf 파서가 조용히 무시하므로 부팅을 깨지 않는다). 형식 오타만 잡는다.
+    _CFG_KEY="${3:-}"; _CFG_VAL="${4:-}"
+    if [ -z "$_CFG_KEY" ] || [ -z "$_CFG_VAL" ]; then
+        echo "Usage: wifi <iface> config <key> <value>" >&2
+        exit 1
+    fi
+    if ! [[ "$_CFG_KEY" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+        echo "Error: invalid config key '$_CFG_KEY' (expected identifier: [a-zA-Z_][a-zA-Z0-9_]*)" >&2
+        exit 1
+    fi
+    # 값의 개행 거부 — wifi_config.py가 "{key}={val}\n"으로 그대로 삽입하므로,
+    # 값에 개행이 있으면 임의의 moal 파라미터 줄이 추가로 박힌다(아래 mfg_mode
+    # 차단을 값 쪽으로 우회하는 경로).
+    case "$_CFG_VAL" in
+        *[$'\n\r']*) echo "Error: config value에 개행 문자 불가" >&2; exit 1 ;;
+    esac
+    # mfg_mode는 fw_name과 반드시 짝을 맞춰야 한다. 단독으로 켜면 MFG 프로파일
+    # 가드(wifi_checker/services/apply_enabled/reboot_policy)가 정상 펌웨어 상태에서
+    # 발동해 STA가 조용히 죽는다 — 짝을 맞춰주는 전용 커맨드로 유도.
+    if [ "$_CFG_KEY" == "mfg_mode" ]; then
+        echo "Error: use 'wifi $1 mfg {on|off}' instead — setting mfg_mode alone desyncs fw_name" >&2
+        exit 1
+    fi
+    echo "config $_CFG_KEY value set to $_CFG_VAL for $IFACE"
+    python3 /usr/local/logger/wifi_config.py "$1" "$_CFG_KEY" "$_CFG_VAL"
     ;;
   mac)
     if [ "$3" == "base" ] || [ "$3" == "0" ]; then
+        # write_mac.sh:26도 같은 검사를 하지만, 오타는 여기서 먼저 잡아야
+        # 아래 성공 메시지가 거짓말을 하지 않는다.
+        if ! is_valid_mac "${4:-}"; then
+            echo "Error: invalid MAC address '${4:-}' (expected XX:XX:XX:XX:XX:XX)" >&2
+            exit 1
+        fi
+        # 성공 보고는 실제 기록 이후에 — write_mac.sh는 .link 기록 실패 등으로도
+        # 1을 반환하므로 그 결과를 삼키지 않는다.
+        if ! /usr/local/scripts/write_mac.sh "$IFACE" "$4"; then
+            echo "Error: write_mac.sh failed for $IFACE (base mac not written)" >&2
+            exit 1
+        fi
         echo "base mac set to $4 for $IFACE"
-        /usr/local/scripts/write_mac.sh $IFACE $4
     elif [ "$3" == "target" ] || [ "$3" == "1" ]; then
         if [ "$IFACE" == "eth0" ]; then
             echo "Error: eth0 does not support target mac"
+            exit 1
+        fi
+        # 이 경로는 무검증이었다: 빈 값은 spoof dynamic과 같은 상태를 만들고,
+        # 쓰레기 값은 wifi_mac_set.py(무검증)를 타고 wifi_mod_para__.conf의
+        # mac_addr= 로 흘러들어 드라이버 설정을 오염시킨다.
+        if ! is_valid_mac "${4:-}"; then
+            echo "Error: invalid MAC address '${4:-}' (expected XX:XX:XX:XX:XX:XX)" >&2
+            echo "       동적 spoofing으로 되돌리려면: wifi $1 spoof dynamic" >&2
             exit 1
         fi
         echo "target mac set to $4 for $IFACE"
@@ -1371,8 +1657,19 @@ case "$2" in
   cal)
     CAL_VAL="$3"
     if [[ "$CAL_VAL" == *.conf ]]; then
+        # cp 실패를 무시하면 존재한 적 없는 파일 경로가 그대로 persist되어
+        # 다음 부팅에 드라이버가 없는 calibration 파일을 가리킨다.
+        if [ ! -f "$CAL_VAL" ]; then
+            echo "Error: cal conf not found: '$CAL_VAL'" >&2
+            exit 1
+        fi
         _cal_basename=$(basename "$CAL_VAL")
-        cp "$CAL_VAL" "/lib/firmware/cts/$_cal_basename"
+        # 이미 /lib/firmware/cts 안의 파일이면 cp가 "same file"로 1을 반환 → -ef로 제외.
+        if [ ! "$CAL_VAL" -ef "/lib/firmware/cts/$_cal_basename" ] \
+            && ! cp "$CAL_VAL" "/lib/firmware/cts/$_cal_basename"; then
+            echo "Error: failed to stage '$CAL_VAL' into /lib/firmware/cts" >&2
+            exit 1
+        fi
         CAL_VAL="cts/$_cal_basename"
     elif [[ "$CAL_VAL" == "2" ]]; then
         CAL_VAL="cts/WlanCalData_ext_RD.conf"
@@ -1437,7 +1734,13 @@ case "$2" in
     CONF="/etc/wpa_supplicant/wpa_supplicant-${IFACE}.conf"
     if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
     FREQS=()
-    for arg in "$@"; do FREQS+=( "$(to_freq_mhz "$arg")" ); done
+    # to_freq_mhz는 비숫자 토큰을 그대로 되돌려주고 1000 미만 정수를 5000+5*v로
+    # 매핑한다 → 재검사가 없으면 freq_list=abc(파싱 실패로 주파수 핀 해제) 나
+    # freq_list=6000(존재하지 않는 채널)이 conf에 박힌 채 부팅을 넘긴다.
+    for arg in "$@"; do
+        _f="$(to_freq_mhz_checked "$arg")" || exit 1
+        FREQS+=( "$_f" )
+    done
     [ ${#FREQS[@]} -eq 0 ] && { echo "configure freq not exist" >&2; exit 1; }
     FREQ_STR="${FREQS[*]}"
     TMP_FILE="$(mktemp)"
@@ -1473,21 +1776,41 @@ case "$2" in
         exit 1
     fi
     NEW_SSID="$1"
+    # 빈 SSID는 ssid=""를 써 association이 영영 불가 / 개행·탭은 awk 멀티라인
+    # injection으로 conf에 임의 directive를 주입한다 — connect 경로와 동일 가드.
+    [ -z "$NEW_SSID" ] && { echo "Error: SSID must not be empty" >&2; exit 1; }
+    case "$NEW_SSID" in
+        *[$'\n\r\t']*) echo "Error: SSID에 개행/탭 문자 불가" >&2; exit 1 ;;
+    esac
+    # SSID는 802.11상 최대 32바이트. 넘으면 psk 길이초과와 동일하게 conf 전체
+    # 로드가 실패해 supplicant가 뜨지 않는다(바이트 기준 — 한글 SSID 11자면 33바이트).
+    _SSID_LEN=$(byte_len "$NEW_SSID")
+    if [ "$_SSID_LEN" -gt 32 ]; then
+        echo "Error: SSID must be 1-32 bytes (got $_SSID_LEN)" >&2
+        exit 1
+    fi
+    # busybox awk가 ENVIRON 미지원이면 SSID가 ""로 silent 손상(awk exit 0 → 성공 오인)
+    # → 적용 전 ENVIRON 지원을 사전 검증(connect 경로와 동일 규약).
+    SSID_ENVIRON_PROBE=ok awk 'BEGIN { exit(ENVIRON["SSID_ENVIRON_PROBE"] == "ok" ? 0 : 1) }' </dev/null \
+        || { echo "Error: awk lacks ENVIRON support — cannot apply ssid safely" >&2; exit 1; }
     TMP_FILE="$(mktemp)"
     # active ssid= → 치환 / #ssid=(주석)만 있으면 주석 해제 후 설정 / 둘 다 없으면 network 블록 끝에 append.
     # (블록 인지 방식은 connect 경로와 동일 — 주석처리된 설정도 확실히 반영. 블록당 done 1회.)
-    if awk -v new_ssid="$NEW_SSID" '
-        BEGIN { in_net = 0; changed = 0 }
+    # SSID는 ENVIRON으로 raw 전달(awk -v는 값의 \X를 C-escape로 해석해 손상) + esc()로
+    # wpa_supplicant conf 문법(C-style)에 맞춰 \와 "를 이스케이프 — connect 경로와 동일.
+    if WIFI_NEW_SSID="$NEW_SSID" awk '
+        function esc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return s }
+        BEGIN { in_net = 0; changed = 0; new_ssid = ENVIRON["WIFI_NEW_SSID"] }
         /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { in_net = 1; done = 0; print; next }
         in_net && /^[[:space:]]*\}/ {
-            if (!done) { print "    ssid=\"" new_ssid "\""; changed = 1; done = 1 }
+            if (!done) { print "    ssid=\"" esc(new_ssid) "\""; changed = 1; done = 1 }
             in_net = 0; print; next
         }
         in_net && /^[[:space:]]*ssid[[:space:]]*=/ {
-            if (!done) { print "    ssid=\"" new_ssid "\""; changed = 1; done = 1 } next
+            if (!done) { print "    ssid=\"" esc(new_ssid) "\""; changed = 1; done = 1 } next
         }
         in_net && /^[[:space:]]*#[[:space:]]*ssid[[:space:]]*=/ {
-            if (!done) { print "    ssid=\"" new_ssid "\""; changed = 1; done = 1; next }
+            if (!done) { print "    ssid=\"" esc(new_ssid) "\""; changed = 1; done = 1; next }
             print; next
         }
         /^[[:space:]]*#/ { print; next }
@@ -1506,21 +1829,41 @@ case "$2" in
     if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> psk <NEW_PSK>" >&2; exit 1; fi
     NEW_PSK="$1"
+    # wpa_supplicant는 따옴표 passphrase를 8..63자로 제한한다. 벗어나면 해당 network
+    # 블록만 버리는 게 아니라 conf 전체 로드에 실패해 supplicant가 아예 뜨지 않는다.
+    # (이 핸들러는 항상 psk="..."로 쓰므로 64자 hex PMK는 지원 대상이 아니다.)
+    # 길이는 바이트로 센다 — wpa_supplicant가 os_strlen(바이트)로 검사하므로
+    # ${#var}(UTF-8 로케일에서 문자 수)로 재면 한글 passphrase가 양방향으로 어긋난다.
+    _PSK_LEN=$(byte_len "$NEW_PSK")
+    if [ "$_PSK_LEN" -lt 8 ] || [ "$_PSK_LEN" -gt 63 ]; then
+        echo "Error: psk must be 8-63 bytes (got $_PSK_LEN)" >&2
+        exit 1
+    fi
+    # 개행·탭은 awk 멀티라인 injection으로 key_mgmt=NONE 같은 임의 directive를 주입한다.
+    case "$NEW_PSK" in
+        *[$'\n\r\t']*) echo "Error: psk에 개행/탭 문자 불가" >&2; exit 1 ;;
+    esac
+    # busybox awk가 ENVIRON 미지원이면 psk가 ""로 silent 손상 → 사전 검증(connect 규약).
+    PSK_ENVIRON_PROBE=ok awk 'BEGIN { exit(ENVIRON["PSK_ENVIRON_PROBE"] == "ok" ? 0 : 1) }' </dev/null \
+        || { echo "Error: awk lacks ENVIRON support — cannot apply psk safely" >&2; exit 1; }
     TMP_FILE="$(mktemp)"
     # active psk= → 치환 / #psk=(주석)만 있으면 주석 해제 후 설정 / 둘 다 없으면 network 블록 끝에 append.
     # (블록 인지 방식은 connect 경로와 동일 — 주석처리된 설정도 확실히 반영. 블록당 done 1회.)
-    if awk -v new_psk="$NEW_PSK" '
-        BEGIN { in_net = 0; changed = 0 }
+    # psk는 ENVIRON으로 raw 전달(awk -v는 값의 \X를 C-escape로 해석해 손상) + esc()로
+    # wpa_supplicant conf 문법(C-style)에 맞춰 \와 "를 이스케이프 — connect 경로와 동일.
+    if WIFI_NEW_PSK="$NEW_PSK" awk '
+        function esc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return s }
+        BEGIN { in_net = 0; changed = 0; new_psk = ENVIRON["WIFI_NEW_PSK"] }
         /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { in_net = 1; done = 0; print; next }
         in_net && /^[[:space:]]*\}/ {
-            if (!done) { print "    psk=\"" new_psk "\""; changed = 1; done = 1 }
+            if (!done) { print "    psk=\"" esc(new_psk) "\""; changed = 1; done = 1 }
             in_net = 0; print; next
         }
         in_net && /^[[:space:]]*psk[[:space:]]*=/ {
-            if (!done) { print "    psk=\"" new_psk "\""; changed = 1; done = 1 } next
+            if (!done) { print "    psk=\"" esc(new_psk) "\""; changed = 1; done = 1 } next
         }
         in_net && /^[[:space:]]*#[[:space:]]*psk[[:space:]]*=/ {
-            if (!done) { print "    psk=\"" new_psk "\""; changed = 1; done = 1; next }
+            if (!done) { print "    psk=\"" esc(new_psk) "\""; changed = 1; done = 1; next }
             print; next
         }
         /^[[:space:]]*#/ { print; next }
@@ -1541,6 +1884,28 @@ case "$2" in
     NEW_KEY="$1"
     [ "$NEW_KEY" = "0" ] && NEW_KEY="NONE"
     [ "$NEW_KEY" = "1" ] && NEW_KEY="WPA-PSK"
+    # 오타 검사 — wpa_supplicant는 미지의 key_mgmt 토큰을 만나면 그 줄만 버리는 게
+    # 아니라 conf 전체 파싱에 실패해 supplicant가 뜨지 않는다(WPA-PSK를 WPAPSK로
+    # 치는 오타가 대표적). key_mgmt는 공백구분 다중 지정이 유효하므로 토큰별로 검사.
+    # usage의 '*'는 임의 문자열이 아니라 아래 wpa_supplicant 인식 토큰 집합을 뜻한다.
+    # 개행 먼저 거부 — read -r -a는 here-string의 첫 줄만 읽으므로, 개행 뒤 토큰은
+    # allowlist를 통째로 우회하면서 awk는 여러 줄 전체를 conf에 써버린다(directive 주입).
+    case "$NEW_KEY" in
+        *[$'\n\r\t']*) echo "Error: key_mgmt에 개행/탭 문자 불가" >&2; exit 1 ;;
+    esac
+    read -r -a _KEY_TOKENS <<< "$NEW_KEY"
+    [ ${#_KEY_TOKENS[@]} -eq 0 ] && { echo "Error: key_mgmt must not be empty" >&2; exit 1; }
+    for _k in "${_KEY_TOKENS[@]}"; do
+        case "$_k" in
+            NONE|WPA-NONE|WPA-PSK|WPA-PSK-SHA256|WPA-EAP|WPA-EAP-SHA256|WPA-EAP-SUITE-B|WPA-EAP-SUITE-B-192) ;;
+            IEEE8021X|SAE|FT-PSK|FT-EAP|FT-EAP-SHA384|FT-SAE|OWE|DPP|OSEN) ;;
+            FILS-SHA256|FILS-SHA384|FT-FILS-SHA256|FT-FILS-SHA384) ;;
+            *)
+                echo "Error: invalid key_mgmt '$_k' (NONE|WPA-PSK|WPA-EAP|SAE|OWE|FT-PSK|FT-EAP|IEEE8021X|...)" >&2
+                exit 1
+                ;;
+        esac
+    done
     TMP_FILE="$(mktemp)"
     # active key_mgmt= → 치환 / #key_mgmt=(주석)만 있으면 주석 해제 후 설정 / 둘 다 없으면 network 블록 끝에 append.
     # (블록 인지 방식은 connect 경로와 동일 — 주석처리된 설정도 확실히 반영. 블록당 done 1회.)
@@ -1606,13 +1971,23 @@ case "$2" in
         case "$NEW_SSID" in
             *[$'\n\r\t']*) echo "Error: SSID에 개행/탭 문자 불가" >&2; exit 1 ;;
         esac
+        # ssid 명령과 동일한 32바이트 상한 — 넘으면 conf 전체 로드가 실패한다.
+        _SSID_LEN=$(byte_len "$NEW_SSID")
+        if [ "$_SSID_LEN" -gt 32 ]; then
+            echo "Error: SSID must be 1-32 bytes (got $_SSID_LEN)" >&2
+            exit 1
+        fi
         # busybox awk가 ENVIRON 미지원이면 SSID가 ""로 silent 손상(awk exit 0 → 성공 오인)
         # → SSID 적용 전 ENVIRON 지원을 사전 검증(opc_wlan_apply.sh와 동일 규약).
         CONNECT_ENVIRON_PROBE=ok awk 'BEGIN { exit(ENVIRON["CONNECT_ENVIRON_PROBE"] == "ok" ? 0 : 1) }' </dev/null \
             || { echo "Error: awk lacks ENVIRON support — cannot apply ssid safely" >&2; exit 1; }
         # freq 인자는 freq 명령과 동일하게 채널/MHz 모두 허용(to_freq_mhz로 MHz 정규화)
+        # + 동일한 재검사 — SSID는 이 아래에서 두텁게 가드되는데 freq만 무검증이었다.
         FREQS=()
-        for arg in "$@"; do FREQS+=( "$(to_freq_mhz "$arg")" ); done
+        for arg in "$@"; do
+            _f="$(to_freq_mhz_checked "$arg")" || exit 1
+            FREQS+=( "$_f" )
+        done
         SET_FREQ=0
         FREQ_STR=""
         if [ ${#FREQS[@]} -gt 0 ]; then SET_FREQ=1; FREQ_STR="${FREQS[*]}"; fi
@@ -1714,7 +2089,11 @@ case "$2" in
         [ -n "$(band_freqs "$arg")" ] && { echo "Error: 2G/5G must be used alone (no other channel/freq args)" >&2; exit 1; }
     done
     FREQS=()
-    for arg in "$@"; do FREQS+=( "$(to_freq_mhz "$arg")" ); done
+    # persist 경로는 아니지만 동일한 재검사 — 오타는 iw에 넘기기 전에 잡는다.
+    for arg in "$@"; do
+        _f="$(to_freq_mhz_checked "$arg")" || exit 1
+        FREQS+=( "$_f" )
+    done
     [ ${#FREQS[@]} -eq 0 ] && { echo "configure freq not exist" >&2; exit 1; }
     FREQ_STR="${FREQS[*]}"
     echo "scanning freq_list $FREQ_STR for $IFACE"
@@ -2284,8 +2663,8 @@ case "$2" in
   ip)
     set -euo pipefail
     shift 2
-    CONF=$(ls -ptr /etc/systemd/network/*${IFACE}*.network | grep -v '/$'| tail -1 | tr -d '\r\n')
-    if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
+    CONF=$(find_network_conf "$IFACE") \
+        || { echo "not found: no .network for $IFACE in /etc/systemd/network" >&2; exit 1; }
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> ip <address/netmask>" >&2; exit 1; fi
     NEW_IP="$1"
     TMP_FILE="$(mktemp)"
@@ -2303,6 +2682,19 @@ case "$2" in
             echo "Address removed from $CONF"
         else echo "no Address= line found in $CONF" >&2; exit 1; fi
     else
+        # 오타/범위 검사 — 여기가 없으면 'apply' 같은 서브커맨드 워드가 그대로
+        # Address=apply/24 로 persist되고(아래 /24 기본값이 오타를 삼킨다),
+        # systemd-networkd가 그 줄만 버려서 다음 부팅에 정적 IP가 사라진다.
+        # /24를 붙이기 전에 검사해야 오류 메시지에 사용자가 친 값이 그대로 나온다.
+        if ! is_valid_ipv4 "$NEW_IP" && ! is_valid_ipv4_cidr "$NEW_IP"; then
+            echo "Error: invalid IP address '$NEW_IP' (expected A.B.C.D or A.B.C.D/0-32)" >&2
+            # 'wifi <iface> ip apply'는 iface 인자 탓에 전역 apply arm에 닿지 못하고
+            # 여기로 떨어진다 — 흔한 오타라 올바른 형태를 짚어준다.
+            if [ "$NEW_IP" = "apply" ]; then
+                echo "       설정을 반영하려면 iface 없이: wifi ip apply" >&2
+            fi
+            exit 1
+        fi
         # subnet mask가 없으면 /24 기본 적용
         if [[ "$NEW_IP" != */* ]]; then
             NEW_IP="${NEW_IP}/24"
@@ -2335,12 +2727,36 @@ case "$2" in
   gt)
     set -euo pipefail
     shift 2
-    CONF=$(ls -ptr /etc/systemd/network/*${IFACE}*.network | grep -v '/$'| tail -1 | tr -d '\r\n')
-    if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
+    CONF=$(find_network_conf "$IFACE") \
+        || { echo "not found: no .network for $IFACE in /etc/systemd/network" >&2; exit 1; }
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> gt <address>" >&2; exit 1; fi
     NEW_GT="$1"
     TMP_FILE="$(mktemp)"
     trap 'rm -f "$TMP_FILE"; sync 2>/dev/null || true' EXIT
+    if [ "$NEW_GT" = "0" ]; then
+        # Gateway 줄 삭제 — sibling인 `ip 0`(Address 삭제)과 대칭.
+        if awk '
+            BEGIN { found = 0 }
+            /^[[:space:]]*#/ { print; next }
+            /^[[:space:]]*Gateway[[:space:]]*=/ { found = 1; next }
+            { print }
+            END { if (!found) exit 1 }
+        ' "$CONF" > "$TMP_FILE"; then
+            safe_install_0644_sync "$TMP_FILE" "$CONF"
+            echo "Gateway removed from $CONF"
+            exit 0
+        else echo "no Gateway= line found in $CONF" >&2; exit 1; fi
+    fi
+    # 오타/범위 검사 — Gateway=는 prefix 없는 순수 주소. 이 가드가 없으면 임의
+    # 문자열이 기존의 유효한 Gateway= 줄을 덮어써 기본 경로가 조용히 사라진다.
+    # ip 커맨드가 {address/netmask}를 받는 탓에 /24를 딸려 치는 오타가 흔해 별도 안내.
+    case "$NEW_GT" in
+        */*) echo "Error: gateway must not carry a prefix — use '${NEW_GT%%/*}' (wifi <iface> gt <address>)" >&2; exit 1 ;;
+    esac
+    if ! is_valid_ipv4 "$NEW_GT"; then
+        echo "Error: invalid gateway address '$NEW_GT' (expected A.B.C.D, or 0 to remove)" >&2
+        exit 1
+    fi
     awk -v new_gt="$NEW_GT" '
         BEGIN { in_net = 0; done = 0 }
         /^[[:space:]]*#/ { print; next }
