@@ -845,6 +845,7 @@ _bridge_status() {
     printf "  %-24s %s\n" "ip_discovery:"       "$ip_disc"
     printf "  %-24s %s\n" "arp_ignore_always:"  "$aia (json=$aia_raw)"
     printf "  %-24s %s\n" "moal.local_hairpin:" "${lhp_raw:-<empty>=driver default 0}"
+    printf "  %-24s %s\n" "eth_fallback:"       "$([ "$have_jq" = "1" ] && jq -r '.wbridge.eth_fallback.enabled // false' "$J" || echo "?")"
     printf "  %-24s %s\n" "eth_sweep_subnet:"   "${sweep:-<empty>}"
     printf "  %-24s %s\n" "eth_client_ip:"      "${client_ip:-<empty>}"
     echo ""
@@ -874,6 +875,7 @@ _bridge_status() {
     printf "  %-24s %s\n" "table 100 routes:"   "${t100_cnt:-0}"
     printf "  %-24s %s\n" "local_hairpin(rt):"  "$lhp_rt"
     printf "  %-24s %s\n" "hairpin counters:"   "$hp_stats"
+    printf "  %-24s %s\n" "fallback route(m200):" "$(ip route show dev "$eth" 2>/dev/null | grep -q "metric 200" && echo present || echo absent)"
     echo ""
 
     # 토폴로지 추정 (참고용 — 판정 표시에만 쓰고 어떤 동작도 바꾸지 않음)
