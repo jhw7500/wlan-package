@@ -878,22 +878,56 @@ _bridge_status() {
     printf "  %-24s %s\n" "fallback route(m200):" "$(ip route show dev "$eth" 2>/dev/null | grep -q "metric 200" && echo present || echo absent)"
     echo ""
 
-    # 토폴로지 추정 (참고용 — 판정 표시에만 쓰고 어떤 동작도 바꾸지 않음)
-    if [ -n "$mlan_inet" ]; then topo="mlan0-IP (est: $iface has inet)"; else topo="eth0-IP (est: $iface no inet)"; fi
-    printf "  %-24s %s\n" "topology (estimated):" "$topo"
+    # 토폴로지 판정 — JSON 의도 우선. IP 배치만으로는 [mlan0-IP + eth0 관리IP]와
+    # [eth0-IP + mlan0 관리IP(타서브넷)]가 대칭이라 원리적으로 구분 불가하므로
+    # (docs/bridge-eth0-ip-topology.md §1: eth0-IP 토폴로지의 mlan0 = "무IP 또는
+    # 타서브넷 IP"), 토폴로지 전용 옵트인 키를 확정 신호로 쓴다:
+    #   mlan0-IP 계열 전용 = hairpin / eth_fallback / peer_route,
+    #   eth0-IP 전용 = arp_ignore_always.
+    # topo_det("mlan0-IP"|"eth0-IP"|"")는 아래 Consistency 규칙의 게이트 —
+    # 구버전은 "mlan0 inet 존재"만으로 판정해 관리IP 변형에서 WARN 오탐을 냈다.
+    local warn=0 hp_on=0 lhp_exp ef_json ef_rt topo_det="" eth_inet
+    ef_json=$([ "$have_jq" = "1" ] && jq -r '.wbridge.eth_fallback.enabled // false' "$J" || echo "?")
+    eth_inet=$(ip -4 addr show "$eth" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}/\d+' | grep -v '/32$' | head -1)
+    if [ "$lhp_raw" = "1" ] || [ "$ef_json" = "true" ] || [ "$pr" = "true" ]; then
+        topo_det="mlan0-IP"; topo="mlan0-IP (json: hairpin/eth_fallback/peer_route)"
+    elif [ "$aia" = "true" ]; then
+        topo_det="eth0-IP"; topo="eth0-IP (json: arp_ignore_always)"
+    elif [ -n "$mlan_inet" ] && [ -z "$eth_inet" ]; then
+        topo_det="mlan0-IP"; topo="mlan0-IP (est: $iface has inet, $eth none)"
+    elif [ -z "$mlan_inet" ] && [ -n "$eth_inet" ]; then
+        topo_det="eth0-IP"; topo="eth0-IP (est: $eth has inet, $iface none)"
+    elif [ -n "$mlan_inet" ]; then
+        topo="ambiguous (both $iface/$eth have inet, no json signal)"
+    else
+        topo="unknown (no inet on $iface/$eth)"
+    fi
+    printf "  %-24s %s\n" "topology:" "$topo"
     echo ""
 
     # --- Consistency (진단만; 사람이 판단. 자동 교정 없음) ---
     echo "[Consistency]"
-    local warn=0 hp_on=0 lhp_exp ef_json ef_rt
-    # eth_fallback(B-2) 상태 — 아래 규칙 다수가 참조 (/32 소유 판정 포함)
-    ef_json=$([ "$have_jq" = "1" ] && jq -r '.wbridge.eth_fallback.enabled // false' "$J" || echo "?")
+    # eth_fallback 런타임 상태 — /32 소유 판정 등이 참조 (ef_json은 토폴로지 판정에서 확보)
     ef_rt=$(ip route show dev "$eth" 2>/dev/null | grep -c "metric 200")
     # hairpin 실효값: runtime param 기준 (JSON은 부팅 시 전달 여부일 뿐)
     [ "$lhp_rt" = "1" ] && hp_on=1
-    if [ "$aia" = "true" ] && [ "$pr" = "false" ] && [ -n "$mlan_inet" ]; then
+    if [ "$topo_det" = "mlan0-IP" ] && [ "$aia" = "true" ] && [ "$pr" = "false" ] && [ -n "$mlan_inet" ]; then
         echo "  [WARN] arp_ignore_always=on + peer_route=off on mlan0-IP -> wired->BD ARP UNANSWERED."
         echo "         Fix: wifi {0|1} br profile {hairpin|peer-route} apply"
+        warn=1
+    fi
+    # 동일 서브넷 병존 — 어느 토폴로지에서도 비정상 (라우팅 모호·weak-host 재개방).
+    # 관리 IP 병존은 반드시 타서브넷이어야 함 (docs/bridge-eth0-ip-topology.md §1).
+    if [ -n "$mlan_inet" ] && [ -n "$eth_inet" ] && command -v python3 >/dev/null 2>&1; then
+        if [ "$(python3 -c "import ipaddress,sys; print(int(ipaddress.ip_interface(sys.argv[1]).network==ipaddress.ip_interface(sys.argv[2]).network))" "$mlan_inet" "$eth_inet" 2>/dev/null)" = "1" ]; then
+            echo "  [WARN] $iface($mlan_inet) / $eth($eth_inet) 동일 서브넷 병존 -> 어느 토폴로지에서도 비정상 (라우팅 모호). 관리 IP는 타서브넷으로."
+            warn=1
+        fi
+    fi
+    # eth0-IP 의도인데 eth0 무IP — 유선측 BD 접근 IP 부재 (IP 이설 미완 상태)
+    if [ "$topo_det" = "eth0-IP" ] && [ -z "$eth_inet" ]; then
+        echo "  [WARN] eth0-IP intent (arp_ignore_always=on) but $eth has no inet -> 유선측 BD 접근 IP 부재."
+        echo "         Fix: $eth 에 공유 서브넷 IP 부여 (IP 이설 미완 상태)"
         warn=1
     fi
     if [ "$pr" = "true" ] && [ "$ip_disc" != "true" ]; then
@@ -916,7 +950,7 @@ _bridge_status() {
         echo "         Fix: $iface 에 공유 서브넷 IP 부여 (wifi $iface ip <addr/mask>)"
         warn=1
     fi
-    if [ "$pr" = "false" ] && [ "$ip_disc" != "true" ] && [ "$hp_on" = "0" ] && [ -n "$mlan_inet" ]; then
+    if [ "$topo_det" = "mlan0-IP" ] && [ "$pr" = "false" ] && [ "$ip_disc" != "true" ] && [ "$hp_on" = "0" ] && [ -n "$mlan_inet" ]; then
         echo "  [WARN] peer_route=off + ip_discovery=off + hairpin off on mlan0-IP -> BD<->wired peer IP 통신 경로 없음."
         echo "         Fix: wifi {0|1} br profile {hairpin|peer-route} apply"
         warn=1
@@ -938,7 +972,7 @@ _bridge_status() {
             fi
         fi
     fi
-    if [ "$pr" = "false" ] && [ -n "$mlan_inet" ] && [ "$rpf_eth" = "1" ]; then
+    if [ "$topo_det" = "mlan0-IP" ] && [ "$pr" = "false" ] && [ -n "$mlan_inet" ] && [ "$rpf_eth" = "1" ]; then
         echo "  [WARN] $eth rp_filter=1(strict) + peer_route=off -> wired->BD($iface IP행) inbound martian drop 위험."
         echo "         Fix: sysctl net.ipv4.conf.$eth.rp_filter=2"
         warn=1
