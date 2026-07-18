@@ -12,13 +12,12 @@ from typing import Any, Dict
 from datetime import datetime
 from collections import deque
 from sUTILS import Logger, _EXTRA_
-from roam_notify import notify_roam, get_associated_bssid
+from roam_notify import notify_roam, get_associated_bssid, confirm_roam
 
 VERSION = "1.1"
 IFACE = "mlan0"
 LINK_LOG_FILE = f"/var/log/cantops/json/{IFACE}/link.json"
 SCAN_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/ap.log"
-FREQ_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/freq.log"
 WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
 ROAM_CONDITION_FLAG = "/tmp/roam_condition"
 LAST_SCAN_TIME_FILE = "/tmp/last_roam_scan_time"
@@ -949,10 +948,103 @@ def mlanutl_scan(ssids, freqs):
         return None
 
 
-def iw_scan(ssid, freqs):
-    if ssid and freqs:
-        cmd = ["iw", IFACE, "scan", "freq"] + freqs + ["ssid", ssid]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def iw_scan_to_ap_lines(ssids, freqs):
+    """로밍 판정 스캔: `iw scan`으로 실제 스캔(=wpa_supplicant BSS 테이블 충전)을 트리거하고,
+    후보를 `wpa_cli scan_results`(=그 테이블)에서 뽑아 get_latest_scan이 읽는 pipe 포맷
+    ap 라인으로 변환한다. 후보가 곧 테이블이라 이후 wpa_cli roam이 대상 BSS를 항상 찾는다
+    (mlanutl setuserscan은 테이블 미충전 → roam FAIL 근본원인이었다).
+    ssids: 단일 str 또는 리스트(directed probe). freqs: MHz 리스트. 실패/결과없음 → None."""
+    if isinstance(ssids, str):
+        ssid_list = [ssids] if ssids else []
+    else:
+        ssid_list = [s for s in (ssids or []) if s]
+
+    # 1) iw scan 트리거(동기, 테이블 충전). 다른 스캐너(logger 등)와 경합 시 -EBUSY 재시도.
+    cmd = ["iw", IFACE, "scan"]
+    if freqs:
+        cmd += ["freq"] + [str(f) for f in freqs]
+    # directed probe(allowed ssid) + 와일드카드("") probe. iw 문법은 `ssid <ssid>*` —
+    # ssid 키워드는 1회만 쓰고 값을 나열한다(키워드 반복은 iw 버전/드라이버에 따라 리터럴
+    # 소비/파싱 붕괴 위험). NXP mlan 등은 ssid 지정 시 와일드카드를 안 보내므로
+    # ""를 함께 넣어 beacon/broadcast 광범위 스캔을 보존한다(중복 제거).
+    cmd += ["ssid"] + list(dict.fromkeys(ssid_list + [""]))
+    scanned_ok = False
+    for attempt in range(3):
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        except subprocess.TimeoutExpired:
+            logger.message("err", f"[{IFACE}] iw scan timeout", _EXTRA_())
+            return None
+        except Exception as e:
+            logger.message("err", f"[{IFACE}] iw scan error: {e}", _EXTRA_())
+            return None
+        if r.returncode == 0:
+            scanned_ok = True
+            break
+        # -EBUSY(다른 스캔 진행 중) → 잠깐 후 재시도. 그 외는 중단.
+        if "busy" in (r.stderr or "").lower() and attempt < 2:
+            time.sleep(1)
+            continue
+        logger.message(
+            "warn",
+            f"[{IFACE}] iw scan rc={r.returncode}: {(r.stderr or '').strip()}",
+            _EXTRA_(),
+        )
+        break
+
+    # iw scan이 끝내 실패 → 스테일 테이블로 로밍 판단하지 않고 None 반환(호출측 backoff).
+    if not scanned_ok:
+        logger.message(
+            "err", f"[{IFACE}] iw scan failed (all attempts) — skip roam decision", _EXTRA_()
+        )
+        return None
+
+    # 2) wpa_supplicant가 스캔 결과를 흡수할 짧은 여유 후 scan_results(=BSS 테이블) 조회.
+    time.sleep(1)
+    try:
+        sr = subprocess.run(
+            ["wpa_cli", "-i", IFACE, "scan_results"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except Exception as e:
+        logger.message("err", f"[{IFACE}] scan_results read error: {e}", _EXTRA_())
+        return None
+    if sr.returncode != 0:
+        logger.message(
+            "err",
+            f"[{IFACE}] scan_results rc={sr.returncode}, stderr={(sr.stderr or '').strip()}",
+            _EXTRA_(),
+        )
+        return None
+
+    return scan_results_to_ap_lines(sr.stdout) or None
+
+
+def scan_results_to_ap_lines(scan_results_stdout):
+    """`wpa_cli scan_results`(탭 구분: bssid/freq/signal/flags/ssid, 첫 줄 헤더)를
+    get_latest_scan이 파싱하는 pipe 포맷(`NN|channel|rssi|ld|bssid|freq|ssid`, 7필드)으로
+    변환. 헤더/형식불량/BSSID아님/미지 freq는 skip. ld=0(LOAD는 channel_info 사용)."""
+    out = []
+    idx = 0
+    for line in (scan_results_stdout or "").splitlines():
+        parts = line.split("\t")
+        if len(parts) < 5:
+            continue
+        bssid = parts[0].strip().lower()
+        if not re.match(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$", bssid):
+            continue  # 헤더('bssid / frequency / ...') 등 skip
+        try:
+            freq = int(parts[1].strip())
+            rssi = int(float(parts[2].strip()))
+        except (ValueError, IndexError):
+            continue
+        ssid = parts[4].strip()
+        ch = freq_to_channel(freq)
+        if ch is None:
+            continue
+        out.append(f"{idx % 100:02d}|{ch}|{rssi}|0|{bssid}|{freq}|{ssid}")
+        idx += 1
+    return out
 
 
 # ==============================================================================
@@ -1472,12 +1564,17 @@ def roam_to_bssid(from_bssid, to_bssid, channel=None, freq=None, rssi=None):
     """
     Ping-pong 확인 후 로밍 실행 (channel/freq/rssi=대상 AP 스캔 권위값)
 
+    성공 판정은 `wpa_cli roam`의 종료코드가 아니라 (1) 응답 텍스트가 "OK"(명령 수락)이고
+    (2) 이후 wpa_cli status 폴링으로 wpa_state=COMPLETED@target(재결합 완료)이 확인될 때만
+    성공으로 본다. wpa_cli는 supplicant가 "FAIL"을 응답해도 exit 0을 주므로(_wpa_ctrl_command),
+    returncode==0 판정은 실패를 성공으로 오인하고 add_roam/notify_roam까지 잘못 수행한다.
+
     Args:
         from_bssid: 현재 연결된 BSSID
         to_bssid: 로밍할 BSSID
 
     Returns:
-        bool: 로밍 성공 여부
+        bool: 로밍 성공(재결합 확인) 여부
     """
     # Ping-pong 확인
     if ENABLE_PING_PONG_PREVENTION and ping_pong_preventer:
@@ -1498,31 +1595,46 @@ def roam_to_bssid(from_bssid, to_bssid, channel=None, freq=None, rssi=None):
             text=True,
             timeout=10,
         )
-
-        if result.returncode == 0:
-            if ENABLE_PING_PONG_PREVENTION and ping_pong_preventer:
-                ping_pong_preventer.add_roam(from_bssid, to_bssid)
-
-            logger.message("info", f"[{IFACE}] Roam successful: {to_bssid}", _EXTRA_())
-
-            optimize_post_roam_connectivity(IFACE)
-
-            notify_roam(IFACE, from_bssid, to_bssid,
-                        channel=channel, freq=freq, rssi=rssi)
-
-            return True
-        else:
-            logger.message(
-                "err", f"[{IFACE}] Roam failed: {result.stderr.strip()}", _EXTRA_()
-            )
-            return False
-
     except subprocess.TimeoutExpired:
         logger.message("err", f"[{IFACE}] Roam timeout: {to_bssid}", _EXTRA_())
         return False
     except Exception as e:
         logger.message("err", f"[{IFACE}] Roam error: {e}", _EXTRA_())
         return False
+
+    # 1차 게이트: wpa_cli는 "FAIL" 응답에도 exit 0을 주므로 returncode가 아니라 응답
+    # 텍스트로 '명령 수락(OK)' 여부를 판정한다. FAIL/FAIL-BUSY면 즉시 실패로 본다.
+    reply = (result.stdout or "").strip()
+    if result.returncode != 0 or reply.split("\n", 1)[0].strip() != "OK":
+        detail = reply or (result.stderr or "").strip() or f"rc={result.returncode}"
+        logger.message(
+            "err", f"[{IFACE}] Roam rejected by supplicant: {detail}", _EXTRA_()
+        )
+        return False
+
+    # 2차 게이트(권위): "OK"는 명령 수락일 뿐 재결합 완료가 아니다. wpa_cli status를
+    # 폴링해 wpa_state=COMPLETED 이고 결합 BSS가 목표와 일치할 때만 성공으로 확정한다.
+    if not confirm_roam(IFACE, to_bssid):
+        logger.message(
+            "err",
+            f"[{IFACE}] Roam not confirmed (BSS != target): {to_bssid}",
+            _EXTRA_(),
+        )
+        return False
+
+    # 재결합이 확인된 경우에만 카운터/통지/최적화 수행 — 가짜 성공에 의한
+    # ping-pong 카운터 오염과 opcd 오통지를 제거한다.
+    if ENABLE_PING_PONG_PREVENTION and ping_pong_preventer:
+        ping_pong_preventer.add_roam(from_bssid, to_bssid)
+
+    logger.message("info", f"[{IFACE}] Roam successful (confirmed): {to_bssid}", _EXTRA_())
+
+    optimize_post_roam_connectivity(IFACE)
+
+    notify_roam(IFACE, from_bssid, to_bssid,
+                channel=channel, freq=freq, rssi=rssi)
+
+    return True
 
 
 def connect_to_ssid(iface, to_ssid, from_bssid, to_bssid):
@@ -1934,23 +2046,27 @@ def main():
         else:
             interval = CHECK_INTERVAL
 
-        # 주변 AP 스캔
+        # 주변 AP 스캔 — iw scan(테이블 충전) + wpa_cli scan_results(=BSS 테이블) 후보.
+        # mlanutl setuserscan은 wpa_supplicant BSS 테이블을 채우지 않아 이후 wpa_cli roam이
+        # 대상 BSS를 못 찾고 FAIL했다(근본원인: 네이티브 bgscan 제거로 테이블이 자동 갱신되지
+        # 않는데 판정 스캔마저 테이블을 안 채움). iw scan은 테이블을 채우고, 후보를 테이블
+        # 그 자체(scan_results)에서 뽑으므로 roam 대상이 항상 테이블에 존재한다.
         if WPA_SSID and WPA_FREQ:
             # station["ssid"]는 get_link_info_with_load가 link.json info.ssid(실제 연결 SSID)로 채움
             if not station.get("ssid"):
                 station["ssid"] = WPA_SSID
-            lines = mlanutl_scan(get_allowed_ssids(station.get("ssid")), WPA_FREQ)
+            ap_lines = iw_scan_to_ap_lines(get_allowed_ssids(station.get("ssid")), WPA_FREQ)
             try:
                 with open(LAST_SCAN_TIME_FILE, "w") as f:
                     f.write(str(time.time()))
             except Exception:
                 pass
 
-            if lines:
-                ap_lines = extract_ap_table(lines)
-                chan_lines = extract_channel_table(lines)
+            if ap_lines:
                 save_with_timestamp(SCAN_LOG_FILE, ap_lines)
-                save_with_timestamp(FREQ_LOG_FILE, chan_lines)
+                # freq.log(채널 load)는 mlanutl 전용 출력이라 미생산. 로밍 LOAD 데이터는
+                # link.json channel_info에서 오므로 판정 영향 없음(로그용 freq.log는
+                # wifi_logger_scan 데몬이 별도 생산).
             else:
                 backoff, no_candidate_streak, last_backoff_cap_ts = (
                     advance_no_candidate_backoff(
@@ -2220,7 +2336,6 @@ if __name__ == "__main__":
 
     LINK_LOG_FILE = f"/var/log/cantops/json/{IFACE}/link.json"
     SCAN_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/ap.log"
-    FREQ_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/freq.log"
     WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-{IFACE}.conf"
     # ROAM_HINT_FILE은 모듈 로드 시 기본 IFACE(mlan0)로 평가됨 → IFACE 갱신 직후 재대입해야
     # bgscan이 touch하는 /tmp/wifi_roam_hint_<iface> 와 경로가 일치(mlan1 불일치 방지).
