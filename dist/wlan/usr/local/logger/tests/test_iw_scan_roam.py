@@ -149,8 +149,10 @@ def test_iw_scan_directed_cmd_includes_freq_and_ssids(monkeypatch):
     c = captured["cmd"]
     assert c[:3] == ["iw", wifi_roam.IFACE, "scan"]
     assert "freq" in c and "5180" in c and "5200" in c
-    # directed(jhw_wlan_, extra1) + 와일드카드("") = 3개 ssid 토큰
-    assert c.count("ssid") == 3 and "jhw_wlan_" in c and "extra1" in c and "" in c
+    # iw 문법 `ssid <값>*`: ssid 키워드는 1회, 뒤에 값(jhw_wlan_, extra1, "") 나열
+    assert c.count("ssid") == 1
+    i = c.index("ssid")
+    assert c[i + 1:] == ["jhw_wlan_", "extra1", ""]
 
 
 def test_iw_scan_all_ebusy_returns_none(monkeypatch):

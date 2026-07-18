@@ -963,11 +963,11 @@ def iw_scan_to_ap_lines(ssids, freqs):
     cmd = ["iw", IFACE, "scan"]
     if freqs:
         cmd += ["freq"] + [str(f) for f in freqs]
-    # directed probe(allowed ssid) + 와일드카드("") probe. NXP mlan 등은 ssid 지정 시
-    # 와일드카드를 안 보내므로(construct_iw_scan_cmd와 동일 사유), ""를 함께 넣어
-    # beacon/broadcast 광범위 스캔을 보존한다(중복 제거).
-    for s in list(dict.fromkeys(ssid_list + [""])):
-        cmd += ["ssid", s]
+    # directed probe(allowed ssid) + 와일드카드("") probe. iw 문법은 `ssid <ssid>*` —
+    # ssid 키워드는 1회만 쓰고 값을 나열한다(키워드 반복은 iw 버전/드라이버에 따라 리터럴
+    # 소비/파싱 붕괴 위험). NXP mlan 등은 ssid 지정 시 와일드카드를 안 보내므로
+    # ""를 함께 넣어 beacon/broadcast 광범위 스캔을 보존한다(중복 제거).
+    cmd += ["ssid"] + list(dict.fromkeys(ssid_list + [""]))
     scanned_ok = False
     for attempt in range(3):
         try:
