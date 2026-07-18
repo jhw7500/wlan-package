@@ -149,4 +149,42 @@ def test_iw_scan_directed_cmd_includes_freq_and_ssids(monkeypatch):
     c = captured["cmd"]
     assert c[:3] == ["iw", wifi_roam.IFACE, "scan"]
     assert "freq" in c and "5180" in c and "5200" in c
-    assert c.count("ssid") == 2 and "jhw_wlan_" in c and "extra1" in c
+    # directed(jhw_wlan_, extra1) + 와일드카드("") = 3개 ssid 토큰
+    assert c.count("ssid") == 3 and "jhw_wlan_" in c and "extra1" in c and "" in c
+
+
+def test_iw_scan_all_ebusy_returns_none(monkeypatch):
+    """iw scan 3회 모두 -EBUSY → 스테일 테이블 폴백 대신 None(호출측 backoff)."""
+    monkeypatch.setattr(wifi_roam.time, "sleep", lambda *_: None)
+    calls = {"iw": 0, "sr": 0}
+
+    def side_effect(cmd, *a, **k):
+        if cmd[0] == "iw":
+            calls["iw"] += 1
+            return _Run(240, "", "command failed: Device or resource busy (-16)")
+        if "scan_results" in cmd:
+            calls["sr"] += 1
+            return _Run(0, SCAN_RESULTS)
+        return _Run(0, "")
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        out = iw_scan_to_ap_lines("jhw_wlan_", ["5180"])
+    assert out is None
+    assert calls["iw"] == 3      # 3회 재시도 모두 실패
+    assert calls["sr"] == 0      # 스캔 실패 → scan_results 조회조차 안 함
+
+
+def test_scan_results_nonzero_rc_returns_none(monkeypatch):
+    """iw scan 성공했으나 wpa_cli scan_results가 비정상 종료 → None."""
+    monkeypatch.setattr(wifi_roam.time, "sleep", lambda *_: None)
+
+    def side_effect(cmd, *a, **k):
+        if cmd[0] == "iw":
+            return _Run(0, "")
+        if "scan_results" in cmd:
+            return _Run(1, "", "some error")
+        return _Run(0, "")
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        out = iw_scan_to_ap_lines("jhw_wlan_", ["5180"])
+    assert out is None

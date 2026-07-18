@@ -3,9 +3,8 @@ import json
 import os
 import sys
 import subprocess
-import time
 
-from roam_notify import notify_roam, get_associated_bssid
+from roam_notify import notify_roam, get_associated_bssid, confirm_roam
 
 WIFI_IFACE = "mlan0"
 SCAN_LOG = f"/var/log/cantops/scan/{WIFI_IFACE}/ap.log"
@@ -145,27 +144,6 @@ def print_candidate_list(current_bssid, candidates):
         print("{:<3} {:>3} {:>4} {:>4} {:17} {:10} {} {}".format(
             i, ap["ch"], ap["ss"], ap["ld"], ap["bssid"], ap["cap"], ap["ssid"], tag
         ))
-
-
-CONFIRM_WAIT_S = 5.0  # roam 후 wpa_state=COMPLETED@target 확인 폴링 한도(초)
-
-
-def confirm_roam(interface, target_bssid, wait_s=CONFIRM_WAIT_S, poll_s=0.5):
-    """`wpa_cli roam`은 비동기라 명령 수락("OK")만으론 재결합 완료를 알 수 없다.
-    get_associated_bssid(wait_s=0.0)=단발 wpa_cli status 조회(COMPLETED 아니면 "")로
-    목표 BSSID 일치까지 폴링한다. roam 진행 전 첫 조회는 이전 AP(COMPLETED)일 수 있어
-    목표 일치 또는 타임아웃까지 반복한다. link.json(비동기 갱신)은 쓰지 않는다."""
-    target = (target_bssid or "").strip().lower()
-    if not target:
-        return False
-    deadline = time.monotonic() + max(0.0, float(wait_s))
-    while True:
-        assoc = (get_associated_bssid(interface, wait_s=0.0) or "").strip().lower()
-        if assoc == target:
-            return True
-        if time.monotonic() >= deadline:
-            return False
-        time.sleep(poll_s)
 
 
 def roam_to_ap(interface, ap, index_label=None, current_ssid=None):

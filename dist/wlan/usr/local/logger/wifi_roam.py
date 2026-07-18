@@ -12,13 +12,12 @@ from typing import Any, Dict
 from datetime import datetime
 from collections import deque
 from sUTILS import Logger, _EXTRA_
-from roam_notify import notify_roam, get_associated_bssid
+from roam_notify import notify_roam, get_associated_bssid, confirm_roam
 
 VERSION = "1.1"
 IFACE = "mlan0"
 LINK_LOG_FILE = f"/var/log/cantops/json/{IFACE}/link.json"
 SCAN_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/ap.log"
-FREQ_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/freq.log"
 WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
 ROAM_CONDITION_FLAG = "/tmp/roam_condition"
 LAST_SCAN_TIME_FILE = "/tmp/last_roam_scan_time"
@@ -964,8 +963,12 @@ def iw_scan_to_ap_lines(ssids, freqs):
     cmd = ["iw", IFACE, "scan"]
     if freqs:
         cmd += ["freq"] + [str(f) for f in freqs]
-    for s in ssid_list:
+    # directed probe(allowed ssid) + 와일드카드("") probe. NXP mlan 등은 ssid 지정 시
+    # 와일드카드를 안 보내므로(construct_iw_scan_cmd와 동일 사유), ""를 함께 넣어
+    # beacon/broadcast 광범위 스캔을 보존한다(중복 제거).
+    for s in list(dict.fromkeys(ssid_list + [""])):
         cmd += ["ssid", s]
+    scanned_ok = False
     for attempt in range(3):
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
@@ -976,8 +979,9 @@ def iw_scan_to_ap_lines(ssids, freqs):
             logger.message("err", f"[{IFACE}] iw scan error: {e}", _EXTRA_())
             return None
         if r.returncode == 0:
+            scanned_ok = True
             break
-        # -EBUSY(다른 스캔 진행 중) → 잠깐 후 재시도. 그 외는 중단(직전 테이블로 진행 시도).
+        # -EBUSY(다른 스캔 진행 중) → 잠깐 후 재시도. 그 외는 중단.
         if "busy" in (r.stderr or "").lower() and attempt < 2:
             time.sleep(1)
             continue
@@ -987,6 +991,13 @@ def iw_scan_to_ap_lines(ssids, freqs):
             _EXTRA_(),
         )
         break
+
+    # iw scan이 끝내 실패 → 스테일 테이블로 로밍 판단하지 않고 None 반환(호출측 backoff).
+    if not scanned_ok:
+        logger.message(
+            "err", f"[{IFACE}] iw scan failed (all attempts) — skip roam decision", _EXTRA_()
+        )
+        return None
 
     # 2) wpa_supplicant가 스캔 결과를 흡수할 짧은 여유 후 scan_results(=BSS 테이블) 조회.
     time.sleep(1)
@@ -999,7 +1010,11 @@ def iw_scan_to_ap_lines(ssids, freqs):
         logger.message("err", f"[{IFACE}] scan_results read error: {e}", _EXTRA_())
         return None
     if sr.returncode != 0:
-        logger.message("err", f"[{IFACE}] scan_results rc={sr.returncode}", _EXTRA_())
+        logger.message(
+            "err",
+            f"[{IFACE}] scan_results rc={sr.returncode}, stderr={(sr.stderr or '').strip()}",
+            _EXTRA_(),
+        )
         return None
 
     return scan_results_to_ap_lines(sr.stdout) or None
@@ -1545,28 +1560,6 @@ def optimize_post_roam_connectivity(iface):
 # ==============================================================================
 # 개선된 roam_to_bssid (Ping-pong 방지 포함)
 # ==============================================================================
-ROAM_CONFIRM_WAIT_S = 5.0  # roam 후 wpa_state=COMPLETED@target 확인 폴링 한도(초)
-
-
-def _confirm_roam(iface, target_bssid, wait_s=ROAM_CONFIRM_WAIT_S, poll_s=0.5):
-    """`wpa_cli roam`은 비동기라 명령 수락("OK")만으로는 재결합 완료를 알 수 없다.
-    wpa_cli status(권위)를 폴링해 wpa_state=COMPLETED 이고 결합 BSS가 목표와 일치할
-    때만 True. link.json은 비동기(~1s) 갱신이라 쓰지 않는다(select_network_for_ssid와 동일 원칙).
-    get_associated_bssid(wait_s=0.0)=단발 status 조회(COMPLETED 아니면 "")로 목표와 대조하며,
-    roam 진행 전 첫 조회는 이전 AP(COMPLETED)일 수 있어 목표 일치 또는 타임아웃까지 폴링한다."""
-    target = (target_bssid or "").strip().lower()
-    if not target:
-        return False
-    deadline = time.monotonic() + max(0.0, float(wait_s))
-    while True:
-        assoc = (get_associated_bssid(iface, wait_s=0.0) or "").strip().lower()
-        if assoc == target:
-            return True
-        if time.monotonic() >= deadline:
-            return False
-        time.sleep(poll_s)
-
-
 def roam_to_bssid(from_bssid, to_bssid, channel=None, freq=None, rssi=None):
     """
     Ping-pong 확인 후 로밍 실행 (channel/freq/rssi=대상 AP 스캔 권위값)
@@ -1621,11 +1614,10 @@ def roam_to_bssid(from_bssid, to_bssid, channel=None, freq=None, rssi=None):
 
     # 2차 게이트(권위): "OK"는 명령 수락일 뿐 재결합 완료가 아니다. wpa_cli status를
     # 폴링해 wpa_state=COMPLETED 이고 결합 BSS가 목표와 일치할 때만 성공으로 확정한다.
-    if not _confirm_roam(IFACE, to_bssid):
+    if not confirm_roam(IFACE, to_bssid):
         logger.message(
             "err",
-            f"[{IFACE}] Roam not confirmed within {ROAM_CONFIRM_WAIT_S}s "
-            f"(BSS != target): {to_bssid}",
+            f"[{IFACE}] Roam not confirmed (BSS != target): {to_bssid}",
             _EXTRA_(),
         )
         return False
@@ -2344,7 +2336,6 @@ if __name__ == "__main__":
 
     LINK_LOG_FILE = f"/var/log/cantops/json/{IFACE}/link.json"
     SCAN_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/ap.log"
-    FREQ_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/freq.log"
     WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-{IFACE}.conf"
     # ROAM_HINT_FILE은 모듈 로드 시 기본 IFACE(mlan0)로 평가됨 → IFACE 갱신 직후 재대입해야
     # bgscan이 touch하는 /tmp/wifi_roam_hint_<iface> 와 경로가 일치(mlan1 불일치 방지).
