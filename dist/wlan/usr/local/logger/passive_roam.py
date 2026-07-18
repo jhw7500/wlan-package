@@ -4,7 +4,7 @@ import os
 import sys
 import subprocess
 
-from roam_notify import notify_roam, get_associated_bssid
+from roam_notify import notify_roam, get_associated_bssid, confirm_roam
 
 WIFI_IFACE = "mlan0"
 SCAN_LOG = f"/var/log/cantops/scan/{WIFI_IFACE}/ap.log"
@@ -186,21 +186,29 @@ def roam_to_ap(interface, ap, index_label=None, current_ssid=None):
         stdout = result.stdout.strip() if result.stdout else ""
         stderr = result.stderr.strip() if result.stderr else ""
         print(f"\noutput: {stdout} {stderr}".rstrip())
-        # 한줄 요약 (wifi_periodic_roam.sh에서 grep "ROAM_RESULT"로 추출)
-        print(f"ROAM_RESULT: {bssid} ch:{ap['ch']} rssi:{ap['ss']} -> {stdout or stderr or 'unknown'}")
-        if result.returncode == 0:
-            # same-SSID(wpa_cli roam)는 bssid가 목표 BSS이고 스캔의 ch/rssi가 권위값이므로
-            # 함께 넘겨 정확히 발행한다. cross-SSID(wifi connect)는 펌웨어가 BSS를 자율
-            # 선택하므로 wpa_cli status(권위)로 실 결합 BSS를 조회해 넘긴다 — link.json은
+
+        if cross_ssid:
+            # cross-SSID(wifi connect 래퍼): 래퍼 exit code가 성공 계약. 펌웨어가 BSS를
+            # 자율 선택하므로 wpa_cli status(권위)로 실 결합 BSS를 조회해 통지 — link.json은
             # 비동기 갱신이라 직후엔 이전 AP가 남을 수 있다. 실패 시 "" → link.address
             # 폴백(종전 동작), 무회귀.
-            if cross_ssid:
-                notify_roam(interface, from_bssid,
-                            get_associated_bssid(interface))
-            else:
-                notify_roam(interface, from_bssid, bssid,
-                            channel=ap["ch"], rssi=ap["ss"])
-        return result.returncode
+            print(f"ROAM_RESULT: {bssid} ch:{ap['ch']} rssi:{ap['ss']} -> {stdout or stderr or 'unknown'}")
+            if result.returncode == 0:
+                notify_roam(interface, from_bssid, get_associated_bssid(interface))
+            return result.returncode
+
+        # same-SSID(wpa_cli roam): wpa_cli는 supplicant가 "FAIL"을 응답해도 exit 0을 주므로
+        # returncode가 아니라 응답 텍스트로 '수락(OK)'을 판정하고, 이후 wpa_cli status를
+        # 폴링해 재결합 완료(COMPLETED@target)를 확인한 경우에만 성공으로 본다.
+        accepted = result.returncode == 0 and stdout.split("\n", 1)[0].strip() == "OK"
+        confirmed = accepted and confirm_roam(interface, bssid)
+        note = "confirmed" if confirmed else ("not confirmed" if accepted else "rejected")
+        # 한줄 요약 (wifi_periodic_roam.sh에서 grep "ROAM_RESULT"로 추출)
+        print(f"ROAM_RESULT: {bssid} ch:{ap['ch']} rssi:{ap['ss']} -> {stdout or stderr or 'unknown'} ({note})")
+        if confirmed:
+            # 재결합 확인된 경우에만 통지 — bssid=목표 BSS, ch/rssi=스캔 권위값.
+            notify_roam(interface, from_bssid, bssid, channel=ap["ch"], rssi=ap["ss"])
+        return 0 if confirmed else 1
     except subprocess.TimeoutExpired:
         print(f"ROAM_RESULT: {bssid} ch:{ap['ch']} rssi:{ap['ss']} -> timeout")
         # timeout이어도 로밍이 뒤늦게 성공했을 수 있다(설계 §8.1 미세갭): 실 결합 BSS가
