@@ -176,6 +176,49 @@ def test_iw_scan_all_ebusy_returns_none(monkeypatch):
     assert calls["sr"] == 0      # 스캔 실패 → scan_results 조회조차 안 함
 
 
+def test_iw_scan_caps_ssids_to_driver_max(monkeypatch):
+    """directed SSID가 드라이버 max(10) 초과 시 cap + wildcard 보존(iw -EINVAL 스캔 전체 실패 방지)."""
+    monkeypatch.setattr(wifi_roam.time, "sleep", lambda *_: None)
+    captured = {}
+
+    def side_effect(cmd, *a, **k):
+        if cmd[0] == "iw":
+            captured["cmd"] = cmd
+            return _Run(0, "")
+        if "scan_results" in cmd:
+            return _Run(0, SCAN_RESULTS)
+        return _Run(0, "")
+
+    many = [f"ssid{i}" for i in range(15)]  # 15 directed → +wildcard면 한계 초과
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        iw_scan_to_ap_lines(many, ["5180"])
+    c = captured["cmd"]
+    assert c.count("ssid") == 1
+    values = c[c.index("ssid") + 1:]
+    assert len(values) == wifi_roam.MAX_SCAN_SSIDS  # 정확히 10(9 directed + wildcard)
+    assert values[-1] == ""                          # wildcard 항상 보존
+    assert values[:9] == many[:9]                    # live/base 우선(앞쪽) 유지
+
+
+def test_iw_scan_no_cap_under_limit(monkeypatch):
+    """한계 이하면 cap 없이 그대로(무회귀)."""
+    monkeypatch.setattr(wifi_roam.time, "sleep", lambda *_: None)
+    captured = {}
+
+    def side_effect(cmd, *a, **k):
+        if cmd[0] == "iw":
+            captured["cmd"] = cmd
+            return _Run(0, "")
+        if "scan_results" in cmd:
+            return _Run(0, SCAN_RESULTS)
+        return _Run(0, "")
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        iw_scan_to_ap_lines(["a", "b", "c"], ["5180"])
+    values = captured["cmd"][captured["cmd"].index("ssid") + 1:]
+    assert values == ["a", "b", "c", ""]
+
+
 def test_scan_results_nonzero_rc_returns_none(monkeypatch):
     """iw scan 성공했으나 wpa_cli scan_results가 비정상 종료 → None."""
     monkeypatch.setattr(wifi_roam.time, "sleep", lambda *_: None)

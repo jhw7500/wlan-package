@@ -948,6 +948,9 @@ def mlanutl_scan(ssids, freqs):
         return None
 
 
+MAX_SCAN_SSIDS = 10  # nl80211 max # scan SSIDs (NXP mlan 실측). 초과 시 iw가 -EINVAL로 스캔 전체 실패.
+
+
 def iw_scan_to_ap_lines(ssids, freqs):
     """로밍 판정 스캔: `iw scan`으로 실제 스캔(=wpa_supplicant BSS 테이블 충전)을 트리거하고,
     후보를 `wpa_cli scan_results`(=그 테이블)에서 뽑아 get_latest_scan이 읽는 pipe 포맷
@@ -967,7 +970,20 @@ def iw_scan_to_ap_lines(ssids, freqs):
     # ssid 키워드는 1회만 쓰고 값을 나열한다(키워드 반복은 iw 버전/드라이버에 따라 리터럴
     # 소비/파싱 붕괴 위험). NXP mlan 등은 ssid 지정 시 와일드카드를 안 보내므로
     # ""를 함께 넣어 beacon/broadcast 광범위 스캔을 보존한다(중복 제거).
-    cmd += ["ssid"] + list(dict.fromkeys(ssid_list + [""]))
+    # 드라이버 max-scan-SSID 초과 방지: iw는 초과 시 -EINVAL로 스캔 전체를 실패시키므로
+    # (→ 로밍 정지) directed SSID 수를 제한하고 wildcard는 항상 보존한다. 초과분(주로
+    # hidden extra)은 wildcard broadcast로 non-hidden만 발견(구 mlanutl 다중=undirected 동치).
+    # ssid_list=get_allowed_ssids라 live/base가 앞이므로 slice가 현재 네트워크를 우선 보존.
+    probe = list(dict.fromkeys(ssid_list + [""]))
+    if len(probe) > MAX_SCAN_SSIDS:
+        logger.message(
+            "warn",
+            f"[{IFACE}] scan SSIDs {len(probe)} > driver max {MAX_SCAN_SSIDS}; "
+            f"capping directed probes (excess hidden SSIDs may be missed)",
+            _EXTRA_(),
+        )
+        probe = probe[:MAX_SCAN_SSIDS - 1] + [""]
+    cmd += ["ssid"] + probe
     scanned_ok = False
     for attempt in range(3):
         try:
