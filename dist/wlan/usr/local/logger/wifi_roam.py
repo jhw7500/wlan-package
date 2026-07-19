@@ -23,6 +23,7 @@ ROAM_CONDITION_FLAG = "/tmp/roam_condition"
 LAST_SCAN_TIME_FILE = "/tmp/last_roam_scan_time"
 WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
 ROAM_HINT_FILE = f"/tmp/wifi_roam_hint_{IFACE}"  # bgscan이 새 후보 AP 발견 시 touch (단방향 신호)
+MAX_SCAN_SSIDS = 10  # nl80211 max # scan SSIDs (NXP mlan 실측). 초과 시 iw가 -EINVAL로 스캔 전체 실패.
 WPA_SSID = None
 WPA_FREQ = None
 WPA_TH_2G = None
@@ -946,9 +947,6 @@ def mlanutl_scan(ssids, freqs):
             "err", f"[{IFACE}] scan command failed:{e.stderr.strip()}", _EXTRA_()
         )
         return None
-
-
-MAX_SCAN_SSIDS = 10  # nl80211 max # scan SSIDs (NXP mlan 실측). 초과 시 iw가 -EINVAL로 스캔 전체 실패.
 
 
 def iw_scan_to_ap_lines(ssids, freqs):

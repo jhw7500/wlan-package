@@ -195,9 +195,10 @@ def test_iw_scan_caps_ssids_to_driver_max(monkeypatch):
     c = captured["cmd"]
     assert c.count("ssid") == 1
     values = c[c.index("ssid") + 1:]
-    assert len(values) == wifi_roam.MAX_SCAN_SSIDS  # 정확히 10(9 directed + wildcard)
+    assert len(values) == wifi_roam.MAX_SCAN_SSIDS  # directed(max-1) + wildcard
     assert values[-1] == ""                          # wildcard 항상 보존
-    assert values[:9] == many[:9]                    # live/base 우선(앞쪽) 유지
+    n = wifi_roam.MAX_SCAN_SSIDS - 1
+    assert values[:n] == many[:n]                    # live/base 우선(앞쪽) 유지
 
 
 def test_iw_scan_no_cap_under_limit(monkeypatch):
