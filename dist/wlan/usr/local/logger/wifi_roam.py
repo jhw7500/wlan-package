@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import io
 import json
 import time
 import subprocess
@@ -285,12 +286,14 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
     )
 
 
-def load_roaming_config(iface):
+def load_roaming_config(iface, data=None):
     """
     JSON 형식의 conf 파일에서 인터페이스별 로밍 설정 로드
 
     Args:
         iface: 인터페이스 이름 (mlan0 또는 mlan1)
+        data: 이미 파싱·검증된 설정 dict(런타임 reload용). 주어지면 파일을 다시
+              읽지 않아 검증-적용 사이 파일 교체(TOCTOU)로 인한 기본값 회귀가 없다.
 
     Returns:
         dict: 로밍 설정 dictionary
@@ -336,9 +339,11 @@ def load_roaming_config(iface):
         "USE_SIGNAL_AVG": DEFAULT_USE_SIGNAL_AVG,
     }
 
-    # 1. JSON 설정 파일 시도
+    # 1. JSON 설정 파일 시도. data(검증된 dict)가 주어지면 재파싱 없이 동일 경로로
+    #    주입(StringIO 셤, 본문 무변경) — 파일 재읽기 제거로 검증-적용 원자성 보장.
     try:
-        with open(WIFI_INIT_CONF_JSON, "r") as f:
+        with (open(WIFI_INIT_CONF_JSON, "r") if data is None
+              else io.StringIO(json.dumps(data))) as f:
             data = json.load(f)
 
             if iface in data and "roaming" in data[iface]:
@@ -1502,7 +1507,7 @@ def reload_roaming_config_if_changed(iface):
         return False
     try:
         with open(WIFI_INIT_CONF_JSON, "r") as f:
-            json.load(f)
+            new_data = json.load(f)
     except (OSError, ValueError) as e:  # ValueError ⊇ JSONDecodeError
         if st["warned"] != mtime:
             st["warned"] = mtime
@@ -1512,8 +1517,26 @@ def reload_roaming_config_if_changed(iface):
                 _EXTRA_(),
             )
         return False
+    # 구조 검증: 구문이 valid여도 dict가 아니거나 iface.roaming 섹션이 없으면
+    # load_roaming_config가 조용히 전부 기본값을 적용한다(시작 시엔 정상 fallback이나
+    # 런타임엔 '현행 유지' 계약 위반) → 여기서 차단. 통과한 new_data를 그대로 전달해
+    # 재파싱을 없앤다(검증-적용 사이 파일 교체 TOCTOU 차단).
+    if not (
+        isinstance(new_data, dict)
+        and isinstance(new_data.get(iface), dict)
+        and isinstance(new_data[iface].get("roaming"), dict)
+    ):
+        if st["warned"] != mtime:
+            st["warned"] = mtime
+            logger.message(
+                "warn",
+                f"[{iface}] runtime config reload skipped "
+                f"(no valid {iface}.roaming section, keeping current)",
+                _EXTRA_(),
+            )
+        return False
     old_gen = GENERATE_NETWORK_BLOCKS
-    load_roaming_config(iface)
+    load_roaming_config(iface, data=new_data)
     if GENERATE_NETWORK_BLOCKS != old_gen:
         logger.message(
             "warn",
@@ -1541,6 +1564,9 @@ def reload_roaming_config_if_changed(iface):
         else:
             adaptive_interval.min_interval = MIN_CHECK_INTERVAL
             adaptive_interval.max_interval = MAX_CHECK_INTERVAL
+    # cross_ssid_cooldown은 의도적으로 갱신만(생성 없음): 별도 enable이 없고 존재가
+    # GENERATE_NETWORK_BLOCKS(런타임 전환 금지, 재시작 전용)에 연동되므로
+    # 런타임에 None→생성이 필요한 상황 자체가 없다.
     if cross_ssid_cooldown is not None:
         cross_ssid_cooldown.retry_count = max(0, ROAM_CROSS_FAIL_RETRY_COUNT)
     st["applied"] = mtime
