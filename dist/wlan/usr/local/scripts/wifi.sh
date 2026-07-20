@@ -1665,10 +1665,13 @@ case "$2" in
         # JSON TH는 SIGHUP으로 wifi_roam 데몬이 즉시 재읽어 반영 — 재시작 없이 데몬 상태
         # (핑퐁 이력·backoff·cooldown) 보존. 폴링이 아니라 신호 트리거라 평시 비용 0.
         if systemctl is-active --quiet "wifi_roam@${IFACE}" 2>/dev/null; then
-            if systemctl kill --kill-who=main -s SIGHUP "wifi_roam@${IFACE}" 2>/dev/null; then
+            if systemctl kill --kill-who=main -s SIGHUP "wifi_roam@${IFACE}"; then
                 echo "wifi_roam@${IFACE} reloaded via SIGHUP (applied, no restart)"
             else
-                echo "Warning: SIGHUP failed; run 'systemctl restart wifi_roam@${IFACE}' to apply" >&2
+                # SIGHUP 전달 실패(권한/구버전 systemd 등, 에러는 위에 노출) → restart 폴백으로
+                # 반드시 반영(무음 미적용 방지). 재시작은 연결 무영향.
+                echo "Warning: SIGHUP failed; falling back to restart" >&2
+                systemctl restart "wifi_roam@${IFACE}" && echo "wifi_roam@${IFACE} restarted (applied)"
             fi
         else
             echo "wifi_roam@${IFACE} inactive (applies on next start)"
