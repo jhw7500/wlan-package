@@ -76,6 +76,7 @@ DEFAULT_ROAM_SUCCESS_SLEEP = 5  # 로밍 성공 후 안정화 대기
 DEFAULT_ROAM_NO_RESULT_MAX_SLEEP = 30  # 후보없음 backoff 상한(초)
 DEFAULT_ROAM_NO_RESULT_BACKOFF_RECOVER_SEC = 60  # 상한 도달 후 streak 점감 시작(초)
 DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT = 2  # cross-SSID 전환 실패 시 cooldown 없이 즉시 재시도 허용 횟수(초과 시 backoff)
+DEFAULT_ROAM_NO_RESULT_FAST_COUNT = 3  # 후보 미발견 시 처음 N회는 backoff 없이 빠른 주기(SCAN_NO_RESULT_SLEEP) 유지 후 지수 backoff
 
 # Post-Roam ARP 최적화 기본값
 DEFAULT_ENABLE_POST_ROAM_ARP_OPTIMIZATION = True
@@ -122,12 +123,15 @@ ROAM_SUCCESS_SLEEP = DEFAULT_ROAM_SUCCESS_SLEEP
 ROAM_NO_RESULT_MAX_SLEEP = DEFAULT_ROAM_NO_RESULT_MAX_SLEEP
 ROAM_NO_RESULT_BACKOFF_RECOVER_SEC = DEFAULT_ROAM_NO_RESULT_BACKOFF_RECOVER_SEC
 ROAM_CROSS_FAIL_RETRY_COUNT = DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT
+ROAM_NO_RESULT_FAST_COUNT = DEFAULT_ROAM_NO_RESULT_FAST_COUNT
 
 def _no_result_max_level():
-    """backoff가 상한(ROAM_NO_RESULT_MAX_SLEEP)에 도달하는 최소 streak 레벨.
+    """지수 backoff가 상한(ROAM_NO_RESULT_MAX_SLEEP)에 도달하는 데 필요한 2배수 증가 레벨.
 
-    2**(level-1) 거대 정수 연산을 막기 위해 streak를 이 레벨로 clamp한다.
-    시작값*2**(L-1) >= cap 를 만족하는 최소 L. 도달 즉시 상한이므로 그 이상은 무의미.
+    compute_no_result_backoff는 over(=streak-fast_count)를 이 값으로 clamp해 2**over
+    거대 정수 연산을 막고(도달 즉시 상한이라 그 이상 무의미), advance_no_candidate_backoff
+    는 streak를 (fast + 이 레벨 - 1)로 cap한다. 즉 'streak' 자체가 아니라 '빠른 구간 이후
+    지수 성장 횟수'의 상한이다. 시작값*2**(L-1) >= cap 를 만족하는 최소 L.
     SCAN_NO_RESULT_SLEEP<=0 등 비정상 입력은 1로 방어(무한 루프/0배수 방지)."""
     start = SCAN_NO_RESULT_SLEEP
     cap = ROAM_NO_RESULT_MAX_SLEEP
@@ -141,18 +145,23 @@ def _no_result_max_level():
     return level
 
 
-def compute_no_result_backoff(streak):
-    """후보없음 streak에 대한 sleep 초(지수 backoff, 상한 clamp).
+def compute_no_result_backoff(streak, fast_count=1):
+    """후보없음 streak에 대한 sleep 초(빠른 스캔 구간 + 지수 backoff, 상한 clamp).
 
-    streak<=0 → 시작값(SCAN_NO_RESULT_SLEEP). streak>=1 → 시작값 * 2**(eff-1),
-    단 eff=min(streak, max_level)로 clamp(거대 정수 2**streak 방지)하고
-    ROAM_NO_RESULT_MAX_SLEEP 상한. 상한 도달 동작은 보존(streak 큰 값 → MAX_SLEEP).
-    끊김 복구는 wpa 네이티브가 담당하므로 이 backoff는 '연결 중 후보없음'
-    airtime 잠식만 억제한다(spec §4)."""
+    fast_count: 처음 이 횟수(streak)까지는 backoff 없이 시작값(SCAN_NO_RESULT_SLEEP)을
+    유지해 빠르게 재스캔한다(로밍컨디션 진입 직후 공격적 로밍 시도). 초과분(over)부터
+    시작값 * 2**over 로 지수 성장하고 ROAM_NO_RESULT_MAX_SLEEP 상한. fast_count=1 이면
+    기존 동작(streak1=시작값, streak2=×2 …)과 동일하다(cross-SSID cooldown 등 기본 경로).
+    streak<=0 → 시작값. eff=min(over, max_level)로 clamp(거대 정수 2**over 방지)하고
+    상한 도달 동작은 보존. 끊김 복구는 wpa 네이티브가 담당하므로 이 backoff는 '연결 중
+    후보없음' airtime 잠식만 억제한다(spec §4)."""
     if streak <= 0:
         return int(SCAN_NO_RESULT_SLEEP)
-    eff = min(streak, _no_result_max_level())
-    backoff = SCAN_NO_RESULT_SLEEP * (2 ** (eff - 1))
+    if streak <= fast_count:
+        return int(SCAN_NO_RESULT_SLEEP)  # 처음 fast_count 회는 빠른 주기(공격적 로밍)
+    over = streak - fast_count            # 빠른 구간 초과분(>=1)부터 지수 backoff
+    eff = min(over, _no_result_max_level())
+    backoff = SCAN_NO_RESULT_SLEEP * (2 ** eff)
     return int(min(backoff, ROAM_NO_RESULT_MAX_SLEEP))
 
 
@@ -161,11 +170,14 @@ def advance_no_candidate_backoff(streak, cap_ts):
     상한 도달 시 cap_ts(첫 도달 시각) 기록 및 RECOVER_SEC 경과마다 streak 점감.
 
     메인루프 3곳(scan 실패 / 결과 0건 / 적합후보 없음)의 동일 로직을 단일화(DRY).
-    streak를 max_level로 cap해 매 tick 무한 증가를 막고(#5), 시간 기반 점감이
-    유효하도록 한다. 반환: (backoff, streak, cap_ts)."""
-    max_level = _no_result_max_level()
-    streak = min(streak + 1, max_level)
-    backoff = compute_no_result_backoff(streak)
+    처음 ROAM_NO_RESULT_FAST_COUNT 회는 빠른 주기(backoff 없이 재스캔), 그 후 지수
+    backoff. streak를 (fast + max_level - 1)로 cap해 매 tick 무한 증가를 막고(#5) 시간
+    기반 점감이 유효하도록 한다. fast=1 이면 cap=max_level(기존과 동일). 반환: (backoff,
+    streak, cap_ts)."""
+    fast = max(1, ROAM_NO_RESULT_FAST_COUNT)
+    max_streak = fast + _no_result_max_level() - 1
+    streak = min(streak + 1, max_streak)
+    backoff = compute_no_result_backoff(streak, fast)
     if backoff >= ROAM_NO_RESULT_MAX_SLEEP:
         if cap_ts is None:
             cap_ts = time.time()
@@ -290,6 +302,7 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
                 "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC"
             ),
             "ROAM_CROSS_FAIL_RETRY_COUNT": _num("ROAM_CROSS_FAIL_RETRY_COUNT"),
+            "ROAM_NO_RESULT_FAST_COUNT": _num("ROAM_NO_RESULT_FAST_COUNT"),
             "USE_SIGNAL_AVG": config["USE_SIGNAL_AVG"],
         }
     )
@@ -345,6 +358,7 @@ def load_roaming_config(iface, data=None):
         "ROAM_NO_RESULT_MAX_SLEEP": DEFAULT_ROAM_NO_RESULT_MAX_SLEEP,
         "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC": DEFAULT_ROAM_NO_RESULT_BACKOFF_RECOVER_SEC,
         "ROAM_CROSS_FAIL_RETRY_COUNT": DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT,
+        "ROAM_NO_RESULT_FAST_COUNT": DEFAULT_ROAM_NO_RESULT_FAST_COUNT,
         "USE_SIGNAL_AVG": DEFAULT_USE_SIGNAL_AVG,
     }
 

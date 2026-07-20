@@ -14,9 +14,11 @@ import pytest
 # `logger` is only assigned at runtime inside main(); stub so any error path is safe.
 wifi_roam.logger = MagicMock()
 
-def _set_sleep(monkeypatch, start, cap):
+def _set_sleep(monkeypatch, start, cap, fast=1):
     monkeypatch.setattr(wifi_roam, "SCAN_NO_RESULT_SLEEP", start)
     monkeypatch.setattr(wifi_roam, "ROAM_NO_RESULT_MAX_SLEEP", cap)
+    # fast=1 → 기존 동작(streak1=start, streak2=×2). advance는 이 전역을 읽는다.
+    monkeypatch.setattr(wifi_roam, "ROAM_NO_RESULT_FAST_COUNT", fast)
 
 def test_backoff_streak_zero_is_start(monkeypatch):
     _set_sleep(monkeypatch, 3, 30)
@@ -109,6 +111,38 @@ def test_advance_decays_streak_after_recover_sec(monkeypatch):
     # streak는 max_level로 clamp된 뒤 1 감소 → max_level-1
     assert streak == max_level - 1
     assert cap_ts == 1000.0  # 점감 시 cap_ts 갱신
+
+# --- ROAM_NO_RESULT_FAST_COUNT: 처음 N회 빠른 주기 후 backoff ---
+
+def test_fast_count_keeps_start_for_first_n(monkeypatch):
+    """fast_count=3 → 처음 3회는 시작값(3s) 유지, 4회째부터 지수 backoff."""
+    _set_sleep(monkeypatch, 3, 30)
+    # streak 1..7, fast_count=3: 3,3,3,6,12,24,30
+    assert [compute_no_result_backoff(s, 3) for s in range(1, 8)] == [3, 3, 3, 6, 12, 24, 30]
+
+def test_fast_count_one_matches_legacy(monkeypatch):
+    """fast_count=1(기본) → 기존 지수 곡선과 완전 동일(무회귀·cross-SSID 보존)."""
+    _set_sleep(monkeypatch, 3, 30)
+    assert [compute_no_result_backoff(s, 1) for s in range(1, 7)] == [3, 6, 12, 24, 30, 30]
+    # 인자 생략 시 기본 fast_count=1
+    assert [compute_no_result_backoff(s) for s in range(1, 7)] == [3, 6, 12, 24, 30, 30]
+
+def test_fast_count_custom_start_cap(monkeypatch):
+    """시작값/상한 커스텀 + fast_count=2: 5,5,10,20,40,40."""
+    _set_sleep(monkeypatch, 5, 40)
+    assert [compute_no_result_backoff(s, 2) for s in range(1, 7)] == [5, 5, 10, 20, 40, 40]
+
+def test_advance_uses_global_fast_count(monkeypatch):
+    """advance는 전역 ROAM_NO_RESULT_FAST_COUNT(기본 3)를 사용 — 처음 3회 빠른 주기 후 backoff,
+    상한(fast+max_level-1=7)에서 cap. 시간 점감은 배제(RECOVER 큰 값)."""
+    _set_sleep(monkeypatch, 3, 30, fast=3)
+    monkeypatch.setattr(wifi_roam, "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC", 99999)
+    streak, cap_ts, seq = 0, None, []
+    for _ in range(8):
+        backoff, streak, cap_ts = advance_no_candidate_backoff(streak, cap_ts)
+        seq.append(backoff)
+    assert seq == [3, 3, 3, 6, 12, 24, 30, 30]
+    assert streak == 3 + wifi_roam._no_result_max_level() - 1  # 7에서 clamp
 
 # --- roam hint mtime consumer ---
 
