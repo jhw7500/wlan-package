@@ -132,7 +132,7 @@
             "base": {
               "type": "string",
               "default": "",
-              "description": "mlan0 base MAC — resolve_mac 최종 폴백 소스. 빈값=생략",
+              "description": "mlan0 base MAC — enable 여부와 무관하게 항상 반영되는 baseline MAC(#110). bridge 활성(wbridge.enabled & iface enable) + dynamic/static 변환 성공 시에만 override. 빈값=생략",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
               "x-consumer": "wifi_init.sh"
@@ -155,7 +155,7 @@
             "base": {
               "type": "string",
               "default": "",
-              "description": "mlan1 base MAC — resolve_mac 최종 폴백 소스. 빈값=생략",
+              "description": "mlan1 base MAC — enable 여부와 무관하게 항상 반영되는 baseline MAC(#110). bridge 활성(wbridge.enabled & iface enable) + dynamic/static 변환 성공 시에만 override. 빈값=생략",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
               "x-consumer": "wifi_init.sh"
