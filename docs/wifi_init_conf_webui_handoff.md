@@ -147,14 +147,16 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 
 | 경로 | 라벨 | 타입 | 기본값 | 허용값/범위 | UI편집 | 적용시점 | 설명 |
 |---|---|---|---|---|---|---|---|
-| `mac.mlan0.base` | mlan0 base MAC | string | `""` | `^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$`, 빈값=생략 | caution | boot | resolve_mac 최종 폴백 소스 |
+| `mac.mlan0.base` | mlan0 base MAC | string | `""` | `^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$`, 빈값=생략 | caution | boot | enable 무관 항상 반영 baseline (#110); bridge 활성+dynamic/static 성공 시에만 override |
 | `mac.mlan0.target` | mlan0 target MAC | string | `""` | 위 MAC 포맷, 빈값=생략 | caution | reboot | static 모드 소스 + mod_para 블록 `mac_addr=`로 주입 |
-| `mac.mlan1.base` | mlan1 base MAC | string | `""` | 위 MAC 포맷, 빈값=생략 | caution | boot | resolve_mac 최종 폴백 소스 |
+| `mac.mlan1.base` | mlan1 base MAC | string | `""` | 위 MAC 포맷, 빈값=생략 | caution | boot | enable 무관 항상 반영 baseline (#110); bridge 활성+dynamic/static 성공 시에만 override |
 | `mac.mlan1.target` | mlan1 target MAC | string | `""` | 위 MAC 포맷, 빈값=생략 | caution | reboot | static 모드 소스 + mod_para 블록 `mac_addr=`로 주입 |
 | `mac.eth0.base` | eth0 base MAC | string | `""` | 위 MAC 포맷, 빈값=생략 | caution | boot | 유효 시 `update_mac.sh eth0`로 설정 |
 
 **비고 (mac)** — 소비: `wifi_init.sh`, (target은 추가로) `wifi_mac_set.py`/`wifi_mac_save.py`.
-- resolve_mac 우선순위: dynamic(`/tmp/eth0_client_mac`) → static이면 target → 그 외/폴백 base. 형식 위반은 warn 로그 후 무시.
+- `base`는 mlan0/mlan1 모두 **enable 여부와 무관하게 항상 반영**(baseline, #110). **실제 bridge 활성**(`wbridge.enabled` & bridge iface enable) **+ dynamic/static 변환 성공 시에만** bridge 인터페이스 MAC을 base 대신 override.
+- resolve_mac 우선순위(bridge iface): dynamic(`/tmp/eth0_client_mac`) → static이면 target → base. 형식 위반은 warn 로그 후 무시.
+- 적용: `update_mac.sh`가 systemd `.link`의 `MACAddress=` 기록 → udev가 **netdev 생성(부팅/드라이버 리로드) 시에만** 적용(런타임 즉시 반영 아님). `.link` 부재/빈 파일이면 재생성, 변경 시 최대 5개 회전 백업(#111).
 
 ### 3.3 wbridge (WiFi Bridge)
 

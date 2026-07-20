@@ -106,10 +106,16 @@ wifi_init_conf.json
 
 | 키 | 설명 |
 |----|------|
-| `base` | 참조 MAC 소스 (빈 문자열이면 생략) |
-| `target` | 적용할 대상 MAC (빈 문자열이면 생략) |
+| `base` | 인터페이스 기본(baseline) MAC. **`enabled` 여부와 무관하게 항상 반영**된다(#110). 빈 문자열이면 생략 |
+| `target` | static 모드 소스 + 드라이버 `mod_para`(`wifi_mod_para__.conf`)의 `mac_addr=` 주입값(펌웨어/어댑터 MAC). 빈 문자열이면 생략 |
 
-> 빈 문자열(`""`)이면 해당 소스를 무시하고 기존 `/opt/wlan/mac` 디렉토리 방식으로 fallback한다.
+> **적용 규칙 (#110~)**
+> - mlan0/mlan1 모두 `enabled` 여부와 무관하게 `base`를 먼저 반영(baseline). (기존: iface `enabled=false`면 MAC 설정 전체 skip → mlan1 비활성 시 base 미반영)
+> - **실제 bridge 기능이 켜져 있고**(`wbridge.enabled=true` & bridge iface `enabled`) **`mac_mode`의 dynamic(유선 peer 클론)/static(target) 변환에 성공한 경우에만** bridge 인터페이스 MAC을 `base` 대신 그 값으로 override한다. 변환 실패/`default` 모드면 base 유지.
+> - resolve_mac 우선순위(bridge iface): dynamic(`/tmp/eth0_client_mac`) → static이면 target → base. 형식 위반은 warn 로그 후 무시.
+> - 빈 문자열이면 해당 소스 생략(기존 `/opt/wlan/mac` 디렉토리 대체).
+
+> **적용 계층·시점**: `update_mac.sh`가 systemd `.link`(`/etc/systemd/network/2X-<iface>.link`)의 `MACAddress=`를 기록하며, **udev가 netdev 생성 시(=부팅/드라이버 리로드)에만 적용**한다 — JSON만 고치고 재부팅하지 않으면 live 인터페이스 MAC은 바뀌지 않는다. `target`은 추가로 `mod_para`의 `mac_addr=`로 주입돼 insmod 시 어댑터 MAC이 된다. `.link`가 없거나 비어 있으면(구버전 잔재) `update_mac.sh`가 `[Match]/[Link]`를 갖춘 파일을 재생성하고(#111), 변경 시 인터페이스당 최대 5개 회전 백업(`.bak.1`~`.bak.5`, 동일 MAC 중복 제외)한다.
 
 ---
 
@@ -140,6 +146,8 @@ wifi_init_conf.json
 > **진단 명령**: 현재 3종 토글·런타임 상태·정합성을 한눈에 보려면 **`wifi {0|1} br status`** (읽기 전용, 값 변경 없음). `peer_route↔ip_discovery`, `arp_ignore_always↔토폴로지(추정)`, 설정↔런타임(`/32` 미러 등)의 불일치를 `[WARN]`/`[INFO]`로 표시한다. 매번 3종 세트를 외우지 않아도 이 명령으로 현재 구성이 맞는지 확인할 수 있다.
 >
 > **eth 지연연결 라우트 등록**: `peer_route=on`인데 이더넷을 **부팅 후 나중에** 연결한 경우, 부팅 시점엔 `wired_mac_ip_get.py`가 링크 대기(`wait_for_eth_link`)에서 빠져나와 **peer host route(`<peer>/32 dev eth0`)가 누락**된다(나머지 인프라 — eth0 `/32` 미러·table 100·sysctl — 은 링크 무관하게 이미 세팅됨). 이후 eth 연결 시 **`wifi {0|1} br route auto`**로 유선 peer를 sweep 탐색해 그 라우트를 사후 등록한다(읽기 전용 아님). 하위 명령: `find [<subnet>]`=탐색만(읽기 전용), `set <ip>`=IP 직접 지정 등록, `auto [<subnet>]`=정확히 1건 발견 시 자동 등록(0건/2건+는 에러 — 후자는 `set <ip>`로 지정). 서브넷 생략 시 `eth_client_ip`(단일 IP quick ARP) → `eth_sweep_subnet` → mlanN 대역 순으로 대상 결정. (자동 트리거는 후속 확장 예정)
+>
+> **⚠️ `find`/`auto`가 peer를 못 찾을 때 (eth0 타서브넷)**: `eth0`의 IP가 sweep 대역과 다른 서브넷이면(예: `eth0=192.168.1.1/24`, peer=`192.168.0.220`), same-subnet source에만 ARP 응답하는 peer는 발견에 실패한다. #113에서 sweep arping의 source를 **대역 내 우리 IP(mlanN)**로 지정하도록 보정했다(⚠️ **서브넷 인자는 sweep 범위만** 바꾸고 arping source IP는 안 바꾸므로 대역 지정만으로는 안 풀림). 그래도 안 되면 `wifi {0|1} br route set <peer-ip>`로 직접 등록한다.
 
 ### 3.1 wbridge.optimize - 커널 레벨 네트워크 튜닝
 
