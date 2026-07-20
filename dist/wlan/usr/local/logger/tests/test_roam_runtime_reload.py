@@ -143,6 +143,37 @@ def test_pingpong_history_preserved_on_param_change(env):
     assert len(prev.roam_history) == 1                       # 이력 보존
 
 
+def test_symmetric_instances_param_update_preserves_state(env):
+    """trend/adaptive/cooldown도 재생성 아닌 필드 갱신(이력·상태 보존) — 대칭 경로 커버."""
+    tt = wifi_roam.RSSITrendTracker(5, 30)
+    tt.rssi_history.append((time.time(), -50))
+    ai = wifi_roam.AdaptiveInterval(1, 10)
+    cd = wifi_roam.CrossSsidCooldown(2)
+    cd.entries["Net"] = {"fails": 1, "until": 0.0}
+    wifi_roam.ENABLE_PREDICTIVE_ROAM = True
+    wifi_roam.ENABLE_ADAPTIVE_INTERVAL = True
+    wifi_roam.trend_tracker = tt
+    wifi_roam.adaptive_interval = ai
+    wifi_roam.cross_ssid_cooldown = cd
+    conf = _conf()
+    conf[IFACE]["roaming"]["PREDICTIVE_ROAM"] = {
+        "enable": True, "trend_window_size": 9, "trend_history_max_age": 99}
+    conf[IFACE]["roaming"]["ADAPTIVE_INTERVAL"] = {
+        "enable": True, "min_check_interval": 2, "max_check_interval": 20}
+    conf[IFACE]["roaming"]["ROAM_CROSS_FAIL_RETRY_COUNT"] = 5
+    _write(env, conf, 1000.0)
+    reload_roaming_config_if_changed(IFACE)          # baseline
+    conf[IFACE]["roaming"]["CHECK_INTERVAL"] = 2     # 변경 유발
+    _write(env, conf, 1010.0)
+    reload_roaming_config_if_changed(IFACE)
+    assert reload_roaming_config_if_changed(IFACE) is True
+    assert wifi_roam.trend_tracker is tt and tt.window_size == 9 and tt.max_age == 99
+    assert len(tt.rssi_history) == 1                 # 이력 보존
+    assert wifi_roam.adaptive_interval is ai and ai.min_interval == 2 and ai.max_interval == 20
+    assert wifi_roam.cross_ssid_cooldown is cd and cd.retry_count == 5
+    assert cd.entries["Net"]["fails"] == 1           # cooldown 상태 보존
+
+
 def test_enable_off_to_on_creates_instance(env):
     wifi_roam.ENABLE_PING_PONG_PREVENTION = False
     wifi_roam.ping_pong_preventer = None
