@@ -52,6 +52,29 @@ is_valid_ipv4() {
     return 0
 }
 
+# ── arping source 선택 ──
+# arping은 -s 없이 호출 시 $ETH_IFACE의 IP를 sender로 쓴다. 대상 대역이 eth0 IP 서브넷과
+# 다르면 same-subnet source에만 ARP 응답하는 peer(strict arp_ignore 등)를 못 찾는다
+# (온타겟 실측 2026-07-20: eth0=192.168.1.1/24에서 peer 192.168.0.220 무응답, source를
+#  peer 대역 IP로 주면 응답). eth0가 대역 내 IP를 이미 가지면 기본(빈 값), 아니면 대역에
+# 속한 우리 IP(mlanN)를 -s 로 반환한다.
+_arp_src_opt() { # $1=network(int) $2=maskbits(int) → stdout: "" | "-s <ip>"
+    local net=$1 mask=$2 eip ei mi
+    while IFS= read -r eip; do
+        [ -n "$eip" ] || continue
+        ei=$(ip_to_int "$eip")
+        [ $(( ei & mask )) -eq "$net" ] && return 0   # eth0 이미 대역 내 → 기본 source
+    done < <(ip -4 addr show "$ETH_IFACE" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
+    if [ -n "${_mlan_ip:-}" ] && is_valid_ipv4 "$_mlan_ip"; then
+        mi=$(ip_to_int "$_mlan_ip")
+        [ $(( mi & mask )) -eq "$net" ] && { printf -- '-s %s' "$_mlan_ip"; return 0; }
+    fi
+    return 0   # 대역 내 우리 IP 없음 → 기본 source (경고는 호출부)
+}
+
+# 테스트에서 함수만 로드할 때: WIFI_EPF_SOURCE_ONLY=1 로 source 하면 링크체크/스윕 미실행.
+[ "${WIFI_EPF_SOURCE_ONLY:-}" = "1" ] && return 0 2>/dev/null
+
 # ── 1) 링크 확인 (arping 전에) ──
 if [ "$(cat "$ETH_CARRIER_PATH" 2>/dev/null)" != "1" ]; then
     _err "$ETH_IFACE link down (carrier != 1) — cannot probe"
@@ -66,7 +89,14 @@ _gw=$(ip -4 route show default dev "$IFACE" 2>/dev/null | awk '{for(i=1;i<=NF;i+
 # ── 3) quick path: subnet 미지정 + eth_client_ip 설정 시 그 IP에 arping ──
 if [ -z "$SUBNET" ]; then
     if _cip=$(_cfg '.wbridge.eth_client_ip') || _cip=$(_cfg '.global.ETH_CLIENT_IP'); then
-        if arping -I "$ETH_IFACE" -c 1 -w "$SWEEP_TIMEOUT" "$_cip" >/dev/null 2>&1; then
+        # eth_client_ip가 eth0 서브넷 밖이면(wired peer는 보통 mlanN 브릿지 대역) mlanN 마스크로
+        # 대상 network를 잡아 대역 내 우리 IP를 source로 지정한다.
+        _q_src=""; _q_pfx=${_mlan_cidr#*/}
+        if is_valid_ipv4 "$_cip" && [ -n "$_mlan_cidr" ] && [ "$_q_pfx" != "$_mlan_cidr" ]; then
+            _q_mask=$(( _q_pfx==0 ? 0 : (0xFFFFFFFF << (32-_q_pfx)) & 0xFFFFFFFF ))
+            _q_src=$(_arp_src_opt "$(( $(ip_to_int "$_cip") & _q_mask ))" "$_q_mask")
+        fi
+        if arping -I "$ETH_IFACE" $_q_src -c 1 -w "$SWEEP_TIMEOUT" "$_cip" >/dev/null 2>&1; then
             logger -p local0.info "[$tag:$LINENO] quick path: eth_client_ip $_cip responded" 2>/dev/null || true
             printf '%s\n' "$_cip"
             exit 0
@@ -97,6 +127,9 @@ if [ "$_count" -gt "$SWEEP_MAX_HOSTS" ]; then
     exit 2
 fi
 
+# 대역 내 우리 IP를 arping source로 (eth0가 대역 밖 IP만 가질 때 strict-ARP peer 발견 보장)
+_src_opt=$(_arp_src_opt "$_network" "$_maskbits")
+[ -n "$_src_opt" ] && logger -p local0.info "[$tag:$LINENO] $ETH_IFACE has no IP in $SUBNET; arping source=${_src_opt#-s }" 2>/dev/null || true
 logger -p local0.info "[$tag:$LINENO] sweep $SUBNET on $ETH_IFACE ($_count hosts)" 2>/dev/null || true
 # arping(iputils)은 raw PF_PACKET 소켓이라 응답을 받아도 **커널 neigh 테이블을 채우지 않는다**
 # (온타겟 실측 2026-07-20: arping exit=0인데 `ip neigh show`엔 없음, ping은 채움). 따라서
@@ -107,7 +140,7 @@ _n=0
 _responders=$(
     for (( ipi=_start; ipi<=_end; ipi++ )); do
         _t=$(int_to_ip "$ipi")
-        ( arping -I "$ETH_IFACE" -c 1 -w "$SWEEP_TIMEOUT" "$_t" >/dev/null 2>&1 && printf '%s\n' "$_t" ) &
+        ( arping -I "$ETH_IFACE" $_src_opt -c 1 -w "$SWEEP_TIMEOUT" "$_t" >/dev/null 2>&1 && printf '%s\n' "$_t" ) &
         _n=$((_n+1))
         if [ $(( _n % SWEEP_PARALLEL_LIMIT )) -eq 0 ]; then wait; fi
     done
