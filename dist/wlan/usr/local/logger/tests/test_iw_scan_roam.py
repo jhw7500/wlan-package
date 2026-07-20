@@ -85,6 +85,24 @@ def test_roundtrip_candidate_bssid_is_table_entry(tmp_path, monkeypatch):
     assert e["ssid"] == "jhw_wlan_"
 
 
+def test_empty_wpa_freq_accepts_any_channel_same_ssid(tmp_path, monkeypatch):
+    """scan_freq 미설정(WPA_FREQ 빈값)이면 동일 SSID AP를 채널 무관 후보로 허용한다
+    — 동작주파수 제한 없이 운용하는 배포에서도 로밍 가능해야 한다. 기존엔 필터가
+    `WPA_FREQ and freq in WPA_FREQ`라 빈 WPA_FREQ에서 후보가 0이 되어 로밍이 죽었다."""
+    ap_log = tmp_path / "ap.log"
+    monkeypatch.setattr(wifi_roam, "SCAN_LOG_FILE", str(ap_log))
+    monkeypatch.setattr(wifi_roam, "WPA_FREQ", [])          # scan_freq 미설정(제한 없음)
+    ap_lines = scan_results_to_ap_lines(SCAN_RESULTS)
+    wifi_roam.save_with_timestamp(str(ap_log), ap_lines)
+
+    entries, ts = wifi_roam.get_latest_scan({"ssid": "jhw_wlan_"}, None, ["jhw_wlan_"])
+    # 동일 SSID(jhw_wlan_) 2개 모두 후보: 00:80(5180/ch36) + aa:bb(2412/ch1) — 채널 무관.
+    # 04:ba(다른 ssid), iptime5G(다른 ssid)는 SSID 불일치로 여전히 제외.
+    assert sorted(e["bssid"] for e in entries) == [
+        "00:80:4c:c7:7d:dd", "aa:bb:cc:dd:ee:ff"
+    ]
+
+
 # ---------- iw_scan_to_ap_lines (오케스트레이션) ----------
 
 def _dispatch(iw_rc=0, iw_err="", sr=SCAN_RESULTS, sr_rc=0):
@@ -256,3 +274,29 @@ def test_scan_results_nonzero_rc_returns_none(monkeypatch):
     with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
         out = iw_scan_to_ap_lines("jhw_wlan_", ["5180"])
     assert out is None
+
+
+def test_iw_scan_empty_freqs_omits_freq_arg_full_band(monkeypatch):
+    """WPA_FREQ=[] (scan_freq 미설정)이면 iw scan 명령에 'freq' 인자가 없어야 한다
+    (전체 대역 스캔). 게이트 #3(if WPA_SSID:)이 빈 freqs로 iw_scan_to_ap_lines를
+    호출하는 경로의 회귀 방지 — freqs 있으면 'freq'가 있어 대조로 무회귀도 고정."""
+    monkeypatch.setattr(wifi_roam.time, "sleep", lambda *_: None)
+    cap = {}
+
+    def side_effect(cmd, *a, **k):
+        if cmd[0] == "iw":
+            cap["cmd"] = list(cmd)
+            return _Run(0, "")
+        if "scan_results" in cmd:
+            return _Run(0, SCAN_RESULTS)
+        return _Run(0, "")
+
+    # 빈 freqs → freq 제한 없음(전체 대역)
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        iw_scan_to_ap_lines(["jhw_wlan_"], [])
+    assert "freq" not in cap["cmd"]
+
+    # 대조: freqs 지정 시 freq 인자 존재(스코프 스캔 무회귀)
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        iw_scan_to_ap_lines(["jhw_wlan_"], ["5180", "5200"])
+    assert "freq" in cap["cmd"] and "5180" in cap["cmd"]
