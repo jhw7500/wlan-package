@@ -1205,12 +1205,20 @@ def get_allowed_ssids(live_ssid=None):
     return allowed
 
 
-def should_cross_connect(best_ssid, base_ssids):
+def should_cross_connect(best_ssid, live_ssid):
     """메인루프 cross-SSID 분기 게이트(spec §3.5, 2차 방어).
     GENERATE_NETWORK_BLOCKS=false(모드 B)면 best_ap가 extra SSID여도 cross connect
-    진입을 차단 → cross connect 직후/모드 B reload 추격 사이 base_ssids 오판 윈도를
-    명시 게이트로 봉쇄. 모드 A에서 best_ap.ssid가 base 집합 밖일 때만 True."""
-    return bool(GENERATE_NETWORK_BLOCKS and best_ssid and best_ssid not in base_ssids)
+    진입을 차단. 모드 A에서는 best_ap.ssid가 **라이브 연결 SSID와 다를 때만** True.
+
+    기준을 base 집합(live+conf WPA_SSID)이 아닌 live 단일로 두는 이유(T5 실측, 2026-07-20):
+    모드 A에서 extra SSID로 전환한 뒤(live=extra) conf 기본 SSID(WPA_SSID)로 되돌아가는
+    후보가 base 포함 판정 탓에 same-SSID(wpa_cli roam) 경로로 오라우팅되어, supplicant가
+    현재 SSID 불일치로 FAIL을 무한 반복했다(복귀 불가). cross 여부의 진실은 '현재 결합
+    SSID와 다른가'뿐이다 — passive_roam의 cross 판정과 동일 원칙. live 미상이면 보수적으로
+    False(same 경로 → 진짜 cross였다면 새 성공판정이 FAIL로 정확히 노출)."""
+    return bool(
+        GENERATE_NETWORK_BLOCKS and best_ssid and live_ssid and best_ssid != live_ssid
+    )
 
 
 # ==============================================================================
@@ -2122,8 +2130,9 @@ def main():
         best_reason = ""
         best_score = 0
 
-        # cross-SSID 판정 기준(라이브 SSID + conf WPA_SSID). 루프와 아래 로밍 분기에서 공유.
-        base_ssids = {s for s in (station.get("ssid"), WPA_SSID) if s}
+        # cross-SSID 판정 기준 = 라이브 연결 SSID 단일(T5: base에 WPA_SSID를 넣으면
+        # conf 기본 SSID 복귀가 same으로 오판되어 FAIL 루프). 루프와 아래 로밍 분기에서 공유.
+        live_ssid = station.get("ssid")
 
         for roam_ap in entries:
             if roam_ap["bssid"] == station["bssid"]:
@@ -2135,7 +2144,7 @@ def main():
             ap_ssid = roam_ap.get("ssid", "")  # .get으로 일관 접근(조건 순서 변경 시 KeyError 방지)
             if (
                 cross_ssid_cooldown is not None
-                and should_cross_connect(ap_ssid, base_ssids)
+                and should_cross_connect(ap_ssid, live_ssid)
                 and cross_ssid_cooldown.is_cooling(ap_ssid)
             ):
                 continue
@@ -2188,10 +2197,10 @@ def main():
                 _EXTRA_(),
             )
 
-            # 라우팅 판단은 위에서 선계산한 base_ssids(라이브 SSID + conf WPA_SSID)를 공유.
-            # should_cross_connect 게이트(모드 A AND base 밖 SSID)면 cross connect(재연결),
+            # 라우팅 판단은 위에서 선계산한 live_ssid(라이브 연결 SSID)를 공유.
+            # should_cross_connect 게이트(모드 A AND live와 다른 SSID)면 cross(select_network),
             # 아니면 무중단 roam. 모드 B(generate=false)는 cross 항상 차단(spec §3.5 2차 게이트).
-            if should_cross_connect(best_ap.get("ssid"), base_ssids):
+            if should_cross_connect(best_ap.get("ssid"), live_ssid):
                 # 다른(extra) SSID → 모드 A select_network(conf 불변). 성공/실패를 cooldown에 등록:
                 # 실패 누적 시 그 SSID를 후보에서 제외해 deauth 진동을 차단(spec §3.2).
                 ok = route_cross_ssid_transition(
