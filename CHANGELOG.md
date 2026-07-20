@@ -3,6 +3,14 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## Unreleased
+
+> SemVer **patch** — `wifi br route` 서브커맨드 신설(진단·복구용). 와이어 포맷·설정키 호환 변경 없음.
+
+### wlan-package (메인)
+
+- **`wifi {0|1} br route {find|set|auto}` 신설** — peer_route=on 토폴로지에서 **이더넷 미연결로 부팅**하면 `wired_mac_ip_get.py`가 `wait_for_eth_link()`에서 early-return 해 **peer host route(`<peer>/32 dev eth0`)만 누락**된다(나머지 인프라는 링크 무관하게 세팅됨). 이후 eth 연결 시 이 라우트를 사후 등록하는 수동 커맨드. 독립 bash 2개(`wifi_eth_peer_find.sh` 탐색기, `wifi_eth_peer_route.sh` 등록기)로 구현하고 부팅크리티컬 `wired_mac_ip_get.py`는 무수정. `find [<subnet>]`=peer sweep 탐색(읽기 전용, self·GW 제외), `set <ip>`=`ip route replace <ip>/32 dev eth0` 등록, `auto [<subnet>]`=정확히 1건 발견 시 등록(0/2+는 에러). 서브넷 생략 시 `eth_client_ip`→`eth_sweep_subnet`→mlanN CIDR 순 결정. `peer_route.enabled=false`면 경고 후 진행. 스텁 기반 단위/통합 테스트 40 assertion 추가. (자동 링크업 트리거는 후속 Phase 2)
+
 ## 0.4.4 (2026-07-17)
 
 > SemVer **patch** — peer_route 진단·안정화 + 부팅 race 수리 + tpacket 배리어 + 로그 명령. 와이어 포맷·설정키 호환 변경 없음.
