@@ -31,7 +31,7 @@ make_env() {
     CONF="$STUB/conf.json"
     CLIENT_FILE="$STUB/eth0_client_ip"
     CARRIER="$STUB/carrier"; echo 1 > "$CARRIER"   # 기본 링크 up
-    ARPING_RC="$STUB/arping_rc"; echo 0 > "$ARPING_RC"
+    RESPONDERS="$STUB/arping_responders"; : > "$RESPONDERS"   # arping이 exit0(응답)으로 칠 IP 목록
 
     # stub: ip — 서브커맨드별 canned 출력, 모든 호출을 CALLS에 기록
     cat > "$STUB/bin/ip" <<STUBEOF
@@ -47,11 +47,13 @@ esac
 exit 0
 STUBEOF
 
-    # stub: arping — 기록 후 ARPING_RC 파일 코드로 종료
+    # stub: arping — 마지막 인자(target IP)가 responders 목록에 있으면 exit 0(응답), 없으면 1.
+    # 실기 arping은 raw 소켓이라 neigh를 안 채우므로, finder는 neigh가 아니라 exit code로 응답자를 수집한다.
     cat > "$STUB/bin/arping" <<STUBEOF
 #!/bin/bash
 echo "arping \$*" >> "$CALLS"
-exit \$(cat "$ARPING_RC" 2>/dev/null || echo 0)
+_t="\${@: -1}"
+grep -qxF "\$_t" "$RESPONDERS" 2>/dev/null && exit 0 || exit 1
 STUBEOF
 
     # stub: logger/jq(그대로 진짜 jq 쓰되 없으면 통과)/sleep(즉시)
@@ -133,47 +135,45 @@ out="$("$FIND_SH" 192.168.0.0/24 mlan0 2>&1)"; rc=$?
 assert_eq "$rc" "3" "F1 carrier down exit3"
 assert_absent "$(cat "$CALLS")" "arping" "F1 no arping"
 
-# F2: 명시 subnet + neigh(self/gw/peer) → peer만 출력, self·gw 제외
+# F2: 명시 subnet + 응답자(self/gw/peer) → peer만 출력, self·gw 제외
 make_env; write_conf true "" ""; _seed_iface
-printf '192.168.0.1 lladdr aa:aa:aa:aa:aa:aa REACHABLE\n192.168.0.20 lladdr bb:bb:bb:bb:bb:bb REACHABLE\n192.168.0.100 lladdr cc:cc:cc:cc:cc:cc REACHABLE\n' > "$STUB/ip_neigh_eth0"
+printf '192.168.0.1\n192.168.0.20\n192.168.0.100\n' > "$RESPONDERS"
 out="$("$FIND_SH" 192.168.0.0/24 mlan0 2>/dev/null)"; rc=$?
 assert_eq "$rc" "0" "F2 exit0"
 assert_contains "$out" "192.168.0.20" "F2 peer 출력"
 assert_absent "$out" "192.168.0.100" "F2 self 제외"
 assert_absent "$out" "192.168.0.1"   "F2 gw 제외"
 assert_contains "$(cat "$CALLS")" "arping" "F2 sweep 수행"
-assert_contains "$(cat "$CALLS")" "neigh flush dev eth0" "F2 sweep 전 neigh flush(STALE 오등록 방지)"
 
-# F3: subnet 생략 + eth_client_ip 설정 + arping 응답(rc0) → 그 IP 출력 (quick path)
-make_env; write_conf true "192.168.0.20" ""; _seed_iface; echo 0 > "$ARPING_RC"
+# F3: subnet 생략 + eth_client_ip 응답 → 그 IP 출력 (quick path)
+make_env; write_conf true "192.168.0.20" ""; _seed_iface
+printf '192.168.0.20\n' > "$RESPONDERS"
 out="$("$FIND_SH" "" mlan0 2>/dev/null)"; rc=$?
 assert_eq "$rc" "0" "F3 quick exit0"
 assert_contains "$out" "192.168.0.20" "F3 eth_client_ip 출력"
 
-# F4: sweep 결과 없음(neigh empty) → exit 1, 빈 출력
-make_env; write_conf true "" ""; _seed_iface; : > "$STUB/ip_neigh_eth0"
+# F4: sweep 응답자 없음 → exit 1, 빈 출력
+make_env; write_conf true "" ""; _seed_iface   # RESPONDERS 비어있음
 out="$("$FIND_SH" 192.168.0.0/24 mlan0 2>/dev/null)"; rc=$?
 assert_eq "$rc" "1" "F4 no peer exit1"
 assert_eq "$out" "" "F4 빈 출력"
 
-# F5: 복수 peer + FAILED 혼재 → REACHABLE/STALE 2줄만, FAILED 제외
+# F5: 복수 응답자 → 각 1줄씩, 정확히 2줄
 make_env; write_conf true "" ""; _seed_iface
-printf '192.168.0.20 lladdr bb:bb:bb:bb:bb:bb REACHABLE\n192.168.0.30 lladdr dd:dd:dd:dd:dd:dd STALE\n192.168.0.40 lladdr ee:ee:ee:ee:ee:ee FAILED\n' > "$STUB/ip_neigh_eth0"
+printf '192.168.0.20\n192.168.0.30\n' > "$RESPONDERS"
 out="$("$FIND_SH" 192.168.0.0/24 mlan0 2>/dev/null)"; rc=$?
 assert_eq "$rc" "0" "F5 exit0"
 assert_contains "$out" "192.168.0.20" "F5 peer1"
-assert_contains "$out" "192.168.0.30" "F5 peer2(STALE 허용)"
-assert_absent   "$out" "192.168.0.40" "F5 FAILED 제외"
+assert_contains "$out" "192.168.0.30" "F5 peer2"
 assert_eq "$(printf '%s\n' "$out" | grep -c .)" "2" "F5 정확히 2줄"
 
-# F6: 스윕 대역 밖 neigh 엔트리 제외 (MEDIUM: stale 이웃 누출 → auto 오등록 방지)
+# F6: 스윕 대역 밖 응답자는 arping 대상이 아니므로 출력 안 됨(범위 내만 probe)
 make_env; write_conf true "" ""; _seed_iface
-printf '192.168.0.5 lladdr bb:bb:bb:bb:bb:bb REACHABLE\n10.0.0.77 lladdr dd:dd:dd:dd:dd:dd STALE\n192.168.9.9 lladdr ee:ee:ee:ee:ee:ee STALE\n' > "$STUB/ip_neigh_eth0"
+printf '192.168.0.5\n10.0.0.77\n' > "$RESPONDERS"
 out="$("$FIND_SH" 192.168.0.0/24 mlan0 2>/dev/null)"; rc=$?
 assert_eq "$rc" "0" "F6 exit0"
 assert_contains "$out" "192.168.0.5" "F6 대역내 peer 출력"
-assert_absent "$out" "10.0.0.77"   "F6 대역밖 제외1"
-assert_absent "$out" "192.168.9.9" "F6 대역밖 제외2"
+assert_absent "$out" "10.0.0.77" "F6 대역밖 미출력(arping 대상 아님)"
 assert_eq "$(printf '%s\n' "$out" | grep -c .)" "1" "F6 정확히 1줄(대역내만)"
 
 # F7: 잘못된 subnet 인자 → exit 2 (garbage 스윕 대신 clean 에러), arping 미수행
@@ -182,16 +182,18 @@ out="$("$FIND_SH" abc.def.ghi.jkl/24 mlan0 2>&1)"; rc=$?
 assert_eq "$rc" "2" "F7 bad subnet exit2"
 assert_absent "$(cat "$CALLS")" "arping" "F7 arping 미수행"
 
-# F8: DELAY 등 REACHABLE/STALE 외 상태 제외 (스펙 정렬)
+# F8 (회귀 방지): arping은 실기에서 neigh를 안 채우므로 finder는 'ip neigh show'를 읽으면 안 된다.
+#   응답자만으로 peer를 찾아야 하고, neigh show/flush 를 호출하지 않아야 한다.
 make_env; write_conf true "" ""; _seed_iface
-printf '192.168.0.20 lladdr bb:bb:bb:bb:bb:bb DELAY\n192.168.0.30 lladdr dd:dd:dd:dd:dd:dd REACHABLE\n' > "$STUB/ip_neigh_eth0"
+printf '192.168.0.20\n' > "$RESPONDERS"
 out="$("$FIND_SH" 192.168.0.0/24 mlan0 2>/dev/null)"; rc=$?
-assert_absent   "$out" "192.168.0.20" "F8 DELAY 제외"
-assert_contains "$out" "192.168.0.30" "F8 REACHABLE 출력"
+assert_contains "$out" "192.168.0.20" "F8 neigh 없이 arping exit-code로 발견"
+assert_absent "$(cat "$CALLS")" "neigh show"  "F8 ip neigh show 미호출(neigh 비의존)"
+assert_absent "$(cat "$CALLS")" "neigh flush" "F8 neigh flush 미호출"
 
 # F9: SWEEP_PARALLEL_LIMIT=0 오버라이드 시 division-by-zero 없이 동작
 make_env; write_conf true "" ""; _seed_iface
-printf '192.168.0.20 lladdr bb:bb:bb:bb:bb:bb REACHABLE\n' > "$STUB/ip_neigh_eth0"
+printf '192.168.0.20\n' > "$RESPONDERS"
 err="$(SWEEP_PARALLEL_LIMIT=0 "$FIND_SH" 192.168.0.0/29 mlan0 2>&1 >/dev/null)"
 assert_absent "$err" "division by zero" "F9 div-by-zero 없음"
 
@@ -201,7 +203,7 @@ cat > "$CONF" <<'JSON'
 { "wbridge": { "peer_route": { "enabled": true } },
   "global": { "ETH_CLIENT_IP": "192.168.0.20" } }
 JSON
-_seed_iface; echo 0 > "$ARPING_RC"
+_seed_iface; printf '192.168.0.20\n' > "$RESPONDERS"
 out="$("$FIND_SH" "" mlan0 2>/dev/null)"; rc=$?
 assert_eq "$rc" "0" "F10 global eth_client_ip quick exit0"
 assert_contains "$out" "192.168.0.20" "F10 global.ETH_CLIENT_IP quick path"
@@ -217,20 +219,20 @@ assert_contains "$(cat "$CALLS")" "ip route replace 192.168.0.20/32 dev eth0" "I
 
 # I2: br route find <subnet> → 탐색기 경유 peer 출력, exit 0
 make_env; write_conf true "" ""; _seed_iface
-printf '192.168.0.20 lladdr bb:bb:bb:bb:bb:bb REACHABLE\n' > "$STUB/ip_neigh_eth0"
+printf '192.168.0.20\n' > "$RESPONDERS"
 out="$(bash "$WIFI_SH" 0 br route find 192.168.0.0/24 2>/dev/null)"; rc=$?
 assert_eq "$rc" "0" "I2 find exit0"
 assert_contains "$out" "192.168.0.20" "I2 peer 출력"
 
 # I3: br route auto — 정확히 1건 → route 발행, exit 0
 make_env; write_conf true "" ""; _seed_iface
-printf '192.168.0.20 lladdr bb:bb:bb:bb:bb:bb REACHABLE\n' > "$STUB/ip_neigh_eth0"
+printf '192.168.0.20\n' > "$RESPONDERS"
 out="$(bash "$WIFI_SH" 0 br route auto 192.168.0.0/24 2>/dev/null)"; rc=$?
 assert_eq "$rc" "0" "I3 auto-1 exit0"
 assert_contains "$(cat "$CALLS")" "ip route replace 192.168.0.20/32 dev eth0" "I3 auto→route 발행"
 
 # I4: br route auto — 0건 → 에러 exit(고유 메시지 '미발견'), route 미발행
-make_env; write_conf true "" ""; _seed_iface; : > "$STUB/ip_neigh_eth0"
+make_env; write_conf true "" ""; _seed_iface   # RESPONDERS 비어있음
 out="$(bash "$WIFI_SH" 0 br route auto 192.168.0.0/24 2>&1)"; rc=$?
 [ "$rc" -ne 0 ] && _pass || _fail "I4 auto-0 nonzero exit (got $rc)"
 assert_absent "$(cat "$CALLS")" "route replace" "I4 route 미발행"
@@ -238,7 +240,7 @@ assert_contains "$out" "미발견" "I4 미발견 메시지"
 
 # I5: br route auto — 2건 → 에러 exit(고유 메시지 '모호'/'set <ip>'), route 미발행
 make_env; write_conf true "" ""; _seed_iface
-printf '192.168.0.20 lladdr bb:bb:bb:bb:bb:bb REACHABLE\n192.168.0.30 lladdr dd:dd:dd:dd:dd:dd REACHABLE\n' > "$STUB/ip_neigh_eth0"
+printf '192.168.0.20\n192.168.0.30\n' > "$RESPONDERS"
 out="$(bash "$WIFI_SH" 0 br route auto 192.168.0.0/24 2>&1)"; rc=$?
 [ "$rc" -ne 0 ] && _pass || _fail "I5 auto-2 nonzero exit (got $rc)"
 assert_absent "$(cat "$CALLS")" "route replace" "I5 route 미발행"
