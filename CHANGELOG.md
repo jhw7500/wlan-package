@@ -5,12 +5,15 @@ wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약�
 
 ## Unreleased
 
-> SemVer **patch** — `wifi br route` 서브커맨드 신설(진단·복구용). 와이어 포맷·설정키 호환 변경 없음.
+> SemVer **patch** — `wifi br route` 서브커맨드 + MAC 반영 로직 정비(base 항상 반영·bridge override)·`update_mac.sh` 견고성. 와이어 포맷·설정키 호환 변경 없음.
 
 ### wlan-package (메인)
 
 - **`wifi {0|1} br route {find|set|auto}` 신설** — peer_route=on 토폴로지에서 **이더넷 미연결로 부팅**하면 `wired_mac_ip_get.py`가 `wait_for_eth_link()`에서 early-return 해 **peer host route(`<peer>/32 dev eth0`)만 누락**된다(나머지 인프라는 링크 무관하게 세팅됨). 이후 eth 연결 시 이 라우트를 사후 등록하는 수동 커맨드. 독립 bash 2개(`wifi_eth_peer_find.sh` 탐색기, `wifi_eth_peer_route.sh` 등록기)로 구현하고 부팅크리티컬 `wired_mac_ip_get.py`는 무수정. `find [<subnet>]`=peer sweep 탐색(읽기 전용, self·GW 제외), `set <ip>`=`ip route replace <ip>/32 dev eth0` 등록, `auto [<subnet>]`=정확히 1건 발견 시 등록(0/2+는 에러). 서브넷 생략 시 `eth_client_ip`→`eth_sweep_subnet`→mlanN CIDR 순 결정. `peer_route.enabled=false`면 경고 후 진행. 스텁 기반 단위/통합 테스트 추가. (자동 링크업 트리거는 후속 Phase 2)
 - **`br route find`/`auto` 실기 무출력 버그 픽스** — 탐색기가 arping sweep 후 `ip neigh show`로 응답자를 읽었으나, `arping`(iputils)은 raw PF_PACKET 소켓이라 **응답을 받아도 커널 neigh 테이블을 채우지 않는다**(온타겟 실측 2026-07-20: `arping` exit=0인데 `ip neigh show`엔 없음, `ping`은 채움). 그 결과 유선 peer가 실제로 응답해도 항상 무출력이었다. `ip neigh show` 읽기·`ip neigh flush`를 폐기하고 **arping exit code로 응답자를 직접 수집**하도록 교체(온타겟 `find`가 유선 peer 192.168.0.21/122 발견 검증). 부수 효과: 스윕 범위 내 IP만 probe하므로 대역 필터가 불필요해지고, live 응답만 잡으므로 STALE 잔존 오등록도 원천 차단(직전 `neigh flush` 가드 제거). 스텁 테스트를 arping-응답자 모델로 재작성 — 기존 테스트는 arping과 neigh 스텁을 분리해 이 버그를 가렸다.
+- **MAC 반영 로직 재설계 + `update_mac.sh` 견고성** (#110) — mlan0/mlan1 모두 `enabled` 여부와 무관하게 `mac.<iface>.base`를 항상 반영(baseline)하고, 실제 bridge 활성(`wbridge.enabled` & bridge iface enable) + dynamic/static 변환 성공 시에만 bridge 인터페이스 MAC을 base 대신 override(기존: iface `enabled=false` 시 MAC 설정 전체 skip → mlan1 비활성에서 base 미반영). `update_mac.sh`는 `.link`가 없을 때 `[Match]/[Link]/MACAddress`를 갖춘 파일을 자동 생성하고(기존: 빈 0바이트 파일 생성 후 성공 로그만 → MAC 미적용), 백업을 인터페이스당 최대 5개 회전(`.bak.1`~`.bak.5`) + 동일 MAC 중복 방지로 전환.
+- **`update_mac.sh` 리뷰 후속 + 테스트** (#111) — 빈(0바이트)·섹션 없는 `.link`도 재생성(구버전 버그로 남은 0바이트 파일이 그대로 방치돼 MAC 미적용되던 회귀 차단), `mktemp` 실패 시 에러 로그 후 종료, 잘못된 MAC 입력 시 현재 `.link`가 이미 유효하면 오래된 백업 복구 skip. `SYSTEMD_NETWORK_DIR` 오버라이드로 테스트 가능화(기본 동작 불변), `update_mac_test.sh` 신설(21 케이스).
+- **`br route find`/`auto` — eth0 타서브넷 peer 발견 수정** (#113) — 탐색기 `wifi_eth_peer_find.sh`가 `arping`을 `-s`(source) 없이 호출해 eth0 IP를 sender로 써, eth0가 sweep 대역과 다른 서브넷이면(예: eth0=192.168.1.1/24, peer=192.168.0.220) same-subnet source에만 응답하는 peer를 못 찾던 문제(서브넷 인자는 sweep 범위만 바꾸고 source는 안 바꿈). eth0가 대역 밖이면 대역 내 우리 IP(mlanN)를 `-s`로 지정하도록 보정. 온타겟(192.168.0.20/peer .220) 발견 검증, `wifi_eth_peer_find_test.sh` 신설(8 케이스).
 
 ## 0.4.4 (2026-07-17)
 
