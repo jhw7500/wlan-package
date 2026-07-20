@@ -103,7 +103,7 @@
             "peer": "",
             "consume_link_local": "",
             "_comment_local_hairpin": "local_hairpin: (0|1, 빈값=드라이버 기본 0) 로컬발 TX(dst==클론 MAC)를 공중 대신 유선 peer로 divert + ARP tee/inject. BD↔유선peer IP 통신을 peer_route/ip_discovery(=peer IP 인지) 없이 성립시킨다. AP가 intra-BSS 반사를 안 하는 현장에서 BD발신의 유일 경로 (2026-07-17 실기 검증). runtime 변경: /sys/module/moal/parameters/bridge_local_hairpin",
-            "local_hairpin": "1"
+            "local_hairpin": "0"
         },
         "optimize": {
             "_comment": [
@@ -296,8 +296,8 @@
             "use_signal_avg": true,
             "DEFAULT_TH_2G": -75,
             "DEFAULT_TH_5G": -75,
-            "DIFF_TH": 10,
-            "CHECK_INTERVAL": 3,
+            "DIFF_TH": 8,
+            "CHECK_INTERVAL": 2,
             "extra_ssids": [],
             "generate_network_blocks": false,
             "ROAM_CROSS_FAIL_RETRY_COUNT": 2,
@@ -334,9 +334,9 @@
                     "detection_time: (int) 핑퐁 감지 후 로밍 억제 시간 (초)"
                 ],
                 "enable": true,
-                "window": 30,
+                "window": 20,
                 "max_roams_in_window": 3,
-                "detection_time": 10
+                "detection_time": 5
             },
             "ADAPTIVE_INTERVAL": {
                 "_comment": [
@@ -384,7 +384,7 @@
                 }
             },
             "SCAN_NO_RESULT_SLEEP": 3,
-            "ROAM_SUCCESS_SLEEP": 5,
+            "ROAM_SUCCESS_SLEEP": 3,
             "enabled": true
         },
         "mcs_tier": {
@@ -481,8 +481,8 @@
             "use_signal_avg": true,
             "DEFAULT_TH_2G": -75,
             "DEFAULT_TH_5G": -75,
-            "DIFF_TH": 10,
-            "CHECK_INTERVAL": 5,
+            "DIFF_TH": 8,
+            "CHECK_INTERVAL": 3,
             "extra_ssids": [],
             "generate_network_blocks": false,
             "ROAM_CROSS_FAIL_RETRY_COUNT": 2,
@@ -519,9 +519,9 @@
                     "detection_time: (int) 핑퐁 감지 후 로밍 억제 시간 (초)"
                 ],
                 "enable": true,
-                "window": 60,
+                "window": 20,
                 "max_roams_in_window": 3,
-                "detection_time": 30
+                "detection_time": 5
             },
             "ADAPTIVE_INTERVAL": {
                 "_comment": [
@@ -569,7 +569,7 @@
                 }
             },
             "SCAN_NO_RESULT_SLEEP": 3,
-            "ROAM_SUCCESS_SLEEP": 5,
+            "ROAM_SUCCESS_SLEEP": 2,
             "enabled": false
         },
         "mcs_tier": {
