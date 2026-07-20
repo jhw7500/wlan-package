@@ -84,6 +84,25 @@ def test_mode_b_no_route_level_count(monkeypatch):
     notify.assert_called_once()
 
 
+def test_mode_b_pingpong_blocked_returns_none(monkeypatch):
+    """모드 B에서도 ping-pong 차단은 route 레벨 None(connect_to_ssid 미호출)."""
+    prev, notify = _setup(monkeypatch, pingpong=True, is_pp=True, mode_a=False)
+    with patch.object(wifi_roam, "connect_to_ssid") as con:
+        assert route_cross_ssid_transition(IFACE, "Net", FROM, TO) is None
+    con.assert_not_called()
+    notify.assert_not_called()
+    prev.add_roam.assert_not_called()
+
+
+def test_connect_to_ssid_internal_block_returns_none(monkeypatch):
+    """connect_to_ssid 직접 호출 시에도 차단=None(False 아님) — record 오염 방지 계약."""
+    prev, _ = _setup(monkeypatch, is_pp=True, mode_a=False)
+    with patch.object(wifi_roam.subprocess, "run") as run:
+        assert wifi_roam.connect_to_ssid(IFACE, "Net", FROM, TO) is None
+    run.assert_not_called()
+    prev.add_roam.assert_not_called()
+
+
 def test_pingpong_disabled_normal_flow(monkeypatch):
     """기능 off → 차단/카운트 없이 정상 전환."""
     prev, notify = _setup(monkeypatch, pingpong=False)

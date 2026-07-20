@@ -1667,7 +1667,9 @@ def connect_to_ssid(iface, to_ssid, from_bssid, to_bssid):
     - freq 인자는 일부러 생략한다: wifi connect에 단일 freq를 주면 conf의 multi-freq
       scan_freq/freq_list가 그 한 채널로 collapse되어 이후 스캔 범위가 축소된다. ssid만
       교체하고 scan_freq는 유지(후보는 이미 WPA_FREQ 내 채널이라 연결 가능).
-    - ping-pong 예산은 same-SSID 로밍과 공유(의도): cross-SSID도 BSSID 기반 카운트에 합산."""
+    - ping-pong 예산은 same-SSID 로밍과 공유(의도): cross-SSID도 BSSID 기반 카운트에 합산.
+    - ping-pong 차단 시 None 반환(전환 미시도 — 실패 아님): 호출자가 결과를
+      record_cross_ssid_result에 넘겨도 cooldown에 실패로 등록되지 않게 route와 계약 통일."""
     if ENABLE_PING_PONG_PREVENTION and ping_pong_preventer:
         if ping_pong_preventer.is_ping_pong(from_bssid, to_bssid):
             logger.message(
@@ -1675,7 +1677,7 @@ def connect_to_ssid(iface, to_ssid, from_bssid, to_bssid):
                 f"[{IFACE}] Cross-SSID roam blocked: ping-pong ({from_bssid} → {to_bssid})",
                 _EXTRA_(),
             )
-            return False
+            return None
 
     logger.message(
         "notice",
@@ -1894,7 +1896,9 @@ def route_cross_ssid_transition(iface, to_ssid, from_bssid, to_bssid):
     # 남을 수 있어(stale ap_mac), 성공 직후 wpa_cli status(권위)로 실 결합 BSS를
     # 조회해 넘긴다. 조회 실패 시 "" → link.address 폴백(종전 동작), 무회귀.
     if ok:
-        assoc = get_associated_bssid(iface)
+        # 소문자 정규화: PingPongPreventer가 (from,to) 문자열 비교로 왕복을 감지하므로
+        # 스캔 파서(.lower())·link.json(.lower())과 표기를 일치시킨다.
+        assoc = (get_associated_bssid(iface) or "").strip().lower()
         if GENERATE_NETWORK_BLOCKS and ENABLE_PING_PONG_PREVENTION and ping_pong_preventer:
             # 실 결합 BSS(권위)로 카운트, 조회 실패 시 목표 to_bssid 폴백.
             ping_pong_preventer.add_roam(from_bssid, assoc or to_bssid)
