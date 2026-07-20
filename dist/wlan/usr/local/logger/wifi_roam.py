@@ -244,7 +244,9 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
             try:
                 return cast(cur)
             except (TypeError, ValueError):
-                return cur
+                # 미래에 모듈 전역 초기값 없는 키가 추가돼 cur가 None이어도 None을
+                # 전역에 쓰지 않는다(이후 int 사용처 TypeError 방지) — 최후 0 폴백.
+                return cur if isinstance(cur, (int, float)) else 0
 
     g.update(
         {
@@ -1508,6 +1510,9 @@ def reload_roaming_config_if_changed(iface):
         st["applied"] = st["seen"] = mtime  # 시작 기준점(main 초기 load 반영분)
         return False
     if mtime == st["applied"]:
+        # 이미 적용된 mtime으로 (되돌림 등) 복귀 → seen도 동기화해야 한다. 안 하면
+        # 디바운스 중(seen=B)에 파일이 A(적용됨)로 돌아갔다 다시 B로 바뀔 때 seen이
+        # 여전히 B라 '안정화됨'으로 오판해 디바운스 없이 즉시 적용된다.
         st["seen"] = mtime
         return False
     if mtime != st["seen"]:
@@ -1560,6 +1565,17 @@ def reload_roaming_config_if_changed(iface):
                 _EXTRA_(),
             )
         GENERATE_NETWORK_BLOCKS = old_gen
+        EXTRA_SSIDS = list(old_extra)
+    elif GENERATE_NETWORK_BLOCKS and EXTRA_SSIDS != old_extra:
+        # 모드 A에서 extra_ssids는 부팅 시 생성된 wpa 네트워크 블록에 종속(gen과 동일
+        # 사유로 블록 생성이 boot 절차). 런타임에 배열만 바꾸면 블록 없는 SSID로
+        # select_network가 실패하므로 재시작 전용으로 취급(현행 유지 + 경고).
+        logger.message(
+            "warn",
+            f"[{iface}] extra_ssids change ignored at runtime in mode A "
+            f"(requires daemon restart to regenerate network blocks)",
+            _EXTRA_(),
+        )
         EXTRA_SSIDS = list(old_extra)
     # 인스턴스 파라미터 갱신(이력 보존) + enable off→on 인스턴스 생성
     if ENABLE_PING_PONG_PREVENTION:
