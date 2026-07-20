@@ -1314,7 +1314,11 @@ def get_latest_scan(st, channel_info_data=None, allowed_ssids=None):
                         _EXTRA_(),
                     )
 
-                    if ssid in allowed_set and WPA_FREQ and freq_str in WPA_FREQ:
+                    # scan_freq(WPA_FREQ) 미설정이면 채널 제한 없이 동일 SSID를 후보로
+                    # 허용한다(동작주파수 제한 없이 운용하는 배포 지원). 설정돼 있으면 그
+                    # 채널로 스코프(기존 동작 유지). 빈 WPA_FREQ에서 후보 0이 되어 로밍이
+                    # 죽던 근본원인 수정.
+                    if ssid in allowed_set and (not WPA_FREQ or freq_str in WPA_FREQ):
                         entries.append(
                             {
                                 "timestamp": timestamp,
@@ -2271,7 +2275,9 @@ def main():
         # 대상 BSS를 못 찾고 FAIL했다(근본원인: 네이티브 bgscan 제거로 테이블이 자동 갱신되지
         # 않는데 판정 스캔마저 테이블을 안 채움). iw scan은 테이블을 채우고, 후보를 테이블
         # 그 자체(scan_results)에서 뽑으므로 roam 대상이 항상 테이블에 존재한다.
-        if WPA_SSID and WPA_FREQ:
+        # WPA_FREQ 미설정(scan_freq 없음)이어도 스캔한다 — iw_scan_to_ap_lines가 freqs
+        # 빈값이면 freq 제한 없이 전체 대역을 스캔하므로 어느 채널의 동일 SSID AP든 발견.
+        if WPA_SSID:
             # station["ssid"]는 get_link_info_with_load가 link.json info.ssid(실제 연결 SSID)로 채움
             if not station.get("ssid"):
                 station["ssid"] = WPA_SSID
