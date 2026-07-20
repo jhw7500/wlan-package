@@ -71,24 +71,37 @@ def test_parse_generate_default_false(tmp_path, monkeypatch):
     assert wifi_roam.GENERATE_NETWORK_BLOCKS is False
 
 
-# --- 메인루프 cross 분기 AND 게이트 (should_cross_connect 헬퍼) ---
+# --- 메인루프 cross 분기 AND 게이트 (should_cross_connect 헬퍼, live SSID 기준) ---
 
 def test_cross_blocked_in_mode_b(monkeypatch):
-    # 모드 B: best_ap가 extra SSID여도 cross connect 진입 안 함
+    # 모드 B: best_ap가 다른 SSID여도 cross connect 진입 안 함
     monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", False)
-    assert wifi_roam.should_cross_connect("Office", {"BaseNet", "LiveNet"}) is False
+    assert wifi_roam.should_cross_connect("Office", "LiveNet") is False
 
 def test_cross_allowed_in_mode_a_for_extra(monkeypatch):
-    # 모드 A: best_ap가 base 밖 SSID면 cross connect 허용
+    # 모드 A: best_ap가 live와 다른 SSID면 cross connect 허용
     monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", True)
-    assert wifi_roam.should_cross_connect("Office", {"BaseNet", "LiveNet"}) is True
+    assert wifi_roam.should_cross_connect("Office", "LiveNet") is True
 
-def test_cross_not_for_base_ssid_mode_a(monkeypatch):
-    # 모드 A라도 best_ap가 base 집합에 속하면 cross 아님(same-SSID roam 경로)
+def test_cross_return_to_conf_default_is_cross(monkeypatch):
+    # ★T5 회귀(2026-07-20): live=extra(Office)에서 conf 기본(BaseNet) 복귀도 cross여야 한다.
+    # 구 base_ssids 판정은 WPA_SSID 포함으로 False(same 오라우팅)→wpa_cli roam FAIL 무한루프.
     monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", True)
-    assert wifi_roam.should_cross_connect("BaseNet", {"BaseNet", "LiveNet"}) is False
+    monkeypatch.setattr(wifi_roam, "WPA_SSID", "BaseNet")
+    assert wifi_roam.should_cross_connect("BaseNet", "Office") is True
+
+def test_cross_not_for_live_ssid_mode_a(monkeypatch):
+    # 모드 A라도 best_ap가 라이브 SSID와 같으면 cross 아님(same-SSID roam 경로)
+    monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", True)
+    assert wifi_roam.should_cross_connect("LiveNet", "LiveNet") is False
 
 def test_cross_none_ssid_false(monkeypatch):
     # best_ap.ssid 부재면 cross 아님(roam_to_bssid 경로로)
     monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", True)
-    assert wifi_roam.should_cross_connect(None, {"BaseNet"}) is False
+    assert wifi_roam.should_cross_connect(None, "LiveNet") is False
+
+def test_cross_unknown_live_false(monkeypatch):
+    # live 미상(None/"")이면 보수적으로 cross 아님
+    monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", True)
+    assert wifi_roam.should_cross_connect("Office", None) is False
+    assert wifi_roam.should_cross_connect("Office", "") is False
