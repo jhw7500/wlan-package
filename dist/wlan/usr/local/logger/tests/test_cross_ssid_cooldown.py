@@ -170,9 +170,9 @@ def test_integration_cooldown_skip_condition(monkeypatch, fake_clock):
     monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", True)
     cd = CrossSsidCooldown(retry_count=0)
     cd.register_failure("Office")
-    base = {"Home"}
+    live = "Home"  # 라이브 연결 SSID(should_cross_connect는 문자열 live_ssid 기준, PR#105)
     # extra SSID(cross 대상) + cooldown 중 → 메인루프가 후보에서 skip
-    assert wifi_roam.should_cross_connect("Office", base) is True
+    assert wifi_roam.should_cross_connect("Office", live) is True
     assert cd.is_cooling("Office") is True
     # 현재 ESS SSID(same)는 cross 대상이 아님 → cooldown과 무관(skip 안 함)
-    assert wifi_roam.should_cross_connect("Home", base) is False
+    assert wifi_roam.should_cross_connect("Home", live) is False
