@@ -138,6 +138,31 @@ update_json_iface() {
     fi
 }
 
+# JSON roaming.* 정수 설정 수정 (중첩 키 + --argjson 숫자 타입 — schema integer 유지)
+update_json_roaming_int() {
+    local iface="$1"
+    local key="$2"
+    local value="$3"
+
+    if [ ! -f "$WIFI_INIT_CONF_JSON" ]; then
+        echo "Error: $WIFI_INIT_CONF_JSON not found"
+        return 1
+    fi
+
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "Error: jq not installed"
+        return 1
+    fi
+
+    if jq --arg i "$iface" --arg k "$key" --argjson v "$value" '.[$i].roaming[$k] = $v' "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp"; then
+        mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
+    else
+        rm -f "${WIFI_INIT_CONF_JSON}.tmp"
+        echo "Error: JSON roaming update failed for ${iface}.roaming.${key}" >&2
+        return 1
+    fi
+}
+
 ensure_wifi_init_conf() {
     # JSON config is managed by postinst, no action needed here
     :
@@ -331,6 +356,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} scan {freq_list|channel_list|2G|5G} : runtime"
     echo "       wifi {0|1|mlan0|mlan1} mscan {get|channel_list|2G|5G} : runtime (setuserscan/getscantable)"
     echo "       wifi {0|1|mlan0|mlan1} roam [0|1..N] : 0=auto best, N=Nth AP (RSSI order)"
+    echo "       wifi {0|1|mlan0|mlan1} roam th [2G|5G] [rssi] : 로밍 RSSI 임계값 표시/설정 (persist, wifi_roam 재시작 반영)"
     echo "       wifi {0|1|mlan0|mlan1} stat reset [mac] : reset stat records (all or specific MAC)"
     echo "       wifi {0|1|mlan0|mlan1} stat interval {seconds} : set stat reset interval (persist)"
     echo "       wifi {0|1|mlan0|mlan1} mon [c|compact] [interval] [--summary-lines N] [--roam-display N]"
@@ -1531,10 +1557,61 @@ case "$2" in
     fi
     ;;
   roam)
-    # wifi 0 roam       → AP 리스트만 표시
-    # wifi 0 roam 0     → 현재 AP 제외 최고 RSSI로 자동 로밍
-    # wifi 0 roam 1~N   → RSSI 순서 N번째 AP로 로밍
+    # wifi 0 roam            → AP 리스트만 표시
+    # wifi 0 roam 0          → 현재 AP 제외 최고 RSSI로 자동 로밍
+    # wifi 0 roam 1~N        → RSSI 순서 N번째 AP로 로밍
+    # wifi 0 roam th         → 로밍 RSSI 임계값 표시 (2G/5G)
+    # wifi 0 roam th 5G -70  → roaming.DEFAULT_TH_5G=-70 (persist) + wifi_roam 재시작 반영
+    # wifi 0 roam th 2G -70  → roaming.DEFAULT_TH_2G=-70
     ROAM_ARG="${3:-}"
+    if [ "$ROAM_ARG" = "th" ]; then
+        if [ "$IFACE" = "eth0" ]; then
+            echo "Error: roam th is for wlan interfaces (mlan0/mlan1)" >&2
+            exit 1
+        fi
+        BAND=$(echo "${4:-}" | tr 'a-z' 'A-Z')
+        case "$BAND" in
+            2G|2) TH_KEY="DEFAULT_TH_2G" ;;
+            5G|5) TH_KEY="DEFAULT_TH_5G" ;;
+            "")
+                # 밴드 미지정 → 현재값 모두 표시
+                th2=$(jq -r ".${IFACE}.roaming.DEFAULT_TH_2G // \"unset\"" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+                th5=$(jq -r ".${IFACE}.roaming.DEFAULT_TH_5G // \"unset\"" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+                echo "$IFACE roam threshold: 2G=${th2} 5G=${th5} (dBm)"
+                exit 0
+                ;;
+            *)
+                echo "Usage: wifi {0|1|mlan0|mlan1} roam th {2G|5G} [rssi]" >&2
+                exit 1
+                ;;
+        esac
+        RSSI="${5:-}"
+        if [ -z "$RSSI" ]; then
+            cur=$(jq -r ".${IFACE}.roaming.${TH_KEY} // \"unset\"" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+            echo "$IFACE roaming.${TH_KEY} = ${cur} (dBm)"
+            exit 0
+        fi
+        # 음수 정수 -100..-1 만 허용 (양수/비정수/범위밖 거부)
+        if ! echo "$RSSI" | grep -qE '^-[0-9]+$' || [ "$RSSI" -lt -100 ] || [ "$RSSI" -gt -1 ]; then
+            echo "Error: rssi must be a negative integer in -100..-1 (got '$RSSI')" >&2
+            exit 1
+        fi
+        OLD=$(jq -r ".${IFACE}.roaming.${TH_KEY} // \"unset\"" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+        update_json_roaming_int "$IFACE" "$TH_KEY" "$RSSI" || exit 1
+        echo "$IFACE roaming.${TH_KEY}: ${OLD} -> ${RSSI} (persist)"
+        # wpa_supplicant conf의 #!TH_ 마커는 JSON보다 우선 — 있으면 반영 안 됨을 경고
+        MARKER="${TH_KEY#DEFAULT_}"
+        if grep -qE "^#!${MARKER}=" "/etc/wpa_supplicant/wpa_supplicant-${IFACE}.conf" 2>/dev/null; then
+            echo "Warning: #!${MARKER}= marker in wpa_supplicant-${IFACE}.conf overrides JSON value" >&2
+        fi
+        # JSON TH는 wifi_roam 시작 시에만 로드 → 재시작으로 즉시 반영 (재시작은 연결 무영향)
+        if systemctl is-active --quiet "wifi_roam@${IFACE}" 2>/dev/null; then
+            systemctl restart "wifi_roam@${IFACE}" && echo "wifi_roam@${IFACE} restarted (applied)"
+        else
+            echo "wifi_roam@${IFACE} inactive (applies on next start)"
+        fi
+        exit 0
+    fi
     if [ -z "$ROAM_ARG" ]; then
         python3 /usr/local/logger/passive_roam.py --iface $IFACE
     else
