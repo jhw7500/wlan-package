@@ -8,6 +8,7 @@ import signal
 import logging
 import logging.handlers
 import os
+import select
 from typing import Any, Dict
 from datetime import datetime
 from collections import deque
@@ -1479,56 +1480,78 @@ def reload_supplicant_conf_if_changed(path):
         )
 
 
-# 런타임 roaming config reload 상태 (mtime 기반 디바운스+검증)
-ROAM_JSON_RELOAD_STATE = {"applied": None, "seen": None, "warned": None}
+# 런타임 roaming config reload — SIGHUP 신호로만 트리거(폴링 없음 → 프로덕션 비용 0).
+# 로밍 설정 변경은 검증/튜닝 때만 발생하므로 매 루프 파일을 stat 하는 상시 폴링은
+# 일반 환경에 불필요한 비용이다. 대신 self-pipe 로 대기 중인 메인루프를 즉시 깨워
+# 긴 backoff sleep 중에도 즉시 반영한다(async-signal-safe: 플래그 대입 + os.write 만).
+_RELOAD_STATE = {"pending": False}
+try:
+    # O_CLOEXEC: 데몬이 spawn하는 자식(iw/wpa_cli/mlanutl)이 신호 파이프 fd를 상속하지
+    # 않게 한다(subprocess close_fds 기본과 이중 방어). O_NONBLOCK로 핸들러 write/drain 무블록.
+    _SIG_PIPE_R, _SIG_PIPE_W = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
+except (OSError, AttributeError):  # pipe2 미지원 플랫폼 폴백
+    try:
+        _SIG_PIPE_R, _SIG_PIPE_W = os.pipe()
+        os.set_blocking(_SIG_PIPE_W, False)
+        os.set_blocking(_SIG_PIPE_R, False)
+    except OSError:
+        _SIG_PIPE_R = _SIG_PIPE_W = None
 
 
-def reload_roaming_config_if_changed(iface):
-    """wifi_init_conf.json 이 런타임 변경되면(에디터/wifi roam th 등) 재시작 없이
-    로밍 설정을 재적용한다 — 검증 시 조건/임계값 라이브 튜닝 + 데몬 상태(핑퐁 이력·
-    backoff·cooldown) 보존이 목적. 4중 방어:
-      1) mtime 변화 + 1사이클 안정화(디바운스): 에디터 연속 저장/쓰기 도중 읽기 회피
-      2) json.loads 선검증 성공 시에만 적용: invalid 저장 시 현행 유지(기본값 회귀
-         금지) + 같은 mtime 경고 1회, 다음 사이클 자동 재시도
-      3) generate_network_blocks(모드 결정자)는 재시작 전용 — conf 블록 생성/cooldown
-         활성이 외부 절차와 결합돼 있어 런타임 전환 금지(경고 후 이전 값 유지)
-      4) 인스턴스 파라미터는 재생성이 아닌 필드 갱신 → 이력(roam_history 등) 보존.
-         enable off→on 은 인스턴스 생성으로 반영, on→off 는 게이트가 자동 차단.
-    적용 성공 시 WPA_CONF_MTIME 을 리셋해 같은 사이클의 wpa conf 재파싱을 유도 →
-    JSON DEFAULT_TH_* 변경이 실제 판정값 WPA_TH_* 까지 전파된다.
-    첫 호출은 main 초기 load 반영분을 기준점으로 기록만 한다.
-    반환: 재적용 수행 여부. True는 '전부 반영'이 아니라 '재적용 실행됨'을 뜻한다 —
-    generate_network_blocks 변경이 차단(유지)된 경우에도 나머지 키는 적용되므로 True."""
+def handle_sighup(signum, frame):
+    """SIGHUP: 런타임 reload 요청 플래그 세팅 + self-pipe 로 대기 즉시 해제.
+    핸들러는 async-signal-safe 연산만 수행한다(플래그 대입 + non-blocking os.write)."""
+    _RELOAD_STATE["pending"] = True
+    if _SIG_PIPE_W is not None:
+        try:
+            os.write(_SIG_PIPE_W, b"x")
+        except OSError:
+            pass
+
+
+def interruptible_sleep(seconds):
+    """SIGHUP 수신 시 즉시 깨어나는 대기 — 폴링이 아니라 커널 블록(유휴 CPU 0)이며,
+    신호가 없으면 seconds 만큼 대기한다. self-pipe 미가용 시 time.sleep 폴백."""
+    if seconds is None or seconds <= 0:
+        return
+    if _SIG_PIPE_R is None:
+        time.sleep(seconds)
+        return
+    try:
+        ready, _, _ = select.select([_SIG_PIPE_R], [], [], seconds)
+    except (OSError, ValueError):
+        time.sleep(seconds)
+        return
+    if ready:
+        try:
+            os.read(_SIG_PIPE_R, 4096)  # drain — 다음 신호를 위해 비운다
+        except OSError:
+            pass
+
+
+def reload_roaming_config(iface):
+    """SIGHUP 수신 시 wifi_init_conf.json 을 1회 재읽어 로밍 설정을 재시작 없이 반영한다
+    (검증 시 조건/임계값 라이브 튜닝 + 데몬 상태[핑퐁 이력·backoff·cooldown] 보존).
+    폴링이 아니라 명시적 신호 트리거이므로 mtime 디바운스가 불필요하다 — 신호 시점이
+    곧 '쓰기 완료'다. 3중 방어:
+      1) json.load 선검증: invalid 면 현행 유지(기본값 회귀 금지)+경고 후 무시.
+      2) 구조 검증(iface.roaming dict): 없으면 현행 유지+경고.
+      3) generate_network_blocks(모드 결정자) / 모드 A 의 extra_ssids 는 부팅 시
+         wpa 블록 생성 절차와 결합돼 재시작 전용(경고 후 이전 값 유지).
+    인스턴스 파라미터는 재생성이 아닌 필드 갱신 → 이력(roam_history 등) 보존.
+    적용 시 WPA_CONF_MTIME 을 리셋해 같은 사이클 wpa conf 재파싱을 유도(JSON DEFAULT_TH_*
+    변경을 실제 판정값 WPA_TH_* 까지 전파). 반환: 적용 수행 여부."""
     global GENERATE_NETWORK_BLOCKS, EXTRA_SSIDS, WPA_CONF_MTIME
     global ping_pong_preventer, adaptive_interval, cross_ssid_cooldown, trend_tracker
-    st = ROAM_JSON_RELOAD_STATE
-    try:
-        mtime = os.stat(WIFI_INIT_CONF_JSON).st_mtime_ns
-    except OSError:
-        return False  # 파일 접근 불가 — 현행 유지
-    if st["applied"] is None:
-        st["applied"] = st["seen"] = mtime  # 시작 기준점(main 초기 load 반영분)
-        return False
-    if mtime == st["applied"]:
-        # 이미 적용된 mtime으로 (되돌림 등) 복귀 → seen도 동기화해야 한다. 안 하면
-        # 디바운스 중(seen=B)에 파일이 A(적용됨)로 돌아갔다 다시 B로 바뀔 때 seen이
-        # 여전히 B라 '안정화됨'으로 오판해 디바운스 없이 즉시 적용된다.
-        st["seen"] = mtime
-        return False
-    if mtime != st["seen"]:
-        st["seen"] = mtime  # 새 mtime 은 한 사이클 안정화 후 적용(쓰기 도중 회피)
-        return False
     try:
         with open(WIFI_INIT_CONF_JSON, "r") as f:
             new_data = json.load(f)
     except (OSError, ValueError) as e:  # ValueError ⊇ JSONDecodeError
-        if st["warned"] != mtime:
-            st["warned"] = mtime
-            logger.message(
-                "warn",
-                f"[{iface}] runtime config reload skipped (invalid JSON, keeping current): {e}",
-                _EXTRA_(),
-            )
+        logger.message(
+            "warn",
+            f"[{iface}] runtime config reload skipped (invalid JSON, keeping current): {e}",
+            _EXTRA_(),
+        )
         return False
     # 구조 검증: 구문이 valid여도 dict가 아니거나 iface.roaming 섹션이 없으면
     # load_roaming_config가 조용히 전부 기본값을 적용한다(시작 시엔 정상 fallback이나
@@ -1539,14 +1562,12 @@ def reload_roaming_config_if_changed(iface):
         and isinstance(new_data.get(iface), dict)
         and isinstance(new_data[iface].get("roaming"), dict)
     ):
-        if st["warned"] != mtime:
-            st["warned"] = mtime
-            logger.message(
-                "warn",
-                f"[{iface}] runtime config reload skipped "
-                f"(no valid {iface}.roaming section, keeping current)",
-                _EXTRA_(),
-            )
+        logger.message(
+            "warn",
+            f"[{iface}] runtime config reload skipped "
+            f"(no valid {iface}.roaming section, keeping current)",
+            _EXTRA_(),
+        )
         return False
     roam_cfg = new_data[iface]["roaming"]  # 구조 검증 통과 → dict 보장
     old_gen = GENERATE_NETWORK_BLOCKS
@@ -1601,10 +1622,8 @@ def reload_roaming_config_if_changed(iface):
     # 런타임에 None→생성이 필요한 상황 자체가 없다.
     if cross_ssid_cooldown is not None:
         cross_ssid_cooldown.retry_count = max(0, ROAM_CROSS_FAIL_RETRY_COUNT)
-    st["applied"] = mtime
-    st["warned"] = None
     WPA_CONF_MTIME = None  # 같은 사이클 wpa conf 재파싱 → 새 DEFAULT_TH_* 로 WPA_TH_* 재산출
-    logger.message("notice", f"[{iface}] runtime roaming config reloaded", _EXTRA_())
+    logger.message("notice", f"[{iface}] runtime roaming config reloaded (SIGHUP)", _EXTRA_())
     return True
 
 
@@ -2158,9 +2177,12 @@ def main():
     hint_state = {"hint_mtime": None}
 
     while True:
-        # wifi_init_conf.json 런타임 변경(에디터/wifi roam th 등) 감지 → 재시작 없이 반영.
-        # wpa conf 재파싱보다 먼저 수행해 JSON TH 변경이 같은 사이클에 WPA_TH_* 까지 전파.
-        reload_roaming_config_if_changed(IFACE)
+        # SIGHUP 수신 시에만 wifi_init_conf.json 재읽어 반영(폴링 없음 → 프로덕션 비용 0).
+        # 대기(interruptible_sleep)가 신호로 즉시 깨어나므로 긴 backoff 중에도 즉시 반영.
+        # 먼저 플래그를 내린 뒤 reload — 처리 중 새 신호는 다음 사이클에 latest 재읽어 커버.
+        if _RELOAD_STATE["pending"]:
+            _RELOAD_STATE["pending"] = False
+            reload_roaming_config(IFACE)
         # wpa_cli reconfigure 등으로 conf 가 런타임 변경됐으면 재파싱(mtime 변화 시에만).
         # ssid/scan_freq/TH 캐시를 최신화해 옛 SSID 로 스캔하는 stale 로밍을 방지한다.
         reload_supplicant_conf_if_changed(WPA_CONF_FILE)
@@ -2173,12 +2195,12 @@ def main():
         station = get_link_info_with_load()
 
         if not station:
-            time.sleep(CHECK_INTERVAL)
+            interruptible_sleep(CHECK_INTERVAL)
             continue
 
         rssi = station.get("rssi")
         if not is_valid_rssi(rssi):
-            time.sleep(CHECK_INTERVAL)
+            interruptible_sleep(CHECK_INTERVAL)
             continue
 
         # RSSI 추적
@@ -2197,7 +2219,7 @@ def main():
             base_threshold = WPA_TH_5G
 
         if base_threshold is None:
-            time.sleep(CHECK_INTERVAL)
+            interruptible_sleep(CHECK_INTERVAL)
             continue
 
         # 예측형 로밍: 하락 추세 시 임계값 조정
@@ -2225,7 +2247,7 @@ def main():
             else:
                 interval = CHECK_INTERVAL
 
-            time.sleep(interval)
+            interruptible_sleep(interval)
             continue
 
         # 로밍 조건 발생
@@ -2277,7 +2299,7 @@ def main():
                     f"streak={no_candidate_streak})",
                     _EXTRA_(),
                 )
-                time.sleep(backoff)
+                interruptible_sleep(backoff)
                 continue
 
         # Load 정보 가져오기
@@ -2298,7 +2320,7 @@ def main():
                 f"(no-candidate backoff={backoff}s, streak={no_candidate_streak})",
                 _EXTRA_(),
             )
-            time.sleep(backoff)
+            interruptible_sleep(backoff)
             continue
 
         # 로밍 후보 평가
@@ -2388,13 +2410,17 @@ def main():
                 record_cross_ssid_result(
                     cross_ssid_cooldown, best_ap["ssid"], ok, ROAM_SUCCESS_SLEEP + interval
                 )
+                # 로밍 성공 정착 대기(의도적 비-중단): 이 짧은 settle 중 SIGHUP이 와도
+                # 직후 interruptible_sleep(interval) 또는 다음 루프 top에서 반영된다.
                 time.sleep(ROAM_SUCCESS_SLEEP)
             elif roam_to_bssid(station["bssid"], best_ap["bssid"],
                                channel=best_ap.get("channel"),
                                freq=best_ap.get("freq"),
                                rssi=best_ap.get("rssi")):
+                # 로밍 성공 정착 대기(의도적 비-중단): 이 짧은 settle 중 SIGHUP이 와도
+                # 직후 interruptible_sleep(interval) 또는 다음 루프 top에서 반영된다.
                 time.sleep(ROAM_SUCCESS_SLEEP)
-            time.sleep(interval)
+            interruptible_sleep(interval)
             continue
 
         # 적합한 후보 없음 → 점증 backoff(연결 중 후보없음 airtime 잠식 억제).
@@ -2407,7 +2433,7 @@ def main():
             f"(no-candidate backoff={backoff}s, streak={no_candidate_streak})",
             _EXTRA_(),
         )
-        time.sleep(backoff)
+        interruptible_sleep(backoff)
         continue
 
 
@@ -2526,6 +2552,7 @@ def parse_thresholds(conf_path, def_th2g=None, def_th5g=None):
 
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_sigterm)
+    signal.signal(signal.SIGHUP, handle_sighup)  # 런타임 config reload(폴링 없이 신호 트리거)
     logger = Logger(app_name="ROAM", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
 
     IFACE = sys.argv[1] if len(sys.argv) > 1 else "mlan0"

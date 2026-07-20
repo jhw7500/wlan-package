@@ -357,7 +357,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} scan {freq_list|channel_list|2G|5G} : runtime"
     echo "       wifi {0|1|mlan0|mlan1} mscan {get|channel_list|2G|5G} : runtime (setuserscan/getscantable)"
     echo "       wifi {0|1|mlan0|mlan1} roam [0|1..N] : 0=auto best, N=Nth AP (RSSI order)"
-    echo "       wifi {0|1|mlan0|mlan1} roam th [2G|5G] [rssi] : 로밍 RSSI 임계값 표시/설정 (persist, wifi_roam 재시작 반영)"
+    echo "       wifi {0|1|mlan0|mlan1} roam th [2G|5G] [rssi] : 로밍 RSSI 임계값 표시/설정 (persist, SIGHUP 무재시작 반영)"
     echo "       wifi {0|1|mlan0|mlan1} stat reset [mac] : reset stat records (all or specific MAC)"
     echo "       wifi {0|1|mlan0|mlan1} stat interval {seconds} : set stat reset interval (persist)"
     echo "       wifi {0|1|mlan0|mlan1} mon [c|compact] [interval] [--summary-lines N] [--roam-display N]"
@@ -1614,7 +1614,7 @@ case "$2" in
     # wifi 0 roam 0          → 현재 AP 제외 최고 RSSI로 자동 로밍
     # wifi 0 roam 1~N        → RSSI 순서 N번째 AP로 로밍
     # wifi 0 roam th         → 로밍 RSSI 임계값 표시 (2G/5G)
-    # wifi 0 roam th 5G -70  → roaming.DEFAULT_TH_5G=-70 (persist) + wifi_roam 재시작 반영
+    # wifi 0 roam th 5G -70  → roaming.DEFAULT_TH_5G=-70 (persist) + SIGHUP 즉시 반영(무재시작)
     # wifi 0 roam th 2G -70  → roaming.DEFAULT_TH_2G=-70
     ROAM_ARG="${3:-}"
     if [ "$ROAM_ARG" = "th" ]; then
@@ -1662,9 +1662,17 @@ case "$2" in
         if grep -qE "^#!${MARKER}=" "/etc/wpa_supplicant/wpa_supplicant-${IFACE}.conf" 2>/dev/null; then
             echo "Warning: #!${MARKER}= marker in wpa_supplicant-${IFACE}.conf overrides JSON value" >&2
         fi
-        # JSON TH는 wifi_roam 시작 시에만 로드 → 재시작으로 즉시 반영 (재시작은 연결 무영향)
+        # JSON TH는 SIGHUP으로 wifi_roam 데몬이 즉시 재읽어 반영 — 재시작 없이 데몬 상태
+        # (핑퐁 이력·backoff·cooldown) 보존. 폴링이 아니라 신호 트리거라 평시 비용 0.
         if systemctl is-active --quiet "wifi_roam@${IFACE}" 2>/dev/null; then
-            systemctl restart "wifi_roam@${IFACE}" && echo "wifi_roam@${IFACE} restarted (applied)"
+            if systemctl kill --kill-who=main -s SIGHUP "wifi_roam@${IFACE}"; then
+                echo "wifi_roam@${IFACE} reloaded via SIGHUP (applied, no restart)"
+            else
+                # SIGHUP 전달 실패(권한/구버전 systemd 등, 에러는 위에 노출) → restart 폴백으로
+                # 반드시 반영(무음 미적용 방지). 재시작은 연결 무영향.
+                echo "Warning: SIGHUP failed; falling back to restart" >&2
+                systemctl restart "wifi_roam@${IFACE}" && echo "wifi_roam@${IFACE} restarted (applied)"
+            fi
         else
             echo "wifi_roam@${IFACE} inactive (applies on next start)"
         fi
