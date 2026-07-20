@@ -230,56 +230,63 @@ def _apply_section_values(
 
 
 def _apply_runtime_globals(config: Dict[str, Any]) -> None:
-    current_default_th_2g = globals().get("DEFAULT_TH_2G", DEFAULT_TH_2G)
-    current_default_th_5g = globals().get("DEFAULT_TH_5G", DEFAULT_TH_5G)
-    current_check_interval = globals().get("CHECK_INTERVAL", CHECK_INTERVAL)
+    g = globals()
 
-    try:
-        check_interval = int(config["CHECK_INTERVAL"])
-    except (TypeError, ValueError):
-        check_interval = int(current_check_interval)
+    def _num(key, cast=int):
+        # flat 덮어쓰기 루프가 원본 문자열 등 잘못된 값을 넣어도(런타임 reload/부팅)
+        # int() 크래시 없이 현행 전역값을 유지한다. 수치 전역은 모듈 로드 시 유효 기본값
+        # 으로 정의되므로 g.get(key)는 항상 유효(최후 방어까지 삼중 가드). 이 방어가
+        # 없으면 예: `SCAN_NO_RESULT_SLEEP: "bad"` 한 줄로 데몬이 ValueError로 죽는다.
+        try:
+            return cast(config[key])
+        except (TypeError, ValueError, KeyError):
+            cur = g.get(key)
+            try:
+                return cast(cur)
+            except (TypeError, ValueError):
+                return cur
 
-    globals().update(
+    g.update(
         {
             "ENABLE_PREDICTIVE_ROAM": config["ENABLE_PREDICTIVE_ROAM"],
-            "PREDICTIVE_THRESHOLD_BOOST": config["PREDICTIVE_THRESHOLD_BOOST"],
-            "TREND_WINDOW_SIZE": config["TREND_WINDOW_SIZE"],
-            "TREND_HISTORY_MAX_AGE": config["TREND_HISTORY_MAX_AGE"],
+            "PREDICTIVE_THRESHOLD_BOOST": _num("PREDICTIVE_THRESHOLD_BOOST"),
+            "TREND_WINDOW_SIZE": _num("TREND_WINDOW_SIZE"),
+            "TREND_HISTORY_MAX_AGE": _num("TREND_HISTORY_MAX_AGE"),
             "ENABLE_LOAD_BASED_ROAM": config["ENABLE_LOAD_BASED_ROAM"],
-            "MAX_ROAM_LOAD": config["MAX_ROAM_LOAD"],
-            "LOAD_DIFF_THRESHOLD": config["LOAD_DIFF_THRESHOLD"],
+            "MAX_ROAM_LOAD": _num("MAX_ROAM_LOAD"),
+            "LOAD_DIFF_THRESHOLD": _num("LOAD_DIFF_THRESHOLD"),
             "ENABLE_PING_PONG_PREVENTION": config["ENABLE_PING_PONG_PREVENTION"],
-            "PING_PONG_WINDOW": config["PING_PONG_WINDOW"],
-            "MAX_ROAMS_IN_WINDOW": config["MAX_ROAMS_IN_WINDOW"],
-            "PING_PONG_DETECTION_TIME": config["PING_PONG_DETECTION_TIME"],
+            "PING_PONG_WINDOW": _num("PING_PONG_WINDOW"),
+            "MAX_ROAMS_IN_WINDOW": _num("MAX_ROAMS_IN_WINDOW"),
+            "PING_PONG_DETECTION_TIME": _num("PING_PONG_DETECTION_TIME"),
             "ENABLE_ADAPTIVE_INTERVAL": config["ENABLE_ADAPTIVE_INTERVAL"],
-            "MIN_CHECK_INTERVAL": config["MIN_CHECK_INTERVAL"],
-            "MAX_CHECK_INTERVAL": config["MAX_CHECK_INTERVAL"],
-            "ADAPTIVE_RSSI_DROP_THRESHOLD": config["ADAPTIVE_RSSI_DROP_THRESHOLD"],
-            "ADAPTIVE_RSSI_RISE_THRESHOLD": config["ADAPTIVE_RSSI_RISE_THRESHOLD"],
-            "ADAPTIVE_NEAR_THRESHOLD_OFFSET": config["ADAPTIVE_NEAR_THRESHOLD_OFFSET"],
-            "ADAPTIVE_NEAR_THRESHOLD_INTERVAL": config["ADAPTIVE_NEAR_THRESHOLD_INTERVAL"],
-            "ADAPTIVE_GOOD_SIGNAL_OFFSET": config["ADAPTIVE_GOOD_SIGNAL_OFFSET"],
-            "ADAPTIVE_CONSECUTIVE_DROP_COUNT": config["ADAPTIVE_CONSECUTIVE_DROP_COUNT"],
-            "DEFAULT_TH_2G": config.get("DEFAULT_TH_2G", current_default_th_2g),
-            "DEFAULT_TH_5G": config.get("DEFAULT_TH_5G", current_default_th_5g),
-            "DIFF_TH": config["DIFF_TH"],
-            "CHECK_INTERVAL": check_interval,
+            "MIN_CHECK_INTERVAL": _num("MIN_CHECK_INTERVAL"),
+            "MAX_CHECK_INTERVAL": _num("MAX_CHECK_INTERVAL"),
+            "ADAPTIVE_RSSI_DROP_THRESHOLD": _num("ADAPTIVE_RSSI_DROP_THRESHOLD"),
+            "ADAPTIVE_RSSI_RISE_THRESHOLD": _num("ADAPTIVE_RSSI_RISE_THRESHOLD"),
+            "ADAPTIVE_NEAR_THRESHOLD_OFFSET": _num("ADAPTIVE_NEAR_THRESHOLD_OFFSET"),
+            "ADAPTIVE_NEAR_THRESHOLD_INTERVAL": _num("ADAPTIVE_NEAR_THRESHOLD_INTERVAL"),
+            "ADAPTIVE_GOOD_SIGNAL_OFFSET": _num("ADAPTIVE_GOOD_SIGNAL_OFFSET"),
+            "ADAPTIVE_CONSECUTIVE_DROP_COUNT": _num("ADAPTIVE_CONSECUTIVE_DROP_COUNT"),
+            "DEFAULT_TH_2G": _num("DEFAULT_TH_2G"),
+            "DEFAULT_TH_5G": _num("DEFAULT_TH_5G"),
+            "DIFF_TH": _num("DIFF_TH"),
+            "CHECK_INTERVAL": _num("CHECK_INTERVAL"),
             "ENABLE_POST_ROAM_ARP_OPTIMIZATION": config[
                 "ENABLE_POST_ROAM_ARP_OPTIMIZATION"
             ],
-            "POST_ROAM_GARP_COUNT": config["POST_ROAM_GARP_COUNT"],
-            "POST_ROAM_GARP_WAIT": config["POST_ROAM_GARP_WAIT"],
+            "POST_ROAM_GARP_COUNT": _num("POST_ROAM_GARP_COUNT"),
+            "POST_ROAM_GARP_WAIT": _num("POST_ROAM_GARP_WAIT"),
             "ENABLE_POST_ROAM_PEER_WARMUP": config["ENABLE_POST_ROAM_PEER_WARMUP"],
-            "POST_ROAM_PEER_COUNT": config["POST_ROAM_PEER_COUNT"],
-            "POST_ROAM_PEER_WAIT": config["POST_ROAM_PEER_WAIT"],
-            "SCAN_NO_RESULT_SLEEP": int(config["SCAN_NO_RESULT_SLEEP"]),
-            "ROAM_SUCCESS_SLEEP": int(config["ROAM_SUCCESS_SLEEP"]),
-            "ROAM_NO_RESULT_MAX_SLEEP": int(config["ROAM_NO_RESULT_MAX_SLEEP"]),
-            "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC": int(
-                config["ROAM_NO_RESULT_BACKOFF_RECOVER_SEC"]
+            "POST_ROAM_PEER_COUNT": _num("POST_ROAM_PEER_COUNT"),
+            "POST_ROAM_PEER_WAIT": _num("POST_ROAM_PEER_WAIT"),
+            "SCAN_NO_RESULT_SLEEP": _num("SCAN_NO_RESULT_SLEEP"),
+            "ROAM_SUCCESS_SLEEP": _num("ROAM_SUCCESS_SLEEP"),
+            "ROAM_NO_RESULT_MAX_SLEEP": _num("ROAM_NO_RESULT_MAX_SLEEP"),
+            "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC": _num(
+                "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC"
             ),
-            "ROAM_CROSS_FAIL_RETRY_COUNT": int(config["ROAM_CROSS_FAIL_RETRY_COUNT"]),
+            "ROAM_CROSS_FAIL_RETRY_COUNT": _num("ROAM_CROSS_FAIL_RETRY_COUNT"),
             "USE_SIGNAL_AVG": config["USE_SIGNAL_AVG"],
         }
     )
@@ -1490,7 +1497,7 @@ def reload_roaming_config_if_changed(iface):
     첫 호출은 main 초기 load 반영분을 기준점으로 기록만 한다.
     반환: 재적용 수행 여부. True는 '전부 반영'이 아니라 '재적용 실행됨'을 뜻한다 —
     generate_network_blocks 변경이 차단(유지)된 경우에도 나머지 키는 적용되므로 True."""
-    global GENERATE_NETWORK_BLOCKS, WPA_CONF_MTIME
+    global GENERATE_NETWORK_BLOCKS, EXTRA_SSIDS, WPA_CONF_MTIME
     global ping_pong_preventer, adaptive_interval, cross_ssid_cooldown, trend_tracker
     st = ROAM_JSON_RELOAD_STATE
     try:
@@ -1536,16 +1543,24 @@ def reload_roaming_config_if_changed(iface):
                 _EXTRA_(),
             )
         return False
+    roam_cfg = new_data[iface]["roaming"]  # 구조 검증 통과 → dict 보장
     old_gen = GENERATE_NETWORK_BLOCKS
+    old_extra = list(EXTRA_SSIDS)
     load_roaming_config(iface, data=new_data)
+    # generate_network_blocks는 런타임 전환 금지(재시작 전용). 키가 '명시적으로' 다른
+    # 값으로 바뀐 경우에만 경고 — 키 부재로 인한 False 수렴은 조용히 복원(오탐 방지).
+    # gen을 유지할 때는 그에 연동된 EXTRA_SSIDS(부팅 시 생성된 wpa 블록과 정합)도 함께
+    # 원복한다 — 런타임에 extra만 바뀌면 없는 블록으로 select_network가 실패하기 때문.
     if GENERATE_NETWORK_BLOCKS != old_gen:
-        logger.message(
-            "warn",
-            f"[{iface}] generate_network_blocks change ignored at runtime "
-            f"(requires daemon restart; keeping {old_gen})",
-            _EXTRA_(),
-        )
+        if "generate_network_blocks" in roam_cfg:
+            logger.message(
+                "warn",
+                f"[{iface}] generate_network_blocks change ignored at runtime "
+                f"(requires daemon restart; keeping {old_gen})",
+                _EXTRA_(),
+            )
         GENERATE_NETWORK_BLOCKS = old_gen
+        EXTRA_SSIDS = list(old_extra)
     # 인스턴스 파라미터 갱신(이력 보존) + enable off→on 인스턴스 생성
     if ENABLE_PING_PONG_PREVENTION:
         if ping_pong_preventer is None:
