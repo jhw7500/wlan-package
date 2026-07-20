@@ -155,6 +155,48 @@ def test_enable_off_to_on_creates_instance(env):
     assert wifi_roam.ping_pong_preventer is not None         # off→on 생성
 
 
+def test_valid_json_but_not_dict_keeps_current(env):
+    """구문은 valid지만 dict가 아님(예: 123) → 구조 검증에서 차단, 현행 유지."""
+    _write(env, _conf(), 1000.0)
+    reload_roaming_config_if_changed(IFACE)          # baseline
+    _write(env, "123", 1010.0)
+    reload_roaming_config_if_changed(IFACE)          # 디바운스
+    assert reload_roaming_config_if_changed(IFACE) is False
+    assert wifi_roam.CHECK_INTERVAL == 7             # 기본값 회귀 없음
+    assert len(_warn_calls("no valid")) == 1
+
+
+def test_missing_iface_section_keeps_current(env):
+    """iface 키 부재(다른 iface만 있는 valid JSON) → 조용한 기본값 회귀 차단."""
+    _write(env, _conf(), 1000.0)
+    reload_roaming_config_if_changed(IFACE)          # baseline
+    _write(env, {"mlan1": {"roaming": {"CHECK_INTERVAL": 2}}}, 1010.0)
+    reload_roaming_config_if_changed(IFACE)
+    assert reload_roaming_config_if_changed(IFACE) is False
+    assert wifi_roam.CHECK_INTERVAL == 7
+    assert len(_warn_calls("no valid")) == 1
+
+
+def test_reload_passes_validated_data_no_reparse(env, monkeypatch):
+    """★TOCTOU 차단: 검증한 파싱 결과가 그대로 load에 전달(파일 재파싱 없음)."""
+    captured = {}
+    real = wifi_roam.load_roaming_config
+
+    def spy(iface, data=None):
+        captured["data"] = data
+        return real(iface, data=data)
+
+    monkeypatch.setattr(wifi_roam, "load_roaming_config", spy)
+    _write(env, _conf(), 1000.0)
+    reload_roaming_config_if_changed(IFACE)          # baseline
+    _write(env, _conf(check_interval=2), 1010.0)
+    reload_roaming_config_if_changed(IFACE)
+    assert reload_roaming_config_if_changed(IFACE) is True
+    assert captured["data"] is not None              # 검증본 전달(재파싱 아님)
+    assert captured["data"][IFACE]["roaming"]["CHECK_INTERVAL"] == 2
+    assert wifi_roam.CHECK_INTERVAL == 2
+
+
 def test_unchanged_mtime_noop(env):
     _write(env, _conf(), 1000.0)
     reload_roaming_config_if_changed(IFACE)
