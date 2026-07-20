@@ -325,20 +325,21 @@ def test_enable_on_to_off_keeps_instance_gates_off(env):
 
 
 def test_revert_then_rechange_re_debounces(env):
-    """되돌림 후 재변경도 디바운스 1사이클 거친다(seen 동기화 라인 회귀 방지)."""
+    """디바운스 중 '이미 적용된 mtime'으로 되돌렸다가 재변경 시 다시 디바운스한다.
+    반드시 mtime==applied 분기(seen 동기화 라인)를 통과해야 회귀를 잡는다 —
+    되돌리는 mtime 이 그 시점의 applied 와 정확히 같아야 한다."""
     _write(env, _conf(check_interval=3), 1000.0)     # A
-    reload_roaming_config_if_changed(IFACE)          # baseline(applied=A)
-    _write(env, _conf(check_interval=2), 1010.0)     # B
-    reload_roaming_config_if_changed(IFACE)          # 디바운스(seen=B)
-    assert reload_roaming_config_if_changed(IFACE) is True   # B 적용(applied=B)
+    reload_roaming_config_if_changed(IFACE)          # baseline(applied=seen=A=1000, 미적용)
+    _write(env, _conf(check_interval=2), 1010.0)     # B — 아직 미적용
+    reload_roaming_config_if_changed(IFACE)          # 디바운스 진입(seen=B=1010, applied=A=1000)
+    _write(env, _conf(check_interval=3), 1000.0)     # A 로 되돌림 — mtime==applied(1000)!
+    # mtime==applied 분기: seen 도 A(1000)로 동기화돼야 한다(안 하면 seen 이 B로 남음)
+    assert reload_roaming_config_if_changed(IFACE) is False
+    _write(env, _conf(check_interval=2), 1010.0)     # 다시 B 로 변경(mtime=1010)
+    # 수정 전: seen 이 여전히 1010 이라 즉시 적용(버그) — 수정 후: seen==1000 이라 디바운스 재진입
+    assert reload_roaming_config_if_changed(IFACE) is False
+    assert reload_roaming_config_if_changed(IFACE) is True   # 안정화 후에야 적용
     assert wifi_roam.CHECK_INTERVAL == 2
-    _write(env, _conf(check_interval=2), 1000.0)     # A(mtime 회귀 = 이미 적용 아님, applied=B)
-    # mtime=1000 != applied(1010) 이고 seen(1010)과도 달라 → 새 변경으로 디바운스 시작
-    assert reload_roaming_config_if_changed(IFACE) is False  # 디바운스(즉시 적용 아님)
-    _write(env, _conf(check_interval=9), 1020.0)     # 재변경 C
-    assert reload_roaming_config_if_changed(IFACE) is False  # 새 mtime → 다시 디바운스
-    assert reload_roaming_config_if_changed(IFACE) is True   # 안정화 후 적용
-    assert wifi_roam.CHECK_INTERVAL == 9
 
 
 def test_unchanged_mtime_noop(env):
