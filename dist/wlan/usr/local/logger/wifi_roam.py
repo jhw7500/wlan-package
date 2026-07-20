@@ -126,10 +126,12 @@ ROAM_CROSS_FAIL_RETRY_COUNT = DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT
 ROAM_NO_RESULT_FAST_COUNT = DEFAULT_ROAM_NO_RESULT_FAST_COUNT
 
 def _no_result_max_level():
-    """backoff가 상한(ROAM_NO_RESULT_MAX_SLEEP)에 도달하는 최소 streak 레벨.
+    """지수 backoff가 상한(ROAM_NO_RESULT_MAX_SLEEP)에 도달하는 데 필요한 2배수 증가 레벨.
 
-    2**(level-1) 거대 정수 연산을 막기 위해 streak를 이 레벨로 clamp한다.
-    시작값*2**(L-1) >= cap 를 만족하는 최소 L. 도달 즉시 상한이므로 그 이상은 무의미.
+    compute_no_result_backoff는 over(=streak-fast_count)를 이 값으로 clamp해 2**over
+    거대 정수 연산을 막고(도달 즉시 상한이라 그 이상 무의미), advance_no_candidate_backoff
+    는 streak를 (fast + 이 레벨 - 1)로 cap한다. 즉 'streak' 자체가 아니라 '빠른 구간 이후
+    지수 성장 횟수'의 상한이다. 시작값*2**(L-1) >= cap 를 만족하는 최소 L.
     SCAN_NO_RESULT_SLEEP<=0 등 비정상 입력은 1로 방어(무한 루프/0배수 방지)."""
     start = SCAN_NO_RESULT_SLEEP
     cap = ROAM_NO_RESULT_MAX_SLEEP
