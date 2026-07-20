@@ -1466,6 +1466,90 @@ def reload_supplicant_conf_if_changed(path):
         )
 
 
+# 런타임 roaming config reload 상태 (mtime 기반 디바운스+검증)
+ROAM_JSON_RELOAD_STATE = {"applied": None, "seen": None, "warned": None}
+
+
+def reload_roaming_config_if_changed(iface):
+    """wifi_init_conf.json 이 런타임 변경되면(에디터/wifi roam th 등) 재시작 없이
+    로밍 설정을 재적용한다 — 검증 시 조건/임계값 라이브 튜닝 + 데몬 상태(핑퐁 이력·
+    backoff·cooldown) 보존이 목적. 4중 방어:
+      1) mtime 변화 + 1사이클 안정화(디바운스): 에디터 연속 저장/쓰기 도중 읽기 회피
+      2) json.loads 선검증 성공 시에만 적용: invalid 저장 시 현행 유지(기본값 회귀
+         금지) + 같은 mtime 경고 1회, 다음 사이클 자동 재시도
+      3) generate_network_blocks(모드 결정자)는 재시작 전용 — conf 블록 생성/cooldown
+         활성이 외부 절차와 결합돼 있어 런타임 전환 금지(경고 후 이전 값 유지)
+      4) 인스턴스 파라미터는 재생성이 아닌 필드 갱신 → 이력(roam_history 등) 보존.
+         enable off→on 은 인스턴스 생성으로 반영, on→off 는 게이트가 자동 차단.
+    적용 성공 시 WPA_CONF_MTIME 을 리셋해 같은 사이클의 wpa conf 재파싱을 유도 →
+    JSON DEFAULT_TH_* 변경이 실제 판정값 WPA_TH_* 까지 전파된다.
+    첫 호출은 main 초기 load 반영분을 기준점으로 기록만 한다. 반환: 적용 여부."""
+    global GENERATE_NETWORK_BLOCKS, WPA_CONF_MTIME
+    global ping_pong_preventer, adaptive_interval, cross_ssid_cooldown, trend_tracker
+    st = ROAM_JSON_RELOAD_STATE
+    try:
+        mtime = os.stat(WIFI_INIT_CONF_JSON).st_mtime_ns
+    except OSError:
+        return False  # 파일 접근 불가 — 현행 유지
+    if st["applied"] is None:
+        st["applied"] = st["seen"] = mtime  # 시작 기준점(main 초기 load 반영분)
+        return False
+    if mtime == st["applied"]:
+        st["seen"] = mtime
+        return False
+    if mtime != st["seen"]:
+        st["seen"] = mtime  # 새 mtime 은 한 사이클 안정화 후 적용(쓰기 도중 회피)
+        return False
+    try:
+        with open(WIFI_INIT_CONF_JSON, "r") as f:
+            json.load(f)
+    except (OSError, ValueError) as e:  # ValueError ⊇ JSONDecodeError
+        if st["warned"] != mtime:
+            st["warned"] = mtime
+            logger.message(
+                "warn",
+                f"[{iface}] runtime config reload skipped (invalid JSON, keeping current): {e}",
+                _EXTRA_(),
+            )
+        return False
+    old_gen = GENERATE_NETWORK_BLOCKS
+    load_roaming_config(iface)
+    if GENERATE_NETWORK_BLOCKS != old_gen:
+        logger.message(
+            "warn",
+            f"[{iface}] generate_network_blocks change ignored at runtime "
+            f"(requires daemon restart; keeping {old_gen})",
+            _EXTRA_(),
+        )
+        GENERATE_NETWORK_BLOCKS = old_gen
+    # 인스턴스 파라미터 갱신(이력 보존) + enable off→on 인스턴스 생성
+    if ENABLE_PING_PONG_PREVENTION:
+        if ping_pong_preventer is None:
+            ping_pong_preventer = PingPongPreventer(PING_PONG_WINDOW, MAX_ROAMS_IN_WINDOW)
+        else:
+            ping_pong_preventer.window_seconds = PING_PONG_WINDOW
+            ping_pong_preventer.max_roams = MAX_ROAMS_IN_WINDOW
+    if ENABLE_PREDICTIVE_ROAM:
+        if trend_tracker is None:
+            trend_tracker = RSSITrendTracker(TREND_WINDOW_SIZE, TREND_HISTORY_MAX_AGE)
+        else:
+            trend_tracker.window_size = TREND_WINDOW_SIZE
+            trend_tracker.max_age = TREND_HISTORY_MAX_AGE
+    if ENABLE_ADAPTIVE_INTERVAL:
+        if adaptive_interval is None:
+            adaptive_interval = AdaptiveInterval(MIN_CHECK_INTERVAL, MAX_CHECK_INTERVAL)
+        else:
+            adaptive_interval.min_interval = MIN_CHECK_INTERVAL
+            adaptive_interval.max_interval = MAX_CHECK_INTERVAL
+    if cross_ssid_cooldown is not None:
+        cross_ssid_cooldown.retry_count = max(0, ROAM_CROSS_FAIL_RETRY_COUNT)
+    st["applied"] = mtime
+    st["warned"] = None
+    WPA_CONF_MTIME = None  # 같은 사이클 wpa conf 재파싱 → 새 DEFAULT_TH_* 로 WPA_TH_* 재산출
+    logger.message("notice", f"[{iface}] runtime roaming config reloaded", _EXTRA_())
+    return True
+
+
 def get_my_ip(iface):
     try:
         result = subprocess.run(
@@ -2016,6 +2100,9 @@ def main():
     hint_state = {"hint_mtime": None}
 
     while True:
+        # wifi_init_conf.json 런타임 변경(에디터/wifi roam th 등) 감지 → 재시작 없이 반영.
+        # wpa conf 재파싱보다 먼저 수행해 JSON TH 변경이 같은 사이클에 WPA_TH_* 까지 전파.
+        reload_roaming_config_if_changed(IFACE)
         # wpa_cli reconfigure 등으로 conf 가 런타임 변경됐으면 재파싱(mtime 변화 시에만).
         # ssid/scan_freq/TH 캐시를 최신화해 옛 SSID 로 스캔하는 stale 로밍을 방지한다.
         reload_supplicant_conf_if_changed(WPA_CONF_FILE)
