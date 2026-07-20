@@ -1569,14 +1569,19 @@ case "$2" in
             echo "Error: roam th is for wlan interfaces (mlan0/mlan1)" >&2
             exit 1
         fi
+        # 표시 경로도 파일 부재를 "unset"으로 오인하지 않도록 선확인 (파손 시 jq 파스 에러는 가시화)
+        if [ ! -f "$WIFI_INIT_CONF_JSON" ]; then
+            echo "Error: $WIFI_INIT_CONF_JSON not found" >&2
+            exit 1
+        fi
         BAND=$(echo "${4:-}" | tr 'a-z' 'A-Z')
         case "$BAND" in
             2G|2) TH_KEY="DEFAULT_TH_2G" ;;
             5G|5) TH_KEY="DEFAULT_TH_5G" ;;
             "")
                 # 밴드 미지정 → 현재값 모두 표시
-                th2=$(jq -r ".${IFACE}.roaming.DEFAULT_TH_2G // \"unset\"" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-                th5=$(jq -r ".${IFACE}.roaming.DEFAULT_TH_5G // \"unset\"" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+                th2=$(jq -r ".${IFACE}.roaming.DEFAULT_TH_2G // \"unset\"" "$WIFI_INIT_CONF_JSON")
+                th5=$(jq -r ".${IFACE}.roaming.DEFAULT_TH_5G // \"unset\"" "$WIFI_INIT_CONF_JSON")
                 echo "$IFACE roam threshold: 2G=${th2} 5G=${th5} (dBm)"
                 exit 0
                 ;;
@@ -1587,7 +1592,7 @@ case "$2" in
         esac
         RSSI="${5:-}"
         if [ -z "$RSSI" ]; then
-            cur=$(jq -r ".${IFACE}.roaming.${TH_KEY} // \"unset\"" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+            cur=$(jq -r ".${IFACE}.roaming.${TH_KEY} // \"unset\"" "$WIFI_INIT_CONF_JSON")
             echo "$IFACE roaming.${TH_KEY} = ${cur} (dBm)"
             exit 0
         fi
@@ -1596,7 +1601,7 @@ case "$2" in
             echo "Error: rssi must be a negative integer in -100..-1 (got '$RSSI')" >&2
             exit 1
         fi
-        OLD=$(jq -r ".${IFACE}.roaming.${TH_KEY} // \"unset\"" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+        OLD=$(jq -r ".${IFACE}.roaming.${TH_KEY} // \"unset\"" "$WIFI_INIT_CONF_JSON")
         update_json_roaming_int "$IFACE" "$TH_KEY" "$RSSI" || exit 1
         echo "$IFACE roaming.${TH_KEY}: ${OLD} -> ${RSSI} (persist)"
         # wpa_supplicant conf의 #!TH_ 마커는 JSON보다 우선 — 있으면 반영 안 됨을 경고
