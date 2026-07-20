@@ -8,10 +8,12 @@ if [ -z "$NEW_MAC" ]; then
     exit 0
 fi
 
+# systemd network 디렉토리. 테스트에서 SYSTEMD_NETWORK_DIR로 오버라이드 가능(기본은 실제 경로).
+NETWORK_DIR="${SYSTEMD_NETWORK_DIR:-/etc/systemd/network}"
 case "$IFACE" in
-  eth0)  LINK_FILE="/etc/systemd/network/22-eth0.link"  ;;
-  mlan0) LINK_FILE="/etc/systemd/network/20-mlan0.link" ;;
-  mlan1) LINK_FILE="/etc/systemd/network/21-mlan1.link" ;;
+  eth0)  LINK_FILE="$NETWORK_DIR/22-eth0.link"  ;;
+  mlan0) LINK_FILE="$NETWORK_DIR/20-mlan0.link" ;;
+  mlan1) LINK_FILE="$NETWORK_DIR/21-mlan1.link" ;;
   *)
     logger -p local0.emerg "[$tag:$LINENO] [$IFACE] interface is wrong!!"
     exit 0
@@ -74,17 +76,21 @@ if [[ "$NEW_MAC" =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]]; then
 
   # MAC 주소 업데이트
   mkdir -p "$(dirname "$LINK_FILE")"
-  tmp="$(mktemp "${LINK_FILE}.tmp.XXXXXX")"
+  if ! tmp="$(mktemp "${LINK_FILE}.tmp.XXXXXX")"; then
+    logger -p local0.err "[$tag:$LINENO] [$IFACE] failed to create temp file in $(dirname "$LINK_FILE")"
+    exit 1
+  fi
 
-  if [ ! -f "$LINK_FILE" ]; then
-    # .link 파일이 없으면 [Match](OriginalName)/[Link](MACAddress)를 갖춘 파일을 새로 생성
+  # 파일이 없거나 / 비었거나(0바이트) / [Match]·[Link] 섹션이 없으면(구버전 버그로 생긴
+  # 빈 .link 포함) [Match](OriginalName)/[Link](MACAddress)를 갖춘 파일을 통째로 (재)생성한다.
+  if [ ! -s "$LINK_FILE" ] || ! grep -q '^\[Match\]' "$LINK_FILE" || ! grep -q '^\[Link\]' "$LINK_FILE"; then
     printf '[Match]\nOriginalName=%s\n\n[Link]\nMACAddress=%s\n' "$IFACE" "$NEW_MAC" > "$tmp"
-    logger -p local0.info "[$tag:$LINENO] [$IFACE] $LINK_FILE not found; creating new .link"
+    logger -p local0.info "[$tag:$LINENO] [$IFACE] $LINK_FILE missing/empty/section-less; (re)creating valid .link"
   elif grep -q "^MACAddress=" "$LINK_FILE"; then
-    # 기존 라인 교체
+    # 기존 MACAddress 라인 교체
     sed "s/^MACAddress=.*/MACAddress=${NEW_MAC}/" "$LINK_FILE" > "$tmp"
   else
-    # 없으면 [Link] 섹션 내부에 추가
+    # [Link]는 있으나 MACAddress 없음 → [Link] 섹션 내부에 추가
     awk -v mac="$NEW_MAC" '
       /^\[Link\]/ { print; inlink=1; next }
       inlink && /^\[/ { print "MACAddress="mac; inlink=0 }
@@ -93,7 +99,12 @@ if [[ "$NEW_MAC" =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]]; then
     ' "$LINK_FILE" > "$tmp"
   fi
 
-  install -o root -g root -m 0644 "$tmp" "$LINK_FILE"
+  # root일 때만 소유권을 root:root로 강제(부팅 시 실제 경로). 비-root(테스트)에서는 모드만 지정.
+  if [ "$(id -u)" -eq 0 ]; then
+    install -o root -g root -m 0644 "$tmp" "$LINK_FILE"
+  else
+    install -m 0644 "$tmp" "$LINK_FILE"
+  fi
   tmp=""
   logger -p local0.info "[$tag:$LINENO] [$IFACE] Updated MACAddress to $NEW_MAC in $LINK_FILE"
 
@@ -101,6 +112,16 @@ if [[ "$NEW_MAC" =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]]; then
 else
   # --- MAC 비정상: 백업에서 복구 ---
   logger -p local0.err "[$tag:$LINENO] [$IFACE] invalid MAC: '$NEW_MAC'"
+
+  # 현재 .link가 이미 유효한 MAC을 갖고 있으면 오래된 백업으로 되돌리지 않고 그대로 유지
+  if [ -f "$LINK_FILE" ]; then
+    CURRENT_MAC=$(grep -oP '^MACAddress=\K.*' "$LINK_FILE" 2>/dev/null || true)
+    if [[ "$CURRENT_MAC" =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]]; then
+      logger -p local0.warn "[$tag:$LINENO] [$IFACE] current MAC already valid ($CURRENT_MAC); skip restore"
+      exit 0
+    fi
+  fi
+
   # 최신 회전 백업(.bak.1)에서 복구, 없으면 구버전 단일 백업(.bak)로 폴백
   RESTORE_FROM=""
   if [ -f "${BACKUP_PREFIX}.1" ]; then
