@@ -11,12 +11,12 @@ import sys
 import time
 from unittest.mock import MagicMock
 
+import pytest
+
 sys.modules.setdefault("sUTILS", MagicMock())
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import wifi_roam
 from wifi_roam import reload_roaming_config_if_changed
-
-import pytest
 
 wifi_roam.logger = MagicMock()
 
@@ -274,6 +274,71 @@ def test_gen_change_blocked_rolls_back_extra_ssids(env):
     assert wifi_roam.GENERATE_NETWORK_BLOCKS is True  # gen 차단
     assert wifi_roam.EXTRA_SSIDS == ["X"]             # extra도 원복(부팅 블록과 정합)
     assert len(_warn_calls("requires daemon restart")) == 1
+
+
+def test_mode_a_extra_ssids_change_ignored_at_runtime(env):
+    """★Codex P2(넓은 범위): gen 유지(모드 A)여도 extra_ssids만 변경은 재시작 전용."""
+    wifi_roam.GENERATE_NETWORK_BLOCKS = True
+    wifi_roam.EXTRA_SSIDS = ["X"]
+    conf = _conf(gen=True)
+    conf[IFACE]["roaming"]["extra_ssids"] = ["X"]
+    _write(env, conf, 1000.0)
+    reload_roaming_config_if_changed(IFACE)          # baseline
+    conf2 = _conf(gen=True)                           # gen은 유지
+    conf2[IFACE]["roaming"]["extra_ssids"] = ["X", "Y"]   # extra만 추가
+    _write(env, conf2, 1010.0)
+    reload_roaming_config_if_changed(IFACE)
+    assert reload_roaming_config_if_changed(IFACE) is True
+    assert wifi_roam.EXTRA_SSIDS == ["X"]             # 부팅 블록과 정합 위해 현행 유지
+    assert len(_warn_calls("extra_ssids change ignored")) == 1
+
+
+def test_mode_b_extra_ssids_change_applies(env):
+    """모드 B(gen=False)는 extra_ssids가 로밍에 무영향이라 재시작 게이트 불필요 — 적용됨."""
+    wifi_roam.GENERATE_NETWORK_BLOCKS = False
+    wifi_roam.EXTRA_SSIDS = ["X"]
+    conf = _conf(gen=False)
+    conf[IFACE]["roaming"]["extra_ssids"] = ["X"]
+    _write(env, conf, 1000.0)
+    reload_roaming_config_if_changed(IFACE)          # baseline
+    conf2 = _conf(gen=False)
+    conf2[IFACE]["roaming"]["extra_ssids"] = ["X", "Y"]
+    _write(env, conf2, 1010.0)
+    reload_roaming_config_if_changed(IFACE)
+    assert reload_roaming_config_if_changed(IFACE) is True
+    assert wifi_roam.EXTRA_SSIDS == ["X", "Y"]        # 모드 B는 그대로 적용
+    assert len(_warn_calls("extra_ssids change ignored")) == 0
+
+
+def test_enable_on_to_off_keeps_instance_gates_off(env):
+    """on→off: 인스턴스는 None으로 만들지 않고(게이트가 차단) 플래그만 False."""
+    prev = wifi_roam.PingPongPreventer(30, 3)
+    wifi_roam.ENABLE_PING_PONG_PREVENTION = True
+    wifi_roam.ping_pong_preventer = prev
+    _write(env, _conf(pp_enable=True), 1000.0)
+    reload_roaming_config_if_changed(IFACE)          # baseline
+    _write(env, _conf(pp_enable=False), 1010.0)
+    reload_roaming_config_if_changed(IFACE)
+    assert reload_roaming_config_if_changed(IFACE) is True
+    assert wifi_roam.ENABLE_PING_PONG_PREVENTION is False
+    assert wifi_roam.ping_pong_preventer is prev      # 인스턴스 잔존(게이트가 미사용 보장)
+
+
+def test_revert_then_rechange_re_debounces(env):
+    """되돌림 후 재변경도 디바운스 1사이클 거친다(seen 동기화 라인 회귀 방지)."""
+    _write(env, _conf(check_interval=3), 1000.0)     # A
+    reload_roaming_config_if_changed(IFACE)          # baseline(applied=A)
+    _write(env, _conf(check_interval=2), 1010.0)     # B
+    reload_roaming_config_if_changed(IFACE)          # 디바운스(seen=B)
+    assert reload_roaming_config_if_changed(IFACE) is True   # B 적용(applied=B)
+    assert wifi_roam.CHECK_INTERVAL == 2
+    _write(env, _conf(check_interval=2), 1000.0)     # A(mtime 회귀 = 이미 적용 아님, applied=B)
+    # mtime=1000 != applied(1010) 이고 seen(1010)과도 달라 → 새 변경으로 디바운스 시작
+    assert reload_roaming_config_if_changed(IFACE) is False  # 디바운스(즉시 적용 아님)
+    _write(env, _conf(check_interval=9), 1020.0)     # 재변경 C
+    assert reload_roaming_config_if_changed(IFACE) is False  # 새 mtime → 다시 디바운스
+    assert reload_roaming_config_if_changed(IFACE) is True   # 안정화 후 적용
+    assert wifi_roam.CHECK_INTERVAL == 9
 
 
 def test_unchanged_mtime_noop(env):
