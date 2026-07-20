@@ -98,31 +98,30 @@ if [ "$_count" -gt "$SWEEP_MAX_HOSTS" ]; then
 fi
 
 logger -p local0.info "[$tag:$LINENO] sweep $SUBNET on $ETH_IFACE ($_count hosts)" 2>/dev/null || true
-# STALE 잔존(직전 연결의 구 peer 등)이 auto 오등록을 유발하지 않도록 스윕 전 neigh 초기화 →
-# 새 arping에 실제 응답한 호스트만 테이블에 남는다.
-ip neigh flush dev "$ETH_IFACE" 2>/dev/null || true
+# arping(iputils)은 raw PF_PACKET 소켓이라 응답을 받아도 **커널 neigh 테이블을 채우지 않는다**
+# (온타겟 실측 2026-07-20: arping exit=0인데 `ip neigh show`엔 없음, ping은 채움). 따라서
+# `ip neigh show`를 읽지 않고 arping **exit code**(0=응답)로 응답자를 직접 수집한다.
+# 스윕 범위 내 IP만 arping하므로 대역 필터가 불필요하고, live 응답만 잡으므로 STALE
+# 잔존 오등록 문제도 원천적으로 없다(neigh flush 불필요).
 _n=0
-for (( ipi=_start; ipi<=_end; ipi++ )); do
-    arping -I "$ETH_IFACE" -c 1 -w "$SWEEP_TIMEOUT" "$(int_to_ip "$ipi")" >/dev/null 2>&1 &
-    _n=$((_n+1))
-    if [ $(( _n % SWEEP_PARALLEL_LIMIT )) -eq 0 ]; then wait; fi
-done
-wait
+_responders=$(
+    for (( ipi=_start; ipi<=_end; ipi++ )); do
+        _t=$(int_to_ip "$ipi")
+        ( arping -I "$ETH_IFACE" -c 1 -w "$SWEEP_TIMEOUT" "$_t" >/dev/null 2>&1 && printf '%s\n' "$_t" ) &
+        _n=$((_n+1))
+        if [ $(( _n % SWEEP_PARALLEL_LIMIT )) -eq 0 ]; then wait; fi
+    done
+    wait
+)
 
-# ── 5) neigh 수집 → self·GW 제외, lladdr 있고 FAILED/INCOMPLETE 아닌 것만 ──
+# ── 5) 응답자에서 self·GW 제외 (스윕 범위 내만 arping했으므로 범위 필터 불필요) ──
 _found=0
 while IFS= read -r _pip; do
     [ -n "$_pip" ] || continue
     [ "$_pip" = "$_mlan_ip" ] && continue
     [ -n "$_gw" ] && [ "$_pip" = "$_gw" ] && continue
-    # 방금 스윕한 서브넷 [_network,_bcast] 밖의 잔존/오래된 neigh는 제외 (auto 오등록 방지).
-    # ip_to_int 파싱 실패(예: IPv6 항목)도 범위 밖으로 간주해 skip.
-    _pi=$(ip_to_int "$_pip" 2>/dev/null)
-    { [ -n "$_pi" ] && [ "$_pi" -ge "$_network" ] && [ "$_pi" -le "$_bcast" ]; } 2>/dev/null || continue
     printf '%s\n' "$_pip"
     _found=$((_found+1))
-done < <(ip -4 neigh show dev "$ETH_IFACE" 2>/dev/null \
-         | awk '/lladdr/ && /REACHABLE|STALE/ {print $1}' \
-         | awk '!seen[$0]++')
+done < <(printf '%s\n' "$_responders" | awk 'NF && !seen[$0]++')
 
 [ "$_found" -ge 1 ] && exit 0 || exit 1
