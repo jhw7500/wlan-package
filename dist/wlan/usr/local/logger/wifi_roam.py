@@ -1486,11 +1486,16 @@ def reload_supplicant_conf_if_changed(path):
 # 긴 backoff sleep 중에도 즉시 반영한다(async-signal-safe: 플래그 대입 + os.write 만).
 _RELOAD_STATE = {"pending": False}
 try:
-    _SIG_PIPE_R, _SIG_PIPE_W = os.pipe()
-    os.set_blocking(_SIG_PIPE_W, False)
-    os.set_blocking(_SIG_PIPE_R, False)
-except OSError:
-    _SIG_PIPE_R = _SIG_PIPE_W = None
+    # O_CLOEXEC: 데몬이 spawn하는 자식(iw/wpa_cli/mlanutl)이 신호 파이프 fd를 상속하지
+    # 않게 한다(subprocess close_fds 기본과 이중 방어). O_NONBLOCK로 핸들러 write/drain 무블록.
+    _SIG_PIPE_R, _SIG_PIPE_W = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
+except (OSError, AttributeError):  # pipe2 미지원 플랫폼 폴백
+    try:
+        _SIG_PIPE_R, _SIG_PIPE_W = os.pipe()
+        os.set_blocking(_SIG_PIPE_W, False)
+        os.set_blocking(_SIG_PIPE_R, False)
+    except OSError:
+        _SIG_PIPE_R = _SIG_PIPE_W = None
 
 
 def handle_sighup(signum, frame):
@@ -2405,11 +2410,15 @@ def main():
                 record_cross_ssid_result(
                     cross_ssid_cooldown, best_ap["ssid"], ok, ROAM_SUCCESS_SLEEP + interval
                 )
+                # 로밍 성공 정착 대기(의도적 비-중단): 이 짧은 settle 중 SIGHUP이 와도
+                # 직후 interruptible_sleep(interval) 또는 다음 루프 top에서 반영된다.
                 time.sleep(ROAM_SUCCESS_SLEEP)
             elif roam_to_bssid(station["bssid"], best_ap["bssid"],
                                channel=best_ap.get("channel"),
                                freq=best_ap.get("freq"),
                                rssi=best_ap.get("rssi")):
+                # 로밍 성공 정착 대기(의도적 비-중단): 이 짧은 settle 중 SIGHUP이 와도
+                # 직후 interruptible_sleep(interval) 또는 다음 루프 top에서 반영된다.
                 time.sleep(ROAM_SUCCESS_SLEEP)
             interruptible_sleep(interval)
             continue
