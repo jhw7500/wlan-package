@@ -711,8 +711,9 @@ def record_cross_ssid_result(cooldown, ssid, ok, post_sleep):
     """cross-SSID 전환 결과를 cooldown에 반영(메인루프 분기를 함수로 추출 → 단위 테스트 가능).
 
     성공(ok=True) → clear, 실패(ok=False) → register_failure(ssid, post_sleep).
+    ok=None(ping-pong 차단 — 전환 미시도)은 실패가 아니므로 무동작(cooldown 오염 방지).
     cooldown이 None(모드 B, cross 자동전환 비활성)이면 무동작."""
-    if cooldown is None:
+    if cooldown is None or ok is None:
         return
     if ok:
         cooldown.clear(ssid)
@@ -1666,7 +1667,9 @@ def connect_to_ssid(iface, to_ssid, from_bssid, to_bssid):
     - freq 인자는 일부러 생략한다: wifi connect에 단일 freq를 주면 conf의 multi-freq
       scan_freq/freq_list가 그 한 채널로 collapse되어 이후 스캔 범위가 축소된다. ssid만
       교체하고 scan_freq는 유지(후보는 이미 WPA_FREQ 내 채널이라 연결 가능).
-    - ping-pong 예산은 same-SSID 로밍과 공유(의도): cross-SSID도 BSSID 기반 카운트에 합산."""
+    - ping-pong 예산은 same-SSID 로밍과 공유(의도): cross-SSID도 BSSID 기반 카운트에 합산.
+    - ping-pong 차단 시 None 반환(전환 미시도 — 실패 아님): 호출자가 결과를
+      record_cross_ssid_result에 넘겨도 cooldown에 실패로 등록되지 않게 route와 계약 통일."""
     if ENABLE_PING_PONG_PREVENTION and ping_pong_preventer:
         if ping_pong_preventer.is_ping_pong(from_bssid, to_bssid):
             logger.message(
@@ -1674,7 +1677,7 @@ def connect_to_ssid(iface, to_ssid, from_bssid, to_bssid):
                 f"[{IFACE}] Cross-SSID roam blocked: ping-pong ({from_bssid} → {to_bssid})",
                 _EXTRA_(),
             )
-            return False
+            return None
 
     logger.message(
         "notice",
@@ -1861,17 +1864,45 @@ def select_network_for_ssid(iface, to_ssid):
 def route_cross_ssid_transition(iface, to_ssid, from_bssid, to_bssid):
     """cross-SSID 전환 수단 라우팅. 모드 A(GENERATE_NETWORK_BLOCKS=True)는 conf 불변
     select_network_for_ssid, 모드 B(False)는 기존 connect_to_ssid(외부 wifi connect).
-    배타적 2-모드라 한 모드에서 다른 경로는 진입 불가."""
+    배타적 2-모드라 한 모드에서 다른 경로는 진입 불가.
+
+    ping-pong 방지(데몬 자동 전환 전용, T6 관찰 반영): same-SSID roam_to_bssid와
+    동일하게 진입 전 is_ping_pong 차단 + 성공 시 add_roam 카운트(예산은 same/cross
+    공유 — BSSID 기반 왕복이면 SSID 불문 핑퐁). 수동 로밍(passive_roam)·망전환
+    (wifi connect 명령)은 이 함수를 거치지 않으므로 비대상. 차단은 '전환 실패'가
+    아니므로 None을 반환해 cross cooldown(record_cross_ssid_result)에 실패로
+    등록되지 않게 한다(cooldown=실패 SSID 억제, ping-pong=왕복 빈도 억제 — 별개).
+
+    Returns:
+        True=전환 확인 / False=전환 실패 / None=ping-pong 차단(이번 tick 스킵)
+    """
+    if ENABLE_PING_PONG_PREVENTION and ping_pong_preventer:
+        if ping_pong_preventer.is_ping_pong(from_bssid, to_bssid):
+            logger.message(
+                "info",
+                f"[{iface}] Cross-SSID roam blocked: ping-pong prevention "
+                f"({from_bssid} → {to_bssid})",
+                _EXTRA_(),
+            )
+            return None
+
     if GENERATE_NETWORK_BLOCKS:
         ok = select_network_for_ssid(iface, to_ssid)
     else:
+        # 모드 B: connect_to_ssid가 내부에서 자체 check+add_roam 수행(기존 동작 유지)
         ok = connect_to_ssid(iface, to_ssid, from_bssid, to_bssid)
     # cross-SSID는 두 모드 모두 펌웨어가 실제 결합 BSS를 자율 선택하므로 to_bssid를
     # 미리 알 수 없다. link.json은 ~1s 주기 비동기 갱신이라 전환 직후엔 이전 AP가
     # 남을 수 있어(stale ap_mac), 성공 직후 wpa_cli status(권위)로 실 결합 BSS를
     # 조회해 넘긴다. 조회 실패 시 "" → link.address 폴백(종전 동작), 무회귀.
     if ok:
-        notify_roam(iface, from_bssid, get_associated_bssid(iface))
+        # 소문자 정규화: PingPongPreventer가 (from,to) 문자열 비교로 왕복을 감지하므로
+        # 스캔 파서(.lower())·link.json(.lower())과 표기를 일치시킨다.
+        assoc = (get_associated_bssid(iface) or "").strip().lower()
+        if GENERATE_NETWORK_BLOCKS and ENABLE_PING_PONG_PREVENTION and ping_pong_preventer:
+            # 실 결합 BSS(권위)로 카운트, 조회 실패 시 목표 to_bssid 폴백.
+            ping_pong_preventer.add_roam(from_bssid, assoc or to_bssid)
+        notify_roam(iface, from_bssid, assoc)
     return ok
 
 
