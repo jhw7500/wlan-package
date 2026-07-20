@@ -274,3 +274,29 @@ def test_scan_results_nonzero_rc_returns_none(monkeypatch):
     with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
         out = iw_scan_to_ap_lines("jhw_wlan_", ["5180"])
     assert out is None
+
+
+def test_iw_scan_empty_freqs_omits_freq_arg_full_band(monkeypatch):
+    """WPA_FREQ=[] (scan_freq 미설정)이면 iw scan 명령에 'freq' 인자가 없어야 한다
+    (전체 대역 스캔). 게이트 #3(if WPA_SSID:)이 빈 freqs로 iw_scan_to_ap_lines를
+    호출하는 경로의 회귀 방지 — freqs 있으면 'freq'가 있어 대조로 무회귀도 고정."""
+    monkeypatch.setattr(wifi_roam.time, "sleep", lambda *_: None)
+    cap = {}
+
+    def side_effect(cmd, *a, **k):
+        if cmd[0] == "iw":
+            cap["cmd"] = list(cmd)
+            return _Run(0, "")
+        if "scan_results" in cmd:
+            return _Run(0, SCAN_RESULTS)
+        return _Run(0, "")
+
+    # 빈 freqs → freq 제한 없음(전체 대역)
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        iw_scan_to_ap_lines(["jhw_wlan_"], [])
+    assert "freq" not in cap["cmd"]
+
+    # 대조: freqs 지정 시 freq 인자 존재(스코프 스캔 무회귀)
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        iw_scan_to_ap_lines(["jhw_wlan_"], ["5180", "5200"])
+    assert "freq" in cap["cmd"] and "5180" in cap["cmd"]
