@@ -340,6 +340,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} br {up|down|start|stop|restart} : runtime"
     echo "       wifi {0|1|mlan0|mlan1} br status : peer_route/hairpin/브릿지 설정·런타임·정합성 진단 (읽기 전용)"
     echo "       wifi {0|1|mlan0|mlan1} br profile {hairpin|dual|peer-route|eth0-ip} [apply] : 연계 설정 묶음 조회/적용 (dry-run 기본)"
+    echo "       wifi {0|1|mlan0|mlan1} br route {find [<subnet>]|set <ip>|auto [<subnet>]} : eth 지연연결 후 peer host route 탐색/등록"
     echo "       wifi {0|1|mlan0|mlan1} br {moal|pcap|tpacket} : wbridge engine+bridge_iface persist"
     echo "       wifi {0|1|mlan0|mlan1} txpwr {0|1|2|3|no|default|low|org|custom_file_name} : persist+runtime"
     echo "       wifi {0|1|mlan0|mlan1} config {conf} {value} : persist"
@@ -1108,6 +1109,56 @@ _bridge_profile() {
     fi
 }
 
+# wifi <0|1|mlan0|mlan1> br route {find|set|auto} : eth 유선 peer host route 탐색/등록
+# peer_route=on인데 eth 미연결로 부팅해 누락된 peer host route(<peer>/32 dev eth0)를
+# 이후 eth 연결 시 사후 등록한다. 두 독립 스크립트(탐색기/등록기)에 위임한다.
+#   find [<subnet>] : peer IP 탐색만 (출력, route 무변경)
+#   set  <ip>       : 주어진 IP로 route 등록
+#   auto [<subnet>] : 탐색 후 정확히 1건이면 등록 (0/2+는 에러)
+_bridge_route() {
+    local verb="$1" arg="$2" iface="$3"
+    local sdir="${WIFI_PEER_SCRIPT_DIR:-/usr/local/scripts}"
+    local finder="$sdir/wifi_eth_peer_find.sh"
+    local setter="$sdir/wifi_eth_peer_route.sh"
+    case "$verb" in
+        find)
+            "$finder" "$arg" "$iface"
+            ;;
+        set)
+            if [ -z "$arg" ]; then
+                echo "Usage: wifi ${NUM:-0} br route set <ip>" >&2
+                return 2
+            fi
+            "$setter" "$arg" "$iface"
+            ;;
+        auto)
+            local peers frc cnt
+            peers=$("$finder" "$arg" "$iface"); frc=$?
+            # 탐색기 종료코드 구분: 0/1=정상(발견/미발견), 2/3=usage·링크down(이미 stderr 출력),
+            # 그 외(127 스크립트 부재·126 권한 등)=비정상 → '미발견'으로 감추지 말고 원인 노출.
+            case "$frc" in
+                0|1) : ;;
+                2|3) return "$frc" ;;
+                *)   echo "br route auto: finder 오류 (exit $frc) — 스크립트/권한 확인" >&2; return "$frc" ;;
+            esac
+            cnt=$(printf '%s\n' "$peers" | grep -c .)
+            if [ "$cnt" -eq 0 ]; then
+                echo "br route auto: peer 미발견 (sweep 결과 없음). eth 링크/서브넷 확인 후 재시도하거나 'wifi ${NUM:-0} br route set <ip>'로 직접 지정하세요." >&2
+                return 1
+            elif [ "$cnt" -gt 1 ]; then
+                echo "br route auto: 모호함 — $cnt개 발견. 하나를 골라 'wifi ${NUM:-0} br route set <ip>'로 지정하세요:" >&2
+                printf '%s\n' "$peers" | sed 's/^/  /' >&2
+                return 1
+            fi
+            "$setter" "$peers" "$iface"
+            ;;
+        *)
+            echo "Usage: wifi {0|1|mlan0|mlan1} br route {find [<subnet>]|set <ip>|auto [<subnet>]}" >&2
+            return 2
+            ;;
+    esac
+}
+
 case "$1" in
   0 | mlan0)
     IFACE="mlan0"
@@ -1531,6 +1582,8 @@ case "$2" in
         _bridge_status "$IFACE"
     elif [ "$3" == "profile" ]; then
         _bridge_profile "${4:-}" "${5:-}"
+    elif [ "$3" == "route" ]; then
+        _bridge_route "${4:-}" "${5:-}" "$IFACE"
     elif [ "$3" == "moal" ] || [ "$3" == "pcap" ] || [ "$3" == "tpacket" ]; then
         if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
             echo "Error: br {moal|pcap|tpacket} supports mlan0/mlan1 only" >&2

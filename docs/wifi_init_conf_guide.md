@@ -138,6 +138,8 @@ wifi_init_conf.json
 > **⚠️ `arp_ignore_always.enabled`는 IP 배치(토폴로지)에 종속**: 출하 기본값 **`true`**는 eth0에 IP를 두거나 eth0/mlan0가 동일 서브넷이라 클론 MAC 이중 ARP 응답이 문제되는 구성을 전제로 한다. **토폴로지(IP 배치)는 이 JSON이 아니라 `wifi <iface> ip`/webui로 결정**되므로, 배치를 바꾸면 이 값도 함께 점검해야 한다. 순수 mlan0-IP에서 BD↔유선peer 직접통신이 필요하면 `peer_route.enabled=true` + `ip_discovery=true` + `arp_ignore_always.enabled=false` 3종 세트로 설정한다(이때 mlan0 IP 배치도 `wifi mlan0 ip`/webui로 수행). `arp_ignore_always=true` + `peer_route=off` 조합에서 mlan0-IP + 유선↔BD가 필요하면 `wifi_init.sh`가 `[GUARD]` 경고를 남긴다.
 >
 > **진단 명령**: 현재 3종 토글·런타임 상태·정합성을 한눈에 보려면 **`wifi {0|1} br status`** (읽기 전용, 값 변경 없음). `peer_route↔ip_discovery`, `arp_ignore_always↔토폴로지(추정)`, 설정↔런타임(`/32` 미러 등)의 불일치를 `[WARN]`/`[INFO]`로 표시한다. 매번 3종 세트를 외우지 않아도 이 명령으로 현재 구성이 맞는지 확인할 수 있다.
+>
+> **eth 지연연결 라우트 등록**: `peer_route=on`인데 이더넷을 **부팅 후 나중에** 연결한 경우, 부팅 시점엔 `wired_mac_ip_get.py`가 링크 대기(`wait_for_eth_link`)에서 빠져나와 **peer host route(`<peer>/32 dev eth0`)가 누락**된다(나머지 인프라 — eth0 `/32` 미러·table 100·sysctl — 은 링크 무관하게 이미 세팅됨). 이후 eth 연결 시 **`wifi {0|1} br route auto`**로 유선 peer를 sweep 탐색해 그 라우트를 사후 등록한다(읽기 전용 아님). 하위 명령: `find [<subnet>]`=탐색만(읽기 전용), `set <ip>`=IP 직접 지정 등록, `auto [<subnet>]`=정확히 1건 발견 시 자동 등록(0건/2건+는 에러 — 후자는 `set <ip>`로 지정). 서브넷 생략 시 `eth_client_ip`(단일 IP quick ARP) → `eth_sweep_subnet` → mlanN 대역 순으로 대상 결정. (자동 트리거는 후속 확장 예정)
 
 ### 3.1 wbridge.optimize - 커널 레벨 네트워크 튜닝
 
