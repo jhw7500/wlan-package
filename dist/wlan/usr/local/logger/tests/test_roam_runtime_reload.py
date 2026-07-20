@@ -228,6 +228,54 @@ def test_reload_passes_validated_data_no_reparse(env, monkeypatch):
     assert wifi_roam.CHECK_INTERVAL == 2
 
 
+def test_bad_numeric_value_no_crash_keeps_current(env):
+    """★Codex P1: 비정수 문자열 값이 저장돼도 크래시 없이 현행 유지 + 다른 유효 키는 적용."""
+    wifi_roam.SCAN_NO_RESULT_SLEEP = 3
+    _write(env, _conf(check_interval=2), 1000.0)
+    reload_roaming_config_if_changed(IFACE)          # baseline
+    conf = _conf(check_interval=5)
+    conf[IFACE]["roaming"]["SCAN_NO_RESULT_SLEEP"] = "bad"   # 크래시 유발값
+    _write(env, conf, 1010.0)
+    reload_roaming_config_if_changed(IFACE)          # 디바운스
+    # 크래시 없이 True(재적용). 구조 검증 통과(구문/섹션 valid)라 적용됨.
+    assert reload_roaming_config_if_changed(IFACE) is True
+    assert wifi_roam.SCAN_NO_RESULT_SLEEP == 3       # 잘못된 값 → 현행 유지(방어 캐스팅)
+    assert wifi_roam.CHECK_INTERVAL == 5             # 같은 파일의 유효 키는 정상 적용
+
+
+def test_gen_key_absent_no_spurious_warning(env):
+    """[Claude MED] gen 키 부재 시 False 수렴이지만 오탐 경고 없이 조용히 복원."""
+    wifi_roam.GENERATE_NETWORK_BLOCKS = True
+    conf = _conf(gen=True)
+    _write(env, conf, 1000.0)
+    reload_roaming_config_if_changed(IFACE)          # baseline
+    conf2 = _conf(check_interval=2)
+    conf2[IFACE]["roaming"].pop("generate_network_blocks", None)  # 키 삭제
+    _write(env, conf2, 1010.0)
+    reload_roaming_config_if_changed(IFACE)
+    assert reload_roaming_config_if_changed(IFACE) is True
+    assert wifi_roam.GENERATE_NETWORK_BLOCKS is True  # 유지
+    assert len(_warn_calls("requires daemon restart")) == 0  # 오탐 경고 없음
+
+
+def test_gen_change_blocked_rolls_back_extra_ssids(env):
+    """★Codex P2: gen 변경 차단 시 함께 바뀐 EXTRA_SSIDS도 원복(블록 정합 유지)."""
+    wifi_roam.GENERATE_NETWORK_BLOCKS = True
+    wifi_roam.EXTRA_SSIDS = ["X"]
+    conf = _conf(gen=True)
+    conf[IFACE]["roaming"]["extra_ssids"] = ["X"]
+    _write(env, conf, 1000.0)
+    reload_roaming_config_if_changed(IFACE)          # baseline
+    conf2 = _conf(gen=False)                         # 모드 전환 시도(차단 대상)
+    conf2[IFACE]["roaming"]["extra_ssids"] = ["Y"]   # extra도 변경
+    _write(env, conf2, 1010.0)
+    reload_roaming_config_if_changed(IFACE)
+    assert reload_roaming_config_if_changed(IFACE) is True
+    assert wifi_roam.GENERATE_NETWORK_BLOCKS is True  # gen 차단
+    assert wifi_roam.EXTRA_SSIDS == ["X"]             # extra도 원복(부팅 블록과 정합)
+    assert len(_warn_calls("requires daemon restart")) == 1
+
+
 def test_unchanged_mtime_noop(env):
     _write(env, _conf(), 1000.0)
     reload_roaming_config_if_changed(IFACE)
