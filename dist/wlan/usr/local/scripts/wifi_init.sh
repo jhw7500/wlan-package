@@ -915,44 +915,41 @@ if [ "${MFG_MODE:-0}" == "1" ]; then
     logger -p local0.info "[$tag:$LINENO] MFG profile: skip MAC setup (wired_mac_ip_get/update_mac)"
 else
 
-# 동적 MAC이 필요한 경우 wired_mac_ip_get.py 먼저 실행
-if [ "$MAC_MODE" = "dynamic" ] && wifi_init_iface_is_enabled "$BRIDGE_IFACE" "true"; then
-    #logger -p local0.info "[$tag:$LINENO] [$BRIDGE_IFACE] running wired_mac_ip_get.py"
-    python3 /usr/local/logger/wired_mac_ip_get.py || true
-else
-    logger -p local0.info "[$tag:$LINENO] skip wired_mac_ip_get.py"
-fi
+# 1) enable 여부와 무관하게 mlan0/mlan1 모두 base MAC을 먼저 반영한다.
+#    ({BRIDGE_IFACE, SECONDARY_IFACE} == {mlan0, mlan1}) base는 인터페이스 기본 MAC이며,
+#    아래 2)에서 bridge 활성 + dynamic/static 변환 성공 시에만 bridge iface MAC을 override 한다.
+for _mac_if in "$BRIDGE_IFACE" "$SECONDARY_IFACE"; do
+    _base_mac=$(read_mac_from_json "base" "$_mac_if" "base") || _base_mac=""
+    if [ -n "$_base_mac" ]; then
+        /usr/local/scripts/update_mac.sh "$_mac_if" "$_base_mac" || logger -p local0.err "[$tag:$LINENO] update_mac.sh $_mac_if (base) failed"
+    else
+        logger -p local0.info "[$tag:$LINENO] [$_mac_if] no base MAC configured; skip base update_mac"
+    fi
+done
 
-# resolve_mac 결과: "mac source"
-BRIDGE_ENABLED=$(iface_enabled_value "$BRIDGE_IFACE")
-if [ "$BRIDGE_ENABLED" = "true" ]; then
+# 2) 실제 bridge 기능이 켜져 있고(wbridge.enabled=true & bridge iface enable) dynamic/static
+#    MAC 변환에 성공하면 bridge 인터페이스 MAC을 base가 아닌 변환된 MAC으로 override 한다.
+BRIDGE_MAC_SOURCE="base"
+if [ "$BRIDGE_NONE" != "true" ] && wifi_init_iface_is_enabled "$BRIDGE_IFACE" "true"; then
+    # dynamic 모드면 유선 peer MAC/IP 확보 먼저 (resolve_mac의 try_dynamic_mac가 /tmp/eth0_client_mac를 읽음)
+    if [ "$MAC_MODE" = "dynamic" ]; then
+        #logger -p local0.info "[$tag:$LINENO] [$BRIDGE_IFACE] running wired_mac_ip_get.py"
+        python3 /usr/local/logger/wired_mac_ip_get.py || true
+    fi
+    # resolve_mac 결과: "mac source" (dynamic → target → base 순 폴백)
     BRIDGE_RESULT=$(resolve_mac "$BRIDGE_IFACE" "$MAC_MODE")
     BRIDGE_MAC="${BRIDGE_RESULT% *}"
     BRIDGE_MAC_SOURCE="${BRIDGE_RESULT##* }"
-    if [ -n "$BRIDGE_MAC" ]; then
-        /usr/local/scripts/update_mac.sh "$BRIDGE_IFACE" "$BRIDGE_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh $BRIDGE_IFACE failed"
+    # dynamic/static 변환 성공(source=dynamic|target)일 때만 base 위에 override. source=base면 이미 1)에서 반영됨.
+    if [ -n "$BRIDGE_MAC" ] && [ "$BRIDGE_MAC_SOURCE" != "base" ]; then
+        /usr/local/scripts/update_mac.sh "$BRIDGE_IFACE" "$BRIDGE_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh $BRIDGE_IFACE ($BRIDGE_MAC_SOURCE) failed"
+        logger -p local0.info "[$tag:$LINENO] [$BRIDGE_IFACE] MAC override to $BRIDGE_MAC (source=$BRIDGE_MAC_SOURCE)"
     else
-        logger -p local0.info "[$tag:$LINENO] [$BRIDGE_IFACE] no MAC resolved; skip update_mac"
-        BRIDGE_MAC_SOURCE="none"
+        BRIDGE_MAC_SOURCE="base"
+        logger -p local0.info "[$tag:$LINENO] [$BRIDGE_IFACE] dynamic/static MAC not resolved; keep base"
     fi
 else
-    BRIDGE_MAC_SOURCE="disabled"
-    logger -p local0.info "[$tag:$LINENO] [$BRIDGE_IFACE] disabled; skip primary MAC update"
-fi
-
-SECONDARY_ENABLED=$(iface_enabled_value "$SECONDARY_IFACE")
-if [ "$SECONDARY_ENABLED" = "true" ]; then
-    SECONDARY_MAC=$(read_mac_from_json "base" "$SECONDARY_IFACE" "base") || SECONDARY_MAC=""
-    SECONDARY_MAC_SOURCE="base"
-    if [ -n "$SECONDARY_MAC" ]; then
-        /usr/local/scripts/update_mac.sh "$SECONDARY_IFACE" "$SECONDARY_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh $SECONDARY_IFACE failed"
-    else
-        logger -p local0.info "[$tag:$LINENO] [$SECONDARY_IFACE] no base MAC configured; skip update_mac"
-        SECONDARY_MAC_SOURCE="none"
-    fi
-else
-    SECONDARY_MAC_SOURCE="disabled"
-    logger -p local0.info "[$tag:$LINENO] [$SECONDARY_IFACE] disabled; skip secondary MAC update"
+    logger -p local0.info "[$tag:$LINENO] [$BRIDGE_IFACE] bridge inactive (BRIDGE_NONE=$BRIDGE_NONE); keep base MAC"
 fi
 
 # wifi_bridge / wifi_event / wifi_periodic_roam / wifi_ping_monitor / wifi_mgmt_log.timer 등
