@@ -230,67 +230,78 @@ def _apply_section_values(
 
 
 def _apply_runtime_globals(config: Dict[str, Any]) -> None:
-    current_default_th_2g = globals().get("DEFAULT_TH_2G", DEFAULT_TH_2G)
-    current_default_th_5g = globals().get("DEFAULT_TH_5G", DEFAULT_TH_5G)
-    current_check_interval = globals().get("CHECK_INTERVAL", CHECK_INTERVAL)
+    g = globals()
 
-    try:
-        check_interval = int(config["CHECK_INTERVAL"])
-    except (TypeError, ValueError):
-        check_interval = int(current_check_interval)
+    def _num(key, cast=int):
+        # flat 덮어쓰기 루프가 원본 문자열 등 잘못된 값을 넣어도(런타임 reload/부팅)
+        # int() 크래시 없이 현행 전역값을 유지한다. 수치 전역은 모듈 로드 시 유효 기본값
+        # 으로 정의되므로 g.get(key)는 항상 유효(최후 방어까지 삼중 가드). 이 방어가
+        # 없으면 예: `SCAN_NO_RESULT_SLEEP: "bad"` 한 줄로 데몬이 ValueError로 죽는다.
+        try:
+            return cast(config[key])
+        except (TypeError, ValueError, KeyError):
+            cur = g.get(key)
+            try:
+                return cast(cur)
+            except (TypeError, ValueError):
+                # 미래에 모듈 전역 초기값 없는 키가 추가돼 cur가 None이어도 None을
+                # 전역에 쓰지 않는다(이후 int 사용처 TypeError 방지) — 최후 0 폴백.
+                return cur if isinstance(cur, (int, float)) else 0
 
-    globals().update(
+    g.update(
         {
             "ENABLE_PREDICTIVE_ROAM": config["ENABLE_PREDICTIVE_ROAM"],
-            "PREDICTIVE_THRESHOLD_BOOST": config["PREDICTIVE_THRESHOLD_BOOST"],
-            "TREND_WINDOW_SIZE": config["TREND_WINDOW_SIZE"],
-            "TREND_HISTORY_MAX_AGE": config["TREND_HISTORY_MAX_AGE"],
+            "PREDICTIVE_THRESHOLD_BOOST": _num("PREDICTIVE_THRESHOLD_BOOST"),
+            "TREND_WINDOW_SIZE": _num("TREND_WINDOW_SIZE"),
+            "TREND_HISTORY_MAX_AGE": _num("TREND_HISTORY_MAX_AGE"),
             "ENABLE_LOAD_BASED_ROAM": config["ENABLE_LOAD_BASED_ROAM"],
-            "MAX_ROAM_LOAD": config["MAX_ROAM_LOAD"],
-            "LOAD_DIFF_THRESHOLD": config["LOAD_DIFF_THRESHOLD"],
+            "MAX_ROAM_LOAD": _num("MAX_ROAM_LOAD"),
+            "LOAD_DIFF_THRESHOLD": _num("LOAD_DIFF_THRESHOLD"),
             "ENABLE_PING_PONG_PREVENTION": config["ENABLE_PING_PONG_PREVENTION"],
-            "PING_PONG_WINDOW": config["PING_PONG_WINDOW"],
-            "MAX_ROAMS_IN_WINDOW": config["MAX_ROAMS_IN_WINDOW"],
-            "PING_PONG_DETECTION_TIME": config["PING_PONG_DETECTION_TIME"],
+            "PING_PONG_WINDOW": _num("PING_PONG_WINDOW"),
+            "MAX_ROAMS_IN_WINDOW": _num("MAX_ROAMS_IN_WINDOW"),
+            "PING_PONG_DETECTION_TIME": _num("PING_PONG_DETECTION_TIME"),
             "ENABLE_ADAPTIVE_INTERVAL": config["ENABLE_ADAPTIVE_INTERVAL"],
-            "MIN_CHECK_INTERVAL": config["MIN_CHECK_INTERVAL"],
-            "MAX_CHECK_INTERVAL": config["MAX_CHECK_INTERVAL"],
-            "ADAPTIVE_RSSI_DROP_THRESHOLD": config["ADAPTIVE_RSSI_DROP_THRESHOLD"],
-            "ADAPTIVE_RSSI_RISE_THRESHOLD": config["ADAPTIVE_RSSI_RISE_THRESHOLD"],
-            "ADAPTIVE_NEAR_THRESHOLD_OFFSET": config["ADAPTIVE_NEAR_THRESHOLD_OFFSET"],
-            "ADAPTIVE_NEAR_THRESHOLD_INTERVAL": config["ADAPTIVE_NEAR_THRESHOLD_INTERVAL"],
-            "ADAPTIVE_GOOD_SIGNAL_OFFSET": config["ADAPTIVE_GOOD_SIGNAL_OFFSET"],
-            "ADAPTIVE_CONSECUTIVE_DROP_COUNT": config["ADAPTIVE_CONSECUTIVE_DROP_COUNT"],
-            "DEFAULT_TH_2G": config.get("DEFAULT_TH_2G", current_default_th_2g),
-            "DEFAULT_TH_5G": config.get("DEFAULT_TH_5G", current_default_th_5g),
-            "DIFF_TH": config["DIFF_TH"],
-            "CHECK_INTERVAL": check_interval,
+            "MIN_CHECK_INTERVAL": _num("MIN_CHECK_INTERVAL"),
+            "MAX_CHECK_INTERVAL": _num("MAX_CHECK_INTERVAL"),
+            "ADAPTIVE_RSSI_DROP_THRESHOLD": _num("ADAPTIVE_RSSI_DROP_THRESHOLD"),
+            "ADAPTIVE_RSSI_RISE_THRESHOLD": _num("ADAPTIVE_RSSI_RISE_THRESHOLD"),
+            "ADAPTIVE_NEAR_THRESHOLD_OFFSET": _num("ADAPTIVE_NEAR_THRESHOLD_OFFSET"),
+            "ADAPTIVE_NEAR_THRESHOLD_INTERVAL": _num("ADAPTIVE_NEAR_THRESHOLD_INTERVAL"),
+            "ADAPTIVE_GOOD_SIGNAL_OFFSET": _num("ADAPTIVE_GOOD_SIGNAL_OFFSET"),
+            "ADAPTIVE_CONSECUTIVE_DROP_COUNT": _num("ADAPTIVE_CONSECUTIVE_DROP_COUNT"),
+            "DEFAULT_TH_2G": _num("DEFAULT_TH_2G"),
+            "DEFAULT_TH_5G": _num("DEFAULT_TH_5G"),
+            "DIFF_TH": _num("DIFF_TH"),
+            "CHECK_INTERVAL": _num("CHECK_INTERVAL"),
             "ENABLE_POST_ROAM_ARP_OPTIMIZATION": config[
                 "ENABLE_POST_ROAM_ARP_OPTIMIZATION"
             ],
-            "POST_ROAM_GARP_COUNT": config["POST_ROAM_GARP_COUNT"],
-            "POST_ROAM_GARP_WAIT": config["POST_ROAM_GARP_WAIT"],
+            "POST_ROAM_GARP_COUNT": _num("POST_ROAM_GARP_COUNT"),
+            "POST_ROAM_GARP_WAIT": _num("POST_ROAM_GARP_WAIT"),
             "ENABLE_POST_ROAM_PEER_WARMUP": config["ENABLE_POST_ROAM_PEER_WARMUP"],
-            "POST_ROAM_PEER_COUNT": config["POST_ROAM_PEER_COUNT"],
-            "POST_ROAM_PEER_WAIT": config["POST_ROAM_PEER_WAIT"],
-            "SCAN_NO_RESULT_SLEEP": int(config["SCAN_NO_RESULT_SLEEP"]),
-            "ROAM_SUCCESS_SLEEP": int(config["ROAM_SUCCESS_SLEEP"]),
-            "ROAM_NO_RESULT_MAX_SLEEP": int(config["ROAM_NO_RESULT_MAX_SLEEP"]),
-            "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC": int(
-                config["ROAM_NO_RESULT_BACKOFF_RECOVER_SEC"]
+            "POST_ROAM_PEER_COUNT": _num("POST_ROAM_PEER_COUNT"),
+            "POST_ROAM_PEER_WAIT": _num("POST_ROAM_PEER_WAIT"),
+            "SCAN_NO_RESULT_SLEEP": _num("SCAN_NO_RESULT_SLEEP"),
+            "ROAM_SUCCESS_SLEEP": _num("ROAM_SUCCESS_SLEEP"),
+            "ROAM_NO_RESULT_MAX_SLEEP": _num("ROAM_NO_RESULT_MAX_SLEEP"),
+            "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC": _num(
+                "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC"
             ),
-            "ROAM_CROSS_FAIL_RETRY_COUNT": int(config["ROAM_CROSS_FAIL_RETRY_COUNT"]),
+            "ROAM_CROSS_FAIL_RETRY_COUNT": _num("ROAM_CROSS_FAIL_RETRY_COUNT"),
             "USE_SIGNAL_AVG": config["USE_SIGNAL_AVG"],
         }
     )
 
 
-def load_roaming_config(iface):
+def load_roaming_config(iface, data=None):
     """
     JSON 형식의 conf 파일에서 인터페이스별 로밍 설정 로드
 
     Args:
         iface: 인터페이스 이름 (mlan0 또는 mlan1)
+        data: 이미 파싱·검증된 설정 dict(런타임 reload용). 주어지면 파일을 다시
+              읽지 않아 검증-적용 사이 파일 교체(TOCTOU)로 인한 기본값 회귀가 없다.
 
     Returns:
         dict: 로밍 설정 dictionary
@@ -336,131 +347,133 @@ def load_roaming_config(iface):
         "USE_SIGNAL_AVG": DEFAULT_USE_SIGNAL_AVG,
     }
 
-    # 1. JSON 설정 파일 시도
+    # 1. JSON 설정 파일 시도. data(검증된 dict)가 주어지면 파일을 다시 읽지 않고
+    #    그대로 사용 — 재읽기 제거로 검증-적용 원자성(TOCTOU 차단) 보장.
     try:
-        with open(WIFI_INIT_CONF_JSON, "r") as f:
-            data = json.load(f)
+        if data is None:
+            with open(WIFI_INIT_CONF_JSON, "r") as f:
+                data = json.load(f)
 
-            if iface in data and "roaming" in data[iface]:
-                roam_config = data[iface]["roaming"]
+        if iface in data and "roaming" in data[iface]:
+            roam_config = data[iface]["roaming"]
 
-                predictive = roam_config.get("PREDICTIVE_ROAM")
-                if isinstance(predictive, dict):
+            predictive = roam_config.get("PREDICTIVE_ROAM")
+            if isinstance(predictive, dict):
+                _apply_section_values(
+                    config,
+                    predictive,
+                    [
+                        ("enable", "ENABLE_PREDICTIVE_ROAM", parse_bool),
+                        ("threshold_boost", "PREDICTIVE_THRESHOLD_BOOST", int),
+                        ("trend_window_size", "TREND_WINDOW_SIZE", int),
+                        ("trend_history_max_age", "TREND_HISTORY_MAX_AGE", int),
+                    ],
+                )
+
+            load_based = roam_config.get("LOAD_BASED_ROAM")
+            if isinstance(load_based, dict):
+                _apply_section_values(
+                    config,
+                    load_based,
+                    [
+                        ("enable", "ENABLE_LOAD_BASED_ROAM", parse_bool),
+                        ("max_roam_load", "MAX_ROAM_LOAD", int),
+                        ("load_diff_threshold", "LOAD_DIFF_THRESHOLD", int),
+                    ],
+                )
+
+            ping_pong = roam_config.get("PING_PONG_PREVENTION")
+            if isinstance(ping_pong, dict):
+                _apply_section_values(
+                    config,
+                    ping_pong,
+                    [
+                        ("enable", "ENABLE_PING_PONG_PREVENTION", parse_bool),
+                        ("window", "PING_PONG_WINDOW", int),
+                        ("max_roams_in_window", "MAX_ROAMS_IN_WINDOW", int),
+                        ("detection_time", "PING_PONG_DETECTION_TIME", int),
+                    ],
+                )
+
+            adaptive = roam_config.get("ADAPTIVE_INTERVAL")
+            if isinstance(adaptive, dict):
+                _apply_section_values(
+                    config,
+                    adaptive,
+                    [
+                        ("enable", "ENABLE_ADAPTIVE_INTERVAL", parse_bool),
+                        ("min_check_interval", "MIN_CHECK_INTERVAL", int),
+                        ("max_check_interval", "MAX_CHECK_INTERVAL", int),
+                        ("rssi_drop_threshold", "ADAPTIVE_RSSI_DROP_THRESHOLD", int),
+                        ("rssi_rise_threshold", "ADAPTIVE_RSSI_RISE_THRESHOLD", int),
+                        ("near_threshold_offset", "ADAPTIVE_NEAR_THRESHOLD_OFFSET", int),
+                        ("near_threshold_interval", "ADAPTIVE_NEAR_THRESHOLD_INTERVAL", int),
+                        ("good_signal_offset", "ADAPTIVE_GOOD_SIGNAL_OFFSET", int),
+                        ("consecutive_drop_count", "ADAPTIVE_CONSECUTIVE_DROP_COUNT", int),
+                    ],
+                )
+
+            post_roam = roam_config.get("POST_ROAM_ARP_OPTIMIZATION")
+            if isinstance(post_roam, dict):
+                _apply_section_values(
+                    config,
+                    post_roam,
+                    [
+                        ("enable", "ENABLE_POST_ROAM_ARP_OPTIMIZATION", parse_bool),
+                        ("garp_count", "POST_ROAM_GARP_COUNT", int),
+                        ("garp_wait", "POST_ROAM_GARP_WAIT", int),
+                    ],
+                )
+
+                peer_warmup = post_roam.get("PEER_WARMUP")
+                if isinstance(peer_warmup, dict):
                     _apply_section_values(
                         config,
-                        predictive,
+                        peer_warmup,
                         [
-                            ("enable", "ENABLE_PREDICTIVE_ROAM", parse_bool),
-                            ("threshold_boost", "PREDICTIVE_THRESHOLD_BOOST", int),
-                            ("trend_window_size", "TREND_WINDOW_SIZE", int),
-                            ("trend_history_max_age", "TREND_HISTORY_MAX_AGE", int),
+                            ("enable", "ENABLE_POST_ROAM_PEER_WARMUP", parse_bool),
+                            ("peer_count", "POST_ROAM_PEER_COUNT", int),
+                            ("peer_wait", "POST_ROAM_PEER_WAIT", int),
                         ],
                     )
 
-                load_based = roam_config.get("LOAD_BASED_ROAM")
-                if isinstance(load_based, dict):
-                    _apply_section_values(
-                        config,
-                        load_based,
-                        [
-                            ("enable", "ENABLE_LOAD_BASED_ROAM", parse_bool),
-                            ("max_roam_load", "MAX_ROAM_LOAD", int),
-                            ("load_diff_threshold", "LOAD_DIFF_THRESHOLD", int),
-                        ],
-                    )
+            # use_signal_avg 옵션 처리
+            _set_config_value(
+                config, "USE_SIGNAL_AVG",
+                roam_config.get("use_signal_avg"), parse_bool
+            )
 
-                ping_pong = roam_config.get("PING_PONG_PREVENTION")
-                if isinstance(ping_pong, dict):
-                    _apply_section_values(
-                        config,
-                        ping_pong,
-                        [
-                            ("enable", "ENABLE_PING_PONG_PREVENTION", parse_bool),
-                            ("window", "PING_PONG_WINDOW", int),
-                            ("max_roams_in_window", "MAX_ROAMS_IN_WINDOW", int),
-                            ("detection_time", "PING_PONG_DETECTION_TIME", int),
-                        ],
-                    )
+            # 다중 SSID 로밍: extra_ssids 로드 (str 리스트만 수용, 공백 제거).
+            # 키 제거/null 시 이전 값이 stale로 남지 않도록 무조건 재대입.
+            extra = roam_config.get("extra_ssids")
+            EXTRA_SSIDS = [
+                str(s).strip() for s in extra if str(s).strip()
+            ] if isinstance(extra, list) else []
 
-                adaptive = roam_config.get("ADAPTIVE_INTERVAL")
-                if isinstance(adaptive, dict):
-                    _apply_section_values(
-                        config,
-                        adaptive,
-                        [
-                            ("enable", "ENABLE_ADAPTIVE_INTERVAL", parse_bool),
-                            ("min_check_interval", "MIN_CHECK_INTERVAL", int),
-                            ("max_check_interval", "MAX_CHECK_INTERVAL", int),
-                            ("rssi_drop_threshold", "ADAPTIVE_RSSI_DROP_THRESHOLD", int),
-                            ("rssi_rise_threshold", "ADAPTIVE_RSSI_RISE_THRESHOLD", int),
-                            ("near_threshold_offset", "ADAPTIVE_NEAR_THRESHOLD_OFFSET", int),
-                            ("near_threshold_interval", "ADAPTIVE_NEAR_THRESHOLD_INTERVAL", int),
-                            ("good_signal_offset", "ADAPTIVE_GOOD_SIGNAL_OFFSET", int),
-                            ("consecutive_drop_count", "ADAPTIVE_CONSECUTIVE_DROP_COUNT", int),
-                        ],
-                    )
+            # 후보없음 backoff 파라미터(평탄 대문자 키). 양의 정수만 수용, 형식오류 시 기본값 유지.
+            _set_config_value(
+                config, "ROAM_NO_RESULT_MAX_SLEEP",
+                roam_config.get("ROAM_NO_RESULT_MAX_SLEEP"), int
+            )
+            _set_config_value(
+                config, "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC",
+                roam_config.get("ROAM_NO_RESULT_BACKOFF_RECOVER_SEC"), int
+            )
+            _set_config_value(
+                config, "ROAM_CROSS_FAIL_RETRY_COUNT",
+                roam_config.get("ROAM_CROSS_FAIL_RETRY_COUNT"), int
+            )
 
-                post_roam = roam_config.get("POST_ROAM_ARP_OPTIMIZATION")
-                if isinstance(post_roam, dict):
-                    _apply_section_values(
-                        config,
-                        post_roam,
-                        [
-                            ("enable", "ENABLE_POST_ROAM_ARP_OPTIMIZATION", parse_bool),
-                            ("garp_count", "POST_ROAM_GARP_COUNT", int),
-                            ("garp_wait", "POST_ROAM_GARP_WAIT", int),
-                        ],
-                    )
+            # 모드 결정자 generate_network_blocks 파싱 (bool만 수용, 기본 false).
+            # 키 부재/형식오류 시 false로 수렴해 모드 B(단일 블록) 보장.
+            GENERATE_NETWORK_BLOCKS = parse_bool(
+                roam_config.get("generate_network_blocks", False)
+            )
 
-                    peer_warmup = post_roam.get("PEER_WARMUP")
-                    if isinstance(peer_warmup, dict):
-                        _apply_section_values(
-                            config,
-                            peer_warmup,
-                            [
-                                ("enable", "ENABLE_POST_ROAM_PEER_WARMUP", parse_bool),
-                                ("peer_count", "POST_ROAM_PEER_COUNT", int),
-                                ("peer_wait", "POST_ROAM_PEER_WAIT", int),
-                            ],
-                        )
-
-                # use_signal_avg 옵션 처리
-                _set_config_value(
-                    config, "USE_SIGNAL_AVG",
-                    roam_config.get("use_signal_avg"), parse_bool
-                )
-
-                # 다중 SSID 로밍: extra_ssids 로드 (str 리스트만 수용, 공백 제거).
-                # 키 제거/null 시 이전 값이 stale로 남지 않도록 무조건 재대입.
-                extra = roam_config.get("extra_ssids")
-                EXTRA_SSIDS = [
-                    str(s).strip() for s in extra if str(s).strip()
-                ] if isinstance(extra, list) else []
-
-                # 후보없음 backoff 파라미터(평탄 대문자 키). 양의 정수만 수용, 형식오류 시 기본값 유지.
-                _set_config_value(
-                    config, "ROAM_NO_RESULT_MAX_SLEEP",
-                    roam_config.get("ROAM_NO_RESULT_MAX_SLEEP"), int
-                )
-                _set_config_value(
-                    config, "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC",
-                    roam_config.get("ROAM_NO_RESULT_BACKOFF_RECOVER_SEC"), int
-                )
-                _set_config_value(
-                    config, "ROAM_CROSS_FAIL_RETRY_COUNT",
-                    roam_config.get("ROAM_CROSS_FAIL_RETRY_COUNT"), int
-                )
-
-                # 모드 결정자 generate_network_blocks 파싱 (bool만 수용, 기본 false).
-                # 키 부재/형식오류 시 false로 수렴해 모드 B(단일 블록) 보장.
-                GENERATE_NETWORK_BLOCKS = parse_bool(
-                    roam_config.get("generate_network_blocks", False)
-                )
-
-                # 설정 적용
-                for key in config.keys():
-                    if key in roam_config:
-                        config[key] = roam_config[key]
+            # 설정 적용
+            for key in config.keys():
+                if key in roam_config:
+                    config[key] = roam_config[key]
 
     except FileNotFoundError:
         if "logger" in globals():
@@ -1466,6 +1479,135 @@ def reload_supplicant_conf_if_changed(path):
         )
 
 
+# 런타임 roaming config reload 상태 (mtime 기반 디바운스+검증)
+ROAM_JSON_RELOAD_STATE = {"applied": None, "seen": None, "warned": None}
+
+
+def reload_roaming_config_if_changed(iface):
+    """wifi_init_conf.json 이 런타임 변경되면(에디터/wifi roam th 등) 재시작 없이
+    로밍 설정을 재적용한다 — 검증 시 조건/임계값 라이브 튜닝 + 데몬 상태(핑퐁 이력·
+    backoff·cooldown) 보존이 목적. 4중 방어:
+      1) mtime 변화 + 1사이클 안정화(디바운스): 에디터 연속 저장/쓰기 도중 읽기 회피
+      2) json.loads 선검증 성공 시에만 적용: invalid 저장 시 현행 유지(기본값 회귀
+         금지) + 같은 mtime 경고 1회, 다음 사이클 자동 재시도
+      3) generate_network_blocks(모드 결정자)는 재시작 전용 — conf 블록 생성/cooldown
+         활성이 외부 절차와 결합돼 있어 런타임 전환 금지(경고 후 이전 값 유지)
+      4) 인스턴스 파라미터는 재생성이 아닌 필드 갱신 → 이력(roam_history 등) 보존.
+         enable off→on 은 인스턴스 생성으로 반영, on→off 는 게이트가 자동 차단.
+    적용 성공 시 WPA_CONF_MTIME 을 리셋해 같은 사이클의 wpa conf 재파싱을 유도 →
+    JSON DEFAULT_TH_* 변경이 실제 판정값 WPA_TH_* 까지 전파된다.
+    첫 호출은 main 초기 load 반영분을 기준점으로 기록만 한다.
+    반환: 재적용 수행 여부. True는 '전부 반영'이 아니라 '재적용 실행됨'을 뜻한다 —
+    generate_network_blocks 변경이 차단(유지)된 경우에도 나머지 키는 적용되므로 True."""
+    global GENERATE_NETWORK_BLOCKS, EXTRA_SSIDS, WPA_CONF_MTIME
+    global ping_pong_preventer, adaptive_interval, cross_ssid_cooldown, trend_tracker
+    st = ROAM_JSON_RELOAD_STATE
+    try:
+        mtime = os.stat(WIFI_INIT_CONF_JSON).st_mtime_ns
+    except OSError:
+        return False  # 파일 접근 불가 — 현행 유지
+    if st["applied"] is None:
+        st["applied"] = st["seen"] = mtime  # 시작 기준점(main 초기 load 반영분)
+        return False
+    if mtime == st["applied"]:
+        # 이미 적용된 mtime으로 (되돌림 등) 복귀 → seen도 동기화해야 한다. 안 하면
+        # 디바운스 중(seen=B)에 파일이 A(적용됨)로 돌아갔다 다시 B로 바뀔 때 seen이
+        # 여전히 B라 '안정화됨'으로 오판해 디바운스 없이 즉시 적용된다.
+        st["seen"] = mtime
+        return False
+    if mtime != st["seen"]:
+        st["seen"] = mtime  # 새 mtime 은 한 사이클 안정화 후 적용(쓰기 도중 회피)
+        return False
+    try:
+        with open(WIFI_INIT_CONF_JSON, "r") as f:
+            new_data = json.load(f)
+    except (OSError, ValueError) as e:  # ValueError ⊇ JSONDecodeError
+        if st["warned"] != mtime:
+            st["warned"] = mtime
+            logger.message(
+                "warn",
+                f"[{iface}] runtime config reload skipped (invalid JSON, keeping current): {e}",
+                _EXTRA_(),
+            )
+        return False
+    # 구조 검증: 구문이 valid여도 dict가 아니거나 iface.roaming 섹션이 없으면
+    # load_roaming_config가 조용히 전부 기본값을 적용한다(시작 시엔 정상 fallback이나
+    # 런타임엔 '현행 유지' 계약 위반) → 여기서 차단. 통과한 new_data를 그대로 전달해
+    # 재파싱을 없앤다(검증-적용 사이 파일 교체 TOCTOU 차단).
+    if not (
+        isinstance(new_data, dict)
+        and isinstance(new_data.get(iface), dict)
+        and isinstance(new_data[iface].get("roaming"), dict)
+    ):
+        if st["warned"] != mtime:
+            st["warned"] = mtime
+            logger.message(
+                "warn",
+                f"[{iface}] runtime config reload skipped "
+                f"(no valid {iface}.roaming section, keeping current)",
+                _EXTRA_(),
+            )
+        return False
+    roam_cfg = new_data[iface]["roaming"]  # 구조 검증 통과 → dict 보장
+    old_gen = GENERATE_NETWORK_BLOCKS
+    old_extra = list(EXTRA_SSIDS)
+    load_roaming_config(iface, data=new_data)
+    # generate_network_blocks는 런타임 전환 금지(재시작 전용). 키가 '명시적으로' 다른
+    # 값으로 바뀐 경우에만 경고 — 키 부재로 인한 False 수렴은 조용히 복원(오탐 방지).
+    # gen을 유지할 때는 그에 연동된 EXTRA_SSIDS(부팅 시 생성된 wpa 블록과 정합)도 함께
+    # 원복한다 — 런타임에 extra만 바뀌면 없는 블록으로 select_network가 실패하기 때문.
+    if GENERATE_NETWORK_BLOCKS != old_gen:
+        if "generate_network_blocks" in roam_cfg:
+            logger.message(
+                "warn",
+                f"[{iface}] generate_network_blocks change ignored at runtime "
+                f"(requires daemon restart; keeping {old_gen})",
+                _EXTRA_(),
+            )
+        GENERATE_NETWORK_BLOCKS = old_gen
+        EXTRA_SSIDS = list(old_extra)
+    elif GENERATE_NETWORK_BLOCKS and EXTRA_SSIDS != old_extra:
+        # 모드 A에서 extra_ssids는 부팅 시 생성된 wpa 네트워크 블록에 종속(gen과 동일
+        # 사유로 블록 생성이 boot 절차). 런타임에 배열만 바꾸면 블록 없는 SSID로
+        # select_network가 실패하므로 재시작 전용으로 취급(현행 유지 + 경고).
+        logger.message(
+            "warn",
+            f"[{iface}] extra_ssids change ignored at runtime in mode A "
+            f"(requires daemon restart to regenerate network blocks)",
+            _EXTRA_(),
+        )
+        EXTRA_SSIDS = list(old_extra)
+    # 인스턴스 파라미터 갱신(이력 보존) + enable off→on 인스턴스 생성
+    if ENABLE_PING_PONG_PREVENTION:
+        if ping_pong_preventer is None:
+            ping_pong_preventer = PingPongPreventer(PING_PONG_WINDOW, MAX_ROAMS_IN_WINDOW)
+        else:
+            ping_pong_preventer.window_seconds = PING_PONG_WINDOW
+            ping_pong_preventer.max_roams = MAX_ROAMS_IN_WINDOW
+    if ENABLE_PREDICTIVE_ROAM:
+        if trend_tracker is None:
+            trend_tracker = RSSITrendTracker(TREND_WINDOW_SIZE, TREND_HISTORY_MAX_AGE)
+        else:
+            trend_tracker.window_size = TREND_WINDOW_SIZE
+            trend_tracker.max_age = TREND_HISTORY_MAX_AGE
+    if ENABLE_ADAPTIVE_INTERVAL:
+        if adaptive_interval is None:
+            adaptive_interval = AdaptiveInterval(MIN_CHECK_INTERVAL, MAX_CHECK_INTERVAL)
+        else:
+            adaptive_interval.min_interval = MIN_CHECK_INTERVAL
+            adaptive_interval.max_interval = MAX_CHECK_INTERVAL
+    # cross_ssid_cooldown은 의도적으로 갱신만(생성 없음): 별도 enable이 없고 존재가
+    # GENERATE_NETWORK_BLOCKS(런타임 전환 금지, 재시작 전용)에 연동되므로
+    # 런타임에 None→생성이 필요한 상황 자체가 없다.
+    if cross_ssid_cooldown is not None:
+        cross_ssid_cooldown.retry_count = max(0, ROAM_CROSS_FAIL_RETRY_COUNT)
+    st["applied"] = mtime
+    st["warned"] = None
+    WPA_CONF_MTIME = None  # 같은 사이클 wpa conf 재파싱 → 새 DEFAULT_TH_* 로 WPA_TH_* 재산출
+    logger.message("notice", f"[{iface}] runtime roaming config reloaded", _EXTRA_())
+    return True
+
+
 def get_my_ip(iface):
     try:
         result = subprocess.run(
@@ -2016,6 +2158,9 @@ def main():
     hint_state = {"hint_mtime": None}
 
     while True:
+        # wifi_init_conf.json 런타임 변경(에디터/wifi roam th 등) 감지 → 재시작 없이 반영.
+        # wpa conf 재파싱보다 먼저 수행해 JSON TH 변경이 같은 사이클에 WPA_TH_* 까지 전파.
+        reload_roaming_config_if_changed(IFACE)
         # wpa_cli reconfigure 등으로 conf 가 런타임 변경됐으면 재파싱(mtime 변화 시에만).
         # ssid/scan_freq/TH 캐시를 최신화해 옛 SSID 로 스캔하는 stale 로밍을 방지한다.
         reload_supplicant_conf_if_changed(WPA_CONF_FILE)
