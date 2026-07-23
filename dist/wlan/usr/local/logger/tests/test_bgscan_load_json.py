@@ -84,7 +84,7 @@ def test_filters_and_interval_parsed(tmp_path, monkeypatch):
     _write_conf(tmp_path, monkeypatch, {
         "mlan0": {"bgscan": {"interval": 45, "ssid_filter": False, "freq_filter": False}}
     })
-    assert load_bgscan_json("mlan0") == (45, False, False, [], True)
+    assert load_bgscan_json("mlan0") == (45, False, False, [], True, True)
 
 
 def test_invalid_types_fall_back_to_defaults(tmp_path, monkeypatch):
@@ -92,13 +92,13 @@ def test_invalid_types_fall_back_to_defaults(tmp_path, monkeypatch):
     _write_conf(tmp_path, monkeypatch, {
         "mlan0": {"bgscan": {"interval": 0, "ssid_filter": "yes", "freq_filter": 1}}
     })
-    interval, ssid_filter, freq_filter, _, _ = load_bgscan_json("mlan0")
+    interval, ssid_filter, freq_filter, _, _, _ = load_bgscan_json("mlan0")
     assert interval is None and ssid_filter is True and freq_filter is True
 
 
 def test_missing_file_returns_defaults(tmp_path, monkeypatch):
     monkeypatch.setattr(wifi_bgscan, "WIFI_INIT_CONF_JSON", str(tmp_path / "nope.json"))
-    assert load_bgscan_json("mlan0") == (None, True, True, [], True)
+    assert load_bgscan_json("mlan0") == (None, True, True, [], True, True)
 
 
 def test_malformed_json_returns_defaults(tmp_path, monkeypatch):
@@ -106,7 +106,7 @@ def test_malformed_json_returns_defaults(tmp_path, monkeypatch):
     path.write_text("{ not valid json ]")
     monkeypatch.setattr(wifi_bgscan, "WIFI_INIT_CONF_JSON", str(path))
     # hits the generic except path → logger.message (stubbed) → defaults
-    assert load_bgscan_json("mlan0") == (None, True, True, [], True)
+    assert load_bgscan_json("mlan0") == (None, True, True, [], True, True)
 
 
 # --- emit_roam_hint gate (5-tuple element 4) ---
