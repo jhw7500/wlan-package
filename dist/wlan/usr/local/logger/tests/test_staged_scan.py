@@ -42,6 +42,9 @@ def _globals(monkeypatch):
     # 남아 뒤 테스트의 캐시 블록이 self-induced로 오판된다).
     monkeypatch.setattr(wifi_roam, "_LAST_SELF_SCAN_TS", None)
     monkeypatch.setattr(wifi_roam, "_LAST_SELF_SCAN_END_TS", None)
+    # load_roaming_config 테스트가 전역을 덮으므로 복원 대상에 포함시킨다.
+    monkeypatch.setattr(wifi_roam, "ENABLE_STAGED_SCAN", True)
+    monkeypatch.setattr(wifi_roam, "SELF_INDUCED_TAIL_SEC", 10)
 
 
 CUR = "aa:aa:aa:aa:aa:aa"
@@ -435,3 +438,36 @@ def test_iw_active_no_wildcard_directed_only(monkeypatch):
     vals = c[c.index("ssid") + 1:]
     assert vals == ["Net"]                   # wildcard "" 없음, directed만
     assert "passive" not in c
+
+
+# ---------- 런타임 설정 노출 (roaming.STAGED_SCAN) ----------
+
+def test_staged_scan_config_applies_to_globals():
+    """`.<iface>.roaming.STAGED_SCAN` 이 전역에 반영돼야 한다 — 현장에서 재배포 없이
+    단계형 스캔을 끄거나(무회귀 폴백) 임계값을 튜닝할 수 있어야 하기 때문."""
+    data = {"mlan0": {"roaming": {"STAGED_SCAN": {
+        "enable": False, "cache_fresh_sec": 90, "self_induced_tail_sec": 25,
+    }}}}
+    wifi_roam.load_roaming_config("mlan0", data)
+    assert wifi_roam.ENABLE_STAGED_SCAN is False
+    assert wifi_roam.CACHE_FRESH_SEC == 90
+    assert wifi_roam.SELF_INDUCED_TAIL_SEC == 25
+
+
+def test_staged_scan_config_absent_keeps_defaults():
+    """STAGED_SCAN 섹션이 없으면 기본값(단계형 활성)이 유지된다 — 무회귀."""
+    wifi_roam.load_roaming_config("mlan0", {"mlan0": {"roaming": {}}})
+    assert wifi_roam.ENABLE_STAGED_SCAN is wifi_roam.DEFAULT_ENABLE_STAGED_SCAN
+    assert wifi_roam.CACHE_FRESH_SEC == wifi_roam.DEFAULT_CACHE_FRESH_SEC
+    assert wifi_roam.SELF_INDUCED_TAIL_SEC == wifi_roam.DEFAULT_SELF_INDUCED_TAIL_SEC
+
+
+def test_staged_scan_config_invalid_values_keep_defaults():
+    """형식 오류(문자열/None)는 기본값 유지 — 한 줄 오타로 데몬이 죽지 않아야 한다."""
+    data = {"mlan0": {"roaming": {"STAGED_SCAN": {
+        "enable": "yes-ish", "cache_fresh_sec": "bad", "self_induced_tail_sec": None,
+    }}}}
+    wifi_roam.load_roaming_config("mlan0", data)
+    assert wifi_roam.CACHE_FRESH_SEC == wifi_roam.DEFAULT_CACHE_FRESH_SEC
+    assert wifi_roam.SELF_INDUCED_TAIL_SEC == wifi_roam.DEFAULT_SELF_INDUCED_TAIL_SEC
+    assert isinstance(wifi_roam.ENABLE_STAGED_SCAN, bool)

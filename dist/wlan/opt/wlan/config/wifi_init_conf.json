@@ -341,6 +341,12 @@
                 "max_roams_in_window": 3,
                 "detection_time": 5
             },
+            "STAGED_SCAN": {
+                "_comment": "단계형 로밍 스캔(홈채널 패시브 → 교차채널 캐시 → 액티브 폴백). enable=false면 종전 단일 액티브 스캔으로 회귀(무회귀 폴백). cache_fresh_sec: 배경 캐시 신선도 바운드(초). self_induced_tail_sec: 자기 스캔 종료 후 이 시간 안에 기록된 ap.log 블록은 그 스캔이 유발한 것으로 보고 배경 캐시로 쓰지 않음(초). SIGHUP으로 런타임 반영.",
+                "enable": true,
+                "cache_fresh_sec": 45,
+                "self_induced_tail_sec": 10
+            },
             "ADAPTIVE_INTERVAL": {
                 "_comment": [
                     "RSSI 변화에 따른 체크 주기 자동 조절. 신호 불안정 시 주기 단축, 안정 시 연장",
@@ -528,6 +534,12 @@
                 "window": 20,
                 "max_roams_in_window": 3,
                 "detection_time": 5
+            },
+            "STAGED_SCAN": {
+                "_comment": "단계형 로밍 스캔(홈채널 패시브 → 교차채널 캐시 → 액티브 폴백). enable=false면 종전 단일 액티브 스캔으로 회귀(무회귀 폴백). cache_fresh_sec: 배경 캐시 신선도 바운드(초). self_induced_tail_sec: 자기 스캔 종료 후 이 시간 안에 기록된 ap.log 블록은 그 스캔이 유발한 것으로 보고 배경 캐시로 쓰지 않음(초). SIGHUP으로 런타임 반영.",
+                "enable": true,
+                "cache_fresh_sec": 45,
+                "self_induced_tail_sec": 10
             },
             "ADAPTIVE_INTERVAL": {
                 "_comment": [

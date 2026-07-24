@@ -49,6 +49,9 @@ DEFAULT_ENABLE_STAGED_SCAN = True
 DEFAULT_CACHE_FRESH_SEC = 45  # 교차채널 캐시 신선도 바운드(초). bgscan 30초 주기 + 지터 여유.
 ENABLE_STAGED_SCAN = DEFAULT_ENABLE_STAGED_SCAN
 CACHE_FRESH_SEC = DEFAULT_CACHE_FRESH_SEC
+# 위 3개(enable/cache_fresh/self_induced_tail)는 wifi_init_conf.json
+# `.<iface>.roaming.STAGED_SCAN` 에서 런타임 조정 가능(SIGHUP reload). 현장에서 재배포 없이
+# 단계형 스캔을 끄거나(무회귀 폴백) 임계값을 튜닝하기 위한 것.
 # 마지막으로 우리가 트리거한 iw scan의 시작/종료 시각(epoch). wifi_logger_scan이 그 스캔의
 # 완료 이벤트로 ap.log에 쓴 블록을 배경 캐시로 오인하지 않기 위한 경계값
 # (scan_block_self_induced). 시작만으로는 상한이 없어 Stage 2가 영구히 죽으므로 종료도 둔다.
@@ -57,7 +60,8 @@ _LAST_SELF_SCAN_END_TS = None
 # 자기 스캔 종료 후 유발 블록이 기록되기까지 허용하는 꼬리 시간(초).
 # wifi_logger_scan: scan-completed → sleep 0.2 → run_getscantable(sleep 1 + 최대 3회 재시도)
 # → save. 넉넉히 잡아 유발 블록을 놓치지 않는다(과하게 잡으면 Stage 3 폴백으로 안전 degrade).
-SELF_INDUCED_TAIL_SEC = 10
+DEFAULT_SELF_INDUCED_TAIL_SEC = 10
+SELF_INDUCED_TAIL_SEC = DEFAULT_SELF_INDUCED_TAIL_SEC
 
 
 def is_valid_rssi(rssi) -> bool:
@@ -322,6 +326,9 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
             ),
             "ROAM_CROSS_FAIL_RETRY_COUNT": _num("ROAM_CROSS_FAIL_RETRY_COUNT"),
             "ROAM_NO_RESULT_FAST_COUNT": _num("ROAM_NO_RESULT_FAST_COUNT"),
+            "ENABLE_STAGED_SCAN": config["ENABLE_STAGED_SCAN"],
+            "CACHE_FRESH_SEC": _num("CACHE_FRESH_SEC"),
+            "SELF_INDUCED_TAIL_SEC": _num("SELF_INDUCED_TAIL_SEC"),
             "USE_SIGNAL_AVG": config["USE_SIGNAL_AVG"],
         }
     )
@@ -378,6 +385,9 @@ def load_roaming_config(iface, data=None):
         "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC": DEFAULT_ROAM_NO_RESULT_BACKOFF_RECOVER_SEC,
         "ROAM_CROSS_FAIL_RETRY_COUNT": DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT,
         "ROAM_NO_RESULT_FAST_COUNT": DEFAULT_ROAM_NO_RESULT_FAST_COUNT,
+        "ENABLE_STAGED_SCAN": DEFAULT_ENABLE_STAGED_SCAN,
+        "CACHE_FRESH_SEC": DEFAULT_CACHE_FRESH_SEC,
+        "SELF_INDUCED_TAIL_SEC": DEFAULT_SELF_INDUCED_TAIL_SEC,
         "USE_SIGNAL_AVG": DEFAULT_USE_SIGNAL_AVG,
     }
 
@@ -444,6 +454,21 @@ def load_roaming_config(iface, data=None):
                         ("near_threshold_interval", "ADAPTIVE_NEAR_THRESHOLD_INTERVAL", int),
                         ("good_signal_offset", "ADAPTIVE_GOOD_SIGNAL_OFFSET", int),
                         ("consecutive_drop_count", "ADAPTIVE_CONSECUTIVE_DROP_COUNT", int),
+                    ],
+                )
+
+            # 단계형 스캔(홈채널 패시브 → 교차채널 캐시 → 액티브 폴백) 파라미터.
+            # enable=false면 종전 단일 액티브 스캔 경로로 회귀 — 현장에서 재배포 없이
+            # 무회귀 폴백을 켤 수 있게 노출한다.
+            staged = roam_config.get("STAGED_SCAN")
+            if isinstance(staged, dict):
+                _apply_section_values(
+                    config,
+                    staged,
+                    [
+                        ("enable", "ENABLE_STAGED_SCAN", parse_bool),
+                        ("cache_fresh_sec", "CACHE_FRESH_SEC", int),
+                        ("self_induced_tail_sec", "SELF_INDUCED_TAIL_SEC", int),
                     ],
                 )
 
@@ -2398,11 +2423,10 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
     # freshness는 스냅샷 시각이 아니라 **사용 시점**에 평가한다 — Stage 1 스캔이 수 초
     # 걸릴 수 있어(EBUSY 재시도·DFS dwell·sleep(1)) 스냅샷 때 판정하면 그만큼 유효창이
     # 늘어난다. 자기 스캔이 유발한 블록은 나이와 무관하게 배경 캐시로 쓰지 않는다.
-    if (
-        cache_entries
-        and not scan_block_self_induced(cache_ts, prev_self_scan_ts, prev_self_scan_end_ts)
-        and scan_block_fresh(cache_ts, CACHE_FRESH_SEC)
-    ):
+    self_induced = scan_block_self_induced(
+        cache_ts, prev_self_scan_ts, prev_self_scan_end_ts
+    )
+    if cache_entries and not self_induced and scan_block_fresh(cache_ts, CACHE_FRESH_SEC):
         best_ap, reason, score = evaluate_candidates(
             cache_entries, station, trend, cooldown, live_ssid, baseline_rssi
         )
@@ -2416,7 +2440,7 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
     elif cache_entries:
         why = (
             "self-induced (written by our own roam scan)"
-            if scan_block_self_induced(cache_ts, prev_self_scan_ts, prev_self_scan_end_ts)
+            if self_induced
             else f"stale (max_age={CACHE_FRESH_SEC}s)"
         )
         logger.message(
