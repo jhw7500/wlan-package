@@ -1070,12 +1070,16 @@ def _iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
         ssid_list = [s for s in (ssids or []) if s]
 
     # 1) iw scan 트리거(동기, 테이블 충전). 다른 스캐너(logger 등)와 경합 시 -EBUSY 재시도.
+    # iw 문법(5.19): `scan [freq <freq>*] ... [ssid <ssid>*|passive]` — `passive`는 ssid와
+    # 같은 **맨 뒤** 그룹이라 freq 뒤에 와야 한다. freq 앞에 두면 iw가 인자를 파싱하지 못해
+    # rc=1로 즉시 실패하고 스캔이 아예 실행되지 않는다(온타겟 실측: `scan passive freq 5180`
+    # → rc=1/0.012s/0 BSS vs `scan freq 5180 passive` → rc=0/0.148s/13 BSS).
     cmd = ["iw", IFACE, "scan"]
-    if passive:
-        cmd.append("passive")
     if freqs:
         cmd += ["freq"] + [str(f) for f in freqs]
-    if not passive:
+    if passive:
+        cmd.append("passive")
+    else:
         # directed probe(allowed ssid) [+ 와일드카드("") probe]. iw 문법은 `ssid <ssid>*` —
         # ssid 키워드는 1회만 쓰고 값을 나열한다(키워드 반복은 iw 버전/드라이버에 따라 리터럴
         # 소비/파싱 붕괴 위험). NXP mlan 등은 ssid 지정 시 와일드카드를 안 보내므로

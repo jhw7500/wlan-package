@@ -70,14 +70,19 @@ def test_passive_adds_keyword_and_drops_ssid_probes():
         "HomeNet", ["2412", "5180"], ssid_filter=True,
         freq_filter=True, extra_ssids=["OfficeNet"], passive=True,
     )
-    assert cmd[:4] == ["iw", "mlan0", "scan", "passive"]
+    assert cmd[:3] == ["iw", "mlan0", "scan"]
     assert _ssid_tokens(cmd) == []          # directed probe 없음
     assert "freq" in cmd and "2412" in cmd and "5180" in cmd  # freq 스코프는 유지
+    # [회귀] iw 5.19 문법 `scan [freq <freq>*] ... [ssid <ssid>*|passive]` — passive는
+    # 맨 뒤 그룹이라 freq 뒤에 와야 한다. 앞에 두면 iw가 rc=1로 즉시 실패해 스캔이 아예
+    # 안 돈다(온타겟 실측). freq_filter=true가 기본이라 이 순서가 곧 기능 여부를 가른다.
+    assert cmd.index("passive") > cmd.index("freq"), f"passive는 freq 뒤여야 함: {cmd}"
+    assert cmd[-1] == "passive", f"passive는 마지막 토큰이어야 함: {cmd}"
 
 
 def test_passive_freq_filter_false_omits_freq():
     cmd = construct_iw_scan_cmd("HomeNet", ["2412"], freq_filter=False, passive=True)
-    assert cmd[:4] == ["iw", "mlan0", "scan", "passive"]
+    assert cmd == ["iw", "mlan0", "scan", "passive"]   # freq 없으면 passive만
     assert "freq" not in cmd
 
 
