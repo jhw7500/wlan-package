@@ -1061,6 +1061,12 @@ def _iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         except subprocess.TimeoutExpired:
+            # KNOWN EDGE(비블로킹): 타임아웃은 '드라이버 스캔이 언제 끝날지 모른다'는 뜻이다.
+            # 래퍼 finally가 기록하는 종료 시각은 여기(=시작+15s)라, 드라이버 스캔이 그보다
+            # 더 오래 끌면 그로 인한 ap.log 블록이 self-induced 윈도우(+SELF_INDUCED_TAIL_SEC)
+            # 밖에 떨어져 배경 캐시로 오인될 수 있다. 15초를 넘기는 스캔은 실측상 드물고,
+            # 발생해도 CACHE_FRESH_SEC 게이트가 2차 방어로 남는다. 근본 수정은 타임아웃 시
+            # 종료 시각에 추가 grace를 얹는 것 — 별도 이슈로 다룬다.
             logger.message("err", f"[{IFACE}] iw scan timeout", _EXTRA_())
             return None
         except Exception as e:

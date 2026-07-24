@@ -379,6 +379,44 @@ def test_filter_ap_lines_by_freq():
     assert wifi_roam.filter_ap_lines_by_freq(None, 5180) == []
 
 
+def test_scan_records_start_and_end_timestamps(monkeypatch):
+    """[회귀] 래퍼가 스캔 시작/종료 시각을 **실제로** 남기는지 직접 고정한다.
+
+    `scan_block_self_induced`의 `(self_scan_end_ts or self_scan_ts)` 폴백 때문에, finally의
+    종료 기록을 통째로 지워도 나머지 테스트가 전부 통과한다(= 방어적 폴백이 실패를 가림).
+    상한이 시작 시각 기준으로 좁아져 '위험한 방향'으로 조용히 degrade하므로, 이 성질만
+    따로 고정한다 — 이번 리뷰에서 두 번 반복된 '테스트 전부 통과인데 의미는 깨짐' 형태."""
+    monkeypatch.setattr(wifi_roam.time, "sleep", lambda *_: None)
+
+    def se(cmd, *a, **k):
+        if cmd[0] == "iw":
+            return _Run(0)
+        if "scan_results" in cmd:
+            return _Run(0, _SR)
+        return _Run(0)
+
+    monkeypatch.setattr(wifi_roam.subprocess, "run", se)
+    wifi_roam.iw_scan_to_ap_lines(None, [5180], passive=True)
+
+    assert wifi_roam._LAST_SELF_SCAN_TS is not None, "스캔 시작 시각 미기록"
+    assert wifi_roam._LAST_SELF_SCAN_END_TS is not None, "스캔 종료 시각 미기록(finally 유실)"
+    assert wifi_roam._LAST_SELF_SCAN_END_TS >= wifi_roam._LAST_SELF_SCAN_TS
+
+
+def test_scan_records_end_even_when_scan_fails(monkeypatch):
+    """조기 return(예외/타임아웃) 경로에서도 finally가 종료 시각을 남겨 윈도우 상한이
+    유실되지 않아야 한다."""
+    def boom(*a, **k):
+        raise RuntimeError("driver gone")
+
+    monkeypatch.setattr(wifi_roam.subprocess, "run", boom)
+    try:
+        wifi_roam.iw_scan_to_ap_lines(None, [5180], passive=True)
+    except Exception:
+        pass
+    assert wifi_roam._LAST_SELF_SCAN_END_TS is not None, "실패 경로에서 종료 시각 미기록"
+
+
 def test_iw_active_no_wildcard_directed_only(monkeypatch):
     monkeypatch.setattr(wifi_roam.time, "sleep", lambda *_: None)
     cap = {}
