@@ -45,6 +45,7 @@ def _globals(monkeypatch):
     # load_roaming_config 테스트가 전역을 덮으므로 복원 대상에 포함시킨다.
     monkeypatch.setattr(wifi_roam, "ENABLE_STAGED_SCAN", True)
     monkeypatch.setattr(wifi_roam, "SELF_INDUCED_TAIL_SEC", 10)
+    monkeypatch.setattr(wifi_roam, "SKIP_REDUNDANT_ACTIVE_SCAN", True)
 
 
 CUR = "aa:aa:aa:aa:aa:aa"
@@ -498,3 +499,123 @@ def test_positive_int_caster():
     for bad in (0, -1, "0", "-3"):
         with pytest.raises(ValueError):
             wifi_roam._positive_int(bad)
+
+
+# ---------- 단일채널 액티브 폴백 스킵 (scan_freq ⊆ 홈채널) ----------
+
+def test_skip_active_fallback_when_single_channel_home_covers(monkeypatch):
+    """scan_freq ⊆ 홈채널 + Stage1 패시브 성공 + 후보 미달 → Stage3 액티브 폴백 스킵.
+    단일채널 배포에서 매 주기 불필요한 액티브 스캔(probe)을 없앤다."""
+    monkeypatch.setattr(wifi_roam, "WPA_FREQ", ["5240"])          # 단일 채널(ch48)
+    calls = []
+    # 홈 패시브: 현재 AP(-50) + 동급 후보(-49, diff=1<10 이라 미달)
+    home = [apln(0, 48, -50, CUR, "Net"), apln(1, 48, -49, "bb:bb:bb:bb:bb:bb", "Net")]
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(home, None, calls))
+    monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
+
+    best, _, _, scanned = wifi_roam.staged_scan_best_candidate(
+        _station(rssi=-70, freq=5240), None, ["Net"], "Net", STABLE, None
+    )
+    assert best is None
+    assert any(c["passive"] is True for c in calls)                       # 홈 패시브는 돎
+    assert not any(c["passive"] is False for c in calls), f"active fired: {calls}"  # 액티브 스킵
+
+
+def test_active_fallback_when_multichannel(monkeypatch):
+    """scan_freq 가 홈채널보다 넓으면(다채널) 액티브 폴백을 스킵하지 않는다 —
+    다른 채널 후보는 패시브 홈스캔이 못 보므로 액티브가 필요하다."""
+    monkeypatch.setattr(wifi_roam, "WPA_FREQ", ["5180", "5240"])  # 홈(5240) + 추가(5180)
+    calls = []
+    home = [apln(0, 48, -50, CUR, "Net")]                          # 홈엔 현재 AP만
+    active = [apln(0, 36, -35, "dd:dd:dd:dd:dd:dd", "Net")]        # 다른 채널의 강한 후보
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(home, active, calls))
+    monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
+
+    best, _, _, _ = wifi_roam.staged_scan_best_candidate(
+        _station(rssi=-70, freq=5240), None, ["Net"], "Net", STABLE, None
+    )
+    assert any(c["passive"] is False for c in calls), "다채널이면 액티브 폴백 실행돼야"
+    assert best is not None and best["bssid"] == "dd:dd:dd:dd:dd:dd"  # 다른채널 후보로 로밍
+
+
+def test_skip_when_home_returns_only_current_ap(monkeypatch):
+    """단일채널 + 홈 패시브가 현재 AP 자신만 반환(같은 채널에 다른 우리 AP 없음) → 로밍할
+    대상이 없고, 같은 채널 액티브도 새 AP를 못 찾으므로 스킵이 맞다(액티브 미실행)."""
+    monkeypatch.setattr(wifi_roam, "WPA_FREQ", ["5240"])
+    calls = []
+    home = [apln(0, 48, -50, CUR, "Net")]  # 현재 AP만
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(home, None, calls))
+    monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
+
+    best, _, _, _ = wifi_roam.staged_scan_best_candidate(
+        _station(rssi=-70, freq=5240), None, ["Net"], "Net", STABLE, None
+    )
+    assert best is None
+    assert any(c["passive"] is True for c in calls)                  # 홈 패시브는 돎
+    assert not any(c["passive"] is False for c in calls), f"active fired: {calls}"  # 스킵
+
+
+def test_no_skip_when_home_sees_only_other_ssid(monkeypatch):
+    """[회귀] 홈 패시브가 결과는 냈지만 우리 SSID 후보가 하나도 없으면(타 SSID만) 스킵하지
+    않는다 — RF 열악으로 우리 AP beacon 을 놓쳤을 때 액티브 directed probe 로 재시도해야."""
+    monkeypatch.setattr(wifi_roam, "WPA_FREQ", ["5240"])
+    calls = []
+    # 홈 패시브 결과는 있으나 전부 다른 SSID → allowed("Net") 후보 0개 → home_scan_ok=False
+    home = [apln(0, 48, -55, "ee:ee:ee:ee:ee:ee", "OtherNet")]
+    active = [apln(0, 48, -40, "dd:dd:dd:dd:dd:dd", "Net")]
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(home, active, calls))
+    monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
+
+    wifi_roam.staged_scan_best_candidate(
+        _station(rssi=-70, freq=5240), None, ["Net"], "Net", STABLE, None
+    )
+    assert any(c["passive"] is False for c in calls), \
+        "우리 SSID 를 패시브로 못 봤으면 액티브 폴백으로 재시도해야(스킵 금지)"
+
+
+def test_no_skip_when_home_scan_failed(monkeypatch):
+    """단일채널이어도 Stage1 패시브 스캔 실패(결과 없음)면 액티브 폴백을 재시도로 실행."""
+    monkeypatch.setattr(wifi_roam, "WPA_FREQ", ["5240"])
+    calls = []
+    active = [apln(0, 48, -40, "dd:dd:dd:dd:dd:dd", "Net")]
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(None, active, calls))  # 홈 패시브=None
+    monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
+
+    wifi_roam.staged_scan_best_candidate(
+        _station(rssi=-70, freq=5240), None, ["Net"], "Net", STABLE, None
+    )
+    assert any(c["passive"] is False for c in calls), "홈 스캔 실패 시 액티브 폴백은 재시도로 실행돼야"
+
+
+def test_skip_disabled_by_config(monkeypatch):
+    """SKIP_REDUNDANT_ACTIVE_SCAN=False → 단일채널이어도 액티브 폴백 실행(무회귀/hidden 대비)."""
+    monkeypatch.setattr(wifi_roam, "WPA_FREQ", ["5240"])
+    monkeypatch.setattr(wifi_roam, "SKIP_REDUNDANT_ACTIVE_SCAN", False)
+    calls = []
+    home = [apln(0, 48, -50, CUR, "Net")]
+    active = [apln(0, 48, -49, "bb:bb:bb:bb:bb:bb", "Net")]
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(home, active, calls))
+    monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
+
+    wifi_roam.staged_scan_best_candidate(
+        _station(rssi=-70, freq=5240), None, ["Net"], "Net", STABLE, None
+    )
+    assert any(c["passive"] is False for c in calls), "옵션 off면 액티브 폴백 실행돼야"
+
+
+def test_skip_redundant_active_config_applies():
+    """`.roaming.STAGED_SCAN.skip_redundant_active` 가 전역에 반영."""
+    wifi_roam.load_roaming_config(
+        "mlan0", {"mlan0": {"roaming": {"STAGED_SCAN": {"skip_redundant_active": False}}}}
+    )
+    assert wifi_roam.SKIP_REDUNDANT_ACTIVE_SCAN is False
+    wifi_roam.load_roaming_config(
+        "mlan0", {"mlan0": {"roaming": {"STAGED_SCAN": {"skip_redundant_active": True}}}}
+    )
+    assert wifi_roam.SKIP_REDUNDANT_ACTIVE_SCAN is True
+
+
+def test_skip_redundant_active_default_true():
+    """STAGED_SCAN 섹션 부재 시 기본값(True) 유지."""
+    wifi_roam.load_roaming_config("mlan0", {"mlan0": {"roaming": {}}})
+    assert wifi_roam.SKIP_REDUNDANT_ACTIVE_SCAN is wifi_roam.DEFAULT_SKIP_REDUNDANT_ACTIVE_SCAN
