@@ -1381,6 +1381,14 @@
                   "x-apply-timing": "runtime",
                   "x-consumer": "wifi_roam.py"
                 },
+                "skip_redundant_active": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "scan_freq 가 현재(홈) 채널의 부분집합(단일 채널 등)이면 홈 패시브 스캔이 이미 모든 후보를 커버하므로 Stage 3 액티브 폴백을 스킵. 매 로밍컨디션 주기의 불필요한 액티브 스캔(probe 송신)을 제거해 airtime·링크 방해를 줄인다. 홈채널에 hidden 로밍 SSID가 있으면 false(hidden은 액티브 probe로만 발견)",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "runtime",
+                  "x-consumer": "wifi_roam.py"
+                },
                 "cache_fresh_sec": {
                   "type": "integer",
                   "default": 45,
@@ -2256,6 +2264,14 @@
                   "type": "boolean",
                   "default": true,
                   "description": "단계형 스캔 ON/OFF. false면 종전 단일 액티브 스캔 경로로 회귀(무회귀 폴백)",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "runtime",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "skip_redundant_active": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "scan_freq 가 현재(홈) 채널의 부분집합(단일 채널 등)이면 홈 패시브 스캔이 이미 모든 후보를 커버하므로 Stage 3 액티브 폴백을 스킵. 매 로밍컨디션 주기의 불필요한 액티브 스캔(probe 송신)을 제거해 airtime·링크 방해를 줄인다. 홈채널에 hidden 로밍 SSID가 있으면 false(hidden은 액티브 probe로만 발견)",
                   "x-ui-editable": "yes",
                   "x-apply-timing": "runtime",
                   "x-consumer": "wifi_roam.py"
