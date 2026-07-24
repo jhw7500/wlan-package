@@ -2426,7 +2426,11 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
     cache_entries, cache_ts = get_latest_scan(station, channel_info_data, allowed)
 
     # ── Stage 1: 홈채널 패시브 스캔 ──
-    home_scan_ok = False  # 패시브 스캔이 결과를 냈나(=홈채널을 실제로 커버했나)
+    # 패시브 스캔이 **우리 허용 SSID 후보를 실제로 봤나**(=홈채널을 로밍 관점에서 커버했나).
+    # 아무 AP나 잡힌 것(home_lines)이 아니라 allowed_set 필터를 통과한 엔트리 유무로 판단한다
+    # — RF 열악/짧은 dwell 로 우리 SSID beacon 은 놓치고 타 SSID beacon 만 받은 경우, Stage 3
+    # 액티브(directed probe)가 우리 SSID를 찾을 수 있으므로 스킵하지 않기 위함(리뷰 반영).
+    home_scan_ok = False
     home_freq = station.get("freq")
     if home_freq:
         # scan_results는 BSS 테이블 전체를 주므로 홈 주파수로 좁힌다(위 helper 주석 참조).
@@ -2435,11 +2439,11 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
         )
         scanned = True
         if home_lines:
-            home_scan_ok = True
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             home_entries = parse_scan_entries(
                 home_lines, now_str, channel_info_data, allowed_set
             )
+            home_scan_ok = bool(home_entries)  # 우리 SSID 후보를 봤을 때만 '커버됨'
             baseline_rssi = baseline_from_entries(home_entries, cur_bssid, baseline_rssi)
             best_ap, reason, score = evaluate_candidates(
                 home_entries, station, trend, cooldown, live_ssid, baseline_rssi
@@ -2491,6 +2495,8 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
         and home_scan_ok
         and home_freq
         and WPA_FREQ
+        # {str(home_freq)} 는 원소 1개짜리 **set 리터럴** — scan_freq 집합이 홈채널 하나의
+        # 부분집합인지(⊆) 비교. str() 은 각 원소 정규화용(WPA_FREQ 원소는 str, home_freq 는 int).
         and {str(f) for f in WPA_FREQ} <= {str(home_freq)}
     ):
         logger.message(

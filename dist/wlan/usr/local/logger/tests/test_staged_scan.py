@@ -538,6 +538,24 @@ def test_active_fallback_when_multichannel(monkeypatch):
     assert best is not None and best["bssid"] == "dd:dd:dd:dd:dd:dd"  # 다른채널 후보로 로밍
 
 
+def test_no_skip_when_home_sees_only_other_ssid(monkeypatch):
+    """[회귀] 홈 패시브가 결과는 냈지만 우리 SSID 후보가 하나도 없으면(타 SSID만) 스킵하지
+    않는다 — RF 열악으로 우리 AP beacon 을 놓쳤을 때 액티브 directed probe 로 재시도해야."""
+    monkeypatch.setattr(wifi_roam, "WPA_FREQ", ["5240"])
+    calls = []
+    # 홈 패시브 결과는 있으나 전부 다른 SSID → allowed("Net") 후보 0개 → home_scan_ok=False
+    home = [apln(0, 48, -55, "ee:ee:ee:ee:ee:ee", "OtherNet")]
+    active = [apln(0, 48, -40, "dd:dd:dd:dd:dd:dd", "Net")]
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(home, active, calls))
+    monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
+
+    wifi_roam.staged_scan_best_candidate(
+        _station(rssi=-70, freq=5240), None, ["Net"], "Net", STABLE, None
+    )
+    assert any(c["passive"] is False for c in calls), \
+        "우리 SSID 를 패시브로 못 봤으면 액티브 폴백으로 재시도해야(스킵 금지)"
+
+
 def test_no_skip_when_home_scan_failed(monkeypatch):
     """단일채널이어도 Stage1 패시브 스캔 실패(결과 없음)면 액티브 폴백을 재시도로 실행."""
     monkeypatch.setattr(wifi_roam, "WPA_FREQ", ["5240"])
