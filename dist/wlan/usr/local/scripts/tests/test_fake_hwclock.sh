@@ -89,6 +89,16 @@ else
     ok "unknown subcommand -> exits non-zero"
 fi
 
+# --- 9) 저장 실패 전파: STATE 부모가 파일이라 mkdir -p 실패 → save 가 non-zero ---
+#     (Codex P2 / Claude MEDIUM 회귀: write_state 실패를 조용히 삼키면 안 됨)
+touch "$TMP/afile"
+if PATH="$TMP/bin:$PATH" FAKE_HWCLOCK_STATE="$TMP/afile/state" \
+        FAKE_HWCLOCK_LEGACY_STATE="$TMP/none" sh "$SUT" save >/dev/null 2>&1; then
+    ng "save with unwritable state -> should propagate failure"
+else
+    ok "save with unwritable state -> exits non-zero (failure propagated)"
+fi
+
 echo "-----"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

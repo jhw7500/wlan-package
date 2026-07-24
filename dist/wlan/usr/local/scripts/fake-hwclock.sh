@@ -25,19 +25,39 @@ ntp_synced() {
     [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = "yes" ]
 }
 
+resolve_state_file() {
+    # 존재하는 상태 파일 경로 출력(STATE 우선, 없으면 LEGACY). 둘 다 없으면 빈 출력.
+    # load 와 saved_epoch 가 공유(폴백 로직 단일화).
+    if [ -f "$STATE" ]; then
+        echo "$STATE"
+    elif [ -f "$LEGACY_STATE" ]; then
+        echo "$LEGACY_STATE"
+    fi
+}
+
 saved_epoch() (
-    # STATE(없으면 LEGACY)의 저장 시각을 epoch로 출력. 없거나 파싱실패면 빈 출력.
+    # 저장 시각을 epoch로 출력. 없거나 파싱실패면 빈 출력.
     # 함수 본문을 서브셸 ( )로 둬 내부 변수가 호출 스코프로 새지 않게 한다(POSIX 청결).
-    f="$STATE"
-    [ -f "$f" ] || f="$LEGACY_STATE"
-    [ -f "$f" ] || exit 0
+    f=$(resolve_state_file)
+    [ -n "$f" ] || exit 0
     date -d "$(cat "$f" 2>/dev/null)" +%s 2>/dev/null
 )
 
 write_state() {
-    mkdir -p "${STATE%/*}"
+    # 실패(읽기전용/full/미마운트 파티션 등)를 조용히 삼키지 않고 저널에 남긴 뒤
+    # non-zero 로 전파한다 — save 실패는 다음 부팅 시각 역행의 직접 원인이고, set 은
+    # 실패를 성공으로 위장하면 안 되기 때문(호출부가 exit code 로 판단).
+    mkdir -p "${STATE%/*}" 2>/dev/null || {
+        logger -p local0.err "[$tag] mkdir failed: ${STATE%/*}"
+        return 1
+    }
     # tmp+mv 원자적 교체 — 쓰기 도중 전원 차단 시 상태 파일 손상 방지
-    date +"%Y-%m-%d %H:%M:%S" > "${STATE}.tmp" && mv -f "${STATE}.tmp" "$STATE"
+    if date +"%Y-%m-%d %H:%M:%S" > "${STATE}.tmp" 2>/dev/null && mv -f "${STATE}.tmp" "$STATE" 2>/dev/null; then
+        return 0
+    fi
+    logger -p local0.err "[$tag] failed to write state: $STATE"
+    rm -f "${STATE}.tmp" 2>/dev/null
+    return 1
 }
 
 case "$1" in
@@ -47,13 +67,12 @@ case "$1" in
     # forward-only: 현재가 저장값보다 앞설 때만 갱신. 저장값 없음(부트스트랩)이거나
     # NTP 동기화됨(권위)이면 무조건 갱신 → 미래 박제도 NTP가 교정 가능.
     if ntp_synced || [ -z "$SAVED" ] || [ "$NOW" -gt "$SAVED" ]; then
-        write_state
+        write_state || exit 1
     fi
     ;;
   load)
-    STATE_FILE="$STATE"
-    [ -f "$STATE_FILE" ] || STATE_FILE="$LEGACY_STATE"
-    [ -f "$STATE_FILE" ] || exit 0
+    STATE_FILE=$(resolve_state_file)
+    [ -n "$STATE_FILE" ] || exit 0
     DATE_STR="$(cat "$STATE_FILE")"
     SAVED=$(date -d "$DATE_STR" +%s 2>/dev/null) || {
         logger -p local0.warn "[$tag] invalid saved time, skip restore: '$DATE_STR'"
@@ -63,6 +82,9 @@ case "$1" in
     # 저장 시각이 현재 시계보다 미래일 때만 적용 (시간 역행 방지).
     # date -s 의 성공 stdout(=설정된 날짜)은 저널 소음이라 버리되, 성공/실패는 명시적
     # logger 로 남긴다(리다이렉트로 둘 다 삼키면 restore 실패가 저널에서 사라진다).
+    # restore 는 best-effort: 실패해도 exit 0 을 유지한다 — 부팅 시각 보정 실패가
+    # sysinit 순서의 이 유닛을 fail 시켜 부팅을 저해하면 안 되기 때문(시계가 틀린 채로도
+    # 부팅은 되어야 한다). root+검증된 DATE_STR 이라 실무상 err 경로는 사실상 도달 불가.
     if [ "$SAVED" -gt "$NOW" ]; then
         if date -s "$DATE_STR" >/dev/null 2>&1; then
             logger -p local0.info "[$tag] clock restored to '$DATE_STR'"
@@ -77,7 +99,9 @@ case "$1" in
     # 서브커맨드로 저장까지 함께 해야 교정이 영속된다.
     [ -n "$2" ] || { echo "Usage: $tag set '<YYYY-MM-DD HH:MM:SS>'"; exit 1; }
     date -s "$2" >/dev/null 2>&1 || { echo "invalid date: $2" >&2; exit 1; }
-    write_state
+    # 저장 실패면 시계는 바뀌었어도 다음 부팅에 옛 값으로 되돌아간다 → 성공으로
+    # 위장하지 않고 명확히 실패로 종료(사용자가 파티션 상태를 고치고 재시도하도록).
+    write_state || { echo "ERROR: clock changed but state NOT persisted ($STATE)" >&2; exit 1; }
     [ -e /dev/rtc0 ] && hwclock -w 2>/dev/null
     echo "clock set to $(date +'%Y-%m-%d %H:%M:%S') (saved + rtc write attempted)"
     ;;
