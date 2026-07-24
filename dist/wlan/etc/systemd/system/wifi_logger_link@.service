@@ -1,0 +1,24 @@
+[Unit]
+Description=WiFi Link Logger for %i (supervised — produces link.json for roaming)
+# link.json(RSSI/supplicant 상태)은 wifi_roam 이 로밍 판정에 반드시 읽는 파일이다.
+# 기존엔 wifi_logger_start.sh 가 & 백그라운드로 띄워 systemd 감독 밖에 있었고, 런타임에
+# 죽으면 재시작되지 않아 로밍이 조용히 멈췄다. Type=simple + Restart=always 로 systemd 가
+# 직접 감독·재시작해 단일 실패에도 자동 복구한다.
+BindsTo=sys-subsystem-net-devices-%i.device
+Requires=sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-%i.device wifi_init.service
+# wifi_logger@%i / wifi_init 재시작·정지에 생명주기 연동(stop/restart 전파).
+PartOf=wifi_init.service wifi_logger@%i.service
+
+[Service]
+Type=simple
+ExecStart=/bin/python3 /usr/local/logger/wifi_logger_link.py %i
+Restart=always
+RestartSec=3
+# flock-loss(중복 실행 감지, link.py exit 3)는 재시작하지 않는다 — 이미 다른 인스턴스가
+# link.json 을 생산 중이므로 재시작 폭주만 유발. 그 외 종료(크래시/OOM 등)는 항상 재시작.
+RestartPreventExitStatus=3
+User=root
+
+[Install]
+WantedBy=wifi-stack.target
