@@ -1160,6 +1160,14 @@
               "x-apply-timing": "runtime",
               "x-consumer": "wifi_bgscan.py"
             },
+            "passive": {
+              "type": "boolean",
+              "default": true,
+              "description": "패시브 스캔(iw scan passive) 사용 여부. true면 probe request 미송신·beacon만 수신(directed ssid probe 무효, hidden SSID 미발견). false면 종전 액티브 스캔",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_bgscan.py"
+            },
             "enabled": {
               "type": "boolean",
               "default": true,
@@ -1994,6 +2002,14 @@
               "type": "boolean",
               "default": true,
               "description": "freq 필터 포함 여부. false면 전체 대역 스캔(airtime 증가)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_bgscan.py"
+            },
+            "passive": {
+              "type": "boolean",
+              "default": true,
+              "description": "패시브 스캔(iw scan passive) 사용 여부. true면 probe request 미송신·beacon만 수신(directed ssid probe 무효, hidden SSID 미발견). false면 종전 액티브 스캔",
               "x-ui-editable": "yes",
               "x-apply-timing": "runtime",
               "x-consumer": "wifi_bgscan.py"

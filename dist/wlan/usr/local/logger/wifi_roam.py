@@ -49,6 +49,9 @@ DEFAULT_ENABLE_STAGED_SCAN = True
 DEFAULT_CACHE_FRESH_SEC = 45  # 교차채널 캐시 신선도 바운드(초). bgscan 30초 주기 + 지터 여유.
 ENABLE_STAGED_SCAN = DEFAULT_ENABLE_STAGED_SCAN
 CACHE_FRESH_SEC = DEFAULT_CACHE_FRESH_SEC
+# 마지막으로 우리가 트리거한 iw scan 시각(epoch). wifi_logger_scan이 그 스캔의 완료
+# 이벤트로 ap.log에 쓴 블록을 배경 캐시로 오인하지 않기 위한 경계값(scan_block_self_induced).
+_LAST_SELF_SCAN_TS = None
 
 
 def is_valid_rssi(rssi) -> bool:
@@ -1005,6 +1008,11 @@ def iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
         ssid_list = [s for s in (ssids or []) if s]
 
     # 1) iw scan 트리거(동기, 테이블 충전). 다른 스캐너(logger 등)와 경합 시 -EBUSY 재시도.
+    # 스캔 '시작' 시각을 기록한다 — wifi_logger_scan이 이 스캔의 완료 이벤트에 반응해
+    # ap.log에 블록을 쓰므로, 이후 그 블록을 배경 캐시로 오인하지 않기 위한 경계값이다
+    # (scan_block_self_induced). 시작 시각을 쓰는 쪽이 보수적이다(경계 이후 블록은 전부 의심).
+    global _LAST_SELF_SCAN_TS
+    _LAST_SELF_SCAN_TS = time.time()
     cmd = ["iw", IFACE, "scan"]
     if passive:
         cmd.append("passive")
@@ -2176,6 +2184,28 @@ def check_roam_conditions(station, roam_ap, trend, baseline_rssi=None):
     return (True, f"RSSI diff: {rssi_diff}dB")
 
 
+def scan_block_self_induced(timestamp_str, self_scan_ts, slack_sec=1.0):
+    """ap.log 블록이 **우리 로밍 판정 스캔이 유발한** 것인지 판정.
+
+    `wifi_logger_scan`은 스캔 주체를 구분하지 않고 scan-completed 이벤트마다 드라이버
+    스캔 테이블(`mlanutl getscantable`, **전 채널**)을 ap.log에 덤프한다. 따라서 로밍
+    판정 스캔 직후에도 새 블록이 생기고, 그 블록의 타임스탬프는 '기록 시각'이라 신선해
+    보이지만 내용의 교차채널 항목은 과거 스캔의 stale 값이다. 같은 호출 안에서는 Stage 0
+    스냅샷이 이를 막지만, **직전 반복**의 스캔이 만든 블록은 다음 반복에서 그대로 통과한다
+    (backoff가 3초라 매우 흔함). 마지막 자기 스캔 시각 이후에 기록된 블록은 배경 캐시로
+    신뢰하지 않는다. 블록 타임스탬프는 초 단위 절삭이라 slack 1초를 둔다.
+
+    진짜 bgscan 블록을 함께 버릴 수 있으나, 그 경우 Stage 3 액티브 폴백으로 안전하게
+    degrade한다(정확도 우선 — stale 데이터로 로밍하는 것보다 한 번 더 스캔이 낫다)."""
+    if not self_scan_ts or not timestamp_str:
+        return False
+    try:
+        block_dt = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+    except (ValueError, TypeError):
+        return False
+    return block_dt.timestamp() >= self_scan_ts - slack_sec
+
+
 def scan_block_fresh(timestamp_str, max_age_sec):
     """스캔 블록 타임스탬프(`YYYY-MM-DD HH:MM:SS`)가 지금부터 max_age_sec 이내면 True.
     교차채널 캐시(ap.log 배경 블록)를 재스캔 없이 재사용해도 될 만큼 신선한지 판정.
@@ -2250,10 +2280,40 @@ def evaluate_candidates(entries, station, trend, cooldown, live_ssid, baseline_r
     return best_ap, best_reason, best_score
 
 
+def filter_ap_lines_by_freq(ap_lines, freq):
+    """**`scan_results_to_ap_lines` 산출 라인 전용** — 지정 주파수 항목만 남긴다.
+
+    ⚠️ field[5]=freq 는 `scan_results_to_ap_lines`가 만든 포맷에서만 성립한다. ap.log의
+    `mlanutl getscantable` 라인도 같은 7-field pipe 모양이지만 field[5] 의미가 달라
+    (그래서 `parse_scan_entries`는 field[5]를 아예 무시한다), 그 경로에 이 함수를 쓰면
+    **조용히 빈 리스트를 반환**한다. `get_latest_scan` 경로에는 사용 금지.
+
+    홈채널 패시브 스캔은 그 채널 하나만 실제로 측정하지만, 이어 읽는 `wpa_cli scan_results`는
+    **BSS 테이블 전체**(다른 채널 항목 = 과거 스캔의 stale 값 포함)를 반환한다. 필터 없이
+    쓰면 Stage 1이 stale 오프채널 BSS를 후보로 골라 freshness 게이트와 액티브 폴백을 통째로
+    우회한다. field[5]는 scan_results의 원본 freq라 channel 왕복 변환 손실이 없다."""
+    out = []
+    try:
+        want = int(freq)
+    except (TypeError, ValueError):
+        return out
+    for line in ap_lines or []:
+        parts = line.split("|")
+        if len(parts) < 7:
+            continue
+        try:
+            if int(parts[5].strip()) == want:
+                out.append(line)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, trend, cooldown):
     """단계형 스캔으로 최적 로밍 후보를 찾는다.
+      0) 교차채널 캐시 **스냅샷**(스캔 전에 먼저 확보 — 아래 이유)
       1) 홈채널 패시브 스캔(같은 채널 후보 + baseline 통일) — 메모리 처리, ap.log 미기록
-      2) 교차채널 캐시(ap.log 배경 블록, CACHE_FRESH_SEC 이내)
+      2) 스냅샷된 교차채널 캐시(CACHE_FRESH_SEC 이내)
       3) 액티브 폴백(scan_freq + 설정 SSID; scan_freq 없으면 전대역 1회)
     반환: (best_ap, best_reason, best_score, scanned). scanned=실제 스캔 시도 여부
     (LAST_SCAN_TIME 기록/backoff 판단용)."""
@@ -2262,10 +2322,23 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
     baseline_rssi = station["rssi"]  # 기본 station dump; 홈/액티브 스캔 성공 시 통일.
     scanned = False
 
+    # ── Stage 0: 배경 캐시 스냅샷 (반드시 스캔 '전에') ──
+    # Stage 1의 iw scan은 nl80211 scan-completed 이벤트를 발생시키고, wifi_logger_scan의
+    # on_scan_event 핸들러가 그 직후(~0.2s) ap.log에 새 블록을 append한다. 스캔 뒤에 읽으면
+    # **내 스캔이 유발한 블록**을 "신선한 배경 캐시"로 오인해(타임스탬프=기록 시각) freshness
+    # 게이트가 무력화된다. 스캔 전에 스냅샷해 배경 캐시의 진짜 나이를 보존한다.
+    # 단, 이 순서만으로는 **직전 반복**의 스캔이 남긴 블록을 막지 못하므로(backoff 3초),
+    # 그 경계값을 이번 호출의 스캔 '전' 값으로 붙잡아 Stage 2에서 함께 판정한다.
+    prev_self_scan_ts = _LAST_SELF_SCAN_TS
+    cache_entries, cache_ts = get_latest_scan(station, channel_info_data, allowed)
+
     # ── Stage 1: 홈채널 패시브 스캔 ──
     home_freq = station.get("freq")
     if home_freq:
-        home_lines = iw_scan_to_ap_lines(None, [home_freq], passive=True)
+        # scan_results는 BSS 테이블 전체를 주므로 홈 주파수로 좁힌다(위 helper 주석 참조).
+        home_lines = filter_ap_lines_by_freq(
+            iw_scan_to_ap_lines(None, [home_freq], passive=True), home_freq
+        )
         scanned = True
         if home_lines:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -2282,9 +2355,15 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
                 )
                 return best_ap, reason, score, scanned
 
-    # ── Stage 2: 교차채널 캐시(bgscan 배경 블록) ──
-    cache_entries, cache_ts = get_latest_scan(station, channel_info_data, allowed)
-    if cache_entries and scan_block_fresh(cache_ts, CACHE_FRESH_SEC):
+    # ── Stage 2: 스냅샷된 교차채널 캐시(bgscan 배경 블록) ──
+    # freshness는 스냅샷 시각이 아니라 **사용 시점**에 평가한다 — Stage 1 스캔이 수 초
+    # 걸릴 수 있어(EBUSY 재시도·DFS dwell·sleep(1)) 스냅샷 때 판정하면 그만큼 유효창이
+    # 늘어난다. 자기 스캔이 유발한 블록은 나이와 무관하게 배경 캐시로 쓰지 않는다.
+    if (
+        cache_entries
+        and not scan_block_self_induced(cache_ts, prev_self_scan_ts)
+        and scan_block_fresh(cache_ts, CACHE_FRESH_SEC)
+    ):
         best_ap, reason, score = evaluate_candidates(
             cache_entries, station, trend, cooldown, live_ssid, baseline_rssi
         )
@@ -2296,10 +2375,14 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
             )
             return best_ap, reason, score, scanned
     elif cache_entries:
+        why = (
+            "self-induced (written by our own roam scan)"
+            if scan_block_self_induced(cache_ts, prev_self_scan_ts)
+            else f"stale (max_age={CACHE_FRESH_SEC}s)"
+        )
         logger.message(
             "info",
-            f"[{IFACE}] cross-channel cache stale (ts={cache_ts}, "
-            f"max_age={CACHE_FRESH_SEC}s) — active fallback",
+            f"[{IFACE}] cross-channel cache unusable: {why} (ts={cache_ts}) — active fallback",
             _EXTRA_(),
         )
 

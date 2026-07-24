@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 
 sys.modules.setdefault("sUTILS", MagicMock())
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import time
 import wifi_roam
 from datetime import datetime, timedelta
 
@@ -20,9 +21,12 @@ import pytest
 wifi_roam.logger = MagicMock()
 
 
-def apln(idx, ch, rssi, bssid, ssid):
-    """pipe 포맷 스캔 라인 `NN|ch|rssi|ld|bssid|freq|ssid` (freq 필드는 파서가 무시)."""
-    return f"{idx:02d}|{ch}|{rssi}|0|{bssid}|0|{ssid}"
+def apln(idx, ch, rssi, bssid, ssid, freq=None):
+    """pipe 포맷 스캔 라인 `NN|ch|rssi|ld|bssid|freq|ssid`.
+    freq(field[5])는 scan_results 원본값 — filter_ap_lines_by_freq가 이걸로 홈채널을 거른다."""
+    if freq is None:
+        freq = wifi_roam.channel_to_freq(ch)
+    return f"{idx:02d}|{ch}|{rssi}|0|{bssid}|{freq}|{ssid}"
 
 
 @pytest.fixture(autouse=True)
@@ -34,6 +38,9 @@ def _globals(monkeypatch):
     monkeypatch.setattr(wifi_roam, "ENABLE_LOAD_BASED_ROAM", False)
     monkeypatch.setattr(wifi_roam, "ENABLE_PREDICTIVE_ROAM", False)
     monkeypatch.setattr(wifi_roam, "CACHE_FRESH_SEC", 45)
+    # 모듈 전역이라 테스트 간 누수 → 격리 위해 매 테스트 리셋(없으면 앞 테스트의 스캔 시각이
+    # 남아 뒤 테스트의 캐시 블록이 self-induced로 오판된다).
+    monkeypatch.setattr(wifi_roam, "_LAST_SELF_SCAN_TS", None)
 
 
 CUR = "aa:aa:aa:aa:aa:aa"
@@ -56,22 +63,17 @@ def _fake_iw(passive_ret, active_ret, calls):
 # ---------- Stage 1: 홈채널 패시브 스캔 ----------
 
 def test_stage1_home_candidate_shortcircuits(monkeypatch):
-    """홈채널 패시브에서 후보를 찾으면 캐시/액티브를 건드리지 않고 바로 반환."""
+    """홈채널 패시브에서 후보를 찾으면 액티브 폴백 없이 바로 반환."""
     calls = []
     home = [apln(0, 36, -68, CUR, "Net"), apln(1, 36, -45, "bb:bb:bb:bb:bb:bb", "Net")]
     monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(home, None, calls))
-    cache_called = {"n": 0}
-    monkeypatch.setattr(
-        wifi_roam, "get_latest_scan",
-        lambda *a, **k: (cache_called.__setitem__("n", cache_called["n"] + 1), ([], None))[1],
-    )
+    monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
 
     best, reason, score, scanned = wifi_roam.staged_scan_best_candidate(
         _station(rssi=-70), None, ["Net"], "Net", STABLE, None
     )
     assert best is not None and best["bssid"] == "bb:bb:bb:bb:bb:bb"
     assert scanned is True
-    assert cache_called["n"] == 0                 # 캐시 조회 안 함
     assert len(calls) == 1 and calls[0]["passive"] is True  # 액티브 폴백 안 함
 
 
@@ -205,6 +207,133 @@ def test_iw_passive_cmd_has_passive_no_ssid(monkeypatch):
     assert "passive" in cap["cmd"]
     assert "ssid" not in cap["cmd"]          # 패시브는 directed probe 없음
     assert "freq" in cap["cmd"] and "5180" in cap["cmd"]
+
+
+# ---------- 회귀: Codex 리뷰 P2 2건 ----------
+
+def test_stage1_ignores_offchannel_bss_from_full_table(monkeypatch):
+    """[회귀] 홈채널 패시브 스캔이라도 wpa_cli scan_results는 BSS 테이블 전체를 준다.
+    다른 채널(ch40)의 stale·강신호 BSS가 Stage 1 후보로 뽑혀 freshness 게이트와 액티브
+    폴백을 우회하면 안 된다 → 홈 주파수(5180)로 필터되어 Stage 3까지 내려가야 한다."""
+    calls = []
+    # 홈 스캔이 반환한 테이블: 홈채널(ch36) 현재 AP + **오프채널(ch40) stale 강신호 AP**
+    home_table = [
+        apln(0, 36, -70, CUR, "Net"),
+        apln(1, 40, -30, "ee:ee:ee:ee:ee:ee", "Net"),   # stale off-channel, 매우 강함
+    ]
+    active = [apln(0, 36, -45, "ff:ff:ff:ff:ff:ff", "Net")]
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(home_table, active, calls))
+    monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
+
+    best, _, _, _ = wifi_roam.staged_scan_best_candidate(
+        _station(rssi=-70, freq=5180), None, ["Net"], "Net", STABLE, None
+    )
+    # 오프채널 stale AP가 선택되면 안 됨 — 액티브 폴백 결과가 나와야 한다.
+    assert best is not None
+    assert best["bssid"] != "ee:ee:ee:ee:ee:ee"
+    assert best["bssid"] == "ff:ff:ff:ff:ff:ff"
+    assert any(c["passive"] is False for c in calls)   # Stage 3까지 진행됨
+
+
+def test_cache_snapshot_taken_before_any_scan(monkeypatch):
+    """[회귀] Stage 1 스캔은 nl80211 이벤트로 wifi_logger_scan이 ap.log에 새 블록을 쓰게
+    한다. 캐시를 스캔 '후'에 읽으면 그 블록을 신선한 배경 캐시로 오인한다 → 캐시 스냅샷은
+    반드시 첫 스캔보다 먼저 일어나야 한다."""
+    order = []
+
+    def fake_iw(ssids, freqs, passive=False, include_wildcard=True):
+        order.append("scan")
+        return None
+
+    def fake_cache(*a, **k):
+        order.append("cache")
+        return ([], None)
+
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", fake_iw)
+    monkeypatch.setattr(wifi_roam, "get_latest_scan", fake_cache)
+
+    wifi_roam.staged_scan_best_candidate(
+        _station(rssi=-70), None, ["Net"], "Net", STABLE, None
+    )
+    assert order[0] == "cache", f"캐시 스냅샷이 스캔보다 먼저여야 함: {order}"
+
+
+def test_self_induced_cache_block_rejected_across_iterations(monkeypatch):
+    """[회귀] 반복 N의 로밍 스캔이 유발한 ap.log 블록을 반복 N+1의 Stage 2가 '신선한 배경
+    캐시'로 오인하면 안 된다. wifi_logger_scan은 스캔 주체를 구분하지 않고 전 채널
+    getscantable을 덤프하므로, 그 블록의 교차채널 항목은 타임스탬프만 새롭고 값은 stale이다."""
+    monkeypatch.setattr(wifi_roam, "_LAST_SELF_SCAN_TS", None)
+
+    # ap.log를 흉내: 스캔이 일어날 때마다 '지금' 타임스탬프로 stale 교차채널 AP 블록이 생김
+    log = {"ts": None}
+    stale_cross = [{"bssid": "ee:ee:ee:ee:ee:ee", "ssid": "Net", "channel": 40,
+                    "freq": 5200, "rssi": -30, "rssi_th": -75, "ld": 0,
+                    "load": 0, "noise": -95, "timestamp": ""}]
+
+    def fake_iw(ssids, freqs, passive=False, include_wildcard=True):
+        wifi_roam._LAST_SELF_SCAN_TS = time.time()          # 실제 코드와 동일한 경계 기록
+        log["ts"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # logger가 블록 append
+        return None                                          # 후보 없음 → 다음 단계로
+
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", fake_iw)
+    monkeypatch.setattr(
+        wifi_roam, "get_latest_scan",
+        lambda *a, **k: ((stale_cross, log["ts"]) if log["ts"] else ([], None)),
+    )
+
+    st = _station(rssi=-70)
+    # 반복 1: 캐시 없음 → 스캔들이 돌며 self-induced 블록 생성
+    b1, _, _, _ = wifi_roam.staged_scan_best_candidate(st, None, ["Net"], "Net", STABLE, None)
+    assert b1 is None
+    assert log["ts"] is not None                    # 블록이 생겼음
+    # 반복 2: 그 블록은 '내 스캔이 유발한 것' → 배경 캐시로 신뢰하면 안 됨
+    b2, _, _, _ = wifi_roam.staged_scan_best_candidate(st, None, ["Net"], "Net", STABLE, None)
+    assert b2 is None, f"self-induced 블록의 stale off-channel AP가 채택됨: {b2}"
+
+
+def test_genuine_background_cache_still_used(monkeypatch):
+    """대조군: 자기 스캔 이력이 없는(=진짜 bgscan) 신선한 블록은 정상적으로 채택된다.
+    self-induced 판정이 과하게 걸려 Stage 2를 통째로 죽이지 않음을 고정."""
+    fresh_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cache = [{"bssid": "cc:cc:cc:cc:cc:cc", "ssid": "Net", "channel": 40, "freq": 5200,
+              "rssi": -50, "rssi_th": -75, "ld": 0, "load": 0, "noise": -95,
+              "timestamp": fresh_ts}]
+    calls = []
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(None, None, calls))
+    monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: (cache, fresh_ts))
+
+    best, _, _, _ = wifi_roam.staged_scan_best_candidate(
+        _station(rssi=-70), None, ["Net"], "Net", STABLE, None
+    )
+    assert best is not None and best["bssid"] == "cc:cc:cc:cc:cc:cc"
+
+
+def test_scan_block_self_induced_helper():
+    now = time.time()
+    ts_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    older = (datetime.now() - timedelta(seconds=30)).strftime("%Y-%m-%d %H:%M:%S")
+    # 자기 스캔 기록이 없으면 판정 불가 → False(기존 동작 유지)
+    assert wifi_roam.scan_block_self_induced(ts_now, None) is False
+    # 블록이 자기 스캔 이후 → self-induced
+    assert wifi_roam.scan_block_self_induced(ts_now, now) is True
+    # 블록이 자기 스캔보다 훨씬 이전 → 배경 캐시
+    assert wifi_roam.scan_block_self_induced(older, now) is False
+    # 형식 불량은 보수적으로 False
+    assert wifi_roam.scan_block_self_induced("garbage", now) is False
+
+
+def test_filter_ap_lines_by_freq():
+    lines = [
+        apln(0, 36, -50, "aa:aa:aa:aa:aa:aa", "Net"),          # 5180
+        apln(1, 40, -40, "bb:bb:bb:bb:bb:bb", "Net"),          # 5200
+        apln(2, 36, -60, "cc:cc:cc:cc:cc:cc", "Net"),          # 5180
+        "malformed-line",
+    ]
+    out = wifi_roam.filter_ap_lines_by_freq(lines, 5180)
+    assert len(out) == 2
+    assert all(l.split("|")[5] == "5180" for l in out)
+    assert wifi_roam.filter_ap_lines_by_freq(lines, None) == []
+    assert wifi_roam.filter_ap_lines_by_freq(None, 5180) == []
 
 
 def test_iw_active_no_wildcard_directed_only(monkeypatch):
