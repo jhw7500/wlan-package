@@ -273,10 +273,11 @@
             "enabled": false
         },
         "bgscan": {
-            "_comment": "Background scan configuration for mlan0. ssid_filter: 기본 ssid의 directed probe 포함 여부(기본 true). freq_filter: freq 필터 포함 여부(기본 true). false면 해당 필터 없이 더 광범위하게 스캔(스캔 시간·airtime↑). roaming.extra_ssids는 ssid_filter와 무관하게 항상 directed probe된다(hidden extra 발견 보장).",
+            "_comment": "Background scan configuration for mlan0. passive: 패시브 스캔 사용 여부(기본 true) — true면 probe request를 보내지 않고 beacon만 수신하므로 ssid_filter/extra_ssids의 directed probe가 모두 무효가 되고 hidden SSID는 bgscan으로 발견되지 않는다(로밍 트리거 시 액티브 폴백이 보완). freq_filter: freq 필터 포함 여부(기본 true), false면 전체 대역 스캔(스캔 시간·airtime↑). ssid_filter(기본 true)는 passive=false일 때만 유효하며, 그때는 roaming.extra_ssids가 ssid_filter와 무관하게 항상 directed probe된다(hidden extra 발견 보장).",
             "interval": 60,
             "ssid_filter": true,
             "freq_filter": true,
+            "passive": true,
             "enabled": true
         },
         "roaming": {
@@ -339,6 +340,12 @@
                 "window": 20,
                 "max_roams_in_window": 3,
                 "detection_time": 5
+            },
+            "STAGED_SCAN": {
+                "_comment": "단계형 로밍 스캔(홈채널 패시브 → 교차채널 캐시 → 액티브 폴백). enable=false면 종전 단일 액티브 스캔으로 회귀(무회귀 폴백). cache_fresh_sec: 배경 캐시 신선도 바운드(초). self_induced_tail_sec: 자기 스캔 종료 후 이 시간 안에 기록된 ap.log 블록은 그 스캔이 유발한 것으로 보고 배경 캐시로 쓰지 않음(초). SIGHUP으로 런타임 반영.",
+                "enable": true,
+                "cache_fresh_sec": 45,
+                "self_induced_tail_sec": 10
             },
             "ADAPTIVE_INTERVAL": {
                 "_comment": [
@@ -460,10 +467,11 @@
             "enabled": false
         },
         "bgscan": {
-            "_comment": "Background scan configuration for mlan1. ssid_filter: 기본 ssid의 directed probe 포함 여부(기본 true). freq_filter: freq 필터 포함 여부(기본 true). false면 해당 필터 없이 더 광범위하게 스캔(스캔 시간·airtime↑). roaming.extra_ssids는 ssid_filter와 무관하게 항상 directed probe된다(hidden extra 발견 보장).",
+            "_comment": "Background scan configuration for mlan1. passive: 패시브 스캔 사용 여부(기본 true) — true면 probe request를 보내지 않고 beacon만 수신하므로 ssid_filter/extra_ssids의 directed probe가 모두 무효가 되고 hidden SSID는 bgscan으로 발견되지 않는다(로밍 트리거 시 액티브 폴백이 보완). freq_filter: freq 필터 포함 여부(기본 true), false면 전체 대역 스캔(스캔 시간·airtime↑). ssid_filter(기본 true)는 passive=false일 때만 유효하며, 그때는 roaming.extra_ssids가 ssid_filter와 무관하게 항상 directed probe된다(hidden extra 발견 보장).",
             "interval": 60,
             "ssid_filter": true,
             "freq_filter": true,
+            "passive": true,
             "enabled": false
         },
         "roaming": {
@@ -526,6 +534,12 @@
                 "window": 20,
                 "max_roams_in_window": 3,
                 "detection_time": 5
+            },
+            "STAGED_SCAN": {
+                "_comment": "단계형 로밍 스캔(홈채널 패시브 → 교차채널 캐시 → 액티브 폴백). enable=false면 종전 단일 액티브 스캔으로 회귀(무회귀 폴백). cache_fresh_sec: 배경 캐시 신선도 바운드(초). self_induced_tail_sec: 자기 스캔 종료 후 이 시간 안에 기록된 ap.log 블록은 그 스캔이 유발한 것으로 보고 배경 캐시로 쓰지 않음(초). SIGHUP으로 런타임 반영.",
+                "enable": true,
+                "cache_fresh_sec": 45,
+                "self_induced_tail_sec": 10
             },
             "ADAPTIVE_INTERVAL": {
                 "_comment": [

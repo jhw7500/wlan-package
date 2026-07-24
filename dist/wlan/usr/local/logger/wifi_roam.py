@@ -40,6 +40,29 @@ DEFAULT_TH_5G = -75
 DIFF_TH = 10
 CHECK_INTERVAL = 1
 
+# 단계형 로밍 스캔: RSSI가 임계값 이하로 떨어지면
+#   1) 홈채널 패시브 스캔(같은 채널 후보 + 현재 AP RSSI로 baseline 통일)
+#   2) 교차채널 캐시(ap.log 배경 블록, CACHE_FRESH_SEC 이내면 재사용)
+#   3) 액티브 폴백(scan_freq + 설정 SSID, 위 둘에서 후보 못 찾을 때만)
+# ENABLE_STAGED_SCAN=False면 종전 단일 액티브 스캔 경로로 회귀(무회귀 안전장치).
+DEFAULT_ENABLE_STAGED_SCAN = True
+DEFAULT_CACHE_FRESH_SEC = 45  # 교차채널 캐시 신선도 바운드(초). bgscan 30초 주기 + 지터 여유.
+ENABLE_STAGED_SCAN = DEFAULT_ENABLE_STAGED_SCAN
+CACHE_FRESH_SEC = DEFAULT_CACHE_FRESH_SEC
+# 위 3개(enable/cache_fresh/self_induced_tail)는 wifi_init_conf.json
+# `.<iface>.roaming.STAGED_SCAN` 에서 런타임 조정 가능(SIGHUP reload). 현장에서 재배포 없이
+# 단계형 스캔을 끄거나(무회귀 폴백) 임계값을 튜닝하기 위한 것.
+# 마지막으로 우리가 트리거한 iw scan의 시작/종료 시각(epoch). wifi_logger_scan이 그 스캔의
+# 완료 이벤트로 ap.log에 쓴 블록을 배경 캐시로 오인하지 않기 위한 경계값
+# (scan_block_self_induced). 시작만으로는 상한이 없어 Stage 2가 영구히 죽으므로 종료도 둔다.
+_LAST_SELF_SCAN_TS = None
+_LAST_SELF_SCAN_END_TS = None
+# 자기 스캔 종료 후 유발 블록이 기록되기까지 허용하는 꼬리 시간(초).
+# wifi_logger_scan: scan-completed → sleep 0.2 → run_getscantable(sleep 1 + 최대 3회 재시도)
+# → save. 넉넉히 잡아 유발 블록을 놓치지 않는다(과하게 잡으면 Stage 3 폴백으로 안전 degrade).
+DEFAULT_SELF_INDUCED_TAIL_SEC = 10
+SELF_INDUCED_TAIL_SEC = DEFAULT_SELF_INDUCED_TAIL_SEC
+
 
 def is_valid_rssi(rssi) -> bool:
     if not isinstance(rssi, int):
@@ -235,6 +258,22 @@ def _set_config_value(config: Dict[str, Any], key: str, raw_value: Any, caster) 
             )
 
 
+def _positive_int(value):
+    """양의 정수만 수용하는 caster. 0/음수는 ValueError로 올려 _set_config_value가
+    기본값을 유지하고 경고를 남기게 한다 — JSON 스키마의 `minimum: 1`을 런타임에서도 강제.
+
+    스키마는 WebUI 힌트일 뿐 데몬이 검증하지 않으므로, 직접 편집/마이그레이션으로 0이
+    들어오면 조용히 기능이 깨진다:
+      - CACHE_FRESH_SEC=0        → scan_block_fresh가 항상 False → Stage 2 영구 비활성
+      - SELF_INDUCED_TAIL_SEC=0  → 자기 스캔이 유발한 ap.log 블록을 못 걸러 stale
+                                   교차채널 데이터로 로밍(위험한 방향)
+    """
+    n = int(value)
+    if n < 1:
+        raise ValueError(f"must be >= 1, got {n}")
+    return n
+
+
 def _apply_section_values(
     config: Dict[str, Any], section: Dict[str, Any], mapping
 ) -> None:
@@ -303,6 +342,9 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
             ),
             "ROAM_CROSS_FAIL_RETRY_COUNT": _num("ROAM_CROSS_FAIL_RETRY_COUNT"),
             "ROAM_NO_RESULT_FAST_COUNT": _num("ROAM_NO_RESULT_FAST_COUNT"),
+            "ENABLE_STAGED_SCAN": config["ENABLE_STAGED_SCAN"],
+            "CACHE_FRESH_SEC": _num("CACHE_FRESH_SEC"),
+            "SELF_INDUCED_TAIL_SEC": _num("SELF_INDUCED_TAIL_SEC"),
             "USE_SIGNAL_AVG": config["USE_SIGNAL_AVG"],
         }
     )
@@ -359,6 +401,9 @@ def load_roaming_config(iface, data=None):
         "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC": DEFAULT_ROAM_NO_RESULT_BACKOFF_RECOVER_SEC,
         "ROAM_CROSS_FAIL_RETRY_COUNT": DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT,
         "ROAM_NO_RESULT_FAST_COUNT": DEFAULT_ROAM_NO_RESULT_FAST_COUNT,
+        "ENABLE_STAGED_SCAN": DEFAULT_ENABLE_STAGED_SCAN,
+        "CACHE_FRESH_SEC": DEFAULT_CACHE_FRESH_SEC,
+        "SELF_INDUCED_TAIL_SEC": DEFAULT_SELF_INDUCED_TAIL_SEC,
         "USE_SIGNAL_AVG": DEFAULT_USE_SIGNAL_AVG,
     }
 
@@ -425,6 +470,21 @@ def load_roaming_config(iface, data=None):
                         ("near_threshold_interval", "ADAPTIVE_NEAR_THRESHOLD_INTERVAL", int),
                         ("good_signal_offset", "ADAPTIVE_GOOD_SIGNAL_OFFSET", int),
                         ("consecutive_drop_count", "ADAPTIVE_CONSECUTIVE_DROP_COUNT", int),
+                    ],
+                )
+
+            # 단계형 스캔(홈채널 패시브 → 교차채널 캐시 → 액티브 폴백) 파라미터.
+            # enable=false면 종전 단일 액티브 스캔 경로로 회귀 — 현장에서 재배포 없이
+            # 무회귀 폴백을 켤 수 있게 노출한다.
+            staged = roam_config.get("STAGED_SCAN")
+            if isinstance(staged, dict):
+                _apply_section_values(
+                    config,
+                    staged,
+                    [
+                        ("enable", "ENABLE_STAGED_SCAN", parse_bool),
+                        ("cache_fresh_sec", "CACHE_FRESH_SEC", _positive_int),
+                        ("self_induced_tail_sec", "SELF_INDUCED_TAIL_SEC", _positive_int),
                     ],
                 )
 
@@ -978,12 +1038,32 @@ def mlanutl_scan(ssids, freqs):
         return None
 
 
-def iw_scan_to_ap_lines(ssids, freqs):
+def iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
     """로밍 판정 스캔: `iw scan`으로 실제 스캔(=wpa_supplicant BSS 테이블 충전)을 트리거하고,
-    후보를 `wpa_cli scan_results`(=그 테이블)에서 뽑아 get_latest_scan이 읽는 pipe 포맷
-    ap 라인으로 변환한다. 후보가 곧 테이블이라 이후 wpa_cli roam이 대상 BSS를 항상 찾는다
+    후보를 `wpa_cli scan_results`(=그 테이블)에서 뽑아 pipe 포맷 ap 라인으로 변환한다.
+    후보가 곧 테이블이라 이후 wpa_cli roam이 대상 BSS를 항상 찾는다
     (mlanutl setuserscan은 테이블 미충전 → roam FAIL 근본원인이었다).
-    ssids: 단일 str 또는 리스트(directed probe). freqs: MHz 리스트. 실패/결과없음 → None."""
+    ssids: 단일 str 또는 리스트(directed probe). freqs: MHz 리스트. 실패/결과없음 → None.
+
+    passive=True: probe를 안 쏘는 패시브 스캔(`iw scan passive`). directed ssid 토큰을
+      전부 생략하고 beacon만 수신 — 홈채널 후보 저부하 수집 및 baseline 통일용.
+    include_wildcard=False: 와일드카드("") broadcast probe를 빼고 directed probe만 —
+      액티브 폴백을 conf의 설정 SSID로만 좁힐 때(사용자 요구: scan_freq+ssid만) 사용.
+
+    스캔 시작/종료 시각을 전역에 남긴다 — wifi_logger_scan이 이 스캔의 완료 이벤트에
+    반응해 ap.log에 블록을 쓰므로, 그 블록을 배경 캐시로 오인하지 않기 위한 윈도우
+    경계값이다(scan_block_self_induced). 종료 시각은 예외/조기 return 경로에서도
+    반드시 남도록 finally에서 기록한다."""
+    global _LAST_SELF_SCAN_TS, _LAST_SELF_SCAN_END_TS
+    _LAST_SELF_SCAN_TS = time.time()
+    try:
+        return _iw_scan_to_ap_lines(ssids, freqs, passive, include_wildcard)
+    finally:
+        _LAST_SELF_SCAN_END_TS = time.time()
+
+
+def _iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
+    """iw_scan_to_ap_lines 본체(자기 스캔 시각 기록은 래퍼가 담당)."""
     if isinstance(ssids, str):
         ssid_list = [ssids] if ssids else []
     else:
@@ -991,31 +1071,43 @@ def iw_scan_to_ap_lines(ssids, freqs):
 
     # 1) iw scan 트리거(동기, 테이블 충전). 다른 스캐너(logger 등)와 경합 시 -EBUSY 재시도.
     cmd = ["iw", IFACE, "scan"]
+    if passive:
+        cmd.append("passive")
     if freqs:
         cmd += ["freq"] + [str(f) for f in freqs]
-    # directed probe(allowed ssid) + 와일드카드("") probe. iw 문법은 `ssid <ssid>*` —
-    # ssid 키워드는 1회만 쓰고 값을 나열한다(키워드 반복은 iw 버전/드라이버에 따라 리터럴
-    # 소비/파싱 붕괴 위험). NXP mlan 등은 ssid 지정 시 와일드카드를 안 보내므로
-    # ""를 함께 넣어 beacon/broadcast 광범위 스캔을 보존한다(중복 제거).
-    # 드라이버 max-scan-SSID 초과 방지: iw는 초과 시 -EINVAL로 스캔 전체를 실패시키므로
-    # (→ 로밍 정지) directed SSID 수를 제한하고 wildcard는 항상 보존한다. 초과분(주로
-    # hidden extra)은 wildcard broadcast로 non-hidden만 발견(구 mlanutl 다중=undirected 동치).
-    # ssid_list=get_allowed_ssids라 live/base가 앞이므로 slice가 현재 네트워크를 우선 보존.
-    probe = list(dict.fromkeys(ssid_list + [""]))
-    if len(probe) > MAX_SCAN_SSIDS:
-        logger.message(
-            "warn",
-            f"[{IFACE}] scan SSIDs {len(probe)} > driver max {MAX_SCAN_SSIDS}; "
-            f"capping directed probes (excess hidden SSIDs may be missed)",
-            _EXTRA_(),
-        )
-        probe = probe[:MAX_SCAN_SSIDS - 1] + [""]
-    cmd += ["ssid"] + probe
+    if not passive:
+        # directed probe(allowed ssid) [+ 와일드카드("") probe]. iw 문법은 `ssid <ssid>*` —
+        # ssid 키워드는 1회만 쓰고 값을 나열한다(키워드 반복은 iw 버전/드라이버에 따라 리터럴
+        # 소비/파싱 붕괴 위험). NXP mlan 등은 ssid 지정 시 와일드카드를 안 보내므로
+        # include_wildcard=True면 ""를 함께 넣어 beacon/broadcast 광범위 스캔을 보존한다.
+        # 드라이버 max-scan-SSID 초과 방지: iw는 초과 시 -EINVAL로 스캔 전체를 실패시키므로
+        # (→ 로밍 정지) directed SSID 수를 제한한다. wildcard 사용 시 슬롯 1개를 남겨 보존한다.
+        # ssid_list=get_allowed_ssids라 live/base가 앞이므로 slice가 현재 네트워크를 우선 보존.
+        probe = list(dict.fromkeys(ssid_list + ([""] if include_wildcard else [])))
+        if len(probe) > MAX_SCAN_SSIDS:
+            logger.message(
+                "warn",
+                f"[{IFACE}] scan SSIDs {len(probe)} > driver max {MAX_SCAN_SSIDS}; "
+                f"capping directed probes (excess hidden SSIDs may be missed)",
+                _EXTRA_(),
+            )
+            if include_wildcard:
+                probe = probe[:MAX_SCAN_SSIDS - 1] + [""]
+            else:
+                probe = probe[:MAX_SCAN_SSIDS]
+        if probe:
+            cmd += ["ssid"] + probe
     scanned_ok = False
     for attempt in range(3):
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         except subprocess.TimeoutExpired:
+            # KNOWN EDGE(비블로킹): 타임아웃은 '드라이버 스캔이 언제 끝날지 모른다'는 뜻이다.
+            # 래퍼 finally가 기록하는 종료 시각은 여기(=시작+15s)라, 드라이버 스캔이 그보다
+            # 더 오래 끌면 그로 인한 ap.log 블록이 self-induced 윈도우(+SELF_INDUCED_TAIL_SEC)
+            # 밖에 떨어져 배경 캐시로 오인될 수 있다. 15초를 넘기는 스캔은 실측상 드물고,
+            # 발생해도 CACHE_FRESH_SEC 게이트가 2차 방어로 남는다. 근본 수정은 타임아웃 시
+            # 종료 시각에 추가 grace를 얹는 것 — 별도 이슈로 다룬다.
             logger.message("err", f"[{IFACE}] iw scan timeout", _EXTRA_())
             return None
         except Exception as e:
@@ -1253,35 +1345,13 @@ def should_cross_connect(best_ssid, live_ssid):
 # ==============================================================================
 # 개선된 get_latest_scan (Load 정보 포함)
 # ==============================================================================
-def get_latest_scan(st, channel_info_data=None, allowed_ssids=None):
-    """Load 정보를 포함한 스캔 결과 반환"""
-    if allowed_ssids is None:
-        allowed_ssids = [st.get("ssid")] if st.get("ssid") else []
-    allowed_set = {s for s in allowed_ssids if s}
-    try:
-        with open(SCAN_LOG_FILE, "r") as f:
-            lines = f.readlines()
-    except Exception as e:
-        logger.message(
-            "err", f"[{IFACE}] Failed to read scan info from ap log: {e}", _EXTRA_()
-        )
-        return [], None
-
-    timestamp = None
+def parse_scan_entries(scan_lines, timestamp, channel_info_data=None, allowed_set=None):
+    """pipe 포맷 스캔 라인(`NN|ch|rssi|ld|bssid|freq|ssid`) 리스트를 로밍 후보 엔트리로
+    변환한다. 파일(get_latest_scan) 경로와 메모리(홈 패시브/액티브 폴백 스캔) 경로가
+    동일 파서를 공유하도록 순수 함수로 분리. allowed_set에 든 SSID + (WPA_FREQ 설정 시)
+    그 채널만 후보로 채택. RSSI 내림차순 정렬해 반환."""
+    allowed_set = allowed_set or set()
     entries = []
-    start_idx = 0
-
-    for i in reversed(range(len(lines))):
-        line = lines[i]
-        match = re.match(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]", line)
-        if match:
-            timestamp = match.group(1)
-            start_idx = i + 1
-            break
-
-    if timestamp is None:
-        logger.message("err", f"[{IFACE}] timestamp is not exist", _EXTRA_())
-        return [], None
 
     # Load 정보 매핑을 위한 사전 준비
     load_map = {}
@@ -1297,7 +1367,7 @@ def get_latest_scan(st, channel_info_data=None, allowed_ssids=None):
             load_map[freq_str] = round(load, 2)
             noise_map[freq_str] = noise
 
-    for line in lines[start_idx:]:
+    for line in scan_lines:
         if re.match(r"^\d{2}\|", line):
             fields = line.strip().split("|")
             if len(fields) >= 7:
@@ -1367,6 +1437,40 @@ def get_latest_scan(st, channel_info_data=None, allowed_ssids=None):
         )
         i += 1
 
+    return candidates
+
+
+def get_latest_scan(st, channel_info_data=None, allowed_ssids=None):
+    """ap.log(배경 스캔 캐시)의 마지막 `[시각]` 블록을 읽어 후보 엔트리 + 그 블록의
+    타임스탬프를 반환. 파싱은 parse_scan_entries가 담당(메모리 경로와 공유)."""
+    if allowed_ssids is None:
+        allowed_ssids = [st.get("ssid")] if st.get("ssid") else []
+    allowed_set = {s for s in allowed_ssids if s}
+    try:
+        with open(SCAN_LOG_FILE, "r") as f:
+            lines = f.readlines()
+    except Exception as e:
+        logger.message(
+            "err", f"[{IFACE}] Failed to read scan info from ap log: {e}", _EXTRA_()
+        )
+        return [], None
+
+    timestamp = None
+    start_idx = 0
+    for i in reversed(range(len(lines))):
+        match = re.match(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]", lines[i])
+        if match:
+            timestamp = match.group(1)
+            start_idx = i + 1
+            break
+
+    if timestamp is None:
+        logger.message("err", f"[{IFACE}] timestamp is not exist", _EXTRA_())
+        return [], None
+
+    candidates = parse_scan_entries(
+        lines[start_idx:], timestamp, channel_info_data, allowed_set
+    )
     return candidates, timestamp
 
 
@@ -2095,7 +2199,7 @@ def score_ap(ap, rssi_weight=1.0, ld_weight=1.0):
 # ==============================================================================
 # 개선된 로밍 조건 확인 함수
 # ==============================================================================
-def check_roam_conditions(station, roam_ap, trend):
+def check_roam_conditions(station, roam_ap, trend, baseline_rssi=None):
     """
     개선된 로밍 조건 확인
 
@@ -2103,12 +2207,17 @@ def check_roam_conditions(station, roam_ap, trend):
         station: 현재 연결 정보
         roam_ap: 로밍 후보 AP 정보
         trend: RSSI 추세
+        baseline_rssi: 현재 AP RSSI 비교 기준. None이면 station["rssi"](station dump)
+            사용. 단계형 스캔에서는 홈채널 패시브 스캔에서 뽑은 현재 AP RSSI를 넘겨,
+            후보(scan 스케일)와 동일 소스로 diff를 계산한다(소스 이질성 제거).
 
     Returns:
         tuple: (should_roam, reason)
     """
+    if baseline_rssi is None:
+        baseline_rssi = station["rssi"]
     # 기본 조건: RSSI 차이
-    rssi_diff = roam_ap["rssi"] - station["rssi"]
+    rssi_diff = roam_ap["rssi"] - baseline_rssi
 
     if rssi_diff < DIFF_TH:
         return (False, f"RSSI diff too small: {rssi_diff}dB < {DIFF_TH}dB")
@@ -2136,6 +2245,251 @@ def check_roam_conditions(station, roam_ap, trend):
             return (True, f"Falling trend, RSSI diff: {rssi_diff}dB")
 
     return (True, f"RSSI diff: {rssi_diff}dB")
+
+
+def scan_block_self_induced(
+    timestamp_str, self_scan_ts, self_scan_end_ts=None,
+    slack_sec=1.0, tail_sec=None,
+):
+    """ap.log 블록이 **우리 로밍 판정 스캔이 유발한** 것인지 판정.
+
+    `wifi_logger_scan`은 스캔 주체를 구분하지 않고 scan-completed 이벤트마다 드라이버
+    스캔 테이블(`mlanutl getscantable`, **전 채널**)을 ap.log에 덤프한다. 따라서 로밍
+    판정 스캔 직후에도 새 블록이 생기고, 그 블록의 타임스탬프는 '기록 시각'이라 신선해
+    보이지만 내용의 교차채널 항목은 과거 스캔의 stale 값이다. 같은 호출 안에서는 Stage 0
+    스냅샷이 이를 막지만, **직전 반복**의 스캔이 만든 블록은 다음 반복에서 그대로 통과한다
+    (backoff가 3초라 매우 흔함). 마지막 자기 스캔 시각 이후에 기록된 블록은 배경 캐시로
+    신뢰하지 않는다. 블록 타임스탬프는 초 단위 절삭이라 slack 1초를 둔다.
+
+    판정은 **유한 윈도우**로 한다: `[스캔 시작 - slack, 스캔 종료 + tail]`.
+    상한(tail)이 없으면 ap.log가 append-only이고 `get_latest_scan`은 항상 최신 블록만
+    돌려주므로, 첫 로밍 스캔 이후 모든 블록이 영구히 self-induced로 판정되어 Stage 2가
+    프로세스 수명 내내 죽는다(= 교차채널 캐시 기능의 사실상 제거). tail은 유발 블록이
+    실제로 기록되기까지의 지연을 덮어야 한다 — `wifi_logger_scan`은 scan-completed 후
+    0.2s 대기 → `run_getscantable`(sleep 1 + 최대 3회 재시도) → 기록이라 수 초가 걸린다.
+
+    윈도우 밖(=충분히 나중)에 기록된 블록은 진짜 배경 bgscan으로 보고 정상 사용한다.
+    윈도우 안의 진짜 bgscan 블록을 함께 버릴 수는 있으나, 그 경우 Stage 3 액티브 폴백으로
+    안전하게 degrade한다(정확도 우선 — stale 데이터로 로밍하는 것보다 한 번 더 스캔이 낫다)."""
+    if not self_scan_ts or not timestamp_str:
+        return False
+    try:
+        block_dt = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+    except (ValueError, TypeError):
+        return False
+    if tail_sec is None:
+        tail_sec = SELF_INDUCED_TAIL_SEC
+    block_ts = block_dt.timestamp()
+    lower = self_scan_ts - slack_sec              # 타임스탬프 초 단위 절삭 보정
+    upper = (self_scan_end_ts or self_scan_ts) + tail_sec
+    return lower <= block_ts <= upper
+
+
+def scan_block_fresh(timestamp_str, max_age_sec):
+    """스캔 블록 타임스탬프(`YYYY-MM-DD HH:MM:SS`)가 지금부터 max_age_sec 이내면 True.
+    교차채널 캐시(ap.log 배경 블록)를 재스캔 없이 재사용해도 될 만큼 신선한지 판정.
+    파싱 실패/미래 시각/음수 나이는 보수적으로 False(→ 액티브 폴백)."""
+    if not timestamp_str:
+        return False
+    try:
+        block_dt = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+    except (ValueError, TypeError):
+        return False
+    age = (datetime.now() - block_dt).total_seconds()
+    return 0 <= age <= max_age_sec
+
+
+def baseline_from_entries(entries, cur_bssid, default_rssi):
+    """스캔 엔트리에서 현재 연결 AP(cur_bssid)의 RSSI를 찾아 반환(baseline 통일용).
+    없으면 default_rssi(=station dump RSSI) 폴백. 현재 AP는 홈채널 스캔에 항상 잡히므로
+    이 값이 후보와 동일 소스(scan 스케일)라 diff 편향이 제거된다."""
+    if not cur_bssid:
+        return default_rssi
+    for e in entries:
+        if e.get("bssid") == cur_bssid:
+            return e["rssi"]
+    return default_rssi
+
+
+def evaluate_candidates(entries, station, trend, cooldown, live_ssid, baseline_rssi):
+    """후보 엔트리 중 최적 로밍 대상을 고른다(현재 AP 제외, cross-SSID cooldown 반영).
+    baseline_rssi=현재 AP 비교 기준(홈 패시브 스캔 스케일로 통일). 점수=RSSI diff*10 +
+    Load 개선*2. 반환: (best_ap, best_reason, best_score). 없으면 (None, "", 0)."""
+    best_ap, best_reason, best_score = None, "", 0
+    for roam_ap in entries:
+        if roam_ap["bssid"] == station["bssid"]:
+            continue
+        # cross-SSID cooldown(모드 A): 전환 실패한 extra SSID는 일정 시간 후보에서 제외.
+        ap_ssid = roam_ap.get("ssid", "")
+        if (
+            cooldown is not None
+            and should_cross_connect(ap_ssid, live_ssid)
+            and cooldown.is_cooling(ap_ssid)
+        ):
+            continue
+
+        should_roam, reason = check_roam_conditions(
+            station, roam_ap, trend, baseline_rssi=baseline_rssi
+        )
+        if should_roam:
+            rssi_diff = roam_ap["rssi"] - baseline_rssi
+            score = rssi_diff * 10
+            if ENABLE_LOAD_BASED_ROAM:
+                current_load = station.get("load", 0)
+                roam_load = roam_ap.get("load", 0)
+                score += (current_load - roam_load) * 2
+            if score > best_score:
+                best_ap = roam_ap
+                best_reason = reason
+                best_score = score
+            logger.message(
+                "info",
+                f"[{IFACE}] Roam candidate: {roam_ap['bssid']}, "
+                f"rssi={roam_ap['rssi']}dB (diff={rssi_diff}dB), "
+                f"load={roam_ap.get('load', 0):.1f}%, "
+                f"reason={reason}, score={score:.1f}",
+                _EXTRA_(),
+            )
+        else:
+            logger.message(
+                "info",
+                f"[{IFACE}] Roam skipped: {roam_ap['bssid']}, {reason}",
+                _EXTRA_(),
+            )
+    return best_ap, best_reason, best_score
+
+
+def filter_ap_lines_by_freq(ap_lines, freq):
+    """**`scan_results_to_ap_lines` 산출 라인 전용** — 지정 주파수 항목만 남긴다.
+
+    ⚠️ field[5]=freq 는 `scan_results_to_ap_lines`가 만든 포맷에서만 성립한다. ap.log의
+    `mlanutl getscantable` 라인도 같은 7-field pipe 모양이지만 field[5] 의미가 달라
+    (그래서 `parse_scan_entries`는 field[5]를 아예 무시한다), 그 경로에 이 함수를 쓰면
+    **조용히 빈 리스트를 반환**한다. `get_latest_scan` 경로에는 사용 금지.
+
+    홈채널 패시브 스캔은 그 채널 하나만 실제로 측정하지만, 이어 읽는 `wpa_cli scan_results`는
+    **BSS 테이블 전체**(다른 채널 항목 = 과거 스캔의 stale 값 포함)를 반환한다. 필터 없이
+    쓰면 Stage 1이 stale 오프채널 BSS를 후보로 골라 freshness 게이트와 액티브 폴백을 통째로
+    우회한다. field[5]는 scan_results의 원본 freq라 channel 왕복 변환 손실이 없다."""
+    out = []
+    try:
+        want = int(freq)
+    except (TypeError, ValueError):
+        return out
+    for line in ap_lines or []:
+        parts = line.split("|")
+        if len(parts) < 7:
+            continue
+        try:
+            if int(parts[5].strip()) == want:
+                out.append(line)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, trend, cooldown):
+    """단계형 스캔으로 최적 로밍 후보를 찾는다.
+      0) 교차채널 캐시 **스냅샷**(스캔 전에 먼저 확보 — 아래 이유)
+      1) 홈채널 패시브 스캔(같은 채널 후보 + baseline 통일) — 메모리 처리, ap.log 미기록
+      2) 스냅샷된 교차채널 캐시(CACHE_FRESH_SEC 이내)
+      3) 액티브 폴백(scan_freq + 설정 SSID; scan_freq 없으면 전대역 1회)
+    반환: (best_ap, best_reason, best_score, scanned). scanned=실제 스캔 시도 여부
+    (LAST_SCAN_TIME 기록/backoff 판단용)."""
+    allowed_set = {s for s in allowed if s}
+    cur_bssid = station.get("bssid")
+    baseline_rssi = station["rssi"]  # 기본 station dump; 홈/액티브 스캔 성공 시 통일.
+    scanned = False
+
+    # ── Stage 0: 배경 캐시 스냅샷 (반드시 스캔 '전에') ──
+    # Stage 1의 iw scan은 nl80211 scan-completed 이벤트를 발생시키고, wifi_logger_scan의
+    # on_scan_event 핸들러가 그 직후(~0.2s) ap.log에 새 블록을 append한다. 스캔 뒤에 읽으면
+    # **내 스캔이 유발한 블록**을 "신선한 배경 캐시"로 오인해(타임스탬프=기록 시각) freshness
+    # 게이트가 무력화된다. 스캔 전에 스냅샷해 배경 캐시의 진짜 나이를 보존한다.
+    # 단, 이 순서만으로는 **직전 반복**의 스캔이 남긴 블록을 막지 못하므로(backoff 3초),
+    # 그 경계값을 이번 호출의 스캔 '전' 값으로 붙잡아 Stage 2에서 함께 판정한다.
+    prev_self_scan_ts = _LAST_SELF_SCAN_TS
+    prev_self_scan_end_ts = _LAST_SELF_SCAN_END_TS
+    cache_entries, cache_ts = get_latest_scan(station, channel_info_data, allowed)
+
+    # ── Stage 1: 홈채널 패시브 스캔 ──
+    home_freq = station.get("freq")
+    if home_freq:
+        # scan_results는 BSS 테이블 전체를 주므로 홈 주파수로 좁힌다(위 helper 주석 참조).
+        home_lines = filter_ap_lines_by_freq(
+            iw_scan_to_ap_lines(None, [home_freq], passive=True), home_freq
+        )
+        scanned = True
+        if home_lines:
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            home_entries = parse_scan_entries(
+                home_lines, now_str, channel_info_data, allowed_set
+            )
+            baseline_rssi = baseline_from_entries(home_entries, cur_bssid, baseline_rssi)
+            best_ap, reason, score = evaluate_candidates(
+                home_entries, station, trend, cooldown, live_ssid, baseline_rssi
+            )
+            if best_ap:
+                logger.message(
+                    "info", f"[{IFACE}] roam candidate from home-channel passive scan", _EXTRA_()
+                )
+                return best_ap, reason, score, scanned
+
+    # ── Stage 2: 스냅샷된 교차채널 캐시(bgscan 배경 블록) ──
+    # freshness는 스냅샷 시각이 아니라 **사용 시점**에 평가한다 — Stage 1 스캔이 수 초
+    # 걸릴 수 있어(EBUSY 재시도·DFS dwell·sleep(1)) 스냅샷 때 판정하면 그만큼 유효창이
+    # 늘어난다. 자기 스캔이 유발한 블록은 나이와 무관하게 배경 캐시로 쓰지 않는다.
+    self_induced = scan_block_self_induced(
+        cache_ts, prev_self_scan_ts, prev_self_scan_end_ts
+    )
+    if cache_entries and not self_induced and scan_block_fresh(cache_ts, CACHE_FRESH_SEC):
+        best_ap, reason, score = evaluate_candidates(
+            cache_entries, station, trend, cooldown, live_ssid, baseline_rssi
+        )
+        if best_ap:
+            logger.message(
+                "info",
+                f"[{IFACE}] roam candidate from cross-channel cache (ts={cache_ts})",
+                _EXTRA_(),
+            )
+            return best_ap, reason, score, scanned
+    elif cache_entries:
+        why = (
+            "self-induced (written by our own roam scan)"
+            if self_induced
+            else f"stale (max_age={CACHE_FRESH_SEC}s)"
+        )
+        logger.message(
+            "info",
+            f"[{IFACE}] cross-channel cache unusable: {why} (ts={cache_ts}) — active fallback",
+            _EXTRA_(),
+        )
+
+    # ── Stage 3: 액티브 폴백 ──
+    if WPA_FREQ:
+        active_lines = iw_scan_to_ap_lines(allowed, WPA_FREQ, include_wildcard=False)
+    else:
+        # scan_freq 미설정 → 스코프할 채널 목록이 없다. 무회귀 안전장치로 전대역 1회
+        # (directed + wildcard) 액티브 스캔. 배포는 scan_freq를 설정하므로 실사용 미영향.
+        logger.message(
+            "warn",
+            f"[{IFACE}] scan_freq(WPA_FREQ) unset — full-band active fallback (once)",
+            _EXTRA_(),
+        )
+        active_lines = iw_scan_to_ap_lines(allowed, None, include_wildcard=True)
+    scanned = True
+    if active_lines:
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        active_entries = parse_scan_entries(
+            active_lines, now_str, channel_info_data, allowed_set
+        )
+        baseline_rssi = baseline_from_entries(active_entries, cur_bssid, baseline_rssi)
+        best_ap, reason, score = evaluate_candidates(
+            active_entries, station, trend, cooldown, live_ssid, baseline_rssi
+        )
+        return best_ap, reason, score, scanned
+
+    return None, "", 0, scanned
 
 
 # ==============================================================================
@@ -2284,123 +2638,75 @@ def main():
         else:
             interval = CHECK_INTERVAL
 
-        # 주변 AP 스캔 — iw scan(테이블 충전) + wpa_cli scan_results(=BSS 테이블) 후보.
-        # mlanutl setuserscan은 wpa_supplicant BSS 테이블을 채우지 않아 이후 wpa_cli roam이
-        # 대상 BSS를 못 찾고 FAIL했다(근본원인: 네이티브 bgscan 제거로 테이블이 자동 갱신되지
-        # 않는데 판정 스캔마저 테이블을 안 채움). iw scan은 테이블을 채우고, 후보를 테이블
-        # 그 자체(scan_results)에서 뽑으므로 roam 대상이 항상 테이블에 존재한다.
-        # WPA_FREQ 미설정(scan_freq 없음)이어도 스캔한다 — iw_scan_to_ap_lines가 freqs
-        # 빈값이면 freq 제한 없이 전체 대역을 스캔하므로 어느 채널의 동일 SSID AP든 발견.
-        if WPA_SSID:
-            # station["ssid"]는 get_link_info_with_load가 link.json info.ssid(실제 연결 SSID)로 채움
-            if not station.get("ssid"):
-                station["ssid"] = WPA_SSID
-            ap_lines = iw_scan_to_ap_lines(get_allowed_ssids(station.get("ssid")), WPA_FREQ)
-            try:
-                with open(LAST_SCAN_TIME_FILE, "w") as f:
-                    f.write(str(time.time()))
-            except Exception:
-                pass
+        # ── 단계형 스캔으로 로밍 후보 결정 ──
+        # station["ssid"]는 get_link_info_with_load가 link.json info.ssid(실제 연결 SSID)로 채움.
+        if not station.get("ssid"):
+            station["ssid"] = WPA_SSID
+        channel_info_data = (
+            station.get("channel_info") if ENABLE_LOAD_BASED_ROAM else None
+        )
+        allowed = get_allowed_ssids(station.get("ssid"))
+        # cross-SSID 판정 기준 = 라이브 연결 SSID 단일(T5: base에 WPA_SSID를 넣으면
+        # conf 기본 SSID 복귀가 same으로 오판되어 FAIL 루프). 평가/로밍 분기에서 공유.
+        live_ssid = station.get("ssid")
 
-            if ap_lines:
-                save_with_timestamp(SCAN_LOG_FILE, ap_lines)
-                # freq.log(채널 load)는 mlanutl 전용 출력이라 미생산. 로밍 LOAD 데이터는
-                # link.json channel_info에서 오므로 판정 영향 없음(로그용 freq.log는
-                # wifi_logger_scan 데몬이 별도 생산).
-            else:
-                backoff, no_candidate_streak, last_backoff_cap_ts = (
-                    advance_no_candidate_backoff(
-                        no_candidate_streak, last_backoff_cap_ts
+        if ENABLE_STAGED_SCAN and WPA_SSID:
+            # 홈채널 패시브 → 교차채널 캐시(≤CACHE_FRESH_SEC) → 액티브 폴백.
+            # 판정 스캔은 메모리 처리(ap.log 미기록) — ap.log는 배경 스캐너 전용 캐시라
+            # 판정 스캔이 마지막 블록을 덮어 캐시를 가리는 문제와 포맷 혼재(같은 시각 두
+            # 형식)를 함께 제거한다. 후보 로그는 syslog(logger.message)로 남는다.
+            best_ap, best_reason, best_score, scanned = staged_scan_best_candidate(
+                station, channel_info_data, allowed, live_ssid, trend, cross_ssid_cooldown
+            )
+            if scanned:
+                try:
+                    with open(LAST_SCAN_TIME_FILE, "w") as f:
+                        f.write(str(time.time()))
+                except Exception:
+                    pass
+        else:
+            # 종전 단일 액티브 스캔 경로(ENABLE_STAGED_SCAN=False 또는 WPA_SSID 부재 시 무회귀).
+            if WPA_SSID:
+                ap_lines = iw_scan_to_ap_lines(allowed, WPA_FREQ)
+                try:
+                    with open(LAST_SCAN_TIME_FILE, "w") as f:
+                        f.write(str(time.time()))
+                except Exception:
+                    pass
+                if ap_lines:
+                    save_with_timestamp(SCAN_LOG_FILE, ap_lines)
+                else:
+                    backoff, no_candidate_streak, last_backoff_cap_ts = (
+                        advance_no_candidate_backoff(
+                            no_candidate_streak, last_backoff_cap_ts
+                        )
                     )
+                    logger.message(
+                        "err",
+                        f"[{IFACE}] scan failed (no-candidate backoff={backoff}s, "
+                        f"streak={no_candidate_streak})",
+                        _EXTRA_(),
+                    )
+                    interruptible_sleep(backoff)
+                    continue
+
+            entries, _ts = get_latest_scan(station, channel_info_data, allowed)
+            if not entries:
+                backoff, no_candidate_streak, last_backoff_cap_ts = (
+                    advance_no_candidate_backoff(no_candidate_streak, last_backoff_cap_ts)
                 )
                 logger.message(
                     "err",
-                    f"[{IFACE}] scan failed (no-candidate backoff={backoff}s, "
-                    f"streak={no_candidate_streak})",
+                    f"[{IFACE}] No Matching APs found in latest scan "
+                    f"(no-candidate backoff={backoff}s, streak={no_candidate_streak})",
                     _EXTRA_(),
                 )
                 interruptible_sleep(backoff)
                 continue
 
-        # Load 정보 가져오기
-        channel_info_data = (
-            station.get("channel_info") if ENABLE_LOAD_BASED_ROAM else None
-        )
-
-        # 스캔 결과 파싱
-        entries, timestamp = get_latest_scan(station, channel_info_data, get_allowed_ssids(station.get("ssid")))
-
-        if not entries:
-            backoff, no_candidate_streak, last_backoff_cap_ts = (
-                advance_no_candidate_backoff(no_candidate_streak, last_backoff_cap_ts)
+            best_ap, best_reason, best_score = evaluate_candidates(
+                entries, station, trend, cross_ssid_cooldown, live_ssid, station["rssi"]
             )
-            logger.message(
-                "err",
-                f"[{IFACE}] No Matching APs found in latest scan "
-                f"(no-candidate backoff={backoff}s, streak={no_candidate_streak})",
-                _EXTRA_(),
-            )
-            interruptible_sleep(backoff)
-            continue
-
-        # 로밍 후보 평가
-        best_ap = None
-        best_reason = ""
-        best_score = 0
-
-        # cross-SSID 판정 기준 = 라이브 연결 SSID 단일(T5: base에 WPA_SSID를 넣으면
-        # conf 기본 SSID 복귀가 same으로 오판되어 FAIL 루프). 루프와 아래 로밍 분기에서 공유.
-        live_ssid = station.get("ssid")
-
-        for roam_ap in entries:
-            if roam_ap["bssid"] == station["bssid"]:
-                continue
-
-            # cross-SSID cooldown(모드 A): 전환 실패한 extra SSID는 일정 시간 후보에서 제외해
-            # select_network 진동을 차단한다. same-SSID(현재 ESS) BSS roam은 should_cross_connect가
-            # cross 대상만 True이므로 영향 없음. cooldown SSID가 유일 후보면 best_ap=None → 후보없음 backoff.
-            ap_ssid = roam_ap.get("ssid", "")  # .get으로 일관 접근(조건 순서 변경 시 KeyError 방지)
-            if (
-                cross_ssid_cooldown is not None
-                and should_cross_connect(ap_ssid, live_ssid)
-                and cross_ssid_cooldown.is_cooling(ap_ssid)
-            ):
-                continue
-
-            # 로밍 조건 확인
-            should_roam, reason = check_roam_conditions(station, roam_ap, trend)
-
-            if should_roam:
-                rssi_diff = roam_ap["rssi"] - station["rssi"]
-
-                # 점수 계산 (RSSI 차이 + Load 개선 정도)
-                score = rssi_diff * 10
-
-                if ENABLE_LOAD_BASED_ROAM:
-                    current_load = station.get("load", 0)
-                    roam_load = roam_ap.get("load", 0)
-                    load_improvement = current_load - roam_load
-                    score += load_improvement * 2
-
-                if score > best_score:
-                    best_ap = roam_ap
-                    best_reason = reason
-                    best_score = score
-
-                logger.message(
-                    "info",
-                    f"[{IFACE}] Roam candidate: {roam_ap['bssid']}, "
-                    f"rssi={roam_ap['rssi']}dB (diff={rssi_diff}dB), "
-                    f"load={roam_ap.get('load', 0):.1f}%, "
-                    f"reason={reason}, score={score:.1f}",
-                    _EXTRA_(),
-                )
-            else:
-                logger.message(
-                    "info",
-                    f"[{IFACE}] Roam skipped: {roam_ap['bssid']}, {reason}",
-                    _EXTRA_(),
-                )
 
         # 최적 AP로 로밍
         if best_ap:
