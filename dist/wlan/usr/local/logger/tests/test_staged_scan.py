@@ -41,6 +41,7 @@ def _globals(monkeypatch):
     # 모듈 전역이라 테스트 간 누수 → 격리 위해 매 테스트 리셋(없으면 앞 테스트의 스캔 시각이
     # 남아 뒤 테스트의 캐시 블록이 self-induced로 오판된다).
     monkeypatch.setattr(wifi_roam, "_LAST_SELF_SCAN_TS", None)
+    monkeypatch.setattr(wifi_roam, "_LAST_SELF_SCAN_END_TS", None)
 
 
 CUR = "aa:aa:aa:aa:aa:aa"
@@ -272,6 +273,7 @@ def test_self_induced_cache_block_rejected_across_iterations(monkeypatch):
 
     def fake_iw(ssids, freqs, passive=False, include_wildcard=True):
         wifi_roam._LAST_SELF_SCAN_TS = time.time()          # 실제 코드와 동일한 경계 기록
+        wifi_roam._LAST_SELF_SCAN_END_TS = time.time()
         log["ts"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # logger가 블록 append
         return None                                          # 후보 없음 → 다음 단계로
 
@@ -314,12 +316,53 @@ def test_scan_block_self_induced_helper():
     older = (datetime.now() - timedelta(seconds=30)).strftime("%Y-%m-%d %H:%M:%S")
     # 자기 스캔 기록이 없으면 판정 불가 → False(기존 동작 유지)
     assert wifi_roam.scan_block_self_induced(ts_now, None) is False
-    # 블록이 자기 스캔 이후 → self-induced
-    assert wifi_roam.scan_block_self_induced(ts_now, now) is True
+    # 블록이 자기 스캔 윈도우 안 → self-induced
+    assert wifi_roam.scan_block_self_induced(ts_now, now, now) is True
     # 블록이 자기 스캔보다 훨씬 이전 → 배경 캐시
-    assert wifi_roam.scan_block_self_induced(older, now) is False
+    assert wifi_roam.scan_block_self_induced(older, now, now) is False
     # 형식 불량은 보수적으로 False
-    assert wifi_roam.scan_block_self_induced("garbage", now) is False
+    assert wifi_roam.scan_block_self_induced("garbage", now, now) is False
+
+
+def test_self_induced_window_has_upper_bound():
+    """[회귀] self-induced 판정에 상한이 없으면, ap.log가 append-only이고 get_latest_scan이
+    항상 최신 블록만 주므로 **첫 로밍 스캔 이후 Stage 2가 영구히 죽는다**(교차채널 캐시
+    기능의 사실상 제거). 자기 스캔보다 충분히 나중에 기록된 블록은 진짜 배경 bgscan이다."""
+    ts_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    tail = wifi_roam.SELF_INDUCED_TAIL_SEC
+    # 자기 스캔이 방금 끝났다 → 지금 블록은 유발된 것
+    now = time.time()
+    assert wifi_roam.scan_block_self_induced(ts_now, now, now) is True
+    # 자기 스캔이 (tail + 여유)만큼 전에 끝났다 → 지금 블록은 배경 bgscan
+    old_scan = now - (tail + 20)
+    assert wifi_roam.scan_block_self_induced(ts_now, old_scan, old_scan) is False, \
+        "상한 없는 게이트 — 오래전 자기 스캔 때문에 진짜 배경 블록까지 거부됨"
+    # 한 시간 전 자기 스캔도 마찬가지(영구 사망 방지)
+    hour_ago = now - 3600
+    assert wifi_roam.scan_block_self_induced(ts_now, hour_ago, hour_ago) is False
+
+
+def test_stage2_recovers_after_earlier_self_scan(monkeypatch):
+    """[회귀] 이전 반복에서 자기 스캔이 있었더라도, 그 뒤 충분히 지나 기록된 진짜 bgscan
+    블록은 Stage 2에서 정상 사용돼야 한다. 상한 없는 게이트면 여기서 best=None이 된다."""
+    now = time.time()
+    old = now - (wifi_roam.SELF_INDUCED_TAIL_SEC + 30)
+    monkeypatch.setattr(wifi_roam, "_LAST_SELF_SCAN_TS", old)
+    monkeypatch.setattr(wifi_roam, "_LAST_SELF_SCAN_END_TS", old)
+
+    fresh_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cache = [{"bssid": "cc:cc:cc:cc:cc:cc", "ssid": "Net", "channel": 40, "freq": 5200,
+              "rssi": -50, "rssi_th": -75, "ld": 0, "load": 0, "noise": -95,
+              "timestamp": fresh_ts}]
+    calls = []
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(None, None, calls))
+    monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: (cache, fresh_ts))
+
+    best, _, _, _ = wifi_roam.staged_scan_best_candidate(
+        _station(rssi=-70), None, ["Net"], "Net", STABLE, None
+    )
+    assert best is not None and best["bssid"] == "cc:cc:cc:cc:cc:cc", \
+        "이전 자기 스캔 때문에 진짜 배경 캐시가 영구 거부됨 (Stage 2 사망)"
 
 
 def test_filter_ap_lines_by_freq():

@@ -49,9 +49,15 @@ DEFAULT_ENABLE_STAGED_SCAN = True
 DEFAULT_CACHE_FRESH_SEC = 45  # 교차채널 캐시 신선도 바운드(초). bgscan 30초 주기 + 지터 여유.
 ENABLE_STAGED_SCAN = DEFAULT_ENABLE_STAGED_SCAN
 CACHE_FRESH_SEC = DEFAULT_CACHE_FRESH_SEC
-# 마지막으로 우리가 트리거한 iw scan 시각(epoch). wifi_logger_scan이 그 스캔의 완료
-# 이벤트로 ap.log에 쓴 블록을 배경 캐시로 오인하지 않기 위한 경계값(scan_block_self_induced).
+# 마지막으로 우리가 트리거한 iw scan의 시작/종료 시각(epoch). wifi_logger_scan이 그 스캔의
+# 완료 이벤트로 ap.log에 쓴 블록을 배경 캐시로 오인하지 않기 위한 경계값
+# (scan_block_self_induced). 시작만으로는 상한이 없어 Stage 2가 영구히 죽으므로 종료도 둔다.
 _LAST_SELF_SCAN_TS = None
+_LAST_SELF_SCAN_END_TS = None
+# 자기 스캔 종료 후 유발 블록이 기록되기까지 허용하는 꼬리 시간(초).
+# wifi_logger_scan: scan-completed → sleep 0.2 → run_getscantable(sleep 1 + 최대 3회 재시도)
+# → save. 넉넉히 잡아 유발 블록을 놓치지 않는다(과하게 잡으면 Stage 3 폴백으로 안전 degrade).
+SELF_INDUCED_TAIL_SEC = 10
 
 
 def is_valid_rssi(rssi) -> bool:
@@ -1001,18 +1007,28 @@ def iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
     passive=True: probe를 안 쏘는 패시브 스캔(`iw scan passive`). directed ssid 토큰을
       전부 생략하고 beacon만 수신 — 홈채널 후보 저부하 수집 및 baseline 통일용.
     include_wildcard=False: 와일드카드("") broadcast probe를 빼고 directed probe만 —
-      액티브 폴백을 conf의 설정 SSID로만 좁힐 때(사용자 요구: scan_freq+ssid만) 사용."""
+      액티브 폴백을 conf의 설정 SSID로만 좁힐 때(사용자 요구: scan_freq+ssid만) 사용.
+
+    스캔 시작/종료 시각을 전역에 남긴다 — wifi_logger_scan이 이 스캔의 완료 이벤트에
+    반응해 ap.log에 블록을 쓰므로, 그 블록을 배경 캐시로 오인하지 않기 위한 윈도우
+    경계값이다(scan_block_self_induced). 종료 시각은 예외/조기 return 경로에서도
+    반드시 남도록 finally에서 기록한다."""
+    global _LAST_SELF_SCAN_TS, _LAST_SELF_SCAN_END_TS
+    _LAST_SELF_SCAN_TS = time.time()
+    try:
+        return _iw_scan_to_ap_lines(ssids, freqs, passive, include_wildcard)
+    finally:
+        _LAST_SELF_SCAN_END_TS = time.time()
+
+
+def _iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
+    """iw_scan_to_ap_lines 본체(자기 스캔 시각 기록은 래퍼가 담당)."""
     if isinstance(ssids, str):
         ssid_list = [ssids] if ssids else []
     else:
         ssid_list = [s for s in (ssids or []) if s]
 
     # 1) iw scan 트리거(동기, 테이블 충전). 다른 스캐너(logger 등)와 경합 시 -EBUSY 재시도.
-    # 스캔 '시작' 시각을 기록한다 — wifi_logger_scan이 이 스캔의 완료 이벤트에 반응해
-    # ap.log에 블록을 쓰므로, 이후 그 블록을 배경 캐시로 오인하지 않기 위한 경계값이다
-    # (scan_block_self_induced). 시작 시각을 쓰는 쪽이 보수적이다(경계 이후 블록은 전부 의심).
-    global _LAST_SELF_SCAN_TS
-    _LAST_SELF_SCAN_TS = time.time()
     cmd = ["iw", IFACE, "scan"]
     if passive:
         cmd.append("passive")
@@ -2184,7 +2200,10 @@ def check_roam_conditions(station, roam_ap, trend, baseline_rssi=None):
     return (True, f"RSSI diff: {rssi_diff}dB")
 
 
-def scan_block_self_induced(timestamp_str, self_scan_ts, slack_sec=1.0):
+def scan_block_self_induced(
+    timestamp_str, self_scan_ts, self_scan_end_ts=None,
+    slack_sec=1.0, tail_sec=None,
+):
     """ap.log 블록이 **우리 로밍 판정 스캔이 유발한** 것인지 판정.
 
     `wifi_logger_scan`은 스캔 주체를 구분하지 않고 scan-completed 이벤트마다 드라이버
@@ -2195,15 +2214,28 @@ def scan_block_self_induced(timestamp_str, self_scan_ts, slack_sec=1.0):
     (backoff가 3초라 매우 흔함). 마지막 자기 스캔 시각 이후에 기록된 블록은 배경 캐시로
     신뢰하지 않는다. 블록 타임스탬프는 초 단위 절삭이라 slack 1초를 둔다.
 
-    진짜 bgscan 블록을 함께 버릴 수 있으나, 그 경우 Stage 3 액티브 폴백으로 안전하게
-    degrade한다(정확도 우선 — stale 데이터로 로밍하는 것보다 한 번 더 스캔이 낫다)."""
+    판정은 **유한 윈도우**로 한다: `[스캔 시작 - slack, 스캔 종료 + tail]`.
+    상한(tail)이 없으면 ap.log가 append-only이고 `get_latest_scan`은 항상 최신 블록만
+    돌려주므로, 첫 로밍 스캔 이후 모든 블록이 영구히 self-induced로 판정되어 Stage 2가
+    프로세스 수명 내내 죽는다(= 교차채널 캐시 기능의 사실상 제거). tail은 유발 블록이
+    실제로 기록되기까지의 지연을 덮어야 한다 — `wifi_logger_scan`은 scan-completed 후
+    0.2s 대기 → `run_getscantable`(sleep 1 + 최대 3회 재시도) → 기록이라 수 초가 걸린다.
+
+    윈도우 밖(=충분히 나중)에 기록된 블록은 진짜 배경 bgscan으로 보고 정상 사용한다.
+    윈도우 안의 진짜 bgscan 블록을 함께 버릴 수는 있으나, 그 경우 Stage 3 액티브 폴백으로
+    안전하게 degrade한다(정확도 우선 — stale 데이터로 로밍하는 것보다 한 번 더 스캔이 낫다)."""
     if not self_scan_ts or not timestamp_str:
         return False
     try:
         block_dt = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
     except (ValueError, TypeError):
         return False
-    return block_dt.timestamp() >= self_scan_ts - slack_sec
+    if tail_sec is None:
+        tail_sec = SELF_INDUCED_TAIL_SEC
+    block_ts = block_dt.timestamp()
+    lower = self_scan_ts - slack_sec              # 타임스탬프 초 단위 절삭 보정
+    upper = (self_scan_end_ts or self_scan_ts) + tail_sec
+    return lower <= block_ts <= upper
 
 
 def scan_block_fresh(timestamp_str, max_age_sec):
@@ -2330,6 +2362,7 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
     # 단, 이 순서만으로는 **직전 반복**의 스캔이 남긴 블록을 막지 못하므로(backoff 3초),
     # 그 경계값을 이번 호출의 스캔 '전' 값으로 붙잡아 Stage 2에서 함께 판정한다.
     prev_self_scan_ts = _LAST_SELF_SCAN_TS
+    prev_self_scan_end_ts = _LAST_SELF_SCAN_END_TS
     cache_entries, cache_ts = get_latest_scan(station, channel_info_data, allowed)
 
     # ── Stage 1: 홈채널 패시브 스캔 ──
@@ -2361,7 +2394,7 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
     # 늘어난다. 자기 스캔이 유발한 블록은 나이와 무관하게 배경 캐시로 쓰지 않는다.
     if (
         cache_entries
-        and not scan_block_self_induced(cache_ts, prev_self_scan_ts)
+        and not scan_block_self_induced(cache_ts, prev_self_scan_ts, prev_self_scan_end_ts)
         and scan_block_fresh(cache_ts, CACHE_FRESH_SEC)
     ):
         best_ap, reason, score = evaluate_candidates(
@@ -2377,7 +2410,7 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
     elif cache_entries:
         why = (
             "self-induced (written by our own roam scan)"
-            if scan_block_self_induced(cache_ts, prev_self_scan_ts)
+            if scan_block_self_induced(cache_ts, prev_self_scan_ts, prev_self_scan_end_ts)
             else f"stale (max_age={CACHE_FRESH_SEC}s)"
         )
         logger.message(
