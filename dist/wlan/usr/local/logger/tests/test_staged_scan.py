@@ -208,9 +208,15 @@ def test_iw_passive_cmd_has_passive_no_ssid(monkeypatch):
 
     monkeypatch.setattr(wifi_roam.subprocess, "run", se)
     wifi_roam.iw_scan_to_ap_lines(None, [5180], passive=True)
-    assert "passive" in cap["cmd"]
-    assert "ssid" not in cap["cmd"]          # 패시브는 directed probe 없음
-    assert "freq" in cap["cmd"] and "5180" in cap["cmd"]
+    c = cap["cmd"]
+    assert "passive" in c
+    assert "ssid" not in c                   # 패시브는 directed probe 없음
+    assert "freq" in c and "5180" in c
+    # [회귀] iw 5.19 문법 `scan [freq <freq>*] ... [ssid <ssid>*|passive]` —
+    # passive 는 맨 뒤 그룹이라 freq 뒤에 와야 한다. 앞에 두면 iw가 rc=1로 즉시 실패해
+    # 스캔이 아예 안 돈다(온타겟 실측). 멤버십만 보던 종전 단언은 이 버그를 못 잡았다.
+    assert c.index("passive") > c.index("freq"), f"passive는 freq 뒤에 와야 함: {c}"
+    assert c[-1] == "passive", f"passive는 마지막 토큰이어야 함: {c}"
 
 
 # ---------- 회귀: Codex 리뷰 P2 2건 ----------

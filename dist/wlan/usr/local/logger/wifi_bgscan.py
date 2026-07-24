@@ -197,10 +197,13 @@ def construct_iw_scan_cmd(ssid, scan_freqs, ssid_filter=True, freq_filter=True, 
     # beacon 기반 RSSI라 현재 링크의 signal_avg(=beacon/데이터 평균)와 스케일이 가까워
     # 로밍 판정의 소스 이질성을 줄인다. hidden SSID는 beacon이 없어 못 잡으므로, 로밍
     # 트리거 시 액티브 폴백(directed probe)이 이를 보완한다.
+    # iw 문법(5.19): `scan [freq <freq>*] ... [ssid <ssid>*|passive]` — `passive`는 ssid와
+    # 같은 **맨 뒤** 그룹이라 freq 뒤에 와야 한다. 앞에 두면 iw가 rc=1로 즉시 실패해
+    # 스캔이 아예 안 돈다(온타겟 실측). freq_filter=true 가 기본이라 순서가 곧 기능 여부다.
     if passive:
-        cmd.append("passive")
         if freq_filter and scan_freqs:
             cmd += ["freq"] + scan_freqs
+        cmd.append("passive")
         return cmd
 
     # freq_filter=false면 freq 필터를 빼고 전체 대역 스캔(기본 true).
