@@ -342,8 +342,9 @@
                 "detection_time": 5
             },
             "STAGED_SCAN": {
-                "_comment": "단계형 로밍 스캔(홈채널 패시브 → 교차채널 캐시 → 액티브 폴백). enable=false면 종전 단일 액티브 스캔으로 회귀(무회귀 폴백). cache_fresh_sec: 배경 캐시 신선도 바운드(초). self_induced_tail_sec: 자기 스캔 종료 후 이 시간 안에 기록된 ap.log 블록은 그 스캔이 유발한 것으로 보고 배경 캐시로 쓰지 않음(초). SIGHUP으로 런타임 반영.",
+                "_comment": "단계형 로밍 스캔(홈채널 패시브 → 교차채널 캐시 → 액티브 폴백). enable=false면 종전 단일 액티브 스캔으로 회귀(무회귀 폴백). cache_fresh_sec: 배경 캐시 신선도 바운드(초). self_induced_tail_sec: 자기 스캔 종료 후 이 시간 안에 기록된 ap.log 블록은 그 스캔이 유발한 것으로 보고 배경 캐시로 쓰지 않음(초). skip_redundant_active: scan_freq가 홈채널 부분집합(단일채널 등)이면 홈 패시브가 이미 다 커버하므로 Stage3 액티브 폴백 스킵(불필요한 probe 제거). 홈채널에 hidden 로밍 SSID가 있으면 false. SIGHUP으로 런타임 반영.",
                 "enable": true,
+                "skip_redundant_active": true,
                 "cache_fresh_sec": 45,
                 "self_induced_tail_sec": 10
             },
@@ -536,8 +537,9 @@
                 "detection_time": 5
             },
             "STAGED_SCAN": {
-                "_comment": "단계형 로밍 스캔(홈채널 패시브 → 교차채널 캐시 → 액티브 폴백). enable=false면 종전 단일 액티브 스캔으로 회귀(무회귀 폴백). cache_fresh_sec: 배경 캐시 신선도 바운드(초). self_induced_tail_sec: 자기 스캔 종료 후 이 시간 안에 기록된 ap.log 블록은 그 스캔이 유발한 것으로 보고 배경 캐시로 쓰지 않음(초). SIGHUP으로 런타임 반영.",
+                "_comment": "단계형 로밍 스캔(홈채널 패시브 → 교차채널 캐시 → 액티브 폴백). enable=false면 종전 단일 액티브 스캔으로 회귀(무회귀 폴백). cache_fresh_sec: 배경 캐시 신선도 바운드(초). self_induced_tail_sec: 자기 스캔 종료 후 이 시간 안에 기록된 ap.log 블록은 그 스캔이 유발한 것으로 보고 배경 캐시로 쓰지 않음(초). skip_redundant_active: scan_freq가 홈채널 부분집합(단일채널 등)이면 홈 패시브가 이미 다 커버하므로 Stage3 액티브 폴백 스킵(불필요한 probe 제거). 홈채널에 hidden 로밍 SSID가 있으면 false. SIGHUP으로 런타임 반영.",
                 "enable": true,
+                "skip_redundant_active": true,
                 "cache_fresh_sec": 45,
                 "self_induced_tail_sec": 10
             },

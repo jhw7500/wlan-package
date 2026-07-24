@@ -47,9 +47,15 @@ CHECK_INTERVAL = 1
 # ENABLE_STAGED_SCAN=False면 종전 단일 액티브 스캔 경로로 회귀(무회귀 안전장치).
 DEFAULT_ENABLE_STAGED_SCAN = True
 DEFAULT_CACHE_FRESH_SEC = 45  # 교차채널 캐시 신선도 바운드(초). bgscan 30초 주기 + 지터 여유.
+# scan_freq 가 홈채널의 부분집합(단일 채널 등)이면 Stage 1 홈 패시브 스캔이 이미 모든 후보를
+# 커버하므로 Stage 3 액티브 폴백은 같은 채널을 probe로 다시 훑는 것뿐 — 스킵해 매 로밍컨디션
+# 주기의 불필요한 액티브 스캔(probe 송신)을 없앤다. hidden SSID 는 액티브 probe로만 발견되므로
+# 홈채널에 hidden 로밍 타깃이 있는 배포는 이 값을 false 로 두거나 다채널로 운용해야 한다.
+DEFAULT_SKIP_REDUNDANT_ACTIVE_SCAN = True
 ENABLE_STAGED_SCAN = DEFAULT_ENABLE_STAGED_SCAN
 CACHE_FRESH_SEC = DEFAULT_CACHE_FRESH_SEC
-# 위 3개(enable/cache_fresh/self_induced_tail)는 wifi_init_conf.json
+SKIP_REDUNDANT_ACTIVE_SCAN = DEFAULT_SKIP_REDUNDANT_ACTIVE_SCAN
+# 위 4개(enable/cache_fresh/self_induced_tail/skip_redundant_active)는 wifi_init_conf.json
 # `.<iface>.roaming.STAGED_SCAN` 에서 런타임 조정 가능(SIGHUP reload). 현장에서 재배포 없이
 # 단계형 스캔을 끄거나(무회귀 폴백) 임계값을 튜닝하기 위한 것.
 # 마지막으로 우리가 트리거한 iw scan의 시작/종료 시각(epoch). wifi_logger_scan이 그 스캔의
@@ -343,6 +349,7 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
             "ROAM_CROSS_FAIL_RETRY_COUNT": _num("ROAM_CROSS_FAIL_RETRY_COUNT"),
             "ROAM_NO_RESULT_FAST_COUNT": _num("ROAM_NO_RESULT_FAST_COUNT"),
             "ENABLE_STAGED_SCAN": config["ENABLE_STAGED_SCAN"],
+            "SKIP_REDUNDANT_ACTIVE_SCAN": config["SKIP_REDUNDANT_ACTIVE_SCAN"],
             "CACHE_FRESH_SEC": _num("CACHE_FRESH_SEC"),
             "SELF_INDUCED_TAIL_SEC": _num("SELF_INDUCED_TAIL_SEC"),
             "USE_SIGNAL_AVG": config["USE_SIGNAL_AVG"],
@@ -402,6 +409,7 @@ def load_roaming_config(iface, data=None):
         "ROAM_CROSS_FAIL_RETRY_COUNT": DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT,
         "ROAM_NO_RESULT_FAST_COUNT": DEFAULT_ROAM_NO_RESULT_FAST_COUNT,
         "ENABLE_STAGED_SCAN": DEFAULT_ENABLE_STAGED_SCAN,
+        "SKIP_REDUNDANT_ACTIVE_SCAN": DEFAULT_SKIP_REDUNDANT_ACTIVE_SCAN,
         "CACHE_FRESH_SEC": DEFAULT_CACHE_FRESH_SEC,
         "SELF_INDUCED_TAIL_SEC": DEFAULT_SELF_INDUCED_TAIL_SEC,
         "USE_SIGNAL_AVG": DEFAULT_USE_SIGNAL_AVG,
@@ -483,6 +491,7 @@ def load_roaming_config(iface, data=None):
                     staged,
                     [
                         ("enable", "ENABLE_STAGED_SCAN", parse_bool),
+                        ("skip_redundant_active", "SKIP_REDUNDANT_ACTIVE_SCAN", parse_bool),
                         ("cache_fresh_sec", "CACHE_FRESH_SEC", _positive_int),
                         ("self_induced_tail_sec", "SELF_INDUCED_TAIL_SEC", _positive_int),
                     ],
@@ -2417,6 +2426,7 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
     cache_entries, cache_ts = get_latest_scan(station, channel_info_data, allowed)
 
     # ── Stage 1: 홈채널 패시브 스캔 ──
+    home_scan_ok = False  # 패시브 스캔이 결과를 냈나(=홈채널을 실제로 커버했나)
     home_freq = station.get("freq")
     if home_freq:
         # scan_results는 BSS 테이블 전체를 주므로 홈 주파수로 좁힌다(위 helper 주석 참조).
@@ -2425,6 +2435,7 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
         )
         scanned = True
         if home_lines:
+            home_scan_ok = True
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             home_entries = parse_scan_entries(
                 home_lines, now_str, channel_info_data, allowed_set
@@ -2468,6 +2479,27 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
             f"[{IFACE}] cross-channel cache unusable: {why} (ts={cache_ts}) — active fallback",
             _EXTRA_(),
         )
+
+    # ── Stage 3 진입 전: 홈 패시브가 scan_freq 전체를 커버했으면 액티브 폴백 스킵 ──
+    # scan_freq ⊆ {홈채널}이면 Stage 3 액티브는 같은 채널을 probe로 다시 훑는 것뿐이라 후보
+    # 발견에 새로 기여하는 게 없다(단일채널 배포 등). 매 로밍컨디션 주기의 불필요한 액티브
+    # 스캔(probe 송신)을 없앤다 = airtime·링크 방해 감소. 조건: 최적화 활성 + Stage 1 패시브
+    # 성공(실패면 액티브가 재시도 역할이라 유지) + scan_freq 가 홈채널의 부분집합.
+    # hidden SSID 는 액티브 probe로만 잡히므로 홈채널에 hidden 로밍 타깃이 있으면 config로 끈다.
+    if (
+        SKIP_REDUNDANT_ACTIVE_SCAN
+        and home_scan_ok
+        and home_freq
+        and WPA_FREQ
+        and {str(f) for f in WPA_FREQ} <= {str(home_freq)}
+    ):
+        logger.message(
+            "info",
+            f"[{IFACE}] scan_freq ⊆ home channel({home_freq}) — home passive covered all, "
+            f"skip redundant active fallback (no roam candidate)",
+            _EXTRA_(),
+        )
+        return None, "", 0, scanned
 
     # ── Stage 3: 액티브 폴백 ──
     if WPA_FREQ:
