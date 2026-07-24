@@ -541,7 +541,9 @@ if __name__ == "__main__":
             time.sleep(1)
     if not _locked:
         logger.message("warning", f"[{IFACE}] another wifi_logger_link already running — exit", _EXTRA_())
-        sys.exit(0)
+        # exit 3 = 중복 실행(flock-loss). systemd 유닛의 RestartPreventExitStatus=3 이 이
+        # 종료를 재시작하지 않게 해 재시작 폭주를 막는다(이미 다른 인스턴스가 link.json 생산 중).
+        sys.exit(3)
 
     # Load tunables from JSON: {iface}.logger.<key> → logger.<key> → arg default
     # link_retry_* 키는 아직 기본 JSON에 없어도 무방하다(없으면 arg/모듈 기본값 사용).
