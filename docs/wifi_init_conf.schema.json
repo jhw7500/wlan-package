@@ -1160,6 +1160,14 @@
               "x-apply-timing": "runtime",
               "x-consumer": "wifi_bgscan.py"
             },
+            "passive": {
+              "type": "boolean",
+              "default": true,
+              "description": "패시브 스캔(iw scan passive) 사용 여부. true면 probe request 미송신·beacon만 수신(directed ssid probe 무효, hidden SSID 미발견). false면 종전 액티브 스캔",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_bgscan.py"
+            },
             "enabled": {
               "type": "boolean",
               "default": true,
@@ -1356,6 +1364,39 @@
                   "description": "핑퐁 감지 후 로밍 억제 시간(초)",
                   "x-ui-editable": "yes",
                   "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                }
+              }
+            },
+            "STAGED_SCAN": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "단계형 로밍 스캔(홈채널 패시브 → 교차채널 캐시 → 액티브 폴백)",
+              "properties": {
+                "enable": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "단계형 스캔 ON/OFF. false면 종전 단일 액티브 스캔 경로로 회귀(무회귀 폴백)",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "runtime",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "cache_fresh_sec": {
+                  "type": "integer",
+                  "default": 45,
+                  "minimum": 1,
+                  "description": "교차채널 캐시(ap.log 배경 블록) 신선도 바운드(초). 초과 시 액티브 폴백",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "runtime",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "self_induced_tail_sec": {
+                  "type": "integer",
+                  "default": 10,
+                  "minimum": 1,
+                  "description": "자기 스캔 종료 후 이 시간 안에 기록된 ap.log 블록은 그 스캔이 유발한 것으로 보고 배경 캐시로 쓰지 않는다(초)",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "runtime",
                   "x-consumer": "wifi_roam.py"
                 }
               }
@@ -1998,6 +2039,14 @@
               "x-apply-timing": "runtime",
               "x-consumer": "wifi_bgscan.py"
             },
+            "passive": {
+              "type": "boolean",
+              "default": true,
+              "description": "패시브 스캔(iw scan passive) 사용 여부. true면 probe request 미송신·beacon만 수신(directed ssid probe 무효, hidden SSID 미발견). false면 종전 액티브 스캔",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_bgscan.py"
+            },
             "enabled": {
               "type": "boolean",
               "default": false,
@@ -2194,6 +2243,39 @@
                   "description": "핑퐁 감지 후 로밍 억제 시간(초)",
                   "x-ui-editable": "yes",
                   "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                }
+              }
+            },
+            "STAGED_SCAN": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "단계형 로밍 스캔(홈채널 패시브 → 교차채널 캐시 → 액티브 폴백)",
+              "properties": {
+                "enable": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "단계형 스캔 ON/OFF. false면 종전 단일 액티브 스캔 경로로 회귀(무회귀 폴백)",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "runtime",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "cache_fresh_sec": {
+                  "type": "integer",
+                  "default": 45,
+                  "minimum": 1,
+                  "description": "교차채널 캐시(ap.log 배경 블록) 신선도 바운드(초). 초과 시 액티브 폴백",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "runtime",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "self_induced_tail_sec": {
+                  "type": "integer",
+                  "default": 10,
+                  "minimum": 1,
+                  "description": "자기 스캔 종료 후 이 시간 안에 기록된 ap.log 블록은 그 스캔이 유발한 것으로 보고 배경 캐시로 쓰지 않는다(초)",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "runtime",
                   "x-consumer": "wifi_roam.py"
                 }
               }

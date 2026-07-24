@@ -143,6 +143,7 @@ def load_bgscan_json(iface):
     (spec §3.5 3차 게이트, 모드 B airtime 회귀 제거). bool 해석은 roam/lib와 통일(_parse_bool)."""
     interval, ssid_filter, freq_filter, extra_ssids = None, True, True, []
     emit_roam_hint = True
+    passive = True  # 기본 패시브(beacon 기반 저부하 배경 스캔). bgscan.passive=false로 액티브 복귀.
     try:
         with open(WIFI_INIT_CONF_JSON, "r") as f:
             data = json.load(f)
@@ -157,6 +158,8 @@ def load_bgscan_json(iface):
             freq_filter = bg["freq_filter"]
         if isinstance(bg.get("emit_roam_hint"), bool):
             emit_roam_hint = bg["emit_roam_hint"]
+        if isinstance(bg.get("passive"), bool):
+            passive = bg["passive"]
         # 로밍 후보(roaming.extra_ssids)와 bgscan 스캔 대상을 일치시킨다.
         # 단, 모드 결정자 generate_network_blocks가 truthy(모드 A)일 때만 extra를 probe 대상에
         # 포함한다(spec §3.5 3차 게이트). 모드 B(false/부재)는 extra=[] 강제 →
@@ -171,7 +174,7 @@ def load_bgscan_json(iface):
         pass
     except Exception as e:
         logger.message("err", f"[{iface}] bgscan json load error: {e}", _EXTRA_())
-    return interval, ssid_filter, freq_filter, extra_ssids, emit_roam_hint
+    return interval, ssid_filter, freq_filter, extra_ssids, emit_roam_hint, passive
 
 def emit_roam_hint_touch(iface):
     """roam backoff 해제 신호: /tmp/wifi_roam_hint_<iface> 를 touch(mtime 갱신).
@@ -186,8 +189,19 @@ def emit_roam_hint_touch(iface):
     except OSError as e:
         logger.message("err", f"[{iface}] roam hint touch failed: {e}", _EXTRA_())
 
-def construct_iw_scan_cmd(ssid, scan_freqs, ssid_filter=True, freq_filter=True, extra_ssids=None):
+def construct_iw_scan_cmd(ssid, scan_freqs, ssid_filter=True, freq_filter=True, extra_ssids=None, passive=False):
     cmd = ["iw", IFACE, "scan"]
+
+    # 패시브 스캔: probe request를 쏘지 않고 beacon만 수신한다. probe를 안 보내므로
+    # directed ssid 토큰은 의미가 없어(드라이버가 무시하거나 -EINVAL) 전부 생략한다.
+    # beacon 기반 RSSI라 현재 링크의 signal_avg(=beacon/데이터 평균)와 스케일이 가까워
+    # 로밍 판정의 소스 이질성을 줄인다. hidden SSID는 beacon이 없어 못 잡으므로, 로밍
+    # 트리거 시 액티브 폴백(directed probe)이 이를 보완한다.
+    if passive:
+        cmd.append("passive")
+        if freq_filter and scan_freqs:
+            cmd += ["freq"] + scan_freqs
+        return cmd
 
     # freq_filter=false면 freq 필터를 빼고 전체 대역 스캔(기본 true).
     if freq_filter and scan_freqs:
@@ -221,9 +235,9 @@ def periodic_scan(conf_path):
     def build():
         global _WILDCARD_PROBE_WARNED
         ssid, freqs, wpa_interval = parse_wpa_supplicant_conf(conf_path)
-        json_interval, ssid_filter, freq_filter, extra_ssids, emit_roam_hint = load_bgscan_json(IFACE)
+        json_interval, ssid_filter, freq_filter, extra_ssids, emit_roam_hint, passive = load_bgscan_json(IFACE)
         interval = json_interval or wpa_interval or DEFAULT_INTERVAL
-        cmd = construct_iw_scan_cmd(ssid, freqs, ssid_filter, freq_filter, extra_ssids)
+        cmd = construct_iw_scan_cmd(ssid, freqs, ssid_filter, freq_filter, extra_ssids, passive=passive)
         # ssid_filter=false + extra_ssids면 construct_iw_scan_cmd가 와일드카드("") probe를
         # 삽입해 광범위 스캔을 보존한다. 빈 SSID를 broadcast probe로 보는 nl80211 동작에
         # 의존하므로(드라이버/커널 의존), 그 가정을 운영 로그에 1회 노출해 신규 플랫폼에서

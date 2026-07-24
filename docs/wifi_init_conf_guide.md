@@ -593,10 +593,15 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 |----|------|--------|------|
 | `enabled` | bool | mlan0 `true` / mlan1 `false` | bgscan 데몬 활성화 |
 | `interval` | int | `60` | 백그라운드 스캔 주기 (초) |
-| `ssid_filter` | bool | `true` | `iw scan`의 **기본 ssid** directed probe 포함 여부. `true`면 conf 기본 ssid를 probe, `false`면 기본 ssid는 probe 없이 스캔. `roaming.extra_ssids`(§11.4)는 이 값과 **무관하게 항상 probe**된다 |
+| `ssid_filter` | bool | `true` | `iw scan`의 **기본 ssid** directed probe 포함 여부. `true`면 conf 기본 ssid를 probe, `false`면 기본 ssid는 probe 없이 스캔. `roaming.extra_ssids`(§11.4)는 이 값과 **무관하게 항상 probe**된다. **`passive=true`(기본)면 directed probe 자체가 없어 이 키는 무효** |
 | `freq_filter` | bool | `true` | `iw scan`에 `freq <wpa_supplicant conf의 scan_freq>` 필터 포함 여부. `false`면 freq 제한 없이 전체 대역 스캔(스캔 시간·airtime↑) |
+| `passive` | bool | `true` | `true`=패시브 스캔(`iw scan passive`, probe request 미송신·beacon 수신만). `false`=종전 액티브 스캔 |
 
-> `ssid_filter=true`(기본)이면 bgscan이 conf 기본 ssid를 directed probe한다. `iw scan`의 `ssid` 인자는 directed probe 대상이라, non-hidden SSID는 probe 없이 beacon으로도 잡히지만 **hidden SSID는 directed probe가 있어야 발견**된다. 따라서 `roaming.extra_ssids`(§11.4)는 명시적 로밍 후보로서 `ssid_filter` 값과 **무관하게 항상 directed probe**에 포함된다 — `ssid_filter=false`로 두어도 extra SSID(hidden 포함)는 누락되지 않는다. ssid_filter on/off의 스캔 시간·통신 영향 차이는 작고, 실제 비용은 `freq_filter`(채널 수)가 좌우한다.
+> **패시브 스캔 (`passive`, 기본 `true`)**: bgscan은 probe request를 쏘지 않고 beacon만 수신한다. probe를 안 보내므로 **directed `ssid` 토큰은 명령에서 전부 생략**되며(`ssid_filter`/`extra_ssids`의 directed probe는 패시브에서 무의미), airtime 오염이 줄고 beacon 기반 RSSI라 현재 링크의 `signal_avg`와 측정 스케일이 가까워진다(로밍 판정 정합성↑, §11.4). **한계**: beacon을 보내지 않는 **hidden SSID는 패시브로 발견되지 않는다** — hidden extra SSID가 로밍 후보라면 `passive=false`로 액티브 bgscan을 쓰거나, 로밍 트리거 시의 액티브 폴백(§11.4)에 의존해야 한다.
+
+> **아래 `ssid_filter` 설명은 `passive=false`(액티브 bgscan)일 때만 적용된다.** `passive=true`(기본)면 probe request를 보내지 않으므로 `ssid` 인자 자체가 명령에서 빠진다.
+>
+> `ssid_filter=true`이면 bgscan이 conf 기본 ssid를 directed probe한다. `iw scan`의 `ssid` 인자는 directed probe 대상이라, non-hidden SSID는 probe 없이 beacon으로도 잡히지만 **hidden SSID는 directed probe가 있어야 발견**된다. 따라서 `roaming.extra_ssids`(§11.4)는 명시적 로밍 후보로서 `ssid_filter` 값과 **무관하게 항상 directed probe**에 포함된다 — `ssid_filter=false`로 두어도 extra SSID(hidden 포함)는 누락되지 않는다. ssid_filter on/off의 스캔 시간·통신 영향 차이는 작고, 실제 비용은 `freq_filter`(채널 수)가 좌우한다.
 
 > bgscan은 `wpa_state==COMPLETED`(연결됨)일 때만 `iw <iface> scan`을 수행한다 — 미연결 시엔 wpa_supplicant의 재연결 스캔/association과 라디오 경합을 피하려 skip.
 
@@ -622,9 +627,34 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 > - **전제**: `extra_ssids`는 현재 network와 **같은 `psk`/`key_mgmt`를 공유**해야 한다. 전환은 conf의 `ssid=`만 교체(`wifi <iface> connect`)하므로 자격증명이 다르면 인증에 실패한다.
 > - **목록 작성**: `extra_ssids`에는 로밍 대상 SSID를 **모두** 나열한다. `wifi connect` 전환 시 conf의 `ssid=`가 바뀌므로, 현재 라이브 SSID는 자동으로 후보에 유지되지만 그 외 대상(원래 기본 SSID 포함)으로 복귀하려면 그 SSID도 `extra_ssids`에 있어야 한다.
 > - **전환 방식**: 후보 SSID가 현재 연결 SSID와 같으면 `wpa_cli roam <bssid>`(무중단), 다르면 `wifi <iface> connect <ssid>`(conf `ssid=` 교체 → `reconfigure` → `reassociate`, **짧은 재연결 끊김** 발생. freq는 넘기지 않아 `scan_freq` 보존).
-> - **스캔 발견**: bgscan은 `ssid_filter` 값과 무관하게 `extra_ssids`를 항상 directed probe하므로, hidden 여부와 무관하게 로밍 후보 SSID가 스캔된다(§11.3, bgscan이 커널 scan cache를 채움). `wifi_roam.py` 능동 로밍은 자체 mlanutl 스캔으로 non-hidden extra SSID를 발견한다(자체 스캔의 hidden 발견은 bgscan probe 경로가 보완).
+> - **스캔 발견**: `bgscan.passive=false`(액티브)면 bgscan이 `ssid_filter` 값과 무관하게 `extra_ssids`를 항상 directed probe하므로 hidden 여부와 무관하게 로밍 후보 SSID가 스캔된다(§11.3, bgscan이 커널 scan cache를 채움). **`bgscan.passive=true`(기본)면 probe가 없어 hidden extra SSID는 bgscan으로 발견되지 않고**, 로밍 트리거 시의 **액티브 폴백**(directed probe, 위 단계형 스캔 3단계)이 이를 보완한다. `wifi_roam.py`의 판정 스캔은 `iw scan` + `wpa_cli scan_results` 경로를 쓴다(과거 mlanutl `setuserscan`은 wpa_supplicant BSS 테이블을 채우지 않아 `wpa_cli roam`이 실패해 대체됨).
 > - **채널 전제**: `extra_ssids` AP는 현재 `scan_freq` 대역 안에 있어야 한다. `wifi_roam.py`는 conf의 `scan_freq`로 스캔·필터하므로 다른 채널의 SSID는 후보가 되지 않는다. (SSID 전환 시 `wifi connect`에 freq를 넘기지 않아 `scan_freq`는 보존된다.)
 > - **AP 선택 (v1 한계)**: 다른 SSID 전환은 `wifi connect <ssid>`로 **BSSID를 지정하지 않는다**. 같은 extra SSID에 AP가 여럿이면 로밍 알고리즘이 고른 best AP가 아닌 다른 AP에 붙을 수 있다. (같은 SSID 로밍은 `wpa_cli roam <bssid>`로 BSSID를 지정하므로 해당 없음.)
+
+> **단계형 로밍 스캔 (staged scan)**: 현재 링크 RSSI가 임계값(`DEFAULT_TH_2G`/`DEFAULT_TH_5G`) 이하로 떨어지면 `wifi_roam.py`가 다음 순서로 후보를 찾는다. 앞 단계에서 후보를 찾으면 뒤 단계는 실행하지 않는다.
+> 1. **홈채널 패시브 스캔** — 현재 접속 채널만 `iw scan passive`로 훑어 같은 채널 후보를 저부하로 수집한다. `wpa_cli scan_results`는 BSS 테이블 **전체**를 반환하므로 **홈 주파수 항목만 남기고 필터**한다(다른 채널 항목은 이번 스캔에서 측정된 값이 아니라 과거 스캔의 stale 값이므로 후보로 쓰면 안 된다).
+> 2. **교차채널 캐시** — bgscan이 채운 `ap.log` 마지막 블록을 재사용한다. 블록 나이가 **45초(`CACHE_FRESH_SEC`)** 이내일 때만 유효하며, 초과 시 stale로 보고 다음 단계로 넘어간다. 이 캐시 스냅샷은 **1단계 스캔보다 먼저** 읽는다 — 로밍 스캔이 유발하는 `nl80211` scan-completed 이벤트에 `wifi_logger_scan`이 반응해 `ap.log`에 새 블록을 쓰기 때문에, 스캔 뒤에 읽으면 자기 스캔이 만든 블록을 "신선한 배경 캐시"로 오인하게 된다.
+> 3. **액티브 폴백** — 위 둘에서 후보를 못 찾을 때만 `iw scan freq <scan_freq> ssid <설정 SSID>`로 directed 스캔한다(와일드카드 broadcast probe 없음). `scan_freq`가 비어 있을 때만 예외적으로 전대역 1회 스캔한다.
+>
+> **RSSI baseline 통일**: 로밍 판정의 `DIFF_TH` 비교에서 현재 AP RSSI는 위 스캔 결과에서 **자기 BSSID 항목을 찾아** 사용한다. 종전에는 현재 AP는 `iw station dump`의 `signal_avg`(평활값), 후보는 `wpa_cli scan_results`(순간값)로 **서로 다른 소스를 직접 뺐기 때문에** diff에 편향이 있었다. 스캔에서 자기 BSSID를 못 찾은 경우에만 `signal_avg`로 폴백한다.
+>
+> ⚠️ **동작 변경 — `ap.log` 기록 범위**: `wifi_roam.py`는 로밍 **판정** 스캔 결과를 **더 이상 직접 `ap.log`에 기록하지 않고**(종전 `save_with_timestamp` 호출 제거) 메모리에서 처리한다. 이는 (a) 판정 스캔 블록이 캐시의 마지막 블록을 가려 2단계를 무력화하는 문제와, (b) 같은 시각에 서로 다른 포맷·다른 RSSI의 블록이 섞이던 문제를 없앤다. 로밍 후보 판정 내역은 **syslog**(`logger.message`)에 남으므로, `ap.log`를 파싱하던 외부 모니터링/디버깅 스크립트가 있다면 syslog로 옮겨야 한다.
+>
+> 단, **`ap.log`에 판정 스캔의 흔적이 전혀 안 남는다는 뜻은 아니다.** `wifi_logger_scan`은 스캔 **주체를 구분하지 않고** scan-completed 이벤트마다 드라이버 스캔 테이블(`mlanutl getscantable`, 전 채널)을 `ap.log`에 덤프하므로, 로밍 판정 스캔도 간접적으로 블록을 남긴다. 그 블록은 타임스탬프(=기록 시각)만 새롭고 교차채널 항목은 과거 스캔의 stale 값이므로, 2단계는 **마지막 자기 스캔 시각 이후에 기록된 블록을 배경 캐시로 신뢰하지 않는다**(신뢰할 수 없으면 3단계 액티브 폴백으로 degrade). `ap.log` 블록의 나이는 "그 시각에 기록됐다"는 뜻이지 "그 시각에 측정됐다"는 뜻이 아니다.
+
+#### STAGED_SCAN - 단계형 스캔
+
+`.<iface>.roaming.STAGED_SCAN` (SIGHUP 런타임 반영 — 재배포/재시작 없이 적용)
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| `enable` | bool | `true` | 단계형 스캔 ON/OFF. **`false`면 종전 단일 액티브 스캔 경로로 회귀**(무회귀 폴백) |
+| `cache_fresh_sec` | int | `45` | 교차채널 캐시(`ap.log` 배경 블록) 신선도 바운드(초). 초과 시 액티브 폴백 |
+| `self_induced_tail_sec` | int | `10` | 자기 스캔 종료 후 이 시간 안에 기록된 `ap.log` 블록은 **그 스캔이 유발한 것**으로 보고 배경 캐시로 쓰지 않는다(초) |
+
+> 필드에서 단계형 스캔이 문제를 일으키면 `enable: false` + SIGHUP(`wifi roam th`)으로 **재배포 없이 즉시 종전 동작으로 되돌릴 수 있다.**
+>
+> `self_induced_tail_sec`를 너무 **작게** 잡으면 자기 스캔이 유발한 블록을 배경 캐시로 오인해 stale 데이터로 로밍할 수 있다(위험한 방향). 너무 **크게** 잡으면 진짜 배경 블록까지 버려 액티브 폴백이 늘어난다(안전한 방향). 기본값 10초는 `wifi_logger_scan`의 기록 지연(최대 ~5초) 대비 여유를 둔 값이다.
 
 #### PREDICTIVE_ROAM - 예측 로밍
 

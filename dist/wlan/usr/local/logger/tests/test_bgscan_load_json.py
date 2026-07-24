@@ -84,7 +84,7 @@ def test_filters_and_interval_parsed(tmp_path, monkeypatch):
     _write_conf(tmp_path, monkeypatch, {
         "mlan0": {"bgscan": {"interval": 45, "ssid_filter": False, "freq_filter": False}}
     })
-    assert load_bgscan_json("mlan0") == (45, False, False, [], True)
+    assert load_bgscan_json("mlan0") == (45, False, False, [], True, True)
 
 
 def test_invalid_types_fall_back_to_defaults(tmp_path, monkeypatch):
@@ -92,13 +92,13 @@ def test_invalid_types_fall_back_to_defaults(tmp_path, monkeypatch):
     _write_conf(tmp_path, monkeypatch, {
         "mlan0": {"bgscan": {"interval": 0, "ssid_filter": "yes", "freq_filter": 1}}
     })
-    interval, ssid_filter, freq_filter, _, _ = load_bgscan_json("mlan0")
+    interval, ssid_filter, freq_filter, _, _, _ = load_bgscan_json("mlan0")
     assert interval is None and ssid_filter is True and freq_filter is True
 
 
 def test_missing_file_returns_defaults(tmp_path, monkeypatch):
     monkeypatch.setattr(wifi_bgscan, "WIFI_INIT_CONF_JSON", str(tmp_path / "nope.json"))
-    assert load_bgscan_json("mlan0") == (None, True, True, [], True)
+    assert load_bgscan_json("mlan0") == (None, True, True, [], True, True)
 
 
 def test_malformed_json_returns_defaults(tmp_path, monkeypatch):
@@ -106,7 +106,7 @@ def test_malformed_json_returns_defaults(tmp_path, monkeypatch):
     path.write_text("{ not valid json ]")
     monkeypatch.setattr(wifi_bgscan, "WIFI_INIT_CONF_JSON", str(path))
     # hits the generic except path → logger.message (stubbed) → defaults
-    assert load_bgscan_json("mlan0") == (None, True, True, [], True)
+    assert load_bgscan_json("mlan0") == (None, True, True, [], True, True)
 
 
 # --- emit_roam_hint gate (5-tuple element 4) ---
@@ -177,3 +177,20 @@ def test_emit_roam_hint_touch_creates_and_advances(tmp_path, monkeypatch):
     os.utime(str(p), (first - 5, first - 5))
     wifi_bgscan.emit_roam_hint_touch("mlan0")
     assert os.path.getmtime(str(p)) > first - 5
+
+
+def test_passive_explicit_false(tmp_path, monkeypatch):
+    """`bgscan.passive: false` 명시 시 파싱 계층이 False를 반환해야 한다
+    (기본값 True 경로만 검증돼 있어 명시 경로가 비어 있었다)."""
+    _write_conf(tmp_path, monkeypatch, {
+        "mlan0": {"bgscan": {"interval": 60, "passive": False}}
+    })
+    assert load_bgscan_json("mlan0")[5] is False
+
+
+def test_passive_non_bool_falls_back_true(tmp_path, monkeypatch):
+    """non-bool(예: 문자열)은 무시하고 기본 True 유지."""
+    _write_conf(tmp_path, monkeypatch, {
+        "mlan0": {"bgscan": {"interval": 60, "passive": "no"}}
+    })
+    assert load_bgscan_json("mlan0")[5] is True

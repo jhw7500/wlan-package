@@ -60,3 +60,29 @@ def test_freq_filter_false_omits_freq_tokens():
 def test_cmd_prefix():
     cmd = construct_iw_scan_cmd("HomeNet", [])
     assert cmd[:3] == ["iw", "mlan0", "scan"]
+
+
+# --- passive scan mode ---
+
+def test_passive_adds_keyword_and_drops_ssid_probes():
+    # 패시브: probe를 안 쏘므로 ssid 토큰이 전부 빠지고 'passive' 키워드가 붙는다.
+    cmd = construct_iw_scan_cmd(
+        "HomeNet", ["2412", "5180"], ssid_filter=True,
+        freq_filter=True, extra_ssids=["OfficeNet"], passive=True,
+    )
+    assert cmd[:4] == ["iw", "mlan0", "scan", "passive"]
+    assert _ssid_tokens(cmd) == []          # directed probe 없음
+    assert "freq" in cmd and "2412" in cmd and "5180" in cmd  # freq 스코프는 유지
+
+
+def test_passive_freq_filter_false_omits_freq():
+    cmd = construct_iw_scan_cmd("HomeNet", ["2412"], freq_filter=False, passive=True)
+    assert cmd[:4] == ["iw", "mlan0", "scan", "passive"]
+    assert "freq" not in cmd
+
+
+def test_active_default_has_no_passive_keyword():
+    # 기본(passive=False)은 회귀 없이 종전 액티브 스캔.
+    cmd = construct_iw_scan_cmd("HomeNet", ["2412"], ssid_filter=True)
+    assert "passive" not in cmd
+    assert _ssid_tokens(cmd) == ["HomeNet"]
