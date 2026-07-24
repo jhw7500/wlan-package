@@ -33,6 +33,8 @@ run_save() {  # $1=NTPSynchronized 스텁값
 }
 
 STATE_F="$TMP/state"
+# "미래" 저장값은 now+10년으로 동적 계산(연도 하드코딩 시한폭탄 방지).
+FUTURE=$(date -d "@$(( $(date +%s) + 315360000 ))" +"%Y-%m-%d %H:%M:%S")
 
 # --- 1) 저장값 없음(부트스트랩) → 기록 ---
 rm -f "$STATE_F"
@@ -46,16 +48,16 @@ NEW=$(cat "$STATE_F")
 if [ "$NEW" != "2000-01-01 00:00:00" ]; then ok "past saved -> overwritten forward"; else ng "past saved -> overwritten forward (got $NEW)"; fi
 
 # --- 3) 저장값이 미래 + NTP 없음 → 역행 방지로 SKIP (핵심: 로그중복 방지) ---
-echo "2035-01-01 00:00:00" > "$STATE_F"
+echo "$FUTURE" > "$STATE_F"
 run_save no
 KEEP=$(cat "$STATE_F")
-if [ "$KEEP" = "2035-01-01 00:00:00" ]; then ok "future saved, no NTP -> skip (monotonic guard)"; else ng "future saved, no NTP -> skip (got $KEEP)"; fi
+if [ "$KEEP" = "$FUTURE" ]; then ok "future saved, no NTP -> skip (monotonic guard)"; else ng "future saved, no NTP -> skip (got $KEEP)"; fi
 
 # --- 4) 저장값이 미래 + NTP 동기화 → 권위라 뒤로 스텝(교정) 허용 ---
-echo "2035-01-01 00:00:00" > "$STATE_F"
+echo "$FUTURE" > "$STATE_F"
 run_save yes
 FIXED=$(cat "$STATE_F")
-if [ "$FIXED" != "2035-01-01 00:00:00" ]; then ok "future saved, NTP synced -> overwrite (heal)"; else ng "future saved, NTP synced -> overwrite (got $FIXED)"; fi
+if [ "$FIXED" != "$FUTURE" ]; then ok "future saved, NTP synced -> overwrite (heal)"; else ng "future saved, NTP synced -> overwrite (got $FIXED)"; fi
 
 # --- 5) 손상된 저장값 + NTP 없음 → 파싱 실패는 '미래 아님'으로 취급, 갱신되어 자가복구 ---
 echo "garbage-not-a-date" > "$STATE_F"

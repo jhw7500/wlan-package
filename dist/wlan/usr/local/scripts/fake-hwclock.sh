@@ -25,13 +25,14 @@ ntp_synced() {
     [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = "yes" ]
 }
 
-saved_epoch() {
+saved_epoch() (
     # STATE(없으면 LEGACY)의 저장 시각을 epoch로 출력. 없거나 파싱실패면 빈 출력.
-    _f="$STATE"
-    [ -f "$_f" ] || _f="$LEGACY_STATE"
-    [ -f "$_f" ] || return 0
-    date -d "$(cat "$_f" 2>/dev/null)" +%s 2>/dev/null
-}
+    # 함수 본문을 서브셸 ( )로 둬 내부 변수가 호출 스코프로 새지 않게 한다(POSIX 청결).
+    f="$STATE"
+    [ -f "$f" ] || f="$LEGACY_STATE"
+    [ -f "$f" ] || exit 0
+    date -d "$(cat "$f" 2>/dev/null)" +%s 2>/dev/null
+)
 
 write_state() {
     mkdir -p "${STATE%/*}"
@@ -59,9 +60,15 @@ case "$1" in
         exit 0
     }
     NOW=$(date +%s)
-    # 저장 시각이 현재 시계보다 미래일 때만 적용 (시간 역행 방지)
+    # 저장 시각이 현재 시계보다 미래일 때만 적용 (시간 역행 방지).
+    # date -s 의 성공 stdout(=설정된 날짜)은 저널 소음이라 버리되, 성공/실패는 명시적
+    # logger 로 남긴다(리다이렉트로 둘 다 삼키면 restore 실패가 저널에서 사라진다).
     if [ "$SAVED" -gt "$NOW" ]; then
-        date -s "$DATE_STR" >/dev/null 2>&1
+        if date -s "$DATE_STR" >/dev/null 2>&1; then
+            logger -p local0.info "[$tag] clock restored to '$DATE_STR'"
+        else
+            logger -p local0.err "[$tag] failed to set clock to '$DATE_STR'"
+        fi
     fi
     ;;
   set)
