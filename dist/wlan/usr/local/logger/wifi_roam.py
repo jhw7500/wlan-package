@@ -258,6 +258,22 @@ def _set_config_value(config: Dict[str, Any], key: str, raw_value: Any, caster) 
             )
 
 
+def _positive_int(value):
+    """양의 정수만 수용하는 caster. 0/음수는 ValueError로 올려 _set_config_value가
+    기본값을 유지하고 경고를 남기게 한다 — JSON 스키마의 `minimum: 1`을 런타임에서도 강제.
+
+    스키마는 WebUI 힌트일 뿐 데몬이 검증하지 않으므로, 직접 편집/마이그레이션으로 0이
+    들어오면 조용히 기능이 깨진다:
+      - CACHE_FRESH_SEC=0        → scan_block_fresh가 항상 False → Stage 2 영구 비활성
+      - SELF_INDUCED_TAIL_SEC=0  → 자기 스캔이 유발한 ap.log 블록을 못 걸러 stale
+                                   교차채널 데이터로 로밍(위험한 방향)
+    """
+    n = int(value)
+    if n < 1:
+        raise ValueError(f"must be >= 1, got {n}")
+    return n
+
+
 def _apply_section_values(
     config: Dict[str, Any], section: Dict[str, Any], mapping
 ) -> None:
@@ -467,8 +483,8 @@ def load_roaming_config(iface, data=None):
                     staged,
                     [
                         ("enable", "ENABLE_STAGED_SCAN", parse_bool),
-                        ("cache_fresh_sec", "CACHE_FRESH_SEC", int),
-                        ("self_induced_tail_sec", "SELF_INDUCED_TAIL_SEC", int),
+                        ("cache_fresh_sec", "CACHE_FRESH_SEC", _positive_int),
+                        ("self_induced_tail_sec", "SELF_INDUCED_TAIL_SEC", _positive_int),
                     ],
                 )
 

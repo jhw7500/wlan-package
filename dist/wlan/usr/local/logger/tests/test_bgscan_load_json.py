@@ -177,3 +177,20 @@ def test_emit_roam_hint_touch_creates_and_advances(tmp_path, monkeypatch):
     os.utime(str(p), (first - 5, first - 5))
     wifi_bgscan.emit_roam_hint_touch("mlan0")
     assert os.path.getmtime(str(p)) > first - 5
+
+
+def test_passive_explicit_false(tmp_path, monkeypatch):
+    """`bgscan.passive: false` 명시 시 파싱 계층이 False를 반환해야 한다
+    (기본값 True 경로만 검증돼 있어 명시 경로가 비어 있었다)."""
+    _write_conf(tmp_path, monkeypatch, {
+        "mlan0": {"bgscan": {"interval": 60, "passive": False}}
+    })
+    assert load_bgscan_json("mlan0")[5] is False
+
+
+def test_passive_non_bool_falls_back_true(tmp_path, monkeypatch):
+    """non-bool(예: 문자열)은 무시하고 기본 True 유지."""
+    _write_conf(tmp_path, monkeypatch, {
+        "mlan0": {"bgscan": {"interval": 60, "passive": "no"}}
+    })
+    assert load_bgscan_json("mlan0")[5] is True

@@ -471,3 +471,24 @@ def test_staged_scan_config_invalid_values_keep_defaults():
     assert wifi_roam.CACHE_FRESH_SEC == wifi_roam.DEFAULT_CACHE_FRESH_SEC
     assert wifi_roam.SELF_INDUCED_TAIL_SEC == wifi_roam.DEFAULT_SELF_INDUCED_TAIL_SEC
     assert isinstance(wifi_roam.ENABLE_STAGED_SCAN, bool)
+
+
+def test_staged_scan_config_rejects_zero_and_negative():
+    """[회귀] 0/음수는 기본값 유지. 스키마의 minimum:1 을 데몬도 강제해야 한다 —
+    self_induced_tail_sec=0 이면 자기 스캔이 유발한 블록을 못 걸러 stale 교차채널
+    데이터로 로밍하고(위험), cache_fresh_sec=0 이면 Stage 2가 조용히 영구 비활성된다."""
+    for bad in (0, -1):
+        data = {"mlan0": {"roaming": {"STAGED_SCAN": {
+            "cache_fresh_sec": bad, "self_induced_tail_sec": bad,
+        }}}}
+        wifi_roam.load_roaming_config("mlan0", data)
+        assert wifi_roam.CACHE_FRESH_SEC == wifi_roam.DEFAULT_CACHE_FRESH_SEC, bad
+        assert wifi_roam.SELF_INDUCED_TAIL_SEC == wifi_roam.DEFAULT_SELF_INDUCED_TAIL_SEC, bad
+
+
+def test_positive_int_caster():
+    assert wifi_roam._positive_int(1) == 1
+    assert wifi_roam._positive_int("45") == 45
+    for bad in (0, -1, "0", "-3"):
+        with pytest.raises(ValueError):
+            wifi_roam._positive_int(bad)
