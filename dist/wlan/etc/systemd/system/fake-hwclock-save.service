@@ -2,7 +2,8 @@
 Description=Save current clock (fake-hwclock)
 DefaultDependencies=no
 Before=shutdown.target
-RequiresMountsFor=/var/log/cantops
+# 실제 마운트 경로 명시(심볼릭 링크 미추적 우회) — fake-hwclock.service 주석 참조.
+RequiresMountsFor=/var/volatile/log/cantops /var/log/cantops
 
 [Service]
 Type=oneshot
