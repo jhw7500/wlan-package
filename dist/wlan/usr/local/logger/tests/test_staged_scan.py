@@ -538,6 +538,23 @@ def test_active_fallback_when_multichannel(monkeypatch):
     assert best is not None and best["bssid"] == "dd:dd:dd:dd:dd:dd"  # 다른채널 후보로 로밍
 
 
+def test_skip_when_home_returns_only_current_ap(monkeypatch):
+    """단일채널 + 홈 패시브가 현재 AP 자신만 반환(같은 채널에 다른 우리 AP 없음) → 로밍할
+    대상이 없고, 같은 채널 액티브도 새 AP를 못 찾으므로 스킵이 맞다(액티브 미실행)."""
+    monkeypatch.setattr(wifi_roam, "WPA_FREQ", ["5240"])
+    calls = []
+    home = [apln(0, 48, -50, CUR, "Net")]  # 현재 AP만
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(home, None, calls))
+    monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
+
+    best, _, _, _ = wifi_roam.staged_scan_best_candidate(
+        _station(rssi=-70, freq=5240), None, ["Net"], "Net", STABLE, None
+    )
+    assert best is None
+    assert any(c["passive"] is True for c in calls)                  # 홈 패시브는 돎
+    assert not any(c["passive"] is False for c in calls), f"active fired: {calls}"  # 스킵
+
+
 def test_no_skip_when_home_sees_only_other_ssid(monkeypatch):
     """[회귀] 홈 패시브가 결과는 냈지만 우리 SSID 후보가 하나도 없으면(타 SSID만) 스킵하지
     않는다 — RF 열악으로 우리 AP beacon 을 놓쳤을 때 액티브 directed probe 로 재시도해야."""

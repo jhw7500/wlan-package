@@ -2478,9 +2478,12 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
             if self_induced
             else f"stale (max_age={CACHE_FRESH_SEC}s)"
         )
+        # "active fallback" 을 예고하지 않는다 — 아래 스킵 조건이 걸리면 Stage 3 액티브가
+        # 실행되지 않으므로(로그와 실제 동작 불일치 방지). 다음에 무엇이 일어나는지는
+        # 스킵 로그(skip redundant active) 또는 Stage 3 실행이 각자 남긴다.
         logger.message(
             "info",
-            f"[{IFACE}] cross-channel cache unusable: {why} (ts={cache_ts}) — active fallback",
+            f"[{IFACE}] cross-channel cache unusable: {why} (ts={cache_ts})",
             _EXTRA_(),
         )
 
