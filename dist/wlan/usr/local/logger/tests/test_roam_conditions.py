@@ -71,6 +71,17 @@ def test_full_diff_reasons_unchanged():
     assert ok_s is True and reason_s.startswith("RSSI diff")
 
 
+def test_relaxation_clamped_at_one(monkeypatch):
+    """[가드] DIFF_TH<3 극단 설정에서도 완화 임계는 최소 1dB — effective≤0 이면 음수/0
+    diff 후보가 게이트를 통과하고, LOAD 활성 시 load 점수가 score 를 양수로 반전시켜
+    나쁜 후보가 채택될 수 있다(리뷰 확증 엣지). max(1, DIFF_TH-3) 클램프를 고정한다."""
+    monkeypatch.setattr(wifi_roam, "DIFF_TH", 2)
+    ok0, _ = wifi_roam.check_roam_conditions(_st(-70), _ap(-70), FALLING)   # diff=0
+    assert ok0 is False, "diff=0 후보가 완화 게이트를 통과함(클램프 부재)"
+    ok1, _ = wifi_roam.check_roam_conditions(_st(-70), _ap(-69), FALLING)   # diff=1
+    assert ok1 is True                                                       # 클램프 하한=1
+
+
 def test_load_gate_applies_in_relaxed_band(monkeypatch):
     """완화 구간에서도 load 게이트는 그대로 적용(완화가 load 조건을 우회하면 안 됨)."""
     monkeypatch.setattr(wifi_roam, "ENABLE_LOAD_BASED_ROAM", True)

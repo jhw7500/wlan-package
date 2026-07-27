@@ -2257,14 +2257,16 @@ def check_roam_conditions(station, roam_ap, trend, baseline_rssi=None):
     # 기본 조건: RSSI 차이. 하락 추세(PREDICTIVE 활성)면 임계를 3dB 완화해 조기 로밍 —
     # 완화는 이 게이트 **이전에** 임계 자체에 적용해야 실효한다(종전엔 게이트 뒤에 있어
     # 도달 시점에 diff ≥ DIFF_TH 가 이미 보장된 dead code — reason 문자열만 바꿨다).
-    # 완화 구간 후보도 아래 load 게이트는 동일하게 통과해야 하며, diff ≤ 0 후보는
-    # evaluate_candidates 의 score(=diff×10) > 0 게이트가 최종 차단한다.
+    # 완화 구간 후보도 아래 load 게이트는 동일하게 통과해야 한다. diff < effective_diff_th
+    # 후보는 이 게이트에서 즉시 차단되며, 완화 임계는 최소 1dB 로 클램프한다 — DIFF_TH<3
+    # 극단 설정에서 임계가 0 이하로 내려가면 음수/0 diff 후보가 통과하고, LOAD 활성 시
+    # load 점수가 score(=diff×10 + load개선×2)를 양수로 반전시켜 채택될 수 있기 때문.
     rssi_diff = roam_ap["rssi"] - baseline_rssi
 
     effective_diff_th = DIFF_TH
     falling_relaxed = False
     if ENABLE_PREDICTIVE_ROAM and trend == RSSITrendTracker.TREND_FALLING:
-        effective_diff_th = DIFF_TH - 3
+        effective_diff_th = max(1, DIFF_TH - 3)
         falling_relaxed = True
 
     if rssi_diff < effective_diff_th:
