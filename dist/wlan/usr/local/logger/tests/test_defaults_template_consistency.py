@@ -113,3 +113,7 @@ def test_bgscan_bool_defaults_match_template(monkeypatch):
     assert freq_filter == bg["freq_filter"], "freq_filter fail-same 위반"
     assert passive == bg["passive"], "passive fail-same 위반"
     assert emit_roam_hint == bg["emit_roam_hint"], "emit_roam_hint fail-same 위반"
+    # interval 폴백: JSON > wpa `#!INTERVAL` > 코드 폴백. 이중 실패(JSON 키 부재 + 마커
+    # 부재) 시 쓰이는 코드 폴백이 템플릿 주기와 일치해야 스캔 cadence 가 fail-same 이다
+    # (불일치 시 30s 폭주 — cache_fresh_sec 산정 전제도 어긋남).
+    assert wifi_bgscan.DEFAULT_INTERVAL == bg["interval"], "interval 코드 폴백 fail-same 위반"

@@ -18,7 +18,9 @@ LAST_SCAN_TIME_FILE = "/tmp/last_roam_scan_time"
 WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
 ROAM_HINT_DIR = "/tmp"  # roam backoff hint 파일 디렉터리 (wifi_roam.roam_hint_touched 가 소비)
 WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
-DEFAULT_INTERVAL = 30
+# 이중 폴백(JSON 키 부재 + wpa conf `#!INTERVAL` 마커 부재) 시의 스캔 주기 — 템플릿
+# bgscan.interval(60)과 fail-same 정렬(작으면 폴백 상태에서 30s 폭주 + cache_fresh 전제 붕괴).
+DEFAULT_INTERVAL = 60
 MAX_SCAN_SSIDS = 10  # nl80211 max # scan SSIDs (NXP mlan 실측). 초과 시 iw가 -EINVAL로 스캔 전체 실패.
 STALE_THRESHOLD_SEC = 600  #1hour
 
@@ -97,7 +99,7 @@ def is_wpa_connected(interface="mlan0"):
 def parse_wpa_supplicant_conf(path):
     ssid = None
     freqs = []
-    interval = 30  #         ^r
+    interval = DEFAULT_INTERVAL  # `#!INTERVAL=` 마커 부재 시 폴백(템플릿과 fail-same)
 
     with open(path, "r") as f:
         for line in f:
