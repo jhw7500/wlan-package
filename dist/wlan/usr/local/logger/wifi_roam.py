@@ -2479,7 +2479,7 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
     clock_stepped = clock_step_detected()
     cache_entries, cache_ts = get_latest_scan(station, channel_info_data, allowed)
 
-    # ── Stage 1: 홈채널 패시브 스캔 ──
+    # ── Stage 1: 홈채널 스캔 (기본 패시브, home_passive=false 면 directed 액티브) ──
     # 패시브 스캔이 **현재 AP 외의 우리 허용 SSID 후보를 실제로 봤나**(=홈채널을 로밍
     # 관점에서 커버했나). 현재 결합 AP 의 BSS 테이블 엔트리는 사용 중(in-use)이라
     # age/scan-miss 만료에서 면제된다 — 이번 dwell 에서 beacon 을 하나도 못 받아도
@@ -2579,7 +2579,7 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
     # ── Stage 3 진입 전: 홈 스캔이 scan_freq 전체를 커버했으면 액티브 폴백 스킵 ──
     # scan_freq ⊆ {홈채널}이면 Stage 3 액티브는 같은 채널을 probe로 다시 훑는 것뿐이라 후보
     # 발견에 새로 기여하는 게 없다(단일채널 배포 등). 매 로밍컨디션 주기의 불필요한 액티브
-    # 스캔(probe 송신)을 없앤다 = airtime·링크 방해 감소. 조건: 최적화 활성 + Stage 1 패시브가
+    # 스캔(probe 송신)을 없앤다 = airtime·링크 방해 감소. 조건: 최적화 활성 + Stage 1 스캔이
     # **현재 AP 외 후보를 실제로 봄**(스캔 실패·현재 AP 상주 엔트리만·타 SSID 만이면 액티브가
     # 재시도/재발견 역할이라 유지) + scan_freq 가 홈채널의 부분집합.
     # hidden SSID 는 액티브 probe로만 잡히므로 홈채널에 hidden 로밍 타깃이 있으면
