@@ -41,7 +41,7 @@ DEFAULT_TH_5G = -75
 # 일치시킨다(fail-same, tests/test_defaults_template_consistency.py 가 고정). per-iface 로
 # 값이 갈리는 키(CHECK_INTERVAL 2/3, ROAM_SUCCESS_SLEEP 3/2)는 주 인터페이스 mlan0 기준.
 DIFF_TH = 8
-CHECK_INTERVAL = 2
+CHECK_INTERVAL = 2  # 로밍 판정 tick 주기(초, mlan0 기준 — mlan1 템플릿=3)
 
 # 단계형 로밍 스캔: RSSI가 임계값 이하로 떨어지면
 #   1) 홈채널 패시브 스캔(같은 채널 후보 + 현재 AP RSSI로 baseline 통일)

@@ -682,7 +682,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 #### PING_PONG_PREVENTION - 핑퐁 방지
 
-| 키 | 타입 | 기본값 (mlan0/mlan1) | 설명 |
+| 키 | 타입 | 기본값 | 설명 |
 |----|------|---------------------|------|
 | `enable` | bool | `true` | 핑퐁 방지 활성화 |
 | `window` | int | `20` | 감시 윈도우 (초) |
@@ -848,8 +848,8 @@ SNMP는 **기본 off(opt-in)**이다. `snmp.enabled=true`일 때만 `wifi_apply_
 |-----------|-------|-------|------|
 | `enabled` | `true` | `false` | **mlan1은 기본적으로 초기화되지 않음** (radio setup·bridge enable skip) |
 | `STANDARD` | `ax` | `ac` | mlan1은 11ax 미지원 |
-| `roaming.CHECK_INTERVAL` | `2` | `3` | mlan0은 주 채널로 더 빠른 로밍 감지 |
-| `roaming.ROAM_SUCCESS_SLEEP` | `3` | `2` | 로밍 성공 후 정착 대기 |
+| `roaming.CHECK_INTERVAL` | `2` | `3` | mlan0은 주 채널이라 더 짧은 2초 주기로 빠르게 감지, mlan1은 3초 |
+| `roaming.ROAM_SUCCESS_SLEEP` | `3` | `2` | 로밍 성공 후 정착 대기 — mlan0=3초, mlan1=2초 |
 | `roaming.enabled` | `true` | `false` | mlan0 로밍 기본 활성화 |
 | `bgscan.enabled` | `true` | `false` | mlan1 비활성 인터페이스 |
 | `checker.enabled` | `true` | `false` | mlan1 비활성 인터페이스 |
