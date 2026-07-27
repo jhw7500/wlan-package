@@ -63,6 +63,29 @@ def _globals(tmp_path, monkeypatch):
     yield scan_time_file
 
 
+def test_record_helper_writes_parseable_epoch(_globals):
+    """[헬퍼 계약] 기록 값은 bgscan 이 float() 로 파싱하는 epoch — 공유 헬퍼 회귀망
+    (staged/legacy 양 경로가 이 헬퍼를 쓴다; legacy 호출부는 메인루프라 유닛 관례상
+    헬퍼 계약으로 커버)."""
+    wifi_roam._record_roam_scan_time()
+    assert _globals.exists()
+    assert float(_globals.read_text()) > 0
+
+
+def test_record_helper_failure_warns_once(monkeypatch):
+    """쓰기 실패(/tmp 불가 등 중대 상태)는 침묵하지 않고 프로세스당 1회 warn —
+    단, 신호 파일이라 동작은 계속(예외 전파 금지)."""
+    monkeypatch.setattr(wifi_roam, "LAST_SCAN_TIME_FILE", "/nonexistent-dir/x/y")
+    monkeypatch.setattr(wifi_roam, "_SCAN_TIME_WRITE_WARNED", False, raising=False)
+    wifi_roam.logger.reset_mock()
+    wifi_roam._record_roam_scan_time()          # 예외 전파 없이 통과해야 함
+    warns = [c for c in wifi_roam.logger.message.call_args_list if c.args[0] == "warn"]
+    assert len(warns) == 1, "쓰기 실패가 침묵함(경고 미발행)"
+    wifi_roam._record_roam_scan_time()
+    warns = [c for c in wifi_roam.logger.message.call_args_list if c.args[0] == "warn"]
+    assert len(warns) == 1, "경고가 매 호출 반복 발행됨(플러드)"
+
+
 def _staged(station=None, allowed=("Net",)):
     return wifi_roam.staged_scan_best_candidate(
         station or _station(), None, list(allowed), "Net", STABLE, None

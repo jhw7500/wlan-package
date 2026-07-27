@@ -2491,6 +2491,9 @@ def filter_ap_lines_by_freq(ap_lines, freq):
     return out
 
 
+_SCAN_TIME_WRITE_WARNED = False  # 기록 실패 warn 프로세스당 1회(플러드 방지)
+
+
 def _record_roam_scan_time():
     """bgscan 타이머 리셋 신호(LAST_SCAN_TIME_FILE) 기록.
 
@@ -2499,12 +2502,21 @@ def _record_roam_scan_time():
     스캔까지 기록하면 — bgscan 의 산출물(교차채널 ap.log 캐시·roam hint)을 정보로도
     라디오로도 대체하지 못하면서 — RSSI 가 임계 주변에서 진동할 때 bgscan 이 계속 뒤로
     밀려 Stage 2 캐시 공급이 고사한다(passive-first 가 자기 캐시 공급원을 굶기는 역설).
-    실패는 무시(신호 파일 — 다음 동등 스캔에서 재기록)."""
+    실패해도 동작은 계속하되(신호 파일 — 다음 동등 스캔에서 재기록) 프로세스당 1회
+    warn 을 남긴다 — /tmp 쓰기 불가는 중대 시스템 상태라 침묵이 부적절(플러드 방지 1회)."""
+    global _SCAN_TIME_WRITE_WARNED
     try:
         with open(LAST_SCAN_TIME_FILE, "w") as f:
             f.write(str(time.time()))
-    except Exception:
-        pass
+    except Exception as e:
+        if not _SCAN_TIME_WRITE_WARNED:
+            logger.message(
+                "warn",
+                f"[{IFACE}] {LAST_SCAN_TIME_FILE} write failed ({e}) — bgscan 타이머 "
+                f"리셋 신호 유실(스케줄 영향은 조기 스캔 방향)",
+                _EXTRA_(),
+            )
+            _SCAN_TIME_WRITE_WARNED = True
 
 
 def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, trend, cooldown):
