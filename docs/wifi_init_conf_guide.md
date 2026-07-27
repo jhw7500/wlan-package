@@ -668,7 +668,9 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
 | `enable` | bool | `false` | 예측 로밍 활성화 (**plain-mode화로 기본 off**, 구 기본 true) |
-| `threshold_boost` | int | `5` | 신호 하락 추세 시 임계값 상향 (dB) |
+| `threshold_boost` | int | `5` | 신호 하락 추세 시 **로밍 컨디션 진입 임계** 상향 (dB) — 더 일찍 후보 탐색 시작 |
+
+> **falling trend의 두 가지 효과**: ① 컨디션 진입 임계가 `threshold_boost`(기본 5dB)만큼 상향되어 더 일찍 탐색을 시작하고, ② 후보 판정의 `DIFF_TH`가 **3dB 완화**된다(`effective_diff_th = max(1, DIFF_TH - 3)` — 하한 1dB 클램프로 음수/0 diff 후보 통과를 차단). 완화 구간 후보도 load 게이트는 동일하게 적용된다.
 | `trend_window_size` | int | `5` | 추세 분석 윈도우 크기 (샘플 수) |
 | `trend_history_max_age` | int | `30` | 추세 기록 최대 보존 시간 (초) |
 
