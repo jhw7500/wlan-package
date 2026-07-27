@@ -449,7 +449,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 | `stat_log_interval_sec` | int | `1` | WiFi 통계 로깅 주기 (초) |
 | `stat_check_interval_sec` | int | `1` | WiFi 통계 체크 주기 (초) |
 | `stat_reset_interval_sec` | int | `604800` | 통계 누적 리셋 주기 (초, 기본 7일) |
-| `bgscan_stale_threshold_sec` | int | `600` | bgscan 로그 stale 판정 시간 (초, 기본 10분) |
+| `bgscan_stale_threshold_sec` | int | `600` | `beacon.json` 스캔 엔트리 stale 프루닝 임계(초, 기본 10분). 소비: `wifi_logger_scan.py`(마지막 관측 후 이 시간이 지난 BSSID 제거, 반영은 데몬 재시작) |
 
 > `stat_log_interval_sec`과 `stat_check_interval_sec`의 차이: check는 데이터 수집 주기, log는 실제 파일/syslog 기록 주기이다. log >= check 관계를 유지해야 한다.
 
