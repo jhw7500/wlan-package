@@ -2264,10 +2264,10 @@ def check_roam_conditions(station, roam_ap, trend, baseline_rssi=None):
     rssi_diff = roam_ap["rssi"] - baseline_rssi
 
     effective_diff_th = DIFF_TH
-    falling_relaxed = False
+    is_falling_trend = False  # '완화 구간 진입'이 아니라 'falling 완화 활성' 플래그
     if ENABLE_PREDICTIVE_ROAM and trend == RSSITrendTracker.TREND_FALLING:
         effective_diff_th = max(1, DIFF_TH - 3)
-        falling_relaxed = True
+        is_falling_trend = True
 
     if rssi_diff < effective_diff_th:
         return (False, f"RSSI diff too small: {rssi_diff}dB < {effective_diff_th}dB")
@@ -2288,7 +2288,9 @@ def check_roam_conditions(station, roam_ap, trend, baseline_rssi=None):
                 f"Target AP load higher: {roam_load}% > {current_load}% + {LOAD_DIFF_THRESHOLD}%",
             )
 
-    if falling_relaxed:
+    # falling 이면 diff ≥ DIFF_TH(완화 불필요 구간)여도 'Falling trend' 사유를 붙인다 —
+    # 종전 reason 체계 유지(사유='추세 활성' 표시이지 '완화 구간 통과' 표시가 아님).
+    if is_falling_trend:
         return (True, f"Falling trend, RSSI diff: {rssi_diff}dB")
 
     return (True, f"RSSI diff: {rssi_diff}dB")

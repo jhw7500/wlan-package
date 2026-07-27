@@ -64,7 +64,9 @@ def test_predictive_disabled_no_relaxation(monkeypatch):
 
 
 def test_full_diff_reasons_unchanged():
-    """무회귀: diff ≥ DIFF_TH 는 종전과 동일 판정·사유(falling='Falling trend', stable=일반)."""
+    """무회귀: diff ≥ DIFF_TH 는 종전과 동일 판정·사유. 주의 — 'Falling trend' 사유는
+    완화 구간 통과 표시가 아니라 **추세 활성 표시**라, diff ≥ DIFF_TH(완화 불필요)여도
+    falling 이면 붙는 것이 올바른(종전 유지) 동작이다."""
     ok_f, reason_f = wifi_roam.check_roam_conditions(_st(-70), _ap(-58), FALLING)
     assert ok_f is True and "Falling trend" in reason_f
     ok_s, reason_s = wifi_roam.check_roam_conditions(_st(-70), _ap(-58), STABLE)
