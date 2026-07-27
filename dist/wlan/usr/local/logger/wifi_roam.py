@@ -53,12 +53,19 @@ DEFAULT_CACHE_FRESH_SEC = 70
 # scan_freq 가 홈채널의 부분집합(단일 채널 등)이면 Stage 1 홈 패시브 스캔이 이미 모든 후보를
 # 커버하므로 Stage 3 액티브 폴백은 같은 채널을 probe로 다시 훑는 것뿐 — 스킵해 매 로밍컨디션
 # 주기의 불필요한 액티브 스캔(probe 송신)을 없앤다. hidden SSID 는 액티브 probe로만 발견되므로
-# 홈채널에 hidden 로밍 타깃이 있는 배포는 이 값을 false 로 두거나 다채널로 운용해야 한다.
+# 홈채널에 hidden 로밍 타깃이 있는 배포는 home_passive=false(홈 directed 액티브)로 hidden 을
+# 커버하는 것을 권장(스킵 유지+주기당 1회). 대안: 이 값을 false 로 두거나 다채널 운용.
 DEFAULT_SKIP_REDUNDANT_ACTIVE_SCAN = True
+# Stage 1 홈채널 스캔 모드. 기본 패시브(probe 미송신, 저부하·비콘 스케일 RSSI). false 면
+# directed 액티브(allowed SSID probe, wildcard 없음) — 홈채널에 hidden 로밍 타깃이 있는
+# 배포에서 skip_redundant_active 최적화를 유지한 채 hidden 을 발견하기 위한 스위치.
+# (패시브는 비콘만 수신하므로 hidden SSID 를 구조적으로 못 본다.)
+DEFAULT_HOME_PASSIVE = True
 ENABLE_STAGED_SCAN = DEFAULT_ENABLE_STAGED_SCAN
 CACHE_FRESH_SEC = DEFAULT_CACHE_FRESH_SEC
 SKIP_REDUNDANT_ACTIVE_SCAN = DEFAULT_SKIP_REDUNDANT_ACTIVE_SCAN
-# 위 4개(enable/cache_fresh/self_induced_tail/skip_redundant_active)는 wifi_init_conf.json
+HOME_PASSIVE = DEFAULT_HOME_PASSIVE
+# 위 5개(enable/cache_fresh/self_induced_tail/skip_redundant_active/home_passive)는 wifi_init_conf.json
 # `.<iface>.roaming.STAGED_SCAN` 에서 런타임 조정 가능(SIGHUP reload). 현장에서 재배포 없이
 # 단계형 스캔을 끄거나(무회귀 폴백) 임계값을 튜닝하기 위한 것.
 # 마지막으로 우리가 트리거한 iw scan의 시작/종료 시각(epoch). wifi_logger_scan이 그 스캔의
@@ -360,6 +367,7 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
             "ROAM_NO_RESULT_FAST_COUNT": _num("ROAM_NO_RESULT_FAST_COUNT"),
             "ENABLE_STAGED_SCAN": config["ENABLE_STAGED_SCAN"],
             "SKIP_REDUNDANT_ACTIVE_SCAN": config["SKIP_REDUNDANT_ACTIVE_SCAN"],
+            "HOME_PASSIVE": config["HOME_PASSIVE"],
             "CACHE_FRESH_SEC": _num("CACHE_FRESH_SEC"),
             "SELF_INDUCED_TAIL_SEC": _num("SELF_INDUCED_TAIL_SEC"),
             "USE_SIGNAL_AVG": config["USE_SIGNAL_AVG"],
@@ -420,6 +428,7 @@ def load_roaming_config(iface, data=None):
         "ROAM_NO_RESULT_FAST_COUNT": DEFAULT_ROAM_NO_RESULT_FAST_COUNT,
         "ENABLE_STAGED_SCAN": DEFAULT_ENABLE_STAGED_SCAN,
         "SKIP_REDUNDANT_ACTIVE_SCAN": DEFAULT_SKIP_REDUNDANT_ACTIVE_SCAN,
+        "HOME_PASSIVE": DEFAULT_HOME_PASSIVE,
         "CACHE_FRESH_SEC": DEFAULT_CACHE_FRESH_SEC,
         "SELF_INDUCED_TAIL_SEC": DEFAULT_SELF_INDUCED_TAIL_SEC,
         "USE_SIGNAL_AVG": DEFAULT_USE_SIGNAL_AVG,
@@ -502,6 +511,7 @@ def load_roaming_config(iface, data=None):
                     [
                         ("enable", "ENABLE_STAGED_SCAN", parse_bool),
                         ("skip_redundant_active", "SKIP_REDUNDANT_ACTIVE_SCAN", parse_bool),
+                        ("home_passive", "HOME_PASSIVE", parse_bool),
                         ("cache_fresh_sec", "CACHE_FRESH_SEC", _positive_int),
                         ("self_induced_tail_sec", "SELF_INDUCED_TAIL_SEC", _positive_int),
                     ],
@@ -2443,7 +2453,8 @@ def filter_ap_lines_by_freq(ap_lines, freq):
 def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, trend, cooldown):
     """단계형 스캔으로 최적 로밍 후보를 찾는다.
       0) 교차채널 캐시 **스냅샷**(스캔 전에 먼저 확보 — 아래 이유) + 시계 스텝 감지
-      1) 홈채널 패시브 스캔(같은 채널 후보 + baseline 통일). 이 iw scan 도 wifi_logger_scan
+      1) 홈채널 스캔(같은 채널 후보 + baseline 통일) — 기본 패시브, home_passive=false 면
+         directed 액티브(hidden 홈 타깃 배포용). 어느 모드든 이 iw scan 은 wifi_logger_scan
          이벤트로 ap.log 블록을 유발한다 — Stage 0 스냅샷·self-induced 윈도우의 전제
       2) 스냅샷된 교차채널 캐시(CACHE_FRESH_SEC 이내)
       3) 액티브 폴백(scan_freq + 설정 SSID; scan_freq 없으면 전대역 1회)
@@ -2482,9 +2493,16 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
     home_freq = station.get("freq")
     if home_freq:
         # scan_results는 BSS 테이블 전체를 주므로 홈 주파수로 좁힌다(위 helper 주석 참조).
-        home_lines = filter_ap_lines_by_freq(
-            iw_scan_to_ap_lines(None, [home_freq], passive=True), home_freq
-        )
+        if HOME_PASSIVE:
+            home_scan_lines = iw_scan_to_ap_lines(None, [home_freq], passive=True)
+        else:
+            # 홈채널 directed 액티브(STAGED_SCAN.home_passive=false) — 홈채널 hidden 로밍
+            # 타깃 배포용. Stage 3와 동일하게 wildcard 없이 allowed 만 probe 하고, 이후
+            # 파이프라인(freq 필터·baseline 통일·home_scan_ok·스킵 가드)은 패시브와 동일.
+            home_scan_lines = iw_scan_to_ap_lines(
+                allowed, [home_freq], include_wildcard=False
+            )
+        home_lines = filter_ap_lines_by_freq(home_scan_lines, home_freq)
         scanned = True
         if home_lines:
             home_covered = True
@@ -2501,7 +2519,10 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
             )
             if best_ap:
                 logger.message(
-                    "info", f"[{IFACE}] roam candidate from home-channel passive scan", _EXTRA_()
+                    "info",
+                    f"[{IFACE}] roam candidate from home-channel "
+                    f"{'passive' if HOME_PASSIVE else 'active'} scan",
+                    _EXTRA_(),
                 )
                 return best_ap, reason, score, scanned
 
@@ -2555,13 +2576,14 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
             _EXTRA_(),
         )
 
-    # ── Stage 3 진입 전: 홈 패시브가 scan_freq 전체를 커버했으면 액티브 폴백 스킵 ──
+    # ── Stage 3 진입 전: 홈 스캔이 scan_freq 전체를 커버했으면 액티브 폴백 스킵 ──
     # scan_freq ⊆ {홈채널}이면 Stage 3 액티브는 같은 채널을 probe로 다시 훑는 것뿐이라 후보
     # 발견에 새로 기여하는 게 없다(단일채널 배포 등). 매 로밍컨디션 주기의 불필요한 액티브
     # 스캔(probe 송신)을 없앤다 = airtime·링크 방해 감소. 조건: 최적화 활성 + Stage 1 패시브가
     # **현재 AP 외 후보를 실제로 봄**(스캔 실패·현재 AP 상주 엔트리만·타 SSID 만이면 액티브가
     # 재시도/재발견 역할이라 유지) + scan_freq 가 홈채널의 부분집합.
-    # hidden SSID 는 액티브 probe로만 잡히므로 홈채널에 hidden 로밍 타깃이 있으면 config로 끈다.
+    # hidden SSID 는 액티브 probe로만 잡히므로 홈채널에 hidden 로밍 타깃이 있으면
+    # home_passive=false(홈 directed 액티브)로 커버하거나 이 스킵을 config로 끈다.
     if (
         SKIP_REDUNDANT_ACTIVE_SCAN
         and home_scan_ok
@@ -2573,7 +2595,8 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
     ):
         logger.message(
             "info",
-            f"[{IFACE}] scan_freq ⊆ home channel({home_freq}) — home passive covered all, "
+            f"[{IFACE}] scan_freq ⊆ home channel({home_freq}) — home "
+            f"{'passive' if HOME_PASSIVE else 'active'} scan covered all, "
             f"skip redundant active fallback (no roam candidate)",
             _EXTRA_(),
         )
