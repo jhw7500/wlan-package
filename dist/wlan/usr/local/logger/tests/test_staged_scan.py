@@ -31,7 +31,9 @@ def apln(idx, ch, rssi, bssid, ssid, freq=None):
 
 
 @pytest.fixture(autouse=True)
-def _globals(monkeypatch):
+def _globals(monkeypatch, tmp_path):
+    # LAST_SCAN_TIME 기록이 staged 함수 내부로 이동 — 테스트가 실제 /tmp 를 건드리지 않게 격리
+    monkeypatch.setattr(wifi_roam, "LAST_SCAN_TIME_FILE", str(tmp_path / "last_roam_scan_time"))
     monkeypatch.setattr(wifi_roam, "WPA_TH_2G", -75)
     monkeypatch.setattr(wifi_roam, "WPA_TH_5G", -75)
     monkeypatch.setattr(wifi_roam, "WPA_FREQ", ["5180", "5200"])  # ch36, ch40
