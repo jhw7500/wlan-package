@@ -155,6 +155,19 @@ def test_single_channel_skip_records(_globals, monkeypatch):
     assert _globals.exists(), "단일채널 전체 커버리지 스캔이 기록되지 않음"
 
 
+def test_single_channel_iw_failure_not_recorded(_globals, monkeypatch):
+    """단일채널이라도 iw 스캔 자체가 실패(None)하면 기록 금지 — '결과 무관'은 AP 발견
+    여부에 한하며, 스캔 실패는 커버리지가 아니다(`if home_lines:` 가드 회귀망)."""
+    monkeypatch.setattr(wifi_roam, "WPA_FREQ", ["5240"])
+    calls = []
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(None, None, calls))
+    monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
+    best, _, _, scanned = _staged(_station(freq=5240))
+    assert best is None and scanned is True
+    assert any(c["passive"] is False for c in calls), "스캔 실패 시 액티브 재시도는 실행돼야"
+    assert not _globals.exists(), "스캔 실패가 커버리지로 기록됨"
+
+
 def test_single_channel_stage1_candidate_records(_globals, monkeypatch):
     """단일채널 + Stage 1 에서 후보 발견 — 결과와 무관하게 전체 커버리지라 기록해야."""
     monkeypatch.setattr(wifi_roam, "WPA_FREQ", ["5240"])
