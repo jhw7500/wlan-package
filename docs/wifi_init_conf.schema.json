@@ -1384,16 +1384,16 @@
                 "skip_redundant_active": {
                   "type": "boolean",
                   "default": true,
-                  "description": "scan_freq 가 현재(홈) 채널의 부분집합(단일 채널 등)이면 홈 패시브 스캔이 이미 모든 후보를 커버하므로 Stage 3 액티브 폴백을 스킵. 매 로밍컨디션 주기의 불필요한 액티브 스캔(probe 송신)을 제거해 airtime·링크 방해를 줄인다. 홈채널에 hidden 로밍 SSID가 있으면 false(hidden은 액티브 probe로만 발견)",
+                  "description": "scan_freq 가 현재(홈) 채널의 부분집합(단일 채널 등)이고 홈 패시브 스캔이 현재 AP 외 후보를 실제로 봤으면 Stage 3 액티브 폴백을 스킵. 매 로밍컨디션 주기의 불필요한 액티브 스캔(probe 송신)을 제거해 airtime·링크 방해를 줄인다. 스캔 실패·현재 AP 상주 엔트리만 보임·타 SSID 만 보임이면 재시도/재발견을 위해 액티브 유지. 홈채널에 hidden 로밍 SSID가 있으면 false(hidden은 액티브 probe로만 발견)",
                   "x-ui-editable": "yes",
                   "x-apply-timing": "runtime",
                   "x-consumer": "wifi_roam.py"
                 },
                 "cache_fresh_sec": {
                   "type": "integer",
-                  "default": 45,
+                  "default": 70,
                   "minimum": 1,
-                  "description": "교차채널 캐시(ap.log 배경 블록) 신선도 바운드(초). 초과 시 액티브 폴백",
+                  "description": "교차채널 캐시(ap.log 배경 블록) 신선도 바운드(초). 초과 시 액티브 폴백. bgscan.interval + 여유(≥10초)로 설정 — 작으면 매 bgscan 주기 말미에 최신 배경 블록조차 stale 판정되어 불필요한 액티브 폴백이 남는다. 기본값 45→70 조정(2026-07): 기존 기기는 postinst json_merge가 기존 값(45)을 보존하므로 업그레이드 시 수동 갱신 필요",
                   "x-ui-editable": "yes",
                   "x-apply-timing": "runtime",
                   "x-consumer": "wifi_roam.py"
@@ -2271,16 +2271,16 @@
                 "skip_redundant_active": {
                   "type": "boolean",
                   "default": true,
-                  "description": "scan_freq 가 현재(홈) 채널의 부분집합(단일 채널 등)이면 홈 패시브 스캔이 이미 모든 후보를 커버하므로 Stage 3 액티브 폴백을 스킵. 매 로밍컨디션 주기의 불필요한 액티브 스캔(probe 송신)을 제거해 airtime·링크 방해를 줄인다. 홈채널에 hidden 로밍 SSID가 있으면 false(hidden은 액티브 probe로만 발견)",
+                  "description": "scan_freq 가 현재(홈) 채널의 부분집합(단일 채널 등)이고 홈 패시브 스캔이 현재 AP 외 후보를 실제로 봤으면 Stage 3 액티브 폴백을 스킵. 매 로밍컨디션 주기의 불필요한 액티브 스캔(probe 송신)을 제거해 airtime·링크 방해를 줄인다. 스캔 실패·현재 AP 상주 엔트리만 보임·타 SSID 만 보임이면 재시도/재발견을 위해 액티브 유지. 홈채널에 hidden 로밍 SSID가 있으면 false(hidden은 액티브 probe로만 발견)",
                   "x-ui-editable": "yes",
                   "x-apply-timing": "runtime",
                   "x-consumer": "wifi_roam.py"
                 },
                 "cache_fresh_sec": {
                   "type": "integer",
-                  "default": 45,
+                  "default": 70,
                   "minimum": 1,
-                  "description": "교차채널 캐시(ap.log 배경 블록) 신선도 바운드(초). 초과 시 액티브 폴백",
+                  "description": "교차채널 캐시(ap.log 배경 블록) 신선도 바운드(초). 초과 시 액티브 폴백. bgscan.interval + 여유(≥10초)로 설정 — 작으면 매 bgscan 주기 말미에 최신 배경 블록조차 stale 판정되어 불필요한 액티브 폴백이 남는다. 기본값 45→70 조정(2026-07): 기존 기기는 postinst json_merge가 기존 값(45)을 보존하므로 업그레이드 시 수동 갱신 필요",
                   "x-ui-editable": "yes",
                   "x-apply-timing": "runtime",
                   "x-consumer": "wifi_roam.py"

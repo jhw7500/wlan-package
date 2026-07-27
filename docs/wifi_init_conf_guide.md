@@ -633,7 +633,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 > **단계형 로밍 스캔 (staged scan)**: 현재 링크 RSSI가 임계값(`DEFAULT_TH_2G`/`DEFAULT_TH_5G`) 이하로 떨어지면 `wifi_roam.py`가 다음 순서로 후보를 찾는다. 앞 단계에서 후보를 찾으면 뒤 단계는 실행하지 않는다.
 > 1. **홈채널 패시브 스캔** — 현재 접속 채널만 `iw scan passive`로 훑어 같은 채널 후보를 저부하로 수집한다. `wpa_cli scan_results`는 BSS 테이블 **전체**를 반환하므로 **홈 주파수 항목만 남기고 필터**한다(다른 채널 항목은 이번 스캔에서 측정된 값이 아니라 과거 스캔의 stale 값이므로 후보로 쓰면 안 된다).
-> 2. **교차채널 캐시** — bgscan이 채운 `ap.log` 마지막 블록을 재사용한다. 블록 나이가 **45초(`CACHE_FRESH_SEC`)** 이내일 때만 유효하며, 초과 시 stale로 보고 다음 단계로 넘어간다. 이 캐시 스냅샷은 **1단계 스캔보다 먼저** 읽는다 — 로밍 스캔이 유발하는 `nl80211` scan-completed 이벤트에 `wifi_logger_scan`이 반응해 `ap.log`에 새 블록을 쓰기 때문에, 스캔 뒤에 읽으면 자기 스캔이 만든 블록을 "신선한 배경 캐시"로 오인하게 된다.
+> 2. **교차채널 캐시** — bgscan이 채운 `ap.log` 마지막 블록을 재사용한다. 블록 나이가 **70초(`CACHE_FRESH_SEC`)** 이내일 때만 유효하며, 초과 시 stale로 보고 다음 단계로 넘어간다. 홈채널 엔트리는 1단계가 방금 실측했으므로 캐시에서 제외한다(묵은 값이 방금의 기각을 뒤집는 역전 방지 — 1단계 스캔 실패 시에는 예외적으로 포함). 직전 판정 이후 **시각 스텝**(NTP step)이 감지된 주기에는 캐시 시간 판정을 신뢰할 수 없어 이 단계를 건너뛴다. 이 캐시 스냅샷은 **1단계 스캔보다 먼저** 읽는다 — 로밍 스캔이 유발하는 `nl80211` scan-completed 이벤트에 `wifi_logger_scan`이 반응해 `ap.log`에 새 블록을 쓰기 때문에, 스캔 뒤에 읽으면 자기 스캔이 만든 블록을 "신선한 배경 캐시"로 오인하게 된다.
 > 3. **액티브 폴백** — 위 둘에서 후보를 못 찾을 때만 `iw scan freq <scan_freq> ssid <설정 SSID>`로 directed 스캔한다(와일드카드 broadcast probe 없음). `scan_freq`가 비어 있을 때만 예외적으로 전대역 1회 스캔한다.
 >
 > **RSSI baseline 통일**: 로밍 판정의 `DIFF_TH` 비교에서 현재 AP RSSI는 위 스캔 결과에서 **자기 BSSID 항목을 찾아** 사용한다. 종전에는 현재 AP는 `iw station dump`의 `signal_avg`(평활값), 후보는 `wpa_cli scan_results`(순간값)로 **서로 다른 소스를 직접 뺐기 때문에** diff에 편향이 있었다. 스캔에서 자기 BSSID를 못 찾은 경우에만 `signal_avg`로 폴백한다.
@@ -649,13 +649,15 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
 | `enable` | bool | `true` | 단계형 스캔 ON/OFF. **`false`면 종전 단일 액티브 스캔 경로로 회귀**(무회귀 폴백) |
-| `skip_redundant_active` | bool | `true` | **`scan_freq`가 현재(홈) 채널의 부분집합**(단일 채널 등)이면 홈 패시브 스캔이 이미 모든 후보를 커버하므로 Stage 3 액티브 폴백을 **스킵**. 매 로밍컨디션 주기의 불필요한 액티브 스캔(probe 송신) 제거 → airtime·링크 방해 감소 |
-| `cache_fresh_sec` | int | `45` | 교차채널 캐시(`ap.log` 배경 블록) 신선도 바운드(초). 초과 시 액티브 폴백 |
+| `skip_redundant_active` | bool | `true` | **`scan_freq`가 현재(홈) 채널의 부분집합**(단일 채널 등)이고 홈 패시브가 **현재 AP 외 후보를 실제로 봤으면** Stage 3 액티브 폴백을 **스킵**. 매 로밍컨디션 주기의 불필요한 액티브 스캔(probe 송신) 제거 → airtime·링크 방해 감소 |
+| `cache_fresh_sec` | int | `70` | 교차채널 캐시(`ap.log` 배경 블록) 신선도 바운드(초). 초과 시 액티브 폴백. **`bgscan.interval` + 여유(≥10초)**로 설정 — 작으면 매 bgscan 주기 말미에 최신 배경 블록조차 stale 판정된다 |
 | `self_induced_tail_sec` | int | `10` | 자기 스캔 종료 후 이 시간 안에 기록된 `ap.log` 블록은 **그 스캔이 유발한 것**으로 보고 배경 캐시로 쓰지 않는다(초) |
 
-> 필드에서 단계형 스캔이 문제를 일으키면 `enable: false` + SIGHUP(`wifi roam th`)으로 **재배포 없이 즉시 종전 동작으로 되돌릴 수 있다.**
+> 필드에서 단계형 스캔이 문제를 일으키면 `enable: false` + SIGHUP(`systemctl kill --kill-who=main -s SIGHUP wifi_roam@mlan0`)으로 **재배포 없이 즉시 종전 동작으로 되돌릴 수 있다.**
 >
-> `skip_redundant_active`(기본 `true`)는 **단일 채널 배포**(모든 로밍 AP가 한 채널)에서 유용하다 — 홈 패시브 스캔이 그 채널의 모든 AP를 이미 보므로 액티브 폴백이 순전히 중복이다. 단 **액티브 directed probe만 hidden SSID를 발견**하므로, 홈 채널에 hidden 로밍 대상 SSID가 있으면 `false`로 두거나 다채널로 운용해야 한다. `scan_freq`가 다채널이면(현재 채널 외 채널 포함) 이 옵션과 무관하게 액티브 폴백은 항상 실행된다(다른 채널 후보는 패시브 홈스캔이 못 보므로). Stage 1 패시브 스캔이 **실패**한 경우에도 액티브 폴백은 재시도로 실행된다.
+> `skip_redundant_active`(기본 `true`)는 **단일 채널 배포**(모든 로밍 AP가 한 채널)에서 유용하다 — 홈 패시브 스캔이 그 채널의 모든 AP를 이미 보므로 액티브 폴백이 순전히 중복이다. 단 **액티브 directed probe만 hidden SSID를 발견**하므로, 홈 채널에 hidden 로밍 대상 SSID가 있으면 `false`로 두거나 다채널로 운용해야 한다. `scan_freq`가 다채널이면(현재 채널 외 채널 포함) 이 옵션과 무관하게 액티브 폴백은 항상 실행된다(다른 채널 후보는 패시브 홈스캔이 못 보므로). Stage 1 패시브 스캔이 **실패**했거나 결과에 **현재 AP 상주 엔트리만** 있는 경우에도 액티브 폴백은 재시도/재발견으로 실행된다 — 현재 결합 AP의 BSS 테이블 엔트리는 사용 중(in-use)이라 만료되지 않아 beacon을 전혀 못 받아도 항상 남으므로, '현재 AP만 보임'은 '같은 채널에 다른 AP가 없음'의 증거가 아니다(이웃 beacon 유실 시 directed probe가 유일한 재발견 경로).
+>
+> **업그레이드 주의**: `cache_fresh_sec` 기본값이 45→70으로 조정됐다(배포 기본 `bgscan.interval` 60초를 커버). 기존 설치 기기는 postinst의 json_merge가 **기존 값(45)을 보존**하므로 자동 반영되지 않는다 — 값을 명시 변경했던 기기가 아니면 `wifi_init_conf.json`에서 70으로 올리고 `systemctl kill --kill-who=main -s SIGHUP wifi_roam@mlan0`(iface별)로 반영할 것. 주의: 조회형 `wifi 0 roam th`는 임계값 **표시 전용**이라 SIGHUP을 보내지 않는다 — SIGHUP 자동 발송은 값 설정형(`wifi 0 roam th {2G|5G} <rssi>`) 경로뿐이다.
 >
 > `self_induced_tail_sec`를 너무 **작게** 잡으면 자기 스캔이 유발한 블록을 배경 캐시로 오인해 stale 데이터로 로밍할 수 있다(위험한 방향). 너무 **크게** 잡으면 진짜 배경 블록까지 버려 액티브 폴백이 늘어난다(안전한 방향). 기본값 10초는 `wifi_logger_scan`의 기록 지연(최대 ~5초) 대비 여유를 둔 값이다.
 

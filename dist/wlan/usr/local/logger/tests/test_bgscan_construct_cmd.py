@@ -12,10 +12,18 @@ from wifi_bgscan import construct_iw_scan_cmd
 import pytest
 
 wifi_bgscan.IFACE = "mlan0"
+wifi_bgscan.logger = MagicMock()   # logger 는 __main__ 에서만 생성 — cap 경고 경로용 mock
 
 
 def _ssid_tokens(cmd):
-    return [cmd[i + 1] for i in range(len(cmd)) if cmd[i] == "ssid"]
+    """iw 문법상 ssid 그룹은 **종단**(`[ssid <ssid>*|passive]`) — `ssid` 키워드 1회 뒤의
+    모든 토큰이 SSID 값이다. 키워드를 반복하면 iw 5.19 파서(SSID 상태에서 키워드 복귀
+    없음)가 두 번째 `ssid` 를 리터럴 SSID 로 소비해, probe 대상이 2N-1 개로 불어나고
+    존재하지 않는 \"ssid\" 네트워크 directed probe 가 전파로 나간다."""
+    assert cmd.count("ssid") <= 1, f"ssid 키워드 반복 금지(iw 가 리터럴 'ssid' 를 probe): {cmd}"
+    if "ssid" not in cmd:
+        return []
+    return cmd[cmd.index("ssid") + 1:]
 
 
 @pytest.mark.parametrize("ssid,ssid_filter,extra_ssids,expected", [
@@ -91,3 +99,46 @@ def test_active_default_has_no_passive_keyword():
     cmd = construct_iw_scan_cmd("HomeNet", ["2412"], ssid_filter=True)
     assert "passive" not in cmd
     assert _ssid_tokens(cmd) == ["HomeNet"]
+
+
+# --- iw 인자 조립 규칙 (ssid 그룹 종단 + 드라이버 SSID 한도) ---
+
+def test_active_freq_before_ssid_and_ssid_group_terminal():
+    """[회귀] iw 5.19 문법상 ssid 도 맨 뒤 그룹 — freq 가 ssid 뒤에 오면 iw 가
+    'freq','5180' 을 SSID 값으로 소비해 rc=0 인 채 전대역 오스캔이 된다(#120 과 동종
+    클래스, 액티브 경로). freq → ssid 순서와 ssid 그룹 종단을 함께 고정한다."""
+    cmd = construct_iw_scan_cmd("HomeNet", ["5180"], ssid_filter=True, freq_filter=True)
+    assert cmd.index("freq") < cmd.index("ssid"), f"freq 는 ssid 앞이어야 함: {cmd}"
+    assert cmd[cmd.index("ssid") + 1:] == ["HomeNet"], f"ssid 그룹은 종단이어야 함: {cmd}"
+
+
+def test_ssid_probe_cap_at_driver_max():
+    """[회귀] nl80211 max scan SSIDs(10, NXP mlan 실측) 초과 시 iw 가 -EINVAL 로 스캔
+    **전체**를 실패시킨다 — bgscan 이 매 주기 전량 실패하면 ap.log 배경 캐시가 영영
+    갱신되지 않아 로밍 Stage 2 까지 연쇄로 죽는다. cap 으로 전량 실패를 막는다."""
+    extras = [f"Net{i}" for i in range(12)]
+    cmd = construct_iw_scan_cmd(
+        "HomeNet", [], ssid_filter=True, freq_filter=False, extra_ssids=extras
+    )
+    toks = _ssid_tokens(cmd)
+    assert len(toks) == wifi_bgscan.MAX_SCAN_SSIDS
+    assert toks[0] == "HomeNet"            # 현재 네트워크 우선 보존
+
+
+def test_no_dangling_ssid_keyword_without_probe_targets():
+    """[회귀] probe 대상이 없으면 `ssid` 키워드 자체가 붙지 않아야 한다 — 값 없는 dangling
+    `ssid` 는 iw 인자 파싱 실패로 스캔 전체를 죽인다. _ssid_tokens([])==[] 는 키워드 부재와
+    dangling 을 구분하지 못하므로 키워드 부재를 직접 고정한다."""
+    cmd = construct_iw_scan_cmd("HomeNet", ["2412"], ssid_filter=False, freq_filter=True)
+    assert "ssid" not in cmd
+
+
+def test_ssid_probe_cap_preserves_wildcard():
+    """ssid_filter=False 광범위 스캔 의도의 wildcard("") 는 cap 후에도 보존돼야 한다."""
+    extras = [f"Net{i}" for i in range(12)]
+    cmd = construct_iw_scan_cmd(
+        "HomeNet", [], ssid_filter=False, freq_filter=False, extra_ssids=extras
+    )
+    toks = _ssid_tokens(cmd)
+    assert len(toks) == wifi_bgscan.MAX_SCAN_SSIDS
+    assert toks[0] == ""                   # wildcard 슬롯 보존
