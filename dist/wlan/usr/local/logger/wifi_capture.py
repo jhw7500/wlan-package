@@ -22,7 +22,8 @@ IFACE = "mlan0"
 #   bit  3 (0x0008) Reassoc Response   bit 11 (0x0800) Auth
 #   bit  4 (0x0010) Probe Request      bit 12 (0x1000) Deauth
 #   bit  5 (0x0020) Probe Response     bit 13 (0x2000) Action
-#                                      bit 14 (0x4000) Action No Ack
+#   bit  6 (0x0040) Timing Advertisement  bit 14 (0x4000) Action No Ack
+#   bit  7 (0x0080) (Reserved)
 # 제외 처리 계층: tcpdump BPF(TCPDUMP_SUPPORTED_SUBTYPES에 있는 subtype)
 #   → tshark 디스플레이 필터(나머지) → 파이썬 루프 최종 가드.
 # 예) 서비스 기본값 0x4100 = Beacon + Action No Ack 제외.
