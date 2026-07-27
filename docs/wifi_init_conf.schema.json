@@ -1384,7 +1384,15 @@
                 "skip_redundant_active": {
                   "type": "boolean",
                   "default": true,
-                  "description": "scan_freq 가 현재(홈) 채널의 부분집합(단일 채널 등)이고 홈 패시브 스캔이 현재 AP 외 후보를 실제로 봤으면 Stage 3 액티브 폴백을 스킵. 매 로밍컨디션 주기의 불필요한 액티브 스캔(probe 송신)을 제거해 airtime·링크 방해를 줄인다. 스캔 실패·현재 AP 상주 엔트리만 보임·타 SSID 만 보임이면 재시도/재발견을 위해 액티브 유지. 홈채널에 hidden 로밍 SSID가 있으면 false(hidden은 액티브 probe로만 발견)",
+                  "description": "scan_freq 가 현재(홈) 채널의 부분집합(단일 채널 등)이고 홈 스캔이 현재 AP 외 후보를 실제로 봤으면 Stage 3 액티브 폴백을 스킵. 매 로밍컨디션 주기의 불필요한 액티브 스캔(probe 송신)을 제거해 airtime·링크 방해를 줄인다. 스캔 실패·현재 AP 상주 엔트리만 보임·타 SSID 만 보임이면 재시도/재발견을 위해 액티브 유지. 홈채널에 hidden 로밍 SSID가 있으면 home_passive=false(홈 directed 액티브) 권장",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "runtime",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "home_passive": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "Stage 1 홈채널 스캔 모드. true(기본)=패시브(probe 미송신, 저부하·비콘 스케일 RSSI). false=directed 액티브(allowed SSID probe, wildcard 없음) — 홈채널에 hidden 로밍 타깃이 있는 배포에서 skip_redundant_active 최적화를 유지한 채 hidden 을 발견(패시브는 hidden 을 구조적으로 못 봄)",
                   "x-ui-editable": "yes",
                   "x-apply-timing": "runtime",
                   "x-consumer": "wifi_roam.py"
@@ -2271,7 +2279,15 @@
                 "skip_redundant_active": {
                   "type": "boolean",
                   "default": true,
-                  "description": "scan_freq 가 현재(홈) 채널의 부분집합(단일 채널 등)이고 홈 패시브 스캔이 현재 AP 외 후보를 실제로 봤으면 Stage 3 액티브 폴백을 스킵. 매 로밍컨디션 주기의 불필요한 액티브 스캔(probe 송신)을 제거해 airtime·링크 방해를 줄인다. 스캔 실패·현재 AP 상주 엔트리만 보임·타 SSID 만 보임이면 재시도/재발견을 위해 액티브 유지. 홈채널에 hidden 로밍 SSID가 있으면 false(hidden은 액티브 probe로만 발견)",
+                  "description": "scan_freq 가 현재(홈) 채널의 부분집합(단일 채널 등)이고 홈 스캔이 현재 AP 외 후보를 실제로 봤으면 Stage 3 액티브 폴백을 스킵. 매 로밍컨디션 주기의 불필요한 액티브 스캔(probe 송신)을 제거해 airtime·링크 방해를 줄인다. 스캔 실패·현재 AP 상주 엔트리만 보임·타 SSID 만 보임이면 재시도/재발견을 위해 액티브 유지. 홈채널에 hidden 로밍 SSID가 있으면 home_passive=false(홈 directed 액티브) 권장",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "runtime",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "home_passive": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "Stage 1 홈채널 스캔 모드. true(기본)=패시브(probe 미송신, 저부하·비콘 스케일 RSSI). false=directed 액티브(allowed SSID probe, wildcard 없음) — 홈채널에 hidden 로밍 타깃이 있는 배포에서 skip_redundant_active 최적화를 유지한 채 hidden 을 발견(패시브는 hidden 을 구조적으로 못 봄)",
                   "x-ui-editable": "yes",
                   "x-apply-timing": "runtime",
                   "x-consumer": "wifi_roam.py"
