@@ -2254,11 +2254,21 @@ def check_roam_conditions(station, roam_ap, trend, baseline_rssi=None):
     """
     if baseline_rssi is None:
         baseline_rssi = station["rssi"]
-    # 기본 조건: RSSI 차이
+    # 기본 조건: RSSI 차이. 하락 추세(PREDICTIVE 활성)면 임계를 3dB 완화해 조기 로밍 —
+    # 완화는 이 게이트 **이전에** 임계 자체에 적용해야 실효한다(종전엔 게이트 뒤에 있어
+    # 도달 시점에 diff ≥ DIFF_TH 가 이미 보장된 dead code — reason 문자열만 바꿨다).
+    # 완화 구간 후보도 아래 load 게이트는 동일하게 통과해야 하며, diff ≤ 0 후보는
+    # evaluate_candidates 의 score(=diff×10) > 0 게이트가 최종 차단한다.
     rssi_diff = roam_ap["rssi"] - baseline_rssi
 
-    if rssi_diff < DIFF_TH:
-        return (False, f"RSSI diff too small: {rssi_diff}dB < {DIFF_TH}dB")
+    effective_diff_th = DIFF_TH
+    falling_relaxed = False
+    if ENABLE_PREDICTIVE_ROAM and trend == RSSITrendTracker.TREND_FALLING:
+        effective_diff_th = DIFF_TH - 3
+        falling_relaxed = True
+
+    if rssi_diff < effective_diff_th:
+        return (False, f"RSSI diff too small: {rssi_diff}dB < {effective_diff_th}dB")
 
     # Load 조건
     if ENABLE_LOAD_BASED_ROAM:
@@ -2276,11 +2286,8 @@ def check_roam_conditions(station, roam_ap, trend, baseline_rssi=None):
                 f"Target AP load higher: {roam_load}% > {current_load}% + {LOAD_DIFF_THRESHOLD}%",
             )
 
-    # 추세 기반 조건 완화 (하락 추세면 더 쉽게 로밍)
-    if ENABLE_PREDICTIVE_ROAM and trend == RSSITrendTracker.TREND_FALLING:
-        # 하락 추세면 RSSI 차이 조건을 3dB 완화
-        if rssi_diff >= (DIFF_TH - 3):
-            return (True, f"Falling trend, RSSI diff: {rssi_diff}dB")
+    if falling_relaxed:
+        return (True, f"Falling trend, RSSI diff: {rssi_diff}dB")
 
     return (True, f"RSSI diff: {rssi_diff}dB")
 
