@@ -68,6 +68,37 @@ def test_threshold_drives_beacon_pruning(monkeypatch):
     assert "bb:bb:bb:bb:bb:bb" not in out
 
 
+def test_loader_captures_warning_on_invalid_value(tmp_path, monkeypatch):
+    """[가시성] 불량 값 폴백은 조용히 삼키지 않고 경고를 캡처한다(로깅은 logger 초기화
+    후 __main__ 에서 1회 발행 — import 시점엔 logger 부재)."""
+    monkeypatch.setattr(wifi_logger_scan, "_STALE_THRESHOLD_LOAD_WARNING", None, raising=False)
+    p = tmp_path / "wic.json"
+    p.write_text(json.dumps({"logger": {"bgscan_stale_threshold_sec": "abc"}}))
+    assert wifi_logger_scan.load_stale_threshold(str(p)) == \
+        wifi_logger_scan.DEFAULT_STALE_THRESHOLD_SEC
+    assert wifi_logger_scan._STALE_THRESHOLD_LOAD_WARNING is not None
+
+
+def test_loader_captures_warning_on_broken_json(tmp_path, monkeypatch):
+    monkeypatch.setattr(wifi_logger_scan, "_STALE_THRESHOLD_LOAD_WARNING", None, raising=False)
+    p = tmp_path / "wic.json"
+    p.write_text("{broken json")
+    assert wifi_logger_scan.load_stale_threshold(str(p)) == \
+        wifi_logger_scan.DEFAULT_STALE_THRESHOLD_SEC
+    assert wifi_logger_scan._STALE_THRESHOLD_LOAD_WARNING is not None
+
+
+def test_loader_silent_on_missing_file_and_valid_value(tmp_path, monkeypatch):
+    """파일 부재(신규/개발 환경 정상 폴백)와 정상 값은 경고 없음 — 경고 과발행 방지."""
+    monkeypatch.setattr(wifi_logger_scan, "_STALE_THRESHOLD_LOAD_WARNING", None, raising=False)
+    wifi_logger_scan.load_stale_threshold("/nonexistent/wic.json")
+    assert wifi_logger_scan._STALE_THRESHOLD_LOAD_WARNING is None
+    p = tmp_path / "wic.json"
+    p.write_text(json.dumps({"logger": {"bgscan_stale_threshold_sec": 300}}))
+    assert wifi_logger_scan.load_stale_threshold(str(p)) == 300
+    assert wifi_logger_scan._STALE_THRESHOLD_LOAD_WARNING is None
+
+
 def test_stale_threshold_wired_to_loader(tmp_path):
     """[와이어링] 모듈 전역 STALE_THRESHOLD_SEC 가 import 시 loader 를 **실제로 경유**해
     config 값을 받는지 검증 — 'loader 는 있는데 전역은 하드코딩' 회귀(= 원래 dead knob
