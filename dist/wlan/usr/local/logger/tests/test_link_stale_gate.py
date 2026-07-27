@@ -30,7 +30,7 @@ def _globals(tmp_path, monkeypatch):
     p.write_text(json.dumps(VALID))
     monkeypatch.setattr(wifi_roam, "LINK_LOG_FILE", str(p))
     monkeypatch.setattr(wifi_roam, "_LINK_CACHE", {"mtime_ns": None, "value": None})
-    monkeypatch.setattr(wifi_roam, "_LINK_STALE_WARNED", False, raising=False)
+    monkeypatch.setattr(wifi_roam, "_LINK_STALE_WARNED", False)
     monkeypatch.setattr(wifi_roam, "USE_SIGNAL_AVG", False)
     monkeypatch.setattr(wifi_roam, "ENABLE_LOAD_BASED_ROAM", False)
     yield p

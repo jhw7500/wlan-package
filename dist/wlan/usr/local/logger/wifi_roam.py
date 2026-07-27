@@ -1232,7 +1232,9 @@ _LINK_CACHE: Dict[str, Any] = {
 # 복구하므로, hang(살아있으나 갱신 정지) 시 mtime 캐시가 마지막 값을 무기한 반환하던
 # 구멍을 나이 게이트로 막는다.
 LINK_STALE_SEC = 30
-_LINK_STALE_WARNED = False  # 에피소드당 1회 경고(매 tick 반복 발행 방지), 갱신 재개 시 리셋
+# 에피소드당 1회 경고(매 tick 반복 발행 방지), 갱신 재개 시 리셋. 모듈 전역 —
+# 단일 스레드·프로세스당 단일 인터페이스 전제(clock_step_detected 앵커와 동일).
+_LINK_STALE_WARNED = False
 
 
 def get_link_info_with_load():
@@ -1250,7 +1252,7 @@ def get_link_info_with_load():
             if not _LINK_STALE_WARNED:
                 logger.message(
                     "warn",
-                    f"[{IFACE}] link.json stale ({age:.0f}s > {LINK_STALE_SEC}s) — "
+                    f"[{IFACE}] {LINK_LOG_FILE} stale ({age:.0f}s > {LINK_STALE_SEC}s) — "
                     f"생산자(wifi_logger_link) 갱신 정지 의심, 로밍 판정 보류",
                     _EXTRA_(),
                 )
