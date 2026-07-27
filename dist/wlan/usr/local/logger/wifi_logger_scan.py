@@ -585,58 +585,10 @@ def main_loop():
         
     scan_event(IFACE, on_scan_event)
     #monitor_nl80211_scan_event(on_scan_event)
-
-    ...
-    log_step = 0
-    try:
-        while True:
-            if time.time() - last_log_time >= LOG_INTERVAL -10 and log_step == 0:
-                #print(f"last_log_time")
-                #lines = run_setuserscan()
-                result = run_iwdevscandump()
-                if result == "err":
-                    logger.message("err", f"[{IFACE}] scan result failed!", _EXTRA_())
-                    time.sleep(5)
-                    #last_log_time = time.time()
-                else:
-                    log_step = 1
-                    #time.sleep(1)  # getscanresults가 준비될 때까지 대기
-            elif time.time() - last_log_time >= LOG_INTERVAL and log_step == 1:
-                lines = run_getscantable()
-                #print(f"{lines}")
-                ap_lines = extract_ap_table(lines)
-                chan_lines = extract_channel_table(lines)
-                
-                save_with_timestamp("ap", ap_lines)
-                save_with_timestamp("freq", chan_lines)
-
-                '''
-                timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                header = f"===== [{timestamp_str}] {'=' * (60 - len(timestamp_str) - 10)}"
-                timestamped_result = f"{header}\n{result}"
-                filename = os.path.join(LOG_DIR, "beacon.log")
-                with open(filename, 'w') as f:
-                    f.write(timestamped_result)
-                '''
-                #logger.message("err", f"result : {result}", _EXTRA_())                
-                new_entries = parse_scan_output(result)
-                existing_db = load_existing()
-                merged = merge_db(existing_db, new_entries)
-                now_sec = int(time.time())
-                cleaned = remove_stale_entries(merged, now_sec)
-                save_db(cleaned)
-
-                last_log_time = time.time()
-                log_step = 0
-            #else:
-                #print(f"last_log_time")
-                #time.sleep(1)
-                
-            time.sleep(5)
-
-    except KeyboardInterrupt:
-        logger.message("err", f"[{IFACE}] keyboardInterrupt occurs", _EXTRA_())
-    ...
+    # NOTE: scan_event 는 dmesg follow 를 영원히 블로킹하므로 이 아래에는 코드를 두지
+    # 않는다 — 종전의 주기 스캔 while 은 도달 불가 사문이었고, 도달했다면 미정의
+    # last_log_time 으로 NameError 였다(제거). 주기적 ap.log/beacon.json 생산은 bgscan
+    # 등 어떤 주체든 유발하는 스캔 이벤트(on_scan_event)로 충분하다.
 
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_sigterm)
