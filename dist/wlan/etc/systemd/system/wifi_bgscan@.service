@@ -3,13 +3,18 @@ Description=WiFi Background Scan Service for %i
 Requires=sys-subsystem-net-devices-%i.device
 After=sys-subsystem-net-devices-%i.device wifi_init.service
 PartOf=wifi_init.service
+# 재시작 rate-limit 무제한: bgscan 이 죽으면 ap.log 배경 캐시가 굳어 로밍 Stage 2 가
+# 조용히 죽는다 — 기본 제한(5회/10s)이면 연속 크래시 시 systemd 가 포기해 영구 미기동.
+# (#118 wifi_logger_link 감독화와 동일 원리)
+StartLimitIntervalSec=0
 
 [Service]
+Type=simple
 ExecStart=/bin/python3 /usr/local/logger/wifi_bgscan.py %i
-#Restart=always
+# 런타임 사망(크래시/OOM) 시 자동 재시작 — 종전엔 Restart 주석 처리라 죽으면 그대로 정지.
+Restart=always
+RestartSec=3
 User=root
-#Type=oneshot
-#RemainAfterExit=true
 
 [Install]
 WantedBy=wifi-stack.target
