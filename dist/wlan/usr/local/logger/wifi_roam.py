@@ -1227,13 +1227,36 @@ _LINK_CACHE: Dict[str, Any] = {
     "mtime_ns": None,
     "value": None,
 }
+# link.json 갱신 정지(생산자 hang 등) 판정 임계(초). 생산자(wifi_logger_link)는 ~1s 주기라
+# 30s 는 부하 스파이크 대비 넉넉한 마진. #118 감독화(Restart=always)는 프로세스 '사망'만
+# 복구하므로, hang(살아있으나 갱신 정지) 시 mtime 캐시가 마지막 값을 무기한 반환하던
+# 구멍을 나이 게이트로 막는다.
+LINK_STALE_SEC = 30
+_LINK_STALE_WARNED = False  # 에피소드당 1회 경고(매 tick 반복 발행 방지), 갱신 재개 시 리셋
 
 
 def get_link_info_with_load():
     """Load 정보를 포함한 연결 정보 반환"""
+    global _LINK_STALE_WARNED
     try:
         st = os.stat(LINK_LOG_FILE)
         mtime_ns = st.st_mtime_ns
+        # stale 게이트는 캐시 히트 **이전** — 갱신이 멈추면 mtime 불변=캐시 히트 경로라,
+        # 순서가 뒤면 마지막 값 무기한 판정이 그대로 남는다. stale 은 파일 부재와 동일하게
+        # None(판정 보류, 메인루프 재시도). wall-clock 전진 스텝 시 일시 stale 로 보일 수
+        # 있으나 생산자의 다음 기록(~1s)으로 자가 치유된다.
+        age = time.time() - st.st_mtime
+        if age > LINK_STALE_SEC:
+            if not _LINK_STALE_WARNED:
+                logger.message(
+                    "warn",
+                    f"[{IFACE}] link.json stale ({age:.0f}s > {LINK_STALE_SEC}s) — "
+                    f"생산자(wifi_logger_link) 갱신 정지 의심, 로밍 판정 보류",
+                    _EXTRA_(),
+                )
+                _LINK_STALE_WARNED = True
+            return None
+        _LINK_STALE_WARNED = False
         cached_mtime_ns = _LINK_CACHE.get("mtime_ns")
         if cached_mtime_ns is not None and cached_mtime_ns == mtime_ns:
             return _LINK_CACHE.get("value")
