@@ -273,11 +273,13 @@
             "enabled": false
         },
         "bgscan": {
-            "_comment": "Background scan configuration for mlan0. passive: 패시브 스캔 사용 여부(기본 true) — true면 probe request를 보내지 않고 beacon만 수신하므로 ssid_filter/extra_ssids의 directed probe가 모두 무효가 되고 hidden SSID는 bgscan으로 발견되지 않는다(로밍 트리거 시 액티브 폴백이 보완). freq_filter: freq 필터 포함 여부(기본 true), false면 전체 대역 스캔(스캔 시간·airtime↑). ssid_filter(기본 true)는 passive=false일 때만 유효하며, 그때는 roaming.extra_ssids가 ssid_filter와 무관하게 항상 directed probe된다(hidden extra 발견 보장). emit_roam_hint: 스캔 성공 시 roam 데몬의 후보없음 backoff를 즉시 해제하는 hint 파일 touch(기본 true).",
+            "_comment": "Background scan configuration for mlan0. freq_filter: freq 필터 포함 여부(기본 true), false면 전체 대역 스캔(스캔 시간·airtime↑). ssid_filter(기본 true)는 passive=false일 때만 유효하며, 그때는 roaming.extra_ssids가 ssid_filter와 무관하게 항상 directed probe된다(hidden extra 발견 보장). 추가 키 설명은 _comment_<키> 참조.",
             "interval": 60,
             "ssid_filter": true,
             "freq_filter": true,
+            "_comment_passive": "true(기본)=패시브 스캔(probe request 미송신, beacon만 수신) — directed probe(ssid_filter/extra_ssids)가 전부 무효가 되고 hidden SSID는 bgscan으로 발견되지 않는다(로밍 트리거 시 액티브 폴백이 보완). false=종전 액티브 스캔",
             "passive": true,
+            "_comment_emit_roam_hint": "true(기본)면 스캔 성공 시 /tmp/wifi_roam_hint_<iface> touch — roam 데몬의 후보없음 지수 backoff를 즉시 해제하는 단방향 신호",
             "emit_roam_hint": true,
             "enabled": true
         },
@@ -343,11 +345,16 @@
                 "detection_time": 5
             },
             "STAGED_SCAN": {
-                "_comment": "단계형 로밍 스캔(홈채널 패시브 → 교차채널 캐시 → 액티브 폴백). enable=false면 종전 단일 액티브 스캔으로 회귀(무회귀 폴백). cache_fresh_sec: 배경 캐시 신선도 바운드(초, bgscan.interval+여유≥10초로 설정). self_induced_tail_sec: 자기 스캔 종료 후 이 시간 안에 기록된 ap.log 블록은 그 스캔이 유발한 것으로 보고 배경 캐시로 쓰지 않음(초). skip_redundant_active: scan_freq가 홈채널 부분집합(단일채널 등)이고 홈 스캔이 현재 AP 외 후보를 실제로 봤으면 Stage3 액티브 폴백 스킵(불필요한 probe 제거. 현재 AP만 보이면 재발견 위해 액티브 유지). home_passive: Stage1 홈채널 스캔 모드(기본 true=패시브). false면 directed 액티브(allowed SSID probe, wildcard 없음) — 홈채널에 hidden 로밍 SSID가 있으면 false 권장(스킵 최적화 유지한 채 hidden 발견). SIGHUP으로 런타임 반영.",
+                "_comment": "단계형 로밍 스캔(홈채널 스캔 → 교차채널 캐시 → 액티브 폴백). 키별 설명은 _comment_<키> 참조. 전 키 SIGHUP으로 런타임 반영.",
+                "_comment_enable": "false면 종전 단일 액티브 스캔 경로로 회귀(무회귀 폴백)",
                 "enable": true,
+                "_comment_skip_redundant_active": "scan_freq가 홈채널 부분집합(단일채널 등)이고 홈 스캔이 현재 AP 외 후보를 실제로 봤으면 Stage3 액티브 폴백 스킵(불필요한 probe 제거). 스캔 실패·현재 AP만 보임·타 SSID만 보임이면 재시도/재발견 위해 액티브 유지",
                 "skip_redundant_active": true,
+                "_comment_home_passive": "Stage1 홈채널 스캔 모드. true(기본)=패시브(probe 미송신, 저부하). false=directed 액티브(allowed SSID probe, wildcard 없음) — 홈채널에 hidden 로밍 SSID가 있으면 false 권장(스킵 최적화 유지한 채 hidden 발견)",
                 "home_passive": true,
+                "_comment_cache_fresh_sec": "교차채널 캐시(ap.log 배경 블록) 신선도 바운드(초). bgscan.interval + 여유(≥10초)로 설정 — 작으면 매 주기 말미에 최신 배경 블록조차 stale 판정되어 불필요한 액티브 폴백 발생",
                 "cache_fresh_sec": 70,
+                "_comment_self_induced_tail_sec": "자기(로밍 판정) 스캔 종료 후 이 시간(초) 안에 기록된 ap.log 블록은 그 스캔이 유발한 것으로 보고 배경 캐시로 쓰지 않음",
                 "self_induced_tail_sec": 10
             },
             "ADAPTIVE_INTERVAL": {
@@ -470,11 +477,13 @@
             "enabled": false
         },
         "bgscan": {
-            "_comment": "Background scan configuration for mlan1. passive: 패시브 스캔 사용 여부(기본 true) — true면 probe request를 보내지 않고 beacon만 수신하므로 ssid_filter/extra_ssids의 directed probe가 모두 무효가 되고 hidden SSID는 bgscan으로 발견되지 않는다(로밍 트리거 시 액티브 폴백이 보완). freq_filter: freq 필터 포함 여부(기본 true), false면 전체 대역 스캔(스캔 시간·airtime↑). ssid_filter(기본 true)는 passive=false일 때만 유효하며, 그때는 roaming.extra_ssids가 ssid_filter와 무관하게 항상 directed probe된다(hidden extra 발견 보장). emit_roam_hint: 스캔 성공 시 roam 데몬의 후보없음 backoff를 즉시 해제하는 hint 파일 touch(기본 true).",
+            "_comment": "Background scan configuration for mlan1. freq_filter: freq 필터 포함 여부(기본 true), false면 전체 대역 스캔(스캔 시간·airtime↑). ssid_filter(기본 true)는 passive=false일 때만 유효하며, 그때는 roaming.extra_ssids가 ssid_filter와 무관하게 항상 directed probe된다(hidden extra 발견 보장). 추가 키 설명은 _comment_<키> 참조.",
             "interval": 60,
             "ssid_filter": true,
             "freq_filter": true,
+            "_comment_passive": "true(기본)=패시브 스캔(probe request 미송신, beacon만 수신) — directed probe(ssid_filter/extra_ssids)가 전부 무효가 되고 hidden SSID는 bgscan으로 발견되지 않는다(로밍 트리거 시 액티브 폴백이 보완). false=종전 액티브 스캔",
             "passive": true,
+            "_comment_emit_roam_hint": "true(기본)면 스캔 성공 시 /tmp/wifi_roam_hint_<iface> touch — roam 데몬의 후보없음 지수 backoff를 즉시 해제하는 단방향 신호",
             "emit_roam_hint": true,
             "enabled": false
         },
@@ -540,11 +549,16 @@
                 "detection_time": 5
             },
             "STAGED_SCAN": {
-                "_comment": "단계형 로밍 스캔(홈채널 패시브 → 교차채널 캐시 → 액티브 폴백). enable=false면 종전 단일 액티브 스캔으로 회귀(무회귀 폴백). cache_fresh_sec: 배경 캐시 신선도 바운드(초, bgscan.interval+여유≥10초로 설정). self_induced_tail_sec: 자기 스캔 종료 후 이 시간 안에 기록된 ap.log 블록은 그 스캔이 유발한 것으로 보고 배경 캐시로 쓰지 않음(초). skip_redundant_active: scan_freq가 홈채널 부분집합(단일채널 등)이고 홈 스캔이 현재 AP 외 후보를 실제로 봤으면 Stage3 액티브 폴백 스킵(불필요한 probe 제거. 현재 AP만 보이면 재발견 위해 액티브 유지). home_passive: Stage1 홈채널 스캔 모드(기본 true=패시브). false면 directed 액티브(allowed SSID probe, wildcard 없음) — 홈채널에 hidden 로밍 SSID가 있으면 false 권장(스킵 최적화 유지한 채 hidden 발견). SIGHUP으로 런타임 반영.",
+                "_comment": "단계형 로밍 스캔(홈채널 스캔 → 교차채널 캐시 → 액티브 폴백). 키별 설명은 _comment_<키> 참조. 전 키 SIGHUP으로 런타임 반영.",
+                "_comment_enable": "false면 종전 단일 액티브 스캔 경로로 회귀(무회귀 폴백)",
                 "enable": true,
+                "_comment_skip_redundant_active": "scan_freq가 홈채널 부분집합(단일채널 등)이고 홈 스캔이 현재 AP 외 후보를 실제로 봤으면 Stage3 액티브 폴백 스킵(불필요한 probe 제거). 스캔 실패·현재 AP만 보임·타 SSID만 보임이면 재시도/재발견 위해 액티브 유지",
                 "skip_redundant_active": true,
+                "_comment_home_passive": "Stage1 홈채널 스캔 모드. true(기본)=패시브(probe 미송신, 저부하). false=directed 액티브(allowed SSID probe, wildcard 없음) — 홈채널에 hidden 로밍 SSID가 있으면 false 권장(스킵 최적화 유지한 채 hidden 발견)",
                 "home_passive": true,
+                "_comment_cache_fresh_sec": "교차채널 캐시(ap.log 배경 블록) 신선도 바운드(초). bgscan.interval + 여유(≥10초)로 설정 — 작으면 매 주기 말미에 최신 배경 블록조차 stale 판정되어 불필요한 액티브 폴백 발생",
                 "cache_fresh_sec": 70,
+                "_comment_self_induced_tail_sec": "자기(로밍 판정) 스캔 종료 후 이 시간(초) 안에 기록된 ap.log 블록은 그 스캔이 유발한 것으로 보고 배경 캐시로 쓰지 않음",
                 "self_induced_tail_sec": 10
             },
             "ADAPTIVE_INTERVAL": {
