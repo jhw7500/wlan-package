@@ -596,6 +596,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 | `ssid_filter` | bool | `true` | `iw scan`의 **기본 ssid** directed probe 포함 여부. `true`면 conf 기본 ssid를 probe, `false`면 기본 ssid는 probe 없이 스캔. `roaming.extra_ssids`(§11.4)는 이 값과 **무관하게 항상 probe**된다. **`passive=true`(기본)면 directed probe 자체가 없어 이 키는 무효** |
 | `freq_filter` | bool | `true` | `iw scan`에 `freq <wpa_supplicant conf의 scan_freq>` 필터 포함 여부. `false`면 freq 제한 없이 전체 대역 스캔(스캔 시간·airtime↑) |
 | `passive` | bool | `true` | `true`=패시브 스캔(`iw scan passive`, probe request 미송신·beacon 수신만). `false`=종전 액티브 스캔 |
+| `emit_roam_hint` | bool | `true` | 스캔 성공 시 `/tmp/wifi_roam_hint_<iface>` touch — `wifi_roam`의 후보없음 지수 backoff를 즉시 해제하는 신호(§11.4). `false`면 hint 미발행 |
 
 > **패시브 스캔 (`passive`, 기본 `true`)**: bgscan은 probe request를 쏘지 않고 beacon만 수신한다. probe를 안 보내므로 **directed `ssid` 토큰은 명령에서 전부 생략**되며(`ssid_filter`/`extra_ssids`의 directed probe는 패시브에서 무의미), airtime 오염이 줄고 beacon 기반 RSSI라 현재 링크의 `signal_avg`와 측정 스케일이 가까워진다(로밍 판정 정합성↑, §11.4). **한계**: beacon을 보내지 않는 **hidden SSID는 패시브로 발견되지 않는다** — hidden extra SSID가 로밍 후보라면 `passive=false`로 액티브 bgscan을 쓰거나, 로밍 트리거 시의 액티브 폴백(§11.4)에 의존해야 한다.
 
@@ -614,10 +615,10 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 | `use_signal_avg` | bool | `true` | 평균 신호 사용 여부 |
 | `DEFAULT_TH_2G` | int | `-75` | 2.4GHz 로밍 RSSI 임계값 (dBm) |
 | `DEFAULT_TH_5G` | int | `-75` | 5GHz 로밍 RSSI 임계값 (dBm) |
-| `DIFF_TH` | int | `10` | 로밍 결정 RSSI 차이 (dB) |
-| `CHECK_INTERVAL` | int | `3` / `5` | 로밍 체크 주기 (초) |
+| `DIFF_TH` | int | `8` | 로밍 결정 RSSI 차이 (dB) |
+| `CHECK_INTERVAL` | int | `2` / `3` | 로밍 체크 주기 (초) |
 | `SCAN_NO_RESULT_SLEEP` | int | `3` | 스캔 결과 없을 때 대기 (초) |
-| `ROAM_SUCCESS_SLEEP` | int | `5` | 로밍 성공 후 대기 (초) |
+| `ROAM_SUCCESS_SLEEP` | int | `3` / `2` | 로밍 성공 후 대기 (초) |
 | `enabled` | bool | mlan0 `true` / mlan1 `false` | 로밍 데몬(`wifi_roam@<iface>`) 활성화. `wifi_apply_enabled.sh`가 systemd enable/disable로 동기화. **mlan0 로밍이 기본 활성화됨** |
 | `extra_ssids` | array[str] | `[]` | conf 기본 ssid 외 추가 로밍 후보 SSID 목록. 빈 배열=기존 단일 SSID 동작(무회귀) |
 | `generate_network_blocks` | bool | `false` | 모드 결정자. `false`=모드B(단일 블록, cross-SSID는 외부 `wifi connect`만, `extra_ssids` 무시), `true`=모드A(다중 network 블록 + `select_network` cross-SSID). 기본 `false`로 기존 단일 SSID 동작 무회귀 |
@@ -684,9 +685,9 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 | 키 | 타입 | 기본값 (mlan0/mlan1) | 설명 |
 |----|------|---------------------|------|
 | `enable` | bool | `true` | 핑퐁 방지 활성화 |
-| `window` | int | `30` / `60` | 감시 윈도우 (초) |
+| `window` | int | `20` | 감시 윈도우 (초) |
 | `max_roams_in_window` | int | `3` | 윈도우 내 최대 로밍 횟수 |
-| `detection_time` | int | `10` / `30` | 핑퐁 감지 시 대기 시간 (초) |
+| `detection_time` | int | `5` | A→B→A 왕복 감지 시간 (초) |
 
 #### ADAPTIVE_INTERVAL - 적응형 체크 주기
 
@@ -847,9 +848,8 @@ SNMP는 **기본 off(opt-in)**이다. `snmp.enabled=true`일 때만 `wifi_apply_
 |-----------|-------|-------|------|
 | `enabled` | `true` | `false` | **mlan1은 기본적으로 초기화되지 않음** (radio setup·bridge enable skip) |
 | `STANDARD` | `ax` | `ac` | mlan1은 11ax 미지원 |
-| `roaming.CHECK_INTERVAL` | `3` | `5` | mlan0은 주 채널로 더 빠른 로밍 감지 |
-| `roaming.PING_PONG_PREVENTION.window` | `30` | `60` | mlan1은 더 넓은 윈도우로 보수적 판단 |
-| `roaming.PING_PONG_PREVENTION.detection_time` | `10` | `30` | mlan1은 핑퐁 감지 시 더 오래 대기 |
+| `roaming.CHECK_INTERVAL` | `2` | `3` | mlan0은 주 채널로 더 빠른 로밍 감지 |
+| `roaming.ROAM_SUCCESS_SLEEP` | `3` | `2` | 로밍 성공 후 정착 대기 |
 | `roaming.enabled` | `true` | `false` | mlan0 로밍 기본 활성화 |
 | `bgscan.enabled` | `true` | `false` | mlan1 비활성 인터페이스 |
 | `checker.enabled` | `true` | `false` | mlan1 비활성 인터페이스 |

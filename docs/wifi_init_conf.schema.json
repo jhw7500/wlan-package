@@ -1168,6 +1168,14 @@
               "x-apply-timing": "runtime",
               "x-consumer": "wifi_bgscan.py"
             },
+            "emit_roam_hint": {
+              "type": "boolean",
+              "default": true,
+              "description": "bgscan 스캔 성공 시 /tmp/wifi_roam_hint_<iface> touch — wifi_roam 의 후보없음 지수 backoff 를 즉시 해제하는 신호(단방향, race-free). false 면 hint 미발행(backoff 는 자체 곡선으로만 회복)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_bgscan.py"
+            },
             "enabled": {
               "type": "boolean",
               "default": true,
@@ -2059,6 +2067,14 @@
               "type": "boolean",
               "default": true,
               "description": "패시브 스캔(iw scan passive) 사용 여부. true면 probe request 미송신·beacon만 수신(directed ssid probe 무효, hidden SSID 미발견). false면 종전 액티브 스캔",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_bgscan.py"
+            },
+            "emit_roam_hint": {
+              "type": "boolean",
+              "default": true,
+              "description": "bgscan 스캔 성공 시 /tmp/wifi_roam_hint_<iface> touch — wifi_roam 의 후보없음 지수 backoff 를 즉시 해제하는 신호(단방향, race-free). false 면 hint 미발행(backoff 는 자체 곡선으로만 회복)",
               "x-ui-editable": "yes",
               "x-apply-timing": "runtime",
               "x-consumer": "wifi_bgscan.py"
