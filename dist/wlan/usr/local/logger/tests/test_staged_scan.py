@@ -50,6 +50,7 @@ def _globals(monkeypatch):
     monkeypatch.setattr(wifi_roam, "ENABLE_STAGED_SCAN", True)
     monkeypatch.setattr(wifi_roam, "SELF_INDUCED_TAIL_SEC", 10)
     monkeypatch.setattr(wifi_roam, "SKIP_REDUNDANT_ACTIVE_SCAN", True)
+    monkeypatch.setattr(wifi_roam, "HOME_PASSIVE", True, raising=False)
 
 
 CUR = "aa:aa:aa:aa:aa:aa"
@@ -804,3 +805,100 @@ def test_cache_fresh_default_covers_deployed_bgscan_interval():
             f"{iface}: cache_fresh_sec({cfs}) 가 bgscan.interval({interval})+지터 여유를 못 덮음"
         checked += 1
     assert checked >= 2, f"템플릿에서 검사된 iface 수 부족: {checked}"
+
+
+# ---------- Stage 1 스캔 모드 (STAGED_SCAN.home_passive) ----------
+
+def test_home_passive_false_stage1_directed_active(monkeypatch):
+    """home_passive=false 면 Stage 1 홈채널 스캔이 패시브 대신 **directed 액티브**
+    (allowed SSID probe, wildcard 없음 — Stage 3와 동일한 축소 원칙)로 실행된다.
+    홈채널에 hidden 로밍 타깃이 있는 배포에서 스킵 최적화를 유지한 채 hidden 을 발견."""
+    monkeypatch.setattr(wifi_roam, "HOME_PASSIVE", False, raising=False)
+    calls = []
+    home = [apln(0, 36, -70, CUR, "Net"), apln(1, 36, -45, "bb:bb:bb:bb:bb:bb", "Net")]
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(None, home, calls))
+    monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
+
+    best, _, _, scanned = wifi_roam.staged_scan_best_candidate(
+        _station(rssi=-70), None, ["Net"], "Net", STABLE, None
+    )
+    assert len(calls) == 1, f"홈 스캔 1회만 실행돼야: {calls}"
+    c = calls[0]
+    assert c["passive"] is False                 # 액티브
+    assert c["ssids"] == ["Net"]                 # allowed directed probe
+    assert c["freqs"] == [5180]                  # 홈채널 스코프
+    assert c["wildcard"] is False                # wildcard 제거(Stage 3와 동일)
+    assert best is not None and best["bssid"] == "bb:bb:bb:bb:bb:bb"
+    assert scanned is True
+
+
+def test_home_passive_default_true_keeps_passive(monkeypatch):
+    """기본값(true)은 현행 그대로 패시브 — 무회귀. 기본 상수도 함께 고정."""
+    assert wifi_roam.DEFAULT_HOME_PASSIVE is True
+    calls = []
+    home = [apln(0, 36, -70, CUR, "Net")]
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(home, None, calls))
+    monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
+    wifi_roam.staged_scan_best_candidate(
+        _station(rssi=-70), None, ["Net"], "Net", STABLE, None
+    )
+    assert calls and calls[0]["passive"] is True and calls[0]["ssids"] is None
+
+
+def test_home_passive_config_applies():
+    """`.roaming.STAGED_SCAN.home_passive` 가 전역에 반영(SIGHUP reload 동일 경로)."""
+    wifi_roam.load_roaming_config(
+        "mlan0", {"mlan0": {"roaming": {"STAGED_SCAN": {"home_passive": False}}}}
+    )
+    assert wifi_roam.HOME_PASSIVE is False
+    wifi_roam.load_roaming_config(
+        "mlan0", {"mlan0": {"roaming": {"STAGED_SCAN": {"home_passive": True}}}}
+    )
+    assert wifi_roam.HOME_PASSIVE is True
+
+
+def test_home_passive_absent_keeps_default_invalid_coerced_to_bool():
+    """키 부재는 기본값(true) 유지. 문자열 값은 parse_bool 규칙으로 해석되며 미인식
+    문자열은 **False 로 강제**된다(기본값 유지 아님 — JSON boolean 리터럴 사용 전제,
+    enable 등 기존 bool 키들과 동일 거동). 실거동을 명시 고정해 vacuous 통과를 막는다."""
+    wifi_roam.load_roaming_config("mlan0", {"mlan0": {"roaming": {}}})
+    assert wifi_roam.HOME_PASSIVE is wifi_roam.DEFAULT_HOME_PASSIVE
+    wifi_roam.load_roaming_config(
+        "mlan0", {"mlan0": {"roaming": {"STAGED_SCAN": {"home_passive": "yes-ish"}}}}
+    )
+    assert wifi_roam.HOME_PASSIVE is False  # parse_bool 미인식 문자열 → False (실거동 고정)
+
+
+def test_home_passive_false_skip_guard_still_applies(monkeypatch):
+    """home_passive=false + 단일채널 + 이웃 실견 → Stage 3 폴백 스킵 유지(총 스캔 1회).
+    홈 액티브는 hidden 까지 커버하므로 Stage 3 는 완전 중복 — 스킵 정당성이 더 강하다."""
+    monkeypatch.setattr(wifi_roam, "HOME_PASSIVE", False, raising=False)
+    monkeypatch.setattr(wifi_roam, "WPA_FREQ", ["5240"])
+    calls = []
+    home = [apln(0, 48, -50, CUR, "Net"), apln(1, 48, -49, "bb:bb:bb:bb:bb:bb", "Net")]
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(None, home, calls))
+    monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
+
+    best, _, _, _ = wifi_roam.staged_scan_best_candidate(
+        _station(rssi=-70, freq=5240), None, ["Net"], "Net", STABLE, None
+    )
+    assert best is None                          # diff 1 < 10 미달
+    assert len(calls) == 1, f"홈 액티브 1회 외 추가 스캔 금지: {calls}"
+
+
+def test_home_passive_false_baseline_unification(monkeypatch):
+    """home_passive=false 에서도 baseline 통일(현재 AP RSSI 를 같은 스캔에서) 유지 —
+    station dump(-70) 기준이면 diff 22 로 오로밍했을 상황을 홈 액티브 실측(-55)이 방지.
+    단일채널로 두어 스킵 가드가 Stage 3 를 막게 하고, 총 1회 스캔으로 판정 완결을 함께 고정."""
+    monkeypatch.setattr(wifi_roam, "HOME_PASSIVE", False, raising=False)
+    monkeypatch.setattr(wifi_roam, "WPA_FREQ", ["5180"])
+    calls = []
+    home = [apln(0, 36, -55, CUR, "Net"), apln(1, 36, -48, "bb:bb:bb:bb:bb:bb", "Net")]
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(None, home, calls))
+    monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
+
+    best, _, _, _ = wifi_roam.staged_scan_best_candidate(
+        _station(rssi=-70), None, ["Net"], "Net", STABLE, None
+    )
+    assert best is None                          # baseline=-55 → diff 7 < 10
+    assert len(calls) == 1
