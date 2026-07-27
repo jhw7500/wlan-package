@@ -2491,6 +2491,22 @@ def filter_ap_lines_by_freq(ap_lines, freq):
     return out
 
 
+def _record_roam_scan_time():
+    """bgscan 타이머 리셋 신호(LAST_SCAN_TIME_FILE) 기록.
+
+    bgscan 은 이 시각 이후 interval 전체를 다시 대기하므로, **bgscan 동등 커버리지**
+    (scan_freq 전 채널을 실제로 훑은) 스캔에서만 기록해야 한다. 홈채널 패시브 같은 부분
+    스캔까지 기록하면 — bgscan 의 산출물(교차채널 ap.log 캐시·roam hint)을 정보로도
+    라디오로도 대체하지 못하면서 — RSSI 가 임계 주변에서 진동할 때 bgscan 이 계속 뒤로
+    밀려 Stage 2 캐시 공급이 고사한다(passive-first 가 자기 캐시 공급원을 굶기는 역설).
+    실패는 무시(신호 파일 — 다음 동등 스캔에서 재기록)."""
+    try:
+        with open(LAST_SCAN_TIME_FILE, "w") as f:
+            f.write(str(time.time()))
+    except Exception:
+        pass
+
+
 def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, trend, cooldown):
     """단계형 스캔으로 최적 로밍 후보를 찾는다.
       0) 교차채널 캐시 **스냅샷**(스캔 전에 먼저 확보 — 아래 이유) + 시계 스텝 감지
@@ -2531,6 +2547,7 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
     # 없다. 타 SSID beacon 만 받은 경우도 같은 이유로 스킵하지 않는다(리뷰 반영).
     home_scan_ok = False
     home_covered = False  # Stage 1 iw scan 성공(신선한 홈채널 실측 존재) — Stage 2 필터 게이트
+    home_covers_all = False  # scan_freq ⊆ {홈채널}(단일채널) — 홈 스캔이 곧 전체 커버리지
     home_freq = station.get("freq")
     if home_freq:
         # scan_results는 BSS 테이블 전체를 주므로 홈 주파수로 좁힌다(위 helper 주석 참조).
@@ -2554,6 +2571,15 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
             home_scan_ok = any(
                 e.get("bssid") != cur_bssid for e in home_entries
             )  # 현재 AP 외 후보를 봤을 때만 '커버됨'
+            # scan_freq ⊆ {홈채널}이면 이번 홈 스캔이 곧 **전체 커버리지**(bgscan 동등) —
+            # 결과·이후 단계와 무관하게 bgscan 타이머 리셋을 기록한다(_record 독스트링 참조).
+            # {str(home_freq)} 는 원소 1개짜리 set 리터럴(⊆ 비교), str() 은 타입 정규화
+            # (WPA_FREQ 원소는 str, home_freq 는 int).
+            home_covers_all = bool(
+                WPA_FREQ and {str(f) for f in WPA_FREQ} <= {str(home_freq)}
+            )
+            if home_covers_all:
+                _record_roam_scan_time()
             baseline_rssi = baseline_from_entries(home_entries, cur_bssid, baseline_rssi)
             best_ap, reason, score = evaluate_candidates(
                 home_entries, station, trend, cooldown, live_ssid, baseline_rssi
@@ -2625,15 +2651,7 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
     # 재시도/재발견 역할이라 유지) + scan_freq 가 홈채널의 부분집합.
     # hidden SSID 는 액티브 probe로만 잡히므로 홈채널에 hidden 로밍 타깃이 있으면
     # home_passive=false(홈 directed 액티브)로 커버하거나 이 스킵을 config로 끈다.
-    if (
-        SKIP_REDUNDANT_ACTIVE_SCAN
-        and home_scan_ok
-        and home_freq
-        and WPA_FREQ
-        # {str(home_freq)} 는 원소 1개짜리 **set 리터럴** — scan_freq 집합이 홈채널 하나의
-        # 부분집합인지(⊆) 비교. str() 은 각 원소 정규화용(WPA_FREQ 원소는 str, home_freq 는 int).
-        and {str(f) for f in WPA_FREQ} <= {str(home_freq)}
-    ):
+    if SKIP_REDUNDANT_ACTIVE_SCAN and home_scan_ok and home_covers_all:
         logger.message(
             "info",
             f"[{IFACE}] scan_freq ⊆ home channel({home_freq}) — home "
@@ -2657,6 +2675,9 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
         active_lines = iw_scan_to_ap_lines(allowed, None, include_wildcard=True)
     scanned = True
     if active_lines:
+        # scan_freq 전 채널(미설정 시 전대역) 실측 **성공** = bgscan 동등 커버리지.
+        # 실패(None) 시엔 기록하지 않는다 — 신선 데이터가 없으니 bgscan 조기 재개가 이득.
+        _record_roam_scan_time()
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         active_entries = parse_scan_entries(
             active_lines, now_str, channel_info_data, allowed_set
@@ -2833,24 +2854,18 @@ def main():
             # 판정 스캔은 메모리 처리(ap.log 미기록) — ap.log는 배경 스캐너 전용 캐시라
             # 판정 스캔이 마지막 블록을 덮어 캐시를 가리는 문제와 포맷 혼재(같은 시각 두
             # 형식)를 함께 제거한다. 후보 로그는 syslog(logger.message)로 남는다.
+            # LAST_SCAN_TIME(bgscan 타이머 리셋)은 staged 함수가 **bgscan 동등 커버리지**
+            # 스캔에서만 직접 기록한다(홈채널 부분 스캔의 무조건 기록이 bgscan 을 계속
+            # 밀어내 Stage 2 캐시를 고사시키던 문제 제거 — _record_roam_scan_time 참조).
             best_ap, best_reason, best_score, scanned = staged_scan_best_candidate(
                 station, channel_info_data, allowed, live_ssid, trend, cross_ssid_cooldown
             )
-            if scanned:
-                try:
-                    with open(LAST_SCAN_TIME_FILE, "w") as f:
-                        f.write(str(time.time()))
-                except Exception:
-                    pass
         else:
             # 종전 단일 액티브 스캔 경로(ENABLE_STAGED_SCAN=False 또는 WPA_SSID 부재 시 무회귀).
             if WPA_SSID:
                 ap_lines = iw_scan_to_ap_lines(allowed, WPA_FREQ)
-                try:
-                    with open(LAST_SCAN_TIME_FILE, "w") as f:
-                        f.write(str(time.time()))
-                except Exception:
-                    pass
+                # 레거시 = scan_freq 전 채널 액티브(bgscan 동등) — 종전대로 시도 시 기록.
+                _record_roam_scan_time()
                 if ap_lines:
                     save_with_timestamp(SCAN_LOG_FILE, ap_lines)
                 else:
