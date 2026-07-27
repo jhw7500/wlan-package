@@ -37,8 +37,11 @@ WPA_CONF_MTIME = None  # 마지막으로 파싱한 wpa_supplicant conf 의 mtime
 # ==============================================================================
 DEFAULT_TH_2G = -75
 DEFAULT_TH_5G = -75
-DIFF_TH = 10
-CHECK_INTERVAL = 1
+# 코드 기본값은 JSON 로드 실패/키 부재 시의 폴백 — 템플릿 wifi_init_conf.json(제품 의도)과
+# 일치시킨다(fail-same, tests/test_defaults_template_consistency.py 가 고정). per-iface 로
+# 값이 갈리는 키(CHECK_INTERVAL 2/3, ROAM_SUCCESS_SLEEP 3/2)는 주 인터페이스 mlan0 기준.
+DIFF_TH = 8
+CHECK_INTERVAL = 2  # 로밍 판정 tick 주기(초, mlan0 기준 — mlan1 템플릿=3)
 
 # 단계형 로밍 스캔: RSSI가 임계값 이하로 떨어지면
 #   1) 홈채널 패시브 스캔(같은 채널 후보 + 현재 AP RSSI로 baseline 통일)
@@ -94,18 +97,20 @@ def is_valid_rssi(rssi) -> bool:
 
 
 # 개선 설정 기본값 (Default Improvement Configuration)
-DEFAULT_ENABLE_PREDICTIVE_ROAM = True
+# 실험 기능 enable 류는 템플릿이 전부 false(plain-mode) — 폴백도 동일하게 꺼 둔다.
+# (종전 코드 기본 True 는 JSON 손상 시 실험 기능 4종이 일제히 켜지는 fail-different 였다.)
+DEFAULT_ENABLE_PREDICTIVE_ROAM = False
 DEFAULT_PREDICTIVE_THRESHOLD_BOOST = 5
 DEFAULT_TREND_WINDOW_SIZE = 5
 DEFAULT_TREND_HISTORY_MAX_AGE = 30
-DEFAULT_ENABLE_LOAD_BASED_ROAM = True
+DEFAULT_ENABLE_LOAD_BASED_ROAM = False
 DEFAULT_MAX_ROAM_LOAD = 80
 DEFAULT_LOAD_DIFF_THRESHOLD = 20
 DEFAULT_ENABLE_PING_PONG_PREVENTION = True
-DEFAULT_PING_PONG_WINDOW = 60
+DEFAULT_PING_PONG_WINDOW = 20
 DEFAULT_MAX_ROAMS_IN_WINDOW = 3
-DEFAULT_PING_PONG_DETECTION_TIME = 30
-DEFAULT_ENABLE_ADAPTIVE_INTERVAL = True
+DEFAULT_PING_PONG_DETECTION_TIME = 5
+DEFAULT_ENABLE_ADAPTIVE_INTERVAL = False
 DEFAULT_MIN_CHECK_INTERVAL = 1
 DEFAULT_MAX_CHECK_INTERVAL = 10
 DEFAULT_ADAPTIVE_RSSI_DROP_THRESHOLD = -5    # Phase 1: 이 값 미만 하락 시 min_interval 전환
@@ -114,21 +119,21 @@ DEFAULT_ADAPTIVE_NEAR_THRESHOLD_OFFSET = 5   # Phase 2: threshold+offset 이하 
 DEFAULT_ADAPTIVE_NEAR_THRESHOLD_INTERVAL = 2 # Phase 2: 근접 구간 고정 인터벌 (s)
 DEFAULT_ADAPTIVE_GOOD_SIGNAL_OFFSET = 15     # Phase 2: threshold+offset 초과 → 간격 증가 허용
 DEFAULT_ADAPTIVE_CONSECUTIVE_DROP_COUNT = 2  # Phase 3: 연속 하락 이 횟수 이상 시 min_interval 강제
-DEFAULT_USE_SIGNAL_AVG = False  # True: link 파일의 signal_avg 사용, False: signal 사용
+DEFAULT_USE_SIGNAL_AVG = True  # True: link 파일의 signal_avg(평활) 사용, False: signal(순간값)
 
 # Sleep 기본값
 DEFAULT_SCAN_NO_RESULT_SLEEP = 3  # AP 스캔 결과 없을 때 재시도 대기
-DEFAULT_ROAM_SUCCESS_SLEEP = 5  # 로밍 성공 후 안정화 대기
+DEFAULT_ROAM_SUCCESS_SLEEP = 3  # 로밍 성공 후 안정화 대기(mlan0 기준, mlan1 템플릿=2)
 DEFAULT_ROAM_NO_RESULT_MAX_SLEEP = 30  # 후보없음 backoff 상한(초)
 DEFAULT_ROAM_NO_RESULT_BACKOFF_RECOVER_SEC = 60  # 상한 도달 후 streak 점감 시작(초)
 DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT = 2  # cross-SSID 전환 실패 시 cooldown 없이 즉시 재시도 허용 횟수(초과 시 backoff)
 DEFAULT_ROAM_NO_RESULT_FAST_COUNT = 3  # 후보 미발견 시 처음 N회는 backoff 없이 빠른 주기(SCAN_NO_RESULT_SLEEP) 유지 후 지수 backoff
 
 # Post-Roam ARP 최적화 기본값
-DEFAULT_ENABLE_POST_ROAM_ARP_OPTIMIZATION = True
+DEFAULT_ENABLE_POST_ROAM_ARP_OPTIMIZATION = False
 DEFAULT_POST_ROAM_GARP_COUNT = 2
 DEFAULT_POST_ROAM_GARP_WAIT = 1
-DEFAULT_ENABLE_POST_ROAM_PEER_WARMUP = True
+DEFAULT_ENABLE_POST_ROAM_PEER_WARMUP = False
 DEFAULT_POST_ROAM_PEER_COUNT = 5
 DEFAULT_POST_ROAM_PEER_WAIT = 1
 

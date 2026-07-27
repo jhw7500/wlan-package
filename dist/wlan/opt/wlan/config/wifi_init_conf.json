@@ -273,11 +273,12 @@
             "enabled": false
         },
         "bgscan": {
-            "_comment": "Background scan configuration for mlan0. passive: 패시브 스캔 사용 여부(기본 true) — true면 probe request를 보내지 않고 beacon만 수신하므로 ssid_filter/extra_ssids의 directed probe가 모두 무효가 되고 hidden SSID는 bgscan으로 발견되지 않는다(로밍 트리거 시 액티브 폴백이 보완). freq_filter: freq 필터 포함 여부(기본 true), false면 전체 대역 스캔(스캔 시간·airtime↑). ssid_filter(기본 true)는 passive=false일 때만 유효하며, 그때는 roaming.extra_ssids가 ssid_filter와 무관하게 항상 directed probe된다(hidden extra 발견 보장).",
+            "_comment": "Background scan configuration for mlan0. passive: 패시브 스캔 사용 여부(기본 true) — true면 probe request를 보내지 않고 beacon만 수신하므로 ssid_filter/extra_ssids의 directed probe가 모두 무효가 되고 hidden SSID는 bgscan으로 발견되지 않는다(로밍 트리거 시 액티브 폴백이 보완). freq_filter: freq 필터 포함 여부(기본 true), false면 전체 대역 스캔(스캔 시간·airtime↑). ssid_filter(기본 true)는 passive=false일 때만 유효하며, 그때는 roaming.extra_ssids가 ssid_filter와 무관하게 항상 directed probe된다(hidden extra 발견 보장). emit_roam_hint: 스캔 성공 시 roam 데몬의 후보없음 backoff를 즉시 해제하는 hint 파일 touch(기본 true).",
             "interval": 60,
             "ssid_filter": true,
             "freq_filter": true,
             "passive": true,
+            "emit_roam_hint": true,
             "enabled": true
         },
         "roaming": {
@@ -469,11 +470,12 @@
             "enabled": false
         },
         "bgscan": {
-            "_comment": "Background scan configuration for mlan1. passive: 패시브 스캔 사용 여부(기본 true) — true면 probe request를 보내지 않고 beacon만 수신하므로 ssid_filter/extra_ssids의 directed probe가 모두 무효가 되고 hidden SSID는 bgscan으로 발견되지 않는다(로밍 트리거 시 액티브 폴백이 보완). freq_filter: freq 필터 포함 여부(기본 true), false면 전체 대역 스캔(스캔 시간·airtime↑). ssid_filter(기본 true)는 passive=false일 때만 유효하며, 그때는 roaming.extra_ssids가 ssid_filter와 무관하게 항상 directed probe된다(hidden extra 발견 보장).",
+            "_comment": "Background scan configuration for mlan1. passive: 패시브 스캔 사용 여부(기본 true) — true면 probe request를 보내지 않고 beacon만 수신하므로 ssid_filter/extra_ssids의 directed probe가 모두 무효가 되고 hidden SSID는 bgscan으로 발견되지 않는다(로밍 트리거 시 액티브 폴백이 보완). freq_filter: freq 필터 포함 여부(기본 true), false면 전체 대역 스캔(스캔 시간·airtime↑). ssid_filter(기본 true)는 passive=false일 때만 유효하며, 그때는 roaming.extra_ssids가 ssid_filter와 무관하게 항상 directed probe된다(hidden extra 발견 보장). emit_roam_hint: 스캔 성공 시 roam 데몬의 후보없음 backoff를 즉시 해제하는 hint 파일 touch(기본 true).",
             "interval": 60,
             "ssid_filter": true,
             "freq_filter": true,
             "passive": true,
+            "emit_roam_hint": true,
             "enabled": false
         },
         "roaming": {
