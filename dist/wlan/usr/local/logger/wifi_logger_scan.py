@@ -17,8 +17,40 @@ JSON_DIR = "var/log/cantops/json"
 LINK_PATH = "/var/log/cantops/json"
 TARGET_PATH = "/dev/shm/json"
 WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
+WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
 LOG_INTERVAL = 30
-STALE_THRESHOLD_SEC = 600  #10min
+# beacon.json stale 엔트리 프루닝 임계(초, 10분). 템플릿 logger.bgscan_stale_threshold_sec
+# 와 fail-same. 종전엔 wifi_bgscan 이 이 키를 로드만 하고 미사용(dead knob)이었고 실소비처인
+# 이 파일은 600 하드코딩이라 설정이 무효였다 — 로드를 실소비처로 이관(반영은 데몬 재시작).
+DEFAULT_STALE_THRESHOLD_SEC = 600
+# import 시점엔 logger 가 없어(__main__ 에서 생성) 로드 실패를 즉시 로깅할 수 없다 —
+# 사유를 캡처해 두고 __main__ 의 logger 초기화 직후 1회 warn 으로 발행한다(운영 가시성).
+_STALE_THRESHOLD_LOAD_WARNING = None
+
+
+def load_stale_threshold(path=WIFI_INIT_CONF_JSON, default=DEFAULT_STALE_THRESHOLD_SEC):
+    """`logger.bgscan_stale_threshold_sec` 로드 — 양의 int 만 수용(bool 제외), 파일
+    부재/파싱 실패/불량 값은 default 유지(fail-same). import 시 1회 호출.
+    파일 부재는 정상 폴백(신규/개발 환경)이라 무경고, 그 외 실패는 경고 캡처."""
+    global _STALE_THRESHOLD_LOAD_WARNING
+    try:
+        with open(path) as f:
+            v = json.load(f).get("logger", {}).get("bgscan_stale_threshold_sec", default)
+        if isinstance(v, int) and not isinstance(v, bool) and v > 0:
+            return v
+        _STALE_THRESHOLD_LOAD_WARNING = (
+            f"invalid logger.bgscan_stale_threshold_sec {v!r} — using default {default}"
+        )
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        _STALE_THRESHOLD_LOAD_WARNING = (
+            f"config load failed ({e}) — using default {default}"
+        )
+    return default
+
+
+STALE_THRESHOLD_SEC = load_stale_threshold()
 #last_log_time = 0
 VERSION = "0.0"
 IFACE = ""
@@ -619,6 +651,10 @@ if __name__ == "__main__":
     if IFACE != "mlan0" and IFACE != "mlan1":
         logger.message("emerg", f"[{IFACE}] is not valid interface", _EXTRA_())
         sys.exit(1)
+
+    # import 시 캡처된 stale_threshold 로드 실패/불량값 경고를 1회 발행(운영 가시성).
+    if _STALE_THRESHOLD_LOAD_WARNING:
+        logger.message("warn", f"[{IFACE}] stale_threshold: {_STALE_THRESHOLD_LOAD_WARNING}", _EXTRA_())
 
     # 단일 인스턴스 락(iface별): 재시작 중복 실행 시 로그 동시 write 방지.
     # 락은 /run(root 전용, non-world-writable)에 둬 /tmp 심링크 truncate 공격을 차단한다.
