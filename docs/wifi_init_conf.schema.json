@@ -1393,7 +1393,7 @@
                   "type": "integer",
                   "default": 70,
                   "minimum": 1,
-                  "description": "교차채널 캐시(ap.log 배경 블록) 신선도 바운드(초). 초과 시 액티브 폴백. bgscan.interval + 여유(≥10초)로 설정 — 작으면 매 bgscan 주기 말미에 최신 배경 블록조차 stale 판정되어 불필요한 액티브 폴백이 남는다",
+                  "description": "교차채널 캐시(ap.log 배경 블록) 신선도 바운드(초). 초과 시 액티브 폴백. bgscan.interval + 여유(≥10초)로 설정 — 작으면 매 bgscan 주기 말미에 최신 배경 블록조차 stale 판정되어 불필요한 액티브 폴백이 남는다. 기본값 45→70 조정(2026-07): 기존 기기는 postinst json_merge가 기존 값(45)을 보존하므로 업그레이드 시 수동 갱신 필요",
                   "x-ui-editable": "yes",
                   "x-apply-timing": "runtime",
                   "x-consumer": "wifi_roam.py"
@@ -2280,7 +2280,7 @@
                   "type": "integer",
                   "default": 70,
                   "minimum": 1,
-                  "description": "교차채널 캐시(ap.log 배경 블록) 신선도 바운드(초). 초과 시 액티브 폴백. bgscan.interval + 여유(≥10초)로 설정 — 작으면 매 bgscan 주기 말미에 최신 배경 블록조차 stale 판정되어 불필요한 액티브 폴백이 남는다",
+                  "description": "교차채널 캐시(ap.log 배경 블록) 신선도 바운드(초). 초과 시 액티브 폴백. bgscan.interval + 여유(≥10초)로 설정 — 작으면 매 bgscan 주기 말미에 최신 배경 블록조차 stale 판정되어 불필요한 액티브 폴백이 남는다. 기본값 45→70 조정(2026-07): 기존 기기는 postinst json_merge가 기존 값(45)을 보존하므로 업그레이드 시 수동 갱신 필요",
                   "x-ui-editable": "yes",
                   "x-apply-timing": "runtime",
                   "x-consumer": "wifi_roam.py"

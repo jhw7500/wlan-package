@@ -2333,7 +2333,11 @@ def clock_step_detected(tolerance_sec=None):
     교차채널 값으로 로밍할 수 있다. 블록 타임스탬프는 타 프로세스가 쓰는 파일 값이라
     monotonic 으로 바꿀 수 없으므로, 스텝이 감지된 tick 은 Stage 2 를 건너뛰어(액티브 폴백
     degrade) 오판 창을 닫는다. 다음 tick 부터는 앵커가 전부 포스트-스텝 시각이라 자가 치유.
-    호출마다 앵커를 갱신한다 — staged 판정 진입 시 1회 호출 전제."""
+    호출마다 앵커를 갱신한다 — staged 판정 진입 시 1회 호출 전제.
+
+    앵커는 모듈 전역이라 **프로세스당 단일 인터페이스 전제**다(현 배포는 systemd 템플릿
+    유닛 `wifi_roam@<iface>` 로 인터페이스별 프로세스 분리). 한 프로세스에서 다중
+    인터페이스를 다루게 되면 앵커를 인터페이스별 dict 로 분리해야 한다."""
     global _LAST_WALL_TS, _LAST_MONO_TS
     if tolerance_sec is None:
         tolerance_sec = CLOCK_STEP_TOLERANCE_SEC
