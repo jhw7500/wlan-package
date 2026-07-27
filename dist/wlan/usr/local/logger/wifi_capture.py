@@ -14,6 +14,18 @@ INTERFACE = "rtap"             # 모니터 인터페이스
 CAP_FILENAME = "mgmt.log"
 BROADCAST_MAC = "ff:ff:ff:ff:ff:ff"
 IFACE = "mlan0"
+# SUBTYPE_MASK: 관리 프레임(wlan.fc.type==0) subtype 제외(exclude) 마스크. argv[2]로 덮어씀.
+# bit N = subtype N. 비트가 1이면 해당 프레임을 로그에서 제외한다.
+#   bit  0 (0x0001) Assoc Request      bit  8 (0x0100) Beacon
+#   bit  1 (0x0002) Assoc Response     bit  9 (0x0200) ATIM
+#   bit  2 (0x0004) Reassoc Request    bit 10 (0x0400) Disassoc
+#   bit  3 (0x0008) Reassoc Response   bit 11 (0x0800) Auth
+#   bit  4 (0x0010) Probe Request      bit 12 (0x1000) Deauth
+#   bit  5 (0x0020) Probe Response     bit 13 (0x2000) Action
+#                                      bit 14 (0x4000) Action No Ack
+# 제외 처리 계층: tcpdump BPF(TCPDUMP_SUPPORTED_SUBTYPES에 있는 subtype)
+#   → tshark 디스플레이 필터(나머지) → 파이썬 루프 최종 가드.
+# 예) 서비스 기본값 0x4100 = Beacon + Action No Ack 제외.
 SUBTYPE_MASK = 0
 TSHARK_COUNT = 100000          # int 로 두는 게 깔끔
 

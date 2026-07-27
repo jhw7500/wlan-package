@@ -148,12 +148,12 @@ def get_last_ap_log_values(log_filename, num_lines=10):
             }
 
             d = log_data
-            logger.message("info",
-                  f"[{IFACE}] {d['timestamp']} | {d['mac']} | BW:{d['bw']} | "
-                  f"RSSI:{d['rssi']}({d['rssi_min']}/{d['rssi_max']}) | "
-                  f"RX:{d['rx_packets']}/{d['rx_bps']}/{d['rx_avg_bps']} | "
-                  f"TX:{d['tx_packets']}/{d['tx_bps']}/{d['tx_avg_bps']} | "
-                  f"FAIL:{d['tx_fail']} T:{d['time']}", _EXTRA_())
+            #logger.message("info",
+            #      f"[{IFACE}] {d['timestamp']} | {d['mac']} | BW:{d['bw']} | "
+            #      f"RSSI:{d['rssi']}({d['rssi_min']}/{d['rssi_max']}) | "
+            #      f"RX:{d['rx_packets']}/{d['rx_bps']}/{d['rx_avg_bps']} | "
+            #      f"TX:{d['tx_packets']}/{d['tx_bps']}/{d['tx_avg_bps']} | "
+            #      f"FAIL:{d['tx_fail']} T:{d['time']}", _EXTRA_())
             return log_data
 
     except Exception as e:
@@ -450,7 +450,7 @@ def log_stats():
                         f"AP changed: {current_ap} -> {ap_mac}\n"
                     )
                     current_ap = ap_mac
-                    logger.message("info", f"[{IFACE}] AP change: {current_ap} -> {ap_mac}", _EXTRA_())
+                    #logger.message("info", f"[{IFACE}] AP change: {current_ap} -> {ap_mac}", _EXTRA_())
                     with open(all_log_filename, "a") as all_log_file:
                         all_log_file.write(log_entry)
                 time.sleep(1)
@@ -484,7 +484,7 @@ def log_stats():
                 f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
                 f"AP changed: {current_ap} -> {ap_mac}\n"
             )
-            logger.message("info", f"[{IFACE}] AP change: {current_ap} -> {ap_mac}", _EXTRA_())
+            #logger.message("info", f"[{IFACE}] AP change: {current_ap} -> {ap_mac}", _EXTRA_())
             current_ap = ap_mac
             #if wifi_info['essid'] != "Unknown":
             with open(log_filename, "a") as log_file:
