@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 
 sys.modules.setdefault("sUTILS", MagicMock())
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import json
 import time
 import wifi_roam
 from datetime import datetime, timedelta
@@ -42,6 +43,9 @@ def _globals(monkeypatch):
     # 남아 뒤 테스트의 캐시 블록이 self-induced로 오판된다).
     monkeypatch.setattr(wifi_roam, "_LAST_SELF_SCAN_TS", None)
     monkeypatch.setattr(wifi_roam, "_LAST_SELF_SCAN_END_TS", None)
+    # 시계 스텝 감지 앵커도 전역 — 리셋 없으면 앞 테스트의 patch된 시각이 스텝으로 오판된다.
+    monkeypatch.setattr(wifi_roam, "_LAST_WALL_TS", None, raising=False)
+    monkeypatch.setattr(wifi_roam, "_LAST_MONO_TS", None, raising=False)
     # load_roaming_config 테스트가 전역을 덮으므로 복원 대상에 포함시킨다.
     monkeypatch.setattr(wifi_roam, "ENABLE_STAGED_SCAN", True)
     monkeypatch.setattr(wifi_roam, "SELF_INDUCED_TAIL_SEC", 10)
@@ -538,21 +542,30 @@ def test_active_fallback_when_multichannel(monkeypatch):
     assert best is not None and best["bssid"] == "dd:dd:dd:dd:dd:dd"  # 다른채널 후보로 로밍
 
 
-def test_skip_when_home_returns_only_current_ap(monkeypatch):
-    """단일채널 + 홈 패시브가 현재 AP 자신만 반환(같은 채널에 다른 우리 AP 없음) → 로밍할
-    대상이 없고, 같은 채널 액티브도 새 AP를 못 찾으므로 스킵이 맞다(액티브 미실행)."""
+def test_no_skip_when_home_sees_only_current_ap(monkeypatch):
+    """[회귀] 단일채널 + 홈 패시브 결과가 현재 AP 자신뿐이면 스킵하지 **않는다** — 액티브
+    directed probe 로 재발견을 시도해야 한다.
+
+    현재 AP 의 BSS 테이블 엔트리는 사용 중(in-use)이라 age/scan-miss 만료에서 면제된다:
+    이번 dwell 에서 beacon 을 하나도 못 받아도 scan_results 에 항상 남는다. 즉 '현재 AP 만
+    보임'은 '같은 채널에 다른 AP 가 없음'의 증거가 아니라, 이웃 AP beacon 이 간섭으로
+    유실된 상태와 구분 불가다. 로밍컨디션 중에는 bgscan 도 정지하므로 여기서 스킵하면
+    probe 기반 재발견 경로가 전무해져 beacon 수신이 회복될 때까지 약한 AP 에 고착된다.
+    이웃 후보를 실제로 본 경우의 스킵(#122 본래 목적)은 위 테스트가 그대로 고정한다."""
     monkeypatch.setattr(wifi_roam, "WPA_FREQ", ["5240"])
     calls = []
-    home = [apln(0, 48, -50, CUR, "Net")]  # 현재 AP만
-    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(home, None, calls))
+    home = [apln(0, 48, -50, CUR, "Net")]  # BSS 테이블 상주 현재 AP 엔트리만
+    active = [apln(0, 48, -35, "bb:bb:bb:bb:bb:bb", "Net")]  # directed probe 가 재발견한 이웃
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(home, active, calls))
     monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
 
     best, _, _, _ = wifi_roam.staged_scan_best_candidate(
         _station(rssi=-70, freq=5240), None, ["Net"], "Net", STABLE, None
     )
-    assert best is None
     assert any(c["passive"] is True for c in calls)                  # 홈 패시브는 돎
-    assert not any(c["passive"] is False for c in calls), f"active fired: {calls}"  # 스킵
+    assert any(c["passive"] is False for c in calls), \
+        "현재 AP 상주 엔트리만으로 '커버됨' 판정 금지 — 액티브 재발견 실행돼야"
+    assert best is not None and best["bssid"] == "bb:bb:bb:bb:bb:bb"
 
 
 def test_no_skip_when_home_sees_only_other_ssid(monkeypatch):
@@ -619,3 +632,175 @@ def test_skip_redundant_active_default_true():
     """STAGED_SCAN 섹션 부재 시 기본값(True) 유지."""
     wifi_roam.load_roaming_config("mlan0", {"mlan0": {"roaming": {}}})
     assert wifi_roam.SKIP_REDUNDANT_ACTIVE_SCAN is wifi_roam.DEFAULT_SKIP_REDUNDANT_ACTIVE_SCAN
+
+
+# ---------- Stage 2 는 교차채널 전용 (홈채널 캐시 역전 방지) ----------
+
+def test_stage2_ignores_home_channel_cache_entries(monkeypatch):
+    """[회귀] Stage 2 캐시는 '교차채널 보완'용 — Stage 1 이 방금 실측한 홈채널 BSS 를 최대
+    CACHE_FRESH_SEC 전의 묵은 RSSI 로 재평가해, 방금의 기각(DIFF_TH 미달)을 뒤집고 정책
+    미달 로밍을 실행하면 안 된다(묵은 측정이 신선한 측정을 이기는 역전)."""
+    calls = []
+    # Stage 1 실측: baseline=-78(현재 AP), 이웃 bb=-72 → diff 6 < 10 이라 기각
+    home = [apln(0, 36, -78, CUR, "Net"), apln(1, 36, -72, "bb:bb:bb:bb:bb:bb", "Net")]
+    active = [apln(0, 40, -47, "dd:dd:dd:dd:dd:dd", "Net")]
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(home, active, calls))
+    fresh_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # 40초 전 배경 캐시에는 같은 bb 가 -60(diff 18)으로 기록돼 있다 — 묵은 값
+    cache = [{"bssid": "bb:bb:bb:bb:bb:bb", "ssid": "Net", "channel": 36, "freq": 5180,
+              "rssi": -60, "rssi_th": -75, "ld": 0, "load": 0, "noise": -95,
+              "timestamp": fresh_ts}]
+    monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: (cache, fresh_ts))
+
+    best, _, _, _ = wifi_roam.staged_scan_best_candidate(
+        _station(rssi=-70, freq=5180), None, ["Net"], "Net", STABLE, None
+    )
+    # 묵은 홈채널 캐시(bb, -60)로 로밍 금지 — Stage 3 액티브의 교차채널 결과(dd)여야 한다
+    assert best is not None and best["bssid"] == "dd:dd:dd:dd:dd:dd", \
+        f"Stage 1 이 방금 기각한 홈채널 BSS 가 묵은 캐시 값으로 재채택됨: {best}"
+    assert any(c["passive"] is False for c in calls)
+
+
+def test_stage2_mixed_cache_evaluates_cross_channel_only(monkeypatch):
+    """[회귀] 혼합(홈+교차) 캐시에서 Stage 2 의 **평가 대상**은 필터된 stage2_entries 여야
+    한다 — 필터만 만들고 평가를 원본 cache_entries 로 하는 부분 회귀 뮤턴트를 킬한다.
+    홈채널의 강한 묵은 엔트리(bb, -40)가 아니라 교차채널 엔트리(cc, -55)가 채택돼야 한다."""
+    calls = []
+    home = [apln(0, 36, -70, CUR, "Net")]
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(home, None, calls))
+    fresh_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cache = [
+        {"bssid": "bb:bb:bb:bb:bb:bb", "ssid": "Net", "channel": 36, "freq": 5180,
+         "rssi": -40, "rssi_th": -75, "ld": 0, "load": 0, "noise": -95, "timestamp": fresh_ts},
+        {"bssid": "cc:cc:cc:cc:cc:cc", "ssid": "Net", "channel": 40, "freq": 5200,
+         "rssi": -55, "rssi_th": -75, "ld": 0, "load": 0, "noise": -95, "timestamp": fresh_ts},
+    ]
+    monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: (cache, fresh_ts))
+
+    best, _, _, _ = wifi_roam.staged_scan_best_candidate(
+        _station(rssi=-70, freq=5180), None, ["Net"], "Net", STABLE, None
+    )
+    assert best is not None and best["bssid"] == "cc:cc:cc:cc:cc:cc", \
+        f"홈채널 묵은 엔트리가 평가에 남음(소비 지점 미필터): {best}"
+    assert not any(c["passive"] is False for c in calls)  # 교차채널 캐시로 충족 — 액티브 불필요
+
+
+def test_stage2_uses_home_cache_when_home_scan_failed(monkeypatch):
+    """대조군: Stage 1 홈 패시브가 실패하면 신선한 홈채널 실측이 없으므로, 홈채널 캐시도
+    후보로 허용한다(없는 것보단 낫다) — 필터가 과하게 걸리지 않음을 고정."""
+    calls = []
+    active = [apln(0, 40, -47, "dd:dd:dd:dd:dd:dd", "Net")]
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(None, active, calls))
+    fresh_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cache = [{"bssid": "cc:cc:cc:cc:cc:cc", "ssid": "Net", "channel": 36, "freq": 5180,
+              "rssi": -50, "rssi_th": -75, "ld": 0, "load": 0, "noise": -95,
+              "timestamp": fresh_ts}]
+    monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: (cache, fresh_ts))
+
+    best, _, _, _ = wifi_roam.staged_scan_best_candidate(
+        _station(rssi=-70, freq=5180), None, ["Net"], "Net", STABLE, None
+    )
+    assert best is not None and best["bssid"] == "cc:cc:cc:cc:cc:cc", \
+        "홈 스캔 실패 시엔 홈채널 캐시가 유일한 정보 — 과잉 필터로 버려짐"
+
+
+# ---------- 시계 스텝(wall vs monotonic) 감지 ----------
+
+def test_clock_step_detected_helper(monkeypatch):
+    """전진/후진 스텝 감지 + 앵커 갱신. NTP slew(점진 보정) 수준의 미세 drift 는 무시."""
+    monkeypatch.setattr(wifi_roam, "_LAST_WALL_TS", None, raising=False)
+    monkeypatch.setattr(wifi_roam, "_LAST_MONO_TS", None, raising=False)
+    t = {"wall": 1000.0, "mono": 500.0}
+    monkeypatch.setattr(wifi_roam.time, "time", lambda: t["wall"])
+    monkeypatch.setattr(wifi_roam.time, "monotonic", lambda: t["mono"])
+    assert wifi_roam.clock_step_detected() is False      # 앵커 없음 → 판정 불가(보수적 False)
+    t["wall"], t["mono"] = 1010.0, 510.0                  # 두 시계 동일 진행
+    assert wifi_roam.clock_step_detected() is False
+    t["wall"], t["mono"] = 1045.0, 513.0                  # wall +35s vs mono +3s → 전진 스텝
+    assert wifi_roam.clock_step_detected() is True
+    t["wall"], t["mono"] = 1040.0, 516.0                  # wall -5s vs mono +3s → 후진 스텝
+    assert wifi_roam.clock_step_detected() is True
+    t["wall"], t["mono"] = 1043.0, 519.0                  # 스텝 후 정상 진행 재개 → 자가 치유
+    assert wifi_roam.clock_step_detected() is False
+
+
+def test_stage2_skipped_after_clock_step(monkeypatch):
+    """[회귀] self-induced 윈도우/신선도의 시간 앵커는 전부 wall-clock 이다. 직전 tick 이후
+    시각 스텝(NTP step — fake-hwclock 기기는 부팅 후 첫 동기화가 큰 전진 스텝)이 감지되면
+    그 tick 의 Stage 2 를 건너뛴다 — 자기 유발 블록이 윈도우를 이탈하면서 기록 시각만
+    '신선'해 보여 stale 교차채널 값으로 로밍하는 오판 창을 닫는다."""
+    monkeypatch.setattr(wifi_roam, "_LAST_WALL_TS", 1000.0, raising=False)
+    monkeypatch.setattr(wifi_roam, "_LAST_MONO_TS", 500.0, raising=False)
+    monkeypatch.setattr(wifi_roam.time, "time", lambda: 1033.0)      # wall +33s
+    monkeypatch.setattr(wifi_roam.time, "monotonic", lambda: 503.0)  # mono +3s → 스텝
+    calls = []
+    home = [apln(0, 36, -70, CUR, "Net")]
+    active = [apln(0, 40, -47, "dd:dd:dd:dd:dd:dd", "Net")]
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(home, active, calls))
+    fresh_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cache = [{"bssid": "cc:cc:cc:cc:cc:cc", "ssid": "Net", "channel": 40, "freq": 5200,
+              "rssi": -50, "rssi_th": -75, "ld": 0, "load": 0, "noise": -95,
+              "timestamp": fresh_ts}]
+    monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: (cache, fresh_ts))
+
+    best, _, _, _ = wifi_roam.staged_scan_best_candidate(
+        _station(rssi=-70, freq=5180), None, ["Net"], "Net", STABLE, None
+    )
+    assert best is not None and best["bssid"] == "dd:dd:dd:dd:dd:dd", \
+        f"시계 스텝 tick 에 신뢰 불가한 캐시가 사용됨: {best}"
+    assert any(c["passive"] is False for c in calls)     # Stage 3 액티브로 degrade
+
+
+def test_stage2_used_when_clocks_advance_together(monkeypatch):
+    """대조군: 두 시계가 같이 진행(스텝 없음)하면 캐시는 정상 사용된다 — 감지기가
+    과하게 걸려 Stage 2 를 상시 죽이지 않음을 고정."""
+    monkeypatch.setattr(wifi_roam, "_LAST_WALL_TS", 1000.0, raising=False)
+    monkeypatch.setattr(wifi_roam, "_LAST_MONO_TS", 500.0, raising=False)
+    monkeypatch.setattr(wifi_roam.time, "time", lambda: 1030.0)
+    monkeypatch.setattr(wifi_roam.time, "monotonic", lambda: 530.0)
+    calls = []
+    home = [apln(0, 36, -70, CUR, "Net")]
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(home, None, calls))
+    fresh_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cache = [{"bssid": "cc:cc:cc:cc:cc:cc", "ssid": "Net", "channel": 40, "freq": 5200,
+              "rssi": -50, "rssi_th": -75, "ld": 0, "load": 0, "noise": -95,
+              "timestamp": fresh_ts}]
+    monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: (cache, fresh_ts))
+
+    best, _, _, _ = wifi_roam.staged_scan_best_candidate(
+        _station(rssi=-70, freq=5180), None, ["Net"], "Net", STABLE, None
+    )
+    assert best is not None and best["bssid"] == "cc:cc:cc:cc:cc:cc"
+    assert not any(c["passive"] is False for c in calls)
+
+
+# ---------- 배포 계층 일관성: cache_fresh_sec vs bgscan.interval ----------
+
+def test_cache_fresh_default_covers_deployed_bgscan_interval():
+    """[일관성] 코드 기본값과 템플릿 cache_fresh_sec 이 배포 계층의 bgscan.interval 을
+    여유 포함으로 커버해야 한다 — 45s 기본이 배포 interval 60s 를 못 덮어 매 주기 마지막
+    15초(25%) 구간에서 '존재하는 가장 신선한 배경 블록'조차 stale 판정되던 결함의 회귀 방지."""
+    tmpl = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "..", "..", "..", "..", "opt", "wlan", "config", "wifi_init_conf.json",
+    )
+    with open(tmpl) as f:
+        data = json.load(f)
+    checked = 0
+    for iface, cfg in data.items():
+        if not isinstance(cfg, dict):
+            continue
+        bg = cfg.get("bgscan")
+        staged = (cfg.get("roaming") or {}).get("STAGED_SCAN")
+        if not isinstance(bg, dict) or not isinstance(staged, dict):
+            continue
+        interval = bg.get("interval")
+        cfs = staged.get("cache_fresh_sec")
+        if not isinstance(interval, int) or not isinstance(cfs, int):
+            continue
+        assert cfs == wifi_roam.DEFAULT_CACHE_FRESH_SEC, \
+            f"{iface}: 템플릿({cfs}) ≠ 코드 기본값({wifi_roam.DEFAULT_CACHE_FRESH_SEC})"
+        assert cfs >= interval + 5, \
+            f"{iface}: cache_fresh_sec({cfs}) 가 bgscan.interval({interval})+지터 여유를 못 덮음"
+        checked += 1
+    assert checked >= 2, f"템플릿에서 검사된 iface 수 부족: {checked}"

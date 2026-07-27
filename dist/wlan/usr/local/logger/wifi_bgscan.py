@@ -19,6 +19,7 @@ WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
 ROAM_HINT_DIR = "/tmp"  # roam backoff hint 파일 디렉터리 (wifi_roam.roam_hint_touched 가 소비)
 WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
 DEFAULT_INTERVAL = 30
+MAX_SCAN_SSIDS = 10  # nl80211 max # scan SSIDs (NXP mlan 실측). 초과 시 iw가 -EINVAL로 스캔 전체 실패.
 STALE_THRESHOLD_SEC = 600  #1hour
 
 # Load STALE_THRESHOLD_SEC from JSON config
@@ -221,14 +222,27 @@ def construct_iw_scan_cmd(ssid, scan_freqs, ssid_filter=True, freq_filter=True, 
     #    빈 문자열 ""(와일드카드 probe)을 함께 넣어 광범위 스캔을 보존한다.
     #    NOTE: `iw scan ssid ""`의 와일드카드 해석은 표준 API가 아니다. 새 플랫폼/드라이버
     #    도입 시 extra_ssids 사용 전 실제로 와일드카드 probe가 나가는지(빈 SSID 무시 여부) 검증할 것.
-    seen = set()
+    # iw 문법은 `ssid <ssid>*` — 키워드는 1회만 쓰고 값을 나열한다(wifi_roam 과 동일 규칙).
+    # 키워드를 반복하면 iw 5.19 파서(SSID 상태에서 키워드 복귀 없음)가 두 번째 'ssid' 를
+    # 리터럴 SSID 로 소비해 probe 대상이 2N-1 개로 불어나고, 존재하지 않는 "ssid" 네트워크
+    # directed probe 가 전파로 나간다.
     probe = ([ssid] if (ssid_filter and ssid) else []) + (extra_ssids or [])
     if not ssid_filter and extra_ssids:
         probe.insert(0, "")
-    for s in probe:
-        if s is not None and s not in seen:
-            seen.add(s)
-            cmd += ["ssid", s]
+    probe = list(dict.fromkeys(s for s in probe if s is not None))
+    # 드라이버 max-scan-SSID 초과 시 iw 가 -EINVAL 로 스캔 전체를 실패시킨다 → bgscan 이
+    # 매 주기 전량 실패하면 ap.log 배경 캐시가 갱신되지 않아 로밍 Stage 2 까지 연쇄로 죽는다.
+    # 현재 ssid/wildcard 가 리스트 앞이라 slice 가 우선순위를 보존한다.
+    if len(probe) > MAX_SCAN_SSIDS:
+        logger.message(
+            "warn",
+            f"[{IFACE}] scan SSIDs {len(probe)} > driver max {MAX_SCAN_SSIDS}; "
+            f"capping directed probes (excess hidden SSIDs may be missed)",
+            _EXTRA_(),
+        )
+        probe = probe[:MAX_SCAN_SSIDS]
+    if probe:
+        cmd += ["ssid"] + probe
 
     return cmd
 

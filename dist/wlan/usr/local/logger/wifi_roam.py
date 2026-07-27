@@ -46,7 +46,10 @@ CHECK_INTERVAL = 1
 #   3) 액티브 폴백(scan_freq + 설정 SSID, 위 둘에서 후보 못 찾을 때만)
 # ENABLE_STAGED_SCAN=False면 종전 단일 액티브 스캔 경로로 회귀(무회귀 안전장치).
 DEFAULT_ENABLE_STAGED_SCAN = True
-DEFAULT_CACHE_FRESH_SEC = 45  # 교차채널 캐시 신선도 바운드(초). bgscan 30초 주기 + 지터 여유.
+# 교차채널 캐시 신선도 바운드(초). 배포 기본 bgscan.interval 60초 + 지터 여유 — 이보다 작으면
+# 매 bgscan 주기의 말미 구간에서 '존재하는 가장 신선한 배경 블록'조차 stale 판정되어 불필요한
+# 액티브 폴백이 남는다. interval 을 키우는 배포는 이 값도 interval+여유(≥10초)로 함께 키울 것.
+DEFAULT_CACHE_FRESH_SEC = 70
 # scan_freq 가 홈채널의 부분집합(단일 채널 등)이면 Stage 1 홈 패시브 스캔이 이미 모든 후보를
 # 커버하므로 Stage 3 액티브 폴백은 같은 채널을 probe로 다시 훑는 것뿐 — 스킵해 매 로밍컨디션
 # 주기의 불필요한 액티브 스캔(probe 송신)을 없앤다. hidden SSID 는 액티브 probe로만 발견되므로
@@ -68,6 +71,13 @@ _LAST_SELF_SCAN_END_TS = None
 # → save. 넉넉히 잡아 유발 블록을 놓치지 않는다(과하게 잡으면 Stage 3 폴백으로 안전 degrade).
 DEFAULT_SELF_INDUCED_TAIL_SEC = 10
 SELF_INDUCED_TAIL_SEC = DEFAULT_SELF_INDUCED_TAIL_SEC
+# 직전 로밍 판정 tick 의 시각 앵커(wall + monotonic). self-induced 윈도우·캐시 신선도의
+# 시간 앵커(자기 스캔 경계 time.time(), ap.log 블록 기록/신선도 판정 datetime.now())가
+# 전부 wall-clock 이라, 시각 스텝(NTP step)이 끼면 자기 유발 블록이 윈도우를 이탈하면서
+# 기록 시각만 신선해 보이는 오판 창이 생긴다(clock_step_detected 참조).
+_LAST_WALL_TS = None
+_LAST_MONO_TS = None
+CLOCK_STEP_TOLERANCE_SEC = 2.0  # NTP slew(점진 보정)는 스텝으로 잡지 않는다. 초 단위 점프만.
 
 
 def is_valid_rssi(rssi) -> bool:
@@ -2312,6 +2322,31 @@ def scan_block_fresh(timestamp_str, max_age_sec):
     return 0 <= age <= max_age_sec
 
 
+def clock_step_detected(tolerance_sec=None):
+    """직전 호출 이후 시스템 시각(wall)이 monotonic 대비 tolerance 이상 점프했는지 판정.
+
+    self-induced 윈도우와 캐시 신선도의 시간 앵커(자기 스캔 경계 `time.time()`, ap.log 블록
+    기록 시각·신선도 판정 `datetime.now()`)는 전부 wall-clock 이다. 스캔 종료와 ap.log 기록
+    사이(~1.2–2.6초)에 시각 스텝 — fake-hwclock 기기는 부팅 후 첫 NTP 동기화가 전원 오프
+    시간만큼의 전진 스텝 — 이 끼면, 자기 유발 블록이 유한 윈도우 [start−slack, end+tail] 을
+    이탈하면서 기록 시각은 포스트-스텝이라 '신선'해 보여, Stage 2 가 그 블록의 stale
+    교차채널 값으로 로밍할 수 있다. 블록 타임스탬프는 타 프로세스가 쓰는 파일 값이라
+    monotonic 으로 바꿀 수 없으므로, 스텝이 감지된 tick 은 Stage 2 를 건너뛰어(액티브 폴백
+    degrade) 오판 창을 닫는다. 다음 tick 부터는 앵커가 전부 포스트-스텝 시각이라 자가 치유.
+    호출마다 앵커를 갱신한다 — staged 판정 진입 시 1회 호출 전제."""
+    global _LAST_WALL_TS, _LAST_MONO_TS
+    if tolerance_sec is None:
+        tolerance_sec = CLOCK_STEP_TOLERANCE_SEC
+    now_wall = time.time()
+    now_mono = time.monotonic()
+    stepped = False
+    if _LAST_WALL_TS is not None and _LAST_MONO_TS is not None:
+        drift = (now_wall - _LAST_WALL_TS) - (now_mono - _LAST_MONO_TS)
+        stepped = abs(drift) > tolerance_sec
+    _LAST_WALL_TS, _LAST_MONO_TS = now_wall, now_mono
+    return stepped
+
+
 def baseline_from_entries(entries, cur_bssid, default_rssi):
     """스캔 엔트리에서 현재 연결 AP(cur_bssid)의 RSSI를 찾아 반환(baseline 통일용).
     없으면 default_rssi(=station dump RSSI) 폴백. 현재 AP는 홈채널 스캔에 항상 잡히므로
@@ -2403,8 +2438,9 @@ def filter_ap_lines_by_freq(ap_lines, freq):
 
 def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, trend, cooldown):
     """단계형 스캔으로 최적 로밍 후보를 찾는다.
-      0) 교차채널 캐시 **스냅샷**(스캔 전에 먼저 확보 — 아래 이유)
-      1) 홈채널 패시브 스캔(같은 채널 후보 + baseline 통일) — 메모리 처리, ap.log 미기록
+      0) 교차채널 캐시 **스냅샷**(스캔 전에 먼저 확보 — 아래 이유) + 시계 스텝 감지
+      1) 홈채널 패시브 스캔(같은 채널 후보 + baseline 통일). 이 iw scan 도 wifi_logger_scan
+         이벤트로 ap.log 블록을 유발한다 — Stage 0 스냅샷·self-induced 윈도우의 전제
       2) 스냅샷된 교차채널 캐시(CACHE_FRESH_SEC 이내)
       3) 액티브 폴백(scan_freq + 설정 SSID; scan_freq 없으면 전대역 1회)
     반환: (best_ap, best_reason, best_score, scanned). scanned=실제 스캔 시도 여부
@@ -2423,14 +2459,22 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
     # 그 경계값을 이번 호출의 스캔 '전' 값으로 붙잡아 Stage 2에서 함께 판정한다.
     prev_self_scan_ts = _LAST_SELF_SCAN_TS
     prev_self_scan_end_ts = _LAST_SELF_SCAN_END_TS
+    # 직전 tick 이후 시각 스텝이 있었으면 이번 tick 의 캐시 시간 판정(self-induced/신선도)은
+    # 신뢰 불가 — Stage 2 를 건너뛰고 액티브 폴백으로 degrade 한다(다음 tick 자가 치유).
+    clock_stepped = clock_step_detected()
     cache_entries, cache_ts = get_latest_scan(station, channel_info_data, allowed)
 
     # ── Stage 1: 홈채널 패시브 스캔 ──
-    # 패시브 스캔이 **우리 허용 SSID 후보를 실제로 봤나**(=홈채널을 로밍 관점에서 커버했나).
-    # 아무 AP나 잡힌 것(home_lines)이 아니라 allowed_set 필터를 통과한 엔트리 유무로 판단한다
-    # — RF 열악/짧은 dwell 로 우리 SSID beacon 은 놓치고 타 SSID beacon 만 받은 경우, Stage 3
-    # 액티브(directed probe)가 우리 SSID를 찾을 수 있으므로 스킵하지 않기 위함(리뷰 반영).
+    # 패시브 스캔이 **현재 AP 외의 우리 허용 SSID 후보를 실제로 봤나**(=홈채널을 로밍
+    # 관점에서 커버했나). 현재 결합 AP 의 BSS 테이블 엔트리는 사용 중(in-use)이라
+    # age/scan-miss 만료에서 면제된다 — 이번 dwell 에서 beacon 을 하나도 못 받아도
+    # scan_results 에 항상 남으므로, 그 엔트리는 '이번 스캔이 뭔가를 수신했다'의 증거가
+    # 못 된다. 현재 AP 만으로 '커버됨' 판정하면 가드가 'iw scan 성공 여부'로 퇴화해,
+    # 이웃 beacon 유실 구간에서 Stage 3 directed probe(유니캐스트 재시도라 beacon 보다
+    # 강건)의 재발견 경로까지 스킵된다 — 로밍컨디션 중에는 bgscan 도 정지라 대체 경로가
+    # 없다. 타 SSID beacon 만 받은 경우도 같은 이유로 스킵하지 않는다(리뷰 반영).
     home_scan_ok = False
+    home_covered = False  # Stage 1 iw scan 성공(신선한 홈채널 실측 존재) — Stage 2 필터 게이트
     home_freq = station.get("freq")
     if home_freq:
         # scan_results는 BSS 테이블 전체를 주므로 홈 주파수로 좁힌다(위 helper 주석 참조).
@@ -2439,11 +2483,14 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
         )
         scanned = True
         if home_lines:
+            home_covered = True
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             home_entries = parse_scan_entries(
                 home_lines, now_str, channel_info_data, allowed_set
             )
-            home_scan_ok = bool(home_entries)  # 우리 SSID 후보를 봤을 때만 '커버됨'
+            home_scan_ok = any(
+                e.get("bssid") != cur_bssid for e in home_entries
+            )  # 현재 AP 외 후보를 봤을 때만 '커버됨'
             baseline_rssi = baseline_from_entries(home_entries, cur_bssid, baseline_rssi)
             best_ap, reason, score = evaluate_candidates(
                 home_entries, station, trend, cooldown, live_ssid, baseline_rssi
@@ -2461,9 +2508,23 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
     self_induced = scan_block_self_induced(
         cache_ts, prev_self_scan_ts, prev_self_scan_end_ts
     )
-    if cache_entries and not self_induced and scan_block_fresh(cache_ts, CACHE_FRESH_SEC):
+    # Stage 2 는 '교차채널 보완' 전용 — Stage 1 이 방금 실측한 홈채널의 BSS 를 최대
+    # CACHE_FRESH_SEC 전의 묵은 캐시 RSSI 로 재평가하면, 방금의 기각(DIFF_TH 미달)을
+    # 묵은 값이 뒤집는 역전(정책 미달 로밍)이 생긴다. 홈채널 엔트리는 Stage 1 스캔이
+    # 성공했을 때만 제외한다 — 실패 시엔 신선한 실측이 없어 캐시가 유일한 정보다.
+    stage2_entries = cache_entries
+    if home_covered and home_freq:
+        stage2_entries = [
+            e for e in cache_entries if str(e.get("freq")) != str(home_freq)
+        ]
+    if (
+        stage2_entries
+        and not self_induced
+        and not clock_stepped
+        and scan_block_fresh(cache_ts, CACHE_FRESH_SEC)
+    ):
         best_ap, reason, score = evaluate_candidates(
-            cache_entries, station, trend, cooldown, live_ssid, baseline_rssi
+            stage2_entries, station, trend, cooldown, live_ssid, baseline_rssi
         )
         if best_ap:
             logger.message(
@@ -2473,11 +2534,14 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
             )
             return best_ap, reason, score, scanned
     elif cache_entries:
-        why = (
-            "self-induced (written by our own roam scan)"
-            if self_induced
-            else f"stale (max_age={CACHE_FRESH_SEC}s)"
-        )
+        if self_induced:
+            why = "self-induced (written by our own roam scan)"
+        elif clock_stepped:
+            why = "clock step detected since last tick (wall vs monotonic)"
+        elif not scan_block_fresh(cache_ts, CACHE_FRESH_SEC):
+            why = f"stale (max_age={CACHE_FRESH_SEC}s)"
+        else:
+            why = "home-channel entries only (covered by this tick's Stage 1 scan)"
         # "active fallback" 을 예고하지 않는다 — 아래 스킵 조건이 걸리면 Stage 3 액티브가
         # 실행되지 않으므로(로그와 실제 동작 불일치 방지). 다음에 무엇이 일어나는지는
         # 스킵 로그(skip redundant active) 또는 Stage 3 실행이 각자 남긴다.
@@ -2490,8 +2554,9 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
     # ── Stage 3 진입 전: 홈 패시브가 scan_freq 전체를 커버했으면 액티브 폴백 스킵 ──
     # scan_freq ⊆ {홈채널}이면 Stage 3 액티브는 같은 채널을 probe로 다시 훑는 것뿐이라 후보
     # 발견에 새로 기여하는 게 없다(단일채널 배포 등). 매 로밍컨디션 주기의 불필요한 액티브
-    # 스캔(probe 송신)을 없앤다 = airtime·링크 방해 감소. 조건: 최적화 활성 + Stage 1 패시브
-    # 성공(실패면 액티브가 재시도 역할이라 유지) + scan_freq 가 홈채널의 부분집합.
+    # 스캔(probe 송신)을 없앤다 = airtime·링크 방해 감소. 조건: 최적화 활성 + Stage 1 패시브가
+    # **현재 AP 외 후보를 실제로 봄**(스캔 실패·현재 AP 상주 엔트리만·타 SSID 만이면 액티브가
+    # 재시도/재발견 역할이라 유지) + scan_freq 가 홈채널의 부분집합.
     # hidden SSID 는 액티브 probe로만 잡히므로 홈채널에 hidden 로밍 타깃이 있으면 config로 끈다.
     if (
         SKIP_REDUNDANT_ACTIVE_SCAN
