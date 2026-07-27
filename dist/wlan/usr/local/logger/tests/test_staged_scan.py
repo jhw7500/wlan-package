@@ -857,16 +857,16 @@ def test_home_passive_config_applies():
     assert wifi_roam.HOME_PASSIVE is True
 
 
-def test_home_passive_absent_and_invalid_keep_default():
-    """키 부재는 기본값(true) 유지. 문자열 값은 parse_bool 규칙으로 해석된다(bool 타입만
-    보증 — 미인식 문자열은 False 로 떨어질 수 있음. JSON boolean 리터럴 사용 전제이며
-    enable 등 기존 bool 키들과 동일 거동, '오타여도 기본값 유지'를 보증하지 않는다)."""
+def test_home_passive_absent_keeps_default_invalid_coerced_to_bool():
+    """키 부재는 기본값(true) 유지. 문자열 값은 parse_bool 규칙으로 해석되며 미인식
+    문자열은 **False 로 강제**된다(기본값 유지 아님 — JSON boolean 리터럴 사용 전제,
+    enable 등 기존 bool 키들과 동일 거동). 실거동을 명시 고정해 vacuous 통과를 막는다."""
     wifi_roam.load_roaming_config("mlan0", {"mlan0": {"roaming": {}}})
     assert wifi_roam.HOME_PASSIVE is wifi_roam.DEFAULT_HOME_PASSIVE
     wifi_roam.load_roaming_config(
         "mlan0", {"mlan0": {"roaming": {"STAGED_SCAN": {"home_passive": "yes-ish"}}}}
     )
-    assert isinstance(wifi_roam.HOME_PASSIVE, bool)
+    assert wifi_roam.HOME_PASSIVE is False  # parse_bool 미인식 문자열 → False (실거동 고정)
 
 
 def test_home_passive_false_skip_guard_still_applies(monkeypatch):
