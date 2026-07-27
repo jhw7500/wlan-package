@@ -22,15 +22,8 @@ WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
 # bgscan.interval(60)과 fail-same 정렬(작으면 폴백 상태에서 30s 폭주 + cache_fresh 전제 붕괴).
 DEFAULT_INTERVAL = 60
 MAX_SCAN_SSIDS = 10  # nl80211 max # scan SSIDs (NXP mlan 실측). 초과 시 iw가 -EINVAL로 스캔 전체 실패.
-STALE_THRESHOLD_SEC = 600  #1hour
-
-# Load STALE_THRESHOLD_SEC from JSON config
-try:
-    with open(WIFI_INIT_CONF_JSON) as _f:
-        _conf = json.load(_f)
-    STALE_THRESHOLD_SEC = _conf.get("logger", {}).get("bgscan_stale_threshold_sec", STALE_THRESHOLD_SEC)
-except Exception:
-    pass
+# (bgscan_stale_threshold_sec 로드는 실소비처인 wifi_logger_scan.py 로 이관 — 여기서는
+#  로드만 하고 미사용인 dead knob 이었다.)
 
 #last_log_time = 0
 VERSION = "0.0"

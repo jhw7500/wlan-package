@@ -900,10 +900,11 @@
         "bgscan_stale_threshold_sec": {
           "type": "integer",
           "default": 600,
-          "description": "백그라운드 스캔 결과를 stale로 판정하는 임계(초). global-only(per-iface override 없음)",
+          "minimum": 1,
+          "description": "beacon.json 스캔 엔트리 stale 프루닝 임계(초) — 마지막 관측 후 이 시간이 지난 BSSID 를 제거. global-only(per-iface override 없음)",
           "x-ui-editable": "yes",
           "x-apply-timing": "daemon-restart",
-          "x-consumer": "wifi_bgscan.py"
+          "x-consumer": "wifi_logger_scan.py"
         }
       }
     },

@@ -17,8 +17,28 @@ JSON_DIR = "var/log/cantops/json"
 LINK_PATH = "/var/log/cantops/json"
 TARGET_PATH = "/dev/shm/json"
 WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
+WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
 LOG_INTERVAL = 30
-STALE_THRESHOLD_SEC = 600  #10min
+# beacon.json stale 엔트리 프루닝 임계(초, 10분). 템플릿 logger.bgscan_stale_threshold_sec
+# 와 fail-same. 종전엔 wifi_bgscan 이 이 키를 로드만 하고 미사용(dead knob)이었고 실소비처인
+# 이 파일은 600 하드코딩이라 설정이 무효였다 — 로드를 실소비처로 이관(반영은 데몬 재시작).
+DEFAULT_STALE_THRESHOLD_SEC = 600
+
+
+def load_stale_threshold(path=WIFI_INIT_CONF_JSON, default=DEFAULT_STALE_THRESHOLD_SEC):
+    """`logger.bgscan_stale_threshold_sec` 로드 — 양의 int 만 수용(bool 제외), 파일
+    부재/파싱 실패/불량 값은 default 유지(fail-same). import 시 1회 호출."""
+    try:
+        with open(path) as f:
+            v = json.load(f).get("logger", {}).get("bgscan_stale_threshold_sec", default)
+        if isinstance(v, int) and not isinstance(v, bool) and v > 0:
+            return v
+    except Exception:
+        pass
+    return default
+
+
+STALE_THRESHOLD_SEC = load_stale_threshold()
 #last_log_time = 0
 VERSION = "0.0"
 IFACE = ""
