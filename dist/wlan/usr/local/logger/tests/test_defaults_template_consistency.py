@@ -20,6 +20,9 @@ import pytest
 sys.modules.setdefault("sUTILS", MagicMock())
 
 _LOGGER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+# wifi_roam.py 가 `from roam_notify import ...` 를 하므로 logger 디렉터리를 명시적으로
+# sys.path 에 넣는다 — `python -m pytest`(cwd 삽입)가 아닌 호출 방식에서도 단독 실행 가능.
+sys.path.insert(0, _LOGGER_DIR)
 _TMPL = os.path.join(
     _LOGGER_DIR, "..", "..", "..", "opt", "wlan", "config", "wifi_init_conf.json"
 )
@@ -93,3 +96,20 @@ def test_code_default_matches_template(fresh, tmpl, attr, path):
     code_val = getattr(fresh, attr)
     assert code_val == node, \
         f"{attr}(코드 초기값 {code_val!r}) != 템플릿 {'.'.join(path)}({node!r}) — fail-same 위반"
+
+
+# bgscan 의 코드 기본값은 모듈 상수가 아니라 load_bgscan_json 의 초기값이다 — config 파일
+# 부재 상태로 호출해 얻은 기본 튜플을 템플릿 mlan0.bgscan 과 대조한다.
+# interval 은 제외: 3중 폴백 체인(JSON > wpa `#!INTERVAL` > DEFAULT_INTERVAL)이라 단순
+# 대조가 성립하지 않고, 코드 최후 폴백(30)의 템플릿(60) 정렬 여부는 별도 판단 사항.
+def test_bgscan_bool_defaults_match_template(monkeypatch):
+    import wifi_bgscan
+    monkeypatch.setattr(wifi_bgscan, "WIFI_INIT_CONF_JSON", "/nonexistent/wic.json")
+    _interval, ssid_filter, freq_filter, _extra, emit_roam_hint, passive = \
+        wifi_bgscan.load_bgscan_json("mlan0")
+    with open(_TMPL) as f:
+        bg = json.load(f)["mlan0"]["bgscan"]
+    assert ssid_filter == bg["ssid_filter"], "ssid_filter fail-same 위반"
+    assert freq_filter == bg["freq_filter"], "freq_filter fail-same 위반"
+    assert passive == bg["passive"], "passive fail-same 위반"
+    assert emit_roam_hint == bg["emit_roam_hint"], "emit_roam_hint fail-same 위반"
