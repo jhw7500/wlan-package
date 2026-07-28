@@ -48,11 +48,18 @@ ADAPTIVE_DEFAULTS = {
     ),
 }
 
+# STAGED_SCAN 계열 — 중첩 경로는 _positive_int caster 가, flat 덮어쓰기 경로는
+# _num(minimum=1) 이 각각 막는다. 두 경로 모두 이 전역을 건드리므로 복원 대상이다.
+STAGED_DEFAULTS = {
+    "CACHE_FRESH_SEC": wifi_roam.DEFAULT_CACHE_FRESH_SEC,
+    "SELF_INDUCED_TAIL_SEC": wifi_roam.DEFAULT_SELF_INDUCED_TAIL_SEC,
+}
+
 
 @pytest.fixture(autouse=True)
 def _restore_globals():
     """각 테스트가 전역을 오염시키지 않도록 기본값으로 되돌린다."""
-    keys = {**DEFAULTS, **ADAPTIVE_DEFAULTS}
+    keys = {**DEFAULTS, **ADAPTIVE_DEFAULTS, **STAGED_DEFAULTS}
     saved = {k: getattr(wifi_roam, k) for k in keys}
     for k, v in keys.items():
         setattr(wifi_roam, k, v)
@@ -157,7 +164,6 @@ def test_cache_fresh_sec_zero_rejected_via_flat_override(bad, monkeypatch):
     roaming 블록에 대문자 키를 직접 넣으면 `for key in config.keys()` 루프가 caster 를
     거치지 않고 raw 로 덮어쓴다. CACHE_FRESH_SEC=0 이면 scan_block_fresh 가 항상 False
     가 되어 Stage 2 교차채널 캐시가 영구 비활성화된다."""
-    before = wifi_roam.CACHE_FRESH_SEC
     _load({"CACHE_FRESH_SEC": bad, "SELF_INDUCED_TAIL_SEC": bad}, monkeypatch)
-    assert wifi_roam.CACHE_FRESH_SEC == before, f"flat 경로가 {bad} 로 오염됐다"
-    assert wifi_roam.SELF_INDUCED_TAIL_SEC >= 1
+    for key, default in STAGED_DEFAULTS.items():
+        assert getattr(wifi_roam, key) == default, f"{key} 가 {bad} 로 오염됐다"

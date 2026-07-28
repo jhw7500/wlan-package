@@ -349,10 +349,13 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
             # 현행 전역값마저 부적합한 경우(이전 재로드에서 오염됐거나 초기값이 없는 키).
             # 아래에서 조용히 클램프하면 최후 폴백이 발동했는지 운영자가 알 수 없다.
             if "logger" in g:
+                # minimum 이 없는 키는 아래에서 0 으로 떨어지므로 "clamping to None" 같은
+                # 사실과 다른 문구가 남지 않게 실제 귀착값을 그대로 적는다.
+                target = minimum if minimum is not None else 0
                 g["logger"].message(
                     "warn",
                     f"[roaming] {key} current global {cur!r} also invalid ({e}); "
-                    f"clamping to {minimum!r}",
+                    f"falling back to {target!r}",
                     _EXTRA_(),
                 )
         # 미래에 모듈 전역 초기값 없는 키가 추가돼 cur가 None이어도 None을 전역에 쓰지
