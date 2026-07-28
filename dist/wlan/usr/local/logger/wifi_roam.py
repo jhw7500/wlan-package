@@ -312,21 +312,47 @@ def _apply_section_values(
 def _apply_runtime_globals(config: Dict[str, Any]) -> None:
     g = globals()
 
-    def _num(key, cast=int):
+    def _num(key, cast=int, minimum=None):
         # flat 덮어쓰기 루프가 원본 문자열 등 잘못된 값을 넣어도(런타임 reload/부팅)
         # int() 크래시 없이 현행 전역값을 유지한다. 수치 전역은 모듈 로드 시 유효 기본값
         # 으로 정의되므로 g.get(key)는 항상 유효(최후 방어까지 삼중 가드). 이 방어가
         # 없으면 예: `SCAN_NO_RESULT_SLEEP: "bad"` 한 줄로 데몬이 ValueError로 죽는다.
+        #
+        # minimum: 지정 시 그 미만 값을 거부하고 현행 전역값으로 폴백한다. 타입 가드만으로는
+        # **값 범위**를 못 막는데, sleep/interval 계열에 0·음수가 들어오면 크래시가 아니라
+        # 대기 없는 바쁜 루프가 된다 — interruptible_sleep(:1700)이 seconds<=0 이면 즉시
+        # 반환하므로 매 tick 스캔이 폭주해 CPU·airtime 을 잠식한다(감지도 어렵다).
+        # ROAM_SUCCESS_SLEEP 은 time.sleep 직접 호출(:2946/:2953)이라 음수면 ValueError 로
+        # 데몬이 죽는다. 스키마의 minimum 은 WebUI 힌트일 뿐 데몬이 강제하지 않으므로
+        # 직접 편집·마이그레이션으로 들어오는 값을 여기서 막는다.
+        def _guard(v):
+            if minimum is not None and v < minimum:
+                raise ValueError(f"must be >= {minimum}, got {v}")
+            return v
+
         try:
-            return cast(config[key])
-        except (TypeError, ValueError, KeyError):
-            cur = g.get(key)
-            try:
-                return cast(cur)
-            except (TypeError, ValueError):
-                # 미래에 모듈 전역 초기값 없는 키가 추가돼 cur가 None이어도 None을
-                # 전역에 쓰지 않는다(이후 int 사용처 TypeError 방지) — 최후 0 폴백.
-                return cur if isinstance(cur, (int, float)) else 0
+            return _guard(cast(config[key]))
+        except KeyError:
+            pass
+        except (TypeError, ValueError) as e:
+            if "logger" in g:
+                g["logger"].message(
+                    "warn",
+                    f"[roaming] {key}={config.get(key)!r} rejected ({e}); "
+                    f"keeping current {g.get(key)!r}",
+                    _EXTRA_(),
+                )
+        cur = g.get(key)
+        try:
+            return _guard(cast(cur))
+        except (TypeError, ValueError):
+            pass
+        # 미래에 모듈 전역 초기값 없는 키가 추가돼 cur가 None이어도 None을 전역에 쓰지
+        # 않는다(이후 int 사용처 TypeError 방지) — 최후 폴백. minimum 이 있으면 그 값을
+        # 하한으로 삼아 0(바쁜 루프)으로 떨어지지 않게 한다.
+        if isinstance(cur, (int, float)):
+            return max(cur, minimum) if minimum is not None else cur
+        return minimum if minimum is not None else 0
 
     g.update(
         {
@@ -353,7 +379,7 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
             "DEFAULT_TH_2G": _num("DEFAULT_TH_2G"),
             "DEFAULT_TH_5G": _num("DEFAULT_TH_5G"),
             "DIFF_TH": _num("DIFF_TH"),
-            "CHECK_INTERVAL": _num("CHECK_INTERVAL"),
+            "CHECK_INTERVAL": _num("CHECK_INTERVAL", minimum=1),
             "ENABLE_POST_ROAM_ARP_OPTIMIZATION": config[
                 "ENABLE_POST_ROAM_ARP_OPTIMIZATION"
             ],
@@ -362,19 +388,22 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
             "ENABLE_POST_ROAM_PEER_WARMUP": config["ENABLE_POST_ROAM_PEER_WARMUP"],
             "POST_ROAM_PEER_COUNT": _num("POST_ROAM_PEER_COUNT"),
             "POST_ROAM_PEER_WAIT": _num("POST_ROAM_PEER_WAIT"),
-            "SCAN_NO_RESULT_SLEEP": _num("SCAN_NO_RESULT_SLEEP"),
-            "ROAM_SUCCESS_SLEEP": _num("ROAM_SUCCESS_SLEEP"),
-            "ROAM_NO_RESULT_MAX_SLEEP": _num("ROAM_NO_RESULT_MAX_SLEEP"),
+            # sleep/interval 계열은 minimum=1 — 0·음수는 바쁜 루프 또는 time.sleep 크래시.
+            "SCAN_NO_RESULT_SLEEP": _num("SCAN_NO_RESULT_SLEEP", minimum=1),
+            "ROAM_SUCCESS_SLEEP": _num("ROAM_SUCCESS_SLEEP", minimum=1),
+            "ROAM_NO_RESULT_MAX_SLEEP": _num("ROAM_NO_RESULT_MAX_SLEEP", minimum=1),
             "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC": _num(
-                "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC"
+                "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC", minimum=1
             ),
             "ROAM_CROSS_FAIL_RETRY_COUNT": _num("ROAM_CROSS_FAIL_RETRY_COUNT"),
             "ROAM_NO_RESULT_FAST_COUNT": _num("ROAM_NO_RESULT_FAST_COUNT"),
             "ENABLE_STAGED_SCAN": config["ENABLE_STAGED_SCAN"],
             "SKIP_REDUNDANT_ACTIVE_SCAN": config["SKIP_REDUNDANT_ACTIVE_SCAN"],
             "HOME_PASSIVE": config["HOME_PASSIVE"],
-            "CACHE_FRESH_SEC": _num("CACHE_FRESH_SEC"),
-            "SELF_INDUCED_TAIL_SEC": _num("SELF_INDUCED_TAIL_SEC"),
+            # _positive_int caster 와 같은 하한 — flat 덮어쓰기 루프가 그 검증을 우회한다.
+            # 0 이면 Stage 2 영구 비활성 / 자기 스캔 유발 블록 미필터(stale 로밍).
+            "CACHE_FRESH_SEC": _num("CACHE_FRESH_SEC", minimum=1),
+            "SELF_INDUCED_TAIL_SEC": _num("SELF_INDUCED_TAIL_SEC", minimum=1),
             "USE_SIGNAL_AVG": config["USE_SIGNAL_AVG"],
         }
     )
