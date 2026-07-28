@@ -345,8 +345,16 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
         cur = g.get(key)
         try:
             return _guard(cast(cur))
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as e:
+            # 현행 전역값마저 부적합한 경우(이전 재로드에서 오염됐거나 초기값이 없는 키).
+            # 아래에서 조용히 클램프하면 최후 폴백이 발동했는지 운영자가 알 수 없다.
+            if "logger" in g:
+                g["logger"].message(
+                    "warn",
+                    f"[roaming] {key} current global {cur!r} also invalid ({e}); "
+                    f"clamping to {minimum!r}",
+                    _EXTRA_(),
+                )
         # 미래에 모듈 전역 초기값 없는 키가 추가돼 cur가 None이어도 None을 전역에 쓰지
         # 않는다(이후 int 사용처 TypeError 방지) — 최후 폴백. minimum 이 있으면 그 값을
         # 하한으로 삼아 0(바쁜 루프)으로 떨어지지 않게 한다.
@@ -368,12 +376,17 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
             "MAX_ROAMS_IN_WINDOW": _num("MAX_ROAMS_IN_WINDOW"),
             "PING_PONG_DETECTION_TIME": _num("PING_PONG_DETECTION_TIME"),
             "ENABLE_ADAPTIVE_INTERVAL": config["ENABLE_ADAPTIVE_INTERVAL"],
-            "MIN_CHECK_INTERVAL": _num("MIN_CHECK_INTERVAL"),
-            "MAX_CHECK_INTERVAL": _num("MAX_CHECK_INTERVAL"),
+            # ADAPTIVE 계열도 interval — AdaptiveInterval(:882) 를 거쳐
+            # `current_interval = max(min_interval, ADAPTIVE_NEAR_THRESHOLD_INTERVAL)`(:926)
+            # 로 합쳐진 뒤 interruptible_sleep 에 그대로 들어간다. 0 이면 같은 바쁜 루프.
+            "MIN_CHECK_INTERVAL": _num("MIN_CHECK_INTERVAL", minimum=1),
+            "MAX_CHECK_INTERVAL": _num("MAX_CHECK_INTERVAL", minimum=1),
             "ADAPTIVE_RSSI_DROP_THRESHOLD": _num("ADAPTIVE_RSSI_DROP_THRESHOLD"),
             "ADAPTIVE_RSSI_RISE_THRESHOLD": _num("ADAPTIVE_RSSI_RISE_THRESHOLD"),
             "ADAPTIVE_NEAR_THRESHOLD_OFFSET": _num("ADAPTIVE_NEAR_THRESHOLD_OFFSET"),
-            "ADAPTIVE_NEAR_THRESHOLD_INTERVAL": _num("ADAPTIVE_NEAR_THRESHOLD_INTERVAL"),
+            "ADAPTIVE_NEAR_THRESHOLD_INTERVAL": _num(
+                "ADAPTIVE_NEAR_THRESHOLD_INTERVAL", minimum=1
+            ),
             "ADAPTIVE_GOOD_SIGNAL_OFFSET": _num("ADAPTIVE_GOOD_SIGNAL_OFFSET"),
             "ADAPTIVE_CONSECUTIVE_DROP_COUNT": _num("ADAPTIVE_CONSECUTIVE_DROP_COUNT"),
             "DEFAULT_TH_2G": _num("DEFAULT_TH_2G"),
