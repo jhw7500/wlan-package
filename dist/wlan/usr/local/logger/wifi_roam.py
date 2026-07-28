@@ -2283,15 +2283,33 @@ def check_roam_conditions(station, roam_ap, trend, baseline_rssi=None):
     # 완화는 이 게이트 **이전에** 임계 자체에 적용해야 실효한다(종전엔 게이트 뒤에 있어
     # 도달 시점에 diff ≥ DIFF_TH 가 이미 보장된 dead code — reason 문자열만 바꿨다).
     # 완화 구간 후보도 아래 load 게이트는 동일하게 통과해야 한다. diff < effective_diff_th
-    # 후보는 이 게이트에서 즉시 차단되며, 완화 임계는 최소 1dB 로 클램프한다 — DIFF_TH<3
-    # 극단 설정에서 임계가 0 이하로 내려가면 음수/0 diff 후보가 통과하고, LOAD 활성 시
-    # load 점수가 score(=diff×10 + load개선×2)를 양수로 반전시켜 채택될 수 있기 때문.
+    # 후보는 이 게이트에서 즉시 차단되며, 완화 임계는 min(DIFF_TH, 1) 로 하한 클램프한다 —
+    # DIFF_TH<3 극단 설정에서 임계가 음수로 내려가면 **더 나쁜 AP**(음수 diff)가 통과하고,
+    # LOAD 활성 시 load 점수가 score(=diff×10 + load개선×2)를 양수로 반전시켜 채택될 수
+    # 있기 때문. 하한이 상수 1 이 아니라 min(DIFF_TH, 1) 인 이유: 하한 1 은 음수 차단이라는
+    # 목적에 필요한 것보다 과해서, DIFF_TH=0("이득 무관")을 설정해도 falling 추세에서만
+    # max(1, -3)=1 로 되살아나 diff=0 후보가 차단됐다(설정 의미와 불일치). min(DIFF_TH, 1)
+    # 은 DIFF_TH=0 일 때만 하한을 0 으로 낮추고, DIFF_TH>=1 에서는 종전과 동일하게 1 이다.
+    # ⚠️ 아래 표는 **이 완화 분기 안에서만** 성립한다 — 즉 ENABLE_PREDICTIVE_ROAM=True
+    # 이고 trend 가 TREND_FALLING 일 때. 그 밖의 모든 경우는 effective_diff_th = DIFF_TH
+    # 로 **설정값이 그대로** 쓰인다. 출하 기본은 PREDICTIVE_ROAM.enable=false 라 이 분기
+    # 자체가 비활성이다.
+    #   DIFF_TH=0 → max(0, -3) = 0   (변경: 종전 1)
+    #   DIFF_TH=1 → max(1, -2) = 1   (동일)
+    #   DIFF_TH=2 → max(1, -1) = 1   (동일)
+    #   DIFF_TH=3 → max(1,  0) = 1   (동일)
+    #   DIFF_TH=4 → max(1,  1) = 1   (동일)
+    #   DIFF_TH≥5 → max(1, TH-3) = TH-3   (동일)
+    # 즉 DIFF_TH=0 외에는 결과가 바뀌지 않는다. 다만 완화 분기 안에서는 DIFF_TH 1~4 가
+    # 모두 1 로 수렴해 설정 해상도가 사라지는데, 이는 하한 1 의 기존 동작을 그대로 둔
+    # 결과다(무회귀 우선). 일관성을 택하려면 하한을 0 으로 낮춰 "3dB 완화, 단 음수 금지"
+    # 로 통일할 수 있으나, 그 경우 DIFF_TH 1~3 의 falling 동작이 함께 바뀐다.
     rssi_diff = roam_ap["rssi"] - baseline_rssi
 
     effective_diff_th = DIFF_TH
     is_falling_trend = False  # '완화 구간 진입'이 아니라 'falling 완화 활성' 플래그
     if ENABLE_PREDICTIVE_ROAM and trend == RSSITrendTracker.TREND_FALLING:
-        effective_diff_th = max(1, DIFF_TH - 3)
+        effective_diff_th = max(min(DIFF_TH, 1), DIFF_TH - 3)
         is_falling_trend = True
 
     if rssi_diff < effective_diff_th:
@@ -2417,7 +2435,21 @@ def baseline_from_entries(entries, cur_bssid, default_rssi):
 def evaluate_candidates(entries, station, trend, cooldown, live_ssid, baseline_rssi):
     """후보 엔트리 중 최적 로밍 대상을 고른다(현재 AP 제외, cross-SSID cooldown 반영).
     baseline_rssi=현재 AP 비교 기준(홈 패시브 스캔 스케일로 통일). 점수=RSSI diff*10 +
-    Load 개선*2. 반환: (best_ap, best_reason, best_score). 없으면 (None, "", 0)."""
+    Load 개선*2. 반환: (best_ap, best_reason, best_score). 없으면 (None, "", 0).
+
+    갱신 조건이 `score > best_score`(초기 0)가 아니라 `best_ap is None or ...`인 이유:
+    DIFF_TH=0 설정에서 diff=0 후보는 check_roam_conditions 게이트(:2297 `diff < th`)를
+    정상 통과하는데 score=diff*10=0 이라 `0 > 0`이 거짓이 되어, 게이트가 허용한 후보가
+    선택 단계에서 조용히 탈락했다(로그에는 `Roam candidate ... score=0`으로 찍혀 채택된
+    것처럼 보임). 그 결과 DIFF_TH=0이 DIFF_TH=1과 동일하게 동작했다.
+
+    ⚠️ 영향 범위는 DIFF_TH=0 에 국한되지 않는다. ENABLE_LOAD_BASED_ROAM=True 이고
+    DIFF_TH<=3 이면 load 패널티로 score<0 인 첫 후보도 채택된다 — 예: DIFF_TH=2, diff=2,
+    current_load=30, roam_load=49 이면 load 게이트(49 > 30+20 거짓)를 통과하고
+    score = 2*10 + (30-49)*2 = -18 이라 구 코드는 미채택, 신 코드는 채택. "이득 무관"
+    의미에는 부합하지만 종전과 달라지는 지점이라 회귀 테스트로 고정했다
+    (test_low_diff_th_with_load_penalty_also_accepts_negative_score).
+    출하 기본(DIFF_TH=8, LOAD_BASED_ROAM=false)에서는 최소 score 가 80-38=42 라 영향 없음."""
     best_ap, best_reason, best_score = None, "", 0
     for roam_ap in entries:
         if roam_ap["bssid"] == station["bssid"]:
@@ -2441,7 +2473,7 @@ def evaluate_candidates(entries, station, trend, cooldown, live_ssid, baseline_r
                 current_load = station.get("load", 0)
                 roam_load = roam_ap.get("load", 0)
                 score += (current_load - roam_load) * 2
-            if score > best_score:
+            if best_ap is None or score > best_score:
                 best_ap = roam_ap
                 best_reason = reason
                 best_score = score

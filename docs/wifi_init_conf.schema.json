@@ -1218,10 +1218,12 @@
             },
             "DIFF_TH": {
               "type": "integer",
-              "default": 10,
-              "description": "현재 AP 대비 후보 AP의 최소 RSSI 차이(dB). 클수록 보수적",
+              "default": 8,
+              "minimum": 0,
+              "maximum": 30,
+              "description": "현재 AP 대비 후보 AP의 최소 RSSI 이득(dB). 클수록 보수적. 0=이득 무관(동률 AP도 후보)이며 측정 요동만으로도 로밍해 진동이 급증하므로 시험용. `wifi <if> roam diff <dB>` 로 런타임 변경 가능(persist + SIGHUP).",
               "x-ui-editable": "yes",
-              "x-apply-timing": "daemon-restart",
+              "x-apply-timing": "runtime",
               "x-consumer": "wifi_roam.py"
             },
             "CHECK_INTERVAL": {
@@ -2121,10 +2123,12 @@
             },
             "DIFF_TH": {
               "type": "integer",
-              "default": 10,
-              "description": "현재 AP 대비 후보 AP의 최소 RSSI 차이(dB). 클수록 보수적",
+              "default": 8,
+              "minimum": 0,
+              "maximum": 30,
+              "description": "현재 AP 대비 후보 AP의 최소 RSSI 이득(dB). 클수록 보수적. 0=이득 무관(동률 AP도 후보)이며 측정 요동만으로도 로밍해 진동이 급증하므로 시험용. `wifi <if> roam diff <dB>` 로 런타임 변경 가능(persist + SIGHUP).",
               "x-ui-editable": "yes",
-              "x-apply-timing": "daemon-restart",
+              "x-apply-timing": "runtime",
               "x-consumer": "wifi_roam.py"
             },
             "CHECK_INTERVAL": {
