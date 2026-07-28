@@ -162,6 +162,26 @@ def test_diff_th_zero_accepts_first_candidate_with_negative_score(monkeypatch):
     assert score < 0, f"부하 패널티로 score<0 이어야 한다(got {score})"
 
 
+def test_low_diff_th_with_load_penalty_also_accepts_negative_score(monkeypatch):
+    """[범위 고정] 이 변경은 DIFF_TH=0 에 국한되지 않는다 — DIFF_TH<=3 + LOAD 활성에서도
+    첫 후보가 음수 score 로 채택된다.
+
+    DIFF_TH=2, diff=2, current_load=30, roam_load=49 이면
+      load 게이트: 49 > 30+20=50 → 거짓이라 통과
+      score = 2*10 + (30-49)*2 = -18
+    구 코드(`score > best_score`, 초기 0)는 미채택, 신 코드는 `best_ap is None` 으로 채택.
+    출하 기본 DIFF_TH=8 은 최소 score 가 80-38=42 라 영향이 없다."""
+    _load_globals(monkeypatch)
+    monkeypatch.setattr(wifi_roam, "DIFF_TH", 2)
+    st = {"bssid": SELF_BSSID, "rssi": -63, "load": 30, "ssid": "TEST"}
+    entries = [_ap("bb:bb:bb:bb:bb:bb", -61, load=49)]
+    best, _reason, score = wifi_roam.evaluate_candidates(
+        entries, st, STABLE, None, "TEST", -63
+    )
+    assert best is not None
+    assert score == -18, f"score 계산이 바뀌었다(got {score})"
+
+
 def test_negative_score_candidate_does_not_mask_better_one(monkeypatch):
     """음수 score 후보가 먼저 와도 더 나은 후보가 최종 선택된다(최댓값 로직 보존)."""
     _load_globals(monkeypatch)

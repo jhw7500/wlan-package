@@ -2441,7 +2441,15 @@ def evaluate_candidates(entries, station, trend, cooldown, live_ssid, baseline_r
     DIFF_TH=0 설정에서 diff=0 후보는 check_roam_conditions 게이트(:2297 `diff < th`)를
     정상 통과하는데 score=diff*10=0 이라 `0 > 0`이 거짓이 되어, 게이트가 허용한 후보가
     선택 단계에서 조용히 탈락했다(로그에는 `Roam candidate ... score=0`으로 찍혀 채택된
-    것처럼 보임). 그 결과 DIFF_TH=0이 DIFF_TH=1과 동일하게 동작했다."""
+    것처럼 보임). 그 결과 DIFF_TH=0이 DIFF_TH=1과 동일하게 동작했다.
+
+    ⚠️ 영향 범위는 DIFF_TH=0 에 국한되지 않는다. ENABLE_LOAD_BASED_ROAM=True 이고
+    DIFF_TH<=3 이면 load 패널티로 score<0 인 첫 후보도 채택된다 — 예: DIFF_TH=2, diff=2,
+    current_load=30, roam_load=49 이면 load 게이트(49 > 30+20 거짓)를 통과하고
+    score = 2*10 + (30-49)*2 = -18 이라 구 코드는 미채택, 신 코드는 채택. "이득 무관"
+    의미에는 부합하지만 종전과 달라지는 지점이라 회귀 테스트로 고정했다
+    (test_low_diff_th_with_load_penalty_also_accepts_negative_score).
+    출하 기본(DIFF_TH=8, LOAD_BASED_ROAM=false)에서는 최소 score 가 80-38=42 라 영향 없음."""
     best_ap, best_reason, best_score = None, "", 0
     for roam_ap in entries:
         if roam_ap["bssid"] == station["bssid"]:
