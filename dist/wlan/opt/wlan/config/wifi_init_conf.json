@@ -293,7 +293,7 @@
                 "use_signal_avg: (bool) true=signal_avg(평균, 안정적), false=signal(순간값, 즉시 반응)",
                 "DEFAULT_TH_2G: (int) 2.4GHz RSSI 로밍 임계값 (dBm). 이 값 이하이면 로밍 시도",
                 "DEFAULT_TH_5G: (int) 5GHz RSSI 로밍 임계값 (dBm). wpa_supplicant.conf 값이 우선",
-                "DIFF_TH: (int) 현재 AP 대비 후보 AP의 최소 RSSI 차이 (dB). 클수록 보수적",
+                "DIFF_TH: (int) 현재 AP 대비 후보 AP의 최소 RSSI 이득 (dB). 클수록 보수적. 0=이득 무관(동률 AP도 후보)이며 측정 요동(동일 AP 연속 관측 |ΔRSSI| p90=1dB)만으로도 로밍해 진동이 급증하므로 시험용. `wifi <if> roam diff <dB>` 로 런타임 변경(persist + SIGHUP 무재시작 반영).",
                 "CHECK_INTERVAL: (int) 로밍 체크 기본 주기 (초). ADAPTIVE_INTERVAL 활성 시 동적 조절됨",
                 "SCAN_NO_RESULT_SLEEP: (int) 스캔 결과 없을 때 대기 (초)",
                 "ROAM_SUCCESS_SLEEP: (int) 로밍 성공 후 재체크 대기 (초)"
@@ -497,7 +497,7 @@
                 "use_signal_avg: (bool) true=signal_avg(평균, 안정적), false=signal(순간값, 즉시 반응)",
                 "DEFAULT_TH_2G: (int) 2.4GHz RSSI 로밍 임계값 (dBm). 이 값 이하이면 로밍 시도",
                 "DEFAULT_TH_5G: (int) 5GHz RSSI 로밍 임계값 (dBm). wpa_supplicant.conf 값이 우선",
-                "DIFF_TH: (int) 현재 AP 대비 후보 AP의 최소 RSSI 차이 (dB). 클수록 보수적",
+                "DIFF_TH: (int) 현재 AP 대비 후보 AP의 최소 RSSI 이득 (dB). 클수록 보수적. 0=이득 무관(동률 AP도 후보)이며 측정 요동(동일 AP 연속 관측 |ΔRSSI| p90=1dB)만으로도 로밍해 진동이 급증하므로 시험용. `wifi <if> roam diff <dB>` 로 런타임 변경(persist + SIGHUP 무재시작 반영).",
                 "CHECK_INTERVAL: (int) 로밍 체크 기본 주기 (초). ADAPTIVE_INTERVAL 활성 시 동적 조절됨",
                 "SCAN_NO_RESULT_SLEEP: (int) 스캔 결과 없을 때 대기 (초)",
                 "ROAM_SUCCESS_SLEEP: (int) 로밍 성공 후 재체크 대기 (초)"
