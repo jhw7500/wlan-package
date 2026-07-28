@@ -139,9 +139,25 @@ def test_valid_values_still_applied(monkeypatch):
     assert wifi_roam.CHECK_INTERVAL == 5
 
 
-def test_cache_fresh_sec_zero_rejected(monkeypatch):
-    """CACHE_FRESH_SEC=0 은 Stage 2 를 영구 비활성화하므로 거부(_positive_int 와 동일 하한)."""
+def test_cache_fresh_sec_zero_rejected_via_nested_caster(monkeypatch):
+    """중첩 경로(STAGED_SCAN.cache_fresh_sec)는 **기존** _positive_int caster 가 막는다.
+
+    이 테스트는 이번에 추가한 _num(minimum=) 가드가 아니라 종전부터 있던 방어를
+    확인한다(무회귀용). 새 가드 검증은 아래 flat 경로 테스트가 담당한다."""
     before = wifi_roam.CACHE_FRESH_SEC
     _load({"STAGED_SCAN": {"cache_fresh_sec": 0}}, monkeypatch)
     assert wifi_roam.CACHE_FRESH_SEC >= 1
     assert wifi_roam.CACHE_FRESH_SEC == before
+
+
+@pytest.mark.parametrize("bad", [0, -1])
+def test_cache_fresh_sec_zero_rejected_via_flat_override(bad, monkeypatch):
+    """[새 가드] flat 덮어쓰기 경로는 _positive_int 를 우회하므로 _num(minimum=1) 이 막는다.
+
+    roaming 블록에 대문자 키를 직접 넣으면 `for key in config.keys()` 루프가 caster 를
+    거치지 않고 raw 로 덮어쓴다. CACHE_FRESH_SEC=0 이면 scan_block_fresh 가 항상 False
+    가 되어 Stage 2 교차채널 캐시가 영구 비활성화된다."""
+    before = wifi_roam.CACHE_FRESH_SEC
+    _load({"CACHE_FRESH_SEC": bad, "SELF_INDUCED_TAIL_SEC": bad}, monkeypatch)
+    assert wifi_roam.CACHE_FRESH_SEC == before, f"flat 경로가 {bad} 로 오염됐다"
+    assert wifi_roam.SELF_INDUCED_TAIL_SEC >= 1
