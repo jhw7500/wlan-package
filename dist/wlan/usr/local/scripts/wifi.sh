@@ -1724,18 +1724,25 @@ case "$2" in
             echo "Error: diff must be an integer in 0..30 (got '$DIFF')" >&2
             exit 1
         fi
-        OLD=$(jq -r ".${IFACE}.roaming.DIFF_TH // \"unset\"" "$WIFI_INIT_CONF_JSON")
+        # 표시용 이전값도 조회 실패를 구분한다 — 파손 JSON 에서 빈 값이 되면 출력이
+        # " -> 3 (persist)" 처럼 이전값 없이 찍혀 혼란스럽다(조회 경로와 동일 패턴).
+        if ! OLD=$(jq -r ".${IFACE}.roaming.DIFF_TH // \"unset\"" "$WIFI_INIT_CONF_JSON"); then
+            echo "Error: failed to read ${IFACE}.roaming.DIFF_TH from $WIFI_INIT_CONF_JSON" >&2
+            exit 1
+        fi
         update_json_roaming_int "$IFACE" "DIFF_TH" "$DIFF" || exit 1
         echo "$IFACE roaming.DIFF_TH: ${OLD} -> ${DIFF} (persist)"
-        # 낮은 값은 측정 요동(동일 AP 연속 관측 |ΔRSSI| p90=1dB)과 구분되지 않는 이득으로도
-        # 로밍해 진동이 급증한다 — 실측 재생 기준 DIFF_TH=1 은 8 대비 로밍 2.28배, 10초 미만
-        # 간격 로밍 0→54건. 시험용 설정이므로 되돌리기를 잊지 않도록 경고한다.
-        if [ "$DIFF" -le 1 ]; then
-            echo "Warning: DIFF_TH=${DIFF} is a test-only setting (roam thrashing); revert after testing" >&2
-        fi
         # 반영 실패(SIGHUP+restart 모두 실패)는 persist 성공과 별개로 비0 종료 —
         # 자동화가 "저장됐으나 미반영" 상태를 감지할 수 있어야 한다.
         reload_roam_daemon "$IFACE" || exit 1
+        # 낮은 값은 측정 요동(동일 AP 연속 관측 |ΔRSSI| p90=1dB)과 구분되지 않는 이득으로도
+        # 로밍해 진동이 급증한다 — 실측 재생 기준 DIFF_TH=1 은 8 대비 로밍 2.28배, 10초 미만
+        # 간격 로밍 0→54건. 시험용 설정이므로 되돌리기를 잊지 않도록 경고한다.
+        # 반영까지 성공한 뒤에 출력한다 — 미반영으로 종료하는 경우엔 이 경고가 오히려
+        # "적용됐다"는 오해를 준다.
+        if [ "$DIFF" -le 1 ]; then
+            echo "Warning: DIFF_TH=${DIFF} is a test-only setting (roam thrashing); revert after testing" >&2
+        fi
         exit 0
     fi
     if [ -z "$ROAM_ARG" ]; then

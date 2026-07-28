@@ -2290,6 +2290,13 @@ def check_roam_conditions(station, roam_ap, trend, baseline_rssi=None):
     # 목적에 필요한 것보다 과해서, DIFF_TH=0("이득 무관")을 설정해도 falling 추세에서만
     # max(1, -3)=1 로 되살아나 diff=0 후보가 차단됐다(설정 의미와 불일치). min(DIFF_TH, 1)
     # 은 DIFF_TH=0 일 때만 하한을 0 으로 낮추고, DIFF_TH>=1 에서는 종전과 동일하게 1 이다.
+    #   DIFF_TH=0 → max(0, -3) = 0   (변경: 종전 1)
+    #   DIFF_TH=1 → max(1, -2) = 1   (동일)
+    #   DIFF_TH=2 → max(1, -1) = 1   (동일)
+    #   DIFF_TH=3 → max(1,  0) = 1   (동일)
+    #   DIFF_TH=4 → max(1,  1) = 1   (동일)
+    #   DIFF_TH≥5 → max(1, TH-3) = TH-3   (동일)
+    # 즉 DIFF_TH=0 외에는 결과가 바뀌지 않는다.
     rssi_diff = roam_ap["rssi"] - baseline_rssi
 
     effective_diff_th = DIFF_TH

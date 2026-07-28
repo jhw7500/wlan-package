@@ -137,3 +137,37 @@ def test_diff_th_zero_falling_still_rejects_worse_ap(monkeypatch):
         0, [_ap("bb:bb:bb:bb:bb:bb", -70)], monkeypatch=monkeypatch, trend=FALLING
     )
     assert best is None
+
+
+# ── LOAD_BASED_ROAM 교차: score 가 음수가 될 수 있는 경로 ──
+
+
+def _load_globals(monkeypatch):
+    monkeypatch.setattr(wifi_roam, "ENABLE_LOAD_BASED_ROAM", True)
+    monkeypatch.setattr(wifi_roam, "MAX_ROAM_LOAD", 80)
+    monkeypatch.setattr(wifi_roam, "LOAD_DIFF_THRESHOLD", 20)
+
+
+def test_diff_th_zero_accepts_first_candidate_with_negative_score(monkeypatch):
+    """DIFF_TH=0 + LOAD 활성: diff=0 이고 후보 부하가 더 높으면 score<0 이 되는데도 채택된다.
+
+    'DIFF_TH=0 = 이득 무관' 의미에는 부합하지만 종전(`score > best_score`, 초기 0)과
+    달라지는 지점이라 의도된 동작으로 고정한다. load 게이트(roam_load > current_load +
+    LOAD_DIFF_THRESHOLD)를 통과하는 범위 안에서만 발생한다."""
+    _load_globals(monkeypatch)
+    best, _reason, score = _eval(
+        0, [_ap("bb:bb:bb:bb:bb:bb", -63, load=10)], monkeypatch=monkeypatch
+    )
+    assert best is not None
+    assert score < 0, f"부하 패널티로 score<0 이어야 한다(got {score})"
+
+
+def test_negative_score_candidate_does_not_mask_better_one(monkeypatch):
+    """음수 score 후보가 먼저 와도 더 나은 후보가 최종 선택된다(최댓값 로직 보존)."""
+    _load_globals(monkeypatch)
+    best, _reason, _score = _eval(
+        0,
+        [_ap("bb:bb:bb:bb:bb:bb", -63, load=10), _ap("cc:cc:cc:cc:cc:cc", -55, load=0)],
+        monkeypatch=monkeypatch,
+    )
+    assert best["bssid"] == "cc:cc:cc:cc:cc:cc"
