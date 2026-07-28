@@ -2417,7 +2417,13 @@ def baseline_from_entries(entries, cur_bssid, default_rssi):
 def evaluate_candidates(entries, station, trend, cooldown, live_ssid, baseline_rssi):
     """후보 엔트리 중 최적 로밍 대상을 고른다(현재 AP 제외, cross-SSID cooldown 반영).
     baseline_rssi=현재 AP 비교 기준(홈 패시브 스캔 스케일로 통일). 점수=RSSI diff*10 +
-    Load 개선*2. 반환: (best_ap, best_reason, best_score). 없으면 (None, "", 0)."""
+    Load 개선*2. 반환: (best_ap, best_reason, best_score). 없으면 (None, "", 0).
+
+    갱신 조건이 `score > best_score`(초기 0)가 아니라 `best_ap is None or ...`인 이유:
+    DIFF_TH=0 설정에서 diff=0 후보는 check_roam_conditions 게이트(:2297 `diff < th`)를
+    정상 통과하는데 score=diff*10=0 이라 `0 > 0`이 거짓이 되어, 게이트가 허용한 후보가
+    선택 단계에서 조용히 탈락했다(로그에는 `Roam candidate ... score=0`으로 찍혀 채택된
+    것처럼 보임). 그 결과 DIFF_TH=0이 DIFF_TH=1과 동일하게 동작했다."""
     best_ap, best_reason, best_score = None, "", 0
     for roam_ap in entries:
         if roam_ap["bssid"] == station["bssid"]:
@@ -2441,7 +2447,7 @@ def evaluate_candidates(entries, station, trend, cooldown, live_ssid, baseline_r
                 current_load = station.get("load", 0)
                 roam_load = roam_ap.get("load", 0)
                 score += (current_load - roam_load) * 2
-            if score > best_score:
+            if best_ap is None or score > best_score:
                 best_ap = roam_ap
                 best_reason = reason
                 best_score = score

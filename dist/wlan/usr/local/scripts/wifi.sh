@@ -163,6 +163,26 @@ update_json_roaming_int() {
     fi
 }
 
+# roaming.* JSON 변경을 wifi_roam 데몬에 무재시작 반영.
+# SIGHUP으로 데몬이 즉시 재읽어 반영 — 재시작 없이 데몬 상태(핑퐁 이력·backoff·cooldown)
+# 보존. 폴링이 아니라 신호 트리거라 평시 비용 0. roam th / roam diff 가 공유한다.
+reload_roam_daemon() {
+    local iface="$1"
+
+    if systemctl is-active --quiet "wifi_roam@${iface}" 2>/dev/null; then
+        if systemctl kill --kill-who=main -s SIGHUP "wifi_roam@${iface}"; then
+            echo "wifi_roam@${iface} reloaded via SIGHUP (applied, no restart)"
+        else
+            # SIGHUP 전달 실패(권한/구버전 systemd 등, 에러는 위에 노출) → restart 폴백으로
+            # 반드시 반영(무음 미적용 방지). 재시작은 연결 무영향.
+            echo "Warning: SIGHUP failed; falling back to restart" >&2
+            systemctl restart "wifi_roam@${iface}" && echo "wifi_roam@${iface} restarted (applied)"
+        fi
+    else
+        echo "wifi_roam@${iface} inactive (applies on next start)"
+    fi
+}
+
 ensure_wifi_init_conf() {
     # JSON config is managed by postinst, no action needed here
     :
@@ -358,6 +378,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} mscan {get|channel_list|2G|5G} : runtime (setuserscan/getscantable)"
     echo "       wifi {0|1|mlan0|mlan1} roam [0|1..N] : 0=auto best, N=Nth AP (RSSI order)"
     echo "       wifi {0|1|mlan0|mlan1} roam th [2G|5G] [rssi] : 로밍 RSSI 임계값 표시/설정 (persist, SIGHUP 무재시작 반영)"
+    echo "       wifi {0|1|mlan0|mlan1} roam diff [dB] : 후보 AP 최소 RSSI 이득 표시/설정 (persist, SIGHUP 무재시작 반영)"
     echo "       wifi {0|1|mlan0|mlan1} stat reset [mac] : reset stat records (all or specific MAC)"
     echo "       wifi {0|1|mlan0|mlan1} stat interval {seconds} : set stat reset interval (persist)"
     echo "       wifi {0|1|mlan0|mlan1} mon [c|compact] [interval] [--summary-lines N] [--roam-display N]"
@@ -1616,6 +1637,8 @@ case "$2" in
     # wifi 0 roam th         → 로밍 RSSI 임계값 표시 (2G/5G)
     # wifi 0 roam th 5G -70  → roaming.DEFAULT_TH_5G=-70 (persist) + SIGHUP 즉시 반영(무재시작)
     # wifi 0 roam th 2G -70  → roaming.DEFAULT_TH_2G=-70
+    # wifi 0 roam diff       → 후보 AP 최소 RSSI 이득(DIFF_TH) 표시
+    # wifi 0 roam diff 3     → roaming.DIFF_TH=3 (persist) + SIGHUP 즉시 반영(무재시작)
     ROAM_ARG="${3:-}"
     if [ "$ROAM_ARG" = "th" ]; then
         if [ "$IFACE" = "eth0" ]; then
@@ -1662,20 +1685,41 @@ case "$2" in
         if grep -qE "^#!${MARKER}=" "/etc/wpa_supplicant/wpa_supplicant-${IFACE}.conf" 2>/dev/null; then
             echo "Warning: #!${MARKER}= marker in wpa_supplicant-${IFACE}.conf overrides JSON value" >&2
         fi
-        # JSON TH는 SIGHUP으로 wifi_roam 데몬이 즉시 재읽어 반영 — 재시작 없이 데몬 상태
-        # (핑퐁 이력·backoff·cooldown) 보존. 폴링이 아니라 신호 트리거라 평시 비용 0.
-        if systemctl is-active --quiet "wifi_roam@${IFACE}" 2>/dev/null; then
-            if systemctl kill --kill-who=main -s SIGHUP "wifi_roam@${IFACE}"; then
-                echo "wifi_roam@${IFACE} reloaded via SIGHUP (applied, no restart)"
-            else
-                # SIGHUP 전달 실패(권한/구버전 systemd 등, 에러는 위에 노출) → restart 폴백으로
-                # 반드시 반영(무음 미적용 방지). 재시작은 연결 무영향.
-                echo "Warning: SIGHUP failed; falling back to restart" >&2
-                systemctl restart "wifi_roam@${IFACE}" && echo "wifi_roam@${IFACE} restarted (applied)"
-            fi
-        else
-            echo "wifi_roam@${IFACE} inactive (applies on next start)"
+        reload_roam_daemon "$IFACE"
+        exit 0
+    fi
+    if [ "$ROAM_ARG" = "diff" ]; then
+        if [ "$IFACE" = "eth0" ]; then
+            echo "Error: roam diff is for wlan interfaces (mlan0/mlan1)" >&2
+            exit 1
         fi
+        # 표시 경로도 파일 부재를 "unset"으로 오인하지 않도록 선확인 (파손 시 jq 파스 에러는 가시화)
+        if [ ! -f "$WIFI_INIT_CONF_JSON" ]; then
+            echo "Error: $WIFI_INIT_CONF_JSON not found" >&2
+            exit 1
+        fi
+        DIFF="${4:-}"
+        if [ -z "$DIFF" ]; then
+            cur=$(jq -r ".${IFACE}.roaming.DIFF_TH // \"unset\"" "$WIFI_INIT_CONF_JSON")
+            echo "$IFACE roaming.DIFF_TH = ${cur} (dB)"
+            exit 0
+        fi
+        # 0..30 정수만 허용 (음수/비정수/범위밖 거부). DIFF_TH 는 '현재 AP 대비 최소 RSSI
+        # 이득'이라 음수는 의미가 없고(더 나쁜 AP로 로밍), 30 이상은 사실상 로밍 금지다.
+        if ! echo "$DIFF" | grep -qE '^[0-9]+$' || [ "$DIFF" -gt 30 ]; then
+            echo "Error: diff must be an integer in 0..30 (got '$DIFF')" >&2
+            exit 1
+        fi
+        OLD=$(jq -r ".${IFACE}.roaming.DIFF_TH // \"unset\"" "$WIFI_INIT_CONF_JSON")
+        update_json_roaming_int "$IFACE" "DIFF_TH" "$DIFF" || exit 1
+        echo "$IFACE roaming.DIFF_TH: ${OLD} -> ${DIFF} (persist)"
+        # 낮은 값은 측정 요동(동일 AP 연속 관측 |ΔRSSI| p90=1dB)과 구분되지 않는 이득으로도
+        # 로밍해 진동이 급증한다 — 실측 재생 기준 DIFF_TH=1 은 8 대비 로밍 2.28배, 10초 미만
+        # 간격 로밍 0→54건. 시험용 설정이므로 되돌리기를 잊지 않도록 경고한다.
+        if [ "$DIFF" -le 1 ]; then
+            echo "Warning: DIFF_TH=${DIFF} is a test-only setting (roam thrashing); revert after testing" >&2
+        fi
+        reload_roam_daemon "$IFACE"
         exit 0
     fi
     if [ -z "$ROAM_ARG" ]; then
