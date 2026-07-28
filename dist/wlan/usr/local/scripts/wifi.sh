@@ -1684,7 +1684,12 @@ case "$2" in
             echo "Error: rssi must be a negative integer in -100..-1 (got '$RSSI')" >&2
             exit 1
         fi
-        OLD=$(jq -r ".${IFACE}.roaming.${TH_KEY} // \"unset\"" "$WIFI_INIT_CONF_JSON")
+        # 표시용 이전값도 조회 실패를 구분한다 — 파손 JSON 에서 빈 값이 되면 출력이
+        # " -> -70 (persist)" 처럼 이전값 없이 찍혀 혼란스럽다(roam diff 와 동일 패턴).
+        if ! OLD=$(jq -r ".${IFACE}.roaming.${TH_KEY} // \"unset\"" "$WIFI_INIT_CONF_JSON"); then
+            echo "Error: failed to read ${IFACE}.roaming.${TH_KEY} from $WIFI_INIT_CONF_JSON" >&2
+            exit 1
+        fi
         update_json_roaming_int "$IFACE" "$TH_KEY" "$RSSI" || exit 1
         echo "$IFACE roaming.${TH_KEY}: ${OLD} -> ${RSSI} (persist)"
         # wpa_supplicant conf의 #!TH_ 마커는 JSON보다 우선 — 있으면 반영 안 됨을 경고
@@ -1716,6 +1721,10 @@ case "$2" in
                 exit 1
             fi
             echo "$IFACE roaming.DIFF_TH = ${cur} (dB)"
+            # 조회 시에도 위험 설정이면 환기 — 시험 후 되돌리지 않은 상태를 알아채게 한다.
+            if [ "$cur" -le 1 ] 2>/dev/null; then
+                echo "Warning: DIFF_TH=${cur} is a test-only setting (roam thrashing); revert after testing" >&2
+            fi
             exit 0
         fi
         # 0..30 정수만 허용 (음수/비정수/범위밖 거부). DIFF_TH 는 '현재 AP 대비 최소 RSSI

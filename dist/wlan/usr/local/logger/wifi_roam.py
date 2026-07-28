@@ -2290,13 +2290,20 @@ def check_roam_conditions(station, roam_ap, trend, baseline_rssi=None):
     # 목적에 필요한 것보다 과해서, DIFF_TH=0("이득 무관")을 설정해도 falling 추세에서만
     # max(1, -3)=1 로 되살아나 diff=0 후보가 차단됐다(설정 의미와 불일치). min(DIFF_TH, 1)
     # 은 DIFF_TH=0 일 때만 하한을 0 으로 낮추고, DIFF_TH>=1 에서는 종전과 동일하게 1 이다.
+    # ⚠️ 아래 표는 **이 완화 분기 안에서만** 성립한다 — 즉 ENABLE_PREDICTIVE_ROAM=True
+    # 이고 trend 가 TREND_FALLING 일 때. 그 밖의 모든 경우는 effective_diff_th = DIFF_TH
+    # 로 **설정값이 그대로** 쓰인다. 출하 기본은 PREDICTIVE_ROAM.enable=false 라 이 분기
+    # 자체가 비활성이다.
     #   DIFF_TH=0 → max(0, -3) = 0   (변경: 종전 1)
     #   DIFF_TH=1 → max(1, -2) = 1   (동일)
     #   DIFF_TH=2 → max(1, -1) = 1   (동일)
     #   DIFF_TH=3 → max(1,  0) = 1   (동일)
     #   DIFF_TH=4 → max(1,  1) = 1   (동일)
     #   DIFF_TH≥5 → max(1, TH-3) = TH-3   (동일)
-    # 즉 DIFF_TH=0 외에는 결과가 바뀌지 않는다.
+    # 즉 DIFF_TH=0 외에는 결과가 바뀌지 않는다. 다만 완화 분기 안에서는 DIFF_TH 1~4 가
+    # 모두 1 로 수렴해 설정 해상도가 사라지는데, 이는 하한 1 의 기존 동작을 그대로 둔
+    # 결과다(무회귀 우선). 일관성을 택하려면 하한을 0 으로 낮춰 "3dB 완화, 단 음수 금지"
+    # 로 통일할 수 있으나, 그 경우 DIFF_TH 1~3 의 falling 동작이 함께 바뀐다.
     rssi_diff = roam_ap["rssi"] - baseline_rssi
 
     effective_diff_th = DIFF_TH
