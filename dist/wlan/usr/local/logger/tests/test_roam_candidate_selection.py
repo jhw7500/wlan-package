@@ -21,6 +21,7 @@ import pytest
 wifi_roam.logger = MagicMock()
 
 STABLE = wifi_roam.RSSITrendTracker.TREND_STABLE
+FALLING = wifi_roam.RSSITrendTracker.TREND_FALLING
 
 SELF_BSSID = "aa:aa:aa:aa:aa:aa"
 
@@ -39,11 +40,11 @@ def _ap(bssid, rssi, load=0):
     return {"bssid": bssid, "rssi": rssi, "load": load, "ssid": "TEST"}
 
 
-def _eval(diff_th, entries, own_rssi=-63, monkeypatch=None):
+def _eval(diff_th, entries, own_rssi=-63, monkeypatch=None, trend=STABLE):
     monkeypatch.setattr(wifi_roam, "DIFF_TH", diff_th)
     st = _st(own_rssi)
     return wifi_roam.evaluate_candidates(
-        entries, st, STABLE, None, "TEST", own_rssi
+        entries, st, trend, None, "TEST", own_rssi
     )
 
 
@@ -102,4 +103,37 @@ def test_no_candidate_returns_contract_tuple(monkeypatch):
 def test_self_bssid_excluded(monkeypatch):
     """자기 BSSID 는 DIFF_TH=0 에서도 후보에서 제외."""
     best, _reason, _score = _eval(0, [_ap(SELF_BSSID, -40)], monkeypatch=monkeypatch)
+    assert best is None
+
+
+# ── falling 추세 완화 클램프와의 교차 (check_roam_conditions:2291-2298) ──
+# 완화 임계 하한이 상수 1 이면 DIFF_TH=0 이어도 max(1, -3)=1 이 되어 diff=0 후보가
+# 차단됐다 — CLI 로 0 을 설정해도 falling 추세에서만 1 처럼 동작하는 불일치.
+# 하한을 min(DIFF_TH, 1) 로 바꿔 DIFF_TH=0 일 때만 0 을 허용하고 나머지는 종전 유지.
+
+
+def test_diff_th_zero_survives_falling_trend_clamp(monkeypatch):
+    """[핵심] DIFF_TH=0 + PREDICTIVE + FALLING 에서도 diff=0 후보가 채택된다."""
+    monkeypatch.setattr(wifi_roam, "ENABLE_PREDICTIVE_ROAM", True)
+    best, _reason, _score = _eval(
+        0, [_ap("bb:bb:bb:bb:bb:bb", -63)], monkeypatch=monkeypatch, trend=FALLING
+    )
+    assert best is not None, "DIFF_TH=0 인데 falling 완화 클램프가 diff=0 을 차단(하한 회귀)"
+
+
+def test_falling_clamp_floor_unchanged_for_normal_diff_th(monkeypatch):
+    """무회귀: DIFF_TH=3 + FALLING 은 종전대로 하한 1 — diff=0 은 차단된다."""
+    monkeypatch.setattr(wifi_roam, "ENABLE_PREDICTIVE_ROAM", True)
+    best, _reason, _score = _eval(
+        3, [_ap("bb:bb:bb:bb:bb:bb", -63)], monkeypatch=monkeypatch, trend=FALLING
+    )
+    assert best is None
+
+
+def test_diff_th_zero_falling_still_rejects_worse_ap(monkeypatch):
+    """DIFF_TH=0 + FALLING 이어도 음수 diff(더 나쁜 AP)는 차단 — 클램프 본래 목적."""
+    monkeypatch.setattr(wifi_roam, "ENABLE_PREDICTIVE_ROAM", True)
+    best, _reason, _score = _eval(
+        0, [_ap("bb:bb:bb:bb:bb:bb", -70)], monkeypatch=monkeypatch, trend=FALLING
+    )
     assert best is None

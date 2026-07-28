@@ -2283,15 +2283,19 @@ def check_roam_conditions(station, roam_ap, trend, baseline_rssi=None):
     # 완화는 이 게이트 **이전에** 임계 자체에 적용해야 실효한다(종전엔 게이트 뒤에 있어
     # 도달 시점에 diff ≥ DIFF_TH 가 이미 보장된 dead code — reason 문자열만 바꿨다).
     # 완화 구간 후보도 아래 load 게이트는 동일하게 통과해야 한다. diff < effective_diff_th
-    # 후보는 이 게이트에서 즉시 차단되며, 완화 임계는 최소 1dB 로 클램프한다 — DIFF_TH<3
-    # 극단 설정에서 임계가 0 이하로 내려가면 음수/0 diff 후보가 통과하고, LOAD 활성 시
-    # load 점수가 score(=diff×10 + load개선×2)를 양수로 반전시켜 채택될 수 있기 때문.
+    # 후보는 이 게이트에서 즉시 차단되며, 완화 임계는 min(DIFF_TH, 1) 로 하한 클램프한다 —
+    # DIFF_TH<3 극단 설정에서 임계가 음수로 내려가면 **더 나쁜 AP**(음수 diff)가 통과하고,
+    # LOAD 활성 시 load 점수가 score(=diff×10 + load개선×2)를 양수로 반전시켜 채택될 수
+    # 있기 때문. 하한이 상수 1 이 아니라 min(DIFF_TH, 1) 인 이유: 하한 1 은 음수 차단이라는
+    # 목적에 필요한 것보다 과해서, DIFF_TH=0("이득 무관")을 설정해도 falling 추세에서만
+    # max(1, -3)=1 로 되살아나 diff=0 후보가 차단됐다(설정 의미와 불일치). min(DIFF_TH, 1)
+    # 은 DIFF_TH=0 일 때만 하한을 0 으로 낮추고, DIFF_TH>=1 에서는 종전과 동일하게 1 이다.
     rssi_diff = roam_ap["rssi"] - baseline_rssi
 
     effective_diff_th = DIFF_TH
     is_falling_trend = False  # '완화 구간 진입'이 아니라 'falling 완화 활성' 플래그
     if ENABLE_PREDICTIVE_ROAM and trend == RSSITrendTracker.TREND_FALLING:
-        effective_diff_th = max(1, DIFF_TH - 3)
+        effective_diff_th = max(min(DIFF_TH, 1), DIFF_TH - 3)
         is_falling_trend = True
 
     if rssi_diff < effective_diff_th:

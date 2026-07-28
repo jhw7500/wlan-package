@@ -176,7 +176,14 @@ reload_roam_daemon() {
             # SIGHUP 전달 실패(권한/구버전 systemd 등, 에러는 위에 노출) → restart 폴백으로
             # 반드시 반영(무음 미적용 방지). 재시작은 연결 무영향.
             echo "Warning: SIGHUP failed; falling back to restart" >&2
-            systemctl restart "wifi_roam@${iface}" && echo "wifi_roam@${iface} restarted (applied)"
+            if systemctl restart "wifi_roam@${iface}"; then
+                echo "wifi_roam@${iface} restarted (applied)"
+            else
+                # 여기까지 오면 JSON 은 persist 됐지만 데몬은 옛 값을 계속 쓴다.
+                # 조용히 성공(exit 0)으로 보고하면 자동화가 부분 적용을 감지하지 못한다.
+                echo "Error: wifi_roam@${iface} restart failed — JSON persisted but the running daemon still uses the old value" >&2
+                return 1
+            fi
         fi
     else
         echo "wifi_roam@${iface} inactive (applies on next start)"
@@ -650,7 +657,7 @@ show_info() {
                 bgscan_interval=$(echo "$iface_json" | jq -r '.bgscan.interval // 60')
                 roam_th_2g=$(echo "$iface_json" | jq -r '.roaming.DEFAULT_TH_2G // -75')
                 roam_th_5g=$(echo "$iface_json" | jq -r '.roaming.DEFAULT_TH_5G // -75')
-                roam_diff=$(echo "$iface_json" | jq -r '.roaming.DIFF_TH // 10')
+                roam_diff=$(echo "$iface_json" | jq -r '.roaming.DIFF_TH // 8')
                 roam_check=$(echo "$iface_json" | jq -r '.roaming.CHECK_INTERVAL // 5')
                 pred_en=$(echo "$iface_json" | jq -r 'if .roaming.PREDICTIVE_ROAM.enable == null then true else .roaming.PREDICTIVE_ROAM.enable end')
                 load_en=$(echo "$iface_json" | jq -r '.roaming.LOAD_BASED_ROAM.enable // false')
@@ -1685,7 +1692,9 @@ case "$2" in
         if grep -qE "^#!${MARKER}=" "/etc/wpa_supplicant/wpa_supplicant-${IFACE}.conf" 2>/dev/null; then
             echo "Warning: #!${MARKER}= marker in wpa_supplicant-${IFACE}.conf overrides JSON value" >&2
         fi
-        reload_roam_daemon "$IFACE"
+        # 반영 실패(SIGHUP+restart 모두 실패)는 persist 성공과 별개로 비0 종료 —
+        # 자동화가 "저장됐으나 미반영" 상태를 감지할 수 있어야 한다.
+        reload_roam_daemon "$IFACE" || exit 1
         exit 0
     fi
     if [ "$ROAM_ARG" = "diff" ]; then
@@ -1700,7 +1709,12 @@ case "$2" in
         fi
         DIFF="${4:-}"
         if [ -z "$DIFF" ]; then
-            cur=$(jq -r ".${IFACE}.roaming.DIFF_TH // \"unset\"" "$WIFI_INIT_CONF_JSON")
+            # jq 실패(파손 JSON·읽기 불가)를 "unset" 과 구분한다 — 실패인데 빈 값을
+            # 정상 출력하고 exit 0 이면 조회 실패를 호출자가 감지할 수 없다.
+            if ! cur=$(jq -r ".${IFACE}.roaming.DIFF_TH // \"unset\"" "$WIFI_INIT_CONF_JSON"); then
+                echo "Error: failed to read ${IFACE}.roaming.DIFF_TH from $WIFI_INIT_CONF_JSON" >&2
+                exit 1
+            fi
             echo "$IFACE roaming.DIFF_TH = ${cur} (dB)"
             exit 0
         fi
@@ -1719,7 +1733,9 @@ case "$2" in
         if [ "$DIFF" -le 1 ]; then
             echo "Warning: DIFF_TH=${DIFF} is a test-only setting (roam thrashing); revert after testing" >&2
         fi
-        reload_roam_daemon "$IFACE"
+        # 반영 실패(SIGHUP+restart 모두 실패)는 persist 성공과 별개로 비0 종료 —
+        # 자동화가 "저장됐으나 미반영" 상태를 감지할 수 있어야 한다.
+        reload_roam_daemon "$IFACE" || exit 1
         exit 0
     fi
     if [ -z "$ROAM_ARG" ]; then
