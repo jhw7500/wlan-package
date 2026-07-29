@@ -2838,7 +2838,9 @@ case "$2" in
     logger -p local0.info "[$tag:$LINENO] [$IFACE] radio-apply: done (mode=${R_MODE:-keep} bw=${R_BW:-keep})"
     echo "radio-apply done for $IFACE (mode=${R_MODE:-keep} bw=${R_BW:-keep})"
     echo "--- link ---"
-    iw dev "$IFACE" link 2>/dev/null | head -8
+    # `iw link` 는 moal 에서 연결 중에도 "Not connected." 를 낼 수 있어 표시가 오해를 준다.
+    wpa_cli -i "$IFACE" status 2>/dev/null | grep -E '^(bssid|freq|ssid|wpa_state)='
+    iw dev "$IFACE" station dump 2>/dev/null | head -8
     echo "--- datarate ---"
     mlanutl "$IFACE" getdatarate 2>/dev/null || true
     ;;

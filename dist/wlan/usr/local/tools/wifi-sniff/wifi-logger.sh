@@ -108,12 +108,42 @@ bitmap_to_label() {
 
 auto_detect() {
     info "현재 STA 연결에서 채널/밴드 자동감지 중..."
+    # `iw dev link` 는 moal 에서 연결 중에도 "Not connected." 를 반환할 수 있어(2026-07-29
+    # 실측) 멀쩡한 연결을 미연결로 오탐지한다. wlan_link_lib 로 판정·조회한다.
+    # 단 이 스크립트는 **단독 배포**를 지원하므로(wifi-capture.sh 와 동일) lib 이 없으면
+    # 최소 구현으로 대체해 자체 완결성을 유지한다.
+    if [ -r /usr/local/scripts/wlan_link_lib.sh ]; then
+        # shellcheck source=/dev/null
+        . /usr/local/scripts/wlan_link_lib.sh
+    else
+        # lib 과 동일하게 **계단식**이어야 한다 — wpa_cli 만 보면 supplicant 가 죽었을 때
+        # 물리적으로 연결돼 있어도 캡처가 거부되어, 이 변경이 없애려는 상황이 그대로 남는다.
+        wlan_is_connected() {
+            local _s _b
+            _s=$(wpa_cli -i "$1" status 2>/dev/null)
+            _b=$(printf '%s\n' "$_s" | sed -n 's/^bssid=//p' | head -1)
+            [ "$(printf '%s\n' "$_s" | sed -n 's/^wpa_state=//p' | head -1)" = "COMPLETED" ] \
+                && [ -n "$_b" ] && [ "$_b" != "00:00:00:00:00:00" ] && return 0
+            [ -n "$(iw dev "$1" station dump 2>/dev/null | sed -n 's/^Station .*/x/p' | head -1)" ]
+        }
+        wlan_freq_mhz() {
+            local _f
+            _f=$(wpa_cli -i "$1" status 2>/dev/null | sed -n 's/^freq=//p' | head -1)
+            [ -n "$_f" ] || _f=$(iw dev "$1" info 2>/dev/null \
+                                 | sed -n 's/.*(\([0-9]\{4,\}\) MHz).*/\1/p' | head -1)
+            printf '%s' "$_f"
+        }
+    fi
+    wlan_is_connected "$IFACE" || die "STA가 연결되어 있지 않습니다. -c와 -b를 직접 지정하세요"
+
+    # 아래 대역폭 자동 감지가 파싱할 원문. 종전에는 `iw link` 출력을 썼는데, station dump 는
+    # "tx bitrate: 780.0 MBit/s VHT-MCS 9 80MHz VHT-NSS 2" 처럼 대역폭 표기를 함께 담는다.
     local status
-    status=$(iw dev "$IFACE" link 2>/dev/null) || die "iw dev $IFACE link 실패"
-    echo "$status" | grep -q "Not connected" && die "STA가 연결되어 있지 않습니다. -c와 -b를 직접 지정하세요"
+    status=$(iw dev "$IFACE" station dump 2>/dev/null)
 
     local freq
-    freq=$(echo "$status" | grep -oP 'freq:\s*\K[0-9]+') || die "주파수를 읽을 수 없습니다"
+    freq=$(wlan_freq_mhz "$IFACE")
+    [ -n "$freq" ] || die "주파수를 읽을 수 없습니다"
 
     if [ -z "$CHANNEL" ]; then
         if [ "$freq" -lt 3000 ]; then CHANNEL=$(( (freq - 2407) / 5 ))
