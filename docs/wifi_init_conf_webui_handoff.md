@@ -373,8 +373,8 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | 경로(`mlanN.roaming.`) | 라벨 | 타입 | 기본값 (mlan0 / mlan1) | 허용값/범위 | UI편집 | 적용시점 | 설명 |
 |---|---|---|---|---|---|---|---|
 | `use_signal_avg` | 평균 신호 사용 | bool | `true` | true\|false | yes | daemon-restart | true=평균(안정), false=순간값 |
-| `DEFAULT_TH_2G` | 2.4GHz 로밍 임계값 | int | `-75` | 음수 dBm | yes | daemon-restart | 이 값 이하이면 로밍 시도 |
-| `DEFAULT_TH_5G` | 5GHz 로밍 임계값 | int | `-75` | 음수 dBm | yes | daemon-restart | wpa_supplicant.conf 값이 우선 |
+| `DEFAULT_TH_2G` | 2.4GHz 로밍 임계값 | int | `-75` | 음수 dBm | yes | daemon-restart | 이 값 이하이면 로밍 시도 (JSON 단일 소스, conf `#!TH_2G=` 마커 미사용) |
+| `DEFAULT_TH_5G` | 5GHz 로밍 임계값 | int | `-75` | 음수 dBm | yes | daemon-restart | 이 값 이하이면 로밍 시도 (JSON 단일 소스, conf `#!TH_5G=` 마커 미사용) |
 | `DIFF_TH` | 후보 AP 최소 RSSI 차 | int | `10` | >=0 dB | yes | daemon-restart | 클수록 보수적 |
 | `CHECK_INTERVAL` | 로밍 체크 주기 | int | `mlan0=3 / mlan1=5` | >=1 초 | yes | daemon-restart | ADAPTIVE_INTERVAL 활성 시 동적 조절 |
 | `extra_ssids` | 추가 로밍 후보 SSID | array | `[]` | 문자열 배열(같은 psk/key_mgmt) | caution | daemon-restart | 모드B(generate_network_blocks=false)면 강제 무시 |
