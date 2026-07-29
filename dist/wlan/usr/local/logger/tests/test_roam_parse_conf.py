@@ -68,13 +68,14 @@ def _write(tmp_path, text):
 
 
 def test_single_block_parses_base_ssid(tmp_path):
-    # 센티넬 없음(단일블록) → 기존 동작 그대로
+    # 센티넬 없음(단일블록) → 기존 동작 그대로.
+    # th2g/th5g 는 conf 마커(-70/-72)가 아니라 모듈 기본값(-75) — 인자 미지정이므로.
     path = _write(tmp_path, _SINGLE_BLOCK)
     ssid, freqs, th2g, th5g, th_connect = parse_supplicant_conf(path)
     assert ssid == "cantops"
     assert freqs == ["2412", "5180"]
-    assert th2g == -70
-    assert th5g == -72
+    assert th2g == wifi_roam.DEFAULT_TH_2G
+    assert th5g == wifi_roam.DEFAULT_TH_5G
     assert th_connect == -80
 
 
@@ -83,15 +84,41 @@ def test_multi_block_returns_base_ssid_not_last_extra(tmp_path):
     path = _write(tmp_path, _MULTI_BLOCK)
     ssid, freqs, th2g, th5g, th_connect = parse_supplicant_conf(path)
     assert ssid == "cantops"
-    # scan_freq / TH 도 센티넬 전(기본) 값이어야 함 (extra 값으로 오염되지 않음)
+    # scan_freq 는 센티넬 전(기본) 값이어야 함 (extra 값으로 오염되지 않음)
     assert freqs == ["2412", "5180"]
-    assert th2g == -70
-    assert th5g == -72
+    assert th2g == wifi_roam.DEFAULT_TH_2G
+    assert th5g == wifi_roam.DEFAULT_TH_5G
+    # TH_CONNECT 는 여전히 conf 에서 읽는다 — extra 블록 값(-65)이 아니라 기본 블록 값
     assert th_connect == -80
 
 
-def test_multi_block_ignores_extra_th_values(tmp_path):
-    # extra 블록의 TH(-60/-61/-65)가 기본 TH(-70/-72/-80)를 덮어쓰지 않음
+def test_multi_block_ignores_extra_th_connect(tmp_path):
+    # extra 블록의 TH_CONNECT(-65)가 기본 블록 값(-80)을 덮어쓰지 않음
     path = _write(tmp_path, _MULTI_BLOCK)
-    _, _, th2g, th5g, th_connect = parse_supplicant_conf(path)
-    assert (th2g, th5g, th_connect) == (-70, -72, -80)
+    _, _, _, _, th_connect = parse_supplicant_conf(path)
+    assert th_connect == -80
+
+
+# ── 로밍 임계 소스 단일화 (conf `#!TH_2G=`/`#!TH_5G=` 마커 경로 제거) ──
+# 종전에는 conf 마커가 JSON 을 덮어써, `wifi <if> roam th` 로 값을 바꿔도 마커가 남아 있으면
+# 조용히 무시됐다. 마커를 생성하는 코드는 dist 에 없고 출하 conf 에도 없어 레거시·수동 편집
+# 파일에서만 발현하는 함정이었다.
+
+
+def test_conf_th_markers_do_not_override_json(tmp_path):
+    """[핵심] conf 에 마커가 있어도 JSON 인자가 이긴다."""
+    path = _write(tmp_path, _SINGLE_BLOCK)  # 마커 -70/-72 포함
+    _, _, th2g, th5g, _ = parse_supplicant_conf(path, def_th2g=-66, def_th5g=-68)
+    assert (th2g, th5g) == (-66, -68), "conf 마커가 JSON 값을 덮어썼다(회귀)"
+
+
+def test_conf_th_markers_ignored_without_json(tmp_path):
+    """JSON 인자가 없으면 마커가 아니라 모듈 기본값으로 떨어진다."""
+    path = _write(tmp_path, _SINGLE_BLOCK)
+    _, _, th2g, th5g, _ = parse_supplicant_conf(path)
+    assert (th2g, th5g) == (wifi_roam.DEFAULT_TH_2G, wifi_roam.DEFAULT_TH_5G)
+
+
+def test_parse_thresholds_removed():
+    """dead code 였던 parse_thresholds 가 제거된 상태를 고정한다(호출부 0건이었음)."""
+    assert not hasattr(wifi_roam, "parse_thresholds")

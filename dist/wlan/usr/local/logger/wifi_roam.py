@@ -1584,21 +1584,26 @@ def get_latest_scan(st, channel_info_data=None, allowed_ssids=None):
 
 def parse_supplicant_conf(path, def_th2g=None, def_th5g=None):
     """
-    wpa_supplicant.conf 파싱
-    TH 값이 없으면 인자로 받은 기본값 사용 (JSON 우선)
+    wpa_supplicant.conf 에서 ssid / scan_freq / `#!TH_CONNECT=` 를 파싱한다.
+
+    로밍 임계(th2g/th5g)는 **conf 에서 읽지 않는다** — 인자로 받은 JSON 값을 그대로
+    돌려주며, 인자가 없을 때만 모듈 기본값(DEFAULT_TH_*)으로 떨어진다. 종전에는 conf 의
+    `#!TH_2G=`/`#!TH_5G=` 마커가 JSON 을 덮어쓰는 2차 경로였으나 제거했다(함수 하단 주석).
+
+    반면 `#!TH_CONNECT=` 는 **conf 에서 계속 읽는 유일한 임계값**이다. 로밍 임계가 아니라
+    연결 시도 최소 RSSI 라 용도가 다르고, 실제 소비도 패치된 wpa_supplicant 쪽에서 이뤄진다
+    (이 값은 여기서 파싱해 전역에 싣기만 한다).
 
     Args:
         path: conf 파일 경로
-        def_th2g: 2.4GHz 기본 임계값 (JSON에서 로드)
-        def_th5g: 5GHz 기본 임계값 (JSON에서 로드)
+        def_th2g: 2.4GHz 로밍 임계값 (JSON에서 로드)
+        def_th5g: 5GHz 로밍 임계값 (JSON에서 로드)
 
     Returns:
         tuple: (ssid, freqs, th2g, th5g, th_connect)
     """
     ssid = None
     freqs = []
-    th2g = None
-    th5g = None
     th_connect = None
 
     with open(path, "r") as f:
@@ -1629,26 +1634,6 @@ def parse_supplicant_conf(path, def_th2g=None, def_th5g=None):
                         _EXTRA_(),
                     )
                     pass
-            elif line.startswith("#!TH_2G="):
-                try:
-                    th2g = int(line.split("=")[1])
-                except ValueError:
-                    logger.message(
-                        "err",
-                        f"[{IFACE}] TH_2G : {th2g} is invalid in {path}",
-                        _EXTRA_(),
-                    )
-                    pass
-            elif line.startswith("#!TH_5G="):
-                try:
-                    th5g = int(line.split("=")[1])
-                except ValueError:
-                    logger.message(
-                        "err",
-                        f"[{IFACE}] TH_5G : {th5g} is invalid in {path}",
-                        _EXTRA_(),
-                    )
-                    pass
             elif line.startswith("#!TH_CONNECT="):
                 try:
                     th_connect = int(line.split("=")[1])
@@ -1660,17 +1645,14 @@ def parse_supplicant_conf(path, def_th2g=None, def_th5g=None):
                     )
                     pass
 
-    # wpa_supplicant.conf에 값이 없으면 JSON 기본값 사용, 없으면 코드 기본값
-    th2g = (
-        th2g
-        if th2g is not None
-        else (def_th2g if def_th2g is not None else DEFAULT_TH_2G)
-    )
-    th5g = (
-        th5g
-        if th5g is not None
-        else (def_th5g if def_th5g is not None else DEFAULT_TH_5G)
-    )
+    # 로밍 임계는 JSON(mlanN.roaming.DEFAULT_TH_*) 단일 소스다.
+    # 종전에는 conf 의 `#!TH_2G=`/`#!TH_5G=` 마커가 JSON 을 덮어썼다. 그 마커를 생성하는
+    # 코드가 dist 어디에도 없고 출하 conf 에도 없어 레거시·수동 편집 파일에서만 발현했는데,
+    # 설정 경로가 둘로 갈리는 탓에 `wifi <if> roam th` 로 값을 바꿔도 조용히 무시되는 사고가
+    # 가능했다(wifi.sh 가 경고를 내지만 이미 저장한 뒤의 사후 통보다). 마커 파싱을 제거해
+    # 임계 설정 경로를 JSON 하나로 통일한다.
+    th2g = def_th2g if def_th2g is not None else DEFAULT_TH_2G
+    th5g = def_th5g if def_th5g is not None else DEFAULT_TH_5G
 
     return ssid, freqs, th2g, th5g, th_connect
 
@@ -1698,6 +1680,13 @@ def reload_supplicant_conf_if_changed(path):
     except Exception as e:
         logger.message("err", f"[{IFACE}] wpa conf reload failed (keep last): {e}", _EXTRA_())
         return
+    # th2g/th5g 는 이제 conf 가 아니라 인자로 넘긴 DEFAULT_TH_*(JSON 값) 그대로다. 따라서
+    # conf 파일만 바뀐 경우 이 둘은 changed 에 기여하지 않는다(ssid/scan_freq/TH_CONNECT 가 판정).
+    # 반대로 SIGHUP 경로에서는 reload_roaming_config 가 DEFAULT_TH_* 를 갱신한 뒤
+    # **WPA_CONF_MTIME 을 None 으로 리셋**하므로(reload_roaming_config 말미 참조) 다음 호출의
+    # mtime 비교가 성립해 재파싱이 유도된다. 그때 새 DEFAULT_TH_* 가 def_th2g/def_th5g 로
+    # 전달돼 직전 WPA_TH_* 와 달라지므로 changed=True — JSON 변경을 실제 판정값까지 전파하는
+    # 의도된 흐름이다. conf 파일 자체의 mtime 이 바뀌어야 하는 것이 아니다.
     changed = (ssid, freqs) != (WPA_SSID, WPA_FREQ) or (th2g, th5g, th_connect) != (WPA_TH_2G, WPA_TH_5G, WPA_TH_CONNECT)
     WPA_SSID, WPA_FREQ, WPA_TH_2G, WPA_TH_5G, WPA_TH_CONNECT = ssid, freqs, th2g, th5g, th_connect
     WPA_CONF_MTIME = mtime
@@ -3113,51 +3102,6 @@ def save_with_timestamp(filename, content_lines):
     return filename
 
 
-def parse_thresholds(conf_path, def_th2g=None, def_th5g=None):
-    """
-    wpa_supplicant.conf에서 TH 값만 파싱
-    TH 값이 없으면 인자로 받은 기본값 사용 (JSON 우선)
-
-    Args:
-        conf_path: conf 파일 경로
-        def_th2g: 2.4GHz 기본 임계값 (JSON에서 로드)
-        def_th5g: 5GHz 기본 임계값 (JSON에서 로드)
-
-    Returns:
-        tuple: (th2g, th5g)
-    """
-    th2g = None
-    th5g = None
-
-    with open(conf_path, "r") as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith("#!TH_2G="):
-                try:
-                    th2g = int(line.split("=")[1])
-                except ValueError:
-                    pass
-            elif line.startswith("#!TH_5G="):
-                try:
-                    th5g = int(line.split("=")[1])
-                except ValueError:
-                    pass
-
-    # wpa_supplicant.conf에 값이 없으면 JSON 기본값 사용, 없으면 코드 기본값
-    th2g = (
-        th2g
-        if th2g is not None
-        else (def_th2g if def_th2g is not None else DEFAULT_TH_2G)
-    )
-    th5g = (
-        th5g
-        if th5g is not None
-        else (def_th5g if def_th5g is not None else DEFAULT_TH_5G)
-    )
-
-    return th2g, th5g
-
-
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_sigterm)
     signal.signal(signal.SIGHUP, handle_sighup)  # 런타임 config reload(폴링 없이 신호 트리거)
@@ -3178,12 +3122,11 @@ if __name__ == "__main__":
     # JSON 설정 로드 (IFACE별 설정)
     load_roaming_config(IFACE)
 
-    # JSON에서 로드한 TH 값을 기본값으로 wpa_supplicant.conf 파싱
-    # wpa_supplicant.conf에 값이 있으면 덮어쓰기, 없으면 JSON 값 사용
-    json_th_2g = DEFAULT_TH_2G
-    json_th_5g = DEFAULT_TH_5G
+    # 로밍 임계(th2g/th5g)는 JSON 단일 소스 — conf `#!TH_*` 마커는 더 이상 읽지 않는다.
+    # parse_supplicant_conf 는 여기서 넘긴 DEFAULT_TH_*(= load_roaming_config 가 JSON 으로
+    # 갱신한 값)를 그대로 돌려주고, conf 에서는 ssid/scan_freq/`#!TH_CONNECT=` 만 읽는다.
     WPA_SSID, WPA_FREQ, WPA_TH_2G, WPA_TH_5G, WPA_TH_CONNECT = parse_supplicant_conf(
-        WPA_CONF_FILE, def_th2g=json_th_2g, def_th5g=json_th_5g
+        WPA_CONF_FILE, def_th2g=DEFAULT_TH_2G, def_th5g=DEFAULT_TH_5G
     )
     # 초기 파싱 시점의 mtime 기록 — 이후 main 루프는 mtime 변화(reconfigure) 시에만 재파싱.
     try:
@@ -3191,13 +3134,11 @@ if __name__ == "__main__":
     except OSError:
         WPA_CONF_MTIME = None
 
-    # 최종 적용값 로깅 (JSON → wpa_supplicant.conf 우선순위)
-    th_source = (
-        "wpa_conf" if (WPA_TH_2G != json_th_2g or WPA_TH_5G != json_th_5g) else "json"
-    )
+    # 최종 적용값 로깅. 임계 소스는 JSON 단일이므로 source 필드를 없앴다 —
+    # conf `#!TH_*` 마커 경로를 제거한 뒤로는 항상 "json" 이라 판별 의미가 없다.
     logger.message(
         "info",
-        f"[{IFACE}] TH values: 2G={WPA_TH_2G}, 5G={WPA_TH_5G} (source: {th_source}, json_default: 2G={json_th_2g}, 5G={json_th_5g})",
+        f"[{IFACE}] TH values: 2G={WPA_TH_2G}, 5G={WPA_TH_5G} (source: json)",
         _EXTRA_(),
     )
 
