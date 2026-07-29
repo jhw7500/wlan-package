@@ -1,7 +1,12 @@
 # shellcheck shell=bash
 # 무선 링크 상태 조회 공용 헬퍼. **source 전용** — 직접 실행하지 않으므로 shebang 을 두지
-# 않는다. `#!/bin/sh` 스크립트(wifi_event.sh 등)도 source 하며, 쓰이는 문법(local, printf,
-# sed)은 dash/busybox ash 에서 모두 동작한다.
+# 않는다.
+#
+# 소비처에는 `#!/bin/sh` 스크립트(wifi_event.sh, diag-9098-11ax.sh, verify-he-mu-features.sh)
+# 가 포함되므로 문법은 sh 범위로 유지한다. `local` 만이 POSIX 표준 밖인데 dash·busybox ash
+# ·bash 가 모두 지원하므로 실사용에 문제가 없다. 위 지시자를 shell=sh 가 아니라 bash 로
+# 둔 것은 그 `local` 때문에 shellcheck 가 SC3043 을 무더기로 내는 것을 피하기 위함이며,
+# bash 전용 문법을 써도 된다는 뜻이 아니다.
 #
 # ── `iw dev <if> link` 를 쓰지 않는 이유 ──────────────────────────────────────
 # 이 명령은 cfg80211 의 current_bss 를 읽는데, moal 드라이버가 이를 신뢰성 있게

@@ -117,12 +117,29 @@ auto_detect() {
         # shellcheck source=/dev/null
         . /usr/local/scripts/wlan_link_lib.sh
     else
+        # lib 과 동일하게 **계단식**이어야 한다 — wpa_cli 만 보면 supplicant 가 죽었을 때
+        # 물리적으로 연결돼 있어도 캡처가 거부되어, 이 변경이 없애려는 상황이 그대로 남는다.
         wlan_is_connected() {
-            [ "$(wpa_cli -i "$1" status 2>/dev/null | sed -n 's/^wpa_state=//p' | head -1)" = "COMPLETED" ]
+            local _s
+            _s=$(wpa_cli -i "$1" status 2>/dev/null)
+            [ "$(printf '%s\n' "$_s" | sed -n 's/^wpa_state=//p' | head -1)" = "COMPLETED" ] && return 0
+            [ -n "$(iw dev "$1" station dump 2>/dev/null | sed -n 's/^Station .*/x/p' | head -1)" ]
         }
-        wlan_freq_mhz() { wpa_cli -i "$1" status 2>/dev/null | sed -n 's/^freq=//p' | head -1; }
+        wlan_freq_mhz() {
+            local _f
+            _f=$(wpa_cli -i "$1" status 2>/dev/null | sed -n 's/^freq=//p' | head -1)
+            [ -n "$_f" ] || _f=$(iw dev "$1" info 2>/dev/null \
+                                 | sed -n 's/.*(\([0-9]\{4,\}\) MHz).*/\1/p' | head -1)
+            printf '%s' "$_f"
+        }
     fi
     wlan_is_connected "$IFACE" || die "STA가 연결되어 있지 않습니다. -c와 -b를 직접 지정하세요"
+
+    # 아래 VHT/대역폭 자동 감지가 파싱할 원문. 종전에는 `iw link` 출력을 썼는데,
+    # station dump 는 "tx bitrate: 780.0 MBit/s VHT-MCS 9 80MHz VHT-NSS 2" 처럼 VHT 표기와
+    # 대역폭을 함께 담아 같은 정보를 더 풍부하게 준다.
+    local status
+    status=$(iw dev "$IFACE" station dump 2>/dev/null)
 
     # 주파수 추출
     local freq

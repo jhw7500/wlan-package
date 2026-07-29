@@ -3,9 +3,11 @@
 # 사용: ./diag-9098-11ax.sh [iface]   (default: mlan0)
 IF="${1:-mlan0}"
 MLANUTL="${MLANUTL:-/usr/local/bin/mlanutl}"
-# 링크 지표 조회 헬퍼(iw link 미사용 — 해당 파일 상단 주석 참조)
+# 링크 지표 조회 헬퍼(iw link 미사용 — 해당 파일 상단 주석 참조).
+# 진단 도구라 결과가 조용히 비는 것보다 즉시 실패가 낫다.
 # shellcheck source=./wlan_link_lib.sh
-. /usr/local/scripts/wlan_link_lib.sh
+. /usr/local/scripts/wlan_link_lib.sh 2>/dev/null \
+    || { echo "ERROR: /usr/local/scripts/wlan_link_lib.sh 로드 실패" >&2; exit 1; }
 
 hr(){ printf '\n=== %s ===\n' "$*"; }
 have(){ command -v "$1" >/dev/null 2>&1; }

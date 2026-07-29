@@ -6,8 +6,11 @@ IFACE="${1:-mlan0}"
 tag=$(basename "$0")
 WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
 # 링크 상태 조회 헬퍼(iw link 미사용 — 파일 상단 주석 참조). /bin/sh 에서도 동작한다.
+# 이 스크립트는 set -e 가 없어 로드 실패가 조용히 넘어가고, 그러면 wlan_bssid 미정의로
+# initial_bssid 가 비어 **catch-up 이 말없이 누락**된다. 실패를 반드시 남긴다.
 # shellcheck source=./wlan_link_lib.sh
-. /usr/local/scripts/wlan_link_lib.sh
+. /usr/local/scripts/wlan_link_lib.sh 2>/dev/null \
+    || logger -p local0.err "[$tag:$LINENO] [$IFACE] wlan_link_lib.sh load failed — catch-up/BSSID lookup unavailable"
 MCS_REASSOC_MARKER="/tmp/.mcstier_reassoc_${IFACE}"
 
 cleanup() {

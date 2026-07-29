@@ -4,9 +4,11 @@
 #   iface           : mlan0 (default)
 #   iperf_server_ip : iperf3 서버 IP (선택 — Step 4 부하 측정에 사용)
 IF="${1:-mlan0}"
-# 링크 지표 조회 헬퍼(iw link 미사용 — 해당 파일 상단 주석 참조)
+# 링크 지표 조회 헬퍼(iw link 미사용 — 해당 파일 상단 주석 참조).
+# 진단 도구라 결과가 조용히 비는 것보다 즉시 실패가 낫다.
 # shellcheck source=./wlan_link_lib.sh
-. /usr/local/scripts/wlan_link_lib.sh
+. /usr/local/scripts/wlan_link_lib.sh 2>/dev/null \
+    || { echo "ERROR: /usr/local/scripts/wlan_link_lib.sh 로드 실패" >&2; exit 1; }
 SRV="${2:-}"
 MLANUTL="${MLANUTL:-/usr/local/bin/mlanutl}"
 ADAP="/proc/mwlan/adapter0/$IF"
