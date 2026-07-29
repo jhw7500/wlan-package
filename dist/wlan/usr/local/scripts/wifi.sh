@@ -1692,11 +1692,9 @@ case "$2" in
         fi
         update_json_roaming_int "$IFACE" "$TH_KEY" "$RSSI" || exit 1
         echo "$IFACE roaming.${TH_KEY}: ${OLD} -> ${RSSI} (persist)"
-        # wpa_supplicant conf의 #!TH_ 마커는 JSON보다 우선 — 있으면 반영 안 됨을 경고
-        MARKER="${TH_KEY#DEFAULT_}"
-        if grep -qE "^#!${MARKER}=" "/etc/wpa_supplicant/wpa_supplicant-${IFACE}.conf" 2>/dev/null; then
-            echo "Warning: #!${MARKER}= marker in wpa_supplicant-${IFACE}.conf overrides JSON value" >&2
-        fi
+        # 종전엔 여기서 wpa_supplicant conf 의 `#!TH_` 마커가 JSON 을 덮어쓴다고 경고했다.
+        # wifi_roam.py 가 그 마커를 더는 읽지 않으므로(임계 소스 = JSON 단일) 경고를 제거한다
+        # — 남겨두면 이제는 사실이 아닌 안내가 된다.
         # 반영 실패(SIGHUP+restart 모두 실패)는 persist 성공과 별개로 비0 종료 —
         # 자동화가 "저장됐으나 미반영" 상태를 감지할 수 있어야 한다.
         reload_roam_daemon "$IFACE" || exit 1
