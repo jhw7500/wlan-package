@@ -1203,7 +1203,7 @@
             "DEFAULT_TH_2G": {
               "type": "integer",
               "default": -75,
-              "description": "2.4GHz RSSI 로밍 임계값(dBm). 이 값 이하이면 로밍 시도",
+              "description": "2.4GHz RSSI 로밍 임계값(dBm). 이 값 이하이면 로밍 시도. 이 JSON 이 단일 소스이며 wpa_supplicant.conf 의 `#!TH_2G=` 마커는 더 이상 읽지 않는다.",
               "x-ui-editable": "yes",
               "x-apply-timing": "daemon-restart",
               "x-consumer": "wifi_roam.py"
@@ -2108,7 +2108,7 @@
             "DEFAULT_TH_2G": {
               "type": "integer",
               "default": -75,
-              "description": "2.4GHz RSSI 로밍 임계값(dBm). 이 값 이하이면 로밍 시도",
+              "description": "2.4GHz RSSI 로밍 임계값(dBm). 이 값 이하이면 로밍 시도. 이 JSON 이 단일 소스이며 wpa_supplicant.conf 의 `#!TH_2G=` 마커는 더 이상 읽지 않는다.",
               "x-ui-editable": "yes",
               "x-apply-timing": "daemon-restart",
               "x-consumer": "wifi_roam.py"

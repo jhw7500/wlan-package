@@ -1545,6 +1545,10 @@ def parse_supplicant_conf(path, def_th2g=None, def_th5g=None):
     돌려주며, 인자가 없을 때만 모듈 기본값(DEFAULT_TH_*)으로 떨어진다. 종전에는 conf 의
     `#!TH_2G=`/`#!TH_5G=` 마커가 JSON 을 덮어쓰는 2차 경로였으나 제거했다(함수 하단 주석).
 
+    반면 `#!TH_CONNECT=` 는 **conf 에서 계속 읽는 유일한 임계값**이다. 로밍 임계가 아니라
+    연결 시도 최소 RSSI 라 용도가 다르고, 실제 소비도 패치된 wpa_supplicant 쪽에서 이뤄진다
+    (이 값은 여기서 파싱해 전역에 싣기만 한다).
+
     Args:
         path: conf 파일 경로
         def_th2g: 2.4GHz 로밍 임계값 (JSON에서 로드)
