@@ -142,6 +142,22 @@ def test_get_latest_scan_defaults_to_logging(monkeypatch, tmp_path):
     assert len(cand) == 1 and "[cache]" in cand[0]
 
 
+def test_get_latest_scan_src_override_for_foreground_read(monkeypatch, tmp_path):
+    """[핵심] 레거시 비-staged 경로는 이번 tick 에 자기가 스캔해 ap.log 에 방금 쓴 블록을
+    되읽는다(`:2989` save_with_timestamp → `:3005` get_latest_scan). src 를 넘기지 못하면
+    **전경 실측이 [cache] 로 오라벨**돼, 소스 구분이 가장 필요한 폴백 모드에서 라벨이
+    거짓이 된다. 파일 경로가 ap.log 라는 사실이 곧 '배경 캐시'를 뜻하지 않는다."""
+    ap = tmp_path / "ap.log"
+    ap.write_text("[2026-07-29 13:00:00]\n" + "\n".join(LINES) + "\n")
+    monkeypatch.setattr(wifi_roam, "SCAN_LOG_FILE", str(ap))
+    wifi_roam.get_latest_scan({"ssid": "TEST"}, None, ["TEST"], src="scan")
+    cand = [t for t in _texts() if "roam candidate 0" in t]
+    assert cand and "[scan]" in cand[0], f"전경 실측이 scan 으로 안 찍힌다: {cand}"
+    assert not any("[cache]" in t for t in _texts()), "전경 실측이 cache 로 오라벨됐다"
+    raw = [t for t in _texts() if "ssid:TEST" in t]
+    assert raw and "[scan]" in raw[0], "관측 행에도 src 가 전파돼야 한다"
+
+
 # ── _iw_scan_to_ap_lines: 스캔 명령 기록 ──
 
 

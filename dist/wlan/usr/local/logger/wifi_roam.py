@@ -1578,13 +1578,19 @@ def parse_scan_entries(
     return candidates
 
 
-def get_latest_scan(st, channel_info_data=None, allowed_ssids=None, log=True):
+def get_latest_scan(st, channel_info_data=None, allowed_ssids=None, log=True, src="cache"):
     """ap.log(배경 스캔 캐시)의 마지막 `[시각]` 블록을 읽어 후보 엔트리 + 그 블록의
     타임스탬프를 반환. 파싱은 parse_scan_entries가 담당(메모리 경로와 공유).
 
     log=False 면 파싱만 하고 로그를 남기지 않는다 — 캐시를 **판정에 쓸지 모르는 시점**에
     선반영하는 staged_scan Stage 0 스냅샷용. 실제로 쓰는 시점에 호출자가
-    log_scan_candidates 로 남긴다."""
+    log_scan_candidates 로 남긴다.
+
+    src 는 **파일이 아니라 그 블록의 출처**를 뜻한다. 기본 "cache"(bgscan 등 배경 스캔이
+    남긴 블록)이지만, 레거시 비-staged 경로는 이번 tick 에 자기가 스캔한 결과를 ap.log 에
+    쓰고(save_with_timestamp) 곧바로 되읽으므로 그 호출은 "scan" 을 넘겨야 한다 — 안 그러면
+    전경 실측이 배경 캐시로 오라벨돼, 소스 구분이 가장 필요한 폴백 모드에서 라벨이 거짓이
+    된다."""
     if allowed_ssids is None:
         allowed_ssids = [st.get("ssid")] if st.get("ssid") else []
     allowed_set = {s for s in allowed_ssids if s}
@@ -1611,7 +1617,7 @@ def get_latest_scan(st, channel_info_data=None, allowed_ssids=None, log=True):
         return [], None
 
     candidates = parse_scan_entries(
-        lines[start_idx:], timestamp, channel_info_data, allowed_set, src="cache", log=log
+        lines[start_idx:], timestamp, channel_info_data, allowed_set, src=src, log=log
     )
     return candidates, timestamp
 
@@ -3002,7 +3008,12 @@ def main():
                     interruptible_sleep(backoff)
                     continue
 
-            entries, _ts = get_latest_scan(station, channel_info_data, allowed)
+            # WPA_SSID 가 있으면 위에서 이번 tick 에 직접 스캔해 ap.log 에 방금 쓴 블록을
+            # 되읽는 것이므로 전경 실측("scan")이다. WPA_SSID 부재로 스캔을 건너뛴 경우에만
+            # 진짜 배경 캐시("cache")를 읽는다.
+            entries, _ts = get_latest_scan(
+                station, channel_info_data, allowed, src="scan" if WPA_SSID else "cache"
+            )
             if not entries:
                 backoff, no_candidate_streak, last_backoff_cap_ts = (
                     advance_no_candidate_backoff(no_candidate_streak, last_backoff_cap_ts)
