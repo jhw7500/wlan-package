@@ -1636,10 +1636,12 @@ def reload_supplicant_conf_if_changed(path):
         logger.message("err", f"[{IFACE}] wpa conf reload failed (keep last): {e}", _EXTRA_())
         return
     # th2g/th5g 는 이제 conf 가 아니라 인자로 넘긴 DEFAULT_TH_*(JSON 값) 그대로다. 따라서
-    # conf 만 바뀐 경우 이 둘은 changed 에 기여하지 않는다(ssid/scan_freq/TH_CONNECT 가 판정).
-    # 반대로 SIGHUP 으로 load_roaming_config 가 DEFAULT_TH_* 를 갱신한 뒤 conf mtime 변화로
-    # 재파싱되면 직전 WPA_TH_* 와 달라져 changed=True 가 되는데, 이는 JSON 변경을 반영하는
-    # 의도된 동작이다.
+    # conf 파일만 바뀐 경우 이 둘은 changed 에 기여하지 않는다(ssid/scan_freq/TH_CONNECT 가 판정).
+    # 반대로 SIGHUP 경로에서는 reload_roaming_config 가 DEFAULT_TH_* 를 갱신한 뒤
+    # **WPA_CONF_MTIME 을 None 으로 리셋**하므로(reload_roaming_config 말미 참조) 다음 호출의
+    # mtime 비교가 성립해 재파싱이 유도된다. 그때 새 DEFAULT_TH_* 가 def_th2g/def_th5g 로
+    # 전달돼 직전 WPA_TH_* 와 달라지므로 changed=True — JSON 변경을 실제 판정값까지 전파하는
+    # 의도된 흐름이다. conf 파일 자체의 mtime 이 바뀌어야 하는 것이 아니다.
     changed = (ssid, freqs) != (WPA_SSID, WPA_FREQ) or (th2g, th5g, th_connect) != (WPA_TH_2G, WPA_TH_5G, WPA_TH_CONNECT)
     WPA_SSID, WPA_FREQ, WPA_TH_2G, WPA_TH_5G, WPA_TH_CONNECT = ssid, freqs, th2g, th5g, th_connect
     WPA_CONF_MTIME = mtime
