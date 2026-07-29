@@ -1180,6 +1180,14 @@ def _iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
                 probe = probe[:MAX_SCAN_SSIDS]
         if probe:
             cmd += ["ssid"] + probe
+
+    # 어떤 명령으로 스캔했는지 남긴다 — 종전엔 실패 경로(timeout/rc≠0)에서도 rc·stderr만
+    # 찍혀 passive/directed 여부·freq·probe SSID 를 사후에 복원할 수 없었다. 형식·레벨은
+    # wifi_bgscan.py 의 스캔 로그와 동일(list repr — 와일드카드 probe 는 빈 문자열이라
+    # ' '.join 하면 화면에서 사라져 directed-only 스캔과 구분이 불가능하다).
+    # 위치: passive/directed 분기 합류 후 + 재시도 루프 밖 → 호출 1회당 정확히 1줄.
+    logger.message("info", f"[{IFACE}] {cmd}", _EXTRA_())
+
     scanned_ok = False
     for attempt in range(3):
         try:
@@ -1453,11 +1461,37 @@ def should_cross_connect(best_ssid, live_ssid):
 # ==============================================================================
 # 개선된 get_latest_scan (Load 정보 포함)
 # ==============================================================================
-def parse_scan_entries(scan_lines, timestamp, channel_info_data=None, allowed_set=None):
+def log_scan_candidates(candidates, src):
+    """후보 엔트리를 info 로 기록한다.
+
+    **파싱 시점이 아니라 실제 판정에 쓰이는 시점에 호출하는 것이 원칙.**
+    staged_scan_best_candidate 의 Stage 0 배경 캐시는 정상 경로(Stage 1 홈스캔 성공)에서
+    홈채널 엔트리가 전량 제거돼(stage2_entries 산출) Stage 2 게이트를 통과할 수 없다.
+    파싱 시점에 찍으면 **판정에 쓰이지도 않은 후보**가 매 tick 로그를 채운다(실측: tick당
+    11줄 중 4줄이 그것). src 라벨로 어느 소스에서 온 후보인지 구분한다."""
+    for i, entry in enumerate(candidates):
+        logger.message(
+            "info",
+            f"[{IFACE}] [{src}] roam candidate {i}: "
+            f"ts={entry['timestamp']}, ssid={entry['ssid']}, bssid={entry['bssid']}, "
+            f"ch={entry['channel']}, freq={entry['freq']}, ld={entry['ld']}, "
+            f"load={entry.get('load', 0):.1f}%, rssi={entry['rssi']}(th={entry['rssi_th']})",
+            _EXTRA_(),
+        )
+
+
+def parse_scan_entries(
+    scan_lines, timestamp, channel_info_data=None, allowed_set=None, src="scan", log=True
+):
     """pipe 포맷 스캔 라인(`NN|ch|rssi|ld|bssid|freq|ssid`) 리스트를 로밍 후보 엔트리로
     변환한다. 파일(get_latest_scan) 경로와 메모리(홈 패시브/액티브 폴백 스캔) 경로가
     동일 파서를 공유하도록 순수 함수로 분리. allowed_set에 든 SSID + (WPA_FREQ 설정 시)
-    그 채널만 후보로 채택. RSSI 내림차순 정렬해 반환."""
+    그 채널만 후보로 채택. RSSI 내림차순 정렬해 반환.
+
+    src: 로그에 붙는 소스 라벨("scan"=이번 tick 실측, "cache"=ap.log 배경 블록).
+         포맷이 같은 두 출력이 한 tick 에 연달아 나와 중복으로 보이던 것을 구분한다.
+    log: False 면 관측 행·후보 행을 모두 억제하고 파싱만 한다. 호출자가 판정에 실제로
+         쓰는 시점에 log_scan_candidates 로 따로 남기기 위한 스위치(위 독스트링 참조)."""
     allowed_set = allowed_set or set()
     entries = []
 
@@ -1499,12 +1533,17 @@ def parse_scan_entries(scan_lines, timestamp, channel_info_data=None, allowed_se
                     ap_load = load_map.get(freq_str, 0)
                     ap_noise = noise_map.get(freq_str, -95)
 
-                    logger.message(
-                        "info",
-                        f"[{IFACE}] ssid:{ssid}, bssid:{bssid}, ch:{channel}, freq:{freq}, "
-                        f"rssi:{rssi}, th:{rssi_th}, ld:{ld}, load:{ap_load:.1f}%, noise:{ap_noise}",
-                        _EXTRA_(),
-                    )
+                    # 후보 필터(아래 if)보다 앞이라 **필터 탈락 항목까지** 남는다 —
+                    # "스캔엔 보였는데 왜 후보가 아닌가"(allowed_set/WPA_FREQ 게이트)
+                    # 진단의 유일한 근거라 유지한다.
+                    if log:
+                        logger.message(
+                            "info",
+                            f"[{IFACE}] [{src}] ssid:{ssid}, bssid:{bssid}, ch:{channel}, "
+                            f"freq:{freq}, rssi:{rssi}, th:{rssi_th}, ld:{ld}, "
+                            f"load:{ap_load:.1f}%, noise:{ap_noise}",
+                            _EXTRA_(),
+                        )
 
                     # scan_freq(WPA_FREQ) 미설정이면 채널 제한 없이 동일 SSID를 후보로
                     # 허용한다(동작주파수 제한 없이 운용하는 배포 지원). 설정돼 있으면 그
@@ -1533,24 +1572,25 @@ def parse_scan_entries(scan_lines, timestamp, channel_info_data=None, allowed_se
 
     candidates = sorted(entries, key=lambda x: x["rssi"], reverse=True)
 
-    i = 0
-    for entry in candidates:
-        logger.message(
-            "info",
-            f"[{IFACE}] roam candidate {i}: "
-            f"ts={entry['timestamp']}, ssid={entry['ssid']}, bssid={entry['bssid']}, "
-            f"ch={entry['channel']}, freq={entry['freq']}, ld={entry['ld']}, "
-            f"load={entry.get('load', 0):.1f}%, rssi={entry['rssi']}(th={entry['rssi_th']})",
-            _EXTRA_(),
-        )
-        i += 1
+    if log:
+        log_scan_candidates(candidates, src)
 
     return candidates
 
 
-def get_latest_scan(st, channel_info_data=None, allowed_ssids=None):
+def get_latest_scan(st, channel_info_data=None, allowed_ssids=None, log=True, src="cache"):
     """ap.log(배경 스캔 캐시)의 마지막 `[시각]` 블록을 읽어 후보 엔트리 + 그 블록의
-    타임스탬프를 반환. 파싱은 parse_scan_entries가 담당(메모리 경로와 공유)."""
+    타임스탬프를 반환. 파싱은 parse_scan_entries가 담당(메모리 경로와 공유).
+
+    log=False 면 파싱만 하고 로그를 남기지 않는다 — 캐시를 **판정에 쓸지 모르는 시점**에
+    선반영하는 staged_scan Stage 0 스냅샷용. 실제로 쓰는 시점에 호출자가
+    log_scan_candidates 로 남긴다.
+
+    src 는 **파일이 아니라 그 블록의 출처**를 뜻한다. 기본 "cache"(bgscan 등 배경 스캔이
+    남긴 블록)이지만, 레거시 비-staged 경로는 이번 tick 에 자기가 스캔한 결과를 ap.log 에
+    쓰고(save_with_timestamp) 곧바로 되읽으므로 그 호출은 "scan" 을 넘겨야 한다 — 안 그러면
+    전경 실측이 배경 캐시로 오라벨돼, 소스 구분이 가장 필요한 폴백 모드에서 라벨이 거짓이
+    된다."""
     if allowed_ssids is None:
         allowed_ssids = [st.get("ssid")] if st.get("ssid") else []
     allowed_set = {s for s in allowed_ssids if s}
@@ -1577,7 +1617,7 @@ def get_latest_scan(st, channel_info_data=None, allowed_ssids=None):
         return [], None
 
     candidates = parse_scan_entries(
-        lines[start_idx:], timestamp, channel_info_data, allowed_set
+        lines[start_idx:], timestamp, channel_info_data, allowed_set, src=src, log=log
     )
     return candidates, timestamp
 
@@ -2612,7 +2652,11 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
     # 직전 tick 이후 시각 스텝이 있었으면 이번 tick 의 캐시 시간 판정(self-induced/신선도)은
     # 신뢰 불가 — Stage 2 를 건너뛰고 액티브 폴백으로 degrade 한다(다음 tick 자가 치유).
     clock_stepped = clock_step_detected()
-    cache_entries, cache_ts = get_latest_scan(station, channel_info_data, allowed)
+    # log=False: 이 시점엔 캐시를 쓸지 모른다(Stage 1 성공 시 홈채널 필터로 전량 제거되어
+    # Stage 2 게이트를 통과 못 함). 실제로 판정에 쓰는 Stage 2 통과 지점에서 남긴다.
+    cache_entries, cache_ts = get_latest_scan(
+        station, channel_info_data, allowed, log=False
+    )
 
     # ── Stage 1: 홈채널 스캔 (기본 패시브, home_passive=false 면 directed 액티브) ──
     # 패시브 스캔이 **현재 AP 외의 우리 허용 SSID 후보를 실제로 봤나**(=홈채널을 로밍
@@ -2644,7 +2688,7 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
             home_covered = True
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             home_entries = parse_scan_entries(
-                home_lines, now_str, channel_info_data, allowed_set
+                home_lines, now_str, channel_info_data, allowed_set, src="scan"
             )
             home_scan_ok = any(
                 e.get("bssid") != cur_bssid for e in home_entries
@@ -2693,6 +2737,9 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
         and not clock_stepped
         and scan_block_fresh(cache_ts, CACHE_FRESH_SEC)
     ):
+        # 여기서부터 캐시가 실제 판정 입력이다 — Stage 0 에서 미룬 로깅을 지금 남긴다.
+        # 홈채널 엔트리가 빠진 stage2_entries(=교차채널 보완분)만 찍어 실제 입력과 일치시킨다.
+        log_scan_candidates(stage2_entries, "cache")
         best_ap, reason, score = evaluate_candidates(
             stage2_entries, station, trend, cooldown, live_ssid, baseline_rssi
         )
@@ -2758,7 +2805,7 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
         _record_roam_scan_time()
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         active_entries = parse_scan_entries(
-            active_lines, now_str, channel_info_data, allowed_set
+            active_lines, now_str, channel_info_data, allowed_set, src="scan"
         )
         baseline_rssi = baseline_from_entries(active_entries, cur_bssid, baseline_rssi)
         best_ap, reason, score = evaluate_candidates(
@@ -2961,7 +3008,12 @@ def main():
                     interruptible_sleep(backoff)
                     continue
 
-            entries, _ts = get_latest_scan(station, channel_info_data, allowed)
+            # WPA_SSID 가 있으면 위에서 이번 tick 에 직접 스캔해 ap.log 에 방금 쓴 블록을
+            # 되읽는 것이므로 전경 실측("scan")이다. WPA_SSID 부재로 스캔을 건너뛴 경우에만
+            # 진짜 배경 캐시("cache")를 읽는다.
+            entries, _ts = get_latest_scan(
+                station, channel_info_data, allowed, src="scan" if WPA_SSID else "cache"
+            )
             if not entries:
                 backoff, no_candidate_streak, last_backoff_cap_ts = (
                     advance_no_candidate_backoff(no_candidate_streak, last_backoff_cap_ts)
