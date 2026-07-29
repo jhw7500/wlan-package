@@ -110,8 +110,18 @@ auto_detect() {
 
     # `iw dev link` 는 moal 에서 연결 중에도 "Not connected." 를 반환할 수 있어(2026-07-29
     # 실측) 멀쩡한 연결을 미연결로 오탐지한다. wlan_link_lib 로 판정·조회한다.
-    # shellcheck source=/dev/null
-    . /usr/local/scripts/wlan_link_lib.sh
+    # 단 이 스크립트는 **단독 배포**를 지원한다(README 는 wifi-capture.sh/wifi-decrypt.sh 만
+    # scp 하고, -H 원격 실행도 /tmp 로 이 파일 하나만 전송한다). lib 이 없을 수 있으므로
+    # 없으면 최소 구현으로 대체해 자체 완결성을 유지한다.
+    if [ -r /usr/local/scripts/wlan_link_lib.sh ]; then
+        # shellcheck source=/dev/null
+        . /usr/local/scripts/wlan_link_lib.sh
+    else
+        wlan_is_connected() {
+            [ "$(wpa_cli -i "$1" status 2>/dev/null | sed -n 's/^wpa_state=//p' | head -1)" = "COMPLETED" ]
+        }
+        wlan_freq_mhz() { wpa_cli -i "$1" status 2>/dev/null | sed -n 's/^freq=//p' | head -1; }
+    fi
     wlan_is_connected "$IFACE" || die "STA가 연결되어 있지 않습니다. -c와 -b를 직접 지정하세요"
 
     # 주파수 추출

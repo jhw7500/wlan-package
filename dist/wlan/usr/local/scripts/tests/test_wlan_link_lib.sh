@@ -36,7 +36,10 @@ mk_iw() {  # $1: station dump 본문, $2: info 본문
 
 STATION_DUMP=$'Station 00:80:4c:c7:7d:dd (on mlan0)\n\trx bytes:\t532086\n\tsignal:  \t-46 dBm\n\tsignal avg:\t-99 dBm\n\ttx bitrate:\t65.0 MBit/s MCS 7'
 WPA_OK=$'bssid=00:80:4c:c7:7d:dd\nfreq=5240\nssid=jhw_wlan_\nwpa_state=COMPLETED'
-WPA_SCAN=$'wpa_state=SCANNING'
+# 실제 supplicant 는 결합 미완료 상태에서도 bssid= 줄을 낸다(구현에 따라 all-zero).
+# 이 픽스처가 핵심 — bssid 만 보고 판단하면 미연결인데 BSSID 가 있는 것처럼 보인다.
+WPA_SCAN=$'bssid=00:00:00:00:00:00\nfreq=0\nssid=\nwpa_state=SCANNING'
+WPA_ASSOC=$'bssid=00:80:4c:c7:7d:dd\nfreq=5240\nssid=jhw_wlan_\nwpa_state=ASSOCIATING'
 IW_INFO=$'Interface mlan0\n\tssid jhw_wlan_\n\tchannel 48 (5240 MHz), width: 20 MHz, center1: 5240 MHz'
 
 export PATH="$TMP:$PATH"
@@ -69,6 +72,22 @@ eq "signal(-46, avg -99 아님)" "$(wlan_signal_dbm mlan0)" "-46"
 echo "── 5. iw info 폴백 시 width(20 MHz) 오매칭 방지 ──"
 mk_wpa_cli ""; mk_iw "$STATION_DUMP" "$IW_INFO"
 eq "freq(5240, width 20 아님)" "$(wlan_freq_mhz mlan0)" "5240"
+
+echo "── 6. [핵심] 결합 미완료 BSSID 거부 (ASSOCIATING) ──"
+# supplicant 가 결합/4-way 진행 중에 낸 bssid 를 수락하면 미연결인데 연결처럼 보여
+# catch-up 허위 실행·fallback GW 오설정이 발생한다(roam_notify.py:228 과 같은 규칙).
+mk_wpa_cli "$WPA_ASSOC"; mk_iw "" ""
+eq "wlan_bssid(ASSOCIATING → 거부)" "$(wlan_bssid mlan0)" ""
+wlan_is_connected mlan0 && ng "wlan_is_connected(ASSOCIATING)" "0" "1" || ok "wlan_is_connected(ASSOCIATING)"
+
+echo "── 7. all-zero BSSID 거부 (SCANNING) ──"
+mk_wpa_cli "$WPA_SCAN"; mk_iw "" ""
+eq "wlan_bssid(SCANNING+all-zero)" "$(wlan_bssid mlan0)" ""
+
+echo "── 8. 미완료여도 station dump 에 peer 가 있으면 그것을 쓴다 ──"
+# moal 이 cfg80211/supplicant 와 어긋난 바로 그 상황 — 실제 결합은 살아 있으므로 채택한다.
+mk_wpa_cli "$WPA_ASSOC"; mk_iw "$STATION_DUMP" "$IW_INFO"
+eq "wlan_bssid(폴백 우선)" "$(wlan_bssid mlan0)" "00:80:4c:c7:7d:dd"
 
 echo
 echo "PASS=$pass FAIL=$fail"

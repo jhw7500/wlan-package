@@ -1,5 +1,7 @@
-#!/bin/bash
-# 무선 링크 상태 조회 공용 헬퍼.
+# shellcheck shell=bash
+# 무선 링크 상태 조회 공용 헬퍼. **source 전용** — 직접 실행하지 않으므로 shebang 을 두지
+# 않는다. `#!/bin/sh` 스크립트(wifi_event.sh 등)도 source 하며, 쓰이는 문법(local, printf,
+# sed)은 dash/busybox ash 에서 모두 동작한다.
 #
 # ── `iw dev <if> link` 를 쓰지 않는 이유 ──────────────────────────────────────
 # 이 명령은 cfg80211 의 current_bss 를 읽는데, moal 드라이버가 이를 신뢰성 있게
@@ -28,10 +30,21 @@
 # 이미 station dump 로 전환해 둔 선례가 있다 — "station dump로 연결 판별 (iw link 대체)")
 
 # 연결된 AP 의 BSSID 를 출력한다. 미연결이면 빈 문자열(exit 0).
+#
+# ⚠️ wpa_state=COMPLETED 일 때만 bssid 를 수락한다. supplicant 는 결합/4-way 진행 중에도
+# bssid= 줄을 내며(구현에 따라 00:00:00:00:00:00), 그걸 그대로 믿으면 **미연결인데 BSSID 가
+# 있는 것처럼 보여** 이 파일이 고치려는 버그와 똑같은 증상이 된다(catch-up 허위 실행,
+# fallback GW 오설정). 이는 리포의 기존 관용과 동일하다 —
+# roam_notify.py:228 `_bssid_from_status()`: "wpa_state=COMPLETED 이고 bssid 줄이 있을 때만
+# 그 값을 반환 … 결합 미완료 시점의 bssid 줄은 신뢰하지 않는다".
 wlan_bssid() {
-    local iface="${1:?wlan_bssid: iface required}" bssid=""
+    local iface="${1:?wlan_bssid: iface required}" bssid="" _status="" _state=""
 
-    bssid=$(wpa_cli -i "$iface" status 2>/dev/null | sed -n 's/^bssid=//p' | head -1)
+    _status=$(wpa_cli -i "$iface" status 2>/dev/null)
+    _state=$(printf '%s\n' "$_status" | sed -n 's/^wpa_state=//p' | head -1)
+    if [ "$_state" = "COMPLETED" ]; then
+        bssid=$(printf '%s\n' "$_status" | sed -n 's/^bssid=//p' | head -1)
+    fi
     if [ -z "$bssid" ]; then
         # station dump 첫 줄: "Station 00:80:4c:c7:7d:dd (on mlan0)"
         bssid=$(iw dev "$iface" station dump 2>/dev/null \
