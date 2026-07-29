@@ -9,8 +9,13 @@ WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
 # 이 스크립트는 set -e 가 없어 로드 실패가 조용히 넘어가고, 그러면 wlan_bssid 미정의로
 # initial_bssid 가 비어 **catch-up 이 말없이 누락**된다. 실패를 반드시 남긴다.
 # shellcheck source=./wlan_link_lib.sh
-. /usr/local/scripts/wlan_link_lib.sh 2>/dev/null \
-    || logger -p local0.err "[$tag:$LINENO] [$IFACE] wlan_link_lib.sh load failed — catch-up/BSSID lookup unavailable"
+if ! . /usr/local/scripts/wlan_link_lib.sh 2>/dev/null; then
+    logger -p local0.err "[$tag:$LINENO] [$IFACE] wlan_link_lib.sh load failed — catch-up/BSSID lookup unavailable"
+    # 로드 실패 후에도 아래에서 wlan_bssid 를 부르므로, stub 이 없으면 매 호출이
+    # "command not found" 를 stderr 로 뱉어 서비스 로그를 오염시킨다. 빈 값으로 수렴시켜
+    # catch-up 만 조용히 건너뛰게 한다(실패 사실은 위 logger 로 이미 남겼다).
+    wlan_bssid() { :; }
+fi
 MCS_REASSOC_MARKER="/tmp/.mcstier_reassoc_${IFACE}"
 
 cleanup() {

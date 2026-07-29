@@ -94,6 +94,10 @@ eq "wlan_bssid(폴백 우선)" "$(wlan_bssid mlan0)" "00:80:4c:c7:7d:dd"
 echo "── 9. [핵심] COMPLETED 인데 all-zero BSSID → 무효 처리 ──"
 mk_wpa_cli "$WPA_ZERO"; mk_iw "" ""
 eq "wlan_bssid(COMPLETED+all-zero)" "$(wlan_bssid mlan0)" ""
+# 두 함수가 같은 규칙을 써야 한다. is_connected 가 상태만 보면 "연결됨인데 BSSID 없음"
+# 이라는 모순이 생겨 소비처마다 판단이 갈린다(wifi_init.sh skip vs 10-set-gateway fallback).
+wlan_is_connected mlan0 && ng "wlan_is_connected(COMPLETED+all-zero)" "0" "1" \
+                        || ok "wlan_is_connected(COMPLETED+all-zero)"
 
 echo "── 10. all-zero 여도 station dump 에 peer 가 있으면 그것을 쓴다 ──"
 mk_wpa_cli "$WPA_ZERO"; mk_iw "$STATION_DUMP" "$IW_INFO"

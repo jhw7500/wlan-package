@@ -119,9 +119,11 @@ auto_detect() {
         # lib 과 동일하게 **계단식**이어야 한다 — wpa_cli 만 보면 supplicant 가 죽었을 때
         # 물리적으로 연결돼 있어도 캡처가 거부되어, 이 변경이 없애려는 상황이 그대로 남는다.
         wlan_is_connected() {
-            local _s
+            local _s _b
             _s=$(wpa_cli -i "$1" status 2>/dev/null)
-            [ "$(printf '%s\n' "$_s" | sed -n 's/^wpa_state=//p' | head -1)" = "COMPLETED" ] && return 0
+            _b=$(printf '%s\n' "$_s" | sed -n 's/^bssid=//p' | head -1)
+            [ "$(printf '%s\n' "$_s" | sed -n 's/^wpa_state=//p' | head -1)" = "COMPLETED" ] \
+                && [ -n "$_b" ] && [ "$_b" != "00:00:00:00:00:00" ] && return 0
             [ -n "$(iw dev "$1" station dump 2>/dev/null | sed -n 's/^Station .*/x/p' | head -1)" ]
         }
         wlan_freq_mhz() {

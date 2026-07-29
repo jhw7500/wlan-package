@@ -66,9 +66,15 @@ wlan_bssid() {
 
 # 연결 여부. 연결이면 exit 0, 아니면 비0.
 wlan_is_connected() {
-    local iface="${1:?wlan_is_connected: iface required}"
+    local iface="${1:?wlan_is_connected: iface required}" _status="" _state="" _bssid=""
 
-    if [ "$(wpa_cli -i "$iface" status 2>/dev/null | sed -n 's/^wpa_state=//p' | head -1)" = "COMPLETED" ]; then
+    # wlan_bssid 와 **같은 규칙**을 쓴다. 상태만 보면 "연결됨인데 BSSID 는 없음" 이라는
+    # 모순된 조합이 생겨(COMPLETED + all-zero) 소비처마다 판단이 갈린다 —
+    # wifi_init.sh 는 연결로 보고 skip, 10-set-gateway.sh 는 BSSID 가 없어 fallback GW.
+    _status=$(wpa_cli -i "$iface" status 2>/dev/null)
+    _state=$(printf '%s\n' "$_status" | sed -n 's/^wpa_state=//p' | head -1)
+    _bssid=$(printf '%s\n' "$_status" | sed -n 's/^bssid=//p' | head -1)
+    if [ "$_state" = "COMPLETED" ] && [ -n "$_bssid" ] && [ "$_bssid" != "00:00:00:00:00:00" ]; then
         return 0
     fi
     # 폴백: station 엔트리가 하나라도 있으면 연결로 본다.
