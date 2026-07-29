@@ -2,6 +2,8 @@
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 # shellcheck source=./wifi_init_config_lib.sh
 . "/usr/local/scripts/wifi_init_config_lib.sh"
+# shellcheck source=./wlan_link_lib.sh
+. "/usr/local/scripts/wlan_link_lib.sh"
 # 설치 전 환경(개발/테스트)에서는 스크립트 옆의 lib로 보충.
 # 타깃은 /usr/local/bin/wifi 심볼릭 링크라 SCRIPT_DIR을 1차 경로로 못 쓴다.
 if ! declare -f wifi_init_mode_to_bandcfg_mask >/dev/null 2>&1; then
@@ -2840,7 +2842,9 @@ case "$2" in
     logger -p local0.info "[$tag:$LINENO] [$IFACE] radio-apply: done (mode=${R_MODE:-keep} bw=${R_BW:-keep})"
     echo "radio-apply done for $IFACE (mode=${R_MODE:-keep} bw=${R_BW:-keep})"
     echo "--- link ---"
-    iw dev "$IFACE" link 2>/dev/null | head -8
+    # `iw link` 는 moal 에서 연결 중에도 "Not connected." 를 낼 수 있어 표시가 오해를 준다.
+    wpa_cli -i "$IFACE" status 2>/dev/null | grep -E '^(bssid|freq|ssid|wpa_state)='
+    iw dev "$IFACE" station dump 2>/dev/null | head -8
     echo "--- datarate ---"
     mlanutl "$IFACE" getdatarate 2>/dev/null || true
     ;;

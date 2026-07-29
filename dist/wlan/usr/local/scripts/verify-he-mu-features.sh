@@ -4,6 +4,9 @@
 #   iface           : mlan0 (default)
 #   iperf_server_ip : iperf3 서버 IP (선택 — Step 4 부하 측정에 사용)
 IF="${1:-mlan0}"
+# 링크 지표 조회 헬퍼(iw link 미사용 — 해당 파일 상단 주석 참조)
+# shellcheck source=./wlan_link_lib.sh
+. /usr/local/scripts/wlan_link_lib.sh
 SRV="${2:-}"
 MLANUTL="${MLANUTL:-/usr/local/bin/mlanutl}"
 ADAP="/proc/mwlan/adapter0/$IF"
@@ -158,11 +161,11 @@ cat <<'EOF'
   rate가 NSS=1로 cap                          | RSSI 약함, BFEE 협상 실패           | signal: -65dBm 이상 권장
   HE 자체 미협상 (HT/VHT만)                    | AP가 ieee80211ax=0                  | iw scan > HE Cap 존재 여부
 EOF
-echo "  현재 보드: signal=$(iw dev $IF link | awk '/signal:/{print $2,$3}'), BW=$(iw dev $IF info | awk '/width:/{print $5,$6}')"
+echo "  현재 보드: signal=$(wlan_signal_dbm "$IF") dBm, BW=$(iw dev $IF info | awk '/width:/{print $5,$6}')"
 
 hr "[FINAL VERDICT]"
 BW=$(iw dev $IF info 2>/dev/null | sed -n 's/.*width: \([0-9]*\).*/\1/p')
-SIG=$(iw dev $IF link 2>/dev/null | awk '/signal:/{print $2}')
+SIG=$(wlan_signal_dbm "$IF")
 RATE=$(iw dev $IF station dump 2>/dev/null | awk '/tx bitrate:/{print $3,$4; exit}')
 P4_BIT1=$(bit "$P4" 1)
 DL_MU_V=$([ $SU_BFEE -eq 1 ] && [ $((SOUND_DIM+1)) -ge 2 ] && [ $RX_NSS2 -le 2 ] && echo OK || echo FAIL)
@@ -170,7 +173,7 @@ UL_MU_V=$([ $HTC -eq 1 ] && [ $FULL_ULMU -eq 1 ] && [ $TX_NSS2 -le 2 ] && echo O
 DL_OF_V=$([ $HTC -eq 1 ] && [ $RX_HE_MU -eq 1 ] && echo OK || echo FAIL)
 UL_OF_V=$([ $HTC -eq 1 ] && [ $OM_CTRL -eq 1 ] && echo OK || echo FAIL)
 cat <<EOF
-연결: $(iw dev $IF link | awk '/Connected to/{print $3}') ($SIG dBm), BW $BW MHz, $RATE
+연결: $(wlan_bssid "$IF") ($SIG dBm), BW $BW MHz, $RATE
 광고: DL-MU-MIMO=$DL_MU_V  UL-MU-MIMO=$UL_MU_V  DL-OFDMA=$DL_OF_V  UL-OFDMA=$UL_OF_V
 
 ── 종합 ──

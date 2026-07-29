@@ -108,12 +108,15 @@ bitmap_to_label() {
 
 auto_detect() {
     info "현재 STA 연결에서 채널/밴드 자동감지 중..."
-    local status
-    status=$(iw dev "$IFACE" link 2>/dev/null) || die "iw dev $IFACE link 실패"
-    echo "$status" | grep -q "Not connected" && die "STA가 연결되어 있지 않습니다. -c와 -b를 직접 지정하세요"
+    # `iw dev link` 는 moal 에서 연결 중에도 "Not connected." 를 반환할 수 있어(2026-07-29
+    # 실측) 멀쩡한 연결을 미연결로 오탐지한다. wlan_link_lib 로 판정·조회한다.
+    # shellcheck source=/dev/null
+    . /usr/local/scripts/wlan_link_lib.sh
+    wlan_is_connected "$IFACE" || die "STA가 연결되어 있지 않습니다. -c와 -b를 직접 지정하세요"
 
     local freq
-    freq=$(echo "$status" | grep -oP 'freq:\s*\K[0-9]+') || die "주파수를 읽을 수 없습니다"
+    freq=$(wlan_freq_mhz "$IFACE")
+    [ -n "$freq" ] || die "주파수를 읽을 수 없습니다"
 
     if [ -z "$CHANNEL" ]; then
         if [ "$freq" -lt 3000 ]; then CHANNEL=$(( (freq - 2407) / 5 ))

@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 # shellcheck source=./wifi_init_config_lib.sh
 . "$SCRIPT_DIR/wifi_init_config_lib.sh"
+# shellcheck source=./wlan_link_lib.sh
+. "$SCRIPT_DIR/wlan_link_lib.sh"
 
 tag=$(basename "$0")
 JSON_FILE="${JSON_FILE:-/usr/local/etc/config.json}"
@@ -774,7 +776,10 @@ apply_radio_mode_bw() {
 
     # 이미 연결된 상태면 bandcfg는 무조건 실패(-EOPNOTSUPP)하고 htcapinfo/vhtcfg만
     # 적용돼 mode/bw split-brain이 됨 → 둘 다 건너뛰고 radio-apply 안내만 남긴다.
-    if iw dev "$iface" link 2>/dev/null | grep -q '^Connected'; then
+    # 연결 판정에 `iw dev link` 를 쓰지 않는다 — moal 이 연결 중에도 "Not connected." 를
+    # 반환하면 이 skip 이 통과돼 bandcfg 가 실행되고, 그 결과가 바로 위 주석이 경고하는
+    # mode/bw split-brain 이다.
+    if wlan_is_connected "$iface"; then
         logger -p local0.info "[$tag:$LINENO] [$iface] connected; skip radio mode/bw re-apply (use 'wifi N radio-apply')"
         return 0
     fi

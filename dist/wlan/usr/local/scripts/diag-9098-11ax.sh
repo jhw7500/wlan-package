@@ -3,6 +3,9 @@
 # 사용: ./diag-9098-11ax.sh [iface]   (default: mlan0)
 IF="${1:-mlan0}"
 MLANUTL="${MLANUTL:-/usr/local/bin/mlanutl}"
+# 링크 지표 조회 헬퍼(iw link 미사용 — 해당 파일 상단 주석 참조)
+# shellcheck source=./wlan_link_lib.sh
+. /usr/local/scripts/wlan_link_lib.sh
 
 hr(){ printf '\n=== %s ===\n' "$*"; }
 have(){ command -v "$1" >/dev/null 2>&1; }
@@ -19,7 +22,7 @@ ls /sys/class/net/$IF/device/ 2>/dev/null | head -5
 cat /sys/class/net/$IF/device/uevent 2>/dev/null
 
 hr "[2] 현재 연결/실제 PHY rate (NSS/MCS)"
-iw dev $IF link
+wpa_cli -i "$IF" status 2>/dev/null | grep -E '^(bssid|freq|ssid|wpa_state)='
 iw dev $IF station dump | awk '/Station|tx bitrate|rx bitrate|signal:|MCS|NSS|connected time/'
 
 hr "[3] HE Capability dump (mlanutl 11axcfg, GET)"
@@ -93,7 +96,7 @@ $MLANUTL $IF htstreamcfg 2>&1
 echo "  (tx_bf_cfg는 peer MAC + sub-action 인자 필수 — 단순 GET 미지원, skip)"
 
 hr "[7] AP HE Cap (현재 연결된 BSS)"
-BSSID=$(iw dev $IF link | awk '/Connected to/ {print $3}')
+BSSID=$(wlan_bssid "$IF")
 echo "BSSID=$BSSID"
 if [ -n "$BSSID" ]; then
   iw dev $IF scan dump 2>/dev/null | awk -v B="$BSSID" '
@@ -148,8 +151,8 @@ DL_OF=$([ "$HTC" = 1 ] && [ "$RX_HEMU" = 1 ] && echo OK || echo FAIL)
 UL_OF=$([ "$HTC" = 1 ] && [ "$OM" = 1 ] && echo OK || echo FAIL)
 # 환경
 BW=$(iw dev $IF info 2>/dev/null | sed -n 's/.*width: \([0-9]*\).*/\1/p')
-SIG=$(iw dev $IF link 2>/dev/null | awk '/signal:/{print $2}')
-CONN=$(iw dev $IF link 2>/dev/null | awk '/Connected to/{print $3}')
+SIG=$(wlan_signal_dbm "$IF")
+CONN=$(wlan_bssid "$IF")
 PHYRATE=$(iw dev $IF station dump 2>/dev/null | awk '/tx bitrate:/{for(i=1;i<=NF;i++) if($i~/MBit/) {print $(i-1); break}; exit}')
 HTCFG=$($MLANUTL $IF htstreamcfg 2>&1 | grep -oE '[0-9]x[0-9]')
 AP_BW=$(iw dev $IF scan dump 2>/dev/null | awk '

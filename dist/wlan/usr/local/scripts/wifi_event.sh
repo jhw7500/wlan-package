@@ -5,6 +5,9 @@
 IFACE="${1:-mlan0}"
 tag=$(basename "$0")
 WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
+# 링크 상태 조회 헬퍼(iw link 미사용 — 파일 상단 주석 참조). /bin/sh 에서도 동작한다.
+# shellcheck source=./wlan_link_lib.sh
+. /usr/local/scripts/wlan_link_lib.sh
 MCS_REASSOC_MARKER="/tmp/.mcstier_reassoc_${IFACE}"
 
 cleanup() {
@@ -91,7 +94,7 @@ fi
 
 # 초기 상태 점검: wifi_event 시작 전에 이미 연결된 경우(첫 부팅 race) 1회 처리.
 # iw event는 구독 이후의 이벤트만 전달하므로, 이미 CONNECTED 상태이면 apply_mcs_tier/run_on_connect가 실행되지 않음.
-initial_bssid=$(iw dev "$IFACE" link 2>/dev/null | awk '/Connected to/ {print $3; exit}')
+initial_bssid=$(wlan_bssid "$IFACE")
 if [ -n "$initial_bssid" ]; then
     logger -p local0.info "[$tag:$LINENO] [$IFACE] INITIAL CONNECTED bssid=$initial_bssid (catch-up)"
     apply_mcs_tier

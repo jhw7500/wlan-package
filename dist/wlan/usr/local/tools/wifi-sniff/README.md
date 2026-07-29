@@ -97,8 +97,9 @@ Options:
 
 ```bash
 # STA가 연결된 상태에서
-iw dev mlan0 link | grep freq
-# freq: 5200  → 채널 40
+# (iw dev ... link 는 moal 에서 연결 중에도 "Not connected." 를 낼 수 있어 쓰지 않는다)
+wpa_cli -i mlan0 status | grep '^freq='
+# freq=5200  → 채널 40
 
 # 또는
 wpa_cli -i mlan0 status | grep freq
@@ -360,8 +361,9 @@ radiotap                                 frames:160129
 [타겟 보드 — 시리얼 콘솔]
 
 # 1. 현재 연결 채널 확인
-iw dev mlan0 link | grep freq
-# freq: 5200 → 채널 40
+# (iw dev ... link 는 moal 에서 연결 중에도 "Not connected." 를 낼 수 있어 쓰지 않는다)
+wpa_cli -i mlan0 status | grep '^freq='
+# freq=5200 → 채널 40
 
 # 2. 캡처 시작 (WiFi 끊김)
 export PATH=$PATH:/opt/wlan/bin
