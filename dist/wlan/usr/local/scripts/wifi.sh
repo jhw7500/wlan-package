@@ -2,8 +2,6 @@
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 # shellcheck source=./wifi_init_config_lib.sh
 . "/usr/local/scripts/wifi_init_config_lib.sh"
-# shellcheck source=./wlan_link_lib.sh
-. "/usr/local/scripts/wlan_link_lib.sh"
 # 설치 전 환경(개발/테스트)에서는 스크립트 옆의 lib로 보충.
 # 타깃은 /usr/local/bin/wifi 심볼릭 링크라 SCRIPT_DIR을 1차 경로로 못 쓴다.
 if ! declare -f wifi_init_mode_to_bandcfg_mask >/dev/null 2>&1; then

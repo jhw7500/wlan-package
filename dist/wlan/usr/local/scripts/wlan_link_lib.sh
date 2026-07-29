@@ -31,6 +31,10 @@
 # ── 대체 소스 (계단식) ───────────────────────────────────────────────────────
 #   1) wpa_cli status   — supplicant SME 의 사실. 연결 판정·BSSID 에 가장 정확하다.
 #   2) iw station dump  — supplicant 부재/사망 시 폴백이자, signal 등 물리 지표의 원천.
+#
+# ⚠️ 동기화 주의: tools/wifi-sniff/wifi-{capture,logger}.sh 는 단독 배포를 지원하느라
+# wlan_is_connected/wlan_freq_mhz 의 **최소 복사본**을 인라인으로 들고 있다. 이 두 함수의
+# 판정 규칙을 바꾸면 그쪽도 함께 고쳐야 한다(테스트가 판정 요소 동일성을 대조한다).
 # 둘 중 하나가 죽어도 동작하도록 순서대로 시도한다. (wifi_logger_link.py 가 같은 이유로
 # 이미 station dump 로 전환해 둔 선례가 있다 — "station dump로 연결 판별 (iw link 대체)")
 
@@ -49,6 +53,8 @@ wlan_bssid() {
     _state=$(printf '%s\n' "$_status" | sed -n 's/^wpa_state=//p' | head -1)
     if [ "$_state" = "COMPLETED" ]; then
         bssid=$(printf '%s\n' "$_status" | sed -n 's/^bssid=//p' | head -1)
+        # COMPLETED 인데 all-zero 가 실리는 구현이 있어 무효값으로 취급한다(상태만 믿지 않는다).
+        [ "$bssid" = "00:00:00:00:00:00" ] && bssid=""
     fi
     if [ -z "$bssid" ]; then
         # station dump 첫 줄: "Station 00:80:4c:c7:7d:dd (on mlan0)"

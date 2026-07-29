@@ -40,6 +40,8 @@ WPA_OK=$'bssid=00:80:4c:c7:7d:dd\nfreq=5240\nssid=jhw_wlan_\nwpa_state=COMPLETED
 # 이 픽스처가 핵심 — bssid 만 보고 판단하면 미연결인데 BSSID 가 있는 것처럼 보인다.
 WPA_SCAN=$'bssid=00:00:00:00:00:00\nfreq=0\nssid=\nwpa_state=SCANNING'
 WPA_ASSOC=$'bssid=00:80:4c:c7:7d:dd\nfreq=5240\nssid=jhw_wlan_\nwpa_state=ASSOCIATING'
+# COMPLETED 인데 all-zero 가 실리는 구현 — 상태만 믿으면 무효 BSSID 를 반환하게 된다.
+WPA_ZERO=$'bssid=00:00:00:00:00:00\nfreq=5240\nssid=jhw_wlan_\nwpa_state=COMPLETED'
 IW_INFO=$'Interface mlan0\n\tssid jhw_wlan_\n\tchannel 48 (5240 MHz), width: 20 MHz, center1: 5240 MHz'
 
 export PATH="$TMP:$PATH"
@@ -88,6 +90,31 @@ echo "── 8. 미완료여도 station dump 에 peer 가 있으면 그것을 �
 # moal 이 cfg80211/supplicant 와 어긋난 바로 그 상황 — 실제 결합은 살아 있으므로 채택한다.
 mk_wpa_cli "$WPA_ASSOC"; mk_iw "$STATION_DUMP" "$IW_INFO"
 eq "wlan_bssid(폴백 우선)" "$(wlan_bssid mlan0)" "00:80:4c:c7:7d:dd"
+
+echo "── 9. [핵심] COMPLETED 인데 all-zero BSSID → 무효 처리 ──"
+mk_wpa_cli "$WPA_ZERO"; mk_iw "" ""
+eq "wlan_bssid(COMPLETED+all-zero)" "$(wlan_bssid mlan0)" ""
+
+echo "── 10. all-zero 여도 station dump 에 peer 가 있으면 그것을 쓴다 ──"
+mk_wpa_cli "$WPA_ZERO"; mk_iw "$STATION_DUMP" "$IW_INFO"
+eq "wlan_bssid(all-zero → 폴백)" "$(wlan_bssid mlan0)" "00:80:4c:c7:7d:dd"
+
+echo "── 11. 인라인 복사본 ↔ lib 판정 요소 동일성 ──"
+# wifi-{capture,logger}.sh 는 단독 배포용 최소 복사본을 인라인으로 들고 있다.
+# 규칙이 갈라지면 단독 배포에서만 다르게 동작하므로 판정 요소를 대조해 고정한다.
+# tests/ → scripts/ → local/ → tools/wifi-sniff
+SNIFF_DIR="$(cd "$(dirname "$0")/../../tools/wifi-sniff" 2>/dev/null && pwd)"
+if [ -n "$SNIFF_DIR" ] && [ -r "$SNIFF_DIR/wifi-capture.sh" ]; then
+    lib_keys=$(sed -n '/^wlan_is_connected() {/,/^}/p' "$(dirname "$0")/../wlan_link_lib.sh" \
+               | grep -oE 'wpa_state|COMPLETED|station dump|Station' | sort -u)
+    for s in wifi-capture wifi-logger; do
+        inl_keys=$(sed -n '/wlan_is_connected() {/,/^        }/p' "$SNIFF_DIR/$s.sh" \
+                   | grep -oE 'wpa_state|COMPLETED|station dump|Station' | sort -u)
+        eq "$s 인라인 판정요소" "$inl_keys" "$lib_keys"
+    done
+else
+    echo "  [SKIP] wifi-sniff 디렉토리를 찾지 못함"
+fi
 
 echo
 echo "PASS=$pass FAIL=$fail"
