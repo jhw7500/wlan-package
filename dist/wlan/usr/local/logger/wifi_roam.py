@@ -1631,6 +1631,11 @@ def reload_supplicant_conf_if_changed(path):
     except Exception as e:
         logger.message("err", f"[{IFACE}] wpa conf reload failed (keep last): {e}", _EXTRA_())
         return
+    # th2g/th5g 는 이제 conf 가 아니라 인자로 넘긴 DEFAULT_TH_*(JSON 값) 그대로다. 따라서
+    # conf 만 바뀐 경우 이 둘은 changed 에 기여하지 않는다(ssid/scan_freq/TH_CONNECT 가 판정).
+    # 반대로 SIGHUP 으로 load_roaming_config 가 DEFAULT_TH_* 를 갱신한 뒤 conf mtime 변화로
+    # 재파싱되면 직전 WPA_TH_* 와 달라져 changed=True 가 되는데, 이는 JSON 변경을 반영하는
+    # 의도된 동작이다.
     changed = (ssid, freqs) != (WPA_SSID, WPA_FREQ) or (th2g, th5g, th_connect) != (WPA_TH_2G, WPA_TH_5G, WPA_TH_CONNECT)
     WPA_SSID, WPA_FREQ, WPA_TH_2G, WPA_TH_5G, WPA_TH_CONNECT = ssid, freqs, th2g, th5g, th_connect
     WPA_CONF_MTIME = mtime
@@ -3066,12 +3071,11 @@ if __name__ == "__main__":
     # JSON 설정 로드 (IFACE별 설정)
     load_roaming_config(IFACE)
 
-    # JSON에서 로드한 TH 값을 기본값으로 wpa_supplicant.conf 파싱
-    # wpa_supplicant.conf에 값이 있으면 덮어쓰기, 없으면 JSON 값 사용
-    json_th_2g = DEFAULT_TH_2G
-    json_th_5g = DEFAULT_TH_5G
+    # 로밍 임계(th2g/th5g)는 JSON 단일 소스 — conf `#!TH_*` 마커는 더 이상 읽지 않는다.
+    # parse_supplicant_conf 는 여기서 넘긴 DEFAULT_TH_*(= load_roaming_config 가 JSON 으로
+    # 갱신한 값)를 그대로 돌려주고, conf 에서는 ssid/scan_freq/`#!TH_CONNECT=` 만 읽는다.
     WPA_SSID, WPA_FREQ, WPA_TH_2G, WPA_TH_5G, WPA_TH_CONNECT = parse_supplicant_conf(
-        WPA_CONF_FILE, def_th2g=json_th_2g, def_th5g=json_th_5g
+        WPA_CONF_FILE, def_th2g=DEFAULT_TH_2G, def_th5g=DEFAULT_TH_5G
     )
     # 초기 파싱 시점의 mtime 기록 — 이후 main 루프는 mtime 변화(reconfigure) 시에만 재파싱.
     try:
