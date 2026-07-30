@@ -211,17 +211,22 @@ def test_track_missing_bssid_field_is_ignored():
     assert gs["bssid"] is None and gs["assoc_ts"] is None
 
 
-def test_invalidate_reset_baseline():
-    """[Codex P2] good-signal 이 아닌 리셋 경로(bgscan hint / 후보 발견)는 기준을 무효화한다.
+def test_on_streak_reset_clears_baseline_and_suppressed():
+    """[Codex P2 + Claude MEDIUM] good-signal 이 아닌 리셋 경로(bgscan hint / 후보 발견)는
+    기준과 **억제 이력 둘 다** 정리한다.
 
-    reset_rssi 는 '마지막 리셋 시점 RSSI' 여야 하는데 종전엔 good-signal 분기에서만
-    갱신돼, 다른 경로로 리셋된 뒤의 판정이 옛 기준과 비교됐다."""
+    기준: reset_rssi 는 '마지막 리셋 시점 RSSI' 여야 하는데 종전엔 good-signal 분기에서만
+    갱신돼, 다른 경로로 리셋된 뒤의 판정이 옛 기준과 비교됐다.
+
+    억제 이력: streak 가 0 이 되면 그때까지의 억제는 무효가 된다(억제 목적이 streak 유지인데
+    다른 경로가 0 으로 만들었다). 남기면 다음 요약이 "이전 N회 억제, streak=0 유지했었음" 으로
+    찍혀 억제가 실익 없었다는 오독을 부른다 — 실기 검증에서 실제로 혼선이 됐다."""
     gs = wifi_roam.new_gate_state()
     gs["reset_rssi"] = -50
     gs["suppressed"] = 4
-    wifi_roam.invalidate_reset_baseline(gs)
+    wifi_roam.on_streak_reset(gs)
     assert gs["reset_rssi"] is None
-    assert gs["suppressed"] == 4, "억제 누적은 유지 — 결합이 바뀐 게 아니므로 요약 대상이다"
+    assert gs["suppressed"] == 0, "streak 가 0 이 된 뒤에도 억제 이력이 남아 요약을 오염시킨다"
 
 
 def test_grace_applies_after_reassoc(monkeypatch):
@@ -303,10 +308,16 @@ def test_config_zero_grace_clamped(monkeypatch, restore_globals):
 
 
 def test_config_garbage_falls_back(monkeypatch, restore_globals):
-    """타입이 깨진 값은 기본값으로 폴백하고 크래시하지 않는다."""
+    """타입이 깨진 값은 기본값으로 폴백하고 크래시하지 않는다.
+
+    enable 도 함께 검증한다 — bool 이 아닌 값("yes")이 truthy 로 새어 들어가면 의도치 않게
+    게이트가 켜진다(기본 off 라는 무회귀 보장이 깨진다)."""
     _load(monkeypatch, {"GOOD_SIGNAL_RESET_GATE": {"enable": "yes", "delta_db": "abc"}})
     assert isinstance(wifi_roam.GOOD_SIGNAL_GATE_DELTA_DB, int)
     assert wifi_roam.GOOD_SIGNAL_GATE_DELTA_DB >= 1
+    assert isinstance(wifi_roam.ENABLE_GOOD_SIGNAL_GATE, bool), (
+        f"enable 이 bool 로 정규화되지 않았다: {wifi_roam.ENABLE_GOOD_SIGNAL_GATE!r}"
+    )
 
 
 # ── wifi.sh 기본값 사본과의 동기 ──

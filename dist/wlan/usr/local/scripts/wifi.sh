@@ -174,14 +174,15 @@ GATE_DEF_GRACE_SEC=40
 # JSON 에 있으면 그 값, 없으면 `<기본값>(default)`. jq 실패는 비0 으로 전파해 호출부가
 # "읽기 실패"와 "키 없음"을 구분할 수 있게 한다.
 gate_effective() {
-    local key="$1"
-    local fallback="$2"
+    local iface="$1"
+    local key="$2"
+    local fallback="$3"
     local v
 
     # iface/key 를 필터 문자열에 보간하지 않고 --arg 로 넘긴다 —
     # update_json_roaming_section 과 같은 방식(같은 파일 안에서 패턴이 갈리면 복사·재사용 시
     # 취약해진다). 현재 IFACE 는 mlan0/mlan1 로 제한돼 실제 인젝션 위험은 없다.
-    v=$(jq -r --arg i "$IFACE" --arg k "$key" \
+    v=$(jq -r --arg i "$iface" --arg k "$key" \
           '.[$i].roaming.GOOD_SIGNAL_RESET_GATE[$k] // empty' \
           "$WIFI_INIT_CONF_JSON") || return 1
     if [ -z "$v" ]; then
@@ -1831,9 +1832,9 @@ case "$2" in
             # JSON 에 키가 없으면 데몬은 wifi_roam.py 의 DEFAULT_* 를 쓴다. 종전엔 그 경우를
             # "unset" 으로만 찍어 **실제 적용값을 알 수 없었다**(gate on 은 enable 만 넣으므로
             # 흔한 상태다). 적용 중인 값과 그 출처를 함께 보여준다.
-            if ! GEN=$(gate_effective enable "$GATE_DEF_ENABLE") \
-               || ! GDL=$(gate_effective delta_db "$GATE_DEF_DELTA_DB") \
-               || ! GGR=$(gate_effective post_roam_grace_sec "$GATE_DEF_GRACE_SEC"); then
+            if ! GEN=$(gate_effective "$IFACE" enable "$GATE_DEF_ENABLE") \
+               || ! GDL=$(gate_effective "$IFACE" delta_db "$GATE_DEF_DELTA_DB") \
+               || ! GGR=$(gate_effective "$IFACE" post_roam_grace_sec "$GATE_DEF_GRACE_SEC"); then
                 echo "Error: failed to read ${IFACE}.roaming.GOOD_SIGNAL_RESET_GATE from $WIFI_INIT_CONF_JSON" >&2
                 exit 1
             fi

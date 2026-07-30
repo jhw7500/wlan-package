@@ -275,15 +275,20 @@ def track_association(station, gs, now=None):
     return True
 
 
-def invalidate_reset_baseline(gs):
+def on_streak_reset(gs):
     """good-signal 이 아닌 경로(bgscan hint / 후보 발견)로 streak 가 리셋될 때 호출.
 
-    reset_rssi 는 "마지막 리셋 시점의 RSSI" 여야 하는데 종전엔 good-signal 분기에서만
-    갱신돼, 다른 경로로 리셋된 뒤의 good-signal 판정이 **옛 기준**과 비교됐다. 그러면 실제
+    **기준 무효화** — reset_rssi 는 "마지막 리셋 시점의 RSSI" 여야 하는데 종전엔 good-signal
+    분기에서만 갱신돼, 다른 경로로 리셋된 뒤의 판정이 **옛 기준**과 비교됐다. 그러면 실제
     이동 후에도 억제되거나(Δ가 옛 기준 대비 작게 나옴) 최신 리셋 이전의 변화로 리셋이
     허용될 수 있다. hint 경로는 station 조회 **전**이라 RSSI 를 모르므로 None 으로 무효화한다
-    — 다음 good-signal 이 no-baseline 으로 허용되며 기준을 다시 잡는다(보수적: 허용 쪽)."""
+    — 다음 good-signal 이 no-baseline 으로 허용되며 기준을 다시 잡는다(보수적: 허용 쪽).
+
+    **억제 이력 정리** — streak 가 0 이 되면 그때까지의 억제는 이미 무효가 된다(억제의 목적이
+    streak 유지인데 다른 경로가 그걸 0 으로 만들었다). 그 카운트를 남기면 다음 요약이
+    "이전 N회 억제, streak=0 유지했었음" 처럼 찍혀 **억제가 실익 없었다는 오독**을 부른다."""
     gs["reset_rssi"] = None
+    gs["suppressed"] = 0
 
 
 def good_signal_reset_allowed(cur_rssi, last_reset_rssi, last_assoc_ts, now=None):
@@ -3013,7 +3018,7 @@ def main():
         if roam_hint_touched(hint_state):
             no_candidate_streak = 0
             last_backoff_cap_ts = None
-            invalidate_reset_baseline(gs)
+            on_streak_reset(gs)
 
         # Load 정보 포함하여 연결 상태 확인
         station = get_link_info_with_load()
@@ -3192,7 +3197,7 @@ def main():
             last_backoff_cap_ts = None
             # 게이트 기준도 함께 무효화 — 로밍이 성공하면 BSSID 변경이 track_association 에서
             # 처리하지만, **실패하면** BSSID 가 그대로라 옛 기준이 남는다.
-            invalidate_reset_baseline(gs)
+            on_streak_reset(gs)
             logger.message(
                 "emerg",
                 f"[{IFACE}] Roaming: {station['bssid']} → {best_ap['bssid']}, "
