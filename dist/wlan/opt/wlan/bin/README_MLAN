@@ -5398,10 +5398,10 @@ Legacy rate indexes for group 0:
 	10  48 Mbps
 	11  54 Mbps
 
-For HT, VHT, and HE groups, <rate_index> is the MCS index.  For NSS 2
-operation, still pass the MCS index shown by iw link, not the combined MCS
-number.  For example, "80MHz HE-MCS 11 HE-NSS 2" uses group 14 and rate_index
-11.
+For HT groups, <rate_index> is the combined MCS index 0..15 (for example,
+HT NSS 2 MCS 7 is index 15).  For VHT and HE groups, pass the per-NSS MCS
+index shown by iw link, not a combined index.  For example,
+"80MHz HE-MCS 11 HE-NSS 2" uses group 14 and rate_index 11.
 
 Examples:
 	1) Read the current TX power table:
@@ -5421,7 +5421,7 @@ Examples:
 		mlanutl mlan0 txratecfg 0 4
 		mlanutl mlan0 txpowercfg 0 4 5
 
-	4) Fix HT20 MCS15 TX power to 10 dBm:
+	4) Fix HT20 MCS15 TX power to 10 dBm (while associated at 20 MHz):
 		mlanutl mlan0 txratecfg 1 15
 		mlanutl mlan0 txpowercfg 1 15 10
 
