@@ -163,6 +163,29 @@ update_json_roaming_int() {
     fi
 }
 
+# GOOD_SIGNAL_RESET_GATE 의 코드 기본값 — wifi_roam.py 의 DEFAULT_GOOD_SIGNAL_GATE_* 와
+# **같아야 한다**. JSON 에 키가 없을 때 데몬이 무엇을 쓰는지 표시하기 위한 사본이며,
+# 두 값의 일치는 tests/test_roam_goodsignal_gate.py 가 파일을 파싱해 검증한다(drift 차단).
+GATE_DEF_ENABLE=false
+GATE_DEF_DELTA_DB=2
+GATE_DEF_GRACE_SEC=40
+
+# GOOD_SIGNAL_RESET_GATE 키의 **적용 중인 값**을 출처와 함께 출력.
+# JSON 에 있으면 그 값, 없으면 `<기본값>(default)`. jq 실패는 비0 으로 전파해 호출부가
+# "읽기 실패"와 "키 없음"을 구분할 수 있게 한다.
+gate_effective() {
+    local key="$1"
+    local fallback="$2"
+    local v
+
+    v=$(jq -r ".${IFACE}.roaming.GOOD_SIGNAL_RESET_GATE.${key} // empty" "$WIFI_INIT_CONF_JSON") || return 1
+    if [ -z "$v" ]; then
+        echo "${fallback}(default)"
+    else
+        echo "$v"
+    fi
+}
+
 # roaming 하위 **섹션 블록**의 키를 갱신(예: GOOD_SIGNAL_RESET_GATE.enable).
 # update_json_roaming_int 는 `.roaming[key]` 1단계만 다루므로 중첩 블록용으로 분리했다.
 # value 는 --argjson 이라 bool(true/false)·정수 모두 그대로 넣을 수 있다.
@@ -1800,9 +1823,12 @@ case "$2" in
         fi
         GATE_SUB="${4:-}"
         if [ -z "$GATE_SUB" ]; then
-            if ! GEN=$(jq -r ".${IFACE}.roaming.GOOD_SIGNAL_RESET_GATE.enable // \"unset\"" "$WIFI_INIT_CONF_JSON") \
-               || ! GDL=$(jq -r ".${IFACE}.roaming.GOOD_SIGNAL_RESET_GATE.delta_db // \"unset\"" "$WIFI_INIT_CONF_JSON") \
-               || ! GGR=$(jq -r ".${IFACE}.roaming.GOOD_SIGNAL_RESET_GATE.post_roam_grace_sec // \"unset\"" "$WIFI_INIT_CONF_JSON"); then
+            # JSON 에 키가 없으면 데몬은 wifi_roam.py 의 DEFAULT_* 를 쓴다. 종전엔 그 경우를
+            # "unset" 으로만 찍어 **실제 적용값을 알 수 없었다**(gate on 은 enable 만 넣으므로
+            # 흔한 상태다). 적용 중인 값과 그 출처를 함께 보여준다.
+            if ! GEN=$(gate_effective enable "$GATE_DEF_ENABLE") \
+               || ! GDL=$(gate_effective delta_db "$GATE_DEF_DELTA_DB") \
+               || ! GGR=$(gate_effective post_roam_grace_sec "$GATE_DEF_GRACE_SEC"); then
                 echo "Error: failed to read ${IFACE}.roaming.GOOD_SIGNAL_RESET_GATE from $WIFI_INIT_CONF_JSON" >&2
                 exit 1
             fi

@@ -204,3 +204,29 @@ def test_config_garbage_falls_back(monkeypatch, restore_globals):
     _load(monkeypatch, {"GOOD_SIGNAL_RESET_GATE": {"enable": "yes", "delta_db": "abc"}})
     assert isinstance(wifi_roam.GOOD_SIGNAL_GATE_DELTA_DB, int)
     assert wifi_roam.GOOD_SIGNAL_GATE_DELTA_DB >= 1
+
+
+# ── wifi.sh 기본값 사본과의 동기 ──
+
+
+def test_wifi_sh_gate_defaults_match_python():
+    """`wifi <if> roam gate` 표시용으로 wifi.sh 가 들고 있는 기본값 사본이 이 모듈의
+    DEFAULT_GOOD_SIGNAL_GATE_* 와 일치하는지 검증한다.
+
+    사본을 둔 이유: JSON 에 키가 없을 때 데몬이 무엇을 쓰는지 CLI 가 보여주려면 값이
+    필요한데, 셸에서 파이썬 상수를 읽는 것은 비싸다. 대신 여기서 두 파일을 파싱해
+    비교함으로써 drift 를 차단한다. 경로가 틀리면 skip 이 아니라 **실패**해야 한다
+    (조용한 skip 으로 검출력을 잃은 전례가 있다)."""
+    sh = os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "wifi.sh")
+    assert os.path.isfile(sh), f"wifi.sh 경로가 틀렸다: {sh}"
+    text = open(sh, encoding="utf-8").read()
+
+    import re
+    def sh_val(name):
+        m = re.search(rf"^{name}=(\S+)", text, re.M)
+        assert m, f"wifi.sh 에 {name} 정의가 없다"
+        return m.group(1)
+
+    assert sh_val("GATE_DEF_ENABLE") == str(wifi_roam.DEFAULT_ENABLE_GOOD_SIGNAL_GATE).lower()
+    assert int(sh_val("GATE_DEF_DELTA_DB")) == wifi_roam.DEFAULT_GOOD_SIGNAL_GATE_DELTA_DB
+    assert int(sh_val("GATE_DEF_GRACE_SEC")) == wifi_roam.DEFAULT_GOOD_SIGNAL_GATE_GRACE_SEC

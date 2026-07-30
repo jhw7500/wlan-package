@@ -3189,10 +3189,14 @@ def main():
         backoff, no_candidate_streak, last_backoff_cap_ts = (
             advance_no_candidate_backoff(no_candidate_streak, last_backoff_cap_ts)
         )
+        # 게이트가 억제 중이면 그 횟수를 병기한다. 억제만 이어지는 동안에는 good-signal
+        # 분기가 아무 로그도 남기지 않아(요약은 '억제→리셋' 전이에서만 찍힌다) 운용 중
+        # 상태를 알 수 없었다 — 이미 매 tick 찍히는 이 줄에 얹어 볼륨 증가 없이 노출한다.
+        gate_note = f", gate_suppressed={gate_suppressed}" if gate_suppressed else ""
         logger.message(
             "info",
             f"[{IFACE}] No suitable roam candidate found "
-            f"(no-candidate backoff={backoff}s, streak={no_candidate_streak})",
+            f"(no-candidate backoff={backoff}s, streak={no_candidate_streak}{gate_note})",
             _EXTRA_(),
         )
         interruptible_sleep(backoff)
