@@ -248,8 +248,10 @@ def new_gate_state():
     return {"bssid": None, "assoc_ts": None, "reset_rssi": None, "suppressed": 0}
 
 
-def track_association(station, gs):
+def track_association(station, gs, now=None):
     """결합 변화(로밍·자율 재연결·연결 끊김)를 감지해 게이트 기준을 갱신. 반환=새 결합 여부.
+
+    now 는 결합 시각 주입용(테스트 격리) — good_signal_reset_allowed 와 같은 규약.
 
     **station 이 None 이면 bssid 를 비운다.** 비우지 않으면 끊겼다 **같은 AP** 로 재결합할 때
     BSSID 비교가 같아 새 결합을 못 알아채고, attach ramp grace 가 적용되지 않은 채 끊김 전
@@ -267,7 +269,7 @@ def track_association(station, gs):
     if not cur or cur == gs["bssid"]:
         return False
     gs["bssid"] = cur
-    gs["assoc_ts"] = time.time()
+    gs["assoc_ts"] = time.time() if now is None else now
     gs["reset_rssi"] = None
     gs["suppressed"] = 0
     return True
@@ -3083,8 +3085,11 @@ def main():
                 no_candidate_streak = 0
                 last_backoff_cap_ts = None
                 gs["reset_rssi"] = station["rssi"]
-            else:
+            elif no_candidate_streak:
                 # 억제 — 매 tick(2초) 로그는 볼륨 문제라 카운터만 누적하고 위에서 요약한다.
+                # streak 가 이미 0 이면 억제할 대상이 없다(리셋해도 결과가 같다). 그때도
+                # 카운트하면 요약이 "43회 억제, streak=0 유지했었음" 처럼 실익 없는 숫자를
+                # 보고한다 — 실기 로그에서 실제로 관측됐다.
                 gs["suppressed"] += 1
 
             if ENABLE_ADAPTIVE_INTERVAL and adaptive_interval:
