@@ -5430,6 +5430,7 @@ Examples:
 		mlanutl mlan0 txpowercfg 14 11 5
 
 	6) Fix HE 1 NSS 80 MHz MCS11 TX power to 5 dBm:
+		mlanutl mlan0 txratecfg 3 11 1
 		mlanutl mlan0 txpowercfg 13 11 5
 
 Notes:
@@ -5464,7 +5465,7 @@ Notes:
 	   group 14 is supported.  Increasing the host MAX_POWER_GROUP value
 	   does not add entries that firmware did not return.
 
-	6) scripts/txpower_family_set.sh records successful SET commands under
+	6) /usr/local/scripts/txpower_family_set.sh records successful SET commands under
 	   /run and uses that state for --status.  This is needed for group 14
 	   and for firmware whose mode field does not change after 0xFF.
 	   Direct mlanutl commands are not visible to this script state.
