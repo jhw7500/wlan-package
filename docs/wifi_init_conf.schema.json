@@ -1379,6 +1379,39 @@
                 }
               }
             },
+            "GOOD_SIGNAL_RESET_GATE": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "신호 양호(rssi >= 임계) 분기의 후보없음 backoff streak 리셋을 '위치가 실제로 변했을 때만' 허용하는 게이트",
+              "properties": {
+                "enable": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "false(기본)면 종전대로 무조건 리셋(무회귀). true 면 직전 리셋 시점 대비 |Δrssi| >= delta_db 일 때만 리셋한다. 근거: 정체 18.85h 재생에서 오탐 리셋 662건 중 624건(94%)이 이 분기이고 그중 623건이 Δ0dB — 임계 바로 위에서 진동할 뿐 위치가 안 변한 경우로, 리셋되면 다음 악화에 backoff 가 3초부터 다시 올라가 스캔이 폭증한다. 켜면 스캔 3377→1417(-58.0%, airtime duty 5.44%→2.28%), 이동 로그(71개 90.1h)는 -0.0%·추가지연 0건",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "runtime",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "delta_db": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 2,
+                  "description": "리셋을 허용하는 최소 |Δrssi|(dB). 매 tick 직전값이 아니라 **직전 리셋 시점** 기준 누적 변화라 1dB 씩 천천히 이동하는 구간도 누적으로 잡는다. 재생 실측상 1/2/3/5 가 전부 -58.0~-58.1% 로 동일(리셋 지점의 Δ가 0dB 에 몰림) — 1dB 양자화 여유를 둔 2 권장",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "runtime",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "post_roam_grace_sec": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 40,
+                  "description": "결합(로밍·재연결·부팅 후 첫 관측) 후 이 시간(초) 동안은 게이트를 우회해 종전처럼 리셋한다. 결합 직후 RSSI 는 25초에 걸쳐 12~14dB 하강하는 측정 램프(attach ramp — TX rate 불변이라 실제 링크 열화가 아니다)라, 그 큰 Δ 를 '이동'으로 읽으면 게이트가 무력화된다",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "runtime",
+                  "x-consumer": "wifi_roam.py"
+                }
+              }
+            },
             "STAGED_SCAN": {
               "type": "object",
               "additionalProperties": true,
@@ -2280,6 +2313,39 @@
                   "description": "핑퐁 감지 후 로밍 억제 시간(초)",
                   "x-ui-editable": "yes",
                   "x-apply-timing": "daemon-restart",
+                  "x-consumer": "wifi_roam.py"
+                }
+              }
+            },
+            "GOOD_SIGNAL_RESET_GATE": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "신호 양호(rssi >= 임계) 분기의 후보없음 backoff streak 리셋을 '위치가 실제로 변했을 때만' 허용하는 게이트",
+              "properties": {
+                "enable": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "false(기본)면 종전대로 무조건 리셋(무회귀). true 면 직전 리셋 시점 대비 |Δrssi| >= delta_db 일 때만 리셋한다. 근거: 정체 18.85h 재생에서 오탐 리셋 662건 중 624건(94%)이 이 분기이고 그중 623건이 Δ0dB — 임계 바로 위에서 진동할 뿐 위치가 안 변한 경우로, 리셋되면 다음 악화에 backoff 가 3초부터 다시 올라가 스캔이 폭증한다. 켜면 스캔 3377→1417(-58.0%, airtime duty 5.44%→2.28%), 이동 로그(71개 90.1h)는 -0.0%·추가지연 0건",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "runtime",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "delta_db": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 2,
+                  "description": "리셋을 허용하는 최소 |Δrssi|(dB). 매 tick 직전값이 아니라 **직전 리셋 시점** 기준 누적 변화라 1dB 씩 천천히 이동하는 구간도 누적으로 잡는다. 재생 실측상 1/2/3/5 가 전부 -58.0~-58.1% 로 동일(리셋 지점의 Δ가 0dB 에 몰림) — 1dB 양자화 여유를 둔 2 권장",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "runtime",
+                  "x-consumer": "wifi_roam.py"
+                },
+                "post_roam_grace_sec": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 40,
+                  "description": "결합(로밍·재연결·부팅 후 첫 관측) 후 이 시간(초) 동안은 게이트를 우회해 종전처럼 리셋한다. 결합 직후 RSSI 는 25초에 걸쳐 12~14dB 하강하는 측정 램프(attach ramp — TX rate 불변이라 실제 링크 열화가 아니다)라, 그 큰 Δ 를 '이동'으로 읽으면 게이트가 무력화된다",
+                  "x-ui-editable": "yes",
+                  "x-apply-timing": "runtime",
                   "x-consumer": "wifi_roam.py"
                 }
               }

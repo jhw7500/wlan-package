@@ -68,6 +68,29 @@ ENABLE_STAGED_SCAN = DEFAULT_ENABLE_STAGED_SCAN
 CACHE_FRESH_SEC = DEFAULT_CACHE_FRESH_SEC
 SKIP_REDUNDANT_ACTIVE_SCAN = DEFAULT_SKIP_REDUNDANT_ACTIVE_SCAN
 HOME_PASSIVE = DEFAULT_HOME_PASSIVE
+
+# ── good-signal 리셋 게이트 ─────────────────────────────────────────────────
+# 메인루프의 good-signal 분기(rssi >= threshold)는 후보없음 backoff streak 를 **무조건**
+# 리셋한다. 실측(정체 18.85h 재생)에서 오탐 리셋 662건 중 624건(94%)이 이 분기였고 그중
+# 623건이 Δ0dB — 임계 바로 위에서 진동할 뿐 위치가 안 변한 경우다. 리셋되면 다음 악화에
+# backoff 가 시작값(3초)부터 다시 올라가 스캔이 폭증한다(스캔 3377→1417, -58.0%;
+# airtime duty 5.44%→2.28%). 이동 로그(71개 90.1h)에서는 스캔 -0.0%·추가지연 0건으로
+# 이동 시 재탐색성은 보존됐다.
+#
+# 판정은 "직전 리셋 시점 대비 |Δrssi| >= delta_db" 다. 재생 실측상 delta 값 1/2/3/5 가
+# 전부 -58.0~-58.1% 로 동일해(리셋 지점의 Δ가 0dB 에 몰림) 1dB 양자화 여유를 둔 2 를 기본으로
+# 한다. 설계의 2층(60초 peak-to-peak >= 5dB)은 이 파일의 RSSI 이력이 ENABLE_PREDICTIVE_ROAM
+# 게이트 안에서만 쌓이고(그래서 출하 기본에서 비어 있음) 샘플 간격도 2~30초로 흔들려
+# 후속 범위로 미뤘다 — 1층만으로 위 효과의 거의 전부를 얻는다.
+DEFAULT_ENABLE_GOOD_SIGNAL_GATE = False  # 무회귀 기본 off — 실기 A/B 후 전환 판단
+DEFAULT_GOOD_SIGNAL_GATE_DELTA_DB = 2
+# 결합 직후 RSSI 는 25초에 걸쳐 12~14dB 하강한다(attach ramp — TX rate 불변이라 실제 링크
+# 열화가 아닌 측정 램프). 그 구간의 큰 Δ 를 "이동"으로 읽으면 게이트가 무력화되므로, 결합
+# 후 이 시간 동안은 종전처럼 무조건 리셋한다(보수적).
+DEFAULT_GOOD_SIGNAL_GATE_GRACE_SEC = 40
+ENABLE_GOOD_SIGNAL_GATE = DEFAULT_ENABLE_GOOD_SIGNAL_GATE
+GOOD_SIGNAL_GATE_DELTA_DB = DEFAULT_GOOD_SIGNAL_GATE_DELTA_DB
+GOOD_SIGNAL_GATE_GRACE_SEC = DEFAULT_GOOD_SIGNAL_GATE_GRACE_SEC
 # 위 5개(enable/cache_fresh/self_induced_tail/skip_redundant_active/home_passive)는 wifi_init_conf.json
 # `.<iface>.roaming.STAGED_SCAN` 에서 런타임 조정 가능(SIGHUP reload). 현장에서 재배포 없이
 # 단계형 스캔을 끄거나(무회귀 폴백) 임계값을 튜닝하기 위한 것.
@@ -214,6 +237,91 @@ def compute_no_result_backoff(streak, fast_count=1):
     eff = min(over, _no_result_max_level())
     backoff = SCAN_NO_RESULT_SLEEP * (2 ** eff)
     return int(min(backoff, ROAM_NO_RESULT_MAX_SLEEP))
+
+
+def new_gate_state():
+    """good-signal 게이트의 tick 간 상태.
+
+    bssid=결합 변화 감지용, assoc_ts=마지막 결합 시각(attach ramp grace),
+    reset_rssi=마지막으로 streak 를 리셋한 시점의 RSSI(변화 누적 기준),
+    suppressed=억제 누적(매 tick 로그는 볼륨 문제라 리셋 시 1회 요약)."""
+    return {"bssid": None, "assoc_ts": None, "reset_rssi": None, "suppressed": 0}
+
+
+def track_association(station, gs, now=None):
+    """결합 변화(로밍·자율 재연결·연결 끊김)를 감지해 게이트 기준을 갱신. 반환=새 결합 여부.
+
+    now 는 결합 시각 주입용(테스트 격리) — good_signal_reset_allowed 와 같은 규약.
+
+    **station 이 None 이면 bssid 를 비운다.** 비우지 않으면 끊겼다 **같은 AP** 로 재결합할 때
+    BSSID 비교가 같아 새 결합을 못 알아채고, attach ramp grace 가 적용되지 않은 채 끊김 전
+    baseline·streak 으로 판정한다. station=None 은 실제 끊김뿐 아니라 link.json stale·부재도
+    포함하지만, 재결합을 놓치는 것보다 grace 를 한 번 더 주는 편이 보수적이다.
+
+    결합이 바뀌면 reset_rssi 를 비우고(옛 AP RSSI 와 비교는 무의미) suppressed 도 0 으로
+    돌린다 — 구 AP 에서 쌓인 억제 카운트가 새 AP 문맥의 요약 로그에 섞이면 오해를 준다.
+
+    로밍 경로에만 두면 supplicant 자율 재연결을 놓치므로 BSSID 관측으로 감지한다."""
+    # `is None` 으로 명시 — get_link_info_with_load 는 None 또는 채워진 dict 만 반환하므로
+    # falsy 검사와 결과가 같지만, "연결 정보 없음" 이라는 의도를 코드에 드러낸다.
+    if station is None:
+        gs["bssid"] = None
+        return False
+    cur = station.get("bssid")
+    if not cur or cur == gs["bssid"]:
+        return False
+    gs["bssid"] = cur
+    gs["assoc_ts"] = time.time() if now is None else now
+    gs["reset_rssi"] = None
+    gs["suppressed"] = 0
+    return True
+
+
+def on_streak_reset(gs):
+    """good-signal 이 아닌 경로(bgscan hint / 후보 발견)로 streak 가 리셋될 때 호출.
+
+    **기준 무효화** — reset_rssi 는 "마지막 리셋 시점의 RSSI" 여야 하는데 종전엔 good-signal
+    분기에서만 갱신돼, 다른 경로로 리셋된 뒤의 판정이 **옛 기준**과 비교됐다. 그러면 실제
+    이동 후에도 억제되거나(Δ가 옛 기준 대비 작게 나옴) 최신 리셋 이전의 변화로 리셋이
+    허용될 수 있다. hint 경로는 station 조회 **전**이라 RSSI 를 모르므로 None 으로 무효화한다
+    — 다음 good-signal 이 no-baseline 으로 허용되며 기준을 다시 잡는다(보수적: 허용 쪽).
+
+    **억제 이력 정리** — streak 가 0 이 되면 그때까지의 억제는 이미 무효가 된다(억제의 목적이
+    streak 유지인데 다른 경로가 그걸 0 으로 만들었다). 그 카운트를 남기면 다음 요약이
+    "이전 N회 억제, streak=0 유지했었음" 처럼 찍혀 **억제가 실익 없었다는 오독**을 부른다."""
+    gs["reset_rssi"] = None
+    gs["suppressed"] = 0
+
+
+def good_signal_reset_allowed(cur_rssi, last_reset_rssi, last_assoc_ts, now=None):
+    """good-signal 분기(rssi >= threshold)에서 후보없음 backoff streak 를 리셋해도 되는지.
+
+    종전은 무조건 리셋이었다. 실측(정체 18.85h 재생)에서 오탐 리셋 662건 중 624건(94%)이
+    이 분기였고 그중 623건이 **Δ0dB** — 임계 바로 위에서 진동할 뿐 위치가 안 변한 경우다.
+    리셋되면 다음 악화에 backoff 가 3초부터 다시 올라가 스캔이 폭증한다.
+
+    판정 = 직전 리셋 시점 대비 |Δrssi| >= GOOD_SIGNAL_GATE_DELTA_DB.
+    "리셋 시점"을 기준으로 삼는 이유: 매 tick 직전값과 비교하면 1dB 씩 천천히 이동하는
+    구간에서 매번 Δ<delta 로 억제돼 이동을 놓친다. 리셋 이후 누적 변화를 봐야 한다.
+
+    허용(=종전 동작)으로 떨어지는 예외 셋:
+      - 게이트 비활성(무회귀 경로)
+      - 기준값 없음(프로세스 시작 직후 첫 판정) — 보수적으로 허용
+      - 결합 후 GRACE_SEC 이내 — attach ramp(25초에 12~14dB 하강)의 큰 Δ 를 이동으로
+        오독하지 않도록 게이트를 우회한다
+    """
+    if not ENABLE_GOOD_SIGNAL_GATE:
+        return True, "gate-disabled"
+    if last_reset_rssi is None:
+        return True, "no-baseline"
+    if last_assoc_ts is not None:
+        now = time.time() if now is None else now
+        if now - last_assoc_ts < GOOD_SIGNAL_GATE_GRACE_SEC:
+            return True, "post-assoc-grace"
+    delta = abs(cur_rssi - last_reset_rssi)
+    if delta >= GOOD_SIGNAL_GATE_DELTA_DB:
+        return True, f"moved({delta}dB)"
+    return False, f"stationary({delta}dB)"
 
 
 def advance_no_candidate_backoff(streak, cap_ts):
@@ -416,6 +524,11 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
             "ENABLE_STAGED_SCAN": config["ENABLE_STAGED_SCAN"],
             "SKIP_REDUNDANT_ACTIVE_SCAN": config["SKIP_REDUNDANT_ACTIVE_SCAN"],
             "HOME_PASSIVE": config["HOME_PASSIVE"],
+            "ENABLE_GOOD_SIGNAL_GATE": config["ENABLE_GOOD_SIGNAL_GATE"],
+            # delta_db 는 0 이면 게이트가 전부 통과(=기능 무효)라 하한 1. grace 는 0 이면
+            # attach ramp 보호가 사라지므로 하한 1 (끄려면 enable=false 를 쓴다).
+            "GOOD_SIGNAL_GATE_DELTA_DB": _num("GOOD_SIGNAL_GATE_DELTA_DB", minimum=1),
+            "GOOD_SIGNAL_GATE_GRACE_SEC": _num("GOOD_SIGNAL_GATE_GRACE_SEC", minimum=1),
             # _positive_int caster 와 같은 하한 — flat 덮어쓰기 루프가 그 검증을 우회한다.
             # 0 이면 Stage 2 영구 비활성 / 자기 스캔 유발 블록 미필터(stale 로밍).
             "CACHE_FRESH_SEC": _num("CACHE_FRESH_SEC", minimum=1),
@@ -476,6 +589,9 @@ def load_roaming_config(iface, data=None):
         "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC": DEFAULT_ROAM_NO_RESULT_BACKOFF_RECOVER_SEC,
         "ROAM_CROSS_FAIL_RETRY_COUNT": DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT,
         "ROAM_NO_RESULT_FAST_COUNT": DEFAULT_ROAM_NO_RESULT_FAST_COUNT,
+        "ENABLE_GOOD_SIGNAL_GATE": DEFAULT_ENABLE_GOOD_SIGNAL_GATE,
+        "GOOD_SIGNAL_GATE_DELTA_DB": DEFAULT_GOOD_SIGNAL_GATE_DELTA_DB,
+        "GOOD_SIGNAL_GATE_GRACE_SEC": DEFAULT_GOOD_SIGNAL_GATE_GRACE_SEC,
         "ENABLE_STAGED_SCAN": DEFAULT_ENABLE_STAGED_SCAN,
         "SKIP_REDUNDANT_ACTIVE_SCAN": DEFAULT_SKIP_REDUNDANT_ACTIVE_SCAN,
         "HOME_PASSIVE": DEFAULT_HOME_PASSIVE,
@@ -564,6 +680,20 @@ def load_roaming_config(iface, data=None):
                         ("home_passive", "HOME_PASSIVE", parse_bool),
                         ("cache_fresh_sec", "CACHE_FRESH_SEC", _positive_int),
                         ("self_induced_tail_sec", "SELF_INDUCED_TAIL_SEC", _positive_int),
+                    ],
+                )
+
+            # good-signal 분기의 backoff streak 리셋 게이트(모듈 상단 주석 참조).
+            # enable=false(기본)면 종전대로 무조건 리셋 — 무회귀.
+            gsg = roam_config.get("GOOD_SIGNAL_RESET_GATE")
+            if isinstance(gsg, dict):
+                _apply_section_values(
+                    config,
+                    gsg,
+                    [
+                        ("enable", "ENABLE_GOOD_SIGNAL_GATE", parse_bool),
+                        ("delta_db", "GOOD_SIGNAL_GATE_DELTA_DB", _positive_int),
+                        ("post_roam_grace_sec", "GOOD_SIGNAL_GATE_GRACE_SEC", _positive_int),
                     ],
                 )
 
@@ -669,7 +799,9 @@ def load_roaming_config(iface, data=None):
         f"ping_pong(window={PING_PONG_WINDOW}, max_roams={MAX_ROAMS_IN_WINDOW}, detect_time={PING_PONG_DETECTION_TIME}), "
         f"adaptive(min={MIN_CHECK_INTERVAL}, max={MAX_CHECK_INTERVAL}), "
         f"post_roam_arp(garp_count={POST_ROAM_GARP_COUNT}, garp_wait={POST_ROAM_GARP_WAIT}, "
-        f"peer_warmup={ENABLE_POST_ROAM_PEER_WARMUP}, peer_count={POST_ROAM_PEER_COUNT}, peer_wait={POST_ROAM_PEER_WAIT})",
+        f"peer_warmup={ENABLE_POST_ROAM_PEER_WARMUP}, peer_count={POST_ROAM_PEER_COUNT}, peer_wait={POST_ROAM_PEER_WAIT}), "
+        f"good_signal_gate(enable={ENABLE_GOOD_SIGNAL_GATE}, delta_db={GOOD_SIGNAL_GATE_DELTA_DB}, "
+        f"grace_sec={GOOD_SIGNAL_GATE_GRACE_SEC})",
         _EXTRA_(),
     )
 
@@ -2871,6 +3003,8 @@ def main():
     no_candidate_streak = 0
     last_backoff_cap_ts = None
     hint_state = {"hint_mtime": None}
+    # good-signal 게이트 상태(new_gate_state / track_association 참조).
+    gs = new_gate_state()
 
     while True:
         # SIGHUP 수신 시에만 wifi_init_conf.json 재읽어 반영(폴링 없음 → 프로덕션 비용 0).
@@ -2886,9 +3020,14 @@ def main():
         if roam_hint_touched(hint_state):
             no_candidate_streak = 0
             last_backoff_cap_ts = None
+            on_streak_reset(gs)
 
         # Load 정보 포함하여 연결 상태 확인
         station = get_link_info_with_load()
+
+        # 결합 추적은 **station 유효성 판정 전에** 한다 — station=None(끊김·link.json stale)
+        # 에서 bssid 를 비워야 같은 AP 로의 재결합도 새 결합으로 감지된다(track_association).
+        track_association(station, gs)
 
         if not station:
             interruptible_sleep(CHECK_INTERVAL)
@@ -2935,8 +3074,34 @@ def main():
         if station["rssi"] >= predictive_threshold:
             set_flag(0, ROAM_CONDITION_FLAG)
             # 신호 양호(로밍 불필요) → 후보없음 streak 해제. 다음 악화 시 시작값부터 backoff.
-            no_candidate_streak = 0
-            last_backoff_cap_ts = None
+            # 단 게이트가 켜져 있으면 **위치가 실제로 변했을 때만** 리셋한다 — 임계 바로
+            # 위에서의 Δ0dB 진동이 backoff 를 3초로 되돌려 스캔을 폭증시키던 경로다
+            # (good_signal_reset_allowed 참조).
+            allowed, why = good_signal_reset_allowed(
+                station["rssi"], gs["reset_rssi"], gs["assoc_ts"]
+            )
+            if allowed:
+                if gs["suppressed"]:
+                    logger.message(
+                        "info",
+                        f"[{IFACE}] good-signal streak reset ({why}) — "
+                        f"이전 {gs['suppressed']}회 억제, streak={no_candidate_streak} 유지했었음",
+                        _EXTRA_(),
+                    )
+                # 리셋 동반 정리는 on_streak_reset 에 위임 — suppressed 초기화가 이 경로와
+                # hint·후보발견 경로에 나뉘어 있으면 향후 필드가 추가될 때 한쪽이 빠진다.
+                on_streak_reset(gs)
+                no_candidate_streak = 0
+                last_backoff_cap_ts = None
+                # 허용 경로 전용: 다음 판정의 비교 기준을 현재 RSSI 로 갱신(on_streak_reset 이
+                # None 으로 비운 것을 여기서 채운다 — 순서 의존이므로 위임 뒤에 와야 한다).
+                gs["reset_rssi"] = station["rssi"]
+            elif no_candidate_streak:
+                # 억제 — 매 tick(2초) 로그는 볼륨 문제라 카운터만 누적하고 위에서 요약한다.
+                # streak 가 이미 0 이면 억제할 대상이 없다(리셋해도 결과가 같다). 그때도
+                # 카운트하면 요약이 "43회 억제, streak=0 유지했었음" 처럼 실익 없는 숫자를
+                # 보고한다 — 실기 로그에서 실제로 관측됐다.
+                gs["suppressed"] += 1
 
             if ENABLE_ADAPTIVE_INTERVAL and adaptive_interval:
                 interval = adaptive_interval.update(rssi, base_threshold, trend)
@@ -3036,6 +3201,9 @@ def main():
             # 후보 발견 → backoff 리셋(spec §4 reset). 다음 후보없음은 시작값부터.
             no_candidate_streak = 0
             last_backoff_cap_ts = None
+            # 게이트 기준도 함께 무효화 — 로밍이 성공하면 BSSID 변경이 track_association 에서
+            # 처리하지만, **실패하면** BSSID 가 그대로라 옛 기준이 남는다.
+            on_streak_reset(gs)
             logger.message(
                 "emerg",
                 f"[{IFACE}] Roaming: {station['bssid']} → {best_ap['bssid']}, "
@@ -3076,10 +3244,14 @@ def main():
         backoff, no_candidate_streak, last_backoff_cap_ts = (
             advance_no_candidate_backoff(no_candidate_streak, last_backoff_cap_ts)
         )
+        # 게이트가 억제 중이면 그 횟수를 병기한다. 억제만 이어지는 동안에는 good-signal
+        # 분기가 아무 로그도 남기지 않아(요약은 '억제→리셋' 전이에서만 찍힌다) 운용 중
+        # 상태를 알 수 없었다 — 이미 매 tick 찍히는 이 줄에 얹어 볼륨 증가 없이 노출한다.
+        gate_note = f", gate_suppressed={gs['suppressed']}" if gs["suppressed"] else ""
         logger.message(
             "info",
             f"[{IFACE}] No suitable roam candidate found "
-            f"(no-candidate backoff={backoff}s, streak={no_candidate_streak})",
+            f"(no-candidate backoff={backoff}s, streak={no_candidate_streak}{gate_note})",
             _EXTRA_(),
         )
         interruptible_sleep(backoff)
