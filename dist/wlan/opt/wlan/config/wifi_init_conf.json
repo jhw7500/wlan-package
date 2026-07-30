@@ -357,6 +357,15 @@
                 "_comment_self_induced_tail_sec": "자기(로밍 판정) 스캔 종료 후 이 시간(초) 안에 기록된 ap.log 블록은 그 스캔이 유발한 것으로 보고 배경 캐시로 쓰지 않음",
                 "self_induced_tail_sec": 10
             },
+            "GOOD_SIGNAL_RESET_GATE": {
+                "_comment": "신호 양호(rssi >= 임계) 분기에서 후보없음 backoff streak 리셋을 '위치가 실제로 변했을 때만' 허용하는 게이트. 키별 설명은 _comment_<키> 참조. 전 키 SIGHUP으로 런타임 반영.",
+                "_comment_enable": "false(기본)면 종전대로 무조건 리셋(무회귀). true면 직전 리셋 시점 대비 |Δrssi| >= delta_db 일 때만 리셋. 근거: 정체 18.85h 재생에서 오탐 리셋 662건 중 624건(94%)이 이 분기이고 그중 623건이 Δ0dB — 임계 바로 위 진동이 backoff를 3초로 되돌려 스캔 폭증. 켜면 스캔 3377→1417(-58.0%), 이동 로그(71개 90.1h)는 -0.0%·추가지연 0건",
+                "enable": false,
+                "_comment_delta_db": "리셋을 허용하는 최소 |Δrssi|(dB, 직전 리셋 시점 기준 누적). 재생 실측상 1/2/3/5 전부 -58.0~-58.1%로 동일(리셋 지점 Δ가 0dB에 몰림) — 1dB 양자화 여유를 둔 2 권장. 0은 게이트 무효라 하한 1",
+                "delta_db": 2,
+                "_comment_post_roam_grace_sec": "결합(로밍·재연결) 후 이 시간(초) 동안은 게이트를 우회해 종전처럼 리셋. 결합 직후 RSSI는 25초에 걸쳐 12~14dB 하강하는 측정 램프(attach ramp, TX rate 불변)라 그 Δ를 '이동'으로 읽으면 게이트가 무력화됨",
+                "post_roam_grace_sec": 40
+            },
             "ADAPTIVE_INTERVAL": {
                 "_comment": [
                     "RSSI 변화에 따른 체크 주기 자동 조절. 신호 불안정 시 주기 단축, 안정 시 연장",
@@ -560,6 +569,15 @@
                 "cache_fresh_sec": 70,
                 "_comment_self_induced_tail_sec": "자기(로밍 판정) 스캔 종료 후 이 시간(초) 안에 기록된 ap.log 블록은 그 스캔이 유발한 것으로 보고 배경 캐시로 쓰지 않음",
                 "self_induced_tail_sec": 10
+            },
+            "GOOD_SIGNAL_RESET_GATE": {
+                "_comment": "신호 양호(rssi >= 임계) 분기에서 후보없음 backoff streak 리셋을 '위치가 실제로 변했을 때만' 허용하는 게이트. 키별 설명은 _comment_<키> 참조. 전 키 SIGHUP으로 런타임 반영.",
+                "_comment_enable": "false(기본)면 종전대로 무조건 리셋(무회귀). true면 직전 리셋 시점 대비 |Δrssi| >= delta_db 일 때만 리셋. 근거: 정체 18.85h 재생에서 오탐 리셋 662건 중 624건(94%)이 이 분기이고 그중 623건이 Δ0dB — 임계 바로 위 진동이 backoff를 3초로 되돌려 스캔 폭증. 켜면 스캔 3377→1417(-58.0%), 이동 로그(71개 90.1h)는 -0.0%·추가지연 0건",
+                "enable": false,
+                "_comment_delta_db": "리셋을 허용하는 최소 |Δrssi|(dB, 직전 리셋 시점 기준 누적). 재생 실측상 1/2/3/5 전부 -58.0~-58.1%로 동일(리셋 지점 Δ가 0dB에 몰림) — 1dB 양자화 여유를 둔 2 권장. 0은 게이트 무효라 하한 1",
+                "delta_db": 2,
+                "_comment_post_roam_grace_sec": "결합(로밍·재연결) 후 이 시간(초) 동안은 게이트를 우회해 종전처럼 리셋. 결합 직후 RSSI는 25초에 걸쳐 12~14dB 하강하는 측정 램프(attach ramp, TX rate 불변)라 그 Δ를 '이동'으로 읽으면 게이트가 무력화됨",
+                "post_roam_grace_sec": 40
             },
             "ADAPTIVE_INTERVAL": {
                 "_comment": [

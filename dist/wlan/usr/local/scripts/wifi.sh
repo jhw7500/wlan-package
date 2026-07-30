@@ -163,6 +163,37 @@ update_json_roaming_int() {
     fi
 }
 
+# roaming 하위 **섹션 블록**의 키를 갱신(예: GOOD_SIGNAL_RESET_GATE.enable).
+# update_json_roaming_int 는 `.roaming[key]` 1단계만 다루므로 중첩 블록용으로 분리했다.
+# value 는 --argjson 이라 bool(true/false)·정수 모두 그대로 넣을 수 있다.
+update_json_roaming_section() {
+    local iface="$1"
+    local section="$2"
+    local key="$3"
+    local value="$4"
+
+    if [ ! -f "$WIFI_INIT_CONF_JSON" ]; then
+        echo "Error: $WIFI_INIT_CONF_JSON not found" >&2
+        return 1
+    fi
+
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "Error: jq not installed" >&2
+        return 1
+    fi
+
+    # 섹션이 없을 수도 있다(구버전 config) → `// {}` 로 만들어 넣는다.
+    if jq --arg i "$iface" --arg s "$section" --arg k "$key" --argjson v "$value" \
+         '.[$i].roaming[$s] = ((.[$i].roaming[$s] // {}) | .[$k] = $v)' \
+         "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp"; then
+        mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
+    else
+        rm -f "${WIFI_INIT_CONF_JSON}.tmp"
+        echo "Error: JSON roaming update failed for ${iface}.roaming.${section}.${key}" >&2
+        return 1
+    fi
+}
+
 # roaming.* JSON 변경을 wifi_roam 데몬에 무재시작 반영.
 # SIGHUP으로 데몬이 즉시 재읽어 반영 — 재시작 없이 데몬 상태(핑퐁 이력·backoff·cooldown)
 # 보존. 폴링이 아니라 신호 트리거라 평시 비용 0. roam th / roam diff 가 공유한다.
@@ -386,6 +417,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} roam [0|1..N] : 0=auto best, N=Nth AP (RSSI order)"
     echo "       wifi {0|1|mlan0|mlan1} roam th [2G|5G] [rssi] : 로밍 RSSI 임계값 표시/설정 (persist, SIGHUP 무재시작 반영)"
     echo "       wifi {0|1|mlan0|mlan1} roam diff [dB] : 후보 AP 최소 RSSI 이득 표시/설정 (persist, SIGHUP 무재시작 반영)"
+    echo "       wifi {0|1|mlan0|mlan1} roam gate [on|off|delta <dB>|grace <sec>] : good-signal 리셋 게이트 표시/설정 (persist, SIGHUP 무재시작 반영)"
     echo "       wifi {0|1|mlan0|mlan1} stat reset [mac] : reset stat records (all or specific MAC)"
     echo "       wifi {0|1|mlan0|mlan1} stat interval {seconds} : set stat reset interval (persist)"
     echo "       wifi {0|1|mlan0|mlan1} mon [c|compact] [interval] [--summary-lines N] [--roam-display N]"
@@ -1646,6 +1678,9 @@ case "$2" in
     # wifi 0 roam th 2G -70  → roaming.DEFAULT_TH_2G=-70
     # wifi 0 roam diff       → 후보 AP 최소 RSSI 이득(DIFF_TH) 표시
     # wifi 0 roam diff 3     → roaming.DIFF_TH=3 (persist) + SIGHUP 즉시 반영(무재시작)
+    # wifi 0 roam gate       → good-signal 리셋 게이트 현재값 표시
+    # wifi 0 roam gate on    → GOOD_SIGNAL_RESET_GATE.enable=true (A/B 시험용 토글)
+    # wifi 0 roam gate delta 3 / grace 60 → 판정 임계·attach ramp grace 조정
     ROAM_ARG="${3:-}"
     if [ "$ROAM_ARG" = "th" ]; then
         if [ "$IFACE" = "eth0" ]; then
@@ -1750,6 +1785,61 @@ case "$2" in
         if [ "$DIFF" -le 1 ]; then
             echo "Warning: DIFF_TH=${DIFF} is a test-only setting (roam thrashing); revert after testing" >&2
         fi
+        exit 0
+    fi
+    if [ "$ROAM_ARG" = "gate" ]; then
+        # good-signal 리셋 게이트 — 신호 양호 분기에서 backoff streak 리셋을
+        # "위치가 실제로 변했을 때만" 허용한다(GOOD_SIGNAL_RESET_GATE).
+        if [ "$IFACE" = "eth0" ]; then
+            echo "Error: roam gate is for wlan interfaces (mlan0/mlan1)" >&2
+            exit 1
+        fi
+        if [ ! -f "$WIFI_INIT_CONF_JSON" ]; then
+            echo "Error: $WIFI_INIT_CONF_JSON not found" >&2
+            exit 1
+        fi
+        GATE_SUB="${4:-}"
+        if [ -z "$GATE_SUB" ]; then
+            if ! GEN=$(jq -r ".${IFACE}.roaming.GOOD_SIGNAL_RESET_GATE.enable // \"unset\"" "$WIFI_INIT_CONF_JSON") \
+               || ! GDL=$(jq -r ".${IFACE}.roaming.GOOD_SIGNAL_RESET_GATE.delta_db // \"unset\"" "$WIFI_INIT_CONF_JSON") \
+               || ! GGR=$(jq -r ".${IFACE}.roaming.GOOD_SIGNAL_RESET_GATE.post_roam_grace_sec // \"unset\"" "$WIFI_INIT_CONF_JSON"); then
+                echo "Error: failed to read ${IFACE}.roaming.GOOD_SIGNAL_RESET_GATE from $WIFI_INIT_CONF_JSON" >&2
+                exit 1
+            fi
+            echo "$IFACE roam gate: enable=${GEN} delta_db=${GDL} post_roam_grace_sec=${GGR}"
+            exit 0
+        fi
+        case "$GATE_SUB" in
+            on|off)
+                [ "$GATE_SUB" = "on" ] && GVAL=true || GVAL=false
+                update_json_roaming_section "$IFACE" "GOOD_SIGNAL_RESET_GATE" "enable" "$GVAL" || exit 1
+                echo "$IFACE roaming.GOOD_SIGNAL_RESET_GATE.enable = ${GVAL} (persist)"
+                ;;
+            delta)
+                GD="${5:-}"
+                # 0 은 게이트를 무효화(모든 Δ 통과)하므로 1 이상만 받는다 — 끄려면 'gate off'.
+                if ! echo "$GD" | grep -qE '^[0-9]+$' || [ "$GD" -lt 1 ] || [ "$GD" -gt 30 ]; then
+                    echo "Error: delta must be an integer in 1..30 (got '$GD'); use 'gate off' to disable" >&2
+                    exit 1
+                fi
+                update_json_roaming_section "$IFACE" "GOOD_SIGNAL_RESET_GATE" "delta_db" "$GD" || exit 1
+                echo "$IFACE roaming.GOOD_SIGNAL_RESET_GATE.delta_db = ${GD} (persist)"
+                ;;
+            grace)
+                GG="${5:-}"
+                if ! echo "$GG" | grep -qE '^[0-9]+$' || [ "$GG" -lt 1 ] || [ "$GG" -gt 300 ]; then
+                    echo "Error: grace must be an integer in 1..300 seconds (got '$GG')" >&2
+                    exit 1
+                fi
+                update_json_roaming_section "$IFACE" "GOOD_SIGNAL_RESET_GATE" "post_roam_grace_sec" "$GG" || exit 1
+                echo "$IFACE roaming.GOOD_SIGNAL_RESET_GATE.post_roam_grace_sec = ${GG} (persist)"
+                ;;
+            *)
+                echo "Usage: wifi {0|1|mlan0|mlan1} roam gate [on|off|delta <dB>|grace <sec>]" >&2
+                exit 1
+                ;;
+        esac
+        reload_roam_daemon "$IFACE" || exit 1
         exit 0
     fi
     if [ -z "$ROAM_ARG" ]; then
