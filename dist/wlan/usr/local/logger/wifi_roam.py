@@ -262,7 +262,9 @@ def track_association(station, gs, now=None):
     돌린다 — 구 AP 에서 쌓인 억제 카운트가 새 AP 문맥의 요약 로그에 섞이면 오해를 준다.
 
     로밍 경로에만 두면 supplicant 자율 재연결을 놓치므로 BSSID 관측으로 감지한다."""
-    if not station:
+    # `is None` 으로 명시 — get_link_info_with_load 는 None 또는 채워진 dict 만 반환하므로
+    # falsy 검사와 결과가 같지만, "연결 정보 없음" 이라는 의도를 코드에 드러낸다.
+    if station is None:
         gs["bssid"] = None
         return False
     cur = station.get("bssid")
@@ -3086,9 +3088,13 @@ def main():
                         f"이전 {gs['suppressed']}회 억제, streak={no_candidate_streak} 유지했었음",
                         _EXTRA_(),
                     )
-                    gs["suppressed"] = 0
+                # 리셋 동반 정리는 on_streak_reset 에 위임 — suppressed 초기화가 이 경로와
+                # hint·후보발견 경로에 나뉘어 있으면 향후 필드가 추가될 때 한쪽이 빠진다.
+                on_streak_reset(gs)
                 no_candidate_streak = 0
                 last_backoff_cap_ts = None
+                # 허용 경로 전용: 다음 판정의 비교 기준을 현재 RSSI 로 갱신(on_streak_reset 이
+                # None 으로 비운 것을 여기서 채운다 — 순서 의존이므로 위임 뒤에 와야 한다).
                 gs["reset_rssi"] = station["rssi"]
             elif no_candidate_streak:
                 # 억제 — 매 tick(2초) 로그는 볼륨 문제라 카운터만 누적하고 위에서 요약한다.
