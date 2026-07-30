@@ -1,4 +1,6 @@
 #!/bin/bash
+# update_mac.sh <iface> <mac|--cleanup> [<plan-iface>=<plan-mac> ...]
+# 최종 계획 인자는 wifi_init.sh의 다중 인터페이스 교환 시에만 사용한다.
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 # shellcheck source=./mac_link_lib.sh
 . "$SCRIPT_DIR/mac_link_lib.sh"
@@ -6,6 +8,7 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 tag=$(basename "$0")
 IFACE="${1:-}"
 NEW_MAC="${2:-}"
+FINAL_MAC_PLAN=("${@:3}")
 
 if [ -z "$NEW_MAC" ]; then
     logger -p local0.info "[$tag:$LINENO] [$IFACE] no MAC provided, skipping"
@@ -28,8 +31,8 @@ esac
 BACKUP_PREFIX="${LINK_FILE}.bak"
 MAX_BAK=5
 
-if ! mac_acquire_iface_lock "$NETWORK_DIR" "$IFACE"; then
-  logger -p local0.err "[$tag:$LINENO] [$IFACE] failed to acquire MAC update lock"
+if ! mac_acquire_global_lock "$NETWORK_DIR"; then
+  logger -p local0.err "[$tag:$LINENO] [$IFACE] failed to acquire global MAC update lock"
   exit 1
 fi
 
@@ -114,7 +117,8 @@ if mac_is_assignable "$NEW_MAC"; then
   NEW_MAC=$(mac_normalize "$NEW_MAC")
 
   # 다른 활성 .link에 같은 MAC을 적용하면 인터페이스 간 주소 충돌이 발생한다.
-  CONFLICT_LINK=$(mac_find_link_conflict "$NETWORK_DIR" "$LINK_FILE" "$NEW_MAC" || true)
+  CONFLICT_LINK=$(mac_find_link_conflict \
+    "$NETWORK_DIR" "$LINK_FILE" "$NEW_MAC" "${FINAL_MAC_PLAN[@]}" || true)
   if [ -n "$CONFLICT_LINK" ]; then
     logger -p local0.err "[$tag:$LINENO] [$IFACE] MAC conflict: $NEW_MAC already used by $CONFLICT_LINK"
     exit 1

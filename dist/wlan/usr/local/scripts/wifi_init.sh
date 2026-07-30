@@ -673,11 +673,12 @@ validate_final_mac_plan() {
 
 apply_final_mac() {
     local iface="$1" mac="$2" source="$3"
+    shift 3
     if [ -z "$mac" ]; then
         logger -p local0.info "[$tag:$LINENO] [$iface] no final MAC configured; skip update_mac"
         return 0
     fi
-    if /usr/local/scripts/update_mac.sh "$iface" "$mac"; then
+    if /usr/local/scripts/update_mac.sh "$iface" "$mac" "$@"; then
         logger -p local0.info "[$tag:$LINENO] [$iface] final MAC applied: $mac (source=$source)"
         return 0
     fi
@@ -994,18 +995,32 @@ else
     logger -p local0.info "[$tag:$LINENO] [$BRIDGE_IFACE] bridge inactive (BRIDGE_NONE=$BRIDGE_NONE); keep base MAC"
 fi
 
+FINAL_MAC_PLAN=(
+    "$BRIDGE_IFACE=$BRIDGE_MAC"
+    "$SECONDARY_IFACE=$SECONDARY_MAC"
+    "eth0=$ETH0_MAC"
+)
+
 # 최종 계획 자체에 같은 MAC이 두 인터페이스에 있으면 부분 적용하지 않고 전체 MAC 쓰기를
-# 건너뛴다. update_mac.sh도 현재 활성 *.link를 다시 검사해 외부/legacy 파일 충돌을 방어한다.
-if validate_final_mac_plan \
-    "$BRIDGE_IFACE=$BRIDGE_MAC" \
-    "$SECONDARY_IFACE=$SECONDARY_MAC" \
-    "eth0=$ETH0_MAC"; then
-    apply_final_mac "$BRIDGE_IFACE" "$BRIDGE_MAC" "$BRIDGE_MAC_SOURCE" \
-        || logger -p local0.err "[$tag:$LINENO] [$BRIDGE_IFACE] final MAC apply failed"
-    apply_final_mac "$SECONDARY_IFACE" "$SECONDARY_MAC" "base" \
-        || logger -p local0.err "[$tag:$LINENO] [$SECONDARY_IFACE] final MAC apply failed"
-    apply_final_mac "eth0" "$ETH0_MAC" "base" \
-        || logger -p local0.err "[$tag:$LINENO] [eth0] final MAC apply failed"
+# 건너뛴다. 전체 적용 동안 전역 락을 유지해 다른 update_mac/write_mac 호출이 중간에
+# 끼어들지 못하게 하고, update_mac.sh에는 이동 예정인 패키지 소유 .link를 판별할
+# 전체 계획을 전달한다. 외부/legacy 파일 충돌은 계속 거부한다.
+if validate_final_mac_plan "${FINAL_MAC_PLAN[@]}"; then
+    if ! mac_acquire_global_lock "${SYSTEMD_NETWORK_DIR:-/etc/systemd/network}"; then
+        logger -p local0.emerg "[$tag:$LINENO] failed to acquire global MAC plan lock"
+    else
+        apply_final_mac "$BRIDGE_IFACE" "$BRIDGE_MAC" "$BRIDGE_MAC_SOURCE" \
+            "${FINAL_MAC_PLAN[@]}" \
+            || logger -p local0.err "[$tag:$LINENO] [$BRIDGE_IFACE] final MAC apply failed"
+        apply_final_mac "$SECONDARY_IFACE" "$SECONDARY_MAC" "base" \
+            "${FINAL_MAC_PLAN[@]}" \
+            || logger -p local0.err "[$tag:$LINENO] [$SECONDARY_IFACE] final MAC apply failed"
+        apply_final_mac "eth0" "$ETH0_MAC" "base" \
+            "${FINAL_MAC_PLAN[@]}" \
+            || logger -p local0.err "[$tag:$LINENO] [eth0] final MAC apply failed"
+        mac_release_global_lock \
+            || logger -p local0.err "[$tag:$LINENO] failed to release global MAC plan lock"
+    fi
 else
     logger -p local0.emerg "[$tag:$LINENO] invalid/duplicate final MAC plan; skip all MAC writes"
 fi
