@@ -21,7 +21,7 @@
 #   .mlanN.roaming.enabled                    → wifi_roam@mlanN.service
 #   .mlanN.periodic_roam.enabled              → wifi_periodic_roam@mlanN.service
 #   .mlanN.arping.enabled                     → wifi_arping@mlanN.service
-#   (.mlanN.on_connect.enabled OR .mcs_tier.enabled) → wifi_event@mlanN.service
+#   (.mlanN.on_connect.enabled OR .snmp.trap.enabled) → wifi_event@mlanN.service
 #   (.wbridge.enabled AND .wbridge.bridge_iface == mlanN) → wifi_bridge@mlanN.service
 #
 # 관리 외 (운영자가 systemctl로 직접): wifi_arping@*, wifi_capture@*,
@@ -143,6 +143,7 @@ apply wifi_mgmt_log.timer "$_mgmt"
 # wbridge 정책
 WBRIDGE_ENABLED=$(get_bool ".wbridge.enabled" "false")
 BRIDGE_IFACE=$(jq -r '.wbridge.bridge_iface // "mlan0"' "$JSON")
+SNMP_TRAP_ENABLED=$(get_bool ".snmp.trap.enabled" "false")
 
 # per-iface 데몬
 for iface in mlan0 mlan1; do
@@ -165,10 +166,9 @@ for iface in mlan0 mlan1; do
     apply "wifi_arping@${iface}.service"        "$(get_bool ".${iface}.arping.enabled"        "false")"
     apply "wifi_periodic_roam@${iface}.service" "$(get_bool ".${iface}.periodic_roam.enabled" "false")"
 
-    # wifi_event: on_connect 또는 mcs_tier 둘 중 하나라도 enable이면 데몬 enable
+    # wifi_event: on_connect 명령 또는 SNMP 링크/채널 트랩이 필요하면 enable
     _oc=$(get_bool ".${iface}.on_connect.enabled" "false")
-    _mc=$(get_bool ".${iface}.mcs_tier.enabled"   "false")
-    if [ "$_oc" = "true" ] || [ "$_mc" = "true" ]; then
+    if [ "$_oc" = "true" ] || [ "$SNMP_TRAP_ENABLED" = "true" ]; then
         apply "wifi_event@${iface}.service" "true"
     else
         apply "wifi_event@${iface}.service" "false"

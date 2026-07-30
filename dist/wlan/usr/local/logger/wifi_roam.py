@@ -24,6 +24,10 @@ ROAM_CONDITION_FLAG = "/tmp/roam_condition"
 LAST_SCAN_TIME_FILE = "/tmp/last_roam_scan_time"
 WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
 ROAM_HINT_FILE = f"/tmp/wifi_roam_hint_{IFACE}"  # bgscan이 새 후보 AP 발견 시 touch (단방향 신호)
+SCAN_TIMESTAMP_RE = re.compile(
+    r"^(?:\[(?P<bracketed>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]"
+    r"|(?P<plain>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}))$"
+)
 MAX_SCAN_SSIDS = 10  # nl80211 max # scan SSIDs (NXP mlan 실측). 초과 시 iw가 -EINVAL로 스캔 전체 실패.
 WPA_SSID = None
 WPA_FREQ = None
@@ -1711,7 +1715,7 @@ def parse_scan_entries(
 
 
 def get_latest_scan(st, channel_info_data=None, allowed_ssids=None, log=True, src="cache"):
-    """ap.log(배경 스캔 캐시)의 마지막 `[시각]` 블록을 읽어 후보 엔트리 + 그 블록의
+    """ap.log(배경 스캔 캐시)의 마지막 시각 블록을 읽어 후보 엔트리 + 그 블록의
     타임스탬프를 반환. 파싱은 parse_scan_entries가 담당(메모리 경로와 공유).
 
     log=False 면 파싱만 하고 로그를 남기지 않는다 — 캐시를 **판정에 쓸지 모르는 시점**에
@@ -1738,9 +1742,9 @@ def get_latest_scan(st, channel_info_data=None, allowed_ssids=None, log=True, sr
     timestamp = None
     start_idx = 0
     for i in reversed(range(len(lines))):
-        match = re.match(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]", lines[i])
+        match = SCAN_TIMESTAMP_RE.fullmatch(lines[i].strip())
         if match:
-            timestamp = match.group(1)
+            timestamp = match.group("plain") or match.group("bracketed")
             start_idx = i + 1
             break
 
@@ -3316,7 +3320,7 @@ def extract_channel_table(lines):
 
 def save_with_timestamp(filename, content_lines):
     timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    header = f"[{timestamp_str}]"
+    header = timestamp_str
     with open(filename, "a") as f:
         f.write(header + "\n")
         for line in content_lines:
