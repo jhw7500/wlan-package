@@ -382,20 +382,6 @@ def poll_supplicant(interface):
         networks = run_command(["wpa_cli", "-i", interface, "list_networks"]) or ""
     return extract_supplicant(status, networks)
 
-def is_wifi_connected_iw(interface="mlan0") -> bool:
-    try:
-        # iw <iface> link 실행
-        output = subprocess.check_output(
-            ["iw", interface, "link"],
-            stderr=subprocess.DEVNULL,
-            encoding="utf-8"
-        )
-        
-        return "Connected to" in output
-
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return False
-
 _prev_tx_failed = None
 _prev_tx_retries = None
 
