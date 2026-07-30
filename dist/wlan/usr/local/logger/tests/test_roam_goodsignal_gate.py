@@ -138,6 +138,102 @@ def test_delta_db_configurable(monkeypatch):
     assert allowed(-47, -50, assoc_ts=NOW - 100)[0] is True
 
 
+# ── 결합 추적 (track_association / invalidate_reset_baseline) ──
+# 리뷰가 지적한 세 결함의 회귀 테스트. 종전엔 이 영역 테스트가 없어 놓쳤다.
+
+
+def _st(bssid="aa:aa:aa:aa:aa:aa"):
+    return {"bssid": bssid, "rssi": -50, "freq": 5180}
+
+
+def test_track_first_observation_is_new_assoc():
+    gs = wifi_roam.new_gate_state()
+    assert wifi_roam.track_association(_st(), gs) is True
+    assert gs["bssid"] == "aa:aa:aa:aa:aa:aa"
+    assert gs["assoc_ts"] is not None
+
+
+def test_track_same_bssid_is_not_new():
+    gs = wifi_roam.new_gate_state()
+    wifi_roam.track_association(_st(), gs)
+    ts = gs["assoc_ts"]
+    assert wifi_roam.track_association(_st(), gs) is False
+    assert gs["assoc_ts"] == ts, "같은 AP 재관측이 grace 를 갱신하면 게이트가 계속 우회된다"
+
+
+def test_track_bssid_change_resets_baseline_and_counter():
+    """[Claude MEDIUM] BSSID 변경 시 reset_rssi 와 **suppressed 둘 다** 초기화.
+
+    suppressed 를 남기면 구 AP 에서 쌓인 카운트가 새 AP 문맥의 요약 로그에
+    "이전 N회 억제"로 찍혀 운용 중 혼선을 준다."""
+    gs = wifi_roam.new_gate_state()
+    wifi_roam.track_association(_st("aa:aa:aa:aa:aa:aa"), gs)
+    gs["reset_rssi"] = -50
+    gs["suppressed"] = 7
+    assert wifi_roam.track_association(_st("bb:bb:bb:bb:bb:bb"), gs) is True
+    assert gs["reset_rssi"] is None, "옛 AP RSSI 와 비교는 무의미"
+    assert gs["suppressed"] == 0, "구 AP 억제 카운트가 새 문맥에 남았다"
+
+
+def test_track_none_station_clears_bssid():
+    """[Codex P2] station=None(끊김·link.json stale)이면 bssid 를 비운다."""
+    gs = wifi_roam.new_gate_state()
+    wifi_roam.track_association(_st(), gs)
+    assert wifi_roam.track_association(None, gs) is False
+    assert gs["bssid"] is None
+
+
+def test_track_reassoc_same_ap_after_disconnect_is_detected():
+    """[Codex P2 핵심] 끊겼다 **같은 AP** 로 재결합해도 새 결합으로 감지된다.
+
+    bssid 를 비우지 않으면 BSSID 비교가 같아 재결합을 놓치고, attach ramp grace 가
+    적용되지 않은 채 끊김 전 baseline·streak 으로 판정한다."""
+    gs = wifi_roam.new_gate_state()
+    wifi_roam.track_association(_st("aa:aa:aa:aa:aa:aa"), gs)
+    gs["reset_rssi"] = -50
+    gs["suppressed"] = 3
+    wifi_roam.track_association(None, gs)                      # 끊김
+    assert wifi_roam.track_association(_st("aa:aa:aa:aa:aa:aa"), gs) is True
+    assert gs["reset_rssi"] is None and gs["suppressed"] == 0
+
+
+def test_track_missing_bssid_field_is_ignored():
+    """BSSID 필드가 없으면(파싱 실패 등) 결합 갱신을 하지 않는다 — 잘못된 grace 방지."""
+    gs = wifi_roam.new_gate_state()
+    assert wifi_roam.track_association({"rssi": -50}, gs) is False
+    assert gs["bssid"] is None and gs["assoc_ts"] is None
+
+
+def test_invalidate_reset_baseline():
+    """[Codex P2] good-signal 이 아닌 리셋 경로(bgscan hint / 후보 발견)는 기준을 무효화한다.
+
+    reset_rssi 는 '마지막 리셋 시점 RSSI' 여야 하는데 종전엔 good-signal 분기에서만
+    갱신돼, 다른 경로로 리셋된 뒤의 판정이 옛 기준과 비교됐다."""
+    gs = wifi_roam.new_gate_state()
+    gs["reset_rssi"] = -50
+    gs["suppressed"] = 4
+    wifi_roam.invalidate_reset_baseline(gs)
+    assert gs["reset_rssi"] is None
+    assert gs["suppressed"] == 4, "억제 누적은 유지 — 결합이 바뀐 게 아니므로 요약 대상이다"
+
+
+def test_grace_applies_after_reassoc(monkeypatch):
+    """재결합 직후에는 게이트가 우회된다(통합 의미 고정) — track_association 이 갱신한
+    assoc_ts 가 good_signal_reset_allowed 의 grace 판정에 실제로 쓰이는지."""
+    gs = wifi_roam.new_gate_state()
+    wifi_roam.track_association(_st(), gs)
+    gs["reset_rssi"] = -50
+    ok, why = wifi_roam.good_signal_reset_allowed(
+        -50, gs["reset_rssi"], gs["assoc_ts"], now=gs["assoc_ts"] + 5
+    )
+    assert ok is True and why == "post-assoc-grace"
+    # grace 경과 후에는 Δ0dB 가 억제된다
+    ok2, _ = wifi_roam.good_signal_reset_allowed(
+        -50, gs["reset_rssi"], gs["assoc_ts"], now=gs["assoc_ts"] + 41
+    )
+    assert ok2 is False
+
+
 # ── 설정 로드 ──
 
 
@@ -219,7 +315,8 @@ def test_wifi_sh_gate_defaults_match_python():
     (조용한 skip 으로 검출력을 잃은 전례가 있다)."""
     sh = os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "wifi.sh")
     assert os.path.isfile(sh), f"wifi.sh 경로가 틀렸다: {sh}"
-    text = open(sh, encoding="utf-8").read()
+    with open(sh, encoding="utf-8") as fh:
+        text = fh.read()
 
     import re
     def sh_val(name):

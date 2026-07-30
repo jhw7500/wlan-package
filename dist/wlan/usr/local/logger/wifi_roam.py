@@ -239,6 +239,51 @@ def compute_no_result_backoff(streak, fast_count=1):
     return int(min(backoff, ROAM_NO_RESULT_MAX_SLEEP))
 
 
+def new_gate_state():
+    """good-signal 게이트의 tick 간 상태.
+
+    bssid=결합 변화 감지용, assoc_ts=마지막 결합 시각(attach ramp grace),
+    reset_rssi=마지막으로 streak 를 리셋한 시점의 RSSI(변화 누적 기준),
+    suppressed=억제 누적(매 tick 로그는 볼륨 문제라 리셋 시 1회 요약)."""
+    return {"bssid": None, "assoc_ts": None, "reset_rssi": None, "suppressed": 0}
+
+
+def track_association(station, gs):
+    """결합 변화(로밍·자율 재연결·연결 끊김)를 감지해 게이트 기준을 갱신. 반환=새 결합 여부.
+
+    **station 이 None 이면 bssid 를 비운다.** 비우지 않으면 끊겼다 **같은 AP** 로 재결합할 때
+    BSSID 비교가 같아 새 결합을 못 알아채고, attach ramp grace 가 적용되지 않은 채 끊김 전
+    baseline·streak 으로 판정한다. station=None 은 실제 끊김뿐 아니라 link.json stale·부재도
+    포함하지만, 재결합을 놓치는 것보다 grace 를 한 번 더 주는 편이 보수적이다.
+
+    결합이 바뀌면 reset_rssi 를 비우고(옛 AP RSSI 와 비교는 무의미) suppressed 도 0 으로
+    돌린다 — 구 AP 에서 쌓인 억제 카운트가 새 AP 문맥의 요약 로그에 섞이면 오해를 준다.
+
+    로밍 경로에만 두면 supplicant 자율 재연결을 놓치므로 BSSID 관측으로 감지한다."""
+    if not station:
+        gs["bssid"] = None
+        return False
+    cur = station.get("bssid")
+    if not cur or cur == gs["bssid"]:
+        return False
+    gs["bssid"] = cur
+    gs["assoc_ts"] = time.time()
+    gs["reset_rssi"] = None
+    gs["suppressed"] = 0
+    return True
+
+
+def invalidate_reset_baseline(gs):
+    """good-signal 이 아닌 경로(bgscan hint / 후보 발견)로 streak 가 리셋될 때 호출.
+
+    reset_rssi 는 "마지막 리셋 시점의 RSSI" 여야 하는데 종전엔 good-signal 분기에서만
+    갱신돼, 다른 경로로 리셋된 뒤의 good-signal 판정이 **옛 기준**과 비교됐다. 그러면 실제
+    이동 후에도 억제되거나(Δ가 옛 기준 대비 작게 나옴) 최신 리셋 이전의 변화로 리셋이
+    허용될 수 있다. hint 경로는 station 조회 **전**이라 RSSI 를 모르므로 None 으로 무효화한다
+    — 다음 good-signal 이 no-baseline 으로 허용되며 기준을 다시 잡는다(보수적: 허용 쪽)."""
+    gs["reset_rssi"] = None
+
+
 def good_signal_reset_allowed(cur_rssi, last_reset_rssi, last_assoc_ts, now=None):
     """good-signal 분기(rssi >= threshold)에서 후보없음 backoff streak 를 리셋해도 되는지.
 
@@ -2949,14 +2994,8 @@ def main():
     no_candidate_streak = 0
     last_backoff_cap_ts = None
     hint_state = {"hint_mtime": None}
-    # good-signal 게이트 상태(good_signal_reset_allowed 참조).
-    # last_reset_rssi=마지막으로 streak 를 리셋한 시점의 RSSI(변화 누적 기준),
-    # last_assoc_ts=마지막 결합 시각(attach ramp grace), last_bssid=결합 변화 감지용,
-    # gate_suppressed=억제 누적(매 tick 로그는 볼륨 문제라 리셋 시 1회 요약).
-    last_reset_rssi = None
-    last_assoc_ts = None
-    last_bssid = None
-    gate_suppressed = 0
+    # good-signal 게이트 상태(new_gate_state / track_association 참조).
+    gs = new_gate_state()
 
     while True:
         # SIGHUP 수신 시에만 wifi_init_conf.json 재읽어 반영(폴링 없음 → 프로덕션 비용 0).
@@ -2972,9 +3011,14 @@ def main():
         if roam_hint_touched(hint_state):
             no_candidate_streak = 0
             last_backoff_cap_ts = None
+            invalidate_reset_baseline(gs)
 
         # Load 정보 포함하여 연결 상태 확인
         station = get_link_info_with_load()
+
+        # 결합 추적은 **station 유효성 판정 전에** 한다 — station=None(끊김·link.json stale)
+        # 에서 bssid 를 비워야 같은 AP 로의 재결합도 새 결합으로 감지된다(track_association).
+        track_association(station, gs)
 
         if not station:
             interruptible_sleep(CHECK_INTERVAL)
@@ -2984,14 +3028,6 @@ def main():
         if not is_valid_rssi(rssi):
             interruptible_sleep(CHECK_INTERVAL)
             continue
-
-        # 결합 변화(로밍 성공·재연결·부팅 후 첫 관측) 감지 → attach ramp grace 기준 갱신.
-        # 로밍 경로에만 두면 supplicant 자율 재연결을 놓치므로 BSSID 관측으로 잡는다.
-        cur_bssid = station.get("bssid")
-        if cur_bssid and cur_bssid != last_bssid:
-            last_bssid = cur_bssid
-            last_assoc_ts = time.time()
-            last_reset_rssi = None  # 새 AP 기준으로 다시 잡는다(옛 AP RSSI 와 비교 무의미)
 
         # RSSI 추적
         if ENABLE_PREDICTIVE_ROAM and trend_tracker:
@@ -3033,23 +3069,23 @@ def main():
             # 위에서의 Δ0dB 진동이 backoff 를 3초로 되돌려 스캔을 폭증시키던 경로다
             # (good_signal_reset_allowed 참조).
             allowed, why = good_signal_reset_allowed(
-                station["rssi"], last_reset_rssi, last_assoc_ts
+                station["rssi"], gs["reset_rssi"], gs["assoc_ts"]
             )
             if allowed:
-                if gate_suppressed:
+                if gs["suppressed"]:
                     logger.message(
                         "info",
                         f"[{IFACE}] good-signal streak reset ({why}) — "
-                        f"이전 {gate_suppressed}회 억제, streak={no_candidate_streak} 유지했었음",
+                        f"이전 {gs['suppressed']}회 억제, streak={no_candidate_streak} 유지했었음",
                         _EXTRA_(),
                     )
-                    gate_suppressed = 0
+                    gs["suppressed"] = 0
                 no_candidate_streak = 0
                 last_backoff_cap_ts = None
-                last_reset_rssi = station["rssi"]
+                gs["reset_rssi"] = station["rssi"]
             else:
                 # 억제 — 매 tick(2초) 로그는 볼륨 문제라 카운터만 누적하고 위에서 요약한다.
-                gate_suppressed += 1
+                gs["suppressed"] += 1
 
             if ENABLE_ADAPTIVE_INTERVAL and adaptive_interval:
                 interval = adaptive_interval.update(rssi, base_threshold, trend)
@@ -3149,6 +3185,9 @@ def main():
             # 후보 발견 → backoff 리셋(spec §4 reset). 다음 후보없음은 시작값부터.
             no_candidate_streak = 0
             last_backoff_cap_ts = None
+            # 게이트 기준도 함께 무효화 — 로밍이 성공하면 BSSID 변경이 track_association 에서
+            # 처리하지만, **실패하면** BSSID 가 그대로라 옛 기준이 남는다.
+            invalidate_reset_baseline(gs)
             logger.message(
                 "emerg",
                 f"[{IFACE}] Roaming: {station['bssid']} → {best_ap['bssid']}, "
@@ -3192,7 +3231,7 @@ def main():
         # 게이트가 억제 중이면 그 횟수를 병기한다. 억제만 이어지는 동안에는 good-signal
         # 분기가 아무 로그도 남기지 않아(요약은 '억제→리셋' 전이에서만 찍힌다) 운용 중
         # 상태를 알 수 없었다 — 이미 매 tick 찍히는 이 줄에 얹어 볼륨 증가 없이 노출한다.
-        gate_note = f", gate_suppressed={gate_suppressed}" if gate_suppressed else ""
+        gate_note = f", gate_suppressed={gs['suppressed']}" if gs["suppressed"] else ""
         logger.message(
             "info",
             f"[{IFACE}] No suitable roam candidate found "
