@@ -26,7 +26,7 @@
 # 실제 피해 경로였던 곳:
 #   - 10-set-gateway.sh : BSSID 를 못 얻어 default route 를 fallback 으로 오설정
 #   - wifi_init.sh      : 연결 중인데 미연결로 보고 bandcfg 재적용 → mode/bw split-brain
-#   - wifi_event.sh     : 첫 부팅 catch-up 미실행 → apply_mcs_tier/run_on_connect 누락
+#   - wifi_event.sh     : 첫 부팅 catch-up 미실행 → run_on_connect 누락
 #
 # ── 대체 소스 (계단식) ───────────────────────────────────────────────────────
 #   1) wpa_cli status   — supplicant SME 의 사실. 연결 판정·BSSID 에 가장 정확하다.

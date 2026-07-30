@@ -6,11 +6,14 @@
 """
 import sys
 import os
+import re
 from unittest.mock import MagicMock, patch
 
 sys.modules.setdefault("sUTILS", MagicMock())
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import wifi_roam
+import wifi_logger_scan
+import passive_roam
 from wifi_roam import scan_results_to_ap_lines, iw_scan_to_ap_lines
 
 import pytest
@@ -25,6 +28,31 @@ SCAN_RESULTS = (
     "aa:bb:cc:dd:ee:ff\t2412\t-60\t[ESS]\tjhw_wlan_\n"                      # freq 밖(2.4G)
     "garbage line no tabs\n"
 )
+
+
+@pytest.mark.parametrize("prefix", ["ap", "freq"])
+def test_scan_logger_timestamp_has_no_brackets(prefix, tmp_path, monkeypatch):
+    monkeypatch.setattr(wifi_logger_scan, "LOG_DIR", str(tmp_path))
+    wifi_logger_scan.save_with_timestamp(prefix, ["sample"])
+
+    header = (tmp_path / f"{prefix}.log").read_text().splitlines()[0]
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", header)
+
+
+@pytest.mark.parametrize(
+    "header",
+    ["2026-07-30 12:34:56", "[2026-07-30 12:34:56]"],
+)
+def test_passive_roam_accepts_plain_and_legacy_timestamp(header, tmp_path):
+    scan_log = tmp_path / "ap.log"
+    scan_log.write_text(
+        f"{header}\n"
+        "01|36|-50|0|00:11:22:33:44:55|cap|test-ssid\n"
+    )
+
+    aps = passive_roam.parse_last_scan_block(str(scan_log))
+    assert len(aps) == 1
+    assert aps[0]["bssid"] == "00:11:22:33:44:55"
 
 
 class _Run:
@@ -75,6 +103,8 @@ def test_roundtrip_candidate_bssid_is_table_entry(tmp_path, monkeypatch):
 
     ap_lines = scan_results_to_ap_lines(SCAN_RESULTS)
     wifi_roam.save_with_timestamp(str(ap_log), ap_lines)
+    header = ap_log.read_text().splitlines()[0]
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", header)
 
     entries, ts = wifi_roam.get_latest_scan({"ssid": "jhw_wlan_"}, None, ["jhw_wlan_"])
     # allowed=jhw_wlan_ + WPA_FREQ(5G 4채널) 필터 → jhw_wlan_(5180)만 후보.

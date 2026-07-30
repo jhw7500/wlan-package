@@ -6,6 +6,7 @@ set -uo pipefail
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 UPDATE_MAC="$SCRIPT_DIR/update_mac.sh"
+WRITE_MAC="$SCRIPT_DIR/write_mac.sh"
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -17,16 +18,23 @@ WORK=$(mktemp -d)
 BINDIR="$WORK/bin"; NET="$WORK/net"
 mkdir -p "$BINDIR" "$NET"
 printf '#!/bin/sh\nexit 0\n' > "$BINDIR/logger"; chmod +x "$BINDIR/logger"
+REAL_INSTALL=$(command -v install)
+REAL_JQ=$(command -v jq || true)
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
 
 LF="$NET/21-mlan1.link"   # mlan1 대상
 
-run_um() { # <iface> <mac>
-  SYSTEMD_NETWORK_DIR="$NET" PATH="$BINDIR:$PATH" bash "$UPDATE_MAC" "$1" "$2"
+run_um() { # <iface> <mac> [<plan-iface>=<plan-mac> ...]
+  SYSTEMD_NETWORK_DIR="$NET" PATH="$BINDIR:$PATH" bash "$UPDATE_MAC" "$@"
+}
+run_wm() { # <iface> <mac>
+  SYSTEMD_NETWORK_DIR="$NET" WIFI_INIT_CONF_JSON="$WORK/no-config.json" \
+    PATH="$BINDIR:$PATH" bash "$WRITE_MAC" "$1" "$2"
 }
 macof() { grep -oP '^MACAddress=\K.*' "$1" 2>/dev/null || true; }
 count_baks() { ls -1 "$NET"/21-mlan1.link.bak.* 2>/dev/null | wc -l | tr -d ' '; }
+count_tmps() { find "$NET" -maxdepth 1 -type f -name '*.link.tmp.*' 2>/dev/null | wc -l | tr -d ' '; }
 reset_net() { rm -rf "$NET"; mkdir -p "$NET"; }
 
 assert_eq() { # desc expected actual
@@ -37,6 +45,7 @@ assert_has() { # desc file pattern
 }
 
 if [ ! -x "$UPDATE_MAC" ]; then echo "missing/not-executable: $UPDATE_MAC" >&2; exit 1; fi
+if [ ! -x "$WRITE_MAC" ]; then echo "missing/not-executable: $WRITE_MAC" >&2; exit 1; fi
 
 echo "=== update_mac.sh tests ==="
 
@@ -114,6 +123,199 @@ assert_eq  "T10 invalid+invalid-current → restore .bak.1" "cc:cc:cc:cc:cc:cc" 
 reset_net
 run_um mlan1 "" >/dev/null 2>&1
 if [ ! -e "$LF" ]; then log_pass "T11 no MAC arg → no file created"; else log_fail "T11 no MAC arg → file unexpectedly created"; fi
+
+# T12: 실제 MAC 변경을 반복해도 install 입력용 임시파일이 남지 않아야 함
+reset_net
+run_um mlan1 "de:ad:be:ef:00:11" >/dev/null 2>&1
+run_um mlan1 "de:ad:be:ef:00:12" >/dev/null 2>&1
+assert_eq "T12 no orphan .link.tmp after updates" "0" "$(count_tmps)"
+
+# T13: 형식만 맞는 비할당 주소(all-zero/broadcast/multicast)는 거부
+for bad_mac in \
+  "00:00:00:00:00:00" \
+  "ff:ff:ff:ff:ff:ff" \
+  "01:00:5e:00:00:01"; do
+  reset_net
+  run_um mlan1 "$bad_mac" >/dev/null 2>&1
+  rc=$?
+  assert_eq "T13 reject non-unicast $bad_mac" "1" "$rc"
+  if [ ! -e "$LF" ]; then
+    log_pass "T13 rejected MAC created no .link ($bad_mac)"
+  else
+    log_fail "T13 rejected MAC unexpectedly created $LF ($bad_mac)"
+  fi
+done
+
+# T14: 다른 활성 .link가 이미 사용하는 MAC은 대소문자와 무관하게 거부
+reset_net
+run_um mlan0 "DE:AD:BE:EF:00:21" >/dev/null 2>&1
+run_um mlan1 "de:ad:be:ef:00:21" >/dev/null 2>&1
+rc=$?
+assert_eq "T14 reject MAC used by another .link" "1" "$rc"
+if [ ! -e "$LF" ]; then
+  log_pass "T14 duplicate rejection created no mlan1 .link"
+else
+  log_fail "T14 duplicate rejection unexpectedly created $LF"
+fi
+
+# T15: write_mac.sh도 같은 의미 검증/활성 .link 중복 검사를 사용
+reset_net
+run_wm mlan1 "01:00:5e:00:00:01" >/dev/null 2>&1
+rc=$?
+assert_eq "T15 write_mac rejects multicast" "1" "$rc"
+run_um mlan0 "de:ad:be:ef:00:31" >/dev/null 2>&1
+run_wm mlan1 "DE:AD:BE:EF:00:31" >/dev/null 2>&1
+rc=$?
+assert_eq "T15 write_mac rejects cross-link duplicate" "1" "$rc"
+
+# T16: write_mac.sh 성공 경로는 active/fixed backup을 갱신하고 tmp를 남기지 않음
+reset_net
+run_um mlan1 "de:ad:be:ef:00:41" >/dev/null 2>&1
+run_wm mlan1 "DE:AD:BE:EF:00:42" >/dev/null 2>&1
+rc=$?
+assert_eq "T16 write_mac succeeds" "0" "$rc"
+assert_eq "T16 write_mac normalizes active MAC" "de:ad:be:ef:00:42" "$(macof "$LF")"
+assert_eq "T16 write_mac fixed backup" "de:ad:be:ef:00:42" "$(macof "$LF.bak")"
+assert_eq "T16 write_mac leaves no tmp" "0" "$(count_tmps)"
+
+# T17: cleanup은 owned orphan/숫자 상한 초과분만 제거하고 정상 세대·사용자 .link는 보존
+reset_net
+touch "$LF.tmp.old1" "$LF.tmp.old2" "$LF.bak.5" "$LF.bak.6" "$LF.bak.99"
+touch "$NET/99-operator.link"
+run_um mlan1 --cleanup >/dev/null 2>&1
+rc=$?
+assert_eq "T17 cleanup command succeeds" "0" "$rc"
+assert_eq "T17 cleanup removes orphan tmp" "0" "$(count_tmps)"
+if [ -e "$LF.bak.5" ] && [ ! -e "$LF.bak.6" ] && [ ! -e "$LF.bak.99" ]; then
+  log_pass "T17 cleanup enforces backup generation cap"
+else
+  log_fail "T17 cleanup did not enforce backup generation cap"
+fi
+if [ -e "$NET/99-operator.link" ]; then
+  log_pass "T17 cleanup preserves operator .link"
+else
+  log_fail "T17 cleanup removed operator .link"
+fi
+if [ ! -e "$LF" ]; then
+  log_pass "T17 cleanup-only created no active .link"
+else
+  log_fail "T17 cleanup-only unexpectedly created $LF"
+fi
+
+# T18: [Match]의 MACAddress는 선택 조건이지 할당 주소가 아니므로 충돌로 오인하지 않음
+reset_net
+printf '[Match]\nMACAddress=de:ad:be:ef:00:51\n\n[Link]\n' > "$NET/99-operator.link"
+run_um mlan1 "de:ad:be:ef:00:51" >/dev/null 2>&1
+rc=$?
+assert_eq "T18 ignore match-only MACAddress for assignment conflict" "0" "$rc"
+assert_eq "T18 requested MAC assigned to mlan1" "de:ad:be:ef:00:51" "$(macof "$LF")"
+
+# T19: own .link의 [Match] MACAddress는 보존하고 [Link] 할당 주소만 추가/교체
+reset_net
+printf '[Match]\nMACAddress=02:00:00:00:00:01\nOriginalName=mlan1\n\n[Link]\n' > "$LF"
+run_um mlan1 "de:ad:be:ef:00:61" >/dev/null 2>&1
+rc=$?
+assert_eq "T19 update with match-side MAC succeeds" "0" "$rc"
+assert_has "T19 preserves [Match] MACAddress" "$LF" '^MACAddress=02:00:00:00:00:01$'
+assert_has "T19 writes [Link] MACAddress" "$LF" '^MACAddress=de:ad:be:ef:00:61$'
+assert_eq "T19 keeps exactly match+link MACAddress" "2" "$(grep -c '^MACAddress=' "$LF")"
+
+# T20: 패키지 소유 인터페이스가 현재 MAC을 서로 교환하는 최종 계획은 허용
+reset_net
+MLAN0_LINK="$NET/20-mlan0.link"
+MAC_A="02:00:00:00:00:a1"
+MAC_B="02:00:00:00:00:b1"
+MAC_E="02:00:00:00:00:e1"
+printf '[Match]\nOriginalName=mlan0\n\n[Link]\nMACAddress=%s\n' "$MAC_A" > "$MLAN0_LINK"
+printf '[Match]\nOriginalName=mlan1\n\n[Link]\nMACAddress=%s\n' "$MAC_B" > "$LF"
+FINAL_PLAN=("mlan0=$MAC_B" "mlan1=$MAC_A" "eth0=$MAC_E")
+run_um mlan0 "$MAC_B" "${FINAL_PLAN[@]}" >/dev/null 2>&1
+rc_first=$?
+run_um mlan1 "$MAC_A" "${FINAL_PLAN[@]}" >/dev/null 2>&1
+rc_second=$?
+assert_eq "T20 planned MAC swap first update succeeds" "0" "$rc_first"
+assert_eq "T20 planned MAC swap second update succeeds" "0" "$rc_second"
+assert_eq "T20 planned MAC swap writes mlan0" "$MAC_B" "$(macof "$MLAN0_LINK")"
+assert_eq "T20 planned MAC swap writes mlan1" "$MAC_A" "$(macof "$LF")"
+
+# T21: 인터페이스를 알 수 없는 운영자 .link는 최종 계획이 있어도 충돌로 유지
+reset_net
+printf '[Match]\nOriginalName=custom0\n\n[Link]\nMACAddress=%s\n' "$MAC_B" \
+  > "$NET/99-operator.link"
+run_um mlan1 "$MAC_B" "${FINAL_PLAN[@]}" >/dev/null 2>&1
+rc=$?
+assert_eq "T21 planned update still rejects operator conflict" "1" "$rc"
+
+# T22: 서로 다른 인터페이스의 동일 MAC 동시 요청은 전역 락으로 하나만 성공
+reset_net
+printf '#!/bin/sh\nsleep "${TEST_INSTALL_DELAY:-0}"\nexec %s "$@"\n' "$REAL_INSTALL" \
+  > "$BINDIR/install"
+chmod +x "$BINDIR/install"
+RACE_MAC="02:00:00:00:00:c1"
+TEST_INSTALL_DELAY=0.5 SYSTEMD_NETWORK_DIR="$NET" PATH="$BINDIR:$PATH" \
+  bash "$UPDATE_MAC" mlan0 "$RACE_MAC" >/dev/null 2>&1 &
+pid0=$!
+TEST_INSTALL_DELAY=0.5 SYSTEMD_NETWORK_DIR="$NET" PATH="$BINDIR:$PATH" \
+  bash "$UPDATE_MAC" mlan1 "$RACE_MAC" >/dev/null 2>&1 &
+pid1=$!
+wait "$pid0"; rc0=$?
+wait "$pid1"; rc1=$?
+success_count=0
+[ "$rc0" -eq 0 ] && success_count=$((success_count + 1))
+[ "$rc1" -eq 0 ] && success_count=$((success_count + 1))
+assigned_count=0
+[ "$(macof "$MLAN0_LINK")" = "$RACE_MAC" ] && assigned_count=$((assigned_count + 1))
+[ "$(macof "$LF")" = "$RACE_MAC" ] && assigned_count=$((assigned_count + 1))
+assert_eq "T22 concurrent duplicate request has one winner" "1" "$success_count"
+assert_eq "T22 concurrent duplicate request writes one link" "1" "$assigned_count"
+
+# T23: 서로 다른 인터페이스의 write_mac 동시 실행도 공유 JSON 갱신을 유실하지 않음
+reset_net
+JSON_FILE="$WORK/wifi_init_conf.json"
+NEW_0="02:00:00:00:00:d1"
+NEW_1="02:00:00:00:00:d2"
+printf '{"mac":{"mlan0":{"base":"02:00:00:00:00:01"},"mlan1":{"base":"02:00:00:00:00:02"}}}\n' \
+  > "$JSON_FILE"
+printf '[Match]\nOriginalName=mlan0\n\n[Link]\nMACAddress=02:00:00:00:00:01\n' > "$MLAN0_LINK"
+printf '[Match]\nOriginalName=mlan1\n\n[Link]\nMACAddress=02:00:00:00:00:02\n' > "$LF"
+if [ -n "$REAL_JQ" ]; then
+  printf '#!/bin/sh\n%s "$@"\nrc=$?\nsleep "${TEST_JQ_DELAY:-0}"\nexit "$rc"\n' "$REAL_JQ" \
+    > "$BINDIR/jq"
+  chmod +x "$BINDIR/jq"
+  TEST_JQ_DELAY=0.5 SYSTEMD_NETWORK_DIR="$NET" WIFI_INIT_CONF_JSON="$JSON_FILE" \
+    PATH="$BINDIR:$PATH" bash "$WRITE_MAC" mlan0 "$NEW_0" >/dev/null 2>&1 &
+  pid0=$!
+  TEST_JQ_DELAY=0.5 SYSTEMD_NETWORK_DIR="$NET" WIFI_INIT_CONF_JSON="$JSON_FILE" \
+    PATH="$BINDIR:$PATH" bash "$WRITE_MAC" mlan1 "$NEW_1" >/dev/null 2>&1 &
+  pid1=$!
+  wait "$pid0"; rc0=$?
+  wait "$pid1"; rc1=$?
+  assert_eq "T23 concurrent write_mac mlan0 succeeds" "0" "$rc0"
+  assert_eq "T23 concurrent write_mac mlan1 succeeds" "0" "$rc1"
+  assert_eq "T23 concurrent JSON keeps mlan0 update" "$NEW_0" \
+    "$("$REAL_JQ" -r '.mac.mlan0.base' "$JSON_FILE")"
+  assert_eq "T23 concurrent JSON keeps mlan1 update" "$NEW_1" \
+    "$("$REAL_JQ" -r '.mac.mlan1.base' "$JSON_FILE")"
+else
+  log_fail "T23 jq is required for concurrent JSON test"
+fi
+
+# T24: wifi_init처럼 부모가 잡은 전역 락을 자식 update_mac이 상속해 재진입해도 교착되지 않음
+reset_net
+INHERITED_MAC="02:00:00:00:00:f1"
+SYSTEMD_NETWORK_DIR="$NET" PATH="$BINDIR:$PATH" timeout 5 bash -c '
+  . "$1"
+  mac_acquire_global_lock "$2" || exit 1
+  bash "$3" mlan0 "$4"
+  rc=$?
+  mac_release_global_lock || exit 1
+  exit "$rc"
+' _ "$SCRIPT_DIR/mac_link_lib.sh" "$NET" "$UPDATE_MAC" "$INHERITED_MAC" \
+  >/dev/null 2>&1
+rc=$?
+assert_eq "T24 inherited global lock does not deadlock child update" "0" "$rc"
+assert_eq "T24 inherited global lock writes requested MAC" "$INHERITED_MAC" \
+  "$(macof "$MLAN0_LINK")"
 
 echo ""
 echo "PASS: $PASS_COUNT"

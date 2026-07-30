@@ -779,7 +779,7 @@ mlan0 / mlan1에 개별 적용. 코드상 `global.rate_adapt`로 fallback하도�
 
 ### 11.6 mcs_tier - MCS Tier 능력 제한
 
-**사용 스크립트**: `wifi_init.sh`, `wifi_event.sh`
+**사용 스크립트**: `wifi_init.sh`
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
@@ -790,10 +790,7 @@ mlan0 / mlan1에 개별 적용. 코드상 `global.rate_adapt`로 fallback하도�
 
 > **인터페이스별 기본값 주의**: 출하 JSON은 mlan0에만 tier 값(`ht="7"`, `vht="7"`, `he="both 7"`)이 설정돼 있고 mlan1은 모두 빈 문자열(`""`)이다. 단 `mcs_tier.enabled`는 **양쪽 모두 `false`**이므로 기본 상태에서는 실제로 적용되지 않는다(값만 preset).
 
-**적용 시점**:
-1. **부팅 시** (`wifi_init.sh` → `apply_iface_radio_defaults`): association 전에 1회 적용
-2. **연결 이벤트 시** (`wifi_event.sh`): `iw event`의 `connected to` 감지 시마다 재적용 (로밍/재연결 포함)
-
+**적용 시점**: 부팅 시 `wifi_init.sh`의 `apply_iface_radio_defaults`에서 association 전에 1회 적용
 
 - `enabled: false`(기본)이면 mcstiercfg를 실행하지 않음 (FW 기본값 사용)
 - 각 키는 **문자열**로 관리. 빈 문자열(`""`)이면 해당 prefix를 명령에서 제외
@@ -823,6 +820,8 @@ mlan0 / mlan1에 개별 적용. 코드상 `global.rate_adapt`로 fallback하도�
 |----|------|--------|------|
 | `enabled` | bool | mlan0 `true` / mlan1 `false` | on_connect 기능 활성화 |
 | `commands` | array | `[]` (양쪽) | AP 연결/로밍 후 순서대로 실행할 명령 목록. 실패해도 중단하지 않고 로깅만 수행 |
+
+> `enabled`와 `commands`는 `wifi_event@<iface>` 시작 시 한 번 읽어 캐시한다. 실행 중 JSON을 변경했다면 `systemctl restart wifi_event@<iface>` 후 반영된다.
 
 ### 11.8 thermal_mgmt - FW Thermal 관리
 

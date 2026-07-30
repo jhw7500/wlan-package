@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+import re
 import sys
 import subprocess
 
@@ -10,6 +11,10 @@ WIFI_IFACE = "mlan0"
 SCAN_LOG = f"/var/log/cantops/scan/{WIFI_IFACE}/ap.log"
 LINK_JSON = f"/var/log/cantops/json/{WIFI_IFACE}/link.json"
 WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
+SCAN_TIMESTAMP_RE = re.compile(
+    r"^(?:\[(?P<bracketed>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]"
+    r"|(?P<plain>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}))$"
+)
 
 
 def read_current_bssid(link_json_path=LINK_JSON):
@@ -56,11 +61,11 @@ def parse_last_scan_block(scan_log_path=SCAN_LOG):
     if not lines:
         return []
 
-    # Find last "[YYYY-..]" header
+    # Find the last timestamp header (legacy [timestamp] and current timestamp).
     start_idx = None
     for i in range(len(lines) - 1, -1, -1):
         line = lines[i].strip()
-        if line.startswith("[") and line.endswith("]"):
+        if SCAN_TIMESTAMP_RE.fullmatch(line):
             start_idx = i
             break
 
