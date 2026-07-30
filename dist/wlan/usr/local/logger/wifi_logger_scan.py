@@ -312,17 +312,7 @@ def save_with_timestamp(prefix, content_lines):
     filename = os.path.join(LOG_DIR, f"{prefix}.log")
     #logger.message("info", f"{filename}", _EXTRA_())
     timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    '''
-    header = f"===== [{timestamp_str}] {'=' * (60 - len(timestamp_str) - 10)}"
-
-    # 로그 파일 append
-    with open(filename, 'a') as f:
-        f.write(header + '\n')
-        for line in content_lines:
-            f.write(line.rstrip() + '\n')
-        f.write('\n')  # 블럭 구분용 줄
-    '''
-    header = f"[{timestamp_str}]"
+    header = timestamp_str
     with open(filename, 'a') as f:
         f.write(header + '\n')
         for line in content_lines:

@@ -48,10 +48,12 @@ def load_logger_config(iface):
     except (OSError, json.JSONDecodeError) as e:
         print(f"WARN: [{iface}] config load failed, using defaults: {e}", file=sys.stderr)
 
+# 새 로그는 timestamp 대괄호를 쓰지 않는다. 기존 누적 로그도 재시작 후 읽을 수 있도록
+# 여는 괄호가 있을 때만 닫는 괄호를 요구해 두 형식을 모두 허용한다.
 LOG_LINE_RE = re.compile(r"""
-    ^\[
+    ^(?P<timestamp_bracket>\[)?
         (?P<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})
-    \]\s+
+    (?(timestamp_bracket)\])\s+
     MAC:(?P<mac>[0-9A-Fa-f:]+),\s+
     BW:(?P<bw_val>\d+)\s*(?P<bw_unit>[A-Za-z/]+)?\s*,\s+ 
     RSSI:(?P<rssi>-?\d+)dBm\(
@@ -394,7 +396,7 @@ def log_stats_write(my_stat, wifi_info):
     #    tx_retry_per = 100
         
     log_entry = (
-        f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
+        f"{time.strftime('%Y-%m-%d %H:%M:%S')} "
         f"MAC:{wifi_info['ap_mac']}, "
         f"BW:{wifi_info['bw']}, "
         f"RSSI:{wifi_info['rssi']}dBm(min:{wifi_info['rssi_min']}/max:{wifi_info['rssi_max']}), "
@@ -446,7 +448,7 @@ def log_stats():
                 ap_mac = None
                 if current_ap != ap_mac:
                     log_entry = (
-                        f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
+                        f"{time.strftime('%Y-%m-%d %H:%M:%S')} "
                         f"AP changed: {current_ap} -> {ap_mac}\n"
                     )
                     current_ap = ap_mac
@@ -481,7 +483,7 @@ def log_stats():
             #old_mac_address = current_ap.replace(":", "_")
             #old_log_filename = f"{LOG_DIR}/{old_mac_address}.log"
             log_entry = (
-                f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
+                f"{time.strftime('%Y-%m-%d %H:%M:%S')} "
                 f"AP changed: {current_ap} -> {ap_mac}\n"
             )
             #logger.message("info", f"[{IFACE}] AP change: {current_ap} -> {ap_mac}", _EXTRA_())
@@ -620,7 +622,7 @@ def log_stats():
         #'''
         if reset_flag:
             log_entry = (
-                f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
+                f"{time.strftime('%Y-%m-%d %H:%M:%S')} "
                 f"MAC:{ap_mac} stat init!!\n"
             )
             #logger.message("info", f"[{IFACE}] AP change: {current_ap} -> {ap_mac}", _EXTRA_())
