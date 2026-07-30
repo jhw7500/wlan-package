@@ -6,6 +6,7 @@ set -uo pipefail
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 UPDATE_MAC="$SCRIPT_DIR/update_mac.sh"
+WRITE_MAC="$SCRIPT_DIR/write_mac.sh"
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -25,8 +26,13 @@ LF="$NET/21-mlan1.link"   # mlan1 대상
 run_um() { # <iface> <mac>
   SYSTEMD_NETWORK_DIR="$NET" PATH="$BINDIR:$PATH" bash "$UPDATE_MAC" "$1" "$2"
 }
+run_wm() { # <iface> <mac>
+  SYSTEMD_NETWORK_DIR="$NET" WIFI_INIT_CONF_JSON="$WORK/no-config.json" \
+    PATH="$BINDIR:$PATH" bash "$WRITE_MAC" "$1" "$2"
+}
 macof() { grep -oP '^MACAddress=\K.*' "$1" 2>/dev/null || true; }
 count_baks() { ls -1 "$NET"/21-mlan1.link.bak.* 2>/dev/null | wc -l | tr -d ' '; }
+count_tmps() { find "$NET" -maxdepth 1 -type f -name '*.link.tmp.*' 2>/dev/null | wc -l | tr -d ' '; }
 reset_net() { rm -rf "$NET"; mkdir -p "$NET"; }
 
 assert_eq() { # desc expected actual
@@ -37,6 +43,7 @@ assert_has() { # desc file pattern
 }
 
 if [ ! -x "$UPDATE_MAC" ]; then echo "missing/not-executable: $UPDATE_MAC" >&2; exit 1; fi
+if [ ! -x "$WRITE_MAC" ]; then echo "missing/not-executable: $WRITE_MAC" >&2; exit 1; fi
 
 echo "=== update_mac.sh tests ==="
 
@@ -114,6 +121,102 @@ assert_eq  "T10 invalid+invalid-current → restore .bak.1" "cc:cc:cc:cc:cc:cc" 
 reset_net
 run_um mlan1 "" >/dev/null 2>&1
 if [ ! -e "$LF" ]; then log_pass "T11 no MAC arg → no file created"; else log_fail "T11 no MAC arg → file unexpectedly created"; fi
+
+# T12: 실제 MAC 변경을 반복해도 install 입력용 임시파일이 남지 않아야 함
+reset_net
+run_um mlan1 "de:ad:be:ef:00:11" >/dev/null 2>&1
+run_um mlan1 "de:ad:be:ef:00:12" >/dev/null 2>&1
+assert_eq "T12 no orphan .link.tmp after updates" "0" "$(count_tmps)"
+
+# T13: 형식만 맞는 비할당 주소(all-zero/broadcast/multicast)는 거부
+for bad_mac in \
+  "00:00:00:00:00:00" \
+  "ff:ff:ff:ff:ff:ff" \
+  "01:00:5e:00:00:01"; do
+  reset_net
+  run_um mlan1 "$bad_mac" >/dev/null 2>&1
+  rc=$?
+  assert_eq "T13 reject non-unicast $bad_mac" "1" "$rc"
+  if [ ! -e "$LF" ]; then
+    log_pass "T13 rejected MAC created no .link ($bad_mac)"
+  else
+    log_fail "T13 rejected MAC unexpectedly created $LF ($bad_mac)"
+  fi
+done
+
+# T14: 다른 활성 .link가 이미 사용하는 MAC은 대소문자와 무관하게 거부
+reset_net
+run_um mlan0 "DE:AD:BE:EF:00:21" >/dev/null 2>&1
+run_um mlan1 "de:ad:be:ef:00:21" >/dev/null 2>&1
+rc=$?
+assert_eq "T14 reject MAC used by another .link" "1" "$rc"
+if [ ! -e "$LF" ]; then
+  log_pass "T14 duplicate rejection created no mlan1 .link"
+else
+  log_fail "T14 duplicate rejection unexpectedly created $LF"
+fi
+
+# T15: write_mac.sh도 같은 의미 검증/활성 .link 중복 검사를 사용
+reset_net
+run_wm mlan1 "01:00:5e:00:00:01" >/dev/null 2>&1
+rc=$?
+assert_eq "T15 write_mac rejects multicast" "1" "$rc"
+run_um mlan0 "de:ad:be:ef:00:31" >/dev/null 2>&1
+run_wm mlan1 "DE:AD:BE:EF:00:31" >/dev/null 2>&1
+rc=$?
+assert_eq "T15 write_mac rejects cross-link duplicate" "1" "$rc"
+
+# T16: write_mac.sh 성공 경로는 active/fixed backup을 갱신하고 tmp를 남기지 않음
+reset_net
+run_um mlan1 "de:ad:be:ef:00:41" >/dev/null 2>&1
+run_wm mlan1 "DE:AD:BE:EF:00:42" >/dev/null 2>&1
+rc=$?
+assert_eq "T16 write_mac succeeds" "0" "$rc"
+assert_eq "T16 write_mac normalizes active MAC" "de:ad:be:ef:00:42" "$(macof "$LF")"
+assert_eq "T16 write_mac fixed backup" "de:ad:be:ef:00:42" "$(macof "$LF.bak")"
+assert_eq "T16 write_mac leaves no tmp" "0" "$(count_tmps)"
+
+# T17: cleanup은 owned orphan/숫자 상한 초과분만 제거하고 정상 세대·사용자 .link는 보존
+reset_net
+touch "$LF.tmp.old1" "$LF.tmp.old2" "$LF.bak.5" "$LF.bak.6" "$LF.bak.99"
+touch "$NET/99-operator.link"
+run_um mlan1 --cleanup >/dev/null 2>&1
+rc=$?
+assert_eq "T17 cleanup command succeeds" "0" "$rc"
+assert_eq "T17 cleanup removes orphan tmp" "0" "$(count_tmps)"
+if [ -e "$LF.bak.5" ] && [ ! -e "$LF.bak.6" ] && [ ! -e "$LF.bak.99" ]; then
+  log_pass "T17 cleanup enforces backup generation cap"
+else
+  log_fail "T17 cleanup did not enforce backup generation cap"
+fi
+if [ -e "$NET/99-operator.link" ]; then
+  log_pass "T17 cleanup preserves operator .link"
+else
+  log_fail "T17 cleanup removed operator .link"
+fi
+if [ ! -e "$LF" ]; then
+  log_pass "T17 cleanup-only created no active .link"
+else
+  log_fail "T17 cleanup-only unexpectedly created $LF"
+fi
+
+# T18: [Match]의 MACAddress는 선택 조건이지 할당 주소가 아니므로 충돌로 오인하지 않음
+reset_net
+printf '[Match]\nMACAddress=de:ad:be:ef:00:51\n\n[Link]\n' > "$NET/99-operator.link"
+run_um mlan1 "de:ad:be:ef:00:51" >/dev/null 2>&1
+rc=$?
+assert_eq "T18 ignore match-only MACAddress for assignment conflict" "0" "$rc"
+assert_eq "T18 requested MAC assigned to mlan1" "de:ad:be:ef:00:51" "$(macof "$LF")"
+
+# T19: own .link의 [Match] MACAddress는 보존하고 [Link] 할당 주소만 추가/교체
+reset_net
+printf '[Match]\nMACAddress=02:00:00:00:00:01\nOriginalName=mlan1\n\n[Link]\n' > "$LF"
+run_um mlan1 "de:ad:be:ef:00:61" >/dev/null 2>&1
+rc=$?
+assert_eq "T19 update with match-side MAC succeeds" "0" "$rc"
+assert_has "T19 preserves [Match] MACAddress" "$LF" '^MACAddress=02:00:00:00:00:01$'
+assert_has "T19 writes [Link] MACAddress" "$LF" '^MACAddress=de:ad:be:ef:00:61$'
+assert_eq "T19 keeps exactly match+link MACAddress" "2" "$(grep -c '^MACAddress=' "$LF")"
 
 echo ""
 echo "PASS: $PASS_COUNT"

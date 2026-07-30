@@ -6,6 +6,8 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 . "$SCRIPT_DIR/wifi_init_config_lib.sh"
 # shellcheck source=./wlan_link_lib.sh
 . "$SCRIPT_DIR/wlan_link_lib.sh"
+# shellcheck source=./mac_link_lib.sh
+. "$SCRIPT_DIR/mac_link_lib.sh"
 
 tag=$(basename "$0")
 JSON_FILE="${JSON_FILE:-/usr/local/etc/config.json}"
@@ -570,8 +572,6 @@ try_insmod() {
     return $ret
 }
 
-MAC_REGEX='^([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$'
-
 try_read_mac() {
     local label=$1
     local file=$2
@@ -583,7 +583,7 @@ try_read_mac() {
 
     local val
     val=$(cat "$file")
-    if [[ "$val" =~ $MAC_REGEX ]]; then
+    if mac_is_assignable "$val"; then
         #logger -p local0.info "[$tag:$LINENO] [$iface] $label mac: $val"
         echo "$val"
         return 0
@@ -604,7 +604,7 @@ read_mac_from_json() {
     val=$(jq -r ".mac.${iface}.${key} // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
     [ -z "$val" ] && return 1
 
-    if [[ "$val" =~ $MAC_REGEX ]]; then
+    if mac_is_assignable "$val"; then
         logger -p local0.info "[$tag:$LINENO] [$iface] $label mac (json): $val"
         echo "$val"
         return 0
@@ -647,6 +647,42 @@ resolve_mac() {
 
     #logger -p local0.info "[$tag:$LINENO] [$iface] mac_source=$source"
     echo "$mac $source"
+}
+
+validate_final_mac_plan() {
+    local entry iface mac normalized
+    declare -A owner_by_mac=()
+
+    for entry in "$@"; do
+        iface="${entry%%=*}"
+        mac="${entry#*=}"
+        [ -n "$mac" ] || continue
+        if ! mac_is_assignable "$mac"; then
+            logger -p local0.err "[$tag:$LINENO] [$iface] final MAC is invalid: $mac"
+            return 1
+        fi
+        normalized=$(mac_normalize "$mac")
+        if [ -n "${owner_by_mac[$normalized]:-}" ]; then
+            logger -p local0.err \
+                "[$tag:$LINENO] MAC conflict in final plan: $normalized ($iface, ${owner_by_mac[$normalized]})"
+            return 1
+        fi
+        owner_by_mac[$normalized]="$iface"
+    done
+}
+
+apply_final_mac() {
+    local iface="$1" mac="$2" source="$3"
+    if [ -z "$mac" ]; then
+        logger -p local0.info "[$tag:$LINENO] [$iface] no final MAC configured; skip update_mac"
+        return 0
+    fi
+    if /usr/local/scripts/update_mac.sh "$iface" "$mac"; then
+        logger -p local0.info "[$tag:$LINENO] [$iface] final MAC applied: $mac (source=$source)"
+        return 0
+    fi
+    logger -p local0.err "[$tag:$LINENO] update_mac.sh $iface ($source) failed"
+    return 1
 }
 
 iface_enabled_value() {
@@ -913,6 +949,13 @@ else
     SECONDARY_IFACE="mlan0"
 fi
 
+# MAC 설정 유무/MFG 모드와 무관하게 패키지가 소유한 고아 tmp와 회전 상한 초과분을 정리한다.
+# 운영자가 만든 다른 *.link 파일이나 고정 legacy .bak은 삭제하지 않는다.
+for _mac_cleanup_if in mlan0 mlan1 eth0; do
+    /usr/local/scripts/update_mac.sh "$_mac_cleanup_if" --cleanup \
+        || logger -p local0.err "[$tag:$LINENO] [$_mac_cleanup_if] stale MAC artifact cleanup failed"
+done
+
 # MFG 프로파일: MAC 설정 전체 skip — 동적/정적 MAC spoofing(update_mac), 유선 IP/MAC
 # discovery(wired_mac_ip_get.py), eth0 base MAC까지. 제조 테스트에서 MAC 변경은 불필요하고
 # eth0 MAC 변경은 진행 중인 labtool 이더넷 연결을 끊을 수 있다.
@@ -920,21 +963,16 @@ if [ "${MFG_MODE:-0}" == "1" ]; then
     logger -p local0.info "[$tag:$LINENO] MFG profile: skip MAC setup (wired_mac_ip_get/update_mac)"
 else
 
-# 1) enable 여부와 무관하게 mlan0/mlan1 모두 base MAC을 먼저 반영한다.
-#    ({BRIDGE_IFACE, SECONDARY_IFACE} == {mlan0, mlan1}) base는 인터페이스 기본 MAC이며,
-#    아래 2)에서 bridge 활성 + dynamic/static 변환 성공 시에만 bridge iface MAC을 override 한다.
-for _mac_if in "$BRIDGE_IFACE" "$SECONDARY_IFACE"; do
-    _base_mac=$(read_mac_from_json "base" "$_mac_if" "base") || _base_mac=""
-    if [ -n "$_base_mac" ]; then
-        /usr/local/scripts/update_mac.sh "$_mac_if" "$_base_mac" || logger -p local0.err "[$tag:$LINENO] update_mac.sh $_mac_if (base) failed"
-    else
-        logger -p local0.info "[$tag:$LINENO] [$_mac_if] no base MAC configured; skip base update_mac"
-    fi
-done
-
-# 2) 실제 bridge 기능이 켜져 있고(wbridge.enabled=true & bridge iface enable) dynamic/static
-#    MAC 변환에 성공하면 bridge 인터페이스 MAC을 base가 아닌 변환된 MAC으로 override 한다.
+# 먼저 세 인터페이스의 최종 MAC을 모두 계산한다. bridge iface는
+# dynamic → target → base 우선순위, secondary/eth0는 base를 사용한다.
+# 계산이 끝난 뒤 인터페이스별 한 번만 update_mac을 호출하므로 base→override 이중 쓰기와
+# 불필요한 백업 회전/flash write가 발생하지 않는다.
+BRIDGE_BASE_MAC=$(read_mac_from_json "base" "$BRIDGE_IFACE" "base") || BRIDGE_BASE_MAC=""
+SECONDARY_MAC=$(read_mac_from_json "base" "$SECONDARY_IFACE" "base") || SECONDARY_MAC=""
+ETH0_MAC=$(read_mac_from_json "base" "eth0" "base") || ETH0_MAC=""
+BRIDGE_MAC="$BRIDGE_BASE_MAC"
 BRIDGE_MAC_SOURCE="base"
+
 if [ "$BRIDGE_NONE" != "true" ] && wifi_init_iface_is_enabled "$BRIDGE_IFACE" "true"; then
     # dynamic 모드면 유선 peer MAC/IP 확보 먼저 (resolve_mac의 try_dynamic_mac가 /tmp/eth0_client_mac를 읽음)
     if [ "$MAC_MODE" = "dynamic" ]; then
@@ -945,29 +983,36 @@ if [ "$BRIDGE_NONE" != "true" ] && wifi_init_iface_is_enabled "$BRIDGE_IFACE" "t
     BRIDGE_RESULT=$(resolve_mac "$BRIDGE_IFACE" "$MAC_MODE")
     BRIDGE_MAC="${BRIDGE_RESULT% *}"
     BRIDGE_MAC_SOURCE="${BRIDGE_RESULT##* }"
-    # dynamic/static 변환 성공(source=dynamic|target)일 때만 base 위에 override. source=base면 이미 1)에서 반영됨.
-    if [ -n "$BRIDGE_MAC" ] && [ "$BRIDGE_MAC_SOURCE" != "base" ]; then
-        /usr/local/scripts/update_mac.sh "$BRIDGE_IFACE" "$BRIDGE_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh $BRIDGE_IFACE ($BRIDGE_MAC_SOURCE) failed"
-        logger -p local0.info "[$tag:$LINENO] [$BRIDGE_IFACE] MAC override to $BRIDGE_MAC (source=$BRIDGE_MAC_SOURCE)"
+    if [ -n "$BRIDGE_MAC" ]; then
+        logger -p local0.info \
+            "[$tag:$LINENO] [$BRIDGE_IFACE] final MAC selected: $BRIDGE_MAC (source=$BRIDGE_MAC_SOURCE)"
     else
-        BRIDGE_MAC_SOURCE="base"
-        logger -p local0.info "[$tag:$LINENO] [$BRIDGE_IFACE] dynamic/static MAC not resolved; keep base"
+        BRIDGE_MAC_SOURCE="none"
+        logger -p local0.info "[$tag:$LINENO] [$BRIDGE_IFACE] dynamic/static/base MAC not resolved"
     fi
 else
     logger -p local0.info "[$tag:$LINENO] [$BRIDGE_IFACE] bridge inactive (BRIDGE_NONE=$BRIDGE_NONE); keep base MAC"
 fi
 
+# 최종 계획 자체에 같은 MAC이 두 인터페이스에 있으면 부분 적용하지 않고 전체 MAC 쓰기를
+# 건너뛴다. update_mac.sh도 현재 활성 *.link를 다시 검사해 외부/legacy 파일 충돌을 방어한다.
+if validate_final_mac_plan \
+    "$BRIDGE_IFACE=$BRIDGE_MAC" \
+    "$SECONDARY_IFACE=$SECONDARY_MAC" \
+    "eth0=$ETH0_MAC"; then
+    apply_final_mac "$BRIDGE_IFACE" "$BRIDGE_MAC" "$BRIDGE_MAC_SOURCE" \
+        || logger -p local0.err "[$tag:$LINENO] [$BRIDGE_IFACE] final MAC apply failed"
+    apply_final_mac "$SECONDARY_IFACE" "$SECONDARY_MAC" "base" \
+        || logger -p local0.err "[$tag:$LINENO] [$SECONDARY_IFACE] final MAC apply failed"
+    apply_final_mac "eth0" "$ETH0_MAC" "base" \
+        || logger -p local0.err "[$tag:$LINENO] [eth0] final MAC apply failed"
+else
+    logger -p local0.emerg "[$tag:$LINENO] invalid/duplicate final MAC plan; skip all MAC writes"
+fi
+
 # wifi_bridge / wifi_event / wifi_periodic_roam / wifi_ping_monitor / wifi_mgmt_log.timer 등
 # 자식 unit의 enable/disable은 운영자의 systemctl 결정이 진실이며, wifi_init.service의
 # ExecStartPost=/usr/local/scripts/wifi_services.sh start 가 enable된 것만 일괄 start한다.
-
-# --- eth0: base ---
-ETH0_MAC=$(read_mac_from_json "base" "eth0" "base") || ETH0_MAC=""
-if [ -n "$ETH0_MAC" ]; then
-    /usr/local/scripts/update_mac.sh eth0 "$ETH0_MAC" || logger -p local0.err "[$tag:$LINENO] update_mac.sh eth0 failed"
-else
-    logger -p local0.info "[$tag:$LINENO] [eth0] no base MAC configured; skip update_mac"
-fi
 
 fi  # MFG profile: MAC setup skip 끝
 

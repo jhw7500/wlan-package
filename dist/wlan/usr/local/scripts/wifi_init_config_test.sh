@@ -96,6 +96,10 @@ fi
 
 expect_file_contains "wifi_init.sh defines read_mac_from_json" "$WIFI_INIT_SH" '^read_mac_from_json() {'
 expect_file_contains "wifi_init.sh defines resolve_mac" "$WIFI_INIT_SH" '^resolve_mac() {'
+expect_equal \
+    "wifi_init.sh has one update_mac write point" \
+    "$(grep -c '^[[:space:]]*if /usr/local/scripts/update_mac.sh ' "$WIFI_INIT_SH")" \
+    "1"
 
 run_case \
     "base values" \
