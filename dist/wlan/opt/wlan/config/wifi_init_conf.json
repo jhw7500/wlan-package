@@ -194,14 +194,16 @@
         }
     },
     "temperature": {
-        "_comment": [
-            "wifi_logger_temp.sh 온도 임계값과 복구 조건 설정",
-            "emerg_*/crit_*/error_*/warn_*: (int) CPU·WLAN 심각도별 온도 임계값 (°C)",
-            "cooldown_sec: (int) emergency로 WiFi·bridge 서비스를 정지한 후 최초 복구 온도 확인까지의 냉각 대기 시간 (초)",
-            "recover_*: (int) CPU·WLAN 복구 판정 온도 (°C)",
-            "check_interval_sec: (int) 온도 확인 주기 (초)",
-            "emerg_count_threshold: (int) emergency 판정에 필요한 연속 초과 횟수"
-        ],
+            "_comment": [
+                "wifi_logger_temp.sh 온도 임계값과 복구 조건 설정",
+                "emerg_cpu: (int) WiFi·bridge 긴급 정지를 시작하는 CPU 온도 임계값 (°C)",
+                "emerg_mlan: (int) WLAN emergency 임계값 예약 키. 현재 스크립트는 값을 로드하지만 긴급 정지 조건에는 사용하지 않음",
+                "crit_*/error_*/warn_*: (int) CPU·WLAN 심각도별 로그 온도 임계값 (°C)",
+                "cooldown_sec: (int) emergency로 WiFi·bridge 서비스를 정지한 후 최초 복구 온도 확인까지의 냉각 대기 시간 (초)",
+                "recover_*: (int) CPU·WLAN 복구 판정 온도 (°C)",
+                "check_interval_sec: (int) 온도 확인 주기 (초)",
+                "emerg_count_threshold: (int) CPU emergency 온도 연속 감지 카운터 임계값. 카운터가 이 값보다 커질 때 정지하므로 기본값 2는 세 번째 연속 감지에서 발동"
+            ],
         "emerg_cpu": 100,
         "crit_cpu": 95,
         "error_cpu": 90,
