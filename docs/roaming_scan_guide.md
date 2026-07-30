@@ -301,7 +301,7 @@ wifi 0 roam gate delta 3     # 판정 임계 조정
 | 3 | **`bgscan.passive=false` 의 부작용** | Stage 3와 **명령 문자열이 완전히 동일**해져 로그에서 주체를 로거 태그(`SCAN[` vs `ROAM[`)로만 구분해야 한다. 패시브면 `passive` 토큰으로 구분된다 |
 | 4 | **good-signal 분기는 조용하다** | 억제가 없으면 **로그를 남기지 않는다**(볼륨 억제 설계). 로그 부재가 "미진입"을 뜻하지 않으므로, 판정은 `streak` 와 `gate_suppressed=N`(no-candidate 줄에 병기) 으로 한다 |
 | 5 | **`MAX_SLEEP`·`RECOVER_SEC` 은 JSON 키가 없다** | `ROAM_NO_RESULT_MAX_SLEEP`·`ROAM_NO_RESULT_BACKOFF_RECOVER_SEC` 은 코드 상수만 있고 배포 JSON·스키마에 키가 없다. **수동 추가해야 실효**한다 |
-| 6 | **`RECOVER_SEC` 은 실효 0** | 상한 도달 후 streak 를 1 감소시키지만 같은 경로의 clamp 가 되돌려 순효과가 없다(latent bug). 실기에서 streak 가 `7↔6` 으로 진동하는 모습으로 관측된다 |
+| 6 | **`RECOVER_SEC` 은 실효 0** | 상한 도달 후 streak 를 1 감소시키지만 같은 경로의 clamp 가 되돌려 순효과가 없다(latent bug). 실기에서 streak 가 `7↔6` 으로 진동하는 모습으로 관측된다. 따라서 후보 미발견 상태가 길어져도 스캔 주기는 상한에 계속 머물며 빠른 탐색 주기로 자동 복귀하지 않는다 |
 | 7 | **bgscan 기아** | 로밍 컨디션이 지속되면 roam 스캔이 `_record_roam_scan_time()` 으로 bgscan 타이머를 계속 밀어내 **bgscan 자체 스캔이 0회**가 된다. 정상 환경(로밍 컨디션 미진입)에서는 정상 동작하므로 **구조적 결함이 아니다** — 임계를 비정상적으로 높인 시험 세팅에서 나타난다 |
 | 8 | **`wifi` CLI 경로** | `/usr/local/bin/wifi` 인데 **ssh 비대화형 PATH(`/usr/bin:/bin:/usr/sbin:/sbin`)에 없다.** 스크립트에서는 절대 경로를 쓸 것. `>/dev/null 2>&1` 과 겹치면 `command not found` 가 조용히 묻힌다 |
 | 9 | **`iw dev link` 는 신뢰 불가** | moal 이 cfg80211 `current_bss` 를 갱신하지 않아 연결 중에도 `Not connected.` 를 반환한다. 링크 판정은 `wlan_link_lib.sh`(wpa_cli → station dump 계단식)를 쓸 것 |
@@ -372,7 +372,7 @@ ping -D -O -I mlan0 -i 0.1 -s 64 -w 295 <target>    # 측정 (RTT/손실 관측)
 |---|---|
 | **2층 판정** (60초 peak-to-peak ≥ 5dB) | **미구현.** RSSI 이력이 `ENABLE_PREDICTIVE_ROAM` 게이트 안에서만 쌓이고(출하 기본 `false` → 비어 있음) 샘플 간격도 2~30초로 흔들려 1초 raw 로 검증한 지표(AUC 0.9999)를 그대로 옮길 수 없다. 1층(Δ)만으로 효과 거의 전부 |
 | **게이트 기본값 전환** (`enable: true`) | 현장 A/B 후 판단 |
-| **87% 기각의 대안 원인** | 주간 구간에서 비연결 AP 스캔 RSSI 가 연결 AP 보다 median 11dB 높게 읽힌다(n=2152, 97.3%). "연결=평활값 vs 스캔=순간값" 측정 방식 차이 가설을 배제하지 못했다. 이 편향이 남으면 게이트를 넣어도 잘못된 후보는 계속 뜬다 |
+| **87% 기각의 대안 원인** | 주간 구간에서 비연결 AP 스캔 RSSI 가 연결 AP 보다 median 11dB 높게 읽힌다(n=2152, 97.3%). "연결=평활값 vs 스캔=순간값" 측정 방식 차이 가설을 배제하지 못했다. 이 값은 서로 다른 AP 집단의 통계라 고정 보정값이 아니므로 `DIFF_TH`에서 11dB를 빼지 않는다. 단계형 스캔은 현재 AP가 같은 스캔 결과에 있으면 `baseline_from_entries()`로 비교 소스를 통일한다. 기본 `DIFF_TH=8`을 유지하고 `Roam candidate` 로그의 실제 `diff`와 로밍 성공률을 현장 A/B한 뒤에만 조정한다. 현재 AP가 스캔에서 누락되어 station RSSI로 폴백하는 구간이 반복되면 그 구간을 별도 계측한다 |
 | **hidden SSID 실측** | 패시브 블록에 빈 SSID 가 없었으나 "hidden 이라 안 잡힘"인지 "그 시점에 없었음"인지 미구분 (§3.4) |
 | **관리 프레임 rate** | airtime 계산의 6Mbps 가정 미검증. `radiotap.datarate` 캡처가 필요 |
 | **고부하 한계** | 4.1Mbps 까지만 측정. 더 높은 부하에서 버퍼가 넘쳐 손실로 전환되는지 미확인 |
