@@ -197,7 +197,7 @@
         "_comment": [
             "wifi_logger_temp.sh 온도 임계값과 복구 조건 설정",
             "emerg_*/crit_*/error_*/warn_*: (int) CPU·WLAN 심각도별 온도 임계값 (°C)",
-            "cooldown_sec: (int) 동일 경고 재출력 방지 시간 (초)",
+            "cooldown_sec: (int) emergency로 WiFi·bridge 서비스를 정지한 후 최초 복구 온도 확인까지의 냉각 대기 시간 (초)",
             "recover_*: (int) CPU·WLAN 복구 판정 온도 (°C)",
             "check_interval_sec: (int) 온도 확인 주기 (초)",
             "emerg_count_threshold: (int) emergency 판정에 필요한 연속 초과 횟수"
