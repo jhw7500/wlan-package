@@ -197,6 +197,13 @@ def test_track_reassoc_same_ap_after_disconnect_is_detected():
     assert gs["reset_rssi"] is None and gs["suppressed"] == 0
 
 
+def test_track_accepts_injected_now():
+    """assoc_ts 주입 — good_signal_reset_allowed 와 같은 규약으로 테스트를 시간에서 격리한다."""
+    gs = wifi_roam.new_gate_state()
+    wifi_roam.track_association(_st(), gs, now=NOW)
+    assert gs["assoc_ts"] == NOW
+
+
 def test_track_missing_bssid_field_is_ignored():
     """BSSID 필드가 없으면(파싱 실패 등) 결합 갱신을 하지 않는다 — 잘못된 grace 방지."""
     gs = wifi_roam.new_gate_state()

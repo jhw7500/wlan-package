@@ -178,7 +178,12 @@ gate_effective() {
     local fallback="$2"
     local v
 
-    v=$(jq -r ".${IFACE}.roaming.GOOD_SIGNAL_RESET_GATE.${key} // empty" "$WIFI_INIT_CONF_JSON") || return 1
+    # iface/key 를 필터 문자열에 보간하지 않고 --arg 로 넘긴다 —
+    # update_json_roaming_section 과 같은 방식(같은 파일 안에서 패턴이 갈리면 복사·재사용 시
+    # 취약해진다). 현재 IFACE 는 mlan0/mlan1 로 제한돼 실제 인젝션 위험은 없다.
+    v=$(jq -r --arg i "$IFACE" --arg k "$key" \
+          '.[$i].roaming.GOOD_SIGNAL_RESET_GATE[$k] // empty' \
+          "$WIFI_INIT_CONF_JSON") || return 1
     if [ -z "$v" ]; then
         echo "${fallback}(default)"
     else
