@@ -26,8 +26,8 @@ case "$IFACE" in
 esac
 
 BACKUP_FILE="${LINK_FILE}.bak"
-if ! mac_acquire_iface_lock "$NETWORK_DIR" "$IFACE"; then
-  logger -p local0.err "[$tag:$LINENO] [$IFACE] failed to acquire MAC update lock"
+if ! mac_acquire_global_lock "$NETWORK_DIR"; then
+  logger -p local0.err "[$tag:$LINENO] [$IFACE] failed to acquire global MAC update lock"
   exit 1
 fi
 

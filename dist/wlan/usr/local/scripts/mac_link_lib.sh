@@ -68,8 +68,9 @@ mac_render_link_with_address() {
     ' "$link_file"
 }
 
-mac_acquire_iface_lock() {
-    local network_dir="$1" iface="$2" lock_dir lock_file
+mac_acquire_global_lock() {
+    local network_dir="$1" lock_dir lock_file
+
     if [ -n "${MAC_LINK_LOCK_DIR:-}" ]; then
         lock_dir="$MAC_LINK_LOCK_DIR"
     elif [ "$network_dir" = "/etc/systemd/network" ]; then
@@ -77,16 +78,68 @@ mac_acquire_iface_lock() {
     else
         lock_dir="$network_dir"
     fi
+    lock_file="$lock_dir/wlan-mac-global.lock"
+
+    # wifi_init.sh가 전체 최종 계획에 대해 이미 획득한 같은 락은 자식
+    # update_mac.sh가 fd 9와 함께 상속한다. 환경 변수만 위조했거나 다른
+    # network_dir의 락이면 재사용하지 않는다.
+    if [ "${MAC_LINK_LOCK_HELD:-}" = "1" ] \
+        && [ "${MAC_LINK_LOCK_FILE:-}" = "$lock_file" ] \
+        && { : >&9; } 2>/dev/null; then
+        return 0
+    fi
+
     mkdir -p "$lock_dir" || return 1
-    lock_file="$lock_dir/wlan-mac-${iface}.lock"
     exec 9>"$lock_file" || return 1
-    flock 9
+    flock 9 || return 1
+    export MAC_LINK_LOCK_HELD=1
+    export MAC_LINK_LOCK_FILE="$lock_file"
+}
+
+mac_release_global_lock() {
+    if [ "${MAC_LINK_LOCK_HELD:-}" != "1" ] || ! { : >&9; } 2>/dev/null; then
+        return 0
+    fi
+    flock -u 9 || return 1
+    exec 9>&-
+    unset MAC_LINK_LOCK_HELD MAC_LINK_LOCK_FILE
+}
+
+# 패키지가 관리하는 .link 파일만 정확한 인터페이스에 매핑한다.
+# 임의 파일명의 인터페이스 문자열은 신뢰하지 않아 운영자 파일은 항상 충돌 검사에 남긴다.
+mac_owned_link_iface() {
+    local link_file="$1"
+    case "${link_file##*/}" in
+      20-mlan0.link) printf 'mlan0\n' ;;
+      21-mlan1.link) printf 'mlan1\n' ;;
+      22-eth0.link)  printf 'eth0\n' ;;
+      *) return 1 ;;
+    esac
+}
+
+mac_plan_value() {
+    local wanted_iface="$1" entry iface value
+    shift
+
+    for entry in "$@"; do
+        iface="${entry%%=*}"
+        [ "$iface" != "$entry" ] || continue
+        [ "$iface" = "$wanted_iface" ] || continue
+        value="${entry#*=}"
+        [ -n "$value" ] || return 1
+        mac_normalize "$value"
+        return 0
+    done
+    return 1
 }
 
 # 다른 활성 *.link가 같은 MACAddress를 설정하면 해당 파일 경로를 출력한다.
+# 단, 패키지 소유 인터페이스가 전달된 최종 계획에서 다른 MAC으로 이동할 예정이면
+# 현재 주소는 일시적인 점유이므로 충돌에서 제외한다.
 mac_find_link_conflict() {
     local network_dir="$1" own_link="$2" requested="$3"
-    local link_file configured
+    local link_file configured owner_iface planned
+    shift 3
     requested=$(mac_normalize "$requested")
 
     for link_file in "$network_dir"/*.link; do
@@ -95,6 +148,16 @@ mac_find_link_conflict() {
         configured=$(mac_read_link_address "$link_file")
         [ -n "$configured" ] || continue
         if [ "$configured" = "$requested" ]; then
+            owner_iface=$(mac_owned_link_iface "$link_file" || true)
+            planned=""
+            if [ -n "$owner_iface" ]; then
+                planned=$(mac_plan_value "$owner_iface" "$@" || true)
+            fi
+            if [ -n "$planned" ] \
+                && mac_is_assignable "$planned" \
+                && [ "$planned" != "$requested" ]; then
+                continue
+            fi
             printf '%s\n' "$link_file"
             return 0
         fi
