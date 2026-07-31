@@ -30,12 +30,20 @@
         "ANT_TYPE": "",
         "tx_work": 0,
         "ping_monitor": {
-            "_comment": "wifi_ping_monitor.service enable/disable. wifi_apply_enabled.sh가 systemctl enable/disable로 동기화한다.",
+            "_comment": [
+                "wifi_ping_monitor.service 활성화 설정. wifi_apply_enabled.sh가 systemctl enable/disable로 동기화",
+                "enabled: (bool) ping monitor 서비스 ON/OFF"
+            ],
             "enabled": false
         }
     },
     "mac": {
-        "_comment": "MAC address configuration. /opt/wlan/mac 디렉토리 대체. 빈 문자열이면 해당 소스 생략.",
+        "_comment": [
+            "인터페이스별 MAC 주소 설정. /opt/wlan/mac 디렉토리를 대체하며 빈 문자열이면 해당 소스를 생략",
+            "mlanN.base: (string) 무선 인터페이스의 기준 MAC 주소",
+            "mlanN.target: (string) 무선 인터페이스에 적용할 대상 MAC 주소",
+            "eth0.base: (string) 유선 인터페이스의 기준 MAC 주소"
+        ],
         "mlan0": {
             "base": "",
             "target": ""
@@ -86,23 +94,32 @@
             "enabled": false
         },
         "arp_ignore_always": {
-            "_comment": "arp_ignore_always.enabled: 클론 MAC의 weak-host 이중 ARP 응답 레이스를 커널 단에서 차단(arp_ignore=1/arp_announce=2). peer_route와 독립적으로 적용되는 개별 토글이다. IP 배치(토폴로지)에 종속: eth0에 IP를 두거나 eth0/mlan0가 동일 서브넷이라 이중응답이 문제인 구성에서 true, BD↔유선peer를 peer_route로 처리하는 순수 mlan0-IP 구성에서는 false. 토폴로지는 이 JSON이 아니라 `wifi <iface> ip`/webui로 결정. peer_route=on은 자체적으로 arp_ignore=1을 적용하므로 이 토글이 불필요.",
+            "_comment": [
+                "클론 MAC의 weak-host 이중 ARP 응답 레이스를 커널에서 차단. peer_route와 독립적으로 적용",
+                "enabled: (bool) arp_ignore=1/arp_announce=2 강제 적용 ON/OFF. eth0에 IP를 두거나 eth0/mlan0가 동일 서브넷인 구성에서 true. 순수 mlan0-IP 구성이나 peer_route=on이면 false"
+            ],
             "enabled": false
         },
         "eth_fallback": {
-            "_comment": "eth_fallback.enabled (B-2): mlan0 IP를 eth0에 /32 미러+공유 서브넷 fallback route(metric 200)로 병행 부여. 평시엔 mlan0 route(metric 0)가 우선해 잠복하고, 무선 down 시 networkd의 mlan0 주소/라우트 철회를 절체 트리거로 활용해 BD↔유선peer 통신을 eth0 직결로 자동 인계·복귀 시 자동 환원 (OHT IP 인지 불요 — 무선단절 중 유선 VHL 생존, 2026-07-17 실기 검증). mlan0-IP 토폴로지 전용. hairpin/dual 프로파일에 기본 포함 (wifi br profile). 20-mlan0.network의 KeepConfiguration/ConfigureWithoutCarrier(S1)와 병용 가능 — 철회가 없는 구성에서는 함께 적용되는 mlan0.ignore_routes_with_linkdown=1이 linkdown 라우트를 제외해 동일하게 절체된다(실기 검증).",
+            "_comment": [
+                "무선 down 시 mlan0 IP를 eth0 직결 경로로 자동 절체하고 복구 시 원래 경로로 환원. mlan0-IP 토폴로지 전용",
+                "enabled: (bool) mlan0 IP의 eth0 /32 미러와 fallback route(metric 200) 적용 ON/OFF. hairpin/dual 프로파일에 기본 포함"
+            ],
             "enabled": false
         },
         "engine": "moal",
         "moal": {
-            "_comment": "engine=moal 전용 파라미터 (키 설명은 상단 _comment). peer/consume_link_local은 빈 문자열이면 insmod 인자로 전달하지 않음(드라이버 기본값 사용 — 구버전 드라이버 호환).",
+            "_comment": [
+                "engine=moal 전용 파라미터. 나머지 키 설명은 wbridge._comment 참조",
+                "peer/consume_link_local: 빈 문자열이면 insmod 인자로 전달하지 않고 드라이버 기본값 사용",
+                "local_hairpin: (string 0|1) 로컬발 TX(dst==클론 MAC)를 무선 대신 유선 peer로 divert하고 ARP tee/inject. 빈 문자열이면 드라이버 기본값 0 사용. 런타임 변경: /sys/module/moal/parameters/bridge_local_hairpin"
+            ],
             "keepalive_ms": 1,
             "keepalive_idle_ms": 20,
             "deliver_rt_prio": 45,
             "debug": 0,
             "peer": "",
             "consume_link_local": "",
-            "_comment_local_hairpin": "local_hairpin: (0|1, 빈값=드라이버 기본 0) 로컬발 TX(dst==클론 MAC)를 공중 대신 유선 peer로 divert + ARP tee/inject. BD↔유선peer IP 통신을 peer_route/ip_discovery(=peer IP 인지) 없이 성립시킨다. AP가 intra-BSS 반사를 안 하는 현장에서 BD발신의 유일 경로 (2026-07-17 실기 검증). runtime 변경: /sys/module/moal/parameters/bridge_local_hairpin",
             "local_hairpin": "0"
         },
         "optimize": {
@@ -160,7 +177,11 @@
             "restart_cooldown_sec": 60,
             "bridge_units": "wifi_bridge@mlan0.service wifi_bridge@mlan1.service",
             "thresholds": {
-                "_comment": "warm: 성능 제한 시작, hot: 최대 발열 억제. enter=진입 온도, exit=해제 온도",
+                "_comment": [
+                    "Thermal 상태 전환 온도 임계값. warm은 성능 제한 시작, hot은 최대 발열 억제",
+                    "*_enter: (int) 해당 상태 진입 온도 (°C)",
+                    "*_exit: (int) 해당 상태 해제 온도 (°C)"
+                ],
                 "warm_cpu_enter": 90,
                 "hot_cpu_enter": 95,
                 "warm_cpu_exit": 85,
@@ -173,7 +194,16 @@
         }
     },
     "temperature": {
-        "_comment": "wifi_logger_temp.sh temperature thresholds and cooldown",
+            "_comment": [
+                "wifi_logger_temp.sh 온도 임계값과 복구 조건 설정",
+                "emerg_cpu: (int) WiFi·bridge 긴급 정지를 시작하는 CPU 온도 임계값 (°C)",
+                "emerg_mlan: (int) WLAN emergency 임계값 예약 키. 현재 스크립트는 값을 로드하지만 긴급 정지 조건에는 사용하지 않음",
+                "crit_*/error_*/warn_*: (int) CPU·WLAN 심각도별 로그 온도 임계값 (°C)",
+                "cooldown_sec: (int) emergency로 WiFi·bridge 서비스를 정지한 후 최초 복구 온도 확인까지의 냉각 대기 시간 (초)",
+                "recover_*: (int) CPU·WLAN 복구 판정 온도 (°C)",
+                "check_interval_sec: (int) 온도 확인 주기 (초)",
+                "emerg_count_threshold: (int) CPU emergency 온도 연속 감지 카운터 임계값. 카운터가 이 값보다 커질 때 정지하므로 기본값 2는 세 번째 연속 감지에서 발동"
+            ],
         "emerg_cpu": 100,
         "crit_cpu": 95,
         "error_cpu": 90,
@@ -189,7 +219,10 @@
         "emerg_count_threshold": 2
     },
     "mmc": {
-        "_comment": "wifi_logger_mmc.sh eMMC health monitoring",
+        "_comment": [
+            "wifi_logger_mmc.sh eMMC 상태 감시 설정",
+            "check_interval_sec: (int) eMMC 상태 확인 주기 (초)"
+        ],
         "check_interval_sec": 300
     },
     "mcp": {
@@ -217,14 +250,28 @@
         }
     },
     "monitor": {
-        "_comment": "wifi_link_monitor.py display configuration. CLI args take priority over these values.",
+        "_comment": [
+            "wifi_link_monitor.py 표시 설정. CLI 인자가 이 값보다 우선",
+            "interval_sec: (number) 화면 갱신 주기 (초)",
+            "summary_lines: (int) summary 로그 표시 줄 수",
+            "ping_lines: (int) ping 로그 표시 줄 수",
+            "roam_display_sec: (int) 로밍 이벤트 표시 유지 시간 (초)"
+        ],
         "interval_sec": 1,
         "summary_lines": 5,
         "ping_lines": 5,
         "roam_display_sec": 5
     },
     "logger": {
-        "_comment": "전역 기본값 (인터페이스별 logger가 없으면 이 값 사용)",
+        "_comment": [
+            "WiFi logger 전역 기본값. 인터페이스별 logger 값이 없으면 사용",
+            "cpu_interval_sec: (number) CPU 로그 기록 주기 (초)",
+            "link_interval_sec: (number) 링크 로그 기록 주기 (초)",
+            "stat_log_interval_sec: (number) 통계 로그 기록 주기 (초)",
+            "stat_check_interval_sec: (number) 통계 상태 확인 주기 (초)",
+            "stat_reset_interval_sec: (number) 통계 로그 자동 초기화 주기 (초)",
+            "bgscan_stale_threshold_sec: (number) bgscan 결과 stale 판정 시간 (초)"
+        ],
         "cpu_interval_sec": 60,
         "link_interval_sec": 0.95,
         "stat_log_interval_sec": 1,
@@ -233,15 +280,17 @@
         "bgscan_stale_threshold_sec": 600
     },
     "eth0": {
-        "_comment": "eth0 interface configuration",
+        "_comment": [
+            "eth0 인터페이스 설정"
+        ],
         "logger": {
             "link_interval_sec": 1
         }
     },
     "mlan0": {
         "_comment": [
-            "mlan0 interface configuration",
-            "net_rx: (int) MGMT 프레임 로깅 비트맵. wifi_init.sh가 wifi_mod_para.conf의 PCIE9098_0(sdio면 SD9098_0) 블록 net_rx=로 반영(0이면 라인 삭제). bit[1:0]=RX 모드(2=로밍 프레임만 Auth/Assoc/Deauth/Disassoc/Action, 3=전체 Beacon/Probe 포함), bit[2](+4)=TX 로그. 값: 0=비활성, 2=로밍, 3=전체, 6=로밍+TX, 7=전체+TX. 로그는 dmesg가 아닌 /proc/mwlan/adapterX/mgmt_log 커널 링버퍼에 기록되고 mgmt-log-flush.timer가 10초마다 /var/log/cantops/mgmt/mlanX/gmgmt.log로 flush"
+            "mlan0/mlan1 공통 인터페이스 설정. 중복 설명은 mlan0에만 정의",
+            "net_rx: (int) MGMT 프레임 로깅 비트맵. wifi_init.sh가 wifi_mod_para.conf의 PCIE9098_N 또는 SD9098_N 블록에 반영하며 0이면 라인 삭제. bit[1:0]=RX 모드(2=로밍 프레임만, 3=Beacon/Probe 포함 전체), bit[2](+4)=TX 로그. 값: 0=비활성, 2=로밍, 3=전체, 6=로밍+TX, 7=전체+TX. /proc/mwlan/adapterN/mgmt_log에서 gmgmt.log로 주기적으로 flush"
         ],
         "STANDARD": "ax",
         "CAL_DATA_CFG": "",
@@ -253,7 +302,13 @@
         "mgmt_hex_dump_enable": false,
         "thermal_mgmt": true,
         "rate_adapt": {
-            "_comment": "FW rate adaptation config. mode: 0=legacy, 1=SR. For SR: thresh 0xff=dynamic(noise-based), else static(success-rate%). interval_ms: eval period in ms. Must be set before association.",
+            "_comment": [
+                "연결 전에 적용하는 FW rate adaptation 설정",
+                "mode: (int) 0=legacy, 1=SR",
+                "low_thresh: (int) SR low threshold. 0xff=노이즈 기반 동적값, 그 외=성공률 기준 정적값 (%)",
+                "high_thresh: (int) SR high threshold. 0xff=노이즈 기반 동적값, 그 외=성공률 기준 정적값 (%)",
+                "interval_ms: (int) rate 평가 주기 (ms)"
+            ],
             "mode": 1,
             "low_thresh": 50,
             "high_thresh": 80,
@@ -267,25 +322,36 @@
             "enabled": true
         },
         "periodic_roam": {
-            "_comment": "Periodic passive roam (roam 0) configuration. scan_before_roam: true=roam 전 스캔 수행(최신 RSSI 기반 판단), false=기존 ap.log 스캔 데이터 사용. 데몬 활성화는 systemctl enable wifi_periodic_roam@mlan0로 결정.",
+            "_comment": [
+                "주기적 passive roam(roam 0) 설정. 서비스 단위는 wifi_periodic_roam@<iface>",
+                "interval: (int) 로밍 실행 주기 (초)",
+                "scan_before_roam: (bool) true=로밍 전 스캔 수행, false=기존 ap.log 사용",
+                "enabled: (bool) periodic roam 서비스 ON/OFF"
+            ],
             "interval": 60,
             "scan_before_roam": true,
             "enabled": false
         },
         "bgscan": {
-            "_comment": "Background scan configuration for mlan0. freq_filter: freq 필터 포함 여부(기본 true), false면 전체 대역 스캔(스캔 시간·airtime↑). ssid_filter(기본 true)는 passive=false일 때만 유효하며, 그때는 roaming.extra_ssids가 ssid_filter와 무관하게 항상 directed probe된다(hidden extra 발견 보장). 추가 키 설명은 _comment_<키> 참조.",
+            "_comment": [
+                "백그라운드 AP 스캔 설정",
+                "interval: (int) 스캔 주기 (초)",
+                "ssid_filter: (bool) 현재·추가 로밍 SSID만 스캔. passive=false일 때만 유효",
+                "freq_filter: (bool) 설정 주파수만 스캔. false이면 전체 대역 스캔으로 시간과 airtime 증가",
+                "passive: (bool) true=probe 없이 beacon만 수신하여 hidden SSID를 발견하지 못함, false=active scan",
+                "emit_roam_hint: (bool) 스캔 성공 시 /tmp/wifi_roam_hint_<iface>를 갱신하여 roam backoff 해제",
+                "enabled: (bool) background scan 서비스 ON/OFF"
+            ],
             "interval": 60,
             "ssid_filter": true,
             "freq_filter": true,
-            "_comment_passive": "true(기본)=패시브 스캔(probe request 미송신, beacon만 수신) — directed probe(ssid_filter/extra_ssids)가 전부 무효가 되고 hidden SSID는 bgscan으로 발견되지 않는다(로밍 트리거 시 액티브 폴백이 보완). false=종전 액티브 스캔",
             "passive": true,
-            "_comment_emit_roam_hint": "true(기본)면 스캔 성공 시 /tmp/wifi_roam_hint_<iface> touch — roam 데몬의 후보없음 지수 backoff를 즉시 해제하는 단방향 신호",
             "emit_roam_hint": true,
             "enabled": true
         },
         "roaming": {
             "_comment": [
-                "wifi_roam.py 로밍 알고리즘 설정 (mlan0)",
+                "wifi_roam.py 로밍 알고리즘 공통 설정",
                 "extra_ssids: (array[str], 기본 []) conf 기본 ssid 외 추가 로밍 후보 SSID. 같은 psk/key_mgmt 전제. 같은 SSID는 wpa_cli roam(무중단), 다른 SSID는 wifi connect(재연결)로 전환. 빈 배열=기존 단일 SSID 동작. extra_ssids는 bgscan이 ssid_filter와 무관하게 항상 directed probe하므로 hidden SSID도 스캔된다.",
                 "generate_network_blocks: (bool, 기본 false) 모드 결정자. false=모드B(단일 블록, cross-SSID는 외부 wifi connect만, extra_ssids 무시), true=모드A(다중 network 블록 생성 + select_network cross-SSID). 기본 false로 기존 단일 SSID 동작 무회귀.",
                 "ROAM_CROSS_FAIL_RETRY_COUNT: (int, 기본 2) 모드 A cross-SSID(select_network) 전환 실패 시 cooldown 없이 즉시 재시도 허용 횟수. 초과하면 SCAN_NO_RESULT_SLEEP~ROAM_NO_RESULT_MAX_SLEEP 지수 backoff로 해당 SSID를 로밍 후보에서 제외(진동 차단). 모드 B에선 미적용.",
@@ -345,25 +411,29 @@
                 "detection_time": 5
             },
             "STAGED_SCAN": {
-                "_comment": "단계형 로밍 스캔(홈채널 스캔 → 교차채널 캐시 → 액티브 폴백). 키별 설명은 _comment_<키> 참조. 전 키 SIGHUP으로 런타임 반영.",
-                "_comment_enable": "false면 종전 단일 액티브 스캔 경로로 회귀(무회귀 폴백)",
+                "_comment": [
+                    "단계형 로밍 스캔(홈채널 → 교차채널 캐시 → active fallback). 모든 키는 SIGHUP으로 런타임 반영",
+                    "enable: (bool) 단계형 스캔 ON/OFF. false이면 기존 단일 active scan 사용",
+                    "skip_redundant_active: (bool) 홈 스캔에서 실제 후보를 찾으면 불필요한 Stage 3 active fallback 생략",
+                    "home_passive: (bool) true=홈채널 passive scan, false=허용된 SSID의 directed active scan",
+                    "cache_fresh_sec: (int) 교차채널 bgscan 캐시 유효 시간 (초). bgscan.interval보다 10초 이상 크게 설정 권장",
+                    "self_induced_tail_sec: (int) 자체 로밍 스캔 종료 후 bgscan 캐시로 간주하지 않을 시간 (초)"
+                ],
                 "enable": true,
-                "_comment_skip_redundant_active": "scan_freq가 홈채널 부분집합(단일채널 등)이고 홈 스캔이 현재 AP 외 후보를 실제로 봤으면 Stage3 액티브 폴백 스킵(불필요한 probe 제거). 스캔 실패·현재 AP만 보임·타 SSID만 보임이면 재시도/재발견 위해 액티브 유지",
                 "skip_redundant_active": true,
-                "_comment_home_passive": "Stage1 홈채널 스캔 모드. true(기본)=패시브(probe 미송신, 저부하). false=directed 액티브(allowed SSID probe, wildcard 없음) — 홈채널에 hidden 로밍 SSID가 있으면 false 권장(스킵 최적화 유지한 채 hidden 발견)",
                 "home_passive": true,
-                "_comment_cache_fresh_sec": "교차채널 캐시(ap.log 배경 블록) 신선도 바운드(초). bgscan.interval + 여유(≥10초)로 설정 — 작으면 매 주기 말미에 최신 배경 블록조차 stale 판정되어 불필요한 액티브 폴백 발생",
                 "cache_fresh_sec": 70,
-                "_comment_self_induced_tail_sec": "자기(로밍 판정) 스캔 종료 후 이 시간(초) 안에 기록된 ap.log 블록은 그 스캔이 유발한 것으로 보고 배경 캐시로 쓰지 않음",
                 "self_induced_tail_sec": 10
             },
             "GOOD_SIGNAL_RESET_GATE": {
-                "_comment": "신호 양호(rssi >= 임계) 분기에서 후보없음 backoff streak 리셋을 '위치가 실제로 변했을 때만' 허용하는 게이트. 키별 설명은 _comment_<키> 참조. 전 키 SIGHUP으로 런타임 반영.",
-                "_comment_enable": "false(기본)면 종전대로 무조건 리셋(무회귀). true면 직전 리셋 시점 대비 |Δrssi| >= delta_db 일 때만 리셋. 근거: 정체 18.85h 재생에서 오탐 리셋 662건 중 624건(94%)이 이 분기이고 그중 623건이 Δ0dB — 임계 바로 위 진동이 backoff를 3초로 되돌려 스캔 폭증. 켜면 스캔 3377→1417(-58.0%), 이동 로그(71개 90.1h)는 -0.0%·추가지연 0건",
+                "_comment": [
+                    "신호 양호 분기에서 위치가 실제로 변한 경우에만 후보없음 backoff streak를 초기화. 모든 키는 SIGHUP으로 런타임 반영",
+                    "enable: (bool) reset gate ON/OFF. false이면 기존처럼 항상 초기화, true이면 직전 초기화 대비 |ΔRSSI|가 delta_db 이상일 때만 초기화",
+                    "delta_db: (int) 초기화를 허용하는 최소 누적 RSSI 변화량 (dB, 최솟값 1)",
+                    "post_roam_grace_sec: (int) 로밍·재연결 후 gate를 우회하여 기존처럼 초기화할 시간 (초)"
+                ],
                 "enable": false,
-                "_comment_delta_db": "리셋을 허용하는 최소 |Δrssi|(dB, 직전 리셋 시점 기준 누적). 재생 실측상 1/2/3/5 전부 -58.0~-58.1%로 동일(리셋 지점 Δ가 0dB에 몰림) — 1dB 양자화 여유를 둔 2 권장. 0은 게이트 무효라 하한 1",
                 "delta_db": 2,
-                "_comment_post_roam_grace_sec": "결합(로밍·재연결) 후 이 시간(초) 동안은 게이트를 우회해 종전처럼 리셋. 결합 직후 RSSI는 25초에 걸쳐 12~14dB 하강하는 측정 램프(attach ramp, TX rate 불변)라 그 Δ를 '이동'으로 읽으면 게이트가 무력화됨",
                 "post_roam_grace_sec": 40
             },
             "ADAPTIVE_INTERVAL": {
@@ -416,19 +486,41 @@
             "enabled": true
         },
         "mcs_tier": {
-            "_comment": "MCS tier capability limit (mcstiercfg). Applied at boot before association AND reapplied on every connected event (wifi_event.sh). Values are strings passed verbatim after each prefix: ht/vht/he. Empty string skips the prefix. Examples: \"7\", \"15\", \"both 7\".",
+            "_comment": [
+                "MCS capability 제한(mcstiercfg). 부팅 시 연결 전에 한 번 적용하며 연결 이벤트마다 재적용하지 않음",
+                "enabled: (bool) MCS tier 설정 적용 ON/OFF",
+                "ht: (string) ht prefix 뒤에 전달할 값. 빈 문자열이면 생략",
+                "vht: (string) vht prefix 뒤에 전달할 값. 빈 문자열이면 생략",
+                "he: (string) he prefix 뒤에 전달할 값. 빈 문자열이면 생략"
+            ],
             "enabled": false,
             "ht": "7",
             "vht": "7",
             "he": "both 7"
         },
         "on_connect": {
-            "_comment": "Commands to execute after AP connection/roaming (via wifi_event). Runs in order, failures are logged but do not stop execution.",
+            "_comment": [
+                "AP 연결·로밍 후 wifi_event가 실행할 명령 목록. 서비스 시작 시 한 번 읽으며 설정 변경 후 서비스 재시작 필요",
+                "enabled: (bool) 연결 후 명령 실행 ON/OFF",
+                "commands: (array[string]) 순서대로 실행할 명령. 실패는 기록하고 다음 명령 계속 실행"
+            ],
             "enabled": true,
             "commands": []
         },
         "checker": {
-            "_comment": "wifi_checker@mlan0 임계값 + 데몬 활성화. RECONFIGURE_GRACE_SEC: reconfigure 재연결 과도기 동안 불안정 사다리 억제(초, flag mtime 기준)",
+            "_comment": [
+                "wifi_checker@<iface> 장애 판정 임계값과 서비스 설정",
+                "LIMIT_CNT: (int) 기본 오류 허용 횟수",
+                "MAX_UNSTABLE_DURATION: (int) 불안정 상태 최대 허용 시간 (초)",
+                "MAX_REBOOT_COUNT: (int) 최대 재부팅 횟수",
+                "REBOOT_COOLDOWN_SEC: (int) 재부팅 간 최소 대기 시간 (초)",
+                "MIN_UPTIME_SEC: (int) 장애 판정 전 최소 uptime (초)",
+                "FAULT_REASSOC_CNT: (int) 재연결 수행 오류 횟수",
+                "FAULT_RESTART_CNT: (int) 서비스 재시작 수행 오류 횟수",
+                "FAULT_REBOOT_CNT: (int) 시스템 재부팅 수행 오류 횟수",
+                "RECONFIGURE_GRACE_SEC: (int) reconfigure 재연결 과도기 동안 장애 단계를 억제할 시간 (초)",
+                "enabled: (bool) checker 서비스 ON/OFF"
+            ],
             "LIMIT_CNT": 5,
             "MAX_UNSTABLE_DURATION": 10,
             "MAX_REBOOT_COUNT": 3,
@@ -441,7 +533,16 @@
             "enabled": true
         },
         "arping": {
-            "_comment": "wifi_arping@mlan0 임계값 + 데몬 활성화",
+            "_comment": [
+                "wifi_arping@<iface> ARP 연결 감시 임계값과 서비스 설정",
+                "threshold: (int) 장애 판정 연속 실패 횟수",
+                "cooldown_sec: (int) 장애 처리 후 대기 시간 (초)",
+                "loop_delay_sec: (int) 감시 반복 대기 시간 (초)",
+                "timeout_sec: (int) ARP 응답 제한 시간 (초)",
+                "sweep_timeout_sec: (int) 피어 탐색 제한 시간 (초)",
+                "sweep_parallel_limit: (int) 동시 피어 탐색 최대 개수",
+                "enabled: (bool) arping 서비스 ON/OFF"
+            ],
             "threshold": 10,
             "cooldown_sec": 10,
             "loop_delay_sec": 10,
@@ -452,10 +553,6 @@
         }
     },
     "mlan1": {
-        "_comment": [
-            "mlan1 interface configuration",
-            "net_rx: (int) MGMT 프레임 로깅 비트맵. wifi_init.sh가 wifi_mod_para.conf의 PCIE9098_1(sdio면 SD9098_1) 블록 net_rx=로 반영(0이면 라인 삭제). bit[1:0]=RX 모드(2=로밍 프레임만 Auth/Assoc/Deauth/Disassoc/Action, 3=전체 Beacon/Probe 포함), bit[2](+4)=TX 로그. 값: 0=비활성, 2=로밍, 3=전체, 6=로밍+TX, 7=전체+TX. 로그는 dmesg가 아닌 /proc/mwlan/adapterX/mgmt_log 커널 링버퍼에 기록되고 mgmt-log-flush.timer가 10초마다 /var/log/cantops/mgmt/mlanX/gmgmt.log로 flush"
-        ],
         "STANDARD": "ac",
         "CAL_DATA_CFG": "",
         "TXPWRLIMIT_PATH": "",
@@ -466,7 +563,6 @@
         "mgmt_hex_dump_enable": false,
         "thermal_mgmt": true,
         "rate_adapt": {
-            "_comment": "FW rate adaptation config. mode: 0=legacy, 1=SR. For SR: thresh 0xff=dynamic(noise-based), else static(success-rate%). interval_ms: eval period in ms. Must be set before association.",
             "mode": 1,
             "low_thresh": 50,
             "high_thresh": 80,
@@ -480,37 +576,19 @@
             "enabled": false
         },
         "periodic_roam": {
-            "_comment": "Periodic passive roam (roam 0) configuration. scan_before_roam: true=roam 전 스캔 수행, false=기존 ap.log 사용. 데몬 활성화는 systemctl enable wifi_periodic_roam@mlan1로 결정.",
             "interval": 60,
             "scan_before_roam": true,
             "enabled": false
         },
         "bgscan": {
-            "_comment": "Background scan configuration for mlan1. freq_filter: freq 필터 포함 여부(기본 true), false면 전체 대역 스캔(스캔 시간·airtime↑). ssid_filter(기본 true)는 passive=false일 때만 유효하며, 그때는 roaming.extra_ssids가 ssid_filter와 무관하게 항상 directed probe된다(hidden extra 발견 보장). 추가 키 설명은 _comment_<키> 참조.",
             "interval": 60,
             "ssid_filter": true,
             "freq_filter": true,
-            "_comment_passive": "true(기본)=패시브 스캔(probe request 미송신, beacon만 수신) — directed probe(ssid_filter/extra_ssids)가 전부 무효가 되고 hidden SSID는 bgscan으로 발견되지 않는다(로밍 트리거 시 액티브 폴백이 보완). false=종전 액티브 스캔",
             "passive": true,
-            "_comment_emit_roam_hint": "true(기본)면 스캔 성공 시 /tmp/wifi_roam_hint_<iface> touch — roam 데몬의 후보없음 지수 backoff를 즉시 해제하는 단방향 신호",
             "emit_roam_hint": true,
             "enabled": false
         },
         "roaming": {
-            "_comment": [
-                "wifi_roam.py 로밍 알고리즘 설정 (mlan1)",
-                "extra_ssids: (array[str], 기본 []) conf 기본 ssid 외 추가 로밍 후보 SSID. 같은 psk/key_mgmt 전제. 같은 SSID는 wpa_cli roam(무중단), 다른 SSID는 wifi connect(재연결)로 전환. 빈 배열=기존 단일 SSID 동작. extra_ssids는 bgscan이 ssid_filter와 무관하게 항상 directed probe하므로 hidden SSID도 스캔된다.",
-                "generate_network_blocks: (bool, 기본 false) 모드 결정자. false=모드B(단일 블록, cross-SSID는 외부 wifi connect만, extra_ssids 무시), true=모드A(다중 network 블록 생성 + select_network cross-SSID). 기본 false로 기존 단일 SSID 동작 무회귀.",
-                "ROAM_CROSS_FAIL_RETRY_COUNT: (int, 기본 2) 모드 A cross-SSID(select_network) 전환 실패 시 cooldown 없이 즉시 재시도 허용 횟수. 초과하면 SCAN_NO_RESULT_SLEEP~ROAM_NO_RESULT_MAX_SLEEP 지수 backoff로 해당 SSID를 로밍 후보에서 제외(진동 차단). 모드 B에선 미적용.",
-                "ROAM_NO_RESULT_FAST_COUNT: (int, 기본 3) 로밍컨디션에서 로밍 대상 AP를 못 찾았을 때, 처음 이 횟수만큼은 backoff 없이 SCAN_NO_RESULT_SLEEP 주기로 빠르게 재스캔한다(진입 직후 공격적 로밍 시도). 초과분부터 SCAN_NO_RESULT_SLEEP×2^n 지수 backoff(ROAM_NO_RESULT_MAX_SLEEP 상한). 1이면 즉시 backoff(기존 동작).",
-                "use_signal_avg: (bool) true=signal_avg(평균, 안정적), false=signal(순간값, 즉시 반응)",
-                "DEFAULT_TH_2G: (int) 2.4GHz RSSI 로밍 임계값 (dBm). 이 값 이하이면 로밍 시도. 이 JSON 이 단일 소스이며 wpa_supplicant.conf 의 `#!TH_2G=` 마커는 더 이상 읽지 않는다.",
-                "DEFAULT_TH_5G: (int) 5GHz RSSI 로밍 임계값 (dBm). 이 값 이하이면 로밍 시도. 이 JSON 이 단일 소스이며 wpa_supplicant.conf 의 `#!TH_5G=` 마커는 더 이상 읽지 않는다.",
-                "DIFF_TH: (int) 현재 AP 대비 후보 AP의 최소 RSSI 이득 (dB). 클수록 보수적. 0=이득 무관(동률 AP도 후보)이며 측정 요동(동일 AP 연속 관측 |ΔRSSI| p90=1dB)만으로도 로밍해 진동이 급증하므로 시험용. `wifi <if> roam diff <dB>` 로 런타임 변경(persist + SIGHUP 무재시작 반영).",
-                "CHECK_INTERVAL: (int) 로밍 체크 기본 주기 (초). ADAPTIVE_INTERVAL 활성 시 동적 조절됨",
-                "SCAN_NO_RESULT_SLEEP: (int) 스캔 결과 없을 때 대기 (초)",
-                "ROAM_SUCCESS_SLEEP: (int) 로밍 성공 후 재체크 대기 (초)"
-            ],
             "use_signal_avg": true,
             "DEFAULT_TH_2G": -75,
             "DEFAULT_TH_5G": -75,
@@ -521,77 +599,35 @@
             "ROAM_CROSS_FAIL_RETRY_COUNT": 2,
             "ROAM_NO_RESULT_FAST_COUNT": 3,
             "PREDICTIVE_ROAM": {
-                "_comment": [
-                    "RSSI 추세 기반 예측 로밍. 하락 추세 감지 시 임계값을 boost만큼 올려 조기 로밍",
-                    "enable: (bool) 예측 로밍 ON/OFF",
-                    "threshold_boost: (int) RSSI 하락 추세 시 임계값에 더하는 부스트 (dB)",
-                    "trend_window_size: (int) 추세 계산에 사용할 RSSI 샘플 수",
-                    "trend_history_max_age: (int) 이 시간(초) 지난 샘플은 폐기"
-                ],
                 "enable": false,
                 "threshold_boost": 5,
                 "trend_window_size": 5,
                 "trend_history_max_age": 30
             },
             "LOAD_BASED_ROAM": {
-                "_comment": [
-                    "AP 채널 부하 기반 로밍. 현재 AP 부하가 높고 후보가 낮으면 로밍",
-                    "enable: (bool) 부하 기반 로밍 ON/OFF",
-                    "max_roam_load: (int) 현재 AP 부하가 이 값(%) 초과 시 로밍 고려",
-                    "load_diff_threshold: (int) 현재 AP와 후보 AP 부하 차이 최소값 (%)"
-                ],
                 "enable": false,
                 "max_roam_load": 80,
                 "load_diff_threshold": 20
             },
             "PING_PONG_PREVENTION": {
-                "_comment": [
-                    "AP 간 반복 로밍(핑퐁) 방지. window 내 로밍 횟수 초과 시 억제",
-                    "enable: (bool) 핑퐁 방지 ON/OFF",
-                    "window: (int) 로밍 횟수 감시 구간 (초)",
-                    "max_roams_in_window: (int) 구간 내 최대 허용 로밍 횟수",
-                    "detection_time: (int) 핑퐁 감지 후 로밍 억제 시간 (초)"
-                ],
                 "enable": true,
                 "window": 20,
                 "max_roams_in_window": 3,
                 "detection_time": 5
             },
             "STAGED_SCAN": {
-                "_comment": "단계형 로밍 스캔(홈채널 스캔 → 교차채널 캐시 → 액티브 폴백). 키별 설명은 _comment_<키> 참조. 전 키 SIGHUP으로 런타임 반영.",
-                "_comment_enable": "false면 종전 단일 액티브 스캔 경로로 회귀(무회귀 폴백)",
                 "enable": true,
-                "_comment_skip_redundant_active": "scan_freq가 홈채널 부분집합(단일채널 등)이고 홈 스캔이 현재 AP 외 후보를 실제로 봤으면 Stage3 액티브 폴백 스킵(불필요한 probe 제거). 스캔 실패·현재 AP만 보임·타 SSID만 보임이면 재시도/재발견 위해 액티브 유지",
                 "skip_redundant_active": true,
-                "_comment_home_passive": "Stage1 홈채널 스캔 모드. true(기본)=패시브(probe 미송신, 저부하). false=directed 액티브(allowed SSID probe, wildcard 없음) — 홈채널에 hidden 로밍 SSID가 있으면 false 권장(스킵 최적화 유지한 채 hidden 발견)",
                 "home_passive": true,
-                "_comment_cache_fresh_sec": "교차채널 캐시(ap.log 배경 블록) 신선도 바운드(초). bgscan.interval + 여유(≥10초)로 설정 — 작으면 매 주기 말미에 최신 배경 블록조차 stale 판정되어 불필요한 액티브 폴백 발생",
                 "cache_fresh_sec": 70,
-                "_comment_self_induced_tail_sec": "자기(로밍 판정) 스캔 종료 후 이 시간(초) 안에 기록된 ap.log 블록은 그 스캔이 유발한 것으로 보고 배경 캐시로 쓰지 않음",
                 "self_induced_tail_sec": 10
             },
             "GOOD_SIGNAL_RESET_GATE": {
-                "_comment": "신호 양호(rssi >= 임계) 분기에서 후보없음 backoff streak 리셋을 '위치가 실제로 변했을 때만' 허용하는 게이트. 키별 설명은 _comment_<키> 참조. 전 키 SIGHUP으로 런타임 반영.",
-                "_comment_enable": "false(기본)면 종전대로 무조건 리셋(무회귀). true면 직전 리셋 시점 대비 |Δrssi| >= delta_db 일 때만 리셋. 근거: 정체 18.85h 재생에서 오탐 리셋 662건 중 624건(94%)이 이 분기이고 그중 623건이 Δ0dB — 임계 바로 위 진동이 backoff를 3초로 되돌려 스캔 폭증. 켜면 스캔 3377→1417(-58.0%), 이동 로그(71개 90.1h)는 -0.0%·추가지연 0건",
                 "enable": false,
-                "_comment_delta_db": "리셋을 허용하는 최소 |Δrssi|(dB, 직전 리셋 시점 기준 누적). 재생 실측상 1/2/3/5 전부 -58.0~-58.1%로 동일(리셋 지점 Δ가 0dB에 몰림) — 1dB 양자화 여유를 둔 2 권장. 0은 게이트 무효라 하한 1",
                 "delta_db": 2,
-                "_comment_post_roam_grace_sec": "결합(로밍·재연결) 후 이 시간(초) 동안은 게이트를 우회해 종전처럼 리셋. 결합 직후 RSSI는 25초에 걸쳐 12~14dB 하강하는 측정 램프(attach ramp, TX rate 불변)라 그 Δ를 '이동'으로 읽으면 게이트가 무력화됨",
                 "post_roam_grace_sec": 40
             },
             "ADAPTIVE_INTERVAL": {
-                "_comment": [
-                    "RSSI 변화에 따른 체크 주기 자동 조절. 신호 불안정 시 주기 단축, 안정 시 연장",
-                    "enable: (bool) 적응형 주기 ON/OFF. false이면 CHECK_INTERVAL 고정 사용",
-                    "min_check_interval: (int) 최소 체크 주기 (초)",
-                    "max_check_interval: (int) 최대 체크 주기 (초)",
-                    "rssi_drop_threshold: (int) 이 값(dB) 이상 하락 시 주기 단축",
-                    "rssi_rise_threshold: (int) 이 값(dB) 이상 상승 시 주기 연장",
-                    "near_threshold_offset: (int) 로밍 임계값 근처(±offset dB) 판정 기준",
-                    "near_threshold_interval: (int) 임계값 근처일 때 사용할 체크 주기 (초)",
-                    "good_signal_offset: (int) 임계값 + offset 이상이면 신호 양호 판정 (dB)",
-                    "consecutive_drop_count: (int) 연속 하락 이 횟수 이상이면 주기 즉시 단축"
-                ],
                 "enable": false,
                 "min_check_interval": 1,
                 "max_check_interval": 10,
@@ -603,22 +639,10 @@
                 "consecutive_drop_count": 2
             },
             "POST_ROAM_ARP_OPTIMIZATION": {
-                "_comment": [
-                    "로밍 후 ARP 최적화. 새 AP의 MAC 테이블을 빠르게 갱신하여 통신 복구 단축",
-                    "enable: (bool) 로밍 후 ARP 최적화 ON/OFF",
-                    "garp_count: (int) Gratuitous ARP 전송 횟수",
-                    "garp_wait: (int) GARP 전송 간 대기 (초)"
-                ],
                 "enable": false,
                 "garp_count": 2,
                 "garp_wait": 1,
                 "PEER_WARMUP": {
-                    "_comment": [
-                        "로밍 후 주변 피어에 ARP 전송하여 피어 측 MAC 테이블 워밍업",
-                        "enable: (bool) 피어 워밍업 ON/OFF",
-                        "peer_count: (int) ARP 전송 대상 피어 수 (ARP 캐시 기준 상위 N개)",
-                        "peer_wait: (int) 피어 간 ARP 전송 대기 (초)"
-                    ],
                     "enable": false,
                     "peer_count": 5,
                     "peer_wait": 1
@@ -629,19 +653,16 @@
             "enabled": false
         },
         "mcs_tier": {
-            "_comment": "MCS tier capability limit (mcstiercfg). Applied at boot before association AND reapplied on every connected event (wifi_event.sh). Values are strings passed verbatim after each prefix: ht/vht/he. Empty string skips the prefix. Examples: \"7\", \"15\", \"both 7\".",
             "enabled": false,
             "ht": "",
             "vht": "",
             "he": ""
         },
         "on_connect": {
-            "_comment": "Commands to execute after AP connection/roaming (via wifi_event). Runs in order, failures are logged but do not stop execution.",
             "enabled": false,
             "commands": []
         },
         "checker": {
-            "_comment": "wifi_checker@mlan1 임계값 + 데몬 활성화. RECONFIGURE_GRACE_SEC: reconfigure 재연결 과도기 동안 불안정 사다리 억제(초, flag mtime 기준)",
             "LIMIT_CNT": 5,
             "MAX_UNSTABLE_DURATION": 10,
             "MAX_REBOOT_COUNT": 3,
@@ -654,7 +675,6 @@
             "enabled": false
         },
         "arping": {
-            "_comment": "wifi_arping@mlan1 임계값 + 데몬 활성화",
             "threshold": 10,
             "cooldown_sec": 10,
             "loop_delay_sec": 10,
@@ -665,7 +685,14 @@
         }
     },
     "snmp": {
-        "_comment": "snmpd(net-snmp) 조건부 기동 + 트랩. enabled: wifi_apply_enabled.sh가 .snmp.enabled를 읽어 snmpd.service를 systemctl enable/disable 동기화하고 wifi_services.sh가 start(기본 off, opt-in, UDP 161 보안). trap: wifi_event.sh가 무선 링크/채널 이벤트 시 snmptrap 송신(기본 off).",
+        "_comment": [
+            "snmpd(net-snmp) 조건부 기동과 WiFi 이벤트 trap 설정. 기본 OFF",
+            "enabled: (bool) snmpd 서비스 ON/OFF. wifi_apply_enabled.sh가 systemctl 상태를 동기화",
+            "trap.enabled: (bool) 무선 링크·채널 이벤트 SNMP trap 전송 ON/OFF",
+            "trap.dest: (string) trap 수신지 주소",
+            "trap.community: (string) SNMP community",
+            "trap.version: (string) SNMP 버전"
+        ],
         "enabled": false,
         "trap": {
             "enabled": false,
@@ -675,7 +702,10 @@
         }
     },
     "opc": {
-        "_comment": "opcd(wlan-opc OPC 제어 데몬) 조건부 기동. enabled: wifi_apply_enabled.sh가 .opc.enabled를 읽어 opcd.service를 systemctl enable/disable 동기화하고 wifi_services.sh가 start(기본 off, opt-in).",
+        "_comment": [
+            "opcd(wlan-opc OPC 제어 데몬) 조건부 기동 설정. 기본 OFF",
+            "enabled: (bool) opcd 서비스 ON/OFF. wifi_apply_enabled.sh가 systemctl 상태를 동기화"
+        ],
         "enabled": false
     }
 }
