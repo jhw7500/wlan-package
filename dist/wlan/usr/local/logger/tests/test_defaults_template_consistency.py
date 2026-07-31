@@ -117,3 +117,52 @@ def test_bgscan_bool_defaults_match_template(monkeypatch):
     # 부재) 시 쓰이는 코드 폴백이 템플릿 주기와 일치해야 스캔 cadence 가 fail-same 이다
     # (불일치 시 30s 폭주 — cache_fresh_sec 산정 전제도 어긋남).
     assert wifi_bgscan.DEFAULT_INTERVAL == bg["interval"], "interval 코드 폴백 fail-same 위반"
+
+
+# --- 스키마 default ↔ 템플릿 (docs/wifi_init_conf.schema.json) ---
+# 스키마의 default 는 "배포 기본값이 무엇인가"를 설명하는 문서이고 WebUI·가이드 생성의
+# 근거가 된다. 템플릿과 어긋나면 실제와 다른 값을 안내하게 된다 — 실측 사례: mlan0/mlan1
+# 각 4키(CHECK_INTERVAL, ROAM_SUCCESS_SLEEP, PING_PONG_PREVENTION.window/detection_time)
+# 가 어긋나 있었고 ROAM_NO_RESULT_FAST_COUNT 는 스키마에 키 자체가 없었다. 위의
+# 코드↔템플릿 축만으로는 스키마가 사각지대라 이 축을 따로 고정한다.
+_SCHEMA = os.path.join(
+    _LOGGER_DIR, "..", "..", "..", "..", "..", "docs", "wifi_init_conf.schema.json"
+)
+
+SCHEMA_CASES = [(iface, path) for iface in ("mlan0", "mlan1") for _a, path in CASES]
+
+
+@pytest.fixture(scope="module")
+def schema():
+    with open(_SCHEMA) as f:
+        return json.load(f)
+
+
+# 위의 `tmpl` 은 mlan0 만 반환하므로 iface 별 대조에는 전체 트리가 필요하다.
+# 케이스마다 다시 파싱하지 않도록 module-scope 로 한 번만 읽는다.
+@pytest.fixture(scope="module")
+def full_tmpl():
+    with open(_TMPL) as f:
+        return json.load(f)
+
+
+@pytest.mark.parametrize(
+    "iface,path", SCHEMA_CASES, ids=[f"{i}:{'.'.join(p)}" for i, p in SCHEMA_CASES]
+)
+def test_schema_default_matches_template(schema, full_tmpl, iface, path):
+    node = full_tmpl[iface]["roaming"]
+    for k in path:
+        assert isinstance(node, dict) and k in node, \
+            f"템플릿 {iface}.roaming 에 {'.'.join(path)} 키 없음"
+        node = node[k]
+
+    sch = schema["properties"][iface]["properties"]["roaming"]
+    for k in path:
+        props = sch.get("properties", {})
+        assert k in props, f"스키마 {iface}.roaming 에 {'.'.join(path)} 키 없음"
+        sch = props[k]
+    assert "default" in sch, f"스키마 {iface}.{'.'.join(path)} 에 default 없음"
+    assert sch["default"] == node, (
+        f"{iface}.{'.'.join(path)} — 스키마 default({sch['default']!r}) != "
+        f"템플릿({node!r})"
+    )

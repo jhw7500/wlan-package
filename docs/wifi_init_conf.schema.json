@@ -1228,7 +1228,7 @@
             },
             "CHECK_INTERVAL": {
               "type": "integer",
-              "default": 3,
+              "default": 2,
               "minimum": 1,
               "description": "로밍 체크 기본 주기(초). ADAPTIVE_INTERVAL 활성 시 동적 조절",
               "x-ui-editable": "yes",
@@ -1257,6 +1257,15 @@
               "default": 2,
               "minimum": 0,
               "description": "모드A cross-SSID 전환 실패 시 즉시 재시도 허용 횟수(모드B 미적용)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_roam.py"
+            },
+            "ROAM_NO_RESULT_FAST_COUNT": {
+              "type": "integer",
+              "default": 3,
+              "minimum": 1,
+              "description": "로밍 후보 미발견 시 지수 backoff 없이 SCAN_NO_RESULT_SLEEP 주기를 유지할 초기 횟수",
               "x-ui-editable": "yes",
               "x-apply-timing": "daemon-restart",
               "x-consumer": "wifi_roam.py"
@@ -1352,7 +1361,7 @@
                 },
                 "window": {
                   "type": "integer",
-                  "default": 30,
+                  "default": 20,
                   "minimum": 1,
                   "description": "로밍 횟수 감시 구간(초)",
                   "x-ui-editable": "yes",
@@ -1370,7 +1379,7 @@
                 },
                 "detection_time": {
                   "type": "integer",
-                  "default": 10,
+                  "default": 5,
                   "minimum": 1,
                   "description": "핑퐁 감지 후 로밍 억제 시간(초)",
                   "x-ui-editable": "yes",
@@ -1621,7 +1630,7 @@
             },
             "ROAM_SUCCESS_SLEEP": {
               "type": "integer",
-              "default": 5,
+              "default": 3,
               "minimum": 1,
               "description": "로밍 성공 후 재체크 대기(초, 안정화)",
               "x-ui-editable": "yes",
@@ -2166,7 +2175,7 @@
             },
             "CHECK_INTERVAL": {
               "type": "integer",
-              "default": 5,
+              "default": 3,
               "minimum": 1,
               "description": "로밍 체크 기본 주기(초). ADAPTIVE_INTERVAL 활성 시 동적 조절",
               "x-ui-editable": "yes",
@@ -2195,6 +2204,15 @@
               "default": 2,
               "minimum": 0,
               "description": "모드A cross-SSID 전환 실패 시 즉시 재시도 허용 횟수(모드B 미적용)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_roam.py"
+            },
+            "ROAM_NO_RESULT_FAST_COUNT": {
+              "type": "integer",
+              "default": 3,
+              "minimum": 1,
+              "description": "로밍 후보 미발견 시 지수 backoff 없이 SCAN_NO_RESULT_SLEEP 주기를 유지할 초기 횟수",
               "x-ui-editable": "yes",
               "x-apply-timing": "daemon-restart",
               "x-consumer": "wifi_roam.py"
@@ -2290,7 +2308,7 @@
                 },
                 "window": {
                   "type": "integer",
-                  "default": 60,
+                  "default": 20,
                   "minimum": 1,
                   "description": "로밍 횟수 감시 구간(초)",
                   "x-ui-editable": "yes",
@@ -2308,7 +2326,7 @@
                 },
                 "detection_time": {
                   "type": "integer",
-                  "default": 30,
+                  "default": 5,
                   "minimum": 1,
                   "description": "핑퐁 감지 후 로밍 억제 시간(초)",
                   "x-ui-editable": "yes",
@@ -2559,7 +2577,7 @@
             },
             "ROAM_SUCCESS_SLEEP": {
               "type": "integer",
-              "default": 5,
+              "default": 2,
               "minimum": 1,
               "description": "로밍 성공 후 재체크 대기(초, 안정화)",
               "x-ui-editable": "yes",
