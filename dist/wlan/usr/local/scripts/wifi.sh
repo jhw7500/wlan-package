@@ -49,23 +49,41 @@ stage_custom_calibration() {
         return 1
     fi
     basename=$(basename "$src")
-    dst="/lib/firmware/cts/$basename"
-
-    if [ ! "$src" -ef "$dst" ]; then
-        tmp=$(safe_tmp_for "$dst") || return 1
-        if ! install -o root -g root -m 0644 "$src" "$tmp" \
-            || ! mv -f "$tmp" "$dst"; then
-            rm -f "$tmp"
-            echo "Error: failed to stage '$src' into /lib/firmware/cts" >&2
-            return 1
-        fi
-        sync "$dst" 2>/dev/null || sync
-    fi
+    dst="$WIFI_CTS_DIR/$basename"
 
     if [ ! -x "$WIFI_CAL_BACKUP_SH" ]; then
         echo "Error: calibration backup helper not found: $WIFI_CAL_BACKUP_SH" >&2
         return 1
     fi
+
+    if [ ! "$src" -ef "$dst" ]; then
+        tmp=$(safe_tmp_for "$dst") || return 1
+        if [ "$(id -u)" -eq 0 ]; then
+            if ! install -o root -g root -m 0644 "$src" "$tmp"; then
+                rm -f "$tmp"
+                echo "Error: failed to stage '$src' into $WIFI_CTS_DIR" >&2
+                return 1
+            fi
+        else
+            if ! install -m 0644 "$src" "$tmp"; then
+                rm -f "$tmp"
+                echo "Error: failed to stage '$src' into $WIFI_CTS_DIR" >&2
+                return 1
+            fi
+        fi
+        if ! "$WIFI_CAL_BACKUP_SH" check "$tmp"; then
+            rm -f "$tmp"
+            echo "Error: invalid calibration: '$src'" >&2
+            return 1
+        fi
+        if ! mv -f "$tmp" "$dst"; then
+            rm -f "$tmp"
+            echo "Error: failed to stage '$src' into $WIFI_CTS_DIR" >&2
+            return 1
+        fi
+        sync "$dst" 2>/dev/null || sync
+    fi
+
     if ! "$WIFI_CAL_BACKUP_SH" mark "$dst"; then
         echo "Error: failed to protect custom calibration: '$dst'" >&2
         return 1
@@ -91,6 +109,7 @@ apply_sed_update() {
 WIFI_INIT_CONF_JSON="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
 JSON_FILE="${JSON_FILE:-/usr/local/etc/config.json}"
 WIFI_CAL_BACKUP_SH="${WIFI_CAL_BACKUP_SH:-/usr/local/scripts/wifi_cal_backup.sh}"
+WIFI_CTS_DIR="${WIFI_CTS_DIR:-/lib/firmware/cts}"
 
 # wpa assoc 완료(wpa_state=COMPLETED) 대기 상한(초) — connect / radio-apply 공통 기본값.
 # radio-apply는 인자($3)로 케이스별 override 가능하며, 미지정 시 이 값을 따른다.

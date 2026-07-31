@@ -4,6 +4,7 @@
 # Usage:
 #   wifi_cal_backup.sh protect       JSON이 선택한 사용자 calibration을 백업/복구
 #   wifi_cal_backup.sh mark <file>   `wifi ... cal <file>`로 반입한 파일을 사용자 파일로 표시·백업
+#   wifi_cal_backup.sh check <file>  반입 임시파일을 변경 없이 검증
 #   wifi_cal_backup.sh reset         공장 초기화 시 사용자 calibration 백업 표식 제거
 set -u
 
@@ -249,11 +250,17 @@ case "${1:-protect}" in
     mark)
         mark_cal "${2:-}"
         ;;
+    check)
+        if ! is_valid_cal "${2:-}"; then
+            log_msg local0.err "$LINENO" "invalid calibration stream: ${2:-}"
+            exit 1
+        fi
+        ;;
     reset)
         reset_markers
         ;;
     *)
-        log_msg local0.err "$LINENO" "usage: $tag <protect|mark <file>|reset>"
+        log_msg local0.err "$LINENO" "usage: $tag <protect|mark <file>|check <file>|reset>"
         exit 64
         ;;
 esac
