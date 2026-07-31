@@ -73,44 +73,39 @@ def test_max_level_defensive_on_bad_start(monkeypatch):
 
 def test_advance_increments_streak_and_returns_backoff(monkeypatch):
     _set_sleep(monkeypatch, 3, 30)
-    backoff, streak, cap_ts = advance_no_candidate_backoff(0, None)
+    backoff, streak = advance_no_candidate_backoff(0)
     assert streak == 1
     assert backoff == 3
-    assert cap_ts is None  # 아직 상한 미도달
 
 def test_advance_streak_caps_at_max_level(monkeypatch):
     # 매 tick 호출해도 streak가 max_level 위로 무한 증가하지 않아야 한다(#5).
     _set_sleep(monkeypatch, 3, 30)
-    monkeypatch.setattr(wifi_roam, "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC", 99999)
     max_level = wifi_roam._no_result_max_level()
-    streak, cap_ts = 0, None
+    streak = 0
     for _ in range(100):
-        backoff, streak, cap_ts = advance_no_candidate_backoff(streak, cap_ts)
+        backoff, streak = advance_no_candidate_backoff(streak)
     assert streak == max_level
     assert backoff == 30  # 상한 유지
 
-def test_advance_records_cap_ts_on_reaching_cap(monkeypatch):
-    _set_sleep(monkeypatch, 3, 30)
-    monkeypatch.setattr(wifi_roam, "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC", 60)
-    max_level = wifi_roam._no_result_max_level()
-    streak, cap_ts = max_level - 1, None
-    backoff, streak, cap_ts = advance_no_candidate_backoff(streak, cap_ts)
-    assert backoff == 30
-    assert cap_ts is not None  # 상한 첫 도달 시각 기록
+def test_advance_stays_at_cap_regardless_of_elapsed_time(monkeypatch):
+    """상한 도달 후에는 시간이 아무리 흘러도 주기가 상한 아래로 내려가지 않는다.
 
-def test_advance_decays_streak_after_recover_sec(monkeypatch):
-    # cap 상태에서 RECOVER_SEC 경과하면 streak가 점감(시간 기반)해야 한다.
-    _set_sleep(monkeypatch, 3, 30)
-    monkeypatch.setattr(wifi_roam, "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC", 60)
-    max_level = wifi_roam._no_result_max_level()
-    # 이미 cap에 도달했고 cap_ts가 충분히 과거(>RECOVER_SEC)라고 가정
-    fake_now = [1000.0]
-    monkeypatch.setattr(wifi_roam.time, "time", lambda: fake_now[0])
-    old_cap_ts = 1000.0 - 61  # 61s 전 → RECOVER_SEC(60) 초과
-    backoff, streak, cap_ts = advance_no_candidate_backoff(max_level, old_cap_ts)
-    # streak는 max_level로 clamp된 뒤 1 감소 → max_level-1
-    assert streak == max_level - 1
-    assert cap_ts == 1000.0  # 점감 시 cap_ts 갱신
+    시간 기반 점감(ROAM_NO_RESULT_BACKOFF_RECOVER_SEC)을 제거하며 고정한 계약이다.
+    제거 전에도 점감은 backoff 계산 뒤에 일어나고 다음 tick 의 streak+1 이 즉시
+    되돌려 반환값이 상한 아래로 내려간 적이 없었다(실효 0). 누군가 점감을 되살리려
+    한다면 이 테스트가 먼저 깨져 '동작이 바뀐다'는 사실을 드러낸다.
+    """
+    _set_sleep(monkeypatch, 3, 30, fast=3)
+    clock = [1000.0]
+    monkeypatch.setattr(wifi_roam.time, "time", lambda: clock[0])
+    streak, seq = 0, []
+    for _ in range(40):
+        backoff, streak = advance_no_candidate_backoff(streak)
+        seq.append(backoff)
+        clock[0] += backoff  # 데몬이 backoff 만큼 자며 시간이 흐른다
+    assert seq[:7] == [3, 3, 3, 6, 12, 24, 30]
+    assert set(seq[6:]) == {30}  # 상한 도달 후 1071초 흘러도 전부 30
+    assert streak == 3 + wifi_roam._no_result_max_level() - 1  # 진동 없이 7 고정
 
 # --- ROAM_NO_RESULT_FAST_COUNT: 처음 N회 빠른 주기 후 backoff ---
 
@@ -134,12 +129,11 @@ def test_fast_count_custom_start_cap(monkeypatch):
 
 def test_advance_uses_global_fast_count(monkeypatch):
     """advance는 전역 ROAM_NO_RESULT_FAST_COUNT(기본 3)를 사용 — 처음 3회 빠른 주기 후 backoff,
-    상한(fast+max_level-1=7)에서 cap. 시간 점감은 배제(RECOVER 큰 값)."""
+    상한(fast+max_level-1=7)에서 cap."""
     _set_sleep(monkeypatch, 3, 30, fast=3)
-    monkeypatch.setattr(wifi_roam, "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC", 99999)
-    streak, cap_ts, seq = 0, None, []
+    streak, seq = 0, []
     for _ in range(8):
-        backoff, streak, cap_ts = advance_no_candidate_backoff(streak, cap_ts)
+        backoff, streak = advance_no_candidate_backoff(streak)
         seq.append(backoff)
     assert seq == [3, 3, 3, 6, 12, 24, 30, 30]
     assert streak == 3 + wifi_roam._no_result_max_level() - 1  # 7에서 clamp

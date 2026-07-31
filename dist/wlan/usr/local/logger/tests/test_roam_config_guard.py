@@ -30,9 +30,6 @@ DEFAULTS = {
     "SCAN_NO_RESULT_SLEEP": wifi_roam.DEFAULT_SCAN_NO_RESULT_SLEEP,
     "ROAM_NO_RESULT_MAX_SLEEP": wifi_roam.DEFAULT_ROAM_NO_RESULT_MAX_SLEEP,
     "ROAM_SUCCESS_SLEEP": wifi_roam.DEFAULT_ROAM_SUCCESS_SLEEP,
-    "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC": (
-        wifi_roam.DEFAULT_ROAM_NO_RESULT_BACKOFF_RECOVER_SEC
-    ),
     # CHECK_INTERVAL 은 전용 DEFAULT_ 상수 없이 :44 에서 직접 정의된다(=2).
     "CHECK_INTERVAL": wifi_roam.CHECK_INTERVAL,
 }
@@ -94,7 +91,6 @@ def test_non_positive_sleep_rejected(bad, monkeypatch):
             "SCAN_NO_RESULT_SLEEP": bad,
             "ROAM_NO_RESULT_MAX_SLEEP": bad,
             "ROAM_SUCCESS_SLEEP": bad,
-            "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC": bad,
             "CHECK_INTERVAL": bad,
         },
         monkeypatch,
@@ -129,9 +125,9 @@ def test_adaptive_interval_non_positive_rejected(bad, monkeypatch):
 def test_non_positive_does_not_produce_zero_backoff(monkeypatch):
     """거부 후 backoff 시퀀스가 0/음수로 떨어지지 않는다(바쁜 루프 회귀 감지)."""
     _load({"SCAN_NO_RESULT_SLEEP": 0, "ROAM_NO_RESULT_MAX_SLEEP": 0}, monkeypatch)
-    streak, cap = 0, None
+    streak = 0
     for _ in range(8):
-        backoff, streak, cap = wifi_roam.advance_no_candidate_backoff(streak, cap)
+        backoff, streak = wifi_roam.advance_no_candidate_backoff(streak)
         assert backoff >= 1, f"backoff={backoff} — 대기 없는 루프가 된다"
 
 

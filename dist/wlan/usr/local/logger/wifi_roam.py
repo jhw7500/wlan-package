@@ -152,7 +152,6 @@ DEFAULT_USE_SIGNAL_AVG = True  # True: link 파일의 signal_avg(평활) 사용,
 DEFAULT_SCAN_NO_RESULT_SLEEP = 3  # AP 스캔 결과 없을 때 재시도 대기
 DEFAULT_ROAM_SUCCESS_SLEEP = 3  # 로밍 성공 후 안정화 대기(mlan0 기준, mlan1 템플릿=2)
 DEFAULT_ROAM_NO_RESULT_MAX_SLEEP = 30  # 후보없음 backoff 상한(초)
-DEFAULT_ROAM_NO_RESULT_BACKOFF_RECOVER_SEC = 60  # 상한 도달 후 streak 점감 시작(초)
 DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT = 2  # cross-SSID 전환 실패 시 cooldown 없이 즉시 재시도 허용 횟수(초과 시 backoff)
 DEFAULT_ROAM_NO_RESULT_FAST_COUNT = 3  # 후보 미발견 시 처음 N회는 backoff 없이 빠른 주기(SCAN_NO_RESULT_SLEEP) 유지 후 지수 backoff
 
@@ -199,7 +198,6 @@ GENERATE_NETWORK_BLOCKS = False
 SCAN_NO_RESULT_SLEEP = DEFAULT_SCAN_NO_RESULT_SLEEP
 ROAM_SUCCESS_SLEEP = DEFAULT_ROAM_SUCCESS_SLEEP
 ROAM_NO_RESULT_MAX_SLEEP = DEFAULT_ROAM_NO_RESULT_MAX_SLEEP
-ROAM_NO_RESULT_BACKOFF_RECOVER_SEC = DEFAULT_ROAM_NO_RESULT_BACKOFF_RECOVER_SEC
 ROAM_CROSS_FAIL_RETRY_COUNT = DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT
 ROAM_NO_RESULT_FAST_COUNT = DEFAULT_ROAM_NO_RESULT_FAST_COUNT
 
@@ -328,26 +326,22 @@ def good_signal_reset_allowed(cur_rssi, last_reset_rssi, last_assoc_ts, now=None
     return False, f"stationary({delta}dB)"
 
 
-def advance_no_candidate_backoff(streak, cap_ts):
-    """후보없음 1 tick 진행: streak 증가(상한 clamp) → backoff 계산 →
-    상한 도달 시 cap_ts(첫 도달 시각) 기록 및 RECOVER_SEC 경과마다 streak 점감.
+def advance_no_candidate_backoff(streak):
+    """후보없음 1 tick 진행: streak 증가(상한 clamp) → backoff 계산.
 
     메인루프 3곳(scan 실패 / 결과 0건 / 적합후보 없음)의 동일 로직을 단일화(DRY).
     처음 ROAM_NO_RESULT_FAST_COUNT 회는 빠른 주기(backoff 없이 재스캔), 그 후 지수
-    backoff. streak를 (fast + max_level - 1)로 cap해 매 tick 무한 증가를 막고(#5) 시간
-    기반 점감이 유효하도록 한다. fast=1 이면 cap=max_level(기존과 동일). 반환: (backoff,
-    streak, cap_ts)."""
+    backoff. streak를 (fast + max_level - 1)로 cap해 매 tick 무한 증가를 막는다(#5).
+    fast=1 이면 cap=max_level(기존과 동일). 반환: (backoff, streak).
+
+    상한 도달 후 시간이 지나면 streak를 1 감소시키던 ROAM_NO_RESULT_BACKOFF_RECOVER_SEC
+    경로는 제거했다 — 점감이 backoff 계산 뒤에 일어나고 다음 tick의 streak+1이 즉시
+    되돌려 반환값이 상한 아래로 내려간 적이 없다(실효 0, streak만 7↔6 진동). 후보없음이
+    길어져도 상한 주기를 유지하는 현재 동작은 그대로다."""
     fast = max(1, ROAM_NO_RESULT_FAST_COUNT)
     max_streak = fast + _no_result_max_level() - 1
     streak = min(streak + 1, max_streak)
-    backoff = compute_no_result_backoff(streak, fast)
-    if backoff >= ROAM_NO_RESULT_MAX_SLEEP:
-        if cap_ts is None:
-            cap_ts = time.time()
-        elif time.time() - cap_ts >= ROAM_NO_RESULT_BACKOFF_RECOVER_SEC:
-            streak = max(1, streak - 1)
-            cap_ts = time.time()
-    return backoff, streak, cap_ts
+    return compute_no_result_backoff(streak, fast), streak
 
 def roam_hint_touched(state):
     """bgscan hint 파일 mtime이 직전 관측보다 새로우면 True(+state 갱신).
@@ -520,9 +514,6 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
             "SCAN_NO_RESULT_SLEEP": _num("SCAN_NO_RESULT_SLEEP", minimum=1),
             "ROAM_SUCCESS_SLEEP": _num("ROAM_SUCCESS_SLEEP", minimum=1),
             "ROAM_NO_RESULT_MAX_SLEEP": _num("ROAM_NO_RESULT_MAX_SLEEP", minimum=1),
-            "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC": _num(
-                "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC", minimum=1
-            ),
             "ROAM_CROSS_FAIL_RETRY_COUNT": _num("ROAM_CROSS_FAIL_RETRY_COUNT"),
             "ROAM_NO_RESULT_FAST_COUNT": _num("ROAM_NO_RESULT_FAST_COUNT"),
             "ENABLE_STAGED_SCAN": config["ENABLE_STAGED_SCAN"],
@@ -590,7 +581,6 @@ def load_roaming_config(iface, data=None):
         "SCAN_NO_RESULT_SLEEP": DEFAULT_SCAN_NO_RESULT_SLEEP,
         "ROAM_SUCCESS_SLEEP": DEFAULT_ROAM_SUCCESS_SLEEP,
         "ROAM_NO_RESULT_MAX_SLEEP": DEFAULT_ROAM_NO_RESULT_MAX_SLEEP,
-        "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC": DEFAULT_ROAM_NO_RESULT_BACKOFF_RECOVER_SEC,
         "ROAM_CROSS_FAIL_RETRY_COUNT": DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT,
         "ROAM_NO_RESULT_FAST_COUNT": DEFAULT_ROAM_NO_RESULT_FAST_COUNT,
         "ENABLE_GOOD_SIGNAL_GATE": DEFAULT_ENABLE_GOOD_SIGNAL_GATE,
@@ -742,10 +732,6 @@ def load_roaming_config(iface, data=None):
             _set_config_value(
                 config, "ROAM_NO_RESULT_MAX_SLEEP",
                 roam_config.get("ROAM_NO_RESULT_MAX_SLEEP"), int
-            )
-            _set_config_value(
-                config, "ROAM_NO_RESULT_BACKOFF_RECOVER_SEC",
-                roam_config.get("ROAM_NO_RESULT_BACKOFF_RECOVER_SEC"), int
             )
             _set_config_value(
                 config, "ROAM_CROSS_FAIL_RETRY_COUNT",
@@ -3003,9 +2989,8 @@ def main():
         )
 
     # 후보없음 점증 backoff 상태(spec §4). streak=연속 후보없음 tick 수,
-    # last_backoff_cap_ts=상한 첫 도달 시각(시간 기반 점감용), hint_state=bgscan hint mtime 추적.
+    # hint_state=bgscan hint mtime 추적.
     no_candidate_streak = 0
-    last_backoff_cap_ts = None
     hint_state = {"hint_mtime": None}
     # good-signal 게이트 상태(new_gate_state / track_association 참조).
     gs = new_gate_state()
@@ -3023,7 +3008,6 @@ def main():
         # bgscan이 새 후보 AP를 발견(hint touch)하면 즉시 backoff 해제(고속 복귀).
         if roam_hint_touched(hint_state):
             no_candidate_streak = 0
-            last_backoff_cap_ts = None
             on_streak_reset(gs)
 
         # Load 정보 포함하여 연결 상태 확인
@@ -3096,7 +3080,6 @@ def main():
                 # hint·후보발견 경로에 나뉘어 있으면 향후 필드가 추가될 때 한쪽이 빠진다.
                 on_streak_reset(gs)
                 no_candidate_streak = 0
-                last_backoff_cap_ts = None
                 # 허용 경로 전용: 다음 판정의 비교 기준을 현재 RSSI 로 갱신(on_streak_reset 이
                 # None 으로 비운 것을 여기서 채운다 — 순서 의존이므로 위임 뒤에 와야 한다).
                 gs["reset_rssi"] = station["rssi"]
@@ -3163,10 +3146,8 @@ def main():
                 if ap_lines:
                     save_with_timestamp(SCAN_LOG_FILE, ap_lines)
                 else:
-                    backoff, no_candidate_streak, last_backoff_cap_ts = (
-                        advance_no_candidate_backoff(
-                            no_candidate_streak, last_backoff_cap_ts
-                        )
+                    backoff, no_candidate_streak = advance_no_candidate_backoff(
+                        no_candidate_streak
                     )
                     logger.message(
                         "err",
@@ -3184,8 +3165,8 @@ def main():
                 station, channel_info_data, allowed, src="scan" if WPA_SSID else "cache"
             )
             if not entries:
-                backoff, no_candidate_streak, last_backoff_cap_ts = (
-                    advance_no_candidate_backoff(no_candidate_streak, last_backoff_cap_ts)
+                backoff, no_candidate_streak = advance_no_candidate_backoff(
+                    no_candidate_streak
                 )
                 logger.message(
                     "err",
@@ -3204,7 +3185,6 @@ def main():
         if best_ap:
             # 후보 발견 → backoff 리셋(spec §4 reset). 다음 후보없음은 시작값부터.
             no_candidate_streak = 0
-            last_backoff_cap_ts = None
             # 게이트 기준도 함께 무효화 — 로밍이 성공하면 BSSID 변경이 track_association 에서
             # 처리하지만, **실패하면** BSSID 가 그대로라 옛 기준이 남는다.
             on_streak_reset(gs)
@@ -3245,9 +3225,7 @@ def main():
             continue
 
         # 적합한 후보 없음 → 점증 backoff(연결 중 후보없음 airtime 잠식 억제).
-        backoff, no_candidate_streak, last_backoff_cap_ts = (
-            advance_no_candidate_backoff(no_candidate_streak, last_backoff_cap_ts)
-        )
+        backoff, no_candidate_streak = advance_no_candidate_backoff(no_candidate_streak)
         # 게이트가 억제 중이면 그 횟수를 병기한다. 억제만 이어지는 동안에는 good-signal
         # 분기가 아무 로그도 남기지 않아(요약은 '억제→리셋' 전이에서만 찍힌다) 운용 중
         # 상태를 알 수 없었다 — 이미 매 tick 찍히는 이 줄에 얹어 볼륨 증가 없이 노출한다.
