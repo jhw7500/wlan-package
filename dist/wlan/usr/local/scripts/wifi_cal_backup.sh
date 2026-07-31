@@ -23,12 +23,19 @@ log_msg() {
     "$LOGGER_BIN" -p "$priority" "[$tag:$line] $*" || true
 }
 
-# calibration 원본은 공백으로 구분된 1-byte hex 스트림이다. 단순 문자열 매치 대신
-# 모든 토큰과 최소 길이를 확인해 잘린 텍스트/다른 conf가 정상본을 덮지 못하게 한다.
+# calibration 원본은 공백으로 구분된 1-byte hex 스트림이며, 5~6번째 byte가
+# little-endian payload 길이다. 모든 토큰과 선언 길이를 함께 확인해 완전한 hex prefix가
+# 정상본을 덮지 못하게 한다.
 is_valid_cal() {
     local path="$1"
     [ -s "$path" ] || return 1
     awk '
+        function hex_nibble(c) {
+            return index("0123456789ABCDEF", toupper(c)) - 1
+        }
+        function hex_byte(s) {
+            return hex_nibble(substr(s, 1, 1)) * 16 + hex_nibble(substr(s, 2, 1))
+        }
         {
             gsub(/\r/, "")
             for (i = 1; i <= NF; i++) {
@@ -36,9 +43,15 @@ is_valid_cal() {
                     exit 1
                 }
                 count++
+                if (count == 5) payload_lo = $i
+                if (count == 6) payload_hi = $i
             }
         }
-        END { if (count < 6) exit 1 }
+        END {
+            if (count < 6) exit 1
+            declared = hex_byte(payload_lo) + hex_byte(payload_hi) * 256
+            if (count != declared + 6) exit 1
+        }
     ' "$path" >/dev/null 2>&1
 }
 
@@ -112,7 +125,22 @@ is_user_cal() {
 }
 
 protect_one() {
-    local path="$1" backup="${1}.bak"
+    local path="$1" mode="${2:-protect}" backup="${1}.bak"
+
+    # marker가 있으면 backup이 사용자가 명시적으로 반입한 원본이다. 패키지 업그레이드가
+    # 같은 basename의 active를 유효한 기본 파일로 덮어도 protect에서는 backup을 복원한다.
+    # 새 사용자 파일로 backup을 교체할 권한은 명시적 mark 경로에만 있다.
+    if [ "$mode" = "protect" ] && [ -f "${path}.user-cal" ] && is_valid_cal "$backup"; then
+        if ! is_valid_cal "$path" || ! cmp -s -- "$path" "$backup"; then
+            log_msg local0.crit "$LINENO" "restoring managed calibration: $backup -> $path"
+            atomic_copy "$backup" "$path" || {
+                log_msg local0.emerg "$LINENO" "managed calibration recovery failed: $backup -> $path"
+                return 1
+            }
+        fi
+        return 0
+    fi
+
     if is_valid_cal "$path"; then
         if ! is_valid_cal "$backup" || ! cmp -s -- "$path" "$backup"; then
             if ! atomic_copy "$path" "$backup"; then
@@ -153,7 +181,7 @@ mark_cal() {
         log_msg local0.err "$LINENO" "refusing to mark invalid calibration: $path"
         return 1
     fi
-    protect_one "$path"
+    protect_one "$path" mark
 }
 
 protect_selected() {
@@ -177,7 +205,7 @@ protect_selected() {
         seen["$path"]=1
 
         if is_user_cal "$path"; then
-            protect_one "$path" || failed=1
+            protect_one "$path" protect || failed=1
         fi
     done < <(jq -r '
         .global.CAL_DATA_CFG // "",

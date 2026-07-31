@@ -19,7 +19,7 @@ FAIL=0
 
 cal_data() {
     local byte="$1"
-    printf '01 00 0F 00 08 %s\n00 20 59 0F 00 00 00 20\n' "$byte"
+    printf '01 00 0F 00 08 00\n00 20 59 0F 00 00 00 %s\n' "$byte"
 }
 
 write_json() {
@@ -59,6 +59,13 @@ write_json cts/WlanCalData_ext.conf
 run_cal protect
 expect "unchanged package calibration is not backed up" test ! -e "$CTS/WlanCalData_ext.conf.bak"
 
+cp "$SCRIPT_DIR/../../lib/firmware/cts/WlanCalData_ext.conf" "$CTS/vendor-ext.conf"
+cp "$SCRIPT_DIR/../../lib/firmware/cts/azure/cal_data.conf" "$CTS/vendor-azure.conf"
+write_json cts/vendor-ext.conf cts/vendor-azure.conf
+run_cal protect
+expect "bundled 1294-byte format passes declared-length validation" test -s "$CTS/vendor-ext.conf.bak"
+expect "bundled 606-byte format passes declared-length validation" test -s "$CTS/vendor-azure.conf.bak"
+
 cal_data BB > "$CTS/custom-board.conf"
 write_json cts/custom-board.conf
 run_cal protect
@@ -69,10 +76,23 @@ printf 'not calibration\n' > "$CTS/custom-board.conf"
 run_cal protect
 expect "invalid custom calibration restores backup" cmp -s "$CTS/custom-board.conf" "$CTS/custom-board.conf.bak"
 
+printf '01 00 0F 00 08 00\n00 20\n' > "$CTS/custom-board.conf"
+run_cal protect
+expect "truncated complete-hex prefix restores backup" cmp -s "$CTS/custom-board.conf" "$CTS/custom-board.conf.bak"
+
 cal_data CC > "$CTS/WlanCalData_ext.conf"
 run_cal mark "$CTS/WlanCalData_ext.conf"
 expect "explicit package-name import is marked custom" test -s "$CTS/WlanCalData_ext.conf.user-cal"
 expect "explicit package-name import is backed up" test -s "$CTS/WlanCalData_ext.conf.bak"
+
+cp "$CTS/WlanCalData_ext.conf.bak" "$WORK/user-package-name.conf"
+cp "$BASELINE/WlanCalData_ext.conf" "$CTS/WlanCalData_ext.conf"
+write_json cts/WlanCalData_ext.conf
+run_cal protect
+expect "upgrade restores marked user calibration over package bytes" \
+    cmp -s "$CTS/WlanCalData_ext.conf" "$WORK/user-package-name.conf"
+expect "upgrade preserves marked user backup" \
+    cmp -s "$CTS/WlanCalData_ext.conf.bak" "$WORK/user-package-name.conf"
 
 printf 'broken\n' > "$CTS/no-backup.conf"
 write_json cts/no-backup.conf
