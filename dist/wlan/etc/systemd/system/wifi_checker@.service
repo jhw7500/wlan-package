@@ -20,6 +20,10 @@ ExecStart=/usr/local/scripts/wifi_checker.sh %i
 Restart=always
 RestartSec=5s
 User=root
+# shell/job-control의 "Terminated" 같은 비구조화 출력이 rsyslog의 ^wifi_ 규칙을
+# 통해 logger.log에 섞이지 않게 한다. 스크립트의 local0 logger 호출은 영향 없음.
+StandardOutput=null
+StandardError=null
 
 [Install]
 WantedBy=wifi-stack.target

@@ -7,7 +7,7 @@ WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
 # 안전한 cp wrapper — 실패 시 logger.err. 모든 인자(와일드카드 포함)를 cp에 전달.
 safe_cp() {
     if ! cp "$@" 2>/dev/null; then
-        logger -p local0.err "[$tag] cp failed: $*"
+        logger -p local0.err "[$tag:$LINENO] cp failed: $*"
         return 1
     fi
 }
@@ -16,14 +16,14 @@ safe_cp() {
 safe_sysfs_write() {
     local value="$1" path="$2"
     if ! echo "$value" > "$path" 2>/dev/null; then
-        logger -p local0.warn "[$tag] sysfs write failed: $value > $path"
+        logger -p local0.warn "[$tag:$LINENO] sysfs write failed: $value > $path"
     fi
 }
 
 # 안전한 print.py wrapper — 콘솔 컬러 출력. 도구 호출 실패 시 logger.warn.
 safe_print() {
     if ! /usr/local/logger/print.py "$@" 2>/dev/null; then
-        logger -p local0.warn "[$tag] print.py failed: $*"
+        logger -p local0.warn "[$tag:$LINENO] print.py failed: $*"
     fi
 }
 
@@ -65,23 +65,23 @@ customctl() {
     if [[ $status != ${target}* ]]; then
         if [[ $target = enable* ]]; then
             if ! systemctl enable $daemon_name 2>/dev/null; then
-                logger -p local0.err "[$tag:customctl] systemctl enable failed: $daemon_name"
+                logger -p local0.err "[$tag:$LINENO] systemctl enable failed: $daemon_name"
             fi
         elif [[ $target = disable* ]]; then
             if [[ $status != mask* ]]; then
                 if ! systemctl disable --now $daemon_name 2>/dev/null; then
-                    logger -p local0.err "[$tag:customctl] systemctl disable failed: $daemon_name"
+                    logger -p local0.err "[$tag:$LINENO] systemctl disable failed: $daemon_name"
                 fi
             fi
         elif [[ $target = mask* ]]; then
             systemctl disable --now $daemon_name 2>/dev/null || true
             if ! systemctl mask $daemon_name 2>/dev/null; then
-                logger -p local0.err "[$tag:customctl] systemctl mask failed: $daemon_name"
+                logger -p local0.err "[$tag:$LINENO] systemctl mask failed: $daemon_name"
             fi
         else
             # invalid target — typo/오타 즉시 syslog로 발견 (예: 'eanble' 같은 미래 함정)
             # 기존엔 echo만 남기고 silent return 1이라 발견이 어려웠음.
-            logger -p local0.err "[$tag:customctl] INVALID target='$target' for daemon='$daemon_name' (must match enable*|disable*|mask*)"
+            logger -p local0.err "[$tag:$LINENO] INVALID target='$target' for daemon='$daemon_name' (must match enable*|disable*|mask*)"
             echo "$target is wrong status"
             return 1
         fi
@@ -223,7 +223,7 @@ cat /dev/null > ui.log
 END
 
 rm -rf /var/log/cantops/* 2>/dev/null \
-    || logger -p local0.warn "[$tag] log cleanup failed: /var/log/cantops/*"
+    || logger -p local0.warn "[$tag:$LINENO] log cleanup failed: /var/log/cantops/*"
 
 safe_sysfs_write none /sys/class/leds/status/trigger
 safe_sysfs_write none /sys/class/leds/lan/trigger

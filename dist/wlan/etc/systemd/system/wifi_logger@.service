@@ -16,7 +16,10 @@ ExecStop=/usr/local/scripts/wifi_logger_stop.sh %i
 RemainAfterExit=true
 #Restart=always
 User=root
+# 자식 Python/shell의 비구조화 stdout·stderr가 logger.log에 섞이지 않게 한다.
+# local0 logger/Python SysLogHandler와 stat/scan 등 개별 로그 파일은 영향 없음.
+StandardOutput=null
+StandardError=null
 
 [Install]
 WantedBy=wifi-stack.target
-

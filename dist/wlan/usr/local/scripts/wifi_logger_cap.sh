@@ -3,16 +3,18 @@
 #exec 200>$LOCKFILE
 #flock -n 200 || exit 1
 
+tag=$(basename "$0")
+
 #ip link set mlan0 address
 getMac() {
     IFACE=$1
 
     if [ -e /sys/class/net/$IFACE/address ]; then
         mac_addr=$(cat /sys/class/net/$IFACE/address)
-        logger -p local0.notice -t tshark "$IFACE MAC Address: $mac_addr"
+        logger -p local0.notice -t tshark "[$tag:$LINENO] [$IFACE] MAC Address: $mac_addr"
         echo "$mac_addr"
     else
-        logger -p local0.crit -t tshark "Interface $IFACE not found"
+        logger -p local0.crit -t tshark "[$tag:$LINENO] [$IFACE] Interface not found"
         echo ""
     fi
 }
@@ -26,7 +28,7 @@ ifconfig rtap up
 # 내 MAC 주소
 #my_mac=$(ip link show mlan0 | awk '/ether/ {print $2}')
 #echo "mlan0 MAC Address: $MAC_ADDR"
-logger -p local0.notice -t tshark "mlan0 MAC Address: $mac_mlan"
+logger -p local0.notice -t tshark "[$tag:$LINENO] [mlan0] MAC Address: $mac_mlan"
 #my_mac="00:50:43:02:fe:01"
 mac_bc="ff:ff:ff:ff:ff:ff"
 
@@ -101,5 +103,5 @@ tshark -l -i "$iface" -T fields \
          dir, signal, noise, snr, sa, da, retry, seq, frame_str)
   fflush()
 }' | while read line; do
-  logger -p local0.notice -t tshark "$line"
+  logger -p local0.notice -t tshark "[$tag:$LINENO] [mlan0] $line"
 done

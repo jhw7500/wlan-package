@@ -15,13 +15,13 @@ tag=$(basename "$0")
 # CONF 가 group/world-writable 이면 dest/community 변조로 트랩이 임의 호스트로 송신될 수
 # 있어 차단(wifi_event.sh 의 on_connect 퍼미션 가드와 동일 방어 — Claude 리뷰 [MEDIUM]).
 _perm=$(stat -c '%a' "$CONF" 2>/dev/null || echo "000")
-[ $(( 0${_perm} & 022 )) -eq 0 ] || { logger -p local0.crit "[$tag] $CONF group/world-writable — 트랩 비활성(대상 변조 방지)"; exit 0; }
+[ $(( 0${_perm} & 022 )) -eq 0 ] || { logger -p local0.crit "[$tag:$LINENO] $CONF group/world-writable — 트랩 비활성(대상 변조 방지)"; exit 0; }
 
 enabled=$(jq -r '.snmp.trap.enabled // false' "$CONF" 2>/dev/null)
 [ "$enabled" = "true" ] || exit 0
 
 dest=$(jq -r '.snmp.trap.dest // ""' "$CONF" 2>/dev/null)
-[ -n "$dest" ] || { logger -p local0.err "[$tag] snmp.trap.dest 미설정 — 트랩 생략"; exit 0; }
+[ -n "$dest" ] || { logger -p local0.err "[$tag:$LINENO] snmp.trap.dest 미설정 — 트랩 생략"; exit 0; }
 
 comm=$(jq -r '.snmp.trap.community // "public"' "$CONF" 2>/dev/null)
 ver=$(jq -r '.snmp.trap.version // "2c"' "$CONF" 2>/dev/null)
@@ -33,7 +33,7 @@ send() {
         return 0
     fi
     snmptrap -v"$ver" -c "$comm" "$dest" "$@" 2>/dev/null \
-        || logger -p local0.err "[$tag] snmptrap 송신 실패 (dest=$dest)"
+        || logger -p local0.err "[$tag:$LINENO] snmptrap 송신 실패 (dest=$dest)"
 }
 
 case "$1" in
