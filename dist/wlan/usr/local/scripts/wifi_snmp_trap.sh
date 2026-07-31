@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # wifi_snmp_trap.sh - CONTEC FXE3000 SNMP 트랩 송신 헬퍼
 # Usage: wifi_snmp_trap.sh link up|down
 #        wifi_snmp_trap.sh channel <ch>

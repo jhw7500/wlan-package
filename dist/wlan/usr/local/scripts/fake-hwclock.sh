@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 tag=$(basename "$0")
 #logger -p local0.info "[$tag:$LINENO] $1"
 # rootfs 재플래시 후에도 시각이 이어지도록 영속 파티션에 저장.

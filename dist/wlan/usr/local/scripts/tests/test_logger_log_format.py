@@ -30,6 +30,16 @@ CATEGORY_BEFORE_SOURCE_RE = re.compile(
     rf"\[(?![^]]*{DYNAMIC_LINE_RE})[^]]+\]\s*"
     rf"\[[^]]*{DYNAMIC_LINE_RE}[^]]*\]"
 )
+SHELL_LINENO_RE = re.compile(r"\$(?:\{)?(?:BASH_)?LINENO")
+POSIX_SH_SHEBANGS = {
+    "#!/bin/sh",
+    "#!/usr/bin/sh",
+    "#!/usr/bin/env sh",
+}
+SCRIPTS_REQUIRING_SHELL_LINENO = (
+    "fake-hwclock.sh",
+    "wifi_snmp_trap.sh",
+)
 
 
 def _logical_shell_lines(path):
@@ -50,6 +60,11 @@ def _shell_files():
         for path in root.rglob("*"):
             if path.is_file():
                 yield path
+
+
+def _declares_posix_sh(path):
+    first_line = path.read_text(errors="replace").splitlines()[:1]
+    return bool(first_line and first_line[0].strip() in POSIX_SH_SHEBANGS)
 
 
 def test_logger_log_shell_calls_include_dynamic_source_first():
@@ -74,6 +89,19 @@ def test_logger_log_shell_calls_include_dynamic_source_first():
                     f"{path.relative_to(WLAN_ROOT)}:{line_number}: "
                     "[file:line] must be the first message field"
                 )
+
+    assert violations == []
+
+
+def test_changed_lineno_scripts_use_a_compatible_shell():
+    violations = []
+    scripts_root = WLAN_ROOT / "usr/local/scripts"
+    for script_name in SCRIPTS_REQUIRING_SHELL_LINENO:
+        path = scripts_root / script_name
+        if _declares_posix_sh(path) and SHELL_LINENO_RE.search(path.read_text()):
+            violations.append(
+                f"{script_name}: LINENO is unavailable with a POSIX sh shebang"
+            )
 
     assert violations == []
 
