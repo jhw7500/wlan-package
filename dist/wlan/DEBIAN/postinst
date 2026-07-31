@@ -394,6 +394,22 @@ json_merge() {
     fi
   fi
 
+  # 첫 부팅 전에 보드 정보까지 반영된 설정을 정상본으로 선제 저장한다. 업그레이드에서는
+  # 기존 정상본과 내용이 같으면 회전하지 않으며, 손상된 active는 commit이 거부한다.
+  if [ -x /usr/local/scripts/wifi_config_backup.sh ]; then
+    /usr/local/scripts/wifi_config_backup.sh commit \
+      || logger -p local0.err "[$tag:$LINENO] [$KEY] initial wifi_init_conf backup failed: $WIFI_CONF"
+  else
+    logger -p local0.err "[$tag:$LINENO] [$KEY] missing wifi_config_backup.sh; initial JSON backup skipped"
+  fi
+  # 업그레이드 전에 등록된 사용자 calibration도 첫 부팅 전 정상본을 확보한다.
+  if [ -x /usr/local/scripts/wifi_cal_backup.sh ]; then
+    /usr/local/scripts/wifi_cal_backup.sh protect \
+      || logger -p local0.err "[$tag:$LINENO] [$KEY] initial custom calibration backup failed"
+  else
+    logger -p local0.err "[$tag:$LINENO] [$KEY] missing wifi_cal_backup.sh; custom calibration backup skipped"
+  fi
+
   if [ -f /opt/wlan/config/sysctl.d/99-wifi-thermal.conf ]; then
     cp /opt/wlan/config/sysctl.d/99-wifi-thermal.conf /usr/lib/sysctl.d/99-wifi-thermal.conf
     logger -p local0.info "[$tag:$LINENO] [$KEY] Installed /usr/lib/sysctl.d/99-wifi-thermal.conf"

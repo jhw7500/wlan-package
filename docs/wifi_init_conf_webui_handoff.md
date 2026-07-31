@@ -22,7 +22,7 @@
 환경변수(스크립트별 override)  >  JSON(wifi_init_conf.json)  >  스크립트 내장 기본값
 ```
 
-- 일부 인터페이스별 필드(`mlanN.Frequency`, `mlanN.enabled`)는 별도 오버레이 `config.json`이 `wifi_init_conf.json`보다 우선한다(해당 필드 비고 참조).
+- 일부 인터페이스별 필드(`mlanN.Frequency`, `mlanN.enabled`)는 별도 오버레이 `config.json`이 `wifi_init_conf.json`보다 우선한다(해당 필드 비고 참조). `config.json`은 wlan-package가 배포·백업하지 않는 외부 호환 overlay이므로, WebUI 등 공급 측에서 백업·복구 수명주기를 함께 관리해야 한다.
 - 인터페이스별 값(`.mlanN.*`)이 있으면 전역(`.global.*`)보다 우선하며, 전역은 fallback이다.
 
 ### ⚠️ 업그레이드 시 기본값 미반영 주의
