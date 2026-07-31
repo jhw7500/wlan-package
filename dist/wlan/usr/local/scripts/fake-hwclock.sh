@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 tag=$(basename "$0")
 #logger -p local0.info "[$tag:$LINENO] $1"
 # rootfs 재플래시 후에도 시각이 이어지도록 영속 파티션에 저장.
@@ -48,14 +48,14 @@ write_state() {
     # non-zero 로 전파한다 — save 실패는 다음 부팅 시각 역행의 직접 원인이고, set 은
     # 실패를 성공으로 위장하면 안 되기 때문(호출부가 exit code 로 판단).
     mkdir -p "${STATE%/*}" 2>/dev/null || {
-        logger -p local0.err "[$tag] mkdir failed: ${STATE%/*}"
+        logger -p local0.err "[$tag:$LINENO] mkdir failed: ${STATE%/*}"
         return 1
     }
     # tmp+mv 원자적 교체 — 쓰기 도중 전원 차단 시 상태 파일 손상 방지
     if date +"%Y-%m-%d %H:%M:%S" > "${STATE}.tmp" 2>/dev/null && mv -f "${STATE}.tmp" "$STATE" 2>/dev/null; then
         return 0
     fi
-    logger -p local0.err "[$tag] failed to write state: $STATE"
+    logger -p local0.err "[$tag:$LINENO] failed to write state: $STATE"
     rm -f "${STATE}.tmp" 2>/dev/null
     return 1
 }
@@ -75,7 +75,7 @@ case "$1" in
     [ -n "$STATE_FILE" ] || exit 0
     DATE_STR="$(cat "$STATE_FILE")"
     SAVED=$(date -d "$DATE_STR" +%s 2>/dev/null) || {
-        logger -p local0.warn "[$tag] invalid saved time, skip restore: '$DATE_STR'"
+        logger -p local0.warn "[$tag:$LINENO] invalid saved time, skip restore: '$DATE_STR'"
         exit 0
     }
     NOW=$(date +%s)
@@ -87,9 +87,9 @@ case "$1" in
     # 부팅은 되어야 한다). root+검증된 DATE_STR 이라 실무상 err 경로는 사실상 도달 불가.
     if [ "$SAVED" -gt "$NOW" ]; then
         if date -s "$DATE_STR" >/dev/null 2>&1; then
-            logger -p local0.info "[$tag] clock restored to '$DATE_STR'"
+            logger -p local0.info "[$tag:$LINENO] clock restored to '$DATE_STR'"
         else
-            logger -p local0.err "[$tag] failed to set clock to '$DATE_STR'"
+            logger -p local0.err "[$tag:$LINENO] failed to set clock to '$DATE_STR'"
         fi
     fi
     ;;

@@ -28,7 +28,7 @@ getMac() {
     if [ -e "/sys/class/net/$iface/address" ]; then
         cat "/sys/class/net/$iface/address"
     else
-        logger -p local0.crit -t tshark "Interface $iface not found"
+        logger -p local0.crit -t tshark "[$tag:$LINENO] [$iface] Interface not found"
         logger -p local2.crit -t tshark "Interface $iface not found"
         echo ""
         return 1
@@ -45,7 +45,7 @@ mlanutl "$IFACE" netmon 1 0x49
 ifconfig rtap up
 
 while :; do
-    logger -p local0.info -t tshark "$IFACE MAC Address: $mac_mlan, subtype_mask: $SUBTYPE_MASK, count: $COUNT"
+    logger -p local0.info -t tshark "[$tag:$LINENO] [$IFACE] MAC Address: $mac_mlan, subtype_mask: $SUBTYPE_MASK, count: $COUNT"
     logger -p local2.info -t tshark "$IFACE MAC Address: $mac_mlan, subtype_mask: $SUBTYPE_MASK, count: $COUNT"
 
     tshark -l -i rtap -n -c "$COUNT" -T fields \

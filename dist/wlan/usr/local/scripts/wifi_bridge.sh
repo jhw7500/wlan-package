@@ -257,7 +257,7 @@ if [ "$USE_OPTIMIZATION" -eq 1 ]; then
             UDP_OPT_RESULT="applied"
         else
             UDP_OPT_RESULT="failed"
-            logger -p local0.warn "Optimization script returned error"
+            logger -p local0.warn "[$tag:$LINENO] [$IFACE] Optimization script returned error"
         fi
     else
         UDP_OPT_RESULT="script_missing"
@@ -272,7 +272,7 @@ if [ "$USE_OPTIMIZATION" -eq 1 ]; then
             IRQ_OPT_RESULT="applied"
         else
             IRQ_OPT_RESULT="failed"
-            logger -p local0.warn "IRQ affinity script returned error"
+            logger -p local0.warn "[$tag:$LINENO] [$IFACE] IRQ affinity script returned error"
         fi
     else
         IRQ_OPT_RESULT="script_missing"

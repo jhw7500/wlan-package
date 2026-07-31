@@ -37,7 +37,7 @@ restore_wpa_supplicant() {
         if dpkg-divert --list "/usr/sbin/$bin" 2>/dev/null | grep -q local; then
             rm -f "/usr/sbin/$bin"
             dpkg-divert --local --rename --remove "/usr/sbin/$bin" 2>/dev/null || true
-            logger -p local0.info "[$KEY][$tag:$LINENO] Restored original /usr/sbin/$bin"
+            logger -p local0.info "[$tag:$LINENO] [$KEY] Restored original /usr/sbin/$bin"
         fi
     done
 }
@@ -46,7 +46,7 @@ restore_wpa_supplicant() {
 restore_systemd_overrides() {
     if [ -f /lib/systemd/system-generators/systemd-sysv-generator.orig ]; then
         mv /lib/systemd/system-generators/systemd-sysv-generator.orig /lib/systemd/system-generators/systemd-sysv-generator
-        logger -p local0.info "[$KEY][$tag:$LINENO] Restored systemd-sysv-generator"
+        logger -p local0.info "[$tag:$LINENO] [$KEY] Restored systemd-sysv-generator"
     elif [ -L /lib/systemd/system-generators/systemd-sysv-generator ]; then
         rm -f /lib/systemd/system-generators/systemd-sysv-generator
     fi
@@ -56,7 +56,7 @@ restore_systemd_overrides() {
 case "$1" in
 purge)
     echo "postrm purge"
-    logger -p local0.info "[$KEY][$tag:$LINENO] Purging wlan-proc package"
+    logger -p local0.info "[$tag:$LINENO] [$KEY] Purging wlan-proc package"
 
     cleanup_symlinks
     restore_wpa_supplicant
@@ -98,7 +98,7 @@ upgrade)
 
 remove)
     echo "postrm remove"
-    logger -p local0.info "[$KEY][$tag:$LINENO] Remove completed for wlan-proc package"
+    logger -p local0.info "[$tag:$LINENO] [$KEY] Remove completed for wlan-proc package"
 
     cleanup_symlinks
     restore_wpa_supplicant

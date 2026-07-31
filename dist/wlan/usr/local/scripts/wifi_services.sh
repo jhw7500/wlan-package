@@ -33,14 +33,14 @@ cmd_start() {
     # MFG 이중 안전장치: wifi_apply_enabled.sh의 MFG disable이 누락/실패해 enable이
     # 남아 있어도 MFG FW 위에서 STA 데몬이 기동되지 않도록 start 전체를 건너뛴다.
     if [ "$(_mfg_mode)" = "1" ]; then
-        logger -p local0.info "[$tag] mfg_mode=1 → skip child unit start (MFG profile)"
+        logger -p local0.info "[$tag:$LINENO] mfg_mode=1 → skip child unit start (MFG profile)"
         return 0
     fi
     while IFS= read -r u; do
         if systemctl is-enabled --quiet "$u" 2>/dev/null; then
-            logger -p local0.info "[$tag] start $u"
+            logger -p local0.info "[$tag:$LINENO] start $u"
             systemctl start --no-block "$u" 2>/dev/null || \
-                logger -p local0.err "[$tag] start $u failed"
+                logger -p local0.err "[$tag:$LINENO] start $u failed"
         fi
     done < <(wifi_services_list)
 }
