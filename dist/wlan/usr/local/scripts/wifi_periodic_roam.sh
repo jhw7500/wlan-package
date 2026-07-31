@@ -26,14 +26,14 @@ INTERVAL="${INTERVAL:-300}"
 
 # 최소 주기 10초
 if [ "$INTERVAL" -lt 10 ] 2>/dev/null; then
-    logger -p local0.warn "$tag interval ${INTERVAL}s too short, using 10s"
+    logger -p local0.warn "[$(basename "$0"):$LINENO] [$IFACE] interval ${INTERVAL}s too short, using 10s"
     INTERVAL=10
 fi
 
-logger -p local0.info "$tag Starting periodic roam, interval=${INTERVAL}s, scan_before_roam=${SCAN_BEFORE_ROAM}"
+logger -p local0.info "[$(basename "$0"):$LINENO] [$IFACE] Starting periodic roam, interval=${INTERVAL}s, scan_before_roam=${SCAN_BEFORE_ROAM}"
 
 cleanup() {
-    logger -p local0.info "$tag Stopping periodic roam"
+    logger -p local0.info "[$(basename "$0"):$LINENO] [$IFACE] Stopping periodic roam"
     exit 0
 }
 trap cleanup SIGTERM SIGINT
@@ -53,14 +53,14 @@ get_freq_list() {
 while true; do
     # 인터페이스 존재 확인
     if [ ! -d "/sys/class/net/$IFACE" ]; then
-        logger -p local0.warn "$tag Interface $IFACE not found, waiting..."
+        logger -p local0.warn "[$(basename "$0"):$LINENO] [$IFACE] Interface not found, waiting..."
         sleep "$INTERVAL"
         continue
     fi
 
     # wpa_supplicant 동작 확인
     if ! wpa_cli -i "$IFACE" status >/dev/null 2>&1; then
-        logger -p local0.warn "$tag wpa_supplicant not running on $IFACE, waiting..."
+        logger -p local0.warn "[$(basename "$0"):$LINENO] [$IFACE] wpa_supplicant not running, waiting..."
         sleep "$INTERVAL"
         continue
     fi
@@ -68,7 +68,7 @@ while true; do
     # 연결 상태 확인 (COMPLETED 상태일 때만 로밍)
     wpa_state=$(wpa_cli -i "$IFACE" status 2>/dev/null | grep '^wpa_state=' | cut -d= -f2)
     if [ "$wpa_state" != "COMPLETED" ]; then
-        logger -p local0.info "$tag Not connected (state=$wpa_state), skip roam"
+        logger -p local0.info "[$(basename "$0"):$LINENO] [$IFACE] Not connected (state=$wpa_state), skip roam"
         sleep "$INTERVAL"
         continue
     fi
@@ -81,7 +81,7 @@ while true; do
             iw "$IFACE" scan freq $freq_list ssid "$ssid" >/dev/null 2>&1
             sleep 1
         else
-            logger -p local0.warn "$tag [$IFACE] scan_before_roam=true but freq_list is empty, skipping scan"
+            logger -p local0.warn "[$(basename "$0"):$LINENO] [$IFACE] scan_before_roam=true but freq_list is empty, skipping scan"
         fi
     fi
 
@@ -96,7 +96,7 @@ while true; do
     else
         # 로밍 실행된 경우만 info로 로깅
         result=$(echo "$output" | grep "ROAM_RESULT:" | head -1)
-        logger -p local0.info "$tag ${result:-Roam: no result}"
+        logger -p local0.info "[$(basename "$0"):$LINENO] [$IFACE] ${result:-Roam: no result}"
     fi
 
     sleep "$INTERVAL"

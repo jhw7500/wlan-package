@@ -33,7 +33,7 @@ upgrade)
 
 remove|deconfigure)
     echo "prerm remove"
-    logger -p local0.info "[$KEY][$tag:$LINENO] Removing wlan-proc package"
+    logger -p local0.info "[$tag:$LINENO] [$KEY] Removing wlan-proc package"
 
     # Stop all wlan services
     # wifi-stack.target 을 먼저 stop 하면 PartOf=wifi_init.service 로 묶인 자식 유닛이

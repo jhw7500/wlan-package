@@ -23,7 +23,7 @@ log_kmsg() {
 log_syslog() {
   local msg="$1"
   if command -v logger >/dev/null 2>&1; then
-    logger -p local0.warning "[$tag] $msg"
+    logger -p local0.warning "[$tag:$LINENO] $msg"
   fi
 }
 

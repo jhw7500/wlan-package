@@ -46,7 +46,11 @@ def load_logger_config(iface):
         STAT_RESET_INTERVAL = _iface.get("stat_reset_interval_sec",
                               _global.get("stat_reset_interval_sec", STAT_RESET_INTERVAL))
     except (OSError, json.JSONDecodeError) as e:
-        print(f"WARN: [{iface}] config load failed, using defaults: {e}", file=sys.stderr)
+        logger.message(
+            "warn",
+            f"[{iface}] config load failed, using defaults: {e}",
+            _EXTRA_(),
+        )
 
 # 새 로그는 timestamp 대괄호를 쓰지 않는다. 기존 누적 로그도 재시작 후 읽을 수 있도록
 # 여는 괄호가 있을 때만 닫는 괄호를 요구해 두 형식을 모두 허용한다.
@@ -159,9 +163,17 @@ def get_last_ap_log_values(log_filename, num_lines=10):
             return log_data
 
     except Exception as e:
-        print(f"log file read error: {e}")
+        logger.message(
+            "err",
+            f"[{IFACE}] log file read error ({log_filename}): {e}",
+            _EXTRA_(),
+        )
 
-    print(f"No valid log found : {log_filename}")
+    logger.message(
+        "warn",
+        f"[{IFACE}] No valid log found: {log_filename}",
+        _EXTRA_(),
+    )
     return None
 
 def get_link_info(json_file):
