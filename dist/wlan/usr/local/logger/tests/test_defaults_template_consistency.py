@@ -138,12 +138,19 @@ def schema():
         return json.load(f)
 
 
+# 위의 `tmpl` 은 mlan0 만 반환하므로 iface 별 대조에는 전체 트리가 필요하다.
+# 케이스마다 다시 파싱하지 않도록 module-scope 로 한 번만 읽는다.
+@pytest.fixture(scope="module")
+def full_tmpl():
+    with open(_TMPL) as f:
+        return json.load(f)
+
+
 @pytest.mark.parametrize(
     "iface,path", SCHEMA_CASES, ids=[f"{i}:{'.'.join(p)}" for i, p in SCHEMA_CASES]
 )
-def test_schema_default_matches_template(schema, iface, path):
-    with open(_TMPL) as f:
-        node = json.load(f)[iface]["roaming"]
+def test_schema_default_matches_template(schema, full_tmpl, iface, path):
+    node = full_tmpl[iface]["roaming"]
     for k in path:
         assert isinstance(node, dict) and k in node, \
             f"템플릿 {iface}.roaming 에 {'.'.join(path)} 키 없음"
