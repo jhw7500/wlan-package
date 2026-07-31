@@ -41,6 +41,56 @@ safe_tmp_for() {
     mktemp "$1.tmp.XXXXXX"
 }
 
+stage_custom_calibration() {
+    # 사용자 파일을 /lib/firmware/cts에 원자적으로 반입하고 즉시 정상본을 만든다.
+    local src="$1" basename dst tmp
+    if [ ! -f "$src" ]; then
+        echo "Error: cal conf not found: '$src'" >&2
+        return 1
+    fi
+    basename=$(basename "$src")
+    dst="$WIFI_CTS_DIR/$basename"
+
+    if [ ! -x "$WIFI_CAL_BACKUP_SH" ]; then
+        echo "Error: calibration backup helper not found: $WIFI_CAL_BACKUP_SH" >&2
+        return 1
+    fi
+
+    if [ ! "$src" -ef "$dst" ]; then
+        tmp=$(safe_tmp_for "$dst") || return 1
+        if [ "$(id -u)" -eq 0 ]; then
+            if ! install -o root -g root -m 0644 "$src" "$tmp"; then
+                rm -f "$tmp"
+                echo "Error: failed to stage '$src' into $WIFI_CTS_DIR" >&2
+                return 1
+            fi
+        else
+            if ! install -m 0644 "$src" "$tmp"; then
+                rm -f "$tmp"
+                echo "Error: failed to stage '$src' into $WIFI_CTS_DIR" >&2
+                return 1
+            fi
+        fi
+        if ! "$WIFI_CAL_BACKUP_SH" check "$tmp"; then
+            rm -f "$tmp"
+            echo "Error: invalid calibration: '$src'" >&2
+            return 1
+        fi
+        if ! mv -f "$tmp" "$dst"; then
+            rm -f "$tmp"
+            echo "Error: failed to stage '$src' into $WIFI_CTS_DIR" >&2
+            return 1
+        fi
+        sync "$dst" 2>/dev/null || sync
+    fi
+
+    if ! "$WIFI_CAL_BACKUP_SH" mark "$dst"; then
+        echo "Error: failed to protect custom calibration: '$dst'" >&2
+        return 1
+    fi
+    printf 'cts/%s\n' "$basename"
+}
+
 # sed -i 대신에도 통일하고 싶으면 사용(권한 보장)
 apply_sed_update() {
     local target="$1"
@@ -58,6 +108,8 @@ apply_sed_update() {
 
 WIFI_INIT_CONF_JSON="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
 JSON_FILE="${JSON_FILE:-/usr/local/etc/config.json}"
+WIFI_CAL_BACKUP_SH="${WIFI_CAL_BACKUP_SH:-/usr/local/scripts/wifi_cal_backup.sh}"
+WIFI_CTS_DIR="${WIFI_CTS_DIR:-/lib/firmware/cts}"
 
 # wpa assoc 완료(wpa_state=COMPLETED) 대기 상한(초) — connect / radio-apply 공통 기본값.
 # radio-apply는 인자($3)로 케이스별 override 가능하며, 미지정 시 이 값을 따른다.
@@ -1336,22 +1388,7 @@ case "$1" in
   cal)
     CAL_DATA_CFG=$2
     if [[ "$CAL_DATA_CFG" == *.conf ]]; then
-        # cp 실패를 무시하면 존재한 적 없는 파일 경로가 그대로 persist되어
-        # 다음 부팅에 드라이버가 없는 calibration 파일을 가리킨다.
-        if [ ! -f "$CAL_DATA_CFG" ]; then
-            echo "Error: cal conf not found: '$CAL_DATA_CFG'" >&2
-            exit 1
-        fi
-        _cal_basename=$(basename "$CAL_DATA_CFG")
-        # 이미 /lib/firmware/cts 안의 파일을 가리키면 cp가 "same file"로 1을 반환한다
-        # → -ef로 걸러내지 않으면 프리셋 없는 a0 칩 변종 파일을 제자리 지정하는
-        # 정상 워크플로우가 거부된다.
-        if [ ! "$CAL_DATA_CFG" -ef "/lib/firmware/cts/$_cal_basename" ] \
-            && ! cp "$CAL_DATA_CFG" "/lib/firmware/cts/$_cal_basename"; then
-            echo "Error: failed to stage '$CAL_DATA_CFG' into /lib/firmware/cts" >&2
-            exit 1
-        fi
-        CAL_DATA_CFG="cts/$_cal_basename"
+        CAL_DATA_CFG=$(stage_custom_calibration "$CAL_DATA_CFG") || exit 1
     elif [[ "$CAL_DATA_CFG" == "2" ]]; then
         CAL_DATA_CFG="cts/WlanCalData_ext_RD.conf"
     elif [[ "$CAL_DATA_CFG" == "1" ]]; then
@@ -2061,20 +2098,7 @@ case "$2" in
   cal)
     CAL_VAL="$3"
     if [[ "$CAL_VAL" == *.conf ]]; then
-        # cp 실패를 무시하면 존재한 적 없는 파일 경로가 그대로 persist되어
-        # 다음 부팅에 드라이버가 없는 calibration 파일을 가리킨다.
-        if [ ! -f "$CAL_VAL" ]; then
-            echo "Error: cal conf not found: '$CAL_VAL'" >&2
-            exit 1
-        fi
-        _cal_basename=$(basename "$CAL_VAL")
-        # 이미 /lib/firmware/cts 안의 파일이면 cp가 "same file"로 1을 반환 → -ef로 제외.
-        if [ ! "$CAL_VAL" -ef "/lib/firmware/cts/$_cal_basename" ] \
-            && ! cp "$CAL_VAL" "/lib/firmware/cts/$_cal_basename"; then
-            echo "Error: failed to stage '$CAL_VAL' into /lib/firmware/cts" >&2
-            exit 1
-        fi
-        CAL_VAL="cts/$_cal_basename"
+        CAL_VAL=$(stage_custom_calibration "$CAL_VAL") || exit 1
     elif [[ "$CAL_VAL" == "2" ]]; then
         CAL_VAL="cts/WlanCalData_ext_RD.conf"
     elif [[ "$CAL_VAL" == "1" ]]; then

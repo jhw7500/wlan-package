@@ -317,6 +317,27 @@ assert_eq "T24 inherited global lock does not deadlock child update" "0" "$rc"
 assert_eq "T24 inherited global lock writes requested MAC" "$INHERITED_MAC" \
   "$(macof "$MLAN0_LINK")"
 
+# T25: 공장 초기화용 reset은 active/운영자 파일은 보존하고 패키지 소유 백업만 제거
+reset_net
+printf '[Match]\nOriginalName=mlan1\n\n[Link]\n' > "$LF"
+touch "$LF.bak" "$LF.bak.1" "$LF.bak.5" "$LF.bak.99" "$LF.bak.operator" "$LF.tmp.old"
+touch "$NET/99-operator.link"
+run_um mlan1 --reset-backups >/dev/null 2>&1
+rc=$?
+assert_eq "T25 reset-backups command succeeds" "0" "$rc"
+if [ -e "$LF" ] && [ -e "$NET/99-operator.link" ] && [ -e "$LF.bak.operator" ]; then
+  log_pass "T25 reset-backups preserves active and operator-owned files"
+else
+  log_fail "T25 reset-backups removed active/operator-owned file"
+fi
+if [ ! -e "$LF.bak" ] && [ ! -e "$LF.bak.1" ] \
+    && [ ! -e "$LF.bak.5" ] && [ ! -e "$LF.bak.99" ]; then
+  log_pass "T25 reset-backups removes fixed and all numeric generations"
+else
+  log_fail "T25 reset-backups left package-owned backup"
+fi
+assert_eq "T25 reset-backups removes orphan tmp" "0" "$(count_tmps)"
+
 echo ""
 echo "PASS: $PASS_COUNT"
 echo "FAIL: $FAIL_COUNT"
