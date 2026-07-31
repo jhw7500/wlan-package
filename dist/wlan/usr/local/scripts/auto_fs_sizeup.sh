@@ -18,20 +18,20 @@ PERCENT=$(awk "BEGIN { printf \"%.2f\", ($PART_BYTES / $TOTAL_BYTES) * 100 }")
 echo "Total Device Size: $TOTAL_BYTES bytes, Partition Size Sum: $PART_BYTES bytes"
 echo "Used for Partitions: $PERCENT %"
 
-logger -p local0.notice "[$key][$tag:$LINENO] Total Device Size: $TOTAL_BYTES bytes, Partition Size Sum: $PART_BYTES bytes, Percent: $PERCENT %"
+logger -p local0.notice "[$tag:$LINENO] [$key] Total Device Size: $TOTAL_BYTES bytes, Partition Size Sum: $PART_BYTES bytes, Percent: $PERCENT %"
 
 LIMIT=90.00
 exceeded=$(awk -v p="$PERCENT" -v limit="$LIMIT" 'BEGIN { if (p > limit) print 1; else print 0 }')
 
 if [ "$exceeded" -eq 1 ]; then
-    logger -p local0.notice "[$key][$tag:$LINENO] no size up beacuse $PERCENT % >= $LIMIT" 
+    logger -p local0.notice "[$tag:$LINENO] [$key] no size up beacuse $PERCENT % >= $LIMIT"
     exit 0
 fi
 
 start=$(fdisk -l /dev/mmcblk$1 |grep mmcblk$1p$2|awk '{print $2}')
 if [ "$start" == "*" ]; then
     echo start sector fail
-    logger -p local0.error "[$key][$tag:$LINENO] start sector fail"
+    logger -p local0.error "[$tag:$LINENO] [$key] start sector fail"
     start=$(fdisk -l /dev/mmcblk$1 |grep mmcblk$1p$2|awk '{print $3}')
     end=$(fdisk -l /dev/mmcblk$1 |grep mmcblk$1p$2|awk '{print $4}')
 else
@@ -44,7 +44,7 @@ logger -p notice "[$key][$tag:$LINENO] mmcblk$1p$2 start:$start end:$end"
 #: <<'END'
 if [ "$end" -lt 60000000 ]; then
 echo fdisk mmcblk$1p$2
-logger -p local0.alert [$key][$tag:$LINENO] fdisk mmcblk$1p$2 size up
+logger -p local0.alert "[$tag:$LINENO] [$key] fdisk mmcblk$1p$2 size up"
 fdisk -u -c /dev/mmcblk$1 <<EOF
 d
 $2

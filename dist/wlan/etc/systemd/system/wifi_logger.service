@@ -13,6 +13,10 @@ Type=oneshot
 RemainAfterExit=true
 ExecStart=/usr/local/scripts/wifi_logger.sh
 ExecStop=/bin/true
+# 백그라운드 자식 종료 시 발생하는 "Terminated"를 logger.log에 쓰지 않는다.
+# 각 로거의 local0 logger/Python SysLogHandler 및 개별 파일 출력은 영향 없음.
+StandardOutput=null
+StandardError=null
 
 [Install]
 WantedBy=wifi-stack.target

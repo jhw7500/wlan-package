@@ -52,7 +52,7 @@ configure)
   done
   if [ "$_has_wbridge" -ne 1 ]; then
     echo "ERROR: no wbridge binary in /usr/local/wlan-bridge/wbridge/ (wbridge, wbridge_imx8, wbridge_imx93)" >&2
-    logger -p local0.err "[$KEY][$tag:$LINENO] Critical: no wbridge binary present"
+    logger -p local0.err "[$tag:$LINENO] [$KEY] Critical: no wbridge binary present"
     exit 1
   fi
   _has_tpacket=0
@@ -61,7 +61,7 @@ configure)
   done
   if [ "$_has_tpacket" -ne 1 ]; then
     echo "ERROR: no wbridge-tpacket binary in /usr/local/wlan-bridge/wbridge/" >&2
-    logger -p local0.err "[$KEY][$tag:$LINENO] Critical: no wbridge-tpacket binary present"
+    logger -p local0.err "[$tag:$LINENO] [$KEY] Critical: no wbridge-tpacket binary present"
     exit 1
   fi
 
@@ -152,7 +152,7 @@ EOF
   # Locale: C → C.UTF-8 (한글 바이트 정상 처리, 별도 로케일 생성 불필요)
   if [ "$(cat /etc/locale.conf 2>/dev/null)" != "LANG=C.UTF-8" ]; then
     echo 'LANG=C.UTF-8' > /etc/locale.conf 2>/dev/null || true
-    logger -p local0.info "[$KEY][$tag:$LINENO] Set default locale to C.UTF-8"
+    logger -p local0.info "[$tag:$LINENO] [$KEY] Set default locale to C.UTF-8"
   fi
 
   # Detect board type via SoC ID.
@@ -175,7 +175,7 @@ EOF
   esac
 
   if [ "$board_detect_ok" -ne 1 ]; then
-    logger -p local0.err "[$KEY][$tag:$LINENO] board detect via $BOARD_CONFIG_SH failed (BOARD_TYPE='${BOARD_TYPE:-}' BUS_TYPE='${BUS_TYPE:-}' IIO_DEV='${IIO_DEV:-}'); detecting inline"
+    logger -p local0.err "[$tag:$LINENO] [$KEY] board detect via $BOARD_CONFIG_SH failed (BOARD_TYPE='${BOARD_TYPE:-}' BUS_TYPE='${BUS_TYPE:-}' IIO_DEV='${IIO_DEV:-}'); detecting inline"
     SOC_ID=$(cat /sys/devices/soc0/soc_id 2>/dev/null || echo "")
     if echo "$SOC_ID" | grep -qi "i\.MX93"; then
       BOARD_TYPE="imx93"
@@ -198,7 +198,7 @@ EOF
   /usr/local/logger/print.py green "\r\n[installer] preparing data partition (resize, wait)..."
   # p3 파티션이 없으면 emmc_fdisk.sh로 생성
   if [ ! -b /dev/mmcblk${EMMC_NUM}p3 ]; then
-    logger -p local0.info "[$KEY][postinst:$LINENO] p3 not found, creating via emmc_fdisk.sh"
+    logger -p local0.info "[postinst:$LINENO] [$KEY] p3 not found, creating via emmc_fdisk.sh"
     /usr/local/scripts/emmc_fdisk.sh
   else
     /usr/local/scripts/auto_fs_sizeup.sh "$EMMC_NUM" 3
@@ -238,7 +238,7 @@ customctl() {
   if [ "$current_target" != "multi-user.target" ]; then
     echo "[INFO] Default target is '$current_target', changing to multi-user.target"
     systemctl set-default multi-user.target 2>/dev/null || true
-    logger -p local0.info "[$KEY][$tag:$LINENO] Changed default target from '$current_target' to multi-user.target"
+    logger -p local0.info "[$tag:$LINENO] [$KEY] Changed default target from '$current_target' to multi-user.target"
   fi
 
   echo "[installer] Optimizing service configuration (batch processing)..."
@@ -279,7 +279,7 @@ customctl() {
   if [ -f /usr/local/opc/opcd.service ]; then
     ln -sf /usr/local/opc/opcd.service /etc/systemd/system/opcd.service
     systemctl daemon-reload 2>/dev/null || true
-    logger -p local0.info "[$KEY][$tag:$LINENO] opcd.service installed via symlink (.opc.enabled 게이트로 제어)"
+    logger -p local0.info "[$tag:$LINENO] [$KEY] opcd.service installed via symlink (.opc.enabled 게이트로 제어)"
   fi
   /usr/local/scripts/wifi_apply_enabled.sh 2>/dev/null || true
 
@@ -294,7 +294,7 @@ makeDirectory() {
         if [ $? -eq 0 ]; then
             echo "Directory $1 created successfully."
         else
-            logger -s -p local0.err "Failed to create $1 directory."
+            logger -s -p local0.err "[$tag:$LINENO] [$KEY] Failed to create $1 directory."
             exit 1
         fi
     else
@@ -323,7 +323,7 @@ cpchk() {
   # 0바이트 파일도 "없음"으로 간주 (이전 설치의 ext4 power-cut 잔재 자동 복구).
   # 모든 cp 직후 per-file sync로 ext4 메타/데이터 동기화 갭을 차단한다.
   if [ ! -s "$2" ]; then
-    logger -s -p local0.info "[$KEY][$tag:$LINENO] cp $1 $2 (target empty or missing)"
+    logger -s -p local0.info "[$tag:$LINENO] [$KEY] cp $1 $2 (target empty or missing)"
     cp "$1" "$2"
     sync "$2" 2>/dev/null || sync
   fi
@@ -333,19 +333,19 @@ cpchk() {
 json_merge() {
   local default="$1" active="$2"
   if [ ! -f "$active" ]; then
-    logger -s -p local0.info "[$KEY][$tag:$LINENO] cp $default $active"
+    logger -s -p local0.info "[$tag:$LINENO] [$KEY] cp $default $active"
     cp "$default" "$active"
   elif command -v jq >/dev/null 2>&1; then
     local merged
     merged=$(jq -s '.[0] * .[1]' "$default" "$active" 2>/dev/null)
     if [ -n "$merged" ]; then
       echo "$merged" > "$active"
-      logger -p local0.info "[$KEY][$tag:$LINENO] json_merge $default -> $active"
+      logger -p local0.info "[$tag:$LINENO] [$KEY] json_merge $default -> $active"
     else
-      logger -p local0.warn "[$KEY][$tag:$LINENO] json_merge failed; keep existing $active"
+      logger -p local0.warn "[$tag:$LINENO] [$KEY] json_merge failed; keep existing $active"
     fi
   else
-    logger -p local0.warn "[$KEY][$tag:$LINENO] jq not found; skip json_merge for $active"
+    logger -p local0.warn "[$tag:$LINENO] [$KEY] jq not found; skip json_merge for $active"
   fi
 }
 
@@ -372,7 +372,7 @@ json_merge() {
     if "$BOARD_CONFIG_SH" "$WIFI_CONF"; then
       board_applied=1
     else
-      logger -p local0.err "[$KEY][postinst:$LINENO] board config apply failed: $WIFI_CONF"
+      logger -p local0.err "[postinst:$LINENO] [$KEY] board config apply failed: $WIFI_CONF"
     fi
   fi
 
@@ -387,18 +387,18 @@ json_merge() {
     if [ -z "$jq_err" ] && [ -s "${WIFI_CONF}.tmp" ]; then
       mv "${WIFI_CONF}.tmp" "$WIFI_CONF"
       sync "$WIFI_CONF" 2>/dev/null || sync
-      logger -p local0.warn "[$KEY][postinst:$LINENO] board config injected inline ($BOARD_TYPE); helper unavailable or failed"
+      logger -p local0.warn "[postinst:$LINENO] [$KEY] board config injected inline ($BOARD_TYPE); helper unavailable or failed"
     else
       rm -f "${WIFI_CONF}.tmp"
-      logger -p local0.err "[$KEY][postinst:$LINENO] inline board config injection failed: $WIFI_CONF: ${jq_err:-empty output}"
+      logger -p local0.err "[postinst:$LINENO] [$KEY] inline board config injection failed: $WIFI_CONF: ${jq_err:-empty output}"
     fi
   fi
 
   if [ -f /opt/wlan/config/sysctl.d/99-wifi-thermal.conf ]; then
     cp /opt/wlan/config/sysctl.d/99-wifi-thermal.conf /usr/lib/sysctl.d/99-wifi-thermal.conf
-    logger -p local0.info "[$KEY][$tag:$LINENO] Installed /usr/lib/sysctl.d/99-wifi-thermal.conf"
+    logger -p local0.info "[$tag:$LINENO] [$KEY] Installed /usr/lib/sysctl.d/99-wifi-thermal.conf"
   else
-    logger -p local0.warn "[$KEY][$tag:$LINENO] Missing /opt/wlan/config/sysctl.d/99-wifi-thermal.conf"
+    logger -p local0.warn "[$tag:$LINENO] [$KEY] Missing /opt/wlan/config/sysctl.d/99-wifi-thermal.conf"
   fi
 
   INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 1))
@@ -426,15 +426,15 @@ json_merge() {
   fi
   # 보드별 바이너리가 없으면 suffix 없는 legacy로 폴백
   if [ -n "$WBRIDGE_SUFFIX" ] && [ ! -f "/usr/local/wlan-bridge/wbridge/wbridge${WBRIDGE_SUFFIX}" ]; then
-    logger -p local0.warn "[$KEY][$tag:$LINENO] wbridge${WBRIDGE_SUFFIX} missing, falling back to suffix-less binary"
+    logger -p local0.warn "[$tag:$LINENO] [$KEY] wbridge${WBRIDGE_SUFFIX} missing, falling back to suffix-less binary"
     WBRIDGE_SUFFIX=""
   fi
   ln -sf "/usr/local/wlan-bridge/wbridge/wbridge${WBRIDGE_SUFFIX}" /usr/local/bin/wifi-wbridge
   ln -sf "/usr/local/wlan-bridge/wbridge/wbridge-tpacket${WBRIDGE_SUFFIX}" /usr/local/bin/wifi-wbridge-tpacket
   ln -sf "/usr/local/wlan-bridge/wbridge/wifi_bridge@.service" /etc/systemd/system/wifi_bridge@.service
-  logger -p local0.info "[$KEY][$tag:$LINENO] wbridge symlinks → suffix='${WBRIDGE_SUFFIX}' (BOARD_TYPE=$BOARD_TYPE)"
+  logger -p local0.info "[$tag:$LINENO] [$KEY] wbridge symlinks → suffix='${WBRIDGE_SUFFIX}' (BOARD_TYPE=$BOARD_TYPE)"
 
-  logger -p local0.info "[$KEY][$tag:$LINENO] Successfully created symlinks for wbridge binaries"
+  logger -p local0.info "[$tag:$LINENO] [$KEY] Successfully created symlinks for wbridge binaries"
 
   # Custom wpa_supplicant (dpkg-divert로 원본 보존, 보드별 바이너리 선택)
   if [ "$BOARD_TYPE" = "imx93" ]; then
@@ -447,7 +447,7 @@ json_merge() {
     dpkg-divert --local --rename --add /usr/sbin/wpa_cli 2>/dev/null || true
     ln -sf /opt/wlan/bin/wpa_supplicant.${WPA_SUFFIX} /usr/sbin/wpa_supplicant
     ln -sf /opt/wlan/bin/wpa_cli.${WPA_SUFFIX} /usr/sbin/wpa_cli
-    logger -p local0.info "[$KEY][$tag:$LINENO] Custom wpa_supplicant.${WPA_SUFFIX} installed via dpkg-divert"
+    logger -p local0.info "[$tag:$LINENO] [$KEY] Custom wpa_supplicant.${WPA_SUFFIX} installed via dpkg-divert"
   fi
 
   # NXP WLAN tools
@@ -461,12 +461,12 @@ json_merge() {
   fi
   if [ -f /opt/wlan/bin/mlanutl_${MLANUTL_SUFFIX} ]; then
     ln -sf /opt/wlan/bin/mlanutl_${MLANUTL_SUFFIX} /usr/local/bin/mlanutl
-    logger -p local0.info "[$KEY][$tag:$LINENO] Linked mlanutl_${MLANUTL_SUFFIX} -> /usr/local/bin/mlanutl"
+    logger -p local0.info "[$tag:$LINENO] [$KEY] Linked mlanutl_${MLANUTL_SUFFIX} -> /usr/local/bin/mlanutl"
   elif [ -f /opt/wlan/bin/mlanutl ]; then
     ln -sf /opt/wlan/bin/mlanutl /usr/local/bin/mlanutl
-    logger -p local0.warn "[$KEY][$tag:$LINENO] mlanutl_${MLANUTL_SUFFIX} not found; fallback to legacy /opt/wlan/bin/mlanutl"
+    logger -p local0.warn "[$tag:$LINENO] [$KEY] mlanutl_${MLANUTL_SUFFIX} not found; fallback to legacy /opt/wlan/bin/mlanutl"
   else
-    logger -p local0.err "[$KEY][$tag:$LINENO] No mlanutl binary found (tried mlanutl_${MLANUTL_SUFFIX} and legacy mlanutl)"
+    logger -p local0.err "[$tag:$LINENO] [$KEY] No mlanutl binary found (tried mlanutl_${MLANUTL_SUFFIX} and legacy mlanutl)"
   fi
 
   ln -sf /opt/wlan/bin/mlan2040coex /usr/local/bin/mlan2040coex
@@ -513,7 +513,7 @@ json_merge() {
 
   if command -v sysctl >/dev/null 2>&1; then
     sysctl --system >/dev/null 2>&1 || true
-    logger -p local0.info "[$KEY][$tag:$LINENO] Applied sysctl --system"
+    logger -p local0.info "[$tag:$LINENO] [$KEY] Applied sysctl --system"
   fi
 
   # VHL daemon
@@ -526,7 +526,7 @@ json_merge() {
 
   PACKAGE_NAME="$DPKG_MAINTSCRIPT_PACKAGE"
   echo -e "\e[1m installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)\e[0m"
-  logger -p local0.info "[$KEY][$tag:$LINENO] installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)"
+  logger -p local0.info "[$tag:$LINENO] [$KEY] installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)"
   /usr/local/logger/print.py green "\r\n[installer] installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)"
   # backup_file.sh의 self-healing은 .bak이 존재해야 동작한다.
   # 첫 부팅의 사각지대를 없애기 위해 설치 종료 직전 보호 대상의 .bak을 일괄 선제 생성.
@@ -550,9 +550,9 @@ json_merge() {
       [ -s "$f" ] || continue
       if grep -qE "$pat" "$f" 2>/dev/null; then
         cp "$f" "$f.bak" 2>/dev/null && sync "$f.bak" 2>/dev/null || sync
-        logger -p local0.info "[$KEY][$tag:$LINENO] init .bak: $f.bak"
+        logger -p local0.info "[$tag:$LINENO] [$KEY] init .bak: $f.bak"
       else
-        logger -p local0.warn "[$KEY][$tag:$LINENO] init .bak skipped (pattern miss): $f"
+        logger -p local0.warn "[$tag:$LINENO] [$KEY] init .bak skipped (pattern miss): $f"
       fi
     done
   }

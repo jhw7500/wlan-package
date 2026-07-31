@@ -6,7 +6,7 @@ key=LOG
 IFACE="${1:-}"
 if [ -z "$IFACE" ]; then
     echo "usage: $0 <iface>" >&2
-    logger -p local0.err "[$tag] usage: $0 <iface>"
+    logger -p local0.err "[$tag:$LINENO] usage: $0 <iface>"
     exit 2
 fi
 MODULE_NAME="moal"
