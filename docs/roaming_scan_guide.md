@@ -300,8 +300,8 @@ wifi 0 roam gate delta 3     # 판정 임계 조정
 | 2 | **JSON 실경로** | 데몬이 읽는 것은 **`/usr/local/etc/wifi_init_conf.json`**. `/opt/wlan/config/` 는 **템플릿**이라 편집해도 반영되지 않는다 |
 | 3 | **`bgscan.passive=false` 의 부작용** | Stage 3와 **명령 문자열이 완전히 동일**해져 로그에서 주체를 로거 태그(`SCAN[` vs `ROAM[`)로만 구분해야 한다. 패시브면 `passive` 토큰으로 구분된다 |
 | 4 | **good-signal 분기는 조용하다** | 억제가 없으면 **로그를 남기지 않는다**(볼륨 억제 설계). 로그 부재가 "미진입"을 뜻하지 않으므로, 판정은 `streak` 와 `gate_suppressed=N`(no-candidate 줄에 병기) 으로 한다 |
-| 5 | **`MAX_SLEEP`·`RECOVER_SEC` 은 JSON 키가 없다** | `ROAM_NO_RESULT_MAX_SLEEP`·`ROAM_NO_RESULT_BACKOFF_RECOVER_SEC` 은 코드 상수만 있고 배포 JSON·스키마에 키가 없다. 실험 시 수동 추가해야 읽히지만 정식 운용 설정으로 권장하지 않는다. 제품 설정으로 노출하려면 템플릿·스키마·테스트를 함께 추가하는 별도 구현이 필요하다 |
-| 6 | **`RECOVER_SEC` 은 실효 0** | 상한 도달 후 streak 를 1 감소시키지만 같은 경로의 clamp 가 되돌려 순효과가 없다(latent bug). 실기에서 streak 가 `7↔6` 으로 진동하는 모습으로 관측된다. 따라서 후보 미발견 상태가 길어져도 스캔 주기는 상한에 계속 머물며 빠른 탐색 주기로 자동 복귀하지 않는다 |
+| 5 | **`MAX_SLEEP` 은 JSON 키가 없다** | `ROAM_NO_RESULT_MAX_SLEEP` 은 코드 상수만 있고 배포 JSON·스키마에 키가 없다. 실험 시 수동 추가해야 읽히지만 정식 운용 설정으로 권장하지 않는다. 제품 설정으로 노출하려면 템플릿·스키마·테스트를 함께 추가하는 별도 구현이 필요하다 |
+| 6 | **후보 미발견이 길어져도 빠른 주기로 복귀하지 않는다** | 상한(기본 30초)에 도달하면 그 주기를 유지한다. 복귀는 **후보 발견·bgscan hint·good-signal 리셋** 같은 사건으로만 일어나고 시간 경과로는 일어나지 않는다. 시간 기반 점감(`ROAM_NO_RESULT_BACKOFF_RECOVER_SEC`)이 있었으나 점감이 backoff 계산 뒤에 일어나고 다음 tick 의 `streak+1` 이 즉시 되돌려 **실효가 0**(streak 만 `7↔6` 진동)이었고, 그 코드는 제거됐다 |
 | 7 | **bgscan 기아** | 로밍 컨디션이 지속되면 roam 스캔이 `_record_roam_scan_time()` 으로 bgscan 타이머를 계속 밀어내 **bgscan 자체 스캔이 0회**가 된다. 정상 환경(로밍 컨디션 미진입)에서는 정상 동작하므로 **구조적 결함이 아니다** — 임계를 비정상적으로 높인 시험 세팅에서 나타난다 |
 | 8 | **`wifi` CLI 경로** | `/usr/local/bin/wifi` 인데 **ssh 비대화형 PATH(`/usr/bin:/bin:/usr/sbin:/sbin`)에 없다.** 스크립트에서는 절대 경로를 쓸 것. `>/dev/null 2>&1` 과 겹치면 `command not found` 가 조용히 묻힌다 |
 | 9 | **`iw dev link` 는 신뢰 불가** | moal 이 cfg80211 `current_bss` 를 갱신하지 않아 연결 중에도 `Not connected.` 를 반환한다. 링크 판정은 `wlan_link_lib.sh`(wpa_cli → station dump 계단식)를 쓸 것 |
