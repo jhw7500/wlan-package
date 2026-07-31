@@ -4,6 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 SCRIPT="$SCRIPT_DIR/wifi_cal_backup.sh"
+WIFI="$SCRIPT_DIR/wifi.sh"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
@@ -13,6 +14,10 @@ BASELINE="$WORK/baseline"
 JSON="$WORK/wifi_init_conf.json"
 LOCK="$WORK/cal.lock"
 mkdir -p "$CTS" "$BASELINE"
+BINDIR="$WORK/bin"
+mkdir -p "$BINDIR"
+printf '#!/bin/sh\nexit 0\n' > "$BINDIR/logger"
+chmod +x "$BINDIR/logger"
 
 PASS=0
 FAIL=0
@@ -39,6 +44,19 @@ run_cal() {
     WIFI_CAL_BACKUP_LOCK="$LOCK" \
     WIFI_CAL_LOGGER=/bin/true \
         "$SCRIPT" "$@"
+}
+
+run_wifi_cal() {
+    WIFI_INIT_CONF_JSON="$JSON" \
+    WIFI_CAL_BACKUP_SH="$SCRIPT" \
+    WIFI_CTS_DIR="$CTS" \
+    WIFI_FIRMWARE_ROOT="$FW" \
+    WIFI_CTS_ROOT="$CTS" \
+    WIFI_CAL_BASELINE_ROOT="$BASELINE" \
+    WIFI_CAL_BACKUP_LOCK="$LOCK" \
+    WIFI_CAL_LOGGER=/bin/true \
+    PATH="$BINDIR:$PATH" \
+        bash "$WIFI" cal "$1"
 }
 
 expect() {
@@ -93,6 +111,28 @@ expect "upgrade restores marked user calibration over package bytes" \
     cmp -s "$CTS/WlanCalData_ext.conf" "$WORK/user-package-name.conf"
 expect "upgrade preserves marked user backup" \
     cmp -s "$CTS/WlanCalData_ext.conf.bak" "$WORK/user-package-name.conf"
+
+mkdir -p "$WORK/import"
+cp "$CTS/WlanCalData_ext.conf" "$WORK/before-invalid-import.conf"
+printf '01 00 0F 00 08 00\n00 20\n' > "$WORK/import/WlanCalData_ext.conf"
+if run_wifi_cal "$WORK/import/WlanCalData_ext.conf" >/dev/null 2>&1; then
+    expect "CLI rejects truncated calibration before rename" false
+else
+    expect "CLI rejects truncated calibration before rename" true
+fi
+expect "CLI invalid same-basename import preserves active file" \
+    cmp -s "$CTS/WlanCalData_ext.conf" "$WORK/before-invalid-import.conf"
+expect "CLI invalid same-basename import preserves JSON selection" \
+    test "$(jq -r '.global.CAL_DATA_CFG' "$JSON")" = "cts/WlanCalData_ext.conf"
+
+cal_data DD > "$WORK/import/custom-new.conf"
+run_wifi_cal "$WORK/import/custom-new.conf" >/dev/null 2>&1
+expect "CLI valid calibration stages active file" \
+    cmp -s "$CTS/custom-new.conf" "$WORK/import/custom-new.conf"
+expect "CLI valid calibration creates backup" test -s "$CTS/custom-new.conf.bak"
+expect "CLI valid calibration creates marker" test -s "$CTS/custom-new.conf.user-cal"
+expect "CLI valid calibration updates JSON after protection" \
+    test "$(jq -r '.global.CAL_DATA_CFG' "$JSON")" = "cts/custom-new.conf"
 
 printf 'broken\n' > "$CTS/no-backup.conf"
 write_json cts/no-backup.conf
