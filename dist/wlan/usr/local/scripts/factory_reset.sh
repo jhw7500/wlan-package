@@ -158,6 +158,13 @@ customctl() {
   safe_cp /opt/wlan/config/systemd/network/20-mlan0.link /etc/systemd/network/20-mlan0.link
   safe_cp /opt/wlan/config/systemd/network/21-mlan1.link /etc/systemd/network/21-mlan1.link
   safe_cp /opt/wlan/config/systemd/network/22-eth0.link /etc/systemd/network/22-eth0.link
+  # active .link는 JSON MAC에서 다시 생성되는 파생 상태다. 공장 초기화 전 MAC이
+  # .bak/.bak.N에서 되살아나지 않도록 update_mac 소유의 백업만 함께 제거한다.
+  for _reset_iface in mlan0 mlan1 eth0; do
+      SYSTEMD_NETWORK_DIR=/etc/systemd/network \
+        /usr/local/scripts/update_mac.sh "$_reset_iface" --reset-backups \
+        || logger -p local0.err "[$tag:$LINENO] [$_reset_iface] link backup reset failed"
+  done
   # 활성 설정을 템플릿으로 되돌린다. postinst는 json_merge(기존 값 우선)로 쓰지만 여기서는
   # 통째로 덮어쓴다 — 사용자 런타임 설정(.global/.mlanN/.wbridge 등)을 지우는 것이 초기화의 목적.
   #
@@ -192,6 +199,26 @@ customctl() {
       else
           logger -p local0.info "[$tag:$LINENO] board config verified: iio_device=$_iio"
       fi
+  fi
+
+  # 공장 초기화 전 운영 설정이 다음 부팅의 복구 후보로 남지 않게 JSON 정상본 세대도
+  # 초기화된 active로 교체한다. 실패하더라도 예전 정상본은 직접 제거해 부활을 막는다.
+  if [ -x /usr/local/scripts/wifi_config_backup.sh ]; then
+      if ! /usr/local/scripts/wifi_config_backup.sh reset; then
+          rm -f -- "${WIFI_INIT_CONF_JSON}.bak" "${WIFI_INIT_CONF_JSON}.bak.1"
+          sync "$(dirname "$WIFI_INIT_CONF_JSON")" 2>/dev/null || sync
+          logger -p local0.emerg "[$tag:$LINENO] JSON backup reset failed; removed stale backup generations"
+      fi
+  else
+      rm -f -- "${WIFI_INIT_CONF_JSON}.bak" "${WIFI_INIT_CONF_JSON}.bak.1"
+      sync "$(dirname "$WIFI_INIT_CONF_JSON")" 2>/dev/null || sync
+      logger -p local0.emerg "[$tag:$LINENO] missing wifi_config_backup.sh; removed stale JSON backups without reseed"
+  fi
+  if [ -x /usr/local/scripts/wifi_cal_backup.sh ]; then
+      /usr/local/scripts/wifi_cal_backup.sh reset \
+        || logger -p local0.err "[$tag:$LINENO] custom calibration backup reset failed"
+  else
+      logger -p local0.err "[$tag:$LINENO] missing wifi_cal_backup.sh; custom calibration backup artifacts may remain"
   fi
 
 #find /var/log/cantops -mindepth 1 -maxdepth 1 ! -name journald -exec rm -rf {} +

@@ -496,6 +496,9 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 | `thermal_mgmt` | bool | `true` | FW thermal management 활성화. `true`(기본)=enable, `false`=disable. 부팅 시 `mlanutl <iface> hostcmd`로 적용. 아래 [§11.8](#118-thermal_mgmt---fw-thermal-관리) 참고 |
 
 > `config.json`이 별도로 설치된 환경에서는 `.mlan0.enabled`, `.mlan1.enabled`, `.mlan0.Frequency`, `.mlan1.Frequency`가 존재할 때만 이 값을 override한다.
+> `config.json`은 wlan-package가 배포하거나 갱신하는 파일이 아닌 외부 호환 overlay다. 따라서
+> wlan-package의 정상본 백업 대상에도 포함하지 않으며, 파일을 공급하는 외부 구성 관리자가
+> 백업·복구 수명주기를 함께 소유해야 한다.
 
 > **⚠️ 패키지 기본값 주의**: 출하 `wifi_init_conf.json`은 `mlan0.enabled=true`, **`mlan1.enabled=false`**로 설정되어 있다 — 즉 **mlan1은 기본적으로 초기화되지 않는다**(`wifi_init.sh`가 radio setup·bridge enable을 건너뛰고, `wifi_apply_enabled.sh`가 mlan1 child unit을 disable). 신규 설치·공장초기화로 이 기본 config를 그대로 쓰는 환경에서 mlan1을 사용하려면 `mlan1.enabled=true`로 변경한다(override `config.json` 또는 본 파일).
 

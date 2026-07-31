@@ -18,12 +18,18 @@ TimeoutStartSec=180
 # ExecStart 실패(모듈 unload/load 실패 등)에서만 재시도. 정상 종료(success)는 재시도 안 함.
 Restart=on-failure
 RestartSec=10s
-# 1) JSON *.enabled → systemctl enable/disable 동기화 (비정상 종료 후에도 일관 보장).
+# 1) JSON 구문/필수 구조 검증. 손상 시 마지막 정상본 또는 패키지 기본본으로 복구.
+ExecStartPre=/usr/local/scripts/wifi_config_backup.sh restore
+# 2) JSON이 선택한 사용자 calibration 파일을 검증하고 손상 시 정상본으로 복구.
+ExecStartPre=/usr/local/scripts/wifi_cal_backup.sh protect
+# 3) JSON *.enabled → systemctl enable/disable 동기화 (비정상 종료 후에도 일관 보장).
 #    정상 reboot은 wifi_apply_enabled.service ExecStop도 동기화하므로 변경 없으면 idempotent (~100ms).
 ExecStartPre=/usr/local/scripts/wifi_apply_enabled.sh
-# 2) 모듈 로드 / 펌웨어 / MAC / 라디오 설정
+# 4) 모듈 로드 / 펌웨어 / MAC / 라디오 설정
 ExecStart=/usr/local/scripts/wifi_init.sh
-# 3) enable된 자식 unit 일괄 start (stop은 자식 PartOf=wifi_init.service 자동 전파)
+# 5) 초기화 성공 후에만 현재 JSON을 최신 정상본으로 확정. 백업 I/O 실패는 Wi-Fi 기동을 막지 않는다.
+ExecStartPost=-/usr/local/scripts/wifi_config_backup.sh commit
+# 6) enable된 자식 unit 일괄 start (stop은 자식 PartOf=wifi_init.service 자동 전파)
 ExecStartPost=/usr/local/scripts/wifi_services.sh start
 RemainAfterExit=yes
 

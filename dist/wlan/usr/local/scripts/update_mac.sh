@@ -1,5 +1,5 @@
 #!/bin/bash
-# update_mac.sh <iface> <mac|--cleanup> [<plan-iface>=<plan-mac> ...]
+# update_mac.sh <iface> <mac|--cleanup|--reset-backups> [<plan-iface>=<plan-mac> ...]
 # 최종 계획 인자는 wifi_init.sh의 다중 인터페이스 교환 시에만 사용한다.
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 # shellcheck source=./mac_link_lib.sh
@@ -74,13 +74,41 @@ cleanup_owned_artifacts() {
     fi
   done
 
-  [ "$cleaned" -eq 0 ] \
+    [ "$cleaned" -eq 0 ] \
     || logger -p local0.info "[$tag:$LINENO] [$IFACE] cleaned $cleaned stale link artifact(s)"
 }
 
 cleanup_owned_artifacts || exit 1
 if [ "$NEW_MAC" = "--cleanup" ]; then
   exit 0
+fi
+
+# 공장 초기화 전용: 패키지가 소유하는 fixed/숫자 회전 백업만 모두 삭제한다.
+# 알 수 없는 비숫자 suffix와 운영자 .link는 건드리지 않는다.
+reset_owned_backups() {
+  local artifact suffix cleaned=0
+  for artifact in "$BACKUP_PREFIX" "${BACKUP_PREFIX}".*; do
+    [ -e "$artifact" ] || continue
+    if [ "$artifact" != "$BACKUP_PREFIX" ]; then
+      suffix="${artifact#"$BACKUP_PREFIX".}"
+      case "$suffix" in
+        ''|*[!0-9]*) continue ;;
+      esac
+    fi
+    if rm -f -- "$artifact"; then
+      cleaned=$((cleaned + 1))
+    else
+      logger -p local0.err "[$tag:$LINENO] [$IFACE] failed to remove link backup: $artifact"
+      return 1
+    fi
+  done
+  sync "$NETWORK_DIR" 2>/dev/null || sync
+  logger -p local0.info "[$tag:$LINENO] [$IFACE] reset $cleaned package-owned link backup(s)"
+}
+
+if [ "$NEW_MAC" = "--reset-backups" ]; then
+  reset_owned_backups
+  exit $?
 fi
 
 # 현재 .link를 회전 백업한다 (인터페이스당 최대 $MAX_BAK개, 최신=.bak.1).
