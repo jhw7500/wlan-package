@@ -219,7 +219,7 @@ update_json_roaming_int() {
 # GOOD_SIGNAL_RESET_GATE 의 코드 기본값 — wifi_roam.py 의 DEFAULT_GOOD_SIGNAL_GATE_* 와
 # **같아야 한다**. JSON 에 키가 없을 때 데몬이 무엇을 쓰는지 표시하기 위한 사본이며,
 # 두 값의 일치는 tests/test_roam_goodsignal_gate.py 가 파일을 파싱해 검증한다(drift 차단).
-GATE_DEF_ENABLE=false
+GATE_DEF_ENABLE=true
 GATE_DEF_DELTA_DB=2
 GATE_DEF_GRACE_SEC=40
 

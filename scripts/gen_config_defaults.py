@@ -76,32 +76,39 @@ def schema_report(tmpl, schema):
     return drift, missing, missing_default
 
 
-def _find_block(lines, name, start, indent_gt):
-    """start 이후에서 indent 가 indent_gt 초과인 '"name": {' 줄을 찾아
-    (시작행, 끝행, indent) 반환. 끝행 = 같은 indent 의 '}' 또는 '},'."""
+def _find_block(lines, name, start, end, indent_gt):
+    """[start, end) 범위에서 indent 가 indent_gt 초과인 '"name": {' 줄을 찾아
+    (시작행, 끝행, indent) 반환. 끝행 = 같은 indent 의 '}' 또는 '},'.
+
+    범위 한정 + **최소 들여쓰기 매치 선택** = 직계 자식. 첫 매치를 쓰면 더 깊은
+    동명 블록(예: mac.mlan0 이 최상위 mlan0 보다 파일상 앞에 있음)을 오인한다 —
+    실사용 첫 mlan0 패치에서 발견된 버그."""
     pat = re.compile(r'^(\s*)"' + re.escape(name) + r'":\s*\{')
-    for i in range(start, len(lines)):
+    cands = []
+    for i in range(start, end):
         m = pat.match(lines[i])
         if m and len(m.group(1)) > indent_gt:
-            indent = len(m.group(1))
-            for j in range(i + 1, len(lines)):
-                s = lines[j]
-                if s.strip() in ("}", "},") and len(s) - len(s.lstrip()) == indent:
-                    return i, j, indent
-            raise RuntimeError(f"블록 끝 미발견: {name} @ {i + 1}")
-    return None
+            cands.append((len(m.group(1)), i))
+    if not cands:
+        return None
+    indent, i = min(cands)  # 최소 들여쓰기(동률이면 앞선 행) = 스코프의 직계 자식
+    for j in range(i + 1, end):
+        s = lines[j]
+        if s.strip() in ("}", "},") and len(s) - len(s.lstrip()) == indent:
+            return i, j, indent
+    raise RuntimeError(f"블록 끝 미발견: {name} @ {i + 1}")
 
 
 def schema_patch_default(lines, path, value):
-    """스키마 텍스트에서 path 블록의 "default": 줄을 value 로 교체."""
+    """스키마 텍스트에서 path 블록의 "default": 줄을 value 로 교체.
+    각 단계 탐색을 직전 부모 블록의 [시작+1, 끝) 으로 스코프한다."""
     assert path, "빈 경로"
-    pos, indent, found = 0, -1, None
+    pos, end, indent, found = 0, len(lines), -1, None
     for comp in path:
-        found = _find_block(lines, comp, pos, indent)
+        found = _find_block(lines, comp, pos, end, indent)
         if found is None:
             raise RuntimeError(f"스키마에서 경로 미발견: {'.'.join(path)}")
-        pos, end, indent = found
-        pos += 1
+        pos, end, indent = found[0] + 1, found[1], found[2]
     blk_end = found[1]
     dpat = re.compile(r'^(\s*)"default":\s*(.+?)(,?)\s*$')
     for i in range(pos, blk_end):

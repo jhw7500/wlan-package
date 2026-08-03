@@ -289,10 +289,11 @@ def test_config_load_applies_gate(monkeypatch, restore_globals):
     assert wifi_roam.GOOD_SIGNAL_GATE_GRACE_SEC == 25
 
 
-def test_config_default_is_disabled(monkeypatch, restore_globals):
-    """[무회귀] 블록이 없으면 기본 off — 기존 배포 동작 불변."""
+def test_config_default_is_enabled(monkeypatch, restore_globals):
+    """블록이 없으면 기본 on — 2026-08-03 기본값 전환(실기 3-way 검증 #138 +
+    로그 재생 −58% 근거). 회귀 경로는 `wifi <n> roam gate off` 런타임 CLI."""
     _load(monkeypatch, {"DIFF_TH": 8})
-    assert wifi_roam.ENABLE_GOOD_SIGNAL_GATE is False
+    assert wifi_roam.ENABLE_GOOD_SIGNAL_GATE is True
 
 
 def test_config_zero_delta_clamped(monkeypatch, restore_globals):

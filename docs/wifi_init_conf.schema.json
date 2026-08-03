@@ -1271,7 +1271,7 @@
             },
             "CHECK_INTERVAL": {
               "type": "integer",
-              "default": 2,
+              "default": 1,
               "minimum": 1,
               "description": "로밍 체크 기본 주기(초). ADAPTIVE_INTERVAL 활성 시 동적 조절",
               "x-ui-editable": "yes",
@@ -1403,8 +1403,8 @@
               "properties": {
                 "enable": {
                   "type": "boolean",
-                  "default": false,
-                  "description": "false(기본)면 종전대로 무조건 리셋(무회귀). true 면 직전 리셋 시점 대비 |Δrssi| >= delta_db 일 때만 리셋한다. 근거: 정체 18.85h 재생에서 오탐 리셋 662건 중 624건(94%)이 이 분기이고 그중 623건이 Δ0dB — 임계 바로 위에서 진동할 뿐 위치가 안 변한 경우로, 리셋되면 다음 악화에 backoff 가 3초부터 다시 올라가 스캔이 폭증한다. 켜면 스캔 3377→1417(-58.0%, airtime duty 5.44%→2.28%), 이동 로그(71개 90.1h)는 -0.0%·추가지연 0건",
+                  "default": true,
+                  "description": "true(기본, 2026-08-03 전환)면 직전 리셋 시점 대비 |Δrssi| >= delta_db 일 때만 리셋한다. false 면 종전대로 무조건 리셋. 근거: 정체 18.85h 재생에서 오탐 리셋 662건 중 624건(94%)이 이 분기이고 그중 623건이 Δ0dB — 임계 바로 위에서 진동할 뿐 위치가 안 변한 경우로, 리셋되면 다음 악화에 backoff 가 3초부터 다시 올라가 스캔이 폭증한다. 켜면 스캔 3377→1417(-58.0%, airtime duty 5.44%→2.28%), 이동 로그(71개 90.1h)는 -0.0%·추가지연 0건",
                   "x-ui-editable": "yes",
                   "x-apply-timing": "runtime",
                   "x-consumer": "wifi_roam.py"
@@ -2166,8 +2166,8 @@
               "properties": {
                 "enable": {
                   "type": "boolean",
-                  "default": false,
-                  "description": "false(기본)면 종전대로 무조건 리셋(무회귀). true 면 직전 리셋 시점 대비 |Δrssi| >= delta_db 일 때만 리셋한다. 근거: 정체 18.85h 재생에서 오탐 리셋 662건 중 624건(94%)이 이 분기이고 그중 623건이 Δ0dB — 임계 바로 위에서 진동할 뿐 위치가 안 변한 경우로, 리셋되면 다음 악화에 backoff 가 3초부터 다시 올라가 스캔이 폭증한다. 켜면 스캔 3377→1417(-58.0%, airtime duty 5.44%→2.28%), 이동 로그(71개 90.1h)는 -0.0%·추가지연 0건",
+                  "default": true,
+                  "description": "true(기본, 2026-08-03 전환)면 직전 리셋 시점 대비 |Δrssi| >= delta_db 일 때만 리셋한다. false 면 종전대로 무조건 리셋. 근거: 정체 18.85h 재생에서 오탐 리셋 662건 중 624건(94%)이 이 분기이고 그중 623건이 Δ0dB — 임계 바로 위에서 진동할 뿐 위치가 안 변한 경우로, 리셋되면 다음 악화에 backoff 가 3초부터 다시 올라가 스캔이 폭증한다. 켜면 스캔 3377→1417(-58.0%, airtime duty 5.44%→2.28%), 이동 로그(71개 90.1h)는 -0.0%·추가지연 0건",
                   "x-ui-editable": "yes",
                   "x-apply-timing": "runtime",
                   "x-consumer": "wifi_roam.py"

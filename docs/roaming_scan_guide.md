@@ -294,7 +294,7 @@ backoff 가 상한에 머물지 못하는 주 원인은 곡선이 아니라 **go
 /usr/local/bin/wifi mlan0 roam gate delta 3     # 판정 임계 조정
 ```
 
-기본값은 `enable: false`(무회귀)이므로 **현장 A/B 후 전환을 판단**한다. 자세한 근거는 `wifi_init_conf_guide.md` §`GOOD_SIGNAL_RESET_GATE`.
+기본값은 `enable: true` 다(2026-08-03 전환 — 로그 재생 −58% + 실기 3-way 검증 후). 회귀 의심 시 `wifi <n> roam gate off` 로 즉시 끌 수 있다. 자세한 근거는 `wifi_init_conf_guide.md` §`GOOD_SIGNAL_RESET_GATE`.
 
 ---
 

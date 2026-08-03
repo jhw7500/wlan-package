@@ -619,7 +619,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 | `DEFAULT_TH_2G` | int | `-75` | 2.4GHz 로밍 RSSI 임계값 (dBm) |
 | `DEFAULT_TH_5G` | int | `-75` | 5GHz 로밍 RSSI 임계값 (dBm) |
 | `DIFF_TH` | int | `8` | 로밍 결정 RSSI 차이 (dB) |
-| `CHECK_INTERVAL` | int | `2` / `3` | 로밍 체크 주기 (초) |
+| `CHECK_INTERVAL` | int | `1` / `3` | 로밍 체크 주기 (초). 판정 입력 link.json 이 ~1s 갱신이라 1 미만은 실익 없음 |
 | `SCAN_NO_RESULT_SLEEP` | int | `3` | 스캔 결과 없을 때 대기 (초) |
 | `ROAM_SUCCESS_SLEEP` | int | `3` / `2` | 로밍 성공 후 대기 (초) |
 | `enabled` | bool | mlan0 `true` / mlan1 `false` | 로밍 데몬(`wifi_roam@<iface>`) 활성화. `wifi_apply_enabled.sh`가 systemd enable/disable로 동기화. **mlan0 로밍이 기본 활성화됨** |
@@ -674,7 +674,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `enable` | bool | `false` | `false`(기본)면 **종전대로 무조건 리셋**(무회귀). `true`면 직전 리셋 시점 대비 `|Δrssi| >= delta_db`일 때만 리셋 |
+| `enable` | bool | `true` | `true`(기본, 2026-08-03 전환)면 직전 리셋 시점 대비 `|Δrssi| >= delta_db`일 때만 리셋. `false`면 종전대로 무조건 리셋 |
 | `delta_db` | int | `2` | 리셋을 허용하는 최소 `|Δrssi|`(dB). 매 tick 직전값이 아니라 **직전 리셋 시점 기준 누적** 변화 — 1dB씩 천천히 이동하는 구간도 누적으로 잡는다. 하한 1(0은 게이트 무효) |
 | `post_roam_grace_sec` | int | `40` | 결합(로밍·재연결·부팅 후 첫 관측) 후 이 시간 동안은 게이트를 **우회**해 종전처럼 리셋(초) |
 
@@ -850,7 +850,7 @@ SNMP는 **기본 off(opt-in)**이다. `snmp.enabled=true`일 때만 `wifi_apply_
 |-----------|-------|-------|------|
 | `enabled` | `true` | `false` | **mlan1은 기본적으로 초기화되지 않음** (radio setup·bridge enable skip) |
 | `STANDARD` | `ax` | `ac` | mlan1은 11ax 미지원 |
-| `roaming.CHECK_INTERVAL` | `2` | `3` | mlan0은 주 채널이라 더 짧은 2초 주기로 빠르게 감지, mlan1은 3초 |
+| `roaming.CHECK_INTERVAL` | `1` | `3` | mlan0은 주 채널이라 1초 주기로 빠르게 감지(입력 link.json 갱신 한계), mlan1은 3초 |
 | `roaming.ROAM_SUCCESS_SLEEP` | `3` | `2` | 로밍 성공 후 정착 대기 — mlan0=3초, mlan1=2초 |
 | `roaming.enabled` | `true` | `false` | mlan0 로밍 기본 활성화 |
 | `bgscan.enabled` | `true` | `false` | mlan1 비활성 인터페이스 |
