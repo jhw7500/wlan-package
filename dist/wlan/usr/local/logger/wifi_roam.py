@@ -143,7 +143,7 @@ DEFAULT_ROAM_NO_RESULT_MAX_SLEEP = 30  # 후보없음 backoff 상한(초). 의�
 # 과거엔 로더가 .get() 으로 읽어 JSON 에 손으로 넣으면 몰래 실효되는 뒷문이었다(감사 D2 로 봉쇄).
 # 운영에서 조정할 근거가 없고, 실험이 필요하면 이 상수를 직접 바꾼다.
 DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT = 2  # cross-SSID 전환 실패 시 cooldown 없이 즉시 재시도 허용 횟수(초과 시 backoff)
-DEFAULT_ROAM_NO_RESULT_FAST_COUNT = 3  # 후보 미발견 시 처음 N회는 backoff 없이 빠른 주기(SCAN_NO_RESULT_SLEEP) 유지 후 지수 backoff
+DEFAULT_ROAM_NO_RESULT_FAST_COUNT = 3  # 후보 미발견 backoff 의 레벨당 반복 횟수 — 각 주기를 N tick 유지 후 2배(플래토 곡선)
 
 
 # 현재 설정값 (Current Configuration - will be loaded from JSON)
@@ -175,10 +175,10 @@ ROAM_NO_RESULT_FAST_COUNT = DEFAULT_ROAM_NO_RESULT_FAST_COUNT
 def _no_result_max_level():
     """지수 backoff가 상한(ROAM_NO_RESULT_MAX_SLEEP)에 도달하는 데 필요한 2배수 증가 레벨.
 
-    compute_no_result_backoff는 over(=streak-fast_count)를 이 값으로 clamp해 2**over
-    거대 정수 연산을 막고(도달 즉시 상한이라 그 이상 무의미), advance_no_candidate_backoff
-    는 streak를 (fast + 이 레벨 - 1)로 cap한다. 즉 'streak' 자체가 아니라 '빠른 구간 이후
-    지수 성장 횟수'의 상한이다. 시작값*2**(L-1) >= cap 를 만족하는 최소 L.
+    compute_no_result_backoff는 레벨(=(streak-1)//fast)을 (이 값 - 1)로 clamp해 거대
+    지수 연산을 막고(도달 즉시 상한이라 그 이상 무의미), advance_no_candidate_backoff
+    는 streak를 fast*(max_level-1)+1 로 cap한다(플래토 곡선에서 상한 레벨에 처음
+    도달하는 지점). 시작값*2**(L-1) >= cap 를 만족하는 최소 L.
     SCAN_NO_RESULT_SLEEP<=0 등 비정상 입력은 1로 방어(무한 루프/0배수 방지)."""
     start = SCAN_NO_RESULT_SLEEP
     cap = ROAM_NO_RESULT_MAX_SLEEP
@@ -193,22 +193,24 @@ def _no_result_max_level():
 
 
 def compute_no_result_backoff(streak, fast_count=1):
-    """후보없음 streak에 대한 sleep 초(빠른 스캔 구간 + 지수 backoff, 상한 clamp).
+    """후보없음 streak에 대한 sleep 초 — 플래토 지수 backoff(상한 clamp).
 
-    fast_count: 처음 이 횟수(streak)까지는 backoff 없이 시작값(SCAN_NO_RESULT_SLEEP)을
-    유지해 빠르게 재스캔한다(로밍컨디션 진입 직후 공격적 로밍 시도). 초과분(over)부터
-    시작값 * 2**over 로 지수 성장하고 ROAM_NO_RESULT_MAX_SLEEP 상한. fast_count=1 이면
-    기존 동작(streak1=시작값, streak2=×2 …)과 동일하다(cross-SSID cooldown 등 기본 경로).
-    streak<=0 → 시작값. eff=min(over, max_level)로 clamp(거대 정수 2**over 방지)하고
-    상한 도달 동작은 보존. 끊김 복구는 wpa 네이티브가 담당하므로 이 backoff는 '연결 중
-    후보없음' airtime 잠식만 억제한다(spec §4)."""
+    fast_count 를 **레벨당 반복 횟수**로 쓴다: 각 주기를 fast_count tick 유지한 뒤
+    2배로 올린다. 곡선 = SCAN_NO_RESULT_SLEEP × 2^⌊(streak-1)/fast_count⌋,
+    상한 ROAM_NO_RESULT_MAX_SLEEP. 기본(3,3)이면 3,3,3,6,6,6,12,12,12,24,24,24,30.
+    종전 의미(처음 N회만 빠른 주기, 이후 매 tick 2배)에서 확장한 것 — 시작 구간뿐
+    아니라 모든 레벨을 같은 폭으로 유지해, 정당한 리셋 직후 탐색이 완만하게
+    느려진다(good-signal 게이트와 세트: 게이트가 가짜 리셋을 막으므로 상승 구간은
+    실제 이동 직후에만 나타난다). fast_count=1 이면 기존 레거시 곡선
+    (streak1=시작값, streak2=×2 …)과 정확히 동일(무회귀 계약, 테스트 고정).
+    streak<=0 → 시작값. 레벨은 max_level-1 로 clamp(거대 지수 방지).
+    끊김 복구는 wpa 네이티브가 담당하므로 이 backoff는 '연결 중 후보없음'
+    airtime 잠식만 억제한다(spec §4)."""
     if streak <= 0:
         return int(SCAN_NO_RESULT_SLEEP)
-    if streak <= fast_count:
-        return int(SCAN_NO_RESULT_SLEEP)  # 처음 fast_count 회는 빠른 주기(공격적 로밍)
-    over = streak - fast_count            # 빠른 구간 초과분(>=1)부터 지수 backoff
-    eff = min(over, _no_result_max_level())
-    backoff = SCAN_NO_RESULT_SLEEP * (2 ** eff)
+    level = (streak - 1) // max(1, fast_count)
+    level = min(level, _no_result_max_level() - 1)
+    backoff = SCAN_NO_RESULT_SLEEP * (2 ** level)
     return int(min(backoff, ROAM_NO_RESULT_MAX_SLEEP))
 
 
@@ -301,16 +303,19 @@ def advance_no_candidate_backoff(streak):
     """후보없음 1 tick 진행: streak 증가(상한 clamp) → backoff 계산.
 
     메인루프 3곳(scan 실패 / 결과 0건 / 적합후보 없음)의 동일 로직을 단일화(DRY).
-    처음 ROAM_NO_RESULT_FAST_COUNT 회는 빠른 주기(backoff 없이 재스캔), 그 후 지수
-    backoff. streak를 (fast + max_level - 1)로 cap해 매 tick 무한 증가를 막는다(#5).
-    fast=1 이면 cap=max_level(기존과 동일). 반환: (backoff, streak).
+    주기는 레벨당 ROAM_NO_RESULT_FAST_COUNT tick 씩 유지하며 2배로 올라가는 플래토
+    곡선이다(compute_no_result_backoff 참조). streak 를 상한 도달
+    지점에서 cap 해 매 tick 무한 증가를 막는다(#5). 반환: (backoff, streak).
 
     상한 도달 후 시간이 지나면 streak를 1 감소시키던 ROAM_NO_RESULT_BACKOFF_RECOVER_SEC
     경로는 제거했다 — 점감이 backoff 계산 뒤에 일어나고 다음 tick의 streak+1이 즉시
     되돌려 반환값이 상한 아래로 내려간 적이 없다(실효 0, streak만 7↔6 진동). 후보없음이
     길어져도 상한 주기를 유지하는 현재 동작은 그대로다."""
     fast = max(1, ROAM_NO_RESULT_FAST_COUNT)
-    max_streak = fast + _no_result_max_level() - 1
+    # 상한 레벨(max_level-1)에 처음 도달하는 streak 에서 clamp — 플래토 곡선에서
+    # 레벨은 (streak-1)//fast 이므로 그 지점은 fast*(max_level-1)+1. fast=1 이면
+    # 종전 cap(max_level)과 동일하다.
+    max_streak = fast * (_no_result_max_level() - 1) + 1
     streak = min(streak + 1, max_streak)
     return compute_no_result_backoff(streak, fast), streak
 

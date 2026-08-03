@@ -280,7 +280,7 @@ SCAN(bgscan) 명령: 3
 
 ### backoff 곡선
 
-후보 미발견 시 `SCAN_NO_RESULT_SLEEP`(기본 3) `× 2^(streak − ROAM_NO_RESULT_FAST_COUNT)`, 상한 `ROAM_NO_RESULT_MAX_SLEEP`(기본 30). `ROAM_NO_RESULT_FAST_COUNT`(기본 3)회까지는 시작값을 그대로 유지하고 그 초과분부터 지수 성장한다 → 곡선 **3, 3, 3, 6, 12, 24, 30**. 상한에 닿은 뒤에는 시간이 지나도 내려오지 않는다(§5 #6).
+후보 미발견 시 `SCAN_NO_RESULT_SLEEP`(기본 3) `× 2^⌊(streak−1)/ROAM_NO_RESULT_FAST_COUNT⌋`, 상한 `ROAM_NO_RESULT_MAX_SLEEP`(기본 30). `ROAM_NO_RESULT_FAST_COUNT`(기본 3)는 **레벨당 반복 횟수** — 각 주기를 3 tick 유지한 뒤 2배로 올라간다 → 곡선 **3,3,3, 6,6,6, 12,12,12, 24,24,24, 30**(상한 도달 135초). `FAST_COUNT=1` 이면 종전 레거시 곡선(3,6,12,24,30)과 동일하다. 상한에 닿은 뒤에는 시간이 지나도 내려오지 않는다(§5 #6).
 
 ### good-signal 리셋 게이트로 빈도를 낮춘다
 

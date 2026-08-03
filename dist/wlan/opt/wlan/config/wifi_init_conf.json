@@ -355,7 +355,7 @@
                 "extra_ssids: (array[str], 기본 []) conf 기본 ssid 외 추가 로밍 후보 SSID. 같은 psk/key_mgmt 전제. 같은 SSID는 wpa_cli roam(무중단), 다른 SSID는 wifi connect(재연결)로 전환. 빈 배열=기존 단일 SSID 동작. extra_ssids는 bgscan이 ssid_filter와 무관하게 항상 directed probe하므로 hidden SSID도 스캔된다.",
                 "generate_network_blocks: (bool, 기본 false) 모드 결정자. false=모드B(단일 블록, cross-SSID는 외부 wifi connect만, extra_ssids 무시), true=모드A(다중 network 블록 생성 + select_network cross-SSID). 기본 false로 기존 단일 SSID 동작 무회귀.",
                 "ROAM_CROSS_FAIL_RETRY_COUNT: (int, 기본 2) 모드 A cross-SSID(select_network) 전환 실패 시 cooldown 없이 즉시 재시도 허용 횟수. 초과하면 SCAN_NO_RESULT_SLEEP~ROAM_NO_RESULT_MAX_SLEEP 지수 backoff로 해당 SSID를 로밍 후보에서 제외(진동 차단). 모드 B에선 미적용.",
-                "ROAM_NO_RESULT_FAST_COUNT: (int, 기본 3) 로밍컨디션에서 로밍 대상 AP를 못 찾았을 때, 처음 이 횟수만큼은 backoff 없이 SCAN_NO_RESULT_SLEEP 주기로 빠르게 재스캔한다(진입 직후 공격적 로밍 시도). 초과분부터 SCAN_NO_RESULT_SLEEP×2^n 지수 backoff(ROAM_NO_RESULT_MAX_SLEEP 상한). 1이면 즉시 backoff(기존 동작).",
+                "ROAM_NO_RESULT_FAST_COUNT: (int, 기본 3) 후보 미발견 backoff 의 레벨당 반복 횟수. 각 주기를 이 횟수만큼 유지한 뒤 2배로 올린다(기본 3: 3,3,3,6,6,6,…,ROAM_NO_RESULT_MAX_SLEEP 상한). 1이면 레거시 곡선(매 tick 2배).",
                 "use_signal_avg: (bool) true=signal_avg(평균, 안정적), false=signal(순간값, 즉시 반응)",
                 "DEFAULT_TH_2G: (int) 2.4GHz RSSI 로밍 임계값 (dBm). 이 값 이하이면 로밍 시도. 이 JSON 이 단일 소스이며 wpa_supplicant.conf 의 `#!TH_2G=` 마커는 더 이상 읽지 않는다.",
                 "DEFAULT_TH_5G: (int) 5GHz RSSI 로밍 임계값 (dBm). 이 값 이하이면 로밍 시도. 이 JSON 이 단일 소스이며 wpa_supplicant.conf 의 `#!TH_5G=` 마커는 더 이상 읽지 않는다.",
