@@ -90,7 +90,8 @@ def _find_block(lines, name, start, indent_gt):
 
 def schema_patch_default(lines, path, value):
     """스키마 텍스트에서 path 블록의 "default": 줄을 value 로 교체."""
-    pos, indent = 0, -1
+    assert path, "빈 경로"
+    pos, indent, found = 0, -1, None
     for comp in path:
         found = _find_block(lines, comp, pos, indent)
         if found is None:
@@ -129,13 +130,15 @@ def resolve(tmpl, candidates, key):
     """후보 prefix 들에 key 를 붙여 템플릿에서 값을 찾는다.
     반환: (vals, mlanN-정규화 경로 튜플) — vals 는 mlanN 확장 시 {iface: 값},
     일반 경로는 {"_": 값}. 미해결이면 (None, None)."""
+    _MISSING = object()
+
     def get(path):
         node = tmpl
         for k in path:
             if not isinstance(node, dict) or k not in node:
-                return KeyError
+                return _MISSING
             node = node[k]
-        return KeyError if isinstance(node, dict) else node
+        return _MISSING if isinstance(node, dict) else node
 
     for prefix in candidates:
         parts = (prefix.split(".") if prefix else []) + key.split(".")
@@ -143,7 +146,7 @@ def resolve(tmpl, candidates, key):
             vals = {}
             for iface in IFACES:
                 v = get(tuple(iface if p == "mlanN" else p for p in parts))
-                if v is KeyError:
+                if v is _MISSING:
                     vals = None
                     break
                 vals[iface] = v
@@ -151,7 +154,7 @@ def resolve(tmpl, candidates, key):
                 return vals, tuple(parts)
         else:
             v = get(tuple(parts))
-            if v is not KeyError:
+            if v is not _MISSING:
                 return {"_": v}, tuple(parts)
     return None, None
 
@@ -164,9 +167,6 @@ def desired_cell(vals):
         return f"`{fmt_cell(a)}`"
     q = isinstance(a, str) or isinstance(b, str)
     return f"`mlan0={fmt_cell(a, q)} / mlan1={fmt_cell(b, q)}`"
-
-
-TOPS_RE = None  # main 에서 초기화
 
 
 def header_candidates(header_text, tops):
@@ -303,6 +303,11 @@ def main():
         SCHEMA.write_text(out)
         HANDOFF.write_text("\n".join(handoff_lines))
         print(f"패치 완료: 스키마 {len(drift)}건, handoff {len(h_changed)}건")
+        if h_uncovered:
+            print(f"주의: handoff 행 누락 {len(h_uncovered)}건은 자동 패치 대상이 "
+                  f"아니다(설명을 사람이 써야 함) — 위 목록을 수동 추가해야 "
+                  f"--check 가 통과한다.")
+            return 1
         return 0
 
     if fail or drift or h_changed:
