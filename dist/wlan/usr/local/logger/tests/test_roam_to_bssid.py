@@ -38,16 +38,14 @@ def _setup(monkeypatch, pingpong=True):
     monkeypatch.setattr(wifi_roam, "ENABLE_PING_PONG_PREVENTION", pingpong)
     monkeypatch.setattr(wifi_roam, "ping_pong_preventer", prev)
     notify = MagicMock()
-    optimize = MagicMock()
     monkeypatch.setattr(wifi_roam, "notify_roam", notify)
-    monkeypatch.setattr(wifi_roam, "optimize_post_roam_connectivity", optimize)
     monkeypatch.setattr(roam_notify.time, "sleep", lambda *_: None)  # confirm 폴링 sleep
-    return prev, notify, optimize
+    return prev, notify
 
 
 def test_fail_reply_with_exit0_is_not_success(monkeypatch):
     """★핵심 결함: supplicant가 FAIL(exit 0)을 줘도 성공으로 오판하면 안 된다."""
-    prev, notify, optimize = _setup(monkeypatch)
+    prev, notify = _setup(monkeypatch)
     with patch.object(wifi_roam.subprocess, "run", return_value=_Run(0, "FAIL\n")), \
          patch.object(roam_notify, "get_associated_bssid") as gab:
         assert roam_to_bssid(FROM, TARGET) is False
@@ -57,7 +55,7 @@ def test_fail_reply_with_exit0_is_not_success(monkeypatch):
 
 
 def test_failbusy_reply_with_exit0_is_not_success(monkeypatch):
-    prev, notify, _ = _setup(monkeypatch)
+    prev, notify = _setup(monkeypatch)
     with patch.object(wifi_roam.subprocess, "run", return_value=_Run(0, "FAIL-BUSY\n")), \
          patch.object(roam_notify, "get_associated_bssid") as gab:
         assert roam_to_bssid(FROM, TARGET) is False
@@ -68,7 +66,7 @@ def test_failbusy_reply_with_exit0_is_not_success(monkeypatch):
 
 def test_ok_but_never_confirmed_is_failure(monkeypatch):
     """OK(명령 수락)만으로는 성공이 아니다 — status가 목표로 안 오면 실패."""
-    prev, notify, _ = _setup(monkeypatch)
+    prev, notify = _setup(monkeypatch)
     with patch.object(wifi_roam.subprocess, "run", return_value=_Run(0, "OK\n")), \
          patch.object(roam_notify, "get_associated_bssid", return_value=FROM), \
          patch.object(roam_notify.time, "monotonic", side_effect=[0.0, 0.0, 10.0]):
@@ -79,13 +77,12 @@ def test_ok_but_never_confirmed_is_failure(monkeypatch):
 
 def test_ok_and_confirmed_is_success(monkeypatch):
     """OK + status가 목표 BSSID로 COMPLETED → 성공. 이때만 통지/카운트."""
-    prev, notify, optimize = _setup(monkeypatch)
+    prev, notify = _setup(monkeypatch)
     with patch.object(wifi_roam.subprocess, "run", return_value=_Run(0, "OK\n")), \
          patch.object(roam_notify, "get_associated_bssid", return_value=TARGET), \
          patch.object(roam_notify.time, "monotonic", return_value=0.0):
         assert roam_to_bssid(FROM, TARGET, channel=36, freq=5180, rssi=-60) is True
     prev.add_roam.assert_called_once_with(FROM, TARGET)
-    optimize.assert_called_once()
     notify.assert_called_once()
     args, kwargs = notify.call_args
     assert args[0] == wifi_roam.IFACE and args[1] == FROM and args[2] == TARGET
@@ -93,7 +90,7 @@ def test_ok_and_confirmed_is_success(monkeypatch):
 
 def test_confirm_waits_for_target_not_first_completed(monkeypatch):
     """roam 진행 전 첫 status는 이전 AP(COMPLETED)일 수 있다 → 목표 일치까지 폴링."""
-    prev, notify, _ = _setup(monkeypatch)
+    prev, notify = _setup(monkeypatch)
     with patch.object(wifi_roam.subprocess, "run", return_value=_Run(0, "OK\n")), \
          patch.object(roam_notify, "get_associated_bssid", side_effect=[FROM, TARGET]) as gab, \
          patch.object(roam_notify.time, "monotonic", return_value=0.0):
@@ -104,7 +101,7 @@ def test_confirm_waits_for_target_not_first_completed(monkeypatch):
 
 def test_transport_failure_nonzero_exit_is_failure(monkeypatch):
     """소켓 전송 실패(wpa_cli exit != 0)도 실패."""
-    prev, notify, _ = _setup(monkeypatch)
+    prev, notify = _setup(monkeypatch)
     with patch.object(wifi_roam.subprocess, "run", return_value=_Run(255, "")), \
          patch.object(roam_notify, "get_associated_bssid") as gab:
         assert roam_to_bssid(FROM, TARGET) is False

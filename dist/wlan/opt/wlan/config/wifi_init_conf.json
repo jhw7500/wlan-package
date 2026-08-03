@@ -459,28 +459,6 @@
                 "good_signal_offset": 15,
                 "consecutive_drop_count": 2
             },
-            "POST_ROAM_ARP_OPTIMIZATION": {
-                "_comment": [
-                    "로밍 후 ARP 최적화. 새 AP의 MAC 테이블을 빠르게 갱신하여 통신 복구 단축",
-                    "enable: (bool) 로밍 후 ARP 최적화 ON/OFF",
-                    "garp_count: (int) Gratuitous ARP 전송 횟수",
-                    "garp_wait: (int) GARP 전송 간 대기 (초)"
-                ],
-                "enable": false,
-                "garp_count": 2,
-                "garp_wait": 1,
-                "PEER_WARMUP": {
-                    "_comment": [
-                        "로밍 후 주변 피어에 ARP 전송하여 피어 측 MAC 테이블 워밍업",
-                        "enable: (bool) 피어 워밍업 ON/OFF",
-                        "peer_count: (int) ARP 전송 대상 피어 수 (ARP 캐시 기준 상위 N개)",
-                        "peer_wait: (int) 피어 간 ARP 전송 대기 (초)"
-                    ],
-                    "enable": false,
-                    "peer_count": 5,
-                    "peer_wait": 1
-                }
-            },
             "SCAN_NO_RESULT_SLEEP": 3,
             "ROAM_SUCCESS_SLEEP": 3,
             "enabled": true
@@ -637,16 +615,6 @@
                 "near_threshold_interval": 2,
                 "good_signal_offset": 15,
                 "consecutive_drop_count": 2
-            },
-            "POST_ROAM_ARP_OPTIMIZATION": {
-                "enable": false,
-                "garp_count": 2,
-                "garp_wait": 1,
-                "PEER_WARMUP": {
-                    "enable": false,
-                    "peer_count": 5,
-                    "peer_wait": 1
-                }
             },
             "SCAN_NO_RESULT_SLEEP": 3,
             "ROAM_SUCCESS_SLEEP": 2,
