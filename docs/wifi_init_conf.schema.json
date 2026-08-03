@@ -1172,7 +1172,7 @@
             "emit_roam_hint": {
               "type": "boolean",
               "default": true,
-              "description": "bgscan 스캔 성공 시 /tmp/wifi_roam_hint_<iface> touch — wifi_roam 의 후보없음 지수 backoff 를 즉시 해제하는 신호(단방향, race-free). false 면 hint 미발행(backoff 는 자체 곡선으로만 회복)",
+              "description": "bgscan 스캔 성공 시 /tmp/wifi_roam_hint_<iface> touch — wifi_roam 의 후보없음 지수 backoff 를 즉시 해제하는 신호(단방향, race-free). false 면 hint 미발행. 주의: 단일 iface 운용에서는 실효가 없다 — backoff 가 쌓이는 구간은 로밍 컨디션 ON 인데 그때 bgscan 은 스캔을 건너뛰어 hint 가 발행될 수 없다. 듀얼 iface(전역 /tmp/roam_condition 공유)에서만 우발적으로 발화 가능",
               "x-ui-editable": "yes",
               "x-apply-timing": "runtime",
               "x-consumer": "wifi_bgscan.py"
@@ -2119,7 +2119,7 @@
             "emit_roam_hint": {
               "type": "boolean",
               "default": true,
-              "description": "bgscan 스캔 성공 시 /tmp/wifi_roam_hint_<iface> touch — wifi_roam 의 후보없음 지수 backoff 를 즉시 해제하는 신호(단방향, race-free). false 면 hint 미발행(backoff 는 자체 곡선으로만 회복)",
+              "description": "bgscan 스캔 성공 시 /tmp/wifi_roam_hint_<iface> touch — wifi_roam 의 후보없음 지수 backoff 를 즉시 해제하는 신호(단방향, race-free). false 면 hint 미발행. 주의: 단일 iface 운용에서는 실효가 없다 — backoff 가 쌓이는 구간은 로밍 컨디션 ON 인데 그때 bgscan 은 스캔을 건너뛰어 hint 가 발행될 수 없다. 듀얼 iface(전역 /tmp/roam_condition 공유)에서만 우발적으로 발화 가능",
               "x-ui-editable": "yes",
               "x-apply-timing": "runtime",
               "x-consumer": "wifi_bgscan.py"
