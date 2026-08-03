@@ -368,7 +368,7 @@
             "DEFAULT_TH_2G": -75,
             "DEFAULT_TH_5G": -75,
             "DIFF_TH": 8,
-            "CHECK_INTERVAL": 2,
+            "CHECK_INTERVAL": 1,
             "extra_ssids": [],
             "generate_network_blocks": false,
             "ROAM_CROSS_FAIL_RETRY_COUNT": 2,
@@ -421,7 +421,7 @@
                     "delta_db: (int) 초기화를 허용하는 최소 누적 RSSI 변화량 (dB, 최솟값 1)",
                     "post_roam_grace_sec: (int) 로밍·재연결 후 gate를 우회하여 기존처럼 초기화할 시간 (초)"
                 ],
-                "enable": false,
+                "enable": true,
                 "delta_db": 2,
                 "post_roam_grace_sec": 40
             },
@@ -562,7 +562,7 @@
                 "self_induced_tail_sec": 10
             },
             "GOOD_SIGNAL_RESET_GATE": {
-                "enable": false,
+                "enable": true,
                 "delta_db": 2,
                 "post_roam_grace_sec": 40
             },
