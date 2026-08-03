@@ -47,7 +47,6 @@ def _globals(tmp_path, monkeypatch):
     monkeypatch.setattr(wifi_roam, "WPA_TH_5G", -75)
     monkeypatch.setattr(wifi_roam, "WPA_FREQ", ["5180", "5200"])
     monkeypatch.setattr(wifi_roam, "DIFF_TH", 10)
-    monkeypatch.setattr(wifi_roam, "ENABLE_LOAD_BASED_ROAM", False)
     monkeypatch.setattr(wifi_roam, "ENABLE_PREDICTIVE_ROAM", False)
     monkeypatch.setattr(wifi_roam, "CACHE_FRESH_SEC", 70)
     monkeypatch.setattr(wifi_roam, "_LAST_SELF_SCAN_TS", None)
@@ -88,7 +87,7 @@ def test_record_helper_failure_warns_once(monkeypatch):
 
 def _staged(station=None, allowed=("Net",)):
     return wifi_roam.staged_scan_best_candidate(
-        station or _station(), None, list(allowed), "Net", STABLE, None
+        station or _station(), list(allowed), "Net", STABLE, None
     )
 
 

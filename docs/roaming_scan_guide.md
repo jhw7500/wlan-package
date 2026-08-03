@@ -306,7 +306,7 @@ backoff 가 상한에 머물지 못하는 주 원인은 곡선이 아니라 **go
 | 2 | **JSON 실경로** | 데몬이 읽는 것은 **`/usr/local/etc/wifi_init_conf.json`**. `/opt/wlan/config/` 는 **템플릿**이라 편집해도 반영되지 않는다 |
 | 3 | **`bgscan.passive=false` 의 부작용** | Stage 3와 **명령 문자열이 완전히 동일**해져 로그에서 주체를 로거 태그(`SCAN[` vs `ROAM[`)로만 구분해야 한다. 패시브면 `passive` 토큰으로 구분된다 |
 | 4 | **good-signal 분기는 조용하다** | 게이트가 **발동(suppress)하지 않은** tick 은 로그를 남기지 않는다(로그 볼륨 절약 설계). 로그 부재가 "미진입"을 뜻하지 않으므로, 판정은 `streak` 와 `gate_suppressed=N`(no-candidate 줄에 병기) 으로 한다 |
-| 5 | **`MAX_SLEEP` 은 JSON 키가 없다** | `ROAM_NO_RESULT_MAX_SLEEP` 은 코드 상수만 있고 배포 JSON·스키마에 키가 없다. 실험 시 수동 추가해야 읽히지만 정식 운용 설정으로 권장하지 않는다. 제품 설정으로 노출하려면 템플릿·스키마·테스트를 함께 추가하는 별도 구현이 필요하다 |
+| 5 | **`MAX_SLEEP` 은 순수 코드 상수다** | `ROAM_NO_RESULT_MAX_SLEEP`(30) 은 JSON 으로 바꿀 수 없다 — 과거엔 로더가 `.get()` 으로 읽어 JSON 에 손으로 넣으면 몰래 실효되는 뒷문이 있었으나 감사 D2(2026-07-31)로 봉쇄됐다(`test_max_sleep_backdoor_closed` 가 고정). 실험에서 상한을 바꾸려면 `wifi_roam.py` 의 `DEFAULT_ROAM_NO_RESULT_MAX_SLEEP` 상수를 직접 수정해야 한다 |
 | 6 | **후보 미발견이 길어져도 빠른 주기로 복귀하지 않는다** | 상한(기본 30초)에 도달하면 그 주기를 유지한다. 복귀는 **후보 발견·bgscan hint·good-signal 리셋** 같은 사건으로만 일어나고 시간 경과로는 일어나지 않는다. 시간 기반 점감(`ROAM_NO_RESULT_BACKOFF_RECOVER_SEC`)이 있었으나 점감이 backoff 계산 뒤에 일어나고 다음 tick 의 `streak+1` 이 즉시 되돌려 **실효가 0**(streak 만 `7↔6` 진동)이었고, 그 코드는 제거됐다 |
 | 7 | **bgscan 기아** | 로밍 컨디션이 켜져 있으면 bgscan 은 스캔하지 않고 5초 대기로 건너뛰며, 추가로 roam 스캔이 `_record_roam_scan_time()` 으로 bgscan 타이머를 밀어낸다 → 컨디션이 지속되면 **bgscan 자체 스캔이 0회**가 된다. 임계를 비정상적으로 높인 시험 세팅에서 관측했으나, 로밍 컨디션은 `rssi < 임계` 면 진입하므로 **약전계·경계 구간에서는 정상 운용 중에도 같은 기아가 생길 수 있다 — 결함 여부는 미판정** |
 | 8 | **`wifi` CLI 경로** | `/usr/local/bin/wifi` 인데 **ssh 비대화형 PATH(`/usr/bin:/bin:/usr/sbin:/sbin`)에 없다.** 스크립트에서는 절대 경로를 쓸 것. `>/dev/null 2>&1` 과 겹치면 `command not found` 가 조용히 묻힌다 |
@@ -349,7 +349,7 @@ systemctl start wifi_logger_link@mlan0    # 복구
 
 1. **기존 파일을 읽어 `signal` 만 바꿔야 한다.** 새로 만들면 `info.freq` 가 없어 `base_threshold` 결정이 실패하고 데몬이 조용히 `continue` 한다.
 2. **mtime 갱신이 필수**다 — `_LINK_CACHE` 재파싱과 `LINK_STALE_SEC` 게이트를 통과해야 한다.
-3. **backoff 상한이 주입 주기를 삼킨다.** streak 가 상한(30초)이면 데몬이 그만큼 자므로 3초 주기 주입은 깨어나는 순간의 값만 관측된다. `ROAM_NO_RESULT_MAX_SLEEP` 을 5초로 낮추고(§5 #5 — 수동 추가 필요) 주입 주기를 맞추면 **tick 수가 주입에 종속돼 구간 간 조건이 자동 정규화**된다.
+3. **backoff 상한이 주입 주기를 삼킨다.** streak 가 상한(30초)이면 데몬이 그만큼 자므로 3초 주기 주입은 깨어나는 순간의 값만 관측된다. 상한을 5초로 낮추고 주입 주기를 맞추면 **tick 수가 주입에 종속돼 구간 간 조건이 자동 정규화**된다. 단 상한은 JSON 으로 바꿀 수 없으므로(§5 #5 — 뒷문 봉쇄) `wifi_roam.py` 의 `DEFAULT_ROAM_NO_RESULT_MAX_SLEEP` 상수를 고쳐 배포해야 하고, 실험 후 원복이 필수다.
 
 ### 7.2 probe airtime 을 재려면 `wifi_capture` 를 쓴다
 

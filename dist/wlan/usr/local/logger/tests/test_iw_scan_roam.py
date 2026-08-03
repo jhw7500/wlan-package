@@ -106,7 +106,7 @@ def test_roundtrip_candidate_bssid_is_table_entry(tmp_path, monkeypatch):
     header = ap_log.read_text().splitlines()[0]
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", header)
 
-    entries, ts = wifi_roam.get_latest_scan({"ssid": "jhw_wlan_"}, None, ["jhw_wlan_"])
+    entries, ts = wifi_roam.get_latest_scan({"ssid": "jhw_wlan_"}, ["jhw_wlan_"])
     # allowed=jhw_wlan_ + WPA_FREQ(5G 4채널) 필터 → jhw_wlan_(5180)만 후보.
     # 04:ba(다른 ssid), iptime5G(다른 ssid), aa:bb(2.4G freq밖)는 제외.
     assert [e["bssid"] for e in entries] == ["00:80:4c:c7:7d:dd"]
@@ -125,7 +125,7 @@ def test_empty_wpa_freq_accepts_any_channel_same_ssid(tmp_path, monkeypatch):
     ap_lines = scan_results_to_ap_lines(SCAN_RESULTS)
     wifi_roam.save_with_timestamp(str(ap_log), ap_lines)
 
-    entries, ts = wifi_roam.get_latest_scan({"ssid": "jhw_wlan_"}, None, ["jhw_wlan_"])
+    entries, ts = wifi_roam.get_latest_scan({"ssid": "jhw_wlan_"}, ["jhw_wlan_"])
     # 동일 SSID(jhw_wlan_) 2개 모두 후보: 00:80(5180/ch36) + aa:bb(2412/ch1) — 채널 무관.
     # 04:ba(다른 ssid), iptime5G(다른 ssid)는 SSID 불일치로 여전히 제외.
     assert sorted(e["bssid"] for e in entries) == [

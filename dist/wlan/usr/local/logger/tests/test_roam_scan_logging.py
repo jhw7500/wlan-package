@@ -35,7 +35,6 @@ def apln(idx, ch, rssi, bssid, ssid, freq=None):
 def _reset(monkeypatch):
     wifi_roam.logger.reset_mock()
     monkeypatch.setattr(wifi_roam, "WPA_FREQ", ["5180"])
-    monkeypatch.setattr(wifi_roam, "ENABLE_LOAD_BASED_ROAM", False)
 
 
 def _msgs():
@@ -63,7 +62,7 @@ LINES = [
 
 def test_default_logs_both_raw_and_candidates():
     """무회귀: 기본 호출은 종전대로 관측 행 + 후보 행을 모두 info 로 남긴다."""
-    ent = wifi_roam.parse_scan_entries(LINES, "2026-07-29 13:00:00", None, {"TEST"})
+    ent = wifi_roam.parse_scan_entries(LINES, "2026-07-29 13:00:00", {"TEST"})
     assert len(ent) == 1
     raw = [t for t in _texts() if "ssid:TEST" in t]
     cand = [t for t in _texts() if "roam candidate 0" in t]
@@ -73,7 +72,7 @@ def test_default_logs_both_raw_and_candidates():
 
 def test_raw_row_kept_for_filtered_out_ssid():
     """필터 탈락 항목도 관측 행은 남는다 — '스캔엔 보였는데 왜 후보가 아닌가' 진단 근거."""
-    wifi_roam.parse_scan_entries(LINES, "2026-07-29 13:00:00", None, {"TEST"})
+    wifi_roam.parse_scan_entries(LINES, "2026-07-29 13:00:00", {"TEST"})
     assert any("ssid:OTHER" in t for t in _texts()), "탈락 항목 관측 행이 사라지면 진단 불가"
     assert not any("roam candidate" in t and "OTHER" in t for t in _texts())
 
@@ -81,7 +80,7 @@ def test_raw_row_kept_for_filtered_out_ssid():
 def test_src_label_present_on_both_rows():
     """[핵심] 소스 라벨이 관측 행·후보 행 양쪽에 붙는다 — 두 벌 출력을 구분하는 수단."""
     wifi_roam.parse_scan_entries(
-        LINES, "2026-07-29 13:00:00", None, {"TEST"}, src="cache"
+        LINES, "2026-07-29 13:00:00", {"TEST"}, src="cache"
     )
     raw = [t for t in _texts() if "ssid:TEST" in t]
     cand = [t for t in _texts() if "roam candidate 0" in t]
@@ -91,14 +90,14 @@ def test_src_label_present_on_both_rows():
 
 def test_default_src_is_scan():
     """src 기본값은 scan — 실측 경로가 다수라 기본을 그쪽에 맞춘다."""
-    wifi_roam.parse_scan_entries(LINES, "2026-07-29 13:00:00", None, {"TEST"})
+    wifi_roam.parse_scan_entries(LINES, "2026-07-29 13:00:00", {"TEST"})
     assert any("[scan]" in t for t in _texts())
 
 
 def test_log_false_suppresses_all_rows_but_still_parses():
     """[핵심] log=False 는 로그만 끄고 파싱 결과는 그대로 — Stage 0 스냅샷용."""
     ent = wifi_roam.parse_scan_entries(
-        LINES, "2026-07-29 13:00:00", None, {"TEST"}, src="cache", log=False
+        LINES, "2026-07-29 13:00:00", {"TEST"}, src="cache", log=False
     )
     assert len(ent) == 1 and ent[0]["bssid"] == "bb:bb:bb:bb:bb:bb", "파싱까지 죽으면 회귀"
     assert not any("ssid:TEST" in t for t in _texts()), "log=False 인데 관측 행이 남았다"
@@ -108,7 +107,7 @@ def test_log_false_suppresses_all_rows_but_still_parses():
 def test_log_scan_candidates_standalone():
     """호출자가 판정 시점에 직접 후보 행만 남길 수 있다(캐시 지연 로깅의 수단)."""
     ent = wifi_roam.parse_scan_entries(
-        LINES, "2026-07-29 13:00:00", None, {"TEST"}, log=False
+        LINES, "2026-07-29 13:00:00", {"TEST"}, log=False
     )
     wifi_roam.logger.reset_mock()
     wifi_roam.log_scan_candidates(ent, "cache")
@@ -127,7 +126,7 @@ def test_get_latest_scan_passes_log_flag(monkeypatch, tmp_path):
     ap = tmp_path / "ap.log"
     ap.write_text("[2026-07-29 13:00:00]\n" + "\n".join(LINES) + "\n")
     monkeypatch.setattr(wifi_roam, "SCAN_LOG_FILE", str(ap))
-    ent, ts = wifi_roam.get_latest_scan({"ssid": "TEST"}, None, ["TEST"], log=False)
+    ent, ts = wifi_roam.get_latest_scan({"ssid": "TEST"}, ["TEST"], log=False)
     assert len(ent) == 1 and ts == "2026-07-29 13:00:00", "파싱 결과가 바뀌면 회귀"
     assert not any("roam candidate" in t for t in _texts())
 
@@ -137,7 +136,7 @@ def test_get_latest_scan_defaults_to_logging(monkeypatch, tmp_path):
     ap = tmp_path / "ap.log"
     ap.write_text("[2026-07-29 13:00:00]\n" + "\n".join(LINES) + "\n")
     monkeypatch.setattr(wifi_roam, "SCAN_LOG_FILE", str(ap))
-    wifi_roam.get_latest_scan({"ssid": "TEST"}, None, ["TEST"])
+    wifi_roam.get_latest_scan({"ssid": "TEST"}, ["TEST"])
     cand = [t for t in _texts() if "roam candidate 0" in t]
     assert len(cand) == 1 and "[cache]" in cand[0]
 
@@ -150,7 +149,7 @@ def test_get_latest_scan_src_override_for_foreground_read(monkeypatch, tmp_path)
     ap = tmp_path / "ap.log"
     ap.write_text("[2026-07-29 13:00:00]\n" + "\n".join(LINES) + "\n")
     monkeypatch.setattr(wifi_roam, "SCAN_LOG_FILE", str(ap))
-    wifi_roam.get_latest_scan({"ssid": "TEST"}, None, ["TEST"], src="scan")
+    wifi_roam.get_latest_scan({"ssid": "TEST"}, ["TEST"], src="scan")
     cand = [t for t in _texts() if "roam candidate 0" in t]
     assert cand and "[scan]" in cand[0], f"전경 실측이 scan 으로 안 찍힌다: {cand}"
     assert not any("[cache]" in t for t in _texts()), "전경 실측이 cache 로 오라벨됐다"
@@ -281,7 +280,7 @@ def test_stage0_cache_silent_when_home_scan_succeeds(staged):
     wifi_roam.logger.reset_mock()
 
     best, _r, _s, _sc = wifi_roam.staged_scan_best_candidate(
-        _station(), None, ["Net"], "Net", "stable", None
+        _station(), ["Net"], "Net", "stable", None
     )
     assert best is not None and best["bssid"] == "bb:bb:bb:bb:bb:bb"
     assert not any("[cache]" in t for t in _texts()), (
@@ -302,7 +301,7 @@ def test_stage2_cache_logged_when_actually_used(staged):
     wifi_roam.logger.reset_mock()
 
     best, _r, _s, _sc = wifi_roam.staged_scan_best_candidate(
-        _station(), None, ["Net"], "Net", "stable", None
+        _station(), ["Net"], "Net", "stable", None
     )
     assert best is not None and best["bssid"] == "cc:cc:cc:cc:cc:cc", "캐시 후보 채택 경로가 깨졌다"
     cache_cand = [t for t in _texts() if "[cache]" in t and "roam candidate" in t]
@@ -328,7 +327,7 @@ def test_stage2_logs_only_entries_actually_evaluated(staged):
     wifi_roam.logger.reset_mock()
 
     best, _r, _s, _sc = wifi_roam.staged_scan_best_candidate(
-        _station(), None, ["Net"], "Net", "stable", None
+        _station(), ["Net"], "Net", "stable", None
     )
     cache_logs = [t for t in _texts() if "[cache]" in t]
     assert not any("dd:dd:dd:dd:dd:dd" in t for t in cache_logs), (

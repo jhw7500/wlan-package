@@ -599,7 +599,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 | `ssid_filter` | bool | `true` | `iw scan`의 **기본 ssid** directed probe 포함 여부. `true`면 conf 기본 ssid를 probe, `false`면 기본 ssid는 probe 없이 스캔. `roaming.extra_ssids`(§11.4)는 이 값과 **무관하게 항상 probe**된다. **`passive=true`(기본)면 directed probe 자체가 없어 이 키는 무효** |
 | `freq_filter` | bool | `true` | `iw scan`에 `freq <wpa_supplicant conf의 scan_freq>` 필터 포함 여부. `false`면 freq 제한 없이 전체 대역 스캔(스캔 시간·airtime↑) |
 | `passive` | bool | `true` | `true`=패시브 스캔(`iw scan passive`, probe request 미송신·beacon 수신만). `false`=종전 액티브 스캔 |
-| `emit_roam_hint` | bool | `true` | 스캔 성공 시 `/tmp/wifi_roam_hint_<iface>` touch — `wifi_roam`의 후보없음 지수 backoff를 즉시 해제하는 신호(§11.4). `false`면 hint 미발행. 메커니즘: 파일은 삭제되지 않고 남으며, `wifi_roam` 메인루프가 매 tick **mtime 변화**를 감지해 backoff 카운터를 리셋한다(단방향 write/read라 race-free) |
+| `emit_roam_hint` | bool | `true` | 스캔 성공 시 `/tmp/wifi_roam_hint_<iface>` touch — `wifi_roam`의 후보없음 지수 backoff를 즉시 해제하는 신호(§11.4). `false`면 hint 미발행. 메커니즘: 파일은 삭제되지 않고 남으며, `wifi_roam` 메인루프가 매 tick **mtime 변화**를 감지해 backoff 카운터를 리셋한다(단방향 write/read라 race-free). **주의 — 단일 iface 운용에서는 실효가 없다**: backoff가 쌓이는 구간은 로밍 컨디션 ON인데, 그 플래그가 켜져 있으면 bgscan은 스캔 자체를 건너뛰므로 hint가 발행될 수 없다. `/tmp/roam_condition`이 iface 구분 없는 전역 파일이라 **듀얼 iface에서만 우발적으로 발화**할 수 있다(감사 2026-07, `knob_audit_2026-07.md` D3) |
 
 > **패시브 스캔 (`passive`, 기본 `true`)**: bgscan은 probe request를 쏘지 않고 beacon만 수신한다. probe를 안 보내므로 **directed `ssid` 토큰은 명령에서 전부 생략**되며(`ssid_filter`/`extra_ssids`의 directed probe는 패시브에서 무의미), airtime 오염이 줄고 beacon 기반 RSSI라 현재 링크의 `signal_avg`와 측정 스케일이 가까워진다(로밍 판정 정합성↑, §11.4). **한계**: beacon을 보내지 않는 **hidden SSID는 패시브로 발견되지 않는다** — hidden extra SSID가 로밍 후보라면 `passive=false`로 액티브 bgscan을 쓰거나, 로밍 트리거 시의 액티브 폴백(§11.4)에 의존해야 한다.
 
@@ -703,17 +703,9 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 | `enable` | bool | `false` | 예측 로밍 활성화 (**plain-mode화로 기본 off**, 구 기본 true) |
 | `threshold_boost` | int | `5` | 신호 하락 추세 시 **로밍 컨디션 진입 임계** 상향 (dB) — 더 일찍 후보 탐색 시작 |
 
-> **falling trend의 두 가지 효과**: ① 컨디션 진입 임계가 `threshold_boost`(기본 5dB)만큼 상향되어 더 일찍 탐색을 시작하고, ② 후보 판정의 `DIFF_TH`가 **3dB 완화**된다(`effective_diff_th = max(1, DIFF_TH - 3)` — 하한 1dB 클램프로 음수/0 diff 후보 통과를 차단). 완화 구간 후보도 load 게이트는 동일하게 적용된다.
+> **falling trend의 두 가지 효과**: ① 컨디션 진입 임계가 `threshold_boost`(기본 5dB)만큼 상향되어 더 일찍 탐색을 시작하고, ② 후보 판정의 `DIFF_TH`가 **3dB 완화**된다(`effective_diff_th = max(1, DIFF_TH - 3)` — 하한 1dB 클램프로 음수/0 diff 후보 통과를 차단).
 | `trend_window_size` | int | `5` | 추세 분석 윈도우 크기 (샘플 수) |
 | `trend_history_max_age` | int | `30` | 추세 기록 최대 보존 시간 (초) |
-
-#### LOAD_BASED_ROAM - 부하 기반 로밍
-
-| 키 | 타입 | 기본값 | 설명 |
-|----|------|--------|------|
-| `enable` | bool | `false` | 부하 기반 로밍 활성화 (**mlan0/mlan1 모두 기본 false** — 이제 인터페이스 간 차이 아님) |
-| `max_roam_load` | int | `80` | 채널 부하 임계값 (%) |
-| `load_diff_threshold` | int | `20` | 채널 간 부하 차이 임계값 (%) |
 
 #### PING_PONG_PREVENTION - 핑퐁 방지
 
@@ -724,35 +716,11 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 | `max_roams_in_window` | int | `3` | 윈도우 내 최대 로밍 횟수 |
 | `detection_time` | int | `5` | A→B→A 왕복 감지 시간 (초) |
 
-#### ADAPTIVE_INTERVAL - 적응형 체크 주기
-
-| 키 | 타입 | 기본값 | 설명 |
-|----|------|--------|------|
-| `enable` | bool | `false` | 적응형 주기 활성화 (**plain-mode화로 기본 off**, 구 기본 true). `false`이면 `CHECK_INTERVAL` 고정 사용 |
-| `min_check_interval` | int | `1` | 최소 체크 주기 (초) |
-| `max_check_interval` | int | `10` | 최대 체크 주기 (초) |
-| `rssi_drop_threshold` | int | `-5` | 신호 하락 감지 임계값 (dB) |
-| `rssi_rise_threshold` | int | `2` | 신호 상승 감지 임계값 (dB) |
-| `near_threshold_offset` | int | `5` | 임계값 근처 판정 오프셋 (dB) |
-| `near_threshold_interval` | int | `2` | 임계값 근처 체크 주기 (초) |
-| `good_signal_offset` | int | `15` | 양호 신호 판정 오프셋 (dB) |
-| `consecutive_drop_count` | int | `2` | 연속 하락 카운트 임계값 |
-
-#### POST_ROAM_ARP_OPTIMIZATION - 로밍 후 ARP 최적화
-
-| 키 | 타입 | 기본값 | 설명 |
-|----|------|--------|------|
-| `enable` | bool | `false` | 활성화 (**plain-mode화로 기본 off**, 구 기본 true) |
-| `garp_count` | int | `2` | Gratuitous ARP 전송 횟수 |
-| `garp_wait` | int | `1` | GARP 전송 간 대기 (초) |
-
-##### PEER_WARMUP - 피어 워밍업
-
-| 키 | 타입 | 기본값 | 설명 |
-|----|------|--------|------|
-| `enable` | bool | `false` | 활성화 (**plain-mode화로 기본 off**, 구 기본 true) |
-| `peer_count` | int | `5` | 워밍업 대상 피어 수 |
-| `peer_wait` | int | `1` | 피어 간 대기 (초) |
+> **제거됨 (2026-07-31 노브 감사 D1, `knob_audit_2026-07.md`)**: `LOAD_BASED_ROAM` ·
+> `ADAPTIVE_INTERVAL` · `POST_ROAM_ARP_OPTIMIZATION`(+`PEER_WARMUP`) 은 출하 기본 off 로
+> 사용 실적이 없어 코드·템플릿·스키마에서 제거됐다. 기존 기기 JSON 에 남은 해당 키는
+> 데몬이 읽지 않으므로 무해(stale)하다. `PREDICTIVE_ROAM` 은 2층 판정 계획의 RSSI 이력
+> 소스라 보류로 남았다.
 
 ### 11.5 rate_adapt - FW Rate Adaptation (per-iface override)
 
@@ -893,7 +861,7 @@ SNMP는 **기본 off(opt-in)**이다. `snmp.enabled=true`일 때만 `wifi_apply_
 | `logger.enabled` | `true` | `false` | mlan1 비활성 인터페이스 |
 | `mcs_tier.ht` / `.vht` / `.he` | `"7"` / `"7"` / `"both 7"` | `""` / `""` / `""` | mlan0만 MCS tier 제한값 설정(단 `mcs_tier.enabled`는 양쪽 `false`) |
 
-> **더 이상 차이 아님**: `LOAD_BASED_ROAM.enable`은 이제 mlan0/mlan1 **모두 `false`**로 동일하다(구 가이드의 mlan1=true 는 stale). `PREDICTIVE_ROAM`/`ADAPTIVE_INTERVAL`/`POST_ROAM_ARP_OPTIMIZATION`/`PEER_WARMUP`도 양쪽 `false`로 동일하다.
+> **더 이상 차이 아님**: `PREDICTIVE_ROAM.enable` 은 양쪽 `false` 로 동일하다. `LOAD_BASED_ROAM`/`ADAPTIVE_INTERVAL`/`POST_ROAM_ARP_OPTIMIZATION` 은 감사 D1(2026-07-31)로 **제거**됐다(§11.4 제거됨 참조).
 
 ---
 

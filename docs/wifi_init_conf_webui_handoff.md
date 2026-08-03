@@ -102,11 +102,10 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
   | hot_wifi_exit | 75 | **85** |
 
 - **`wbridge.eth_link_wait_sec`**: 3 → **5**.
-- **로밍 고급기능 대거 off (plain-mode화)**:
-  - `roaming.PREDICTIVE_ROAM.enable` → false
-  - `roaming.ADAPTIVE_INTERVAL.enable` → false
-  - `roaming.POST_ROAM_ARP_OPTIMIZATION.enable`(+ `PEER_WARMUP.enable`) → false
-  - `roaming.LOAD_BASED_ROAM.enable` → false (mlan0/mlan1 양쪽)
+- **로밍 고급기능 정리**:
+  - `roaming.PREDICTIVE_ROAM.enable` → false (보류 — 2층 판정 이력 소스)
+  - `roaming.ADAPTIVE_INTERVAL` / `POST_ROAM_ARP_OPTIMIZATION`(+`PEER_WARMUP`) /
+    `LOAD_BASED_ROAM` → **제거됨** (감사 D1 2026-07-31, `knob_audit_2026-07.md`)
   - `mlan0.roaming.enabled` = **true** (mlan0 로밍 기본 활성화), `mlan1.roaming.enabled` = false
 
 ### 2.4 제거/유령(phantom)
@@ -387,28 +386,12 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `PREDICTIVE_ROAM.threshold_boost` | 예측 임계 부스트 | int | `5` | >=0 dB | yes | daemon-restart | 하락 추세 시 임계값에 더하는 부스트 |
 | `PREDICTIVE_ROAM.trend_window_size` | 추세 샘플 수 | int | `5` | >=1 | yes | daemon-restart | 추세 계산 RSSI 샘플 수 |
 | `PREDICTIVE_ROAM.trend_history_max_age` | 추세 샘플 최대 수명 | int | `30` | >=1 초 | yes | daemon-restart | 이 시간 지난 샘플 폐기 |
-| `LOAD_BASED_ROAM.enable` | 부하 기반 로밍 | bool | `false` | true\|false | yes | daemon-restart | AP 채널 부하 기반 로밍 |
-| `LOAD_BASED_ROAM.max_roam_load` | 최대 로밍 부하 | int | `80` | 0..100(%) | yes | daemon-restart | 현재 AP 부하 초과 시 로밍 고려 |
-| `LOAD_BASED_ROAM.load_diff_threshold` | 부하 차 임계값 | int | `20` | 0..100(%) | yes | daemon-restart | 현재-후보 AP 부하 차이 최소값 |
+
+> `LOAD_BASED_ROAM`·`ADAPTIVE_INTERVAL`·`POST_ROAM_ARP_OPTIMIZATION`(+`PEER_WARMUP`) 키는 감사 D1(2026-07-31)로 제거됨 — WebUI 에 노출하지 말 것.
 | `PING_PONG_PREVENTION.enable` | 핑퐁 방지 | bool | `true` | true\|false | yes | daemon-restart | AP 간 반복 로밍 방지 |
 | `PING_PONG_PREVENTION.window` | 핑퐁 감시 구간 | int | `mlan0=30 / mlan1=60` | >=1 초 | yes | daemon-restart | 로밍 횟수 감시 구간 |
 | `PING_PONG_PREVENTION.max_roams_in_window` | 구간 내 최대 로밍 | int | `3` | >=1 | yes | daemon-restart | 초과 시 detection_time 동안 억제 |
 | `PING_PONG_PREVENTION.detection_time` | 핑퐁 억제 시간 | int | `mlan0=10 / mlan1=30` | >=1 초 | yes | daemon-restart | 감지 후 로밍 억제 시간 |
-| `ADAPTIVE_INTERVAL.enable` | 적응형 체크 주기 | bool | `false` | true\|false | yes | daemon-restart | false면 CHECK_INTERVAL 고정 |
-| `ADAPTIVE_INTERVAL.min_check_interval` | 최소 체크 주기 | int | `1` | >=1 초 | yes | daemon-restart | 적응형 최소 주기 |
-| `ADAPTIVE_INTERVAL.max_check_interval` | 최대 체크 주기 | int | `10` | >=min 초 | yes | daemon-restart | 적응형 최대 주기 |
-| `ADAPTIVE_INTERVAL.rssi_drop_threshold` | RSSI 하락 임계 | int | `-5` | 음수 dB | yes | daemon-restart | 이상 하락 시 주기 단축 |
-| `ADAPTIVE_INTERVAL.rssi_rise_threshold` | RSSI 상승 임계 | int | `2` | >=0 dB | yes | daemon-restart | 이상 상승 시 주기 연장 |
-| `ADAPTIVE_INTERVAL.near_threshold_offset` | 임계 근처 offset | int | `5` | >=0 dB | yes | daemon-restart | 임계값 근처(±offset) 판정 기준 |
-| `ADAPTIVE_INTERVAL.near_threshold_interval` | 임계 근처 주기 | int | `2` | >=1 초 | yes | daemon-restart | 임계 근처일 때 체크 주기 |
-| `ADAPTIVE_INTERVAL.good_signal_offset` | 양호 신호 offset | int | `15` | >=0 dB | yes | daemon-restart | 임계+offset 이상이면 양호 판정 |
-| `ADAPTIVE_INTERVAL.consecutive_drop_count` | 연속 하락 횟수 | int | `2` | >=1 | yes | daemon-restart | 연속 하락 이 횟수 이상이면 즉시 단축 |
-| `POST_ROAM_ARP_OPTIMIZATION.enable` | 로밍 후 ARP 최적화 | bool | `false` | true\|false | yes | daemon-restart | GARP로 MAC 테이블 갱신 |
-| `POST_ROAM_ARP_OPTIMIZATION.garp_count` | GARP 전송 횟수 | int | `2` | >=1 | yes | daemon-restart | Gratuitous ARP 횟수 |
-| `POST_ROAM_ARP_OPTIMIZATION.garp_wait` | GARP 전송 간 대기 | int | `1` | >=0 초 | yes | daemon-restart | GARP 전송 간 대기 |
-| `POST_ROAM_ARP_OPTIMIZATION.PEER_WARMUP.enable` | 피어 워밍업 | bool | `false` | true\|false | yes | daemon-restart | 주변 피어 MAC 테이블 워밍업 |
-| `POST_ROAM_ARP_OPTIMIZATION.PEER_WARMUP.peer_count` | 워밍업 피어 수 | int | `5` | >=1 (상위 N개) | yes | daemon-restart | ARP 전송 대상 피어 수 |
-| `POST_ROAM_ARP_OPTIMIZATION.PEER_WARMUP.peer_wait` | 피어 간 ARP 대기 | int | `1` | >=0 초 | yes | daemon-restart | 피어 간 ARP 전송 대기 |
 
 **비고 (roaming)** — 소비: `wifi_roam.py`(데몬 시작 시 1회 로드 → daemon-restart), `enabled`류는 `wifi_apply_enabled.sh`.
 - `mlanN.enabled=false`면 하위 로밍/스캔/logger/checker/arping 데몬은 상위 게이트로 강제 disable.
