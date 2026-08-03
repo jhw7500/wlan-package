@@ -1311,41 +1311,6 @@
                 }
               }
             },
-            "LOAD_BASED_ROAM": {
-              "type": "object",
-              "additionalProperties": true,
-              "description": "AP 채널 부하 기반 로밍",
-              "properties": {
-                "enable": {
-                  "type": "boolean",
-                  "default": false,
-                  "description": "AP 채널 부하 기반 로밍 ON/OFF",
-                  "x-ui-editable": "yes",
-                  "x-apply-timing": "daemon-restart",
-                  "x-consumer": "wifi_roam.py"
-                },
-                "max_roam_load": {
-                  "type": "integer",
-                  "default": 80,
-                  "minimum": 0,
-                  "maximum": 100,
-                  "description": "현재 AP 부하가 이 값(%) 초과 시 로밍 고려",
-                  "x-ui-editable": "yes",
-                  "x-apply-timing": "daemon-restart",
-                  "x-consumer": "wifi_roam.py"
-                },
-                "load_diff_threshold": {
-                  "type": "integer",
-                  "default": 20,
-                  "minimum": 0,
-                  "maximum": 100,
-                  "description": "현재 AP와 후보 AP 부하 차이 최소값(%)",
-                  "x-ui-editable": "yes",
-                  "x-apply-timing": "daemon-restart",
-                  "x-consumer": "wifi_roam.py"
-                }
-              }
-            },
             "PING_PONG_PREVENTION": {
               "type": "object",
               "additionalProperties": true,
@@ -2186,41 +2151,6 @@
                   "default": 30,
                   "minimum": 1,
                   "description": "이 시간(초) 지난 RSSI 샘플은 폐기",
-                  "x-ui-editable": "yes",
-                  "x-apply-timing": "daemon-restart",
-                  "x-consumer": "wifi_roam.py"
-                }
-              }
-            },
-            "LOAD_BASED_ROAM": {
-              "type": "object",
-              "additionalProperties": true,
-              "description": "AP 채널 부하 기반 로밍",
-              "properties": {
-                "enable": {
-                  "type": "boolean",
-                  "default": false,
-                  "description": "AP 채널 부하 기반 로밍 ON/OFF",
-                  "x-ui-editable": "yes",
-                  "x-apply-timing": "daemon-restart",
-                  "x-consumer": "wifi_roam.py"
-                },
-                "max_roam_load": {
-                  "type": "integer",
-                  "default": 80,
-                  "minimum": 0,
-                  "maximum": 100,
-                  "description": "현재 AP 부하가 이 값(%) 초과 시 로밍 고려",
-                  "x-ui-editable": "yes",
-                  "x-apply-timing": "daemon-restart",
-                  "x-consumer": "wifi_roam.py"
-                },
-                "load_diff_threshold": {
-                  "type": "integer",
-                  "default": 20,
-                  "minimum": 0,
-                  "maximum": 100,
-                  "description": "현재 AP와 후보 AP 부하 차이 최소값(%)",
                   "x-ui-editable": "yes",
                   "x-apply-timing": "daemon-restart",
                   "x-consumer": "wifi_roam.py"

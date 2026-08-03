@@ -38,7 +38,6 @@ def _globals(monkeypatch, tmp_path):
     monkeypatch.setattr(wifi_roam, "WPA_TH_5G", -75)
     monkeypatch.setattr(wifi_roam, "WPA_FREQ", ["5180", "5200"])  # ch36, ch40
     monkeypatch.setattr(wifi_roam, "DIFF_TH", 10)
-    monkeypatch.setattr(wifi_roam, "ENABLE_LOAD_BASED_ROAM", False)
     monkeypatch.setattr(wifi_roam, "ENABLE_PREDICTIVE_ROAM", False)
     monkeypatch.setattr(wifi_roam, "CACHE_FRESH_SEC", 45)
     # 모듈 전역이라 테스트 간 누수 → 격리 위해 매 테스트 리셋(없으면 앞 테스트의 스캔 시각이
@@ -82,7 +81,7 @@ def test_stage1_home_candidate_shortcircuits(monkeypatch):
     monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
 
     best, reason, score, scanned = wifi_roam.staged_scan_best_candidate(
-        _station(rssi=-70), None, ["Net"], "Net", STABLE, None
+        _station(rssi=-70), ["Net"], "Net", STABLE, None
     )
     assert best is not None and best["bssid"] == "bb:bb:bb:bb:bb:bb"
     assert scanned is True
@@ -99,7 +98,7 @@ def test_stage1_baseline_unification_blocks_spurious_roam(monkeypatch):
     monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
 
     best, _, _, _ = wifi_roam.staged_scan_best_candidate(
-        _station(rssi=-70), None, ["Net"], "Net", STABLE, None
+        _station(rssi=-70), ["Net"], "Net", STABLE, None
     )
     assert best is None    # baseline=-55 통일 → 7dB diff는 임계값 미만
 
@@ -117,7 +116,7 @@ def test_stage2_fresh_cache_used(monkeypatch):
     monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: (cache, fresh_ts))
 
     best, _, _, _ = wifi_roam.staged_scan_best_candidate(
-        _station(rssi=-70), None, ["Net"], "Net", STABLE, None
+        _station(rssi=-70), ["Net"], "Net", STABLE, None
     )
     assert best is not None and best["bssid"] == "cc:cc:cc:cc:cc:cc"
     # 액티브 폴백(passive=False) 호출 없음
@@ -139,7 +138,7 @@ def test_stage3_active_fallback_when_cache_stale(monkeypatch):
     ))
 
     best, _, _, scanned = wifi_roam.staged_scan_best_candidate(
-        _station(rssi=-70), None, ["Net"], "Net", STABLE, None
+        _station(rssi=-70), ["Net"], "Net", STABLE, None
     )
     assert best is not None and best["bssid"] == "dd:dd:dd:dd:dd:dd"
     active_calls = [c for c in calls if c["passive"] is False]
@@ -159,7 +158,7 @@ def test_stage3_empty_scan_freq_full_band_with_wildcard(monkeypatch):
     monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
 
     best, _, _, _ = wifi_roam.staged_scan_best_candidate(
-        _station(rssi=-70), None, ["Net"], "Net", STABLE, None
+        _station(rssi=-70), ["Net"], "Net", STABLE, None
     )
     active_calls = [c for c in calls if c["passive"] is False]
     assert len(active_calls) == 1
@@ -244,7 +243,7 @@ def test_stage1_ignores_offchannel_bss_from_full_table(monkeypatch):
     monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
 
     best, _, _, _ = wifi_roam.staged_scan_best_candidate(
-        _station(rssi=-70, freq=5180), None, ["Net"], "Net", STABLE, None
+        _station(rssi=-70, freq=5180), ["Net"], "Net", STABLE, None
     )
     # 오프채널 stale AP가 선택되면 안 됨 — 액티브 폴백 결과가 나와야 한다.
     assert best is not None
@@ -271,7 +270,7 @@ def test_cache_snapshot_taken_before_any_scan(monkeypatch):
     monkeypatch.setattr(wifi_roam, "get_latest_scan", fake_cache)
 
     wifi_roam.staged_scan_best_candidate(
-        _station(rssi=-70), None, ["Net"], "Net", STABLE, None
+        _station(rssi=-70), ["Net"], "Net", STABLE, None
     )
     assert order[0] == "cache", f"캐시 스냅샷이 스캔보다 먼저여야 함: {order}"
 
@@ -302,11 +301,11 @@ def test_self_induced_cache_block_rejected_across_iterations(monkeypatch):
 
     st = _station(rssi=-70)
     # 반복 1: 캐시 없음 → 스캔들이 돌며 self-induced 블록 생성
-    b1, _, _, _ = wifi_roam.staged_scan_best_candidate(st, None, ["Net"], "Net", STABLE, None)
+    b1, _, _, _ = wifi_roam.staged_scan_best_candidate(st, ["Net"], "Net", STABLE, None)
     assert b1 is None
     assert log["ts"] is not None                    # 블록이 생겼음
     # 반복 2: 그 블록은 '내 스캔이 유발한 것' → 배경 캐시로 신뢰하면 안 됨
-    b2, _, _, _ = wifi_roam.staged_scan_best_candidate(st, None, ["Net"], "Net", STABLE, None)
+    b2, _, _, _ = wifi_roam.staged_scan_best_candidate(st, ["Net"], "Net", STABLE, None)
     assert b2 is None, f"self-induced 블록의 stale off-channel AP가 채택됨: {b2}"
 
 
@@ -322,7 +321,7 @@ def test_genuine_background_cache_still_used(monkeypatch):
     monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: (cache, fresh_ts))
 
     best, _, _, _ = wifi_roam.staged_scan_best_candidate(
-        _station(rssi=-70), None, ["Net"], "Net", STABLE, None
+        _station(rssi=-70), ["Net"], "Net", STABLE, None
     )
     assert best is not None and best["bssid"] == "cc:cc:cc:cc:cc:cc"
 
@@ -376,7 +375,7 @@ def test_stage2_recovers_after_earlier_self_scan(monkeypatch):
     monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: (cache, fresh_ts))
 
     best, _, _, _ = wifi_roam.staged_scan_best_candidate(
-        _station(rssi=-70), None, ["Net"], "Net", STABLE, None
+        _station(rssi=-70), ["Net"], "Net", STABLE, None
     )
     assert best is not None and best["bssid"] == "cc:cc:cc:cc:cc:cc", \
         "이전 자기 스캔 때문에 진짜 배경 캐시가 영구 거부됨 (Stage 2 사망)"
@@ -521,7 +520,7 @@ def test_skip_active_fallback_when_single_channel_home_covers(monkeypatch):
     monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
 
     best, _, _, scanned = wifi_roam.staged_scan_best_candidate(
-        _station(rssi=-70, freq=5240), None, ["Net"], "Net", STABLE, None
+        _station(rssi=-70, freq=5240), ["Net"], "Net", STABLE, None
     )
     assert best is None
     assert any(c["passive"] is True for c in calls)                       # 홈 패시브는 돎
@@ -539,7 +538,7 @@ def test_active_fallback_when_multichannel(monkeypatch):
     monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
 
     best, _, _, _ = wifi_roam.staged_scan_best_candidate(
-        _station(rssi=-70, freq=5240), None, ["Net"], "Net", STABLE, None
+        _station(rssi=-70, freq=5240), ["Net"], "Net", STABLE, None
     )
     assert any(c["passive"] is False for c in calls), "다채널이면 액티브 폴백 실행돼야"
     assert best is not None and best["bssid"] == "dd:dd:dd:dd:dd:dd"  # 다른채널 후보로 로밍
@@ -563,7 +562,7 @@ def test_no_skip_when_home_sees_only_current_ap(monkeypatch):
     monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
 
     best, _, _, _ = wifi_roam.staged_scan_best_candidate(
-        _station(rssi=-70, freq=5240), None, ["Net"], "Net", STABLE, None
+        _station(rssi=-70, freq=5240), ["Net"], "Net", STABLE, None
     )
     assert any(c["passive"] is True for c in calls)                  # 홈 패시브는 돎
     assert any(c["passive"] is False for c in calls), \
@@ -583,7 +582,7 @@ def test_no_skip_when_home_sees_only_other_ssid(monkeypatch):
     monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
 
     wifi_roam.staged_scan_best_candidate(
-        _station(rssi=-70, freq=5240), None, ["Net"], "Net", STABLE, None
+        _station(rssi=-70, freq=5240), ["Net"], "Net", STABLE, None
     )
     assert any(c["passive"] is False for c in calls), \
         "우리 SSID 를 패시브로 못 봤으면 액티브 폴백으로 재시도해야(스킵 금지)"
@@ -598,7 +597,7 @@ def test_no_skip_when_home_scan_failed(monkeypatch):
     monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
 
     wifi_roam.staged_scan_best_candidate(
-        _station(rssi=-70, freq=5240), None, ["Net"], "Net", STABLE, None
+        _station(rssi=-70, freq=5240), ["Net"], "Net", STABLE, None
     )
     assert any(c["passive"] is False for c in calls), "홈 스캔 실패 시 액티브 폴백은 재시도로 실행돼야"
 
@@ -614,7 +613,7 @@ def test_skip_disabled_by_config(monkeypatch):
     monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
 
     wifi_roam.staged_scan_best_candidate(
-        _station(rssi=-70, freq=5240), None, ["Net"], "Net", STABLE, None
+        _station(rssi=-70, freq=5240), ["Net"], "Net", STABLE, None
     )
     assert any(c["passive"] is False for c in calls), "옵션 off면 액티브 폴백 실행돼야"
 
@@ -656,7 +655,7 @@ def test_stage2_ignores_home_channel_cache_entries(monkeypatch):
     monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: (cache, fresh_ts))
 
     best, _, _, _ = wifi_roam.staged_scan_best_candidate(
-        _station(rssi=-70, freq=5180), None, ["Net"], "Net", STABLE, None
+        _station(rssi=-70, freq=5180), ["Net"], "Net", STABLE, None
     )
     # 묵은 홈채널 캐시(bb, -60)로 로밍 금지 — Stage 3 액티브의 교차채널 결과(dd)여야 한다
     assert best is not None and best["bssid"] == "dd:dd:dd:dd:dd:dd", \
@@ -681,7 +680,7 @@ def test_stage2_mixed_cache_evaluates_cross_channel_only(monkeypatch):
     monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: (cache, fresh_ts))
 
     best, _, _, _ = wifi_roam.staged_scan_best_candidate(
-        _station(rssi=-70, freq=5180), None, ["Net"], "Net", STABLE, None
+        _station(rssi=-70, freq=5180), ["Net"], "Net", STABLE, None
     )
     assert best is not None and best["bssid"] == "cc:cc:cc:cc:cc:cc", \
         f"홈채널 묵은 엔트리가 평가에 남음(소비 지점 미필터): {best}"
@@ -701,7 +700,7 @@ def test_stage2_uses_home_cache_when_home_scan_failed(monkeypatch):
     monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: (cache, fresh_ts))
 
     best, _, _, _ = wifi_roam.staged_scan_best_candidate(
-        _station(rssi=-70, freq=5180), None, ["Net"], "Net", STABLE, None
+        _station(rssi=-70, freq=5180), ["Net"], "Net", STABLE, None
     )
     assert best is not None and best["bssid"] == "cc:cc:cc:cc:cc:cc", \
         "홈 스캔 실패 시엔 홈채널 캐시가 유일한 정보 — 과잉 필터로 버려짐"
@@ -747,7 +746,7 @@ def test_stage2_skipped_after_clock_step(monkeypatch):
     monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: (cache, fresh_ts))
 
     best, _, _, _ = wifi_roam.staged_scan_best_candidate(
-        _station(rssi=-70, freq=5180), None, ["Net"], "Net", STABLE, None
+        _station(rssi=-70, freq=5180), ["Net"], "Net", STABLE, None
     )
     assert best is not None and best["bssid"] == "dd:dd:dd:dd:dd:dd", \
         f"시계 스텝 tick 에 신뢰 불가한 캐시가 사용됨: {best}"
@@ -771,7 +770,7 @@ def test_stage2_used_when_clocks_advance_together(monkeypatch):
     monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: (cache, fresh_ts))
 
     best, _, _, _ = wifi_roam.staged_scan_best_candidate(
-        _station(rssi=-70, freq=5180), None, ["Net"], "Net", STABLE, None
+        _station(rssi=-70, freq=5180), ["Net"], "Net", STABLE, None
     )
     assert best is not None and best["bssid"] == "cc:cc:cc:cc:cc:cc"
     assert not any(c["passive"] is False for c in calls)
@@ -822,7 +821,7 @@ def test_home_passive_false_stage1_directed_active(monkeypatch):
     monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
 
     best, _, _, scanned = wifi_roam.staged_scan_best_candidate(
-        _station(rssi=-70), None, ["Net"], "Net", STABLE, None
+        _station(rssi=-70), ["Net"], "Net", STABLE, None
     )
     assert len(calls) == 1, f"홈 스캔 1회만 실행돼야: {calls}"
     c = calls[0]
@@ -842,7 +841,7 @@ def test_home_passive_default_true_keeps_passive(monkeypatch):
     monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(home, None, calls))
     monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
     wifi_roam.staged_scan_best_candidate(
-        _station(rssi=-70), None, ["Net"], "Net", STABLE, None
+        _station(rssi=-70), ["Net"], "Net", STABLE, None
     )
     assert calls and calls[0]["passive"] is True and calls[0]["ssids"] is None
 
@@ -882,7 +881,7 @@ def test_home_passive_false_skip_guard_still_applies(monkeypatch):
     monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
 
     best, _, _, _ = wifi_roam.staged_scan_best_candidate(
-        _station(rssi=-70, freq=5240), None, ["Net"], "Net", STABLE, None
+        _station(rssi=-70, freq=5240), ["Net"], "Net", STABLE, None
     )
     assert best is None                          # diff 1 < 10 미달
     assert len(calls) == 1, f"홈 액티브 1회 외 추가 스캔 금지: {calls}"
@@ -900,7 +899,7 @@ def test_home_passive_false_baseline_unification(monkeypatch):
     monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
 
     best, _, _, _ = wifi_roam.staged_scan_best_candidate(
-        _station(rssi=-70), None, ["Net"], "Net", STABLE, None
+        _station(rssi=-70), ["Net"], "Net", STABLE, None
     )
     assert best is None                          # baseline=-55 → diff 7 < 10
     assert len(calls) == 1
