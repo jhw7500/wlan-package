@@ -21,7 +21,8 @@ _TOOL = os.path.join(_REPO, "scripts", "gen_config_defaults.py")
 
 def test_generated_defaults_are_in_sync():
     r = subprocess.run(
-        [sys.executable, _TOOL, "--check"], capture_output=True, text=True
+        [sys.executable, _TOOL, "--check"],
+        capture_output=True, text=True, timeout=60
     )
     assert r.returncode == 0, (
         "템플릿과 스키마/handoff 기본값이 어긋났다.\n"
