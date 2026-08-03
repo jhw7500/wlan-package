@@ -151,7 +151,9 @@ DEFAULT_USE_SIGNAL_AVG = True  # True: link 파일의 signal_avg(평활) 사용,
 # Sleep 기본값
 DEFAULT_SCAN_NO_RESULT_SLEEP = 3  # AP 스캔 결과 없을 때 재시도 대기
 DEFAULT_ROAM_SUCCESS_SLEEP = 3  # 로밍 성공 후 안정화 대기(mlan0 기준, mlan1 템플릿=2)
-DEFAULT_ROAM_NO_RESULT_MAX_SLEEP = 30  # 후보없음 backoff 상한(초)
+DEFAULT_ROAM_NO_RESULT_MAX_SLEEP = 30  # 후보없음 backoff 상한(초). 의도적으로 JSON 미노출 —
+# 과거엔 로더가 .get() 으로 읽어 JSON 에 손으로 넣으면 몰래 실효되는 뒷문이었다(감사 D2 로 봉쇄).
+# 운영에서 조정할 근거가 없고, 실험이 필요하면 이 상수를 직접 바꾼다.
 DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT = 2  # cross-SSID 전환 실패 시 cooldown 없이 즉시 재시도 허용 횟수(초과 시 backoff)
 DEFAULT_ROAM_NO_RESULT_FAST_COUNT = 3  # 후보 미발견 시 처음 N회는 backoff 없이 빠른 주기(SCAN_NO_RESULT_SLEEP) 유지 후 지수 backoff
 
@@ -513,7 +515,6 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
             # sleep/interval 계열은 minimum=1 — 0·음수는 바쁜 루프 또는 time.sleep 크래시.
             "SCAN_NO_RESULT_SLEEP": _num("SCAN_NO_RESULT_SLEEP", minimum=1),
             "ROAM_SUCCESS_SLEEP": _num("ROAM_SUCCESS_SLEEP", minimum=1),
-            "ROAM_NO_RESULT_MAX_SLEEP": _num("ROAM_NO_RESULT_MAX_SLEEP", minimum=1),
             "ROAM_CROSS_FAIL_RETRY_COUNT": _num("ROAM_CROSS_FAIL_RETRY_COUNT"),
             "ROAM_NO_RESULT_FAST_COUNT": _num("ROAM_NO_RESULT_FAST_COUNT"),
             "ENABLE_STAGED_SCAN": config["ENABLE_STAGED_SCAN"],
@@ -580,7 +581,6 @@ def load_roaming_config(iface, data=None):
         "POST_ROAM_PEER_WAIT": DEFAULT_POST_ROAM_PEER_WAIT,
         "SCAN_NO_RESULT_SLEEP": DEFAULT_SCAN_NO_RESULT_SLEEP,
         "ROAM_SUCCESS_SLEEP": DEFAULT_ROAM_SUCCESS_SLEEP,
-        "ROAM_NO_RESULT_MAX_SLEEP": DEFAULT_ROAM_NO_RESULT_MAX_SLEEP,
         "ROAM_CROSS_FAIL_RETRY_COUNT": DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT,
         "ROAM_NO_RESULT_FAST_COUNT": DEFAULT_ROAM_NO_RESULT_FAST_COUNT,
         "ENABLE_GOOD_SIGNAL_GATE": DEFAULT_ENABLE_GOOD_SIGNAL_GATE,
@@ -729,10 +729,7 @@ def load_roaming_config(iface, data=None):
             ] if isinstance(extra, list) else []
 
             # 후보없음 backoff 파라미터(평탄 대문자 키). 양의 정수만 수용, 형식오류 시 기본값 유지.
-            _set_config_value(
-                config, "ROAM_NO_RESULT_MAX_SLEEP",
-                roam_config.get("ROAM_NO_RESULT_MAX_SLEEP"), int
-            )
+            # ROAM_NO_RESULT_MAX_SLEEP 은 JSON 에서 읽지 않는다(상수 고정 — 감사 D2).
             _set_config_value(
                 config, "ROAM_CROSS_FAIL_RETRY_COUNT",
                 roam_config.get("ROAM_CROSS_FAIL_RETRY_COUNT"), int
