@@ -61,15 +61,19 @@ def schema_node(schema, path):
 
 
 def schema_report(tmpl, schema):
-    """(drift 리스트, 누락 리스트). drift = (path, 템플릿값, 스키마값)."""
-    drift, missing = [], []
+    """(drift, 키 누락, default 줄 누락). drift = (path, 템플릿값, 스키마값).
+    default 필드 자체가 없는 노드는 drift 로 취급하면 --write 의 라인 패처가
+    "default" 줄을 못 찾아 비정상 종료하므로 수동 추가 대상으로 분리한다."""
+    drift, missing, missing_default = [], [], []
     for path, tv in template_leaves(tmpl):
         n = schema_node(schema, path)
         if n is None:
             missing.append(path)
-        elif n.get("default") != tv:
-            drift.append((path, tv, n.get("default")))
-    return drift, missing
+        elif "default" not in n:
+            missing_default.append(path)
+        elif n["default"] != tv:
+            drift.append((path, tv, n["default"]))
+    return drift, missing, missing_default
 
 
 def _find_block(lines, name, start, indent_gt):
@@ -256,11 +260,11 @@ def main():
     g.add_argument("--write", action="store_true", help="스키마·handoff 패치")
     args = ap.parse_args()
 
-    tmpl = json.loads(TEMPLATE.read_text())
-    schema = json.loads(SCHEMA.read_text())
+    tmpl = json.loads(TEMPLATE.read_text(encoding="utf-8"))
+    schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
 
-    drift, missing = schema_report(tmpl, schema)
-    handoff_lines = HANDOFF.read_text().split("\n")
+    drift, missing, missing_default = schema_report(tmpl, schema)
+    handoff_lines = HANDOFF.read_text(encoding="utf-8").split("\n")
     h_changed, h_unresolved, h_uncovered = handoff_sync(
         tmpl, handoff_lines, write=args.write
     )
@@ -270,6 +274,11 @@ def main():
         fail = True
         print(f"[스키마] 템플릿 키가 스키마에 없음 — 수동 추가 필요: {len(missing)}건")
         for p in missing:
+            print(f"    {'.'.join(p)}")
+    if missing_default:
+        fail = True
+        print(f"[스키마] default 필드 없음 — 수동 추가 필요: {len(missing_default)}건")
+        for p in missing_default:
             print(f"    {'.'.join(p)}")
     if drift:
         print(f"[스키마] default 불일치: {len(drift)}건")
@@ -292,16 +301,16 @@ def main():
             print(f"    {p}")
 
     if args.write:
-        if missing:
-            print("스키마 누락 키는 --write 로 자동 추가하지 않는다(설명 필요). 중단.")
+        if missing or missing_default:
+            print("스키마 누락 키/default 는 --write 로 자동 추가하지 않는다(설명 필요). 중단.")
             return 1
-        slines = SCHEMA.read_text().split("\n")
+        slines = SCHEMA.read_text(encoding="utf-8").split("\n")
         for p, tv, _ in drift:
             schema_patch_default(slines, p, tv)
         out = "\n".join(slines)
         json.loads(out)  # 문법 검증
-        SCHEMA.write_text(out)
-        HANDOFF.write_text("\n".join(handoff_lines))
+        SCHEMA.write_text(out, encoding="utf-8")
+        HANDOFF.write_text("\n".join(handoff_lines), encoding="utf-8")
         print(f"패치 완료: 스키마 {len(drift)}건, handoff {len(h_changed)}건")
         if h_uncovered:
             print(f"주의: handoff 행 누락 {len(h_uncovered)}건은 자동 패치 대상이 "
