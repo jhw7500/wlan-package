@@ -386,17 +386,6 @@
                 "trend_window_size": 5,
                 "trend_history_max_age": 30
             },
-            "LOAD_BASED_ROAM": {
-                "_comment": [
-                    "AP 채널 부하 기반 로밍. 현재 AP 부하가 높고 후보가 낮으면 로밍",
-                    "enable: (bool) 부하 기반 로밍 ON/OFF",
-                    "max_roam_load: (int) 현재 AP 부하가 이 값(%) 초과 시 로밍 고려",
-                    "load_diff_threshold: (int) 현재 AP와 후보 AP 부하 차이 최소값 (%)"
-                ],
-                "enable": false,
-                "max_roam_load": 80,
-                "load_diff_threshold": 20
-            },
             "PING_PONG_PREVENTION": {
                 "_comment": [
                     "AP 간 반복 로밍(핑퐁) 방지. window 내 로밍 횟수 초과 시 억제",
@@ -581,11 +570,6 @@
                 "threshold_boost": 5,
                 "trend_window_size": 5,
                 "trend_history_max_age": 30
-            },
-            "LOAD_BASED_ROAM": {
-                "enable": false,
-                "max_roam_load": 80,
-                "load_diff_threshold": 20
             },
             "PING_PONG_PREVENTION": {
                 "enable": true,

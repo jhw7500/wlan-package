@@ -130,9 +130,6 @@ DEFAULT_ENABLE_PREDICTIVE_ROAM = False
 DEFAULT_PREDICTIVE_THRESHOLD_BOOST = 5
 DEFAULT_TREND_WINDOW_SIZE = 5
 DEFAULT_TREND_HISTORY_MAX_AGE = 30
-DEFAULT_ENABLE_LOAD_BASED_ROAM = False
-DEFAULT_MAX_ROAM_LOAD = 80
-DEFAULT_LOAD_DIFF_THRESHOLD = 20
 DEFAULT_ENABLE_PING_PONG_PREVENTION = True
 DEFAULT_PING_PONG_WINDOW = 20
 DEFAULT_MAX_ROAMS_IN_WINDOW = 3
@@ -164,9 +161,6 @@ ENABLE_PREDICTIVE_ROAM = DEFAULT_ENABLE_PREDICTIVE_ROAM
 PREDICTIVE_THRESHOLD_BOOST = DEFAULT_PREDICTIVE_THRESHOLD_BOOST
 TREND_WINDOW_SIZE = DEFAULT_TREND_WINDOW_SIZE
 TREND_HISTORY_MAX_AGE = DEFAULT_TREND_HISTORY_MAX_AGE
-ENABLE_LOAD_BASED_ROAM = DEFAULT_ENABLE_LOAD_BASED_ROAM
-MAX_ROAM_LOAD = DEFAULT_MAX_ROAM_LOAD
-LOAD_DIFF_THRESHOLD = DEFAULT_LOAD_DIFF_THRESHOLD
 ENABLE_PING_PONG_PREVENTION = DEFAULT_ENABLE_PING_PONG_PREVENTION
 PING_PONG_WINDOW = DEFAULT_PING_PONG_WINDOW
 MAX_ROAMS_IN_WINDOW = DEFAULT_MAX_ROAMS_IN_WINDOW
@@ -260,7 +254,7 @@ def track_association(station, gs, now=None):
     돌린다 — 구 AP 에서 쌓인 억제 카운트가 새 AP 문맥의 요약 로그에 섞이면 오해를 준다.
 
     로밍 경로에만 두면 supplicant 자율 재연결을 놓치므로 BSSID 관측으로 감지한다."""
-    # `is None` 으로 명시 — get_link_info_with_load 는 None 또는 채워진 dict 만 반환하므로
+    # `is None` 으로 명시 — get_link_info 는 None 또는 채워진 dict 만 반환하므로
     # falsy 검사와 결과가 같지만, "연결 정보 없음" 이라는 의도를 코드에 드러낸다.
     if station is None:
         gs["bssid"] = None
@@ -467,9 +461,6 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
             "PREDICTIVE_THRESHOLD_BOOST": _num("PREDICTIVE_THRESHOLD_BOOST"),
             "TREND_WINDOW_SIZE": _num("TREND_WINDOW_SIZE"),
             "TREND_HISTORY_MAX_AGE": _num("TREND_HISTORY_MAX_AGE"),
-            "ENABLE_LOAD_BASED_ROAM": config["ENABLE_LOAD_BASED_ROAM"],
-            "MAX_ROAM_LOAD": _num("MAX_ROAM_LOAD"),
-            "LOAD_DIFF_THRESHOLD": _num("LOAD_DIFF_THRESHOLD"),
             "ENABLE_PING_PONG_PREVENTION": config["ENABLE_PING_PONG_PREVENTION"],
             "PING_PONG_WINDOW": _num("PING_PONG_WINDOW"),
             "MAX_ROAMS_IN_WINDOW": _num("MAX_ROAMS_IN_WINDOW"),
@@ -533,9 +524,6 @@ def load_roaming_config(iface, data=None):
         "PREDICTIVE_THRESHOLD_BOOST": DEFAULT_PREDICTIVE_THRESHOLD_BOOST,
         "TREND_WINDOW_SIZE": DEFAULT_TREND_WINDOW_SIZE,
         "TREND_HISTORY_MAX_AGE": DEFAULT_TREND_HISTORY_MAX_AGE,
-        "ENABLE_LOAD_BASED_ROAM": DEFAULT_ENABLE_LOAD_BASED_ROAM,
-        "MAX_ROAM_LOAD": DEFAULT_MAX_ROAM_LOAD,
-        "LOAD_DIFF_THRESHOLD": DEFAULT_LOAD_DIFF_THRESHOLD,
         "ENABLE_PING_PONG_PREVENTION": DEFAULT_ENABLE_PING_PONG_PREVENTION,
         "PING_PONG_WINDOW": DEFAULT_PING_PONG_WINDOW,
         "MAX_ROAMS_IN_WINDOW": DEFAULT_MAX_ROAMS_IN_WINDOW,
@@ -588,18 +576,6 @@ def load_roaming_config(iface, data=None):
                         ("threshold_boost", "PREDICTIVE_THRESHOLD_BOOST", int),
                         ("trend_window_size", "TREND_WINDOW_SIZE", int),
                         ("trend_history_max_age", "TREND_HISTORY_MAX_AGE", int),
-                    ],
-                )
-
-            load_based = roam_config.get("LOAD_BASED_ROAM")
-            if isinstance(load_based, dict):
-                _apply_section_values(
-                    config,
-                    load_based,
-                    [
-                        ("enable", "ENABLE_LOAD_BASED_ROAM", parse_bool),
-                        ("max_roam_load", "MAX_ROAM_LOAD", int),
-                        ("load_diff_threshold", "LOAD_DIFF_THRESHOLD", int),
                     ],
                 )
 
@@ -719,7 +695,7 @@ def load_roaming_config(iface, data=None):
     logger.message(
         "info",
         f"[{IFACE}] Roaming config loaded: "
-        f"predictive={ENABLE_PREDICTIVE_ROAM}, load_based={ENABLE_LOAD_BASED_ROAM}, "
+        f"predictive={ENABLE_PREDICTIVE_ROAM}, "
         f"ping_pong={ENABLE_PING_PONG_PREVENTION}, adaptive={ENABLE_ADAPTIVE_INTERVAL}, "
         f"rssi_source={'signal_avg' if USE_SIGNAL_AVG else 'signal'}, "
         f"extra_ssids={EXTRA_SSIDS}",
@@ -731,7 +707,6 @@ def load_roaming_config(iface, data=None):
         f"[{IFACE}] Roaming effective values: "
         f"th_2g={DEFAULT_TH_2G}, th_5g={DEFAULT_TH_5G}, diff_th={DIFF_TH}, check_interval={CHECK_INTERVAL}, "
         f"predictive(boost={PREDICTIVE_THRESHOLD_BOOST}, window={TREND_WINDOW_SIZE}, max_age={TREND_HISTORY_MAX_AGE}), "
-        f"load(max_roam_load={MAX_ROAM_LOAD}, load_diff_th={LOAD_DIFF_THRESHOLD}), "
         f"ping_pong(window={PING_PONG_WINDOW}, max_roams={MAX_ROAMS_IN_WINDOW}, detect_time={PING_PONG_DETECTION_TIME}), "
         f"adaptive(min={MIN_CHECK_INTERVAL}, max={MAX_CHECK_INTERVAL}), "
         f"good_signal_gate(enable={ENABLE_GOOD_SIGNAL_GATE}, delta_db={GOOD_SIGNAL_GATE_DELTA_DB}, "
@@ -1315,7 +1290,7 @@ def _iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
 def scan_results_to_ap_lines(scan_results_stdout):
     """`wpa_cli scan_results`(탭 구분: bssid/freq/signal/flags/ssid, 첫 줄 헤더)를
     get_latest_scan이 파싱하는 pipe 포맷(`NN|channel|rssi|ld|bssid|freq|ssid`, 7필드)으로
-    변환. 헤더/형식불량/BSSID아님/미지 freq는 skip. ld=0(LOAD는 channel_info 사용)."""
+    변환. 헤더/형식불량/BSSID아님/미지 freq는 skip. ld=0 고정(iw 출력에 없는 필드)."""
     out = []
     idx = 0
     for line in (scan_results_stdout or "").splitlines():
@@ -1340,7 +1315,7 @@ def scan_results_to_ap_lines(scan_results_stdout):
 
 
 # ==============================================================================
-# 개선된 get_link_info_with_load (Load 정보 포함)
+# get_link_info — link.json 파싱
 # ==============================================================================
 _LINK_CACHE: Dict[str, Any] = {
     "mtime_ns": None,
@@ -1356,8 +1331,8 @@ LINK_STALE_SEC = 30
 _LINK_STALE_WARNED = False
 
 
-def get_link_info_with_load():
-    """Load 정보를 포함한 연결 정보 반환"""
+def get_link_info():
+    """link.json 에서 연결 정보(bssid/freq/rssi/ssid)를 반환(mtime 캐시·stale 게이트)."""
     global _LINK_STALE_WARNED
     try:
         st = os.stat(LINK_LOG_FILE)
@@ -1396,35 +1371,6 @@ def get_link_info_with_load():
                 "ssid": data["info"].get("ssid", "").strip(),
             }
 
-            # Load 정보 추가 (활성화됨)
-            if ENABLE_LOAD_BASED_ROAM:
-                channel_info = data.get("channel_info", {})
-                result["channel_info"] = channel_info
-                freq_str = str(result["freq"])
-
-                if freq_str in channel_info:
-                    info = channel_info[freq_str]
-                    noise = info.get("noise", -95)
-                    busy = info.get("busy_time_ms", 0)
-                    active = info.get("active_time_ms", 1)
-
-                    if active > 0:
-                        load = (busy / active) * 100
-                    else:
-                        load = 0
-
-                    result["noise"] = noise
-                    result["load"] = round(load, 2)
-
-                    logger.message(
-                        "debug",
-                        f"[{IFACE}] channel info: freq={freq_str}, noise={noise}, load={load:.1f}%",
-                        _EXTRA_(),
-                    )
-            else:
-                # Load 비활성화 시 기본값 설정
-                result["noise"] = -95
-                result["load"] = 0
 
             _LINK_CACHE["mtime_ns"] = mtime_ns
             _LINK_CACHE["value"] = result
@@ -1435,34 +1381,6 @@ def get_link_info_with_load():
         return None
 
 
-def get_link_info():
-    """기존 get_link_info (호환성 유지)"""
-    try:
-        with open(LINK_LOG_FILE, "r") as f:
-            data = json.load(f)
-            link = data["link"]
-            if USE_SIGNAL_AVG and "signal_avg" in link:
-                rssi_raw = link["signal_avg"]
-            else:
-                rssi_raw = link["signal"]
-            result = {
-                "bssid": link["address"].strip().lower(),
-                "freq": int(data["info"]["freq"]),
-                "rssi": int(rssi_raw.replace(" dBm", "")),
-            }
-            return result
-    except Exception as e:
-        return None
-
-
-def load_channel_info():
-    try:
-        with open(LINK_LOG_FILE, "r") as f:
-            data = json.load(f)
-            return data.get("channel_info", {})
-    except Exception as e:
-        print(f"[ERROR] Failed to load channel info from link log: {e}")
-        return {}
 
 
 def get_current_ssid():
@@ -1541,13 +1459,13 @@ def log_scan_candidates(candidates, src):
             f"[{IFACE}] [{src}] roam candidate {i}: "
             f"ts={entry['timestamp']}, ssid={entry['ssid']}, bssid={entry['bssid']}, "
             f"ch={entry['channel']}, freq={entry['freq']}, ld={entry['ld']}, "
-            f"load={entry.get('load', 0):.1f}%, rssi={entry['rssi']}(th={entry['rssi_th']})",
+            f"rssi={entry['rssi']}(th={entry['rssi_th']})",
             _EXTRA_(),
         )
 
 
 def parse_scan_entries(
-    scan_lines, timestamp, channel_info_data=None, allowed_set=None, src="scan", log=True
+    scan_lines, timestamp, allowed_set=None, src="scan", log=True
 ):
     """pipe 포맷 스캔 라인(`NN|ch|rssi|ld|bssid|freq|ssid`) 리스트를 로밍 후보 엔트리로
     변환한다. 파일(get_latest_scan) 경로와 메모리(홈 패시브/액티브 폴백 스캔) 경로가
@@ -1561,19 +1479,6 @@ def parse_scan_entries(
     allowed_set = allowed_set or set()
     entries = []
 
-    # Load 정보 매핑을 위한 사전 준비
-    load_map = {}
-    noise_map = {}
-    if ENABLE_LOAD_BASED_ROAM and channel_info_data:
-        for freq_str, info in channel_info_data.items():
-            noise = info.get("noise", -95)
-            busy = info.get("busy_time_ms", 0)
-            active = info.get("active_time_ms", 1)
-            load = (busy / active) * 100 if active > 0 else 0
-
-            # 채널을 주파수로 변환하여 매핑
-            load_map[freq_str] = round(load, 2)
-            noise_map[freq_str] = noise
 
     for line in scan_lines:
         if re.match(r"^\d{2}\|", line):
@@ -1584,7 +1489,7 @@ def parse_scan_entries(
                     rssi = int(fields[2].strip())
                     ld = int(
                         fields[3].strip()
-                    )  # Load from scan (deprecated, using channel_info)
+                    )  # 포맷상 자리만 유지(항상 0) — 소비처 없음
                     bssid = fields[4].strip().lower()
                     ssid = fields[6].strip()
                     rssi_th = WPA_TH_2G if channel < 36 else WPA_TH_5G
@@ -1595,10 +1500,6 @@ def parse_scan_entries(
 
                     freq_str = str(freq)
 
-                    # Load 정보 추가
-                    ap_load = load_map.get(freq_str, 0)
-                    ap_noise = noise_map.get(freq_str, -95)
-
                     # 후보 필터(아래 if)보다 앞이라 **필터 탈락 항목까지** 남는다 —
                     # "스캔엔 보였는데 왜 후보가 아닌가"(allowed_set/WPA_FREQ 게이트)
                     # 진단의 유일한 근거라 유지한다.
@@ -1606,8 +1507,7 @@ def parse_scan_entries(
                         logger.message(
                             "info",
                             f"[{IFACE}] [{src}] ssid:{ssid}, bssid:{bssid}, ch:{channel}, "
-                            f"freq:{freq}, rssi:{rssi}, th:{rssi_th}, ld:{ld}, "
-                            f"load:{ap_load:.1f}%, noise:{ap_noise}",
+                            f"freq:{freq}, rssi:{rssi}, th:{rssi_th}, ld:{ld}",
                             _EXTRA_(),
                         )
 
@@ -1624,8 +1524,6 @@ def parse_scan_entries(
                                 "rssi": rssi,
                                 "rssi_th": rssi_th,
                                 "ld": ld,
-                                "load": ap_load,
-                                "noise": ap_noise,
                                 "bssid": bssid,
                                 "ssid": ssid,
                             }
@@ -1644,7 +1542,7 @@ def parse_scan_entries(
     return candidates
 
 
-def get_latest_scan(st, channel_info_data=None, allowed_ssids=None, log=True, src="cache"):
+def get_latest_scan(st, allowed_ssids=None, log=True, src="cache"):
     """ap.log(배경 스캔 캐시)의 마지막 시각 블록을 읽어 후보 엔트리 + 그 블록의
     타임스탬프를 반환. 파싱은 parse_scan_entries가 담당(메모리 경로와 공유).
 
@@ -1683,7 +1581,7 @@ def get_latest_scan(st, channel_info_data=None, allowed_ssids=None, log=True, sr
         return [], None
 
     candidates = parse_scan_entries(
-        lines[start_idx:], timestamp, channel_info_data, allowed_set, src=src, log=log
+        lines[start_idx:], timestamp, allowed_set, src=src, log=log
     )
     return candidates, timestamp
 
@@ -2337,22 +2235,6 @@ def check_roam_conditions(station, roam_ap, trend, baseline_rssi=None):
     if rssi_diff < effective_diff_th:
         return (False, f"RSSI diff too small: {rssi_diff}dB < {effective_diff_th}dB")
 
-    # Load 조건
-    if ENABLE_LOAD_BASED_ROAM:
-        current_load = station.get("load", 0)
-        roam_load = roam_ap.get("load", 0)
-
-        # 로밍 대상 AP의 Load가 너무 높으면 제외
-        if roam_load > MAX_ROAM_LOAD:
-            return (False, f"Target AP load too high: {roam_load}% > {MAX_ROAM_LOAD}%")
-
-        # 현재 AP보다 Load가 너무 높으면 제외
-        if roam_load > current_load + LOAD_DIFF_THRESHOLD:
-            return (
-                False,
-                f"Target AP load higher: {roam_load}% > {current_load}% + {LOAD_DIFF_THRESHOLD}%",
-            )
-
     # falling 이면 diff ≥ DIFF_TH(완화 불필요 구간)여도 'Falling trend' 사유를 붙인다 —
     # 종전 reason 체계 유지(사유='추세 활성' 표시이지 '완화 구간 통과' 표시가 아님).
     if is_falling_trend:
@@ -2456,22 +2338,15 @@ def baseline_from_entries(entries, cur_bssid, default_rssi):
 
 def evaluate_candidates(entries, station, trend, cooldown, live_ssid, baseline_rssi):
     """후보 엔트리 중 최적 로밍 대상을 고른다(현재 AP 제외, cross-SSID cooldown 반영).
-    baseline_rssi=현재 AP 비교 기준(홈 패시브 스캔 스케일로 통일). 점수=RSSI diff*10 +
-    Load 개선*2. 반환: (best_ap, best_reason, best_score). 없으면 (None, "", 0).
+    baseline_rssi=현재 AP 비교 기준(홈 패시브 스캔 스케일로 통일). 점수=RSSI diff*10.
+    반환: (best_ap, best_reason, best_score). 없으면 (None, "", 0).
 
     갱신 조건이 `score > best_score`(초기 0)가 아니라 `best_ap is None or ...`인 이유:
     DIFF_TH=0 설정에서 diff=0 후보는 check_roam_conditions 게이트(:2297 `diff < th`)를
     정상 통과하는데 score=diff*10=0 이라 `0 > 0`이 거짓이 되어, 게이트가 허용한 후보가
     선택 단계에서 조용히 탈락했다(로그에는 `Roam candidate ... score=0`으로 찍혀 채택된
     것처럼 보임). 그 결과 DIFF_TH=0이 DIFF_TH=1과 동일하게 동작했다.
-
-    ⚠️ 영향 범위는 DIFF_TH=0 에 국한되지 않는다. ENABLE_LOAD_BASED_ROAM=True 이고
-    DIFF_TH<=3 이면 load 패널티로 score<0 인 첫 후보도 채택된다 — 예: DIFF_TH=2, diff=2,
-    current_load=30, roam_load=49 이면 load 게이트(49 > 30+20 거짓)를 통과하고
-    score = 2*10 + (30-49)*2 = -18 이라 구 코드는 미채택, 신 코드는 채택. "이득 무관"
-    의미에는 부합하지만 종전과 달라지는 지점이라 회귀 테스트로 고정했다
-    (test_low_diff_th_with_load_penalty_also_accepts_negative_score).
-    출하 기본(DIFF_TH=8, LOAD_BASED_ROAM=false)에서는 최소 score 가 80-38=42 라 영향 없음."""
+    출하 기본(DIFF_TH=8)에서는 최소 score 가 80 이라 영향 없음."""
     best_ap, best_reason, best_score = None, "", 0
     for roam_ap in entries:
         if roam_ap["bssid"] == station["bssid"]:
@@ -2491,10 +2366,6 @@ def evaluate_candidates(entries, station, trend, cooldown, live_ssid, baseline_r
         if should_roam:
             rssi_diff = roam_ap["rssi"] - baseline_rssi
             score = rssi_diff * 10
-            if ENABLE_LOAD_BASED_ROAM:
-                current_load = station.get("load", 0)
-                roam_load = roam_ap.get("load", 0)
-                score += (current_load - roam_load) * 2
             if best_ap is None or score > best_score:
                 best_ap = roam_ap
                 best_reason = reason
@@ -2503,7 +2374,6 @@ def evaluate_candidates(entries, station, trend, cooldown, live_ssid, baseline_r
                 "info",
                 f"[{IFACE}] Roam candidate: {roam_ap['bssid']}, "
                 f"rssi={roam_ap['rssi']}dB (diff={rssi_diff}dB), "
-                f"load={roam_ap.get('load', 0):.1f}%, "
                 f"reason={reason}, score={score:.1f}",
                 _EXTRA_(),
             )
@@ -2573,7 +2443,7 @@ def _record_roam_scan_time():
             _SCAN_TIME_WRITE_WARNED = True
 
 
-def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, trend, cooldown):
+def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
     """단계형 스캔으로 최적 로밍 후보를 찾는다.
       0) 교차채널 캐시 **스냅샷**(스캔 전에 먼저 확보 — 아래 이유) + 시계 스텝 감지
       1) 홈채널 스캔(같은 채널 후보 + baseline 통일) — 기본 패시브, home_passive=false 면
@@ -2602,9 +2472,7 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
     clock_stepped = clock_step_detected()
     # log=False: 이 시점엔 캐시를 쓸지 모른다(Stage 1 성공 시 홈채널 필터로 전량 제거되어
     # Stage 2 게이트를 통과 못 함). 실제로 판정에 쓰는 Stage 2 통과 지점에서 남긴다.
-    cache_entries, cache_ts = get_latest_scan(
-        station, channel_info_data, allowed, log=False
-    )
+    cache_entries, cache_ts = get_latest_scan(station, allowed, log=False)
 
     # ── Stage 1: 홈채널 스캔 (기본 패시브, home_passive=false 면 directed 액티브) ──
     # 패시브 스캔이 **현재 AP 외의 우리 허용 SSID 후보를 실제로 봤나**(=홈채널을 로밍
@@ -2636,7 +2504,7 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
             home_covered = True
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             home_entries = parse_scan_entries(
-                home_lines, now_str, channel_info_data, allowed_set, src="scan"
+                home_lines, now_str, allowed_set, src="scan"
             )
             home_scan_ok = any(
                 e.get("bssid") != cur_bssid for e in home_entries
@@ -2753,7 +2621,7 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
         _record_roam_scan_time()
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         active_entries = parse_scan_entries(
-            active_lines, now_str, channel_info_data, allowed_set, src="scan"
+            active_lines, now_str, allowed_set, src="scan"
         )
         baseline_rssi = baseline_from_entries(active_entries, cur_bssid, baseline_rssi)
         best_ap, reason, score = evaluate_candidates(
@@ -2807,12 +2675,6 @@ def main():
             _EXTRA_(),
         )
 
-    if ENABLE_LOAD_BASED_ROAM:
-        logger.message(
-            "info",
-            f"[{IFACE}] Load-based roaming enabled (max_load={MAX_ROAM_LOAD}%)",
-            _EXTRA_(),
-        )
 
     # 후보없음 점증 backoff 상태(spec §4). streak=연속 후보없음 tick 수,
     # hint_state=bgscan hint mtime 추적.
@@ -2837,7 +2699,7 @@ def main():
             on_streak_reset(gs)
 
         # Load 정보 포함하여 연결 상태 확인
-        station = get_link_info_with_load()
+        station = get_link_info()
 
         # 결합 추적은 **station 유효성 판정 전에** 한다 — station=None(끊김·link.json stale)
         # 에서 bssid 를 비워야 같은 AP 로의 재결합도 새 결합으로 감지된다(track_association).
@@ -2929,7 +2791,7 @@ def main():
             "info",
             f"[{IFACE}] roaming condition: {station['rssi']} < {predictive_threshold} "
             f"(base={base_threshold}, trend={trend_str}) "
-            f"bssid={station['bssid']}, load={station.get('load', 0):.1f}%",
+            f"bssid={station['bssid']}",
             _EXTRA_(),
         )
         set_flag(1, ROAM_CONDITION_FLAG)
@@ -2941,12 +2803,9 @@ def main():
             interval = CHECK_INTERVAL
 
         # ── 단계형 스캔으로 로밍 후보 결정 ──
-        # station["ssid"]는 get_link_info_with_load가 link.json info.ssid(실제 연결 SSID)로 채움.
+        # station["ssid"]는 get_link_info가 link.json info.ssid(실제 연결 SSID)로 채움.
         if not station.get("ssid"):
             station["ssid"] = WPA_SSID
-        channel_info_data = (
-            station.get("channel_info") if ENABLE_LOAD_BASED_ROAM else None
-        )
         allowed = get_allowed_ssids(station.get("ssid"))
         # cross-SSID 판정 기준 = 라이브 연결 SSID 단일(T5: base에 WPA_SSID를 넣으면
         # conf 기본 SSID 복귀가 same으로 오판되어 FAIL 루프). 평가/로밍 분기에서 공유.
@@ -2961,7 +2820,7 @@ def main():
             # 스캔에서만 직접 기록한다(홈채널 부분 스캔의 무조건 기록이 bgscan 을 계속
             # 밀어내 Stage 2 캐시를 고사시키던 문제 제거 — _record_roam_scan_time 참조).
             best_ap, best_reason, best_score, scanned = staged_scan_best_candidate(
-                station, channel_info_data, allowed, live_ssid, trend, cross_ssid_cooldown
+                station, allowed, live_ssid, trend, cross_ssid_cooldown
             )
         else:
             # 종전 단일 액티브 스캔 경로(ENABLE_STAGED_SCAN=False 또는 WPA_SSID 부재 시 무회귀).
@@ -2988,7 +2847,7 @@ def main():
             # 되읽는 것이므로 전경 실측("scan")이다. WPA_SSID 부재로 스캔을 건너뛴 경우에만
             # 진짜 배경 캐시("cache")를 읽는다.
             entries, _ts = get_latest_scan(
-                station, channel_info_data, allowed, src="scan" if WPA_SSID else "cache"
+                station, allowed, src="scan" if WPA_SSID else "cache"
             )
             if not entries:
                 backoff, no_candidate_streak = advance_no_candidate_backoff(
@@ -3179,7 +3038,6 @@ if __name__ == "__main__":
         f"[{IFACE}] version:{VERSION}, ssid:{WPA_SSID}, scan_freq:{WPA_FREQ}, "
         f"TH_2G:{WPA_TH_2G}, TH_5G:{WPA_TH_5G}, "
         f"predictive_roam:{ENABLE_PREDICTIVE_ROAM}, "
-        f"load_based_roam:{ENABLE_LOAD_BASED_ROAM}, "
         f"ping_pong_prevention:{ENABLE_PING_PONG_PREVENTION}, "
         f"adaptive_interval:{ENABLE_ADAPTIVE_INTERVAL}",
         _EXTRA_(),
