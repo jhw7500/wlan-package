@@ -134,15 +134,6 @@ DEFAULT_ENABLE_PING_PONG_PREVENTION = True
 DEFAULT_PING_PONG_WINDOW = 20
 DEFAULT_MAX_ROAMS_IN_WINDOW = 3
 DEFAULT_PING_PONG_DETECTION_TIME = 5
-DEFAULT_ENABLE_ADAPTIVE_INTERVAL = False
-DEFAULT_MIN_CHECK_INTERVAL = 1
-DEFAULT_MAX_CHECK_INTERVAL = 10
-DEFAULT_ADAPTIVE_RSSI_DROP_THRESHOLD = -5    # Phase 1: 이 값 미만 하락 시 min_interval 전환
-DEFAULT_ADAPTIVE_RSSI_RISE_THRESHOLD = 2     # Phase 1: 이 값 초과 상승 시 간격 증가
-DEFAULT_ADAPTIVE_NEAR_THRESHOLD_OFFSET = 5   # Phase 2: threshold+offset 이하 → 빠른 체크 구간
-DEFAULT_ADAPTIVE_NEAR_THRESHOLD_INTERVAL = 2 # Phase 2: 근접 구간 고정 인터벌 (s)
-DEFAULT_ADAPTIVE_GOOD_SIGNAL_OFFSET = 15     # Phase 2: threshold+offset 초과 → 간격 증가 허용
-DEFAULT_ADAPTIVE_CONSECUTIVE_DROP_COUNT = 2  # Phase 3: 연속 하락 이 횟수 이상 시 min_interval 강제
 DEFAULT_USE_SIGNAL_AVG = True  # True: link 파일의 signal_avg(평활) 사용, False: signal(순간값)
 
 # Sleep 기본값
@@ -165,15 +156,6 @@ ENABLE_PING_PONG_PREVENTION = DEFAULT_ENABLE_PING_PONG_PREVENTION
 PING_PONG_WINDOW = DEFAULT_PING_PONG_WINDOW
 MAX_ROAMS_IN_WINDOW = DEFAULT_MAX_ROAMS_IN_WINDOW
 PING_PONG_DETECTION_TIME = DEFAULT_PING_PONG_DETECTION_TIME
-ENABLE_ADAPTIVE_INTERVAL = DEFAULT_ENABLE_ADAPTIVE_INTERVAL
-MIN_CHECK_INTERVAL = DEFAULT_MIN_CHECK_INTERVAL
-MAX_CHECK_INTERVAL = DEFAULT_MAX_CHECK_INTERVAL
-ADAPTIVE_RSSI_DROP_THRESHOLD = DEFAULT_ADAPTIVE_RSSI_DROP_THRESHOLD
-ADAPTIVE_RSSI_RISE_THRESHOLD = DEFAULT_ADAPTIVE_RSSI_RISE_THRESHOLD
-ADAPTIVE_NEAR_THRESHOLD_OFFSET = DEFAULT_ADAPTIVE_NEAR_THRESHOLD_OFFSET
-ADAPTIVE_NEAR_THRESHOLD_INTERVAL = DEFAULT_ADAPTIVE_NEAR_THRESHOLD_INTERVAL
-ADAPTIVE_GOOD_SIGNAL_OFFSET = DEFAULT_ADAPTIVE_GOOD_SIGNAL_OFFSET
-ADAPTIVE_CONSECUTIVE_DROP_COUNT = DEFAULT_ADAPTIVE_CONSECUTIVE_DROP_COUNT
 USE_SIGNAL_AVG = DEFAULT_USE_SIGNAL_AVG
 
 # 다중 SSID 로밍: conf 기본 ssid 외 추가 로밍 후보 SSID (roaming.extra_ssids에서 로드)
@@ -465,20 +447,6 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
             "PING_PONG_WINDOW": _num("PING_PONG_WINDOW"),
             "MAX_ROAMS_IN_WINDOW": _num("MAX_ROAMS_IN_WINDOW"),
             "PING_PONG_DETECTION_TIME": _num("PING_PONG_DETECTION_TIME"),
-            "ENABLE_ADAPTIVE_INTERVAL": config["ENABLE_ADAPTIVE_INTERVAL"],
-            # ADAPTIVE 계열도 interval — AdaptiveInterval(:882) 를 거쳐
-            # `current_interval = max(min_interval, ADAPTIVE_NEAR_THRESHOLD_INTERVAL)`(:926)
-            # 로 합쳐진 뒤 interruptible_sleep 에 그대로 들어간다. 0 이면 같은 바쁜 루프.
-            "MIN_CHECK_INTERVAL": _num("MIN_CHECK_INTERVAL", minimum=1),
-            "MAX_CHECK_INTERVAL": _num("MAX_CHECK_INTERVAL", minimum=1),
-            "ADAPTIVE_RSSI_DROP_THRESHOLD": _num("ADAPTIVE_RSSI_DROP_THRESHOLD"),
-            "ADAPTIVE_RSSI_RISE_THRESHOLD": _num("ADAPTIVE_RSSI_RISE_THRESHOLD"),
-            "ADAPTIVE_NEAR_THRESHOLD_OFFSET": _num("ADAPTIVE_NEAR_THRESHOLD_OFFSET"),
-            "ADAPTIVE_NEAR_THRESHOLD_INTERVAL": _num(
-                "ADAPTIVE_NEAR_THRESHOLD_INTERVAL", minimum=1
-            ),
-            "ADAPTIVE_GOOD_SIGNAL_OFFSET": _num("ADAPTIVE_GOOD_SIGNAL_OFFSET"),
-            "ADAPTIVE_CONSECUTIVE_DROP_COUNT": _num("ADAPTIVE_CONSECUTIVE_DROP_COUNT"),
             "DEFAULT_TH_2G": _num("DEFAULT_TH_2G"),
             "DEFAULT_TH_5G": _num("DEFAULT_TH_5G"),
             "DIFF_TH": _num("DIFF_TH"),
@@ -528,15 +496,6 @@ def load_roaming_config(iface, data=None):
         "PING_PONG_WINDOW": DEFAULT_PING_PONG_WINDOW,
         "MAX_ROAMS_IN_WINDOW": DEFAULT_MAX_ROAMS_IN_WINDOW,
         "PING_PONG_DETECTION_TIME": DEFAULT_PING_PONG_DETECTION_TIME,
-        "ENABLE_ADAPTIVE_INTERVAL": DEFAULT_ENABLE_ADAPTIVE_INTERVAL,
-        "MIN_CHECK_INTERVAL": DEFAULT_MIN_CHECK_INTERVAL,
-        "MAX_CHECK_INTERVAL": DEFAULT_MAX_CHECK_INTERVAL,
-        "ADAPTIVE_RSSI_DROP_THRESHOLD": DEFAULT_ADAPTIVE_RSSI_DROP_THRESHOLD,
-        "ADAPTIVE_RSSI_RISE_THRESHOLD": DEFAULT_ADAPTIVE_RSSI_RISE_THRESHOLD,
-        "ADAPTIVE_NEAR_THRESHOLD_OFFSET": DEFAULT_ADAPTIVE_NEAR_THRESHOLD_OFFSET,
-        "ADAPTIVE_NEAR_THRESHOLD_INTERVAL": DEFAULT_ADAPTIVE_NEAR_THRESHOLD_INTERVAL,
-        "ADAPTIVE_GOOD_SIGNAL_OFFSET": DEFAULT_ADAPTIVE_GOOD_SIGNAL_OFFSET,
-        "ADAPTIVE_CONSECUTIVE_DROP_COUNT": DEFAULT_ADAPTIVE_CONSECUTIVE_DROP_COUNT,
         "DEFAULT_TH_2G": DEFAULT_TH_2G,
         "DEFAULT_TH_5G": DEFAULT_TH_5G,
         "DIFF_TH": DIFF_TH,
@@ -589,24 +548,6 @@ def load_roaming_config(iface, data=None):
                         ("window", "PING_PONG_WINDOW", int),
                         ("max_roams_in_window", "MAX_ROAMS_IN_WINDOW", int),
                         ("detection_time", "PING_PONG_DETECTION_TIME", int),
-                    ],
-                )
-
-            adaptive = roam_config.get("ADAPTIVE_INTERVAL")
-            if isinstance(adaptive, dict):
-                _apply_section_values(
-                    config,
-                    adaptive,
-                    [
-                        ("enable", "ENABLE_ADAPTIVE_INTERVAL", parse_bool),
-                        ("min_check_interval", "MIN_CHECK_INTERVAL", int),
-                        ("max_check_interval", "MAX_CHECK_INTERVAL", int),
-                        ("rssi_drop_threshold", "ADAPTIVE_RSSI_DROP_THRESHOLD", int),
-                        ("rssi_rise_threshold", "ADAPTIVE_RSSI_RISE_THRESHOLD", int),
-                        ("near_threshold_offset", "ADAPTIVE_NEAR_THRESHOLD_OFFSET", int),
-                        ("near_threshold_interval", "ADAPTIVE_NEAR_THRESHOLD_INTERVAL", int),
-                        ("good_signal_offset", "ADAPTIVE_GOOD_SIGNAL_OFFSET", int),
-                        ("consecutive_drop_count", "ADAPTIVE_CONSECUTIVE_DROP_COUNT", int),
                     ],
                 )
 
@@ -696,7 +637,7 @@ def load_roaming_config(iface, data=None):
         "info",
         f"[{IFACE}] Roaming config loaded: "
         f"predictive={ENABLE_PREDICTIVE_ROAM}, "
-        f"ping_pong={ENABLE_PING_PONG_PREVENTION}, adaptive={ENABLE_ADAPTIVE_INTERVAL}, "
+        f"ping_pong={ENABLE_PING_PONG_PREVENTION}, "
         f"rssi_source={'signal_avg' if USE_SIGNAL_AVG else 'signal'}, "
         f"extra_ssids={EXTRA_SSIDS}",
         _EXTRA_(),
@@ -708,7 +649,6 @@ def load_roaming_config(iface, data=None):
         f"th_2g={DEFAULT_TH_2G}, th_5g={DEFAULT_TH_5G}, diff_th={DIFF_TH}, check_interval={CHECK_INTERVAL}, "
         f"predictive(boost={PREDICTIVE_THRESHOLD_BOOST}, window={TREND_WINDOW_SIZE}, max_age={TREND_HISTORY_MAX_AGE}), "
         f"ping_pong(window={PING_PONG_WINDOW}, max_roams={MAX_ROAMS_IN_WINDOW}, detect_time={PING_PONG_DETECTION_TIME}), "
-        f"adaptive(min={MIN_CHECK_INTERVAL}, max={MAX_CHECK_INTERVAL}), "
         f"good_signal_gate(enable={ENABLE_GOOD_SIGNAL_GATE}, delta_db={GOOD_SIGNAL_GATE_DELTA_DB}, "
         f"grace_sec={GOOD_SIGNAL_GATE_GRACE_SEC})",
         _EXTRA_(),
@@ -930,74 +870,10 @@ def record_cross_ssid_result(cooldown, ssid, ok, post_sleep):
 
 
 # ==============================================================================
-# 적응형 간격 (Adaptive Interval)
-# ==============================================================================
-class AdaptiveInterval:
-    """RSSI 상태에 따라 체크 간격 조정"""
-
-    def __init__(
-        self, min_interval=MIN_CHECK_INTERVAL, max_interval=MAX_CHECK_INTERVAL
-    ):
-        self.min_interval = min_interval
-        self.max_interval = max_interval
-        self.current_interval = CHECK_INTERVAL
-        self.last_rssi = None
-        self.consecutive_low_rssi = 0
-        self.consecutive_high_rssi = 0
-
-    def update(self, current_rssi, threshold, trend):
-        """
-        RSSI와 추세에 따라 간격 조정
-        - 신호가 임계값 근처: 간격 단축
-        - 신호가 안정적이고 좋음: 간격 증가
-        - 하락 추세: 즉시 간격 단축
-        """
-        # RSSI 변화율 계산
-        if self.last_rssi is not None:
-            rssi_change = current_rssi - self.last_rssi
-
-            # Phase 1: 신호가 급격히 악화되면 최소 간격
-            if rssi_change < ADAPTIVE_RSSI_DROP_THRESHOLD:
-                self.current_interval = self.min_interval
-                self.consecutive_low_rssi += 1
-                self.consecutive_high_rssi = 0
-            # Phase 1: 신호가 개선되면 간격 증가
-            elif rssi_change > ADAPTIVE_RSSI_RISE_THRESHOLD:
-                self.current_interval = min(
-                    self.max_interval, self.current_interval + 1
-                )
-                self.consecutive_high_rssi += 1
-                self.consecutive_low_rssi = 0
-            else:
-                # 안정 상태
-                self.consecutive_low_rssi = 0
-                self.consecutive_high_rssi = 0
-
-        self.last_rssi = current_rssi
-
-        if threshold is None:
-            return self.current_interval
-
-        # Phase 2: 임계값 근처에서는 간격 단축
-        if current_rssi < threshold + ADAPTIVE_NEAR_THRESHOLD_OFFSET:
-            self.current_interval = max(self.min_interval, ADAPTIVE_NEAR_THRESHOLD_INTERVAL)
-        # Phase 2: 신호가 안정적이고 좋으면 간격 증가
-        elif current_rssi > threshold + ADAPTIVE_GOOD_SIGNAL_OFFSET and trend == RSSITrendTracker.TREND_STABLE:
-            self.current_interval = min(self.max_interval, self.current_interval + 1)
-
-        # Phase 3: 연속 낮은 RSSI 감지 시 더 빠른 체크
-        if self.consecutive_low_rssi >= ADAPTIVE_CONSECUTIVE_DROP_COUNT:
-            self.current_interval = self.min_interval
-
-        return self.current_interval
-
-
-# ==============================================================================
 # 전역 인스턴스 (Global Instances)
 # ==============================================================================
 trend_tracker = None
 ping_pong_preventer = None
-adaptive_interval = None
 cross_ssid_cooldown = None
 
 
@@ -1765,7 +1641,7 @@ def reload_roaming_config(iface):
     적용 시 WPA_CONF_MTIME 을 리셋해 같은 사이클 wpa conf 재파싱을 유도(JSON DEFAULT_TH_*
     변경을 실제 판정값 WPA_TH_* 까지 전파). 반환: 적용 수행 여부."""
     global GENERATE_NETWORK_BLOCKS, EXTRA_SSIDS, WPA_CONF_MTIME
-    global ping_pong_preventer, adaptive_interval, cross_ssid_cooldown, trend_tracker
+    global ping_pong_preventer, cross_ssid_cooldown, trend_tracker
     try:
         with open(WIFI_INIT_CONF_JSON, "r") as f:
             new_data = json.load(f)
@@ -1834,12 +1710,6 @@ def reload_roaming_config(iface):
         else:
             trend_tracker.window_size = TREND_WINDOW_SIZE
             trend_tracker.max_age = TREND_HISTORY_MAX_AGE
-    if ENABLE_ADAPTIVE_INTERVAL:
-        if adaptive_interval is None:
-            adaptive_interval = AdaptiveInterval(MIN_CHECK_INTERVAL, MAX_CHECK_INTERVAL)
-        else:
-            adaptive_interval.min_interval = MIN_CHECK_INTERVAL
-            adaptive_interval.max_interval = MAX_CHECK_INTERVAL
     # cross_ssid_cooldown은 의도적으로 갱신만(생성 없음): 별도 enable이 없고 존재가
     # GENERATE_NETWORK_BLOCKS(런타임 전환 금지, 재시작 전용)에 연동되므로
     # 런타임에 None→생성이 필요한 상황 자체가 없다.
@@ -2636,7 +2506,7 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
 # 개선된 main 함수
 # ==============================================================================
 def main():
-    global trend_tracker, ping_pong_preventer, adaptive_interval, cross_ssid_cooldown
+    global trend_tracker, ping_pong_preventer, cross_ssid_cooldown
 
     # 초기화
     if ENABLE_PREDICTIVE_ROAM:
@@ -2666,14 +2536,6 @@ def main():
         # 모드 B(generate_network_blocks=false)는 cross-SSID 자동전환이 비활성(should_cross_connect
         # 항상 False)이라 cooldown 미사용. 인스턴스를 만들지 않아 'enabled' 오인 로그를 피한다.
         cross_ssid_cooldown = None
-
-    if ENABLE_ADAPTIVE_INTERVAL:
-        adaptive_interval = AdaptiveInterval(MIN_CHECK_INTERVAL, MAX_CHECK_INTERVAL)
-        logger.message(
-            "info",
-            f"[{IFACE}] Adaptive interval enabled (min={MIN_CHECK_INTERVAL}s, max={MAX_CHECK_INTERVAL}s)",
-            _EXTRA_(),
-        )
 
 
     # 후보없음 점증 backoff 상태(spec §4). streak=연속 후보없음 tick 수,
@@ -2778,10 +2640,7 @@ def main():
                 # 보고한다 — 실기 로그에서 실제로 관측됐다.
                 gs["suppressed"] += 1
 
-            if ENABLE_ADAPTIVE_INTERVAL and adaptive_interval:
-                interval = adaptive_interval.update(rssi, base_threshold, trend)
-            else:
-                interval = CHECK_INTERVAL
+            interval = CHECK_INTERVAL
 
             interruptible_sleep(interval)
             continue
@@ -2797,10 +2656,7 @@ def main():
         set_flag(1, ROAM_CONDITION_FLAG)
 
         # 인터벌 계산 (루프 내 모든 경로에서 공유)
-        if ENABLE_ADAPTIVE_INTERVAL and adaptive_interval:
-            interval = adaptive_interval.update(rssi, base_threshold, trend)
-        else:
-            interval = CHECK_INTERVAL
+        interval = CHECK_INTERVAL
 
         # ── 단계형 스캔으로 로밍 후보 결정 ──
         # station["ssid"]는 get_link_info가 link.json info.ssid(실제 연결 SSID)로 채움.
@@ -3038,8 +2894,7 @@ if __name__ == "__main__":
         f"[{IFACE}] version:{VERSION}, ssid:{WPA_SSID}, scan_freq:{WPA_FREQ}, "
         f"TH_2G:{WPA_TH_2G}, TH_5G:{WPA_TH_5G}, "
         f"predictive_roam:{ENABLE_PREDICTIVE_ROAM}, "
-        f"ping_pong_prevention:{ENABLE_PING_PONG_PREVENTION}, "
-        f"adaptive_interval:{ENABLE_ADAPTIVE_INTERVAL}",
+        f"ping_pong_prevention:{ENABLE_PING_PONG_PREVENTION}",
         _EXTRA_(),
     )
 

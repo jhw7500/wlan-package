@@ -425,29 +425,6 @@
                 "delta_db": 2,
                 "post_roam_grace_sec": 40
             },
-            "ADAPTIVE_INTERVAL": {
-                "_comment": [
-                    "RSSI 변화에 따른 체크 주기 자동 조절. 신호 불안정 시 주기 단축, 안정 시 연장",
-                    "enable: (bool) 적응형 주기 ON/OFF. false이면 CHECK_INTERVAL 고정 사용",
-                    "min_check_interval: (int) 최소 체크 주기 (초)",
-                    "max_check_interval: (int) 최대 체크 주기 (초)",
-                    "rssi_drop_threshold: (int) 이 값(dB) 이상 하락 시 주기 단축",
-                    "rssi_rise_threshold: (int) 이 값(dB) 이상 상승 시 주기 연장",
-                    "near_threshold_offset: (int) 로밍 임계값 근처(±offset dB) 판정 기준",
-                    "near_threshold_interval: (int) 임계값 근처일 때 사용할 체크 주기 (초)",
-                    "good_signal_offset: (int) 임계값 + offset 이상이면 신호 양호 판정 (dB)",
-                    "consecutive_drop_count: (int) 연속 하락 이 횟수 이상이면 주기 즉시 단축"
-                ],
-                "enable": false,
-                "min_check_interval": 1,
-                "max_check_interval": 10,
-                "rssi_drop_threshold": -5,
-                "rssi_rise_threshold": 2,
-                "near_threshold_offset": 5,
-                "near_threshold_interval": 2,
-                "good_signal_offset": 15,
-                "consecutive_drop_count": 2
-            },
             "SCAN_NO_RESULT_SLEEP": 3,
             "ROAM_SUCCESS_SLEEP": 3,
             "enabled": true
@@ -588,17 +565,6 @@
                 "enable": false,
                 "delta_db": 2,
                 "post_roam_grace_sec": 40
-            },
-            "ADAPTIVE_INTERVAL": {
-                "enable": false,
-                "min_check_interval": 1,
-                "max_check_interval": 10,
-                "rssi_drop_threshold": -5,
-                "rssi_rise_threshold": 2,
-                "near_threshold_offset": 5,
-                "near_threshold_interval": 2,
-                "good_signal_offset": 15,
-                "consecutive_drop_count": 2
             },
             "SCAN_NO_RESULT_SLEEP": 3,
             "ROAM_SUCCESS_SLEEP": 2,
