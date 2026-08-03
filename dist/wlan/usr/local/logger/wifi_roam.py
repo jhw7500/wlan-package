@@ -2220,6 +2220,22 @@ def evaluate_candidates(entries, station, trend, cooldown, live_ssid, baseline_r
     선택 단계에서 조용히 탈락했다(로그에는 `Roam candidate ... score=0`으로 찍혀 채택된
     것처럼 보임). 그 결과 DIFF_TH=0이 DIFF_TH=1과 동일하게 동작했다.
     출하 기본(DIFF_TH=8)에서는 최소 score 가 80 이라 영향 없음."""
+    # 핑퐁 억제의 범위 규칙(리뷰 P1): same-SSID 후보는 BSSID 단위 — wpa_cli roam 이
+    # 대상 BSSID 를 고정하므로 쌍 판정이 정확하다. cross-SSID 후보는 SSID 단위 —
+    # select_network 는 network id 만 고르고 supplicant 가 BSSID 를 자율 선택하므로,
+    # 같은 SSID 의 다른(약한) BSSID 를 후보로 남기면 결국 억제된 바로 그 BSSID 로
+    # 재결합할 수 있다. 이번 스캔 엔트리 기준으로 어느 BSSID 라도 억제에 걸리는
+    # cross SSID 는 통째로 이번 tick 후보에서 제외한다.
+    blocked_cross_ssids = set()
+    if ENABLE_PING_PONG_PREVENTION and ping_pong_preventer:
+        for e in entries:
+            e_ssid = e.get("ssid", "")
+            if (
+                should_cross_connect(e_ssid, live_ssid)
+                and ping_pong_preventer.would_block(station["bssid"], e["bssid"])
+            ):
+                blocked_cross_ssids.add(e_ssid)
+
     best_ap, best_reason, best_score = None, "", 0
     for roam_ap in entries:
         if roam_ap["bssid"] == station["bssid"]:
@@ -2233,21 +2249,27 @@ def evaluate_candidates(entries, station, trend, cooldown, live_ssid, baseline_r
         ):
             continue
         # 핑퐁 억제 중인 대상은 선정 단계에서 제외. 종전엔 선정 후
-        # roam_to_bssid 진입부에서야 차단돼 "스캔→선정→차단→interval 대기"가
-        # CHECK_INTERVAL 주기로 헛돌았다 — 제외하면 (다른 후보가 없는 한)
-        # no-candidate backoff 가 스캔 주기를 자연히 압축하고, 제3의 AP 는
-        # 여전히 즉시 선택된다. roam_to_bssid 의 검사는 최종 방어선으로 유지.
-        if (
-            ENABLE_PING_PONG_PREVENTION
-            and ping_pong_preventer
-            and ping_pong_preventer.would_block(station["bssid"], roam_ap["bssid"])
-        ):
-            logger.message(
-                "info",
-                f"[{IFACE}] Roam skipped: {roam_ap['bssid']}, ping-pong suppressed",
-                _EXTRA_(),
-            )
-            continue
+        # roam_to_bssid/route_cross 진입부에서야 차단돼 "스캔→선정→차단→interval
+        # 대기"가 CHECK_INTERVAL 주기로 헛돌았다 — 제외하면 (다른 후보가 없는 한)
+        # no-candidate backoff 가 스캔 주기를 자연히 압축하고, 무관한 AP 는
+        # 여전히 즉시 선택된다. 실행 직전 검사들은 최종 방어선으로 유지.
+        if ENABLE_PING_PONG_PREVENTION and ping_pong_preventer:
+            if should_cross_connect(ap_ssid, live_ssid):
+                blocked = ap_ssid in blocked_cross_ssids  # SSID 단위(위 주석)
+            else:
+                blocked = bool(
+                    ping_pong_preventer.would_block(
+                        station["bssid"], roam_ap["bssid"]
+                    )
+                )
+            if blocked:
+                logger.message(
+                    "info",
+                    f"[{IFACE}] Roam skipped: {roam_ap['bssid']}, "
+                    f"ping-pong suppressed",
+                    _EXTRA_(),
+                )
+                continue
 
         should_roam, reason = check_roam_conditions(
             station, roam_ap, trend, baseline_rssi=baseline_rssi
