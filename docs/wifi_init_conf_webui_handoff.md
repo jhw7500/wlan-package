@@ -31,6 +31,11 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 
 ### 범례
 
+> **기본값 컬럼은 생성된다**: §3 표의 기본값 셀은 `scripts/gen_config_defaults.py` 가
+> 배포 템플릿(`dist/wlan/opt/wlan/config/wifi_init_conf.json`)에서 동기화한다.
+> 기본값이 바뀌면 이 문서를 손으로 고치지 말고 **템플릿을 고친 뒤 `--write` 를 실행**할 것.
+> CI 테스트(`test_config_default_sync.py`)가 불일치를 차단한다.
+
 **apply_timing (적용 시점)**
 
 | 값 | 의미 |
@@ -171,14 +176,14 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `wbridge.eth_link_wait_sec` | 유선 링크 대기(초) | int | `5` | 양의 정수 | yes | boot | dynamic MAC 모드에서 유선 링크 up 대기 |
 | `wbridge.eth_sweep_subnet` | peer sweep 대역(CIDR) | string | `""` | CIDR(예: `192.168.1.0/24`) 또는 `""` | caution | boot | 빈값이면 eth0→mlan0 inet 순 폴백. 정적 CIDR 권장 |
 | `wbridge.peer_route.enabled` | 양방향 peer 라우팅 마스터 | bool | `false` | true\|false | caution | boot | 옵션 X. false=기본 투명 브릿지(토폴로지 무관 안전). BD가 유선 peer와 직접 통신하는 mlan0-IP 토폴로지에서만 true(+ip_discovery=true, arp_ignore_always=false). **토폴로지=IP 배치는 `wifi <iface> ip`/webui로 별도 결정** |
-| `wbridge.arp_ignore_always.enabled` | ARP 정책(토폴로지 종속) | bool | `true` | true\|false | caution | boot | `peer_route`와 독립. 클론 MAC 이중 ARP 레이스 차단(`arp_ignore=1`/`arp_announce=2`). eth0-IP/동일서브넷=true, 순수 mlan0-IP=false. **아래 주의** |
-| `wbridge.engine` | 브릿지 엔진 | enum | `pcap` | `pcap`\|`tpacket`\|`moal` | caution | daemon-restart | pcap/tpacket=유저스페이스, moal=드라이버 레벨. moal↔전환은 reboot |
+| `wbridge.arp_ignore_always.enabled` | ARP 정책(토폴로지 종속) | bool | `false` | true\|false | caution | boot | `peer_route`와 독립. 클론 MAC 이중 ARP 레이스 차단(`arp_ignore=1`/`arp_announce=2`). eth0-IP/동일서브넷=true, 순수 mlan0-IP=false. **아래 주의** |
+| `wbridge.engine` | 브릿지 엔진 | enum | `moal` | `pcap`\|`tpacket`\|`moal` | caution | daemon-restart | pcap/tpacket=유저스페이스, moal=드라이버 레벨. moal↔전환은 reboot |
 
 **비고 (wbridge 기본)** — 소비: `wifi_bridge.sh`, `wifi_init.sh`, `wired_mac_ip_get.py`, `wifi_apply_enabled.sh`.
 - SSoT는 이 JSON. JSON 파싱 실패 시에만 `/etc/default/wbridge`가 폴백.
 - `ip_discovery`=true는 `peer_route.enabled`=true와 조합해야 양방향 라우팅 완성.
 - `engine=moal`이면 `link_guard`는 무시된다.
-- **⚠️ `arp_ignore_always.enabled`**: IP 배치(토폴로지)에 종속된 값. 출하 기본 **true**는 eth0-IP(또는 eth0/mlan0 동일 서브넷) 구성 전제. **토폴로지는 이 JSON이 아니라 `wifi <iface> ip`/webui로 결정**하므로 배치 변경 시 함께 점검. 순수 mlan0-IP + 유선↔BD 직접통신이 필요하면 `peer_route=true`+`ip_discovery=true`+`arp_ignore_always=false` 3종 세트. 아래 5장 주의 박스 참조.
+- **⚠️ `arp_ignore_always.enabled`**: IP 배치(토폴로지)에 종속된 값. 출하 기본 **false**는 순수 mlan0-IP(기본 토폴로지) 전제 — eth0-IP(또는 eth0/mlan0 동일 서브넷) 구성에서는 true 로 변경. **토폴로지는 이 JSON이 아니라 `wifi <iface> ip`/webui로 결정**하므로 배치 변경 시 함께 점검. 순수 mlan0-IP + 유선↔BD 직접통신이 필요하면 `peer_route=true`+`ip_discovery=true`+`arp_ignore_always=false` 3종 세트. 아래 5장 주의 박스 참조.
 
 #### 3.3.2 wbridge.moal (engine=moal 전용)
 
@@ -336,7 +341,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `TXPWRLIMIT_PATH` | TX 파워 리밋(per-iface) | string | `""` | 절대경로\|`none`\|빈값 | caution | boot | mlanN>global 우선. 부팅 시 mlanutl hostcmd |
 | `connect_threshold` | 연결 임계값(RSSI) | int | `-100` | 음의 정수 dBm(예 -100~-40). -100=사실상 무필터 | caution | daemon-restart | **커스텀 wpa_supplicant 바이너리**가 `/usr/local/etc/wifi_init_conf.json`을 직접 읽어, 신호레벨이 이 값 미만인 BSS를 연결 후보에서 제외(로그 `BSS: … level N < connect threshold M`). 과설정 시 미연결 위험 |
 | `enabled` | 인터페이스 활성화 | bool | `mlan0=true / mlan1=false` | true\|false | yes | boot | false면 부팅 초기화·모든 자식 데몬 disable. **overlay config.json이 우선** |
-| `Frequency` | 주파수 대역 | enum | `"auto"` | `auto`\|`2.4GHz`\|`5GHz` (검증 없음) | caution | boot | 현재는 로그/상태표시에만 사용(HW 밴드제한 미적용). **overlay config.json이 우선** |
+| `Frequency` | 주파수 대역 | enum | `auto` | `auto`\|`2.4GHz`\|`5GHz` (검증 없음) | caution | boot | 현재는 로그/상태표시에만 사용(HW 밴드제한 미적용). **overlay config.json이 우선** |
 | `net_rx` | MGMT 프레임 로깅 비트맵 | int | `0` | `0`\|`2`\|`3`\|`6`\|`7` (bit[1:0]=RX모드, bit[2]=TX로그) | caution | reboot | mod_para 블록 `net_rx=`. 로그는 커널 링버퍼→10초마다 flush |
 | `mgmt_hex_dump_enable` | MGMT hex dump 로깅 | bool | `false` | true\|false | caution | reboot | 디버그용. mod_para 블록 `mgmt_hex_dump=1/0` |
 | `thermal_mgmt` | FW 열관리 | bool | `true` | true\|false | caution | boot | FW thermal management(SUBID 0x113). 명시적 false만 disable |
@@ -374,13 +379,13 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `use_signal_avg` | 평균 신호 사용 | bool | `true` | true\|false | yes | daemon-restart | true=평균(안정), false=순간값 |
 | `DEFAULT_TH_2G` | 2.4GHz 로밍 임계값 | int | `-75` | 음수 dBm | yes | daemon-restart | 이 값 이하이면 로밍 시도 (JSON 단일 소스, conf `#!TH_2G=` 마커 미사용) |
 | `DEFAULT_TH_5G` | 5GHz 로밍 임계값 | int | `-75` | 음수 dBm | yes | daemon-restart | 이 값 이하이면 로밍 시도 (JSON 단일 소스, conf `#!TH_5G=` 마커 미사용) |
-| `DIFF_TH` | 후보 AP 최소 RSSI 차 | int | `10` | >=0 dB | yes | daemon-restart | 클수록 보수적 |
-| `CHECK_INTERVAL` | 로밍 체크 주기 | int | `mlan0=3 / mlan1=5` | >=1 초 | yes | daemon-restart | ADAPTIVE_INTERVAL 활성 시 동적 조절 |
+| `DIFF_TH` | 후보 AP 최소 RSSI 차 | int | `8` | >=0 dB | yes | daemon-restart | 클수록 보수적 |
+| `CHECK_INTERVAL` | 로밍 체크 주기 | int | `mlan0=2 / mlan1=3` | >=1 초 | yes | daemon-restart | 고정 체크 주기(ADAPTIVE_INTERVAL 은 감사 D1로 제거됨) |
 | `extra_ssids` | 추가 로밍 후보 SSID | array | `[]` | 문자열 배열(같은 psk/key_mgmt) | caution | daemon-restart | 모드B(generate_network_blocks=false)면 강제 무시 |
 | `generate_network_blocks` | 모드 결정자 | bool | `false` | true\|false | caution | daemon-restart | false=모드B(단일 블록), true=모드A(다중+select_network) |
 | `ROAM_CROSS_FAIL_RETRY_COUNT` | cross-SSID 재시도 횟수 | int | `2` | >=0 (모드A 전용) | yes | daemon-restart | 초과 시 지수 backoff로 후보 제외 |
 | `SCAN_NO_RESULT_SLEEP` | 스캔 무결과 대기 | int | `3` | >=1 초 | yes | daemon-restart | 지수 backoff 시작값 |
-| `ROAM_SUCCESS_SLEEP` | 로밍 성공 후 대기 | int | `5` | >=1 초 | yes | daemon-restart | 성공 후 재체크 대기 |
+| `ROAM_SUCCESS_SLEEP` | 로밍 성공 후 대기 | int | `mlan0=3 / mlan1=2` | >=1 초 | yes | daemon-restart | 성공 후 재체크 대기 |
 | `enabled` | 로밍 데몬 활성화 | bool | `mlan0=true / mlan1=false` | true\|false | yes | daemon-restart | `wifi_roam@mlanN` enable/disable |
 | `PREDICTIVE_ROAM.enable` | 예측 로밍 | bool | `false` | true\|false | yes | daemon-restart | RSSI 하락 추세 시 조기 로밍 |
 | `PREDICTIVE_ROAM.threshold_boost` | 예측 임계 부스트 | int | `5` | >=0 dB | yes | daemon-restart | 하락 추세 시 임계값에 더하는 부스트 |
@@ -389,9 +394,9 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 
 > `LOAD_BASED_ROAM`·`ADAPTIVE_INTERVAL`·`POST_ROAM_ARP_OPTIMIZATION`(+`PEER_WARMUP`) 키는 감사 D1(2026-07-31)로 제거됨 — WebUI 에 노출하지 말 것.
 | `PING_PONG_PREVENTION.enable` | 핑퐁 방지 | bool | `true` | true\|false | yes | daemon-restart | AP 간 반복 로밍 방지 |
-| `PING_PONG_PREVENTION.window` | 핑퐁 감시 구간 | int | `mlan0=30 / mlan1=60` | >=1 초 | yes | daemon-restart | 로밍 횟수 감시 구간 |
+| `PING_PONG_PREVENTION.window` | 핑퐁 감시 구간 | int | `20` | >=1 초 | yes | daemon-restart | 로밍 횟수 감시 구간 |
 | `PING_PONG_PREVENTION.max_roams_in_window` | 구간 내 최대 로밍 | int | `3` | >=1 | yes | daemon-restart | 초과 시 detection_time 동안 억제 |
-| `PING_PONG_PREVENTION.detection_time` | 핑퐁 억제 시간 | int | `mlan0=10 / mlan1=30` | >=1 초 | yes | daemon-restart | 감지 후 로밍 억제 시간 |
+| `PING_PONG_PREVENTION.detection_time` | 핑퐁 억제 시간 | int | `5` | >=1 초 | yes | daemon-restart | 감지 후 로밍 억제 시간 |
 
 **비고 (roaming)** — 소비: `wifi_roam.py`(데몬 시작 시 1회 로드 → daemon-restart), `enabled`류는 `wifi_apply_enabled.sh`.
 - `mlanN.enabled=false`면 하위 로밍/스캔/logger/checker/arping 데몬은 상위 게이트로 강제 disable.
@@ -473,7 +478,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | **기본/드라이버** | `global.*`(BOARD_TYPE, BUS_TYPE, BLUETOOTH.enable, MOD_PARA, CAL/TXPWR, STANDARD, DEV_CAP_MASK, ANT_TYPE, tx_work), `mac.*`, `mlanN.{STANDARD, CAL_DATA_CFG, TXPWRLIMIT_PATH, Frequency, net_rx, mgmt_hex_dump_enable, rate_adapt.*}` | 대부분 caution/reboot. MAC·펌웨어·표준은 고급 |
 | **인터페이스 활성화** | `mlanN.enabled`, `global.ping_monitor.enabled`, 각 `*.enabled` 토글 | mlan1 기본 off |
 | **브릿지** | `wbridge.{enabled, bridge_iface, mac_mode, ip_discovery, eth_client_ip, eth_link_wait_sec, eth_sweep_subnet, peer_route.enabled, arp_ignore_always.enabled, engine}`, `wbridge.moal.*`(고급), `wbridge.optimize.*`, `wbridge.link_guard.*` | moal.*/arp_ignore_always는 고급 |
-| **로밍** | `mlanN.roaming.*`, `mlanN.periodic_roam.*`, `mlanN.bgscan.*`, `mlanN.mcs_tier.*`, `mlanN.connect_threshold` | 고급기능(PREDICTIVE/ADAPTIVE/LOAD/POST_ROAM)은 "고급 로밍" 하위로. `connect_threshold`=연결 최소 RSSI(wpa_supplicant) |
+| **로밍** | `mlanN.roaming.*`, `mlanN.periodic_roam.*`, `mlanN.bgscan.*`, `mlanN.mcs_tier.*`, `mlanN.connect_threshold` | 고급기능(PREDICTIVE_ROAM)은 "고급 로밍" 하위로(ADAPTIVE/LOAD/POST_ROAM 은 감사 D1로 제거). `connect_threshold`=연결 최소 RSSI(wpa_supplicant) |
 | **모니터링·발열** | `temperature.*`, `wbridge.thermal.*`, `mmc.*`, `mcp.*`, `monitor.*`, `logger.*`, `mlanN.logger.*`, `eth0.logger.*`, `mlanN.thermal_mgmt` | 온도 임계·게인은 고급/읽기전용 |
 | **헬스·리부트** | `mlanN.checker.*`, `mlanN.arping.*` | 재부팅 정책 항목(MAX_REBOOT_COUNT 등)은 고급 |
 | **SNMP** | `snmp.enabled`, `snmp.trap.*` | snmp.enabled는 고급(포트 오픈) |
