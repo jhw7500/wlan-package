@@ -1308,7 +1308,7 @@
               "type": "integer",
               "default": 3,
               "minimum": 1,
-              "description": "로밍 후보 미발견 시 지수 backoff 없이 SCAN_NO_RESULT_SLEEP 주기를 유지할 초기 횟수",
+              "description": "후보 미발견 backoff 의 레벨당 반복 횟수 — 각 주기를 이 횟수만큼 유지한 뒤 2배(기본 3: 3,3,3,6,6,6,…,30). 1=레거시 곡선(매 tick 2배)",
               "x-ui-editable": "yes",
               "x-apply-timing": "daemon-restart",
               "x-consumer": "wifi_roam.py"
@@ -2071,7 +2071,7 @@
               "type": "integer",
               "default": 3,
               "minimum": 1,
-              "description": "로밍 후보 미발견 시 지수 backoff 없이 SCAN_NO_RESULT_SLEEP 주기를 유지할 초기 횟수",
+              "description": "후보 미발견 backoff 의 레벨당 반복 횟수 — 각 주기를 이 횟수만큼 유지한 뒤 2배(기본 3: 3,3,3,6,6,6,…,30). 1=레거시 곡선(매 tick 2배)",
               "x-ui-editable": "yes",
               "x-apply-timing": "daemon-restart",
               "x-consumer": "wifi_roam.py"
