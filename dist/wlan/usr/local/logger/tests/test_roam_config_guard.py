@@ -33,17 +33,6 @@ DEFAULTS = {
     "CHECK_INTERVAL": wifi_roam.CHECK_INTERVAL,
 }
 
-# ADAPTIVE_INTERVAL 블록은 중첩 경로라 별도로 다룬다. AdaptiveInterval(:882) 를 거쳐
-# current_interval = max(min_interval, ADAPTIVE_NEAR_THRESHOLD_INTERVAL)(:926) 으로
-# 합쳐진 뒤 interruptible_sleep 에 들어가므로 0 이면 같은 바쁜 루프가 된다.
-ADAPTIVE_DEFAULTS = {
-    "MIN_CHECK_INTERVAL": wifi_roam.DEFAULT_MIN_CHECK_INTERVAL,
-    "MAX_CHECK_INTERVAL": wifi_roam.DEFAULT_MAX_CHECK_INTERVAL,
-    "ADAPTIVE_NEAR_THRESHOLD_INTERVAL": (
-        wifi_roam.DEFAULT_ADAPTIVE_NEAR_THRESHOLD_INTERVAL
-    ),
-}
-
 # STAGED_SCAN 계열 — 중첩 경로는 _positive_int caster 가, flat 덮어쓰기 경로는
 # _num(minimum=1) 이 각각 막는다. 두 경로 모두 이 전역을 건드리므로 복원 대상이다.
 STAGED_DEFAULTS = {
@@ -55,7 +44,7 @@ STAGED_DEFAULTS = {
 @pytest.fixture(autouse=True)
 def _restore_globals():
     """각 테스트가 전역을 오염시키지 않도록 기본값으로 되돌린다."""
-    keys = {**DEFAULTS, **ADAPTIVE_DEFAULTS, **STAGED_DEFAULTS}
+    keys = {**DEFAULTS, **STAGED_DEFAULTS}
     saved = {k: getattr(wifi_roam, k) for k in keys}
     for k, v in keys.items():
         setattr(wifi_roam, k, v)
@@ -96,28 +85,6 @@ def test_non_positive_sleep_rejected(bad, monkeypatch):
     for key, default in DEFAULTS.items():
         assert getattr(wifi_roam, key) == default, f"{key} 가 {bad} 로 오염됐다"
 
-
-@pytest.mark.parametrize("bad", [0, -1])
-def test_adaptive_interval_non_positive_rejected(bad, monkeypatch):
-    """ADAPTIVE_INTERVAL 계열도 interval 이라 같은 하한이 필요하다.
-
-    current_interval = max(min_interval, ADAPTIVE_NEAR_THRESHOLD_INTERVAL)(:926) 이므로
-    두 값이 모두 0 이면 interruptible_sleep(0) → 즉시 반환 → 바쁜 루프."""
-    _load(
-        {
-            "ADAPTIVE_INTERVAL": {
-                "enable": True,
-                "min_check_interval": bad,
-                "max_check_interval": bad,
-                "near_threshold_interval": bad,
-            }
-        },
-        monkeypatch,
-    )
-    for key, default in ADAPTIVE_DEFAULTS.items():
-        assert getattr(wifi_roam, key) == default, f"{key} 가 {bad} 로 오염됐다"
-    assert max(wifi_roam.MIN_CHECK_INTERVAL,
-               wifi_roam.ADAPTIVE_NEAR_THRESHOLD_INTERVAL) >= 1
 
 
 def test_non_positive_does_not_produce_zero_backoff(monkeypatch):

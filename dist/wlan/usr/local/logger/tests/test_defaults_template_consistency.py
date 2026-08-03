@@ -2,8 +2,9 @@
 
 코드 기본값은 JSON 로드 실패/키 부재 시의 폴백이다. 템플릿과 다르면 JSON 손상 같은
 실패 상태에서 기능 enable 이 뒤집히는 비대칭(fail-different)이 생긴다 — 실측 사례:
-PREDICTIVE/LOAD/ADAPTIVE/POST_ROAM_ARP 는 템플릿이 false 로 끄는데 코드 기본이 True 라
-JSON 이 깨지면 실험 기능 4종이 일제히 켜졌다. per-iface 로 값이 갈리는 키
+과거 실험 기능 4종(PREDICTIVE/LOAD/ADAPTIVE/POST_ROAM_ARP)은 템플릿이 false 로 끄는데
+코드 기본이 True 라 JSON 이 깨지면 일제히 켜졌다 — 이 원칙의 기원. LOAD/ADAPTIVE/
+POST_ROAM_ARP 는 감사 D1(2026-07-31)로 제거됐고 PREDICTIVE 만 남았다. per-iface 로 값이 갈리는 키
 (CHECK_INTERVAL 2/3, ROAM_SUCCESS_SLEEP 3/2)는 주 인터페이스 mlan0 값을 폴백 기준으로
 고정한다(mlan1 차이는 템플릿이 담당).
 
@@ -61,7 +62,6 @@ CASES = [
     ("DEFAULT_PING_PONG_WINDOW", ["PING_PONG_PREVENTION", "window"]),
     ("DEFAULT_MAX_ROAMS_IN_WINDOW", ["PING_PONG_PREVENTION", "max_roams_in_window"]),
     ("DEFAULT_PING_PONG_DETECTION_TIME", ["PING_PONG_PREVENTION", "detection_time"]),
-    ("DEFAULT_ENABLE_ADAPTIVE_INTERVAL", ["ADAPTIVE_INTERVAL", "enable"]),
     ("DEFAULT_ENABLE_STAGED_SCAN", ["STAGED_SCAN", "enable"]),
     ("DEFAULT_SKIP_REDUNDANT_ACTIVE_SCAN", ["STAGED_SCAN", "skip_redundant_active"]),
     ("DEFAULT_HOME_PASSIVE", ["STAGED_SCAN", "home_passive"]),
