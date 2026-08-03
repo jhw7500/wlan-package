@@ -390,7 +390,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `extra_ssids` | 추가 로밍 후보 SSID | array | `[]` | 문자열 배열(같은 psk/key_mgmt) | caution | daemon-restart | 모드B(generate_network_blocks=false)면 강제 무시 |
 | `generate_network_blocks` | 모드 결정자 | bool | `false` | true\|false | caution | daemon-restart | false=모드B(단일 블록), true=모드A(다중+select_network) |
 | `ROAM_CROSS_FAIL_RETRY_COUNT` | cross-SSID 재시도 횟수 | int | `2` | >=0 (모드A 전용) | yes | daemon-restart | 초과 시 지수 backoff로 후보 제외 |
-| `ROAM_NO_RESULT_FAST_COUNT` | 후보없음 고속 재시도 횟수 | int | `3` | >=1 | yes | daemon-restart | 처음 N회는 backoff 없이 `SCAN_NO_RESULT_SLEEP` 주기 유지, 초과분부터 지수 backoff |
+| `ROAM_NO_RESULT_FAST_COUNT` | backoff 레벨당 반복 횟수 | int | `3` | >=1 | yes | daemon-restart | 각 주기를 N tick 유지 후 2배(플래토 곡선, 기본 3,3,3,6,6,6,…). 1=레거시(매 tick 2배) |
 | `SCAN_NO_RESULT_SLEEP` | 스캔 무결과 대기 | int | `3` | >=1 초 | yes | daemon-restart | 지수 backoff 시작값 |
 | `ROAM_SUCCESS_SLEEP` | 로밍 성공 후 대기 | int | `mlan0=3 / mlan1=2` | >=1 초 | yes | daemon-restart | 성공 후 재체크 대기 |
 | `enabled` | 로밍 데몬 활성화 | bool | `mlan0=true / mlan1=false` | true\|false | yes | daemon-restart | `wifi_roam@mlanN` enable/disable |
