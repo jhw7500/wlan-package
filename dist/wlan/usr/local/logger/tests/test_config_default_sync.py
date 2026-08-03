@@ -29,3 +29,27 @@ def test_generated_defaults_are_in_sync():
         "템플릿을 고쳤다면 scripts/gen_config_defaults.py --write 를 실행해\n"
         "생성 산출물을 함께 커밋할 것. 상세:\n" + r.stdout + r.stderr
     )
+
+
+def test_schema_patch_resolves_shadowed_toplevel_block():
+    """schema_patch_default 가 파일상 먼저 나오는 더 깊은 동명 블록(mac.mlan0)에
+    속지 않고 최상위 mlan0 의 직계 경로를 패치한다 — 첫 mlan0 실패치에서 발견된
+    스코핑 버그의 회귀 고정."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "gen_cfg", os.path.join(_REPO, "scripts", "gen_config_defaults.py")
+    )
+    gen = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gen)
+
+    lines = gen.SCHEMA.read_text(encoding="utf-8").split("\n")
+    gen.schema_patch_default(lines, ("mlan0", "roaming", "CHECK_INTERVAL"), 77)
+    import json as _json
+    patched = _json.loads("\n".join(lines))
+    assert patched["properties"]["mlan0"]["properties"]["roaming"][
+        "properties"]["CHECK_INTERVAL"]["default"] == 77
+    # 그림자 블록(mac.mlan0)은 무손상
+    assert "default" not in str(
+        patched["properties"]["mac"]["properties"]["mlan0"]["properties"]["base"]
+    ) or patched["properties"]["mac"]["properties"]["mlan0"][
+        "properties"]["base"].get("default") != 77

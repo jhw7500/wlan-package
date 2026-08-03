@@ -45,7 +45,7 @@ DEFAULT_TH_5G = -75
 # 일치시킨다(fail-same, tests/test_defaults_template_consistency.py 가 고정). per-iface 로
 # 값이 갈리는 키(CHECK_INTERVAL 2/3, ROAM_SUCCESS_SLEEP 3/2)는 주 인터페이스 mlan0 기준.
 DIFF_TH = 8
-CHECK_INTERVAL = 2  # 로밍 판정 tick 주기(초, mlan0 기준 — mlan1 템플릿=3)
+CHECK_INTERVAL = 1  # 로밍 판정 tick 주기(초, mlan0 기준 — mlan1 템플릿=3). 판정 입력 link.json 이 ~1s 갱신이라 1 미만은 실익 없음
 
 # 단계형 로밍 스캔: RSSI가 임계값 이하로 떨어지면
 #   1) 홈채널 패시브 스캔(같은 채널 후보 + 현재 AP RSSI로 baseline 통일)
@@ -86,7 +86,7 @@ HOME_PASSIVE = DEFAULT_HOME_PASSIVE
 # 한다. 설계의 2층(60초 peak-to-peak >= 5dB)은 이 파일의 RSSI 이력이 ENABLE_PREDICTIVE_ROAM
 # 게이트 안에서만 쌓이고(그래서 출하 기본에서 비어 있음) 샘플 간격도 2~30초로 흔들려
 # 후속 범위로 미뤘다 — 1층만으로 위 효과의 거의 전부를 얻는다.
-DEFAULT_ENABLE_GOOD_SIGNAL_GATE = False  # 무회귀 기본 off — 실기 A/B 후 전환 판단
+DEFAULT_ENABLE_GOOD_SIGNAL_GATE = True  # 기본 on (2026-08-03 전환) — 실기 3-way 검증 완료(#138), 정체 스캔 −58%·이동 영향 0
 DEFAULT_GOOD_SIGNAL_GATE_DELTA_DB = 2
 # 결합 직후 RSSI 는 25초에 걸쳐 12~14dB 하강한다(attach ramp — TX rate 불변이라 실제 링크
 # 열화가 아닌 측정 램프). 그 구간의 큰 Δ 를 "이동"으로 읽으면 게이트가 무력화되므로, 결합
