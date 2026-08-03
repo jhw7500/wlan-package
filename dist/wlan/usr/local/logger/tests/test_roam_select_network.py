@@ -51,7 +51,6 @@ def _make_side_effect(list_out=_LIST_NETWORKS, select_rc=0, enable_rc=0,
     return side_effect
 
 def test_select_network_success_polls_then_enables(monkeypatch):
-    monkeypatch.setattr(wifi_roam, "optimize_post_roam_connectivity", MagicMock())
     calls = []
     _se = _make_side_effect()  # 이터레이터를 한 번만 생성해 호출 간 state 공유
 
@@ -65,7 +64,6 @@ def test_select_network_success_polls_then_enables(monkeypatch):
     assert ok is True
     assert "select_network" in calls
     assert calls[-1] == "enable_network"  # fallback 후보 복원이 마지막
-    wifi_roam.optimize_post_roam_connectivity.assert_called_once_with("mlan0")
 
 def test_select_network_ssid_not_found_returns_false_no_select(monkeypatch):
     # to_ssid가 list_networks에 없으면 select_network 자체를 호출하지 않고 False
@@ -84,7 +82,6 @@ def test_select_network_ssid_not_found_returns_false_no_select(monkeypatch):
 
 def test_select_network_timeout_polls_then_false_but_restores(monkeypatch):
     # COMPLETED에 끝내 도달 못하면 False, 단 enable_network로 fallback 후보는 복원
-    monkeypatch.setattr(wifi_roam, "optimize_post_roam_connectivity", MagicMock())
     calls = []
 
     def side_effect(cmd, *a, **k):
@@ -97,12 +94,10 @@ def test_select_network_timeout_polls_then_false_but_restores(monkeypatch):
             ok = select_network_for_ssid("mlan0", "OfficeNet")
     assert ok is False
     assert "enable_network" in calls  # 실패해도 후보 복원
-    wifi_roam.optimize_post_roam_connectivity.assert_not_called()
 
 def test_select_network_status_timeout_after_select_still_restores(monkeypatch):
     # #2 회귀: select_network 성공 후 status 폴링이 TimeoutExpired를 raise해도
     # enable_network all 로 fallback 후보를 복원해야 한다(다른 블록 영구 disabled 방지).
-    monkeypatch.setattr(wifi_roam, "optimize_post_roam_connectivity", MagicMock())
     calls = []
 
     def side_effect(cmd, *a, **k):
@@ -124,12 +119,10 @@ def test_select_network_status_timeout_after_select_still_restores(monkeypatch):
     assert ok is False
     assert "select_network" in calls
     assert "enable_network" in calls  # 폴링 timeout이어도 복원 호출
-    wifi_roam.optimize_post_roam_connectivity.assert_not_called()
 
 
 def test_select_network_status_exception_after_select_still_restores(monkeypatch):
     # #2 회귀: select_network 성공 후 status 폴링이 일반 Exception을 raise해도 복원
-    monkeypatch.setattr(wifi_roam, "optimize_post_roam_connectivity", MagicMock())
     calls = []
 
     def side_effect(cmd, *a, **k):
@@ -150,7 +143,6 @@ def test_select_network_status_exception_after_select_still_restores(monkeypatch
             ok = select_network_for_ssid("mlan0", "OfficeNet")
     assert ok is False
     assert "enable_network" in calls
-    wifi_roam.optimize_post_roam_connectivity.assert_not_called()
 
 
 def test_select_network_list_networks_timeout_does_not_restore(monkeypatch):
@@ -174,19 +166,6 @@ def test_select_network_list_networks_timeout_does_not_restore(monkeypatch):
     assert "enable_network" not in calls
 
 
-def test_select_network_uses_iface_param_in_optimize(monkeypatch):
-    # #4: 성공 경로의 optimize_post_roam_connectivity 는 전역 IFACE 가 아니라 iface 인자 사용
-    monkeypatch.setattr(wifi_roam, "IFACE", "mlan0")  # 전역과 다른 iface 로 호출
-    monkeypatch.setattr(wifi_roam, "optimize_post_roam_connectivity", MagicMock())
-    _se = _make_side_effect()
-
-    with patch.object(wifi_roam.subprocess, "run", side_effect=_se):
-        with patch.object(wifi_roam.time, "sleep", MagicMock()):
-            ok = select_network_for_ssid("mlan1", "OfficeNet")
-    assert ok is True
-    wifi_roam.optimize_post_roam_connectivity.assert_called_once_with("mlan1")
-
-
 def test_select_network_list_networks_fails_returns_false(monkeypatch):
     with patch.object(wifi_roam.subprocess, "run",
                       side_effect=lambda cmd, *a, **k: _Run(1, "")):
@@ -196,7 +175,6 @@ def test_select_network_list_networks_fails_returns_false(monkeypatch):
 
 def test_select_network_exact_ssid_match_not_substring(monkeypatch):
     # "Office"는 "OfficeNet"의 부분문자열이지만 정확히 일치하는 블록이 없으면 False
-    monkeypatch.setattr(wifi_roam, "optimize_post_roam_connectivity", MagicMock())
     calls = []
 
     def side_effect(cmd, *a, **k):

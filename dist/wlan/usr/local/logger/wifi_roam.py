@@ -158,12 +158,6 @@ DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT = 2  # cross-SSID 전환 실패 시 cooldown
 DEFAULT_ROAM_NO_RESULT_FAST_COUNT = 3  # 후보 미발견 시 처음 N회는 backoff 없이 빠른 주기(SCAN_NO_RESULT_SLEEP) 유지 후 지수 backoff
 
 # Post-Roam ARP 최적화 기본값
-DEFAULT_ENABLE_POST_ROAM_ARP_OPTIMIZATION = False
-DEFAULT_POST_ROAM_GARP_COUNT = 2
-DEFAULT_POST_ROAM_GARP_WAIT = 1
-DEFAULT_ENABLE_POST_ROAM_PEER_WARMUP = False
-DEFAULT_POST_ROAM_PEER_COUNT = 5
-DEFAULT_POST_ROAM_PEER_WAIT = 1
 
 # 현재 설정값 (Current Configuration - will be loaded from JSON)
 ENABLE_PREDICTIVE_ROAM = DEFAULT_ENABLE_PREDICTIVE_ROAM
@@ -360,12 +354,6 @@ def roam_hint_touched(state):
     return False
 
 # Post-Roam ARP 최적화 설정
-ENABLE_POST_ROAM_ARP_OPTIMIZATION = DEFAULT_ENABLE_POST_ROAM_ARP_OPTIMIZATION
-POST_ROAM_GARP_COUNT = DEFAULT_POST_ROAM_GARP_COUNT
-POST_ROAM_GARP_WAIT = DEFAULT_POST_ROAM_GARP_WAIT
-ENABLE_POST_ROAM_PEER_WARMUP = DEFAULT_ENABLE_POST_ROAM_PEER_WARMUP
-POST_ROAM_PEER_COUNT = DEFAULT_POST_ROAM_PEER_COUNT
-POST_ROAM_PEER_WAIT = DEFAULT_POST_ROAM_PEER_WAIT
 
 
 # ==============================================================================
@@ -504,14 +492,6 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
             "DEFAULT_TH_5G": _num("DEFAULT_TH_5G"),
             "DIFF_TH": _num("DIFF_TH"),
             "CHECK_INTERVAL": _num("CHECK_INTERVAL", minimum=1),
-            "ENABLE_POST_ROAM_ARP_OPTIMIZATION": config[
-                "ENABLE_POST_ROAM_ARP_OPTIMIZATION"
-            ],
-            "POST_ROAM_GARP_COUNT": _num("POST_ROAM_GARP_COUNT"),
-            "POST_ROAM_GARP_WAIT": _num("POST_ROAM_GARP_WAIT"),
-            "ENABLE_POST_ROAM_PEER_WARMUP": config["ENABLE_POST_ROAM_PEER_WARMUP"],
-            "POST_ROAM_PEER_COUNT": _num("POST_ROAM_PEER_COUNT"),
-            "POST_ROAM_PEER_WAIT": _num("POST_ROAM_PEER_WAIT"),
             # sleep/interval 계열은 minimum=1 — 0·음수는 바쁜 루프 또는 time.sleep 크래시.
             "SCAN_NO_RESULT_SLEEP": _num("SCAN_NO_RESULT_SLEEP", minimum=1),
             "ROAM_SUCCESS_SLEEP": _num("ROAM_SUCCESS_SLEEP", minimum=1),
@@ -573,12 +553,6 @@ def load_roaming_config(iface, data=None):
         "DEFAULT_TH_5G": DEFAULT_TH_5G,
         "DIFF_TH": DIFF_TH,
         "CHECK_INTERVAL": CHECK_INTERVAL,
-        "ENABLE_POST_ROAM_ARP_OPTIMIZATION": DEFAULT_ENABLE_POST_ROAM_ARP_OPTIMIZATION,
-        "POST_ROAM_GARP_COUNT": DEFAULT_POST_ROAM_GARP_COUNT,
-        "POST_ROAM_GARP_WAIT": DEFAULT_POST_ROAM_GARP_WAIT,
-        "ENABLE_POST_ROAM_PEER_WARMUP": DEFAULT_ENABLE_POST_ROAM_PEER_WARMUP,
-        "POST_ROAM_PEER_COUNT": DEFAULT_POST_ROAM_PEER_COUNT,
-        "POST_ROAM_PEER_WAIT": DEFAULT_POST_ROAM_PEER_WAIT,
         "SCAN_NO_RESULT_SLEEP": DEFAULT_SCAN_NO_RESULT_SLEEP,
         "ROAM_SUCCESS_SLEEP": DEFAULT_ROAM_SUCCESS_SLEEP,
         "ROAM_CROSS_FAIL_RETRY_COUNT": DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT,
@@ -691,30 +665,6 @@ def load_roaming_config(iface, data=None):
                     ],
                 )
 
-            post_roam = roam_config.get("POST_ROAM_ARP_OPTIMIZATION")
-            if isinstance(post_roam, dict):
-                _apply_section_values(
-                    config,
-                    post_roam,
-                    [
-                        ("enable", "ENABLE_POST_ROAM_ARP_OPTIMIZATION", parse_bool),
-                        ("garp_count", "POST_ROAM_GARP_COUNT", int),
-                        ("garp_wait", "POST_ROAM_GARP_WAIT", int),
-                    ],
-                )
-
-                peer_warmup = post_roam.get("PEER_WARMUP")
-                if isinstance(peer_warmup, dict):
-                    _apply_section_values(
-                        config,
-                        peer_warmup,
-                        [
-                            ("enable", "ENABLE_POST_ROAM_PEER_WARMUP", parse_bool),
-                            ("peer_count", "POST_ROAM_PEER_COUNT", int),
-                            ("peer_wait", "POST_ROAM_PEER_WAIT", int),
-                        ],
-                    )
-
             # use_signal_avg 옵션 처리
             _set_config_value(
                 config, "USE_SIGNAL_AVG",
@@ -771,7 +721,6 @@ def load_roaming_config(iface, data=None):
         f"[{IFACE}] Roaming config loaded: "
         f"predictive={ENABLE_PREDICTIVE_ROAM}, load_based={ENABLE_LOAD_BASED_ROAM}, "
         f"ping_pong={ENABLE_PING_PONG_PREVENTION}, adaptive={ENABLE_ADAPTIVE_INTERVAL}, "
-        f"post_roam_arp={ENABLE_POST_ROAM_ARP_OPTIMIZATION}, "
         f"rssi_source={'signal_avg' if USE_SIGNAL_AVG else 'signal'}, "
         f"extra_ssids={EXTRA_SSIDS}",
         _EXTRA_(),
@@ -785,8 +734,6 @@ def load_roaming_config(iface, data=None):
         f"load(max_roam_load={MAX_ROAM_LOAD}, load_diff_th={LOAD_DIFF_THRESHOLD}), "
         f"ping_pong(window={PING_PONG_WINDOW}, max_roams={MAX_ROAMS_IN_WINDOW}, detect_time={PING_PONG_DETECTION_TIME}), "
         f"adaptive(min={MIN_CHECK_INTERVAL}, max={MAX_CHECK_INTERVAL}), "
-        f"post_roam_arp(garp_count={POST_ROAM_GARP_COUNT}, garp_wait={POST_ROAM_GARP_WAIT}, "
-        f"peer_warmup={ENABLE_POST_ROAM_PEER_WARMUP}, peer_count={POST_ROAM_PEER_COUNT}, peer_wait={POST_ROAM_PEER_WAIT}), "
         f"good_signal_gate(enable={ENABLE_GOOD_SIGNAL_GATE}, delta_db={GOOD_SIGNAL_GATE_DELTA_DB}, "
         f"grace_sec={GOOD_SIGNAL_GATE_GRACE_SEC})",
         _EXTRA_(),
@@ -2005,120 +1952,6 @@ def reload_roaming_config(iface):
     return True
 
 
-def get_my_ip(iface):
-    try:
-        result = subprocess.run(
-            ["ip", "-4", "addr", "show", iface],
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-        for line in result.stdout.splitlines():
-            if "inet " in line:
-                parts = line.strip().split()
-                for part in parts:
-                    if part.startswith("inet"):
-                        ip = parts[parts.index(part) + 1].split("/")[0]
-                        return ip
-        return None
-    except Exception:
-        return None
-
-
-def get_recent_peers(iface, count=5):
-    peers = []
-    try:
-        result = subprocess.run(
-            ["ip", "neigh", "show", "dev", iface],
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-        for line in result.stdout.splitlines():
-            parts = line.split()
-            if len(parts) >= 1:
-                ip = parts[0]
-                if "." in ip:
-                    peers.append(ip)
-                    if len(peers) >= count:
-                        break
-    except Exception:
-        pass
-    return peers
-
-
-def optimize_post_roam_connectivity(iface):
-    if not ENABLE_POST_ROAM_ARP_OPTIMIZATION:
-        return
-
-    my_ip = get_my_ip(iface)
-    if not my_ip:
-        logger.message(
-            "debug",
-            f"[{iface}] Post-roam optimization skipped: no IP address",
-            _EXTRA_(),
-        )
-        return
-
-    try:
-        logger.message(
-            "info",
-            f"[{iface}] Sending gratuitous ARP ({POST_ROAM_GARP_COUNT} times)",
-            _EXTRA_(),
-        )
-        for i in range(POST_ROAM_GARP_COUNT):
-            subprocess.run(
-                [
-                    "arping",
-                    "-U",
-                    "-c",
-                    "1",
-                    "-w",
-                    str(POST_ROAM_GARP_WAIT),
-                    "-I",
-                    iface,
-                    my_ip,
-                ],
-                capture_output=True,
-                timeout=POST_ROAM_GARP_WAIT + 1,
-            )
-            if i < POST_ROAM_GARP_COUNT - 1:
-                time.sleep(0.1)
-    except Exception as e:
-        logger.message(
-            "debug",
-            f"[{iface}] Gratuitous ARP failed: {e}",
-            _EXTRA_(),
-        )
-
-    if ENABLE_POST_ROAM_PEER_WARMUP:
-        peers = get_recent_peers(iface, POST_ROAM_PEER_COUNT)
-        if peers:
-            logger.message(
-                "info",
-                f"[{iface}] ARP warm-up for {len(peers)} peers",
-                _EXTRA_(),
-            )
-            for peer_ip in peers:
-                try:
-                    subprocess.run(
-                        [
-                            "arping",
-                            "-c",
-                            "1",
-                            "-w",
-                            str(POST_ROAM_PEER_WAIT),
-                            "-I",
-                            iface,
-                            peer_ip,
-                        ],
-                        capture_output=True,
-                        timeout=POST_ROAM_PEER_WAIT + 1,
-                    )
-                except Exception:
-                    pass
-
-
 # ==============================================================================
 # 개선된 roam_to_bssid (Ping-pong 방지 포함)
 # ==============================================================================
@@ -2191,8 +2024,6 @@ def roam_to_bssid(from_bssid, to_bssid, channel=None, freq=None, rssi=None):
 
     logger.message("info", f"[{IFACE}] Roam successful (confirmed): {to_bssid}", _EXTRA_())
 
-    optimize_post_roam_connectivity(IFACE)
-
     notify_roam(IFACE, from_bssid, to_bssid,
                 channel=channel, freq=freq, rssi=rssi)
 
@@ -2236,7 +2067,6 @@ def connect_to_ssid(iface, to_ssid, from_bssid, to_bssid):
             logger.message(
                 "info", f"[{IFACE}] Cross-SSID connect successful: {to_ssid}", _EXTRA_()
             )
-            optimize_post_roam_connectivity(IFACE)
             return True
         else:
             logger.message(
@@ -2375,7 +2205,6 @@ def select_network_for_ssid(iface, to_ssid):
                 f"[{iface}] Cross-SSID select_network successful: {to_ssid} (id={nid})",
                 _EXTRA_(),
             )
-            optimize_post_roam_connectivity(iface)
             return True
 
         logger.message(
