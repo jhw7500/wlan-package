@@ -130,60 +130,31 @@ DEFAULT_ENABLE_PREDICTIVE_ROAM = False
 DEFAULT_PREDICTIVE_THRESHOLD_BOOST = 5
 DEFAULT_TREND_WINDOW_SIZE = 5
 DEFAULT_TREND_HISTORY_MAX_AGE = 30
-DEFAULT_ENABLE_LOAD_BASED_ROAM = False
-DEFAULT_MAX_ROAM_LOAD = 80
-DEFAULT_LOAD_DIFF_THRESHOLD = 20
 DEFAULT_ENABLE_PING_PONG_PREVENTION = True
 DEFAULT_PING_PONG_WINDOW = 20
 DEFAULT_MAX_ROAMS_IN_WINDOW = 3
 DEFAULT_PING_PONG_DETECTION_TIME = 5
-DEFAULT_ENABLE_ADAPTIVE_INTERVAL = False
-DEFAULT_MIN_CHECK_INTERVAL = 1
-DEFAULT_MAX_CHECK_INTERVAL = 10
-DEFAULT_ADAPTIVE_RSSI_DROP_THRESHOLD = -5    # Phase 1: 이 값 미만 하락 시 min_interval 전환
-DEFAULT_ADAPTIVE_RSSI_RISE_THRESHOLD = 2     # Phase 1: 이 값 초과 상승 시 간격 증가
-DEFAULT_ADAPTIVE_NEAR_THRESHOLD_OFFSET = 5   # Phase 2: threshold+offset 이하 → 빠른 체크 구간
-DEFAULT_ADAPTIVE_NEAR_THRESHOLD_INTERVAL = 2 # Phase 2: 근접 구간 고정 인터벌 (s)
-DEFAULT_ADAPTIVE_GOOD_SIGNAL_OFFSET = 15     # Phase 2: threshold+offset 초과 → 간격 증가 허용
-DEFAULT_ADAPTIVE_CONSECUTIVE_DROP_COUNT = 2  # Phase 3: 연속 하락 이 횟수 이상 시 min_interval 강제
 DEFAULT_USE_SIGNAL_AVG = True  # True: link 파일의 signal_avg(평활) 사용, False: signal(순간값)
 
 # Sleep 기본값
 DEFAULT_SCAN_NO_RESULT_SLEEP = 3  # AP 스캔 결과 없을 때 재시도 대기
 DEFAULT_ROAM_SUCCESS_SLEEP = 3  # 로밍 성공 후 안정화 대기(mlan0 기준, mlan1 템플릿=2)
-DEFAULT_ROAM_NO_RESULT_MAX_SLEEP = 30  # 후보없음 backoff 상한(초)
+DEFAULT_ROAM_NO_RESULT_MAX_SLEEP = 30  # 후보없음 backoff 상한(초). 의도적으로 JSON 미노출 —
+# 과거엔 로더가 .get() 으로 읽어 JSON 에 손으로 넣으면 몰래 실효되는 뒷문이었다(감사 D2 로 봉쇄).
+# 운영에서 조정할 근거가 없고, 실험이 필요하면 이 상수를 직접 바꾼다.
 DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT = 2  # cross-SSID 전환 실패 시 cooldown 없이 즉시 재시도 허용 횟수(초과 시 backoff)
 DEFAULT_ROAM_NO_RESULT_FAST_COUNT = 3  # 후보 미발견 시 처음 N회는 backoff 없이 빠른 주기(SCAN_NO_RESULT_SLEEP) 유지 후 지수 backoff
 
-# Post-Roam ARP 최적화 기본값
-DEFAULT_ENABLE_POST_ROAM_ARP_OPTIMIZATION = False
-DEFAULT_POST_ROAM_GARP_COUNT = 2
-DEFAULT_POST_ROAM_GARP_WAIT = 1
-DEFAULT_ENABLE_POST_ROAM_PEER_WARMUP = False
-DEFAULT_POST_ROAM_PEER_COUNT = 5
-DEFAULT_POST_ROAM_PEER_WAIT = 1
 
 # 현재 설정값 (Current Configuration - will be loaded from JSON)
 ENABLE_PREDICTIVE_ROAM = DEFAULT_ENABLE_PREDICTIVE_ROAM
 PREDICTIVE_THRESHOLD_BOOST = DEFAULT_PREDICTIVE_THRESHOLD_BOOST
 TREND_WINDOW_SIZE = DEFAULT_TREND_WINDOW_SIZE
 TREND_HISTORY_MAX_AGE = DEFAULT_TREND_HISTORY_MAX_AGE
-ENABLE_LOAD_BASED_ROAM = DEFAULT_ENABLE_LOAD_BASED_ROAM
-MAX_ROAM_LOAD = DEFAULT_MAX_ROAM_LOAD
-LOAD_DIFF_THRESHOLD = DEFAULT_LOAD_DIFF_THRESHOLD
 ENABLE_PING_PONG_PREVENTION = DEFAULT_ENABLE_PING_PONG_PREVENTION
 PING_PONG_WINDOW = DEFAULT_PING_PONG_WINDOW
 MAX_ROAMS_IN_WINDOW = DEFAULT_MAX_ROAMS_IN_WINDOW
 PING_PONG_DETECTION_TIME = DEFAULT_PING_PONG_DETECTION_TIME
-ENABLE_ADAPTIVE_INTERVAL = DEFAULT_ENABLE_ADAPTIVE_INTERVAL
-MIN_CHECK_INTERVAL = DEFAULT_MIN_CHECK_INTERVAL
-MAX_CHECK_INTERVAL = DEFAULT_MAX_CHECK_INTERVAL
-ADAPTIVE_RSSI_DROP_THRESHOLD = DEFAULT_ADAPTIVE_RSSI_DROP_THRESHOLD
-ADAPTIVE_RSSI_RISE_THRESHOLD = DEFAULT_ADAPTIVE_RSSI_RISE_THRESHOLD
-ADAPTIVE_NEAR_THRESHOLD_OFFSET = DEFAULT_ADAPTIVE_NEAR_THRESHOLD_OFFSET
-ADAPTIVE_NEAR_THRESHOLD_INTERVAL = DEFAULT_ADAPTIVE_NEAR_THRESHOLD_INTERVAL
-ADAPTIVE_GOOD_SIGNAL_OFFSET = DEFAULT_ADAPTIVE_GOOD_SIGNAL_OFFSET
-ADAPTIVE_CONSECUTIVE_DROP_COUNT = DEFAULT_ADAPTIVE_CONSECUTIVE_DROP_COUNT
 USE_SIGNAL_AVG = DEFAULT_USE_SIGNAL_AVG
 
 # 다중 SSID 로밍: conf 기본 ssid 외 추가 로밍 후보 SSID (roaming.extra_ssids에서 로드)
@@ -264,7 +235,7 @@ def track_association(station, gs, now=None):
     돌린다 — 구 AP 에서 쌓인 억제 카운트가 새 AP 문맥의 요약 로그에 섞이면 오해를 준다.
 
     로밍 경로에만 두면 supplicant 자율 재연결을 놓치므로 BSSID 관측으로 감지한다."""
-    # `is None` 으로 명시 — get_link_info_with_load 는 None 또는 채워진 dict 만 반환하므로
+    # `is None` 으로 명시 — get_link_info 는 None 또는 채워진 dict 만 반환하므로
     # falsy 검사와 결과가 같지만, "연결 정보 없음" 이라는 의도를 코드에 드러낸다.
     if station is None:
         gs["bssid"] = None
@@ -357,13 +328,6 @@ def roam_hint_touched(state):
         return True
     return False
 
-# Post-Roam ARP 최적화 설정
-ENABLE_POST_ROAM_ARP_OPTIMIZATION = DEFAULT_ENABLE_POST_ROAM_ARP_OPTIMIZATION
-POST_ROAM_GARP_COUNT = DEFAULT_POST_ROAM_GARP_COUNT
-POST_ROAM_GARP_WAIT = DEFAULT_POST_ROAM_GARP_WAIT
-ENABLE_POST_ROAM_PEER_WARMUP = DEFAULT_ENABLE_POST_ROAM_PEER_WARMUP
-POST_ROAM_PEER_COUNT = DEFAULT_POST_ROAM_PEER_COUNT
-POST_ROAM_PEER_WAIT = DEFAULT_POST_ROAM_PEER_WAIT
 
 
 # ==============================================================================
@@ -477,43 +441,17 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
             "PREDICTIVE_THRESHOLD_BOOST": _num("PREDICTIVE_THRESHOLD_BOOST"),
             "TREND_WINDOW_SIZE": _num("TREND_WINDOW_SIZE"),
             "TREND_HISTORY_MAX_AGE": _num("TREND_HISTORY_MAX_AGE"),
-            "ENABLE_LOAD_BASED_ROAM": config["ENABLE_LOAD_BASED_ROAM"],
-            "MAX_ROAM_LOAD": _num("MAX_ROAM_LOAD"),
-            "LOAD_DIFF_THRESHOLD": _num("LOAD_DIFF_THRESHOLD"),
             "ENABLE_PING_PONG_PREVENTION": config["ENABLE_PING_PONG_PREVENTION"],
             "PING_PONG_WINDOW": _num("PING_PONG_WINDOW"),
             "MAX_ROAMS_IN_WINDOW": _num("MAX_ROAMS_IN_WINDOW"),
             "PING_PONG_DETECTION_TIME": _num("PING_PONG_DETECTION_TIME"),
-            "ENABLE_ADAPTIVE_INTERVAL": config["ENABLE_ADAPTIVE_INTERVAL"],
-            # ADAPTIVE 계열도 interval — AdaptiveInterval(:882) 를 거쳐
-            # `current_interval = max(min_interval, ADAPTIVE_NEAR_THRESHOLD_INTERVAL)`(:926)
-            # 로 합쳐진 뒤 interruptible_sleep 에 그대로 들어간다. 0 이면 같은 바쁜 루프.
-            "MIN_CHECK_INTERVAL": _num("MIN_CHECK_INTERVAL", minimum=1),
-            "MAX_CHECK_INTERVAL": _num("MAX_CHECK_INTERVAL", minimum=1),
-            "ADAPTIVE_RSSI_DROP_THRESHOLD": _num("ADAPTIVE_RSSI_DROP_THRESHOLD"),
-            "ADAPTIVE_RSSI_RISE_THRESHOLD": _num("ADAPTIVE_RSSI_RISE_THRESHOLD"),
-            "ADAPTIVE_NEAR_THRESHOLD_OFFSET": _num("ADAPTIVE_NEAR_THRESHOLD_OFFSET"),
-            "ADAPTIVE_NEAR_THRESHOLD_INTERVAL": _num(
-                "ADAPTIVE_NEAR_THRESHOLD_INTERVAL", minimum=1
-            ),
-            "ADAPTIVE_GOOD_SIGNAL_OFFSET": _num("ADAPTIVE_GOOD_SIGNAL_OFFSET"),
-            "ADAPTIVE_CONSECUTIVE_DROP_COUNT": _num("ADAPTIVE_CONSECUTIVE_DROP_COUNT"),
             "DEFAULT_TH_2G": _num("DEFAULT_TH_2G"),
             "DEFAULT_TH_5G": _num("DEFAULT_TH_5G"),
             "DIFF_TH": _num("DIFF_TH"),
             "CHECK_INTERVAL": _num("CHECK_INTERVAL", minimum=1),
-            "ENABLE_POST_ROAM_ARP_OPTIMIZATION": config[
-                "ENABLE_POST_ROAM_ARP_OPTIMIZATION"
-            ],
-            "POST_ROAM_GARP_COUNT": _num("POST_ROAM_GARP_COUNT"),
-            "POST_ROAM_GARP_WAIT": _num("POST_ROAM_GARP_WAIT"),
-            "ENABLE_POST_ROAM_PEER_WARMUP": config["ENABLE_POST_ROAM_PEER_WARMUP"],
-            "POST_ROAM_PEER_COUNT": _num("POST_ROAM_PEER_COUNT"),
-            "POST_ROAM_PEER_WAIT": _num("POST_ROAM_PEER_WAIT"),
             # sleep/interval 계열은 minimum=1 — 0·음수는 바쁜 루프 또는 time.sleep 크래시.
             "SCAN_NO_RESULT_SLEEP": _num("SCAN_NO_RESULT_SLEEP", minimum=1),
             "ROAM_SUCCESS_SLEEP": _num("ROAM_SUCCESS_SLEEP", minimum=1),
-            "ROAM_NO_RESULT_MAX_SLEEP": _num("ROAM_NO_RESULT_MAX_SLEEP", minimum=1),
             "ROAM_CROSS_FAIL_RETRY_COUNT": _num("ROAM_CROSS_FAIL_RETRY_COUNT"),
             "ROAM_NO_RESULT_FAST_COUNT": _num("ROAM_NO_RESULT_FAST_COUNT"),
             "ENABLE_STAGED_SCAN": config["ENABLE_STAGED_SCAN"],
@@ -552,35 +490,16 @@ def load_roaming_config(iface, data=None):
         "PREDICTIVE_THRESHOLD_BOOST": DEFAULT_PREDICTIVE_THRESHOLD_BOOST,
         "TREND_WINDOW_SIZE": DEFAULT_TREND_WINDOW_SIZE,
         "TREND_HISTORY_MAX_AGE": DEFAULT_TREND_HISTORY_MAX_AGE,
-        "ENABLE_LOAD_BASED_ROAM": DEFAULT_ENABLE_LOAD_BASED_ROAM,
-        "MAX_ROAM_LOAD": DEFAULT_MAX_ROAM_LOAD,
-        "LOAD_DIFF_THRESHOLD": DEFAULT_LOAD_DIFF_THRESHOLD,
         "ENABLE_PING_PONG_PREVENTION": DEFAULT_ENABLE_PING_PONG_PREVENTION,
         "PING_PONG_WINDOW": DEFAULT_PING_PONG_WINDOW,
         "MAX_ROAMS_IN_WINDOW": DEFAULT_MAX_ROAMS_IN_WINDOW,
         "PING_PONG_DETECTION_TIME": DEFAULT_PING_PONG_DETECTION_TIME,
-        "ENABLE_ADAPTIVE_INTERVAL": DEFAULT_ENABLE_ADAPTIVE_INTERVAL,
-        "MIN_CHECK_INTERVAL": DEFAULT_MIN_CHECK_INTERVAL,
-        "MAX_CHECK_INTERVAL": DEFAULT_MAX_CHECK_INTERVAL,
-        "ADAPTIVE_RSSI_DROP_THRESHOLD": DEFAULT_ADAPTIVE_RSSI_DROP_THRESHOLD,
-        "ADAPTIVE_RSSI_RISE_THRESHOLD": DEFAULT_ADAPTIVE_RSSI_RISE_THRESHOLD,
-        "ADAPTIVE_NEAR_THRESHOLD_OFFSET": DEFAULT_ADAPTIVE_NEAR_THRESHOLD_OFFSET,
-        "ADAPTIVE_NEAR_THRESHOLD_INTERVAL": DEFAULT_ADAPTIVE_NEAR_THRESHOLD_INTERVAL,
-        "ADAPTIVE_GOOD_SIGNAL_OFFSET": DEFAULT_ADAPTIVE_GOOD_SIGNAL_OFFSET,
-        "ADAPTIVE_CONSECUTIVE_DROP_COUNT": DEFAULT_ADAPTIVE_CONSECUTIVE_DROP_COUNT,
         "DEFAULT_TH_2G": DEFAULT_TH_2G,
         "DEFAULT_TH_5G": DEFAULT_TH_5G,
         "DIFF_TH": DIFF_TH,
         "CHECK_INTERVAL": CHECK_INTERVAL,
-        "ENABLE_POST_ROAM_ARP_OPTIMIZATION": DEFAULT_ENABLE_POST_ROAM_ARP_OPTIMIZATION,
-        "POST_ROAM_GARP_COUNT": DEFAULT_POST_ROAM_GARP_COUNT,
-        "POST_ROAM_GARP_WAIT": DEFAULT_POST_ROAM_GARP_WAIT,
-        "ENABLE_POST_ROAM_PEER_WARMUP": DEFAULT_ENABLE_POST_ROAM_PEER_WARMUP,
-        "POST_ROAM_PEER_COUNT": DEFAULT_POST_ROAM_PEER_COUNT,
-        "POST_ROAM_PEER_WAIT": DEFAULT_POST_ROAM_PEER_WAIT,
         "SCAN_NO_RESULT_SLEEP": DEFAULT_SCAN_NO_RESULT_SLEEP,
         "ROAM_SUCCESS_SLEEP": DEFAULT_ROAM_SUCCESS_SLEEP,
-        "ROAM_NO_RESULT_MAX_SLEEP": DEFAULT_ROAM_NO_RESULT_MAX_SLEEP,
         "ROAM_CROSS_FAIL_RETRY_COUNT": DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT,
         "ROAM_NO_RESULT_FAST_COUNT": DEFAULT_ROAM_NO_RESULT_FAST_COUNT,
         "ENABLE_GOOD_SIGNAL_GATE": DEFAULT_ENABLE_GOOD_SIGNAL_GATE,
@@ -617,18 +536,6 @@ def load_roaming_config(iface, data=None):
                     ],
                 )
 
-            load_based = roam_config.get("LOAD_BASED_ROAM")
-            if isinstance(load_based, dict):
-                _apply_section_values(
-                    config,
-                    load_based,
-                    [
-                        ("enable", "ENABLE_LOAD_BASED_ROAM", parse_bool),
-                        ("max_roam_load", "MAX_ROAM_LOAD", int),
-                        ("load_diff_threshold", "LOAD_DIFF_THRESHOLD", int),
-                    ],
-                )
-
             ping_pong = roam_config.get("PING_PONG_PREVENTION")
             if isinstance(ping_pong, dict):
                 _apply_section_values(
@@ -639,24 +546,6 @@ def load_roaming_config(iface, data=None):
                         ("window", "PING_PONG_WINDOW", int),
                         ("max_roams_in_window", "MAX_ROAMS_IN_WINDOW", int),
                         ("detection_time", "PING_PONG_DETECTION_TIME", int),
-                    ],
-                )
-
-            adaptive = roam_config.get("ADAPTIVE_INTERVAL")
-            if isinstance(adaptive, dict):
-                _apply_section_values(
-                    config,
-                    adaptive,
-                    [
-                        ("enable", "ENABLE_ADAPTIVE_INTERVAL", parse_bool),
-                        ("min_check_interval", "MIN_CHECK_INTERVAL", int),
-                        ("max_check_interval", "MAX_CHECK_INTERVAL", int),
-                        ("rssi_drop_threshold", "ADAPTIVE_RSSI_DROP_THRESHOLD", int),
-                        ("rssi_rise_threshold", "ADAPTIVE_RSSI_RISE_THRESHOLD", int),
-                        ("near_threshold_offset", "ADAPTIVE_NEAR_THRESHOLD_OFFSET", int),
-                        ("near_threshold_interval", "ADAPTIVE_NEAR_THRESHOLD_INTERVAL", int),
-                        ("good_signal_offset", "ADAPTIVE_GOOD_SIGNAL_OFFSET", int),
-                        ("consecutive_drop_count", "ADAPTIVE_CONSECUTIVE_DROP_COUNT", int),
                     ],
                 )
 
@@ -691,30 +580,6 @@ def load_roaming_config(iface, data=None):
                     ],
                 )
 
-            post_roam = roam_config.get("POST_ROAM_ARP_OPTIMIZATION")
-            if isinstance(post_roam, dict):
-                _apply_section_values(
-                    config,
-                    post_roam,
-                    [
-                        ("enable", "ENABLE_POST_ROAM_ARP_OPTIMIZATION", parse_bool),
-                        ("garp_count", "POST_ROAM_GARP_COUNT", int),
-                        ("garp_wait", "POST_ROAM_GARP_WAIT", int),
-                    ],
-                )
-
-                peer_warmup = post_roam.get("PEER_WARMUP")
-                if isinstance(peer_warmup, dict):
-                    _apply_section_values(
-                        config,
-                        peer_warmup,
-                        [
-                            ("enable", "ENABLE_POST_ROAM_PEER_WARMUP", parse_bool),
-                            ("peer_count", "POST_ROAM_PEER_COUNT", int),
-                            ("peer_wait", "POST_ROAM_PEER_WAIT", int),
-                        ],
-                    )
-
             # use_signal_avg 옵션 처리
             _set_config_value(
                 config, "USE_SIGNAL_AVG",
@@ -729,10 +594,7 @@ def load_roaming_config(iface, data=None):
             ] if isinstance(extra, list) else []
 
             # 후보없음 backoff 파라미터(평탄 대문자 키). 양의 정수만 수용, 형식오류 시 기본값 유지.
-            _set_config_value(
-                config, "ROAM_NO_RESULT_MAX_SLEEP",
-                roam_config.get("ROAM_NO_RESULT_MAX_SLEEP"), int
-            )
+            # ROAM_NO_RESULT_MAX_SLEEP 은 JSON 에서 읽지 않는다(상수 고정 — 감사 D2).
             _set_config_value(
                 config, "ROAM_CROSS_FAIL_RETRY_COUNT",
                 roam_config.get("ROAM_CROSS_FAIL_RETRY_COUNT"), int
@@ -772,9 +634,8 @@ def load_roaming_config(iface, data=None):
     logger.message(
         "info",
         f"[{IFACE}] Roaming config loaded: "
-        f"predictive={ENABLE_PREDICTIVE_ROAM}, load_based={ENABLE_LOAD_BASED_ROAM}, "
-        f"ping_pong={ENABLE_PING_PONG_PREVENTION}, adaptive={ENABLE_ADAPTIVE_INTERVAL}, "
-        f"post_roam_arp={ENABLE_POST_ROAM_ARP_OPTIMIZATION}, "
+        f"predictive={ENABLE_PREDICTIVE_ROAM}, "
+        f"ping_pong={ENABLE_PING_PONG_PREVENTION}, "
         f"rssi_source={'signal_avg' if USE_SIGNAL_AVG else 'signal'}, "
         f"extra_ssids={EXTRA_SSIDS}",
         _EXTRA_(),
@@ -785,11 +646,7 @@ def load_roaming_config(iface, data=None):
         f"[{IFACE}] Roaming effective values: "
         f"th_2g={DEFAULT_TH_2G}, th_5g={DEFAULT_TH_5G}, diff_th={DIFF_TH}, check_interval={CHECK_INTERVAL}, "
         f"predictive(boost={PREDICTIVE_THRESHOLD_BOOST}, window={TREND_WINDOW_SIZE}, max_age={TREND_HISTORY_MAX_AGE}), "
-        f"load(max_roam_load={MAX_ROAM_LOAD}, load_diff_th={LOAD_DIFF_THRESHOLD}), "
         f"ping_pong(window={PING_PONG_WINDOW}, max_roams={MAX_ROAMS_IN_WINDOW}, detect_time={PING_PONG_DETECTION_TIME}), "
-        f"adaptive(min={MIN_CHECK_INTERVAL}, max={MAX_CHECK_INTERVAL}), "
-        f"post_roam_arp(garp_count={POST_ROAM_GARP_COUNT}, garp_wait={POST_ROAM_GARP_WAIT}, "
-        f"peer_warmup={ENABLE_POST_ROAM_PEER_WARMUP}, peer_count={POST_ROAM_PEER_COUNT}, peer_wait={POST_ROAM_PEER_WAIT}), "
         f"good_signal_gate(enable={ENABLE_GOOD_SIGNAL_GATE}, delta_db={GOOD_SIGNAL_GATE_DELTA_DB}, "
         f"grace_sec={GOOD_SIGNAL_GATE_GRACE_SEC})",
         _EXTRA_(),
@@ -1011,74 +868,10 @@ def record_cross_ssid_result(cooldown, ssid, ok, post_sleep):
 
 
 # ==============================================================================
-# 적응형 간격 (Adaptive Interval)
-# ==============================================================================
-class AdaptiveInterval:
-    """RSSI 상태에 따라 체크 간격 조정"""
-
-    def __init__(
-        self, min_interval=MIN_CHECK_INTERVAL, max_interval=MAX_CHECK_INTERVAL
-    ):
-        self.min_interval = min_interval
-        self.max_interval = max_interval
-        self.current_interval = CHECK_INTERVAL
-        self.last_rssi = None
-        self.consecutive_low_rssi = 0
-        self.consecutive_high_rssi = 0
-
-    def update(self, current_rssi, threshold, trend):
-        """
-        RSSI와 추세에 따라 간격 조정
-        - 신호가 임계값 근처: 간격 단축
-        - 신호가 안정적이고 좋음: 간격 증가
-        - 하락 추세: 즉시 간격 단축
-        """
-        # RSSI 변화율 계산
-        if self.last_rssi is not None:
-            rssi_change = current_rssi - self.last_rssi
-
-            # Phase 1: 신호가 급격히 악화되면 최소 간격
-            if rssi_change < ADAPTIVE_RSSI_DROP_THRESHOLD:
-                self.current_interval = self.min_interval
-                self.consecutive_low_rssi += 1
-                self.consecutive_high_rssi = 0
-            # Phase 1: 신호가 개선되면 간격 증가
-            elif rssi_change > ADAPTIVE_RSSI_RISE_THRESHOLD:
-                self.current_interval = min(
-                    self.max_interval, self.current_interval + 1
-                )
-                self.consecutive_high_rssi += 1
-                self.consecutive_low_rssi = 0
-            else:
-                # 안정 상태
-                self.consecutive_low_rssi = 0
-                self.consecutive_high_rssi = 0
-
-        self.last_rssi = current_rssi
-
-        if threshold is None:
-            return self.current_interval
-
-        # Phase 2: 임계값 근처에서는 간격 단축
-        if current_rssi < threshold + ADAPTIVE_NEAR_THRESHOLD_OFFSET:
-            self.current_interval = max(self.min_interval, ADAPTIVE_NEAR_THRESHOLD_INTERVAL)
-        # Phase 2: 신호가 안정적이고 좋으면 간격 증가
-        elif current_rssi > threshold + ADAPTIVE_GOOD_SIGNAL_OFFSET and trend == RSSITrendTracker.TREND_STABLE:
-            self.current_interval = min(self.max_interval, self.current_interval + 1)
-
-        # Phase 3: 연속 낮은 RSSI 감지 시 더 빠른 체크
-        if self.consecutive_low_rssi >= ADAPTIVE_CONSECUTIVE_DROP_COUNT:
-            self.current_interval = self.min_interval
-
-        return self.current_interval
-
-
-# ==============================================================================
 # 전역 인스턴스 (Global Instances)
 # ==============================================================================
 trend_tracker = None
 ping_pong_preventer = None
-adaptive_interval = None
 cross_ssid_cooldown = None
 
 
@@ -1371,7 +1164,7 @@ def _iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
 def scan_results_to_ap_lines(scan_results_stdout):
     """`wpa_cli scan_results`(탭 구분: bssid/freq/signal/flags/ssid, 첫 줄 헤더)를
     get_latest_scan이 파싱하는 pipe 포맷(`NN|channel|rssi|ld|bssid|freq|ssid`, 7필드)으로
-    변환. 헤더/형식불량/BSSID아님/미지 freq는 skip. ld=0(LOAD는 channel_info 사용)."""
+    변환. 헤더/형식불량/BSSID아님/미지 freq는 skip. ld=0 고정(iw 출력에 없는 필드)."""
     out = []
     idx = 0
     for line in (scan_results_stdout or "").splitlines():
@@ -1396,7 +1189,7 @@ def scan_results_to_ap_lines(scan_results_stdout):
 
 
 # ==============================================================================
-# 개선된 get_link_info_with_load (Load 정보 포함)
+# get_link_info — link.json 파싱
 # ==============================================================================
 _LINK_CACHE: Dict[str, Any] = {
     "mtime_ns": None,
@@ -1412,8 +1205,8 @@ LINK_STALE_SEC = 30
 _LINK_STALE_WARNED = False
 
 
-def get_link_info_with_load():
-    """Load 정보를 포함한 연결 정보 반환"""
+def get_link_info():
+    """link.json 에서 연결 정보(bssid/freq/rssi/ssid)를 반환(mtime 캐시·stale 게이트)."""
     global _LINK_STALE_WARNED
     try:
         st = os.stat(LINK_LOG_FILE)
@@ -1452,35 +1245,6 @@ def get_link_info_with_load():
                 "ssid": data["info"].get("ssid", "").strip(),
             }
 
-            # Load 정보 추가 (활성화됨)
-            if ENABLE_LOAD_BASED_ROAM:
-                channel_info = data.get("channel_info", {})
-                result["channel_info"] = channel_info
-                freq_str = str(result["freq"])
-
-                if freq_str in channel_info:
-                    info = channel_info[freq_str]
-                    noise = info.get("noise", -95)
-                    busy = info.get("busy_time_ms", 0)
-                    active = info.get("active_time_ms", 1)
-
-                    if active > 0:
-                        load = (busy / active) * 100
-                    else:
-                        load = 0
-
-                    result["noise"] = noise
-                    result["load"] = round(load, 2)
-
-                    logger.message(
-                        "debug",
-                        f"[{IFACE}] channel info: freq={freq_str}, noise={noise}, load={load:.1f}%",
-                        _EXTRA_(),
-                    )
-            else:
-                # Load 비활성화 시 기본값 설정
-                result["noise"] = -95
-                result["load"] = 0
 
             _LINK_CACHE["mtime_ns"] = mtime_ns
             _LINK_CACHE["value"] = result
@@ -1491,34 +1255,6 @@ def get_link_info_with_load():
         return None
 
 
-def get_link_info():
-    """기존 get_link_info (호환성 유지)"""
-    try:
-        with open(LINK_LOG_FILE, "r") as f:
-            data = json.load(f)
-            link = data["link"]
-            if USE_SIGNAL_AVG and "signal_avg" in link:
-                rssi_raw = link["signal_avg"]
-            else:
-                rssi_raw = link["signal"]
-            result = {
-                "bssid": link["address"].strip().lower(),
-                "freq": int(data["info"]["freq"]),
-                "rssi": int(rssi_raw.replace(" dBm", "")),
-            }
-            return result
-    except Exception as e:
-        return None
-
-
-def load_channel_info():
-    try:
-        with open(LINK_LOG_FILE, "r") as f:
-            data = json.load(f)
-            return data.get("channel_info", {})
-    except Exception as e:
-        print(f"[ERROR] Failed to load channel info from link log: {e}")
-        return {}
 
 
 def get_current_ssid():
@@ -1597,13 +1333,13 @@ def log_scan_candidates(candidates, src):
             f"[{IFACE}] [{src}] roam candidate {i}: "
             f"ts={entry['timestamp']}, ssid={entry['ssid']}, bssid={entry['bssid']}, "
             f"ch={entry['channel']}, freq={entry['freq']}, ld={entry['ld']}, "
-            f"load={entry.get('load', 0):.1f}%, rssi={entry['rssi']}(th={entry['rssi_th']})",
+            f"rssi={entry['rssi']}(th={entry['rssi_th']})",
             _EXTRA_(),
         )
 
 
 def parse_scan_entries(
-    scan_lines, timestamp, channel_info_data=None, allowed_set=None, src="scan", log=True
+    scan_lines, timestamp, allowed_set=None, src="scan", log=True
 ):
     """pipe 포맷 스캔 라인(`NN|ch|rssi|ld|bssid|freq|ssid`) 리스트를 로밍 후보 엔트리로
     변환한다. 파일(get_latest_scan) 경로와 메모리(홈 패시브/액티브 폴백 스캔) 경로가
@@ -1617,19 +1353,6 @@ def parse_scan_entries(
     allowed_set = allowed_set or set()
     entries = []
 
-    # Load 정보 매핑을 위한 사전 준비
-    load_map = {}
-    noise_map = {}
-    if ENABLE_LOAD_BASED_ROAM and channel_info_data:
-        for freq_str, info in channel_info_data.items():
-            noise = info.get("noise", -95)
-            busy = info.get("busy_time_ms", 0)
-            active = info.get("active_time_ms", 1)
-            load = (busy / active) * 100 if active > 0 else 0
-
-            # 채널을 주파수로 변환하여 매핑
-            load_map[freq_str] = round(load, 2)
-            noise_map[freq_str] = noise
 
     for line in scan_lines:
         if re.match(r"^\d{2}\|", line):
@@ -1640,7 +1363,7 @@ def parse_scan_entries(
                     rssi = int(fields[2].strip())
                     ld = int(
                         fields[3].strip()
-                    )  # Load from scan (deprecated, using channel_info)
+                    )  # 포맷상 자리만 유지(항상 0) — 소비처 없음
                     bssid = fields[4].strip().lower()
                     ssid = fields[6].strip()
                     rssi_th = WPA_TH_2G if channel < 36 else WPA_TH_5G
@@ -1651,10 +1374,6 @@ def parse_scan_entries(
 
                     freq_str = str(freq)
 
-                    # Load 정보 추가
-                    ap_load = load_map.get(freq_str, 0)
-                    ap_noise = noise_map.get(freq_str, -95)
-
                     # 후보 필터(아래 if)보다 앞이라 **필터 탈락 항목까지** 남는다 —
                     # "스캔엔 보였는데 왜 후보가 아닌가"(allowed_set/WPA_FREQ 게이트)
                     # 진단의 유일한 근거라 유지한다.
@@ -1662,8 +1381,7 @@ def parse_scan_entries(
                         logger.message(
                             "info",
                             f"[{IFACE}] [{src}] ssid:{ssid}, bssid:{bssid}, ch:{channel}, "
-                            f"freq:{freq}, rssi:{rssi}, th:{rssi_th}, ld:{ld}, "
-                            f"load:{ap_load:.1f}%, noise:{ap_noise}",
+                            f"freq:{freq}, rssi:{rssi}, th:{rssi_th}, ld:{ld}",
                             _EXTRA_(),
                         )
 
@@ -1680,8 +1398,6 @@ def parse_scan_entries(
                                 "rssi": rssi,
                                 "rssi_th": rssi_th,
                                 "ld": ld,
-                                "load": ap_load,
-                                "noise": ap_noise,
                                 "bssid": bssid,
                                 "ssid": ssid,
                             }
@@ -1700,7 +1416,7 @@ def parse_scan_entries(
     return candidates
 
 
-def get_latest_scan(st, channel_info_data=None, allowed_ssids=None, log=True, src="cache"):
+def get_latest_scan(st, allowed_ssids=None, log=True, src="cache"):
     """ap.log(배경 스캔 캐시)의 마지막 시각 블록을 읽어 후보 엔트리 + 그 블록의
     타임스탬프를 반환. 파싱은 parse_scan_entries가 담당(메모리 경로와 공유).
 
@@ -1739,7 +1455,7 @@ def get_latest_scan(st, channel_info_data=None, allowed_ssids=None, log=True, sr
         return [], None
 
     candidates = parse_scan_entries(
-        lines[start_idx:], timestamp, channel_info_data, allowed_set, src=src, log=log
+        lines[start_idx:], timestamp, allowed_set, src=src, log=log
     )
     return candidates, timestamp
 
@@ -1923,7 +1639,7 @@ def reload_roaming_config(iface):
     적용 시 WPA_CONF_MTIME 을 리셋해 같은 사이클 wpa conf 재파싱을 유도(JSON DEFAULT_TH_*
     변경을 실제 판정값 WPA_TH_* 까지 전파). 반환: 적용 수행 여부."""
     global GENERATE_NETWORK_BLOCKS, EXTRA_SSIDS, WPA_CONF_MTIME
-    global ping_pong_preventer, adaptive_interval, cross_ssid_cooldown, trend_tracker
+    global ping_pong_preventer, cross_ssid_cooldown, trend_tracker
     try:
         with open(WIFI_INIT_CONF_JSON, "r") as f:
             new_data = json.load(f)
@@ -1992,12 +1708,6 @@ def reload_roaming_config(iface):
         else:
             trend_tracker.window_size = TREND_WINDOW_SIZE
             trend_tracker.max_age = TREND_HISTORY_MAX_AGE
-    if ENABLE_ADAPTIVE_INTERVAL:
-        if adaptive_interval is None:
-            adaptive_interval = AdaptiveInterval(MIN_CHECK_INTERVAL, MAX_CHECK_INTERVAL)
-        else:
-            adaptive_interval.min_interval = MIN_CHECK_INTERVAL
-            adaptive_interval.max_interval = MAX_CHECK_INTERVAL
     # cross_ssid_cooldown은 의도적으로 갱신만(생성 없음): 별도 enable이 없고 존재가
     # GENERATE_NETWORK_BLOCKS(런타임 전환 금지, 재시작 전용)에 연동되므로
     # 런타임에 None→생성이 필요한 상황 자체가 없다.
@@ -2006,120 +1716,6 @@ def reload_roaming_config(iface):
     WPA_CONF_MTIME = None  # 같은 사이클 wpa conf 재파싱 → 새 DEFAULT_TH_* 로 WPA_TH_* 재산출
     logger.message("notice", f"[{iface}] runtime roaming config reloaded (SIGHUP)", _EXTRA_())
     return True
-
-
-def get_my_ip(iface):
-    try:
-        result = subprocess.run(
-            ["ip", "-4", "addr", "show", iface],
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-        for line in result.stdout.splitlines():
-            if "inet " in line:
-                parts = line.strip().split()
-                for part in parts:
-                    if part.startswith("inet"):
-                        ip = parts[parts.index(part) + 1].split("/")[0]
-                        return ip
-        return None
-    except Exception:
-        return None
-
-
-def get_recent_peers(iface, count=5):
-    peers = []
-    try:
-        result = subprocess.run(
-            ["ip", "neigh", "show", "dev", iface],
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-        for line in result.stdout.splitlines():
-            parts = line.split()
-            if len(parts) >= 1:
-                ip = parts[0]
-                if "." in ip:
-                    peers.append(ip)
-                    if len(peers) >= count:
-                        break
-    except Exception:
-        pass
-    return peers
-
-
-def optimize_post_roam_connectivity(iface):
-    if not ENABLE_POST_ROAM_ARP_OPTIMIZATION:
-        return
-
-    my_ip = get_my_ip(iface)
-    if not my_ip:
-        logger.message(
-            "debug",
-            f"[{iface}] Post-roam optimization skipped: no IP address",
-            _EXTRA_(),
-        )
-        return
-
-    try:
-        logger.message(
-            "info",
-            f"[{iface}] Sending gratuitous ARP ({POST_ROAM_GARP_COUNT} times)",
-            _EXTRA_(),
-        )
-        for i in range(POST_ROAM_GARP_COUNT):
-            subprocess.run(
-                [
-                    "arping",
-                    "-U",
-                    "-c",
-                    "1",
-                    "-w",
-                    str(POST_ROAM_GARP_WAIT),
-                    "-I",
-                    iface,
-                    my_ip,
-                ],
-                capture_output=True,
-                timeout=POST_ROAM_GARP_WAIT + 1,
-            )
-            if i < POST_ROAM_GARP_COUNT - 1:
-                time.sleep(0.1)
-    except Exception as e:
-        logger.message(
-            "debug",
-            f"[{iface}] Gratuitous ARP failed: {e}",
-            _EXTRA_(),
-        )
-
-    if ENABLE_POST_ROAM_PEER_WARMUP:
-        peers = get_recent_peers(iface, POST_ROAM_PEER_COUNT)
-        if peers:
-            logger.message(
-                "info",
-                f"[{iface}] ARP warm-up for {len(peers)} peers",
-                _EXTRA_(),
-            )
-            for peer_ip in peers:
-                try:
-                    subprocess.run(
-                        [
-                            "arping",
-                            "-c",
-                            "1",
-                            "-w",
-                            str(POST_ROAM_PEER_WAIT),
-                            "-I",
-                            iface,
-                            peer_ip,
-                        ],
-                        capture_output=True,
-                        timeout=POST_ROAM_PEER_WAIT + 1,
-                    )
-                except Exception:
-                    pass
 
 
 # ==============================================================================
@@ -2194,8 +1790,6 @@ def roam_to_bssid(from_bssid, to_bssid, channel=None, freq=None, rssi=None):
 
     logger.message("info", f"[{IFACE}] Roam successful (confirmed): {to_bssid}", _EXTRA_())
 
-    optimize_post_roam_connectivity(IFACE)
-
     notify_roam(IFACE, from_bssid, to_bssid,
                 channel=channel, freq=freq, rssi=rssi)
 
@@ -2239,7 +1833,6 @@ def connect_to_ssid(iface, to_ssid, from_bssid, to_bssid):
             logger.message(
                 "info", f"[{IFACE}] Cross-SSID connect successful: {to_ssid}", _EXTRA_()
             )
-            optimize_post_roam_connectivity(IFACE)
             return True
         else:
             logger.message(
@@ -2378,7 +1971,6 @@ def select_network_for_ssid(iface, to_ssid):
                 f"[{iface}] Cross-SSID select_network successful: {to_ssid} (id={nid})",
                 _EXTRA_(),
             )
-            optimize_post_roam_connectivity(iface)
             return True
 
         logger.message(
@@ -2511,22 +2103,6 @@ def check_roam_conditions(station, roam_ap, trend, baseline_rssi=None):
     if rssi_diff < effective_diff_th:
         return (False, f"RSSI diff too small: {rssi_diff}dB < {effective_diff_th}dB")
 
-    # Load 조건
-    if ENABLE_LOAD_BASED_ROAM:
-        current_load = station.get("load", 0)
-        roam_load = roam_ap.get("load", 0)
-
-        # 로밍 대상 AP의 Load가 너무 높으면 제외
-        if roam_load > MAX_ROAM_LOAD:
-            return (False, f"Target AP load too high: {roam_load}% > {MAX_ROAM_LOAD}%")
-
-        # 현재 AP보다 Load가 너무 높으면 제외
-        if roam_load > current_load + LOAD_DIFF_THRESHOLD:
-            return (
-                False,
-                f"Target AP load higher: {roam_load}% > {current_load}% + {LOAD_DIFF_THRESHOLD}%",
-            )
-
     # falling 이면 diff ≥ DIFF_TH(완화 불필요 구간)여도 'Falling trend' 사유를 붙인다 —
     # 종전 reason 체계 유지(사유='추세 활성' 표시이지 '완화 구간 통과' 표시가 아님).
     if is_falling_trend:
@@ -2630,22 +2206,15 @@ def baseline_from_entries(entries, cur_bssid, default_rssi):
 
 def evaluate_candidates(entries, station, trend, cooldown, live_ssid, baseline_rssi):
     """후보 엔트리 중 최적 로밍 대상을 고른다(현재 AP 제외, cross-SSID cooldown 반영).
-    baseline_rssi=현재 AP 비교 기준(홈 패시브 스캔 스케일로 통일). 점수=RSSI diff*10 +
-    Load 개선*2. 반환: (best_ap, best_reason, best_score). 없으면 (None, "", 0).
+    baseline_rssi=현재 AP 비교 기준(홈 패시브 스캔 스케일로 통일). 점수=RSSI diff*10.
+    반환: (best_ap, best_reason, best_score). 없으면 (None, "", 0).
 
     갱신 조건이 `score > best_score`(초기 0)가 아니라 `best_ap is None or ...`인 이유:
     DIFF_TH=0 설정에서 diff=0 후보는 check_roam_conditions 게이트(:2297 `diff < th`)를
     정상 통과하는데 score=diff*10=0 이라 `0 > 0`이 거짓이 되어, 게이트가 허용한 후보가
     선택 단계에서 조용히 탈락했다(로그에는 `Roam candidate ... score=0`으로 찍혀 채택된
     것처럼 보임). 그 결과 DIFF_TH=0이 DIFF_TH=1과 동일하게 동작했다.
-
-    ⚠️ 영향 범위는 DIFF_TH=0 에 국한되지 않는다. ENABLE_LOAD_BASED_ROAM=True 이고
-    DIFF_TH<=3 이면 load 패널티로 score<0 인 첫 후보도 채택된다 — 예: DIFF_TH=2, diff=2,
-    current_load=30, roam_load=49 이면 load 게이트(49 > 30+20 거짓)를 통과하고
-    score = 2*10 + (30-49)*2 = -18 이라 구 코드는 미채택, 신 코드는 채택. "이득 무관"
-    의미에는 부합하지만 종전과 달라지는 지점이라 회귀 테스트로 고정했다
-    (test_low_diff_th_with_load_penalty_also_accepts_negative_score).
-    출하 기본(DIFF_TH=8, LOAD_BASED_ROAM=false)에서는 최소 score 가 80-38=42 라 영향 없음."""
+    출하 기본(DIFF_TH=8)에서는 최소 score 가 80 이라 영향 없음."""
     best_ap, best_reason, best_score = None, "", 0
     for roam_ap in entries:
         if roam_ap["bssid"] == station["bssid"]:
@@ -2665,10 +2234,6 @@ def evaluate_candidates(entries, station, trend, cooldown, live_ssid, baseline_r
         if should_roam:
             rssi_diff = roam_ap["rssi"] - baseline_rssi
             score = rssi_diff * 10
-            if ENABLE_LOAD_BASED_ROAM:
-                current_load = station.get("load", 0)
-                roam_load = roam_ap.get("load", 0)
-                score += (current_load - roam_load) * 2
             if best_ap is None or score > best_score:
                 best_ap = roam_ap
                 best_reason = reason
@@ -2677,7 +2242,6 @@ def evaluate_candidates(entries, station, trend, cooldown, live_ssid, baseline_r
                 "info",
                 f"[{IFACE}] Roam candidate: {roam_ap['bssid']}, "
                 f"rssi={roam_ap['rssi']}dB (diff={rssi_diff}dB), "
-                f"load={roam_ap.get('load', 0):.1f}%, "
                 f"reason={reason}, score={score:.1f}",
                 _EXTRA_(),
             )
@@ -2747,7 +2311,7 @@ def _record_roam_scan_time():
             _SCAN_TIME_WRITE_WARNED = True
 
 
-def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, trend, cooldown):
+def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
     """단계형 스캔으로 최적 로밍 후보를 찾는다.
       0) 교차채널 캐시 **스냅샷**(스캔 전에 먼저 확보 — 아래 이유) + 시계 스텝 감지
       1) 홈채널 스캔(같은 채널 후보 + baseline 통일) — 기본 패시브, home_passive=false 면
@@ -2776,9 +2340,7 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
     clock_stepped = clock_step_detected()
     # log=False: 이 시점엔 캐시를 쓸지 모른다(Stage 1 성공 시 홈채널 필터로 전량 제거되어
     # Stage 2 게이트를 통과 못 함). 실제로 판정에 쓰는 Stage 2 통과 지점에서 남긴다.
-    cache_entries, cache_ts = get_latest_scan(
-        station, channel_info_data, allowed, log=False
-    )
+    cache_entries, cache_ts = get_latest_scan(station, allowed, log=False)
 
     # ── Stage 1: 홈채널 스캔 (기본 패시브, home_passive=false 면 directed 액티브) ──
     # 패시브 스캔이 **현재 AP 외의 우리 허용 SSID 후보를 실제로 봤나**(=홈채널을 로밍
@@ -2810,7 +2372,7 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
             home_covered = True
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             home_entries = parse_scan_entries(
-                home_lines, now_str, channel_info_data, allowed_set, src="scan"
+                home_lines, now_str, allowed_set, src="scan"
             )
             home_scan_ok = any(
                 e.get("bssid") != cur_bssid for e in home_entries
@@ -2927,7 +2489,7 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
         _record_roam_scan_time()
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         active_entries = parse_scan_entries(
-            active_lines, now_str, channel_info_data, allowed_set, src="scan"
+            active_lines, now_str, allowed_set, src="scan"
         )
         baseline_rssi = baseline_from_entries(active_entries, cur_bssid, baseline_rssi)
         best_ap, reason, score = evaluate_candidates(
@@ -2942,7 +2504,7 @@ def staged_scan_best_candidate(station, channel_info_data, allowed, live_ssid, t
 # 개선된 main 함수
 # ==============================================================================
 def main():
-    global trend_tracker, ping_pong_preventer, adaptive_interval, cross_ssid_cooldown
+    global trend_tracker, ping_pong_preventer, cross_ssid_cooldown
 
     # 초기화
     if ENABLE_PREDICTIVE_ROAM:
@@ -2973,20 +2535,6 @@ def main():
         # 항상 False)이라 cooldown 미사용. 인스턴스를 만들지 않아 'enabled' 오인 로그를 피한다.
         cross_ssid_cooldown = None
 
-    if ENABLE_ADAPTIVE_INTERVAL:
-        adaptive_interval = AdaptiveInterval(MIN_CHECK_INTERVAL, MAX_CHECK_INTERVAL)
-        logger.message(
-            "info",
-            f"[{IFACE}] Adaptive interval enabled (min={MIN_CHECK_INTERVAL}s, max={MAX_CHECK_INTERVAL}s)",
-            _EXTRA_(),
-        )
-
-    if ENABLE_LOAD_BASED_ROAM:
-        logger.message(
-            "info",
-            f"[{IFACE}] Load-based roaming enabled (max_load={MAX_ROAM_LOAD}%)",
-            _EXTRA_(),
-        )
 
     # 후보없음 점증 backoff 상태(spec §4). streak=연속 후보없음 tick 수,
     # hint_state=bgscan hint mtime 추적.
@@ -3011,7 +2559,7 @@ def main():
             on_streak_reset(gs)
 
         # Load 정보 포함하여 연결 상태 확인
-        station = get_link_info_with_load()
+        station = get_link_info()
 
         # 결합 추적은 **station 유효성 판정 전에** 한다 — station=None(끊김·link.json stale)
         # 에서 bssid 를 비워야 같은 AP 로의 재결합도 새 결합으로 감지된다(track_association).
@@ -3090,10 +2638,7 @@ def main():
                 # 보고한다 — 실기 로그에서 실제로 관측됐다.
                 gs["suppressed"] += 1
 
-            if ENABLE_ADAPTIVE_INTERVAL and adaptive_interval:
-                interval = adaptive_interval.update(rssi, base_threshold, trend)
-            else:
-                interval = CHECK_INTERVAL
+            interval = CHECK_INTERVAL
 
             interruptible_sleep(interval)
             continue
@@ -3103,24 +2648,18 @@ def main():
             "info",
             f"[{IFACE}] roaming condition: {station['rssi']} < {predictive_threshold} "
             f"(base={base_threshold}, trend={trend_str}) "
-            f"bssid={station['bssid']}, load={station.get('load', 0):.1f}%",
+            f"bssid={station['bssid']}",
             _EXTRA_(),
         )
         set_flag(1, ROAM_CONDITION_FLAG)
 
         # 인터벌 계산 (루프 내 모든 경로에서 공유)
-        if ENABLE_ADAPTIVE_INTERVAL and adaptive_interval:
-            interval = adaptive_interval.update(rssi, base_threshold, trend)
-        else:
-            interval = CHECK_INTERVAL
+        interval = CHECK_INTERVAL
 
         # ── 단계형 스캔으로 로밍 후보 결정 ──
-        # station["ssid"]는 get_link_info_with_load가 link.json info.ssid(실제 연결 SSID)로 채움.
+        # station["ssid"]는 get_link_info가 link.json info.ssid(실제 연결 SSID)로 채움.
         if not station.get("ssid"):
             station["ssid"] = WPA_SSID
-        channel_info_data = (
-            station.get("channel_info") if ENABLE_LOAD_BASED_ROAM else None
-        )
         allowed = get_allowed_ssids(station.get("ssid"))
         # cross-SSID 판정 기준 = 라이브 연결 SSID 단일(T5: base에 WPA_SSID를 넣으면
         # conf 기본 SSID 복귀가 same으로 오판되어 FAIL 루프). 평가/로밍 분기에서 공유.
@@ -3135,7 +2674,7 @@ def main():
             # 스캔에서만 직접 기록한다(홈채널 부분 스캔의 무조건 기록이 bgscan 을 계속
             # 밀어내 Stage 2 캐시를 고사시키던 문제 제거 — _record_roam_scan_time 참조).
             best_ap, best_reason, best_score, scanned = staged_scan_best_candidate(
-                station, channel_info_data, allowed, live_ssid, trend, cross_ssid_cooldown
+                station, allowed, live_ssid, trend, cross_ssid_cooldown
             )
         else:
             # 종전 단일 액티브 스캔 경로(ENABLE_STAGED_SCAN=False 또는 WPA_SSID 부재 시 무회귀).
@@ -3162,7 +2701,7 @@ def main():
             # 되읽는 것이므로 전경 실측("scan")이다. WPA_SSID 부재로 스캔을 건너뛴 경우에만
             # 진짜 배경 캐시("cache")를 읽는다.
             entries, _ts = get_latest_scan(
-                station, channel_info_data, allowed, src="scan" if WPA_SSID else "cache"
+                station, allowed, src="scan" if WPA_SSID else "cache"
             )
             if not entries:
                 backoff, no_candidate_streak = advance_no_candidate_backoff(
@@ -3353,9 +2892,7 @@ if __name__ == "__main__":
         f"[{IFACE}] version:{VERSION}, ssid:{WPA_SSID}, scan_freq:{WPA_FREQ}, "
         f"TH_2G:{WPA_TH_2G}, TH_5G:{WPA_TH_5G}, "
         f"predictive_roam:{ENABLE_PREDICTIVE_ROAM}, "
-        f"load_based_roam:{ENABLE_LOAD_BASED_ROAM}, "
-        f"ping_pong_prevention:{ENABLE_PING_PONG_PREVENTION}, "
-        f"adaptive_interval:{ENABLE_ADAPTIVE_INTERVAL}",
+        f"ping_pong_prevention:{ENABLE_PING_PONG_PREVENTION}",
         _EXTRA_(),
     )
 

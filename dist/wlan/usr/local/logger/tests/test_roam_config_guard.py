@@ -28,21 +28,9 @@ wifi_roam.logger = MagicMock()
 # 모듈 로드 시점의 유효 기본값 — 거부된 값은 여기로 폴백해야 한다.
 DEFAULTS = {
     "SCAN_NO_RESULT_SLEEP": wifi_roam.DEFAULT_SCAN_NO_RESULT_SLEEP,
-    "ROAM_NO_RESULT_MAX_SLEEP": wifi_roam.DEFAULT_ROAM_NO_RESULT_MAX_SLEEP,
     "ROAM_SUCCESS_SLEEP": wifi_roam.DEFAULT_ROAM_SUCCESS_SLEEP,
     # CHECK_INTERVAL 은 전용 DEFAULT_ 상수 없이 :44 에서 직접 정의된다(=2).
     "CHECK_INTERVAL": wifi_roam.CHECK_INTERVAL,
-}
-
-# ADAPTIVE_INTERVAL 블록은 중첩 경로라 별도로 다룬다. AdaptiveInterval(:882) 를 거쳐
-# current_interval = max(min_interval, ADAPTIVE_NEAR_THRESHOLD_INTERVAL)(:926) 으로
-# 합쳐진 뒤 interruptible_sleep 에 들어가므로 0 이면 같은 바쁜 루프가 된다.
-ADAPTIVE_DEFAULTS = {
-    "MIN_CHECK_INTERVAL": wifi_roam.DEFAULT_MIN_CHECK_INTERVAL,
-    "MAX_CHECK_INTERVAL": wifi_roam.DEFAULT_MAX_CHECK_INTERVAL,
-    "ADAPTIVE_NEAR_THRESHOLD_INTERVAL": (
-        wifi_roam.DEFAULT_ADAPTIVE_NEAR_THRESHOLD_INTERVAL
-    ),
 }
 
 # STAGED_SCAN 계열 — 중첩 경로는 _positive_int caster 가, flat 덮어쓰기 경로는
@@ -56,7 +44,7 @@ STAGED_DEFAULTS = {
 @pytest.fixture(autouse=True)
 def _restore_globals():
     """각 테스트가 전역을 오염시키지 않도록 기본값으로 되돌린다."""
-    keys = {**DEFAULTS, **ADAPTIVE_DEFAULTS, **STAGED_DEFAULTS}
+    keys = {**DEFAULTS, **STAGED_DEFAULTS}
     saved = {k: getattr(wifi_roam, k) for k in keys}
     for k, v in keys.items():
         setattr(wifi_roam, k, v)
@@ -89,7 +77,6 @@ def test_non_positive_sleep_rejected(bad, monkeypatch):
     _load(
         {
             "SCAN_NO_RESULT_SLEEP": bad,
-            "ROAM_NO_RESULT_MAX_SLEEP": bad,
             "ROAM_SUCCESS_SLEEP": bad,
             "CHECK_INTERVAL": bad,
         },
@@ -99,32 +86,10 @@ def test_non_positive_sleep_rejected(bad, monkeypatch):
         assert getattr(wifi_roam, key) == default, f"{key} 가 {bad} 로 오염됐다"
 
 
-@pytest.mark.parametrize("bad", [0, -1])
-def test_adaptive_interval_non_positive_rejected(bad, monkeypatch):
-    """ADAPTIVE_INTERVAL 계열도 interval 이라 같은 하한이 필요하다.
-
-    current_interval = max(min_interval, ADAPTIVE_NEAR_THRESHOLD_INTERVAL)(:926) 이므로
-    두 값이 모두 0 이면 interruptible_sleep(0) → 즉시 반환 → 바쁜 루프."""
-    _load(
-        {
-            "ADAPTIVE_INTERVAL": {
-                "enable": True,
-                "min_check_interval": bad,
-                "max_check_interval": bad,
-                "near_threshold_interval": bad,
-            }
-        },
-        monkeypatch,
-    )
-    for key, default in ADAPTIVE_DEFAULTS.items():
-        assert getattr(wifi_roam, key) == default, f"{key} 가 {bad} 로 오염됐다"
-    assert max(wifi_roam.MIN_CHECK_INTERVAL,
-               wifi_roam.ADAPTIVE_NEAR_THRESHOLD_INTERVAL) >= 1
-
 
 def test_non_positive_does_not_produce_zero_backoff(monkeypatch):
     """거부 후 backoff 시퀀스가 0/음수로 떨어지지 않는다(바쁜 루프 회귀 감지)."""
-    _load({"SCAN_NO_RESULT_SLEEP": 0, "ROAM_NO_RESULT_MAX_SLEEP": 0}, monkeypatch)
+    _load({"SCAN_NO_RESULT_SLEEP": 0}, monkeypatch)
     streak = 0
     for _ in range(8):
         backoff, streak = wifi_roam.advance_no_candidate_backoff(streak)
@@ -134,12 +99,21 @@ def test_non_positive_does_not_produce_zero_backoff(monkeypatch):
 def test_valid_values_still_applied(monkeypatch):
     """무회귀: 정상 값은 그대로 반영된다."""
     _load(
-        {"SCAN_NO_RESULT_SLEEP": 4, "ROAM_NO_RESULT_MAX_SLEEP": 40, "CHECK_INTERVAL": 5},
+        {"SCAN_NO_RESULT_SLEEP": 4, "CHECK_INTERVAL": 5},
         monkeypatch,
     )
     assert wifi_roam.SCAN_NO_RESULT_SLEEP == 4
-    assert wifi_roam.ROAM_NO_RESULT_MAX_SLEEP == 40
     assert wifi_roam.CHECK_INTERVAL == 5
+
+
+def test_max_sleep_backdoor_closed(monkeypatch):
+    """ROAM_NO_RESULT_MAX_SLEEP 은 JSON 으로 바꿀 수 없다(감사 D2 — 뒷문 봉쇄 고정).
+
+    과거엔 로더가 .get() 으로 읽어 템플릿·스키마에 없는 키가 몰래 실효됐다.
+    누군가 로드를 되살리면 이 테스트가 먼저 깨진다."""
+    _load({"ROAM_NO_RESULT_MAX_SLEEP": 40}, monkeypatch)
+    assert wifi_roam.ROAM_NO_RESULT_MAX_SLEEP == \
+        wifi_roam.DEFAULT_ROAM_NO_RESULT_MAX_SLEEP
 
 
 def test_cache_fresh_sec_zero_rejected_via_nested_caster(monkeypatch):
