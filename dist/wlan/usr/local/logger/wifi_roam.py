@@ -145,7 +145,6 @@ DEFAULT_ROAM_NO_RESULT_MAX_SLEEP = 30  # 후보없음 backoff 상한(초). 의�
 DEFAULT_ROAM_CROSS_FAIL_RETRY_COUNT = 2  # cross-SSID 전환 실패 시 cooldown 없이 즉시 재시도 허용 횟수(초과 시 backoff)
 DEFAULT_ROAM_NO_RESULT_FAST_COUNT = 3  # 후보 미발견 시 처음 N회는 backoff 없이 빠른 주기(SCAN_NO_RESULT_SLEEP) 유지 후 지수 backoff
 
-# Post-Roam ARP 최적화 기본값
 
 # 현재 설정값 (Current Configuration - will be loaded from JSON)
 ENABLE_PREDICTIVE_ROAM = DEFAULT_ENABLE_PREDICTIVE_ROAM
@@ -329,7 +328,6 @@ def roam_hint_touched(state):
         return True
     return False
 
-# Post-Roam ARP 최적화 설정
 
 
 # ==============================================================================

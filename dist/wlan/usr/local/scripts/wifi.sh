@@ -785,21 +785,19 @@ show_info() {
                 roam_diff=$(echo "$iface_json" | jq -r '.roaming.DIFF_TH // 8')
                 roam_check=$(echo "$iface_json" | jq -r '.roaming.CHECK_INTERVAL // 5')
                 pred_en=$(echo "$iface_json" | jq -r 'if .roaming.PREDICTIVE_ROAM.enable == null then true else .roaming.PREDICTIVE_ROAM.enable end')
-                load_en=$(echo "$iface_json" | jq -r '.roaming.LOAD_BASED_ROAM.enable // false')
                 pingpong_en=$(echo "$iface_json" | jq -r 'if .roaming.PING_PONG_PREVENTION.enable == null then true else .roaming.PING_PONG_PREVENTION.enable end')
-                adaptive_en=$(echo "$iface_json" | jq -r 'if .roaming.ADAPTIVE_INTERVAL.enable == null then true else .roaming.ADAPTIVE_INTERVAL.enable end')
 
                 if [ "$only_iface" = "all" ]; then
                     echo "  [${iface}]"
                     echo "    enabled=$enabled  Frequency=$freq  net_rx=$net_rx"
                     echo "    bgscan_interval=${bgscan_interval}s"
                     echo "    roaming: TH_2G=${roam_th_2g} TH_5G=${roam_th_5g} DIFF=${roam_diff} CHECK=${roam_check}s"
-                    echo "    features: predictive=$pred_en load_based=$load_en pingpong=$pingpong_en adaptive=$adaptive_en"
+                    echo "    features: predictive=$pred_en pingpong=$pingpong_en"
                 else
                     echo "  enabled=$enabled  Frequency=$freq  net_rx=$net_rx"
                     echo "  bgscan_interval=${bgscan_interval}s"
                     echo "  roaming: TH_2G=${roam_th_2g} TH_5G=${roam_th_5g} DIFF=${roam_diff} CHECK=${roam_check}s"
-                    echo "  features: predictive=$pred_en load_based=$load_en pingpong=$pingpong_en adaptive=$adaptive_en"
+                    echo "  features: predictive=$pred_en pingpong=$pingpong_en"
                 fi
             else
                 echo "  [${iface}] (no JSON config)"

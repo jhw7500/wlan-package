@@ -32,7 +32,7 @@ strings 포함) → 테스트 커버리지 grep → 시맨틱 판정(메모리·
 | iface 하드웨어(STANDARD·CAL·TXPWR·Frequency·net_rx·tx_work·rate_adapt·thermal_mgmt·mgmt_hex_dump)(12) | wifi_init.sh 부팅 적용 | **유지** |
 | bgscan(6) | wifi_bgscan.py, wifi_apply_enabled.sh | **유지** + `emit_roam_hint` 주의 표기(아래) |
 | roaming 코어(TH·DIFF·CHECK_INTERVAL·sleep·cross·fast·staged·gate)(20) | wifi_roam.py, wifi.sh CLI | **유지+테스트 고정**(이미 양호) |
-| **실험 4종(22)** | wifi_roam.py (게이트 안) | **결정 필요: 제거 vs experimental 표기** ↓ |
+| **실험 4종(22)** | wifi_roam.py (게이트 안) + **wifi.sh status 표시**(감사 당시 누락 — PR #147 리뷰가 발견, jq fallback 이 true 라 키 제거 후 거짓 표시되던 것 함께 수정) | **결정 필요: 제거 vs experimental 표기** ↓ |
 | PING_PONG_PREVENTION(4) | wifi_roam.py | 유지 — detection_time 은 환경 의존(시험환경 차단 0건), 현장 측정 후 조정 |
 | GOOD_SIGNAL_RESET_GATE(3) | wifi_roam.py, wifi.sh gate CLI | 유지 — 기본 off 는 experimental 아닌 **현장 A/B 대기**(#138 실기 검증 완료) |
 | periodic_roam(3) + passive_roam.py | wifi_periodic_roam.sh, wifi.sh roam CLI | **통합 검토** — 두 번째 로밍 엔진. 수동 CLI 의존이라 즉시 제거 불가 |
