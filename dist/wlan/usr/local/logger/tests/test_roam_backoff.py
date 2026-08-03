@@ -103,17 +103,18 @@ def test_advance_stays_at_cap_regardless_of_elapsed_time(monkeypatch):
         backoff, streak = advance_no_candidate_backoff(streak)
         seq.append(backoff)
         clock[0] += backoff  # 데몬이 backoff 만큼 자며 시간이 흐른다
-    assert seq[:7] == [3, 3, 3, 6, 12, 24, 30]
-    assert set(seq[6:]) == {30}  # 상한 도달 후 1071초 흘러도 전부 30
-    assert streak == 3 + wifi_roam._no_result_max_level() - 1  # 진동 없이 7 고정
+    assert seq[:13] == [3, 3, 3, 6, 6, 6, 12, 12, 12, 24, 24, 24, 30]
+    assert set(seq[12:]) == {30}  # 상한 도달 후 시간이 흘러도 전부 30
+    # 상한 도달 지점(fast*(max_level-1)+1 = 13)에서 진동 없이 고정
+    assert streak == 3 * (wifi_roam._no_result_max_level() - 1) + 1
 
 # --- ROAM_NO_RESULT_FAST_COUNT: 처음 N회 빠른 주기 후 backoff ---
 
 def test_fast_count_keeps_start_for_first_n(monkeypatch):
-    """fast_count=3 → 처음 3회는 시작값(3s) 유지, 4회째부터 지수 backoff."""
+    """fast_count=3 → 레벨당 3회 반복하는 플래토 곡선."""
     _set_sleep(monkeypatch, 3, 30)
-    # streak 1..7, fast_count=3: 3,3,3,6,12,24,30
-    assert [compute_no_result_backoff(s, 3) for s in range(1, 8)] == [3, 3, 3, 6, 12, 24, 30]
+    assert [compute_no_result_backoff(s, 3) for s in range(1, 14)] == \
+        [3, 3, 3, 6, 6, 6, 12, 12, 12, 24, 24, 24, 30]
 
 def test_fast_count_one_matches_legacy(monkeypatch):
     """fast_count=1(기본) → 기존 지수 곡선과 완전 동일(무회귀·cross-SSID 보존)."""
@@ -123,20 +124,20 @@ def test_fast_count_one_matches_legacy(monkeypatch):
     assert [compute_no_result_backoff(s) for s in range(1, 7)] == [3, 6, 12, 24, 30, 30]
 
 def test_fast_count_custom_start_cap(monkeypatch):
-    """시작값/상한 커스텀 + fast_count=2: 5,5,10,20,40,40."""
+    """시작값/상한 커스텀 + fast_count=2: 레벨당 2회 플래토."""
     _set_sleep(monkeypatch, 5, 40)
-    assert [compute_no_result_backoff(s, 2) for s in range(1, 7)] == [5, 5, 10, 20, 40, 40]
+    assert [compute_no_result_backoff(s, 2) for s in range(1, 10)] == \
+        [5, 5, 10, 10, 20, 20, 40, 40, 40]
 
 def test_advance_uses_global_fast_count(monkeypatch):
-    """advance는 전역 ROAM_NO_RESULT_FAST_COUNT(기본 3)를 사용 — 처음 3회 빠른 주기 후 backoff,
-    상한(fast+max_level-1=7)에서 cap."""
+    """advance는 전역 ROAM_NO_RESULT_FAST_COUNT(기본 3)를 사용 — 레벨당 3회 플래토."""
     _set_sleep(monkeypatch, 3, 30, fast=3)
     streak, seq = 0, []
     for _ in range(8):
         backoff, streak = advance_no_candidate_backoff(streak)
         seq.append(backoff)
-    assert seq == [3, 3, 3, 6, 12, 24, 30, 30]
-    assert streak == 3 + wifi_roam._no_result_max_level() - 1  # 7에서 clamp
+    assert seq == [3, 3, 3, 6, 6, 6, 12, 12]
+    assert streak == 8  # cap(13) 이전이라 tick 수 그대로
 
 # --- roam hint mtime consumer ---
 
