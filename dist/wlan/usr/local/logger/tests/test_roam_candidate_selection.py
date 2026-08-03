@@ -136,3 +136,137 @@ def test_diff_th_zero_falling_still_rejects_worse_ap(monkeypatch):
         0, [_ap("bb:bb:bb:bb:bb:bb", -70)], monkeypatch=monkeypatch, trend=FALLING
     )
     assert best is None
+
+
+# ── 핑퐁 억제 대상 후보 제외 (스캔→선정→차단 헛돌이 제거) ──
+# 억제 중 대상이 선정되면 roam_to_bssid 차단 후 interval 만 자고 재스캔해
+# CHECK_INTERVAL 주기로 낭비 스캔이 돌았다. 선정 단계에서 제외하면 (다른
+# 후보가 없는 한) no-candidate backoff 가 주기를 압축하고, 제3의 AP 는
+# 즉시 선택된다.
+
+
+def _blocking_preventer(pairs):
+    """지정한 (from,to) 쌍만 차단하는 스텁."""
+    p = MagicMock()
+    p.would_block.side_effect = (
+        lambda f, to: "round-trip" if (f, to) in pairs else None
+    )
+    return p
+
+
+def test_pingpong_suppressed_target_excluded(monkeypatch):
+    """[핵심] 억제 중인 유일 후보는 탈락 → 후보없음(backoff 경로)."""
+    monkeypatch.setattr(wifi_roam, "ENABLE_PING_PONG_PREVENTION", True)
+    monkeypatch.setattr(
+        wifi_roam, "ping_pong_preventer",
+        _blocking_preventer({(SELF_BSSID, "bb:bb:bb:bb:bb:bb")}),
+    )
+    best, _reason, _score = _eval(8, [_ap("bb:bb:bb:bb:bb:bb", -52)],
+                                  monkeypatch=monkeypatch)
+    assert best is None, "억제 중 대상이 선정되면 차단 루프가 CHECK_INTERVAL 로 헛돈다"
+
+
+def test_pingpong_third_ap_still_selected(monkeypatch):
+    """억제는 쌍 단위 — 제3의 AP 는 (RSSI 가 더 낮아도) 즉시 선택된다."""
+    monkeypatch.setattr(wifi_roam, "ENABLE_PING_PONG_PREVENTION", True)
+    monkeypatch.setattr(
+        wifi_roam, "ping_pong_preventer",
+        _blocking_preventer({(SELF_BSSID, "bb:bb:bb:bb:bb:bb")}),
+    )
+    best, _reason, _score = _eval(
+        8,
+        [_ap("bb:bb:bb:bb:bb:bb", -50), _ap("cc:cc:cc:cc:cc:cc", -52)],
+        monkeypatch=monkeypatch,
+    )
+    assert best is not None and best["bssid"] == "cc:cc:cc:cc:cc:cc"
+
+
+def test_pingpong_disabled_no_exclusion(monkeypatch):
+    """ENABLE_PING_PONG_PREVENTION=False 면 제외 없음(무회귀)."""
+    monkeypatch.setattr(wifi_roam, "ENABLE_PING_PONG_PREVENTION", False)
+    monkeypatch.setattr(
+        wifi_roam, "ping_pong_preventer",
+        _blocking_preventer({(SELF_BSSID, "bb:bb:bb:bb:bb:bb")}),
+    )
+    best, _reason, _score = _eval(8, [_ap("bb:bb:bb:bb:bb:bb", -52)],
+                                  monkeypatch=monkeypatch)
+    assert best is not None
+
+
+def test_pingpong_preventer_none_no_exclusion(monkeypatch):
+    """preventer 미생성(기능 off 기동)이면 제외 없음(무회귀)."""
+    monkeypatch.setattr(wifi_roam, "ENABLE_PING_PONG_PREVENTION", True)
+    monkeypatch.setattr(wifi_roam, "ping_pong_preventer", None)
+    best, _reason, _score = _eval(8, [_ap("bb:bb:bb:bb:bb:bb", -52)],
+                                  monkeypatch=monkeypatch)
+    assert best is not None
+
+
+# ── would_block ↔ is_ping_pong 동등성 + 무로그 계약 ──
+
+
+def _ap_x(bssid, rssi, ssid):
+    return {"bssid": bssid, "rssi": rssi, "ssid": ssid}
+
+
+def test_pingpong_cross_ssid_suppressed_at_ssid_scope(monkeypatch):
+    """[P1 회귀] 모드 A cross 대상은 SSID 통째 제외 — select_network 는 SSID 만
+    고정하므로 약한 BSSID 를 후보로 남기면 supplicant 가 억제된 강한 BSSID 로
+    재결합해 억제를 우회한다."""
+    monkeypatch.setattr(wifi_roam, "ENABLE_PING_PONG_PREVENTION", True)
+    monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", True)  # 모드 A
+    monkeypatch.setattr(
+        wifi_roam, "ping_pong_preventer",
+        _blocking_preventer({(SELF_BSSID, "bb:bb:bb:bb:bb:bb")}),  # 강한 쪽만 차단
+    )
+    monkeypatch.setattr(wifi_roam, "DIFF_TH", 8)
+    entries = [
+        _ap_x("bb:bb:bb:bb:bb:bb", -50, "EXTRA"),   # 억제된 강한 BSSID
+        _ap_x("dd:dd:dd:dd:dd:dd", -52, "EXTRA"),   # 같은 SSID 의 약한 BSSID
+    ]
+    st = {"bssid": SELF_BSSID, "rssi": -63, "ssid": "TEST"}
+    best, _r, _s = wifi_roam.evaluate_candidates(entries, st, STABLE, None, "TEST", -63)
+    assert best is None, "약한 BSSID 가 남으면 select_network 가 억제 BSSID 로 우회한다"
+
+
+def test_pingpong_cross_other_ssid_unaffected(monkeypatch):
+    """SSID 단위 제외는 해당 SSID 한정 — 무관한 cross SSID 는 즉시 선택."""
+    monkeypatch.setattr(wifi_roam, "ENABLE_PING_PONG_PREVENTION", True)
+    monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", True)
+    monkeypatch.setattr(
+        wifi_roam, "ping_pong_preventer",
+        _blocking_preventer({(SELF_BSSID, "bb:bb:bb:bb:bb:bb")}),
+    )
+    monkeypatch.setattr(wifi_roam, "DIFF_TH", 8)
+    entries = [
+        _ap_x("bb:bb:bb:bb:bb:bb", -50, "EXTRA"),
+        _ap_x("ee:ee:ee:ee:ee:ee", -52, "OTHER"),
+    ]
+    st = {"bssid": SELF_BSSID, "rssi": -63, "ssid": "TEST"}
+    best, _r, _s = wifi_roam.evaluate_candidates(entries, st, STABLE, None, "TEST", -63)
+    assert best is not None and best["bssid"] == "ee:ee:ee:ee:ee:ee"
+
+
+def test_would_block_too_many_roams_is_quiet(monkeypatch):
+    """무로그 계약을 too-many-roams 분기까지 — 이 분기에 로그가 생겨도 잡는다."""
+    pp = wifi_roam.PingPongPreventer(window_seconds=20, max_roams=1)
+    pp.add_roam("aa:aa:aa:aa:aa:aa", "bb:bb:bb:bb:bb:bb")
+    wifi_roam.logger.reset_mock()
+    assert pp.would_block("cc:cc:cc:cc:cc:cc", "dd:dd:dd:dd:dd:dd") == "too-many-roams"
+    wifi_roam.logger.message.assert_not_called()
+
+
+def test_would_block_matches_is_ping_pong_and_is_quiet(monkeypatch):
+    """두 판정은 같은 규칙(위임 구조)이고, would_block 은 로그를 남기지 않는다 —
+    후보마다 매 tick 호출되는 자리라 warn 반복을 막는 것이 분리 이유다."""
+    monkeypatch.setattr(wifi_roam, "PING_PONG_DETECTION_TIME", 5)
+    pp = wifi_roam.PingPongPreventer(window_seconds=20, max_roams=3)
+    pp.add_roam("aa:aa:aa:aa:aa:aa", "bb:bb:bb:bb:bb:bb")
+
+    wifi_roam.logger.reset_mock()
+    assert pp.would_block("bb:bb:bb:bb:bb:bb", "aa:aa:aa:aa:aa:aa") == "round-trip"
+    assert pp.would_block("bb:bb:bb:bb:bb:bb", "cc:cc:cc:cc:cc:cc") is None
+    wifi_roam.logger.message.assert_not_called()
+
+    assert pp.is_ping_pong("bb:bb:bb:bb:bb:bb", "aa:aa:aa:aa:aa:aa") is True
+    wifi_roam.logger.message.assert_called()  # 최종 방어선은 경고를 남긴다
