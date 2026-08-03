@@ -770,40 +770,45 @@ class PingPongPreventer:
             ]
         )
 
-    def is_ping_pong(self, from_bssid, to_bssid):
-        """
-        Ping-pong 로밍 확인
-        - 최근 로밍 횟수 초과 여부
-        - 왕복 로밍 (A→B→A) 확인
-        """
+    def would_block(self, from_bssid, to_bssid):
+        """로그 없는 차단 판정 — 후보 제외(evaluate_candidates)용.
+
+        is_ping_pong 과 동일 규칙이되 경고를 남기지 않는다. 후보마다 매 tick
+        호출되는 자리라 로그를 남기면 억제 구간 내내 warn 이 반복된다.
+        반환: None(허용) / "too-many-roams" / "round-trip"."""
         now = time.time()
 
         # 최근 로밍 횟수 확인
-        recent_roams = [
-            (t, f, t_b)
-            for t, f, t_b in self.roam_history
-            if now - t < self.window_seconds
-        ]
-
-        if len(recent_roams) >= self.max_roams:
-            logger.message(
-                "warn",
-                f"[{IFACE}] Too many roams ({len(recent_roams)}) in {self.window_seconds}s",
-                _EXTRA_(),
-            )
-            return True
+        recent = [t for t, _f, _tb in self.roam_history
+                  if now - t < self.window_seconds]
+        if len(recent) >= self.max_roams:
+            return "too-many-roams"
 
         # 반복 로밍 확인 (A→B→A)
         for t, f, t_b in reversed(list(self.roam_history)):
             if f == to_bssid and t_b == from_bssid:
                 if now - t < PING_PONG_DETECTION_TIME:
-                    logger.message(
-                        "warn",
-                        f"[{IFACE}] Ping-pong detected: {from_bssid} ↔ {to_bssid}",
-                        _EXTRA_(),
-                    )
-                    return True
+                    return "round-trip"
 
+        return None
+
+    def is_ping_pong(self, from_bssid, to_bssid):
+        """would_block + 경고 로그 — 로밍 실행 직전의 최종 방어선용."""
+        reason = self.would_block(from_bssid, to_bssid)
+        if reason == "too-many-roams":
+            logger.message(
+                "warn",
+                f"[{IFACE}] Too many roams ({self.get_roam_count()}) in {self.window_seconds}s",
+                _EXTRA_(),
+            )
+            return True
+        if reason == "round-trip":
+            logger.message(
+                "warn",
+                f"[{IFACE}] Ping-pong detected: {from_bssid} ↔ {to_bssid}",
+                _EXTRA_(),
+            )
+            return True
         return False
 
     def get_roam_count(self):
@@ -2226,6 +2231,22 @@ def evaluate_candidates(entries, station, trend, cooldown, live_ssid, baseline_r
             and should_cross_connect(ap_ssid, live_ssid)
             and cooldown.is_cooling(ap_ssid)
         ):
+            continue
+        # 핑퐁 억제 중인 대상은 선정 단계에서 제외. 종전엔 선정 후
+        # roam_to_bssid 진입부에서야 차단돼 "스캔→선정→차단→interval 대기"가
+        # CHECK_INTERVAL 주기로 헛돌았다 — 제외하면 (다른 후보가 없는 한)
+        # no-candidate backoff 가 스캔 주기를 자연히 압축하고, 제3의 AP 는
+        # 여전히 즉시 선택된다. roam_to_bssid 의 검사는 최종 방어선으로 유지.
+        if (
+            ENABLE_PING_PONG_PREVENTION
+            and ping_pong_preventer
+            and ping_pong_preventer.would_block(station["bssid"], roam_ap["bssid"])
+        ):
+            logger.message(
+                "info",
+                f"[{IFACE}] Roam skipped: {roam_ap['bssid']}, ping-pong suppressed",
+                _EXTRA_(),
+            )
             continue
 
         should_roam, reason = check_roam_conditions(
