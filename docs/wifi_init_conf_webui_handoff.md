@@ -386,7 +386,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `DEFAULT_TH_2G` | 2.4GHz 로밍 임계값 | int | `-75` | 음수 dBm | yes | daemon-restart | 이 값 이하이면 로밍 시도 (JSON 단일 소스, conf `#!TH_2G=` 마커 미사용) |
 | `DEFAULT_TH_5G` | 5GHz 로밍 임계값 | int | `-75` | 음수 dBm | yes | daemon-restart | 이 값 이하이면 로밍 시도 (JSON 단일 소스, conf `#!TH_5G=` 마커 미사용) |
 | `DIFF_TH` | 후보 AP 최소 RSSI 차 | int | `8` | >=0 dB | yes | daemon-restart | 클수록 보수적 |
-| `CHECK_INTERVAL` | 로밍 체크 주기 | int | `mlan0=2 / mlan1=3` | >=1 초 | yes | daemon-restart | 고정 체크 주기(ADAPTIVE_INTERVAL 은 감사 D1로 제거됨) |
+| `CHECK_INTERVAL` | 로밍 체크 주기 | int | `mlan0=1 / mlan1=3` | >=1 초 | yes | daemon-restart | 고정 체크 주기(ADAPTIVE_INTERVAL 은 감사 D1로 제거됨) |
 | `extra_ssids` | 추가 로밍 후보 SSID | array | `[]` | 문자열 배열(같은 psk/key_mgmt) | caution | daemon-restart | 모드B(generate_network_blocks=false)면 강제 무시 |
 | `generate_network_blocks` | 모드 결정자 | bool | `false` | true\|false | caution | daemon-restart | false=모드B(단일 블록), true=모드A(다중+select_network) |
 | `ROAM_CROSS_FAIL_RETRY_COUNT` | cross-SSID 재시도 횟수 | int | `2` | >=0 (모드A 전용) | yes | daemon-restart | 초과 시 지수 backoff로 후보 제외 |
@@ -409,7 +409,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `STAGED_SCAN.home_passive` | Stage1 홈채널 패시브 | bool | `true` | true\|false | yes | runtime | false=directed 액티브(홈채널 hidden 타깃용, 가이드 §2) |
 | `STAGED_SCAN.cache_fresh_sec` | Stage2 캐시 신선도 | int | `70` | >=1 초 | yes | runtime | ap.log 캐시 블록 유효 시간. `bgscan.interval`+여유 유지(가이드 §5 함정 #1) |
 | `STAGED_SCAN.self_induced_tail_sec` | 자기유발 블록 제외 여유 | int | `10` | >=1 초 | yes | runtime | 내 로밍 스캔이 남긴 ap.log 블록을 Stage2 판정에서 제외하는 시간 여유 |
-| `GOOD_SIGNAL_RESET_GATE.enable` | good-signal 리셋 게이트 | bool | `false` | true\|false | yes | runtime | 정체 시 backoff streak 유지로 스캔 폭증 차단(PR #138, 현장 A/B 대기). CLI `wifi <n> roam gate` |
+| `GOOD_SIGNAL_RESET_GATE.enable` | good-signal 리셋 게이트 | bool | `true` | true\|false | yes | runtime | 정체 시 backoff streak 유지로 스캔 폭증 차단(PR #138, 현장 A/B 대기). CLI `wifi <n> roam gate` |
 | `GOOD_SIGNAL_RESET_GATE.delta_db` | 게이트 이동 판정 임계 | int | `2` | >=1 dB | yes | runtime | 직전 리셋 시점 대비 \|Δrssi\| 가 이 값 이상이면 리셋 허용 |
 | `GOOD_SIGNAL_RESET_GATE.post_roam_grace_sec` | 결합 후 유예 | int | `40` | >=1 초 | yes | runtime | attach ramp(결합 직후 RSSI 하강)를 이동으로 오독하지 않는 유예 |
 
