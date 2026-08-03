@@ -127,8 +127,8 @@ def fmt_cell(v, quote_str=False):
 
 def resolve(tmpl, candidates, key):
     """후보 prefix 들에 key 를 붙여 템플릿에서 값을 찾는다.
-    mlanN 은 mlan0/mlan1 로 확장해 dict {iface: 값} 반환, 일반 경로는 단일 값.
-    미해결이면 None."""
+    반환: (vals, mlanN-정규화 경로 튜플) — vals 는 mlanN 확장 시 {iface: 값},
+    일반 경로는 {"_": 값}. 미해결이면 (None, None)."""
     def get(path):
         node = tmpl
         for k in path:
@@ -139,7 +139,7 @@ def resolve(tmpl, candidates, key):
 
     for prefix in candidates:
         parts = (prefix.split(".") if prefix else []) + key.split(".")
-        if parts and parts[0] == "mlanN" or "mlanN" in parts:
+        if "mlanN" in parts:
             vals = {}
             for iface in IFACES:
                 v = get(tuple(iface if p == "mlanN" else p for p in parts))
@@ -148,12 +148,12 @@ def resolve(tmpl, candidates, key):
                     break
                 vals[iface] = v
             if vals is not None:
-                return vals
+                return vals, tuple(parts)
         else:
             v = get(tuple(parts))
             if v is not KeyError:
-                return {"_": v}
-    return None
+                return {"_": v}, tuple(parts)
+    return None, None
 
 
 def desired_cell(vals):
@@ -186,12 +186,20 @@ def header_candidates(header_text, tops):
     return cands
 
 
+# handoff §3 에 행이 없어도 되는 템플릿 leaf (mlanN 정규화 경로 문자열).
+# 항목을 늘릴 땐 왜 WebUI 인수인계에서 빼는지 사유를 함께 적을 것.
+HANDOFF_COVERAGE_ALLOWLIST = set()
+
+
 def handoff_sync(tmpl, lines, write):
-    """§3 표의 기본값 셀 동기화. (변경행 리스트, 미해결행 리스트) 반환."""
+    """§3 표의 기본값 셀 동기화.
+    (변경행, 미해결행, 커버리지 누락 leaf) 반환 — 누락 = 템플릿에 있는데
+    §3 표 어디에도 행이 없는 키(WebUI 구현자가 볼 수 없는 설정)."""
     tops = set(tmpl.keys())
     in_scope = False
     cands, h3_cands = [""], [""]
     changed, unresolved = [], []
+    covered = set()
     row_re = re.compile(r"^\|\s*`([^`]+)`\s*\|")
     for i, line in enumerate(lines):
         if line.startswith("## "):
@@ -216,10 +224,11 @@ def handoff_sync(tmpl, lines, write):
         cells = line.split("|")
         if len(cells) < 6:  # | 키 | 라벨 | 타입 | 기본값 | ... 최소 형태
             continue
-        vals = resolve(tmpl, cands, re.sub(r"^mlan[01]\b", "mlanN", key))
+        vals, rpath = resolve(tmpl, cands, re.sub(r"\bmlan[01]\b", "mlanN", key))
         if vals is None:
             unresolved.append((i + 1, key))
             continue
+        covered.add(".".join(rpath))
         want = desired_cell(vals)
         cur = cells[4].strip()
         if cur != want:
@@ -227,7 +236,15 @@ def handoff_sync(tmpl, lines, write):
             if write:
                 cells[4] = f" {want} "
                 lines[i] = "|".join(cells)
-    return changed, unresolved
+
+    # 역방향 커버리지: 템플릿 leaf(mlanN 정규화) 전수가 §3 에 행으로 존재해야 한다.
+    # 없으면 WebUI 구현자가 그 설정의 존재 자체를 모른다(리뷰 P2 — 실측 12키 누락).
+    all_paths = set()
+    for p, _v in template_leaves(tmpl):
+        norm = tuple("mlanN" if c in IFACES else c for c in p)
+        all_paths.add(".".join(norm))
+    uncovered = sorted(all_paths - covered - HANDOFF_COVERAGE_ALLOWLIST)
+    return changed, unresolved, uncovered
 
 
 # ── main ─────────────────────────────────────────────────────────────────────
@@ -244,7 +261,9 @@ def main():
 
     drift, missing = schema_report(tmpl, schema)
     handoff_lines = HANDOFF.read_text().split("\n")
-    h_changed, h_unresolved = handoff_sync(tmpl, handoff_lines, write=args.write)
+    h_changed, h_unresolved, h_uncovered = handoff_sync(
+        tmpl, handoff_lines, write=args.write
+    )
 
     fail = False
     if missing:
@@ -265,6 +284,12 @@ def main():
               f"{len(h_unresolved)}건")
         for ln, key in h_unresolved:
             print(f"    :{ln} `{key}`")
+    if h_uncovered:
+        fail = True
+        print(f"[handoff] §3 에 행이 없는 템플릿 키 — 수동 추가 필요: "
+              f"{len(h_uncovered)}건")
+        for p in h_uncovered:
+            print(f"    {p}")
 
     if args.write:
         if missing:
