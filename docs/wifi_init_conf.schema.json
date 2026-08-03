@@ -366,10 +366,9 @@
               "x-consumer": "wifi_init.sh"
             },
             "local_hairpin": {
-              "type": "string",
               "default": "0",
-              "enum": ["", "0", "1"],
-              "description": "engine=moal 전용 — 로컬발 TX(dst==클론 MAC) 유선 divert + ARP tee/inject(BD↔유선 peer 통신). 빈값=드라이버 기본",
+              "enum": ["", "0", "1", 0, 1],
+              "description": "engine=moal 전용 — 로컬발 TX(dst==클론 MAC) 유선 divert + ARP tee/inject(BD↔유선 peer 통신). 빈값=드라이버 기본. CLI(br profile apply)가 숫자로 기록하므로 문자열·숫자 표기 모두 유효",
               "x-ui-editable": "caution",
               "x-apply-timing": "reboot",
               "x-consumer": "wifi_init.sh"
