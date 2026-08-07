@@ -156,6 +156,25 @@ def get_last_dmesg_line_count():
     result = subprocess.run(["dmesg"], stdout=subprocess.PIPE, text=True)
     return len(result.stdout.strip().splitlines())
 
+def classify_scan_line(line, interface):
+    """dmesg 스캔 라인 분류 — "own_start"|"other_start"|"completed"|None.
+
+    온타겟 실측(2026-08-07, moal): START 는 `wlan: mlan0 START SCAN` 으로 iface 가
+    찍히지만 COMPLETED 는 `wlan: SCAN COMPLETED: scanned AP count=N` 으로 iface 가
+    없다(드라이버 버전 통제 전제). 그래서 타 iface START 개입 후의 COMPLETED 는
+    소유가 모호하다 — 소비/폐기 판단은 호출측(scan_event)의 상태가 담당한다.
+    """
+    if "wlan:" not in line:
+        return None
+    if f"wlan: {interface} START SCAN" in line:
+        return "own_start"
+    if " START SCAN" in line:
+        return "other_start"
+    if "wlan: SCAN COMPLETED" in line:
+        return "completed"
+    return None
+
+
 def scan_event(interface, on_event_callback):
     last_line_count = get_last_dmesg_line_count()
 
@@ -167,16 +186,16 @@ def scan_event(interface, on_event_callback):
             if current_line <= last_line_count:
                 continue
 
-            if "wlan:" not in line:
-                continue
-
-            #print(line.strip())
-
-            if f"wlan: {interface} START SCAN" in line:
+            kind = classify_scan_line(line, interface)
+            if kind == "own_start":
                 scan_started = True
-
-            if scan_started and "wlan: SCAN COMPLETED" in line:
-                #logger.message("info", f"{interface} SCAN COMPLETED", _EXTRA_())
+            elif kind == "other_start" and scan_started:
+                # dmesg 는 단일 스트림이고 COMPLETED 에 iface 가 없어, 자기 START 후
+                # 타 iface START 가 끼면 다음 COMPLETED 의 소유가 모호하다 — 버린다
+                # (다음 자기 스캔에서 자연 복구, 배경 캐시 1회 미갱신은 무해).
+                logger.message("info", f"[{interface}] other-iface scan interleaved — dropping ambiguous COMPLETED", _EXTRA_())
+                scan_started = False
+            elif kind == "completed" and scan_started:
                 on_event_callback(interface)
                 scan_started = False
 
