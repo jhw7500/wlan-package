@@ -58,7 +58,7 @@ STATE=""
 PRE_STATE=""
 BUS_LINK=""
 REBOOT_F=0
-BGSCAN_GUARD_TS=0   # bgscan 가드 최종 점검 시각(300s 주기, mlan0 전용)
+BGSCAN_GUARD_TS=0   # bgscan 가드 최종 점검 시각(300s 주기, mlan0/mlan1)
 
 cleanup() {
     logger -p local0.info "[$tag:$LINENO] [$IFACE] stop"
@@ -230,13 +230,14 @@ while true; do
         STATE=$(get_state)
         TIMESTAMP=$(date +%s)
 
-        # bgscan 가드(경고-only, 300s 주기, mlan0 전용): wpa_supplicant 내부 bgscan 활성은
+        # bgscan 가드(경고-only, 300s 주기, mlan0/mlan1): wpa_supplicant 내부 bgscan 활성은
         # 자율 로밍으로 Roaming(0x04) notify(3훅)를 우회한다 — 운영 전제 감시
         # (wlan-opc docs/implementation/design-roam-indication-notify.md §8.3/§8.4).
         # 전 network id 순회(모드A extra 블록 포함). 한계: 전역 `wpa_cli set bgscan`은 ctrl
         # 조회 불가(hostap 2.10 전역 getter 없음) → wpa.log의 모듈 초기화 로그로 보조 탐지.
-        # mlan1은 스코프 제외 결정(DBDC 도입 시 재평가)이라 검사하지 않는다.
-        if [[ "$IFACE" == "mlan0" ]] && (( TIMESTAMP - BGSCAN_GUARD_TS >= 300 )); then
+        # DBDC 재평가 완료(2026-08-07): checker@mlan1 인스턴스도 자기 iface conf/wpa.log를
+        # 검사한다(conf·로그 경로는 $IFACE 파생). mlan0 단독 출하에선 checker@mlan1 비활성.
+        if [[ "$IFACE" == "mlan0" || "$IFACE" == "mlan1" ]] && (( TIMESTAMP - BGSCAN_GUARD_TS >= 300 )); then
             BGSCAN_GUARD_TS=$TIMESTAMP
             while read -r _nid _; do
                 [[ "$_nid" =~ ^[0-9]+$ ]] || continue
