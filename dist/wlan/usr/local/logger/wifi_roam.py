@@ -29,6 +29,7 @@ SCAN_TIMESTAMP_RE = re.compile(
     r"|(?P<plain>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}))$"
 )
 MAX_SCAN_SSIDS = 10  # nl80211 max # scan SSIDs (NXP mlan 실측). 초과 시 iw가 -EINVAL로 스캔 전체 실패.
+IW_SCAN_FRESH_SLACK_MS = 1000  # iw scan 경과시간에 더할 last-seen 오차/동시스캔 여유
 WPA_SSID = None
 WPA_FREQ = None
 WPA_TH_2G = None
@@ -1050,7 +1051,9 @@ def _iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
     logger.message("info", f"[{IFACE}] {cmd}", _EXTRA_())
 
     scanned_ok = False
+    scan_elapsed_ms = 0
     for attempt in range(3):
+        attempt_started = time.monotonic()
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         except subprocess.TimeoutExpired:
@@ -1061,6 +1064,7 @@ def _iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
             return None
         if r.returncode == 0:
             scanned_ok = True
+            scan_elapsed_ms = max(0, int((time.monotonic() - attempt_started) * 1000))
             break
         # -EBUSY(다른 스캔 진행 중) → 잠깐 후 재시도. 그 외는 중단.
         if "busy" in (r.stderr or "").lower() and attempt < 2:
@@ -1077,6 +1081,22 @@ def _iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
     if not scanned_ok:
         logger.message(
             "err", f"[{IFACE}] iw scan failed (all attempts) — skip roam decision", _EXTRA_()
+        )
+        return None
+
+    # `iw scan` stdout도 커널 BSS cache 전체를 담지만 각 항목에 `last seen` age가 있다.
+    # 이번 scan 실행시간(+짧은 여유) 이내에 관측된 BSSID만 membership으로 사용한다.
+    # 이후 wpa_cli scan_results에서 이 집합만 남기면, supplicant에 오래 잔존한 BSS를
+    # 방금 측정한 것처럼 현재 시각으로 덮어써 로밍하는 오류를 막으면서 roam 대상이
+    # supplicant BSS table에 존재한다는 기존 계약도 유지된다.
+    max_seen_age_ms = scan_elapsed_ms + IW_SCAN_FRESH_SLACK_MS
+    fresh_bssids = fresh_bssids_from_iw_scan(r.stdout, max_seen_age_ms)
+    if not fresh_bssids:
+        logger.message(
+            "warn",
+            f"[{IFACE}] iw scan returned no BSS refreshed within "
+            f"{max_seen_age_ms}ms — skip roam decision",
+            _EXTRA_(),
         )
         return None
 
@@ -1098,15 +1118,45 @@ def _iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
         )
         return None
 
-    return scan_results_to_ap_lines(sr.stdout) or None
+    return scan_results_to_ap_lines(sr.stdout, fresh_bssids=fresh_bssids) or None
 
 
-def scan_results_to_ap_lines(scan_results_stdout):
+def fresh_bssids_from_iw_scan(iw_scan_stdout, max_age_ms):
+    """`iw scan` dump에서 이번 scan 동안 갱신된 BSSID 집합을 추출한다.
+
+    `iw`는 오래된 kernel BSS cache도 함께 출력하므로 BSS 블록의 `last seen: N ms ago`를
+    scan 실행시간+여유와 비교한다. age가 없거나 형식이 깨진 블록은 fail-closed로 제외한다.
+    NXP iw 출력은 associated BSS를 `aa:bb:...(on mlan0)`처럼 붙여 쓰므로 MAC 17자만 캡처한다.
+    """
+    try:
+        max_age = max(0, int(max_age_ms))
+    except (TypeError, ValueError):
+        return set()
+
+    fresh = set()
+    current_bssid = None
+    for line in (iw_scan_stdout or "").splitlines():
+        if line.startswith("BSS "):
+            bss = re.match(r"^BSS\s+(([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2})", line)
+            current_bssid = bss.group(1).lower() if bss else None
+            continue
+        seen = re.match(r"^\s*last seen:\s*(\d+)\s*ms ago\s*$", line)
+        if current_bssid and seen and int(seen.group(1)) <= max_age:
+            fresh.add(current_bssid)
+    return fresh
+
+
+def scan_results_to_ap_lines(scan_results_stdout, fresh_bssids=None):
     """`wpa_cli scan_results`(탭 구분: bssid/freq/signal/flags/ssid, 첫 줄 헤더)를
     get_latest_scan이 파싱하는 pipe 포맷(`NN|channel|rssi|ld|bssid|freq|ssid`, 7필드)으로
-    변환. 헤더/형식불량/BSSID아님/미지 freq는 skip. ld=0 고정(iw 출력에 없는 필드)."""
+    변환. fresh_bssids가 주어지면 이번 iw scan에서 갱신된 BSSID만 허용한다.
+    헤더/형식불량/BSSID아님/미지 freq는 skip. ld=0 고정(iw 출력에 없는 필드)."""
     out = []
     idx = 0
+    fresh = (
+        {str(b).lower() for b in fresh_bssids}
+        if fresh_bssids is not None else None
+    )
     for line in (scan_results_stdout or "").splitlines():
         parts = line.split("\t")
         if len(parts) < 5:
@@ -1114,6 +1164,8 @@ def scan_results_to_ap_lines(scan_results_stdout):
         bssid = parts[0].strip().lower()
         if not re.match(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$", bssid):
             continue  # 헤더('bssid / frequency / ...') 등 skip
+        if fresh is not None and bssid not in fresh:
+            continue
         try:
             freq = int(parts[1].strip())
             rssi = int(float(parts[2].strip()))

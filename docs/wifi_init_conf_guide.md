@@ -642,6 +642,8 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 >
 > `ap.log`/bgscan RSSI는 최대 bgscan interval만큼 과거 값일 수 있으므로 **최종 로밍 후보 판정에는 사용하지 않는다.** bgscan은 평상시 BSS 테이블 충전과 roam backoff hint 용도로 유지된다.
 >
+> **active/passive scan 결과 freshness**: `iw scan`과 이어지는 `wpa_cli scan_results`는 둘 다 누적 BSS cache를 출력할 수 있다. 로밍 데몬은 `iw` 출력의 `last seen` age가 이번 scan 실행시간+1초 이내인 BSSID 집합을 만든 뒤, `scan_results`에서도 그 BSSID만 사용한다. freshness를 증명할 수 없으면 누적 테이블로 판단하지 않고 해당 tick을 실패 처리한다.
+>
 > **RSSI baseline 통일**: 로밍 판정의 `DIFF_TH` 비교에서 현재 AP RSSI는 위 스캔 결과에서 **자기 BSSID 항목을 찾아** 사용한다. 종전에는 현재 AP는 `iw station dump`의 `signal_avg`(평활값), 후보는 `wpa_cli scan_results`(순간값)로 **서로 다른 소스를 직접 뺐기 때문에** diff에 편향이 있었다. 스캔에서 자기 BSSID를 못 찾은 경우에만 `signal_avg`로 폴백한다.
 >
 > ⚠️ `wifi_roam.py`의 판정 결과는 메모리에서 처리하고 후보 내역은 syslog에 남긴다. `wifi_logger_scan`이 scan-completed 이벤트에 반응해 `ap.log` 블록을 남길 수 있지만, 이 블록은 자동 로밍 의사결정 입력이 아니다.

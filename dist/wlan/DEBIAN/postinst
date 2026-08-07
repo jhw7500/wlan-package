@@ -388,10 +388,18 @@ cleanup_retired_roaming_keys() {
       .mlan1.roaming.ADAPTIVE_INTERVAL,
       .mlan1.roaming.POST_ROAM_ARP_OPTIMIZATION
     )
-    | .mlan0.roaming.STAGED_SCAN |= with_entries(select(.key | startswith("_comment") | not))
-    | .mlan0.roaming.GOOD_SIGNAL_RESET_GATE |= with_entries(select(.key | startswith("_comment") | not))
-    | .mlan1.roaming.STAGED_SCAN |= with_entries(select(.key | startswith("_comment") | not))
-    | .mlan1.roaming.GOOD_SIGNAL_RESET_GATE |= with_entries(select(.key | startswith("_comment") | not))' \
+    | if (.mlan0.roaming.STAGED_SCAN | type) == "object" then
+        .mlan0.roaming.STAGED_SCAN |= with_entries(select(.key | startswith("_comment") | not))
+      else . end
+    | if (.mlan0.roaming.GOOD_SIGNAL_RESET_GATE | type) == "object" then
+        .mlan0.roaming.GOOD_SIGNAL_RESET_GATE |= with_entries(select(.key | startswith("_comment") | not))
+      else . end
+    | if (.mlan1.roaming.STAGED_SCAN | type) == "object" then
+        .mlan1.roaming.STAGED_SCAN |= with_entries(select(.key | startswith("_comment") | not))
+      else . end
+    | if (.mlan1.roaming.GOOD_SIGNAL_RESET_GATE | type) == "object" then
+        .mlan1.roaming.GOOD_SIGNAL_RESET_GATE |= with_entries(select(.key | startswith("_comment") | not))
+      else . end' \
     "$active" > "$tmp"; then
     chmod 0644 "$tmp"
     chown root:root "$tmp" 2>/dev/null || true

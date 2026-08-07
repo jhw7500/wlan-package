@@ -47,6 +47,8 @@ iw scan freq <scan_freq 전체> ssid <allowed>
 
 현재 AP와 후보 AP를 같은 시점/scan source로 비교한다. `ap.log`/bgscan cache RSSI는 최대 bgscan interval만큼 과거 값일 수 있어 최종 결정에는 사용하지 않는다.
 
+`iw scan`과 `wpa_cli scan_results` 자체도 누적 BSS cache를 포함할 수 있으므로, 단순히 scan 명령 성공 후 모든 행에 현재 시각을 붙이지 않는다. `iw` 결과의 `last seen`이 **이번 scan 실행시간+1초 이내**인 BSSID만 추출하고, supplicant `scan_results`를 그 집합으로 교차 필터한다. age 정보가 없으면 fail-closed로 후보 판정을 건너뛴다.
+
 #### 단일 freq passive 이후 active 재확인 스킵 조건 — AND 3개
 
 ```
