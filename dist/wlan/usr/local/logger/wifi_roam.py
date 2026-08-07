@@ -20,8 +20,19 @@ IFACE = "mlan0"
 LINK_LOG_FILE = f"/var/log/cantops/json/{IFACE}/link.json"
 SCAN_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/ap.log"
 WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
-ROAM_CONDITION_FLAG = "/tmp/roam_condition"
-LAST_SCAN_TIME_FILE = "/tmp/last_roam_scan_time"
+def roam_state_paths(iface):
+    """iface별 roam 상태 파일 경로(조건 플래그, 마지막 roam 스캔 시각) 규칙.
+
+    wifi_bgscan.roam_state_paths 와 정확히 동일해야 하는 reader/writer 쌍 규칙 —
+    두 데몬은 서로 import 없이 경로 규칙으로만 결합하므로
+    tests/test_roam_state_per_iface.py 가 양쪽 일치를 고정한다."""
+    return (
+        f"/run/wifi/roam_condition_{iface}",
+        f"/run/wifi/last_roam_scan_{iface}",
+    )
+
+# 모듈 로드 시 mlan0 기본 경로 — __main__ 이 실제 IFACE 로 재대입(ROAM_HINT_FILE 전례).
+ROAM_CONDITION_FLAG, LAST_SCAN_TIME_FILE = roam_state_paths(IFACE)
 WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
 ROAM_HINT_FILE = f"/tmp/wifi_roam_hint_{IFACE}"  # bgscan이 새 후보 AP 발견 시 touch (단방향 신호)
 SCAN_TIMESTAMP_RE = re.compile(
@@ -931,17 +942,27 @@ FREQ_TO_CHAN = {
 }
 
 
-def set_flag(on, path=ROAM_CONDITION_FLAG):
-    with open(path, "w") as f:
+def set_flag(on, path=None):
+    # 기본 인자는 def 시점 바인딩 → None 센티널로 호출 시점 전역(iface별 재대입) 해석.
+    if path is None:
+        path = ROAM_CONDITION_FLAG
+    # 같은 디렉터리 tmp 파일 + os.replace 원자 교체 — reader(wifi_bgscan)의 torn read 제거.
+    # /run/wifi 는 tmpfs 라 부팅마다 사라짐 → 쓰기 시 디렉터리 보장.
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, "w") as f:
         if on is True or on == 1:
             f.write("1")
         elif on is False or on == 0:
             f.write("0")
         else:
             f.write("")
+    os.replace(tmp_path, path)
 
 
-def get_flag(path=ROAM_CONDITION_FLAG) -> bool:
+def get_flag(path=None) -> bool:
+    if path is None:
+        path = ROAM_CONDITION_FLAG  # 호출 시점 전역 — __main__ iface별 재대입 반영
     try:
         with open(path, "r") as f:
             content = f.read().strip()
@@ -2260,11 +2281,16 @@ def _record_roam_scan_time():
     (scan_freq 전 채널을 실제로 훑은) 스캔에서만 기록해야 한다. 다중채널 direct active와
     단일채널 home scan이 이에 해당한다.
     실패해도 동작은 계속하되(신호 파일 — 다음 동등 스캔에서 재기록) 프로세스당 1회
-    warn 을 남긴다 — /tmp 쓰기 불가는 중대 시스템 상태라 침묵이 부적절(플러드 방지 1회)."""
+    warn 을 남긴다 — /run/wifi 쓰기 불가는 중대 시스템 상태라 침묵이 부적절(플러드 방지 1회)."""
     global _SCAN_TIME_WRITE_WARNED
     try:
-        with open(LAST_SCAN_TIME_FILE, "w") as f:
+        # 같은 디렉터리 tmp + os.replace 원자 교체 — bgscan float() 파싱의 torn read 제거.
+        # /run/wifi 는 tmpfs 라 부팅마다 사라짐 → 쓰기 시 디렉터리 보장.
+        os.makedirs(os.path.dirname(LAST_SCAN_TIME_FILE) or ".", exist_ok=True)
+        tmp_path = f"{LAST_SCAN_TIME_FILE}.tmp"
+        with open(tmp_path, "w") as f:
             f.write(str(time.time()))
+        os.replace(tmp_path, LAST_SCAN_TIME_FILE)
     except Exception as e:
         if not _SCAN_TIME_WRITE_WARNED:
             logger.message(
@@ -2822,6 +2848,9 @@ if __name__ == "__main__":
     # ROAM_HINT_FILE은 모듈 로드 시 기본 IFACE(mlan0)로 평가됨 → IFACE 갱신 직후 재대입해야
     # bgscan이 touch하는 /tmp/wifi_roam_hint_<iface> 와 경로가 일치(mlan1 불일치 방지).
     ROAM_HINT_FILE = f"/tmp/wifi_roam_hint_{IFACE}"
+    # roam 상태 파일도 동일 이유로 iface별 재대입 — DBDC 시 두 roam 데몬의 플래그
+    # 교차 기록(last-writer-wins)과 bgscan 교차 정지를 차단한다.
+    ROAM_CONDITION_FLAG, LAST_SCAN_TIME_FILE = roam_state_paths(IFACE)
 
     # JSON 설정 로드 (IFACE별 설정)
     load_roaming_config(IFACE)
