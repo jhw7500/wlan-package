@@ -1876,8 +1876,9 @@ def _enable_network_all(iface):
 
 def select_network_for_ssid(iface, to_ssid):
     """모드 A(다중 블록) cross-SSID 전환: conf ssid를 교체하지 않고 메모리 상태만 전환.
-    list_networks로 to_ssid의 network id 조회 → select_network <id> → wpa_state=COMPLETED
-    폴링(최대 ~3s) → enable_network all(fallback 후보 복원). conf 파일 불변(save_config 미호출).
+    list_networks로 to_ssid의 network id 조회 → select_network <id>(응답 "OK" 게이트)
+    → COMPLETED@target 폴링(wpa_state·ssid·id 대조, 최대 ~3s) → enable_network all
+    (fallback 후보 복원). conf 파일 불변(save_config 미호출).
     id 조회 실패/타임아웃/예외 시 False 반환(절대 ssid 교체 안 함, 다음 tick 재평가).
     enable_network all은 실패 경로에서도(폴링 중 timeout/예외 포함) 호출해 fallback 블록을 복원한다."""
     # selected=True 이후 경로(select_network 성공)에서 예외가 나면 다른 블록이 disabled로
@@ -1928,10 +1929,26 @@ def select_network_for_ssid(iface, to_ssid):
             # select_network은 다른 블록을 disable시키므로 실패해도 후보 복원 필요
             _enable_network_all(iface)
             return False
+        # 수락 게이트: wpa_cli는 "FAIL" 응답에도 exit 0을 주므로(roam_to_bssid와 동일 규약)
+        # returncode가 아니라 응답 텍스트로 '명령 수락(OK)' 여부를 판정한다. FAIL이면
+        # (stale id 등) supplicant가 다른 블록을 disable하기 전에 반환하므로 후보 복원
+        # 불필요 — 폴링에 진입하지 않고 즉시 실패로 본다.
+        reply = (sel.stdout or "").strip()
+        if reply.split("\n", 1)[0].strip() != "OK":
+            detail = reply or (sel.stderr or "").strip() or f"rc={sel.returncode}"
+            logger.message(
+                "err",
+                f"[{iface}] select_network rejected by supplicant (id={nid}): {detail}",
+                _EXTRA_(),
+            )
+            return False
         # 이 시점부터 다른 블록이 disabled 상태 → 어떤 경로로 나가든 복원 책임 발생
         selected = True
 
-        # wpa_state=COMPLETED 폴링 (최대 ~3s: 0.5s × 6회)
+        # COMPLETED@target 폴링 (최대 ~3s: 0.5s × 6회). wpa_state만으로는 전환 직전의
+        # 구 AP 결합(COMPLETED 잔존)을 첫 폴에서 성공으로 오판하므로 ssid=/id=까지 목표
+        # 블록과 대조한다. status의 ssid=는 list_networks와 동일 인코딩(wpa_ssid_txt)이라
+        # id 조회에 정확 일치했던 to_ssid 표현을 그대로 비교해도 안전하다.
         completed = False
         for _ in range(6):
             stt = subprocess.run(
@@ -1940,12 +1957,15 @@ def select_network_for_ssid(iface, to_ssid):
                 text=True,
                 timeout=10,
             )
-            state = None
+            state = cur_ssid = cur_id = None
             for ln in stt.stdout.splitlines():
                 if ln.startswith("wpa_state="):
                     state = ln.split("=", 1)[1].strip()
-                    break
-            if state == "COMPLETED":
+                elif ln.startswith("ssid="):
+                    cur_ssid = ln.split("=", 1)[1].strip()
+                elif ln.startswith("id="):
+                    cur_id = ln.split("=", 1)[1].strip()
+            if state == "COMPLETED" and cur_ssid == to_ssid and cur_id == nid:
                 completed = True
                 break
             time.sleep(0.5)
@@ -1963,7 +1983,7 @@ def select_network_for_ssid(iface, to_ssid):
 
         logger.message(
             "err",
-            f"[{iface}] select_network: wpa_state not COMPLETED for {to_ssid} "
+            f"[{iface}] select_network: not COMPLETED@target for {to_ssid} "
             f"(id={nid}), candidates restored, retry next tick",
             _EXTRA_(),
         )
