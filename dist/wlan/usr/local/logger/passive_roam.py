@@ -4,6 +4,8 @@ import os
 import re
 import sys
 import subprocess
+import time
+from datetime import datetime
 
 from roam_notify import notify_roam, get_associated_bssid, confirm_roam
 
@@ -15,6 +17,9 @@ SCAN_TIMESTAMP_RE = re.compile(
     r"^(?:\[(?P<bracketed>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]"
     r"|(?P<plain>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}))$"
 )
+# ap.log 마지막 블록의 허용 age 상한(bgscan 기본 주기 60s 의 2.5배). scan 로거가 죽으면
+# 마지막 블록이 무기한 재사용되므로, 이보다 오래된 블록은 stale 로 거부한다(설정 노브 아님).
+SCAN_BLOCK_MAX_AGE_SEC = 150
 
 
 def read_current_bssid(link_json_path=LINK_JSON):
@@ -50,7 +55,7 @@ def load_extra_ssids(iface, conf_path=WIFI_INIT_CONF_JSON):
     return []
 
 
-def parse_last_scan_block(scan_log_path=SCAN_LOG):
+def parse_last_scan_block(scan_log_path=SCAN_LOG, max_age_sec=SCAN_BLOCK_MAX_AGE_SEC):
     """Parse the last scan block from ap.log"""
     if not os.path.exists(scan_log_path):
         return []
@@ -63,14 +68,29 @@ def parse_last_scan_block(scan_log_path=SCAN_LOG):
 
     # Find the last timestamp header (legacy [timestamp] and current timestamp).
     start_idx = None
+    ts_match = None
     for i in range(len(lines) - 1, -1, -1):
         line = lines[i].strip()
-        if SCAN_TIMESTAMP_RE.fullmatch(line):
+        ts_match = SCAN_TIMESTAMP_RE.fullmatch(line)
+        if ts_match:
             start_idx = i
             break
 
     if start_idx is None:
         return []
+
+    # stale 가드: 블록 timestamp 가 상한보다 오래됐으면 거부 — 죽은 scan 로거의 옛 데이터로
+    # 로밍하는 것을 막는다. strptime 불가(포맷 불명)면 age 판정 불가 — 종전 동작(수용) 유지.
+    ts_str = ts_match.group("bracketed") or ts_match.group("plain")
+    try:
+        block_ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").timestamp()
+    except ValueError:
+        block_ts = None
+    if block_ts is not None:
+        age_sec = time.time() - block_ts
+        if age_sec > max_age_sec:
+            print(f"scan data stale ({int(age_sec)}s old > {max_age_sec}s limit) — run a scan first")
+            return []
 
     block_lines = lines[start_idx + 1:]
 

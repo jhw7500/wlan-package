@@ -702,7 +702,9 @@ if __name__ == "__main__":
             time.sleep(1)
     if not _locked:
         logger.message("warning", f"[{IFACE}] another wifi_logger_stat already running — exit", _EXTRA_())
-        sys.exit(0)
+        # exit 3 = 중복 실행(flock-loss). systemd 유닛의 RestartPreventExitStatus=3 이 이
+        # 종료를 재시작하지 않게 해 재시작 폭주를 막는다(이미 다른 인스턴스가 생산 중).
+        sys.exit(3)
 
     load_logger_config(IFACE)
 

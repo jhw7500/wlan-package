@@ -1,0 +1,31 @@
+[Unit]
+Description=WiFi Stat Logger for %i (supervised — produces stat.log)
+# stat.log(링크/트래픽 통계)를 생산하는 wifi_logger_stat.py 가 기존엔 wifi_logger_start.sh
+# 의 & 백그라운드 자식으로 떠 systemd 감독 밖에 있었고, 런타임에 죽으면 재시작되지 않아
+# 통계 로그가 조용히 멈췄다. Type=simple + Restart=always 로 systemd 가 직접 감독·재시작해
+# 단일 실패에도 자동 복구한다.
+BindsTo=sys-subsystem-net-devices-%i.device
+Requires=sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-%i.device wifi_init.service
+# wifi_logger@%i / wifi_init 재시작·정지에 생명주기 연동(stop/restart 전파).
+# wifi_logger@%i 의 Wants= 로 pull-in 되므로 [Install] 은 두지 않는다(엄격한 자식 유닛,
+# 별도 systemctl enable 불필요 — 이중 활성화/순서 모호성 제거).
+PartOf=wifi_init.service wifi_logger@%i.service
+# 무선 iface(mlan0/mlan1) 전용 — wifi_logger@eth0 의 Wants= pull-in 은 조건 불충족으로
+# 스킵된다(종전 wifi_logger_start.sh 의 iface 검증과 동일 의미).
+ConditionPathIsDirectory=/sys/class/net/%i/wireless
+# 재시작 rate-limit 무제한: 기본 제한(5회/10s)이면 연속 크래시 시 systemd 가 포기해
+# 영구 미기동이 된다. (#118 wifi_logger_link 감독화와 동일 원리)
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/bin/python3 /usr/local/logger/wifi_logger_stat.py %i
+Restart=always
+RestartSec=3
+# flock-loss(중복 실행 감지, exit 3): 이미 다른 인스턴스가 로그를 생산 중이므로 정상
+# 종료로 분류(SuccessExitStatus)하고 재시작하지 않는다(RestartPreventExitStatus).
+# → 재시작 폭주 방지 + failed 상태 오탐(모니터링 노이즈) 방지. (wifi_logger_link@ 와 동일)
+SuccessExitStatus=3
+RestartPreventExitStatus=3
+User=root
