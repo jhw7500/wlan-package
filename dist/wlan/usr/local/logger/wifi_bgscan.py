@@ -49,20 +49,9 @@ def handle_sigterm(signum, frame):
 def cleanup():
     pass
 
-def set_flag(on: bool, path=None):
-    # get_flag 와 동일한 None 센티널 — 기본 인자는 def 시점 바인딩이라 __main__ 의
-    # iface별 재대입이 반영되지 않는다. 현재 미호출이지만, 향후 기본 호출이 추가될 때
-    # 조용히 mlan0 경로에 기록하는 함정을 남기지 않는다(#157 리뷰).
-    if path is None:
-        path = ROAM_CONDITION_FLAG
-    with open(path, "w") as f:
-        if on == 1:
-            f.write("1")
-        elif on == 0:
-            f.write("0")
-        else:
-            f.write("")  # 빈 파일은 OFF 상태
-
+# bgscan 은 roam_condition 플래그의 reader 전용 — writer(set_flag)는 wifi_roam 에만
+# 존재한다(원자 쓰기 포함). 종전의 미호출 set_flag 는 def 시점 바인딩·비원자 쓰기
+# 함정만 남겨 제거했다(#157 리뷰 — 호출이 필요해지면 wifi_roam 구현을 따를 것).
 def get_flag(path=None) -> bool:
     # 기본 인자는 def 시점 바인딩이라 __main__ 의 iface별 재대입이 반영되지 않는다
     # → None 센티널로 호출 시점 전역을 읽는다(mlan1 인스턴스의 mlan0 플래그 오독 방지).
