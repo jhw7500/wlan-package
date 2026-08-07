@@ -246,9 +246,16 @@ while true; do
                     logger -p local0.warning "[$tag:$LINENO] [$IFACE] network $_nid bgscan=$_bg active — autonomous roaming bypasses Roaming(0x04) notify (design §8.4)"
                 fi
             done < <(wpa_cli -i "$IFACE" list_networks 2>/dev/null | tail -n +2)
-            if grep -q "bgscan: Initialized module" "/var/log/cantops/wpa/$IFACE/wpa.log" 2>/dev/null; then
-                logger -p local0.warning "[$tag:$LINENO] [$IFACE] wpa.log: bgscan module initialized — runtime global 'set bgscan' suspected (ctrl-undetectable, design §8.3)"
+            # 보조 탐지는 현재 supplicant 실행(InvocationID)의 journal 로 한정 —
+            # wpa.log 는 회전 전까지 누적이라 구 릴리스가 남긴 'Initialized module'
+            # 라인이 conf 정리(postinst) 후에도 300s 마다 오경고를 만든다(#159 리뷰).
+            # 업그레이드 후 재시작 전의 supplicant 는 메모리에 bgscan 모듈이 살아
+            # 있으므로 현재 실행 journal 에 그 라인이 있고, 여전히 경고된다(정당).
+            _inv=$(systemctl show -p InvocationID --value "wpa_supplicant@${IFACE}" 2>/dev/null)
+            if [[ -n "$_inv" ]] && journalctl -q _SYSTEMD_INVOCATION_ID="$_inv" 2>/dev/null | grep -q "bgscan: Initialized module"; then
+                logger -p local0.warning "[$tag:$LINENO] [$IFACE] journal: bgscan module initialized — runtime global 'set bgscan' suspected (ctrl-undetectable, design §8.3)"
             fi
+            unset _inv
         fi
 
         if [[ "$STATE" == "DISCONNECTED" || "$STATE" == "SCANNING" || "$STATE" == "down" ]]; then
