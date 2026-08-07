@@ -13,8 +13,21 @@ from datetime import datetime
 from sUTILS import Logger, _EXTRA_
 
 LOG_DIR = "/var/log/cantops/scan"
-ROAM_CONDITION_FLAG = "/tmp/roam_condition"
-LAST_SCAN_TIME_FILE = "/tmp/last_roam_scan_time"
+
+def roam_state_paths(iface):
+    """iface별 roam 상태 파일 경로(조건 플래그, 마지막 roam 스캔 시각) 규칙.
+
+    wifi_roam.roam_state_paths 와 정확히 동일해야 하는 reader/writer 쌍 규칙 —
+    두 데몬은 서로 import 없이 경로 규칙으로만 결합하므로
+    tests/test_roam_state_per_iface.py 가 양쪽 일치를 고정한다."""
+    return (
+        f"/run/wifi/roam_condition_{iface}",
+        f"/run/wifi/last_roam_scan_{iface}",
+    )
+
+# 모듈 로드 시 mlan0 기본 경로로 평가 — __main__ 이 실제 IFACE 로 재대입한다
+# (iface 미구분 전역 파일이면 DBDC 시 mlan0 roam 조건이 mlan1 bgscan 을 정지시킴).
+ROAM_CONDITION_FLAG, LAST_SCAN_TIME_FILE = roam_state_paths("mlan0")
 WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
 ROAM_HINT_DIR = "/tmp"  # roam backoff hint 파일 디렉터리 (wifi_roam.roam_hint_touched 가 소비)
 WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
@@ -45,7 +58,11 @@ def set_flag(on: bool, path=ROAM_CONDITION_FLAG):
         else:
             f.write("")  # 빈 파일은 OFF 상태
 
-def get_flag(path=ROAM_CONDITION_FLAG) -> bool:
+def get_flag(path=None) -> bool:
+    # 기본 인자는 def 시점 바인딩이라 __main__ 의 iface별 재대입이 반영되지 않는다
+    # → None 센티널로 호출 시점 전역을 읽는다(mlan1 인스턴스의 mlan0 플래그 오독 방지).
+    if path is None:
+        path = ROAM_CONDITION_FLAG
     try:
         with open(path, "r") as f:
             content = f.read().strip()
@@ -355,6 +372,9 @@ if __name__ == "__main__":
         IFACE = sys.argv[1]
 
     WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-{IFACE}.conf"
+    # roam 상태 파일 iface별 재대입 — 모듈 상수는 로드 시 mlan0 기본으로 평가됨
+    # (wifi_roam ROAM_HINT_FILE 전례와 동일한 이유).
+    ROAM_CONDITION_FLAG, LAST_SCAN_TIME_FILE = roam_state_paths(IFACE)
     #logger.message("info", f"[{IFACE}] version : {VERSION}", _EXTRA_())
 
     if IFACE != "mlan0" and IFACE != "mlan1" :
