@@ -156,29 +156,63 @@ def get_last_dmesg_line_count():
     result = subprocess.run(["dmesg"], stdout=subprocess.PIPE, text=True)
     return len(result.stdout.strip().splitlines())
 
-def scan_event(interface, on_event_callback):
+def classify_scan_line(line, interface):
+    """dmesg 스캔 라인 분류 — "own_start"|"other_start"|"completed"|None.
+
+    온타겟 실측(2026-08-07, moal): START 는 `wlan: mlan0 START SCAN` 으로 iface 가
+    찍히지만 COMPLETED 는 `wlan: SCAN COMPLETED: scanned AP count=N` 으로 iface 가
+    없다(드라이버 버전 통제 전제). 그래서 타 iface START 개입 후의 COMPLETED 는
+    소유가 모호하다 — 소비/폐기 판단은 호출측(scan_event)의 상태가 담당한다.
+    """
+    if "wlan:" not in line:
+        return None
+    # own_start 패턴이 other_start(" START SCAN")보다 구체적이므로 반드시 먼저
+    # 검사한다 — 순서를 바꾸면 자기 START 가 other_start 로 오분류된다.
+    if f"wlan: {interface} START SCAN" in line:
+        return "own_start"
+    if " START SCAN" in line:
+        return "other_start"
+    if "wlan: SCAN COMPLETED" in line:
+        return "completed"
+    return None
+
+
+# 타 iface START 후 이 시간(초) 내의 COMPLETED 는 소유 모호로 폐기한다.
+# 실측 스캔 소요 ~0.3s·bgscan 주기 60s 라 넉넉하고, COMPLETED 라인 유실로
+# 타 START 기록만 남아도 폐기 고착이 이 창 길이로 한정된다.
+AMBIGUOUS_SCAN_WINDOW_S = 30
+
+
+def scan_event(interface, on_event_callback, _clock=time.monotonic):
     last_line_count = get_last_dmesg_line_count()
 
     with subprocess.Popen(["dmesg", "--follow"], stdout=subprocess.PIPE, text=True, bufsize=1) as dmesg_proc:
         scan_started = False
+        last_other_start = None  # 최근 타 iface START 시각(_clock 기준)
         current_line = 0
         for line in dmesg_proc.stdout:
             current_line += 1
             if current_line <= last_line_count:
                 continue
 
-            if "wlan:" not in line:
-                continue
-
-            #print(line.strip())
-
-            if f"wlan: {interface} START SCAN" in line:
+            kind = classify_scan_line(line, interface)
+            if kind == "own_start":
                 scan_started = True
-
-            if scan_started and "wlan: SCAN COMPLETED" in line:
-                #logger.message("info", f"{interface} SCAN COMPLETED", _EXTRA_())
-                on_event_callback(interface)
+            elif kind == "other_start":
+                # 기록만 하고 판정은 COMPLETED 시점의 시간창으로 한다 — 종전의
+                # 즉시 리셋은 타 START 가 자기 START 보다 먼저 온(나중에 시작한
+                # 관찰자) 경우를 못 지켰다(#158 Codex 리뷰).
+                last_other_start = _clock()
+            elif kind == "completed" and scan_started:
                 scan_started = False
+                if (last_other_start is not None
+                        and _clock() - last_other_start < AMBIGUOUS_SCAN_WINDOW_S):
+                    # dmesg 는 단일 스트림이고 COMPLETED 에 iface 가 없어 소유가
+                    # 모호하다 — 버린다(다음 자기 스캔에서 자연 복구, 배경 캐시
+                    # 1회 미갱신은 무해. 로밍 판정은 별도 iw scan 경로라 무영향).
+                    logger.message("info", f"[{interface}] other-iface scan overlapped — dropping ambiguous COMPLETED", _EXTRA_())
+                else:
+                    on_event_callback(interface)
 
 
 def monitor_nl80211_scan_event(on_event_callback):
