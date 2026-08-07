@@ -7,6 +7,7 @@
 import sys
 import os
 import re
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 sys.modules.setdefault("sUTILS", MagicMock())
@@ -54,11 +55,10 @@ def test_scan_logger_timestamp_has_no_brackets(prefix, tmp_path, monkeypatch):
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", header)
 
 
-@pytest.mark.parametrize(
-    "header",
-    ["2026-07-30 12:34:56", "[2026-07-30 12:34:56]"],
-)
-def test_passive_roam_accepts_plain_and_legacy_timestamp(header, tmp_path):
+# timestamp 는 fresh 하게 생성 — 고정 날짜는 stale 가드(SCAN_BLOCK_MAX_AGE_SEC)에 걸린다.
+@pytest.mark.parametrize("fmt", ["{ts}", "[{ts}]"])
+def test_passive_roam_accepts_plain_and_legacy_timestamp(fmt, tmp_path):
+    header = fmt.format(ts=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     scan_log = tmp_path / "ap.log"
     scan_log.write_text(
         f"{header}\n"
