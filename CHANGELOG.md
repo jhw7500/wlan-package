@@ -3,11 +3,33 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
-## Unreleased
+## 0.5.0 (2026-08-07)
 
-> SemVer **patch** — `wifi br route` 서브커맨드 + MAC 반영 로직 정비(base 항상 반영·bridge override)·`update_mac.sh` 견고성. 와이어 포맷·설정키 호환 변경 없음.
+> SemVer **minor** — 로밍 엔진 개편 + 설정키 정리(제거 키는 postinst가 자동 마이그레이션) + 로거 systemd 감독화 + `wifi br route`·MAC 반영 정비. 와이어 포맷 변경 없음. 제거된 설정 키(LOAD_BASED_ROAM·ADAPTIVE_INTERVAL·POST_ROAM_ARP_OPTIMIZATION 등)는 업그레이드 시 자동 삭제되며 수동 조치 불필요.
 
-### wlan-package (메인)
+### 로밍 엔진 개편 (#102~#137, #149~#152)
+
+- **판정 스캔을 iw scan 기반 fresh 결과로 전환** — mlanutl setuserscan이 wpa_supplicant BSS 테이블을 채우지 않아 `wpa_cli roam`이 FAIL하던 근본원인 수정(#102~#106). 스캔 단위 BSS freshness 게이트(`last seen` 대조)로 stale BSS 오판 차단, Stage 2 bgscan 캐시 판정 제거 — 매 tick 직접 fresh 스캔이 1차 설계(#152). 스캔 로그 src(scan/cache) 라벨(#137), LAST_SCAN_TIME 기록을 bgscan 동등 커버리지로 게이트(#130).
+- **cross-SSID 모드 A(select_network)** — extra_ssids 다중 SSID를 conf 교체 없이 select_network로 전환(2AP same-SSID + cross-SSID 양방향 온타겟 실증), cross ping-pong cooldown(#149), same-SSID ping-pong은 후보 선정 단계에서 BSSID 단위 제외.
+- **backoff·게이트** — 후보없음 플래토 backoff 곡선(3,3,3,6,…,30 상한)(#150), good-signal 리셋 게이트(Δ2dB, 임계 진동 오리셋 차단) 신설(#138) 후 기본 on + mlan0 CHECK_INTERVAL=1(#151).
+- **SIGHUP 런타임 reload** — 폴링 제거, self-pipe interruptible sleep 기반 즉시 반영(`wifi roam th` 연동, 프로덕션 유휴 비용 0)(#112).
+
+### 설정 체계 정리 (#146~#148)
+
+- 실험 노브 3종 제거(197→175키, −627줄)(#147). retired key는 postinst `cleanup_retired_roaming_keys`가 업그레이드 장비에서 자동 삭제. 설정 기본값 생성기 `gen_config_defaults.py --check/--write` + 역방향 커버리지 게이트로 코드/템플릿/스키마/handoff 4축 drift 해소(#148), 스키마 일관성 테스트 축(#146).
+
+### 로거 systemd 감독화 (#118, #156)
+
+- link(#118)에 이어 scan/stat/snapshot 로거를 Restart=always 감독 템플릿 유닛으로 분리 — `wifi_logger@` Wants pull-in, eth0 인스턴스 Condition 스킵, flock-loss exit 3(RestartPreventExitStatus 연동), start.sh `&` 기동/stop.sh pkill 제거(#156). passive_roam에 150s stale 가드 — 죽은 scan 로거의 옛 데이터로 수동 roam 하는 것을 차단.
+- 온타겟 실증 완료(cts-wlan): 유닛 기동·kill 자동재시작·중복 exit3·stop 전파·stale 가드 양방향.
+
+### 이슈 트리아지 안정성 픽스 (#153~#155)
+
+- **select_network 성공 판정 강화**(#154) — wpa_cli "FAIL"+exit 0 오수락 차단(응답 "OK" 게이트) + 폴링을 wpa_state/ssid/id 3중 대조로 강화(구 AP COMPLETED 잔존 오판 → 핑퐁 카운터 오염·허위 opcd 통지 차단). FAIL 경로 방어적 블록 복원.
+- **roam 실패 backoff**(#155) — 실패 tick도 후보없음 곡선을 전진(성공 확정 시에만 리셋), 후보 발견 시 good-signal baseline 재앵커로 임계 진동에 의한 에스컬레이션 무효화 차단.
+- **mlan1 supplicant bgscan 제거**(#153) — 자율 로밍이 외부 roam 데몬·Roaming notify를 우회하던 지뢰 제거(템플릿 + 기존 기기 postinst 마이그레이션), `wifi status` 표시 fallback 템플릿 정렬.
+
+### 브릿지 라우팅·MAC (`wifi br route`·update_mac)
 
 - **`wifi {0|1} br route {find|set|auto}` 신설** — peer_route=on 토폴로지에서 **이더넷 미연결로 부팅**하면 `wired_mac_ip_get.py`가 `wait_for_eth_link()`에서 early-return 해 **peer host route(`<peer>/32 dev eth0`)만 누락**된다(나머지 인프라는 링크 무관하게 세팅됨). 이후 eth 연결 시 이 라우트를 사후 등록하는 수동 커맨드. 독립 bash 2개(`wifi_eth_peer_find.sh` 탐색기, `wifi_eth_peer_route.sh` 등록기)로 구현하고 부팅크리티컬 `wired_mac_ip_get.py`는 무수정. `find [<subnet>]`=peer sweep 탐색(읽기 전용, self·GW 제외), `set <ip>`=`ip route replace <ip>/32 dev eth0` 등록, `auto [<subnet>]`=정확히 1건 발견 시 등록(0/2+는 에러). 서브넷 생략 시 `eth_client_ip`→`eth_sweep_subnet`→mlanN CIDR 순 결정. `peer_route.enabled=false`면 경고 후 진행. 스텁 기반 단위/통합 테스트 추가. (자동 링크업 트리거는 후속 Phase 2)
 - **`br route find`/`auto` 실기 무출력 버그 픽스** — 탐색기가 arping sweep 후 `ip neigh show`로 응답자를 읽었으나, `arping`(iputils)은 raw PF_PACKET 소켓이라 **응답을 받아도 커널 neigh 테이블을 채우지 않는다**(온타겟 실측 2026-07-20: `arping` exit=0인데 `ip neigh show`엔 없음, `ping`은 채움). 그 결과 유선 peer가 실제로 응답해도 항상 무출력이었다. `ip neigh show` 읽기·`ip neigh flush`를 폐기하고 **arping exit code로 응답자를 직접 수집**하도록 교체(온타겟 `find`가 유선 peer 192.168.0.21/122 발견 검증). 부수 효과: 스윕 범위 내 IP만 probe하므로 대역 필터가 불필요해지고, live 응답만 잡으므로 STALE 잔존 오등록도 원천 차단(직전 `neigh flush` 가드 제거). 스텁 테스트를 arping-응답자 모델로 재작성 — 기존 테스트는 arping과 neigh 스텁을 분리해 이 버그를 가렸다.
