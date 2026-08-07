@@ -1,5 +1,5 @@
 Package: wlan-proc
-Version: 0.4.4
+Version: 0.5.0
 Section: test
 Priority: optional
 Architecture: arm64
@@ -37,3 +37,4 @@ Description: WLAN Application
  0.4.2 : wifi info에 [MFG] 상태 섹션(mfg_mode/fw_name/mfg_loaded/profile) + snmpd/opcd 데몬 상태 표시
  0.4.3 : factory_reset이 보드 감지 결과를 날려 Invalid Voltage가 무한 emerg 브로드캐스트되던 버그 수정 — SoC 감지+주입을 wifi_board_config.sh로 분리해 postinst/factory_reset이 공유(템플릿엔 .mcp.iio_device가 없고 .global.BOARD_TYPE이 고정값이라 덮어쓰면 iMX93이 iio:device0으로, iMX8MM이 BOARD_TYPE=imx93으로 어긋남), wifi_logger_mcp.sh는 ADC 읽기 실패를 감지해 emerg→err 강등·backoff·max_probe_fail(12회) 후 종료
  0.4.4 : peer_route 진단·안정화(wifi br status 진단 명령 신설, sweep 폴백·psrc를 mlanN.network 설정값 기반으로=mac_mode=dynamic 부팅 race OHT 미발견 수리, br status의 enabled=false 오표시 픽스), moal deliver_rt_prio 노브(RX deliver leg RT화·Direction B), wbridge tpacket TX/RX 링버퍼 메모리 배리어(ARM weak-memory), 로그 명령 정비(tar.gz·log reset)·stat.log 손상 수리
+ 0.5.0 : 로밍 엔진 개편(판정 스캔 iw scan 전환·BSS freshness 게이트·stale 캐시 판정 제거·cross-SSID select_network 모드 A·OK 게이트+state/ssid/id 3중 성공판정·후보없음 플래토 backoff+실패 tick 전진·good-signal 리셋 게이트 기본 on·CHECK_INTERVAL=1·SIGHUP 런타임 reload), 설정 정리(실험 노브 제거 197→175키+retired key 자동 마이그레이션·gen_config_defaults 생성기·drift 게이트), 로거 감독화(scan/stat/snapshot systemd 유닛+passive_roam stale 가드), mlan1 bgscan 제거+기존기기 마이그레이션, wifi br route find/set/auto+MAC base 항상 반영·update_mac 견고성
