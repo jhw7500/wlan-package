@@ -6,9 +6,10 @@ BindsTo=sys-subsystem-net-devices-%i.device
 Requires=sys-subsystem-net-devices-%i.device
 After=sys-subsystem-net-devices-%i.device wifi_init.service
 PartOf=wifi_init.service
-# link 로거는 systemd 가 직접 감독(Restart=always)하는 별도 유닛으로 분리. 이 유닛이
-# 뜰 때 함께 pull-in 되고, PartOf(link 유닛 쪽)로 stop/restart 가 전파된다.
-Wants=wifi_logger_link@%i.service
+# link/scan/stat/snapshot 로거는 systemd 가 직접 감독(Restart=always)하는 별도 유닛으로
+# 분리. 이 유닛이 뜰 때 함께 pull-in 되고, PartOf(각 유닛 쪽)로 stop/restart 가 전파된다.
+# (scan/stat/snapshot 은 유닛 쪽 Condition 으로 무선 iface 전용 — eth0 인스턴스는 스킵)
+Wants=wifi_logger_link@%i.service wifi_logger_scan@%i.service wifi_logger_stat@%i.service wifi_link_snapshot@%i.service
 
 [Service]
 ExecStart=/usr/local/scripts/wifi_logger_start.sh %i
