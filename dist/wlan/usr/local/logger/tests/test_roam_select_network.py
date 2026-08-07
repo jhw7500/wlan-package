@@ -43,7 +43,7 @@ def _make_side_effect(list_out=_LIST_NETWORKS, select_rc=0, enable_rc=0,
                 st = next(state_iter)
             except StopIteration:
                 st = "COMPLETED"
-            return _Run(0, f"bssid=00:11:22:33:44:55\nssid=OfficeNet\nwpa_state={st}\n")
+            return _Run(0, f"bssid=00:11:22:33:44:55\nssid=OfficeNet\nid=1\nwpa_state={st}\n")
         if sub == "enable_network":
             return _Run(enable_rc, "OK\n")
         return _Run(1, "")
@@ -188,6 +188,86 @@ def test_select_network_exact_ssid_match_not_substring(monkeypatch):
     assert "select_network" not in calls
 
 
+def test_select_network_fail_reply_returns_false_no_poll(monkeypatch):
+    # wpa_cli는 supplicant "FAIL" 응답에도 exit 0 — 응답 텍스트 게이트로 즉시 실패해야
+    # 하며 status 폴링에 진입하지 않는다. FAIL은 다른 블록 disable 전 반환이므로 복원 없음.
+    calls = []
+
+    def side_effect(cmd, *a, **k):
+        sub = cmd[3]
+        calls.append(sub)
+        if sub == "list_networks":
+            return _Run(0, _LIST_NETWORKS)
+        if sub == "select_network":
+            return _Run(0, "FAIL\n")
+        if sub == "enable_network":
+            return _Run(0, "OK\n")
+        return _Run(1, "")
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        with patch.object(wifi_roam.time, "sleep", MagicMock()):
+            ok = select_network_for_ssid("mlan0", "OfficeNet")
+    assert ok is False
+    assert "status" not in calls
+    assert "enable_network" not in calls
+
+
+def test_select_network_old_ap_completed_not_success_until_target(monkeypatch):
+    # 전환 직후 첫 폴은 구 AP 결합이 COMPLETED로 잔존 — ssid/id 대조로 성공 오판 금지,
+    # 목표 블록 재결합(COMPLETED@target) 시점에만 성공.
+    calls = []
+    status_seq = iter([
+        "bssid=aa:bb:cc:dd:ee:ff\nssid=HomeNet\nid=0\nwpa_state=COMPLETED\n",
+        "wpa_state=SCANNING\n",
+        "bssid=00:11:22:33:44:55\nssid=OfficeNet\nid=1\nwpa_state=COMPLETED\n",
+    ])
+
+    def side_effect(cmd, *a, **k):
+        sub = cmd[3]
+        calls.append(sub)
+        if sub == "list_networks":
+            return _Run(0, _LIST_NETWORKS)
+        if sub == "select_network":
+            return _Run(0, "OK\n")
+        if sub == "status":
+            return _Run(0, next(status_seq))
+        if sub == "enable_network":
+            return _Run(0, "OK\n")
+        return _Run(1, "")
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        with patch.object(wifi_roam.time, "sleep", MagicMock()):
+            ok = select_network_for_ssid("mlan0", "OfficeNet")
+    assert ok is True
+    assert calls.count("status") == 3  # 구 AP COMPLETED·SCANNING을 지나 3번째에만 성공
+    assert calls[-1] == "enable_network"
+
+
+def test_select_network_wrong_ssid_completed_times_out(monkeypatch):
+    # 끝까지 구 AP(COMPLETED) 잔존 — ssid/id 불일치로 성공 금지, 타임아웃 실패 + 후보 복원
+    calls = []
+
+    def side_effect(cmd, *a, **k):
+        sub = cmd[3]
+        calls.append(sub)
+        if sub == "list_networks":
+            return _Run(0, _LIST_NETWORKS)
+        if sub == "select_network":
+            return _Run(0, "OK\n")
+        if sub == "status":
+            return _Run(0, "bssid=aa:bb:cc:dd:ee:ff\nssid=HomeNet\nid=0\nwpa_state=COMPLETED\n")
+        if sub == "enable_network":
+            return _Run(0, "OK\n")
+        return _Run(1, "")
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        with patch.object(wifi_roam.time, "sleep", MagicMock()):
+            ok = select_network_for_ssid("mlan0", "OfficeNet")
+    assert ok is False
+    assert calls.count("status") == 6  # 폴링 한도 소진
+    assert "enable_network" in calls
+
+
 # --- cross-SSID 라우팅 헬퍼(메인루프 분기) ---
 
 def test_route_cross_mode_a_uses_select_network(monkeypatch):
@@ -215,3 +295,31 @@ def test_route_cross_mode_b_uses_connect(monkeypatch):
     )
     con.assert_called_once_with("mlan0", "OfficeNet", "aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66")
     sel.assert_not_called()
+
+
+def test_route_cross_mode_a_fail_reply_no_success_side_effects(monkeypatch):
+    # select_network FAIL 수락 거부가 route까지 False로 전파 — notify_roam/add_roam
+    # (핑퐁 카운터) 등 성공 부수효과가 없어야 한다.
+    monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", True, raising=False)
+    notify = MagicMock()
+    monkeypatch.setattr(wifi_roam, "notify_roam", notify)
+    preventer = MagicMock()
+    preventer.is_ping_pong.return_value = False
+    monkeypatch.setattr(wifi_roam, "ping_pong_preventer", preventer, raising=False)
+
+    def side_effect(cmd, *a, **k):
+        sub = cmd[3]
+        if sub == "list_networks":
+            return _Run(0, _LIST_NETWORKS)
+        if sub == "select_network":
+            return _Run(0, "FAIL\n")
+        return _Run(0, "OK\n")
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        with patch.object(wifi_roam.time, "sleep", MagicMock()):
+            ok = wifi_roam.route_cross_ssid_transition(
+                "mlan0", "OfficeNet", "aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"
+            )
+    assert ok is False
+    notify.assert_not_called()
+    preventer.add_roam.assert_not_called()
