@@ -216,15 +216,14 @@ update_json_roaming_int() {
     fi
 }
 
-# GOOD_SIGNAL_RESET_GATE 의 코드 기본값 — wifi_roam.py 의 DEFAULT_GOOD_SIGNAL_GATE_* 와
-# **같아야 한다**. JSON 에 키가 없을 때 데몬이 무엇을 쓰는지 표시하기 위한 사본이며,
-# 두 값의 일치는 tests/test_roam_goodsignal_gate.py 가 파일을 파싱해 검증한다(drift 차단).
+# GOOD_SIGNAL_RESET_GATE 의 코드 정책 사본. enable만 JSON 설정이고 delta/grace는 고정값이다.
+# tests/test_roam_goodsignal_gate.py가 Python 상수와의 drift를 차단한다.
 GATE_DEF_ENABLE=true
-GATE_DEF_DELTA_DB=2
-GATE_DEF_GRACE_SEC=40
+GATE_FIXED_DELTA_DB=2
+GATE_FIXED_GRACE_SEC=40
 
 # GOOD_SIGNAL_RESET_GATE 키의 **적용 중인 값**을 출처와 함께 출력.
-# JSON 에 있으면 그 값, 없으면 `<기본값>(default)`. jq 실패는 비0 으로 전파해 호출부가
+# JSON 에 있으면 그 값(false 포함), 없으면 `<기본값>(default)`. jq 실패는 비0 으로 전파해 호출부가
 # "읽기 실패"와 "키 없음"을 구분할 수 있게 한다.
 gate_effective() {
     local iface="$1"
@@ -235,8 +234,11 @@ gate_effective() {
     # iface/key 를 필터 문자열에 보간하지 않고 --arg 로 넘긴다 —
     # update_json_roaming_section 과 같은 방식(같은 파일 안에서 패턴이 갈리면 복사·재사용 시
     # 취약해진다). 현재 IFACE 는 mlan0/mlan1 로 제한돼 실제 인젝션 위험은 없다.
+    # jq의 `a // b`는 null뿐 아니라 false도 b로 대체한다. enable=false를 "키 없음"으로
+    # 오인하지 않도록 has()로 존재 여부를 먼저 판정한다.
     v=$(jq -r --arg i "$iface" --arg k "$key" \
-          '.[$i].roaming.GOOD_SIGNAL_RESET_GATE[$k] // empty' \
+          '(.[$i].roaming.GOOD_SIGNAL_RESET_GATE // {}) as $g |
+           if ($g | has($k)) then ($g[$k] | tostring) else empty end' \
           "$WIFI_INIT_CONF_JSON") || return 1
     if [ -z "$v" ]; then
         echo "${fallback}(default)"
@@ -501,7 +503,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} roam [0|1..N] : 0=auto best, N=Nth AP (RSSI order)"
     echo "       wifi {0|1|mlan0|mlan1} roam th [2G|5G] [rssi] : 로밍 RSSI 임계값 표시/설정 (persist, SIGHUP 무재시작 반영)"
     echo "       wifi {0|1|mlan0|mlan1} roam diff [dB] : 후보 AP 최소 RSSI 이득 표시/설정 (persist, SIGHUP 무재시작 반영)"
-    echo "       wifi {0|1|mlan0|mlan1} roam gate [on|off|delta <dB>|grace <sec>] : good-signal 리셋 게이트 표시/설정 (persist, SIGHUP 무재시작 반영)"
+    echo "       wifi {0|1|mlan0|mlan1} roam gate [on|off] : good-signal 리셋 게이트 표시/설정 (delta=2dB, grace=40s 고정)"
     echo "       wifi {0|1|mlan0|mlan1} stat reset [mac] : reset stat records (all or specific MAC)"
     echo "       wifi {0|1|mlan0|mlan1} stat interval {seconds} : set stat reset interval (persist)"
     echo "       wifi {0|1|mlan0|mlan1} mon [c|compact] [interval] [--summary-lines N] [--roam-display N]"
@@ -1755,8 +1757,7 @@ case "$2" in
     # wifi 0 roam diff       → 후보 AP 최소 RSSI 이득(DIFF_TH) 표시
     # wifi 0 roam diff 3     → roaming.DIFF_TH=3 (persist) + SIGHUP 즉시 반영(무재시작)
     # wifi 0 roam gate       → good-signal 리셋 게이트 현재값 표시
-    # wifi 0 roam gate on    → GOOD_SIGNAL_RESET_GATE.enable=true (A/B 시험용 토글)
-    # wifi 0 roam gate delta 3 / grace 60 → 판정 임계·attach ramp grace 조정
+    # wifi 0 roam gate on    → GOOD_SIGNAL_RESET_GATE.enable=true (현장 kill-switch)
     ROAM_ARG="${3:-}"
     if [ "$ROAM_ARG" = "th" ]; then
         if [ "$IFACE" = "eth0" ]; then
@@ -1876,16 +1877,14 @@ case "$2" in
         fi
         GATE_SUB="${4:-}"
         if [ -z "$GATE_SUB" ]; then
-            # JSON 에 키가 없으면 데몬은 wifi_roam.py 의 DEFAULT_* 를 쓴다. 종전엔 그 경우를
+            # JSON 에 키가 없으면 데몬은 wifi_roam.py 의 기본값을 쓴다. 종전엔 그 경우를
             # "unset" 으로만 찍어 **실제 적용값을 알 수 없었다**(gate on 은 enable 만 넣으므로
             # 흔한 상태다). 적용 중인 값과 그 출처를 함께 보여준다.
-            if ! GEN=$(gate_effective "$IFACE" enable "$GATE_DEF_ENABLE") \
-               || ! GDL=$(gate_effective "$IFACE" delta_db "$GATE_DEF_DELTA_DB") \
-               || ! GGR=$(gate_effective "$IFACE" post_roam_grace_sec "$GATE_DEF_GRACE_SEC"); then
+            if ! GEN=$(gate_effective "$IFACE" enable "$GATE_DEF_ENABLE"); then
                 echo "Error: failed to read ${IFACE}.roaming.GOOD_SIGNAL_RESET_GATE from $WIFI_INIT_CONF_JSON" >&2
                 exit 1
             fi
-            echo "$IFACE roam gate: enable=${GEN} delta_db=${GDL} post_roam_grace_sec=${GGR}"
+            echo "$IFACE roam gate: enable=${GEN} delta_db=${GATE_FIXED_DELTA_DB}(fixed) post_roam_grace_sec=${GATE_FIXED_GRACE_SEC}(fixed)"
             exit 0
         fi
         case "$GATE_SUB" in
@@ -1894,27 +1893,8 @@ case "$2" in
                 update_json_roaming_section "$IFACE" "GOOD_SIGNAL_RESET_GATE" "enable" "$GVAL" || exit 1
                 echo "$IFACE roaming.GOOD_SIGNAL_RESET_GATE.enable = ${GVAL} (persist)"
                 ;;
-            delta)
-                GD="${5:-}"
-                # 0 은 게이트를 무효화(모든 Δ 통과)하므로 1 이상만 받는다 — 끄려면 'gate off'.
-                if ! echo "$GD" | grep -qE '^[0-9]+$' || [ "$GD" -lt 1 ] || [ "$GD" -gt 30 ]; then
-                    echo "Error: delta must be an integer in 1..30 (got '$GD'); use 'gate off' to disable" >&2
-                    exit 1
-                fi
-                update_json_roaming_section "$IFACE" "GOOD_SIGNAL_RESET_GATE" "delta_db" "$GD" || exit 1
-                echo "$IFACE roaming.GOOD_SIGNAL_RESET_GATE.delta_db = ${GD} (persist)"
-                ;;
-            grace)
-                GG="${5:-}"
-                if ! echo "$GG" | grep -qE '^[0-9]+$' || [ "$GG" -lt 1 ] || [ "$GG" -gt 300 ]; then
-                    echo "Error: grace must be an integer in 1..300 seconds (got '$GG')" >&2
-                    exit 1
-                fi
-                update_json_roaming_section "$IFACE" "GOOD_SIGNAL_RESET_GATE" "post_roam_grace_sec" "$GG" || exit 1
-                echo "$IFACE roaming.GOOD_SIGNAL_RESET_GATE.post_roam_grace_sec = ${GG} (persist)"
-                ;;
             *)
-                echo "Usage: wifi {0|1|mlan0|mlan1} roam gate [on|off|delta <dB>|grace <sec>]" >&2
+                echo "Usage: wifi {0|1|mlan0|mlan1} roam gate [on|off] (delta=2dB, grace=40s fixed)" >&2
                 exit 1
                 ;;
         esac

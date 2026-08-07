@@ -349,6 +349,61 @@ json_merge() {
   fi
 }
 
+# deep merge는 기존 사용자 키를 보존하므로, 코드에서 폐기한 노브는 명시적으로 지운다.
+# 제거하지 않으면 업그레이드 장비의 JSON/WebUI에 무효 설정이 영구히 남아 오해를 만든다.
+cleanup_retired_roaming_keys() {
+  local active="$1" tmp
+  [ -f "$active" ] || return 0
+  if ! command -v jq >/dev/null 2>&1; then
+    logger -p local0.warn "[$tag:$LINENO] [$KEY] jq not found; skip retired roaming key cleanup"
+    return 0
+  fi
+
+  tmp="${active}.cleanup.$$"
+  if jq 'del(
+      .mlan0.roaming.STAGED_SCAN.cache_fresh_sec,
+      .mlan0.roaming.STAGED_SCAN.self_induced_tail_sec,
+      .mlan0.roaming.STAGED_SCAN._comment,
+      .mlan0.roaming.GOOD_SIGNAL_RESET_GATE.delta_db,
+      .mlan0.roaming.GOOD_SIGNAL_RESET_GATE.post_roam_grace_sec,
+      .mlan0.roaming.GOOD_SIGNAL_RESET_GATE._comment,
+      .mlan0.roaming.CACHE_FRESH_SEC,
+      .mlan0.roaming.SELF_INDUCED_TAIL_SEC,
+      .mlan0.roaming.GOOD_SIGNAL_GATE_DELTA_DB,
+      .mlan0.roaming.GOOD_SIGNAL_GATE_GRACE_SEC,
+      .mlan0.roaming.LOAD_BASED_ROAM,
+      .mlan0.roaming.ADAPTIVE_INTERVAL,
+      .mlan0.roaming.POST_ROAM_ARP_OPTIMIZATION,
+      .mlan1.roaming.STAGED_SCAN.cache_fresh_sec,
+      .mlan1.roaming.STAGED_SCAN.self_induced_tail_sec,
+      .mlan1.roaming.STAGED_SCAN._comment,
+      .mlan1.roaming.GOOD_SIGNAL_RESET_GATE.delta_db,
+      .mlan1.roaming.GOOD_SIGNAL_RESET_GATE.post_roam_grace_sec,
+      .mlan1.roaming.GOOD_SIGNAL_RESET_GATE._comment,
+      .mlan1.roaming.CACHE_FRESH_SEC,
+      .mlan1.roaming.SELF_INDUCED_TAIL_SEC,
+      .mlan1.roaming.GOOD_SIGNAL_GATE_DELTA_DB,
+      .mlan1.roaming.GOOD_SIGNAL_GATE_GRACE_SEC,
+      .mlan1.roaming.LOAD_BASED_ROAM,
+      .mlan1.roaming.ADAPTIVE_INTERVAL,
+      .mlan1.roaming.POST_ROAM_ARP_OPTIMIZATION
+    )
+    | .mlan0.roaming.STAGED_SCAN |= with_entries(select(.key | startswith("_comment") | not))
+    | .mlan0.roaming.GOOD_SIGNAL_RESET_GATE |= with_entries(select(.key | startswith("_comment") | not))
+    | .mlan1.roaming.STAGED_SCAN |= with_entries(select(.key | startswith("_comment") | not))
+    | .mlan1.roaming.GOOD_SIGNAL_RESET_GATE |= with_entries(select(.key | startswith("_comment") | not))' \
+    "$active" > "$tmp"; then
+    chmod 0644 "$tmp"
+    chown root:root "$tmp" 2>/dev/null || true
+    mv "$tmp" "$active"
+    sync "$active" 2>/dev/null || sync
+    logger -p local0.info "[$tag:$LINENO] [$KEY] removed retired roaming keys from $active"
+  else
+    rm -f "$tmp"
+    logger -p local0.warn "[$tag:$LINENO] [$KEY] retired roaming key cleanup failed; keep $active"
+  fi
+}
+
   cpchk /opt/wlan/mfg/bridge_init.conf /usr/local/mfg/bridge_init.conf
   cpchk /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/timesyncd.conf
   cpchk /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan0.conf /etc/wpa_supplicant/wpa_supplicant-mlan0.conf
@@ -361,6 +416,7 @@ json_merge() {
   cpchk /opt/wlan/config/systemd/network/21-mlan1.link /etc/systemd/network/21-mlan1.link
   cpchk /opt/wlan/config/systemd/network/22-eth0.link /etc/systemd/network/22-eth0.link
   json_merge /opt/wlan/config/wifi_init_conf.json /usr/local/etc/wifi_init_conf.json
+  cleanup_retired_roaming_keys /usr/local/etc/wifi_init_conf.json
 
   # json_merge 이후 보드별 설정 적용 (첫 설치 시에도 정상 동작).
   # 헬퍼가 없으면 위에서 인라인 감지한 값을 그대로 주입한다 — 이 단계를 건너뛰면 JSON에는

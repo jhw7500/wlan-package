@@ -33,18 +33,10 @@ DEFAULTS = {
     "CHECK_INTERVAL": wifi_roam.CHECK_INTERVAL,
 }
 
-# STAGED_SCAN 계열 — 중첩 경로는 _positive_int caster 가, flat 덮어쓰기 경로는
-# _num(minimum=1) 이 각각 막는다. 두 경로 모두 이 전역을 건드리므로 복원 대상이다.
-STAGED_DEFAULTS = {
-    "CACHE_FRESH_SEC": wifi_roam.DEFAULT_CACHE_FRESH_SEC,
-    "SELF_INDUCED_TAIL_SEC": wifi_roam.DEFAULT_SELF_INDUCED_TAIL_SEC,
-}
-
-
 @pytest.fixture(autouse=True)
 def _restore_globals():
     """각 테스트가 전역을 오염시키지 않도록 기본값으로 되돌린다."""
-    keys = {**DEFAULTS, **STAGED_DEFAULTS}
+    keys = DEFAULTS
     saved = {k: getattr(wifi_roam, k) for k in keys}
     for k, v in keys.items():
         setattr(wifi_roam, k, v)
@@ -115,25 +107,3 @@ def test_max_sleep_backdoor_closed(monkeypatch):
     assert wifi_roam.ROAM_NO_RESULT_MAX_SLEEP == \
         wifi_roam.DEFAULT_ROAM_NO_RESULT_MAX_SLEEP
 
-
-def test_cache_fresh_sec_zero_rejected_via_nested_caster(monkeypatch):
-    """중첩 경로(STAGED_SCAN.cache_fresh_sec)는 **기존** _positive_int caster 가 막는다.
-
-    이 테스트는 이번에 추가한 _num(minimum=) 가드가 아니라 종전부터 있던 방어를
-    확인한다(무회귀용). 새 가드 검증은 아래 flat 경로 테스트가 담당한다."""
-    before = wifi_roam.CACHE_FRESH_SEC
-    _load({"STAGED_SCAN": {"cache_fresh_sec": 0}}, monkeypatch)
-    assert wifi_roam.CACHE_FRESH_SEC >= 1
-    assert wifi_roam.CACHE_FRESH_SEC == before
-
-
-@pytest.mark.parametrize("bad", [0, -1])
-def test_cache_fresh_sec_zero_rejected_via_flat_override(bad, monkeypatch):
-    """[새 가드] flat 덮어쓰기 경로는 _positive_int 를 우회하므로 _num(minimum=1) 이 막는다.
-
-    roaming 블록에 대문자 키를 직접 넣으면 `for key in config.keys()` 루프가 caster 를
-    거치지 않고 raw 로 덮어쓴다. CACHE_FRESH_SEC=0 이면 scan_block_fresh 가 항상 False
-    가 되어 Stage 2 교차채널 캐시가 영구 비활성화된다."""
-    _load({"CACHE_FRESH_SEC": bad, "SELF_INDUCED_TAIL_SEC": bad}, monkeypatch)
-    for key, default in STAGED_DEFAULTS.items():
-        assert getattr(wifi_roam, key) == default, f"{key} 가 {bad} 로 오염됐다"
