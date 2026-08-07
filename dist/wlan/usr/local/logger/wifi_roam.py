@@ -2659,10 +2659,18 @@ def main():
         # 최적 AP로 로밍
         if best_ap:
             # 후보 발견 → backoff 리셋(spec §4 reset). 다음 후보없음은 시작값부터.
+            # 단 same-SSID 시도가 **실패**하면 아래 실패 분기가 종전 streak 에서
+            # 재전진한다 — 후보 발견만으로 지속 실패 환경(AP ACL·밴드스티어링 거부 등)의
+            # backoff 가 풀리면 고정 주기로 무한 재시도한다. 리셋 유지는 성공 확정 시에만.
+            prev_streak = no_candidate_streak
             no_candidate_streak = 0
             # 게이트 기준도 함께 무효화 — 로밍이 성공하면 BSSID 변경이 track_association 에서
             # 처리하지만, **실패하면** BSSID 가 그대로라 옛 기준이 남는다.
             on_streak_reset(gs)
+            # hint 경로와 달리 여기선 현재 RSSI 를 아므로 기준을 즉시 재앵커한다. None 으로
+            # 두면 실패 직후 임계 위 Δ0~1dB 진동 한 tick 에 good-signal 이 no-baseline 으로
+            # 리셋을 허용해, 아래 실패 분기의 backoff 에스컬레이션이 무효화된다.
+            gs["reset_rssi"] = station["rssi"]
             logger.message(
                 "emerg",
                 f"[{IFACE}] Roaming: {station['bssid']} → {best_ap['bssid']}, "
@@ -2696,6 +2704,21 @@ def main():
                 # 로밍 성공 정착 대기(의도적 비-중단): 이 짧은 settle 중 SIGHUP이 와도
                 # 직후 interruptible_sleep(interval) 또는 다음 루프 top에서 반영된다.
                 time.sleep(ROAM_SUCCESS_SLEEP)
+            else:
+                # same-SSID 시도 실패(거부·미확정·ping-pong 차단) → 후보없음 tick 과
+                # 동일하게 종전 streak 에서 backoff 전진. CHECK_INTERVAL 고정 재시도가
+                # 실패 모드별 고정 주기로 무한 반복되는 것을 억제한다(성공·hint·
+                # good-signal 리셋 경로는 기존과 동일).
+                backoff, no_candidate_streak = advance_no_candidate_backoff(prev_streak)
+                logger.message(
+                    "err",
+                    f"[{IFACE}] Roam attempt failed: {station['bssid']} → "
+                    f"{best_ap['bssid']} (roam-fail backoff={backoff}s, "
+                    f"streak={no_candidate_streak})",
+                    _EXTRA_(),
+                )
+                interruptible_sleep(backoff)
+                continue
             interruptible_sleep(interval)
             continue
 
