@@ -2645,6 +2645,10 @@ def main():
             # 게이트 기준도 함께 무효화 — 로밍이 성공하면 BSSID 변경이 track_association 에서
             # 처리하지만, **실패하면** BSSID 가 그대로라 옛 기준이 남는다.
             on_streak_reset(gs)
+            # hint 경로와 달리 여기선 현재 RSSI 를 아므로 기준을 즉시 재앵커한다. None 으로
+            # 두면 실패 직후 임계 위 Δ0~1dB 진동 한 tick 에 good-signal 이 no-baseline 으로
+            # 리셋을 허용해, 아래 실패 분기의 backoff 에스컬레이션이 무효화된다.
+            gs["reset_rssi"] = station["rssi"]
             logger.message(
                 "emerg",
                 f"[{IFACE}] Roaming: {station['bssid']} → {best_ap['bssid']}, "

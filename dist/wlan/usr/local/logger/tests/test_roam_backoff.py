@@ -194,14 +194,20 @@ class _StopLoop(Exception):
     """interruptible_sleep 호출 횟수로 main() 무한 루프를 종료시키는 테스트 전용 신호."""
 
 
-def _drive_main(monkeypatch, roam_results, ticks):
+def _drive_main(monkeypatch, roam_results, ticks, rssi_seq=None, gate=False):
     """main() 루프를 interruptible_sleep 기준 ticks 회 돌리고 sleep 값 목록을 반환.
 
     roam_results: roam_to_bssid 반환값 시퀀스 — 앞에서부터 소비하고 마지막 값을 반복.
-    매 tick 로밍 조건(rssi<th)과 후보 발견이 성립하도록 station/staged scan 을 고정해,
+    rssi_seq: tick별 station rssi 시퀀스(마지막 값 반복) — 미지정 시 -70 고정(항상 조건).
+    gate=True 면 good-signal 게이트를 켜서(Δ2dB, grace 0) 임계 위 tick 의 리셋 판정까지
+    관측한다. 기본은 매 tick 로밍 조건(rssi<th)+후보 발견이 성립하도록 고정해,
     same-SSID 시도 결과(성공/실패)에 따른 sleep 경로만 관측한다.
     """
     _set_sleep(monkeypatch, 3, 30, fast=3)
+    if gate:
+        monkeypatch.setattr(wifi_roam, "ENABLE_GOOD_SIGNAL_GATE", True)
+        monkeypatch.setattr(wifi_roam, "GOOD_SIGNAL_GATE_DELTA_DB", 2)
+        monkeypatch.setattr(wifi_roam, "GOOD_SIGNAL_GATE_GRACE_SEC", 0)
     monkeypatch.setattr(wifi_roam, "ENABLE_PREDICTIVE_ROAM", False)
     monkeypatch.setattr(wifi_roam, "ENABLE_PING_PONG_PREVENTION", False)
     monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", False)
@@ -216,7 +222,15 @@ def _drive_main(monkeypatch, roam_results, ticks):
     )
     monkeypatch.setattr(wifi_roam, "roam_hint_touched", lambda state: False)
     station = {"bssid": "aa:aa:aa:aa:aa:01", "rssi": -70, "freq": 2412, "ssid": "net1"}
-    monkeypatch.setattr(wifi_roam, "get_link_info", lambda: dict(station))
+    rssi_iter = list(rssi_seq) if rssi_seq else None
+
+    def fake_link():
+        s = dict(station)
+        if rssi_iter:
+            s["rssi"] = rssi_iter.pop(0) if len(rssi_iter) > 1 else rssi_iter[0]
+        return s
+
+    monkeypatch.setattr(wifi_roam, "get_link_info", fake_link)
     best = {"bssid": "aa:aa:aa:aa:aa:02", "ssid": "net1", "rssi": -55, "freq": 2437}
     monkeypatch.setattr(
         wifi_roam,
@@ -267,3 +281,16 @@ def test_main_roam_success_keeps_interval(monkeypatch):
     # 성공만 이어지면 종전과 동일하게 interval(CHECK_INTERVAL) sleep 유지(무회귀).
     sleeps = _drive_main(monkeypatch, [True], ticks=3)
     assert sleeps == [1, 1, 1]
+
+
+def test_main_good_signal_oscillation_keeps_failure_backoff(monkeypatch):
+    """실패 에스컬레이션 중 임계 위 Δ1dB 진동 1 tick 이 backoff 를 리셋하지 못한다.
+
+    후보 발견 시 baseline 을 현재 RSSI 로 앵커하지 않으면(None 잔존) good-signal 이
+    no-baseline 으로 무조건 리셋을 허용해 에스컬레이션이 3s 로 되돌아간다(#155 리뷰).
+    TH=-65: -66 실패 3틱(3,3,3) → -65 good-signal(Δ1 억제, interval 1s) → -66 실패는
+    종전 streak 에서 재전진(6s)."""
+    sleeps = _drive_main(
+        monkeypatch, [False], ticks=5, rssi_seq=[-66, -66, -66, -65, -66], gate=True
+    )
+    assert sleeps == [3, 3, 3, 1, 6]
