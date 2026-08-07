@@ -190,7 +190,8 @@ def test_select_network_exact_ssid_match_not_substring(monkeypatch):
 
 def test_select_network_fail_reply_returns_false_no_poll(monkeypatch):
     # wpa_cli는 supplicant "FAIL" 응답에도 exit 0 — 응답 텍스트 게이트로 즉시 실패해야
-    # 하며 status 폴링에 진입하지 않는다. FAIL은 다른 블록 disable 전 반환이므로 복원 없음.
+    # 하며 status 폴링에 진입하지 않는다. 복원(enable_network)은 방어적으로 호출한다
+    # (upstream은 FAIL을 disable 전에 반환하지만 패치 supplicant 의미론을 가정하지 않음).
     calls = []
 
     def side_effect(cmd, *a, **k):
@@ -209,7 +210,7 @@ def test_select_network_fail_reply_returns_false_no_poll(monkeypatch):
             ok = select_network_for_ssid("mlan0", "OfficeNet")
     assert ok is False
     assert "status" not in calls
-    assert "enable_network" not in calls
+    assert "enable_network" in calls  # 방어적 복원(무-disable 상태면 no-op)
 
 
 def test_select_network_old_ap_completed_not_success_until_target(monkeypatch):

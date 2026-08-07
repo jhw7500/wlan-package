@@ -1931,8 +1931,9 @@ def select_network_for_ssid(iface, to_ssid):
             return False
         # 수락 게이트: wpa_cli는 "FAIL" 응답에도 exit 0을 주므로(roam_to_bssid와 동일 규약)
         # returncode가 아니라 응답 텍스트로 '명령 수락(OK)' 여부를 판정한다. FAIL이면
-        # (stale id 등) supplicant가 다른 블록을 disable하기 전에 반환하므로 후보 복원
-        # 불필요 — 폴링에 진입하지 않고 즉시 실패로 본다.
+        # (stale id 등) 폴링에 진입하지 않고 즉시 실패로 본다. upstream ctrl_iface는
+        # FAIL을 타 블록 disable 전에 반환하지만, 우리 supplicant는 패치 빌드라 그
+        # 의미론을 가정하지 않고 복원을 방어적으로 호출한다(전부 enabled면 no-op).
         reply = (sel.stdout or "").strip()
         if reply.split("\n", 1)[0].strip() != "OK":
             detail = reply or (sel.stderr or "").strip() or f"rc={sel.returncode}"
@@ -1941,6 +1942,7 @@ def select_network_for_ssid(iface, to_ssid):
                 f"[{iface}] select_network rejected by supplicant (id={nid}): {detail}",
                 _EXTRA_(),
             )
+            _enable_network_all(iface)
             return False
         # 이 시점부터 다른 블록이 disabled 상태 → 어떤 경로로 나가든 복원 책임 발생
         selected = True
