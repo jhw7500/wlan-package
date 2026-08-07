@@ -49,7 +49,12 @@ def handle_sigterm(signum, frame):
 def cleanup():
     pass
 
-def set_flag(on: bool, path=ROAM_CONDITION_FLAG):
+def set_flag(on: bool, path=None):
+    # get_flag 와 동일한 None 센티널 — 기본 인자는 def 시점 바인딩이라 __main__ 의
+    # iface별 재대입이 반영되지 않는다. 현재 미호출이지만, 향후 기본 호출이 추가될 때
+    # 조용히 mlan0 경로에 기록하는 함정을 남기지 않는다(#157 리뷰).
+    if path is None:
+        path = ROAM_CONDITION_FLAG
     with open(path, "w") as f:
         if on == 1:
             f.write("1")
