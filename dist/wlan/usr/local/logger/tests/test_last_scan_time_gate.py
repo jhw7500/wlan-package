@@ -1,6 +1,6 @@
 """LAST_SCAN_TIME(bgscan 타이머 리셋) 기록 게이트 테스트.
 
-bgscan 은 /tmp/last_roam_scan_time 이후 interval 전체를 다시 대기한다.
+bgscan 은 /run/wifi/last_roam_scan_<iface> 이후 interval 전체를 다시 대기한다.
 다중채널 directed active 또는 단일채널 home scan처럼 설정 채널 전체를 성공적으로
 실측했을 때만 기록한다. 스캔 실패는 기록하지 않아 bgscan이 조기에 재개되게 한다."""
 import os
@@ -61,10 +61,13 @@ def test_record_helper_writes_parseable_epoch(_globals):
     assert float(_globals.read_text()) > 0
 
 
-def test_record_helper_failure_warns_once(monkeypatch):
-    """쓰기 실패(/tmp 불가 등 중대 상태)는 침묵하지 않고 프로세스당 1회 warn —
-    단, 신호 파일이라 동작은 계속(예외 전파 금지)."""
-    monkeypatch.setattr(wifi_roam, "LAST_SCAN_TIME_FILE", "/nonexistent-dir/x/y")
+def test_record_helper_failure_warns_once(tmp_path, monkeypatch):
+    """쓰기 실패(디렉터리 생성 불가 등 중대 상태)는 침묵하지 않고 프로세스당 1회 warn —
+    단, 신호 파일이라 동작은 계속(예외 전파 금지). 부모 경로가 파일인 지점으로 실패를
+    주입한다 — makedirs 도입 후 절대경로 권한 의존(root 실행 CI에서 성공해버림) 제거."""
+    blocker = tmp_path / "blocker"
+    blocker.write_text("")
+    monkeypatch.setattr(wifi_roam, "LAST_SCAN_TIME_FILE", str(blocker / "x"))
     monkeypatch.setattr(wifi_roam, "_SCAN_TIME_WRITE_WARNED", False, raising=False)
     wifi_roam.logger.reset_mock()
     wifi_roam._record_roam_scan_time()          # 예외 전파 없이 통과해야 함
