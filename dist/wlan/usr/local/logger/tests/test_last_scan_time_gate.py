@@ -1,12 +1,8 @@
 """LAST_SCAN_TIME(bgscan 타이머 리셋) 기록 게이트 테스트.
 
-bgscan 은 /tmp/last_roam_scan_time 이후 interval 전체를 다시 대기한다. 종전엔 staged
-경로가 '스캔 시도(scanned)'만으로 무조건 기록해, 홈채널 패시브(부분 스캔 — bgscan 의
-교차채널 캐시 공급을 정보로도 라디오로도 대체 못 함)까지 bgscan 을 밀어냈다 → RSSI 가
-임계 주변에서 진동하면 bgscan 이 무한 연기되어 Stage 2 캐시가 고사(passive-first 가
-자기 캐시 공급원을 굶기는 역설). 수정: **bgscan 동등 커버리지**일 때만 기록 —
-① Stage 3 액티브가 실제 **성공**(실패 시 미기록: bgscan 조기 재개가 오히려 이득)
-② scan_freq ⊆ {홈채널}(단일채널 — 홈 스캔이 곧 전체 커버리지, 결과 무관)."""
+bgscan 은 /tmp/last_roam_scan_time 이후 interval 전체를 다시 대기한다.
+다중채널 directed active 또는 단일채널 home scan처럼 설정 채널 전체를 성공적으로
+실측했을 때만 기록한다. 스캔 실패는 기록하지 않아 bgscan이 조기에 재개되게 한다."""
 import os
 import sys
 from datetime import datetime
@@ -48,13 +44,7 @@ def _globals(tmp_path, monkeypatch):
     monkeypatch.setattr(wifi_roam, "WPA_FREQ", ["5180", "5200"])
     monkeypatch.setattr(wifi_roam, "DIFF_TH", 10)
     monkeypatch.setattr(wifi_roam, "ENABLE_PREDICTIVE_ROAM", False)
-    monkeypatch.setattr(wifi_roam, "CACHE_FRESH_SEC", 70)
-    monkeypatch.setattr(wifi_roam, "_LAST_SELF_SCAN_TS", None)
-    monkeypatch.setattr(wifi_roam, "_LAST_SELF_SCAN_END_TS", None)
-    monkeypatch.setattr(wifi_roam, "_LAST_WALL_TS", None)
-    monkeypatch.setattr(wifi_roam, "_LAST_MONO_TS", None)
     monkeypatch.setattr(wifi_roam, "ENABLE_STAGED_SCAN", True)
-    monkeypatch.setattr(wifi_roam, "SELF_INDUCED_TAIL_SEC", 10)
     monkeypatch.setattr(wifi_roam, "SKIP_REDUNDANT_ACTIVE_SCAN", True)
     monkeypatch.setattr(wifi_roam, "HOME_PASSIVE", True)
     scan_time_file = tmp_path / "last_roam_scan_time"
@@ -91,30 +81,31 @@ def _staged(station=None, allowed=("Net",)):
     )
 
 
-def test_stage1_candidate_multichannel_not_recorded(_globals, monkeypatch):
-    """다채널에서 Stage 1(홈 패시브)만으로 끝난 tick — 부분 스캔이라 기록 금지."""
+def test_multichannel_active_success_records(_globals, monkeypatch):
+    """다중채널은 전체 directed active 성공이므로 bgscan 타이머를 기록."""
     calls = []
-    home = [apln(0, 36, -70, CUR, "Net"), apln(1, 36, -45, "bb:bb:bb:bb:bb:bb", "Net")]
-    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(home, None, calls))
-    monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: ([], None))
+    active = [apln(0, 36, -70, CUR, "Net"), apln(1, 40, -45, "bb:bb:bb:bb:bb:bb", "Net")]
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(None, active, calls))
     best, _, _, scanned = _staged()
     assert best is not None and scanned is True
-    assert not _globals.exists(), "홈채널 부분 스캔이 bgscan 타이머를 리셋함(기아 회귀)"
+    assert len(calls) == 1 and calls[0]["passive"] is False
+    assert _globals.exists(), "다중채널 전체 active 성공이 기록되지 않음"
 
 
-def test_stage2_cache_hit_not_recorded(_globals, monkeypatch):
-    """Stage 2 캐시 히트로 끝난 tick — 추가 스캔 없음, 기록 금지."""
+def test_cache_is_ignored_and_active_failure_not_recorded(_globals, monkeypatch):
+    """강한 cache 후보가 있어도 active 실패면 후보/타이머 기록 모두 없음."""
     calls = []
-    home = [apln(0, 36, -70, CUR, "Net")]
-    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(home, None, calls))
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(None, None, calls))
     fresh_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cache = [{"bssid": "cc:cc:cc:cc:cc:cc", "ssid": "Net", "channel": 40, "freq": 5200,
               "rssi": -50, "rssi_th": -75, "ld": 0, "load": 0, "noise": -95,
               "timestamp": fresh_ts}]
-    monkeypatch.setattr(wifi_roam, "get_latest_scan", lambda *a, **k: (cache, fresh_ts))
+    cache_reader = MagicMock(return_value=(cache, fresh_ts))
+    monkeypatch.setattr(wifi_roam, "get_latest_scan", cache_reader)
     best, _, _, _ = _staged()
-    assert best is not None and best["bssid"] == "cc:cc:cc:cc:cc:cc"
+    assert best is None
     assert not _globals.exists()
+    cache_reader.assert_not_called()
 
 
 def test_stage3_success_records(_globals, monkeypatch):
