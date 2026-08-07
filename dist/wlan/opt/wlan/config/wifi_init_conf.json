@@ -360,7 +360,7 @@
                 "DEFAULT_TH_2G: (int) 2.4GHz RSSI 로밍 임계값 (dBm). 이 값 이하이면 로밍 시도. 이 JSON 이 단일 소스이며 wpa_supplicant.conf 의 `#!TH_2G=` 마커는 더 이상 읽지 않는다.",
                 "DEFAULT_TH_5G: (int) 5GHz RSSI 로밍 임계값 (dBm). 이 값 이하이면 로밍 시도. 이 JSON 이 단일 소스이며 wpa_supplicant.conf 의 `#!TH_5G=` 마커는 더 이상 읽지 않는다.",
                 "DIFF_TH: (int) 현재 AP 대비 후보 AP의 최소 RSSI 이득 (dB). 클수록 보수적. 0=이득 무관(동률 AP도 후보)이며 측정 요동(동일 AP 연속 관측 |ΔRSSI| p90=1dB)만으로도 로밍해 진동이 급증하므로 시험용. `wifi <if> roam diff <dB>` 로 런타임 변경(persist + SIGHUP 무재시작 반영).",
-                "CHECK_INTERVAL: (int) 로밍 체크 기본 주기 (초). ADAPTIVE_INTERVAL 활성 시 동적 조절됨",
+                "CHECK_INTERVAL: (int) 로밍 체크 고정 주기 (초)",
                 "SCAN_NO_RESULT_SLEEP: (int) 스캔 결과 없을 때 대기 (초)",
                 "ROAM_SUCCESS_SLEEP: (int) 로밍 성공 후 재체크 대기 (초)"
             ],
@@ -401,29 +401,22 @@
             },
             "STAGED_SCAN": {
                 "_comment": [
-                    "단계형 로밍 스캔(홈채널 → 교차채널 캐시 → active fallback). 모든 키는 SIGHUP으로 런타임 반영",
+                    "로밍 판정 스캔: 단일 freq는 홈채널 scan, 다중 freq는 전체 directed active scan. SIGHUP 런타임 반영",
                     "enable: (bool) 단계형 스캔 ON/OFF. false이면 기존 단일 active scan 사용",
-                    "skip_redundant_active: (bool) 홈 스캔에서 실제 후보를 찾으면 불필요한 Stage 3 active fallback 생략",
-                    "home_passive: (bool) true=홈채널 passive scan, false=허용된 SSID의 directed active scan",
-                    "cache_fresh_sec: (int) 교차채널 bgscan 캐시 유효 시간 (초). bgscan.interval보다 10초 이상 크게 설정 권장",
-                    "self_induced_tail_sec: (int) 자체 로밍 스캔 종료 후 bgscan 캐시로 간주하지 않을 시간 (초)"
+                    "skip_redundant_active: (bool) home_passive=true일 때 후보를 관측한 passive scan 뒤의 active fallback 생략. home_passive=false는 이미 active이므로 항상 1회만 수행",
+                    "home_passive: (bool) 단일 freq에서 true=홈채널 passive, false=directed active. 다중 freq에서는 무시하고 전체 directed active"
                 ],
                 "enable": true,
                 "skip_redundant_active": true,
-                "home_passive": true,
-                "cache_fresh_sec": 70,
-                "self_induced_tail_sec": 10
+                "home_passive": true
             },
             "GOOD_SIGNAL_RESET_GATE": {
                 "_comment": [
-                    "신호 양호 분기에서 위치가 실제로 변한 경우에만 후보없음 backoff streak를 초기화. 모든 키는 SIGHUP으로 런타임 반영",
-                    "enable: (bool) reset gate ON/OFF. false이면 기존처럼 항상 초기화, true이면 직전 초기화 대비 |ΔRSSI|가 delta_db 이상일 때만 초기화",
-                    "delta_db: (int) 초기화를 허용하는 최소 누적 RSSI 변화량 (dB, 최솟값 1)",
-                    "post_roam_grace_sec: (int) 로밍·재연결 후 gate를 우회하여 기존처럼 초기화할 시간 (초)"
+                    "신호 양호 분기에서 위치가 실제로 변한 경우에만 후보없음 backoff streak를 초기화. SIGHUP으로 런타임 반영",
+                    "enable: (bool) reset gate ON/OFF. false이면 기존처럼 항상 초기화",
+                    "정책 고정값: 직전 초기화 대비 |ΔRSSI| 2dB 이상이면 이동으로 판단, 결합 후 40초는 gate 우회"
                 ],
-                "enable": true,
-                "delta_db": 2,
-                "post_roam_grace_sec": 40
+                "enable": true
             },
             "SCAN_NO_RESULT_SLEEP": 3,
             "ROAM_SUCCESS_SLEEP": 3,
@@ -557,14 +550,10 @@
             "STAGED_SCAN": {
                 "enable": true,
                 "skip_redundant_active": true,
-                "home_passive": true,
-                "cache_fresh_sec": 70,
-                "self_induced_tail_sec": 10
+                "home_passive": true
             },
             "GOOD_SIGNAL_RESET_GATE": {
-                "enable": true,
-                "delta_db": 2,
-                "post_roam_grace_sec": 40
+                "enable": true
             },
             "SCAN_NO_RESULT_SLEEP": 3,
             "ROAM_SUCCESS_SLEEP": 2,

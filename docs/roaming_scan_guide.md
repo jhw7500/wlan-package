@@ -12,9 +12,9 @@
 | 주체 | 언제 | 무엇을 |
 |---|---|---|
 | **bgscan** (`wifi_bgscan.py`) | **로밍 컨디션이 꺼져 있을 때만** — 켜져 있으면 스캔하지 않고 5초 대기로 건너뛴다(§5 #7) | `interval`(기본 60초)마다 `scan_freq` **전 채널** |
-| **roam Stage 1/2/3** (`wifi_roam.py`) | **로밍 컨디션 진입 후에만** | 홈 채널 → 캐시 → 전 채널 |
+| **roam 판정 scan** (`wifi_roam.py`) | **로밍 컨디션 진입 후에만** | 단일 freq=홈채널 우선, 다중 freq=전체 directed active |
 
-`wifi_logger_scan.py` 는 **스스로 스캔하지 않는다.** 커널 로그(`dmesg --follow`)에서 `wlan: <if> START SCAN` → `wlan: SCAN COMPLETED` 쌍을 감지해 그 시점의 `mlanutl getscantable` 결과를 `ap.log` 에 덤프하는 **수동적 관찰자**다. 즉 누가 스캔했든 그 결과가 `ap.log`(= Stage 2 캐시)에 기록된다.
+`wifi_logger_scan.py` 는 **스스로 스캔하지 않는다.** 커널 scan 완료 이벤트를 관찰해 `mlanutl getscantable` 결과를 `ap.log`에 기록한다. `ap.log`는 진단 기록이며 자동 로밍 후보 RSSI 판정에는 사용하지 않는다.
 
 ### 로밍 컨디션이란
 
@@ -24,35 +24,30 @@
 
 ---
 
-## 1. roam Stage 구조
+## 1. roam scan 구조
 
-### Stage 1 — 홈 채널 스캔
+### 단일 freq — 홈 채널 우선
 
-현재 결합 채널 **하나만** 훑는다(`home_freq = station["freq"]`). 모드는 `STAGED_SCAN.home_passive`:
+`scan_freq`가 하나이고 현재 결합 채널과 같을 때만 홈채널 스캔을 먼저 수행한다. 모드는 `STAGED_SCAN.home_passive`:
 
 | 값 | 명령 | 성격 |
 |---|---|---|
 | `true` (기본) | `iw scan freq <홈> passive` | probe 미송신, beacon 수신 |
 | `false` | `iw scan freq <홈> ssid <allowed>` | directed probe (hidden 커버) |
 
-후보를 찾으면 **즉시 반환**해 Stage 2·3을 건너뛴다. 이때 `baseline_from_entries()` 로 현재 AP RSSI 를 같은 스캔 스케일로 맞춘다(소스 이질성 제거).
+후보를 찾으면 즉시 반환한다. 현재 AP RSSI도 같은 scan 결과에서 찾아 `DIFF_TH` 비교 source를 통일한다. 현재 AP 외 같은 SSID BSS를 관측했지만 이득이 부족하면 중복 active scan을 생략한다. 후보 beacon을 받지 못했거나 scan이 실패하면 동일 채널 directed active로 한 번 재확인한다.
 
-### Stage 2 — 교차채널 캐시
+### 다중 freq — 전 채널 active 1회
 
-`ap.log` 의 **마지막 시각 헤더 블록**을 읽는다(헤더는 대괄호 없는 `YYYY-MM-DD HH:MM:SS` 한 줄. 옛 `[시각]` 형식도 `SCAN_TIMESTAMP_RE` 가 함께 받는다). 게이트 4개를 모두 통과해야 판정에 쓰인다:
+`scan_freq`가 2개 이상이면 홈 passive와 `ap.log` cache를 건너뛰고 즉시 다음을 수행한다.
 
-1. `stage2_entries` 가 비어 있지 않음 — **홈 채널 엔트리를 제외한 뒤**
-2. `not self_induced` — 내 로밍 스캔이 유발한 블록이 아님
-3. `not clock_stepped` — 시계 점프 없음
-4. `scan_block_fresh(ts, cache_fresh_sec)` — 기본 70초 이내
+```sh
+iw scan freq <scan_freq 전체> ssid <allowed>
+```
 
-**홈 채널 엔트리를 빼는 이유**: Stage 1이 방금 실측한 채널을 최대 70초 묵은 캐시 RSSI로 재평가하면, 방금 내린 기각(`DIFF_TH` = 후보가 현재 AP보다 얼마나 좋아야 갈아타는지의 최소 이득 dB. JSON `roaming.DIFF_TH`, CLI `wifi <if> roam diff`, 기본 8)을 묵은 값이 뒤집는 역전이 생긴다. 단 Stage 1 스캔이 **실패**하면 이 필터가 걸리지 않는다(그때는 캐시가 유일한 정보 — 의도된 degrade).
+현재 AP와 후보 AP를 같은 시점/scan source로 비교한다. `ap.log`/bgscan cache RSSI는 최대 bgscan interval만큼 과거 값일 수 있어 최종 결정에는 사용하지 않는다.
 
-### Stage 3 — 전 채널 액티브 폴백
-
-`iw scan freq <scan_freq 전체> ssid <allowed>` (wildcard 없음). hidden SSID 는 **directed probe 로만** 발견되며 Stage 3 가 그 기본 경로다 — 홈 채널에 한해서는 `home_passive: false` 도 같은 효과를 낸다(둘 다 `ssid <allowed>` 를 붙인다).
-
-#### Stage 3 스킵 조건 — AND 3개
+#### 단일 freq passive 이후 active 재확인 스킵 조건 — AND 3개
 
 ```
 SKIP_REDUNDANT_ACTIVE_SCAN  and  home_scan_ok  and  home_covers_all
@@ -64,11 +59,13 @@ SKIP_REDUNDANT_ACTIVE_SCAN  and  home_scan_ok  and  home_covers_all
 | `home_covers_all` | — (런타임 판정) | `scan_freq ⊆ {홈채널}` — **단일 채널**이면 성립 |
 | **`home_scan_ok`** | — (런타임 판정) | **홈 채널에서 현재 AP 외 같은 SSID 후보를 실제로 봤음** |
 
-`home_scan_ok` 가 자주 간과된다. 단일 채널이어도 **홈 채널에 같은 SSID AP가 자기뿐이면** 스킵이 걸리지 않고 액티브가 돈다.
+`home_scan_ok` 가 자주 간과된다. `home_passive=true`인 단일 채널에서 **같은 SSID AP가 자기뿐이면** 스킵이 걸리지 않고 directed active fallback이 한 번 실행된다.
 
-> **실측(기여 미분리)**: AP 둘이 모두 ch48일 때는 `skip redundant active fallback` 이 439건 찍혔고, ch36/ch48로 분리하자 Stage 3가 매 tick 실행됐다. 다만 이 분리는 `home_scan_ok`(홈에 같은 SSID 후보 존재)와 `home_covers_all`(`scan_freq ⊆ {홈채널}`)을 **동시에** 거짓으로 만들므로 어느 항의 기여인지 갈라내지 못한다. `home_scan_ok` 단독 검증은 `scan_freq` 를 1개로 유지한 채 후보 AP 만 다른 채널로 옮기는 별도 A/B 가 필요하다.
+> 기존 실측에서 AP 둘이 모두 ch48일 때 `skip redundant active fallback`이 동작했다. ch36/ch48 다중 구성은 이제 home passive 없이 전 채널 active 1회로 처리한다.
 
 현재 결합 AP의 BSS 테이블 엔트리는 사용 중(in-use)이라 만료되지 않으므로, **"현재 AP만 보임"은 "같은 채널에 다른 AP가 없음"의 증거가 아니다.** 이웃 beacon 유실 시 directed probe가 유일한 재발견 경로라 액티브를 유지한다.
+
+`home_passive=false`이면 첫 홈 스캔 자체가 동일 채널 directed active이므로 후보 유무나 `skip_redundant_active` 값과 무관하게 **1회로 종료**한다. 결과가 없을 때 같은 명령을 즉시 반복하지 않고 다음 backoff tick에서 재시도한다.
 
 ---
 
@@ -90,8 +87,7 @@ SKIP_REDUNDANT_ACTIVE_SCAN  and  home_scan_ok  and  home_covers_all
     "STAGED_SCAN": {
       "enable": true,
       "home_passive": true,
-      "skip_redundant_active": true,
-      "cache_fresh_sec": 70
+      "skip_redundant_active": true
     }
   }
 }
@@ -107,11 +103,11 @@ tick당 `['iw','mlan0','scan','freq','5240','passive']` **1회뿐**. Stage 3 스
 
 **hidden SSID를 구조적으로 못 잡는다**(beacon에 SSID가 없다). 홈 채널에 hidden 로밍 타깃이 있으면 `home_passive: false` 로 바꿔야 하고, 그러면 probe airtime 이 생긴다. 대안인 `skip_redundant_active: false`(패시브+액티브 2회)는 **probe airtime 은 같고**(액티브 스캔 횟수가 둘 다 1회) 스캔 시간(off-channel dwell)이 한 번 더 늘어 자기 링크 tail 비용이 커진다.
 
-### 2.2 다채널 — 액티브 폴백
+### 2.2 다채널 — 직접 액티브
 
 #### 별도 설정이 필요 없다
 
-`scan_freq` 가 2개 이상이면 `home_covers_all=false` 가 되어 스킵 조건이 무너지고 **Stage 3 액티브가 매 tick 자동 실행**된다. **기본값 그대로 두면 된다.**
+`scan_freq`가 2개 이상이면 홈 passive/cache 단계를 건너뛰고 **전 채널 directed active가 1회 실행**된다. 기본값 그대로 두면 된다.
 
 ```json
 "mlan0": {
@@ -120,8 +116,7 @@ tick당 `['iw','mlan0','scan','freq','5240','passive']` **1회뿐**. Stage 3 스
     "STAGED_SCAN": {
       "enable": true,
       "home_passive": true,
-      "skip_redundant_active": true,
-      "cache_fresh_sec": 70
+      "skip_redundant_active": true
     }
   }
 }
@@ -129,9 +124,7 @@ tick당 `['iw','mlan0','scan','freq','5240','passive']` **1회뿐**. Stage 3 스
 
 `scan_freq=5180 5240` (2개 이상)
 
-#### 다채널에서 `home_passive: false` 는 쓰지 말 것
-
-Stage 1이 `iw scan freq <홈> ssid <allowed>`, Stage 3가 `iw scan freq <전채널> ssid <allowed>` 가 되어 **Stage 1이 후보를 못 찾은 tick 에서 홈 채널을 두 번 액티브로 probe** 한다(찾은 tick 은 즉시 반환해 Stage 3를 건너뛰므로 1회로 끝난다). 그만큼이 중복 비용이다. 다채널에서 Stage 1의 역할은 "저부하 패시브로 홈 후보를 먼저 찾아 액티브를 회피"하는 것이므로 `true` 가 맞다.
+다채널에서는 `home_passive`와 `skip_redundant_active`가 scan 방식을 바꾸지 않는다. `skip_redundant_active`는 단일 freq passive 모드에서만 평가되며, 단일 freq `home_passive=false`도 directed active 1회로 완결된다.
 
 ### 2.3 `bgscan.passive` 판단
 
@@ -147,8 +140,8 @@ Stage 1이 `iw scan freq <홈> ssid <allowed>`, Stage 3가 `iw scan freq <전채
 | RSSI 스케일 | 차이 없음 (§3.3 — roam Stage 1 vs Stage 3 실측. **bgscan 모드 간·`getscantable` 캐시는 미측정**) | 좌동 |
 | 로그 구분 | `passive` 토큰으로 구분 | **Stage 3와 명령 문자열 동일** |
 
-- **다채널**: hidden은 Stage 3가 어차피 잡는다. 액티브 bgscan이 얻는 것은 "1 tick 선점"뿐이고(Stage 1→3 간격 실측 1.15초), 대가는 상시 airtime이다.
-- **단일 채널**: 캐시가 **판정에 아예 쓰이지 않는다**(§1 Stage 2 — 홈채널 필터로 공집합). 액티브 bgscan이 hidden을 캐시에 넣어도 읽히지 않는다. 이 구성에서 Stage 3 까지 스킵된다면 hidden 을 잡는 경로는 `home_passive: false` 뿐이다.
+- **다채널**: roam condition에서 direct active가 hidden을 잡는다. active bgscan의 이득은 평시 선점뿐이고 대가는 상시 airtime이다.
+- **단일 채널**: cache는 판정에 쓰이지 않는다. hidden 대상은 `home_passive: false`로 발견한다.
 
 단말 수는 **비용 쪽만** 키운다(50대·3초 주기 기준 7.67%). 이득은 단말 수와 무관하므로, 1대여도 `true` 가 낫고 많아지면 격차가 벌어질 뿐이다.
 
@@ -291,10 +284,9 @@ backoff 가 상한에 머물지 못하는 주 원인은 곡선이 아니라 **go
 ```sh
 /usr/local/bin/wifi mlan0 roam gate on          # 켜기 (SIGHUP 무재시작)
 /usr/local/bin/wifi mlan0 roam gate             # 현재값 확인
-/usr/local/bin/wifi mlan0 roam gate delta 3     # 판정 임계 조정
 ```
 
-기본값은 `enable: true` 다(2026-08-03 전환 — 로그 재생 −58% + 실기 3-way 검증 후). 회귀 의심 시 `wifi <n> roam gate off` 로 즉시 끌 수 있다. 자세한 근거는 `wifi_init_conf_guide.md` §`GOOD_SIGNAL_RESET_GATE`.
+기본값은 `enable: true` 다(2026-08-03 전환 — 로그 재생 −58% + 실기 3-way 검증 후). 판정 임계 2dB와 결합 후 유예 40초는 실측 기반 코드 고정 정책이며 JSON/CLI 옵션이 아니다. 회귀 의심 시 `wifi <n> roam gate off` 로 즉시 끌 수 있다. 자세한 근거는 `wifi_init_conf_guide.md` §`GOOD_SIGNAL_RESET_GATE`.
 
 ---
 
@@ -302,15 +294,14 @@ backoff 가 상한에 머물지 못하는 주 원인은 곡선이 아니라 **go
 
 | # | 함정 | 내용 |
 |---|---|---|
-| 1 | **`cache_fresh_sec` vs `bgscan.interval`** | 두 값이 **독립 설정**이다. `interval` 을 90으로 올리면 캐시가 영구 stale 이 되어 Stage 2가 죽고 액티브 폴백만 남는다. `cache_fresh_sec = interval + 여유(≥10초)` 를 유지할 것 |
-| 2 | **JSON 실경로** | 데몬이 읽는 것은 **`/usr/local/etc/wifi_init_conf.json`**. `/opt/wlan/config/` 는 **템플릿**이라 편집해도 반영되지 않는다 |
-| 3 | **`bgscan.passive=false` 의 부작용** | Stage 3와 **명령 문자열이 완전히 동일**해져 로그에서 주체를 로거 태그(`SCAN[` vs `ROAM[`)로만 구분해야 한다. 패시브면 `passive` 토큰으로 구분된다 |
-| 4 | **good-signal 분기는 조용하다** | 게이트가 **발동(suppress)하지 않은** tick 은 로그를 남기지 않는다(로그 볼륨 절약 설계). 로그 부재가 "미진입"을 뜻하지 않으므로, 판정은 `streak` 와 `gate_suppressed=N`(no-candidate 줄에 병기) 으로 한다 |
-| 5 | **`MAX_SLEEP` 은 순수 코드 상수다** | `ROAM_NO_RESULT_MAX_SLEEP`(30) 은 JSON 으로 바꿀 수 없다 — 과거엔 로더가 `.get()` 으로 읽어 JSON 에 손으로 넣으면 몰래 실효되는 뒷문이 있었으나 감사 D2(2026-07-31)로 봉쇄됐다(`test_max_sleep_backdoor_closed` 가 고정). 실험에서 상한을 바꾸려면 `wifi_roam.py` 의 `DEFAULT_ROAM_NO_RESULT_MAX_SLEEP` 상수를 직접 수정해야 한다 |
-| 6 | **후보 미발견이 길어져도 빠른 주기로 복귀하지 않는다** | 상한(기본 30초)에 도달하면 그 주기를 유지한다. 복귀는 **후보 발견·bgscan hint·good-signal 리셋** 같은 사건으로만 일어나고 시간 경과로는 일어나지 않는다. 시간 기반 점감(`ROAM_NO_RESULT_BACKOFF_RECOVER_SEC`)이 있었으나 점감이 backoff 계산 뒤에 일어나고 다음 tick 의 `streak+1` 이 즉시 되돌려 **실효가 0**(streak 만 `7↔6` 진동)이었고, 그 코드는 제거됐다 |
-| 7 | **bgscan 기아** | 로밍 컨디션이 켜져 있으면 bgscan 은 스캔하지 않고 5초 대기로 건너뛰며, 추가로 roam 스캔이 `_record_roam_scan_time()` 으로 bgscan 타이머를 밀어낸다 → 컨디션이 지속되면 **bgscan 자체 스캔이 0회**가 된다. 임계를 비정상적으로 높인 시험 세팅에서 관측했으나, 로밍 컨디션은 `rssi < 임계` 면 진입하므로 **약전계·경계 구간에서는 정상 운용 중에도 같은 기아가 생길 수 있다 — 결함 여부는 미판정** |
-| 8 | **`wifi` CLI 경로** | `/usr/local/bin/wifi` 인데 **ssh 비대화형 PATH(`/usr/bin:/bin:/usr/sbin:/sbin`)에 없다.** 스크립트에서는 절대 경로를 쓸 것. `>/dev/null 2>&1` 과 겹치면 `command not found` 가 조용히 묻힌다 |
-| 9 | **`iw dev link` 는 신뢰 불가** | moal 이 cfg80211 `current_bss` 를 갱신하지 않아 연결 중에도 `Not connected.` 를 반환한다. 링크 판정은 `wlan_link_lib.sh`(wpa_cli → station dump 계단식)를 쓸 것 |
+| 1 | **JSON 실경로** | 데몬이 읽는 것은 **`/usr/local/etc/wifi_init_conf.json`**. `/opt/wlan/config/` 는 **템플릿**이라 편집해도 반영되지 않는다 |
+| 2 | **`bgscan.passive=false` 의 부작용** | Stage 3와 **명령 문자열이 완전히 동일**해져 로그에서 주체를 로거 태그(`SCAN[` vs `ROAM[`)로만 구분해야 한다. 패시브면 `passive` 토큰으로 구분된다 |
+| 3 | **good-signal 분기는 조용하다** | 게이트가 **발동(suppress)하지 않은** tick 은 로그를 남기지 않는다(로그 볼륨 절약 설계). 로그 부재가 "미진입"을 뜻하지 않으므로, 판정은 `streak` 와 `gate_suppressed=N`(no-candidate 줄에 병기) 으로 한다 |
+| 4 | **`MAX_SLEEP` 은 순수 코드 상수다** | `ROAM_NO_RESULT_MAX_SLEEP`(30) 은 JSON 으로 바꿀 수 없다 — 과거엔 로더가 `.get()` 으로 읽어 JSON 에 손으로 넣으면 몰래 실효되는 뒷문이 있었으나 감사 D2(2026-07-31)로 봉쇄됐다(`test_max_sleep_backdoor_closed` 가 고정). 실험에서 상한을 바꾸려면 `wifi_roam.py` 의 `DEFAULT_ROAM_NO_RESULT_MAX_SLEEP` 상수를 직접 수정해야 한다 |
+| 5 | **후보 미발견이 길어져도 빠른 주기로 복귀하지 않는다** | 상한(기본 30초)에 도달하면 그 주기를 유지한다. 복귀는 **후보 발견·bgscan hint·good-signal 리셋** 같은 사건으로만 일어나고 시간 경과로는 일어나지 않는다. 시간 기반 점감(`ROAM_NO_RESULT_BACKOFF_RECOVER_SEC`)이 있었으나 점감이 backoff 계산 뒤에 일어나고 다음 tick 의 `streak+1` 이 즉시 되돌려 **실효가 0**(streak 만 `7↔6` 진동)이었고, 그 코드는 제거됐다 |
+| 6 | **로밍 조건 중 bgscan 정지** | 로밍 조건 동안 bgscan은 정지하지만 로밍 판정은 최신 active/home scan을 직접 사용하므로 cache 고사로 인한 판단 오류는 없다 |
+| 7 | **`wifi` CLI 경로** | `/usr/local/bin/wifi` 인데 **ssh 비대화형 PATH(`/usr/bin:/bin:/usr/sbin:/sbin`)에 없다.** 스크립트에서는 절대 경로를 쓸 것. `>/dev/null 2>&1` 과 겹치면 `command not found` 가 조용히 묻힌다 |
+| 8 | **`iw dev link` 는 신뢰 불가** | moal 이 cfg80211 `current_bss` 를 갱신하지 않아 연결 중에도 `Not connected.` 를 반환한다. 링크 판정은 `wlan_link_lib.sh`(wpa_cli → station dump 계단식)를 쓸 것 |
 
 ---
 
@@ -318,7 +309,7 @@ backoff 가 상한에 머물지 못하는 주 원인은 곡선이 아니라 **go
 
 | 대상 | 방법 | 반영 |
 |---|---|---|
-| good-signal 게이트 | `wifi <if> roam gate [on\|off\|delta <dB>\|grace <sec>]` | SIGHUP 무재시작 |
+| good-signal 게이트 | `wifi <if> roam gate [on\|off]` | SIGHUP 무재시작 |
 | 로밍 임계 | `wifi <if> roam th {2G\|5G} <rssi>` | SIGHUP 무재시작 |
 | 후보 최소 이득 | `wifi <if> roam diff <dB>` | SIGHUP 무재시작 |
 | `STAGED_SCAN` 계열 | JSON 편집 + `systemctl kill --kill-who=main -s SIGHUP wifi_roam@<if>` | SIGHUP |
