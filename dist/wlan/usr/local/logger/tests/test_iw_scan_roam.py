@@ -14,7 +14,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import wifi_roam
 import wifi_logger_scan
 import passive_roam
-from wifi_roam import scan_results_to_ap_lines, iw_scan_to_ap_lines
+from wifi_roam import (
+    fresh_bssids_from_iw_scan,
+    scan_results_to_ap_lines,
+    iw_scan_to_ap_lines,
+)
 
 import pytest
 
@@ -27,6 +31,17 @@ SCAN_RESULTS = (
     "58:86:94:d2:73:e8\t5200\t-47.5\t[WPA2-PSK-CCMP][ESS]\tiptime5G\n"     # float signal
     "aa:bb:cc:dd:ee:ff\t2412\t-60\t[ESS]\tjhw_wlan_\n"                      # freq 밖(2.4G)
     "garbage line no tabs\n"
+)
+
+IW_SCAN_DUMP = (
+    "BSS 00:80:4c:c7:7d:dd(on mlan0) -- associated\n"
+    "\tlast seen: 0 ms ago\n"
+    "BSS 04:ba:d6:ec:0b:08(on mlan0)\n"
+    "\tlast seen: 1 ms ago\n"
+    "BSS 58:86:94:d2:73:e8(on mlan0)\n"
+    "\tlast seen: 2 ms ago\n"
+    "BSS aa:bb:cc:dd:ee:ff(on mlan0)\n"
+    "\tlast seen: 3 ms ago\n"
 )
 
 
@@ -92,6 +107,33 @@ def test_parser_empty_and_none():
     assert scan_results_to_ap_lines(None) == []
 
 
+def test_iw_fresh_bssid_parser_filters_stale_and_malformed():
+    dump = (
+        "BSS 00:80:4c:c7:7d:dd(on mlan0) -- associated\n"
+        "\tlast seen: 25 ms ago\n"
+        "BSS 04:ba:d6:ec:0b:08(on mlan0)\n"
+        "\tlast seen: 30000 ms ago\n"
+        "BSS broken\n"
+        "\tlast seen: 0 ms ago\n"
+        "BSS 58:86:94:d2:73:e8(on mlan0)\n"
+        "\tSSID: no-age-is-not-fresh\n"
+    )
+    assert fresh_bssids_from_iw_scan(dump, 1000) == {"00:80:4c:c7:7d:dd"}
+    assert fresh_bssids_from_iw_scan(None, 1000) == set()
+    assert fresh_bssids_from_iw_scan(dump, "bad") == set()
+
+
+def test_scan_results_filter_keeps_only_fresh_bssids():
+    out = scan_results_to_ap_lines(
+        SCAN_RESULTS,
+        fresh_bssids={"00:80:4C:C7:7D:DD", "58:86:94:d2:73:e8"},
+    )
+    assert [line.split("|")[4] for line in out] == [
+        "00:80:4c:c7:7d:dd",
+        "58:86:94:d2:73:e8",
+    ]
+
+
 # ---------- 라운드트립: scan_results → ap_lines → get_latest_scan ----------
 
 def test_roundtrip_candidate_bssid_is_table_entry(tmp_path, monkeypatch):
@@ -138,7 +180,7 @@ def test_empty_wpa_freq_accepts_any_channel_same_ssid(tmp_path, monkeypatch):
 def _dispatch(iw_rc=0, iw_err="", sr=SCAN_RESULTS, sr_rc=0):
     def side_effect(cmd, *a, **k):
         if cmd[0] == "iw":
-            return _Run(iw_rc, "", iw_err)
+            return _Run(iw_rc, IW_SCAN_DUMP if iw_rc == 0 else "", iw_err)
         if "scan_results" in cmd:
             return _Run(sr_rc, sr)
         return _Run(0, "")
@@ -152,6 +194,47 @@ def test_iw_scan_to_ap_lines_happy(monkeypatch):
     assert out and out[0].split("|")[4] == "00:80:4c:c7:7d:dd"
 
 
+def test_iw_scan_drops_supplicant_bss_not_refreshed_by_this_scan(monkeypatch):
+    """누적 scan_results의 강한 stale BSS가 이번 iw scan 결과로 승격되지 않는다."""
+    monkeypatch.setattr(wifi_roam.time, "sleep", lambda *_: None)
+    iw_dump = (
+        "BSS 00:80:4c:c7:7d:dd(on mlan0) -- associated\n"
+        "\tlast seen: 0 ms ago\n"
+        "BSS 04:ba:d6:ec:0b:08(on mlan0)\n"
+        "\tlast seen: 30000 ms ago\n"
+    )
+
+    def side_effect(cmd, *a, **k):
+        if cmd[0] == "iw":
+            return _Run(0, iw_dump)
+        if "scan_results" in cmd:
+            return _Run(0, SCAN_RESULTS)
+        return _Run(0, "")
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        out = iw_scan_to_ap_lines("jhw_wlan_", ["5180", "5200"])
+
+    assert [line.split("|")[4] for line in out] == ["00:80:4c:c7:7d:dd"]
+
+
+def test_iw_scan_without_last_seen_metadata_fails_closed(monkeypatch):
+    """freshness를 증명할 수 없으면 누적 supplicant table을 읽지 않고 판단을 건너뛴다."""
+    monkeypatch.setattr(wifi_roam.time, "sleep", lambda *_: None)
+    calls = {"sr": 0}
+
+    def side_effect(cmd, *a, **k):
+        if cmd[0] == "iw":
+            return _Run(0, "BSS 00:80:4c:c7:7d:dd(on mlan0)\n\tSSID: jhw_wlan_\n")
+        if "scan_results" in cmd:
+            calls["sr"] += 1
+            return _Run(0, SCAN_RESULTS)
+        return _Run(0, "")
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        assert iw_scan_to_ap_lines("jhw_wlan_", ["5180"]) is None
+    assert calls["sr"] == 0
+
+
 def test_iw_scan_ebusy_retries_then_reads(monkeypatch):
     monkeypatch.setattr(wifi_roam.time, "sleep", lambda *_: None)
     calls = {"iw": 0}
@@ -161,7 +244,7 @@ def test_iw_scan_ebusy_retries_then_reads(monkeypatch):
             calls["iw"] += 1
             if calls["iw"] == 1:
                 return _Run(240, "", "command failed: Device or resource busy (-16)")
-            return _Run(0, "")
+            return _Run(0, IW_SCAN_DUMP)
         if "scan_results" in cmd:
             return _Run(0, SCAN_RESULTS)
         return _Run(0, "")
@@ -187,7 +270,7 @@ def test_iw_scan_directed_cmd_includes_freq_and_ssids(monkeypatch):
     def side_effect(cmd, *a, **k):
         if cmd[0] == "iw":
             captured["cmd"] = cmd
-            return _Run(0, "")
+            return _Run(0, IW_SCAN_DUMP)
         if "scan_results" in cmd:
             return _Run(0, SCAN_RESULTS)
         return _Run(0, "")
@@ -232,7 +315,7 @@ def test_iw_scan_caps_ssids_to_driver_max(monkeypatch):
     def side_effect(cmd, *a, **k):
         if cmd[0] == "iw":
             captured["cmd"] = cmd
-            return _Run(0, "")
+            return _Run(0, IW_SCAN_DUMP)
         if "scan_results" in cmd:
             return _Run(0, SCAN_RESULTS)
         return _Run(0, "")
@@ -257,7 +340,7 @@ def test_iw_scan_no_cap_under_limit(monkeypatch):
     def side_effect(cmd, *a, **k):
         if cmd[0] == "iw":
             captured["cmd"] = cmd
-            return _Run(0, "")
+            return _Run(0, IW_SCAN_DUMP)
         if "scan_results" in cmd:
             return _Run(0, SCAN_RESULTS)
         return _Run(0, "")
@@ -277,7 +360,7 @@ def test_iw_scan_exactly_at_limit_no_cap(monkeypatch):
     def side_effect(cmd, *a, **k):
         if cmd[0] == "iw":
             captured["cmd"] = cmd
-            return _Run(0, "")
+            return _Run(0, IW_SCAN_DUMP)
         if "scan_results" in cmd:
             return _Run(0, SCAN_RESULTS)
         return _Run(0, "")
@@ -296,7 +379,7 @@ def test_scan_results_nonzero_rc_returns_none(monkeypatch):
 
     def side_effect(cmd, *a, **k):
         if cmd[0] == "iw":
-            return _Run(0, "")
+            return _Run(0, IW_SCAN_DUMP)
         if "scan_results" in cmd:
             return _Run(1, "", "some error")
         return _Run(0, "")
@@ -316,7 +399,7 @@ def test_iw_scan_empty_freqs_omits_freq_arg_full_band(monkeypatch):
     def side_effect(cmd, *a, **k):
         if cmd[0] == "iw":
             cap["cmd"] = list(cmd)
-            return _Run(0, "")
+            return _Run(0, IW_SCAN_DUMP)
         if "scan_results" in cmd:
             return _Run(0, SCAN_RESULTS)
         return _Run(0, "")

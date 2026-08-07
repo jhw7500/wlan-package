@@ -264,6 +264,16 @@ def test_baseline_from_entries_found_and_fallback():
     assert wifi_roam.baseline_from_entries(entries, "ff:ff:ff:ff:ff:ff", -70) == -70
 
 
+def test_filter_ap_lines_by_freq_handles_malformed_and_mixed_types():
+    ch36 = apln(0, 36, -55, CUR, "Net", freq=5180)
+    ch40 = apln(1, 40, -50, "bb:bb:bb:bb:bb:bb", "Net", freq=5200)
+    malformed = ["bad", "00|36|-50|0|aa:bb:cc:dd:ee:ff|not-a-freq|Net"]
+
+    assert wifi_roam.filter_ap_lines_by_freq([ch36, ch40] + malformed, "5180") == [ch36]
+    assert wifi_roam.filter_ap_lines_by_freq(None, 5180) == []
+    assert wifi_roam.filter_ap_lines_by_freq([ch36], None) == []
+
+
 class _Run:
     def __init__(self, rc=0, out="", err=""):
         self.returncode, self.stdout, self.stderr = rc, out, err
