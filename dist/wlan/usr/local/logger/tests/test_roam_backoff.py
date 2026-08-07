@@ -187,3 +187,83 @@ def test_main_reassigns_roam_hint_file_for_iface():
     main_idx = src.index('if __name__ == "__main__"')
     main_block = src[main_idx:]
     assert 'ROAM_HINT_FILE = f"/tmp/wifi_roam_hint_{IFACE}"' in main_block
+
+# --- same-SSID roam 실패 시 backoff 전진 (메인루프 wiring) ---
+
+class _StopLoop(Exception):
+    """interruptible_sleep 호출 횟수로 main() 무한 루프를 종료시키는 테스트 전용 신호."""
+
+
+def _drive_main(monkeypatch, roam_results, ticks):
+    """main() 루프를 interruptible_sleep 기준 ticks 회 돌리고 sleep 값 목록을 반환.
+
+    roam_results: roam_to_bssid 반환값 시퀀스 — 앞에서부터 소비하고 마지막 값을 반복.
+    매 tick 로밍 조건(rssi<th)과 후보 발견이 성립하도록 station/staged scan 을 고정해,
+    same-SSID 시도 결과(성공/실패)에 따른 sleep 경로만 관측한다.
+    """
+    _set_sleep(monkeypatch, 3, 30, fast=3)
+    monkeypatch.setattr(wifi_roam, "ENABLE_PREDICTIVE_ROAM", False)
+    monkeypatch.setattr(wifi_roam, "ENABLE_PING_PONG_PREVENTION", False)
+    monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", False)
+    monkeypatch.setattr(wifi_roam, "ENABLE_STAGED_SCAN", True)
+    monkeypatch.setattr(wifi_roam, "WPA_SSID", "net1")
+    monkeypatch.setattr(wifi_roam, "WPA_TH_2G", -65)
+    monkeypatch.setattr(wifi_roam, "CHECK_INTERVAL", 1)
+    monkeypatch.setattr(wifi_roam, "_RELOAD_STATE", {"pending": False})
+    monkeypatch.setattr(wifi_roam, "set_flag", lambda *a, **k: None)
+    monkeypatch.setattr(
+        wifi_roam, "reload_supplicant_conf_if_changed", lambda *a, **k: None
+    )
+    monkeypatch.setattr(wifi_roam, "roam_hint_touched", lambda state: False)
+    station = {"bssid": "aa:aa:aa:aa:aa:01", "rssi": -70, "freq": 2412, "ssid": "net1"}
+    monkeypatch.setattr(wifi_roam, "get_link_info", lambda: dict(station))
+    best = {"bssid": "aa:aa:aa:aa:aa:02", "ssid": "net1", "rssi": -55, "freq": 2437}
+    monkeypatch.setattr(
+        wifi_roam,
+        "staged_scan_best_candidate",
+        lambda *a, **k: (dict(best), "rssi", 10.0, True),
+    )
+    results = list(roam_results)
+
+    def fake_roam(*a, **k):
+        return results.pop(0) if len(results) > 1 else results[0]
+
+    monkeypatch.setattr(wifi_roam, "roam_to_bssid", fake_roam)
+    monkeypatch.setattr(wifi_roam.time, "sleep", lambda s: None)
+    sleeps = []
+
+    def fake_isleep(sec):
+        sleeps.append(sec)
+        if len(sleeps) >= ticks:
+            raise _StopLoop
+
+    monkeypatch.setattr(wifi_roam, "interruptible_sleep", fake_isleep)
+    with pytest.raises(_StopLoop):
+        wifi_roam.main()
+    return sleeps
+
+
+def test_main_roam_failure_sleeps_escalate(monkeypatch):
+    """반복 실패 시 후보없음과 동일한 플래토 곡선으로 sleep 에스컬레이션.
+
+    종전엔 후보 발견 시점 리셋 탓에 실패해도 CHECK_INTERVAL(1s) 고정 재시도였다."""
+    sleeps = _drive_main(monkeypatch, [False], ticks=13)
+    assert sleeps == [3, 3, 3, 6, 6, 6, 12, 12, 12, 24, 24, 24, 30]
+
+
+def test_main_roam_failure_backoff_caps(monkeypatch):
+    # 상한(30s) 도달 후 계속 실패해도 상한 유지(무한 증가 없음).
+    sleeps = _drive_main(monkeypatch, [False], ticks=20)
+    assert set(sleeps[12:]) == {30}
+
+
+def test_main_roam_success_resets_backoff(monkeypatch):
+    # 실패 5회(3,3,3,6,6) → 성공 확정 tick 은 interval(1s) → 이후 실패는 시작값 3부터.
+    sleeps = _drive_main(monkeypatch, [False] * 5 + [True, False], ticks=8)
+    assert sleeps == [3, 3, 3, 6, 6, 1, 3, 3]
+
+
+def test_main_roam_success_keeps_interval(monkeypatch):
+    # 성공만 이어지면 종전과 동일하게 interval(CHECK_INTERVAL) sleep 유지(무회귀).
+    sleeps = _drive_main(monkeypatch, [True], ticks=3)
+    assert sleeps == [1, 1, 1]
