@@ -412,10 +412,26 @@ cleanup_retired_roaming_keys() {
   fi
 }
 
+# mlan1 conf 의 활성 bgscan 은 supplicant 자율 로밍을 발화시켜 외부 roam 데몬과 Roaming
+# notify 경로를 우회한다. 템플릿에서는 제거했지만 cpchk 는 기존 /etc 복사본을 보존하므로,
+# 업그레이드 장비에서도 해당 라인만 표적 제거한다(사용자 관리 필드는 그대로 둔다).
+cleanup_mlan1_supplicant_bgscan() {
+  local conf="$1"
+  [ -f "$conf" ] || return 0
+  grep -q '^[[:space:]]*bgscan=' "$conf" || return 0
+  if sed -i '/^[[:space:]]*bgscan=/d' "$conf"; then
+    sync "$conf" 2>/dev/null || sync
+    logger -p local0.info "[$tag:$LINENO] [$KEY] removed active bgscan line from $conf"
+  else
+    logger -p local0.warn "[$tag:$LINENO] [$KEY] failed to remove bgscan line from $conf"
+  fi
+}
+
   cpchk /opt/wlan/mfg/bridge_init.conf /usr/local/mfg/bridge_init.conf
   cpchk /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/timesyncd.conf
   cpchk /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan0.conf /etc/wpa_supplicant/wpa_supplicant-mlan0.conf
   cpchk /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan1.conf /etc/wpa_supplicant/wpa_supplicant-mlan1.conf
+  cleanup_mlan1_supplicant_bgscan /etc/wpa_supplicant/wpa_supplicant-mlan1.conf
   cpchk /opt/wlan/config/systemd/network/20-mlan0.network /etc/systemd/network/20-mlan0.network
   cpchk /opt/wlan/config/systemd/network/21-mlan1.network /etc/systemd/network/21-mlan1.network
   cpchk /opt/wlan/config/systemd/network/22-eth0.network /etc/systemd/network/22-eth0.network
