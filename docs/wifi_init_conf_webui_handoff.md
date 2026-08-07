@@ -404,14 +404,10 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `PING_PONG_PREVENTION.window` | 핑퐁 감시 구간 | int | `20` | >=1 초 | yes | daemon-restart | 로밍 횟수 감시 구간 |
 | `PING_PONG_PREVENTION.max_roams_in_window` | 구간 내 최대 로밍 | int | `3` | >=1 | yes | daemon-restart | 초과 시 detection_time 동안 억제 |
 | `PING_PONG_PREVENTION.detection_time` | 핑퐁 억제 시간 | int | `5` | >=1 초 | yes | daemon-restart | 감지 후 로밍 억제 시간 |
-| `STAGED_SCAN.enable` | 단계형 스캔 | bool | `true` | true\|false | yes | runtime | 홈채널→캐시→전채널 3단계 스캔(로밍 가이드 §1). false=종전 단일 액티브 스캔 |
-| `STAGED_SCAN.skip_redundant_active` | Stage3 중복 스킵 | bool | `true` | true\|false | yes | runtime | 단일채널+홈스캔 성공 시 전채널 액티브 생략(스킵 조건 3개 AND, 가이드 §1) |
-| `STAGED_SCAN.home_passive` | Stage1 홈채널 패시브 | bool | `true` | true\|false | yes | runtime | false=directed 액티브(홈채널 hidden 타깃용, 가이드 §2) |
-| `STAGED_SCAN.cache_fresh_sec` | Stage2 캐시 신선도 | int | `70` | >=1 초 | yes | runtime | ap.log 캐시 블록 유효 시간. `bgscan.interval`+여유 유지(가이드 §5 함정 #1) |
-| `STAGED_SCAN.self_induced_tail_sec` | 자기유발 블록 제외 여유 | int | `10` | >=1 초 | yes | runtime | 내 로밍 스캔이 남긴 ap.log 블록을 Stage2 판정에서 제외하는 시간 여유 |
-| `GOOD_SIGNAL_RESET_GATE.enable` | good-signal 리셋 게이트 | bool | `true` | true\|false | yes | runtime | 정체 시 backoff streak 유지로 스캔 폭증 차단(PR #138, 현장 A/B 대기). CLI `wifi <n> roam gate` |
-| `GOOD_SIGNAL_RESET_GATE.delta_db` | 게이트 이동 판정 임계 | int | `2` | >=1 dB | yes | runtime | 직전 리셋 시점 대비 \|Δrssi\| 가 이 값 이상이면 리셋 허용 |
-| `GOOD_SIGNAL_RESET_GATE.post_roam_grace_sec` | 결합 후 유예 | int | `40` | >=1 초 | yes | runtime | attach ramp(결합 직후 RSSI 하강)를 이동으로 오독하지 않는 유예 |
+| `STAGED_SCAN.enable` | 로밍 판정 스캔 | bool | `true` | true\|false | yes | runtime | 단일 freq=홈채널 우선, 다중 freq=전체 directed active |
+| `STAGED_SCAN.skip_redundant_active` | 단일채널 중복 스킵 | bool | `true` | true\|false | yes | runtime | 단일채널 passive 모드에서 이웃을 관측하면 추가 active 생략. home_passive=false는 항상 active 1회 |
+| `STAGED_SCAN.home_passive` | 단일채널 홈 passive | bool | `true` | true\|false | yes | runtime | 단일 freq 전용. false=directed active; 다중 freq에서는 무시 |
+| `GOOD_SIGNAL_RESET_GATE.enable` | good-signal 리셋 게이트 | bool | `true` | true\|false | yes | runtime | 정체 시 backoff streak 유지. 판정 2dB/결합 유예 40초는 코드 고정. CLI `wifi <n> roam gate` |
 
 **비고 (roaming)** — 소비: `wifi_roam.py`(데몬 시작 시 1회 로드 → daemon-restart), `enabled`류는 `wifi_apply_enabled.sh`.
 - `mlanN.enabled=false`면 하위 로밍/스캔/logger/checker/arping 데몬은 상위 게이트로 강제 disable.

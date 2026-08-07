@@ -225,9 +225,7 @@ def test_scan_command_logged_even_on_failure(monkeypatch):
     assert any("'scan'" in t and "'passive'" in t for t in _texts())
 
 
-# ── staged_scan 통합: Stage 0 침묵 / Stage 2 지연 로깅 ──
-# 기존 test_staged_scan.py 는 get_latest_scan 을 통째로 mock 하므로 log 전달을 검증하지
-# 못한다. 여기서는 **실제 ap.log 파일**을 두고 파서까지 돌려 tick 단위 로그 수를 센다.
+# ── staged_scan 통합: ap.log cache가 로밍 판정/로그에 유입되지 않는지 검증 ──
 
 CUR = "aa:aa:aa:aa:aa:aa"
 
@@ -240,14 +238,8 @@ def staged(monkeypatch, tmp_path):
     monkeypatch.setattr(wifi_roam, "WPA_FREQ", ["5180", "5200"])
     monkeypatch.setattr(wifi_roam, "DIFF_TH", 10)
     monkeypatch.setattr(wifi_roam, "ENABLE_PREDICTIVE_ROAM", False)
-    monkeypatch.setattr(wifi_roam, "CACHE_FRESH_SEC", 45)
-    monkeypatch.setattr(wifi_roam, "SELF_INDUCED_TAIL_SEC", 10)
     monkeypatch.setattr(wifi_roam, "SKIP_REDUNDANT_ACTIVE_SCAN", True)
     monkeypatch.setattr(wifi_roam, "HOME_PASSIVE", True, raising=False)
-    monkeypatch.setattr(wifi_roam, "_LAST_SELF_SCAN_TS", None)
-    monkeypatch.setattr(wifi_roam, "_LAST_SELF_SCAN_END_TS", None)
-    monkeypatch.setattr(wifi_roam, "_LAST_WALL_TS", None, raising=False)
-    monkeypatch.setattr(wifi_roam, "_LAST_MONO_TS", None, raising=False)
     return monkeypatch, tmp_path
 
 
@@ -265,17 +257,13 @@ def _station(rssi=-70, freq=5180, ssid="Net"):
     return {"bssid": CUR, "ssid": ssid, "freq": freq, "rssi": rssi, "load": 0}
 
 
-def test_stage0_cache_silent_when_home_scan_succeeds(staged):
-    """[핵심] 홈스캔이 후보를 찾으면 캐시는 판정에 안 쓰이므로 로그도 안 남는다.
-
-    종전엔 이 경로에서 캐시 관측·후보 행이 매 tick 찍혀(실측 tick당 4줄) 같은 테이블이
-    두 번 나온 것처럼 보였다."""
+def test_multifreq_active_scan_does_not_log_cache(staged):
+    """다중채널에서는 cache를 읽지 않고 최신 active 결과만 [scan]으로 기록."""
     monkeypatch, tmp_path = staged
-    # 캐시에는 교차채널(ch40) 후보가 들어 있다 — 그런데도 안 찍혀야 한다.
-    _write_cache(tmp_path, monkeypatch, [apln(1, 40, -50, "cc:cc:cc:cc:cc:cc", "Net")])
-    home = [apln(0, 36, -68, CUR, "Net"), apln(1, 36, -45, "bb:bb:bb:bb:bb:bb", "Net")]
+    _write_cache(tmp_path, monkeypatch, [apln(1, 40, -30, "cc:cc:cc:cc:cc:cc", "Net")])
+    active = [apln(0, 36, -68, CUR, "Net"), apln(1, 40, -45, "bb:bb:bb:bb:bb:bb", "Net")]
     monkeypatch.setattr(
-        wifi_roam, "iw_scan_to_ap_lines", lambda *a, **k: home if k.get("passive") else None
+        wifi_roam, "iw_scan_to_ap_lines", lambda *a, **k: active if not k.get("passive") else None
     )
     wifi_roam.logger.reset_mock()
 
@@ -289,48 +277,41 @@ def test_stage0_cache_silent_when_home_scan_succeeds(staged):
     assert any("[scan]" in t for t in _texts()), "실측 스캔 로그까지 사라지면 회귀"
 
 
-def test_stage2_cache_logged_when_actually_used(staged):
-    """[핵심] 캐시가 실제 판정 입력이 되는 tick 에서는 [cache] 후보 행이 남는다 —
-    지연 로깅이 '정보를 없애는' 변경이 아님을 고정."""
+def test_multifreq_cache_not_used_when_active_fails(staged):
+    """active 실패 시 ap.log에 강한 후보가 있어도 선택하거나 로그하지 않는다."""
     monkeypatch, tmp_path = staged
-    _write_cache(tmp_path, monkeypatch, [apln(1, 40, -50, "cc:cc:cc:cc:cc:cc", "Net")])
-    home = [apln(0, 36, -70, CUR, "Net")]  # 현재 AP만 → 홈 후보 없음
-    monkeypatch.setattr(
-        wifi_roam, "iw_scan_to_ap_lines", lambda *a, **k: home if k.get("passive") else None
-    )
+    _write_cache(tmp_path, monkeypatch, [apln(1, 40, -30, "cc:cc:cc:cc:cc:cc", "Net")])
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", lambda *a, **k: None)
     wifi_roam.logger.reset_mock()
 
     best, _r, _s, _sc = wifi_roam.staged_scan_best_candidate(
         _station(), ["Net"], "Net", "stable", None
     )
-    assert best is not None and best["bssid"] == "cc:cc:cc:cc:cc:cc", "캐시 후보 채택 경로가 깨졌다"
-    cache_cand = [t for t in _texts() if "[cache]" in t and "roam candidate" in t]
-    assert cache_cand, f"캐시를 썼는데 근거 로그가 없다: {_texts()}"
+    assert best is None
+    assert not any("[cache]" in t for t in _texts())
 
 
-def test_stage2_logs_only_entries_actually_evaluated(staged):
-    """캐시 로그는 홈채널 필터를 거친 stage2_entries 와 일치해야 한다 — 판정 입력과
-    로그가 어긋나면 진단이 틀어진다(홈채널 캐시 엔트리는 Stage 1 실측이 대체)."""
+def test_multifreq_logs_only_active_entries(staged):
+    """cache BSSID가 아니라 이번 active scan BSSID만 판정 로그에 남는다."""
     monkeypatch, tmp_path = staged
     _write_cache(
         tmp_path,
         monkeypatch,
         [
-            apln(1, 36, -40, "dd:dd:dd:dd:dd:dd", "Net"),  # 홈채널(5180) → 필터로 제외
-            apln(2, 40, -50, "cc:cc:cc:cc:cc:cc", "Net"),  # 교차채널 → 평가 대상
+            apln(1, 36, -30, "dd:dd:dd:dd:dd:dd", "Net"),
+            apln(2, 40, -30, "cc:cc:cc:cc:cc:cc", "Net"),
         ],
     )
-    home = [apln(0, 36, -70, CUR, "Net")]
+    active = [apln(0, 36, -70, CUR, "Net"), apln(1, 40, -50, "ee:ee:ee:ee:ee:ee", "Net")]
     monkeypatch.setattr(
-        wifi_roam, "iw_scan_to_ap_lines", lambda *a, **k: home if k.get("passive") else None
+        wifi_roam, "iw_scan_to_ap_lines", lambda *a, **k: active
     )
     wifi_roam.logger.reset_mock()
 
     best, _r, _s, _sc = wifi_roam.staged_scan_best_candidate(
         _station(), ["Net"], "Net", "stable", None
     )
-    cache_logs = [t for t in _texts() if "[cache]" in t]
-    assert not any("dd:dd:dd:dd:dd:dd" in t for t in cache_logs), (
-        "홈채널 캐시 엔트리는 평가에서 빠지는데 로그에는 남았다(로그≠판정입력)"
-    )
-    assert best is not None and best["bssid"] == "cc:cc:cc:cc:cc:cc"
+    texts = _texts()
+    assert not any("[cache]" in t for t in texts)
+    assert not any("dd:dd:dd:dd:dd:dd" in t or "cc:cc:cc:cc:cc:cc" in t for t in texts)
+    assert best is not None and best["bssid"] == "ee:ee:ee:ee:ee:ee"

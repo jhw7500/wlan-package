@@ -1273,7 +1273,7 @@
               "type": "integer",
               "default": 1,
               "minimum": 1,
-              "description": "로밍 체크 기본 주기(초). ADAPTIVE_INTERVAL 활성 시 동적 조절",
+              "description": "로밍 체크 고정 주기(초)",
               "x-ui-editable": "yes",
               "x-apply-timing": "daemon-restart",
               "x-consumer": "wifi_roam.py"
@@ -1404,25 +1404,7 @@
                 "enable": {
                   "type": "boolean",
                   "default": true,
-                  "description": "true(기본, 2026-08-03 전환)면 직전 리셋 시점 대비 |Δrssi| >= delta_db 일 때만 리셋한다. false 면 종전대로 무조건 리셋. 근거: 정체 18.85h 재생에서 오탐 리셋 662건 중 624건(94%)이 이 분기이고 그중 623건이 Δ0dB — 임계 바로 위에서 진동할 뿐 위치가 안 변한 경우로, 리셋되면 다음 악화에 backoff 가 3초부터 다시 올라가 스캔이 폭증한다. 켜면 스캔 3377→1417(-58.0%, airtime duty 5.44%→2.28%), 이동 로그(71개 90.1h)는 -0.0%·추가지연 0건",
-                  "x-ui-editable": "yes",
-                  "x-apply-timing": "runtime",
-                  "x-consumer": "wifi_roam.py"
-                },
-                "delta_db": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "default": 2,
-                  "description": "리셋을 허용하는 최소 |Δrssi|(dB). 매 tick 직전값이 아니라 **직전 리셋 시점** 기준 누적 변화라 1dB 씩 천천히 이동하는 구간도 누적으로 잡는다. 재생 실측상 1/2/3/5 가 전부 -58.0~-58.1% 로 동일(리셋 지점의 Δ가 0dB 에 몰림) — 1dB 양자화 여유를 둔 2 권장",
-                  "x-ui-editable": "yes",
-                  "x-apply-timing": "runtime",
-                  "x-consumer": "wifi_roam.py"
-                },
-                "post_roam_grace_sec": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "default": 40,
-                  "description": "결합(로밍·재연결·부팅 후 첫 관측) 후 이 시간(초) 동안은 게이트를 우회해 종전처럼 리셋한다. 결합 직후 RSSI 는 25초에 걸쳐 12~14dB 하강하는 측정 램프(attach ramp — TX rate 불변이라 실제 링크 열화가 아니다)라, 그 큰 Δ 를 '이동'으로 읽으면 게이트가 무력화된다",
+                  "description": "true(기본)면 직전 리셋 시점 대비 |Δrssi| >= 2dB 일 때만 리셋하고, 결합 후 40초는 gate를 우회한다. false면 종전대로 항상 리셋하는 현장 kill-switch",
                   "x-ui-editable": "yes",
                   "x-apply-timing": "runtime",
                   "x-consumer": "wifi_roam.py"
@@ -1432,7 +1414,7 @@
             "STAGED_SCAN": {
               "type": "object",
               "additionalProperties": true,
-              "description": "단계형 로밍 스캔(홈채널 패시브 → 교차채널 캐시 → 액티브 폴백)",
+              "description": "로밍 판정 스캔(단일 freq: 홈채널 우선, 다중 freq: 전체 directed active 1회; ap.log cache는 판정에 미사용)",
               "properties": {
                 "enable": {
                   "type": "boolean",
@@ -1445,7 +1427,7 @@
                 "skip_redundant_active": {
                   "type": "boolean",
                   "default": true,
-                  "description": "scan_freq 가 현재(홈) 채널의 부분집합(단일 채널 등)이고 홈 스캔이 현재 AP 외 후보를 실제로 봤으면 Stage 3 액티브 폴백을 스킵. 매 로밍컨디션 주기의 불필요한 액티브 스캔(probe 송신)을 제거해 airtime·링크 방해를 줄인다. 스캔 실패·현재 AP 상주 엔트리만 보임·타 SSID 만 보임이면 재시도/재발견을 위해 액티브 유지. 홈채널에 hidden 로밍 SSID가 있으면 home_passive=false(홈 directed 액티브) 권장",
+                  "description": "단일 freq에서 home_passive=true이고 홈 passive scan이 현재 AP 외 후보를 실제로 봤으면 추가 active fallback을 스킵한다. 스캔 실패·현재 AP만 보임·타 SSID만 보임이면 재발견을 위해 active fallback을 유지한다. home_passive=false는 첫 scan 자체가 directed active이므로 이 값과 무관하게 1회만 수행한다",
                   "x-ui-editable": "yes",
                   "x-apply-timing": "runtime",
                   "x-consumer": "wifi_roam.py"
@@ -1453,25 +1435,7 @@
                 "home_passive": {
                   "type": "boolean",
                   "default": true,
-                  "description": "Stage 1 홈채널 스캔 모드. true(기본)=패시브(probe 미송신, 저부하·비콘 스케일 RSSI). false=directed 액티브(allowed SSID probe, wildcard 없음) — 홈채널에 hidden 로밍 타깃이 있는 배포에서 skip_redundant_active 최적화를 유지한 채 hidden 을 발견(패시브는 hidden 을 구조적으로 못 봄)",
-                  "x-ui-editable": "yes",
-                  "x-apply-timing": "runtime",
-                  "x-consumer": "wifi_roam.py"
-                },
-                "cache_fresh_sec": {
-                  "type": "integer",
-                  "default": 70,
-                  "minimum": 1,
-                  "description": "교차채널 캐시(ap.log 배경 블록) 신선도 바운드(초). 초과 시 액티브 폴백. bgscan.interval + 여유(≥10초)로 설정 — 작으면 매 bgscan 주기 말미에 최신 배경 블록조차 stale 판정되어 불필요한 액티브 폴백이 남는다. 기본값 45→70 조정(2026-07): 기존 기기는 postinst json_merge가 기존 값(45)을 보존하므로 업그레이드 시 수동 갱신 필요",
-                  "x-ui-editable": "yes",
-                  "x-apply-timing": "runtime",
-                  "x-consumer": "wifi_roam.py"
-                },
-                "self_induced_tail_sec": {
-                  "type": "integer",
-                  "default": 10,
-                  "minimum": 1,
-                  "description": "자기 스캔 종료 후 이 시간 안에 기록된 ap.log 블록은 그 스캔이 유발한 것으로 보고 배경 캐시로 쓰지 않는다(초)",
+                  "description": "단일 freq 홈채널 스캔 모드. true(기본)=패시브, false=directed active. 다중 freq에서는 이 값과 무관하게 설정 freq 전체 directed active 1회",
                   "x-ui-editable": "yes",
                   "x-apply-timing": "runtime",
                   "x-consumer": "wifi_roam.py"
@@ -2036,7 +2000,7 @@
               "type": "integer",
               "default": 3,
               "minimum": 1,
-              "description": "로밍 체크 기본 주기(초). ADAPTIVE_INTERVAL 활성 시 동적 조절",
+              "description": "로밍 체크 고정 주기(초)",
               "x-ui-editable": "yes",
               "x-apply-timing": "daemon-restart",
               "x-consumer": "wifi_roam.py"
@@ -2167,25 +2131,7 @@
                 "enable": {
                   "type": "boolean",
                   "default": true,
-                  "description": "true(기본, 2026-08-03 전환)면 직전 리셋 시점 대비 |Δrssi| >= delta_db 일 때만 리셋한다. false 면 종전대로 무조건 리셋. 근거: 정체 18.85h 재생에서 오탐 리셋 662건 중 624건(94%)이 이 분기이고 그중 623건이 Δ0dB — 임계 바로 위에서 진동할 뿐 위치가 안 변한 경우로, 리셋되면 다음 악화에 backoff 가 3초부터 다시 올라가 스캔이 폭증한다. 켜면 스캔 3377→1417(-58.0%, airtime duty 5.44%→2.28%), 이동 로그(71개 90.1h)는 -0.0%·추가지연 0건",
-                  "x-ui-editable": "yes",
-                  "x-apply-timing": "runtime",
-                  "x-consumer": "wifi_roam.py"
-                },
-                "delta_db": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "default": 2,
-                  "description": "리셋을 허용하는 최소 |Δrssi|(dB). 매 tick 직전값이 아니라 **직전 리셋 시점** 기준 누적 변화라 1dB 씩 천천히 이동하는 구간도 누적으로 잡는다. 재생 실측상 1/2/3/5 가 전부 -58.0~-58.1% 로 동일(리셋 지점의 Δ가 0dB 에 몰림) — 1dB 양자화 여유를 둔 2 권장",
-                  "x-ui-editable": "yes",
-                  "x-apply-timing": "runtime",
-                  "x-consumer": "wifi_roam.py"
-                },
-                "post_roam_grace_sec": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "default": 40,
-                  "description": "결합(로밍·재연결·부팅 후 첫 관측) 후 이 시간(초) 동안은 게이트를 우회해 종전처럼 리셋한다. 결합 직후 RSSI 는 25초에 걸쳐 12~14dB 하강하는 측정 램프(attach ramp — TX rate 불변이라 실제 링크 열화가 아니다)라, 그 큰 Δ 를 '이동'으로 읽으면 게이트가 무력화된다",
+                  "description": "true(기본)면 직전 리셋 시점 대비 |Δrssi| >= 2dB 일 때만 리셋하고, 결합 후 40초는 gate를 우회한다. false면 종전대로 항상 리셋하는 현장 kill-switch",
                   "x-ui-editable": "yes",
                   "x-apply-timing": "runtime",
                   "x-consumer": "wifi_roam.py"
@@ -2195,7 +2141,7 @@
             "STAGED_SCAN": {
               "type": "object",
               "additionalProperties": true,
-              "description": "단계형 로밍 스캔(홈채널 패시브 → 교차채널 캐시 → 액티브 폴백)",
+              "description": "로밍 판정 스캔(단일 freq: 홈채널 우선, 다중 freq: 전체 directed active 1회; ap.log cache는 판정에 미사용)",
               "properties": {
                 "enable": {
                   "type": "boolean",
@@ -2208,7 +2154,7 @@
                 "skip_redundant_active": {
                   "type": "boolean",
                   "default": true,
-                  "description": "scan_freq 가 현재(홈) 채널의 부분집합(단일 채널 등)이고 홈 스캔이 현재 AP 외 후보를 실제로 봤으면 Stage 3 액티브 폴백을 스킵. 매 로밍컨디션 주기의 불필요한 액티브 스캔(probe 송신)을 제거해 airtime·링크 방해를 줄인다. 스캔 실패·현재 AP 상주 엔트리만 보임·타 SSID 만 보임이면 재시도/재발견을 위해 액티브 유지. 홈채널에 hidden 로밍 SSID가 있으면 home_passive=false(홈 directed 액티브) 권장",
+                  "description": "단일 freq에서 home_passive=true이고 홈 passive scan이 현재 AP 외 후보를 실제로 봤으면 추가 active fallback을 스킵한다. 스캔 실패·현재 AP만 보임·타 SSID만 보임이면 재발견을 위해 active fallback을 유지한다. home_passive=false는 첫 scan 자체가 directed active이므로 이 값과 무관하게 1회만 수행한다",
                   "x-ui-editable": "yes",
                   "x-apply-timing": "runtime",
                   "x-consumer": "wifi_roam.py"
@@ -2216,25 +2162,7 @@
                 "home_passive": {
                   "type": "boolean",
                   "default": true,
-                  "description": "Stage 1 홈채널 스캔 모드. true(기본)=패시브(probe 미송신, 저부하·비콘 스케일 RSSI). false=directed 액티브(allowed SSID probe, wildcard 없음) — 홈채널에 hidden 로밍 타깃이 있는 배포에서 skip_redundant_active 최적화를 유지한 채 hidden 을 발견(패시브는 hidden 을 구조적으로 못 봄)",
-                  "x-ui-editable": "yes",
-                  "x-apply-timing": "runtime",
-                  "x-consumer": "wifi_roam.py"
-                },
-                "cache_fresh_sec": {
-                  "type": "integer",
-                  "default": 70,
-                  "minimum": 1,
-                  "description": "교차채널 캐시(ap.log 배경 블록) 신선도 바운드(초). 초과 시 액티브 폴백. bgscan.interval + 여유(≥10초)로 설정 — 작으면 매 bgscan 주기 말미에 최신 배경 블록조차 stale 판정되어 불필요한 액티브 폴백이 남는다. 기본값 45→70 조정(2026-07): 기존 기기는 postinst json_merge가 기존 값(45)을 보존하므로 업그레이드 시 수동 갱신 필요",
-                  "x-ui-editable": "yes",
-                  "x-apply-timing": "runtime",
-                  "x-consumer": "wifi_roam.py"
-                },
-                "self_induced_tail_sec": {
-                  "type": "integer",
-                  "default": 10,
-                  "minimum": 1,
-                  "description": "자기 스캔 종료 후 이 시간 안에 기록된 ap.log 블록은 그 스캔이 유발한 것으로 보고 배경 캐시로 쓰지 않는다(초)",
+                  "description": "단일 freq 홈채널 스캔 모드. true(기본)=패시브, false=directed active. 다중 freq에서는 이 값과 무관하게 설정 freq 전체 directed active 1회",
                   "x-ui-editable": "yes",
                   "x-apply-timing": "runtime",
                   "x-consumer": "wifi_roam.py"

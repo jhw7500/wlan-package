@@ -12,6 +12,10 @@
 """
 import sys
 import os
+import json
+import re
+import shlex
+import subprocess
 import time
 from unittest.mock import MagicMock
 
@@ -257,7 +261,7 @@ def restore_globals():
         "ENABLE_GOOD_SIGNAL_GATE", "GOOD_SIGNAL_GATE_DELTA_DB", "GOOD_SIGNAL_GATE_GRACE_SEC",
         "DIFF_TH", "CHECK_INTERVAL", "WPA_TH_2G", "WPA_TH_5G",
         "ENABLE_PREDICTIVE_ROAM", "ENABLE_LOAD_BASED_ROAM", "ENABLE_STAGED_SCAN",
-        "HOME_PASSIVE", "CACHE_FRESH_SEC", "SELF_INDUCED_TAIL_SEC",
+        "HOME_PASSIVE",
     ]
     saved = {k: getattr(wifi_roam, k) for k in keys if hasattr(wifi_roam, k)}
     yield
@@ -281,12 +285,12 @@ def _load(monkeypatch, roaming):
 
 
 def test_config_load_applies_gate(monkeypatch, restore_globals):
-    """JSON 의 GOOD_SIGNAL_RESET_GATE 가 전역에 반영된다."""
+    """enable만 반영되고 폐기된 수치 키는 고정 정책을 바꾸지 않는다."""
     _load(monkeypatch, {"GOOD_SIGNAL_RESET_GATE":
                         {"enable": True, "delta_db": 3, "post_roam_grace_sec": 25}})
     assert wifi_roam.ENABLE_GOOD_SIGNAL_GATE is True
-    assert wifi_roam.GOOD_SIGNAL_GATE_DELTA_DB == 3
-    assert wifi_roam.GOOD_SIGNAL_GATE_GRACE_SEC == 25
+    assert wifi_roam.GOOD_SIGNAL_GATE_DELTA_DB == 2
+    assert wifi_roam.GOOD_SIGNAL_GATE_GRACE_SEC == 40
 
 
 def test_config_default_is_enabled(monkeypatch, restore_globals):
@@ -296,26 +300,9 @@ def test_config_default_is_enabled(monkeypatch, restore_globals):
     assert wifi_roam.ENABLE_GOOD_SIGNAL_GATE is True
 
 
-def test_config_zero_delta_clamped(monkeypatch, restore_globals):
-    """delta_db=0 은 게이트를 무효화하므로 하한 1 로 클램프된다."""
-    _load(monkeypatch, {"GOOD_SIGNAL_RESET_GATE": {"enable": True, "delta_db": 0}})
-    assert wifi_roam.GOOD_SIGNAL_GATE_DELTA_DB >= 1
-
-
-def test_config_zero_grace_clamped(monkeypatch, restore_globals):
-    """post_roam_grace_sec=0 은 attach ramp 보호를 없애므로 하한 1 로 클램프."""
-    _load(monkeypatch, {"GOOD_SIGNAL_RESET_GATE": {"enable": True, "post_roam_grace_sec": 0}})
-    assert wifi_roam.GOOD_SIGNAL_GATE_GRACE_SEC >= 1
-
-
 def test_config_garbage_falls_back(monkeypatch, restore_globals):
-    """타입이 깨진 값은 기본값으로 폴백하고 크래시하지 않는다.
-
-    enable 도 함께 검증한다 — bool 이 아닌 값("yes")이 truthy 로 새어 들어가면 의도치 않게
-    게이트가 켜진다(기본 off 라는 무회귀 보장이 깨진다)."""
+    """enable 타입이 깨져도 bool 기본값으로 폴백하고 크래시하지 않는다."""
     _load(monkeypatch, {"GOOD_SIGNAL_RESET_GATE": {"enable": "yes", "delta_db": "abc"}})
-    assert isinstance(wifi_roam.GOOD_SIGNAL_GATE_DELTA_DB, int)
-    assert wifi_roam.GOOD_SIGNAL_GATE_DELTA_DB >= 1
     assert isinstance(wifi_roam.ENABLE_GOOD_SIGNAL_GATE, bool), (
         f"enable 이 bool 로 정규화되지 않았다: {wifi_roam.ENABLE_GOOD_SIGNAL_GATE!r}"
     )
@@ -326,7 +313,7 @@ def test_config_garbage_falls_back(monkeypatch, restore_globals):
 
 def test_wifi_sh_gate_defaults_match_python():
     """`wifi <if> roam gate` 표시용으로 wifi.sh 가 들고 있는 기본값 사본이 이 모듈의
-    DEFAULT_GOOD_SIGNAL_GATE_* 와 일치하는지 검증한다.
+    고정 정책 상수와 일치하는지 검증한다.
 
     사본을 둔 이유: JSON 에 키가 없을 때 데몬이 무엇을 쓰는지 CLI 가 보여주려면 값이
     필요한데, 셸에서 파이썬 상수를 읽는 것은 비싸다. 대신 여기서 두 파일을 파싱해
@@ -337,12 +324,34 @@ def test_wifi_sh_gate_defaults_match_python():
     with open(sh, encoding="utf-8") as fh:
         text = fh.read()
 
-    import re
     def sh_val(name):
         m = re.search(rf"^{name}=(\S+)", text, re.M)
         assert m, f"wifi.sh 에 {name} 정의가 없다"
         return m.group(1)
 
     assert sh_val("GATE_DEF_ENABLE") == str(wifi_roam.DEFAULT_ENABLE_GOOD_SIGNAL_GATE).lower()
-    assert int(sh_val("GATE_DEF_DELTA_DB")) == wifi_roam.DEFAULT_GOOD_SIGNAL_GATE_DELTA_DB
-    assert int(sh_val("GATE_DEF_GRACE_SEC")) == wifi_roam.DEFAULT_GOOD_SIGNAL_GATE_GRACE_SEC
+    assert int(sh_val("GATE_FIXED_DELTA_DB")) == wifi_roam.GOOD_SIGNAL_GATE_DELTA_DB
+    assert int(sh_val("GATE_FIXED_GRACE_SEC")) == wifi_roam.GOOD_SIGNAL_GATE_GRACE_SEC
+
+
+def test_wifi_sh_gate_false_is_not_treated_as_missing(tmp_path):
+    """jq의 `false // fallback` 함정으로 gate off가 true(default)로 표시되지 않는다."""
+    sh = os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "wifi.sh")
+    text = open(sh, encoding="utf-8").read()
+    func = re.search(r"^gate_effective\(\) \{.*?^\}", text, re.M | re.S)
+    assert func, "wifi.sh gate_effective 함수 추출 실패"
+
+    conf = tmp_path / "wifi_init_conf.json"
+    conf.write_text(json.dumps({
+        "mlan0": {"roaming": {"GOOD_SIGNAL_RESET_GATE": {"enable": False}}}
+    }))
+    script = (
+        f"WIFI_INIT_CONF_JSON={shlex.quote(str(conf))}\n"
+        f"{func.group(0)}\n"
+        "gate_effective mlan0 enable true\n"
+    )
+    result = subprocess.run(
+        ["bash", "-c", script], text=True, capture_output=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "false"

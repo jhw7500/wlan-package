@@ -631,20 +631,22 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 > - **전제**: `extra_ssids`는 현재 network와 **같은 `psk`/`key_mgmt`를 공유**해야 한다. 전환은 conf의 `ssid=`만 교체(`wifi <iface> connect`)하므로 자격증명이 다르면 인증에 실패한다.
 > - **목록 작성**: `extra_ssids`에는 로밍 대상 SSID를 **모두** 나열한다. `wifi connect` 전환 시 conf의 `ssid=`가 바뀌므로, 현재 라이브 SSID는 자동으로 후보에 유지되지만 그 외 대상(원래 기본 SSID 포함)으로 복귀하려면 그 SSID도 `extra_ssids`에 있어야 한다.
 > - **전환 방식**: 후보 SSID가 현재 연결 SSID와 같으면 `wpa_cli roam <bssid>`(무중단), 다르면 `wifi <iface> connect <ssid>`(conf `ssid=` 교체 → `reconfigure` → `reassociate`, **짧은 재연결 끊김** 발생. freq는 넘기지 않아 `scan_freq` 보존).
-> - **스캔 발견**: `bgscan.passive=false`(액티브)면 bgscan이 `ssid_filter` 값과 무관하게 `extra_ssids`를 항상 directed probe하므로 hidden 여부와 무관하게 로밍 후보 SSID가 스캔된다(§11.3, bgscan이 커널 scan cache를 채움). **`bgscan.passive=true`(기본)면 probe가 없어 hidden extra SSID는 bgscan으로 발견되지 않고**, 로밍 트리거 시의 **액티브 폴백**(directed probe, 위 단계형 스캔 3단계)이 이를 보완한다. `wifi_roam.py`의 판정 스캔은 `iw scan` + `wpa_cli scan_results` 경로를 쓴다(과거 mlanutl `setuserscan`은 wpa_supplicant BSS 테이블을 채우지 않아 `wpa_cli roam`이 실패해 대체됨).
+> - **스캔 발견**: `bgscan.passive=false`면 hidden SSID도 평시에 directed probe한다. 기본 `passive=true`에서는 hidden SSID를 못 보지만, 다중 freq 로밍 조건에서는 `wifi_roam.py`가 설정 채널 전체를 directed active scan하므로 이를 보완한다. 단일 freq hidden 배포는 `STAGED_SCAN.home_passive=false`를 사용한다.
 > - **채널 전제**: `extra_ssids` AP는 현재 `scan_freq` 대역 안에 있어야 한다. `wifi_roam.py`는 conf의 `scan_freq`로 스캔·필터하므로 다른 채널의 SSID는 후보가 되지 않는다. (SSID 전환 시 `wifi connect`에 freq를 넘기지 않아 `scan_freq`는 보존된다.)
 > - **AP 선택 (v1 한계)**: 다른 SSID 전환은 `wifi connect <ssid>`로 **BSSID를 지정하지 않는다**. 같은 extra SSID에 AP가 여럿이면 로밍 알고리즘이 고른 best AP가 아닌 다른 AP에 붙을 수 있다. (같은 SSID 로밍은 `wpa_cli roam <bssid>`로 BSSID를 지정하므로 해당 없음.)
 
-> **단계형 로밍 스캔 (staged scan)**: 현재 링크 RSSI가 임계값(`DEFAULT_TH_2G`/`DEFAULT_TH_5G`) 이하로 떨어지면 `wifi_roam.py`가 다음 순서로 후보를 찾는다. 앞 단계에서 후보를 찾으면 뒤 단계는 실행하지 않는다.
-> 1. **홈채널 패시브 스캔** — 현재 접속 채널만 `iw scan passive`로 훑어 같은 채널 후보를 저부하로 수집한다. `wpa_cli scan_results`는 BSS 테이블 **전체**를 반환하므로 **홈 주파수 항목만 남기고 필터**한다(다른 채널 항목은 이번 스캔에서 측정된 값이 아니라 과거 스캔의 stale 값이므로 후보로 쓰면 안 된다).
-> 2. **교차채널 캐시** — bgscan이 채운 `ap.log` 마지막 블록을 재사용한다. 블록 나이가 **70초(`CACHE_FRESH_SEC`)** 이내일 때만 유효하며, 초과 시 stale로 보고 다음 단계로 넘어간다. 홈채널 엔트리는 1단계가 방금 실측했으므로 캐시에서 제외한다(묵은 값이 방금의 기각을 뒤집는 역전 방지 — 1단계 스캔 실패 시에는 예외적으로 포함). 직전 판정 이후 **시각 스텝**(NTP step)이 감지된 주기에는 캐시 시간 판정을 신뢰할 수 없어 이 단계를 건너뛴다. 이 캐시 스냅샷은 **1단계 스캔보다 먼저** 읽는다 — 로밍 스캔이 유발하는 `nl80211` scan-completed 이벤트에 `wifi_logger_scan`이 반응해 `ap.log`에 새 블록을 쓰기 때문에, 스캔 뒤에 읽으면 자기 스캔이 만든 블록을 "신선한 배경 캐시"로 오인하게 된다.
-> 3. **액티브 폴백** — 위 둘에서 후보를 못 찾을 때만 `iw scan freq <scan_freq> ssid <설정 SSID>`로 directed 스캔한다(와일드카드 broadcast probe 없음). `scan_freq`가 비어 있을 때만 예외적으로 전대역 1회 스캔한다.
+> **로밍 판정 스캔**: 현재 링크 RSSI가 임계값 아래로 떨어지면 주파수 구성에 따라 분기한다.
+> 1. **단일 freq = 현재 채널**: `home_passive=true`면 홈채널 passive scan을 수행한다. 현재 AP 외 후보 beacon을 못 받았을 때만 같은 채널 directed active scan으로 재확인한다. `home_passive=false`면 처음부터 directed active 1회다.
+> 2. **다중 freq**: 홈 passive와 `ap.log` cache 판정을 건너뛰고 `iw scan freq <scan_freq 전체> ssid <allowed>` directed active를 1회 수행한다.
+> 3. **scan_freq 미설정**: 안전장치로 전대역 active scan 1회를 수행한다.
+>
+> `ap.log`/bgscan RSSI는 최대 bgscan interval만큼 과거 값일 수 있으므로 **최종 로밍 후보 판정에는 사용하지 않는다.** bgscan은 평상시 BSS 테이블 충전과 roam backoff hint 용도로 유지된다.
+>
+> **active/passive scan 결과 freshness**: `iw scan`과 이어지는 `wpa_cli scan_results`는 둘 다 누적 BSS cache를 출력할 수 있다. 로밍 데몬은 `iw` 출력의 `last seen` age가 이번 scan 실행시간+1초 이내인 BSSID 집합을 만든 뒤, `scan_results`에서도 그 BSSID만 사용한다. freshness를 증명할 수 없으면 누적 테이블로 판단하지 않고 해당 tick을 실패 처리한다.
 >
 > **RSSI baseline 통일**: 로밍 판정의 `DIFF_TH` 비교에서 현재 AP RSSI는 위 스캔 결과에서 **자기 BSSID 항목을 찾아** 사용한다. 종전에는 현재 AP는 `iw station dump`의 `signal_avg`(평활값), 후보는 `wpa_cli scan_results`(순간값)로 **서로 다른 소스를 직접 뺐기 때문에** diff에 편향이 있었다. 스캔에서 자기 BSSID를 못 찾은 경우에만 `signal_avg`로 폴백한다.
 >
-> ⚠️ **동작 변경 — `ap.log` 기록 범위**: `wifi_roam.py`는 로밍 **판정** 스캔 결과를 **더 이상 직접 `ap.log`에 기록하지 않고**(종전 `save_with_timestamp` 호출 제거) 메모리에서 처리한다. 이는 (a) 판정 스캔 블록이 캐시의 마지막 블록을 가려 2단계를 무력화하는 문제와, (b) 같은 시각에 서로 다른 포맷·다른 RSSI의 블록이 섞이던 문제를 없앤다. 로밍 후보 판정 내역은 **syslog**(`logger.message`)에 남으므로, `ap.log`를 파싱하던 외부 모니터링/디버깅 스크립트가 있다면 syslog로 옮겨야 한다.
->
-> 단, **`ap.log`에 판정 스캔의 흔적이 전혀 안 남는다는 뜻은 아니다.** `wifi_logger_scan`은 스캔 **주체를 구분하지 않고** scan-completed 이벤트마다 드라이버 스캔 테이블(`mlanutl getscantable`, 전 채널)을 `ap.log`에 덤프하므로, 로밍 판정 스캔도 간접적으로 블록을 남긴다. 그 블록은 타임스탬프(=기록 시각)만 새롭고 교차채널 항목은 과거 스캔의 stale 값이므로, 2단계는 **마지막 자기 스캔 시각 이후에 기록된 블록을 배경 캐시로 신뢰하지 않는다**(신뢰할 수 없으면 3단계 액티브 폴백으로 degrade). `ap.log` 블록의 나이는 "그 시각에 기록됐다"는 뜻이지 "그 시각에 측정됐다"는 뜻이 아니다.
+> ⚠️ `wifi_roam.py`의 판정 결과는 메모리에서 처리하고 후보 내역은 syslog에 남긴다. `wifi_logger_scan`이 scan-completed 이벤트에 반응해 `ap.log` 블록을 남길 수 있지만, 이 블록은 자동 로밍 의사결정 입력이 아니다.
 
 #### STAGED_SCAN - 단계형 스캔
 
@@ -653,18 +655,12 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
 | `enable` | bool | `true` | 단계형 스캔 ON/OFF. **`false`면 종전 단일 액티브 스캔 경로로 회귀**(무회귀 폴백) |
-| `skip_redundant_active` | bool | `true` | **`scan_freq`가 현재(홈) 채널의 부분집합**(단일 채널 등)이고 홈 스캔이 **현재 AP 외 후보를 실제로 봤으면** Stage 3 액티브 폴백을 **스킵**. 매 로밍컨디션 주기의 불필요한 액티브 스캔(probe 송신) 제거 → airtime·링크 방해 감소 |
-| `home_passive` | bool | `true` | Stage 1 홈채널 스캔 모드. `true`(기본)=패시브(probe 미송신, 저부하). `false`=**directed 액티브**(allowed SSID probe, wildcard 없음) — 홈채널에 **hidden** 로밍 타깃이 있는 배포에서 스킵 최적화를 유지한 채 hidden 발견 |
-| `cache_fresh_sec` | int | `70` | 교차채널 캐시(`ap.log` 배경 블록) 신선도 바운드(초). 초과 시 액티브 폴백. **`bgscan.interval` + 여유(≥10초)**로 설정 — 작으면 매 bgscan 주기 말미에 최신 배경 블록조차 stale 판정된다 |
-| `self_induced_tail_sec` | int | `10` | 자기 스캔 종료 후 이 시간 안에 기록된 `ap.log` 블록은 **그 스캔이 유발한 것**으로 보고 배경 캐시로 쓰지 않는다(초) |
+| `skip_redundant_active` | bool | `true` | 단일 freq에서 `home_passive=true`이고 홈 passive scan이 **현재 AP 외 후보를 실제로 봤으면** 추가 active fallback을 스킵. `home_passive=false`는 첫 scan 자체가 active이므로 이 값과 무관하게 1회만 수행 |
+| `home_passive` | bool | `true` | 단일 freq 홈채널 모드. `true`=passive, `false`=directed active. 다중 freq에서는 무시되고 전체 directed active 수행 |
 
 > 필드에서 단계형 스캔이 문제를 일으키면 `enable: false` + SIGHUP(`systemctl kill --kill-who=main -s SIGHUP wifi_roam@mlan0`)으로 **재배포 없이 즉시 종전 동작으로 되돌릴 수 있다.**
 >
-> `skip_redundant_active`(기본 `true`)는 **단일 채널 배포**(모든 로밍 AP가 한 채널)에서 유용하다 — 홈 패시브 스캔이 그 채널의 모든 AP를 이미 보므로 액티브 폴백이 순전히 중복이다. 단 **액티브 directed probe만 hidden SSID를 발견**하므로, 홈 채널에 hidden 로밍 대상 SSID가 있으면 **`home_passive: false`(홈 directed 액티브 — 스킵 최적화와 주기당 스캔 1회를 유지한 채 hidden 커버)를 권장**하고, 대안으로 `skip_redundant_active: false`(패시브+액티브 2회) 또는 다채널 운용도 가능하다. `scan_freq`가 다채널이면(현재 채널 외 채널 포함) 이 옵션과 무관하게 액티브 폴백은 항상 실행된다(다른 채널 후보는 패시브 홈스캔이 못 보므로). Stage 1 패시브 스캔이 **실패**했거나 결과에 **현재 AP 상주 엔트리만** 있는 경우에도 액티브 폴백은 재시도/재발견으로 실행된다 — 현재 결합 AP의 BSS 테이블 엔트리는 사용 중(in-use)이라 만료되지 않아 beacon을 전혀 못 받아도 항상 남으므로, '현재 AP만 보임'은 '같은 채널에 다른 AP가 없음'의 증거가 아니다(이웃 beacon 유실 시 directed probe가 유일한 재발견 경로).
->
-> **업그레이드 주의**: `cache_fresh_sec` 기본값이 45→70으로 조정됐다(배포 기본 `bgscan.interval` 60초를 커버). 기존 설치 기기는 postinst의 json_merge가 **기존 값(45)을 보존**하므로 자동 반영되지 않는다 — 값을 명시 변경했던 기기가 아니면 `wifi_init_conf.json`에서 70으로 올리고 `systemctl kill --kill-who=main -s SIGHUP wifi_roam@mlan0`(iface별)로 반영할 것. 주의: 조회형 `wifi 0 roam th`는 임계값 **표시 전용**이라 SIGHUP을 보내지 않는다 — SIGHUP 자동 발송은 값 설정형(`wifi 0 roam th {2G|5G} <rssi>`) 경로뿐이다.
->
-> `self_induced_tail_sec`를 너무 **작게** 잡으면 자기 스캔이 유발한 블록을 배경 캐시로 오인해 stale 데이터로 로밍할 수 있다(위험한 방향). 너무 **크게** 잡으면 진짜 배경 블록까지 버려 액티브 폴백이 늘어난다(안전한 방향). 기본값 10초는 `wifi_logger_scan`의 기록 지연(최대 ~5초) 대비 여유를 둔 값이다.
+> `skip_redundant_active`는 단일 채널 passive 모드에서만 사용된다. 홈 passive scan이 현재 AP 외 같은 SSID 후보를 실제로 관측했다면 active 재확인을 생략한다. `home_passive=false`와 다중 freq에서는 이미 directed active scan 1회로 완결되므로 이 옵션을 평가하지 않는다.
 
 #### GOOD_SIGNAL_RESET_GATE - good-signal 리셋 게이트
 
@@ -674,9 +670,9 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `enable` | bool | `true` | `true`(기본, 2026-08-03 전환)면 직전 리셋 시점 대비 `|Δrssi| >= delta_db`일 때만 리셋. `false`면 종전대로 무조건 리셋 |
-| `delta_db` | int | `2` | 리셋을 허용하는 최소 `|Δrssi|`(dB). 매 tick 직전값이 아니라 **직전 리셋 시점 기준 누적** 변화 — 1dB씩 천천히 이동하는 구간도 누적으로 잡는다. 하한 1(0은 게이트 무효) |
-| `post_roam_grace_sec` | int | `40` | 결합(로밍·재연결·부팅 후 첫 관측) 후 이 시간 동안은 게이트를 **우회**해 종전처럼 리셋(초) |
+| `enable` | bool | `true` | `true`면 직전 리셋 시점 대비 `|Δrssi| >= 2dB`일 때만 리셋하고, 결합 후 40초 동안은 게이트를 우회한다. `false`면 종전대로 무조건 리셋 |
+
+`delta_db=2`, `post_roam_grace_sec=40`은 실측에 근거한 **코드 고정 정책**이며 JSON 옵션이 아니다. 임계값 후보(1/2/3/5dB)의 재생 결과가 사실상 같고, 결합 직후 RSSI ramp가 약 25초 관측되어 현장 튜닝 이득 없이 오설정 위험만 만드는 두 키를 제거했다.
 
 **시뮬레이션 결과**(로그 재생):
 
@@ -688,11 +684,11 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 스캔 airtime duty 5.44% → 2.28%. **다중 단말 환경에서 효과가 커진다** — 액티브 스캔 1회의 probe airtime이 온타겟 실측 약 4.6ms(ProbeReq 4 + ProbeResp 8, 6Mbps 가정)이므로, 스캔 주기가 3초에서 30초로 늘면 채널 점유가 10배 줄어든다(단말 50대 기준 7.7% → 0.77%).
 
-> **`delta_db` 선택**: 재생 실측상 1/2/3/5가 전부 −58.0~−58.1%로 동일하다(리셋 지점의 Δ가 0dB에 몰려 있어 어떤 임계든 같이 걸린다). RSSI가 1dB 단위로 양자화되므로 노이즈 여유를 둔 **2~3 권장**.
+> **고정 2dB 근거**: 재생 실측상 1/2/3/5가 전부 −58.0~−58.1%로 동일하다(리셋 지점의 Δ가 0dB에 몰려 있어 어떤 임계든 같이 걸린다). RSSI 1dB 양자화의 노이즈 여유를 위해 2dB로 고정했다.
 >
 > **`post_roam_grace_sec`가 필요한 이유**: 결합 직후 RSSI는 25초에 걸쳐 **12~14dB 하강**한다(attach ramp — 같은 구간 TX rate가 불변이므로 실제 링크 열화가 아니라 측정 램프다). 그 큰 Δ를 "이동"으로 읽으면 게이트가 사실상 무력화되므로 그 창에서는 우회한다.
 >
-> **런타임 A/B**: `wifi <if> roam gate on|off`로 즉시 토글되고(SIGHUP), `wifi <if> roam gate`로 현재값을 볼 수 있다. 켠 뒤 로그의 `good-signal streak reset (...) — 이전 N회 억제` 라인으로 억제가 실제로 일어나는지 확인한다.
+> **런타임 A/B**: `wifi <if> roam gate on|off`로 즉시 토글되고(SIGHUP), `wifi <if> roam gate`로 현재 enable과 고정 정책값을 볼 수 있다. 켠 뒤 로그의 `good-signal streak reset (...) — 이전 N회 억제` 라인으로 억제가 실제로 일어나는지 확인한다.
 >
 > **한계**: 위 시뮬레이션은 1초 raw RSSI 로그 재생 결과다. 실기 메인루프의 RSSI 샘플 간격은 상황에 따라 2~30초(good-signal이면 `CHECK_INTERVAL`, 로밍 컨디션이면 backoff)로 흔들리므로 **이동 시 재탐색 지연은 실기에서 재확인이 필요**하다. 설계의 2층 판정(60초 peak-to-peak ≥ 5dB)은 이 파일의 RSSI 이력이 `PREDICTIVE_ROAM.enable` 게이트 안에서만 쌓여(출하 기본에서 비어 있음) 후속 범위로 미뤘다 — 1층(Δ)만으로 위 효과의 거의 전부를 얻는다.
 
