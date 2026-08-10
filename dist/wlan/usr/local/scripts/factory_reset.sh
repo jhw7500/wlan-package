@@ -132,6 +132,10 @@ customctl() {
   customctl enable wifi_logger
   customctl enable log-watchdog.timer
   customctl enable journald-snapshot.timer
+  # WebUI(nginx) 서빙 — disable 목록 제거만으론 과거 리셋으로 disabled 된 기기가
+  # 복구되지 않는다(enable/disable 은 영속 유닛 파일 조작). 명시적 enable 로 의도를
+  # 코드에 고정한다(#161 리뷰).
+  customctl enable nginx
 
   customctl disable wifi_checker@eth0
   customctl enable wifi_led@eth0
