@@ -158,19 +158,44 @@ customctl() {
   safe_cp /opt/wlan/config/systemd/network/20-mlan0.link /etc/systemd/network/20-mlan0.link
   safe_cp /opt/wlan/config/systemd/network/21-mlan1.link /etc/systemd/network/21-mlan1.link
   safe_cp /opt/wlan/config/systemd/network/22-eth0.link /etc/systemd/network/22-eth0.link
-  # active .link는 JSON MAC에서 다시 생성되는 파생 상태다. 공장 초기화 전 MAC이
-  # .bak/.bak.N에서 되살아나지 않도록 update_mac 소유의 백업만 함께 제거한다.
-  for _reset_iface in mlan0 mlan1 eth0; do
-      SYSTEMD_NETWORK_DIR=/etc/systemd/network \
-        /usr/local/scripts/update_mac.sh "$_reset_iface" --reset-backups \
-        || logger -p local0.err "[$tag:$LINENO] [$_reset_iface] link backup reset failed"
-  done
+  # active .link는 JSON MAC에서 다시 생성되는 파생 상태다. 위 복사만으로는 MAC 오염이 다
+  # 지워지지 않는다 — 백업(*.link.bak*)에서 되살아날 수 있고, safe_cp는 실패해도 로그만 남기고
+  # 진행하며, 패키지 소유가 아닌 .link가 같은 인터페이스를 지목하면(파일명이 20-보다 앞서면
+  # udev가 그쪽을 먼저 적용) 템플릿 복원이 통째로 가려진다. 파생 잔재 제거·외부 .link 삭제·
+  # 후조건 검증을 wifi_link_reset.sh가 한 번에 처리한다.
+  if [ -x /usr/local/scripts/wifi_link_reset.sh ]; then
+      if ! /usr/local/scripts/wifi_link_reset.sh; then
+          logger -p local0.err "[$tag:$LINENO] link reset incomplete; a .link may still force a MAC"
+          safe_print red "\r\n[factory] WARNING: link reset incomplete (see syslog)"
+      fi
+  else
+      logger -p local0.err "[$tag:$LINENO] missing wifi_link_reset.sh; stale .link MAC not cleaned"
+  fi
+  # 덮어쓰기 전, 지워선 안 되는 하드웨어/생산 설정(MOD_PARA·CAL_DATA_CFG·TXPWRLIMIT_PATH·
+  # .mac.<iface>.base)을 떠 둔다. 되쓰기는 보드 감지 이후에 한다 — wifi_board_config.sh가
+  # .global.MOD_PARA를 상수로 다시 쓰므로 그 전에 되쓰면 곧바로 덮인다.
+  # 보존 목록과 판정 규칙은 wifi_conf_preserve.sh 참고(`wifi_conf_preserve.sh keys`).
+  PRESERVE_SNAPSHOT=""
+  if [ -x /usr/local/scripts/wifi_conf_preserve.sh ]; then
+      PRESERVE_SNAPSHOT=$(mktemp /tmp/wifi_conf_preserve.XXXXXX 2>/dev/null)
+      if [ -z "$PRESERVE_SNAPSHOT" ] \
+         || ! /usr/local/scripts/wifi_conf_preserve.sh save "$PRESERVE_SNAPSHOT"; then
+          rm -f -- "$PRESERVE_SNAPSHOT"
+          PRESERVE_SNAPSHOT=""
+          logger -p local0.err "[$tag:$LINENO] preserve snapshot failed; hardware keys fall back to template"
+      fi
+  else
+      logger -p local0.err "[$tag:$LINENO] missing wifi_conf_preserve.sh; hardware keys fall back to template"
+  fi
+
   # 활성 설정을 템플릿으로 되돌린다. postinst는 json_merge(기존 값 우선)로 쓰지만 여기서는
   # 통째로 덮어쓴다 — 사용자 런타임 설정(.global/.mlanN/.wbridge 등)을 지우는 것이 초기화의 목적.
   #
-  # .mac.* (mlan0/mlan1/eth0의 base·target)도 템플릿의 빈 문자열로 리셋된다. 의도된 동작이다
-  # (신규 설치 상태와 동일하게 맞춘다). 리셋 후 MAC은 드라이버 기본값을 쓰며, 지정이 필요하면
-  # `wifi mac <iface> <base|target> <MAC>`으로 다시 설정한다. 자동 복구 경로는 없다.
+  # .mac.<iface>.target은 템플릿의 빈 문자열로 리셋된다. 의도된 동작이다 — target은
+  # `wifi mac <iface> target <MAC>`으로 정하는 런타임 설정이고, 리셋 후에는 base(=유닛의
+  # 기준 MAC)로 폴백한다(wifi_init.sh resolve_mac: dynamic → target → base).
+  # base는 아래 preserve 단계에서 되살린다. 위에서 비워진 .link의 MACAddress는 다음 부팅에
+  # resolve_mac → update_mac.sh 경로로 base에서 다시 채워진다(드라이버 로드 전에 수행).
   safe_cp /opt/wlan/config/wifi_init_conf.json /usr/local/etc/
 
   # 단, 보드 감지 결과는 사용자 설정이 아니라 하드웨어 사실이므로 반드시 되살린다.
@@ -184,6 +209,14 @@ customctl() {
           || logger -p local0.err "[$tag:$LINENO] board config apply failed"
   else
       logger -p local0.err "[$tag:$LINENO] missing wifi_board_config.sh; board settings not restored"
+  fi
+
+  # 보드 감지가 끝난 뒤에 하드웨어/생산 설정을 되쓴다(위 snapshot 주석 참고).
+  # 실패해도 초기화는 계속한다 — 템플릿 기본값으로 부팅은 되고, 원인은 로그에 남는다.
+  if [ -n "$PRESERVE_SNAPSHOT" ]; then
+      /usr/local/scripts/wifi_conf_preserve.sh apply "$PRESERVE_SNAPSHOT" \
+          || logger -p local0.err "[$tag:$LINENO] preserved key restore failed; template values remain"
+      rm -f -- "$PRESERVE_SNAPSHOT"
   fi
 
   # 후조건 검증. 헬퍼가 없든, 실패했든, 조용히 잘못 썼든 결과는 하나다 — .mcp.iio_device가
