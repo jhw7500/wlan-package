@@ -68,6 +68,94 @@ mac_render_link_with_address() {
     ' "$link_file"
 }
 
+# [Match] 섹션의 OriginalName 값을 출력한다. 없으면 빈 출력(=파일명만으로는 대상 판정 불가).
+mac_read_link_original_name() {
+    local link_file="$1"
+    [ -f "$link_file" ] || return 1
+    awk '
+        /^[[:space:]]*\[[^]]+\]/ {
+            in_match = ($0 ~ /^[[:space:]]*\[Match\][[:space:]]*([#;].*)?$/)
+            next
+        }
+        in_match && /^[[:space:]]*OriginalName[[:space:]]*=/ {
+            sub(/^[[:space:]]*OriginalName[[:space:]]*=[[:space:]]*/, "")
+            sub(/[[:space:]]*$/, "")
+            if (value == "") value = $0
+        }
+        END {
+            if (value != "") print value
+        }
+    ' "$link_file" 2>/dev/null
+}
+
+# [Match] 섹션의 OriginalName 줄 수. systemd가 반복 지정을 병합하는지 덮어쓰는지에
+# 기대지 않기 위해, 2줄 이상이면 호출자가 판정 불가로 다룬다.
+mac_count_link_original_name() {
+    local link_file="$1"
+    [ -f "$link_file" ] || { printf '0\n'; return 0; }
+    awk '
+        /^[[:space:]]*\[[^]]+\]/ {
+            in_match = ($0 ~ /^[[:space:]]*\[Match\][[:space:]]*([#;].*)?$/)
+            next
+        }
+        in_match && /^[[:space:]]*OriginalName[[:space:]]*=/ { n++ }
+        END { print n + 0 }
+    ' "$link_file" 2>/dev/null
+}
+
+# 이 .link의 매칭 대상을 OriginalName만으로 판정할 수 없으면 0(참)을 반환한다.
+# 세 경우다. ① OriginalName이 아예 없다 — Path/Driver/Type 등 다른 조건은 여기서 해석하지
+# 않는다. ② 값에 부정(!) 패턴이 있다 — systemd는 '!' 접두 패턴을 "이것만 제외"로 해석하므로
+# 단순 glob 매칭 결과가 의미상 뒤집힌다(OriginalName=!mlan0 은 mlan0을 뺀 전부와 매칭).
+# ③ OriginalName 줄이 여러 개다 — 병합/덮어쓰기 중 무엇인지 추측하면 과소 탐지(거짓 안심)나
+# 과잉 삭제 중 하나로 틀린다.
+# 호출자는 판정 불가를 "매칭 안 함"으로 취급하지 말고 보수적으로 처리해야 한다.
+mac_link_match_undecidable() {
+    local link_file="$1" names token
+    [ "$(mac_count_link_original_name "$link_file")" -le 1 ] || return 0
+    names=$(mac_read_link_original_name "$link_file") || return 0
+    [ -n "$names" ] || return 0
+    for token in $names; do
+        case "$token" in
+            !*) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# .link의 OriginalName이 해당 인터페이스를 지목하는지. systemd는 공백 구분 목록과 glob을
+# 허용하므로(예: "mlan0 mlan1", "mlan*") 토큰별로 glob 매칭한다.
+# 판정 불가(OriginalName 없음 / 부정 패턴)면 1을 반환한다 — 호출자는
+# mac_link_match_undecidable로 두 경우를 구분해야 한다.
+mac_link_matches_iface() {
+    local link_file="$1" iface="$2" names token
+    mac_link_match_undecidable "$link_file" && return 1
+    names=$(mac_read_link_original_name "$link_file") || return 1
+    for token in $names; do
+        # shellcheck disable=SC2254  # glob 매칭이 목적이라 의도적으로 비인용
+        case "$iface" in
+            $token) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# [Link] 섹션의 MACAddress 라인만 제거한다 (mac_render_link_with_address의 역방향).
+# [Match]의 MACAddress는 인터페이스 선택 조건이므로 보존한다. 결과 .link는 패키지 템플릿과
+# 같은 "MAC 미지정" 상태가 되어 드라이버 기본 MAC(permaddr)이 그대로 쓰인다.
+mac_render_link_without_address() {
+    local link_file="$1"
+    awk '
+        /^[[:space:]]*\[[^]]+\]/ {
+            in_link = ($0 ~ /^[[:space:]]*\[Link\][[:space:]]*([#;].*)?$/)
+            print
+            next
+        }
+        in_link && /^[[:space:]]*MACAddress[[:space:]]*=/ { next }
+        { print }
+    ' "$link_file"
+}
+
 mac_acquire_global_lock() {
     local network_dir="$1" lock_dir lock_file
 
