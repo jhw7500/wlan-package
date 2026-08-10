@@ -3,7 +3,7 @@
     "Language": "English",
     "Name": "WirelessLAN",
     "Timezone": "Asia/Seoul",
-    "Country": "JP"
+    "Country": "KR"
   },
   "eth0": {
     "Port_Speed": "auto (1Gbps)"
