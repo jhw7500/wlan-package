@@ -287,10 +287,21 @@ def iw_scan_event(interface, on_event_callback, _popen=None, _select=None,
             elif kind == "aborted":
                 logger.message("info", f"[{interface}] scan aborted — no new results", _EXTRA_())
     finally:
+        # 종료시킨 뒤 반드시 reap 한다 — scan_event_source 가 최대
+        # IW_EVENT_MAX_RESTARTS 회 새 `iw event` 를 띄우므로 wait 를 빠뜨리면
+        # 종료된 자식이 좀비로 남고, 다음 스트림이 이전 프로세스와 겹칠 수 있다.
         try:
             proc.terminate()
         except Exception:
             pass
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+                proc.wait(timeout=5)
+            except Exception:
+                pass
 
 
 def scan_event_source(interface, on_event_callback, _clock=time.monotonic, _sleep=time.sleep):
@@ -298,6 +309,7 @@ def scan_event_source(interface, on_event_callback, _clock=time.monotonic, _slee
 
     폴백은 되돌아오지 않는다 — 두 스트림을 동시에 읽으면 같은 스캔이 두 번 소비된다.
     """
+    # 스트림이 끝난 시각 목록. 최초 1회는 재시작이 아니므로 재시작 수 = len-1.
     restarts = []
     while True:
         consumed = iw_scan_event(interface, on_event_callback)
@@ -308,7 +320,7 @@ def scan_event_source(interface, on_event_callback, _clock=time.monotonic, _slee
         restarts = [t for t in restarts if now - t < IW_EVENT_RESTART_WINDOW_S]
         restarts.append(now)
         if len(restarts) > IW_EVENT_MAX_RESTARTS:
-            logger.message("crit", f"[{interface}] iw event restarted {len(restarts)}x within {IW_EVENT_RESTART_WINDOW_S}s — falling back to dmesg scan_event", _EXTRA_())
+            logger.message("crit", f"[{interface}] iw event restarted {len(restarts) - 1}x (limit {IW_EVENT_MAX_RESTARTS}) within {IW_EVENT_RESTART_WINDOW_S}s — falling back to dmesg scan_event", _EXTRA_())
             break
         logger.message("warn", f"[{interface}] iw event stream ended after {consumed} event(s) — restarting", _EXTRA_())
         _sleep(1)
