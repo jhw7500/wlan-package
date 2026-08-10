@@ -578,6 +578,26 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 - `wifi {0|1} cal {0|1|2|none|*.conf}` → `.mlanN.CAL_DATA_CFG` 저장 (다음 부팅에 블록 반영). `wifi cal ...`(인자 없는 최상위)는 `global.CAL_DATA_CFG` 저장.
 - `wifi {0|1} txpwr {0|1|2|3|no|default|low|org|*.conf}` → live 적용 + `.mlanN.TXPWRLIMIT_PATH` 저장. `no/0`은 `"none"`으로 저장(이 인터페이스만 미적용). `wifi txpwr ...`(최상위)는 `global.TXPWRLIMIT_PATH` 저장.
 
+#### 공장 초기화 예외 — MOD_PARA / CAL_DATA_CFG / TXPWRLIMIT_PATH / mac.base
+
+`factory_reset.sh`는 활성 설정(`/usr/local/etc/wifi_init_conf.json`)을 템플릿으로 **통째로** 덮어쓰지만, 아래 10개 경로만은 리셋 대상에서 제외한다. 사용자 취향이 아니라 유닛마다 생산 단계에서 정해지는 하드웨어·규제 값이라, 템플릿으로 되돌리면 그 유닛의 캘리브레이션·TX 파워 리밋·기준 MAC이 다른 값으로 바뀌기 때문이다.
+
+| 보존 경로 | 유효성 게이트 |
+|-----------|---------------|
+| `.global.MOD_PARA` | 파일 존재 |
+| `.global.CAL_DATA_CFG`, `.global.TXPWRLIMIT_PATH` | 파일 존재 |
+| `.mlan0.CAL_DATA_CFG`, `.mlan0.TXPWRLIMIT_PATH` | 파일 존재 |
+| `.mlan1.CAL_DATA_CFG`, `.mlan1.TXPWRLIMIT_PATH` | 파일 존재 |
+| `.mac.mlan0.base`, `.mac.mlan1.base`, `.mac.eth0.base` | 할당 가능한 unicast MAC (`mac_link_lib.sh`의 `mac_is_assignable`) |
+
+- 담당 스크립트: `wifi_conf_preserve.sh` (`save <snapshot>` → 덮어쓰기 → `apply <snapshot>`). 보존 목록의 단일 출처는 이 스크립트이며 `wifi_conf_preserve.sh keys`로 확인한다.
+- **`apply`는 `wifi_board_config.sh` 뒤에 실행된다.** 보드 감지 헬퍼가 `.global.MOD_PARA`를 상수로 다시 쓰므로(v0.3.0 `wifi_mod_para_.conf` 통합 마이그레이션 잔재) 그 전에 되쓰면 곧바로 덮인다.
+- 빈 문자열과 `"none"`은 "사용 안 함"이라는 유효한 설정이므로 게이트를 거치지 않고 그대로 보존한다.
+- **되살릴 수 없는 값(없는 파일, 할당 불가 MAC)은 보존하지 않고 템플릿 기본값을 남긴다** (`logger.warn`). 공장 초기화가 고장을 이월하지 않게 하기 위함이며, 특히 `MOD_PARA`가 없는 파일을 가리키면 `moal` insmod가 실패해 무선이 아예 올라오지 않는다.
+- **`.mac`은 `base`만 보존하고 `target`은 초기화된다.** `base`는 유닛의 기준 MAC(`write_mac.sh` / `eth_mac_get.sh`가 기록)이지만 `target`은 `wifi mac <iface> target <MAC>`으로 정하는 런타임 설정이다. 리셋 후 `resolve_mac`은 `dynamic → target → base` 순으로 폴백하므로 보존된 `base`가 쓰인다. 함께 초기화되는 `.link` 파일은 다음 부팅에 `resolve_mac` → `update_mac.sh` 경로로 `base`에서 다시 만들어진다.
+- 위 10개를 제외한 나머지 키(`STANDARD`, `connect_threshold`, `.wbridge.*`, `.mac.*.target` 등)는 종전대로 전부 템플릿 값으로 초기화된다.
+- 테스트: `wifi_conf_preserve_test.sh` (하드웨어/root 불필요)
+
 ### 11.2 periodic_roam - 주기적 패시브 로밍
 
 **사용 스크립트**: `wifi_periodic_roam.sh` (service: `wifi_periodic_roam@.service`)
