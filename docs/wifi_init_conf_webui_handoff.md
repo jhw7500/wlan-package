@@ -315,7 +315,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | 경로 | 라벨 | 타입 | 기본값 | 허용값/범위 | UI편집 | 적용시점 | 설명 |
 |---|---|---|---|---|---|---|---|
 | `logger.cpu_interval_sec` | CPU 로그 주기(전역) | int | `60` | 양의 정수 | yes | daemon-restart | CPU/메모리/클럭 로그 주기(per-iface override 없음) |
-| `logger.link_interval_sec` | 링크 폴링 주기(전역) | float | `0.95` | 양의 실수 | yes | daemon-restart | 링크 상태 폴링 주기. eth0/mlanN.logger가 override |
+| `logger.link_interval_sec` | 링크 폴링 주기(전역) | float | `0.9` | 양의 실수 | yes | daemon-restart | 링크 상태 폴링 주기. eth0/mlanN.logger가 override |
 | `logger.stat_log_interval_sec` | 통계 로그 주기(전역) | int | `1` | 양의 정수 | yes | daemon-restart | 통계 기록 주기 |
 | `logger.stat_check_interval_sec` | 통계 체크 주기(전역) | int | `1` | 양의 정수 | yes | daemon-restart | 통계 수집 루프 체크 주기 |
 | `logger.stat_reset_interval_sec` | 통계 리셋 주기(전역) | int | `604800` | 정수(기본 7일) | yes | daemon-restart | AP별 누적 통계 리셋 주기 |
@@ -359,7 +359,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 
 | 경로(`mlanN.logger.`) | 라벨 | 타입 | 기본값 (mlan0 / mlan1) | 허용값/범위 | UI편집 | 적용시점 | 설명 |
 |---|---|---|---|---|---|---|---|
-| `link_interval_sec` | 링크 로거 주기 | float | `0.95` | 초(>0) | yes | daemon-restart | mlanN>global 우선 |
+| `link_interval_sec` | 링크 로거 주기 | float | `0.9` | 초(>0) | yes | daemon-restart | mlanN>global 우선 |
 | `stat_log_interval_sec` | 통계 로그 기록 주기 | int | `1` | 초(>0) | yes | daemon-restart | mlanN>global 우선 |
 | `stat_check_interval_sec` | 통계 체크 주기 | int | `1` | 초(>0) | yes | daemon-restart | mlanN>global 우선 |
 | `stat_reset_interval_sec` | 통계 리셋 주기 | int | `604800` | 초(7일) | yes | daemon-restart | mlanN>global 우선 |

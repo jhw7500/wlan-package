@@ -916,7 +916,7 @@
         },
         "link_interval_sec": {
           "type": "number",
-          "default": 0.95,
+          "default": 0.9,
           "description": "iw station/info/survey 링크 상태 폴링 주기(초, 전역 기본)",
           "x-ui-editable": "yes",
           "x-apply-timing": "daemon-restart",
@@ -1108,7 +1108,7 @@
           "properties": {
             "link_interval_sec": {
               "type": "number",
-              "default": 0.95,
+              "default": 0.9,
               "description": "링크 상태 로깅 주기(초)",
               "x-ui-editable": "yes",
               "x-apply-timing": "daemon-restart",
@@ -1835,7 +1835,7 @@
           "properties": {
             "link_interval_sec": {
               "type": "number",
-              "default": 0.95,
+              "default": 0.9,
               "description": "링크 상태 로깅 주기(초)",
               "x-ui-editable": "yes",
               "x-apply-timing": "daemon-restart",
