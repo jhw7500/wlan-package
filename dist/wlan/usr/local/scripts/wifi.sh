@@ -784,7 +784,7 @@ show_info() {
                 bgscan_interval=$(echo "$iface_json" | jq -r '.bgscan.interval // 60')
                 roam_th_2g=$(echo "$iface_json" | jq -r '.roaming.DEFAULT_TH_2G // -75')
                 roam_th_5g=$(echo "$iface_json" | jq -r '.roaming.DEFAULT_TH_5G // -75')
-                roam_diff=$(echo "$iface_json" | jq -r '.roaming.DIFF_TH // 8')
+                roam_diff=$(echo "$iface_json" | jq -r '.roaming.DIFF_TH // 7')
                 roam_check=$(echo "$iface_json" | jq -r '.roaming.CHECK_INTERVAL // 1')
                 pred_en=$(echo "$iface_json" | jq -r 'if .roaming.PREDICTIVE_ROAM.enable == null then false else .roaming.PREDICTIVE_ROAM.enable end')
                 pingpong_en=$(echo "$iface_json" | jq -r 'if .roaming.PING_PONG_PREVENTION.enable == null then true else .roaming.PING_PONG_PREVENTION.enable end')

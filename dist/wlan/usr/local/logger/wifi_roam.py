@@ -56,7 +56,7 @@ DEFAULT_TH_5G = -75
 # 코드 기본값은 JSON 로드 실패/키 부재 시의 폴백 — 템플릿 wifi_init_conf.json(제품 의도)과
 # 일치시킨다(fail-same, tests/test_defaults_template_consistency.py 가 고정). per-iface 로
 # 값이 갈리는 키(CHECK_INTERVAL 2/3, ROAM_SUCCESS_SLEEP 3/2)는 주 인터페이스 mlan0 기준.
-DIFF_TH = 8
+DIFF_TH = 7
 CHECK_INTERVAL = 1  # 로밍 판정 tick 주기(초, mlan0 기준 — mlan1 템플릿=3). 판정 입력 link.json 이 ~1s 갱신이라 1 미만은 실익 없음
 
 # 단계형 로밍 스캔: RSSI가 임계값 이하로 떨어지면
@@ -123,7 +123,7 @@ DEFAULT_TREND_HISTORY_MAX_AGE = 30
 DEFAULT_ENABLE_PING_PONG_PREVENTION = True
 DEFAULT_PING_PONG_WINDOW = 20
 DEFAULT_MAX_ROAMS_IN_WINDOW = 3
-DEFAULT_PING_PONG_DETECTION_TIME = 5
+DEFAULT_PING_PONG_DETECTION_TIME = 10
 DEFAULT_USE_SIGNAL_AVG = True  # True: link 파일의 signal_avg(평활) 사용, False: signal(순간값)
 
 # Sleep 기본값
