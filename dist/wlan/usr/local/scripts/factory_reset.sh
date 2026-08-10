@@ -112,7 +112,6 @@ customctl() {
   customctl disable avahi-daemon.socket
   customctl disable containerd
   customctl disable lighttpd
-  customctl disable nginx
   customctl disable monkey
   customctl disable netdata
   customctl disable collectd
@@ -197,6 +196,7 @@ customctl() {
   # base는 아래 preserve 단계에서 되살린다. 위에서 비워진 .link의 MACAddress는 다음 부팅에
   # resolve_mac → update_mac.sh 경로로 base에서 다시 채워진다(드라이버 로드 전에 수행).
   safe_cp /opt/wlan/config/wifi_init_conf.json /usr/local/etc/
+  safe_cp /opt/wlan/config/config.json /usr/local/etc/
 
   # 단, 보드 감지 결과는 사용자 설정이 아니라 하드웨어 사실이므로 반드시 되살린다.
   # 템플릿에는 .mcp.iio_device 키가 없고 .global.BOARD_TYPE은 고정값("imx93")이라, 위 복사만으로
