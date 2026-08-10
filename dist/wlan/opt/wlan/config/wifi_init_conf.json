@@ -312,8 +312,8 @@
                 "interval_ms: (int) rate 평가 주기 (ms)"
             ],
             "mode": 1,
-            "low_thresh": 50,
-            "high_thresh": 80,
+            "low_thresh": 70,
+            "high_thresh": 90,
             "interval_ms": 100
         },
         "logger": {
@@ -369,7 +369,7 @@
             "use_signal_avg": true,
             "DEFAULT_TH_2G": -75,
             "DEFAULT_TH_5G": -75,
-            "DIFF_TH": 8,
+            "DIFF_TH": 7,
             "CHECK_INTERVAL": 1,
             "extra_ssids": [],
             "generate_network_blocks": false,
@@ -399,7 +399,7 @@
                 "enable": true,
                 "window": 20,
                 "max_roams_in_window": 3,
-                "detection_time": 5
+                "detection_time": 10
             },
             "STAGED_SCAN": {
                 "_comment": [
@@ -432,7 +432,7 @@
                 "vht: (string) vht prefix 뒤에 전달할 값. 빈 문자열이면 생략",
                 "he: (string) he prefix 뒤에 전달할 값. 빈 문자열이면 생략"
             ],
-            "enabled": false,
+            "enabled": true,
             "ht": "7",
             "vht": "7",
             "he": "both 7"
@@ -503,8 +503,8 @@
         "thermal_mgmt": true,
         "rate_adapt": {
             "mode": 1,
-            "low_thresh": 50,
-            "high_thresh": 80,
+            "low_thresh": 70,
+            "high_thresh": 90,
             "interval_ms": 100
         },
         "logger": {
@@ -531,8 +531,8 @@
             "use_signal_avg": true,
             "DEFAULT_TH_2G": -75,
             "DEFAULT_TH_5G": -75,
-            "DIFF_TH": 8,
-            "CHECK_INTERVAL": 3,
+            "DIFF_TH": 7,
+            "CHECK_INTERVAL": 1,
             "extra_ssids": [],
             "generate_network_blocks": false,
             "ROAM_CROSS_FAIL_RETRY_COUNT": 2,
@@ -547,7 +547,7 @@
                 "enable": true,
                 "window": 20,
                 "max_roams_in_window": 3,
-                "detection_time": 5
+                "detection_time": 10
             },
             "STAGED_SCAN": {
                 "enable": true,
@@ -558,14 +558,14 @@
                 "enable": true
             },
             "SCAN_NO_RESULT_SLEEP": 3,
-            "ROAM_SUCCESS_SLEEP": 2,
+            "ROAM_SUCCESS_SLEEP": 3,
             "enabled": false
         },
         "mcs_tier": {
-            "enabled": false,
-            "ht": "",
-            "vht": "",
-            "he": ""
+            "enabled": true,
+            "ht": "7",
+            "vht": "7",
+            "he": "both 7"
         },
         "on_connect": {
             "enabled": false,
