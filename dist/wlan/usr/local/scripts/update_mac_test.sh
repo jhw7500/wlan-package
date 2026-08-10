@@ -33,6 +33,10 @@ run_wm() { # <iface> <mac>
     PATH="$BINDIR:$PATH" bash "$WRITE_MAC" "$1" "$2"
 }
 macof() { grep -oP '^MACAddress=\K.*' "$1" 2>/dev/null || true; }
+# [Match]의 MACAddress(선택 조건)까지 잡는 macof와 달리 [Link] 섹션의 할당 주소만 읽는다.
+linkmacof() {
+  bash -c '. "$1"; mac_read_link_address "$2"' _ "$SCRIPT_DIR/mac_link_lib.sh" "$1" 2>/dev/null || true
+}
 count_baks() { ls -1 "$NET"/21-mlan1.link.bak.* 2>/dev/null | wc -l | tr -d ' '; }
 count_tmps() { find "$NET" -maxdepth 1 -type f -name '*.link.tmp.*' 2>/dev/null | wc -l | tr -d ' '; }
 reset_net() { rm -rf "$NET"; mkdir -p "$NET"; }
@@ -337,6 +341,57 @@ else
   log_fail "T25 reset-backups left package-owned backup"
 fi
 assert_eq "T25 reset-backups removes orphan tmp" "0" "$(count_tmps)"
+
+# T26: --clear는 [Link] MACAddress만 제거하고 나머지 구조/[Match] 조건은 보존한다.
+#      (dynamic 클론 잔재 폐기 경로 — 쓸 MAC이 없을 때 이전 클론이 재적용되는 것을 막는다)
+reset_net
+printf '[Match]\nOriginalName=mlan1\nMACAddress=aa:bb:cc:dd:ee:ff\n\n[Link]\nMACAddress=02:00:00:00:00:c1\nMTUBytes=1500\n' > "$LF"
+run_um mlan1 --clear >/dev/null 2>&1
+rc=$?
+assert_eq "T26 clear command succeeds" "0" "$rc"
+assert_eq "T26 clear removes [Link] MACAddress" "" "$(linkmacof "$LF")"
+assert_has "T26 clear preserves [Match] MACAddress condition" "$LF" "^MACAddress=aa:bb:cc:dd:ee:ff"
+assert_has "T26 clear preserves other [Link] keys" "$LF" "^MTUBytes=1500"
+assert_eq "T26 clear rotates one backup" "1" "$(count_baks)"
+assert_eq "T26 clear backup keeps previous MAC" "02:00:00:00:00:c1" "$(linkmacof "$LF.bak.1")"
+assert_eq "T26 clear leaves no orphan tmp" "0" "$(count_tmps)"
+
+# T27: 이미 MACAddress가 없으면 no-op — 백업을 만들지 않는다.
+run_um mlan1 --clear >/dev/null 2>&1
+rc=$?
+assert_eq "T27 clear on address-less link succeeds" "0" "$rc"
+assert_eq "T27 clear on address-less link does not rotate" "1" "$(count_baks)"
+
+# T28: .link 자체가 없어도 성공 (신규 설치/공장 초기화 직후)
+reset_net
+run_um mlan1 --clear >/dev/null 2>&1
+rc=$?
+assert_eq "T28 clear without link file succeeds" "0" "$rc"
+if [ ! -e "$LF" ]; then
+  log_pass "T28 clear does not create a link file"
+else
+  log_fail "T28 clear created a link file"
+fi
+
+# T29: clear 후 다시 MAC을 쓰면 정상 복구된다 (유선 peer 재연결 시나리오)
+printf '[Match]\nOriginalName=mlan1\n\n[Link]\n' > "$LF"
+run_um mlan1 02:00:00:00:00:d1 >/dev/null 2>&1
+assert_eq "T29 write after clear restores MAC" "02:00:00:00:00:d1" "$(macof "$LF")"
+
+# T30: wifi_init.sh는 전역 락을 쥔 채 --clear를 호출한다 — 상속된 락에서 데드락이 없어야 한다.
+reset_net
+printf '[Match]\nOriginalName=mlan0\n\n[Link]\nMACAddress=02:00:00:00:00:e1\n' > "$MLAN0_LINK"
+SYSTEMD_NETWORK_DIR="$NET" PATH="$BINDIR:$PATH" timeout 5 bash -c '
+  . "$1"
+  mac_acquire_global_lock "$2" || exit 1
+  bash "$3" mlan0 --clear
+  rc=$?
+  mac_release_global_lock || exit 1
+  exit "$rc"
+' _ "$SCRIPT_DIR/mac_link_lib.sh" "$NET" "$UPDATE_MAC" >/dev/null 2>&1
+rc=$?
+assert_eq "T30 inherited global lock does not deadlock clear" "0" "$rc"
+assert_eq "T30 inherited global lock clears MACAddress" "" "$(linkmacof "$MLAN0_LINK")"
 
 echo ""
 echo "PASS: $PASS_COUNT"

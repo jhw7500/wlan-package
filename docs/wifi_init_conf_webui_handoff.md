@@ -171,6 +171,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `wbridge.enabled` | 브릿지 전체 활성화 | bool | `true` | true\|false | yes | boot | false면 bridge 서비스 전부 stop+disable |
 | `wbridge.bridge_iface` | 브릿지 무선 인터페이스 | enum | `mlan0` | `mlan0`\|`mlan1` | caution | boot | mlan1이면 moal `bridge_wlan_idx=1`. pcap 트랙은 mlan0 하드코딩 |
 | `wbridge.mac_mode` | 브릿지 MAC 결정 방식 | enum | `dynamic` | `default`\|`dynamic`\|`static` | caution | boot | dynamic=유선측 MAC 동적 획득 |
+| `wbridge.mac_clone_require_peer` | 클론 MAC 유선 peer 필수 | bool | `true` | true\|false | caution | boot | `mac_mode=dynamic` 전용. true=유선 peer를 찾은 부팅에서만 클론 유지(없으면 `mac.<iface>.base` → base도 없으면 `.link` MACAddress 제거 → 드라이버 기본 MAC). false=직전 클론이 `.link`에 남아 다음 부팅에도 재적용(같은 PC로 여러 기기 설정 시 MAC 중복) |
 | `wbridge.ip_discovery` | 클라이언트 IP 탐색 | bool | `false` | true\|false | yes | boot | dynamic MAC 확보 후 클라이언트 IP 탐색+host route(/32 dev eth0) 등록. false=MAC만 확보(부팅 가속) |
 | `wbridge.eth_client_ip` | 유선 클라이언트 고정 IP | string | `""` | IPv4 또는 `""`(=비활성) | caution | boot | 빈값이면 quick ARP probe 비활성 |
 | `wbridge.eth_link_wait_sec` | 유선 링크 대기(초) | int | `5` | 양의 정수 | yes | boot | dynamic MAC 모드에서 유선 링크 up 대기 |

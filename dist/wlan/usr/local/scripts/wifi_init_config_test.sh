@@ -96,9 +96,15 @@ fi
 
 expect_file_contains "wifi_init.sh defines read_mac_from_json" "$WIFI_INIT_SH" '^read_mac_from_json() {'
 expect_file_contains "wifi_init.sh defines resolve_mac" "$WIFI_INIT_SH" '^resolve_mac() {'
+# 인터페이스별 MAC 쓰기는 한 지점이어야 한다 (base→override 이중 쓰기/불필요한 백업 회전 방지).
 expect_equal \
     "wifi_init.sh has one update_mac write point" \
-    "$(grep -c '^[[:space:]]*if /usr/local/scripts/update_mac.sh ' "$WIFI_INIT_SH")" \
+    "$(grep -c '^[[:space:]]*if /usr/local/scripts/update_mac.sh "\$iface" "\$mac" ' "$WIFI_INIT_SH")" \
+    "1"
+# 쓸 MAC이 없을 때의 클론 폐기(--clear)도 한 지점 — 쓰기 경로와 상호 배타적이어야 한다.
+expect_equal \
+    "wifi_init.sh has one update_mac clear point" \
+    "$(grep -c '^[[:space:]]*if /usr/local/scripts/update_mac.sh "\$iface" --clear' "$WIFI_INIT_SH")" \
     "1"
 
 run_case \
