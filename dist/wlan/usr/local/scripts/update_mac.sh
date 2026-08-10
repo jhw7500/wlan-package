@@ -142,6 +142,11 @@ backup_link() {
 # [Link] MACAddress를 제거해 드라이버 기본 MAC(permaddr)으로 되돌린다.
 # 쓸 MAC이 하나도 없을 때(dynamic peer 없음 + base 없음) 이전 클론 MAC이 .link에 남아
 # 다음 insmod에서 그대로 재적용되는 것을 막는 경로다. 이미 MACAddress가 없으면 no-op.
+#
+# 주의: tmp는 의도적으로 전역이다 — 파일 상단의 `trap cleanup_tmp EXIT`가 전역 tmp를 보고
+# 오류 반환 시 임시 파일을 지운다. 여기에 `local tmp`를 추가하면 트랩이 빈 전역만 보게 되어
+# 실패 경로마다 /etc/systemd/network에 .link.tmp.* 고아가 쌓인다 (PR #160 리뷰에서 실제로
+# 제안된 변경이라 남겨둔다). 아래 오류 경로에 rm이 없는 것도 같은 이유다.
 clear_link_address() {
   local cur_mac
   if [ ! -f "$LINK_FILE" ]; then
