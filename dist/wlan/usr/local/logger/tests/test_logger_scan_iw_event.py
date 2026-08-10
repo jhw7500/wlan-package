@@ -69,12 +69,12 @@ def test_classify_unrelated_events_none():
 
 
 def test_classify_malformed_lines_none():
-    """위조된 iw event 줄은 안전하게 None — 오분류 방지."""
+    """깨진/위조된 iw event 줄은 안전하게 None — 오분류 방지 (#163 OpenCode 리뷰)."""
     malformed = [
-        "1785957060.7: mlan0 (phy #0 malformed\n",  # missing "): "
-        "1785957060.7: mlan0 scan started\n",  # missing phy
-        "mlan0 (phy #): scan started\n",  # missing phy number
-        "1785957060.7: mlan0 (phy #0): scan\n",  # incomplete event
+        "1785957060.7: mlan0 (phy #0 malformed\n",   # "): " 없음
+        "1785957060.7: mlan0 scan started\n",        # phy 토큰 없음
+        "mlan0 (phy #): scan started\n",             # phy 번호 없음
+        "1785957060.7: mlan0 (phy #0): scan\n",      # 이벤트 이름 미완성
     ]
     for line in malformed:
         assert wifi_logger_scan.classify_iw_event_line(line, "mlan0") is None
@@ -170,29 +170,57 @@ def test_idle_watchdog_returns_so_stream_restarts():
 # ---- scan_event_source 폴백 ----
 
 def _run_source(monkeypatch, iw_results):
-    """iw_scan_event 반환값 시퀀스를 주고 dmesg 폴백 호출 여부를 확인."""
+    """iw_scan_event 반환값 시퀀스를 주고 (폴백 호출목록, iw 호출횟수)를 반환."""
     fell_back = []
+    calls = {"n": 0}
     results = iter(iw_results)
-    monkeypatch.setattr(wifi_logger_scan, "iw_scan_event",
-                        lambda *a, **k: next(results))
+
+    def fake_iw(*a, **k):
+        calls["n"] += 1
+        return next(results)
+
+    monkeypatch.setattr(wifi_logger_scan, "iw_scan_event", fake_iw)
     monkeypatch.setattr(wifi_logger_scan, "scan_event",
                         lambda iface, cb: fell_back.append(iface))
     wifi_logger_scan.scan_event_source(
         "mlan0", lambda iface: None, _clock=lambda: 0.0, _sleep=lambda s: None)
-    return fell_back
+    return fell_back, calls["n"]
 
 
 def test_unusable_primary_falls_back_immediately(monkeypatch):
-    assert _run_source(monkeypatch, [None]) == ["mlan0"]
+    fell_back, calls = _run_source(monkeypatch, [None])
+    assert fell_back == ["mlan0"]
+    assert calls == 1          # 재시작 없이 즉시 폴백
 
 
 def test_restart_cap_falls_back(monkeypatch):
-    """재시작이 상한을 넘으면 dmesg 로 내려간다 — 무한 재시작 스핀 방지."""
+    """재시작이 상한에 도달하면 dmesg 로 내려간다 — 무한 재시작 스핀 방지.
+
+    호출 = 최초 1 + 재시작 cap 회. 그 다음 종료에서 폴백하므로 iw 는 cap+1 회
+    호출된다(= 재시작 cap 회 수행 후 중단)."""
     cap = wifi_logger_scan.IW_EVENT_MAX_RESTARTS
-    assert _run_source(monkeypatch, [1] * (cap + 1)) == ["mlan0"]
+    fell_back, calls = _run_source(monkeypatch, [1] * (cap + 1))
+    assert fell_back == ["mlan0"]
+    assert calls == cap + 1
 
 
-def test_transient_restarts_then_fallback(monkeypatch):
-    """상한 이내의 재시작 후 실패는 폴백한다."""
+def test_transient_ends_restart_until_primary_unusable(monkeypatch):
+    """상한 이내의 종료는 재시작만 한다 — 폴백은 None(사용 불가)에서 일어난다.
+
+    cap-1 회 종료는 모두 재시작으로 흡수되고, 마지막 None 에서만 폴백하므로
+    iw 는 정확히 cap 회 호출된다(최초 1 + 재시작 cap-1)."""
     cap = wifi_logger_scan.IW_EVENT_MAX_RESTARTS
-    assert _run_source(monkeypatch, [1] * (cap - 1) + [None]) == ["mlan0"]
+    fell_back, calls = _run_source(monkeypatch, [1] * (cap - 1) + [None])
+    assert fell_back == ["mlan0"]
+    assert calls == cap
+
+
+def test_stream_is_reaped_on_exit():
+    """종료한 `iw event` 를 반드시 wait 로 거둔다 — 재시작 루프의 좀비 누적 방지."""
+    proc = MagicMock()
+    proc.stdout = _FakeStdout(IW_LINES[:4])
+    wifi_logger_scan.iw_scan_event(
+        "mlan0", lambda iface: None, _popen=lambda *a, **k: proc,
+        _select=lambda r, w, x, t: (r, [], []), _clock=lambda: 0.0)
+    proc.terminate.assert_called_once()
+    proc.wait.assert_called()
