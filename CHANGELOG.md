@@ -3,6 +3,26 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.5.1 (2026-08-10)
+
+> SemVer **patch** — DBDC 선행 정비(다중 iface 격리) + factory reset 위생 + 실기 튜닝 기본값 승격 + link.json 마감 스케줄링. 설정 키 추가/제거 없음(값·템플릿 변경만), 와이어 포맷 변경 없음.
+
+### DBDC 선행 정비 (#157~#159)
+
+- **roam 상태 파일 iface별 분리** — `/run/wifi/{roam_condition,last_roam_scan}_<iface>` + atomic write. 기본 인자 def-시점 바인딩 탓에 재대입이 bgscan `get_flag()`에 반영되지 않던 실버그를 센티널로 수정, reader 데몬의 미호출 writer 제거(#157).
+- **dmesg 스캔 소유 시간창(30s) 판정** — COMPLETED에 iface가 없는 실측 포맷에서 동시 스캔 오귀속을 먼저/나중 관찰자 양방향 차단(즉시-리셋 방식의 사각지대 교체)(#158).
+- **autonomous-bgscan 가드 mlan1 확장** + 보조 탐지를 현재 supplicant 실행(InvocationID) journal로 한정 — wpa.log 누적에 의한 구 릴리스 잔재 오경고 제거(#159).
+
+### factory reset 위생 (#160)
+
+- 공장 초기화가 하드웨어·생산 설정(보드 감지, MAC base 등)을 보존하고, 클론 MAC 잔재로 여러 기기가 같은 MAC으로 부팅하던 문제 수정. `.link` 대상 판정 견고화(다중 OriginalName·판정불가 드롭인).
+
+### 기본값 승격·설정 (#161, #162)
+
+- **실기 튜닝값 승격**: rate_adapt 70/90, DIFF_TH 7, ping_pong detection_time 10, mcs_tier 기본 적용(ht/vht "7", he "both 7"), mlan1 로밍 키를 mlan0과 정렬. 코드 상수·wifi.sh fallback·스키마·handoff 4축 동기화(#161).
+- **config.json overlay 템플릿 신설** + factory_reset 배포 + nginx 명시 enable(과거 리셋으로 disabled된 기기 복구)(#161).
+- **link.json 생산 0.95→0.9s + 마감(deadline) 스케줄링** — 고정 sleep의 실주기 초과(작업시간+interval)를 수정해 roam tick(1s) 대비 신선도를 실제로 보장. `Device.Country` KR(#162).
+
 ## 0.5.0 (2026-08-07)
 
 > SemVer **minor** — 로밍 엔진 개편 + 설정키 정리(제거 키는 postinst가 자동 마이그레이션) + 로거 systemd 감독화 + `wifi br route`·MAC 반영 정비. 와이어 포맷 변경 없음. 제거된 설정 키(LOAD_BASED_ROAM·ADAPTIVE_INTERVAL·POST_ROAM_ARP_OPTIMIZATION 등)는 업그레이드 시 자동 삭제되며 수동 조치 불필요.
