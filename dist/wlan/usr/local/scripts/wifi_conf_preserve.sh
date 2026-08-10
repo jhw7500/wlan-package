@@ -25,7 +25,8 @@
 # 곧바로 덮인다.
 #
 # 되살려도 안전한 값만 되쓴다 — 파일 경로는 그 파일이 실제로 있을 때, MAC은 할당 가능한
-# unicast일 때. 빈 문자열과 "none"은 "사용 안 함"이라는 유효한 설정이라 그대로 보존한다.
+# unicast일 때. 빈 문자열과 "none"은 대개 "사용 안 함"이라는 유효한 설정이라 그대로 보존하되,
+# PRESERVE_REQUIRED_KEYS(현재 global.MOD_PARA)는 빈값도 거부한다.
 # 못 쓰는 값까지 되살리면 공장 초기화가 복구 수단이 아니라 고장을 이월하는 동작이 된다 —
 # 특히 MOD_PARA가 없는 파일을 가리키면 moal insmod가 실패해 무선이 아예 안 올라온다.
 set -u
@@ -86,12 +87,28 @@ mac_value_usable() {
     mac_is_assignable "$1"
 }
 
+# 빈값/"none"을 "사용 안 함"으로 해석하면 안 되는 키. 드라이버가 항상 필요로 하는 값이라
+# 빈값을 되쓰면 wifi_init.sh가 moal_args="mod_para=" 로 insmod해 무선이 올라오지 않는다.
+# jq의 //는 빈 문자열에 폴백하지 않으므로(`.global.MOD_PARA // "기본값"`은 ""를 그대로 둔다)
+# 아래 단계에서 걸러야 한다. 바로 앞 wifi_board_config.sh가 이 키를 상수로 고쳐놓기 때문에,
+# 빈값을 보존하면 그 치유를 되돌려 공장 초기화가 고장을 이월하게 된다.
+PRESERVE_REQUIRED_KEYS='global.MOD_PARA'
+
 # 되살려도 안전한 값인지. 못 쓰는 값이면 사유를 출력하고 1을 반환한다.
-# 빈값/none은 "사용 안 함"이라는 유효한 설정이라 검사 없이 보존한다.
+# 빈값/none은 대개 "사용 안 함"이라는 유효한 설정이라 검사 없이 보존하지만,
+# PRESERVE_REQUIRED_KEYS에 있는 키는 예외로 거부한다.
 value_reject_reason() {
-    local section="$1" value="$2"
+    local dotted="$1" value="$2" section="${1%%.*}"
     case "$value" in
-        ""|none|None) return 1 ;;
+        ""|none|None)
+            case " $PRESERVE_REQUIRED_KEYS " in
+                *" $dotted "*)
+                    printf 'empty/none not allowed for this key'
+                    return 0
+                    ;;
+            esac
+            return 1
+            ;;
     esac
     if [ "$section" = "mac" ]; then
         mac_value_usable "$value" && return 1
@@ -133,7 +150,11 @@ save_snapshot() {
     log_msg local0.info "$LINENO" "preserved keys captured ($count): $(snapshot_pairs "$snapshot" | tr '\n' ' ')"
 }
 
-# 스냅샷에 실제로 담긴 보존 대상을 "<점표기 키>\t<jq 경로 JSON>\t<값>"으로 펼친다.
+# 스냅샷의 보존 대상을 "<점표기 키>\t<jq 경로 JSON>\t<원시 값>\t<값 JSON>"으로 펼친다.
+# 원시 값은 게이트 판정용, 값 JSON은 되쓰기용이다 — --arg로 되쓰면 boolean/number도
+# 문자열이 되므로, 나중에 문자열 아닌 키가 PRESERVE_PATHS에 추가돼도 타입이 유지되게 한다.
+# 구분자가 탭(@tsv)이 아니라 US(\x1f)인 이유: 탭은 IFS 공백문자라 bash read가 연속 탭을
+# 하나로 합쳐, 빈 문자열 값(CAL_DATA_CFG="" 등)이 통째로 사라지고 뒤 컬럼이 앞으로 밀린다.
 # 순회 기준은 스냅샷 구조가 아니라 PRESERVE_PATHS다 — 목록 밖의 키가 스냅샷에 섞여 있어도
 # 아예 읽지 않으므로 되쓰기 대상이 되지 않는다.
 snapshot_entries() {
@@ -143,19 +164,20 @@ snapshot_entries() {
         | . as $p
         | ($snap | getpath($p)) as $v
         | select($v != null)
-        | [($p | join(".")), ($p | tojson), ($v | tostring)] | @tsv
+        | [($p | join(".")), ($p | tojson), ($v | tostring), ($v | tojson)]
+        | join("\u001f")
     ' "$1" 2>/dev/null
 }
 
 # 로그용 "global.MOD_PARA=cts/wifi_mod_para.conf ..." 한 줄.
 snapshot_pairs() {
-    snapshot_entries "$1" | while IFS=$'\t' read -r dotted _ value; do
+    snapshot_entries "$1" | while IFS=$'\037' read -r dotted _ value _; do
         printf '%s=%s\n' "$dotted" "$value"
     done
 }
 
 apply_snapshot() {
-    local snapshot="$1" keep='{}' applied="" skipped="" dotted path value reason tmp
+    local snapshot="$1" keep='{}' applied="" skipped="" dotted path value valuejson reason tmp
 
     if [ -z "$snapshot" ]; then
         log_msg local0.err "$LINENO" "usage: $tag apply <snapshot>"
@@ -170,14 +192,14 @@ apply_snapshot() {
         return 1
     fi
 
-    while IFS=$'\t' read -r dotted path value; do
+    while IFS=$'\037' read -r dotted path value valuejson; do
         [ -n "$dotted" ] || continue
-        if reason=$(value_reject_reason "${dotted%%.*}" "$value"); then
+        if reason=$(value_reject_reason "$dotted" "$value"); then
             skipped="$skipped $dotted=$value"
             log_msg local0.warn "$LINENO" "preserved value unusable ($reason); fall back to template: $dotted=$value"
             continue
         fi
-        keep=$(printf '%s' "$keep" | jq -c --argjson p "$path" --arg v "$value" \
+        keep=$(printf '%s' "$keep" | jq -c --argjson p "$path" --argjson v "$valuejson" \
                    'setpath($p; $v)') || {
             log_msg local0.err "$LINENO" "failed to stage preserved key: $dotted"
             return 1
