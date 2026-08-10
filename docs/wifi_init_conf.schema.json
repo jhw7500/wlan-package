@@ -218,6 +218,14 @@
           "x-apply-timing": "boot",
           "x-consumer": "wifi_init.sh, wired_mac_ip_get.py"
         },
+        "mac_clone_require_peer": {
+          "type": "boolean",
+          "default": true,
+          "description": "mac_mode=dynamic 전용. true=클론 MAC은 유선 peer를 찾은 부팅에서만 유지(없으면 base → 없으면 MAC 미지정). false=직전 클론이 .link에 남아 재적용",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "boot",
+          "x-consumer": "wifi_init.sh, update_mac.sh"
+        },
         "ip_discovery": {
           "type": "boolean",
           "default": false,

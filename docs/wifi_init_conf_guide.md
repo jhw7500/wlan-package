@@ -114,6 +114,7 @@ wifi_init_conf.json
 > - **실제 bridge 기능이 켜져 있고**(`wbridge.enabled=true` & bridge iface `enabled`) **`mac_mode`의 dynamic(유선 peer 클론)/static(target) 변환에 성공한 경우에만** bridge 인터페이스 MAC을 `base` 대신 그 값으로 override한다. 변환 실패/`default` 모드면 base 유지.
 > - resolve_mac 우선순위(bridge iface): dynamic(`/tmp/eth0_client_mac`) → static이면 target → base. 형식 위반은 warn 로그 후 무시.
 > - 빈 문자열이면 해당 소스 생략(기존 `/opt/wlan/mac` 디렉토리 대체).
+> - **쓸 MAC이 하나도 없으면**(dynamic peer 없음 + base 없음) `wbridge.mac_clone_require_peer=true`(기본)일 때 bridge iface `.link`의 `MACAddress`를 **제거**해 드라이버 기본 MAC으로 되돌린다. 아래 [클론 MAC 잔재](#클론-mac-잔재--mac_clone_require_peer) 참고.
 
 > **적용 계층·시점**: `update_mac.sh`가 systemd `.link`(`/etc/systemd/network/2X-<iface>.link`)의 `MACAddress=`를 기록하며, **udev가 netdev 생성 시(=부팅/드라이버 리로드)에만 적용**한다 — JSON만 고치고 재부팅하지 않으면 live 인터페이스 MAC은 바뀌지 않는다. `target`은 추가로 `mod_para`의 `mac_addr=`로 주입돼 insmod 시 어댑터 MAC이 된다. `.link`가 없거나 비어 있으면(구버전 잔재) `update_mac.sh`가 `[Match]/[Link]`를 갖춘 파일을 재생성하고(#111), 변경 시 인터페이스당 최대 5개 회전 백업(`.bak.1`~`.bak.5`, 동일 MAC 중복 제외)한다.
 
@@ -133,6 +134,7 @@ wifi_init_conf.json
 | `enabled` | bool | `true` | bridge 기능 마스터 스위치. `false`이면 bridge 서비스 전체 stop+disable |
 | `bridge_iface` | string | `"mlan0"` | bridge에 사용할 인터페이스. `"mlan0"` 또는 `"mlan1"`. `mlan1`이면 moal insmod `bridge_wlan_idx=1`로 전달(engine=moal 시). pcap 트랙은 `wifi_bridge@mlan0`에 하드코딩 |
 | `mac_mode` | string | `"dynamic"` | MAC 주소 모드. `"default"` (base만), `"dynamic"` (유선측 MAC 동적 획득→base), `"static"` (target→base) |
+| `mac_clone_require_peer` | bool | `true` | `mac_mode=dynamic` 전용. 클론 MAC을 **유선 peer를 실제로 찾은 부팅에서만** 유지한다. 아래 [클론 MAC 잔재](#클론-mac-잔재--mac_clone_require_peer) 참고 |
 | `ip_discovery` | bool | `false` | dynamic MAC 모드에서 MAC 확보 후 클라이언트 IP까지 탐색할지. `false`면 MAC만 확보 후 즉시 종료(부팅 가속, host route 미등록). `true`면 IP 탐색(passive→unicast→sweep) + host route(`/32 dev eth0`) 자동 등록. 양방향 라우팅 완성에는 `peer_route.enabled=true` 필요 |
 | `eth_client_ip` | string | `""` | 유선 클라이언트 고정 IP. 빈 문자열이면 quick ARP probe 비활성. 네트워크 토폴로지 종속 |
 | `eth_link_wait_sec` | int | `5` | dynamic MAC 모드에서 유선 링크 준비 대기 시간 (초). `wired_mac_ip_get.py`에서 사용 (구 기본값 3 → **5**) |
@@ -148,6 +150,36 @@ wifi_init_conf.json
 > **eth 지연연결 라우트 등록**: `peer_route=on`인데 이더넷을 **부팅 후 나중에** 연결한 경우, 부팅 시점엔 `wired_mac_ip_get.py`가 링크 대기(`wait_for_eth_link`)에서 빠져나와 **peer host route(`<peer>/32 dev eth0`)가 누락**된다(나머지 인프라 — eth0 `/32` 미러·table 100·sysctl — 은 링크 무관하게 이미 세팅됨). 이후 eth 연결 시 **`wifi {0|1} br route auto`**로 유선 peer를 sweep 탐색해 그 라우트를 사후 등록한다(읽기 전용 아님). 하위 명령: `find [<subnet>]`=탐색만(읽기 전용), `set <ip>`=IP 직접 지정 등록, `auto [<subnet>]`=정확히 1건 발견 시 자동 등록(0건/2건+는 에러 — 후자는 `set <ip>`로 지정). 서브넷 생략 시 `eth_client_ip`(단일 IP quick ARP) → `eth_sweep_subnet` → mlanN 대역 순으로 대상 결정. (자동 트리거는 후속 확장 예정)
 >
 > **⚠️ `find`/`auto`가 peer를 못 찾을 때 (eth0 타서브넷)**: `eth0`의 IP가 sweep 대역과 다른 서브넷이면(예: `eth0=192.168.1.1/24`, peer=`192.168.0.220`), same-subnet source에만 ARP 응답하는 peer는 발견에 실패한다. #113에서 sweep arping의 source를 **대역 내 우리 IP(mlanN)**로 지정하도록 보정했다(⚠️ **서브넷 인자는 sweep 범위만** 바꾸고 arping source IP는 안 바꾸므로 대역 지정만으로는 안 풀림). 그래도 안 되면 `wifi {0|1} br route set <peer-ip>`로 직접 등록한다.
+
+#### 클론 MAC 잔재 — `mac_clone_require_peer`
+
+`mac_mode=dynamic`은 유선 peer(BD에 연결된 PC/PLC)의 MAC을 bridge 인터페이스 `.link`에 클론한다. 이 `.link`는 **다음 `insmod`까지 남기 때문에**, 같은 PC로 여러 기기를 차례로 설정하면 각 기기에 같은 MAC이 기록되고 PC를 떼도 그대로 유지돼 **여러 기기가 동일 MAC으로 부팅**하는 문제가 있었다.
+
+| `mac_clone_require_peer` | 유선 peer 없는 부팅에서의 동작 |
+|--------------------------|--------------------------------|
+| `true` (기본) | `base` 있으면 → `base` 기록. `base` 없으면 → `.link`의 `MACAddress` **제거**(드라이버 기본 MAC). 클론 잔재가 남지 않는다 |
+| `false` | 종전 동작 — 직전 클론이 `.link`에 남아 다음 부팅에도 재적용된다 |
+
+- **반영 시점은 같은 부팅**이다. `wifi_init.sh`의 MAC 결정 블록은 `try_insmod`보다 **앞**에서 실행되므로, 정정된 `.link`를 udev가 netdev 생성 시 바로 적용한다.
+- `true`면 매 탐색 전에 `/tmp/eth0_client_mac`도 지운다. `wired_mac_ip_get.py`는 peer를 찾았을 때만 이 파일을 쓰고 실패해도 지우지 않아, `systemctl restart wifi_init` 시 유선을 뽑았는데도 직전 실행의 peer MAC이 읽히기 때문이다.
+- 대상은 **bridge 인터페이스**(`wbridge.bridge_iface`)뿐이다. dynamic 클론은 이 인터페이스에만 적용되므로 secondary/eth0의 `.link`는 건드리지 않는다. 다만 `bridge_iface`를 mlan0↔mlan1로 **바꾼 경우**, 이전 bridge 인터페이스에 남은 클론은 이 옵션의 범위 밖이므로 `wifi mac <iface> base <MAC>` 또는 공장 초기화로 정리해야 한다.
+- MFG 프로파일(`mfg_mode=1`)에서는 MAC 설정 전체가 skip되므로 이 정정도 수행하지 않는다.
+- 관련 구현: `wifi_init.sh`(`apply_final_mac`), `update_mac.sh --clear`, `mac_link_lib.sh`(`mac_render_link_without_address`). 테스트: `update_mac_test.sh` T26~T30.
+
+**공장 초기화의 `.link` 정리** — `factory_reset.sh`는 2단계로 MAC 오염을 제거한다. 목표는 "초기화 후 어떤 `.link`도 mlan0/mlan1/eth0에 MAC을 강제하지 않는다"이며, 2단계가 그 사실을 검증까지 한다.
+
+| 단계 | 동작 |
+|------|------|
+| 1 | 패키지 소유 `.link` 3개를 `/opt/wlan/config/systemd/network/`의 템플릿(=`MACAddress` 없음)으로 덮어쓰기 |
+| 2 | **`wifi_link_reset.sh`** — ① `*.link.*` 파생 잔재 일소 ② 패키지 소유분에 남은 `MACAddress` 제거(1단계 실패 대비) ③ 외부 `.link`가 우리 인터페이스의 MAC을 강제하면 **파일 삭제** ④ `.link.d` 드롭인 감지 ⑤ 후조건 검증 + `sync` |
+
+- ①은 `.link.bak`·`.link.bak.N`·`.link.bak.<임의 suffix>`·orphan `.link.tmp.*`를 모두 지운다. 공장 초기화에서 이들은 되살릴 이유가 없는 파생 상태다. (구 `update_mac.sh --reset-backups` 루프를 대체 — 그쪽은 비숫자 suffix 백업을 보존했다)
+- ③이 필요한 이유: **udev는 파일명 사전순으로 처음 매칭된 `.link`만 적용**하므로 `10-custom.link` 같은 낮은 번호 파일이 `20-mlan0.link`를 완전히 가린다. 이름이 `.link`로 끝나 ①의 `*.link.*` 글롭에는 걸리지 않는다.
+- **삭제 대상은 `OriginalName`으로 우리 인터페이스를 지목하면서 `MACAddress`를 설정하는 `.link`뿐**이다(공백 구분 목록·glob 인식). MAC을 설정하지 않는 `.link`(MTU/WoL 등 운영자 튜닝)와 무관한 인터페이스용 `.link`는 보존한다.
+- 판정 불가 2종은 **삭제하지 않고** `logger.crit` + 콘솔 경고만 남긴다 — 오삭제보다 사람 판단이 낫다는 판단. 이때 `wifi_link_reset.sh`는 exit 1이지만 공장 초기화는 계속 진행한다.
+  - `OriginalName` 없이 `MACAddress`만 설정하는 `.link` (`Path=`/`Driver=` 매칭은 해석하지 않음)
+  - `<name>.link.d/*.conf` 드롭인의 `MACAddress` — 드롭인은 부모 `.link`에 **병합**되므로 템플릿 복원과 무관하게 MAC을 강제한다. 디렉터리라 ①의 `rm`으로도 지워지지 않는다(부모 `.link`가 없는 고아 드롭인은 systemd가 무시하므로 대상 아님).
+- 진단: `wifi_link_reset.sh --check`는 아무것도 바꾸지 않고 강제 MAC이 남았는지만 검사한다(남으면 exit 1). 테스트: `wifi_link_reset_test.sh`
 
 ### 3.1 wbridge.optimize - 커널 레벨 네트워크 튜닝
 
@@ -594,7 +626,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 - **`apply`는 `wifi_board_config.sh` 뒤에 실행된다.** 보드 감지 헬퍼가 `.global.MOD_PARA`를 상수로 다시 쓰므로(v0.3.0 `wifi_mod_para_.conf` 통합 마이그레이션 잔재) 그 전에 되쓰면 곧바로 덮인다.
 - 빈 문자열과 `"none"`은 "사용 안 함"이라는 유효한 설정이므로 게이트를 거치지 않고 그대로 보존한다.
 - **되살릴 수 없는 값(없는 파일, 할당 불가 MAC)은 보존하지 않고 템플릿 기본값을 남긴다** (`logger.warn`). 공장 초기화가 고장을 이월하지 않게 하기 위함이며, 특히 `MOD_PARA`가 없는 파일을 가리키면 `moal` insmod가 실패해 무선이 아예 올라오지 않는다.
-- **`.mac`은 `base`만 보존하고 `target`은 초기화된다.** `base`는 유닛의 기준 MAC(`write_mac.sh` / `eth_mac_get.sh`가 기록)이지만 `target`은 `wifi mac <iface> target <MAC>`으로 정하는 런타임 설정이다. 리셋 후 `resolve_mac`은 `dynamic → target → base` 순으로 폴백하므로 보존된 `base`가 쓰인다. 함께 초기화되는 `.link` 파일은 다음 부팅에 `resolve_mac` → `update_mac.sh` 경로로 `base`에서 다시 만들어진다.
+- **`.mac`은 `base`만 보존하고 `target`은 초기화된다.** `base`는 유닛의 기준 MAC(`write_mac.sh` / `eth_mac_get.sh`가 기록)이지만 `target`은 `wifi mac <iface> target <MAC>`으로 정하는 런타임 설정이다. 리셋 후 `resolve_mac`은 `dynamic → target → base` 순으로 폴백하므로 보존된 `base`가 쓰인다. 함께 초기화되는 `.link` 파일은 다음 부팅에 `resolve_mac` → `update_mac.sh` 경로로 `base`에서 다시 만들어진다(`.link` 정리 절차는 [공장 초기화의 `.link` 정리](#클론-mac-잔재--mac_clone_require_peer) 참고).
 - 위 10개를 제외한 나머지 키(`STANDARD`, `connect_threshold`, `.wbridge.*`, `.mac.*.target` 등)는 종전대로 전부 템플릿 값으로 초기화된다.
 - 테스트: `wifi_conf_preserve_test.sh` (하드웨어/root 불필요)
 

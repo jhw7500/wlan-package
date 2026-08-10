@@ -48,6 +48,10 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
     BRIDGE_IFACE=$(jq -r '.wbridge.bridge_iface // .global.BRIDGE_IFACE // "mlan0"' "$WIFI_INIT_CONF_JSON")
     WBRIDGE_ENABLED=$(jq -r 'if .wbridge.enabled then "true" else "false" end' "$WIFI_INIT_CONF_JSON" 2>/dev/null || echo "true")
     MAC_MODE=$(jq -r '.wbridge.mac_mode // .global.MAC_MODE // "default"' "$WIFI_INIT_CONF_JSON")
+    # mac_clone_require_peer: dynamic 클론 MAC을 유선 peer가 실제로 있을 때만 유지한다.
+    # true면 peer를 못 찾은 부팅에서 이전 클론이 .link에 남지 않는다(base → 없으면 MAC 미지정).
+    MAC_CLONE_REQUIRE_PEER=$(jq -r 'if (.wbridge.mac_clone_require_peer // true) then "true" else "false" end' \
+        "$WIFI_INIT_CONF_JSON" 2>/dev/null || echo "true")
     WBRIDGE_ENGINE=$(jq -r '.wbridge.engine // "pcap"' "$WIFI_INIT_CONF_JSON")
     # moal keepalive: 발열↔레이턴시 노브 (engine=moal 전용 insmod 인자).
     # 음이 아닌 정수만 수용 — 그 외(키 없음/잘못된 값)는 스크립트 기본값(1) 유지.
@@ -212,7 +216,9 @@ if [ "$MAC_MODE" != "default" ] && [ "$MAC_MODE" != "dynamic" ] && [ "$MAC_MODE"
     logger -p local0.err "[$tag:$LINENO] MAC_MODE invalid: $MAC_MODE, fallback to default"
     MAC_MODE="default"
 fi
-logger -p local0.info "[$tag:$LINENO] BOARD_TYPE=$BOARD_TYPE, modules=$MLAN_KO/$MOAL_KO BRIDGE_IFACE=$BRIDGE_IFACE BRIDGE_NONE=$BRIDGE_NONE MAC_MODE=$MAC_MODE"
+# jq/JSON을 못 읽은 경우에도 템플릿 기본값과 같은 true로 맞춘다.
+MAC_CLONE_REQUIRE_PEER="${MAC_CLONE_REQUIRE_PEER:-true}"
+logger -p local0.info "[$tag:$LINENO] BOARD_TYPE=$BOARD_TYPE, modules=$MLAN_KO/$MOAL_KO BRIDGE_IFACE=$BRIDGE_IFACE BRIDGE_NONE=$BRIDGE_NONE MAC_MODE=$MAC_MODE mac_clone_require_peer=$MAC_CLONE_REQUIRE_PEER"
 logger -p local0.info "[$tag:$LINENO] mlan0: enabled=$MLAN0_ENABLED freq=$MLAN0_FREQ, mlan1: enabled=$MLAN1_ENABLED freq=$MLAN1_FREQ"
 
 # moal 엔진일 때만 bridge 파라미터를 moal insmod args에 추가.
@@ -680,6 +686,20 @@ apply_final_mac() {
     local iface="$1" mac="$2" source="$3"
     shift 3
     if [ -z "$mac" ]; then
+        # dynamic 클론 잔재 폐기(mac_clone_require_peer=true).
+        # 쓸 MAC이 하나도 없는데 .link를 그대로 두면 직전 부팅에 클론한 유선 peer MAC이
+        # 남아 바로 아래 insmod에서 udev가 다시 적용한다. 그 결과 같은 PC로 설정한 여러
+        # 기기가 전부 같은 MAC을 갖게 된다. MACAddress를 지워 드라이버 기본 MAC으로 되돌린다.
+        if [ "$iface" = "$BRIDGE_IFACE" ] && [ "$MAC_MODE" = "dynamic" ] \
+            && [ "${MAC_CLONE_REQUIRE_PEER:-true}" = "true" ]; then
+            if /usr/local/scripts/update_mac.sh "$iface" --clear; then
+                logger -p local0.info \
+                    "[$tag:$LINENO] [$iface] no usable MAC (wired peer/base absent); discarded stale clone MAC → driver default"
+            else
+                logger -p local0.err "[$tag:$LINENO] [$iface] failed to discard stale clone MAC"
+            fi
+            return 0
+        fi
         logger -p local0.info "[$tag:$LINENO] [$iface] no final MAC configured; skip update_mac"
         return 0
     fi
@@ -982,6 +1002,12 @@ BRIDGE_MAC_SOURCE="base"
 if [ "$BRIDGE_NONE" != "true" ] && wifi_init_iface_is_enabled "$BRIDGE_IFACE" "true"; then
     # dynamic 모드면 유선 peer MAC/IP 확보 먼저 (resolve_mac의 try_dynamic_mac가 /tmp/eth0_client_mac를 읽음)
     if [ "$MAC_MODE" = "dynamic" ]; then
+        # wired_mac_ip_get.py는 peer를 찾았을 때만 파일을 쓰고 실패 시 기존 파일을 지우지 않는다.
+        # 부팅 직후엔 tmpfs라 비어 있지만 wifi_init 재실행에서는 유선을 뽑아도 직전 실행이 남긴
+        # peer MAC이 그대로 읽혀 클론이 유지된다. require_peer면 매 탐색을 빈 상태에서 시작한다.
+        if [ "${MAC_CLONE_REQUIRE_PEER:-true}" = "true" ]; then
+            rm -f /tmp/eth0_client_mac
+        fi
         #logger -p local0.info "[$tag:$LINENO] [$BRIDGE_IFACE] running wired_mac_ip_get.py"
         python3 /usr/local/logger/wired_mac_ip_get.py || true
     fi

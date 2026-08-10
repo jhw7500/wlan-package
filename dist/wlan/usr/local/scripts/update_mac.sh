@@ -1,5 +1,5 @@
 #!/bin/bash
-# update_mac.sh <iface> <mac|--cleanup|--reset-backups> [<plan-iface>=<plan-mac> ...]
+# update_mac.sh <iface> <mac|--cleanup|--reset-backups|--clear> [<plan-iface>=<plan-mac> ...]
 # 최종 계획 인자는 wifi_init.sh의 다중 인터페이스 교환 시에만 사용한다.
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 # shellcheck source=./mac_link_lib.sh
@@ -138,6 +138,59 @@ backup_link() {
   cp "$LINK_FILE" "${BACKUP_PREFIX}.1" || return 1
   logger -p local0.info "[$tag:$LINENO] [$IFACE] backup created: ${BACKUP_PREFIX}.1 (rotate, max ${MAX_BAK})"
 }
+
+# [Link] MACAddress를 제거해 드라이버 기본 MAC(permaddr)으로 되돌린다.
+# 쓸 MAC이 하나도 없을 때(dynamic peer 없음 + base 없음) 이전 클론 MAC이 .link에 남아
+# 다음 insmod에서 그대로 재적용되는 것을 막는 경로다. 이미 MACAddress가 없으면 no-op.
+clear_link_address() {
+  local cur_mac
+  if [ ! -f "$LINK_FILE" ]; then
+    logger -p local0.info "[$tag:$LINENO] [$IFACE] no link file; MACAddress already absent"
+    return 0
+  fi
+  cur_mac=$(mac_read_link_address "$LINK_FILE")
+  if [ -z "$cur_mac" ]; then
+    logger -p local0.info "[$tag:$LINENO] [$IFACE] MACAddress already absent in $LINK_FILE"
+    return 0
+  fi
+
+  if ! backup_link; then
+    logger -p local0.err "[$tag:$LINENO] [$IFACE] failed to rotate backup for $LINK_FILE"
+    return 1
+  fi
+
+  if ! tmp="$(mktemp "${LINK_FILE}.tmp.XXXXXX")"; then
+    logger -p local0.err "[$tag:$LINENO] [$IFACE] failed to create temp file in $(dirname "$LINK_FILE")"
+    return 1
+  fi
+  mac_render_link_without_address "$LINK_FILE" > "$tmp" || {
+    logger -p local0.err "[$tag:$LINENO] [$IFACE] failed to render $LINK_FILE without MACAddress"
+    return 1
+  }
+
+  if [ "$(id -u)" -eq 0 ]; then
+    install -o root -g root -m 0644 "$tmp" "$LINK_FILE" || {
+      logger -p local0.err "[$tag:$LINENO] [$IFACE] failed to install $LINK_FILE"
+      return 1
+    }
+  else
+    install -m 0644 "$tmp" "$LINK_FILE" || {
+      logger -p local0.err "[$tag:$LINENO] [$IFACE] failed to install $LINK_FILE"
+      return 1
+    }
+  fi
+  rm -f "$tmp" || {
+    logger -p local0.err "[$tag:$LINENO] [$IFACE] failed to remove temp file: $tmp"
+    return 1
+  }
+  tmp=""
+  logger -p local0.info "[$tag:$LINENO] [$IFACE] cleared MACAddress (was $cur_mac); driver default MAC will be used"
+}
+
+if [ "$NEW_MAC" = "--clear" ]; then
+  clear_link_address
+  exit $?
+fi
 
 # MAC 유효성 검사
 if mac_is_assignable "$NEW_MAC"; then

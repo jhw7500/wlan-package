@@ -158,13 +158,19 @@ customctl() {
   safe_cp /opt/wlan/config/systemd/network/20-mlan0.link /etc/systemd/network/20-mlan0.link
   safe_cp /opt/wlan/config/systemd/network/21-mlan1.link /etc/systemd/network/21-mlan1.link
   safe_cp /opt/wlan/config/systemd/network/22-eth0.link /etc/systemd/network/22-eth0.link
-  # active .link는 JSON MAC에서 다시 생성되는 파생 상태다. 공장 초기화 전 MAC이
-  # .bak/.bak.N에서 되살아나지 않도록 update_mac 소유의 백업만 함께 제거한다.
-  for _reset_iface in mlan0 mlan1 eth0; do
-      SYSTEMD_NETWORK_DIR=/etc/systemd/network \
-        /usr/local/scripts/update_mac.sh "$_reset_iface" --reset-backups \
-        || logger -p local0.err "[$tag:$LINENO] [$_reset_iface] link backup reset failed"
-  done
+  # active .link는 JSON MAC에서 다시 생성되는 파생 상태다. 위 복사만으로는 MAC 오염이 다
+  # 지워지지 않는다 — 백업(*.link.bak*)에서 되살아날 수 있고, safe_cp는 실패해도 로그만 남기고
+  # 진행하며, 패키지 소유가 아닌 .link가 같은 인터페이스를 지목하면(파일명이 20-보다 앞서면
+  # udev가 그쪽을 먼저 적용) 템플릿 복원이 통째로 가려진다. 파생 잔재 제거·외부 .link 삭제·
+  # 후조건 검증을 wifi_link_reset.sh가 한 번에 처리한다.
+  if [ -x /usr/local/scripts/wifi_link_reset.sh ]; then
+      if ! /usr/local/scripts/wifi_link_reset.sh; then
+          logger -p local0.err "[$tag:$LINENO] link reset incomplete; a .link may still force a MAC"
+          safe_print red "\r\n[factory] WARNING: link reset incomplete (see syslog)"
+      fi
+  else
+      logger -p local0.err "[$tag:$LINENO] missing wifi_link_reset.sh; stale .link MAC not cleaned"
+  fi
   # 덮어쓰기 전, 지워선 안 되는 하드웨어/생산 설정(MOD_PARA·CAL_DATA_CFG·TXPWRLIMIT_PATH·
   # .mac.<iface>.base)을 떠 둔다. 되쓰기는 보드 감지 이후에 한다 — wifi_board_config.sh가
   # .global.MOD_PARA를 상수로 다시 쓰므로 그 전에 되쓰면 곧바로 덮인다.
