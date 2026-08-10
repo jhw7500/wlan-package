@@ -351,8 +351,8 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `mgmt_hex_dump_enable` | MGMT hex dump 로깅 | bool | `false` | true\|false | caution | reboot | 디버그용. mod_para 블록 `mgmt_hex_dump=1/0` |
 | `thermal_mgmt` | FW 열관리 | bool | `true` | true\|false | caution | boot | FW thermal management(SUBID 0x113). 명시적 false만 disable |
 | `rate_adapt.mode` | 레이트 적응 모드 | int | `1` | `0`=legacy\|`1`=SR | caution | boot | 비었으면 rate_adapt 블록 전체 skip |
-| `rate_adapt.low_thresh` | 레이트 적응 low 임계 | int | `50` | 0..100(%) 또는 255(0xff=dynamic) | caution | boot | SR 모드 하한 성공률(%) |
-| `rate_adapt.high_thresh` | 레이트 적응 high 임계 | int | `80` | 0..100(%) 또는 255(0xff) | caution | boot | SR 모드 상한 성공률(%) |
+| `rate_adapt.low_thresh` | 레이트 적응 low 임계 | int | `70` | 0..100(%) 또는 255(0xff=dynamic) | caution | boot | SR 모드 하한 성공률(%) |
+| `rate_adapt.high_thresh` | 레이트 적응 high 임계 | int | `90` | 0..100(%) 또는 255(0xff) | caution | boot | SR 모드 상한 성공률(%) |
 | `rate_adapt.interval_ms` | 레이트 적응 평가주기(ms) | int | `100` | ms 정수 | caution | boot | 평가 주기 |
 
 #### 3.10.2 mlanN.logger (per-iface 로거)
@@ -386,14 +386,14 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `use_signal_avg` | 평균 신호 사용 | bool | `true` | true\|false | yes | daemon-restart | true=평균(안정), false=순간값 |
 | `DEFAULT_TH_2G` | 2.4GHz 로밍 임계값 | int | `-75` | 음수 dBm | yes | daemon-restart | 이 값 이하이면 로밍 시도 (JSON 단일 소스, conf `#!TH_2G=` 마커 미사용) |
 | `DEFAULT_TH_5G` | 5GHz 로밍 임계값 | int | `-75` | 음수 dBm | yes | daemon-restart | 이 값 이하이면 로밍 시도 (JSON 단일 소스, conf `#!TH_5G=` 마커 미사용) |
-| `DIFF_TH` | 후보 AP 최소 RSSI 차 | int | `8` | >=0 dB | yes | daemon-restart | 클수록 보수적 |
-| `CHECK_INTERVAL` | 로밍 체크 주기 | int | `mlan0=1 / mlan1=3` | >=1 초 | yes | daemon-restart | 고정 체크 주기(ADAPTIVE_INTERVAL 은 감사 D1로 제거됨) |
+| `DIFF_TH` | 후보 AP 최소 RSSI 차 | int | `7` | >=0 dB | yes | daemon-restart | 클수록 보수적 |
+| `CHECK_INTERVAL` | 로밍 체크 주기 | int | `1` | >=1 초 | yes | daemon-restart | 고정 체크 주기(ADAPTIVE_INTERVAL 은 감사 D1로 제거됨) |
 | `extra_ssids` | 추가 로밍 후보 SSID | array | `[]` | 문자열 배열(같은 psk/key_mgmt) | caution | daemon-restart | 모드B(generate_network_blocks=false)면 강제 무시 |
 | `generate_network_blocks` | 모드 결정자 | bool | `false` | true\|false | caution | daemon-restart | false=모드B(단일 블록), true=모드A(다중+select_network) |
 | `ROAM_CROSS_FAIL_RETRY_COUNT` | cross-SSID 재시도 횟수 | int | `2` | >=0 (모드A 전용) | yes | daemon-restart | 초과 시 지수 backoff로 후보 제외 |
 | `ROAM_NO_RESULT_FAST_COUNT` | backoff 레벨당 반복 횟수 | int | `3` | >=1 | yes | daemon-restart | 각 주기를 N tick 유지 후 2배(플래토 곡선, 기본 3,3,3,6,6,6,…). 1=레거시(매 tick 2배) |
 | `SCAN_NO_RESULT_SLEEP` | 스캔 무결과 대기 | int | `3` | >=1 초 | yes | daemon-restart | 지수 backoff 시작값 |
-| `ROAM_SUCCESS_SLEEP` | 로밍 성공 후 대기 | int | `mlan0=3 / mlan1=2` | >=1 초 | yes | daemon-restart | 성공 후 재체크 대기 |
+| `ROAM_SUCCESS_SLEEP` | 로밍 성공 후 대기 | int | `3` | >=1 초 | yes | daemon-restart | 성공 후 재체크 대기 |
 | `enabled` | 로밍 데몬 활성화 | bool | `mlan0=true / mlan1=false` | true\|false | yes | daemon-restart | `wifi_roam@mlanN` enable/disable |
 | `PREDICTIVE_ROAM.enable` | 예측 로밍 | bool | `false` | true\|false | yes | daemon-restart | RSSI 하락 추세 시 조기 로밍 |
 | `PREDICTIVE_ROAM.threshold_boost` | 예측 임계 부스트 | int | `5` | >=0 dB | yes | daemon-restart | 하락 추세 시 임계값에 더하는 부스트 |
@@ -404,7 +404,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `PING_PONG_PREVENTION.enable` | 핑퐁 방지 | bool | `true` | true\|false | yes | daemon-restart | AP 간 반복 로밍 방지 |
 | `PING_PONG_PREVENTION.window` | 핑퐁 감시 구간 | int | `20` | >=1 초 | yes | daemon-restart | 로밍 횟수 감시 구간 |
 | `PING_PONG_PREVENTION.max_roams_in_window` | 구간 내 최대 로밍 | int | `3` | >=1 | yes | daemon-restart | 초과 시 detection_time 동안 억제 |
-| `PING_PONG_PREVENTION.detection_time` | 핑퐁 억제 시간 | int | `5` | >=1 초 | yes | daemon-restart | 감지 후 로밍 억제 시간 |
+| `PING_PONG_PREVENTION.detection_time` | 핑퐁 억제 시간 | int | `10` | >=1 초 | yes | daemon-restart | 감지 후 로밍 억제 시간 |
 | `STAGED_SCAN.enable` | 로밍 판정 스캔 | bool | `true` | true\|false | yes | runtime | 단일 freq=홈채널 우선, 다중 freq=전체 directed active |
 | `STAGED_SCAN.skip_redundant_active` | 단일채널 중복 스킵 | bool | `true` | true\|false | yes | runtime | 단일채널 passive 모드에서 이웃을 관측하면 추가 active 생략. home_passive=false는 항상 active 1회 |
 | `STAGED_SCAN.home_passive` | 단일채널 홈 passive | bool | `true` | true\|false | yes | runtime | 단일 freq 전용. false=directed active; 다중 freq에서는 무시 |
@@ -418,10 +418,10 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 
 | 경로(`mlanN.mcs_tier.`) | 라벨 | 타입 | 기본값 (mlan0 / mlan1) | 허용값/범위 | UI편집 | 적용시점 | 설명 |
 |---|---|---|---|---|---|---|---|
-| `enabled` | MCS tier 제한 활성화 | bool | `false` | true\|false | caution | boot | 부팅 시 + 매 연결 이벤트마다 재적용 |
-| `ht` | MCS HT tier 값 | string | `mlan0="7" / mlan1=""` | 자유 문자열(예 `"7"`,`"15"`), 빈값=skip | caution | boot | `mlanutl mcstiercfg ht <값>` verbatim |
-| `vht` | MCS VHT tier 값 | string | `mlan0="7" / mlan1=""` | 자유 문자열, 빈값=skip | caution | boot | vht prefix verbatim |
-| `he` | MCS HE tier 값 | string | `mlan0="both 7" / mlan1=""` | 자유 문자열(예 `"both 7"`), 빈값=skip | caution | boot | he prefix verbatim(공백 포함 문자열 그대로) |
+| `enabled` | MCS tier 제한 활성화 | bool | `true` | true\|false | caution | boot | 부팅 시 + 매 연결 이벤트마다 재적용 |
+| `ht` | MCS HT tier 값 | string | `7` | 자유 문자열(예 `"7"`,`"15"`), 빈값=skip | caution | boot | `mlanutl mcstiercfg ht <값>` verbatim |
+| `vht` | MCS VHT tier 값 | string | `7` | 자유 문자열, 빈값=skip | caution | boot | vht prefix verbatim |
+| `he` | MCS HE tier 값 | string | `both 7` | 자유 문자열(예 `"both 7"`), 빈값=skip | caution | boot | he prefix verbatim(공백 포함 문자열 그대로) |
 
 **비고 (mcs_tier)** — 소비: `wifi_init.sh`(부팅), `wifi_event.sh`(매 connected 재적용). 타입은 **문자열**이며 빈 문자열은 "해당 prefix skip" 센티널. `enabled=true`인데 ht/vht/he 전부 비면 no-op. `on_connect` 또는 `mcs_tier` 중 하나라도 true면 `wifi_event@mlanN` 데몬 enable.
 

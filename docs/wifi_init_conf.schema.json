@@ -1077,7 +1077,7 @@
             },
             "low_thresh": {
               "type": "integer",
-              "default": 50,
+              "default": 70,
               "description": "SR 모드 하한 성공률 임계(%). 255(0xff)이면 노이즈 기반 동적",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -1085,7 +1085,7 @@
             },
             "high_thresh": {
               "type": "integer",
-              "default": 80,
+              "default": 90,
               "description": "SR 모드 상한 성공률 임계(%). 255(0xff)이면 동적",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -1269,7 +1269,7 @@
             },
             "DIFF_TH": {
               "type": "integer",
-              "default": 8,
+              "default": 7,
               "minimum": 0,
               "maximum": 30,
               "description": "현재 AP 대비 후보 AP의 최소 RSSI 이득(dB). 클수록 보수적. 0=이득 무관(동률 AP도 후보)이며 측정 요동만으로도 로밍해 진동이 급증하므로 시험용. `wifi <if> roam diff <dB>` 로 런타임 변경 가능(persist + SIGHUP).",
@@ -1395,7 +1395,7 @@
                 },
                 "detection_time": {
                   "type": "integer",
-                  "default": 5,
+                  "default": 10,
                   "minimum": 1,
                   "description": "핑퐁 감지 후 로밍 억제 시간(초)",
                   "x-ui-editable": "yes",
@@ -1485,7 +1485,7 @@
           "properties": {
             "enabled": {
               "type": "boolean",
-              "default": false,
+              "default": true,
               "description": "MCS tier 제한 활성화. true인데 ht/vht/he 전부 비면 no-op",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -1804,7 +1804,7 @@
             },
             "low_thresh": {
               "type": "integer",
-              "default": 50,
+              "default": 70,
               "description": "SR 모드 하한 성공률 임계(%). 255(0xff)이면 노이즈 기반 동적",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -1812,7 +1812,7 @@
             },
             "high_thresh": {
               "type": "integer",
-              "default": 80,
+              "default": 90,
               "description": "SR 모드 상한 성공률 임계(%). 255(0xff)이면 동적",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -1996,7 +1996,7 @@
             },
             "DIFF_TH": {
               "type": "integer",
-              "default": 8,
+              "default": 7,
               "minimum": 0,
               "maximum": 30,
               "description": "현재 AP 대비 후보 AP의 최소 RSSI 이득(dB). 클수록 보수적. 0=이득 무관(동률 AP도 후보)이며 측정 요동만으로도 로밍해 진동이 급증하므로 시험용. `wifi <if> roam diff <dB>` 로 런타임 변경 가능(persist + SIGHUP).",
@@ -2006,7 +2006,7 @@
             },
             "CHECK_INTERVAL": {
               "type": "integer",
-              "default": 3,
+              "default": 1,
               "minimum": 1,
               "description": "로밍 체크 고정 주기(초)",
               "x-ui-editable": "yes",
@@ -2122,7 +2122,7 @@
                 },
                 "detection_time": {
                   "type": "integer",
-                  "default": 5,
+                  "default": 10,
                   "minimum": 1,
                   "description": "핑퐁 감지 후 로밍 억제 시간(초)",
                   "x-ui-editable": "yes",
@@ -2188,7 +2188,7 @@
             },
             "ROAM_SUCCESS_SLEEP": {
               "type": "integer",
-              "default": 2,
+              "default": 3,
               "minimum": 1,
               "description": "로밍 성공 후 재체크 대기(초, 안정화)",
               "x-ui-editable": "yes",
@@ -2212,7 +2212,7 @@
           "properties": {
             "enabled": {
               "type": "boolean",
-              "default": false,
+              "default": true,
               "description": "MCS tier 제한 활성화. true인데 ht/vht/he 전부 비면 no-op",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -2220,7 +2220,7 @@
             },
             "ht": {
               "type": "string",
-              "default": "",
+              "default": "7",
               "description": "HT(802.11n) MCS tier 제한 인자(문자열 verbatim, 예: \"7\", \"15\"). 빈 문자열=해당 prefix skip",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -2228,7 +2228,7 @@
             },
             "vht": {
               "type": "string",
-              "default": "",
+              "default": "7",
               "description": "VHT(802.11ac) MCS tier 제한 인자(문자열 verbatim, 예: \"7\"). 빈 문자열=skip",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -2236,7 +2236,7 @@
             },
             "he": {
               "type": "string",
-              "default": "",
+              "default": "both 7",
               "description": "HE(802.11ax) MCS tier 제한 인자(문자열 verbatim, 예: \"both 7\", \"7\"). 빈 문자열=skip",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
