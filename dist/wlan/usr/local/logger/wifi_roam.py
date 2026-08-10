@@ -54,10 +54,10 @@ WPA_CONF_MTIME = None  # 마지막으로 파싱한 wpa_supplicant conf 의 mtime
 DEFAULT_TH_2G = -75
 DEFAULT_TH_5G = -75
 # 코드 기본값은 JSON 로드 실패/키 부재 시의 폴백 — 템플릿 wifi_init_conf.json(제품 의도)과
-# 일치시킨다(fail-same, tests/test_defaults_template_consistency.py 가 고정). per-iface 로
-# 값이 갈리는 키(CHECK_INTERVAL 2/3, ROAM_SUCCESS_SLEEP 3/2)는 주 인터페이스 mlan0 기준.
+# 일치시킨다(fail-same, tests/test_defaults_template_consistency.py 가 고정). 로밍 키는
+# mlan0/mlan1 템플릿 값이 정렬돼 있어(튜닝 승격, 2026-08) 폴백도 단일 값으로 충분하다.
 DIFF_TH = 7
-CHECK_INTERVAL = 1  # 로밍 판정 tick 주기(초, mlan0 기준 — mlan1 템플릿=3). 판정 입력 link.json 이 ~1s 갱신이라 1 미만은 실익 없음
+CHECK_INTERVAL = 1  # 로밍 판정 tick 주기(초, 양 iface 템플릿 동일). 판정 입력 link.json 이 ~1s 갱신이라 1 미만은 실익 없음
 
 # 단계형 로밍 스캔: RSSI가 임계값 이하로 떨어지면
 #   - 단일채널: 홈채널 패시브 스캔(같은 채널 후보 + 현재 AP RSSI로 baseline 통일),
