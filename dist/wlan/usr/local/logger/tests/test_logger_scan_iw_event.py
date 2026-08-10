@@ -68,6 +68,18 @@ def test_classify_unrelated_events_none():
         assert wifi_logger_scan.classify_iw_event_line(line, "mlan0") is None
 
 
+def test_classify_malformed_lines_none():
+    """위조된 iw event 줄은 안전하게 None — 오분류 방지."""
+    malformed = [
+        "1785957060.7: mlan0 (phy #0 malformed\n",  # missing "): "
+        "1785957060.7: mlan0 scan started\n",  # missing phy
+        "mlan0 (phy #): scan started\n",  # missing phy number
+        "1785957060.7: mlan0 (phy #0): scan\n",  # incomplete event
+    ]
+    for line in malformed:
+        assert wifi_logger_scan.classify_iw_event_line(line, "mlan0") is None
+
+
 # ---- iw_scan_event 스트림 ----
 
 class _FakeStdout:
@@ -180,7 +192,7 @@ def test_restart_cap_falls_back(monkeypatch):
     assert _run_source(monkeypatch, [1] * (cap + 1)) == ["mlan0"]
 
 
-def test_transient_end_restarts_without_fallback(monkeypatch):
-    """상한 이내의 종료는 재시작만 하고 폴백하지 않는다."""
+def test_transient_restarts_then_fallback(monkeypatch):
+    """상한 이내의 재시작 후 실패는 폴백한다."""
     cap = wifi_logger_scan.IW_EVENT_MAX_RESTARTS
     assert _run_source(monkeypatch, [1] * (cap - 1) + [None]) == ["mlan0"]
