@@ -19,7 +19,7 @@ LOG_DIR = "/var/log/cantops/json"
 LINK_PATH = "/var/log/cantops/json"
 TARGET_PATH = "/dev/shm/json"
 MWLAN_LOG_PATH = "/proc/mwlan/adapter0/mlan0/log"
-LOOP_INTERVAL = 0.95	#0.965
+LOOP_INTERVAL = 0.9  # 코드 폴백 — 템플릿 logger.link_interval_sec 와 fail-same
 SPIKE_THRESHOLD_FAIL = 1
 SPIKE_THRESHOLD_RETRY = 10
 # reconfigure/select_network 직후 100~200ms 순간 끊김(station dump 일시적 공백)을
@@ -419,6 +419,10 @@ def _write_empty_link():
 def main():
     os.makedirs(LOG_DIR, exist_ok=True)
     while True:
+        # 주기 = 고정 sleep 이 아니라 마감 기준 — 폴링 작업(wpa_cli/iw/ip/fsync) 소요를
+        # 차감해야 실주기가 LOOP_INTERVAL 을 지킨다. 고정 sleep 이면 부하 시 실주기가
+        # roam tick(1s) 을 넘어 매 tick 신선한 link.json 보장이 깨진다(#162 리뷰).
+        cycle_start = time.monotonic()
         if not os.path.exists(f"/sys/class/net/{IFACE}"):
             logger.message("info", f"[{IFACE}] waiting for interface...", _EXTRA_())
             time.sleep(1)
@@ -434,7 +438,7 @@ def main():
                 "eth_stats": eth_stats
             }
             save_db(data, LOG_DIR)
-            time.sleep(LOOP_INTERVAL)
+            time.sleep(max(0.0, LOOP_INTERVAL - (time.monotonic() - cycle_start)))
             continue
 
         if not is_wpa_running(IFACE):
@@ -484,7 +488,7 @@ def main():
         }
 
         save_db(data, LOG_DIR)
-        time.sleep(LOOP_INTERVAL)
+        time.sleep(max(0.0, LOOP_INTERVAL - (time.monotonic() - cycle_start)))
 
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_sigterm)
