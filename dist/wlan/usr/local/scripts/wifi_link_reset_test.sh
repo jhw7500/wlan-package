@@ -126,6 +126,27 @@ expect_eq "negated OriginalName link preserved" "yes" "$(exists "$NET/11-negated
 expect_eq "negated OriginalName logged for review" "1" \
     "$(grep -c 'cannot decide the target' "$LOG")"
 
+# --- OriginalName 줄이 여러 개면 판정 불가 (병합/덮어쓰기 의미를 추측하지 않는다) ---
+reset_net
+tmpl_link mlan0 > "$NET/20-mlan0.link"
+printf '[Match]\nOriginalName=eth9\nOriginalName=mlan0\n\n[Link]\nMACAddress=aa:bb:cc:00:00:20\n' > "$NET/12-two.link"
+run_reset
+expect_eq "multiple OriginalName exits 1" "1" "$?"
+expect_eq "multiple OriginalName link preserved" "yes" "$(exists "$NET/12-two.link")"
+expect_eq "multiple OriginalName logged for review" "1" "$(grep -c 'cannot decide the target' "$LOG")"
+
+# --- 부모가 판정 불가이고 자신은 MAC이 없어도 드롭인 MAC은 보고된다 ---
+# (부모는 remove_foreign_link가 조기 반환하므로 scan_dropins가 놓치면 아무도 보고하지 않는다)
+reset_net
+tmpl_link mlan0 > "$NET/20-mlan0.link"
+printf '[Match]\nPath=platform-*\n\n[Link]\nMTUBytes=1500\n' > "$NET/20-x.link"
+mkdir -p "$NET/20-x.link.d"
+printf '[Link]\nMACAddress=aa:bb:cc:00:00:21\n' > "$NET/20-x.link.d/10-mac.conf"
+run_reset
+expect_eq "dropin under undecidable parent exits 1" "1" "$?"
+expect_eq "dropin under undecidable parent reported" "1" "$(grep -c 'drop-in forces MAC' "$LOG")"
+expect_eq "undecidable parent preserved" "yes" "$(exists "$NET/20-x.link")"
+
 # --- --check는 변경 없이 진단만 ---
 reset_net
 tmpl_link mlan0 > "$NET/20-mlan0.link"

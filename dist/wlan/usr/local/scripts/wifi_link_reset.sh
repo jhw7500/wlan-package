@@ -103,7 +103,12 @@ scan_dropins() {
         parent="${dropin_dir%.d}"
         # 부모 .link가 없으면 systemd가 드롭인을 적용하지 않는다.
         [ -f "$parent" ] || continue
-        mac_owned_link_iface "$parent" >/dev/null || matched_managed_iface "$parent" >/dev/null || continue
+        # 판정 불가 부모도 포함한다 — 부모 자신이 MAC을 안 쓰면 remove_foreign_link가
+        # 조기 반환해 아무도 보고하지 않으므로, 드롭인의 MAC이 조용히 남는다.
+        mac_owned_link_iface "$parent" >/dev/null \
+            || matched_managed_iface "$parent" >/dev/null \
+            || mac_link_match_undecidable "$parent" \
+            || continue
         for conf in "$dropin_dir"/*.conf; do
             [ -f "$conf" ] || continue
             mac=$(mac_read_link_address "$conf")
