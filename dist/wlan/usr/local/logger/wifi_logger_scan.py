@@ -227,20 +227,31 @@ def scan_event(interface, on_event_callback, _clock=time.monotonic):
 # (종전의 tshark/nlmon0 기반 monitor_nl80211_scan_event 는 호출부가 없는 사문이었고,
 #  전역 netlink 캡처라 iface 필터도 없어 같은 모호성을 그대로 안고 있었다 — 제거.)
 IW_EVENT_IDLE_TIMEOUT_S = 300     # 우리 iface 이벤트가 이만큼 없으면 스트림 재시작
+# select 타임아웃 = 유휴 시 깨어나는 주기. 이 값의 유일한 용도가 위 워치독 판정이라
+# 임계(300s) 대비 해상도가 넉넉하면 된다 — 1s 로 두면 임베디드에서 초당 1회 무의미한
+# wakeup 이 계속된다(#163 리뷰).
+IW_EVENT_POLL_INTERVAL_S = 10
 IW_EVENT_MAX_RESTARTS = 5         # 아래 창 안에서 이 횟수를 넘기면 dmesg 폴백
 IW_EVENT_RESTART_WINDOW_S = 900
 
 
 def classify_iw_event_line(line, interface):
-    """iw event 한 줄 분류 — 우리 iface 것만 "started"|"finished"|"aborted", 그 외 None."""
+    """iw event 한 줄 분류 — 우리 iface 것만 "started"|"finished"|"aborted", 그 외 None.
+
+    `<iface> (phy #<숫자>): ` 를 정확히 요구한다. 숫자를 강제하지 않으면
+    `mlan0 (phy #): scan started` 같은 깨진 줄이 정상으로 분류된다(#163 리뷰).
+    """
     anchor = f"{interface} (phy #"
     idx = line.find(anchor)
     if idx < 0:
         return None
-    sep = line.find("): ", idx + len(anchor))
-    if sep < 0:
+    pos = idx + len(anchor)
+    end = pos
+    while end < len(line) and line[end].isdigit():
+        end += 1
+    if end == pos or not line.startswith("): ", end):
         return None
-    event = line[sep + 3:].strip()
+    event = line[end + 3:].strip()
     for kind in ("started", "finished", "aborted"):
         if event.startswith(f"scan {kind}"):
             return kind
@@ -268,7 +279,7 @@ def iw_scan_event(interface, on_event_callback, _popen=None, _select=None,
     last_seen = _clock()
     try:
         while True:
-            ready, _, _ = select_fn([proc.stdout], [], [], 1.0)
+            ready, _, _ = select_fn([proc.stdout], [], [], IW_EVENT_POLL_INTERVAL_S)
             if not ready:
                 if _clock() - last_seen > idle_timeout:
                     logger.message("warn", f"[{interface}] no iw scan event for {idle_timeout}s — restarting stream", _EXTRA_())
