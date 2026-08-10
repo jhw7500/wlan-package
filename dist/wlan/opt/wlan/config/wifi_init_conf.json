@@ -275,7 +275,7 @@
             "bgscan_stale_threshold_sec: (number) bgscan 결과 stale 판정 시간 (초)"
         ],
         "cpu_interval_sec": 60,
-        "link_interval_sec": 0.95,
+        "link_interval_sec": 0.9,
         "stat_log_interval_sec": 1,
         "stat_check_interval_sec": 1,
         "stat_reset_interval_sec": 604800,
@@ -317,7 +317,7 @@
             "interval_ms": 100
         },
         "logger": {
-            "link_interval_sec": 0.95,
+            "link_interval_sec": 0.9,
             "stat_log_interval_sec": 1,
             "stat_check_interval_sec": 1,
             "stat_reset_interval_sec": 604800,
@@ -508,7 +508,7 @@
             "interval_ms": 100
         },
         "logger": {
-            "link_interval_sec": 0.95,
+            "link_interval_sec": 0.9,
             "stat_log_interval_sec": 1,
             "stat_check_interval_sec": 1,
             "stat_reset_interval_sec": 604800,

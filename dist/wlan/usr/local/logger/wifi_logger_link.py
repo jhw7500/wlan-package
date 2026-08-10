@@ -494,8 +494,8 @@ if __name__ == "__main__":
     parser.add_argument("iface", nargs="?", default="mlan0",
                         choices=["mlan0", "mlan1", "eth0"],
                         help="Interface name")
-    parser.add_argument("--interval", type=float, default=0.965,
-                        help="Main loop interval in seconds (default: 0.965)")
+    parser.add_argument("--interval", type=float, default=0.9,
+                        help="Main loop interval in seconds (default: 0.9)")
     parser.add_argument("--spike-fail", type=int, default=1,
                         help="TX fail spike threshold per cycle (default: 1)")
     parser.add_argument("--spike-retry", type=int, default=10,
