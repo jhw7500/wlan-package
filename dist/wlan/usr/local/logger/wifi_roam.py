@@ -57,7 +57,7 @@ DEFAULT_TH_5G = -75
 # 일치시킨다(fail-same, tests/test_defaults_template_consistency.py 가 고정). 로밍 키는
 # mlan0/mlan1 템플릿 값이 정렬돼 있어(튜닝 승격, 2026-08) 폴백도 단일 값으로 충분하다.
 DIFF_TH = 7
-CHECK_INTERVAL = 1  # 로밍 판정 tick 주기(초, 양 iface 템플릿 동일). 판정 입력 link.json 이 ~1s 갱신이라 1 미만은 실익 없음
+CHECK_INTERVAL = 1  # 로밍 판정 tick 주기(초, 양 iface 템플릿 동일). 판정 입력 link.json 이 0.9s 주기 갱신(logger.link_interval_sec)이라 1 미만은 실익 없음
 
 # 단계형 로밍 스캔: RSSI가 임계값 이하로 떨어지면
 #   - 단일채널: 홈채널 패시브 스캔(같은 채널 후보 + 현재 AP RSSI로 baseline 통일),
@@ -1208,7 +1208,7 @@ _LINK_CACHE: Dict[str, Any] = {
     "mtime_ns": None,
     "value": None,
 }
-# link.json 갱신 정지(생산자 hang 등) 판정 임계(초). 생산자(wifi_logger_link)는 ~1s 주기라
+# link.json 갱신 정지(생산자 hang 등) 판정 임계(초). 생산자(wifi_logger_link)는 0.9s 주기라
 # 30s 는 부하 스파이크 대비 넉넉한 마진. #118 감독화(Restart=always)는 프로세스 '사망'만
 # 복구하므로, hang(살아있으나 갱신 정지) 시 mtime 캐시가 마지막 값을 무기한 반환하던
 # 구멍을 나이 게이트로 막는다.
