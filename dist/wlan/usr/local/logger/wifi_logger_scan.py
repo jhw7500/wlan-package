@@ -8,6 +8,7 @@ import sys
 import json
 import signal
 import fcntl
+import select
 import threading
 from datetime import datetime
 from sUTILS import Logger, _EXTRA_
@@ -215,12 +216,126 @@ def scan_event(interface, on_event_callback, _clock=time.monotonic):
                     on_event_callback(interface)
 
 
-def monitor_nl80211_scan_event(on_event_callback):
-    cmd = ["tshark", "-i", "nlmon0", "-l", "-Y", "nl80211.cmd == 50"]
-    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True) as proc:
-        for line in proc.stdout:
-            if line.strip():
-                on_event_callback()
+# ---- 주 이벤트 경로: iw event (nl80211) ----
+# dmesg 와 달리 이벤트 줄마다 iface 가 찍혀 소유가 모호하지 않다 — 위 시간창 추측
+# (AMBIGUOUS_SCAN_WINDOW_S)이 아예 필요 없다. 온타겟 실측(cts-wlan, iw 6.9-12,
+# moal, mlan0/mlan1 DBDC 동시 스캔):
+#   1785957060.444730: mlan0 (phy #0): scan started
+#   1785957060.708500: mlan0 (phy #0): scan finished: 5180 5240,
+#   1785957110.174799: mlan1 (phy #1): scan started
+# `-t` 없이 실행하면 앞의 epoch 접두가 없으므로 파서는 두 형태를 모두 받는다.
+# (종전의 tshark/nlmon0 기반 monitor_nl80211_scan_event 는 호출부가 없는 사문이었고,
+#  전역 netlink 캡처라 iface 필터도 없어 같은 모호성을 그대로 안고 있었다 — 제거.)
+IW_EVENT_IDLE_TIMEOUT_S = 300     # 우리 iface 이벤트가 이만큼 없으면 스트림 재시작
+# select 타임아웃 = 유휴 시 깨어나는 주기. 이 값의 유일한 용도가 위 워치독 판정이라
+# 임계(300s) 대비 해상도가 넉넉하면 된다 — 1s 로 두면 임베디드에서 초당 1회 무의미한
+# wakeup 이 계속된다(#163 리뷰).
+IW_EVENT_POLL_INTERVAL_S = 10
+IW_EVENT_MAX_RESTARTS = 5         # 아래 창 안에서 이 횟수를 넘기면 dmesg 폴백
+IW_EVENT_RESTART_WINDOW_S = 900
+
+
+def classify_iw_event_line(line, interface):
+    """iw event 한 줄 분류 — 우리 iface 것만 "started"|"finished"|"aborted", 그 외 None.
+
+    `<iface> (phy #<숫자>): ` 를 정확히 요구한다. 숫자를 강제하지 않으면
+    `mlan0 (phy #): scan started` 같은 깨진 줄이 정상으로 분류된다(#163 리뷰).
+    """
+    anchor = f"{interface} (phy #"
+    idx = line.find(anchor)
+    if idx < 0:
+        return None
+    pos = idx + len(anchor)
+    end = pos
+    while end < len(line) and line[end].isdigit():
+        end += 1
+    if end == pos or not line.startswith("): ", end):
+        return None
+    event = line[end + 3:].strip()
+    for kind in ("started", "finished", "aborted"):
+        if event.startswith(f"scan {kind}"):
+            return kind
+    return None
+
+
+def iw_scan_event(interface, on_event_callback, _popen=None, _select=None,
+                  _clock=time.monotonic, idle_timeout=IW_EVENT_IDLE_TIMEOUT_S):
+    """iw event 스트림에서 이 iface 의 `scan finished` 만 소비한다.
+
+    반환: 소비한 이벤트 수. 스트림을 시작조차 못 하면 None (호출측이 폴백 판단).
+    스트림이 끝나거나 idle_timeout 동안 우리 iface 이벤트가 전혀 없으면 반환한다 —
+    드라이버가 이벤트를 멈춰도 ap.log 가 조용히 멎지 않게 하는 워치독이다.
+    """
+    popen = _popen or subprocess.Popen
+    select_fn = _select or select.select
+    try:
+        proc = popen(["iw", "event"], stdout=subprocess.PIPE,
+                     stderr=subprocess.DEVNULL, text=True, bufsize=1)
+    except (OSError, ValueError) as e:
+        logger.message("err", f"[{interface}] cannot start `iw event`: {e}", _EXTRA_())
+        return None
+
+    consumed = 0
+    last_seen = _clock()
+    try:
+        while True:
+            ready, _, _ = select_fn([proc.stdout], [], [], IW_EVENT_POLL_INTERVAL_S)
+            if not ready:
+                if _clock() - last_seen > idle_timeout:
+                    logger.message("warn", f"[{interface}] no iw scan event for {idle_timeout}s — restarting stream", _EXTRA_())
+                    return consumed
+                continue
+            line = proc.stdout.readline()
+            if not line:
+                return consumed
+            kind = classify_iw_event_line(line, interface)
+            if kind is None:
+                continue
+            last_seen = _clock()
+            if kind == "finished":
+                consumed += 1
+                on_event_callback(interface)
+            elif kind == "aborted":
+                logger.message("info", f"[{interface}] scan aborted — no new results", _EXTRA_())
+    finally:
+        # 종료시킨 뒤 반드시 reap 한다 — scan_event_source 가 최대
+        # IW_EVENT_MAX_RESTARTS 회 새 `iw event` 를 띄우므로 wait 를 빠뜨리면
+        # 종료된 자식이 좀비로 남고, 다음 스트림이 이전 프로세스와 겹칠 수 있다.
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+
+
+def scan_event_source(interface, on_event_callback, _clock=time.monotonic, _sleep=time.sleep):
+    """주 경로 iw event, 실패가 반복되면 dmesg scan_event 로 폴백한다(블로킹).
+
+    폴백은 되돌아오지 않는다 — 두 스트림을 동시에 읽으면 같은 스캔이 두 번 소비된다.
+    """
+    # 스트림이 끝난 시각 목록. 최초 1회는 재시작이 아니므로 재시작 수 = len-1.
+    restarts = []
+    while True:
+        consumed = iw_scan_event(interface, on_event_callback)
+        if consumed is None:
+            logger.message("crit", f"[{interface}] iw event source unusable — falling back to dmesg scan_event", _EXTRA_())
+            break
+        now = _clock()
+        restarts = [t for t in restarts if now - t < IW_EVENT_RESTART_WINDOW_S]
+        restarts.append(now)
+        if len(restarts) > IW_EVENT_MAX_RESTARTS:
+            logger.message("crit", f"[{interface}] iw event restarted {len(restarts) - 1}x (limit {IW_EVENT_MAX_RESTARTS}) within {IW_EVENT_RESTART_WINDOW_S}s — falling back to dmesg scan_event", _EXTRA_())
+            break
+        logger.message("warn", f"[{interface}] iw event stream ended after {consumed} event(s) — restarting", _EXTRA_())
+        _sleep(1)
+    scan_event(interface, on_event_callback)
 
 def run_setuserscan():
     try:
@@ -607,9 +722,8 @@ def main_loop():
         get_scan_result()
         #time.sleep(3)
         
-    scan_event(IFACE, on_scan_event)
-    #monitor_nl80211_scan_event(on_scan_event)
-    # NOTE: scan_event 는 dmesg follow 를 영원히 블로킹하므로 이 아래에는 코드를 두지
+    scan_event_source(IFACE, on_scan_event)
+    # NOTE: scan_event_source 는 iw event/dmesg follow 를 영원히 블로킹하므로 이 아래에는 코드를 두지
     # 않는다 — 종전의 주기 스캔 while 은 도달 불가 사문이었고, 도달했다면 미정의
     # last_log_time 으로 NameError 였다(제거). 주기적 ap.log/beacon.json 생산은 bgscan
     # 등 어떤 주체든 유발하는 스캔 이벤트(on_scan_event)로 충분하다.
