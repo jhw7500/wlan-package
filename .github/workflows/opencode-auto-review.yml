@@ -31,11 +31,13 @@ jobs:
       github.event.pull_request.head.repo.fork == false &&
       github.event.pull_request.head.repo.full_name == github.repository
     permissions:
+      # id-token 없음(의도) — v1.34 부터 이 리뷰는 OIDC 교환 대신 GITHUB_TOKEN 을 쓴다.
+      # 캘러가 남겨두면 재사용 워크플로우가 실수로 다시 요구할 때 조용히 통과한다.
+      # 자동 리뷰는 코드를 쓰지 않으므로 contents 는 read 로 고정.
       contents: read
       pull-requests: write
       issues: write
-      id-token: write
-    uses: jhw7500/automation/.github/workflows/opencode-auto-review.yml@v1.33
+    uses: jhw7500/automation/.github/workflows/opencode-auto-review.yml@v1.34
     with:
       pr_number: ${{ github.event.pull_request.number }}
     secrets: inherit
