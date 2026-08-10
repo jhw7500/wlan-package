@@ -114,6 +114,18 @@ expect_eq "undecidable foreign link exits 1" "1" "$?"
 expect_eq "undecidable foreign link preserved" "yes" "$(exists "$NET/12-bypath.link")"
 expect_eq "undecidable link logged for review" "1" "$(grep -c 'left in place for manual review' "$LOG")"
 
+# --- 부정(!) OriginalName은 판정 불가로 다뤄 삭제하지 않고 보고 ---
+# systemd는 '!' 접두 패턴을 "이것만 제외"로 해석하므로 단순 glob 매칭이 의미상 뒤집힌다.
+# (OriginalName=!mlan0 은 mlan0을 뺀 전부와 매칭 — glob으로 보면 "매칭 안 함"으로 오판)
+reset_net
+tmpl_link mlan0 > "$NET/20-mlan0.link"
+printf '[Match]\nOriginalName=!mlan0\n\n[Link]\nMACAddress=aa:bb:cc:00:00:10\n' > "$NET/11-negated.link"
+run_reset
+expect_eq "negated OriginalName exits 1" "1" "$?"
+expect_eq "negated OriginalName link preserved" "yes" "$(exists "$NET/11-negated.link")"
+expect_eq "negated OriginalName logged for review" "1" \
+    "$(grep -c 'cannot decide the target' "$LOG")"
+
 # --- --check는 변경 없이 진단만 ---
 reset_net
 tmpl_link mlan0 > "$NET/20-mlan0.link"

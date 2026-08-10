@@ -127,6 +127,33 @@ expect_eq "non-preserved key is reset" "" "$(value_of global STANDARD)"
 expect_eq "non-preserved key is reset (mlan0.enabled)" "true" "$(value_of mlan0 enabled)"
 expect_eq "board config result kept" "imx8mm" "$(value_of global BOARD_TYPE)"
 
+# --- MOD_PARA는 빈값/none을 "사용 안 함"으로 받아주지 않는다 ---
+# 드라이버가 항상 필요로 하는 값이라 빈값을 보존하면 moal_args="mod_para=" 로 insmod된다.
+# 바로 앞 wifi_board_config.sh가 상수로 고쳐놓은 값을 되돌리는 셈이라 거부해야 한다.
+for _bad in "" none; do
+    : > "$LOG"
+    jq -n --arg m "$_bad" '{global: {MOD_PARA: $m, CAL_DATA_CFG: "", TXPWRLIMIT_PATH: ""},
+                            mac: {}, mlan0: {}, mlan1: {}}' > "$ACTIVE"
+    run_preserve save "$SNAPSHOT"
+    template_json > "$ACTIVE"
+    jq '.global.MOD_PARA = "cts/wifi_mod_para.conf"' "$ACTIVE" > "$ACTIVE.t" && mv "$ACTIVE.t" "$ACTIVE"
+    run_preserve apply "$SNAPSHOT"
+    expect_eq "MOD_PARA='$_bad' rejected; board config value kept" \
+        "cts/wifi_mod_para.conf" "$(value_of global MOD_PARA)"
+    expect_eq "MOD_PARA='$_bad' rejection logged" "1" \
+        "$(grep -c 'empty/none not allowed for this key' "$LOG")"
+done
+
+# --- 빈값 예외는 나머지 키에서는 그대로 유효하다 (회귀 방지) ---
+: > "$LOG"
+jq -n '{global: {MOD_PARA: "cts/wifi_mod_para_unit.conf", CAL_DATA_CFG: "", TXPWRLIMIT_PATH: "none"},
+        mac: {}, mlan0: {}, mlan1: {}}' > "$ACTIVE"
+run_preserve save "$SNAPSHOT"
+template_json > "$ACTIVE"
+run_preserve apply "$SNAPSHOT"
+expect_eq "global.CAL_DATA_CFG empty still preserved" "" "$(value_of global CAL_DATA_CFG)"
+expect_eq "global.TXPWRLIMIT_PATH none still preserved" "none" "$(value_of global TXPWRLIMIT_PATH)"
+
 # --- 키가 없던 설정: 템플릿 값이 그대로 남는다 ---
 : > "$LOG"
 jq -n '{global: {BOARD_TYPE: "imx93"}, mlan0: {}, mlan1: {}}' > "$ACTIVE"

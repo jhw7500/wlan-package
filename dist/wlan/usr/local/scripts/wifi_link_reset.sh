@@ -150,11 +150,11 @@ remove_foreign_link() {
     [ -n "$cur_mac" ] || return 0
 
     if ! owner=$(matched_managed_iface "$link_file"); then
-        # OriginalName이 없거나 우리 인터페이스를 지목하지 않는다. 후자는 무해하지만
-        # 전자는 Path/Driver 매칭으로 우리 인터페이스에 걸릴 수 있어 사람이 봐야 한다.
-        if [ -z "$(mac_read_link_original_name "$link_file")" ]; then
+        # 우리 인터페이스를 지목하지 않거나(무해) 판정이 불가능하다. 후자는 Path/Driver
+        # 매칭이나 부정(!) 패턴으로 우리 인터페이스에 걸릴 수 있어 사람이 봐야 한다.
+        if mac_link_match_undecidable "$link_file"; then
             log_msg local0.crit "$LINENO" \
-                "foreign link sets MAC but has no OriginalName; left in place for manual review: ${link_file##*/}=$cur_mac"
+                "foreign link sets MAC but its OriginalName cannot decide the target (absent or negated); left in place for manual review: ${link_file##*/}=$cur_mac"
             return 1
         fi
         return 0
@@ -204,7 +204,7 @@ for _link in "$NETWORK_DIR"/*.link; do
     _mac=$(mac_read_link_address "$_link")
     [ -n "$_mac" ] || continue
     if mac_owned_link_iface "$_link" >/dev/null || matched_managed_iface "$_link" >/dev/null \
-        || [ -z "$(mac_read_link_original_name "$_link")" ]; then
+        || mac_link_match_undecidable "$_link"; then
         remaining="$remaining ${_link##*/}=$_mac"
     fi
 done

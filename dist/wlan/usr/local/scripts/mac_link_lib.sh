@@ -88,15 +88,36 @@ mac_read_link_original_name() {
     ' "$link_file" 2>/dev/null
 }
 
+# 이 .link의 매칭 대상을 OriginalName만으로 판정할 수 없으면 0(참)을 반환한다.
+# 두 경우다. ① OriginalName이 아예 없다 — Path/Driver/Type 등 다른 조건은 여기서 해석하지
+# 않는다. ② 값에 부정(!) 패턴이 있다 — systemd는 '!' 접두 패턴을 "이것만 제외"로 해석하므로
+# 단순 glob 매칭 결과가 의미상 뒤집힌다(OriginalName=!mlan0 은 mlan0을 뺀 전부와 매칭).
+# 호출자는 판정 불가를 "매칭 안 함"으로 취급하지 말고 보수적으로 처리해야 한다.
+mac_link_match_undecidable() {
+    local link_file="$1" names token
+    names=$(mac_read_link_original_name "$link_file") || return 0
+    [ -n "$names" ] || return 0
+    for token in $names; do
+        case "$token" in
+            !*) return 0 ;;
+        esac
+    done
+    return 1
+}
+
 # .link의 OriginalName이 해당 인터페이스를 지목하는지. systemd는 공백 구분 목록과 glob을
 # 허용하므로(예: "mlan0 mlan1", "mlan*") 토큰별로 glob 매칭한다.
-# OriginalName이 없으면 1을 반환한다 — Path/Driver/Type 등 다른 조건은 여기서 해석하지
-# 않으므로 "매칭 안 함"이 아니라 "판정 불가"로 다루고 호출자가 보수적으로 처리해야 한다.
+# 판정 불가(OriginalName 없음 / 부정 패턴)면 1을 반환한다 — 호출자는
+# mac_link_match_undecidable로 두 경우를 구분해야 한다.
 mac_link_matches_iface() {
     local link_file="$1" iface="$2" names token
     names=$(mac_read_link_original_name "$link_file") || return 1
     [ -n "$names" ] || return 1
     for token in $names; do
+        # 부정 패턴이 하나라도 있으면 의미가 뒤집히므로 여기서 판정하지 않는다.
+        case "$token" in
+            !*) return 1 ;;
+        esac
         # shellcheck disable=SC2254  # glob 매칭이 목적이라 의도적으로 비인용
         case "$iface" in
             $token) return 0 ;;
