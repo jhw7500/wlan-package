@@ -21,7 +21,7 @@ defaults:
 
 jobs:
   dispatch:
-    uses: 'jhw7500/automation/.github/workflows/gemini-dispatch.yml@v1.35'
+    uses: 'jhw7500/automation/.github/workflows/gemini-dispatch.yml@v1.36'
     permissions:
       contents: 'read'
       id-token: 'write'
@@ -32,4 +32,3 @@ jobs:
     secrets:
       APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
