@@ -168,7 +168,7 @@ done
 # nginx 소유권 계약: Factory Reset 은 nginx 를 필수 유닛으로 요구하지 않는다(부재해도
 # reset 성공). 다만 0.5.0 이하 reset 이 영속 disable 시킨 기기를 되살리는 enable 은 남긴다.
 if grep -q 'nginx' "$LIB"; then
-    fail "nginx is not a required factory unit"
+    fail "nginx must not appear in FACTORY_REQUIRED_UNITS"
 else
     pass "nginx is not a required factory unit"
 fi

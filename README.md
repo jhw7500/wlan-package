@@ -151,16 +151,18 @@ The `postinst` script will automatically:
 - Enable required systemd units
 - Create symbolic links for binaries
 
-런타임 설정원은 `/usr/local/etc/wifi_init_conf.json` 하나다. `config.json`은
-완전 제거 대상이며 업그레이드 시 active 잔재가 삭제되고, 패키지에 다시
-포함되면 release gate와 CI가 실패한다.
+Notes on configuration ownership:
 
-nginx는 표준 제품 이미지가 제공하는 선행조건이라 Factory Reset의 필수 유닛이
-아니다. 없거나 비정상이어도 Factory Reset은 실패하지 않는다.
-
-Factory Reset의 `eth0` 공장 기본값은 `192.168.1.1/24`다. 일반 패키지
-업그레이드에서는 현재 active 네트워크 설정을 보존하므로, 이 값은 신규 설치와
-Factory Reset에만 적용된다. 사이트별 유선 관리 주소는 설치 후 변경해서 쓴다.
+- `/usr/local/etc/wifi_init_conf.json` is the single runtime configuration source.
+  `config.json` is retired: upgrades delete any leftover active copy, and the
+  release gate and CI fail if it is ever packaged again.
+- nginx is a prerequisite supplied by the standard product image, so it is not a
+  required unit for Factory Reset. Factory Reset succeeds even if nginx is
+  missing or unhealthy.
+- The Factory Reset `eth0` address is `192.168.1.1/24`. Regular package upgrades
+  preserve the current active network configuration, so this value applies only
+  to fresh installs and Factory Reset. Set the site-specific wired management
+  address after installation.
 
 ### 3. Verify Installation
 
