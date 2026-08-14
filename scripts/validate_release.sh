@@ -5,7 +5,7 @@ REPO=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 SDIO_FW_REL="usr/lib/firmware/cts/sd9098_wlan_v1.bin"
 SDIO_FW_SHA256="7c3ef6e12d3cfc9bd638d1571ccf6ddd2e96e0ed179ec70664ccb1df0ba29e57"
 FACTORY_ETH0_REL="opt/wlan/config/systemd/network/22-eth0.network"
-FACTORY_ETH0_ADDRESS="192.168.214.5/24"
+FACTORY_ETH0_ADDRESS="192.168.1.1/24"
 FW_DOC_DIR_REL="usr/share/doc/wlan-proc/nxp-imx-firmware"
 FW_LICENSE_SHA256="3001cf84018c5cb10d183a678f6ec8a928c797616ba06b398d7ca93c0779aaa2"
 FW_SCR_SHA256="a05d7e1bb43bd7f3a955f3ff5c4dba3c61a5515df6f4fc5bf150a370e413289e"

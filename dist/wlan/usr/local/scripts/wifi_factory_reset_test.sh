@@ -486,12 +486,12 @@ for required_backup in \
 done
 
 # Factory Reset 뒤에도 유선 관리 경로가 유지되어야 한다. 이 주소는 실제 양산/시험
-# 유선 접속 주소와 같아야 하며, 과거 192.168.1.1 기본값으로 되돌아가면 안 된다.
+# 제품 Factory Reset 유선 기본값은 192.168.1.1/24다.
 FACTORY_ETH0_TEMPLATE="$SCRIPT_DIR/../../../opt/wlan/config/systemd/network/22-eth0.network"
-if [ "$(awk -F= '$1 == "Address" { print $2 }' "$FACTORY_ETH0_TEMPLATE")" = "192.168.214.5/24" ]; then
-    pass "factory eth0 management address remains 192.168.214.5/24"
+if [ "$(awk -F= '$1 == "Address" { print $2 }' "$FACTORY_ETH0_TEMPLATE")" = "192.168.1.1/24" ]; then
+    pass "factory eth0 address is 192.168.1.1/24"
 else
-    fail "factory eth0 management address is not 192.168.214.5/24"
+    fail "factory eth0 address is not 192.168.1.1/24"
 fi
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"

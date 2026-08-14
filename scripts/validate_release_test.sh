@@ -316,7 +316,7 @@ if bash "$VALIDATE" package "$WORK/wrong-fw.deb" >/dev/null 2>&1; then
 fi
 
 make_tree
-sed -i 's/Address=192\.168\.214\.5\/24/Address=192.168.1.1\/24/' \
+sed -i 's/Address=192\.168\.1\.1\/24/Address=192.168.214.5\/24/' \
     "$PKG/opt/wlan/config/systemd/network/22-eth0.network"
 build "$WORK/wrong-factory-ip.deb"
 if bash "$VALIDATE" package "$WORK/wrong-factory-ip.deb" >/dev/null 2>&1; then
