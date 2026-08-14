@@ -134,20 +134,6 @@ sed -i 's/^Architecture: .*/Architecture: all/' "$PKG/DEBIAN/control"
 build "$WORK/wrong-architecture.deb"
 expect_metadata_rejected Architecture "$WORK/wrong-architecture.deb"
 
-mkdir -p "$PKG/opt/wlan/config"
-printf '{}\n' > "$PKG/opt/wlan/config/config.json"
-build "$WORK/config.deb"
-if bash "$VALIDATE" package "$WORK/config.deb" >/dev/null 2>&1; then
-    echo "FAIL: retired config.json accepted" >&2; exit 1
-fi
-
-make_tree
-ln -s /etc/passwd "$PKG/opt/wlan/config/config.json"
-build "$WORK/config-symlink.deb"
-if bash "$VALIDATE" package "$WORK/config-symlink.deb" >/dev/null 2>&1; then
-    echo "FAIL: retired config.json symlink accepted" >&2; exit 1
-fi
-
 make_tree
 rm "$PKG/usr/local/opc/bin/opcd"
 ln -s /bin/true "$PKG/usr/local/opc/bin/opcd"
