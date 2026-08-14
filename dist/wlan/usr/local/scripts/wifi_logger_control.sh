@@ -213,7 +213,7 @@ update_policy() {
         echo "Error: logger policy committed but durability sync failed" >&2
         return 1
     fi
-    if ! "$APPLY_ENABLED"; then
+    if ! WIFI_APPLY_STRICT=1 "$APPLY_ENABLED"; then
         echo "Error: logger policy committed but systemd synchronization failed" >&2
         rc=1
     fi

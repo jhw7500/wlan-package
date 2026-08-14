@@ -127,7 +127,7 @@ LEGACY_MCS="$WORK/legacy-mcs.json"
 NORMALIZED_MCS="$WORK/normalized-mcs.json"
 jq '
   .mlan0.mcs_tier = {enabled:true,ht:7,vht:9,he:11}
-  | .mlan1.mcs_tier = {enabled:true,ht:15,vht:8,he:9}
+  | .mlan1.mcs_tier = {enabled:true,ht:15,vht:8,he:"both 7"}
 ' "$CONF" > "$LEGACY_MCS"
 if declare -F wifi_fw_normalize_legacy_mcs_json >/dev/null 2>&1 \
    && wifi_fw_normalize_legacy_mcs_json "$LEGACY_MCS" > "$NORMALIZED_MCS"; then
@@ -148,6 +148,11 @@ expect_eq "legacy mlan1 VHT value preserved" 8 \
     "$(jq -r '.mlan1.mcs_tier.vht' "$NORMALIZED_MCS" 2>/dev/null)"
 expect_eq "legacy mlan1 unsupported HE is cleared" '' \
     "$(jq -r '.mlan1.mcs_tier.he' "$NORMALIZED_MCS" 2>/dev/null)"
+jq '.mlan1.mcs_tier.he = 9' "$LEGACY_MCS" > "$WORK/legacy-mcs-numeric-he.json"
+wifi_fw_normalize_legacy_mcs_json "$WORK/legacy-mcs-numeric-he.json" \
+    > "$WORK/normalized-mcs-numeric-he.json"
+expect_eq "legacy mlan1 numeric HE is cleared" '' \
+    "$(jq -r '.mlan1.mcs_tier.he' "$WORK/normalized-mcs-numeric-he.json" 2>/dev/null)"
 expect_rc "normalized AX MCS config is valid" 0 wifi_fw_validate_mcs_config "$NORMALIZED_MCS" mlan0
 expect_rc "normalized AC MCS config is valid" 0 wifi_fw_validate_mcs_config "$NORMALIZED_MCS" mlan1
 wifi_fw_normalize_legacy_mcs_json "$NORMALIZED_MCS" > "$WORK/normalized-mcs-twice.json"
