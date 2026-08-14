@@ -173,6 +173,6 @@ def test_logger_release_version_and_runtime_dependencies():
             key, value = line.split(":", 1)
             fields[key] = value.strip()
 
-    assert fields["Version"] == "0.5.3"
+    assert fields["Version"] == "0.5.4"
     dependencies = {item.strip().split()[0] for item in fields["Depends"].split(",")}
     assert {"bc", "sysstat"} <= dependencies
