@@ -144,7 +144,8 @@ status_scope() {
 
     if [ "$controller_active" -eq 1 ] && { [ "$policy" != "true" ] || [ "$parent_policy" != "true" ]; }; then
         echo "state=runtime-override"
-        return 0
+        [ "$child_failed" -eq 0 ] && return 0
+        return 1
     fi
     if [ "$policy" != "true" ] || [ "$parent_policy" != "true" ]; then
         if [ "$scope" = "system" ]; then
