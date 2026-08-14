@@ -210,10 +210,13 @@ customctl() {
   customctl enable wifi_logger
   customctl enable log-watchdog.timer
   customctl enable journald-snapshot.timer
-  # nginx 자체는 이미지/wifi_manager 소유라 Factory Reset 의 필수 유닛이 아니다
-  # (FACTORY_REQUIRED_UNITS 에서 제외). 다만 0.5.0 이하 factory_reset 이
+  # nginx 자체는 제품 이미지가 제공하는 선행조건이라 Factory Reset 의 필수 유닛이
+  # 아니다(FACTORY_REQUIRED_UNITS 에서 제외). 다만 0.5.0 이하 factory_reset 이
   # `customctl disable nginx` 로 영속 disable 시킨 기기는 스스로 복구되지 않으므로
   # (enable/disable 은 유닛 파일 조작), wlan-proc 이 만든 피해만 여기서 되돌린다.
+  # 제거 조건: 0.5.0 이하에서 올라온 기기가 현장에 남아있지 않다고 확인되면 이 줄을
+  # 지운다. 그때까지는 nginx 미탑재 이미지에서 syslog 에 enable 실패가 남는 것을
+  # 감수한다(reset 성공 여부에는 영향 없음).
   customctl enable nginx
 
   customctl disable wifi_checker@eth0
