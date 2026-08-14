@@ -1,12 +1,12 @@
 # wlan-package
 
-Debian package for deploying WLAN application infrastructure on ARM64 embedded systems (i.MX8MM + NXP88W9098).
+Debian package for deploying WLAN application infrastructure on ARM64 embedded systems (i.MX8MM/i.MX93 + NXP 88W9098).
 
 ## Overview
 
 This package (`wlan-proc`) bundles the wlan-bridge L2 network bridge along with supporting scripts, configuration files, and systemd services for wireless network management on embedded Linux systems.
 
-**Current Version:** 0.5.1
+**Current Version:** 0.5.3
 
 ## Prerequisites
 
@@ -17,12 +17,22 @@ This package (`wlan-proc`) bundles the wlan-bridge L2 network bridge along with 
 - `dpkg-deb` (Debian packaging tools)
 - `make`
 - `tar`
+- Python 3 with `pytest` and `jsonschema` (release gates)
+- For x86_64 cross-builds, both NXP i.MX8 and i.MX93 SDK environment files;
+  set `SDK_LOC`/`SDK_NAME` when they are not installed under `/shared`
 
 Install dependencies on Ubuntu/Debian:
 ```bash
 sudo apt-get update
-sudo apt-get install -y gcc-aarch64-linux-gnu libpcap-dev dpkg-dev make tar
+sudo apt-get install -y gcc-aarch64-linux-gnu libpcap-dev dpkg-dev make tar python3-pytest python3-jsonschema
 ```
+
+The generic ARM64 toolchain builds `wlan-opc` and `vhld`. The two board-specific
+`wbridge` builds additionally source the matching NXP SDK environment. On the
+current build host those are:
+
+- `/shared/fsl-imx-xwayland/6.6-nanbield/environment-setup-armv8a-poky-linux` (i.MX8)
+- `/shared/fsl-imx-wayland/6.6-nanbield/environment-setup-armv8a-poky-linux` (i.MX93)
 
 ### Target System Requirements
 
@@ -50,22 +60,30 @@ git submodule update --init --recursive
 ### 3. Build the Package
 
 The build script will:
-- Compile wlan-bridge binaries (`dumb` and `dumb-tpacket`) into `wlan-bridge/dumb/release/` directory
+- Compile wlan-bridge binaries (`wbridge` and `wbridge-tpacket`) for the supported boards
 - Copy binaries, scripts, and configuration files to `dist/`
-- Create a Debian package in `release/`
+- Create and validate the Debian package and a sanitized source archive in `release/`
 
 ```bash
 ./build.sh
 ```
 
 **Output:**
-- `wlan-bridge/dumb/release/dumb` - libpcap-based bridge binary
-- `wlan-bridge/dumb/release/dumb-tpacket` - TPACKET_V3 bridge binary
+- `wlan-bridge/wbridge/release/wbridge_<board>` - libpcap-based bridge binary
+- `wlan-bridge/wbridge/release/wbridge-tpacket_<board>` - TPACKET_V3 bridge binary
 - `release/wlan.deb` - Latest build
-- `release/wlan-proc-0.4.0.deb` - Versioned package
-- `release/wlan-package.tar` - Full package archive
+- `release/wlan-proc-0.5.3.deb` - Versioned package
+- `release/wlan-package.tar` - Allowlisted source/build archive
+- `release/SHA256SUMS` - Release-set hashes, published last
 
-**Note:** The `wlan-bridge/dumb/release/` and `wlan-bridge/dumb/debug/` directories are build outputs and should not be committed.
+The source archive contains only the files required to rebuild and validate the
+package. Local agent state, target-test artifacts, private working documents,
+caches, and generated subproject binaries are deliberately excluded.
+Verify all release files together with `cd release && sha256sum -c SHA256SUMS`;
+the checksum manifest is published last so an interrupted multi-file publish is
+detected as a mismatch rather than treated as a coherent release set.
+
+**Note:** The `wlan-bridge/wbridge/release/` and `wlan-bridge/wbridge/debug/` directories are build outputs and should not be committed.
 
 ### 4. (Optional) Update Scripts from System
 
@@ -83,15 +101,13 @@ wlan-package/
 ├── build.sh             # Package build script
 ├── update.sh            # Update scripts from system
 ├── wlan-bridge/         # Git submodule
-│   └── dumb/
+│   └── wbridge/
 │       ├── release/     # Compiled release binaries (stripped)
-│       │   ├── dumb
-│       │   └── dumb-tpacket
+│       │   ├── wbridge_<board>
+│       │   └── wbridge-tpacket_<board>
 │       ├── debug/       # Compiled debug binaries (unstripped)
-│       │   ├── dumb
-│       │   └── dumb-tpacket
-│       ├── dumb.c
-│       ├── dumb-tpacket.c
+│       ├── bridge.c
+│       ├── wbridge-tpacket.c
 │       └── Makefile
 └── dist/wlan/           # Debian package contents
     ├── DEBIAN/
@@ -106,7 +122,7 @@ wlan-package/
     │   └── ...
     └── usr/local/
         ├── wlan-bridge/     # L2 bridge binaries and docs
-        │   ├── dumb/
+        │   ├── wbridge/
         │   ├── scripts/
         │   └── docs/
         ├── scripts/         # WLAN management scripts
@@ -118,14 +134,14 @@ wlan-package/
 ### 1. Transfer Package to Target
 
 ```bash
-scp release/wlan-proc-0.4.0.deb root@<target-ip>:/tmp/
+scp release/wlan-proc-0.5.3.deb root@<target-ip>:/tmp/
 ```
 
 ### 2. Install on Target System
 
 ```bash
 ssh root@<target-ip>
-dpkg -i /tmp/wlan-proc-0.4.0.deb
+dpkg -i /tmp/wlan-proc-0.5.3.deb
 ```
 
 The `postinst` script will automatically:
@@ -145,7 +161,7 @@ systemctl status wifi_init
 systemctl status wifi_logger
 
 # Test bridge binary
-wifi-dumb --help
+wifi-wbridge --help
 ```
 
 ## Components
@@ -161,12 +177,12 @@ High-performance userspace L2 bridge for wired/wireless interfaces. See `wlan-br
 - Systemd integration
 
 **Binaries:**
-- `/usr/local/bin/wifi-dumb` - Production bridge (libpcap)
-- `/usr/local/bin/wifi-dumb-tpacket` - Experimental high-performance version
+- `/usr/local/bin/wifi-wbridge` - Production bridge (libpcap)
+- `/usr/local/bin/wifi-wbridge-tpacket` - Experimental high-performance version
 
 **Optional Debug Binaries:**
-- `/usr/local/wlan-bridge/debug/dumb` - Debug build (unstripped, may not be included)
-- `/usr/local/wlan-bridge/debug/dumb-tpacket` - Debug build (unstripped, may not be included)
+- `/usr/local/wlan-bridge/debug/wbridge_<board>` - Debug bridge build
+- `/usr/local/wlan-bridge/debug/wbridge-tpacket_<board>` - Debug TPACKET build
 
 ### Systemd Services
 
@@ -177,6 +193,31 @@ The package includes multiple systemd services:
 - `wifi_checker@.service` - Connection monitoring
 - `wifi_roam@.service` - Roaming management
 - And more...
+
+### Logger Control
+
+System and per-interface logger groups expose the same six lifecycle actions:
+
+```bash
+wifi log system start|stop|restart|status|enable|disable
+wifi mlan0 log start|stop|restart|status|enable|disable
+wifi mlan1 log start|stop|restart|status|enable|disable
+wifi eth0  log start|stop|restart|status|enable|disable
+```
+
+There is intentionally no aggregate interface command. `start`, `stop`, and
+`restart` affect only the current runtime. `enable` and `disable` update only
+the persistent boot policy; they do not implicitly start or stop the group.
+
+The system group controls independently supervised CPU, MMC, temperature, MCP,
+and summary children. The temperature child also owns overtemperature
+protection, so stopping or disabling the system group stops both temperature
+logging and thermal protection; the CLI prints a warning before doing so.
+Interface logger children are supervised per interface. Child restart bursts
+are limited to 10 failures per 300 seconds with a 3-second retry delay.
+Potentially blocking stat/snapshot/CPU/MMC/MCP operations time out after 5
+seconds; each WLAN temperature query times out after 3 seconds and is recorded
+as `unknown` rather than `0`.
 
 ## Configuration
 
@@ -199,7 +240,7 @@ Systemd network configuration files are located in `/etc/systemd/network/`:
 - Ensure `libpcap-dev` is installed
 - Check cross-compiler is in PATH
 - Verify submodule is initialized: `git submodule status`
-- Check if `wlan-bridge/dumb/release/` directory was created successfully
+- Check if `wlan-bridge/wbridge/release/` directory was created successfully
 
 **Error: "Source directory does not exist" (update.sh)**
 - The `update.sh` script requires existing system directories
@@ -208,7 +249,7 @@ Systemd network configuration files are located in `/etc/systemd/network/`:
 **Clean Build**
 If you need to start fresh:
 ```bash
-cd wlan-bridge/dumb
+cd wlan-bridge/wbridge
 make clean
 cd ../..
 rm -rf release/

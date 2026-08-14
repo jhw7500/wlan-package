@@ -1,6 +1,12 @@
 #!/bin/bash
 tag=$(basename "$0")
 WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
+WIFI_INIT_CONF_TEMPLATE="/opt/wlan/config/wifi_init_conf.json"
+FACTORY_RESET_LIB="/usr/local/scripts/wifi_factory_reset_lib.sh"
+FACTORY_STAGED_CONFIG="/usr/local/etc/.wifi_init_conf.factory.$$"
+PRESERVE_SNAPSHOT=""
+critical_failures=0
+config_committed=0
 
 # === 헬퍼 함수 (LED/print/cp 호출 전에 정의) ===
 
@@ -27,6 +33,81 @@ safe_print() {
     fi
 }
 
+secure_wpa_conf() {
+    local conf="$1"
+    [ -f "$conf" ] || return 1
+    chown root:root "$conf" 2>/dev/null || return 1
+    chmod 0600 "$conf" || return 1
+    sync "$conf" 2>/dev/null || sync
+}
+
+# 파괴적 변경 전에 package template, 필수 helper, systemd unit, 같은 파일시스템 stage
+# 가능 여부를 모두 확인한다. 실패 시 기존 active 설정과 서비스 상태를 건드리지 않는다.
+if [ ! -r "$FACTORY_RESET_LIB" ]; then
+    logger -p local0.emerg "[$tag:$LINENO] missing factory reset library: $FACTORY_RESET_LIB"
+    exit 1
+fi
+# shellcheck source=./wifi_factory_reset_lib.sh
+. "$FACTORY_RESET_LIB"
+
+# Factory Reset 성공의 필수 복구 계약. wifi_init의 self-healing 대상은 active와 .bak을
+# 같은 factory source로 함께 재시드해 reset 이전 SSID/IP/FW 설정이 부활하지 않게 한다.
+# 그 밖의 OS 편의 설정과 .link는 아래 best-effort 복사 후 wifi_link_reset의 MAC 후조건으로
+# 처리한다.
+FACTORY_REQUIRED_PAYLOADS=(
+    "/opt/wlan/config/wlan/txpwrlimit_cfg_9098.conf|/lib/firmware/cts/txpwrlimit_cfg_9098.conf|0644"
+    "/opt/wlan/config/wlan/txpwrlimit_cfg_9098.conf|/lib/firmware/cts/txpwrlimit_cfg_9098.conf.bak|0644"
+    "/opt/wlan/config/wlan/wifi_mod_para.conf|/lib/firmware/cts/wifi_mod_para.conf|0644"
+    "/opt/wlan/config/wlan/wifi_mod_para.conf|/lib/firmware/cts/wifi_mod_para.conf.bak|0644"
+    "/opt/wlan/config/wpa_supplicant/wpa_supplicant@.service|/lib/systemd/system/wpa_supplicant@.service|0644"
+    "/opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan0.conf|/etc/wpa_supplicant/wpa_supplicant-mlan0.conf|0600"
+    "/opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan0.conf|/etc/wpa_supplicant/wpa_supplicant-mlan0.conf.bak|0600"
+    "/opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan1.conf|/etc/wpa_supplicant/wpa_supplicant-mlan1.conf|0600"
+    "/opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan1.conf|/etc/wpa_supplicant/wpa_supplicant-mlan1.conf.bak|0600"
+    "/opt/wlan/config/systemd/network/20-mlan0.network|/etc/systemd/network/20-mlan0.network|0644"
+    "/opt/wlan/config/systemd/network/20-mlan0.network|/etc/systemd/network/20-mlan0.network.bak|0644"
+    "/opt/wlan/config/systemd/network/21-mlan1.network|/etc/systemd/network/21-mlan1.network|0644"
+    "/opt/wlan/config/systemd/network/21-mlan1.network|/etc/systemd/network/21-mlan1.network.bak|0644"
+    "/opt/wlan/config/systemd/network/22-eth0.network|/etc/systemd/network/22-eth0.network|0644"
+    "/opt/wlan/config/systemd/network/22-eth0.network|/etc/systemd/network/22-eth0.network.bak|0644"
+)
+
+if ! factory_preflight "$WIFI_INIT_CONF_TEMPLATE" "$(dirname "$WIFI_INIT_CONF_JSON")" \
+   || ! factory_preflight_required_payloads "${FACTORY_REQUIRED_PAYLOADS[@]}"; then
+    logger -p local0.emerg "[$tag:$LINENO] factory reset preflight failed; active state unchanged"
+    safe_print red "[factory] preflight failed; reset aborted"
+    exit 1
+fi
+
+# 생산값 snapshot은 선택 사항이다. 실패하면 검증된 template+board 기본값으로 진행한다.
+if [ -x /usr/local/scripts/wifi_conf_preserve.sh ]; then
+    PRESERVE_SNAPSHOT=$(mktemp /tmp/wifi_conf_preserve.XXXXXX 2>/dev/null || true)
+    if [ -z "$PRESERVE_SNAPSHOT" ] \
+       || ! /usr/local/scripts/wifi_conf_preserve.sh save "$PRESERVE_SNAPSHOT"; then
+        rm -f -- "$PRESERVE_SNAPSHOT"
+        PRESERVE_SNAPSHOT=""
+        logger -p local0.warn "[$tag:$LINENO] preserve snapshot failed; using template hardware defaults"
+    fi
+fi
+
+if ! factory_stage_config "$WIFI_INIT_CONF_TEMPLATE" "$FACTORY_STAGED_CONFIG" "$PRESERVE_SNAPSHOT"; then
+    rm -f -- "$FACTORY_STAGED_CONFIG" "$PRESERVE_SNAPSHOT"
+    logger -p local0.emerg "[$tag:$LINENO] factory config staging failed; active state unchanged"
+    safe_print red "[factory] config staging failed; reset aborted"
+    exit 1
+fi
+rm -f -- "$PRESERVE_SNAPSHOT"
+PRESERVE_SNAPSHOT=""
+trap 'rm -f -- "$FACTORY_STAGED_CONFIG" "$PRESERVE_SNAPSHOT"' EXIT
+
+# 필수 payload는 다른 reset 변경보다 먼저 같은 디렉터리의 temp에 검증한 뒤 rename한다.
+# 하나라도 실패하면 기존 destination을 보존하고 서비스/JSON 변경 및 reboot 전에 중단한다.
+if ! factory_install_required_payloads "${FACTORY_REQUIRED_PAYLOADS[@]}"; then
+    logger -p local0.emerg "[$tag:$LINENO] required factory payload restore failed; reset aborted"
+    safe_print red "[factory] required payload restore failed; reset aborted"
+    exit 1
+fi
+
 logger -p local0.info "[$tag:$LINENO] start"
 safe_print cyan "[factory] reset start"
 safe_sysfs_write none /sys/class/leds/status/trigger
@@ -49,11 +130,9 @@ safe_cp /opt/wlan/config/rc.local /etc/
 safe_cp /opt/wlan/config/rsyslog.conf /etc/
 safe_cp /opt/wlan/config/smb.conf /etc/samba/
 #cp /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/
-safe_cp /opt/wlan/config/wlan/* /lib/firmware/cts/
 safe_cp /opt/wlan/config/crontab /etc/
 #cp /opt/wlan/firmware/* /lib/firmware/nxp/
 #cp /opt/wlan/driver/* /lib/modules/$KERNEL_VERSION/updates/
-safe_cp /opt/wlan/config/wpa_supplicant/wpa_supplicant@.service /lib/systemd/system/
 safe_cp /opt/wlan/config/systemd/journald.conf /etc/systemd/
 
 customctl() {
@@ -128,7 +207,6 @@ customctl() {
   customctl enable watchdog
   customctl enable switchd
   customctl enable fake-hwclock
-  customctl enable wifi_init
   customctl enable wifi_logger
   customctl enable log-watchdog.timer
   customctl enable journald-snapshot.timer
@@ -143,20 +221,12 @@ customctl() {
 
   #customctl enable arping@mlan0
   customctl enable wifi_led@mlan0
-  customctl enable wifi_logger@mlan0
-  customctl enable wifi_checker@mlan0
-  customctl enable wifi_bgscan@mlan0
-  customctl enable wifi_roam@mlan0
-  customctl enable wifi_event@mlan0
   #customctl enable wifi_capture@mlan0
 
   safe_cp /opt/wlan/mfg/bridge_init.conf /usr/local/mfg/bridge_init.conf
   safe_cp /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/timesyncd.conf
-  safe_cp /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan0.conf /etc/wpa_supplicant/wpa_supplicant-mlan0.conf
-  safe_cp /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan1.conf /etc/wpa_supplicant/wpa_supplicant-mlan1.conf
-  safe_cp /opt/wlan/config/systemd/network/20-mlan0.network /etc/systemd/network/20-mlan0.network
-  safe_cp /opt/wlan/config/systemd/network/21-mlan1.network /etc/systemd/network/21-mlan1.network
-  safe_cp /opt/wlan/config/systemd/network/22-eth0.network /etc/systemd/network/22-eth0.network
+  secure_wpa_conf /etc/wpa_supplicant/wpa_supplicant-mlan0.conf || critical_failures=$((critical_failures + 1))
+  secure_wpa_conf /etc/wpa_supplicant/wpa_supplicant-mlan1.conf || critical_failures=$((critical_failures + 1))
   safe_cp /opt/wlan/config/systemd/network/10-lo.network /etc/systemd/network/10-lo.network
   safe_cp /opt/wlan/config/systemd/network/20-mlan0.link /etc/systemd/network/20-mlan0.link
   safe_cp /opt/wlan/config/systemd/network/21-mlan1.link /etc/systemd/network/21-mlan1.link
@@ -168,94 +238,61 @@ customctl() {
   # 후조건 검증을 wifi_link_reset.sh가 한 번에 처리한다.
   if [ -x /usr/local/scripts/wifi_link_reset.sh ]; then
       if ! /usr/local/scripts/wifi_link_reset.sh; then
+          critical_failures=$((critical_failures + 1))
           logger -p local0.err "[$tag:$LINENO] link reset incomplete; a .link may still force a MAC"
           safe_print red "\r\n[factory] WARNING: link reset incomplete (see syslog)"
       fi
   else
+      critical_failures=$((critical_failures + 1))
       logger -p local0.err "[$tag:$LINENO] missing wifi_link_reset.sh; stale .link MAC not cleaned"
   fi
-  # 덮어쓰기 전, 지워선 안 되는 하드웨어/생산 설정(MOD_PARA·CAL_DATA_CFG·TXPWRLIMIT_PATH·
-  # .mac.<iface>.base)을 떠 둔다. 되쓰기는 보드 감지 이후에 한다 — wifi_board_config.sh가
-  # .global.MOD_PARA를 상수로 다시 쓰므로 그 전에 되쓰면 곧바로 덮인다.
-  # 보존 목록과 판정 규칙은 wifi_conf_preserve.sh 참고(`wifi_conf_preserve.sh keys`).
-  PRESERVE_SNAPSHOT=""
-  if [ -x /usr/local/scripts/wifi_conf_preserve.sh ]; then
-      PRESERVE_SNAPSHOT=$(mktemp /tmp/wifi_conf_preserve.XXXXXX 2>/dev/null)
-      if [ -z "$PRESERVE_SNAPSHOT" ] \
-         || ! /usr/local/scripts/wifi_conf_preserve.sh save "$PRESERVE_SNAPSHOT"; then
-          rm -f -- "$PRESERVE_SNAPSHOT"
-          PRESERVE_SNAPSHOT=""
-          logger -p local0.err "[$tag:$LINENO] preserve snapshot failed; hardware keys fall back to template"
-      fi
+  # 검증을 끝낸 stage만 같은 파일시스템의 temp+rename으로 active에 승격한다.
+  # link reset 실패가 있어도 active는 valid factory config로 남기되, 아래 gate가 reboot을 막는다.
+  if ! factory_commit_config "$FACTORY_STAGED_CONFIG" "$WIFI_INIT_CONF_JSON"; then
+      critical_failures=$((critical_failures + 1))
+      logger -p local0.emerg "[$tag:$LINENO] atomic factory config commit failed"
   else
-      logger -p local0.err "[$tag:$LINENO] missing wifi_conf_preserve.sh; hardware keys fall back to template"
+      config_committed=1
   fi
-
-  # 활성 설정을 템플릿으로 되돌린다. postinst는 json_merge(기존 값 우선)로 쓰지만 여기서는
-  # 통째로 덮어쓴다 — 사용자 런타임 설정(.global/.mlanN/.wbridge 등)을 지우는 것이 초기화의 목적.
-  #
-  # .mac.<iface>.target은 템플릿의 빈 문자열로 리셋된다. 의도된 동작이다 — target은
-  # `wifi mac <iface> target <MAC>`으로 정하는 런타임 설정이고, 리셋 후에는 base(=유닛의
-  # 기준 MAC)로 폴백한다(wifi_init.sh resolve_mac: dynamic → target → base).
-  # base는 아래 preserve 단계에서 되살린다. 위에서 비워진 .link의 MACAddress는 다음 부팅에
-  # resolve_mac → update_mac.sh 경로로 base에서 다시 채워진다(드라이버 로드 전에 수행).
-  safe_cp /opt/wlan/config/wifi_init_conf.json /usr/local/etc/
-  safe_cp /opt/wlan/config/config.json /usr/local/etc/
-
-  # 단, 보드 감지 결과는 사용자 설정이 아니라 하드웨어 사실이므로 반드시 되살린다.
-  # 템플릿에는 .mcp.iio_device 키가 없고 .global.BOARD_TYPE은 고정값("imx93")이라, 위 복사만으로
-  # 끝내면 postinst가 주입해 둔 값이 사라진다. 그러면 wifi_logger_mcp.sh가 iio:device0
-  # fallback으로 떨어져(iMX93은 device1) ADC를 못 읽고 Invalid Voltage를 무한 로깅하며,
-  # iMX8MM에서는 BOARD_TYPE이 imx93으로 뒤바뀌어 드라이버 선택까지 어긋난다.
-  # 이 호출로 factory_reset 결과 == 신규 설치 결과(템플릿 + 보드 감지)가 된다.
-  if [ -x /usr/local/scripts/wifi_board_config.sh ]; then
-      /usr/local/scripts/wifi_board_config.sh /usr/local/etc/wifi_init_conf.json \
-          || logger -p local0.err "[$tag:$LINENO] board config apply failed"
-  else
-      logger -p local0.err "[$tag:$LINENO] missing wifi_board_config.sh; board settings not restored"
-  fi
-
-  # 보드 감지가 끝난 뒤에 하드웨어/생산 설정을 되쓴다(위 snapshot 주석 참고).
-  # 실패해도 초기화는 계속한다 — 템플릿 기본값으로 부팅은 되고, 원인은 로그에 남는다.
-  if [ -n "$PRESERVE_SNAPSHOT" ]; then
-      /usr/local/scripts/wifi_conf_preserve.sh apply "$PRESERVE_SNAPSHOT" \
-          || logger -p local0.err "[$tag:$LINENO] preserved key restore failed; template values remain"
-      rm -f -- "$PRESERVE_SNAPSHOT"
-  fi
-
-  # 후조건 검증. 헬퍼가 없든, 실패했든, 조용히 잘못 썼든 결과는 하나다 — .mcp.iio_device가
-  # 없는 채로 reboot하면 이 버그가 그대로 재현된다. 여기서 확인해 최소한 원인이 드러나게 한다.
-  # (인라인 jq 폴백을 두지 않는 이유: 헬퍼는 이 스크립트와 같은 .deb로 원자적으로 배포되고,
-  #  헬퍼의 실패 원인(jq 부재·JSON 손상)은 인라인 jq도 똑같이 겪으므로 실익이 없다.
-  #  감지 로직을 세 번째로 복제하면 드리프트만 늘어난다.)
-  if command -v jq >/dev/null 2>&1; then
-      _iio=$(jq -r '.mcp.iio_device // empty' /usr/local/etc/wifi_init_conf.json 2>/dev/null)
-      if [ -z "$_iio" ]; then
-          logger -p local0.err "[$tag:$LINENO] .mcp.iio_device missing after board config; wifi_logger_mcp will fall back and fail to read the ADC"
-          safe_print red "\r\n[factory] WARNING: board config not applied (.mcp.iio_device missing)"
-      else
-          logger -p local0.info "[$tag:$LINENO] board config verified: iio_device=$_iio"
-      fi
-  fi
+  rm -f -- "$FACTORY_STAGED_CONFIG"
 
   # 공장 초기화 전 운영 설정이 다음 부팅의 복구 후보로 남지 않게 JSON 정상본 세대도
   # 초기화된 active로 교체한다. 실패하더라도 예전 정상본은 직접 제거해 부활을 막는다.
-  if [ -x /usr/local/scripts/wifi_config_backup.sh ]; then
+  if [ "$config_committed" -eq 1 ]; then
       if ! /usr/local/scripts/wifi_config_backup.sh reset; then
-          rm -f -- "${WIFI_INIT_CONF_JSON}.bak" "${WIFI_INIT_CONF_JSON}.bak.1"
-          sync "$(dirname "$WIFI_INIT_CONF_JSON")" 2>/dev/null || sync
-          logger -p local0.emerg "[$tag:$LINENO] JSON backup reset failed; removed stale backup generations"
+          if rm -f -- "${WIFI_INIT_CONF_JSON}.bak" "${WIFI_INIT_CONF_JSON}.bak.1" \
+             && { sync "$(dirname "$WIFI_INIT_CONF_JSON")" 2>/dev/null || sync; }; then
+              logger -p local0.emerg "[$tag:$LINENO] JSON backup reset failed; stale generations removed (no recovery seed)"
+          else
+              critical_failures=$((critical_failures + 1))
+              logger -p local0.emerg "[$tag:$LINENO] JSON backup reset and stale-generation cleanup both failed"
+          fi
+      fi
+  fi
+  if [ -x "$FACTORY_CAL_BACKUP_SH" ]; then
+      if ! "$FACTORY_CAL_BACKUP_SH" reset; then
+          critical_failures=$((critical_failures + 1))
+          logger -p local0.emerg "[$tag:$LINENO] selected production calibration reset/protection failed"
       fi
   else
-      rm -f -- "${WIFI_INIT_CONF_JSON}.bak" "${WIFI_INIT_CONF_JSON}.bak.1"
-      sync "$(dirname "$WIFI_INIT_CONF_JSON")" 2>/dev/null || sync
-      logger -p local0.emerg "[$tag:$LINENO] missing wifi_config_backup.sh; removed stale JSON backups without reseed"
+      critical_failures=$((critical_failures + 1))
+      logger -p local0.emerg "[$tag:$LINENO] missing wifi_cal_backup.sh; cannot protect selected production calibration"
   fi
-  if [ -x /usr/local/scripts/wifi_cal_backup.sh ]; then
-      /usr/local/scripts/wifi_cal_backup.sh reset \
-        || logger -p local0.err "[$tag:$LINENO] custom calibration backup reset failed"
-  else
-      logger -p local0.err "[$tag:$LINENO] missing wifi_cal_backup.sh; custom calibration backup artifacts may remain"
+
+  if ! factory_verify_required_payloads "${FACTORY_REQUIRED_PAYLOADS[@]}"; then
+      critical_failures=$((critical_failures + 1))
+      logger -p local0.emerg "[$tag:$LINENO] required factory payload postcondition failed"
+  fi
+
+  if [ "$config_committed" -eq 1 ]; then
+      if ! factory_restore_service_state "$WIFI_INIT_CONF_JSON"; then
+          critical_failures=$((critical_failures + 1))
+          logger -p local0.emerg "[$tag:$LINENO] factory service state restore failed"
+      fi
+      if ! factory_verify_postconditions "$WIFI_INIT_CONF_JSON"; then
+          critical_failures=$((critical_failures + 1))
+          logger -p local0.emerg "[$tag:$LINENO] factory reset postcondition verification failed"
+      fi
   fi
 
 #find /var/log/cantops -mindepth 1 -maxdepth 1 ! -name journald -exec rm -rf {} +
@@ -297,9 +334,16 @@ safe_sysfs_write 1 /sys/class/leds/status/brightness
 safe_sysfs_write 1 /sys/class/leds/lan/brightness
 safe_sysfs_write 1 /sys/class/leds/wlan/brightness
 
+if [ "$critical_failures" -ne 0 ]; then
+    logger -p local0.emerg "[$tag:$LINENO] factory reset incomplete: critical_failures=$critical_failures; reboot inhibited"
+    safe_print red "[factory] reset incomplete; reboot inhibited (see syslog)"
+    exit 1
+fi
 
 echo "factory reset finish"
 safe_print cyan "[factory] reset finish"
+trap - EXIT
+rm -f -- "$FACTORY_STAGED_CONFIG" "$PRESERVE_SNAPSHOT"
 
 # === 자동 reboot ===
 # 변경된 .network / wpa_supplicant / wifi_init_conf.json / sysctl 등을 cold start로

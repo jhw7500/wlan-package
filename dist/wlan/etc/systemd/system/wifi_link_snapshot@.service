@@ -14,9 +14,9 @@ PartOf=wifi_init.service wifi_logger@%i.service
 # 무선 iface(mlan0/mlan1) 전용 — wifi_logger@eth0 의 Wants= pull-in 은 조건 불충족으로
 # 스킵된다(종전 wifi_logger_start.sh 의 iface 검증과 동일 의미).
 ConditionPathIsDirectory=/sys/class/net/%i/wireless
-# 재시작 rate-limit 무제한: 기본 제한(5회/10s)이면 연속 크래시 시 systemd 가 포기해
-# 영구 미기동이 된다. (#118 wifi_logger_link 감독화와 동일 원리)
-StartLimitIntervalSec=0
+# 영구 오류의 무한 재시작을 막되 일시 장애는 자동 복구한다.
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Service]
 Type=simple

@@ -1,0 +1,14 @@
+{
+  "component": "NXP 88W9098 SDIO WLAN firmware",
+  "installed_path": "/usr/lib/firmware/cts/sd9098_wlan_v1.bin",
+  "upstream_repository": "https://github.com/nxp-imx/imx-firmware",
+  "upstream_ref": "lf-6.18.20_2.0.0",
+  "upstream_commit": "cc78ca8b1ee28ff741bcc160246f61b008f6c89f",
+  "upstream_path": "FwImage_9098_SD/sd9098_wlan_v1.bin",
+  "git_blob": "3fb819705df1b6cac54ce554951bae19e6f2ddec",
+  "size": 659428,
+  "sha256": "7c3ef6e12d3cfc9bd638d1571ccf6ddd2e96e0ed179ec70664ccb1df0ba29e57",
+  "firmware_version": "17.92.1.p149.115",
+  "license": "LA_OPT_NXP_Software_License - Production Use; Section 2.3 applies",
+  "scope": "SDIO WLAN-only production firmware. Other selectable PCIe, combo/BT, and manufacturing firmware variants are unchanged and are not claimed as p149.115."
+}

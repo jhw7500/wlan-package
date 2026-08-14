@@ -14,22 +14,20 @@ from datetime import datetime
 from collections import deque
 from sUTILS import Logger, _EXTRA_
 from roam_notify import notify_roam, get_associated_bssid, confirm_roam
+from roam_state import (
+    clear_own_lease,
+    clear_stale_lease,
+    lease_active,
+    process_start_time,
+    roam_state_paths,
+    write_flag,
+)
 
 VERSION = "1.1"
 IFACE = "mlan0"
 LINK_LOG_FILE = f"/var/log/cantops/json/{IFACE}/link.json"
 SCAN_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/ap.log"
 WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
-def roam_state_paths(iface):
-    """iface별 roam 상태 파일 경로(조건 플래그, 마지막 roam 스캔 시각) 규칙.
-
-    wifi_bgscan.roam_state_paths 와 정확히 동일해야 하는 reader/writer 쌍 규칙 —
-    두 데몬은 서로 import 없이 경로 규칙으로만 결합하므로
-    tests/test_roam_state_per_iface.py 가 양쪽 일치를 고정한다."""
-    return (
-        f"/run/wifi/roam_condition_{iface}",
-        f"/run/wifi/last_roam_scan_{iface}",
-    )
 
 # 모듈 로드 시 mlan0 기본 경로 — __main__ 이 실제 IFACE 로 재대입(ROAM_HINT_FILE 전례).
 ROAM_CONDITION_FLAG, LAST_SCAN_TIME_FILE = roam_state_paths(IFACE)
@@ -855,7 +853,7 @@ def handle_sigterm(signum, frame):
 
 
 def cleanup():
-    pass
+    clear_own_lease(ROAM_CONDITION_FLAG)
 
 
 def freq_to_channel(freq):
@@ -946,29 +944,19 @@ def set_flag(on, path=None):
     # 기본 인자는 def 시점 바인딩 → None 센티널로 호출 시점 전역(iface별 재대입) 해석.
     if path is None:
         path = ROAM_CONDITION_FLAG
-    # 같은 디렉터리 tmp 파일 + os.replace 원자 교체 — reader(wifi_bgscan)의 torn read 제거.
-    # /run/wifi 는 tmpfs 라 부팅마다 사라짐 → 쓰기 시 디렉터리 보장.
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    tmp_path = f"{path}.tmp"
-    with open(tmp_path, "w") as f:
-        if on is True or on == 1:
-            f.write("1")
-        elif on is False or on == 0:
-            f.write("0")
-        else:
-            f.write("")
-    os.replace(tmp_path, path)
+    write_flag(on, path)
 
 
 def get_flag(path=None) -> bool:
     if path is None:
         path = ROAM_CONDITION_FLAG  # 호출 시점 전역 — __main__ iface별 재대입 반영
-    try:
-        with open(path, "r") as f:
-            content = f.read().strip()
-            return content == "1"
-    except FileNotFoundError:
-        return False
+    return lease_active(path)
+
+
+def clear_stale_roam_lease(path=None) -> bool:
+    if path is None:
+        path = ROAM_CONDITION_FLAG
+    return clear_stale_lease(path)
 
 
 def mlanutl_scan(ssids, freqs):
@@ -2851,6 +2839,8 @@ if __name__ == "__main__":
     # roam 상태 파일도 동일 이유로 iface별 재대입 — DBDC 시 두 roam 데몬의 플래그
     # 교차 기록(last-writer-wins)과 bgscan 교차 정지를 차단한다.
     ROAM_CONDITION_FLAG, LAST_SCAN_TIME_FILE = roam_state_paths(IFACE)
+    if clear_stale_roam_lease():
+        logger.message("warn", f"[{IFACE}] removed stale roam-condition lease on startup", _EXTRA_())
 
     # JSON 설정 로드 (IFACE별 설정)
     load_roaming_config(IFACE)

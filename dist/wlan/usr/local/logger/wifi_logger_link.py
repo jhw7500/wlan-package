@@ -107,11 +107,17 @@ def run_command_with_retry(cmd, retries=2, delay=0.1, validate_fn=None):
     #logger.message("err", f"[{IFACE}] {cmd} -> all {retries} attempts failed", _EXTRA_())
     return None
 
-def run_command(cmd):
+LINK_COMMAND_TIMEOUT_S = 3
+
+
+def run_command(cmd, timeout=LINK_COMMAND_TIMEOUT_S):
     try:
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            check=True, timeout=timeout,
+        )
         return result.stdout.strip()
-    except subprocess.CalledProcessError as e:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
         print(f"Command failed: {e}")
         return ""
 

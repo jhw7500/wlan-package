@@ -1,20 +1,12 @@
 [Unit]
-Description=WiFi Logger Controller
-#Requires=wifi_logger@mlan0.service wifi_logger@mlan1.service
-#After=network.target
-#After=wifi_init.service
-#Before=sysinit.target
-#BindsTo=sys-subsystem-net-devices-mlan0.device
-Requires=sys-subsystem-net-devices-mlan0.device
-After=sys-subsystem-net-devices-mlan0.device wifi_init.service
+Description=System Logger Controller
+After=wifi_init.service
+Wants=wifi_logger_cpu.service wifi_logger_mmc.service wifi_logger_temp.service wifi_logger_mcp.service wifi_logger_summary.service
 
 [Service]
 Type=oneshot
-RemainAfterExit=true
-ExecStart=/usr/local/scripts/wifi_logger.sh
-ExecStop=/bin/true
-# 백그라운드 자식 종료 시 발생하는 "Terminated"를 logger.log에 쓰지 않는다.
-# 각 로거의 local0 logger/Python SysLogHandler 및 개별 파일 출력은 영향 없음.
+ExecStart=/bin/true
+RemainAfterExit=yes
 StandardOutput=null
 StandardError=null
 

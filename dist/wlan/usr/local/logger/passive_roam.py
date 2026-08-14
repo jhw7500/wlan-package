@@ -22,6 +22,18 @@ SCAN_TIMESTAMP_RE = re.compile(
 SCAN_BLOCK_MAX_AGE_SEC = 150
 
 
+def scan_block_max_age_sec(iface=WIFI_IFACE, conf_path=WIFI_INIT_CONF_JSON):
+    """bgscan 주기가 길어도 정상 cache를 stale로 오판하지 않는 동적 상한."""
+    try:
+        with open(conf_path, "r") as f:
+            interval = json.load(f).get(iface, {}).get("bgscan", {}).get("interval")
+        if isinstance(interval, int) and not isinstance(interval, bool) and interval > 0:
+            return max(SCAN_BLOCK_MAX_AGE_SEC, int(interval * 2.5))
+    except (FileNotFoundError, json.JSONDecodeError, KeyError, AttributeError, TypeError):
+        pass
+    return SCAN_BLOCK_MAX_AGE_SEC
+
+
 def read_current_bssid(link_json_path=LINK_JSON):
     """Read current connected BSSID from link.json"""
     try:
@@ -55,8 +67,10 @@ def load_extra_ssids(iface, conf_path=WIFI_INIT_CONF_JSON):
     return []
 
 
-def parse_last_scan_block(scan_log_path=SCAN_LOG, max_age_sec=SCAN_BLOCK_MAX_AGE_SEC):
+def parse_last_scan_block(scan_log_path=SCAN_LOG, max_age_sec=None):
     """Parse the last scan block from ap.log"""
+    if max_age_sec is None:
+        max_age_sec = scan_block_max_age_sec(WIFI_IFACE, WIFI_INIT_CONF_JSON)
     if not os.path.exists(scan_log_path):
         return []
 

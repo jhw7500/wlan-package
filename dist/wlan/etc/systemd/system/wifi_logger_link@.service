@@ -11,9 +11,9 @@ After=sys-subsystem-net-devices-%i.device wifi_init.service
 # wifi_logger@%i 의 Wants= 로 pull-in 되므로 [Install] 은 두지 않는다(엄격한 자식 유닛,
 # 별도 systemctl enable 불필요 — 이중 활성화/순서 모호성 제거).
 PartOf=wifi_init.service wifi_logger@%i.service
-# 재시작 rate-limit 무제한: link.json 은 로밍에 필수라 '절대 영구 사망 없음'을 우선한다.
-# 기본 제한(5회/10s)이면 연속 크래시 시 systemd 가 포기해 다시 영구 미기동이 된다.
-StartLimitIntervalSec=0
+# 영구 오류의 무한 재시작을 막되 일시 장애는 자동 복구한다.
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Service]
 Type=simple

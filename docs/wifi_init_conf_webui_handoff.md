@@ -5,7 +5,7 @@
 - **목적**: 웹 UI "설정 프로그램"이 `wifi_init_conf.json`을 폼(form)으로 노출/편집할 때 참조하는 **완전한 필드 명세**. 각 필드의 경로·타입·기본값·허용값·UI 편집 가능 여부·적용 시점·소비 스크립트를 정리한다.
 - **대상**: 웹 UI 설정 편집기 담당자.
 - **단일 소스오브트루스(SSoT)**: 값/구조의 최종 기준은 항상 아래 실제 파일이다. 본 문서와 값이 다르면 JSON이 옳다.
-  - `/home/jhw/ai/opencode/projects/wlan-package/dist/wlan/opt/wlan/config/wifi_init_conf.json`
+  - `dist/wlan/opt/wlan/config/wifi_init_conf.json`
 
 ### 파일 경로
 
@@ -22,7 +22,7 @@
 환경변수(스크립트별 override)  >  JSON(wifi_init_conf.json)  >  스크립트 내장 기본값
 ```
 
-- 일부 인터페이스별 필드(`mlanN.Frequency`, `mlanN.enabled`)는 별도 오버레이 `config.json`이 `wifi_init_conf.json`보다 우선한다(해당 필드 비고 참조). `config.json`은 wlan-package가 배포·백업하지 않는 외부 호환 overlay이므로, WebUI 등 공급 측에서 백업·복구 수명주기를 함께 관리해야 한다.
+- 인터페이스 활성화와 주파수 값도 `wifi_init_conf.json`만 읽는다. 별도 외부 설정 파일과의 우선순위 병합은 없다.
 - 인터페이스별 값(`.mlanN.*`)이 있으면 전역(`.global.*`)보다 우선하며, 전역은 fallback이다.
 
 ### ⚠️ 업그레이드 시 기본값 미반영 주의
@@ -65,7 +65,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 - **`checker`, `arping`가 최상위 → `mlan0`/`mlan1` 하위(인터페이스별)로 이동**. 이제 `mlan0.checker.*`, `mlan1.arping.*` 형태다.
 - **`global` 개편**:
   - `FW_NAME`, `MFG_MODE` **제거**. 펌웨어는 `global.BOARD_TYPE` + `global.BUS_TYPE` + `global.BLUETOOTH.enable`로 **자동 선택**된다. `MFG_MODE`는 JSON이 아니라 `mod_para.conf`의 `mfg_mode=`에서 읽는다.
-  - `global.rate_adapt` 블록 **제거**. 코드에 fallback 경로만 남아있고 데이터는 없음 → 실질적으로 per-iface(`mlanN.rate_adapt`)만 유효.
+  - `global.rate_adapt` 블록과 코드 fallback 모두 **제거**. per-iface(`mlanN.rate_adapt`) section만 유효하며 4개 필드는 한 묶음이다.
 
 ### 2.2 신규 섹션/키
 
@@ -115,7 +115,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 
 ### 2.4 제거/유령(phantom)
 
-- `global.rate_adapt` — 데이터 없음(코드 fallback 경로만 존재).
+- `global.rate_adapt` — 데이터와 코드 fallback 모두 없음.
 - `logger.link_retry_count` / `logger.link_retry_delay_sec` — **JSON 키가 아님**. 스키마에 넣지 말 것(아래 ⚠️ 주의 박스 및 각주 참조).
 
 ---
@@ -314,6 +314,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 
 | 경로 | 라벨 | 타입 | 기본값 | 허용값/범위 | UI편집 | 적용시점 | 설명 |
 |---|---|---|---|---|---|---|---|
+| `logger.enabled` | 시스템 로거 그룹 활성화 | bool | `true` | true\|false | yes | boot | CPU/MMC/TEMP/MCP/SUMMARY 그룹. false면 온도 로그와 과열 보호도 중단 |
 | `logger.cpu_interval_sec` | CPU 로그 주기(전역) | int | `60` | 양의 정수 | yes | daemon-restart | CPU/메모리/클럭 로그 주기(per-iface override 없음) |
 | `logger.link_interval_sec` | 링크 폴링 주기(전역) | float | `0.9` | 양의 실수 | yes | daemon-restart | 링크 상태 폴링 주기. eth0/mlanN.logger가 override |
 | `logger.stat_log_interval_sec` | 통계 로그 주기(전역) | int | `1` | 양의 정수 | yes | daemon-restart | 통계 기록 주기 |
@@ -329,9 +330,10 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 
 | 경로 | 라벨 | 타입 | 기본값 | 허용값/범위 | UI편집 | 적용시점 | 설명 |
 |---|---|---|---|---|---|---|---|
-| `eth0.logger.link_interval_sec` | eth0 링크 폴링 주기(초) | int | `1` | 양의 실수/정수 | yes | daemon-restart | 전역 0.95를 eth0에 한해 1로 override |
+| `eth0.logger.enabled` | eth0 로거 그룹 활성화 | bool | `true` | true\|false | yes | boot | `wifi_logger@eth0.service` 부팅 정책 |
+| `eth0.logger.link_interval_sec` | eth0 링크 폴링 주기(초) | int | `1` | 양의 실수/정수 | yes | daemon-restart | 전역 0.9를 eth0에 한해 1로 override |
 
-**비고 (eth0)** — 소비: `wifi_logger_link.py`. `wifi_logger@eth0` 재시작 시 반영.
+**비고 (eth0)** — 소비: `wifi_logger_link.py`, `wifi_apply_enabled.sh`. `wifi_logger@eth0` 재시작 시 반영.
 
 ### 3.10 mlan0 / mlan1 (무선 인터페이스)
 
@@ -345,15 +347,15 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `CAL_DATA_CFG` | 캘리브레이션 파일(per-iface) | string | `""` | 경로\|`none`\|빈값 | caution | reboot | mlanN>global 우선. 빈값/none→`cal_data_cfg=none` |
 | `TXPWRLIMIT_PATH` | TX 파워 리밋(per-iface) | string | `""` | 절대경로\|`none`\|빈값 | caution | boot | mlanN>global 우선. 부팅 시 mlanutl hostcmd |
 | `connect_threshold` | 연결 임계값(RSSI) | int | `-100` | 음의 정수 dBm(예 -100~-40). -100=사실상 무필터 | caution | daemon-restart | **커스텀 wpa_supplicant 바이너리**가 `/usr/local/etc/wifi_init_conf.json`을 직접 읽어, 신호레벨이 이 값 미만인 BSS를 연결 후보에서 제외(로그 `BSS: … level N < connect threshold M`). 과설정 시 미연결 위험 |
-| `enabled` | 인터페이스 활성화 | bool | `mlan0=true / mlan1=false` | true\|false | yes | boot | false면 부팅 초기화·모든 자식 데몬 disable. **overlay config.json이 우선** |
-| `Frequency` | 주파수 대역 | enum | `auto` | `auto`\|`2.4GHz`\|`5GHz` (검증 없음) | caution | boot | 현재는 로그/상태표시에만 사용(HW 밴드제한 미적용). **overlay config.json이 우선** |
+| `enabled` | 인터페이스 활성화 | bool | `mlan0=true / mlan1=false` | true\|false | yes | boot | false면 부팅 초기화·모든 자식 데몬 disable |
+| `Frequency` | 주파수 대역 | enum | `auto` | `auto`\|`2.4GHz`\|`5GHz` (검증 없음) | caution | boot | 현재는 로그/상태표시에만 사용(HW 밴드제한 미적용) |
 | `net_rx` | MGMT 프레임 로깅 비트맵 | int | `0` | `0`\|`2`\|`3`\|`6`\|`7` (bit[1:0]=RX모드, bit[2]=TX로그) | caution | reboot | mod_para 블록 `net_rx=`. 로그는 커널 링버퍼→10초마다 flush |
 | `mgmt_hex_dump_enable` | MGMT hex dump 로깅 | bool | `false` | true\|false | caution | reboot | 디버그용. mod_para 블록 `mgmt_hex_dump=1/0` |
 | `thermal_mgmt` | FW 열관리 | bool | `true` | true\|false | caution | boot | FW thermal management(SUBID 0x113). 명시적 false만 disable |
-| `rate_adapt.mode` | 레이트 적응 모드 | int | `1` | `0`=legacy\|`1`=SR | caution | boot | 비었으면 rate_adapt 블록 전체 skip |
-| `rate_adapt.low_thresh` | 레이트 적응 low 임계 | int | `70` | 0..100(%) 또는 255(0xff=dynamic) | caution | boot | SR 모드 하한 성공률(%) |
-| `rate_adapt.high_thresh` | 레이트 적응 high 임계 | int | `90` | 0..100(%) 또는 255(0xff) | caution | boot | SR 모드 상한 성공률(%) |
-| `rate_adapt.interval_ms` | 레이트 적응 평가주기(ms) | int | `100` | ms 정수 | caution | boot | 평가 주기 |
+| `rate_adapt.mode` | 레이트 적응 모드 | int | `1` | `0`=legacy\|`1`=SR | caution | boot | section 존재 시 4개 필드 모두 필수 |
+| `rate_adapt.low_thresh` | 레이트 적응 low 임계 | int | `70` | 0..100 또는 255 | caution | boot | static은 low<high, dynamic은 low/high 모두 255 |
+| `rate_adapt.high_thresh` | 레이트 적응 high 임계 | int | `90` | 0..100 또는 255 | caution | boot | 70/90은 실기 결과에 따라 바뀌는 시험값 |
+| `rate_adapt.interval_ms` | 레이트 적응 평가주기(ms) | int | `100` | 양수, 10ms 배수 | caution | boot | association 전 SET+GET. mlan0 roam 및 mlan1 AC association 완료 시 FW 30/50 복귀 실측 |
 
 #### 3.10.2 mlanN.logger (per-iface 로거)
 
@@ -418,12 +420,17 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 
 | 경로(`mlanN.mcs_tier.`) | 라벨 | 타입 | 기본값 (mlan0 / mlan1) | 허용값/범위 | UI편집 | 적용시점 | 설명 |
 |---|---|---|---|---|---|---|---|
-| `enabled` | MCS tier 제한 활성화 | bool | `true` | true\|false | caution | boot | 부팅 시 + 매 연결 이벤트마다 재적용 |
-| `ht` | MCS HT tier 값 | string | `7` | 자유 문자열(예 `"7"`,`"15"`), 빈값=skip | caution | boot | `mlanutl mcstiercfg ht <값>` verbatim |
-| `vht` | MCS VHT tier 값 | string | `7` | 자유 문자열, 빈값=skip | caution | boot | vht prefix verbatim |
-| `he` | MCS HE tier 값 | string | `both 7` | 자유 문자열(예 `"both 7"`), 빈값=skip | caution | boot | he prefix verbatim(공백 포함 문자열 그대로) |
+| `enabled` | MCS tier 제한 활성화 | bool | `true` | true\|false | caution | boot + link verify/reassociate | association 전 SET 후 GET 검증. mlan0 HE 0x0000은 연결 후 검증하고 FW 기본 복귀 시 SET+reassociate 1회 |
+| `ht` | MCS HT tier 값 | string | `7` | `"7"`\|`"15"` | caution | boot | 양쪽 iface 필수 |
+| `vht` | MCS VHT tier 값 | string | `7` | `"7"`\|`"8"`\|`"9"` | caution | boot | 양쪽 iface 필수 |
+| `he` | MCS HE tier 값 | string | `mlan0="both 7" / mlan1=""` | mlan0=`"both 7"`\|`"both 9"`\|`"both 11"`; mlan1=`""` | caution | boot | mlan0(ax)만 mcstiercfg+11axcfg 검증, mlan1(ac)은 HE 미지원 |
 
-**비고 (mcs_tier)** — 소비: `wifi_init.sh`(부팅), `wifi_event.sh`(매 connected 재적용). 타입은 **문자열**이며 빈 문자열은 "해당 prefix skip" 센티널. `enabled=true`인데 ht/vht/he 전부 비면 no-op. `on_connect` 또는 `mcs_tier` 중 하나라도 true면 `wifi_event@mlanN` 데몬 enable.
+**비고 (mcs_tier)** — 소비: `wifi_init.sh`, `wifi_event.sh`, `wifi_apply_enabled.sh`, `wifi.sh`.
+`enabled=true`인데 필드가 partial/invalid이면 해당 MCS section을 경고 후 skip한다. HT/VHT 또는 명확한
+비영 HE 불일치는 supplicant 시작을 차단한다. 단, mlan0의 association 전 HE Tx/Rx가 모두 0x0000이면
+pending으로 기록한다. 첫 연결 GET이 FW 기본값이면 connected SET으로 다음 association 값을 저장하고
+reassociate를 한 번만 요청한다. 다음 CONNECTED 검증 성공 시 pending/1회 마커를 제거한다. 실패 시
+반복 재연결이나 reboot 없이 링크와 pending을 유지한다. CLI 수정은 다음 부팅에 적용된다.
 
 #### 3.10.6 mlanN.on_connect
 

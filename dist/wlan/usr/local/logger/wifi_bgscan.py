@@ -11,19 +11,9 @@ import signal
 import threading
 from datetime import datetime
 from sUTILS import Logger, _EXTRA_
+from roam_state import lease_active, process_start_time, roam_state_paths
 
 LOG_DIR = "/var/log/cantops/scan"
-
-def roam_state_paths(iface):
-    """iface별 roam 상태 파일 경로(조건 플래그, 마지막 roam 스캔 시각) 규칙.
-
-    wifi_roam.roam_state_paths 와 정확히 동일해야 하는 reader/writer 쌍 규칙 —
-    두 데몬은 서로 import 없이 경로 규칙으로만 결합하므로
-    tests/test_roam_state_per_iface.py 가 양쪽 일치를 고정한다."""
-    return (
-        f"/run/wifi/roam_condition_{iface}",
-        f"/run/wifi/last_roam_scan_{iface}",
-    )
 
 # 모듈 로드 시 mlan0 기본 경로로 평가 — __main__ 이 실제 IFACE 로 재대입한다
 # (iface 미구분 전역 파일이면 DBDC 시 mlan0 roam 조건이 mlan1 bgscan 을 정지시킴).
@@ -49,20 +39,14 @@ def handle_sigterm(signum, frame):
 def cleanup():
     pass
 
-# bgscan 은 roam_condition 플래그의 reader 전용 — writer(set_flag)는 wifi_roam 에만
-# 존재한다(원자 쓰기 포함). 종전의 미호출 set_flag 는 def 시점 바인딩·비원자 쓰기
-# 함정만 남겨 제거했다(#157 리뷰 — 호출이 필요해지면 wifi_roam 구현을 따를 것).
+# bgscan 은 roam_condition PID lease의 reader 전용이다. 죽은 writer/PID 재사용/구버전
+# 정수 플래그는 reader가 자동 폐기해 같은 boot에서 bgscan이 영구 억제되지 않게 한다.
 def get_flag(path=None) -> bool:
     # 기본 인자는 def 시점 바인딩이라 __main__ 의 iface별 재대입이 반영되지 않는다
     # → None 센티널로 호출 시점 전역을 읽는다(mlan1 인스턴스의 mlan0 플래그 오독 방지).
     if path is None:
         path = ROAM_CONDITION_FLAG
-    try:
-        with open(path, "r") as f:
-            content = f.read().strip()
-            return content == "1"
-    except FileNotFoundError:
-        return False  # 파일이 없으면 OFF 취급
+    return lease_active(path)
 
 def is_wpa_running(interface="mlan0"):
     result = subprocess.run(

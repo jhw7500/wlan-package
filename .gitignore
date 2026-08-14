@@ -22,6 +22,7 @@ network.json
 .bkit/
 .omc/
 .omo/
+.omx/
 .serena/
 .vscode/
 .context/
@@ -43,3 +44,6 @@ docs/04-report/wbridge-invention-disclosure-*.md
 # 로컬 툴/에이전트 세션 artifact (추적 제외)
 .playwright-mcp/
 .superpowers/
+artifacts/
+
+HANDOFF.md

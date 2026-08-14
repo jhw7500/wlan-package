@@ -5,8 +5,9 @@ After=local-fs.target sysinit.target
 Wants=local-fs.target
 Conflicts=shutdown.target
 Before=shutdown.target
-# 연속 실패(StartLimit 소진) 시 비상 리부트. wlan_emergency_reboot.service가
-# wlan_reboot_policy.sh를 통해 uptime/cooldown 정책을 확인한 후 reboot 수행.
+# 실패 시 비상 복구 unit을 호출한다. 냉부팅 첫 MCS transitional status(75)는
+# wlan_emergency_reboot.service의 ExecCondition이 제외하며 systemd가 10초 후 재시도한다.
+# 그 외 실패는 wlan_reboot_policy.sh의 uptime/cooldown 정책으로 판정한다.
 OnFailure=wlan_emergency_reboot.service
 # rmmod/insmod 실패 등 ExecStart 실패 시 짧은 간격으로 재시도. burst를 넘으면 정지.
 StartLimitIntervalSec=600

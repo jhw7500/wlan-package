@@ -60,3 +60,19 @@ def test_max_age_override_rejects(tmp_path):
     log = tmp_path / "ap.log"
     _write_log(log, 30)
     assert passive_roam.parse_last_scan_block(str(log), max_age_sec=10) == []
+
+
+def test_max_age_scales_with_bgscan_interval(tmp_path):
+    conf = tmp_path / "wifi_init_conf.json"
+    conf.write_text('{"mlan0":{"bgscan":{"interval":300}}}')
+    assert passive_roam.scan_block_max_age_sec("mlan0", str(conf)) == 750
+
+
+def test_valid_long_interval_cache_is_not_rejected(tmp_path, monkeypatch):
+    conf = tmp_path / "wifi_init_conf.json"
+    conf.write_text('{"mlan0":{"bgscan":{"interval":300}}}')
+    log = tmp_path / "ap.log"
+    _write_log(log, 400)
+    monkeypatch.setattr(passive_roam, "WIFI_INIT_CONF_JSON", str(conf))
+    monkeypatch.setattr(passive_roam, "WIFI_IFACE", "mlan0")
+    assert len(passive_roam.parse_last_scan_block(str(log))) == 1

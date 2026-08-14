@@ -84,10 +84,10 @@ def test_classify_malformed_lines_none():
 
 class _FakeStdout:
     def __init__(self, lines):
-        self._lines = list(lines)
+        self._chunks = [line.encode() for line in lines]
 
-    def readline(self):
-        return self._lines.pop(0) if self._lines else ""
+    def read(self, _fd, _size):
+        return self._chunks.pop(0) if self._chunks else b""
 
     def fileno(self):
         return 0
@@ -113,6 +113,7 @@ def _run_iw(lines, interface="mlan0", popen_exc=None, clock_values=None,
     consumed = wifi_logger_scan.iw_scan_event(
         interface, lambda iface: events.append(iface),
         _popen=popen, _select=lambda r, w, x, t: (r, [], []),
+        _read=proc.stdout.read,
         _clock=clock, idle_timeout=idle_timeout)
     return consumed, events
 
@@ -221,6 +222,7 @@ def test_stream_is_reaped_on_exit():
     proc.stdout = _FakeStdout(IW_LINES[:4])
     wifi_logger_scan.iw_scan_event(
         "mlan0", lambda iface: None, _popen=lambda *a, **k: proc,
-        _select=lambda r, w, x, t: (r, [], []), _clock=lambda: 0.0)
+        _select=lambda r, w, x, t: (r, [], []), _read=proc.stdout.read,
+        _clock=lambda: 0.0)
     proc.terminate.assert_called_once()
     proc.wait.assert_called()
