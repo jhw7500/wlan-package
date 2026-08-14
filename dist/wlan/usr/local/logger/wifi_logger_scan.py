@@ -233,6 +233,7 @@ IW_EVENT_IDLE_TIMEOUT_S = 300     # 우리 iface 이벤트가 이만큼 없으�
 IW_EVENT_POLL_INTERVAL_S = 10
 IW_EVENT_MAX_RESTARTS = 5         # 아래 창 안에서 이 횟수를 넘기면 dmesg 폴백
 IW_EVENT_RESTART_WINDOW_S = 900
+SCAN_COMMAND_TIMEOUT_S = 5
 
 
 def classify_iw_event_line(line, interface):
@@ -258,7 +259,7 @@ def classify_iw_event_line(line, interface):
     return None
 
 
-def iw_scan_event(interface, on_event_callback, _popen=None, _select=None,
+def iw_scan_event(interface, on_event_callback, _popen=None, _select=None, _read=None,
                   _clock=time.monotonic, idle_timeout=IW_EVENT_IDLE_TIMEOUT_S):
     """iw event 스트림에서 이 iface 의 `scan finished` 만 소비한다.
 
@@ -268,15 +269,17 @@ def iw_scan_event(interface, on_event_callback, _popen=None, _select=None,
     """
     popen = _popen or subprocess.Popen
     select_fn = _select or select.select
+    read_fn = _read or os.read
     try:
         proc = popen(["iw", "event"], stdout=subprocess.PIPE,
-                     stderr=subprocess.DEVNULL, text=True, bufsize=1)
+                     stderr=subprocess.DEVNULL, bufsize=0)
     except (OSError, ValueError) as e:
         logger.message("err", f"[{interface}] cannot start `iw event`: {e}", _EXTRA_())
         return None
 
     consumed = 0
     last_seen = _clock()
+    pending = b""
     try:
         while True:
             ready, _, _ = select_fn([proc.stdout], [], [], IW_EVENT_POLL_INTERVAL_S)
@@ -285,18 +288,26 @@ def iw_scan_event(interface, on_event_callback, _popen=None, _select=None,
                     logger.message("warn", f"[{interface}] no iw scan event for {idle_timeout}s — restarting stream", _EXTRA_())
                     return consumed
                 continue
-            line = proc.stdout.readline()
-            if not line:
+            try:
+                chunk = read_fn(proc.stdout.fileno(), 4096)
+            except OSError as e:
+                logger.message("err", f"[{interface}] iw event read failed: {e}", _EXTRA_())
                 return consumed
-            kind = classify_iw_event_line(line, interface)
-            if kind is None:
-                continue
-            last_seen = _clock()
-            if kind == "finished":
-                consumed += 1
-                on_event_callback(interface)
-            elif kind == "aborted":
-                logger.message("info", f"[{interface}] scan aborted — no new results", _EXTRA_())
+            if not chunk:
+                return consumed
+            pending += chunk
+            while b"\n" in pending:
+                raw_line, pending = pending.split(b"\n", 1)
+                line = raw_line.decode("utf-8", errors="replace")
+                kind = classify_iw_event_line(line, interface)
+                if kind is None:
+                    continue
+                last_seen = _clock()
+                if kind == "finished":
+                    consumed += 1
+                    on_event_callback(interface)
+                elif kind == "aborted":
+                    logger.message("info", f"[{interface}] scan aborted — no new results", _EXTRA_())
     finally:
         # 종료시킨 뒤 반드시 reap 한다 — scan_event_source 가 최대
         # IW_EVENT_MAX_RESTARTS 회 새 `iw event` 를 띄우므로 wait 를 빠뜨리면
@@ -344,10 +355,11 @@ def run_setuserscan():
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            timeout=SCAN_COMMAND_TIMEOUT_S,
             check=True  # ← returncode != 0이면 예외 발생
         )
         return result.stdout.splitlines()
-    except subprocess.CalledProcessError as e:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
         logger.message("err", f"[{IFACE}] setuserscan failed: {e}", _EXTRA_())
         return []
 
@@ -359,10 +371,11 @@ def run_iwdevscandump(retries=3, delay=1):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                timeout=SCAN_COMMAND_TIMEOUT_S,
                 check=True
             )
             return result.stdout.splitlines()
-        except subprocess.CalledProcessError as e:
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
             logger.message("err", f"[{IFACE}] {attempt}/{retries} scan dump failed: {e}", _EXTRA_())
             if attempt < retries:
                 time.sleep(delay)
@@ -379,10 +392,11 @@ def run_getscantable(retries=3, delay=1):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                timeout=SCAN_COMMAND_TIMEOUT_S,
                 check=True
             )
             return result.stdout.splitlines()
-        except subprocess.CalledProcessError as e:
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
             logger.message("err", f"[{IFACE}] {attempt}/{retries} getscantable failed: {e}", _EXTRA_())
             if attempt < retries:
                 time.sleep(delay)

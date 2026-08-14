@@ -267,6 +267,7 @@
     "logger": {
         "_comment": [
             "WiFi logger 전역 기본값. 인터페이스별 logger 값이 없으면 사용",
+            "enabled: (bool) 시스템 로거 그룹 부팅 활성화. false면 온도 로그와 과열 보호도 함께 중단",
             "cpu_interval_sec: (number) CPU 로그 기록 주기 (초)",
             "link_interval_sec: (number) 링크 로그 기록 주기 (초)",
             "stat_log_interval_sec: (number) 통계 로그 기록 주기 (초)",
@@ -274,6 +275,7 @@
             "stat_reset_interval_sec: (number) 통계 로그 자동 초기화 주기 (초)",
             "bgscan_stale_threshold_sec: (number) bgscan 결과 stale 판정 시간 (초)"
         ],
+        "enabled": true,
         "cpu_interval_sec": 60,
         "link_interval_sec": 0.9,
         "stat_log_interval_sec": 1,
@@ -286,6 +288,7 @@
             "eth0 인터페이스 설정"
         ],
         "logger": {
+            "enabled": true,
             "link_interval_sec": 1
         }
     },
@@ -426,7 +429,7 @@
         },
         "mcs_tier": {
             "_comment": [
-                "MCS capability 제한(mcstiercfg). 부팅 시 연결 전에 한 번 적용하며 연결 이벤트마다 재적용하지 않음",
+                "MCS capability 제한(mcstiercfg). 연결 전 SET; mlan0 HE 0x0000은 첫 연결에서 검증하고 FW 기본 복귀 시 SET+reassociate 1회 후 확정",
                 "enabled: (bool) MCS tier 설정 적용 ON/OFF",
                 "ht: (string) ht prefix 뒤에 전달할 값. 빈 문자열이면 생략",
                 "vht: (string) vht prefix 뒤에 전달할 값. 빈 문자열이면 생략",
@@ -565,7 +568,7 @@
             "enabled": true,
             "ht": "7",
             "vht": "7",
-            "he": "both 7"
+            "he": ""
         },
         "on_connect": {
             "enabled": false,

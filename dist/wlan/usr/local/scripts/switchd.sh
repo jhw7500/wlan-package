@@ -41,7 +41,14 @@ log() { echo "<6>[switchd] $*" > "$LOGKMSG"; }
 gpiomon -c "$CHIP" -e both -b pull-up -p 50ms -F '%E %c %o' "$OFF" >"$fifo" &
 GMON_PID=$!
 
-trap 'kill $GMON_PID 2>/dev/null; rm -f "$fifo"; exit 0' INT TERM EXIT
+cleanup() {
+    local rc=$?
+    trap - INT TERM EXIT
+    kill "$GMON_PID" 2>/dev/null || true
+    rm -f -- "$fifo"
+    exit "$rc"
+}
+trap cleanup INT TERM EXIT
 
 pressed=0; press_t=0; fired_long=0; elapsed=0
 
@@ -109,16 +116,13 @@ while :; do
             #logger -p local0.info "[$tag:$LINENO] long-press action fired (>=${LONG_MIN}s)"
             logger -p local0.emerg "[$tag:$LINENO] long press triggered"
             fired_long=1
-            # 예: 재부팅/특정 스크립트 실행 등
-            /usr/local/scripts/factory_reset.sh
-            /usr/local/scripts/journald_snapshot.sh
-            sleep 2
-            /usr/local/logger/print.py red "reboot"
-            sleep 1
-            /usr/local/scripts/wlan_reboot_policy.sh \
-              --source switchd \
-              --reason "manual long-press" \
-              --force
+            # Factory Reset이 검증과 reboot를 단독 소유한다. 실패 rc를 무시하고 여기서
+            # 강제 reboot하면 불완전한 WPA/network/FW 상태로 부팅될 수 있다.
+            if ! /usr/local/scripts/factory_reset.sh; then
+                logger -p local0.emerg "[$tag:$LINENO] factory reset failed; reboot inhibited"
+                /usr/local/logger/print.py red "factory reset failed; reboot inhibited"
+                exit 1
+            fi
             exit 0
         fi
     fi

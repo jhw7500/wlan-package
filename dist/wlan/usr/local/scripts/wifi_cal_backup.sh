@@ -5,7 +5,7 @@
 #   wifi_cal_backup.sh protect       JSON이 선택한 사용자 calibration을 백업/복구
 #   wifi_cal_backup.sh mark <file>   `wifi ... cal <file>`로 반입한 파일을 사용자 파일로 표시·백업
 #   wifi_cal_backup.sh check <file>  반입 임시파일을 변경 없이 검증
-#   wifi_cal_backup.sh reset         공장 초기화 시 사용자 calibration 백업 표식 제거
+#   wifi_cal_backup.sh reset         선택된 생산 calibration은 복구·보존하고 미선택 표식 제거
 set -u
 
 tag=$(basename "$0")
@@ -15,6 +15,7 @@ CTS_ROOT="${WIFI_CTS_ROOT:-${FIRMWARE_ROOT}/cts}"
 BASELINE_ROOT="${WIFI_CAL_BASELINE_ROOT:-/opt/wlan/config/wlan}"
 LOCK_FILE="${WIFI_CAL_BACKUP_LOCK:-/run/wifi/wifi_cal.backup.lock}"
 LOGGER_BIN="${WIFI_CAL_LOGGER:-logger}"
+SYNC_BIN="${WIFI_CAL_SYNC_CMD:-sync}"
 
 CTS_ROOT=$(readlink -m -- "$CTS_ROOT")
 
@@ -65,25 +66,31 @@ atomic_copy() {
         rm -f -- "$tmp"
         return 1
     fi
-    sync "$tmp" 2>/dev/null || sync
+    if ! "$SYNC_BIN" "$tmp" 2>/dev/null && ! "$SYNC_BIN"; then
+        rm -f -- "$tmp"
+        return 1
+    fi
     if ! mv -f -- "$tmp" "$dst"; then
         rm -f -- "$tmp"
         return 1
     fi
-    sync "$dst" 2>/dev/null || sync
-    sync "$dst_dir" 2>/dev/null || true
+    "$SYNC_BIN" "$dst" 2>/dev/null || "$SYNC_BIN" || return 1
+    "$SYNC_BIN" "$dst_dir" 2>/dev/null || "$SYNC_BIN" || return 1
 }
 
 write_marker() {
     local path="$1" marker="${path}.user-cal" tmp
     tmp=$(mktemp "${marker}.tmp.XXXXXX") || return 1
     printf 'managed-by=wifi_cal_backup.sh\n' > "$tmp"
-    sync "$tmp" 2>/dev/null || sync
+    if ! "$SYNC_BIN" "$tmp" 2>/dev/null && ! "$SYNC_BIN"; then
+        rm -f -- "$tmp"
+        return 1
+    fi
     if ! mv -f -- "$tmp" "$marker"; then
         rm -f -- "$tmp"
         return 1
     fi
-    sync "$marker" 2>/dev/null || sync
+    "$SYNC_BIN" "$marker" 2>/dev/null || "$SYNC_BIN"
 }
 
 resolve_cal_path() {
@@ -218,16 +225,89 @@ protect_selected() {
 }
 
 reset_markers() {
-    local marker path failed=0
+    local marker path selected_path baseline backup failed=0
+    local -A selected=()
+    local -A handled=()
+
     [ -d "$CTS_ROOT" ] || return 0
+
+    # Factory Reset이 보존하는 JSON의 CAL 선택과 일치시킨다. 선택된 production CAL은
+    # marker+backup까지 유지하며, active가 깨졌다면 backup에서 먼저 복구한다.
+    if ! jq -e 'type == "object"' "$JSON" >/dev/null 2>&1; then
+        log_msg local0.emerg "$LINENO" "cannot read selected calibration paths during reset: $JSON"
+        return 1
+    fi
+    while IFS= read -r value; do
+        selected_path=$(resolve_cal_path "$value") || continue
+        selected["$selected_path"]=1
+    done < <(jq -r '
+        .global.CAL_DATA_CFG // "",
+        .mlan0.CAL_DATA_CFG // "",
+        .mlan1.CAL_DATA_CFG // ""
+    ' "$JSON")
+
     while IFS= read -r -d '' marker; do
         path="${marker%.user-cal}"
-        if ! rm -f -- "$marker" "${path}.bak"; then
+        if [ -n "${selected[$path]:-}" ]; then
+            if ! protect_one "$path" protect; then
+                log_msg local0.emerg "$LINENO" "selected calibration could not be protected during reset: $path"
+                failed=1
+            fi
+            handled["$path"]=1
+            continue
+        fi
+        if ! rm -f -- "$marker" "${path}.bak" "$path"; then
             log_msg local0.err "$LINENO" "failed to remove calibration backup artifacts: $path"
             failed=1
         fi
     done < <(find "$CTS_ROOT" -type f -name '*.user-cal' -print0)
-    sync "$CTS_ROOT" 2>/dev/null || sync
+
+    # marker 없는 legacy/MFG custom CAL도 선택된 순간 production state다. package
+    # baseline 두 경로는 아래 전용 분기가 처리하고, 나머지는 여기서 검증·backup·mark한다.
+    for path in "${!selected[@]}"; do
+        [ -n "${handled[$path]:-}" ] && continue
+        case "${path#"$CTS_ROOT"/}" in
+            WlanCalData_ext.conf|WlanCalData_ext_RD.conf) continue ;;
+        esac
+        if ! protect_one "$path" protect; then
+            log_msg local0.emerg "$LINENO" "selected unmarked calibration invalid during reset: $path"
+            failed=1
+        else
+            handled["$path"]=1
+        fi
+    done
+
+    # package-owned CAL은 marker가 없으면 공장 baseline이 단일 진실원이다. 예전
+    # unmarked .bak을 남기면 다음 active 손상 때 그 값이 production CAL로 부활한다.
+    for path in "$CTS_ROOT/WlanCalData_ext.conf" "$CTS_ROOT/WlanCalData_ext_RD.conf"; do
+        if [ -n "${selected[$path]:-}" ] && [ -f "${path}.user-cal" ]; then
+            continue
+        fi
+        baseline="${BASELINE_ROOT}/$(basename -- "$path")"
+        backup="${path}.bak"
+        if [ ! -e "$path" ] && [ ! -e "$baseline" ]; then
+            continue
+        fi
+        if ! is_valid_cal "$baseline"; then
+            log_msg local0.emerg "$LINENO" "selected package calibration baseline invalid: $baseline"
+            failed=1
+            continue
+        fi
+        if ! atomic_copy "$baseline" "$path" || ! atomic_copy "$baseline" "$backup"; then
+            log_msg local0.emerg "$LINENO" "failed to seed package calibration and backup: $path"
+            failed=1
+            continue
+        fi
+        if ! is_valid_cal "$path" || ! is_valid_cal "$backup" \
+           || ! cmp -s -- "$baseline" "$path" || ! cmp -s -- "$baseline" "$backup"; then
+            log_msg local0.emerg "$LINENO" "package calibration postcondition failed: $path"
+            failed=1
+        fi
+    done
+    if ! "$SYNC_BIN" "$CTS_ROOT" 2>/dev/null && ! "$SYNC_BIN"; then
+        failed=1
+        log_msg local0.emerg "$LINENO" "calibration reset directory sync failed: $CTS_ROOT"
+    fi
     [ "$failed" -eq 0 ]
 }
 

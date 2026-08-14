@@ -3,6 +3,40 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.5.3 (2026-08-14)
+
+> SemVer **patch** — 시스템/인터페이스 로거 제어를 대칭화하고, 시스템 로거 자식을 개별 감독하며 외부 명령 hang을 제한한다. 로그 포맷·무선 설정·와이어 프로토콜 변경 없음.
+
+### 로거 그룹 제어·장애 격리
+
+- `wifi log system ...`과 `wifi {mlan0|mlan1|eth0} log ...`에 `start|stop|restart|status|enable|disable` 6개 동작을 제공한다. 런타임 동작과 부팅 정책을 분리했으며 인터페이스 일괄 명령은 두지 않는다. 기존 `logctl.sh`는 system 명령 호환 래퍼로 유지한다.
+- 시스템 로거를 CPU/MMC/TEMP/MCP/SUMMARY 5개 systemd 자식으로 분리하고 `wifi_logger.service`를 중앙 controller로 전환했다. 각 자식 장애는 독립적으로 관측·복구되며, 인터페이스 link/scan/stat/snapshot을 포함한 재시작은 300초당 10회·3초 간격으로 제한한다.
+- `.logger.enabled=true`, `.eth0.logger.enabled=true`를 명시하고 mlan0=true/mlan1=false 기존 정책과 함께 `wifi_apply_enabled.sh`에서 단일 동기화한다. 시스템 `stop|disable`은 TEMP와 과열 보호를 함께 중단하므로 CLI가 명시적으로 경고한다.
+
+### Hang 제한·온도 안전성
+
+- stat/snapshot/CPU/MMC/MCP 외부 명령과 sysfs 읽기를 5초로 제한하고, WLAN 온도 조회는 인터페이스당 3초로 제한했다. `bc`와 `sysstat`을 명시적 런타임 의존성으로 승격했다.
+- 온도 timeout·비정상 응답을 `0°C`로 변환하지 않고 유효성 상태와 `unknown`으로 기록한다. 임계값 비교는 유효 샘플에만 수행하며, cooldown 복구는 CPU와 존재하는 WLAN 센서가 모두 유효하고 복구 임계 미만일 때만 기존 snapshot→reboot 경로를 실행한다.
+- 로컬 단위·release gate 검증까지 수행하며, 실제 타겟 설치·재부팅 검증은 별도 배포 단계로 유보한다.
+
+## 0.5.2 (2026-08-13)
+
+> SemVer **patch** — Factory Reset 복구 트랜잭션·CAL/backup 정책·재부팅 게이트를 양산 수준으로 강화하고, 공장 유선 관리 주소와 i.MX93 SDIO/WLAN-only 펌웨어를 타겟 검증값으로 고정한다. 설정 키·와이어 포맷 변경 없음.
+
+### Factory Reset 복구 강화
+
+- **유선 관리 경로 유지** — Factory Reset 기본 `eth0` 주소를 `192.168.214.5/24`로 통일해 reset/reboot 뒤에도 동일 유선 경로로 재접속한다. 일반 업그레이드는 active 주소를 보존하며 reset 시 공장값이 적용된다.
+- **필수 WLAN payload 원자 복원·후조건 검증** — FW 설정, WPA service/conf, 3개 `.network`를 staged install·sync·atomic rename·내용/owner/mode 후조건으로 복구한다. WPA/network/mod_para/txpower `.bak`도 공장값으로 재시드해 이전 자격증명·IP·FW 설정 부활을 막는다. 중간 실패는 전체 rollback하고 reboot을 금지한다.
+- **생산 CAL 보존 정합화** — 선택된 custom CAL은 포맷 검증 후 active/backup/marker를 보존·복구하고, package CAL 및 선택되지 않은 잔재는 baseline으로 재시드하거나 제거한다. CAL helper/sync/후조건 실패는 reset 실패로 처리한다.
+- **재부팅·서비스 계약** — 장시간 버튼 경로가 reset 실패 rc를 보존하며 `factory_reset.sh`만 reboot을 소유한다. 표준 이미지 선행조건인 `nginx.service`와 핵심 WLAN 유닛을 preflight·enable·후조건에서 검증한다.
+- WPA active/backup을 `root:root 0600`, 나머지 관리 payload를 `root:root 0644`로 정규화하고, MOD_PARA 최종 self-healing source를 canonical `/opt/wlan/config/wlan/wifi_mod_para.conf`로 수정했다.
+
+### SDIO WLAN firmware·출하 게이트
+
+- i.MX93 **SDIO/WLAN-only** `sd9098_wlan_v1.bin`을 NXP `lf-6.18.20_2.0.0/FwImage_9098_SD`의 17.92.1.p149.115로 갱신했다(SHA256 `7c3ef6e12d3cfc9bd638d1571ccf6ddd2e96e0ed179ec70664ccb1df0ba29e57`). PCIe, combo/BT, MFG firmware는 이번 변경 범위가 아니며 p149.115로 주장하지 않는다.
+- NXP branch-matched `LICENSE.txt`, `SCR-imx-firmware.txt`, immutable source/commit/blob/hash manifest를 패키지에 포함하고 빌드·패키지 게이트에서 검증한다. 펌웨어는 NXP 기반 Authorized System의 일부로만 배포해야 한다.
+- release gate가 FW SHA256/size, factory eth0 주소, 네트워크 템플릿 0644, firmware notice/provenance를 검증한다.
+
 ## 0.5.1 (2026-08-10)
 
 > SemVer **patch** — DBDC 선행 정비(다중 iface 격리) + factory reset 위생 + 실기 튜닝 기본값 승격 + link.json 마감 스케줄링. 설정 키 추가/제거 없음(값·템플릿 변경만), 와이어 포맷 변경 없음.
@@ -22,6 +56,11 @@ wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약�
 - **실기 튜닝값 승격**: rate_adapt 70/90, DIFF_TH 7, ping_pong detection_time 10, mcs_tier 기본 적용(ht/vht "7", he "both 7"), mlan1 로밍 키를 mlan0과 정렬. 코드 상수·wifi.sh fallback·스키마·handoff 4축 동기화(#161).
 - **config.json overlay 템플릿 신설** + factory_reset 배포 + nginx 명시 enable(과거 리셋으로 disabled된 기기 복구)(#161).
 - **link.json 생산 0.95→0.9s + 마감(deadline) 스케줄링** — 고정 sleep의 실주기 초과(작업시간+interval)를 수정해 roam tick(1s) 대비 신선도를 실제로 보장. `Device.Country` KR(#162).
+
+### MCS association 전 검증 안정화
+
+- AP가 없는 factory reset 부팅에서 88W9098 mlan0의 HE GET이 `0x0000`으로만 보여 `wifi_init` 재시작·비상 reboot가 반복되던 문제 수정. HT/VHT가 일치하고 HE Tx/Rx만 0x0000인 경우에 한해 association을 허용하고 per-iface pending을 남긴다.
+- `wifi_event@mlan0`이 INITIAL CONNECTED/CONNECTED/ROAMED에서 검증한다. 첫 association이 HE를 FW 기본값으로 되돌리면 connected SET으로 다음 association 값을 저장하고 1회만 reassociate한 뒤 GET으로 확정한다. 성공 시 pending/마커 제거, 실패 시 반복 재연결·reboot 없이 링크와 관측 상태를 보존한다. 실제 로드된 SDIO p149.115 cold boot와 동일 SSID BSSID roam에서 HE/VHT `0xFFF0` 유지 실증. 비영 HE 오설정과 HT/VHT 불일치는 기존 fail-closed 정책을 유지하며, AC 전용 mlan1은 deferred HE 서비스 대상에서 제외한다.
 
 ## 0.5.0 (2026-08-07)
 

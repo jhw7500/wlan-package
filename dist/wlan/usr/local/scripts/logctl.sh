@@ -1,53 +1,17 @@
 #!/bin/bash
 
-case "$1" in
-  start)
-        systemctl start wifi_checker@mlan0
-        systemctl start wifi_checker@mlan0
-        systemctl start wifi_logger@mlan0
-        systemctl start wifi_logger@mlan1
-        systemctl start wifi_logger
+WIFI_SH="${WIFI_SH:-/usr/local/scripts/wifi.sh}"
+
+case "${1:-}" in
+    start|stop|restart|status|enable|disable)
+        exec "$WIFI_SH" log system "$1"
         ;;
-  stop)
-	systemctl stop wifi_checker@mlan0
-	systemctl stop wifi_checker@mlan0
-	systemctl stop wifi_logger@mlan0
-	systemctl stop wifi_logger@mlan1
-	systemctl stop wifi_logger
-    ;;
-  disable)
-	systemctl disable wifi_checker@mlan0
-	systemctl disable wifi_checker@mlan1
-	systemctl disable wifi_logger@mlan0
-	systemctl disable wifi_logger@mlan1
-	systemctl disable wifi_logger
-	#systemctl stop wifi_logger_summary
-	#systemctl stop wifi_capture
-    ;;
-  enable)
-        systemctl enable wifi_checker@mlan0
-        systemctl enable wifi_checker@mlan1
-        systemctl enable wifi_logger@mlan0
-        systemctl enable wifi_logger@mlan1
-        systemctl enable wifi_logger
-    ;;
-  clean)
-    rm /var/log/cantops/* -r
-    systemctl restart wifi_logger
-    systemctl restart wifi_logger@mlan0
-    systemctl restart rsyslog
-    #cat /dev/null > /var/log/cantops/kerl.log
-    #cat /dev/null > /var/log/cantops/sys.log
-    #cat /dev/null > /var/log/cantops/local0.log
-    #cat /dev/null > /var/log/cantops/summary/stat.log
-    #cat /dev/null > /var/log/cantops/scan/mlan0/ap.log
-    #cat /dev/null > /var/log/cantops/scan/mlan0/freq.log
-    #cat /dev/null > /var/log/cantops/stat/
-    ;;
-  *)
-	echo "Usage: $0 {start|start|enable|disable}"
-	exit 1
-    ;;
+    clean)
+        exec "$WIFI_SH" log reset
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status|enable|disable|clean}" >&2
+        echo "For interface logging use: wifi <mlan0|mlan1|eth0> log <action>" >&2
+        exit 2
+        ;;
 esac
-
-

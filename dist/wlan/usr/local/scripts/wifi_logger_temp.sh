@@ -1,21 +1,31 @@
 #!/bin/bash
+
 tag=$(basename "$0")
 
+LOGGER_COMMAND_LIB="${WIFI_LOGGER_COMMAND_LIB:-/usr/local/scripts/wifi_logger_command_lib.sh}"
+if [ ! -r "$LOGGER_COMMAND_LIB" ]; then
+    LOGGER_COMMAND_LIB="$(dirname "$0")/wifi_logger_command_lib.sh"
+fi
+# shellcheck source=wifi_logger_command_lib.sh
+. "$LOGGER_COMMAND_LIB"
+
 cleanup() {
-    #logger -p local3.info "[$tag:$LINENO] stop"
     exit 0
 }
 trap cleanup INT TERM
 
-CPU_TMP_VAL=0
-CPU_TEMP=0
-MLAN0_TEMP=0
-MLAN1_TEMP=0
+CPU_TEMP=unknown
+CPU_TEMP_VALID=0
+MLAN0_TEMP=unknown
+MLAN0_TEMP_VALID=0
+MLAN0_PRESENT=0
+MLAN1_TEMP=unknown
+MLAN1_TEMP_VALID=0
+MLAN1_PRESENT=0
 LOG_LEVEL=info
 max_cpu_temp=0
 emerg_cnt=0
 
-# Defaults
 EMERG_CPU_TEMP=93
 CRIT_CPU_TEMP=90
 ERR_CPU_TEMP=85
@@ -27,9 +37,10 @@ WARN_MLAN_TEMP=70
 COOLDOWN_SEC=60
 EMERG_COUNT_THRESHOLD=2
 CHECK_INTERVAL_SEC=5
+CONFIG_RECOVER_CPU_TEMP=""
+CONFIG_RECOVER_MLAN_TEMP=""
 
-# Load from JSON config
-WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
+WIFI_INIT_CONF_JSON="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
 if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
     EMERG_CPU_TEMP=$(jq -r '.temperature.emerg_cpu // 93' "$WIFI_INIT_CONF_JSON")
     CRIT_CPU_TEMP=$(jq -r '.temperature.crit_cpu // 90' "$WIFI_INIT_CONF_JSON")
@@ -42,38 +53,106 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
     COOLDOWN_SEC=$(jq -r '.temperature.cooldown_sec // 60' "$WIFI_INIT_CONF_JSON")
     EMERG_COUNT_THRESHOLD=$(jq -r '.temperature.emerg_count_threshold // 2' "$WIFI_INIT_CONF_JSON")
     CHECK_INTERVAL_SEC=$(jq -r '.temperature.check_interval_sec // 5' "$WIFI_INIT_CONF_JSON")
+    CONFIG_RECOVER_CPU_TEMP=$(jq -r '.temperature.recover_cpu // empty' "$WIFI_INIT_CONF_JSON")
+    CONFIG_RECOVER_MLAN_TEMP=$(jq -r '.temperature.recover_mlan // empty' "$WIFI_INIT_CONF_JSON")
 fi
 
-to_int() {
-    local v
-    v=${1:-}
-    if [[ "$v" =~ ^-?[0-9]+$ ]]; then
-        echo "$v"
-    else
-        echo 0
-    fi
-}
-
-RECOVER_CPU_TEMP=${RECOVER_CPU_TEMP:-$(jq -r '.temperature.recover_cpu // empty' "$WIFI_INIT_CONF_JSON" 2>/dev/null || echo "$CRIT_CPU_TEMP")}
-RECOVER_MLAN_TEMP=${RECOVER_MLAN_TEMP:-$(jq -r '.temperature.recover_mlan // empty' "$WIFI_INIT_CONF_JSON" 2>/dev/null || echo "$CRIT_MLAN_TEMP")}
+RECOVER_CPU_TEMP="${RECOVER_CPU_TEMP:-${CONFIG_RECOVER_CPU_TEMP:-$CRIT_CPU_TEMP}}"
+RECOVER_MLAN_TEMP="${RECOVER_MLAN_TEMP:-${CONFIG_RECOVER_MLAN_TEMP:-$CRIT_MLAN_TEMP}}"
+CPU_TEMP_PATH="${WIFI_CPU_TEMP_PATH:-/sys/devices/virtual/thermal/thermal_zone0/temp}"
+MAX_TEMP_PATH="${WIFI_MAX_TEMP_PATH:-/var/log/cantops/max_temp}"
+NET_CLASS_ROOT="${WIFI_NET_CLASS_ROOT:-/sys/class/net}"
+COMMAND_TIMEOUT_SEC="${WIFI_LOGGER_COMMAND_TIMEOUT_SEC:-5}"
+TEMP_TIMEOUT_SEC="${WIFI_LOGGER_TEMP_TIMEOUT_SEC:-3}"
+INITIAL_DELAY_SEC="${WIFI_LOGGER_INITIAL_DELAY_SEC:-$CHECK_INTERVAL_SEC}"
+COOLDOWN_RETRY_SEC="${WIFI_LOGGER_COOLDOWN_RETRY_SEC:-5}"
+REBOOT_DELAY_SEC="${WIFI_LOGGER_REBOOT_DELAY_SEC:-3}"
+ONESHOT="${WIFI_LOGGER_ONESHOT:-0}"
+JOURNALD_SNAPSHOT_SH="${WIFI_JOURNALD_SNAPSHOT_SH:-/usr/local/scripts/journald_snapshot.sh}"
+REBOOT_POLICY_SH="${WIFI_REBOOT_POLICY_SH:-/usr/local/scripts/wlan_reboot_policy.sh}"
 
 WIFI_STOP_UNITS=${WIFI_STOP_UNITS:-"wifi_bridge@mlan0 wifi_bridge@mlan1 wifi_checker@mlan0 wifi_checker@mlan1 wifi_arping@mlan0 wifi_arping@mlan1 wifi_bgscan@mlan0 wifi_bgscan@mlan1 wifi_roam@mlan0 wifi_roam@mlan1 wifi_capture@mlan0 wifi_capture@mlan1 wpa_supplicant@mlan0 wpa_supplicant@mlan1 wifi_logger@mlan0 wifi_logger@mlan1 wifi_logger@eth0"}
 
 stop_wifi_and_bridge() {
-    if ! command -v systemctl >/dev/null 2>&1; then
-        return 0
-    fi
-
+    command -v systemctl >/dev/null 2>&1 || return 0
     for unit in $WIFI_STOP_UNITS; do
         systemctl stop "$unit" 2>/dev/null || true
     done
 }
 
+read_cpu_temp() {
+    local raw
+    raw=$(logger_read_bounded "$COMMAND_TIMEOUT_SEC" "$CPU_TEMP_PATH" 2>/dev/null) \
+        || return 1
+    [[ "$raw" =~ ^-?[0-9]+$ ]] || return 1
+    printf '%s\n' "$((raw / 1000))"
+}
+
+read_wlan_temp() {
+    local iface=$1 output value
+    output=$(logger_run_bounded "$TEMP_TIMEOUT_SEC" \
+        mlanutl "$iface" get_sensor_temp 2>/dev/null) || return 1
+    value=$(printf '%s\n' "$output" | awk '
+        $4 ~ /^-?[0-9]+([.][0-9]+)?$/ {
+            printf "%d\n", $4
+            found=1
+            exit
+        }
+        END { if (!found) exit 1 }
+    ') || return 1
+    printf '%s\n' "$value"
+}
+
 read_temps() {
-    CPU_TMP_VAL=$(to_int "$(cat /sys/devices/virtual/thermal/thermal_zone0/temp 2>/dev/null || echo 0)")
-    CPU_TEMP=$((CPU_TMP_VAL / 1000))
-    MLAN0_TEMP=$(to_int "$(mlanutl mlan0 get_sensor_temp 2>/dev/null | awk '{print int($4)}' || true)")
-    MLAN1_TEMP=$(to_int "$(mlanutl mlan1 get_sensor_temp 2>/dev/null | awk '{print int($4)}' || true)")
+    local value
+
+    CPU_TEMP=unknown
+    CPU_TEMP_VALID=0
+    if value=$(read_cpu_temp); then
+        CPU_TEMP=$value
+        CPU_TEMP_VALID=1
+    fi
+
+    MLAN0_TEMP=unknown
+    MLAN0_TEMP_VALID=0
+    MLAN0_PRESENT=0
+    if [ -d "$NET_CLASS_ROOT/mlan0" ]; then
+        MLAN0_PRESENT=1
+        if value=$(read_wlan_temp mlan0); then
+            MLAN0_TEMP=$value
+            MLAN0_TEMP_VALID=1
+        fi
+    fi
+
+    MLAN1_TEMP=unknown
+    MLAN1_TEMP_VALID=0
+    MLAN1_PRESENT=0
+    if [ -d "$NET_CLASS_ROOT/mlan1" ]; then
+        MLAN1_PRESENT=1
+        if value=$(read_wlan_temp mlan1); then
+            MLAN1_TEMP=$value
+            MLAN1_TEMP_VALID=1
+        fi
+    fi
+}
+
+sample_ge() {
+    local valid=$1 value=$2 threshold=$3
+    [ "$valid" -eq 1 ] && (( value >= threshold ))
+}
+
+temperatures_recovered() {
+    [ "$CPU_TEMP_VALID" -eq 1 ] && (( CPU_TEMP < RECOVER_CPU_TEMP )) \
+        || return 1
+    if [ "$MLAN0_PRESENT" -eq 1 ]; then
+        [ "$MLAN0_TEMP_VALID" -eq 1 ] && (( MLAN0_TEMP < RECOVER_MLAN_TEMP )) \
+            || return 1
+    fi
+    if [ "$MLAN1_PRESENT" -eq 1 ]; then
+        [ "$MLAN1_TEMP_VALID" -eq 1 ] && (( MLAN1_TEMP < RECOVER_MLAN_TEMP )) \
+            || return 1
+    fi
+    return 0
 }
 
 cooldown_until_recover() {
@@ -83,56 +162,72 @@ cooldown_until_recover() {
 
     while true; do
         read_temps
-        if (( CPU_TEMP < RECOVER_CPU_TEMP && MLAN0_TEMP < RECOVER_MLAN_TEMP && MLAN1_TEMP < RECOVER_MLAN_TEMP )); then
+        if temperatures_recovered; then
             logger -p local0.emerg "[$tag:$LINENO] overtemp recovered: cpu=${CPU_TEMP} (<${RECOVER_CPU_TEMP}), mlan0=${MLAN0_TEMP}, mlan1=${MLAN1_TEMP}; rebooting"
-            /usr/local/scripts/journald_snapshot.sh
-            sleep 3
-            /usr/local/scripts/wlan_reboot_policy.sh \
-              --source wifi_logger_temp \
-              --reason "overtemp recovered -> reboot cpu=${CPU_TEMP} mlan0=${MLAN0_TEMP} mlan1=${MLAN1_TEMP}" \
-              --force
+            "$JOURNALD_SNAPSHOT_SH"
+            sleep "$REBOOT_DELAY_SEC"
+            "$REBOOT_POLICY_SH" \
+                --source wifi_logger_temp \
+                --reason "overtemp recovered -> reboot cpu=${CPU_TEMP} mlan0=${MLAN0_TEMP} mlan1=${MLAN1_TEMP}" \
+                --force
             return 0
         fi
 
         logger -p local0.warning "[$tag:$LINENO] overtemp cooldown: cpu=${CPU_TEMP} (target<${RECOVER_CPU_TEMP}), mlan0=${MLAN0_TEMP}, mlan1=${MLAN1_TEMP}"
-        sleep 5
+        sleep "$COOLDOWN_RETRY_SEC"
     done
+}
+
+update_max_cpu_temp() {
+    local recorded=0
+    [ "$CPU_TEMP_VALID" -eq 1 ] || return 0
+    if current=$(logger_read_bounded "$COMMAND_TIMEOUT_SEC" "$MAX_TEMP_PATH" 2>/dev/null) \
+        && [[ "$current" =~ ^-?[0-9]+$ ]]; then
+        recorded=$current
+    fi
+    if (( CPU_TEMP > recorded )); then
+        printf '%s\n' "$CPU_TEMP" > "$MAX_TEMP_PATH"
+    fi
 }
 
 logger -p local3.info "[$tag:$LINENO] cpu_temp warn : $WARN_CPU_TEMP, err : $ERR_CPU_TEMP, crit : $CRIT_CPU_TEMP, emerg : $EMERG_CPU_TEMP"
 
-sleep "$CHECK_INTERVAL_SEC"
+mkdir -p "$(dirname "$MAX_TEMP_PATH")" 2>/dev/null || true
+sleep "$INITIAL_DELAY_SEC"
 
 while true; do
     read_temps
-    mkdir -p /var/log/cantops 2>/dev/null || true
-    max_cpu_temp=$(to_int "$(cat /var/log/cantops/max_temp 2>/dev/null || echo 0)")
-        
-    if (( CPU_TEMP > max_cpu_temp )); then
-        echo "$CPU_TEMP" > /var/log/cantops/max_temp
-    fi
+    update_max_cpu_temp
 
-    if (( CPU_TEMP >= EMERG_CPU_TEMP )); then
+    if sample_ge "$CPU_TEMP_VALID" "$CPU_TEMP" "$EMERG_CPU_TEMP"; then
         ((emerg_cnt++))
         if (( emerg_cnt > EMERG_COUNT_THRESHOLD )); then
             logger -p local0.emerg "[$tag:$LINENO] temperature critical (cpu=${CPU_TEMP} >= ${EMERG_CPU_TEMP})"
             cooldown_until_recover
+            emerg_cnt=0
         fi
-    elif (( CPU_TEMP >= CRIT_CPU_TEMP || MLAN0_TEMP >= CRIT_MLAN_TEMP || MLAN1_TEMP >= CRIT_MLAN_TEMP )); then
+    else
+        emerg_cnt=0
+    fi
+
+    if sample_ge "$CPU_TEMP_VALID" "$CPU_TEMP" "$CRIT_CPU_TEMP" \
+        || sample_ge "$MLAN0_TEMP_VALID" "$MLAN0_TEMP" "$CRIT_MLAN_TEMP" \
+        || sample_ge "$MLAN1_TEMP_VALID" "$MLAN1_TEMP" "$CRIT_MLAN_TEMP"; then
         LOG_LEVEL=crit
-        emerg_cnt=0
-    elif (( CPU_TEMP >= ERR_CPU_TEMP  || MLAN0_TEMP >= ERR_MLAN_TEMP  || MLAN1_TEMP >= ERR_MLAN_TEMP )); then
+    elif sample_ge "$CPU_TEMP_VALID" "$CPU_TEMP" "$ERR_CPU_TEMP" \
+        || sample_ge "$MLAN0_TEMP_VALID" "$MLAN0_TEMP" "$ERR_MLAN_TEMP" \
+        || sample_ge "$MLAN1_TEMP_VALID" "$MLAN1_TEMP" "$ERR_MLAN_TEMP"; then
         LOG_LEVEL=err
-        emerg_cnt=0
-    elif (( CPU_TEMP >= WARN_CPU_TEMP  || MLAN0_TEMP >= WARN_MLAN_TEMP  || MLAN1_TEMP >= WARN_MLAN_TEMP )); then
+    elif sample_ge "$CPU_TEMP_VALID" "$CPU_TEMP" "$WARN_CPU_TEMP" \
+        || sample_ge "$MLAN0_TEMP_VALID" "$MLAN0_TEMP" "$WARN_MLAN_TEMP" \
+        || sample_ge "$MLAN1_TEMP_VALID" "$MLAN1_TEMP" "$WARN_MLAN_TEMP"; then
         LOG_LEVEL=warn
-        emerg_cnt=0
     else
         LOG_LEVEL=debug
-        emerg_cnt=0
     fi
 
     logger -p local3.$LOG_LEVEL "[$tag:$LINENO] temp cpu : $CPU_TEMP, mlan0 : $MLAN0_TEMP, mlan1 : $MLAN1_TEMP"
 
+    [ "$ONESHOT" = "1" ] && break
     sleep "$CHECK_INTERVAL_SEC"
 done

@@ -4,13 +4,14 @@ set -euo pipefail
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 # shellcheck source=./wifi_init_config_lib.sh
 . "$SCRIPT_DIR/wifi_init_config_lib.sh"
+# shellcheck source=./wifi_fw_config_lib.sh
+. "$SCRIPT_DIR/wifi_fw_config_lib.sh"
 # shellcheck source=./wlan_link_lib.sh
 . "$SCRIPT_DIR/wlan_link_lib.sh"
 # shellcheck source=./mac_link_lib.sh
 . "$SCRIPT_DIR/mac_link_lib.sh"
 
 tag=$(basename "$0")
-JSON_FILE="${JSON_FILE:-/usr/local/etc/config.json}"
 MOD_PARA="cts/wifi_mod_para.conf"
 TXPWRLIMIT_PATH="/lib/firmware/cts/txpwrlimit_cfg_9098.conf"
 # thermal_mgmt FW hostcmd 정의 파일 (per-interface enable/disable_thermal_mgmt 블록, SUBID 0x113)
@@ -345,7 +346,7 @@ else
     _MOD_PARA_PATTERN="PCIE9098_0"
 fi
 
-/usr/local/scripts/backup_file.sh /lib/firmware/$MOD_PARA "$_MOD_PARA_PATTERN" "$_DEFAULT_DIR/wifi_mod_para__.conf" \
+/usr/local/scripts/backup_file.sh /lib/firmware/$MOD_PARA "$_MOD_PARA_PATTERN" "$_DEFAULT_DIR/wlan/wifi_mod_para.conf" \
     || logger -p local0.err "[$tag:$LINENO] backup failed: $MOD_PARA"
 # TXPWRLIMIT는 변형이 5개+이고 사용자 정책에 따라 바뀌므로 default 매핑 없이 .bak에만 의존.
 # 인터페이스별 경로(.mlanN.TXPWRLIMIT_PATH // 전역)를 각각 백업하되 동일 경로는 한 번만.
@@ -794,34 +795,6 @@ apply_iface_thermal_mgmt() {
         logger -p local0.err "[$tag:$LINENO] [$iface] thermal_mgmt $block failed"
 }
 
-apply_mcs_tier() {
-    local iface="$1"
-    local enabled ht vht he args=""
-
-    [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1 || return 0
-
-    enabled=$(jq -r ".${iface}.mcs_tier.enabled // false" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-    [ "$enabled" = "true" ] || return 0
-
-    ht=$(jq -r ".${iface}.mcs_tier.ht // \"\"" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-    vht=$(jq -r ".${iface}.mcs_tier.vht // \"\"" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-    he=$(jq -r ".${iface}.mcs_tier.he // \"\"" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-
-    # Empty string skips; non-empty passes through verbatim (e.g. "both 7" → "he both 7").
-    [ -n "$ht" ] && args="$args ht $ht"
-    [ -n "$vht" ] && args="$args vht $vht"
-    [ -n "$he" ] && args="$args he $he"
-
-    if [ -z "$args" ]; then
-        logger -p local0.warn "[$tag:$LINENO] [$iface] mcs_tier: enabled but no tier specified"
-        return 0
-    fi
-
-    logger -p local0.info "[$tag:$LINENO] [$iface] mcstiercfg$args"
-    mlanutl "$iface" mcstiercfg $args > /dev/null 2>&1 || \
-        logger -p local0.err "[$tag:$LINENO] [$iface] mcstiercfg failed"
-}
-
 # .{iface}.radio.{mode,bw} 부팅 재적용 (wifi.sh의 mode/bw/radio-apply와 동기 유지).
 # bandcfg/htcapinfo/vhtcfg는 드라이버 RAM 전용이라 insmod마다 FW 기본값으로
 # 복원되므로 여기서 다시 적용한다. 부팅 경로이므로 실패해도 항상 0을 반환
@@ -948,23 +921,13 @@ apply_iface_radio_defaults() {
     # 함수는 부팅 보호를 위해 항상 0을 반환하고 실패는 내부에서 logger로 남긴다.
     apply_radio_mode_bw "$iface"
 
-    # Apply rate_adapt_cfg (per-iface override > global, must be set before association)
-    local ra_mode ra_low ra_high ra_interval ra_interval_ms
-    ra_mode=$(jq -r ".${iface}.rate_adapt.mode // .global.rate_adapt.mode // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-    if [ -n "$ra_mode" ]; then
-        ra_low=$(jq -r ".${iface}.rate_adapt.low_thresh // .global.rate_adapt.low_thresh // 255" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-        ra_high=$(jq -r ".${iface}.rate_adapt.high_thresh // .global.rate_adapt.high_thresh // 255" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-        ra_interval_ms=$(jq -r ".${iface}.rate_adapt.interval_ms // .global.rate_adapt.interval_ms // 100" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
-        ra_interval=$((ra_interval_ms / 10))
-        sleep 0.2
-        logger -p local0.info "[$tag:$LINENO] [$iface] rate_adapt_cfg $ra_mode $ra_low $ra_high $ra_interval (${ra_interval_ms}ms)"
-        mlanutl "$iface" rate_adapt_cfg "$ra_mode" "$ra_low" "$ra_high" "$ra_interval" > /dev/null 2>&1 || \
-            logger -p local0.err "[$tag:$LINENO] [$iface] rate_adapt_cfg failed"
-    fi
+    # rate는 association 전에만 설정 가능하며 partial/default 혼합을 금지한다.
+    wifi_fw_apply_rate "$WIFI_INIT_CONF_JSON" "$iface"
 
-    # Apply MCS tier capability limit from per-interface config
-    apply_mcs_tier "$iface" || \
-        logger -p local0.err "[$tag:$LINENO] [$iface] apply_mcs_tier failed (continuing)"
+    # MCS는 SET 성공 코드만 믿지 않고 GET(mcstiercfg + mlan0 11axcfg)을 확인한다.
+    # HT/VHT까지 불일치하면 supplicant 시작을 막는다. association 전 HE만 0x0000으로
+    # 보이면 pending으로 defer하고 wifi_event가 연결 후 검증/1회 제한 복구한다.
+    wifi_fw_apply_mcs_verified "$WIFI_INIT_CONF_JSON" "$iface"
 }
 
 # BRIDGE: MAC_MODE에 따라 resolve
@@ -1408,8 +1371,15 @@ if command -v systemctl >/dev/null 2>&1; then
     # 모듈 로드 + networkd가 mlan 인터페이스를 생성한 직후, association 전에 라디오 기본값 적용.
     # 그 외 자식 데몬은 ExecStartPost(/usr/local/scripts/wifi_services.sh)가 systemctl enable
     # 상태에 따라 일괄 start한다.
-    apply_iface_radio_defaults "mlan0" "$MLAN0_ENABLED"
-    apply_iface_radio_defaults "mlan1" "$MLAN1_ENABLED"
+    fw_config_failed=0
+    apply_iface_radio_defaults "mlan0" "$MLAN0_ENABLED" || fw_config_failed=1
+    apply_iface_radio_defaults "mlan1" "$MLAN1_ENABLED" || fw_config_failed=1
+    if [ "$fw_config_failed" -ne 0 ]; then
+        mcs_failure_code=$(wifi_fw_mcs_cold_failure_code)
+        logger -p local0.warn "[$tag:$LINENO] MCS verification failed before association; exit=$mcs_failure_code (75=one cold lifecycle retry, 1=persistent failure)"
+        exit "$mcs_failure_code"
+    fi
+    wifi_fw_mcs_cold_success
 
     # wifi_manager 계열이 enable되어 있으면 wpa_supplicant는 wifi_manager가 자체 관리하므로
     # wifi_init이 별도로 시작하지 않는다. 그렇지 않으면 BRIDGE_IFACE의 wpa_supplicant를

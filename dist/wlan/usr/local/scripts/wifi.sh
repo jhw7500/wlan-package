@@ -9,6 +9,12 @@ if ! declare -f wifi_init_mode_to_bandcfg_mask >/dev/null 2>&1; then
     # syntax error는 그대로 노출(2>/dev/null로 삼키지 않음).
     [ -f "$SCRIPT_DIR/wifi_init_config_lib.sh" ] && . "$SCRIPT_DIR/wifi_init_config_lib.sh"
 fi
+# shellcheck source=./wifi_fw_config_lib.sh
+if [ -r /usr/local/scripts/wifi_fw_config_lib.sh ]; then
+    . /usr/local/scripts/wifi_fw_config_lib.sh
+elif [ -r "$SCRIPT_DIR/wifi_fw_config_lib.sh" ]; then
+    . "$SCRIPT_DIR/wifi_fw_config_lib.sh"
+fi
 
 tag=$(basename "$0")
 IFACE=mlan
@@ -29,10 +35,13 @@ logger -p local0.info "[$tag:$LINENO] [$IFACE] cmd : wifi $1 $2 $3 $4"
 trap 'sync 2>/dev/null || true' EXIT
 
 # ----- safe file update helpers -----
-safe_install_0644_sync() {
+safe_install_sync() {
     # $1: src(tmp), $2: dst(real)
-    local src="$1" dst="$2"
-    install -o root -g root -m 0644 "$src" "$dst"
+    local src="$1" dst="$2" mode=0644
+    case "$dst" in
+        /etc/wpa_supplicant/wpa_supplicant-*.conf) mode=0600 ;;
+    esac
+    install -o root -g root -m "$mode" "$src" "$dst"
     sync "$dst" 2>/dev/null || sync
 }
 
@@ -99,7 +108,7 @@ apply_sed_update() {
     tmp="$(safe_tmp_for "$target")"
     trap 'rm -f "$tmp"' RETURN
     sed "$@" "$target" > "$tmp"
-    safe_install_0644_sync "$tmp" "$target"
+    safe_install_sync "$tmp" "$target"
     rm -f "$tmp"
     trap - RETURN
 }
@@ -107,9 +116,9 @@ apply_sed_update() {
 # ------------------------------------
 
 WIFI_INIT_CONF_JSON="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
-JSON_FILE="${JSON_FILE:-/usr/local/etc/config.json}"
 WIFI_CAL_BACKUP_SH="${WIFI_CAL_BACKUP_SH:-/usr/local/scripts/wifi_cal_backup.sh}"
 WIFI_CTS_DIR="${WIFI_CTS_DIR:-/lib/firmware/cts}"
+WIFI_LOGGER_CONTROL_SH="${WIFI_LOGGER_CONTROL_SH:-/usr/local/scripts/wifi_logger_control.sh}"
 
 # wpa assoc 완료(wpa_state=COMPLETED) 대기 상한(초) — connect / radio-apply 공통 기본값.
 # radio-apply는 인자($3)로 케이스별 override 가능하며, 미지정 시 이 값을 따른다.
@@ -508,6 +517,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} stat interval {seconds} : set stat reset interval (persist)"
     echo "       wifi {0|1|mlan0|mlan1} mon [c|compact] [interval] [--summary-lines N] [--roam-display N]"
     echo "       wifi {0|1|mlan0|mlan1} mcs [on|off|reset|ht <7|15> vht <7|8|9> he <7|9|11>] : persist+runtime"
+    echo "       wifi {0|1|mlan0|mlan1} rate [<mode> <low> <high> <interval_ms>] : configured/live 조회 또는 다음 부팅값 persist"
     echo "       wifi {0|1|mlan0|mlan1} mode [b|g|a|n|ac|ax] : stage (radio-apply 성공 시 persist, mlan1은 ax 불가)"
     echo "       wifi {0|1|mlan0|mlan1} bw [20|40|80|auto|default] : stage (radio-apply 성공 시 persist; default=AP 따라)"
     echo "       wifi {0|1|mlan0|mlan1} radio-apply [timeout_s] : runtime (적용 성공 시 commit, 실패 시 라이브 롤백+재연결)"
@@ -521,6 +531,8 @@ usage() {
     echo "       wifi stand {n|ac|ax|4|5|6} : persist"
     echo "       wifi log dump : /var/log/cantops 전체 압축(현재 디렉터리)"
     echo "       wifi log reset : 전체 로그 초기화(전역+모든 iface truncate + rsyslog HUP)"
+    echo "       wifi log system {start|stop|restart|status|enable|disable} : 시스템 로거 그룹 제어"
+    echo "       wifi {0|1|2|mlan0|mlan1|eth0} log {start|stop|restart|status|enable|disable} : iface 로거 그룹 제어"
     echo "       wifi backup : 로그·설정 백업(/var/log/cantops/backup)"
     exit 1
 }
@@ -898,6 +910,8 @@ show_info() {
         country=$(wpa_field "$conf" "country")
         ssid=$(wpa_field "$conf" "ssid")
         psk=$(wpa_field "$conf" "psk")
+        psk_display="N/A"
+        [ -n "${psk:-}" ] && psk_display="********"
         key_mgmt=$(wpa_field "$conf" "key_mgmt")
         freq_list=$(wpa_field "$conf" "freq_list")
         scan_freq=$(wpa_field "$conf" "scan_freq")
@@ -905,10 +919,10 @@ show_info() {
             local prefix="  ${dev}: "
             local pad
             pad=$(printf '%*s' ${#prefix} "")
-            echo "${prefix}country=${country:-N/A} ssid=${ssid:-N/A} psk=${psk:-N/A} key_mgmt=${key_mgmt:-N/A}"
+            echo "${prefix}country=${country:-N/A} ssid=${ssid:-N/A} psk=${psk_display} key_mgmt=${key_mgmt:-N/A}"
         else
             local pad="  "
-            echo "  country=${country:-N/A} ssid=${ssid:-N/A} psk=${psk:-N/A} key_mgmt=${key_mgmt:-N/A}"
+            echo "  country=${country:-N/A} ssid=${ssid:-N/A} psk=${psk_display} key_mgmt=${key_mgmt:-N/A}"
         fi
         if [ -n "${freq_list:-}" ]; then
             echo "${pad}freq_list=$(freqs_with_channels "${freq_list// / }")"
@@ -1594,7 +1608,9 @@ case "$1" in
     ;;
   log)
     LOG_BASE=/var/log/cantops
-    if [ "$2" == "dump" ]; then
+    if [ "${2:-}" == "system" ]; then
+        exec "$WIFI_LOGGER_CONTROL_SH" system "${3:-}"
+    elif [ "$2" == "dump" ]; then
         if [ ! -d "$LOG_BASE" ]; then
             echo "Error: $LOG_BASE not found" >&2
             exit 1
@@ -2166,7 +2182,7 @@ case "$2" in
     { print }
     END { if (blocks == 0) { print "error: no network={ block in config" > "/dev/stderr"; exit 1 } }
     ' "$CONF" > "$TMP_FILE"
-    safe_install_0644_sync "$TMP_FILE" "$CONF"
+    safe_install_sync "$TMP_FILE" "$CONF"
     echo "scan_freq / freq_list configure $FREQ_STR in $CONF"
     ;;
   ssid)
@@ -2224,7 +2240,7 @@ case "$2" in
         { print }
         END { if (!changed) exit 1 }
     ' "$CONF" > "$TMP_FILE"; then
-        safe_install_0644_sync "$TMP_FILE" "$CONF"
+        safe_install_sync "$TMP_FILE" "$CONF"
         rm -f "$TMP_FILE"
         echo "ssid changed to \"$NEW_SSID\" in $CONF"
     else echo "no network={ block found, nothing changed in $CONF" >&2; rm -f "$TMP_FILE"; exit 1; fi
@@ -2279,7 +2295,7 @@ case "$2" in
         { print }
         END { if (!changed) exit 1 }
     ' "$CONF" > "$TMP_FILE"; then
-        safe_install_0644_sync "$TMP_FILE" "$CONF"
+        safe_install_sync "$TMP_FILE" "$CONF"
         rm -f "$TMP_FILE"
         echo "psk changed in $CONF"
     else echo "no network={ block found, nothing changed in $CONF" >&2; rm -f "$TMP_FILE"; exit 1; fi
@@ -2336,7 +2352,7 @@ case "$2" in
         { print }
         END { if (!changed) exit 1 }
     ' "$CONF" > "$TMP_FILE"; then
-        safe_install_0644_sync "$TMP_FILE" "$CONF"
+        safe_install_sync "$TMP_FILE" "$CONF"
         rm -f "$TMP_FILE"
         echo "key_mgmt changed to $NEW_KEY in $CONF"
     else echo "no network={ block found, nothing changed in $CONF" >&2; rm -f "$TMP_FILE"; exit 1; fi
@@ -2436,7 +2452,7 @@ case "$2" in
             { print }
             END { if (blocks == 0) { print "error: no network={ block in config" > "/dev/stderr"; exit 1 } }
         ' "$CONF" > "$TMP_FILE"; then
-            safe_install_0644_sync "$TMP_FILE" "$CONF"
+            safe_install_sync "$TMP_FILE" "$CONF"
             rm -f "$TMP_FILE"
         else
             rm -f "$TMP_FILE"
@@ -2548,6 +2564,60 @@ case "$2" in
     mlanutl "$IFACE" setuserscan chan="$CHAN_STR"
     echo "(results: wifi $NUM mscan get)"
     ;;
+  rate)
+    if [ -z "${3:-}" ]; then
+        echo "--- Configured rate_adapt ($WIFI_INIT_CONF_JSON) ---"
+        if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
+            jq -r ".${IFACE}.rate_adapt // \"(not configured)\"" "$WIFI_INIT_CONF_JSON"
+        else
+            echo "(JSON or jq not available)"
+        fi
+        echo ""
+        echo "--- Live rate_adapt_cfg ($IFACE) ---"
+        mlanutl "$IFACE" rate_adapt_cfg 2>/dev/null || echo "(rate_adapt_cfg not available)"
+        echo ""
+        echo "Note: FW may restore 30/50 when a roam association reaches COMPLETED."
+        echo "      Connected-state SET is unsupported; configured values apply before association on boot."
+    else
+        if [ "$#" -ne 6 ]; then
+            echo "Usage: wifi $NUM rate <mode:0|1> <low:0..100|255> <high:0..100|255> <interval_ms>" >&2
+            exit 1
+        fi
+        _rate_mode=$3
+        _rate_low=$4
+        _rate_high=$5
+        _rate_interval=$6
+        for _rate_value in "$_rate_mode" "$_rate_low" "$_rate_high" "$_rate_interval"; do
+            case "$_rate_value" in ''|*[!0-9]*) echo "Error: rate values must be non-negative integers" >&2; exit 1 ;; esac
+        done
+        _rate_tmp=$(safe_tmp_for "$WIFI_INIT_CONF_JSON") || exit 1
+        if ! jq --arg iface "$IFACE" \
+                --argjson mode "$_rate_mode" --argjson low "$_rate_low" \
+                --argjson high "$_rate_high" --argjson interval "$_rate_interval" '
+                .[$iface].rate_adapt = {
+                    mode: $mode, low_thresh: $low, high_thresh: $high, interval_ms: $interval
+                }
+            ' "$WIFI_INIT_CONF_JSON" > "$_rate_tmp"; then
+            rm -f -- "$_rate_tmp"
+            echo "Error: failed to stage rate_adapt JSON" >&2
+            exit 1
+        fi
+        if ! declare -f wifi_fw_validate_rate_config >/dev/null 2>&1 \
+           || ! wifi_fw_validate_rate_config "$_rate_tmp" "$IFACE"; then
+            rm -f -- "$_rate_tmp"
+            echo "Error: invalid rate config (mode 0|1; static 0..100 with low<high, or 255/255; interval positive 10ms multiple)" >&2
+            exit 1
+        fi
+        if ! safe_install_sync "$_rate_tmp" "$WIFI_INIT_CONF_JSON"; then
+            rm -f -- "$_rate_tmp"
+            echo "Error: failed to persist rate_adapt JSON" >&2
+            exit 1
+        fi
+        rm -f -- "$_rate_tmp"
+        echo "rate_adapt configured for $IFACE: mode=$_rate_mode low=$_rate_low high=$_rate_high interval_ms=$_rate_interval"
+        echo "Apply: next boot before association. Current connection is unchanged."
+    fi
+    ;;
   mcs)
     if [ -z "${3:-}" ]; then
         # GET: show current mcs_tier from JSON + live mcstiercfg
@@ -2560,42 +2630,31 @@ case "$2" in
         echo ""
         echo "--- Live mcstiercfg ($IFACE) ---"
         mlanutl "$IFACE" mcstiercfg 2>/dev/null || echo "(mcstiercfg not available)"
+        if [ "$IFACE" = "mlan0" ]; then
+            echo ""
+            echo "--- Live 11axcfg ($IFACE, HE capability map) ---"
+            mlanutl "$IFACE" 11axcfg 2>/dev/null || echo "(11axcfg not available)"
+        fi
     elif [ "$3" == "off" ] || [ "$3" == "0" ]; then
         # Disable mcs_tier
         jq --arg iface "$IFACE" '.[$iface].mcs_tier.enabled = false' \
             "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp" && \
             mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
         echo "mcs_tier disabled for $IFACE in $WIFI_INIT_CONF_JSON"
-        echo "(apply on next boot. To restore live: mlanutl $IFACE mcstiercfg reset)"
+        echo "(applies before association on next boot; current association is unchanged)"
     elif [ "$3" == "on" ] || [ "$3" == "1" ]; then
         # Enable mcs_tier with stored JSON values (re-apply ht/vht/he)
         jq --arg iface "$IFACE" '.[$iface].mcs_tier.enabled = true' \
             "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp" && \
             mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
         echo "mcs_tier enabled for $IFACE in $WIFI_INIT_CONF_JSON"
-        # Build live args from stored ht/vht/he
-        MCS_ARGS=""
-        MCS_HT=$(jq -r ".${IFACE}.mcs_tier.ht // empty" "$WIFI_INIT_CONF_JSON")
-        MCS_VHT=$(jq -r ".${IFACE}.mcs_tier.vht // empty" "$WIFI_INIT_CONF_JSON")
-        MCS_HE=$(jq -r ".${IFACE}.mcs_tier.he // empty" "$WIFI_INIT_CONF_JSON")
-        [ -n "$MCS_HT" ] && MCS_ARGS="$MCS_ARGS ht $MCS_HT"
-        [ -n "$MCS_VHT" ] && MCS_ARGS="$MCS_ARGS vht $MCS_VHT"
-        [ -n "$MCS_HE" ] && MCS_ARGS="$MCS_ARGS he $MCS_HE"
-        if [ -n "$MCS_ARGS" ]; then
-            mlanutl "$IFACE" mcstiercfg $MCS_ARGS > /dev/null 2>&1 && \
-                echo "Applied live:$MCS_ARGS (reconnect to take effect)" || \
-                echo "Warning: live apply failed (will apply on next boot)"
-        else
-            echo "(no ht/vht/he stored — set values with: wifi $NUM mcs ht <v> vht <v> he <v>)"
-        fi
+        echo "(applies and is GET-verified before association on next boot)"
     elif [ "$3" == "reset" ]; then
         # Reset: disable in JSON + restore live
         jq --arg iface "$IFACE" '.[$iface].mcs_tier.enabled = false' \
             "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp" && \
             mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
-        mlanutl "$IFACE" mcstiercfg reset > /dev/null 2>&1 && \
-            echo "mcs_tier reset for $IFACE (JSON disabled + live restored)" || \
-            echo "mcs_tier JSON disabled (mcstiercfg reset failed — reconnect may be needed)"
+        echo "mcs_tier disabled for $IFACE (FW defaults return on next boot)"
     else
         # SET: wifi 0 mcs ht 7 vht 7 he 7
         shift 2  # remove iface and "mcs"
@@ -2619,8 +2678,12 @@ case "$2" in
                     shift 2 ;;
                 he)
                     [ -z "${2:-}" ] && { echo "Error: he requires a value (7/9/11)"; exit 1; }
+                    if [ "$IFACE" != "mlan0" ]; then
+                        echo "Error: $IFACE supports up to 802.11ac; HE is unsupported" >&2
+                        exit 1
+                    fi
                     case "$2" in
-                        7|9|11) MCS_HE="$2"; MCS_ARGS="$MCS_ARGS he $2" ;;
+                        7|9|11) MCS_HE="both $2"; MCS_ARGS="$MCS_ARGS he both $2" ;;
                         *) echo "Error: he must be 7, 9, or 11"; exit 1 ;;
                     esac
                     shift 2 ;;
@@ -2631,19 +2694,24 @@ case "$2" in
             echo "Error: specify at least one of: ht, vht, he"
             exit 1
         fi
-        # Update JSON: enable + set values
-        JQ_EXPR=".${IFACE}.mcs_tier.enabled = true"
-        [ -n "$MCS_HT" ] && JQ_EXPR="$JQ_EXPR | .${IFACE}.mcs_tier.ht = $MCS_HT"
-        [ -n "$MCS_VHT" ] && JQ_EXPR="$JQ_EXPR | .${IFACE}.mcs_tier.vht = $MCS_VHT"
-        [ -n "$MCS_HE" ] && JQ_EXPR="$JQ_EXPR | .${IFACE}.mcs_tier.he = $MCS_HE"
-        jq "$JQ_EXPR" "$WIFI_INIT_CONF_JSON" > "${WIFI_INIT_CONF_JSON}.tmp" && \
-            mv "${WIFI_INIT_CONF_JSON}.tmp" "$WIFI_INIT_CONF_JSON"
+        # 문자열 타입을 유지한 채 원자 갱신한다. FW live SET은 connected 상태의 현재
+        # association capability를 바꾸지 못하므로 실행하지 않는다.
+        _mcs_tmp=$(safe_tmp_for "$WIFI_INIT_CONF_JSON") || exit 1
+        if ! jq --arg iface "$IFACE" --arg ht "$MCS_HT" --arg vht "$MCS_VHT" --arg he "$MCS_HE" '
+                .[$iface].mcs_tier.enabled = true
+                | if $ht != "" then .[$iface].mcs_tier.ht = $ht else . end
+                | if $vht != "" then .[$iface].mcs_tier.vht = $vht else . end
+                | if $he != "" then .[$iface].mcs_tier.he = $he else . end
+            ' "$WIFI_INIT_CONF_JSON" > "$_mcs_tmp" \
+           || ! safe_install_sync "$_mcs_tmp" "$WIFI_INIT_CONF_JSON"; then
+            rm -f -- "$_mcs_tmp"
+            echo "Error: failed to update mcs_tier JSON" >&2
+            exit 1
+        fi
+        rm -f -- "$_mcs_tmp"
         echo "mcs_tier updated for $IFACE:$MCS_ARGS"
         echo "JSON: enabled=true$( [ -n "$MCS_HT" ] && echo " ht=$MCS_HT" )$( [ -n "$MCS_VHT" ] && echo " vht=$MCS_VHT" )$( [ -n "$MCS_HE" ] && echo " he=$MCS_HE" )"
-        # Apply live
-        mlanutl "$IFACE" mcstiercfg $MCS_ARGS > /dev/null 2>&1 && \
-            echo "Applied live (reconnect to take effect)" || \
-            echo "Warning: live apply failed (will apply on next boot)"
+        echo "Apply: next boot before association (SET + mcstiercfg/11axcfg GET verification)"
     fi
     ;;
   standard)
@@ -2981,6 +3049,11 @@ case "$2" in
     mlanutl "$IFACE" getdatarate 2>/dev/null || true
     ;;
   log)
+    case "${3:-}" in
+      start|stop|restart|status|enable|disable)
+        exec "$WIFI_LOGGER_CONTROL_SH" "$IFACE" "$3"
+        ;;
+    esac
     if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
         echo "Error: log cp/compress/extract/reset supports mlan0/mlan1 only" >&2
         exit 1
@@ -3152,7 +3225,7 @@ case "$2" in
             { print }
             END { if (!found) exit 1 }
         ' "$CONF" > "$TMP_FILE"; then
-            safe_install_0644_sync "$TMP_FILE" "$CONF"
+            safe_install_sync "$TMP_FILE" "$CONF"
             echo "Address removed from $CONF"
         else echo "no Address= line found in $CONF" >&2; exit 1; fi
     else
@@ -3194,7 +3267,7 @@ case "$2" in
                 }
             }
         ' "$CONF" > "$TMP_FILE"
-        safe_install_0644_sync "$TMP_FILE" "$CONF"
+        safe_install_sync "$TMP_FILE" "$CONF"
         echo "Address set to \"$NEW_IP\" in $CONF"
     fi
     ;;
@@ -3216,7 +3289,7 @@ case "$2" in
             { print }
             END { if (!found) exit 1 }
         ' "$CONF" > "$TMP_FILE"; then
-            safe_install_0644_sync "$TMP_FILE" "$CONF"
+            safe_install_sync "$TMP_FILE" "$CONF"
             echo "Gateway removed from $CONF"
             exit 0
         else echo "no Gateway= line found in $CONF" >&2; exit 1; fi
@@ -3251,7 +3324,7 @@ case "$2" in
             }
         }
     ' "$CONF" > "$TMP_FILE"
-    safe_install_0644_sync "$TMP_FILE" "$CONF"
+    safe_install_sync "$TMP_FILE" "$CONF"
     rm -f "$TMP_FILE"
     echo "Gateway set to \"$NEW_GT\" in $CONF"
     ;;

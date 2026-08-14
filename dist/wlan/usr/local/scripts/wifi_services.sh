@@ -28,21 +28,41 @@ _mfg_mode() {
     printf '%s\n' "${m:-0}"
 }
 
-cmd_start() {
+_wifi_start_if_enabled() {
+    local u="$1"
+    if systemctl is-enabled --quiet "$u" 2>/dev/null; then
+        logger -p local0.info "[$tag:$LINENO] start $u"
+        systemctl start --no-block "$u" 2>/dev/null || \
+            logger -p local0.err "[$tag:$LINENO] start $u failed"
+    fi
+}
+
+wifi_services_start_non_wireless() {
     local u
+    while IFS= read -r u; do
+        _wifi_start_if_enabled "$u"
+    done < <(wifi_services_non_wireless_list)
+}
+
+wifi_services_start_wireless() {
+    local u
+    while IFS= read -r u; do
+        _wifi_start_if_enabled "$u"
+    done < <(wifi_services_wireless_list)
+}
+
+cmd_start() {
+    # wifi-stack.target가 이미 활성화된 뒤 ExecStartPre에서 enable 상태가 복구돼도
+    # 이번 부팅에 즉시 기동되도록 system/eth0 로거를 먼저 시작한다.
+    wifi_services_start_non_wireless
+
     # MFG 이중 안전장치: wifi_apply_enabled.sh의 MFG disable이 누락/실패해 enable이
-    # 남아 있어도 MFG FW 위에서 STA 데몬이 기동되지 않도록 start 전체를 건너뛴다.
+    # 남아 있어도 MFG FW 위에서 STA 데몬이 기동되지 않도록 무선 목록을 건너뛴다.
     if [ "$(_mfg_mode)" = "1" ]; then
-        logger -p local0.info "[$tag:$LINENO] mfg_mode=1 → skip child unit start (MFG profile)"
+        logger -p local0.info "[$tag:$LINENO] mfg_mode=1 → skip wireless child unit start (MFG profile)"
         return 0
     fi
-    while IFS= read -r u; do
-        if systemctl is-enabled --quiet "$u" 2>/dev/null; then
-            logger -p local0.info "[$tag:$LINENO] start $u"
-            systemctl start --no-block "$u" 2>/dev/null || \
-                logger -p local0.err "[$tag:$LINENO] start $u failed"
-        fi
-    done < <(wifi_services_list)
+    wifi_services_start_wireless
 }
 
 cmd_stop() {

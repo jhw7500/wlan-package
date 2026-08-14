@@ -905,6 +905,14 @@
       "additionalProperties": true,
       "description": "전역 로거 기본값. 인터페이스별 logger(eth0/mlanN.logger)가 override(단 bgscan_stale_threshold_sec는 global-only). 참고: link_retry_count/link_retry_delay_sec는 JSON 실재 키가 아니므로 여기 없음.",
       "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "시스템 로거 그룹 부팅 활성화. false면 온도 로그와 과열 보호도 함께 중단",
+          "x-ui-editable": "yes",
+          "x-apply-timing": "boot",
+          "x-consumer": "wifi_apply_enabled.sh, wifi_logger_control.sh"
+        },
         "cpu_interval_sec": {
           "type": "integer",
           "default": 60,
@@ -969,10 +977,18 @@
           "additionalProperties": true,
           "description": "eth0 로거 설정(전역 logger override)",
           "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "eth0 로거 그룹 부팅 활성화",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_apply_enabled.sh, wifi_logger_control.sh"
+            },
             "link_interval_sec": {
               "type": "number",
               "default": 1,
-              "description": "eth0 인터페이스 링크 상태 폴링 주기(초). 전역 0.95를 eth0에 한해 override",
+              "description": "eth0 인터페이스 링크 상태 폴링 주기(초). 전역 0.9를 eth0에 한해 override",
               "x-ui-editable": "yes",
               "x-apply-timing": "daemon-restart",
               "x-consumer": "wifi_logger_link.py"
@@ -1064,7 +1080,8 @@
         "rate_adapt": {
           "type": "object",
           "additionalProperties": true,
-          "description": "FW 레이트 적응 설정. association 전에 설정.",
+          "description": "FW 레이트 적응 설정. 4개 필드를 모두 제공해야 하며 association 전에만 설정 가능. roam 완료 시 FW 기본값으로 복귀할 수 있음.",
+          "required": ["mode", "low_thresh", "high_thresh", "interval_ms"],
           "properties": {
             "mode": {
               "type": "integer",
@@ -1078,6 +1095,7 @@
             "low_thresh": {
               "type": "integer",
               "default": 70,
+              "anyOf": [{"minimum": 0, "maximum": 100}, {"const": 255}],
               "description": "SR 모드 하한 성공률 임계(%). 255(0xff)이면 노이즈 기반 동적",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -1086,6 +1104,7 @@
             "high_thresh": {
               "type": "integer",
               "default": 90,
+              "anyOf": [{"minimum": 0, "maximum": 100}, {"const": 255}],
               "description": "SR 모드 상한 성공률 임계(%). 255(0xff)이면 동적",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -1094,6 +1113,8 @@
             "interval_ms": {
               "type": "integer",
               "default": 100,
+              "minimum": 10,
+              "multipleOf": 10,
               "description": "레이트 적응 평가 주기(ms)",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -1481,39 +1502,43 @@
         "mcs_tier": {
           "type": "object",
           "additionalProperties": true,
-          "description": "MCS tier capability 제한(mcstiercfg). 부팅 시 + 매 connected 이벤트마다 적용.",
+          "description": "MCS tier capability 제한. association 전 SET 후 GET 검증. mlan0 HE 0x0000은 연결 후 검증하고 FW 기본 복귀 시 connected SET+reassociate 1회.",
+          "required": ["enabled", "ht", "vht", "he"],
           "properties": {
             "enabled": {
               "type": "boolean",
               "default": true,
-              "description": "MCS tier 제한 활성화. true인데 ht/vht/he 전부 비면 no-op",
+              "description": "MCS tier 제한 활성화. HT/VHT·비영 HE 불일치는 association을 차단하고, HE 0x0000은 연결 후 검증 및 필요 시 1회 재association",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
-              "x-consumer": "wifi_init.sh, wifi_event.sh"
+              "x-consumer": "wifi_init.sh, wifi_event.sh, wifi_apply_enabled.sh, wifi.sh"
             },
             "ht": {
               "type": "string",
               "default": "7",
-              "description": "HT(802.11n) MCS tier 제한 인자(문자열 verbatim, 예: \"7\", \"15\"). 빈 문자열=해당 prefix skip",
+              "enum": ["7", "15"],
+              "description": "HT(802.11n) MCS tier 제한",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
-              "x-consumer": "wifi_init.sh, wifi_event.sh"
+              "x-consumer": "wifi_init.sh, wifi_event.sh, wifi.sh"
             },
             "vht": {
               "type": "string",
               "default": "7",
-              "description": "VHT(802.11ac) MCS tier 제한 인자(문자열 verbatim, 예: \"7\"). 빈 문자열=skip",
+              "enum": ["7", "8", "9"],
+              "description": "VHT(802.11ac) MCS tier 제한",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
-              "x-consumer": "wifi_init.sh, wifi_event.sh"
+              "x-consumer": "wifi_init.sh, wifi_event.sh, wifi.sh"
             },
             "he": {
               "type": "string",
               "default": "both 7",
-              "description": "HE(802.11ax) MCS tier 제한 인자(문자열 verbatim, 예: \"both 7\", \"7\"). 빈 문자열=skip",
+              "enum": ["both 7", "both 9", "both 11"],
+              "description": "mlan0 HE(802.11ax) Tx/Rx MCS tier 제한. association 전 0x0000이면 연결 후 검증하고 FW 기본 복귀 시 SET+reassociate 1회",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
-              "x-consumer": "wifi_init.sh, wifi_event.sh"
+              "x-consumer": "wifi_init.sh, wifi_event.sh, wifi.sh"
             }
           }
         },
@@ -1791,7 +1816,8 @@
         "rate_adapt": {
           "type": "object",
           "additionalProperties": true,
-          "description": "FW 레이트 적응 설정. association 전에 설정.",
+          "description": "FW 레이트 적응 설정. 4개 필드를 모두 제공해야 하며 association 전에만 설정 가능. roam 완료 시 FW 기본값으로 복귀할 수 있음.",
+          "required": ["mode", "low_thresh", "high_thresh", "interval_ms"],
           "properties": {
             "mode": {
               "type": "integer",
@@ -1805,6 +1831,7 @@
             "low_thresh": {
               "type": "integer",
               "default": 70,
+              "anyOf": [{"minimum": 0, "maximum": 100}, {"const": 255}],
               "description": "SR 모드 하한 성공률 임계(%). 255(0xff)이면 노이즈 기반 동적",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -1813,6 +1840,7 @@
             "high_thresh": {
               "type": "integer",
               "default": 90,
+              "anyOf": [{"minimum": 0, "maximum": 100}, {"const": 255}],
               "description": "SR 모드 상한 성공률 임계(%). 255(0xff)이면 동적",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -1821,6 +1849,8 @@
             "interval_ms": {
               "type": "integer",
               "default": 100,
+              "minimum": 10,
+              "multipleOf": 10,
               "description": "레이트 적응 평가 주기(ms)",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -2208,39 +2238,43 @@
         "mcs_tier": {
           "type": "object",
           "additionalProperties": true,
-          "description": "MCS tier capability 제한(mcstiercfg). 부팅 시 + 매 connected 이벤트마다 적용.",
+          "description": "mlan1(ac) HT/VHT MCS tier 제한. HE는 지원하지 않으며 association 전 SET 후 GET 검증.",
+          "required": ["enabled", "ht", "vht", "he"],
           "properties": {
             "enabled": {
               "type": "boolean",
               "default": true,
-              "description": "MCS tier 제한 활성화. true인데 ht/vht/he 전부 비면 no-op",
+              "description": "MCS tier 제한 활성화. HT/VHT GET 검증 실패 시 association 시작을 차단",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
-              "x-consumer": "wifi_init.sh, wifi_event.sh"
+              "x-consumer": "wifi_init.sh, wifi.sh"
             },
             "ht": {
               "type": "string",
               "default": "7",
-              "description": "HT(802.11n) MCS tier 제한 인자(문자열 verbatim, 예: \"7\", \"15\"). 빈 문자열=해당 prefix skip",
+              "enum": ["7", "15"],
+              "description": "HT(802.11n) MCS tier 제한",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
-              "x-consumer": "wifi_init.sh, wifi_event.sh"
+              "x-consumer": "wifi_init.sh, wifi.sh"
             },
             "vht": {
               "type": "string",
               "default": "7",
-              "description": "VHT(802.11ac) MCS tier 제한 인자(문자열 verbatim, 예: \"7\"). 빈 문자열=skip",
+              "enum": ["7", "8", "9"],
+              "description": "VHT(802.11ac) MCS tier 제한",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
-              "x-consumer": "wifi_init.sh, wifi_event.sh"
+              "x-consumer": "wifi_init.sh, wifi.sh"
             },
             "he": {
               "type": "string",
-              "default": "both 7",
-              "description": "HE(802.11ax) MCS tier 제한 인자(문자열 verbatim, 예: \"both 7\", \"7\"). 빈 문자열=skip",
+              "default": "",
+              "enum": [""],
+              "description": "mlan1은 802.11ac까지만 지원하므로 반드시 빈 문자열",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
-              "x-consumer": "wifi_init.sh, wifi_event.sh"
+              "x-consumer": "wifi_init.sh, wifi.sh"
             }
           }
         },
