@@ -51,9 +51,12 @@ case "$1" in
   is-active)
     case ",${FAKE_ACTIVE_UNITS:-}," in *",$3,"*) exit 0;; *) exit 3;; esac ;;
   show)
+    case ",${FAKE_INACTIVE_UNITS:-}," in
+      *",$2,"*) active=inactive; sub=dead ;;
+      *) active="${FAKE_ACTIVE_STATE:-active}"; sub="${FAKE_SUB_STATE:-running}" ;;
+    esac
     printf 'ActiveState=%s\nSubState=%s\nNRestarts=%s\n' \
-      "${FAKE_ACTIVE_STATE:-active}" "${FAKE_SUB_STATE:-running}" \
-      "${FAKE_NRESTARTS:-0}"
+      "$active" "$sub" "${FAKE_NRESTARTS:-0}"
     ;;
 esac
 exit "${FAKE_SYSTEMCTL_RC:-0}"
@@ -257,6 +260,21 @@ def test_status_returns_zero_for_healthy_runtime_override(run_control):
 
     assert result.returncode == 0
     assert "runtime-override" in result.stdout
+
+
+def test_status_rejects_runtime_override_with_failed_child(run_control):
+    result = run_control(
+        "mlan1",
+        "status",
+        FAKE_INACTIVE_UNITS="wifi_logger_scan@mlan1.service",
+    )
+
+    assert result.returncode == 1
+    assert "state=runtime-override" in result.stdout
+    assert any(
+        line.startswith("wifi_logger_scan@mlan1.service") and " inactive " in line
+        for line in result.stdout.splitlines()
+    )
 
 
 @pytest.mark.parametrize(
