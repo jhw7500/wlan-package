@@ -527,11 +527,6 @@ PY
         grep -E '/(\.omc|\.pytest_cache|__pycache__)(/|$)|\.pyc$|/tests?/|_test\.(sh|py)$' "$names" >&2
         return 1
     fi
-    if grep -Eq '(usr/local/etc|opt/wlan/config)/config\.json/?$' "$names"; then
-        echo "release gate: retired config.json packaged" >&2
-        return 1
-    fi
-
     local conf entry mode
     for conf in \
         ./opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan0.conf \

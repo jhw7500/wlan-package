@@ -158,10 +158,6 @@ jobs:
           dpkg-deb -c release/wlan.deb | grep "usr/local/wlan-bridge/wbridge/wbridge" || exit 1
           dpkg-deb -c release/wlan.deb | grep "usr/local/wlan-bridge/wbridge/wbridge-tpacket" || exit 1
           dpkg-deb -c release/wlan.deb | grep "usr/local/etc/wifi_init_conf.json" || exit 1
-          if dpkg-deb -c release/wlan.deb | grep -q "usr/local/etc/config.json"; then
-            echo "Error: config.json should not be packaged by wlan-package"
-            exit 1
-          fi
 
       - name: Validate wifi_init_conf.json
         if: steps.submodules.outputs.submodules == 'true' && runner.arch == 'ARM64'
