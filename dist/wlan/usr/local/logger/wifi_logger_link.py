@@ -27,6 +27,29 @@ SPIKE_THRESHOLD_RETRY = 10
 LINK_RETRY_COUNT = 4
 LINK_RETRY_DELAY = 0.05
 
+
+def build_arg_parser():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("iface", nargs="?", default="mlan0",
+                        choices=["mlan0", "mlan1", "eth0"],
+                        help="Interface name")
+    parser.add_argument("--interval", type=float, default=LOOP_INTERVAL,
+                        help=f"Main loop interval in seconds (default: {LOOP_INTERVAL})")
+    parser.add_argument("--spike-fail", type=int, default=SPIKE_THRESHOLD_FAIL,
+                        help=f"TX fail spike threshold per cycle "
+                             f"(default: {SPIKE_THRESHOLD_FAIL})")
+    parser.add_argument("--spike-retry", type=int, default=SPIKE_THRESHOLD_RETRY,
+                        help=f"TX retry spike threshold per cycle "
+                             f"(default: {SPIKE_THRESHOLD_RETRY})")
+    parser.add_argument("--link-retry-count", type=int, default=LINK_RETRY_COUNT,
+                        help=f"Fast-retry count when station dump is momentarily empty "
+                             f"(reconfigure/select_network blip suppression, "
+                             f"default: {LINK_RETRY_COUNT})")
+    parser.add_argument("--link-retry-delay", type=float, default=LINK_RETRY_DELAY,
+                        help=f"Fast-retry delay between attempts in seconds "
+                             f"(default: {LINK_RETRY_DELAY})")
+    return parser
+
 def handle_sigterm(signum, frame):
     logger.message('crit', f"[{IFACE}] SIGTERM {signum} received! Cleaning up...", _EXTRA_())
     cleanup()
@@ -66,7 +89,7 @@ def save_db(db, dir=LOG_DIR):
 
     os.rename(tmp_path, final_path)  # atomic한 rename
 
-'''
+r'''
 def save_db(db):
     def compact_lists(text):
         pattern = re.compile(r'\[\s*\n\s*((?:.+,\s*\n)+)\s*(.+?)\s*\]')
@@ -500,21 +523,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_sigterm)
     logger = Logger(app_name="LINK", facility=logging.handlers.SysLogHandler.LOG_LOCAL0)
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("iface", nargs="?", default="mlan0",
-                        choices=["mlan0", "mlan1", "eth0"],
-                        help="Interface name")
-    parser.add_argument("--interval", type=float, default=0.9,
-                        help="Main loop interval in seconds (default: 0.9)")
-    parser.add_argument("--spike-fail", type=int, default=1,
-                        help="TX fail spike threshold per cycle (default: 1)")
-    parser.add_argument("--spike-retry", type=int, default=10,
-                        help="TX retry spike threshold per cycle (default: 10)")
-    parser.add_argument("--link-retry-count", type=int, default=LINK_RETRY_COUNT,
-                        help=f"Fast-retry count when station dump is momentarily empty "
-                             f"(reconfigure/select_network blip suppression, default: {LINK_RETRY_COUNT})")
-    parser.add_argument("--link-retry-delay", type=float, default=LINK_RETRY_DELAY,
-                        help=f"Fast-retry delay between attempts in seconds (default: {LINK_RETRY_DELAY})")
+    parser = build_arg_parser()
     args = parser.parse_args()
 
     IFACE = args.iface

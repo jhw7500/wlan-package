@@ -693,10 +693,10 @@ wifi eth0  log start|stop|restart|status|enable|disable
 | `use_signal_avg` | bool | `true` | 평균 신호 사용 여부 |
 | `DEFAULT_TH_2G` | int | `-75` | 2.4GHz 로밍 RSSI 임계값 (dBm) |
 | `DEFAULT_TH_5G` | int | `-75` | 5GHz 로밍 RSSI 임계값 (dBm) |
-| `DIFF_TH` | int | `8` | 로밍 결정 RSSI 차이 (dB) |
-| `CHECK_INTERVAL` | int | `1` / `3` | 로밍 체크 주기 (초). 판정 입력 link.json 이 ~1s 갱신이라 1 미만은 실익 없음 |
+| `DIFF_TH` | int | `7` | 로밍 결정 RSSI 차이 (dB) |
+| `CHECK_INTERVAL` | int | `1` | 로밍 체크 주기 (초). 판정 입력 link.json 이 ~1s 갱신이라 1 미만은 실익 없음 |
 | `SCAN_NO_RESULT_SLEEP` | int | `3` | 스캔 결과 없을 때 대기 (초) |
-| `ROAM_SUCCESS_SLEEP` | int | `3` / `2` | 로밍 성공 후 대기 (초) |
+| `ROAM_SUCCESS_SLEEP` | int | `3` | 로밍 성공 후 대기 (초) |
 | `enabled` | bool | mlan0 `true` / mlan1 `false` | 로밍 데몬(`wifi_roam@<iface>`) 활성화. `wifi_apply_enabled.sh`가 systemd enable/disable로 동기화. **mlan0 로밍이 기본 활성화됨** |
 | `extra_ssids` | array[str] | `[]` | conf 기본 ssid 외 추가 로밍 후보 SSID 목록. 빈 배열=기존 단일 SSID 동작(무회귀) |
 | `generate_network_blocks` | bool | `false` | 모드 결정자. `false`=모드B(단일 블록, cross-SSID는 외부 `wifi connect`만, `extra_ssids` 무시), `true`=모드A(다중 network 블록 + `select_network` cross-SSID). 기본 `false`로 기존 단일 SSID 동작 무회귀 |
@@ -785,7 +785,7 @@ wifi eth0  log start|stop|restart|status|enable|disable
 | `enable` | bool | `true` | 핑퐁 방지 활성화 |
 | `window` | int | `20` | 감시 윈도우 (초) |
 | `max_roams_in_window` | int | `3` | 윈도우 내 최대 로밍 횟수 |
-| `detection_time` | int | `5` | A→B→A 왕복 감지 시간 (초) |
+| `detection_time` | int | `10` | A→B→A 왕복 감지 시간 (초) |
 
 > **제거됨 (2026-07-31 노브 감사 D1, `knob_audit_2026-07.md`)**: `LOAD_BASED_ROAM` ·
 > `ADAPTIVE_INTERVAL` · `POST_ROAM_ARP_OPTIMIZATION`(+`PEER_WARMUP`) 은 출하 기본 off 로
@@ -939,16 +939,14 @@ SNMP는 **기본 off(opt-in)**이다. `snmp.enabled=true`일 때만 `wifi_apply_
 |-----------|-------|-------|------|
 | `enabled` | `true` | `false` | **mlan1은 기본적으로 초기화되지 않음** (radio setup·bridge enable skip) |
 | `STANDARD` | `ax` | `ac` | mlan1은 11ax 미지원 |
-| `roaming.CHECK_INTERVAL` | `1` | `3` | mlan0은 주 채널이라 1초 주기로 빠르게 감지(입력 link.json 갱신 한계), mlan1은 3초 |
-| `roaming.ROAM_SUCCESS_SLEEP` | `3` | `2` | 로밍 성공 후 정착 대기 — mlan0=3초, mlan1=2초 |
 | `roaming.enabled` | `true` | `false` | mlan0 로밍 기본 활성화 |
 | `bgscan.enabled` | `true` | `false` | mlan1 비활성 인터페이스 |
-
-> ※ `PING_PONG_PREVENTION` 파라미터는 mlan0/mlan1 **동일**(window=20, detection_time=5)이라 이 표에 없다 — 과거 가이드의 30/60·10/30 병기는 템플릿과 불일치했던 오기.
 | `checker.enabled` | `true` | `false` | mlan1 비활성 인터페이스 |
 | `on_connect.enabled` | `true` | `false` | mlan1 비활성 인터페이스 |
 | `logger.enabled` | `true` | `false` | mlan1 비활성 인터페이스 |
 | `mcs_tier.ht` / `.vht` / `.he` | `"7"` / `"7"` / `"both 7"` | `"7"` / `"7"` / `""` | mlan1은 ac 전용이므로 HE만 제외 |
+
+> ※ `roaming.CHECK_INTERVAL=1`, `ROAM_SUCCESS_SLEEP=3`, `PING_PONG_PREVENTION`(window=20, detection_time=10)은 mlan0/mlan1이 동일하므로 이 표에 없다.
 
 > **더 이상 차이 아님**: `PREDICTIVE_ROAM.enable` 은 양쪽 `false` 로 동일하다. `LOAD_BASED_ROAM`/`ADAPTIVE_INTERVAL`/`POST_ROAM_ARP_OPTIMIZATION` 은 감사 D1(2026-07-31)로 **제거**됐다(§11.4 제거됨 참조).
 
