@@ -165,10 +165,17 @@ expect_rc "service state restore succeeds" 0 factory_restore_service_state "$ACT
 for unit in wifi-stack.target wifi_apply_enabled.service wifi_init.service; do
     [ -e "$STATE/$unit" ] && pass "$unit enabled" || fail "$unit not enabled"
 done
-if grep -q 'nginx' "$LIB" "$FACTORY_SCRIPT"; then
-    fail "Factory Reset does not own wifi_manager nginx"
+# nginx 소유권 계약: Factory Reset 은 nginx 를 필수 유닛으로 요구하지 않는다(부재해도
+# reset 성공). 다만 0.5.0 이하 reset 이 영속 disable 시킨 기기를 되살리는 enable 은 남긴다.
+if grep -q 'nginx' "$LIB"; then
+    fail "nginx is not a required factory unit"
 else
-    pass "Factory Reset does not own wifi_manager nginx"
+    pass "nginx is not a required factory unit"
+fi
+if grep -q '^[[:space:]]*customctl enable nginx$' "$FACTORY_SCRIPT"; then
+    pass "factory reset re-enables nginx disabled by past resets"
+else
+    fail "factory reset re-enables nginx disabled by past resets"
 fi
 
 APPLY_FAIL=1
