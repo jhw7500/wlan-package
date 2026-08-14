@@ -6,7 +6,8 @@ Debian package for deploying WLAN application infrastructure on ARM64 embedded s
 
 This package (`wlan-proc`) bundles the wlan-bridge L2 network bridge along with supporting scripts, configuration files, and systemd services for wireless network management on embedded Linux systems.
 
-**Current Version:** 0.5.4
+The package version is defined once in `dist/wlan/DEBIAN/control` (`Version`).
+After a build, inspect it with `dpkg-deb -f release/wlan.deb Version`.
 
 ## Prerequisites
 
@@ -72,7 +73,7 @@ The build script will:
 - `wlan-bridge/wbridge/release/wbridge_<board>` - libpcap-based bridge binary
 - `wlan-bridge/wbridge/release/wbridge-tpacket_<board>` - TPACKET_V3 bridge binary
 - `release/wlan.deb` - Latest build
-- `release/wlan-proc-0.5.4.deb` - Versioned package
+- `release/wlan-proc-<version>.deb` - Versioned package derived from `DEBIAN/control`
 - `release/wlan-package.tar` - Allowlisted source/build archive
 - `release/SHA256SUMS` - Release-set hashes, published last
 
@@ -134,14 +135,14 @@ wlan-package/
 ### 1. Transfer Package to Target
 
 ```bash
-scp release/wlan-proc-0.5.4.deb root@<target-ip>:/tmp/
+scp release/wlan.deb root@<target-ip>:/tmp/
 ```
 
 ### 2. Install on Target System
 
 ```bash
 ssh root@<target-ip>
-dpkg -i /tmp/wlan-proc-0.5.4.deb
+dpkg -i /tmp/wlan.deb
 ```
 
 The `postinst` script will automatically:

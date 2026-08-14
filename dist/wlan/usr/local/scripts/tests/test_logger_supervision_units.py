@@ -166,13 +166,12 @@ def test_install_and_factory_reset_restore_logger_boot_policy():
     assert '"$FACTORY_APPLY_ENABLED_SH"' in factory_lib
 
 
-def test_logger_release_version_and_runtime_dependencies():
+def test_logger_runtime_dependencies():
     fields = {}
     for line in CONTROL.read_text().splitlines():
         if ":" in line and not line.startswith(" "):
             key, value = line.split(":", 1)
             fields[key] = value.strip()
 
-    assert fields["Version"] == "0.5.4"
     dependencies = {item.strip().split()[0] for item in fields["Depends"].split(",")}
     assert {"bc", "sysstat"} <= dependencies

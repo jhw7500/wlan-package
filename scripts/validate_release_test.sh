@@ -8,6 +8,21 @@ trap 'rm -rf "$WORK"' EXIT
 PKG="$WORK/pkg"
 SOURCE_NETWORK="$REPO/dist/wlan/opt/wlan/config/systemd/network/22-eth0.network"
 
+# DEBIAN/control is the release-version SSoT.  Documentation and build logic
+# must not introduce a second concrete version that every release has to edit.
+if grep -Eq 'Current Version:\*\*[[:space:]]*[0-9]+(\.[0-9]+)+' "$REPO/README.md"; then
+    echo "FAIL: README contains a duplicated concrete current version" >&2
+    exit 1
+fi
+if grep -Eq 'wlan-proc-[0-9]+\.[0-9]+\.[0-9]+\.deb' "$REPO/README.md"; then
+    echo "FAIL: README deployment examples pin a concrete package version" >&2
+    exit 1
+fi
+if grep -q 'readme_version=' "$REPO/build.sh"; then
+    echo "FAIL: build parses a duplicate README version instead of control" >&2
+    exit 1
+fi
+
 # Git stores only executable vs non-executable and `git archive` materializes a
 # non-executable file as 0664.  The source gate must accept that representation;
 # the package gate below still requires the shipped payload to be exactly 0644.
