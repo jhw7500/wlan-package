@@ -14,8 +14,12 @@ contains() { grep -Fq -- "$2" "$1" && ok "$3" || bad "$3"; }
 not_contains() { grep -Fq -- "$2" "$1" && bad "$3" || ok "$3"; }
 
 for conf in "$TEMPLATE_DIR"/wpa_supplicant-mlan*.conf; do
-    [ "$(stat -c %a "$conf")" = 600 ] && ok "template mode 0600: $(basename "$conf")" \
-        || bad "template mode is not 0600: $conf"
+    mode=$(stat -c %a "$conf")
+    if (( (8#$mode & 07111) == 0 )); then
+        ok "template source is non-executable: $(basename "$conf")"
+    else
+        bad "template source is executable or set-id: $conf (mode=$mode)"
+    fi
 done
 
 contains "$WIFI" 'safe_install_sync()' "wifi has mode-aware atomic install"

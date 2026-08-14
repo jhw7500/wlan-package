@@ -478,6 +478,13 @@ payload = subprocess.check_output(["dpkg-deb", "--fsys-tarfile", os.environ["PAC
 errors = []
 with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
     members = {m.name.removeprefix("./").rstrip("/"): m for m in archive.getmembers()}
+    required_cli_executables = {
+        "usr/local/scripts/wifi_logger_control.sh",
+    }
+    for name in sorted(required_cli_executables):
+        member = members.get(name)
+        if member is None or not member.isfile() or not member.mode & 0o111:
+            errors.append(f"CLI helper is missing or not executable: {name}")
     installed_unit_paths = {
         "opt/wlan/config/wpa_supplicant/wpa_supplicant@.service",
         "usr/local/opc/opcd.service",

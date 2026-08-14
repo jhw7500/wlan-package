@@ -72,6 +72,7 @@ make_tree() {
         usr/local/scripts/wifi_cal_backup.sh \
         usr/local/scripts/wifi_apply_enabled.sh \
         usr/local/scripts/wifi_init.sh \
+        usr/local/scripts/wifi_logger_control.sh \
         usr/local/scripts/wifi_services.sh; do
         cp "$REPO/dist/wlan/$rel" "$PKG/$rel"
         chmod 0755 "$PKG/$rel"
@@ -224,6 +225,13 @@ chmod 0644 "$PKG/usr/local/scripts/wifi_init.sh"
 build "$WORK/nonexec-service-command.deb"
 if bash "$VALIDATE" package "$WORK/nonexec-service-command.deb" >/dev/null 2>&1; then
     echo "FAIL: non-executable systemd service command accepted" >&2; exit 1
+fi
+
+make_tree
+chmod 0644 "$PKG/usr/local/scripts/wifi_logger_control.sh"
+build "$WORK/nonexec-wifi-cli-helper.deb"
+if bash "$VALIDATE" package "$WORK/nonexec-wifi-cli-helper.deb" >/dev/null 2>&1; then
+    echo "FAIL: non-executable wifi CLI helper accepted" >&2; exit 1
 fi
 
 make_tree
