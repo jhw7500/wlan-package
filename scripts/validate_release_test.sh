@@ -149,6 +149,24 @@ sed -i 's/^Architecture: .*/Architecture: all/' "$PKG/DEBIAN/control"
 build "$WORK/wrong-architecture.deb"
 expect_metadata_rejected Architecture "$WORK/wrong-architecture.deb"
 
+# 직전 케이스가 control 의 Architecture 를 오염시킨 채로 남기므로 트리를 되돌린 뒤
+# 검사한다. 되돌리지 않으면 config.json 이 아니라 Architecture 게이트가 거부해
+# 이 fixture 가 통과한 것처럼 보인다.
+make_tree
+mkdir -p "$PKG/opt/wlan/config"
+printf '{}\n' > "$PKG/opt/wlan/config/config.json"
+build "$WORK/config.deb"
+if bash "$VALIDATE" package "$WORK/config.deb" >/dev/null 2>&1; then
+    echo "FAIL: retired config.json accepted" >&2; exit 1
+fi
+
+make_tree
+ln -s /etc/passwd "$PKG/opt/wlan/config/config.json"
+build "$WORK/config-symlink.deb"
+if bash "$VALIDATE" package "$WORK/config-symlink.deb" >/dev/null 2>&1; then
+    echo "FAIL: retired config.json symlink accepted" >&2; exit 1
+fi
+
 make_tree
 rm "$PKG/usr/local/opc/bin/opcd"
 ln -s /bin/true "$PKG/usr/local/opc/bin/opcd"
