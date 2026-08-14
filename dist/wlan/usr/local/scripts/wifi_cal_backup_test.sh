@@ -43,6 +43,7 @@ run_cal() {
     WIFI_CAL_BASELINE_ROOT="$BASELINE" \
     WIFI_CAL_BACKUP_LOCK="$LOCK" \
     WIFI_CAL_LOGGER=/bin/true \
+    WIFI_CAL_SYNC_CMD="${CAL_SYNC_CMD:-sync}" \
         "$SCRIPT" "$@"
 }
 
@@ -76,6 +77,47 @@ cp "$CTS/WlanCalData_ext.conf" "$BASELINE/WlanCalData_ext.conf"
 write_json cts/WlanCalData_ext.conf
 run_cal protect
 expect "unchanged package calibration is not backed up" test ! -e "$CTS/WlanCalData_ext.conf.bak"
+
+# marker 없는 과거 .bak은 package CAL 손상 시 되살아나면 안 된다. reset은 선택된
+# package CAL active와 backup을 독립 baseline으로 함께 재시드한다.
+cal_data BB > "$CTS/WlanCalData_ext.conf.bak"
+run_cal reset
+expect "reset seeds selected package calibration from baseline" \
+    cmp -s "$CTS/WlanCalData_ext.conf" "$BASELINE/WlanCalData_ext.conf"
+expect "reset replaces stale unmarked package calibration backup" \
+    cmp -s "$CTS/WlanCalData_ext.conf.bak" "$BASELINE/WlanCalData_ext.conf"
+
+cat > "$BINDIR/sync-fail" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+chmod +x "$BINDIR/sync-fail"
+cal_data BB > "$CTS/WlanCalData_ext.conf.bak"
+CAL_SYNC_CMD="$BINDIR/sync-fail"
+if run_cal reset; then
+    expect "reset propagates calibration sync failure" false
+else
+expect "reset propagates calibration sync failure" true
+fi
+unset CAL_SYNC_CMD
+expect "failed calibration reset leaves no temp artifacts" \
+    sh -c '! find "$1" -type f -name "*.tmp.*" -print -quit | grep -q .' _ "$CTS"
+
+# legacy/MFG에서 marker 없이 선택된 custom CAL도 reset 단계에서 검증·보호해야 한다.
+cal_data BC > "$CTS/unmarked-selected-valid.conf"
+write_json cts/unmarked-selected-valid.conf
+run_cal reset
+expect "reset protects selected unmarked valid calibration" \
+    test -s "$CTS/unmarked-selected-valid.conf.bak"
+expect "reset marks selected unmarked valid calibration" \
+    test -s "$CTS/unmarked-selected-valid.conf.user-cal"
+printf 'broken unmarked selected calibration\n' > "$CTS/unmarked-selected-invalid.conf"
+write_json cts/unmarked-selected-invalid.conf
+if run_cal reset; then
+    expect "reset rejects selected unmarked invalid calibration" false
+else
+    expect "reset rejects selected unmarked invalid calibration" true
+fi
 
 cp "$SCRIPT_DIR/../../lib/firmware/cts/WlanCalData_ext.conf" "$CTS/vendor-ext.conf"
 cp "$SCRIPT_DIR/../../lib/firmware/cts/azure/cal_data.conf" "$CTS/vendor-azure.conf"
@@ -149,9 +191,58 @@ expect "outside-cts path is not backed up" test ! -e "$WORK/outside.conf.bak"
 
 write_json cts/custom-board.conf
 run_cal reset
-expect "reset removes custom backup" test ! -e "$CTS/custom-board.conf.bak"
-expect "reset removes custom marker" test ! -e "$CTS/custom-board.conf.user-cal"
-expect "reset preserves staged active file" test -e "$CTS/custom-board.conf"
+expect "reset keeps selected custom backup" test -s "$CTS/custom-board.conf.bak"
+expect "reset keeps selected custom marker" test -s "$CTS/custom-board.conf.user-cal"
+expect "reset preserves selected active file" test -e "$CTS/custom-board.conf"
+
+# 보존하기로 한 production CAL은 reset 도중 active가 깨져 있어도 정상 backup에서
+# 먼저 복구되어야 한다. marker/backup을 지우고 다음 부팅을 실패시키면 안 된다.
+cal_data EE > "$CTS/custom-reset-recovery.conf"
+write_json cts/custom-reset-recovery.conf
+run_cal mark "$CTS/custom-reset-recovery.conf"
+printf 'broken during reset\n' > "$CTS/custom-reset-recovery.conf"
+run_cal reset
+expect "reset recovers selected custom calibration from backup" \
+    cmp -s "$CTS/custom-reset-recovery.conf" "$CTS/custom-reset-recovery.conf.bak"
+expect "reset retains recovered custom calibration marker" \
+    test -s "$CTS/custom-reset-recovery.conf.user-cal"
+
+# 패키지 이름과 같은 파일에 명시적으로 반입한 production CAL도 보존 계약은 같다.
+cal_data AB > "$CTS/WlanCalData_ext.conf"
+run_cal mark "$CTS/WlanCalData_ext.conf"
+cp "$CTS/WlanCalData_ext.conf" "$WORK/selected-same-name.expected"
+write_json cts/WlanCalData_ext.conf
+run_cal reset
+expect "reset keeps selected same-basename custom calibration" \
+    cmp -s "$CTS/WlanCalData_ext.conf" "$WORK/selected-same-name.expected"
+expect "reset keeps selected same-basename custom backup" \
+    cmp -s "$CTS/WlanCalData_ext.conf.bak" "$WORK/selected-same-name.expected"
+expect "reset keeps selected same-basename custom marker" \
+    test -s "$CTS/WlanCalData_ext.conf.user-cal"
+
+# 현재 선택되지 않은 과거 사용자 CAL만 reset 대상이다.
+cal_data FF > "$CTS/obsolete-user-cal.conf"
+run_cal mark "$CTS/obsolete-user-cal.conf"
+cal_data A1 > "$CTS/current-selected.conf"
+run_cal mark "$CTS/current-selected.conf"
+write_json cts/current-selected.conf
+run_cal reset
+expect "reset removes unselected custom backup" test ! -e "$CTS/obsolete-user-cal.conf.bak"
+expect "reset removes unselected custom marker" test ! -e "$CTS/obsolete-user-cal.conf.user-cal"
+expect "reset removes unselected custom active file" test ! -e "$CTS/obsolete-user-cal.conf"
+
+# package basename의 custom CAL이 현재 선택되지 않았다면 공장 baseline으로 완전히
+# 되돌린다. marker만 지우고 active bytes를 남기면 나중 선택 시 pre-reset 값이 부활한다.
+cal_data CD > "$CTS/WlanCalData_ext.conf"
+run_cal mark "$CTS/WlanCalData_ext.conf"
+write_json cts/current-selected.conf
+run_cal reset
+expect "reset restores unselected package-name CAL active to baseline" \
+    cmp -s "$CTS/WlanCalData_ext.conf" "$BASELINE/WlanCalData_ext.conf"
+expect "reset seeds unselected package-name CAL backup from baseline" \
+    cmp -s "$CTS/WlanCalData_ext.conf.bak" "$BASELINE/WlanCalData_ext.conf"
+expect "reset removes unselected package-name CAL marker" \
+    test ! -e "$CTS/WlanCalData_ext.conf.user-cal"
 
 printf '\nResult: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

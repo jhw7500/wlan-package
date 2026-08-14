@@ -4,13 +4,19 @@
 # wifi_init.service가 통제하는 자식 unit 목록을 단일 정의.
 # 실제 가동 여부는 운영자의 systemctl enable/disable이 결정한다.
 #
+# 비무선 로거는 MFG 프로파일에서도 JSON 정책에 따라 시작한다. 나머지 목록은
+# MFG 모드에서 기동하지 않는 STA/FW 연계 서비스다.
+#
 # 제외 정책 (목록에서 빠진 것들):
 #   - switchd, journald-snapshot.timer, fake-hwclock.timer, log-watchdog.timer  : wifi 외 도메인
 #   - wifi_led@mlan0/mlan1                                                       : LED는 별도 정책
-#   - wifi_logger.service (글로벌)                                               : per-iface logger와 별개로 운영
-#   - eth0 관련 wifi_* 인스턴스                                                  : 무선과 무관
+#   - wifi_logger@eth0 외 eth0 관련 wifi_* 인스턴스                              : 무선과 무관
 
-wifi_services_list() {
+wifi_services_non_wireless_list() {
+    printf '%s\n' wifi_logger.service wifi_logger@eth0.service
+}
+
+wifi_services_wireless_list() {
     local svcs=()
     svcs+=(wifi_ping_monitor.service)
     svcs+=(snmpd.service)   # 글로벌 SNMP 데몬 — .snmp.enabled 토글(wifi_apply_enabled.sh)로 조건부 기동
@@ -29,4 +35,9 @@ wifi_services_list() {
         svcs+=("wifi_periodic_roam@${iface}.service")
     done
     printf '%s\n' "${svcs[@]}"
+}
+
+wifi_services_list() {
+    wifi_services_non_wireless_list
+    wifi_services_wireless_list
 }

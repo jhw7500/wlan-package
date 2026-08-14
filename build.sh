@@ -1,7 +1,12 @@
 #!/bin/bash
+set -euo pipefail
 
 BASEDIR=${PWD}
 echo "Script location: ${BASEDIR}"
+
+# 오래 걸리는 cross-build 전에 설정 drift·schema·단위/shell 회귀를 먼저 차단한다.
+bash "${BASEDIR}/scripts/validate_release.sh" pre \
+    || { echo "Error: pre-build release gate failed" >&2; exit 1; }
 
 # Build wlan-bridge binaries (wbridge)
 echo "Building wbridge binaries..."
@@ -14,7 +19,7 @@ WBRIDGE_DIR="${BASEDIR}/wlan-bridge/wbridge"
 MAKE_FOR_IMX8="${WBRIDGE_DIR}/make-for-imx8"
 MAKE_FOR_IMX93="${WBRIDGE_DIR}/make-for-imx93"
 
-cd "${WBRIDGE_DIR}"
+cd "${WBRIDGE_DIR}" || { echo "Error: cannot enter ${WBRIDGE_DIR}" >&2; exit 1; }
 make clean || { echo "Warning: make clean failed"; }
 
 HOST_ARCH=$(uname -m)
@@ -65,11 +70,26 @@ else
     cross_build_board "imx93" "${MAKE_FOR_IMX93}"
 fi
 
-cd "${BASEDIR}"
+cd "${BASEDIR}" || { echo "Error: cannot return to ${BASEDIR}" >&2; exit 1; }
 echo "Build completed successfully"
 
 # Create wlan-bridge directory structure
-mkdir -p "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/"{wbridge,debug,scripts,docs}
+mkdir -p "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/"{wbridge,debug}
+rm -rf "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/scripts" \
+       "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/docs"
+mkdir -p "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/"{scripts,docs}
+
+# Never mix artifacts from a previous native/cross build. Known boards prefer
+# suffixed binaries in postinst, so retaining an old suffix can silently select
+# stale code over the binary built in this invocation.
+find "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/wbridge" -maxdepth 1 \
+    \( -type f -o -type l \) \
+    \( -name 'wbridge' -o -name 'wbridge_*' -o -name 'wbridge-tpacket' -o -name 'wbridge-tpacket_*' \) \
+    -delete
+find "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/debug" -maxdepth 1 \
+    \( -type f -o -type l \) \
+    \( -name 'wbridge' -o -name 'wbridge_*' -o -name 'wbridge-tpacket' -o -name 'wbridge-tpacket_*' \) \
+    -delete
 
 # Native vs cross 빌드에 따라 산출물 이름이 다르다.
 # - native(aarch64): wbridge, wbridge-tpacket (suffix 없음)
@@ -113,6 +133,11 @@ cp "${BASEDIR}/wlan-bridge/wbridge/wifi_bridge@.service" "${BASEDIR}/dist/wlan/u
 # Copy wlan-bridge scripts and docs
 cp -a "${BASEDIR}/wlan-bridge/scripts/." "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/scripts/" || { echo "Error: Failed to copy scripts"; exit 1; }
 cp -a "${BASEDIR}/wlan-bridge/docs/." "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/docs/" || { echo "Error: Failed to copy docs"; exit 1; }
+# Thermal state handling is WLAN-package-owned because it consumes the JSON
+# SSoT; keep it alongside the bridge scripts after rebuilding the clean stage.
+cp "${BASEDIR}/dist/wlan/usr/local/scripts/wifi_thermal_state_update.sh" \
+   "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/scripts/wifi_thermal_state_update.sh" \
+    || { echo "Error: Failed to stage WLAN thermal script"; exit 1; }
 
 # Build wlan-opc (OPC-side control daemon + VHL CLI simulator)
 # 산출물: wlan-opc/build/<arch>/{opcd/opcd,vhlctl/vhlctl}, wlan-opc/opcd/opcd.service
@@ -121,7 +146,7 @@ cp -a "${BASEDIR}/wlan-bridge/docs/." "${BASEDIR}/dist/wlan/usr/local/wlan-bridg
 WLAN_OPC_DIR="${BASEDIR}/wlan-opc"
 if [ -d "${WLAN_OPC_DIR}" ]; then
     echo "Building wlan-opc..."
-    cd "${WLAN_OPC_DIR}"
+    cd "${WLAN_OPC_DIR}" || { echo "Error: cannot enter ${WLAN_OPC_DIR}" >&2; exit 1; }
     make clean || true
     # Device package MUST use the nxp platform backend (real /var/log/cantops JSON
     # link data, timesyncd NTP, dpkg-query firmware, wifi.sh radio apply). The
@@ -156,7 +181,7 @@ if [ -d "${WLAN_OPC_DIR}" ]; then
         fi
         OPC_BUILD="."
     fi
-    cd "${BASEDIR}"
+    cd "${BASEDIR}" || { echo "Error: cannot return to ${BASEDIR}" >&2; exit 1; }
 
     OPC_DEST="${BASEDIR}/dist/wlan/usr/local/opc"
     mkdir -p "${OPC_DEST}/bin"
@@ -172,14 +197,14 @@ fi
 echo "Building vhld..."
 VHLD_DIR="${BASEDIR}/dist/wlan/usr/local/vhl_daemon"
 if [ -f "${VHLD_DIR}/Makefile" ]; then
-    cd "${VHLD_DIR}"
+    cd "${VHLD_DIR}" || { echo "Error: cannot enter ${VHLD_DIR}" >&2; exit 1; }
     make clean
     if [ "${HOST_ARCH}" = "aarch64" ] || [ "${HOST_ARCH}" = "arm64" ]; then
         make release || { echo "Error: Failed to build vhld"; exit 1; }
     else
         make cross || { echo "Error: Failed to cross-build vhld"; exit 1; }
     fi
-    cd "${BASEDIR}"
+    cd "${BASEDIR}" || { echo "Error: cannot return to ${BASEDIR}" >&2; exit 1; }
     echo "vhld build completed"
 else
     echo "Warning: vhld Makefile not found, skipping"
@@ -199,46 +224,155 @@ fi
 
 echo "version:${version}"
 
-# README.md Current Version이 control Version과 동기되어 있는지 점검 (경고만, 빌드는 계속).
-# 막지 않는다 — 릴리스 담당자에게 README 갱신 누락을 상기시키는 용도.
+# README.md Current Version이 control Version과 동기되어 있는지 점검한다.
 # grep 실패(README 없음/패턴 불일치)는 || true로 흡수해 set -e 환경에서도 안전하고,
 # 빈 값도 경고로 알려 README 서식 변경 시 체크가 소리 없이 죽지 않게 한다.
 # (정규식이 README의 'Current Version:** X.Y' 형식에 의존 — 형식 변경 시 이 패턴도 갱신)
 readme_version=$(grep -m1 -oE 'Current Version:\*\*[[:space:]]*[0-9]+(\.[0-9]+)+' "${BASEDIR}/README.md" 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+$' || true)
 if [ -z "${readme_version}" ]; then
-    echo "Warning: README.md에서 'Current Version'을 파싱하지 못함 — README 형식 확인" >&2
+    echo "Error: README.md에서 'Current Version'을 파싱하지 못함 — README 형식 확인" >&2
+    exit 1
 elif [ "${readme_version}" != "${version}" ]; then
-    echo "Warning: README.md Current Version(${readme_version}) != control Version(${version}) — README 버전 갱신 권장" >&2
+    echo "Error: README.md Current Version(${readme_version}) != control Version(${version})" >&2
+    exit 1
 fi
 
-# Temporarily move tmp directories out of dpkg build tree
-STASH_DIR="${BASEDIR}/dist/.tmp-stash"
-rm -rf "${STASH_DIR}"
-TMP_DIRS=()
-restore_tmp() {
-    for rel in "${TMP_DIRS[@]}"; do
-        [ -d "${STASH_DIR}/${rel}" ] && mv "${STASH_DIR}/${rel}" "${BASEDIR}/dist/wlan/${rel}"
-    done
-    rm -rf "${STASH_DIR}"
+# source tree를 직접 dpkg에 넘기지 않는다. 임시 stage에서 개발 산출물/테스트를 제거하고
+# mode를 정규화한 뒤 root-owner-group package를 만들며, 검증 성공 전 release 파일을 덮지 않는다.
+PKG_STAGE=$(mktemp -d)
+CANDIDATE_DEB="${BASEDIR}/release/.wlan.deb.candidate.$$"
+CANDIDATE_VERSIONED_DEB="${BASEDIR}/release/.${package}-${version}.deb.candidate.$$"
+CANDIDATE_TAR="${BASEDIR}/release/.wlan-package.tar.candidate.$$"
+CANDIDATE_SUMS="${BASEDIR}/release/.SHA256SUMS.candidate.$$"
+cleanup_package_stage() {
+    rm -rf "${PKG_STAGE}"
+    rm -f "${CANDIDATE_DEB}" "${CANDIDATE_VERSIONED_DEB}" "${CANDIDATE_TAR}" "${CANDIDATE_SUMS}"
 }
-trap restore_tmp EXIT
-while IFS= read -r -d '' d; do
-    rel="${d#${BASEDIR}/dist/wlan/}"
-    stash="${STASH_DIR}/${rel}"
-    mkdir -p "$(dirname "${stash}")"
-    mv "$d" "${stash}"
-    TMP_DIRS+=("${rel}")
-done < <(find "${BASEDIR}/dist/wlan" -type d -name tmp -print0)
+trap cleanup_package_stage EXIT
+cp -a "${BASEDIR}/dist/wlan" "${PKG_STAGE}/wlan"
 
-dpkg -b wlan "${BASEDIR}/release/wlan.deb"
+find "${PKG_STAGE}/wlan" -type d \
+    \( -name .omc -o -name .pytest_cache -o -name __pycache__ -o -name test -o -name tests \) \
+    -prune -exec rm -rf {} +
+find "${PKG_STAGE}/wlan" -type f \
+    \( -name '*.pyc' -o -name '*_test.sh' -o -name '*_test.py' -o -name '.gitignore' \) -delete
+find "${PKG_STAGE}/wlan" -type d -name tmp -prune -exec rm -rf {} +
+chmod -R a-s,go-w "${PKG_STAGE}/wlan"
+chmod 0600 "${PKG_STAGE}/wlan/opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan0.conf" \
+           "${PKG_STAGE}/wlan/opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan1.conf"
+chmod 0644 "${PKG_STAGE}/wlan/opt/wlan/config/wifi_init_conf.json"
 
-cp "${BASEDIR}/release/wlan.deb" "${BASEDIR}/release/${package}-${version}.deb"
+dpkg-deb --build --root-owner-group "${PKG_STAGE}/wlan" "${CANDIDATE_DEB}" || {
+    echo "Error: failed to build candidate package" >&2
+    exit 1
+}
+chmod 0644 "${CANDIDATE_DEB}" || {
+    echo "Error: failed to normalize candidate package mode" >&2
+    exit 1
+}
+bash "${BASEDIR}/scripts/validate_release.sh" package "${CANDIDATE_DEB}" || {
+    echo "Error: candidate package failed the release gate" >&2
+    exit 1
+}
+cp "${CANDIDATE_DEB}" "${CANDIDATE_VERSIONED_DEB}" || {
+    echo "Error: failed to stage versioned package candidate" >&2
+    exit 1
+}
 
-echo "Creating package tarball: ${BASEDIR}/release/wlan-package.tar"
-tar --exclude-vcs \
-  --exclude="./release" \
-  --exclude="./.worktrees" \
-  --exclude="./tmp" \
-  --exclude="*/tmp" \
-  -cf "${BASEDIR}/release/wlan-package.tar" -C "${BASEDIR}" .
+echo "Creating sanitized source tarball: ${BASEDIR}/release/wlan-package.tar"
+
+# This is a source/build handoff, not a checkout snapshot.  A positive
+# allowlist prevents local agent state, target evidence, private working docs,
+# and newly-created top-level paths from silently becoming release artifacts.
+SOURCE_ARCHIVE_MEMBERS=()
+while IFS= read -r member; do
+    SOURCE_ARCHIVE_MEMBERS+=("$member")
+done < <(python3 - "${BASEDIR}/scripts/source_archive_manifest.txt" <<'PY'
+import posixpath
+import sys
+
+files = []
+parents = set()
+for raw in open(sys.argv[1], encoding="utf-8"):
+    path = raw.strip()
+    if not path or path.startswith("#"):
+        continue
+    files.append(path)
+    parent = posixpath.dirname(path)
+    while parent:
+        parents.add(parent)
+        parent = posixpath.dirname(parent)
+for member in sorted(parents | set(files)):
+    print(member)
+PY
+)
+
+tar --format=posix \
+    --sort=name \
+    --mtime="@${SOURCE_DATE_EPOCH:-0}" \
+    --pax-option=delete=atime,delete=ctime \
+    --numeric-owner \
+    --owner=0 \
+    --group=0 \
+    --mode='u-s,g-s,go-w' \
+    --no-recursion \
+    -cf "${CANDIDATE_TAR}" -C "${BASEDIR}" "${SOURCE_ARCHIVE_MEMBERS[@]}" || {
+        echo "Error: failed to create candidate source tarball" >&2
+        exit 1
+    }
+chmod 0644 "${CANDIDATE_TAR}" || {
+    echo "Error: failed to normalize candidate source tarball mode" >&2
+    exit 1
+}
+
+bash "${BASEDIR}/scripts/package_tar_test.sh" "${CANDIDATE_TAR}" || {
+    echo "Error: candidate source tarball failed the release gate" >&2
+    exit 1
+}
+
+(
+    cd "${BASEDIR}/release" || exit 1
+    sha256sum \
+        "$(basename "${CANDIDATE_DEB}")" \
+        "$(basename "${CANDIDATE_VERSIONED_DEB}")" \
+        "$(basename "${CANDIDATE_TAR}")" \
+        | sed \
+            -e "s#$(basename "${CANDIDATE_DEB}")#wlan.deb#" \
+            -e "s#$(basename "${CANDIDATE_VERSIONED_DEB}")#${package}-${version}.deb#" \
+            -e "s#$(basename "${CANDIDATE_TAR}")#wlan-package.tar#" \
+        > "${CANDIDATE_SUMS}"
+) || {
+    echo "Error: failed to stage release checksum manifest" >&2
+    exit 1
+}
+if [ "$(wc -l < "${CANDIDATE_SUMS}")" -ne 3 ] \
+    || [ "$(awk '{print $2}' "${CANDIDATE_SUMS}" | LC_ALL=C sort -u | wc -l)" -ne 3 ]; then
+    echo "Error: staged release checksum manifest is incomplete" >&2
+    exit 1
+fi
+chmod 0644 "${CANDIDATE_SUMS}" || {
+    echo "Error: failed to normalize release checksum manifest mode" >&2
+    exit 1
+}
+
+# Publish only after the complete release set has passed its gates. Every
+# destination is replaced by rename, so readers never observe a truncated file.
+# Consumers that require set-level atomicity should pin the published hashes;
+# POSIX has no multi-file atomic rename primitive.
+mv -f "${CANDIDATE_DEB}" "${BASEDIR}/release/wlan.deb" || {
+    echo "Error: failed to publish validated package" >&2
+    exit 1
+}
+mv -f "${CANDIDATE_VERSIONED_DEB}" "${BASEDIR}/release/${package}-${version}.deb" || {
+    echo "Error: failed to publish versioned package" >&2
+    exit 1
+}
+mv -f "${CANDIDATE_TAR}" "${BASEDIR}/release/wlan-package.tar" || {
+    echo "Error: failed to publish validated source tarball" >&2
+    exit 1
+}
+mv -f "${CANDIDATE_SUMS}" "${BASEDIR}/release/SHA256SUMS" || {
+    echo "Error: failed to publish release checksum manifest" >&2
+    exit 1
+}
 echo "Created: ${BASEDIR}/release/wlan-package.tar"

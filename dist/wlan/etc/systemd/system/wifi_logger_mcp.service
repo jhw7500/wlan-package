@@ -1,0 +1,15 @@
+[Unit]
+Description=MCP Current and Voltage Logger
+After=wifi_init.service
+PartOf=wifi_logger.service
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+ExecStart=/usr/local/scripts/wifi_logger_mcp.sh
+Restart=always
+RestartSec=3
+User=root
+StandardOutput=null
+StandardError=null

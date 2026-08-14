@@ -1,10 +1,10 @@
-#!/bin/sh
+#!/bin/bash
 # wifi_event.sh - iw event(netlink) 기반 AP 연결 변화 감지 + on_connect 커맨드 실행
 # Usage: wifi_event.sh [interface]
 
 IFACE="${1:-mlan0}"
 tag=$(basename "$0")
-WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
+WIFI_INIT_CONF_JSON="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
 ON_CONNECT_CMDS=""
 # 링크 상태 조회 헬퍼(iw link 미사용 — 파일 상단 주석 참조). /bin/sh 에서도 동작한다.
 # 이 스크립트는 set -e 가 없어 로드 실패가 조용히 넘어가고, 그러면 wlan_bssid 미정의로
@@ -17,6 +17,21 @@ if ! . /usr/local/scripts/wlan_link_lib.sh 2>/dev/null; then
     # catch-up 만 조용히 건너뛰게 한다(실패 사실은 위 logger 로 이미 남겼다).
     wlan_bssid() { :; }
 fi
+
+# association 전에는 88W9098 HE map이 0x0000으로 보일 수 있다. wifi_init이 남긴
+# per-iface pending이 있을 때만 CONNECTED/ROAMED에서 검증하고, 첫 association이 FW
+# 기본값으로 되돌리면 connected SET + 1회 reassociate로 다음 association을 확정한다.
+# shellcheck source=./wifi_fw_config_lib.sh
+if ! . /usr/local/scripts/wifi_fw_config_lib.sh 2>/dev/null; then
+    logger -p local0.err "[$tag:$LINENO] [$IFACE] wifi_fw_config_lib.sh load failed — deferred MCS verification unavailable"
+    wifi_fw_verify_mcs_connected() { return 0; }
+fi
+
+run_mcs_post_connect_verify() {
+    # mlanutl 검증/제한 복구가 iw event 소비를 막지 않도록 별도 자식에서 수행한다.
+    # 실패는 library가 기록하며 링크/service lifecycle에는 전파하지 않는다.
+    ( wifi_fw_verify_mcs_connected "$WIFI_INIT_CONF_JSON" "$IFACE" || true ) &
+}
 cleanup() {
     logger -p local0.info "[$tag:$LINENO] [$IFACE] stopped"
     exit 0
@@ -71,6 +86,7 @@ run_on_connect() {
 initial_bssid=$(wlan_bssid "$IFACE")
 if [ -n "$initial_bssid" ]; then
     logger -p local0.info "[$tag:$LINENO] [$IFACE] INITIAL CONNECTED bssid=$initial_bssid (catch-up)"
+    run_mcs_post_connect_verify
     run_on_connect
     # catch-up 에서는 LinkUp 트랩을 송신하지 않는다 — 이는 '상태 변화'가 아니라 기존 연결의
     # 복구이고, 데몬 재시작마다 중복 up 트랩을 유발한다. NMS 는 SNMP 폴링(IfLinkStatus
@@ -82,6 +98,7 @@ iw event -t 2>&1 | while IFS= read -r line; do
         *"$IFACE"*"connected to"*)
             bssid=$(echo "$line" | grep -oE '([0-9a-f]{2}:){5}[0-9a-f]{2}' | head -1)
             logger -p local0.info "[$tag:$LINENO] [$IFACE] CONNECTED bssid=$bssid"
+            run_mcs_post_connect_verify
             run_on_connect
             # 트랩은 &(백그라운드) — dest 가 hostname 이면 DNS 지연이 iw event 루프를 블로킹해
             # 후속 이벤트를 누락시킬 수 있어 분리(Gemini/Claude 리뷰 합의). UDP fire-forget 라
@@ -95,6 +112,7 @@ iw event -t 2>&1 | while IFS= read -r line; do
             # 표면화되어 위 케이스가 커버한다.
             bssid=$(echo "$line" | grep -oE '([0-9a-f]{2}:){5}[0-9a-f]{2}' | head -1)
             logger -p local0.info "[$tag:$LINENO] [$IFACE] ROAMED bssid=$bssid"
+            run_mcs_post_connect_verify
             ;;
         *"$IFACE"*"channel switch started"*)
             # STARTED 는 전환 개시 알림 — iw dev info 가 아직 구채널을 반환하므로 트랩 생략.

@@ -80,9 +80,10 @@ wifi_init_conf.json
 
 > **참고**: `BRIDGE_IFACE`, `MAC_MODE`, `ETH_CLIENT_IP`, `eth_link_wait_sec`는 `wbridge` 섹션으로 이동되었습니다. 하위 호환을 위해 `global`에 있어도 동작하지만(레거시 fallback 키), 새 설정에서는 `wbridge` 섹션을 사용하세요.
 
-### 1.1 rate_adapt 안내 (global.rate_adapt는 제거됨)
+### 1.1 rate_adapt 안내
 
-> **⚠️ `global.rate_adapt` 블록은 현재 JSON에 존재하지 않는다.** `wifi_init.sh`는 `.mlanN.rate_adapt.<key> // .global.rate_adapt.<key> // empty` 형태로 global을 fallback으로 **읽도록 코딩되어 있으나, JSON에 데이터가 없으므로** 실질적으로는 항상 **인터페이스별 값(`mlanN.rate_adapt`)** 또는 내장 기본값으로 귀결된다. 즉 rate_adapt는 per-iface 설정만 유효하다 — [§11.5 rate_adapt](#115-rate_adapt---fw-rate-adaptation-per-iface-override) 참조.
+> `rate_adapt`는 인터페이스별 블록만 사용한다. 섹션이 존재하면 4개 필드를 모두 제공해야 하며,
+> partial 값에 global 또는 코드 기본값을 섞지 않는다. 상세 계약은 [§11.5](#115-rate_adapt---fw-rate-adaptation)를 참고한다.
 
 ### 1.2 global.ping_monitor - Ping 모니터 서비스
 
@@ -149,7 +150,7 @@ wifi_init_conf.json
 >
 > **eth 지연연결 라우트 등록**: `peer_route=on`인데 이더넷을 **부팅 후 나중에** 연결한 경우, 부팅 시점엔 `wired_mac_ip_get.py`가 링크 대기(`wait_for_eth_link`)에서 빠져나와 **peer host route(`<peer>/32 dev eth0`)가 누락**된다(나머지 인프라 — eth0 `/32` 미러·table 100·sysctl — 은 링크 무관하게 이미 세팅됨). 이후 eth 연결 시 **`wifi {0|1} br route auto`**로 유선 peer를 sweep 탐색해 그 라우트를 사후 등록한다(읽기 전용 아님). 하위 명령: `find [<subnet>]`=탐색만(읽기 전용), `set <ip>`=IP 직접 지정 등록, `auto [<subnet>]`=정확히 1건 발견 시 자동 등록(0건/2건+는 에러 — 후자는 `set <ip>`로 지정). 서브넷 생략 시 `eth_client_ip`(단일 IP quick ARP) → `eth_sweep_subnet` → mlanN 대역 순으로 대상 결정. (자동 트리거는 후속 확장 예정)
 >
-> **⚠️ `find`/`auto`가 peer를 못 찾을 때 (eth0 타서브넷)**: `eth0`의 IP가 sweep 대역과 다른 서브넷이면(예: `eth0=192.168.1.1/24`, peer=`192.168.0.220`), same-subnet source에만 ARP 응답하는 peer는 발견에 실패한다. #113에서 sweep arping의 source를 **대역 내 우리 IP(mlanN)**로 지정하도록 보정했다(⚠️ **서브넷 인자는 sweep 범위만** 바꾸고 arping source IP는 안 바꾸므로 대역 지정만으로는 안 풀림). 그래도 안 되면 `wifi {0|1} br route set <peer-ip>`로 직접 등록한다.
+> **⚠️ `find`/`auto`가 peer를 못 찾을 때 (eth0 타서브넷)**: `eth0`의 IP가 sweep 대역과 다른 서브넷이면(예: `eth0=192.168.214.5/24`, peer=`192.168.0.220`), same-subnet source에만 ARP 응답하는 peer는 발견에 실패한다. #113에서 sweep arping의 source를 **대역 내 우리 IP(mlanN)**로 지정하도록 보정했다(⚠️ **서브넷 인자는 sweep 범위만** 바꾸고 arping source IP는 안 바꾸므로 대역 지정만으로는 안 풀림). 그래도 안 되면 `wifi {0|1} br route set <peer-ip>`로 직접 등록한다.
 
 #### 클론 MAC 잔재 — `mac_clone_require_peer`
 
@@ -166,7 +167,7 @@ wifi_init_conf.json
 - MFG 프로파일(`mfg_mode=1`)에서는 MAC 설정 전체가 skip되므로 이 정정도 수행하지 않는다.
 - 관련 구현: `wifi_init.sh`(`apply_final_mac`), `update_mac.sh --clear`, `mac_link_lib.sh`(`mac_render_link_without_address`). 테스트: `update_mac_test.sh` T26~T30.
 
-**공장 초기화의 `.link` 정리** — `factory_reset.sh`는 2단계로 MAC 오염을 제거한다. 목표는 "초기화 후 어떤 `.link`도 mlan0/mlan1/eth0에 MAC을 강제하지 않는다"이며, 2단계가 그 사실을 검증까지 한다.
+**공장 초기화의 `.link` 정리** — `factory_reset.sh`는 2단계로 MAC 오염을 제거한다. 목표는 **reset 내부에서 재부팅하기 직전** 어떤 `.link`도 mlan0/mlan1/eth0에 이전 MAC을 강제하지 않게 만드는 것이며, 2단계가 그 사실을 검증한다. 다음 부팅의 `wifi_init.sh`는 보존된 production base 또는 이번 부팅에 새로 검출한 dynamic peer MAC을 의도적으로 다시 기록할 수 있으므로, 부팅 완료 후 `wifi_link_reset.sh --check`가 non-zero인 것만으로 reset 실패로 판정하면 안 된다. 부팅 후에는 선택된 MAC 입력·managed `.link`·실제 인터페이스 MAC이 일치하는지 검증한다.
 
 | 단계 | 동작 |
 |------|------|
@@ -179,7 +180,11 @@ wifi_init_conf.json
 - 판정 불가 2종은 **삭제하지 않고** `logger.crit` + 콘솔 경고만 남긴다 — 오삭제보다 사람 판단이 낫다는 판단. 이때 `wifi_link_reset.sh`는 exit 1이지만 공장 초기화는 계속 진행한다.
   - `OriginalName` 없이 `MACAddress`만 설정하는 `.link` (`Path=`/`Driver=` 매칭은 해석하지 않음)
   - `<name>.link.d/*.conf` 드롭인의 `MACAddress` — 드롭인은 부모 `.link`에 **병합**되므로 템플릿 복원과 무관하게 MAC을 강제한다. 디렉터리라 ①의 `rm`으로도 지워지지 않는다(부모 `.link`가 없는 고아 드롭인은 systemd가 무시하므로 대상 아님).
-- 진단: `wifi_link_reset.sh --check`는 아무것도 바꾸지 않고 강제 MAC이 남았는지만 검사한다(남으면 exit 1). 테스트: `wifi_link_reset_test.sh`
+- 진단: `wifi_link_reset.sh --check`는 아무것도 바꾸지 않고 강제 MAC이 남았는지만 검사한다(남으면 exit 1). 이 명령은 Factory Reset 내부의 **재부팅 전 청결성 검사**이며, `wifi_init`이 최종 MAC 계획을 적용한 부팅 후 상태 검사로 사용하지 않는다. 테스트: `wifi_link_reset_test.sh`
+
+**공장 초기화의 필수 파일 복구 게이트** — FW 설정 4종, `wpa_supplicant@.service`, 두 WPA conf, mlan0/mlan1/eth0 `.network`는 best-effort `cp` 대상이 아니다. 각 파일을 destination과 같은 디렉터리의 temp에 root 소유·규정 모드(WPA 0600, 나머지 0644)로 설치하고 원본과 `cmp`한 뒤 atomic rename한다. WPA/network 및 mod_para/txpower의 `.bak`도 같은 factory 원본으로 재시드하므로 reset 이전 자격증명·IP·FW 설정이 self-healing에서 부활하지 않는다. 설치·sync·rename·최종 내용/권한 검증 중 하나라도 실패하면 reset은 non-zero로 끝나며 reboot하지 않는다. 장시간 버튼 호출자도 이 결과를 우회해 별도 강제 reboot하지 않는다.
+
+Factory Reset이 성공하면 장비가 재부팅되며, 공장 기본 유선 주소는 `eth0=192.168.214.5/24`이다. 재부팅 뒤 `root@192.168.214.5`로 다시 접속해 후조건을 확인한다. 일반 패키지 업그레이드는 현재 active 네트워크 설정을 보존하므로 이 주소는 Factory Reset 시 확정 적용된다. 동일 L2에 초기화 장비를 여러 대 동시에 연결하면 주소 충돌이 발생하므로 한 대씩 격리해 초기화한다.
 
 ### 3.1 wbridge.optimize - 커널 레벨 네트워크 튜닝
 
@@ -470,14 +475,15 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 ## 10. logger - 로깅 주기 설정
 
-**사용 스크립트**: `wifi_logger_cpu.sh`, `wifi_logger_stat.py`, `wifi_bgscan.py`
+**사용 스크립트**: `wifi_logger_cpu.sh`, `wifi_logger_stat.py`, `wifi_bgscan.py`, `wifi_apply_enabled.sh`
 
 이 섹션은 **전역 기본값**이다. `eth0.logger`, `mlan0.logger`, `mlan1.logger`에서 인터페이스별로 override할 수 있다.
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
+| `enabled` | bool | `true` | 시스템 로거 그룹 부팅 활성화. `false`면 온도 로그와 과열 보호도 함께 중단 |
 | `cpu_interval_sec` | int | `60` | CPU/MEM 사용률 로깅 주기 (초) |
-| `link_interval_sec` | float | `0.95` | 링크 상태 체크 주기 (초) |
+| `link_interval_sec` | float | `0.9` | 링크 상태 체크 주기 (초) |
 | `stat_log_interval_sec` | int | `1` | WiFi 통계 로깅 주기 (초) |
 | `stat_check_interval_sec` | int | `1` | WiFi 통계 체크 주기 (초) |
 | `stat_reset_interval_sec` | int | `604800` | 통계 누적 리셋 주기 (초, 기본 7일) |
@@ -493,17 +499,35 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 ```json
 "eth0": {
-    "logger": { "link_interval_sec": 1.0 }
+    "logger": { "enabled": true, "link_interval_sec": 1.0 }
 },
 "mlan0": {
     "logger": {
-        "link_interval_sec": 0.95,
+        "enabled": true,
+        "link_interval_sec": 0.9,
         "stat_log_interval_sec": 1,
         "stat_check_interval_sec": 1,
         "stat_reset_interval_sec": 604800
     }
 }
 ```
+
+로거 그룹 제어 명령은 시스템과 인터페이스에 동일하게
+`start|stop|restart|status|enable|disable`을 제공한다. 런타임 동작과 부팅 정책은
+분리되며, 인터페이스 일괄 명령은 없다. 시스템 그룹의 `stop|disable`은
+`wifi_logger_temp`가 담당하는 온도 체크와 과열 보호도 함께 중단하므로 CLI가 경고한다.
+
+```bash
+wifi log system start|stop|restart|status|enable|disable
+wifi mlan0 log start|stop|restart|status|enable|disable
+wifi mlan1 log start|stop|restart|status|enable|disable
+wifi eth0  log start|stop|restart|status|enable|disable
+```
+
+- `start|stop|restart`: 현재 부팅의 런타임 상태만 변경
+- `enable|disable`: JSON 부팅 정책과 systemd enable 상태만 변경하며 즉시 start/stop하지 않음
+- 시스템 자식(CPU/MMC/TEMP/MCP/SUMMARY)은 각각 systemd가 감독한다. TEMP 중지는 과열 보호 중지와 동일하다.
+- 외부 명령 제한시간은 stat/snapshot/CPU/MMC/MCP 5초, WLAN 온도 조회 3초다. 실패한 온도는 `0`이 아니라 `unknown`이다.
 
 ---
 
@@ -527,12 +551,10 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 | `TXPWRLIMIT_PATH` | string | `""` | 인터페이스별 TX 파워 리밋 파일(절대 경로). 비어있으면 `global.TXPWRLIMIT_PATH`로 fallback. `"none"`이면 이 인터페이스만 미적용. 부팅 시 `mlanutl <iface> hostcmd`로 적용 |
 | `thermal_mgmt` | bool | `true` | FW thermal management 활성화. `true`(기본)=enable, `false`=disable. 부팅 시 `mlanutl <iface> hostcmd`로 적용. 아래 [§11.8](#118-thermal_mgmt---fw-thermal-관리) 참고 |
 
-> `config.json`이 별도로 설치된 환경에서는 `.mlan0.enabled`, `.mlan1.enabled`, `.mlan0.Frequency`, `.mlan1.Frequency`가 존재할 때만 이 값을 override한다.
-> `config.json`은 wlan-package가 배포하거나 갱신하는 파일이 아닌 외부 호환 overlay다. 따라서
-> wlan-package의 정상본 백업 대상에도 포함하지 않으며, 파일을 공급하는 외부 구성 관리자가
-> 백업·복구 수명주기를 함께 소유해야 한다.
+> 인터페이스 활성화와 주파수 값은 `/usr/local/etc/wifi_init_conf.json`만 읽는다.
+> 별도 외부 설정 파일과의 우선순위 병합은 없다.
 
-> **⚠️ 패키지 기본값 주의**: 출하 `wifi_init_conf.json`은 `mlan0.enabled=true`, **`mlan1.enabled=false`**로 설정되어 있다 — 즉 **mlan1은 기본적으로 초기화되지 않는다**(`wifi_init.sh`가 radio setup·bridge enable을 건너뛰고, `wifi_apply_enabled.sh`가 mlan1 child unit을 disable). 신규 설치·공장초기화로 이 기본 config를 그대로 쓰는 환경에서 mlan1을 사용하려면 `mlan1.enabled=true`로 변경한다(override `config.json` 또는 본 파일).
+> **⚠️ 패키지 기본값 주의**: 출하 `wifi_init_conf.json`은 `mlan0.enabled=true`, **`mlan1.enabled=false`**로 설정되어 있다 — 즉 **mlan1은 기본적으로 초기화되지 않는다**(`wifi_init.sh`가 radio setup·bridge enable을 건너뛰고, `wifi_apply_enabled.sh`가 mlan1 child unit을 disable). 신규 설치·공장초기화로 이 기본 config를 그대로 쓰는 환경에서 mlan1을 사용하려면 본 파일의 `mlan1.enabled=true`로 변경한다.
 
 #### net_rx 비트맵
 
@@ -626,6 +648,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 - **`apply`는 `wifi_board_config.sh` 뒤에 실행된다.** 보드 감지 헬퍼가 `.global.MOD_PARA`를 상수로 다시 쓰므로(v0.3.0 `wifi_mod_para_.conf` 통합 마이그레이션 잔재) 그 전에 되쓰면 곧바로 덮인다.
 - 빈 문자열과 `"none"`은 "사용 안 함"이라는 유효한 설정이므로 게이트를 거치지 않고 그대로 보존한다.
 - **되살릴 수 없는 값(없는 파일, 할당 불가 MAC)은 보존하지 않고 템플릿 기본값을 남긴다** (`logger.warn`). 공장 초기화가 고장을 이월하지 않게 하기 위함이며, 특히 `MOD_PARA`가 없는 파일을 가리키면 `moal` insmod가 실패해 무선이 아예 올라오지 않는다.
+- **선택된 production CAL은 `wifi_cal_backup.sh reset`에서 형식까지 재검증한다.** custom marker가 있으면 정상 active/backup을 유지하고 active 손상 시 backup에서 복구하며, 둘 다 손상되면 reset을 실패시켜 reboot을 막는다. 선택되지 않은 custom CAL(active/backup/marker)은 제거하고, package 이름의 CAL은 독립 `/opt/wlan/config/wlan/` baseline으로 active와 `.bak`을 함께 재시드해 과거 bytes가 부활하지 않게 한다.
 - **`.mac`은 `base`만 보존하고 `target`은 초기화된다.** `base`는 유닛의 기준 MAC(`write_mac.sh` / `eth_mac_get.sh`가 기록)이지만 `target`은 `wifi mac <iface> target <MAC>`으로 정하는 런타임 설정이다. 리셋 후 `resolve_mac`은 `dynamic → target → base` 순으로 폴백하므로 보존된 `base`가 쓰인다. 함께 초기화되는 `.link` 파일은 다음 부팅에 `resolve_mac` → `update_mac.sh` 경로로 `base`에서 다시 만들어진다(`.link` 정리 절차는 [공장 초기화의 `.link` 정리](#클론-mac-잔재--mac_clone_require_peer) 참고).
 - 위 10개를 제외한 나머지 키(`STANDARD`, `connect_threshold`, `.wbridge.*`, `.mac.*.target` 등)는 종전대로 전부 템플릿 값으로 초기화된다.
 - 테스트: `wifi_conf_preserve_test.sh` (하드웨어/root 불필요)
@@ -770,55 +793,73 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 > 데몬이 읽지 않으므로 무해(stale)하다. `PREDICTIVE_ROAM` 은 2층 판정 계획의 RSSI 이력
 > 소스라 보류로 남았다.
 
-### 11.5 rate_adapt - FW Rate Adaptation (per-iface override)
+### 11.5 rate_adapt - FW Rate Adaptation
 
-**사용 스크립트**: `wifi_init.sh`
+**사용 스크립트**: `wifi_init.sh`, `wifi.sh`
 
-mlan0 / mlan1에 개별 적용. 코드상 `global.rate_adapt`로 fallback하도록 되어 있으나 **현재 JSON global에는 `rate_adapt` 블록이 없으므로**(§1.1 참조) 실질적으로는 인터페이스별 값 또는 내장 기본값만 유효하다.
+mlan0 / mlan1에 개별 적용한다. 섹션이 있으면 아래 4개 필드가 모두 유효해야 하며,
+하나라도 없거나 잘못되면 해당 iface의 rate 설정 전체를 경고 후 건너뛴다.
 
 | 키 | 타입 | 기본값 (현재 JSON) | 설명 |
 |----|------|------------------|------|
 | `mode` | int | `1` | `0`=legacy, `1`=SR(Success Rate) |
-| `low_thresh` | int | `50` | SR 하한 (%). `255`(0xff)=dynamic |
-| `high_thresh` | int | `80` | SR 상한 (%) |
-| `interval_ms` | int | `100` | 평가 주기 (ms) |
+| `low_thresh` | int | `70` | SR 하한 (%). `255`(0xff)=dynamic |
+| `high_thresh` | int | `90` | SR 상한 (%). static은 `low < high`, dynamic은 양쪽 모두 255 |
+| `interval_ms` | int | `100` | 양수이며 10ms 배수인 평가 주기 |
 
-**우선순위**: `.mlanN.rate_adapt.<key>` > `.global.rate_adapt.<key>` > 내장 기본값
+현재 `70/90`은 확정 상수가 아니라 실기 결과에 따라 템플릿에서 계속 조정하는 시험값이다.
+코드 fallback에는 이 수치를 복제하지 않는다.
 
 ```json
 "mlan0": {
-    "rate_adapt": { "mode": 1, "low_thresh": 50, "high_thresh": 80, "interval_ms": 100 }
+    "rate_adapt": { "mode": 1, "low_thresh": 70, "high_thresh": 90, "interval_ms": 100 }
 },
 "mlan1": {
-    "rate_adapt": { "mode": 1, "low_thresh": 40, "high_thresh": 70, "interval_ms": 200 }
+    "rate_adapt": { "mode": 1, "low_thresh": 70, "high_thresh": 90, "interval_ms": 100 }
 }
 ```
 
-> **적용 시점**: `apply_iface_radio_defaults()` 안에서 association 전에 호출. 각 iface 초기화 시 mlanutl rate_adapt_cfg로 전달.
+> **적용 시점과 한계**: 부팅 association 전에만 SET하고 즉시 GET을 로그에 남긴다. NXP 도구 계약상
+> connected 상태 SET은 지원되지 않는다. 실기에서는 mlan0 일반 reconnect에는 70/90이 유지됐지만
+> 직접 roam의 `COMPLETED`에서 FW 기본 `30/50`으로 복귀했다. ac 전용 mlan1은 최초 association과
+> 일반 reconnect의 `COMPLETED`에서도 30/50으로 복귀했다. `wifi <iface> rate`는 configured/live를
+> 함께 표시하며, 수정은 `wifi <iface> rate <mode> <low> <high> <interval_ms>`로 JSON에만 저장한다.
 
 ### 11.6 mcs_tier - MCS Tier 능력 제한
 
-**사용 스크립트**: `wifi_init.sh`
+**사용 스크립트**: `wifi_init.sh`, `wifi_event.sh`, `wifi_apply_enabled.sh`
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `enabled` | bool | `false` (양쪽) | mcstiercfg 적용 활성화 |
-| `ht` | string | mlan0 `"7"` / mlan1 `""` | HT(11n) 인자. 예: `"7"`(1x1), `"15"`(2x2). `""`이면 건너뜀 |
-| `vht` | string | mlan0 `"7"` / mlan1 `""` | VHT(11ac) 인자. 예: `"7"`, `"8"`, `"9"`. `""`이면 건너뜀 |
-| `he` | string | mlan0 `"both 7"` / mlan1 `""` | HE(11ax) 인자. 예: `"7"`, `"9"`, `"11"`, 또는 `"both 7"`. `""`이면 건너뜀 |
+| `enabled` | bool | `true` (양쪽) | mcstiercfg 적용·검증 활성화 |
+| `ht` | string | `"7"` (양쪽) | HT(11n). `"7"` 또는 `"15"` |
+| `vht` | string | `"7"` (양쪽) | VHT(11ac). `"7"`, `"8"`, `"9"` |
+| `he` | string | mlan0 `"both 7"` / mlan1 `""` | HE(11ax) Tx/Rx. mlan0만 지원하며 mlan1은 반드시 빈 문자열 |
 
-> **인터페이스별 기본값 주의**: 출하 JSON은 mlan0에만 tier 값(`ht="7"`, `vht="7"`, `he="both 7"`)이 설정돼 있고 mlan1은 모두 빈 문자열(`""`)이다. 단 `mcs_tier.enabled`는 **양쪽 모두 `false`**이므로 기본 상태에서는 실제로 적용되지 않는다(값만 preset).
+> **인터페이스 capability**: mlan0은 ax이므로 HT/VHT/HE를 검증한다. mlan1은 ac까지만 지원하므로
+> HT/VHT만 적용하고 HE 설정과 `11axcfg` 판정에서 제외한다.
 
-**적용 시점**: 부팅 시 `wifi_init.sh`의 `apply_iface_radio_defaults`에서 association 전에 1회 적용
+**적용 시점**: 부팅 시 association 전에 SET한다. SET return code만 신뢰하지 않고
+`mcstiercfg` GET을 검증하며 mlan0 HE는 `11axcfg` map도 함께 확인한다. HT/VHT가 다르거나
+명확한 비영(非零) HE 값이 설정 의도와 다르면 제한 재시도 후 supplicant 시작을 차단한다.
+이 persistent 실패에는 기존 systemd lifecycle 복구가 적용된다.
 
-- `enabled: false`(기본)이면 mcstiercfg를 실행하지 않음 (FW 기본값 사용)
-- 각 키는 **문자열**로 관리. 빈 문자열(`""`)이면 해당 prefix를 명령에서 제외
-- 값 안의 토큰은 공백으로 구분되어 mcstiercfg 인자로 **그대로 전달**됨
-  - `he: "7"` → `mlanutl <iface> mcstiercfg he 7`
-  - `he: "both 7"` → `mlanutl <iface> mcstiercfg he both 7`
-- 유효성 검사를 하지 않으므로 mcstiercfg가 지원하는 문법은 자유롭게 사용 가능 (실패 시 에러 로깅만 수행)
-- 인터페이스별 독립 설정 가능 (mlan0과 mlan1에 다른 tier)
-- 하위호환: 기존 int 값(`"ht": 7`)도 문자열로 읽혀 동일하게 동작
+88W9098 실기에서는 AP가 없는 factory reset 상태에서 HT/VHT는 적용됐지만 association 전
+HE Tx/Rx가 `0x0000`으로만 보이는 경우가 확인됐다. 이 경우는 실패가 아니라 per-iface pending으로
+기록하고 association을 진행한다. `wifi_event@mlan0`이 INITIAL CONNECTED/CONNECTED/ROAMED에서
+먼저 GET을 확인한다. 값이 맞으면 pending을 지운다.
+
+p149.115 실기에서는 첫 association이 HE를 FW 기본 `0xFFFA`로 되돌렸다. 이 경우 connected SET으로
+다음 association capability를 저장하고 per-iface 1회 마커를 만든 뒤 `wpa_cli reassociate`를 한 번만
+요청한다. 다음 CONNECTED의 GET이 JSON 의도와 일치하면 pending과 마커를 지운다. SET이 보이지 않거나
+재association 뒤에도 불일치하면 반복 재연결하지 않고 링크·pending·오류를 보존한다. cold boot 실증에서
+이 과정 후 HE/VHT `0xFFF0`이 확정됐고, 동일 SSID BSSID roam에서도 추가 SET/reassociate 없이 유지됐다.
+AC 전용 mlan1은 이 deferred HE 경로와 `11axcfg` 검증 대상이 아니다.
+
+- `enabled: false`이면 mcstiercfg를 실행하지 않고 FW 기본값을 사용한다.
+- `enabled: true`이면 iface capability에 맞는 필드를 모두 문자열로 제공해야 한다.
+- mlan0 AX+HE 설정은 deferred 검증과 제한된 1회 복구를 위해 `wifi_event@mlan0`을 활성화한다. mlan1 AC 설정만으로는 활성화하지 않는다.
+- CLI 수정은 JSON만 바꾸며 다음 부팅의 association 전 검증 경로에서 적용한다.
 
 > **주의**: VHT는 FW 내부에 MCS 7 하한(floor)이 있어 tier 7이 사실상 최소값.
 
@@ -907,7 +948,7 @@ SNMP는 **기본 off(opt-in)**이다. `snmp.enabled=true`일 때만 `wifi_apply_
 | `checker.enabled` | `true` | `false` | mlan1 비활성 인터페이스 |
 | `on_connect.enabled` | `true` | `false` | mlan1 비활성 인터페이스 |
 | `logger.enabled` | `true` | `false` | mlan1 비활성 인터페이스 |
-| `mcs_tier.ht` / `.vht` / `.he` | `"7"` / `"7"` / `"both 7"` | `""` / `""` / `""` | mlan0만 MCS tier 제한값 설정(단 `mcs_tier.enabled`는 양쪽 `false`) |
+| `mcs_tier.ht` / `.vht` / `.he` | `"7"` / `"7"` / `"both 7"` | `"7"` / `"7"` / `""` | mlan1은 ac 전용이므로 HE만 제외 |
 
 > **더 이상 차이 아님**: `PREDICTIVE_ROAM.enable` 은 양쪽 `false` 로 동일하다. `LOAD_BASED_ROAM`/`ADAPTIVE_INTERVAL`/`POST_ROAM_ARP_OPTIMIZATION` 은 감사 D1(2026-07-31)로 **제거**됐다(§11.4 제거됨 참조).
 

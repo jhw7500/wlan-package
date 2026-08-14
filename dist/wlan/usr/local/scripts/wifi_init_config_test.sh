@@ -4,6 +4,12 @@ set -euo pipefail
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 LIB="$SCRIPT_DIR/wifi_init_config_lib.sh"
 WIFI_INIT_SH="$SCRIPT_DIR/wifi_init.sh"
+WIFI_SH="$SCRIPT_DIR/wifi.sh"
+FACTORY_RESET_SH="$SCRIPT_DIR/factory_reset.sh"
+POSTINST="$SCRIPT_DIR/../../../DEBIAN/postinst"
+LEGACY_CONFIG_TEMPLATE="$SCRIPT_DIR/../../../opt/wlan/config/config.json"
+GUIDE="$SCRIPT_DIR/../../../../../docs/wifi_init_conf_guide.md"
+HANDOFF="$SCRIPT_DIR/../../../../../docs/wifi_init_conf_webui_handoff.md"
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -39,6 +45,40 @@ expect_file_contains() {
         log_pass "$desc"
     else
         log_fail "$desc (missing pattern: $pattern)"
+    fi
+}
+
+expect_file_not_contains() {
+    local desc="$1"
+    local file="$2"
+    local pattern="$3"
+
+    if grep -q "$pattern" "$file"; then
+        log_fail "$desc (unexpected pattern: $pattern)"
+    else
+        log_pass "$desc"
+    fi
+}
+
+expect_path_absent() {
+    local desc="$1"
+    local path="$2"
+
+    if [ -e "$path" ] || [ -L "$path" ]; then
+        log_fail "$desc (unexpected path: $path)"
+    else
+        log_pass "$desc"
+    fi
+}
+
+expect_file_exists() {
+    local desc="$1"
+    local path="$2"
+
+    if [ -f "$path" ]; then
+        log_pass "$desc"
+    else
+        log_fail "$desc (missing file: $path)"
     fi
 }
 
@@ -107,6 +147,21 @@ expect_equal \
     "$(grep -c '^[[:space:]]*if /usr/local/scripts/update_mac.sh "\$iface" --clear' "$WIFI_INIT_SH")" \
     "1"
 
+expect_file_not_contains "wifi_init.sh has no legacy config path" "$WIFI_INIT_SH" '/usr/local/etc/config.json'
+expect_file_not_contains "wifi.sh has no legacy config path" "$WIFI_SH" '/usr/local/etc/config.json'
+expect_file_not_contains "config library has no overlay branch" "$LIB" 'overlay_json'
+expect_file_not_contains "factory reset does not restore legacy config" "$FACTORY_RESET_SH" '/opt/wlan/config/config.json'
+expect_path_absent "legacy config template is not packaged" "$LEGACY_CONFIG_TEMPLATE"
+expect_file_contains "upgrade removes retired active config" "$POSTINST" 'rm -f -- /usr/local/etc/config.json'
+expect_file_not_contains "postinst JSON merge never truncates active" "$POSTINST" 'echo "$merged" > "$active"'
+expect_file_contains "postinst JSON merge uses atomic helper" "$POSTINST" 'atomic_json_install "$merged" "$active"'
+expect_file_exists "operator guide is available to the source validation" "$GUIDE"
+expect_file_exists "WebUI handoff is available to the source validation" "$HANDOFF"
+expect_file_not_contains "guide has no legacy active config path" "$GUIDE" '/usr/local/etc/config.json'
+expect_file_not_contains "guide has no legacy template path" "$GUIDE" '/opt/wlan/config/config.json'
+expect_file_not_contains "handoff has no legacy active config path" "$HANDOFF" '/usr/local/etc/config.json'
+expect_file_not_contains "handoff has no legacy template path" "$HANDOFF" '/opt/wlan/config/config.json'
+
 run_case \
     "base values" \
     '{"mlan0":{"enabled":false,"Frequency":"5GHz"}}' \
@@ -115,68 +170,18 @@ run_case \
     "5GHz"
 
 run_case \
-    "overlay overrides" \
+    "legacy overlay is ignored" \
     '{"mlan0":{"enabled":false,"Frequency":"5GHz"}}' \
     '{"mlan0":{"enabled":true,"Frequency":"2.4GHz"}}' \
-    "true" \
-    "2.4GHz"
-
-run_case \
-    "partial overlay" \
-    '{"mlan0":{"enabled":false,"Frequency":"5GHz"}}' \
-    '{"mlan0":{"enabled":true}}' \
-    "true" \
+    "false" \
     "5GHz"
 
-# --- mcs_tier tests ---
-
-echo ""
-echo "=== mcs_tier tests ==="
-
-# T-mcs-01: mcs_tier disabled (default)
-_json='{"mlan0":{"mcs_tier":{"enabled":false,"ht":7,"vht":7,"he":7}}}'
-expect_equal "mcs_tier disabled" \
-    "$(echo "$_json" | jq -r '.mlan0.mcs_tier.enabled // false')" \
-    "false"
-
-# T-mcs-02: mcs_tier enabled, read all tiers
-_json='{"mlan0":{"mcs_tier":{"enabled":true,"ht":7,"vht":8,"he":9}}}'
-expect_equal "mcs_tier enabled" \
-    "$(echo "$_json" | jq -r '.mlan0.mcs_tier.enabled')" \
-    "true"
-expect_equal "mcs_tier ht=7" \
-    "$(echo "$_json" | jq -r '.mlan0.mcs_tier.ht')" \
-    "7"
-expect_equal "mcs_tier vht=8" \
-    "$(echo "$_json" | jq -r '.mlan0.mcs_tier.vht')" \
-    "8"
-expect_equal "mcs_tier he=9" \
-    "$(echo "$_json" | jq -r '.mlan0.mcs_tier.he')" \
-    "9"
-
-# T-mcs-03: partial config (he only)
-_json='{"mlan0":{"mcs_tier":{"enabled":true,"he":11}}}'
-expect_equal "mcs_tier partial ht=empty" \
-    "$(echo "$_json" | jq -r '.mlan0.mcs_tier.ht // empty')" \
-    ""
-expect_equal "mcs_tier partial he=11" \
-    "$(echo "$_json" | jq -r '.mlan0.mcs_tier.he')" \
-    "11"
-
-# T-mcs-04: mcs_tier section missing → default false
-_json='{"mlan0":{"enabled":true}}'
-expect_equal "mcs_tier missing → false" \
-    "$(echo "$_json" | jq -r '.mlan0.mcs_tier.enabled // false')" \
-    "false"
-
-# T-mcs-05: per-interface independence
-_json='{"mlan0":{"mcs_tier":{"enabled":true,"he":7}},"mlan1":{"mcs_tier":{"enabled":true,"he":11}}}'
-expect_equal "mlan0 he=7" \
-    "$(echo "$_json" | jq -r '.mlan0.mcs_tier.he')" \
-    "7"
-expect_equal "mlan1 he=11" \
-    "$(echo "$_json" | jq -r '.mlan1.mcs_tier.he')" \
-    "11"
+run_case \
+    "legacy partial overlay is ignored" \
+    '{"mlan0":{"enabled":false,"Frequency":"5GHz"}}' \
+    '{"mlan0":{"enabled":true}}' \
+    "false" \
+    "5GHz"
 
 # --- radio mode/bw helper tests ---
 

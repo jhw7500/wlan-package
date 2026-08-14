@@ -30,6 +30,8 @@ prev_retry_count = None
 prev_tx_frame_count = None
 
 WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
+STAT_COMMAND_TIMEOUT_S = 5
+PROC_NET_DEV = "/proc/net/dev"
 
 def load_logger_config(iface):
     """Load logger config: {iface}.logger.key → logger.key → default"""
@@ -341,8 +343,22 @@ def get_wifi_info():
 
 def get_network_stats():
     """Extract RX/TX bytes and packets for mlan0 from /proc/net/dev"""
-    cmd = "cat /proc/net/dev"
-    result = os.popen(cmd).read()
+    empty_stats = {
+        "rx_bytes": 0,
+        "rx_packets": 0,
+        "tx_bytes": 0,
+        "tx_packets": 0,
+    }
+    try:
+        with open(PROC_NET_DEV, encoding="utf-8") as proc_net_dev:
+            result = proc_net_dev.read()
+    except OSError as exc:
+        logger.message(
+            "err",
+            f"[{IFACE}] failed to read {PROC_NET_DEV}: {exc}",
+            _EXTRA_(),
+        )
+        return empty_stats
     
     mlan0_data = re.search(rf"{IFACE}:\s+(\d+)\s+(\d+)\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+(\d+)\s+(\d+)", result)
 
@@ -353,12 +369,7 @@ def get_network_stats():
             "tx_bytes": int(mlan0_data.group(3)),
             "tx_packets": int(mlan0_data.group(4)),
         }
-    return {
-        "rx_bytes": 0,
-        "rx_packets": 0,
-        "tx_bytes": 0,
-        "tx_packets": 0,
-    }
+    return empty_stats
 
 '''
 def get_mlanutl_log(interface="mlan0"):
@@ -374,11 +385,24 @@ def get_mlanutl_log(interface="mlan0"):
 #ERROR_THROTTLE_SEC = 5    # 에러 로그는 5초에 한 번만 출력
 
 def get_mlanutl_log(interface="mlan0"):
-    global _last_log_error_time
     try:
-        return subprocess.check_output(["mlanutl", interface, "getlog"], text=True)
-    except subprocess.CalledProcessError as e:
-        logger.message("err", f"[{IFACE}] getlog Failed: {e}", _EXTRA_())
+        result = subprocess.run(
+            ["mlanutl", interface, "getlog"],
+            capture_output=True,
+            text=True,
+            timeout=STAT_COMMAND_TIMEOUT_S,
+            check=True,
+        )
+        return result.stdout
+    except subprocess.TimeoutExpired:
+        logger.message(
+            "err",
+            f"[{interface}] getlog timed out after {STAT_COMMAND_TIMEOUT_S}s",
+            _EXTRA_(),
+        )
+        return ""
+    except (subprocess.CalledProcessError, OSError) as e:
+        logger.message("err", f"[{interface}] getlog failed: {e}", _EXTRA_())
         return ""
 
 

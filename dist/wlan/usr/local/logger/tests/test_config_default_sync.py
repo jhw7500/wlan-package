@@ -53,3 +53,21 @@ def test_schema_patch_resolves_shadowed_toplevel_block():
         patched["properties"]["mac"]["properties"]["mlan0"]["properties"]["base"]
     ) or patched["properties"]["mac"]["properties"]["mlan0"][
         "properties"]["base"].get("default") != 77
+
+
+def test_handoff_unresolved_rows_are_explicitly_allowlisted():
+    """런타임 생성 필드 외의 typo/유령 행은 정보 로그로 통과시키지 않는다."""
+    import importlib.util
+    import json
+
+    spec = importlib.util.spec_from_file_location(
+        "gen_cfg_unresolved", os.path.join(_REPO, "scripts", "gen_config_defaults.py")
+    )
+    gen = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gen)
+    tmpl = json.loads(gen.TEMPLATE.read_text(encoding="utf-8"))
+    lines = gen.HANDOFF.read_text(encoding="utf-8").split("\n")
+    _changed, unresolved, _uncovered = gen.handoff_sync(tmpl, lines, write=False)
+    unknown = [(line, key) for line, key in unresolved
+               if key not in gen.HANDOFF_UNRESOLVED_ALLOWLIST]
+    assert not unknown, f"allowlist 없는 handoff 미해결 행: {unknown}"

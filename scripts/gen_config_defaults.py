@@ -200,6 +200,9 @@ def header_candidates(header_text, tops):
 # handoff §3 에 행이 없어도 되는 템플릿 leaf (mlanN 정규화 경로 문자열).
 # 항목을 늘릴 땐 왜 WebUI 인수인계에서 빼는지 사유를 함께 적을 것.
 HANDOFF_COVERAGE_ALLOWLIST = set()
+# 템플릿에 의도적으로 없는 런타임 생성 필드. 이 목록 밖의 미해결 표 행은 typo/유령
+# 후보이므로 --check를 실패시킨다.
+HANDOFF_UNRESOLVED_ALLOWLIST = {"mcp.iio_device"}
 
 
 def handoff_sync(tmpl, lines, write):
@@ -275,6 +278,10 @@ def main():
     h_changed, h_unresolved, h_uncovered = handoff_sync(
         tmpl, handoff_lines, write=args.write
     )
+    h_unknown_unresolved = [
+        (ln, key) for ln, key in h_unresolved
+        if key not in HANDOFF_UNRESOLVED_ALLOWLIST
+    ]
 
     fail = False
     if missing:
@@ -296,9 +303,15 @@ def main():
         for ln, key, cur, want in h_changed:
             print(f"    :{ln} `{key}`: {cur} → {want}")
     if h_unresolved:
-        print(f"[handoff] 템플릿에서 미해결(제거/유령 후보 — 행 점검 필요): "
-              f"{len(h_unresolved)}건")
+        print(f"[handoff] 템플릿 미해결 행: {len(h_unresolved)}건 "
+              f"(명시적 runtime allowlist={len(h_unresolved) - len(h_unknown_unresolved)})")
         for ln, key in h_unresolved:
+            print(f"    :{ln} `{key}`")
+    if h_unknown_unresolved:
+        fail = True
+        print(f"[handoff] allowlist 없는 미해결 행 — 제거/유령 후보: "
+              f"{len(h_unknown_unresolved)}건")
+        for ln, key in h_unknown_unresolved:
             print(f"    :{ln} `{key}`")
     if h_uncovered:
         fail = True
@@ -308,8 +321,8 @@ def main():
             print(f"    {p}")
 
     if args.write:
-        if missing or missing_default:
-            print("스키마 누락 키/default 는 --write 로 자동 추가하지 않는다(설명 필요). 중단.")
+        if missing or missing_default or h_unknown_unresolved:
+            print("스키마 누락 또는 allowlist 없는 handoff 행은 --write 로 자동 처리하지 않는다. 중단.")
             return 1
         slines = SCHEMA.read_text(encoding="utf-8").split("\n")
         for p, tv, _ in drift:
@@ -329,7 +342,7 @@ def main():
     if fail or drift or h_changed:
         print("불일치 있음 — scripts/gen_config_defaults.py --write 로 동기화하라.")
         return 1
-    print(f"동기화 상태 정상 (handoff 미해결 {len(h_unresolved)}건은 정보성).")
+    print(f"동기화 상태 정상 (runtime 생성 handoff 행 {len(h_unresolved)}건 allowlist).")
     return 0
 
 

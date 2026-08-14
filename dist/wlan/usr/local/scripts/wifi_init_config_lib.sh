@@ -40,15 +40,10 @@ wifi_init_get_iface_enabled() {
     local default="${2:-true}"
     local value="$default"
     local conf_json="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
-    local overlay_json="${JSON_FILE:-/usr/local/etc/config.json}"
     local query=".${iface}.enabled"
 
     if wifi_init_json_key_exists "$conf_json" "$query"; then
         value=$(wifi_init_json_read_raw "$conf_json" "$query")
-    fi
-
-    if wifi_init_json_key_exists "$overlay_json" "$query"; then
-        value=$(wifi_init_json_read_raw "$overlay_json" "$query")
     fi
 
     wifi_init_normalize_bool "$value" "$default"
@@ -59,15 +54,10 @@ wifi_init_get_iface_frequency() {
     local default="${2:-auto}"
     local value="$default"
     local conf_json="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
-    local overlay_json="${JSON_FILE:-/usr/local/etc/config.json}"
     local query=".${iface}.Frequency"
 
     if wifi_init_json_key_exists "$conf_json" "$query"; then
         value=$(wifi_init_json_read_raw "$conf_json" "$query")
-    fi
-
-    if wifi_init_json_key_exists "$overlay_json" "$query"; then
-        value=$(wifi_init_json_read_raw "$overlay_json" "$query")
     fi
 
     if [ -z "$value" ] || [ "$value" = "null" ]; then

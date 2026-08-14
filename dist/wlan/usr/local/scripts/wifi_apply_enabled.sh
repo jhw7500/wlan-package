@@ -14,6 +14,8 @@
 #   .wbridge.thermal.enabled                  → wifi_thermal_state.timer
 #   .snmp.enabled                             → snmpd.service (배포판 net-snmp 유닛)
 #   .opc.enabled                              → opcd.service (wlan-opc OPC 제어 데몬)
+#   .logger.enabled                           → wifi_logger.service (시스템 로거 그룹)
+#   .eth0.logger.enabled                      → wifi_logger@eth0.service
 #   .mlanN.enabled (인터페이스 자체)          → wpa_supplicant@mlanN.service
 #   .mlanN.logger.enabled                     → wifi_logger@mlanN.service
 #   .mlanN.checker.enabled                    → wifi_checker@mlanN.service
@@ -21,24 +23,30 @@
 #   .mlanN.roaming.enabled                    → wifi_roam@mlanN.service
 #   .mlanN.periodic_roam.enabled              → wifi_periodic_roam@mlanN.service
 #   .mlanN.arping.enabled                     → wifi_arping@mlanN.service
-#   (.mlanN.on_connect.enabled OR .snmp.trap.enabled) → wifi_event@mlanN.service
+#   (.mlanN.on_connect.enabled OR .snmp.trap.enabled OR
+#    (AX iface AND .mlanN.mcs_tier.enabled AND HE configured))
+#                                               → wifi_event@mlanN.service
 #   (.wbridge.enabled AND .wbridge.bridge_iface == mlanN) → wifi_bridge@mlanN.service
 #
 # 관리 외 (운영자가 systemctl로 직접): wifi_arping@*, wifi_capture@*,
-# wifi_led@*, wifi_ping@*, wifi_logger.service(글로벌)
+# wifi_led@*, wifi_ping@*
 #
 set -u
 
 JSON="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
 tag="wifi_apply_enabled"
+STRICT=0
+case "${WIFI_APPLY_STRICT:-0}" in
+    1|true|TRUE|yes|YES) STRICT=1 ;;
+esac
 
 # 처리 결과 누적
 ENABLED_UNITS=()
 DISABLED_UNITS=()
 FAILED_UNITS=()
 
-[ -f "$JSON" ] || { logger -p local0.warn "[$tag:$LINENO] $JSON not found, skip"; exit 0; }
-command -v jq >/dev/null 2>&1 || { logger -p local0.warn "[$tag:$LINENO] jq not available, skip"; exit 0; }
+[ -f "$JSON" ] || { logger -p local0.warn "[$tag:$LINENO] $JSON not found, skip"; exit "$STRICT"; }
+command -v jq >/dev/null 2>&1 || { logger -p local0.warn "[$tag:$LINENO] jq not available, skip"; exit "$STRICT"; }
 
 # JSON parse 검증 — 실패 시 즉시 중단. 그렇지 않으면 모든 키가 null로 평가되어
 # default 값(logger/checker는 true)이 운영자 의도를 덮어쓸 수 있다.
@@ -99,6 +107,12 @@ apply() {
 _MOD_PARA=$(jq -r '.global.MOD_PARA // "cts/wifi_mod_para.conf"' "$JSON" 2>/dev/null) || _MOD_PARA="cts/wifi_mod_para.conf"
 [ -n "$_MOD_PARA" ] || _MOD_PARA="cts/wifi_mod_para.conf"
 MFG_MODE=$(grep -m1 '^[[:space:]]*mfg_mode=' "/lib/firmware/$_MOD_PARA" 2>/dev/null | sed 's/.*mfg_mode=//' | tr -d ' ' || echo "0")
+
+# 시스템/유선 로거는 MFG STA 프로파일과 독립이다. MFG early-return보다 먼저
+# 적용해야 wifi log system|eth0 enable/disable이 모든 모드에서 같은 의미를 가진다.
+apply wifi_logger.service     "$(get_bool ".logger.enabled" "true")"
+apply wifi_logger@eth0.service "$(get_bool ".eth0.logger.enabled" "true")"
+
 if [ "${MFG_MODE:-0}" = "1" ]; then
     logger -p local0.info "[$tag:$LINENO] mfg_mode=1 → MFG profile: disable+stop STA/FW-touching units"
     MFG_UNITS=(wifi_ping_monitor.service wifi_thermal_state.timer wifi_mgmt_log.timer
@@ -122,6 +136,9 @@ if [ "${MFG_MODE:-0}" = "1" ]; then
     done
     systemctl daemon-reload 2>/dev/null || true
     logger -p local0.info "[$tag:$LINENO] MFG profile applied: disabled=${#DISABLED_UNITS[@]} failed=${#FAILED_UNITS[@]}"
+    if [ "$STRICT" -eq 1 ] && [ "${#FAILED_UNITS[@]}" -gt 0 ]; then
+        exit 1
+    fi
     exit 0
 fi
 
@@ -166,9 +183,18 @@ for iface in mlan0 mlan1; do
     apply "wifi_arping@${iface}.service"        "$(get_bool ".${iface}.arping.enabled"        "false")"
     apply "wifi_periodic_roam@${iface}.service" "$(get_bool ".${iface}.periodic_roam.enabled" "false")"
 
-    # wifi_event: on_connect 명령 또는 SNMP 링크/채널 트랩이 필요하면 enable
+    # wifi_event: on_connect 명령, SNMP 링크/채널 트랩, 또는 association 후 deferred
+    # MCS 검증/1회 제한 복구가 필요하면 enable한다.
     _oc=$(get_bool ".${iface}.on_connect.enabled" "false")
-    if [ "$_oc" = "true" ] || [ "$SNMP_TRAP_ENABLED" = "true" ]; then
+    _mcs=$(get_bool ".${iface}.mcs_tier.enabled" "false")
+    _standard=$(jq -r ".${iface}.STANDARD // \"\" | ascii_downcase" "$JSON" 2>/dev/null)
+    _mcs_he=$(jq -r ".${iface}.mcs_tier.he // \"\"" "$JSON" 2>/dev/null)
+    _mcs_verify="false"
+    if [ "$_mcs" = "true" ] && { [ "$_standard" = "ax" ] || [ "$_standard" = "6" ]; } \
+       && [ -n "$_mcs_he" ]; then
+        _mcs_verify="true"
+    fi
+    if [ "$_oc" = "true" ] || [ "$SNMP_TRAP_ENABLED" = "true" ] || [ "$_mcs_verify" = "true" ]; then
         apply "wifi_event@${iface}.service" "true"
     else
         apply "wifi_event@${iface}.service" "false"
@@ -205,4 +231,8 @@ if [ "${#FAILED_UNITS[@]}" -gt 0 ]; then
 fi
 if [ "${#ENABLED_UNITS[@]}" -eq 0 ] && [ "${#DISABLED_UNITS[@]}" -eq 0 ] && [ "${#FAILED_UNITS[@]}" -eq 0 ]; then
     _log_summary "  no change (all units already in desired state)"
+fi
+
+if [ "$STRICT" -eq 1 ] && [ "${#FAILED_UNITS[@]}" -gt 0 ]; then
+    exit 1
 fi
