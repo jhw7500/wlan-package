@@ -159,10 +159,14 @@ Notes on configuration ownership:
 - nginx is a prerequisite supplied by the standard product image, so it is not a
   required unit for Factory Reset. Factory Reset succeeds even if nginx is
   missing or unhealthy.
-- The Factory Reset `eth0` address is `192.168.1.1/24`. Regular package upgrades
-  preserve the current active network configuration, so this value applies only
-  to fresh installs and Factory Reset. Set the site-specific wired management
-  address after installation.
+- The Factory Reset `eth0` address is `192.168.1.1/24`. **This is the recovery
+  path.** Factory Reset restores defaults, including the default WPA supplicant
+  configuration, so the unit will not associate unless the default SSID happens
+  to be in range — that is expected. Reconfiguration is done over Ethernet:
+  connect a host on `192.168.1.0/24` to `eth0` and reach the unit at
+  `192.168.1.1`. Regular package upgrades preserve the current active network
+  configuration, so this value applies only to fresh installs and Factory Reset.
+  Site-specific wired addresses are set after installation.
 
 ### 3. Verify Installation
 
