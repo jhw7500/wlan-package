@@ -19,6 +19,55 @@ _wifi_fw_has_section() {
     jq -e --arg i "$iface" --arg s "$section" '.[$i][$s] != null' "$json" >/dev/null 2>&1
 }
 
+# 0.5.2 이하 wifi CLI는 jq 식에 MCS 값을 숫자로 넣었다. 0.5.3의 스키마와
+# 런타임 계약은 문자열이며, mlan0 HE는 Tx/Rx 방향을 명시한다. 업그레이드 시
+# 유효한 레거시 값만 정규형으로 바꾸고 알 수 없는 값은 그대로 남겨 검증기가
+# 거부하도록 한다.
+wifi_fw_normalize_legacy_mcs_json() {
+    local json="$1"
+    jq '
+        def canonical_number($allowed):
+            . as $value
+            | if (($value | type) == "number" and (($allowed | index($value)) != null))
+              then ($value | tostring)
+              else $value
+              end;
+        def normalize_common($iface):
+            if (.[$iface].mcs_tier? | type) == "object" then
+                (if (.[$iface].mcs_tier | has("ht"))
+                 then .[$iface].mcs_tier.ht |= canonical_number([7, 15])
+                 else . end)
+                | (if (.[$iface].mcs_tier | has("vht"))
+                   then .[$iface].mcs_tier.vht |= canonical_number([7, 8, 9])
+                   else . end)
+            else . end;
+        normalize_common("mlan0")
+        | normalize_common("mlan1")
+        | if ((.mlan0.mcs_tier? | type) == "object"
+              and (.mlan0.mcs_tier | has("he"))) then
+              .mlan0.mcs_tier.he |= (
+                  . as $value
+                  | if (($value | type) == "number"
+                        and (([7, 9, 11] | index($value)) != null))
+                    then "both \($value)"
+                    else $value
+                    end
+              )
+          else . end
+        | if ((.mlan1.mcs_tier? | type) == "object"
+              and (.mlan1.mcs_tier | has("he"))) then
+              .mlan1.mcs_tier.he |= (
+                  . as $value
+                  | if (($value | type) == "number"
+                        and (([7, 9, 11] | index($value)) != null))
+                    then ""
+                    else $value
+                    end
+              )
+          else . end
+    ' "$json"
+}
+
 wifi_fw_validate_rate_config() {
     local json="$1" iface="$2" values mode low high interval
     _wifi_fw_has_section "$json" "$iface" rate_adapt || return 2

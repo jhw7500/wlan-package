@@ -393,6 +393,30 @@ json_merge() {
   fi
 }
 
+normalize_legacy_mcs_tier() {
+  local active="$1" normalized
+  [ -f "$active" ] || return 0
+  if [ ! -r /usr/local/scripts/wifi_fw_config_lib.sh ]; then
+    logger -p local0.err "[$tag:$LINENO] [$KEY] MCS migration library missing"
+    return 1
+  fi
+  # shellcheck source=/usr/local/scripts/wifi_fw_config_lib.sh
+  . /usr/local/scripts/wifi_fw_config_lib.sh
+  if ! declare -F wifi_fw_normalize_legacy_mcs_json >/dev/null 2>&1; then
+    logger -p local0.err "[$tag:$LINENO] [$KEY] MCS migration function missing"
+    return 1
+  fi
+  normalized=$(wifi_fw_normalize_legacy_mcs_json "$active") || {
+    logger -p local0.err "[$tag:$LINENO] [$KEY] legacy numeric MCS normalization failed"
+    return 1
+  }
+  atomic_json_install "$normalized" "$active" || {
+    logger -p local0.err "[$tag:$LINENO] [$KEY] normalized MCS config commit failed"
+    return 1
+  }
+  logger -p local0.info "[$tag:$LINENO] [$KEY] normalized legacy numeric MCS values"
+}
+
 # deep merge는 기존 사용자 키를 보존하므로, 코드에서 폐기한 노브는 명시적으로 지운다.
 # 제거하지 않으면 업그레이드 장비의 JSON/WebUI에 무효 설정이 영구히 남아 오해를 만든다.
 cleanup_retired_roaming_keys() {
@@ -494,6 +518,7 @@ secure_wpa_conf() {
   cpchk /opt/wlan/config/systemd/network/21-mlan1.link /etc/systemd/network/21-mlan1.link
   cpchk /opt/wlan/config/systemd/network/22-eth0.link /etc/systemd/network/22-eth0.link
   json_merge /opt/wlan/config/wifi_init_conf.json /usr/local/etc/wifi_init_conf.json || exit 1
+  normalize_legacy_mcs_tier /usr/local/etc/wifi_init_conf.json || exit 1
   cleanup_retired_roaming_keys /usr/local/etc/wifi_init_conf.json
 
   # json_merge 이후 보드별 설정 적용 (첫 설치 시에도 정상 동작).
