@@ -151,11 +151,16 @@ The `postinst` script will automatically:
 - Enable required systemd units
 - Create symbolic links for binaries
 
-`/usr/local/etc/config.json`과 nginx는 별도 `wifi_manager` 패키지가
-설치·관리한다. `wlan-proc`는 이 파일과 서비스를 설치, 삭제, Factory Reset,
-release 검증 대상으로 취급하지 않는다. Factory Reset의 `eth0` 공장 기본값은
-`192.168.1.1/24`이며, 일반 패키지 업그레이드에서는 현재 active 네트워크 설정을
-보존한다.
+런타임 설정원은 `/usr/local/etc/wifi_init_conf.json` 하나다. `config.json`은
+완전 제거 대상이며 업그레이드 시 active 잔재가 삭제되고, 패키지에 다시
+포함되면 release gate와 CI가 실패한다.
+
+nginx는 표준 제품 이미지가 제공하는 선행조건이라 Factory Reset의 필수 유닛이
+아니다. 없거나 비정상이어도 Factory Reset은 실패하지 않는다.
+
+Factory Reset의 `eth0` 공장 기본값은 `192.168.1.1/24`다. 일반 패키지
+업그레이드에서는 현재 active 네트워크 설정을 보존하므로, 이 값은 신규 설치와
+Factory Reset에만 적용된다. 사이트별 유선 관리 주소는 설치 후 변경해서 쓴다.
 
 ### 3. Verify Installation
 
