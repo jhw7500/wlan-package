@@ -6,6 +6,7 @@ LIB="$SCRIPT_DIR/wifi_fw_config_lib.sh"
 WIFI_INIT="$SCRIPT_DIR/wifi_init.sh"
 WIFI_CLI="$SCRIPT_DIR/wifi.sh"
 WIFI_EVENT="$SCRIPT_DIR/wifi_event.sh"
+POSTINST="$SCRIPT_DIR/../../../DEBIAN/postinst"
 WIFI_INIT_UNIT="$SCRIPT_DIR/../../../etc/systemd/system/wifi_init.service"
 EMERGENCY_UNIT="$SCRIPT_DIR/../../../etc/systemd/system/wlan_emergency_reboot.service"
 TEMPLATE="$SCRIPT_DIR/../../../opt/wlan/config/wifi_init_conf.json"
@@ -121,6 +122,47 @@ cat > "$CONF" <<'EOF'
   "mlan1":{"STANDARD":"ac","rate_adapt":{"mode":1,"low_thresh":255,"high_thresh":255,"interval_ms":200},"mcs_tier":{"enabled":true,"ht":"7","vht":"7","he":""}}
 }
 EOF
+
+LEGACY_MCS="$WORK/legacy-mcs.json"
+NORMALIZED_MCS="$WORK/normalized-mcs.json"
+jq '
+  .mlan0.mcs_tier = {enabled:true,ht:7,vht:9,he:11}
+  | .mlan1.mcs_tier = {enabled:true,ht:15,vht:8,he:9}
+' "$CONF" > "$LEGACY_MCS"
+if declare -F wifi_fw_normalize_legacy_mcs_json >/dev/null 2>&1 \
+   && wifi_fw_normalize_legacy_mcs_json "$LEGACY_MCS" > "$NORMALIZED_MCS"; then
+    pass "legacy numeric MCS normalization succeeds"
+else
+    : > "$NORMALIZED_MCS"
+    fail "legacy numeric MCS normalization succeeds"
+fi
+expect_eq "legacy mlan0 HT becomes canonical string" string \
+    "$(jq -r '.mlan0.mcs_tier.ht | type' "$NORMALIZED_MCS" 2>/dev/null)"
+expect_eq "legacy mlan0 VHT value preserved" 9 \
+    "$(jq -r '.mlan0.mcs_tier.vht' "$NORMALIZED_MCS" 2>/dev/null)"
+expect_eq "legacy mlan0 HE becomes bidirectional string" 'both 11' \
+    "$(jq -r '.mlan0.mcs_tier.he' "$NORMALIZED_MCS" 2>/dev/null)"
+expect_eq "legacy mlan1 HT becomes canonical string" string \
+    "$(jq -r '.mlan1.mcs_tier.ht | type' "$NORMALIZED_MCS" 2>/dev/null)"
+expect_eq "legacy mlan1 VHT value preserved" 8 \
+    "$(jq -r '.mlan1.mcs_tier.vht' "$NORMALIZED_MCS" 2>/dev/null)"
+expect_eq "legacy mlan1 unsupported HE is cleared" '' \
+    "$(jq -r '.mlan1.mcs_tier.he' "$NORMALIZED_MCS" 2>/dev/null)"
+expect_rc "normalized AX MCS config is valid" 0 wifi_fw_validate_mcs_config "$NORMALIZED_MCS" mlan0
+expect_rc "normalized AC MCS config is valid" 0 wifi_fw_validate_mcs_config "$NORMALIZED_MCS" mlan1
+wifi_fw_normalize_legacy_mcs_json "$NORMALIZED_MCS" > "$WORK/normalized-mcs-twice.json"
+expect_eq "MCS normalization is idempotent" \
+    "$(jq -S -c . "$NORMALIZED_MCS")" \
+    "$(jq -S -c . "$WORK/normalized-mcs-twice.json")"
+jq '.mlan0.mcs_tier.ht = 6' "$LEGACY_MCS" > "$WORK/invalid-legacy-mcs.json"
+wifi_fw_normalize_legacy_mcs_json "$WORK/invalid-legacy-mcs.json" > "$WORK/invalid-normalized-mcs.json"
+expect_eq "unknown legacy MCS value is not coerced" number \
+    "$(jq -r '.mlan0.mcs_tier.ht | type' "$WORK/invalid-normalized-mcs.json")"
+expect_rc "unknown legacy MCS remains invalid" 1 \
+    wifi_fw_validate_mcs_config "$WORK/invalid-normalized-mcs.json" mlan0
+grep -q 'normalize_legacy_mcs_tier /usr/local/etc/wifi_init_conf.json || exit 1' "$POSTINST" \
+    && pass "postinst migrates legacy numeric MCS after merge" \
+    || fail "postinst does not migrate legacy numeric MCS after merge"
 
 expect_rc "static rate config valid" 0 wifi_fw_validate_rate_config "$CONF" mlan0
 expect_rc "dynamic rate config valid" 0 wifi_fw_validate_rate_config "$CONF" mlan1
