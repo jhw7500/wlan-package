@@ -52,9 +52,7 @@ preflight·enable·후조건을 모두 제거하는 방향으로 작성됐었다
 - `wifi_init.sh`가 `wifi_manager`/`wifi-manager` 유닛의 enabled 여부로
   wpa_supplicant 직접 기동을 건너뛰는 기존 접점을 변경하지 않는다.
 - 0.5.2 당시 `192.168.214.5/24`를 사용했던 역사 기록을 소급 삭제하지 않는다.
-- Factory Reset의 wpa_supplicant 공장 템플릿(SSID) 자체는 이 설계의 범위가 아니다.
-  현장 SSID와 다른 값이 들어 있어 원격 Factory Reset이 무선 관리 경로를 끊는 문제는
-  배포 절차에서 다루며, 이 변경이 만든 위험이 아니다.
+- Factory Reset의 wpa_supplicant 공장 템플릿(SSID) 값은 변경하지 않는다.
 
 ## 소유권 경계
 
@@ -107,6 +105,13 @@ WLAN 핵심 서비스(`wifi-stack.target`, `wifi_apply_enabled.service`,
 Factory Reset은 기존 필수 payload 트랜잭션을 통해 active와 `.bak`에 같은 값을
 원자적으로 복원한다. 일반 패키지 업그레이드는 기존 active 네트워크 설정을
 보존한다(postinst의 `cpchk`가 대상이 비었거나 없을 때만 복사하므로).
+
+**이 주소는 Factory Reset 후의 복구 경로다.** Factory Reset은 WPA supplicant 설정도
+공장 기본값으로 되돌리므로, 기본 SSID가 현장에 없으면 무선이 붙지 않는 것이 정상이고
+의도된 동작이다. 재설정은 유선으로 한다 — `192.168.1.0/24` 호스트를 `eth0`에 연결해
+`192.168.1.1`로 접속한다. 따라서 이 값이 사이트 시험 주소로 바뀌어 있으면
+공장초기화된 유닛의 복구 경로가 사라진다. 0.5.2가 정확히 그 상태였고
+(`192.168.214.5/24`로 승격), 이 설계가 복원하는 대상이다.
 
 release gate와 Factory Reset source-contract 테스트는 packaged template의 주소가
 정확히 `192.168.1.1/24`인지 확인한다. `192.168.214.5/24`는 제품 기본값으로

@@ -4,6 +4,10 @@ Name=eth0
 [Network]
 DHCP=no
 # BD default management IP (최초 설치 시 SSH 접속용, 사이트별 변경 가능).
+# Factory Reset 후의 복구 경로이기도 하다. Factory Reset 은 wpa_supplicant 설정도
+# 공장 기본값으로 되돌리므로 기본 SSID 가 현장에 없으면 무선이 안 붙는 것이 정상이고,
+# 그때 192.168.1.0/24 호스트를 eth0 에 연결해 이 주소로 접속해 재설정한다.
+# 따라서 이 값을 사이트 시험 주소로 바꿔 패키징하면 안 된다 (release gate 가 막는다).
 # peer_route 관련 동적 설정(eth0 host scope IP, table 100 link route, main fallback route,
 # policy rule iif=eth0→table 100)은 모두 wifi_init.sh가 wbridge.peer_route.enabled 토글에 따라
 # 부여/회수한다. systemd-networkd 단계에서 static 부여하면 enabled=false 시 부여 후 제거
