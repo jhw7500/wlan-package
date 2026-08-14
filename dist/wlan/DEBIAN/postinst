@@ -321,8 +321,9 @@ makeDirectory() {
   makeDirectory /var/log/cantops/mgmt/mlan0
   makeDirectory /var/log/cantops/mgmt/mlan1
 
-  # 0.5.1 개발 중 임시 도입된 별도 overlay는 더 이상 설정원으로 사용하지 않는다.
-  # 업그레이드 장비에서도 wifi_init_conf.json 하나만 남도록 active 잔재를 제거한다.
+  # config.json 은 호환 유지 대상이 아니라 완전 제거 대상이다. 0.5.1 개발 중 임시
+  # 도입된 overlay 설정원이며 현재 소비 코드가 없다. 업그레이드 장비에서도
+  # wifi_init_conf.json 하나만 남도록 active 잔재를 제거한다.
   rm -f -- /usr/local/etc/config.json
 
   echo "set hostname:$hostname"

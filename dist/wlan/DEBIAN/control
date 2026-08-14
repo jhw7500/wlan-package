@@ -1,5 +1,5 @@
 Package: wlan-proc
-Version: 0.5.3
+Version: 0.5.4
 Section: net
 Priority: optional
 Architecture: arm64
@@ -41,3 +41,4 @@ Description: WLAN Application
  0.5.1 : DBDC 선행 정비(roam 상태 파일 iface 분리·dmesg 스캔 시간창 소유판정·bgscan 가드 mlan1 확장), factory reset 위생(클론 MAC 잔재·하드웨어 설정 보존), 실기 튜닝 기본값 승격(rate_adapt 70/90·DIFF_TH 7·detection_time 10·mcs_tier on), 설정 단일원 정비+nginx enable, link.json 0.9s 마감 스케줄링+Country KR
  0.5.2 : factory reset 필수 payload/CAL/backup 원자 복구·후조건·reboot gate, eth0 공장주소 192.168.214.5, SDIO WLAN-only FW p149.115 및 출처/라이선스·release gate
  0.5.3 : 시스템/인터페이스 로거 6-action 제어, 시스템 자식 개별 감독, bounded restart/command timeout, 온도 unknown 안전처리
+ 0.5.4 : Factory Reset eth0 공장주소 192.168.1.1 복원, nginx 필수유닛 제외(과거 리셋 disable 복구 enable은 유지), config.json 완전제거 계약 유지

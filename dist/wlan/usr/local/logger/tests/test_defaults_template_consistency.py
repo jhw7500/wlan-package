@@ -4,9 +4,8 @@
 실패 상태에서 기능 enable 이 뒤집히는 비대칭(fail-different)이 생긴다 — 실측 사례:
 과거 실험 기능 4종(PREDICTIVE/LOAD/ADAPTIVE/POST_ROAM_ARP)은 템플릿이 false 로 끄는데
 코드 기본이 True 라 JSON 이 깨지면 일제히 켜졌다 — 이 원칙의 기원. LOAD/ADAPTIVE/
-POST_ROAM_ARP 는 감사 D1(2026-07-31)로 제거됐고 PREDICTIVE 만 남았다. per-iface 로 값이 갈리는 키
-(CHECK_INTERVAL 2/3, ROAM_SUCCESS_SLEEP 3/2)는 주 인터페이스 mlan0 값을 폴백 기준으로
-고정한다(mlan1 차이는 템플릿이 담당).
+POST_ROAM_ARP 는 감사 D1(2026-07-31)로 제거됐고 PREDICTIVE 만 남았다. 로밍 기본값은
+mlan0/mlan1 템플릿이 정렬돼 있어 공통 코드 폴백을 사용한다.
 
 전역이 다른 테스트의 load_roaming_config 호출로 오염되지 않도록, 모듈을 별도 이름으로
 신선하게 로드해 '초기값'을 검사한다(순서 독립)."""
@@ -26,6 +25,9 @@ _LOGGER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, _LOGGER_DIR)
 _TMPL = os.path.join(
     _LOGGER_DIR, "..", "..", "..", "opt", "wlan", "config", "wifi_init_conf.json"
+)
+_GUIDE = os.path.join(
+    _LOGGER_DIR, "..", "..", "..", "..", "..", "docs", "wifi_init_conf_guide.md"
 )
 
 
@@ -158,3 +160,51 @@ def test_schema_default_matches_template(schema, full_tmpl, iface, path):
         f"{iface}.{'.'.join(path)} — 스키마 default({sch['default']!r}) != "
         f"템플릿({node!r})"
     )
+
+
+def _iface_default_cell(mlan0_value, mlan1_value):
+    if mlan0_value == mlan1_value:
+        return f"`{mlan0_value}`"
+    return f"`{mlan0_value}` / `{mlan1_value}`"
+
+
+def test_guide_roaming_defaults_match_template(full_tmpl):
+    with open(_GUIDE, encoding="utf-8") as f:
+        guide = f.read()
+    mlan0 = full_tmpl["mlan0"]["roaming"]
+    mlan1 = full_tmpl["mlan1"]["roaming"]
+
+    for key in ("DIFF_TH", "CHECK_INTERVAL", "ROAM_SUCCESS_SLEEP"):
+        expected = _iface_default_cell(mlan0[key], mlan1[key])
+        assert f"| `{key}` | int | {expected} |" in guide, (
+            f"가이드 {key} 기본값이 템플릿과 다름: expected {expected}"
+        )
+
+    ping0 = mlan0["PING_PONG_PREVENTION"]
+    ping1 = mlan1["PING_PONG_PREVENTION"]
+    assert ping0["detection_time"] == ping1["detection_time"]
+    assert f"| `detection_time` | int | `{ping0['detection_time']}` |" in guide
+    assert (
+        f"(window={ping0['window']}, detection_time={ping0['detection_time']})"
+        in guide
+    )
+
+
+def test_link_logger_cli_default_uses_module_constant(monkeypatch):
+    import wifi_logger_link
+
+    monkeypatch.setattr(wifi_logger_link, "LOOP_INTERVAL", 1.234)
+    monkeypatch.setattr(wifi_logger_link, "SPIKE_THRESHOLD_FAIL", 12)
+    monkeypatch.setattr(wifi_logger_link, "SPIKE_THRESHOLD_RETRY", 34)
+    parser = wifi_logger_link.build_arg_parser()
+    args = parser.parse_args(["mlan0"])
+    assert args.interval == 1.234
+    assert args.spike_fail == 12
+    assert args.spike_retry == 34
+    assert "default: 1.234" in parser.format_help()
+
+
+def test_link_logger_default_matches_template(full_tmpl):
+    import wifi_logger_link
+
+    assert wifi_logger_link.LOOP_INTERVAL == full_tmpl["logger"]["link_interval_sec"]

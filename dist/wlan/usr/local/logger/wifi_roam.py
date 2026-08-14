@@ -126,7 +126,7 @@ DEFAULT_USE_SIGNAL_AVG = True  # True: link 파일의 signal_avg(평활) 사용,
 
 # Sleep 기본값
 DEFAULT_SCAN_NO_RESULT_SLEEP = 3  # AP 스캔 결과 없을 때 재시도 대기
-DEFAULT_ROAM_SUCCESS_SLEEP = 3  # 로밍 성공 후 안정화 대기(mlan0 기준, mlan1 템플릿=2)
+DEFAULT_ROAM_SUCCESS_SLEEP = 3  # 로밍 성공 후 안정화 대기(양 iface 템플릿 동일)
 DEFAULT_ROAM_NO_RESULT_MAX_SLEEP = 30  # 후보없음 backoff 상한(초). 의도적으로 JSON 미노출 —
 # 과거엔 로더가 .get() 으로 읽어 JSON 에 손으로 넣으면 몰래 실효되는 뒷문이었다(감사 D2 로 봉쇄).
 # 운영에서 조정할 근거가 없고, 실험이 필요하면 이 상수를 직접 바꾼다.

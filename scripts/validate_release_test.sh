@@ -8,6 +8,21 @@ trap 'rm -rf "$WORK"' EXIT
 PKG="$WORK/pkg"
 SOURCE_NETWORK="$REPO/dist/wlan/opt/wlan/config/systemd/network/22-eth0.network"
 
+# DEBIAN/control is the release-version SSoT.  Documentation and build logic
+# must not introduce a second concrete version that every release has to edit.
+if grep -Eq 'Current Version:\*\*[[:space:]]*[0-9]+(\.[0-9]+)+' "$REPO/README.md"; then
+    echo "FAIL: README contains a duplicated concrete current version" >&2
+    exit 1
+fi
+if grep -Eq 'wlan-proc-[0-9]+\.[0-9]+\.[0-9]+\.deb' "$REPO/README.md"; then
+    echo "FAIL: README deployment examples pin a concrete package version" >&2
+    exit 1
+fi
+if grep -q 'readme_version=' "$REPO/build.sh"; then
+    echo "FAIL: build parses a duplicate README version instead of control" >&2
+    exit 1
+fi
+
 # Git stores only executable vs non-executable and `git archive` materializes a
 # non-executable file as 0664.  The source gate must accept that representation;
 # the package gate below still requires the shipped payload to be exactly 0644.
@@ -134,6 +149,10 @@ sed -i 's/^Architecture: .*/Architecture: all/' "$PKG/DEBIAN/control"
 build "$WORK/wrong-architecture.deb"
 expect_metadata_rejected Architecture "$WORK/wrong-architecture.deb"
 
+# 직전 케이스가 control 의 Architecture 를 오염시킨 채로 남기므로 트리를 되돌린 뒤
+# 검사한다. 되돌리지 않으면 config.json 이 아니라 Architecture 게이트가 거부해
+# 이 fixture 가 통과한 것처럼 보인다.
+make_tree
 mkdir -p "$PKG/opt/wlan/config"
 printf '{}\n' > "$PKG/opt/wlan/config/config.json"
 build "$WORK/config.deb"
@@ -330,7 +349,7 @@ if bash "$VALIDATE" package "$WORK/wrong-fw.deb" >/dev/null 2>&1; then
 fi
 
 make_tree
-sed -i 's/Address=192\.168\.214\.5\/24/Address=192.168.1.1\/24/' \
+sed -i 's/Address=192\.168\.1\.1\/24/Address=192.168.214.5\/24/' \
     "$PKG/opt/wlan/config/systemd/network/22-eth0.network"
 build "$WORK/wrong-factory-ip.deb"
 if bash "$VALIDATE" package "$WORK/wrong-factory-ip.deb" >/dev/null 2>&1; then

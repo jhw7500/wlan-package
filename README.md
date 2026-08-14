@@ -6,7 +6,8 @@ Debian package for deploying WLAN application infrastructure on ARM64 embedded s
 
 This package (`wlan-proc`) bundles the wlan-bridge L2 network bridge along with supporting scripts, configuration files, and systemd services for wireless network management on embedded Linux systems.
 
-**Current Version:** 0.5.3
+The package version is defined once in `dist/wlan/DEBIAN/control` (`Version`).
+After a build, inspect it with `dpkg-deb -f release/wlan.deb Version`.
 
 ## Prerequisites
 
@@ -72,7 +73,7 @@ The build script will:
 - `wlan-bridge/wbridge/release/wbridge_<board>` - libpcap-based bridge binary
 - `wlan-bridge/wbridge/release/wbridge-tpacket_<board>` - TPACKET_V3 bridge binary
 - `release/wlan.deb` - Latest build
-- `release/wlan-proc-0.5.3.deb` - Versioned package
+- `release/wlan-proc-<version>.deb` - Versioned package derived from `DEBIAN/control`
 - `release/wlan-package.tar` - Allowlisted source/build archive
 - `release/SHA256SUMS` - Release-set hashes, published last
 
@@ -134,14 +135,14 @@ wlan-package/
 ### 1. Transfer Package to Target
 
 ```bash
-scp release/wlan-proc-0.5.3.deb root@<target-ip>:/tmp/
+scp release/wlan.deb root@<target-ip>:/tmp/
 ```
 
 ### 2. Install on Target System
 
 ```bash
 ssh root@<target-ip>
-dpkg -i /tmp/wlan-proc-0.5.3.deb
+dpkg -i /tmp/wlan.deb
 ```
 
 The `postinst` script will automatically:
@@ -149,6 +150,23 @@ The `postinst` script will automatically:
 - Set up network interfaces
 - Enable required systemd units
 - Create symbolic links for binaries
+
+Notes on configuration ownership:
+
+- `/usr/local/etc/wifi_init_conf.json` is the single runtime configuration source.
+  `config.json` is retired: upgrades delete any leftover active copy, and the
+  release gate and CI fail if it is ever packaged again.
+- nginx is a prerequisite supplied by the standard product image, so it is not a
+  required unit for Factory Reset. Factory Reset succeeds even if nginx is
+  missing or unhealthy.
+- The Factory Reset `eth0` address is `192.168.1.1/24`. **This is the recovery
+  path.** Factory Reset restores defaults, including the default WPA supplicant
+  configuration, so the unit will not associate unless the default SSID happens
+  to be in range — that is expected. Reconfiguration is done over Ethernet:
+  connect a host on `192.168.1.0/24` to `eth0` and reach the unit at
+  `192.168.1.1`. Regular package upgrades preserve the current active network
+  configuration, so this value applies only to fresh installs and Factory Reset.
+  Site-specific wired addresses are set after installation.
 
 ### 3. Verify Installation
 

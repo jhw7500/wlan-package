@@ -224,19 +224,6 @@ fi
 
 echo "version:${version}"
 
-# README.md Current Version이 control Version과 동기되어 있는지 점검한다.
-# grep 실패(README 없음/패턴 불일치)는 || true로 흡수해 set -e 환경에서도 안전하고,
-# 빈 값도 경고로 알려 README 서식 변경 시 체크가 소리 없이 죽지 않게 한다.
-# (정규식이 README의 'Current Version:** X.Y' 형식에 의존 — 형식 변경 시 이 패턴도 갱신)
-readme_version=$(grep -m1 -oE 'Current Version:\*\*[[:space:]]*[0-9]+(\.[0-9]+)+' "${BASEDIR}/README.md" 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+$' || true)
-if [ -z "${readme_version}" ]; then
-    echo "Error: README.md에서 'Current Version'을 파싱하지 못함 — README 형식 확인" >&2
-    exit 1
-elif [ "${readme_version}" != "${version}" ]; then
-    echo "Error: README.md Current Version(${readme_version}) != control Version(${version})" >&2
-    exit 1
-fi
-
 # source tree를 직접 dpkg에 넘기지 않는다. 임시 stage에서 개발 산출물/테스트를 제거하고
 # mode를 정규화한 뒤 root-owner-group package를 만들며, 검증 성공 전 release 파일을 덮지 않는다.
 PKG_STAGE=$(mktemp -d)
