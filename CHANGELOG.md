@@ -3,6 +3,16 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.5.4 (2026-08-14)
+
+> SemVer **patch** — `wifi_manager`가 소유하는 `config.json`·nginx 경계를 복원하고 Factory Reset 유선 공장 주소를 제품 기본값으로 되돌린다.
+
+### 패키지 소유권·Factory Reset 정정
+
+- 업그레이드 시 `/usr/local/etc/config.json`을 삭제하지 않는다. 이 파일은 별도 `wifi_manager` 패키지가 설치·관리하므로 기존 사용자 설정과 서비스 동작을 보존한다.
+- `wlan-proc`의 package/CI/Factory Reset 검사와 복원 대상에서 `config.json`을 제외하고, nginx의 preflight·enable·후조건도 제거한다. 두 리소스의 lifecycle은 `wifi_manager`가 단독 소유한다.
+- Factory Reset의 `eth0` 공장 기본 주소를 임시 타겟 검증값 `192.168.214.5/24`에서 제품값 `192.168.1.1/24`로 복원한다. 일반 업그레이드는 active 네트워크 설정을 계속 보존한다.
+
 ## 0.5.3 (2026-08-14)
 
 > SemVer **patch** — 시스템/인터페이스 로거 제어를 대칭화하고, 시스템 로거 자식을 개별 감독하며 외부 명령 hang을 제한한다. 로그 포맷·무선 설정·와이어 프로토콜 변경 없음.
