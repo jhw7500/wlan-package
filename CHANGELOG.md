@@ -3,6 +3,15 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.5.5 (2026-08-14)
+
+> SemVer **patch** — Factory Reset의 nginx enable을 유닛 존재 가드로 감싼다. 동작 계약은 변하지 않는다.
+
+### Factory Reset nginx 처리 정리
+
+- `customctl enable nginx`를 `systemctl cat nginx.service` 성공 시에만 실행한다. nginx 미탑재 이미지에서 남던 `systemctl enable failed: nginx` err 로그가 사라진다. 유닛이 있는데 enable이 실패하면 종전대로 err만 남기고 Factory Reset은 계속한다.
+- `FACTORY_OPTIONAL_UNITS`를 쓰지 않은 이유를 코드 주석에 남겼다. 그 경로는 유닛이 존재하는데 enable이나 후조건이 실패하면 `critical_failures`로 이어져 `reboot inhibited` + `exit 1`로 Factory Reset을 중단시킨다. 0.5.4가 `FACTORY_REQUIRED_UNITS`에서 nginx를 뺀 취지 — "nginx가 없거나 비정상이어도 Factory Reset은 실패하지 않는다" — 와 어긋나므로 채택하지 않았다.
+
 ## 0.5.4 (2026-08-14)
 
 > SemVer **patch** — nginx를 Factory Reset 필수 유닛에서 분리하고, Factory Reset 유선 공장 주소를 제품 기본값으로 되돌린다. `config.json` 완전 제거 계약은 유지한다.
