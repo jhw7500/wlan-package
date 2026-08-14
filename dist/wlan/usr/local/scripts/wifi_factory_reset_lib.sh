@@ -21,7 +21,6 @@ FACTORY_REQUIRED_UNITS=(
     wifi-stack.target
     wifi_apply_enabled.service
     wifi_init.service
-    nginx.service
 )
 FACTORY_OPTIONAL_UNITS=()
 

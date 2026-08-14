@@ -4,12 +4,8 @@ set -euo pipefail
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 LIB="$SCRIPT_DIR/wifi_init_config_lib.sh"
 WIFI_INIT_SH="$SCRIPT_DIR/wifi_init.sh"
-WIFI_SH="$SCRIPT_DIR/wifi.sh"
 FACTORY_RESET_SH="$SCRIPT_DIR/factory_reset.sh"
 POSTINST="$SCRIPT_DIR/../../../DEBIAN/postinst"
-LEGACY_CONFIG_TEMPLATE="$SCRIPT_DIR/../../../opt/wlan/config/config.json"
-GUIDE="$SCRIPT_DIR/../../../../../docs/wifi_init_conf_guide.md"
-HANDOFF="$SCRIPT_DIR/../../../../../docs/wifi_init_conf_webui_handoff.md"
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -60,56 +56,18 @@ expect_file_not_contains() {
     fi
 }
 
-expect_path_absent() {
-    local desc="$1"
-    local path="$2"
-
-    if [ -e "$path" ] || [ -L "$path" ]; then
-        log_fail "$desc (unexpected path: $path)"
-    else
-        log_pass "$desc"
-    fi
-}
-
-expect_file_exists() {
-    local desc="$1"
-    local path="$2"
-
-    if [ -f "$path" ]; then
-        log_pass "$desc"
-    else
-        log_fail "$desc (missing file: $path)"
-    fi
-}
-
-make_json_files() {
-    local conf_json="$1"
-    local overlay_json="$2"
-    local conf_body="$3"
-    local overlay_body="$4"
-
-    printf '%s\n' "$conf_body" > "$conf_json"
-    if [ -n "$overlay_body" ]; then
-        printf '%s\n' "$overlay_body" > "$overlay_json"
-    fi
-}
-
 run_case() {
     local name="$1"
     local conf_body="$2"
-    local overlay_body="$3"
-    local expected_enabled="$4"
-    local expected_frequency="$5"
+    local expected_enabled="$3"
+    local expected_frequency="$4"
 
     local tmpdir
     tmpdir=$(mktemp -d)
     local conf_json="$tmpdir/wifi_init_conf.json"
-    local overlay_json="$tmpdir/config.json"
-
-    make_json_files "$conf_json" "$overlay_json" "$conf_body" "$overlay_body"
+    printf '%s\n' "$conf_body" > "$conf_json"
 
     WIFI_INIT_CONF_JSON="$conf_json" \
-    JSON_FILE="$overlay_json" \
     bash -c '
         set -euo pipefail
         source "$1"
@@ -147,39 +105,18 @@ expect_equal \
     "$(grep -c '^[[:space:]]*if /usr/local/scripts/update_mac.sh "\$iface" --clear' "$WIFI_INIT_SH")" \
     "1"
 
-expect_file_not_contains "wifi_init.sh has no legacy config path" "$WIFI_INIT_SH" '/usr/local/etc/config.json'
-expect_file_not_contains "wifi.sh has no legacy config path" "$WIFI_SH" '/usr/local/etc/config.json'
-expect_file_not_contains "config library has no overlay branch" "$LIB" 'overlay_json'
-expect_file_not_contains "factory reset does not restore legacy config" "$FACTORY_RESET_SH" '/opt/wlan/config/config.json'
-expect_path_absent "legacy config template is not packaged" "$LEGACY_CONFIG_TEMPLATE"
-expect_file_contains "upgrade removes retired active config" "$POSTINST" 'rm -f -- /usr/local/etc/config.json'
+expect_file_not_contains \
+    "postinst preserves wifi_manager active config" \
+    "$POSTINST" '/usr/local/etc/config.json'
+expect_file_not_contains \
+    "factory reset does not own wifi_manager config" \
+    "$FACTORY_RESET_SH" '/opt/wlan/config/config.json'
 expect_file_not_contains "postinst JSON merge never truncates active" "$POSTINST" 'echo "$merged" > "$active"'
 expect_file_contains "postinst JSON merge uses atomic helper" "$POSTINST" 'atomic_json_install "$merged" "$active"'
-expect_file_exists "operator guide is available to the source validation" "$GUIDE"
-expect_file_exists "WebUI handoff is available to the source validation" "$HANDOFF"
-expect_file_not_contains "guide has no legacy active config path" "$GUIDE" '/usr/local/etc/config.json'
-expect_file_not_contains "guide has no legacy template path" "$GUIDE" '/opt/wlan/config/config.json'
-expect_file_not_contains "handoff has no legacy active config path" "$HANDOFF" '/usr/local/etc/config.json'
-expect_file_not_contains "handoff has no legacy template path" "$HANDOFF" '/opt/wlan/config/config.json'
 
 run_case \
     "base values" \
     '{"mlan0":{"enabled":false,"Frequency":"5GHz"}}' \
-    '' \
-    "false" \
-    "5GHz"
-
-run_case \
-    "legacy overlay is ignored" \
-    '{"mlan0":{"enabled":false,"Frequency":"5GHz"}}' \
-    '{"mlan0":{"enabled":true,"Frequency":"2.4GHz"}}' \
-    "false" \
-    "5GHz"
-
-run_case \
-    "legacy partial overlay is ignored" \
-    '{"mlan0":{"enabled":false,"Frequency":"5GHz"}}' \
-    '{"mlan0":{"enabled":true}}' \
     "false" \
     "5GHz"
 
