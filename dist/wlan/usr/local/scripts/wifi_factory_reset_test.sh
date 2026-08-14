@@ -162,25 +162,24 @@ expect_eq "committed mode is 0644" '644' "$(stat -c %a "$ACTIVE")"
 
 rm -f "$STATE"/*
 expect_rc "service state restore succeeds" 0 factory_restore_service_state "$ACTIVE"
-for unit in wifi-stack.target wifi_apply_enabled.service wifi_init.service nginx.service; do
+for unit in wifi-stack.target wifi_apply_enabled.service wifi_init.service; do
     [ -e "$STATE/$unit" ] && pass "$unit enabled" || fail "$unit not enabled"
 done
-rm -f "$STATE/nginx.service"
-expect_rc "required nginx must be enabled postcondition" 1 factory_verify_postconditions "$ACTIVE"
-: > "$STATE/nginx.service"
+if grep -q 'nginx' "$LIB" "$FACTORY_SCRIPT"; then
+    fail "Factory Reset does not own wifi_manager nginx"
+else
+    pass "Factory Reset does not own wifi_manager nginx"
+fi
 
 APPLY_FAIL=1
 export APPLY_FAIL
 expect_rc "strict service sync failure is fatal" 1 factory_restore_service_state "$ACTIVE"
 unset APPLY_FAIL
 
-MISSING_UNIT=nginx.service
-export MISSING_UNIT
-expect_rc "missing standard-image nginx fails preflight" 1 factory_preflight "$TEMPLATE" "$(dirname "$ACTIVE")"
 MISSING_UNIT=wifi_init.service
+export MISSING_UNIT
 expect_rc "missing required Wi-Fi unit fails preflight" 1 factory_preflight "$TEMPLATE" "$(dirname "$ACTIVE")"
 unset MISSING_UNIT
-: > "$STATE/nginx.service"
 
 expect_rc "postconditions accept valid committed state" 0 factory_verify_postconditions "$ACTIVE"
 LINK_RESET_FAIL=1
