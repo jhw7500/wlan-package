@@ -5,13 +5,14 @@ wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약�
 
 ## 0.5.4 (2026-08-14)
 
-> SemVer **patch** — `wifi_manager`가 소유하는 `config.json`·nginx 경계를 복원하고 Factory Reset 유선 공장 주소를 제품 기본값으로 되돌린다.
+> SemVer **patch** — nginx를 Factory Reset 필수 유닛에서 분리하고, Factory Reset 유선 공장 주소를 제품 기본값으로 되돌린다. `config.json` 완전 제거 계약은 유지한다.
 
-### 패키지 소유권·Factory Reset 정정
+### Factory Reset 소유권·기본값 정정
 
-- 업그레이드 시 `/usr/local/etc/config.json`을 삭제하지 않는다. 이 파일은 별도 `wifi_manager` 패키지가 설치·관리하므로 기존 사용자 설정과 서비스 동작을 보존한다.
-- `wlan-proc`의 package/CI/Factory Reset 검사와 복원 대상에서 `config.json`을 제외하고, nginx의 preflight·enable·후조건도 제거한다. 두 리소스의 lifecycle은 `wifi_manager`가 단독 소유한다.
-- Factory Reset의 `eth0` 공장 기본 주소를 임시 타겟 검증값 `192.168.214.5/24`에서 제품값 `192.168.1.1/24`로 복원한다. 일반 업그레이드는 active 네트워크 설정을 계속 보존한다.
+- Factory Reset의 `eth0` 공장 기본 주소를 임시 타겟 검증값 `192.168.214.5/24`에서 제품값 `192.168.1.1/24`로 복원한다. 일반 패키지 업그레이드는 active 네트워크 설정을 계속 보존하므로, 이 값은 신규 설치와 Factory Reset에만 적용된다.
+- nginx는 표준 제품 이미지가 제공하는 선행조건이므로 `FACTORY_REQUIRED_UNITS`에서 제외한다. nginx가 없거나 비정상이어도 Factory Reset은 실패하지 않는다.
+- 다만 0.5.0 이하의 Factory Reset이 `customctl disable nginx`로 영속 disable 시킨 기기는 스스로 복구되지 않으므로, `customctl enable nginx`는 그대로 유지한다. `wlan-proc`이 만든 피해만 되돌리는 범위다.
+- `/usr/local/etc/config.json`은 호환 유지 대상이 아니라 완전 제거 대상이라는 기존 계약을 유지한다. 업그레이드 시 active 잔재를 삭제하고, 패키지·CI·release gate의 재유입 금지 검사도 유지한다.
 
 ## 0.5.3 (2026-08-14)
 
