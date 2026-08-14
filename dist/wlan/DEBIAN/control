@@ -1,9 +1,9 @@
 Package: wlan-proc
-Version: 0.5.1
-Section: test
+Version: 0.5.3
+Section: net
 Priority: optional
 Architecture: arm64
-Depends: libpcap0.8 | libpcap, systemd, jq
+Depends: libpcap0.8 | libpcap, systemd, jq, bc, sysstat
 Conflicts: wlan-package
 Replaces: wlan-package
 Recommends: jq, snmpd
@@ -38,4 +38,6 @@ Description: WLAN Application
  0.4.3 : factory_reset이 보드 감지 결과를 날려 Invalid Voltage가 무한 emerg 브로드캐스트되던 버그 수정 — SoC 감지+주입을 wifi_board_config.sh로 분리해 postinst/factory_reset이 공유(템플릿엔 .mcp.iio_device가 없고 .global.BOARD_TYPE이 고정값이라 덮어쓰면 iMX93이 iio:device0으로, iMX8MM이 BOARD_TYPE=imx93으로 어긋남), wifi_logger_mcp.sh는 ADC 읽기 실패를 감지해 emerg→err 강등·backoff·max_probe_fail(12회) 후 종료
  0.4.4 : peer_route 진단·안정화(wifi br status 진단 명령 신설, sweep 폴백·psrc를 mlanN.network 설정값 기반으로=mac_mode=dynamic 부팅 race OHT 미발견 수리, br status의 enabled=false 오표시 픽스), moal deliver_rt_prio 노브(RX deliver leg RT화·Direction B), wbridge tpacket TX/RX 링버퍼 메모리 배리어(ARM weak-memory), 로그 명령 정비(tar.gz·log reset)·stat.log 손상 수리
  0.5.0 : 로밍 엔진 개편(판정 스캔 iw scan 전환·BSS freshness 게이트·stale 캐시 판정 제거·cross-SSID select_network 모드 A·OK 게이트+state/ssid/id 3중 성공판정·후보없음 플래토 backoff+실패 tick 전진·good-signal 리셋 게이트 기본 on·CHECK_INTERVAL=1·SIGHUP 런타임 reload), 설정 정리(실험 노브 제거 197→175키+retired key 자동 마이그레이션·gen_config_defaults 생성기·drift 게이트), 로거 감독화(scan/stat/snapshot systemd 유닛+passive_roam stale 가드), mlan1 bgscan 제거+기존기기 마이그레이션, wifi br route find/set/auto+MAC base 항상 반영·update_mac 견고성
- 0.5.1 : DBDC 선행 정비(roam 상태 파일 iface 분리·dmesg 스캔 시간창 소유판정·bgscan 가드 mlan1 확장), factory reset 위생(클론 MAC 잔재·하드웨어 설정 보존), 실기 튜닝 기본값 승격(rate_adapt 70/90·DIFF_TH 7·detection_time 10·mcs_tier on), config.json overlay 템플릿+nginx enable, link.json 0.9s 마감 스케줄링+Country KR
+ 0.5.1 : DBDC 선행 정비(roam 상태 파일 iface 분리·dmesg 스캔 시간창 소유판정·bgscan 가드 mlan1 확장), factory reset 위생(클론 MAC 잔재·하드웨어 설정 보존), 실기 튜닝 기본값 승격(rate_adapt 70/90·DIFF_TH 7·detection_time 10·mcs_tier on), 설정 단일원 정비+nginx enable, link.json 0.9s 마감 스케줄링+Country KR
+ 0.5.2 : factory reset 필수 payload/CAL/backup 원자 복구·후조건·reboot gate, eth0 공장주소 192.168.214.5, SDIO WLAN-only FW p149.115 및 출처/라이선스·release gate
+ 0.5.3 : 시스템/인터페이스 로거 6-action 제어, 시스템 자식 개별 감독, bounded restart/command timeout, 온도 unknown 안전처리

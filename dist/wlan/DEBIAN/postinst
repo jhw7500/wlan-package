@@ -67,6 +67,15 @@ configure)
 
   mkdir -p /usr/local/etc
 
+  # 0.5.1 이전 패키지가 payload로 설치했던 개발용 테스트/cache는 새 패키지에서
+  # 제거해도 Python이 만든 비소유 파일 때문에 dpkg가 빈 디렉터리를 지우지 못할 수 있다.
+  # 운영 경로 아래의 알려진 개발 전용 위치만 표적 삭제한다.
+  rm -rf -- \
+    /usr/local/logger/tests \
+    /usr/local/logger/__pycache__ \
+    /usr/local/scripts/tests \
+    /usr/local/scripts/__pycache__
+
   cp /opt/wlan/config/logrotate.d/logrotate.rsyslog /etc/logrotate.d/
 
   # wlan 전용 logrotate hourly 실행 스크립트 설치
@@ -257,8 +266,9 @@ customctl() {
   done
   systemctl daemon-reload 2>/dev/null || true
 
-  # 시스템 unit + wifi 진입점(wifi_init/wifi_apply_enabled) + 통제 외 wifi unit
-  # (wifi_logger 글로벌, wifi_led/wifi_logger eth0+mlan0) + wifi-stack.target
+  # 시스템 unit + wifi 진입점(wifi_init/wifi_apply_enabled) + 기본 복구 unit을 먼저
+  # enable한다. wifi_logger 글로벌/eth0의 최종 부팅 정책은 아래
+  # wifi_apply_enabled.sh가 JSON(.logger.enabled/.eth0.logger.enabled)과 동기화한다.
   # wifi-stack.target 은 multi-user.target 도달 후 비블로킹으로 wifi 스택을 기동한다.
   /usr/local/logger/print.py green "\r\n[installer] enabling services..."
   systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer journald-snapshot-boundary.service wifi-stack.target wifi_init wifi_apply_enabled wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 log-watchdog.timer serial-getty@ttyGS0.service || true
@@ -311,6 +321,10 @@ makeDirectory() {
   makeDirectory /var/log/cantops/mgmt/mlan0
   makeDirectory /var/log/cantops/mgmt/mlan1
 
+  # 0.5.1 개발 중 임시 도입된 별도 overlay는 더 이상 설정원으로 사용하지 않는다.
+  # 업그레이드 장비에서도 wifi_init_conf.json 하나만 남도록 active 잔재를 제거한다.
+  rm -f -- /usr/local/etc/config.json
+
   echo "set hostname:$hostname"
   echo "$hostname" > /etc/hostname
   sed -i "2s/.*/127.0.1.1 $hostname/" /etc/hosts
@@ -330,17 +344,47 @@ cpchk() {
 }
 
 # JSON deep merge: 새 키는 기본값에서 추가, 기존 키는 사용자 값 유지
+atomic_json_install() {
+  local content="$1" active="$2" dir tmp
+  dir=$(dirname "$active")
+  mkdir -p "$dir" || return 1
+  tmp=$(mktemp "${active}.merge.XXXXXX") || return 1
+  if ! printf '%s\n' "$content" > "$tmp" || ! jq empty "$tmp" >/dev/null 2>&1; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+  chmod 0644 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  chown root:root "$tmp" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
+  sync "$tmp" 2>/dev/null || sync
+  if ! mv -f -- "$tmp" "$active"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+  sync "$active" 2>/dev/null || sync
+  sync "$dir" 2>/dev/null || sync
+}
+
 json_merge() {
   local default="$1" active="$2"
   if [ ! -f "$active" ]; then
-    logger -s -p local0.info "[$tag:$LINENO] [$KEY] cp $default $active"
-    cp "$default" "$active"
+    local merged
+    merged=$(cat "$default" 2>/dev/null) || return 1
+    if atomic_json_install "$merged" "$active"; then
+      logger -s -p local0.info "[$tag:$LINENO] [$KEY] installed $default -> $active"
+    else
+      logger -p local0.err "[$tag:$LINENO] [$KEY] initial JSON install failed: $default -> $active"
+      return 1
+    fi
   elif command -v jq >/dev/null 2>&1; then
     local merged
     merged=$(jq -s '.[0] * .[1]' "$default" "$active" 2>/dev/null)
     if [ -n "$merged" ]; then
-      echo "$merged" > "$active"
-      logger -p local0.info "[$tag:$LINENO] [$KEY] json_merge $default -> $active"
+      if atomic_json_install "$merged" "$active"; then
+        logger -p local0.info "[$tag:$LINENO] [$KEY] json_merge $default -> $active"
+      else
+        logger -p local0.err "[$tag:$LINENO] [$KEY] atomic json_merge write failed; keep existing $active"
+        return 1
+      fi
     else
       logger -p local0.warn "[$tag:$LINENO] [$KEY] json_merge failed; keep existing $active"
     fi
@@ -427,11 +471,21 @@ cleanup_mlan1_supplicant_bgscan() {
   fi
 }
 
+secure_wpa_conf() {
+  local conf="$1"
+  [ -f "$conf" ] || return 1
+  chown root:root "$conf" 2>/dev/null || return 1
+  chmod 0600 "$conf" || return 1
+  sync "$conf" 2>/dev/null || sync
+}
+
   cpchk /opt/wlan/mfg/bridge_init.conf /usr/local/mfg/bridge_init.conf
   cpchk /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/timesyncd.conf
   cpchk /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan0.conf /etc/wpa_supplicant/wpa_supplicant-mlan0.conf
   cpchk /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan1.conf /etc/wpa_supplicant/wpa_supplicant-mlan1.conf
   cleanup_mlan1_supplicant_bgscan /etc/wpa_supplicant/wpa_supplicant-mlan1.conf
+  secure_wpa_conf /etc/wpa_supplicant/wpa_supplicant-mlan0.conf || exit 1
+  secure_wpa_conf /etc/wpa_supplicant/wpa_supplicant-mlan1.conf || exit 1
   cpchk /opt/wlan/config/systemd/network/20-mlan0.network /etc/systemd/network/20-mlan0.network
   cpchk /opt/wlan/config/systemd/network/21-mlan1.network /etc/systemd/network/21-mlan1.network
   cpchk /opt/wlan/config/systemd/network/22-eth0.network /etc/systemd/network/22-eth0.network
@@ -439,7 +493,7 @@ cleanup_mlan1_supplicant_bgscan() {
   cpchk /opt/wlan/config/systemd/network/20-mlan0.link /etc/systemd/network/20-mlan0.link
   cpchk /opt/wlan/config/systemd/network/21-mlan1.link /etc/systemd/network/21-mlan1.link
   cpchk /opt/wlan/config/systemd/network/22-eth0.link /etc/systemd/network/22-eth0.link
-  json_merge /opt/wlan/config/wifi_init_conf.json /usr/local/etc/wifi_init_conf.json
+  json_merge /opt/wlan/config/wifi_init_conf.json /usr/local/etc/wifi_init_conf.json || exit 1
   cleanup_retired_roaming_keys /usr/local/etc/wifi_init_conf.json
 
   # json_merge 이후 보드별 설정 적용 (첫 설치 시에도 정상 동작).

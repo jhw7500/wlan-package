@@ -4,7 +4,14 @@ set -u
 tag=$(basename "$0")
 DEV="/sys/bus/iio/devices/iio:device0"
 FACILITY="local3"
-WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
+WIFI_INIT_CONF_JSON="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
+
+LOGGER_COMMAND_LIB="${WIFI_LOGGER_COMMAND_LIB:-/usr/local/scripts/wifi_logger_command_lib.sh}"
+if [ ! -r "$LOGGER_COMMAND_LIB" ]; then
+    LOGGER_COMMAND_LIB="$(dirname "$0")/wifi_logger_command_lib.sh"
+fi
+# shellcheck source=wifi_logger_command_lib.sh
+. "$LOGGER_COMMAND_LIB"
 
 # Defaults
 gain0="0.5203"
@@ -36,11 +43,19 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
     WARN_A_24V=$(jq -r '.mcp.system_24v.warn_a // 0.2' "$WIFI_INIT_CONF_JSON")
 fi
 
+[ -n "${WIFI_MCP_IIO_DEVICE:-}" ] && DEV=$WIFI_MCP_IIO_DEVICE
+[ -n "${WIFI_LOGGER_MCP_CHECK_INTERVAL:-}" ] && \
+    MCP_CHECK_INTERVAL=$WIFI_LOGGER_MCP_CHECK_INTERVAL
+[ -n "${WIFI_LOGGER_MCP_MAX_PROBE_FAIL:-}" ] && \
+    MCP_MAX_PROBE_FAIL=$WIFI_LOGGER_MCP_MAX_PROBE_FAIL
+COMMAND_TIMEOUT_SEC="${WIFI_LOGGER_COMMAND_TIMEOUT_SEC:-5}"
+ONESHOT="${WIFI_LOGGER_ONESHOT:-0}"
+
 # bc는 이 스크립트의 모든 계산과 비교에 쓰인다(패키지 Depends에는 없는 암묵적 의존).
 # 없으면 계산이 전부 빈 값이 되고 sleep이 실패해 busy loop로 CPU를 태우므로, 여기서 끊는다.
 if ! command -v bc >/dev/null 2>&1; then
     logger -p ${FACILITY}.err "[$tag:$LINENO] bc not found; current/voltage monitoring disabled"
-    exit 0
+    exit 1
 fi
 
 # 설정값 방어. 비숫자/0 이하를 그대로 흘려보내면 sleep이 실패해 busy loop가 되거나
@@ -79,10 +94,14 @@ trap cleanup INT TERM
 # 오인하게 된다.
 read_adc() {
     local raw0 scale0 raw1 scale1
-    raw0=$(cat "$DEV/in_voltage0_raw" 2>/dev/null)     || return 1
-    scale0=$(cat "$DEV/in_voltage0_scale" 2>/dev/null) || return 1
-    raw1=$(cat "$DEV/in_voltage1_raw" 2>/dev/null)     || return 1
-    scale1=$(cat "$DEV/in_voltage1_scale" 2>/dev/null) || return 1
+    raw0=$(logger_read_bounded "$COMMAND_TIMEOUT_SEC" "$DEV/in_voltage0_raw" 2>/dev/null) \
+        || return 1
+    scale0=$(logger_read_bounded "$COMMAND_TIMEOUT_SEC" "$DEV/in_voltage0_scale" 2>/dev/null) \
+        || return 1
+    raw1=$(logger_read_bounded "$COMMAND_TIMEOUT_SEC" "$DEV/in_voltage1_raw" 2>/dev/null) \
+        || return 1
+    scale1=$(logger_read_bounded "$COMMAND_TIMEOUT_SEC" "$DEV/in_voltage1_scale" 2>/dev/null) \
+        || return 1
 
     a=$(echo "$raw0 * $scale0 * $gain0" | bc -l 2>/dev/null)
     v=$(echo "$raw1 * $scale1 * $gain1" | bc -l 2>/dev/null)
@@ -120,7 +139,7 @@ while true; do
     probe_fail=$((probe_fail + 1))
     if [ "$probe_fail" -ge "$MCP_MAX_PROBE_FAIL" ]; then
         logger -p ${FACILITY}.err "[$tag:$LINENO] no valid supply after $probe_fail probes on $DEV; current/voltage monitoring disabled"
-        exit 0
+        exit 1
     fi
     backoff_sleep "$probe_fail"
 done
@@ -158,5 +177,6 @@ while true; do
 
     logger -p ${FACILITY}.${LOG_LEVEL} "[$tag:$LINENO] CH0(Current): $(printf '%.3f' "$a")A, CH1(Voltage): $(printf '%.3f' "$v")V"
 
+    [ "$ONESHOT" = "1" ] && break
     sleep "$MCP_CHECK_INTERVAL"
 done

@@ -1,34 +1,38 @@
 #!/bin/bash
-tag=$(basename "$0")
-# Defaults
-MMC_CHECK_INTERVAL=300
 
-# Load from JSON config
-WIFI_INIT_CONF_JSON="/usr/local/etc/wifi_init_conf.json"
+tag=$(basename "$0")
+
+LOGGER_COMMAND_LIB="${WIFI_LOGGER_COMMAND_LIB:-/usr/local/scripts/wifi_logger_command_lib.sh}"
+if [ ! -r "$LOGGER_COMMAND_LIB" ]; then
+    LOGGER_COMMAND_LIB="$(dirname "$0")/wifi_logger_command_lib.sh"
+fi
+# shellcheck source=wifi_logger_command_lib.sh
+. "$LOGGER_COMMAND_LIB"
+
+MMC_CHECK_INTERVAL=300
+BOARD_TYPE=imx8mm
+WIFI_INIT_CONF_JSON="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
 if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
     MMC_CHECK_INTERVAL=$(jq -r '.mmc.check_interval_sec // 300' "$WIFI_INIT_CONF_JSON")
     BOARD_TYPE=$(jq -r '.global.BOARD_TYPE // "imx8mm"' "$WIFI_INIT_CONF_JSON")
 fi
 
-
-if [ "$BOARD_TYPE" == "imx93" ]; then
-    EXT=/sys/kernel/debug/mmc0/mmc0:0001/ext_csd
+if [ "$BOARD_TYPE" = "imx93" ]; then
+    DEFAULT_EXT=/sys/kernel/debug/mmc0/mmc0:0001/ext_csd
 else
-    EXT=/sys/kernel/debug/mmc2/mmc2:0001/ext_csd
+    DEFAULT_EXT=/sys/kernel/debug/mmc2/mmc2:0001/ext_csd
 fi
+EXT="${WIFI_MMC_EXT_CSD_PATH:-$DEFAULT_EXT}"
+COMMAND_TIMEOUT_SEC="${WIFI_LOGGER_COMMAND_TIMEOUT_SEC:-5}"
+ONESHOT="${WIFI_LOGGER_ONESHOT:-0}"
 
 cleanup() {
-    #logger -p local0.info "[$tag:$LINENO] stop"
     exit 0
 }
 trap cleanup INT TERM
 
-
-#logger -p local0.info "[$tag:$LINENO] start"
-
 to_bucket() {
-    v=$1
-    case "$v" in
+    case "$1" in
         00) echo "N/A" ;;
         01) echo "0~10%" ;;
         02) echo "10~20%" ;;
@@ -46,8 +50,7 @@ to_bucket() {
 }
 
 to_eol_text() {
-    v=$1
-    case "$v" in
+    case "$1" in
         01) echo "Normal(<80%)" ;;
         02) echo "Error(>=80%)" ;;
         03) echo "Emergency(>=90%)" ;;
@@ -55,34 +58,37 @@ to_eol_text() {
     esac
 }
 
+hex_at() {
+    local off=$1 pos
+    pos=$((off * 2))
+    printf '%s\n' "${RES:$pos:2}" | tr '[:lower:]' '[:upper:]'
+}
+
 while true; do
-    RES=$(tr -d '\n\r ' < "$EXT")
+    if ! RES=$(logger_read_bounded "$COMMAND_TIMEOUT_SEC" "$EXT" 2>/dev/null); then
+        logger -p local3.err "[$tag:$LINENO] MMC read failed: $EXT"
+        [ "$ONESHOT" = "1" ] && break
+        sleep "$MMC_CHECK_INTERVAL"
+        continue
+    fi
+    RES=$(printf '%s' "$RES" | tr -d '\n\r ')
 
-    hex_at() {
-        off=$1
-        pos=$((off*2))
-        echo "${RES:$pos:2}" | tr '[:lower:]' '[:upper:]'
-    }
-
-    # JEDEC offsets
-    PRE_EOL=$(hex_at 267)   # 0x10B
-    LTA=$(hex_at 268)       # 0x10C
-    LTB=$(hex_at 269)       # 0x10D
-
+    PRE_EOL=$(hex_at 267)
+    LTA=$(hex_at 268)
+    LTB=$(hex_at 269)
     BKT_A=$(to_bucket "$LTA")
     BKT_B=$(to_bucket "$LTB")
     EOL_TXT=$(to_eol_text "$PRE_EOL")
 
-    sev="info"
+    sev=info
     case "$LTA$LTB" in
-        *0A*|*0B*) sev="emerg" ;;
-        *09*      ) sev="crit"  ;;
-        *08*      ) sev="error" ;;
-        *07*      ) sev="warning" ;;
+        *0A*|*0B*) sev=emerg ;;
+        *09*) sev=crit ;;
+        *08*) sev=error ;;
+        *07*) sev=warning ;;
     esac
 
     logger -p local3.$sev "[$tag:$LINENO] PRE_EOL=$EOL_TXT, LifeA=$BKT_A, LifeB=$BKT_B (raw: A=0x$LTA, B=0x$LTB)"
-
+    [ "$ONESHOT" = "1" ] && break
     sleep "$MMC_CHECK_INTERVAL"
 done
-

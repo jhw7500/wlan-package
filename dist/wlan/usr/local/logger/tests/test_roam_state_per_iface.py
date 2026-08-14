@@ -5,8 +5,11 @@ mlan0 roam 조건이 mlan1 bgscan 을 정지시키거나 두 roam 데몬이 플�
 기록(last-writer-wins)하는 오염을 차단한다. 두 데몬은 서로 import 없이 경로
 규칙으로만 결합하므로(reader/writer 쌍) 규칙 일치를 여기서 고정한다."""
 import os
+import subprocess
 import sys
 from unittest.mock import MagicMock
+
+import pytest
 
 sys.modules.setdefault("sUTILS", MagicMock())
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -54,7 +57,9 @@ def test_set_flag_atomic_and_creates_dir(tmp_path):
     쓰기 후 값이 정확하며 같은 디렉터리에 .tmp 잔재를 남기지 않는다."""
     path = tmp_path / "wifi" / "roam_condition_mlan0"  # 부모 디렉터리 미존재
     wifi_roam.set_flag(1, str(path))
-    assert path.read_text() == "1"
+    fields = path.read_text().split()
+    assert fields[0] == "1" and int(fields[1]) == os.getpid() and fields[2]
+    assert wifi_bgscan.get_flag(str(path)) is True
     wifi_roam.set_flag(0, str(path))
     assert path.read_text() == "0"
     wifi_roam.set_flag(None, str(path))  # 그 외 값 → 빈 파일(OFF)
@@ -96,7 +101,7 @@ def test_roam_flag_helpers_follow_reassigned_global(tmp_path, monkeypatch):
     flag = tmp_path / "roam_condition_mlan1"
     monkeypatch.setattr(wifi_roam, "ROAM_CONDITION_FLAG", str(flag))
     wifi_roam.set_flag(1)
-    assert flag.read_text() == "1"
+    assert flag.read_text().startswith(f"1 {os.getpid()} ")
     assert wifi_roam.get_flag() is True
 
 
@@ -107,3 +112,66 @@ def test_flag_isolation_between_ifaces(tmp_path):
     wifi_roam.set_flag(1, str(p0))
     assert wifi_bgscan.get_flag(str(p0)) is True
     assert wifi_bgscan.get_flag(str(p1)) is False
+
+
+def test_dead_writer_lease_is_removed(tmp_path):
+    flag = tmp_path / "roam_condition_mlan0"
+    flag.write_text("1 99999999 1")
+    assert wifi_bgscan.get_flag(str(flag)) is False
+    assert not flag.exists()
+
+
+def test_pid_reuse_start_time_mismatch_is_removed(tmp_path):
+    flag = tmp_path / "roam_condition_mlan0"
+    start = wifi_bgscan.process_start_time(os.getpid())
+    assert start is not None
+    flag.write_text(f"1 {os.getpid()} {int(start) + 1}")
+    assert wifi_bgscan.get_flag(str(flag)) is False
+    assert not flag.exists()
+
+
+def test_legacy_integer_flag_is_stale_and_removed(tmp_path):
+    flag = tmp_path / "roam_condition_mlan0"
+    flag.write_text("1")
+    assert wifi_bgscan.get_flag(str(flag)) is False
+    assert not flag.exists()
+
+
+def test_cleanup_removes_only_own_lease(tmp_path, monkeypatch):
+    flag = tmp_path / "roam_condition_mlan0"
+    monkeypatch.setattr(wifi_roam, "ROAM_CONDITION_FLAG", str(flag))
+    wifi_roam.set_flag(1)
+    wifi_roam.cleanup()
+    assert not flag.exists()
+
+    proc = subprocess.Popen(["sleep", "10"])
+    try:
+        start = wifi_roam.process_start_time(proc.pid)
+        assert start is not None
+        flag.write_text(f"1 {proc.pid} {start}")
+        wifi_roam.cleanup()
+        assert flag.exists(), "다른 살아 있는 writer lease를 지우면 안 됨"
+    finally:
+        proc.terminate()
+        proc.wait(timeout=3)
+
+
+def test_sigterm_handler_releases_own_lease(tmp_path, monkeypatch):
+    flag = tmp_path / "roam_condition_mlan0"
+    monkeypatch.setattr(wifi_roam, "ROAM_CONDITION_FLAG", str(flag))
+    wifi_roam.set_flag(1)
+    with pytest.raises(SystemExit) as exc:
+        wifi_roam.handle_sigterm(15, None)
+    assert exc.value.code == 0
+    assert not flag.exists()
+
+
+def test_startup_self_heal_keeps_iface_isolation(tmp_path, monkeypatch):
+    p0 = tmp_path / "roam_condition_mlan0"
+    p1 = tmp_path / "roam_condition_mlan1"
+    p0.write_text("1 99999999 1")
+    wifi_roam.set_flag(1, str(p1))
+    monkeypatch.setattr(wifi_roam, "ROAM_CONDITION_FLAG", str(p0))
+    assert wifi_roam.clear_stale_roam_lease() is True
+    assert not p0.exists()
+    assert wifi_bgscan.get_flag(str(p1)) is True
