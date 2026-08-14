@@ -214,10 +214,20 @@ customctl() {
   # 아니다(FACTORY_REQUIRED_UNITS 에서 제외). 다만 0.5.0 이하 factory_reset 이
   # `customctl disable nginx` 로 영속 disable 시킨 기기는 스스로 복구되지 않으므로
   # (enable/disable 은 유닛 파일 조작), wlan-proc 이 만든 피해만 여기서 되돌린다.
-  # 제거 조건: 0.5.0 이하에서 올라온 기기가 현장에 남아있지 않다고 확인되면 이 줄을
-  # 지운다. 그때까지는 nginx 미탑재 이미지에서 syslog 에 enable 실패가 남는 것을
-  # 감수한다(reset 성공 여부에는 영향 없음).
-  customctl enable nginx
+  #
+  # 유닛이 있을 때만 시도한다. 미탑재 이미지에서 customctl 이 남기던
+  # `systemctl enable failed: nginx` err 로그를 없애기 위한 가드다. 유닛이 있는데
+  # enable 이 실패하면 customctl 이 err 만 남기고 진행한다 — reset 성공 여부에 영향 없음.
+  #
+  # FACTORY_OPTIONAL_UNITS 를 쓰지 않는 이유: 그 경로는 유닛이 존재하는데 enable 이나
+  # 후조건이 실패하면 failed=1 -> critical_failures -> `reboot inhibited` + exit 1 로
+  # Factory Reset 을 중단시킨다. 그러면 "nginx 가 없거나 비정상이어도 Factory Reset 은
+  # 실패하지 않는다"는 계약이 깨지고, REQUIRED 에서 뺀 의미가 사라진다.
+  #
+  # 제거 조건: 0.5.0 이하에서 올라온 기기가 현장에 남아있지 않다고 확인되면 이 블록을 지운다.
+  if systemctl cat nginx.service >/dev/null 2>&1; then
+      customctl enable nginx
+  fi
 
   customctl disable wifi_checker@eth0
   customctl enable wifi_led@eth0
