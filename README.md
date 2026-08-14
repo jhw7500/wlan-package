@@ -6,7 +6,7 @@ Debian package for deploying WLAN application infrastructure on ARM64 embedded s
 
 This package (`wlan-proc`) bundles the wlan-bridge L2 network bridge along with supporting scripts, configuration files, and systemd services for wireless network management on embedded Linux systems.
 
-**Current Version:** 0.5.3
+**Current Version:** 0.5.4
 
 ## Prerequisites
 
@@ -72,7 +72,7 @@ The build script will:
 - `wlan-bridge/wbridge/release/wbridge_<board>` - libpcap-based bridge binary
 - `wlan-bridge/wbridge/release/wbridge-tpacket_<board>` - TPACKET_V3 bridge binary
 - `release/wlan.deb` - Latest build
-- `release/wlan-proc-0.5.3.deb` - Versioned package
+- `release/wlan-proc-0.5.4.deb` - Versioned package
 - `release/wlan-package.tar` - Allowlisted source/build archive
 - `release/SHA256SUMS` - Release-set hashes, published last
 
@@ -134,14 +134,14 @@ wlan-package/
 ### 1. Transfer Package to Target
 
 ```bash
-scp release/wlan-proc-0.5.3.deb root@<target-ip>:/tmp/
+scp release/wlan-proc-0.5.4.deb root@<target-ip>:/tmp/
 ```
 
 ### 2. Install on Target System
 
 ```bash
 ssh root@<target-ip>
-dpkg -i /tmp/wlan-proc-0.5.3.deb
+dpkg -i /tmp/wlan-proc-0.5.4.deb
 ```
 
 The `postinst` script will automatically:
@@ -149,6 +149,12 @@ The `postinst` script will automatically:
 - Set up network interfaces
 - Enable required systemd units
 - Create symbolic links for binaries
+
+`/usr/local/etc/config.json`과 nginx는 별도 `wifi_manager` 패키지가
+설치·관리한다. `wlan-proc`는 이 파일과 서비스를 설치, 삭제, Factory Reset,
+release 검증 대상으로 취급하지 않는다. Factory Reset의 `eth0` 공장 기본값은
+`192.168.1.1/24`이며, 일반 패키지 업그레이드에서는 현재 active 네트워크 설정을
+보존한다.
 
 ### 3. Verify Installation
 

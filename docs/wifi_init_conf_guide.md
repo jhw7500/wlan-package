@@ -150,7 +150,7 @@ wifi_init_conf.json
 >
 > **eth 지연연결 라우트 등록**: `peer_route=on`인데 이더넷을 **부팅 후 나중에** 연결한 경우, 부팅 시점엔 `wired_mac_ip_get.py`가 링크 대기(`wait_for_eth_link`)에서 빠져나와 **peer host route(`<peer>/32 dev eth0`)가 누락**된다(나머지 인프라 — eth0 `/32` 미러·table 100·sysctl — 은 링크 무관하게 이미 세팅됨). 이후 eth 연결 시 **`wifi {0|1} br route auto`**로 유선 peer를 sweep 탐색해 그 라우트를 사후 등록한다(읽기 전용 아님). 하위 명령: `find [<subnet>]`=탐색만(읽기 전용), `set <ip>`=IP 직접 지정 등록, `auto [<subnet>]`=정확히 1건 발견 시 자동 등록(0건/2건+는 에러 — 후자는 `set <ip>`로 지정). 서브넷 생략 시 `eth_client_ip`(단일 IP quick ARP) → `eth_sweep_subnet` → mlanN 대역 순으로 대상 결정. (자동 트리거는 후속 확장 예정)
 >
-> **⚠️ `find`/`auto`가 peer를 못 찾을 때 (eth0 타서브넷)**: `eth0`의 IP가 sweep 대역과 다른 서브넷이면(예: `eth0=192.168.214.5/24`, peer=`192.168.0.220`), same-subnet source에만 ARP 응답하는 peer는 발견에 실패한다. #113에서 sweep arping의 source를 **대역 내 우리 IP(mlanN)**로 지정하도록 보정했다(⚠️ **서브넷 인자는 sweep 범위만** 바꾸고 arping source IP는 안 바꾸므로 대역 지정만으로는 안 풀림). 그래도 안 되면 `wifi {0|1} br route set <peer-ip>`로 직접 등록한다.
+> **⚠️ `find`/`auto`가 peer를 못 찾을 때 (eth0 타서브넷)**: `eth0`의 IP가 sweep 대역과 다른 서브넷이면(예: `eth0=192.168.1.1/24`, peer=`192.168.0.220`), same-subnet source에만 ARP 응답하는 peer는 발견에 실패한다. #113에서 sweep arping의 source를 **대역 내 우리 IP(mlanN)**로 지정하도록 보정했다(⚠️ **서브넷 인자는 sweep 범위만** 바꾸고 arping source IP는 안 바꾸므로 대역 지정만으로는 안 풀림). 그래도 안 되면 `wifi {0|1} br route set <peer-ip>`로 직접 등록한다.
 
 #### 클론 MAC 잔재 — `mac_clone_require_peer`
 
@@ -184,7 +184,7 @@ wifi_init_conf.json
 
 **공장 초기화의 필수 파일 복구 게이트** — FW 설정 4종, `wpa_supplicant@.service`, 두 WPA conf, mlan0/mlan1/eth0 `.network`는 best-effort `cp` 대상이 아니다. 각 파일을 destination과 같은 디렉터리의 temp에 root 소유·규정 모드(WPA 0600, 나머지 0644)로 설치하고 원본과 `cmp`한 뒤 atomic rename한다. WPA/network 및 mod_para/txpower의 `.bak`도 같은 factory 원본으로 재시드하므로 reset 이전 자격증명·IP·FW 설정이 self-healing에서 부활하지 않는다. 설치·sync·rename·최종 내용/권한 검증 중 하나라도 실패하면 reset은 non-zero로 끝나며 reboot하지 않는다. 장시간 버튼 호출자도 이 결과를 우회해 별도 강제 reboot하지 않는다.
 
-Factory Reset이 성공하면 장비가 재부팅되며, 공장 기본 유선 주소는 `eth0=192.168.214.5/24`이다. 재부팅 뒤 `root@192.168.214.5`로 다시 접속해 후조건을 확인한다. 일반 패키지 업그레이드는 현재 active 네트워크 설정을 보존하므로 이 주소는 Factory Reset 시 확정 적용된다. 동일 L2에 초기화 장비를 여러 대 동시에 연결하면 주소 충돌이 발생하므로 한 대씩 격리해 초기화한다.
+Factory Reset이 성공하면 장비가 재부팅되며, 공장 기본 유선 주소는 `eth0=192.168.1.1/24`이다. 재부팅 뒤 `root@192.168.1.1`로 다시 접속해 후조건을 확인한다. 일반 패키지 업그레이드는 현재 active 네트워크 설정을 보존하므로 이 주소는 Factory Reset 시 확정 적용된다. 동일 L2에 초기화 장비를 여러 대 동시에 연결하면 주소 충돌이 발생하므로 한 대씩 격리해 초기화한다.
 
 ### 3.1 wbridge.optimize - 커널 레벨 네트워크 튜닝
 
