@@ -162,25 +162,31 @@ expect_eq "committed mode is 0644" '644' "$(stat -c %a "$ACTIVE")"
 
 rm -f "$STATE"/*
 expect_rc "service state restore succeeds" 0 factory_restore_service_state "$ACTIVE"
-for unit in wifi-stack.target wifi_apply_enabled.service wifi_init.service nginx.service; do
+for unit in wifi-stack.target wifi_apply_enabled.service wifi_init.service; do
     [ -e "$STATE/$unit" ] && pass "$unit enabled" || fail "$unit not enabled"
 done
-rm -f "$STATE/nginx.service"
-expect_rc "required nginx must be enabled postcondition" 1 factory_verify_postconditions "$ACTIVE"
-: > "$STATE/nginx.service"
+# nginx 소유권 계약: Factory Reset 은 nginx 를 필수 유닛으로 요구하지 않는다(부재해도
+# reset 성공). 다만 0.5.0 이하 reset 이 영속 disable 시킨 기기를 되살리는 enable 은 남긴다.
+if grep -q 'nginx' "$LIB"; then
+    fail "nginx must not appear in FACTORY_REQUIRED_UNITS"
+else
+    pass "nginx is not a required factory unit"
+fi
+if grep -q '^[[:space:]]*customctl enable nginx$' "$FACTORY_SCRIPT"; then
+    pass "factory reset re-enables nginx disabled by past resets"
+else
+    fail "factory reset re-enables nginx disabled by past resets"
+fi
 
 APPLY_FAIL=1
 export APPLY_FAIL
 expect_rc "strict service sync failure is fatal" 1 factory_restore_service_state "$ACTIVE"
 unset APPLY_FAIL
 
-MISSING_UNIT=nginx.service
-export MISSING_UNIT
-expect_rc "missing standard-image nginx fails preflight" 1 factory_preflight "$TEMPLATE" "$(dirname "$ACTIVE")"
 MISSING_UNIT=wifi_init.service
+export MISSING_UNIT
 expect_rc "missing required Wi-Fi unit fails preflight" 1 factory_preflight "$TEMPLATE" "$(dirname "$ACTIVE")"
 unset MISSING_UNIT
-: > "$STATE/nginx.service"
 
 expect_rc "postconditions accept valid committed state" 0 factory_verify_postconditions "$ACTIVE"
 LINK_RESET_FAIL=1
@@ -487,12 +493,12 @@ for required_backup in \
 done
 
 # Factory Reset 뒤에도 유선 관리 경로가 유지되어야 한다. 이 주소는 실제 양산/시험
-# 유선 접속 주소와 같아야 하며, 과거 192.168.1.1 기본값으로 되돌아가면 안 된다.
+# 제품 Factory Reset 유선 기본값은 192.168.1.1/24다.
 FACTORY_ETH0_TEMPLATE="$SCRIPT_DIR/../../../opt/wlan/config/systemd/network/22-eth0.network"
-if [ "$(awk -F= '$1 == "Address" { print $2 }' "$FACTORY_ETH0_TEMPLATE")" = "192.168.214.5/24" ]; then
-    pass "factory eth0 management address remains 192.168.214.5/24"
+if [ "$(awk -F= '$1 == "Address" { print $2 }' "$FACTORY_ETH0_TEMPLATE")" = "192.168.1.1/24" ]; then
+    pass "factory eth0 address is 192.168.1.1/24"
 else
-    fail "factory eth0 management address is not 192.168.214.5/24"
+    fail "factory eth0 address is not 192.168.1.1/24"
 fi
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
