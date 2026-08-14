@@ -26,6 +26,7 @@ class ControlResult:
     stderr: str
     calls: list[list[str]]
     config: Path
+    apply_strict: str
 
 
 def _write_exe(path, text):
@@ -63,7 +64,12 @@ exit "${FAKE_SYSTEMCTL_RC:-0}"
 """,
     )
     fake_apply = tmp_path / "apply-enabled"
-    _write_exe(fake_apply, '#!/bin/sh\nexit "${FAKE_APPLY_RC:-0}"\n')
+    apply_strict = tmp_path / "apply.strict"
+    _write_exe(
+        fake_apply,
+        '#!/bin/sh\nprintf "%s" "${WIFI_APPLY_STRICT:-}" > "$FAKE_APPLY_STRICT"\n'
+        'exit "${FAKE_APPLY_RC:-0}"\n',
+    )
     fake_sync = tmp_path / "sync"
     _write_exe(fake_sync, '#!/bin/sh\nexit "${FAKE_SYNC_RC:-0}"\n')
 
@@ -75,6 +81,7 @@ exit "${FAKE_SYSTEMCTL_RC:-0}"
             "WIFI_LOGGER_APPLY_ENABLED_SH": str(fake_apply),
             "WIFI_LOGGER_SYNC": str(fake_sync),
             "FAKE_SYSTEMCTL_CALLS": str(calls),
+            "FAKE_APPLY_STRICT": str(apply_strict),
         }
         env.update({key: str(value) for key, value in extra_env.items()})
         cp = subprocess.run(
@@ -86,7 +93,12 @@ exit "${FAKE_SYSTEMCTL_RC:-0}"
         )
         recorded = [line.split() for line in calls.read_text().splitlines()]
         return ControlResult(
-            cp.returncode, cp.stdout, cp.stderr, recorded, config
+            cp.returncode,
+            cp.stdout,
+            cp.stderr,
+            recorded,
+            config,
+            apply_strict.read_text() if apply_strict.exists() else "",
         )
 
     return run
@@ -221,6 +233,13 @@ def test_apply_failure_keeps_committed_policy_for_boot_retry(run_control):
 
     assert result.returncode == 1
     assert json.loads(result.config.read_text())["mlan1"]["logger"]["enabled"] is True
+
+
+def test_policy_update_requires_strict_systemd_synchronization(run_control):
+    result = run_control("mlan1", "enable")
+
+    assert result.returncode == 0
+    assert result.apply_strict == "1"
 
 
 def test_status_reports_healthy_controller_and_children(run_control):

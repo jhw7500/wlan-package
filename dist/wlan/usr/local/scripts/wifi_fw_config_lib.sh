@@ -58,8 +58,11 @@ wifi_fw_normalize_legacy_mcs_json() {
               and (.mlan1.mcs_tier | has("he"))) then
               .mlan1.mcs_tier.he |= (
                   . as $value
-                  | if (($value | type) == "number"
-                        and (([7, 9, 11] | index($value)) != null))
+                  | if ((($value | type) == "number"
+                         and (([7, 9, 11] | index($value)) != null))
+                        or (($value | type) == "string"
+                            and ((["7", "9", "11", "both 7", "both 9", "both 11"]
+                                  | index($value)) != null)))
                     then ""
                     else $value
                     end
