@@ -16,6 +16,11 @@ StartLimitBurst=10
 Type=simple
 Restart=always
 RestartSec=3
+# 모듈 재로드 경로(wifi_init.sh)가 rmmod 전에 systemctl stop 으로 동기 대기하므로 상한을
+# 둔다. 기본값(DefaultTimeoutStopSec, 통상 90s)이면 SIGTERM 에 반응하지 않는 supplicant
+# 하나가 재로드 전체를 90초 지연시킨다. 10초 뒤 systemd 가 SIGKILL 한다.
+# (systemctl 에는 --timeout 옵션이 없으므로 상한은 유닛에 둘 수밖에 없다.)
+TimeoutStopSec=10
 ExecStartPre=/bin/mkdir -p /var/log/cantops/wpa/%I
 ExecStartPre=/bin/sh -c 'echo "$(date "+%%Y-%%m-%%d %%H:%%M:%%S.%%3N") wpa_supplicant[info] %I: START" >> /var/log/cantops/wpa/%I/wpa.log'
 ExecStart=/usr/sbin/wpa_supplicant -c/etc/wpa_supplicant/wpa_supplicant-%I.conf -i%I -d

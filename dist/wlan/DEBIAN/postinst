@@ -93,6 +93,14 @@ EOF
   cp /opt/wlan/config/wifi_mod_para__.conf /lib/firmware/nxp/
   cp /opt/wlan/config/crontab /etc/
   cp /opt/wlan/config/wpa_supplicant/wpa_supplicant@.service /lib/systemd/system/
+  # payload 로 실린 udev rule(99-wlan-*.rules)을 udev 가 즉시 인지하도록 재로드한다.
+  # 없으면 신규/변경 rule 이 다음 재부팅까지 적용되지 않는다.
+  # 주의: trigger 는 하지 않는다 — add 이벤트를 재생하면 99-wlan-wpa-reattach.rules 가
+  # 현재 붙어 있는 mlan* 에 대해 try-restart 를 걸어, 패키지 설치만으로 무선이 끊긴다.
+  # 재로드는 규칙만 갱신하고 다음 실제 netdev 이벤트부터 적용된다.
+  if command -v udevadm >/dev/null 2>&1; then
+    udevadm control --reload-rules 2>/dev/null || true
+  fi
   cp /opt/wlan/config/systemd/journald.conf /etc/systemd/
   mkdir -p /etc/snmp
   cp /opt/wlan/config/snmp/snmpd.conf /etc/snmp/snmpd.conf

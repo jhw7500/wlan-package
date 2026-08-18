@@ -24,6 +24,7 @@ UDEV_RULE = WLAN_ROOT / "etc/udev/rules.d/99-wlan-wpa-reattach.rules"
 ARP_SEAL_RULE = WLAN_ROOT / "etc/udev/rules.d/99-wlan-arp-seal.rules"
 WPA_UNIT = WLAN_ROOT / "opt/wlan/config/wpa_supplicant/wpa_supplicant@.service"
 WIFI_INIT = WLAN_ROOT / "usr/local/scripts/wifi_init.sh"
+POSTINST = WLAN_ROOT / "DEBIAN/postinst"
 PAYLOAD_MANIFEST = WLAN_ROOT / "DEBIAN/payload-manifest.txt"
 SOURCE_MANIFEST = REPO_ROOT / "scripts/source_archive_manifest.txt"
 
@@ -138,6 +139,46 @@ def test_module_reload_stops_wpa_via_systemd_before_kill():
     assert stop_idx != -1, "모듈 재로드 전 systemctl stop 이 없다 — rmmod 창에서 되살아난다"
     assert kill_idx != -1, "kill 폴백이 사라졌다(형식 변경 시 테스트 갱신)"
     assert stop_idx < kill_idx, "systemctl stop 이 kill -9 보다 뒤에 있다 — 순서가 무의미"
+
+
+def test_stop_wait_is_bounded():
+    """`systemctl stop` 은 동기이고 systemctl 에는 --timeout 옵션이 없다.
+
+    모듈 재로드 경로가 rmmod 전에 stop 으로 대기하므로, 유닛에 상한이 없으면
+    DefaultTimeoutStopSec(통상 90s)까지 재로드 전체가 멈춘다. 상한은 유닛에 둘 수밖에
+    없다 — `systemctl stop --timeout=N` 은 존재하지 않는 옵션이라 그대로 쓰면 명령이
+    통째로 실패하고 `|| true` 가 삼켜, wpa 가 아예 정지되지 않는 회귀가 된다.
+    """
+    text = WPA_UNIT.read_text(encoding="utf-8")
+    m = re.search(r"^TimeoutStopSec=(\d+)", text, re.M)
+    assert m, "TimeoutStopSec 미설정 — 재로드가 기본 90초까지 지연될 수 있다"
+    assert 1 <= int(m.group(1)) <= 30, f"상한이 비현실적이다: {m.group(1)}s"
+    assert "--timeout" not in WIFI_INIT.read_text(encoding="utf-8"), (
+        "systemctl 에 없는 --timeout 옵션이 쓰였다 — 명령 전체가 실패한다"
+    )
+
+
+# ── 배포 즉시 적용 ──────────────────────────────────────────────────────────
+
+def test_postinst_reloads_udev_rules():
+    """재로드가 없으면 신규 rule 이 다음 재부팅까지 적용되지 않는다."""
+    text = POSTINST.read_text(encoding="utf-8")
+    assert "udevadm control --reload-rules" in text, (
+        "postinst 가 udev rule 을 재로드하지 않는다 — 배포해도 재부팅 전까지 무효"
+    )
+
+
+def test_postinst_does_not_trigger_udev():
+    """`udevadm trigger` 는 금지다.
+
+    add 이벤트를 재생하면 이 rule 이 **현재 붙어 있는** mlan* 에 try-restart 를 걸어,
+    패키지 설치만으로 무선이 끊긴다. 재로드는 규칙만 갱신하고 다음 실제 netdev
+    이벤트부터 적용된다.
+    """
+    text = POSTINST.read_text(encoding="utf-8")
+    assert "udevadm trigger" not in text, (
+        "udevadm trigger 가 추가됐다 — 설치 중 무선이 끊긴다"
+    )
 
 
 # ── 패키징 게이트 ───────────────────────────────────────────────────────────
