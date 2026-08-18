@@ -311,7 +311,10 @@ if lsmod | grep -q "^${MOAL_MOD}\b" || lsmod | grep -q "^${MLAN_MOD}\b"; then
     # 무기록이면, "왜 kill 폴백까지 갔는지"를 사후에 알 수 없다.
     if command -v systemctl >/dev/null 2>&1; then
         logger -p local0.info "[$tag:$LINENO] stopping wpa_supplicant@mlan0/mlan1 via systemctl before rmmod"
-        systemctl stop wpa_supplicant@mlan0.service wpa_supplicant@mlan1.service 2>/dev/null \
+        # stderr 를 버리지 않는다 — "failed" 사실만 남기고 이유(DBus 불통/권한/유닛 로드
+        # 실패)를 지우면 사후 추적이 끊긴다. 이 스크립트는 wifi_init.service 하에서 돌아
+        # stderr 가 그대로 journald 에 수집된다.
+        systemctl stop wpa_supplicant@mlan0.service wpa_supplicant@mlan1.service \
             || logger -p local0.warn "[$tag:$LINENO] systemctl stop wpa_supplicant@ failed; relying on kill fallback"
     else
         logger -p local0.warn "[$tag:$LINENO] systemctl not found; relying on kill fallback before rmmod"

@@ -109,7 +109,9 @@ EOF
       printf '[%s:%s] WARN: udevadm control --reload failed — udev rules apply after reboot\n' "$tag" "$LINENO" >&2
     fi
   else
+    # 두 분기 모두 logger 실패(syslog 미기동 컨테이너 등)에 대비해 stderr 폴백을 둔다.
     logger -p local0.warn "[$tag:$LINENO] [$KEY] udevadm not found; udev rules apply after reboot" || true
+    printf '[%s:%s] WARN: udevadm not found — udev rules apply after reboot\n' "$tag" "$LINENO" >&2
   fi
   cp /opt/wlan/config/systemd/journald.conf /etc/systemd/
   mkdir -p /etc/snmp

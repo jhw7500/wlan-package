@@ -139,6 +139,26 @@ def test_module_reload_stops_wpa_via_systemd_before_kill():
     assert stop_idx != -1, "모듈 재로드 전 systemctl stop 이 없다 — rmmod 창에서 되살아난다"
     assert kill_idx != -1, "kill 폴백이 사라졌다(형식 변경 시 테스트 갱신)"
     assert stop_idx < kill_idx, "systemctl stop 이 kill -9 보다 뒤에 있다 — 순서가 무의미"
+    # mlan0 만 확인하면 mlan1 을 빼도 통과한다. DBDC 보조 STA 는 checker/event 커버리지가
+    # 없어(핸드오프 §1) 이 stop 이 빠지면 rmmod 창에서 되살아나는 경로가 그대로 열린다.
+    assert "wpa_supplicant@mlan1.service" in text[stop_idx:stop_idx + 120], (
+        "systemctl stop 이 mlan1 을 포함하지 않는다"
+    )
+
+
+def test_module_reload_stop_keeps_stderr():
+    """실패 "이유"를 지우지 않는다.
+
+    `2>/dev/null` 을 붙이면 logger 가 "failed" 사실만 남기고 원인(DBus 불통/권한/유닛
+    로드 실패)은 영구 소실된다. 이 스크립트는 wifi_init.service 하에서 돌아 stderr 가
+    그대로 journald 에 수집되므로 버릴 이유가 없다.
+    """
+    text = WIFI_INIT.read_text(encoding="utf-8")
+    stop_idx = text.find("systemctl stop wpa_supplicant@mlan0.service")
+    assert stop_idx != -1
+    assert "2>/dev/null" not in text[stop_idx:stop_idx + 200], (
+        "systemctl stop 의 stderr 를 버린다 — 실패 이유가 사라진다"
+    )
 
 
 def test_stop_wait_is_bounded():
@@ -189,6 +209,16 @@ def test_postinst_does_not_swallow_reload_failure():
     assert "udevadm control --reload 2>/dev/null" not in text, (
         "stderr 를 버린다 — 패키지 관리자와 로그 양쪽에서 실패가 보이지 않는다"
     )
+    # 재로드 실패 분기와 udevadm 부재 분기 **양쪽** 모두 stderr 폴백을 가져야 한다.
+    # syslog 미기동 환경(컨테이너 등)에서는 logger 가 조용히 실패해 한쪽만 있으면
+    # 그 분기의 경고가 통째로 사라진다.
+    block = text[max(0, idx - 800):idx + 800]
+    for msg in ("udevadm control --reload failed", "udevadm not found"):
+        lines = [ln for ln in block.splitlines() if msg in ln]
+        assert any("logger" in ln for ln in lines), f"{msg}: logger 경고가 없다"
+        assert any("printf" in ln and ">&2" in ln for ln in lines), (
+            f"{msg}: stderr 폴백(printf >&2)이 없다 — syslog 미기동 환경에서 경고가 사라진다"
+        )
 
 
 def test_module_reload_logs_stop_attempt():
