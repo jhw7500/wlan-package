@@ -102,20 +102,15 @@ reconfigure_grace_active() {
     (( now - mt >= 0 && now - mt < RECONFIGURE_GRACE_SEC ))
 }
 
+# operstate 를 그대로 돌려준다: up / down / dormant / lowerlayerdown /
+# notpresent / unknown. 예전에는 wpa_state 나 COMPLETED/DISCONNECTED 를
+# 돌려줬고(위 주석) 호출부 비교문에 그 문자열이 남아 있었다.
 get_state() {
-    #wpa_cli -i "$IFACE" status | grep "^wpa_state=" | cut -d= -f2
-    #iw "$IFACE" link | grep 'Connected to' >/dev/null && echo "COMPLETED" || echo "DISCONNECTED"
     cat /sys/class/net/"$IFACE"/operstate
 }
 
 is_wpa_active() {
     systemctl is-active --quiet "wpa_supplicant@${IFACE}.service"
-}
-
-is_connected() {
-    local state
-    state=$(get_state)
-    [[ "$state" == "COMPLETED" ]]
 }
 
 is_wpa_completed() {
@@ -136,8 +131,13 @@ wpa_handshake_in_progress() {
 }
 
 # Check if station dump works (returns 0=ok, 1=fault)
+# rc 가 아니라 출력으로 판정한다. nl80211 DUMP 계열은 드라이버 에러를
+# NLMSG_ERROR 가 아니라 NLMSG_DONE 페이로드로 돌려주고, iw/libnl 의 finish
+# 핸들러가 이를 정상 종료로 덮어써 exit 0 이 된다(대조: dump 계열 rc=0,
+# doit 계열 `iw <if> info` rc=237). 드라이버가 wedge 되어 모든 IOCTL 이
+# 거부되는 동안에도 rc 는 0 이라 FAULT_CNT 가 영원히 오르지 않았다.
 check_station_dump() {
-    iw "$IFACE" station dump >/dev/null 2>&1
+    [ -n "$(iw "$IFACE" station dump 2>/dev/null | sed -n 's/^Station .*/x/p' | head -1)" ]
 }
 
 # MFG 프로파일 판정 (SoT: mod_para.conf의 mfg_mode=). MFG FW에서는 scan/connect가
@@ -258,7 +258,12 @@ while true; do
             unset _inv
         fi
 
-        if [[ "$STATE" == "DISCONNECTED" || "$STATE" == "SCANNING" || "$STATE" == "down" ]]; then
+        # operstate 값으로 판정한다. "DISCONNECTED"/"SCANNING" 은 get_state 가
+        # wpa_state 를 돌려주던 시절의 잔재라 절대 매치되지 않았다. unknown 은
+        # 연결 여부를 알 수 없다는 뜻이므로 종전대로 개입하지 않는다(정상 연결
+        # 중에 reassociate 로 끊는 것을 피한다).
+        if [[ "$STATE" == "down" || "$STATE" == "dormant" || \
+              "$STATE" == "lowerlayerdown" || "$STATE" == "notpresent" ]]; then
             FAULT_CNT=0
             if reconfigure_grace_active "$TIMESTAMP"; then
                 # reconfigure 재연결 과도기 — 정당한 재연결을 끊지 않도록 타이머/사다리 억제
@@ -345,7 +350,10 @@ while true; do
         # — 정책의 실제 거부 코드(10/11/12)가 로그에 남아야 진단 가능.
         if [ "$rc" -ne 0 ]; then
           logger -p local0.warning "[$tag:$LINENO] [$IFACE] Reboot refused by policy (rc=$rc)"
-          sleep 60
+          # rc=11(loop) 은 쿨다운보다 길게 물러난다. 정책은 거부하기 전에
+          # state 를 먼저 쓰므로(wlan_reboot_policy.sh), 쿨다운보다 짧은 주기로
+          # 재요청하면 last_ts 가 계속 밀려 count 가 영구히 래칫된다.
+          if [ "$rc" -eq 11 ]; then sleep $((REBOOT_COOLDOWN_SEC + 30)); else sleep 60; fi
         fi
     fi
 done
