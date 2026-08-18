@@ -9,14 +9,13 @@
 # netdev 재생성 훅은 이 리포에서 99-wlan-arp-seal.rules 로 이미 실증된 방식이며 동일한
 # add 트리거를 쓴다.
 #
-# try-restart 인 이유 (man systemctl: "Stop and then start ... if the units are running.
-# This does nothing if units are not running"):
-#   - 부팅 첫 add: wpa 아직 미기동 → no-op. 부팅 순서에 개입하지 않는다.
-#   - 재생성: active 면 좀비/정상 불문 재시작 → 재부착.
-#   - 운영자가 .mlanN.wpa_supplicant.enabled=false 로 끈 경우: 유닛 비활성 → no-op.
-#     restart 나 start 를 쓰면 이 의도를 덮어쓴다.
+# 처리는 헬퍼(wlan_wpa_reattach.sh)에 둔다. 유닛 상태별로 필요한 동작이 달라 RUN 한 줄로는
+# 표현할 수 없기 때문이다 — active 면 restart, failed 면 reset-failed+start(단 enable 된
+# 경우만), inactive 면 no-op. 특히 failed 는 systemd 기준 "not running" 이라 try-restart 가
+# no-op 이므로(실측), 단일 try-restart 로는 StartLimit 을 소진한 유닛을 되살릴 수 없다.
+# 상세 근거는 헬퍼 주석 참조.
 #
-# --no-block 이 필수다. man systemctl: 미지정 시 "systemctl will wait until the unit's
+# 헬퍼는 job 을 거는 호출에 --no-block 을 쓴다. man systemctl: 미지정 시 "systemctl will wait until the unit's
 # start-up is completed". 게다가 wpa_supplicant@.service 는 지금 막 생성 중인
 # sys-subsystem-net-devices-%i.device 를 Requires/After 로 걸고 있어, 블로킹 호출은 그
 # device 유닛을 기다리며 udev 워커를 멈춘다. man 7 udev 는 RUN 에서 파생된 프로세스가
@@ -24,7 +23,7 @@
 # 멈춘 호출은 작업을 반쯤 남기고 죽는다. --no-block 은 job 만 큐잉하고 즉시 반환하며,
 # 실제 재시작은 udev 워커 밖(PID 1)에서 수행된다.
 #
-# RUN 은 셸을 거치지 않으므로 절대 경로를 쓴다. /bin 은 usr-merge 심볼릭 링크이므로
-# 실체 경로인 /usr/bin 을 직접 가리킨다. KERNEL 패턴은 arp-seal rule 과 동일하게
+# RUN 은 셸을 거치지 않으므로 절대 경로를 쓴다. 헬퍼 내부도 systemd-udevd 의 최소 PATH 를
+# 감안해 /usr/bin/systemctl 절대 경로를 쓴다. KERNEL 패턴은 arp-seal rule 과 동일하게
 # mlan[0-9]* 로 좁힌다(mlan* 는 향후 mlanX 아닌 이름까지 잡을 수 있다).
-ACTION=="add", SUBSYSTEM=="net", KERNEL=="mlan[0-9]*", RUN+="/usr/bin/systemctl --no-block try-restart wpa_supplicant@%k.service"
+ACTION=="add", SUBSYSTEM=="net", KERNEL=="mlan[0-9]*", RUN+="/usr/local/scripts/wlan_wpa_reattach.sh %k"
