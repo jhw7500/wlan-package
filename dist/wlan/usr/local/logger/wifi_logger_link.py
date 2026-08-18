@@ -19,7 +19,7 @@ LOG_DIR = "/var/log/cantops/json"
 LINK_PATH = "/var/log/cantops/json"
 TARGET_PATH = "/dev/shm/json"
 MWLAN_LOG_PATH = "/proc/mwlan/adapter0/mlan0/log"
-LOOP_INTERVAL = 0.9  # 코드 폴백 — 템플릿 logger.link_interval_sec 와 fail-same
+LOOP_INTERVAL = 0.9  # 코드 폴백 — 템플릿 <iface>.logger.link_interval_sec 와 fail-same
 SPIKE_THRESHOLD_FAIL = 1
 SPIKE_THRESHOLD_RETRY = 10
 # reconfigure/select_network 직후 100~200ms 순간 끊김(station dump 일시적 공백)을

@@ -71,6 +71,93 @@ wifi_fw_normalize_legacy_mcs_json() {
     ' "$json"
 }
 
+# 안테나 경로 비트맵 유효성 — 10진 또는 0x 16진, 1..0xFFFF.
+# 0 은 거부한다: 어떤 경로도 선택하지 않는 값이라 RF 가 죽는데 mlanutl 은 성공으로 보고할
+# 수 있고, 이 기기는 무선이 유일한 접속 경로다.
+_wifi_fw_is_ant_path() {
+    local v="$1" n
+    case "$v" in
+        0x*|0X*)
+            case "${v#0[xX]}" in ''|*[!0-9a-fA-F]*) return 1 ;; esac
+            ;;
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    n=$((v)) 2>/dev/null || return 1
+    [ "$n" -ge 1 ] && [ "$n" -le 65535 ]
+}
+
+# antcfg 는 mcs_tier 와 같은 opt-in 이다(기본 false) — 지금까지 적용하지 않던 설정이라
+# 기본으로 켜면 출하 기기의 RF 경로가 통째로 바뀐다.
+wifi_fw_validate_antcfg_config() {
+    local json="$1" iface="$2" enabled tx rx
+    _wifi_fw_has_section "$json" "$iface" antcfg || return 2
+    enabled=$(jq -r --arg i "$iface" '.[$i].antcfg.enabled // false' "$json" 2>/dev/null)
+    [ "$enabled" = true ] || return 2
+
+    jq -e --arg i "$iface" '
+        (.[$i].antcfg | type) == "object"
+        and (.[$i].antcfg | has("tx") and has("rx"))
+        and ([.[$i].antcfg.tx, .[$i].antcfg.rx] | all(type == "string"))
+    ' "$json" >/dev/null 2>&1 || return 1
+
+    tx=$(jq -r --arg i "$iface" '.[$i].antcfg.tx' "$json" 2>/dev/null) || return 1
+    rx=$(jq -r --arg i "$iface" '.[$i].antcfg.rx' "$json" 2>/dev/null) || return 1
+
+    _wifi_fw_is_ant_path "$tx" || return 1
+    # rx 는 선택 — 비면 인자를 생략해 tx 가 Tx/Rx 양쪽에 적용된다.
+    [ -z "$rx" ] || _wifi_fw_is_ant_path "$rx" || return 1
+}
+
+wifi_fw_apply_antcfg() {
+    local json="$1" iface="$2" tx rx live rc other
+    if ! _wifi_fw_has_section "$json" "$iface" antcfg; then
+        wifi_fw_log local0.info "[$iface] antcfg absent; skip"
+        return 0
+    fi
+    if wifi_fw_validate_antcfg_config "$json" "$iface"; then
+        :
+    else
+        rc=$?
+        case "$rc" in
+            2) wifi_fw_log local0.info "[$iface] antcfg disabled; skip (FW/board default path)" ;;
+            *) wifi_fw_log local0.err "[$iface] invalid antcfg section; skip (FW/board default path)" ;;
+        esac
+        return 0
+    fi
+
+    # antcfg 는 어댑터(라디오) 단위 설정인데 키는 인터페이스별이라 오설정을 부르기 쉽다 —
+    # 두 인터페이스에 서로 다른 값을 켜면 나중에 적용된 쪽이 조용히 이긴다. 명시적으로 경고한다.
+    case "$iface" in mlan0) other=mlan1 ;; mlan1) other=mlan0 ;; *) other="" ;; esac
+    if [ -n "$other" ] && wifi_fw_validate_antcfg_config "$json" "$other" \
+       && [ "$(jq -c --arg i "$iface" '[.[$i].antcfg.tx, .[$i].antcfg.rx]' "$json")" \
+            != "$(jq -c --arg i "$other" '[.[$i].antcfg.tx, .[$i].antcfg.rx]' "$json")" ]; then
+        wifi_fw_log local0.warn "[$iface] antcfg differs from $other; adapter-level setting — last applied wins"
+    fi
+
+    tx=$(jq -r --arg i "$iface" '.[$i].antcfg.tx' "$json")
+    rx=$(jq -r --arg i "$iface" '.[$i].antcfg.rx' "$json")
+
+    if [ -n "$rx" ]; then
+        wifi_fw_log local0.info "[$iface] antcfg configured: tx=$tx rx=$rx"
+        "$WIFI_MLANUTL" "$iface" antcfg "$tx" "$rx" >/dev/null 2>&1 || {
+            wifi_fw_log local0.err "[$iface] antcfg SET failed"
+            return 0
+        }
+    else
+        wifi_fw_log local0.info "[$iface] antcfg configured: tx=$tx (rx 생략 — tx가 Tx/Rx 공통)"
+        "$WIFI_MLANUTL" "$iface" antcfg "$tx" >/dev/null 2>&1 || {
+            wifi_fw_log local0.err "[$iface] antcfg SET failed"
+            return 0
+        }
+    fi
+
+    live=$("$WIFI_MLANUTL" "$iface" antcfg 2>&1) || {
+        wifi_fw_log local0.warn "[$iface] antcfg GET failed after SET"
+        return 0
+    }
+    wifi_fw_log local0.info "[$iface] antcfg live after pre-association SET: $(printf '%s' "$live" | tr '\n' ' ')"
+}
+
 wifi_fw_validate_rate_config() {
     local json="$1" iface="$2" values mode low high interval
     _wifi_fw_has_section "$json" "$iface" rate_adapt || return 2
@@ -101,9 +188,22 @@ wifi_fw_validate_rate_config() {
 }
 
 wifi_fw_apply_rate() {
-    local json="$1" iface="$2" values mode low high interval_ms interval live
+    local json="$1" iface="$2" values mode low high interval_ms interval live enabled
     if ! _wifi_fw_has_section "$json" "$iface" rate_adapt; then
         wifi_fw_log local0.info "[$iface] rate_adapt absent; skip"
+        return 0
+    fi
+    # enabled 기본 true — 섹션이 있으면 적용하던 종전 동작을 그대로 둔다(mcs_tier 는
+    # opt-in 이라 기본 false, 이쪽은 이미 켜져 있던 기능이라 기본 true).
+    # jq 의 // 는 false 를 falsey 로 취급해 기본값으로 덮으므로 null 만 기본값으로 본다.
+    # 판정은 mcs_tier 와 같은 strict 비교 — 스키마상 boolean 이며 같은 파일의 형제 키와
+    # 해석이 갈리면 안 된다.
+    enabled=$(jq -r --arg i "$iface" '
+        if (.[$i].rate_adapt.enabled == null) then "true"
+        else (.[$i].rate_adapt.enabled | tostring) end
+    ' "$json" 2>/dev/null)
+    if [ "$enabled" != true ]; then
+        wifi_fw_log local0.info "[$iface] rate_adapt disabled; skip (FW 기본값 유지)"
         return 0
     fi
     if ! wifi_fw_validate_rate_config "$json" "$iface"; then
