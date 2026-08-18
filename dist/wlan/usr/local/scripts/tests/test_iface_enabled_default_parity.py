@@ -153,20 +153,34 @@ def _init_side(config_path):
     return r.stdout.strip()
 
 
+def _shell_fn(src, name):
+    """셸 소스에서 함수 정의를 원문 그대로 꺼낸다(끝은 열 0 의 단독 `}` 행)."""
+    head = f"{name}() {{\n"
+    assert head in src, f"{name} 정의를 찾지 못함(형식 변경 시 테스트 갱신)"
+    rest = src.split(head, 1)[1]
+    end = rest.find("\n}\n")
+    assert end != -1, f"{name} 의 종료 행을 찾지 못함"
+    return head + rest[:end] + "\n}\n"
+
+
+def _apply_helpers():
+    """wifi_apply_enabled.sh 의 normalize_bool/get_bool 을 **실물 그대로** 꺼내온다.
+
+    재현 사본을 실행하면 실제 스크립트의 판정이 바뀌어도 테스트는 자기 사본을 검증해
+    통과한다 — 이 파일이 고정하려는 것이 바로 두 스크립트의 판정 일치이므로, 상대편을
+    재구현하면 게이트가 무력해진다.
+    """
+    src = APPLY_SH.read_text()
+    return _shell_fn(src, "normalize_bool") + _shell_fn(src, "get_bool")
+
+
 def _apply_side(config_path):
-    """wifi_apply_enabled.sh 의 get_bool + normalize_bool 을 그대로 재현."""
+    """wifi_apply_enabled.sh 의 get_bool(원문)으로 mlan0 판정을 돌려준다."""
     script = f'''
         set -u
         JSON="{config_path}"
-        normalize_bool() {{
-            case "${{1:-}}" in
-                true|TRUE|True|1|yes|YES|Yes) printf 'true\\n' ;;
-                *) printf 'false\\n' ;;
-            esac
-        }}
-        v=$(jq -r 'if .mlan0.enabled == null then "false" else (.mlan0.enabled | tostring) end' "$JSON" 2>/dev/null)
-        [ -z "$v" ] && v="false"
-        normalize_bool "$v"
+{_apply_helpers()}
+        get_bool ".mlan0.enabled" "false"
     '''
     r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stderr

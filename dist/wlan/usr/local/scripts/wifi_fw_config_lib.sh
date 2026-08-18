@@ -109,7 +109,7 @@ wifi_fw_validate_antcfg_config() {
 }
 
 wifi_fw_apply_antcfg() {
-    local json="$1" iface="$2" tx rx live rc other
+    local json="$1" iface="$2" tx rx live rc other differs
     if ! _wifi_fw_has_section "$json" "$iface" antcfg; then
         wifi_fw_log local0.info "[$iface] antcfg absent; skip"
         return 0
@@ -127,11 +127,22 @@ wifi_fw_apply_antcfg() {
 
     # antcfg 는 어댑터(라디오) 단위 설정인데 키는 인터페이스별이라 오설정을 부르기 쉽다 —
     # 두 인터페이스에 서로 다른 값을 켜면 나중에 적용된 쪽이 조용히 이긴다. 명시적으로 경고한다.
+    # 비교는 jq 한 번으로 끝낸다 — 두 번 호출하면 둘 다 실패했을 때 ""!="" 가 되어 경고가
+    # 조용히 누락된다. 판정 불가(빈 결과)도 침묵하지 않고 별도 경고로 남긴다.
     case "$iface" in mlan0) other=mlan1 ;; mlan1) other=mlan0 ;; *) other="" ;; esac
-    if [ -n "$other" ] && wifi_fw_validate_antcfg_config "$json" "$other" \
-       && [ "$(jq -c --arg i "$iface" '[.[$i].antcfg.tx, .[$i].antcfg.rx]' "$json")" \
-            != "$(jq -c --arg i "$other" '[.[$i].antcfg.tx, .[$i].antcfg.rx]' "$json")" ]; then
-        wifi_fw_log local0.warn "[$iface] antcfg differs from $other; adapter-level setting — last applied wins"
+    if [ -n "$other" ] && wifi_fw_validate_antcfg_config "$json" "$other"; then
+        differs=$(jq -r --arg i "$iface" --arg o "$other" '
+            [.[$i].antcfg.tx, .[$i].antcfg.rx] != [.[$o].antcfg.tx, .[$o].antcfg.rx]
+        ' "$json" 2>/dev/null) || differs=""
+        case "$differs" in
+            true)
+                wifi_fw_log local0.warn "[$iface] antcfg differs from $other; adapter-level setting — last applied wins"
+                ;;
+            false) ;;
+            *)
+                wifi_fw_log local0.warn "[$iface] antcfg cross-check vs $other failed; cannot confirm agreement"
+                ;;
+        esac
     fi
 
     tx=$(jq -r --arg i "$iface" '.[$i].antcfg.tx' "$json")
