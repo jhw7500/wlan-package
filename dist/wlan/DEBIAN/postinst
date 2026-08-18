@@ -97,9 +97,19 @@ EOF
   # 없으면 신규/변경 rule 이 다음 재부팅까지 적용되지 않는다.
   # 주의: trigger 는 하지 않는다 — add 이벤트를 재생하면 99-wlan-wpa-reattach.rules 가
   # 현재 붙어 있는 mlan* 에 대해 try-restart 를 걸어, 패키지 설치만으로 무선이 끊긴다.
-  # 재로드는 규칙만 갱신하고 다음 실제 netdev 이벤트부터 적용된다.
+  # 재로드는 규칙만 갱신하고 다음 실제 netdev 이벤트부터 적용된다 — man udevadm:
+  # "Reloading rules and databases does not apply any changes to already existing
+  # devices; the new configuration will only be applied to new events."
+  # 실패를 조용히 삼키지 않는다: 재로드가 안 되면 rule 이 재부팅까지 무효인데, 그 사실이
+  # 어디에도 남지 않으면 "배포했는데 왜 안 고쳐졌나"를 추적할 수 없다. 설치 자체는
+  # 막지 않는다(재부팅하면 적용되므로).
   if command -v udevadm >/dev/null 2>&1; then
-    udevadm control --reload-rules 2>/dev/null || true
+    if ! udevadm control --reload; then
+      logger -p local0.warn "[$tag:$LINENO] [$KEY] udevadm control --reload failed; udev rules apply after reboot" || true
+      printf '[%s:%s] WARN: udevadm control --reload failed — udev rules apply after reboot\n' "$tag" "$LINENO" >&2
+    fi
+  else
+    logger -p local0.warn "[$tag:$LINENO] [$KEY] udevadm not found; udev rules apply after reboot" || true
   fi
   cp /opt/wlan/config/systemd/journald.conf /etc/systemd/
   mkdir -p /etc/snmp

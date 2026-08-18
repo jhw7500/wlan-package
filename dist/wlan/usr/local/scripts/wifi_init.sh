@@ -307,8 +307,14 @@ if lsmod | grep -q "^${MOAL_MOD}\b" || lsmod | grep -q "^${MLAN_MOD}\b"; then
     # OnFailure=wlan_emergency_reboot.service 로 이어진다. systemctl stop 은 명시적 정지라
     # systemd 가 재기동하지 않는다. kill -9 는 systemd 밖에서 뜬 잔존 프로세스용 폴백으로만
     # 남긴다(수동 실행분 등).
+    # graceful stop 시도와 실패를 남긴다. 아래 kill -9 는 PID 를 로깅하는데 그 앞 단계가
+    # 무기록이면, "왜 kill 폴백까지 갔는지"를 사후에 알 수 없다.
     if command -v systemctl >/dev/null 2>&1; then
-        systemctl stop wpa_supplicant@mlan0.service wpa_supplicant@mlan1.service 2>/dev/null || true
+        logger -p local0.info "[$tag:$LINENO] stopping wpa_supplicant@mlan0/mlan1 via systemctl before rmmod"
+        systemctl stop wpa_supplicant@mlan0.service wpa_supplicant@mlan1.service 2>/dev/null \
+            || logger -p local0.warn "[$tag:$LINENO] systemctl stop wpa_supplicant@ failed; relying on kill fallback"
+    else
+        logger -p local0.warn "[$tag:$LINENO] systemctl not found; relying on kill fallback before rmmod"
     fi
     wpa_pids=$(pgrep -f 'wpa_supplicant.*mlan' 2>/dev/null | tr '\n' ' ') || true
     if [ -n "$wpa_pids" ]; then
