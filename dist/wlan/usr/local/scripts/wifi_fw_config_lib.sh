@@ -78,7 +78,13 @@ _wifi_fw_is_ant_path() {
     local v="$1" n
     case "$v" in
         0x*|0X*)
-            case "${v#0[xX]}" in ''|*[!0-9a-fA-F]*) return 1 ;; esac
+            case "${v#0[xX]}" in
+                ''|*[!0-9a-fA-F]*) return 1 ;;
+                # 유효 범위가 1..0xFFFF 라 16진 5자리 이상은 무조건 초과다. bash 산술
+                # 오버플로가 음수를 만들어 아래 범위 검사에서 걸리는 우연에 기대지 않고
+                # 여기서 명시적으로 거부한다(선행 0 거부와 같은 취지 — 모호한 입력 배제).
+                ?????*) return 1 ;;
+            esac
             ;;
         # 선행 0 10진수 거부: bash 산술은 "010" 을 8진수 8 로 읽는데 mlanutl 에는 문자열
         # "010" 이 그대로 전달돼, 범위 검증한 값과 실제 적용값이 갈린다.
@@ -147,8 +153,14 @@ wifi_fw_apply_antcfg() {
         esac
     fi
 
-    tx=$(jq -r --arg i "$iface" '.[$i].antcfg.tx' "$json")
-    rx=$(jq -r --arg i "$iface" '.[$i].antcfg.rx' "$json")
+    tx=$(jq -r --arg i "$iface" '.[$i].antcfg.tx' "$json" 2>/dev/null) || tx=""
+    rx=$(jq -r --arg i "$iface" '.[$i].antcfg.rx' "$json" 2>/dev/null) || rx=""
+    # 검증 통과 후라 빈 tx 는 나올 수 없지만, 나온다면 mlanutl 에 빈 인자를 넘기는 대신
+    # 사유를 남기고 FW 기본 경로를 유지한다(같은 함수의 다른 jq 호출과 동일 규약).
+    if [ -z "$tx" ]; then
+        wifi_fw_log local0.err "[$iface] antcfg tx read failed after validation; skip (FW/board default path)"
+        return 0
+    fi
 
     if [ -n "$rx" ]; then
         wifi_fw_log local0.info "[$iface] antcfg configured: tx=$tx rx=$rx"
