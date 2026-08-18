@@ -141,6 +141,19 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `global.ANT_TYPE` | 안테나 경로 | enum | `""` | `""`\|`internal`\|`external` (또는 0\|1). 빈값=설정 안 함 | caution | boot | 부팅 시 GPIO(SW_SEL1/2)로 적용. 런타임 변경은 `wifi ant` |
 | `global.tx_work` | moal TX 제출 방식 | int | `0` | `0`\|`1` (빈값/형식위반=미전달) | caution | reboot | 0=동기 제출(홉1), 1=tx_workqueue 비동기(홉2, NXP iMX 기본). capability-gate |
 | `global.ping_monitor.enabled` | ping 모니터 서비스 | bool | `false` | true\|false | yes | daemon-restart | `wifi_ping_monitor.service` enable/disable |
+| `global.fw_watch.enabled` | 드라이버 wedge 감시 | bool | `true` | true\|false | yes | daemon-restart | `wlan_fw_watch.service` enable/disable |
+| `global.fw_watch.CHECK_INTERVAL_SEC` | wedge 폴링 주기 | int | `5` | 1~60 | yes | daemon-restart | `wifi_status` 확인 간격(초) |
+| `global.fw_watch.INITIAL_DELAY_SEC` | 감시 시작 유예 | int | `60` | 0~600 | yes | daemon-restart | 부팅 중 FW 다운로드 창 회피(초) |
+| `global.fw_watch.TERM_FAULT_CNT` | 확정 판정 틱 | int | `3` | 1~60 | yes | daemon-restart | `wifi_status=11` 연속 관측 횟수 |
+| `global.fw_watch.ABNORMAL_FAULT_CNT` | 비정상 판정 틱 | int | `36` | 0~600 | yes | daemon-restart | 그 외 비정상 값 연속 횟수. 0=비활성 |
+| `global.fw_watch.CONFIRM_TIMEOUT_SEC` | 확인 읽기 제한 | int | `3` | 1~30 | yes | daemon-restart | `hardware_status` 읽기 타임아웃(초) |
+| `global.fw_watch.RELOAD_ENABLED` | 리로드 우선 | int | `1` | 0\|1 | yes | daemon-restart | 1이면 재부팅 전 `wifi_init.service` 재시작 |
+| `global.fw_watch.RELOAD_COOLDOWN_SEC` | 리로드 쿨다운 | int | `900` | 60~86400 | yes | daemon-restart | 리로드 간 최소 간격(초) |
+| `global.fw_watch.VERIFY_TIMEOUT_SEC` | 회복 확인 제한 | int | `90` | 10~600 | yes | daemon-restart | 리로드 후 회복 대기(초) |
+| `global.fw_watch.VERIFY_INTERVAL_SEC` | 회복 확인 주기 | int | `3` | 1~30 | yes | daemon-restart | 회복 폴링 간격(초) |
+| `global.fw_watch.MAX_REBOOT_COUNT` | 재부팅 상한 | int | `3` | 1~10 | yes | daemon-restart | 정책에 전달 |
+| `global.fw_watch.REBOOT_COOLDOWN_SEC` | 재부팅 쿨다운 | int | `300` | 60~86400 | yes | daemon-restart | 정책에 전달(초) |
+| `global.fw_watch.MIN_UPTIME_SEC` | 최소 uptime | int | `60` | 0~3600 | yes | daemon-restart | 정책에 전달(초) |
 
 **비고 (global)** — 소비: 대부분 `wifi_init.sh`(부팅). `ping_monitor.enabled`는 `wifi_apply_enabled.sh`.
 - `BUS_TYPE`/`BLUETOOTH.enable`/`BOARD_TYPE`는 하드웨어와 일치해야 함(fw_name·mod_para 블록·.ko 선택 결정). fw_name이 바뀌면 `wifi_config.py`가 `mod_para.conf`에 자동 기입.

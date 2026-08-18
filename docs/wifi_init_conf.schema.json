@@ -13,7 +13,10 @@
         "BOARD_TYPE": {
           "type": "string",
           "default": "imx93",
-          "enum": ["imx8mm", "imx93"],
+          "enum": [
+            "imx8mm",
+            "imx93"
+          ],
           "description": "보드/드라이버 선택 — imx93*이면 mlan_imx93/moal_imx93, 아니면 mlan_imx8/moal_imx8 .ko 로드",
           "x-ui-editable": "caution",
           "x-apply-timing": "reboot",
@@ -22,7 +25,10 @@
         "BUS_TYPE": {
           "type": "string",
           "default": "sdio",
-          "enum": ["sdio", "pcie"],
+          "enum": [
+            "sdio",
+            "pcie"
+          ],
           "description": "버스 종류 — fw_name 자동선택, mod_para 블록 prefix(SD9098/PCIE9098) 결정에 사용",
           "x-ui-editable": "caution",
           "x-apply-timing": "reboot",
@@ -70,7 +76,15 @@
         "STANDARD": {
           "type": "string",
           "default": "",
-          "enum": ["", "n", "ac", "ax", "4", "5", "6"],
+          "enum": [
+            "",
+            "n",
+            "ac",
+            "ax",
+            "4",
+            "5",
+            "6"
+          ],
           "description": "WiFi 표준 제한 fallback(dev_cap_mask로 변환). mlanN.STANDARD가 우선. 빈값=칩 기본(제한 없음)",
           "x-ui-editable": "caution",
           "x-apply-timing": "reboot",
@@ -87,7 +101,13 @@
         "ANT_TYPE": {
           "type": "string",
           "default": "",
-          "enum": ["", "internal", "external", "0", "1"],
+          "enum": [
+            "",
+            "internal",
+            "external",
+            "0",
+            "1"
+          ],
           "description": "안테나 경로 부팅 시 GPIO(SW_SEL1/SW_SEL2) 설정. 빈값=설정 안 함. 런타임 변경은 'wifi ant' 명령",
           "x-ui-editable": "caution",
           "x-apply-timing": "boot",
@@ -96,7 +116,10 @@
         "tx_work": {
           "type": "integer",
           "default": 0,
-          "enum": [0, 1],
+          "enum": [
+            0,
+            1
+          ],
           "description": "moal 데이터 TX 제출 방식 module_param — 0=호출자 컨텍스트 동기(홉1), 1=tx_workqueue 비동기(홉2, NXP iMX 기본)",
           "x-ui-editable": "caution",
           "x-apply-timing": "reboot",
@@ -114,6 +137,129 @@
               "x-ui-editable": "yes",
               "x-apply-timing": "daemon-restart",
               "x-consumer": "wifi_apply_enabled.sh"
+            }
+          }
+        },
+        "fw_watch": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "wlan_fw_watch.service — 드라이버 wedge 감시자 설정",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "wlan_fw_watch.service enable/disable — systemctl로 동기화",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_apply_enabled.sh"
+            },
+            "CHECK_INTERVAL_SEC": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 5,
+              "description": "/proc/mwlan/wifi_status 폴링 주기 (초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wlan_fw_watch.sh"
+            },
+            "INITIAL_DELAY_SEC": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 60,
+              "description": "기동 후 첫 판정까지 유예 (초) — 부팅 중 FW 다운로드 창 회피",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wlan_fw_watch.sh"
+            },
+            "TERM_FAULT_CNT": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 3,
+              "description": "wifi_status=11(FW_RECOVERY_FAIL) 연속 관측 횟수",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wlan_fw_watch.sh"
+            },
+            "ABNORMAL_FAULT_CNT": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 36,
+              "description": "그 외 비정상 값 연속 관측 횟수. 0이면 이 계층 비활성",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wlan_fw_watch.sh"
+            },
+            "CONFIRM_TIMEOUT_SEC": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 3,
+              "description": "hardware_status 확인 읽기 제한 시간 (초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wlan_fw_watch.sh"
+            },
+            "RELOAD_ENABLED": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 1,
+              "description": "1이면 재부팅 전에 wifi_init.service 재시작을 먼저 시도",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wlan_fw_watch.sh"
+            },
+            "RELOAD_COOLDOWN_SEC": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 900,
+              "description": "리로드 간 최소 간격 (초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wlan_fw_watch.sh"
+            },
+            "VERIFY_TIMEOUT_SEC": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 90,
+              "description": "리로드 후 회복 확인 제한 시간 (초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wlan_fw_watch.sh"
+            },
+            "VERIFY_INTERVAL_SEC": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 3,
+              "description": "회복 확인 폴링 주기 (초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wlan_fw_watch.sh"
+            },
+            "MAX_REBOOT_COUNT": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 3,
+              "description": "정책에 전달할 최대 재부팅 횟수",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wlan_fw_watch.sh"
+            },
+            "REBOOT_COOLDOWN_SEC": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 300,
+              "description": "정책에 전달할 재부팅 간 최소 대기 (초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wlan_fw_watch.sh"
+            },
+            "MIN_UPTIME_SEC": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 60,
+              "description": "정책에 전달할 최소 uptime (초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wlan_fw_watch.sh"
             }
           }
         }
@@ -203,7 +349,10 @@
         "bridge_iface": {
           "type": "string",
           "default": "mlan0",
-          "enum": ["mlan0", "mlan1"],
+          "enum": [
+            "mlan0",
+            "mlan1"
+          ],
           "description": "브릿지에 사용할 무선 인터페이스",
           "x-ui-editable": "caution",
           "x-apply-timing": "boot",
@@ -212,7 +361,11 @@
         "mac_mode": {
           "type": "string",
           "default": "dynamic",
-          "enum": ["default", "dynamic", "static"],
+          "enum": [
+            "default",
+            "dynamic",
+            "static"
+          ],
           "description": "브릿지 인터페이스 MAC 결정 방식. dynamic=유선측 MAC 동적 획득",
           "x-ui-editable": "caution",
           "x-apply-timing": "boot",
@@ -307,7 +460,11 @@
         "engine": {
           "type": "string",
           "default": "moal",
-          "enum": ["pcap", "tpacket", "moal"],
+          "enum": [
+            "pcap",
+            "tpacket",
+            "moal"
+          ],
           "description": "브릿지 엔진. pcap/tpacket=유저스페이스, moal=드라이버 레벨(mod_para bridge_mode=1)",
           "x-ui-editable": "caution",
           "x-apply-timing": "daemon-restart",
@@ -339,7 +496,10 @@
             "debug": {
               "type": "integer",
               "default": 0,
-              "enum": [0, 1],
+              "enum": [
+                0,
+                1
+              ],
               "description": "engine=moal 전용 — BR_DBG/[DBG-RXDROP] 브릿지 디버그 로그(dmesg) 토글. 평시 0",
               "x-ui-editable": "caution",
               "x-apply-timing": "reboot",
@@ -357,7 +517,11 @@
             "consume_link_local": {
               "type": "string",
               "default": "",
-              "enum": ["", "0", "1"],
+              "enum": [
+                "",
+                "0",
+                "1"
+              ],
               "description": "engine=moal 전용 — 차단된 link-local(STP/LLDP) 프레임 드라이버 내 폐기(1) A/B 토글. 빈값=드라이버 기본(0)",
               "x-ui-editable": "caution",
               "x-apply-timing": "reboot",
@@ -374,9 +538,18 @@
               "x-consumer": "wifi_init.sh"
             },
             "local_hairpin": {
-              "type": ["string", "integer"],
+              "type": [
+                "string",
+                "integer"
+              ],
               "default": "0",
-              "enum": ["", "0", "1", 0, 1],
+              "enum": [
+                "",
+                "0",
+                "1",
+                0,
+                1
+              ],
               "description": "engine=moal 전용 — 로컬발 TX(dst==클론 MAC) 유선 divert + ARP tee/inject(BD↔유선 peer 통신). 빈값=드라이버 기본. CLI(br profile apply)가 숫자로 기록하므로 문자열·숫자 표기 모두 유효",
               "x-ui-editable": "caution",
               "x-apply-timing": "reboot",
@@ -400,7 +573,12 @@
             "mode": {
               "type": "string",
               "default": "normal",
-              "enum": ["latency", "normal", "eco", "thermal"],
+              "enum": [
+                "latency",
+                "normal",
+                "eco",
+                "thermal"
+              ],
               "description": "최적화 프로파일. latency=최소지연/최대발열, normal=균형(권장), eco=저전력, thermal=최소발열",
               "x-ui-editable": "yes",
               "x-apply-timing": "daemon-restart",
@@ -409,7 +587,11 @@
             "irq_affinity": {
               "type": "string",
               "default": "auto",
-              "enum": ["auto", "pinned", "none"],
+              "enum": [
+                "auto",
+                "pinned",
+                "none"
+              ],
               "description": "IRQ/RPS CPU 핀 정책. auto=코어수 자동판단, pinned=ETH/WLAN 코어 고정, none=커널 기본",
               "x-ui-editable": "caution",
               "x-apply-timing": "daemon-restart",
@@ -962,7 +1144,15 @@
         "STANDARD": {
           "type": "string",
           "default": "ax",
-          "enum": ["", "n", "ac", "ax", "4", "5", "6"],
+          "enum": [
+            "",
+            "n",
+            "ac",
+            "ax",
+            "4",
+            "5",
+            "6"
+          ],
           "description": "mlan0가 협상할 최대 WiFi 표준 제한(dev_cap_mask로 변환). native max=ax. 빈값=칩 기본",
           "x-ui-editable": "caution",
           "x-apply-timing": "reboot",
@@ -1003,7 +1193,11 @@
         "Frequency": {
           "type": "string",
           "default": "auto",
-          "enum": ["auto", "2.4GHz", "5GHz"],
+          "enum": [
+            "auto",
+            "2.4GHz",
+            "5GHz"
+          ],
           "description": "mlan0 동작 대역. 현재는 부팅 로그/상태표시에만 쓰이고 하드웨어 밴드 제한 미적용(밴드 제한은 wpa_supplicant freq_list 담당)",
           "x-ui-editable": "caution",
           "x-apply-timing": "boot",
@@ -1012,7 +1206,13 @@
         "net_rx": {
           "type": "integer",
           "default": 0,
-          "enum": [0, 2, 3, 6, 7],
+          "enum": [
+            0,
+            2,
+            3,
+            6,
+            7
+          ],
           "description": "MGMT 프레임 로깅 비트맵. bit[1:0]=RX모드(2=로밍프레임만, 3=전체Beacon/Probe포함), bit[2](+4)=TX로그. 0=비활성",
           "x-ui-editable": "caution",
           "x-apply-timing": "reboot",
@@ -1069,7 +1269,12 @@
           "type": "object",
           "additionalProperties": true,
           "description": "FW 레이트 적응 설정. 4개 필드를 모두 제공해야 하며 association 전에만 설정 가능. roam 완료 시 FW 기본값으로 복귀할 수 있음.",
-          "required": ["mode", "low_thresh", "high_thresh", "interval_ms"],
+          "required": [
+            "mode",
+            "low_thresh",
+            "high_thresh",
+            "interval_ms"
+          ],
           "properties": {
             "enabled": {
               "type": "boolean",
@@ -1082,7 +1287,10 @@
             "mode": {
               "type": "integer",
               "default": 1,
-              "enum": [0, 1],
+              "enum": [
+                0,
+                1
+              ],
               "description": "레이트 적응 알고리즘 모드. 0=legacy, 1=SR(success-rate)",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -1091,7 +1299,15 @@
             "low_thresh": {
               "type": "integer",
               "default": 70,
-              "anyOf": [{"minimum": 0, "maximum": 100}, {"const": 255}],
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                {
+                  "const": 255
+                }
+              ],
               "description": "SR 모드 하한 성공률 임계(%). 255(0xff)이면 노이즈 기반 동적",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -1100,7 +1316,15 @@
             "high_thresh": {
               "type": "integer",
               "default": 90,
-              "anyOf": [{"minimum": 0, "maximum": 100}, {"const": 255}],
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                {
+                  "const": 255
+                }
+              ],
               "description": "SR 모드 상한 성공률 임계(%). 255(0xff)이면 동적",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -1330,7 +1554,9 @@
             "extra_ssids": {
               "type": "array",
               "default": [],
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "description": "conf 기본 ssid 외 추가 로밍 후보 SSID 목록(같은 psk/key_mgmt 전제). generate_network_blocks=false면 무시",
               "x-ui-editable": "caution",
               "x-apply-timing": "daemon-restart",
@@ -1523,7 +1749,12 @@
           "type": "object",
           "additionalProperties": true,
           "description": "MCS tier capability 제한. association 전 SET 후 GET 검증. mlan0 HE 0x0000은 연결 후 검증하고 FW 기본 복귀 시 connected SET+reassociate 1회.",
-          "required": ["enabled", "ht", "vht", "he"],
+          "required": [
+            "enabled",
+            "ht",
+            "vht",
+            "he"
+          ],
           "properties": {
             "enabled": {
               "type": "boolean",
@@ -1536,7 +1767,10 @@
             "ht": {
               "type": "string",
               "default": "7",
-              "enum": ["7", "15"],
+              "enum": [
+                "7",
+                "15"
+              ],
               "description": "HT(802.11n) MCS tier 제한",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -1545,7 +1779,11 @@
             "vht": {
               "type": "string",
               "default": "7",
-              "enum": ["7", "8", "9"],
+              "enum": [
+                "7",
+                "8",
+                "9"
+              ],
               "description": "VHT(802.11ac) MCS tier 제한",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -1554,7 +1792,11 @@
             "he": {
               "type": "string",
               "default": "both 7",
-              "enum": ["both 7", "both 9", "both 11"],
+              "enum": [
+                "both 7",
+                "both 9",
+                "both 11"
+              ],
               "description": "mlan0 HE(802.11ax) Tx/Rx MCS tier 제한. association 전 0x0000이면 연결 후 검증하고 FW 기본 복귀 시 SET+reassociate 1회",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -1578,7 +1820,9 @@
             "commands": {
               "type": "array",
               "default": [],
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "description": "연결/로밍 직후 순서대로 실행할 shell 명령 배열(실패는 로그만). command injection 위험이므로 내용 검증 필요",
               "x-ui-editable": "caution",
               "x-apply-timing": "runtime",
@@ -1761,7 +2005,15 @@
         "STANDARD": {
           "type": "string",
           "default": "ac",
-          "enum": ["", "n", "ac", "ax", "4", "5", "6"],
+          "enum": [
+            "",
+            "n",
+            "ac",
+            "ax",
+            "4",
+            "5",
+            "6"
+          ],
           "description": "mlan1가 협상할 최대 WiFi 표준 제한. native max=ac(ax 미지원, 지정 시 경고). 빈값=칩 기본",
           "x-ui-editable": "caution",
           "x-apply-timing": "reboot",
@@ -1802,7 +2054,11 @@
         "Frequency": {
           "type": "string",
           "default": "auto",
-          "enum": ["auto", "2.4GHz", "5GHz"],
+          "enum": [
+            "auto",
+            "2.4GHz",
+            "5GHz"
+          ],
           "description": "mlan1 동작 대역. 현재는 부팅 로그/상태표시에만 쓰이고 하드웨어 밴드 제한 미적용",
           "x-ui-editable": "caution",
           "x-apply-timing": "boot",
@@ -1811,7 +2067,13 @@
         "net_rx": {
           "type": "integer",
           "default": 0,
-          "enum": [0, 2, 3, 6, 7],
+          "enum": [
+            0,
+            2,
+            3,
+            6,
+            7
+          ],
           "description": "MGMT 프레임 로깅 비트맵. bit[1:0]=RX모드(2=로밍프레임만, 3=전체), bit[2](+4)=TX로그. 0=비활성",
           "x-ui-editable": "caution",
           "x-apply-timing": "reboot",
@@ -1868,7 +2130,12 @@
           "type": "object",
           "additionalProperties": true,
           "description": "FW 레이트 적응 설정. 4개 필드를 모두 제공해야 하며 association 전에만 설정 가능. roam 완료 시 FW 기본값으로 복귀할 수 있음.",
-          "required": ["mode", "low_thresh", "high_thresh", "interval_ms"],
+          "required": [
+            "mode",
+            "low_thresh",
+            "high_thresh",
+            "interval_ms"
+          ],
           "properties": {
             "enabled": {
               "type": "boolean",
@@ -1881,7 +2148,10 @@
             "mode": {
               "type": "integer",
               "default": 1,
-              "enum": [0, 1],
+              "enum": [
+                0,
+                1
+              ],
               "description": "레이트 적응 알고리즘 모드. 0=legacy, 1=SR(success-rate)",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -1890,7 +2160,15 @@
             "low_thresh": {
               "type": "integer",
               "default": 70,
-              "anyOf": [{"minimum": 0, "maximum": 100}, {"const": 255}],
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                {
+                  "const": 255
+                }
+              ],
               "description": "SR 모드 하한 성공률 임계(%). 255(0xff)이면 노이즈 기반 동적",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -1899,7 +2177,15 @@
             "high_thresh": {
               "type": "integer",
               "default": 90,
-              "anyOf": [{"minimum": 0, "maximum": 100}, {"const": 255}],
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                {
+                  "const": 255
+                }
+              ],
               "description": "SR 모드 상한 성공률 임계(%). 255(0xff)이면 동적",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -2129,7 +2415,9 @@
             "extra_ssids": {
               "type": "array",
               "default": [],
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "description": "conf 기본 ssid 외 추가 로밍 후보 SSID 목록(같은 psk/key_mgmt 전제). generate_network_blocks=false면 무시",
               "x-ui-editable": "caution",
               "x-apply-timing": "daemon-restart",
@@ -2322,7 +2610,12 @@
           "type": "object",
           "additionalProperties": true,
           "description": "mlan1(ac) HT/VHT MCS tier 제한. HE는 지원하지 않으며 association 전 SET 후 GET 검증.",
-          "required": ["enabled", "ht", "vht", "he"],
+          "required": [
+            "enabled",
+            "ht",
+            "vht",
+            "he"
+          ],
           "properties": {
             "enabled": {
               "type": "boolean",
@@ -2335,7 +2628,10 @@
             "ht": {
               "type": "string",
               "default": "7",
-              "enum": ["7", "15"],
+              "enum": [
+                "7",
+                "15"
+              ],
               "description": "HT(802.11n) MCS tier 제한",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -2344,7 +2640,11 @@
             "vht": {
               "type": "string",
               "default": "7",
-              "enum": ["7", "8", "9"],
+              "enum": [
+                "7",
+                "8",
+                "9"
+              ],
               "description": "VHT(802.11ac) MCS tier 제한",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -2353,7 +2653,9 @@
             "he": {
               "type": "string",
               "default": "",
-              "enum": [""],
+              "enum": [
+                ""
+              ],
               "description": "mlan1은 802.11ac까지만 지원하므로 반드시 빈 문자열",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
@@ -2377,7 +2679,9 @@
             "commands": {
               "type": "array",
               "default": [],
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "description": "연결/로밍 직후 순서대로 실행할 shell 명령 배열(실패는 로그만). command injection 위험이므로 내용 검증 필요",
               "x-ui-editable": "caution",
               "x-apply-timing": "runtime",
@@ -2597,7 +2901,10 @@
             "version": {
               "type": "string",
               "default": "2c",
-              "enum": ["1", "2c"],
+              "enum": [
+                "1",
+                "2c"
+              ],
               "description": "SNMP 트랩 프로토콜 버전",
               "x-ui-editable": "yes",
               "x-apply-timing": "runtime",

@@ -1,0 +1,24 @@
+[Unit]
+Description=WLAN driver wedge watchdog
+DefaultDependencies=no
+# wifi_init.service 가 hang/실패해도 독립적으로 떠 있어야 한다
+# (wifi_checker@.service 와 같은 이유로 After=wifi_init.service 를 걸지 않는다).
+After=sysinit.target
+# PartOf=wifi_init.service 를 의도적으로 두지 않는다. 복구 액션이
+# `systemctl restart wifi_init.service` 라서, PartOf 면 감시자 자신이 리로드 도중
+# stop 되어 회복 검증(2단)이 불가능해지고 쿨다운 상태도 소실된다.
+# 패키지 내 유일한 lifecycle 예외이며, 이 예외가 본 유닛의 존재 이유다.
+Conflicts=shutdown.target
+Before=shutdown.target
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=/usr/local/scripts/wlan_fw_watch.sh
+Restart=always
+RestartSec=5s
+User=root
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=wifi-stack.target
