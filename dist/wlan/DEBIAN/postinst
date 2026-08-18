@@ -365,6 +365,27 @@ atomic_json_install() {
   sync "$dir" 2>/dev/null || sync
 }
 
+# 설정 병합 프로그램 — .[0]=배포 템플릿, .[1]=설치본.
+#
+# 기본 규칙은 종전과 같다: 설치본(운영자가 바꾼 값)이 이긴다.
+# 예외는 `_comment*` 뿐이다 — 이건 운영자 상태가 아니라 **배포 문서**이므로 템플릿이
+# 권위를 갖는다. jq 의 * 는 객체만 재귀 병합하고 배열은 오른쪽(설치본)이 이기기 때문에,
+# 그냥 두면 업그레이드 기기에 최초 설치 당시의 설명이 영구 잔존한다(실측). 키가 다른
+# 블록으로 이관된 뒤에도 옛 설명이 남아 운영자에게 틀린 문서를 보여준다.
+#   - 템플릿에 있는 `_comment*`  → 템플릿 값으로 갱신
+#   - 템플릿에 없는 `_comment*`  → 제거(은퇴 블록의 설명 잔재)
+# 소비 코드는 `_comment*` 를 읽지 않는다(문서 전용).
+# shellcheck disable=SC2016
+JSON_MERGE_JQ='
+  def cpaths: [ paths | select(.[-1] | type == "string" and startswith("_comment")) ];
+  .[0] as $t | .[1] as $a
+  | ($t * $a) as $m
+  | ($t | cpaths) as $tc
+  | ($m | cpaths) as $mc
+  | ($m | delpaths([ $mc[] | select(($tc | index(.)) | not) ]))
+  | reduce $tc[] as $p (.; setpath($p; $t | getpath($p)))
+'
+
 json_merge() {
   local default="$1" active="$2"
   if [ ! -f "$active" ]; then
@@ -378,7 +399,7 @@ json_merge() {
     fi
   elif command -v jq >/dev/null 2>&1; then
     local merged
-    merged=$(jq -s '.[0] * .[1]' "$default" "$active" 2>/dev/null)
+    merged=$(jq -s "$JSON_MERGE_JQ" "$default" "$active" 2>/dev/null)
     if [ -n "$merged" ]; then
       if atomic_json_install "$merged" "$active"; then
         logger -p local0.info "[$tag:$LINENO] [$KEY] json_merge $default -> $active"
@@ -391,6 +412,54 @@ json_merge() {
     fi
   else
     logger -p local0.warn "[$tag:$LINENO] [$KEY] jq not found; skip json_merge for $active"
+  fi
+}
+
+migrate_retired_global_logger_keys() {
+  # 전역 logger 에서 인터페이스별(<iface>.logger.*)로 이관된 키를 옮긴다.
+  # **json_merge 이전에** 호출해야 한다: 병합은 템플릿의 새 per-iface 기본값을 주입하는데
+  # 소비 코드가 per-iface 를 전역보다 우선하므로, 병합 후에 정리하면 운영자가 커스터마이즈한
+  # 구 전역값이 조용히 덮인다. 전역값은 per-iface 키가 없는 인터페이스에만 승격시키고(운영자가
+  # 이미 인터페이스별로 정한 값은 건드리지 않는다) 유령이 되는 전역 키는 제거한다.
+  # 전역에 이관 키가 없으면(신규 설치/재실행) no-op — 멱등.
+  local active="$1" migrated
+  [ -f "$active" ] || return 0
+  if ! command -v jq >/dev/null 2>&1; then
+    logger -p local0.warn "[$tag:$LINENO] [$KEY] jq not found; skip global logger migration"
+    return 0
+  fi
+  jq -e '(.logger // {})
+         | has("link_interval_sec") or has("stat_log_interval_sec")
+           or has("stat_check_interval_sec") or has("stat_reset_interval_sec")
+           or has("bgscan_stale_threshold_sec")' "$active" >/dev/null 2>&1 || return 0
+  migrated=$(jq '
+      def promote($k; $ifaces):
+        if ((.logger // {}) | has($k)) then
+          (.logger[$k]) as $g
+          | reduce $ifaces[] as $i (.;
+              if (getpath([$i, "logger", $k]) == null)
+              then setpath([$i, "logger", $k]; $g)
+              else . end)
+        else . end;
+        promote("link_interval_sec";          ["mlan0", "mlan1", "eth0"])
+      | promote("stat_log_interval_sec";      ["mlan0", "mlan1"])
+      | promote("stat_check_interval_sec";    ["mlan0", "mlan1"])
+      | promote("stat_reset_interval_sec";    ["mlan0", "mlan1"])
+      | promote("bgscan_stale_threshold_sec"; ["mlan0", "mlan1"])
+      | if (.logger | type) == "object" then
+          .logger |= del(.link_interval_sec, .stat_log_interval_sec,
+                         .stat_check_interval_sec, .stat_reset_interval_sec,
+                         .bgscan_stale_threshold_sec)
+        else . end
+    ' "$active" 2>/dev/null)
+  if [ -z "$migrated" ]; then
+    logger -p local0.warn "[$tag:$LINENO] [$KEY] global logger migration failed; keep existing $active"
+    return 0
+  fi
+  if atomic_json_install "$migrated" "$active"; then
+    logger -p local0.info "[$tag:$LINENO] [$KEY] migrated retired global logger keys -> per-iface"
+  else
+    logger -p local0.err "[$tag:$LINENO] [$KEY] atomic write failed for global logger migration; keep existing $active"
   fi
 }
 
@@ -432,10 +501,8 @@ cleanup_retired_roaming_keys() {
   if jq 'del(
       .mlan0.roaming.STAGED_SCAN.cache_fresh_sec,
       .mlan0.roaming.STAGED_SCAN.self_induced_tail_sec,
-      .mlan0.roaming.STAGED_SCAN._comment,
       .mlan0.roaming.GOOD_SIGNAL_RESET_GATE.delta_db,
       .mlan0.roaming.GOOD_SIGNAL_RESET_GATE.post_roam_grace_sec,
-      .mlan0.roaming.GOOD_SIGNAL_RESET_GATE._comment,
       .mlan0.roaming.CACHE_FRESH_SEC,
       .mlan0.roaming.SELF_INDUCED_TAIL_SEC,
       .mlan0.roaming.GOOD_SIGNAL_GATE_DELTA_DB,
@@ -445,10 +512,8 @@ cleanup_retired_roaming_keys() {
       .mlan0.roaming.POST_ROAM_ARP_OPTIMIZATION,
       .mlan1.roaming.STAGED_SCAN.cache_fresh_sec,
       .mlan1.roaming.STAGED_SCAN.self_induced_tail_sec,
-      .mlan1.roaming.STAGED_SCAN._comment,
       .mlan1.roaming.GOOD_SIGNAL_RESET_GATE.delta_db,
       .mlan1.roaming.GOOD_SIGNAL_RESET_GATE.post_roam_grace_sec,
-      .mlan1.roaming.GOOD_SIGNAL_RESET_GATE._comment,
       .mlan1.roaming.CACHE_FRESH_SEC,
       .mlan1.roaming.SELF_INDUCED_TAIL_SEC,
       .mlan1.roaming.GOOD_SIGNAL_GATE_DELTA_DB,
@@ -456,19 +521,7 @@ cleanup_retired_roaming_keys() {
       .mlan1.roaming.LOAD_BASED_ROAM,
       .mlan1.roaming.ADAPTIVE_INTERVAL,
       .mlan1.roaming.POST_ROAM_ARP_OPTIMIZATION
-    )
-    | if (.mlan0.roaming.STAGED_SCAN | type) == "object" then
-        .mlan0.roaming.STAGED_SCAN |= with_entries(select(.key | startswith("_comment") | not))
-      else . end
-    | if (.mlan0.roaming.GOOD_SIGNAL_RESET_GATE | type) == "object" then
-        .mlan0.roaming.GOOD_SIGNAL_RESET_GATE |= with_entries(select(.key | startswith("_comment") | not))
-      else . end
-    | if (.mlan1.roaming.STAGED_SCAN | type) == "object" then
-        .mlan1.roaming.STAGED_SCAN |= with_entries(select(.key | startswith("_comment") | not))
-      else . end
-    | if (.mlan1.roaming.GOOD_SIGNAL_RESET_GATE | type) == "object" then
-        .mlan1.roaming.GOOD_SIGNAL_RESET_GATE |= with_entries(select(.key | startswith("_comment") | not))
-      else . end' \
+    )' \
     "$active" > "$tmp"; then
     chmod 0644 "$tmp"
     chown root:root "$tmp" 2>/dev/null || true
@@ -518,6 +571,7 @@ secure_wpa_conf() {
   cpchk /opt/wlan/config/systemd/network/20-mlan0.link /etc/systemd/network/20-mlan0.link
   cpchk /opt/wlan/config/systemd/network/21-mlan1.link /etc/systemd/network/21-mlan1.link
   cpchk /opt/wlan/config/systemd/network/22-eth0.link /etc/systemd/network/22-eth0.link
+  migrate_retired_global_logger_keys /usr/local/etc/wifi_init_conf.json
   json_merge /opt/wlan/config/wifi_init_conf.json /usr/local/etc/wifi_init_conf.json || exit 1
   normalize_legacy_mcs_tier /usr/local/etc/wifi_init_conf.json || exit 1
   cleanup_retired_roaming_keys /usr/local/etc/wifi_init_conf.json

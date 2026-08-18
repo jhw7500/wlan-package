@@ -1,5 +1,24 @@
 #!/bin/bash
 
+# 설정 JSON 가용성 판정 — 파일/jq/파싱 세 가지를 한 곳에서 본다.
+# wifi_init.sh 와 wifi_apply_enabled.sh 가 같은 판정을 각자 구현하던 것을 통일한 것이다.
+# 종료코드로 사유를 구분해 호출자가 자기 정책(warn/crit, skip/abort, 폴백값)을 정한다.
+#   0 = 읽고 파싱 가능
+#   1 = 파일 없음
+#   2 = jq 없음
+#   3 = 파싱 실패 (파일은 존재)
+# 0 이 아니면 "키가 없다"와 "설정을 못 읽는다"를 구분할 수 없다 — 모든 키가 null 로
+# 평가되므로 부재 키의 기본값을 적용하면 운영자 의도를 통째로 덮어쓴다. 특히 인터페이스
+# 활성 기본값을 false 로 떨어뜨리면 설정이 깨진 기기가 무선까지 잃어 원격 복구가 끊긴다.
+wifi_init_conf_status() {
+    local file="${1:-${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}}"
+
+    [ -f "$file" ] || return 1
+    command -v jq >/dev/null 2>&1 || return 2
+    jq empty "$file" >/dev/null 2>&1 || return 3
+    return 0
+}
+
 wifi_init_json_key_exists() {
     local file="$1"
     local query="$2"

@@ -310,28 +310,25 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 
 **비고 (monitor)** — 소비: `wifi_link_monitor.py`. **CLI 인자가 JSON보다 우선**. 온디맨드 curses 도구라 다음 실행 시 반영.
 
-### 3.8 logger (전역 로거 기본값)
+### 3.8 logger (시스템 로거 — 비인터페이스)
 
 | 경로 | 라벨 | 타입 | 기본값 | 허용값/범위 | UI편집 | 적용시점 | 설명 |
 |---|---|---|---|---|---|---|---|
 | `logger.enabled` | 시스템 로거 그룹 활성화 | bool | `true` | true\|false | yes | boot | CPU/MMC/TEMP/MCP/SUMMARY 그룹. false면 온도 로그와 과열 보호도 중단 |
-| `logger.cpu_interval_sec` | CPU 로그 주기(전역) | int | `60` | 양의 정수 | yes | daemon-restart | CPU/메모리/클럭 로그 주기(per-iface override 없음) |
-| `logger.link_interval_sec` | 링크 폴링 주기(전역) | float | `0.9` | 양의 실수 | yes | daemon-restart | 링크 상태 폴링 주기. eth0/mlanN.logger가 override |
-| `logger.stat_log_interval_sec` | 통계 로그 주기(전역) | int | `1` | 양의 정수 | yes | daemon-restart | 통계 기록 주기 |
-| `logger.stat_check_interval_sec` | 통계 체크 주기(전역) | int | `1` | 양의 정수 | yes | daemon-restart | 통계 수집 루프 체크 주기 |
-| `logger.stat_reset_interval_sec` | 통계 리셋 주기(전역) | int | `604800` | 정수(기본 7일) | yes | daemon-restart | AP별 누적 통계 리셋 주기 |
-| `logger.bgscan_stale_threshold_sec` | bgscan stale 임계 | int | `600` | 정수 | yes | daemon-restart | 스캔 결과 stale 판정 임계(global-only) |
+| `logger.cpu_interval_sec` | CPU 로그 주기 | int | `60` | 양의 정수 | yes | daemon-restart | CPU/메모리/클럭 로그 주기(per-iface 개념 없음) |
 
-**비고 (logger)** — 소비: `wifi_logger_cpu.sh`/`wifi_logger_link.py`/`wifi_logger_stat.py`/`wifi_bgscan.py`.
-- 우선순위: `{iface}.logger.*` > `logger.*` (단 `cpu_interval_sec`·`bgscan_stale_threshold_sec`는 global-only).
+**비고 (logger)** — 소비: `wifi_apply_enabled.sh`·`wifi_logger_control.sh`(`enabled`), `wifi_logger_cpu.sh`(`cpu_interval_sec`).
+- 이 절은 **인터페이스 개념이 없는 시스템 로거**만 다룬다. 인터페이스별 주기·활성화 키는 §3.9(eth0)·§3.10.2(mlanN)에 있다.
+- `logger.enabled=false`는 `wifi_logger.service` 그룹(cpu/mmc/temp/mcp/summary)만 멈춘다 — `wifi_logger@<iface>`는 `PartOf=wifi_logger.service`가 주석 처리돼 있어 계속 동작한다. 인터페이스 로거를 끄려면 `<iface>.logger.enabled`를 쓴다.
 - **① 유령 키 주의**: `logger.link_retry_count` / `logger.link_retry_delay_sec`는 **JSON 키가 아니다.** 스키마에 넣지 말 것. `wifi_logger_link.py`의 모듈/CLI 기본값(각각 `4` / `0.05`)이며, 필요 시 CLI `--link-retry-count` / `--link-retry-delay`로만 조정한다.
+- **② 인터페이스별로 이관됨**: `link_interval_sec` / `stat_log_interval_sec` / `stat_check_interval_sec` / `stat_reset_interval_sec` / `bgscan_stale_threshold_sec`는 전역에서 제거되고 `<iface>.logger.*`로 옮겨졌다. 업그레이드 시 postinst 의 `migrate_retired_global_logger_keys` 가 구 전역값을 per-iface 키가 없는 인터페이스로 승격시킨 뒤 전역 키를 삭제하므로, **정상 경로에서는 전역 잔존 키가 없다** — WebUI 는 전역 레거시 편집 UI 를 둘 필요가 없다. 소비 코드에 남은 `{iface}.logger.*` → `logger.*` 폴백 체인은 그 마이그레이션이 돌지 못한 기기(jq 부재/실패/구버전 postinst)용 안전망일 뿐이다. 전역에 값을 다시 써 넣으면 per-iface 가 우선하므로 조용히 무시되는 유령 노브가 된다.
 
 ### 3.9 eth0 (eth0 인터페이스)
 
 | 경로 | 라벨 | 타입 | 기본값 | 허용값/범위 | UI편집 | 적용시점 | 설명 |
 |---|---|---|---|---|---|---|---|
 | `eth0.logger.enabled` | eth0 로거 그룹 활성화 | bool | `true` | true\|false | yes | boot | `wifi_logger@eth0.service` 부팅 정책 |
-| `eth0.logger.link_interval_sec` | eth0 링크 폴링 주기(초) | int | `1` | 양의 실수/정수 | yes | daemon-restart | 전역 0.9를 eth0에 한해 1로 override |
+| `eth0.logger.link_interval_sec` | eth0 링크 폴링 주기(초) | int | `1` | 양의 실수/정수 | yes | daemon-restart | eth0 의 링크 폴링 주기. 전역 기본값은 없다(§3.8 참조) — 값이 없으면 코드 기본 0.9 |
 
 **비고 (eth0)** — 소비: `wifi_logger_link.py`, `wifi_apply_enabled.sh`. `wifi_logger@eth0` 재시작 시 반영.
 
@@ -348,11 +345,16 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `TXPWRLIMIT_PATH` | TX 파워 리밋(per-iface) | string | `""` | 절대경로\|`none`\|빈값 | caution | boot | mlanN>global 우선. 부팅 시 mlanutl hostcmd |
 | `connect_threshold` | 연결 임계값(RSSI) | int | `-100` | 음의 정수 dBm(예 -100~-40). -100=사실상 무필터 | caution | daemon-restart | **커스텀 wpa_supplicant 바이너리**가 `/usr/local/etc/wifi_init_conf.json`을 직접 읽어, 신호레벨이 이 값 미만인 BSS를 연결 후보에서 제외(로그 `BSS: … level N < connect threshold M`). 과설정 시 미연결 위험 |
 | `enabled` | 인터페이스 활성화 | bool | `mlan0=true / mlan1=false` | true\|false | yes | boot | false면 부팅 초기화·모든 자식 데몬 disable |
+| `wpa_supplicant.enabled` | supplicant 데몬 | bool | `true` | true\|false | yes | boot | `wpa_supplicant@mlanN` enable/disable + `wifi_init.sh`의 직접 start 게이트. false면 외부(`wifi_manager` 등)가 supplicant를 소유한다는 뜻. `mlanN.enabled=false`면 이 값과 무관하게 disable |
 | `Frequency` | 주파수 대역 | enum | `auto` | `auto`\|`2.4GHz`\|`5GHz` (검증 없음) | caution | boot | 현재는 로그/상태표시에만 사용(HW 밴드제한 미적용) |
 | `net_rx` | MGMT 프레임 로깅 비트맵 | int | `0` | `0`\|`2`\|`3`\|`6`\|`7` (bit[1:0]=RX모드, bit[2]=TX로그) | caution | reboot | mod_para 블록 `net_rx=`. 로그는 커널 링버퍼→10초마다 flush |
 | `mgmt_hex_dump_enable` | MGMT hex dump 로깅 | bool | `false` | true\|false | caution | reboot | 디버그용. mod_para 블록 `mgmt_hex_dump=1/0` |
 | `thermal_mgmt` | FW 열관리 | bool | `true` | true\|false | caution | boot | FW thermal management(SUBID 0x113). 명시적 false만 disable |
-| `rate_adapt.mode` | 레이트 적응 모드 | int | `1` | `0`=legacy\|`1`=SR | caution | boot | section 존재 시 4개 필드 모두 필수 |
+| `antcfg.enabled` | 안테나 경로 적용 | bool | `false` | true\|false | caution | boot | FW Tx/Rx path 적용 ON/OFF. false면 FW/보드 기본 경로 유지(출하 기본). **어댑터 단위 설정**이라 mlan0/mlan1에 서로 다른 값을 켜면 나중에 적용된 쪽이 이기며 경고 로그가 남는다. `global.ANT_TYPE`(GPIO mux)와는 별개 |
+| `antcfg.tx` | Tx 경로 비트맵 | string | `""` | 10진 또는 `0x` 16진, 1..0xFFFF (0 거부) | caution | boot | `rx`가 비면 Tx/Rx 공통. 9098은 LOW BYTE=2G / HIGH BYTE=5G, 각 바이트 bit0=path A·bit1=path B. 예 `0x303`=양 밴드 A+B, `0x103`=2G A+B + 5G A, `0x202`=양 밴드 path B. SAD 칩은 `0xFFFF`=다이버시티 |
+| `antcfg.rx` | Rx 경로 비트맵 | string | `""` | 빈값 또는 tx와 동일 범위 | caution | boot | 빈 문자열이면 인자를 생략해 `tx`가 Tx/Rx 양쪽에 적용된다. SAD 칩에서 `tx=0xFFFF`일 때는 평가 주기(기본 `0x1770`=6s) |
+| `rate_adapt.enabled` | 레이트 적응 적용 | bool | `true` | true\|false | caution | boot | false면 `rate_adapt_cfg`를 SET하지 않고 FW 기본값 유지. 키 부재 시 true(종전 동작). `wifi <iface> rate`로 값을 바꿔도 이 값이 false면 부팅 시 적용되지 않는다 |
+| `rate_adapt.mode` | 레이트 적응 모드 | int | `1` | `0`=legacy\|`1`=SR | caution | boot | section 존재 시 mode/low/high/interval 4개 필수(enabled는 선택) |
 | `rate_adapt.low_thresh` | 레이트 적응 low 임계 | int | `70` | 0..100 또는 255 | caution | boot | static은 low<high, dynamic은 low/high 모두 255 |
 | `rate_adapt.high_thresh` | 레이트 적응 high 임계 | int | `90` | 0..100 또는 255 | caution | boot | 70/90은 실기 결과에 따라 바뀌는 시험값 |
 | `rate_adapt.interval_ms` | 레이트 적응 평가주기(ms) | int | `100` | 양수, 10ms 배수 | caution | boot | association 전 SET+GET. mlan0 roam 및 mlan1 AC association 완료 시 FW 30/50 복귀 실측 |
@@ -365,6 +367,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `stat_log_interval_sec` | 통계 로그 기록 주기 | int | `1` | 초(>0) | yes | daemon-restart | mlanN>global 우선 |
 | `stat_check_interval_sec` | 통계 체크 주기 | int | `1` | 초(>0) | yes | daemon-restart | mlanN>global 우선 |
 | `stat_reset_interval_sec` | 통계 리셋 주기 | int | `604800` | 초(7일) | yes | daemon-restart | mlanN>global 우선 |
+| `bgscan_stale_threshold_sec` | bgscan stale 임계 | int | `600` | 초(양의 정수) | yes | daemon-restart | `beacon.json` stale 엔트리 프루닝 기준. 소비 `wifi_logger_scan.py`. 양의 int 아니면 코드 기본 600 + warn |
 | `logger.enabled` | 로거 데몬 활성화 | bool | `mlan0=true / mlan1=false` | true\|false | yes | daemon-restart | `wifi_logger@mlanN` enable/disable. `mlanN.enabled=false`면 강제 disable |
 
 #### 3.10.3 mlanN.periodic_roam / bgscan

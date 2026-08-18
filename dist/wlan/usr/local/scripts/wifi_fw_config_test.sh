@@ -55,6 +55,13 @@ case "$cmd" in
             printf 'Rate Adapt Cfg:\n Legacy RateAdapt Enabled\n'
         fi
         ;;
+    antcfg)
+        if [ $# -gt 0 ]; then printf '%s\n' "$*" > "$STATE/$iface.ant"; exit 0; fi
+        [ -e "$STATE/$iface.ant" ] || { printf 'Mode of Tx/Rx path is : 0x3\n'; exit 0; }
+        read -r m n < "$STATE/$iface.ant"
+        printf 'Mode of Tx path is : %s\n' "$m"
+        printf 'Mode of Rx path is : %s\n' "${n:-$m}"
+        ;;
     mcstiercfg)
         if [ $# -gt 0 ]; then
             count_file="$STATE/$iface.mcs_set_count"
@@ -186,6 +193,136 @@ jq '.mlan0.rate_adapt.low_thresh=255 | .mlan0.rate_adapt.high_thresh=90' "$CONF"
 expect_rc "dynamic rate requires both thresholds 255" 1 wifi_fw_validate_rate_config "$WORK/half-dynamic.json" mlan0
 jq '.mlan0.rate_adapt.interval_ms=105' "$CONF" > "$WORK/bad-interval.json"
 expect_rc "rate interval must be 10ms multiple" 1 wifi_fw_validate_rate_config "$WORK/bad-interval.json" mlan0
+
+# ── rate_adapt.enabled 게이트 ──────────────────────────────────────────────
+# 기본 true(키 부재 = 종전 동작). false면 SET 자체를 하지 않고 FW 기본값을 유지한다.
+# 값 검증은 enabled 와 독립이어야 한다 — 아니면 꺼둔 iface 에 대해 `wifi <iface> rate`가
+# 유효한 값을 거부한다(CLI 가 같은 validate 를 공유하므로).
+rm -f "$STATE/mlan0.rate"
+expect_rc "absent enabled defaults to on" 0 wifi_fw_apply_rate "$CONF" mlan0
+expect_eq "absent enabled emitted SET" '1 70 90 10' "$(cat "$STATE/mlan0.rate" 2>/dev/null)"
+
+rm -f "$STATE/mlan0.rate"
+jq '.mlan0.rate_adapt.enabled=true' "$CONF" > "$WORK/rate-on.json"
+expect_rc "explicitly enabled rate applies" 0 wifi_fw_apply_rate "$WORK/rate-on.json" mlan0
+expect_eq "enabled rate emitted SET" '1 70 90 10' "$(cat "$STATE/mlan0.rate" 2>/dev/null)"
+
+rm -f "$STATE/mlan0.rate"
+jq '.mlan0.rate_adapt.enabled=false' "$CONF" > "$WORK/rate-off.json"
+expect_rc "disabled rate section applies cleanly" 0 wifi_fw_apply_rate "$WORK/rate-off.json" mlan0
+expect_eq "disabled rate emitted no SET" 'no' "$([ -e "$STATE/mlan0.rate" ] && echo yes || echo no)"
+expect_rc "disabled rate still validates values" 0 wifi_fw_validate_rate_config "$WORK/rate-off.json" mlan0
+
+rm -f "$STATE/mlan0.rate"
+jq '.mlan0.rate_adapt.enabled=0' "$CONF" > "$WORK/rate-zero.json"
+expect_rc "non-true enabled treated as off" 0 wifi_fw_apply_rate "$WORK/rate-zero.json" mlan0
+expect_eq "non-true enabled emitted no SET" 'no' "$([ -e "$STATE/mlan0.rate" ] && echo yes || echo no)"
+
+expect_eq "template ships mlan0 rate_adapt.enabled" 'true' "$(jq -r '.mlan0.rate_adapt.enabled' "$TEMPLATE")"
+expect_eq "template ships mlan1 rate_adapt.enabled" 'true' "$(jq -r '.mlan1.rate_adapt.enabled' "$TEMPLATE")"
+
+# CLI 의 rate 쓰기는 통째 대입이면 동거 키(_comment/enabled)를 지운다 — 병합이어야 한다.
+grep -qF '.[$iface].rate_adapt = ((.[$iface].rate_adapt // {}) + {' "$WIFI_CLI" \
+    && pass "CLI merges rate_adapt instead of replacing" \
+    || fail "CLI replaces rate_adapt object (동거 키 _comment/enabled 유실)"
+
+_rate_merged=$(jq --arg iface mlan0 --argjson mode 0 --argjson low 10 \
+        --argjson high 20 --argjson interval 50 '
+        .[$iface].rate_adapt = ((.[$iface].rate_adapt // {}) + {
+            mode: $mode, low_thresh: $low, high_thresh: $high, interval_ms: $interval
+        })' "$TEMPLATE")
+expect_eq "rate merge keeps enabled" 'true' \
+    "$(printf '%s' "$_rate_merged" | jq -r '.mlan0.rate_adapt.enabled')"
+expect_eq "rate merge keeps _comment" 'true' \
+    "$(printf '%s' "$_rate_merged" | jq -r '(.mlan0.rate_adapt._comment | type) == "array"')"
+expect_eq "rate merge updates values" '0 10 20 50' \
+    "$(printf '%s' "$_rate_merged" | jq -r '.mlan0.rate_adapt | "\(.mode) \(.low_thresh) \(.high_thresh) \(.interval_ms)"')"
+
+# ── antcfg (FW Tx/Rx 안테나 경로) ────────────────────────────────────────────
+# mcs_tier 와 같은 opt-in — 지금까지 적용하지 않던 설정이라 기본으로 켜면 출하 기기의
+# RF 경로가 통째로 바뀐다. 꺼져 있으면 SET 자체를 하지 않는다.
+_ant() { jq --arg t "$2" --arg r "$3" ".mlan0.antcfg={enabled:$1, tx:\$t, rx:\$r}" "$CONF"; }
+
+rm -f "$STATE/mlan0.ant"
+expect_rc "antcfg absent section skips" 0 wifi_fw_apply_antcfg "$CONF" mlan0
+expect_eq "antcfg absent emitted no SET" 'no' "$([ -e "$STATE/mlan0.ant" ] && echo yes || echo no)"
+
+_ant false 0x303 '' > "$WORK/ant-off.json"
+expect_rc "antcfg disabled is not an error" 0 wifi_fw_apply_antcfg "$WORK/ant-off.json" mlan0
+expect_eq "antcfg disabled emitted no SET" 'no' "$([ -e "$STATE/mlan0.ant" ] && echo yes || echo no)"
+expect_rc "antcfg disabled reports rc=2 to validator" 2 wifi_fw_validate_antcfg_config "$WORK/ant-off.json" mlan0
+
+_ant true 0x303 '' > "$WORK/ant-tx.json"
+expect_rc "antcfg tx-only valid" 0 wifi_fw_validate_antcfg_config "$WORK/ant-tx.json" mlan0
+rm -f "$STATE/mlan0.ant"
+expect_rc "antcfg tx-only applies" 0 wifi_fw_apply_antcfg "$WORK/ant-tx.json" mlan0
+expect_eq "antcfg tx-only omits rx arg" '0x303' "$(cat "$STATE/mlan0.ant" 2>/dev/null)"
+
+_ant true 0x103 0x303 > "$WORK/ant-txrx.json"
+rm -f "$STATE/mlan0.ant"
+expect_rc "antcfg tx+rx applies" 0 wifi_fw_apply_antcfg "$WORK/ant-txrx.json" mlan0
+expect_eq "antcfg tx+rx passes both args" '0x103 0x303' "$(cat "$STATE/mlan0.ant" 2>/dev/null)"
+
+_ant true 3 '' > "$WORK/ant-dec.json"
+expect_rc "antcfg accepts decimal" 0 wifi_fw_validate_antcfg_config "$WORK/ant-dec.json" mlan0
+_ant true 0xFFFF 0x1770 > "$WORK/ant-sad.json"
+expect_rc "antcfg accepts SAD diversity form" 0 wifi_fw_validate_antcfg_config "$WORK/ant-sad.json" mlan0
+
+# 0 은 어떤 경로도 선택하지 않아 RF 가 죽는다 — 무선이 유일한 접속 경로라 반드시 거부.
+_ant true 0 '' > "$WORK/ant-zero.json"
+expect_rc "antcfg rejects zero tx" 1 wifi_fw_validate_antcfg_config "$WORK/ant-zero.json" mlan0
+_ant true 0x303 0 > "$WORK/ant-zero-rx.json"
+expect_rc "antcfg rejects zero rx" 1 wifi_fw_validate_antcfg_config "$WORK/ant-zero-rx.json" mlan0
+_ant true 0x10000 '' > "$WORK/ant-over.json"
+expect_rc "antcfg rejects out-of-range tx" 1 wifi_fw_validate_antcfg_config "$WORK/ant-over.json" mlan0
+_ant true 0xZZ '' > "$WORK/ant-hex.json"
+expect_rc "antcfg rejects non-hex tx" 1 wifi_fw_validate_antcfg_config "$WORK/ant-hex.json" mlan0
+# 선행 0 10진수 거부: bash 산술이 8진수로 읽어(010→8) 검증한 값과 mlanutl 에 전달되는
+# 문자열("010")이 갈린다. hex(0x…)는 정상 경로이므로 함께 고정한다.
+_ant true 010 '' > "$WORK/ant-oct.json"
+expect_rc "antcfg rejects leading-zero decimal tx" 1 wifi_fw_validate_antcfg_config "$WORK/ant-oct.json" mlan0
+_ant true 0x303 0377 > "$WORK/ant-oct-rx.json"
+expect_rc "antcfg rejects leading-zero decimal rx" 1 wifi_fw_validate_antcfg_config "$WORK/ant-oct-rx.json" mlan0
+_ant true 0x0303 '' > "$WORK/ant-hex-lead0.json"
+expect_rc "antcfg still accepts 0x-prefixed hex" 0 wifi_fw_validate_antcfg_config "$WORK/ant-hex-lead0.json" mlan0
+# 0x00303 은 값(771)이 범위 안이라 **자릿수 가드만이** 거부할 수 있다 — 0x10303 처럼
+# 범위를 넘는 값으로는 범위 검사와 구분되지 않아 가드를 검증하지 못한다.
+_ant true 0x00303 '' > "$WORK/ant-hex-long.json"
+expect_rc "antcfg rejects hex wider than 16 bits" 1 wifi_fw_validate_antcfg_config "$WORK/ant-hex-long.json" mlan0
+_ant true 0x10303 '' > "$WORK/ant-hex-over.json"
+expect_rc "antcfg rejects hex above 0xFFFF" 1 wifi_fw_validate_antcfg_config "$WORK/ant-hex-over.json" mlan0
+_ant true 0xFFFF '' > "$WORK/ant-hex-max.json"
+expect_rc "antcfg accepts 4-digit hex boundary" 0 wifi_fw_validate_antcfg_config "$WORK/ant-hex-max.json" mlan0
+_ant true '' '' > "$WORK/ant-empty.json"
+expect_rc "antcfg rejects empty tx when enabled" 1 wifi_fw_validate_antcfg_config "$WORK/ant-empty.json" mlan0
+
+rm -f "$STATE/mlan0.ant"
+expect_rc "invalid antcfg is skipped without fallback" 0 wifi_fw_apply_antcfg "$WORK/ant-zero.json" mlan0
+expect_eq "invalid antcfg emitted no SET" 'no' "$([ -e "$STATE/mlan0.ant" ] && echo yes || echo no)"
+
+# 어댑터 단위 설정이므로 두 iface 값이 다르면 경고를 남긴다
+jq '.mlan0.antcfg={enabled:true,tx:"0x303",rx:""} | .mlan1.antcfg={enabled:true,tx:"0x202",rx:""}' \
+    "$CONF" > "$WORK/ant-conflict.json"
+: > "$LOG"
+rm -f "$STATE/mlan0.ant"
+wifi_fw_apply_antcfg "$WORK/ant-conflict.json" mlan0 >/dev/null 2>&1
+grep -q 'adapter-level setting' "$LOG" \
+    && pass "antcfg warns when two ifaces disagree" \
+    || fail "antcfg does not warn on adapter-level conflict"
+
+jq '.mlan0.antcfg={enabled:true,tx:"0x303",rx:""} | .mlan1.antcfg={enabled:true,tx:"0x303",rx:""}' \
+    "$CONF" > "$WORK/ant-same.json"
+: > "$LOG"
+wifi_fw_apply_antcfg "$WORK/ant-same.json" mlan0 >/dev/null 2>&1
+grep -q 'adapter-level setting' "$LOG" \
+    && fail "antcfg warns even when values match (오탐)" \
+    || pass "antcfg does not warn when values match"
+
+expect_eq "template ships mlan0 antcfg disabled" 'false' "$(jq -r '.mlan0.antcfg.enabled' "$TEMPLATE")"
+expect_eq "template ships mlan1 antcfg disabled" 'false' "$(jq -r '.mlan1.antcfg.enabled' "$TEMPLATE")"
+grep -q 'wifi_fw_apply_antcfg "$WIFI_INIT_CONF_JSON" "$iface"' "$WIFI_INIT" \
+    && pass "wifi_init delegates antcfg apply" \
+    || fail "wifi_init does not delegate antcfg apply"
 
 expect_rc "ax MCS config valid" 0 wifi_fw_validate_mcs_config "$CONF" mlan0
 expect_rc "ac MCS config valid without HE" 0 wifi_fw_validate_mcs_config "$CONF" mlan1
