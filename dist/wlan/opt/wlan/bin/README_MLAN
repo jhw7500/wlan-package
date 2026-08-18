@@ -5421,7 +5421,7 @@ Examples:
 		mlanutl mlan0 txratecfg 0 4
 		mlanutl mlan0 txpowercfg 0 4 5
 
-	4) Fix HT20 MCS15 TX power to 10 dBm (while associated at 20 MHz):
+	4) Fix HT20 MCS15 TX power to 10 dBm:
 		mlanutl mlan0 txratecfg 1 15
 		mlanutl mlan0 txpowercfg 1 15 10
 
@@ -5430,7 +5430,6 @@ Examples:
 		mlanutl mlan0 txpowercfg 14 11 5
 
 	6) Fix HE 1 NSS 80 MHz MCS11 TX power to 5 dBm:
-		mlanutl mlan0 txratecfg 3 11 1
 		mlanutl mlan0 txpowercfg 13 11 5
 
 Notes:
