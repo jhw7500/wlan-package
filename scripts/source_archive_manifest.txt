@@ -57,6 +57,7 @@ dist/wlan/etc/systemd/system/wifi_thermal_state.service
 dist/wlan/etc/systemd/system/wifi_thermal_state.timer
 dist/wlan/etc/systemd/system/wlan_emergency_reboot.service
 dist/wlan/etc/udev/rules.d/99-wlan-arp-seal.rules
+dist/wlan/etc/udev/rules.d/99-wlan-wpa-reattach.rules
 dist/wlan/etc/wbridge/quick.conf.example
 dist/wlan/opt/wlan/bin/README
 dist/wlan/opt/wlan/bin/README_MLAN
@@ -364,6 +365,7 @@ dist/wlan/usr/local/scripts/wifi_snmp_trap.sh
 dist/wlan/usr/local/scripts/wifi_thermal_state_update.sh
 dist/wlan/usr/local/scripts/wlan_link_lib.sh
 dist/wlan/usr/local/scripts/wlan_reboot_policy.sh
+dist/wlan/usr/local/scripts/wlan_wpa_reattach.sh
 dist/wlan/usr/local/scripts/wpa_supplicant.sh
 dist/wlan/usr/local/scripts/write_mac.sh
 dist/wlan/usr/local/tools/pcap-analyzer/USAGE.md

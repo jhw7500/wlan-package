@@ -47,6 +47,7 @@ etc/systemd/system/wifi_thermal_state.service
 etc/systemd/system/wifi_thermal_state.timer
 etc/systemd/system/wlan_emergency_reboot.service
 etc/udev/rules.d/99-wlan-arp-seal.rules
+etc/udev/rules.d/99-wlan-wpa-reattach.rules
 etc/wbridge/quick.conf.example
 opt/wlan/bin/README
 opt/wlan/bin/README_MLAN
@@ -279,6 +280,7 @@ usr/local/scripts/wifi_snmp_trap.sh
 usr/local/scripts/wifi_thermal_state_update.sh
 usr/local/scripts/wlan_link_lib.sh
 usr/local/scripts/wlan_reboot_policy.sh
+usr/local/scripts/wlan_wpa_reattach.sh
 usr/local/scripts/wpa_supplicant.sh
 usr/local/scripts/write_mac.sh
 usr/local/tools/pcap-analyzer/USAGE.md
