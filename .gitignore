@@ -46,4 +46,12 @@ docs/04-report/wbridge-invention-disclosure-*.md
 .superpowers/
 artifacts/
 
-HANDOFF.md
+# 세션 인계 문서 — 다음 세션이 읽을 때까지만 가치가 있다. 코드와 무관한 서술이
+# 히스토리에 쌓이는 것을 막는다. 완료되면 내용을 PR 본문/Notion 으로 옮기고 파일은 지운다.
+# 슬래시 없는 패턴이라 .jhw/HANDOFF-*.md 같은 하위 경로도 함께 잡는다.
+# 예외: 담당자·팀에게 넘기는 '경계 인계'는 docs/ 에 커밋한다
+#       (예: docs/wifi_init_conf_webui_handoff.md — 이 패턴에 걸리지 않는다).
+HANDOFF*.md
+
+# 세션 작업 디렉터리 — 인계 문서, 일회성 검증 스크립트 등
+.jhw/
