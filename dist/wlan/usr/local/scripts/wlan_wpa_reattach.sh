@@ -60,7 +60,10 @@ case "$state" in
         # 운영자가 꺼둔 유닛은 되살리지 않는다 — 이 분기만 start 를 쓴다.
         if "$SYSTEMCTL" is-enabled --quiet "$unit" 2>/dev/null; then
             "$LOGGER" -p local0.warn "[$tag] [$iface] unit failed (start-limit exhausted while netdev was absent) — reset-failed + start" 2>/dev/null || true
-            "$SYSTEMCTL" reset-failed "$unit" 2>/dev/null || true
+            # 실패를 삼키지 않는다 — 다른 분기와 같은 규약. reset-failed 가 실패하면
+            # 이어지는 start 도 start-limit 에 다시 걸려 조용히 아무 일도 안 일어난다.
+            "$SYSTEMCTL" reset-failed "$unit" \
+                || "$LOGGER" -p local0.err "[$tag] [$iface] reset-failed $unit failed" 2>/dev/null || true
             "$SYSTEMCTL" --no-block start "$unit" \
                 || "$LOGGER" -p local0.err "[$tag] [$iface] start $unit failed" 2>/dev/null || true
         else

@@ -212,6 +212,24 @@ def test_helper_rejects_non_mlan_interface(tmp_path, bad):
     assert calls == [], f"거부해야 하는데 호출이 나갔다: {calls}"
 
 
+def test_helper_does_not_swallow_systemctl_failures():
+    """헬퍼의 모든 systemctl job 호출은 실패 시 사유를 남긴다.
+
+    `2>/dev/null || true` 로 삼키면 복구가 조용히 실패한다 — reset-failed 가 실패하면
+    이어지는 start 도 start-limit 에 다시 걸려 아무 일도 일어나지 않는데, 그 사실이
+    어디에도 남지 않는다. is-active/is-enabled 는 상태 질의라 대상이 아니다.
+    """
+    text = HELPER.read_text(encoding="utf-8")
+    import re as _re
+    # 근접 N줄 윈도우로 보면 **다음 명령**의 로깅에 가려 통과한다(실측). 해당 호출의
+    # 논리 행(백슬래시 연속 포함)만 본다.
+    for m in _re.finditer(r'"\$SYSTEMCTL"\s+(?:--no-block\s+)?(restart|start|reset-failed)\b', text):
+        logical = _logical_line(text, m.start())
+        assert "$LOGGER" in logical, (
+            f"{m.group(1)} 호출의 실패가 로그에 남지 않는다: {logical.strip()[:120]}"
+        )
+
+
 # ── 계층 A: 유닛 Restart 정책 ───────────────────────────────────────────────
 
 def test_wpa_unit_has_supervision_contract():
@@ -274,7 +292,9 @@ def test_module_reload_stop_keeps_stderr():
     text = WIFI_INIT.read_text(encoding="utf-8")
     stop_idx = text.find("systemctl stop wpa_supplicant@mlan0.service")
     assert stop_idx != -1
-    assert "2>/dev/null" not in text[stop_idx:stop_idx + 200], (
+    # 고정 바이트 창은 명령이 백슬래시 연속 행으로 길어지면 리디렉션을 놓친다 —
+    # 논리 행 전체를 본다(_logical_line).
+    assert "2>/dev/null" not in _logical_line(text, stop_idx), (
         "systemctl stop 의 stderr 를 버린다 — 실패 이유가 사라진다"
     )
 
