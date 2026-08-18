@@ -300,10 +300,19 @@ fi
 if lsmod | grep -q "^${MOAL_MOD}\b" || lsmod | grep -q "^${MLAN_MOD}\b"; then
     logger -p local0.info "[$tag:$LINENO] $MOAL_MOD/$MLAN_MOD already loaded → unloading"
 
-    # wpa 관련 프로세스 종료
+    # wpa 관련 프로세스 종료 — 반드시 systemctl stop 을 먼저 한다.
+    # wpa_supplicant@ 에 Restart=always 가 붙어 있으므로 kill -9 만 하면 systemd 가 이를
+    # 실패로 보고 RestartSec 뒤 재기동한다. 그 프로세스가 아래 rmmod 창에서 mlan 을 다시
+    # 점유하면 rmmod 가 실패하고, 실패는 exit 1 → wifi_init.service 의
+    # OnFailure=wlan_emergency_reboot.service 로 이어진다. systemctl stop 은 명시적 정지라
+    # systemd 가 재기동하지 않는다. kill -9 는 systemd 밖에서 뜬 잔존 프로세스용 폴백으로만
+    # 남긴다(수동 실행분 등).
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl stop wpa_supplicant@mlan0.service wpa_supplicant@mlan1.service 2>/dev/null || true
+    fi
     wpa_pids=$(pgrep -f 'wpa_supplicant.*mlan' 2>/dev/null | tr '\n' ' ') || true
     if [ -n "$wpa_pids" ]; then
-        logger -p local0.info "[$tag:$LINENO] killing wpa processes: $wpa_pids"
+        logger -p local0.info "[$tag:$LINENO] killing leftover wpa processes: $wpa_pids"
         kill -9 $wpa_pids 2>/dev/null || true
     fi
 
