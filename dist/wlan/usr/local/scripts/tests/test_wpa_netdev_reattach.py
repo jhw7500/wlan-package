@@ -212,22 +212,44 @@ def test_helper_rejects_non_mlan_interface(tmp_path, bad):
     assert calls == [], f"거부해야 하는데 호출이 나갔다: {calls}"
 
 
-def test_helper_does_not_swallow_systemctl_failures():
-    """헬퍼의 모든 systemctl job 호출은 실패 시 사유를 남긴다.
+def test_helper_failure_paths_have_stderr_fallback():
+    """실패 경로는 `logger` 가 죽어도 메시지가 남아야 한다.
 
-    `2>/dev/null || true` 로 삼키면 복구가 조용히 실패한다 — reset-failed 가 실패하면
-    이어지는 start 도 start-limit 에 다시 걸려 아무 일도 일어나지 않는데, 그 사실이
-    어디에도 남지 않는다. is-active/is-enabled 는 상태 질의라 대상이 아니다.
+    `"$LOGGER" ... 2>/dev/null || true` 만 있으면 syslog/journald 미기동이나 /dev/log
+    부재 시 메시지가 통째로 사라진다. 헬퍼는 systemd-udevd 컨텍스트라 stderr 가
+    journald 로 수집되므로 폴백을 둔다 — postinst 의 udev 재로드 분기와 같은 규약.
+
+    이전 판은 논리 행에 `$LOGGER` 가 있는지만 봐서 **바로 이 취약 경로를 통과시켰다**
+    (리뷰 지적). 등급 래퍼가 stderr 를 실제로 쓰는지까지 확인한다.
     """
     text = HELPER.read_text(encoding="utf-8")
     import re as _re
-    # 근접 N줄 윈도우로 보면 **다음 명령**의 로깅에 가려 통과한다(실측). 해당 호출의
-    # 논리 행(백슬래시 연속 포함)만 본다.
+
+    # 1) warn/err 래퍼는 stderr 폴백을 가져야 한다. info 는 정상 흐름이라 대상 아님.
+    for level in ("_warn", "_err"):
+        m = _re.search(rf"^{level}\(\)\s*\{{(.+?)\}}\s*$", text, _re.M | _re.S)
+        assert m, f"{level} 래퍼가 없다(형식 변경 시 테스트 갱신)"
+        body = m.group(1)
+        assert ">&2" in body, f"{level} 에 stderr 폴백이 없다 — logger 실패 시 메시지 소실"
+
+    # 2) job 호출의 실패 분기는 그 래퍼를 경유해야 한다(맨 $LOGGER 금지).
     for m in _re.finditer(r'"\$SYSTEMCTL"\s+(?:--no-block\s+)?(restart|start|reset-failed)\b', text):
         logical = _logical_line(text, m.start())
-        assert "$LOGGER" in logical, (
-            f"{m.group(1)} 호출의 실패가 로그에 남지 않는다: {logical.strip()[:120]}"
+        assert "_err" in logical or "_warn" in logical, (
+            f"{m.group(1)} 실패가 stderr 폴백 없는 경로로 로깅된다: {logical.strip()[:120]}"
         )
+        assert '"$LOGGER"' not in logical, (
+            f"{m.group(1)} 이 래퍼 대신 맨 $LOGGER 를 쓴다 — logger 실패 시 소실: "
+            f"{logical.strip()[:120]}"
+        )
+
+
+def test_helper_logs_when_systemctl_unusable():
+    """`systemctl` 실행 불가 시 무로그 exit 0 이면 배포 오류가 '아무 일 없음' 으로 보인다."""
+    text = HELPER.read_text(encoding="utf-8")
+    idx = text.find("not executable")
+    assert idx != -1, "systemctl 미실행 분기에 로그가 없다"
+    assert "_err" in _logical_line(text, idx), "해당 로그가 stderr 폴백 경로가 아니다"
 
 
 # ── 계층 A: 유닛 Restart 정책 ───────────────────────────────────────────────
