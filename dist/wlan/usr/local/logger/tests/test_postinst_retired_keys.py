@@ -42,10 +42,29 @@ _TMPL = os.path.join(
 )
 
 
-def _postinst_fn(name):
+def _postinst_fn(name, must_contain=None):
+    """postinst 에서 셸 함수 본문을 원문 그대로 꺼낸다.
+
+    본문의 끝은 **열 0 의 단독 `}` 행**으로 판정한다. 이 저장소의 셸 함수는 본문을
+    들여쓰고 내장 jq 프로그램도 `if/then/else/end` 만 쓰므로 열 0 에 `}` 가 나타나지
+    않는다는 전제다. 그 전제가 깨지면(중첩 프로세스 치환, 함수 안 함수 정의 등) 본문이
+    거기서 조용히 잘리므로, 호출자가 `must_contain` 으로 본문 말미의 표식을 넘겨
+    잘림을 즉시 검출한다 — 잘린 본문으로 정규식을 돌리면 "은퇴 경로 0건" 같은
+    거짓 통과가 난다.
+    """
     src = open(_POSTINST, encoding="utf-8").read()
-    assert f"{name}() {{" in src, f"postinst 에 {name} 이 없다(함수명 변경 시 테스트 갱신)"
-    return src.split(f"{name}() {{", 1)[1].split("\n}\n", 1)[0]
+    head = f"{name}() {{\n"
+    assert head in src, f"postinst 에 {name} 이 없다(함수명/형식 변경 시 테스트 갱신)"
+    rest = src.split(head, 1)[1]
+    end = rest.find("\n}\n")
+    assert end != -1, f"{name} 의 종료 행(열 0 의 단독 `}}`)을 찾지 못했다"
+    body = rest[:end]
+    if must_contain is not None:
+        assert must_contain in body, (
+            f"{name} 본문 추출이 잘렸다 — 본문 안에 열 0 의 단독 `}}` 행이 생기면 "
+            f"거기서 끊긴다(기대 표식 {must_contain!r} 없음)"
+        )
+    return body
 
 
 @pytest.fixture(scope="module")
@@ -66,7 +85,8 @@ def test_retired_roaming_keys_absent_from_template(tmpl):
     """은퇴 선언된 기능 키가 템플릿에 되살아나면 매 설치마다 조용히 삭제된다."""
     paths = re.findall(
         r"^\s*(\.mlan[01]\.[A-Za-z0-9_.]+),?\s*$",
-        _postinst_fn("cleanup_retired_roaming_keys"),
+        _postinst_fn("cleanup_retired_roaming_keys",
+                     must_contain="POST_ROAM_ARP_OPTIMIZATION"),
         re.M,
     )
     assert paths, "은퇴 경로 파싱 실패 — postinst del() 목록 형식이 바뀌었다"
@@ -81,7 +101,8 @@ def test_retired_roaming_keys_absent_from_template(tmpl):
 def test_cleanup_does_not_touch_comments():
     """`_comment` 는 json_merge 가 템플릿 권위로 관리한다 — cleanup 이 다시 손대면
     merge 가 방금 넣은 최신 설명을 도로 지우는 옛 우회책이 부활한다."""
-    body = _postinst_fn("cleanup_retired_roaming_keys")
+    body = _postinst_fn("cleanup_retired_roaming_keys",
+                        must_contain="POST_ROAM_ARP_OPTIMIZATION")
     assert "_comment" not in body, (
         "cleanup_retired_roaming_keys 가 `_comment` 를 다시 다룬다. 설명 갱신은 "
         "json_merge 의 JSON_MERGE_JQ 가 담당하므로 여기서 지우면 안 된다"
@@ -195,7 +216,8 @@ def test_shipped_template_comments_reach_installed_file(tmp_path):
 def _promotions():
     matches = re.findall(
         r'promote\("([A-Za-z0-9_]+)";\s*\[([^\]]+)\]\)',
-        _postinst_fn("migrate_retired_global_logger_keys"),
+        _postinst_fn("migrate_retired_global_logger_keys",
+                          must_contain="bgscan_stale_threshold_sec"),
     )
     assert matches, "promote() 파싱 실패 — migrate 함수 형식이 바뀌었다"
     return [(k, re.findall(r'"([a-z0-9]+)"', ifs)) for k, ifs in matches]
