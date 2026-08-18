@@ -17,7 +17,8 @@
 wifi_init_conf.json
 ├── global              # 드라이버 초기화 (보드/버스/펌웨어 자동선택, 모듈 파라미터)
 │   ├── BLUETOOTH       #   BT combo 펌웨어 사용 여부 (enable, fw 자동선택 반영)
-│   └── ping_monitor    #   ping 모니터 서비스 제어
+│   ├── ping_monitor    #   ping 모니터 서비스 제어
+│   └── fw_watch        #   드라이버 wedge 감시·복구
 ├── mac                 # MAC 주소 설정 (인터페이스별)
 ├── wbridge             # wifi_bridge 프로세스 설정
 │   ├── peer_route      #   양방향 peer 라우팅 마스터 스위치 (enabled)
@@ -185,6 +186,46 @@ wifi_init_conf.json
 **공장 초기화의 필수 파일 복구 게이트** — FW 설정 4종, `wpa_supplicant@.service`, 두 WPA conf, mlan0/mlan1/eth0 `.network`는 best-effort `cp` 대상이 아니다. 각 파일을 destination과 같은 디렉터리의 temp에 root 소유·규정 모드(WPA 0600, 나머지 0644)로 설치하고 원본과 `cmp`한 뒤 atomic rename한다. WPA/network 및 mod_para/txpower의 `.bak`도 같은 factory 원본으로 재시드하므로 reset 이전 자격증명·IP·FW 설정이 self-healing에서 부활하지 않는다. 설치·sync·rename·최종 내용/권한 검증 중 하나라도 실패하면 reset은 non-zero로 끝나며 reboot하지 않는다. 장시간 버튼 호출자도 이 결과를 우회해 별도 강제 reboot하지 않는다.
 
 Factory Reset이 성공하면 장비가 재부팅되며, 공장 기본 유선 주소는 `eth0=192.168.1.1/24`이다. 재부팅 뒤 `root@192.168.1.1`로 다시 접속해 후조건을 확인한다. 일반 패키지 업그레이드는 현재 active 네트워크 설정을 보존하므로 이 주소는 Factory Reset 시 확정 적용된다. 동일 L2에 초기화 장비를 여러 대 동시에 연결하면 주소 충돌이 발생하므로 한 대씩 격리해 초기화한다.
+
+
+### 1.3 global.fw_watch - 드라이버 wedge 감시자
+
+**사용 스크립트**: `wlan_fw_watch.sh`, `wlan_reboot_policy.sh`
+
+FW 자동복구가 최종 실패하면 드라이버가 `driver_status=MTRUE` 로 latch 되어 모든 IOCTL 이
+거부된다. 이때 netdev 는 그대로 등록돼 있고 operstate 도 `up` 이라 기존 복구 경로 셋이
+모두 빗나간다 — `wifi_checker` 의 netdev 소멸 분기는 netdev 가 사라져야 하고, station dump
+사다리는 `wpa_state=COMPLETED` 를 요구하며, `wifi_init.service` 의 `OnFailure` 는 유닛이
+다시 실행돼야 한다. 이 감시자는 `/proc/mwlan/wifi_status` 를 직접 보고 그 공백을 메운다.
+
+판정은 보수적이다: `wifi_status` 가 **정확히 11**(`WIFI_STATUS_FW_RECOVERY_FAIL`)일 때만
+후보로 보고(0~10 은 정상 전이값이며 FW 이벤트가 임의 값을 실을 수 있다), 빈 읽기는 0 이
+아니라 판정 불가로 취급하며(rmmod 창), 연속 틱 디바운스를 통과한 뒤에야
+`hardware_status` 로 확인한다. `hardware_status` 는 정상 teardown 마다 `NotReady` 가 되므로
+1차 신호로 쓰지 않는다.
+
+조치는 재부팅이 아니라 **모듈 리로드 우선**이다. `systemctl restart wifi_init.service` 로
+드라이버를 다시 올리고 회복을 확인한 뒤, 그래도 낫지 않을 때만 `wlan_reboot_policy.sh` 로
+넘긴다. 정책 호출 시 `--iface` 를 주지 않는다 — `wifi_status` 는 보드 전역 신호라
+per-iface 링크 장애 예산(`reboot_policy_mlan0.state`)과 섞이면 안 된다.
+
+| 키 | 타입 | 기본값 | 설명 |
+|---|---|---|---|
+| `enabled` | bool | `true` | `wlan_fw_watch.service` 활성화. `wifi_apply_enabled.sh` 가 systemd enable/disable 로 동기화 |
+| `CHECK_INTERVAL_SEC` | int | `5` | `wifi_status` 폴링 주기 (초) |
+| `INITIAL_DELAY_SEC` | int | `60` | 기동 후 첫 판정까지 유예 (초). 부팅 중 FW 다운로드 창을 피한다 |
+| `TERM_FAULT_CNT` | int | `3` | `wifi_status=11` 연속 관측 횟수 (기본 15초) |
+| `ABNORMAL_FAULT_CNT` | int | `36` | 그 외 비정상 값 연속 관측 횟수 (기본 180초). `0` 이면 이 계층 비활성 |
+| `CONFIRM_TIMEOUT_SEC` | int | `3` | `hardware_status` 확인 읽기 제한 (초). adapter config 는 FW 커맨드를 유발하므로 반드시 bounded 로 읽는다 |
+| `RELOAD_ENABLED` | int | `1` | `1` 이면 재부팅 전에 리로드를 먼저 시도. **`0` 이면 감지·보고만 하고 아무 조치도 하지 않는다**(재부팅하지 않음) |
+| `RELOAD_COOLDOWN_SEC` | int | `900` | 리로드 간 최소 간격 (초). `wifi_init.service` 의 `StartLimitIntervalSec` 보다 길다 |
+| `VERIFY_TIMEOUT_SEC` | int | `90` | 리로드 후 회복 확인 제한 (초) |
+| `VERIFY_INTERVAL_SEC` | int | `3` | 회복 확인 폴링 주기 (초) |
+| `MAX_REBOOT_COUNT` / `REBOOT_COOLDOWN_SEC` / `MIN_UPTIME_SEC` | int | `3` / `300` / `60` | 에스컬레이션 시 `wlan_reboot_policy.sh` 에 전달 |
+
+> MFG 프로파일에서는 감시를 보류한다(`mod_para.conf` 의 `mfg_mode=`). 과열 차단 중에도
+> `wifi_logger_temp.sh` 의 `WIFI_STOP_UNITS` 에 포함돼 함께 정지한다 — 차단 도중 리로드가
+> 무선 유닛을 되살리는 것을 막기 위해서다.
 
 ### 3.1 wbridge.optimize - 커널 레벨 네트워크 튜닝
 

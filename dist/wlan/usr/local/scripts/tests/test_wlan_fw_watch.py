@@ -38,9 +38,11 @@ def test_script_and_unit_exist():
 def test_unit_is_not_partof_wifi_init():
     """PartOf 면 감시자가 자기 복구 액션에 스스로 stop 된다.
 
-    복구는 `systemctl restart wifi_init.service` 인데, PartOf=wifi_init.service 면
-    그 재시작이 이 유닛까지 stop 시켜 회복 검증도 쿨다운 상태도 사라진다.
-    패키지 내 유일한 lifecycle 예외이며 이것이 별도 유닛으로 만든 이유다.
+    복구는 `systemctl restart wifi_init.service` 라서 PartOf 면 그 재시작이 이 유닛까지
+    stop 시켜 90초 회복 검증창이 사라진다. (쿨다운은 STATE_FILE 에 있어 잃지 않는다.)
+    별도 유닛인 더 큰 이유는 재부팅 예산 분리다 — 정책은 --iface 유무로 state 파일을
+    가르므로, 보드 전역 wedge 예산이 per-iface 링크 장애 예산과 섞이면 AP 부재로
+    소진된 카운터가 wedge 재부팅을 조용히 거부한다.
     """
     text = UNIT.read_text()
     assert not re.search(r"^\s*PartOf\s*=", text, re.M), \
@@ -178,3 +180,18 @@ def test_cooldown_recurrence_does_escalate():
     """쿨다운 중 재발은 '리로드로도 안 나았다'는 뜻이므로 에스컬레이션이 맞다."""
     text = SCRIPT.read_text()
     assert "recurred within reload cooldown" in text
+
+
+def test_thermal_cooldown_stops_the_watchdog():
+    """과열 차단 중에는 감시자도 멈춰야 한다.
+
+    wifi_logger_temp.sh 의 cooldown_until_recover() 가 WIFI_STOP_UNITS 를 stop 하고
+    온도 회복을 기다리는데, 그 목록에 이 유닛이 없으면 살아남은 감시자가 wedge 를
+    만나 wifi_init 를 재시작시키고, 그 ExecStartPost 가 무선 유닛을 되살린다 —
+    열 차단 한복판에서 라디오가 다시 켜진다.
+    """
+    temp = WLAN_ROOT / "usr/local/scripts/wifi_logger_temp.sh"
+    m = re.search(r"WIFI_STOP_UNITS=\$\{WIFI_STOP_UNITS:-\"([^\"]*)\"\}", temp.read_text())
+    assert m, "WIFI_STOP_UNITS 를 찾지 못했다"
+    assert "wlan_fw_watch" in m.group(1), \
+        "과열 차단 목록에 감시자가 빠지면 차단 중 라디오가 재무장된다"

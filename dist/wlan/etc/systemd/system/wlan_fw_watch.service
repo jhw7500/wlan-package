@@ -6,8 +6,9 @@ DefaultDependencies=no
 After=sysinit.target
 # PartOf=wifi_init.service 를 의도적으로 두지 않는다. 복구 액션이
 # `systemctl restart wifi_init.service` 라서, PartOf 면 감시자 자신이 리로드 도중
-# stop 되어 회복 검증(2단)이 불가능해지고 쿨다운 상태도 소실된다.
-# 패키지 내 유일한 lifecycle 예외이며, 이 예외가 본 유닛의 존재 이유다.
+# stop 되어 회복 검증(2단)이 불가능해진다. 쿨다운은 파일에 있으므로 잃지 않는다.
+# 별도 유닛인 더 큰 이유는 재부팅 예산 분리다 — wifi_status 는 보드 전역 신호라
+# 정책을 --iface 없이 호출해야 하고, per-iface 링크 장애 예산과 섞이면 안 된다.
 Conflicts=shutdown.target
 Before=shutdown.target
 StartLimitIntervalSec=0
