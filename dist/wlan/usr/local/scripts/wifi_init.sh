@@ -300,10 +300,33 @@ fi
 if lsmod | grep -q "^${MOAL_MOD}\b" || lsmod | grep -q "^${MLAN_MOD}\b"; then
     logger -p local0.info "[$tag:$LINENO] $MOAL_MOD/$MLAN_MOD already loaded → unloading"
 
-    # wpa 관련 프로세스 종료
+    # wpa 관련 프로세스 종료 — 반드시 systemctl stop 을 먼저 한다.
+    # wpa_supplicant@ 에 Restart=always 가 붙어 있으므로 kill -9 만 하면 systemd 가 이를
+    # 실패로 보고 RestartSec 뒤 재기동한다. 그 프로세스가 아래 rmmod 창에서 mlan 을 다시
+    # 점유하면 rmmod 가 실패하고, 실패는 exit 1 → wifi_init.service 의
+    # OnFailure=wlan_emergency_reboot.service 로 이어진다. systemctl stop 은 명시적 정지라
+    # systemd 가 재기동하지 않는다. kill -9 는 systemd 밖에서 뜬 잔존 프로세스용 폴백으로만
+    # 남긴다(수동 실행분 등).
+    # graceful stop 시도와 실패를 남긴다. 아래 kill -9 는 PID 를 로깅하는데 그 앞 단계가
+    # 무기록이면, "왜 kill 폴백까지 갔는지"를 사후에 알 수 없다.
+    # 이 구간의 logger 에는 모두 `|| true` 를 붙인다. 스크립트가 set -euo pipefail 이라
+    # logger 실패(syslog 미기동 등)가 여기서 스크립트를 끊으면 kill -9 폴백까지 건너뛰어진
+    # 채 rmmod 창에 진입한다. 특히 `cmd || logger ...` 형태는 cmd 가 실패한 뒤 logger 도
+    # 실패하면 표현식 전체가 non-zero 라 set -e 가 발동한다 — 정확히 이 PR 이 막으려는
+    # 경로다. 파일 전체는 맨 logger 가 관례지만 이 임계 구간만 예외로 둔다.
+    if command -v systemctl >/dev/null 2>&1; then
+        logger -p local0.info "[$tag:$LINENO] stopping wpa_supplicant@mlan0/mlan1 via systemctl before rmmod" || true
+        # stderr 를 버리지 않는다 — "failed" 사실만 남기고 이유(DBus 불통/권한/유닛 로드
+        # 실패)를 지우면 사후 추적이 끊긴다. 이 스크립트는 wifi_init.service 하에서 돌아
+        # stderr 가 그대로 journald 에 수집된다.
+        systemctl stop wpa_supplicant@mlan0.service wpa_supplicant@mlan1.service \
+            || logger -p local0.warn "[$tag:$LINENO] systemctl stop wpa_supplicant@ failed; relying on kill fallback" || true
+    else
+        logger -p local0.warn "[$tag:$LINENO] systemctl not found; relying on kill fallback before rmmod" || true
+    fi
     wpa_pids=$(pgrep -f 'wpa_supplicant.*mlan' 2>/dev/null | tr '\n' ' ') || true
     if [ -n "$wpa_pids" ]; then
-        logger -p local0.info "[$tag:$LINENO] killing wpa processes: $wpa_pids"
+        logger -p local0.info "[$tag:$LINENO] killing leftover wpa processes: $wpa_pids"
         kill -9 $wpa_pids 2>/dev/null || true
     fi
 
