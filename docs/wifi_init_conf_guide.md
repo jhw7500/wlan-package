@@ -227,6 +227,25 @@ per-iface 링크 장애 예산(`reboot_policy_mlan0.state`)과 섞이면 안 된
 > `wifi_logger_temp.sh` 의 `WIFI_STOP_UNITS` 에 포함돼 함께 정지한다 — 차단 도중 리로드가
 > 무선 유닛을 되살리는 것을 막기 위해서다.
 
+**리로드가 `wifi_checker` 와 겹치지 않는가 (2026-08-18 실측)** — 감시자가 거는
+`systemctl restart wifi_init.service` 는 `PartOf` 전파로 `wifi_checker@` 도 재시작시킨다.
+그 사이 netdev 가 사라지므로 checker 의 "netdev 부재" 사다리가 먼저 재부팅을 요청할
+여지가 있는지 보드에서 측정했다.
+
+| 항목 | 값 |
+|---|---|
+| checker 발화 임계 | `ERR_CNT > LIMIT_CNT(5)` = 6틱 × `sleep 5` = **30초** 연속 부재 |
+| 실측 netdev 부재 구간 | **5.6초** |
+| checker ACTIVE 상태로 리로드했을 때 실측 `ERR_CNT` 최대 | **2** |
+| 재부팅 요청 | **0회** (`reboot_policy_mlan0.state` 생성 안 됨) |
+
+마진이 5배 이상이고, 방어가 삼중이다 — 부재 구간이 임계보다 훨씬 짧고, `PartOf` 전파로
+checker 가 재시작되면서 `ERR_CNT` 가 0 으로 리셋되며, 재시작된 checker 는 루프 진입 전
+lsmod 대기(최대 15초)를 먼저 한다. 따라서 별도의 grace 플래그가 필요하지 않다.
+
+부재가 실제로 30초를 넘는다면 그것은 오탐이 아니라 리로드가 실패했다는 뜻이므로,
+그때 checker 가 재부팅을 요청하는 것은 의도된 동작이다.
+
 ### 3.1 wbridge.optimize - 커널 레벨 네트워크 튜닝
 
 **사용 스크립트**: `wifi_bridge.sh` → `optimize-for-udp.sh`, `setup-irq-affinity.sh`
