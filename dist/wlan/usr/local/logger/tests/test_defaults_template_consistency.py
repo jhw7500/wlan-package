@@ -204,7 +204,9 @@ def test_link_logger_cli_default_uses_module_constant(monkeypatch):
     assert "default: 1.234" in parser.format_help()
 
 
-def test_link_logger_default_matches_template(full_tmpl):
+@pytest.mark.parametrize("iface", ["mlan0", "mlan1"])
+def test_link_logger_default_matches_template(full_tmpl, iface):
+    """이 키는 전역 logger 에서 인터페이스별로 이관됐다 — 두 인터페이스 모두 고정한다."""
     import wifi_logger_link
 
-    assert wifi_logger_link.LOOP_INTERVAL == full_tmpl["logger"]["link_interval_sec"]
+    assert wifi_logger_link.LOOP_INTERVAL == full_tmpl[iface]["logger"]["link_interval_sec"]

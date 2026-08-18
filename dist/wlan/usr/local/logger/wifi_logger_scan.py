@@ -20,7 +20,7 @@ TARGET_PATH = "/dev/shm/json"
 WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
 WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
 LOG_INTERVAL = 30
-# beacon.json stale 엔트리 프루닝 임계(초, 10분). 템플릿 logger.bgscan_stale_threshold_sec
+# beacon.json stale 엔트리 프루닝 임계(초, 10분). 템플릿 <iface>.logger.bgscan_stale_threshold_sec
 # 와 fail-same. 종전엔 wifi_bgscan 이 이 키를 로드만 하고 미사용(dead knob)이었고 실소비처인
 # 이 파일은 600 하드코딩이라 설정이 무효였다 — 로드를 실소비처로 이관(반영은 데몬 재시작).
 DEFAULT_STALE_THRESHOLD_SEC = 600
@@ -29,18 +29,34 @@ DEFAULT_STALE_THRESHOLD_SEC = 600
 _STALE_THRESHOLD_LOAD_WARNING = None
 
 
-def load_stale_threshold(path=WIFI_INIT_CONF_JSON, default=DEFAULT_STALE_THRESHOLD_SEC):
-    """`logger.bgscan_stale_threshold_sec` 로드 — 양의 int 만 수용(bool 제외), 파일
-    부재/파싱 실패/불량 값은 default 유지(fail-same). import 시 1회 호출.
+def load_stale_threshold(path=WIFI_INIT_CONF_JSON, default=DEFAULT_STALE_THRESHOLD_SEC,
+                         iface=None):
+    """`bgscan_stale_threshold_sec` 로드 — 양의 int 만 수용(bool 제외), 파일 부재/파싱
+    실패/불량 값은 default 유지(fail-same).
+
+    해석 순서: `<iface>.logger.*` → `logger.*` → default. iface=None 이면 전역만 본다.
+    템플릿은 이 키를 인터페이스별로 정의하지만, 업그레이드된 기기에는 구 전역 키가
+    남아 있을 수 있어 전역 폴백을 유지한다.
+
+    import 시 1회(전역 스코프) + `__main__` 에서 IFACE 확정 후 1회(iface 스코프) 호출.
     파일 부재는 정상 폴백(신규/개발 환경)이라 무경고, 그 외 실패는 경고 캡처."""
     global _STALE_THRESHOLD_LOAD_WARNING
     try:
         with open(path) as f:
-            v = json.load(f).get("logger", {}).get("bgscan_stale_threshold_sec", default)
+            conf = json.load(f)
+        scope = "logger"
+        v = None
+        if iface:
+            _if_logger = (conf.get(iface) or {}).get("logger") or {}
+            v = _if_logger.get("bgscan_stale_threshold_sec")
+            if v is not None:
+                scope = f"{iface}.logger"
+        if v is None:
+            v = (conf.get("logger") or {}).get("bgscan_stale_threshold_sec", default)
         if isinstance(v, int) and not isinstance(v, bool) and v > 0:
             return v
         _STALE_THRESHOLD_LOAD_WARNING = (
-            f"invalid logger.bgscan_stale_threshold_sec {v!r} — using default {default}"
+            f"invalid {scope}.bgscan_stale_threshold_sec {v!r} — using default {default}"
         )
     except FileNotFoundError:
         pass
@@ -52,6 +68,17 @@ def load_stale_threshold(path=WIFI_INIT_CONF_JSON, default=DEFAULT_STALE_THRESHO
 
 
 STALE_THRESHOLD_SEC = load_stale_threshold()
+
+
+def apply_iface_stale_threshold(iface, path=WIFI_INIT_CONF_JSON):
+    """IFACE 확정 후 `<iface>.logger.*` 스코프로 재해석해 모듈 전역에 반영한다.
+    import 시점엔 iface 를 알 수 없어 전역 스코프로만 로드되므로 이 호출이 필요하다 —
+    '로더는 iface 를 받는데 전역은 여전히 전역값' 회귀를 테스트로 고정하기 위해
+    `__main__` 인라인이 아닌 함수로 둔다."""
+    global STALE_THRESHOLD_SEC, _STALE_THRESHOLD_LOAD_WARNING
+    _STALE_THRESHOLD_LOAD_WARNING = None
+    STALE_THRESHOLD_SEC = load_stale_threshold(path=path, iface=iface)
+    return STALE_THRESHOLD_SEC
 #last_log_time = 0
 VERSION = "0.0"
 IFACE = ""
@@ -756,7 +783,11 @@ if __name__ == "__main__":
         logger.message("emerg", f"[{IFACE}] is not valid interface", _EXTRA_())
         sys.exit(1)
 
-    # import 시 캡처된 stale_threshold 로드 실패/불량값 경고를 1회 발행(운영 가시성).
+    # import 시점엔 IFACE 를 몰라 전역 스코프로만 로드했다. IFACE 가 확정된 지금
+    # `<iface>.logger.*` 를 우선 적용해 재해석한다(템플릿의 실제 정의 위치).
+    apply_iface_stale_threshold(IFACE)
+
+    # stale_threshold 로드 실패/불량값 경고를 1회 발행(운영 가시성).
     if _STALE_THRESHOLD_LOAD_WARNING:
         logger.message("warn", f"[{IFACE}] stale_threshold: {_STALE_THRESHOLD_LOAD_WARNING}", _EXTRA_())
 

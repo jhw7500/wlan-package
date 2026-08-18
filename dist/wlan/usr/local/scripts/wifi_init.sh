@@ -193,8 +193,24 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
     fi
 fi
 
-MLAN0_ENABLED=$(wifi_init_get_iface_enabled "mlan0" "true")
-MLAN1_ENABLED=$(wifi_init_get_iface_enabled "mlan1" "true")
+# 인터페이스 활성 폴백 기본값 — wifi_apply_enabled.sh 와 같은 규약으로 맞춘다.
+# 두 스크립트가 다르면 한쪽은 유닛을 disable 하고 다른 쪽은 radio setup / supplicant
+# start 를 진행하는 모순 상태가 된다(wifi_apply_enabled.sh 는 `.mlanN.enabled` 부재를
+# "false" 로 본다).
+#   - 설정을 읽을 수 있는데 키가 없거나 해석 불가  → false
+#   - 설정을 못 읽음(파일/jq 부재, 파싱 실패)       → true
+# 후자를 false 로 떨어뜨리면 안 된다: 그건 "인터페이스를 껐다"가 아니라 "설정을 못 읽는다"
+# 이고, 여기서 양쪽 인터페이스를 죽이면 config 가 깨진 기기가 무선까지 잃어 원격 복구가
+# 끊긴다. wifi_apply_enabled.sh 도 이 경우 apply 자체를 건너뛰거나 중단해 종전 enable
+# 상태를 그대로 둔다 — 기동 유지가 양쪽 공통 동작이며, 판정은 wifi_init_conf_status 하나를
+# 공유한다(각자 구현하면 파싱 실패 같은 사유가 한쪽에만 반영된다).
+IFACE_ENABLED_DEFAULT=false
+if ! wifi_init_conf_status "$WIFI_INIT_CONF_JSON"; then
+    IFACE_ENABLED_DEFAULT=true
+fi
+
+MLAN0_ENABLED=$(wifi_init_get_iface_enabled "mlan0" "$IFACE_ENABLED_DEFAULT")
+MLAN1_ENABLED=$(wifi_init_get_iface_enabled "mlan1" "$IFACE_ENABLED_DEFAULT")
 MLAN0_FREQ=$(wifi_init_get_iface_frequency "mlan0" "auto")
 MLAN1_FREQ=$(wifi_init_get_iface_frequency "mlan1" "auto")
 
@@ -921,6 +937,10 @@ apply_iface_radio_defaults() {
     # 함수는 부팅 보호를 위해 항상 0을 반환하고 실패는 내부에서 logger로 남긴다.
     apply_radio_mode_bw "$iface"
 
+    # 안테나 경로(FW Tx/Rx path)는 rate/MCS보다 근본이라 먼저 적용한다. opt-in이며
+    # 꺼져 있으면 FW/보드 기본 경로를 그대로 둔다. global.ANT_TYPE(GPIO mux)과는 별개다.
+    wifi_fw_apply_antcfg "$WIFI_INIT_CONF_JSON" "$iface"
+
     # rate는 association 전에만 설정 가능하며 partial/default 혼합을 금지한다.
     wifi_fw_apply_rate "$WIFI_INIT_CONF_JSON" "$iface"
 
@@ -962,7 +982,7 @@ ETH0_MAC=$(read_mac_from_json "base" "eth0" "base") || ETH0_MAC=""
 BRIDGE_MAC="$BRIDGE_BASE_MAC"
 BRIDGE_MAC_SOURCE="base"
 
-if [ "$BRIDGE_NONE" != "true" ] && wifi_init_iface_is_enabled "$BRIDGE_IFACE" "true"; then
+if [ "$BRIDGE_NONE" != "true" ] && wifi_init_iface_is_enabled "$BRIDGE_IFACE" "$IFACE_ENABLED_DEFAULT"; then
     # dynamic 모드면 유선 peer MAC/IP 확보 먼저 (resolve_mac의 try_dynamic_mac가 /tmp/eth0_client_mac를 읽음)
     if [ "$MAC_MODE" = "dynamic" ]; then
         # wired_mac_ip_get.py는 peer를 찾았을 때만 파일을 쓰고 실패 시 기존 파일을 지우지 않는다.
@@ -1381,6 +1401,24 @@ if command -v systemctl >/dev/null 2>&1; then
     fi
     wifi_fw_mcs_cold_success
 
+    # supplicant 데몬 게이트 — .<iface>.enabled(인터페이스 전체)와
+    # .<iface>.wpa_supplicant.enabled(데몬 개별, 기본 true)가 모두 참일 때만 직접 start한다.
+    # wifi_apply_enabled.sh가 같은 두 키로 유닛을 enable/disable하지만 systemctl start는
+    # disable된 유닛도 기동시키므로, 이 경로를 막지 않으면 두 키 모두 실효하지 않는다
+    # (인터페이스를 끈 운영자에게 supplicant가 붙는 상태 — 스키마의 "false면 모든 자식
+    # 데몬 disable" 계약 위반).
+    # 진리값 해석은 인라인 문자열 비교가 아니라 이 스크립트의 정규 리더를 쓴다 —
+    # 0/no/off 같은 값에서 wifi_apply_enabled.sh와 어긋나면 한쪽은 disable하고 다른 쪽은
+    # start하는 모순이 생긴다. jq의 //는 false를 falsey로 취급하므로 쓰지 않는다.
+    _wpa_enabled=true
+    if [ "$(wifi_init_get_iface_enabled "$BRIDGE_IFACE" "$IFACE_ENABLED_DEFAULT")" != "true" ]; then
+        _wpa_enabled=false
+    elif wifi_init_json_key_exists "$WIFI_INIT_CONF_JSON" ".${BRIDGE_IFACE}.wpa_supplicant.enabled"; then
+        _wpa_enabled=$(wifi_init_normalize_bool \
+            "$(wifi_init_json_read_raw "$WIFI_INIT_CONF_JSON" ".${BRIDGE_IFACE}.wpa_supplicant.enabled")" \
+            "true")
+    fi
+
     # wifi_manager 계열이 enable되어 있으면 wpa_supplicant는 wifi_manager가 자체 관리하므로
     # wifi_init이 별도로 시작하지 않는다. 그렇지 않으면 BRIDGE_IFACE의 wpa_supplicant를
     # 직접 start하여 association이 ExecStartPost 시점 이전에 시작되도록 한다.
@@ -1392,7 +1430,9 @@ if command -v systemctl >/dev/null 2>&1; then
             break
         fi
     done
-    if [ "$wifi_manager_active" = "false" ]; then
+    if [ "$_wpa_enabled" = "false" ]; then
+        logger -p local0.info "[$tag:$LINENO] [$BRIDGE_IFACE] disabled by .enabled or .wpa_supplicant.enabled; skip wpa_supplicant@$BRIDGE_IFACE start"
+    elif [ "$wifi_manager_active" = "false" ]; then
         logger -p local0.info "[$tag:$LINENO] No wifi_manager service; starting wpa_supplicant@$BRIDGE_IFACE"
         systemctl start --no-block "wpa_supplicant@${BRIDGE_IFACE}" 2>/dev/null || \
             logger -p local0.err "[$tag:$LINENO] Failed to start wpa_supplicant@$BRIDGE_IFACE"

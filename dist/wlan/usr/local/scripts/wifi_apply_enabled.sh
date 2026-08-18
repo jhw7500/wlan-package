@@ -16,7 +16,7 @@
 #   .opc.enabled                              → opcd.service (wlan-opc OPC 제어 데몬)
 #   .logger.enabled                           → wifi_logger.service (시스템 로거 그룹)
 #   .eth0.logger.enabled                      → wifi_logger@eth0.service
-#   .mlanN.enabled (인터페이스 자체)          → wpa_supplicant@mlanN.service
+#   .mlanN.wpa_supplicant.enabled             → wpa_supplicant@mlanN.service
 #   .mlanN.logger.enabled                     → wifi_logger@mlanN.service
 #   .mlanN.checker.enabled                    → wifi_checker@mlanN.service
 #   .mlanN.bgscan.enabled                     → wifi_bgscan@mlanN.service
@@ -28,10 +28,18 @@
 #                                               → wifi_event@mlanN.service
 #   (.wbridge.enabled AND .wbridge.bridge_iface == mlanN) → wifi_bridge@mlanN.service
 #
+# .mlanN.enabled=false 이면 위 mlanN 자식 유닛은 개별 키와 무관하게 전부 disable된다.
+#
 # 관리 외 (운영자가 systemctl로 직접): wifi_arping@*, wifi_capture@*,
 # wifi_led@*, wifi_ping@*
 #
 set -u
+
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+# 설정 가용성 판정(wifi_init_conf_status)을 wifi_init.sh 와 공유한다 — 각자 구현하면
+# 파싱 실패 같은 사유가 한쪽에만 반영돼 두 스크립트의 판단이 갈린다.
+# shellcheck source=/dev/null
+. "$SCRIPT_DIR/wifi_init_config_lib.sh"
 
 JSON="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
 tag="wifi_apply_enabled"
@@ -45,16 +53,20 @@ ENABLED_UNITS=()
 DISABLED_UNITS=()
 FAILED_UNITS=()
 
-[ -f "$JSON" ] || { logger -p local0.warn "[$tag:$LINENO] $JSON not found, skip"; exit "$STRICT"; }
-command -v jq >/dev/null 2>&1 || { logger -p local0.warn "[$tag:$LINENO] jq not available, skip"; exit "$STRICT"; }
-
-# JSON parse 검증 — 실패 시 즉시 중단. 그렇지 않으면 모든 키가 null로 평가되어
-# default 값(logger/checker는 true)이 운영자 의도를 덮어쓸 수 있다.
-if ! jq empty "$JSON" 2>/dev/null; then
-    logger -p local0.crit "[$tag:$LINENO] CRITICAL: $JSON parse failed — refusing to apply (would overwrite operator intent with defaults)"
-    printf '[%s:%s] CRITICAL: %s parse failed — aborted\n' "$tag" "$LINENO" "$JSON" >&2
-    exit 1
-fi
+# 설정 가용성 — 판정은 공유(wifi_init_conf_status), 사유별 정책만 여기서 정한다.
+# parse 실패는 skip이 아니라 중단이다: 모든 키가 null로 평가되어 default 값(logger/
+# checker는 true)이 운영자 의도를 덮어쓴다.
+wifi_init_conf_status "$JSON" && _conf_status=0 || _conf_status=$?
+case "$_conf_status" in
+    0) ;;
+    1) logger -p local0.warn "[$tag:$LINENO] $JSON not found, skip"; exit "$STRICT" ;;
+    2) logger -p local0.warn "[$tag:$LINENO] jq not available, skip"; exit "$STRICT" ;;
+    *)
+        logger -p local0.crit "[$tag:$LINENO] CRITICAL: $JSON parse failed — refusing to apply (would overwrite operator intent with defaults)"
+        printf '[%s:%s] CRITICAL: %s parse failed — aborted\n' "$tag" "$LINENO" "$JSON" >&2
+        exit 1
+        ;;
+esac
 
 normalize_bool() {
     case "${1:-}" in
@@ -174,7 +186,7 @@ for iface in mlan0 mlan1; do
         continue
     fi
 
-    apply "wpa_supplicant@${iface}.service" "true"
+    apply "wpa_supplicant@${iface}.service"     "$(get_bool ".${iface}.wpa_supplicant.enabled" "true")"
 
     apply "wifi_logger@${iface}.service"        "$(get_bool ".${iface}.logger.enabled"        "true")"
     apply "wifi_checker@${iface}.service"       "$(get_bool ".${iface}.checker.enabled"       "true")"

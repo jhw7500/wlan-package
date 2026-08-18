@@ -2594,9 +2594,10 @@ case "$2" in
         if ! jq --arg iface "$IFACE" \
                 --argjson mode "$_rate_mode" --argjson low "$_rate_low" \
                 --argjson high "$_rate_high" --argjson interval "$_rate_interval" '
-                .[$iface].rate_adapt = {
+                # 통째 대입은 동거 키(_comment, enabled)를 지운다 — 값만 덮어쓴다.
+                .[$iface].rate_adapt = ((.[$iface].rate_adapt // {}) + {
                     mode: $mode, low_thresh: $low, high_thresh: $high, interval_ms: $interval
-                }
+                })
             ' "$WIFI_INIT_CONF_JSON" > "$_rate_tmp"; then
             rm -f -- "$_rate_tmp"
             echo "Error: failed to stage rate_adapt JSON" >&2
@@ -2615,6 +2616,12 @@ case "$2" in
         fi
         rm -f -- "$_rate_tmp"
         echo "rate_adapt configured for $IFACE: mode=$_rate_mode low=$_rate_low high=$_rate_high interval_ms=$_rate_interval"
+        if [ "$(jq -r --arg i "$IFACE" '
+                if (.[$i].rate_adapt.enabled == null) then "true"
+                else (.[$i].rate_adapt.enabled | tostring) end' \
+                "$WIFI_INIT_CONF_JSON" 2>/dev/null)" != true ]; then
+            echo "Note: ${IFACE}.rate_adapt.enabled=false — 값은 저장되지만 부팅 시 적용되지 않는다."
+        fi
         echo "Apply: next boot before association. Current connection is unchanged."
     fi
     ;;
