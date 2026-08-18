@@ -33,6 +33,15 @@ SYSTEMCTL=/usr/bin/systemctl
 LOGGER=/usr/bin/logger
 tag="wlan_wpa_reattach"
 
+# logger 자체가 실패하는 환경(syslog/journald 미기동, /dev/log 부재)에서는
+# `"$LOGGER" ... || true` 만으로는 메시지가 통째로 사라진다. 진단이 필요한 등급
+# (warn/err)에는 stderr 폴백을 둔다 — 헬퍼는 systemd-udevd 컨텍스트에서 실행되어
+# stderr 가 journald 로 수집된다. postinst 의 udev 재로드 분기와 같은 규약이다.
+# info 는 정상 흐름 기록이라 logger 만으로 충분하다(udev 로그 소음 방지).
+_info() { "$LOGGER" -p local0.info "[$tag] $*" 2>/dev/null || true; }
+_warn() { "$LOGGER" -p local0.warn "[$tag] $*" 2>/dev/null || true; printf '[%s] %s\n' "$tag" "$*" >&2; }
+_err()  { "$LOGGER" -p local0.err  "[$tag] $*" 2>/dev/null || true; printf '[%s] %s\n' "$tag" "$*" >&2; }
+
 iface="${1:-}"
 # udev 는 %k 로 실제 커널 이름만 넘기지만, 이 스크립트가 손으로 호출될 수도 있다.
 # `mlan[0-9]*` 는 glob 이라 "mlan0; ..." 같은 값도 통과시킨다(변수는 인용돼 있어 인젝션은
@@ -40,34 +49,38 @@ iface="${1:-}"
 case "$iface" in
     mlan[0-9]|mlan[0-9][0-9]) ;;
     *)
-        "$LOGGER" -p local0.err "[$tag] invalid interface '${iface}'" 2>/dev/null || true
+        _err "invalid interface '${iface}'"
         exit 1
         ;;
 esac
 
 unit="wpa_supplicant@${iface}.service"
-[ -x "$SYSTEMCTL" ] || exit 0
+# 조용히 성공하면 배포 오류(경로 오타·권한)가 "아무 일도 없었음"으로 보인다.
+if [ ! -x "$SYSTEMCTL" ]; then
+    _err "$SYSTEMCTL not executable — cannot re-attach $unit"
+    exit 0
+fi
 
 state=$("$SYSTEMCTL" is-active "$unit" 2>/dev/null) || true
 
 case "$state" in
     active|activating)
-        "$LOGGER" -p local0.info "[$tag] [$iface] netdev re-created while unit $state — restart to re-attach" 2>/dev/null || true
+        _info "[$iface] netdev re-created while unit $state — restart to re-attach"
         "$SYSTEMCTL" --no-block restart "$unit" \
-            || "$LOGGER" -p local0.err "[$tag] [$iface] restart $unit failed" 2>/dev/null || true
+            || _err "[$iface] restart $unit failed"
         ;;
     failed)
         # 운영자가 꺼둔 유닛은 되살리지 않는다 — 이 분기만 start 를 쓴다.
         if "$SYSTEMCTL" is-enabled --quiet "$unit" 2>/dev/null; then
-            "$LOGGER" -p local0.warn "[$tag] [$iface] unit failed (start-limit exhausted while netdev was absent) — reset-failed + start" 2>/dev/null || true
+            _warn "[$iface] unit failed (start-limit exhausted while netdev was absent) — reset-failed + start"
             # 실패를 삼키지 않는다 — 다른 분기와 같은 규약. reset-failed 가 실패하면
             # 이어지는 start 도 start-limit 에 다시 걸려 조용히 아무 일도 안 일어난다.
             "$SYSTEMCTL" reset-failed "$unit" \
-                || "$LOGGER" -p local0.err "[$tag] [$iface] reset-failed $unit failed" 2>/dev/null || true
+                || _err "[$iface] reset-failed $unit failed"
             "$SYSTEMCTL" --no-block start "$unit" \
-                || "$LOGGER" -p local0.err "[$tag] [$iface] start $unit failed" 2>/dev/null || true
+                || _err "[$iface] start $unit failed"
         else
-            "$LOGGER" -p local0.info "[$tag] [$iface] unit failed but disabled — leave stopped (operator intent)" 2>/dev/null || true
+            _info "[$iface] unit failed but disabled — leave stopped (operator intent)"
         fi
         ;;
     *)
