@@ -2619,7 +2619,7 @@ case "$2" in
         if [ "$(jq -r --arg i "$IFACE" '
                 if (.[$i].rate_adapt.enabled == null) then "true"
                 else (.[$i].rate_adapt.enabled | tostring) end' \
-                "$WIFI_INIT_CONF_JSON" 2>/dev/null)" != true ]; then
+                "$WIFI_INIT_CONF_JSON" 2>/dev/null)" != "true" ]; then
             echo "Note: ${IFACE}.rate_adapt.enabled=false — 값은 저장되지만 부팅 시 적용되지 않는다."
         fi
         echo "Apply: next boot before association. Current connection is unchanged."

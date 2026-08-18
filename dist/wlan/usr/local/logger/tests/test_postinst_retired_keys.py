@@ -131,6 +131,10 @@ def _merge(template, installed, tmp_path):
     return json.loads(r.stdout)
 
 
+# jq 부재는 **개발 환경 조건**이지 제품 조건이 아니다 — postinst 와 wifi_* 스크립트가
+# 모두 jq 에 의존하므로 타겟에는 항상 존재한다. 그래서 xfail(=실패로 추적)이 아니라
+# skip 이 맞다. 참고로 이 스위트는 현재 CI(.github/workflows/build-test.yml)에서 실행되지
+# 않으므로 "CI 가 조용히 skip 한다"는 상황 자체가 없다 — 검증은 로컬/릴리스 전 수동 실행이다.
 needs_jq = pytest.mark.skipif(shutil.which("jq") is None, reason="jq 미설치")
 
 

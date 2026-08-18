@@ -80,7 +80,9 @@ _wifi_fw_is_ant_path() {
         0x*|0X*)
             case "${v#0[xX]}" in ''|*[!0-9a-fA-F]*) return 1 ;; esac
             ;;
-        ''|*[!0-9]*) return 1 ;;
+        # 선행 0 10진수 거부: bash 산술은 "010" 을 8진수 8 로 읽는데 mlanutl 에는 문자열
+        # "010" 이 그대로 전달돼, 범위 검증한 값과 실제 적용값이 갈린다.
+        ''|0[0-9]*|*[!0-9]*) return 1 ;;
     esac
     n=$((v)) 2>/dev/null || return 1
     [ "$n" -ge 1 ] && [ "$n" -le 65535 ]
@@ -212,7 +214,13 @@ wifi_fw_apply_rate() {
     enabled=$(jq -r --arg i "$iface" '
         if (.[$i].rate_adapt.enabled == null) then "true"
         else (.[$i].rate_adapt.enabled | tostring) end
-    ' "$json" 2>/dev/null)
+    ' "$json" 2>/dev/null) || enabled=""
+    # 읽기 실패(빈 결과)를 disabled 와 같은 info 로 묻으면, 설정이 켜져 있는데 적용되지
+    # 않은 상태가 조용히 지나간다 — 사유를 구분해 warn 으로 남긴다.
+    if [ -z "$enabled" ]; then
+        wifi_fw_log local0.warn "[$iface] rate_adapt.enabled read failed; skip (FW 기본값 유지)"
+        return 0
+    fi
     if [ "$enabled" != true ]; then
         wifi_fw_log local0.info "[$iface] rate_adapt disabled; skip (FW 기본값 유지)"
         return 0
