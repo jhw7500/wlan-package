@@ -12,7 +12,9 @@
 조건**을 고정한다 — 특히 `try-restart`/`--no-block` 은 대체 가능한 표현이 아니라 아래
 근거로 선택된 것이라, 무심코 `restart`/블로킹 호출로 바뀌면 다른 결함이 된다.
 """
+import os
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -24,6 +26,7 @@ UDEV_RULE = WLAN_ROOT / "etc/udev/rules.d/99-wlan-wpa-reattach.rules"
 ARP_SEAL_RULE = WLAN_ROOT / "etc/udev/rules.d/99-wlan-arp-seal.rules"
 WPA_UNIT = WLAN_ROOT / "opt/wlan/config/wpa_supplicant/wpa_supplicant@.service"
 WIFI_INIT = WLAN_ROOT / "usr/local/scripts/wifi_init.sh"
+HELPER = WLAN_ROOT / "usr/local/scripts/wlan_wpa_reattach.sh"
 POSTINST = WLAN_ROOT / "DEBIAN/postinst"
 PAYLOAD_MANIFEST = WLAN_ROOT / "DEBIAN/payload-manifest.txt"
 SOURCE_MANIFEST = REPO_ROOT / "scripts/source_archive_manifest.txt"
@@ -49,51 +52,134 @@ def test_rule_triggers_on_mlan_netdev_add():
         assert token in line, f"{token} 없음 — 트리거가 netdev 재생성에 걸리지 않는다"
 
 
-def test_rule_uses_try_restart_not_restart_or_start():
-    """`try-restart` 는 대체 가능한 표현이 아니다.
-
-    man systemctl: "Stop and then start ... **if the units are running**. This does
-    nothing if units are not running."
-      - 부팅 첫 add 에서 wpa 는 아직 미기동 → no-op(부팅 순서 무간섭)
-      - 운영자가 `.mlanN.wpa_supplicant.enabled=false` 로 끈 경우 → 비활성 → no-op
-    `restart`/`start` 로 바꾸면 두 경우 모두 유닛을 강제로 띄워 운영자 의도와 부팅
-    순서를 덮어쓴다.
-    """
+def test_rule_delegates_to_helper_with_absolute_path():
+    """RUN 은 셸을 거치지 않으므로 절대 경로가 필요하고, 인스턴스는 %k 로 넘긴다."""
     line = _rule_line()
-    assert "try-restart" in line, "try-restart 가 아니다"
-    assert not re.search(r"systemctl[^\"]*\brestart\b(?!-)", line.replace("try-restart", "")), (
-        "try-restart 외의 restart 동사가 섞였다"
+    m = re.search(r'RUN\+="(/[^ "]+)([^"]*)"', line)
+    assert m, "RUN+= 에 절대 경로 명령이 없다"
+    assert m.group(1) == "/usr/local/scripts/wlan_wpa_reattach.sh", (
+        f"헬퍼가 아니다: {m.group(1)}"
     )
-    assert not re.search(r"systemctl[^\"]*\bstart\b", line.replace("try-restart", "")), (
-        "start 동사가 섞였다 — 꺼둔 supplicant 를 되살린다"
-    )
+    assert m.group(2).strip() == "%k", "인터페이스를 %k 로 넘기지 않는다"
 
 
-def test_rule_is_non_blocking():
-    """`--no-block` 이 없으면 udev 워커가 멈춘다.
+def test_helper_is_executable():
+    """udev RUN 은 프로그램을 직접 exec 한다 — 실행 비트가 없으면 조용히 아무 일도 없다."""
+    assert HELPER.exists(), "헬퍼가 없다"
+    assert HELPER.stat().st_mode & 0o111, "헬퍼에 실행 비트가 없다"
+
+
+def test_helper_uses_no_block_for_job_calls():
+    """job 을 거는 호출은 --no-block 이어야 한다.
 
     man systemctl: 미지정 시 "systemctl will wait until the unit's start-up is
-    completed". 게다가 wpa_supplicant@.service 는 지금 생성 중인
-    sys-subsystem-net-devices-%i.device 를 Requires/After 로 걸어, 블로킹 호출은 그
-    device 유닛을 기다린다. man 7 udev 는 RUN 파생 프로세스가 이벤트 처리 후
-    "unconditionally killed" 된다고 명시하므로 그 대기는 작업을 반쯤 남기고 끊긴다.
+    completed". 이 유닛은 지금 생성 중인 sys-subsystem-net-devices-%i.device 를
+    Requires/After 로 걸어 블로킹 호출은 그 device 유닛을 기다린다. man 7 udev 는 RUN
+    파생 프로세스가 이벤트 처리 후 "unconditionally killed" 된다고 명시하므로 그 대기는
+    작업을 반쯤 남기고 끊긴다. (reset-failed / is-* 는 job 을 만들지 않아 대상이 아니다.)
     """
-    assert "--no-block" in _rule_line(), "--no-block 없음 — udev 워커 블로킹"
-
-
-def test_rule_uses_absolute_path_and_instance_name():
-    """RUN 은 셸을 거치지 않으므로 절대 경로가 필요하고, 인스턴스는 %k 로 받는다."""
-    line = _rule_line()
-    m = re.search(r'RUN\+="(/[^ "]+)', line)
-    assert m, "RUN+= 에 절대 경로 명령이 없다"
-    assert m.group(1).endswith("/systemctl"), f"systemctl 이 아니다: {m.group(1)}"
-    assert "wpa_supplicant@%k.service" in line, "인스턴스가 %k 로 확장되지 않는다"
+    text = HELPER.read_text(encoding="utf-8")
+    for verb in ("restart", "start"):
+        for m in re.finditer(rf'\$SYSTEMCTL"?\s+([^\n]*\b{verb}\b[^\n]*)', text):
+            assert "--no-block" in m.group(1), f"job 호출에 --no-block 없음: {m.group(1)}"
 
 
 def test_rule_sorts_after_arp_seal():
     """udev 는 파일명 사전순으로 처리한다 — 기존 netdev 훅 뒤에 오도록 유지한다."""
     assert ARP_SEAL_RULE.exists(), "전례 rule 이 사라졌다(경로 변경 시 테스트 갱신)"
     assert ARP_SEAL_RULE.name < UDEV_RULE.name
+
+
+# ── 헬퍼 동작 (가짜 systemctl 로 실행 검증) ────────────────────────────────
+#
+# 문자열 단언은 분기를 지워도 통과하기 쉽다. 여기서는 헬퍼를 **실제로 실행**해
+# 어떤 systemctl 하위명령이 나가는지 본다.
+
+def _run_helper(tmp_path, state, enabled="yes", iface="mlan0"):
+    """가짜 systemctl 을 물려 헬퍼를 돌리고, 발행된 job 호출 목록을 돌려준다."""
+    fake = tmp_path / "systemctl"
+    fake.write_text(
+        "#!/bin/bash\n"
+        "case \"$1\" in\n"
+        "  is-active) echo \"$FAKE_STATE\"; [ \"$FAKE_STATE\" = active ] && exit 0 || exit 3 ;;\n"
+        "  is-enabled) [ \"$FAKE_ENABLED\" = yes ] && exit 0 || exit 1 ;;\n"
+        "  *) echo \"$*\" >> \"$CALLS\"; exit 0 ;;\n"
+        "esac\n"
+    )
+    fake.chmod(0o755)
+    noop = tmp_path / "logger"
+    noop.write_text("#!/bin/bash\nexit 0\n")
+    noop.chmod(0o755)
+
+    src = HELPER.read_text(encoding="utf-8")
+    patched = (src.replace("SYSTEMCTL=/usr/bin/systemctl", f"SYSTEMCTL={fake}")
+                  .replace("LOGGER=/usr/bin/logger", f"LOGGER={noop}"))
+    assert f"SYSTEMCTL={fake}" in patched, "SYSTEMCTL 상수 라인을 찾지 못함(형식 변경 시 갱신)"
+    script = tmp_path / "helper.sh"
+    script.write_text(patched)
+    script.chmod(0o755)
+
+    calls = tmp_path / "calls.txt"
+    calls.write_text("")
+    env = dict(os.environ, CALLS=str(calls), FAKE_STATE=state, FAKE_ENABLED=enabled)
+    r = subprocess.run(["bash", str(script), iface], capture_output=True, text=True,
+                       timeout=30, env=env)
+    return r.returncode, [ln for ln in calls.read_text().splitlines() if ln.strip()]
+
+
+@pytest.mark.parametrize("state", ["active", "activating"])
+def test_helper_restarts_zombie(tmp_path, state):
+    """좀비 라운드 — 프로세스가 구 ifindex 에 붙은 채 살아 있으면 restart 로 재부착."""
+    rc, calls = _run_helper(tmp_path, state)
+    assert rc == 0
+    assert any("restart" in c and "--no-block" in c for c in calls), calls
+    assert not any("reset-failed" in c for c in calls), "살아있는 유닛에 reset-failed 불필요"
+
+
+def test_helper_revives_failed_unit(tmp_path):
+    """[핵심] StartLimit 을 소진해 failed 로 굳은 유닛을 되살린다.
+
+    failed 는 systemd 기준 "not running" 이라 try-restart/restart 가 모두 no-op 이고
+    (실측), reset-failed 만으로도 inactive 가 될 뿐이라 start 가 필요하다. 이 분기가
+    없으면 netdev 복구가 RestartSec x StartLimitBurst 를 넘길 때 supplicant 가 영구
+    failed 에 갇힌다.
+    """
+    rc, calls = _run_helper(tmp_path, "failed")
+    assert rc == 0
+    joined = " ; ".join(calls)
+    assert "reset-failed" in joined, f"reset-failed 없음: {calls}"
+    assert any("start" in c and "--no-block" in c for c in calls), f"start 없음: {calls}"
+    reset_i = next(i for i, c in enumerate(calls) if "reset-failed" in c)
+    start_i = next(i for i, c in enumerate(calls) if "start" in c)
+    assert reset_i < start_i, (
+        f"reset-failed 가 start 보다 뒤에 있다 — StartLimit 이 안 지워진 채 start 한다: {calls}"
+    )
+
+
+def test_helper_does_not_revive_disabled_unit(tmp_path):
+    """failed 분기만 start 를 쓰므로 여기서만 운영자 의도를 되살릴 위험이 있다.
+
+    `.mlanN.wpa_supplicant.enabled=false` 로 disable 된 유닛은 failed 여도 그대로 둔다.
+    """
+    rc, calls = _run_helper(tmp_path, "failed", enabled="no")
+    assert rc == 0
+    assert calls == [], f"꺼둔 유닛을 되살렸다: {calls}"
+
+
+@pytest.mark.parametrize("state", ["inactive", "deactivating"])
+def test_helper_noop_when_not_running(tmp_path, state):
+    """부팅 첫 add(아직 미기동), 운영자 정지, 재로드 중 의도적 stop — 모두 건드리지 않는다."""
+    rc, calls = _run_helper(tmp_path, state)
+    assert rc == 0
+    assert calls == [], f"{state} 상태를 건드렸다: {calls}"
+
+
+@pytest.mark.parametrize("bad", ["eth0", "", "mlan0; rm -rf /", "../etc"])
+def test_helper_rejects_non_mlan_interface(tmp_path, bad):
+    """udev 가 넘기는 %k 외 값으로 호출돼도 엉뚱한 유닛을 건드리지 않는다."""
+    rc, calls = _run_helper(tmp_path, "active", iface=bad)
+    assert rc == 1, f"거부되지 않았다: rc={rc}"
+    assert calls == [], f"거부해야 하는데 호출이 나갔다: {calls}"
 
 
 # ── 계층 A: 유닛 Restart 정책 ───────────────────────────────────────────────

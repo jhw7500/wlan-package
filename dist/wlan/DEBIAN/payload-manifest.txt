@@ -280,6 +280,7 @@ usr/local/scripts/wifi_snmp_trap.sh
 usr/local/scripts/wifi_thermal_state_update.sh
 usr/local/scripts/wlan_link_lib.sh
 usr/local/scripts/wlan_reboot_policy.sh
+usr/local/scripts/wlan_wpa_reattach.sh
 usr/local/scripts/wpa_supplicant.sh
 usr/local/scripts/write_mac.sh
 usr/local/tools/pcap-analyzer/USAGE.md
