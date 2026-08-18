@@ -10,6 +10,7 @@
 #
 # 매핑 (JSON 키 → systemd unit):
 #   .global.ping_monitor.enabled              → wifi_ping_monitor.service
+#   .global.fw_watch.enabled                  → wlan_fw_watch.service
 #   .mlan0.net_rx + .mlan1.net_rx > 0         → wifi_mgmt_log.timer
 #   .wbridge.thermal.enabled                  → wifi_thermal_state.timer
 #   .snmp.enabled                             → snmpd.service (배포판 net-snmp 유닛)
@@ -128,7 +129,7 @@ apply wifi_logger@eth0.service "$(get_bool ".eth0.logger.enabled" "true")"
 if [ "${MFG_MODE:-0}" = "1" ]; then
     logger -p local0.info "[$tag:$LINENO] mfg_mode=1 → MFG profile: disable+stop STA/FW-touching units"
     MFG_UNITS=(wifi_ping_monitor.service wifi_thermal_state.timer wifi_mgmt_log.timer
-               snmpd.service opcd.service)
+               snmpd.service opcd.service wlan_fw_watch.service)
     for iface in mlan0 mlan1; do
         for u in wpa_supplicant wifi_logger wifi_checker wifi_event \
                  wifi_bridge wifi_bgscan wifi_roam wifi_periodic_roam wifi_arping; do
@@ -156,6 +157,7 @@ fi
 
 # 글로벌 데몬
 apply wifi_ping_monitor.service     "$(get_bool ".global.ping_monitor.enabled" "false")"
+apply wlan_fw_watch.service         "$(get_bool ".global.fw_watch.enabled"     "true")"
 apply wifi_thermal_state.timer      "$(get_bool ".wbridge.thermal.enabled"     "false")"
 apply snmpd.service                 "$(get_bool ".snmp.enabled"                "false")"
 apply opcd.service                  "$(get_bool ".opc.enabled"                 "false")"
