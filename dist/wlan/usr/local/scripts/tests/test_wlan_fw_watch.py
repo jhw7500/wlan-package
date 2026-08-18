@@ -156,3 +156,25 @@ def test_checker_state_compare_uses_operstate_values():
     assert '"$STATE" == "SCANNING"' not in text, \
         "operstate 는 SCANNING 을 반환하지 않는다 (죽은 비교)"
     assert '"$STATE" == "down"' in text
+
+
+def test_reload_disabled_never_reboots():
+    """RELOAD_ENABLED=0 은 "감지만" 이어야 한다.
+
+    실기(2026-08-18)에서 RELOAD_ENABLED=0 으로 시험하다 보드가 재부팅됐다. 설정 이름이
+    약속하는 것은 "리로드를 하지 않는다" 이지 "대신 재부팅한다" 가 아니다. 재부팅은
+    리로드를 실제로 시도했고 낫지 않았을 때만 정당하다.
+    """
+    text = SCRIPT.read_text()
+    m = re.search(r'if \[ "\$RELOAD_ENABLED" != "1" \]; then(.*?)elif', text, re.S)
+    assert m, "RELOAD_ENABLED 비활성 분기가 없다"
+    branch = m.group(1)
+    assert "request_reboot" not in branch, \
+        "리로드가 꺼져 있는데 재부팅하면 설정 이름이 거짓말을 한다"
+    assert "reporting only" in branch
+
+
+def test_cooldown_recurrence_does_escalate():
+    """쿨다운 중 재발은 '리로드로도 안 나았다'는 뜻이므로 에스컬레이션이 맞다."""
+    text = SCRIPT.read_text()
+    assert "recurred within reload cooldown" in text
