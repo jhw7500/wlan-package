@@ -32,6 +32,23 @@ PAYLOAD_MANIFEST = WLAN_ROOT / "DEBIAN/payload-manifest.txt"
 SOURCE_MANIFEST = REPO_ROOT / "scripts/source_archive_manifest.txt"
 
 
+def _logical_line(text, idx):
+    """idx 가 속한 셸 논리 행(백슬래시 연결 포함)을 돌려준다."""
+    start = text.rfind("\n", 0, idx) + 1
+    out = []
+    while True:
+        end = text.find("\n", start)
+        if end == -1:
+            out.append(text[start:])
+            break
+        line = text[start:end]
+        out.append(line)
+        if not line.rstrip().endswith("\\"):
+            break
+        start = end + 1
+    return "\n".join(out)
+
+
 def _rule_line():
     """주석을 제외한 실제 rule 행(단일)."""
     lines = [
@@ -240,7 +257,9 @@ def test_module_reload_stops_wpa_via_systemd_before_kill():
     assert stop_idx < kill_idx, "systemctl stop 이 kill -9 보다 뒤에 있다 — 순서가 무의미"
     # mlan0 만 확인하면 mlan1 을 빼도 통과한다. DBDC 보조 STA 는 checker/event 커버리지가
     # 없어(핸드오프 §1) 이 stop 이 빠지면 rmmod 창에서 되살아나는 경로가 그대로 열린다.
-    assert "wpa_supplicant@mlan1.service" in text[stop_idx:stop_idx + 120], (
+    # 고정 바이트 창은 명령이 재포맷되면 false negative 를 낸다 — 논리 행(백슬래시 연결
+    # 포함) 전체를 본다.
+    assert "wpa_supplicant@mlan1.service" in _logical_line(text, stop_idx), (
         "systemctl stop 이 mlan1 을 포함하지 않는다"
     )
 
@@ -287,8 +306,11 @@ def test_critical_path_loggers_cannot_abort_script():
     """
     text = WIFI_INIT.read_text(encoding="utf-8")
     assert "set -euo pipefail" in text, "set -e 전제가 바뀌었다(테스트 갱신 필요)"
+    # 실패 폴백(`cmd || logger ...`)이 특히 위험하다 — cmd 가 실패한 뒤 logger 도 실패하면
+    # 표현식 전체가 non-zero 라 set -e 가 발동해 kill -9 폴백까지 건너뛴다.
     for marker in ("stopping wpa_supplicant@mlan0/mlan1 via systemctl",
-                   "systemctl not found; relying on kill fallback before rmmod"):
+                   "systemctl not found; relying on kill fallback before rmmod",
+                   "systemctl stop wpa_supplicant@ failed; relying on kill fallback"):
         line = next((ln for ln in text.splitlines() if marker in ln), None)
         assert line is not None, f"로그 문구가 사라졌다: {marker}"
         assert line.rstrip().endswith("|| true"), (
