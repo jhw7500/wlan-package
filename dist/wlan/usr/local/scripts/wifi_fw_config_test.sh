@@ -277,6 +277,14 @@ _ant true 0x10000 '' > "$WORK/ant-over.json"
 expect_rc "antcfg rejects out-of-range tx" 1 wifi_fw_validate_antcfg_config "$WORK/ant-over.json" mlan0
 _ant true 0xZZ '' > "$WORK/ant-hex.json"
 expect_rc "antcfg rejects non-hex tx" 1 wifi_fw_validate_antcfg_config "$WORK/ant-hex.json" mlan0
+# 선행 0 10진수 거부: bash 산술이 8진수로 읽어(010→8) 검증한 값과 mlanutl 에 전달되는
+# 문자열("010")이 갈린다. hex(0x…)는 정상 경로이므로 함께 고정한다.
+_ant true 010 '' > "$WORK/ant-oct.json"
+expect_rc "antcfg rejects leading-zero decimal tx" 1 wifi_fw_validate_antcfg_config "$WORK/ant-oct.json" mlan0
+_ant true 0x303 0377 > "$WORK/ant-oct-rx.json"
+expect_rc "antcfg rejects leading-zero decimal rx" 1 wifi_fw_validate_antcfg_config "$WORK/ant-oct-rx.json" mlan0
+_ant true 0x0303 '' > "$WORK/ant-hex-lead0.json"
+expect_rc "antcfg still accepts 0x-prefixed hex" 0 wifi_fw_validate_antcfg_config "$WORK/ant-hex-lead0.json" mlan0
 _ant true '' '' > "$WORK/ant-empty.json"
 expect_rc "antcfg rejects empty tx when enabled" 1 wifi_fw_validate_antcfg_config "$WORK/ant-empty.json" mlan0
 
