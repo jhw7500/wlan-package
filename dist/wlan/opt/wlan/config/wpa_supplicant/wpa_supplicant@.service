@@ -3,11 +3,19 @@ Description=WPA supplicant daemon (interface-specific version)
 Requires=sys-subsystem-net-devices-%i.device
 After=sys-subsystem-net-devices-%i.device wifi_init.service
 PartOf=wifi_init.service
+# netdev 재생성(드라이버 리셋/재로드)으로 supplicant 가 죽는 라운드를 자동 복구한다.
+# 좀비로 살아남는 라운드는 프로세스가 죽지 않아 여기서 안 잡히며 99-wlan-wpa-reattach.rules
+# 가 덮는다. 영구 오류의 무한 재시작은 StartLimit 으로 막는다 — 값은 이 리포의 감독 계약
+# (wifi_link_snapshot@ 등, tests/test_logger_supervision_units.py 가 고정)과 동일하게 맞춘다.
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 # NetworkManager users will probably want the dbus version instead.
 
 [Service]
 Type=simple
+Restart=always
+RestartSec=3
 ExecStartPre=/bin/mkdir -p /var/log/cantops/wpa/%I
 ExecStartPre=/bin/sh -c 'echo "$(date "+%%Y-%%m-%%d %%H:%%M:%%S.%%3N") wpa_supplicant[info] %I: START" >> /var/log/cantops/wpa/%I/wpa.log'
 ExecStart=/usr/sbin/wpa_supplicant -c/etc/wpa_supplicant/wpa_supplicant-%I.conf -i%I -d

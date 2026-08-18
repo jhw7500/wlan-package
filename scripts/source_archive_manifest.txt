@@ -57,6 +57,7 @@ dist/wlan/etc/systemd/system/wifi_thermal_state.service
 dist/wlan/etc/systemd/system/wifi_thermal_state.timer
 dist/wlan/etc/systemd/system/wlan_emergency_reboot.service
 dist/wlan/etc/udev/rules.d/99-wlan-arp-seal.rules
+dist/wlan/etc/udev/rules.d/99-wlan-wpa-reattach.rules
 dist/wlan/etc/wbridge/quick.conf.example
 dist/wlan/opt/wlan/bin/README
 dist/wlan/opt/wlan/bin/README_MLAN
