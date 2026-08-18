@@ -64,9 +64,22 @@ def test_rule_delegates_to_helper_with_absolute_path():
 
 
 def test_helper_is_executable():
-    """udev RUN 은 프로그램을 직접 exec 한다 — 실행 비트가 없으면 조용히 아무 일도 없다."""
+    """udev RUN 은 프로그램을 직접 exec 한다 — 실행 비트가 없으면 조용히 아무 일도 없다.
+
+    **git 인덱스 모드**를 본다. 이 저장소는 core.fileMode=false 라 로컬 chmod 가 git 에
+    반영되지 않으며, 빌드는 신선한 체크아웃에서 이뤄지므로 인덱스 모드(100755)가
+    패키지에 실리는 실제 권한을 결정한다. 파일시스템 모드만 확인하면 로컬에서만
+    통과하고 CI 빌드 산출물은 non-executable 이 되는 상태를 놓친다.
+    """
     assert HELPER.exists(), "헬퍼가 없다"
-    assert HELPER.stat().st_mode & 0o111, "헬퍼에 실행 비트가 없다"
+    r = subprocess.run(["git", "ls-files", "-s", "--", str(HELPER)],
+                       capture_output=True, text=True, cwd=str(REPO_ROOT), timeout=30)
+    assert r.returncode == 0 and r.stdout.strip(), f"git 인덱스에 없다: {r.stderr}"
+    mode = r.stdout.split()[0]
+    assert mode == "100755", (
+        f"git 인덱스 모드가 {mode} 다 — 신선한 체크아웃에서 non-executable 이 되어 "
+        "udev RUN 이 조용히 실패한다. `git update-index --chmod=+x` 필요"
+    )
 
 
 def test_helper_uses_no_block_for_job_calls():
