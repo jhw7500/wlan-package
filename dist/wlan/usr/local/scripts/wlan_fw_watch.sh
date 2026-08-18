@@ -93,7 +93,8 @@ confirm_hw_not_ready() {
     # shellcheck disable=SC2086
     out=$(logger_run_bounded "$CONFIRM_TIMEOUT_SEC" grep -h '^hardware_status=' $ADAPTER_CONFIG_GLOB 2>/dev/null)
     rc=$?
-    HW_STATUS_SEEN=$(printf '%s' "$out" | tr '\n' ',' | sed 's/,$//')
+    # 값만 남긴다 — 접두사를 그대로 두면 로그가 hardware_status=hardware_status=5 가 된다
+    HW_STATUS_SEEN=$(printf '%s' "$out" | sed 's/^hardware_status=//' | tr '\n' ',' | sed 's/,$//')
     if [ "$rc" -eq 124 ]; then
         HW_STATUS_SEEN="timeout"
         return 1
@@ -210,7 +211,12 @@ while true; do
     [ -x "$SNAPSHOT_BIN" ] && "$SNAPSHOT_BIN" >/dev/null 2>&1
     sync
 
-    if [ "$RELOAD_ENABLED" = "1" ] && reload_allowed; then
+    if [ "$RELOAD_ENABLED" != "1" ]; then
+        # 리로드 기능이 꺼져 있으면 감지만 보고하고 끝낸다. 설정 이름이 약속하지 않은
+        # 재부팅을 여기서 하지 않는다 — 재부팅까지 원한다면 RELOAD_ENABLED=1 로 두고
+        # 리로드가 실제로 실패했을 때 에스컬레이션되게 하는 것이 맞다.
+        logger -p local0.emerg "[$tag:$LINENO] reload disabled by config — reporting only, no action taken"
+    elif reload_allowed; then
         logger -p local0.emerg "[$tag:$LINENO] reloading driver via wifi_init.service"
         mark_reload
         # --no-block 필수: TimeoutStartSec 동안 감시 루프가 눈이 멀면 안 된다.
@@ -224,8 +230,9 @@ while true; do
         logger -p local0.emerg "[$tag:$LINENO] reload did not recover within ${VERIFY_TIMEOUT_SEC}s — escalating"
         request_reboot "driver_wedge (wifi_status=$ws hardware_status=$HW_STATUS_SEEN, reload did not recover)"
     else
-        logger -p local0.emerg "[$tag:$LINENO] reload skipped (enabled=$RELOAD_ENABLED cooldown) — escalating"
-        request_reboot "driver_wedge (wifi_status=$ws hardware_status=$HW_STATUS_SEEN, reload unavailable)"
+        # 쿨다운 중 = 직전 리로드로도 낫지 않고 다시 wedge 라는 뜻이라 에스컬레이션한다.
+        logger -p local0.emerg "[$tag:$LINENO] wedge recurred within reload cooldown — escalating"
+        request_reboot "driver_wedge (wifi_status=$ws hardware_status=$HW_STATUS_SEEN, recurred within reload cooldown)"
     fi
 
     FAULT_CNT=0; FAULT_CLASS=""
