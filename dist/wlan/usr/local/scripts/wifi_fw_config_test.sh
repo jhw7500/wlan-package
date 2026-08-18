@@ -285,6 +285,14 @@ _ant true 0x303 0377 > "$WORK/ant-oct-rx.json"
 expect_rc "antcfg rejects leading-zero decimal rx" 1 wifi_fw_validate_antcfg_config "$WORK/ant-oct-rx.json" mlan0
 _ant true 0x0303 '' > "$WORK/ant-hex-lead0.json"
 expect_rc "antcfg still accepts 0x-prefixed hex" 0 wifi_fw_validate_antcfg_config "$WORK/ant-hex-lead0.json" mlan0
+# 0x00303 은 값(771)이 범위 안이라 **자릿수 가드만이** 거부할 수 있다 — 0x10303 처럼
+# 범위를 넘는 값으로는 범위 검사와 구분되지 않아 가드를 검증하지 못한다.
+_ant true 0x00303 '' > "$WORK/ant-hex-long.json"
+expect_rc "antcfg rejects hex wider than 16 bits" 1 wifi_fw_validate_antcfg_config "$WORK/ant-hex-long.json" mlan0
+_ant true 0x10303 '' > "$WORK/ant-hex-over.json"
+expect_rc "antcfg rejects hex above 0xFFFF" 1 wifi_fw_validate_antcfg_config "$WORK/ant-hex-over.json" mlan0
+_ant true 0xFFFF '' > "$WORK/ant-hex-max.json"
+expect_rc "antcfg accepts 4-digit hex boundary" 0 wifi_fw_validate_antcfg_config "$WORK/ant-hex-max.json" mlan0
 _ant true '' '' > "$WORK/ant-empty.json"
 expect_rc "antcfg rejects empty tx when enabled" 1 wifi_fw_validate_antcfg_config "$WORK/ant-empty.json" mlan0
 
