@@ -82,7 +82,7 @@ wifi_init_conf.json
 
 ### 1.1 rate_adapt 안내
 
-> `rate_adapt`는 인터페이스별 블록만 사용한다. 섹션이 존재하면 4개 필드를 모두 제공해야 하며,
+> `rate_adapt`는 인터페이스별 블록만 사용한다. 섹션이 존재하면 값 4개 필드(`mode`/`low_thresh`/`high_thresh`/`interval_ms`)를 모두 제공해야 하며,
 > partial 값에 global 또는 코드 기본값을 섞지 않는다. 상세 계약은 [§11.5](#115-rate_adapt---fw-rate-adaptation)를 참고한다.
 
 ### 1.2 global.ping_monitor - Ping 모니터 서비스
@@ -475,39 +475,53 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 
 ## 10. logger - 로깅 주기 설정
 
-**사용 스크립트**: `wifi_logger_cpu.sh`, `wifi_logger_stat.py`, `wifi_bgscan.py`, `wifi_apply_enabled.sh`
+**사용 스크립트**: `wifi_logger_cpu.sh`, `wifi_apply_enabled.sh`, `wifi_logger_control.sh`
 
-이 섹션은 **전역 기본값**이다. `eth0.logger`, `mlan0.logger`, `mlan1.logger`에서 인터페이스별로 override할 수 있다.
+이 섹션은 **인터페이스 개념이 없는 시스템 로거**만 다룬다. 주기 키는 아래 per-interface 절에 있다.
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `enabled` | bool | `true` | 시스템 로거 그룹 부팅 활성화. `false`면 온도 로그와 과열 보호도 함께 중단 |
+| `enabled` | bool | `true` | 시스템 로거 그룹(CPU/MMC/TEMP/MCP/SUMMARY) 부팅 활성화. `false`면 온도 로그와 과열 보호도 함께 중단. 인터페이스별 로거(`wifi_logger@<iface>`)는 멈추지 않는다 |
 | `cpu_interval_sec` | int | `60` | CPU/MEM 사용률 로깅 주기 (초) |
-| `link_interval_sec` | float | `0.9` | 링크 상태 체크 주기 (초) |
-| `stat_log_interval_sec` | int | `1` | WiFi 통계 로깅 주기 (초) |
-| `stat_check_interval_sec` | int | `1` | WiFi 통계 체크 주기 (초) |
-| `stat_reset_interval_sec` | int | `604800` | 통계 누적 리셋 주기 (초, 기본 7일) |
-| `bgscan_stale_threshold_sec` | int | `600` | `beacon.json` 스캔 엔트리 stale 프루닝 임계(초, 기본 10분). 소비: `wifi_logger_scan.py`(마지막 관측 후 이 시간이 지난 BSSID 제거, 반영은 데몬 재시작) |
 
-> `stat_log_interval_sec`과 `stat_check_interval_sec`의 차이: check는 데이터 수집 주기, log는 실제 파일/syslog 기록 주기이다. log >= check 관계를 유지해야 한다.
+> **인터페이스별로 이관됨**: `link_interval_sec` / `stat_log_interval_sec` / `stat_check_interval_sec` /
+> `stat_reset_interval_sec` / `bgscan_stale_threshold_sec` 는 전역 `logger`에서 제거되고
+> `<iface>.logger.*` 로 옮겨졌다. 업그레이드 시 `postinst`의
+> `migrate_retired_global_logger_keys`가 구 전역값을 per-iface 키가 없는 인터페이스로 승격시킨 뒤
+> 전역 키를 지우므로(운영자가 바꾼 값은 보존된다), **정상 경로에서는 전역 잔존 키가 없다.**
+> 소비 코드에 남은 `<iface>.logger` → `logger` → 코드 기본값 체인의 전역 항은 그 마이그레이션이
+> 돌지 못한 기기(jq 부재/실패/구버전 postinst)용 안전망일 뿐이다.
 
 > **⚠️ `link_retry_count` / `link_retry_delay_sec` 는 JSON 키가 아니다 (유령 키)**: 구 가이드에는 이 두 키가 `logger` 표에 있었으나 **현재 JSON에는 실재하지 않으며, JSON Schema에도 넣지 말 것**. `wifi_logger_link.py`의 순간 끊김 억제 로직(`wpa_cli reconfigure`·`select_network` 직후 100~200ms 동안 `iw station dump`가 비는 것을 곧바로 끊김으로 기록하지 않고 재조회)은 **모듈/CLI 기본값 `4` / `0.05`(초)로만 동작**한다. 조정이 필요하면 JSON이 아니라 CLI `--link-retry-count` / `--link-retry-delay`로만 가능하다.
 
-### per-interface logger override
+### per-interface logger (주기 키의 소재지)
 
-인터페이스별 `logger` 블록이 존재하면 해당 키만 override된다. 미지정 키는 전역 기본값을 사용한다.
+| 키 | 타입 | 기본값 | 인터페이스 | 설명 |
+|----|------|--------|-----------|------|
+| `link_interval_sec` | float | mlanN `0.9` / eth0 `1` | mlan0, mlan1, eth0 | 링크 상태 체크 주기 (초) |
+| `stat_log_interval_sec` | int | `1` | mlan0, mlan1 | WiFi 통계 로깅 주기 (초) |
+| `stat_check_interval_sec` | int | `1` | mlan0, mlan1 | WiFi 통계 체크 주기 (초) |
+| `stat_reset_interval_sec` | int | `604800` | mlan0, mlan1 | 통계 누적 리셋 주기 (초, 기본 7일) |
+| `bgscan_stale_threshold_sec` | int | `600` | mlan0, mlan1 | `beacon.json` 스캔 엔트리 stale 프루닝 임계(초, 기본 10분). 소비: `wifi_logger_scan.py`. 양의 정수가 아니면 코드 기본 600 + 경고 |
+| `enabled` | bool | mlan0 `true` / mlan1 `false` / eth0 `true` | mlan0, mlan1, eth0 | `wifi_logger@<iface>` 부팅 정책. `mlanN.enabled=false`면 강제 disable |
+
+> `stat_log_interval_sec`과 `stat_check_interval_sec`의 차이: check는 데이터 수집 주기, log는 실제 파일/syslog 기록 주기이다. log >= check 관계를 유지해야 한다.
+>
+> eth0은 `enabled`와 `link_interval_sec`만 소비한다 — stat/scan 로거는 유닛의
+> `ConditionPathIsDirectory=/sys/class/net/%i/wireless` 로 무선 인터페이스에서만 동작한다.
 
 ```json
 "eth0": {
-    "logger": { "enabled": true, "link_interval_sec": 1.0 }
+    "logger": { "enabled": true, "link_interval_sec": 1 }
 },
 "mlan0": {
     "logger": {
-        "enabled": true,
         "link_interval_sec": 0.9,
         "stat_log_interval_sec": 1,
         "stat_check_interval_sec": 1,
-        "stat_reset_interval_sec": 604800
+        "stat_reset_interval_sec": 604800,
+        "bgscan_stale_threshold_sec": 600,
+        "enabled": true
     }
 }
 ```
@@ -542,6 +556,7 @@ wifi eth0  log start|stop|restart|status|enable|disable
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
 | `enabled` | bool | mlan0 `true` / mlan1 `false` | 인터페이스별 초기화/적용 여부. `false`면 `wifi_init.sh`가 해당 인터페이스의 radio setup과 bridge enable을 건너뜀 |
+| `wpa_supplicant.enabled` | bool | `true` | supplicant 데몬 관리. `wifi_apply_enabled.sh`가 `wpa_supplicant@<iface>.service`를 enable/disable하고, `false`면 `wifi_init.sh`의 직접 `systemctl start`도 건너뛴다(두 경로를 모두 막아야 실효한다 — `start`는 disable된 유닛도 기동시키기 때문). 외부(`wifi_manager` 등)가 supplicant를 소유하거나 association을 수동 제어할 때 `false`. `<iface>.enabled=false`이면 이 값과 무관하게 disable |
 | `Frequency` | string | `"auto"` | 인터페이스별 bandcfg 기본값. `auto`, `2.4GHz`, `5GHz` |
 | `connect_threshold` | int | `-100` | 연결 후보 BSS의 신호레벨이 이 값(dBm) 미만이면 연결 후보에서 제외하는 최소 연결 임계값. `-100`=사실상 무필터. **커스텀 패치 wpa_supplicant 바이너리**(`/opt/wlan/bin/wpa_supplicant.imx8`/`.imx93`)가 `/usr/local/etc/wifi_init_conf.json`을 직접 읽어 적용(shell/python 스크립트 경유 아님). 로그: `BSS: … level N < connect threshold M` |
 | `net_rx` | int | `0` | MGMT 프레임 로깅 모드. `wifi_init.sh`가 `wifi_mod_para.conf`의 해당 블록(`PCIE9098_N` / `SD9098_N`)에 반영. 0=비활성 |
@@ -793,15 +808,58 @@ wifi eth0  log start|stop|restart|status|enable|disable
 > 데몬이 읽지 않으므로 무해(stale)하다. `PREDICTIVE_ROAM` 은 2층 판정 계획의 RSSI 이력
 > 소스라 보류로 남았다.
 
+### 11.4b antcfg - FW Tx/Rx 안테나 경로
+
+**사용 스크립트**: `wifi_init.sh` → `wifi_fw_config_lib.sh`
+
+association 전에 `mlanutl <iface> antcfg <tx> [rx]`로 FW의 Tx/Rx 경로를 지정한다.
+**opt-in이며 출하 기본은 `enabled: false`** — 켜지 않으면 FW/보드 기본 경로를 그대로 둔다.
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| `enabled` | bool | `false` | 적용 ON/OFF. `false`면 SET 자체를 하지 않는다 |
+| `tx` | string | `""` | Tx 경로 비트맵. 10진 또는 `0x` 16진, `1`~`0xFFFF`. `rx`가 비면 Tx/Rx 공통 |
+| `rx` | string | `""` | Rx 경로 비트맵. 빈 문자열이면 인자를 생략한다 |
+
+비트맵 해석 (9097/9098/IW624):
+
+| | LOW BYTE (2G) | HIGH BYTE (5G) |
+|---|---|---|
+| bit 0 / bit 8 | path A | path A |
+| bit 1 / bit 9 | path B | path B |
+| 둘 다 | path A+B | path A+B |
+
+| 예시 | 의미 |
+|------|------|
+| `"0x303"` | 2G/5G 모두 A+B (2x2) |
+| `"0x103"` | 2G A+B, 5G A |
+| `"0x202"` | 2G/5G 모두 path B |
+| `"3"` | 밴드 구분 없는 칩에서 A+B |
+| `"0xFFFF"` | SAD 지원 칩의 안테나 다이버시티 (이때 `rx`는 평가 주기, 기본 `0x1770`=6s) |
+
+> **⚠️ 어댑터 단위 설정**: 키는 인터페이스별이지만 실제로는 라디오(어댑터) 하나의 설정이다.
+> `mlan0`/`mlan1`에 서로 다른 값을 켜면 나중에 적용된 쪽(mlan1)이 이기며, 이때 경고 로그가 남는다.
+> 두 인터페이스를 함께 쓸 때는 같은 값을 넣거나 한쪽만 켠다.
+
+> **⚠️ `global.ANT_TYPE`과 다르다**: `ANT_TYPE`은 드라이버 로드 전 GPIO mux(`SW_SEL1`/`SW_SEL2`)를
+> `internal`/`external`로 바꾸는 하드웨어 경로 선택이고, `antcfg`는 그 뒤 FW의 Tx/Rx chain 선택이다.
+> 서로 독립이며 둘 다 필요할 수 있다.
+
+> **`0` 거부**: `tx`/`rx`에 `0`을 넣으면 어떤 경로도 선택되지 않아 RF가 죽는다. `mlanutl`이 성공을
+> 보고할 수 있고 이 기기는 무선이 유일한 접속 경로이므로, 설정 검증 단계에서 거부하고 섹션 전체를
+> 건너뛴다(FW 기본 경로 유지). 범위를 벗어난 값·비16진 문자열도 같다.
+
 ### 11.5 rate_adapt - FW Rate Adaptation
 
 **사용 스크립트**: `wifi_init.sh`, `wifi.sh`
 
-mlan0 / mlan1에 개별 적용한다. 섹션이 있으면 아래 4개 필드가 모두 유효해야 하며,
-하나라도 없거나 잘못되면 해당 iface의 rate 설정 전체를 경고 후 건너뛴다.
+mlan0 / mlan1에 개별 적용한다. 섹션이 있으면 `mode`/`low_thresh`/`high_thresh`/`interval_ms`
+4개 필드가 모두 유효해야 하며, 하나라도 없거나 잘못되면 해당 iface의 rate 설정 전체를 경고 후
+건너뛴다. `enabled`는 선택 키로, 없으면 `true`(종전 동작)로 본다.
 
 | 키 | 타입 | 기본값 (현재 JSON) | 설명 |
 |----|------|------------------|------|
+| `enabled` | bool | `true` | 섹션 적용 ON/OFF. `false`면 `rate_adapt_cfg`를 SET하지 않고 FW 기본값을 그대로 둔다. 값 검증은 `enabled`와 무관하게 수행되므로 꺼둔 채로도 값을 미리 저장해 둘 수 있다 |
 | `mode` | int | `1` | `0`=legacy, `1`=SR(Success Rate) |
 | `low_thresh` | int | `70` | SR 하한 (%). `255`(0xff)=dynamic |
 | `high_thresh` | int | `90` | SR 상한 (%). static은 `low < high`, dynamic은 양쪽 모두 255 |
@@ -812,10 +870,10 @@ mlan0 / mlan1에 개별 적용한다. 섹션이 있으면 아래 4개 필드가 
 
 ```json
 "mlan0": {
-    "rate_adapt": { "mode": 1, "low_thresh": 70, "high_thresh": 90, "interval_ms": 100 }
+    "rate_adapt": { "enabled": true, "mode": 1, "low_thresh": 70, "high_thresh": 90, "interval_ms": 100 }
 },
 "mlan1": {
-    "rate_adapt": { "mode": 1, "low_thresh": 70, "high_thresh": 90, "interval_ms": 100 }
+    "rate_adapt": { "enabled": true, "mode": 1, "low_thresh": 70, "high_thresh": 90, "interval_ms": 100 }
 }
 ```
 

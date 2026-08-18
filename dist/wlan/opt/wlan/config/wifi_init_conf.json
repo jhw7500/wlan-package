@@ -266,22 +266,12 @@
     },
     "logger": {
         "_comment": [
-            "WiFi logger 전역 기본값. 인터페이스별 logger 값이 없으면 사용",
-            "enabled: (bool) 시스템 로거 그룹 부팅 활성화. false면 온도 로그와 과열 보호도 함께 중단",
-            "cpu_interval_sec: (number) CPU 로그 기록 주기 (초)",
-            "link_interval_sec: (number) 링크 로그 기록 주기 (초)",
-            "stat_log_interval_sec: (number) 통계 로그 기록 주기 (초)",
-            "stat_check_interval_sec: (number) 통계 상태 확인 주기 (초)",
-            "stat_reset_interval_sec: (number) 통계 로그 자동 초기화 주기 (초)",
-            "bgscan_stale_threshold_sec: (number) bgscan 결과 stale 판정 시간 (초)"
+            "시스템(비인터페이스) 로거 설정. 인터페이스별 주기/활성화 키는 eth0.logger / mlanN.logger 에 정의하며 전역에는 두지 않는다. 업그레이드 시 postinst 가 구 전역 키를 per-iface 로 승격 후 삭제한다",
+            "enabled: (bool) 시스템 로거 그룹(cpu/mmc/temp/mcp/summary) 부팅 활성화. false면 온도 로그와 과열 보호도 함께 중단. 인터페이스별 로거(wifi_logger@<iface>)는 멈추지 않는다",
+            "cpu_interval_sec: (number) CPU 로그 기록 주기 (초)"
         ],
         "enabled": true,
-        "cpu_interval_sec": 60,
-        "link_interval_sec": 0.9,
-        "stat_log_interval_sec": 1,
-        "stat_check_interval_sec": 1,
-        "stat_reset_interval_sec": 604800,
-        "bgscan_stale_threshold_sec": 600
+        "cpu_interval_sec": 60
     },
     "eth0": {
         "_comment": [
@@ -306,24 +296,60 @@
         "net_rx": 0,
         "mgmt_hex_dump_enable": false,
         "thermal_mgmt": true,
+        "antcfg": {
+            "_comment": [
+                "FW Tx/Rx 안테나 경로. association 전에 mlanutl <iface> antcfg <tx> [rx] 로 적용",
+                "enabled: (bool) 적용 ON/OFF. 기본 false — 끄면 FW/보드 기본 경로를 그대로 둔다",
+                "tx: (string) Tx 경로 비트맵. 10진 또는 0x 16진. rx가 비면 Tx/Rx 공통으로 쓰인다",
+                "rx: (string) Rx 경로 비트맵. 빈 문자열이면 인자를 생략해 tx 값이 Tx/Rx 양쪽에 적용된다",
+                "9098 비트맵: LOW BYTE=2G, HIGH BYTE=5G. 각 바이트에서 bit0=path A, bit1=path B",
+                "예: 0x303=2G/5G 모두 A+B(2x2), 0x103=2G A+B + 5G A, 0x202=2G/5G 모두 path B, 3=A+B(밴드 구분 없는 칩)",
+                "SAD 지원 칩: tx=0xFFFF가 안테나 다이버시티이고 이때 rx는 평가 주기(기본 0x1770=6s)를 뜻한다",
+                "주의: antcfg는 어댑터(라디오) 단위 설정이라 mlan0/mlan1에 서로 다른 값을 켜면 나중에 적용된 쪽(mlan1)이 이긴다",
+                "주의: global.ANT_TYPE(GPIO mux, internal|external)과는 별개 설정이다"
+            ],
+            "enabled": false,
+            "tx": "",
+            "rx": ""
+        },
         "rate_adapt": {
             "_comment": [
                 "연결 전에 적용하는 FW rate adaptation 설정",
+                "enabled: (bool) 이 섹션 적용 ON/OFF. false면 rate_adapt_cfg를 SET하지 않고 FW 기본값을 그대로 둔다. 키가 없으면 true(종전 동작)",
                 "mode: (int) 0=legacy, 1=SR",
                 "low_thresh: (int) SR low threshold. 0xff=노이즈 기반 동적값, 그 외=성공률 기준 정적값 (%)",
                 "high_thresh: (int) SR high threshold. 0xff=노이즈 기반 동적값, 그 외=성공률 기준 정적값 (%)",
                 "interval_ms: (int) rate 평가 주기 (ms)"
             ],
+            "enabled": true,
             "mode": 1,
             "low_thresh": 70,
             "high_thresh": 90,
             "interval_ms": 100
         },
+        "wpa_supplicant": {
+            "_comment": [
+                "wpa_supplicant@<iface> 데몬 관리. wifi_apply_enabled.sh가 systemctl enable/disable로 동기화",
+                "enabled: (bool) supplicant 데몬 ON/OFF. false면 유닛을 disable하고 wifi_init.sh의 직접 start도 건너뛴다. 외부(wifi_manager 등)가 supplicant를 소유하거나 association을 수동 제어할 때 사용",
+                "주의: mlanN.enabled가 false이면 이 값과 무관하게 disable된다(인터페이스 전체 차단이 우선)"
+            ],
+            "enabled": true
+        },
         "logger": {
+            "_comment": [
+                "인터페이스별 로거 설정. 소비 코드 해석 순서는 <iface>.logger -> logger -> 코드 기본값이며, 중간의 logger 항은 마이그레이션이 돌지 못한 기기용 안전망이다(정상 경로에는 전역 잔존 키가 없다)",
+                "link_interval_sec: (number) 링크 로그 기록 주기 (초)",
+                "stat_log_interval_sec: (int) 통계 로그 기록 주기 (초)",
+                "stat_check_interval_sec: (int) 통계 상태 확인 주기 (초)",
+                "stat_reset_interval_sec: (int) 통계 로그 자동 초기화 주기 (초)",
+                "bgscan_stale_threshold_sec: (int) beacon.json stale 엔트리 프루닝 기준 시간 (초). 양의 정수만 유효",
+                "enabled: (bool) wifi_logger@<iface> 서비스 ON/OFF"
+            ],
             "link_interval_sec": 0.9,
             "stat_log_interval_sec": 1,
             "stat_check_interval_sec": 1,
             "stat_reset_interval_sec": 604800,
+            "bgscan_stale_threshold_sec": 600,
             "enabled": true
         },
         "periodic_roam": {
@@ -504,17 +530,27 @@
         "net_rx": 0,
         "mgmt_hex_dump_enable": false,
         "thermal_mgmt": true,
+        "antcfg": {
+            "enabled": false,
+            "tx": "",
+            "rx": ""
+        },
         "rate_adapt": {
+            "enabled": true,
             "mode": 1,
             "low_thresh": 70,
             "high_thresh": 90,
             "interval_ms": 100
+        },
+        "wpa_supplicant": {
+            "enabled": true
         },
         "logger": {
             "link_interval_sec": 0.9,
             "stat_log_interval_sec": 1,
             "stat_check_interval_sec": 1,
             "stat_reset_interval_sec": 604800,
+            "bgscan_stale_threshold_sec": 600,
             "enabled": false
         },
         "periodic_roam": {
