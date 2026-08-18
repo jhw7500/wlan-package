@@ -71,7 +71,7 @@ ONESHOT="${WIFI_LOGGER_ONESHOT:-0}"
 JOURNALD_SNAPSHOT_SH="${WIFI_JOURNALD_SNAPSHOT_SH:-/usr/local/scripts/journald_snapshot.sh}"
 REBOOT_POLICY_SH="${WIFI_REBOOT_POLICY_SH:-/usr/local/scripts/wlan_reboot_policy.sh}"
 
-WIFI_STOP_UNITS=${WIFI_STOP_UNITS:-"wifi_bridge@mlan0 wifi_bridge@mlan1 wifi_checker@mlan0 wifi_checker@mlan1 wifi_arping@mlan0 wifi_arping@mlan1 wifi_bgscan@mlan0 wifi_bgscan@mlan1 wifi_roam@mlan0 wifi_roam@mlan1 wifi_capture@mlan0 wifi_capture@mlan1 wpa_supplicant@mlan0 wpa_supplicant@mlan1 wifi_logger@mlan0 wifi_logger@mlan1 wifi_logger@eth0"}
+WIFI_STOP_UNITS=${WIFI_STOP_UNITS:-"wifi_bridge@mlan0 wifi_bridge@mlan1 wifi_checker@mlan0 wifi_checker@mlan1 wifi_arping@mlan0 wifi_arping@mlan1 wifi_bgscan@mlan0 wifi_bgscan@mlan1 wifi_roam@mlan0 wifi_roam@mlan1 wifi_capture@mlan0 wifi_capture@mlan1 wpa_supplicant@mlan0 wpa_supplicant@mlan1 wifi_logger@mlan0 wifi_logger@mlan1 wifi_logger@eth0 wlan_fw_watch"}
 
 stop_wifi_and_bridge() {
     command -v systemctl >/dev/null 2>&1 || return 0

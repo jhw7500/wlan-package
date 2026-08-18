@@ -11,9 +11,12 @@
 # 그래서 /proc/mwlan/wifi_status 를 직접 본다. 이 값은 보드 전역 단일 신호라
 # per-iface 인 wifi_checker@ 가 아니라 독립 유닛에서 감시한다.
 #
-# 이 유닛은 의도적으로 PartOf=wifi_init.service 가 아니다 — 복구 액션이
-# `systemctl restart wifi_init.service` 라서, PartOf 면 감시자 자신이 리로드 도중
-# stop 되어 회복 검증도 쿨다운 상태도 잃는다.
+# 이 유닛은 의도적으로 PartOf=wifi_init.service 가 아니다. 복구 액션이
+# `systemctl restart wifi_init.service` 라서 PartOf 면 감시자가 리로드 도중 stop 되고,
+# 그러면 90초 회복 검증창이 사라진다. (쿨다운은 STATE_FILE 에 있으므로 잃지 않는다.)
+# 더 중요한 이유는 재부팅 예산 네임스페이스다: 정책은 --iface 유무로 state 파일을
+# 가르는데, 링크 장애용 per-iface 예산과 보드 전역 하드웨어 wedge 예산이 섞이면
+# AP 부재로 소진된 카운터가 wedge 재부팅을 조용히 거부한다.
 
 tag=$(basename "$0")
 
@@ -103,8 +106,6 @@ confirm_hw_not_ready() {
     printf '%s' "$out" | grep -qv '^hardware_status=0$' && return 1
     return 0
 }
-
-now_sec() { cut -d. -f1 /proc/uptime; }
 
 reload_allowed() {
     local last now
