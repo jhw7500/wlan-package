@@ -161,10 +161,48 @@ def test_stop_wait_is_bounded():
 # ── 배포 즉시 적용 ──────────────────────────────────────────────────────────
 
 def test_postinst_reloads_udev_rules():
-    """재로드가 없으면 신규 rule 이 다음 재부팅까지 적용되지 않는다."""
+    """재로드가 없으면 신규 rule 이 다음 재부팅까지 적용되지 않는다.
+
+    옵션은 canonical form 인 `--reload` 를 쓴다 — `--reload-rules` 는 동작하는
+    하위호환 별칭이지만 `udevadm control --help` 와 man page 어디에도 문서화돼 있지 않다.
+    """
     text = POSTINST.read_text(encoding="utf-8")
-    assert "udevadm control --reload-rules" in text, (
+    assert "udevadm control --reload" in text, (
         "postinst 가 udev rule 을 재로드하지 않는다 — 배포해도 재부팅 전까지 무효"
+    )
+    assert "--reload-rules" not in text, (
+        "문서화되지 않은 별칭 --reload-rules 를 쓴다 — canonical form 은 --reload"
+    )
+
+
+def test_postinst_does_not_swallow_reload_failure():
+    """재로드 실패는 조용히 넘기면 안 된다.
+
+    실패하면 rule 이 재부팅까지 무효인데, 그 사실이 어디에도 남지 않으면 "배포했는데 왜
+    안 고쳐졌나"를 추적할 수 없다. 설치 자체는 막지 않되(재부팅하면 적용) 로그는 남긴다.
+    """
+    text = POSTINST.read_text(encoding="utf-8")
+    idx = text.find("udevadm control --reload")
+    assert idx != -1
+    window = text[idx:idx + 500]
+    assert "logger" in window, "재로드 실패가 로그에 남지 않는다"
+    assert "udevadm control --reload 2>/dev/null" not in text, (
+        "stderr 를 버린다 — 패키지 관리자와 로그 양쪽에서 실패가 보이지 않는다"
+    )
+
+
+def test_module_reload_logs_stop_attempt():
+    """kill 폴백 앞의 graceful stop 시도가 무기록이면 사후 추적이 끊긴다.
+
+    주변 `logger` 개수를 세면 kill 블록의 로그에 가려 통과하므로, 이 단계에서만 나오는
+    문구를 직접 확인한다.
+    """
+    text = WIFI_INIT.read_text(encoding="utf-8")
+    assert "stopping wpa_supplicant@mlan0/mlan1 via systemctl" in text, (
+        "graceful stop 시도 로그가 없다"
+    )
+    assert "systemctl stop wpa_supplicant@ failed" in text, (
+        "stop 실패 로그가 없다 — 왜 kill 폴백까지 갔는지 알 수 없다"
     )
 
 
