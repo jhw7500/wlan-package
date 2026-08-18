@@ -309,15 +309,19 @@ if lsmod | grep -q "^${MOAL_MOD}\b" || lsmod | grep -q "^${MLAN_MOD}\b"; then
     # 남긴다(수동 실행분 등).
     # graceful stop 시도와 실패를 남긴다. 아래 kill -9 는 PID 를 로깅하는데 그 앞 단계가
     # 무기록이면, "왜 kill 폴백까지 갔는지"를 사후에 알 수 없다.
+    # 이 구간의 logger 에는 `|| true` 를 붙인다. 스크립트가 set -euo pipefail 이라 logger
+    # 실패(syslog 미기동 등)가 여기서 스크립트를 끊으면 systemctl stop 과 kill -9 폴백이
+    # **둘 다** 건너뛰어진 채 rmmod 창에 진입한다 — 파일 전체의 맨 logger 관례를 따르되
+    # 임계 구간의 첫 문장만 예외로 둔다.
     if command -v systemctl >/dev/null 2>&1; then
-        logger -p local0.info "[$tag:$LINENO] stopping wpa_supplicant@mlan0/mlan1 via systemctl before rmmod"
+        logger -p local0.info "[$tag:$LINENO] stopping wpa_supplicant@mlan0/mlan1 via systemctl before rmmod" || true
         # stderr 를 버리지 않는다 — "failed" 사실만 남기고 이유(DBus 불통/권한/유닛 로드
         # 실패)를 지우면 사후 추적이 끊긴다. 이 스크립트는 wifi_init.service 하에서 돌아
         # stderr 가 그대로 journald 에 수집된다.
         systemctl stop wpa_supplicant@mlan0.service wpa_supplicant@mlan1.service \
             || logger -p local0.warn "[$tag:$LINENO] systemctl stop wpa_supplicant@ failed; relying on kill fallback"
     else
-        logger -p local0.warn "[$tag:$LINENO] systemctl not found; relying on kill fallback before rmmod"
+        logger -p local0.warn "[$tag:$LINENO] systemctl not found; relying on kill fallback before rmmod" || true
     fi
     wpa_pids=$(pgrep -f 'wpa_supplicant.*mlan' 2>/dev/null | tr '\n' ' ') || true
     if [ -n "$wpa_pids" ]; then

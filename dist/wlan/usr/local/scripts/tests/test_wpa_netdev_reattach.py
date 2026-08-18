@@ -277,6 +277,25 @@ def test_stop_wait_is_bounded():
     )
 
 
+def test_critical_path_loggers_cannot_abort_script():
+    """`set -euo pipefail` + 맨 logger = 임계 구간이 통째로 건너뛰어질 수 있다.
+
+    stop/kill 앞 첫 문장에서 logger 가 실패하면(syslog 미기동 등) 스크립트가 거기서
+    끊겨 systemctl stop 과 kill -9 폴백이 **둘 다** 실행되지 않고, wpa 가 살아있는 채로
+    rmmod 창에 진입한다 → rmmod 실패 → exit 1 → OnFailure=wlan_emergency_reboot.
+    파일 전체는 맨 logger 가 관례지만 이 구간만 예외로 `|| true` 를 요구한다.
+    """
+    text = WIFI_INIT.read_text(encoding="utf-8")
+    assert "set -euo pipefail" in text, "set -e 전제가 바뀌었다(테스트 갱신 필요)"
+    for marker in ("stopping wpa_supplicant@mlan0/mlan1 via systemctl",
+                   "systemctl not found; relying on kill fallback before rmmod"):
+        line = next((ln for ln in text.splitlines() if marker in ln), None)
+        assert line is not None, f"로그 문구가 사라졌다: {marker}"
+        assert line.rstrip().endswith("|| true"), (
+            f"임계 구간 logger 에 `|| true` 가 없다 — set -e 로 stop/kill 이 건너뛰어진다: {marker}"
+        )
+
+
 # ── 배포 즉시 적용 ──────────────────────────────────────────────────────────
 
 def test_postinst_reloads_udev_rules():
@@ -355,6 +374,8 @@ def test_postinst_does_not_trigger_udev():
     [
         (PAYLOAD_MANIFEST, "etc/udev/rules.d/99-wlan-wpa-reattach.rules"),
         (SOURCE_MANIFEST, "dist/wlan/etc/udev/rules.d/99-wlan-wpa-reattach.rules"),
+        (PAYLOAD_MANIFEST, "usr/local/scripts/wlan_wpa_reattach.sh"),
+        (SOURCE_MANIFEST, "dist/wlan/usr/local/scripts/wlan_wpa_reattach.sh"),
     ],
 )
 def test_rule_is_registered_in_manifests(manifest, entry):
