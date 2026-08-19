@@ -64,7 +64,7 @@ load_conf() {
              VERIFY_INTERVAL_SEC MAX_REBOOT_COUNT REBOOT_COOLDOWN_SEC MIN_UPTIME_SEC; do
         v=$(jq -r ".global.fw_watch.${k} // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null)
         # 숫자만 채택 — jq 실패/빈 JSON/문자열이 산술을 0 으로 만들지 않게 한다
-        [[ "$v" =~ ^[0-9]+$ ]] && eval "$k=\$v"
+        [[ "$v" =~ ^[0-9]+$ ]] && printf -v "$k" '%s' "$v"
     done
 }
 
@@ -107,10 +107,19 @@ confirm_hw_not_ready() {
     return 0
 }
 
+# mlan* 중 하나라도 존재하면 참. 특정 이름(mlan0)에 의존하지 않는다.
+have_wlan_netdev() {
+    local d
+    for d in /sys/class/net/mlan*; do
+        [ -d "$d" ] && return 0
+    done
+    return 1
+}
+
 reload_allowed() {
     local last now
     now=$(date +%s)
-    last=$(cut -d' ' -f1 "$STATE_FILE" 2>/dev/null)
+    last=$(head -n1 "$STATE_FILE" 2>/dev/null | cut -d' ' -f1)
     [[ "$last" =~ ^[0-9]+$ ]] || return 0
     [ $((now - last)) -ge "$RELOAD_COOLDOWN_SEC" ]
 }
@@ -128,8 +137,11 @@ verify_recovered() {
     while [ "$(date +%s)" -lt "$deadline" ]; do
         ws=$(read_wifi_status)
         if [ "$ws" = "0" ]; then
-            if confirm_hw_not_ready; then
-                [ -d /sys/class/net/mlan0 ] && return 0
+            # confirm_hw_not_ready 가 0 을 주면 전 adapter 가 Ready 라는 뜻이다.
+            # netdev 는 이름을 박지 않고 mlan* 중 하나라도 돌아왔는지만 본다 —
+            # 어느 어댑터가 먼저 뜨는지는 구성에 따라 다르다.
+            if confirm_hw_not_ready && have_wlan_netdev; then
+                return 0
             fi
         fi
         sleep "$VERIFY_INTERVAL_SEC"
