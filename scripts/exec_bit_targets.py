@@ -108,7 +108,9 @@ def dangling_targets(root: Path, modes: dict[str, str]) -> list[tuple[str, str, 
         """
         if repo_path not in ignored_cache:
             rc = subprocess.run(
-                ["git", "check-ignore", "-q", "--", repo_path], cwd=root
+                ["git", "check-ignore", "-q", "--", repo_path],
+                cwd=root,
+                capture_output=True,
             ).returncode
             ignored_cache[repo_path] = rc == 0
         return ignored_cache[repo_path]
@@ -140,11 +142,26 @@ def dangling_targets(root: Path, modes: dict[str, str]) -> list[tuple[str, str, 
     return out
 
 
+# git 인덱스에서 심볼릭 링크의 모드
+SYMLINK_MODE = "120000"
+
+
 def violations(root: Path | None = None) -> list[tuple[str, str, str, str]]:
-    """실행 대상인데 인덱스 모드가 100755 가 아닌 것들."""
+    """실행 대상인데 인덱스 모드가 100755 가 아닌 것들.
+
+    심볼릭 링크(120000)는 제외한다. git 은 심볼릭 링크에 `update-index --chmod=+x`
+    를 **거부**하므로(`fatal: cannot chmod +x`) 실측 확인 — 파일이 훼손되지는 않지만,
+    포함하면 훅이 매 커밋 "보정 실패" 를 찍고 테스트가 영구 실패한다. 링크 자체가
+    아니라 **링크가 가리키는 대상**이 실행 가능해야 하는데, 그 대상이 리포 안에 있다면
+    그 파일이 별도 항목으로 이미 검사된다.
+    """
     root = root or repo_root()
     modes = index_modes(root)
-    return [t for t in exec_targets(root, modes) if modes[t[3]] != "100755"]
+    return [
+        t
+        for t in exec_targets(root, modes)
+        if modes[t[3]] not in ("100755", SYMLINK_MODE)
+    ]
 
 
 def main() -> int:

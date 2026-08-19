@@ -22,8 +22,10 @@ RUN 을 조용히 건너뛴다. 어느 쪽도 에러가 눈에 띄지 않는다.
 """
 
 import importlib.util
+import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 WLAN_ROOT = Path(__file__).resolve().parents[4]  # dist/wlan
@@ -96,6 +98,52 @@ def test_rule_covers_both_systemd_and_udev():
     kinds = {kind for _decl, kind, _exe, _rp in helper.exec_targets(REPO_ROOT, modes)}
     assert "systemd" in kinds, "systemd ExecStart 대상을 하나도 못 찾았다"
     assert "udev" in kinds, "udev RUN/PROGRAM 대상을 하나도 못 찾았다"
+
+
+def test_symlink_exec_target_is_excluded(tmp_path):
+    """심볼릭 링크 실행 대상은 위반으로 세지 않는다 — 임시 저장소로 실측한다.
+
+    git 은 심볼릭 링크에 `update-index --chmod=+x` 를 거부한다(`fatal: cannot chmod +x`).
+    파일이 훼손되지는 않지만, 포함하면 훅이 매 커밋 "보정 실패" 를 찍고 이 테스트가
+    영구 실패한다. 링크가 아니라 **링크가 가리키는 대상**이 실행 가능해야 한다.
+
+    본 저장소에는 현재 심볼릭 링크가 0건이라 합성 저장소로 확인한다.
+    """
+    helper = _load_helper()
+    repo = tmp_path / "r"
+    (repo / "dist/wlan/etc/systemd/system").mkdir(parents=True)
+    (repo / "dist/wlan/usr/local/scripts").mkdir(parents=True)
+
+    (repo / "dist/wlan/usr/local/scripts/real.sh").write_text("#!/bin/bash\n")
+    os.chmod(repo / "dist/wlan/usr/local/scripts/real.sh", 0o755)
+    os.symlink("real.sh", repo / "dist/wlan/usr/local/scripts/link.sh")
+    (repo / "dist/wlan/etc/systemd/system/t.service").write_text(
+        "[Service]\nExecStart=/usr/local/scripts/link.sh\n"
+    )
+
+    run = lambda *a: subprocess.run(a, cwd=repo, check=True, capture_output=True)
+    run("git", "init", "-q", ".")
+    run("git", "config", "user.email", "t@t")
+    run("git", "config", "user.name", "t")
+    run("git", "add", "-A")
+    run("git", "commit", "-qm", "init")
+
+    modes = helper.index_modes(repo)
+    link = "dist/wlan/usr/local/scripts/link.sh"
+    assert modes[link] == helper.SYMLINK_MODE, "합성 저장소에 심볼릭 링크가 안 들어갔다"
+
+    targets = helper.exec_targets(repo, modes)
+    assert any(t[3] == link for t in targets), "심볼릭 링크가 실행 대상으로 탐지돼야 한다"
+
+    bad = helper.violations(repo)
+    assert [t[3] for t in bad] == [], f"심볼릭 링크가 위반으로 잡혔다: {bad}"
+
+    # git 이 실제로 chmod 를 거부하는지도 함께 고정한다 — 제외 근거 자체의 회귀 방지
+    r = subprocess.run(
+        ["git", "update-index", "--chmod=+x", "--", link],
+        cwd=repo, capture_output=True, text=True,
+    )
+    assert r.returncode != 0, "git 이 심볼릭 링크 chmod 를 허용한다면 제외 근거를 재검토할 것"
 
 
 def test_helper_cli_reports_violations_and_exit_code():
