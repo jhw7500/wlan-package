@@ -54,9 +54,12 @@ ip addr replace "${_m_ip}/32" dev eth0 2>/dev/null \
 _e_addr=$(awk -F= '/^[[:space:]]*Address[[:space:]]*=/{gsub(/[[:space:]]/,"",$2); print $2; exit}' \
           /etc/systemd/network/22-eth0.network 2>/dev/null)
 if [ -n "$_e_addr" ] && [ "${_e_addr%/*}" != "$_m_ip" ]; then
+    # del 실패는 주소가 없을 때의 정상 경로라 그 자체로는 로깅하지 않는다. 다만 뒤이은
+    # add 까지 실패하면 원인 판별에 필요하므로 rc 를 그 메시지에 실어 보낸다.
     ip addr del "$_e_addr" dev eth0 2>/dev/null
+    _del_rc=$?
     ip addr add "$_e_addr" dev eth0 2>/dev/null \
-        || { _fail=1; logger -p local0.warn "[$tag:$LINENO] mgmt addr re-add failed ($_e_addr dev eth0)"; }
+        || { _fail=1; logger -p local0.warn "[$tag:$LINENO] mgmt addr re-add failed ($_e_addr dev eth0; 선행 del rc=$_del_rc)"; }
 fi
 
 # 2) peer host route + permanent neigh (발견 결과가 있을 때만)

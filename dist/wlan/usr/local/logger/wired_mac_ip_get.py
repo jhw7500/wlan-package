@@ -365,10 +365,13 @@ def apply_peer_host_route(peer_ip, peer_mac=None):
     """
     if not peer_ip:
         return
-    # src 고정 필수: eth0에는 관리 IP(192.168.1.1/24)와 mlan0 미러(/32)가 공존하는데,
-    # src 미지정 시 커널 inet_select_addr가 eth0의 "첫 번째" 주소를 고르므로
-    # (22-eth0.network의 ConfigureWithoutCarrier로 관리 IP가 항상 첫 주소) peer가
-    # 되돌아올 수 없는 192.168.1.1이 소스로 선택돼 BD→peer 통신이 죽는다.
+    # src 고정 필수: eth0에는 관리 IP(192.168.1.1/24, 22-eth0.network)와 mlan0 미러
+    # (/32, wifi_init.sh)가 공존하고 둘 다 scope global이다. src 미지정이면 커널
+    # inet_select_addr가 peer 서브넷과 일치하는 주소를 못 찾아 eth0의 "첫 번째"
+    # 주소로 폴백하는데, networkd가 부팅 때 먼저 붙이는 관리 IP가 대개 그 자리다 —
+    # peer가 되돌아올 수 없는 192.168.1.1이 소스가 되어 BD→peer 통신이 죽는다.
+    # 22-eth0.network의 ConfigureWithoutCarrier는 현재 비활성이라 이 순서를 보장하지
+    # 않는다. 그래서 순서에 기대지 않고 여기서 src를 명시적으로 고정한다.
     cmd = ["ip", "route", "replace", f"{peer_ip}/32", "dev", ETH_IFACE]
     src_ip, _ = get_iface_config_addr(IFACE)
     if src_ip:
