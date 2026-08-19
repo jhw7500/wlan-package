@@ -49,12 +49,15 @@ try:
     # 명시적 None 체크 후 str-based 파싱: bool/string 모두 안전 처리.
     # 기존 .get("enabled", True) + str() 방식은 "enabled": null 케이스에서
     # str(None)="None" → False가 되어 wifi_init.sh의 default=true와 split-brain 발생.
-    _pr_v = _wb.get("peer_route", {}).get("enabled")
+    # 주의: dict.get(k, default) 는 키가 "존재하고 값이 null" 이면 default 가 아니라
+    # None 을 돌려준다. 그 상태로 .get() 을 부르면 AttributeError 가 나고 아래
+    # except 가 삼켜, 뒤따르는 LOCAL_HAIRPIN 파싱까지 통째로 건너뛴다. `or {}` 로 막는다.
+    _pr_v = (_wb.get("peer_route") or {}).get("enabled")
     PEER_ROUTE_ENABLED = True if _pr_v is None else \
         str(_pr_v).strip().lower() in ("1", "true", "yes", "on")
     # local_hairpin(int 1 또는 "1")도 host route/neigh 등록 게이트에 포함 —
     # hairpin 단독 구성(peer_route=off)에서도 BD↔유선peer IP 채널이 성립해야 한다.
-    _lh_v = _wb.get("moal", {}).get("local_hairpin")
+    _lh_v = (_wb.get("moal") or {}).get("local_hairpin")
     LOCAL_HAIRPIN = str(_lh_v).strip().lower() in ("1", "true", "yes", "on")
 except Exception:
     pass
