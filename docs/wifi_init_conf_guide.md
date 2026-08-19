@@ -137,7 +137,7 @@ wifi_init_conf.json
 | `bridge_iface` | string | `"mlan0"` | bridge에 사용할 인터페이스. `"mlan0"` 또는 `"mlan1"`. `mlan1`이면 moal insmod `bridge_wlan_idx=1`로 전달(engine=moal 시). pcap 트랙은 `wifi_bridge@mlan0`에 하드코딩 |
 | `mac_mode` | string | `"dynamic"` | MAC 주소 모드. `"default"` (base만), `"dynamic"` (유선측 MAC 동적 획득→base), `"static"` (target→base) |
 | `mac_clone_require_peer` | bool | `true` | `mac_mode=dynamic` 전용. 클론 MAC을 **유선 peer를 실제로 찾은 부팅에서만** 유지한다. 아래 [클론 MAC 잔재](#클론-mac-잔재--mac_clone_require_peer) 참고 |
-| `ip_discovery` | bool | `false` | dynamic MAC 모드에서 MAC 확보 후 클라이언트 IP까지 탐색할지. `false`면 MAC만 확보 후 즉시 종료(부팅 가속, host route 미등록). `true`면 IP 탐색(passive→unicast→sweep) + host route(`/32 dev eth0`) 자동 등록. 양방향 라우팅 완성에는 `peer_route.enabled=true` 필요 |
+| `ip_discovery` | bool | `false` | dynamic MAC 모드에서 MAC 확보 후 클라이언트 IP까지 탐색할지. `false`면 MAC만 확보 후 즉시 종료(부팅 가속, host route 미등록). `true`면 IP 탐색(passive→unicast→sweep) + host route(`/32 dev eth0` src=무선IP) + peer neigh(permanent) 자동 등록. 양방향 라우팅 완성에는 `peer_route.enabled=true` **또는 `moal.local_hairpin=1`** 필요 (등록 게이트가 둘 중 하나면 열림) |
 | `eth_client_ip` | string | `""` | 유선 클라이언트 고정 IP. 빈 문자열이면 quick ARP probe 비활성. 네트워크 토폴로지 종속 |
 | `eth_link_wait_sec` | int | `5` | dynamic MAC 모드에서 유선 링크 준비 대기 시간 (초). `wired_mac_ip_get.py`에서 사용 (구 기본값 3 → **5**) |
 | `eth_sweep_subnet` | string | `""` | peer 발견 최후 sweep 대역 (CIDR). sweep는 eth0로 전송되지만 **peer는 mlan0-IP 토폴로지에서 mlan0와 같은 대역**에 있다. 빈값이면 `mlanN.network의 Address 설정값 → mlanN 런타임 inet → eth0 런타임 inet` 순 폴백 — **설정값을 우선 읽어 부팅 race(mlanN IP 미부여 시점에 eth0 관리대역으로 오판)를 차단**한다. ⚠️ 순수 eth0-IP 토폴로지에서 `mlanN.network`에 이전 구성의 `Address`가 남아 있으면 mlanN 대역이 잡히므로, 그 구성에서는 이 값을 명시해 우회, 예: `"192.168.0.0/24"` |

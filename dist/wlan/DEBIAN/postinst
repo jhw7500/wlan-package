@@ -291,7 +291,13 @@ customctl() {
   # wifi_apply_enabled.sh가 JSON(.logger.enabled/.eth0.logger.enabled)과 동기화한다.
   # wifi-stack.target 은 multi-user.target 도달 후 비블로킹으로 wifi 스택을 기동한다.
   /usr/local/logger/print.py green "\r\n[installer] enabling services..."
-  systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer journald-snapshot-boundary.service wifi-stack.target wifi_init wifi_apply_enabled wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 log-watchdog.timer serial-getty@ttyGS0.service || true
+  systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer journald-snapshot-boundary.service wifi-stack.target wifi_init wifi_apply_enabled wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 log-watchdog.timer serial-getty@ttyGS0.service wlan-peer-net.service || true
+  # wlan-peer-net.service 는 PartOf=systemd-networkd.service 로 networkd restart 를
+  # 추종하는데, PartOf 는 대상이 이미 active 일 때만 발화한다(inactive 면 restart 가
+  # 전파되지 않음 — 실측). enable 만 하면 다음 재부팅 전까지 그 복구 경로가 죽어
+  # 있으므로 설치 시점에 한 번 띄운다. Type=oneshot RemainAfterExit=yes 라 즉시
+  # active(exited) 가 되고, 게이트가 꺼져 있으면 스크립트가 내부에서 no-op 한다.
+  systemctl start --no-block wlan-peer-net.service || true
   # serial-getty@ttyGS0는 커널 콘솔이자 이 설치 로그 출력 대상이라 동기 start가
   # 위험하다(PID1 잡 대기와 맞물려 데드락 가능). --no-block로 큐잉만 하고 진행한다.
   systemctl start --no-block switchd wifi_led@eth0 serial-getty@ttyGS0.service || true

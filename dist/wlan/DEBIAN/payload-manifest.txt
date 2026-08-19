@@ -45,6 +45,7 @@ etc/systemd/system/wifi_ping_monitor.service
 etc/systemd/system/wifi_roam@.service
 etc/systemd/system/wifi_thermal_state.service
 etc/systemd/system/wifi_thermal_state.timer
+etc/systemd/system/wlan-peer-net.service
 etc/systemd/system/wlan_emergency_reboot.service
 etc/systemd/system/wlan_fw_watch.service
 etc/udev/rules.d/99-wlan-arp-seal.rules
@@ -273,6 +274,7 @@ usr/local/scripts/wifi_logger_stop.sh
 usr/local/scripts/wifi_logger_temp.sh
 usr/local/scripts/wifi_mfg.sh
 usr/local/scripts/wifi_mgmt_log.sh
+usr/local/scripts/wifi_peer_net_reapply.sh
 usr/local/scripts/wifi_periodic_roam.sh
 usr/local/scripts/wifi_ping.sh
 usr/local/scripts/wifi_services.sh
