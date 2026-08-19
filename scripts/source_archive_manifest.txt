@@ -55,6 +55,7 @@ dist/wlan/etc/systemd/system/wifi_ping_monitor.service
 dist/wlan/etc/systemd/system/wifi_roam@.service
 dist/wlan/etc/systemd/system/wifi_thermal_state.service
 dist/wlan/etc/systemd/system/wifi_thermal_state.timer
+dist/wlan/etc/systemd/system/wlan-peer-net.service
 dist/wlan/etc/systemd/system/wlan_emergency_reboot.service
 dist/wlan/etc/systemd/system/wlan_fw_watch.service
 dist/wlan/etc/udev/rules.d/99-wlan-arp-seal.rules
@@ -301,6 +302,7 @@ dist/wlan/usr/local/scripts/tests/test_fake_hwclock.sh
 dist/wlan/usr/local/scripts/tests/test_logger_log_format.py
 dist/wlan/usr/local/scripts/tests/test_logger_shell_timeouts.py
 dist/wlan/usr/local/scripts/tests/test_logger_supervision_units.py
+dist/wlan/usr/local/scripts/tests/test_unit_execstart_exec_bit.py
 dist/wlan/usr/local/scripts/tests/test_wifi_eth_peer.sh
 dist/wlan/usr/local/scripts/tests/test_wifi_log_extract.py
 dist/wlan/usr/local/scripts/tests/test_wifi_logger_control.py
@@ -356,6 +358,7 @@ dist/wlan/usr/local/scripts/wifi_logger_stop.sh
 dist/wlan/usr/local/scripts/wifi_logger_temp.sh
 dist/wlan/usr/local/scripts/wifi_mfg.sh
 dist/wlan/usr/local/scripts/wifi_mgmt_log.sh
+dist/wlan/usr/local/scripts/wifi_peer_net_reapply.sh
 dist/wlan/usr/local/scripts/wifi_periodic_roam.sh
 dist/wlan/usr/local/scripts/wifi_ping.sh
 dist/wlan/usr/local/scripts/wifi_radio_test.sh

@@ -1,0 +1,16 @@
+[Unit]
+Description=Reapply wbridge peer channel net artifacts (eth0 mirror/route/neigh)
+# networkd는 restart 시 foreign 주소·라우트(무선 IP 미러/peer host route/neigh)를
+# flush한다(실측 2026-07-18). PartOf로 restart를 추종해 직후 재적용한다.
+# restart 실사용 경로: wifi_init.sh·wifi_config.sh의 reload 실패 fallback,
+# 수동 `wifi net restart`, 운영자 systemctl restart systemd-networkd.
+After=systemd-networkd.service
+PartOf=systemd-networkd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/scripts/wifi_peer_net_reapply.sh
+
+[Install]
+WantedBy=multi-user.target

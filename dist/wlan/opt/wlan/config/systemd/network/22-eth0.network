@@ -13,3 +13,13 @@ DHCP=no
 # 부여/회수한다. systemd-networkd 단계에서 static 부여하면 enabled=false 시 부여 후 제거
 # 패턴이 발생하므로 의도적으로 분리.
 Address=192.168.1.1/24
+# 캐리어 flap/케이블 재연결 시 주소 회수→재부여로 eth0 주소 순서가 뒤집혀
+# (wifi_init.sh eth_fallback의 /32 미러가 첫 주소가 됨) ifconfig류 표시가
+# 장치마다 달라지는 문제 방지 — 주소를 캐리어와 무관하게 부여·유지해
+# 192.168.1.1/24가 항상 첫 주소로 고정된다 (기능 영향 없음, 표시 결정성).
+# 아래 두 줄은 의도적으로 비활성이다. 표시 결정성만을 위한 것이고, peer 채널 동작은
+# 이 순서에 기대지 않는다 — wired_mac_ip_get.py 가 host route 에 src 를 명시적으로
+# 고정한다. 켜면 캐리어 없는 상태에서도 주소를 부여·유지하게 되므로 enabled=false
+# 경로의 주소 회수 동작과의 상호작용을 다시 검토한 뒤에 활성화할 것.
+#ConfigureWithoutCarrier=yes
+#KeepConfiguration=static

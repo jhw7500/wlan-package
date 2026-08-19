@@ -32,6 +32,10 @@ IP_DISCOVERY = False        # MAC 확보 후 클라이언트 IP까지 탐색할�
 ETH_SWEEP_SUBNET = None
 # PEER_ROUTE_ENABLED: 양방향 peer 라우팅(옵션 X) 마스터 토글. false면 host route 등록 skip.
 PEER_ROUTE_ENABLED = True
+# LOCAL_HAIRPIN: 드라이버 로컬 hairpin. 아래 게이트가 `PEER_ROUTE_ENABLED or LOCAL_HAIRPIN`
+# 이라 여기에도 기본값이 있어야 한다 — peer_route=false 로 파싱된 뒤 try 블록이 중도
+# 실패하면(예: wbridge.moal 이 dict 가 아닌 손상 config) 단축평가가 안 걸려 NameError 가 된다.
+LOCAL_HAIRPIN = False
 try:
     with open("/usr/local/etc/wifi_init_conf.json") as f:
         _cfg = json.load(f)
@@ -45,9 +49,16 @@ try:
     # 명시적 None 체크 후 str-based 파싱: bool/string 모두 안전 처리.
     # 기존 .get("enabled", True) + str() 방식은 "enabled": null 케이스에서
     # str(None)="None" → False가 되어 wifi_init.sh의 default=true와 split-brain 발생.
-    _pr_v = _wb.get("peer_route", {}).get("enabled")
+    # 주의: dict.get(k, default) 는 키가 "존재하고 값이 null" 이면 default 가 아니라
+    # None 을 돌려준다. 그 상태로 .get() 을 부르면 AttributeError 가 나고 아래
+    # except 가 삼켜, 뒤따르는 LOCAL_HAIRPIN 파싱까지 통째로 건너뛴다. `or {}` 로 막는다.
+    _pr_v = (_wb.get("peer_route") or {}).get("enabled")
     PEER_ROUTE_ENABLED = True if _pr_v is None else \
         str(_pr_v).strip().lower() in ("1", "true", "yes", "on")
+    # local_hairpin(int 1 또는 "1")도 host route/neigh 등록 게이트에 포함 —
+    # hairpin 단독 구성(peer_route=off)에서도 BD↔유선peer IP 채널이 성립해야 한다.
+    _lh_v = (_wb.get("moal") or {}).get("local_hairpin")
+    LOCAL_HAIRPIN = str(_lh_v).strip().lower() in ("1", "true", "yes", "on")
 except Exception:
     pass
 
@@ -347,7 +358,7 @@ def save_data(file_path, data):
         if data:
             f.write(f"{data}\n")
 
-def apply_peer_host_route(peer_ip):
+def apply_peer_host_route(peer_ip, peer_mac=None):
     """
     라우팅 비대칭 해소:
       - mlan0와 eth0가 같은 서브넷일 때 connected route 한쪽으로만 잡혀
@@ -357,16 +368,54 @@ def apply_peer_host_route(peer_ip):
     """
     if not peer_ip:
         return
-    r = subprocess.run(
-        ["ip", "route", "replace", f"{peer_ip}/32", "dev", ETH_IFACE],
-        capture_output=True, text=True, check=False
-    )
+    # src 고정 필수: eth0에는 관리 IP(192.168.1.1/24, 22-eth0.network)와 mlan0 미러
+    # (/32, wifi_init.sh)가 공존하고 둘 다 scope global이다. src 미지정이면 커널
+    # inet_select_addr가 peer 서브넷과 일치하는 주소를 못 찾아 eth0의 "첫 번째"
+    # 주소로 폴백하는데, networkd가 부팅 때 먼저 붙이는 관리 IP가 대개 그 자리다 —
+    # peer가 되돌아올 수 없는 192.168.1.1이 소스가 되어 BD→peer 통신이 죽는다.
+    # 22-eth0.network의 ConfigureWithoutCarrier는 현재 비활성이라 이 순서를 보장하지
+    # 않는다. 그래서 순서에 기대지 않고 여기서 src를 명시적으로 고정한다.
+    cmd = ["ip", "route", "replace", f"{peer_ip}/32", "dev", ETH_IFACE]
+    src_ip, _ = get_iface_config_addr(IFACE)
+    if src_ip:
+        cmd += ["src", src_ip]
+    # 주의: 부팅 경로에서는 wifi_init.sh:921이 이 스크립트를 "드라이버 로드 이전"에
+    # 동기 호출한다. 그 시점엔 src(mlan0 IP)가 아직 어떤 인터페이스에도 없어 커널이
+    # "Invalid prefsrc address"로 거부하는 것이 정상이다. 여기서 대기/재시도하면
+    # 주소를 부여할 wifi_init.sh 본체가 이 스크립트의 종료를 기다리는 중이므로
+    # 자기 데드락 — 드라이버 로드(무선 기동)만 그만큼 지연된다 (120s 재시도 회귀 실측).
+    # → 1회 시도 후 즉시 양보. 부팅 경로의 확정 등록은 wifi_init.sh peer_route=on
+    # 블록의 재적용이 담당하고, 런타임 재발견(wifi_arping.sh) 경로에서는 주소가
+    # 이미 있어 이 1회 시도가 그대로 성공한다.
+    r = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if r.returncode == 0:
-        logger.message("info", f"[{IFACE}] host route applied: {peer_ip}/32 dev {ETH_IFACE}", _EXTRA_())
+        logger.message("info", f"[{IFACE}] host route applied: {peer_ip}/32 dev {ETH_IFACE}"
+                               f"{' src ' + src_ip if src_ip else ''}", _EXTRA_())
+    elif "prefsrc" in (r.stderr or ""):
+        logger.message("info",
+            f"[{IFACE}] host route deferred: src {src_ip} not yet local (boot race) — "
+            f"wifi_init.sh reapplies after addr assignment", _EXTRA_())
     else:
         logger.message("err",
             f"[{IFACE}] host route apply FAILED ({peer_ip}/32 dev {ETH_IFACE}): {r.stderr.strip()}",
             _EXTRA_())
+
+    # ARP 회피(peer neigh 고정): peer_route=on은 arp_announce=2를 설정하는데, eth0의
+    # /32 미러는 peer 서브넷을 포함하지 않아 커널 ARP sender가 관리 IP(192.168.1.1)로
+    # 광고된다. off-subnet sender의 ARP를 무시하는 peer 스택(실측: imx93 EVK)에서는
+    # 해소가 영원히 실패하므로, discovery가 이미 확보한 MAC으로 neigh를 고정해 ARP
+    # 의존 자체를 제거한다 (매 부팅 재발견으로 갱신되므로 stale 위험 낮음).
+    if peer_mac:
+        n = subprocess.run(["ip", "neigh", "replace", peer_ip, "lladdr", peer_mac,
+                            "dev", ETH_IFACE, "nud", "permanent"],
+                           capture_output=True, text=True, check=False)
+        if n.returncode == 0:
+            logger.message("info",
+                f"[{IFACE}] peer neigh pinned: {peer_ip} -> {peer_mac} ({ETH_IFACE})", _EXTRA_())
+        else:
+            logger.message("err",
+                f"[{IFACE}] peer neigh pin FAILED ({peer_ip} {peer_mac}): {n.stderr.strip()}",
+                _EXTRA_())
 
 # ===================== 메인 =====================
 
@@ -431,11 +480,13 @@ def main():
     save_data(f"/tmp/{ETH_IFACE}_client_ip", ip)
 
     if ip:
-        # 라우팅 비대칭 해소: peer로 가는 트래픽을 eth0로 강제 (peer_route 마스터 토글 체크)
-        if PEER_ROUTE_ENABLED:
-            apply_peer_host_route(ip)
+        # 라우팅 비대칭 해소: peer로 가는 트래픽을 eth0로 강제
+        # (게이트: peer_route=on 또는 moal.local_hairpin=1 — hairpin 단독 구성 포함)
+        if PEER_ROUTE_ENABLED or LOCAL_HAIRPIN:
+            apply_peer_host_route(ip, mac)
         else:
-            logger.message("info", f"[{IFACE}] peer_route=off: skip host route for {ip}", _EXTRA_())
+            logger.message("info",
+                f"[{IFACE}] peer_route=off & local_hairpin!=1: skip host route for {ip}", _EXTRA_())
         #print(f"[+] Wired Client IP resolved: {ip}")
         logger.message("info", f"[{IFACE}] result MAC/IP: {mac} {ip}", _EXTRA_())
     else:

@@ -1197,8 +1197,9 @@ _bridge_status() {
         echo "  [WARN] peer_route=on but no /32 mirror on $eth (runtime). Reboot or 'wifi <0|1> br restart'."
         warn=1
     fi
-    if [ "$pr" = "false" ] && [ -n "$eth_mirror" ] && [ "$ef_json" != "true" ]; then
-        # eth_fallback=on 이면 /32 는 fallback 의 정당한 산출물 — stale 아님
+    if [ "$pr" = "false" ] && [ -n "$eth_mirror" ] && [ "$ef_json" != "true" ] && [ "$lhp_raw" != "1" ]; then
+        # eth_fallback=on 또는 local_hairpin=1 이면 /32 는 정당한 산출물 — stale 아님
+        # (wifi_init.sh가 hairpin 구성에서도 eth0 대표주소=무선 IP 미러를 부여한다)
         echo "  [WARN] peer_route=off but /32 mirror present on $eth ($eth_mirror). Stale; reboot to revert."
         warn=1
     fi
