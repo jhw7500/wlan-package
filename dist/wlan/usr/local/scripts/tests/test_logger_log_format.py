@@ -11,6 +11,7 @@ STRUCTURED_LOG_UNITS = (
     "wifi_checker@.service",
     "wifi_logger.service",
     "wifi_logger@.service",
+    "wlan_fw_watch.service",
 )
 SHELL_ROOTS = (
     WLAN_ROOT / "usr/local/scripts",

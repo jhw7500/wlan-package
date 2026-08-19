@@ -4,6 +4,34 @@
         "This file contains global WiFi settings and per-interface roaming configurations"
     ],
     "global": {
+    "fw_watch": {
+      "_comment": [
+        "wlan_fw_watch.service — 드라이버 wedge 감시자 설정",
+        "enabled: (bool) 감시 서비스 ON/OFF",
+        "CHECK_INTERVAL_SEC: (int) /proc/mwlan/wifi_status 폴링 주기 (초)",
+        "INITIAL_DELAY_SEC: (int) 기동 후 첫 판정까지 유예 (초) — 부팅 중 FW 다운로드 창 회피",
+        "TERM_FAULT_CNT: (int) wifi_status=11(FW_RECOVERY_FAIL) 연속 관측 횟수",
+        "ABNORMAL_FAULT_CNT: (int) 그 외 비정상 값 연속 관측 횟수. 0이면 이 계층 비활성",
+        "CONFIRM_TIMEOUT_SEC: (int) hardware_status 확인 읽기 제한 시간 (초)",
+        "RELOAD_ENABLED: (int) 1이면 재부팅 전에 wifi_init.service 재시작을 먼저 시도",
+        "RELOAD_COOLDOWN_SEC: (int) 리로드 간 최소 간격 (초)",
+        "VERIFY_TIMEOUT_SEC: (int) 리로드 후 회복 확인 제한 시간 (초)",
+        "VERIFY_INTERVAL_SEC: (int) 회복 확인 폴링 주기 (초)"
+      ],
+      "enabled": true,
+      "CHECK_INTERVAL_SEC": 5,
+      "INITIAL_DELAY_SEC": 60,
+      "TERM_FAULT_CNT": 3,
+      "ABNORMAL_FAULT_CNT": 36,
+      "CONFIRM_TIMEOUT_SEC": 3,
+      "RELOAD_ENABLED": 1,
+      "RELOAD_COOLDOWN_SEC": 900,
+      "VERIFY_TIMEOUT_SEC": 90,
+      "VERIFY_INTERVAL_SEC": 3,
+      "MAX_REBOOT_COUNT": 3,
+      "REBOOT_COOLDOWN_SEC": 300,
+      "MIN_UPTIME_SEC": 60
+    },
         "_comment": [
             "드라이버 초기화 전역 설정. wifi_init.sh가 사용. 인터페이스별 값(mlanN)이 있으면 그것이 우선하고 여기 값은 fallback.",
             "BOARD_TYPE: (string) imx8mm|imx93 — 보드/드라이버 선택 (mlan_imx8/moal_imx8 vs _imx93)",

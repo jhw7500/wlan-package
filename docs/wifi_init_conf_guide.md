@@ -17,7 +17,8 @@
 wifi_init_conf.json
 ├── global              # 드라이버 초기화 (보드/버스/펌웨어 자동선택, 모듈 파라미터)
 │   ├── BLUETOOTH       #   BT combo 펌웨어 사용 여부 (enable, fw 자동선택 반영)
-│   └── ping_monitor    #   ping 모니터 서비스 제어
+│   ├── ping_monitor    #   ping 모니터 서비스 제어
+│   └── fw_watch        #   드라이버 wedge 감시·복구
 ├── mac                 # MAC 주소 설정 (인터페이스별)
 ├── wbridge             # wifi_bridge 프로세스 설정
 │   ├── peer_route      #   양방향 peer 라우팅 마스터 스위치 (enabled)
@@ -186,6 +187,65 @@ wifi_init_conf.json
 
 Factory Reset이 성공하면 장비가 재부팅되며, 공장 기본 유선 주소는 `eth0=192.168.1.1/24`이다. 재부팅 뒤 `root@192.168.1.1`로 다시 접속해 후조건을 확인한다. 일반 패키지 업그레이드는 현재 active 네트워크 설정을 보존하므로 이 주소는 Factory Reset 시 확정 적용된다. 동일 L2에 초기화 장비를 여러 대 동시에 연결하면 주소 충돌이 발생하므로 한 대씩 격리해 초기화한다.
 
+
+### 1.3 global.fw_watch - 드라이버 wedge 감시자
+
+**사용 스크립트**: `wlan_fw_watch.sh`, `wlan_reboot_policy.sh`
+
+FW 자동복구가 최종 실패하면 드라이버가 `driver_status=MTRUE` 로 latch 되어 모든 IOCTL 이
+거부된다. 이때 netdev 는 그대로 등록돼 있고 operstate 도 `up` 이라 기존 복구 경로 셋이
+모두 빗나간다 — `wifi_checker` 의 netdev 소멸 분기는 netdev 가 사라져야 하고, station dump
+사다리는 `wpa_state=COMPLETED` 를 요구하며, `wifi_init.service` 의 `OnFailure` 는 유닛이
+다시 실행돼야 한다. 이 감시자는 `/proc/mwlan/wifi_status` 를 직접 보고 그 공백을 메운다.
+
+판정은 보수적이다: `wifi_status` 가 **정확히 11**(`WIFI_STATUS_FW_RECOVERY_FAIL`)일 때만
+후보로 보고(0~10 은 정상 전이값이며 FW 이벤트가 임의 값을 실을 수 있다), 빈 읽기는 0 이
+아니라 판정 불가로 취급하며(rmmod 창), 연속 틱 디바운스를 통과한 뒤에야
+`hardware_status` 로 확인한다. `hardware_status` 는 정상 teardown 마다 `NotReady` 가 되므로
+1차 신호로 쓰지 않는다.
+
+조치는 재부팅이 아니라 **모듈 리로드 우선**이다. `systemctl restart wifi_init.service` 로
+드라이버를 다시 올리고 회복을 확인한 뒤, 그래도 낫지 않을 때만 `wlan_reboot_policy.sh` 로
+넘긴다. 정책 호출 시 `--iface` 를 주지 않는다 — `wifi_status` 는 보드 전역 신호라
+per-iface 링크 장애 예산(`reboot_policy_mlan0.state`)과 섞이면 안 된다.
+
+| 키 | 타입 | 기본값 | 설명 |
+|---|---|---|---|
+| `enabled` | bool | `true` | `wlan_fw_watch.service` 활성화. `wifi_apply_enabled.sh` 가 systemd enable/disable 로 동기화 |
+| `CHECK_INTERVAL_SEC` | int | `5` | `wifi_status` 폴링 주기 (초) |
+| `INITIAL_DELAY_SEC` | int | `60` | 기동 후 첫 판정까지 유예 (초). 부팅 중 FW 다운로드 창을 피한다 |
+| `TERM_FAULT_CNT` | int | `3` | `wifi_status=11` 연속 관측 횟수 (기본 15초) |
+| `ABNORMAL_FAULT_CNT` | int | `36` | 그 외 비정상 값 연속 관측 횟수 (기본 180초). `0` 이면 이 계층 비활성 |
+| `CONFIRM_TIMEOUT_SEC` | int | `3` | `hardware_status` 확인 읽기 제한 (초). adapter config 는 FW 커맨드를 유발하므로 반드시 bounded 로 읽는다 |
+| `RELOAD_ENABLED` | int | `1` | `1` 이면 재부팅 전에 리로드를 먼저 시도. **`0` 이면 감지·보고만 하고 아무 조치도 하지 않는다**(재부팅하지 않음) |
+| `RELOAD_COOLDOWN_SEC` | int | `900` | 리로드 간 최소 간격 (초). `wifi_init.service` 의 `StartLimitIntervalSec` 보다 길다 |
+| `VERIFY_TIMEOUT_SEC` | int | `90` | 리로드 후 회복 확인 제한 (초) |
+| `VERIFY_INTERVAL_SEC` | int | `3` | 회복 확인 폴링 주기 (초) |
+| `MAX_REBOOT_COUNT` / `REBOOT_COOLDOWN_SEC` / `MIN_UPTIME_SEC` | int | `3` / `300` / `60` | 에스컬레이션 시 `wlan_reboot_policy.sh` 에 전달 |
+
+> MFG 프로파일에서는 감시를 보류한다(`mod_para.conf` 의 `mfg_mode=`). 과열 차단 중에도
+> `wifi_logger_temp.sh` 의 `WIFI_STOP_UNITS` 에 포함돼 함께 정지한다 — 차단 도중 리로드가
+> 무선 유닛을 되살리는 것을 막기 위해서다.
+
+**리로드가 `wifi_checker` 와 겹치지 않는가 (2026-08-18 실측)** — 감시자가 거는
+`systemctl restart wifi_init.service` 는 `PartOf` 전파로 `wifi_checker@` 도 재시작시킨다.
+그 사이 netdev 가 사라지므로 checker 의 "netdev 부재" 사다리가 먼저 재부팅을 요청할
+여지가 있는지 보드에서 측정했다.
+
+| 항목 | 값 |
+|---|---|
+| checker 발화 임계 | `ERR_CNT > LIMIT_CNT(5)` = 6틱 × `sleep 5` = **30초** 연속 부재 |
+| 실측 netdev 부재 구간 | **5.6초** |
+| checker ACTIVE 상태로 리로드했을 때 실측 `ERR_CNT` 최대 | **2** |
+| 재부팅 요청 | **0회** (`reboot_policy_mlan0.state` 생성 안 됨) |
+
+마진이 5배 이상이고, 방어가 삼중이다 — 부재 구간이 임계보다 훨씬 짧고, `PartOf` 전파로
+checker 가 재시작되면서 `ERR_CNT` 가 0 으로 리셋되며, 재시작된 checker 는 루프 진입 전
+lsmod 대기(최대 15초)를 먼저 한다. 따라서 별도의 grace 플래그가 필요하지 않다.
+
+부재가 실제로 30초를 넘는다면 그것은 오탐이 아니라 리로드가 실패했다는 뜻이므로,
+그때 checker 가 재부팅을 요청하는 것은 의도된 동작이다.
+
 ### 3.1 wbridge.optimize - 커널 레벨 네트워크 튜닝
 
 **사용 스크립트**: `wifi_bridge.sh` → `optimize-for-udp.sh`, `setup-irq-affinity.sh`
@@ -264,6 +324,23 @@ Factory Reset이 성공하면 장비가 재부팅되며, 공장 기본 유선 �
 ## 4. checker - WiFi 체커 + Reboot 정책 (인터페이스별: `mlanN.checker`)
 
 **사용 스크립트**: `wifi_checker.sh`, `wlan_reboot_policy.sh`
+
+> **⚠️ 동작 변경 (2026-08-19)** — 아래 두 판정이 그동안 **사실상 발화하지 않고 있었고**,
+> 고친 뒤로는 정상 발화한다. 임계값(`FAULT_*`, `LIMIT_CNT`)은 그대로지만 체감 민감도가
+> 올라가므로 운영 시 참고할 것.
+>
+> - **station dump 판정**: `iw ... station dump` 의 **exit code** 로 보던 것을 **출력 유무**로
+>   바꿨다. nl80211 DUMP 계열은 드라이버 에러를 `NLMSG_DONE` 페이로드로 돌려주고 iw 가
+>   exit 0 을 내므로, 드라이버가 죽어 있어도 `FAULT_CNT` 가 오르지 않았다(실측: dump rc=0
+>   vs doit `iw <if> info` rc=237). 이제 `FAULT_REASSOC_CNT`(2) → `FAULT_RESTART_CNT`(4) →
+>   `FAULT_REBOOT_CNT`(6) 사다리가 실제로 동작한다.
+> - **operstate 비교**: `get_state()` 는 오래전부터 `operstate` 를 돌려주는데 비교 문자열은
+>   `wpa_state` 시절의 `"DISCONNECTED"`/`"SCANNING"` 이 남아 있어 `"down"` 하나만 유효했다.
+>   `dormant`/`lowerlayerdown`/`notpresent` 를 명시적으로 포함했다(`unknown` 은 연결 여부를
+>   알 수 없다는 뜻이라 종전대로 개입하지 않는다).
+> - **정책 거부 시 백오프**: 재부팅 요청이 `rc=11`(loop) 로 거부되면 `REBOOT_COOLDOWN_SEC + 30`
+>   초 물러난다. 정책은 거부하면서도 state 를 먼저 쓰므로, 쿨다운보다 짧은 주기로 재요청하면
+>   카운터가 영구히 래칫된다.
 
 > **⚠️ 구조 변경**: 이 설정은 최상위 `checker`에서 **인터페이스별**(`mlan0.checker`, `mlan1.checker`)로 이동했다. 각 인터페이스에 동일 키가 존재하며 `enabled`로 데몬(`wifi_checker@<iface>`) 활성화를 제어한다.
 
