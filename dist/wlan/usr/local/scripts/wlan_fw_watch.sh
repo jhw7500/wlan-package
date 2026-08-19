@@ -84,8 +84,11 @@ read_wifi_status() {
     printf '%s' "$ws"
 }
 
-# 0 = 모든 adapter 가 Ready(오탐) / 1 = 하나 이상 non-zero 또는 timeout(wedge 확정)
-# / 2 = 판정 불가(파일 없음)
+# 반환값은 shell 관례(0=성공=조건 성립)를 따르므로 이름과 반대로 읽히기 쉽다:
+#   0 = 모든 adapter 가 Ready → wedge 가 아니다(오탐)
+#   1 = 하나 이상 non-zero 이거나 timeout → wedge 확정
+#   2 = 판정 불가(파일 없음)
+# 호출부는 `if confirm_hw_not_ready; then <오탐 처리>` 형태로 읽는다.
 #
 # adapter config 는 seq_file show() 가 타임아웃 없는 FW 커맨드를 발행하므로
 # 폴링 루프에서 읽지 않는다. 디바운스가 성립한 틱에서만, 반드시 bounded 로 읽는다.
@@ -126,7 +129,11 @@ reload_allowed() {
 
 mark_reload() {
     mkdir -p "$(dirname "$STATE_FILE")" 2>/dev/null || true
-    echo "$(date +%s) reload" > "$STATE_FILE" 2>/dev/null || true
+    # 쓰기가 조용히 실패하면 reload_allowed() 가 늘 참이 되어 쿨다운이 사라진다
+    # (FS full / ro 마운트). 최소한 그 사실이 로그에 남아야 진단이 가능하다.
+    if ! echo "$(date +%s) reload" > "$STATE_FILE" 2>/dev/null; then
+        logger -p local0.warning "[$tag:$LINENO] cannot write $STATE_FILE — reload cooldown will not be enforced"
+    fi
 }
 
 # 리로드 후 회복 확인. /proc/mwlan 부재는 실패가 아니라 "진행 중"이다.
