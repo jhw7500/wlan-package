@@ -22,6 +22,11 @@
 tag="wifi_peer_net_reapply"
 WIFI_INIT_CONF_JSON="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
 
+# jq 미설치·conf 부재는 의도적으로 fail-closed 다(_pr=false 유지 → 아래에서 exit 0).
+# 이 스크립트는 주소·라우트·neigh 를 실제로 바꾸므로, 설정을 읽지 못하는 상태에서
+# 기본값으로 적용하면 의도하지 않은 네트워크 변경이 된다. wired_mac_ip_get.py 의
+# PEER_ROUTE_ENABLED=True 기본값과 방향이 다른 것은 이 때문이며, '설정을 읽었는데
+# 키가 없다'(→ factory default true, 아래 case)와 '설정을 못 읽었다'를 구분한다.
 _pr=false
 _lhp=""
 if command -v jq >/dev/null 2>&1 && [ -f "$WIFI_INIT_CONF_JSON" ]; then
@@ -41,25 +46,34 @@ _m_addr=$(awk -F= '/^[[:space:]]*Address[[:space:]]*=/{gsub(/[[:space:]]/,"",$2)
 _m_ip=${_m_addr%/*}
 echo "$_m_ip" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || exit 0
 
+_fail=0
+
 # 1) 미러 보장 + 관리 IP 후순위 재배치 (del→add 사이 networkd 선복구는 EEXIST로 무해)
-ip addr replace "${_m_ip}/32" dev eth0 2>/dev/null
+ip addr replace "${_m_ip}/32" dev eth0 2>/dev/null \
+    || { _fail=1; logger -p local0.warn "[$tag:$LINENO] mirror addr apply failed (${_m_ip}/32 dev eth0)"; }
 _e_addr=$(awk -F= '/^[[:space:]]*Address[[:space:]]*=/{gsub(/[[:space:]]/,"",$2); print $2; exit}' \
           /etc/systemd/network/22-eth0.network 2>/dev/null)
 if [ -n "$_e_addr" ] && [ "${_e_addr%/*}" != "$_m_ip" ]; then
     ip addr del "$_e_addr" dev eth0 2>/dev/null
-    ip addr add "$_e_addr" dev eth0 2>/dev/null
+    ip addr add "$_e_addr" dev eth0 2>/dev/null \
+        || { _fail=1; logger -p local0.warn "[$tag:$LINENO] mgmt addr re-add failed ($_e_addr dev eth0)"; }
 fi
 
 # 2) peer host route + permanent neigh (발견 결과가 있을 때만)
 _p_ip=$(cat /tmp/eth0_client_ip 2>/dev/null)
 if echo "$_p_ip" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
     ip route replace "${_p_ip}/32" dev eth0 src "$_m_ip" 2>/dev/null \
-        || logger -p local0.warn "[$tag:$LINENO] host route apply failed (${_p_ip}/32 src ${_m_ip})"
+        || { _fail=1; logger -p local0.warn "[$tag:$LINENO] host route apply failed (${_p_ip}/32 src ${_m_ip})"; }
     _p_mac=$(cat /tmp/eth0_client_mac 2>/dev/null)
     if echo "$_p_mac" | grep -qiE '^([0-9a-f]{2}:){5}[0-9a-f]{2}$'; then
-        ip neigh replace "$_p_ip" lladdr "$_p_mac" dev eth0 nud permanent 2>/dev/null
+        ip neigh replace "$_p_ip" lladdr "$_p_mac" dev eth0 nud permanent 2>/dev/null \
+            || { _fail=1; logger -p local0.warn "[$tag:$LINENO] peer neigh pin failed ($_p_ip -> $_p_mac)"; }
     fi
 fi
 
-logger -p local0.info "[$tag:$LINENO] applied: mirror=${_m_ip}/32 first, sub=${_e_addr:-<none>}, peer=${_p_ip:-<undiscovered>} (peer_route=$_pr local_hairpin=${_lhp:-0})"
+if [ "$_fail" = "1" ]; then
+    logger -p local0.warn "[$tag:$LINENO] applied with errors (위 warn 참조): mirror=${_m_ip}/32 first, sub=${_e_addr:-<none>}, peer=${_p_ip:-<undiscovered>} (peer_route=$_pr local_hairpin=${_lhp:-0})"
+else
+    logger -p local0.info "[$tag:$LINENO] applied: mirror=${_m_ip}/32 first, sub=${_e_addr:-<none>}, peer=${_p_ip:-<undiscovered>} (peer_route=$_pr local_hairpin=${_lhp:-0})"
+fi
 exit 0
