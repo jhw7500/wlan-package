@@ -463,6 +463,7 @@ dist/wlan/usr/share/doc/wlan-proc/nxp-imx-firmware/firmware-source.json
 docs/wifi_init_conf.schema.json
 docs/wifi_init_conf_guide.md
 docs/wifi_init_conf_webui_handoff.md
+scripts/exec_bit_targets.py
 scripts/gen_config_defaults.py
 scripts/package_tar_test.sh
 scripts/source_archive_manifest.txt
