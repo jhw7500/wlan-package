@@ -1,22 +1,50 @@
 #!/bin/bash
-# pre-commit: 드라이버 manifest 자동 동기화.
+# pre-commit: ① 드라이버 manifest 자동 동기화  ② 실행비트 자동 보정
 #
+# 활성화: git config core.hooksPath scripts/git-hooks
+#
+# 두 작업 모두 실패해도 커밋을 막지 않는다(graceful skip). 이 훅은 "깜빡함"을 막는
+# 보조 장치이고, 강제 게이트는 CI 쪽 테스트(test_unit_execstart_exec_bit.py)가 맡는다.
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+
+# ── ① 드라이버 manifest ─────────────────────────────────────────────────────
 # 바이너리 .ko 는 .gitignore 대상이라 git 이 변경을 직접 감지하지 못한다. 그래서 커밋 시마다
 # manifest 를 재생성하고, 내용이 바뀌었으면 이 커밋에 함께 스테이징한다(깜빡해도 동기화).
 # 환경 미비(.ko/modinfo/wlan-driver-v2 부재) 시 graceful skip — 커밋을 막지 않는다.
-#
-# 활성화: git config core.hooksPath scripts/git-hooks
-
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 GEN="${REPO_ROOT}/scripts/gen_driver_manifest.sh"
 MANIFEST="dist/wlan/opt/wlan/driver/DRIVER_MANIFEST.md"
 
-[ -x "${GEN}" ] || exit 0
-"${GEN}" >/dev/null 2>&1 || exit 0   # 도구 실패는 커밋을 막지 않는다
-
-# manifest 가 변경(또는 신규)되었으면 이 커밋에 포함
-if [ -n "$(git -C "${REPO_ROOT}" status --porcelain -- "${MANIFEST}" 2>/dev/null)" ]; then
-    git -C "${REPO_ROOT}" add "${MANIFEST}"
-    echo "[pre-commit] ${MANIFEST} 갱신·스테이징됨"
+if [ -x "${GEN}" ] && "${GEN}" >/dev/null 2>&1; then
+    if [ -n "$(git -C "${REPO_ROOT}" status --porcelain -- "${MANIFEST}" 2>/dev/null)" ]; then
+        git -C "${REPO_ROOT}" add "${MANIFEST}"
+        echo "[pre-commit] ${MANIFEST} 갱신·스테이징됨"
+    fi
 fi
+
+# ── ② 실행비트 자동 보정 ────────────────────────────────────────────────────
+# 이 저장소는 core.fileMode=false 라 워킹트리 `chmod +x` 가 git 인덱스에 반영되지 않는다.
+# 빌드는 신선한 체크아웃에서 이뤄지므로, systemd 유닛(ExecStart=)이나 udev 규칙(RUN+=)이
+# 직접 실행하는 파일이 100644 로 커밋되면 패키지에 non-executable 로 실려 203/EXEC 로
+# 죽는다. 에러가 유닛 로그에만 남아 온타겟에서 "왜 안 되지"로 시간을 쓰기 쉽다.
+#
+# 판정 규칙은 scripts/exec_bit_targets.py 한 곳에 있다(훅과 테스트가 같은 소스를 본다).
+# 여기서는 +x 를 **추가만** 한다 — 제거는 절대 하지 않으므로 의도적으로 644 인 파일
+# (source 용 lib, pytest 로 도는 테스트 등)은 건드리지 않는다.
+TARGETS="${REPO_ROOT}/scripts/exec_bit_targets.py"
+
+if [ -r "${TARGETS}" ] && command -v python3 >/dev/null 2>&1; then
+    _fixed=0
+    while IFS=$'\t' read -r _path _kind _decl; do
+        [ -n "${_path}" ] || continue
+        if git -C "${REPO_ROOT}" update-index --chmod=+x -- "${_path}" 2>/dev/null; then
+            echo "[pre-commit] 실행비트 보정: ${_path}  (${_kind}: ${_decl})"
+            _fixed=$((_fixed + 1))
+        else
+            echo "[pre-commit] 실행비트 보정 실패: ${_path} — 'git update-index --chmod=+x ${_path}' 를 직접 실행하세요" >&2
+        fi
+    done < <(python3 "${TARGETS}" 2>/dev/null)
+    [ "${_fixed}" -gt 0 ] && echo "[pre-commit] 실행비트 ${_fixed}건 보정됨 — 이 커밋에 포함됩니다"
+fi
+
 exit 0
