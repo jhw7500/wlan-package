@@ -61,6 +61,30 @@ def test_unit_and_udev_exec_targets_are_executable_in_git_index():
     )
 
 
+def test_no_dangling_exec_targets():
+    """선언은 있는데 대상 파일이 없는 실행 경로가 없어야 한다 — 끊긴 배선.
+
+    실행비트 검사만으로는 "스크립트가 지워졌다"나 "ExecStart 경로 오타"를 못 잡는다.
+    대상이 리포에 없으면 애초에 실행비트 검사 목록에 들어오지 않기 때문이다.
+
+    PR #184 에 있던 핀포인트 배선 테스트(특정 유닛이 특정 스크립트를 참조하는지)를
+    일반 규칙으로 대체한 것이다. 개별 쌍이 아니라 **모든** 선언을 본다.
+
+    빌드 산출물(.gitignore 로 저장소가 스스로 생성물이라 선언한 것, 예: vhld.c → vhld)은
+    git 에 없는 것이 정상이라 제외된다.
+    """
+    helper = _load_helper()
+    modes = helper.index_modes(REPO_ROOT)
+    dangling = helper.dangling_targets(REPO_ROOT, modes)
+
+    bad = [f"[{kind}] {decl} → {exe}" for decl, kind, exe in dangling]
+    assert bad == [], (
+        "유닛/udev 가 참조하는 파일이 저장소에 없다. 스크립트가 삭제됐거나 경로가 "
+        "잘못됐다 — 패키지에 실리지 않아 실행 시점에 실패한다. 빌드 산출물이라면 "
+        "해당 경로를 .gitignore 에 선언할 것:\n  " + "\n  ".join(bad)
+    )
+
+
 def test_rule_covers_both_systemd_and_udev():
     """판정 범위가 한쪽으로 쪼그라드는 회귀를 막는다.
 

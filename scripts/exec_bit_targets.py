@@ -17,6 +17,7 @@ pre-commit 훅과 회귀 테스트가 **같은 규칙**을 봐야 하므로 판�
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -29,7 +30,7 @@ _UNIT_SUFFIXES = (".service", ".timer", ".target", ".socket", ".path", ".mount")
 
 # systemd: ExecStart/ExecStop/... = [-+!@]prefix 뒤의 첫 토큰이 실행 파일
 _SYSTEMD_EXEC = re.compile(
-    r"^\s*Exec(?:Start|StartPre|StartPost|Stop|StopPost|Reload|Condition)\s*=\s*[-+!@]*(\S+)"
+    r"^\s*Exec(?:Start|StartPre|StartPost|Stop|StopPost|Reload)\s*=\s*[-+!@]*(\S+)"
 )
 # udev: RUN{program}+="..." / PROGRAM="..." / IMPORT{program}="..."
 _UDEV_EXEC = re.compile(
@@ -69,6 +70,9 @@ def exec_targets(root: Path, modes: dict[str, str]) -> list[tuple[str, str, str,
             continue
         text = (root / path).read_text(encoding="utf-8", errors="replace")
         for line in text.splitlines():
+            # 주석 처리된 규칙은 실행되지 않는다. systemd 는 '#'/';', udev 는 '#'.
+            if line.lstrip()[:1] in ("#", ";"):
+                continue
             if kind == "systemd":
                 m = pattern.match(line)
                 hits = [m.group(1)] if m else []
@@ -81,6 +85,59 @@ def exec_targets(root: Path, modes: dict[str, str]) -> list[tuple[str, str, str,
                 if repo_path in modes:
                     found.append((path, kind, exe, repo_path))
     return found
+
+
+def dangling_targets(root: Path, modes: dict[str, str]) -> list[tuple[str, str, str]]:
+    """선언은 있는데 **대상 파일이 리포에 없는** 실행 경로 — 끊긴 배선.
+
+    실행비트 검사만으로는 "스크립트가 지워졌다"나 "ExecStart 경로 오타"를 못 잡는다
+    (대상이 없으면 애초에 검사 목록에 안 들어오기 때문). 패키지가 소유하는 디렉터리를
+    가리키는데 그 파일만 없는 경우를 배선 끊김으로 본다 — 배포판 제공 바이너리
+    (/bin/systemctl 등)는 그 디렉터리 자체가 리포에 없으므로 자연히 제외된다.
+    """
+    owned_dirs = {os.path.dirname(p) for p in modes}
+    out: list[tuple[str, str, str]] = []
+    ignored_cache: dict[str, bool] = {}
+
+    def is_generated(repo_path: str) -> bool:
+        """`.gitignore` 로 명시 제외된 경로 = 빌드 산출물 (예: vhld.c → vhld).
+
+        git 에 없는 것이 정상이므로 배선 끊김이 아니다. 저장소가 스스로 '생성물'
+        이라고 선언한 것만 예외로 삼는다 — 디스크 존재 여부로 판정하면 신선한
+        체크아웃(빌드 전)에서 오탐이 난다.
+        """
+        if repo_path not in ignored_cache:
+            rc = subprocess.run(
+                ["git", "check-ignore", "-q", "--", repo_path], cwd=root
+            ).returncode
+            ignored_cache[repo_path] = rc == 0
+        return ignored_cache[repo_path]
+
+    for path in modes:
+        if path.endswith(_UNIT_SUFFIXES):
+            kind, pattern = "systemd", _SYSTEMD_EXEC
+        elif path.endswith(".rules"):
+            kind, pattern = "udev", _UDEV_EXEC
+        else:
+            continue
+        text = (root / path).read_text(encoding="utf-8", errors="replace")
+        for line in text.splitlines():
+            if line.lstrip()[:1] in ("#", ";"):
+                continue
+            if kind == "systemd":
+                m = pattern.match(line)
+                hits = [m.group(1)] if m else []
+            else:
+                hits = pattern.findall(line)
+            for exe in hits:
+                if not exe.startswith("/"):
+                    continue
+                repo_path = PAYLOAD_PREFIX + exe
+                if repo_path in modes:
+                    continue  # 정상
+                if os.path.dirname(repo_path) in owned_dirs and not is_generated(repo_path):
+                    out.append((path, kind, exe))
+    return out
 
 
 def violations(root: Path | None = None) -> list[tuple[str, str, str, str]]:
