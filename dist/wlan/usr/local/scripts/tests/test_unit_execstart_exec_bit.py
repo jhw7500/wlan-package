@@ -25,7 +25,6 @@ import importlib.util
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 WLAN_ROOT = Path(__file__).resolve().parents[4]  # dist/wlan
