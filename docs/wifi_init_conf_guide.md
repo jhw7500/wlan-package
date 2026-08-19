@@ -325,6 +325,23 @@ lsmod 대기(최대 15초)를 먼저 한다. 따라서 별도의 grace 플래그
 
 **사용 스크립트**: `wifi_checker.sh`, `wlan_reboot_policy.sh`
 
+> **⚠️ 동작 변경 (2026-08-19)** — 아래 두 판정이 그동안 **사실상 발화하지 않고 있었고**,
+> 고친 뒤로는 정상 발화한다. 임계값(`FAULT_*`, `LIMIT_CNT`)은 그대로지만 체감 민감도가
+> 올라가므로 운영 시 참고할 것.
+>
+> - **station dump 판정**: `iw ... station dump` 의 **exit code** 로 보던 것을 **출력 유무**로
+>   바꿨다. nl80211 DUMP 계열은 드라이버 에러를 `NLMSG_DONE` 페이로드로 돌려주고 iw 가
+>   exit 0 을 내므로, 드라이버가 죽어 있어도 `FAULT_CNT` 가 오르지 않았다(실측: dump rc=0
+>   vs doit `iw <if> info` rc=237). 이제 `FAULT_REASSOC_CNT`(2) → `FAULT_RESTART_CNT`(4) →
+>   `FAULT_REBOOT_CNT`(6) 사다리가 실제로 동작한다.
+> - **operstate 비교**: `get_state()` 는 오래전부터 `operstate` 를 돌려주는데 비교 문자열은
+>   `wpa_state` 시절의 `"DISCONNECTED"`/`"SCANNING"` 이 남아 있어 `"down"` 하나만 유효했다.
+>   `dormant`/`lowerlayerdown`/`notpresent` 를 명시적으로 포함했다(`unknown` 은 연결 여부를
+>   알 수 없다는 뜻이라 종전대로 개입하지 않는다).
+> - **정책 거부 시 백오프**: 재부팅 요청이 `rc=11`(loop) 로 거부되면 `REBOOT_COOLDOWN_SEC + 30`
+>   초 물러난다. 정책은 거부하면서도 state 를 먼저 쓰므로, 쿨다운보다 짧은 주기로 재요청하면
+>   카운터가 영구히 래칫된다.
+
 > **⚠️ 구조 변경**: 이 설정은 최상위 `checker`에서 **인터페이스별**(`mlan0.checker`, `mlan1.checker`)로 이동했다. 각 인터페이스에 동일 키가 존재하며 `enabled`로 데몬(`wifi_checker@<iface>`) 활성화를 제어한다.
 
 | 키 | 타입 | 기본값 | 설명 |
