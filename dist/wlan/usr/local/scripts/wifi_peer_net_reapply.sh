@@ -54,6 +54,9 @@ ip addr replace "${_m_ip}/32" dev eth0 2>/dev/null \
 _e_addr=$(awk -F= '/^[[:space:]]*Address[[:space:]]*=/{gsub(/[[:space:]]/,"",$2); print $2; exit}' \
           /etc/systemd/network/22-eth0.network 2>/dev/null)
 if [ -n "$_e_addr" ] && [ "${_e_addr%/*}" != "$_m_ip" ]; then
+    # del→add 사이에 관리 IP 가 잠시 없는 창이 생긴다. 이 스크립트를 부르는 경로가
+    # 부팅이거나 networkd restart 직후(이미 순단이 난 시점)라 추가 영향은 작지만,
+    # 주소 순서를 바꾸는 데 del→add 외의 수단이 없어 감수한 선택이다.
     # del 실패는 주소가 없을 때의 정상 경로라 그 자체로는 로깅하지 않는다. 다만 뒤이은
     # add 까지 실패하면 원인 판별에 필요하므로 rc 를 그 메시지에 실어 보낸다.
     ip addr del "$_e_addr" dev eth0 2>/dev/null
