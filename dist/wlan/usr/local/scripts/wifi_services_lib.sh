@@ -19,6 +19,7 @@ wifi_services_non_wireless_list() {
 wifi_services_wireless_list() {
     local svcs=()
     svcs+=(wifi_ping_monitor.service)
+    svcs+=(wlan_fw_watch.service)   # 드라이버 wedge 감시 — .global.fw_watch.enabled 토글
     svcs+=(snmpd.service)   # 글로벌 SNMP 데몬 — .snmp.enabled 토글(wifi_apply_enabled.sh)로 조건부 기동
     svcs+=(opcd.service)    # OPC 제어 데몬 — .opc.enabled 토글(wifi_apply_enabled.sh)로 조건부 기동
     svcs+=(wifi_mgmt_log.timer wifi_thermal_state.timer)
