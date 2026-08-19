@@ -32,6 +32,10 @@ IP_DISCOVERY = False        # MAC 확보 후 클라이언트 IP까지 탐색할�
 ETH_SWEEP_SUBNET = None
 # PEER_ROUTE_ENABLED: 양방향 peer 라우팅(옵션 X) 마스터 토글. false면 host route 등록 skip.
 PEER_ROUTE_ENABLED = True
+# LOCAL_HAIRPIN: 드라이버 로컬 hairpin. 아래 게이트가 `PEER_ROUTE_ENABLED or LOCAL_HAIRPIN`
+# 이라 여기에도 기본값이 있어야 한다 — peer_route=false 로 파싱된 뒤 try 블록이 중도
+# 실패하면(예: wbridge.moal 이 dict 가 아닌 손상 config) 단축평가가 안 걸려 NameError 가 된다.
+LOCAL_HAIRPIN = False
 try:
     with open("/usr/local/etc/wifi_init_conf.json") as f:
         _cfg = json.load(f)
