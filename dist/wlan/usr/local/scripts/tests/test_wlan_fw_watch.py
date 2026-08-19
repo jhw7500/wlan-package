@@ -195,3 +195,21 @@ def test_thermal_cooldown_stops_the_watchdog():
     assert m, "WIFI_STOP_UNITS 를 찾지 못했다"
     assert "wlan_fw_watch" in m.group(1), \
         "과열 차단 목록에 감시자가 빠지면 차단 중 라디오가 재무장된다"
+
+
+def test_recovery_check_is_netdev_name_agnostic():
+    """회복 확인이 특정 netdev 이름에 매이면 안 된다.
+
+    리로드 후 어느 어댑터가 먼저 뜨는지는 구성에 따라 다르다. mlan0 를 박아두면
+    mlan1 만 올라온 보드에서 회복을 영원히 놓쳐 불필요한 재부팅으로 에스컬레이션된다.
+    """
+    text = SCRIPT.read_text()
+    assert "have_wlan_netdev" in text
+    assert "/sys/class/net/mlan0" not in text, "특정 netdev 이름을 박지 않는다"
+
+
+def test_conf_load_does_not_use_eval():
+    """설정 로드는 eval 없이 한다 — 가드가 나중에 느슨해져도 주입 여지가 없도록."""
+    text = SCRIPT.read_text()
+    assert "eval " not in text, "eval 대신 printf -v 를 쓴다"
+    assert 'printf -v "$k"' in text
