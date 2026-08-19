@@ -1245,6 +1245,10 @@ if command -v systemctl >/dev/null 2>&1; then
                     # 대안: moal.local_hairpin=1 (드라이버 로컬 hairpin — peer IP 인지 불요).
                     # 잔재 정리(이전 부팅의 fallback route)는 enabled=false 분기에서만 수행.
 
+                    # peer host route/neigh 재적용은 아래 "eth0 대표주소" 블록(게이트:
+                    # peer_route=on ∥ local_hairpin=1)으로 이동 — hairpin 단독 구성에서도
+                    # BD↔유선peer 채널이 성립해야 하므로 peer_route 분기 밖에서 수행한다.
+
                     logger -p local0.info "[$tag:$LINENO] peer_route=on: eth0 sync addr=${_mlan_ip}/32 subnet=${_mlan_subnet}"
                 else
                     logger -p local0.warn "[$tag:$LINENO] eth0 sync skipped: invalid mlan0 Address ($_mlan_addr)"
@@ -1349,6 +1353,15 @@ if command -v systemctl >/dev/null 2>&1; then
         done
     fi
     unset _ef_enabled
+
+    # === eth0 대표주소 = 무선 IP 미러 + peer host route/neigh 재적용 ===
+    # 로직 전체는 wifi_peer_net_reapply.sh로 위임 (게이트: peer_route=on ∥
+    # moal.local_hairpin=1 — 판정도 스크립트 내부). 같은 스크립트를
+    # wlan-peer-net.service(PartOf=systemd-networkd.service)가 networkd restart
+    # 직후에도 실행해, restart의 foreign 주소/라우트 flush(실측 2026-07-18)를
+    # 자동 복구한다 — 단일 소스·멱등. 상세 주석은 해당 스크립트 참조.
+    /usr/local/scripts/wifi_peer_net_reapply.sh \
+        || logger -p local0.warn "[$tag:$LINENO] wifi_peer_net_reapply.sh failed (non-fatal)"
 
     # === 무선 인터페이스 weak-host ARP 봉인 (per-interface, 무조건 적용) ===
     # 커널 실효값 = max(conf.all, conf.dev)이므로, mlan0/mlan1에 arp_ignore=1을
