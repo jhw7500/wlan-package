@@ -41,7 +41,7 @@ wifi_init_conf.json
 │   ├── logger          #   mlan0 전용 로깅 override (enabled 포함)
 │   ├── net_rx          #   MGMT 프레임 로깅 (→ PCIE9098_0 / SD9098_0)
 │   ├── rate_adapt      #   FW rate adaptation
-│   ├── periodic_roam   #   주기적 패시브 로밍
+│   ├── periodic_roam   #   DEPRECATED 호환 블록(강제 off)
 │   ├── bgscan          #   백그라운드 스캔
 │   ├── roaming         #   로밍 알고리즘
 │   ├── mcs_tier        #   MCS tier 능력 제한 (mcstiercfg)
@@ -49,7 +49,7 @@ wifi_init_conf.json
 │   ├── checker         #   wifi_checker + reboot 정책 (구 최상위 checker에서 이동)
 │   └── arping          #   ARP 연결 감시 + sweep (구 최상위 arping에서 이동)
 └── mlan1               # mlan1 인터페이스 설정 (mlan0과 동일 구조)
-    ├── logger, net_rx, rate_adapt, periodic_roam, bgscan,
+    ├── logger, net_rx, rate_adapt, periodic_roam(DEPRECATED), bgscan,
     ├── roaming, mcs_tier, on_connect, checker, arping ...  # mlan0과 동일 구조
     └── (net_rx → PCIE9098_1 / SD9098_1)
 ```
@@ -624,7 +624,7 @@ wifi eth0  log start|stop|restart|status|enable|disable
 
 ## 11. mlan0 / mlan1 - 인터페이스별 설정
 
-**사용 스크립트**: `wifi_bgscan.py`, `wifi_roam.py`, `wifi_periodic_roam.sh`, `wifi_event.sh`
+**사용 스크립트**: `wifi_bgscan.py`, `wifi_roam.py`, `wifi_init.sh`, `wifi_apply_enabled.sh`, `wifi_event.sh`
 
 ### 11.1 interface defaults - 인터페이스 기본 활성/주파수
 
@@ -747,26 +747,41 @@ wifi eth0  log start|stop|restart|status|enable|disable
 
 ### 11.2 periodic_roam - 주기적 패시브 로밍
 
-**사용 스크립트**: `wifi_periodic_roam.sh` (service: `wifi_periodic_roam@.service`)
+> **DEPRECATED / 강제 비활성**: 이 블록은 기존 JSON 호환을 위해서만 남아 있다.
+> `wifi_periodic_roam`은 `wifi_roam`/wpa native와 겹치는 제3의 proactive owner이므로
+> `wifi_apply_enabled.sh`가 `enabled=true`도 경고 후 무시하고
+> `wifi_periodic_roam@<iface>.service`를 항상 disable한다.
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `enabled` | bool | `false` | 주기적 패시브 로밍 활성화 |
-| `interval` | int | `60` | 로밍 시도 주기 (초) |
-| `scan_before_roam` | bool | `true` | `true`=roam 전 스캔 수행(최신 RSSI 기반 판단), `false`=기존 ap.log 스캔 데이터 사용 |
+| `enabled` | bool | `false` | **미사용**. `true`도 강제 off |
+| `interval` | int | `60` | legacy 값 보존용, 현재 동작에 미사용 |
+| `scan_before_roam` | bool | `true` | legacy 값 보존용, 현재 동작에 미사용 |
 
 ### 11.3 bgscan - 백그라운드 스캔
 
 **사용 스크립트**: `wifi_bgscan.py`
 
+`wifi_bgscan.py`는 별도 backend 설정을 받지 않는다. 프로세스 시작 시
+`roaming.enabled`를 읽어 requester를 한 번 결정(latch)한다.
+
+| `roaming.enabled` | proactive roam owner | bgscan requester | Mode A cross-SSID |
+|---|---|---|---|
+| `true` | `wifi_roam.py` | `iw` | wifi_roam이 목표 network ID/BSSID를 pin·선택·확인 |
+| `false` | wpa_supplicant native selection | `wpa_cli scan` (`TYPE=ONLY` 미사용) | wpa 기본 network 선택 정책을 수용 |
+
+owner/backend의 runtime hot switch는 지원하지 않는다. `roaming.enabled` 변경은
+**재부팅**으로 반영한다. 반면 `bgscan.enabled=false`는 package 주기 스캔만 끄며,
+wpa_supplicant의 장애 복구·재연결 스캔은 계속 동작한다.
+
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `enabled` | bool | mlan0 `true` / mlan1 `false` | bgscan 데몬 활성화 |
+| `enabled` | bool | mlan0 `true` / mlan1 `false` | package background scan 서비스 활성화. false여도 wpa 복구 scan은 유지 |
 | `interval` | int | `60` | 백그라운드 스캔 주기 (초) |
 | `ssid_filter` | bool | `true` | `iw scan`의 **기본 ssid** directed probe 포함 여부. `true`면 conf 기본 ssid를 probe, `false`면 기본 ssid는 probe 없이 스캔. `roaming.extra_ssids`(§11.4)는 이 값과 **무관하게 항상 probe**된다. **`passive=true`(기본)면 directed probe 자체가 없어 이 키는 무효** |
-| `freq_filter` | bool | `true` | `iw scan`에 `freq <wpa_supplicant conf의 scan_freq>` 필터 포함 여부. `false`면 freq 제한 없이 전체 대역 스캔(스캔 시간·airtime↑) |
+| `freq_filter` | bool | `true` | **DEPRECATED**. 공통 `freq_list`가 있으면 `false`도 무시하고 iw/wpa_cli 모두 같은 목록을 사용. 목록 자체가 없을 때만 전대역 |
 | `passive` | bool | `true` | `true`=패시브 스캔(`iw scan passive`, probe request 미송신·beacon 수신만). `false`=종전 액티브 스캔 |
-| `emit_roam_hint` | bool | `true` | 스캔 성공 시 `/tmp/wifi_roam_hint_<iface>` touch — `wifi_roam`의 후보없음 지수 backoff를 즉시 해제하는 신호(§11.4). `false`면 hint 미발행. 메커니즘: 파일은 삭제되지 않고 남으며, `wifi_roam` 메인루프가 매 tick **mtime 변화**를 감지해 backoff 카운터를 리셋한다(단방향 write/read라 race-free). **주의 — 단일 iface 운용에서는 실효가 없다**: backoff가 쌓이는 구간은 로밍 컨디션 ON인데, 그 플래그가 켜져 있으면 bgscan은 스캔 자체를 건너뛰므로 hint가 발행될 수 없다. `/tmp/roam_condition`이 iface 구분 없는 전역 파일이라 **듀얼 iface에서만 우발적으로 발화**할 수 있다(감사 2026-07, `knob_audit_2026-07.md` D3) |
+| `emit_roam_hint` | bool | `true` | iw/wifi_roam owner에서 스캔 성공 시 roam backoff hint 발행. wpa native owner에서는 소비자가 없어 강제 비활성 |
 
 > **패시브 스캔 (`passive`, 기본 `true`)**: bgscan은 probe request를 쏘지 않고 beacon만 수신한다. probe를 안 보내므로 **directed `ssid` 토큰은 명령에서 전부 생략**되며(`ssid_filter`/`extra_ssids`의 directed probe는 패시브에서 무의미), airtime 오염이 줄고 beacon 기반 RSSI라 현재 링크의 `signal_avg`와 측정 스케일이 가까워진다(로밍 판정 정합성↑, §11.4). **한계**: beacon을 보내지 않는 **hidden SSID는 패시브로 발견되지 않는다** — hidden extra SSID가 로밍 후보라면 `passive=false`로 액티브 bgscan을 쓰거나, 로밍 트리거 시의 액티브 폴백(§11.4)에 의존해야 한다.
 
@@ -776,7 +791,26 @@ wifi eth0  log start|stop|restart|status|enable|disable
 
 > bgscan은 `wpa_state==COMPLETED`(연결됨)일 때만 `iw <iface> scan`을 수행한다 — 미연결 시엔 wpa_supplicant의 재연결 스캔/association과 라디오 경합을 피하려 skip.
 
-> 스캔 파라미터는 **매 스캔 직전에 다시 읽는다** — `ssid`/`freq`는 `wpa_supplicant-<iface>.conf`에서, `interval`/`ssid_filter`/`freq_filter`는 이 JSON `bgscan` 블록에서. 런타임에 무선설정을 재적용하거나 JSON을 바꾸면 bgscan 재시작 없이 **다음 스캔부터 새 값으로 스캔**한다(읽기 실패 시 직전 값 유지). 연결 상태 확인(`wpa_cli`)도 매 tick이 아니라 스캔 주기 도래 시에만 수행한다.
+> 스캔 파라미터는 **매 스캔 직전에 다시 읽는다** — SSID와 공통 `freq_list`는
+> `wpa_supplicant-<iface>.conf`에서, `interval`/filter/passive는 JSON에서 읽는다.
+> 단, **backend/owner만 시작 시 latch**되므로 `roaming.enabled` 변경은 재부팅이 필요하다.
+> 연결 상태 확인은 매 tick이 아니라 스캔 주기 도래 시에만 수행한다.
+
+공통 주파수 정책의 canonical 형식은 다음과 같다. 목록이 비면 전역/블록
+`freq_list`를 모두 생략하며, active `scan_freq`는 사용하지 않는다.
+
+```ini
+update_config=0
+freq_list=2412 2437 5180
+network={
+    # ...
+    freq_list=2412 2437 5180
+}
+```
+
+모든 network 블록은 전역과 **동일한 목록**을 갖는다. 부팅과 `wifi freq`,
+`wifi connect`, OPC writer가 이 형식을 유지하므로 Mode A의 SSID마다 서로 다른
+주파수 범위를 둘 수 없다.
 
 ### 11.4 roaming - 로밍 알고리즘
 
@@ -789,23 +823,29 @@ wifi eth0  log start|stop|restart|status|enable|disable
 | `CHECK_INTERVAL` | int | `1` | 로밍 체크 주기 (초). 판정 입력 link.json 이 ~1s 갱신이라 1 미만은 실익 없음 |
 | `SCAN_NO_RESULT_SLEEP` | int | `3` | 스캔 결과 없을 때 대기 (초) |
 | `ROAM_SUCCESS_SLEEP` | int | `3` | 로밍 성공 후 대기 (초) |
-| `enabled` | bool | mlan0 `true` / mlan1 `false` | 로밍 데몬(`wifi_roam@<iface>`) 활성화. `wifi_apply_enabled.sh`가 systemd enable/disable로 동기화. **mlan0 로밍이 기본 활성화됨** |
-| `extra_ssids` | array[str] | `[]` | conf 기본 ssid 외 추가 로밍 후보 SSID 목록. 빈 배열=기존 단일 SSID 동작(무회귀) |
-| `generate_network_blocks` | bool | `false` | 모드 결정자. `false`=모드B(단일 블록, cross-SSID는 외부 `wifi connect`만, `extra_ssids` 무시), `true`=모드A(다중 network 블록 + `select_network` cross-SSID). 기본 `false`로 기존 단일 SSID 동작 무회귀 |
+| `enabled` | bool | mlan0 `true` / mlan1 `false` | owner 선택자. `true`=wifi_roam+iw, `false`=wpa native+wpa_cli. 시작 시 latch되므로 변경은 **재부팅** |
+| `extra_ssids` | array[str] | `[]` | Mode A에서 추가 network 블록으로 만들 SSID. 같은 psk/key_mgmt 전제. 변경은 **재부팅** |
+| `generate_network_blocks` | bool | `false` | 부팅 topology 결정자. `false`=Mode B 단일 블록/수동 cross-SSID, `true`=Mode A 다중 블록/자동 cross-SSID. 변경은 **재부팅** |
 | `ROAM_CROSS_FAIL_RETRY_COUNT` | int | `2` | 모드A cross-SSID(`select_network`) 전환 실패 시 cooldown 없이 즉시 재시도 허용 횟수. 초과 시 지수 backoff로 해당 SSID를 후보에서 제외(진동 차단). 모드B에선 미적용 |
 
-> **다중 SSID 로밍 (`extra_ssids`)**: wpa_supplicant conf는 단일 `network` 블록을 유지하고, `extra_ssids`에 적은 SSID도 스캔·로밍 후보에 포함한다. `wifi_roam.py`(자동 데몬)와 `wifi <iface> roam`(`passive_roam.py`) 모두 적용된다.
-> - **전제**: `extra_ssids`는 현재 network와 **같은 `psk`/`key_mgmt`를 공유**해야 한다. 전환은 conf의 `ssid=`만 교체(`wifi <iface> connect`)하므로 자격증명이 다르면 인증에 실패한다.
-> - **목록 작성**: `extra_ssids`에는 로밍 대상 SSID를 **모두** 나열한다. `wifi connect` 전환 시 conf의 `ssid=`가 바뀌므로, 현재 라이브 SSID는 자동으로 후보에 유지되지만 그 외 대상(원래 기본 SSID 포함)으로 복귀하려면 그 SSID도 `extra_ssids`에 있어야 한다.
-> - **전환 방식**: 후보 SSID가 현재 연결 SSID와 같으면 `wpa_cli roam <bssid>`(무중단), 다르면 `wifi <iface> connect <ssid>`(conf `ssid=` 교체 → `reconfigure` → `reassociate`, **짧은 재연결 끊김** 발생. freq는 넘기지 않아 `scan_freq` 보존).
-> - **스캔 발견**: `bgscan.passive=false`면 hidden SSID도 평시에 directed probe한다. 기본 `passive=true`에서는 hidden SSID를 못 보지만, 다중 freq 로밍 조건에서는 `wifi_roam.py`가 설정 채널 전체를 directed active scan하므로 이를 보완한다. 단일 freq hidden 배포는 `STAGED_SCAN.home_passive=false`를 사용한다.
-> - **채널 전제**: `extra_ssids` AP는 현재 `scan_freq` 대역 안에 있어야 한다. `wifi_roam.py`는 conf의 `scan_freq`로 스캔·필터하므로 다른 채널의 SSID는 후보가 되지 않는다. (SSID 전환 시 `wifi connect`에 freq를 넘기지 않아 `scan_freq`는 보존된다.)
-> - **AP 선택 (v1 한계)**: 다른 SSID 전환은 `wifi connect <ssid>`로 **BSSID를 지정하지 않는다**. 같은 extra SSID에 AP가 여럿이면 로밍 알고리즘이 고른 best AP가 아닌 다른 AP에 붙을 수 있다. (같은 SSID 로밍은 `wpa_cli roam <bssid>`로 BSSID를 지정하므로 해당 없음.)
+> **Mode B (`generate_network_blocks=false`)**: 단일 network 블록만 유지하고
+> `extra_ssids`를 무시한다. cross-SSID는 `wifi connect <ssid> [freq...]`로 수동 전환한다.
+> 같은 SSID 안에서는 선택된 owner의 로밍을 사용할 수 있다.
+>
+> **Mode A (`generate_network_blocks=true`)**: 부팅 시 base 블록의 자격증명과 공통
+> `freq_list`를 상속한 extra SSID 블록을 만든다. 명시적 `wifi connect <ssid>`는 기본
+> SSID 소실을 막기 위해 거부한다. `roaming.enabled=true`이면 wifi_roam이 목표 BSSID를
+> 해당 network ID에 임시 pin하고 `id+ssid+bssid+COMPLETED`를 정확히 확인한 뒤 pin을
+> 해제하고 모든 블록을 복구한다. `false`이면 wpa_supplicant의 native cross-SSID 선택
+> 정책(우선순위·신호·blacklist 등)을 그대로 수용한다.
+>
+> Mode A/B와 owner는 부팅 초기에 결정한다. 설정 파일만 고치거나 일부 daemon만
+> 재시작해 topology/owner를 hot switch하지 말고 반드시 재부팅한다.
 
 > **로밍 판정 스캔**: 현재 링크 RSSI가 임계값 아래로 떨어지면 주파수 구성에 따라 분기한다.
 > 1. **단일 freq = 현재 채널**: `home_passive=true`면 홈채널 passive scan을 수행한다. 현재 AP 외 후보 beacon을 못 받았을 때만 같은 채널 directed active scan으로 재확인한다. `home_passive=false`면 처음부터 directed active 1회다.
-> 2. **다중 freq**: 홈 passive와 `ap.log` cache 판정을 건너뛰고 `iw scan freq <scan_freq 전체> ssid <allowed>` directed active를 1회 수행한다.
-> 3. **scan_freq 미설정**: 안전장치로 전대역 active scan 1회를 수행한다.
+> 2. **다중 freq**: 홈 passive와 `ap.log` cache 판정을 건너뛰고 `iw scan freq <공통 freq_list 전체> ssid <allowed>` directed active를 1회 수행한다.
+> 3. **공통 freq_list 미설정**: 안전장치로 전대역 active scan 1회를 수행한다.
 >
 > `ap.log`/bgscan RSSI는 최대 bgscan interval만큼 과거 값일 수 있으므로 **최종 로밍 후보 판정에는 사용하지 않는다.** bgscan은 평상시 BSS 테이블 충전과 roam backoff hint 용도로 유지된다.
 >

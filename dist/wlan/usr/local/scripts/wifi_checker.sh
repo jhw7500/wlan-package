@@ -230,9 +230,8 @@ while true; do
         STATE=$(get_state)
         TIMESTAMP=$(date +%s)
 
-        # bgscan 가드(경고-only, 300s 주기, mlan0/mlan1): wpa_supplicant 내부 bgscan 활성은
-        # 자율 로밍으로 Roaming(0x04) notify(3훅)를 우회한다 — 운영 전제 감시
-        # (wlan-opc docs/implementation/design-roam-indication-notify.md §8.3/§8.4).
+        # bgscan 가드(경고-only, 300s 주기, mlan0/mlan1): built-in bgscan은 package
+        # wifi_bgscan과 별도 scan/roam 스케줄을 만들어 어느 owner에서도 지원하지 않는다.
         # 전 network id 순회(모드A extra 블록 포함). 한계: 전역 `wpa_cli set bgscan`은 ctrl
         # 조회 불가(hostap 2.10 전역 getter 없음) → wpa.log의 모듈 초기화 로그로 보조 탐지.
         # DBDC 재평가 완료(2026-08-07): checker@mlan1 인스턴스도 자기 iface conf/wpa.log를
@@ -243,7 +242,7 @@ while true; do
                 [[ "$_nid" =~ ^[0-9]+$ ]] || continue
                 _bg=$(wpa_cli -i "$IFACE" get_network "$_nid" bgscan 2>/dev/null)
                 if [[ -n "$_bg" && "$_bg" != "FAIL" && "$_bg" != '""' ]]; then
-                    logger -p local0.warning "[$tag:$LINENO] [$IFACE] network $_nid bgscan=$_bg active — autonomous roaming bypasses Roaming(0x04) notify (design §8.4)"
+                    logger -p local0.warning "[$tag:$LINENO] [$IFACE] network $_nid has unsupported built-in bgscan=$_bg — remove it; package wifi_bgscan owns periodic scan scheduling"
                 fi
             done < <(wpa_cli -i "$IFACE" list_networks 2>/dev/null | tail -n +2)
             # 보조 탐지는 현재 supplicant 실행(InvocationID)의 journal 로 한정 —
@@ -253,7 +252,7 @@ while true; do
             # 있으므로 현재 실행 journal 에 그 라인이 있고, 여전히 경고된다(정당).
             _inv=$(systemctl show -p InvocationID --value "wpa_supplicant@${IFACE}" 2>/dev/null)
             if [[ -n "$_inv" ]] && journalctl -q _SYSTEMD_INVOCATION_ID="$_inv" 2>/dev/null | grep -q "bgscan: Initialized module"; then
-                logger -p local0.warning "[$tag:$LINENO] [$IFACE] journal: bgscan module initialized — runtime global 'set bgscan' suspected (ctrl-undetectable, design §8.3)"
+                logger -p local0.warning "[$tag:$LINENO] [$IFACE] journal: unsupported built-in bgscan module initialized — runtime global 'set bgscan' suspected (ctrl-undetectable)"
             fi
             unset _inv
         fi

@@ -382,10 +382,9 @@
         },
         "periodic_roam": {
             "_comment": [
-                "주기적 passive roam(roam 0) 설정. 서비스 단위는 wifi_periodic_roam@<iface>",
-                "interval: (int) 로밍 실행 주기 (초)",
-                "scan_before_roam: (bool) true=로밍 전 스캔 수행, false=기존 ap.log 사용",
-                "enabled: (bool) periodic roam 서비스 ON/OFF"
+                "DEPRECATED 호환 블록. wifi_periodic_roam은 제3의 proactive roam owner라 항상 강제 disable됨",
+                "enabled=true도 무시하고 wifi_apply_enabled.sh가 경고 후 wifi_periodic_roam@<iface>를 disable",
+                "interval/scan_before_roam은 기존 JSON 호환을 위해 보존하지만 현재 동작에는 사용되지 않음"
             ],
             "interval": 60,
             "scan_before_roam": true,
@@ -393,13 +392,14 @@
         },
         "bgscan": {
             "_comment": [
-                "백그라운드 AP 스캔 설정",
+                "패키지 백그라운드 AP 스캔. 별도 backend 키 없이 roaming.enabled에서 시작 시 1회 결정(latch)",
+                "roaming.enabled=true -> wifi_roam owner + iw scan; false -> wpa native owner + wpa_cli scan",
                 "interval: (int) 스캔 주기 (초)",
                 "ssid_filter: (bool) 현재·추가 로밍 SSID만 스캔. passive=false일 때만 유효",
-                "freq_filter: (bool) 설정 주파수만 스캔. false이면 전체 대역 스캔으로 시간과 airtime 증가",
+                "freq_filter: (bool) DEPRECATED. 공통 global freq_list가 있으면 false도 무시하고 두 backend에 같은 목록을 강제",
                 "passive: (bool) true=probe 없이 beacon만 수신하여 hidden SSID를 발견하지 못함, false=active scan",
-                "emit_roam_hint: (bool) 스캔 성공 시 /tmp/wifi_roam_hint_<iface>를 갱신하여 roam backoff 해제",
-                "enabled: (bool) background scan 서비스 ON/OFF"
+                "emit_roam_hint: (bool) iw/wifi_roam owner에서만 roam backoff 해제; wpa native owner에서는 강제 비활성",
+                "enabled: (bool) package periodic scan ON/OFF. false여도 wpa_supplicant 장애 복구/재연결 scan은 유지"
             ],
             "interval": 60,
             "ssid_filter": true,
@@ -410,9 +410,11 @@
         },
         "roaming": {
             "_comment": [
-                "wifi_roam.py 로밍 알고리즘 공통 설정",
-                "extra_ssids: (array[str], 기본 []) conf 기본 ssid 외 추가 로밍 후보 SSID. 같은 psk/key_mgmt 전제. 같은 SSID는 wpa_cli roam(무중단), 다른 SSID는 wifi connect(재연결)로 전환. 빈 배열=기존 단일 SSID 동작. extra_ssids는 bgscan이 ssid_filter와 무관하게 항상 directed probe하므로 hidden SSID도 스캔된다.",
-                "generate_network_blocks: (bool, 기본 false) 모드 결정자. false=모드B(단일 블록, cross-SSID는 외부 wifi connect만, extra_ssids 무시), true=모드A(다중 network 블록 생성 + select_network cross-SSID). 기본 false로 기존 단일 SSID 동작 무회귀.",
+                "proactive roam owner와 wifi_roam.py 알고리즘 설정. owner/backend는 daemon 시작 시 결정되며 runtime 전환하지 않음",
+                "enabled: true=wifi_roam owner + iw bgscan, false=wpa_supplicant native owner + wpa_cli bgscan. 변경은 재부팅 필요",
+                "extra_ssids: (array[str], 기본 []) 모드A 다중 network 블록으로 만들 추가 SSID. 같은 psk/key_mgmt 전제. 모드B에서는 무시.",
+                "generate_network_blocks: (bool, 기본 false) 부팅 topology 결정자. false=모드B(단일 블록, 수동 cross-SSID), true=모드A(다중 블록, 선택 owner의 자동 cross-SSID). 변경은 재부팅 필요.",
+                "wpa_supplicant 주파수 정책: 전역 freq_list와 모든 network 블록의 freq_list를 같은 공통 목록으로 유지하고 scan_freq는 사용하지 않음.",
                 "ROAM_CROSS_FAIL_RETRY_COUNT: (int, 기본 2) 모드 A cross-SSID(select_network) 전환 실패 시 cooldown 없이 즉시 재시도 허용 횟수. 초과하면 SCAN_NO_RESULT_SLEEP~ROAM_NO_RESULT_MAX_SLEEP 지수 backoff로 해당 SSID를 로밍 후보에서 제외(진동 차단). 모드 B에선 미적용.",
                 "ROAM_NO_RESULT_FAST_COUNT: (int, 기본 3) 후보 미발견 backoff 의 레벨당 반복 횟수. 각 주기를 이 횟수만큼 유지한 뒤 2배로 올린다(기본 3: 3,3,3,6,6,6,…,ROAM_NO_RESULT_MAX_SLEEP 상한). 1이면 레거시 곡선(매 tick 2배).",
                 "use_signal_avg: (bool) true=signal_avg(평균, 안정적), false=signal(순간값, 즉시 반응)",
@@ -582,11 +584,19 @@
             "enabled": false
         },
         "periodic_roam": {
+            "_comment": [
+                "DEPRECATED 호환 블록. enabled=true도 무시하고 wifi_periodic_roam@<iface>는 항상 강제 disable"
+            ],
             "interval": 60,
             "scan_before_roam": true,
             "enabled": false
         },
         "bgscan": {
+            "_comment": [
+                "backend는 시작 시 roaming.enabled에서 latch: true=iw(wifi_roam owner), false=wpa_cli(wpa native owner)",
+                "freq_filter=false는 deprecated; 공통 global freq_list가 있으면 계속 강제",
+                "enabled=false는 package periodic scan만 중지하며 wpa 장애 복구 scan은 유지"
+            ],
             "interval": 60,
             "ssid_filter": true,
             "freq_filter": true,
@@ -595,6 +605,10 @@
             "enabled": false
         },
         "roaming": {
+            "_comment": [
+                "enabled=true -> wifi_roam owner + iw bgscan; false -> wpa native owner + wpa_cli bgscan",
+                "generate_network_blocks/extra_ssids는 부팅 topology이며 변경 시 재부팅 필요"
+            ],
             "use_signal_avg": true,
             "DEFAULT_TH_2G": -75,
             "DEFAULT_TH_5G": -75,
