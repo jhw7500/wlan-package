@@ -19,6 +19,7 @@ fi
 tag=$(basename "$0")
 IFACE=mlan
 NUM=""
+WPA_CONF_DIR="${WPA_CONF_DIR:-/etc/wpa_supplicant}"
 
 if [ "${1:-}" == "0" ] || [ "${1:-}" == "mlan0" ]; then
     IFACE=mlan0
@@ -381,7 +382,9 @@ apply_bw_or_exit() { # $1 iface, $2 bw_cap
 
 # wpa_cli는 데몬 응답이 FAIL이어도 exit 0이므로 출력 문자열로 성공 판정
 wpa_cli_ok() {
-    [ "$(wpa_cli -i "$1" "$2" 2>/dev/null)" = "OK" ]
+    local iface="$1"
+    shift
+    [ "$(wpa_cli -i "$iface" "$@" 2>/dev/null)" = "OK" ]
 }
 
 # ----- radio staged-apply helpers -----
@@ -506,7 +509,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} psk {password} : persist"
     echo "       wifi {0|1|mlan0|mlan1} key {0|1|NONE|WPA-PSK|SAE|OWE|FT-PSK|WPA-EAP|...} : persist (wpa_supplicant 인식 토큰만; 공백구분 다중 지정 가능)"
     echo "       wifi {0|1|mlan0|mlan1} freq {freq_list|channel_list} : persist"
-    echo "       wifi {0|1|mlan0|mlan1} connect [ssid] [freq_list|channel_list] : ssid+scan_freq+freq_list 변경 후 reconfigure 적용(재연결); 인자 없으면 현재 설정으로 재연결(reassociate)"
+    echo "       wifi {0|1|mlan0|mlan1} connect [ssid] [freq_list|channel_list] : ssid+전역/블록 freq_list 변경 후 reconfigure 적용(재연결); 인자 없으면 현재 설정으로 재연결(reassociate)"
     echo "       wifi {0|1|mlan0|mlan1} scan {freq_list|channel_list|2G|5G} : runtime"
     echo "       wifi {0|1|mlan0|mlan1} mscan {get|channel_list|2G|5G} : runtime (setuserscan/getscantable)"
     echo "       wifi {0|1|mlan0|mlan1} roam [0|1..N] : 0=auto best, N=Nth AP (RSSI order)"
@@ -902,7 +905,7 @@ show_info() {
         fi
 
     for dev in "${wpa_devs[@]}"; do
-        conf="/etc/wpa_supplicant/wpa_supplicant-${dev}.conf"
+        conf="$WPA_CONF_DIR/wpa_supplicant-${dev}.conf"
         if [ ! -f "$conf" ]; then
             echo "  $dev: not found ($conf)"
             continue
@@ -914,7 +917,6 @@ show_info() {
         [ -n "${psk:-}" ] && psk_display="********"
         key_mgmt=$(wpa_field "$conf" "key_mgmt")
         freq_list=$(wpa_field "$conf" "freq_list")
-        scan_freq=$(wpa_field "$conf" "scan_freq")
         if [ "$only_iface" = "all" ]; then
             local prefix="  ${dev}: "
             local pad
@@ -926,9 +928,6 @@ show_info() {
         fi
         if [ -n "${freq_list:-}" ]; then
             echo "${pad}freq_list=$(freqs_with_channels "${freq_list// / }")"
-        fi
-        if [ -n "${scan_freq:-}" ]; then
-            echo "${pad}scan_freq=$(freqs_with_channels "${scan_freq// / }")"
         fi
     done
     echo ""
@@ -2154,7 +2153,7 @@ case "$2" in
   freq)
     set -euo pipefail
     shift 2
-    CONF="/etc/wpa_supplicant/wpa_supplicant-${IFACE}.conf"
+    CONF="$WPA_CONF_DIR/wpa_supplicant-${IFACE}.conf"
     if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
     FREQS=()
     # to_freq_mhz는 비숫자 토큰을 그대로 되돌려주고 1000 미만 정수를 5000+5*v로
@@ -2168,28 +2167,17 @@ case "$2" in
     FREQ_STR="${FREQS[*]}"
     TMP_FILE="$(mktemp)"
     trap 'rm -f "$TMP_FILE"; sync 2>/dev/null || true' EXIT
-    # 모든 network={} 블록에 적용 (블록마다 done 플래그 리셋). 블록이 없으면 에러.
-    awk -v freqs="$FREQ_STR" '
-    BEGIN { in_net = 0; blocks = 0 }
-    /^[[:space:]]*#/ { print; next }
-    /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { in_net = 1; blocks++; done_scan = 0; done_list = 0; print; next }
-    in_net && /^[[:space:]]*\}/ {
-        if (!done_scan) { print "    scan_freq=" freqs; done_scan = 1 }
-        if (!done_list) { print "    freq_list=" freqs; done_list = 1 }
-        in_net = 0; print; next
-    }
-    in_net && /^[[:space:]]*scan_freq[[:space:]]*=/ { if (!done_scan) { print "    scan_freq=" freqs; done_scan = 1 } next }
-    in_net && /^[[:space:]]*freq_list[[:space:]]*=/ { if (!done_list) { print "    freq_list=" freqs; done_list = 1 } next }
-    { print }
-    END { if (blocks == 0) { print "error: no network={ block in config" > "/dev/stderr"; exit 1 } }
-    ' "$CONF" > "$TMP_FILE"
+    if ! wifi_wpa_conf_render_canonical "$CONF" "$TMP_FILE" "$FREQ_STR"; then
+        echo "Error: failed to render canonical frequency policy in $CONF" >&2
+        exit 1
+    fi
     safe_install_sync "$TMP_FILE" "$CONF"
-    echo "scan_freq / freq_list configure $FREQ_STR in $CONF"
+    echo "global/block freq_list configured $FREQ_STR in $CONF"
     ;;
   ssid)
     set -euo pipefail
     shift 2
-    CONF="/etc/wpa_supplicant/wpa_supplicant-${IFACE}.conf"
+    CONF="$WPA_CONF_DIR/wpa_supplicant-${IFACE}.conf"
     if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> ssid <NEW_SSID>" >&2; exit 1; fi
     if grep -q '^# >>> wifi_extra_ssid' "$CONF"; then
@@ -2249,7 +2237,7 @@ case "$2" in
   psk)
     set -euo pipefail
     shift 2
-    CONF="/etc/wpa_supplicant/wpa_supplicant-${IFACE}.conf"
+    CONF="$WPA_CONF_DIR/wpa_supplicant-${IFACE}.conf"
     if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> psk <NEW_PSK>" >&2; exit 1; fi
     NEW_PSK="$1"
@@ -2304,7 +2292,7 @@ case "$2" in
   key)
     set -euo pipefail
     shift 2
-    CONF="/etc/wpa_supplicant/wpa_supplicant-${IFACE}.conf"
+    CONF="$WPA_CONF_DIR/wpa_supplicant-${IFACE}.conf"
     if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> key <0|1|NONE|WPA-PSK>" >&2; exit 1; fi
     NEW_KEY="$1"
@@ -2359,8 +2347,9 @@ case "$2" in
     else echo "no network={ block found, nothing changed in $CONF" >&2; rm -f "$TMP_FILE"; exit 1; fi
     ;;
   connect)
-    # 인자 있음: ssid(+scan_freq/freq_list)를 conf에 기록 → wpa_cli reconfigure로 재로드.
-    #            freq 인자 생략 시 ssid만 바꾸고 scan_freq/freq_list는 유지.
+    # 인자 있음(Mode B): ssid(+공통 freq_list)를 canonical conf에 기록한 뒤
+    #                     wpa_cli reconfigure로 재로드한다.
+    #                     freq 생략 시 기존 공통 목록을 유지하되 legacy scan_freq는 제거.
     # 인자 없음: conf 편집/reconfigure 없이 현재 설정으로 강제 재연결만.
     # 공통: reassociate(연결/미연결 모두 강제 재연관 → ssid 변경 반영 확실) 우선,
     #       실패 시 reconnect fallback(rollback_radio_live와 동일 규약) → assoc 대기.
@@ -2370,26 +2359,50 @@ case "$2" in
     #   ssid 변경은 의도된 영속이라 rollback하지 않는다 — 다음 재시도/부팅 시 적용.
     set -euo pipefail
     shift 2
+    HAS_TARGET=0
+    TARGET_SSID=""
+    HAS_TARGET_ID=0
+    TARGET_ID=""
+    SET_FREQ=0
+    FREQ_STR=""
+    MODE_A_RESTORE=0
     if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
         echo "Error: connect supports mlan0/mlan1 only" >&2; exit 1
     fi
     if ! command -v wpa_cli >/dev/null 2>&1; then
         echo "Error: wpa_cli not found" >&2; exit 1
     fi
-    CONF="/etc/wpa_supplicant/wpa_supplicant-${IFACE}.conf"
+    CONF="$WPA_CONF_DIR/wpa_supplicant-${IFACE}.conf"
     # 다중블록 모드 거부 가드: 자동생성 센티넬이 있으면 ssid 일괄교체(conf-edit) 경로를
     # 차단한다(기본 SSID 영구 소실 방지). ssid 인자가 있을 때만 거부 — 인자 없는
     # 강제 재연결(reassociate)은 conf를 건드리지 않으므로 허용.
-    if [ $# -ge 1 ] && [ -f "$CONF" ] && grep -q '^# >>> wifi_extra_ssid' "$CONF"; then
-        echo "Error: $CONF 는 다중블록 모드(generate_network_blocks=true)입니다." >&2
-        echo "       ssid 일괄교체는 기본 SSID를 소실시킵니다 — cross-SSID 전환은" >&2
-        echo "       wifi_roam의 select_network(자동) 또는 wpa_cli select_network <id>를 사용하세요." >&2
-        exit 1
+    if [ -f "$CONF" ] && grep -q '^# >>> wifi_extra_ssid' "$CONF"; then
+        if [ $# -ge 1 ]; then
+            echo "Error: $CONF 는 다중블록 모드(generate_network_blocks=true)입니다." >&2
+            echo "       ssid 일괄교체는 기본 SSID를 소실시킵니다 — cross-SSID 전환은" >&2
+            echo "       wifi_roam의 select_network(자동) 또는 wpa_cli select_network <id>를 사용하세요." >&2
+            exit 1
+        fi
+
+        # Mode A의 인자 없는 reconnect는 현재 선택된 network id를 먼저 고정한다.
+        # 단순 reassociate 뒤 COMPLETED만 보면 정상 유지 요청이 다른 SSID로 끝나도
+        # 성공 처리할 수 있다. 현재 id가 없는 장애 상태에서는 기존 broad recovery를 유지.
+        WPA_STATUS=$(wpa_cli -i "$IFACE" status 2>/dev/null) || WPA_STATUS=""
+        while IFS='=' read -r _key _value; do
+            [ "$_key" = "id" ] && TARGET_ID="$_value"
+        done <<< "$WPA_STATUS"
+        if [[ "$TARGET_ID" =~ ^[0-9]+$ ]]; then
+            HAS_TARGET_ID=1
+        else
+            TARGET_ID=""
+        fi
     fi
     if [ $# -ge 1 ]; then
         # === conf 편집 경로: ssid(+freq) 기록 → reconfigure ===
         if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
         NEW_SSID="$1"; shift
+        HAS_TARGET=1
+        TARGET_SSID="$NEW_SSID"
         # 빈 SSID는 conf에 ssid=""를 써 association 불가(silent exit 8) → 즉시 거부.
         [ -z "$NEW_SSID" ] && { echo "Error: SSID must not be empty" >&2; exit 1; }
         # SSID 개행/탭 거부 — awk 멀티라인 injection(conf에 임의 directive 주입) 차단.
@@ -2414,56 +2427,58 @@ case "$2" in
             _f="$(to_freq_mhz_checked "$arg")" || exit 1
             FREQS+=( "$_f" )
         done
-        SET_FREQ=0
-        FREQ_STR=""
         if [ ${#FREQS[@]} -gt 0 ]; then SET_FREQ=1; FREQ_STR="${FREQS[*]}"; fi
-        # 모든 network={} 블록에 ssid(+freq)를 한 awk 패스로 적용(freq/ssid 명령 동일 규약).
-        # 임시파일은 set -e 중 조기 exit 시에도 정리되도록 EXIT trap 설정(freq 명령 패턴).
+        # freq 생략 시에도 legacy conf를 canonical 형식으로 이행하면서 기존 공통 목록을
+        # 보존한다(전역 > 첫 블록 freq_list > 첫 블록 scan_freq 우선순위).
+        if [ "$SET_FREQ" = "0" ]; then
+            if ! FREQ_STR="$(wifi_wpa_conf_common_freqs "$CONF")"; then
+                echo "Error: failed to resolve common frequency policy in $CONF" >&2
+                exit 1
+            fi
+        fi
+
+        # canonical 변환과 SSID 치환을 두 임시파일에서 완료한 뒤 최종 결과만 한 번
+        # install한다. 중간 형식이 실제 conf에 노출되지 않아 reconfigure와 경쟁하지 않는다.
+        CANON_FILE="$(mktemp)"
         TMP_FILE="$(mktemp)"
-        trap 'rm -f "$TMP_FILE"; sync 2>/dev/null || true' EXIT
+        trap 'rm -f "$CANON_FILE" "$TMP_FILE"; sync 2>/dev/null || true' EXIT
+        if ! wifi_wpa_conf_render_canonical "$CONF" "$CANON_FILE" "$FREQ_STR"; then
+            echo "Error: failed to render canonical frequency policy in $CONF" >&2
+            exit 1
+        fi
         # SSID는 ENVIRON으로 raw 전달 — awk -v는 값의 \X를 C-escape로 해석해 손상시킨다.
         # 값은 이스케이프하지 않고 그대로 쓴다: wpa_supplicant의 따옴표 형식 ssid="..."는
         # raw 바이트다(wpa_config_parse_string이 마지막 "까지를 그대로 복사). C-escape를
         # 디코드하는 건 P"..." 형식뿐이라, \를 \\로 바꿔 쓰면 리터럴 백슬래시가 저장된다.
-        if CONNECT_SSID="$NEW_SSID" awk -v freqs="$FREQ_STR" -v set_freq="$SET_FREQ" '
+        if CONNECT_SSID="$NEW_SSID" awk '
             BEGIN { in_net = 0; blocks = 0; new_ssid = ENVIRON["CONNECT_SSID"] }
             /^[[:space:]]*#/ { print; next }
             /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ {
-                in_net = 1; blocks++; done_ssid = 0; done_scan = 0; done_list = 0; print; next
+                in_net = 1; blocks++; done_ssid = 0; print; next
             }
             in_net && /^[[:space:]]*\}/ {
                 if (!done_ssid) { print "    ssid=\"" new_ssid "\""; done_ssid = 1 }
-                if (set_freq == 1) {
-                    if (!done_scan) { print "    scan_freq=" freqs; done_scan = 1 }
-                    if (!done_list) { print "    freq_list=" freqs; done_list = 1 }
-                }
                 in_net = 0; print; next
             }
             in_net && /^[[:space:]]*ssid[[:space:]]*=/ {
                 if (!done_ssid) { print "    ssid=\"" new_ssid "\""; done_ssid = 1 } next
             }
-            in_net && /^[[:space:]]*scan_freq[[:space:]]*=/ {
-                if (set_freq == 1) { if (!done_scan) { print "    scan_freq=" freqs; done_scan = 1 } } else print
-                next
-            }
-            in_net && /^[[:space:]]*freq_list[[:space:]]*=/ {
-                if (set_freq == 1) { if (!done_list) { print "    freq_list=" freqs; done_list = 1 } } else print
-                next
-            }
             { print }
             END { if (blocks == 0) { print "error: no network={ block in config" > "/dev/stderr"; exit 1 } }
-        ' "$CONF" > "$TMP_FILE"; then
+        ' "$CANON_FILE" > "$TMP_FILE"; then
             safe_install_sync "$TMP_FILE" "$CONF"
-            rm -f "$TMP_FILE"
+            rm -f "$CANON_FILE" "$TMP_FILE"
         else
-            rm -f "$TMP_FILE"
+            rm -f "$CANON_FILE" "$TMP_FILE"
             echo "Error: failed to update $CONF (no network={ block?)" >&2
             exit 1
         fi
         if [ "$SET_FREQ" = "1" ]; then
-            echo "conf updated: ssid=\"$NEW_SSID\" scan_freq/freq_list=$FREQ_STR in $CONF"
+            echo "conf updated: ssid=\"$NEW_SSID\" global/block freq_list=$FREQ_STR in $CONF"
+        elif [ -n "$FREQ_STR" ]; then
+            echo "conf updated: ssid=\"$NEW_SSID\" (global/block freq_list 유지: $FREQ_STR) in $CONF"
         else
-            echo "conf updated: ssid=\"$NEW_SSID\" (scan_freq/freq_list 유지) in $CONF"
+            echo "conf updated: ssid=\"$NEW_SSID\" (frequency restriction 없음) in $CONF"
         fi
         if ! wpa_cli_ok "$IFACE" reconfigure; then
             echo "Error: wpa_cli reconfigure failed for $IFACE (wpa_supplicant 미동작 또는 conf 문법 오류 확인)" >&2
@@ -2472,29 +2487,79 @@ case "$2" in
         echo "wpa_cli reconfigure OK ($IFACE)"
     else
         # === 인자 없음: conf 그대로 현재 설정으로 재연결만 ===
-        echo "no ssid given — reassociating $IFACE with current conf..."
+        if [ "$HAS_TARGET_ID" = "1" ]; then
+            echo "no ssid given — reselecting current network id=$TARGET_ID on $IFACE..."
+        else
+            echo "no ssid/current id given — reassociating $IFACE with current conf..."
+        fi
     fi
     # --- 공통: 강제 재연결(reassociate 우선, 실패 시 reconnect) → assoc 대기 ---
-    if ! wpa_cli_ok "$IFACE" reassociate && ! wpa_cli_ok "$IFACE" reconnect; then
-        echo "Error: wpa_cli reassociate/reconnect failed for $IFACE" >&2
-        exit 7
+    if [ "$HAS_TARGET_ID" = "1" ]; then
+        # select_network는 다른 블록을 disable할 수 있으므로 성공/실패/timeout 어느
+        # 경로에서도 enable_network all을 복구한다. 플래그를 명령 전에 올려 FAIL 응답도 보호.
+        restore_mode_a_networks() {
+            [ "$MODE_A_RESTORE" = "1" ] || return 0
+            MODE_A_RESTORE=0
+            if ! wpa_cli_ok "$IFACE" enable_network all; then
+                echo "Warning: failed to restore all network blocks on $IFACE" >&2
+                return 1
+            fi
+        }
+        MODE_A_RESTORE=1
+        trap 'restore_mode_a_networks || true; sync 2>/dev/null || true' EXIT
+        if ! wpa_cli_ok "$IFACE" select_network "$TARGET_ID"; then
+            echo "Error: wpa_cli select_network $TARGET_ID failed for $IFACE" >&2
+            exit 7
+        fi
+    elif ! wpa_cli_ok "$IFACE" reassociate && ! wpa_cli_ok "$IFACE" reconnect; then
+            echo "Error: wpa_cli reassociate/reconnect failed for $IFACE" >&2
+            exit 7
     fi
     # 연결 완료 대기(best-effort, 최대 15s) — 0.1s grid 폴링으로 COMPLETED를 빨리 감지.
     # (실제 association 시간은 물리 과정이라 불변; 폴링 grid만 줄여 끝맺음 반응성 개선)
     CONNECT_TIMEOUT="$ASSOC_TIMEOUT_DEFAULT"
     WPA_STATE=""
+    CUR_SSID=""
+    CUR_FREQ=""
+    CUR_ID=""
+    ASSOC_MATCH=0
     # 상한 의미 유지 — CONNECT_TIMEOUT(초)×10 회 × sleep 0.1s = CONNECT_TIMEOUT 초
     for ((_i = 1; _i <= CONNECT_TIMEOUT * 10; _i++)); do
-        WPA_STATE=$(wpa_cli -i "$IFACE" status 2>/dev/null | sed -n 's/^wpa_state=//p') || true
-        [ "$WPA_STATE" = "COMPLETED" ] && break
+        WPA_STATUS=$(wpa_cli -i "$IFACE" status 2>/dev/null) || WPA_STATUS=""
+        WPA_STATE=""; CUR_SSID=""; CUR_FREQ=""; CUR_ID=""
+        while IFS='=' read -r _key _value; do
+            case "$_key" in
+                wpa_state) WPA_STATE="$_value" ;;
+                ssid)      CUR_SSID="$_value" ;;
+                freq)      CUR_FREQ="$_value" ;;
+                id)        CUR_ID="$_value" ;;
+            esac
+        done <<< "$WPA_STATUS"
+
+        if [ "$WPA_STATE" = "COMPLETED" ]; then
+            if [ "$HAS_TARGET_ID" = "1" ]; then
+                [ "$CUR_ID" = "$TARGET_ID" ] && ASSOC_MATCH=1
+            elif [ "$HAS_TARGET" = "0" ]; then
+                ASSOC_MATCH=1
+            elif [ "$CUR_SSID" = "$TARGET_SSID" ]; then
+                if [ "$SET_FREQ" = "0" ]; then
+                    ASSOC_MATCH=1
+                else
+                    case " $FREQ_STR " in
+                        *" $CUR_FREQ "*) ASSOC_MATCH=1 ;;
+                    esac
+                fi
+            fi
+        fi
+        [ "$ASSOC_MATCH" = "1" ] && break
         sleep 0.1
     done
-    if [ "$WPA_STATE" = "COMPLETED" ]; then
-        CUR_SSID=$(wpa_cli -i "$IFACE" status 2>/dev/null | sed -n 's/^ssid=//p') || true
-        echo "associated: ssid=\"${CUR_SSID:-N/A}\" (wpa_state=COMPLETED)"
+    if [ "$ASSOC_MATCH" = "1" ]; then
+        echo "associated: ssid=\"${CUR_SSID:-N/A}\" freq=${CUR_FREQ:-N/A} id=${CUR_ID:-N/A} (wpa_state=COMPLETED)"
         exit 0
     else
-        echo "Warning: association not completed within ${CONNECT_TIMEOUT}s (state=${WPA_STATE:-unknown})" >&2
+        echo "Warning: requested association not completed within ${CONNECT_TIMEOUT}s" >&2
+        echo "         target_id=${TARGET_ID:-any} target_ssid=${TARGET_SSID:-any} target_freq=${FREQ_STR:-any} state=${WPA_STATE:-unknown} id=${CUR_ID:-N/A} ssid=${CUR_SSID:-N/A} freq=${CUR_FREQ:-N/A}" >&2
         echo "         'wifi $NUM scan' / 'wifi $NUM info'로 AP 가용성/대역 점검" >&2
         exit 8
     fi
@@ -2908,7 +2973,7 @@ case "$2" in
         R_CONF="${WPA_CONF_DIR:-/etc/wpa_supplicant}/wpa_supplicant-${IFACE}.conf"
         R_FREQ_BANDS=$(wifi_init_conf_freq_bands "$R_CONF")
         if [ "$R_FREQ_BANDS" = "5G" ]; then
-            echo "Error: mode=$R_MODE is 2.4G-only but freq_list/scan_freq in $R_CONF is 5G-only — STA can never associate." >&2
+            echo "Error: mode=$R_MODE is 2.4G-only but common freq_list in $R_CONF is 5G-only — STA can never associate." >&2
             echo "       Fix with 'wifi $NUM freq <2.4G ch>' or 'wifi $NUM mode a' (or higher), then retry." >&2
             exit 11
         elif [ "$R_FREQ_BANDS" = "2G 5G" ]; then

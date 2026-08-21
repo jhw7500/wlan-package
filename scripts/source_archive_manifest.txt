@@ -370,6 +370,7 @@ dist/wlan/usr/local/scripts/wifi_services.sh
 dist/wlan/usr/local/scripts/wifi_services_lib.sh
 dist/wlan/usr/local/scripts/wifi_snmp_trap.sh
 dist/wlan/usr/local/scripts/wifi_thermal_state_update.sh
+dist/wlan/usr/local/scripts/wifi_wpa_conf_writer_test.sh
 dist/wlan/usr/local/scripts/wlan_fw_watch.sh
 dist/wlan/usr/local/scripts/wlan_link_lib.sh
 dist/wlan/usr/local/scripts/wlan_reboot_policy.sh

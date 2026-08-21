@@ -200,7 +200,7 @@ def roam_to_ap(interface, ap, index_label=None, current_ssid=None):
     bssid = ap["bssid"]
     cross_ssid = bool(current_ssid) and bool(ap.get("ssid")) and ap["ssid"] != current_ssid
     if cross_ssid:
-        # freq 생략: wifi connect에 단일 freq를 주면 conf scan_freq가 그 채널로 collapse됨
+        # freq 생략: 단일 freq를 주면 전역/블록 공통 freq_list가 그 채널로 collapse됨
         cmd = ["/usr/local/bin/wifi", interface, "connect", ap["ssid"]]
     else:
         cmd = ["wpa_cli", "-i", interface, "roam", bssid]
