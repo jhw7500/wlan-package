@@ -142,3 +142,55 @@ def test_ssid_probe_cap_preserves_wildcard():
     toks = _ssid_tokens(cmd)
     assert len(toks) == wifi_bgscan.MAX_SCAN_SSIDS
     assert toks[0] == ""                   # wildcard 슬롯 보존
+
+
+# --- wpa_cli SCAN backend ---
+
+def _wpa_ssid_hex_tokens(cmd):
+    return [cmd[i + 1] for i, token in enumerate(cmd[:-1]) if token == "ssid"]
+
+
+def test_wpa_passive_scan_uses_exact_common_frequency_list():
+    cmd = wifi_bgscan.construct_wpa_scan_cmd(
+        "mlan0", "Base", ["5180", "5200"], passive=True
+    )
+    assert cmd == [
+        "wpa_cli", "-i", "mlan0", "scan", "freq=5180,5200", "passive=1"
+    ]
+    assert "TYPE=ONLY" not in cmd
+
+
+def test_wpa_active_scan_hex_encodes_each_configured_ssid():
+    cmd = wifi_bgscan.construct_wpa_scan_cmd(
+        "mlan0",
+        "Base",
+        ["5180"],
+        ssid_filter=True,
+        extra_ssids=["Office", "게스트"],
+        passive=False,
+    )
+    assert cmd[:5] == ["wpa_cli", "-i", "mlan0", "scan", "freq=5180"]
+    assert _wpa_ssid_hex_tokens(cmd) == [
+        "Base".encode("utf-8").hex(),
+        "Office".encode("utf-8").hex(),
+        "게스트".encode("utf-8").hex(),
+    ]
+    assert "TYPE=ONLY" not in cmd
+
+
+def test_wpa_scan_without_common_list_is_unrestricted():
+    cmd = wifi_bgscan.construct_wpa_scan_cmd(
+        "mlan0", "Base", [], ssid_filter=False, extra_ssids=[], passive=False
+    )
+    assert cmd == ["wpa_cli", "-i", "mlan0", "scan"]
+
+
+def test_wpa_scan_deduplicates_and_caps_directed_ssids():
+    extras = ["Base"] + [f"Net{i}" for i in range(20)]
+    cmd = wifi_bgscan.construct_wpa_scan_cmd(
+        "mlan0", "Base", ["2412"], ssid_filter=True, extra_ssids=extras
+    )
+    ssids = _wpa_ssid_hex_tokens(cmd)
+    assert len(ssids) == wifi_bgscan.MAX_SCAN_SSIDS
+    assert ssids[0] == "Base".encode().hex()
+    assert len(set(ssids)) == len(ssids)

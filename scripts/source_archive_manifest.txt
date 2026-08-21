@@ -215,6 +215,8 @@ dist/wlan/usr/local/logger/sUTILS.py
 dist/wlan/usr/local/logger/tests/__init__.py
 dist/wlan/usr/local/logger/tests/test_bgscan_construct_cmd.py
 dist/wlan/usr/local/logger/tests/test_bgscan_load_json.py
+dist/wlan/usr/local/logger/tests/test_bgscan_parse_conf.py
+dist/wlan/usr/local/logger/tests/test_bgscan_run_scan.py
 dist/wlan/usr/local/logger/tests/test_config_default_sync.py
 dist/wlan/usr/local/logger/tests/test_cross_ssid_cooldown.py
 dist/wlan/usr/local/logger/tests/test_defaults_template_consistency.py
