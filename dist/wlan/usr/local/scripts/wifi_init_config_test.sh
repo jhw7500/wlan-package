@@ -10,6 +10,8 @@ POSTINST="$SCRIPT_DIR/../../../DEBIAN/postinst"
 LEGACY_CONFIG_TEMPLATE="$SCRIPT_DIR/../../../opt/wlan/config/config.json"
 GUIDE="$SCRIPT_DIR/../../../../../docs/wifi_init_conf_guide.md"
 HANDOFF="$SCRIPT_DIR/../../../../../docs/wifi_init_conf_webui_handoff.md"
+WPA_TEMPLATE0="$SCRIPT_DIR/../../../opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan0.conf"
+WPA_TEMPLATE1="$SCRIPT_DIR/../../../opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan1.conf"
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -211,6 +213,184 @@ expect_equal "vhtbw 80"   "$(wifi_init_bw_to_vhtbw 80)"   "1"
 expect_equal "vhtbw auto" "$(wifi_init_bw_to_vhtbw auto)" "1"
 expect_equal "vhtbw invalid → empty" "$(wifi_init_bw_to_vhtbw 160 || true)" ""
 
+# --- wpa_supplicant common frequency resolver ---
+
+echo ""
+echo "=== wpa common frequency resolver ==="
+
+_wpa_tmpd=$(mktemp -d)
+cat > "$_wpa_tmpd/global.conf" <<'EOF'
+freq_list=5180 5200
+network={
+    ssid="base"
+    freq_list=2412
+    scan_freq=2437
+}
+EOF
+cat > "$_wpa_tmpd/base-list.conf" <<'EOF'
+network={
+    ssid="base"
+    freq_list=2412 2437
+    scan_freq=5180
+}
+network={
+    ssid="extra"
+    freq_list=5200
+}
+EOF
+cat > "$_wpa_tmpd/base-scan.conf" <<'EOF'
+network={
+    ssid="base"
+    scan_freq=5220 5240 # legacy base list
+}
+EOF
+cat > "$_wpa_tmpd/unrestricted.conf" <<'EOF'
+network={
+    ssid="base"
+}
+EOF
+
+if declare -F wifi_wpa_conf_common_freqs >/dev/null; then
+    expect_equal "common freq global wins" \
+        "$(wifi_wpa_conf_common_freqs "$_wpa_tmpd/global.conf")" "5180 5200"
+    expect_equal "common freq base freq_list fallback" \
+        "$(wifi_wpa_conf_common_freqs "$_wpa_tmpd/base-list.conf")" "2412 2437"
+    expect_equal "common freq base scan_freq legacy fallback" \
+        "$(wifi_wpa_conf_common_freqs "$_wpa_tmpd/base-scan.conf")" "5220 5240"
+    expect_equal "common freq unrestricted" \
+        "$(wifi_wpa_conf_common_freqs "$_wpa_tmpd/unrestricted.conf")" ""
+else
+    log_fail "wifi_wpa_conf_common_freqs is defined"
+fi
+
+cat > "$_wpa_tmpd/legacy-render.conf" <<'EOF'
+# preserve this comment
+update_config=1
+country=KR
+freq_list=2412
+network={
+    ssid="base"
+    scan_freq=2412 2437
+    freq_list=2412 2437
+}
+network={
+    ssid="extra"
+    scan_freq=5180
+    freq_list=5180
+}
+EOF
+
+if declare -F wifi_wpa_conf_render_canonical >/dev/null; then
+    if wifi_wpa_conf_render_canonical \
+        "$_wpa_tmpd/legacy-render.conf" "$_wpa_tmpd/rendered.conf" "5180 5200"; then
+        expect_equal "canonical has one global freq_list" \
+            "$(awk '
+                /^[[:space:]]*#/ { next }
+                /^[[:space:]]*network[[:space:]]*=/ { in_net=1 }
+                !in_net && /^[[:space:]]*freq_list[[:space:]]*=/ { n++ }
+                in_net && /^[[:space:]]*}/ { in_net=0 }
+                END { print n+0 }
+            ' "$_wpa_tmpd/rendered.conf")" "1"
+        expect_equal "canonical copies freq_list to every block" \
+            "$(awk '
+                /^[[:space:]]*network[[:space:]]*=/ { in_net=1; next }
+                in_net && /^[[:space:]]*freq_list=5180 5200$/ { n++ }
+                in_net && /^[[:space:]]*}/ { in_net=0 }
+                END { print n+0 }
+            ' "$_wpa_tmpd/rendered.conf")" "2"
+        expect_equal "canonical removes active scan_freq" \
+            "$(grep -Ec '^[[:space:]]*scan_freq[[:space:]]*=' "$_wpa_tmpd/rendered.conf" || true)" "0"
+        expect_equal "canonical forces one update_config=0" \
+            "$(grep -Ec '^update_config=0$' "$_wpa_tmpd/rendered.conf" || true)" "1"
+        expect_file_contains "canonical preserves unrelated comments" \
+            "$_wpa_tmpd/rendered.conf" '^# preserve this comment$'
+
+        wifi_wpa_conf_render_canonical \
+            "$_wpa_tmpd/rendered.conf" "$_wpa_tmpd/rendered-again.conf" "5180 5200"
+        if cmp -s "$_wpa_tmpd/rendered.conf" "$_wpa_tmpd/rendered-again.conf"; then
+            log_pass "canonical render is idempotent"
+        else
+            log_fail "canonical render is idempotent"
+        fi
+
+        wifi_wpa_conf_render_canonical \
+            "$_wpa_tmpd/legacy-render.conf" "$_wpa_tmpd/unrestricted-render.conf" ""
+        expect_equal "unrestricted removes all active freq_list" \
+            "$(grep -Ec '^[[:space:]]*freq_list[[:space:]]*=' "$_wpa_tmpd/unrestricted-render.conf" || true)" "0"
+        expect_equal "unrestricted removes all active scan_freq" \
+            "$(grep -Ec '^[[:space:]]*scan_freq[[:space:]]*=' "$_wpa_tmpd/unrestricted-render.conf" || true)" "0"
+    else
+        log_fail "canonical renderer accepts network config"
+    fi
+else
+    log_fail "wifi_wpa_conf_render_canonical is defined"
+fi
+
+cp "$_wpa_tmpd/legacy-render.conf" "$_wpa_tmpd/in-place.conf"
+chmod 0640 "$_wpa_tmpd/in-place.conf"
+if declare -F wifi_wpa_conf_normalize_file >/dev/null; then
+    if wifi_wpa_conf_normalize_file "$_wpa_tmpd/in-place.conf"; then
+        expect_equal "in-place normalizer preserves mode" \
+            "$(stat -c '%a' "$_wpa_tmpd/in-place.conf")" "640"
+        expect_equal "in-place normalizer uses resolved global list" \
+            "$(wifi_wpa_conf_common_freqs "$_wpa_tmpd/in-place.conf")" "2412"
+        cp "$_wpa_tmpd/in-place.conf" "$_wpa_tmpd/in-place.once"
+        wifi_wpa_conf_normalize_file "$_wpa_tmpd/in-place.conf"
+        if cmp -s "$_wpa_tmpd/in-place.once" "$_wpa_tmpd/in-place.conf"; then
+            log_pass "in-place normalization is idempotent"
+        else
+            log_fail "in-place normalization is idempotent"
+        fi
+    else
+        log_fail "in-place normalizer accepts valid conf"
+    fi
+
+    printf 'country=KR\n' > "$_wpa_tmpd/no-network.conf"
+    cp "$_wpa_tmpd/no-network.conf" "$_wpa_tmpd/no-network.before"
+    if wifi_wpa_conf_normalize_file "$_wpa_tmpd/no-network.conf"; then
+        log_fail "in-place normalizer rejects missing network block"
+    elif cmp -s "$_wpa_tmpd/no-network.before" "$_wpa_tmpd/no-network.conf"; then
+        log_pass "in-place normalizer rejects missing network without damage"
+    else
+        log_fail "in-place normalizer rejects missing network without damage"
+    fi
+else
+    log_fail "wifi_wpa_conf_normalize_file is defined"
+fi
+
+cat > "$_wpa_tmpd/generated.conf" <<'EOF'
+update_config=0
+freq_list=5180 5200
+network={
+    ssid="base"
+    key_mgmt=WPA-PSK
+    psk="12345678"
+    freq_list=5180 5200
+}
+EOF
+cat > "$_wpa_tmpd/wifi_init_conf.json" <<'EOF'
+{
+  "mlan0": {
+    "roaming": {
+      "generate_network_blocks": true,
+      "extra_ssids": ["office", "guest"]
+    }
+  }
+}
+EOF
+if WIFI_INIT_CONF_JSON="$_wpa_tmpd/wifi_init_conf.json" \
+    wifi_init_sync_extra_ssid_blocks mlan0 "$_wpa_tmpd/generated.conf"; then
+    expect_equal "generated mode A has three network blocks" \
+        "$(grep -Ec '^[[:space:]]*network[[:space:]]*=' "$_wpa_tmpd/generated.conf")" "3"
+    expect_equal "generated mode A copies common block filter" \
+        "$(grep -Ec '^[[:space:]]+freq_list=5180 5200$' "$_wpa_tmpd/generated.conf")" "3"
+    expect_equal "generated mode A has no scan_freq" \
+        "$(grep -Ec '^[[:space:]]*scan_freq[[:space:]]*=' "$_wpa_tmpd/generated.conf" || true)" "0"
+else
+    log_fail "generated mode A sync accepts canonical base"
+fi
+rm -rf "$_wpa_tmpd"
+
 _fb_tmpd=$(mktemp -d)
 printf 'network={\n    freq_list=5180 5200\n    scan_freq=5180 5200\n}\n' > "$_fb_tmpd/c1.conf"
 expect_equal "freq_bands 5G-only" "$(wifi_init_conf_freq_bands "$_fb_tmpd/c1.conf")" "5G"
@@ -220,8 +400,35 @@ printf 'network={\n    scan_freq=2412 # home only\n}\n' > "$_fb_tmpd/c3.conf"
 expect_equal "freq_bands 2G + comment tokens" "$(wifi_init_conf_freq_bands "$_fb_tmpd/c3.conf")" "2G"
 printf 'network={\n    ssid="x"\n}\n' > "$_fb_tmpd/c4.conf"
 expect_equal "freq_bands no restriction" "$(wifi_init_conf_freq_bands "$_fb_tmpd/c4.conf")" ""
+printf 'freq_list=5180 5200\nnetwork={\n    freq_list=2412\n    scan_freq=2437\n}\n' > "$_fb_tmpd/c5.conf"
+expect_equal "freq_bands uses canonical global precedence" \
+    "$(wifi_init_conf_freq_bands "$_fb_tmpd/c5.conf")" "5G"
 expect_equal "freq_bands missing file" "$(wifi_init_conf_freq_bands "$_fb_tmpd/none.conf")" ""
 rm -rf "$_fb_tmpd"
+
+# 부팅은 backup_file 복원 후 canonical 정규화, 그 다음 extra block 생성 순서다.
+_normalize_line=$(grep -n 'wifi_wpa_conf_normalize_file.*wpa_supplicant-mlan0' "$WIFI_INIT_SH" | head -1 | cut -d: -f1 || true)
+_generate_line=$(grep -n 'wifi_init_sync_extra_ssid_blocks mlan0' "$WIFI_INIT_SH" | head -1 | cut -d: -f1 || true)
+if [ -n "$_normalize_line" ] && [ -n "$_generate_line" ] && [ "$_normalize_line" -lt "$_generate_line" ]; then
+    log_pass "wifi_init normalizes mlan0 before generating blocks"
+else
+    log_fail "wifi_init normalizes mlan0 before generating blocks"
+fi
+
+for _template in "$WPA_TEMPLATE0" "$WPA_TEMPLATE1"; do
+    expect_equal "$(basename "$_template") uses update_config=0" \
+        "$(grep -Ec '^update_config=0$' "$_template" || true)" "1"
+    expect_equal "$(basename "$_template") has one global freq_list" \
+        "$(awk '
+            /^[[:space:]]*#/ { next }
+            /^[[:space:]]*network[[:space:]]*=/ { in_net=1 }
+            !in_net && /^[[:space:]]*freq_list[[:space:]]*=/ { n++ }
+            in_net && /^[[:space:]]*}/ { in_net=0 }
+            END { print n+0 }
+        ' "$_template")" "1"
+    expect_equal "$(basename "$_template") has no scan_freq" \
+        "$(grep -Ec '^[[:space:]]*scan_freq[[:space:]]*=' "$_template" || true)" "0"
+done
 
 echo "PASS: $PASS_COUNT"
 echo "FAIL: $FAIL_COUNT"
