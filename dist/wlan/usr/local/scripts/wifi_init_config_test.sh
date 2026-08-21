@@ -389,6 +389,79 @@ if WIFI_INIT_CONF_JSON="$_wpa_tmpd/wifi_init_conf.json" \
 else
     log_fail "generated mode A sync accepts canonical base"
 fi
+
+cat > "$_wpa_tmpd/empty-extra.json" <<'EOF'
+{
+  "mlan0": {
+    "roaming": {
+      "enabled": true,
+      "generate_network_blocks": true,
+      "extra_ssids": []
+    },
+    "bgscan": {"enabled": true}
+  }
+}
+EOF
+cat > "$_wpa_tmpd/empty-extra.conf" <<'EOF'
+update_config=0
+network={
+    ssid="base"
+    key_mgmt=WPA-PSK
+    psk="12345678"
+}
+EOF
+if WIFI_INIT_CONF_JSON="$_wpa_tmpd/empty-extra.json" \
+    wifi_wpa_conf_is_multi_topology mlan0 "$_wpa_tmpd/empty-extra.conf"; then
+    log_pass "Mode A identity survives an empty extra_ssids list"
+else
+    log_fail "Mode A identity survives an empty extra_ssids list"
+fi
+
+mkdir -p "$_wpa_tmpd/run"
+cat > "$_wpa_tmpd/run/mlan0.roam-policy.json" <<'EOF'
+{"version":1,"iface":"mlan0","roaming_enabled":true,"bgscan_enabled":true,"generate_network_blocks":true,"extra_ssids":[]}
+EOF
+cat > "$_wpa_tmpd/live-mode-b.json" <<'EOF'
+{"mlan0":{"roaming":{"generate_network_blocks":false},"bgscan":{"enabled":false}}}
+EOF
+if WIFI_RUN_DIR="$_wpa_tmpd/run" WIFI_INIT_CONF_JSON="$_wpa_tmpd/live-mode-b.json" \
+    wifi_wpa_conf_is_multi_topology mlan0 "$_wpa_tmpd/empty-extra.conf"; then
+    log_pass "boot snapshot wins over runtime topology JSON edits"
+else
+    log_fail "boot snapshot wins over runtime topology JSON edits"
+fi
+
+cat > "$_wpa_tmpd/run/mlan0.roam-policy.json" <<'EOF'
+{"version":1,"iface":"mlan0","roaming_enabled":true,"bgscan_enabled":true,"generate_network_blocks":true,"extra_ssids":["BootOffice"]}
+EOF
+cp "$_wpa_tmpd/empty-extra.conf" "$_wpa_tmpd/snapshot-sync.conf"
+if WIFI_RUN_DIR="$_wpa_tmpd/run" WIFI_INIT_CONF_JSON="$_wpa_tmpd/live-mode-b.json" \
+    wifi_init_sync_extra_ssid_blocks mlan0 "$_wpa_tmpd/snapshot-sync.conf"; then
+    expect_equal "extra block sync uses boot snapshot after service restart" \
+        "$(grep -Ec '^[[:space:]]*network[[:space:]]*=' "$_wpa_tmpd/snapshot-sync.conf")" "2"
+    expect_equal "extra block sync ignores mutated live JSON" \
+        "$(grep -Ec '^[[:space:]]+ssid="BootOffice"$' "$_wpa_tmpd/snapshot-sync.conf")" "1"
+else
+    log_fail "extra block sync uses boot snapshot after service restart"
+fi
+
+cat > "$_wpa_tmpd/manual-multi.conf" <<'EOF'
+network={
+    ssid="one"
+}
+network={
+    ssid="two"
+}
+EOF
+cat > "$_wpa_tmpd/run/mlan0.roam-policy.json" <<'EOF'
+{"version":1,"iface":"mlan0","roaming_enabled":false,"bgscan_enabled":true,"generate_network_blocks":false,"extra_ssids":[]}
+EOF
+if WIFI_RUN_DIR="$_wpa_tmpd/run" \
+    wifi_wpa_conf_is_multi_topology mlan0 "$_wpa_tmpd/manual-multi.conf"; then
+    log_pass "manual multi-block conf is protected from single-SSID writers"
+else
+    log_fail "manual multi-block conf is protected from single-SSID writers"
+fi
 rm -rf "$_wpa_tmpd"
 
 _fb_tmpd=$(mktemp -d)

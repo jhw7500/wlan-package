@@ -348,15 +348,19 @@ def test_cross_ssid_select_rejects_completed_on_wrong_bssid_and_cleans_up(monkey
     assert sum(c[3:] == ["enable_network", "all"] for c in calls) == 1
 
 
-def test_cross_ssid_pin_rejection_stops_before_select_without_spurious_cleanup(monkeypatch):
+def test_cross_ssid_pin_rejection_stops_before_select_and_cleans_ambiguous_pin(monkeypatch):
     calls = []
 
     def side_effect(cmd, *a, **k):
         calls.append(cmd)
         if cmd[3] == "list_networks":
             return _Run(0, _LIST_NETWORKS)
-        if cmd[3] == "bssid":
+        if cmd[3:] == ["bssid", "1", _TARGET_BSSID]:
             return _Run(0, "FAIL\n")
+        if cmd[3:] == ["bssid", "1", "any"]:
+            return _Run(0, "OK\n")
+        if cmd[3:] == ["enable_network", "all"]:
+            return _Run(0, "OK\n")
         return _Run(1, "")
 
     with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
@@ -364,8 +368,36 @@ def test_cross_ssid_pin_rejection_stops_before_select_without_spurious_cleanup(m
 
     assert ok is False
     assert not any(c[3] == "select_network" for c in calls)
-    assert not any(c[3:] == ["bssid", "1", "any"] for c in calls)
-    assert not any(c[3] == "enable_network" for c in calls)
+    assert sum(c[3:] == ["bssid", "1", "any"] for c in calls) == 1
+    assert sum(c[3:] == ["enable_network", "all"] for c in calls) == 1
+
+
+@pytest.mark.parametrize("failure", ["timeout", "exception"])
+def test_cross_ssid_pin_ambiguous_failure_always_clears_and_restores(monkeypatch, failure):
+    calls = []
+
+    def side_effect(cmd, *a, **k):
+        calls.append(cmd)
+        if cmd[3] == "list_networks":
+            return _Run(0, _LIST_NETWORKS)
+        if cmd[3:] == ["bssid", "1", _TARGET_BSSID]:
+            if failure == "timeout":
+                raise wifi_roam.subprocess.TimeoutExpired(cmd, 10)
+            raise RuntimeError("pin transport failed after delivery")
+        if cmd[3:] == ["bssid", "1", "any"]:
+            return _Run(0, "OK\n")
+        if cmd[3:] == ["enable_network", "all"]:
+            return _Run(0, "OK\n")
+        return _Run(1, "")
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        with patch.object(wifi_roam.time, "sleep", MagicMock()):
+            ok = select_network_for_ssid("mlan0", "OfficeNet", _TARGET_BSSID)
+
+    assert ok is False
+    assert not any(c[3] == "select_network" for c in calls)
+    assert sum(c[3:] == ["bssid", "1", "any"] for c in calls) == 1
+    assert sum(c[3:] == ["enable_network", "all"] for c in calls) == 1
 
 
 def test_cross_ssid_status_exception_clears_pin_and_restores_networks(monkeypatch):
@@ -389,6 +421,74 @@ def test_cross_ssid_status_exception_clears_pin_and_restores_networks(monkeypatc
     assert ok is False
     assert sum(c[3:] == ["bssid", "1", "any"] for c in calls) == 1
     assert sum(c[3:] == ["enable_network", "all"] for c in calls) == 1
+
+
+def test_cross_ssid_cleanup_transient_failure_is_retried_before_success(monkeypatch):
+    calls = []
+    clear_count = 0
+    enable_count = 0
+
+    def side_effect(cmd, *a, **k):
+        nonlocal clear_count, enable_count
+        calls.append(cmd)
+        sub = cmd[3]
+        if sub == "list_networks":
+            return _Run(0, _LIST_NETWORKS)
+        if cmd[3:] == ["bssid", "1", _TARGET_BSSID]:
+            return _Run(0, "OK\n")
+        if cmd[3:] == ["bssid", "1", "any"]:
+            clear_count += 1
+            return _Run(0, "FAIL\n" if clear_count == 1 else "OK\n")
+        if sub == "select_network":
+            return _Run(0, "OK\n")
+        if sub == "status":
+            return _Run(
+                0,
+                f"bssid={_TARGET_BSSID}\nssid=OfficeNet\nid=1\nwpa_state=COMPLETED\n",
+            )
+        if sub == "enable_network":
+            enable_count += 1
+            return _Run(0, "FAIL\n" if enable_count == 1 else "OK\n")
+        return _Run(1, "")
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        with patch.object(wifi_roam.time, "sleep", MagicMock()):
+            ok = select_network_for_ssid("mlan0", "OfficeNet", _TARGET_BSSID)
+
+    assert ok is True
+    assert clear_count == 2
+    assert enable_count == 2
+
+
+def test_cross_ssid_cleanup_persistent_failure_never_reports_success(monkeypatch):
+    calls = []
+
+    def side_effect(cmd, *a, **k):
+        calls.append(cmd)
+        sub = cmd[3]
+        if sub == "list_networks":
+            return _Run(0, _LIST_NETWORKS)
+        if cmd[3:] == ["bssid", "1", _TARGET_BSSID]:
+            return _Run(0, "OK\n")
+        if sub == "select_network":
+            return _Run(0, "OK\n")
+        if sub == "status":
+            return _Run(
+                0,
+                f"bssid={_TARGET_BSSID}\nssid=OfficeNet\nid=1\nwpa_state=COMPLETED\n",
+            )
+        if cmd[3:] == ["bssid", "1", "any"] or sub == "enable_network":
+            return _Run(0, "FAIL\n")
+        if sub == "reconfigure":
+            return _Run(0, "FAIL\n")
+        return _Run(1, "")
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        with patch.object(wifi_roam.time, "sleep", MagicMock()):
+            ok = select_network_for_ssid("mlan0", "OfficeNet", _TARGET_BSSID)
+
+    assert ok is False
+    assert any(c[3] == "reconfigure" for c in calls)
 
 
 # --- cross-SSID 라우팅 헬퍼(메인루프 분기) ---

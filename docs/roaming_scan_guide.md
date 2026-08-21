@@ -14,9 +14,10 @@
 | `true` | `wifi_roam.py` | `iw` | 외부 알고리즘이 후보를 평가하고 BSSID/ID를 명시적으로 전환 |
 | `false` | wpa_supplicant native | `wpa_cli scan` | scan 결과를 wpa native selection에 맡김(`TYPE=ONLY` 미사용) |
 
-`wifi_roam`과 wpa native owner는 동시에 쓰지 않는다. bgscan backend는 별도 JSON 키가
-아니라 프로세스 시작 시 `roaming.enabled`에서 한 번 결정(latch)된다. owner 변경은
-runtime 전환 대상이 아니며 **재부팅**해야 한다. `bgscan.enabled=false`는 package 주기
+`wifi_roam`과 wpa native owner는 동시에 쓰지 않는다. 별도 backend JSON 키 대신 부팅
+최초 `/run/wifi/<iface>.roam-policy.json`에 owner/backend/bgscan/topology/extra를 원자
+snapshot한다. daemon crash-restart나 wifi_init 재시작에도 snapshot이 우선하며 변경은
+**재부팅**해야 한다. `bgscan.enabled=false`는 package 주기
 스캔만 끄고 wpa_supplicant의 장애 복구·재연결 scan은 막지 않는다.
 
 ### topology(Mode A/B) × owner 매트릭스
@@ -26,7 +27,9 @@ runtime 전환 대상이 아니며 **재부팅**해야 한다. `bgscan.enabled=f
 | **Mode B** `generate_network_blocks=false` | 단일 블록, 같은 SSID 외부 로밍. cross-SSID는 `wifi connect` 수동 전환 | 단일 블록 native 선택. cross-SSID는 `wifi connect` 수동 전환 |
 | **Mode A** `generate_network_blocks=true` | 다중 블록, 목표 BSSID pin+ID/SSID/BSSID 확인으로 자동 cross-SSID | 다중 블록, wpa 기본 정책으로 자동 cross-SSID |
 
-Mode A/B도 부팅 시 network block topology를 만들므로 변경 후 재부팅이 필수다. 모든
+Mode A/B도 부팅 snapshot과 network block topology를 함께 만들므로 변경 후 재부팅이
+필수다. `generate_network_blocks=true`이면 `extra_ssids=[]`여도 Mode A identity와
+명시적 SSID writer 금지는 유지된다. 모든
 블록은 전역과 동일한 **공통 `freq_list`**를 사용하고 active `scan_freq`는 쓰지 않는다.
 
 wifi_roam owner에서는 스캔 경로가 둘이다.
@@ -329,7 +332,8 @@ backoff 가 상한에 머물지 못하는 주 원인은 곡선이 아니라 **go
 | 7 | **`wifi` CLI 경로** | `/usr/local/bin/wifi` 인데 **ssh 비대화형 PATH(`/usr/bin:/bin:/usr/sbin:/sbin`)에 없다.** 스크립트에서는 절대 경로를 쓸 것. `>/dev/null 2>&1` 과 겹치면 `command not found` 가 조용히 묻힌다 |
 | 8 | **`iw dev link` 는 신뢰 불가** | moal 이 cfg80211 `current_bss` 를 갱신하지 않아 연결 중에도 `Not connected.` 를 반환한다. 링크 판정은 `wlan_link_lib.sh`(wpa_cli → station dump 계단식)를 쓸 것 |
 | 9 | **`freq_filter=false`** | deprecated. 공통 global `freq_list`가 있으면 false도 무시하고 iw/wpa_cli 모두 같은 목록을 강제한다. 전대역이 필요하면 공통 목록 자체를 제거해야 한다 |
-| 10 | **`periodic_roam.enabled=true`** | 제3 owner 방지를 위해 무시되고 unit은 강제 disable된다. 자동 로밍 owner는 `roaming.enabled` 하나로만 선택한다 |
+| 10 | **`periodic_roam.enabled=true`** | 제3 owner 방지를 위해 무시되고 unit은 강제 disable+stop된다. unit의 항상-false ExecCondition도 stale queued job 실행을 막는다 |
+| 11 | **boot policy snapshot 손상/부재** | owner를 추측하지 않는다. wifi_apply_enabled/owner daemon이 fail-closed하여 이중 owner보다 기동 실패를 선택한다 |
 
 ---
 
@@ -342,9 +346,9 @@ backoff 가 상한에 머물지 못하는 주 원인은 곡선이 아니라 **go
 | 후보 최소 이득 | `wifi <if> roam diff <dB>` | SIGHUP 무재시작 |
 | `STAGED_SCAN` 계열 | JSON 편집 + `systemctl kill --kill-who=main -s SIGHUP wifi_roam@<if>` | SIGHUP |
 | `bgscan.passive` / `interval` | JSON 편집만 | **재시작 불필요** — `wifi_bgscan.py` 가 매 스캔 직전 재로드 (실측 확인) |
-| `bgscan.enabled` | JSON 편집 후 부팅 정책 재적용 | package scan 서비스만 on/off; wpa 복구 scan 유지 |
-| `roaming.enabled` | JSON 편집 | **재부팅** — owner/backend latch |
-| `generate_network_blocks` / `extra_ssids` | JSON 편집 | **재부팅** — network block topology 재생성 |
+| `bgscan.enabled` | JSON 편집 | **재부팅** — package scan service boot snapshot; false여도 wpa 복구 scan 유지 |
+| `roaming.enabled` | JSON 편집 | **재부팅** — owner/backend boot snapshot |
+| `generate_network_blocks` / `extra_ssids` | JSON 편집 | **재부팅** — boot snapshot + network block topology 재생성 |
 | 공통 `freq_list` | `wifi <if> freq <freq...>` | persist-only, 다음 부팅. 즉시 `reconfigure`는 순단·wpa 자율선택 가능성에 주의 |
 
 > 조회형 `wifi <if> roam th`(값 없이)는 **표시 전용**이라 SIGHUP 을 보내지 않는다.

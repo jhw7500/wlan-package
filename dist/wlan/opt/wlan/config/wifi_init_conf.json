@@ -392,7 +392,7 @@
         },
         "bgscan": {
             "_comment": [
-                "패키지 백그라운드 AP 스캔. 별도 backend 키 없이 roaming.enabled에서 시작 시 1회 결정(latch)",
+                "패키지 백그라운드 AP 스캔. 별도 backend 키 없이 /run boot policy snapshot에서 owner/backend를 결정",
                 "roaming.enabled=true -> wifi_roam owner + iw scan; false -> wpa native owner + wpa_cli scan",
                 "interval: (int) 스캔 주기 (초)",
                 "ssid_filter: (bool) 현재·추가 로밍 SSID만 스캔. passive=false일 때만 유효",
@@ -410,7 +410,7 @@
         },
         "roaming": {
             "_comment": [
-                "proactive roam owner와 wifi_roam.py 알고리즘 설정. owner/backend는 daemon 시작 시 결정되며 runtime 전환하지 않음",
+                "proactive roam owner와 wifi_roam.py 알고리즘 설정. owner/topology는 부팅 최초 /run snapshot으로 고정되어 daemon 재시작에도 불변",
                 "enabled: true=wifi_roam owner + iw bgscan, false=wpa_supplicant native owner + wpa_cli bgscan. 변경은 재부팅 필요",
                 "extra_ssids: (array[str], 기본 []) 모드A 다중 network 블록으로 만들 추가 SSID. 같은 psk/key_mgmt 전제. 모드B에서는 무시.",
                 "generate_network_blocks: (bool, 기본 false) 부팅 topology 결정자. false=모드B(단일 블록, 수동 cross-SSID), true=모드A(다중 블록, 선택 owner의 자동 cross-SSID). 변경은 재부팅 필요.",

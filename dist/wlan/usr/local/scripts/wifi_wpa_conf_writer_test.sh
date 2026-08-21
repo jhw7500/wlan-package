@@ -10,8 +10,9 @@ trap 'rm -rf "$TD"' EXIT
 BIN="$TD/bin"
 WPA_DIR="$TD/wpa"
 STATE_DIR="$TD/state"
+RUN_DIR="$TD/run"
 CALL_LOG="$TD/calls.log"
-mkdir -p "$BIN" "$WPA_DIR" "$STATE_DIR"
+mkdir -p "$BIN" "$WPA_DIR" "$STATE_DIR" "$RUN_DIR"
 : > "$CALL_LOG"
 
 cat > "$BIN/logger" <<'EOF'
@@ -25,6 +26,10 @@ EOF
 cat > "$BIN/install" <<'EOF'
 #!/bin/sh
 while [ "$#" -gt 2 ]; do shift; done
+if [ "${INSTALL_MODE:-}" = "partial-fail" ]; then
+    printf 'PARTIAL\n' > "$2"
+    exit 1
+fi
 cp "$1" "$2"
 EOF
 cat > "$BIN/systemctl" <<'EOF'
@@ -75,12 +80,16 @@ EOT
       printf 'OK\n'
     fi
     ;;
+  *" enable_network all"*)
+    mode=$(cat "$STATE_DIR/enable-mode" 2>/dev/null || echo ok)
+    if [ "$mode" = "fail" ]; then printf 'FAIL\n'; else printf 'OK\n'; fi
+    ;;
   *) printf 'OK\n' ;;
 esac
 EOF
 chmod +x "$BIN"/*
 export PATH="$BIN:$PATH"
-export CALL_LOG STATE_DIR
+export CALL_LOG STATE_DIR WIFI_RUN_DIR="$RUN_DIR"
 
 PASS=0
 FAIL=0
@@ -136,6 +145,17 @@ set_reconfigure_mode() {
     rm -f "$STATE_DIR/reconfigure-count"
 }
 
+set_enable_mode() {
+    printf '%s\n' "$1" > "$STATE_DIR/enable-mode"
+}
+
+set_boot_policy() {
+    local roam_enabled="$1" generate="$2" extras_json="${3:-[]}" bgscan_enabled="${4:-true}"
+    cat > "$RUN_DIR/mlan0.roam-policy.json" <<EOF
+{"version":1,"iface":"mlan0","roaming_enabled":$roam_enabled,"bgscan_enabled":$bgscan_enabled,"generate_network_blocks":$generate,"extra_ssids":$extras_json}
+EOF
+}
+
 count_global_freq() {
     awk '
       /^[[:space:]]*#/ { next }
@@ -156,6 +176,7 @@ count_block_freq() {
 }
 
 echo "=== wifi freq canonical writer ==="
+set_boot_policy true true '["Office"]'
 write_mode_a_legacy
 : > "$CALL_LOG"
 WPA_CONF_DIR="$WPA_DIR" bash "$WIFI_SH" 0 freq 5180 5200 >/dev/null 2>&1
@@ -171,9 +192,28 @@ check_equal "wifi freq forces update_config=0" \
     "$(grep -Ec '^update_config=0$' "$CONF" || true)" "1"
 check_equal "wifi freq remains persist-only" \
     "$(grep -c 'reconfigure' "$CALL_LOG" || true)" "0"
+if [ -f "$RUN_DIR/mlan0.wpa-conf.lock" ]; then
+    pass "wifi writer acquires shared per-interface lock"
+else
+    fail "wifi writer acquires shared per-interface lock"
+fi
+
+write_mode_b_legacy
+set_boot_policy false false
+cp "$CONF" "$TD/atomic-original.conf"
+INSTALL_MODE=partial-fail WPA_CONF_DIR="$WPA_DIR" \
+    bash "$WIFI_SH" 0 freq 5180 >/dev/null 2>&1
+rc=$?
+if [ "$rc" -ne 0 ]; then pass "wifi atomic writer propagates staging failure"; else fail "wifi atomic writer propagates staging failure"; fi
+if cmp -s "$CONF" "$TD/atomic-original.conf"; then
+    pass "wifi staging failure leaves original conf byte-exact"
+else
+    fail "wifi staging failure leaves original conf byte-exact"
+fi
 
 echo ""
 echo "=== wifi connect target-aware writer ==="
+set_boot_policy false false
 write_mode_b_legacy
 set_status_mode stale-then-target
 : > "$CALL_LOG"
@@ -205,6 +245,7 @@ WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
 check_equal "wifi connect rejects requested SSID on wrong frequency" "$?" "8"
 
 write_mode_a_legacy
+set_boot_policy true true '["Office"]'
 before=$(sha256sum "$CONF" | awk '{print $1}')
 WPA_CONF_DIR="$WPA_DIR" bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1
 rc=$?
@@ -212,8 +253,21 @@ after=$(sha256sum "$CONF" | awk '{print $1}')
 check_equal "wifi connect explicit SSID remains rejected in Mode A" "$rc" "1"
 check_equal "Mode A rejection leaves conf unchanged" "$after" "$before"
 
+write_mode_b_legacy
+set_boot_policy true true '[]'
+before=$(sha256sum "$CONF" | awk '{print $1}')
+WPA_CONF_DIR="$WPA_DIR" bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1
+rc=$?
+after=$(sha256sum "$CONF" | awk '{print $1}')
+check_equal "Mode A empty-extra snapshot rejects explicit connect" "$rc" "1"
+check_equal "Mode A empty-extra connect leaves conf unchanged" "$after" "$before"
+WPA_CONF_DIR="$WPA_DIR" bash "$WIFI_SH" 0 ssid NewNet >/dev/null 2>&1
+check_equal "Mode A empty-extra snapshot rejects wifi ssid" "$?" "1"
+
 write_mode_a_legacy
+set_boot_policy true true '["Office"]'
 set_status_mode mode-a-current
+set_enable_mode ok
 : > "$CALL_LOG"
 WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
     bash "$WIFI_SH" 0 connect >/dev/null 2>&1
@@ -230,6 +284,16 @@ check_equal "Mode A no-arg reconnect restores all network blocks" \
     "$(grep -c 'enable_network all$' "$CALL_LOG" || true)" "1"
 
 write_mode_a_legacy
+set_status_mode mode-a-current
+set_enable_mode fail
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 connect >/dev/null 2>&1
+rc=$?
+check_equal "Mode A reconnect fails when all-network restore fails" "$rc" "7"
+set_enable_mode ok
+
+write_mode_a_legacy
 set_status_mode no-current
 : > "$CALL_LOG"
 WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
@@ -243,6 +307,7 @@ check_equal "Mode A broad recovery does not invent a target id" \
 
 echo ""
 echo "=== OPC canonical writer and rollback ==="
+set_boot_policy false false
 write_mode_b_legacy
 set_reconfigure_mode ok
 : > "$CALL_LOG"
@@ -275,6 +340,7 @@ check_equal "OPC rollback reconfigures restored conf" \
     "$(grep -c 'reconfigure$' "$CALL_LOG" || true)" "2"
 
 write_mode_a_legacy
+set_boot_policy true true '["Office"]'
 before=$(sha256sum "$CONF" | awk '{print $1}')
 WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$TD/run" \
     sh "$OPC_SH" mlan0 ssid NewNet >/dev/null 2>&1
@@ -282,6 +348,16 @@ rc=$?
 after=$(sha256sum "$CONF" | awk '{print $1}')
 check_equal "OPC explicit SSID remains rejected in Mode A" "$rc" "2"
 check_equal "OPC Mode A rejection leaves conf unchanged" "$after" "$before"
+
+write_mode_b_legacy
+set_boot_policy true true '[]'
+before=$(sha256sum "$CONF" | awk '{print $1}')
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
+    sh "$OPC_SH" mlan0 ssid NewNet >/dev/null 2>&1
+rc=$?
+after=$(sha256sum "$CONF" | awk '{print $1}')
+check_equal "OPC rejects Mode A with empty extra list" "$rc" "2"
+check_equal "OPC empty-extra rejection leaves conf unchanged" "$after" "$before"
 
 echo ""
 echo "RESULT: PASS=$PASS FAIL=$FAIL"

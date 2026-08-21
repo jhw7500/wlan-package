@@ -26,6 +26,19 @@ def _write_conf(tmp_path, monkeypatch, conf):
     return path
 
 
+def _write_policy(tmp_path, *, roaming_enabled, generate=False, extras=None, bgscan=True):
+    path = tmp_path / "mlan0.roam-policy.json"
+    path.write_text(json.dumps({
+        "version": 1,
+        "iface": "mlan0",
+        "roaming_enabled": roaming_enabled,
+        "bgscan_enabled": bgscan,
+        "generate_network_blocks": generate,
+        "extra_ssids": extras or [],
+    }))
+    return path
+
+
 # --- extra_ssids extraction / validation (the untested runtime path) ---
 
 def test_extra_ssids_valid_list_stripped(tmp_path, monkeypatch):
@@ -168,6 +181,35 @@ def test_extra_ssids_gated_off_when_generate_false(tmp_path, monkeypatch):
     assert load_bgscan_json("mlan0")[3] == []
 
 
+def test_boot_topology_policy_does_not_hot_reload_from_json(tmp_path, monkeypatch):
+    path = _write_conf(tmp_path, monkeypatch, {
+        "mlan0": {
+            "bgscan": {"interval": 60},
+            "roaming": {
+                "generate_network_blocks": False,
+                "extra_ssids": ["LiveJsonMustNotWin"],
+            },
+        }
+    })
+    boot_policy = {
+        "version": 1,
+        "iface": "mlan0",
+        "roaming_enabled": True,
+        "bgscan_enabled": True,
+        "generate_network_blocks": True,
+        "extra_ssids": ["BootOffice"],
+    }
+    assert load_bgscan_json("mlan0", boot_policy=boot_policy)[3] == ["BootOffice"]
+
+    data = json.loads(path.read_text())
+    data["mlan0"]["roaming"] = {
+        "generate_network_blocks": True,
+        "extra_ssids": ["ChangedAtRuntime"],
+    }
+    path.write_text(json.dumps(data))
+    assert load_bgscan_json("mlan0", boot_policy=boot_policy)[3] == ["BootOffice"]
+
+
 def test_emit_roam_hint_touch_creates_and_advances(tmp_path, monkeypatch):
     monkeypatch.setattr(wifi_bgscan, "ROAM_HINT_DIR", str(tmp_path))
     wifi_bgscan.emit_roam_hint_touch("mlan0")
@@ -199,29 +241,31 @@ def test_passive_non_bool_falls_back_true(tmp_path, monkeypatch):
 # --- proactive roam owner -> boot-latched scan backend ---
 
 def test_scan_backend_is_iw_when_wifi_roam_is_enabled(tmp_path, monkeypatch):
-    _write_conf(tmp_path, monkeypatch, {
-        "mlan0": {"roaming": {"enabled": True}}
-    })
-    assert wifi_bgscan.load_scan_backend("mlan0") == "iw"
+    _write_policy(tmp_path, roaming_enabled=True)
+    assert wifi_bgscan.load_scan_backend("mlan0", run_dir=str(tmp_path)) == "iw"
 
 
 def test_scan_backend_is_wpa_cli_when_wifi_roam_is_disabled(tmp_path, monkeypatch):
-    _write_conf(tmp_path, monkeypatch, {
-        "mlan0": {"roaming": {"enabled": False}}
-    })
-    assert wifi_bgscan.load_scan_backend("mlan0") == "wpa_cli"
+    _write_policy(tmp_path, roaming_enabled=False)
+    assert wifi_bgscan.load_scan_backend("mlan0", run_dir=str(tmp_path)) == "wpa_cli"
 
 
-@pytest.mark.parametrize("roaming", [{}, {"enabled": "false"}, {"enabled": 0}])
-def test_scan_backend_rejects_missing_or_non_boolean_owner(tmp_path, monkeypatch, roaming):
-    _write_conf(tmp_path, monkeypatch, {"mlan0": {"roaming": roaming}})
+@pytest.mark.parametrize("owner", [None, "false", 0])
+def test_scan_backend_rejects_missing_or_non_boolean_owner(tmp_path, monkeypatch, owner):
+    policy = {
+        "version": 1,
+        "iface": "mlan0",
+        "bgscan_enabled": True,
+        "generate_network_blocks": False,
+        "extra_ssids": [],
+    }
+    if owner is not None:
+        policy["roaming_enabled"] = owner
+    (tmp_path / "mlan0.roam-policy.json").write_text(json.dumps(policy))
     with pytest.raises(wifi_bgscan.BgscanConfigError):
-        wifi_bgscan.load_scan_backend("mlan0")
+        wifi_bgscan.load_scan_backend("mlan0", run_dir=str(tmp_path))
 
 
 def test_scan_backend_rejects_unreadable_json_instead_of_guessing(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        wifi_bgscan, "WIFI_INIT_CONF_JSON", str(tmp_path / "missing.json")
-    )
     with pytest.raises(wifi_bgscan.BgscanConfigError):
-        wifi_bgscan.load_scan_backend("mlan0")
+        wifi_bgscan.load_scan_backend("mlan0", run_dir=str(tmp_path))

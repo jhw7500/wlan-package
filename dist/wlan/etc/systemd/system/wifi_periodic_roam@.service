@@ -5,6 +5,8 @@ After=sys-subsystem-net-devices-%i.device wifi_init.service
 PartOf=wifi_init.service
 
 [Service]
+# deprecated third owner: 이전 release의 남은 WantedBy symlink/queued job도 실행 불가.
+ExecCondition=/bin/false
 ExecStart=/usr/local/scripts/wifi_periodic_roam.sh %i
 Restart=on-failure
 RestartSec=10s
