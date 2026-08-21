@@ -20,7 +20,9 @@
 #   끊김이 문제가 되면 freq_list 를 런타임 전용(set_network)으로 관리하는 방식으로
 #   후속 전환을 검토한다.
 #
-# exit: 0=ok / 2=usage / 3=ctrl_interface 부재 / 4=conf 편집 실패(awk ENVIRON 미지원 포함) / 5=reconfigure 실패
+# exit: 0=ok / 2=usage / 3=ctrl_interface 부재 /
+#       4=conf 편집 실패(awk ENVIRON 미지원 포함) / 5=reconfigure 실패 /
+#       6=transaction 취소 또는 rollback 실패
 set -u
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -94,11 +96,45 @@ if [ "$HAVE_SSID" = 1 ]; then
         || { echo "opc_wlan_apply: awk lacks ENVIRON support — cannot apply ssid safely" >&2; exit 4; }
 fi
 # trap 을 mktemp 보다 먼저 등록 — 임시파일 생성과 trap 등록 사이에 시그널이 와도
-# 파일이 남지 않도록(누출 창 제거). 실패 경로는 exit 으로 trap 정리에 위임한다.
-BAK=""; EDIT_TMP=""; TMP=""
-trap 'rm -f "$EDIT_TMP" "$TMP" "$BAK"' EXIT
+# 파일이 남지 않도록(누출 창 제거). ROLLBACK_REQUIRED는 새 conf 설치 직전부터
+# reconfigure 성공까지 1이며, 이 구간의 모든 exit/signal은 원본 복원을 거친다.
+BAK=""; EDIT_TMP=""; TMP=""; ROLLBACK_REQUIRED=0
+opc_transaction_cleanup() {
+    cleanup_rc=$?
+    trap - EXIT HUP INT TERM
+    [ -z "$EDIT_TMP" ] || rm -f "$EDIT_TMP"
+    [ -z "$TMP" ] || rm -f "$TMP"
+
+    if [ "$ROLLBACK_REQUIRED" = 1 ]; then
+        if [ -n "$BAK" ] && [ -f "$BAK" ] && mv -f "$BAK" "$CONF"; then
+            BAK=""
+            ROLLBACK_REQUIRED=0
+            sync "$CONF" 2>/dev/null || sync 2>/dev/null || true
+            sync "$CONF_DIR" 2>/dev/null || sync 2>/dev/null || true
+            # live daemon도 복원본을 읽게 한다. 원래 실패/cancel의 반환값은 보존한다.
+            wcli reconfigure >/dev/null 2>&1 || true
+            if [ "$cleanup_rc" -eq 5 ]; then
+                echo "opc_wlan_apply: reconfigure failed for $IFACE — conf rolled back" >&2
+            else
+                echo "opc_wlan_apply: transaction interrupted — conf rolled back" >&2
+            fi
+        else
+            echo "opc_wlan_apply: CRITICAL: rollback failed; original backup retained at ${BAK:-<unavailable>}" >&2
+            cleanup_rc=6
+        fi
+    elif [ -n "$BAK" ]; then
+        rm -f "$BAK"
+        BAK=""
+    fi
+    exit "$cleanup_rc"
+}
+trap 'opc_transaction_cleanup' EXIT
+trap 'exit 6' HUP INT TERM
 BAK="$(mktemp "${CONF}.bak.XXXXXX")" || { echo "opc_wlan_apply: mktemp(bak) failed" >&2; exit 4; }
 cp -p "$CONF" "$BAK" || { echo "opc_wlan_apply: backup failed" >&2; exit 4; }
+# rollback inode가 rename 전에 durable해야 전원 장애 후에도 원본 복구를 보장한다.
+sync "$BAK" 2>/dev/null || sync 2>/dev/null \
+    || { echo "opc_wlan_apply: backup sync failed" >&2; exit 4; }
 EDIT_TMP="$(mktemp "${CONF}.edit.XXXXXX")" || { echo "opc_wlan_apply: mktemp(edit) failed" >&2; exit 4; }
 TMP="$(mktemp "${CONF}.XXXXXX")" || { echo "opc_wlan_apply: mktemp failed" >&2; exit 4; }
 
@@ -143,35 +179,33 @@ chmod --reference="$CONF" "$TMP" 2>/dev/null || chmod 0600 "$TMP" 2>/dev/null ||
 # rename 전 staging 내용을 먼저 durable하게 한다. rename 후에는 대상
 # inode와 directory entry를 각각 sync해 전원 장애에서 old/new 중 하나만 남게 한다.
 sync "$TMP" 2>/dev/null || sync 2>/dev/null || true
+# 이 플래그를 rename보다 먼저 세워, 두 명령 사이 signal도 원본으로 복구한다.
+ROLLBACK_REQUIRED=1
 mv -f "$TMP" "$CONF" || { echo "opc_wlan_apply: conf install failed" >&2; exit 4; }
 TMP=""
 sync "$CONF" 2>/dev/null || sync 2>/dev/null || true
 sync "$CONF_DIR" 2>/dev/null || sync 2>/dev/null || true
-# mv 로 TMP 소진. reconfigure 검증 전까지 BAK(롤백본)는 보존해야 하므로, 이 구간에
-# 시그널이 와도 백업이 지워지지 않도록 trap 에서 BAK 제거를 뺀다.
-trap '[ -z "$TMP" ] || rm -f "$TMP"' EXIT
 
 # --- 적용 트리거: 전체 conf 재로드 → 공통 freq_list/ssid 모두 반영 ----------------
 # reconfigure 실패 시 깨진 conf 가 영속되어 다음 reboot 기동을 막을 수 있으므로,
 # 원본 백업으로 롤백한 뒤 재적용한다(무선 전체 다운 방지).
-# wpa_cli 는 제어요청 전달만 성공하면 데몬 응답(OK/FAIL)과 무관하게 exit 0 이므로,
-# exit code 가 아니라 출력이 "OK" 인지로 실패를 판정한다(wifi.sh 의 wpa_cli_ok 와 동일).
+# 데몬 reply가 OK여도 wrapper/transport rc가 nonzero면 실패다. reply와 rc를 따로
+# 보존해 둘 다 성공인 경우에만 commit한다(wifi.sh의 wpa_cli_ok와 동일 계약).
 # reconfigure 는 재연결(끊김)을 유발 — wifi_checker 가 과도기를 '불안정'으로 오판해
 # reassociate/restart 하지 않도록 grace flag 를 세운다(TTL 은 checker 의 RECONFIGURE_GRACE_SEC).
 if mkdir -p "$WIFI_RUN_DIR" 2>/dev/null; then
     touch "$WIFI_RUN_DIR/${IFACE}.reconfigure-grace" 2>/dev/null || true
 fi
-if [ "$(wcli reconfigure 2>/dev/null)" != "OK" ]; then
-    mv -f "$BAK" "$CONF"
-    BAK=""
-    sync "$CONF" 2>/dev/null || sync 2>/dev/null || true
-    sync "$CONF_DIR" 2>/dev/null || sync 2>/dev/null || true
-    trap - EXIT   # TMP 는 위 mv 로 이미 소진(rename)됨 — 정리할 임시파일 없음
-    wcli reconfigure >/dev/null 2>&1 || true
-    echo "opc_wlan_apply: reconfigure failed for $IFACE — conf rolled back" >&2
+RECONFIGURE_REPLY=$(wcli reconfigure 2>/dev/null)
+RECONFIGURE_RC=$?
+if [ "$RECONFIGURE_RC" -ne 0 ] || [ "$RECONFIGURE_REPLY" != "OK" ]; then
+    # EXIT transaction trap이 rollback rename/result/sync를 일원화한다.
     exit 5
 fi
-trap - EXIT
+# reconfigure가 확정된 시점이 commit point. 이후 signal은 새 conf를 되돌리지 않는다.
+ROLLBACK_REQUIRED=0
 rm -f "$BAK"
+BAK=""
+trap - EXIT HUP INT TERM
 
 exit 0

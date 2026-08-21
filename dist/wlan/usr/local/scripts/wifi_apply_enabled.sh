@@ -200,18 +200,18 @@ if [ "${MFG_MODE:-0}" = "1" ]; then
         # 무조건 stop — is-active 게이트는 After=wifi_init로 큐에 대기 중인 start/restart
         # job을 놓친다(그 시점 유닛은 inactive, disable은 큐된 job을 취소하지 못함).
         # stop은 job-mode=replace로 대기 job을 취소하며 inactive 유닛에는 무비용 no-op.
-        # 유닛 파일 자체가 없는 선택 유닛(snmpd/opcd 미설치 이미지)은 큐 job도 존재할 수
-        # 없으므로 skip — 존재하지 않는 유닛 stop의 err 오탐 로그 방지.
-        if systemctl cat "$u" >/dev/null 2>&1; then
-            case "$u" in
-                wifi_bgscan@*.service|wifi_roam@*.service|wifi_periodic_roam@*.service)
-                    ensure_stopped_owner_unit "$u" || true
-                    ;;
-                *)
+        # 세 owner unit은 이 패키지 payload라 존재 여부 진단(systemctl cat)이 실패해도
+        # stop/cancel을 생략할 수 없다. 선택 유닛만 cat으로 부재를 걸러 err 오탐을 막는다.
+        case "$u" in
+            wifi_bgscan@*.service|wifi_roam@*.service|wifi_periodic_roam@*.service)
+                ensure_stopped_owner_unit "$u" || true
+                ;;
+            *)
+                if systemctl cat "$u" >/dev/null 2>&1; then
                     systemctl stop "$u" 2>/dev/null || logger -p local0.err "[$tag:$LINENO] stop $u failed"
-                    ;;
-            esac
-        fi
+                fi
+                ;;
+        esac
     done
     systemctl daemon-reload 2>/dev/null || true
     logger -p local0.info "[$tag:$LINENO] MFG profile applied: disabled=${#DISABLED_UNITS[@]} failed=${#FAILED_UNITS[@]}"

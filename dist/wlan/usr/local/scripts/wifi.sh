@@ -394,11 +394,15 @@ apply_bw_or_exit() { # $1 iface, $2 bw_cap
     esac
 }
 
-# wpa_cli는 데몬 응답이 FAIL이어도 exit 0이므로 출력 문자열로 성공 판정
+# wpa_cli는 데몬 응답이 FAIL이어도 exit 0일 수 있다. 반대로 transport/wrapper가
+# stdout에 OK를 남기고 nonzero로 끝나는 경우도 실패이므로 rc와 reply를 모두 확인한다.
 wpa_cli_ok() {
-    local iface="$1"
+    local iface="$1" reply
     shift
-    [ "$(wpa_cli -i "$iface" "$@" 2>/dev/null)" = "OK" ]
+    if ! reply=$(wpa_cli -i "$iface" "$@" 2>/dev/null); then
+        return 1
+    fi
+    [ "$reply" = "OK" ]
 }
 
 # ----- radio staged-apply helpers -----

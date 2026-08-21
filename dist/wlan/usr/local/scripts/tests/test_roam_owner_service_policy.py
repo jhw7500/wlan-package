@@ -303,6 +303,53 @@ exit 0
     assert result.returncode != 0
 
 
+def test_mfg_owner_stop_is_not_skipped_when_systemctl_cat_fails(
+    tmp_path: Path,
+) -> None:
+    """Package-owned owner unit은 `systemctl cat` 진단 실패와 무관하게 stop한다."""
+    data = _config(False)
+    data["global"]["MOD_PARA"] = "test-mfg.conf"
+    config = tmp_path / "wifi_init_conf.json"
+    config.write_text(json.dumps(data))
+    calls = tmp_path / "systemctl.calls"
+    calls.write_text("")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_exe(
+        fake_bin / "systemctl",
+        """#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_SYSTEMCTL_CALLS"
+if [ "$1" = "is-enabled" ]; then exit 1; fi
+if [ "$1" = "cat" ] && [ "$2" = "wifi_roam@mlan0.service" ]; then exit 1; fi
+exit 0
+""",
+    )
+    _write_exe(
+        fake_bin / "grep",
+        """#!/bin/sh
+case "$*" in
+  *"/lib/firmware/test-mfg.conf"*) printf 'mfg_mode=1\n'; exit 0 ;;
+esac
+exec /bin/grep "$@"
+""",
+    )
+    _write_exe(fake_bin / "logger", "#!/bin/sh\nexit 0\n")
+    env = os.environ | {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "WIFI_INIT_CONF_JSON": str(config),
+        "WIFI_RUN_DIR": str(tmp_path / "run"),
+        "WIFI_APPLY_STRICT": "0",
+        "FAKE_SYSTEMCTL_CALLS": str(calls),
+    }
+
+    result = subprocess.run(
+        ["bash", str(APPLY)], env=env, text=True, capture_output=True, timeout=5
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "stop wifi_roam@mlan0.service" in calls.read_text().splitlines()
+
+
 def test_deleted_boot_snapshot_is_not_recreated_from_mutated_json(tmp_path: Path) -> None:
     config = tmp_path / "wifi_init_conf.json"
     config.write_text(json.dumps(_config(True, generate_network_blocks=True)))
