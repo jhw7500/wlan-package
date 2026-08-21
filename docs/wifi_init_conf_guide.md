@@ -766,7 +766,9 @@ wifi eth0  log start|stop|restart|status|enable|disable
 `wifi_bgscan.py`는 별도 backend 설정을 받지 않는다. `wifi_apply_enabled.sh`가 부팅
 최초 `/run/wifi/<iface>.roam-policy.json`을 원자 생성하고, bgscan/roam/init/writer가
 이 snapshot을 공통으로 사용한다. `/run` 수명 동안 owner/topology는 daemon이
-crash-restart되어도 바뀌지 않는다.
+crash-restart되어도 바뀌지 않는다. `/run/.<iface>.roam-policy.latched`는 해당 boot에
+snapshot이 이미 생성됐음을 별도로 기억한다. snapshot만 삭제되면 live JSON으로
+재생성하지 않고 service/writer가 fail-closed하며, 재부팅 시에만 둘 다 사라진다.
 
 | `roaming.enabled` | proactive roam owner | bgscan requester | Mode A cross-SSID |
 |---|---|---|---|
@@ -815,8 +817,8 @@ network={
 모든 network 블록은 전역과 **동일한 목록**을 갖는다. 부팅과 `wifi freq`,
 `wifi connect`, OPC writer가 이 형식을 유지하므로 Mode A의 SSID마다 서로 다른
 주파수 범위를 둘 수 없다. runtime writer는 `/run/wifi/<iface>.wpa-conf.lock`을
-공유하고, 같은 directory staging 파일을 sync한 뒤 atomic rename하므로 wifi/OPC가
-경합하거나 reader가 partial conf를 관찰하지 않는다.
+공유하고, 같은 directory staging 파일을 sync한 뒤 atomic rename하고 대상 파일과
+directory까지 sync하므로 wifi/OPC가 경합하거나 reader가 partial conf를 관찰하지 않는다.
 
 ### 11.4 roaming - 로밍 알고리즘
 
@@ -845,6 +847,9 @@ network={
 > 해당 network ID에 임시 pin하고 `id+ssid+bssid+COMPLETED`를 정확히 확인한 뒤 pin을
 > 해제하고 모든 블록을 복구한다. `false`이면 wpa_supplicant의 native cross-SSID 선택
 > 정책(우선순위·신호·blacklist 등)을 그대로 수용한다.
+> pin 해제/all-network 복구와 canonical reconfigure가 모두 실패하면
+> `/run/wifi/<iface>.selection-cleanup-pending`을 남기고, wifi_roam은 다음 판정보다
+> 해당 cleanup을 먼저 재시도한다. marker가 제거될 때까지 새 로밍 판정은 차단된다.
 >
 > Mode A/B와 owner는 부팅 최초 `/run` snapshot으로 결정한다. 설정 파일만 고치거나
 > 일부 daemon/wifi_init만 재시작해 topology/owner를 hot switch할 수 없으며 반드시

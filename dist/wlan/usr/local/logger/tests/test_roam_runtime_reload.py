@@ -2,7 +2,7 @@
 
 계약: SIGHUP 수신 시 wifi_init_conf.json 을 1회 재읽어 적용(mtime 디바운스 없음 —
 신호 시점이 곧 '쓰기 완료'). invalid/구조무효 저장은 현행 유지(기본값 회귀 금지)+경고.
-generate_network_blocks/모드 A extra_ssids 는 재부팅 전용(경고 후 유지). 인스턴스는
+generate_network_blocks/extra_ssids 는 재부팅 전용(경고 후 boot snapshot 유지). 인스턴스는
 필드 갱신으로 이력 보존, enable off→on 은 생성. 적용 시 WPA_CONF_MTIME 리셋(wpa conf
 재파싱 → TH 전파). interruptible_sleep 은 신호 시 즉시 깨는 커널 블록(폴링 아님).
 """
@@ -139,11 +139,13 @@ def test_mode_a_extra_ssids_change_blocked(env):
     assert len(_warn_calls("extra_ssids change ignored")) == 1
 
 
-def test_mode_b_extra_ssids_applies(env):
-    # 모드 B(gen=False)는 extra_ssids 변경 그대로 적용(데몬 무영향, 재생성 불필요)
+def test_mode_b_extra_ssids_change_is_blocked_by_boot_snapshot(env):
+    # 모드 B에서도 extra_ssids는 boot snapshot 필드다. 현재 consumer가 무시하더라도
+    # mutable JSON 값이 전역으로 새면 향후 consumer 추가 시 topology hot-switch가 된다.
     _write(env, _conf(gen=False, extra=["x"]))
     assert reload_roaming_config(IFACE) is True
-    assert wifi_roam.EXTRA_SSIDS == ["x"]
+    assert wifi_roam.EXTRA_SSIDS == []
+    assert len(_warn_calls("extra_ssids change ignored")) == 1
 
 
 def test_pingpong_history_preserved_on_param_change(env):

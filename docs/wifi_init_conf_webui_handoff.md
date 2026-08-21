@@ -85,6 +85,8 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 - backend 선택용 신규 키는 없다. owner/backend/topology는 부팅 최초
   `/run/wifi/<iface>.roam-policy.json` snapshot에 latch되고 daemon 재시작에도 불변이므로
   UI 변경은 **재부팅 필요**로 표시한다.
+- snapshot이 same boot에 삭제돼도 `/run/.<iface>.roam-policy.latched`가 live JSON
+  fallback을 차단한다. UI가 일부 데몬/wifi_init만 재시작해 반영하려 하면 안 된다.
 - `generate_network_blocks`와 `extra_ssids`도 부팅 topology이므로 **재부팅 필요**다.
 - `bgscan.enabled=false`는 package 주기 scan만 끈다. wpa 장애 복구 scan은 유지된다.
 - `bgscan.freq_filter=false`는 deprecated다. 공통 `freq_list`가 있으면 계속 강제한다.

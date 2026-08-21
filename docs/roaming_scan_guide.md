@@ -333,7 +333,8 @@ backoff 가 상한에 머물지 못하는 주 원인은 곡선이 아니라 **go
 | 8 | **`iw dev link` 는 신뢰 불가** | moal 이 cfg80211 `current_bss` 를 갱신하지 않아 연결 중에도 `Not connected.` 를 반환한다. 링크 판정은 `wlan_link_lib.sh`(wpa_cli → station dump 계단식)를 쓸 것 |
 | 9 | **`freq_filter=false`** | deprecated. 공통 global `freq_list`가 있으면 false도 무시하고 iw/wpa_cli 모두 같은 목록을 강제한다. 전대역이 필요하면 공통 목록 자체를 제거해야 한다 |
 | 10 | **`periodic_roam.enabled=true`** | 제3 owner 방지를 위해 무시되고 unit은 강제 disable+stop된다. unit의 항상-false ExecCondition도 stale queued job 실행을 막는다 |
-| 11 | **boot policy snapshot 손상/부재** | owner를 추측하지 않는다. wifi_apply_enabled/owner daemon이 fail-closed하여 이중 owner보다 기동 실패를 선택한다 |
+| 11 | **boot policy snapshot 손상/부재** | owner를 추측하지 않는다. `/run/.<iface>.roam-policy.latched`가 same-boot snapshot 삭제를 감지하고 wifi_apply_enabled/owner daemon/writer가 fail-closed하여 이중 owner보다 기동 실패를 선택한다 |
+| 12 | **Mode A 선택 cleanup 미해결** | BSSID pin 해제·all-network 복원·canonical reconfigure가 모두 실패하면 `/run/wifi/<iface>.selection-cleanup-pending`이 남는다. wifi_roam은 이 marker를 먼저 재복구하며 해결 전에는 새 로밍 판정을 하지 않는다 |
 
 ---
 

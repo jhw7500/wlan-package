@@ -21,6 +21,7 @@ exit 0
 EOF
 cat > "$BIN/sync" <<'EOF'
 #!/bin/sh
+printf 'sync %s\n' "$*" >> "$CALL_LOG"
 exit 0
 EOF
 cat > "$BIN/install" <<'EOF'
@@ -322,6 +323,16 @@ check_equal "OPC freq removes scan_freq" \
     "$(grep -Ec '^[[:space:]]*scan_freq[[:space:]]*=' "$CONF" || true)" "0"
 check_equal "OPC successful apply reconfigures once" \
     "$(grep -c 'reconfigure$' "$CALL_LOG" || true)" "1"
+_opc_stage_sync=$(grep -nE '^sync .*/wpa_supplicant-mlan0\.conf\.[^/ ]+$' "$CALL_LOG" | head -1 | cut -d: -f1)
+_opc_reconfigure=$(grep -n 'reconfigure$' "$CALL_LOG" | head -1 | cut -d: -f1)
+if [ -n "$_opc_stage_sync" ] && [ -n "$_opc_reconfigure" ] \
+   && [ "$_opc_stage_sync" -lt "$_opc_reconfigure" ]; then
+    pass "OPC syncs staged conf before reconfigure"
+else
+    fail "OPC must sync staged conf before rename/reconfigure"
+fi
+check_equal "OPC syncs destination directory" \
+    "$(grep -Fxc "sync $WPA_DIR" "$CALL_LOG" || true)" "1"
 
 write_mode_b_legacy
 cp "$CONF" "$TD/opc-original.conf"

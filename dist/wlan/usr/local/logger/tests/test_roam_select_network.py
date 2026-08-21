@@ -1,5 +1,6 @@
 import sys
 import os
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 sys.modules.setdefault("sUTILS", MagicMock())
@@ -11,6 +12,11 @@ from wifi_roam import select_network_for_ssid
 import pytest
 
 wifi_roam.logger = MagicMock()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_cleanup_marker(tmp_path, monkeypatch):
+    monkeypatch.setattr(wifi_roam, "WIFI_RUN_DIR", str(tmp_path), raising=False)
 
 class _Run:
     """subprocess.run stub: returncode + stdout."""
@@ -489,6 +495,31 @@ def test_cross_ssid_cleanup_persistent_failure_never_reports_success(monkeypatch
 
     assert ok is False
     assert any(c[3] == "reconfigure" for c in calls)
+    marker = Path(wifi_roam.selection_cleanup_marker_path("mlan0"))
+    assert marker.read_text().strip() == "1"
+    assert any(
+        "cleanup remains unresolved" in str(call)
+        for call in wifi_roam.logger.message.call_args_list
+    )
+
+
+def test_pending_selection_cleanup_is_retried_and_marker_cleared(monkeypatch):
+    marker = Path(wifi_roam.selection_cleanup_marker_path("mlan0"))
+    marker.write_text("1\n")
+    calls = []
+
+    def side_effect(cmd, *a, **k):
+        calls.append(cmd[3:])
+        if cmd[3:] in (["bssid", "1", "any"], ["enable_network", "all"]):
+            return _Run(0, "OK\n")
+        return _Run(1, "")
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        with patch.object(wifi_roam.time, "sleep", MagicMock()):
+            assert wifi_roam.retry_pending_selection_cleanup("mlan0") is True
+
+    assert calls == [["bssid", "1", "any"], ["enable_network", "all"]]
+    assert not marker.exists()
 
 
 # --- cross-SSID 라우팅 헬퍼(메인루프 분기) ---
