@@ -22,6 +22,44 @@ EOF
 cat > "$BIN/sync" <<'EOF'
 #!/bin/sh
 printf 'sync %s\n' "$*" >> "$CALL_LOG"
+mode=$(cat "$STATE_DIR/sync-mode" 2>/dev/null || echo ok)
+
+# Path sync 실패 직후 호출되는 global `sync` fallback도 같은 장애로 실패시킨다.
+if [ "$#" -eq 0 ] && [ -f "$STATE_DIR/sync-fallback-pending" ]; then
+    rm -f "$STATE_DIR/sync-fallback-pending"
+    exit 1
+fi
+
+fail_once() {
+    [ ! -f "$STATE_DIR/sync-mode-fired" ] || return 1
+    : > "$STATE_DIR/sync-mode-fired"
+    : > "$STATE_DIR/sync-fallback-pending"
+    exit 1
+}
+
+case "$mode" in
+  fail-stage)
+    case "${1:-}" in
+      "$WPA_DIR"/wpa_supplicant-mlan0.conf.*)
+        case "${1:-}" in *.bak.*|*.rollback.*) ;; *) fail_once ;; esac
+        ;;
+    esac
+    ;;
+  fail-installed)
+    [ "${1:-}" != "$WPA_DIR/wpa_supplicant-mlan0.conf" ] || fail_once
+    ;;
+  fail-rollback-file)
+    if [ -f "$STATE_DIR/rollback-started" ] \
+       && [ "${1:-}" = "$WPA_DIR/wpa_supplicant-mlan0.conf" ]; then
+        fail_once
+    fi
+    ;;
+  fail-rollback-dir)
+    if [ -f "$STATE_DIR/rollback-started" ] && [ "${1:-}" = "$WPA_DIR" ]; then
+        fail_once
+    fi
+    ;;
+esac
 exit 0
 EOF
 cat > "$BIN/install" <<'EOF'
@@ -35,12 +73,13 @@ cp "$1" "$2"
 EOF
 cat > "$BIN/mv" <<'EOF'
 #!/bin/sh
+printf 'mv %s\n' "$*" >> "$CALL_LOG"
 mode=$(cat "$STATE_DIR/mv-mode" 2>/dev/null || echo ok)
 case "$mode:$*" in
-  fail-rollback:*\.bak.*)
+  fail-rollback:*\.bak.*|fail-rollback:*\.rollback.*)
     exit 1
     ;;
-  term-after-install:*\.bak.*)
+  term-after-install:*\.bak.*|term-after-install:*\.rollback.*)
     exec /bin/mv "$@"
     ;;
   term-after-install:*)
@@ -53,6 +92,7 @@ case "$mode:$*" in
     exit "$rc"
     ;;
 esac
+case "$*" in *\.rollback.*) : > "$STATE_DIR/rollback-started" ;; esac
 exec /bin/mv "$@"
 EOF
 cat > "$BIN/systemctl" <<'EOF'
@@ -129,7 +169,7 @@ esac
 EOF
 chmod +x "$BIN"/*
 export PATH="$BIN:$PATH"
-export CALL_LOG STATE_DIR WIFI_RUN_DIR="$RUN_DIR"
+export CALL_LOG STATE_DIR WPA_DIR WIFI_RUN_DIR="$RUN_DIR"
 
 PASS=0
 FAIL=0
@@ -199,6 +239,12 @@ set_assoc_mode() {
 
 set_mv_mode() {
     printf '%s\n' "$1" > "$STATE_DIR/mv-mode"
+}
+
+set_sync_mode() {
+    printf '%s\n' "$1" > "$STATE_DIR/sync-mode"
+    rm -f "$STATE_DIR/sync-mode-fired" "$STATE_DIR/sync-fallback-pending" \
+          "$STATE_DIR/rollback-started"
 }
 
 set_boot_policy() {
@@ -420,21 +466,61 @@ check_equal "OPC freq removes scan_freq" \
 check_equal "OPC successful apply reconfigures once" \
     "$(grep -c 'reconfigure$' "$CALL_LOG" || true)" "1"
 _opc_backup_sync=$(grep -nE '^sync .*/wpa_supplicant-mlan0\.conf\.bak\.[^/ ]+$' "$CALL_LOG" | head -1 | cut -d: -f1)
-if [ -n "$_opc_backup_sync" ]; then
-    pass "OPC syncs rollback backup before destructive rename"
+_opc_backup_dir_sync=$(grep -nFx "sync $WPA_DIR" "$CALL_LOG" | head -1 | cut -d: -f1)
+_opc_install_mv=$(grep -nE "^mv -f .*/wpa_supplicant-mlan0\\.conf\\.[^/ ]+ $CONF$" "$CALL_LOG" | grep -v '\.bak\.' | head -1 | cut -d: -f1)
+if [ -n "$_opc_backup_sync" ] && [ -n "$_opc_backup_dir_sync" ] \
+   && [ -n "$_opc_install_mv" ] \
+   && [ "$_opc_backup_sync" -lt "$_opc_backup_dir_sync" ] \
+   && [ "$_opc_backup_dir_sync" -lt "$_opc_install_mv" ]; then
+    pass "OPC durably syncs rollback backup entry before destructive rename"
 else
-    fail "OPC must sync rollback backup before destructive rename"
+    fail "OPC must sync rollback backup file+directory before destructive rename"
 fi
 _opc_stage_sync=$(grep -nE '^sync .*/wpa_supplicant-mlan0\.conf\.[^/ ]+$' "$CALL_LOG" | grep -v '\.bak\.' | head -1 | cut -d: -f1)
 _opc_reconfigure=$(grep -n 'reconfigure$' "$CALL_LOG" | head -1 | cut -d: -f1)
 if [ -n "$_opc_stage_sync" ] && [ -n "$_opc_reconfigure" ] \
-   && [ "$_opc_stage_sync" -lt "$_opc_reconfigure" ]; then
+   && [ -n "$_opc_install_mv" ] \
+   && [ "$_opc_stage_sync" -lt "$_opc_install_mv" ] \
+   && [ "$_opc_install_mv" -lt "$_opc_reconfigure" ]; then
     pass "OPC syncs staged conf before reconfigure"
 else
     fail "OPC must sync staged conf before rename/reconfigure"
 fi
 check_equal "OPC syncs destination directory" \
-    "$(grep -Fxc "sync $WPA_DIR" "$CALL_LOG" || true)" "1"
+    "$(grep -Fxc "sync $WPA_DIR" "$CALL_LOG" || true)" "2"
+
+write_mode_b_legacy
+cp "$CONF" "$TD/opc-stage-sync-original.conf"
+set_sync_mode fail-stage
+set_reconfigure_mode ok
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$TD/run" \
+    sh "$OPC_SH" mlan0 freq "5180 5200" >/dev/null 2>&1
+rc=$?
+check_equal "OPC staging sync failure exits 4" "$rc" "4"
+if cmp -s "$CONF" "$TD/opc-stage-sync-original.conf"; then
+    pass "OPC staging sync failure leaves original conf byte-exact"
+else
+    fail "OPC staging sync failure must leave original conf byte-exact"
+fi
+check_equal "OPC staging sync failure does not reconfigure" \
+    "$(grep -c 'reconfigure$' "$CALL_LOG" || true)" "0"
+set_sync_mode ok
+
+write_mode_b_legacy
+cp "$CONF" "$TD/opc-installed-sync-original.conf"
+set_sync_mode fail-installed
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$TD/run" \
+    sh "$OPC_SH" mlan0 freq "5180 5200" >/dev/null 2>&1
+rc=$?
+check_equal "OPC installed-conf sync failure exits 4" "$rc" "4"
+if cmp -s "$CONF" "$TD/opc-installed-sync-original.conf"; then
+    pass "OPC installed-conf sync failure rolls back exact original"
+else
+    fail "OPC installed-conf sync failure must roll back exact original"
+fi
+set_sync_mode ok
 
 write_mode_b_legacy
 cp "$CONF" "$TD/opc-original.conf"
@@ -495,6 +581,39 @@ else
 fi
 rm -f "$_rollback_backup"
 set_mv_mode ok
+set_reconfigure_mode ok
+
+for _sync_failure in fail-rollback-file fail-rollback-dir; do
+    write_mode_b_legacy
+    cp "$CONF" "$TD/opc-${_sync_failure}-original.conf"
+    set_reconfigure_mode fail-first
+    set_sync_mode "$_sync_failure"
+    : > "$CALL_LOG"
+    OPC_ERR="$TD/opc-${_sync_failure}.err"
+    WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$TD/run" \
+        sh "$OPC_SH" mlan0 freq "5180 5200" >/dev/null 2>"$OPC_ERR"
+    rc=$?
+    check_equal "OPC ${_sync_failure} exits 6" "$rc" "6"
+    _rollback_backup=""
+    for _candidate in "$CONF".bak.*; do
+        [ -f "$_candidate" ] && _rollback_backup="$_candidate" && break
+    done
+    if [ -n "$_rollback_backup" ] \
+       && cmp -s "$_rollback_backup" "$TD/opc-${_sync_failure}-original.conf"; then
+        pass "OPC ${_sync_failure} retains byte-exact recovery backup"
+    else
+        fail "OPC ${_sync_failure} must retain byte-exact recovery backup"
+    fi
+    if grep -q 'CRITICAL: rollback failed' "$OPC_ERR" \
+       && [ -n "$_rollback_backup" ] \
+       && grep -Fq "$_rollback_backup" "$OPC_ERR"; then
+        pass "OPC ${_sync_failure} reports critical retained-backup path"
+    else
+        fail "OPC ${_sync_failure} must report critical retained-backup path"
+    fi
+    rm -f "$_rollback_backup"
+    set_sync_mode ok
+done
 set_reconfigure_mode ok
 
 write_mode_b_legacy

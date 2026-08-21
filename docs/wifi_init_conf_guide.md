@@ -819,11 +819,14 @@ network={
 주파수 범위를 둘 수 없다. runtime writer는 `/run/wifi/<iface>.wpa-conf.lock`을
 공유하고, 같은 directory staging 파일을 sync한 뒤 atomic rename하고 대상 파일과
 directory까지 sync하므로 wifi/OPC가 경합하거나 reader가 partial conf를 관찰하지 않는다.
-OPC는 원본 backup inode도 새 conf 설치 전에 sync하며, 설치 직전부터 reconfigure 성공
-직전까지 rollback-required 단계로 처리한다. 이 구간의 실패·시그널은 EXIT trap이 원본을
-복구하고, rollback rename 자체가 실패하면 exit 6으로 중단하면서 byte-exact backup 경로를
-보존·보고한다. 모든 `wpa_cli` 제어 명령은 **process rc=0과 reply=`OK`를 동시에** 만족해야
-성공이다(`OK` 출력 뒤 nonzero 종료도 실패).
+OPC는 원본 backup inode와 그 directory entry도 새 conf 설치 전에 순서대로 sync하며,
+설치 직전부터 reconfigure 성공 직전까지 rollback-required 단계로 처리한다. 이 구간의
+실패·시그널은 EXIT trap이 원본을
+복구한다. staging/설치 파일·directory sync 실패도 성공으로 무시하지 않는다. rollback은
+durable backup을 별도 staging으로 복사해 atomic rename하고 복원 파일+directory sync가
+모두 성공한 뒤에만 backup을 제거한다. rollback rename/sync가 실패하면 exit 6으로
+중단하면서 byte-exact backup 경로를 보존·보고한다. 모든 `wpa_cli` 제어 명령은
+**process rc=0과 reply=`OK`를 동시에** 만족해야 성공이다(`OK` 출력 뒤 nonzero 종료도 실패).
 
 ### 11.4 roaming - 로밍 알고리즘
 
@@ -856,7 +859,10 @@ OPC는 원본 backup inode도 새 conf 설치 전에 sync하며, 설치 직전�
 > WAL 지속성을 확인하지 못하면 pin 자체를 거부하고 process-local gate도 유지한다.
 > pin 해제/all-network 복구와 canonical reconfigure가 모두 실패하면 WAL을 남긴 채
 > wifi_roam은 다음 판정보다 해당 cleanup을 먼저 재시도한다. WAL은 `/run/wifi` 정리와
-> 독립적이며, 디스크 WAL 또는 메모리 gate가 제거될 때까지 새 로밍 판정은 차단된다.
+> 독립적이다. daemon 재시작 시에는 boot snapshot 검증/owner 거부보다 cleanup-only
+> preflight를 먼저 수행하므로, snapshot이 함께 삭제돼도 supplicant pin을 복구한 뒤
+> owner 정책은 계속 fail-closed한다. 디스크 WAL 또는 메모리 gate가 제거될 때까지 새
+> 로밍 판정은 차단된다.
 >
 > Mode A/B와 owner는 부팅 최초 `/run` snapshot으로 결정한다. 설정 파일만 고치거나
 > 일부 daemon/wifi_init만 재시작해 topology/owner를 hot switch할 수 없으며 반드시

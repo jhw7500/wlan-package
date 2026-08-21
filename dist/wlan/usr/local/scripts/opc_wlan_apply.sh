@@ -99,18 +99,51 @@ fi
 # 파일이 남지 않도록(누출 창 제거). ROLLBACK_REQUIRED는 새 conf 설치 직전부터
 # reconfigure 성공까지 1이며, 이 구간의 모든 exit/signal은 원본 복원을 거친다.
 BAK=""; EDIT_TMP=""; TMP=""; ROLLBACK_REQUIRED=0
+opc_sync_required() {
+    sync "$1" 2>/dev/null || sync 2>/dev/null
+}
+
 opc_transaction_cleanup() {
     cleanup_rc=$?
     trap - EXIT HUP INT TERM
     [ -z "$EDIT_TMP" ] || rm -f "$EDIT_TMP"
     [ -z "$TMP" ] || rm -f "$TMP"
+    EDIT_TMP=""
+    TMP=""
 
     if [ "$ROLLBACK_REQUIRED" = 1 ]; then
-        if [ -n "$BAK" ] && [ -f "$BAK" ] && mv -f "$BAK" "$CONF"; then
-            BAK=""
+        rollback_ok=1
+        if [ -z "$BAK" ] || [ ! -f "$BAK" ]; then
+            rollback_ok=0
+        else
+            TMP=$(mktemp "${CONF}.rollback.XXXXXX") || rollback_ok=0
+        fi
+        if [ "$rollback_ok" -eq 1 ]; then
+            cp -p "$BAK" "$TMP" || rollback_ok=0
+        fi
+        if [ "$rollback_ok" -eq 1 ]; then
+            opc_sync_required "$TMP" || rollback_ok=0
+        fi
+        if [ "$rollback_ok" -eq 1 ]; then
+            if mv -f "$TMP" "$CONF"; then
+                TMP=""
+            else
+                rollback_ok=0
+            fi
+        fi
+        if [ "$rollback_ok" -eq 1 ]; then
+            opc_sync_required "$CONF" || rollback_ok=0
+        fi
+        if [ "$rollback_ok" -eq 1 ]; then
+            opc_sync_required "$CONF_DIR" || rollback_ok=0
+        fi
+
+        if [ "$rollback_ok" -eq 1 ]; then
             ROLLBACK_REQUIRED=0
-            sync "$CONF" 2>/dev/null || sync 2>/dev/null || true
-            sync "$CONF_DIR" 2>/dev/null || sync 2>/dev/null || true
+            # 복원 inode+directory가 durable해진 뒤에만 원본 backup을 소비한다.
+            if rm -f "$BAK"; then
+                BAK=""
+            fi
             # live daemon도 복원본을 읽게 한다. 원래 실패/cancel의 반환값은 보존한다.
             wcli reconfigure >/dev/null 2>&1 || true
             if [ "$cleanup_rc" -eq 5 ]; then
@@ -119,7 +152,13 @@ opc_transaction_cleanup() {
                 echo "opc_wlan_apply: transaction interrupted — conf rolled back" >&2
             fi
         else
-            echo "opc_wlan_apply: CRITICAL: rollback failed; original backup retained at ${BAK:-<unavailable>}" >&2
+            [ -z "$TMP" ] || rm -f "$TMP"
+            TMP=""
+            if [ -n "$BAK" ] && [ -f "$BAK" ]; then
+                echo "opc_wlan_apply: CRITICAL: rollback failed; original backup retained at $BAK" >&2
+            else
+                echo "opc_wlan_apply: CRITICAL: rollback failed; original backup unavailable at ${BAK:-<unset>}" >&2
+            fi
             cleanup_rc=6
         fi
     elif [ -n "$BAK" ]; then
@@ -133,8 +172,12 @@ trap 'exit 6' HUP INT TERM
 BAK="$(mktemp "${CONF}.bak.XXXXXX")" || { echo "opc_wlan_apply: mktemp(bak) failed" >&2; exit 4; }
 cp -p "$CONF" "$BAK" || { echo "opc_wlan_apply: backup failed" >&2; exit 4; }
 # rollback inode가 rename 전에 durable해야 전원 장애 후에도 원본 복구를 보장한다.
-sync "$BAK" 2>/dev/null || sync 2>/dev/null \
+opc_sync_required "$BAK" \
     || { echo "opc_wlan_apply: backup sync failed" >&2; exit 4; }
+# 새 backup 이름도 directory에 영속된 뒤에만 CONF를 교체한다. 파일 inode sync만으로는
+# 정전 후 backup directory entry의 존재를 보장하지 못한다.
+opc_sync_required "$CONF_DIR" \
+    || { echo "opc_wlan_apply: backup directory sync failed" >&2; exit 4; }
 EDIT_TMP="$(mktemp "${CONF}.edit.XXXXXX")" || { echo "opc_wlan_apply: mktemp(edit) failed" >&2; exit 4; }
 TMP="$(mktemp "${CONF}.XXXXXX")" || { echo "opc_wlan_apply: mktemp failed" >&2; exit 4; }
 
@@ -178,13 +221,16 @@ EDIT_TMP=""
 chmod --reference="$CONF" "$TMP" 2>/dev/null || chmod 0600 "$TMP" 2>/dev/null || true
 # rename 전 staging 내용을 먼저 durable하게 한다. rename 후에는 대상
 # inode와 directory entry를 각각 sync해 전원 장애에서 old/new 중 하나만 남게 한다.
-sync "$TMP" 2>/dev/null || sync 2>/dev/null || true
+opc_sync_required "$TMP" \
+    || { echo "opc_wlan_apply: staged conf sync failed" >&2; exit 4; }
 # 이 플래그를 rename보다 먼저 세워, 두 명령 사이 signal도 원본으로 복구한다.
 ROLLBACK_REQUIRED=1
 mv -f "$TMP" "$CONF" || { echo "opc_wlan_apply: conf install failed" >&2; exit 4; }
 TMP=""
-sync "$CONF" 2>/dev/null || sync 2>/dev/null || true
-sync "$CONF_DIR" 2>/dev/null || sync 2>/dev/null || true
+opc_sync_required "$CONF" \
+    || { echo "opc_wlan_apply: installed conf sync failed" >&2; exit 4; }
+opc_sync_required "$CONF_DIR" \
+    || { echo "opc_wlan_apply: installed directory sync failed" >&2; exit 4; }
 
 # --- 적용 트리거: 전체 conf 재로드 → 공통 freq_list/ssid 모두 반영 ----------------
 # reconfigure 실패 시 깨진 conf 가 영속되어 다음 reboot 기동을 막을 수 있으므로,

@@ -177,6 +177,67 @@ wifi_roam.select_network_for_ssid('mlan0', 'OfficeNet', '00:11:22:33:44:55')
     assert not marker.exists()
 
 
+def test_startup_consumes_surviving_wal_before_missing_policy_refusal(tmp_path):
+    """Deleted /run/wifi must not strand a surviving selection WAL on restart."""
+    logger_dir = Path(wifi_roam.__file__).resolve().parent
+    script = Path(wifi_roam.__file__).resolve()
+    state_dir = tmp_path / "selection-state"
+    state_dir.mkdir()
+    marker = state_dir / ".mlan0.selection-cleanup-pending"
+    marker.write_text(
+        json.dumps({"version": 1, "network_id": "1", "phase": "before-pin"})
+        + "\n"
+    )
+    missing_run_dir = tmp_path / "deleted-wifi-run"
+    call_log = tmp_path / "wpa.calls"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_wpa = fake_bin / "wpa_cli"
+    fake_wpa.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' \"$*\" >> \"$WPA_CALL_LOG\"\n"
+        "printf 'OK\\n'\n"
+    )
+    fake_wpa.chmod(0o755)
+
+    child = f"""
+import runpy, sys, types
+class StubLogger:
+    def __init__(self, *a, **k): pass
+    def message(self, *a, **k): pass
+sys.modules['sUTILS'] = types.SimpleNamespace(Logger=StubLogger, _EXTRA_=lambda: {{}})
+sys.modules['roam_state'] = types.SimpleNamespace(
+    clear_own_lease=lambda *a, **k: True,
+    clear_stale_lease=lambda *a, **k: False,
+    lease_active=lambda *a, **k: False,
+    process_start_time=lambda *a, **k: '1',
+    roam_state_paths=lambda iface: ({str(tmp_path / 'condition')!r}, {str(tmp_path / 'scan-time')!r}),
+    write_flag=lambda *a, **k: None,
+)
+sys.path.insert(0, {str(logger_dir)!r})
+sys.argv = [{str(script)!r}, 'mlan0']
+runpy.run_path({str(script)!r}, run_name='__main__')
+"""
+    env = os.environ | {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "WPA_CALL_LOG": str(call_log),
+        "WIFI_RUN_DIR": str(missing_run_dir),
+        "WIFI_SELECTION_STATE_DIR": str(state_dir),
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", child], env=env, text=True, capture_output=True, timeout=10
+    )
+
+    # Cleanup-only preflight succeeds, then owner/topology still fails closed on the
+    # deliberately missing boot snapshot.
+    assert result.returncode == 2, result.stderr
+    assert call_log.read_text().splitlines() == [
+        "-i mlan0 bssid 1 any",
+        "-i mlan0 enable_network all",
+    ]
+    assert not marker.exists()
+
+
 def test_select_network_ssid_not_found_returns_false_no_select(monkeypatch):
     # to_ssid가 list_networks에 없으면 select_network 자체를 호출하지 않고 False
     calls = []
@@ -259,6 +320,36 @@ def test_select_network_status_exception_after_select_still_restores(monkeypatch
             ok = select_network_for_ssid("mlan0", "OfficeNet", "00:11:22:33:44:55")
     assert ok is False
     assert "enable_network" in calls
+
+
+def test_select_network_status_nonzero_rc_cannot_prove_target_completion(monkeypatch):
+    """Target-looking stdout must not override a failed status process result."""
+    calls = []
+
+    def side_effect(cmd, *a, **k):
+        calls.append(cmd[3:])
+        if cmd[3] == "list_networks":
+            return _Run(0, _LIST_NETWORKS)
+        if cmd[3] in ("bssid", "select_network", "enable_network"):
+            return _Run(0, "OK\n")
+        if cmd[3] == "status":
+            return _Run(
+                9,
+                "bssid=00:11:22:33:44:55\n"
+                "ssid=OfficeNet\nid=1\nwpa_state=COMPLETED\n",
+            )
+        return _Run(1, "")
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        with patch.object(wifi_roam.time, "sleep", MagicMock()):
+            ok = select_network_for_ssid(
+                "mlan0", "OfficeNet", "00:11:22:33:44:55"
+            )
+
+    assert ok is False
+    assert sum(call == ["status"] for call in calls) == 6
+    assert ["bssid", "1", "any"] in calls
+    assert ["enable_network", "all"] in calls
 
 
 def test_select_network_list_networks_timeout_does_not_restore(monkeypatch):
