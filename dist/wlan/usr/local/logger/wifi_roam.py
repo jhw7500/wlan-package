@@ -2280,6 +2280,16 @@ def select_network_for_ssid(iface, to_ssid, to_bssid):
                     text=True,
                     timeout=10,
                 )
+                if stt.returncode != 0:
+                    detail = (stt.stdout or stt.stderr or "").strip()
+                    logger.message(
+                        "err",
+                        f"[{iface}] status proof failed (rc={stt.returncode}): "
+                        f"{detail or 'no reply'}",
+                        _EXTRA_(),
+                    )
+                    time.sleep(0.5)
+                    continue
                 state = cur_ssid = cur_id = cur_bssid = None
                 for ln in stt.stdout.splitlines():
                     if ln.startswith("wpa_state="):
@@ -3161,6 +3171,18 @@ if __name__ == "__main__":
     ROAM_CONDITION_FLAG, LAST_SCAN_TIME_FILE = roam_state_paths(IFACE)
     if clear_stale_roam_lease():
         logger.message("warn", f"[{IFACE}] removed stale roam-condition lease on startup", _EXTRA_())
+
+    # Selection WAL은 disposable /run/wifi boot snapshot보다 오래 살아남도록 /run 바로
+    # 아래에 둔다. 따라서 snapshot 손상/삭제로 owner를 fail-closed 하기 *전에* cleanup만
+    # 수행해야 SIGKILL 뒤의 BSSID pin/disabled-network 상태를 영구히 고립시키지 않는다.
+    # WAL이 없으면 단순 open→ENOENT이며, 이 preflight는 scan/roam 결정을 절대 수행하지 않는다.
+    if not retry_pending_selection_cleanup(IFACE):
+        logger.message(
+            "emerg",
+            f"[{IFACE}] startup selection cleanup unresolved; refusing owner startup",
+            _EXTRA_(),
+        )
+        sys.exit(4)
 
     # owner/topology는 /run boot snapshot이 단일 SoT다. daemon crash/restart 뒤에도
     # persisted JSON 변경을 재해석하지 않으며, snapshot 부재/불일치는 fail-closed한다.
