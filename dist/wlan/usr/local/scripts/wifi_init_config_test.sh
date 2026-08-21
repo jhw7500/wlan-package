@@ -431,6 +431,26 @@ else
     log_fail "boot snapshot wins over runtime topology JSON edits"
 fi
 
+# snapshot이 이미 생성된 boot에서 파일만 삭제되면 live JSON으로
+# topology를 재해석하지 않고 writer도 보수적 multi 판정으로 fail-closed한다.
+rm -f "$_wpa_tmpd/run/mlan0.roam-policy.json"
+: > "$_wpa_tmpd/.mlan0.roam-policy.latched"
+if WIFI_RUN_DIR="$_wpa_tmpd/run" WIFI_INIT_CONF_JSON="$_wpa_tmpd/live-mode-b.json" \
+    wifi_wpa_conf_is_multi_topology mlan0 "$_wpa_tmpd/empty-extra.conf"; then
+    log_pass "deleted boot snapshot blocks live topology fallback"
+else
+    log_fail "deleted boot snapshot blocks live topology fallback"
+fi
+cp "$_wpa_tmpd/empty-extra.conf" "$_wpa_tmpd/deleted-snapshot-sync.conf"
+if WIFI_RUN_DIR="$_wpa_tmpd/run" WIFI_INIT_CONF_JSON="$_wpa_tmpd/live-mode-b.json" \
+    wifi_init_sync_extra_ssid_blocks mlan0 "$_wpa_tmpd/deleted-snapshot-sync.conf"; then
+    log_fail "deleted boot snapshot blocks extra-block writer fallback"
+elif cmp -s "$_wpa_tmpd/empty-extra.conf" "$_wpa_tmpd/deleted-snapshot-sync.conf"; then
+    log_pass "deleted boot snapshot blocks extra-block writer fallback"
+else
+    log_fail "deleted boot snapshot failure leaves extra-block conf unchanged"
+fi
+
 cat > "$_wpa_tmpd/run/mlan0.roam-policy.json" <<'EOF'
 {"version":1,"iface":"mlan0","roaming_enabled":true,"bgscan_enabled":true,"generate_network_blocks":true,"extra_ssids":["BootOffice"]}
 EOF

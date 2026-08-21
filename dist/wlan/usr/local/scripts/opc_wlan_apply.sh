@@ -57,6 +57,7 @@ done
 [ -n "$FREQS" ] || [ "$HAVE_SSID" = 1 ] || { echo "opc_wlan_apply: nothing to apply (need freq and/or ssid)" >&2; exit 2; }
 
 CONF="${WPA_CONF_DIR:-/etc/wpa_supplicant}/wpa_supplicant-${IFACE}.conf"
+CONF_DIR=${CONF%/*}
 WIFI_RUN_DIR="${WIFI_RUN_DIR:-/run/wifi}"
 [ -f "$CONF" ] || { echo "opc_wlan_apply: conf not found: $CONF" >&2; exit 4; }
 wifi_wpa_conf_lock_acquire "$IFACE" \
@@ -139,11 +140,16 @@ EDIT_TMP=""
 # 원본 conf 권한을 보존한다 — psk= 평문이 0644 로 월드리더블 노출되지 않도록.
 # --reference 미지원 환경(busybox 등)은 0600 으로 폴백(노출 최소).
 chmod --reference="$CONF" "$TMP" 2>/dev/null || chmod 0600 "$TMP" 2>/dev/null || true
+# rename 전 staging 내용을 먼저 durable하게 한다. rename 후에는 대상
+# inode와 directory entry를 각각 sync해 전원 장애에서 old/new 중 하나만 남게 한다.
+sync "$TMP" 2>/dev/null || sync 2>/dev/null || true
 mv -f "$TMP" "$CONF" || { echo "opc_wlan_apply: conf install failed" >&2; exit 4; }
+TMP=""
+sync "$CONF" 2>/dev/null || sync 2>/dev/null || true
+sync "$CONF_DIR" 2>/dev/null || sync 2>/dev/null || true
 # mv 로 TMP 소진. reconfigure 검증 전까지 BAK(롤백본)는 보존해야 하므로, 이 구간에
 # 시그널이 와도 백업이 지워지지 않도록 trap 에서 BAK 제거를 뺀다.
-trap 'rm -f "$TMP"' EXIT
-sync 2>/dev/null || true
+trap '[ -z "$TMP" ] || rm -f "$TMP"' EXIT
 
 # --- 적용 트리거: 전체 conf 재로드 → 공통 freq_list/ssid 모두 반영 ----------------
 # reconfigure 실패 시 깨진 conf 가 영속되어 다음 reboot 기동을 막을 수 있으므로,
@@ -156,7 +162,10 @@ if mkdir -p "$WIFI_RUN_DIR" 2>/dev/null; then
     touch "$WIFI_RUN_DIR/${IFACE}.reconfigure-grace" 2>/dev/null || true
 fi
 if [ "$(wcli reconfigure 2>/dev/null)" != "OK" ]; then
-    mv -f "$BAK" "$CONF"; sync 2>/dev/null || true
+    mv -f "$BAK" "$CONF"
+    BAK=""
+    sync "$CONF" 2>/dev/null || sync 2>/dev/null || true
+    sync "$CONF_DIR" 2>/dev/null || sync 2>/dev/null || true
     trap - EXIT   # TMP 는 위 mv 로 이미 소진(rename)됨 — 정리할 임시파일 없음
     wcli reconfigure >/dev/null 2>&1 || true
     echo "opc_wlan_apply: reconfigure failed for $IFACE — conf rolled back" >&2
@@ -164,6 +173,5 @@ if [ "$(wcli reconfigure 2>/dev/null)" != "OK" ]; then
 fi
 trap - EXIT
 rm -f "$BAK"
-sync 2>/dev/null || true
 
 exit 0

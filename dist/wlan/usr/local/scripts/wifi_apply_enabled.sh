@@ -111,11 +111,11 @@ for _owner_iface in mlan0 mlan1; do
     fi
 done
 
-# apply <unit> <want_true_or_false>
+# apply <unit> <want_true_or_false> [owner_disable_critical]
 # 현재 systemctl enable 상태와 want가 다를 때만 enable/disable 호출.
 apply() {
-    local unit="$1" want="$2"
-    local cur="false"
+    local unit="$1" want="$2" owner_critical="${3:-false}"
+    local cur="false" disable_failed=0
     systemctl is-enabled --quiet "$unit" 2>/dev/null && cur="true"
     if [ "$want" = "true" ] && [ "$cur" = "false" ]; then
         logger -p local0.info "[$tag:$LINENO] enable $unit"
@@ -132,7 +132,20 @@ apply() {
         else
             FAILED_UNITS+=("disable:$unit")
             logger -p local0.err "[$tag:$LINENO] disable $unit failed"
+            disable_failed=1
+            if [ "$owner_critical" = "true" ]; then
+                OWNER_POLICY_FAILED=1
+                logger -p local0.crit "[$tag:$LINENO] cannot disable disallowed owner $unit"
+            fi
         fi
+    fi
+    # disable exit 0만으로 stale enable symlink 제거를 단정하지 않는다.
+    if [ "$want" = "false" ] && [ "$owner_critical" = "true" ] \
+       && [ "$disable_failed" -eq 0 ] \
+       && systemctl is-enabled --quiet "$unit" 2>/dev/null; then
+        OWNER_POLICY_FAILED=1
+        FAILED_UNITS+=("postcheck-enabled:$unit")
+        logger -p local0.crit "[$tag:$LINENO] disallowed owner remains enabled: $unit"
     fi
 }
 
@@ -176,19 +189,34 @@ if [ "${MFG_MODE:-0}" = "1" ]; then
         done
     done
     for u in "${MFG_UNITS[@]}"; do
-        apply "$u" "false"
+        case "$u" in
+            wifi_bgscan@*.service|wifi_roam@*.service|wifi_periodic_roam@*.service)
+                apply "$u" "false" "true"
+                ;;
+            *)
+                apply "$u" "false"
+                ;;
+        esac
         # 무조건 stop — is-active 게이트는 After=wifi_init로 큐에 대기 중인 start/restart
         # job을 놓친다(그 시점 유닛은 inactive, disable은 큐된 job을 취소하지 못함).
         # stop은 job-mode=replace로 대기 job을 취소하며 inactive 유닛에는 무비용 no-op.
         # 유닛 파일 자체가 없는 선택 유닛(snmpd/opcd 미설치 이미지)은 큐 job도 존재할 수
         # 없으므로 skip — 존재하지 않는 유닛 stop의 err 오탐 로그 방지.
         if systemctl cat "$u" >/dev/null 2>&1; then
-            systemctl stop "$u" 2>/dev/null || logger -p local0.err "[$tag:$LINENO] stop $u failed"
+            case "$u" in
+                wifi_bgscan@*.service|wifi_roam@*.service|wifi_periodic_roam@*.service)
+                    ensure_stopped_owner_unit "$u" || true
+                    ;;
+                *)
+                    systemctl stop "$u" 2>/dev/null || logger -p local0.err "[$tag:$LINENO] stop $u failed"
+                    ;;
+            esac
         fi
     done
     systemctl daemon-reload 2>/dev/null || true
     logger -p local0.info "[$tag:$LINENO] MFG profile applied: disabled=${#DISABLED_UNITS[@]} failed=${#FAILED_UNITS[@]}"
-    if [ "$STRICT" -eq 1 ] && [ "${#FAILED_UNITS[@]}" -gt 0 ]; then
+    if [ "$OWNER_POLICY_FAILED" -ne 0 ] \
+       || { [ "$STRICT" -eq 1 ] && [ "${#FAILED_UNITS[@]}" -gt 0 ]; }; then
         exit 1
     fi
     exit 0
@@ -222,7 +250,14 @@ for iface in mlan0 mlan1; do
         logger -p local0.info "[$tag:$LINENO] [$iface] disabled → all child units disable"
         for u in wpa_supplicant wifi_logger wifi_checker wifi_event \
                  wifi_bridge wifi_bgscan wifi_roam wifi_periodic_roam wifi_arping; do
-            apply "${u}@${iface}.service" "false"
+            case "$u" in
+                wifi_bgscan|wifi_roam|wifi_periodic_roam)
+                    apply "${u}@${iface}.service" "false" "true"
+                    ;;
+                *)
+                    apply "${u}@${iface}.service" "false"
+                    ;;
+            esac
         done
         ensure_stopped_owner_unit "wifi_bgscan@${iface}.service" || true
         ensure_stopped_owner_unit "wifi_roam@${iface}.service" || true
@@ -236,10 +271,18 @@ for iface in mlan0 mlan1; do
     apply "wifi_checker@${iface}.service"       "$(get_bool ".${iface}.checker.enabled"       "true")"
     _bgscan_want=$(boot_policy_bool "$iface" bgscan_enabled) || exit 1
     _roam_want=$(boot_policy_bool "$iface" roaming_enabled) || exit 1
-    apply "wifi_bgscan@${iface}.service"        "$_bgscan_want"
-    apply "wifi_roam@${iface}.service"          "$_roam_want"
+    if [ "$_bgscan_want" = "false" ]; then
+        apply "wifi_bgscan@${iface}.service" "false" "true"
+    else
+        apply "wifi_bgscan@${iface}.service" "true"
+    fi
+    if [ "$_roam_want" = "false" ]; then
+        apply "wifi_roam@${iface}.service" "false" "true"
+    else
+        apply "wifi_roam@${iface}.service" "true"
+    fi
     apply "wifi_arping@${iface}.service"        "$(get_bool ".${iface}.arping.enabled"        "false")"
-    apply "wifi_periodic_roam@${iface}.service" "false"
+    apply "wifi_periodic_roam@${iface}.service" "false" "true"
     if [ "$_bgscan_want" = "false" ]; then
         ensure_stopped_owner_unit "wifi_bgscan@${iface}.service" || true
     fi

@@ -85,6 +85,7 @@ def test_roam_owner_drives_services_and_periodic_owner_is_forced_off(
         """#!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_SYSTEMCTL_CALLS"
 if [ "$1" = "is-enabled" ]; then
+  if grep -Fxq "disable $3" "$FAKE_SYSTEMCTL_CALLS"; then exit 1; fi
   case ",${FAKE_ENABLED_UNITS:-}," in
     *",$3,"*) exit 0 ;;
     *) exit 1 ;;
@@ -264,6 +265,77 @@ exit 0
         ["bash", str(APPLY)], env=env, text=True, capture_output=True, timeout=5
     )
     assert result.returncode != 0
+
+
+@pytest.mark.parametrize("disable_reply", ["fail", "still-enabled"])
+def test_disallowed_owner_disable_or_postcheck_failure_is_fatal_without_strict(
+    tmp_path: Path, disable_reply: str
+) -> None:
+    config = tmp_path / "wifi_init_conf.json"
+    config.write_text(json.dumps(_config(False)))
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_exe(
+        fake_bin / "systemctl",
+        """#!/bin/sh
+if [ "$1" = "is-enabled" ] && [ "$3" = "wifi_periodic_roam@mlan0.service" ]; then
+  exit 0
+fi
+if [ "$1" = "disable" ] && [ "$2" = "wifi_periodic_roam@mlan0.service" ]; then
+  [ "$DISABLE_REPLY" = "fail" ] && exit 1
+  exit 0
+fi
+if [ "$1" = "is-enabled" ]; then exit 1; fi
+exit 0
+""",
+    )
+    _write_exe(fake_bin / "logger", "#!/bin/sh\nexit 0\n")
+    env = os.environ | {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "WIFI_INIT_CONF_JSON": str(config),
+        "WIFI_RUN_DIR": str(tmp_path / "run"),
+        "WIFI_APPLY_STRICT": "0",
+        "DISABLE_REPLY": disable_reply,
+    }
+    result = subprocess.run(
+        ["bash", str(APPLY)], env=env, text=True, capture_output=True, timeout=5
+    )
+    assert result.returncode != 0
+
+
+def test_deleted_boot_snapshot_is_not_recreated_from_mutated_json(tmp_path: Path) -> None:
+    config = tmp_path / "wifi_init_conf.json"
+    config.write_text(json.dumps(_config(True, generate_network_blocks=True)))
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_exe(
+        fake_bin / "systemctl",
+        "#!/bin/sh\nif [ \"$1\" = is-enabled ]; then exit 1; fi\nexit 0\n",
+    )
+    _write_exe(fake_bin / "logger", "#!/bin/sh\nexit 0\n")
+    run_dir = tmp_path / "run"
+    env = os.environ | {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "WIFI_INIT_CONF_JSON": str(config),
+        "WIFI_RUN_DIR": str(run_dir),
+    }
+
+    first = subprocess.run(
+        ["bash", str(APPLY)], env=env, text=True, capture_output=True, timeout=5
+    )
+    assert first.returncode == 0, first.stderr
+    snapshot = run_dir / "mlan0.roam-policy.json"
+    latch = tmp_path / ".mlan0.roam-policy.latched"
+    assert snapshot.exists()
+    assert latch.exists()
+
+    snapshot.unlink()
+    config.write_text(json.dumps(_config(False, bgscan_enabled=False)))
+    second = subprocess.run(
+        ["bash", str(APPLY)], env=env, text=True, capture_output=True, timeout=5
+    )
+    assert second.returncode != 0
+    assert not snapshot.exists()
 
 
 def test_owner_units_fail_closed_on_stale_queued_start() -> None:

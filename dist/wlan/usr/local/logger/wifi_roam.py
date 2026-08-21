@@ -33,6 +33,7 @@ WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
 # 모듈 로드 시 mlan0 기본 경로 — __main__ 이 실제 IFACE 로 재대입(ROAM_HINT_FILE 전례).
 ROAM_CONDITION_FLAG, LAST_SCAN_TIME_FILE = roam_state_paths(IFACE)
 WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
+WIFI_RUN_DIR = os.environ.get("WIFI_RUN_DIR", "/run/wifi")
 ROAM_HINT_FILE = f"/tmp/wifi_roam_hint_{IFACE}"  # bgscan이 새 후보 AP 발견 시 touch (단방향 신호)
 SCAN_TIMESTAMP_RE = re.compile(
     r"^(?:\[(?P<bracketed>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]"
@@ -1666,8 +1667,8 @@ def reload_roaming_config(iface):
     곧 '쓰기 완료'다. 3중 방어:
       1) json.load 선검증: invalid 면 현행 유지(기본값 회귀 금지)+경고 후 무시.
       2) 구조 검증(iface.roaming dict): 없으면 현행 유지+경고.
-      3) generate_network_blocks(모드 결정자) / 모드 A 의 extra_ssids 는 부팅 시
-         wpa 블록 생성 절차와 결합돼 재부팅 전용(경고 후 boot snapshot 유지).
+      3) generate_network_blocks(모드 결정자) / extra_ssids 는 모드와 무관하게
+         boot snapshot 필드이므로 재부팅 전용(경고 후 부팅값 유지).
     인스턴스 파라미터는 재생성이 아닌 필드 갱신 → 이력(roam_history 등) 보존.
     적용 시 WPA_CONF_MTIME 을 리셋해 같은 사이클 wpa conf 재파싱을 유도(JSON DEFAULT_TH_*
     변경을 실제 판정값 WPA_TH_* 까지 전파). 반환: 적용 수행 여부."""
@@ -1705,8 +1706,9 @@ def reload_roaming_config(iface):
     load_roaming_config(iface, data=new_data)
     # generate_network_blocks는 런타임 전환 금지(재부팅 전용). 키가 '명시적으로' 다른
     # 값으로 바뀐 경우에만 경고 — 키 부재로 인한 False 수렴은 조용히 복원(오탐 방지).
-    # gen을 유지할 때는 그에 연동된 EXTRA_SSIDS(부팅 시 생성된 wpa 블록과 정합)도 함께
-    # 원복한다 — 런타임에 extra만 바뀌면 없는 블록으로 select_network가 실패하기 때문.
+    # topology/extra는 모드와 무관하게 동일한 boot snapshot에 속한다. Mode B에서
+    # extra가 현재 사용되지 않더라도 mutable JSON 값을 전역으로 누출하면 향후 consumer가
+    # topology hot-switch를 만들 수 있으므로 두 필드를 각각 무조건 복원한다.
     if GENERATE_NETWORK_BLOCKS != old_gen:
         if "generate_network_blocks" in roam_cfg:
             logger.message(
@@ -1715,19 +1717,15 @@ def reload_roaming_config(iface):
                 f"(requires reboot; keeping boot snapshot {old_gen})",
                 _EXTRA_(),
             )
-        GENERATE_NETWORK_BLOCKS = old_gen
-        EXTRA_SSIDS = list(old_extra)
-    elif GENERATE_NETWORK_BLOCKS and EXTRA_SSIDS != old_extra:
-        # 모드 A에서 extra_ssids는 부팅 시 생성된 wpa 네트워크 블록에 종속(gen과 동일
-        # 사유로 블록 생성이 boot 절차). 런타임에 배열만 바꾸면 블록 없는 SSID로
-        # select_network가 실패하므로 재부팅 전용으로 취급(현행 유지 + 경고).
+    GENERATE_NETWORK_BLOCKS = old_gen
+    if "extra_ssids" in roam_cfg and EXTRA_SSIDS != old_extra:
         logger.message(
             "warn",
-            f"[{iface}] extra_ssids change ignored at runtime in mode A "
-            f"(requires reboot to regenerate network blocks)",
+            f"[{iface}] extra_ssids change ignored at runtime "
+            f"(requires reboot; keeping boot snapshot)",
             _EXTRA_(),
         )
-        EXTRA_SSIDS = list(old_extra)
+    EXTRA_SSIDS = list(old_extra)
     # 인스턴스 파라미터 갱신(이력 보존) + enable off→on 인스턴스 생성
     if ENABLE_PING_PONG_PREVENTION:
         if ping_pong_preventer is None:
@@ -1975,13 +1973,89 @@ def _wpa_reconfigure(iface):
     return False
 
 
+def selection_cleanup_marker_path(iface):
+    """Mode A 선택 상태가 아직 복구되지 않았음을 나타내는 per-iface marker."""
+    return os.path.join(WIFI_RUN_DIR, f"{iface}.selection-cleanup-pending")
+
+
+def _sync_parent_directory(path):
+    """Atomic replace/unlink의 directory entry를 durable하게 한다."""
+    directory = os.path.dirname(path) or "."
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    fd = os.open(directory, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _mark_selection_cleanup_pending(iface, network_id):
+    """Unresolved BSSID/network cleanup을 same-directory atomic marker로 기록."""
+    marker = selection_cleanup_marker_path(iface)
+    tmp = f"{marker}.tmp.{os.getpid()}"
+    fd = None
+    try:
+        os.makedirs(os.path.dirname(marker), exist_ok=True)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            fd = None  # fdopen이 소유
+            f.write(f"{network_id}\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, marker)
+        _sync_parent_directory(marker)
+        return True
+    except Exception as e:
+        logger.message(
+            "emerg",
+            f"[{iface}] cannot persist selection cleanup marker: {e}",
+            _EXTRA_(),
+        )
+        return False
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+
+def _clear_selection_cleanup_pending(iface):
+    marker = selection_cleanup_marker_path(iface)
+    try:
+        os.unlink(marker)
+    except FileNotFoundError:
+        return True
+    except OSError as e:
+        logger.message(
+            "err", f"[{iface}] cannot clear selection cleanup marker: {e}", _EXTRA_()
+        )
+        return False
+    try:
+        _sync_parent_directory(marker)
+    except OSError as e:
+        # 현재 namespace에서는 제거됐다. power loss로 marker가 다시 보이면
+        # 다음 기동에 보수적으로 cleanup을 한 번 더 실행한다.
+        logger.message(
+            "warn", f"[{iface}] cleanup marker directory sync failed: {e}", _EXTRA_()
+        )
+    return True
+
+
 def _restore_network_selection_state(iface, network_id):
     """BSSID pin/all-network state를 bounded retry 후 canonical reconfigure로 복구한다."""
     for _ in range(2):
         clear_ok = _set_network_bssid(iface, network_id, "any")
         enable_ok = _enable_network_all(iface)
         if clear_ok and enable_ok:
-            return True
+            return _clear_selection_cleanup_pending(iface)
         time.sleep(0.1)
 
     logger.message(
@@ -1989,21 +2063,77 @@ def _restore_network_selection_state(iface, network_id):
         f"[{iface}] transient selection cleanup failed; reloading canonical conf",
         _EXTRA_(),
     )
-    if not _wpa_reconfigure(iface):
-        return False
-    time.sleep(0.2)
-    clear_ok = _set_network_bssid(iface, network_id, "any")
-    enable_ok = _enable_network_all(iface)
-    if clear_ok and enable_ok:
+    if _wpa_reconfigure(iface):
+        time.sleep(0.2)
+        clear_ok = _set_network_bssid(iface, network_id, "any")
+        enable_ok = _enable_network_all(iface)
+        if clear_ok and enable_ok and _clear_selection_cleanup_pending(iface):
+            logger.message(
+                "notice",
+                f"[{iface}] selection state recovered by canonical reconfigure; "
+                "transition result will be retried",
+                _EXTRA_(),
+            )
+            # reconfigure는 association을 다시 시작할 수 있어 이전 COMPLETED 증명이
+            # 더는 유효하지 않다. cleanup은 끝났지만 이번 transition은 실패.
+            return False
+
+    _mark_selection_cleanup_pending(iface, network_id)
+    logger.message(
+        "err",
+        f"[{iface}] selection cleanup remains unresolved (id={network_id}); "
+        "blocking new roam decisions until recovery",
+        _EXTRA_(),
+    )
+    return False
+
+
+def retry_pending_selection_cleanup(iface):
+    """Pending marker가 있으면 새 roam 판정 전에 cleanup을 재시도한다."""
+    marker = selection_cleanup_marker_path(iface)
+    try:
+        with open(marker, "r") as f:
+            network_id = f.read().strip()
+    except FileNotFoundError:
+        return True
+    except OSError as e:
         logger.message(
-            "notice",
-            f"[{iface}] selection state recovered by canonical reconfigure; "
-            "transition result will be retried",
+            "err", f"[{iface}] cannot read selection cleanup marker: {e}", _EXTRA_()
+        )
+        return False
+
+    if not network_id.isdigit():
+        logger.message(
+            "err",
+            f"[{iface}] invalid selection cleanup marker; trying canonical recovery",
             _EXTRA_(),
         )
-    # reconfigure는 association을 다시 시작할 수 있어 이전 COMPLETED 증명이 더는
-    # 유효하지 않다. 복구 성공이어도 이번 transition은 실패로 반환해 다음 tick에 재검증.
-    return False
+        if (
+            _wpa_reconfigure(iface)
+            and _enable_network_all(iface)
+            and _clear_selection_cleanup_pending(iface)
+        ):
+            return True
+        logger.message(
+            "err", f"[{iface}] selection cleanup remains unresolved", _EXTRA_()
+        )
+        return False
+
+    logger.message(
+        "warn",
+        f"[{iface}] retrying pending selection cleanup (id={network_id})",
+        _EXTRA_(),
+    )
+    _restore_network_selection_state(iface, network_id)
+    if os.path.exists(marker):
+        logger.message(
+            "err", f"[{iface}] selection cleanup remains unresolved", _EXTRA_()
+        )
+        return False
+    logger.message(
+        "notice", f"[{iface}] pending selection cleanup resolved", _EXTRA_()
+    )
+    return True
 
 
 def select_network_for_ssid(iface, to_ssid, to_bssid):
@@ -2121,10 +2251,15 @@ def select_network_for_ssid(iface, to_ssid, to_bssid):
         )
         return True
 
+    cleanup_detail = (
+        "cleanup remains unresolved"
+        if os.path.exists(selection_cleanup_marker_path(iface))
+        else "candidates restored"
+    )
     logger.message(
         "err",
         f"[{iface}] select_network: not COMPLETED@target for {to_ssid} "
-        f"(id={nid}, bssid={target_bssid}), candidates restored",
+        f"(id={nid}, bssid={target_bssid}), {cleanup_detail}",
         _EXTRA_(),
     )
     return False
@@ -2268,12 +2403,10 @@ def evaluate_candidates(entries, station, trend, cooldown, live_ssid, baseline_r
     선택 단계에서 조용히 탈락했다(로그에는 `Roam candidate ... score=0`으로 찍혀 채택된
     것처럼 보임). 그 결과 DIFF_TH=0이 DIFF_TH=1과 동일하게 동작했다.
     출하 기본(DIFF_TH=8)에서는 최소 score 가 80 이라 영향 없음."""
-    # 핑퐁 억제의 범위 규칙(리뷰 P1): same-SSID 후보는 BSSID 단위 — wpa_cli roam 이
-    # 대상 BSSID 를 고정하므로 쌍 판정이 정확하다. cross-SSID 후보는 SSID 단위 —
-    # select_network 는 network id 만 고르고 supplicant 가 BSSID 를 자율 선택하므로,
-    # 같은 SSID 의 다른(약한) BSSID 를 후보로 남기면 결국 억제된 바로 그 BSSID 로
-    # 재결합할 수 있다. 이번 스캔 엔트리 기준으로 어느 BSSID 라도 억제에 걸리는
-    # cross SSID 는 통째로 이번 tick 후보에서 제외한다.
+    # 핑퐁 억제의 범위 규칙(리뷰 P1): same-SSID는 대상 BSSID 쌍을 정확히
+    # 차단한다. cross-SSID도 현재는 선택한 BSSID를 network id에 임시 pin하지만,
+    # 같은 목표 SSID의 다른 BSSID로 우회해 즉시 재시도하지 않도록 기존의 보수적
+    # SSID-wide 차단 정책을 유지한다.
     blocked_cross_ssids = set()
     if ENABLE_PING_PONG_PREVENTION and ping_pong_preventer:
         for e in entries:
@@ -2616,6 +2749,11 @@ def main():
         if _RELOAD_STATE["pending"]:
             _RELOAD_STATE["pending"] = False
             reload_roaming_config(IFACE)
+        # 이전 Mode A 선택의 BSSID pin/all-network cleanup이 미해결이면
+        # 새 scan/로밍 판정보다 먼저 복구한다. 실패 동안은 새 pin 금지.
+        if not retry_pending_selection_cleanup(IFACE):
+            interruptible_sleep(CHECK_INTERVAL)
+            continue
         # wpa_cli reconfigure 등으로 conf 가 런타임 변경됐으면 재파싱(mtime 변화 시에만).
         # ssid/scan_freq/TH 캐시를 최신화해 옛 SSID 로 스캔하는 stale 로밍을 방지한다.
         reload_supplicant_conf_if_changed(WPA_CONF_FILE)

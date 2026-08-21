@@ -61,6 +61,38 @@ wifi_roam_policy_path() {
     printf '%s/%s.roam-policy.json\n' "${WIFI_RUN_DIR:-/run/wifi}" "$1"
 }
 
+# Snapshot 디렉터리와 독립적인 boot-latch. 기본 /run/wifi의
+# 상위(/run)에 두어 /run/wifi만 삭제돼도 "이 boot에 이미 snapshot을
+# 생성함"을 기억한다. /run 전체가 비워지는 재부팅에서만 둘 다 사라진다.
+wifi_roam_policy_latch_path() {
+    local iface="$1" run_dir="${WIFI_RUN_DIR:-/run/wifi}" latch_dir
+    latch_dir="${WIFI_ROAM_POLICY_LATCH_DIR:-}"
+    if [ -z "$latch_dir" ]; then
+        latch_dir=$(dirname -- "$run_dir") || return 1
+    fi
+    printf '%s/.%s.roam-policy.latched\n' "$latch_dir" "$iface"
+}
+
+_wifi_roam_policy_mark_latched() {
+    local iface="$1" latch latch_dir tmp
+    latch=$(wifi_roam_policy_latch_path "$iface") || return 1
+    [ -e "$latch" ] && return 0
+    latch_dir=${latch%/*}
+    mkdir -p "$latch_dir" || return 1
+    tmp=$(mktemp "$latch_dir/.${iface}.roam-policy.latched.XXXXXX") || return 1
+    if ! printf '1\n' > "$tmp" || ! chmod 0600 "$tmp" 2>/dev/null; then
+        rm -f "$tmp"
+        return 1
+    fi
+    sync "$tmp" 2>/dev/null || sync 2>/dev/null || true
+    if ! mv -f "$tmp" "$latch"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    sync "$latch" 2>/dev/null || sync 2>/dev/null || true
+    sync "$latch_dir" 2>/dev/null || sync 2>/dev/null || true
+}
+
 wifi_roam_policy_validate_file() {
     local file="$1" iface="$2"
     [ -f "$file" ] || return 1
@@ -82,10 +114,11 @@ wifi_roam_policy_validate_file() {
 wifi_roam_policy_ensure_snapshot() {
     local iface="$1"
     local conf_json="${2:-${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}}"
-    local run_dir="${WIFI_RUN_DIR:-/run/wifi}" policy tmp
+    local run_dir="${WIFI_RUN_DIR:-/run/wifi}" policy latch tmp
     local roaming_enabled bgscan_enabled generate extras
 
     policy=$(wifi_roam_policy_path "$iface") || return 1
+    latch=$(wifi_roam_policy_latch_path "$iface") || return 1
     command -v flock >/dev/null 2>&1 || return 1
     mkdir -p "$run_dir" || return 1
     # 두 apply 인스턴스가 동시에 'missing'을 보고 서로 다른 JSON으로 overwrite하지
@@ -93,9 +126,14 @@ wifi_roam_policy_ensure_snapshot() {
     exec 8>"$run_dir/.roam-policy.lock" || return 1
     flock -x 8 || return 1
     if [ -e "$policy" ]; then
-        wifi_roam_policy_validate_file "$policy" "$iface"
+        wifi_roam_policy_validate_file "$policy" "$iface" || return 1
+        # Upgrade/이전 crash로 valid snapshot만 있는 경우 latch를 복구한다.
+        _wifi_roam_policy_mark_latched "$iface"
         return $?
     fi
+    # 같은 boot에 snapshot을 삭제한 후 live JSON으로 owner/topology를
+    # 재구성하면 hot-switch가 된다. 재생성 대신 fail-closed.
+    [ ! -e "$latch" ] || return 1
 
     wifi_init_conf_status "$conf_json" || return 1
 
@@ -142,7 +180,8 @@ wifi_roam_policy_ensure_snapshot() {
         return 1
     fi
     sync "$policy" 2>/dev/null || sync 2>/dev/null || true
-    wifi_roam_policy_validate_file "$policy" "$iface"
+    wifi_roam_policy_validate_file "$policy" "$iface" || return 1
+    _wifi_roam_policy_mark_latched "$iface"
 }
 
 wifi_roam_policy_get_bool() {
@@ -168,15 +207,19 @@ wifi_wpa_conf_network_count() {
 # 우선순위: 이 boot snapshot > (테스트/boot 전) live JSON > 실제 conf shape/sentinel.
 # snapshot이 존재하지만 invalid면 안전하게 multi로 판정해 mutation을 차단한다.
 wifi_wpa_conf_is_multi_topology() {
-    local iface="$1" conf="$2" policy gen="" count
+    local iface="$1" conf="$2" policy latch gen="" count
     local conf_json="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
     policy=$(wifi_roam_policy_path "$iface") || return 0
+    latch=$(wifi_roam_policy_latch_path "$iface") || return 0
     if [ -e "$policy" ]; then
         if ! wifi_roam_policy_validate_file "$policy" "$iface"; then
             return 0
         fi
         gen=$(jq -r '.generate_network_blocks' "$policy" 2>/dev/null) || return 0
     else
+        # Snapshot이 이미 생성된 boot에 파일만 유실된 상태. live JSON으로
+        # 단일 topology를 추측해 writer가 SSID를 일괄 치환하지 못하게 차단.
+        [ ! -e "$latch" ] || return 0
         if wifi_init_conf_status "$conf_json"; then
             gen=$(wifi_init_normalize_bool \
                 "$(wifi_init_json_read_raw "$conf_json" ".${iface}.roaming.generate_network_blocks")" \
@@ -474,17 +517,21 @@ _wifi_extra_ssid_template_field() {
 wifi_init_sync_extra_ssid_blocks() {
     local iface="$1" conf="$2"
     local conf_json="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
-    local policy
+    local policy latch
 
     [ -f "$conf" ] || return 0
     command -v jq >/dev/null 2>&1 || return 0
 
     local gen
     policy=$(wifi_roam_policy_path "$iface") || return 1
+    latch=$(wifi_roam_policy_latch_path "$iface") || return 1
     if [ -e "$policy" ]; then
         wifi_roam_policy_validate_file "$policy" "$iface" || return 1
         gen=$(jq -r '.generate_network_blocks' "$policy" 2>/dev/null) || return 1
     else
+        # 이 boot에 snapshot을 이미 생성했다면 유실 후 live JSON으로
+        # extra block을 재해석하지 않는다(수동 wifi_init 재실행 hot-switch 차단).
+        [ ! -e "$latch" ] || return 1
         gen=$(wifi_init_normalize_bool \
             "$(wifi_init_json_read_raw "$conf_json" ".${iface}.roaming.generate_network_blocks")" \
             false)
