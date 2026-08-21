@@ -186,6 +186,7 @@ usr/lib/firmware/cts/wifi_mod_para.conf
 usr/local/logger/passive_roam.py
 usr/local/logger/print.py
 usr/local/logger/roam_notify.py
+usr/local/logger/roam_policy.py
 usr/local/logger/roam_state.py
 usr/local/logger/sUTILS.py
 usr/local/logger/usb_print.py
