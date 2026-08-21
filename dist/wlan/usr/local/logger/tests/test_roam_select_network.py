@@ -29,13 +29,15 @@ _LIST_NETWORKS = (
 
 def _make_side_effect(list_out=_LIST_NETWORKS, select_rc=0, enable_rc=0,
                       states=("SCANNING", "COMPLETED")):
-    """wpa_cli 호출 순서: list_networks → select_network → status(폴링)* → enable_network."""
+    """wpa_cli 호출 순서: list → bssid pin → select → status* → clear → enable."""
     state_iter = iter(states)
 
     def side_effect(cmd, *args, **kwargs):
         sub = cmd[3]  # ["wpa_cli","-i",IFACE,<sub>,...]
         if sub == "list_networks":
             return _Run(0, list_out)
+        if sub == "bssid":
+            return _Run(0, "OK\n")
         if sub == "select_network":
             return _Run(select_rc, "OK\n")
         if sub == "status":
@@ -60,7 +62,7 @@ def test_select_network_success_polls_then_enables(monkeypatch):
 
     with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
         with patch.object(wifi_roam.time, "sleep", MagicMock()):
-            ok = select_network_for_ssid("mlan0", "OfficeNet")
+            ok = select_network_for_ssid("mlan0", "OfficeNet", "00:11:22:33:44:55")
     assert ok is True
     assert "select_network" in calls
     assert calls[-1] == "enable_network"  # fallback 후보 복원이 마지막
@@ -75,7 +77,7 @@ def test_select_network_ssid_not_found_returns_false_no_select(monkeypatch):
 
     with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
         with patch.object(wifi_roam.time, "sleep", MagicMock()):
-            ok = select_network_for_ssid("mlan0", "NoSuchSSID")
+            ok = select_network_for_ssid("mlan0", "NoSuchSSID", "00:11:22:33:44:55")
     assert ok is False
     assert "select_network" not in calls
     assert "enable_network" not in calls
@@ -91,7 +93,7 @@ def test_select_network_timeout_polls_then_false_but_restores(monkeypatch):
 
     with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
         with patch.object(wifi_roam.time, "sleep", MagicMock()):
-            ok = select_network_for_ssid("mlan0", "OfficeNet")
+            ok = select_network_for_ssid("mlan0", "OfficeNet", "00:11:22:33:44:55")
     assert ok is False
     assert "enable_network" in calls  # 실패해도 후보 복원
 
@@ -105,6 +107,8 @@ def test_select_network_status_timeout_after_select_still_restores(monkeypatch):
         calls.append(sub)
         if sub == "list_networks":
             return _Run(0, _LIST_NETWORKS)
+        if sub == "bssid":
+            return _Run(0, "OK\n")
         if sub == "select_network":
             return _Run(0, "OK\n")
         if sub == "status":
@@ -115,7 +119,7 @@ def test_select_network_status_timeout_after_select_still_restores(monkeypatch):
 
     with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
         with patch.object(wifi_roam.time, "sleep", MagicMock()):
-            ok = select_network_for_ssid("mlan0", "OfficeNet")
+            ok = select_network_for_ssid("mlan0", "OfficeNet", "00:11:22:33:44:55")
     assert ok is False
     assert "select_network" in calls
     assert "enable_network" in calls  # 폴링 timeout이어도 복원 호출
@@ -130,6 +134,8 @@ def test_select_network_status_exception_after_select_still_restores(monkeypatch
         calls.append(sub)
         if sub == "list_networks":
             return _Run(0, _LIST_NETWORKS)
+        if sub == "bssid":
+            return _Run(0, "OK\n")
         if sub == "select_network":
             return _Run(0, "OK\n")
         if sub == "status":
@@ -140,7 +146,7 @@ def test_select_network_status_exception_after_select_still_restores(monkeypatch
 
     with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
         with patch.object(wifi_roam.time, "sleep", MagicMock()):
-            ok = select_network_for_ssid("mlan0", "OfficeNet")
+            ok = select_network_for_ssid("mlan0", "OfficeNet", "00:11:22:33:44:55")
     assert ok is False
     assert "enable_network" in calls
 
@@ -161,7 +167,7 @@ def test_select_network_list_networks_timeout_does_not_restore(monkeypatch):
 
     with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
         with patch.object(wifi_roam.time, "sleep", MagicMock()):
-            ok = select_network_for_ssid("mlan0", "OfficeNet")
+            ok = select_network_for_ssid("mlan0", "OfficeNet", "00:11:22:33:44:55")
     assert ok is False
     assert "enable_network" not in calls
 
@@ -170,7 +176,7 @@ def test_select_network_list_networks_fails_returns_false(monkeypatch):
     with patch.object(wifi_roam.subprocess, "run",
                       side_effect=lambda cmd, *a, **k: _Run(1, "")):
         with patch.object(wifi_roam.time, "sleep", MagicMock()):
-            ok = select_network_for_ssid("mlan0", "OfficeNet")
+            ok = select_network_for_ssid("mlan0", "OfficeNet", "00:11:22:33:44:55")
     assert ok is False
 
 def test_select_network_exact_ssid_match_not_substring(monkeypatch):
@@ -183,7 +189,7 @@ def test_select_network_exact_ssid_match_not_substring(monkeypatch):
 
     with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
         with patch.object(wifi_roam.time, "sleep", MagicMock()):
-            ok = select_network_for_ssid("mlan0", "Office")
+            ok = select_network_for_ssid("mlan0", "Office", "00:11:22:33:44:55")
     assert ok is False
     assert "select_network" not in calls
 
@@ -199,6 +205,8 @@ def test_select_network_fail_reply_returns_false_no_poll(monkeypatch):
         calls.append(sub)
         if sub == "list_networks":
             return _Run(0, _LIST_NETWORKS)
+        if sub == "bssid":
+            return _Run(0, "OK\n")
         if sub == "select_network":
             return _Run(0, "FAIL\n")
         if sub == "enable_network":
@@ -207,7 +215,7 @@ def test_select_network_fail_reply_returns_false_no_poll(monkeypatch):
 
     with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
         with patch.object(wifi_roam.time, "sleep", MagicMock()):
-            ok = select_network_for_ssid("mlan0", "OfficeNet")
+            ok = select_network_for_ssid("mlan0", "OfficeNet", "00:11:22:33:44:55")
     assert ok is False
     assert "status" not in calls
     assert "enable_network" in calls  # 방어적 복원(무-disable 상태면 no-op)
@@ -228,6 +236,8 @@ def test_select_network_old_ap_completed_not_success_until_target(monkeypatch):
         calls.append(sub)
         if sub == "list_networks":
             return _Run(0, _LIST_NETWORKS)
+        if sub == "bssid":
+            return _Run(0, "OK\n")
         if sub == "select_network":
             return _Run(0, "OK\n")
         if sub == "status":
@@ -238,7 +248,7 @@ def test_select_network_old_ap_completed_not_success_until_target(monkeypatch):
 
     with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
         with patch.object(wifi_roam.time, "sleep", MagicMock()):
-            ok = select_network_for_ssid("mlan0", "OfficeNet")
+            ok = select_network_for_ssid("mlan0", "OfficeNet", "00:11:22:33:44:55")
     assert ok is True
     assert calls.count("status") == 3  # 구 AP COMPLETED·SCANNING을 지나 3번째에만 성공
     assert calls[-1] == "enable_network"
@@ -253,6 +263,8 @@ def test_select_network_wrong_ssid_completed_times_out(monkeypatch):
         calls.append(sub)
         if sub == "list_networks":
             return _Run(0, _LIST_NETWORKS)
+        if sub == "bssid":
+            return _Run(0, "OK\n")
         if sub == "select_network":
             return _Run(0, "OK\n")
         if sub == "status":
@@ -263,10 +275,120 @@ def test_select_network_wrong_ssid_completed_times_out(monkeypatch):
 
     with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
         with patch.object(wifi_roam.time, "sleep", MagicMock()):
-            ok = select_network_for_ssid("mlan0", "OfficeNet")
+            ok = select_network_for_ssid("mlan0", "OfficeNet", "00:11:22:33:44:55")
     assert ok is False
     assert calls.count("status") == 6  # 폴링 한도 소진
     assert "enable_network" in calls
+
+
+# --- target BSSID pin/confirm/cleanup contract ---
+
+_TARGET_BSSID = "00:11:22:33:44:55"
+
+
+def test_cross_ssid_select_pins_and_confirms_exact_target_bssid(monkeypatch):
+    calls = []
+
+    def side_effect(cmd, *a, **k):
+        calls.append(cmd)
+        sub = cmd[3]
+        if sub == "list_networks":
+            return _Run(0, _LIST_NETWORKS)
+        if sub == "bssid":
+            return _Run(0, "OK\n")
+        if sub == "select_network":
+            return _Run(0, "OK\n")
+        if sub == "status":
+            return _Run(
+                0,
+                f"bssid={_TARGET_BSSID}\nssid=OfficeNet\nid=1\nwpa_state=COMPLETED\n",
+            )
+        if sub == "enable_network":
+            return _Run(0, "OK\n")
+        return _Run(1, "")
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        with patch.object(wifi_roam.time, "sleep", MagicMock()):
+            ok = select_network_for_ssid("mlan0", "OfficeNet", _TARGET_BSSID)
+
+    assert ok is True
+    assert [c[3:] for c in calls] == [
+        ["list_networks"],
+        ["bssid", "1", _TARGET_BSSID],
+        ["select_network", "1"],
+        ["status"],
+        ["bssid", "1", "any"],
+        ["enable_network", "all"],
+    ]
+
+
+def test_cross_ssid_select_rejects_completed_on_wrong_bssid_and_cleans_up(monkeypatch):
+    calls = []
+
+    def side_effect(cmd, *a, **k):
+        calls.append(cmd)
+        sub = cmd[3]
+        if sub == "list_networks":
+            return _Run(0, _LIST_NETWORKS)
+        if sub in ("bssid", "select_network", "enable_network"):
+            return _Run(0, "OK\n")
+        if sub == "status":
+            return _Run(
+                0,
+                "bssid=aa:bb:cc:dd:ee:ff\nssid=OfficeNet\nid=1\nwpa_state=COMPLETED\n",
+            )
+        return _Run(1, "")
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        with patch.object(wifi_roam.time, "sleep", MagicMock()):
+            ok = select_network_for_ssid("mlan0", "OfficeNet", _TARGET_BSSID)
+
+    assert ok is False
+    assert sum(c[3:] == ["bssid", "1", "any"] for c in calls) == 1
+    assert sum(c[3:] == ["enable_network", "all"] for c in calls) == 1
+
+
+def test_cross_ssid_pin_rejection_stops_before_select_without_spurious_cleanup(monkeypatch):
+    calls = []
+
+    def side_effect(cmd, *a, **k):
+        calls.append(cmd)
+        if cmd[3] == "list_networks":
+            return _Run(0, _LIST_NETWORKS)
+        if cmd[3] == "bssid":
+            return _Run(0, "FAIL\n")
+        return _Run(1, "")
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        ok = select_network_for_ssid("mlan0", "OfficeNet", _TARGET_BSSID)
+
+    assert ok is False
+    assert not any(c[3] == "select_network" for c in calls)
+    assert not any(c[3:] == ["bssid", "1", "any"] for c in calls)
+    assert not any(c[3] == "enable_network" for c in calls)
+
+
+def test_cross_ssid_status_exception_clears_pin_and_restores_networks(monkeypatch):
+    calls = []
+
+    def side_effect(cmd, *a, **k):
+        calls.append(cmd)
+        sub = cmd[3]
+        if sub == "list_networks":
+            return _Run(0, _LIST_NETWORKS)
+        if sub in ("bssid", "select_network", "enable_network"):
+            return _Run(0, "OK\n")
+        if sub == "status":
+            raise RuntimeError("status boom")
+        return _Run(1, "")
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        with patch.object(wifi_roam.time, "sleep", MagicMock()):
+            ok = select_network_for_ssid("mlan0", "OfficeNet", _TARGET_BSSID)
+
+    assert ok is False
+    assert sum(c[3:] == ["bssid", "1", "any"] for c in calls) == 1
+    assert sum(c[3:] == ["enable_network", "all"] for c in calls) == 1
 
 
 # --- cross-SSID 라우팅 헬퍼(메인루프 분기) ---
@@ -281,7 +403,7 @@ def test_route_cross_mode_a_uses_select_network(monkeypatch):
     wifi_roam.route_cross_ssid_transition(
         "mlan0", "OfficeNet", "aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"
     )
-    sel.assert_called_once_with("mlan0", "OfficeNet")
+    sel.assert_called_once_with("mlan0", "OfficeNet", "11:22:33:44:55:66")
     con.assert_not_called()
 
 def test_route_cross_mode_b_uses_connect(monkeypatch):

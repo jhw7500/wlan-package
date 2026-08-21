@@ -60,6 +60,25 @@ network={
 }
 """ + _SENTINEL_END + "\n"
 
+_CANONICAL_MULTI_BLOCK = """\
+update_config=0
+freq_list=5180 5200
+network={
+    ssid="cantops"
+    freq_list=2412
+    key_mgmt=WPA-PSK
+    psk="secret"
+}
+#!TH_CONNECT=-80
+""" + _SENTINEL_BEGIN + """
+network={
+    ssid="OfficeA"
+    freq_list=2437
+    key_mgmt=WPA-PSK
+    psk="secret"
+}
+""" + _SENTINEL_END + "\n"
+
 
 def _write(tmp_path, text):
     p = tmp_path / "wpa.conf"
@@ -97,6 +116,29 @@ def test_multi_block_ignores_extra_th_connect(tmp_path):
     path = _write(tmp_path, _MULTI_BLOCK)
     _, _, _, _, th_connect = parse_supplicant_conf(path)
     assert th_connect == -80
+
+
+def test_canonical_global_freq_list_is_roam_scan_source(tmp_path):
+    """전역 목록이 block별 값과 충돌해도 common global 값만 사용한다."""
+    path = _write(tmp_path, _CANONICAL_MULTI_BLOCK)
+    ssid, freqs, _, _, th_connect = parse_supplicant_conf(path)
+    assert ssid == "cantops"
+    assert freqs == ["5180", "5200"]
+    assert th_connect == -80
+
+
+def test_legacy_base_freq_list_precedes_scan_freq_until_boot_migration(tmp_path):
+    path = _write(
+        tmp_path,
+        """\
+network={
+    ssid="cantops"
+    freq_list=2412 2437
+    scan_freq=5180
+}
+""",
+    )
+    assert parse_supplicant_conf(path)[1] == ["2412", "2437"]
 
 
 # ── 로밍 임계 소스 단일화 (conf `#!TH_2G=`/`#!TH_5G=` 마커 경로 제거) ──
