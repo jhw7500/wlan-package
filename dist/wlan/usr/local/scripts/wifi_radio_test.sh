@@ -312,7 +312,6 @@ mkconf() {
 network={
     ssid="test"
     freq_list=$1
-    scan_freq=$1
 }
 EOC
 }

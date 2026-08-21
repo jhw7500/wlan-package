@@ -5,14 +5,14 @@
 #   --netid N : (하위호환 인자) 단일 network 블록 전제 — 현재는 모든 블록에 적용하므로 무시.
 #   freq/ssid : 하나 이상 지정.
 #
-# 책임: wpa_supplicant conf 파일을 직접 수정(ssid/scan_freq/freq_list)하고
+# 책임: wpa_supplicant conf 파일을 직접 수정(ssid/전역+블록 freq_list)하고
 #       `wpa_cli reconfigure` 로 프로세스 종료 없이 동적 적용 + 영속을 한 번에 처리.
 #       재연결 성공 확인/롤백은 안 함 (결과는 WlanStatusChange indication 이 통지).
 #
 # 왜 save_config 가 아니라 conf 직접편집인가:
 #   wpa_supplicant v2.10 의 save_config 는 freq_list 를 직렬화하지 않아(verified
 #   on-target) 영속이 깨지고, update_config=1 conf 를 통째로 재생성하며 주석/포맷도
-#   손실된다. conf 를 우리가 직접 쓰면 freq_list/scan_freq/ssid 가 그대로 영속되고,
+#   손실된다. conf 를 우리가 직접 쓰면 공통 freq_list/ssid 가 그대로 영속되고,
 #   reconfigure 가 conf 를 재로드하면서 freq_list(하드 밴드 락)까지 즉시 반영된다.
 #   (set_network 런타임 변경은 reconfigure 시 conf 값으로 덮어써지므로 쓰지 않는다.)
 #
@@ -22,6 +22,19 @@
 #
 # exit: 0=ok / 2=usage / 3=ctrl_interface 부재 / 4=conf 편집 실패(awk ENVIRON 미지원 포함) / 5=reconfigure 실패
 set -u
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# 설치 이미지에서는 같은 scripts 디렉터리, 개발/대체 진입점에서는 정규 설치 경로를 쓴다.
+if [ -r "$SCRIPT_DIR/wifi_init_config_lib.sh" ]; then
+    # shellcheck source=./wifi_init_config_lib.sh
+    . "$SCRIPT_DIR/wifi_init_config_lib.sh"
+elif [ -r /usr/local/scripts/wifi_init_config_lib.sh ]; then
+    # shellcheck source=/usr/local/scripts/wifi_init_config_lib.sh
+    . /usr/local/scripts/wifi_init_config_lib.sh
+else
+    echo "opc_wlan_apply: wifi_init_config_lib.sh not found" >&2
+    exit 4
+fi
 
 IFACE="${1:-}"
 [ -n "$IFACE" ] || { echo "usage: $0 <iface> [--netid N] [freq \"<mhz ...>\"] [ssid <name>]" >&2; exit 2; }
@@ -44,6 +57,7 @@ done
 [ -n "$FREQS" ] || [ "$HAVE_SSID" = 1 ] || { echo "opc_wlan_apply: nothing to apply (need freq and/or ssid)" >&2; exit 2; }
 
 CONF="${WPA_CONF_DIR:-/etc/wpa_supplicant}/wpa_supplicant-${IFACE}.conf"
+WIFI_RUN_DIR="${WIFI_RUN_DIR:-/run/wifi}"
 [ -f "$CONF" ] || { echo "opc_wlan_apply: conf not found: $CONF" >&2; exit 4; }
 
 # 다중블록 모드(자동생성 센티넬 존재) 거부: ssid 일괄교체는 기본 SSID를 소실시키므로
@@ -60,8 +74,8 @@ wcli() { wpa_cli -i "$IFACE" "$@"; }
 wcli ping >/dev/null 2>&1 || { echo "opc_wlan_apply: wpa_cli ctrl unavailable for $IFACE" >&2; exit 3; }
 
 # --- conf 직접 편집 (atomic: 같은 fs 임시파일 → chmod → rename, 원본은 롤백용 백업) -
-# freq → 모든 network={} 블록에 scan_freq=/freq_list= 설정(단일 블록 전제).
-# ssid → network 블록의 ssid= 치환(없으면 블록 끝에 추가). 한 awk 패스로 처리.
+# ssid → 중간파일에서 network 블록의 ssid= 치환(없으면 블록 끝에 추가).
+# freq → 공용 renderer가 전역/모든 블록에 같은 freq_list를 쓰고 scan_freq를 제거.
 # SSID 의 \ 와 " 는 wpa_supplicant conf 문법(C-style escape)에 맞게 이스케이프하여
 # conf 라인 인젝션/따옴표 조기종료를 막는다(신뢰 불가 입력 대비).
 DO_FREQ=0; [ -n "$FREQS" ] && DO_FREQ=1
@@ -78,33 +92,26 @@ if [ "$HAVE_SSID" = 1 ]; then
 fi
 # trap 을 mktemp 보다 먼저 등록 — 임시파일 생성과 trap 등록 사이에 시그널이 와도
 # 파일이 남지 않도록(누출 창 제거). 실패 경로는 exit 으로 trap 정리에 위임한다.
-BAK=""; TMP=""
-trap 'rm -f "$TMP" "$BAK"' EXIT
+BAK=""; EDIT_TMP=""; TMP=""
+trap 'rm -f "$EDIT_TMP" "$TMP" "$BAK"' EXIT
 BAK="$(mktemp "${CONF}.bak.XXXXXX")" || { echo "opc_wlan_apply: mktemp(bak) failed" >&2; exit 4; }
 cp -p "$CONF" "$BAK" || { echo "opc_wlan_apply: backup failed" >&2; exit 4; }
+EDIT_TMP="$(mktemp "${CONF}.edit.XXXXXX")" || { echo "opc_wlan_apply: mktemp(edit) failed" >&2; exit 4; }
 TMP="$(mktemp "${CONF}.XXXXXX")" || { echo "opc_wlan_apply: mktemp failed" >&2; exit 4; }
 
 # SSID 는 ENVIRON 으로 전달한다 — awk -v 는 값의 \X 를 C-escape 로 해석해(예: \b→
 # 백스페이스) 백슬래시가 든 SSID 를 손상시키므로, raw 보존되는 ENVIRON 을 쓴다.
 # (ENVIRON 미지원 awk 는 위 probe 에서 걸러져 이 경로에 도달하지 않는다.)
-OPC_SSID="$SSID" awk -v freqs="$FREQS" -v do_freq="$DO_FREQ" -v do_ssid="$HAVE_SSID" '
+OPC_SSID="$SSID" awk -v do_ssid="$HAVE_SSID" '
     function esc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return s }
     BEGIN { in_net = 0; blocks = 0; ssid_done = 0; new_ssid = ENVIRON["OPC_SSID"] }
     /^[[:space:]]*#/ { print; next }
     /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ {
-        in_net = 1; blocks++; done_scan = 0; done_list = 0; ssid_done = 0; print; next
+        in_net = 1; blocks++; ssid_done = 0; print; next
     }
     in_net && /^[[:space:]]*\}/ {
-        if (do_freq && !done_scan) { print "    scan_freq=" freqs; done_scan = 1 }
-        if (do_freq && !done_list) { print "    freq_list=" freqs; done_list = 1 }
         if (do_ssid && !ssid_done)  { print "    ssid=\"" esc(new_ssid) "\""; ssid_done = 1 }
         in_net = 0; print; next
-    }
-    do_freq && in_net && /^[[:space:]]*scan_freq[[:space:]]*=/ {
-        if (!done_scan) { print "    scan_freq=" freqs; done_scan = 1 } next
-    }
-    do_freq && in_net && /^[[:space:]]*freq_list[[:space:]]*=/ {
-        if (!done_list) { print "    freq_list=" freqs; done_list = 1 } next
     }
     do_ssid && in_net && /^[[:space:]]*ssid[[:space:]]*=/ {
         if (!ssid_done) { print "    ssid=\"" esc(new_ssid) "\""; ssid_done = 1 } next
@@ -114,7 +121,18 @@ OPC_SSID="$SSID" awk -v freqs="$FREQS" -v do_freq="$DO_FREQ" -v do_ssid="$HAVE_S
         if (blocks == 0) { print "error: no network={ block in " FILENAME > "/dev/stderr"; exit 1 }
         if (blocks > 1) { print "warn: " blocks " network blocks present — all modified (single-block assumed)" > "/dev/stderr" }
     }
-' "$CONF" > "$TMP" || { echo "opc_wlan_apply: conf edit failed" >&2; exit 4; }
+' "$CONF" > "$EDIT_TMP" || { echo "opc_wlan_apply: conf edit failed" >&2; exit 4; }
+
+# SSID-only 요청도 기존 공통 목록을 해석해 canonical 형식을 보존/이행한다.
+COMMON_FREQS="$FREQS"
+if [ "$DO_FREQ" = 0 ]; then
+    COMMON_FREQS=$(wifi_wpa_conf_common_freqs "$EDIT_TMP") \
+        || { echo "opc_wlan_apply: common frequency resolve failed" >&2; exit 4; }
+fi
+wifi_wpa_conf_render_canonical "$EDIT_TMP" "$TMP" "$COMMON_FREQS" \
+    || { echo "opc_wlan_apply: canonical conf render failed" >&2; exit 4; }
+rm -f "$EDIT_TMP"
+EDIT_TMP=""
 
 # 원본 conf 권한을 보존한다 — psk= 평문이 0644 로 월드리더블 노출되지 않도록.
 # --reference 미지원 환경(busybox 등)은 0600 으로 폴백(노출 최소).
@@ -125,15 +143,16 @@ mv -f "$TMP" "$CONF" || { echo "opc_wlan_apply: conf install failed" >&2; exit 4
 trap 'rm -f "$TMP"' EXIT
 sync 2>/dev/null || true
 
-# --- 적용 트리거: 전체 conf 재로드 → freq_list/scan_freq/ssid 모두 반영 -----------
+# --- 적용 트리거: 전체 conf 재로드 → 공통 freq_list/ssid 모두 반영 ----------------
 # reconfigure 실패 시 깨진 conf 가 영속되어 다음 reboot 기동을 막을 수 있으므로,
 # 원본 백업으로 롤백한 뒤 재적용한다(무선 전체 다운 방지).
 # wpa_cli 는 제어요청 전달만 성공하면 데몬 응답(OK/FAIL)과 무관하게 exit 0 이므로,
 # exit code 가 아니라 출력이 "OK" 인지로 실패를 판정한다(wifi.sh 의 wpa_cli_ok 와 동일).
 # reconfigure 는 재연결(끊김)을 유발 — wifi_checker 가 과도기를 '불안정'으로 오판해
 # reassociate/restart 하지 않도록 grace flag 를 세운다(TTL 은 checker 의 RECONFIGURE_GRACE_SEC).
-mkdir -p /run/wifi 2>/dev/null || true
-: > "/run/wifi/${IFACE}.reconfigure-grace" 2>/dev/null || true
+if mkdir -p "$WIFI_RUN_DIR" 2>/dev/null; then
+    touch "$WIFI_RUN_DIR/${IFACE}.reconfigure-grace" 2>/dev/null || true
+fi
 if [ "$(wcli reconfigure 2>/dev/null)" != "OK" ]; then
     mv -f "$BAK" "$CONF"; sync 2>/dev/null || true
     trap - EXIT   # TMP 는 위 mv 로 이미 소진(rename)됨 — 정리할 임시파일 없음

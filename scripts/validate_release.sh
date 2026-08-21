@@ -226,6 +226,7 @@ PY
         dist/wlan/usr/local/scripts/wifi_init_config_test.sh \
         dist/wlan/usr/local/scripts/wifi_link_reset_test.sh \
         dist/wlan/usr/local/scripts/wifi_secret_test.sh \
+        dist/wlan/usr/local/scripts/wifi_wpa_conf_writer_test.sh \
         dist/wlan/usr/local/scripts/tests/test_fake_hwclock.sh \
         dist/wlan/usr/local/scripts/tests/test_wifi_eth_peer.sh \
         dist/wlan/usr/local/scripts/tests/test_wlan_link_lib.sh; do

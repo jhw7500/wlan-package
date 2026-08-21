@@ -1169,7 +1169,7 @@ static int handle_set_wlan_config(int fd, struct sockaddr_in *src,
     }
 
     /* Apply via opc_wlan_apply.sh (execvp - no shell interpretation):
-     * conf 파일을 직접 편집(ssid/scan_freq/freq_list)하고 wpa_cli reconfigure 로
+     * conf 파일을 직접 편집(ssid/전역+블록 공통 freq_list)하고 wpa_cli reconfigure 로
      * 영속+동적적용을 한 번에 처리한다. ssid 와 freq 를 한 번의 호출로 묶어 단일
      * reconfigure(끊김 1회)로 적용한다. 스크립트가 ssid 를 따옴표로 감싸므로
      * 원문만 전달한다.
