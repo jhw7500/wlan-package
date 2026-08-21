@@ -125,16 +125,147 @@ wifi_init_bw_to_vhtbw() {
     esac
 }
 
-# wpa_supplicant conf의 freq_list/scan_freq에 등장하는 밴드 집합을 출력.
+# wpa_supplicant conf에서 패키지 공통 주파수 목록을 결정한다.
+# 우선순위: 전역 freq_list > 첫 network 블록 freq_list > 첫 블록 scan_freq.
+# 마지막 두 항목은 canonical 형식으로 이행하기 전 배포 conf를 위한 부팅 호환 경로다.
+# 출력은 원래 순서를 보존한 공백 구분 목록이며, 제한이 없거나 파일이 없으면 무출력.
+wifi_wpa_conf_common_freqs() {
+    local conf="$1"
+    [ -f "$conf" ] || return 0
+
+    awk '
+        function trim(s) {
+            sub(/^[[:space:]]+/, "", s)
+            sub(/[[:space:]]+$/, "", s)
+            return s
+        }
+        function setting_value(line, key, value) {
+            value = line
+            sub(/^[[:space:]]*/, "", value)
+            sub("^" key "[[:space:]]*=[[:space:]]*", "", value)
+            sub(/[[:space:]]+#[^"]*$/, "", value)
+            return trim(value)
+        }
+        /^[[:space:]]*#/ { next }
+        /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ {
+            in_net = 1
+            net_count++
+            next
+        }
+        in_net && /^[[:space:]]*\}/ {
+            in_net = 0
+            next
+        }
+        !in_net && /^[[:space:]]*freq_list[[:space:]]*=/ {
+            if (global_list == "")
+                global_list = setting_value($0, "freq_list")
+            next
+        }
+        in_net && net_count == 1 && /^[[:space:]]*freq_list[[:space:]]*=/ {
+            if (base_list == "")
+                base_list = setting_value($0, "freq_list")
+            next
+        }
+        in_net && net_count == 1 && /^[[:space:]]*scan_freq[[:space:]]*=/ {
+            if (base_scan == "")
+                base_scan = setting_value($0, "scan_freq")
+            next
+        }
+        END {
+            if (global_list != "") print global_list
+            else if (base_list != "") print base_list
+            else if (base_scan != "") print base_scan
+        }
+    ' "$conf"
+}
+
+# wpa_supplicant conf를 canonical 주파수 형식으로 순수 변환한다.
+# 사용: wifi_wpa_conf_render_canonical <source> <destination> <common-freqs>
+# - 전역 update_config=0 및 (목록이 있으면) 전역 freq_list 1개
+# - 각 network 블록에 같은 freq_list 1개
+# - 모든 network 블록의 active scan_freq 제거
+# 설치/권한/롤백은 호출자 책임이라 wifi.sh와 OPC가 같은 변환을 각자 트랜잭션에 넣을 수 있다.
+wifi_wpa_conf_render_canonical() {
+    local source="$1" destination="$2" freqs="${3-}"
+    [ -f "$source" ] || return 1
+    [ "$source" != "$destination" ] || return 1
+
+    awk -v freqs="$freqs" '
+        function emit_global_policy() {
+            if (global_emitted) return
+            print "update_config=0"
+            if (freqs != "") print "freq_list=" freqs
+            global_emitted = 1
+        }
+        /^[[:space:]]*#/ { print; next }
+        !in_net && /^[[:space:]]*update_config[[:space:]]*=/ { next }
+        !in_net && /^[[:space:]]*freq_list[[:space:]]*=/ { next }
+        /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ {
+            emit_global_policy()
+            in_net = 1
+            blocks++
+            print
+            next
+        }
+        in_net && /^[[:space:]]*scan_freq[[:space:]]*=/ { next }
+        in_net && /^[[:space:]]*freq_list[[:space:]]*=/ { next }
+        in_net && /^[[:space:]]*\}/ {
+            if (freqs != "") print "    freq_list=" freqs
+            in_net = 0
+            print
+            next
+        }
+        { print }
+        END {
+            if (blocks == 0 || in_net) exit 1
+        }
+    ' "$source" > "$destination"
+}
+
+# 배포/사용 중 conf를 같은 파일시스템에서 원자적으로 canonical 형식으로 정규화한다.
+# 파일 부재는 부팅 복원 경로와의 호환을 위해 no-op 성공, 파싱/설치 실패는 nonzero다.
+wifi_wpa_conf_normalize_file() {
+    local conf="$1" freqs tmp
+    [ -f "$conf" ] || return 0
+
+    freqs=$(wifi_wpa_conf_common_freqs "$conf") || return 1
+    tmp=$(mktemp "${conf}.normalize.XXXXXX") || return 1
+
+    if ! wifi_wpa_conf_render_canonical "$conf" "$tmp" "$freqs"; then
+        rm -f "$tmp"
+        return 1
+    fi
+
+    # 평문 PSK가 들어가는 파일이므로 mode 보존 실패 시 노출 최소값 0600을 쓴다.
+    chmod --reference="$conf" "$tmp" 2>/dev/null || chmod 0600 "$tmp" 2>/dev/null || {
+        rm -f "$tmp"
+        return 1
+    }
+    chown --reference="$conf" "$tmp" 2>/dev/null || true
+
+    if cmp -s "$tmp" "$conf"; then
+        rm -f "$tmp"
+        return 0
+    fi
+    if ! mv -f "$tmp" "$conf"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    sync "$conf" 2>/dev/null || sync 2>/dev/null || true
+    return 0
+}
+
+# wpa_supplicant conf의 canonical 공통 주파수에 등장하는 밴드 집합을 출력.
 # 출력: ""(제한 없음/파일 없음), "2G", "5G", "2G 5G".
 # wifi.sh(radio-apply exit 11 가드)와 wifi_init.sh(부팅 가드) 공용.
+# 부팅 정규화 전 legacy conf도 wifi_wpa_conf_common_freqs의 우선순위로 해석한다.
 # Note: 6GHz(5925-7125MHz)는 미분류 — 현 칩(9098/IW612)이 6GHz 미지원.
 #       6E 칩 도입 시 분류 추가 필요.
 wifi_init_conf_freq_bands() {
-    local conf="$1" f has2="" has5=""
+    local conf="$1" f freqs has2="" has5=""
     [ -f "$conf" ] || return 0
-    for f in $(sed -n -e 's/^[[:space:]]*freq_list[[:space:]]*=//p' \
-                      -e 's/^[[:space:]]*scan_freq[[:space:]]*=//p' "$conf"); do
+    freqs=$(wifi_wpa_conf_common_freqs "$conf") || return 1
+    for f in $freqs; do
         # 비숫자 토큰 필터: trailing comment("# ...") 등 word-splitting으로
         # 들어온 잡토큰도 여기서 걸러진다 (의도된 가드)
         case "$f" in
