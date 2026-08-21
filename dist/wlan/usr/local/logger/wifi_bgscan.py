@@ -30,6 +30,11 @@ VERSION = "0.0"
 IFACE = ""
 _WPA_CLI_WARNED = False   # wpa_cli 부재 로그 1회 제한 플래그
 _WILDCARD_PROBE_WARNED = False   # ssid_filter=false+extra_ssids 와일드카드 probe 가정 경고 1회 제한
+_FREQ_FILTER_DEPRECATED_WARNED = False  # common freq 정책과 충돌하는 false 경고 1회
+
+
+class BgscanConfigError(RuntimeError):
+    """스캔 backend 소유권을 안전하게 결정할 수 없는 시작 설정."""
 
 def handle_sigterm(signum, frame):
     logger.message('crit', f"[{IFACE}] SIGTERM {signum} received! Cleaning up...", _EXTRA_())
@@ -82,34 +87,55 @@ def is_wpa_connected(interface="mlan0"):
     return False
 
 def parse_wpa_supplicant_conf(path):
-    ssid = None
-    freqs = []
+    base_ssid = None
+    network_ssids = []
+    global_freqs = []
+    base_freqs = []
+    base_scan_freqs = []
     interval = DEFAULT_INTERVAL  # `#!INTERVAL=` 마커 부재 시 폴백(템플릿과 fail-same)
+    in_network = False
+    network_index = 0
 
     with open(path, "r") as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith("ssid=") and not line.startswith("#"):
-                ssid = line.split("=", 1)[1].strip().strip('"')
-            elif line.startswith("scan_freq=") and not line.startswith("#"):
-                freqs = line.split("=", 1)[1].strip().split()
-            elif line.startswith("#!INTERVAL="):
+        for raw_line in f:
+            line = raw_line.strip()
+            if line.startswith("#!INTERVAL="):
                 try:
                     interval = int(line.split("=")[1])
                 except ValueError:
                     logger.message('err', f"[{IFACE}] INTERVAL : {interval} is invalid in {path}", _EXTRA_())
-                    pass
-            '''
-            elif line.startswith("bgscan=") and not line.startswith("#"):
-                parts = line.split("=", 1)[1].strip().strip('"').split(":")
-                if len(parts) == 4:  # bgscan="simple:X:Y:Z"
-                    try:
-                        scan_interval = int(parts[3])
-                    except ValueError:
-                        pass
-            '''
+                continue
+            if not line or line.startswith("#"):
+                continue
+            if re.match(r"^network\s*=\s*\{", line):
+                in_network = True
+                network_index += 1
+                continue
+            if in_network and line.startswith("}"):
+                in_network = False
+                continue
 
-    return ssid, freqs, interval
+            if in_network and line.startswith("ssid="):
+                ssid = line.split("=", 1)[1].strip().strip('"')
+                if base_ssid is None:
+                    base_ssid = ssid
+                if ssid not in network_ssids:
+                    network_ssids.append(ssid)
+            elif not in_network and line.startswith("freq_list="):
+                if not global_freqs:
+                    value = line.split("=", 1)[1].split("#", 1)[0]
+                    global_freqs = value.strip().split()
+            elif in_network and network_index == 1 and line.startswith("freq_list="):
+                if not base_freqs:
+                    value = line.split("=", 1)[1].split("#", 1)[0]
+                    base_freqs = value.strip().split()
+            elif in_network and network_index == 1 and line.startswith("scan_freq="):
+                if not base_scan_freqs:
+                    value = line.split("=", 1)[1].split("#", 1)[0]
+                    base_scan_freqs = value.strip().split()
+
+    freqs = global_freqs or base_freqs or base_scan_freqs
+    return base_ssid, network_ssids, freqs, interval
 
 def _parse_bool(value):
     """bool 해석을 roam parse_bool / lib normalize_bool과 통일(true/1/yes/on/enabled → True).
@@ -120,6 +146,34 @@ def _parse_bool(value):
     if isinstance(value, str):
         return value.lower() in ("true", "1", "yes", "on", "enabled")
     return bool(value)
+
+
+def load_scan_backend(iface):
+    """시작 시 `.iface.roaming.enabled`로 고정할 scan requester를 결정한다.
+
+    owner를 추측하면 wifi_roam 서비스 상태와 다른 backend가 떠 이중 로밍 주체가 될 수
+    있으므로 파일/JSON/키/타입 오류는 fail-closed 한다. 반환값은 프로세스 시작 후
+    호출자가 보관하며 periodic reload 대상이 아니다.
+    """
+    try:
+        with open(WIFI_INIT_CONF_JSON, "r") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        raise BgscanConfigError(
+            f"cannot load roam owner from {WIFI_INIT_CONF_JSON}: {e}"
+        ) from e
+
+    try:
+        enabled = data[iface]["roaming"]["enabled"]
+    except (KeyError, TypeError) as e:
+        raise BgscanConfigError(
+            f"missing boolean {iface}.roaming.enabled"
+        ) from e
+    if not isinstance(enabled, bool):
+        raise BgscanConfigError(
+            f"{iface}.roaming.enabled must be boolean, got {type(enabled).__name__}"
+        )
+    return "iw" if enabled else "wpa_cli"
 
 
 def load_bgscan_json(iface):
@@ -233,36 +287,167 @@ def construct_iw_scan_cmd(ssid, scan_freqs, ssid_filter=True, freq_filter=True, 
 
     return cmd
 
-def periodic_scan(conf_path):
 
-    # 스캔 명령/주기/필터는 매 스캔 직전 wpa_supplicant conf + JSON에서 재구성한다.
-    def build():
-        global _WILDCARD_PROBE_WARNED
-        ssid, freqs, wpa_interval = parse_wpa_supplicant_conf(conf_path)
-        json_interval, ssid_filter, freq_filter, extra_ssids, emit_roam_hint, passive = load_bgscan_json(IFACE)
-        interval = json_interval or wpa_interval or DEFAULT_INTERVAL
-        cmd = construct_iw_scan_cmd(ssid, freqs, ssid_filter, freq_filter, extra_ssids, passive=passive)
-        # ssid_filter=false + extra_ssids면 construct_iw_scan_cmd가 와일드카드("") probe를
-        # 삽입해 광범위 스캔을 보존한다. 빈 SSID를 broadcast probe로 보는 nl80211 동작에
-        # 의존하므로(드라이버/커널 의존), 그 가정을 운영 로그에 1회 노출해 신규 플랫폼에서
-        # 일반 AP 발견 여부를 검증할 수 있게 한다.
-        if not ssid_filter and extra_ssids and not _WILDCARD_PROBE_WARNED:
+def construct_wpa_scan_cmd(
+    iface,
+    ssid,
+    scan_freqs,
+    ssid_filter=True,
+    extra_ssids=None,
+    passive=False,
+):
+    """wpa_supplicant가 결과를 native selection에 쓰는 SCAN 요청을 만든다.
+
+    `TYPE=ONLY`는 scan_only_handler를 설치해 selection을 막으므로 사용하지 않는다.
+    전역 목록이 있으면 wpa의 조건부 fallback에 기대지 않고 명시적 comma-list로 넘긴다.
+    ctrl_iface의 `ssid` 값은 raw 문자열이 아니라 UTF-8 hex 형식이다.
+    """
+    cmd = ["wpa_cli", "-i", iface, "scan"]
+    if scan_freqs:
+        cmd.append(f"freq={','.join(scan_freqs)}")
+    if passive:
+        cmd.append("passive=1")
+        return cmd
+
+    probe = ([ssid] if (ssid_filter and ssid) else []) + (extra_ssids or [])
+    probe = list(
+        dict.fromkeys(s for s in probe if isinstance(s, str) and s)
+    )
+    if len(probe) > MAX_SCAN_SSIDS:
+        logger.message(
+            "warn",
+            f"[{iface}] scan SSIDs {len(probe)} > driver max {MAX_SCAN_SSIDS}; "
+            f"capping directed probes (excess hidden SSIDs may be missed)",
+            _EXTRA_(),
+        )
+        probe = probe[:MAX_SCAN_SSIDS]
+    for name in probe:
+        cmd.extend(["ssid", name.encode("utf-8").hex()])
+    return cmd
+
+
+def run_scan_command(cmd, backend):
+    """고정 backend의 scan 요청을 한 번 실행하고 실제 수락 여부를 반환한다."""
+    if backend not in ("iw", "wpa_cli"):
+        raise ValueError(f"unsupported scan backend: {backend}")
+    try:
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        logger.message(
+            "err", f"[{IFACE}] {backend} scan timed out (30s)", _EXTRA_()
+        )
+        return False
+    except OSError as e:
+        logger.message(
+            "err", f"[{IFACE}] {backend} scan execution failed: {e}", _EXTRA_()
+        )
+        return False
+
+    if result.returncode != 0:
+        detail = (result.stderr or "").strip() or (result.stdout or "").strip()
+        logger.message(
+            "err",
+            f"[{IFACE}] {backend} scan exited {result.returncode}: {detail}",
+            _EXTRA_(),
+        )
+        return False
+    if backend == "wpa_cli":
+        reply = next(
+            (line.strip() for line in (result.stdout or "").splitlines() if line.strip()),
+            "",
+        )
+        if reply != "OK":
+            logger.message(
+                "err",
+                f"[{IFACE}] wpa_cli scan rejected: {reply or 'empty reply'}",
+                _EXTRA_(),
+            )
+            return False
+    return True
+
+
+def build_scan_request(conf_path, backend):
+    """reload 가능한 scan 파라미터로 고정 backend의 다음 요청을 구성한다."""
+    global _WILDCARD_PROBE_WARNED, _FREQ_FILTER_DEPRECATED_WARNED
+
+    ssid, network_ssids, freqs, wpa_interval = parse_wpa_supplicant_conf(conf_path)
+    (
+        json_interval,
+        ssid_filter,
+        freq_filter,
+        extra_ssids,
+        emit_roam_hint,
+        passive,
+    ) = load_bgscan_json(IFACE)
+    interval = json_interval or wpa_interval or DEFAULT_INTERVAL
+
+    # 전역 freq_list가 있으면 두 backend 모두 같은 목록을 반드시 사용한다. wpa는
+    # 명시 freq를 빼도 전역 fallback이 적용돼 `freq_filter=false=전대역`을 구현할 수
+    # 없으므로, backend별 의미가 갈라지는 legacy false를 더 이상 적용하지 않는다.
+    if freqs and not freq_filter:
+        if not _FREQ_FILTER_DEPRECATED_WARNED:
             logger.message(
                 "warn",
-                f"[{IFACE}] ssid_filter=false + extra_ssids: 와일드카드(\"\") probe 삽입 "
-                f"— 신규 드라이버/플랫폼에서 일반 AP 발견 동작 확인 필요",
+                f"[{IFACE}] bgscan.freq_filter=false is deprecated; "
+                "common global freq_list remains enforced",
+                _EXTRA_(),
+            )
+            _FREQ_FILTER_DEPRECATED_WARNED = True
+        freq_filter = True
+
+    scan_extras = list(dict.fromkeys(network_ssids[1:] + extra_ssids))
+    if backend == "iw":
+        cmd = construct_iw_scan_cmd(
+            ssid,
+            freqs,
+            ssid_filter,
+            freq_filter,
+            scan_extras,
+            passive=passive,
+        )
+        if not ssid_filter and scan_extras and not _WILDCARD_PROBE_WARNED:
+            logger.message(
+                "warn",
+                f"[{IFACE}] ssid_filter=false + extra SSIDs: wildcard(\"\") probe inserted "
+                "— verify broad discovery on new drivers/platforms",
                 _EXTRA_(),
             )
             _WILDCARD_PROBE_WARNED = True
         return cmd, interval, emit_roam_hint
+    if backend == "wpa_cli":
+        cmd = construct_wpa_scan_cmd(
+            IFACE,
+            ssid,
+            freqs,
+            ssid_filter=ssid_filter,
+            extra_ssids=scan_extras,
+            passive=passive,
+        )
+        # wifi_roam.py가 실행되지 않는 native owner에는 backoff hint 소비자가 없다.
+        return cmd, interval, False
+    raise ValueError(f"unsupported scan backend: {backend}")
 
+
+def periodic_scan(conf_path, backend):
+
+    # 스캔 명령/주기/필터는 매 스캔 직전 wpa_supplicant conf + JSON에서 재구성한다.
     # 초기 1회 구성 (실패해도 기동 — 다음 스캔 직전 재시도).
     cmd = None
     interval = DEFAULT_INTERVAL
-    emit_roam_hint = True
+    emit_roam_hint = backend == "iw"
     try:
-        cmd, interval, emit_roam_hint = build()
-        logger.message("info", f"[{IFACE}] bgscan start: cmd={cmd}, interval={interval}", _EXTRA_())
+        cmd, interval, emit_roam_hint = build_scan_request(conf_path, backend)
+        logger.message(
+            "info",
+            f"[{IFACE}] bgscan start: backend={backend}, cmd={cmd}, interval={interval}",
+            _EXTRA_(),
+        )
     except Exception as e:
         logger.message("err", f"[{IFACE}] initial bgscan config load failed: {e}", _EXTRA_())
 
@@ -308,37 +493,30 @@ def periodic_scan(conf_path):
             # 스캔 직전에 wpa conf + JSON을 다시 읽어 최신 ssid/freq/interval/필터로 스캔한다
             # (런타임 변경 반영). 재로드 실패 시 직전 cmd/interval 유지.
             try:
-                cmd, interval, emit_roam_hint = build()
+                cmd, interval, emit_roam_hint = build_scan_request(conf_path, backend)
             except Exception as e:
                 logger.message("err", f"[{IFACE}] bgscan config reload failed (keep last): {e}", _EXTRA_())
 
             if cmd:
-                try:
-                    logger.message("info", f"[{IFACE}] {cmd}", _EXTRA_())
-                    # stderr는 capture(저널 노이즈 방지)하되 실패 시 로그에 포함 → 진단성 유지.
-                    # timeout으로 드라이버/FW stall 시 데몬이 영구 hang되는 것을 방지(다음 주기 재시도).
-                    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, check=True, timeout=30)
+                logger.message("info", f"[{IFACE}] {cmd}", _EXTRA_())
+                if run_scan_command(cmd, backend):
                     # 스캔 성공(드라이버에 새 BSS 결과 적재) → roam backoff 해제 신호 touch.
                     # roam이 mtime 변화를 보면 후보없음 streak=0 으로 고속 복귀(spec §4 reset-b).
                     if emit_roam_hint:
                         emit_roam_hint_touch(IFACE)
-                except subprocess.TimeoutExpired:
-                    logger.message("err", f"[{IFACE}] iw scan timed out (30s) — driver/FW stall?", _EXTRA_())
-                except subprocess.CalledProcessError as e:
-                    logger.message("err", f"[{IFACE}] iw scan failed: {e} stderr={(e.stderr or '').strip()}", _EXTRA_())
             # 성공/실패 무관하게 다음 주기까지 back off (실패 시 1s 폭주 재시도 방지)
             last_time = time.time()
 
         time.sleep(1)
 
-def main_loop():
+def main_loop(backend):
     #subprocess.run(["ifconfig", IFACE, "up"])
     #last_log_time = time.time()
 
     # 스캔 파라미터(ssid/freq/interval/필터)는 periodic_scan이 매 스캔 직전 재로드하며,
     # 초기값은 periodic_scan의 "bgscan start" 로그에 찍힌다(여기서 중복 read 안 함).
     logger.message("info", f"[{IFACE}] version: {VERSION} (스캔 파라미터는 매 스캔 직전 재로드)", _EXTRA_())
-    periodic_scan(WPA_CONF_FILE)
+    periodic_scan(WPA_CONF_FILE, backend)
 
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_sigterm)
@@ -359,4 +537,15 @@ if __name__ == "__main__":
         logger.message("err", f"[{IFACE}] invalid interface", _EXTRA_())
         sys.exit(1)
 
-    main_loop()
+    try:
+        SCAN_BACKEND = load_scan_backend(IFACE)
+    except BgscanConfigError as e:
+        logger.message("emerg", f"[{IFACE}] bgscan owner config invalid: {e}", _EXTRA_())
+        sys.exit(2)
+    ROAM_OWNER = "wifi_roam" if SCAN_BACKEND == "iw" else "wpa_supplicant"
+    logger.message(
+        "notice",
+        f"[{IFACE}] roam_owner={ROAM_OWNER} scan_backend={SCAN_BACKEND} (latched at start)",
+        _EXTRA_(),
+    )
+    main_loop(SCAN_BACKEND)

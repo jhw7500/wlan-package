@@ -194,3 +194,34 @@ def test_passive_non_bool_falls_back_true(tmp_path, monkeypatch):
         "mlan0": {"bgscan": {"interval": 60, "passive": "no"}}
     })
     assert load_bgscan_json("mlan0")[5] is True
+
+
+# --- proactive roam owner -> boot-latched scan backend ---
+
+def test_scan_backend_is_iw_when_wifi_roam_is_enabled(tmp_path, monkeypatch):
+    _write_conf(tmp_path, monkeypatch, {
+        "mlan0": {"roaming": {"enabled": True}}
+    })
+    assert wifi_bgscan.load_scan_backend("mlan0") == "iw"
+
+
+def test_scan_backend_is_wpa_cli_when_wifi_roam_is_disabled(tmp_path, monkeypatch):
+    _write_conf(tmp_path, monkeypatch, {
+        "mlan0": {"roaming": {"enabled": False}}
+    })
+    assert wifi_bgscan.load_scan_backend("mlan0") == "wpa_cli"
+
+
+@pytest.mark.parametrize("roaming", [{}, {"enabled": "false"}, {"enabled": 0}])
+def test_scan_backend_rejects_missing_or_non_boolean_owner(tmp_path, monkeypatch, roaming):
+    _write_conf(tmp_path, monkeypatch, {"mlan0": {"roaming": roaming}})
+    with pytest.raises(wifi_bgscan.BgscanConfigError):
+        wifi_bgscan.load_scan_backend("mlan0")
+
+
+def test_scan_backend_rejects_unreadable_json_instead_of_guessing(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        wifi_bgscan, "WIFI_INIT_CONF_JSON", str(tmp_path / "missing.json")
+    )
+    with pytest.raises(wifi_bgscan.BgscanConfigError):
+        wifi_bgscan.load_scan_backend("mlan0")
