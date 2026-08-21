@@ -435,9 +435,8 @@ if command -v wifi_init_sync_extra_ssid_blocks >/dev/null 2>&1; then
         || logger -p local0.err "[$tag:$LINENO] extra_ssid block sync failed: mlan1"
 fi
 
-# bgscan 가드(경고-only): conf의 비주석 bgscan=는 wpa_supplicant 자율 로밍을 켜
-# Roaming(0x04) notify(3훅)를 우회한다 — 운영 전제 위반 감시
-# (wlan-opc docs/implementation/design-roam-indication-notify.md §8.3/§8.4).
+# bgscan 가드(경고-only): conf의 비주석 bgscan=는 package wifi_bgscan과 별도
+# scan/roam 스케줄을 만든다. wifi_roam/wpa native 어느 owner에서도 지원하지 않는다.
 # mlan0/mlan1 conf를 순회 검사(파일 존재 시) — DBDC 재평가 완료(2026-08-07)로 mlan1 포함.
 # 런타임 wpa_cli set 경로는 wifi_checker.sh의 주기 가드가 보조한다.
 # (set -e: grep 무매치는 || true로 흡수)
@@ -446,7 +445,7 @@ for _bg_iface in mlan0 mlan1; do
     [ -f "$_bg_conf" ] || continue
     _bgscan_line=$(grep -E '^[[:space:]]*bgscan[[:space:]]*=' "$_bg_conf" 2>/dev/null | head -1) || true
     if [ -n "${_bgscan_line:-}" ]; then
-        logger -p local0.warning "[$tag:$LINENO] [$_bg_iface] active wpa_supplicant bgscan in conf ('${_bgscan_line}') — autonomous roaming bypasses Roaming(0x04) notify (design §8.4)"
+        logger -p local0.warning "[$tag:$LINENO] [$_bg_iface] unsupported built-in wpa_supplicant bgscan in conf ('${_bgscan_line}') — remove it; package wifi_bgscan owns periodic scan scheduling"
     fi
 done
 unset _bgscan_line _bg_iface _bg_conf

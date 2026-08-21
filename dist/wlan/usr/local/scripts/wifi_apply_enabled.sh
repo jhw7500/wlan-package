@@ -22,7 +22,7 @@
 #   .mlanN.checker.enabled                    → wifi_checker@mlanN.service
 #   .mlanN.bgscan.enabled                     → wifi_bgscan@mlanN.service
 #   .mlanN.roaming.enabled                    → wifi_roam@mlanN.service
-#   .mlanN.periodic_roam.enabled              → wifi_periodic_roam@mlanN.service
+#   .mlanN.periodic_roam.enabled              → deprecated; wifi_periodic_roam@mlanN.service forced disabled
 #   .mlanN.arping.enabled                     → wifi_arping@mlanN.service
 #   (.mlanN.on_connect.enabled OR .snmp.trap.enabled OR
 #    (AX iface AND .mlanN.mcs_tier.enabled AND HE configured))
@@ -85,6 +85,16 @@ get_bool() {
     [ -z "$v" ] && v="$def"
     normalize_bool "$v"
 }
+
+# wifi_periodic_roam은 wifi_roam/wpa native와 겹치는 제3의 proactive owner라 더 이상
+# 활성화하지 않는다. 호환을 위해 JSON 키는 읽되 true 요청은 경고하고 unit은 항상 false.
+for _owner_iface in mlan0 mlan1; do
+    if [ "$(get_bool ".${_owner_iface}.periodic_roam.enabled" "false")" = "true" ]; then
+        _owner_msg="[${_owner_iface}] periodic_roam.enabled=true is deprecated and ignored; wifi_periodic_roam is forced disabled"
+        logger -p local0.warning "[$tag:$LINENO] $_owner_msg"
+        printf '[%s] WARNING: %s\n' "$tag" "$_owner_msg" >&2
+    fi
+done
 
 # apply <unit> <want_true_or_false>
 # 현재 systemctl enable 상태와 want가 다를 때만 enable/disable 호출.
@@ -195,7 +205,7 @@ for iface in mlan0 mlan1; do
     apply "wifi_bgscan@${iface}.service"        "$(get_bool ".${iface}.bgscan.enabled"        "false")"
     apply "wifi_roam@${iface}.service"          "$(get_bool ".${iface}.roaming.enabled"       "false")"
     apply "wifi_arping@${iface}.service"        "$(get_bool ".${iface}.arping.enabled"        "false")"
-    apply "wifi_periodic_roam@${iface}.service" "$(get_bool ".${iface}.periodic_roam.enabled" "false")"
+    apply "wifi_periodic_roam@${iface}.service" "false"
 
     # wifi_event: on_connect 명령, SNMP 링크/채널 트랩, 또는 association 후 deferred
     # MCS 검증/1회 제한 복구가 필요하면 enable한다.
