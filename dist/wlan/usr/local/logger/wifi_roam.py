@@ -34,6 +34,16 @@ WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
 ROAM_CONDITION_FLAG, LAST_SCAN_TIME_FILE = roam_state_paths(IFACE)
 WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
 WIFI_RUN_DIR = os.environ.get("WIFI_RUN_DIR", "/run/wifi")
+# Mode A selection 복구 WAL은 /run/wifi 바깥에 둔다. wifi 서비스 재시작 과정에서
+# /run/wifi 자체가 정리돼도, supplicant 메모리에 남은 BSSID pin 복구 의무까지 함께
+# 사라지면 안 된다. 테스트/제품별 경로 주입은 별도 환경변수로만 허용한다.
+WIFI_SELECTION_STATE_DIR = os.environ.get(
+    "WIFI_SELECTION_STATE_DIR",
+    os.path.dirname(WIFI_RUN_DIR.rstrip("/")) or "/",
+)
+# WAL directory fsync 실패처럼 디스크 지속성을 증명하지 못한 경우에도 살아 있는
+# daemon은 새 선택을 허용하지 않는다. 값은 복구해야 할 network id 문자열이다.
+_SELECTION_CLEANUP_PENDING = {}
 ROAM_HINT_FILE = f"/tmp/wifi_roam_hint_{IFACE}"  # bgscan이 새 후보 AP 발견 시 touch (단방향 신호)
 SCAN_TIMESTAMP_RE = re.compile(
     r"^(?:\[(?P<bracketed>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]"
@@ -1974,8 +1984,10 @@ def _wpa_reconfigure(iface):
 
 
 def selection_cleanup_marker_path(iface):
-    """Mode A 선택 상태가 아직 복구되지 않았음을 나타내는 per-iface marker."""
-    return os.path.join(WIFI_RUN_DIR, f"{iface}.selection-cleanup-pending")
+    """Mode A 선택 상태가 아직 복구되지 않았음을 나타내는 per-iface WAL."""
+    return os.path.join(
+        WIFI_SELECTION_STATE_DIR, f".{iface}.selection-cleanup-pending"
+    )
 
 
 def _sync_parent_directory(path):
@@ -1989,8 +2001,12 @@ def _sync_parent_directory(path):
         os.close(fd)
 
 
-def _mark_selection_cleanup_pending(iface, network_id):
-    """Unresolved BSSID/network cleanup을 same-directory atomic marker로 기록."""
+def _mark_selection_cleanup_pending(iface, network_id, phase="before-pin"):
+    """BSSID/network 변경 전에 복구 의무를 메모리+atomic JSON WAL로 기록."""
+    network_id = str(network_id)
+    # disk I/O보다 먼저 gate를 세운다. WAL 기록이 실패하면 caller는 상태를 바꾸지
+    # 않지만, 결과가 모호한 replace/fsync 실패도 다음 loop에서 보수적으로 복구한다.
+    _SELECTION_CLEANUP_PENDING[iface] = network_id
     marker = selection_cleanup_marker_path(iface)
     tmp = f"{marker}.tmp.{os.getpid()}"
     fd = None
@@ -1999,7 +2015,16 @@ def _mark_selection_cleanup_pending(iface, network_id):
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
             fd = None  # fdopen이 소유
-            f.write(f"{network_id}\n")
+            json.dump(
+                {
+                    "version": 1,
+                    "network_id": network_id,
+                    "phase": phase,
+                },
+                f,
+                separators=(",", ":"),
+            )
+            f.write("\n")
             f.flush()
             os.fsync(f.fileno())
         os.chmod(tmp, 0o600)
@@ -2032,6 +2057,7 @@ def _clear_selection_cleanup_pending(iface):
     try:
         os.unlink(marker)
     except FileNotFoundError:
+        _SELECTION_CLEANUP_PENDING.pop(iface, None)
         return True
     except OSError as e:
         logger.message(
@@ -2046,7 +2072,15 @@ def _clear_selection_cleanup_pending(iface):
         logger.message(
             "warn", f"[{iface}] cleanup marker directory sync failed: {e}", _EXTRA_()
         )
+    _SELECTION_CLEANUP_PENDING.pop(iface, None)
     return True
+
+
+def _selection_cleanup_is_pending(iface):
+    """디스크 WAL 또는 process-local gate 중 하나라도 남았는지 확인."""
+    return iface in _SELECTION_CLEANUP_PENDING or os.path.exists(
+        selection_cleanup_marker_path(iface)
+    )
 
 
 def _restore_network_selection_state(iface, network_id):
@@ -2089,20 +2123,43 @@ def _restore_network_selection_state(iface, network_id):
 
 
 def retry_pending_selection_cleanup(iface):
-    """Pending marker가 있으면 새 roam 판정 전에 cleanup을 재시도한다."""
+    """Pending WAL/gate가 있으면 새 roam 판정 전에 cleanup을 재시도한다."""
     marker = selection_cleanup_marker_path(iface)
-    try:
-        with open(marker, "r") as f:
-            network_id = f.read().strip()
-    except FileNotFoundError:
-        return True
-    except OSError as e:
-        logger.message(
-            "err", f"[{iface}] cannot read selection cleanup marker: {e}", _EXTRA_()
-        )
-        return False
+    if iface in _SELECTION_CLEANUP_PENDING:
+        network_id = _SELECTION_CLEANUP_PENDING[iface]
+    else:
+        try:
+            with open(marker, "r") as f:
+                raw = f.read().strip()
+        except FileNotFoundError:
+            return True
+        except OSError as e:
+            logger.message(
+                "err", f"[{iface}] cannot read selection cleanup marker: {e}", _EXTRA_()
+            )
+            return False
 
-    if not network_id.isdigit():
+        network_id = ""
+        try:
+            record = json.loads(raw)
+            if (
+                isinstance(record, dict)
+                and record.get("version") == 1
+                and str(record.get("network_id", "")).isdigit()
+                and record.get("phase") == "before-pin"
+            ):
+                network_id = str(record["network_id"])
+        except (TypeError, ValueError):
+            pass
+        # json.loads("1")은 예외 없이 int를 반환하므로 except 안에 두면 legacy
+        # marker가 invalid로 떨어진다. 구조화 record가 아니어도 숫자-only면 수용한다.
+        if not network_id and raw.isdigit():
+            network_id = raw
+
+        # WAL을 읽은 직후부터는 파일이 외부에서 사라져도 현재 daemon이 gate를 유지한다.
+        _SELECTION_CLEANUP_PENDING[iface] = network_id
+
+    if not str(network_id).isdigit():
         logger.message(
             "err",
             f"[{iface}] invalid selection cleanup marker; trying canonical recovery",
@@ -2125,7 +2182,7 @@ def retry_pending_selection_cleanup(iface):
         _EXTRA_(),
     )
     _restore_network_selection_state(iface, network_id)
-    if os.path.exists(marker):
+    if _selection_cleanup_is_pending(iface):
         logger.message(
             "err", f"[{iface}] selection cleanup remains unresolved", _EXTRA_()
         )
@@ -2180,6 +2237,16 @@ def select_network_for_ssid(iface, to_ssid, to_bssid):
     completed = False
     cleanup_ok = True
     try:
+        # pin/select 변경 전 cleanup 의무를 write-ahead한다. 이 marker가 있어야
+        # BSSID 명령 직후 SIGKILL/OOM으로 finally를 못 거쳐도 재시작 후 복구한다.
+        if not _mark_selection_cleanup_pending(iface, nid):
+            logger.message(
+                "emerg",
+                f"[{iface}] refusing select_network: cleanup obligation "
+                f"could not be persisted (id={nid})",
+                _EXTRA_(),
+            )
+            return False
         # ctrl timeout/exception은 요청이 supplicant에 전달된 뒤 reply만 유실된 상태일 수
         # 있다. 호출 *전* attempted를 세워 모든 ambiguous 경로가 finally clear를 거친다.
         pin_attempted = True
@@ -2253,7 +2320,7 @@ def select_network_for_ssid(iface, to_ssid, to_bssid):
 
     cleanup_detail = (
         "cleanup remains unresolved"
-        if os.path.exists(selection_cleanup_marker_path(iface))
+        if _selection_cleanup_is_pending(iface)
         else "candidates restored"
     )
     logger.message(

@@ -33,6 +33,28 @@ if [ "${INSTALL_MODE:-}" = "partial-fail" ]; then
 fi
 cp "$1" "$2"
 EOF
+cat > "$BIN/mv" <<'EOF'
+#!/bin/sh
+mode=$(cat "$STATE_DIR/mv-mode" 2>/dev/null || echo ok)
+case "$mode:$*" in
+  fail-rollback:*\.bak.*)
+    exit 1
+    ;;
+  term-after-install:*\.bak.*)
+    exec /bin/mv "$@"
+    ;;
+  term-after-install:*)
+    /bin/mv "$@"
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
+      kill -TERM "$PPID"
+      sleep 0.1
+    fi
+    exit "$rc"
+    ;;
+esac
+exec /bin/mv "$@"
+EOF
 cat > "$BIN/systemctl" <<'EOF'
 #!/bin/sh
 exit 0
@@ -75,7 +97,10 @@ EOT
     count=$((count + 1))
     printf '%s\n' "$count" > "$STATE_DIR/reconfigure-count"
     mode=$(cat "$STATE_DIR/reconfigure-mode" 2>/dev/null || echo ok)
-    if [ "$mode" = "fail-first" ] && [ "$count" -eq 1 ]; then
+    if [ "$mode" = "rc-ok" ]; then
+      printf 'OK\n'
+      exit 9
+    elif [ "$mode" = "fail-first" ] && [ "$count" -eq 1 ]; then
       printf 'FAIL\n'
     else
       printf 'OK\n'
@@ -83,7 +108,21 @@ EOT
     ;;
   *" enable_network all"*)
     mode=$(cat "$STATE_DIR/enable-mode" 2>/dev/null || echo ok)
-    if [ "$mode" = "fail" ]; then printf 'FAIL\n'; else printf 'OK\n'; fi
+    if [ "$mode" = "rc-ok" ]; then printf 'OK\n'; exit 9
+    elif [ "$mode" = "fail" ]; then printf 'FAIL\n'
+    else printf 'OK\n'; fi
+    ;;
+  *" select_network "*)
+    mode=$(cat "$STATE_DIR/select-mode" 2>/dev/null || echo ok)
+    if [ "$mode" = "rc-ok" ]; then printf 'OK\n'; exit 9
+    elif [ "$mode" = "fail" ]; then printf 'FAIL\n'
+    else printf 'OK\n'; fi
+    ;;
+  *" reassociate"*|*" reconnect"*)
+    mode=$(cat "$STATE_DIR/assoc-mode" 2>/dev/null || echo ok)
+    if [ "$mode" = "rc-ok" ]; then printf 'OK\n'; exit 9
+    elif [ "$mode" = "fail" ]; then printf 'FAIL\n'
+    else printf 'OK\n'; fi
     ;;
   *) printf 'OK\n' ;;
 esac
@@ -148,6 +187,18 @@ set_reconfigure_mode() {
 
 set_enable_mode() {
     printf '%s\n' "$1" > "$STATE_DIR/enable-mode"
+}
+
+set_select_mode() {
+    printf '%s\n' "$1" > "$STATE_DIR/select-mode"
+}
+
+set_assoc_mode() {
+    printf '%s\n' "$1" > "$STATE_DIR/assoc-mode"
+}
+
+set_mv_mode() {
+    printf '%s\n' "$1" > "$STATE_DIR/mv-mode"
 }
 
 set_boot_policy() {
@@ -234,6 +285,14 @@ check_equal "wifi connect removes scan_freq" \
     "$(grep -Ec '^[[:space:]]*scan_freq[[:space:]]*=' "$CONF" || true)" "0"
 
 write_mode_b_legacy
+set_reconfigure_mode rc-ok
+set_status_mode stale-then-target
+WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1
+check_equal "wifi connect rejects reconfigure stdout OK with nonzero rc" "$?" "7"
+set_reconfigure_mode ok
+
+write_mode_b_legacy
 set_status_mode wrong-ssid
 WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
     bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1
@@ -286,6 +345,19 @@ check_equal "Mode A no-arg reconnect restores all network blocks" \
 
 write_mode_a_legacy
 set_status_mode mode-a-current
+set_select_mode rc-ok
+set_enable_mode ok
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 connect >/dev/null 2>&1
+rc=$?
+check_equal "Mode A reconnect rejects select_network stdout OK with nonzero rc" "$rc" "7"
+check_equal "Mode A rejected select still restores all network blocks" \
+    "$(grep -c 'enable_network all$' "$CALL_LOG" || true)" "1"
+set_select_mode ok
+
+write_mode_a_legacy
+set_status_mode mode-a-current
 set_enable_mode fail
 : > "$CALL_LOG"
 WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
@@ -295,6 +367,30 @@ check_equal "Mode A reconnect fails when all-network restore fails" "$rc" "7"
 set_enable_mode ok
 
 write_mode_a_legacy
+set_status_mode mode-a-current
+set_enable_mode rc-ok
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 connect >/dev/null 2>&1
+rc=$?
+check_equal "Mode A reconnect rejects enable-all stdout OK with nonzero rc" "$rc" "7"
+set_enable_mode ok
+
+write_mode_b_legacy
+set_boot_policy false false
+set_status_mode base
+set_assoc_mode rc-ok
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 connect >/dev/null 2>&1
+rc=$?
+check_equal "Mode B reconnect rejects reassociate/reconnect OK with nonzero rc" "$rc" "7"
+check_equal "Mode B failed reassociate tries reconnect fallback" \
+    "$(grep -c 'reconnect$' "$CALL_LOG" || true)" "1"
+set_assoc_mode ok
+
+write_mode_a_legacy
+set_boot_policy true true '["Office"]'
 set_status_mode no-current
 : > "$CALL_LOG"
 WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
@@ -323,7 +419,13 @@ check_equal "OPC freq removes scan_freq" \
     "$(grep -Ec '^[[:space:]]*scan_freq[[:space:]]*=' "$CONF" || true)" "0"
 check_equal "OPC successful apply reconfigures once" \
     "$(grep -c 'reconfigure$' "$CALL_LOG" || true)" "1"
-_opc_stage_sync=$(grep -nE '^sync .*/wpa_supplicant-mlan0\.conf\.[^/ ]+$' "$CALL_LOG" | head -1 | cut -d: -f1)
+_opc_backup_sync=$(grep -nE '^sync .*/wpa_supplicant-mlan0\.conf\.bak\.[^/ ]+$' "$CALL_LOG" | head -1 | cut -d: -f1)
+if [ -n "$_opc_backup_sync" ]; then
+    pass "OPC syncs rollback backup before destructive rename"
+else
+    fail "OPC must sync rollback backup before destructive rename"
+fi
+_opc_stage_sync=$(grep -nE '^sync .*/wpa_supplicant-mlan0\.conf\.[^/ ]+$' "$CALL_LOG" | grep -v '\.bak\.' | head -1 | cut -d: -f1)
 _opc_reconfigure=$(grep -n 'reconfigure$' "$CALL_LOG" | head -1 | cut -d: -f1)
 if [ -n "$_opc_stage_sync" ] && [ -n "$_opc_reconfigure" ] \
    && [ "$_opc_stage_sync" -lt "$_opc_reconfigure" ]; then
@@ -349,6 +451,66 @@ else
 fi
 check_equal "OPC rollback reconfigures restored conf" \
     "$(grep -c 'reconfigure$' "$CALL_LOG" || true)" "2"
+
+write_mode_b_legacy
+cp "$CONF" "$TD/opc-rc-original.conf"
+set_reconfigure_mode rc-ok
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$TD/run" \
+    sh "$OPC_SH" mlan0 freq "5180 5200" >/dev/null 2>&1
+rc=$?
+check_equal "OPC rejects reconfigure stdout OK with nonzero rc" "$rc" "5"
+if cmp -s "$CONF" "$TD/opc-rc-original.conf"; then
+    pass "OPC rc failure restores exact original conf"
+else
+    fail "OPC rc failure restores exact original conf"
+fi
+set_reconfigure_mode ok
+
+write_mode_b_legacy
+cp "$CONF" "$TD/opc-rollback-original.conf"
+set_reconfigure_mode fail-first
+set_mv_mode fail-rollback
+: > "$CALL_LOG"
+OPC_ERR="$TD/opc-rollback.err"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$TD/run" \
+    sh "$OPC_SH" mlan0 freq "5180 5200" >/dev/null 2>"$OPC_ERR"
+rc=$?
+check_equal "OPC rollback failure exits 6" "$rc" "6"
+_rollback_backup=""
+for _candidate in "$CONF".bak.*; do
+    [ -f "$_candidate" ] && _rollback_backup="$_candidate" && break
+done
+if [ -n "$_rollback_backup" ] && cmp -s "$_rollback_backup" "$TD/opc-rollback-original.conf"; then
+    pass "OPC rollback failure retains byte-exact original backup"
+else
+    fail "OPC rollback failure must retain byte-exact original backup"
+fi
+if grep -q 'CRITICAL: rollback failed' "$OPC_ERR" \
+   && [ -n "$_rollback_backup" ] \
+   && grep -Fq "$_rollback_backup" "$OPC_ERR"; then
+    pass "OPC rollback failure reports critical retained-backup path"
+else
+    fail "OPC rollback failure must report critical retained-backup path"
+fi
+rm -f "$_rollback_backup"
+set_mv_mode ok
+set_reconfigure_mode ok
+
+write_mode_b_legacy
+cp "$CONF" "$TD/opc-signal-original.conf"
+set_mv_mode term-after-install
+OPC_ERR="$TD/opc-signal.err"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$TD/run" \
+    sh "$OPC_SH" mlan0 freq "5180 5200" >/dev/null 2>"$OPC_ERR"
+rc=$?
+check_equal "OPC cancellation after install exits 6" "$rc" "6"
+if cmp -s "$CONF" "$TD/opc-signal-original.conf"; then
+    pass "OPC cancellation after install restores exact original conf"
+else
+    fail "OPC cancellation after install restores exact original conf"
+fi
+set_mv_mode ok
 
 write_mode_a_legacy
 set_boot_policy true true '["Office"]'

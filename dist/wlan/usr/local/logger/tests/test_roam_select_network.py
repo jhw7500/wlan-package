@@ -1,5 +1,7 @@
 import sys
 import os
+import json
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -16,7 +18,11 @@ wifi_roam.logger = MagicMock()
 
 @pytest.fixture(autouse=True)
 def _isolated_cleanup_marker(tmp_path, monkeypatch):
-    monkeypatch.setattr(wifi_roam, "WIFI_RUN_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(wifi_roam, "WIFI_RUN_DIR", str(tmp_path / "wifi"), raising=False)
+    monkeypatch.setattr(
+        wifi_roam, "WIFI_SELECTION_STATE_DIR", str(tmp_path), raising=False
+    )
+    monkeypatch.setattr(wifi_roam, "_SELECTION_CLEANUP_PENDING", {}, raising=False)
 
 class _Run:
     """subprocess.run stub: returncode + stdout."""
@@ -72,6 +78,104 @@ def test_select_network_success_polls_then_enables(monkeypatch):
     assert ok is True
     assert "select_network" in calls
     assert calls[-1] == "enable_network"  # fallback 후보 복원이 마지막
+
+
+def test_cleanup_marker_is_written_before_bssid_pin_mutation(monkeypatch):
+    marker_seen_at_pin = False
+
+    def side_effect(cmd, *a, **k):
+        nonlocal marker_seen_at_pin
+        if cmd[3] == "list_networks":
+            return _Run(0, _LIST_NETWORKS)
+        if cmd[3:] == ["bssid", "1", "00:11:22:33:44:55"]:
+            marker = Path(wifi_roam.selection_cleanup_marker_path("mlan0"))
+            record = json.loads(marker.read_text()) if marker.exists() else {}
+            marker_seen_at_pin = (
+                record.get("network_id") == "1"
+                and record.get("phase") == "before-pin"
+            )
+            return _Run(0, "OK\n")
+        if cmd[3:] in (["bssid", "1", "any"], ["enable_network", "all"]):
+            return _Run(0, "OK\n")
+        if cmd[3] == "select_network":
+            return _Run(0, "FAIL\n")
+        return _Run(1, "")
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        assert select_network_for_ssid(
+            "mlan0", "OfficeNet", "00:11:22:33:44:55"
+        ) is False
+
+    assert marker_seen_at_pin is True
+
+
+def test_cleanup_marker_write_failure_prevents_any_selection_mutation(monkeypatch):
+    calls = []
+
+    def side_effect(cmd, *a, **k):
+        calls.append(cmd[3:])
+        if cmd[3] == "list_networks":
+            return _Run(0, _LIST_NETWORKS)
+        return _Run(0, "OK\n")
+
+    def fail_directory_sync(_path):
+        raise OSError("injected directory fsync failure")
+
+    monkeypatch.setattr(wifi_roam, "_sync_parent_directory", fail_directory_sync)
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        assert select_network_for_ssid(
+            "mlan0", "OfficeNet", "00:11:22:33:44:55"
+        ) is False
+
+    assert calls == [["list_networks"]]
+    assert wifi_roam._SELECTION_CLEANUP_PENDING == {"mlan0": "1"}
+
+
+def test_sigkill_after_pin_leaves_wal_for_restart_recovery(tmp_path, monkeypatch):
+    logger_dir = Path(wifi_roam.__file__).resolve().parent
+    state_dir = tmp_path / "selection-state"
+    run_dir = tmp_path / "wifi"
+    child = f"""
+import os, sys, types
+sys.modules['sUTILS'] = types.SimpleNamespace(Logger=object, _EXTRA_=lambda: {{}})
+sys.path.insert(0, {str(logger_dir)!r})
+import wifi_roam
+wifi_roam.logger = types.SimpleNamespace(message=lambda *a, **k: None)
+class R:
+    def __init__(self, rc=0, out=''):
+        self.returncode=rc; self.stdout=out; self.stderr=''
+def run(cmd, *a, **k):
+    if cmd[3] == 'list_networks':
+        return R(0, {_LIST_NETWORKS!r})
+    if cmd[3:] == ['bssid', '1', '00:11:22:33:44:55']:
+        os._exit(91)
+    return R(0, 'OK\\n')
+wifi_roam.subprocess.run = run
+wifi_roam.select_network_for_ssid('mlan0', 'OfficeNet', '00:11:22:33:44:55')
+"""
+    env = os.environ | {
+        "WIFI_RUN_DIR": str(run_dir),
+        "WIFI_SELECTION_STATE_DIR": str(state_dir),
+    }
+    crashed = subprocess.run([sys.executable, "-c", child], env=env, timeout=10)
+    assert crashed.returncode == 91
+
+    marker = state_dir / ".mlan0.selection-cleanup-pending"
+    record = json.loads(marker.read_text())
+    assert record == {"version": 1, "network_id": "1", "phase": "before-pin"}
+
+    monkeypatch.setattr(wifi_roam, "WIFI_SELECTION_STATE_DIR", str(state_dir))
+    recovery_calls = []
+
+    def recover(cmd, *a, **k):
+        recovery_calls.append(cmd[3:])
+        return _Run(0, "OK\n")
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=recover):
+        assert wifi_roam.retry_pending_selection_cleanup("mlan0") is True
+    assert recovery_calls == [["bssid", "1", "any"], ["enable_network", "all"]]
+    assert not marker.exists()
+
 
 def test_select_network_ssid_not_found_returns_false_no_select(monkeypatch):
     # to_ssid가 list_networks에 없으면 select_network 자체를 호출하지 않고 False
@@ -496,7 +600,11 @@ def test_cross_ssid_cleanup_persistent_failure_never_reports_success(monkeypatch
     assert ok is False
     assert any(c[3] == "reconfigure" for c in calls)
     marker = Path(wifi_roam.selection_cleanup_marker_path("mlan0"))
-    assert marker.read_text().strip() == "1"
+    assert json.loads(marker.read_text()) == {
+        "version": 1,
+        "network_id": "1",
+        "phase": "before-pin",
+    }
     assert any(
         "cleanup remains unresolved" in str(call)
         for call in wifi_roam.logger.message.call_args_list
@@ -505,7 +613,10 @@ def test_cross_ssid_cleanup_persistent_failure_never_reports_success(monkeypatch
 
 def test_pending_selection_cleanup_is_retried_and_marker_cleared(monkeypatch):
     marker = Path(wifi_roam.selection_cleanup_marker_path("mlan0"))
-    marker.write_text("1\n")
+    marker.write_text(
+        json.dumps({"version": 1, "network_id": "1", "phase": "before-pin"})
+        + "\n"
+    )
     calls = []
 
     def side_effect(cmd, *a, **k):
@@ -517,6 +628,24 @@ def test_pending_selection_cleanup_is_retried_and_marker_cleared(monkeypatch):
     with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
         with patch.object(wifi_roam.time, "sleep", MagicMock()):
             assert wifi_roam.retry_pending_selection_cleanup("mlan0") is True
+
+    assert calls == [["bssid", "1", "any"], ["enable_network", "all"]]
+    assert not marker.exists()
+
+
+def test_legacy_numeric_selection_cleanup_marker_is_still_recovered(monkeypatch):
+    marker = Path(wifi_roam.selection_cleanup_marker_path("mlan0"))
+    marker.write_text("1\n")
+    calls = []
+
+    def side_effect(cmd, *a, **k):
+        calls.append(cmd[3:])
+        if cmd[3:] in (["bssid", "1", "any"], ["enable_network", "all"]):
+            return _Run(0, "OK\n")
+        return _Run(1, "")
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        assert wifi_roam.retry_pending_selection_cleanup("mlan0") is True
 
     assert calls == [["bssid", "1", "any"], ["enable_network", "all"]]
     assert not marker.exists()
