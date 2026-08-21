@@ -12,6 +12,11 @@ import threading
 from datetime import datetime
 from sUTILS import Logger, _EXTRA_
 from roam_state import lease_active, process_start_time, roam_state_paths
+from roam_policy import (
+    RoamPolicyError,
+    load_boot_roam_policy,
+    scan_backend_for_policy,
+)
 
 LOG_DIR = "/var/log/cantops/scan"
 
@@ -148,35 +153,23 @@ def _parse_bool(value):
     return bool(value)
 
 
-def load_scan_backend(iface):
-    """시작 시 `.iface.roaming.enabled`로 고정할 scan requester를 결정한다.
-
-    owner를 추측하면 wifi_roam 서비스 상태와 다른 backend가 떠 이중 로밍 주체가 될 수
-    있으므로 파일/JSON/키/타입 오류는 fail-closed 한다. 반환값은 프로세스 시작 후
-    호출자가 보관하며 periodic reload 대상이 아니다.
-    """
+def load_scan_policy(iface, run_dir=None):
+    """이 boot에서 불변인 owner/topology snapshot을 fail-closed로 읽는다."""
     try:
-        with open(WIFI_INIT_CONF_JSON, "r") as f:
-            data = json.load(f)
-    except (OSError, ValueError) as e:
-        raise BgscanConfigError(
-            f"cannot load roam owner from {WIFI_INIT_CONF_JSON}: {e}"
-        ) from e
+        return load_boot_roam_policy(iface, run_dir=run_dir)
+    except RoamPolicyError as e:
+        raise BgscanConfigError(str(e)) from e
 
+
+def load_scan_backend(iface, run_dir=None):
+    """Boot snapshot에서 고정 scan requester를 결정한다."""
     try:
-        enabled = data[iface]["roaming"]["enabled"]
-    except (KeyError, TypeError) as e:
-        raise BgscanConfigError(
-            f"missing boolean {iface}.roaming.enabled"
-        ) from e
-    if not isinstance(enabled, bool):
-        raise BgscanConfigError(
-            f"{iface}.roaming.enabled must be boolean, got {type(enabled).__name__}"
-        )
-    return "iw" if enabled else "wpa_cli"
+        return scan_backend_for_policy(load_scan_policy(iface, run_dir=run_dir))
+    except RoamPolicyError as e:
+        raise BgscanConfigError(str(e)) from e
 
 
-def load_bgscan_json(iface):
+def load_bgscan_json(iface, boot_policy=None):
     """`.iface.bgscan`에서 interval/ssid_filter/freq_filter/emit_roam_hint를,
     `.iface.roaming.extra_ssids`에서 추가 스캔 SSID를 한 번의 파일 읽기로 로드.
     interval은 양의 정수만, 필터/emit_roam_hint는 bool만, extra_ssids는 문자열 리스트만
@@ -202,14 +195,12 @@ def load_bgscan_json(iface):
             emit_roam_hint = bg["emit_roam_hint"]
         if isinstance(bg.get("passive"), bool):
             passive = bg["passive"]
-        # 로밍 후보(roaming.extra_ssids)와 bgscan 스캔 대상을 일치시킨다.
-        # 단, 모드 결정자 generate_network_blocks가 truthy(모드 A)일 때만 extra를 probe 대상에
-        # 포함한다(spec §3.5 3차 게이트). 모드 B(false/부재)는 extra=[] 강제 →
-        # directed probe에서 extra 제외 → 모드 B airtime 회귀 제거.
-        # bool 해석은 roam parse_bool / lib normalize_bool과 통일(_parse_bool).
+        # owner/topology는 production main이 전달한 /run boot snapshot에서만 읽는다.
+        # boot_policy=None은 단위테스트/구버전 직접호출 호환 경로일 뿐 daemon 경로가 아니다.
         roaming_cfg = iface_cfg.get("roaming", {})
-        if _parse_bool(roaming_cfg.get("generate_network_blocks")):
-            extra = roaming_cfg.get("extra_ssids")
+        topology_cfg = boot_policy if boot_policy is not None else roaming_cfg
+        if _parse_bool(topology_cfg.get("generate_network_blocks")):
+            extra = topology_cfg.get("extra_ssids")
             if isinstance(extra, list):
                 extra_ssids = [s.strip() for s in extra if isinstance(s, str) and s.strip()]
     except FileNotFoundError:
@@ -372,7 +363,7 @@ def run_scan_command(cmd, backend):
     return True
 
 
-def build_scan_request(conf_path, backend):
+def build_scan_request(conf_path, backend, boot_policy=None):
     """reload 가능한 scan 파라미터로 고정 backend의 다음 요청을 구성한다."""
     global _WILDCARD_PROBE_WARNED, _FREQ_FILTER_DEPRECATED_WARNED
 
@@ -384,7 +375,7 @@ def build_scan_request(conf_path, backend):
         extra_ssids,
         emit_roam_hint,
         passive,
-    ) = load_bgscan_json(IFACE)
+    ) = load_bgscan_json(IFACE, boot_policy=boot_policy)
     interval = json_interval or wpa_interval or DEFAULT_INTERVAL
 
     # 전역 freq_list가 있으면 두 backend 모두 같은 목록을 반드시 사용한다. wpa는
@@ -434,7 +425,7 @@ def build_scan_request(conf_path, backend):
     raise ValueError(f"unsupported scan backend: {backend}")
 
 
-def periodic_scan(conf_path, backend):
+def periodic_scan(conf_path, backend, boot_policy):
 
     # 스캔 명령/주기/필터는 매 스캔 직전 wpa_supplicant conf + JSON에서 재구성한다.
     # 초기 1회 구성 (실패해도 기동 — 다음 스캔 직전 재시도).
@@ -442,7 +433,9 @@ def periodic_scan(conf_path, backend):
     interval = DEFAULT_INTERVAL
     emit_roam_hint = backend == "iw"
     try:
-        cmd, interval, emit_roam_hint = build_scan_request(conf_path, backend)
+        cmd, interval, emit_roam_hint = build_scan_request(
+            conf_path, backend, boot_policy=boot_policy
+        )
         logger.message(
             "info",
             f"[{IFACE}] bgscan start: backend={backend}, cmd={cmd}, interval={interval}",
@@ -493,7 +486,9 @@ def periodic_scan(conf_path, backend):
             # 스캔 직전에 wpa conf + JSON을 다시 읽어 최신 ssid/freq/interval/필터로 스캔한다
             # (런타임 변경 반영). 재로드 실패 시 직전 cmd/interval 유지.
             try:
-                cmd, interval, emit_roam_hint = build_scan_request(conf_path, backend)
+                cmd, interval, emit_roam_hint = build_scan_request(
+                    conf_path, backend, boot_policy=boot_policy
+                )
             except Exception as e:
                 logger.message("err", f"[{IFACE}] bgscan config reload failed (keep last): {e}", _EXTRA_())
 
@@ -509,14 +504,14 @@ def periodic_scan(conf_path, backend):
 
         time.sleep(1)
 
-def main_loop(backend):
+def main_loop(backend, boot_policy):
     #subprocess.run(["ifconfig", IFACE, "up"])
     #last_log_time = time.time()
 
     # 스캔 파라미터(ssid/freq/interval/필터)는 periodic_scan이 매 스캔 직전 재로드하며,
     # 초기값은 periodic_scan의 "bgscan start" 로그에 찍힌다(여기서 중복 read 안 함).
     logger.message("info", f"[{IFACE}] version: {VERSION} (스캔 파라미터는 매 스캔 직전 재로드)", _EXTRA_())
-    periodic_scan(WPA_CONF_FILE, backend)
+    periodic_scan(WPA_CONF_FILE, backend, boot_policy)
 
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_sigterm)
@@ -538,14 +533,22 @@ if __name__ == "__main__":
         sys.exit(1)
 
     try:
-        SCAN_BACKEND = load_scan_backend(IFACE)
+        BOOT_POLICY = load_scan_policy(IFACE)
+        SCAN_BACKEND = scan_backend_for_policy(BOOT_POLICY)
     except BgscanConfigError as e:
         logger.message("emerg", f"[{IFACE}] bgscan owner config invalid: {e}", _EXTRA_())
         sys.exit(2)
+    if not BOOT_POLICY["bgscan_enabled"]:
+        logger.message(
+            "notice",
+            f"[{IFACE}] boot policy disables package bgscan; refusing stale start",
+            _EXTRA_(),
+        )
+        sys.exit(3)
     ROAM_OWNER = "wifi_roam" if SCAN_BACKEND == "iw" else "wpa_supplicant"
     logger.message(
         "notice",
         f"[{IFACE}] roam_owner={ROAM_OWNER} scan_backend={SCAN_BACKEND} (latched at start)",
         _EXTRA_(),
     )
-    main_loop(SCAN_BACKEND)
+    main_loop(SCAN_BACKEND, BOOT_POLICY)

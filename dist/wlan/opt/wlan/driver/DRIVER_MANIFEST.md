@@ -3,7 +3,7 @@
 > `scripts/gen_driver_manifest.sh` 자동 생성 — 수동 편집 금지.
 > 바이너리 `.ko` 는 .gitignore 대상이며, 이 파일이 배포된 드라이버의 약식 이력이다.
 
-- 소스(wlan-driver-v2): `lf-6.12.3-1.0.0-163-g3cae8af` (HEAD 3cae8af)
+- 소스(wlan-driver-v2): `unknown` (HEAD unknown)
 - 대상 디렉토리: `dist/wlan/opt/wlan/driver`
 
 | 파일 | version | srcversion | vermagic |
@@ -11,6 +11,6 @@
 | debug/mlan.ko | 405.p61 | 41705D05ED8C1DA0F3483A7 | 6.6.3-lts-next-ge16172170484-dirty SMP preempt mod_unload modversions aarch64 |
 | debug/moal.ko | 405.p61 | 7AD84AFC1AE8006735BCAAD | 6.6.3-lts-next-ge16172170484-dirty SMP preempt mod_unload modversions aarch64 |
 | mlan_imx8.ko | 505.p14 | C313A4C1BA94176BBBF91E7 | 6.6.3-lts-next-g9bc88c3c4469-dirty SMP preempt mod_unload modversions aarch64 |
-| mlan_imx93.ko | 505.p14 | C313A4C1BA94176BBBF91E7 | 6.6.3-lts-next-gccf0a99701a7-dirty SMP preempt mod_unload modversions aarch64 |
+| mlan_imx93.ko | 505.p14 | 41469260FFF85611C4D6D71 | 6.6.3-lts-next-gccf0a99701a7-dirty SMP preempt mod_unload modversions aarch64 |
 | moal_imx8.ko | 505.p14 | 4BA28708A7C5CBCB7C79BF3 | 6.6.3-lts-next-g9bc88c3c4469-dirty SMP preempt mod_unload modversions aarch64 |
-| moal_imx93.ko | 505.p14 | FB27694F2F5B445CF2E9D68 | 6.6.3-lts-next-gccf0a99701a7-dirty SMP preempt mod_unload modversions aarch64 |
+| moal_imx93.ko | 505.p14 | F15BF1363ED3552C63F31BB | 6.6.3-lts-next-gccf0a99701a7-dirty SMP preempt mod_unload modversions aarch64 |

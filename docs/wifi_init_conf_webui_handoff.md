@@ -82,8 +82,9 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 
 - `roaming.enabled=true`: `wifi_roam` owner + `iw` bgscan.
 - `roaming.enabled=false`: wpa_supplicant native owner + `wpa_cli` bgscan.
-- backend 선택용 신규 키는 없다. owner/backend는 daemon 시작 시 latch되며 UI 변경은
-  **재부팅 필요**로 표시한다.
+- backend 선택용 신규 키는 없다. owner/backend/topology는 부팅 최초
+  `/run/wifi/<iface>.roam-policy.json` snapshot에 latch되고 daemon 재시작에도 불변이므로
+  UI 변경은 **재부팅 필요**로 표시한다.
 - `generate_network_blocks`와 `extra_ssids`도 부팅 topology이므로 **재부팅 필요**다.
 - `bgscan.enabled=false`는 package 주기 scan만 끈다. wpa 장애 복구 scan은 유지된다.
 - `bgscan.freq_filter=false`는 deprecated다. 공통 `freq_list`가 있으면 계속 강제한다.
@@ -400,7 +401,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 |---|---|---|---|---|---|---|---|
 | `periodic_roam.interval` | legacy 주기 값 | int | `60` | 호환 보존 | no | na | **DEPRECATED/미사용** |
 | `periodic_roam.scan_before_roam` | legacy 스캔 값 | bool | `true` | 호환 보존 | no | na | **DEPRECATED/미사용** |
-| `periodic_roam.enabled` | legacy periodic owner | bool | `false` | true\|false | no | na | **DEPRECATED**. true도 경고 후 `wifi_periodic_roam@mlanN` 강제 disable |
+| `periodic_roam.enabled` | legacy periodic owner | bool | `false` | true\|false | no | na | **DEPRECATED**. true도 경고 후 `wifi_periodic_roam@mlanN` 강제 disable+stop, unit ExecCondition으로 실행 차단 |
 | `bgscan.interval` | 백그라운드 스캔 주기 | int | `60` | >0 | yes | runtime | 매 스캔 직전 재로드(무재시작) |
 | `bgscan.ssid_filter` | SSID directed probe | bool | `true` | true\|false | yes | runtime | false면 광범위 undirected 스캔 |
 | `bgscan.freq_filter` | 주파수 필터(legacy) | bool | `true` | true\|false | no | runtime | **DEPRECATED**. 공통 global `freq_list`가 있으면 false도 무시하고 iw/wpa_cli 모두 같은 목록 강제 |
@@ -408,9 +409,10 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `bgscan.emit_roam_hint` | roam hint 발행 | bool | `true` | true\|false | yes | runtime | iw/wifi_roam owner에서만 유효. wpa native owner에서는 강제 비활성 |
 | `bgscan.enabled` | package 백그라운드 스캔 | bool | `mlan0=true / mlan1=false` | true\|false | yes | boot | `wifi_bgscan@mlanN` enable/disable. false여도 wpa 장애 복구 scan 유지 |
 
-**비고 (bgscan owner)** — 별도 backend 필드를 만들지 않는다. `wifi_bgscan.py`는 시작 시
-`roaming.enabled`를 읽어 `true=iw`, `false=wpa_cli`로 한 번 고정한다. 따라서 이 토글은
-runtime/daemon-restart 항목이 아니라 아래 표처럼 **reboot 항목**이다.
+**비고 (bgscan owner)** — 별도 backend 필드를 만들지 않는다. 부팅 정책 적용기가
+`roaming.enabled`/`bgscan.enabled`/topology/extra를 `/run` snapshot으로 한 번 고정하고
+`wifi_bgscan.py`와 `wifi_roam.py`가 이를 읽는다. persisted JSON 편집 뒤 daemon을
+재시작해도 snapshot이 우선하므로 이 토글은 아래 표처럼 **reboot 항목**이다.
 
 #### 3.10.4 mlanN.roaming (wifi_roam.py 로밍)
 
@@ -421,13 +423,13 @@ runtime/daemon-restart 항목이 아니라 아래 표처럼 **reboot 항목**이
 | `DEFAULT_TH_5G` | 5GHz 로밍 임계값 | int | `-75` | 음수 dBm | yes | daemon-restart | 이 값 이하이면 로밍 시도 (JSON 단일 소스, conf `#!TH_5G=` 마커 미사용) |
 | `DIFF_TH` | 후보 AP 최소 RSSI 차 | int | `7` | >=0 dB | yes | daemon-restart | 클수록 보수적 |
 | `CHECK_INTERVAL` | 로밍 체크 주기 | int | `1` | >=1 초 | yes | daemon-restart | 고정 체크 주기(ADAPTIVE_INTERVAL 은 감사 D1로 제거됨) |
-| `extra_ssids` | 추가 로밍 후보 SSID | array | `[]` | 문자열 배열(같은 psk/key_mgmt) | caution | reboot | 모드A에서 추가 network 블록 생성. 모드B면 무시 |
+| `extra_ssids` | 추가 로밍 후보 SSID | array | `[]` | 문자열 배열(같은 psk/key_mgmt) | caution | reboot | 모드A에서 추가 network 블록 생성. 빈 배열이어도 Mode A identity/SSID 일괄변경 금지는 유지. 모드B면 무시 |
 | `generate_network_blocks` | topology 결정자 | bool | `false` | true\|false | caution | reboot | false=모드B(단일 블록/수동 cross-SSID), true=모드A(다중 블록/자동 cross-SSID) |
 | `ROAM_CROSS_FAIL_RETRY_COUNT` | cross-SSID 재시도 횟수 | int | `2` | >=0 (모드A 전용) | yes | daemon-restart | 초과 시 지수 backoff로 후보 제외 |
 | `ROAM_NO_RESULT_FAST_COUNT` | backoff 레벨당 반복 횟수 | int | `3` | >=1 | yes | daemon-restart | 각 주기를 N tick 유지 후 2배(플래토 곡선, 기본 3,3,3,6,6,6,…). 1=레거시(매 tick 2배) |
 | `SCAN_NO_RESULT_SLEEP` | 스캔 무결과 대기 | int | `3` | >=1 초 | yes | daemon-restart | 지수 backoff 시작값 |
 | `ROAM_SUCCESS_SLEEP` | 로밍 성공 후 대기 | int | `3` | >=1 초 | yes | daemon-restart | 성공 후 재체크 대기 |
-| `enabled` | proactive roam owner | bool | `mlan0=true / mlan1=false` | true\|false | yes | reboot | true=`wifi_roam`+iw, false=wpa native+wpa_cli. 시작 시 latch |
+| `enabled` | proactive roam owner | bool | `mlan0=true / mlan1=false` | true\|false | yes | reboot | true=`wifi_roam`+iw, false=wpa native+wpa_cli. boot snapshot에 latch |
 | `PREDICTIVE_ROAM.enable` | 예측 로밍 | bool | `false` | true\|false | yes | daemon-restart | RSSI 하락 추세 시 조기 로밍 |
 | `PREDICTIVE_ROAM.threshold_boost` | 예측 임계 부스트 | int | `5` | >=0 dB | yes | daemon-restart | 하락 추세 시 임계값에 더하는 부스트 |
 | `PREDICTIVE_ROAM.trend_window_size` | 추세 샘플 수 | int | `5` | >=1 | yes | daemon-restart | 추세 계산 RSSI 샘플 수 |

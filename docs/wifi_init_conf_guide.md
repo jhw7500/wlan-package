@@ -750,7 +750,8 @@ wifi eth0  log start|stop|restart|status|enable|disable
 > **DEPRECATED / 강제 비활성**: 이 블록은 기존 JSON 호환을 위해서만 남아 있다.
 > `wifi_periodic_roam`은 `wifi_roam`/wpa native와 겹치는 제3의 proactive owner이므로
 > `wifi_apply_enabled.sh`가 `enabled=true`도 경고 후 무시하고
-> `wifi_periodic_roam@<iface>.service`를 항상 disable한다.
+> `wifi_periodic_roam@<iface>.service`를 항상 disable+stop한다. unit 자체에도 항상
+> 실패하는 `ExecCondition`이 있어 이전 release의 symlink/queued job으로도 실행되지 않는다.
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
@@ -762,8 +763,10 @@ wifi eth0  log start|stop|restart|status|enable|disable
 
 **사용 스크립트**: `wifi_bgscan.py`
 
-`wifi_bgscan.py`는 별도 backend 설정을 받지 않는다. 프로세스 시작 시
-`roaming.enabled`를 읽어 requester를 한 번 결정(latch)한다.
+`wifi_bgscan.py`는 별도 backend 설정을 받지 않는다. `wifi_apply_enabled.sh`가 부팅
+최초 `/run/wifi/<iface>.roam-policy.json`을 원자 생성하고, bgscan/roam/init/writer가
+이 snapshot을 공통으로 사용한다. `/run` 수명 동안 owner/topology는 daemon이
+crash-restart되어도 바뀌지 않는다.
 
 | `roaming.enabled` | proactive roam owner | bgscan requester | Mode A cross-SSID |
 |---|---|---|---|
@@ -791,9 +794,10 @@ wpa_supplicant의 장애 복구·재연결 스캔은 계속 동작한다.
 
 > bgscan은 `wpa_state==COMPLETED`(연결됨)일 때만 `iw <iface> scan`을 수행한다 — 미연결 시엔 wpa_supplicant의 재연결 스캔/association과 라디오 경합을 피하려 skip.
 
-> 스캔 파라미터는 **매 스캔 직전에 다시 읽는다** — SSID와 공통 `freq_list`는
-> `wpa_supplicant-<iface>.conf`에서, `interval`/filter/passive는 JSON에서 읽는다.
-> 단, **backend/owner만 시작 시 latch**되므로 `roaming.enabled` 변경은 재부팅이 필요하다.
+> 스캔 파라미터는 **매 스캔 직전에 다시 읽는다** — 실제 network SSID와 공통
+> `freq_list`는 `wpa_supplicant-<iface>.conf`에서, `interval`/filter/passive는 JSON에서
+> 읽는다. 반면 **backend/owner/generate/extra_ssids/bgscan.enabled**는 boot snapshot에
+> 고정되므로 persisted JSON만 바꾸거나 daemon을 재시작해도 바뀌지 않는다.
 > 연결 상태 확인은 매 tick이 아니라 스캔 주기 도래 시에만 수행한다.
 
 공통 주파수 정책의 canonical 형식은 다음과 같다. 목록이 비면 전역/블록
@@ -810,7 +814,9 @@ network={
 
 모든 network 블록은 전역과 **동일한 목록**을 갖는다. 부팅과 `wifi freq`,
 `wifi connect`, OPC writer가 이 형식을 유지하므로 Mode A의 SSID마다 서로 다른
-주파수 범위를 둘 수 없다.
+주파수 범위를 둘 수 없다. runtime writer는 `/run/wifi/<iface>.wpa-conf.lock`을
+공유하고, 같은 directory staging 파일을 sync한 뒤 atomic rename하므로 wifi/OPC가
+경합하거나 reader가 partial conf를 관찰하지 않는다.
 
 ### 11.4 roaming - 로밍 알고리즘
 
@@ -823,8 +829,8 @@ network={
 | `CHECK_INTERVAL` | int | `1` | 로밍 체크 주기 (초). 판정 입력 link.json 이 ~1s 갱신이라 1 미만은 실익 없음 |
 | `SCAN_NO_RESULT_SLEEP` | int | `3` | 스캔 결과 없을 때 대기 (초) |
 | `ROAM_SUCCESS_SLEEP` | int | `3` | 로밍 성공 후 대기 (초) |
-| `enabled` | bool | mlan0 `true` / mlan1 `false` | owner 선택자. `true`=wifi_roam+iw, `false`=wpa native+wpa_cli. 시작 시 latch되므로 변경은 **재부팅** |
-| `extra_ssids` | array[str] | `[]` | Mode A에서 추가 network 블록으로 만들 SSID. 같은 psk/key_mgmt 전제. 변경은 **재부팅** |
+| `enabled` | bool | mlan0 `true` / mlan1 `false` | owner 선택자. `true`=wifi_roam+iw, `false`=wpa native+wpa_cli. boot snapshot에 latch되므로 변경은 **재부팅** |
+| `extra_ssids` | array[str] | `[]` | Mode A에서 추가 network 블록으로 만들 SSID. 같은 psk/key_mgmt 전제. 빈 배열이어도 Mode A identity/SSID writer 금지는 유지. 변경은 **재부팅** |
 | `generate_network_blocks` | bool | `false` | 부팅 topology 결정자. `false`=Mode B 단일 블록/수동 cross-SSID, `true`=Mode A 다중 블록/자동 cross-SSID. 변경은 **재부팅** |
 | `ROAM_CROSS_FAIL_RETRY_COUNT` | int | `2` | 모드A cross-SSID(`select_network`) 전환 실패 시 cooldown 없이 즉시 재시도 허용 횟수. 초과 시 지수 backoff로 해당 SSID를 후보에서 제외(진동 차단). 모드B에선 미적용 |
 
@@ -834,13 +840,15 @@ network={
 >
 > **Mode A (`generate_network_blocks=true`)**: 부팅 시 base 블록의 자격증명과 공통
 > `freq_list`를 상속한 extra SSID 블록을 만든다. 명시적 `wifi connect <ssid>`는 기본
-> SSID 소실을 막기 위해 거부한다. `roaming.enabled=true`이면 wifi_roam이 목표 BSSID를
+> SSID 소실을 막기 위해 거부한다. `extra_ssids=[]`로 생성 블록이 0개여도 Mode A
+> identity는 boot snapshot에 남아 같은 거부가 적용된다. `roaming.enabled=true`이면 wifi_roam이 목표 BSSID를
 > 해당 network ID에 임시 pin하고 `id+ssid+bssid+COMPLETED`를 정확히 확인한 뒤 pin을
 > 해제하고 모든 블록을 복구한다. `false`이면 wpa_supplicant의 native cross-SSID 선택
 > 정책(우선순위·신호·blacklist 등)을 그대로 수용한다.
 >
-> Mode A/B와 owner는 부팅 초기에 결정한다. 설정 파일만 고치거나 일부 daemon만
-> 재시작해 topology/owner를 hot switch하지 말고 반드시 재부팅한다.
+> Mode A/B와 owner는 부팅 최초 `/run` snapshot으로 결정한다. 설정 파일만 고치거나
+> 일부 daemon/wifi_init만 재시작해 topology/owner를 hot switch할 수 없으며 반드시
+> 재부팅한다. snapshot이 없거나 손상되면 owner daemon은 추측하지 않고 기동을 거부한다.
 
 > **로밍 판정 스캔**: 현재 링크 RSSI가 임계값 아래로 떨어지면 주파수 구성에 따라 분기한다.
 > 1. **단일 freq = 현재 채널**: `home_passive=true`면 홈채널 passive scan을 수행한다. 현재 AP 외 후보 beacon을 못 받았을 때만 같은 채널 directed active scan으로 재확인한다. `home_passive=false`면 처음부터 directed active 1회다.

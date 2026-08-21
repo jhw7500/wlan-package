@@ -20,6 +20,7 @@ tag=$(basename "$0")
 IFACE=mlan
 NUM=""
 WPA_CONF_DIR="${WPA_CONF_DIR:-/etc/wpa_supplicant}"
+WIFI_RUN_DIR="${WIFI_RUN_DIR:-/run/wifi}"
 
 if [ "${1:-}" == "0" ] || [ "${1:-}" == "mlan0" ]; then
     IFACE=mlan0
@@ -38,12 +39,25 @@ trap 'sync 2>/dev/null || true' EXIT
 # ----- safe file update helpers -----
 safe_install_sync() {
     # $1: src(tmp), $2: dst(real)
-    local src="$1" dst="$2" mode=0644
+    local src="$1" dst="$2" mode=0644 stage dst_dir
     case "$dst" in
-        /etc/wpa_supplicant/wpa_supplicant-*.conf) mode=0600 ;;
+        */wpa_supplicant-*.conf) mode=0600 ;;
     esac
-    install -o root -g root -m "$mode" "$src" "$dst"
+    # install(1)을 dst에 직접 호출하면 unlink+copy라 power loss/동시 reader가 partial
+    # 파일을 볼 수 있다. 같은 directory stage에 metadata까지 완성한 뒤 rename한다.
+    stage=$(mktemp "${dst}.install.XXXXXX") || return 1
+    if ! install -o root -g root -m "$mode" "$src" "$stage"; then
+        rm -f "$stage"
+        return 1
+    fi
+    sync "$stage" 2>/dev/null || sync 2>/dev/null || true
+    if ! mv -f "$stage" "$dst"; then
+        rm -f "$stage"
+        return 1
+    fi
     sync "$dst" 2>/dev/null || sync
+    dst_dir=${dst%/*}
+    [ "$dst_dir" != "$dst" ] && sync "$dst_dir" 2>/dev/null || true
 }
 
 safe_tmp_for() {
@@ -2155,6 +2169,8 @@ case "$2" in
     shift 2
     CONF="$WPA_CONF_DIR/wpa_supplicant-${IFACE}.conf"
     if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
+    wifi_wpa_conf_lock_acquire "$IFACE" \
+        || { echo "Error: failed to lock $CONF" >&2; exit 1; }
     FREQS=()
     # to_freq_mhz는 비숫자 토큰을 그대로 되돌려주고 1000 미만 정수를 5000+5*v로
     # 매핑한다 → 재검사가 없으면 freq_list=abc(파싱 실패로 주파수 핀 해제) 나
@@ -2179,9 +2195,11 @@ case "$2" in
     shift 2
     CONF="$WPA_CONF_DIR/wpa_supplicant-${IFACE}.conf"
     if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
+    wifi_wpa_conf_lock_acquire "$IFACE" \
+        || { echo "Error: failed to lock $CONF" >&2; exit 1; }
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> ssid <NEW_SSID>" >&2; exit 1; fi
-    if grep -q '^# >>> wifi_extra_ssid' "$CONF"; then
-        echo "Error: $CONF 는 다중블록 모드(generate_network_blocks=true)입니다." >&2
+    if wifi_wpa_conf_is_multi_topology "$IFACE" "$CONF"; then
+        echo "Error: $CONF 는 Mode A 또는 다중 network topology입니다." >&2
         echo "       ssid 일괄교체는 기본 SSID를 소실시킵니다 — cross-SSID 전환은" >&2
         echo "       wpa_cli select_network <id>를 사용하세요." >&2
         exit 1
@@ -2239,6 +2257,8 @@ case "$2" in
     shift 2
     CONF="$WPA_CONF_DIR/wpa_supplicant-${IFACE}.conf"
     if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
+    wifi_wpa_conf_lock_acquire "$IFACE" \
+        || { echo "Error: failed to lock $CONF" >&2; exit 1; }
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> psk <NEW_PSK>" >&2; exit 1; fi
     NEW_PSK="$1"
     # wpa_supplicant는 따옴표 passphrase를 8..63자로 제한한다. 벗어나면 해당 network
@@ -2294,6 +2314,8 @@ case "$2" in
     shift 2
     CONF="$WPA_CONF_DIR/wpa_supplicant-${IFACE}.conf"
     if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
+    wifi_wpa_conf_lock_acquire "$IFACE" \
+        || { echo "Error: failed to lock $CONF" >&2; exit 1; }
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> key <0|1|NONE|WPA-PSK>" >&2; exit 1; fi
     NEW_KEY="$1"
     [ "$NEW_KEY" = "0" ] && NEW_KEY="NONE"
@@ -2373,12 +2395,14 @@ case "$2" in
         echo "Error: wpa_cli not found" >&2; exit 1
     fi
     CONF="$WPA_CONF_DIR/wpa_supplicant-${IFACE}.conf"
-    # 다중블록 모드 거부 가드: 자동생성 센티넬이 있으면 ssid 일괄교체(conf-edit) 경로를
-    # 차단한다(기본 SSID 영구 소실 방지). ssid 인자가 있을 때만 거부 — 인자 없는
+    wifi_wpa_conf_lock_acquire "$IFACE" \
+        || { echo "Error: failed to lock $CONF" >&2; exit 1; }
+    # Mode A/실제 다중블록 거부 가드: boot snapshot을 우선하고 sentinel/block 수를
+    # fail-safe 보조로 써 ssid 일괄교체를 차단한다. ssid 인자가 있을 때만 거부 — 인자 없는
     # 강제 재연결(reassociate)은 conf를 건드리지 않으므로 허용.
-    if [ -f "$CONF" ] && grep -q '^# >>> wifi_extra_ssid' "$CONF"; then
+    if [ -f "$CONF" ] && wifi_wpa_conf_is_multi_topology "$IFACE" "$CONF"; then
         if [ $# -ge 1 ]; then
-            echo "Error: $CONF 는 다중블록 모드(generate_network_blocks=true)입니다." >&2
+            echo "Error: $CONF 는 Mode A 또는 다중 network topology입니다." >&2
             echo "       ssid 일괄교체는 기본 SSID를 소실시킵니다 — cross-SSID 전환은" >&2
             echo "       wifi_roam의 select_network(자동) 또는 wpa_cli select_network <id>를 사용하세요." >&2
             exit 1
@@ -2498,15 +2522,38 @@ case "$2" in
         # select_network는 다른 블록을 disable할 수 있으므로 성공/실패/timeout 어느
         # 경로에서도 enable_network all을 복구한다. 플래그를 명령 전에 올려 FAIL 응답도 보호.
         restore_mode_a_networks() {
+            local _attempt
             [ "$MODE_A_RESTORE" = "1" ] || return 0
-            MODE_A_RESTORE=0
-            if ! wpa_cli_ok "$IFACE" enable_network all; then
-                echo "Warning: failed to restore all network blocks on $IFACE" >&2
-                return 1
+            for _attempt in 1 2; do
+                if wpa_cli_ok "$IFACE" enable_network all; then
+                    MODE_A_RESTORE=0
+                    return 0
+                fi
+                sleep 0.1
+            done
+            # ambiguous ctrl failure 자동복구: canonical conf를 다시 읽힌 뒤 한 번 더 복원.
+            if wpa_cli_ok "$IFACE" reconfigure; then
+                sleep 0.1
+                if wpa_cli_ok "$IFACE" enable_network all; then
+                    MODE_A_RESTORE=0
+                    echo "Warning: candidates recovered by reconfigure; association proof invalidated" >&2
+                    return 1
+                fi
             fi
+            echo "Warning: failed to restore all network blocks on $IFACE" >&2
+            return 1
+        }
+        finish_mode_a_connect() {
+            local _rc=$?
+            trap - EXIT
+            if ! restore_mode_a_networks && [ "$_rc" -eq 0 ]; then
+                _rc=7
+            fi
+            sync 2>/dev/null || true
+            exit "$_rc"
         }
         MODE_A_RESTORE=1
-        trap 'restore_mode_a_networks || true; sync 2>/dev/null || true' EXIT
+        trap finish_mode_a_connect EXIT
         if ! wpa_cli_ok "$IFACE" select_network "$TARGET_ID"; then
             echo "Error: wpa_cli select_network $TARGET_ID failed for $IFACE" >&2
             exit 7
@@ -2555,6 +2602,10 @@ case "$2" in
         sleep 0.1
     done
     if [ "$ASSOC_MATCH" = "1" ]; then
+        if [ "$HAS_TARGET_ID" = "1" ] && ! restore_mode_a_networks; then
+            echo "Error: associated target but failed to restore all Mode A candidates" >&2
+            exit 7
+        fi
         echo "associated: ssid=\"${CUR_SSID:-N/A}\" freq=${CUR_FREQ:-N/A} id=${CUR_ID:-N/A} (wpa_state=COMPLETED)"
         exit 0
     else

@@ -86,6 +86,21 @@ get_bool() {
     normalize_bool "$v"
 }
 
+# owner/topology/bgscan enablement는 reboot 경계인 /run snapshot으로 고정한다.
+# 같은 boot의 수동 재실행/daemon restart는 persisted JSON 변경을 반영하지 않는다.
+WIFI_RUN_DIR="${WIFI_RUN_DIR:-/run/wifi}"
+for _policy_iface in mlan0 mlan1; do
+    if ! wifi_roam_policy_ensure_snapshot "$_policy_iface" "$JSON"; then
+        logger -p local0.emerg "[$tag:$LINENO] cannot create/validate boot roam policy for $_policy_iface"
+        printf '[%s] CRITICAL: invalid boot roam policy for %s\n' "$tag" "$_policy_iface" >&2
+        exit 1
+    fi
+done
+
+boot_policy_bool() {
+    wifi_roam_policy_get_bool "$1" "$2"
+}
+
 # wifi_periodic_roam은 wifi_roam/wpa native와 겹치는 제3의 proactive owner라 더 이상
 # 활성화하지 않는다. 호환을 위해 JSON 키는 읽되 true 요청은 경고하고 unit은 항상 false.
 for _owner_iface in mlan0 mlan1; do
@@ -119,6 +134,20 @@ apply() {
             logger -p local0.err "[$tag:$LINENO] disable $unit failed"
         fi
     fi
+}
+
+# disable은 target dependency로 이미 queued된 start job을 취소하지 않는다. owner로
+# 허용되지 않은 unit은 enable 상태와 무관하게 stop하여 queued/active 양쪽을 닫는다.
+OWNER_POLICY_FAILED=0
+ensure_stopped_owner_unit() {
+    local unit="$1"
+    if systemctl stop "$unit" 2>/dev/null; then
+        return 0
+    fi
+    OWNER_POLICY_FAILED=1
+    FAILED_UNITS+=("stop:$unit")
+    logger -p local0.crit "[$tag:$LINENO] stop/cancel disallowed owner $unit failed"
+    return 1
 }
 
 # MFG 프로파일: mfg_mode=1(SoT: mod_para.conf)이면 STA/FW 접촉 유닛을 일괄
@@ -195,6 +224,9 @@ for iface in mlan0 mlan1; do
                  wifi_bridge wifi_bgscan wifi_roam wifi_periodic_roam wifi_arping; do
             apply "${u}@${iface}.service" "false"
         done
+        ensure_stopped_owner_unit "wifi_bgscan@${iface}.service" || true
+        ensure_stopped_owner_unit "wifi_roam@${iface}.service" || true
+        ensure_stopped_owner_unit "wifi_periodic_roam@${iface}.service" || true
         continue
     fi
 
@@ -202,10 +234,20 @@ for iface in mlan0 mlan1; do
 
     apply "wifi_logger@${iface}.service"        "$(get_bool ".${iface}.logger.enabled"        "true")"
     apply "wifi_checker@${iface}.service"       "$(get_bool ".${iface}.checker.enabled"       "true")"
-    apply "wifi_bgscan@${iface}.service"        "$(get_bool ".${iface}.bgscan.enabled"        "false")"
-    apply "wifi_roam@${iface}.service"          "$(get_bool ".${iface}.roaming.enabled"       "false")"
+    _bgscan_want=$(boot_policy_bool "$iface" bgscan_enabled) || exit 1
+    _roam_want=$(boot_policy_bool "$iface" roaming_enabled) || exit 1
+    apply "wifi_bgscan@${iface}.service"        "$_bgscan_want"
+    apply "wifi_roam@${iface}.service"          "$_roam_want"
     apply "wifi_arping@${iface}.service"        "$(get_bool ".${iface}.arping.enabled"        "false")"
     apply "wifi_periodic_roam@${iface}.service" "false"
+    if [ "$_bgscan_want" = "false" ]; then
+        ensure_stopped_owner_unit "wifi_bgscan@${iface}.service" || true
+    fi
+    if [ "$_roam_want" = "false" ]; then
+        ensure_stopped_owner_unit "wifi_roam@${iface}.service" || true
+    fi
+    # deprecated third owner는 is-enabled=false/수동 active 상태까지 포함해 항상 중지.
+    ensure_stopped_owner_unit "wifi_periodic_roam@${iface}.service" || true
 
     # wifi_event: on_connect 명령, SNMP 링크/채널 트랩, 또는 association 후 deferred
     # MCS 검증/1회 제한 복구가 필요하면 enable한다.
@@ -257,6 +299,9 @@ if [ "${#ENABLED_UNITS[@]}" -eq 0 ] && [ "${#DISABLED_UNITS[@]}" -eq 0 ] && [ "$
     _log_summary "  no change (all units already in desired state)"
 fi
 
+if [ "$OWNER_POLICY_FAILED" -ne 0 ]; then
+    exit 1
+fi
 if [ "$STRICT" -eq 1 ] && [ "${#FAILED_UNITS[@]}" -gt 0 ]; then
     exit 1
 fi

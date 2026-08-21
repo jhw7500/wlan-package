@@ -210,6 +210,7 @@ dist/wlan/usr/lib/firmware/cts/wifi_mod_para.conf
 dist/wlan/usr/local/logger/passive_roam.py
 dist/wlan/usr/local/logger/print.py
 dist/wlan/usr/local/logger/roam_notify.py
+dist/wlan/usr/local/logger/roam_policy.py
 dist/wlan/usr/local/logger/roam_state.py
 dist/wlan/usr/local/logger/sUTILS.py
 dist/wlan/usr/local/logger/tests/__init__.py
@@ -241,6 +242,7 @@ dist/wlan/usr/local/logger/tests/test_roam_goodsignal_gate.py
 dist/wlan/usr/local/logger/tests/test_roam_mode_gate.py
 dist/wlan/usr/local/logger/tests/test_roam_notify.py
 dist/wlan/usr/local/logger/tests/test_roam_parse_conf.py
+dist/wlan/usr/local/logger/tests/test_roam_policy.py
 dist/wlan/usr/local/logger/tests/test_roam_runtime_reload.py
 dist/wlan/usr/local/logger/tests/test_roam_scan_logging.py
 dist/wlan/usr/local/logger/tests/test_roam_select_network.py

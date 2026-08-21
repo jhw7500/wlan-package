@@ -22,6 +22,7 @@ from roam_state import (
     roam_state_paths,
     write_flag,
 )
+from roam_policy import RoamPolicyError, load_boot_roam_policy
 
 VERSION = "1.1"
 IFACE = "mlan0"
@@ -614,6 +615,25 @@ def load_roaming_config(iface, data=None):
     )
 
     return config
+
+
+def apply_boot_roam_policy(policy):
+    """Live JSON로 읽은 topology를 이 boot의 immutable snapshot으로 덮는다."""
+    global GENERATE_NETWORK_BLOCKS, EXTRA_SSIDS
+    if not isinstance(policy, dict):
+        raise RoamPolicyError("boot roam policy must be an object")
+    if policy.get("roaming_enabled") is not True:
+        raise RoamPolicyError("wifi_roam owner is disabled by boot policy")
+    generate = policy.get("generate_network_blocks")
+    extras = policy.get("extra_ssids")
+    if not isinstance(generate, bool):
+        raise RoamPolicyError("generate_network_blocks must be boolean")
+    if not isinstance(extras, list) or any(not isinstance(v, str) for v in extras):
+        raise RoamPolicyError("extra_ssids must be a string array")
+    GENERATE_NETWORK_BLOCKS = generate
+    EXTRA_SSIDS = (
+        [value.strip() for value in extras if value.strip()] if generate else []
+    )
 
 
 # ==============================================================================
@@ -1647,7 +1667,7 @@ def reload_roaming_config(iface):
       1) json.load 선검증: invalid 면 현행 유지(기본값 회귀 금지)+경고 후 무시.
       2) 구조 검증(iface.roaming dict): 없으면 현행 유지+경고.
       3) generate_network_blocks(모드 결정자) / 모드 A 의 extra_ssids 는 부팅 시
-         wpa 블록 생성 절차와 결합돼 재시작 전용(경고 후 이전 값 유지).
+         wpa 블록 생성 절차와 결합돼 재부팅 전용(경고 후 boot snapshot 유지).
     인스턴스 파라미터는 재생성이 아닌 필드 갱신 → 이력(roam_history 등) 보존.
     적용 시 WPA_CONF_MTIME 을 리셋해 같은 사이클 wpa conf 재파싱을 유도(JSON DEFAULT_TH_*
     변경을 실제 판정값 WPA_TH_* 까지 전파). 반환: 적용 수행 여부."""
@@ -1683,7 +1703,7 @@ def reload_roaming_config(iface):
     old_gen = GENERATE_NETWORK_BLOCKS
     old_extra = list(EXTRA_SSIDS)
     load_roaming_config(iface, data=new_data)
-    # generate_network_blocks는 런타임 전환 금지(재시작 전용). 키가 '명시적으로' 다른
+    # generate_network_blocks는 런타임 전환 금지(재부팅 전용). 키가 '명시적으로' 다른
     # 값으로 바뀐 경우에만 경고 — 키 부재로 인한 False 수렴은 조용히 복원(오탐 방지).
     # gen을 유지할 때는 그에 연동된 EXTRA_SSIDS(부팅 시 생성된 wpa 블록과 정합)도 함께
     # 원복한다 — 런타임에 extra만 바뀌면 없는 블록으로 select_network가 실패하기 때문.
@@ -1692,7 +1712,7 @@ def reload_roaming_config(iface):
             logger.message(
                 "warn",
                 f"[{iface}] generate_network_blocks change ignored at runtime "
-                f"(requires daemon restart; keeping {old_gen})",
+                f"(requires reboot; keeping boot snapshot {old_gen})",
                 _EXTRA_(),
             )
         GENERATE_NETWORK_BLOCKS = old_gen
@@ -1700,11 +1720,11 @@ def reload_roaming_config(iface):
     elif GENERATE_NETWORK_BLOCKS and EXTRA_SSIDS != old_extra:
         # 모드 A에서 extra_ssids는 부팅 시 생성된 wpa 네트워크 블록에 종속(gen과 동일
         # 사유로 블록 생성이 boot 절차). 런타임에 배열만 바꾸면 블록 없는 SSID로
-        # select_network가 실패하므로 재시작 전용으로 취급(현행 유지 + 경고).
+        # select_network가 실패하므로 재부팅 전용으로 취급(현행 유지 + 경고).
         logger.message(
             "warn",
             f"[{iface}] extra_ssids change ignored at runtime in mode A "
-            f"(requires daemon restart to regenerate network blocks)",
+            f"(requires reboot to regenerate network blocks)",
             _EXTRA_(),
         )
         EXTRA_SSIDS = list(old_extra)
@@ -1722,7 +1742,7 @@ def reload_roaming_config(iface):
             trend_tracker.window_size = TREND_WINDOW_SIZE
             trend_tracker.max_age = TREND_HISTORY_MAX_AGE
     # cross_ssid_cooldown은 의도적으로 갱신만(생성 없음): 별도 enable이 없고 존재가
-    # GENERATE_NETWORK_BLOCKS(런타임 전환 금지, 재시작 전용)에 연동되므로
+    # GENERATE_NETWORK_BLOCKS(런타임 전환 금지, 재부팅 전용)에 연동되므로
     # 런타임에 None→생성이 필요한 상황 자체가 없다.
     if cross_ssid_cooldown is not None:
         cross_ssid_cooldown.retry_count = max(0, ROAM_CROSS_FAIL_RETRY_COUNT)
@@ -1932,6 +1952,60 @@ def _set_network_bssid(iface, network_id, bssid):
         return False
 
 
+def _wpa_reconfigure(iface):
+    """Canonical conf reload를 요청하고 ctrl reply까지 엄격히 확인한다."""
+    try:
+        result = subprocess.run(
+            ["wpa_cli", "-i", iface, "reconfigure"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        reply = (result.stdout or "").strip().split("\n", 1)[0].strip()
+        if result.returncode == 0 and reply == "OK":
+            return True
+        logger.message(
+            "err",
+            f"[{iface}] reconfigure recovery rejected: "
+            f"{(result.stdout or result.stderr or '').strip() or f'rc={result.returncode}'}",
+            _EXTRA_(),
+        )
+    except Exception as e:
+        logger.message("err", f"[{iface}] reconfigure recovery error: {e}", _EXTRA_())
+    return False
+
+
+def _restore_network_selection_state(iface, network_id):
+    """BSSID pin/all-network state를 bounded retry 후 canonical reconfigure로 복구한다."""
+    for _ in range(2):
+        clear_ok = _set_network_bssid(iface, network_id, "any")
+        enable_ok = _enable_network_all(iface)
+        if clear_ok and enable_ok:
+            return True
+        time.sleep(0.1)
+
+    logger.message(
+        "warn",
+        f"[{iface}] transient selection cleanup failed; reloading canonical conf",
+        _EXTRA_(),
+    )
+    if not _wpa_reconfigure(iface):
+        return False
+    time.sleep(0.2)
+    clear_ok = _set_network_bssid(iface, network_id, "any")
+    enable_ok = _enable_network_all(iface)
+    if clear_ok and enable_ok:
+        logger.message(
+            "notice",
+            f"[{iface}] selection state recovered by canonical reconfigure; "
+            "transition result will be retried",
+            _EXTRA_(),
+        )
+    # reconfigure는 association을 다시 시작할 수 있어 이전 COMPLETED 증명이 더는
+    # 유효하지 않다. 복구 성공이어도 이번 transition은 실패로 반환해 다음 tick에 재검증.
+    return False
+
+
 def select_network_for_ssid(iface, to_ssid, to_bssid):
     """Mode A cross-SSID: target block를 목표 BSSID로 pin한 뒤 정확히 확인한다.
 
@@ -1972,20 +2046,21 @@ def select_network_for_ssid(iface, to_ssid, to_bssid):
         )
         return False
 
-    if not _set_network_bssid(iface, nid, target_bssid):
-        return False
-
-    selection_attempted = False
+    pin_attempted = False
     completed = False
     cleanup_ok = True
     try:
+        # ctrl timeout/exception은 요청이 supplicant에 전달된 뒤 reply만 유실된 상태일 수
+        # 있다. 호출 *전* attempted를 세워 모든 ambiguous 경로가 finally clear를 거친다.
+        pin_attempted = True
+        if not _set_network_bssid(iface, nid, target_bssid):
+            return False
         logger.message(
             "notice",
             f"[{iface}] Cross-SSID select_network: id={nid} ssid={to_ssid} "
             f"bssid={target_bssid}",
             _EXTRA_(),
         )
-        selection_attempted = True
         sel = subprocess.run(
             ["wpa_cli", "-i", iface, "select_network", nid],
             capture_output=True,
@@ -2032,10 +2107,10 @@ def select_network_for_ssid(iface, to_ssid, to_bssid):
             "err", f"[{iface}] select_network error: {to_ssid}: {e}", _EXTRA_()
         )
     finally:
-        if not _set_network_bssid(iface, nid, "any"):
-            cleanup_ok = False
-        if selection_attempted and not _enable_network_all(iface):
-            cleanup_ok = False
+        # pin rejection도 transport 관점에서는 상태가 모호하므로 clear/all-enable을
+        # 묶어 bounded retry하고, 필요하면 canonical conf reconfigure로 자동복구한다.
+        if pin_attempted:
+            cleanup_ok = _restore_network_selection_state(iface, nid)
 
     if completed and cleanup_ok:
         logger.message(
@@ -2882,8 +2957,31 @@ if __name__ == "__main__":
     if clear_stale_roam_lease():
         logger.message("warn", f"[{IFACE}] removed stale roam-condition lease on startup", _EXTRA_())
 
-    # JSON 설정 로드 (IFACE별 설정)
+    # owner/topology는 /run boot snapshot이 단일 SoT다. daemon crash/restart 뒤에도
+    # persisted JSON 변경을 재해석하지 않으며, snapshot 부재/불일치는 fail-closed한다.
+    try:
+        BOOT_POLICY = load_boot_roam_policy(IFACE)
+    except RoamPolicyError as e:
+        logger.message("emerg", f"[{IFACE}] boot roam policy invalid: {e}", _EXTRA_())
+        sys.exit(2)
+    if not BOOT_POLICY["roaming_enabled"]:
+        logger.message(
+            "notice",
+            f"[{IFACE}] boot policy selects wpa native owner; refusing stale wifi_roam start",
+            _EXTRA_(),
+        )
+        sys.exit(3)
+
+    # 런타임 튜닝 값은 JSON에서 로드하되 topology/extra는 즉시 boot snapshot으로 복원.
     load_roaming_config(IFACE)
+    apply_boot_roam_policy(BOOT_POLICY)
+    logger.message(
+        "notice",
+        f"[{IFACE}] boot roam policy: owner=wifi_roam "
+        f"topology={'A' if GENERATE_NETWORK_BLOCKS else 'B'} "
+        f"extra_ssids={EXTRA_SSIDS}",
+        _EXTRA_(),
+    )
 
     # 로밍 임계(th2g/th5g)는 JSON 단일 소스 — conf `#!TH_*` 마커는 더 이상 읽지 않는다.
     # parse_supplicant_conf 는 여기서 넘긴 DEFAULT_TH_*(= load_roaming_config 가 JSON 으로

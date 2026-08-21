@@ -2,7 +2,7 @@
 
 계약: SIGHUP 수신 시 wifi_init_conf.json 을 1회 재읽어 적용(mtime 디바운스 없음 —
 신호 시점이 곧 '쓰기 완료'). invalid/구조무효 저장은 현행 유지(기본값 회귀 금지)+경고.
-generate_network_blocks/모드 A extra_ssids 는 재시작 전용(경고 후 유지). 인스턴스는
+generate_network_blocks/모드 A extra_ssids 는 재부팅 전용(경고 후 유지). 인스턴스는
 필드 갱신으로 이력 보존, enable off→on 은 생성. 적용 시 WPA_CONF_MTIME 리셋(wpa conf
 재파싱 → TH 전파). interruptible_sleep 은 신호 시 즉시 깨는 커널 블록(폴링 아님).
 """
@@ -126,8 +126,8 @@ def test_missing_file_keeps_current(env):
 def test_generate_change_blocked_at_runtime(env):
     _write(env, _conf(gen=True))
     assert reload_roaming_config(IFACE) is True    # 나머지 키는 적용되므로 True
-    assert wifi_roam.GENERATE_NETWORK_BLOCKS is False   # 재시작 전용 — 유지
-    assert len(_warn_calls("requires daemon restart")) == 1
+    assert wifi_roam.GENERATE_NETWORK_BLOCKS is False   # boot snapshot — 유지
+    assert len(_warn_calls("requires reboot")) == 1
 
 
 def test_mode_a_extra_ssids_change_blocked(env):
@@ -295,6 +295,6 @@ def test_gen_key_absent_no_spurious_warning(env):
     del conf[IFACE]["roaming"]["generate_network_blocks"]       # 키 부재(parse_bool False 수렴)
     _write(env, conf)
     assert reload_roaming_config(IFACE) is True
-    assert wifi_roam.GENERATE_NETWORK_BLOCKS is True            # 재시작 전용 — 복원
+    assert wifi_roam.GENERATE_NETWORK_BLOCKS is True            # boot snapshot — 복원
     assert wifi_roam.EXTRA_SSIDS == ["a"]                       # 연동 복원
-    assert len(_warn_calls("requires daemon restart")) == 0     # 키 부재는 오탐 경고 없음
+    assert len(_warn_calls("requires reboot")) == 0             # 키 부재는 오탐 경고 없음

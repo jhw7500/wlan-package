@@ -54,6 +54,153 @@ wifi_init_normalize_bool() {
     esac
 }
 
+# === 부팅 roaming owner/topology snapshot ==================================
+# /run은 reboot 때 비워지므로 최초 생성값이 이 boot의 owner/topology SoT다. JSON을
+# 런타임에 편집하거나 daemon이 crash-restart되어도 이 파일은 덮어쓰지 않는다.
+wifi_roam_policy_path() {
+    printf '%s/%s.roam-policy.json\n' "${WIFI_RUN_DIR:-/run/wifi}" "$1"
+}
+
+wifi_roam_policy_validate_file() {
+    local file="$1" iface="$2"
+    [ -f "$file" ] || return 1
+    command -v jq >/dev/null 2>&1 || return 1
+    jq -e --arg iface "$iface" '
+        type == "object" and
+        .version == 1 and
+        .iface == $iface and
+        (.roaming_enabled | type == "boolean") and
+        (.bgscan_enabled | type == "boolean") and
+        (.generate_network_blocks | type == "boolean") and
+        (.extra_ssids | type == "array") and
+        all(.extra_ssids[]; type == "string")
+    ' "$file" >/dev/null 2>&1
+}
+
+# 현재 JSON에서 snapshot을 **없을 때만** 원자 생성한다. 기존 파일이 valid면 그대로
+# 유지하고, invalid면 추측/덮어쓰기 없이 실패한다(한 boot 안 owner hot-switch 차단).
+wifi_roam_policy_ensure_snapshot() {
+    local iface="$1"
+    local conf_json="${2:-${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}}"
+    local run_dir="${WIFI_RUN_DIR:-/run/wifi}" policy tmp
+    local roaming_enabled bgscan_enabled generate extras
+
+    policy=$(wifi_roam_policy_path "$iface") || return 1
+    command -v flock >/dev/null 2>&1 || return 1
+    mkdir -p "$run_dir" || return 1
+    # 두 apply 인스턴스가 동시에 'missing'을 보고 서로 다른 JSON으로 overwrite하지
+    # 못하게 existence check부터 rename까지 직렬화한다.
+    exec 8>"$run_dir/.roam-policy.lock" || return 1
+    flock -x 8 || return 1
+    if [ -e "$policy" ]; then
+        wifi_roam_policy_validate_file "$policy" "$iface"
+        return $?
+    fi
+
+    wifi_init_conf_status "$conf_json" || return 1
+
+    roaming_enabled=$(wifi_init_normalize_bool \
+        "$(wifi_init_json_read_raw "$conf_json" ".${iface}.roaming.enabled")" false) || return 1
+    bgscan_enabled=$(wifi_init_normalize_bool \
+        "$(wifi_init_json_read_raw "$conf_json" ".${iface}.bgscan.enabled")" false) || return 1
+    generate=$(wifi_init_normalize_bool \
+        "$(wifi_init_json_read_raw "$conf_json" ".${iface}.roaming.generate_network_blocks")" false) || return 1
+    if [ "$generate" = "true" ]; then
+        extras=$(jq -c --arg iface "$iface" \
+            '(.[$iface].roaming.extra_ssids // []) as $raw
+             | if ($raw | type) == "array" then
+                 [$raw[] | select(type == "string")
+                  | gsub("^\\s+|\\s+$"; "") | select(length > 0)]
+               else [] end' \
+            "$conf_json" 2>/dev/null) || return 1
+    else
+        extras='[]'
+    fi
+
+    tmp=$(mktemp "$run_dir/.${iface}.roam-policy.XXXXXX") || return 1
+    if ! jq -cn \
+        --arg iface "$iface" \
+        --argjson roaming_enabled "$roaming_enabled" \
+        --argjson bgscan_enabled "$bgscan_enabled" \
+        --argjson generate "$generate" \
+        --argjson extras "$extras" \
+        '{version: 1, iface: $iface,
+          roaming_enabled: $roaming_enabled,
+          bgscan_enabled: $bgscan_enabled,
+          generate_network_blocks: $generate,
+          extra_ssids: $extras}' > "$tmp"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    chmod 0644 "$tmp" 2>/dev/null || {
+        rm -f "$tmp"
+        return 1
+    }
+    sync "$tmp" 2>/dev/null || sync 2>/dev/null || true
+    if ! mv -f "$tmp" "$policy"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    sync "$policy" 2>/dev/null || sync 2>/dev/null || true
+    wifi_roam_policy_validate_file "$policy" "$iface"
+}
+
+wifi_roam_policy_get_bool() {
+    local iface="$1" key="$2" policy
+    case "$key" in
+        roaming_enabled|bgscan_enabled|generate_network_blocks) ;;
+        *) return 1 ;;
+    esac
+    policy=$(wifi_roam_policy_path "$iface") || return 1
+    wifi_roam_policy_validate_file "$policy" "$iface" || return 1
+    jq -r ".${key}" "$policy" 2>/dev/null
+}
+
+# network block 수. 파싱이 깨져 닫히지 않은 block도 시작 토큰 기준으로 보수 집계한다.
+wifi_wpa_conf_network_count() {
+    local conf="$1"
+    [ -f "$conf" ] || { printf '0\n'; return 0; }
+    awk '/^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { n++ }
+         END { print n+0 }' "$conf"
+}
+
+# 단일 SSID를 일괄 치환하면 안 되는 topology인지 판정한다.
+# 우선순위: 이 boot snapshot > (테스트/boot 전) live JSON > 실제 conf shape/sentinel.
+# snapshot이 존재하지만 invalid면 안전하게 multi로 판정해 mutation을 차단한다.
+wifi_wpa_conf_is_multi_topology() {
+    local iface="$1" conf="$2" policy gen="" count
+    local conf_json="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
+    policy=$(wifi_roam_policy_path "$iface") || return 0
+    if [ -e "$policy" ]; then
+        if ! wifi_roam_policy_validate_file "$policy" "$iface"; then
+            return 0
+        fi
+        gen=$(jq -r '.generate_network_blocks' "$policy" 2>/dev/null) || return 0
+    else
+        if wifi_init_conf_status "$conf_json"; then
+            gen=$(wifi_init_normalize_bool \
+                "$(wifi_init_json_read_raw "$conf_json" ".${iface}.roaming.generate_network_blocks")" \
+                false)
+        fi
+    fi
+    [ "$gen" = "true" ] && return 0
+    grep -q '^# >>> wifi_extra_ssid' "$conf" 2>/dev/null && return 0
+    count=$(wifi_wpa_conf_network_count "$conf") || return 0
+    [ "${count:-0}" -gt 1 ] 2>/dev/null && return 0
+    return 1
+}
+
+# wifi CLI와 OPC writer가 공유하는 per-interface advisory lock. FD 9는 process
+# 종료까지 열린 채 유지되어 render/install/reconfigure/rollback 전체를 직렬화한다.
+wifi_wpa_conf_lock_acquire() {
+    local iface="$1" run_dir="${WIFI_RUN_DIR:-/run/wifi}" lock_file
+    command -v flock >/dev/null 2>&1 || return 1
+    mkdir -p "$run_dir" || return 1
+    lock_file="$run_dir/${iface}.wpa-conf.lock"
+    exec 9>"$lock_file" || return 1
+    flock -x 9
+}
+
 wifi_init_get_iface_enabled() {
     local iface="$1"
     local default="${2:-true}"
@@ -287,9 +434,10 @@ wifi_init_conf_freq_bands() {
 }
 
 # === wifi_extra_ssid 자동 network 블록 멱등 생성 ===
-# 모드 A(roaming.generate_network_blocks=true) + extra_ssids 비어있지 않을 때만,
+# 모드 A(boot snapshot generate_network_blocks=true) + extra_ssids 비어있지 않을 때만,
 # 센티넬 주석으로 감싼 자동 network 블록을 conf에 멱등 재생성한다.
-# 모드 B/빈 배열/jq 부재 → 기존 자동 블록만 제거(무회귀). 사용자 수동 블록(센티넬 없음)은 보존.
+# 모드 B/빈 배열 → 기존 자동 블록만 제거(무회귀). 사용자 수동 블록(센티넬 없음)은 보존하되
+# runtime 단일-SSID writer는 실제 block 수를 검사해 일괄 mutation을 거부한다.
 # 첫(센티넬 밖) network 블록을 템플릿으로 고정 필드(key_mgmt/psk/proto/pairwise/group/
 # scan_ssid/freq_list)를 상속하고 ssid만 extra 값으로 바꿔 append. ssid 권위 소스는 json.
 WIFI_EXTRA_SSID_BEGIN='# >>> wifi_extra_ssid auto-generated (do not edit) >>>'
@@ -326,14 +474,21 @@ _wifi_extra_ssid_template_field() {
 wifi_init_sync_extra_ssid_blocks() {
     local iface="$1" conf="$2"
     local conf_json="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
+    local policy
 
     [ -f "$conf" ] || return 0
     command -v jq >/dev/null 2>&1 || return 0
 
     local gen
-    gen=$(wifi_init_normalize_bool \
-        "$(wifi_init_json_read_raw "$conf_json" ".${iface}.roaming.generate_network_blocks")" \
-        false)
+    policy=$(wifi_roam_policy_path "$iface") || return 1
+    if [ -e "$policy" ]; then
+        wifi_roam_policy_validate_file "$policy" "$iface" || return 1
+        gen=$(jq -r '.generate_network_blocks' "$policy" 2>/dev/null) || return 1
+    else
+        gen=$(wifi_init_normalize_bool \
+            "$(wifi_init_json_read_raw "$conf_json" ".${iface}.roaming.generate_network_blocks")" \
+            false)
+    fi
 
     local tmp
     tmp=$(mktemp "${conf}.extra.XXXXXX") || return 1
@@ -353,7 +508,11 @@ wifi_init_sync_extra_ssid_blocks() {
 
     # 모드 A: extra_ssids 읽기 (각 줄 1 SSID)
     local extras
-    extras=$(wifi_init_json_read_raw "$conf_json" ".${iface}.roaming.extra_ssids[]?")
+    if [ -e "$policy" ]; then
+        extras=$(jq -r '.extra_ssids[]?' "$policy" 2>/dev/null) || return 1
+    else
+        extras=$(wifi_init_json_read_raw "$conf_json" ".${iface}.roaming.extra_ssids[]?")
+    fi
 
     # extra 없으면 자동 블록만 제거
     if [ -z "$extras" ]; then
