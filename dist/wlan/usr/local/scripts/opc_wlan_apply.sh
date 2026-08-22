@@ -69,7 +69,8 @@ wifi_wpa_conf_lock_acquire "$IFACE" \
 # 소실시키므로 거부한다(exit 2=usage). freq 변경은 물리 대역 공통이라 허용한다.
 if [ "$HAVE_SSID" = 1 ] && wifi_wpa_conf_is_multi_topology "$IFACE" "$CONF"; then
     echo "opc_wlan_apply: $CONF 는 다중블록 모드 — ssid 일괄변경 거부(기본 SSID 소실 방지)." >&2
-    echo "                cross-SSID 전환은 wpa_cli select_network <id>를 사용하세요." >&2
+    echo "                SSID 전환은 boot-latched owner policy에 따라 자동 처리됩니다." >&2
+    echo "                현재 network 재연결은 SSID 없이 'wifi <iface> connect'를 사용하세요." >&2
     exit 2
 fi
 

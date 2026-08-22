@@ -225,14 +225,6 @@ set_reconfigure_mode() {
     rm -f "$STATE_DIR/reconfigure-count"
 }
 
-set_enable_mode() {
-    printf '%s\n' "$1" > "$STATE_DIR/enable-mode"
-}
-
-set_select_mode() {
-    printf '%s\n' "$1" > "$STATE_DIR/select-mode"
-}
-
 set_assoc_mode() {
     printf '%s\n' "$1" > "$STATE_DIR/assoc-mode"
 }
@@ -373,54 +365,19 @@ check_equal "Mode A empty-extra snapshot rejects wifi ssid" "$?" "1"
 write_mode_a_legacy
 set_boot_policy true true '["Office"]'
 set_status_mode mode-a-current
-set_enable_mode ok
 : > "$CALL_LOG"
 WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
     bash "$WIFI_SH" 0 connect >/dev/null 2>&1
 rc=$?
 check_equal "Mode A no-arg reconnect confirms original network id" "$rc" "0"
-check_equal "Mode A no-arg reconnect reselects current id" \
-    "$(grep -c 'select_network 1$' "$CALL_LOG" || true)" "1"
-if [ "$(cat "$STATE_DIR/status-count" 2>/dev/null || echo 0)" -ge 3 ]; then
-    pass "Mode A no-arg reconnect ignores COMPLETED on another id"
-else
-    fail "Mode A no-arg reconnect ignores COMPLETED on another id"
-fi
-check_equal "Mode A no-arg reconnect restores all network blocks" \
-    "$(grep -c 'enable_network all$' "$CALL_LOG" || true)" "1"
-
-write_mode_a_legacy
-set_status_mode mode-a-current
-set_select_mode rc-ok
-set_enable_mode ok
-: > "$CALL_LOG"
-WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
-    bash "$WIFI_SH" 0 connect >/dev/null 2>&1
-rc=$?
-check_equal "Mode A reconnect rejects select_network stdout OK with nonzero rc" "$rc" "7"
-check_equal "Mode A rejected select still restores all network blocks" \
-    "$(grep -c 'enable_network all$' "$CALL_LOG" || true)" "1"
-set_select_mode ok
-
-write_mode_a_legacy
-set_status_mode mode-a-current
-set_enable_mode fail
-: > "$CALL_LOG"
-WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
-    bash "$WIFI_SH" 0 connect >/dev/null 2>&1
-rc=$?
-check_equal "Mode A reconnect fails when all-network restore fails" "$rc" "7"
-set_enable_mode ok
-
-write_mode_a_legacy
-set_status_mode mode-a-current
-set_enable_mode rc-ok
-: > "$CALL_LOG"
-WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
-    bash "$WIFI_SH" 0 connect >/dev/null 2>&1
-rc=$?
-check_equal "Mode A reconnect rejects enable-all stdout OK with nonzero rc" "$rc" "7"
-set_enable_mode ok
+check_equal "Mode A no-arg reconnect issues one owner-neutral reassociate" \
+    "$(grep -c 'reassociate$' "$CALL_LOG" || true)" "1"
+check_equal "Mode A no-arg reconnect never selects a network block" \
+    "$(grep -c 'select_network' "$CALL_LOG" || true)" "0"
+check_equal "Mode A no-arg reconnect never enables network blocks" \
+    "$(grep -c 'enable_network' "$CALL_LOG" || true)" "0"
+check_equal "Mode A no-arg reconnect ignores wrong-id COMPLETED until original id returns" \
+    "$(cat "$STATE_DIR/status-count" 2>/dev/null || echo 0)" "3"
 
 write_mode_b_legacy
 set_boot_policy false false
@@ -447,6 +404,37 @@ check_equal "Mode A broad recovery uses reassociate" \
     "$(grep -c 'reassociate$' "$CALL_LOG" || true)" "1"
 check_equal "Mode A broad recovery does not invent a target id" \
     "$(grep -c 'select_network' "$CALL_LOG" || true)" "0"
+
+echo ""
+echo "=== supported Mode A and bgscan guidance ==="
+if grep -Fq 'wpa_cli select_network' "$WIFI_SH"; then
+    fail "wifi Mode A guidance must not recommend raw wpa_cli select_network"
+else
+    pass "wifi Mode A guidance avoids raw wpa_cli select_network"
+fi
+if grep -Fq 'wpa_cli select_network' "$OPC_SH"; then
+    fail "OPC Mode A guidance must not recommend raw wpa_cli select_network"
+else
+    pass "OPC Mode A guidance avoids raw wpa_cli select_network"
+fi
+GUIDE="$SCRIPT_DIR/../../../../../docs/wifi_init_conf_guide.md"
+if grep -Fq 'iw <iface> scan passive' "$GUIDE" \
+   && grep -Fq 'wpa_cli -i <iface> SCAN passive=1' "$GUIDE"; then
+    pass "bgscan guide documents iw and native passive request grammars"
+else
+    fail "bgscan guide documents iw and native passive request grammars"
+fi
+if grep -Fq 'UTF-8 hex' "$GUIDE"; then
+    pass "bgscan guide documents hex-encoded native active SSID filters"
+else
+    fail "bgscan guide documents hex-encoded native active SSID filters"
+fi
+if grep -Fq 'both backends' "$GUIDE" \
+   && grep -Fq 'wpa_state=COMPLETED' "$GUIDE"; then
+    pass "bgscan guide applies COMPLETED safety gate to both backends"
+else
+    fail "bgscan guide applies COMPLETED safety gate to both backends"
+fi
 
 echo ""
 echo "=== OPC canonical writer and rollback ==="
