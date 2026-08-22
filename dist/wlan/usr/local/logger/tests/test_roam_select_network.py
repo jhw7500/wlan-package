@@ -39,6 +39,8 @@ _LIST_NETWORKS = (
     "2\tGuest\tany\t[DISABLED]\n"
 )
 
+_CLEAR_BSSID = "00:00:00:00:00:00"
+
 def _make_side_effect(list_out=_LIST_NETWORKS, select_rc=0, enable_rc=0,
                       states=("SCANNING", "COMPLETED")):
     """wpa_cli 호출 순서: list → bssid pin → select → status* → clear → enable."""
@@ -95,7 +97,7 @@ def test_cleanup_marker_is_written_before_bssid_pin_mutation(monkeypatch):
                 and record.get("phase") == "before-pin"
             )
             return _Run(0, "OK\n")
-        if cmd[3:] in (["bssid", "1", "any"], ["enable_network", "all"]):
+        if cmd[3:] in (["bssid", "1", _CLEAR_BSSID], ["enable_network", "all"]):
             return _Run(0, "OK\n")
         if cmd[3] == "select_network":
             return _Run(0, "FAIL\n")
@@ -173,7 +175,7 @@ wifi_roam.select_network_for_ssid('mlan0', 'OfficeNet', '00:11:22:33:44:55')
 
     with patch.object(wifi_roam.subprocess, "run", side_effect=recover):
         assert wifi_roam.retry_pending_selection_cleanup("mlan0") is True
-    assert recovery_calls == [["bssid", "1", "any"], ["enable_network", "all"]]
+    assert recovery_calls == [["bssid", "1", _CLEAR_BSSID], ["enable_network", "all"]]
     assert not marker.exists()
 
 
@@ -232,7 +234,7 @@ runpy.run_path({str(script)!r}, run_name='__main__')
     # deliberately missing boot snapshot.
     assert result.returncode == 2, result.stderr
     assert call_log.read_text().splitlines() == [
-        "-i mlan0 bssid 1 any",
+        "-i mlan0 bssid 1 00:00:00:00:00:00",
         "-i mlan0 enable_network all",
     ]
     assert not marker.exists()
@@ -348,7 +350,7 @@ def test_select_network_status_nonzero_rc_cannot_prove_target_completion(monkeyp
 
     assert ok is False
     assert sum(call == ["status"] for call in calls) == 6
-    assert ["bssid", "1", "any"] in calls
+    assert ["bssid", "1", _CLEAR_BSSID] in calls
     assert ["enable_network", "all"] in calls
 
 
@@ -518,7 +520,7 @@ def test_cross_ssid_select_pins_and_confirms_exact_target_bssid(monkeypatch):
         ["bssid", "1", _TARGET_BSSID],
         ["select_network", "1"],
         ["status"],
-        ["bssid", "1", "any"],
+        ["bssid", "1", _CLEAR_BSSID],
         ["enable_network", "all"],
     ]
 
@@ -545,7 +547,7 @@ def test_cross_ssid_select_rejects_completed_on_wrong_bssid_and_cleans_up(monkey
             ok = select_network_for_ssid("mlan0", "OfficeNet", _TARGET_BSSID)
 
     assert ok is False
-    assert sum(c[3:] == ["bssid", "1", "any"] for c in calls) == 1
+    assert sum(c[3:] == ["bssid", "1", _CLEAR_BSSID] for c in calls) == 1
     assert sum(c[3:] == ["enable_network", "all"] for c in calls) == 1
 
 
@@ -558,7 +560,7 @@ def test_cross_ssid_pin_rejection_stops_before_select_and_cleans_ambiguous_pin(m
             return _Run(0, _LIST_NETWORKS)
         if cmd[3:] == ["bssid", "1", _TARGET_BSSID]:
             return _Run(0, "FAIL\n")
-        if cmd[3:] == ["bssid", "1", "any"]:
+        if cmd[3:] == ["bssid", "1", _CLEAR_BSSID]:
             return _Run(0, "OK\n")
         if cmd[3:] == ["enable_network", "all"]:
             return _Run(0, "OK\n")
@@ -569,7 +571,7 @@ def test_cross_ssid_pin_rejection_stops_before_select_and_cleans_ambiguous_pin(m
 
     assert ok is False
     assert not any(c[3] == "select_network" for c in calls)
-    assert sum(c[3:] == ["bssid", "1", "any"] for c in calls) == 1
+    assert sum(c[3:] == ["bssid", "1", _CLEAR_BSSID] for c in calls) == 1
     assert sum(c[3:] == ["enable_network", "all"] for c in calls) == 1
 
 
@@ -585,7 +587,7 @@ def test_cross_ssid_pin_ambiguous_failure_always_clears_and_restores(monkeypatch
             if failure == "timeout":
                 raise wifi_roam.subprocess.TimeoutExpired(cmd, 10)
             raise RuntimeError("pin transport failed after delivery")
-        if cmd[3:] == ["bssid", "1", "any"]:
+        if cmd[3:] == ["bssid", "1", _CLEAR_BSSID]:
             return _Run(0, "OK\n")
         if cmd[3:] == ["enable_network", "all"]:
             return _Run(0, "OK\n")
@@ -597,7 +599,7 @@ def test_cross_ssid_pin_ambiguous_failure_always_clears_and_restores(monkeypatch
 
     assert ok is False
     assert not any(c[3] == "select_network" for c in calls)
-    assert sum(c[3:] == ["bssid", "1", "any"] for c in calls) == 1
+    assert sum(c[3:] == ["bssid", "1", _CLEAR_BSSID] for c in calls) == 1
     assert sum(c[3:] == ["enable_network", "all"] for c in calls) == 1
 
 
@@ -620,7 +622,7 @@ def test_cross_ssid_status_exception_clears_pin_and_restores_networks(monkeypatc
             ok = select_network_for_ssid("mlan0", "OfficeNet", _TARGET_BSSID)
 
     assert ok is False
-    assert sum(c[3:] == ["bssid", "1", "any"] for c in calls) == 1
+    assert sum(c[3:] == ["bssid", "1", _CLEAR_BSSID] for c in calls) == 1
     assert sum(c[3:] == ["enable_network", "all"] for c in calls) == 1
 
 
@@ -637,7 +639,7 @@ def test_cross_ssid_cleanup_transient_failure_is_retried_before_success(monkeypa
             return _Run(0, _LIST_NETWORKS)
         if cmd[3:] == ["bssid", "1", _TARGET_BSSID]:
             return _Run(0, "OK\n")
-        if cmd[3:] == ["bssid", "1", "any"]:
+        if cmd[3:] == ["bssid", "1", _CLEAR_BSSID]:
             clear_count += 1
             return _Run(0, "FAIL\n" if clear_count == 1 else "OK\n")
         if sub == "select_network":
@@ -678,7 +680,7 @@ def test_cross_ssid_cleanup_persistent_failure_never_reports_success(monkeypatch
                 0,
                 f"bssid={_TARGET_BSSID}\nssid=OfficeNet\nid=1\nwpa_state=COMPLETED\n",
             )
-        if cmd[3:] == ["bssid", "1", "any"] or sub == "enable_network":
+        if cmd[3:] == ["bssid", "1", _CLEAR_BSSID] or sub == "enable_network":
             return _Run(0, "FAIL\n")
         if sub == "reconfigure":
             return _Run(0, "FAIL\n")
@@ -712,7 +714,7 @@ def test_pending_selection_cleanup_is_retried_and_marker_cleared(monkeypatch):
 
     def side_effect(cmd, *a, **k):
         calls.append(cmd[3:])
-        if cmd[3:] in (["bssid", "1", "any"], ["enable_network", "all"]):
+        if cmd[3:] in (["bssid", "1", _CLEAR_BSSID], ["enable_network", "all"]):
             return _Run(0, "OK\n")
         return _Run(1, "")
 
@@ -720,7 +722,7 @@ def test_pending_selection_cleanup_is_retried_and_marker_cleared(monkeypatch):
         with patch.object(wifi_roam.time, "sleep", MagicMock()):
             assert wifi_roam.retry_pending_selection_cleanup("mlan0") is True
 
-    assert calls == [["bssid", "1", "any"], ["enable_network", "all"]]
+    assert calls == [["bssid", "1", _CLEAR_BSSID], ["enable_network", "all"]]
     assert not marker.exists()
 
 
@@ -731,14 +733,14 @@ def test_legacy_numeric_selection_cleanup_marker_is_still_recovered(monkeypatch)
 
     def side_effect(cmd, *a, **k):
         calls.append(cmd[3:])
-        if cmd[3:] in (["bssid", "1", "any"], ["enable_network", "all"]):
+        if cmd[3:] in (["bssid", "1", _CLEAR_BSSID], ["enable_network", "all"]):
             return _Run(0, "OK\n")
         return _Run(1, "")
 
     with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
         assert wifi_roam.retry_pending_selection_cleanup("mlan0") is True
 
-    assert calls == [["bssid", "1", "any"], ["enable_network", "all"]]
+    assert calls == [["bssid", "1", _CLEAR_BSSID], ["enable_network", "all"]]
     assert not marker.exists()
 
 
