@@ -804,3 +804,72 @@ An interim defense rejected a Mode B writer target merely because it appeared in
 ### Failure-boundary review and concerns
 
 All lock-owner child graphs, snapshot publication boundaries, boot installation branches, recovery startup/main-loop exits, Mode A/B routing, and SSID serialization/consumer boundaries were reviewed after GREEN. The only harness adjustment was a test-only cleanup polling margin (3s to 5s) for overloaded host scheduling; production watchdog semantics and lock duration are unchanged. Known required findings: none unresolved. Final concern: none.
+
+
+## Controller gate mismatch and watchdog continuation (2026-08-23)
+
+### Controller reproduction
+
+Before scoped re-review, the controller independently reran the clean commits and caught a deterministic gate mismatch:
+
+- `/tmp/task10-controller-final-fix-release-pre.log` — release preflight exit `1`, writer `RESULT: PASS=256 FAIL=3`, SHA-256 `03eb7865da1cf802888bd9f9ce9259f78ab2eb73b967aba5fdcb74c5b9182429`;
+- `/tmp/task10-controller-final-fix-writer-rerun-1.log` — isolated writer `PASS=256 FAIL=3`, SHA-256 `5b0d330ac96a8f315aa72a9d62213aa0e00b929a7482797bde112cb1558d890b`.
+
+The first two failures were `monitor PID-poll watchdog still bounds monitor orphan` and `explicit install watchdog still bounds monitor orphan`. The later `Mode B fresh proof cleans private monitor` failure was downstream contamination because the earlier private directory remained during subsequent cases. The failed monitor processes/directories disappeared only later, proving an overdue cleanup rather than a wrong steady-state postcondition.
+
+### Measured root cause
+
+The original watchdog did not have a structurally bounded owner-liveness decision. Every nominal 100 ms tick traversed:
+
+```text
+connect_monitor_pid_matches
+  -> command substitution
+  -> wifi_wpa_child_call
+  -> connect_monitor_proc_start
+  -> wifi_wpa_child_exec cat /proc/<owner>/stat
+```
+
+Monitor recovery and identity added external pidfile `cat` and `/proc/<pid>/cmdline` `tr` children. A delayed/held child therefore delayed the watchdog itself before it could observe owner death. Increasing the assertion deadline would only hide that unbounded dependency.
+
+Temporary, subsequently removed instrumentation ran five harnesses concurrently and captured 20 SIGKILL cleanup graphs. When all helper children scheduled promptly, owner-death detection was `0.105394..0.117046 s`; death-to-private-directory removal was `0.023506..0.401153 s`; total watcher-start-to-removal was `0.137805..0.516887 s`. Artifact: `/tmp/task10-watchdog-trace.log`, SHA-256 `b56758b76bf110ec4274bd9ba36ed1a02965264eb5eb0bbd7d2bffbcb12e7344`. Those measurements explain why earlier implementer runs passed while controller runs exposed the missing structural bound.
+
+### Deterministic RED
+
+The harness now arms a separate `/proc/*/stat` trap only after the monitor is attached and association polling has begun, guaranteeing the selected child belongs to the watchdog parent-liveness graph rather than monitor setup. Keeping that child alive across owner SIGKILL produced:
+
+- `FAIL: watchdog parent-liveness poll must not depend on external cat`;
+- `FAIL: builtin-watchdog bounds monitor orphan within three seconds`;
+- `RESULT: PASS=257 FAIL=2`.
+
+Artifact: `/tmp/task10-final-fix-continuation-red-watchdog.log`, SHA-256 `7d006b6b4414be7a7df0476b89a0fc31823b0b2976bf8ea83c767db0231e22ce`. RED cleanup explicitly drained the resumed old watchdog afterward, so later cases were not contaminated.
+
+### Fix
+
+Commit `32c42508b6869664439e36db8a6acde8788f5a67` (`fix(wifi): make monitor watchdog polling child-free`) changes only:
+
+- `dist/wlan/usr/local/scripts/wifi.sh`;
+- `dist/wlan/usr/local/scripts/wifi_wpa_conf_writer_test.sh`.
+
+`/proc/<pid>/stat` is read directly with the shell `read` builtin and its start token assigned into a named caller variable. NUL-delimited `/proc/<pid>/cmdline` is inspected with Bash builtin `read -d ''`. Monitor pidfiles are read with guarded builtins. Thus owner liveness, PID/start-token validation, and post-death monitor recovery have no external child or command-substitution scheduling boundary. Numeric PID validation, non-zombie check, start-token identity, wpa_cli argv identity, monitor TERM/KILL behavior, FD9->FD7 lock order, and close-first supported-child contracts remain unchanged.
+
+The test deadline was tightened back from the temporary five-second scheduler margin to the original three-second combined PID-exit plus private-directory-removal bound. This is an actual causal fix, not a deadline extension.
+
+### Final clean-commit GREEN
+
+Two consecutive isolated runs from clean commit `32c4250`:
+
+- `/tmp/task10-final-fix-continuation-green-writer-final-1.log` — `RESULT: PASS=259 FAIL=0`;
+- `/tmp/task10-final-fix-continuation-green-writer-final-2.log` — `RESULT: PASS=259 FAIL=0`.
+
+Both are byte-identical with SHA-256 `ffb523ec6ff976fb934801c49672b179ce5976fc5e4b18d728d53cfbfae65b1a`.
+
+Full clean-tree release gate:
+
+- `/tmp/task10-final-fix-continuation-green-release-pre-final.log` — `CONTINUATION_FINAL_RELEASE_PRE_RC=0`, SHA-256 `706b0bc7423e52af447c6de39242ce863c39e382e0e8bb43955c32be038c8d10`;
+- logger pytest `699 passed`;
+- scripts pytest `190 passed`;
+- init harness `PASS=127 FAIL=0`;
+- writer harness `RESULT: PASS=259 FAIL=0`;
+- all remaining release-preflight harnesses passed.
+
+No board access, merge, push, or deadline-only workaround occurred. Required findings unresolved: none. Concern: none.
