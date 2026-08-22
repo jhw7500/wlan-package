@@ -429,25 +429,28 @@ wpa_cli_ok() {
     [ "$reply" = "OK" ]
 }
 
-# Return a live process's /proc start-time token.  Cleanup uses the token as
-# well as the numeric PID so a stale/reused pidfile can never target a new
-# process.  Field parsing starts after the final ") " to tolerate spaces in
-# the kernel comm field.
-connect_monitor_proc_start() {
-    local pid="$1" stat rest
+# Store a live process's /proc start-time token in the named caller variable.
+# This liveness path is shell-builtin only: the SIGKILL watchdog must never
+# wait behind a schedulable `cat`/`tr` child before it can enforce its cleanup
+# bound.  Field parsing starts after the final ") " to tolerate spaces in the
+# kernel comm field.
+connect_monitor_proc_start_into() {
+    local output_name="$1" pid="$2" stat rest
+    printf -v "$output_name" '%s' ""
     case "$pid" in ''|*[!0-9]*) return 1 ;; esac
     [ "$pid" -gt 1 ] || return 1
-    stat=$(wifi_wpa_child_exec cat "/proc/$pid/stat" 2>/dev/null) || return 1
+    [ -r "/proc/$pid/stat" ] || return 1
+    IFS= read -r stat < "/proc/$pid/stat" 2>/dev/null || return 1
     rest=${stat##*) }
     set -- $rest
     [ $# -ge 20 ] && [ "${1:-}" != "Z" ] || return 1
-    printf '%s\n' "${20}"
+    printf -v "$output_name" '%s' "${20}"
 }
 
 connect_monitor_pid_matches() {
     local pid="$1" expected="$2" current
     [ -n "$expected" ] || return 1
-    current=$(wifi_wpa_child_call connect_monitor_proc_start "$pid") || return 1
+    connect_monitor_proc_start_into current "$pid" || return 1
     [ "$current" = "$expected" ]
 }
 
@@ -455,9 +458,10 @@ connect_monitor_pid_is_wpa_cli() {
     local pid="$1" arg
     case "$pid" in ''|*[!0-9]*) return 1 ;; esac
     [ "$pid" -gt 1 ] || return 1
-    while IFS= read -r arg; do
+    [ -r "/proc/$pid/cmdline" ] || return 1
+    while IFS= read -r -d '' arg; do
         case "$arg" in wpa_cli|*/wpa_cli) return 0 ;; esac
-    done < <(wifi_wpa_child_exec tr '\000' '\n' < "/proc/$pid/cmdline" 2>/dev/null)
+    done < "/proc/$pid/cmdline" 2>/dev/null
     return 1
 }
 
@@ -478,9 +482,12 @@ connect_event_monitor_cleanup() {
     # start() records the identity.  Recover only a live wpa_cli identity from
     # our mode-0700 directory; arbitrary/stale numeric PIDs remain unsignalled.
     if [ -z "$start" ] && [ -n "${CONNECT_MONITOR_DIR:-}" ]; then
-        pid=$(wifi_wpa_child_exec cat "$CONNECT_MONITOR_DIR/wpa_cli.pid" 2>/dev/null) || true
+        pid=""
+        if [ -r "$CONNECT_MONITOR_DIR/wpa_cli.pid" ]; then
+            IFS= read -r pid < "$CONNECT_MONITOR_DIR/wpa_cli.pid" || pid=""
+        fi
         if connect_monitor_pid_is_wpa_cli "$pid"; then
-            start=$(wifi_wpa_child_call connect_monitor_proc_start "$pid" 2>/dev/null || true)
+            connect_monitor_proc_start_into start "$pid" 2>/dev/null || start=""
         fi
     fi
     if connect_monitor_pid_matches "$pid" "$start"; then
@@ -536,7 +543,7 @@ EOF
     # It recovers only a live wpa_cli from our private directory, then pins its
     # /proc start token before sending any signal.
     parent_pid=$$
-    parent_start=$(wifi_wpa_child_call connect_monitor_proc_start "$parent_pid") || {
+    connect_monitor_proc_start_into parent_start "$parent_pid" || {
         connect_event_monitor_cleanup
         return 1
     }
@@ -554,9 +561,12 @@ EOF
         [ -d "$CONNECT_MONITOR_DIR" ] || exit 0
         pid=""; start=""
         for _i in 1 2 3 4 5 6 7 8 9 10; do
-            pid=$(wifi_wpa_child_exec cat "$pidfile" 2>/dev/null) || true
+            pid=""
+            if [ -r "$pidfile" ]; then
+                IFS= read -r pid < "$pidfile" || pid=""
+            fi
             if connect_monitor_pid_is_wpa_cli "$pid"; then
-                start=$(wifi_wpa_child_call connect_monitor_proc_start "$pid" 2>/dev/null || true)
+                connect_monitor_proc_start_into start "$pid" 2>/dev/null || start=""
                 [ -n "$start" ] && break
             fi
             wifi_wpa_run_child sleep 0.1
@@ -578,7 +588,7 @@ EOF
     ) >/dev/null 2>&1 &
     watchdog_pid=$!
     CONNECT_MONITOR_WATCHDOG_PID="$watchdog_pid"
-    watchdog_start=$(wifi_wpa_child_call connect_monitor_proc_start "$watchdog_pid") || {
+    connect_monitor_proc_start_into watchdog_start "$watchdog_pid" || {
         kill -TERM "$watchdog_pid" 2>/dev/null || true
         wait "$watchdog_pid" 2>/dev/null || true
         connect_event_monitor_cleanup
@@ -595,8 +605,11 @@ EOF
     fi
     pid=""
     for _i in 1 2 3 4 5 6 7 8 9 10; do
-        pid=$(wifi_wpa_child_exec cat "$pidfile" 2>/dev/null) || true
-        start=$(wifi_wpa_child_call connect_monitor_proc_start "$pid" 2>/dev/null || true)
+        pid=""
+        if [ -r "$pidfile" ]; then
+            IFS= read -r pid < "$pidfile" || pid=""
+        fi
+        connect_monitor_proc_start_into start "$pid" 2>/dev/null || start=""
         [ -n "$start" ] && break
         wifi_wpa_run_child sleep 0.1
     done

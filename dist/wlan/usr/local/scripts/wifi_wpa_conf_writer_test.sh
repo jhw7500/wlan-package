@@ -95,6 +95,16 @@ case "$mode:${1:-}" in
     fi
     ;;
 esac
+case "${1:-}" in
+  /proc/*/stat)
+    if [ -f "$STATE_DIR/watchdog-probe-arm" ] \
+       && mkdir "$STATE_DIR/watchdog-probe-claim" 2>/dev/null; then
+      printf '%s\n' "$$" > "$STATE_DIR/watchdog-probe-pid"
+      : > "$STATE_DIR/watchdog-probe-ready"
+      IFS= read -r _release < "$STATE_DIR/watchdog-probe-release"
+    fi
+    ;;
+esac
 exec /bin/cat "$@"
 EOF
 cat > "$BIN/mv" <<'EOF'
@@ -467,6 +477,36 @@ cleanup_held_child() {
           "$STATE_DIR/held-child-ready" "$STATE_DIR/held-child-release"
 }
 
+prepare_watchdog_probe() {
+    rm -rf "$STATE_DIR/watchdog-probe-claim"
+    rm -f "$STATE_DIR/watchdog-probe-arm" "$STATE_DIR/watchdog-probe-pid" \
+          "$STATE_DIR/watchdog-probe-ready" "$STATE_DIR/watchdog-probe-release"
+    mkfifo "$STATE_DIR/watchdog-probe-release"
+}
+
+arm_watchdog_probe() {
+    : > "$STATE_DIR/watchdog-probe-arm"
+    for _wait in $(seq 1 50); do
+        [ -f "$STATE_DIR/watchdog-probe-ready" ] && return 0
+        sleep 0.01
+    done
+    return 1
+}
+
+cleanup_watchdog_probe() {
+    local pid=""
+    pid=$(cat "$STATE_DIR/watchdog-probe-pid" 2>/dev/null || true)
+    [ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null || true
+    for _wait in $(seq 1 50); do
+        [ -z "$pid" ] || ! monitor_process_running "$pid" && break
+        sleep 0.01
+    done
+    [ -z "$pid" ] || kill -KILL "$pid" 2>/dev/null || true
+    rm -rf "$STATE_DIR/watchdog-probe-claim"
+    rm -f "$STATE_DIR/watchdog-probe-arm" "$STATE_DIR/watchdog-probe-pid" \
+          "$STATE_DIR/watchdog-probe-ready" "$STATE_DIR/watchdog-probe-release"
+}
+
 check_held_child_survives_owner_reap() {
     local desc="$1" pid=""
     pid=$(cat "$STATE_DIR/held-child-pid" 2>/dev/null || true)
@@ -509,7 +549,7 @@ check_missing_pid_cleanup_set_e() {
     local funcs="$TD/connect-cleanup-functions.sh"
     local dir="$TD/missing-pid-cleanup" result="" rc=0
     awk '
-        /^connect_monitor_proc_start\(\) \{/ { copy = 1 }
+        /^connect_monitor_proc_start_into\(\) \{/ { copy = 1 }
         /^connect_event_monitor_start\(\)/ { copy = 0 }
         copy { print }
     ' "$WIFI_SH" > "$funcs"
@@ -624,13 +664,10 @@ check_monitor_cleaned() {
     local desc="$1" pid="" dir=""
     pid=$(cat "$STATE_DIR/last-monitor-pid" 2>/dev/null || true)
     dir=$(cat "$STATE_DIR/last-monitor-dir" 2>/dev/null || true)
-    # Poll the combined cleanup postcondition through a five-second harness
-    # deadline.  The production watchdog reacts in bounded 100 ms ticks, but
-    # this host may be heavily scheduled while the release suite runs; using
-    # the exact nominal cleanup duration as the assertion deadline is a test
-    # race.  PID exit can also precede rm -rf by a few milliseconds, so never
-    # break on PID exit alone.
-    for _wait in $(seq 1 50); do
+    # Poll the combined cleanup postcondition through the production three-
+    # second bound.  PID exit can precede rm -rf by a few milliseconds, so
+    # never break on PID exit alone.
+    for _wait in $(seq 1 30); do
         if { [ -z "$pid" ] || ! monitor_process_running "$pid"; } \
            && { [ -z "$dir" ] || [ ! -e "$dir" ]; } \
            && ! find "$RUN_DIR" -maxdepth 1 -name 'mlan0.connect-monitor.*' -print -quit 2>/dev/null | grep -q .; then
@@ -1255,27 +1292,53 @@ fi
 rm -f "$STATE_DIR/slow-status-release"
 check_monitor_cleaned "Mode A slow-child watchdog still bounds monitor orphan"
 
-# Hold the parent's first private PID-file read during monitor setup.  The
-# daemon and watchdog already exist, both transaction locks are held, and the
-# selected cat remains alive across SIGKILL of only the owning wifi shell.
+# Arm a deterministic trap for any external /proc parent-liveness `cat` only
+# after the monitor is attached.  The watchdog's three-second SIGKILL bound
+# must not depend on a schedulable/transitively held polling child.
 write_mode_a_legacy
 set_status_mode mode-a-wait
 set_monitor_mode stubborn
-prepare_held_child monitor-pid-cat
+prepare_watchdog_probe
 : > "$CALL_LOG"
 WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=10 \
     bash "$WIFI_SH" 0 connect >/dev/null 2>&1 &
 _wifi_pid=$!
-wait_for_held_child \
-    "Mode A SIGKILL fixture holds monitor PID-poll child live"
+for _wait in $(seq 1 100); do
+    [ -s "$STATE_DIR/last-monitor-pid" ] \
+        && [ -d "$(cat "$STATE_DIR/last-monitor-dir" 2>/dev/null || true)" ] \
+        && [ "$(cat "$STATE_DIR/status-count" 2>/dev/null || echo 0)" -ge 2 ] \
+        && break
+    sleep 0.01
+done
+if [ "$(cat "$STATE_DIR/status-count" 2>/dev/null || echo 0)" -ge 2 ]; then
+    pass "watchdog probe arms after monitor setup and association polling"
+else
+    fail "watchdog probe must arm after monitor setup and association polling"
+fi
+if arm_watchdog_probe; then
+    fail "watchdog parent-liveness poll must not depend on external cat"
+else
+    pass "watchdog parent-liveness poll is shell-builtin and child-free"
+fi
 kill -KILL "$_wifi_pid" 2>/dev/null || true
 wait "$_wifi_pid" 2>/dev/null || true
-check_held_child_survives_owner_reap \
-    "monitor PID-poll child remains live after owner SIGKILL and reap"
 check_connect_locks_available_before_monitor_cleanup \
-    "monitor PID-poll SIGKILL releases FD9 then FD7 before monitor cleanup"
-cleanup_held_child "monitor PID-poll SIGKILL fixture cleans held child"
-check_monitor_cleaned "monitor PID-poll watchdog still bounds monitor orphan"
+    "builtin-watchdog SIGKILL releases FD9 then FD7 before monitor cleanup"
+check_monitor_cleaned "builtin-watchdog bounds monitor orphan within three seconds"
+cleanup_watchdog_probe
+# A RED run deliberately holds the old external poll through the assertion;
+# drain its resumed watchdog before the next scenario so one causal failure
+# cannot contaminate later monitor checks.
+for _wait in $(seq 1 30); do
+    _probe_dir=$(cat "$STATE_DIR/last-monitor-dir" 2>/dev/null || true)
+    [ -z "$_probe_dir" ] || [ ! -e "$_probe_dir" ] && break
+    sleep 0.1
+done
+if [ ! -e "${_probe_dir:-}" ]; then
+    pass "watchdog probe cleanup leaves no private monitor directory"
+else
+    fail "watchdog probe cleanup must leave no private monitor directory"
+fi
 
 # Hold the canonical writer's install child only after the explicit-connect
 # monitor is attached.  This covers the render/install transaction rather than
@@ -1440,10 +1503,9 @@ for wrapper, command in wrapper_re.findall(regions):
     inventory[wrapper].add(command)
 
 expected = {
-    "wifi_wpa_child_exec": {"cat", "mktemp", "tr", "wpa_cli"},
+    "wifi_wpa_child_exec": {"cat", "mktemp", "wpa_cli"},
     "wifi_wpa_child_call": {
-        "connect_monitor_proc_start", "to_freq_mhz_checked",
-        "wifi_ssid_to_hex", "wifi_ssid_to_wpa_text",
+        "to_freq_mhz_checked", "wifi_ssid_to_hex", "wifi_ssid_to_wpa_text",
         "wifi_wpa_conf_common_freqs",
     },
     "wifi_wpa_run_child": {
