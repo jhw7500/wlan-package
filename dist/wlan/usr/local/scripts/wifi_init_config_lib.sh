@@ -250,7 +250,10 @@ wifi_wpa_conf_lock_acquire() {
 wifi_scan_transition_lock_acquire() {
     local iface="$1" run_dir="${WIFI_RUN_DIR:-/run/wifi}" lock_file timeout
     timeout="${WIFI_SCAN_TRANSITION_LOCK_TIMEOUT:-15}"
-    case "$timeout" in ''|*[!0-9]*) timeout=15 ;; esac
+    case "$timeout" in
+        0) ;;
+        ''|*[!0-9]*|*) timeout=15 ;;
+    esac
     command -v flock >/dev/null 2>&1 || return 1
     mkdir -p "$run_dir" || return 1
     lock_file="$run_dir/${iface}.scan-transition.lock"

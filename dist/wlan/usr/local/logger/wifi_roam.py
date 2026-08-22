@@ -28,6 +28,7 @@ from roam_policy import RoamPolicyError, load_boot_roam_policy
 VERSION = "1.1"
 IFACE = "mlan0"
 BSSID_CLEAR_ADDR = "00:00:00:00:00:00"
+SCAN_TRANSITION_BUSY = object()
 # wpa_supplicant CTRL_IFACE BSSID accepts a MAC address, not "any";
 # the all-zero address clears ssid->bssid_set and is displayed as "any".
 LINK_LOG_FILE = f"/var/log/cantops/json/{IFACE}/link.json"
@@ -1047,7 +1048,7 @@ def iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
     with scan_transition_lock(IFACE) as acquired:
         if not acquired:
             logger.message("info", f"[{IFACE}] scan-transition busy; defer roam scan", _EXTRA_())
-            return None
+            return SCAN_TRANSITION_BUSY
         return _iw_scan_to_ap_lines(ssids, freqs, passive, include_wildcard)
 
 
@@ -1106,7 +1107,7 @@ def _iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         except subprocess.TimeoutExpired:
             logger.message("err", f"[{IFACE}] iw scan timeout", _EXTRA_())
-            return None
+            return SCAN_TRANSITION_BUSY
         except Exception as e:
             logger.message("err", f"[{IFACE}] iw scan error: {e}", _EXTRA_())
             return None
@@ -2388,7 +2389,7 @@ def route_cross_ssid_transition(iface, to_ssid, from_bssid, to_bssid):
         with scan_transition_lock(iface) as acquired:
             if not acquired:
                 logger.message("info", f"[{iface}] scan-transition busy; defer cross-SSID roam", _EXTRA_())
-                return None
+                return SCAN_TRANSITION_BUSY
             ok = select_network_for_ssid(iface, to_ssid, to_bssid)
     else:
         # 모드 B: connect_to_ssid가 내부에서 자체 check+add_roam 수행(기존 동작 유지)
@@ -2676,6 +2677,8 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
                 allowed, None, include_wildcard=True
             )
         scanned = True
+        if active_lines is SCAN_TRANSITION_BUSY:
+            return SCAN_TRANSITION_BUSY, "", 0, False
         if not active_lines:
             return None, "", 0, scanned
 
@@ -2716,6 +2719,8 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
             )
         home_lines = filter_ap_lines_by_freq(home_scan_lines, home_freq)
         scanned = True
+        if home_scan_lines is SCAN_TRANSITION_BUSY:
+            return SCAN_TRANSITION_BUSY, "", 0, False
         if home_lines:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             home_entries = parse_scan_entries(
@@ -2780,6 +2785,8 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
         allowed, configured_freqs, include_wildcard=False
     )
     scanned = True
+    if active_lines is SCAN_TRANSITION_BUSY:
+        return SCAN_TRANSITION_BUSY, "", 0, False
     if active_lines:
         # scan_freq 전 채널(미설정 시 전대역) 실측 **성공** = bgscan 동등 커버리지.
         # 실패(None) 시엔 기록하지 않는다 — 신선 데이터가 없으니 bgscan 조기 재개가 이득.
@@ -2977,10 +2984,16 @@ def main():
             best_ap, best_reason, best_score, scanned = staged_scan_best_candidate(
                 station, allowed, live_ssid, trend, cross_ssid_cooldown
             )
+            if best_ap is SCAN_TRANSITION_BUSY:
+                interruptible_sleep(CHECK_INTERVAL)
+                continue
         else:
             # 종전 단일 액티브 스캔 경로(ENABLE_STAGED_SCAN=False 또는 WPA_SSID 부재 시 무회귀).
             if WPA_SSID:
                 ap_lines = iw_scan_to_ap_lines(allowed, WPA_FREQ)
+                if ap_lines is SCAN_TRANSITION_BUSY:
+                    interruptible_sleep(CHECK_INTERVAL)
+                    continue
                 # 레거시 = scan_freq 전 채널 액티브(bgscan 동등) — 종전대로 시도 시 기록.
                 _record_roam_scan_time()
                 if ap_lines:
@@ -3053,6 +3066,10 @@ def main():
                 ok = route_cross_ssid_transition(
                     IFACE, best_ap["ssid"], station["bssid"], best_ap["bssid"]
                 )
+                if ok is SCAN_TRANSITION_BUSY:
+                    no_candidate_streak = prev_streak
+                    interruptible_sleep(CHECK_INTERVAL)
+                    continue
                 # 전환 결과를 cooldown에 반영(성공→clear / 실패→register). post_sleep=실패 후
                 # 메인루프가 대기하는 시간(ROAM_SUCCESS_SLEEP+interval)을 반영해, 그 sleep 동안
                 # cooldown이 만료돼 무효화되는 것을 방지. cooldown None(모드 B)이면 무동작.
@@ -3062,10 +3079,14 @@ def main():
                 # 로밍 성공 정착 대기(의도적 비-중단): 이 짧은 settle 중 SIGHUP이 와도
                 # 직후 interruptible_sleep(interval) 또는 다음 루프 top에서 반영된다.
                 time.sleep(ROAM_SUCCESS_SLEEP)
-            elif roam_to_bssid(station["bssid"], best_ap["bssid"],
+            elif (ok := roam_to_bssid(station["bssid"], best_ap["bssid"],
                                channel=best_ap.get("channel"),
                                freq=best_ap.get("freq"),
-                               rssi=best_ap.get("rssi")):
+                               rssi=best_ap.get("rssi"))) is SCAN_TRANSITION_BUSY:
+                no_candidate_streak = prev_streak
+                interruptible_sleep(CHECK_INTERVAL)
+                continue
+            elif ok:
                 # 로밍 성공 정착 대기(의도적 비-중단): 이 짧은 settle 중 SIGHUP이 와도
                 # 직후 interruptible_sleep(interval) 또는 다음 루프 top에서 반영된다.
                 time.sleep(ROAM_SUCCESS_SLEEP)
