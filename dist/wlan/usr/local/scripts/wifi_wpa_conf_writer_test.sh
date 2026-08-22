@@ -386,12 +386,17 @@ check_monitor_cleaned() {
     local desc="$1" pid="" dir=""
     pid=$(cat "$STATE_DIR/last-monitor-pid" 2>/dev/null || true)
     dir=$(cat "$STATE_DIR/last-monitor-dir" 2>/dev/null || true)
-    # Watchdog detection (0.1s) plus graceful TERM allowance (1s) can cross a
-    # one-second assertion boundary; allow three seconds while still proving a
-    # tight bound well below the fake daemon's unbounded lifetime.
+    # Poll the combined cleanup postcondition through the three-second bound.
+    # PID exit can precede the watchdog's rm -rf by a few milliseconds, so
+    # breaking on PID exit alone races the private-directory assertion.
     for _wait in $(seq 1 30); do
-        [ -z "$pid" ] || ! monitor_process_running "$pid" || { sleep 0.1; continue; }
-        break
+        if { [ -z "$pid" ] || ! monitor_process_running "$pid"; } \
+           && { [ -z "$dir" ] || [ ! -e "$dir" ]; } \
+           && ! find "$RUN_DIR" -maxdepth 1 -name 'mlan0.connect-monitor.*' -print -quit 2>/dev/null | grep -q .; then
+            pass "$desc"
+            return
+        fi
+        sleep 0.1
     done
     if { [ -z "$pid" ] || ! monitor_process_running "$pid"; } \
        && { [ -z "$dir" ] || [ ! -e "$dir" ]; } \
