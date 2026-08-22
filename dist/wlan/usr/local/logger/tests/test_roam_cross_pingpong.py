@@ -16,6 +16,18 @@ from wifi_roam import route_cross_ssid_transition, record_cross_ssid_result
 import pytest
 
 wifi_roam.logger = MagicMock()
+_real_scan_transition_lock = wifi_roam.scan_transition_lock
+
+
+@pytest.fixture(autouse=True)
+def _private_scan_lock_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        wifi_roam,
+        "scan_transition_lock",
+        lambda iface: _real_scan_transition_lock(
+            iface, run_dir=str(tmp_path / "wifi")
+        ),
+    )
 
 IFACE = "mlan0"
 FROM = "aa:bb:cc:dd:ee:ff"

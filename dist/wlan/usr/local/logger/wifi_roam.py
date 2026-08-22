@@ -1800,7 +1800,7 @@ def roam_to_bssid(from_bssid, to_bssid, channel=None, freq=None, rssi=None):
     with scan_transition_lock(IFACE) as acquired:
         if not acquired:
             logger.message("info", f"[{IFACE}] scan-transition busy; defer roam", _EXTRA_())
-            return None
+            return SCAN_TRANSITION_BUSY
         return _roam_to_bssid_locked(from_bssid, to_bssid, channel, freq, rssi)
 
 
@@ -3036,18 +3036,40 @@ def main():
 
         # 최적 AP로 로밍
         if best_ap:
-            # 후보 발견 → backoff 리셋(spec §4 reset). 다음 후보없음은 시작값부터.
-            # 단 same-SSID 시도가 **실패**하면 아래 실패 분기가 종전 streak 에서
-            # 재전진한다 — 후보 발견만으로 지속 실패 환경(AP ACL·밴드스티어링 거부 등)의
-            # backoff 가 풀리면 고정 주기로 무한 재시도한다. 리셋 유지는 성공 확정 시에만.
+            # Lock contention is scheduler-neutral.  Do not reset candidate/gate
+            # state or claim an attempted roam until the transition helper has
+            # actually acquired the shared live-operation lock.
             prev_streak = no_candidate_streak
+            # 라우팅 판단은 위에서 선계산한 live_ssid(라이브 연결 SSID)를 공유.
+            # should_cross_connect 게이트(모드 A AND live와 다른 SSID)면 cross(select_network),
+            # 아니면 무중단 roam. 모드 B(generate=false)는 cross 항상 차단(spec §3.5 2차 게이트).
+            is_cross_ssid = should_cross_connect(best_ap.get("ssid"), live_ssid)
+            if is_cross_ssid:
+                # 다른(extra) SSID → 모드 A select_network(conf 불변). 성공/실패를 cooldown에 등록:
+                # 실패 누적 시 그 SSID를 후보에서 제외해 deauth 진동을 차단(spec §3.2).
+                ok = route_cross_ssid_transition(
+                    IFACE, best_ap["ssid"], station["bssid"], best_ap["bssid"]
+                )
+                if ok is SCAN_TRANSITION_BUSY:
+                    interruptible_sleep(CHECK_INTERVAL)
+                    continue
+            else:
+                ok = roam_to_bssid(
+                    station["bssid"], best_ap["bssid"],
+                    channel=best_ap.get("channel"),
+                    freq=best_ap.get("freq"),
+                    rssi=best_ap.get("rssi"),
+                )
+                if ok is SCAN_TRANSITION_BUSY:
+                    interruptible_sleep(CHECK_INTERVAL)
+                    continue
+
+            # A non-busy result means the transition lock was held and a real
+            # backend decision occurred.  Only now reset candidate/gate state
+            # and emit the attempt log.  On ordinary same-SSID failure the
+            # backoff below still advances from prev_streak.
             no_candidate_streak = 0
-            # 게이트 기준도 함께 무효화 — 로밍이 성공하면 BSSID 변경이 track_association 에서
-            # 처리하지만, **실패하면** BSSID 가 그대로라 옛 기준이 남는다.
             on_streak_reset(gs)
-            # hint 경로와 달리 여기선 현재 RSSI 를 아므로 기준을 즉시 재앵커한다. None 으로
-            # 두면 실패 직후 임계 위 Δ0~1dB 진동 한 tick 에 good-signal 이 no-baseline 으로
-            # 리셋을 허용해, 아래 실패 분기의 backoff 에스컬레이션이 무효화된다.
             gs["reset_rssi"] = station["rssi"]
             logger.message(
                 "emerg",
@@ -3057,19 +3079,7 @@ def main():
                 _EXTRA_(),
             )
 
-            # 라우팅 판단은 위에서 선계산한 live_ssid(라이브 연결 SSID)를 공유.
-            # should_cross_connect 게이트(모드 A AND live와 다른 SSID)면 cross(select_network),
-            # 아니면 무중단 roam. 모드 B(generate=false)는 cross 항상 차단(spec §3.5 2차 게이트).
-            if should_cross_connect(best_ap.get("ssid"), live_ssid):
-                # 다른(extra) SSID → 모드 A select_network(conf 불변). 성공/실패를 cooldown에 등록:
-                # 실패 누적 시 그 SSID를 후보에서 제외해 deauth 진동을 차단(spec §3.2).
-                ok = route_cross_ssid_transition(
-                    IFACE, best_ap["ssid"], station["bssid"], best_ap["bssid"]
-                )
-                if ok is SCAN_TRANSITION_BUSY:
-                    no_candidate_streak = prev_streak
-                    interruptible_sleep(CHECK_INTERVAL)
-                    continue
+            if is_cross_ssid:
                 # 전환 결과를 cooldown에 반영(성공→clear / 실패→register). post_sleep=실패 후
                 # 메인루프가 대기하는 시간(ROAM_SUCCESS_SLEEP+interval)을 반영해, 그 sleep 동안
                 # cooldown이 만료돼 무효화되는 것을 방지. cooldown None(모드 B)이면 무동작.
@@ -3079,13 +3089,6 @@ def main():
                 # 로밍 성공 정착 대기(의도적 비-중단): 이 짧은 settle 중 SIGHUP이 와도
                 # 직후 interruptible_sleep(interval) 또는 다음 루프 top에서 반영된다.
                 time.sleep(ROAM_SUCCESS_SLEEP)
-            elif (ok := roam_to_bssid(station["bssid"], best_ap["bssid"],
-                               channel=best_ap.get("channel"),
-                               freq=best_ap.get("freq"),
-                               rssi=best_ap.get("rssi"))) is SCAN_TRANSITION_BUSY:
-                no_candidate_streak = prev_streak
-                interruptible_sleep(CHECK_INTERVAL)
-                continue
             elif ok:
                 # 로밍 성공 정착 대기(의도적 비-중단): 이 짧은 settle 중 SIGHUP이 와도
                 # 직후 interruptible_sleep(interval) 또는 다음 루프 top에서 반영된다.

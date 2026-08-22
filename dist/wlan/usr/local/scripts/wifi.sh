@@ -548,6 +548,9 @@ EOF
     }
     watchdog_ticks=$((timeout * 10 + 50))
     (
+        # Survive shell/job-control hangup propagation if the owning command
+        # is killed before its EXIT trap can stop this watchdog.
+        trap '' HUP
         exec 7>&- 9>&-
         for ((_i = 1; _i <= watchdog_ticks; _i++)); do
             [ -d "$CONNECT_MONITOR_DIR" ] || exit 0
@@ -566,7 +569,10 @@ EOF
         done
         if connect_monitor_pid_matches "$pid" "$start"; then
             kill -TERM "$pid" 2>/dev/null || true
-            for _i in 1 2 3 4 5 6 7 8 9 10; do
+            # The parent is already gone (normally SIGKILL), so there is no
+            # caller left to benefit from a long graceful-daemon wait.  Bound
+            # orphan cleanup tightly, then force release of private resources.
+            for _i in 1 2 3; do
                 connect_monitor_pid_matches "$pid" "$start" || break
                 sleep 0.1
             done
@@ -613,6 +619,45 @@ connect_event_monitor_arm() {
     rm -f "$CONNECT_MONITOR_DIR/connected-id" \
           "$CONNECT_MONITOR_DIR"/connected-id.tmp.*
     : > "$CONNECT_MONITOR_DIR/armed"
+}
+
+# Read fresh event evidence before status so an accepted COMPLETED snapshot is
+# necessarily subsequent to the CONNECTED epoch.  The connect command sets the
+# target globals before invoking this helper.
+connect_association_poll_matches() {
+    FRESH_EVENT_ID=$(cat "$CONNECT_MONITOR_DIR/connected-id" 2>/dev/null || true)
+    WPA_STATUS=$(wpa_cli -i "$IFACE" status 2>/dev/null) || WPA_STATUS=""
+    WPA_STATE=""; CUR_SSID=""; CUR_FREQ=""; CUR_ID=""; ASSOC_MATCH=0
+    while IFS='=' read -r _key _value; do
+        case "$_key" in
+            wpa_state) WPA_STATE="$_value" ;;
+            ssid)      CUR_SSID="$_value" ;;
+            freq)      CUR_FREQ="$_value" ;;
+            id)        CUR_ID="$_value" ;;
+        esac
+    done <<< "$WPA_STATUS"
+
+    if [ "$WPA_STATE" = "COMPLETED" ]; then
+        if [ "$HAS_TARGET_ID" = "1" ]; then
+            [ "$FRESH_EVENT_ID" = "$TARGET_ID" ] \
+                && [ "$CUR_ID" = "$TARGET_ID" ] && ASSOC_MATCH=1
+        elif [ "$HAS_TARGET" = "0" ]; then
+            [[ "$FRESH_EVENT_ID" =~ ^[0-9]+$ ]] \
+                && [ "$CUR_ID" = "$FRESH_EVENT_ID" ] && ASSOC_MATCH=1
+        elif [ "$CUR_SSID" = "$TARGET_SSID" ]; then
+            if [[ "$FRESH_EVENT_ID" =~ ^[0-9]+$ ]] \
+               && [ "$FRESH_EVENT_ID" = "$CUR_ID" ]; then
+                if [ "$SET_FREQ" = "0" ]; then
+                    ASSOC_MATCH=1
+                else
+                    case " $FREQ_STR " in
+                        *" $CUR_FREQ "*) ASSOC_MATCH=1 ;;
+                    esac
+                fi
+            fi
+        fi
+    fi
+    [ "$ASSOC_MATCH" = "1" ]
 }
 
 # ----- radio staged-apply helpers -----
@@ -2602,6 +2647,8 @@ case "$2" in
     SET_FREQ=0
     FREQ_STR=""
     CONNECT_TIMEOUT="$ASSOC_TIMEOUT_DEFAULT"
+    TOTAL_POLLS=$((CONNECT_TIMEOUT * 10))
+    REMAINING_POLLS="$TOTAL_POLLS"
     if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
         echo "Error: connect supports mlan0/mlan1 only" >&2; exit 1
     fi
@@ -2636,28 +2683,16 @@ case "$2" in
             exit 1
         fi
 
-        # Mode A의 인자 없는 reconnect는 현재 선택된 network id를 먼저 고정한다.
-        # 단순 reassociate 뒤 COMPLETED만 보면 정상 유지 요청이 다른 SSID로 끝나도
-        # 성공 처리할 수 있다. 현재 id가 없는 장애 상태에서는 기존 broad recovery를 유지.
-        WPA_STATUS=$(wpa_cli -i "$IFACE" status 2>/dev/null) || WPA_STATUS=""
-        while IFS='=' read -r _key _value; do
-            [ "$_key" = "id" ] && TARGET_ID="$_value"
-        done <<< "$WPA_STATUS"
-        if [[ "$TARGET_ID" =~ ^[0-9]+$ ]]; then
-            HAS_TARGET_ID=1
-        else
-            TARGET_ID=""
-        fi
+        # No-argument paths already captured the current numeric id above.
+        # A disconnected/no-id Mode A recovery intentionally remains broad.
     fi
-    if true; then
-        trap 'connect_event_monitor_cleanup; sync 2>/dev/null || true' EXIT
-        trap 'exit 129' HUP
-        trap 'exit 130' INT
-        trap 'exit 143' TERM
-        if ! connect_event_monitor_start "$IFACE" "$CONNECT_TIMEOUT"; then
-            echo "Error: failed to attach reconnect event monitor for $IFACE" >&2
-            exit 7
-        fi
+    trap 'connect_event_monitor_cleanup; sync 2>/dev/null || true' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    if ! connect_event_monitor_start "$IFACE" "$CONNECT_TIMEOUT"; then
+        echo "Error: failed to attach reconnect event monitor for $IFACE" >&2
+        exit 7
     fi
     if [ $# -ge 1 ]; then
         # === conf 편집 경로: ssid(+freq) 기록 → reconfigure ===
@@ -2747,22 +2782,28 @@ case "$2" in
             exit 7
         fi
         echo "wpa_cli reconfigure OK ($IFACE)"
-        # A successful reconfigure may itself associate.  Accept only fresh
-        # event+status proof during this short grace, avoiding a duplicate
-        # reassociate on the normal path.
-        sleep 0.1
-        FRESH_EVENT_ID=$(cat "$CONNECT_MONITOR_DIR/connected-id" 2>/dev/null || true)
-        WPA_STATUS=$(wpa_cli -i "$IFACE" status 2>/dev/null) || WPA_STATUS=""
-        WPA_STATE=""; CUR_SSID=""; CUR_FREQ=""; CUR_ID=""
-        while IFS='=' read -r _key _value; do
-            case "$_key" in wpa_state) WPA_STATE="$_value" ;; ssid) CUR_SSID="$_value" ;; freq) CUR_FREQ="$_value" ;; id) CUR_ID="$_value" ;; esac
-        done <<< "$WPA_STATUS"
-        if [[ "$FRESH_EVENT_ID" =~ ^[0-9]+$ ]] && [ "$FRESH_EVENT_ID" = "$CUR_ID" ] && [ "$WPA_STATE" = "COMPLETED" ] \
-           && [ "$CUR_SSID" = "$TARGET_SSID" ] \
-           && { [ "$SET_FREQ" = "0" ] || case " $FREQ_STR " in *" $CUR_FREQ "*) true;; *) false;; esac; }; then
-            echo "associated by reconfigure: ssid=\"$CUR_SSID\" freq=$CUR_FREQ id=$CUR_ID"
-            exit 0
+        # Reconfigure gets a bounded grace share of the one association poll
+        # budget.  A delayed fresh event plus a subsequent matching status can
+        # complete here without a redundant reassociation.
+        GRACE_POLLS=$((TOTAL_POLLS / 3))
+        [ "$GRACE_POLLS" -ge 1 ] || GRACE_POLLS=1
+        [ "$GRACE_POLLS" -le 20 ] || GRACE_POLLS=20
+        if [ "$GRACE_POLLS" -ge "$TOTAL_POLLS" ]; then
+            GRACE_POLLS=$((TOTAL_POLLS - 1))
         fi
+        for ((_i = 1; _i <= GRACE_POLLS && REMAINING_POLLS > 0; _i++)); do
+            if connect_association_poll_matches; then
+                ASSOC_MATCH=1
+            fi
+            REMAINING_POLLS=$((REMAINING_POLLS - 1))
+            if [ "$ASSOC_MATCH" = "1" ]; then
+                echo "associated by reconfigure: ssid=\"$CUR_SSID\" freq=$CUR_FREQ id=$CUR_ID"
+                exit 0
+            fi
+            if [ "$_i" -lt "$GRACE_POLLS" ] && [ "$REMAINING_POLLS" -gt 0 ]; then
+                sleep 0.1
+            fi
+        done
     else
         # === 인자 없음: conf 그대로 현재 설정으로 재연결만 ===
         if [ "$HAS_TARGET_ID" = "1" ]; then
@@ -2784,49 +2825,17 @@ case "$2" in
     fi
     # 연결 완료 대기(best-effort, 최대 15s) — 0.1s grid 폴링으로 COMPLETED를 빨리 감지.
     # (실제 association 시간은 물리 과정이라 불변; 폴링 grid만 줄여 끝맺음 반응성 개선)
-    WPA_STATE=""
-    CUR_SSID=""
-    CUR_FREQ=""
-    CUR_ID=""
-    FRESH_EVENT_ID=""
-    ASSOC_MATCH=0
-    # 상한 의미 유지 — CONNECT_TIMEOUT(초)×10 회 × sleep 0.1s = CONNECT_TIMEOUT 초
-    for ((_i = 1; _i <= CONNECT_TIMEOUT * 10; _i++)); do
-        # Read event evidence before status so an accepted COMPLETED snapshot
-        # is necessarily subsequent to the fresh CONNECTED epoch.
-        FRESH_EVENT_ID=$(cat "$CONNECT_MONITOR_DIR/connected-id" 2>/dev/null || true)
-        WPA_STATUS=$(wpa_cli -i "$IFACE" status 2>/dev/null) || WPA_STATUS=""
-        WPA_STATE=""; CUR_SSID=""; CUR_FREQ=""; CUR_ID=""
-        while IFS='=' read -r _key _value; do
-            case "$_key" in
-                wpa_state) WPA_STATE="$_value" ;;
-                ssid)      CUR_SSID="$_value" ;;
-                freq)      CUR_FREQ="$_value" ;;
-                id)        CUR_ID="$_value" ;;
-            esac
-        done <<< "$WPA_STATUS"
-
-        if [ "$WPA_STATE" = "COMPLETED" ]; then
-            if [ "$HAS_TARGET_ID" = "1" ]; then
-                [ "$FRESH_EVENT_ID" = "$TARGET_ID" ] \
-                    && [ "$CUR_ID" = "$TARGET_ID" ] && ASSOC_MATCH=1
-            elif [ "$HAS_TARGET" = "0" ]; then
-                [[ "$FRESH_EVENT_ID" =~ ^[0-9]+$ ]] \
-                    && [ "$CUR_ID" = "$FRESH_EVENT_ID" ] && ASSOC_MATCH=1
-            elif [ "$CUR_SSID" = "$TARGET_SSID" ]; then
-                if ! [[ "$FRESH_EVENT_ID" =~ ^[0-9]+$ ]] || [ "$FRESH_EVENT_ID" != "$CUR_ID" ]; then
-                    :
-                elif [ "$SET_FREQ" = "0" ]; then
-                    ASSOC_MATCH=1
-                else
-                    case " $FREQ_STR " in
-                        *" $CUR_FREQ "*) ASSOC_MATCH=1 ;;
-                    esac
-                fi
-            fi
+    WPA_STATE=""; CUR_SSID=""; CUR_FREQ=""; CUR_ID=""
+    FRESH_EVENT_ID=""; ASSOC_MATCH=0
+    # No-argument reconnects arrive with the full budget.  Explicit reconnects
+    # use only the remainder after grace; neither phase resets the counter.
+    while [ "$REMAINING_POLLS" -gt 0 ]; do
+        if connect_association_poll_matches; then
+            ASSOC_MATCH=1
         fi
+        REMAINING_POLLS=$((REMAINING_POLLS - 1))
         [ "$ASSOC_MATCH" = "1" ] && break
-        sleep 0.1
+        [ "$REMAINING_POLLS" -gt 0 ] && sleep 0.1
     done
     if [ "$ASSOC_MATCH" = "1" ]; then
         echo "associated: ssid=\"${CUR_SSID:-N/A}\" freq=${CUR_FREQ:-N/A} id=${CUR_ID:-N/A} (wpa_state=COMPLETED)"

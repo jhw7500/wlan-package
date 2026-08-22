@@ -67,13 +67,39 @@ def test_scan_transition_lock_is_per_iface_exclusive_and_sigkill_releases(tmp_pa
 
 
 def test_scan_transition_lock_path_error_is_visible_and_never_uses_tmp(monkeypatch):
-    def denied(*_args, **_kwargs):
+    calls = []
+
+    def denied(*args, **kwargs):
+        calls.append((args, kwargs))
         raise PermissionError("denied")
 
     monkeypatch.setattr(roam_state.os, "makedirs", denied)
     with pytest.raises(PermissionError):
         with roam_state.scan_transition_lock("mlan0", run_dir="/run/wifi"):
             pass
+    assert calls == [(("/run/wifi",), {"exist_ok": True})]
+    assert all("/tmp" not in str(call) for call in calls)
+
+
+def test_scan_transition_lock_open_error_propagates_without_alternate_namespace(monkeypatch):
+    makedirs = MagicMock()
+    open_calls = []
+
+    def denied(path, flags, mode):
+        open_calls.append((path, flags, mode))
+        raise PermissionError("open denied")
+
+    monkeypatch.setattr(roam_state.os, "makedirs", makedirs)
+    monkeypatch.setattr(roam_state.os, "open", denied)
+    with pytest.raises(PermissionError, match="open denied"):
+        with roam_state.scan_transition_lock("mlan0", run_dir="/run/wifi"):
+            pass
+
+    makedirs.assert_called_once_with("/run/wifi", exist_ok=True)
+    assert [call[0] for call in open_calls] == [
+        "/run/wifi/mlan0.scan-transition.lock"
+    ]
+    assert all("/tmp" not in call[0] for call in open_calls)
 
 
 # ── 경로 규칙 ──────────────────────────────────────────────────────────────

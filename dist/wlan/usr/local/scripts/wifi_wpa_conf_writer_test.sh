@@ -111,6 +111,12 @@ cat > "$BIN/wpa_cli" <<'EOF'
 #!/bin/sh
 printf 'wpa_cli %s\n' "$*" >> "$CALL_LOG"
 
+emit_connected_event() {
+  action=$(cat "$STATE_DIR/monitor-action" 2>/dev/null || true)
+  [ -n "$action" ] && [ -x "$action" ] || return 0
+  WPA_ID="${1:-0}" "$action" mlan0 CONNECTED
+}
+
 # Model the deployed `wpa_cli -a ACTION -B -P PIDFILE` daemon interface.
 # The private action monitor is a real background process so the harness can
 # verify that wifi.sh bounds and removes it rather than merely deleting files.
@@ -185,7 +191,18 @@ case "$*" in
       no-current-recover)
         if [ "$count" -eq 1 ]; then state=DISCONNECTED; ssid=; id=; freq=;
         else ssid=Base; id=0; freq=5180; fi ;;
+      mode-b-id-switch)
+        ssid=Base; freq=5180
+        if [ "$count" -eq 1 ]; then id=0; else id=1; fi ;;
       target) ssid=NewNet; id=0; freq=5180 ;;
+      target-no-id) ssid=NewNet; id=; freq=5180 ;;
+      target-nonnumeric-id) ssid=NewNet; id=bad; freq=5180 ;;
+      target-delayed-grace)
+        ssid=NewNet; id=0; freq=5180
+        [ "$count" -ne 2 ] || emit_connected_event 0 ;;
+      target-delayed-fallback)
+        ssid=NewNet; id=0; freq=5180
+        [ "$count" -ne 6 ] || emit_connected_event 0 ;;
     esac
     cat <<EOT
 wpa_state=$state
@@ -1143,6 +1160,120 @@ WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" ASSOC_TIMEOUT_DEFAULT=2 \
 check_equal "explicit Mode B fallback reassociation succeeds with fresh proof" "$?" "0"
 check_equal "explicit Mode B fallback issues exactly one reassociate" \
     "$(grep -c 'reassociate$' "$CALL_LOG" || true)" "1"
+
+# Delayed reconfigure proof must consume the shared budget but still avoid a
+# redundant reassociation when the event and subsequent status arrive in grace.
+write_mode_b_legacy
+set_boot_policy false false
+set_status_mode target-delayed-grace
+set_monitor_mode delayed-grace
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1
+check_equal "delayed fresh explicit target proof succeeds within grace" "$?" "0"
+check_equal "delayed grace proof avoids reassociate/reconnect" \
+    "$(grep -Ec 'reassociate$|reconnect$' "$CALL_LOG" || true)" "0"
+check_equal "delayed grace proof uses three shared-budget status polls" \
+    "$(grep -c ' status$' "$CALL_LOG" || true)" "3"
+
+# With no event, grace plus fallback must share exactly TOTAL_POLLS.  An
+# accepted reassociate is not followed by reconnect merely because proof times out.
+write_mode_b_legacy
+set_boot_policy false false
+set_status_mode target
+set_monitor_mode stale
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1
+check_equal "absent event cannot prove explicit target before timeout" "$?" "8"
+check_equal "explicit grace plus fallback is bounded by TOTAL_POLLS" \
+    "$(grep -c ' status$' "$CALL_LOG" || true)" "10"
+check_equal "explicit no-proof timeout issues exactly one accepted reassociate" \
+    "$(grep -c 'reassociate$' "$CALL_LOG" || true)" "1"
+check_equal "accepted reassociate timeout never issues reconnect" \
+    "$(grep -c 'reconnect$' "$CALL_LOG" || true)" "0"
+
+# Grace consumes three polls; the event appears during fallback poll six and
+# therefore needs the subsequent seventh status snapshot for causal success.
+write_mode_b_legacy
+set_boot_policy false false
+set_status_mode target-delayed-fallback
+set_monitor_mode delayed-fallback
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1
+check_equal "fresh proof succeeds in remaining fallback budget" "$?" "0"
+check_equal "fallback proof does not reset total poll budget" \
+    "$(grep -c ' status$' "$CALL_LOG" || true)" "7"
+check_equal "fallback proof uses exactly one reassociate" \
+    "$(grep -c 'reassociate$' "$CALL_LOG" || true)" "1"
+check_equal "fallback proof after accepted reassociate uses no reconnect" \
+    "$(grep -c 'reconnect$' "$CALL_LOG" || true)" "0"
+
+write_mode_b_legacy
+set_boot_policy false false
+set_status_mode mode-b-id-switch
+set_monitor_mode matching
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 connect >/dev/null 2>&1
+check_equal "Mode B no-arg current id 0 rejects fresh event/status id 1" "$?" "8"
+
+for _status_id_mode in target-no-id target-nonnumeric-id; do
+    write_mode_b_legacy
+    set_boot_policy false false
+    set_status_mode "$_status_id_mode"
+    set_monitor_mode reconfigure-event
+    : > "$CALL_LOG"
+    WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+        bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1
+    check_equal "explicit numeric event rejects ${_status_id_mode} status" "$?" "8"
+done
+
+# Only the zero override is honored.  All other values normalize to the
+# production 15-second bound; fixtures are uncontended so these never wait.
+for _lock_case in zero one large invalid empty default; do
+    write_mode_b_legacy
+    set_boot_policy false false
+    set_status_mode base
+    set_monitor_mode matching-zero
+    : > "$CALL_LOG"
+    case "$_lock_case" in
+        zero)
+            _lock_value=0; _expected_timeout=0
+            WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
+                WIFI_SCAN_TRANSITION_LOCK_TIMEOUT="$_lock_value" ASSOC_TIMEOUT_DEFAULT=1 \
+                bash "$WIFI_SH" 0 connect >/dev/null 2>&1 ;;
+        one)
+            _lock_value=1; _expected_timeout=15
+            WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
+                WIFI_SCAN_TRANSITION_LOCK_TIMEOUT="$_lock_value" ASSOC_TIMEOUT_DEFAULT=1 \
+                bash "$WIFI_SH" 0 connect >/dev/null 2>&1 ;;
+        large)
+            _lock_value=16; _expected_timeout=15
+            WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
+                WIFI_SCAN_TRANSITION_LOCK_TIMEOUT="$_lock_value" ASSOC_TIMEOUT_DEFAULT=1 \
+                bash "$WIFI_SH" 0 connect >/dev/null 2>&1 ;;
+        invalid)
+            _lock_value=invalid; _expected_timeout=15
+            WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
+                WIFI_SCAN_TRANSITION_LOCK_TIMEOUT="$_lock_value" ASSOC_TIMEOUT_DEFAULT=1 \
+                bash "$WIFI_SH" 0 connect >/dev/null 2>&1 ;;
+        empty)
+            _lock_value=empty; _expected_timeout=15
+            WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
+                WIFI_SCAN_TRANSITION_LOCK_TIMEOUT="" ASSOC_TIMEOUT_DEFAULT=1 \
+                bash "$WIFI_SH" 0 connect >/dev/null 2>&1 ;;
+        default)
+            _lock_value=default; _expected_timeout=15
+            env -u WIFI_SCAN_TRANSITION_LOCK_TIMEOUT \
+                WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+                bash "$WIFI_SH" 0 connect >/dev/null 2>&1 ;;
+    esac
+    check_equal "scan-transition timeout ${_lock_value} fixture succeeds" "$?" "0"
+    check_equal "scan-transition timeout ${_lock_value} uses flock -w ${_expected_timeout}" \
+        "$(grep -Ec "^flock -w ${_expected_timeout} -x 7$" "$CALL_LOG" || true)" "1"
+done
 
 check_scan_transition_lock_available "normal writer exit leaves scan-transition lock acquirable"
 
