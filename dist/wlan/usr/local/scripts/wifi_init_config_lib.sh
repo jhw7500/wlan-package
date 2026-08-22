@@ -412,6 +412,14 @@ wifi_wpa_conf_render_canonical() {
     ' "$source" > "$destination"
 }
 
+# 원본 conf의 소유권을 임시파일에 먼저 적용하고 mode를 마지막에 복원한다.
+# chown은 setuid/setgid bit를 지울 수 있으므로 chmod 순서가 뒤여야 mode도 정확하다.
+wifi_wpa_conf_preserve_metadata() {
+    local source="$1" destination="$2"
+    chown --reference="$source" "$destination" 2>/dev/null || return 1
+    chmod --reference="$source" "$destination" 2>/dev/null || return 1
+}
+
 # 배포/사용 중 conf를 같은 파일시스템에서 원자적으로 canonical 형식으로 정규화한다.
 # 파일 부재는 부팅 복원 경로와의 호환을 위해 no-op 성공, 파싱/설치 실패는 nonzero다.
 wifi_wpa_conf_normalize_file() {
@@ -426,12 +434,10 @@ wifi_wpa_conf_normalize_file() {
         return 1
     fi
 
-    # 평문 PSK가 들어가는 파일이므로 mode 보존 실패 시 노출 최소값 0600을 쓴다.
-    chmod --reference="$conf" "$tmp" 2>/dev/null || chmod 0600 "$tmp" 2>/dev/null || {
+    if ! wifi_wpa_conf_preserve_metadata "$conf" "$tmp"; then
         rm -f "$tmp"
         return 1
-    }
-    chown --reference="$conf" "$tmp" 2>/dev/null || true
+    fi
 
     if cmp -s "$tmp" "$conf"; then
         rm -f "$tmp"
@@ -547,7 +553,7 @@ wifi_init_sync_extra_ssid_blocks() {
     if [ "$gen" != "true" ]; then
         _wifi_extra_ssid_strip "$conf" > "$tmp" || return 1
         if ! cmp -s "$tmp" "$conf"; then
-            chmod --reference="$conf" "$tmp" 2>/dev/null || chmod 0600 "$tmp" 2>/dev/null || true
+            wifi_wpa_conf_preserve_metadata "$conf" "$tmp" || return 1
             mv -f "$tmp" "$conf" && sync "$conf" 2>/dev/null
         fi
         return 0
@@ -565,7 +571,7 @@ wifi_init_sync_extra_ssid_blocks() {
     if [ -z "$extras" ]; then
         _wifi_extra_ssid_strip "$conf" > "$tmp" || return 1
         if ! cmp -s "$tmp" "$conf"; then
-            chmod --reference="$conf" "$tmp" 2>/dev/null || chmod 0600 "$tmp" 2>/dev/null || true
+            wifi_wpa_conf_preserve_metadata "$conf" "$tmp" || return 1
             mv -f "$tmp" "$conf" && sync "$conf" 2>/dev/null
         fi
         return 0
@@ -589,7 +595,7 @@ wifi_init_sync_extra_ssid_blocks() {
     if [ -z "$t_keymgmt" ] || [ -z "$t_psk" ]; then
         printf '%s\n' "$stripped" > "$tmp"
         if ! cmp -s "$tmp" "$conf"; then
-            chmod --reference="$conf" "$tmp" 2>/dev/null || chmod 0600 "$tmp" 2>/dev/null || true
+            wifi_wpa_conf_preserve_metadata "$conf" "$tmp" || return 1
             mv -f "$tmp" "$conf" && sync "$conf" 2>/dev/null
         fi
         return 0
@@ -633,7 +639,7 @@ EOF
     fi
 
     if ! cmp -s "$tmp" "$conf"; then
-        chmod --reference="$conf" "$tmp" 2>/dev/null || chmod 0600 "$tmp" 2>/dev/null || true
+        wifi_wpa_conf_preserve_metadata "$conf" "$tmp" || return 1
         mv -f "$tmp" "$conf" && sync "$conf" 2>/dev/null
     fi
     return 0

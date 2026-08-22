@@ -37,6 +37,12 @@ logger -p local0.info "[$tag:$LINENO] [$IFACE] cmd : wifi $1 $2 $3 $4"
 trap 'sync 2>/dev/null || true' EXIT
 
 # ----- safe file update helpers -----
+sync_path_or_global() {
+    # BusyBox sync builds without -f may reject a path operand.  A successful
+    # global sync is an acceptable durability fallback; failure of both is not.
+    sync "$1" 2>/dev/null || sync 2>/dev/null
+}
+
 safe_install_sync() {
     # $1: src(tmp), $2: dst(real)
     local src="$1" dst="$2" mode=0644 stage dst_dir
@@ -50,14 +56,20 @@ safe_install_sync() {
         rm -f "$stage"
         return 1
     fi
-    sync "$stage" 2>/dev/null || sync 2>/dev/null || true
+    if ! sync_path_or_global "$stage"; then
+        rm -f "$stage"
+        return 1
+    fi
     if ! mv -f "$stage" "$dst"; then
         rm -f "$stage"
         return 1
     fi
-    sync "$dst" 2>/dev/null || sync
+    sync_path_or_global "$dst" || return 1
     dst_dir=${dst%/*}
-    [ "$dst_dir" != "$dst" ] && sync "$dst_dir" 2>/dev/null || true
+    if [ "$dst_dir" != "$dst" ]; then
+        sync_path_or_global "$dst_dir" || return 1
+    fi
+    return 0
 }
 
 safe_tmp_for() {
@@ -403,6 +415,183 @@ wpa_cli_ok() {
         return 1
     fi
     [ "$reply" = "OK" ]
+}
+
+# Return a live process's /proc start-time token.  Cleanup uses the token as
+# well as the numeric PID so a stale/reused pidfile can never target a new
+# process.  Field parsing starts after the final ") " to tolerate spaces in
+# the kernel comm field.
+connect_monitor_proc_start() {
+    local pid="$1" stat rest
+    case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$pid" -gt 1 ] || return 1
+    stat=$(cat "/proc/$pid/stat" 2>/dev/null) || return 1
+    rest=${stat##*) }
+    set -- $rest
+    [ $# -ge 20 ] && [ "${1:-}" != "Z" ] || return 1
+    printf '%s\n' "${20}"
+}
+
+connect_monitor_pid_matches() {
+    local pid="$1" expected="$2" current
+    [ -n "$expected" ] || return 1
+    current=$(connect_monitor_proc_start "$pid") || return 1
+    [ "$current" = "$expected" ]
+}
+
+connect_monitor_pid_is_wpa_cli() {
+    local pid="$1" arg
+    case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$pid" -gt 1 ] || return 1
+    while IFS= read -r arg; do
+        case "$arg" in wpa_cli|*/wpa_cli) return 0 ;; esac
+    done < <(tr '\000' '\n' < "/proc/$pid/cmdline" 2>/dev/null)
+    return 1
+}
+
+connect_event_monitor_cleanup() {
+    local pid start watchdog_pid watchdog_start _i
+    watchdog_pid="${CONNECT_MONITOR_WATCHDOG_PID:-}"
+    watchdog_start="${CONNECT_MONITOR_WATCHDOG_START:-}"
+    if connect_monitor_pid_matches "$watchdog_pid" "$watchdog_start"; then
+        kill -TERM "$watchdog_pid" 2>/dev/null || true
+    fi
+    if [ -n "$watchdog_pid" ]; then
+        wait "$watchdog_pid" 2>/dev/null || true
+    fi
+
+    pid="${CONNECT_MONITOR_PID:-}"
+    start="${CONNECT_MONITOR_START:-}"
+    # A signal can arrive after wpa_cli writes its private pidfile but before
+    # start() records the identity.  Recover only a live wpa_cli identity from
+    # our mode-0700 directory; arbitrary/stale numeric PIDs remain unsignalled.
+    if [ -z "$start" ] && [ -n "${CONNECT_MONITOR_DIR:-}" ]; then
+        pid=$(cat "$CONNECT_MONITOR_DIR/wpa_cli.pid" 2>/dev/null || true)
+        if connect_monitor_pid_is_wpa_cli "$pid"; then
+            start=$(connect_monitor_proc_start "$pid" 2>/dev/null || true)
+        fi
+    fi
+    if connect_monitor_pid_matches "$pid" "$start"; then
+        kill -TERM "$pid" 2>/dev/null || true
+        for _i in 1 2 3 4 5 6 7 8 9 10; do
+            connect_monitor_pid_matches "$pid" "$start" || break
+            sleep 0.1
+        done
+        if connect_monitor_pid_matches "$pid" "$start"; then
+            kill -KILL "$pid" 2>/dev/null || true
+        fi
+    fi
+    [ -z "${CONNECT_MONITOR_DIR:-}" ] || rm -rf -- "$CONNECT_MONITOR_DIR"
+    CONNECT_MONITOR_DIR=""
+    CONNECT_MONITOR_PID=""
+    CONNECT_MONITOR_START=""
+    CONNECT_MONITOR_WATCHDOG_PID=""
+    CONNECT_MONITOR_WATCHDOG_START=""
+}
+
+connect_event_monitor_start() { # $1 iface, $2 association timeout seconds
+    local iface="$1" timeout="$2" action pidfile pid start parent_pid parent_start
+    local watchdog_ticks watchdog_pid watchdog_start _i
+
+    mkdir -p "$WIFI_RUN_DIR" 2>/dev/null || return 1
+    CONNECT_MONITOR_DIR=$(mktemp -d "$WIFI_RUN_DIR/${iface}.connect-monitor.XXXXXX") \
+        || return 1
+    chmod 0700 "$CONNECT_MONITOR_DIR" 2>/dev/null || {
+        connect_event_monitor_cleanup
+        return 1
+    }
+    action="$CONNECT_MONITOR_DIR/action.sh"
+    pidfile="$CONNECT_MONITOR_DIR/wpa_cli.pid"
+    cat > "$action" <<'EOF'
+#!/bin/sh
+[ "${2:-}" = "CONNECTED" ] || exit 0
+monitor_dir=${0%/*}
+[ -f "$monitor_dir/armed" ] || exit 0
+case "${WPA_ID:-}" in ''|*[!0-9]*) exit 0 ;; esac
+tmp="$monitor_dir/connected-id.tmp.$$"
+(umask 077; printf '%s\n' "$WPA_ID" > "$tmp") || exit 1
+mv -f "$tmp" "$monitor_dir/connected-id"
+EOF
+    chmod 0700 "$action" 2>/dev/null || {
+        connect_event_monitor_cleanup
+        return 1
+    }
+
+    # EXIT/signal traps cannot run after SIGKILL.  Start the watchdog before
+    # daemon attachment so even the small pidfile/setup window is covered.
+    # It recovers only a live wpa_cli from our private directory, then pins its
+    # /proc start token before sending any signal.
+    parent_pid=$$
+    parent_start=$(connect_monitor_proc_start "$parent_pid") || {
+        connect_event_monitor_cleanup
+        return 1
+    }
+    watchdog_ticks=$((timeout * 10 + 50))
+    (
+        for ((_i = 1; _i <= watchdog_ticks; _i++)); do
+            [ -d "$CONNECT_MONITOR_DIR" ] || exit 0
+            connect_monitor_pid_matches "$parent_pid" "$parent_start" || break
+            sleep 0.1
+        done
+        [ -d "$CONNECT_MONITOR_DIR" ] || exit 0
+        pid=""; start=""
+        for _i in 1 2 3 4 5 6 7 8 9 10; do
+            pid=$(cat "$pidfile" 2>/dev/null || true)
+            if connect_monitor_pid_is_wpa_cli "$pid"; then
+                start=$(connect_monitor_proc_start "$pid" 2>/dev/null || true)
+                [ -n "$start" ] && break
+            fi
+            sleep 0.1
+        done
+        if connect_monitor_pid_matches "$pid" "$start"; then
+            kill -TERM "$pid" 2>/dev/null || true
+            for _i in 1 2 3 4 5 6 7 8 9 10; do
+                connect_monitor_pid_matches "$pid" "$start" || break
+                sleep 0.1
+            done
+            if connect_monitor_pid_matches "$pid" "$start"; then
+                kill -KILL "$pid" 2>/dev/null || true
+            fi
+        fi
+        rm -rf -- "$CONNECT_MONITOR_DIR"
+    ) >/dev/null 2>&1 &
+    watchdog_pid=$!
+    CONNECT_MONITOR_WATCHDOG_PID="$watchdog_pid"
+    watchdog_start=$(connect_monitor_proc_start "$watchdog_pid") || {
+        kill -TERM "$watchdog_pid" 2>/dev/null || true
+        wait "$watchdog_pid" 2>/dev/null || true
+        connect_event_monitor_cleanup
+        return 1
+    }
+    CONNECT_MONITOR_WATCHDOG_START="$watchdog_start"
+
+    # Daemon mode's stdout is not part of the request/reply protocol; its rc
+    # plus a live private pidfile prove successful attachment.
+    if ! wpa_cli -i "$iface" -a "$action" -B -P "$pidfile" >/dev/null 2>&1; then
+        connect_event_monitor_cleanup
+        return 1
+    fi
+    pid=""
+    for _i in 1 2 3 4 5 6 7 8 9 10; do
+        pid=$(cat "$pidfile" 2>/dev/null || true)
+        start=$(connect_monitor_proc_start "$pid" 2>/dev/null || true)
+        [ -n "$start" ] && break
+        sleep 0.1
+    done
+    if [ -z "${start:-}" ]; then
+        connect_event_monitor_cleanup
+        return 1
+    fi
+    CONNECT_MONITOR_PID="$pid"
+    CONNECT_MONITOR_START="$start"
+    return 0
+}
+
+connect_event_monitor_arm() {
+    [ -n "${CONNECT_MONITOR_DIR:-}" ] || return 1
+    rm -f "$CONNECT_MONITOR_DIR/connected-id" \
+          "$CONNECT_MONITOR_DIR"/connected-id.tmp.*
+    : > "$CONNECT_MONITOR_DIR/armed"
 }
 
 # ----- radio staged-apply helpers -----
@@ -2391,6 +2580,7 @@ case "$2" in
     TARGET_ID=""
     SET_FREQ=0
     FREQ_STR=""
+    CONNECT_TIMEOUT="$ASSOC_TIMEOUT_DEFAULT"
     if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
         echo "Error: connect supports mlan0/mlan1 only" >&2; exit 1
     fi
@@ -2422,6 +2612,16 @@ case "$2" in
             HAS_TARGET_ID=1
         else
             TARGET_ID=""
+        fi
+    fi
+    if [ "$HAS_TARGET_ID" = "1" ]; then
+        trap 'connect_event_monitor_cleanup; sync 2>/dev/null || true' EXIT
+        trap 'exit 129' HUP
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        if ! connect_event_monitor_start "$IFACE" "$CONNECT_TIMEOUT"; then
+            echo "Error: failed to attach reconnect event monitor for $IFACE" >&2
+            exit 7
         fi
     fi
     if [ $# -ge 1 ]; then
@@ -2522,21 +2722,30 @@ case "$2" in
     fi
     # --- 공통: owner-neutral 강제 재연결(reassociate 우선, 실패 시 reconnect) → assoc 대기 ---
     # Mode A도 다른 network 블록의 enabled 상태를 바꾸지 않는다. 최초에 캡처한 id는
-    # 아래 COMPLETED 폴링에서만 증명하므로, 다른 id로 완료되면 성공 처리하지 않는다.
+    # fresh CONNECTED event와 그 이후 COMPLETED 폴링으로만 증명한다.
+    if [ "$HAS_TARGET_ID" = "1" ] && ! connect_event_monitor_arm; then
+        echo "Error: failed to arm reconnect event monitor for $IFACE" >&2
+        exit 7
+    fi
     if ! wpa_cli_ok "$IFACE" reassociate && ! wpa_cli_ok "$IFACE" reconnect; then
         echo "Error: wpa_cli reassociate/reconnect failed for $IFACE" >&2
         exit 7
     fi
     # 연결 완료 대기(best-effort, 최대 15s) — 0.1s grid 폴링으로 COMPLETED를 빨리 감지.
     # (실제 association 시간은 물리 과정이라 불변; 폴링 grid만 줄여 끝맺음 반응성 개선)
-    CONNECT_TIMEOUT="$ASSOC_TIMEOUT_DEFAULT"
     WPA_STATE=""
     CUR_SSID=""
     CUR_FREQ=""
     CUR_ID=""
+    FRESH_EVENT_ID=""
     ASSOC_MATCH=0
     # 상한 의미 유지 — CONNECT_TIMEOUT(초)×10 회 × sleep 0.1s = CONNECT_TIMEOUT 초
     for ((_i = 1; _i <= CONNECT_TIMEOUT * 10; _i++)); do
+        # Read event evidence before status so an accepted COMPLETED snapshot
+        # is necessarily subsequent to the fresh CONNECTED epoch.
+        if [ "$HAS_TARGET_ID" = "1" ]; then
+            FRESH_EVENT_ID=$(cat "$CONNECT_MONITOR_DIR/connected-id" 2>/dev/null || true)
+        fi
         WPA_STATUS=$(wpa_cli -i "$IFACE" status 2>/dev/null) || WPA_STATUS=""
         WPA_STATE=""; CUR_SSID=""; CUR_FREQ=""; CUR_ID=""
         while IFS='=' read -r _key _value; do
@@ -2550,7 +2759,8 @@ case "$2" in
 
         if [ "$WPA_STATE" = "COMPLETED" ]; then
             if [ "$HAS_TARGET_ID" = "1" ]; then
-                [ "$CUR_ID" = "$TARGET_ID" ] && ASSOC_MATCH=1
+                [ "$FRESH_EVENT_ID" = "$TARGET_ID" ] \
+                    && [ "$CUR_ID" = "$TARGET_ID" ] && ASSOC_MATCH=1
             elif [ "$HAS_TARGET" = "0" ]; then
                 ASSOC_MATCH=1
             elif [ "$CUR_SSID" = "$TARGET_SSID" ]; then
@@ -2571,7 +2781,7 @@ case "$2" in
         exit 0
     else
         echo "Warning: requested association not completed within ${CONNECT_TIMEOUT}s" >&2
-        echo "         target_id=${TARGET_ID:-any} target_ssid=${TARGET_SSID:-any} target_freq=${FREQ_STR:-any} state=${WPA_STATE:-unknown} id=${CUR_ID:-N/A} ssid=${CUR_SSID:-N/A} freq=${CUR_FREQ:-N/A}" >&2
+        echo "         target_id=${TARGET_ID:-any} event_id=${FRESH_EVENT_ID:-none} target_ssid=${TARGET_SSID:-any} target_freq=${FREQ_STR:-any} state=${WPA_STATE:-unknown} id=${CUR_ID:-N/A} ssid=${CUR_SSID:-N/A} freq=${CUR_FREQ:-N/A}" >&2
         echo "         'wifi $NUM scan' / 'wifi $NUM info'로 AP 가용성/대역 점검" >&2
         exit 8
     fi

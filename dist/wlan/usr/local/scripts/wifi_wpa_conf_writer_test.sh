@@ -48,6 +48,9 @@ case "$mode" in
   fail-installed)
     [ "${1:-}" != "$WPA_DIR/wpa_supplicant-mlan0.conf" ] || fail_once
     ;;
+  fail-dir)
+    [ "${1:-}" != "$WPA_DIR" ] || fail_once
+    ;;
   fail-rollback-file)
     if [ -f "$STATE_DIR/rollback-started" ] \
        && [ "${1:-}" = "$WPA_DIR/wpa_supplicant-mlan0.conf" ]; then
@@ -102,6 +105,41 @@ EOF
 cat > "$BIN/wpa_cli" <<'EOF'
 #!/bin/sh
 printf 'wpa_cli %s\n' "$*" >> "$CALL_LOG"
+
+# Model the deployed `wpa_cli -a ACTION -B -P PIDFILE` daemon interface.
+# The private action monitor is a real background process so the harness can
+# verify that wifi.sh bounds and removes it rather than merely deleting files.
+case " $* " in
+  *" -a "*)
+    action=""; pidfile=""; background=0
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        -a) action="$2"; shift 2 ;;
+        -P) pidfile="$2"; shift 2 ;;
+        -B) background=1; shift ;;
+        *) shift ;;
+      esac
+    done
+    [ -n "$action" ] && [ -n "$pidfile" ] && [ "$background" = "1" ] || exit 2
+    printf '%s\n' "$action" > "$STATE_DIR/monitor-action"
+    printf '%s\n' "$pidfile" > "$STATE_DIR/last-monitor-pidfile"
+    dirname "$pidfile" > "$STATE_DIR/last-monitor-dir"
+    mode=$(cat "$STATE_DIR/monitor-mode" 2>/dev/null || echo matching)
+    if [ "$mode" = "setup-fail" ]; then
+      printf 'FAIL\n'
+      exit 1
+    fi
+    # A native wpa_cli daemon has argv[0]="wpa_cli" even when PATH resolved
+    # the executable.  Model that exact /proc identity for safe PID handling.
+    bash -c 'exec -a wpa_cli sleep 60' >/dev/null 2>&1 &
+    monitor_pid=$!
+    printf '%s\n' "$monitor_pid" > "$pidfile"
+    printf '%s\n' "$monitor_pid" > "$STATE_DIR/last-monitor-pid"
+    printf 'OK\n'
+    exit 0
+    ;;
+esac
+
 case "$*" in
   *" status"*)
     count=$(cat "$STATE_DIR/status-count" 2>/dev/null || echo 0)
@@ -122,6 +160,11 @@ case "$*" in
         else
           ssid=Office; id=1
         fi ;;
+      mode-a-steady)
+        ssid=Office; id=1 ;;
+      mode-a-wait)
+        ssid=Office; id=1
+        [ "$count" -eq 1 ] || state=DISCONNECTED ;;
       no-current)
         if [ "$count" -eq 1 ]; then state=DISCONNECTED; ssid=; id=; freq=; fi ;;
     esac
@@ -159,6 +202,14 @@ EOT
     else printf 'OK\n'; fi
     ;;
   *" reassociate"*|*" reconnect"*)
+    action=$(cat "$STATE_DIR/monitor-action" 2>/dev/null || true)
+    mode=$(cat "$STATE_DIR/monitor-mode" 2>/dev/null || echo off)
+    if [ -n "$action" ] && [ -x "$action" ]; then
+      case "$mode" in
+        matching) WPA_ID=1 "$action" mlan0 CONNECTED ;;
+        wrong-id) WPA_ID=0 "$action" mlan0 CONNECTED ;;
+      esac
+    fi
     mode=$(cat "$STATE_DIR/assoc-mode" 2>/dev/null || echo ok)
     if [ "$mode" = "rc-ok" ]; then printf 'OK\n'; exit 9
     elif [ "$mode" = "fail" ]; then printf 'FAIL\n'
@@ -227,6 +278,50 @@ set_reconfigure_mode() {
 
 set_assoc_mode() {
     printf '%s\n' "$1" > "$STATE_DIR/assoc-mode"
+}
+
+set_monitor_mode() {
+    printf '%s\n' "$1" > "$STATE_DIR/monitor-mode"
+    rm -f "$STATE_DIR/monitor-action" "$STATE_DIR/last-monitor-pid" \
+          "$STATE_DIR/last-monitor-pidfile" "$STATE_DIR/last-monitor-dir"
+}
+
+monitor_process_running() {
+    local pid="$1" state
+    kill -0 "$pid" 2>/dev/null || return 1
+    state=$(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null || true)
+    [ "$state" != "Z" ]
+}
+
+check_monitor_cleaned() {
+    local desc="$1" pid="" dir=""
+    pid=$(cat "$STATE_DIR/last-monitor-pid" 2>/dev/null || true)
+    dir=$(cat "$STATE_DIR/last-monitor-dir" 2>/dev/null || true)
+    # Watchdog detection (0.1s) plus graceful TERM allowance (1s) can cross a
+    # one-second assertion boundary; allow three seconds while still proving a
+    # tight bound well below the fake daemon's unbounded lifetime.
+    for _wait in $(seq 1 30); do
+        [ -z "$pid" ] || ! monitor_process_running "$pid" || { sleep 0.1; continue; }
+        break
+    done
+    if { [ -z "$pid" ] || ! monitor_process_running "$pid"; } \
+       && { [ -z "$dir" ] || [ ! -e "$dir" ]; } \
+       && ! find "$RUN_DIR" -maxdepth 1 -name 'mlan0.connect-monitor.*' -print -quit 2>/dev/null | grep -q .; then
+        pass "$desc"
+    else
+        fail "$desc (pid=${pid:-missing} dir=${dir:-missing})"
+    fi
+}
+
+check_monitor_attached_before_request() {
+    local desc="$1" attach request
+    attach=$(grep -n ' -a .* -B -P ' "$CALL_LOG" | head -1 | cut -d: -f1)
+    request=$(grep -n 'reassociate$' "$CALL_LOG" | head -1 | cut -d: -f1)
+    if [ -n "$attach" ] && [ -n "$request" ] && [ "$attach" -lt "$request" ]; then
+        pass "$desc"
+    else
+        fail "$desc (attach=${attach:-missing} request=${request:-missing})"
+    fi
 }
 
 set_mv_mode() {
@@ -301,6 +396,35 @@ else
     fail "wifi staging failure leaves original conf byte-exact"
 fi
 
+for _sync_failure in fail-stage fail-installed fail-dir; do
+    write_mode_b_legacy
+    cp "$CONF" "$TD/wifi-${_sync_failure}-original.conf"
+    set_sync_mode "$_sync_failure"
+    : > "$CALL_LOG"
+    WPA_CONF_DIR="$WPA_DIR" bash "$WIFI_SH" 0 freq 5180 >/dev/null 2>&1
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        pass "wifi freq ${_sync_failure} is fatal"
+    else
+        fail "wifi freq ${_sync_failure} must be fatal"
+    fi
+    if [ "$_sync_failure" = "fail-stage" ]; then
+        if cmp -s "$CONF" "$TD/wifi-${_sync_failure}-original.conf"; then
+            pass "wifi freq staging sync failure leaves original byte-exact"
+        else
+            fail "wifi freq staging sync failure must leave original byte-exact"
+        fi
+        check_equal "wifi freq staging sync failure performs no install rename" \
+            "$(grep -Ec "^mv -f .* $CONF$" "$CALL_LOG" || true)" "0"
+        if ! find "$WPA_DIR" -maxdepth 1 -name 'wpa_supplicant-mlan0.conf.install.*' -print -quit | grep -q .; then
+            pass "wifi freq staging sync failure removes stage"
+        else
+            fail "wifi freq staging sync failure must remove stage"
+        fi
+    fi
+done
+set_sync_mode ok
+
 echo ""
 echo "=== wifi connect target-aware writer ==="
 set_boot_policy false false
@@ -321,6 +445,25 @@ check_equal "wifi connect writes canonical block list" \
     "$(count_block_freq "$CONF" '5180')" "1"
 check_equal "wifi connect removes scan_freq" \
     "$(grep -Ec '^[[:space:]]*scan_freq[[:space:]]*=' "$CONF" || true)" "0"
+
+for _sync_failure in fail-installed fail-dir; do
+    write_mode_b_legacy
+    set_status_mode stale-then-target
+    set_reconfigure_mode ok
+    set_sync_mode "$_sync_failure"
+    : > "$CALL_LOG"
+    WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+        bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        pass "wifi connect ${_sync_failure} is fatal before live apply"
+    else
+        fail "wifi connect ${_sync_failure} must be fatal before live apply"
+    fi
+    check_equal "wifi connect ${_sync_failure} does not reconfigure" \
+        "$(grep -c 'reconfigure$' "$CALL_LOG" || true)" "0"
+done
+set_sync_mode ok
 
 write_mode_b_legacy
 set_reconfigure_mode rc-ok
@@ -364,24 +507,121 @@ check_equal "Mode A empty-extra snapshot rejects wifi ssid" "$?" "1"
 
 write_mode_a_legacy
 set_boot_policy true true '["Office"]'
-set_status_mode mode-a-current
+set_status_mode mode-a-steady
+set_monitor_mode stale
 : > "$CALL_LOG"
 WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
     bash "$WIFI_SH" 0 connect >/dev/null 2>&1
 rc=$?
-check_equal "Mode A no-arg reconnect confirms original network id" "$rc" "0"
+check_equal "Mode A no-arg reconnect rejects stale COMPLETED without fresh event" "$rc" "8"
+check_monitor_attached_before_request "Mode A action monitor attaches before reassociate"
+check_monitor_cleaned "Mode A stale-event timeout removes monitor resources"
 check_equal "Mode A no-arg reconnect issues one owner-neutral reassociate" \
     "$(grep -c 'reassociate$' "$CALL_LOG" || true)" "1"
 check_equal "Mode A no-arg reconnect never selects a network block" \
     "$(grep -c 'select_network' "$CALL_LOG" || true)" "0"
 check_equal "Mode A no-arg reconnect never enables network blocks" \
     "$(grep -c 'enable_network' "$CALL_LOG" || true)" "0"
-check_equal "Mode A no-arg reconnect ignores wrong-id COMPLETED until original id returns" \
-    "$(cat "$STATE_DIR/status-count" 2>/dev/null || echo 0)" "3"
+
+write_mode_a_legacy
+set_status_mode mode-a-steady
+set_monitor_mode wrong-id
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 connect >/dev/null 2>&1
+rc=$?
+check_equal "Mode A no-arg reconnect rejects fresh event for another id" "$rc" "8"
+check_monitor_cleaned "Mode A wrong-id timeout removes monitor resources"
+check_equal "Mode A wrong-id reconnect never selects a network block" \
+    "$(grep -c 'select_network' "$CALL_LOG" || true)" "0"
+check_equal "Mode A wrong-id reconnect never enables network blocks" \
+    "$(grep -c 'enable_network' "$CALL_LOG" || true)" "0"
+
+write_mode_a_legacy
+set_status_mode mode-a-steady
+set_monitor_mode matching
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 connect >/dev/null 2>&1
+rc=$?
+check_equal "Mode A no-arg reconnect accepts fresh matching event and status" "$rc" "0"
+check_monitor_attached_before_request "Mode A matching monitor attaches before reassociate"
+check_monitor_cleaned "Mode A success removes monitor resources"
+check_equal "Mode A matching reconnect never selects a network block" \
+    "$(grep -c 'select_network' "$CALL_LOG" || true)" "0"
+check_equal "Mode A matching reconnect never enables network blocks" \
+    "$(grep -c 'enable_network' "$CALL_LOG" || true)" "0"
+
+write_mode_a_legacy
+set_status_mode mode-a-steady
+set_monitor_mode setup-fail
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 connect >/dev/null 2>&1
+rc=$?
+check_equal "Mode A monitor setup failure is fail-closed" "$rc" "7"
+check_equal "Mode A monitor setup failure sends no reconnect request" \
+    "$(grep -Ec 'reassociate$|reconnect$' "$CALL_LOG" || true)" "0"
+check_monitor_cleaned "Mode A setup failure removes monitor resources"
+
+write_mode_a_legacy
+set_status_mode mode-a-steady
+set_monitor_mode matching
+set_assoc_mode fail
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 connect >/dev/null 2>&1
+rc=$?
+check_equal "Mode A rejected reconnect command exits 7" "$rc" "7"
+check_monitor_cleaned "Mode A command rejection removes monitor resources"
+set_assoc_mode ok
+
+write_mode_a_legacy
+set_status_mode mode-a-wait
+set_monitor_mode stale
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=10 \
+    bash "$WIFI_SH" 0 connect >/dev/null 2>&1 &
+_wifi_pid=$!
+for _wait in $(seq 1 20); do
+    [ -s "$STATE_DIR/last-monitor-pid" ] && break
+    sleep 0.05
+done
+if [ -s "$STATE_DIR/last-monitor-pid" ]; then
+    pass "Mode A signal test attaches monitor"
+else
+    fail "Mode A signal test must attach monitor"
+fi
+kill -TERM "$_wifi_pid" 2>/dev/null || true
+wait "$_wifi_pid" 2>/dev/null
+rc=$?
+if [ "$rc" -ne 0 ]; then pass "Mode A TERM exits nonzero"; else fail "Mode A TERM must exit nonzero"; fi
+check_monitor_cleaned "Mode A TERM removes monitor resources"
+
+write_mode_a_legacy
+set_status_mode mode-a-wait
+set_monitor_mode stale
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=10 \
+    bash "$WIFI_SH" 0 connect >/dev/null 2>&1 &
+_wifi_pid=$!
+for _wait in $(seq 1 20); do
+    [ -s "$STATE_DIR/last-monitor-pid" ] && break
+    sleep 0.05
+done
+if [ -s "$STATE_DIR/last-monitor-pid" ]; then
+    pass "Mode A SIGKILL test attaches monitor"
+else
+    fail "Mode A SIGKILL test must attach monitor"
+fi
+kill -KILL "$_wifi_pid" 2>/dev/null || true
+wait "$_wifi_pid" 2>/dev/null || true
+check_monitor_cleaned "Mode A watchdog bounds SIGKILL orphan"
 
 write_mode_b_legacy
 set_boot_policy false false
 set_status_mode base
+set_monitor_mode off
 set_assoc_mode rc-ok
 : > "$CALL_LOG"
 WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \

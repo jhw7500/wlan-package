@@ -328,10 +328,20 @@ fi
 
 cp "$_wpa_tmpd/legacy-render.conf" "$_wpa_tmpd/in-place.conf"
 chmod 0640 "$_wpa_tmpd/in-place.conf"
+_metadata_uid=$(id -u)
+_metadata_gid=$(id -g)
+if [ "$_metadata_uid" -eq 0 ]; then
+    _metadata_uid=12345
+    _metadata_gid=12346
+    chown "$_metadata_uid:$_metadata_gid" "$_wpa_tmpd/in-place.conf"
+fi
 if declare -F wifi_wpa_conf_normalize_file >/dev/null; then
     if wifi_wpa_conf_normalize_file "$_wpa_tmpd/in-place.conf"; then
         expect_equal "in-place normalizer preserves mode" \
             "$(stat -c '%a' "$_wpa_tmpd/in-place.conf")" "640"
+        expect_equal "in-place normalizer preserves uid/gid" \
+            "$(stat -c '%u:%g' "$_wpa_tmpd/in-place.conf")" \
+            "$_metadata_uid:$_metadata_gid"
         expect_equal "in-place normalizer uses resolved global list" \
             "$(wifi_wpa_conf_common_freqs "$_wpa_tmpd/in-place.conf")" "2412"
         cp "$_wpa_tmpd/in-place.conf" "$_wpa_tmpd/in-place.once"
@@ -358,6 +368,27 @@ else
     log_fail "wifi_wpa_conf_normalize_file is defined"
 fi
 
+# Even without privilege, exercise the shared helper against files owned by the
+# test user.  Root additionally uses a non-default numeric UID/GID fixture.
+printf 'source\n' > "$_wpa_tmpd/metadata-source.conf"
+printf 'target\n' > "$_wpa_tmpd/metadata-target.conf"
+chmod 0640 "$_wpa_tmpd/metadata-source.conf"
+chmod 0600 "$_wpa_tmpd/metadata-target.conf"
+if [ "$(id -u)" -eq 0 ]; then
+    chown "$_metadata_uid:$_metadata_gid" "$_wpa_tmpd/metadata-source.conf"
+fi
+if declare -F wifi_wpa_conf_preserve_metadata >/dev/null \
+   && wifi_wpa_conf_preserve_metadata \
+        "$_wpa_tmpd/metadata-source.conf" "$_wpa_tmpd/metadata-target.conf"; then
+    expect_equal "shared metadata helper copies mode" \
+        "$(stat -c '%a' "$_wpa_tmpd/metadata-target.conf")" "640"
+    expect_equal "shared metadata helper copies uid/gid" \
+        "$(stat -c '%u:%g' "$_wpa_tmpd/metadata-target.conf")" \
+        "$_metadata_uid:$_metadata_gid"
+else
+    log_fail "shared metadata helper applies required mode and uid/gid"
+fi
+
 cat > "$_wpa_tmpd/generated.conf" <<'EOF'
 update_config=0
 freq_list=5180 5200
@@ -368,6 +399,10 @@ network={
     freq_list=5180 5200
 }
 EOF
+chmod 0640 "$_wpa_tmpd/generated.conf"
+if [ "$(id -u)" -eq 0 ]; then
+    chown "$_metadata_uid:$_metadata_gid" "$_wpa_tmpd/generated.conf"
+fi
 cat > "$_wpa_tmpd/wifi_init_conf.json" <<'EOF'
 {
   "mlan0": {
@@ -386,8 +421,36 @@ if WIFI_INIT_CONF_JSON="$_wpa_tmpd/wifi_init_conf.json" \
         "$(grep -Ec '^[[:space:]]+freq_list=5180 5200$' "$_wpa_tmpd/generated.conf")" "3"
     expect_equal "generated mode A has no scan_freq" \
         "$(grep -Ec '^[[:space:]]*scan_freq[[:space:]]*=' "$_wpa_tmpd/generated.conf" || true)" "0"
+    expect_equal "generated mode A preserves mode" \
+        "$(stat -c '%a' "$_wpa_tmpd/generated.conf")" "640"
+    expect_equal "generated mode A preserves uid/gid" \
+        "$(stat -c '%u:%g' "$_wpa_tmpd/generated.conf")" \
+        "$_metadata_uid:$_metadata_gid"
 else
     log_fail "generated mode A sync accepts canonical base"
+fi
+
+cat > "$_wpa_tmpd/remove-extra.json" <<'EOF'
+{
+  "mlan0": {
+    "roaming": {
+      "generate_network_blocks": true,
+      "extra_ssids": []
+    }
+  }
+}
+EOF
+if WIFI_INIT_CONF_JSON="$_wpa_tmpd/remove-extra.json" \
+    wifi_init_sync_extra_ssid_blocks mlan0 "$_wpa_tmpd/generated.conf"; then
+    expect_equal "Mode A extra-block removal leaves one network" \
+        "$(grep -Ec '^[[:space:]]*network[[:space:]]*=' "$_wpa_tmpd/generated.conf")" "1"
+    expect_equal "Mode A extra-block removal preserves mode" \
+        "$(stat -c '%a' "$_wpa_tmpd/generated.conf")" "640"
+    expect_equal "Mode A extra-block removal preserves uid/gid" \
+        "$(stat -c '%u:%g' "$_wpa_tmpd/generated.conf")" \
+        "$_metadata_uid:$_metadata_gid"
+else
+    log_fail "Mode A extra-block removal succeeds"
 fi
 
 cat > "$_wpa_tmpd/empty-extra.json" <<'EOF'
