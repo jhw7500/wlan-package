@@ -250,6 +250,15 @@ def test_cross_ssid_transition_lock_contention_is_neutral_without_selection_or_c
     select.assert_not_called()
 
 
+def test_staged_home_scan_busy_is_propagated_before_line_filter(monkeypatch):
+    monkeypatch.setattr(wifi_roam, "WPA_FREQ", ["5180"])
+    monkeypatch.setattr(wifi_roam, "HOME_PASSIVE", True)
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", lambda *_a, **_k: wifi_roam.SCAN_TRANSITION_BUSY)
+    station = {"bssid": "00:11:22:33:44:55", "rssi": -80, "freq": 5180}
+    result = wifi_roam.staged_scan_best_candidate(station, ["Base"], "Base", None, None)
+    assert result[0] is wifi_roam.SCAN_TRANSITION_BUSY
+
+
 def test_iw_scan_drops_supplicant_bss_not_refreshed_by_this_scan(monkeypatch):
     """누적 scan_results의 강한 stale BSS가 이번 iw scan 결과로 승격되지 않는다."""
     monkeypatch.setattr(wifi_roam.time, "sleep", lambda *_: None)
