@@ -785,16 +785,18 @@ wpa_supplicant의 장애 복구·재연결 스캔은 계속 동작한다.
 | `interval` | int | `60` | 백그라운드 스캔 주기 (초) |
 | `ssid_filter` | bool | `true` | `iw scan`의 **기본 ssid** directed probe 포함 여부. `true`면 conf 기본 ssid를 probe, `false`면 기본 ssid는 probe 없이 스캔. `roaming.extra_ssids`(§11.4)는 이 값과 **무관하게 항상 probe**된다. **`passive=true`(기본)면 directed probe 자체가 없어 이 키는 무효** |
 | `freq_filter` | bool | `true` | **DEPRECATED**. 공통 `freq_list`가 있으면 `false`도 무시하고 iw/wpa_cli 모두 같은 목록을 사용. 목록 자체가 없을 때만 전대역 |
-| `passive` | bool | `true` | `true`=패시브 스캔(`iw scan passive`, probe request 미송신·beacon 수신만). `false`=종전 액티브 스캔 |
+| `passive` | bool | `true` | `true`=패시브 스캔. iw backend는 `iw <iface> scan passive`, native backend는 `wpa_cli -i <iface> SCAN passive=1`(probe request 미송신·beacon 수신만)을 요청한다. `false`=종전 액티브 스캔 |
 | `emit_roam_hint` | bool | `true` | iw/wifi_roam owner에서 스캔 성공 시 roam backoff hint 발행. wpa native owner에서는 소비자가 없어 강제 비활성 |
 
 > **패시브 스캔 (`passive`, 기본 `true`)**: bgscan은 probe request를 쏘지 않고 beacon만 수신한다. probe를 안 보내므로 **directed `ssid` 토큰은 명령에서 전부 생략**되며(`ssid_filter`/`extra_ssids`의 directed probe는 패시브에서 무의미), airtime 오염이 줄고 beacon 기반 RSSI라 현재 링크의 `signal_avg`와 측정 스케일이 가까워진다(로밍 판정 정합성↑, §11.4). **한계**: beacon을 보내지 않는 **hidden SSID는 패시브로 발견되지 않는다** — hidden extra SSID가 로밍 후보라면 `passive=false`로 액티브 bgscan을 쓰거나, 로밍 트리거 시의 액티브 폴백(§11.4)에 의존해야 한다.
 
 > **아래 `ssid_filter` 설명은 `passive=false`(액티브 bgscan)일 때만 적용된다.** `passive=true`(기본)면 probe request를 보내지 않으므로 `ssid` 인자 자체가 명령에서 빠진다.
 >
-> `ssid_filter=true`이면 bgscan이 conf 기본 ssid를 directed probe한다. `iw scan`의 `ssid` 인자는 directed probe 대상이라, non-hidden SSID는 probe 없이 beacon으로도 잡히지만 **hidden SSID는 directed probe가 있어야 발견**된다. 따라서 `roaming.extra_ssids`(§11.4)는 명시적 로밍 후보로서 `ssid_filter` 값과 **무관하게 항상 directed probe**에 포함된다 — `ssid_filter=false`로 두어도 extra SSID(hidden 포함)는 누락되지 않는다. ssid_filter on/off의 스캔 시간·통신 영향 차이는 작고, 실제 비용은 `freq_filter`(채널 수)가 좌우한다.
+> `ssid_filter=true`이면 bgscan이 conf 기본 ssid를 directed probe한다. iw backend의 active 문법은 `iw <iface> scan ... ssid <SSID>`이고, native backend는 `wpa_cli -i <iface> SCAN ... ssid <UTF-8 hex>`를 쓴다. native active SSID filters are UTF-8 hex encoded because the control interface accepts bytes rather than a quoted SSID. non-hidden SSID는 probe 없이 beacon으로도 잡히지만 **hidden SSID는 directed probe가 있어야 발견**된다. 따라서 `roaming.extra_ssids`(§11.4)는 명시적 로밍 후보로서 `ssid_filter` 값과 **무관하게 항상 directed probe**에 포함된다 — `ssid_filter=false`로 두어도 extra SSID(hidden 포함)는 누락되지 않는다. ssid_filter on/off의 스캔 시간·통신 영향 차이는 작고, 실제 비용은 `freq_filter`(채널 수)가 좌우한다.
 
-> bgscan은 `wpa_state==COMPLETED`(연결됨)일 때만 `iw <iface> scan`을 수행한다 — 미연결 시엔 wpa_supplicant의 재연결 스캔/association과 라디오 경합을 피하려 skip.
+> both backends require the same `wpa_state=COMPLETED` safety gate before bgscan sends either `iw <iface> scan` or the native `wpa_cli ... SCAN` request. 미연결 시엔 wpa_supplicant의 재연결 스캔/association과 라디오 경합을 피하려 skip한다.
+>
+> package bgscan은 per-network `bgscan=`을 설정·강제하지 않는다. 그 unsupported boundary에 대한 built-in fail-close 동작은 이 구성의 범위 밖이다.
 
 > 스캔 파라미터는 **매 스캔 직전에 다시 읽는다** — 실제 network SSID와 공통
 > `freq_list`는 `wpa_supplicant-<iface>.conf`에서, `interval`/filter/passive는 JSON에서

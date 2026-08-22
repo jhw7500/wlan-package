@@ -2204,8 +2204,8 @@ case "$2" in
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> ssid <NEW_SSID>" >&2; exit 1; fi
     if wifi_wpa_conf_is_multi_topology "$IFACE" "$CONF"; then
         echo "Error: $CONF 는 Mode A 또는 다중 network topology입니다." >&2
-        echo "       ssid 일괄교체는 기본 SSID를 소실시킵니다 — cross-SSID 전환은" >&2
-        echo "       wpa_cli select_network <id>를 사용하세요." >&2
+        echo "       SSID 전환은 boot-latched owner policy에 따라 자동 처리됩니다." >&2
+        echo "       SSID 없이 'wifi <iface> connect'를 실행하면 현재 network 재연결을 요청합니다." >&2
         exit 1
     fi
     NEW_SSID="$1"
@@ -2391,7 +2391,6 @@ case "$2" in
     TARGET_ID=""
     SET_FREQ=0
     FREQ_STR=""
-    MODE_A_RESTORE=0
     if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
         echo "Error: connect supports mlan0/mlan1 only" >&2; exit 1
     fi
@@ -2407,8 +2406,8 @@ case "$2" in
     if [ -f "$CONF" ] && wifi_wpa_conf_is_multi_topology "$IFACE" "$CONF"; then
         if [ $# -ge 1 ]; then
             echo "Error: $CONF 는 Mode A 또는 다중 network topology입니다." >&2
-            echo "       ssid 일괄교체는 기본 SSID를 소실시킵니다 — cross-SSID 전환은" >&2
-            echo "       wifi_roam의 select_network(자동) 또는 wpa_cli select_network <id>를 사용하세요." >&2
+            echo "       SSID 전환은 boot-latched owner policy에 따라 자동 처리됩니다." >&2
+            echo "       SSID 없이 'wifi <iface> connect'를 실행하면 현재 network 재연결을 요청합니다." >&2
             exit 1
         fi
 
@@ -2516,55 +2515,17 @@ case "$2" in
     else
         # === 인자 없음: conf 그대로 현재 설정으로 재연결만 ===
         if [ "$HAS_TARGET_ID" = "1" ]; then
-            echo "no ssid given — reselecting current network id=$TARGET_ID on $IFACE..."
+            echo "no ssid given — reassociating current network id=$TARGET_ID on $IFACE..."
         else
             echo "no ssid/current id given — reassociating $IFACE with current conf..."
         fi
     fi
-    # --- 공통: 강제 재연결(reassociate 우선, 실패 시 reconnect) → assoc 대기 ---
-    if [ "$HAS_TARGET_ID" = "1" ]; then
-        # select_network는 다른 블록을 disable할 수 있으므로 성공/실패/timeout 어느
-        # 경로에서도 enable_network all을 복구한다. 플래그를 명령 전에 올려 FAIL 응답도 보호.
-        restore_mode_a_networks() {
-            local _attempt
-            [ "$MODE_A_RESTORE" = "1" ] || return 0
-            for _attempt in 1 2; do
-                if wpa_cli_ok "$IFACE" enable_network all; then
-                    MODE_A_RESTORE=0
-                    return 0
-                fi
-                sleep 0.1
-            done
-            # ambiguous ctrl failure 자동복구: canonical conf를 다시 읽힌 뒤 한 번 더 복원.
-            if wpa_cli_ok "$IFACE" reconfigure; then
-                sleep 0.1
-                if wpa_cli_ok "$IFACE" enable_network all; then
-                    MODE_A_RESTORE=0
-                    echo "Warning: candidates recovered by reconfigure; association proof invalidated" >&2
-                    return 1
-                fi
-            fi
-            echo "Warning: failed to restore all network blocks on $IFACE" >&2
-            return 1
-        }
-        finish_mode_a_connect() {
-            local _rc=$?
-            trap - EXIT
-            if ! restore_mode_a_networks && [ "$_rc" -eq 0 ]; then
-                _rc=7
-            fi
-            sync 2>/dev/null || true
-            exit "$_rc"
-        }
-        MODE_A_RESTORE=1
-        trap finish_mode_a_connect EXIT
-        if ! wpa_cli_ok "$IFACE" select_network "$TARGET_ID"; then
-            echo "Error: wpa_cli select_network $TARGET_ID failed for $IFACE" >&2
-            exit 7
-        fi
-    elif ! wpa_cli_ok "$IFACE" reassociate && ! wpa_cli_ok "$IFACE" reconnect; then
-            echo "Error: wpa_cli reassociate/reconnect failed for $IFACE" >&2
-            exit 7
+    # --- 공통: owner-neutral 강제 재연결(reassociate 우선, 실패 시 reconnect) → assoc 대기 ---
+    # Mode A도 다른 network 블록의 enabled 상태를 바꾸지 않는다. 최초에 캡처한 id는
+    # 아래 COMPLETED 폴링에서만 증명하므로, 다른 id로 완료되면 성공 처리하지 않는다.
+    if ! wpa_cli_ok "$IFACE" reassociate && ! wpa_cli_ok "$IFACE" reconnect; then
+        echo "Error: wpa_cli reassociate/reconnect failed for $IFACE" >&2
+        exit 7
     fi
     # 연결 완료 대기(best-effort, 최대 15s) — 0.1s grid 폴링으로 COMPLETED를 빨리 감지.
     # (실제 association 시간은 물리 과정이라 불변; 폴링 grid만 줄여 끝맺음 반응성 개선)
@@ -2606,10 +2567,6 @@ case "$2" in
         sleep 0.1
     done
     if [ "$ASSOC_MATCH" = "1" ]; then
-        if [ "$HAS_TARGET_ID" = "1" ] && ! restore_mode_a_networks; then
-            echo "Error: associated target but failed to restore all Mode A candidates" >&2
-            exit 7
-        fi
         echo "associated: ssid=\"${CUR_SSID:-N/A}\" freq=${CUR_FREQ:-N/A} id=${CUR_ID:-N/A} (wpa_state=COMPLETED)"
         exit 0
     else
