@@ -142,7 +142,11 @@ case " $* " in
     fi
     # A native wpa_cli daemon has argv[0]="wpa_cli" even when PATH resolved
     # the executable.  Model that exact /proc identity for safe PID handling.
-    bash -c 'exec -a wpa_cli sleep 60' >/dev/null 2>&1 &
+    if [ "$mode" = "stubborn" ]; then
+      bash -c 'trap "" TERM; exec -a wpa_cli sleep 60' >/dev/null 2>&1 &
+    else
+      bash -c 'exec -a wpa_cli sleep 60' >/dev/null 2>&1 &
+    fi
     monitor_pid=$!
     printf '%s\n' "$monitor_pid" > "$pidfile"
     printf '%s\n' "$monitor_pid" > "$STATE_DIR/last-monitor-pid"
@@ -199,6 +203,14 @@ case "$*" in
       mode-a-wait)
         ssid=Office; id=1
         [ "$count" -eq 1 ] || state=DISCONNECTED ;;
+      mode-a-slow-poll)
+        ssid=Office; id=1
+        if [ "$count" -gt 1 ]; then
+          printf '%s\n' "$$" > "$STATE_DIR/slow-status-pid"
+          : > "$STATE_DIR/slow-status-ready"
+          IFS= read -r _release < "$STATE_DIR/slow-status-release"
+          state=DISCONNECTED
+        fi ;;
       no-current)
         if [ "$count" -eq 1 ]; then state=DISCONNECTED; ssid=; id=; freq=; fi ;;
       no-current-recover)
@@ -387,6 +399,22 @@ check_scan_transition_lock_available() {
         sleep 0.01
     done
     fail "$desc"
+}
+
+check_connect_locks_available_before_monitor_cleanup() {
+    local desc="$1" dir=""
+    dir=$(cat "$STATE_DIR/last-monitor-dir" 2>/dev/null || true)
+    if [ -n "$dir" ] && [ -d "$dir" ] && (
+        exec 9>"$RUN_DIR/mlan0.wpa-conf.lock"
+        flock -n 9 || exit 1
+        exec 7>"$RUN_DIR/mlan0.scan-transition.lock"
+        flock -n 7 || exit 1
+        [ -d "$dir" ]
+    ); then
+        pass "$desc"
+    else
+        fail "$desc (dir=${dir:-missing})"
+    fi
 }
 
 monitor_process_running() {
@@ -741,6 +769,52 @@ kill -KILL "$_wifi_pid" 2>/dev/null || true
 wait "$_wifi_pid" 2>/dev/null || true
 check_scan_transition_lock_available "Mode A SIGKILL leaves scan-transition lock immediately acquirable"
 check_monitor_cleaned "Mode A watchdog bounds SIGKILL orphan"
+
+# Hold the first post-monitor association status child alive, kill only its
+# owning shell, and probe both transaction locks before the watchdog removes
+# the private monitor directory.  This deterministically exposes inherited
+# open file descriptions instead of hoping SIGKILL lands in a short poll.
+write_mode_a_legacy
+set_status_mode mode-a-slow-poll
+set_monitor_mode stubborn
+rm -f "$STATE_DIR/slow-status-pid" "$STATE_DIR/slow-status-ready" \
+      "$STATE_DIR/slow-status-release"
+mkfifo "$STATE_DIR/slow-status-release"
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=10 \
+    bash "$WIFI_SH" 0 connect >/dev/null 2>&1 &
+_wifi_pid=$!
+for _wait in $(seq 1 100); do
+    [ -s "$STATE_DIR/slow-status-pid" ] \
+        && [ -f "$STATE_DIR/slow-status-ready" ] \
+        && [ -d "$(cat "$STATE_DIR/last-monitor-dir" 2>/dev/null || true)" ] \
+        && break
+    sleep 0.01
+done
+_slow_status_pid=$(cat "$STATE_DIR/slow-status-pid" 2>/dev/null || true)
+if [ -n "$_slow_status_pid" ] && kill -0 "$_slow_status_pid" 2>/dev/null; then
+    pass "Mode A SIGKILL fixture holds post-monitor status child live"
+else
+    fail "Mode A SIGKILL fixture must hold post-monitor status child live"
+fi
+kill -KILL "$_wifi_pid" 2>/dev/null || true
+wait "$_wifi_pid" 2>/dev/null || true
+check_connect_locks_available_before_monitor_cleanup \
+    "Mode A SIGKILL releases FD9 then FD7 before monitor cleanup"
+[ -z "$_slow_status_pid" ] || kill -TERM "$_slow_status_pid" 2>/dev/null || true
+for _wait in $(seq 1 50); do
+    [ -z "$_slow_status_pid" ] || ! monitor_process_running "$_slow_status_pid" \
+        && break
+    sleep 0.01
+done
+if [ -z "$_slow_status_pid" ] || ! monitor_process_running "$_slow_status_pid"; then
+    pass "Mode A SIGKILL fixture cleans slow status child"
+else
+    fail "Mode A SIGKILL fixture must clean slow status child"
+    kill -KILL "$_slow_status_pid" 2>/dev/null || true
+fi
+rm -f "$STATE_DIR/slow-status-release"
+check_monitor_cleaned "Mode A slow-child watchdog still bounds monitor orphan"
 
 write_mode_b_legacy
 set_boot_policy false false

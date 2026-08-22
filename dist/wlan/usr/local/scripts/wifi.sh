@@ -423,7 +423,7 @@ apply_bw_or_exit() { # $1 iface, $2 bw_cap
 wpa_cli_ok() {
     local iface="$1" reply
     shift
-    if ! reply=$(wpa_cli -i "$iface" "$@" 2>/dev/null); then
+    if ! reply=$(wifi_wpa_child_exec wpa_cli -i "$iface" "$@" 2>/dev/null); then
         return 1
     fi
     [ "$reply" = "OK" ]
@@ -608,8 +608,8 @@ EOF
 
 connect_event_monitor_arm() {
     [ -n "${CONNECT_MONITOR_DIR:-}" ] || return 1
-    rm -f "$CONNECT_MONITOR_DIR/connected-id" \
-          "$CONNECT_MONITOR_DIR"/connected-id.tmp.*
+    wifi_wpa_run_child rm -f "$CONNECT_MONITOR_DIR/connected-id" \
+        "$CONNECT_MONITOR_DIR"/connected-id.tmp.*
     : > "$CONNECT_MONITOR_DIR/armed"
 }
 
@@ -617,8 +617,10 @@ connect_event_monitor_arm() {
 # necessarily subsequent to the CONNECTED epoch.  The connect command sets the
 # target globals before invoking this helper.
 connect_association_poll_matches() {
-    FRESH_EVENT_ID=$(cat "$CONNECT_MONITOR_DIR/connected-id" 2>/dev/null || true)
-    WPA_STATUS=$(wpa_cli -i "$IFACE" status 2>/dev/null) || WPA_STATUS=""
+    if ! FRESH_EVENT_ID=$(wifi_wpa_child_exec cat "$CONNECT_MONITOR_DIR/connected-id" 2>/dev/null); then
+        FRESH_EVENT_ID=""
+    fi
+    WPA_STATUS=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" status 2>/dev/null) || WPA_STATUS=""
     WPA_STATE=""; CUR_SSID=""; CUR_FREQ=""; CUR_ID=""; ASSOC_MATCH=0
     while IFS='=' read -r _key _value; do
         case "$_key" in
@@ -2658,7 +2660,7 @@ case "$2" in
     # Every no-argument reconnect captures its current id, including Mode B.
     # Broad recovery is permitted only when this initial status has no id.
     if [ "$#" -eq 0 ]; then
-        WPA_STATUS=$(wpa_cli -i "$IFACE" status 2>/dev/null) || WPA_STATUS=""
+        WPA_STATUS=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" status 2>/dev/null) || WPA_STATUS=""
         while IFS='=' read -r _key _value; do
             [ "$_key" = "id" ] && TARGET_ID="$_value"
         done <<< "$WPA_STATUS"
@@ -2793,7 +2795,7 @@ case "$2" in
                 exit 0
             fi
             if [ "$_i" -lt "$GRACE_POLLS" ] && [ "$REMAINING_POLLS" -gt 0 ]; then
-                sleep 0.1
+                wifi_wpa_run_child sleep 0.1
             fi
         done
     else
@@ -2827,7 +2829,7 @@ case "$2" in
         fi
         REMAINING_POLLS=$((REMAINING_POLLS - 1))
         [ "$ASSOC_MATCH" = "1" ] && break
-        [ "$REMAINING_POLLS" -gt 0 ] && sleep 0.1
+        [ "$REMAINING_POLLS" -gt 0 ] && wifi_wpa_run_child sleep 0.1
     done
     if [ "$ASSOC_MATCH" = "1" ]; then
         echo "associated: ssid=\"${CUR_SSID:-N/A}\" freq=${CUR_FREQ:-N/A} id=${CUR_ID:-N/A} (wpa_state=COMPLETED)"

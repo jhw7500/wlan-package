@@ -190,3 +190,15 @@
   abort returns `FAIL` and restores connect success — cost if wrong: on a
   slower target the writer fails closed after about 200 ms instead of applying,
   requiring operator retry while never racing mutation into an active scan.
+- Task 10 fix round 3: board evidence identified a foreground association poll
+  child retaining FD9/FD7 after its `wifi connect` parent was SIGKILLed. The
+  deterministic held-status-child RED was `PASS=203 FAIL=1`; direct child-shell
+  FD closure is now GREEN at writer `PASS=205 FAIL=0`, init `88/0`, logger
+  pytest `654`, scripts pytest `169`, and syntax/defaults/release-pre/range
+  diff-check exit 0.
+- Ruling: Require immediate ordered FD9-then-FD7 reacquisition before watchdog
+  cleanup and make every transient connect polling/association child explicitly
+  close inherited descriptors while the parent remains sole lock owner — cost
+  if wrong: an undocumented external helper that intentionally depended on
+  private FDs 7 or 9 would lose that accidental channel, but supported command
+  inputs, outputs, retry timing, and transaction lock scope remain unchanged.

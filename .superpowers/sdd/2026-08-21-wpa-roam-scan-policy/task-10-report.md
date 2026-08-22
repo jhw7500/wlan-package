@@ -313,3 +313,104 @@ rtk git diff --check f46865d4892eb28facc77ed6406d89afee245a58
   production-test-seam change was introduced.
 
 Concerns: none.
+
+## Fix round 3: transient child lock inheritance
+
+Binding finding SHA-256:
+`320bf36c0c38462d5dea6cd15d44f760ccaaaeed652074b8728a7799d1bb3305`.
+Board evidence remains under `/tmp/wlan-board-test-task10-eHAbw35A`.
+
+The board's three-round SIGKILL matrix repeatedly found both locks busy while
+the monitor and its private directory were still live. The watchdog and
+monitor daemon had already closed FD7/FD9; the remaining holder was a
+foreground association poll child inheriting the parent's open lock file
+descriptions.
+
+### Deterministic RED
+
+Before production changes, the writer mock gained a `wpa_cli status` mode that
+returns the initial current id, then blocks its first post-monitor association
+poll on a FIFO. The harness confirms that child and a stubborn private monitor
+are live, SIGKILLs only the owning `wifi connect` shell, and immediately tries
+FD9 followed by FD7 with `flock -n` while the private directory still exists.
+It then terminates the fake slow child and retains the watchdog cleanup check.
+
+```sh
+rtk bash dist/wlan/usr/local/scripts/wifi_wpa_conf_writer_test.sh
+# exit 1; RESULT: PASS=203 FAIL=1
+# sole failure: Mode A SIGKILL releases FD9 then FD7 before monitor cleanup
+```
+
+This is the expected defect: the held status child kept both open file
+descriptions after the owner was reaped.
+
+### Implementation and intermediate diagnosis
+
+- `wifi_wpa_child_exec` closes 7 and 9 in the current child shell and then
+  replaces it with the external command. Command substitutions call this form
+  directly, so no intermediate substitution shell remains to hold locks.
+- `wifi_wpa_run_child` supplies one close-and-exec subshell for ordinary child
+  calls. The transaction parent never closes its descriptors and remains the
+  sole lock owner until transaction exit.
+- Both status substitutions, connected-id reads, event-evidence cleanup,
+  association polling sleeps, abort-quiescence calls/sleeps, and every
+  reconfigure/reassociate/reconnect request now use those forms.
+
+The first GREEN attempt nested a close-and-exec subshell inside the
+command-substitution shell. The deterministic test correctly remained RED at
+`PASS=203 FAIL=1`, proving the intermediate shell still retained the lock
+descriptions. Splitting the direct command-substitution form removed that
+holder; no association timeout, retry count, or response contract changed.
+
+### Final GREEN validation
+
+```sh
+rtk bash dist/wlan/usr/local/scripts/wifi_wpa_conf_writer_test.sh
+# RESULT: PASS=205 FAIL=0
+
+rtk bash dist/wlan/usr/local/scripts/wifi_init_config_test.sh
+# PASS: 88 / FAIL: 0
+
+rtk bash -n dist/wlan/usr/local/scripts/wifi.sh \
+  dist/wlan/usr/local/scripts/opc_wlan_apply.sh \
+  dist/wlan/usr/local/scripts/wifi_init_config_lib.sh \
+  dist/wlan/usr/local/scripts/wifi_wpa_conf_writer_test.sh
+# exit 0
+
+rtk sh -n dist/wlan/usr/local/scripts/opc_wlan_apply.sh \
+  dist/wlan/usr/local/scripts/wifi_init_config_lib.sh
+# exit 0
+
+rtk python3 -m pytest dist/wlan/usr/local/logger/tests -q
+# 654 passed in 7.24s
+
+rtk python3 -m pytest dist/wlan/usr/local/scripts/tests -q
+# 169 passed in 16.80s
+
+rtk python3 scripts/gen_config_defaults.py --check
+# exit 0 (one documented runtime-generated handoff allowlist row)
+
+rtk ./scripts/validate_release.sh pre
+# exit 0; embedded logger 654 passed, scripts 169 passed,
+# writer RESULT: PASS=205 FAIL=0
+
+rtk git diff --check 0c56e229dc029c9e9685b0a1aeef398cab270f03
+# exit 0
+```
+
+### Self-review
+
+- Determinism: **PASS** — the regression holds the real mock status process
+  alive, proves monitor-directory presence at the ordered FD9/FD7 probe, and
+  explicitly cleans both slow child and monitor resources.
+- Sole ownership: **PASS** — command-substitution shells themselves close and
+  `exec`; normal calls use one close-and-exec child. All listed post-lock
+  polling/association external commands use the shared pattern.
+- Scope/order/budget: **PASS** — parent acquisition remains FD9 then FD7 and
+  neither descriptor is released early; `TOTAL_POLLS`, the shared 15-second
+  budget, monitor/watchdog lifecycle, and exact abort-quiescence policy are
+  unchanged.
+- Contract surface: **PASS** — no runtime option, JSON/schema, owner,
+  topology, frequency, or default-interval change was introduced.
+
+Concerns: none.

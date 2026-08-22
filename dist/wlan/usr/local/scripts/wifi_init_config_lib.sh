@@ -244,6 +244,21 @@ wifi_wpa_conf_lock_acquire() {
     flock -x 9
 }
 
+# Replace the current child shell with an external command after closing both
+# live-operation descriptors.  Use this form directly inside command
+# substitutions so no intermediate substitution shell can retain the locks.
+wifi_wpa_child_exec() {
+    exec 7>&- 9>&-
+    exec "$@"
+}
+
+# Normal (non-substitution) calls get exactly one child, which immediately
+# closes the descriptors and execs.  The transaction parent remains the sole
+# FD9/FD7 owner throughout.
+wifi_wpa_run_child() (
+    wifi_wpa_child_exec "$@"
+)
+
 # Exact plain FAIL is the deployed "no active scan" result.  OK only accepts
 # the abort request; the scan teardown can still be in progress, so reissue a
 # small fixed number of times until FAIL proves quiescence.  Every other reply,
@@ -252,7 +267,7 @@ wifi_wpa_conf_lock_acquire() {
 wifi_wpa_abort_scan_quiesce() {
     local iface="$1" reply attempt
     for attempt in 1 2 3 4 5; do
-        if ! reply=$(wpa_cli -i "$iface" abort_scan 2>/dev/null); then
+        if ! reply=$(wifi_wpa_child_exec wpa_cli -i "$iface" abort_scan 2>/dev/null); then
             return 1
         fi
         case "$reply" in
@@ -261,7 +276,7 @@ wifi_wpa_abort_scan_quiesce() {
                 ;;
             OK)
                 [ "$attempt" -lt 5 ] || return 1
-                sleep 0.05 || return 1
+                wifi_wpa_run_child sleep 0.05 || return 1
                 ;;
             *)
                 return 1
