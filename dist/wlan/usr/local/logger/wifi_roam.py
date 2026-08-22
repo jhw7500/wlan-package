@@ -1107,7 +1107,7 @@ def _iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         except subprocess.TimeoutExpired:
             logger.message("err", f"[{IFACE}] iw scan timeout", _EXTRA_())
-            return SCAN_TRANSITION_BUSY
+            return None
         except Exception as e:
             logger.message("err", f"[{IFACE}] iw scan error: {e}", _EXTRA_())
             return None

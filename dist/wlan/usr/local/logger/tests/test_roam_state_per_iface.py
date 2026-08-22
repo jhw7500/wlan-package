@@ -66,6 +66,16 @@ def test_scan_transition_lock_is_per_iface_exclusive_and_sigkill_releases(tmp_pa
             proc.wait(timeout=3)
 
 
+def test_scan_transition_lock_path_error_is_visible_and_never_uses_tmp(monkeypatch):
+    def denied(*_args, **_kwargs):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(roam_state.os, "makedirs", denied)
+    with pytest.raises(PermissionError):
+        with roam_state.scan_transition_lock("mlan0", run_dir="/run/wifi"):
+            pass
+
+
 # ── 경로 규칙 ──────────────────────────────────────────────────────────────
 
 def test_path_rule_identical_between_daemons():
