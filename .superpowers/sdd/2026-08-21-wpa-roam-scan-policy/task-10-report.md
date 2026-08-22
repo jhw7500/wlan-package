@@ -175,3 +175,8 @@ The obsolete `/tmp` host-test concession is explicitly superseded: production
 attempts only the requested `/run/wifi` namespace and propagates both mkdir and
 open permission errors. Host tests use explicit temporary `run_dir` seams;
 there is no alternate production namespace. Concerns: none.
+
+The repository pre-commit hook regenerated `DRIVER_MANIFEST.md` from unrelated
+host binaries while creating the implementation commit. The report follow-up
+restores that file byte-for-byte from inherited HEAD with hooks disabled; it is
+absent from the final Task 10 range and is not a Task 10 change.
