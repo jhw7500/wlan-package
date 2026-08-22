@@ -244,6 +244,20 @@ wifi_wpa_conf_lock_acquire() {
     flock -x 9
 }
 
+# FD 7 serializes live scans with association-changing operations.  Callers
+# already hold FD 9, so the global order is always conf -> scan-transition.
+# Tests may use a zero timeout; production defaults to a bounded 15 seconds.
+wifi_scan_transition_lock_acquire() {
+    local iface="$1" run_dir="${WIFI_RUN_DIR:-/run/wifi}" lock_file timeout
+    timeout="${WIFI_SCAN_TRANSITION_LOCK_TIMEOUT:-15}"
+    case "$timeout" in ''|*[!0-9]*) timeout=15 ;; esac
+    command -v flock >/dev/null 2>&1 || return 1
+    mkdir -p "$run_dir" || return 1
+    lock_file="$run_dir/${iface}.scan-transition.lock"
+    exec 7>"$lock_file" || return 1
+    flock -w "$timeout" -x 7
+}
+
 wifi_init_get_iface_enabled() {
     local iface="$1"
     local default="${2:-true}"

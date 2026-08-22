@@ -214,6 +214,7 @@ sys.modules['roam_state'] = types.SimpleNamespace(
     lease_active=lambda *a, **k: False,
     process_start_time=lambda *a, **k: '1',
     roam_state_paths=lambda iface: ({str(tmp_path / 'condition')!r}, {str(tmp_path / 'scan-time')!r}),
+    scan_transition_lock=lambda *a, **k: None,
     write_flag=lambda *a, **k: None,
 )
 sys.path.insert(0, {str(logger_dir)!r})

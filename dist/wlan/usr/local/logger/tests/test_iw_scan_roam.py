@@ -7,6 +7,7 @@
 import sys
 import os
 import re
+from contextlib import contextmanager
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
@@ -192,6 +193,52 @@ def test_iw_scan_to_ap_lines_happy(monkeypatch):
     with patch.object(wifi_roam.subprocess, "run", side_effect=_dispatch()):
         out = iw_scan_to_ap_lines("jhw_wlan_", ["5180", "5200"])
     assert out and out[0].split("|")[4] == "00:80:4c:c7:7d:dd"
+
+
+def test_external_roam_scan_lock_contention_skips_iw_without_backend_fallback(monkeypatch):
+    """External owner lock contention is a neutral cycle, never a retry/fallback."""
+    @contextmanager
+    def denied_lock(*_args, **_kwargs):
+        yield False
+
+    monkeypatch.setattr(wifi_roam, "scan_transition_lock", denied_lock, raising=False)
+    run = MagicMock()
+    monkeypatch.setattr(wifi_roam.subprocess, "run", run)
+
+    assert wifi_roam.iw_scan_to_ap_lines(["jhw_wlan_"], ["5180"]) is None
+    run.assert_not_called()
+
+
+def test_external_roam_transition_lock_contention_skips_wpa_roam_without_failure(monkeypatch):
+    """The selected transition is separately serialized from the scan phase."""
+    @contextmanager
+    def denied_lock(*_args, **_kwargs):
+        yield False
+
+    monkeypatch.setattr(wifi_roam, "scan_transition_lock", denied_lock, raising=False)
+    monkeypatch.setattr(wifi_roam, "ENABLE_PING_PONG_PREVENTION", False)
+    run = MagicMock()
+    monkeypatch.setattr(wifi_roam.subprocess, "run", run)
+
+    assert wifi_roam.roam_to_bssid("00:11:22:33:44:55", "00:11:22:33:44:66") is None
+    run.assert_not_called()
+
+
+def test_cross_ssid_transition_lock_contention_is_neutral_without_selection_or_cooldown(monkeypatch):
+    @contextmanager
+    def denied_lock(*_args, **_kwargs):
+        yield False
+
+    monkeypatch.setattr(wifi_roam, "scan_transition_lock", denied_lock, raising=False)
+    monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", True)
+    monkeypatch.setattr(wifi_roam, "ENABLE_PING_PONG_PREVENTION", False)
+    select = MagicMock()
+    monkeypatch.setattr(wifi_roam, "select_network_for_ssid", select)
+
+    assert wifi_roam.route_cross_ssid_transition(
+        "mlan0", "Office", "00:11:22:33:44:55", "00:11:22:33:44:66"
+    ) is None
+    select.assert_not_called()
 
 
 def test_iw_scan_drops_supplicant_bss_not_refreshed_by_this_scan(monkeypatch):

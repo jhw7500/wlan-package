@@ -1,7 +1,10 @@
 import os
 import sys
 import json
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 
 sys.modules.setdefault("sUTILS", MagicMock())
@@ -142,3 +145,60 @@ def test_native_request_combines_conf_and_json_ssids_in_order(tmp_path, monkeypa
 
     ssids = [cmd[i + 1] for i, token in enumerate(cmd[:-1]) if token == "ssid"]
     assert ssids == [name.encode().hex() for name in ("Base", "Office", "JsonOnly")]
+
+
+def test_periodic_scan_lock_contention_defers_full_interval_without_subprocess(
+    tmp_path, monkeypatch
+):
+    """A busy association transition is a neutral skipped bgscan cycle.
+
+    The scan scheduler must record the attempted time even though no scan was
+    issued, so the next loop at +1s does not spin/retry before the configured
+    normal interval.  This gives the daemon a deterministic no-wait seam while
+    production still uses the real per-interface flock.
+    """
+    conf = _write_runtime_config(tmp_path, monkeypatch)
+    calls = []
+
+    @contextmanager
+    def denied_lock(*_args, **_kwargs):
+        yield False
+
+    # ``raising=False`` deliberately lets this execute on the pre-Task-10
+    # code: it then demonstrates the missing serialization as an iw/wpa scan.
+    monkeypatch.setattr(wifi_bgscan, "scan_transition_lock", denied_lock, raising=False)
+    monkeypatch.setattr(wifi_bgscan.os.path, "exists", lambda _path: True)
+    monkeypatch.setattr(wifi_bgscan, "is_wpa_running", lambda _iface: True)
+    monkeypatch.setattr(wifi_bgscan, "is_wpa_connected", lambda _iface: calls.append("connected") or True)
+    monkeypatch.setattr(wifi_bgscan, "get_flag", lambda: False)
+    monkeypatch.setattr(wifi_bgscan, "build_scan_request", lambda *_a, **_k: (["iw", "mlan0", "scan"], 60, False))
+    run = MagicMock(return_value=True)
+    monkeypatch.setattr(wifi_bgscan, "run_scan_command", run)
+
+    now = iter((0, 61, 61, 62))
+    last_now = 62
+
+    def fake_time():
+        nonlocal last_now
+        try:
+            last_now = next(now)
+        except StopIteration:
+            pass
+        return last_now
+
+    monkeypatch.setattr(wifi_bgscan.time, "time", fake_time)
+    sleep_calls = 0
+
+    def fake_sleep(_seconds):
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls == 3:
+            raise RuntimeError("stop periodic loop")
+
+    monkeypatch.setattr(wifi_bgscan.time, "sleep", fake_sleep)
+
+    with pytest.raises(RuntimeError, match="stop periodic loop"):
+        wifi_bgscan.periodic_scan(conf, "iw", {})
+
+    assert run.call_count == 0, "contention must not issue a scan subprocess"
+    assert calls == ["connected"], "the +1s loop must be deferred until interval"

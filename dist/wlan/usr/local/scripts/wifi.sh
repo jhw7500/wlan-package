@@ -1,12 +1,24 @@
 #!/bin/bash
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-# shellcheck source=./wifi_init_config_lib.sh
-. "/usr/local/scripts/wifi_init_config_lib.sh"
+# Prefer the sibling library for package/development invocation; the installed
+# `/usr/local/bin/wifi` has no sibling and therefore uses the installed copy.
+if [ -r "$SCRIPT_DIR/wifi_init_config_lib.sh" ]; then
+    . "$SCRIPT_DIR/wifi_init_config_lib.sh"
+else
+    # shellcheck source=./wifi_init_config_lib.sh
+    . "/usr/local/scripts/wifi_init_config_lib.sh"
+fi
 # 설치 전 환경(개발/테스트)에서는 스크립트 옆의 lib로 보충.
 # 타깃은 /usr/local/bin/wifi 심볼릭 링크라 SCRIPT_DIR을 1차 경로로 못 쓴다.
 if ! declare -f wifi_init_mode_to_bandcfg_mask >/dev/null 2>&1; then
     # 파일 존재 시에만 source — 없으면 조용히 skip(정상), 있으면 source의
     # syntax error는 그대로 노출(2>/dev/null로 삼키지 않음).
+    [ -f "$SCRIPT_DIR/wifi_init_config_lib.sh" ] && . "$SCRIPT_DIR/wifi_init_config_lib.sh"
+fi
+# Development/test entry points can have an older installed library even though
+# this sibling script is the package under test.  Load the sibling only when
+# the new live-operation primitive is absent; installed images already carry it.
+if ! declare -f wifi_scan_transition_lock_acquire >/dev/null 2>&1; then
     [ -f "$SCRIPT_DIR/wifi_init_config_lib.sh" ] && . "$SCRIPT_DIR/wifi_init_config_lib.sh"
 fi
 # shellcheck source=./wifi_fw_config_lib.sh
@@ -417,6 +429,14 @@ wpa_cli_ok() {
     [ "$reply" = "OK" ]
 }
 
+wpa_cli_abort_scan_quiesce() {
+    local iface="$1" reply
+    if ! reply=$(wpa_cli -i "$iface" abort_scan 2>/dev/null); then
+        return 1
+    fi
+    [ "$reply" = "OK" ] || [ "$reply" = "FAIL" ]
+}
+
 # Return a live process's /proc start-time token.  Cleanup uses the token as
 # well as the numeric PID so a stale/reused pidfile can never target a new
 # process.  Field parsing starts after the final ") " to tolerate spaces in
@@ -528,6 +548,7 @@ EOF
     }
     watchdog_ticks=$((timeout * 10 + 50))
     (
+        exec 7>&- 9>&-
         for ((_i = 1; _i <= watchdog_ticks; _i++)); do
             [ -d "$CONNECT_MONITOR_DIR" ] || exit 0
             connect_monitor_pid_matches "$parent_pid" "$parent_start" || break
@@ -567,7 +588,7 @@ EOF
 
     # Daemon mode's stdout is not part of the request/reply protocol; its rc
     # plus a live private pidfile prove successful attachment.
-    if ! wpa_cli -i "$iface" -a "$action" -B -P "$pidfile" >/dev/null 2>&1; then
+    if ! (exec 7>&- 9>&-; wpa_cli -i "$iface" -a "$action" -B -P "$pidfile") >/dev/null 2>&1; then
         connect_event_monitor_cleanup
         return 1
     fi
@@ -2590,6 +2611,11 @@ case "$2" in
     CONF="$WPA_CONF_DIR/wpa_supplicant-${IFACE}.conf"
     wifi_wpa_conf_lock_acquire "$IFACE" \
         || { echo "Error: failed to lock $CONF" >&2; exit 1; }
+    wifi_scan_transition_lock_acquire "$IFACE" \
+        || { echo "Error: failed to lock scan transition for $IFACE" >&2; exit 1; }
+    if ! wpa_cli_abort_scan_quiesce "$IFACE"; then
+        echo "Error: cannot quiesce scan for $IFACE" >&2; exit 7
+    fi
     # Mode A/실제 다중블록 거부 가드: boot snapshot을 우선하고 sentinel/block 수를
     # fail-safe 보조로 써 ssid 일괄교체를 차단한다. ssid 인자가 있을 때만 거부 — 인자 없는
     # 강제 재연결(reassociate)은 conf를 건드리지 않으므로 허용.
@@ -2614,7 +2640,7 @@ case "$2" in
             TARGET_ID=""
         fi
     fi
-    if [ "$HAS_TARGET_ID" = "1" ]; then
+    if true; then
         trap 'connect_event_monitor_cleanup; sync 2>/dev/null || true' EXIT
         trap 'exit 129' HUP
         trap 'exit 130' INT
@@ -2668,7 +2694,7 @@ case "$2" in
         # install한다. 중간 형식이 실제 conf에 노출되지 않아 reconfigure와 경쟁하지 않는다.
         CANON_FILE="$(mktemp)"
         TMP_FILE="$(mktemp)"
-        trap 'rm -f "$CANON_FILE" "$TMP_FILE"; sync 2>/dev/null || true' EXIT
+        trap 'rm -f "$CANON_FILE" "$TMP_FILE"; connect_event_monitor_cleanup; sync 2>/dev/null || true' EXIT
         if ! wifi_wpa_conf_render_canonical "$CONF" "$CANON_FILE" "$FREQ_STR"; then
             echo "Error: failed to render canonical frequency policy in $CONF" >&2
             exit 1
@@ -2707,11 +2733,27 @@ case "$2" in
         else
             echo "conf updated: ssid=\"$NEW_SSID\" (frequency restriction 없음) in $CONF"
         fi
-        if ! wpa_cli_ok "$IFACE" reconfigure; then
+        if ! connect_event_monitor_arm || ! wpa_cli_ok "$IFACE" reconfigure; then
             echo "Error: wpa_cli reconfigure failed for $IFACE (wpa_supplicant 미동작 또는 conf 문법 오류 확인)" >&2
             exit 7
         fi
         echo "wpa_cli reconfigure OK ($IFACE)"
+        # A successful reconfigure may itself associate.  Accept only fresh
+        # event+status proof during this short grace, avoiding a duplicate
+        # reassociate on the normal path.
+        sleep 0.1
+        FRESH_EVENT_ID=$(cat "$CONNECT_MONITOR_DIR/connected-id" 2>/dev/null || true)
+        WPA_STATUS=$(wpa_cli -i "$IFACE" status 2>/dev/null) || WPA_STATUS=""
+        WPA_STATE=""; CUR_SSID=""; CUR_FREQ=""; CUR_ID=""
+        while IFS='=' read -r _key _value; do
+            case "$_key" in wpa_state) WPA_STATE="$_value" ;; ssid) CUR_SSID="$_value" ;; freq) CUR_FREQ="$_value" ;; id) CUR_ID="$_value" ;; esac
+        done <<< "$WPA_STATUS"
+        if [ "$FRESH_EVENT_ID" = "$CUR_ID" ] && [ "$WPA_STATE" = "COMPLETED" ] \
+           && [ "$CUR_SSID" = "$TARGET_SSID" ] \
+           && { [ "$SET_FREQ" = "0" ] || case " $FREQ_STR " in *" $CUR_FREQ "*) true;; *) false;; esac; }; then
+            echo "associated by reconfigure: ssid=\"$CUR_SSID\" freq=$CUR_FREQ id=$CUR_ID"
+            exit 0
+        fi
     else
         # === 인자 없음: conf 그대로 현재 설정으로 재연결만 ===
         if [ "$HAS_TARGET_ID" = "1" ]; then
@@ -2723,7 +2765,7 @@ case "$2" in
     # --- 공통: owner-neutral 강제 재연결(reassociate 우선, 실패 시 reconnect) → assoc 대기 ---
     # Mode A도 다른 network 블록의 enabled 상태를 바꾸지 않는다. 최초에 캡처한 id는
     # fresh CONNECTED event와 그 이후 COMPLETED 폴링으로만 증명한다.
-    if [ "$HAS_TARGET_ID" = "1" ] && ! connect_event_monitor_arm; then
+    if ! connect_event_monitor_arm; then
         echo "Error: failed to arm reconnect event monitor for $IFACE" >&2
         exit 7
     fi
@@ -2743,9 +2785,7 @@ case "$2" in
     for ((_i = 1; _i <= CONNECT_TIMEOUT * 10; _i++)); do
         # Read event evidence before status so an accepted COMPLETED snapshot
         # is necessarily subsequent to the fresh CONNECTED epoch.
-        if [ "$HAS_TARGET_ID" = "1" ]; then
-            FRESH_EVENT_ID=$(cat "$CONNECT_MONITOR_DIR/connected-id" 2>/dev/null || true)
-        fi
+        FRESH_EVENT_ID=$(cat "$CONNECT_MONITOR_DIR/connected-id" 2>/dev/null || true)
         WPA_STATUS=$(wpa_cli -i "$IFACE" status 2>/dev/null) || WPA_STATUS=""
         WPA_STATE=""; CUR_SSID=""; CUR_FREQ=""; CUR_ID=""
         while IFS='=' read -r _key _value; do
@@ -2762,9 +2802,12 @@ case "$2" in
                 [ "$FRESH_EVENT_ID" = "$TARGET_ID" ] \
                     && [ "$CUR_ID" = "$TARGET_ID" ] && ASSOC_MATCH=1
             elif [ "$HAS_TARGET" = "0" ]; then
-                ASSOC_MATCH=1
+                [[ "$FRESH_EVENT_ID" =~ ^[0-9]+$ ]] \
+                    && [ "$CUR_ID" = "$FRESH_EVENT_ID" ] && ASSOC_MATCH=1
             elif [ "$CUR_SSID" = "$TARGET_SSID" ]; then
-                if [ "$SET_FREQ" = "0" ]; then
+                if [ "$FRESH_EVENT_ID" != "$CUR_ID" ]; then
+                    :
+                elif [ "$SET_FREQ" = "0" ]; then
                     ASSOC_MATCH=1
                 else
                     case " $FREQ_STR " in
