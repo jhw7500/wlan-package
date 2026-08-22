@@ -63,11 +63,15 @@
 - Task 6: complete (commit `aebb107` plus boot-policy hardening commits, recovered from git history)
 - Task 7: complete (integration/review evidence through `90097ec`; review-driven remediation moved to Task 8 and branch finishing deferred)
 
-## Deferred target evidence (not completion claims)
+## Target evidence status
 
 - Mode B external owner: same-SSID roaming observed for 5 round trips / 10 transitions on the replacement AP.
 - Mode B native owner: owner exclusivity and wpa_cli scan requester observed; automatic BSSID handoff not yet directly observed.
-- Mode A external/native owner: structural, writer, and cleanup recovery evidence exists; real cross-SSID transition still needs a second SSID with usable shared credentials.
+- Mode A external owner: superseded by Task 10 board acceptance — five round
+  trips/ten real cross-SSID transitions passed against the two intended APs.
+- Mode A native owner: superseded by Task 10 board acceptance — one real
+  cross-SSID transition followed the supported wpa_cli scan path with no custom
+  selection command.
 
 ## Active task
 
@@ -216,3 +220,108 @@
   intentionally consumes private descriptors 7 or 9 would lose an unsupported
   channel, whereas failing to isolate any child can strand both locks after
   SIGKILL and block immediate recovery for that child's lifetime.
+- Task 10: fix round 4/5 (0 addressed, 1 open — command-substitution `exec`
+  bypasses the inner `|| true`, regressing missing-PID cleanup semantics;
+  commits de31b50..ddc57bd).
+- Task 10: minor (deferred): the held-child fixtures prove pre-kill liveness
+  but must also prove the child remains alive after parent SIGKILL and before
+  the lock probes; carried into fix round 5 because it strengthens the board
+  finding's causal evidence.
+- Task 10: minor (deferred): the static post-lock inventory is exact for the
+  known command graph but cannot detect an arbitrary future executable name;
+  final review must treat it as a reviewed inventory, not a shell-parser proof.
+- Task 10: fix round 5/5 (2 addressed, 0 open — PID-read substitution
+  normalization and post-SIGKILL child-liveness proof; commits
+  ddc57bd..d7615f9). Scoped re-review CLEAN. Fresh controller gates at
+  `d7615f9`: writer `220/0`, init `88/0`, logger pytest `654`, scripts pytest
+  `169`, Bash/POSIX syntax, defaults, release-pre, and exact-range diff check
+  all exit 0. The subsequently completed board acceptance is recorded below.
+- Task 10 final package: built from `d7615f9` as `wlan-proc 0.5.5`, package
+  SHA-256 `5ffd3cf8...38ac9e0`; five installed runtime files matched source.
+- Task 10 controlled board matrix: SIGKILL recovery passed 3/3 with the held
+  child live through ordered immediate FD9/FD7 probes; Mode B manual
+  scan/connect concurrency passed 10/10 with fresh exact target proof and no
+  rejected/timeout/temporary-disable errors, leak, or ping failure.
+- Task 10 Mode A/external board matrix: five round trips/ten real cross-SSID
+  transitions passed with exact SSID/BSSID/frequency/id, fresh event, cleared
+  pin, all networks enabled, no WAL/monitor/lock leak, and healthy ping.
+- Task 10 Mode A/native board matrix: reboot-latched native ownership proved
+  `wifi_roam=inactive`, wpa_cli scan backend, common `5180 5200` policy, and one
+  real cross-SSID transition ordered `SCAN_STARTED -> SCAN_RESULTS -> selected
+  BSS`, with zero custom `SELECT_NETWORK`/`ROAM` commands and `CORE_OK=1`.
+- Task 10 harness diagnostics: Mode B v5 failed only because greedy `.*id=`
+  parsed the suffix of `bssid=`; external-owner v1 exposed the intentional
+  persist-only/runtime-frequency distinction, v2 correctly rejected a weaker
+  target against real current-AP scan RSSI, and v3 sampled asynchronous cleanup
+  too early. Corrected causal harnesses passed without hiding these behaviors.
+- Task 10 exact board restoration: saved Mode B/external JSON and supplicant
+  conf were restored byte-for-byte before and after reboot, services/status,
+  package, locks, monitor/WAL absence, and ping passed; final assertion is
+  `FINAL_RESTORE_OK=1`. Evidence and verified 1,436-file SHA manifest:
+  `/tmp/wlan-board-test-task10-eHAbw35A`.
+- Task 10: complete (commits `f94dd2c..d7615f9`, scoped fix re-review CLEAN,
+  local gates and all required board acceptance/restore gates PASS). Required
+  merge-base whole-branch review remains in progress.
+
+## Final whole-branch review at `d7615f9`
+
+- Review package: `review-27c30a6..d7615f9.diff` (26 commits, 48 files).
+- Independent final review SHA-256:
+  `42649f75bb3fa36fff3753f0e23998cfb272e93ba291454bf53c0922a27ef820`.
+- Verdict: not ready to merge; Critical 0, Important 6, Minor 2.
+- Important findings: WAL recovery mutates supplicant outside the transition
+  lock; FD9/FD7 child isolation omits lock acquisition, OPC, and FD9-only
+  writers; policy publication precedes the tombstone; boot extra-block
+  install/sync failures are masked; passive_roam advertises a Mode A
+  cross-SSID path rejected by the supported writer; SSID validation and
+  serialization are lossy/incomplete.
+- Minors: active-policy wording still calls the common `freq_list`
+  `scan_freq`; final ledger/board records are modified but not in nominated
+  HEAD. The known-command static inventory limitation remains acceptable, but
+  cannot excuse the concretely omitted supported writer graphs.
+- Ruling: In Mode A, keep manual cross-SSID selection unsupported in
+  `passive_roam`; read the immutable boot policy, suppress/reject extra-SSID
+  manual targets explicitly, and preserve same-SSID BSSID roam — this matches
+  the established automatic-Mode-A/manual-Mode-B product boundary without
+  adding a second external transition API — cost if wrong: operators lose a
+  manual Mode A cross-SSID action they may have expected, although the exposed
+  path was already deterministically rejected by `wifi connect`.
+- Ruling: Define the shared SSID contract as valid nonempty UTF-8 of 1..32
+  encoded bytes, preserving leading/trailing spaces and printable
+  backslash/quote bytes via byte-exact hex supplicant serialization; reject
+  C0/DEL controls, duplicates, and extra/base identity duplication at schema
+  where expressible and at every runtime boundary — cost if wrong: previously
+  schema-accepted control/duplicate values become invalid and generated
+  `ssid=` values are less human-readable, but accepted identities round-trip
+  exactly instead of silently changing.
+- Ruling: Preserve the already tracked SDD ledger/report by including their
+  final delta as an intentional, separate evidence-only commit inside the
+  single final-fix review range rather than deleting or silently omitting them
+  — the normal SDD cleanup rule assumes ignored scratch, but these two files
+  are already branch history and the reviewer treated them as binding input —
+  cost if wrong: the branch retains process/audit documentation maintainers may
+  prefer outside product history; separating the commit makes it removable.
+- Final review fix wave: one implementer, base `d7615f9`; no second fix wave.
+
+
+## 2026-08-23 — Task 10 final whole-branch fix wave (all review findings)
+
+- Fix base remained `d7615f9876f05554f74adc344997f50d9ad575cb`; binding review SHA-256 was `42649f75bb3fa36fff3753f0e23998cfb272e93ba291454bf53c0922a27ef820`.
+- Production/tests/operator-doc/schema commit: `a0ec07e` (`fix(wifi): close final roam policy review gaps`). The pre-commit hook's unrelated local driver-manifest regeneration was explicitly removed before the final commit.
+- TDD RED was witnessed before production edits:
+  - logger focused set: `39 failed, 203 passed` (`/tmp/task10-final-fix-red-logger.log`) — real WAL-lock contention/startup, Mode A manual CLI, SSID Python/parser/schema boundaries;
+  - snapshot owner-policy set: `18 failed, 12 passed` (`/tmp/task10-final-fix-red-scripts-policy.log`) — tombstone order/fault boundaries and SSID snapshot validation;
+  - init harness: `PASS=94 FAIL=33` (`/tmp/task10-final-fix-red-init.log`) — checked install boundaries, fail-closed boot topology, SSID generation;
+  - writer harness: `PASS=241 FAIL=14` (`/tmp/task10-final-fix-red-writers.log`) — FD inventories/orphan-child lock release and exact SSID writers;
+  - CTRL_IFACE/iw consumer supplement: `5 failed` (`/tmp/task10-final-fix-red-ssid-ctrl-consumers.log`).
+- Resolutions:
+  1. Pending selection recovery now detects unlocked, acquires the exact nonblocking per-interface transition lock, rechecks WAL/gate, and mutates only in the lock-held helper. Main contention defers one cycle; startup contention/failure exits with zero control mutation.
+  2. FD7 acquisition closes FD9 in its waiter; all supported `wifi connect`, OPC, and FD9-only writer child/substitution/transitive paths use close-first wrappers. Exact inventories and live-child SIGKILL probes prove ordered FD9/FD7 release.
+  3. Snapshot creation fully stages/validates policy, durably publishes the tombstone first, then policy; tombstone-only and policy-without-tombstone states fail closed and never reconstruct from changed live JSON.
+  4. One checked same-directory boot install primitive preserves metadata and requires staged sync, rename, installed-file sync, and directory sync for normalize/generate/remove paths. Every injected boundary propagates and `wifi_init` exits before affected supplicant continuation.
+  5. `passive_roam` uses immutable boot policy. Mode A filters/rejects manual cross-SSID and never starts `wifi connect`; same-SSID BSSID roam remains. Mode B manual cross-SSID remains integrated and supported.
+  6. Shared SSID contract is valid nonempty UTF-8, 1..32 encoded bytes, no C0/DEL, unique extras, and no boot base/extra identity duplicate. Spaces/quotes/backslashes are preserved and all supported writers/generators emit hexadecimal `ssid=`. Consumers decode exact CTRL_IFACE/iw identities; real upstream wpa_supplicant config parsing is exercised.
+  7. Active-policy terminology now says common/configured `freq_list`; `scan_freq` remains only in explicitly legacy fallback/removal contexts. This evidence is intentionally isolated to the two tracked SDD records.
+- Self-review caught and rejected an overbroad interpretation that would have prohibited a valid Mode B manual candidate after it became the live single-block base. New RED (`2 failed, 10 passed` plus four writer assertions) and GREEN (`12 passed`; full writer `259/0`) preserve Mode B while retaining boot snapshot base/extra duplicate rejection.
+- Final GREEN: logger `699 passed`; scripts pytest `190 passed`; init `127/0`; writer `259/0`; Bash/POSIX/Python/JSON static checks `FINAL_STATIC_OK`; defaults/schema `FINAL_DEFAULTS_SCHEMA_OK`; full `validate_release.sh pre` returned `0`; base and working diff checks passed.
+- Final concern: none. The writer harness cleanup poll was widened only as test scheduler margin; production watchdog timing and lock lifetime were not changed.

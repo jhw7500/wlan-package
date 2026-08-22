@@ -1,4 +1,4 @@
-# Task 10 implementation report (fix round 1 complete)
+# Task 10 implementation report (implementation and board acceptance complete)
 
 ## Scope and stop condition
 
@@ -220,6 +220,87 @@ rtk ./scripts/validate_release.sh pre
 rtk git diff --check 8eddd0973725156dfbfe340d1524ede1a66f96f5
 # exit 0
 ```
+
+Concerns: none.
+
+## Fix round 5: preserve substitution failure normalization
+
+Inherited HEAD: `ddc57bd11052a3f138f42d6de63aa58e4aca1aa1`.
+Implementation/test commit: `d7615f9876f05554f74adc344997f50d9ad575cb`
+(`fix(wlan): preserve child substitution cleanup`).
+
+### Root cause and RED
+
+The three private PID-file reads put `|| true` inside the command substitution.
+`wifi_wpa_child_exec` correctly closes FD7/FD9 and then `exec`s the reader, but
+that `exec` replaces the substitution shell before its internal OR-list can
+run. A missing PID file therefore returned the reader's failure to a `set -e`
+owner instead of the old empty-output/success normalization.
+
+The writer harness first extracted the real monitor cleanup function and ran
+its missing-PID-file path under `set -e`. It also added direct Bash and POSIX-sh
+checks for failure-to-empty/success normalization and successful stdout
+capture. Each held status, PID-poll, and install fixture now proves its chosen
+child remains live after the owner is SIGKILLed and reaped, immediately before
+the ordered FD9-then-FD7 probe.
+
+```sh
+rtk bash dist/wlan/usr/local/scripts/wifi_wpa_conf_writer_test.sh
+# exit 1 — RESULT: PASS=219 FAIL=1
+# sole failure: set -e missing-PID cleanup did not reach directory removal
+```
+
+### Implementation
+
+Failure normalization now sits in the owning shell for all three reads:
+`pid=$(wifi_wpa_child_exec cat ... 2>/dev/null) || true`. The reader still
+closes both descriptors before `exec`; missing files yield empty captured
+stdout with successful caller status; successful stdout is unchanged; and the
+transaction parent retains FD9/FD7 through its existing EXIT cleanup.
+
+The static inventory remains a reviewed exact inventory for the current known
+post-lock graph. It is intentionally not claimed to be a universal shell parser
+or proof against arbitrary future executable names.
+
+### GREEN and final validation
+
+```sh
+rtk bash dist/wlan/usr/local/scripts/wifi_wpa_conf_writer_test.sh
+# exit 0 — RESULT: PASS=220 FAIL=0
+
+rtk bash dist/wlan/usr/local/scripts/wifi_init_config_test.sh
+# exit 0 — PASS: 88 / FAIL: 0
+
+rtk bash -n dist/wlan/usr/local/scripts/wifi.sh \
+  dist/wlan/usr/local/scripts/opc_wlan_apply.sh \
+  dist/wlan/usr/local/scripts/wifi_init_config_lib.sh \
+  dist/wlan/usr/local/scripts/wifi_wpa_conf_writer_test.sh
+# exit 0 — syntax failures: 0
+
+rtk sh -n dist/wlan/usr/local/scripts/opc_wlan_apply.sh \
+  dist/wlan/usr/local/scripts/wifi_init_config_lib.sh
+# exit 0 — syntax failures: 0
+
+rtk python3 -m pytest dist/wlan/usr/local/logger/tests -q
+# exit 0 — 654 passed, 0 failed
+
+rtk python3 -m pytest dist/wlan/usr/local/scripts/tests -q
+# exit 0 — 169 passed, 0 failed
+
+rtk python3 scripts/gen_config_defaults.py --check
+# exit 0 — defaults mismatches: 0; one documented runtime handoff row allowlisted
+
+rtk ./scripts/validate_release.sh pre
+# exit 0 — embedded logger 654 passed, scripts 169 passed,
+# writer RESULT: PASS=220 FAIL=0; no validation failure
+
+rtk git diff --check ddc57bd11052a3f138f42d6de63aa58e4aca1aa1..HEAD
+# exit 0 — whitespace errors: 0
+```
+
+The pre-commit hook regenerated unrelated `DRIVER_MANIFEST.md`; it was restored
+byte-for-byte from inherited HEAD and excluded by a hooks-disabled amend. The
+final commit contains only `wifi.sh` and the writer regression harness.
 
 Concerns: none.
 
@@ -537,3 +618,189 @@ rtk git diff --check de31b503a3075457ed084ecc147e0ef2f67c7a1a
 
 Concerns: none.
 
+## Final board acceptance at `d7615f9`
+
+The final reviewed package was built from
+`d7615f9876f05554f74adc344997f50d9ad575cb` and installed as
+`wlan-proc 0.5.5` on `root@192.168.214.5`:
+
+- package: `wlan-d7615f9.deb`
+- package SHA-256:
+  `5ffd3cf8d8efc34136b3d416a4873d0e3450d0b47132596e13e94316e38ac9e0`
+- installed `wifi.sh`, `wifi_init_config_lib.sh`, `wifi_bgscan.py`,
+  `wifi_roam.py`, and `roam_state.py` were byte-identical to the source files
+  at that HEAD.
+
+The controlled fixtures were base `jhw_wlan_` at
+`00:80:4c:c7:7d:dd`/5180 and extra `jhw_wlan` at
+`58:86:94:d2:73:e8`/5200. `jhw_wlan__` at 5220 was excluded. RF capture was
+not enabled during the successful matrices: same-radio netmon on `mlan0`
+suppressed the active scan under test, and the approved constraints prohibit
+substituting `mlan1` or `net_rx`. The earlier same-radio capture failure
+artifacts remain in the evidence directory.
+
+### SIGKILL recovery: PASS 3/3
+
+`task10_sigkill_matrix_v3.sh` held the selected real poll child alive, killed
+only the transaction parent, and in every round proved that the child was
+still alive before and after the ordered lock probes. FD9 and then FD7 were
+immediately acquirable while the private monitor directory still existed.
+The watchdog subsequently removed the daemon/private files, and a fresh
+recovery produced a new matching `CONNECTED` event/status id, healthy ping,
+and no lock or monitor leak. Result: `CORE_FAILS=0`.
+
+### Mode B manual scan/connect concurrency: PASS 10/10
+
+`task10_modeb_matrix_v6_nocapture.sh` alternated both target SSIDs. Each round
+issued the exact manual passive scan, waited until it entered the scan path,
+then ran `wifi connect`. All ten rounds returned a causally fresh numeric event
+id matching status id, requested SSID/BSSID/frequency, exact scan-quiescence
+ordering, no monitor/WAL/lock leak, no rejected/timeout/temporary-disable
+errors, and a healthy ping. Result: `CORE_FAILS=0 PING_FAILS=0`.
+
+The preceding v5 test failure was a harness-only parser defect: a greedy
+`.*id=` matched the `id=` suffix inside `bssid=`. Tab-field parsing reproduced
+the actual event id and v6 passed without a production change.
+
+### Mode A external owner: PASS 5 round trips / 10 transitions
+
+`task10_modea_external_matrix_v4.sh` used bind-mounted RSSI injection only for
+`.link.signal` and `.link.signal_avg`, waited through the anti-ping-pong window,
+and alternated five complete round trips. Every transition proved the exact
+SSID/BSSID/frequency/network id and fresh event; all networks were enabled,
+temporary BSSID pins were cleared, the selection WAL was absent, both locks
+were free, no monitor leaked, and ping remained healthy. Result:
+`CORE_FAILS=0 PING_FAILS=0`.
+
+Three diagnostics were resolved in the test setup rather than hidden as
+product fixes:
+
+1. the boot-time supplicant runtime must contain the common `5180 5200` list;
+   `wifi freq` is intentionally persist-only and cannot retroactively widen a
+   running supplicant;
+2. a multichannel real scan correctly rejects a weaker target against the real
+   current-AP scan RSSI, so per-leg daemon-file narrowing was used to exercise
+   the injected-current-RSSI seam while retaining real candidate scans; and
+3. cleanup is asynchronous after the `CONNECTED` event, so the harness waits
+   for the exact enable/pin/WAL/lock postcondition instead of sampling it
+   prematurely.
+
+### Mode A native owner: PASS 1 real cross-SSID transition
+
+After installing a reboot-latched `roaming.enabled=false` Mode A policy, boot
+state proved `wifi_roam=inactive`, `wifi_bgscan=active`,
+`scan_backend=wpa_cli`, two enabled network blocks, one common global
+`freq_list=5180 5200`, and no `scan_freq`. The native harness established the
+base network, enabled the extra block with `no-connect`, then used only the
+supported manual `wpa_cli scan` request. One scan produced:
+
+```text
+SCAN_STARTED (line 37) -> SCAN_RESULTS (line 49)
+-> selected BSS 58:86:94:d2:73:e8 / jhw_wlan (line 93)
+```
+
+The subsequent fresh event and status both identified network id 1,
+`jhw_wlan`, `58:86:94:d2:73:e8`, and 5200. There were zero custom
+`SELECT_NETWORK`/`ROAM` control commands, zero rejected/timeout errors, no
+disabled networks or pins, no WAL/monitor/lock leak, and ping passed. Result:
+`CORE_OK=1`.
+
+### Exact board restoration: PASS
+
+The saved pre-test Mode B/external-owner files were restored with their
+original ownership and modes and verified both before and after the final
+reboot:
+
+- `/usr/local/etc/wifi_init_conf.json`:
+  `be46944c89e45f0b07a6a672f6a4a6fd23e8ef993a7d88a93ed5caab9219c2c9`,
+  `root:root 0644`
+- `/etc/wpa_supplicant/wpa_supplicant-mlan0.conf`:
+  `e1f9248ab43b159e69e7ffd5a7143ab797caeff7f3aa4216bcf706dc6708d758`,
+  `root:root 0600`
+
+Post-reboot policy was Mode B/external owner, `wpa_supplicant`, `wifi_roam`,
+and `wifi_bgscan` were active, capture was inactive, and mlan0 was
+`COMPLETED` on id 0 / `jhw_wlan_` / `00:80:4c:c7:7d:dd` / 5180. The injection
+drop-in, monitor directories, and selection WAL were absent; FD9 and FD7 were
+free; three gateway pings had 0% loss; package/version/source hashes matched.
+The assertion artifact ends with `FINAL_RESTORE_OK=1`.
+
+Raw evidence, harnesses, configs, and a verified 1,436-file checksum manifest
+are preserved under `/tmp/wlan-board-test-task10-eHAbw35A`.
+
+Board acceptance verdict: **PASS**. Task 10 implementation and target rollout
+criteria are complete; only the required whole-branch review remains.
+
+## Final whole-branch review and fix wave
+
+The independent merge-base review of `27c30a6..d7615f9` found no Critical
+issues, six Important issues, and two Minors; report SHA-256 is
+`42649f75bb3fa36fff3753f0e23998cfb272e93ba291454bf53c0922a27ef820`.
+The six required fixes are:
+
+1. serialize pending-selection WAL recovery under the exact transition lock;
+2. extend child-FD isolation to lock acquisition, OPC, and every FD9-only
+   supported writer;
+3. publish the boot tombstone durably before the policy snapshot;
+4. propagate boot normalize/extra-block atomic-install and sync failures and
+   fail closed;
+5. stop advertising the rejected Mode A manual cross-SSID path while retaining
+   same-SSID BSSID roam; and
+6. define and enforce one byte-exact 1..32-byte UTF-8 SSID contract.
+
+The terminology Minor will be corrected in the same wave. The final ledger and
+report delta will be retained in a separate evidence-only commit within the
+scoped re-review range. Per the SDD final-review rule, all findings go to one
+fix implementer and receive exactly one scoped re-review; there is no second
+fix wave.
+
+
+## Final whole-branch fix wave — implementation and verification (2026-08-23)
+
+### Scope and commits
+
+- Comparison base (unchanged): `d7615f9876f05554f74adc344997f50d9ad575cb`.
+- Reviewed finding document: `/tmp/task10-final-whole-branch-review.md`, SHA-256 `42649f75bb3fa36fff3753f0e23998cfb272e93ba291454bf53c0922a27ef820`.
+- Production/tests/operator docs/schema: `a0ec07e` (`fix(wifi): close final roam policy review gaps`).
+- This appendix and the matching progress appendix are deliberately staged only in the separate evidence-only commit. No ignored review packages, raw `/tmp` artifacts, target-board changes, merge, or push are included.
+
+### Deterministic RED evidence (before production edits)
+
+| Finding coverage | Witnessed RED | Artifact |
+|---|---:|---|
+| A recovery lock, E manual Mode A, F Python/parser/schema | `39 failed, 203 passed` | `/tmp/task10-final-fix-red-logger.log` |
+| C tombstone-first + failure boundaries, F snapshot validation | `18 failed, 12 passed` | `/tmp/task10-final-fix-red-scripts-policy.log` |
+| D checked boot installs + fail-closed init, F generated hex/identity | `PASS=94 FAIL=33` | `/tmp/task10-final-fix-red-init.log` |
+| B universal FD isolation, F wifi/OPC writers | `PASS=241 FAIL=14` | `/tmp/task10-final-fix-red-writers.log` |
+| F exact CTRL_IFACE/iw consumers | `5 failed` | `/tmp/task10-final-fix-red-ssid-ctrl-consumers.log` |
+
+The recovery tests held the real transition lock and observed the old implementation mutate during both normal-loop/startup scenarios. The FD tests kept the selected acquisition/OPC/FD9-only child alive across parent SIGKILL before ordered lock probes. Snapshot tests injected each stage/rename/sync boundary and deleted runtime policy state before mutating live JSON. Boot install tests injected staged sync, `mv`, installed sync, and directory sync across normalize/generate/remove variants. The manual test executed the real CLI boundary and checked that Mode A started no forbidden wifi child. SSID cases included UTF-8, leading/trailing spaces, quote/backslash, controls, duplicates, boot-base duplication, and 32/33 encoded-byte limits.
+
+### Per-finding resolution
+
+1. **WAL recovery lock:** `_pending_selection_cleanup_network_id()` is a mutation-free detector. `retry_pending_selection_cleanup()` acquires the exact nonblocking `scan_transition_lock`, rechecks under lock, and delegates all BSSID-clear/enable/reconfigure work to `_retry_pending_selection_cleanup_locked()`. The normal Mode A transition already holding the lock calls the lock-held cleanup graph and never nests acquisition. Busy main-loop recovery sleeps/defer one cycle; startup busy/error exits before any control request.
+2. **Universal FD isolation:** FD9-to-FD7 order is unchanged. The FD7 waiter closes FD9, and close-first exec/call wrappers cover the complete supported post-lock graph in `wifi connect`, OPC, and FD9-only `wifi freq/ssid/psk/key`. Background action/watchdog children close both descriptors structurally. Exact source inventories plus deterministic held-child SIGKILL tests prove the child remains alive while the dead parent no longer keeps either ordered lock.
+3. **Tombstone-first snapshot:** policy JSON is rendered, chmodded, synced, and validated before publication; the durable tombstone is atomically installed first; policy is atomically installed and synced second. Policy-without-tombstone is no longer repaired. Tombstone-without-policy fails closed until reboot, including deletion plus changed live-JSON retries.
+4. **Checked boot topology install:** normalization and every generated/removal branch share `wifi_wpa_conf_atomic_install()`: same directory, preserved owner/mode, required staged sync, rename, installed-file sync, and destination-directory sync. Every failure is propagated. `wifi_init.sh` treats missing/failing required normalization/topology primitives as fatal before supplicant continuation.
+5. **Mode A manual ruling:** `passive_roam` reads only the immutable boot snapshot. Mode A does not advertise cross-SSID entries and rejects a cross-SSID call before constructing/invoking `wifi connect`; same-SSID BSSID roam is retained. Mode B advertises and executes boot-latched manual candidates through the real CLI integration path.
+6. **Shared SSID contract:** schema expresses nonempty/control-free/unique/code-point bounds and documents the encoded-byte rule; snapshot, shell, writer, OPC, and Python boundaries enforce valid UTF-8, 1..32 encoded bytes, no C0/DEL, uniqueness, and no boot-base duplicate. Identities are never trimmed. Supported writers/generators use byte-exact lowercase hex `ssid=<UTF-8 hex>`. CTRL_IFACE/iw/AP-table consumers decode exact identities. Tests use the local upstream wpa_supplicant config parser rather than a substitute.
+7. **Minors:** active-policy messages/comments now use common/configured `freq_list`, reserving `scan_freq` for explicitly legacy fallback/removal/tests. The pre-existing controller final-review/board record was prefix-preserved byte-for-byte, then these two tracked records alone receive the final-fix evidence.
+
+### Self-review correction
+
+An interim defense rejected a Mode B writer target merely because it appeared in boot `extra_ssids`. That was overbroad: the contract rejects duplicate declarations between the *boot base* and extras, but explicitly supports a Mode B manual candidate replacing the live single block. Deterministic follow-up RED was `2 failed, 10 passed` for current-extra same-SSID behavior (`/tmp/task10-final-fix-red-modeb-current-extra.log`) plus four writer assertions (`/tmp/task10-final-fix-red-modeb-writer-extra.log`). The guard was removed, immutable snapshot validation retained, and GREEN became `12 passed` plus the complete writer `PASS=259 FAIL=0`.
+
+### Final GREEN and quality gates
+
+- logger pytest: `699 passed in 10.44s` — `/tmp/task10-final-fix-green-logger-final-complete.log`;
+- scripts pytest: `190 passed in 26.47s` — `/tmp/task10-final-fix-green-scripts-final-complete.log`;
+- init harness: `PASS=127 FAIL=0` — `/tmp/task10-final-fix-green-init-final-complete.log`;
+- writer harness: `RESULT: PASS=259 FAIL=0` — `/tmp/task10-final-fix-green-writers-contract-final.log`;
+- static Bash/POSIX/Python/JSON checks: `FINAL_STATIC_OK` — `/tmp/task10-final-fix-green-static-final.log`;
+- generated defaults/schema: `FINAL_DEFAULTS_SCHEMA_OK` (one pre-existing allowlisted runtime handoff) — `/tmp/task10-final-fix-green-defaults-schema-final.log`;
+- full `scripts/validate_release.sh pre`: exit `0`, including logger `699`, scripts `190`, init `127/0`, writer `259/0`, and remaining release harnesses — `/tmp/task10-final-fix-green-release-pre-final.log`;
+- `git diff --check d7615f9876f05554f74adc344997f50d9ad575cb..HEAD` and final working diff check passed.
+
+### Failure-boundary review and concerns
+
+All lock-owner child graphs, snapshot publication boundaries, boot installation branches, recovery startup/main-loop exits, Mode A/B routing, and SSID serialization/consumer boundaries were reviewed after GREEN. The only harness adjustment was a test-only cleanup polling margin (3s to 5s) for overloaded host scheduling; production watchdog semantics and lock duration are unchanged. Known required findings: none unresolved. Final concern: none.
