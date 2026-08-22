@@ -414,3 +414,126 @@ rtk git diff --check 0c56e229dc029c9e9685b0a1aeef398cab270f03
   topology, frequency, or default-interval change was introduced.
 
 Concerns: none.
+## Fix round 4: universal post-lock child FD isolation
+
+Binding finding SHA-256:
+`320bf36c0c38462d5dea6cd15d44f760ccaaaeed652074b8728a7799d1bb3305`.
+The scoped `0c56e22..de31b50` review correctly found that round 3 covered the
+association poll but not the full child graph reachable while FD9 and FD7 were
+held. Monitor construction/identity polling, topology inspection, explicit
+render/install, signal cleanup, and EXIT durability still spawned retaining
+children.
+
+### Deterministic RED
+
+The hardware-free writer harness was extended before production edits with
+two additional FIFO-held real child processes:
+
+- a private `wpa_cli.pid` `cat` during monitor setup/PID polling; and
+- the canonical writer's `install` after an explicit-connect monitor was
+  attached.
+
+Each fixture proves the selected child is live and the stubborn private monitor
+directory exists, SIGKILLs only the owning `wifi connect` shell, then requires
+nonblocking acquisition of FD9 followed by FD7 while that directory still
+exists. The existing held-status-child case remains unchanged. A narrow source
+inventory additionally rejects unwrapped external commands or an unreviewed
+change to the close-boundary inventory in the post-lock connect/helper slices.
+
+```sh
+rtk bash dist/wlan/usr/local/scripts/wifi_wpa_conf_writer_test.sh
+# exit 1; RESULT: PASS=211 FAIL=3
+# failures: held PID-poll child, held explicit-install child, static inventory
+```
+
+Both behavioral failures retained FD9/FD7 exactly as reported; the source
+inventory enumerated the remaining direct setup, identity, render/install,
+polling, cleanup, and EXIT children.
+
+### Implementation and complete child inventory
+
+`wifi_wpa_child_close` is the single descriptor-close primitive.
+`wifi_wpa_child_exec` closes and replaces a direct command-substitution shell;
+`wifi_wpa_run_child` gives ordinary external commands one close-and-exec child.
+For transitive shared helpers, `wifi_wpa_child_call` and
+`wifi_wpa_run_child_call` close before entering the helper, so all descendants
+inherit closed descriptors without changing unrelated direct helper callers.
+Stdout/stderr, argv/globbing, redirections, exit status, and substitution
+capture remain at their original call sites.
+
+The audited graph after both locks are acquired is:
+
+- abort quiescence: `wpa_cli` replies and bounded `sleep`;
+- topology protection: policy path/validation, JSON reads, sentinel `grep`, and
+  network-count `awk`, all beneath one closed helper boundary;
+- monitor setup and identity: `mkdir`, `mktemp`, both `chmod` calls, action-file
+  `cat`, `/proc` `cat`/`tr`, watchdog identity/poll `cat`/`sleep`, daemon
+  `wpa_cli`, PID-file polling, and setup cleanup `rm`;
+- explicit processing: byte-length/frequency substitutions, ENVIRON probe
+  `awk`, common-frequency resolver `awk`, both `mktemp` calls, canonical and
+  SSID render `awk`, and the atomic install helper's transitive
+  `mktemp`/`install`/`sync`/`rm`/`mv` operations;
+- association and teardown: evidence `cat`, status/reconfigure/reassociate/
+  reconnect `wpa_cli`, grace/final polling `sleep`, evidence/temp/monitor `rm`,
+  `/proc` identity checks, and EXIT `sync`.
+
+The watchdog closes FD7/FD9 as its first operation, the generated action also
+closes them before any child, and the persistent monitor is launched through
+the close-and-exec runner. The owning transaction shell alone retains both
+locks through EXIT cleanup.
+
+### Final GREEN validation
+
+```sh
+rtk bash dist/wlan/usr/local/scripts/wifi_wpa_conf_writer_test.sh
+# RESULT: PASS=214 FAIL=0
+
+rtk bash dist/wlan/usr/local/scripts/wifi_init_config_test.sh
+# PASS: 88 / FAIL: 0
+
+rtk bash -n dist/wlan/usr/local/scripts/wifi.sh \
+  dist/wlan/usr/local/scripts/opc_wlan_apply.sh \
+  dist/wlan/usr/local/scripts/wifi_init_config_lib.sh \
+  dist/wlan/usr/local/scripts/wifi_wpa_conf_writer_test.sh
+# exit 0
+
+rtk sh -n dist/wlan/usr/local/scripts/opc_wlan_apply.sh \
+  dist/wlan/usr/local/scripts/wifi_init_config_lib.sh
+# exit 0
+
+rtk python3 -m pytest dist/wlan/usr/local/logger/tests -q
+# 654 passed in 7.22s
+
+rtk python3 -m pytest dist/wlan/usr/local/scripts/tests -q
+# 169 passed in 16.84s
+
+rtk python3 scripts/gen_config_defaults.py --check
+# exit 0 (one documented runtime-generated handoff allowlist row)
+
+rtk ./scripts/validate_release.sh pre
+# exit 0; embedded logger 654 passed, scripts 169 passed,
+# writer RESULT: PASS=214 FAIL=0
+
+rtk git diff --check de31b503a3075457ed084ecc147e0ef2f67c7a1a
+# exit 0
+```
+
+### Self-review
+
+- Behavioral proof: **PASS** — status, monitor PID polling, and explicit
+  install are independently held across owner SIGKILL; ordered immediate lock
+  acquisition occurs before watchdog cleanup in all three cases.
+- Inventory completeness: **PASS** — the static gate covers the post-lock
+  connect slice, monitor/association helper cluster, and abort helper, while
+  transitive topology/render/install helpers enter only through closed
+  boundaries. Its exact inventory fails on silent additions.
+- Semantics: **PASS** — direct substitutions close in their own shell;
+  ordinary and transitive calls preserve output, error, status, arguments,
+  redirections, and file effects. Shared helpers themselves were not changed.
+- Contracts: **PASS** — FD9-to-FD7 order, full transaction lock lifetime,
+  abort policy, shared 15-second association budget, monitor/watchdog cleanup,
+  atomic writer durability/metadata, and all JSON/schema/owner/topology/
+  frequency/default behavior are unchanged.
+
+Concerns: none.
+

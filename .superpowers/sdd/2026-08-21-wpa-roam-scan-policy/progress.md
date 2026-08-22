@@ -202,3 +202,17 @@
   if wrong: an undocumented external helper that intentionally depended on
   private FDs 7 or 9 would lose that accidental channel, but supported command
   inputs, outputs, retry timing, and transaction lock scope remain unchanged.
+- Task 10 fix round 4: the scoped review found round 3 incomplete outside the
+  association poll. Deterministic held monitor-PID-poll and explicit-install
+  children plus the preserved held-status child were RED at writer
+  `PASS=211 FAIL=3`; universal close-first boundaries and a static exact child
+  inventory are GREEN at writer `PASS=214 FAIL=0`, init `88/0`, logger pytest
+  `654`, scripts pytest `169`, and syntax/defaults/release-pre/exact-base
+  diff-check exit 0.
+- Ruling: Require universal post-lock child FD isolation: direct substitutions
+  close in their own shell, ordinary external calls close-and-exec once, and
+  transitive helper calls cross a close-first boundary while the transaction
+  parent alone retains FD9/FD7 — cost if wrong: a hidden connect helper that
+  intentionally consumes private descriptors 7 or 9 would lose an unsupported
+  channel, whereas failing to isolate any child can strand both locks after
+  SIGKILL and block immediate recovery for that child's lifetime.

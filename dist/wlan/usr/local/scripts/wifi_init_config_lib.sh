@@ -244,19 +244,39 @@ wifi_wpa_conf_lock_acquire() {
     flock -x 9
 }
 
-# Replace the current child shell with an external command after closing both
-# live-operation descriptors.  Use this form directly inside command
-# substitutions so no intermediate substitution shell can retain the locks.
-wifi_wpa_child_exec() {
+# Close the connect transaction's private descriptors in the current child.
+# The owning transaction shell never calls this directly and remains the sole
+# lock owner until exit.
+wifi_wpa_child_close() {
     exec 7>&- 9>&-
+}
+
+# Replace the current child shell with an external command.  Direct command
+# substitutions use this form so no intermediate substitution shell retains
+# the locks.
+wifi_wpa_child_exec() {
+    wifi_wpa_child_close
     exec "$@"
 }
 
-# Normal (non-substitution) calls get exactly one child, which immediately
-# closes the descriptors and execs.  The transaction parent remains the sole
-# FD9/FD7 owner throughout.
+# A command substitution that must invoke a shell function closes immediately
+# in that substitution shell; every transitive external child therefore
+# inherits both descriptors closed while stdout and status remain unchanged.
+wifi_wpa_child_call() {
+    wifi_wpa_child_close
+    "$@"
+}
+
+# Normal external calls get exactly one close-and-exec child.
 wifi_wpa_run_child() (
     wifi_wpa_child_exec "$@"
+)
+
+# Normal calls into shared shell helpers get one close-first child.  The helper
+# may spawn multiple external commands, all of which inherit closed FDs, while
+# unrelated direct callers of those helpers retain their existing behavior.
+wifi_wpa_run_child_call() (
+    wifi_wpa_child_call "$@"
 )
 
 # Exact plain FAIL is the deployed "no active scan" result.  OK only accepts
