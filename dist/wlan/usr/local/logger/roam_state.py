@@ -20,11 +20,7 @@ def scan_transition_lock(iface, run_dir=None):
     advisory flock on normal exit, signals, and SIGKILL.
     """
     run_dir = run_dir or "/run/wifi"
-    try:
-        os.makedirs(run_dir, exist_ok=True)
-    except PermissionError:
-        run_dir = os.path.join("/tmp", "wifi")
-        os.makedirs(run_dir, exist_ok=True)
+    os.makedirs(run_dir, exist_ok=True)
     path = os.path.join(run_dir, f"{iface}.scan-transition.lock")
     fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
     acquired = False
