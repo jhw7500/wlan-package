@@ -429,14 +429,6 @@ wpa_cli_ok() {
     [ "$reply" = "OK" ]
 }
 
-wpa_cli_abort_scan_quiesce() {
-    local iface="$1" reply
-    if ! reply=$(wpa_cli -i "$iface" abort_scan 2>/dev/null); then
-        return 1
-    fi
-    [ "$reply" = "OK" ] || [ "$reply" = "FAIL" ]
-}
-
 # Return a live process's /proc start-time token.  Cleanup uses the token as
 # well as the numeric PID so a stale/reused pidfile can never target a new
 # process.  Field parsing starts after the final ") " to tolerate spaces in
@@ -2660,7 +2652,7 @@ case "$2" in
         || { echo "Error: failed to lock $CONF" >&2; exit 1; }
     wifi_scan_transition_lock_acquire "$IFACE" \
         || { echo "Error: failed to lock scan transition for $IFACE" >&2; exit 1; }
-    if ! wpa_cli_abort_scan_quiesce "$IFACE"; then
+    if ! wifi_wpa_abort_scan_quiesce "$IFACE"; then
         echo "Error: cannot quiesce scan for $IFACE" >&2; exit 7
     fi
     # Every no-argument reconnect captures its current id, including Mode B.

@@ -178,3 +178,15 @@
   three-second deadline; ten consecutive writer runs each passed `169/0`,
   scripts pytest passed `169`, and release-pre passed with embedded writer
   `169/0`. Production code is unchanged.
+- Task 10 fix round 2 board finding: direct scan-to-connect failed 10/10 after
+  first `ABORT_SCAN=OK`; the successful control path immediately issued a
+  second abort, received exact plain `FAIL`, and then connected. Writer RED was
+  `PASS=167 FAIL=34`. Shared bounded quiescence polling for wifi and OPC is now
+  GREEN at writer `PASS=201 FAIL=0`, init `88/0`, logger pytest `654`, scripts
+  pytest `169`, syntax/defaults/release-pre/range diff-check exit 0.
+- Ruling: Treat exact `ABORT_SCAN=OK` only as an accepted request and require a
+  bounded retry to exact plain `FAIL` before mutation; use five fixed attempts
+  50 ms apart for wifi and OPC — board evidence proves the immediate second
+  abort returns `FAIL` and restores connect success — cost if wrong: on a
+  slower target the writer fails closed after about 200 ms instead of applying,
+  requiring operator retry while never racing mutation into an active scan.

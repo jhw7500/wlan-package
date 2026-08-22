@@ -222,3 +222,94 @@ rtk git diff --check 8eddd0973725156dfbfe340d1524ede1a66f96f5
 ```
 
 Concerns: none.
+
+## Fix round 2: prove abort quiescence
+
+Board finding SHA-256:
+`6b3936fbaf68dfc820dca2c266145f5f5a2d2509d0932cd24ad5d6adf5ff8e71`.
+Evidence directory: `/tmp/wlan-board-test-task10-eHAbw35A`.
+
+The direct required scan-to-connect sequence failed 10/10 because the first
+exact `ABORT_SCAN=OK` only acknowledged the abort request; teardown had not
+yet become quiescent before `RECONFIGURE`, and both AP attempts ended in
+`ASSOC_TIMED_OUT`. The board's successful control path issued another
+`ABORT_SCAN` immediately: the second reply was exact plain `FAIL`, proving
+that no scan remained, and the ordinary connect then succeeded without an
+added pre-connect delay.
+
+### Witnessed RED
+
+Writer coverage was added before the production change for wifi and OPC:
+`OK` then `FAIL` success, repeated-`OK` exhaustion, and invalid later empty,
+unexpected, or nonzero-transport replies. Every fail-closed path checks the
+configuration byte-for-byte and forbids live association/reconfigure calls.
+
+```sh
+rtk bash dist/wlan/usr/local/scripts/wifi_wpa_conf_writer_test.sh
+# exit 1; RESULT: PASS=167 FAIL=34
+```
+
+The old one-shot implementation stopped after the first `OK`: the two
+`OK`-then-`FAIL` cases made only one call, while every exhaustion/later-invalid
+case mutated configuration and issued a live command.
+
+### Implementation
+
+- `wifi_wpa_abort_scan_quiesce()` is now shared by wifi and OPC in
+  `wifi_init_config_lib.sh`.
+- Exact plain `FAIL` remains a one-call no-active-scan success. Exact `OK`
+  means only that the abort was accepted, so the helper retries up to five
+  total calls with a fixed 50 ms interval until exact plain `FAIL` proves
+  quiescence.
+- Transport/nonzero, empty, unexpected reply, sleep failure, or five accepted
+  replies without plain `FAIL` fail closed before configuration mutation,
+  transaction install, or a live association command.
+- The bound is fixed production policy (at most 200 ms of sleeps), not a
+  schema/runtime knob and not part of or a reset of the existing 15-second
+  association proof budget. FD9 then FD7 ordering is unchanged.
+
+### GREEN validation
+
+```sh
+rtk bash dist/wlan/usr/local/scripts/wifi_wpa_conf_writer_test.sh
+# RESULT: PASS=201 FAIL=0
+
+rtk bash dist/wlan/usr/local/scripts/wifi_init_config_test.sh
+# PASS: 88 / FAIL: 0
+
+rtk bash -n dist/wlan/usr/local/scripts/wifi.sh \
+  dist/wlan/usr/local/scripts/opc_wlan_apply.sh \
+  dist/wlan/usr/local/scripts/wifi_init_config_lib.sh \
+  dist/wlan/usr/local/scripts/wifi_wpa_conf_writer_test.sh
+# exit 0
+
+rtk python3 -m pytest dist/wlan/usr/local/logger/tests -q
+# 654 passed in 7.25s
+
+rtk python3 -m pytest dist/wlan/usr/local/scripts/tests -q
+# 169 passed in 17.20s
+
+rtk python3 scripts/gen_config_defaults.py --check
+# exit 0 (one documented runtime-generated handoff allowlist row)
+
+rtk ./scripts/validate_release.sh pre
+# exit 0; embedded logger 654 passed, scripts 169 passed,
+# writer RESULT: PASS=201 FAIL=0
+
+rtk git diff --check f46865d4892eb28facc77ed6406d89afee245a58
+# exit 0
+```
+
+### Self-review
+
+- Reply contract: **PASS** — only exact plain `FAIL` establishes quiescence;
+  `OK` retries, and every other outcome fails closed.
+- Pre-mutation safety: **PASS** — wifi and OPC byte-exact tests cover every
+  later failure and prove no reconfigure/reassociate/reconnect escapes.
+- Bounds/budgets: **PASS** — five fixed attempts and four 50 ms sleeps are
+  independent of the unchanged `TOTAL_POLLS` association budget.
+- Locking/scope: **PASS** — shared helper runs after existing FD9-to-FD7 lock
+  acquisition; no JSON, schema, owner, topology, frequency, interval, or
+  production-test-seam change was introduced.
+
+Concerns: none.
