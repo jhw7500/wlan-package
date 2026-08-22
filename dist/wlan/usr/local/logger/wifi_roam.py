@@ -20,6 +20,7 @@ from roam_state import (
     lease_active,
     process_start_time,
     roam_state_paths,
+    scan_transition_lock,
     write_flag,
 )
 from roam_policy import RoamPolicyError, load_boot_roam_policy
@@ -1043,7 +1044,11 @@ def iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
       전부 생략하고 beacon만 수신 — 홈채널 후보 저부하 수집 및 baseline 통일용.
     include_wildcard=False: 와일드카드("") broadcast probe를 빼고 directed probe만 —
       액티브 폴백을 conf의 설정 SSID로만 좁힐 때(사용자 요구: scan_freq+ssid만) 사용."""
-    return _iw_scan_to_ap_lines(ssids, freqs, passive, include_wildcard)
+    with scan_transition_lock(IFACE) as acquired:
+        if not acquired:
+            logger.message("info", f"[{IFACE}] scan-transition busy; defer roam scan", _EXTRA_())
+            return None
+        return _iw_scan_to_ap_lines(ssids, freqs, passive, include_wildcard)
 
 
 def _iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
@@ -1791,6 +1796,14 @@ def roam_to_bssid(from_bssid, to_bssid, channel=None, freq=None, rssi=None):
             )
             return False
 
+    with scan_transition_lock(IFACE) as acquired:
+        if not acquired:
+            logger.message("info", f"[{IFACE}] scan-transition busy; defer roam", _EXTRA_())
+            return None
+        return _roam_to_bssid_locked(from_bssid, to_bssid, channel, freq, rssi)
+
+
+def _roam_to_bssid_locked(from_bssid, to_bssid, channel=None, freq=None, rssi=None):
     logger.message("emerg", f"[{IFACE}] Roaming: {from_bssid} → {to_bssid}", _EXTRA_())
 
     try:
@@ -2372,7 +2385,11 @@ def route_cross_ssid_transition(iface, to_ssid, from_bssid, to_bssid):
             return None
 
     if GENERATE_NETWORK_BLOCKS:
-        ok = select_network_for_ssid(iface, to_ssid, to_bssid)
+        with scan_transition_lock(iface) as acquired:
+            if not acquired:
+                logger.message("info", f"[{iface}] scan-transition busy; defer cross-SSID roam", _EXTRA_())
+                return None
+            ok = select_network_for_ssid(iface, to_ssid, to_bssid)
     else:
         # 모드 B: connect_to_ssid가 내부에서 자체 check+add_roam 수행(기존 동작 유지)
         ok = connect_to_ssid(iface, to_ssid, from_bssid, to_bssid)

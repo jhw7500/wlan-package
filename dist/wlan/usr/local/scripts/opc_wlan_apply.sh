@@ -64,6 +64,8 @@ WIFI_RUN_DIR="${WIFI_RUN_DIR:-/run/wifi}"
 [ -f "$CONF" ] || { echo "opc_wlan_apply: conf not found: $CONF" >&2; exit 4; }
 wifi_wpa_conf_lock_acquire "$IFACE" \
     || { echo "opc_wlan_apply: failed to lock $CONF" >&2; exit 4; }
+wifi_scan_transition_lock_acquire "$IFACE" \
+    || { echo "opc_wlan_apply: failed to lock scan transition for $IFACE" >&2; exit 4; }
 
 # boot snapshot Mode A 또는 실제 다중블록 conf는 SSID 일괄교체가 기본 SSID를
 # 소실시키므로 거부한다(exit 2=usage). freq 변경은 물리 대역 공통이라 허용한다.
@@ -78,6 +80,12 @@ wcli() { wpa_cli -i "$IFACE" "$@"; }
 
 # ctrl interface 가용 확인 (wpa_supplicant 미동작이면 reconfigure 불가 → 3).
 wcli ping >/dev/null 2>&1 || { echo "opc_wlan_apply: wpa_cli ctrl unavailable for $IFACE" >&2; exit 3; }
+ABORT_REPLY=$(wcli abort_scan 2>/dev/null)
+ABORT_RC=$?
+if [ "$ABORT_RC" -ne 0 ] || { [ "$ABORT_REPLY" != "OK" ] && [ "$ABORT_REPLY" != "FAIL" ]; }; then
+    echo "opc_wlan_apply: cannot quiesce scan for $IFACE" >&2
+    exit 5
+fi
 
 # --- conf 직접 편집 (atomic: 같은 fs 임시파일 → chmod → rename, 원본은 롤백용 백업) -
 # ssid → 중간파일에서 network 블록의 ssid= 치환(없으면 블록 끝에 추가).

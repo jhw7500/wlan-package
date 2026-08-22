@@ -11,7 +11,7 @@ import signal
 import threading
 from datetime import datetime
 from sUTILS import Logger, _EXTRA_
-from roam_state import lease_active, process_start_time, roam_state_paths
+from roam_state import lease_active, process_start_time, roam_state_paths, scan_transition_lock
 from roam_policy import (
     RoamPolicyError,
     load_boot_roam_policy,
@@ -493,12 +493,16 @@ def periodic_scan(conf_path, backend, boot_policy):
                 logger.message("err", f"[{IFACE}] bgscan config reload failed (keep last): {e}", _EXTRA_())
 
             if cmd:
-                logger.message("info", f"[{IFACE}] {cmd}", _EXTRA_())
-                if run_scan_command(cmd, backend):
-                    # 스캔 성공(드라이버에 새 BSS 결과 적재) → roam backoff 해제 신호 touch.
-                    # roam이 mtime 변화를 보면 후보없음 streak=0 으로 고속 복귀(spec §4 reset-b).
-                    if emit_roam_hint:
-                        emit_roam_hint_touch(IFACE)
+                with scan_transition_lock(IFACE) as acquired:
+                    if acquired:
+                        logger.message("info", f"[{IFACE}] {cmd}", _EXTRA_())
+                        if run_scan_command(cmd, backend):
+                            # 스캔 성공(드라이버에 새 BSS 결과 적재) → roam backoff 해제 신호 touch.
+                            # roam이 mtime 변화를 보면 후보없음 streak=0 으로 고속 복귀(spec §4 reset-b).
+                            if emit_roam_hint:
+                                emit_roam_hint_touch(IFACE)
+                    else:
+                        logger.message("info", f"[{IFACE}] scan-transition busy; defer bgscan", _EXTRA_())
             # 성공/실패 무관하게 다음 주기까지 back off (실패 시 1s 폭주 재시도 방지)
             last_time = time.time()
 

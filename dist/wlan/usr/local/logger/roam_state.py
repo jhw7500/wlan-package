@@ -1,6 +1,8 @@
 """wifi_roam writer와 wifi_bgscan reader가 공유하는 iface별 PID lease."""
 
 import os
+import fcntl
+from contextlib import contextmanager
 
 
 def roam_state_paths(iface):
@@ -8,6 +10,36 @@ def roam_state_paths(iface):
         f"/run/wifi/roam_condition_{iface}",
         f"/run/wifi/last_roam_scan_{iface}",
     )
+
+
+@contextmanager
+def scan_transition_lock(iface, run_dir=None):
+    """Nonblocking per-interface live scan/association serialization lock.
+
+    The lock path deliberately survives owners; kernel FD lifetime releases the
+    advisory flock on normal exit, signals, and SIGKILL.
+    """
+    run_dir = run_dir or "/run/wifi"
+    try:
+        os.makedirs(run_dir, exist_ok=True)
+    except PermissionError:
+        # Unprivileged host-side tests do not own /run; deployed service does.
+        run_dir = os.path.join("/tmp", "wifi")
+        os.makedirs(run_dir, exist_ok=True)
+    path = os.path.join(run_dir, f"{iface}.scan-transition.lock")
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    acquired = False
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquired = True
+        except BlockingIOError:
+            pass
+        yield acquired
+    finally:
+        if acquired:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 def process_start_time(pid):

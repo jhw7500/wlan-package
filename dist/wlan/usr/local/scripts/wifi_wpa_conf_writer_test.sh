@@ -102,6 +102,11 @@ cat > "$BIN/systemctl" <<'EOF'
 #!/bin/sh
 exit 0
 EOF
+cat > "$BIN/flock" <<'EOF'
+#!/bin/sh
+printf 'flock %s\n' "$*" >> "$CALL_LOG"
+exec /usr/bin/flock "$@"
+EOF
 cat > "$BIN/wpa_cli" <<'EOF'
 #!/bin/sh
 printf 'wpa_cli %s\n' "$*" >> "$CALL_LOG"
@@ -141,6 +146,16 @@ case " $* " in
 esac
 
 case "$*" in
+  *" abort_scan"*)
+    mode=$(cat "$STATE_DIR/abort-scan-mode" 2>/dev/null || echo ok)
+    case "$mode" in
+      ok) printf 'OK\n' ;;
+      plain-fail) printf 'FAIL\n' ;;
+      empty) : ;;
+      other) printf 'BUSY\n' ;;
+      rc-ok) printf 'OK\n'; exit 9 ;;
+    esac
+    ;;
   *" status"*)
     count=$(cat "$STATE_DIR/status-count" 2>/dev/null || echo 0)
     count=$((count + 1))
@@ -167,6 +182,10 @@ case "$*" in
         [ "$count" -eq 1 ] || state=DISCONNECTED ;;
       no-current)
         if [ "$count" -eq 1 ]; then state=DISCONNECTED; ssid=; id=; freq=; fi ;;
+      no-current-recover)
+        if [ "$count" -eq 1 ]; then state=DISCONNECTED; ssid=; id=; freq=;
+        else ssid=Base; id=0; freq=5180; fi ;;
+      target) ssid=NewNet; id=0; freq=5180 ;;
     esac
     cat <<EOT
 wpa_state=$state
@@ -186,6 +205,12 @@ EOT
     elif [ "$mode" = "fail-first" ] && [ "$count" -eq 1 ]; then
       printf 'FAIL\n'
     else
+      action=$(cat "$STATE_DIR/monitor-action" 2>/dev/null || true)
+      monitor_mode=$(cat "$STATE_DIR/monitor-mode" 2>/dev/null || echo off)
+      if [ "$monitor_mode" = "reconfigure-event" ] \
+         && [ -n "$action" ] && [ -x "$action" ]; then
+        WPA_ID=$(cat "$STATE_DIR/event-id" 2>/dev/null || echo 0) "$action" mlan0 CONNECTED
+      fi
       printf 'OK\n'
     fi
     ;;
@@ -207,6 +232,7 @@ EOT
     if [ -n "$action" ] && [ -x "$action" ]; then
       case "$mode" in
         matching) WPA_ID=1 "$action" mlan0 CONNECTED ;;
+        matching-zero) WPA_ID=0 "$action" mlan0 CONNECTED ;;
         wrong-id) WPA_ID=0 "$action" mlan0 CONNECTED ;;
       esac
     fi
@@ -286,6 +312,52 @@ set_monitor_mode() {
           "$STATE_DIR/last-monitor-pidfile" "$STATE_DIR/last-monitor-dir"
 }
 
+set_abort_scan_mode() {
+    printf '%s\n' "$1" > "$STATE_DIR/abort-scan-mode"
+}
+
+hold_scan_transition_lock() {
+    local lock="$RUN_DIR/mlan0.scan-transition.lock" ready="$TD/scan-lock-ready"
+    rm -f "$ready"
+    python3 - "$lock" "$ready" <<'PY' &
+import fcntl
+import signal
+import sys
+
+fd = open(sys.argv[1], "a+")
+fcntl.flock(fd.fileno(), fcntl.LOCK_EX)
+open(sys.argv[2], "w").close()
+signal.pause()
+PY
+    SCAN_LOCK_HOLDER=$!
+    for _wait in $(seq 1 50); do
+        [ -f "$ready" ] && return 0
+        sleep 0.02
+    done
+    return 1
+}
+
+release_scan_transition_lock() {
+    [ -z "${SCAN_LOCK_HOLDER:-}" ] || kill -TERM "$SCAN_LOCK_HOLDER" 2>/dev/null || true
+    [ -z "${SCAN_LOCK_HOLDER:-}" ] || wait "$SCAN_LOCK_HOLDER" 2>/dev/null || true
+    SCAN_LOCK_HOLDER=""
+}
+
+check_scan_transition_lock_available() {
+    local desc="$1" lock="$RUN_DIR/mlan0.scan-transition.lock" _try
+    # The parent has already been reaped.  Permit only a tiny scheduler handoff
+    # for a just-daemonized monitor child; this probe is still before watchdog
+    # cleanup and catches inherited FD7 locks.
+    for _try in $(seq 1 10); do
+        if ( exec 7>"$lock" && flock -n 7 ); then
+            pass "$desc"
+            return
+        fi
+        sleep 0.01
+    done
+    fail "$desc"
+}
+
 monitor_process_running() {
     local pid="$1" state
     kill -0 "$pid" 2>/dev/null || return 1
@@ -321,6 +393,17 @@ check_monitor_attached_before_request() {
         pass "$desc"
     else
         fail "$desc (attach=${attach:-missing} request=${request:-missing})"
+    fi
+}
+
+check_monitor_attached_before_reconfigure() {
+    local desc="$1" attach request
+    attach=$(grep -n ' -a .* -B -P ' "$CALL_LOG" | head -1 | cut -d: -f1)
+    request=$(grep -n 'reconfigure$' "$CALL_LOG" | head -1 | cut -d: -f1)
+    if [ -n "$attach" ] && [ -n "$request" ] && [ "$attach" -lt "$request" ]; then
+        pass "$desc"
+    else
+        fail "$desc (attach=${attach:-missing} reconfigure=${request:-missing})"
     fi
 }
 
@@ -430,6 +513,7 @@ echo "=== wifi connect target-aware writer ==="
 set_boot_policy false false
 write_mode_b_legacy
 set_status_mode stale-then-target
+set_monitor_mode matching-zero
 : > "$CALL_LOG"
 WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
     bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1
@@ -475,12 +559,14 @@ set_reconfigure_mode ok
 
 write_mode_b_legacy
 set_status_mode wrong-ssid
+set_monitor_mode reconfigure-event
 WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
     bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1
 check_equal "wifi connect rejects COMPLETED on wrong SSID" "$?" "8"
 
 write_mode_b_legacy
 set_status_mode wrong-freq
+set_monitor_mode reconfigure-event
 WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
     bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1
 check_equal "wifi connect rejects requested SSID on wrong frequency" "$?" "8"
@@ -597,6 +683,7 @@ wait "$_wifi_pid" 2>/dev/null
 rc=$?
 if [ "$rc" -ne 0 ]; then pass "Mode A TERM exits nonzero"; else fail "Mode A TERM must exit nonzero"; fi
 check_monitor_cleaned "Mode A TERM removes monitor resources"
+check_scan_transition_lock_available "Mode A TERM leaves scan-transition lock immediately acquirable"
 
 write_mode_a_legacy
 set_status_mode mode-a-wait
@@ -616,6 +703,7 @@ else
 fi
 kill -KILL "$_wifi_pid" 2>/dev/null || true
 wait "$_wifi_pid" 2>/dev/null || true
+check_scan_transition_lock_available "Mode A SIGKILL leaves scan-transition lock immediately acquirable"
 check_monitor_cleaned "Mode A watchdog bounds SIGKILL orphan"
 
 write_mode_b_legacy
@@ -635,6 +723,7 @@ set_assoc_mode ok
 write_mode_a_legacy
 set_boot_policy true true '["Office"]'
 set_status_mode no-current
+set_monitor_mode matching-zero
 : > "$CALL_LOG"
 WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
     bash "$WIFI_SH" 0 connect >/dev/null 2>&1
@@ -878,6 +967,184 @@ rc=$?
 after=$(sha256sum "$CONF" | awk '{print $1}')
 check_equal "OPC rejects Mode A with empty extra list" "$rc" "2"
 check_equal "OPC empty-extra rejection leaves conf unchanged" "$after" "$before"
+
+echo ""
+echo "=== scan-transition serialization and fresh association proof ==="
+
+# Production owns a 15-second bounded wait; the explicit zero override below is
+# test-only so held-lock cases remain deterministic and fast.
+write_mode_a_legacy
+set_boot_policy true true '["Office"]'
+set_abort_scan_mode plain-fail
+set_status_mode mode-a-steady
+set_monitor_mode matching
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 connect >/dev/null 2>&1
+rc=$?
+check_equal "wifi connect retains the production association budget" "$rc" "0"
+_conf_lock_line=$(grep -nE '^flock .*(^| )9$' "$CALL_LOG" | head -1 | cut -d: -f1)
+_transition_lock_line=$(grep -nE '^flock -w 15 .* 7$' "$CALL_LOG" | head -1 | cut -d: -f1)
+if [ -n "$_conf_lock_line" ] && [ -n "$_transition_lock_line" ] \
+   && [ "$_conf_lock_line" -lt "$_transition_lock_line" ]; then
+    pass "wifi connect acquires conf lock before 15-second scan-transition lock"
+else
+    fail "wifi connect must acquire FD9 then bounded FD7 lock (conf=${_conf_lock_line:-missing} transition=${_transition_lock_line:-missing})"
+fi
+check_equal "wifi connect accepts deployed plain FAIL ABORT_SCAN reply" \
+    "$(grep -c 'abort_scan$' "$CALL_LOG" || true)" "1"
+
+for _abort_mode in ok plain-fail; do
+    write_mode_b_legacy
+    set_boot_policy false false
+    set_abort_scan_mode "$_abort_mode"
+    set_status_mode target
+    set_monitor_mode reconfigure-event
+    : > "$CALL_LOG"
+    WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" ASSOC_TIMEOUT_DEFAULT=2 \
+        bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1
+    rc=$?
+    check_equal "explicit Mode B accepts $_abort_mode ABORT_SCAN" "$rc" "0"
+    check_equal "explicit Mode B sends one $_abort_mode ABORT_SCAN" \
+        "$(grep -c 'abort_scan$' "$CALL_LOG" || true)" "1"
+    check_monitor_attached_before_reconfigure \
+        "explicit Mode B attaches fresh-event monitor before reconfigure ($_abort_mode)"
+    check_equal "fresh reconfigure proof avoids redundant reassociate ($_abort_mode)" \
+        "$(grep -Ec 'reassociate$|reconnect$' "$CALL_LOG" || true)" "0"
+done
+
+for _abort_mode in empty other rc-ok; do
+    write_mode_b_legacy
+    set_boot_policy false false
+    set_abort_scan_mode "$_abort_mode"
+    cp "$CONF" "$TD/wifi-abort-${_abort_mode}.conf"
+    : > "$CALL_LOG"
+    WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+        bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1
+    rc=$?
+    if [ "$rc" -ne 0 ]; then pass "wifi rejects $_abort_mode ABORT_SCAN before mutation"; else fail "wifi must reject $_abort_mode ABORT_SCAN before mutation"; fi
+    if cmp -s "$CONF" "$TD/wifi-abort-${_abort_mode}.conf"; then
+        pass "wifi $_abort_mode ABORT_SCAN rejection leaves conf byte-exact"
+    else
+        fail "wifi $_abort_mode ABORT_SCAN rejection must leave conf byte-exact"
+    fi
+    check_equal "wifi $_abort_mode rejection sends no association request" \
+        "$(grep -Ec 'reconfigure$|reassociate$|reconnect$' "$CALL_LOG" || true)" "0"
+done
+
+write_mode_b_legacy
+set_boot_policy false false
+set_abort_scan_mode other
+cp "$CONF" "$TD/opc-abort-other.conf"
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
+    sh "$OPC_SH" mlan0 freq "5180 5200" >/dev/null 2>&1
+rc=$?
+if [ "$rc" -ne 0 ]; then pass "OPC rejects invalid ABORT_SCAN before transaction"; else fail "OPC must reject invalid ABORT_SCAN before transaction"; fi
+if cmp -s "$CONF" "$TD/opc-abort-other.conf"; then
+    pass "OPC abort rejection leaves conf byte-exact"
+else
+    fail "OPC abort rejection must leave conf byte-exact"
+fi
+check_equal "OPC abort rejection sends no reconfigure" \
+    "$(grep -c 'reconfigure$' "$CALL_LOG" || true)" "0"
+
+write_mode_b_legacy
+set_boot_policy false false
+set_abort_scan_mode ok
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
+    sh "$OPC_SH" mlan0 freq "5180 5200" >/dev/null 2>&1
+check_equal "OPC accepts OK ABORT_SCAN" "$?" "0"
+check_equal "OPC sends ABORT_SCAN after locks" "$(grep -c 'abort_scan$' "$CALL_LOG" || true)" "1"
+
+# Held scan-transition lock: both writers fail before touching the conf or
+# issuing ABORT_SCAN/reconfigure/reassociate.  The explicit timeout override
+# keeps this RED test independent of the production 15-second bound.
+write_mode_b_legacy
+set_boot_policy false false
+set_abort_scan_mode ok
+cp "$CONF" "$TD/wifi-held-transition.conf"
+hold_scan_transition_lock || fail "test fixture acquires held scan-transition lock"
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" WIFI_SCAN_TRANSITION_LOCK_TIMEOUT=0 \
+    bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1
+rc=$?
+release_scan_transition_lock
+if [ "$rc" -ne 0 ]; then pass "wifi held scan-transition lock fails closed"; else fail "wifi must fail closed on held scan-transition lock"; fi
+if cmp -s "$CONF" "$TD/wifi-held-transition.conf"; then pass "wifi held transition lock leaves conf byte-exact"; else fail "wifi held transition lock must preserve conf"; fi
+check_equal "wifi held transition lock sends no live ctrl request" \
+    "$(grep -Ec 'abort_scan$|reconfigure$|reassociate$|reconnect$' "$CALL_LOG" || true)" "0"
+
+write_mode_b_legacy
+set_boot_policy false false
+cp "$CONF" "$TD/opc-held-transition.conf"
+hold_scan_transition_lock || fail "OPC test fixture acquires held scan-transition lock"
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" WIFI_SCAN_TRANSITION_LOCK_TIMEOUT=0 \
+    sh "$OPC_SH" mlan0 freq "5180 5200" >/dev/null 2>&1
+rc=$?
+release_scan_transition_lock
+if [ "$rc" -ne 0 ]; then pass "OPC held scan-transition lock fails closed"; else fail "OPC must fail closed on held scan-transition lock"; fi
+if cmp -s "$CONF" "$TD/opc-held-transition.conf"; then pass "OPC held transition lock leaves conf byte-exact"; else fail "OPC held transition lock must preserve conf"; fi
+check_equal "OPC held transition lock sends no live ctrl request" \
+    "$(grep -Ec 'abort_scan$|reconfigure$|reassociate$|reconnect$' "$CALL_LOG" || true)" "0"
+
+# Mode B and disconnected Mode A now use the same fresh-event transaction as
+# capture-id Mode A; a stale COMPLETED snapshot alone must never prove success.
+write_mode_b_legacy
+set_boot_policy false false
+set_abort_scan_mode plain-fail
+set_status_mode base
+set_monitor_mode stale
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 connect >/dev/null 2>&1
+check_equal "Mode B no-arg reconnect rejects stale COMPLETED without fresh event" "$?" "8"
+
+write_mode_b_legacy
+set_status_mode base
+set_monitor_mode matching-zero
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 connect >/dev/null 2>&1
+check_equal "Mode B no-arg reconnect accepts fresh matching event and status" "$?" "0"
+check_monitor_attached_before_request "Mode B fresh proof attaches monitor before reassociate"
+check_monitor_cleaned "Mode B fresh proof cleans private monitor"
+
+write_mode_a_legacy
+set_boot_policy true true '["Office"]'
+set_status_mode no-current
+set_monitor_mode stale
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 connect >/dev/null 2>&1
+check_equal "Mode A disconnected recovery rejects stale/no-event COMPLETED" "$?" "8"
+
+write_mode_a_legacy
+set_status_mode no-current-recover
+set_monitor_mode matching-zero
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 connect >/dev/null 2>&1
+check_equal "Mode A disconnected recovery accepts fresh event id and later matching status" "$?" "0"
+check_monitor_attached_before_request "Mode A disconnected recovery attaches monitor before reassociate"
+
+# If RECONFIGURE has no fresh proof, the monitor must be re-armed and exactly
+# one owner-neutral reassociation uses the remainder of the original budget.
+write_mode_b_legacy
+set_boot_policy false false
+set_abort_scan_mode ok
+set_status_mode target
+set_monitor_mode matching-zero
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" ASSOC_TIMEOUT_DEFAULT=2 \
+    bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1
+check_equal "explicit Mode B fallback reassociation succeeds with fresh proof" "$?" "0"
+check_equal "explicit Mode B fallback issues exactly one reassociate" \
+    "$(grep -c 'reassociate$' "$CALL_LOG" || true)" "1"
+
+check_scan_transition_lock_available "normal writer exit leaves scan-transition lock acquirable"
 
 echo ""
 echo "RESULT: PASS=$PASS FAIL=$FAIL"
