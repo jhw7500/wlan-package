@@ -1,4 +1,4 @@
-# Task 10 implementation report (implementation and board acceptance complete)
+# Task 10 implementation report (board acceptance complete; final branch review blocked)
 
 ## Scope and stop condition
 
@@ -873,3 +873,43 @@ Full clean-tree release gate:
 - all remaining release-preflight harnesses passed.
 
 No board access, merge, push, or deadline-only workaround occurred. Required findings unresolved: none. Concern: none.
+
+## Exactly-one scoped re-review and stop verdict (2026-08-23)
+
+The required, and only, scoped re-review of `d7615f9..c959b97` is
+`/tmp/task10-final-fix-scoped-rereview.md` (SHA-256
+`94570c7dbcc6623f68210195bc821d671d56bdbf7fac4999e6b1fc0880f2c41a`).
+It found findings 1–5 and Minors 7–8 addressed and the watchdog continuation
+sound, but finding 6 remained open through two new Important failures:
+
+1. **Mode A scan request construction:** the generated supplicant blocks
+   already provide every extra in `network_ssids[1:]`; the immutable boot
+   policy supplies the same identities again. Strict validation of the
+   concatenated list rejects the representational overlap. A controller-owned
+   production-shape harness reproduced `BgscanConfigError` for both `iw` and
+   `wpa_cli` (`/tmp/task10-repro-modea-bgscan.py`, SHA-256
+   `938f85a1c426762ba0232a6986f2dfba95622de4183bc6b624f89062498671c6`;
+   log SHA-256
+   `68f04b5742da98419a4f99d2f37421774f1264d254bc98c117d9cf712a92d634`).
+   Because initial construction leaves `cmd=None` and every reload repeats the
+   same rejection, the production daemon issues no background scan.
+2. **Mode B current-extra restart/reboot:** a supported manual candidate can
+   legitimately become the mutable live single-block base while remaining an
+   immutable configured candidate. Snapshot validation and topology sync
+   reinterpret that state as an extra/base declaration error. The controller
+   reproduced `rc=1` from both operations with an existing snapshot, then
+   removed policy+latch to model reboot-cleared `/run` and reproduced both
+   failures again with the conf unchanged
+   (`/tmp/task10-repro-modeb-reboot.py`, SHA-256
+   `acbc456ec9f83788b130f0e11087de4c63da6ef8c3a471757ac57aa1477f5789`;
+   log SHA-256
+   `1b987cdd0e7c26d3f8115c35ee8f4593602978045a0d51c9d30e7814726da512`).
+   `wifi_apply_enabled.sh` and `wifi_init.sh` propagate these failures and exit,
+   so this is a boot/service-start blocker rather than a diagnostic-only error.
+
+The final-review process permits one final fix implementer and exactly one
+scoped re-review, with no second fix wave. That breaker is now reached. No
+further production edit or target deployment was made; no merge or push was
+attempted. The previously restored board remains on the accepted `d7615f9`
+package. Final branch verdict: **blocked / not merge-ready** pending explicit
+authorization for a new remediation cycle.

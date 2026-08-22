@@ -336,3 +336,38 @@
 - Scoped fix commit `32c42508b6869664439e36db8a6acde8788f5a67` makes `/proc` stat, NUL-delimited cmdline, and monitor pidfile reads direct shell builtins and assigns start tokens in caller variables. The watchdog owner-death/identity path now has no child or command substitution to stall; PID/start-token reuse protection, FD9->FD7 order, child FD isolation, and the production watchdog policy are unchanged. The harness was restored from the temporary 5-second margin to the intended 3-second combined PID+directory postcondition.
 - Required clean-commit GREEN: two consecutive isolated writer runs both returned `RESULT: PASS=259 FAIL=0` with byte-identical logs (SHA-256 `ffb523ec6ff976fb934801c49672b179ce5976fc5e4b18d728d53cfbfae65b1a`), and full `validate_release.sh pre` returned `0` with logger `699`, scripts `190`, init `127/0`, and writer `259/0` (`/tmp/task10-final-fix-continuation-green-release-pre-final.log`, SHA-256 `706b0bc7423e52af447c6de39242ce863c39e382e0e8bb43955c32be038c8d10`).
 - Concern: none. This is continuation of the single final fix wave, not a deadline-only workaround or a second wave.
+
+## 2026-08-23 — Exactly-one scoped re-review breaker
+
+- The required scoped re-review of `d7615f9..c959b97` is preserved at
+  `/tmp/task10-final-fix-scoped-rereview.md`, SHA-256
+  `94570c7dbcc6623f68210195bc821d671d56bdbf7fac4999e6b1fc0880f2c41a`.
+  Findings 1–5 and Minors 7–8 were addressed; finding 6 was not. The watchdog
+  continuation was addressed without a new Critical/Important defect, but the
+  fix range introduced two new Important production-shape failures.
+- Mode A controller reproduction used a generated base+extra supplicant conf
+  and the same immutable snapshot extra. Both `iw` and `wpa_cli` request
+  construction raised `BgscanConfigError: ... duplicate SSID identity`, so an
+  initially empty command remains empty across reloads and no background scan
+  is issued. Harness/log SHA-256:
+  `938f85a1c426762ba0232a6986f2dfba95622de4183bc6b624f89062498671c6` /
+  `68f04b5742da98419a4f99d2f37421774f1264d254bc98c117d9cf712a92d634`
+  (`/tmp/task10-repro-modea-bgscan.py`, `.log`).
+- Mode B controller reproduction made a supported manual candidate the live
+  single-block SSID while retaining it in boot policy. Existing-snapshot
+  `wifi_roam_policy_ensure_snapshot` and topology sync both returned `1`; after
+  deleting policy+latch to reproduce reboot-cleared `/run`, creation and sync
+  again both returned `1`. The conf remained byte-exact. Harness/log SHA-256:
+  `acbc456ec9f83788b130f0e11087de4c63da6ef8c3a471757ac57aa1477f5789` /
+  `1b987cdd0e7c26d3f8115c35ee8f4593602978045a0d51c9d30e7814726da512`
+  (`/tmp/task10-repro-modeb-reboot.py`, `.log`).
+- Ruling: Accept both scoped re-review residuals as load-bearing and stop this
+  implementation cycle without a second production fix wave, board rollout,
+  merge, or push — the mandated one-fix/one-re-review breaker has been reached,
+  and shipping would disable Mode A background scans in the generated topology
+  and fail closed on a supported Mode B candidate after service restart or
+  reboot — cost if wrong: integration remains delayed even though both repairs
+  appear narrow, but the already restored board stays on the previously
+  accepted `d7615f9` package rather than receiving a known-broken head.
+- Current status: **blocked / not merge-ready**. The board was not touched after
+  this verdict and remains in its exact restored Mode B/external-owner state.
