@@ -26,6 +26,9 @@ from roam_policy import RoamPolicyError, load_boot_roam_policy
 
 VERSION = "1.1"
 IFACE = "mlan0"
+BSSID_CLEAR_ADDR = "00:00:00:00:00:00"
+# wpa_supplicant CTRL_IFACE BSSID accepts a MAC address, not "any";
+# the all-zero address clears ssid->bssid_set and is displayed as "any".
 LINK_LOG_FILE = f"/var/log/cantops/json/{IFACE}/link.json"
 SCAN_LOG_FILE = f"/var/log/cantops/scan/{IFACE}/ap.log"
 WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-mlan0.conf"
@@ -2086,7 +2089,7 @@ def _selection_cleanup_is_pending(iface):
 def _restore_network_selection_state(iface, network_id):
     """BSSID pin/all-network state를 bounded retry 후 canonical reconfigure로 복구한다."""
     for _ in range(2):
-        clear_ok = _set_network_bssid(iface, network_id, "any")
+        clear_ok = _set_network_bssid(iface, network_id, BSSID_CLEAR_ADDR)
         enable_ok = _enable_network_all(iface)
         if clear_ok and enable_ok:
             return _clear_selection_cleanup_pending(iface)
@@ -2099,7 +2102,7 @@ def _restore_network_selection_state(iface, network_id):
     )
     if _wpa_reconfigure(iface):
         time.sleep(0.2)
-        clear_ok = _set_network_bssid(iface, network_id, "any")
+        clear_ok = _set_network_bssid(iface, network_id, BSSID_CLEAR_ADDR)
         enable_ok = _enable_network_all(iface)
         if clear_ok and enable_ok and _clear_selection_cleanup_pending(iface):
             logger.message(
@@ -2197,7 +2200,8 @@ def select_network_for_ssid(iface, to_ssid, to_bssid):
     """Mode A cross-SSID: target block를 목표 BSSID로 pin한 뒤 정확히 확인한다.
 
     pin은 wpa 메모리에만 두며 save_config하지 않는다. pin이 수락된 뒤에는 모든 종료
-    경로에서 `bssid <id> any`를, select 시도 뒤에는 `enable_network all`을 실행해
+    경로에서 `bssid <id> 00:00:00:00:00:00`를, select 시도 뒤에는
+    `enable_network all`을 실행해
     장애 시 native fallback 후보를 복원한다.
     """
     target_bssid = (to_bssid or "").strip().lower()
