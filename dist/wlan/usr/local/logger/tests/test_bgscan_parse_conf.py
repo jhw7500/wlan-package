@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import wifi_bgscan
 from wifi_bgscan import parse_wpa_supplicant_conf
+import pytest
 
 
 wifi_bgscan.logger = MagicMock()
@@ -45,7 +46,7 @@ network={
     assert interval == 45
 
 
-def test_parser_deduplicates_ssids_and_ignores_commented_settings(tmp_path):
+def test_parser_preserves_unique_ssids_and_ignores_commented_settings(tmp_path):
     path = _write(
         tmp_path,
         """\
@@ -56,7 +57,7 @@ network={
     ssid="Base"
 }
 network={
-    ssid="Base"
+    ssid="Office"
 }
 network={
     ssid="Guest"
@@ -67,7 +68,7 @@ network={
     base, ssids, freqs, interval = parse_wpa_supplicant_conf(path)
 
     assert base == "Base"
-    assert ssids == ["Base", "Guest"]
+    assert ssids == ["Base", "Office", "Guest"]
     assert freqs == ["5180", "5200"]
     assert interval == wifi_bgscan.DEFAULT_INTERVAL
 
@@ -99,3 +100,38 @@ network={
 """
     )
     assert parse_wpa_supplicant_conf(str(scan_only))[2] == ["5220", "5240"]
+
+
+def test_parser_decodes_hex_ssids_and_preserves_spaces_quotes_backslashes(tmp_path):
+    base = '  게스트 \\ " exact  '
+    office = " Office "
+    path = _write(
+        tmp_path,
+        f"""\
+network={{
+    ssid={base.encode('utf-8').hex()}
+}}
+network={{
+    ssid={office.encode('utf-8').hex()}
+}}
+""",
+    )
+    parsed_base, ssids, _, _ = parse_wpa_supplicant_conf(path)
+    assert parsed_base == base
+    assert ssids == [base, office]
+
+
+def test_parser_rejects_duplicate_network_ssid_identity(tmp_path):
+    path = _write(
+        tmp_path,
+        """\
+network={
+    ssid=42617365
+}
+network={
+    ssid="Base"
+}
+""",
+    )
+    with pytest.raises(ValueError, match="duplicate"):
+        parse_wpa_supplicant_conf(path)

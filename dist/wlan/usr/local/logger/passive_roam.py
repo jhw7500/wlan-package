@@ -8,11 +8,18 @@ import time
 from datetime import datetime
 
 from roam_notify import notify_roam, get_associated_bssid, confirm_roam
+from roam_policy import (
+    RoamPolicyError,
+    load_boot_roam_policy,
+    validate_ssid,
+    validate_ssid_list,
+)
 
 WIFI_IFACE = "mlan0"
 SCAN_LOG = f"/var/log/cantops/scan/{WIFI_IFACE}/ap.log"
 LINK_JSON = f"/var/log/cantops/json/{WIFI_IFACE}/link.json"
 WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
+WIFI_COMMAND = os.environ.get("PASSIVE_ROAM_WIFI_COMMAND", "/usr/local/bin/wifi")
 SCAN_TIMESTAMP_RE = re.compile(
     r"^(?:\[(?P<bracketed>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]"
     r"|(?P<plain>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}))$"
@@ -40,7 +47,14 @@ def read_current_bssid(link_json_path=LINK_JSON):
         with open(link_json_path, "r") as f:
             data = json.load(f)
         return data.get("link", {}).get("address", "").strip().lower()
-    except (FileNotFoundError, json.JSONDecodeError, KeyError, AttributeError, TypeError):
+    except (
+        FileNotFoundError,
+        json.JSONDecodeError,
+        KeyError,
+        AttributeError,
+        TypeError,
+        RoamPolicyError,
+    ):
         return ""
 
 
@@ -49,22 +63,30 @@ def read_current_ssid(link_json_path=LINK_JSON):
     try:
         with open(link_json_path, "r") as f:
             data = json.load(f)
-        return data.get("info", {}).get("ssid", "").strip()
-    except (FileNotFoundError, json.JSONDecodeError, KeyError, AttributeError, TypeError):
+        return validate_ssid(data.get("info", {}).get("ssid", ""))
+    except (
+        FileNotFoundError,
+        json.JSONDecodeError,
+        KeyError,
+        AttributeError,
+        TypeError,
+        RoamPolicyError,
+    ):
         return ""
 
 
+def load_manual_roam_policy(iface, run_dir=None):
+    """Read the immutable boot owner/topology contract for manual roaming."""
+    return load_boot_roam_policy(iface, run_dir=run_dir)
+
+
 def load_extra_ssids(iface, conf_path=WIFI_INIT_CONF_JSON):
-    """roaming.extra_ssids 로드 (다중 SSID 로밍 허용 목록). 없거나 형식오류면 []."""
+    """Compatibility accessor backed only by the immutable boot snapshot."""
+    del conf_path
     try:
-        with open(conf_path, "r") as f:
-            roam = json.load(f).get(iface, {}).get("roaming", {})
-        extra = roam.get("extra_ssids")
-        if isinstance(extra, list):
-            return [str(s).strip() for s in extra if str(s).strip()]
-    except (FileNotFoundError, json.JSONDecodeError, KeyError, AttributeError, TypeError):
-        pass
-    return []
+        return list(load_manual_roam_policy(iface)["extra_ssids"])
+    except RoamPolicyError:
+        return []
 
 
 def parse_last_scan_block(scan_log_path=SCAN_LOG, max_age_sec=None):
@@ -110,33 +132,34 @@ def parse_last_scan_block(scan_log_path=SCAN_LOG, max_age_sec=None):
 
     aps = []
     for raw in block_lines:
-        line = raw.strip()
-        if not line or "|" not in line:
+        line = raw.rstrip("\r\n")
+        structural = line.lstrip()
+        if not structural or "|" not in line:
             continue
-        if line.startswith("-") or line.startswith("#") or line.startswith("["):
+        if structural.startswith("-") or structural.startswith("#") or structural.startswith("["):
             continue
 
-        parts = [p.strip() for p in line.split("|")]
+        parts = line.split("|")
         if len(parts) < 7:
             continue
 
         try:
             aps.append({
-                "idx": parts[0],
-                "ch": int(parts[1]),
-                "ss": int(parts[2]),
-                "ld": int(parts[3]),
-                "bssid": parts[4],
-                "cap": parts[5],
-                "ssid": parts[6],
+                "idx": parts[0].strip(),
+                "ch": int(parts[1].strip()),
+                "ss": int(parts[2].strip()),
+                "ld": int(parts[3].strip()),
+                "bssid": parts[4].strip(),
+                "cap": parts[5].strip(),
+                "ssid": validate_ssid("|".join(parts[6:])),
             })
-        except ValueError:
+        except (ValueError, RoamPolicyError):
             continue
 
     return aps
 
 
-def build_candidate_list():
+def build_candidate_list(policy=None):
     """
     Return (current_bssid, current_ssid, candidates, extra_ssids)
 
@@ -147,7 +170,19 @@ def build_candidate_list():
     """
     current_bssid = read_current_bssid(LINK_JSON)
     current_ssid = read_current_ssid(LINK_JSON)
-    extra_ssids = load_extra_ssids(WIFI_IFACE)
+    if policy is None:
+        policy = load_manual_roam_policy(WIFI_IFACE)
+    mode_a = policy["generate_network_blocks"]
+    # The snapshot rejected base/extra duplication at boot.  At runtime the
+    # current SSID may legitimately be one of those extras after an automatic
+    # Mode A selection or a manual Mode B connect; treat it as the live base
+    # for same-SSID roaming instead of misclassifying the boot policy.
+    policy_extras = validate_ssid_list(list(policy["extra_ssids"]))
+    # Mode A extras are autonomous owner topology, not manual cross-SSID
+    # targets.  Do not advertise their identities to this CLI.
+    extra_ssids = [] if mode_a else policy_extras
+    if mode_a and policy_extras:
+        print("manual cross-SSID selection is unsupported in Mode A")
     allowed = ([current_ssid] if current_ssid else []) + [
         s for s in extra_ssids if s and s != current_ssid
     ]
@@ -185,7 +220,7 @@ def print_candidate_list(current_bssid, candidates):
         ))
 
 
-def roam_to_ap(interface, ap, index_label=None, current_ssid=None):
+def roam_to_ap(interface, ap, index_label=None, current_ssid=None, mode_a=False):
     """
     Roam to the given AP.
     - 같은 SSID: wpa_cli roam <bssid> (무중단)
@@ -199,9 +234,12 @@ def roam_to_ap(interface, ap, index_label=None, current_ssid=None):
 
     bssid = ap["bssid"]
     cross_ssid = bool(current_ssid) and bool(ap.get("ssid")) and ap["ssid"] != current_ssid
+    if cross_ssid and mode_a:
+        print("manual cross-SSID selection is unsupported in Mode A")
+        return 1
     if cross_ssid:
         # freq 생략: 단일 freq를 주면 전역/블록 공통 freq_list가 그 채널로 collapse됨
-        cmd = ["/usr/local/bin/wifi", interface, "connect", ap["ssid"]]
+        cmd = [WIFI_COMMAND, interface, "connect", ap["ssid"]]
     else:
         cmd = ["wpa_cli", "-i", interface, "roam", bssid]
 
@@ -261,7 +299,7 @@ def roam_to_ap(interface, ap, index_label=None, current_ssid=None):
         return 1
 
 
-def roam_to_best_non_current(interface, candidates, current_ssid=None):
+def roam_to_best_non_current(interface, candidates, current_ssid=None, mode_a=False):
     """
     Find the best AP excluding the current one and roam to it.
     Candidates are filtered by allowed SSIDs (current + extra_ssids) in build_candidate_list.
@@ -273,11 +311,17 @@ def roam_to_best_non_current(interface, candidates, current_ssid=None):
 
     others.sort(key=lambda x: x["ss"], reverse=True)
     best_ap = others[0]
-    return roam_to_ap(interface, best_ap, index_label="best_non_current", current_ssid=current_ssid)
+    return roam_to_ap(
+        interface,
+        best_ap,
+        index_label="best_non_current",
+        current_ssid=current_ssid,
+        mode_a=mode_a,
+    )
 
 
 def main():
-    global WIFI_IFACE, SCAN_LOG, LINK_JSON
+    global WIFI_IFACE, SCAN_LOG, LINK_JSON, WIFI_COMMAND
 
     import argparse
     parser = argparse.ArgumentParser(description="Passive roaming tool")
@@ -289,10 +333,21 @@ def main():
     args = parser.parse_args()
 
     WIFI_IFACE = args.iface
-    SCAN_LOG = f"/var/log/cantops/scan/{WIFI_IFACE}/ap.log"
-    LINK_JSON = f"/var/log/cantops/json/{WIFI_IFACE}/link.json"
+    SCAN_LOG = os.environ.get(
+        "PASSIVE_ROAM_SCAN_LOG", f"/var/log/cantops/scan/{WIFI_IFACE}/ap.log"
+    )
+    LINK_JSON = os.environ.get(
+        "PASSIVE_ROAM_LINK_JSON", f"/var/log/cantops/json/{WIFI_IFACE}/link.json"
+    )
+    WIFI_COMMAND = os.environ.get("PASSIVE_ROAM_WIFI_COMMAND", "/usr/local/bin/wifi")
 
-    current_bssid, current_ssid, candidates, extra_ssids = build_candidate_list()
+    try:
+        policy = load_manual_roam_policy(WIFI_IFACE)
+        current_bssid, current_ssid, candidates, extra_ssids = build_candidate_list(policy)
+    except RoamPolicyError as exc:
+        print(f"cannot load immutable boot roaming policy: {exc}")
+        sys.exit(1)
+    mode_a = policy["generate_network_blocks"]
     print(f"Allowed SSIDs: current={current_ssid} extra_ssids={extra_ssids}")
     if not candidates:
         sys.exit(1)
@@ -306,7 +361,9 @@ def main():
 
     # Argument 0: auto-roam to best AP excluding current
     if args.index == 0:
-        ret = roam_to_best_non_current(WIFI_IFACE, candidates, current_ssid)
+        ret = roam_to_best_non_current(
+            WIFI_IFACE, candidates, current_ssid, mode_a=mode_a
+        )
         sys.exit(ret)
 
     # Argument > 0: roam to N-th AP in the printed list
@@ -315,7 +372,13 @@ def main():
         sys.exit(1)
 
     ap = candidates[args.index - 1]
-    ret = roam_to_ap(WIFI_IFACE, ap, index_label=args.index, current_ssid=current_ssid)
+    ret = roam_to_ap(
+        WIFI_IFACE,
+        ap,
+        index_label=args.index,
+        current_ssid=current_ssid,
+        mode_a=mode_a,
+    )
     sys.exit(ret)
 
 

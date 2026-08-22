@@ -112,8 +112,65 @@ def test_parser_field_mapping_and_float_signal():
     assert row3[2] == "-47"
 
 
+def test_scan_result_and_ap_line_roundtrip_preserves_ssid_identity_spaces(tmp_path, monkeypatch):
+    ssid = '  guest \\ " exact  '
+    encoded = _wpa_printf_encode(ssid)
+    raw = (
+        "bssid / frequency / signal level / flags / ssid\n"
+        f"00:11:22:33:44:55\t5180\t-40\t[ESS]\t{encoded}\n"
+    )
+    lines = scan_results_to_ap_lines(raw)
+    assert lines[0].split("|", 6)[6] == ssid
+
+    ap_log = tmp_path / "ap.log"
+    monkeypatch.setattr(wifi_roam, "SCAN_LOG_FILE", str(ap_log))
+    monkeypatch.setattr(wifi_roam, "WPA_FREQ", ["5180"])
+    wifi_roam.save_with_timestamp(str(ap_log), lines)
+    entries, _ = wifi_roam.get_latest_scan(
+        {"bssid": "aa:bb:cc:dd:ee:ff"}, [ssid], log=False, src="scan"
+    )
+    assert entries[0]["ssid"] == ssid
+
+
 def test_parser_empty_and_none():
     assert scan_results_to_ap_lines("") == []
+
+
+def _wpa_printf_encode(value):
+    out = []
+    for byte in value.encode("utf-8"):
+        if byte == 0x22:
+            out.append(r'\"')
+        elif byte == 0x5C:
+            out.append(r'\\')
+        elif 0x20 <= byte <= 0x7E:
+            out.append(chr(byte))
+        else:
+            out.append(f"\\x{byte:02x}")
+    return "".join(out)
+
+
+def test_scan_results_decodes_wpa_ctrl_escaped_utf8_quote_and_backslash():
+    ssid = '  게스트 \\ " exact  '
+    encoded = _wpa_printf_encode(ssid)
+    raw = (
+        "bssid / frequency / signal level / flags / ssid\n"
+        f"00:11:22:33:44:55\t5180\t-40\t[ESS]\t{encoded}\n"
+    )
+    lines = scan_results_to_ap_lines(raw)
+    assert lines[0].split("|", 6)[6] == ssid
+
+
+def test_logger_ap_table_keeps_last_field_ssid_edges_byte_exact():
+    ssid = '  edge \\ " exact  '
+    rows = [
+        "----------------",
+        "# | Ch | RSSI | Load | BSSID | Cap | SSID",
+        "----------------",
+        f" 7|36|-40|0|00:11:22:33:44:55|cap|{ssid}",
+    ]
+    extracted = wifi_logger_scan.extract_ap_table(rows)
+    assert extracted[-1].split("|", 6)[6] == ssid
     assert scan_results_to_ap_lines(None) == []
 
 

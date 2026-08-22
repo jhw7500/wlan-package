@@ -73,6 +73,106 @@ wifi_roam_policy_latch_path() {
     printf '%s/.%s.roam-policy.latched\n' "$latch_dir" "$iface"
 }
 
+wifi_sync_path_or_global() {
+    sync "$1" 2>/dev/null || sync 2>/dev/null
+}
+
+# Validate a JSON SSID array without translating any identity.  When a base
+# supplicant configuration exists, reject an extra/base duplicate as well.
+wifi_ssid_array_validate_json() {
+    local extras_json="$1" base_conf="${2:-}"
+    python3 - "$extras_json" "$base_conf" 2>/dev/null <<'PY'
+import json
+import os
+import re
+import sys
+
+def valid(value):
+    if not isinstance(value, str):
+        raise ValueError("SSID must be a string")
+    raw = value.encode("utf-8")
+    if not 1 <= len(raw) <= 32:
+        raise ValueError("SSID must be 1..32 UTF-8 bytes")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7f for ch in value):
+        raise ValueError("SSID contains a C0 control or DEL")
+    return value
+
+def parse_value(token):
+    token = token.strip()
+    if len(token) >= 2 and token[0] == '"' and token[-1] == '"':
+        return valid(token[1:-1])
+    if not re.fullmatch(r"(?:[0-9A-Fa-f]{2})+", token):
+        raise ValueError("unsupported base SSID representation")
+    return valid(bytes.fromhex(token).decode("utf-8"))
+
+values = json.loads(sys.argv[1])
+if not isinstance(values, list):
+    raise ValueError("extra_ssids must be an array")
+checked = [valid(value) for value in values]
+if len(set(checked)) != len(checked):
+    raise ValueError("duplicate extra SSID identity")
+
+base_conf = sys.argv[2]
+base = None
+if base_conf and os.path.isfile(base_conf):
+    in_network = False
+    with open(base_conf, encoding="utf-8") as stream:
+        for raw_line in stream:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if re.match(r"^network\s*=\s*\{", line):
+                in_network = True
+                continue
+            if in_network and line.startswith("}"):
+                break
+            if in_network and re.match(r"^ssid\s*=", line):
+                base = parse_value(line.split("=", 1)[1])
+                break
+if base is not None and base in checked:
+    raise ValueError("extra SSID duplicates base SSID identity")
+PY
+}
+
+wifi_ssid_to_hex() {
+    python3 - "$1" 2>/dev/null <<'PY'
+import sys
+value = sys.argv[1]
+raw = value.encode("utf-8")
+if not 1 <= len(raw) <= 32:
+    raise SystemExit(1)
+if any(ord(ch) < 0x20 or ord(ch) == 0x7f for ch in value):
+    raise SystemExit(1)
+print(raw.hex())
+PY
+}
+
+# Match upstream wpa_ssid_txt()/printf_encode output used by CTRL_IFACE
+# status/list_networks/scan_results.  Writers compare this form to status while
+# retaining the original identity for config serialization and operator text.
+wifi_ssid_to_wpa_text() {
+    python3 - "$1" 2>/dev/null <<'PY'
+import sys
+value = sys.argv[1]
+raw = value.encode("utf-8")
+if not 1 <= len(raw) <= 32:
+    raise SystemExit(1)
+if any(ord(ch) < 0x20 or ord(ch) == 0x7f for ch in value):
+    raise SystemExit(1)
+out = []
+for byte in raw:
+    if byte == 0x22:
+        out.append(r'\"')
+    elif byte == 0x5c:
+        out.append(r'\\')
+    elif 0x20 <= byte <= 0x7e:
+        out.append(chr(byte))
+    else:
+        out.append(f"\\x{byte:02x}")
+print("".join(out))
+PY
+}
+
 _wifi_roam_policy_mark_latched() {
     local iface="$1" latch latch_dir tmp
     latch=$(wifi_roam_policy_latch_path "$iface") || return 1
@@ -84,17 +184,20 @@ _wifi_roam_policy_mark_latched() {
         rm -f "$tmp"
         return 1
     fi
-    sync "$tmp" 2>/dev/null || sync 2>/dev/null || true
+    if ! wifi_sync_path_or_global "$tmp"; then
+        rm -f "$tmp"
+        return 1
+    fi
     if ! mv -f "$tmp" "$latch"; then
         rm -f "$tmp"
         return 1
     fi
-    sync "$latch" 2>/dev/null || sync 2>/dev/null || true
-    sync "$latch_dir" 2>/dev/null || sync 2>/dev/null || true
+    wifi_sync_path_or_global "$latch" || return 1
+    wifi_sync_path_or_global "$latch_dir" || return 1
 }
 
 wifi_roam_policy_validate_file() {
-    local file="$1" iface="$2"
+    local file="$1" iface="$2" extras
     [ -f "$file" ] || return 1
     command -v jq >/dev/null 2>&1 || return 1
     jq -e --arg iface "$iface" '
@@ -106,7 +209,9 @@ wifi_roam_policy_validate_file() {
         (.generate_network_blocks | type == "boolean") and
         (.extra_ssids | type == "array") and
         all(.extra_ssids[]; type == "string")
-    ' "$file" >/dev/null 2>&1
+    ' "$file" >/dev/null 2>&1 || return 1
+    extras=$(jq -c '.extra_ssids' "$file" 2>/dev/null) || return 1
+    wifi_ssid_array_validate_json "$extras"
 }
 
 # 현재 JSON에서 snapshot을 **없을 때만** 원자 생성한다. 기존 파일이 valid면 그대로
@@ -114,11 +219,16 @@ wifi_roam_policy_validate_file() {
 wifi_roam_policy_ensure_snapshot() {
     local iface="$1"
     local conf_json="${2:-${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}}"
-    local run_dir="${WIFI_RUN_DIR:-/run/wifi}" policy latch tmp
+    local run_dir="${WIFI_RUN_DIR:-/run/wifi}" policy latch tmp base_conf
     local roaming_enabled bgscan_enabled generate extras
 
     policy=$(wifi_roam_policy_path "$iface") || return 1
     latch=$(wifi_roam_policy_latch_path "$iface") || return 1
+    base_conf="${WPA_CONF_DIR:-/etc/wpa_supplicant}/wpa_supplicant-${iface}.conf"
+    if [ ! -f "$base_conf" ]; then
+        base_conf="${WIFI_WPA_DEFAULT_CONF_DIR:-${SCRIPT_DIR:-/usr/local/scripts}/../../../opt/wlan/config/wpa_supplicant}/wpa_supplicant-${iface}.conf"
+    fi
+    [ -f "$base_conf" ] || return 1
     command -v flock >/dev/null 2>&1 || return 1
     mkdir -p "$run_dir" || return 1
     # 두 apply 인스턴스가 동시에 'missing'을 보고 서로 다른 JSON으로 overwrite하지
@@ -126,10 +236,13 @@ wifi_roam_policy_ensure_snapshot() {
     exec 8>"$run_dir/.roam-policy.lock" || return 1
     flock -x 8 || return 1
     if [ -e "$policy" ]; then
+        # A policy without the tombstone is an untrusted policy-first crash
+        # state.  Never promote it or reconstruct from mutable live JSON.
+        [ -e "$latch" ] || return 1
         wifi_roam_policy_validate_file "$policy" "$iface" || return 1
-        # Upgrade/이전 crash로 valid snapshot만 있는 경우 latch를 복구한다.
-        _wifi_roam_policy_mark_latched "$iface"
-        return $?
+        extras=$(jq -c '.extra_ssids' "$policy" 2>/dev/null) || return 1
+        wifi_ssid_array_validate_json "$extras" "$base_conf" || return 1
+        return 0
     fi
     # 같은 boot에 snapshot을 삭제한 후 live JSON으로 owner/topology를
     # 재구성하면 hot-switch가 된다. 재생성 대신 fail-closed.
@@ -143,17 +256,13 @@ wifi_roam_policy_ensure_snapshot() {
         "$(wifi_init_json_read_raw "$conf_json" ".${iface}.bgscan.enabled")" false) || return 1
     generate=$(wifi_init_normalize_bool \
         "$(wifi_init_json_read_raw "$conf_json" ".${iface}.roaming.generate_network_blocks")" false) || return 1
-    if [ "$generate" = "true" ]; then
-        extras=$(jq -c --arg iface "$iface" \
-            '(.[$iface].roaming.extra_ssids // []) as $raw
-             | if ($raw | type) == "array" then
-                 [$raw[] | select(type == "string")
-                  | gsub("^\\s+|\\s+$"; "") | select(length > 0)]
-               else [] end' \
-            "$conf_json" 2>/dev/null) || return 1
-    else
-        extras='[]'
-    fi
+    # Preserve Mode A and Mode B manual identities alike.  Topology generation
+    # is gated separately; the immutable snapshot remains the manual policy SoT.
+    extras=$(jq -c --arg iface "$iface" \
+        '(.[$iface].roaming.extra_ssids // []) as $raw
+         | if ($raw | type) == "array" then $raw else error("extra_ssids") end' \
+        "$conf_json" 2>/dev/null) || return 1
+    wifi_ssid_array_validate_json "$extras" "$base_conf" || return 1
 
     tmp=$(mktemp "$run_dir/.${iface}.roam-policy.XXXXXX") || return 1
     if ! jq -cn \
@@ -174,14 +283,28 @@ wifi_roam_policy_ensure_snapshot() {
         rm -f "$tmp"
         return 1
     }
-    sync "$tmp" 2>/dev/null || sync 2>/dev/null || true
+    if ! wifi_sync_path_or_global "$tmp"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    wifi_roam_policy_validate_file "$tmp" "$iface" || {
+        rm -f "$tmp"
+        return 1
+    }
+
+    # Commit tombstone first.  Any failure after its rename is a same-boot
+    # fail-closed state; policy is never reconstructed from changed JSON.
+    if ! _wifi_roam_policy_mark_latched "$iface"; then
+        rm -f "$tmp"
+        return 1
+    fi
     if ! mv -f "$tmp" "$policy"; then
         rm -f "$tmp"
         return 1
     fi
-    sync "$policy" 2>/dev/null || sync 2>/dev/null || true
-    wifi_roam_policy_validate_file "$policy" "$iface" || return 1
-    _wifi_roam_policy_mark_latched "$iface"
+    wifi_sync_path_or_global "$policy" || return 1
+    wifi_sync_path_or_global "$run_dir" || return 1
+    wifi_roam_policy_validate_file "$policy" "$iface"
 }
 
 wifi_roam_policy_get_bool() {
@@ -241,7 +364,7 @@ wifi_wpa_conf_lock_acquire() {
     mkdir -p "$run_dir" || return 1
     lock_file="$run_dir/${iface}.wpa-conf.lock"
     exec 9>"$lock_file" || return 1
-    flock -x 9
+    ( exec 7>&-; flock -x 9 )
 }
 
 # Close the connect transaction's private descriptors in the current child.
@@ -317,10 +440,10 @@ wifi_scan_transition_lock_acquire() {
         ''|*[!0-9]*|*) timeout=15 ;;
     esac
     command -v flock >/dev/null 2>&1 || return 1
-    mkdir -p "$run_dir" || return 1
+    wifi_wpa_run_child mkdir -p "$run_dir" || return 1
     lock_file="$run_dir/${iface}.scan-transition.lock"
     exec 7>"$lock_file" || return 1
-    flock -w "$timeout" -x 7
+    ( exec 9>&-; flock -w "$timeout" -x 7 )
 }
 
 wifi_init_get_iface_enabled() {
@@ -395,7 +518,7 @@ wifi_init_bw_to_vhtbw() {
 }
 
 # wpa_supplicant conf에서 패키지 공통 주파수 목록을 결정한다.
-# 우선순위: 전역 freq_list > 첫 network 블록 freq_list > 첫 블록 scan_freq.
+# 우선순위: 전역 freq_list > 첫 network 블록 freq_list > 첫 블록 legacy scan_freq fallback.
 # 마지막 두 항목은 canonical 형식으로 이행하기 전 배포 conf를 위한 부팅 호환 경로다.
 # 출력은 원래 순서를 보존한 공백 구분 목록이며, 제한이 없거나 파일이 없으면 무출력.
 wifi_wpa_conf_common_freqs() {
@@ -452,7 +575,7 @@ wifi_wpa_conf_common_freqs() {
 # 사용: wifi_wpa_conf_render_canonical <source> <destination> <common-freqs>
 # - 전역 update_config=0 및 (목록이 있으면) 전역 freq_list 1개
 # - 각 network 블록에 같은 freq_list 1개
-# - 모든 network 블록의 active scan_freq 제거
+# - 모든 network 블록의 legacy active scan_freq 제거
 # 설치/권한/롤백은 호출자 책임이라 wifi.sh와 OPC가 같은 변환을 각자 트랜잭션에 넣을 수 있다.
 wifi_wpa_conf_render_canonical() {
     local source="$1" destination="$2" freqs="${3-}"
@@ -499,6 +622,23 @@ wifi_wpa_conf_preserve_metadata() {
     chmod --reference="$source" "$destination" 2>/dev/null || return 1
 }
 
+# Checked same-directory publication for every boot topology transform.
+# Content must already be fully rendered in $1; metadata is copied from the
+# installed destination before staged sync and atomic rename.
+wifi_wpa_conf_atomic_install() {
+    local staged="$1" destination="$2" destination_dir staged_dir
+    [ -f "$staged" ] || return 1
+    [ -f "$destination" ] || return 1
+    destination_dir=${destination%/*}
+    staged_dir=${staged%/*}
+    [ "$destination_dir" = "$staged_dir" ] || return 1
+    wifi_wpa_conf_preserve_metadata "$destination" "$staged" || return 1
+    wifi_sync_path_or_global "$staged" || return 1
+    mv -f "$staged" "$destination" || return 1
+    wifi_sync_path_or_global "$destination" || return 1
+    wifi_sync_path_or_global "$destination_dir" || return 1
+}
+
 # 배포/사용 중 conf를 같은 파일시스템에서 원자적으로 canonical 형식으로 정규화한다.
 # 파일 부재는 부팅 복원 경로와의 호환을 위해 no-op 성공, 파싱/설치 실패는 nonzero다.
 wifi_wpa_conf_normalize_file() {
@@ -513,20 +653,14 @@ wifi_wpa_conf_normalize_file() {
         return 1
     fi
 
-    if ! wifi_wpa_conf_preserve_metadata "$conf" "$tmp"; then
-        rm -f "$tmp"
-        return 1
-    fi
-
     if cmp -s "$tmp" "$conf"; then
         rm -f "$tmp"
         return 0
     fi
-    if ! mv -f "$tmp" "$conf"; then
+    if ! wifi_wpa_conf_atomic_install "$tmp" "$conf"; then
         rm -f "$tmp"
         return 1
     fi
-    sync "$conf" 2>/dev/null || sync 2>/dev/null || true
     return 0
 }
 
@@ -602,10 +736,10 @@ _wifi_extra_ssid_template_field() {
 wifi_init_sync_extra_ssid_blocks() {
     local iface="$1" conf="$2"
     local conf_json="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
-    local policy latch
+    local policy latch extras_json extras
 
     [ -f "$conf" ] || return 0
-    command -v jq >/dev/null 2>&1 || return 0
+    command -v jq >/dev/null 2>&1 || return 1
 
     local gen
     policy=$(wifi_roam_policy_path "$iface") || return 1
@@ -613,14 +747,20 @@ wifi_init_sync_extra_ssid_blocks() {
     if [ -e "$policy" ]; then
         wifi_roam_policy_validate_file "$policy" "$iface" || return 1
         gen=$(jq -r '.generate_network_blocks' "$policy" 2>/dev/null) || return 1
+        extras_json=$(jq -c '.extra_ssids' "$policy" 2>/dev/null) || return 1
     else
         # 이 boot에 snapshot을 이미 생성했다면 유실 후 live JSON으로
         # extra block을 재해석하지 않는다(수동 wifi_init 재실행 hot-switch 차단).
         [ ! -e "$latch" ] || return 1
         gen=$(wifi_init_normalize_bool \
             "$(wifi_init_json_read_raw "$conf_json" ".${iface}.roaming.generate_network_blocks")" \
-            false)
+            false) || return 1
+        extras_json=$(jq -c --arg iface "$iface" \
+            '(.[$iface].roaming.extra_ssids // []) as $raw
+             | if ($raw | type) == "array" then $raw else error("extra_ssids") end' \
+            "$conf_json" 2>/dev/null) || return 1
     fi
+    wifi_ssid_array_validate_json "$extras_json" "$conf" || return 1
 
     local tmp
     tmp=$(mktemp "${conf}.extra.XXXXXX") || return 1
@@ -632,26 +772,19 @@ wifi_init_sync_extra_ssid_blocks() {
     if [ "$gen" != "true" ]; then
         _wifi_extra_ssid_strip "$conf" > "$tmp" || return 1
         if ! cmp -s "$tmp" "$conf"; then
-            wifi_wpa_conf_preserve_metadata "$conf" "$tmp" || return 1
-            mv -f "$tmp" "$conf" && sync "$conf" 2>/dev/null
+            wifi_wpa_conf_atomic_install "$tmp" "$conf" || return 1
         fi
         return 0
     fi
 
     # 모드 A: extra_ssids 읽기 (각 줄 1 SSID)
-    local extras
-    if [ -e "$policy" ]; then
-        extras=$(jq -r '.extra_ssids[]?' "$policy" 2>/dev/null) || return 1
-    else
-        extras=$(wifi_init_json_read_raw "$conf_json" ".${iface}.roaming.extra_ssids[]?")
-    fi
+    extras=$(printf '%s' "$extras_json" | jq -r '.[]' 2>/dev/null) || return 1
 
     # extra 없으면 자동 블록만 제거
     if [ -z "$extras" ]; then
         _wifi_extra_ssid_strip "$conf" > "$tmp" || return 1
         if ! cmp -s "$tmp" "$conf"; then
-            wifi_wpa_conf_preserve_metadata "$conf" "$tmp" || return 1
-            mv -f "$tmp" "$conf" && sync "$conf" 2>/dev/null
+            wifi_wpa_conf_atomic_install "$tmp" "$conf" || return 1
         fi
         return 0
     fi
@@ -674,8 +807,7 @@ wifi_init_sync_extra_ssid_blocks() {
     if [ -z "$t_keymgmt" ] || [ -z "$t_psk" ]; then
         printf '%s\n' "$stripped" > "$tmp"
         if ! cmp -s "$tmp" "$conf"; then
-            wifi_wpa_conf_preserve_metadata "$conf" "$tmp" || return 1
-            mv -f "$tmp" "$conf" && sync "$conf" 2>/dev/null
+            wifi_wpa_conf_atomic_install "$tmp" "$conf" || return 1
         fi
         return 0
     fi
@@ -684,13 +816,11 @@ wifi_init_sync_extra_ssid_blocks() {
     {
         cat "$stripfile"
         printf '%s\n' "$WIFI_EXTRA_SSID_BEGIN"
-        local ssid esc
+        local ssid ssid_hex
         while IFS= read -r ssid; do
-            [ -z "$ssid" ] && continue
-            # ssid 내 \와 " 이스케이프 (conf C-style 문법)
-            esc=$(printf '%s' "$ssid" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+            ssid_hex=$(wifi_ssid_to_hex "$ssid") || return 1
             printf 'network={\n'
-            printf '    ssid="%s"\n' "$esc"
+            printf '    ssid=%s\n' "$ssid_hex"
             printf '    key_mgmt=%s\n' "$t_keymgmt"
             printf '    psk=%s\n' "$t_psk"
             [ -n "$t_proto" ]    && printf '    proto=%s\n' "$t_proto"
@@ -718,8 +848,7 @@ EOF
     fi
 
     if ! cmp -s "$tmp" "$conf"; then
-        wifi_wpa_conf_preserve_metadata "$conf" "$tmp" || return 1
-        mv -f "$tmp" "$conf" && sync "$conf" 2>/dev/null
+        wifi_wpa_conf_atomic_install "$tmp" "$conf" || return 1
     fi
     return 0
 }

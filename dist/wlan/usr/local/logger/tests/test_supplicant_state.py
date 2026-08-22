@@ -123,3 +123,14 @@ def test_poll_supplicant_calls_list_networks_when_not_completed(monkeypatch):
 
     monkeypatch.setattr(wl, "run_command", fake_run)
     assert wl.poll_supplicant("mlan0") == {"wpa_state": "SCANNING", "temp_disabled": True}
+
+
+def test_parse_iw_info_decodes_escaped_utf8_and_preserves_ssid_edges():
+    ssid = '  게스트 \\ " exact  '
+    encoded = "".join(
+        chr(byte) if 0x21 <= byte <= 0x7E and byte != 0x5C
+        else f"\\x{byte:02x}"
+        for byte in ssid.encode("utf-8")
+    )
+    parsed = wl.parse_iw_info(f"Interface mlan0\n\tssid {encoded}\n")
+    assert parsed["ssid"] == ssid

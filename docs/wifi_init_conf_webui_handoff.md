@@ -450,7 +450,9 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 **비고 (roaming)** — owner/topology는 부팅 시 확정하며 runtime hot switch하지 않는다.
 - `mlanN.enabled=false`면 하위 로밍/스캔/logger/checker/arping 데몬은 상위 게이트로 강제 disable.
 - Mode A는 `extra_ssids`를 다중 블록으로 생성한다. wifi_roam owner는 exact BSSID를 pin/확인하고, wpa native owner는 wpa 기본 cross-SSID 선택 정책을 수용한다.
-- Mode B는 단일 블록이며 `extra_ssids`를 무시한다. cross-SSID는 `wifi connect` 수동 명령으로만 전환한다.
+- Mode B는 단일 블록이다. 자동 owner/bgscan은 `extra_ssids`를 무시하지만 boot snapshot은 수동 `passive_roam` 후보로 보존하며, cross-SSID는 `passive_roam` 선택 또는 `wifi connect`로 전환한다.
+- 부팅 snapshot은 base/extra 중복을 거부한다. 다만 Mode B 수동 전환 후 live base가 boot-latched 후보와 같아지는 것은 정상이며, 같은 SSID 내 수동 BSSID 로밍을 계속 지원한다.
+- Mode A 수동 `passive_roam`은 cross-SSID 후보를 표시/실행하지 않는다. Mode A cross-SSID는 선택된 자동 owner만 수행한다.
 - 모든 블록은 전역과 동일한 공통 `freq_list`를 사용한다. SSID별 주파수 분리는 UI에서 제공하지 않는다.
 
 #### 3.10.5 mlanN.mcs_tier

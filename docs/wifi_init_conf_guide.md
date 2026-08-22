@@ -805,7 +805,7 @@ wpa_supplicant의 장애 복구·재연결 스캔은 계속 동작한다.
 > 연결 상태 확인은 매 tick이 아니라 스캔 주기 도래 시에만 수행한다.
 
 공통 주파수 정책의 canonical 형식은 다음과 같다. 목록이 비면 전역/블록
-`freq_list`를 모두 생략하며, active `scan_freq`는 사용하지 않는다.
+`freq_list`를 모두 생략한다. `scan_freq`는 부팅 canonicalization의 legacy fallback으로만 읽는다.
 
 ```ini
 update_config=0
@@ -847,7 +847,12 @@ durable backup을 별도 staging으로 복사해 atomic rename하고 복원 파�
 | `ROAM_CROSS_FAIL_RETRY_COUNT` | int | `2` | 모드A cross-SSID(`select_network`) 전환 실패 시 cooldown 없이 즉시 재시도 허용 횟수. 초과 시 지수 backoff로 해당 SSID를 후보에서 제외(진동 차단). 모드B에선 미적용 |
 
 > **Mode B (`generate_network_blocks=false`)**: 단일 network 블록만 유지하고
-> `extra_ssids`를 무시한다. cross-SSID는 `wifi connect <ssid> [freq...]`로 수동 전환한다.
+> 자동 owner/bgscan은 `extra_ssids`를 무시한다. 다만 boot snapshot은 identity를 보존하며
+> `passive_roam`에서 후보로 선택하거나 `wifi connect <ssid> [freq...]`로 수동 전환한다.
+> snapshot 생성 시점에는 부팅 base와 중복된 후보를 거부하지만, 정상적인 Mode B
+> 수동 전환 후 live base가 그 후보와 같아지는 것은 의도된 단일-블록 동작이다.
+> Mode A에서는 자동 owner만 cross-SSID를 수행하고 `passive_roam` 수동 cross-SSID는
+> 후보를 표시하거나 `wifi connect`를 호출하지 않는다.
 > 같은 SSID 안에서는 선택된 owner의 로밍을 사용할 수 있다.
 >
 > **Mode A (`generate_network_blocks=true`)**: 부팅 시 base 블록의 자격증명과 공통

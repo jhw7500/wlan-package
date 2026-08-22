@@ -141,6 +141,20 @@ network={
     assert parse_supplicant_conf(path)[1] == ["2412", "2437"]
 
 
+def test_roam_parser_decodes_hex_ssid_without_trimming_identity(tmp_path):
+    ssid = '  게스트 \\ " exact  '
+    path = _write(
+        tmp_path,
+        f"""\
+network={{
+    ssid={ssid.encode('utf-8').hex()}
+    freq_list=5180
+}}
+""",
+    )
+    assert parse_supplicant_conf(path)[0] == ssid
+
+
 # ── 로밍 임계 소스 단일화 (conf `#!TH_2G=`/`#!TH_5G=` 마커 경로 제거) ──
 # 종전에는 conf 마커가 JSON 을 덮어써, `wifi <if> roam th` 로 값을 바꿔도 마커가 남아 있으면
 # 조용히 무시됐다. 마커를 생성하는 코드는 dist 에 없고 출하 conf 에도 없어 레거시·수동 편집

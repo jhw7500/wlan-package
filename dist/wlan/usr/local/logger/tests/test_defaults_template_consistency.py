@@ -162,6 +162,19 @@ def test_schema_default_matches_template(schema, full_tmpl, iface, path):
     )
 
 
+@pytest.mark.parametrize("iface", ["mlan0", "mlan1"])
+def test_schema_extra_ssids_expresses_identity_contract(schema, iface):
+    node = schema["properties"][iface]["properties"]["roaming"]["properties"]["extra_ssids"]
+    item = node["items"]
+    assert node.get("uniqueItems") is True
+    assert item.get("minLength") == 1
+    # JSON Schema counts code points, so this is only an expressible upper guard;
+    # every runtime boundary separately enforces 32 encoded UTF-8 bytes.
+    assert item.get("maxLength") == 32
+    assert "\\u0000-\\u001F" in item.get("pattern", "")
+    assert "\\u007F" in item.get("pattern", "")
+
+
 def _iface_default_cell(mlan0_value, mlan1_value):
     if mlan0_value == mlan1_value:
         return f"`{mlan0_value}`"
