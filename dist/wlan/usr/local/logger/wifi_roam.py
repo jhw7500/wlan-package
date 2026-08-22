@@ -2717,10 +2717,10 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
             home_scan_lines = iw_scan_to_ap_lines(
                 allowed, [home_freq], include_wildcard=False
             )
-        home_lines = filter_ap_lines_by_freq(home_scan_lines, home_freq)
-        scanned = True
         if home_scan_lines is SCAN_TRANSITION_BUSY:
             return SCAN_TRANSITION_BUSY, "", 0, False
+        home_lines = filter_ap_lines_by_freq(home_scan_lines, home_freq)
+        scanned = True
         if home_lines:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             home_entries = parse_scan_entries(
