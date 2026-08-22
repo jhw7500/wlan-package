@@ -68,11 +68,32 @@ EOF
 cat > "$BIN/install" <<'EOF'
 #!/bin/sh
 while [ "$#" -gt 2 ]; do shift; done
+if [ "${INSTALL_MODE:-}" = "hold-after-monitor" ] \
+   && [ -s "$STATE_DIR/monitor-action" ] \
+   && mkdir "$STATE_DIR/held-child-claim" 2>/dev/null; then
+    printf '%s\n' "$$" > "$STATE_DIR/held-child-pid"
+    : > "$STATE_DIR/held-child-ready"
+    IFS= read -r _release < "$STATE_DIR/held-child-release"
+fi
 if [ "${INSTALL_MODE:-}" = "partial-fail" ]; then
     printf 'PARTIAL\n' > "$2"
     exit 1
 fi
 cp "$1" "$2"
+EOF
+cat > "$BIN/cat" <<'EOF'
+#!/bin/sh
+mode=$(/bin/cat "$STATE_DIR/held-child-mode" 2>/dev/null || true)
+case "$mode:${1:-}" in
+  monitor-pid-cat:*/wpa_cli.pid)
+    if mkdir "$STATE_DIR/held-child-claim" 2>/dev/null; then
+      printf '%s\n' "$$" > "$STATE_DIR/held-child-pid"
+      : > "$STATE_DIR/held-child-ready"
+      IFS= read -r _release < "$STATE_DIR/held-child-release"
+    fi
+    ;;
+esac
+exec /bin/cat "$@"
 EOF
 cat > "$BIN/mv" <<'EOF'
 #!/bin/sh
@@ -357,6 +378,53 @@ set_monitor_mode() {
 set_abort_scan_mode() {
     printf '%s\n' "$1" > "$STATE_DIR/abort-scan-mode"
     rm -f "$STATE_DIR/abort-scan-count"
+}
+
+prepare_held_child() {
+    local mode="$1"
+    rm -rf "$STATE_DIR/held-child-claim"
+    rm -f "$STATE_DIR/held-child-pid" "$STATE_DIR/held-child-ready" \
+          "$STATE_DIR/held-child-release"
+    printf '%s\n' "$mode" > "$STATE_DIR/held-child-mode"
+    mkfifo "$STATE_DIR/held-child-release"
+}
+
+wait_for_held_child() {
+    local desc="$1" pid=""
+    for _wait in $(seq 1 100); do
+        if [ -s "$STATE_DIR/held-child-pid" ] \
+           && [ -f "$STATE_DIR/held-child-ready" ] \
+           && [ -d "$(cat "$STATE_DIR/last-monitor-dir" 2>/dev/null || true)" ]; then
+            break
+        fi
+        sleep 0.01
+    done
+    pid=$(cat "$STATE_DIR/held-child-pid" 2>/dev/null || true)
+    if [ -n "$pid" ] && monitor_process_running "$pid"; then
+        pass "$desc"
+        return 0
+    fi
+    fail "$desc"
+    return 1
+}
+
+cleanup_held_child() {
+    local desc="$1" pid=""
+    pid=$(cat "$STATE_DIR/held-child-pid" 2>/dev/null || true)
+    [ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null || true
+    for _wait in $(seq 1 50); do
+        [ -z "$pid" ] || ! monitor_process_running "$pid" && break
+        sleep 0.01
+    done
+    if [ -z "$pid" ] || ! monitor_process_running "$pid"; then
+        pass "$desc"
+    else
+        fail "$desc"
+        kill -KILL "$pid" 2>/dev/null || true
+    fi
+    rm -rf "$STATE_DIR/held-child-claim"
+    rm -f "$STATE_DIR/held-child-mode" "$STATE_DIR/held-child-pid" \
+          "$STATE_DIR/held-child-ready" "$STATE_DIR/held-child-release"
 }
 
 hold_scan_transition_lock() {
@@ -815,6 +883,148 @@ else
 fi
 rm -f "$STATE_DIR/slow-status-release"
 check_monitor_cleaned "Mode A slow-child watchdog still bounds monitor orphan"
+
+# Hold the parent's first private PID-file read during monitor setup.  The
+# daemon and watchdog already exist, both transaction locks are held, and the
+# selected cat remains alive across SIGKILL of only the owning wifi shell.
+write_mode_a_legacy
+set_status_mode mode-a-wait
+set_monitor_mode stubborn
+prepare_held_child monitor-pid-cat
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=10 \
+    bash "$WIFI_SH" 0 connect >/dev/null 2>&1 &
+_wifi_pid=$!
+wait_for_held_child \
+    "Mode A SIGKILL fixture holds monitor PID-poll child live"
+kill -KILL "$_wifi_pid" 2>/dev/null || true
+wait "$_wifi_pid" 2>/dev/null || true
+check_connect_locks_available_before_monitor_cleanup \
+    "monitor PID-poll SIGKILL releases FD9 then FD7 before monitor cleanup"
+cleanup_held_child "monitor PID-poll SIGKILL fixture cleans held child"
+check_monitor_cleaned "monitor PID-poll watchdog still bounds monitor orphan"
+
+# Hold the canonical writer's install child only after the explicit-connect
+# monitor is attached.  This covers the render/install transaction rather than
+# another association poll and again probes while the stubborn monitor's
+# private directory proves watchdog cleanup has not hidden lock retention.
+write_mode_b_legacy
+set_boot_policy false false
+set_status_mode target
+set_monitor_mode stubborn
+prepare_held_child explicit-install
+: > "$CALL_LOG"
+INSTALL_MODE=hold-after-monitor WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=10 \
+    bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1 &
+_wifi_pid=$!
+wait_for_held_child \
+    "explicit connect SIGKILL fixture holds post-monitor install child live"
+kill -KILL "$_wifi_pid" 2>/dev/null || true
+wait "$_wifi_pid" 2>/dev/null || true
+check_connect_locks_available_before_monitor_cleanup \
+    "explicit install SIGKILL releases FD9 then FD7 before monitor cleanup"
+cleanup_held_child "explicit install SIGKILL fixture cleans held child"
+check_monitor_cleaned "explicit install watchdog still bounds monitor orphan"
+
+# Keep a narrow static inventory over the helper cluster and the connect
+# source slice that execute after FD9/FD7 acquisition.  Every raw external
+# token must sit behind one of the close-first boundaries; the exact boundary
+# inventory also forces future wrapped children to be reviewed deliberately.
+if python3 - "$WIFI_SH" "$SCRIPT_DIR/wifi_init_config_lib.sh" <<'PY'
+import re
+import sys
+
+wifi_path, lib_path = sys.argv[1:]
+wifi = open(wifi_path, encoding="utf-8").read()
+lib = open(lib_path, encoding="utf-8").read()
+
+helper_start = wifi.index("wpa_cli_ok() {")
+helper_end = wifi.index("# ----- radio staged-apply helpers -----", helper_start)
+connect_case = wifi.index("  connect)")
+connect_start = wifi.index('    wifi_wpa_conf_lock_acquire "$IFACE"', connect_case)
+connect_end = wifi.index("\n    ;;\n  scan)", connect_start)
+abort_start = lib.index("wifi_wpa_abort_scan_quiesce() {")
+abort_end = lib.index("\n}\n\n# FD 7 serializes", abort_start) + 2
+regions = wifi[helper_start:helper_end] + wifi[connect_start:connect_end] \
+    + lib[abort_start:abort_end]
+
+external = (
+    "awk", "cat", "chmod", "dirname", "grep", "install", "jq", "mkdir",
+    "mktemp", "mv", "rm", "sleep", "sync", "tr", "wpa_cli",
+)
+command = "(" + "|".join(external) + r")\b"
+command_start = re.compile(
+    r"^(?:(?:if|elif|while|until)\s+)?(?:!\s+)?"
+    r"(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S+)\s+)*"
+    + command
+)
+command_after_operator = re.compile(r"(?:\$\(|<\(|[;&|])\s*" + command)
+wrappers = (
+    "wifi_wpa_child_exec", "wifi_wpa_child_call",
+    "wifi_wpa_run_child", "wifi_wpa_run_child_call",
+)
+
+violations = []
+in_heredoc = False
+action_body = []
+for number, line in enumerate(regions.splitlines(), 1):
+    stripped = line.strip()
+    if in_heredoc:
+        if stripped == "EOF":
+            in_heredoc = False
+        else:
+            action_body.append(stripped)
+        continue
+    if "<<'EOF'" in line:
+        in_heredoc = True
+        continue
+    if not stripped or stripped.startswith("#"):
+        continue
+    has_raw_command = bool(command_start.search(stripped) \
+        or command_after_operator.search(line))
+    if stripped.startswith("trap ") and re.search(command, line):
+        has_raw_command = True
+    if has_raw_command and not any(wrapper in line for wrapper in wrappers):
+        violations.append(f"line {number}: {stripped}")
+
+if "exec 7>&- 9>&-" not in action_body:
+    violations.append("monitor action heredoc lacks an explicit FD7/FD9 close")
+
+inventory = {wrapper: set() for wrapper in wrappers}
+wrapper_re = re.compile(
+    r"\b(" + "|".join(sorted(wrappers, key=len, reverse=True))
+    + r")\s+([A-Za-z_][A-Za-z0-9_]*)"
+)
+for wrapper, command in wrapper_re.findall(regions):
+    inventory[wrapper].add(command)
+
+expected = {
+    "wifi_wpa_child_exec": {"cat", "mktemp", "tr", "wpa_cli"},
+    "wifi_wpa_child_call": {
+        "byte_len", "connect_monitor_proc_start", "to_freq_mhz_checked",
+        "wifi_wpa_conf_common_freqs",
+    },
+    "wifi_wpa_run_child": {
+        "awk", "cat", "chmod", "mkdir", "rm", "sleep", "sync", "wpa_cli",
+    },
+    "wifi_wpa_run_child_call": {
+        "safe_install_sync", "wifi_wpa_conf_is_multi_topology",
+        "wifi_wpa_conf_render_canonical",
+    },
+}
+if inventory != expected:
+    violations.append(f"inventory mismatch: expected={expected!r} actual={inventory!r}")
+
+if violations:
+    print("post-lock child isolation violations:", file=sys.stderr)
+    print("\n".join(violations), file=sys.stderr)
+    raise SystemExit(1)
+PY
+then
+    pass "wifi connect post-lock external-command inventory is complete and isolated"
+else
+    fail "wifi connect post-lock external-command inventory must stay complete and isolated"
+fi
 
 write_mode_b_legacy
 set_boot_policy false false

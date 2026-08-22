@@ -437,7 +437,7 @@ connect_monitor_proc_start() {
     local pid="$1" stat rest
     case "$pid" in ''|*[!0-9]*) return 1 ;; esac
     [ "$pid" -gt 1 ] || return 1
-    stat=$(cat "/proc/$pid/stat" 2>/dev/null) || return 1
+    stat=$(wifi_wpa_child_exec cat "/proc/$pid/stat" 2>/dev/null) || return 1
     rest=${stat##*) }
     set -- $rest
     [ $# -ge 20 ] && [ "${1:-}" != "Z" ] || return 1
@@ -447,7 +447,7 @@ connect_monitor_proc_start() {
 connect_monitor_pid_matches() {
     local pid="$1" expected="$2" current
     [ -n "$expected" ] || return 1
-    current=$(connect_monitor_proc_start "$pid") || return 1
+    current=$(wifi_wpa_child_call connect_monitor_proc_start "$pid") || return 1
     [ "$current" = "$expected" ]
 }
 
@@ -457,7 +457,7 @@ connect_monitor_pid_is_wpa_cli() {
     [ "$pid" -gt 1 ] || return 1
     while IFS= read -r arg; do
         case "$arg" in wpa_cli|*/wpa_cli) return 0 ;; esac
-    done < <(tr '\000' '\n' < "/proc/$pid/cmdline" 2>/dev/null)
+    done < <(wifi_wpa_child_exec tr '\000' '\n' < "/proc/$pid/cmdline" 2>/dev/null)
     return 1
 }
 
@@ -478,22 +478,23 @@ connect_event_monitor_cleanup() {
     # start() records the identity.  Recover only a live wpa_cli identity from
     # our mode-0700 directory; arbitrary/stale numeric PIDs remain unsignalled.
     if [ -z "$start" ] && [ -n "${CONNECT_MONITOR_DIR:-}" ]; then
-        pid=$(cat "$CONNECT_MONITOR_DIR/wpa_cli.pid" 2>/dev/null || true)
+        pid=$(wifi_wpa_child_exec cat "$CONNECT_MONITOR_DIR/wpa_cli.pid" 2>/dev/null || true)
         if connect_monitor_pid_is_wpa_cli "$pid"; then
-            start=$(connect_monitor_proc_start "$pid" 2>/dev/null || true)
+            start=$(wifi_wpa_child_call connect_monitor_proc_start "$pid" 2>/dev/null || true)
         fi
     fi
     if connect_monitor_pid_matches "$pid" "$start"; then
         kill -TERM "$pid" 2>/dev/null || true
         for _i in 1 2 3 4 5 6 7 8 9 10; do
             connect_monitor_pid_matches "$pid" "$start" || break
-            sleep 0.1
+            wifi_wpa_run_child sleep 0.1
         done
         if connect_monitor_pid_matches "$pid" "$start"; then
             kill -KILL "$pid" 2>/dev/null || true
         fi
     fi
-    [ -z "${CONNECT_MONITOR_DIR:-}" ] || rm -rf -- "$CONNECT_MONITOR_DIR"
+    [ -z "${CONNECT_MONITOR_DIR:-}" ] \
+        || wifi_wpa_run_child rm -rf -- "$CONNECT_MONITOR_DIR"
     CONNECT_MONITOR_DIR=""
     CONNECT_MONITOR_PID=""
     CONNECT_MONITOR_START=""
@@ -505,17 +506,18 @@ connect_event_monitor_start() { # $1 iface, $2 association timeout seconds
     local iface="$1" timeout="$2" action pidfile pid start parent_pid parent_start
     local watchdog_ticks watchdog_pid watchdog_start _i
 
-    mkdir -p "$WIFI_RUN_DIR" 2>/dev/null || return 1
-    CONNECT_MONITOR_DIR=$(mktemp -d "$WIFI_RUN_DIR/${iface}.connect-monitor.XXXXXX") \
+    wifi_wpa_run_child mkdir -p "$WIFI_RUN_DIR" 2>/dev/null || return 1
+    CONNECT_MONITOR_DIR=$(wifi_wpa_child_exec mktemp -d "$WIFI_RUN_DIR/${iface}.connect-monitor.XXXXXX") \
         || return 1
-    chmod 0700 "$CONNECT_MONITOR_DIR" 2>/dev/null || {
+    wifi_wpa_run_child chmod 0700 "$CONNECT_MONITOR_DIR" 2>/dev/null || {
         connect_event_monitor_cleanup
         return 1
     }
     action="$CONNECT_MONITOR_DIR/action.sh"
     pidfile="$CONNECT_MONITOR_DIR/wpa_cli.pid"
-    cat > "$action" <<'EOF'
+    wifi_wpa_run_child cat > "$action" <<'EOF'
 #!/bin/sh
+exec 7>&- 9>&-
 [ "${2:-}" = "CONNECTED" ] || exit 0
 monitor_dir=${0%/*}
 [ -f "$monitor_dir/armed" ] || exit 0
@@ -524,7 +526,7 @@ tmp="$monitor_dir/connected-id.tmp.$$"
 (umask 077; printf '%s\n' "$WPA_ID" > "$tmp") || exit 1
 mv -f "$tmp" "$monitor_dir/connected-id"
 EOF
-    chmod 0700 "$action" 2>/dev/null || {
+    wifi_wpa_run_child chmod 0700 "$action" 2>/dev/null || {
         connect_event_monitor_cleanup
         return 1
     }
@@ -534,30 +536,30 @@ EOF
     # It recovers only a live wpa_cli from our private directory, then pins its
     # /proc start token before sending any signal.
     parent_pid=$$
-    parent_start=$(connect_monitor_proc_start "$parent_pid") || {
+    parent_start=$(wifi_wpa_child_call connect_monitor_proc_start "$parent_pid") || {
         connect_event_monitor_cleanup
         return 1
     }
     watchdog_ticks=$((timeout * 10 + 50))
     (
+        exec 7>&- 9>&-
         # Survive shell/job-control hangup propagation if the owning command
         # is killed before its EXIT trap can stop this watchdog.
         trap '' HUP
-        exec 7>&- 9>&-
         for ((_i = 1; _i <= watchdog_ticks; _i++)); do
             [ -d "$CONNECT_MONITOR_DIR" ] || exit 0
             connect_monitor_pid_matches "$parent_pid" "$parent_start" || break
-            sleep 0.1
+            wifi_wpa_run_child sleep 0.1
         done
         [ -d "$CONNECT_MONITOR_DIR" ] || exit 0
         pid=""; start=""
         for _i in 1 2 3 4 5 6 7 8 9 10; do
-            pid=$(cat "$pidfile" 2>/dev/null || true)
+            pid=$(wifi_wpa_child_exec cat "$pidfile" 2>/dev/null || true)
             if connect_monitor_pid_is_wpa_cli "$pid"; then
-                start=$(connect_monitor_proc_start "$pid" 2>/dev/null || true)
+                start=$(wifi_wpa_child_call connect_monitor_proc_start "$pid" 2>/dev/null || true)
                 [ -n "$start" ] && break
             fi
-            sleep 0.1
+            wifi_wpa_run_child sleep 0.1
         done
         if connect_monitor_pid_matches "$pid" "$start"; then
             kill -TERM "$pid" 2>/dev/null || true
@@ -566,17 +568,17 @@ EOF
             # orphan cleanup tightly, then force release of private resources.
             for _i in 1 2 3; do
                 connect_monitor_pid_matches "$pid" "$start" || break
-                sleep 0.1
+                wifi_wpa_run_child sleep 0.1
             done
             if connect_monitor_pid_matches "$pid" "$start"; then
                 kill -KILL "$pid" 2>/dev/null || true
             fi
         fi
-        rm -rf -- "$CONNECT_MONITOR_DIR"
+        wifi_wpa_run_child rm -rf -- "$CONNECT_MONITOR_DIR"
     ) >/dev/null 2>&1 &
     watchdog_pid=$!
     CONNECT_MONITOR_WATCHDOG_PID="$watchdog_pid"
-    watchdog_start=$(connect_monitor_proc_start "$watchdog_pid") || {
+    watchdog_start=$(wifi_wpa_child_call connect_monitor_proc_start "$watchdog_pid") || {
         kill -TERM "$watchdog_pid" 2>/dev/null || true
         wait "$watchdog_pid" 2>/dev/null || true
         connect_event_monitor_cleanup
@@ -586,16 +588,17 @@ EOF
 
     # Daemon mode's stdout is not part of the request/reply protocol; its rc
     # plus a live private pidfile prove successful attachment.
-    if ! (exec 7>&- 9>&-; wpa_cli -i "$iface" -a "$action" -B -P "$pidfile") >/dev/null 2>&1; then
+    if ! wifi_wpa_run_child wpa_cli -i "$iface" -a "$action" -B -P "$pidfile" \
+        >/dev/null 2>&1; then
         connect_event_monitor_cleanup
         return 1
     fi
     pid=""
     for _i in 1 2 3 4 5 6 7 8 9 10; do
-        pid=$(cat "$pidfile" 2>/dev/null || true)
-        start=$(connect_monitor_proc_start "$pid" 2>/dev/null || true)
+        pid=$(wifi_wpa_child_exec cat "$pidfile" 2>/dev/null || true)
+        start=$(wifi_wpa_child_call connect_monitor_proc_start "$pid" 2>/dev/null || true)
         [ -n "$start" ] && break
-        sleep 0.1
+        wifi_wpa_run_child sleep 0.1
     done
     if [ -z "${start:-}" ]; then
         connect_event_monitor_cleanup
@@ -2669,7 +2672,8 @@ case "$2" in
     # Mode A/실제 다중블록 거부 가드: boot snapshot을 우선하고 sentinel/block 수를
     # fail-safe 보조로 써 ssid 일괄교체를 차단한다. ssid 인자가 있을 때만 거부 — 인자 없는
     # 강제 재연결(reassociate)은 conf를 건드리지 않으므로 허용.
-    if [ -f "$CONF" ] && wifi_wpa_conf_is_multi_topology "$IFACE" "$CONF"; then
+    if [ -f "$CONF" ] \
+       && wifi_wpa_run_child_call wifi_wpa_conf_is_multi_topology "$IFACE" "$CONF"; then
         if [ $# -ge 1 ]; then
             echo "Error: $CONF 는 Mode A 또는 다중 network topology입니다." >&2
             echo "       SSID 전환은 boot-latched owner policy에 따라 자동 처리됩니다." >&2
@@ -2680,7 +2684,7 @@ case "$2" in
         # No-argument paths already captured the current numeric id above.
         # A disconnected/no-id Mode A recovery intentionally remains broad.
     fi
-    trap 'connect_event_monitor_cleanup; sync 2>/dev/null || true' EXIT
+    trap 'connect_event_monitor_cleanup; wifi_wpa_run_child sync 2>/dev/null || true' EXIT
     trap 'exit 129' HUP
     trap 'exit 130' INT
     trap 'exit 143' TERM
@@ -2702,27 +2706,28 @@ case "$2" in
             *[$'\n\r\t']*) echo "Error: SSID에 개행/탭 문자 불가" >&2; exit 1 ;;
         esac
         # ssid 명령과 동일한 32바이트 상한 — 넘으면 conf 전체 로드가 실패한다.
-        _SSID_LEN=$(byte_len "$NEW_SSID")
+        _SSID_LEN=$(wifi_wpa_child_call byte_len "$NEW_SSID")
         if [ "$_SSID_LEN" -gt 32 ]; then
             echo "Error: SSID must be 1-32 bytes (got $_SSID_LEN)" >&2
             exit 1
         fi
         # busybox awk가 ENVIRON 미지원이면 SSID가 ""로 silent 손상(awk exit 0 → 성공 오인)
         # → SSID 적용 전 ENVIRON 지원을 사전 검증(opc_wlan_apply.sh와 동일 규약).
-        CONNECT_ENVIRON_PROBE=ok awk 'BEGIN { exit(ENVIRON["CONNECT_ENVIRON_PROBE"] == "ok" ? 0 : 1) }' </dev/null \
+        CONNECT_ENVIRON_PROBE=ok wifi_wpa_run_child awk \
+            'BEGIN { exit(ENVIRON["CONNECT_ENVIRON_PROBE"] == "ok" ? 0 : 1) }' </dev/null \
             || { echo "Error: awk lacks ENVIRON support — cannot apply ssid safely" >&2; exit 1; }
         # freq 인자는 freq 명령과 동일하게 채널/MHz 모두 허용(to_freq_mhz로 MHz 정규화)
         # + 동일한 재검사 — SSID는 이 아래에서 두텁게 가드되는데 freq만 무검증이었다.
         FREQS=()
         for arg in "$@"; do
-            _f="$(to_freq_mhz_checked "$arg")" || exit 1
+            _f="$(wifi_wpa_child_call to_freq_mhz_checked "$arg")" || exit 1
             FREQS+=( "$_f" )
         done
         if [ ${#FREQS[@]} -gt 0 ]; then SET_FREQ=1; FREQ_STR="${FREQS[*]}"; fi
         # freq 생략 시에도 legacy conf를 canonical 형식으로 이행하면서 기존 공통 목록을
         # 보존한다(전역 > 첫 블록 freq_list > 첫 블록 scan_freq 우선순위).
         if [ "$SET_FREQ" = "0" ]; then
-            if ! FREQ_STR="$(wifi_wpa_conf_common_freqs "$CONF")"; then
+            if ! FREQ_STR="$(wifi_wpa_child_call wifi_wpa_conf_common_freqs "$CONF")"; then
                 echo "Error: failed to resolve common frequency policy in $CONF" >&2
                 exit 1
             fi
@@ -2730,10 +2735,11 @@ case "$2" in
 
         # canonical 변환과 SSID 치환을 두 임시파일에서 완료한 뒤 최종 결과만 한 번
         # install한다. 중간 형식이 실제 conf에 노출되지 않아 reconfigure와 경쟁하지 않는다.
-        CANON_FILE="$(mktemp)"
-        TMP_FILE="$(mktemp)"
-        trap 'rm -f "$CANON_FILE" "$TMP_FILE"; connect_event_monitor_cleanup; sync 2>/dev/null || true' EXIT
-        if ! wifi_wpa_conf_render_canonical "$CONF" "$CANON_FILE" "$FREQ_STR"; then
+        CANON_FILE="$(wifi_wpa_child_exec mktemp)"
+        TMP_FILE="$(wifi_wpa_child_exec mktemp)"
+        trap 'wifi_wpa_run_child rm -f "$CANON_FILE" "$TMP_FILE"; connect_event_monitor_cleanup; wifi_wpa_run_child sync 2>/dev/null || true' EXIT
+        if ! wifi_wpa_run_child_call wifi_wpa_conf_render_canonical \
+            "$CONF" "$CANON_FILE" "$FREQ_STR"; then
             echo "Error: failed to render canonical frequency policy in $CONF" >&2
             exit 1
         fi
@@ -2741,7 +2747,7 @@ case "$2" in
         # 값은 이스케이프하지 않고 그대로 쓴다: wpa_supplicant의 따옴표 형식 ssid="..."는
         # raw 바이트다(wpa_config_parse_string이 마지막 "까지를 그대로 복사). C-escape를
         # 디코드하는 건 P"..." 형식뿐이라, \를 \\로 바꿔 쓰면 리터럴 백슬래시가 저장된다.
-        if CONNECT_SSID="$NEW_SSID" awk '
+        if CONNECT_SSID="$NEW_SSID" wifi_wpa_run_child awk '
             BEGIN { in_net = 0; blocks = 0; new_ssid = ENVIRON["CONNECT_SSID"] }
             /^[[:space:]]*#/ { print; next }
             /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ {
@@ -2757,10 +2763,10 @@ case "$2" in
             { print }
             END { if (blocks == 0) { print "error: no network={ block in config" > "/dev/stderr"; exit 1 } }
         ' "$CANON_FILE" > "$TMP_FILE"; then
-            safe_install_sync "$TMP_FILE" "$CONF"
-            rm -f "$CANON_FILE" "$TMP_FILE"
+            wifi_wpa_run_child_call safe_install_sync "$TMP_FILE" "$CONF"
+            wifi_wpa_run_child rm -f "$CANON_FILE" "$TMP_FILE"
         else
-            rm -f "$CANON_FILE" "$TMP_FILE"
+            wifi_wpa_run_child rm -f "$CANON_FILE" "$TMP_FILE"
             echo "Error: failed to update $CONF (no network={ block?)" >&2
             exit 1
         fi
