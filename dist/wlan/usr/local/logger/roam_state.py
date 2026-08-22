@@ -23,7 +23,6 @@ def scan_transition_lock(iface, run_dir=None):
     try:
         os.makedirs(run_dir, exist_ok=True)
     except PermissionError:
-        # Unprivileged host-side tests do not own /run; deployed service does.
         run_dir = os.path.join("/tmp", "wifi")
         os.makedirs(run_dir, exist_ok=True)
     path = os.path.join(run_dir, f"{iface}.scan-transition.lock")

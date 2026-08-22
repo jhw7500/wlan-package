@@ -2616,6 +2616,15 @@ case "$2" in
     if ! wpa_cli_abort_scan_quiesce "$IFACE"; then
         echo "Error: cannot quiesce scan for $IFACE" >&2; exit 7
     fi
+    # Every no-argument reconnect captures its current id, including Mode B.
+    # Broad recovery is permitted only when this initial status has no id.
+    if [ "$#" -eq 0 ]; then
+        WPA_STATUS=$(wpa_cli -i "$IFACE" status 2>/dev/null) || WPA_STATUS=""
+        while IFS='=' read -r _key _value; do
+            [ "$_key" = "id" ] && TARGET_ID="$_value"
+        done <<< "$WPA_STATUS"
+        if [[ "$TARGET_ID" =~ ^[0-9]+$ ]]; then HAS_TARGET_ID=1; else TARGET_ID=""; fi
+    fi
     # Mode A/실제 다중블록 거부 가드: boot snapshot을 우선하고 sentinel/block 수를
     # fail-safe 보조로 써 ssid 일괄교체를 차단한다. ssid 인자가 있을 때만 거부 — 인자 없는
     # 강제 재연결(reassociate)은 conf를 건드리지 않으므로 허용.
@@ -2748,7 +2757,7 @@ case "$2" in
         while IFS='=' read -r _key _value; do
             case "$_key" in wpa_state) WPA_STATE="$_value" ;; ssid) CUR_SSID="$_value" ;; freq) CUR_FREQ="$_value" ;; id) CUR_ID="$_value" ;; esac
         done <<< "$WPA_STATUS"
-        if [ "$FRESH_EVENT_ID" = "$CUR_ID" ] && [ "$WPA_STATE" = "COMPLETED" ] \
+        if [[ "$FRESH_EVENT_ID" =~ ^[0-9]+$ ]] && [ "$FRESH_EVENT_ID" = "$CUR_ID" ] && [ "$WPA_STATE" = "COMPLETED" ] \
            && [ "$CUR_SSID" = "$TARGET_SSID" ] \
            && { [ "$SET_FREQ" = "0" ] || case " $FREQ_STR " in *" $CUR_FREQ "*) true;; *) false;; esac; }; then
             echo "associated by reconfigure: ssid=\"$CUR_SSID\" freq=$CUR_FREQ id=$CUR_ID"
@@ -2805,7 +2814,7 @@ case "$2" in
                 [[ "$FRESH_EVENT_ID" =~ ^[0-9]+$ ]] \
                     && [ "$CUR_ID" = "$FRESH_EVENT_ID" ] && ASSOC_MATCH=1
             elif [ "$CUR_SSID" = "$TARGET_SSID" ]; then
-                if [ "$FRESH_EVENT_ID" != "$CUR_ID" ]; then
+                if ! [[ "$FRESH_EVENT_ID" =~ ^[0-9]+$ ]] || [ "$FRESH_EVENT_ID" != "$CUR_ID" ]; then
                     :
                 elif [ "$SET_FREQ" = "0" ]; then
                     ASSOC_MATCH=1

@@ -205,7 +205,7 @@ def test_external_roam_scan_lock_contention_skips_iw_without_backend_fallback(mo
     run = MagicMock()
     monkeypatch.setattr(wifi_roam.subprocess, "run", run)
 
-    assert wifi_roam.iw_scan_to_ap_lines(["jhw_wlan_"], ["5180"]) is None
+    assert wifi_roam.iw_scan_to_ap_lines(["jhw_wlan_"], ["5180"]) is wifi_roam.SCAN_TRANSITION_BUSY
     run.assert_not_called()
 
 
@@ -237,7 +237,7 @@ def test_cross_ssid_transition_lock_contention_is_neutral_without_selection_or_c
 
     assert wifi_roam.route_cross_ssid_transition(
         "mlan0", "Office", "00:11:22:33:44:55", "00:11:22:33:44:66"
-    ) is None
+    ) is wifi_roam.SCAN_TRANSITION_BUSY
     select.assert_not_called()
 
 
