@@ -418,21 +418,34 @@ done
 # backup_file 복원 직후 legacy block별 scan_freq/freq_list를 공통 전역 freq_list +
 # 동일 block filter로 정규화한다. supplicant 시작 전이라 live reconfigure는 필요 없다.
 # 정규화-then-확장 순서 의존: extra block이 base의 canonical filter만 상속하게 한다.
-if command -v wifi_wpa_conf_normalize_file >/dev/null 2>&1; then
-    wifi_wpa_conf_normalize_file /etc/wpa_supplicant/wpa_supplicant-mlan0.conf \
-        || logger -p local0.err "[$tag:$LINENO] wpa conf frequency normalization failed: mlan0"
-    wifi_wpa_conf_normalize_file /etc/wpa_supplicant/wpa_supplicant-mlan1.conf \
-        || logger -p local0.err "[$tag:$LINENO] wpa conf frequency normalization failed: mlan1"
+if ! command -v wifi_wpa_conf_normalize_file >/dev/null 2>&1; then
+    logger -p local0.err "[$tag:$LINENO] required wpa normalization primitive is unavailable"
+    exit 1
+fi
+if ! wifi_wpa_conf_normalize_file /etc/wpa_supplicant/wpa_supplicant-mlan0.conf; then
+    logger -p local0.err "[$tag:$LINENO] wpa conf frequency normalization failed: mlan0"
+    exit 1
+fi
+if ! wifi_wpa_conf_normalize_file /etc/wpa_supplicant/wpa_supplicant-mlan1.conf; then
+    logger -p local0.err "[$tag:$LINENO] wpa conf frequency normalization failed: mlan1"
+    exit 1
 fi
 
 # 정규화된 단일블록 원본에서 모드 A extra_ssid 자동 블록을 멱등 재생성.
 # backup_file이 default(단일블록)로 복원해도 여기서 자가 복원한다.
-# 모드 B/빈 배열은 자동 블록만 제거(무회귀). 함수 부재 시(lib 미source) 조용히 skip.
-if command -v wifi_init_sync_extra_ssid_blocks >/dev/null 2>&1; then
-    wifi_init_sync_extra_ssid_blocks mlan0 /etc/wpa_supplicant/wpa_supplicant-mlan0.conf \
-        || logger -p local0.err "[$tag:$LINENO] extra_ssid block sync failed: mlan0"
-    wifi_init_sync_extra_ssid_blocks mlan1 /etc/wpa_supplicant/wpa_supplicant-mlan1.conf \
-        || logger -p local0.err "[$tag:$LINENO] extra_ssid block sync failed: mlan1"
+# 모드 B/빈 배열은 자동 블록만 제거(무회귀). 이 transform은 supplicant
+# 시작 전 필수 topology gate라 부재/실패를 log-and-continue 하지 않는다.
+if ! command -v wifi_init_sync_extra_ssid_blocks >/dev/null 2>&1; then
+    logger -p local0.err "[$tag:$LINENO] required extra-SSID topology primitive is unavailable"
+    exit 1
+fi
+if ! wifi_init_sync_extra_ssid_blocks mlan0 /etc/wpa_supplicant/wpa_supplicant-mlan0.conf; then
+    logger -p local0.err "[$tag:$LINENO] extra_ssid block sync failed: mlan0"
+    exit 1
+fi
+if ! wifi_init_sync_extra_ssid_blocks mlan1 /etc/wpa_supplicant/wpa_supplicant-mlan1.conf; then
+    logger -p local0.err "[$tag:$LINENO] extra_ssid block sync failed: mlan1"
+    exit 1
 fi
 
 # bgscan 가드(경고-only): conf의 비주석 bgscan=는 package wifi_bgscan과 별도

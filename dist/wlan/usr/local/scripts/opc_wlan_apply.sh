@@ -69,27 +69,34 @@ wifi_scan_transition_lock_acquire "$IFACE" \
 
 # boot snapshot Mode A 또는 실제 다중블록 conf는 SSID 일괄교체가 기본 SSID를
 # 소실시키므로 거부한다(exit 2=usage). freq 변경은 물리 대역 공통이라 허용한다.
-if [ "$HAVE_SSID" = 1 ] && wifi_wpa_conf_is_multi_topology "$IFACE" "$CONF"; then
+if [ "$HAVE_SSID" = 1 ] && wifi_wpa_run_child_call wifi_wpa_conf_is_multi_topology "$IFACE" "$CONF"; then
     echo "opc_wlan_apply: $CONF 는 다중블록 모드 — ssid 일괄변경 거부(기본 SSID 소실 방지)." >&2
     echo "                SSID 전환은 boot-latched owner policy에 따라 자동 처리됩니다." >&2
     echo "                현재 network 재연결은 SSID 없이 'wifi <iface> connect'를 사용하세요." >&2
     exit 2
 fi
 
-wcli() { wpa_cli -i "$IFACE" "$@"; }
+# Validate and encode the exact SSID before abort_scan or any other live
+# control mutation.  In Mode B an immutable extra is intentionally a manual
+# candidate that may replace the sole base block.
+if [ "$HAVE_SSID" = 1 ]; then
+    SSID_HEX=$(wifi_wpa_child_call wifi_ssid_to_hex "$SSID") \
+        || { echo "opc_wlan_apply: SSID must be valid UTF-8, 1-32 bytes, without C0 controls or DEL" >&2; exit 2; }
+fi
 
 # ctrl interface 가용 확인 (wpa_supplicant 미동작이면 reconfigure 불가 → 3).
-wcli ping >/dev/null 2>&1 || { echo "opc_wlan_apply: wpa_cli ctrl unavailable for $IFACE" >&2; exit 3; }
-if ! wifi_wpa_abort_scan_quiesce "$IFACE"; then
+wifi_wpa_run_child wpa_cli -i "$IFACE" ping >/dev/null 2>&1 \
+    || { echo "opc_wlan_apply: wpa_cli ctrl unavailable for $IFACE" >&2; exit 3; }
+if ! wifi_wpa_run_child_call wifi_wpa_abort_scan_quiesce "$IFACE"; then
     echo "opc_wlan_apply: cannot quiesce scan for $IFACE" >&2
     exit 5
 fi
 
 # --- conf 직접 편집 (atomic: 같은 fs 임시파일 → chmod → rename, 원본은 롤백용 백업) -
 # ssid → 중간파일에서 network 블록의 ssid= 치환(없으면 블록 끝에 추가).
-# freq → 공용 renderer가 전역/모든 블록에 같은 freq_list를 쓰고 scan_freq를 제거.
-# SSID 의 \ 와 " 는 wpa_supplicant conf 문법(C-style escape)에 맞게 이스케이프하여
-# conf 라인 인젝션/따옴표 조기종료를 막는다(신뢰 불가 입력 대비).
+# freq → 공용 renderer가 전역/모든 블록에 같은 freq_list를 쓰고 legacy scan_freq를 제거.
+# SSID는 공통 UTF-8/길이/control 계약으로 검증한 뒤 byte-exact hex token으로 쓴다.
+# 공백, 백슬래시, 따옴표가 quoting/escape 해석으로 다른 identity가 되지 않는다.
 DO_FREQ=0; [ -n "$FREQS" ] && DO_FREQ=1
 # FREQS 는 숫자/공백만 허용 — 직접 호출 시 awk -v 로 들어가는 값에 개행 등이 섞여
 # conf 라인이 인젝션되는 것을 차단(데몬 경로는 정수만 전달하나 방어적으로 검증).
@@ -99,7 +106,7 @@ case "$FREQS" in *[!0-9\ ]*) echo "opc_wlan_apply: invalid freq '$FREQS' (digits
 # SSID 적용 시에만 ENVIRON 지원을 사전 검증하고, 미지원이면 편집 전에 비-0(exit 4)로
 # 실패를 알린다. (freq 경로는 -v 전달이라 ENVIRON 과 무관 — 밴드락은 영향받지 않는다.)
 if [ "$HAVE_SSID" = 1 ]; then
-    OPC_ENVIRON_PROBE=ok awk 'BEGIN { exit(ENVIRON["OPC_ENVIRON_PROBE"] == "ok" ? 0 : 1) }' </dev/null \
+    OPC_ENVIRON_PROBE=ok wifi_wpa_run_child awk 'BEGIN { exit(ENVIRON["OPC_ENVIRON_PROBE"] == "ok" ? 0 : 1) }' </dev/null \
         || { echo "opc_wlan_apply: awk lacks ENVIRON support — cannot apply ssid safely" >&2; exit 4; }
 fi
 # trap 을 mktemp 보다 먼저 등록 — 임시파일 생성과 trap 등록 사이에 시그널이 와도
@@ -107,14 +114,14 @@ fi
 # reconfigure 성공까지 1이며, 이 구간의 모든 exit/signal은 원본 복원을 거친다.
 BAK=""; EDIT_TMP=""; TMP=""; ROLLBACK_REQUIRED=0
 opc_sync_required() {
-    sync "$1" 2>/dev/null || sync 2>/dev/null
+    wifi_wpa_run_child sync "$1" 2>/dev/null || wifi_wpa_run_child sync 2>/dev/null
 }
 
 opc_transaction_cleanup() {
     cleanup_rc=$?
     trap - EXIT HUP INT TERM
-    [ -z "$EDIT_TMP" ] || rm -f "$EDIT_TMP"
-    [ -z "$TMP" ] || rm -f "$TMP"
+    [ -z "$EDIT_TMP" ] || wifi_wpa_run_child rm -f "$EDIT_TMP"
+    [ -z "$TMP" ] || wifi_wpa_run_child rm -f "$TMP"
     EDIT_TMP=""
     TMP=""
 
@@ -123,16 +130,16 @@ opc_transaction_cleanup() {
         if [ -z "$BAK" ] || [ ! -f "$BAK" ]; then
             rollback_ok=0
         else
-            TMP=$(mktemp "${CONF}.rollback.XXXXXX") || rollback_ok=0
+            TMP=$(wifi_wpa_child_exec mktemp "${CONF}.rollback.XXXXXX") || rollback_ok=0
         fi
         if [ "$rollback_ok" -eq 1 ]; then
-            cp -p "$BAK" "$TMP" || rollback_ok=0
+            wifi_wpa_run_child cp -p "$BAK" "$TMP" || rollback_ok=0
         fi
         if [ "$rollback_ok" -eq 1 ]; then
             opc_sync_required "$TMP" || rollback_ok=0
         fi
         if [ "$rollback_ok" -eq 1 ]; then
-            if mv -f "$TMP" "$CONF"; then
+            if wifi_wpa_run_child mv -f "$TMP" "$CONF"; then
                 TMP=""
             else
                 rollback_ok=0
@@ -148,18 +155,18 @@ opc_transaction_cleanup() {
         if [ "$rollback_ok" -eq 1 ]; then
             ROLLBACK_REQUIRED=0
             # 복원 inode+directory가 durable해진 뒤에만 원본 backup을 소비한다.
-            if rm -f "$BAK"; then
+            if wifi_wpa_run_child rm -f "$BAK"; then
                 BAK=""
             fi
             # live daemon도 복원본을 읽게 한다. 원래 실패/cancel의 반환값은 보존한다.
-            wcli reconfigure >/dev/null 2>&1 || true
+            wifi_wpa_run_child wpa_cli -i "$IFACE" reconfigure >/dev/null 2>&1 || true
             if [ "$cleanup_rc" -eq 5 ]; then
                 echo "opc_wlan_apply: reconfigure failed for $IFACE — conf rolled back" >&2
             else
                 echo "opc_wlan_apply: transaction interrupted — conf rolled back" >&2
             fi
         else
-            [ -z "$TMP" ] || rm -f "$TMP"
+            [ -z "$TMP" ] || wifi_wpa_run_child rm -f "$TMP"
             TMP=""
             if [ -n "$BAK" ] && [ -f "$BAK" ]; then
                 echo "opc_wlan_apply: CRITICAL: rollback failed; original backup retained at $BAK" >&2
@@ -169,15 +176,15 @@ opc_transaction_cleanup() {
             cleanup_rc=6
         fi
     elif [ -n "$BAK" ]; then
-        rm -f "$BAK"
+        wifi_wpa_run_child rm -f "$BAK"
         BAK=""
     fi
     exit "$cleanup_rc"
 }
 trap 'opc_transaction_cleanup' EXIT
 trap 'exit 6' HUP INT TERM
-BAK="$(mktemp "${CONF}.bak.XXXXXX")" || { echo "opc_wlan_apply: mktemp(bak) failed" >&2; exit 4; }
-cp -p "$CONF" "$BAK" || { echo "opc_wlan_apply: backup failed" >&2; exit 4; }
+BAK="$(wifi_wpa_child_exec mktemp "${CONF}.bak.XXXXXX")" || { echo "opc_wlan_apply: mktemp(bak) failed" >&2; exit 4; }
+wifi_wpa_run_child cp -p "$CONF" "$BAK" || { echo "opc_wlan_apply: backup failed" >&2; exit 4; }
 # rollback inode가 rename 전에 durable해야 전원 장애 후에도 원본 복구를 보장한다.
 opc_sync_required "$BAK" \
     || { echo "opc_wlan_apply: backup sync failed" >&2; exit 4; }
@@ -185,25 +192,23 @@ opc_sync_required "$BAK" \
 # 정전 후 backup directory entry의 존재를 보장하지 못한다.
 opc_sync_required "$CONF_DIR" \
     || { echo "opc_wlan_apply: backup directory sync failed" >&2; exit 4; }
-EDIT_TMP="$(mktemp "${CONF}.edit.XXXXXX")" || { echo "opc_wlan_apply: mktemp(edit) failed" >&2; exit 4; }
-TMP="$(mktemp "${CONF}.XXXXXX")" || { echo "opc_wlan_apply: mktemp failed" >&2; exit 4; }
+EDIT_TMP="$(wifi_wpa_child_exec mktemp "${CONF}.edit.XXXXXX")" || { echo "opc_wlan_apply: mktemp(edit) failed" >&2; exit 4; }
+TMP="$(wifi_wpa_child_exec mktemp "${CONF}.XXXXXX")" || { echo "opc_wlan_apply: mktemp failed" >&2; exit 4; }
 
-# SSID 는 ENVIRON 으로 전달한다 — awk -v 는 값의 \X 를 C-escape 로 해석해(예: \b→
-# 백스페이스) 백슬래시가 든 SSID 를 손상시키므로, raw 보존되는 ENVIRON 을 쓴다.
-# (ENVIRON 미지원 awk 는 위 probe 에서 걸러져 이 경로에 도달하지 않는다.)
-OPC_SSID="$SSID" awk -v do_ssid="$HAVE_SSID" '
-    function esc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return s }
-    BEGIN { in_net = 0; blocks = 0; ssid_done = 0; new_ssid = ENVIRON["OPC_SSID"] }
+# 검증된 hex token을 ENVIRON으로 전달한다. ENVIRON 미지원 awk는 위 probe에서
+# 걸러져 이 경로에 도달하지 않는다.
+OPC_SSID_HEX="${SSID_HEX:-}" wifi_wpa_run_child awk -v do_ssid="$HAVE_SSID" '
+    BEGIN { in_net = 0; blocks = 0; ssid_done = 0; new_ssid = ENVIRON["OPC_SSID_HEX"] }
     /^[[:space:]]*#/ { print; next }
     /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ {
         in_net = 1; blocks++; ssid_done = 0; print; next
     }
     in_net && /^[[:space:]]*\}/ {
-        if (do_ssid && !ssid_done)  { print "    ssid=\"" esc(new_ssid) "\""; ssid_done = 1 }
+        if (do_ssid && !ssid_done)  { print "    ssid=" new_ssid; ssid_done = 1 }
         in_net = 0; print; next
     }
     do_ssid && in_net && /^[[:space:]]*ssid[[:space:]]*=/ {
-        if (!ssid_done) { print "    ssid=\"" esc(new_ssid) "\""; ssid_done = 1 } next
+        if (!ssid_done) { print "    ssid=" new_ssid; ssid_done = 1 } next
     }
     { print }
     END {
@@ -215,24 +220,25 @@ OPC_SSID="$SSID" awk -v do_ssid="$HAVE_SSID" '
 # SSID-only 요청도 기존 공통 목록을 해석해 canonical 형식을 보존/이행한다.
 COMMON_FREQS="$FREQS"
 if [ "$DO_FREQ" = 0 ]; then
-    COMMON_FREQS=$(wifi_wpa_conf_common_freqs "$EDIT_TMP") \
+    COMMON_FREQS=$(wifi_wpa_child_call wifi_wpa_conf_common_freqs "$EDIT_TMP") \
         || { echo "opc_wlan_apply: common frequency resolve failed" >&2; exit 4; }
 fi
-wifi_wpa_conf_render_canonical "$EDIT_TMP" "$TMP" "$COMMON_FREQS" \
+wifi_wpa_run_child_call wifi_wpa_conf_render_canonical "$EDIT_TMP" "$TMP" "$COMMON_FREQS" \
     || { echo "opc_wlan_apply: canonical conf render failed" >&2; exit 4; }
-rm -f "$EDIT_TMP"
+wifi_wpa_run_child rm -f "$EDIT_TMP"
 EDIT_TMP=""
 
 # 원본 conf 권한을 보존한다 — psk= 평문이 0644 로 월드리더블 노출되지 않도록.
 # --reference 미지원 환경(busybox 등)은 0600 으로 폴백(노출 최소).
-chmod --reference="$CONF" "$TMP" 2>/dev/null || chmod 0600 "$TMP" 2>/dev/null || true
+wifi_wpa_run_child chmod --reference="$CONF" "$TMP" 2>/dev/null \
+    || wifi_wpa_run_child chmod 0600 "$TMP" 2>/dev/null || true
 # rename 전 staging 내용을 먼저 durable하게 한다. rename 후에는 대상
 # inode와 directory entry를 각각 sync해 전원 장애에서 old/new 중 하나만 남게 한다.
 opc_sync_required "$TMP" \
     || { echo "opc_wlan_apply: staged conf sync failed" >&2; exit 4; }
 # 이 플래그를 rename보다 먼저 세워, 두 명령 사이 signal도 원본으로 복구한다.
 ROLLBACK_REQUIRED=1
-mv -f "$TMP" "$CONF" || { echo "opc_wlan_apply: conf install failed" >&2; exit 4; }
+wifi_wpa_run_child mv -f "$TMP" "$CONF" || { echo "opc_wlan_apply: conf install failed" >&2; exit 4; }
 TMP=""
 opc_sync_required "$CONF" \
     || { echo "opc_wlan_apply: installed conf sync failed" >&2; exit 4; }
@@ -246,10 +252,10 @@ opc_sync_required "$CONF_DIR" \
 # 보존해 둘 다 성공인 경우에만 commit한다(wifi.sh의 wpa_cli_ok와 동일 계약).
 # reconfigure 는 재연결(끊김)을 유발 — wifi_checker 가 과도기를 '불안정'으로 오판해
 # reassociate/restart 하지 않도록 grace flag 를 세운다(TTL 은 checker 의 RECONFIGURE_GRACE_SEC).
-if mkdir -p "$WIFI_RUN_DIR" 2>/dev/null; then
-    touch "$WIFI_RUN_DIR/${IFACE}.reconfigure-grace" 2>/dev/null || true
+if wifi_wpa_run_child mkdir -p "$WIFI_RUN_DIR" 2>/dev/null; then
+    wifi_wpa_run_child touch "$WIFI_RUN_DIR/${IFACE}.reconfigure-grace" 2>/dev/null || true
 fi
-RECONFIGURE_REPLY=$(wcli reconfigure 2>/dev/null)
+RECONFIGURE_REPLY=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" reconfigure 2>/dev/null)
 RECONFIGURE_RC=$?
 if [ "$RECONFIGURE_RC" -ne 0 ] || [ "$RECONFIGURE_REPLY" != "OK" ]; then
     # EXIT transaction trap이 rollback rename/result/sync를 일원화한다.
@@ -257,7 +263,7 @@ if [ "$RECONFIGURE_RC" -ne 0 ] || [ "$RECONFIGURE_REPLY" != "OK" ]; then
 fi
 # reconfigure가 확정된 시점이 commit point. 이후 signal은 새 conf를 되돌리지 않는다.
 ROLLBACK_REQUIRED=0
-rm -f "$BAK"
+wifi_wpa_run_child rm -f "$BAK"
 BAK=""
 trap - EXIT HUP INT TERM
 

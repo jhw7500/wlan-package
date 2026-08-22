@@ -2,6 +2,8 @@ import sys
 import os
 import json
 import subprocess
+import fcntl
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -212,7 +214,10 @@ def test_startup_consumes_surviving_wal_before_missing_policy_refusal(tmp_path):
     fake_wpa.chmod(0o755)
 
     child = f"""
-import runpy, sys, types
+import contextlib, runpy, sys, types
+@contextlib.contextmanager
+def transition_lock(*args, **kwargs):
+    yield True
 class StubLogger:
     def __init__(self, *a, **k): pass
     def message(self, *a, **k): pass
@@ -223,7 +228,7 @@ sys.modules['roam_state'] = types.SimpleNamespace(
     lease_active=lambda *a, **k: False,
     process_start_time=lambda *a, **k: '1',
     roam_state_paths=lambda iface: ({str(tmp_path / 'condition')!r}, {str(tmp_path / 'scan-time')!r}),
-    scan_transition_lock=lambda *a, **k: None,
+    scan_transition_lock=transition_lock,
     write_flag=lambda *a, **k: None,
 )
 sys.path.insert(0, {str(logger_dir)!r})
@@ -736,6 +741,159 @@ def test_pending_selection_cleanup_is_retried_and_marker_cleared(monkeypatch):
     assert not marker.exists()
 
 
+def test_pending_selection_cleanup_defers_under_real_scan_transition_lock(
+    tmp_path, monkeypatch
+):
+    """Recovery must not mutate supplicant while another live operation owns the lock."""
+    marker = Path(wifi_roam.selection_cleanup_marker_path("mlan0"))
+    marker.write_text(
+        json.dumps({"version": 1, "network_id": "1", "phase": "before-pin"})
+        + "\n"
+    )
+    calls = []
+
+    def record_mutation(cmd, *args, **kwargs):
+        calls.append(cmd)
+        return _Run(0, "OK\n")
+
+    lock_dir = tmp_path / "wifi"
+    lock_dir.mkdir(exist_ok=True)
+    lock_path = lock_dir / "mlan0.scan-transition.lock"
+    with lock_path.open("a+") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        with patch.object(wifi_roam.subprocess, "run", side_effect=record_mutation):
+            result = wifi_roam.retry_pending_selection_cleanup("mlan0")
+
+    assert result is wifi_roam.SCAN_TRANSITION_BUSY
+    assert calls == []
+    assert marker.exists()
+
+
+def test_main_loop_pending_cleanup_contention_holds_real_lock_and_mutates_nothing(
+    tmp_path, monkeypatch
+):
+    marker = Path(wifi_roam.selection_cleanup_marker_path("mlan0"))
+    marker.write_text(
+        json.dumps({"version": 1, "network_id": "1", "phase": "before-pin"})
+        + "\n"
+    )
+    monkeypatch.setattr(wifi_roam, "ENABLE_PREDICTIVE_ROAM", False)
+    monkeypatch.setattr(wifi_roam, "ENABLE_PING_PONG_PREVENTION", False)
+    monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", False)
+    monkeypatch.setattr(wifi_roam, "CHECK_INTERVAL", 7)
+    monkeypatch.setattr(wifi_roam, "_RELOAD_STATE", {"pending": False})
+    later = MagicMock(side_effect=AssertionError("busy recovery did not defer"))
+    monkeypatch.setattr(wifi_roam, "reload_supplicant_conf_if_changed", later)
+    control_calls = []
+
+    def record_control(cmd, *args, **kwargs):
+        control_calls.append(cmd)
+        return _Run(0, "OK\n")
+
+    class StopCycle(Exception):
+        pass
+
+    sleeps = []
+    def stop_cycle(seconds):
+        sleeps.append(seconds)
+        raise StopCycle
+
+    monkeypatch.setattr(wifi_roam, "interruptible_sleep", stop_cycle)
+    lock_path = tmp_path / "wifi" / "mlan0.scan-transition.lock"
+    lock_path.parent.mkdir(exist_ok=True)
+    with lock_path.open("a+") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        with patch.object(wifi_roam.subprocess, "run", side_effect=record_control):
+            with pytest.raises(StopCycle):
+                wifi_roam.main()
+
+    assert sleeps == [7]
+    assert control_calls == []
+    assert marker.exists()
+    later.assert_not_called()
+
+
+def test_startup_pending_cleanup_contention_fails_without_control_mutation(tmp_path):
+    """Startup contention is explicit and cannot issue even one cleanup command."""
+    logger_dir = Path(wifi_roam.__file__).resolve().parent
+    script = Path(wifi_roam.__file__).resolve()
+    state_dir = tmp_path / "selection-state"
+    state_dir.mkdir()
+    marker = state_dir / ".mlan0.selection-cleanup-pending"
+    marker.write_text(
+        json.dumps({"version": 1, "network_id": "1", "phase": "before-pin"})
+        + "\n"
+    )
+    run_dir = tmp_path / "wifi"
+    run_dir.mkdir()
+    lock_path = run_dir / "mlan0.scan-transition.lock"
+    call_log = tmp_path / "wpa.calls"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_wpa = fake_bin / "wpa_cli"
+    fake_wpa.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' \"$*\" >> \"$WPA_CALL_LOG\"\n"
+        "printf 'OK\\n'\n"
+    )
+    fake_wpa.chmod(0o755)
+
+    child = f"""
+import contextlib, fcntl, os, runpy, sys, types
+@contextlib.contextmanager
+def transition_lock(iface):
+    path = os.path.join({str(run_dir)!r}, f"{{iface}}.scan-transition.lock")
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    acquired = False
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquired = True
+        except BlockingIOError:
+            pass
+        yield acquired
+    finally:
+        if acquired:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+class StubLogger:
+    def __init__(self, *a, **k): pass
+    def message(self, *a, **k): pass
+sys.modules['sUTILS'] = types.SimpleNamespace(Logger=StubLogger, _EXTRA_=lambda: {{}})
+sys.modules['roam_state'] = types.SimpleNamespace(
+    clear_own_lease=lambda *a, **k: True,
+    clear_stale_lease=lambda *a, **k: False,
+    lease_active=lambda *a, **k: False,
+    process_start_time=lambda *a, **k: '1',
+    roam_state_paths=lambda iface: ({str(tmp_path / 'condition')!r}, {str(tmp_path / 'scan-time')!r}),
+    scan_transition_lock=transition_lock,
+    write_flag=lambda *a, **k: None,
+)
+sys.path.insert(0, {str(logger_dir)!r})
+sys.argv = [{str(script)!r}, 'mlan0']
+runpy.run_path({str(script)!r}, run_name='__main__')
+"""
+    env = os.environ | {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "WPA_CALL_LOG": str(call_log),
+        "WIFI_RUN_DIR": str(run_dir),
+        "WIFI_SELECTION_STATE_DIR": str(state_dir),
+    }
+    with lock_path.open("a+") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        result = subprocess.run(
+            [sys.executable, "-c", child],
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+
+    assert result.returncode == 4, result.stderr
+    assert not call_log.exists() or call_log.read_text() == ""
+    assert marker.exists()
+
+
 def test_legacy_numeric_selection_cleanup_marker_is_still_recovered(monkeypatch):
     marker = Path(wifi_roam.selection_cleanup_marker_path("mlan0"))
     marker.write_text("1\n")
@@ -809,3 +967,46 @@ def test_route_cross_mode_a_fail_reply_no_success_side_effects(monkeypatch):
     assert ok is False
     notify.assert_not_called()
     preventer.add_roam.assert_not_called()
+
+
+def _wpa_printf_encode(value):
+    out = []
+    for byte in value.encode("utf-8"):
+        if byte == 0x22:
+            out.append(r'\"')
+        elif byte == 0x5C:
+            out.append(r'\\')
+        elif 0x20 <= byte <= 0x7E:
+            out.append(chr(byte))
+        else:
+            out.append(f"\\x{byte:02x}")
+    return "".join(out)
+
+
+def test_select_network_decodes_wpa_ctrl_identity_in_list_and_status():
+    ssid = '  게스트 \\ " exact  '
+    encoded = _wpa_printf_encode(ssid)
+    listing = (
+        "network id / ssid / bssid / flags\n"
+        f"1\t{encoded}\tany\t\n"
+    )
+
+    def side_effect(cmd, *args, **kwargs):
+        sub = cmd[3]
+        if sub == "list_networks":
+            return _Run(0, listing)
+        if sub in ("bssid", "select_network", "enable_network"):
+            return _Run(0, "OK\n")
+        if sub == "status":
+            return _Run(
+                0,
+                "bssid=00:11:22:33:44:55\n"
+                f"ssid={encoded}\nid=1\nwpa_state=COMPLETED\n",
+            )
+        return _Run(1, "")
+
+    with patch.object(wifi_roam.subprocess, "run", side_effect=side_effect):
+        with patch.object(wifi_roam.time, "sleep", MagicMock()):
+            assert select_network_for_ssid(
+                "mlan0", ssid, "00:11:22:33:44:55"
+            ) is True

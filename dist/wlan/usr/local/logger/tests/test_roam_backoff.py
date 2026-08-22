@@ -296,6 +296,32 @@ def test_main_good_signal_oscillation_keeps_failure_backoff(monkeypatch):
     assert sleeps == [3, 3, 3, 1, 6]
 
 
+def test_main_pending_cleanup_busy_defers_exactly_one_normal_cycle(monkeypatch):
+    """The recovery-lock busy sentinel is scheduler-neutral, not truthy success."""
+    monkeypatch.setattr(wifi_roam, "ENABLE_PREDICTIVE_ROAM", False)
+    monkeypatch.setattr(wifi_roam, "ENABLE_PING_PONG_PREVENTION", False)
+    monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", False)
+    monkeypatch.setattr(wifi_roam, "CHECK_INTERVAL", 7)
+    monkeypatch.setattr(wifi_roam, "_RELOAD_STATE", {"pending": False})
+    cleanup = MagicMock(return_value=wifi_roam.SCAN_TRANSITION_BUSY)
+    later_boundary = MagicMock(side_effect=AssertionError("cycle did not defer"))
+    monkeypatch.setattr(wifi_roam, "retry_pending_selection_cleanup", cleanup)
+    monkeypatch.setattr(wifi_roam, "reload_supplicant_conf_if_changed", later_boundary)
+    sleeps = []
+
+    def stop_after_defer(seconds):
+        sleeps.append(seconds)
+        raise _StopLoop
+
+    monkeypatch.setattr(wifi_roam, "interruptible_sleep", stop_after_defer)
+    with pytest.raises(_StopLoop):
+        wifi_roam.main()
+
+    cleanup.assert_called_once_with(wifi_roam.IFACE)
+    assert sleeps == [7]
+    later_boundary.assert_not_called()
+
+
 def _drive_main_busy_cycle(monkeypatch, stage_result, *, cross=False):
     """Run exactly one production main-loop cycle and expose all busy side effects."""
     _set_sleep(monkeypatch, 3, 30, fast=1)

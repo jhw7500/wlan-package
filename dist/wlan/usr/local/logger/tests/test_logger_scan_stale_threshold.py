@@ -30,6 +30,19 @@ _TMPL = os.path.join(
 )
 
 
+def test_logger_scan_decodes_hex_ssid_identity_byte_exact(tmp_path):
+    ssid = '  게스트 \\ " exact  '
+    conf = tmp_path / "wpa.conf"
+    conf.write_text(
+        "freq_list=5180\n"
+        "network={\n"
+        f"    ssid={ssid.encode('utf-8').hex()}\n"
+        "}\n"
+    )
+    parsed, _, _ = wifi_logger_scan.parse_wpa_supplicant_conf(str(conf))
+    assert parsed == ssid
+
+
 def test_loader_reads_config_value(tmp_path):
     p = tmp_path / "wic.json"
     p.write_text(json.dumps({"logger": {"bgscan_stale_threshold_sec": 300}}))

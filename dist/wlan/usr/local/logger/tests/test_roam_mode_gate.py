@@ -80,7 +80,7 @@ def test_boot_policy_overrides_mutated_live_topology(monkeypatch):
         "extra_ssids": [" BootOffice ", "Guest"],
     })
     assert wifi_roam.GENERATE_NETWORK_BLOCKS is True
-    assert wifi_roam.EXTRA_SSIDS == ["BootOffice", "Guest"]
+    assert wifi_roam.EXTRA_SSIDS == [" BootOffice ", "Guest"]
 
 
 def test_boot_policy_rejects_stale_wifi_roam_owner():

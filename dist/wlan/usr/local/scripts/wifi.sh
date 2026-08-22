@@ -46,7 +46,7 @@ elif [ "${1:-}" == "2" ] || [ "${1:-}" == "eth0" ]; then
 fi
 
 logger -p local0.info "[$tag:$LINENO] [$IFACE] cmd : wifi $1 $2 $3 $4"
-trap 'sync 2>/dev/null || true' EXIT
+trap 'wifi_wpa_run_child sync 2>/dev/null || true' EXIT
 
 # ----- safe file update helpers -----
 sync_path_or_global() {
@@ -641,7 +641,7 @@ connect_association_poll_matches() {
         elif [ "$HAS_TARGET" = "0" ]; then
             [[ "$FRESH_EVENT_ID" =~ ^[0-9]+$ ]] \
                 && [ "$CUR_ID" = "$FRESH_EVENT_ID" ] && ASSOC_MATCH=1
-        elif [ "$CUR_SSID" = "$TARGET_SSID" ]; then
+        elif [ "$CUR_SSID" = "$TARGET_SSID_WPA_TEXT" ]; then
             if [[ "$FRESH_EVENT_ID" =~ ^[0-9]+$ ]] \
                && [ "$FRESH_EVENT_ID" = "$CUR_ID" ]; then
                 if [ "$SET_FREQ" = "0" ]; then
@@ -2432,18 +2432,18 @@ case "$2" in
     # 매핑한다 → 재검사가 없으면 freq_list=abc(파싱 실패로 주파수 핀 해제) 나
     # freq_list=6000(존재하지 않는 채널)이 conf에 박힌 채 부팅을 넘긴다.
     for arg in "$@"; do
-        _f="$(to_freq_mhz_checked "$arg")" || exit 1
+        _f="$(wifi_wpa_child_call to_freq_mhz_checked "$arg")" || exit 1
         FREQS+=( "$_f" )
     done
     [ ${#FREQS[@]} -eq 0 ] && { echo "configure freq not exist" >&2; exit 1; }
     FREQ_STR="${FREQS[*]}"
-    TMP_FILE="$(mktemp)"
-    trap 'rm -f "$TMP_FILE"; sync 2>/dev/null || true' EXIT
-    if ! wifi_wpa_conf_render_canonical "$CONF" "$TMP_FILE" "$FREQ_STR"; then
+    TMP_FILE="$(wifi_wpa_child_exec mktemp)"
+    trap 'wifi_wpa_run_child rm -f "$TMP_FILE"; wifi_wpa_run_child sync 2>/dev/null || true' EXIT
+    if ! wifi_wpa_run_child_call wifi_wpa_conf_render_canonical "$CONF" "$TMP_FILE" "$FREQ_STR"; then
         echo "Error: failed to render canonical frequency policy in $CONF" >&2
         exit 1
     fi
-    safe_install_sync "$TMP_FILE" "$CONF"
+    wifi_wpa_run_child_call safe_install_sync "$TMP_FILE" "$CONF"
     echo "global/block freq_list configured $FREQ_STR in $CONF"
     ;;
   ssid)
@@ -2454,59 +2454,48 @@ case "$2" in
     wifi_wpa_conf_lock_acquire "$IFACE" \
         || { echo "Error: failed to lock $CONF" >&2; exit 1; }
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> ssid <NEW_SSID>" >&2; exit 1; fi
-    if wifi_wpa_conf_is_multi_topology "$IFACE" "$CONF"; then
+    if wifi_wpa_run_child_call wifi_wpa_conf_is_multi_topology "$IFACE" "$CONF"; then
         echo "Error: $CONF 는 Mode A 또는 다중 network topology입니다." >&2
         echo "       SSID 전환은 boot-latched owner policy에 따라 자동 처리됩니다." >&2
         echo "       SSID 없이 'wifi <iface> connect'를 실행하면 현재 network 재연결을 요청합니다." >&2
         exit 1
     fi
     NEW_SSID="$1"
-    # 빈 SSID는 ssid=""를 써 association이 영영 불가 / 개행·탭은 awk 멀티라인
-    # injection으로 conf에 임의 directive를 주입한다 — connect 경로와 동일 가드.
-    [ -z "$NEW_SSID" ] && { echo "Error: SSID must not be empty" >&2; exit 1; }
-    case "$NEW_SSID" in
-        *[$'\n\r\t']*) echo "Error: SSID에 개행/탭 문자 불가" >&2; exit 1 ;;
-    esac
-    # SSID는 802.11상 최대 32바이트. 넘으면 psk 길이초과와 동일하게 conf 전체
-    # 로드가 실패해 supplicant가 뜨지 않는다(바이트 기준 — 한글 SSID 11자면 33바이트).
-    _SSID_LEN=$(byte_len "$NEW_SSID")
-    if [ "$_SSID_LEN" -gt 32 ]; then
-        echo "Error: SSID must be 1-32 bytes (got $_SSID_LEN)" >&2
+    SSID_HEX=$(wifi_wpa_child_call wifi_ssid_to_hex "$NEW_SSID") || {
+        echo "Error: SSID must be valid UTF-8, 1-32 bytes, without C0 controls or DEL" >&2
         exit 1
-    fi
+    }
     # busybox awk가 ENVIRON 미지원이면 SSID가 ""로 silent 손상(awk exit 0 → 성공 오인)
     # → 적용 전 ENVIRON 지원을 사전 검증(connect 경로와 동일 규약).
-    SSID_ENVIRON_PROBE=ok awk 'BEGIN { exit(ENVIRON["SSID_ENVIRON_PROBE"] == "ok" ? 0 : 1) }' </dev/null \
+    SSID_ENVIRON_PROBE=ok wifi_wpa_run_child awk 'BEGIN { exit(ENVIRON["SSID_ENVIRON_PROBE"] == "ok" ? 0 : 1) }' </dev/null \
         || { echo "Error: awk lacks ENVIRON support — cannot apply ssid safely" >&2; exit 1; }
-    TMP_FILE="$(mktemp)"
+    TMP_FILE="$(wifi_wpa_child_exec mktemp)"
     # active ssid= → 치환 / #ssid=(주석)만 있으면 주석 해제 후 설정 / 둘 다 없으면 network 블록 끝에 append.
     # (블록 인지 방식은 connect 경로와 동일 — 주석처리된 설정도 확실히 반영. 블록당 done 1회.)
-    # SSID는 ENVIRON으로 raw 전달 — awk -v는 값의 \X를 C-escape로 해석해 손상시킨다.
-    # 값은 이스케이프하지 않고 그대로 쓴다: wpa_supplicant의 따옴표 형식 ssid="..."는
-    # raw 바이트다(wpa_config_parse_string이 마지막 "까지를 그대로 복사). C-escape를
-    # 디코드하는 건 P"..." 형식뿐이라, \를 \\로 바꿔 쓰면 리터럴 백슬래시가 저장된다.
-    if WIFI_NEW_SSID="$NEW_SSID" awk '
-        BEGIN { in_net = 0; changed = 0; new_ssid = ENVIRON["WIFI_NEW_SSID"] }
+    # Hex is the sole writer representation: no quoting/escape/whitespace
+    # interpretation can alter the validated UTF-8 identity.
+    if WIFI_NEW_SSID_HEX="$SSID_HEX" wifi_wpa_run_child awk '
+        BEGIN { in_net = 0; changed = 0; new_ssid = ENVIRON["WIFI_NEW_SSID_HEX"] }
         /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { in_net = 1; done = 0; print; next }
         in_net && /^[[:space:]]*\}/ {
-            if (!done) { print "    ssid=\"" new_ssid "\""; changed = 1; done = 1 }
+            if (!done) { print "    ssid=" new_ssid; changed = 1; done = 1 }
             in_net = 0; print; next
         }
         in_net && /^[[:space:]]*ssid[[:space:]]*=/ {
-            if (!done) { print "    ssid=\"" new_ssid "\""; changed = 1; done = 1 } next
+            if (!done) { print "    ssid=" new_ssid; changed = 1; done = 1 } next
         }
         in_net && /^[[:space:]]*#[[:space:]]*ssid[[:space:]]*=/ {
-            if (!done) { print "    ssid=\"" new_ssid "\""; changed = 1; done = 1; next }
+            if (!done) { print "    ssid=" new_ssid; changed = 1; done = 1; next }
             print; next
         }
         /^[[:space:]]*#/ { print; next }
         { print }
         END { if (!changed) exit 1 }
     ' "$CONF" > "$TMP_FILE"; then
-        safe_install_sync "$TMP_FILE" "$CONF"
-        rm -f "$TMP_FILE"
+        wifi_wpa_run_child_call safe_install_sync "$TMP_FILE" "$CONF"
+        wifi_wpa_run_child rm -f "$TMP_FILE"
         echo "ssid changed to \"$NEW_SSID\" in $CONF"
-    else echo "no network={ block found, nothing changed in $CONF" >&2; rm -f "$TMP_FILE"; exit 1; fi
+    else echo "no network={ block found, nothing changed in $CONF" >&2; wifi_wpa_run_child rm -f "$TMP_FILE"; exit 1; fi
     ;;
   psk)
     set -euo pipefail
@@ -2522,7 +2511,7 @@ case "$2" in
     # (이 핸들러는 항상 psk="..."로 쓰므로 64자 hex PMK는 지원 대상이 아니다.)
     # 길이는 바이트로 센다 — wpa_supplicant가 os_strlen(바이트)로 검사하므로
     # ${#var}(UTF-8 로케일에서 문자 수)로 재면 한글 passphrase가 양방향으로 어긋난다.
-    _PSK_LEN=$(byte_len "$NEW_PSK")
+    _PSK_LEN=$(wifi_wpa_child_call byte_len "$NEW_PSK")
     if [ "$_PSK_LEN" -lt 8 ] || [ "$_PSK_LEN" -gt 63 ]; then
         echo "Error: psk must be 8-63 bytes (got $_PSK_LEN)" >&2
         exit 1
@@ -2532,9 +2521,9 @@ case "$2" in
         *[$'\n\r\t']*) echo "Error: psk에 개행/탭 문자 불가" >&2; exit 1 ;;
     esac
     # busybox awk가 ENVIRON 미지원이면 psk가 ""로 silent 손상 → 사전 검증(connect 규약).
-    PSK_ENVIRON_PROBE=ok awk 'BEGIN { exit(ENVIRON["PSK_ENVIRON_PROBE"] == "ok" ? 0 : 1) }' </dev/null \
+    PSK_ENVIRON_PROBE=ok wifi_wpa_run_child awk 'BEGIN { exit(ENVIRON["PSK_ENVIRON_PROBE"] == "ok" ? 0 : 1) }' </dev/null \
         || { echo "Error: awk lacks ENVIRON support — cannot apply psk safely" >&2; exit 1; }
-    TMP_FILE="$(mktemp)"
+    TMP_FILE="$(wifi_wpa_child_exec mktemp)"
     # active psk= → 치환 / #psk=(주석)만 있으면 주석 해제 후 설정 / 둘 다 없으면 network 블록 끝에 append.
     # (블록 인지 방식은 connect 경로와 동일 — 주석처리된 설정도 확실히 반영. 블록당 done 1회.)
     # psk는 ENVIRON으로 raw 전달 — awk -v는 값의 \X를 C-escape로 해석해 손상시킨다.
@@ -2542,7 +2531,7 @@ case "$2" in
     # raw 바이트다(wpa_config_parse_psk가 os_strrchr로 마지막 "까지를 그대로 취함).
     # \를 \\로 바꿔 쓰면 리터럴 백슬래시가 저장되고, 위 byte_len은 이스케이프 전
     # 길이를 재므로 63바이트 경계에서 conf 전체 로드가 깨진다.
-    if WIFI_NEW_PSK="$NEW_PSK" awk '
+    if WIFI_NEW_PSK="$NEW_PSK" wifi_wpa_run_child awk '
         BEGIN { in_net = 0; changed = 0; new_psk = ENVIRON["WIFI_NEW_PSK"] }
         /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { in_net = 1; done = 0; print; next }
         in_net && /^[[:space:]]*\}/ {
@@ -2560,10 +2549,10 @@ case "$2" in
         { print }
         END { if (!changed) exit 1 }
     ' "$CONF" > "$TMP_FILE"; then
-        safe_install_sync "$TMP_FILE" "$CONF"
-        rm -f "$TMP_FILE"
+        wifi_wpa_run_child_call safe_install_sync "$TMP_FILE" "$CONF"
+        wifi_wpa_run_child rm -f "$TMP_FILE"
         echo "psk changed in $CONF"
-    else echo "no network={ block found, nothing changed in $CONF" >&2; rm -f "$TMP_FILE"; exit 1; fi
+    else echo "no network={ block found, nothing changed in $CONF" >&2; wifi_wpa_run_child rm -f "$TMP_FILE"; exit 1; fi
     ;;
   key)
     set -euo pipefail
@@ -2598,10 +2587,10 @@ case "$2" in
                 ;;
         esac
     done
-    TMP_FILE="$(mktemp)"
+    TMP_FILE="$(wifi_wpa_child_exec mktemp)"
     # active key_mgmt= → 치환 / #key_mgmt=(주석)만 있으면 주석 해제 후 설정 / 둘 다 없으면 network 블록 끝에 append.
     # (블록 인지 방식은 connect 경로와 동일 — 주석처리된 설정도 확실히 반영. 블록당 done 1회.)
-    if awk -v new_key="$NEW_KEY" '
+    if wifi_wpa_run_child awk -v new_key="$NEW_KEY" '
         BEGIN { in_net = 0; changed = 0 }
         /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { in_net = 1; done = 0; print; next }
         in_net && /^[[:space:]]*\}/ {
@@ -2619,10 +2608,10 @@ case "$2" in
         { print }
         END { if (!changed) exit 1 }
     ' "$CONF" > "$TMP_FILE"; then
-        safe_install_sync "$TMP_FILE" "$CONF"
-        rm -f "$TMP_FILE"
+        wifi_wpa_run_child_call safe_install_sync "$TMP_FILE" "$CONF"
+        wifi_wpa_run_child rm -f "$TMP_FILE"
         echo "key_mgmt changed to $NEW_KEY in $CONF"
-    else echo "no network={ block found, nothing changed in $CONF" >&2; rm -f "$TMP_FILE"; exit 1; fi
+    else echo "no network={ block found, nothing changed in $CONF" >&2; wifi_wpa_run_child rm -f "$TMP_FILE"; exit 1; fi
     ;;
   connect)
     # 인자 있음(Mode B): ssid(+공통 freq_list)를 canonical conf에 기록한 뒤
@@ -2639,6 +2628,7 @@ case "$2" in
     shift 2
     HAS_TARGET=0
     TARGET_SSID=""
+    TARGET_SSID_WPA_TEXT=""
     HAS_TARGET_ID=0
     TARGET_ID=""
     SET_FREQ=0
@@ -2657,6 +2647,17 @@ case "$2" in
         || { echo "Error: failed to lock $CONF" >&2; exit 1; }
     wifi_scan_transition_lock_acquire "$IFACE" \
         || { echo "Error: failed to lock scan transition for $IFACE" >&2; exit 1; }
+    if [ "$#" -ge 1 ]; then
+        NEW_SSID="$1"
+        SSID_HEX=$(wifi_wpa_child_call wifi_ssid_to_hex "$NEW_SSID") || {
+            echo "Error: SSID must be valid UTF-8, 1-32 bytes, without C0 controls or DEL" >&2
+            exit 1
+        }
+        TARGET_SSID_WPA_TEXT=$(wifi_wpa_child_call wifi_ssid_to_wpa_text "$NEW_SSID") || {
+            echo "Error: cannot encode SSID for exact association proof" >&2
+            exit 1
+        }
+    fi
     if ! wifi_wpa_abort_scan_quiesce "$IFACE"; then
         echo "Error: cannot quiesce scan for $IFACE" >&2; exit 7
     fi
@@ -2695,22 +2696,11 @@ case "$2" in
     if [ $# -ge 1 ]; then
         # === conf 편집 경로: ssid(+freq) 기록 → reconfigure ===
         if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
-        NEW_SSID="$1"; shift
+        # Identity validation and byte-exact encoding happened before any live
+        # ctrl mutation, while both writer locks were held.
+        shift
         HAS_TARGET=1
         TARGET_SSID="$NEW_SSID"
-        # 빈 SSID는 conf에 ssid=""를 써 association 불가(silent exit 8) → 즉시 거부.
-        [ -z "$NEW_SSID" ] && { echo "Error: SSID must not be empty" >&2; exit 1; }
-        # SSID 개행/탭 거부 — awk 멀티라인 injection(conf에 임의 directive 주입) 차단.
-        # connect는 conf 직접편집 entry point라 여기서 가드한다.
-        case "$NEW_SSID" in
-            *[$'\n\r\t']*) echo "Error: SSID에 개행/탭 문자 불가" >&2; exit 1 ;;
-        esac
-        # ssid 명령과 동일한 32바이트 상한 — 넘으면 conf 전체 로드가 실패한다.
-        _SSID_LEN=$(wifi_wpa_child_call byte_len "$NEW_SSID")
-        if [ "$_SSID_LEN" -gt 32 ]; then
-            echo "Error: SSID must be 1-32 bytes (got $_SSID_LEN)" >&2
-            exit 1
-        fi
         # busybox awk가 ENVIRON 미지원이면 SSID가 ""로 silent 손상(awk exit 0 → 성공 오인)
         # → SSID 적용 전 ENVIRON 지원을 사전 검증(opc_wlan_apply.sh와 동일 규약).
         CONNECT_ENVIRON_PROBE=ok wifi_wpa_run_child awk \
@@ -2725,7 +2715,7 @@ case "$2" in
         done
         if [ ${#FREQS[@]} -gt 0 ]; then SET_FREQ=1; FREQ_STR="${FREQS[*]}"; fi
         # freq 생략 시에도 legacy conf를 canonical 형식으로 이행하면서 기존 공통 목록을
-        # 보존한다(전역 > 첫 블록 freq_list > 첫 블록 scan_freq 우선순위).
+        # 보존한다(전역 > 첫 블록 freq_list > 첫 블록 legacy scan_freq fallback 우선순위).
         if [ "$SET_FREQ" = "0" ]; then
             if ! FREQ_STR="$(wifi_wpa_child_call wifi_wpa_conf_common_freqs "$CONF")"; then
                 echo "Error: failed to resolve common frequency policy in $CONF" >&2
@@ -2743,22 +2733,19 @@ case "$2" in
             echo "Error: failed to render canonical frequency policy in $CONF" >&2
             exit 1
         fi
-        # SSID는 ENVIRON으로 raw 전달 — awk -v는 값의 \X를 C-escape로 해석해 손상시킨다.
-        # 값은 이스케이프하지 않고 그대로 쓴다: wpa_supplicant의 따옴표 형식 ssid="..."는
-        # raw 바이트다(wpa_config_parse_string이 마지막 "까지를 그대로 복사). C-escape를
-        # 디코드하는 건 P"..." 형식뿐이라, \를 \\로 바꿔 쓰면 리터럴 백슬래시가 저장된다.
-        if CONNECT_SSID="$NEW_SSID" wifi_wpa_run_child awk '
-            BEGIN { in_net = 0; blocks = 0; new_ssid = ENVIRON["CONNECT_SSID"] }
+        # Hex is byte-exact for spaces, quotes, backslashes, and UTF-8.
+        if CONNECT_SSID_HEX="$SSID_HEX" wifi_wpa_run_child awk '
+            BEGIN { in_net = 0; blocks = 0; new_ssid = ENVIRON["CONNECT_SSID_HEX"] }
             /^[[:space:]]*#/ { print; next }
             /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ {
                 in_net = 1; blocks++; done_ssid = 0; print; next
             }
             in_net && /^[[:space:]]*\}/ {
-                if (!done_ssid) { print "    ssid=\"" new_ssid "\""; done_ssid = 1 }
+                if (!done_ssid) { print "    ssid=" new_ssid; done_ssid = 1 }
                 in_net = 0; print; next
             }
             in_net && /^[[:space:]]*ssid[[:space:]]*=/ {
-                if (!done_ssid) { print "    ssid=\"" new_ssid "\""; done_ssid = 1 } next
+                if (!done_ssid) { print "    ssid=" new_ssid; done_ssid = 1 } next
             }
             { print }
             END { if (blocks == 0) { print "error: no network={ block in config" > "/dev/stderr"; exit 1 } }

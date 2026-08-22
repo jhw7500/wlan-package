@@ -23,7 +23,14 @@ from roam_state import (
     scan_transition_lock,
     write_flag,
 )
-from roam_policy import RoamPolicyError, load_boot_roam_policy
+from roam_policy import (
+    RoamPolicyError,
+    decode_wpa_ssid_text,
+    load_boot_roam_policy,
+    parse_wpa_ssid_value,
+    validate_ssid,
+    validate_ssid_list,
+)
 
 VERSION = "1.1"
 IFACE = "mlan0"
@@ -82,7 +89,7 @@ CHECK_INTERVAL = 1  # 로밍 판정 tick 주기(초, 양 iface 템플릿 동일)
 # 평상시 BSS 테이블 충전과 roam backoff 해제 hint 용도로만 유지한다.
 # ENABLE_STAGED_SCAN=False면 종전 단일 액티브 스캔 경로로 회귀(무회귀 안전장치).
 DEFAULT_ENABLE_STAGED_SCAN = True
-# scan_freq 가 홈채널의 부분집합(단일 채널 등)이면 Stage 1 홈 패시브 스캔이 이미 모든 후보를
+# configured common freq_list가 홈채널의 부분집합(단일 채널 등)이면 Stage 1 홈 패시브 스캔이 이미 모든 후보를
 # 커버하므로 Stage 3 액티브 폴백은 같은 채널을 probe로 다시 훑는 것뿐 — 스킵해 매 로밍컨디션
 # 주기의 불필요한 액티브 스캔(probe 송신)을 없앤다. hidden SSID 는 액티브 probe로만 발견되므로
 # 홈채널에 hidden 로밍 타깃이 있는 배포는 home_passive=false(홈 directed 액티브)로 hidden 을
@@ -564,12 +571,10 @@ def load_roaming_config(iface, data=None):
                 roam_config.get("use_signal_avg"), parse_bool
             )
 
-            # 다중 SSID 로밍: extra_ssids 로드 (str 리스트만 수용, 공백 제거).
+            # 다중 SSID 로밍: byte-exact UTF-8 identity 계약으로 검증한다.
             # 키 제거/null 시 이전 값이 stale로 남지 않도록 무조건 재대입.
             extra = roam_config.get("extra_ssids")
-            EXTRA_SSIDS = [
-                str(s).strip() for s in extra if str(s).strip()
-            ] if isinstance(extra, list) else []
+            EXTRA_SSIDS = validate_ssid_list(extra) if isinstance(extra, list) else []
 
             # 후보없음 backoff 파라미터(평탄 대문자 키). 양의 정수만 수용, 형식오류 시 기본값 유지.
             # ROAM_NO_RESULT_MAX_SLEEP 은 JSON 에서 읽지 않는다(상수 고정 — 감사 D2).
@@ -644,12 +649,9 @@ def apply_boot_roam_policy(policy):
     extras = policy.get("extra_ssids")
     if not isinstance(generate, bool):
         raise RoamPolicyError("generate_network_blocks must be boolean")
-    if not isinstance(extras, list) or any(not isinstance(v, str) for v in extras):
-        raise RoamPolicyError("extra_ssids must be a string array")
+    extras = validate_ssid_list(extras)
     GENERATE_NETWORK_BLOCKS = generate
-    EXTRA_SSIDS = (
-        [value.strip() for value in extras if value.strip()] if generate else []
-    )
+    EXTRA_SSIDS = list(extras) if generate else []
 
 
 # ==============================================================================
@@ -1044,7 +1046,7 @@ def iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
     passive=True: probe를 안 쏘는 패시브 스캔(`iw scan passive`). directed ssid 토큰을
       전부 생략하고 beacon만 수신 — 홈채널 후보 저부하 수집 및 baseline 통일용.
     include_wildcard=False: 와일드카드("") broadcast probe를 빼고 directed probe만 —
-      액티브 폴백을 conf의 설정 SSID로만 좁힐 때(사용자 요구: scan_freq+ssid만) 사용."""
+      액티브 폴백을 conf의 설정 SSID로만 좁힐 때(사용자 요구: configured freq_list+ssid만) 사용."""
     with scan_transition_lock(IFACE) as acquired:
         if not acquired:
             logger.message("info", f"[{IFACE}] scan-transition busy; defer roam scan", _EXTRA_())
@@ -1220,7 +1222,10 @@ def scan_results_to_ap_lines(scan_results_stdout, fresh_bssids=None):
             rssi = int(float(parts[2].strip()))
         except (ValueError, IndexError):
             continue
-        ssid = parts[4].strip()
+        try:
+            ssid = decode_wpa_ssid_text("\t".join(parts[4:]))
+        except RoamPolicyError:
+            continue
         ch = freq_to_channel(freq)
         if ch is None:
             continue
@@ -1282,7 +1287,7 @@ def get_link_info():
                 "bssid": link["address"].strip().lower(),
                 "freq": int(data["info"]["freq"]),
                 "rssi": int(rssi_raw.replace(" dBm", "")),
-                "ssid": data["info"].get("ssid", "").strip(),
+                "ssid": validate_ssid(data["info"].get("ssid", "")),
             }
 
 
@@ -1301,7 +1306,7 @@ def get_current_ssid():
     try:
         with open(LINK_LOG_FILE, "r") as f:
             data = json.load(f)
-            return data["info"]["ssid"].strip()
+            return validate_ssid(data["info"]["ssid"])
     except Exception as e:
         logger.message(
             "err", f"[{IFACE}] Failed to get current SSID from link log: {e}", _EXTRA_()
@@ -1393,7 +1398,7 @@ def parse_scan_entries(
 
     for line in scan_lines:
         if re.match(r"^\d{2}\|", line):
-            fields = line.strip().split("|")
+            fields = line.rstrip("\r\n").split("|")
             if len(fields) >= 7:
                 try:
                     channel = int(fields[1].strip())
@@ -1402,7 +1407,7 @@ def parse_scan_entries(
                         fields[3].strip()
                     )  # 포맷상 자리만 유지(항상 0) — 소비처 없음
                     bssid = fields[4].strip().lower()
-                    ssid = fields[6].strip()
+                    ssid = validate_ssid("|".join(fields[6:]))
                     rssi_th = WPA_TH_2G if channel < 36 else WPA_TH_5G
                     freq = channel_to_freq(channel)
 
@@ -1422,7 +1427,7 @@ def parse_scan_entries(
                             _EXTRA_(),
                         )
 
-                    # scan_freq(WPA_FREQ) 미설정이면 채널 제한 없이 동일 SSID를 후보로
+                    # configured common freq_list(WPA_FREQ) 미설정이면 채널 제한 없이 동일 SSID를 후보로
                     # 허용한다(동작주파수 제한 없이 운용하는 배포 지원). 설정돼 있으면 그
                     # 채널로 스코프(기존 동작 유지). 빈 WPA_FREQ에서 후보 0이 되어 로밍이
                     # 죽던 근본원인 수정.
@@ -1502,7 +1507,7 @@ def parse_supplicant_conf(path, def_th2g=None, def_th5g=None):
     wpa_supplicant.conf 에서 기본 ssid / 공통 freq_list / `#!TH_CONNECT=` 를 파싱한다.
 
     주파수 우선순위는 전역 freq_list > 첫 network 블록 freq_list > 첫 블록
-    scan_freq다. 마지막 두 경로는 wifi_init 부팅 정규화 전 legacy conf 호환용이다.
+    legacy scan_freq다. 마지막 두 경로는 wifi_init 부팅 정규화 전 legacy conf 호환용이다.
 
     로밍 임계(th2g/th5g)는 **conf 에서 읽지 않는다** — 인자로 받은 JSON 값을 그대로
     돌려주며, 인자가 없을 때만 모듈 기본값(DEFAULT_TH_*)으로 떨어진다. 종전에는 conf 의
@@ -1523,7 +1528,7 @@ def parse_supplicant_conf(path, def_th2g=None, def_th5g=None):
     ssid = None
     global_freqs = []
     base_freqs = []
-    base_scan_freqs = []
+    legacy_scan_freqs = []
     th_connect = None
     in_network = False
     network_index = 0
@@ -1560,7 +1565,7 @@ def parse_supplicant_conf(path, def_th2g=None, def_th5g=None):
 
             if in_network and network_index == 1 and line.startswith("ssid="):
                 if ssid is None:
-                    ssid = line.split("=", 1)[1].strip().strip('"')
+                    ssid = parse_wpa_ssid_value(line.split("=", 1)[1])
             elif not in_network and line.startswith("freq_list="):
                 if not global_freqs:
                     value = line.split("=", 1)[1].split("#", 1)[0]
@@ -1570,11 +1575,12 @@ def parse_supplicant_conf(path, def_th2g=None, def_th5g=None):
                     value = line.split("=", 1)[1].split("#", 1)[0]
                     base_freqs = value.strip().split()
             elif in_network and network_index == 1 and line.startswith("scan_freq="):
-                if not base_scan_freqs:
+                # Boot-only compatibility fallback; canonical configs use freq_list.
+                if not legacy_scan_freqs:
                     value = line.split("=", 1)[1].split("#", 1)[0]
-                    base_scan_freqs = value.strip().split()
+                    legacy_scan_freqs = value.strip().split()
 
-    freqs = global_freqs or base_freqs or base_scan_freqs
+    freqs = global_freqs or base_freqs or legacy_scan_freqs
 
     # 로밍 임계는 JSON(mlanN.roaming.DEFAULT_TH_*) 단일 소스다.
     # 종전에는 conf 의 `#!TH_2G=`/`#!TH_5G=` 마커가 JSON 을 덮어썼다. 그 마커를 생성하는
@@ -1608,6 +1614,7 @@ def reload_supplicant_conf_if_changed(path):
         ssid, freqs, th2g, th5g, th_connect = parse_supplicant_conf(
             path, def_th2g=DEFAULT_TH_2G, def_th5g=DEFAULT_TH_5G
         )
+        validate_ssid_list(EXTRA_SSIDS, base_ssid=ssid)
     except Exception as e:
         logger.message("err", f"[{IFACE}] wpa conf reload failed (keep last): {e}", _EXTRA_())
         return
@@ -1859,8 +1866,8 @@ def connect_to_ssid(iface, to_ssid, from_bssid, to_bssid):
     wpa_cli roam은 같은 network 블록(SSID) 내 BSS만 전환하므로, 다른 SSID 전환은 connect로 처리.
     - extra_ssids가 현재와 같은 psk/key_mgmt를 공유한다는 전제(아니면 connect 후 인증 실패).
     - freq 인자는 일부러 생략한다: wifi connect에 단일 freq를 주면 conf의 multi-freq
-      scan_freq/freq_list가 그 한 채널로 collapse되어 이후 스캔 범위가 축소된다. ssid만
-      교체하고 scan_freq는 유지(후보는 이미 WPA_FREQ 내 채널이라 연결 가능).
+      common freq_list가 그 한 채널로 collapse되어 이후 스캔 범위가 축소된다. ssid만
+      교체하고 configured common freq_list는 유지(후보는 이미 WPA_FREQ 내 채널이라 연결 가능).
     - ping-pong 예산은 same-SSID 로밍과 공유(의도): cross-SSID도 BSSID 기반 카운트에 합산.
     - ping-pong 차단 시 None 반환(전환 미시도 — 실패 아님): 호출자가 결과를
       record_cross_ssid_result에 넘겨도 cooldown에 실패로 등록되지 않게 route와 계약 통일."""
@@ -1916,9 +1923,13 @@ def _parse_network_id_for_ssid(list_networks_stdout, to_ssid):
         parts = line.split("\t")
         if len(parts) < 2:
             continue
-        nid, ssid = parts[0].strip(), parts[1].strip()
+        nid = parts[0].strip()
         if not nid.isdigit():
             continue  # 헤더 줄 skip
+        try:
+            ssid = decode_wpa_ssid_text(parts[1])
+        except RoamPolicyError:
+            continue
         if ssid == to_ssid:
             return nid
     return None
@@ -2139,22 +2150,22 @@ def _restore_network_selection_state(iface, network_id):
     return False
 
 
-def retry_pending_selection_cleanup(iface):
-    """Pending WAL/gate가 있으면 새 roam 판정 전에 cleanup을 재시도한다."""
+def _pending_selection_cleanup_network_id(iface):
+    """Read the WAL/gate without issuing any supplicant control mutation."""
     marker = selection_cleanup_marker_path(iface)
     if iface in _SELECTION_CLEANUP_PENDING:
-        network_id = _SELECTION_CLEANUP_PENDING[iface]
+        return _SELECTION_CLEANUP_PENDING[iface]
     else:
         try:
             with open(marker, "r") as f:
                 raw = f.read().strip()
         except FileNotFoundError:
-            return True
+            return None
         except OSError as e:
             logger.message(
                 "err", f"[{iface}] cannot read selection cleanup marker: {e}", _EXTRA_()
             )
-            return False
+            raise
 
         network_id = ""
         try:
@@ -2175,6 +2186,11 @@ def retry_pending_selection_cleanup(iface):
 
         # WAL을 읽은 직후부터는 파일이 외부에서 사라져도 현재 daemon이 gate를 유지한다.
         _SELECTION_CLEANUP_PENDING[iface] = network_id
+        return network_id
+
+
+def _retry_pending_selection_cleanup_locked(iface, network_id):
+    """Perform every recovery mutation while the caller owns transition FD."""
 
     if not str(network_id).isdigit():
         logger.message(
@@ -2208,6 +2224,43 @@ def retry_pending_selection_cleanup(iface):
         "notice", f"[{iface}] pending selection cleanup resolved", _EXTRA_()
     )
     return True
+
+
+def retry_pending_selection_cleanup(iface):
+    """Recover a pending selection only under the exact transition lock.
+
+    The unlocked read is only a cheap pending-state detector.  After the
+    nonblocking lock succeeds, WAL/process gate state is re-read before any
+    BSSID, enable-network, or reconfigure command is allowed.
+    """
+    try:
+        network_id = _pending_selection_cleanup_network_id(iface)
+    except OSError:
+        return False
+    if network_id is None:
+        return True
+
+    try:
+        with scan_transition_lock(iface) as acquired:
+            if not acquired:
+                logger.message(
+                    "info",
+                    f"[{iface}] scan-transition busy; defer selection cleanup",
+                    _EXTRA_(),
+                )
+                return SCAN_TRANSITION_BUSY
+            try:
+                network_id = _pending_selection_cleanup_network_id(iface)
+            except OSError:
+                return False
+            if network_id is None:
+                return True
+            return _retry_pending_selection_cleanup_locked(iface, network_id)
+    except OSError as exc:
+        logger.message(
+            "err", f"[{iface}] selection cleanup lock failure: {exc}", _EXTRA_()
+        )
+        return False
 
 
 def select_network_for_ssid(iface, to_ssid, to_bssid):
@@ -2313,7 +2366,10 @@ def select_network_for_ssid(iface, to_ssid, to_bssid):
                     if ln.startswith("wpa_state="):
                         state = ln.split("=", 1)[1].strip()
                     elif ln.startswith("ssid="):
-                        cur_ssid = ln.split("=", 1)[1].strip()
+                        try:
+                            cur_ssid = decode_wpa_ssid_text(ln.split("=", 1)[1])
+                        except RoamPolicyError:
+                            cur_ssid = ""
                     elif ln.startswith("id="):
                         cur_id = ln.split("=", 1)[1].strip()
                     elif ln.startswith("bssid="):
@@ -2613,7 +2669,7 @@ def _record_roam_scan_time():
     """bgscan 타이머 리셋 신호(LAST_SCAN_TIME_FILE) 기록.
 
     bgscan 은 이 시각 이후 interval 전체를 다시 대기하므로, **bgscan 동등 커버리지**
-    (scan_freq 전 채널을 실제로 훑은) 스캔에서만 기록해야 한다. 다중채널 direct active와
+    (configured common freq_list 전 채널을 실제로 훑은) 스캔에서만 기록해야 한다. 다중채널 direct active와
     단일채널 home scan이 이에 해당한다.
     실패해도 동작은 계속하되(신호 파일 — 다음 동등 스캔에서 재기록) 프로세스당 1회
     warn 을 남긴다 — /run/wifi 쓰기 불가는 중대 시스템 상태라 침묵이 부적절(플러드 방지 1회)."""
@@ -2670,7 +2726,7 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
         else:
             logger.message(
                 "warn",
-                f"[{IFACE}] scan_freq(WPA_FREQ) unset — full-band active scan (once)",
+                f"[{IFACE}] configured freq_list(WPA_FREQ) unset — full-band active scan (once)",
                 _EXTRA_(),
             )
             active_lines = iw_scan_to_ap_lines(
@@ -2729,7 +2785,7 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
             home_scan_ok = any(
                 e.get("bssid") != cur_bssid for e in home_entries
             )  # 현재 AP 외 후보를 봤을 때만 '커버됨'
-            # scan_freq ⊆ {홈채널}이면 이번 홈 스캔이 곧 **전체 커버리지**(bgscan 동등) —
+            # configured common freq_list ⊆ {홈채널}이면 이번 홈 스캔이 곧 **전체 커버리지**(bgscan 동등) —
             # 결과·이후 단계와 무관하게 bgscan 타이머 리셋을 기록한다(_record 독스트링 참조).
             # {str(home_freq)} 는 원소 1개짜리 set 리터럴(⊆ 비교), str() 은 타입 정규화
             # (WPA_FREQ 원소는 str, home_freq 는 int).
@@ -2762,17 +2818,17 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
         return None, "", 0, scanned
 
     # ── 단일채널 passive 이후 active 재확인 생략 ──
-    # scan_freq ⊆ {홈채널}이면 Stage 3 액티브는 같은 채널을 probe로 다시 훑는 것뿐이라 후보
+    # configured common freq_list ⊆ {홈채널}이면 Stage 3 액티브는 같은 채널을 probe로 다시 훑는 것뿐이라 후보
     # 발견에 새로 기여하는 게 없다(단일채널 배포 등). 매 로밍컨디션 주기의 불필요한 액티브
     # 스캔(probe 송신)을 없앤다 = airtime·링크 방해 감소. 조건: 최적화 활성 + Stage 1 스캔이
     # **현재 AP 외 후보를 실제로 봄**(스캔 실패·현재 AP 상주 엔트리만·타 SSID 만이면 액티브가
-    # 재시도/재발견 역할이라 유지) + scan_freq 가 홈채널의 부분집합.
+    # 재시도/재발견 역할이라 유지) + configured common freq_list가 홈채널의 부분집합.
     # hidden SSID 는 액티브 probe로만 잡히므로 홈채널에 hidden 로밍 타깃이 있으면
     # home_passive=false(홈 directed 액티브)로 커버하거나 이 스킵을 config로 끈다.
     if SKIP_REDUNDANT_ACTIVE_SCAN and home_scan_ok and home_covers_all:
         logger.message(
             "info",
-            f"[{IFACE}] scan_freq ⊆ home channel({home_freq}) — home "
+            f"[{IFACE}] configured freq_list ⊆ home channel({home_freq}) — home "
             f"passive scan covered all, "
             f"skip redundant active fallback (no roam candidate)",
             _EXTRA_(),
@@ -2788,7 +2844,7 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
     if active_lines is SCAN_TRANSITION_BUSY:
         return SCAN_TRANSITION_BUSY, "", 0, False
     if active_lines:
-        # scan_freq 전 채널(미설정 시 전대역) 실측 **성공** = bgscan 동등 커버리지.
+        # configured common freq_list 전 채널(미설정 시 전대역) 실측 **성공** = bgscan 동등 커버리지.
         # 실패(None) 시엔 기록하지 않는다 — 신선 데이터가 없으니 bgscan 조기 재개가 이득.
         _record_roam_scan_time()
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -2856,11 +2912,12 @@ def main():
             reload_roaming_config(IFACE)
         # 이전 Mode A 선택의 BSSID pin/all-network cleanup이 미해결이면
         # 새 scan/로밍 판정보다 먼저 복구한다. 실패 동안은 새 pin 금지.
-        if not retry_pending_selection_cleanup(IFACE):
+        cleanup_result = retry_pending_selection_cleanup(IFACE)
+        if cleanup_result is SCAN_TRANSITION_BUSY or cleanup_result is not True:
             interruptible_sleep(CHECK_INTERVAL)
             continue
         # wpa_cli reconfigure 등으로 conf 가 런타임 변경됐으면 재파싱(mtime 변화 시에만).
-        # ssid/scan_freq/TH 캐시를 최신화해 옛 SSID 로 스캔하는 stale 로밍을 방지한다.
+        # ssid/configured freq_list/TH 캐시를 최신화해 옛 SSID 로 스캔하는 stale 로밍을 방지한다.
         reload_supplicant_conf_if_changed(WPA_CONF_FILE)
         # bgscan이 새 후보 AP를 발견(hint touch)하면 즉시 backoff 해제(고속 복귀).
         if roam_hint_touched(hint_state):
@@ -2994,7 +3051,7 @@ def main():
                 if ap_lines is SCAN_TRANSITION_BUSY:
                     interruptible_sleep(CHECK_INTERVAL)
                     continue
-                # 레거시 = scan_freq 전 채널 액티브(bgscan 동등) — 종전대로 시도 시 기록.
+                # 레거시 실행경로 = configured freq_list 전 채널 액티브(bgscan 동등) — 종전대로 시도 시 기록.
                 _record_roam_scan_time()
                 if ap_lines:
                     save_with_timestamp(SCAN_LOG_FILE, ap_lines)
@@ -3189,7 +3246,7 @@ def save_with_timestamp(filename, content_lines):
     with open(filename, "a") as f:
         f.write(header + "\n")
         for line in content_lines:
-            f.write(line.rstrip() + "\n")
+            f.write(line.rstrip("\r\n") + "\n")
         f.write("\n")
 
     return filename
@@ -3221,7 +3278,7 @@ if __name__ == "__main__":
     # 아래에 둔다. 따라서 snapshot 손상/삭제로 owner를 fail-closed 하기 *전에* cleanup만
     # 수행해야 SIGKILL 뒤의 BSSID pin/disabled-network 상태를 영구히 고립시키지 않는다.
     # WAL이 없으면 단순 open→ENOENT이며, 이 preflight는 scan/roam 결정을 절대 수행하지 않는다.
-    if not retry_pending_selection_cleanup(IFACE):
+    if retry_pending_selection_cleanup(IFACE) is not True:
         logger.message(
             "emerg",
             f"[{IFACE}] startup selection cleanup unresolved; refusing owner startup",
@@ -3261,6 +3318,11 @@ if __name__ == "__main__":
     WPA_SSID, WPA_FREQ, WPA_TH_2G, WPA_TH_5G, WPA_TH_CONNECT = parse_supplicant_conf(
         WPA_CONF_FILE, def_th2g=DEFAULT_TH_2G, def_th5g=DEFAULT_TH_5G
     )
+    try:
+        validate_ssid_list(EXTRA_SSIDS, base_ssid=WPA_SSID)
+    except RoamPolicyError as exc:
+        logger.message("emerg", f"[{IFACE}] invalid boot SSID topology: {exc}", _EXTRA_())
+        sys.exit(2)
     # 초기 파싱 시점의 mtime 기록 — 이후 main 루프는 mtime 변화(reconfigure) 시에만 재파싱.
     try:
         WPA_CONF_MTIME = os.path.getmtime(WPA_CONF_FILE)

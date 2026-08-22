@@ -15,7 +15,10 @@ from roam_state import lease_active, process_start_time, roam_state_paths, scan_
 from roam_policy import (
     RoamPolicyError,
     load_boot_roam_policy,
+    parse_wpa_ssid_value,
     scan_backend_for_policy,
+    validate_ssid,
+    validate_ssid_list,
 )
 
 LOG_DIR = "/var/log/cantops/scan"
@@ -96,7 +99,7 @@ def parse_wpa_supplicant_conf(path):
     network_ssids = []
     global_freqs = []
     base_freqs = []
-    base_scan_freqs = []
+    legacy_scan_freqs = []
     interval = DEFAULT_INTERVAL  # `#!INTERVAL=` 마커 부재 시 폴백(템플릿과 fail-same)
     in_network = False
     network_index = 0
@@ -121,11 +124,15 @@ def parse_wpa_supplicant_conf(path):
                 continue
 
             if in_network and line.startswith("ssid="):
-                ssid = line.split("=", 1)[1].strip().strip('"')
+                try:
+                    ssid = parse_wpa_ssid_value(line.split("=", 1)[1])
+                except RoamPolicyError as exc:
+                    raise ValueError(f"invalid SSID in {path}: {exc}") from exc
                 if base_ssid is None:
                     base_ssid = ssid
-                if ssid not in network_ssids:
-                    network_ssids.append(ssid)
+                if ssid in network_ssids:
+                    raise ValueError(f"duplicate SSID identity in {path}: {ssid!r}")
+                network_ssids.append(ssid)
             elif not in_network and line.startswith("freq_list="):
                 if not global_freqs:
                     value = line.split("=", 1)[1].split("#", 1)[0]
@@ -135,11 +142,12 @@ def parse_wpa_supplicant_conf(path):
                     value = line.split("=", 1)[1].split("#", 1)[0]
                     base_freqs = value.strip().split()
             elif in_network and network_index == 1 and line.startswith("scan_freq="):
-                if not base_scan_freqs:
+                # Boot-only compatibility fallback; canonical configs use freq_list.
+                if not legacy_scan_freqs:
                     value = line.split("=", 1)[1].split("#", 1)[0]
-                    base_scan_freqs = value.strip().split()
+                    legacy_scan_freqs = value.strip().split()
 
-    freqs = global_freqs or base_freqs or base_scan_freqs
+    freqs = global_freqs or base_freqs or legacy_scan_freqs
     return base_ssid, network_ssids, freqs, interval
 
 def _parse_bool(value):
@@ -201,8 +209,7 @@ def load_bgscan_json(iface, boot_policy=None):
         topology_cfg = boot_policy if boot_policy is not None else roaming_cfg
         if _parse_bool(topology_cfg.get("generate_network_blocks")):
             extra = topology_cfg.get("extra_ssids")
-            if isinstance(extra, list):
-                extra_ssids = [s.strip() for s in extra if isinstance(s, str) and s.strip()]
+            extra_ssids = validate_ssid_list(extra)
     except FileNotFoundError:
         pass
     except Exception as e:
@@ -222,7 +229,7 @@ def emit_roam_hint_touch(iface):
     except OSError as e:
         logger.message("err", f"[{iface}] roam hint touch failed: {e}", _EXTRA_())
 
-def construct_iw_scan_cmd(ssid, scan_freqs, ssid_filter=True, freq_filter=True, extra_ssids=None, passive=False):
+def construct_iw_scan_cmd(ssid, configured_freqs, ssid_filter=True, freq_filter=True, extra_ssids=None, passive=False):
     cmd = ["iw", IFACE, "scan"]
 
     # 패시브 스캔: probe request를 쏘지 않고 beacon만 수신한다. probe를 안 보내므로
@@ -234,14 +241,14 @@ def construct_iw_scan_cmd(ssid, scan_freqs, ssid_filter=True, freq_filter=True, 
     # 같은 **맨 뒤** 그룹이라 freq 뒤에 와야 한다. 앞에 두면 iw가 rc=1로 즉시 실패해
     # 스캔이 아예 안 돈다(온타겟 실측). freq_filter=true 가 기본이라 순서가 곧 기능 여부다.
     if passive:
-        if freq_filter and scan_freqs:
-            cmd += ["freq"] + scan_freqs
+        if freq_filter and configured_freqs:
+            cmd += ["freq"] + configured_freqs
         cmd.append("passive")
         return cmd
 
     # freq_filter=false면 freq 필터를 빼고 전체 대역 스캔(기본 true).
-    if freq_filter and scan_freqs:
-        cmd += ["freq"] + scan_freqs
+    if freq_filter and configured_freqs:
+        cmd += ["freq"] + configured_freqs
 
     # directed probe(ssid 토큰) 대상 수집:
     #  - 기본/현재 ssid: ssid_filter=true일 때만 probe. false면 광범위(undirected) 스캔.
@@ -258,10 +265,13 @@ def construct_iw_scan_cmd(ssid, scan_freqs, ssid_filter=True, freq_filter=True, 
     # 키워드를 반복하면 iw 5.19 파서(SSID 상태에서 키워드 복귀 없음)가 두 번째 'ssid' 를
     # 리터럴 SSID 로 소비해 probe 대상이 2N-1 개로 불어나고, 존재하지 않는 "ssid" 네트워크
     # directed probe 가 전파로 나간다.
-    probe = ([ssid] if (ssid_filter and ssid) else []) + (extra_ssids or [])
-    if not ssid_filter and extra_ssids:
+    validated_extras = validate_ssid_list(
+        list(extra_ssids or []), base_ssid=ssid if ssid is not None else None
+    )
+    probe = ([validate_ssid(ssid)] if (ssid_filter and ssid) else []) + validated_extras
+    if not ssid_filter and validated_extras:
         probe.insert(0, "")
-    probe = list(dict.fromkeys(s for s in probe if s is not None))
+    probe = [s for s in probe if s is not None]
     # 드라이버 max-scan-SSID 초과 시 iw 가 -EINVAL 로 스캔 전체를 실패시킨다 → bgscan 이
     # 매 주기 전량 실패하면 ap.log 배경 캐시가 갱신되지 않아 로밍 Stage 2 까지 연쇄로 죽는다.
     # 현재 ssid/wildcard 가 리스트 앞이라 slice 가 우선순위를 보존한다.
@@ -282,7 +292,7 @@ def construct_iw_scan_cmd(ssid, scan_freqs, ssid_filter=True, freq_filter=True, 
 def construct_wpa_scan_cmd(
     iface,
     ssid,
-    scan_freqs,
+    configured_freqs,
     ssid_filter=True,
     extra_ssids=None,
     passive=False,
@@ -294,16 +304,16 @@ def construct_wpa_scan_cmd(
     ctrl_iface의 `ssid` 값은 raw 문자열이 아니라 UTF-8 hex 형식이다.
     """
     cmd = ["wpa_cli", "-i", iface, "scan"]
-    if scan_freqs:
-        cmd.append(f"freq={','.join(scan_freqs)}")
+    if configured_freqs:
+        cmd.append(f"freq={','.join(configured_freqs)}")
     if passive:
         cmd.append("passive=1")
         return cmd
 
-    probe = ([ssid] if (ssid_filter and ssid) else []) + (extra_ssids or [])
-    probe = list(
-        dict.fromkeys(s for s in probe if isinstance(s, str) and s)
+    validated_extras = validate_ssid_list(
+        list(extra_ssids or []), base_ssid=ssid if ssid is not None else None
     )
+    probe = ([validate_ssid(ssid)] if (ssid_filter and ssid) else []) + validated_extras
     if len(probe) > MAX_SCAN_SSIDS:
         logger.message(
             "warn",
@@ -392,7 +402,12 @@ def build_scan_request(conf_path, backend, boot_policy=None):
             _FREQ_FILTER_DEPRECATED_WARNED = True
         freq_filter = True
 
-    scan_extras = list(dict.fromkeys(network_ssids[1:] + extra_ssids))
+    try:
+        scan_extras = validate_ssid_list(
+            network_ssids[1:] + extra_ssids, base_ssid=ssid
+        )
+    except RoamPolicyError as exc:
+        raise BgscanConfigError(f"invalid scan SSID topology: {exc}") from exc
     if backend == "iw":
         cmd = construct_iw_scan_cmd(
             ssid,

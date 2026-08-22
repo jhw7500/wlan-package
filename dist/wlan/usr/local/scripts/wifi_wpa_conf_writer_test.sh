@@ -68,12 +68,14 @@ EOF
 cat > "$BIN/install" <<'EOF'
 #!/bin/sh
 while [ "$#" -gt 2 ]; do shift; done
-if [ "${INSTALL_MODE:-}" = "hold-after-monitor" ] \
-   && [ -s "$STATE_DIR/monitor-action" ] \
-   && mkdir "$STATE_DIR/held-child-claim" 2>/dev/null; then
+if { [ "${INSTALL_MODE:-}" = "hold-after-monitor" ] \
+     && [ -s "$STATE_DIR/monitor-action" ]; \
+   } || [ "${INSTALL_MODE:-}" = "hold-fd9-writer" ]; then
+  if mkdir "$STATE_DIR/held-child-claim" 2>/dev/null; then
     printf '%s\n' "$$" > "$STATE_DIR/held-child-pid"
     : > "$STATE_DIR/held-child-ready"
     IFS= read -r _release < "$STATE_DIR/held-child-release"
+  fi
 fi
 if [ "${INSTALL_MODE:-}" = "partial-fail" ]; then
     printf 'PARTIAL\n' > "$2"
@@ -126,11 +128,32 @@ EOF
 cat > "$BIN/flock" <<'EOF'
 #!/bin/sh
 printf 'flock %s\n' "$*" >> "$CALL_LOG"
+mode=$(/bin/cat "$STATE_DIR/held-child-mode" 2>/dev/null || true)
+case "$mode:$*" in
+  fd7-acquire:*" -x 7")
+    if mkdir "$STATE_DIR/held-child-claim" 2>/dev/null; then
+      printf '%s\n' "$$" > "$STATE_DIR/held-child-pid"
+      : > "$STATE_DIR/held-child-ready"
+      IFS= read -r _release < "$STATE_DIR/held-child-release"
+    fi
+    ;;
+esac
 exec /usr/bin/flock "$@"
 EOF
 cat > "$BIN/wpa_cli" <<'EOF'
 #!/bin/sh
 printf 'wpa_cli %s\n' "$*" >> "$CALL_LOG"
+
+held_mode=$(/bin/cat "$STATE_DIR/held-child-mode" 2>/dev/null || true)
+case "$held_mode:$*" in
+  opc-ping:*" ping")
+    if mkdir "$STATE_DIR/held-child-claim" 2>/dev/null; then
+      printf '%s\n' "$$" > "$STATE_DIR/held-child-pid"
+      : > "$STATE_DIR/held-child-ready"
+      IFS= read -r _release < "$STATE_DIR/held-child-release"
+    fi
+    ;;
+esac
 
 emit_connected_event() {
   action=$(cat "$STATE_DIR/monitor-action" 2>/dev/null || true)
@@ -241,6 +264,7 @@ case "$*" in
         ssid=Base; freq=5180
         if [ "$count" -eq 1 ]; then id=0; else id=1; fi ;;
       target) ssid=NewNet; id=0; freq=5180 ;;
+      target-custom) ssid=$(/bin/cat "$STATE_DIR/target-ssid"); id=0; freq=5180 ;;
       target-no-id) ssid=NewNet; id=; freq=5180 ;;
       target-nonnumeric-id) ssid=NewNet; id=bad; freq=5180 ;;
       target-delayed-grace)
@@ -408,6 +432,22 @@ wait_for_held_child() {
     return 1
 }
 
+wait_for_held_child_no_monitor() {
+    local desc="$1" pid=""
+    for _wait in $(seq 1 100); do
+        [ -s "$STATE_DIR/held-child-pid" ] \
+            && [ -f "$STATE_DIR/held-child-ready" ] && break
+        sleep 0.01
+    done
+    pid=$(cat "$STATE_DIR/held-child-pid" 2>/dev/null || true)
+    if [ -n "$pid" ] && monitor_process_running "$pid"; then
+        pass "$desc"
+        return 0
+    fi
+    fail "$desc"
+    return 1
+}
+
 cleanup_held_child() {
     local desc="$1" pid=""
     pid=$(cat "$STATE_DIR/held-child-pid" 2>/dev/null || true)
@@ -559,6 +599,20 @@ check_connect_locks_available_before_monitor_cleanup() {
     fi
 }
 
+check_ordered_writer_locks_available() {
+    local desc="$1"
+    if (
+        exec 9>"$RUN_DIR/mlan0.wpa-conf.lock"
+        flock -n 9 || exit 1
+        exec 7>"$RUN_DIR/mlan0.scan-transition.lock"
+        flock -n 7 || exit 1
+    ); then
+        pass "$desc"
+    else
+        fail "$desc"
+    fi
+}
+
 monitor_process_running() {
     local pid="$1" state
     kill -0 "$pid" 2>/dev/null || return 1
@@ -570,10 +624,13 @@ check_monitor_cleaned() {
     local desc="$1" pid="" dir=""
     pid=$(cat "$STATE_DIR/last-monitor-pid" 2>/dev/null || true)
     dir=$(cat "$STATE_DIR/last-monitor-dir" 2>/dev/null || true)
-    # Poll the combined cleanup postcondition through the three-second bound.
-    # PID exit can precede the watchdog's rm -rf by a few milliseconds, so
-    # breaking on PID exit alone races the private-directory assertion.
-    for _wait in $(seq 1 30); do
+    # Poll the combined cleanup postcondition through a five-second harness
+    # deadline.  The production watchdog reacts in bounded 100 ms ticks, but
+    # this host may be heavily scheduled while the release suite runs; using
+    # the exact nominal cleanup duration as the assertion deadline is a test
+    # race.  PID exit can also precede rm -rf by a few milliseconds, so never
+    # break on PID exit alone.
+    for _wait in $(seq 1 50); do
         if { [ -z "$pid" ] || ! monitor_process_running "$pid"; } \
            && { [ -z "$dir" ] || [ ! -e "$dir" ]; } \
            && ! find "$RUN_DIR" -maxdepth 1 -name 'mlan0.connect-monitor.*' -print -quit 2>/dev/null | grep -q .; then
@@ -628,6 +685,7 @@ set_boot_policy() {
     cat > "$RUN_DIR/mlan0.roam-policy.json" <<EOF
 {"version":1,"iface":"mlan0","roaming_enabled":$roam_enabled,"bgscan_enabled":$bgscan_enabled,"generate_network_blocks":$generate,"extra_ssids":$extras_json}
 EOF
+    printf '1\n' > "${RUN_DIR%/*}/.mlan0.roam-policy.latched"
 }
 
 count_global_freq() {
@@ -647,6 +705,44 @@ count_block_freq() {
       in_net && /^[[:space:]]*}/ { in_net=0 }
       END { print n+0 }
     ' "$1"
+}
+
+ssid_hex() {
+    python3 -c 'import sys; print(sys.argv[1].encode("utf-8").hex())' "$1"
+}
+
+ssid_wpa_text() {
+    python3 - "$1" <<'PYCODE'
+import sys
+out = []
+for byte in sys.argv[1].encode("utf-8"):
+    if byte == 0x22:
+        out.append(r'\"')
+    elif byte == 0x5c:
+        out.append(r'\\')
+    elif 0x20 <= byte <= 0x7e:
+        out.append(chr(byte))
+    else:
+        out.append(f"\\x{byte:02x}")
+print("".join(out))
+PYCODE
+}
+
+check_real_wpa_parser() {
+    local desc="$1" conf="$2" parser log
+    parser=$(command -v wpa_supplicant 2>/dev/null || true)
+    if [ -z "$parser" ]; then
+        fail "$desc (wpa_supplicant unavailable)"
+        return
+    fi
+    log="$TD/wpa-parser-$PASS-$FAIL.log"
+    "$parser" -D none -i wlanpkgtest0 -c "$conf" -dd >"$log" 2>&1 || true
+    if grep -q 'Successfully initialized wpa_supplicant' "$log" \
+       && ! grep -q 'Failed to read or parse configuration' "$log"; then
+        pass "$desc"
+    else
+        fail "$desc"
+    fi
 }
 
 echo "=== wifi freq canonical writer ==="
@@ -670,6 +766,83 @@ if [ -f "$RUN_DIR/mlan0.wpa-conf.lock" ]; then
     pass "wifi writer acquires shared per-interface lock"
 else
     fail "wifi writer acquires shared per-interface lock"
+fi
+
+# Exact current supported-writer graph inventory beyond wifi connect: the FD7
+# acquisition primitive, all four FD9-only cases, and OPC from lock acquisition
+# through transaction cleanup.  This is deliberately a reviewed source-slice
+# inventory, not a claim to parse arbitrary future shell grammar.
+if python3 - "$WIFI_SH" "$OPC_SH" "$SCRIPT_DIR/wifi_init_config_lib.sh" <<'PY'
+import re
+import sys
+
+wifi_path, opc_path, lib_path = sys.argv[1:]
+wifi = open(wifi_path, encoding="utf-8").read()
+opc = open(opc_path, encoding="utf-8").read()
+lib = open(lib_path, encoding="utf-8").read()
+
+case_names = ("freq", "ssid", "psk", "key")
+regions = []
+for index, name in enumerate(case_names):
+    start = wifi.index(f"  {name})")
+    next_name = case_names[index + 1] if index + 1 < len(case_names) else "connect"
+    end = wifi.index(f"\n  {next_name})", start)
+    lock = wifi.index('wifi_wpa_conf_lock_acquire "$IFACE"', start, end)
+    regions.append((f"wifi-{name}", wifi[lock:end]))
+
+opc_start = opc.index('wifi_wpa_conf_lock_acquire "$IFACE"')
+regions.append(("opc", opc[opc_start:]))
+
+acquire_start = lib.index("wifi_scan_transition_lock_acquire() {")
+acquire_end = lib.index("\n}\n", acquire_start) + 2
+acquire = lib[acquire_start:acquire_end]
+if "exec 9>&-" not in acquire:
+    raise SystemExit("FD7 acquisition child does not structurally close FD9")
+
+external = (
+    "awk", "cat", "chmod", "chown", "cp", "dirname", "flock", "grep",
+    "install", "jq", "mkdir", "mktemp", "mv", "python3", "rm", "sed",
+    "sleep", "sync", "touch", "tr", "wpa_cli",
+)
+command = "(" + "|".join(external) + r")\b"
+wrappers = (
+    "wifi_wpa_child_exec", "wifi_wpa_child_call",
+    "wifi_wpa_run_child", "wifi_wpa_run_child_call",
+)
+start_re = re.compile(
+    r"^(?:(?:if|elif|while|until)\s+)?(?:!\s+)?"
+    r"(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S+)\s+)*" + command
+)
+after_re = re.compile(r"(?:\$\(|<\(|[;&|])\s*" + command)
+violations = []
+for region_name, region in regions:
+    heredoc = False
+    for number, line in enumerate(region.splitlines(), 1):
+        stripped = line.strip()
+        if heredoc:
+            if stripped in {"EOF", "EOT"}:
+                heredoc = False
+            continue
+        if re.search(r"<<-?['\"]?(?:EOF|EOT)['\"]?", line):
+            heredoc = True
+            continue
+        if not stripped or stripped.startswith("#"):
+            continue
+        raw = bool(start_re.search(stripped) or after_re.search(line))
+        if stripped.startswith("trap ") and re.search(command, line):
+            raw = True
+        if raw and not any(wrapper in line for wrapper in wrappers):
+            violations.append(f"{region_name}:{number}: {stripped}")
+
+if violations:
+    print("supported-writer private-FD isolation violations:", file=sys.stderr)
+    print("\n".join(violations), file=sys.stderr)
+    raise SystemExit(1)
+PY
+then
+    pass "FD7 acquisition, OPC, and FD9-only writer inventories are complete and isolated"
+else
+    fail "FD7 acquisition, OPC, and FD9-only writer inventories must be complete and isolated"
 fi
 
 write_mode_b_legacy
@@ -713,6 +886,125 @@ for _sync_failure in fail-stage fail-installed fail-dir; do
     fi
 done
 set_sync_mode ok
+
+echo ""
+echo "=== shared SSID validation and hex serialization ==="
+_special_ssid='  게스트 \ " exact  '
+_special_hex=$(ssid_hex "$_special_ssid")
+write_mode_b_legacy
+set_boot_policy false false '["Office"]'
+WPA_CONF_DIR="$WPA_DIR" bash "$WIFI_SH" 0 ssid "$_special_ssid" >/dev/null 2>&1
+check_equal "wifi ssid accepts printable UTF-8 special identity" "$?" "0"
+check_equal "wifi ssid writes exact UTF-8 hex token" \
+    "$(grep -Ec "^[[:space:]]+ssid=${_special_hex}$" "$CONF")" "1"
+check_real_wpa_parser "real parser accepts wifi ssid hex output" "$CONF"
+
+_ssid_32='가가가가가가가가가가ab'
+_ssid_33='가가가가가가가가가가가'
+write_mode_b_legacy
+WPA_CONF_DIR="$WPA_DIR" bash "$WIFI_SH" 0 ssid "$_ssid_32" >/dev/null 2>&1
+check_equal "wifi ssid accepts exact 32-byte UTF-8 boundary" "$?" "0"
+check_equal "wifi ssid 32-byte boundary is exact hex" \
+    "$(grep -Ec "^[[:space:]]+ssid=$(ssid_hex "$_ssid_32")$" "$CONF")" "1"
+
+for _invalid_ssid in '' $'bad\nname' $'bad\tname' $'bad\x7fname' "$_ssid_33"; do
+    write_mode_b_legacy
+    cp "$CONF" "$TD/invalid-ssid.before"
+    WPA_CONF_DIR="$WPA_DIR" bash "$WIFI_SH" 0 ssid "$_invalid_ssid" >/dev/null 2>&1
+    rc=$?
+    if [ "$rc" -ne 0 ] && cmp -s "$CONF" "$TD/invalid-ssid.before"; then
+        pass "wifi ssid rejects invalid/control/33-byte identity without mutation"
+    else
+        fail "wifi ssid must reject invalid/control/33-byte identity without mutation"
+    fi
+done
+
+# Mode B's immutable extra list is a manual candidate allowlist.  Selecting
+# one of those candidates intentionally replaces the sole base block; this is
+# not Mode A topology generation and must remain supported by every Mode B
+# SSID writer.
+write_mode_b_legacy
+set_boot_policy false false '["Office"]'
+WPA_CONF_DIR="$WPA_DIR" bash "$WIFI_SH" 0 ssid Office >/dev/null 2>&1
+rc=$?
+if [ "$rc" -eq 0 ] && grep -Eq '^[[:space:]]+ssid=4f6666696365$' "$CONF"; then
+    pass "wifi ssid accepts an immutable Mode B manual candidate"
+else
+    fail "wifi ssid must accept an immutable Mode B manual candidate"
+fi
+
+write_mode_b_legacy
+set_boot_policy false false '["Office"]'
+set_status_mode target-custom
+printf '%s' "$(ssid_wpa_text Office)" > "$STATE_DIR/target-ssid"
+set_monitor_mode reconfigure-event
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 connect Office 5180 >/dev/null 2>&1
+rc=$?
+if [ "$rc" -eq 0 ] && grep -Eq '^[[:space:]]+ssid=4f6666696365$' "$CONF"; then
+    pass "wifi connect accepts an immutable Mode B manual candidate"
+else
+    fail "wifi connect must accept an immutable Mode B manual candidate"
+fi
+check_equal "wifi connect Mode B manual candidate reconfigures once" \
+    "$(grep -c 'reconfigure$' "$CALL_LOG" || true)" "1"
+
+write_mode_b_legacy
+set_boot_policy false false '["Office"]'
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
+    sh "$OPC_SH" mlan0 ssid Office >/dev/null 2>&1
+rc=$?
+if [ "$rc" -eq 0 ] && grep -Eq '^[[:space:]]+ssid=4f6666696365$' "$CONF"; then
+    pass "OPC accepts an immutable Mode B manual candidate"
+else
+    fail "OPC must accept an immutable Mode B manual candidate"
+fi
+
+write_mode_b_legacy
+set_status_mode target-custom
+printf '%s' "$(ssid_wpa_text "$_special_ssid")" > "$STATE_DIR/target-ssid"
+set_monitor_mode reconfigure-event
+WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 connect "$_special_ssid" 5180 >/dev/null 2>&1
+check_equal "wifi connect accepts exact special SSID" "$?" "0"
+check_equal "wifi connect writes exact UTF-8 hex token" \
+    "$(grep -Ec "^[[:space:]]+ssid=${_special_hex}$" "$CONF")" "1"
+check_real_wpa_parser "real parser accepts wifi connect hex output" "$CONF"
+
+write_mode_b_legacy
+set_reconfigure_mode ok
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
+    sh "$OPC_SH" mlan0 ssid "$_special_ssid" >/dev/null 2>&1
+check_equal "OPC accepts exact special SSID in Mode B" "$?" "0"
+check_equal "OPC writes exact UTF-8 hex token" \
+    "$(grep -Ec "^[[:space:]]+ssid=${_special_hex}$" "$CONF")" "1"
+check_real_wpa_parser "real parser accepts OPC hex output" "$CONF"
+
+for _invalid_ssid in $'bad\x1fname' $'bad\x7fname' "$_ssid_33"; do
+    write_mode_b_legacy
+    cp "$CONF" "$TD/invalid-connect.before"
+    set_monitor_mode stale
+    WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+        bash "$WIFI_SH" 0 connect "$_invalid_ssid" >/dev/null 2>&1
+    rc=$?
+    if [ "$rc" -ne 0 ] && cmp -s "$CONF" "$TD/invalid-connect.before"; then
+        pass "wifi connect rejects invalid/control/33-byte identity without mutation"
+    else
+        fail "wifi connect must reject invalid/control/33-byte identity without mutation"
+    fi
+
+    write_mode_b_legacy
+    cp "$CONF" "$TD/invalid-opc.before"
+    WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
+        sh "$OPC_SH" mlan0 ssid "$_invalid_ssid" >/dev/null 2>&1
+    rc=$?
+    if [ "$rc" -ne 0 ] && cmp -s "$CONF" "$TD/invalid-opc.before"; then
+        pass "OPC rejects invalid/control/33-byte identity without mutation"
+    else
+        fail "OPC must reject invalid/control/33-byte identity without mutation"
+    fi
+done
 
 echo ""
 echo "=== wifi connect target-aware writer ==="
@@ -1009,6 +1301,63 @@ check_connect_locks_available_before_monitor_cleanup \
 cleanup_held_child "explicit install SIGKILL fixture cleans held child"
 check_monitor_cleaned "explicit install watchdog still bounds monitor orphan"
 
+# Kill the transaction while the real FD7-acquisition child is selected and
+# alive.  It has not called the kernel flock yet, so both ordered probes must be
+# immediately free even though the child survives its parent.
+write_mode_b_legacy
+set_boot_policy false false
+prepare_held_child fd7-acquire
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=10 \
+    bash "$WIFI_SH" 0 connect >/dev/null 2>&1 &
+_wifi_pid=$!
+wait_for_held_child_no_monitor \
+    "FD7 acquisition SIGKILL fixture holds real flock child live"
+kill -KILL "$_wifi_pid" 2>/dev/null || true
+wait "$_wifi_pid" 2>/dev/null || true
+check_held_child_survives_owner_reap \
+    "FD7 acquisition child remains live after owner SIGKILL and reap"
+check_ordered_writer_locks_available \
+    "FD7 acquisition orphan closes FD9 and owns neither ordered lock"
+cleanup_held_child "FD7 acquisition SIGKILL fixture cleans held child"
+
+# OPC's first post-lock ctrl child is transitive through wcli().  It must close
+# both private descriptors before exec just like the connect graph.
+write_mode_b_legacy
+set_boot_policy false false
+prepare_held_child opc-ping
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
+    sh "$OPC_SH" mlan0 freq "5180 5200" >/dev/null 2>&1 &
+_opc_pid=$!
+wait_for_held_child_no_monitor "OPC SIGKILL fixture holds wpa_cli ping child live"
+kill -KILL "$_opc_pid" 2>/dev/null || true
+wait "$_opc_pid" 2>/dev/null || true
+check_held_child_survives_owner_reap \
+    "OPC wpa_cli child remains live after owner SIGKILL and reap"
+check_ordered_writer_locks_available \
+    "OPC held-child SIGKILL releases FD9 then FD7 immediately"
+cleanup_held_child "OPC SIGKILL fixture cleans held child"
+
+# wifi freq is representative of the FD9-only writer family.  Exact source
+# inventory below covers freq/ssid/psk/key; this causal fixture proves the
+# close-first boundary with a selected install child.
+write_mode_b_legacy
+set_boot_policy false false
+prepare_held_child fd9-install
+: > "$CALL_LOG"
+INSTALL_MODE=hold-fd9-writer WPA_CONF_DIR="$WPA_DIR" \
+    bash "$WIFI_SH" 0 freq 5180 5200 >/dev/null 2>&1 &
+_wifi_pid=$!
+wait_for_held_child_no_monitor "FD9-only writer holds install child live"
+kill -KILL "$_wifi_pid" 2>/dev/null || true
+wait "$_wifi_pid" 2>/dev/null || true
+check_held_child_survives_owner_reap \
+    "FD9-only install child remains live after owner SIGKILL and reap"
+check_ordered_writer_locks_available \
+    "FD9-only writer SIGKILL releases FD9 and leaves FD7 free"
+cleanup_held_child "FD9-only writer SIGKILL fixture cleans held child"
+
 # The close-and-exec primitive is shared with POSIX-sh callers.  Normalize a
 # missing reader in the owning shell, not inside the substitution child, and
 # prove successful capture stays byte-exact (modulo shell-mandated trailing
@@ -1093,7 +1442,8 @@ for wrapper, command in wrapper_re.findall(regions):
 expected = {
     "wifi_wpa_child_exec": {"cat", "mktemp", "tr", "wpa_cli"},
     "wifi_wpa_child_call": {
-        "byte_len", "connect_monitor_proc_start", "to_freq_mhz_checked",
+        "connect_monitor_proc_start", "to_freq_mhz_checked",
+        "wifi_ssid_to_hex", "wifi_ssid_to_wpa_text",
         "wifi_wpa_conf_common_freqs",
     },
     "wifi_wpa_run_child": {
