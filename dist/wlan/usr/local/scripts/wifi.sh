@@ -478,7 +478,7 @@ connect_event_monitor_cleanup() {
     # start() records the identity.  Recover only a live wpa_cli identity from
     # our mode-0700 directory; arbitrary/stale numeric PIDs remain unsignalled.
     if [ -z "$start" ] && [ -n "${CONNECT_MONITOR_DIR:-}" ]; then
-        pid=$(wifi_wpa_child_exec cat "$CONNECT_MONITOR_DIR/wpa_cli.pid" 2>/dev/null || true)
+        pid=$(wifi_wpa_child_exec cat "$CONNECT_MONITOR_DIR/wpa_cli.pid" 2>/dev/null) || true
         if connect_monitor_pid_is_wpa_cli "$pid"; then
             start=$(wifi_wpa_child_call connect_monitor_proc_start "$pid" 2>/dev/null || true)
         fi
@@ -554,7 +554,7 @@ EOF
         [ -d "$CONNECT_MONITOR_DIR" ] || exit 0
         pid=""; start=""
         for _i in 1 2 3 4 5 6 7 8 9 10; do
-            pid=$(wifi_wpa_child_exec cat "$pidfile" 2>/dev/null || true)
+            pid=$(wifi_wpa_child_exec cat "$pidfile" 2>/dev/null) || true
             if connect_monitor_pid_is_wpa_cli "$pid"; then
                 start=$(wifi_wpa_child_call connect_monitor_proc_start "$pid" 2>/dev/null || true)
                 [ -n "$start" ] && break
@@ -595,7 +595,7 @@ EOF
     fi
     pid=""
     for _i in 1 2 3 4 5 6 7 8 9 10; do
-        pid=$(wifi_wpa_child_exec cat "$pidfile" 2>/dev/null || true)
+        pid=$(wifi_wpa_child_exec cat "$pidfile" 2>/dev/null) || true
         start=$(wifi_wpa_child_call connect_monitor_proc_start "$pid" 2>/dev/null || true)
         [ -n "$start" ] && break
         wifi_wpa_run_child sleep 0.1

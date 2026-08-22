@@ -427,6 +427,80 @@ cleanup_held_child() {
           "$STATE_DIR/held-child-ready" "$STATE_DIR/held-child-release"
 }
 
+check_held_child_survives_owner_reap() {
+    local desc="$1" pid=""
+    pid=$(cat "$STATE_DIR/held-child-pid" 2>/dev/null || true)
+    if [ -n "$pid" ] && monitor_process_running "$pid"; then
+        pass "$desc"
+    else
+        fail "$desc (pid=${pid:-missing})"
+    fi
+}
+
+check_child_substitution_normalization() {
+    local shell="$1" result="" rc=0
+    result=$("$shell" -s -- "$SCRIPT_DIR/wifi_init_config_lib.sh" "$TD" <<'EOF'
+set -e
+. "$1"
+root="$2/child-substitution-$$"
+mkdir -p "$root"
+trap 'rm -rf "$root"' EXIT
+exec 9>"$root/fd9"
+exec 7>"$root/fd7"
+
+missing_out=$(wifi_wpa_child_exec cat "$root/missing" 2>/dev/null) || true
+[ "$?" -eq 0 ]
+[ -z "$missing_out" ]
+
+printf 'alpha\nbeta' > "$root/success"
+success_out=$(wifi_wpa_child_exec cat "$root/success")
+[ "$success_out" = "$(printf 'alpha\nbeta')" ]
+printf 'normalized\n'
+EOF
+    ) || rc=$?
+    if [ "$rc" -eq 0 ] && [ "$result" = "normalized" ]; then
+        pass "$shell child substitution preserves failure-to-empty and successful stdout"
+    else
+        fail "$shell child substitution normalization (rc=$rc output=$result)"
+    fi
+}
+
+check_missing_pid_cleanup_set_e() {
+    local funcs="$TD/connect-cleanup-functions.sh"
+    local dir="$TD/missing-pid-cleanup" result="" rc=0
+    awk '
+        /^connect_monitor_proc_start\(\) \{/ { copy = 1 }
+        /^connect_event_monitor_start\(\)/ { copy = 0 }
+        copy { print }
+    ' "$WIFI_SH" > "$funcs"
+    rm -rf "$dir"
+    mkdir -p "$dir"
+    result=$(bash -s -- "$SCRIPT_DIR/wifi_init_config_lib.sh" "$funcs" "$dir" <<'EOF'
+set -e
+. "$1"
+. "$2"
+CONNECT_MONITOR_WATCHDOG_PID=""
+CONNECT_MONITOR_WATCHDOG_START=""
+CONNECT_MONITOR_PID=""
+CONNECT_MONITOR_START=""
+CONNECT_MONITOR_DIR="$3"
+exec 9>"$3/fd9"
+exec 7>"$3/fd7"
+connect_event_monitor_cleanup
+[ -z "$CONNECT_MONITOR_DIR" ]
+[ ! -e "$3" ]
+printf 'cleanup-reached\n'
+EOF
+    ) || rc=$?
+    if [ "$rc" -eq 0 ] && [ "$result" = "cleanup-reached" ] \
+       && [ ! -e "$dir" ]; then
+        pass "set -e cleanup removes private monitor directory when PID file is absent"
+    else
+        fail "set -e missing-PID cleanup must reach directory removal (rc=$rc output=$result)"
+        rm -rf "$dir"
+    fi
+}
+
 hold_scan_transition_lock() {
     local lock="$RUN_DIR/mlan0.scan-transition.lock" ready="$TD/scan-lock-ready"
     rm -f "$ready"
@@ -867,6 +941,11 @@ else
 fi
 kill -KILL "$_wifi_pid" 2>/dev/null || true
 wait "$_wifi_pid" 2>/dev/null || true
+if [ -n "$_slow_status_pid" ] && monitor_process_running "$_slow_status_pid"; then
+    pass "Mode A status child remains live after owner SIGKILL and reap"
+else
+    fail "Mode A status child must remain live after owner SIGKILL and reap"
+fi
 check_connect_locks_available_before_monitor_cleanup \
     "Mode A SIGKILL releases FD9 then FD7 before monitor cleanup"
 [ -z "$_slow_status_pid" ] || kill -TERM "$_slow_status_pid" 2>/dev/null || true
@@ -899,6 +978,8 @@ wait_for_held_child \
     "Mode A SIGKILL fixture holds monitor PID-poll child live"
 kill -KILL "$_wifi_pid" 2>/dev/null || true
 wait "$_wifi_pid" 2>/dev/null || true
+check_held_child_survives_owner_reap \
+    "monitor PID-poll child remains live after owner SIGKILL and reap"
 check_connect_locks_available_before_monitor_cleanup \
     "monitor PID-poll SIGKILL releases FD9 then FD7 before monitor cleanup"
 cleanup_held_child "monitor PID-poll SIGKILL fixture cleans held child"
@@ -921,10 +1002,21 @@ wait_for_held_child \
     "explicit connect SIGKILL fixture holds post-monitor install child live"
 kill -KILL "$_wifi_pid" 2>/dev/null || true
 wait "$_wifi_pid" 2>/dev/null || true
+check_held_child_survives_owner_reap \
+    "explicit install child remains live after owner SIGKILL and reap"
 check_connect_locks_available_before_monitor_cleanup \
     "explicit install SIGKILL releases FD9 then FD7 before monitor cleanup"
 cleanup_held_child "explicit install SIGKILL fixture cleans held child"
 check_monitor_cleaned "explicit install watchdog still bounds monitor orphan"
+
+# The close-and-exec primitive is shared with POSIX-sh callers.  Normalize a
+# missing reader in the owning shell, not inside the substitution child, and
+# prove successful capture stays byte-exact (modulo shell-mandated trailing
+# newline removal) in both shells.  The extracted production cleanup function
+# then exercises the missing private PID file under its real `set -e` context.
+check_child_substitution_normalization bash
+check_child_substitution_normalization sh
+check_missing_pid_cleanup_set_e
 
 # Keep a narrow static inventory over the helper cluster and the connect
 # source slice that execute after FD9/FD7 acquisition.  Every raw external
