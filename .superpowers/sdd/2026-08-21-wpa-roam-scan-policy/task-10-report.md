@@ -180,3 +180,45 @@ The repository pre-commit hook regenerated `DRIVER_MANIFEST.md` from unrelated
 host binaries while creating the implementation commit. The report follow-up
 restores that file byte-for-byte from inherited HEAD with hooks disabled; it is
 absent from the final Task 10 range and is not a Task 10 change.
+
+## Scoped watchdog harness-race follow-up
+
+Fresh controller validation after `8eddd0973725156dfbfe340d1524ede1a66f96f5`
+reproduced `PASS=168 FAIL=1` in two of four normal writer runs, with only
+`Mode A watchdog bounds SIGKILL orphan` failing. Strace established that the
+monitor PID disappeared at `1787397898.988993`, while watchdog `rm -rf` did not
+start until `1787397898.995989` and completed at `1787397899.005243`. The old
+helper broke its poll loop as soon as the PID disappeared, so it could test
+directory absence roughly 7 ms before removal started.
+
+The fix is test-harness-only: `check_monitor_cleaned()` now polls the complete
+postcondition (PID absent/zombie, recorded directory absent, and no iface
+monitor glob) throughout the existing three-second deadline. It retains the
+same final combined assertions and failure detail at the deadline, so a real
+daemon or private-file leak still fails visibly. No production file changed.
+
+Exact validation:
+
+```sh
+rtk bash -n dist/wlan/usr/local/scripts/wifi_wpa_conf_writer_test.sh
+# exit 0
+
+rtk bash -lc 'set -e; for i in $(seq 1 10); do
+  rtk bash dist/wlan/usr/local/scripts/wifi_wpa_conf_writer_test.sh \
+    > "/tmp/task10-watchdog-fix-run-${i}.log"
+  rtk grep "^RESULT:" "/tmp/task10-watchdog-fix-run-${i}.log"
+done'
+# runs 1..10: each RESULT: PASS=169 FAIL=0 (exit 0)
+
+rtk python3 -m pytest dist/wlan/usr/local/scripts/tests -q
+# 169 passed in 16.90s
+
+rtk ./scripts/validate_release.sh pre
+# exit 0; embedded logger 654 passed, scripts 169 passed,
+# writer RESULT: PASS=169 FAIL=0
+
+rtk git diff --check 8eddd0973725156dfbfe340d1524ede1a66f96f5
+# exit 0
+```
+
+Concerns: none.
