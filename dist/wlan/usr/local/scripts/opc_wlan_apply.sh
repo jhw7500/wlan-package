@@ -80,9 +80,7 @@ wcli() { wpa_cli -i "$IFACE" "$@"; }
 
 # ctrl interface 가용 확인 (wpa_supplicant 미동작이면 reconfigure 불가 → 3).
 wcli ping >/dev/null 2>&1 || { echo "opc_wlan_apply: wpa_cli ctrl unavailable for $IFACE" >&2; exit 3; }
-ABORT_REPLY=$(wcli abort_scan 2>/dev/null)
-ABORT_RC=$?
-if [ "$ABORT_RC" -ne 0 ] || { [ "$ABORT_REPLY" != "OK" ] && [ "$ABORT_REPLY" != "FAIL" ]; }; then
+if ! wifi_wpa_abort_scan_quiesce "$IFACE"; then
     echo "opc_wlan_apply: cannot quiesce scan for $IFACE" >&2
     exit 5
 fi

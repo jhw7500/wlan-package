@@ -153,10 +153,23 @@ esac
 
 case "$*" in
   *" abort_scan"*)
-    mode=$(cat "$STATE_DIR/abort-scan-mode" 2>/dev/null || echo ok)
+    count=$(cat "$STATE_DIR/abort-scan-count" 2>/dev/null || echo 0)
+    count=$((count + 1))
+    printf '%s\n' "$count" > "$STATE_DIR/abort-scan-count"
+    mode=$(cat "$STATE_DIR/abort-scan-mode" 2>/dev/null || echo plain-fail)
     case "$mode" in
       ok) printf 'OK\n' ;;
       plain-fail) printf 'FAIL\n' ;;
+      ok-then-fail)
+        if [ "$count" -eq 1 ]; then printf 'OK\n'; else printf 'FAIL\n'; fi ;;
+      always-ok) printf 'OK\n' ;;
+      ok-then-empty)
+        if [ "$count" -eq 1 ]; then printf 'OK\n'; else :; fi ;;
+      ok-then-other)
+        if [ "$count" -eq 1 ]; then printf 'OK\n'; else printf 'BUSY\n'; fi ;;
+      ok-then-rc-ok)
+        printf 'OK\n'
+        [ "$count" -eq 1 ] || exit 9 ;;
       empty) : ;;
       other) printf 'BUSY\n' ;;
       rc-ok) printf 'OK\n'; exit 9 ;;
@@ -331,6 +344,7 @@ set_monitor_mode() {
 
 set_abort_scan_mode() {
     printf '%s\n' "$1" > "$STATE_DIR/abort-scan-mode"
+    rm -f "$STATE_DIR/abort-scan-count"
 }
 
 hold_scan_transition_lock() {
@@ -1016,7 +1030,11 @@ fi
 check_equal "wifi connect accepts deployed plain FAIL ABORT_SCAN reply" \
     "$(grep -c 'abort_scan$' "$CALL_LOG" || true)" "1"
 
-for _abort_mode in ok plain-fail; do
+for _abort_mode in ok-then-fail plain-fail; do
+    case "$_abort_mode" in
+        ok-then-fail) _expected_abort_calls=2 ;;
+        plain-fail)   _expected_abort_calls=1 ;;
+    esac
     write_mode_b_legacy
     set_boot_policy false false
     set_abort_scan_mode "$_abort_mode"
@@ -1027,8 +1045,8 @@ for _abort_mode in ok plain-fail; do
         bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1
     rc=$?
     check_equal "explicit Mode B accepts $_abort_mode ABORT_SCAN" "$rc" "0"
-    check_equal "explicit Mode B sends one $_abort_mode ABORT_SCAN" \
-        "$(grep -c 'abort_scan$' "$CALL_LOG" || true)" "1"
+    check_equal "explicit Mode B $_abort_mode reaches quiescent FAIL" \
+        "$(grep -c 'abort_scan$' "$CALL_LOG" || true)" "$_expected_abort_calls"
     check_monitor_attached_before_reconfigure \
         "explicit Mode B attaches fresh-event monitor before reconfigure ($_abort_mode)"
     check_equal "fresh reconfigure proof avoids redundant reassociate ($_abort_mode)" \
@@ -1073,19 +1091,75 @@ check_equal "OPC abort rejection sends no reconfigure" \
 
 write_mode_b_legacy
 set_boot_policy false false
-set_abort_scan_mode ok
+set_abort_scan_mode ok-then-fail
 : > "$CALL_LOG"
 WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
     sh "$OPC_SH" mlan0 freq "5180 5200" >/dev/null 2>&1
-check_equal "OPC accepts OK ABORT_SCAN" "$?" "0"
-check_equal "OPC sends ABORT_SCAN after locks" "$(grep -c 'abort_scan$' "$CALL_LOG" || true)" "1"
+check_equal "OPC accepts OK then quiescent FAIL ABORT_SCAN" "$?" "0"
+check_equal "OPC polls ABORT_SCAN through quiescent FAIL" \
+    "$(grep -c 'abort_scan$' "$CALL_LOG" || true)" "2"
+
+# An accepted abort is not quiescence.  Exhaustion and any later malformed or
+# transport reply must fail before conf mutation or association-changing calls.
+for _late_abort_mode in always-ok ok-then-empty ok-then-other ok-then-rc-ok; do
+    case "$_late_abort_mode" in
+        always-ok) _expected_abort_calls=5 ;;
+        *)         _expected_abort_calls=2 ;;
+    esac
+
+    write_mode_b_legacy
+    set_boot_policy false false
+    set_abort_scan_mode "$_late_abort_mode"
+    cp "$CONF" "$TD/wifi-${_late_abort_mode}.conf"
+    : > "$CALL_LOG"
+    WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+        bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        pass "wifi rejects $_late_abort_mode before mutation"
+    else
+        fail "wifi must reject $_late_abort_mode before mutation"
+    fi
+    if cmp -s "$CONF" "$TD/wifi-${_late_abort_mode}.conf"; then
+        pass "wifi $_late_abort_mode rejection leaves conf byte-exact"
+    else
+        fail "wifi $_late_abort_mode rejection must leave conf byte-exact"
+    fi
+    check_equal "wifi $_late_abort_mode stops after bounded ABORT_SCAN calls" \
+        "$(grep -c 'abort_scan$' "$CALL_LOG" || true)" "$_expected_abort_calls"
+    check_equal "wifi $_late_abort_mode sends no association command" \
+        "$(grep -Ec 'reconfigure$|reassociate$|reconnect$' "$CALL_LOG" || true)" "0"
+
+    write_mode_b_legacy
+    set_boot_policy false false
+    set_abort_scan_mode "$_late_abort_mode"
+    cp "$CONF" "$TD/opc-${_late_abort_mode}.conf"
+    : > "$CALL_LOG"
+    WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
+        sh "$OPC_SH" mlan0 freq "5180 5200" >/dev/null 2>&1
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        pass "OPC rejects $_late_abort_mode before transaction"
+    else
+        fail "OPC must reject $_late_abort_mode before transaction"
+    fi
+    if cmp -s "$CONF" "$TD/opc-${_late_abort_mode}.conf"; then
+        pass "OPC $_late_abort_mode rejection leaves conf byte-exact"
+    else
+        fail "OPC $_late_abort_mode rejection must leave conf byte-exact"
+    fi
+    check_equal "OPC $_late_abort_mode stops after bounded ABORT_SCAN calls" \
+        "$(grep -c 'abort_scan$' "$CALL_LOG" || true)" "$_expected_abort_calls"
+    check_equal "OPC $_late_abort_mode sends no reconfigure" \
+        "$(grep -c 'reconfigure$' "$CALL_LOG" || true)" "0"
+done
 
 # Held scan-transition lock: both writers fail before touching the conf or
 # issuing ABORT_SCAN/reconfigure/reassociate.  The explicit timeout override
 # keeps this RED test independent of the production 15-second bound.
 write_mode_b_legacy
 set_boot_policy false false
-set_abort_scan_mode ok
+set_abort_scan_mode plain-fail
 cp "$CONF" "$TD/wifi-held-transition.conf"
 hold_scan_transition_lock || fail "test fixture acquires held scan-transition lock"
 : > "$CALL_LOG"
@@ -1156,7 +1230,7 @@ check_monitor_attached_before_request "Mode A disconnected recovery attaches mon
 # one owner-neutral reassociation uses the remainder of the original budget.
 write_mode_b_legacy
 set_boot_policy false false
-set_abort_scan_mode ok
+set_abort_scan_mode plain-fail
 set_status_mode target
 set_monitor_mode matching-zero
 : > "$CALL_LOG"

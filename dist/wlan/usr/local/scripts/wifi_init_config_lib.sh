@@ -244,6 +244,33 @@ wifi_wpa_conf_lock_acquire() {
     flock -x 9
 }
 
+# Exact plain FAIL is the deployed "no active scan" result.  OK only accepts
+# the abort request; the scan teardown can still be in progress, so reissue a
+# small fixed number of times until FAIL proves quiescence.  Every other reply,
+# transport failure, or bound exhaustion is fail-closed.  This is deliberately
+# not a runtime knob and is independent of the association proof budget.
+wifi_wpa_abort_scan_quiesce() {
+    local iface="$1" reply attempt
+    for attempt in 1 2 3 4 5; do
+        if ! reply=$(wpa_cli -i "$iface" abort_scan 2>/dev/null); then
+            return 1
+        fi
+        case "$reply" in
+            FAIL)
+                return 0
+                ;;
+            OK)
+                [ "$attempt" -lt 5 ] || return 1
+                sleep 0.05 || return 1
+                ;;
+            *)
+                return 1
+                ;;
+        esac
+    done
+    return 1
+}
+
 # FD 7 serializes live scans with association-changing operations.  Callers
 # already hold FD 9, so the global order is always conf -> scan-transition.
 # Tests may use a zero timeout; production defaults to a bounded 15 seconds.
