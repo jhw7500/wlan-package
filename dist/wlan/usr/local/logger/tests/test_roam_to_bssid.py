@@ -19,6 +19,18 @@ from wifi_roam import roam_to_bssid
 import pytest
 
 wifi_roam.logger = MagicMock()
+_real_scan_transition_lock = wifi_roam.scan_transition_lock
+
+
+@pytest.fixture(autouse=True)
+def _private_scan_lock_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        wifi_roam,
+        "scan_transition_lock",
+        lambda iface: _real_scan_transition_lock(
+            iface, run_dir=str(tmp_path / "wifi")
+        ),
+    )
 
 FROM = "aa:bb:cc:dd:ee:ff"
 TARGET = "11:22:33:44:55:66"

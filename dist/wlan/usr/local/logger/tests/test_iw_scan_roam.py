@@ -229,7 +229,10 @@ def test_external_roam_transition_lock_contention_skips_wpa_roam_without_failure
     run = MagicMock()
     monkeypatch.setattr(wifi_roam.subprocess, "run", run)
 
-    assert wifi_roam.roam_to_bssid("00:11:22:33:44:55", "00:11:22:33:44:66") is None
+    assert (
+        wifi_roam.roam_to_bssid("00:11:22:33:44:55", "00:11:22:33:44:66")
+        is wifi_roam.SCAN_TRANSITION_BUSY
+    )
     run.assert_not_called()
 
 
@@ -257,6 +260,17 @@ def test_staged_home_scan_busy_is_propagated_before_line_filter(monkeypatch):
     station = {"bssid": "00:11:22:33:44:55", "rssi": -80, "freq": 5180}
     result = wifi_roam.staged_scan_best_candidate(station, ["Base"], "Base", None, None)
     assert result[0] is wifi_roam.SCAN_TRANSITION_BUSY
+
+
+def test_iw_scan_timeout_is_ordinary_failure_not_lock_contention(monkeypatch):
+    monkeypatch.setattr(
+        wifi_roam.subprocess,
+        "run",
+        MagicMock(side_effect=wifi_roam.subprocess.TimeoutExpired("iw", 15)),
+    )
+    result = wifi_roam.iw_scan_to_ap_lines(["Base"], ["5180"])
+    assert result is None
+    assert result is not wifi_roam.SCAN_TRANSITION_BUSY
 
 
 def test_iw_scan_drops_supplicant_bss_not_refreshed_by_this_scan(monkeypatch):
