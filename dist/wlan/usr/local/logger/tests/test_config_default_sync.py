@@ -9,6 +9,7 @@ CI 에서 차단한다.
 역할이 다르다 — 저쪽은 코드 폴백↔템플릿의 fail-same 원칙, 이쪽은 생성 산출물
 (스키마 default·handoff 기본값 셀)의 동기화 규약을 고정한다.
 """
+import json
 import os
 import subprocess
 import sys
@@ -29,6 +30,38 @@ def test_generated_defaults_are_in_sync():
         "템플릿을 고쳤다면 scripts/gen_config_defaults.py --write 를 실행해\n"
         "생성 산출물을 함께 커밋할 것. 상세:\n" + r.stdout + r.stderr
     )
+
+
+def test_bgscan_passive_docs_describe_backend_safety_split():
+    """Operator docs must preserve the iw safety override and native compatibility."""
+    repo = os.path.abspath(os.path.join(os.path.dirname(__file__), *[".."] * 6))
+    template = os.path.join(repo, "dist/wlan/opt/wlan/config/wifi_init_conf.json")
+    schema = os.path.join(repo, "docs/wifi_init_conf.schema.json")
+    handoff = os.path.join(repo, "docs/wifi_init_conf_webui_handoff.md")
+    guide = os.path.join(repo, "docs/roaming_scan_guide.md")
+
+    with open(template, encoding="utf-8") as f:
+        template_data = json.load(f)
+    for iface in ("mlan0", "mlan1"):
+        passive_comment = next(
+            comment for comment in template_data[iface]["bgscan"]["_comment"]
+            if comment.startswith("passive:")
+        )
+        assert "iw" in passive_comment and "active" in passive_comment
+        assert "wpa_cli" in passive_comment and "passive=1" in passive_comment
+
+    with open(schema, encoding="utf-8") as f:
+        schema_data = json.load(f)
+    for iface in ("mlan0", "mlan1"):
+        description = schema_data["properties"][iface]["properties"]["bgscan"]["properties"]["passive"]["description"]
+        assert "iw" in description and "active" in description
+        assert "wpa_cli" in description and "passive=1" in description
+
+    for path in (handoff, guide):
+        contents = open(path, encoding="utf-8").read()
+        assert "bgscan.passive=true" in contents
+        assert "wpa_cli" in contents and "passive=1" in contents
+    assert "STAGED_SCAN.home_passive" in open(guide, encoding="utf-8").read()
 
 
 def test_schema_patch_resolves_shadowed_toplevel_block():

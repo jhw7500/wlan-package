@@ -407,7 +407,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `bgscan.interval` | 백그라운드 스캔 주기 | int | `60` | >0 | yes | runtime | 매 스캔 직전 재로드(무재시작) |
 | `bgscan.ssid_filter` | SSID directed probe | bool | `true` | true\|false | yes | runtime | false면 광범위 undirected 스캔 |
 | `bgscan.freq_filter` | 주파수 필터(legacy) | bool | `true` | true\|false | no | runtime | **DEPRECATED**. 공통 global `freq_list`가 있으면 false도 무시하고 iw/wpa_cli 모두 같은 목록 강제 |
-| `bgscan.passive` | 패시브 스캔 | bool | `true` | true\|false | yes | runtime | true=probe 미송신(beacon 수신만, 공유매체 probe airtime 0). hidden SSID 미발견 — 판단 기준은 로밍 가이드 §2.3 |
+| `bgscan.passive` | iw safety compatibility | bool | `true` | true\|false | yes | runtime | `wifi_roam` owner/`iw` periodic bgscan에서는 `bgscan.passive=true`를 수용하지만 supported mlan hardware의 data-plane safety를 위해 once-per-process warning 후 active scan으로 강제한다. wpa native owner/`wpa_cli`는 계속 `passive=1`을 보낸다. `STAGED_SCAN.home_passive`와 별개이며 변경하지 않는다 |
 | `bgscan.emit_roam_hint` | roam hint 발행 | bool | `true` | true\|false | yes | runtime | iw/wifi_roam owner에서만 유효. wpa native owner에서는 강제 비활성 |
 | `bgscan.enabled` | package 백그라운드 스캔 | bool | `mlan0=true / mlan1=false` | true\|false | yes | boot | `wifi_bgscan@mlanN` enable/disable. false여도 wpa 장애 복구 scan 유지 |
 
