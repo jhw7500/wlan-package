@@ -355,6 +355,90 @@ def test_mode_b_snapshot_preserves_manual_extra_ssid_identities_byte_exact(
     assert policy["extra_ssids"] == [special]
 
 
+def test_mode_b_current_manual_candidate_survives_restart_and_reboot(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "wifi_init_conf.json"
+    config.write_text(json.dumps(_config(True, extra_ssids=["Base"])))
+    run_dir = tmp_path / "run"
+    latch_dir = tmp_path / "latches"
+    latch_dir.mkdir()
+    fake_bin = _snapshot_fault_bin(tmp_path)
+    fault_state = tmp_path / "fault-state"
+
+    first = _run_snapshot_ensure(
+        config, run_dir, latch_dir, fake_bin, fault_state, ""
+    )
+    assert first.returncode == 0, first.stderr
+    existing = _run_snapshot_ensure(
+        config, run_dir, latch_dir, fake_bin, fault_state, ""
+    )
+    assert existing.returncode == 0, existing.stderr
+
+    (run_dir / "mlan0.roam-policy.json").unlink()
+    (latch_dir / ".mlan0.roam-policy.latched").unlink()
+    reboot = _run_snapshot_ensure(
+        config, run_dir, latch_dir, fake_bin, fault_state, ""
+    )
+    assert reboot.returncode == 0, reboot.stderr
+
+
+@pytest.mark.parametrize("policy_source", ["snapshot", "live-json"])
+def test_mode_b_extra_block_sync_accepts_current_manual_candidate(
+    tmp_path: Path, policy_source: str
+) -> None:
+    config = tmp_path / "wifi_init_conf.json"
+    config.write_text(json.dumps(_config(True, extra_ssids=["Base"])))
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    latch_dir = tmp_path / "latches"
+    latch_dir.mkdir()
+    wpa_dir = tmp_path / "wpa"
+    wpa_dir.mkdir()
+    conf = wpa_dir / "wpa_supplicant-mlan0.conf"
+    original = 'freq_list=5180\nnetwork={\n    ssid="Base"\n}\n'
+    conf.write_text(original)
+
+    if policy_source == "snapshot":
+        (run_dir / "mlan0.roam-policy.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "iface": "mlan0",
+                    "roaming_enabled": True,
+                    "bgscan_enabled": True,
+                    "generate_network_blocks": False,
+                    "extra_ssids": ["Base"],
+                }
+            )
+        )
+        (latch_dir / ".mlan0.roam-policy.latched").write_text("1\n")
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            '. "$1"; wifi_init_sync_extra_ssid_blocks mlan0 "$2"',
+            "_",
+            str(LIB),
+            str(conf),
+        ],
+        env=os.environ
+        | {
+            "WIFI_INIT_CONF_JSON": str(config),
+            "WIFI_RUN_DIR": str(run_dir),
+            "WIFI_ROAM_POLICY_LATCH_DIR": str(latch_dir),
+            "WPA_CONF_DIR": str(wpa_dir),
+        },
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert conf.read_text() == original
+
+
 @pytest.mark.parametrize(
     "extras",
     [

@@ -240,8 +240,11 @@ wifi_roam_policy_ensure_snapshot() {
         # state.  Never promote it or reconstruct from mutable live JSON.
         [ -e "$latch" ] || return 1
         wifi_roam_policy_validate_file "$policy" "$iface" || return 1
+        generate=$(jq -r '.generate_network_blocks' "$policy" 2>/dev/null) || return 1
         extras=$(jq -c '.extra_ssids' "$policy" 2>/dev/null) || return 1
-        wifi_ssid_array_validate_json "$extras" "$base_conf" || return 1
+        if [ "$generate" = "true" ]; then
+            wifi_ssid_array_validate_json "$extras" "$base_conf" || return 1
+        fi
         return 0
     fi
     # 같은 boot에 snapshot을 삭제한 후 live JSON으로 owner/topology를
@@ -262,7 +265,11 @@ wifi_roam_policy_ensure_snapshot() {
         '(.[$iface].roaming.extra_ssids // []) as $raw
          | if ($raw | type) == "array" then $raw else error("extra_ssids") end' \
         "$conf_json" 2>/dev/null) || return 1
-    wifi_ssid_array_validate_json "$extras" "$base_conf" || return 1
+    if [ "$generate" = "true" ]; then
+        wifi_ssid_array_validate_json "$extras" "$base_conf" || return 1
+    else
+        wifi_ssid_array_validate_json "$extras" || return 1
+    fi
 
     tmp=$(mktemp "$run_dir/.${iface}.roam-policy.XXXXXX") || return 1
     if ! jq -cn \
@@ -760,7 +767,11 @@ wifi_init_sync_extra_ssid_blocks() {
              | if ($raw | type) == "array" then $raw else error("extra_ssids") end' \
             "$conf_json" 2>/dev/null) || return 1
     fi
-    wifi_ssid_array_validate_json "$extras_json" "$conf" || return 1
+    if [ "$gen" = "true" ]; then
+        wifi_ssid_array_validate_json "$extras_json" "$conf" || return 1
+    else
+        wifi_ssid_array_validate_json "$extras_json" || return 1
+    fi
 
     local tmp
     tmp=$(mktemp "${conf}.extra.XXXXXX") || return 1

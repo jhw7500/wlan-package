@@ -2,6 +2,7 @@ import os
 import sys
 import json
 from contextlib import contextmanager
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -145,6 +146,55 @@ def test_native_request_combines_conf_and_json_ssids_in_order(tmp_path, monkeypa
 
     ssids = [cmd[i + 1] for i, token in enumerate(cmd[:-1]) if token == "ssid"]
     assert ssids == [name.encode().hex() for name in ("Base", "Office", "JsonOnly")]
+
+
+@pytest.mark.parametrize("backend", ["iw", "wpa_cli"])
+def test_generated_extra_and_boot_snapshot_overlap_is_one_probe(
+    tmp_path, monkeypatch, backend
+):
+    conf = Path(_write_runtime_config(tmp_path, monkeypatch))
+    conf.write_text(
+        """\
+freq_list=5180 5200
+network={
+    ssid="Base"
+}
+# >>> wifi_extra_ssid auto-generated (do not edit) >>>
+network={
+    ssid=4f6666696365
+}
+# <<< wifi_extra_ssid auto-generated <<<
+"""
+    )
+    boot_policy = {
+        "generate_network_blocks": True,
+        "extra_ssids": ["Office"],
+    }
+
+    cmd, _, _ = wifi_bgscan.build_scan_request(
+        str(conf), backend, boot_policy=boot_policy
+    )
+
+    if backend == "iw":
+        probes = cmd[cmd.index("ssid") + 1 :]
+    else:
+        probes = [cmd[i + 1] for i, token in enumerate(cmd[:-1]) if token == "ssid"]
+        probes = [bytes.fromhex(probe).decode("utf-8") for probe in probes]
+    assert probes == ["Base", "Office"]
+
+
+@pytest.mark.parametrize("extra_ssids", [["Office", "Office"], ["Base"]])
+def test_build_request_strictly_rejects_invalid_boot_snapshot_extras(
+    tmp_path, monkeypatch, extra_ssids
+):
+    conf = _write_runtime_config(tmp_path, monkeypatch)
+    boot_policy = {
+        "generate_network_blocks": True,
+        "extra_ssids": extra_ssids,
+    }
+
+    with pytest.raises(wifi_bgscan.BgscanConfigError, match="SSID topology"):
+        wifi_bgscan.build_scan_request(conf, "iw", boot_policy=boot_policy)
 
 
 def test_periodic_scan_lock_contention_defers_full_interval_without_subprocess(
