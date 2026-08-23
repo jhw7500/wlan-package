@@ -783,14 +783,24 @@ wpa_supplicant의 장애 복구·재연결 스캔은 계속 동작한다.
 |----|------|--------|------|
 | `enabled` | bool | mlan0 `true` / mlan1 `false` | package background scan 서비스 활성화. false여도 wpa 복구 scan은 유지 |
 | `interval` | int | `60` | 백그라운드 스캔 주기 (초) |
-| `ssid_filter` | bool | `true` | `iw scan`의 **기본 ssid** directed probe 포함 여부. `true`면 conf 기본 ssid를 probe, `false`면 기본 ssid는 probe 없이 스캔. `roaming.extra_ssids`(§11.4)는 이 값과 **무관하게 항상 probe**된다. **`passive=true`(기본)면 directed probe 자체가 없어 이 키는 무효** |
+| `ssid_filter` | bool | `true` | active scan의 **기본 ssid** directed probe 포함 여부. `true`면 conf 기본 ssid를 probe, `false`면 기본 ssid는 probe 없이 스캔. `roaming.extra_ssids`(§11.4)는 이 값과 **무관하게 항상 probe**된다. wifi_roam/iw periodic bgscan은 `passive=true`도 safety override 뒤 active construction을 쓰므로 이 규칙이 적용된다 |
 | `freq_filter` | bool | `true` | **DEPRECATED**. 공통 `freq_list`가 있으면 `false`도 무시하고 iw/wpa_cli 모두 같은 목록을 사용. 목록 자체가 없을 때만 전대역 |
-| `passive` | bool | `true` | `true`=패시브 스캔. iw backend는 `iw <iface> scan passive`, native backend는 `wpa_cli -i <iface> SCAN passive=1`(probe request 미송신·beacon 수신만)을 요청한다. `false`=종전 액티브 스캔 |
+| `passive` | bool | `true` | compatibility 값. wifi_roam owner의 periodic iw bgscan은 `bgscan.passive=true`를 수용하지만 supported mlan hardware의 data-plane safety를 위해 프로세스당 한 번 경고하고 active scan으로 강제한다. wpa native owner는 계속 `wpa_cli -i <iface> SCAN passive=1`을 요청한다. `false`는 native backend에서도 active scan을 요청한다 |
 | `emit_roam_hint` | bool | `true` | iw/wifi_roam owner에서 스캔 성공 시 roam backoff hint 발행. wpa native owner에서는 소비자가 없어 강제 비활성 |
 
-> **패시브 스캔 (`passive`, 기본 `true`)**: bgscan은 probe request를 쏘지 않고 beacon만 수신한다. probe를 안 보내므로 **directed `ssid` 토큰은 명령에서 전부 생략**되며(`ssid_filter`/`extra_ssids`의 directed probe는 패시브에서 무의미), airtime 오염이 줄고 beacon 기반 RSSI라 현재 링크의 `signal_avg`와 측정 스케일이 가까워진다(로밍 판정 정합성↑, §11.4). **한계**: beacon을 보내지 않는 **hidden SSID는 패시브로 발견되지 않는다** — hidden extra SSID가 로밍 후보라면 `passive=false`로 액티브 bgscan을 쓰거나, 로밍 트리거 시의 액티브 폴백(§11.4)에 의존해야 한다.
+> **periodic iw safety override (`bgscan.passive`, 기본 `true`)**: wifi_roam owner의
+> periodic `iw` backend는 `true`를 config compatibility로만 수용한다. supported mlan
+> hardware에서 반복 다채널 passive scan이 data plane을 strand할 수 있으므로, 이 backend는
+> 프로세스당 한 번 warning을 남기고 기존 active grammar를 사용한다. 즉 periodic `iw`
+> 명령에는 `passive` 토큰이 없고, `ssid_filter`와 `roaming.extra_ssids`의 정상 directed
+> probe 순서가 유지된다. 반대로 wpa native owner의 `wpa_cli` backend는 `true`일 때
+> `passive=1`을 계속 보내므로 probe 없이 beacon만 수신하며 hidden SSID를 발견하지 못한다.
+> `STAGED_SCAN.home_passive`는 wifi_roam.py의 단일 홈 채널 staged-scan 설정으로,
+> `bgscan.passive`와 별개이고 이번 periodic safety override로 변경되지 않았다.
 
-> **아래 `ssid_filter` 설명은 `passive=false`(액티브 bgscan)일 때만 적용된다.** `passive=true`(기본)면 probe request를 보내지 않으므로 `ssid` 인자 자체가 명령에서 빠진다.
+> **아래 `ssid_filter` 설명은 active construction에 적용된다.** wifi_roam/iw periodic
+> bgscan은 `passive` 값과 무관하게 safety override 뒤 이 construction을 사용한다. wpa
+> native backend는 `passive=false`일 때만 아래 directed `ssid` 인자를 사용한다.
 >
 > `ssid_filter=true`이면 bgscan이 conf 기본 ssid를 directed probe한다. iw backend의 active 문법은 `iw <iface> scan ... ssid <SSID>`이고, native backend는 `wpa_cli -i <iface> SCAN ... ssid <UTF-8 hex>`를 쓴다. native active SSID filters are UTF-8 hex encoded because the control interface accepts bytes rather than a quoted SSID. non-hidden SSID는 probe 없이 beacon으로도 잡히지만 **hidden SSID는 directed probe가 있어야 발견**된다. 따라서 `roaming.extra_ssids`(§11.4)는 명시적 로밍 후보로서 `ssid_filter` 값과 **무관하게 항상 directed probe**에 포함된다 — `ssid_filter=false`로 두어도 extra SSID(hidden 포함)는 누락되지 않는다. ssid_filter on/off의 스캔 시간·통신 영향 차이는 작고, 실제 비용은 `freq_filter`(채널 수)가 좌우한다.
 

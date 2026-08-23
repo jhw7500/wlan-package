@@ -39,6 +39,7 @@ def test_bgscan_passive_docs_describe_backend_safety_split():
     schema = os.path.join(repo, "docs/wifi_init_conf.schema.json")
     handoff = os.path.join(repo, "docs/wifi_init_conf_webui_handoff.md")
     guide = os.path.join(repo, "docs/roaming_scan_guide.md")
+    config_guide = os.path.join(repo, "docs/wifi_init_conf_guide.md")
 
     with open(template, encoding="utf-8") as f:
         template_data = json.load(f)
@@ -57,11 +58,11 @@ def test_bgscan_passive_docs_describe_backend_safety_split():
         assert "iw" in description and "active" in description
         assert "wpa_cli" in description and "passive=1" in description
 
-    for path in (handoff, guide):
+    for path in (handoff, guide, config_guide):
         contents = open(path, encoding="utf-8").read()
         assert "bgscan.passive=true" in contents
         assert "wpa_cli" in contents and "passive=1" in contents
-    assert "STAGED_SCAN.home_passive" in open(guide, encoding="utf-8").read()
+        assert "STAGED_SCAN.home_passive" in contents
 
 
 def test_schema_patch_resolves_shadowed_toplevel_block():
