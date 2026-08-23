@@ -403,9 +403,19 @@ def build_scan_request(conf_path, backend, boot_policy=None):
         freq_filter = True
 
     try:
-        scan_extras = validate_ssid_list(
-            network_ssids[1:] + extra_ssids, base_ssid=ssid
-        )
+        conf_extras = validate_ssid_list(network_ssids[1:], base_ssid=ssid)
+        snapshot_source = extra_ssids
+        if boot_policy is not None and _parse_bool(
+            boot_policy.get("generate_network_blocks")
+        ):
+            snapshot_source = boot_policy.get("extra_ssids")
+        snapshot_extras = validate_ssid_list(snapshot_source, base_ssid=ssid)
+        conf_extra_identities = set(conf_extras)
+        scan_extras = conf_extras + [
+            extra
+            for extra in snapshot_extras
+            if extra not in conf_extra_identities
+        ]
     except RoamPolicyError as exc:
         raise BgscanConfigError(f"invalid scan SSID topology: {exc}") from exc
     if backend == "iw":
