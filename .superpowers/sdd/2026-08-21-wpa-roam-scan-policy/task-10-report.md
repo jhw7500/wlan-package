@@ -913,3 +913,329 @@ further production edit or target deployment was made; no merge or push was
 attempted. The previously restored board remains on the accepted `d7615f9`
 package. Final branch verdict: **blocked / not merge-ready** pending explicit
 authorization for a new remediation cycle.
+
+## User-approved remediation cycle 2 (2026-08-23)
+
+The user explicitly approved a new remediation cycle after the preceding
+process breaker. The authorized scope was limited to the two independently
+reproduced runtime-shape regressions; no tombstone, durability, atomic-install,
+metadata, lock, watchdog, roaming, or runtime mode-switch contract was reopened.
+
+### Implementation and TDD
+
+Commit `21b12295fbb392c17b5a444994453095fafab97e` (`fix(wifi): accept runtime
+SSID topology shapes`) changes exactly:
+
+- `dist/wlan/usr/local/logger/wifi_bgscan.py`;
+- `dist/wlan/usr/local/logger/tests/test_bgscan_run_scan.py`;
+- `dist/wlan/usr/local/scripts/wifi_init_config_lib.sh`; and
+- `dist/wlan/usr/local/scripts/tests/test_roam_owner_service_policy.py`.
+
+For Mode A, generated-conf extras and boot-snapshot extras are validated
+independently against the base, then combined as a stable ordered identity
+union: conf extras first, followed by snapshot-only extras. Cross-source
+overlap is coalesced only after strict per-source validation, so duplicates
+inside either source and base duplication remain fatal. Both `iw` and
+`wpa_cli` consume this single merged list.
+
+For Mode B, the strict candidate-list validator remains unchanged, but live
+base/candidate equality is rejected only when `generate_network_blocks=true`.
+This preserves the Mode A topology invariant while allowing a supported Mode B
+manual candidate to become the mutable single-block base across service restart
+and reboot.
+
+Witnessed RED before production edits:
+
+- `/tmp/task10-remediation-2-red-bgscan.log`: two backend failures for expected
+  generated/snapshot overlap;
+- `/tmp/task10-remediation-2-red-modeb.log`: three snapshot/reboot/sync
+  failures for current-base/candidate equality; and
+- `/tmp/task10-remediation-2-red-bgscan-strict.log`: raw duplicate snapshot
+  input exposed the loader fallback seam.
+
+Controller-owned final GREEN:
+
+- `/tmp/task10-controller-remediation-2-success.log`:
+  `CONTROLLER_REMEDIATION_SUCCESS=1`;
+- focused bgscan: `12 passed`;
+- focused Mode B snapshot policy: `34 passed`;
+- full `scripts/validate_release.sh pre`: exit 0, logger `703 passed`, scripts
+  `193 passed`, init `PASS=127 FAIL=0`, writer `PASS=259 FAIL=0`;
+- `git diff --check 90b3222..21b1229`: clean.
+
+The initial combined focused pytest invocation failed only because two
+independent test roots both expose a top-level `tests` package. Running the
+same suites in separate pytest processes passed; this was collection namespace
+collision, not a product or assertion failure.
+
+### Independent scoped review
+
+The independent review of `90b3222..21b1229` is
+`/tmp/task10-remediation-2-review.md`, SHA-256
+`87e5017b41b349543513deeda0326110830b9f396f5774fa5b219090b079e5e6`.
+Verdicts: spec PASS, quality PASS, Critical 0, Important 0, READY.
+
+Two nonblocking test-depth observations were deferred: an explicit mixed
+conf-overlap-plus-snapshot-only ordering table, and malformed Mode B candidates
+parameterized through every affected entry point. The implementation retains a
+stable non-set output order and the common strict validator is visibly invoked
+by all paths; focused and complete suites are green, so neither observation is
+evidence of a current defect.
+
+### Package
+
+Fresh `./build.sh` and `scripts/validate_release.sh package release/wlan.deb`
+both passed. Artifact: `wlan-proc 0.5.5`, arm64, SHA-256
+`1b2fb7532c33ec1cba45162906003559234185f317d6c217572ba8a4a61f5efa`.
+Installed reviewed source hashes are:
+
+- `wifi_bgscan.py`: `d61392ab620e47bf775afac49241bd6144c9e6ce961d7f186f4722d66bb9db76`;
+- `wifi_init_config_lib.sh`: `44d7eae97ec26904556a5e1190413445e7c391778d85dc1e0021c451b3502dd5`.
+
+## Remediation cycle 2 board acceptance
+
+### Safety and harness correction
+
+`jhw-control board status` returned `INVALID_CONFIG`, so no registry
+reservation could be created. The already authorized direct board operation
+proceeded only after exact baseline proof and with an automatic recovery path.
+The original board files were preserved as root-owned `0644`/`0600` and
+verified at SHA-256 `be46944c...9219c2c9` and `e1f9248a...708d758`.
+
+An early orchestrator invocation exposed an SSH quoting bug after copying the
+package/config: OpenSSH argv joining caused the intended `bash -c` payload to
+execute incorrectly. Testing stopped immediately. The accepted `d7615f9`
+package and both exact originals were manually reinstalled, the board was
+actually rebooted, and old source hashes, services, base association, locks,
+capture state, and ping were reverified before any rerun. The corrected
+orchestrator quotes the complete remote `bash -c` program as one argument.
+Failed-attempt and exact-recovery evidence is retained rather than discarded.
+
+The first corrected native harness then failed only its assumption that a
+second `wpa_cli -a` action connection would receive scan events. The action
+process was live, while the product journal proved the exact scan control
+request, `SCAN_STARTED`, both directed probes, `SCAN_RESULTS`, and completion.
+The final harness therefore keeps action delivery diagnostic-only and requires
+the stronger causal after-cursor journal sequence plus exact resulting BSS
+identities.
+
+### Mode B current candidate: PASS before and after reboot
+
+With Mode B/external owner and immutable `extra_ssids=["jhw_wlan"]`, `wifi
+connect` changed the single block from base `jhw_wlan_`/5180 to candidate
+`jhw_wlan`/5200. The command returned 0, association completed on BSSID
+`58:86:94:d2:73:e8`, the network count remained one, snapshot ensure and
+topology sync both returned 0, the conf was unchanged after those checks, and
+ping passed:
+
+```text
+CONNECT_RC=0 CONNECTED=1 NETWORKS=1 ENSURE_RC=0 SYNC_RC=0
+CONF_UNCHANGED=1 PING_RC=0 MODEB_SWITCH_FAILS=0
+```
+
+After reboot, the board again completed on `jhw_wlan`, with one current
+network, ensure/sync 0, byte-unchanged conf, no boot errors, and healthy ping:
+
+```text
+CONNECTED=1 NETWORKS=1 CURRENT_COUNT=1 ENSURE_RC=0 SYNC_RC=0
+CONF_UNCHANGED=1 BOOT_ERRORS=0 MODEB_REBOOT_FAILS=0
+```
+
+### Mode A external scan owner: PASS
+
+Boot state proved `generate_network_blocks=true`, `wifi_roam=active`,
+`wifi_bgscan=active`, and two network blocks. The journal parser extracted:
+
+```text
+iw mlan0 scan freq 5180 5200 5220 5240 ssid jhw_wlan_ jhw_wlan
+```
+
+The exact ordered probes were `[jhw_wlan_, jhw_wlan]`, each once. The successful
+`iw` request updated the roam hint, no initial/reload config error appeared,
+the transition lock was free, the roam service stayed active, and ping passed.
+Result: `MODEA_EXTERNAL_FAILS=0`.
+
+### Mode A native scan owner: PASS
+
+Boot state proved `generate_network_blocks=true`, `roaming_enabled=false`,
+`wifi_roam=inactive`, `wifi_bgscan=active`, and two network blocks. The parsed
+request was:
+
+```text
+wpa_cli -i mlan0 scan freq=5180,5200,5220,5240 \
+  ssid 6a68775f776c616e5f ssid 6a68775f776c616e
+```
+
+Those hex probes decode exactly to `[jhw_wlan_, jhw_wlan]`, once each. In the
+same after-cursor journal window the exact request appeared at line 17,
+`Event SCAN_STARTED` at line 54, and `Event SCAN_RESULTS` at line 63. The
+result table contained `00:80:4c:c7:7d:dd`/5180/`jhw_wlan_` and
+`58:86:94:d2:73:e8`/5200/`jhw_wlan`. There were zero config load/reload errors,
+the scan-transition lock was free, and ping passed:
+
+```text
+JOURNAL_SCAN=1 CAUSAL_SCAN=1 PARSER_RC=0 BASE_SEEN=1 EXTRA_SEEN=1
+ERRORS=0 MODEA_NATIVE_FAILS=0
+```
+
+The attached `wpa_cli -a` process was healthy (`ACTION_RC=0`,
+`ACTION_LIVE=1`) but delivered no scan action event (`ACTION_SCAN_EVENT=0`);
+this is documented as an action-interface observation, not mistaken for lack
+of a native scan.
+
+### Exact final restore and retained package: PASS
+
+After acceptance, the reviewed new package was retained while the operator's
+JSON and supplicant conf were restored byte-for-byte and the board rebooted.
+Final assertions proved:
+
+- exact original config hashes and `root:root 0644`/`0600` metadata;
+- reviewed installed source hashes shown above;
+- `wpa_supplicant`, `wifi_roam`, and `wifi_bgscan` active;
+- `wifi_capture@mlan0` inactive;
+- immutable runtime policy restored to Mode B/external owner with no extras;
+- `mlan0` COMPLETED on id 0 / `jhw_wlan_` / 5180;
+- configuration and scan-transition locks free, gateway ping 3/3; and
+- remote safety directory removed.
+
+The scripted assertion is `FINAL_RESTORE_OK=1`; a separate post-cleanup SSH
+probe returned `INDEPENDENT_FINAL_BOARD_OK=1`.
+
+Raw local/remote evidence is
+`/tmp/wlan-board-test-remediation2-CLtSvslw`. Its 98-file `SHA256SUMS`
+manifest has SHA-256
+`ea2e7133f4ef53630c86097ed69d2cc75a0da6ee9cf50ae5cea140fa0d804aac`.
+
+Final remediation verdict: **PASS / merge-ready subject only to the normal
+branch-finishing choice**. The final clean-tree
+`scripts/validate_release.sh pre` rerun exited 0 with logger `703`, scripts
+`193`, init `127/0`, writer `259/0`; `/tmp/task10-remediation-2-final-verification-2.log`
+has SHA-256
+`e03bc0b09cfb6c6b3300b0bc4d313eb4afa76a76f910519d2ae562a22a18be49`.
+No merge or push has been performed.
+
+## Post-acceptance board radio diagnostic
+
+After the acceptance, evidence commit, and local finishing gate, a separate
+live-board health probe found a stale association: supplicant still reported
+`COMPLETED` on `jhw_wlan_`/`00:80:4c:c7:7d:dd`/5180, but the neighbor entry was
+`FAILED`, ARP and gateway ping had no replies, and station statistics showed
+`tx failed=255970`. This occurred without any intervening board configuration
+or package change.
+
+The supported no-argument recovery path was run once under the required
+`wifi_capture@mlan0`/netmon capture. It did not manufacture success: `wifi 0
+connect` returned rc 8 because no fresh association completed within 15
+seconds and the supplicant moved to scanning. JSON and supplicant conf remained
+byte-exact, and capture cleanup returned the service to inactive. Artifact:
+`/tmp/task10-postacceptance-noarg-reassociate.log`, SHA-256
+`f5c3857c336d3dd9025917368f139eea88b60ba9898e88ebe5d27b6b2e747945`.
+
+The capture and supplicant evidence localized the failure below the package
+configuration transaction: five authentication frames were transmitted from
+mlan0 to the base BSSID, no authentication/association response was received,
+and supplicant repeatedly logged `Authentication timed out` followed by
+`SSID-TEMP-DISABLED`. Three minutes of normal automatic retry alternated
+scanning/authenticating/disconnected without recovery. Artifact:
+`/tmp/task10-postacceptance-auth-timeouts.log`, SHA-256
+`5f1ed6c91c82495daf2da850701a790e541b5234fe838b45ac77c34dcf35d883`.
+
+One previously authorized board reboot was then used as a diagnostic component
+reset. The exact same saved configuration immediately authenticated to the
+base BSSID and gateway ping returned 3/3. A first 150-second observation
+covered two real 60-second background scans with ten healthy samples, no
+disconnect/auth timeout, free locks, and capture inactive.
+
+Because the incident first appeared after a longer dwell, the final gate
+matched that time axis: a 15-minute soak sampled status and a three-packet ping
+31 times while the daemon completed 15 background scans. All 31 samples stayed
+`COMPLETED` on the exact base BSSID, every ping command received replies,
+disconnect and authentication-timeout counts were zero, and driver `tx failed`
+remained 0. Three samples lost one of three packets but no sample lost the data
+path. Exact original config hashes and reviewed runtime hashes remained
+unchanged, capture was inactive, both locks were free, and the assertion was
+`POST_REBOOT_15MIN_SOAK_FAILS=0`. Artifact:
+`/tmp/task10-postacceptance-15min-soak.log`, SHA-256
+`0570077f85bea023e30934827f9014b155204a299405755c18f2ef4db1d5fe6d`.
+
+That provisional non-reproduction conclusion was then falsified. The
+15-minute soak had transmitted a three-packet probe every 30 seconds. After
+those probes stopped while the local release gate ran, the same stale
+`COMPLETED` state returned within minutes: gateway ping was 0/3, the neighbor
+entry failed, and `tx failed` rose from 0 to 60204. Observation traffic had
+kept the link usable and masked the actual idle postcondition.
+
+### Deterministic scan-mode isolation
+
+The board was reset to the same byte-exact config before the following tests.
+Only background scan state or the exact scan grammar changed.
+
+1. **A — no bgscan, five-minute idle: PASS.** After an initial healthy ping,
+   `wifi_bgscan` was stopped and mlan0 was left idle for five minutes. The
+   association and final ping remained healthy, `tx failed` stayed 0, and
+   there were no scans, disconnects, or auth timeouts. The daemon was restored
+   by the harness cleanup. Artifact:
+   `/tmp/task10-postacceptance-phase-a-bgscan-off.log`, SHA-256
+   `ad8bbc212e5a647e9d72129ebfc6a6ecc6a71c7e2cb3045e120031b1d9b39530`.
+2. **B — production passive bgscan, five-minute idle: deterministic FAIL.**
+   With the daemon active, the exact command
+   `iw mlan0 scan freq 5180 5200 5220 5240 passive` ran five times. Supplicant
+   still claimed `COMPLETED`, but final ping was 0/3 and `tx failed` rose
+   `0 -> 42025`; config was unchanged and no disconnect/auth timeout informed
+   the owner. Link logs show the first TX_FAIL spikes after the fourth passive
+   request. Artifact: `/tmp/task10-postacceptance-phase-b-bgscan-on.log`,
+   SHA-256
+   `f4cd2b52e296f5a1ba0c2e9c3f826d453a0544e15fb47c787b211e7ac6152a32`.
+3. **C — active directed manual control: PASS.** With the daemon stopped, five
+   scans used the same 60-second cadence, four frequencies, and transition
+   lock, changing only the grammar to
+   `iw mlan0 scan freq 5180 5200 5220 5240 ssid jhw_wlan_`. All five requests
+   succeeded; final ping was 3/3, `tx failed` stayed 0, and there were no
+   disconnects/auth timeouts. Artifact:
+   `/tmp/task10-postacceptance-phase-c-active-directed.log`, SHA-256
+   `dd4b19d7e84f8edcd591a0478a86fa0771b61578e349c39845ea556bd0339031`.
+4. **D — real daemon with temporary `passive=false`: behavioral PASS.** The
+   actual daemon issued five exact directed active requests and supplicant
+   recorded five external scans. After five idle minutes, status and ping were
+   healthy, there were no disconnects/auth timeouts, and JSON was restored
+   byte-for-byte before stopping the daemon. The harness returned 1 only
+   because its after-cursor command-text collector was empty; every product
+   predicate passed, and a separate unit-journal extraction proves the exact
+   five commands. Artifacts:
+   `/tmp/task10-postacceptance-phase-d-daemon-active.log`, SHA-256
+   `fed0b212b7cdca6690b1bf297becc4fee789068735429f0ea93b58dc5548d8fe`,
+   and command evidence SHA-256
+   `9eec476bb9b169583f09abc61e02e603de1b5a7420594244e838f5efd395f4a8`.
+
+### Root-cause verdict and stop condition
+
+The demonstrated root-cause boundary is the deployed NXP moal 437.p3 external
+multi-channel passive scan path. Repeated `iw ... passive` requests can strand
+the associated data plane while station/supplicant state remains stale
+`COMPLETED`; normal no-argument reassociation then cannot authenticate and only
+a board/radio reset recovered it. Removing scans or using the already supported
+active directed grammar under the same owner, lock, frequency list, cadence,
+SSID, and AP stays healthy.
+
+The prior roaming guide's passive experiments do not contradict this result:
+its off-channel measurement explicitly streamed pings while scanning, exactly
+the condition now shown to mask the idle failure. The passive implementation
+predates remediation cycle 2, and the two approved SSID runtime-shape fixes do
+not change this grammar; nevertheless the required exact-restoration health
+gate cannot pass with the operator's `passive=true` config left active.
+
+The recommended next bounded remediation is to make the supported mlan/iw
+backend fail safe to the validated active directed grammar when passive is
+requested, with an explicit warning plus defaults/schema/operator-guide/test
+updates. A gateway keepalive is rejected as a workaround because it assumes a
+reachable IP peer and merely masks the scan-induced radio state; post-failure
+reassociation is also inadequate because the captured AP authentication
+responses never arrive.
+
+No further production edit or re-review was authorized in this cycle. The
+board is held safely with exact original JSON/conf and the reviewed new package,
+`wpa_supplicant` and `wifi_roam` active, `wifi_bgscan` intentionally inactive,
+capture inactive, and the base data path healthy. This is not the required
+final service state. The earlier merge-ready sentence is superseded: final
+branch status is **blocked / not merge-ready pending explicit authorization
+for the passive-iw safety remediation and a fresh scoped review**.
