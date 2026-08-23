@@ -1571,11 +1571,14 @@ else
     pass "OPC Mode A guidance avoids raw wpa_cli select_network"
 fi
 GUIDE="$SCRIPT_DIR/../../../../../docs/wifi_init_conf_guide.md"
-if grep -Fq 'iw <iface> scan passive' "$GUIDE" \
-   && grep -Fq 'wpa_cli -i <iface> SCAN passive=1' "$GUIDE"; then
-    pass "bgscan guide documents iw and native passive request grammars"
+if grep -Fq 'bgscan.passive=true' "$GUIDE" \
+   && grep -Fq 'active scan으로 강제' "$GUIDE" \
+   && grep -Fq 'wpa_cli -i <iface> SCAN passive=1' "$GUIDE" \
+   && grep -Fq 'STAGED_SCAN.home_passive' "$GUIDE" \
+   && grep -Fq '별개' "$GUIDE"; then
+    pass "bgscan guide documents iw safety override and native passive grammar"
 else
-    fail "bgscan guide documents iw and native passive request grammars"
+    fail "bgscan guide documents iw safety override and native passive grammar"
 fi
 if grep -Fq 'UTF-8 hex' "$GUIDE"; then
     pass "bgscan guide documents hex-encoded native active SSID filters"
