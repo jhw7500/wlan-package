@@ -112,7 +112,6 @@ SKIP_REDUNDANT_ACTIVE_SCAN  and  home_scan_ok  and  home_covers_all
 
 ```json
 "mlan0": {
-  "bgscan":  { "passive": true, "interval": 60 },
   "roaming": {
     "STAGED_SCAN": {
       "enable": true,
@@ -127,7 +126,10 @@ SKIP_REDUNDANT_ACTIVE_SCAN  and  home_scan_ok  and  home_covers_all
 
 #### 결과
 
-tick당 `['iw','mlan0','scan','freq','5240','passive']` **1회뿐**. Stage 3 스킵으로 **probe 0 → 공유 매체 probe airtime 0**. 단 자기 링크의 off-channel 영향까지 0 은 아니다(§3.2).
+tick당 `['iw','mlan0','scan','freq','5240','passive']` **1회뿐**. 이는
+`STAGED_SCAN.home_passive`가 만든 `wifi_roam.py` 홈 채널 scan이며 periodic bgscan이
+아니다. Stage 3 스킵으로 **probe 0 → 공유 매체 probe airtime 0**. 단 자기 링크의
+off-channel 영향까지 0 은 아니다(§3.2).
 
 #### 한계
 
@@ -141,7 +143,6 @@ tick당 `['iw','mlan0','scan','freq','5240','passive']` **1회뿐**. Stage 3 스
 
 ```json
 "mlan0": {
-  "bgscan":  { "passive": true, "interval": 60 },
   "roaming": {
     "STAGED_SCAN": {
       "enable": true,
@@ -158,28 +159,35 @@ tick당 `['iw','mlan0','scan','freq','5240','passive']` **1회뿐**. Stage 3 스
 
 ### 2.3 `bgscan.passive` 판단
 
-**hidden 로밍 타깃이 없다면 두 구성 모두 `true`(기본) 를 권하며, 이 결론은 단말 수와 무관하다.** hidden 타깃을 운용한다면 이득(고정)과 비용(단말 수 비례)의 교차점이 생겨 단말 밀도가 결정 변수가 된다(아래 각주).
+`bgscan.passive`의 JSON 기본값은 `true`로 유지한다. 이는 wpa native owner의
+`wpa_cli` 호환을 위한 값이다. 그러나 `wifi_roam` owner의 periodic `iw` bgscan에서는
+`bgscan.passive=true`를 수용하되 **active scan으로 안전 강제**하고 프로세스당 한 번
+경고한다. 따라서 지원 mlan hardware에서 periodic `iw ... scan ... passive`는 발행되지
+않으며, 공통 `freq_list`와 base/extra SSID 순서를 그대로 쓰는 directed active scan이 된다.
 
-액티브 bgscan의 **고유 이득은 하나뿐**이다 — hidden SSID를 **평시에 미리** 캐시·BSS 테이블에 넣어두는 것. 패시브는 beacon만 받으므로 hidden을 못 본다.
+반대로 wpa native owner는 `wpa_cli scan ... passive=1`을 계속 보낸다. 이 두 backend의
+차이를 설정 UI와 운영 절차에서 혼동하지 말 것. `STAGED_SCAN.home_passive`는
+`wifi_roam.py`의 단일 홈 채널 staged-scan 설정으로, `bgscan.passive`와 별개이며 이번
+안전 조치로 변경되지 않았다.
 
-| 항목 | 패시브 | 액티브 |
-|---|---|---|
-| 다채널 일반 AP 커버 | **확보** (§3.4 실측) | 확보 |
-| hidden 평시 선점 | 없음 | 있음 (Stage 3 대비 약 1.15초 선점, §3.3 주) |
-| 공유 매체 probe airtime | **0** | 4.56ms/스캔 상시 |
-| RSSI 스케일 | 차이 없음 (§3.3 — roam Stage 1 vs Stage 3 실측. **bgscan 모드 간·`getscantable` 캐시는 미측정**) | 좌동 |
-| 로그 구분 | `passive` 토큰으로 구분 | **Stage 3와 명령 문자열 동일** |
+#### 새로운 target-board 안전 근거
 
-- **다채널**: roam condition에서 direct active가 hidden을 잡는다. active bgscan의 이득은 평시 선점뿐이고 대가는 상시 airtime이다.
-- **단일 채널**: cache는 판정에 쓰이지 않는다. hidden 대상은 `home_passive: false`로 발견한다.
+NXP moal 437.p3에서 idle 상태의 반복 다채널 periodic passive `iw` scan은 약 네 번째
+scan 뒤 data plane을 strand했다. 이때 wpa_supplicant는 계속 `COMPLETED`로 보였으므로
+연결 상태만으로 안전을 판단할 수 없었다. 동일한 daemon, 주파수 목록, lock, cadence로
+비교한 active-directed A/B control은 정상 상태를 유지했다.
 
-단말 수는 **비용 쪽만** 키운다(50대·3초 주기 기준 7.67%). 이득은 단말 수와 무관하므로, 1대여도 `true` 가 낫고 많아지면 격차가 벌어질 뿐이다.
-
-> hidden 로밍 타깃을 운용한다면 "약 1.15초 선점 vs 상시 airtime" 을 견주는 판단이 되고, 단말 밀도가 갈림길이 된다.
+과거의 연속 ping 측정은 idle postcondition을 가렸으므로 periodic mlan `iw` passive가
+현재 권장되거나 안전하다는 근거가 아니다. 이 결과는 staged single-channel path를
+반증한 것이 아니며, 그 경로의 `STAGED_SCAN.home_passive` 동작은 그대로다.
 
 ---
 
 ## 3. 실측 데이터
+
+> **역사적 측정 주의:** 아래의 기존 passive/active airtime·ping 수치는 당시 연속 ping
+> 부하에서 얻은 것이다. idle data-plane postcondition을 검증하지 않았으므로 periodic
+> mlan `iw` passive의 현재 안전성 또는 권장 설정을 뒷받침하지 않는다.
 
 ### 3.1 probe airtime — 공유 매체 비용
 
@@ -251,32 +259,21 @@ active   +0.0~0.5s  med 4.95  (+1.41)   ← 여기만
 | sd | 0.44 |
 | 분포 | −2:2, −1:6, **0:251**, +1:17, +2:4, +3:1 |
 
-**251/281(89.3%)이 정확히 0dB.** 즉 `construct_iw_scan_cmd` 주석의 *"패시브는 beacon 기반이라 `signal_avg` 와 스케일이 가깝다"* 는 논거가 이 하드웨어(NXP moal)에서는 **액티브와 구분되지 않는다.** 모드 선택 기준에서 스케일은 빼도 되고, 남는 것은 **airtime vs hidden 커버**뿐이다.
+**251/281(89.3%)이 정확히 0dB.** 이 기록은 `wifi_roam.py` staged path의 당시
+Stage 1/Stage 3 비교이며, periodic bgscan safety 판단에는 쓰지 않는다.
 
 > **주의**: 전체 로그로 재면 −1.0dB 로 보이는데 그건 시간대가 다른 데이터가 섞인 아티팩트다. **같은 tick 으로 짝지어야** 한다.
 
-### 3.4 다채널 bgscan 커버리지 — 비홈 채널도 남는다
+### 3.4 다채널 periodic bgscan — 이전 passive 커버리지 기록은 superseded
 
-다채널(공통 `freq_list=5180 5240`) + `bgscan.passive=true` + **로밍 컨디션 미진입** 상태로 200초 관찰:
+이전 기록은 다채널 `bgscan.passive=true`가 `iw ... passive`로 실행되어 비홈 채널
+항목을 남긴 사례였다. 이는 coverage 관찰일 뿐 idle data-plane safety 검증이 아니며,
+새 target-board 결과로 periodic mlan `iw` passive 권장 근거에서 제외한다.
 
-```
-roaming condition: 0     roam 판정 tick: 0     ROAM 스캔 명령: 0
-SCAN(bgscan) 명령: 3
-['iw', 'mlan0', 'scan', 'freq', '5180', '5240', 'passive']   ← 전 채널 포함
-```
-
-`ap.log` 최신 블록 (홈 채널 = ch36):
-
-| 채널 | 개수 | 비고 |
-|---|---|---|
-| ch036 (홈) | 7개 | |
-| **ch048 (비홈)** | **2개** | `04:ba:d6`(`jhw_wlan_`, −44dBm) 포함 — 로밍 후보 |
-
-`construct_iw_scan_cmd`의 패시브 분기는 공통 목록이 있으면 `["freq"] + freqs`를
-붙이므로, **패시브 bgscan도 `freq_list` 전 채널을 훑는다.** 즉 로밍 컨디션에
-도달하지 않아도 비홈 채널 일반 AP가 `ap.log`·캐시에 기록된다.
-
-> 이번 블록에 빈 SSID 항목은 없었다. 다만 **"hidden 이라 안 잡힌 것"인지 "그 시점에 없었던 것"인지는 이 데이터로 구분되지 않는다.**
+현재 periodic `iw` 경로는 같은 공통 `freq_list` 전 채널을 directed active grammar로
+스캔한다. active-directed A/B control이 정상 상태를 유지한 것은 이 runtime guard의
+근거지만, 이전 수치에서 새 airtime 수치를 추정하거나 staged single-channel path까지
+위험하다고 일반화해서는 안 된다.
 
 ### 3.5 good-signal 리셋 게이트 (PR #138)
 
@@ -327,7 +324,7 @@ backoff 가 상한에 머물지 못하는 주 원인은 곡선이 아니라 **go
 | # | 함정 | 내용 |
 |---|---|---|
 | 1 | **JSON 실경로** | 데몬이 읽는 것은 **`/usr/local/etc/wifi_init_conf.json`**. `/opt/wlan/config/` 는 **템플릿**이라 편집해도 반영되지 않는다 |
-| 2 | **`bgscan.passive=false` 로그 구분** | wifi_roam/iw owner에서는 Stage 3와 명령 문자열이 같아져 로거 태그(`SCAN[` vs `ROAM[`)로 구분한다. wpa native owner는 `wpa_cli scan`이라 명령 자체가 다르다 |
+| 2 | **`bgscan.passive` 로그 구분** | wifi_roam/iw owner에서는 true도 active로 safety override되므로 프로세스당 한 번의 warning과 로거 태그(`SCAN[` vs `ROAM[`)로 구분한다. wpa native owner는 `wpa_cli scan ... passive=1`이라 명령 자체가 다르다 |
 | 3 | **good-signal 분기는 조용하다** | 게이트가 **발동(suppress)하지 않은** tick 은 로그를 남기지 않는다(로그 볼륨 절약 설계). 로그 부재가 "미진입"을 뜻하지 않으므로, 판정은 `streak` 와 `gate_suppressed=N`(no-candidate 줄에 병기) 으로 한다 |
 | 4 | **`MAX_SLEEP` 은 순수 코드 상수다** | `ROAM_NO_RESULT_MAX_SLEEP`(30) 은 JSON 으로 바꿀 수 없다 — 과거엔 로더가 `.get()` 으로 읽어 JSON 에 손으로 넣으면 몰래 실효되는 뒷문이 있었으나 감사 D2(2026-07-31)로 봉쇄됐다(`test_max_sleep_backdoor_closed` 가 고정). 실험에서 상한을 바꾸려면 `wifi_roam.py` 의 `DEFAULT_ROAM_NO_RESULT_MAX_SLEEP` 상수를 직접 수정해야 한다 |
 | 5 | **후보 미발견이 길어져도 빠른 주기로 복귀하지 않는다** | wifi_roam owner에서 상한(기본 30초)에 도달하면 그 주기를 유지한다. 복귀는 **후보 발견·bgscan hint·good-signal 리셋** 같은 사건으로만 일어난다. wpa native owner에서는 이 backoff/hint가 적용되지 않는다 |

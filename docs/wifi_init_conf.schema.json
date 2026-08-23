@@ -1480,7 +1480,7 @@
             "passive": {
               "type": "boolean",
               "default": true,
-              "description": "패시브 스캔(iw scan passive) 사용 여부. true면 probe request 미송신·beacon만 수신(directed ssid probe 무효, hidden SSID 미발견). false면 종전 액티브 스캔",
+              "description": "Config compatibility boolean. wifi_roam owner/iw periodic bgscan forces true to active scanning with a once-per-process warning on supported mlan hardware for data-plane safety; wpa native owner/wpa_cli still sends passive=1. STAGED_SCAN.home_passive is separate and unchanged.",
               "x-ui-editable": "yes",
               "x-apply-timing": "runtime",
               "x-consumer": "wifi_bgscan.py"
@@ -2345,7 +2345,7 @@
             "passive": {
               "type": "boolean",
               "default": true,
-              "description": "패시브 스캔(iw scan passive) 사용 여부. true면 probe request 미송신·beacon만 수신(directed ssid probe 무효, hidden SSID 미발견). false면 종전 액티브 스캔",
+              "description": "Config compatibility boolean. wifi_roam owner/iw periodic bgscan forces true to active scanning with a once-per-process warning on supported mlan hardware for data-plane safety; wpa native owner/wpa_cli still sends passive=1. STAGED_SCAN.home_passive is separate and unchanged.",
               "x-ui-editable": "yes",
               "x-apply-timing": "runtime",
               "x-consumer": "wifi_bgscan.py"

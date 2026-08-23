@@ -77,7 +77,7 @@ def test_timeout_fails_without_invoking_an_alternate_backend():
     run.assert_called_once()
 
 
-def _write_runtime_config(tmp_path, monkeypatch, *, freq_filter=True):
+def _write_runtime_config(tmp_path, monkeypatch, *, freq_filter=True, passive=False):
     json_path = tmp_path / "wifi_init_conf.json"
     json_path.write_text(
         json.dumps(
@@ -87,7 +87,7 @@ def _write_runtime_config(tmp_path, monkeypatch, *, freq_filter=True):
                         "interval": 45,
                         "ssid_filter": True,
                         "freq_filter": freq_filter,
-                        "passive": False,
+                        "passive": passive,
                         "emit_roam_hint": True,
                     },
                     "roaming": {
@@ -137,6 +137,20 @@ def test_build_request_uses_common_freq_even_when_legacy_filter_is_false(
 
     assert cmd[:3] == ["iw", wifi_bgscan.IFACE, "scan"]
     assert cmd[cmd.index("freq") + 1 : cmd.index("ssid")] == ["5180", "5200"]
+
+
+def test_build_request_passive_json_mode_a_is_forced_to_ordered_active_iw(
+    tmp_path, monkeypatch
+):
+    conf = _write_runtime_config(tmp_path, monkeypatch, passive=True)
+
+    cmd, _, _ = wifi_bgscan.build_scan_request(conf, "iw")
+
+    assert cmd == [
+        "iw", "mlan0", "scan", "freq", "5180", "5200",
+        "ssid", "Base", "Office", "JsonOnly",
+    ]
+    assert "passive" not in cmd
 
 
 def test_native_request_combines_conf_and_json_ssids_in_order(tmp_path, monkeypatch):

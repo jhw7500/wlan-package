@@ -397,7 +397,7 @@
                 "interval: (int) 스캔 주기 (초)",
                 "ssid_filter: (bool) 현재·추가 로밍 SSID만 스캔. passive=false일 때만 유효",
                 "freq_filter: (bool) DEPRECATED. 공통 global freq_list가 있으면 false도 무시하고 두 backend에 같은 목록을 강제",
-                "passive: (bool) true=probe 없이 beacon만 수신하여 hidden SSID를 발견하지 못함, false=active scan",
+                "passive: (bool) config compatibility. wifi_roam owner/iw periodic bgscan forces true to active scan with once-per-process warning on supported mlan hardware for data-plane safety; wpa native owner/wpa_cli keeps passive=1; STAGED_SCAN.home_passive is separate and unchanged",
                 "emit_roam_hint: (bool) iw/wifi_roam owner에서만 roam backoff 해제; wpa native owner에서는 강제 비활성",
                 "enabled: (bool) package periodic scan ON/OFF. false여도 wpa_supplicant 장애 복구/재연결 scan은 유지"
             ],
@@ -595,6 +595,7 @@
             "_comment": [
                 "backend는 boot snapshot에서 latch: roaming.enabled true=iw(wifi_roam owner), false=wpa_cli(wpa native owner)",
                 "freq_filter=false는 deprecated; 공통 global freq_list가 있으면 계속 강제",
+                "passive: (bool) config compatibility. wifi_roam owner/iw periodic bgscan forces true to active scan with once-per-process warning on supported mlan hardware for data-plane safety; wpa native owner/wpa_cli keeps passive=1; STAGED_SCAN.home_passive is separate and unchanged",
                 "enabled=false는 package periodic scan만 중지하며 wpa 장애 복구 scan은 유지"
             ],
             "interval": 60,

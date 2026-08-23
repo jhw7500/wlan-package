@@ -39,6 +39,7 @@ IFACE = ""
 _WPA_CLI_WARNED = False   # wpa_cli 부재 로그 1회 제한 플래그
 _WILDCARD_PROBE_WARNED = False   # ssid_filter=false+extra_ssids 와일드카드 probe 가정 경고 1회 제한
 _FREQ_FILTER_DEPRECATED_WARNED = False  # common freq 정책과 충돌하는 false 경고 1회
+_IW_PASSIVE_FORCED_ACTIVE_WARNED = False  # iw periodic passive safety override 경고 1회
 
 
 class BgscanConfigError(RuntimeError):
@@ -186,7 +187,8 @@ def load_bgscan_json(iface, boot_policy=None):
     (spec §3.5 3차 게이트, 모드 B airtime 회귀 제거). bool 해석은 roam/lib와 통일(_parse_bool)."""
     interval, ssid_filter, freq_filter, extra_ssids = None, True, True, []
     emit_roam_hint = True
-    passive = True  # 기본 패시브(beacon 기반 저부하 배경 스캔). bgscan.passive=false로 액티브 복귀.
+    # Native wpa_cli compatibility default. The iw constructor safety-overrides it to active.
+    passive = True
     try:
         with open(WIFI_INIT_CONF_JSON, "r") as f:
             data = json.load(f)
@@ -230,21 +232,23 @@ def emit_roam_hint_touch(iface):
         logger.message("err", f"[{iface}] roam hint touch failed: {e}", _EXTRA_())
 
 def construct_iw_scan_cmd(ssid, configured_freqs, ssid_filter=True, freq_filter=True, extra_ssids=None, passive=False):
+    global _IW_PASSIVE_FORCED_ACTIVE_WARNED
+
     cmd = ["iw", IFACE, "scan"]
 
-    # 패시브 스캔: probe request를 쏘지 않고 beacon만 수신한다. probe를 안 보내므로
-    # directed ssid 토큰은 의미가 없어(드라이버가 무시하거나 -EINVAL) 전부 생략한다.
-    # beacon 기반 RSSI라 현재 링크의 signal_avg(=beacon/데이터 평균)와 스케일이 가까워
-    # 로밍 판정의 소스 이질성을 줄인다. hidden SSID는 beacon이 없어 못 잡으므로, 로밍
-    # 트리거 시 액티브 폴백(directed probe)이 이를 보완한다.
-    # iw 문법(5.19): `scan [freq <freq>*] ... [ssid <ssid>*|passive]` — `passive`는 ssid와
-    # 같은 **맨 뒤** 그룹이라 freq 뒤에 와야 한다. 앞에 두면 iw가 rc=1로 즉시 실패해
-    # 스캔이 아예 안 돈다(온타겟 실측). freq_filter=true 가 기본이라 순서가 곧 기능 여부다.
+    # NXP moal 437.p3에서 반복 다채널 passive iw scan은 supplicant가 COMPLETED여도
+    # data plane을 strand할 수 있다. JSON default는 native wpa_cli 호환 때문에 유지하되,
+    # iw periodic backend는 언제나 기존 directed active grammar로 안전하게 구성한다.
     if passive:
-        if freq_filter and configured_freqs:
-            cmd += ["freq"] + configured_freqs
-        cmd.append("passive")
-        return cmd
+        if not _IW_PASSIVE_FORCED_ACTIVE_WARNED:
+            logger.message(
+                "warn",
+                f"[{IFACE}] bgscan.passive=true requested for iw; forcing active scanning "
+                "because repeated multi-channel passive scans can strand the data plane "
+                "on supported mlan hardware",
+                _EXTRA_(),
+            )
+            _IW_PASSIVE_FORCED_ACTIVE_WARNED = True
 
     # freq_filter=false면 freq 필터를 빼고 전체 대역 스캔(기본 true).
     if freq_filter and configured_freqs:

@@ -15,6 +15,14 @@ wifi_bgscan.IFACE = "mlan0"
 wifi_bgscan.logger = MagicMock()   # logger 는 __main__ 에서만 생성 — cap 경고 경로용 mock
 
 
+@pytest.fixture(autouse=True)
+def reset_iw_passive_safety_warning():
+    """Keep the process-wide iw passive safety warning order-independent."""
+    wifi_bgscan._IW_PASSIVE_FORCED_ACTIVE_WARNED = False
+    yield
+    wifi_bgscan._IW_PASSIVE_FORCED_ACTIVE_WARNED = False
+
+
 def _ssid_tokens(cmd):
     """iw 문법상 ssid 그룹은 **종단**(`[ssid <ssid>*|passive]`) — `ssid` 키워드 1회 뒤의
     모든 토큰이 SSID 값이다. 키워드를 반복하면 iw 5.19 파서(SSID 상태에서 키워드 복귀
@@ -75,26 +83,51 @@ def test_cmd_prefix():
 
 # --- passive scan mode ---
 
-def test_passive_adds_keyword_and_drops_ssid_probes():
-    # 패시브: probe를 안 쏘므로 ssid 토큰이 전부 빠지고 'passive' 키워드가 붙는다.
+def test_passive_request_is_forced_to_exact_active_directed_command():
     cmd = construct_iw_scan_cmd(
-        "HomeNet", ["2412", "5180"], ssid_filter=True,
-        freq_filter=True, extra_ssids=["OfficeNet"], passive=True,
+        "HomeNet",
+        ["2412", "5180"],
+        ssid_filter=True,
+        freq_filter=True,
+        extra_ssids=["OfficeNet"],
+        passive=True,
     )
-    assert cmd[:3] == ["iw", "mlan0", "scan"]
-    assert _ssid_tokens(cmd) == []          # directed probe 없음
-    assert "freq" in cmd and "2412" in cmd and "5180" in cmd  # freq 스코프는 유지
-    # [회귀] iw 5.19 문법 `scan [freq <freq>*] ... [ssid <ssid>*|passive]` — passive는
-    # 맨 뒤 그룹이라 freq 뒤에 와야 한다. 앞에 두면 iw가 rc=1로 즉시 실패해 스캔이 아예
-    # 안 돈다(온타겟 실측). freq_filter=true가 기본이라 이 순서가 곧 기능 여부를 가른다.
-    assert cmd.index("passive") > cmd.index("freq"), f"passive는 freq 뒤여야 함: {cmd}"
-    assert cmd[-1] == "passive", f"passive는 마지막 토큰이어야 함: {cmd}"
+    assert cmd == [
+        "iw", "mlan0", "scan", "freq", "2412", "5180",
+        "ssid", "HomeNet", "OfficeNet",
+    ]
+    assert "passive" not in cmd
 
 
-def test_passive_freq_filter_false_omits_freq():
-    cmd = construct_iw_scan_cmd("HomeNet", ["2412"], freq_filter=False, passive=True)
-    assert cmd == ["iw", "mlan0", "scan", "passive"]   # freq 없으면 passive만
-    assert "freq" not in cmd
+def test_passive_override_honors_no_freq_and_active_no_probe_case():
+    forced_active = construct_iw_scan_cmd(
+        "HomeNet", ["2412"], ssid_filter=False, freq_filter=False, passive=True
+    )
+    ordinary_active = construct_iw_scan_cmd(
+        "HomeNet", ["2412"], ssid_filter=False, freq_filter=False, passive=False
+    )
+    assert forced_active == ordinary_active == ["iw", "mlan0", "scan"]
+    assert "passive" not in forced_active
+    assert "ssid" not in forced_active
+
+
+def test_passive_override_warns_once_and_explicit_active_does_not_warn():
+    wifi_bgscan.logger.reset_mock()
+
+    construct_iw_scan_cmd("HomeNet", [], passive=True)
+    construct_iw_scan_cmd("HomeNet", [], passive=True)
+    construct_iw_scan_cmd("HomeNet", [], passive=False)
+
+    warnings = [
+        call.args[1]
+        for call in wifi_bgscan.logger.message.call_args_list
+        if call.args[0] == "warn"
+    ]
+    assert len(warnings) == 1
+    assert "[mlan0]" in warnings[0]
+    assert "bgscan.passive=true" in warnings[0]
+    assert "forcing active scanning" in warnings[0]
+    assert "data plane" in warnings[0]
 
 
 def test_active_default_has_no_passive_keyword():
