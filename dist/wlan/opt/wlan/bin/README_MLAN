@@ -5398,10 +5398,10 @@ Legacy rate indexes for group 0:
 	10  48 Mbps
 	11  54 Mbps
 
-For HT groups, <rate_index> is the combined MCS index 0..15 (for example,
-HT NSS 2 MCS 7 is index 15).  For VHT and HE groups, pass the per-NSS MCS
-index shown by iw link, not a combined index.  For example,
-"80MHz HE-MCS 11 HE-NSS 2" uses group 14 and rate_index 11.
+For HT groups, <rate_index> is the combined MCS index 0..15; HT NSS 2 MCS 7
+uses index 15, which iw link reports as "MCS 15".  For VHT and HE groups, NSS
+is selected by <group>, so pass the per-NSS MCS index shown by iw link.  For
+example, "80MHz HE-MCS 11 HE-NSS 2" uses group 14 and rate_index 11.
 
 Examples:
 	1) Read the current TX power table:
@@ -5464,8 +5464,10 @@ Notes:
 	   group 14 is supported.  Increasing the host MAX_POWER_GROUP value
 	   does not add entries that firmware did not return.
 
-	6) /usr/local/scripts/txpower_family_set.sh records successful SET commands under
-	   /run and uses that state for --status.  This is needed for group 14
-	   and for firmware whose mode field does not change after 0xFF.
+	6) /usr/local/scripts/txpower_family_set.sh (repository source:
+	   dist/wlan/usr/local/scripts/txpower_family_set.sh) records successful
+	   SET commands under /run and uses that state for --status.  This is
+	   needed for group 14 and for firmware whose mode field does not change
+	   after 0xFF.
 	   Direct mlanutl commands are not visible to this script state.
 ===============================================================================
