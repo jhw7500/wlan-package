@@ -196,7 +196,9 @@ else
   "$_snap" 2>/dev/null || log_all "pre-reboot journal snapshot failed (source=${SOURCE:-n/a} reason=$REASON)"
 fi
 sync
-if ! do_reboot; then
+if do_reboot; then
+  exit 0
+else
   rc=$?
   log_all "reboot: failed (rc=$rc) (source=${SOURCE:-n/a} iface=${IFACE:-n/a} reason=$REASON)"
   exit "$rc"

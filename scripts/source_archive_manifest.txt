@@ -308,6 +308,7 @@ dist/wlan/usr/local/scripts/tests/test_wifi_log_extract.py
 dist/wlan/usr/local/scripts/tests/test_wifi_logger_control.py
 dist/wlan/usr/local/scripts/tests/test_wifi_snmp_trap.py
 dist/wlan/usr/local/scripts/tests/test_wlan_link_lib.sh
+dist/wlan/usr/local/scripts/tests/test_wlan_reboot_policy.py
 dist/wlan/usr/local/scripts/txpower_family_set.sh
 dist/wlan/usr/local/scripts/update_mac.sh
 dist/wlan/usr/local/scripts/update_mac_test.sh
