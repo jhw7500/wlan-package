@@ -65,6 +65,20 @@ def test_bgscan_passive_docs_describe_backend_safety_split():
         assert "STAGED_SCAN.home_passive" in contents
 
 
+def test_webui_handoff_requires_utf8_byte_validation_for_extra_ssids():
+    """The external WebUI/save API must not treat JSON Schema maxLength as bytes."""
+    handoff = os.path.join(_REPO, "docs", "wifi_init_conf_webui_handoff.md")
+    contents = open(handoff, encoding="utf-8").read()
+    assert "x-utf8-maxBytes" in contents
+    assert "TextEncoder" in contents
+    assert "unpaired surrogate" in contents
+    assert "Unicode scalar value" in contents
+    assert "server-side" in contents
+    assert "custom keyword" in contents
+    assert "32바이트 허용" in contents
+    assert "33바이트 거부" in contents
+
+
 def test_schema_patch_resolves_shadowed_toplevel_block():
     """schema_patch_default 가 파일상 먼저 나오는 더 깊은 동명 블록(mac.mlan0)에
     속지 않고 최상위 mlan0 의 직계 경로를 패치한다 — 첫 mlan0 실패치에서 발견된
