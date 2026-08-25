@@ -327,18 +327,25 @@
         "antcfg": {
             "_comment": [
                 "FW Tx/Rx 안테나 경로. association 전에 mlanutl <iface> antcfg <tx> [rx] 로 적용",
-                "enabled: (bool) 적용 ON/OFF. 기본 false — 끄면 FW/보드 기본 경로를 그대로 둔다",
+                "enabled: (bool) 적용 ON/OFF. false이면 FW/보드 기본 경로를 그대로 둔다. 현재 mlan0 제품값은 scan wedge 회피용 비대칭 NSS 설정을 활성화한다",
                 "tx: (string) Tx 경로 비트맵. 10진 또는 0x 16진. rx가 비면 Tx/Rx 공통으로 쓰인다",
                 "rx: (string) Rx 경로 비트맵. 빈 문자열이면 인자를 생략해 tx 값이 Tx/Rx 양쪽에 적용된다",
+                "verify: (object, optional) SET 후 확인할 physical_tx/physical_rx/user_htstream. 존재하면 세 값을 모두 GET으로 확인하며 불일치 시 association을 중단한다",
+                "9098 비대칭 요청 tx=0x0303/rx=0x0101은 physical GET 0x0303/0x0303으로 정규화되고 논리 Rx NSS1 의도는 user_htstream=0x2121에 유지된다",
                 "9098 비트맵: LOW BYTE=2G, HIGH BYTE=5G. 각 바이트에서 bit0=path A, bit1=path B",
                 "예: 0x303=2G/5G 모두 A+B(2x2), 0x103=2G A+B + 5G A, 0x202=2G/5G 모두 path B, 3=A+B(밴드 구분 없는 칩)",
                 "SAD 지원 칩: tx=0xFFFF가 안테나 다이버시티이고 이때 rx는 평가 주기(기본 0x1770=6s)를 뜻한다",
                 "주의: antcfg는 어댑터(라디오) 단위 설정이라 mlan0/mlan1에 서로 다른 값을 켜면 나중에 적용된 쪽(mlan1)이 이긴다",
                 "주의: global.ANT_TYPE(GPIO mux, internal|external)과는 별개 설정이다"
             ],
-            "enabled": false,
-            "tx": "",
-            "rx": ""
+            "enabled": true,
+            "tx": "0x0303",
+            "rx": "0x0101",
+            "verify": {
+                "physical_tx": "0x0303",
+                "physical_rx": "0x0303",
+                "user_htstream": "0x2121"
+            }
         },
         "rate_adapt": {
             "_comment": [
@@ -563,7 +570,12 @@
         "antcfg": {
             "enabled": false,
             "tx": "",
-            "rx": ""
+            "rx": "",
+            "verify": {
+                "physical_tx": "",
+                "physical_rx": "",
+                "user_htstream": ""
+            }
         },
         "rate_adapt": {
             "enabled": true,

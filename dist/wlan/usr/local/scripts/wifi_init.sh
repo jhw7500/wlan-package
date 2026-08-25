@@ -984,7 +984,7 @@ apply_iface_radio_defaults() {
 
     # 안테나 경로(FW Tx/Rx path)는 rate/MCS보다 근본이라 먼저 적용한다. opt-in이며
     # 꺼져 있으면 FW/보드 기본 경로를 그대로 둔다. global.ANT_TYPE(GPIO mux)과는 별개다.
-    wifi_fw_apply_antcfg "$WIFI_INIT_CONF_JSON" "$iface"
+    wifi_fw_apply_antcfg "$WIFI_INIT_CONF_JSON" "$iface" || return 1
 
     # rate는 association 전에만 설정 가능하며 partial/default 혼합을 금지한다.
     wifi_fw_apply_rate "$WIFI_INIT_CONF_JSON" "$iface"
@@ -1454,7 +1454,7 @@ if command -v systemctl >/dev/null 2>&1; then
     apply_iface_radio_defaults "mlan1" "$MLAN1_ENABLED" || fw_config_failed=1
     if [ "$fw_config_failed" -ne 0 ]; then
         mcs_failure_code=$(wifi_fw_mcs_cold_failure_code)
-        logger -p local0.warn "[$tag:$LINENO] MCS verification failed before association; exit=$mcs_failure_code (75=one cold lifecycle retry, 1=persistent failure)"
+        logger -p local0.warn "[$tag:$LINENO] FW radio configuration verification failed before association; exit=$mcs_failure_code (75=one cold lifecycle retry, 1=persistent failure)"
         exit "$mcs_failure_code"
     fi
     wifi_fw_mcs_cold_success

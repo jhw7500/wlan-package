@@ -6,6 +6,7 @@ SDIO_FW_REL="usr/lib/firmware/cts/sd9098_wlan_v1.bin"
 SDIO_FW_SHA256="7c3ef6e12d3cfc9bd638d1571ccf6ddd2e96e0ed179ec70664ccb1df0ba29e57"
 FACTORY_ETH0_REL="opt/wlan/config/systemd/network/22-eth0.network"
 FACTORY_ETH0_ADDRESS="192.168.1.1/24"
+MLANUTL_IMX93_REL="opt/wlan/bin/mlanutl_imx93"
 FW_DOC_DIR_REL="usr/share/doc/wlan-proc/nxp-imx-firmware"
 FW_LICENSE_SHA256="3001cf84018c5cb10d183a678f6ec8a928c797616ba06b398d7ca93c0779aaa2"
 FW_SCR_SHA256="a05d7e1bb43bd7f3a955f3ff5c4dba3c61a5515df6f4fc5bf150a370e413289e"
@@ -29,6 +30,7 @@ is_generated_wbridge_path() {
 validate_source_product_defaults() {
     local fw="$REPO/dist/wlan/$SDIO_FW_REL"
     local network="$REPO/dist/wlan/$FACTORY_ETH0_REL"
+    local mlanutl_imx93="$REPO/dist/wlan/$MLANUTL_IMX93_REL"
     local actual_hash actual_address actual_mode
 
     [ -s "$fw" ] || { echo "release gate: missing/empty SDIO firmware: $fw" >&2; return 1; }
@@ -49,6 +51,19 @@ validate_source_product_defaults() {
         echo "release gate: factory eth0 source must not be executable or set-id: mode=$actual_mode" >&2
         return 1
     fi
+
+    [ -f "$mlanutl_imx93" ] && [ ! -L "$mlanutl_imx93" ] && [ -s "$mlanutl_imx93" ] \
+        && [ -x "$mlanutl_imx93" ] || {
+        echo "release gate: missing/non-executable matching imx93 mlanutl: $mlanutl_imx93" >&2
+        return 1
+    }
+    # 543 driver는 antcfg physical path와 host NSS intent를 별도 private command로
+    # 제공한다. 구 utility를 staging하면 제품 verify가 user_htstream을 읽지 못해
+    # wifi_init이 fail-closed 하므로 패키징 전에 ABI marker를 강제한다.
+    LC_ALL=C grep -aFq 'antcfgnss' "$mlanutl_imx93" || {
+        echo "release gate: imx93 mlanutl lacks required antcfgnss support: $mlanutl_imx93" >&2
+        return 1
+    }
 
     local rel expected
     for rel in \
