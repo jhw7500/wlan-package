@@ -1,5 +1,5 @@
 #!/bin/bash
-# pre-commit: ① 드라이버 manifest 자동 동기화  ② 실행비트 자동 보정
+# pre-commit: ① 드라이버 component lock 확인  ② 실행비트 자동 보정
 #
 # 활성화: git config core.hooksPath scripts/git-hooks
 #
@@ -8,18 +8,16 @@
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 
-# ── ① 드라이버 manifest ─────────────────────────────────────────────────────
-# 바이너리 .ko 는 .gitignore 대상이라 git 이 변경을 직접 감지하지 못한다. 그래서 커밋 시마다
-# manifest 를 재생성하고, 내용이 바뀌었으면 이 커밋에 함께 스테이징한다(깜빡해도 동기화).
-# 환경 미비(.ko/modinfo/wlan-driver-v2 부재) 시 graceful skip — 커밋을 막지 않는다.
+# ── ① 드라이버 component lock ──────────────────────────────────────────────
+# 바이너리 .ko 는 .gitignore 대상이라 Git이 변경을 직접 감지하지 못한다. 임의의 인접
+# 저장소 HEAD를 source provenance로 추정해서는 안 되므로 hook은 manifest를 자동 재생성하지
+# 않고 기존 exact SHA lock만 확인한다. 드라이버 교체 시 운영자가 검증한 immutable commit을
+# 명시해 `scripts/gen_driver_manifest.sh --write <repo> <ref>`를 실행해야 한다.
 GEN="${REPO_ROOT}/scripts/gen_driver_manifest.sh"
-MANIFEST="dist/wlan/opt/wlan/driver/DRIVER_MANIFEST.md"
 
-if [ -x "${GEN}" ] && "${GEN}" >/dev/null 2>&1; then
-    if [ -n "$(git -C "${REPO_ROOT}" status --porcelain -- "${MANIFEST}" 2>/dev/null)" ]; then
-        git -C "${REPO_ROOT}" add "${MANIFEST}"
-        echo "[pre-commit] ${MANIFEST} 갱신·스테이징됨"
-    fi
+if [ -r "${GEN}" ] && ! bash "${GEN}" --check >/dev/null 2>&1; then
+    echo "[pre-commit] 드라이버 component lock 불일치 — release gate에서 거부됨" >&2
+    echo "[pre-commit] 검증한 source ref로 ${GEN} --write <wlan-driver-v2 repo> <source ref> 실행 필요" >&2
 fi
 
 # ── ② 실행비트 자동 보정 ────────────────────────────────────────────────────

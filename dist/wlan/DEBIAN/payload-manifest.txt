@@ -97,6 +97,7 @@ opt/wlan/config/wlan/wifi_mod_para.conf
 opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan0.conf
 opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan1.conf
 opt/wlan/config/wpa_supplicant/wpa_supplicant@.service
+opt/wlan/driver/DRIVER_COMPONENTS.sha256
 opt/wlan/driver/DRIVER_MANIFEST.md
 opt/wlan/driver/debug/mlan.ko
 opt/wlan/driver/debug/moal.ko

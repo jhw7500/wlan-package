@@ -1595,6 +1595,7 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 32,
+                "x-utf8-maxBytes": 32,
                 "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
               },
               "description": "유효 UTF-8 1..32 encoded bytes의 고유 SSID identity(공백/따옴표/백슬래시 보존, C0/DEL 금지, 부팅 base SSID 중복 금지). 모드A에서는 추가 network 블록용이며 수동 cross-SSID 선택은 지원하지 않는다. 모드B에서는 수동 cross-SSID 후보로 유지하며, 정상 전환 후 live base가 해당 후보와 같아질 수 있다. 변경은 재부팅 필요",
@@ -2496,6 +2497,7 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 32,
+                "x-utf8-maxBytes": 32,
                 "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
               },
               "description": "유효 UTF-8 1..32 encoded bytes의 고유 SSID identity(공백/따옴표/백슬래시 보존, C0/DEL 금지, base SSID 중복 금지). 모드A에서는 추가 network 블록용이며 수동 cross-SSID 선택은 지원하지 않는다. 모드B에서는 수동 cross-SSID 후보로 유지한다. 변경은 재부팅 필요",

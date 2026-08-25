@@ -434,7 +434,7 @@ WebUI에서 개별 편집하지 않는다.
 | `DEFAULT_TH_5G` | 5GHz 로밍 임계값 | int | `-75` | 음수 dBm | yes | daemon-restart | 이 값 이하이면 로밍 시도 (JSON 단일 소스, conf `#!TH_5G=` 마커 미사용) |
 | `DIFF_TH` | 후보 AP 최소 RSSI 차 | int | `7` | >=0 dB | yes | daemon-restart | 클수록 보수적 |
 | `CHECK_INTERVAL` | 로밍 체크 주기 | int | `1` | >=1 초 | yes | daemon-restart | 고정 체크 주기(ADAPTIVE_INTERVAL 은 감사 D1로 제거됨) |
-| `extra_ssids` | 추가 로밍 후보 SSID | array | `[]` | 문자열 배열(같은 psk/key_mgmt) | caution | reboot | 모드A에서 추가 network 블록 생성. 빈 배열이어도 Mode A identity/SSID 일괄변경 금지는 유지. 모드B면 무시 |
+| `extra_ssids` | 추가 로밍 후보 SSID | array | `[]` | 고유 문자열 배열, 각 UTF-8 1..32 encoded bytes(같은 psk/key_mgmt) | caution | reboot | 모드A에서 추가 network 블록 생성. 모드B에서는 boot-latched 수동 cross-SSID 후보로만 사용 |
 | `generate_network_blocks` | topology 결정자 | bool | `false` | true\|false | caution | reboot | false=모드B(단일 블록/수동 cross-SSID), true=모드A(다중 블록/자동 cross-SSID) |
 | `ROAM_CROSS_FAIL_RETRY_COUNT` | cross-SSID 재시도 횟수 | int | `2` | >=0 (모드A 전용) | yes | daemon-restart | 초과 시 지수 backoff로 후보 제외 |
 | `ROAM_NO_RESULT_FAST_COUNT` | backoff 레벨당 반복 횟수 | int | `3` | >=1 | yes | daemon-restart | 각 주기를 N tick 유지 후 2배(플래토 곡선, 기본 3,3,3,6,6,6,…). 1=레거시(매 tick 2배) |
@@ -581,6 +581,18 @@ reassociate를 한 번만 요청한다. 다음 CONNECTED 검증 성공 시 pendi
 > `roaming.enabled`, `generate_network_blocks`, `extra_ssids`는 저장 후 **재부팅 필요**로
 > 표시할 것. 일부 unit만 재시작해 owner/backend 또는 network block topology를 바꾸는
 > UI 동작은 지원하지 않는다. `periodic_roam.*`은 deprecated read-only로 표시한다.
+
+> **⑦ `extra_ssids` 길이는 문자 수가 아니라 UTF-8 encoded byte 수**
+> JSON Schema의 표준 `maxLength`는 Unicode code point 수를 세므로 32바이트 제한을 단독으로
+> 표현하지 못한다. mlan0/mlan1의 `extra_ssids.items.x-utf8-maxBytes=32`를 UI 계약으로 읽고,
+> 브라우저에서는 먼저 `unpaired surrogate`가 없는 Unicode scalar value 문자열인지 검사한 뒤
+> `new TextEncoder().encode(value).length`로 저장 전에 검사할 것. 표준 validator는 `x-*`
+> custom keyword를 자동 집행하지 않으므로 validator adapter 없이 저장 기능을 활성화하면 안 된다.
+> **32바이트 허용, 33바이트 거부**가 경계 계약이다. Save API는 UI 결과를 신뢰하지 말고
+> server-side authority로서 valid UTF-8, 1..32바이트, C0/DEL 금지, 중복을 다시 검사해야 한다.
+> identity 보존을 위해 자동 Unicode normalization은 하지 않는다. 제품의
+> `wifi_init_config_lib.sh` 검사는 최종 fail-closed 방어선이지 UI/Save API 검사를 대신하지 않는다.
+> 이 문서는 외부 WebUI/Save API의 구현 계약이며 해당 consumer의 통합시험 완료를 뜻하지 않는다.
 
 ---
 

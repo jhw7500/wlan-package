@@ -171,8 +171,20 @@ def test_schema_extra_ssids_expresses_identity_contract(schema, iface):
     # JSON Schema counts code points, so this is only an expressible upper guard;
     # every runtime boundary separately enforces 32 encoded UTF-8 bytes.
     assert item.get("maxLength") == 32
+    assert item.get("x-utf8-maxBytes") == 32
     assert "\\u0000-\\u001F" in item.get("pattern", "")
     assert "\\u007F" in item.get("pattern", "")
+
+    # A schema/UI consumer must use the extension rather than maxLength alone.
+    byte_limit = item["x-utf8-maxBytes"]
+    exact_32_bytes = "가" * 10 + "ab"
+    exact_33_bytes = "가" * 11
+    assert len(exact_32_bytes) <= item["maxLength"]
+    assert len(exact_33_bytes) <= item["maxLength"]
+    assert len(exact_32_bytes.encode("utf-8")) == byte_limit
+    assert len(exact_33_bytes.encode("utf-8")) == byte_limit + 1
+    with pytest.raises(UnicodeEncodeError):
+        "\ud800".encode("utf-8")
 
 
 def _iface_default_cell(mlan0_value, mlan1_value):

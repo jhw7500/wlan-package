@@ -12,6 +12,7 @@ FW_LICENSE_SHA256="3001cf84018c5cb10d183a678f6ec8a928c797616ba06b398d7ca93c0779a
 FW_SCR_SHA256="a05d7e1bb43bd7f3a955f3ff5c4dba3c61a5515df6f4fc5bf150a370e413289e"
 FW_SOURCE_SHA256="4dbbbeebe006653040a28669433e6d8fbf596291e77d8e6ecb2efe7010e82745"
 PAYLOAD_MANIFEST_REL="DEBIAN/payload-manifest.txt"
+DRIVER_COMPONENT_LOCK_REL="opt/wlan/driver/DRIVER_COMPONENTS.sha256"
 WBRIDGE_RELEASE_DIR="usr/local/wlan-bridge/wbridge"
 WBRIDGE_DEBUG_DIR="usr/local/wlan-bridge/debug"
 
@@ -32,6 +33,14 @@ validate_source_product_defaults() {
     local network="$REPO/dist/wlan/$FACTORY_ETH0_REL"
     local mlanutl_imx93="$REPO/dist/wlan/$MLANUTL_IMX93_REL"
     local actual_hash actual_address actual_mode
+
+    # The qualified modules, matching private-command utility, and firmware are
+    # an atomic board-tested set.  Module binaries are gitignored, so version
+    # strings alone cannot prevent an accidental local replacement.
+    if ! bash "$REPO/scripts/gen_driver_manifest.sh" --check; then
+        echo "release gate: driver provenance/component lock validation failed" >&2
+        return 1
+    fi
 
     [ -s "$fw" ] || { echo "release gate: missing/empty SDIO firmware: $fw" >&2; return 1; }
     actual_hash=$(sha256sum "$fw" | awk '{print $1}')
@@ -82,6 +91,62 @@ validate_source_product_defaults() {
             return 1
         }
     done
+}
+
+validate_packaged_component_lock() {
+    local deb=$1
+    if ! bash "$REPO/scripts/gen_driver_manifest.sh" --check; then
+        echo "release gate: source component lock is invalid before package comparison" >&2
+        return 1
+    fi
+    REPO_ROOT="$REPO" PACKAGE_DEB="$deb" LOCK_REL="$DRIVER_COMPONENT_LOCK_REL" python3 - <<'PY'
+import hashlib
+import io
+import os
+import re
+import subprocess
+import tarfile
+from pathlib import Path
+
+repo = Path(os.environ["REPO_ROOT"])
+lock_rel = os.environ["LOCK_REL"]
+source_lock = repo / "dist/wlan" / lock_rel
+expected_lock = source_lock.read_bytes()
+payload = subprocess.check_output(["dpkg-deb", "--fsys-tarfile", os.environ["PACKAGE_DEB"]])
+
+with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
+    members = {m.name.removeprefix("./").rstrip("/"): m for m in archive.getmembers()}
+    lock_member = members.get(lock_rel)
+    if lock_member is None or not lock_member.isfile():
+        raise SystemExit(f"release gate: packaged component lock missing/non-regular: {lock_rel}")
+    stream = archive.extractfile(lock_member)
+    packaged_lock = stream.read() if stream else b""
+    if packaged_lock != expected_lock:
+        raise SystemExit("release gate: packaged component lock differs from source")
+
+    entries = {}
+    for number, raw in enumerate(expected_lock.decode("utf-8").splitlines(), 1):
+        if not raw or raw.startswith("# "):
+            continue
+        match = re.fullmatch(r"([0-9a-f]{64})  ([^\s]+)", raw)
+        if not match:
+            raise SystemExit(f"release gate: malformed source component lock line {number}")
+        digest, rel = match.groups()
+        entries[rel] = digest
+
+    errors = []
+    for rel, expected in sorted(entries.items()):
+        member = members.get(rel)
+        if member is None or not member.isfile() or member.size == 0:
+            errors.append(f"qualified component missing/empty/non-regular: {rel}")
+            continue
+        stream = archive.extractfile(member)
+        actual = hashlib.sha256(stream.read() if stream else b"").hexdigest()
+        if actual != expected:
+            errors.append(f"qualified component sha256 mismatch: {rel}: {actual} != {expected}")
+    if errors:
+        raise SystemExit("\n".join(f"release gate: {error}" for error in errors))
+PY
 }
 
 validate_payload_manifest() {
@@ -298,6 +363,7 @@ validate_package() {
         }
     done
     validate_control_archive "$deb"
+    validate_packaged_component_lock "$deb"
 
     listing=$(mktemp)
     names=$(mktemp)
