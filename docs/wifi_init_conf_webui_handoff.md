@@ -377,14 +377,23 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `net_rx` | MGMT 프레임 로깅 비트맵 | int | `0` | `0`\|`2`\|`3`\|`6`\|`7` (bit[1:0]=RX모드, bit[2]=TX로그) | caution | reboot | mod_para 블록 `net_rx=`. 로그는 커널 링버퍼→10초마다 flush |
 | `mgmt_hex_dump_enable` | MGMT hex dump 로깅 | bool | `false` | true\|false | caution | reboot | 디버그용. mod_para 블록 `mgmt_hex_dump=1/0` |
 | `thermal_mgmt` | FW 열관리 | bool | `true` | true\|false | caution | boot | FW thermal management(SUBID 0x113). 명시적 false만 disable |
-| `antcfg.enabled` | 안테나 경로 적용 | bool | `false` | true\|false | caution | boot | FW Tx/Rx path 적용 ON/OFF. false면 FW/보드 기본 경로 유지(출하 기본). **어댑터 단위 설정**이라 mlan0/mlan1에 서로 다른 값을 켜면 나중에 적용된 쪽이 이기며 경고 로그가 남는다. `global.ANT_TYPE`(GPIO mux)와는 별개 |
-| `antcfg.tx` | Tx 경로 비트맵 | string | `""` | 10진 또는 `0x` 16진, 1..0xFFFF (0 거부) | caution | boot | `rx`가 비면 Tx/Rx 공통. 9098은 LOW BYTE=2G / HIGH BYTE=5G, 각 바이트 bit0=path A·bit1=path B. 예 `0x303`=양 밴드 A+B, `0x103`=2G A+B + 5G A, `0x202`=양 밴드 path B. SAD 칩은 `0xFFFF`=다이버시티 |
-| `antcfg.rx` | Rx 경로 비트맵 | string | `""` | 빈값 또는 tx와 동일 범위 | caution | boot | 빈 문자열이면 인자를 생략해 `tx`가 Tx/Rx 양쪽에 적용된다. SAD 칩에서 `tx=0xFFFF`일 때는 평가 주기(기본 `0x1770`=6s) |
+| `antcfg.enabled` | 안테나 경로 적용 | bool | `mlan0=true / mlan1=false` | true\|false | caution | boot | FW Tx/Rx path 적용 ON/OFF. mlan0 제품값은 p149.115 scan wedge 회피를 위해 활성화한다. **어댑터 단위 설정**이라 mlan0/mlan1에 서로 다른 값을 켜면 나중에 적용된 쪽이 이기며 경고 로그가 남는다. `global.ANT_TYPE`(GPIO mux)와는 별개 |
+| `antcfg.tx` | Tx 경로 비트맵 | string | `mlan0="0x0303" / mlan1=""` | 10진 또는 `0x` 16진, 1..0xFFFF (0 거부) | caution | boot | `rx`가 비면 Tx/Rx 공통. 9098은 LOW BYTE=2G / HIGH BYTE=5G, 각 바이트 bit0=path A·bit1=path B. 예 `0x303`=양 밴드 A+B, `0x103`=2G A+B + 5G A, `0x202`=양 밴드 path B. SAD 칩은 `0xFFFF`=다이버시티 |
+| `antcfg.rx` | Rx 경로 비트맵 | string | `mlan0="0x0101" / mlan1=""` | 빈값 또는 tx와 동일 범위 | caution | boot | 빈 문자열이면 인자를 생략해 `tx`가 Tx/Rx 양쪽에 적용된다. mlan0의 0x0101은 host Rx NSS1 의도이며 FW physical Rx GET은 0x0303으로 정규화된다 |
+| `antcfg.verify.physical_tx` | antcfg physical Tx 기대값 | string | `mlan0="0x0303" / mlan1=""` | 10진 또는 `0x` 16진, 1..0xFFFF | no | boot | SET 후 FW physical Tx GET 검증값. verify가 존재하면 세 verify 필드 모두 필수이며 UI 편집 금지 |
+| `antcfg.verify.physical_rx` | antcfg physical Rx 기대값 | string | `mlan0="0x0303" / mlan1=""` | 10진 또는 `0x` 16진, 1..0xFFFF | no | boot | p149.115의 비대칭 요청 정규화 결과를 검증한다 |
+| `antcfg.verify.user_htstream` | antcfg host NSS 기대값 | string | `mlan0="0x2121" / mlan1=""` | 10진 또는 `0x` 16진, 1..0xFFFF | no | boot | matching 543 mlanutl의 `antcfgnss` 조회 결과. 0x2121=양 밴드 Tx 2SS/Rx 1SS. 불일치·미지원이면 association 중단 |
 | `rate_adapt.enabled` | 레이트 적응 적용 | bool | `true` | true\|false | caution | boot | false면 `rate_adapt_cfg`를 SET하지 않고 FW 기본값 유지. 키 부재 시 true(종전 동작). `wifi <iface> rate`로 값을 바꿔도 이 값이 false면 부팅 시 적용되지 않는다 |
 | `rate_adapt.mode` | 레이트 적응 모드 | int | `1` | `0`=legacy\|`1`=SR | caution | boot | section 존재 시 mode/low/high/interval 4개 필수(enabled는 선택) |
 | `rate_adapt.low_thresh` | 레이트 적응 low 임계 | int | `70` | 0..100 또는 255 | caution | boot | static은 low<high, dynamic은 low/high 모두 255 |
 | `rate_adapt.high_thresh` | 레이트 적응 high 임계 | int | `90` | 0..100 또는 255 | caution | boot | 70/90은 실기 결과에 따라 바뀌는 시험값 |
 | `rate_adapt.interval_ms` | 레이트 적응 평가주기(ms) | int | `100` | 양수, 10ms 배수 | caution | boot | association 전 SET+GET. mlan0 roam 및 mlan1 AC association 완료 시 FW 30/50 복귀 실측 |
+
+**비고 (antcfg 업그레이드)** — `postinst`는 active 우선 deep merge 뒤 과거 제품 기본
+`false/empty`, 알려진 physical 1x1 `0x0101`, 이미 선택된 `0x0303/0x0101`만 새 검증 계약으로
+멱등 승격한다. 다른 명시적 Tx/Rx 조합은 사용자 커스텀으로 보존하며, deep merge가 거기에
+제품용 verify를 주입했으면 그 verify만 제거한다. verify 3개 필드는 제품 호환성 계약이므로
+WebUI에서 개별 편집하지 않는다.
 
 #### 3.10.2 mlanN.logger (per-iface 로거)
 

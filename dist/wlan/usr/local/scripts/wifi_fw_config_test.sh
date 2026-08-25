@@ -59,8 +59,12 @@ case "$cmd" in
         if [ $# -gt 0 ]; then printf '%s\n' "$*" > "$STATE/$iface.ant"; exit 0; fi
         [ -e "$STATE/$iface.ant" ] || { printf 'Mode of Tx/Rx path is : 0x3\n'; exit 0; }
         read -r m n < "$STATE/$iface.ant"
-        printf 'Mode of Tx path is : %s\n' "$m"
-        printf 'Mode of Rx path is : %s\n' "${n:-$m}"
+        printf 'Mode of Tx path is %s\n' "${ANTCFG_GET_TX:-$m}"
+        printf 'Mode of Rx path is %s\n' "${ANTCFG_GET_RX:-${n:-$m}}"
+        if [ "${ANTCFG_EMIT_USER_HTSTREAM:-0}" = 1 ]; then
+            printf 'NSS limit (antcfg): 2G rx=1 tx=2, 5G rx=1 tx=2  [user_htstream=%s]\n' \
+                "${ANTCFG_GET_USER_HTSTREAM:-0x2121}"
+        fi
         ;;
     mcstiercfg)
         if [ $# -gt 0 ]; then
@@ -176,6 +180,74 @@ grep -q 'normalize_legacy_mcs_tier /usr/local/etc/wifi_init_conf.json || exit 1'
     && pass "postinst migrates legacy numeric MCS after merge" \
     || fail "postinst does not migrate legacy numeric MCS after merge"
 
+# JSON deep merge는 active 값을 보존하므로 템플릿 기본만 바꾸면 기존 장비의 구형
+# antcfg(false/empty) 또는 알려진 문제값(physical 1x1)이 남는다. 정확히 그 제품 이력만
+# 새 비대칭 계약으로 승격하고 운영자가 정한 다른 값은 건드리지 않아야 한다.
+jq '.mlan0.antcfg={_comment:["keep"],enabled:false,tx:"",rx:"",operator_note:"preserve"}' \
+    "$CONF" > "$WORK/legacy-antcfg-off.json"
+if declare -F wifi_fw_migrate_product_antcfg_json >/dev/null 2>&1 \
+   && wifi_fw_migrate_product_antcfg_json "$WORK/legacy-antcfg-off.json" \
+        > "$WORK/migrated-antcfg-off.json"; then
+    pass "legacy product antcfg migration succeeds"
+else
+    : > "$WORK/migrated-antcfg-off.json"
+    fail "legacy product antcfg migration succeeds"
+fi
+expect_eq "legacy disabled antcfg becomes asymmetric product workaround" \
+    'true 0x0303 0x0101 0x0303 0x0303 0x2121' \
+    "$(jq -r '.mlan0.antcfg | "\(.enabled) \(.tx) \(.rx) \(.verify.physical_tx) \(.verify.physical_rx) \(.verify.user_htstream)"' \
+        "$WORK/migrated-antcfg-off.json" 2>/dev/null)"
+expect_eq "antcfg migration preserves comments and unrelated operator metadata" 'keep preserve' \
+    "$(jq -r '.mlan0.antcfg | "\(._comment[0]) \(.operator_note)"' \
+        "$WORK/migrated-antcfg-off.json" 2>/dev/null)"
+
+jq '.mlan0.antcfg={enabled:true,tx:"0x0101",rx:""}' "$CONF" \
+    > "$WORK/legacy-antcfg-1x1.json"
+wifi_fw_migrate_product_antcfg_json "$WORK/legacy-antcfg-1x1.json" \
+    > "$WORK/migrated-antcfg-1x1.json" 2>/dev/null
+expect_eq "known physical 1x1 trigger migrates to asymmetric workaround" \
+    '0x0303 0x0101 0x2121' \
+    "$(jq -r '.mlan0.antcfg | "\(.tx) \(.rx) \(.verify.user_htstream)"' \
+        "$WORK/migrated-antcfg-1x1.json" 2>/dev/null)"
+
+jq '.mlan0.antcfg={enabled:true,tx:"0x0303",rx:"0x0303",operator_note:"custom"}' \
+    "$CONF" > "$WORK/custom-antcfg.json"
+wifi_fw_migrate_product_antcfg_json "$WORK/custom-antcfg.json" \
+    > "$WORK/custom-antcfg-after.json" 2>/dev/null
+expect_eq "explicit custom antcfg remains unchanged" \
+    "$(jq -S -c . "$WORK/custom-antcfg.json")" \
+    "$(jq -S -c . "$WORK/custom-antcfg-after.json" 2>/dev/null)"
+
+# 실제 postinst 순서는 template*active deep merge 후 migration이다. 구 active에 verify가
+# 없었어도 템플릿 하위 객체가 custom Tx/Rx에 주입될 수 있으므로 제품 기본 verify만 제거해
+# 종전의 log-only custom 동작을 보존해야 한다.
+jq '.mlan0.antcfg.verify={physical_tx:"0x0303",physical_rx:"0x0303",user_htstream:"0x2121"}' \
+    "$WORK/custom-antcfg.json" > "$WORK/custom-antcfg-merged.json"
+wifi_fw_migrate_product_antcfg_json "$WORK/custom-antcfg-merged.json" \
+    > "$WORK/custom-antcfg-merged-after.json" 2>/dev/null
+expect_eq "post-merge custom mlan0 removes injected product verification" \
+    '0x0303 0x0303 custom false' \
+    "$(jq -r '.mlan0.antcfg | "\(.tx) \(.rx) \(.operator_note) \(.verify != null)"' \
+        "$WORK/custom-antcfg-merged-after.json" 2>/dev/null)"
+
+jq '.mlan1.antcfg={enabled:true,tx:"0x202",rx:"",verify:{physical_tx:"",physical_rx:"",user_htstream:""}}' \
+    "$CONF" > "$WORK/custom-antcfg-mlan1-merged.json"
+wifi_fw_migrate_product_antcfg_json "$WORK/custom-antcfg-mlan1-merged.json" \
+    > "$WORK/custom-antcfg-mlan1-after.json" 2>/dev/null
+expect_eq "post-merge custom mlan1 removes injected empty verification" \
+    'true 0x202  false' \
+    "$(jq -r '.mlan1.antcfg | "\(.enabled) \(.tx) \(.rx) \(.verify != null)"' \
+        "$WORK/custom-antcfg-mlan1-after.json" 2>/dev/null)"
+
+wifi_fw_migrate_product_antcfg_json "$WORK/migrated-antcfg-off.json" \
+    > "$WORK/migrated-antcfg-twice.json" 2>/dev/null
+expect_eq "product antcfg migration is idempotent" \
+    "$(jq -S -c . "$WORK/migrated-antcfg-off.json" 2>/dev/null)" \
+    "$(jq -S -c . "$WORK/migrated-antcfg-twice.json" 2>/dev/null)"
+grep -q 'migrate_product_antcfg /usr/local/etc/wifi_init_conf.json || exit 1' "$POSTINST" \
+    && pass "postinst migrates product antcfg after merge" \
+    || fail "postinst does not migrate product antcfg after merge"
+
 expect_rc "static rate config valid" 0 wifi_fw_validate_rate_config "$CONF" mlan0
 expect_rc "dynamic rate config valid" 0 wifi_fw_validate_rate_config "$CONF" mlan1
 expect_rc "rate apply succeeds" 0 wifi_fw_apply_rate "$CONF" mlan0
@@ -242,6 +314,16 @@ expect_eq "rate merge updates values" '0 10 20 50' \
 # mcs_tier 와 같은 opt-in — 지금까지 적용하지 않던 설정이라 기본으로 켜면 출하 기기의
 # RF 경로가 통째로 바뀐다. 꺼져 있으면 SET 자체를 하지 않는다.
 _ant() { jq --arg t "$2" --arg r "$3" ".mlan0.antcfg={enabled:$1, tx:\$t, rx:\$r}" "$CONF"; }
+_ant_verified() {
+    jq --arg t "$1" --arg r "$2" --arg ptx "$3" --arg prx "$4" --arg hs "$5" '
+        .mlan0.antcfg={
+            enabled:true,
+            tx:$t,
+            rx:$r,
+            verify:{physical_tx:$ptx,physical_rx:$prx,user_htstream:$hs}
+        }
+    ' "$CONF"
+}
 
 rm -f "$STATE/mlan0.ant"
 expect_rc "antcfg absent section skips" 0 wifi_fw_apply_antcfg "$CONF" mlan0
@@ -262,6 +344,34 @@ _ant true 0x103 0x303 > "$WORK/ant-txrx.json"
 rm -f "$STATE/mlan0.ant"
 expect_rc "antcfg tx+rx applies" 0 wifi_fw_apply_antcfg "$WORK/ant-txrx.json" mlan0
 expect_eq "antcfg tx+rx passes both args" '0x103 0x303' "$(cat "$STATE/mlan0.ant" 2>/dev/null)"
+
+# 9098 FW는 비대칭 0x0303/0x0101 요청을 physical 0x0303/0x0303으로 정규화하고,
+# 실제 Rx NSS 제한 의도는 user_htstream=0x2121에 보존한다. 요청값과 physical GET을
+# 단순 비교하면 정상 상태를 실패로 판정하므로 세 값을 독립적으로 검증한다.
+_ant_verified 0x0303 0x0101 0x0303 0x0303 0x2121 > "$WORK/ant-verified.json"
+export ANTCFG_GET_TX=0x303 ANTCFG_GET_RX=0x303
+export ANTCFG_EMIT_USER_HTSTREAM=1 ANTCFG_GET_USER_HTSTREAM=0x2121
+rm -f "$STATE/mlan0.ant"
+expect_rc "antcfg accepts normalized physical paths with matching host NSS intent" 0 \
+    wifi_fw_apply_antcfg "$WORK/ant-verified.json" mlan0
+
+export ANTCFG_GET_USER_HTSTREAM=0x2222
+expect_rc "antcfg rejects wrong host NSS intent" 1 \
+    wifi_fw_apply_antcfg "$WORK/ant-verified.json" mlan0
+
+export ANTCFG_GET_USER_HTSTREAM=0x2121 ANTCFG_GET_RX=0x101
+expect_rc "antcfg rejects unexpected physical Rx path" 1 \
+    wifi_fw_apply_antcfg "$WORK/ant-verified.json" mlan0
+
+export ANTCFG_GET_RX=0x303 ANTCFG_EMIT_USER_HTSTREAM=0
+expect_rc "antcfg rejects GET output missing required host NSS intent" 1 \
+    wifi_fw_apply_antcfg "$WORK/ant-verified.json" mlan0
+unset ANTCFG_GET_TX ANTCFG_GET_RX ANTCFG_EMIT_USER_HTSTREAM ANTCFG_GET_USER_HTSTREAM
+
+jq '.mlan0.antcfg.verify.user_htstream="invalid"' "$WORK/ant-verified.json" \
+    > "$WORK/ant-verify-invalid.json"
+expect_rc "antcfg rejects invalid verification contract" 1 \
+    wifi_fw_validate_antcfg_config "$WORK/ant-verify-invalid.json" mlan0
 
 _ant true 3 '' > "$WORK/ant-dec.json"
 expect_rc "antcfg accepts decimal" 0 wifi_fw_validate_antcfg_config "$WORK/ant-dec.json" mlan0
@@ -318,11 +428,17 @@ grep -q 'adapter-level setting' "$LOG" \
     && fail "antcfg warns even when values match (오탐)" \
     || pass "antcfg does not warn when values match"
 
-expect_eq "template ships mlan0 antcfg disabled" 'false' "$(jq -r '.mlan0.antcfg.enabled' "$TEMPLATE")"
+expect_eq "template enables mlan0 asymmetric antcfg workaround" 'true 0x0303 0x0101' \
+    "$(jq -r '.mlan0.antcfg | "\(.enabled) \(.tx) \(.rx)"' "$TEMPLATE")"
+expect_eq "template verifies normalized physical paths and host NSS intent" '0x0303 0x0303 0x2121' \
+    "$(jq -r '.mlan0.antcfg.verify | "\(.physical_tx) \(.physical_rx) \(.user_htstream)"' "$TEMPLATE")"
 expect_eq "template ships mlan1 antcfg disabled" 'false' "$(jq -r '.mlan1.antcfg.enabled' "$TEMPLATE")"
 grep -q 'wifi_fw_apply_antcfg "$WIFI_INIT_CONF_JSON" "$iface"' "$WIFI_INIT" \
     && pass "wifi_init delegates antcfg apply" \
     || fail "wifi_init does not delegate antcfg apply"
+grep -Eq 'wifi_fw_apply_antcfg "\$WIFI_INIT_CONF_JSON" "\$iface"[[:space:]]*\|\|[[:space:]]*return 1' "$WIFI_INIT" \
+    && pass "wifi_init stops before association when verified antcfg fails" \
+    || fail "wifi_init ignores verified antcfg failure"
 
 expect_rc "ax MCS config valid" 0 wifi_fw_validate_mcs_config "$CONF" mlan0
 expect_rc "ac MCS config valid without HE" 0 wifi_fw_validate_mcs_config "$CONF" mlan1

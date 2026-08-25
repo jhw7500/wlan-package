@@ -973,13 +973,32 @@ durable backup을 별도 staging으로 복사해 atomic rename하고 복원 파�
 **사용 스크립트**: `wifi_init.sh` → `wifi_fw_config_lib.sh`
 
 association 전에 `mlanutl <iface> antcfg <tx> [rx]`로 FW의 Tx/Rx 경로를 지정한다.
-**opt-in이며 출하 기본은 `enabled: false`** — 켜지 않으면 FW/보드 기본 경로를 그대로 둔다.
+섹션 자체는 opt-in이지만, 현재 mlan0 제품 기본은 p149.115 scan-return TX wedge 회피를 위해
+`tx=0x0303`, `rx=0x0101`을 활성화한다. mlan1은 비활성 상태다.
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `enabled` | bool | `false` | 적용 ON/OFF. `false`면 SET 자체를 하지 않는다 |
-| `tx` | string | `""` | Tx 경로 비트맵. 10진 또는 `0x` 16진, `1`~`0xFFFF`. `rx`가 비면 Tx/Rx 공통 |
-| `rx` | string | `""` | Rx 경로 비트맵. 빈 문자열이면 인자를 생략한다 |
+| `enabled` | bool | mlan0=`true`, mlan1=`false` | 적용 ON/OFF. `false`면 SET 자체를 하지 않는다 |
+| `tx` | string | mlan0=`"0x0303"`, mlan1=`""` | Tx 경로 비트맵. 10진 또는 `0x` 16진, `1`~`0xFFFF`. `rx`가 비면 Tx/Rx 공통 |
+| `rx` | string | mlan0=`"0x0101"`, mlan1=`""` | Rx 경로 비트맵. 빈 문자열이면 인자를 생략한다 |
+| `verify.physical_tx` | string | mlan0=`"0x0303"` | SET 뒤 기대하는 FW physical Tx path |
+| `verify.physical_rx` | string | mlan0=`"0x0303"` | SET 뒤 기대하는 FW physical Rx path |
+| `verify.user_htstream` | string | mlan0=`"0x2121"` | SET 뒤 기대하는 host NSS intent. matching 543 `mlanutl` 필요 |
+
+`verify`가 없으면 기존처럼 SET 후 GET 결과를 로그로만 남긴다. `verify`가 있으면 세 하위 키가
+모두 필수이며, 어느 하나라도 파싱되지 않거나 기대값과 다르면 `wifi_init`은 supplicant 시작 전에
+실패한다. 비대칭 요청 `0x0303/0x0101`은 FW physical GET에서 `0x0303/0x0303`으로 정규화되므로
+요청 Rx와 physical Rx를 직접 비교하지 않는다. 논리적 양 밴드 Tx 2SS/Rx 1SS 의도는
+`user_htstream=0x2121`로 별도 검증한다.
+릴리즈 preflight는 staging된 imx93 `mlanutl`에 이 조회용 `antcfgnss` ABI marker가 없으면
+패키징을 거부한다.
+
+업그레이드에서는 active JSON 우선 병합 때문에 템플릿 변경만으로 과거 값이 바뀌지 않는다.
+`postinst`가 병합 직후 과거 제품 기본 `enabled=false, tx="", rx=""`, 알려진 physical 1x1
+`0x0101`, 또는 이미 선택된 `0x0303/0x0101` 요청만 위 검증 계약으로 멱등 승격한다. 그 밖의
+명시적 안테나 경로 값은 운영자 설정으로 보고 보존한다. deep merge가 그런 커스텀 값에
+템플릿의 제품용 `verify`를 자동 주입한 경우에는 주입된 계약만 제거해 기존 log-only 동작을
+유지한다.
 
 비트맵 해석 (9097/9098/IW624):
 

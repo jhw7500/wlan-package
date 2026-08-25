@@ -71,6 +71,58 @@ wifi_fw_normalize_legacy_mcs_json() {
     ' "$json"
 }
 
+# 기존 설치의 active JSON은 postinst deep merge에서 템플릿보다 우선한다. 따라서
+# 새 제품 기본만 바꿔서는 과거 false/empty 값이나 p149.115 scan wedge를 재현한 physical
+# 1x1 값이 남는다. 알려진 제품 이력과 이미 선택된 새 요청만 승격하고, 그 밖의 명시적
+# 운영자 안테나 설정은 보존한다.
+wifi_fw_migrate_product_antcfg_json() {
+    local json="$1"
+    jq '
+        def one_of($values): . as $v | ($values | index($v)) != null;
+        def is_legacy_disabled($a):
+            ($a.enabled == false and ($a.tx // "") == "" and ($a.rx // "") == "");
+        def is_legacy_physical_1x1($a):
+            ($a.enabled == true
+             and (($a.tx // "") | one_of(["0x101", "0x0101", "0X101", "0X0101"]))
+             and (($a.rx // "") | one_of(["", "0x101", "0x0101", "0X101", "0X0101"])));
+        def is_product_request($a):
+            ($a.enabled == true
+             and (($a.tx // "") | one_of(["0x303", "0x0303", "0X303", "0X0303"]))
+             and (($a.rx // "") | one_of(["0x101", "0x0101", "0X101", "0X0101"])));
+        def is_product_verify($v):
+            (($v | type) == "object"
+             and $v.physical_tx == "0x0303"
+             and $v.physical_rx == "0x0303"
+             and $v.user_htstream == "0x2121");
+        def is_empty_verify($v):
+            (($v | type) == "object"
+             and ($v.physical_tx // "") == ""
+             and ($v.physical_rx // "") == ""
+             and ($v.user_htstream // "") == "");
+        (.mlan0.antcfg // {}) as $a
+        | if is_legacy_disabled($a) or is_legacy_physical_1x1($a) or is_product_request($a)
+          then .mlan0.antcfg = ($a + {
+              enabled: true,
+              tx: "0x0303",
+              rx: "0x0101",
+              verify: {
+                  physical_tx: "0x0303",
+                  physical_rx: "0x0303",
+                  user_htstream: "0x2121"
+              }
+          })
+          elif is_product_verify($a.verify)
+          then .mlan0.antcfg |= del(.verify)
+          else .
+          end
+        | (.mlan1.antcfg // {}) as $b
+        | if is_empty_verify($b.verify)
+          then .mlan1.antcfg |= del(.verify)
+          else .
+          end
+    ' "$json"
+}
+
 # 안테나 경로 비트맵 유효성 — 10진 또는 0x 16진, 1..0xFFFF.
 # 0 은 거부한다: 어떤 경로도 선택하지 않는 값이라 RF 가 죽는데 mlanutl 은 성공으로 보고할
 # 수 있고, 이 기기는 무선이 유일한 접속 경로다.
@@ -97,7 +149,7 @@ _wifi_fw_is_ant_path() {
 # antcfg 는 mcs_tier 와 같은 opt-in 이다(기본 false) — 지금까지 적용하지 않던 설정이라
 # 기본으로 켜면 출하 기기의 RF 경로가 통째로 바뀐다.
 wifi_fw_validate_antcfg_config() {
-    local json="$1" iface="$2" enabled tx rx
+    local json="$1" iface="$2" enabled tx rx verify_values physical_tx physical_rx user_htstream
     _wifi_fw_has_section "$json" "$iface" antcfg || return 2
     enabled=$(jq -r --arg i "$iface" '.[$i].antcfg.enabled // false' "$json" 2>/dev/null)
     [ "$enabled" = true ] || return 2
@@ -114,10 +166,33 @@ wifi_fw_validate_antcfg_config() {
     _wifi_fw_is_ant_path "$tx" || return 1
     # rx 는 선택 — 비면 인자를 생략해 tx 가 Tx/Rx 양쪽에 적용된다.
     [ -z "$rx" ] || _wifi_fw_is_ant_path "$rx" || return 1
+
+    # verify가 없으면 기존의 SET+관측 로그 동작을 유지한다. 있으면 요청값과 별개인
+    # FW physical path 및 host NSS intent의 기대값 세 개를 모두 명시해야 한다.
+    if jq -e --arg i "$iface" '.[$i].antcfg | has("verify")' "$json" >/dev/null 2>&1; then
+        jq -e --arg i "$iface" '
+            .[$i].antcfg.verify as $v
+            | ($v | type) == "object"
+            and ($v | has("physical_tx") and has("physical_rx") and has("user_htstream"))
+            and ([$v.physical_tx, $v.physical_rx, $v.user_htstream] | all(type == "string"))
+        ' "$json" >/dev/null 2>&1 || return 1
+        verify_values=$(jq -er --arg i "$iface" '
+            .[$i].antcfg.verify
+            | [.physical_tx,.physical_rx,.user_htstream]
+            | @tsv
+        ' "$json" 2>/dev/null) || return 1
+        IFS=$'\t' read -r physical_tx physical_rx user_htstream <<< "$verify_values"
+        _wifi_fw_is_ant_path "$physical_tx" || return 1
+        _wifi_fw_is_ant_path "$physical_rx" || return 1
+        _wifi_fw_is_ant_path "$user_htstream" || return 1
+    fi
+
+    return 0
 }
 
 wifi_fw_apply_antcfg() {
-    local json="$1" iface="$2" tx rx live rc other differs
+    local json="$1" iface="$2" tx rx live rc other differs verify_enabled
+    local expected_tx expected_rx expected_user_htstream actual_tx actual_rx actual_user_htstream
     if ! _wifi_fw_has_section "$json" "$iface" antcfg; then
         wifi_fw_log local0.info "[$iface] antcfg absent; skip"
         return 0
@@ -155,6 +230,17 @@ wifi_fw_apply_antcfg() {
 
     tx=$(jq -r --arg i "$iface" '.[$i].antcfg.tx' "$json" 2>/dev/null) || tx=""
     rx=$(jq -r --arg i "$iface" '.[$i].antcfg.rx' "$json" 2>/dev/null) || rx=""
+    verify_enabled=$(jq -r --arg i "$iface" '.[$i].antcfg | has("verify")' "$json" 2>/dev/null) \
+        || verify_enabled=false
+    if [ "$verify_enabled" = true ]; then
+        IFS=$'\t' read -r expected_tx expected_rx expected_user_htstream < <(
+            jq -r --arg i "$iface" '
+                .[$i].antcfg.verify
+                | [.physical_tx,.physical_rx,.user_htstream]
+                | @tsv
+            ' "$json"
+        )
+    fi
     # 검증 통과 후라 빈 tx 는 나올 수 없지만, 나온다면 mlanutl 에 빈 인자를 넘기는 대신
     # 사유를 남기고 FW 기본 경로를 유지한다(같은 함수의 다른 jq 호출과 동일 규약).
     if [ -z "$tx" ]; then
@@ -166,21 +252,54 @@ wifi_fw_apply_antcfg() {
         wifi_fw_log local0.info "[$iface] antcfg configured: tx=$tx rx=$rx"
         "$WIFI_MLANUTL" "$iface" antcfg "$tx" "$rx" >/dev/null 2>&1 || {
             wifi_fw_log local0.err "[$iface] antcfg SET failed"
+            [ "$verify_enabled" = true ] && return 1
             return 0
         }
     else
         wifi_fw_log local0.info "[$iface] antcfg configured: tx=$tx (rx 생략 — tx가 Tx/Rx 공통)"
         "$WIFI_MLANUTL" "$iface" antcfg "$tx" >/dev/null 2>&1 || {
             wifi_fw_log local0.err "[$iface] antcfg SET failed"
+            [ "$verify_enabled" = true ] && return 1
             return 0
         }
     fi
 
     live=$("$WIFI_MLANUTL" "$iface" antcfg 2>&1) || {
         wifi_fw_log local0.warn "[$iface] antcfg GET failed after SET"
+        [ "$verify_enabled" = true ] && return 1
         return 0
     }
     wifi_fw_log local0.info "[$iface] antcfg live after pre-association SET: $(printf '%s' "$live" | tr '\n' ' ')"
+
+    [ "$verify_enabled" = true ] || return 0
+
+    # 9098 비대칭 NSS 설정은 요청 Rx mask를 physical GET에 그대로 돌려주지 않는다.
+    # physical path와 host intent를 각각 파싱해 명시된 계약과 수치로 비교한다.
+    actual_tx=$(printf '%s\n' "$live" \
+        | sed -n 's/^Mode of Tx path is[[:space:]:]*\([^[:space:]]*\).*$/\1/p' | tail -1)
+    actual_rx=$(printf '%s\n' "$live" \
+        | sed -n 's/^Mode of Rx path is[[:space:]:]*\([^[:space:]]*\).*$/\1/p' | tail -1)
+    actual_user_htstream=$(printf '%s\n' "$live" \
+        | sed -n 's/.*\[user_htstream=\(0[xX][0-9A-Fa-f][0-9A-Fa-f]*\)\].*/\1/p' | tail -1)
+
+    if ! _wifi_fw_is_ant_path "$actual_tx" \
+       || [ "$((actual_tx))" -ne "$((expected_tx))" ]; then
+        wifi_fw_log local0.err "[$iface] antcfg physical Tx verification failed: expected=$expected_tx actual=${actual_tx:-<missing>}"
+        return 1
+    fi
+    if ! _wifi_fw_is_ant_path "$actual_rx" \
+       || [ "$((actual_rx))" -ne "$((expected_rx))" ]; then
+        wifi_fw_log local0.err "[$iface] antcfg physical Rx verification failed: expected=$expected_rx actual=${actual_rx:-<missing>}"
+        return 1
+    fi
+    if ! _wifi_fw_is_ant_path "$actual_user_htstream" \
+       || [ "$((actual_user_htstream))" -ne "$((expected_user_htstream))" ]; then
+        wifi_fw_log local0.err "[$iface] antcfg host NSS verification failed: expected=$expected_user_htstream actual=${actual_user_htstream:-<missing>}"
+        return 1
+    fi
+
+    wifi_fw_log local0.info "[$iface] antcfg verified: physical_tx=$actual_tx physical_rx=$actual_rx user_htstream=$actual_user_htstream"
+    return 0
 }
 
 wifi_fw_validate_rate_config() {

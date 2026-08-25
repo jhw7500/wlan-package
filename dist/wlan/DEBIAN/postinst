@@ -441,6 +441,30 @@ json_merge() {
   fi
 }
 
+migrate_product_antcfg() {
+  local active="$1" migrated
+  [ -f "$active" ] || return 0
+  if [ ! -r /usr/local/scripts/wifi_fw_config_lib.sh ]; then
+    logger -p local0.err "[$tag:$LINENO] [$KEY] antcfg migration library missing"
+    return 1
+  fi
+  # shellcheck source=/usr/local/scripts/wifi_fw_config_lib.sh
+  . /usr/local/scripts/wifi_fw_config_lib.sh
+  if ! declare -F wifi_fw_migrate_product_antcfg_json >/dev/null 2>&1; then
+    logger -p local0.err "[$tag:$LINENO] [$KEY] antcfg migration function missing"
+    return 1
+  fi
+  migrated=$(wifi_fw_migrate_product_antcfg_json "$active") || {
+    logger -p local0.err "[$tag:$LINENO] [$KEY] product antcfg migration failed"
+    return 1
+  }
+  atomic_json_install "$migrated" "$active" || {
+    logger -p local0.err "[$tag:$LINENO] [$KEY] migrated antcfg config commit failed"
+    return 1
+  }
+  logger -p local0.info "[$tag:$LINENO] [$KEY] migrated product antcfg compatibility values"
+}
+
 migrate_retired_global_logger_keys() {
   # 전역 logger 에서 인터페이스별(<iface>.logger.*)로 이관된 키를 옮긴다.
   # **json_merge 이전에** 호출해야 한다: 병합은 템플릿의 새 per-iface 기본값을 주입하는데
@@ -599,6 +623,7 @@ secure_wpa_conf() {
   cpchk /opt/wlan/config/systemd/network/22-eth0.link /etc/systemd/network/22-eth0.link
   migrate_retired_global_logger_keys /usr/local/etc/wifi_init_conf.json
   json_merge /opt/wlan/config/wifi_init_conf.json /usr/local/etc/wifi_init_conf.json || exit 1
+  migrate_product_antcfg /usr/local/etc/wifi_init_conf.json || exit 1
   normalize_legacy_mcs_tier /usr/local/etc/wifi_init_conf.json || exit 1
   cleanup_retired_roaming_keys /usr/local/etc/wifi_init_conf.json
 

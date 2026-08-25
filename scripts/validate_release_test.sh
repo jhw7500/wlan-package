@@ -7,6 +7,7 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 PKG="$WORK/pkg"
 SOURCE_NETWORK="$REPO/dist/wlan/opt/wlan/config/systemd/network/22-eth0.network"
+SOURCE_MLANUTL_IMX93="$REPO/dist/wlan/opt/wlan/bin/mlanutl_imx93"
 
 # DEBIAN/control is the release-version SSoT.  Documentation and build logic
 # must not introduce a second concrete version that every release has to edit.
@@ -47,6 +48,24 @@ if (
     validate_source_product_defaults >/dev/null 2>&1
 ); then
     echo "FAIL: executable factory network source was accepted" >&2
+    exit 1
+fi
+
+# 비대칭 antcfg 제품 검증은 matching 543 utility의 private `antcfgnss` 조회가
+# 필수다. staging이 구형 mlanutl로 되돌아가면 wifi_init이 다음 부팅에서 fail-closed
+# 하므로 release source gate가 패키징 전에 막아야 한다.
+if (
+    backup="$WORK/mlanutl_imx93.backup"
+    cp -p "$SOURCE_MLANUTL_IMX93" "$backup"
+    trap 'cp -p "$backup" "$SOURCE_MLANUTL_IMX93"' EXIT
+    printf '#!/bin/sh\necho legacy-utility\n' \
+        > "$SOURCE_MLANUTL_IMX93"
+    chmod 0755 "$SOURCE_MLANUTL_IMX93"
+    # shellcheck source=validate_release.sh
+    source "$VALIDATE"
+    validate_source_product_defaults >/dev/null 2>&1
+); then
+    echo "FAIL: imx93 mlanutl without antcfgnss support was accepted" >&2
     exit 1
 fi
 
