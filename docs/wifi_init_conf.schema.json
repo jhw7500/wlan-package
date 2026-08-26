@@ -1237,13 +1237,14 @@
         "antcfg": {
           "type": "object",
           "additionalProperties": true,
-          "description": "FW Tx/Rx 안테나 경로(mlanutl <iface> antcfg). association 전 적용. opt-in(기본 false). 어댑터 단위 설정이라 mlan0/mlan1 값이 다르면 나중에 적용된 쪽이 이긴다. global.ANT_TYPE(GPIO mux)와는 별개",
+          "description": "FW Tx/Rx 안테나 경로. imx93 mlan0의 0x0303/0x0101+verify는 p149.115 scan wedge 회피 제품 안전 불변식이며 mcs_tier 7, mlan1 antcfg off와 함께 association 전에 강제된다. imx8에서는 strict imx93 profile을 보드 감지 시 중화한다.",
           "properties": {
             "enabled": {
               "type": "boolean",
               "default": true,
               "description": "안테나 경로 적용 ON/OFF. false면 FW/보드 기본 경로를 그대로 둔다",
-              "x-ui-editable": "caution",
+              "x-ui-editable": "no",
+              "x-ui-editable-by-board": {"imx93": "no", "imx8mm": "caution"},
               "x-apply-timing": "boot",
               "x-consumer": "wifi_fw_config_lib.sh"
             },
@@ -1251,7 +1252,8 @@
               "type": "string",
               "default": "0x0303",
               "description": "Tx 경로 비트맵(10진 또는 0x 16진, 1..0xFFFF). rx가 비면 Tx/Rx 공통. 9098은 LOW BYTE=2G/HIGH BYTE=5G, 각 바이트 bit0=path A·bit1=path B. 예 0x303=양 밴드 A+B, 0x103=2G A+B+5G A. SAD 칩은 0xFFFF=다이버시티. 0은 거부(RF 사망)",
-              "x-ui-editable": "caution",
+              "x-ui-editable": "no",
+              "x-ui-editable-by-board": {"imx93": "no", "imx8mm": "caution"},
               "x-apply-timing": "boot",
               "x-consumer": "wifi_fw_config_lib.sh"
             },
@@ -1259,7 +1261,8 @@
               "type": "string",
               "default": "0x0101",
               "description": "Rx 경로 비트맵. 빈 문자열이면 인자를 생략해 tx가 Tx/Rx 양쪽에 적용된다. SAD 칩에서 tx=0xFFFF일 때는 평가 주기(기본 0x1770=6s)",
-              "x-ui-editable": "caution",
+              "x-ui-editable": "no",
+              "x-ui-editable-by-board": {"imx93": "no", "imx8mm": "caution"},
               "x-apply-timing": "boot",
               "x-consumer": "wifi_fw_config_lib.sh"
             },
@@ -1789,7 +1792,7 @@
         "mcs_tier": {
           "type": "object",
           "additionalProperties": true,
-          "description": "MCS tier capability 제한. association 전 SET 후 GET 검증. mlan0 HE 0x0000은 연결 후 검증하고 FW 기본 복귀 시 connected SET+reassociate 1회.",
+          "description": "MCS tier capability 제한. imx93 mlan0은 antcfg scan-wedge 회피 profile과 묶인 제품 안전 불변식으로 enabled=true, HT/VHT/HE=7 고정. HE 0x0000은 연결 후 검증하고 FW 기본 복귀 시 connected SET 뒤 serialized wifi connect 1회.",
           "required": [
             "enabled",
             "ht",
@@ -1801,7 +1804,8 @@
               "type": "boolean",
               "default": true,
               "description": "MCS tier 제한 활성화. HT/VHT·비영 HE 불일치는 association을 차단하고, HE 0x0000은 연결 후 검증 및 필요 시 1회 재association",
-              "x-ui-editable": "caution",
+              "x-ui-editable": "no",
+              "x-ui-editable-by-board": {"imx93": "no", "imx8mm": "caution"},
               "x-apply-timing": "boot",
               "x-consumer": "wifi_init.sh, wifi_event.sh, wifi_apply_enabled.sh, wifi.sh"
             },
@@ -1813,7 +1817,8 @@
                 "15"
               ],
               "description": "HT(802.11n) MCS tier 제한",
-              "x-ui-editable": "caution",
+              "x-ui-editable": "no",
+              "x-ui-editable-by-board": {"imx93": "no", "imx8mm": "caution"},
               "x-apply-timing": "boot",
               "x-consumer": "wifi_init.sh, wifi_event.sh, wifi.sh"
             },
@@ -1826,7 +1831,8 @@
                 "9"
               ],
               "description": "VHT(802.11ac) MCS tier 제한",
-              "x-ui-editable": "caution",
+              "x-ui-editable": "no",
+              "x-ui-editable-by-board": {"imx93": "no", "imx8mm": "caution"},
               "x-apply-timing": "boot",
               "x-consumer": "wifi_init.sh, wifi_event.sh, wifi.sh"
             },
@@ -1838,8 +1844,9 @@
                 "both 9",
                 "both 11"
               ],
-              "description": "mlan0 HE(802.11ax) Tx/Rx MCS tier 제한. association 전 0x0000이면 연결 후 검증하고 FW 기본 복귀 시 SET+reassociate 1회",
-              "x-ui-editable": "caution",
+              "description": "mlan0 HE(802.11ax) Tx/Rx MCS tier 제한. association 전 0x0000이면 연결 후 검증하고 FW 기본 복귀 시 SET 뒤 serialized wifi connect 1회",
+              "x-ui-editable": "no",
+              "x-ui-editable-by-board": {"imx93": "no", "imx8mm": "caution"},
               "x-apply-timing": "boot",
               "x-consumer": "wifi_init.sh, wifi_event.sh, wifi.sh"
             }

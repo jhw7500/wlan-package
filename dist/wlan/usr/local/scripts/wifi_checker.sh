@@ -286,13 +286,14 @@ while true; do
                 elif (( DURATION >= RESTART_DURATION )); then
                     # 2차(무거움): 장시간 미연결·무진행 → wpa_supplicant 재시작
                     logger -p local0.err "[$tag:$LINENO] [$IFACE] restart wpa_supplicant@$IFACE (disconnected ${DURATION}s >= ${RESTART_DURATION}s, no progress)"
-                    wifi $IFACE restart
+                    wifi "$IFACE" restart
                     UNSTABLE_START=0
                     REASSOC_DONE=0
                 elif (( DURATION >= MAX_UNSTABLE_DURATION )) && (( REASSOC_DONE == 0 )); then
-                    # 1차(가벼움): reassociate 먼저 (wpa 프로세스/상태 유지)
-                    logger -p local0.warning "[$tag:$LINENO] [$IFACE] reassociate (disconnected ${DURATION}s >= ${MAX_UNSTABLE_DURATION}s, no progress)"
-                    wpa_cli -i "$IFACE" reassociate >/dev/null 2>&1
+                    # 1차(가벼움): 공용 transition lock과 fresh association proof를
+                    # 소유하는 wifi connect로 owner-neutral reassociate를 요청한다.
+                    logger -p local0.warning "[$tag:$LINENO] [$IFACE] serialized reconnect (disconnected ${DURATION}s >= ${MAX_UNSTABLE_DURATION}s, no progress)"
+                    wifi "$IFACE" connect >/dev/null 2>&1
                     REASSOC_DONE=1
                 fi
             fi
@@ -318,10 +319,10 @@ while true; do
                     FAULT_CNT=0
                 elif (( FAULT_CNT >= FAULT_RESTART_CNT )); then
                     logger -p local0.err "[$tag:$LINENO] [$IFACE] station dump fault ($FAULT_CNT >= $FAULT_RESTART_CNT), restarting wpa_supplicant"
-                    wifi $IFACE restart
+                    wifi "$IFACE" restart
                 elif (( FAULT_CNT >= FAULT_REASSOC_CNT )); then
-                    logger -p local0.warning "[$tag:$LINENO] [$IFACE] station dump fault ($FAULT_CNT >= $FAULT_REASSOC_CNT), reassociating"
-                    wpa_cli -i "$IFACE" reassociate >/dev/null 2>&1
+                    logger -p local0.warning "[$tag:$LINENO] [$IFACE] station dump fault ($FAULT_CNT >= $FAULT_REASSOC_CNT), serialized reconnect"
+                    wifi "$IFACE" connect >/dev/null 2>&1
                 fi
             else
                 FAULT_CNT=0

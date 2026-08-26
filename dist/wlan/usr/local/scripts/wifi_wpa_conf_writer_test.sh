@@ -133,6 +133,14 @@ exec /bin/mv "$@"
 EOF
 cat > "$BIN/systemctl" <<'EOF'
 #!/bin/sh
+printf 'systemctl %s\n' "$*" >> "$CALL_LOG"
+case "$1" in
+  stop) printf 'inactive\n' > "$STATE_DIR/wpa-service-state" ;;
+  start|restart) printf 'active\n' > "$STATE_DIR/wpa-service-state" ;;
+  is-active)
+    [ "$(cat "$STATE_DIR/wpa-service-state" 2>/dev/null || echo active)" = active ]
+    exit $? ;;
+esac
 exit 0
 EOF
 cat > "$BIN/flock" <<'EOF'
@@ -340,6 +348,16 @@ EOT
     ;;
   *) printf 'OK\n' ;;
 esac
+EOF
+cat > "$BIN/iw" <<'EOF'
+#!/bin/sh
+printf 'iw %s\n' "$*" >> "$CALL_LOG"
+exit 0
+EOF
+cat > "$BIN/mlanutl" <<'EOF'
+#!/bin/sh
+printf 'mlanutl %s\n' "$*" >> "$CALL_LOG"
+exit 0
 EOF
 chmod +x "$BIN"/*
 export PATH="$BIN:$PATH"
@@ -1976,6 +1994,84 @@ if [ "$rc" -ne 0 ]; then pass "OPC held scan-transition lock fails closed"; else
 if cmp -s "$CONF" "$TD/opc-held-transition.conf"; then pass "OPC held transition lock leaves conf byte-exact"; else fail "OPC held transition lock must preserve conf"; fi
 check_equal "OPC held transition lock sends no live ctrl request" \
     "$(grep -Ec 'abort_scan$|reconfigure$|reassociate$|reconnect$' "$CALL_LOG" || true)" "0"
+
+for _manual_op in scan mscan; do
+    hold_scan_transition_lock || fail "${_manual_op} test fixture acquires held scan-transition lock"
+    : > "$CALL_LOG"
+    WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" WIFI_SCAN_TRANSITION_LOCK_TIMEOUT=0 \
+        bash "$WIFI_SH" 0 "$_manual_op" 36 >/dev/null 2>&1
+    rc=$?
+    release_scan_transition_lock
+    if [ "$rc" -ne 0 ]; then
+        pass "wifi ${_manual_op} fails closed on held scan-transition lock"
+    else
+        fail "wifi ${_manual_op} must fail closed on held scan-transition lock"
+    fi
+    check_equal "wifi ${_manual_op} held lock starts no driver scan" \
+        "$(grep -Ec '^iw |^mlanutl ' "$CALL_LOG" || true)" "0"
+done
+
+# supplicant lifecycle도 scan/connect와 같은 transition gateway를 사용한다.
+for _lifecycle_op in restart start stop; do
+    hold_scan_transition_lock || fail "${_lifecycle_op} fixture acquires held transition lock"
+    : > "$CALL_LOG"
+    WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" WIFI_SCAN_TRANSITION_LOCK_TIMEOUT=0 \
+        ASSOC_TIMEOUT_DEFAULT=1 bash "$WIFI_SH" 0 "$_lifecycle_op" >/dev/null 2>&1
+    rc=$?
+    release_scan_transition_lock
+    if [ "$rc" -ne 0 ]; then
+        pass "wifi ${_lifecycle_op} fails closed on held transition lock"
+    else
+        fail "wifi ${_lifecycle_op} must fail closed on held transition lock"
+    fi
+    check_equal "wifi ${_lifecycle_op} held lock changes no service state" \
+        "$(grep -c '^systemctl ' "$CALL_LOG" || true)" "0"
+done
+
+for _lifecycle_op in restart start stop; do
+    set_abort_scan_mode ok-then-fail
+    set_status_mode base
+    : > "$CALL_LOG"
+    WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+        bash "$WIFI_SH" 0 "$_lifecycle_op" >/dev/null 2>&1
+    rc=$?
+    check_equal "wifi ${_lifecycle_op} serialized lifecycle succeeds" "$rc" "0"
+    check_equal "wifi ${_lifecycle_op} quiesces native scan" \
+        "$(grep -c 'abort_scan$' "$CALL_LOG" || true)" "2"
+done
+
+# FD7을 wpa_cli scan 요청이 반환한 뒤 획득했더라도 native scan은 비동기로 계속될 수
+# 있다. raw driver scan 전에 ABORT_SCAN이 OK→FAIL로 수렴할 때까지 quiesce해야 한다.
+for _manual_op in scan mscan; do
+    set_abort_scan_mode ok-then-fail
+    : > "$CALL_LOG"
+    WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
+        bash "$WIFI_SH" 0 "$_manual_op" 36 >/dev/null 2>&1
+    rc=$?
+    check_equal "wifi ${_manual_op} quiesces accepted native scan" "$rc" "0"
+    check_equal "wifi ${_manual_op} waits for ABORT_SCAN FAIL" \
+        "$(grep -c 'abort_scan$' "$CALL_LOG" || true)" "2"
+    _abort_line=$(grep -n 'abort_scan$' "$CALL_LOG" | tail -1 | cut -d: -f1)
+    _driver_line=$(grep -nE '^iw |^mlanutl ' "$CALL_LOG" | head -1 | cut -d: -f1)
+    if [ -n "$_abort_line" ] && [ -n "$_driver_line" ] && [ "$_abort_line" -lt "$_driver_line" ]; then
+        pass "wifi ${_manual_op} starts driver scan only after native quiescence"
+    else
+        fail "wifi ${_manual_op} must quiesce native scan before driver scan"
+    fi
+
+    set_abort_scan_mode always-ok
+    : > "$CALL_LOG"
+    WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
+        bash "$WIFI_SH" 0 "$_manual_op" 36 >/dev/null 2>&1
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        pass "wifi ${_manual_op} rejects non-quiescent native scan"
+    else
+        fail "wifi ${_manual_op} must reject non-quiescent native scan"
+    fi
+    check_equal "wifi ${_manual_op} non-quiescent path starts no driver scan" \
+        "$(grep -Ec '^iw |^mlanutl ' "$CALL_LOG" || true)" "0"
+done
 
 # Mode B and disconnected Mode A now use the same fresh-event transaction as
 # capture-id Mode A; a stale COMPLETED snapshot alone must never prove success.

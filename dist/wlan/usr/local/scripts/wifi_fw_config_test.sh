@@ -6,7 +6,9 @@ LIB="$SCRIPT_DIR/wifi_fw_config_lib.sh"
 WIFI_INIT="$SCRIPT_DIR/wifi_init.sh"
 WIFI_CLI="$SCRIPT_DIR/wifi.sh"
 WIFI_EVENT="$SCRIPT_DIR/wifi_event.sh"
+WIFI_CHECKER="$SCRIPT_DIR/wifi_checker.sh"
 POSTINST="$SCRIPT_DIR/../../../DEBIAN/postinst"
+BOARD_CONFIG="$SCRIPT_DIR/wifi_board_config.sh"
 WIFI_INIT_UNIT="$SCRIPT_DIR/../../../etc/systemd/system/wifi_init.service"
 EMERGENCY_UNIT="$SCRIPT_DIR/../../../etc/systemd/system/wlan_emergency_reboot.service"
 TEMPLATE="$SCRIPT_DIR/../../../opt/wlan/config/wifi_init_conf.json"
@@ -119,6 +121,13 @@ printf '%s\n' "$*" >> "$STATE/wpa_calls"
 exit 0
 EOF
 chmod +x "$WIFI_WPA_CLI"
+export WIFI_COMMAND="$WORK/wifi"
+cat > "$WIFI_COMMAND" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "$STATE/wifi_calls"
+exit 0
+EOF
+chmod +x "$WIFI_COMMAND"
 export WIFI_MCS_VERIFY_DELAY_SEC=0
 export WIFI_MCS_VERIFY_ATTEMPTS=3
 export WIFI_MCS_PENDING_DIR="$WORK/pending"
@@ -244,9 +253,57 @@ wifi_fw_migrate_product_antcfg_json "$WORK/migrated-antcfg-off.json" \
 expect_eq "product antcfg migration is idempotent" \
     "$(jq -S -c . "$WORK/migrated-antcfg-off.json" 2>/dev/null)" \
     "$(jq -S -c . "$WORK/migrated-antcfg-twice.json" 2>/dev/null)"
-grep -q 'migrate_product_antcfg /usr/local/etc/wifi_init_conf.json || exit 1' "$POSTINST" \
-    && pass "postinst migrates product antcfg after merge" \
-    || fail "postinst does not migrate product antcfg after merge"
+
+# p149.115/antcfgnss 계약은 현재 imx93 543.p18 조합에만 qualification 됐다.
+# imx8의 505.p14 utility는 user_htstream GET ABI가 없으므로 legacy disabled나
+# 중간 후보 패키지가 주입한 exact product profile을 엄격 verify로 승격하면 안 된다.
+wifi_fw_migrate_product_antcfg_json "$WORK/legacy-antcfg-off.json" imx8mm \
+    > "$WORK/migrated-antcfg-imx8.json" 2>/dev/null
+expect_eq "imx8 legacy disabled antcfg remains disabled" \
+    'false   false' \
+    "$(jq -r '.mlan0.antcfg | "\(.enabled) \(.tx) \(.rx) \(.verify != null)"' \
+        "$WORK/migrated-antcfg-imx8.json" 2>/dev/null)"
+
+wifi_fw_migrate_product_antcfg_json "$TEMPLATE" imx8mm \
+    > "$WORK/migrated-product-antcfg-imx8.json" 2>/dev/null
+expect_eq "imx8 candidate upgrade neutralizes injected strict product profile" \
+    'false   false' \
+    "$(jq -r '.mlan0.antcfg | "\(.enabled) \(.tx) \(.rx) \(.verify != null)"' \
+        "$WORK/migrated-product-antcfg-imx8.json" 2>/dev/null)"
+
+cp "$TEMPLATE" "$WORK/board-imx8.json"
+if "$BOARD_CONFIG" "$WORK/board-imx8.json" >/dev/null 2>&1; then
+    pass "imx8 board config succeeds on package template"
+else
+    fail "imx8 board config succeeds on package template"
+fi
+expect_eq "imx8 board config removes unsupported strict antcfg profile" \
+    'false   false' \
+    "$(jq -r '.mlan0.antcfg | "\(.enabled) \(.tx) \(.rx) \(.verify != null)"' \
+        "$WORK/board-imx8.json" 2>/dev/null)"
+
+expect_rc "imx93 product scan profile accepts shipped defaults" 0 \
+    wifi_fw_validate_product_scan_profile "$TEMPLATE" imx93
+jq '.mlan0.antcfg.enabled=false' "$TEMPLATE" > "$WORK/unsafe-antcfg.json"
+expect_rc "imx93 product scan profile rejects disabled antcfg" 1 \
+    wifi_fw_validate_product_scan_profile "$WORK/unsafe-antcfg.json" imx93
+jq '.mlan0.mcs_tier.he="both 9"' "$TEMPLATE" > "$WORK/unsafe-mcs.json"
+expect_rc "imx93 product scan profile rejects MCS above 7" 1 \
+    wifi_fw_validate_product_scan_profile "$WORK/unsafe-mcs.json" imx93
+jq '.mlan1.antcfg.enabled=true' "$TEMPLATE" > "$WORK/unsafe-mlan1-antcfg.json"
+expect_rc "imx93 product scan profile rejects adapter overwrite from mlan1" 1 \
+    wifi_fw_validate_product_scan_profile "$WORK/unsafe-mlan1-antcfg.json" imx93
+expect_rc "imx93 variant board name cannot bypass product scan profile" 1 \
+    wifi_fw_validate_product_scan_profile "$WORK/unsafe-antcfg.json" imx93-revA
+expect_rc "imx8 skips imx93-only product scan profile" 0 \
+    wifi_fw_validate_product_scan_profile "$WORK/custom-antcfg.json" imx8mm
+
+grep -q 'migrate_product_antcfg /usr/local/etc/wifi_init_conf.json "$BOARD_TYPE" || exit 1' "$POSTINST" \
+    && pass "postinst gates product antcfg migration by detected board" \
+    || fail "postinst does not gate product antcfg migration by detected board"
+grep -q 'wifi_fw_validate_product_scan_profile "$WIFI_INIT_CONF_JSON" "$BOARD_TYPE"' "$WIFI_INIT" \
+    && pass "wifi_init enforces board-qualified product scan profile" \
+    || fail "wifi_init does not enforce board-qualified product scan profile"
 
 expect_rc "static rate config valid" 0 wifi_fw_validate_rate_config "$CONF" mlan0
 expect_rc "dynamic rate config valid" 0 wifi_fw_validate_rate_config "$CONF" mlan1
@@ -497,14 +554,18 @@ export MCS_CONNECTED_SET_RECOVERS=1
 connected_recovery_set_count=$(cat "$STATE/mlan0.mcs_set_count")
 expect_rc "connected default HE schedules bounded recovery" 0 wifi_fw_verify_mcs_connected "$CONF" mlan0
 expect_eq "connected recovery SET runs exactly once" "$((connected_recovery_set_count + 1))" "$(cat "$STATE/mlan0.mcs_set_count")"
-expect_eq "connected recovery requests one reassociation" '-i mlan0 reassociate' "$(cat "$STATE/wpa_calls")"
+expect_eq "connected recovery uses serialized wifi connect wrapper" 'mlan0 connect' \
+    "$(cat "$STATE/wifi_calls")"
+expect_eq "connected recovery bypasses no transition lock with direct wpa_cli" 0 \
+    "$(cat "$STATE/wpa_calls" 2>/dev/null | wc -l)"
 expect_eq "reassociation keeps verification pending" yes \
     "$([ -e "$WIFI_MCS_PENDING_DIR/mcs_verify_pending_mlan0" ] && echo yes || echo no)"
 expect_eq "reassociation attempt marker is present" yes \
     "$([ -e "$WIFI_MCS_PENDING_DIR/mcs_reassociate_once_mlan0" ] && echo yes || echo no)"
 expect_rc "post-reassociation GET verifies stored MCS" 0 wifi_fw_verify_mcs_connected "$CONF" mlan0
 expect_eq "post-reassociation verification performs no extra SET" "$((connected_recovery_set_count + 1))" "$(cat "$STATE/mlan0.mcs_set_count")"
-expect_eq "post-reassociation verification performs no extra reassociate" 1 "$(wc -l < "$STATE/wpa_calls")"
+expect_eq "post-reassociation verification performs no extra wifi connect" 1 \
+    "$(wc -l < "$STATE/wifi_calls")"
 expect_eq "post-reassociation verification clears pending" no \
     "$([ -e "$WIFI_MCS_PENDING_DIR/mcs_verify_pending_mlan0" ] && echo yes || echo no)"
 expect_eq "post-reassociation verification clears attempt marker" no \
@@ -544,6 +605,15 @@ grep -q 'wifi_fw_config_lib.sh' "$WIFI_EVENT" \
 grep -q 'wifi_fw_verify_mcs_connected' "$WIFI_EVENT" \
     && pass "wifi_event verifies deferred MCS after connection" \
     || fail "wifi_event does not verify deferred MCS after connection"
+if grep -Eq 'wpa_cli[^\n]*reassociate' "$WIFI_CHECKER"; then
+    fail "wifi_checker bypasses transition lock with direct reassociate"
+elif [ "$(grep -c 'wifi "\$IFACE" connect' "$WIFI_CHECKER" || true)" -eq 2 ]; then
+    pass "wifi_checker routes both lightweight recovery paths through wifi connect"
+else
+    fail "wifi_checker does not route both lightweight recovery paths through wifi connect"
+fi
+expect_eq "wifi_checker routes both heavy recovery paths through serialized wifi restart" 2 \
+    "$(grep -Ec 'wifi "?\$IFACE"? restart' "$WIFI_CHECKER" || true)"
 if grep -q '^apply_mcs_tier()' "$WIFI_INIT"; then fail "legacy unverified MCS apply remains"; else pass "legacy unverified MCS apply removed"; fi
 expect_eq "mlan1 HE template is empty" '' "$(jq -r '.mlan1.mcs_tier.he' "$TEMPLATE")"
 if grep -q 'Applied live.*reconnect to take effect' "$WIFI_CLI"; then

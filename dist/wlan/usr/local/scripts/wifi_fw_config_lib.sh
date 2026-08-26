@@ -3,6 +3,7 @@
 
 : "${WIFI_MLANUTL:=mlanutl}"
 : "${WIFI_WPA_CLI:=wpa_cli}"
+: "${WIFI_COMMAND:=/usr/local/bin/wifi}"
 : "${WIFI_FW_LOGGER:=logger}"
 : "${WIFI_MCS_VERIFY_ATTEMPTS:=5}"
 : "${WIFI_MCS_VERIFY_DELAY_SEC:=1}"
@@ -76,8 +77,8 @@ wifi_fw_normalize_legacy_mcs_json() {
 # 1x1 값이 남는다. 알려진 제품 이력과 이미 선택된 새 요청만 승격하고, 그 밖의 명시적
 # 운영자 안테나 설정은 보존한다.
 wifi_fw_migrate_product_antcfg_json() {
-    local json="$1"
-    jq '
+    local json="$1" board_type="${2:-imx93}"
+    jq --arg board "$board_type" '
         def one_of($values): . as $v | ($values | index($v)) != null;
         def is_legacy_disabled($a):
             ($a.enabled == false and ($a.tx // "") == "" and ($a.rx // "") == "");
@@ -100,20 +101,32 @@ wifi_fw_migrate_product_antcfg_json() {
              and ($v.physical_rx // "") == ""
              and ($v.user_htstream // "") == "");
         (.mlan0.antcfg // {}) as $a
-        | if is_legacy_disabled($a) or is_legacy_physical_1x1($a) or is_product_request($a)
-          then .mlan0.antcfg = ($a + {
-              enabled: true,
-              tx: "0x0303",
-              rx: "0x0101",
-              verify: {
-                  physical_tx: "0x0303",
-                  physical_rx: "0x0303",
-                  user_htstream: "0x2121"
-              }
-          })
-          elif is_product_verify($a.verify)
-          then .mlan0.antcfg |= del(.verify)
-          else .
+        | if $board == "imx93" then
+            if is_legacy_disabled($a) or is_legacy_physical_1x1($a) or is_product_request($a)
+            then .mlan0.antcfg = ($a + {
+                enabled: true,
+                tx: "0x0303",
+                rx: "0x0101",
+                verify: {
+                    physical_tx: "0x0303",
+                    physical_rx: "0x0303",
+                    user_htstream: "0x2121"
+                }
+            })
+            elif is_product_verify($a.verify)
+            then .mlan0.antcfg |= del(.verify)
+            else .
+            end
+          else
+            # 505.p14/imx8 utility에는 antcfgnss(user_htstream) GET ABI가 없다.
+            # 후보 패키지가 주입한 exact 제품 profile만 안전하게 중화하고, 기존 custom
+            # SET(log-only)은 보존한다. deep merge로 verify만 주입된 경우도 제거한다.
+            if is_product_request($a) and is_product_verify($a.verify)
+            then .mlan0.antcfg = (($a + {enabled:false, tx:"", rx:""}) | del(.verify))
+            elif is_product_verify($a.verify)
+            then .mlan0.antcfg |= del(.verify)
+            else .
+            end
           end
         | (.mlan1.antcfg // {}) as $b
         | if is_empty_verify($b.verify)
@@ -121,6 +134,28 @@ wifi_fw_migrate_product_antcfg_json() {
           else .
           end
     ' "$json"
+}
+
+# p149.115 scan wedge 회피 profile은 imx93/543 계열에서 association 전에 지켜야 하는
+# 제품 안전 불변식이다. generic JSON 노브가 physical Tx/Rx 동시 1-path를 다시 만들거나
+# mlan1의 adapter-level antcfg가 뒤에서 덮어쓰지 못하게 부팅을 fail-closed 한다.
+# imx8/505 계열은 이 ABI로 qualification되지 않았으므로 적용 대상이 아니다.
+wifi_fw_validate_product_scan_profile() {
+    local json="$1" board_type="${2:-imx93}"
+    case "$board_type" in imx93*) ;; *) return 0 ;; esac
+    jq -e '
+        .mlan0.antcfg.enabled == true
+        and .mlan0.antcfg.tx == "0x0303"
+        and .mlan0.antcfg.rx == "0x0101"
+        and .mlan0.antcfg.verify.physical_tx == "0x0303"
+        and .mlan0.antcfg.verify.physical_rx == "0x0303"
+        and .mlan0.antcfg.verify.user_htstream == "0x2121"
+        and .mlan0.mcs_tier.enabled == true
+        and .mlan0.mcs_tier.ht == "7"
+        and .mlan0.mcs_tier.vht == "7"
+        and .mlan0.mcs_tier.he == "both 7"
+        and (.mlan1.antcfg.enabled != true)
+    ' "$json" >/dev/null 2>&1
 }
 
 # 안테나 경로 비트맵 유효성 — 10진 또는 0x 16진, 1..0xFFFF.
@@ -588,8 +623,10 @@ wifi_fw_apply_mcs_verified() {
 }
 
 # Deferred marker가 있을 때만 연결 후 확인한다. GET이 맞으면 종료하고, 첫 association이
-# FW 기본값으로 되돌린 경우 connected SET으로 다음 association 값을 저장한 뒤 한 번만
-# reassociate한다. 실패는 wifi_init/reboot로 전파하지 않고 링크와 pending을 보존한다.
+# FW 기본값으로 되돌린 경우 connected SET으로 다음 association 값을 저장한다. 실제
+# association 변경은 MCS lock을 푼 outer 함수가 transition lock+fresh proof를 소유하는
+# `wifi <iface> connect`로 한 번만 수행한다. 실패는 wifi_init/reboot로 전파하지 않고
+# 링크와 pending을 보존한다.
 _wifi_fw_verify_mcs_connected_locked() {
     local json="$1" iface="$2" standard ht vht he mcs_get ax_get="" validation_rc
     local -a args
@@ -624,7 +661,7 @@ _wifi_fw_verify_mcs_connected_locked() {
 
     # 실제 로드된 SDIO p149.115 실기에서는 첫 association이 pre-association HE tier를 FW 기본값으로
     # 되돌린다. connected SET은 현재 링크를 끊지 않고 다음 association capability를
-    # 저장하므로, 한 번 SET 검증 후 wpa_supplicant reassociate를 요청한다. attempt marker는
+    # 저장하므로, 한 번 SET 검증 후 outer 함수에 serialized reconnect를 요청한다. attempt marker는
     # 이벤트 중복/실패 시 재연결 루프를 막고 다음 CONNECTED GET 성공 때 pending과 함께 지운다.
     if wifi_fw_mcs_reassociate_attempted "$iface"; then
         wifi_fw_log local0.err "[$iface] deferred mcstiercfg still mismatched after one-time reassociation; link preserved"
@@ -654,13 +691,8 @@ _wifi_fw_verify_mcs_connected_locked() {
         wifi_fw_log local0.err "[$iface] cannot persist one-time MCS reassociation marker; link preserved"
         return 1
     fi
-    if ! "$WIFI_WPA_CLI" -i "$iface" reassociate >/dev/null 2>&1; then
-        wifi_fw_mcs_clear_reassociate "$iface" 2>/dev/null || true
-        wifi_fw_log local0.err "[$iface] one-time MCS reassociation request failed; pending retained"
-        return 1
-    fi
-    wifi_fw_log local0.info "[$iface] connected MCS tier staged; one-time reassociation requested, pending GET verification"
-    return 0
+    wifi_fw_log local0.info "[$iface] connected MCS tier staged; serialized reconnect required, pending GET verification"
+    return 10
 }
 
 wifi_fw_verify_mcs_connected() {
@@ -674,10 +706,25 @@ wifi_fw_verify_mcs_connected() {
         exec {lock_fd}>&-
         return 0
     fi
-    _wifi_fw_verify_mcs_connected_locked "$json" "$iface"
-    rc=$?
+    if _wifi_fw_verify_mcs_connected_locked "$json" "$iface"; then
+        rc=0
+    else
+        rc=$?
+    fi
     flock -u "$lock_fd" 2>/dev/null || true
     exec {lock_fd}>&-
+    if [ "$rc" -eq 10 ]; then
+        # wifi connect 내부가 conf(FD9) -> transition(FD7), ABORT_SCAN quiesce,
+        # fresh CONNECTED+status proof를 일괄 소유한다. MCS lock을 먼저 해제했으므로
+        # CONNECTED event의 후속 GET verifier와 교착하지 않는다.
+        if "$WIFI_COMMAND" "$iface" connect >/dev/null 2>&1; then
+            wifi_fw_log local0.info "[$iface] one-time MCS reconnect completed through serialized wifi command"
+            return 0
+        fi
+        wifi_fw_mcs_clear_reassociate "$iface" 2>/dev/null || true
+        wifi_fw_log local0.err "[$iface] one-time serialized MCS reconnect failed; pending retained"
+        return 1
+    fi
     return "$rc"
 }
 

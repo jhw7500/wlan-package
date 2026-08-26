@@ -5,9 +5,11 @@ import re
 import sys
 import subprocess
 import time
+from contextlib import nullcontext
 from datetime import datetime
 
 from roam_notify import notify_roam, get_associated_bssid, confirm_roam
+from roam_state import scan_transition_lock
 from roam_policy import (
     RoamPolicyError,
     load_boot_roam_policy,
@@ -27,6 +29,29 @@ SCAN_TIMESTAMP_RE = re.compile(
 # ap.log 마지막 블록의 허용 age 상한(bgscan 기본 주기 60s 의 2.5배). scan 로거가 죽으면
 # 마지막 블록이 무기한 재사용되므로, 이보다 오래된 블록은 stale 로 거부한다(설정 노브 아님).
 SCAN_BLOCK_MAX_AGE_SEC = 150
+
+
+def abort_scan_quiesce(iface):
+    """ABORT_SCAN이 plain FAIL(진행 scan 없음)로 수렴할 때만 안전하다고 판정."""
+    for attempt in range(1, 6):
+        try:
+            result = subprocess.run(
+                ["wpa_cli", "-i", iface, "abort_scan"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False
+        if result.returncode != 0:
+            return False
+        reply = (result.stdout or "").strip()
+        if reply == "FAIL":
+            return True
+        if reply != "OK" or attempt == 5:
+            return False
+        time.sleep(0.05)
+    return False
 
 
 def scan_block_max_age_sec(iface=WIFI_IFACE, conf_path=WIFI_INIT_CONF_JSON):
@@ -257,46 +282,59 @@ def roam_to_ap(interface, ap, index_label=None, current_ssid=None, mode_a=False)
     # 재결합 후 비동기로 갱신되므로, roam 이후 호출하면 이미 새 AP를 반환해 from==to가
     # 된다. LINK_JSON을 명시 전달 — 기본인자는 def 시점 값(mlan0)으로 고정되어
     # --iface 변경(모듈변수 갱신)을 반영하지 못한다.
-    from_bssid = read_current_bssid(LINK_JSON)
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        stdout = result.stdout.strip() if result.stdout else ""
-        stderr = result.stderr.strip() if result.stderr else ""
-        print(f"\noutput: {stdout} {stderr}".rstrip())
+    # cross-SSID는 wifi connect가 conf(FD9) -> transition(FD7) 순서로 자체 잠금을
+    # 소유한다. 여기서 먼저 FD7을 잡으면 자식이 같은 잠금을 다시 얻지 못하므로 중첩하지
+    # 않는다. 직접 wpa_cli roam을 수행하는 same-SSID 경로만 공용 transition 잠금을
+    # 획득해 bgscan/manual scan/connect와 association 변경을 직렬화한다.
+    lock = nullcontext(True) if cross_ssid else scan_transition_lock(interface)
+    with lock as acquired:
+        if not acquired:
+            print(f"scan/association transition busy for {interface}; roam not started")
+            return 1
+        if not cross_ssid and not abort_scan_quiesce(interface):
+            print(f"native scan did not quiesce for {interface}; roam not started")
+            return 1
 
-        if cross_ssid:
-            # cross-SSID(wifi connect 래퍼): 래퍼 exit code가 성공 계약. 펌웨어가 BSS를
-            # 자율 선택하므로 wpa_cli status(권위)로 실 결합 BSS를 조회해 통지 — link.json은
-            # 비동기 갱신이라 직후엔 이전 AP가 남을 수 있다. 실패 시 "" → link.address
-            # 폴백(종전 동작), 무회귀.
-            print(f"ROAM_RESULT: {bssid} ch:{ap['ch']} rssi:{ap['ss']} -> {stdout or stderr or 'unknown'}")
-            if result.returncode == 0:
-                notify_roam(interface, from_bssid, get_associated_bssid(interface))
-            return result.returncode
+        from_bssid = read_current_bssid(LINK_JSON)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            stdout = result.stdout.strip() if result.stdout else ""
+            stderr = result.stderr.strip() if result.stderr else ""
+            print(f"\noutput: {stdout} {stderr}".rstrip())
 
-        # same-SSID(wpa_cli roam): wpa_cli는 supplicant가 "FAIL"을 응답해도 exit 0을 주므로
-        # returncode가 아니라 응답 텍스트로 '수락(OK)'을 판정하고, 이후 wpa_cli status를
-        # 폴링해 재결합 완료(COMPLETED@target)를 확인한 경우에만 성공으로 본다.
-        accepted = result.returncode == 0 and stdout.split("\n", 1)[0].strip() == "OK"
-        confirmed = accepted and confirm_roam(interface, bssid)
-        note = "confirmed" if confirmed else ("not confirmed" if accepted else "rejected")
-        # 한줄 요약 (wifi_periodic_roam.sh에서 grep "ROAM_RESULT"로 추출)
-        print(f"ROAM_RESULT: {bssid} ch:{ap['ch']} rssi:{ap['ss']} -> {stdout or stderr or 'unknown'} ({note})")
-        if confirmed:
-            # 재결합 확인된 경우에만 통지 — bssid=목표 BSS, ch/rssi=스캔 권위값.
-            notify_roam(interface, from_bssid, bssid, channel=ap["ch"], rssi=ap["ss"])
-        return 0 if confirmed else 1
-    except subprocess.TimeoutExpired:
-        print(f"ROAM_RESULT: {bssid} ch:{ap['ch']} rssi:{ap['ss']} -> timeout")
-        # timeout이어도 로밍이 뒤늦게 성공했을 수 있다(설계 §8.1 미세갭): 실 결합 BSS가
-        # from과 다르면 통지. 조회 실패("")나 미변경이면 통지 생략 — 오발행 없음.
-        cur = get_associated_bssid(interface)
-        if cur and cur.lower() != (from_bssid or "").lower():
-            notify_roam(interface, from_bssid, cur)
-        return 1
-    except FileNotFoundError:
-        print("roam command not found.")
-        return 1
+            if cross_ssid:
+                # cross-SSID(wifi connect 래퍼): 래퍼 exit code가 성공 계약. 펌웨어가 BSS를
+                # 자율 선택하므로 wpa_cli status(권위)로 실 결합 BSS를 조회해 통지 — link.json은
+                # 비동기 갱신이라 직후엔 이전 AP가 남을 수 있다. 실패 시 "" → link.address
+                # 폴백(종전 동작), 무회귀.
+                print(f"ROAM_RESULT: {bssid} ch:{ap['ch']} rssi:{ap['ss']} -> {stdout or stderr or 'unknown'}")
+                if result.returncode == 0:
+                    notify_roam(interface, from_bssid, get_associated_bssid(interface))
+                return result.returncode
+
+            # same-SSID(wpa_cli roam): wpa_cli는 supplicant가 "FAIL"을 응답해도 exit 0을 주므로
+            # returncode가 아니라 응답 텍스트로 '수락(OK)'을 판정하고, 이후 wpa_cli status를
+            # 폴링해 재결합 완료(COMPLETED@target)를 확인한 경우에만 성공으로 본다.
+            accepted = result.returncode == 0 and stdout.split("\n", 1)[0].strip() == "OK"
+            confirmed = accepted and confirm_roam(interface, bssid)
+            note = "confirmed" if confirmed else ("not confirmed" if accepted else "rejected")
+            # 한줄 요약 (wifi_periodic_roam.sh에서 grep "ROAM_RESULT"로 추출)
+            print(f"ROAM_RESULT: {bssid} ch:{ap['ch']} rssi:{ap['ss']} -> {stdout or stderr or 'unknown'} ({note})")
+            if confirmed:
+                # 재결합 확인된 경우에만 통지 — bssid=목표 BSS, ch/rssi=스캔 권위값.
+                notify_roam(interface, from_bssid, bssid, channel=ap["ch"], rssi=ap["ss"])
+            return 0 if confirmed else 1
+        except subprocess.TimeoutExpired:
+            print(f"ROAM_RESULT: {bssid} ch:{ap['ch']} rssi:{ap['ss']} -> timeout")
+            # timeout이어도 로밍이 뒤늦게 성공했을 수 있다(설계 §8.1 미세갭): 실 결합 BSS가
+            # from과 다르면 통지. 조회 실패("")나 미변경이면 통지 생략 — 오발행 없음.
+            cur = get_associated_bssid(interface)
+            if cur and cur.lower() != (from_bssid or "").lower():
+                notify_roam(interface, from_bssid, cur)
+            return 1
+        except FileNotFoundError:
+            print("roam command not found.")
+            return 1
 
 
 def roam_to_best_non_current(interface, candidates, current_ssid=None, mode_a=False):
