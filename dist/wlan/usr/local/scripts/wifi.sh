@@ -429,6 +429,23 @@ wpa_cli_ok() {
     [ "$reply" = "OK" ]
 }
 
+# service start/restart 뒤 process active만으로 association 완료를 주장하지 않는다.
+# 새 supplicant 인스턴스의 COMPLETED를 bounded polling하고 그동안 parent가 FD7을 유지한다.
+wifi_wpa_wait_completed_under_transition() {
+    local iface="$1" polls reply line state="" i
+    polls=$((ASSOC_TIMEOUT_DEFAULT * 10))
+    for ((i = 1; i <= polls; i++)); do
+        reply=$(wifi_wpa_child_exec wpa_cli -i "$iface" status 2>/dev/null) || reply=""
+        state=""
+        while IFS= read -r line; do
+            case "$line" in wpa_state=*) state=${line#wpa_state=} ;; esac
+        done <<< "$reply"
+        [ "$state" = COMPLETED ] && return 0
+        [ "$i" -lt "$polls" ] && wifi_wpa_run_child sleep 0.1
+    done
+    return 1
+}
+
 # Store a live process's /proc start-time token in the named caller variable.
 # This liveness path is shell-builtin only: the SIGKILL watchdog must never
 # wait behind a schedulable `cat`/`tr` child before it can enforce its cleanup
@@ -1989,18 +2006,42 @@ case "$2" in
     ;;
   restart)
     echo "restart WPA service for $IFACE..."
-    #systemctl restart wpa_supplicant@$IFACE
-    systemctl stop wpa_supplicant@$IFACE
-    sleep 1
-    systemctl start wpa_supplicant@$IFACE
+    wifi_scan_transition_lock_acquire "$IFACE" \
+        || { echo "Error: scan/association transition busy for $IFACE" >&2; exit 6; }
+    # 이미 accepted된 native scan은 먼저 취소한다. supplicant wedge로 quiesce가
+    # 불가능해도 heavy recovery 자체를 막지 않는다; FD7 아래 stop이 scan owner를 종료한다.
+    wifi_wpa_abort_scan_quiesce "$IFACE" \
+        || logger -p local0.warning "[$tag:$LINENO] [$IFACE] native scan did not quiesce before forced WPA restart"
+    wifi_wpa_run_child systemctl stop "wpa_supplicant@$IFACE" \
+        || { echo "Error: failed to stop WPA service for $IFACE" >&2; exit 7; }
+    wifi_wpa_run_child sleep 1
+    wifi_wpa_run_child systemctl start "wpa_supplicant@$IFACE" \
+        || { echo "Error: failed to start WPA service for $IFACE" >&2; exit 7; }
+    wifi_wpa_wait_completed_under_transition "$IFACE" \
+        || { echo "Error: WPA association not completed after restart for $IFACE" >&2; exit 8; }
+    exit 0
     ;;
   start | up)
     echo "Starting WPA service for $IFACE..."
-    systemctl start wpa_supplicant@$IFACE
+    wifi_scan_transition_lock_acquire "$IFACE" \
+        || { echo "Error: scan/association transition busy for $IFACE" >&2; exit 6; }
+    wifi_wpa_abort_scan_quiesce "$IFACE" \
+        || logger -p local0.warning "[$tag:$LINENO] [$IFACE] native scan quiesce unavailable before WPA start"
+    wifi_wpa_run_child systemctl start "wpa_supplicant@$IFACE" \
+        || { echo "Error: failed to start WPA service for $IFACE" >&2; exit 7; }
+    wifi_wpa_wait_completed_under_transition "$IFACE" \
+        || { echo "Error: WPA association not completed after start for $IFACE" >&2; exit 8; }
+    exit 0
     ;;
   stop | down)
     echo "Stopping WPA service for $IFACE..."
-    systemctl stop wpa_supplicant@$IFACE
+    wifi_scan_transition_lock_acquire "$IFACE" \
+        || { echo "Error: scan/association transition busy for $IFACE" >&2; exit 6; }
+    wifi_wpa_abort_scan_quiesce "$IFACE" \
+        || logger -p local0.warning "[$tag:$LINENO] [$IFACE] native scan did not quiesce before forced WPA stop"
+    wifi_wpa_run_child systemctl stop "wpa_supplicant@$IFACE" \
+        || { echo "Error: failed to stop WPA service for $IFACE" >&2; exit 7; }
+    exit 0
     ;;
   status)
     systemctl status wpa_supplicant@$IFACE
@@ -2857,6 +2898,12 @@ case "$2" in
             echo "Error: 2G/5G must be used alone (no other channel/freq args)" >&2; exit 1
         fi
         echo "scanning band $1 for $IFACE: $BAND_FREQS"
+        if ! wifi_scan_transition_lock_acquire "$IFACE"; then
+            echo "Error: scan/association transition busy for $IFACE" >&2; exit 6
+        fi
+        if ! wifi_wpa_abort_scan_quiesce "$IFACE"; then
+            echo "Error: native scan did not quiesce for $IFACE" >&2; exit 6
+        fi
         iw $IFACE scan freq $BAND_FREQS
         exit 0
     fi
@@ -2872,6 +2919,12 @@ case "$2" in
     [ ${#FREQS[@]} -eq 0 ] && { echo "configure freq not exist" >&2; exit 1; }
     FREQ_STR="${FREQS[*]}"
     echo "scanning freq_list $FREQ_STR for $IFACE"
+    if ! wifi_scan_transition_lock_acquire "$IFACE"; then
+        echo "Error: scan/association transition busy for $IFACE" >&2; exit 6
+    fi
+    if ! wifi_wpa_abort_scan_quiesce "$IFACE"; then
+        echo "Error: native scan did not quiesce for $IFACE" >&2; exit 6
+    fi
     iw $IFACE scan freq $FREQ_STR
     ;;
   mscan)
@@ -2910,6 +2963,12 @@ case "$2" in
         CHAN_STR="$(IFS=,; echo "${CHANS[*]}")"
     fi
     echo "mscan (setuserscan) chan=$CHAN_STR for $IFACE"
+    if ! wifi_scan_transition_lock_acquire "$IFACE"; then
+        echo "Error: scan/association transition busy for $IFACE" >&2; exit 6
+    fi
+    if ! wifi_wpa_abort_scan_quiesce "$IFACE"; then
+        echo "Error: native scan did not quiesce for $IFACE" >&2; exit 6
+    fi
     mlanutl "$IFACE" setuserscan chan="$CHAN_STR"
     echo "(results: wifi $NUM mscan get)"
     ;;
@@ -3273,6 +3332,17 @@ case "$2" in
             echo "Error: mlan1 does not support ax (11ax)" >&2
             exit 2
         fi
+    fi
+    # 이 지점부터 mlanutl snapshot/SET과 disconnect/reassociate를 수행한다. 외부
+    # bgscan/manual scan/connect와 같은 per-iface transition namespace를 획득해
+    # rollback·association 확인까지 프로세스 수명 동안 직렬화한다.
+    if ! wifi_scan_transition_lock_acquire "$IFACE"; then
+        echo "Error: scan/association transition busy for $IFACE" >&2
+        exit 6
+    fi
+    if ! wifi_wpa_abort_scan_quiesce "$IFACE"; then
+        echo "Error: native scan did not quiesce for $IFACE" >&2
+        exit 6
     fi
     # 실패 시 롤백용 적용 전 스냅샷
     SNAP_BAND=$(mlanutl "$IFACE" bandcfg 2>/dev/null | sed -n 's/.*Infra Band: \(0x[0-9a-fA-F]*\).*/\1/p' | head -1)

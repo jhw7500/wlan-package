@@ -359,12 +359,29 @@ def parse_bool(value):
     return bool(value)
 
 
-def _set_config_value(config: Dict[str, Any], key: str, raw_value: Any, caster) -> None:
-    if raw_value is None:
+_MISSING = object()
+
+
+def _set_config_value(
+    config: Dict[str, Any], key: str, raw_value: Any, caster, *, strict=False
+) -> None:
+    if raw_value is _MISSING:
         return
+    if raw_value is None:
+        if strict:
+            raise ValueError(f"{key} must not be null")
+        return
+    if strict and caster is parse_bool and not isinstance(raw_value, bool):
+        raise ValueError(f"{key} must be boolean, got {raw_value!r}")
+    if strict and caster is int and (
+        not isinstance(raw_value, int) or isinstance(raw_value, bool)
+    ):
+        raise ValueError(f"{key} must be integer, got {raw_value!r}")
     try:
         config[key] = caster(raw_value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
+        if strict:
+            raise ValueError(f"{key} has invalid value {raw_value!r}") from exc
         if "logger" in globals():
             logger.message(
                 "warn",
@@ -374,10 +391,38 @@ def _set_config_value(config: Dict[str, Any], key: str, raw_value: Any, caster) 
 
 
 def _apply_section_values(
-    config: Dict[str, Any], section: Dict[str, Any], mapping
+    config: Dict[str, Any], section: Dict[str, Any], mapping, *, strict=False
 ) -> None:
     for source_key, config_key, caster in mapping:
-        _set_config_value(config, config_key, section.get(source_key), caster)
+        _set_config_value(
+            config, config_key, section.get(source_key, _MISSING), caster, strict=strict
+        )
+
+
+_RUNTIME_NUMERIC_BOUNDS = {
+    # wifi_init_conf.schema.json의 wifi_roam.py 소비 필드와 같은 계약이다.
+    "DIFF_TH": (0, 30),
+    "CHECK_INTERVAL": (1, None),
+    "ROAM_CROSS_FAIL_RETRY_COUNT": (0, None),
+    "ROAM_NO_RESULT_FAST_COUNT": (1, None),
+    "TREND_WINDOW_SIZE": (1, None),
+    "TREND_HISTORY_MAX_AGE": (1, None),
+    "PING_PONG_WINDOW": (1, None),
+    "MAX_ROAMS_IN_WINDOW": (1, None),
+    "PING_PONG_DETECTION_TIME": (1, None),
+    "SCAN_NO_RESULT_SLEEP": (1, None),
+    "ROAM_SUCCESS_SLEEP": (1, None),
+}
+
+
+def _validate_runtime_numeric_bounds(config: Dict[str, Any]) -> None:
+    """SIGHUP에서는 schema 범위 위반을 commit 전에 전부 거부한다."""
+    for key, (minimum, maximum) in _RUNTIME_NUMERIC_BOUNDS.items():
+        value = config[key]
+        if minimum is not None and value < minimum:
+            raise ValueError(f"{key} must be >= {minimum}, got {value}")
+        if maximum is not None and value > maximum:
+            raise ValueError(f"{key} must be <= {maximum}, got {value}")
 
 
 def _apply_runtime_globals(config: Dict[str, Any]) -> None:
@@ -477,7 +522,9 @@ def load_roaming_config(iface, data=None):
         dict: 로밍 설정 dictionary
     """
     global EXTRA_SSIDS, GENERATE_NETWORK_BLOCKS
-    GENERATE_NETWORK_BLOCKS = False
+    strict_runtime_reload = data is not None
+    new_extra_ssids = []
+    new_generate_network_blocks = False
     config = {
         "ENABLE_PREDICTIVE_ROAM": DEFAULT_ENABLE_PREDICTIVE_ROAM,
         "PREDICTIVE_THRESHOLD_BOOST": DEFAULT_PREDICTIVE_THRESHOLD_BOOST,
@@ -512,7 +559,9 @@ def load_roaming_config(iface, data=None):
         if iface in data and "roaming" in data[iface]:
             roam_config = data[iface]["roaming"]
 
-            predictive = roam_config.get("PREDICTIVE_ROAM")
+            predictive = roam_config.get("PREDICTIVE_ROAM", _MISSING)
+            if strict_runtime_reload and predictive is not _MISSING and not isinstance(predictive, dict):
+                raise ValueError("PREDICTIVE_ROAM must be an object")
             if isinstance(predictive, dict):
                 _apply_section_values(
                     config,
@@ -522,10 +571,12 @@ def load_roaming_config(iface, data=None):
                         ("threshold_boost", "PREDICTIVE_THRESHOLD_BOOST", int),
                         ("trend_window_size", "TREND_WINDOW_SIZE", int),
                         ("trend_history_max_age", "TREND_HISTORY_MAX_AGE", int),
-                    ],
+                    ], strict=strict_runtime_reload,
                 )
 
-            ping_pong = roam_config.get("PING_PONG_PREVENTION")
+            ping_pong = roam_config.get("PING_PONG_PREVENTION", _MISSING)
+            if strict_runtime_reload and ping_pong is not _MISSING and not isinstance(ping_pong, dict):
+                raise ValueError("PING_PONG_PREVENTION must be an object")
             if isinstance(ping_pong, dict):
                 _apply_section_values(
                     config,
@@ -535,13 +586,15 @@ def load_roaming_config(iface, data=None):
                         ("window", "PING_PONG_WINDOW", int),
                         ("max_roams_in_window", "MAX_ROAMS_IN_WINDOW", int),
                         ("detection_time", "PING_PONG_DETECTION_TIME", int),
-                    ],
+                    ], strict=strict_runtime_reload,
                 )
 
             # 단일채널 home scan / 다중채널 direct active 파라미터.
             # enable=false면 종전 단일 액티브 스캔 경로로 회귀 — 현장에서 재배포 없이
             # 무회귀 폴백을 켤 수 있게 노출한다.
-            staged = roam_config.get("STAGED_SCAN")
+            staged = roam_config.get("STAGED_SCAN", _MISSING)
+            if strict_runtime_reload and staged is not _MISSING and not isinstance(staged, dict):
+                raise ValueError("STAGED_SCAN must be an object")
             if isinstance(staged, dict):
                 _apply_section_values(
                     config,
@@ -550,51 +603,69 @@ def load_roaming_config(iface, data=None):
                         ("enable", "ENABLE_STAGED_SCAN", parse_bool),
                         ("skip_redundant_active", "SKIP_REDUNDANT_ACTIVE_SCAN", parse_bool),
                         ("home_passive", "HOME_PASSIVE", parse_bool),
-                    ],
+                    ], strict=strict_runtime_reload,
                 )
 
             # good-signal 분기의 backoff streak 리셋 게이트(모듈 상단 주석 참조).
             # enable=false면 종전대로 무조건 리셋하는 현장 kill-switch.
-            gsg = roam_config.get("GOOD_SIGNAL_RESET_GATE")
+            gsg = roam_config.get("GOOD_SIGNAL_RESET_GATE", _MISSING)
+            if strict_runtime_reload and gsg is not _MISSING and not isinstance(gsg, dict):
+                raise ValueError("GOOD_SIGNAL_RESET_GATE must be an object")
             if isinstance(gsg, dict):
                 _apply_section_values(
                     config,
                     gsg,
                     [
                         ("enable", "ENABLE_GOOD_SIGNAL_GATE", parse_bool),
-                    ],
+                    ], strict=strict_runtime_reload,
                 )
 
             # use_signal_avg 옵션 처리
             _set_config_value(
                 config, "USE_SIGNAL_AVG",
-                roam_config.get("use_signal_avg"), parse_bool
+                roam_config.get("use_signal_avg", _MISSING), parse_bool,
+                strict=strict_runtime_reload,
             )
 
             # 다중 SSID 로밍: byte-exact UTF-8 identity 계약으로 검증한다.
             # 키 제거/null 시 이전 값이 stale로 남지 않도록 무조건 재대입.
             extra = roam_config.get("extra_ssids")
-            EXTRA_SSIDS = validate_ssid_list(extra) if isinstance(extra, list) else []
+            if strict_runtime_reload and "extra_ssids" in roam_config and not isinstance(extra, list):
+                raise ValueError("extra_ssids must be an array")
+            new_extra_ssids = validate_ssid_list(extra) if isinstance(extra, list) else []
 
             # 후보없음 backoff 파라미터(평탄 대문자 키). 양의 정수만 수용, 형식오류 시 기본값 유지.
             # ROAM_NO_RESULT_MAX_SLEEP 은 JSON 에서 읽지 않는다(상수 고정 — 감사 D2).
             _set_config_value(
                 config, "ROAM_CROSS_FAIL_RETRY_COUNT",
-                roam_config.get("ROAM_CROSS_FAIL_RETRY_COUNT"), int
+                roam_config.get("ROAM_CROSS_FAIL_RETRY_COUNT", _MISSING), int,
+                strict=strict_runtime_reload,
             )
 
             # 모드 결정자 generate_network_blocks 파싱 (bool만 수용, 기본 false).
             # 키 부재/형식오류 시 false로 수렴해 모드 B(단일 블록) 보장.
-            GENERATE_NETWORK_BLOCKS = parse_bool(
-                roam_config.get("generate_network_blocks", False)
-            )
+            generate_raw = roam_config.get("generate_network_blocks", False)
+            if strict_runtime_reload and not isinstance(generate_raw, bool):
+                raise ValueError("generate_network_blocks must be boolean")
+            new_generate_network_blocks = parse_bool(generate_raw)
 
-            # 설정 적용
-            for key in config.keys():
+            # legacy 평탄 키도 detached config에 type-aware로 적용한다. raw 값을 그대로
+            # 넣으면 strict reload가 _apply_runtime_globals의 per-key fallback에서 부분
+            # 적용되고, 부팅에서도 문자열이 전역으로 누출될 수 있다.
+            for key in list(config):
                 if key in roam_config:
-                    config[key] = roam_config[key]
+                    caster = parse_bool if isinstance(config[key], bool) else int
+                    _set_config_value(
+                        config, key, roam_config[key], caster,
+                        strict=strict_runtime_reload,
+                    )
+
+            if strict_runtime_reload:
+                _validate_runtime_numeric_bounds(config)
 
     except FileNotFoundError:
+        if strict_runtime_reload:
+            raise
         if "logger" in globals():
             logger.message(
                 "warn",
@@ -602,17 +673,25 @@ def load_roaming_config(iface, data=None):
                 _EXTRA_(),
             )
     except json.JSONDecodeError as e:
+        if strict_runtime_reload:
+            raise
         if "logger" in globals():
             logger.message(
                 "err", f"[{iface}] roaming config JSON decode error: {e}", _EXTRA_()
             )
     except Exception as e:
+        if strict_runtime_reload:
+            raise
         if "logger" in globals():
             logger.message(
                 "err", f"[{iface}] roaming config load error: {e}", _EXTRA_()
             )
 
+    # 파싱·identity 검증이 모두 끝난 뒤 한 번에 commit한다. 특히 extra_ssids의 뒤쪽
+    # 중복/형식 오류가 앞에서 읽은 수치 전역만 부분 적용하는 SIGHUP 상태를 만들면 안 된다.
     _apply_runtime_globals(config)
+    EXTRA_SSIDS = new_extra_ssids
+    GENERATE_NETWORK_BLOCKS = new_generate_network_blocks
 
     logger.message(
         "info",
@@ -1729,7 +1808,16 @@ def reload_roaming_config(iface):
     roam_cfg = new_data[iface]["roaming"]  # 구조 검증 통과 → dict 보장
     old_gen = GENERATE_NETWORK_BLOCKS
     old_extra = list(EXTRA_SSIDS)
-    load_roaming_config(iface, data=new_data)
+    try:
+        load_roaming_config(iface, data=new_data)
+    except Exception as e:
+        logger.message(
+            "warn",
+            f"[{iface}] runtime config reload skipped "
+            f"(semantic validation failed, keeping current): {e}",
+            _EXTRA_(),
+        )
+        return False
     # generate_network_blocks는 런타임 전환 금지(재부팅 전용). 키가 '명시적으로' 다른
     # 값으로 바뀐 경우에만 경고 — 키 부재로 인한 False 수렴은 조용히 복원(오탐 방지).
     # topology/extra는 모드와 무관하게 동일한 boot snapshot에 속한다. Mode B에서

@@ -1449,6 +1449,10 @@ if command -v systemctl >/dev/null 2>&1; then
     # 모듈 로드 + networkd가 mlan 인터페이스를 생성한 직후, association 전에 라디오 기본값 적용.
     # 그 외 자식 데몬은 ExecStartPost(/usr/local/scripts/wifi_services.sh)가 systemctl enable
     # 상태에 따라 일괄 start한다.
+    if ! wifi_fw_validate_product_scan_profile "$WIFI_INIT_CONF_JSON" "$BOARD_TYPE"; then
+        logger -p local0.err "[$tag:$LINENO] board-qualified product scan profile invalid for $BOARD_TYPE; refuse association"
+        exit 1
+    fi
     fw_config_failed=0
     apply_iface_radio_defaults "mlan0" "$MLAN0_ENABLED" || fw_config_failed=1
     apply_iface_radio_defaults "mlan1" "$MLAN1_ENABLED" || fw_config_failed=1

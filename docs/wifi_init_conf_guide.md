@@ -911,6 +911,8 @@ durable backup을 별도 staging으로 복사해 atomic rename하고 복원 파�
 > 필드에서 단계형 스캔이 문제를 일으키면 `enable: false` + SIGHUP(`systemctl kill --kill-who=main -s SIGHUP wifi_roam@mlan0`)으로 **재배포 없이 즉시 종전 동작으로 되돌릴 수 있다.**
 >
 > `skip_redundant_active`는 단일 채널 passive 모드에서만 사용된다. 홈 passive scan이 현재 AP 외 같은 SSID 후보를 실제로 관측했다면 active 재확인을 생략한다. `home_passive=false`와 다중 freq에서는 이미 directed active scan 1회로 완결되므로 이 옵션을 평가하지 않는다.
+>
+> **SIGHUP 원자성**: 데몬은 새 JSON을 분리된 설정으로 읽고 타입, schema 수치 범위, SSID identity를 모두 검증한 뒤 한 번에 반영한다. 어느 한 필드라도 잘못되면 전체 변경을 거부하고 기존 설정과 WPA conf mtime을 그대로 유지한다. 따라서 임시 저장 중인 JSON이나 `trend_window_size: 0` 같은 범위 위반이 다른 유효 필드만 부분 반영시키지 않는다.
 
 #### GOOD_SIGNAL_RESET_GATE - good-signal 리셋 게이트
 
@@ -973,8 +975,10 @@ durable backup을 별도 staging으로 복사해 atomic rename하고 복원 파�
 **사용 스크립트**: `wifi_init.sh` → `wifi_fw_config_lib.sh`
 
 association 전에 `mlanutl <iface> antcfg <tx> [rx]`로 FW의 Tx/Rx 경로를 지정한다.
-섹션 자체는 opt-in이지만, 현재 mlan0 제품 기본은 p149.115 scan-return TX wedge 회피를 위해
-`tx=0x0303`, `rx=0x0101`을 활성화한다. mlan1은 비활성 상태다.
+섹션 자체는 opt-in이다. **imx93/543 제품**의 mlan0 기본은 p149.115 scan-return TX wedge
+회피를 위해 `tx=0x0303`, `rx=0x0101`을 활성화하고 mlan1은 비활성 상태다. **imx8/505**는
+matching `antcfgnss` GET ABI로 qualification되지 않았으므로 `wifi_board_config.sh`가 이
+strict 제품 profile을 `enabled=false`, 빈 Tx/Rx, verify 없음으로 중화한다.
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
@@ -993,12 +997,22 @@ association 전에 `mlanutl <iface> antcfg <tx> [rx]`로 FW의 Tx/Rx 경로를 �
 릴리즈 preflight는 staging된 imx93 `mlanutl`에 이 조회용 `antcfgnss` ABI marker가 없으면
 패키징을 거부한다.
 
+imx93에서는 이 값만 개별 노브가 아니라 `mcs_tier enabled + HT/VHT/HE 7`, mlan1 antcfg
+비활성과 묶인 **제품 안전 불변식**이다. `wifi_init.sh`가 association 전에 전체 조합을
+검사하며 하나라도 바뀌면 supplicant를 시작하지 않는다. 따라서 WebUI는 imx93에서 이
+antcfg/MCS 제품값을 읽기 전용으로 표시해야 한다.
+
 업그레이드에서는 active JSON 우선 병합 때문에 템플릿 변경만으로 과거 값이 바뀌지 않는다.
 `postinst`가 병합 직후 과거 제품 기본 `enabled=false, tx="", rx=""`, 알려진 physical 1x1
 `0x0101`, 또는 이미 선택된 `0x0303/0x0101` 요청만 위 검증 계약으로 멱등 승격한다. 그 밖의
 명시적 안테나 경로 값은 운영자 설정으로 보고 보존한다. deep merge가 그런 커스텀 값에
 템플릿의 제품용 `verify`를 자동 주입한 경우에는 주입된 계약만 제거해 기존 log-only 동작을
 유지한다.
+
+이 마이그레이션은 **forward-only safety migration**이다. 새 패키지로 승격된 설정을 구
+패키지가 이해하는 값으로 자동 역변환하지 않는다. downgrade가 필요하면 해당 구 릴리스와
+함께 저장한 구 버전 설정/backup을 복원해야 한다. imx8 업그레이드와 factory reset은
+보드 감지 단계에서 위 strict imx93 profile만 중화하며, 별도 custom log-only antcfg는 보존한다.
 
 비트맵 해석 (9097/9098/IW624):
 
@@ -1087,8 +1101,10 @@ HE Tx/Rx가 `0x0000`으로만 보이는 경우가 확인됐다. 이 경우는 �
 먼저 GET을 확인한다. 값이 맞으면 pending을 지운다.
 
 p149.115 실기에서는 첫 association이 HE를 FW 기본 `0xFFFA`로 되돌렸다. 이 경우 connected SET으로
-다음 association capability를 저장하고 per-iface 1회 마커를 만든 뒤 `wpa_cli reassociate`를 한 번만
-요청한다. 다음 CONNECTED의 GET이 JSON 의도와 일치하면 pending과 마커를 지운다. SET이 보이지 않거나
+다음 association capability를 저장하고 per-iface 1회 마커를 만든 뒤 MCS lock을 해제하고
+`wifi <iface> connect`를 한 번만 요청한다. 이 wrapper가 scan-transition lock, scan quiesce,
+fresh association 증명을 함께 소유한다. 다음 CONNECTED의 GET이 JSON 의도와 일치하면 pending과
+마커를 지운다. SET이 보이지 않거나
 재association 뒤에도 불일치하면 반복 재연결하지 않고 링크·pending·오류를 보존한다. cold boot 실증에서
 이 과정 후 HE/VHT `0xFFF0`이 확정됐고, 동일 SSID BSSID roam에서도 추가 SET/reassociate 없이 유지됐다.
 AC 전용 mlan1은 이 deferred HE 경로와 `11axcfg` 검증 대상이 아니다.

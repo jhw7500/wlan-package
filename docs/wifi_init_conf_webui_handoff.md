@@ -54,6 +54,11 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `caution` | 고급/위험 — 하드웨어·안전·보안·재부팅 정책에 영향, 검증·경고 필요 |
 | `no` | 읽기전용/자동설정 — UI에서 편집 금지 |
 
+`x-ui-editable-by-board`가 있으면 현재 `global.BOARD_TYPE` 키의 값으로 해당 맵을 먼저
+적용한다. 키를 지원하지 않는 구 UI는 안전한 fallback인 `x-ui-editable`을 사용한다.
+현재 이 조건부 계약은 `mlan0.antcfg.{enabled,tx,rx}`와
+`mlan0.mcs_tier.{enabled,ht,vht,he}`에 적용되며 `imx93=no`, `imx8mm=caution`이다.
+
 ---
 
 ## 2. 최근 변경점 (웹 UI 반영 필요)
@@ -377,9 +382,9 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `net_rx` | MGMT 프레임 로깅 비트맵 | int | `0` | `0`\|`2`\|`3`\|`6`\|`7` (bit[1:0]=RX모드, bit[2]=TX로그) | caution | reboot | mod_para 블록 `net_rx=`. 로그는 커널 링버퍼→10초마다 flush |
 | `mgmt_hex_dump_enable` | MGMT hex dump 로깅 | bool | `false` | true\|false | caution | reboot | 디버그용. mod_para 블록 `mgmt_hex_dump=1/0` |
 | `thermal_mgmt` | FW 열관리 | bool | `true` | true\|false | caution | boot | FW thermal management(SUBID 0x113). 명시적 false만 disable |
-| `antcfg.enabled` | 안테나 경로 적용 | bool | `mlan0=true / mlan1=false` | true\|false | caution | boot | FW Tx/Rx path 적용 ON/OFF. mlan0 제품값은 p149.115 scan wedge 회피를 위해 활성화한다. **어댑터 단위 설정**이라 mlan0/mlan1에 서로 다른 값을 켜면 나중에 적용된 쪽이 이기며 경고 로그가 남는다. `global.ANT_TYPE`(GPIO mux)와는 별개 |
-| `antcfg.tx` | Tx 경로 비트맵 | string | `mlan0="0x0303" / mlan1=""` | 10진 또는 `0x` 16진, 1..0xFFFF (0 거부) | caution | boot | `rx`가 비면 Tx/Rx 공통. 9098은 LOW BYTE=2G / HIGH BYTE=5G, 각 바이트 bit0=path A·bit1=path B. 예 `0x303`=양 밴드 A+B, `0x103`=2G A+B + 5G A, `0x202`=양 밴드 path B. SAD 칩은 `0xFFFF`=다이버시티 |
-| `antcfg.rx` | Rx 경로 비트맵 | string | `mlan0="0x0101" / mlan1=""` | 빈값 또는 tx와 동일 범위 | caution | boot | 빈 문자열이면 인자를 생략해 `tx`가 Tx/Rx 양쪽에 적용된다. mlan0의 0x0101은 host Rx NSS1 의도이며 FW physical Rx GET은 0x0303으로 정규화된다 |
+| `antcfg.enabled` | 안테나 경로 적용 | bool | `mlan0=true / mlan1=false` | true\|false | imx93=no / imx8=caution | boot | 표의 기본값은 imx93 package template 기준. imx93 mlan0 제품값은 p149.115 scan wedge 회피 안전 불변식이라 편집 금지. **어댑터 단위 설정**이라 mlan1 enable도 imx93 부팅에서 거부된다. imx8은 strict verify profile을 보드 감지 시 중화한다. `global.ANT_TYPE`과는 별개 |
+| `antcfg.tx` | Tx 경로 비트맵 | string | `mlan0="0x0303" / mlan1=""` | 10진 또는 `0x` 16진, 1..0xFFFF (0 거부) | imx93=no / imx8=caution | boot | 표의 기본값은 imx93 template이며 imx8 strict profile은 빈값으로 중화된다. `rx`가 비면 Tx/Rx 공통. 9098은 LOW BYTE=2G / HIGH BYTE=5G, 각 바이트 bit0=path A·bit1=path B |
+| `antcfg.rx` | Rx 경로 비트맵 | string | `mlan0="0x0101" / mlan1=""` | 빈값 또는 tx와 동일 범위 | imx93=no / imx8=caution | boot | imx8 strict profile은 빈값으로 중화된다. imx93의 0x0101은 host Rx NSS1 의도이며 FW physical Rx GET은 0x0303으로 정규화된다 |
 | `antcfg.verify.physical_tx` | antcfg physical Tx 기대값 | string | `mlan0="0x0303" / mlan1=""` | 10진 또는 `0x` 16진, 1..0xFFFF | no | boot | SET 후 FW physical Tx GET 검증값. verify가 존재하면 세 verify 필드 모두 필수이며 UI 편집 금지 |
 | `antcfg.verify.physical_rx` | antcfg physical Rx 기대값 | string | `mlan0="0x0303" / mlan1=""` | 10진 또는 `0x` 16진, 1..0xFFFF | no | boot | p149.115의 비대칭 요청 정규화 결과를 검증한다 |
 | `antcfg.verify.user_htstream` | antcfg host NSS 기대값 | string | `mlan0="0x2121" / mlan1=""` | 10진 또는 `0x` 16진, 1..0xFFFF | no | boot | matching 543 mlanutl의 `antcfgnss` 조회 결과. 0x2121=양 밴드 Tx 2SS/Rx 1SS. 불일치·미지원이면 association 중단 |
@@ -394,6 +399,10 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 멱등 승격한다. 다른 명시적 Tx/Rx 조합은 사용자 커스텀으로 보존하며, deep merge가 거기에
 제품용 verify를 주입했으면 그 verify만 제거한다. verify 3개 필드는 제품 호환성 계약이므로
 WebUI에서 개별 편집하지 않는다.
+이 처리는 **forward-only safety migration**이며 downgrade 시 구 릴리스와 함께 저장한 구
+설정/backup을 복원해야 한다. imx93에서는 antcfg와 mlan0 MCS 7 조합 전체가 association 전
+불변식이므로 해당 필드들을 읽기 전용으로 표시한다. imx8에서는 strict imx93 profile을
+보드 설정 단계에서 비활성화하고 verify를 제거한다.
 
 #### 3.10.2 mlanN.logger (per-iface 로거)
 
@@ -468,16 +477,17 @@ WebUI에서 개별 편집하지 않는다.
 
 | 경로(`mlanN.mcs_tier.`) | 라벨 | 타입 | 기본값 (mlan0 / mlan1) | 허용값/범위 | UI편집 | 적용시점 | 설명 |
 |---|---|---|---|---|---|---|---|
-| `enabled` | MCS tier 제한 활성화 | bool | `true` | true\|false | caution | boot + link verify/reassociate | association 전 SET 후 GET 검증. mlan0 HE 0x0000은 연결 후 검증하고 FW 기본 복귀 시 SET+reassociate 1회 |
-| `ht` | MCS HT tier 값 | string | `7` | `"7"`\|`"15"` | caution | boot | 양쪽 iface 필수 |
-| `vht` | MCS VHT tier 값 | string | `7` | `"7"`\|`"8"`\|`"9"` | caution | boot | 양쪽 iface 필수 |
-| `he` | MCS HE tier 값 | string | `mlan0="both 7" / mlan1=""` | mlan0=`"both 7"`\|`"both 9"`\|`"both 11"`; mlan1=`""` | caution | boot | mlan0(ax)만 mcstiercfg+11axcfg 검증, mlan1(ac)은 HE 미지원 |
+| `enabled` | MCS tier 제한 활성화 | bool | `true` | true\|false | imx93 mlan0=no / 그 외 caution | boot + link verify/reconnect | association 전 SET 후 GET 검증. imx93 mlan0은 제품 안전 불변식으로 true 고정 |
+| `ht` | MCS HT tier 값 | string | `7` | `"7"`\|`"15"` | imx93 mlan0=no / 그 외 caution | boot | imx93 mlan0은 `"7"` 고정, 양쪽 iface 필수 |
+| `vht` | MCS VHT tier 값 | string | `7` | `"7"`\|`"8"`\|`"9"` | imx93 mlan0=no / 그 외 caution | boot | imx93 mlan0은 `"7"` 고정 |
+| `he` | MCS HE tier 값 | string | `mlan0="both 7" / mlan1=""` | mlan0=`"both 7"`\|`"both 9"`\|`"both 11"`; mlan1=`""` | imx93 mlan0=no / 그 외 caution | boot | imx93 mlan0은 `"both 7"` 고정. mlan1(ac)은 HE 미지원 |
 
 **비고 (mcs_tier)** — 소비: `wifi_init.sh`, `wifi_event.sh`, `wifi_apply_enabled.sh`, `wifi.sh`.
 `enabled=true`인데 필드가 partial/invalid이면 해당 MCS section을 경고 후 skip한다. HT/VHT 또는 명확한
 비영 HE 불일치는 supplicant 시작을 차단한다. 단, mlan0의 association 전 HE Tx/Rx가 모두 0x0000이면
 pending으로 기록한다. 첫 연결 GET이 FW 기본값이면 connected SET으로 다음 association 값을 저장하고
-reassociate를 한 번만 요청한다. 다음 CONNECTED 검증 성공 시 pending/1회 마커를 제거한다. 실패 시
+MCS lock 해제 뒤 `wifi <iface> connect`를 한 번만 요청한다. 이 경로는 scan-transition lock과 fresh
+association proof를 사용한다. 다음 CONNECTED 검증 성공 시 pending/1회 마커를 제거한다. 실패 시
 반복 재연결이나 reboot 없이 링크와 pending을 유지한다. CLI 수정은 다음 부팅에 적용된다.
 
 #### 3.10.6 mlanN.on_connect

@@ -8,6 +8,7 @@ import sys
 import os
 import json
 import subprocess
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -38,8 +39,15 @@ def _ap(ssid="Net", is_current=False):
 
 def _setup(monkeypatch):
     notify = MagicMock()
+
+    @contextmanager
+    def acquired_lock(_iface):
+        yield True
+
     monkeypatch.setattr(passive_roam, "notify_roam", notify)
     monkeypatch.setattr(passive_roam, "read_current_bssid", lambda *_a, **_k: FROM)
+    monkeypatch.setattr(passive_roam, "scan_transition_lock", acquired_lock)
+    monkeypatch.setattr(passive_roam, "abort_scan_quiesce", lambda _iface: True, raising=False)
     monkeypatch.setattr(roam_notify.time, "sleep", lambda *_: None)  # confirm 폴링 sleep
     return notify
 
@@ -81,6 +89,31 @@ def test_same_ssid_ok_and_confirmed_is_success(monkeypatch):
     args, kwargs = notify.call_args
     assert args[0] == IFACE and args[1] == FROM and args[2] == TARGET
     assert kwargs.get("channel") == 36 and kwargs.get("rssi") == -60
+
+
+def test_same_ssid_roam_fails_closed_when_transition_lock_is_busy(monkeypatch):
+    """수동 roam도 bgscan/connect와 같은 transition namespace를 사용한다."""
+    notify = _setup(monkeypatch)
+
+    @contextmanager
+    def denied_lock(_iface):
+        yield False
+
+    monkeypatch.setattr(passive_roam, "scan_transition_lock", denied_lock, raising=False)
+    with patch.object(passive_roam.subprocess, "run") as run:
+        assert roam_to_ap(IFACE, _ap(), current_ssid="Net") == 1
+    run.assert_not_called()
+    notify.assert_not_called()
+
+
+def test_same_ssid_roam_fails_closed_when_native_scan_cannot_quiesce(monkeypatch):
+    """FD7 획득 전에 시작된 wpa scan이 끝나지 않으면 roam을 발행하지 않는다."""
+    notify = _setup(monkeypatch)
+    monkeypatch.setattr(passive_roam, "abort_scan_quiesce", lambda _iface: False)
+    with patch.object(passive_roam.subprocess, "run") as run:
+        assert roam_to_ap(IFACE, _ap(), current_ssid="Net") == 1
+    run.assert_not_called()
+    notify.assert_not_called()
 
 
 def test_same_ssid_confirm_waits_for_target(monkeypatch):
