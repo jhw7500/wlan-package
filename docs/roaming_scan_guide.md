@@ -359,6 +359,8 @@ backoff 가 상한에 머물지 못하는 주 원인은 곡선이 아니라 **go
 > SIGHUP reload는 트랜잭션이다. JSON 타입, schema 수치 범위, SSID identity 중 하나라도 무효면 전체 변경을 거부하고 기존 런타임 값과 WPA conf mtime을 유지한다.
 >
 > 수동 `scan`/`mscan`, `radio-apply`, `connect`, `start`/`stop`/`restart`, 같은 SSID roam은 동일한 scan-transition lock으로 직렬화된다. live 전환 전 `ABORT_SCAN`이 `FAIL`을 반환할 때까지 bounded quiesce하여 wpa_supplicant의 비동기 native scan 완료가 뒤늦게 전환과 겹치지 않게 한다. supplicant 자체를 내리는 `stop`/`restart` 복구 경로는 quiesce를 얻지 못해도 lock을 유지한 채 종료를 계속한다.
+>
+> `start`/`up`은 lock 획득 뒤 service activity를 판정한다. already-active `start`/`up`은 scan/association을 변경하지 않고 0을 반환한다. active service의 연결 복구에는 `wifi <if> connect`(lightweight) 또는 `wifi <if> restart`(heavyweight)를 사용한다. inactive 경로만 bounded `ABORT_SCAN` quiescence, service start, bounded `COMPLETED` 확인을 수행하며 각각 transition busy=6, start 실패=7, association timeout=8을 반환한다.
 
 ---
 
