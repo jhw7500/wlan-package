@@ -5,6 +5,7 @@ set -u
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 WIFI_SH="$SCRIPT_DIR/wifi.sh"
 OPC_SH="$SCRIPT_DIR/opc_wlan_apply.sh"
+ROAM_GUIDE="$SCRIPT_DIR/../../../../../docs/roaming_scan_guide.md"
 TD=$(mktemp -d)
 trap 'rm -rf "$TD"' EXIT
 BIN="$TD/bin"
@@ -273,6 +274,12 @@ case "$*" in
           IFS= read -r _release < "$STATE_DIR/slow-status-release"
           state=DISCONNECTED
         fi ;;
+      disconnected)
+        state=DISCONNECTED
+        ssid=
+        id=
+        freq=
+        ;;
       no-current)
         if [ "$count" -eq 1 ]; then state=DISCONNECTED; ssid=; id=; freq=; fi ;;
       no-current-recover)
@@ -430,6 +437,10 @@ set_monitor_mode() {
 set_abort_scan_mode() {
     printf '%s\n' "$1" > "$STATE_DIR/abort-scan-mode"
     rm -f "$STATE_DIR/abort-scan-count"
+}
+
+set_wpa_service_state() {
+    printf '%s\n' "$1" > "$STATE_DIR/wpa-service-state"
 }
 
 prepare_held_child() {
@@ -2028,7 +2039,8 @@ for _lifecycle_op in restart start stop; do
         "$(grep -c '^systemctl ' "$CALL_LOG" || true)" "0"
 done
 
-for _lifecycle_op in restart start stop; do
+for _lifecycle_op in restart stop; do
+    set_wpa_service_state active
     set_abort_scan_mode ok-then-fail
     set_status_mode base
     : > "$CALL_LOG"
@@ -2039,6 +2051,101 @@ for _lifecycle_op in restart start stop; do
     check_equal "wifi ${_lifecycle_op} quiesces native scan" \
         "$(grep -c 'abort_scan$' "$CALL_LOG" || true)" "2"
 done
+
+# already-active start is an idempotent service no-op under FD7.  It neither
+# cancels an accepted scan nor probes/changes association, and always exits 0.
+set_wpa_service_state active
+set_abort_scan_mode always-ok
+set_status_mode base
+: > "$CALL_LOG"
+start_output=$(WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
+    ASSOC_TIMEOUT_DEFAULT=1 bash "$WIFI_SH" 0 start 2>&1)
+rc=$?
+check_equal "wifi start already-active COMPLETED exits zero" "$rc" "0"
+check_equal "wifi start already-active ignores ABORT_SCAN non-convergence" \
+    "$(grep -c 'abort_scan$' "$CALL_LOG" || true)" "0"
+check_equal "wifi start already-active starts no service" \
+    "$(grep -c '^systemctl start ' "$CALL_LOG" || true)" "0"
+check_equal "wifi start already-active probes no association" \
+    "$(grep -c ' status$' "$CALL_LOG" || true)" "0"
+case "$start_output" in
+    *"already active"*"scan/association unchanged"*)
+        pass "wifi start reports already-active no-op contract" ;;
+    *) fail "wifi start must report already-active no-op contract" ;;
+esac
+_lock_line=$(grep -nE '^flock -w 15 -x 7$' "$CALL_LOG" | head -1 | cut -d: -f1)
+_active_line=$(grep -nE '^systemctl is-active --quiet wpa_supplicant@mlan0$' "$CALL_LOG" | head -1 | cut -d: -f1)
+if [ -n "$_lock_line" ] && [ -n "$_active_line" ] \
+   && [ "$_lock_line" -lt "$_active_line" ]; then
+    pass "wifi start checks active state after transition lock"
+else
+    fail "wifi start must check active state after transition lock"
+fi
+
+set_wpa_service_state active
+set_abort_scan_mode always-ok
+set_status_mode disconnected
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 up >/dev/null 2>&1
+rc=$?
+check_equal "wifi up already-active disconnected exits zero" "$rc" "0"
+check_equal "wifi up already-active disconnected changes no scan state" \
+    "$(grep -c 'abort_scan$' "$CALL_LOG" || true)" "0"
+check_equal "wifi up already-active disconnected starts no service" \
+    "$(grep -c '^systemctl start ' "$CALL_LOG" || true)" "0"
+check_equal "wifi up already-active disconnected probes no association" \
+    "$(grep -c ' status$' "$CALL_LOG" || true)" "0"
+
+# Inactive start retains PR #195's quiesce -> start -> bounded COMPLETED path.
+set_wpa_service_state inactive
+set_abort_scan_mode ok-then-fail
+set_status_mode base
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 start >/dev/null 2>&1
+rc=$?
+check_equal "wifi start inactive associated exits zero" "$rc" "0"
+check_equal "wifi start inactive quiesces accepted native scan" \
+    "$(grep -c 'abort_scan$' "$CALL_LOG" || true)" "2"
+check_equal "wifi start inactive starts service once" \
+    "$(grep -c '^systemctl start wpa_supplicant@mlan0$' "$CALL_LOG" || true)" "1"
+check_equal "wifi start inactive proves COMPLETED" \
+    "$(grep -c ' status$' "$CALL_LOG" || true)" "1"
+
+set_wpa_service_state inactive
+set_abort_scan_mode always-ok
+set_status_mode base
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 start >/dev/null 2>&1
+rc=$?
+check_equal "wifi start inactive survives non-quiescent stale control path" "$rc" "0"
+check_equal "wifi start inactive bounds ABORT_SCAN attempts" \
+    "$(grep -c 'abort_scan$' "$CALL_LOG" || true)" "5"
+check_equal "wifi start inactive still starts after quiesce warning" \
+    "$(grep -c '^systemctl start wpa_supplicant@mlan0$' "$CALL_LOG" || true)" "1"
+
+set_wpa_service_state inactive
+set_abort_scan_mode plain-fail
+set_status_mode disconnected
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 start >/dev/null 2>&1
+rc=$?
+check_equal "wifi start inactive disconnected exits association-timeout" "$rc" "8"
+check_equal "wifi start inactive disconnected still starts service once" \
+    "$(grep -c '^systemctl start wpa_supplicant@mlan0$' "$CALL_LOG" || true)" "1"
+check_equal "wifi start inactive disconnected uses bounded status polls" \
+    "$(grep -c ' status$' "$CALL_LOG" || true)" "10"
+
+usage_output=$(WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
+    bash "$WIFI_SH" invalid start 2>&1 || true)
+case "$usage_output" in
+    *"start/up: active=no-op"*"inactive=quiesce+start+COMPLETED"*)
+        pass "wifi usage documents active/inactive start contract" ;;
+    *) fail "wifi usage must document active/inactive start contract" ;;
+esac
 
 # FD7을 wpa_cli scan 요청이 반환한 뒤 획득했더라도 native scan은 비동기로 계속될 수
 # 있다. raw driver scan 전에 ABORT_SCAN이 OK→FAIL로 수렴할 때까지 quiesce해야 한다.

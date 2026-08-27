@@ -783,6 +783,7 @@ update_json_radio() {
 
 usage() {
     echo "Usage: wifi {0|1|2|mlan0|mlan1|eth0} {start|up|stop|down|restart|status} : runtime"
+    echo "         start/up: active=no-op (scan/association unchanged, exit 0); inactive=quiesce+start+COMPLETED (6=busy 7=start 8=assoc-timeout)"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} info : show current configuration and status"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} ip {address/netmask|0} : persist (0=Address 삭제, netmask 생략 시 /24)"
     echo "       wifi net apply [iface] : runtime — .network 반영. iface 지정 시 해당 링크만 reconfigure(나머지 안 끊김); systemd<244면 전체 재시작 폴백"
@@ -2025,6 +2026,14 @@ case "$2" in
     echo "Starting WPA service for $IFACE..."
     wifi_scan_transition_lock_acquire "$IFACE" \
         || { echo "Error: scan/association transition busy for $IFACE" >&2; exit 6; }
+    # start/up is idempotent for an already-running supplicant.  The activity
+    # decision is made under FD7, and this path deliberately leaves any native
+    # scan and the current association epoch untouched.  Recovery callers use
+    # `wifi connect` (lightweight) or `wifi restart` (heavyweight) instead.
+    if wifi_wpa_run_child systemctl is-active --quiet "wpa_supplicant@$IFACE"; then
+        echo "WPA service already active for $IFACE; scan/association unchanged"
+        exit 0
+    fi
     wifi_wpa_abort_scan_quiesce "$IFACE" \
         || logger -p local0.warning "[$tag:$LINENO] [$IFACE] native scan quiesce unavailable before WPA start"
     wifi_wpa_run_child systemctl start "wpa_supplicant@$IFACE" \
