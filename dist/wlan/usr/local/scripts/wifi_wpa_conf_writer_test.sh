@@ -5,7 +5,6 @@ set -u
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 WIFI_SH="$SCRIPT_DIR/wifi.sh"
 OPC_SH="$SCRIPT_DIR/opc_wlan_apply.sh"
-ROAM_GUIDE="$SCRIPT_DIR/../../../../../docs/roaming_scan_guide.md"
 TD=$(mktemp -d)
 trap 'rm -rf "$TD"' EXIT
 BIN="$TD/bin"
