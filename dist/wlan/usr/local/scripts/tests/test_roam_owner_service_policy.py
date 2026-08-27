@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import pytest
 
 WLAN_ROOT = Path(__file__).resolve().parents[4]
 APPLY = WLAN_ROOT / "usr/local/scripts/wifi_apply_enabled.sh"
+CHECKER = WLAN_ROOT / "usr/local/scripts/wifi_checker.sh"
 LIB = WLAN_ROOT / "usr/local/scripts/wifi_init_config_lib.sh"
 SYSTEMD = WLAN_ROOT / "etc/systemd/system"
 
@@ -775,3 +777,17 @@ def test_owner_units_fail_closed_on_stale_queued_start() -> None:
     assert "ExecCondition=/bin/false" in periodic
     assert "RestartPreventExitStatus=3" in roam
     assert "RestartPreventExitStatus=3" in bgscan
+
+
+def test_wifi_checker_recovery_uses_transition_gateways() -> None:
+    body = CHECKER.read_text()
+
+    assert body.count('wifi "$IFACE" connect') == 2
+    assert body.count('wifi "$IFACE" restart') == 2
+
+    mutating_wpa_cli = re.compile(
+        r"^\s*wpa_cli\b[^\n]*\b"
+        r"(?:reassociate|reconnect|select_network|enable_network|disable_network)\b",
+        re.MULTILINE,
+    )
+    assert mutating_wpa_cli.search(body) is None
