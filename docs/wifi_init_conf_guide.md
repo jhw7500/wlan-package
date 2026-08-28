@@ -1058,7 +1058,7 @@ mlan0 / mlan1에 개별 적용한다. 섹션이 있으면 `mode`/`low_thresh`/`h
 
 | 키 | 타입 | 기본값 (현재 JSON) | 설명 |
 |----|------|------------------|------|
-| `enabled` | bool | `true` | 섹션 적용 ON/OFF. `false`면 `rate_adapt_cfg`를 SET하지 않고 FW 기본값을 그대로 둔다. 값 검증은 `enabled`와 무관하게 수행되므로 꺼둔 채로도 값을 미리 저장해 둘 수 있다 |
+| `enabled` | bool | `true` | 섹션 적용 ON/OFF. `false`면 `rate_adapt_cfg`를 SET하지 않는다. 이때 남는 값은 FW 기본값이 아니라 **마지막으로 SET된 값**이다 — rate_adapt는 드라이버 재적재를 넘어 유지되며 콜드부팅 후에만 FW 기본값이다(2026-08-28 실측). 값 검증은 `enabled`와 무관하게 수행되므로 꺼둔 채로도 값을 미리 저장해 둘 수 있다 |
 | `mode` | int | `1` | `0`=legacy, `1`=SR(Success Rate) |
 | `low_thresh` | int | `70` | SR 하한 (%). `255`(0xff)=dynamic |
 | `high_thresh` | int | `90` | SR 상한 (%). static은 `low < high`, dynamic은 양쪽 모두 255 |

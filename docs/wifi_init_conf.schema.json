@@ -1318,7 +1318,7 @@
             "enabled": {
               "type": "boolean",
               "default": true,
-              "description": "rate_adapt 섹션 적용 ON/OFF. false면 rate_adapt_cfg를 SET하지 않고 FW 기본값을 유지한다. 키 부재 시 true(종전 동작)",
+              "description": "rate_adapt 섹션 적용 ON/OFF. false면 rate_adapt_cfg를 SET하지 않는다. 이때 남는 값은 FW 기본값이 아니라 마지막으로 SET된 값이다(rate_adapt는 드라이버 재적재를 넘어 유지되며 콜드부팅 후에만 FW 기본값). 키 부재 시 true(종전 동작)",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
               "x-consumer": "wifi_fw_config_lib.sh"
@@ -2224,7 +2224,7 @@
             "enabled": {
               "type": "boolean",
               "default": true,
-              "description": "rate_adapt 섹션 적용 ON/OFF. false면 rate_adapt_cfg를 SET하지 않고 FW 기본값을 유지한다. 키 부재 시 true(종전 동작)",
+              "description": "rate_adapt 섹션 적용 ON/OFF. false면 rate_adapt_cfg를 SET하지 않는다. 이때 남는 값은 FW 기본값이 아니라 마지막으로 SET된 값이다(rate_adapt는 드라이버 재적재를 넘어 유지되며 콜드부팅 후에만 FW 기본값). 키 부재 시 true(종전 동작)",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
               "x-consumer": "wifi_fw_config_lib.sh"
