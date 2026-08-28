@@ -517,6 +517,7 @@ FWCFG_WATCH_TABLE = (
 _fwcfg_prev = {}
 _fwcfg_deadline = 0.0
 _fwcfg_index = 0
+_fwcfg_initialized = False
 
 def _sample_fwcfg(entry):
     """설정 하나를 GET·정규화하고, 값이 바뀌었을 때만 기록한다."""
@@ -544,7 +545,7 @@ def check_fw_settings(now):
     warn 을 내보낸다. 같은 로그 스트림의 TX_FAIL/TX_RETRY spike 와 타임스탬프로 바로
     대조할 수 있다. eth0 에는 mlanutl 이 없으므로 mlan* 에서만 동작한다.
     """
-    global _fwcfg_deadline, _fwcfg_index
+    global _fwcfg_deadline, _fwcfg_index, _fwcfg_initialized
     if FWCFG_WATCH_SEC <= 0 or not IFACE.startswith("mlan"):
         return
     if now < _fwcfg_deadline:
@@ -555,7 +556,13 @@ def check_fw_settings(now):
     # supplicant 를 띄운 뒤에 기동하므로(After=wifi_init.service, 실측 0.6s 차) 그
     # 사이 첫 association 이 값을 되돌리면 되돌아간 값이 baseline 이 되어 CHANGED 가
     # 영영 나지 않는다(PR #206 Codex P2). 이후 주기는 부하를 위해 라운드로빈한다.
-    if not _fwcfg_prev:
+    # 초기화 여부는 baseline 성공과 분리해 추적한다. `_fwcfg_prev` 가 비었는지로
+    # 판정하면 GET 이 전부 실패하는 구간(FW/드라이버 ioctl 장애)에서 매 주기 전량
+    # 스윕을 반복해, run_command 타임아웃 3s x 3 = 최대 9s 동안 link.json 생산이
+    # 멈춘다. 실패한 baseline 은 이후 라운드로빈에서 주기당 1회씩 재시도된다
+    # (PR #206 Codex P2).
+    if not _fwcfg_initialized:
+        _fwcfg_initialized = True
         for entry in FWCFG_WATCH_TABLE:
             _sample_fwcfg(entry)
         return
