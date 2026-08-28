@@ -156,9 +156,6 @@ Notes on configuration ownership:
 - `/usr/local/etc/wifi_init_conf.json` is the single runtime configuration source.
   `config.json` is retired: upgrades delete any leftover active copy, and the
   release gate and CI fail if it is ever packaged again.
-- nginx is a prerequisite supplied by the standard product image, so it is not a
-  required unit for Factory Reset. Factory Reset succeeds even if nginx is
-  missing or unhealthy.
 - The Factory Reset `eth0` address is `192.168.1.1/24`. **This is the recovery
   path.** Factory Reset restores defaults, including the default WPA supplicant
   configuration, so the unit will not associate unless the default SSID happens
