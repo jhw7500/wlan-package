@@ -16,6 +16,16 @@ PASS=0
 FAIL=0
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
+LOGGER_BIN="$WORK/logger-bin"
+MODULE_LOG="$WORK/module-identity.log"
+mkdir -p "$LOGGER_BIN"
+cat > "$LOGGER_BIN/logger" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "$LOGGER_CAPTURE"
+EOF
+chmod +x "$LOGGER_BIN/logger"
+export PATH="$LOGGER_BIN:$PATH"
+export LOGGER_CAPTURE="$MODULE_LOG"
 
 pass() { PASS=$((PASS + 1)); printf 'PASS: %s\n' "$1"; }
 fail() { FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; }
@@ -280,6 +290,11 @@ printf 'i.MX8MM\n' > "$SOC_IMX8"
 printf 'not-an-imx-board\n' > "$SOC_UNKNOWN"
 : > "$SOC_EMPTY"
 
+case "$(command -v logger)" in
+    "$WORK"/*) pass "detector failure fixtures use test-owned logger" ;;
+    *) fail "detector failure fixtures can reach host logger" ;;
+esac
+
 _detected=$(WIFI_SOC_ID_PATH="$SOC_IMX93" "$BOARD_CONFIG" --detect 2>/dev/null)
 expect_eq "detect maps i.MX93 to canonical identity" \
     "imx93 sdio" \
@@ -319,17 +334,8 @@ expect_rc "module verifier rejects board/basename mismatch" 1 \
         "$KO_DIR/mlan_imx93.ko" "$KO_DIR/moal_imx93.ko"
 
 printf 'WRONGVERSION\n' > "$SYS_MODULE/mlan/version"
-LOGGER_BIN="$WORK/logger-bin"
-MODULE_LOG="$WORK/module-identity.log"
-mkdir -p "$LOGGER_BIN"
-cat > "$LOGGER_BIN/logger" <<'EOF'
-#!/bin/bash
-printf '%s\n' "$*" >> "$LOGGER_CAPTURE"
-EOF
-chmod +x "$LOGGER_BIN/logger"
 expect_rc "module verifier rejects loaded version mismatch" 1 \
-    env PATH="$LOGGER_BIN:$PATH" LOGGER_CAPTURE="$MODULE_LOG" \
-        WIFI_SYS_MODULE_ROOT="$SYS_MODULE" "$BOARD_CONFIG" --verify-loaded imx93 \
+    env WIFI_SYS_MODULE_ROOT="$SYS_MODULE" "$BOARD_CONFIG" --verify-loaded imx93 \
         "$KO_DIR/mlan_imx93.ko" "$KO_DIR/moal_imx93.ko"
 grep -Fq 'field=version expected=543.p18 actual=WRONGVERSION' "$MODULE_LOG" \
     && pass "module mismatch log includes expected and actual metadata" \
