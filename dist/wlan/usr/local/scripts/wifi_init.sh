@@ -38,11 +38,44 @@ bridge_deliver_rt_prio=45
 tx_work=""
 
 WIFI_INIT_CONF_JSON="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
+BOARD_CONFIG_SH="$SCRIPT_DIR/wifi_board_config.sh"
+[ -x "$BOARD_CONFIG_SH" ] || {
+    logger -p local0.emerg "[$tag:$LINENO] hardware identity helper unavailable: $BOARD_CONFIG_SH"
+    exit 1
+}
+if ! _board_facts=$("$BOARD_CONFIG_SH" --detect); then
+    logger -p local0.emerg "[$tag:$LINENO] actual SoC detection failed"
+    exit 1
+fi
+eval "$_board_facts"
+ACTUAL_SOC_ID="$SOC_ID"
+ACTUAL_BOARD_TYPE="$BOARD_TYPE"
+ACTUAL_BUS_TYPE="$BUS_TYPE"
+ACTUAL_IIO_DEV="$IIO_DEV"
+unset _board_facts
+
+if [ ! -f "$WIFI_INIT_CONF_JSON" ] || ! command -v jq >/dev/null 2>&1; then
+    logger -p local0.emerg "[$tag:$LINENO] cannot reconcile hardware identity: config/jq unavailable"
+    exit 1
+fi
+PERSISTED_BOARD_TYPE="$(jq -r '.global.BOARD_TYPE // ""' "$WIFI_INIT_CONF_JSON")" || exit 1
+PERSISTED_BUS_TYPE=$(jq -r '.global.BUS_TYPE // ""' "$WIFI_INIT_CONF_JSON") || exit 1
+PERSISTED_IIO_DEV=$(jq -r '.mcp.iio_device // ""' "$WIFI_INIT_CONF_JSON") || exit 1
+if [ "$PERSISTED_BOARD_TYPE" != "$ACTUAL_BOARD_TYPE" ] ||
+   [ "$PERSISTED_BUS_TYPE" != "$ACTUAL_BUS_TYPE" ] ||
+   [ "$PERSISTED_IIO_DEV" != "$ACTUAL_IIO_DEV" ]; then
+    logger -p local0.crit "[$tag:$LINENO] persisted hardware identity mismatch: persisted=$PERSISTED_BOARD_TYPE/$PERSISTED_BUS_TYPE/$PERSISTED_IIO_DEV actual=$ACTUAL_BOARD_TYPE/$ACTUAL_BUS_TYPE/$ACTUAL_IIO_DEV"
+    "$BOARD_CONFIG_SH" "$WIFI_INIT_CONF_JSON" || {
+        logger -p local0.emerg "[$tag:$LINENO] hardware identity normalization failed"
+        exit 1
+    }
+fi
+BOARD_TYPE="$ACTUAL_BOARD_TYPE"
+BUS_TYPE="$ACTUAL_BUS_TYPE"
 
 #logger -p local0.info "[$tag:$LINENO] wifi initializing"
 
 if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
-    BOARD_TYPE=$(jq -r '.global.BOARD_TYPE // "imx8mm"' "$WIFI_INIT_CONF_JSON")
     MOD_PARA=$(jq -r '.global.MOD_PARA // "cts/wifi_mod_para.conf"' "$WIFI_INIT_CONF_JSON")
     TXPWRLIMIT_PATH=$(jq -r '.global.TXPWRLIMIT_PATH // "/lib/firmware/cts/txpwrlimit_cfg_9098.conf"' "$WIFI_INIT_CONF_JSON")
     ANT_TYPE=$(jq -r '.global.ANT_TYPE // ""' "$WIFI_INIT_CONF_JSON")
@@ -115,13 +148,10 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
 fi
 
 # 커널 모듈 (보드별 드라이버 선택)
-case "${BOARD_TYPE:-imx8mm}" in
-    imx93*)
-        MLAN_KO="mlan_imx93.ko"; MOAL_KO="moal_imx93.ko"
-        ;;
-    *)
-        MLAN_KO="mlan_imx8.ko"; MOAL_KO="moal_imx8.ko"
-        ;;
+case "$BOARD_TYPE" in
+    imx93)  MLAN_KO=mlan_imx93.ko; MOAL_KO=moal_imx93.ko ;;
+    imx8mm) MLAN_KO=mlan_imx8.ko;  MOAL_KO=moal_imx8.ko ;;
+    *) logger -p local0.emerg "[$tag:$LINENO] unsupported canonical BOARD_TYPE=$BOARD_TYPE"; exit 1 ;;
 esac
 MLAN_MOD="mlan"; MOAL_MOD="moal"
 
@@ -165,7 +195,7 @@ MFG_LOADED_FLAG="/run/wifi/mfg_loaded"
 
 # BUS_TYPE/BLUETOOTH 기반 fw_name 자동 갱신
 if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
-    _BUS=$(jq -r '.global.BUS_TYPE // "pcie"' "$WIFI_INIT_CONF_JSON")
+_BUS="$BUS_TYPE"
     _BT=$(jq -r '.global.BLUETOOTH.enable // false' "$WIFI_INIT_CONF_JSON")
     _MOD_FILE="/lib/firmware/$(jq -r '.global.MOD_PARA // "cts/wifi_mod_para.conf"' "$WIFI_INIT_CONF_JSON")"
     _MFG="$MFG_MODE"
@@ -1120,6 +1150,13 @@ if ! try_insmod "/opt/wlan/driver/$MOAL_KO" "$moal_args"; then
     echo "$MOAL_KO module load failed"
     exit 1
 fi
+
+if ! "$BOARD_CONFIG_SH" --verify-loaded "$BOARD_TYPE" \
+        "/opt/wlan/driver/$MLAN_KO" "/opt/wlan/driver/$MOAL_KO"; then
+    logger -p local0.emerg "[$tag:$LINENO] loaded modules do not match actual SoC=$ACTUAL_SOC_ID board=$BOARD_TYPE"
+    exit 1
+fi
+logger -p local0.info "[$tag:$LINENO] hardware identity verified: soc=$ACTUAL_SOC_ID board=$BOARD_TYPE modules=$MLAN_KO/$MOAL_KO"
 
 # mfg_mode는 여기서 재판독하지 않는다 — insmod 인자/fw_name을 결정한 판정값(MFG_MODE)과
 # 플래그("현재 드라이버가 mfg로 로드됨")가 항상 일치해야 한다(재판독 시 FW 다운로드 수 초

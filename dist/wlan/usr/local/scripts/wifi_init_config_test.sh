@@ -724,10 +724,23 @@ for _boot_operation in normalize generate remove-empty remove-mode-b remove-miss
     done
 done
 
-# A required boot transform is before supplicant/service continuation.  Its caller
-# must terminate wifi_init, not reduce the failure to an operator-only log line.
-_boot_transform_region=$(sed -n '418,445p' "$WIFI_INIT_SH")
-if printf '%s\n' "$_boot_transform_region" | grep -q 'exit 1'; then
+# Required topology transforms are bounded by their stable section comments, not
+# source line numbers. Every fail guard in that section must terminate wifi_init
+# before the later bgscan/supplicant continuation can run.
+_boot_transform_region=$(awk '
+    index($0, "# backup_file") && index($0, "scan_freq/freq_list") { in_topology=1 }
+    in_topology && /^# bgscan/ { exit }
+    in_topology { print }
+' "$WIFI_INIT_SH")
+if printf '%s\n' "$_boot_transform_region" | grep -Fq 'wifi_wpa_conf_normalize_file' \
+   && printf '%s\n' "$_boot_transform_region" | grep -Fq 'wifi_init_sync_extra_ssid_blocks' \
+   && printf '%s\n' "$_boot_transform_region" | awk '
+        /^[[:space:]]*if ! / { guards++; waiting=1; next }
+        waiting && /^[[:space:]]*exit 1$/ { exits++; waiting=0; next }
+        waiting && /^[[:space:]]*fi$/ { missing++; waiting=0 }
+        END { exit !(guards > 0 && exits == guards && missing == 0) }
+    ';
+then
     log_pass "wifi_init fails closed when required wpa topology preparation fails"
 else
     log_fail "wifi_init must exit before supplicant continuation on topology failure"
