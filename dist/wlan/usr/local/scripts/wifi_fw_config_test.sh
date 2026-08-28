@@ -311,10 +311,14 @@ SOC_IMX93="$WORK/soc-imx93"
 SOC_IMX8="$WORK/soc-imx8"
 SOC_UNKNOWN="$WORK/soc-unknown"
 SOC_EMPTY="$WORK/soc-empty"
+SOC_UNSAFE="$WORK/soc-unsafe"
+SOC_SUFFIX="$WORK/soc-suffix"
 printf 'i.MX93\n' > "$SOC_IMX93"
 printf 'i.MX8MM\n' > "$SOC_IMX8"
 printf 'not-an-imx-board\n' > "$SOC_UNKNOWN"
 : > "$SOC_EMPTY"
+printf 'i.MX9/3\n' > "$SOC_UNSAFE"
+printf 'i.MX930\n' > "$SOC_SUFFIX"
 
 case "$(command -v logger)" in
     "$WORK"/*) pass "detector failure fixtures use test-owned logger" ;;
@@ -341,6 +345,10 @@ expect_rc "detect rejects empty SoC source" 1 \
     env WIFI_SOC_ID_PATH="$SOC_EMPTY" "$BOARD_CONFIG" --detect
 expect_rc "detect rejects missing SoC source" 1 \
     env WIFI_SOC_ID_PATH="$WORK/missing-soc-id" "$BOARD_CONFIG" --detect
+expect_rc "detect rejects SoC identity changed by safety normalization" 1 \
+    env WIFI_SOC_ID_PATH="$SOC_UNSAFE" "$BOARD_CONFIG" --detect
+expect_rc "detect rejects SoC identity with canonical prefix only" 1 \
+    env WIFI_SOC_ID_PATH="$SOC_SUFFIX" "$BOARD_CONFIG" --detect
 
 KO_DIR="$WORK/ko"
 SYS_MODULE="$WORK/sys-module"
@@ -386,6 +394,11 @@ printf 'version=543.p18\0version=duplicate\0srcversion=MOAL93SRC\0' \
 expect_rc "module verifier rejects duplicate KO metadata" 1 \
     env WIFI_SYS_MODULE_ROOT="$SYS_MODULE" "$BOARD_CONFIG" --verify-loaded imx93 \
         "$BAD_KO_DIR/mlan_imx93.ko" "$BAD_KO_DIR/moal_imx93.ko"
+printf 'version=543.p18\0version=\0srcversion=MOAL93SRC\0' \
+    > "$BAD_KO_DIR/moal_imx93.ko"
+expect_rc "module verifier rejects trailing-empty duplicate KO metadata" 1 \
+    env WIFI_SYS_MODULE_ROOT="$SYS_MODULE" "$BOARD_CONFIG" --verify-loaded imx93 \
+        "$BAD_KO_DIR/mlan_imx93.ko" "$BAD_KO_DIR/moal_imx93.ko"
 
 jq '.global.BOARD_TYPE="imx93"
     | .global.BUS_TYPE="sdio"
@@ -406,6 +419,36 @@ if [ "$(jq -r '.mcp.iio_device' "$WORK/board-imx8.json" 2>/dev/null)" != "/tmp/s
 else
     fail "detected IIO path replaces stale persisted path"
 fi
+
+MV_FAULT_BIN="$WORK/mv-fault-bin"
+MV_FAULT_DIR="$WORK/board-mv-fault"
+MV_CAPTURE="$WORK/mv-fault.log"
+MV_FAULT_CONF="$MV_FAULT_DIR/wifi_init_conf.json"
+MV_FAULT_ORIGINAL="$WORK/board-mv-fault.original.json"
+mkdir -p "$MV_FAULT_BIN" "$MV_FAULT_DIR"
+cat > "$MV_FAULT_BIN/mv" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "$MV_CAPTURE"
+exit 1
+EOF
+chmod +x "$MV_FAULT_BIN/mv"
+cp "$TEMPLATE" "$MV_FAULT_CONF"
+cp "$MV_FAULT_CONF" "$MV_FAULT_ORIGINAL"
+expect_rc "board normalization fails closed when atomic rename fails" 1 \
+    env PATH="$MV_FAULT_BIN:$PATH" MV_CAPTURE="$MV_CAPTURE" \
+        WIFI_SOC_ID_PATH="$SOC_IMX8" "$BOARD_CONFIG" "$MV_FAULT_CONF"
+if [ -s "$MV_CAPTURE" ]; then
+    pass "rename-fault fixture reaches test-local failing mv"
+else
+    fail "rename-fault fixture does not reach test-local failing mv"
+fi
+if cmp -s "$MV_FAULT_ORIGINAL" "$MV_FAULT_CONF"; then
+    pass "rename failure preserves original JSON byte-for-byte"
+else
+    fail "rename failure changes original JSON"
+fi
+expect_eq "rename failure removes only its temporary output" '' \
+    "$(find "$MV_FAULT_DIR" -mindepth 1 -maxdepth 1 ! -name 'wifi_init_conf.json' -print)"
 
 expect_rc "imx93 product scan profile accepts shipped defaults" 0 \
     wifi_fw_validate_product_scan_profile "$TEMPLATE" imx93

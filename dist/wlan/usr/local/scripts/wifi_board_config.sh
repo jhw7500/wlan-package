@@ -57,23 +57,27 @@ resolve_iio_dev() {
 }
 
 detect_board() {
-    local family
+    local family safe_soc_id
     SOC_ID=$(cat "$SOC_ID_PATH" 2>/dev/null) || {
         logger -p local0.emerg "[$tag:$LINENO] cannot read SoC identity: $SOC_ID_PATH" || true
         return 1
     }
-    SOC_ID=$(printf '%s' "$SOC_ID" | tr -cd 'A-Za-z0-9._ :-')
+    safe_soc_id=$(printf '%s' "$SOC_ID" | tr -cd 'A-Za-z0-9._ :-')
+    [ "$SOC_ID" = "$safe_soc_id" ] || {
+        logger -p local0.emerg "[$tag:$LINENO] unsafe SoC identity: $SOC_ID_PATH" || true
+        return 1
+    }
     [ -n "$SOC_ID" ] || {
         logger -p local0.emerg "[$tag:$LINENO] empty SoC identity: $SOC_ID_PATH" || true
         return 1
     }
     family=$(printf '%s' "$SOC_ID" | tr '[:lower:]' '[:upper:]')
     case "$family" in
-        *I.MX93*)
+        I.MX93)
             BOARD_TYPE=imx93; BUS_TYPE=sdio
             IIO_DEV_FALLBACK=/sys/bus/iio/devices/iio:device1
             ;;
-        *I.MX8MM*)
+        I.MX8MM)
             BOARD_TYPE=imx8mm; BUS_TYPE=pcie
             IIO_DEV_FALLBACK=/sys/bus/iio/devices/iio:device0
             ;;
@@ -93,9 +97,17 @@ emit_detection() {
 module_field() {
     local ko="$1" field="$2" values
     [ -f "$ko" ] && [ ! -L "$ko" ] && [ -s "$ko" ] || return 1
-    values=$(tr '\000' '\n' < "$ko" | sed -n "s/^${field}=//p") || return 1
-    [ -n "$values" ] || return 1
-    [ "${values#*$'\n'}" = "$values" ] || return 1
+    values=$(tr '\000' '\n' < "$ko" | awk -v field="$field" '
+        BEGIN { prefix = field "=" }
+        index($0, prefix) == 1 {
+            count++
+            value = substr($0, length(prefix) + 1)
+        }
+        END {
+            if (count != 1 || value == "") exit 1
+            print value
+        }
+    ') || return 1
     printf '%s\n' "$values"
 }
 
@@ -166,7 +178,17 @@ if ! command -v jq >/dev/null 2>&1; then
     exit 1
 fi
 
-tmp="${WIFI_CONF}.tmp"
+tmp=""
+cleanup_tmp() {
+    [ -z "$tmp" ] || rm -f -- "$tmp"
+}
+trap cleanup_tmp EXIT
+
+if ! tmp=$(mktemp "${WIFI_CONF}.tmp.XXXXXX"); then
+    logger -p local0.err "[$tag:$LINENO] cannot create temporary file for $WIFI_CONF"
+    exit 1
+fi
+
 # jq의 stderr는 버리지 않고 캡처해 실패 원인(JSON 구문 오류 등)을 로그로 남긴다.
 # `2>&1 > file`은 stderr를 명령치환으로, stdout을 파일로 보낸다 (순서 중요).
 jq_err=$(jq --arg b "$BOARD_TYPE" --arg bus "$BUS_TYPE" --arg iio "$IIO_DEV" '
@@ -190,14 +212,26 @@ jq_err=$(jq --arg b "$BOARD_TYPE" --arg bus "$BUS_TYPE" --arg iio "$IIO_DEV" '
               else . end
             ' \
             "$WIFI_CONF" 2>&1 > "$tmp")
-if [ -z "$jq_err" ] && [ -s "$tmp" ]; then
-    mv "$tmp" "$WIFI_CONF"
-    # factory_reset은 곧바로 reboot하므로, 전원이 끊겨도 보드 설정이 유실되지 않도록 동기화한다
-    # (postinst의 cpchk도 같은 이유로 cp 직후 sync한다).
-    sync "$WIFI_CONF" 2>/dev/null || sync
-    logger -p local0.info "[$tag:$LINENO] $BOARD_TYPE detected (soc_id=$SOC_ID), BUS_TYPE=$BUS_TYPE, iio_device=$IIO_DEV [$IIO_SOURCE] -> $WIFI_CONF"
-else
-    rm -f "$tmp"
-    logger -p local0.err "[$tag:$LINENO] jq update failed; keep existing $WIFI_CONF: ${jq_err:-empty output}"
+jq_rc=$?
+if [ "$jq_rc" -ne 0 ]; then
+    logger -p local0.err "[$tag:$LINENO] jq update failed; keep existing $WIFI_CONF: ${jq_err:-exit status $jq_rc}"
     exit 1
 fi
+if [ -n "$jq_err" ]; then
+    logger -p local0.err "[$tag:$LINENO] jq update failed; keep existing $WIFI_CONF: $jq_err"
+    exit 1
+fi
+if [ ! -s "$tmp" ]; then
+    logger -p local0.err "[$tag:$LINENO] jq update failed; keep existing $WIFI_CONF: empty output"
+    exit 1
+fi
+if ! mv -- "$tmp" "$WIFI_CONF"; then
+    logger -p local0.err "[$tag:$LINENO] cannot install normalized configuration; keep existing $WIFI_CONF"
+    exit 1
+fi
+tmp=""
+
+# factory_reset은 곧바로 reboot하므로, 전원이 끊겨도 보드 설정이 유실되지 않도록 동기화한다
+# (postinst의 cpchk도 같은 이유로 cp 직후 sync한다).
+sync "$WIFI_CONF" 2>/dev/null || sync
+logger -p local0.info "[$tag:$LINENO] $BOARD_TYPE detected (soc_id=$SOC_ID), BUS_TYPE=$BUS_TYPE, iio_device=$IIO_DEV [$IIO_SOURCE] -> $WIFI_CONF"
