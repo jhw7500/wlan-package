@@ -457,7 +457,7 @@ _RE_RA_IV = re.compile(r"Eval Timer interval\s*:\s*(\d+)")
 _RE_ANT_TX = re.compile(r"Mode of Tx path is\s*(0x[0-9a-fA-F]+)")
 _RE_ANT_RX = re.compile(r"Mode of Rx path is\s*(0x[0-9a-fA-F]+)")
 _RE_ANT_HTS = re.compile(r"user_htstream=(0x[0-9a-fA-F]+)")
-_RE_MCS_HT = re.compile(r"HT\s+\(11n\)\s*:\s*(\S+)")
+_RE_MCS_HT = re.compile(r"HT\s+\(11n\)\s*:\s*(.+?)\s*$", re.M)
 _RE_MCS_VTX = re.compile(r"VHT Tx:\s*(0x[0-9a-fA-F]+)")
 _RE_MCS_VRX = re.compile(r"VHT Rx:\s*(0x[0-9a-fA-F]+)")
 _RE_MCS_HTX = re.compile(r"HE Tx:\s*(0x[0-9a-fA-F]+)")
@@ -501,7 +501,10 @@ def _norm_mcs_tier(text):
         return None
     htx, hrx = _RE_MCS_HTX.search(text), _RE_MCS_HRX.search(text)
     he = f"{htx.group(1)}/{hrx.group(1)}" if (htx and hrx) else "?/?"
-    return f"HT={ht.group(1)} VHT={vtx.group(1)}/{vrx.group(1)} HE={he}"
+    # NSS 토큰만 쓰면 HT MCS 상한 변화(0~7 -> 0~15)를 놓친다. 줄 전체를 공백
+    # 정규화해 상한까지 비교 대상에 넣는다(PR #206 Codex P2).
+    ht_v = " ".join(ht.group(1).split())
+    return f"HT={ht_v} VHT={vtx.group(1)}/{vrx.group(1)} HE={he}"
 
 
 # (이름, mlanutl 서브커맨드, 정규화 함수) — 한 tick 에 하나씩 라운드로빈으로 본다.
@@ -579,6 +582,11 @@ def main():
             time.sleep(max(0.0, LOOP_INTERVAL - (time.monotonic() - cycle_start)))
             continue
 
+        # FW 설정 관측은 연결 여부와 무관하게 수행한다. mcs_tier 첫-assoc 리셋과
+        # rate_adapt 되돌림은 association 창 안에서 벌어지므로, 연결 성립 후에만
+        # 보면 첫 baseline 자체가 이미 되돌아간 값이 된다(PR #206 Codex P2).
+        check_fw_settings(cycle_start)
+
         if not is_wpa_running(IFACE):
             # wpa 미실행 → supplicant 무효. link.json 은 기존대로 '{}'.
             write_supplicant_json(LOG_DIR, {"wpa_state": "", "temp_disabled": False})
@@ -613,7 +621,6 @@ def main():
         channel_data = parse_survey_dump(channel_out) if channel_out else {}
 
         check_tx_spike(link_data)
-        check_fw_settings(cycle_start)
 
         info_data = parse_iw_info(info_out) if info_out else {}
         info_data.update(get_ip_info(IFACE))
