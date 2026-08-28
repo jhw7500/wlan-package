@@ -728,5 +728,25 @@ grep -q 'ExecCondition=.*ExecMainStatus.*75' "$EMERGENCY_UNIT" \
     && pass "emergency reboot skips transitional MCS status" \
     || fail "emergency reboot does not skip transitional MCS status"
 
+_detect_line=$(grep -n -- '--detect' "$WIFI_INIT" | head -1 | cut -d: -f1)
+_json_line=$(grep -n 'MOD_PARA=$(jq' "$WIFI_INIT" | head -1 | cut -d: -f1)
+[ -n "$_detect_line" ] && [ -n "$_json_line" ] &&
+    [ "$_detect_line" -lt "$_json_line" ] \
+    && pass "wifi_init detects hardware before reading JSON settings" \
+    || fail "wifi_init does not detect hardware before JSON settings"
+
+if grep -q 'BOARD_TYPE=$(jq' "$WIFI_INIT"; then
+    fail "wifi_init still trusts persisted BOARD_TYPE"
+else
+    pass "wifi_init does not trust persisted BOARD_TYPE"
+fi
+
+grep -q -- '--verify-loaded "$BOARD_TYPE"' "$WIFI_INIT" \
+    && pass "wifi_init verifies loaded board-qualified modules" \
+    || fail "wifi_init does not verify loaded modules"
+grep -q 'persisted hardware identity mismatch' "$WIFI_INIT" \
+    && pass "wifi_init logs persisted identity drift" \
+    || fail "wifi_init does not log identity drift"
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
