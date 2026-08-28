@@ -199,6 +199,32 @@ grep -q 'normalize_legacy_mcs_tier /usr/local/etc/wifi_init_conf.json || exit 1'
     && pass "postinst migrates legacy numeric MCS after merge" \
     || fail "postinst does not migrate legacy numeric MCS after merge"
 
+grep -Fq 'if ! _board_facts=$("$BOARD_CONFIG_SH" --detect)' "$POSTINST" \
+    && pass "postinst fails closed through canonical detector" \
+    || fail "postinst does not check canonical detector status"
+
+if grep -q 'SOC_ID=$(cat /sys/devices/soc0/soc_id' "$POSTINST"; then
+    fail "postinst retains duplicate inline SoC detection"
+else
+    pass "postinst has no duplicate inline SoC detection"
+fi
+
+if grep -q 'board_applied=' "$POSTINST"; then
+    fail "postinst retains permissive board-apply fallback"
+else
+    pass "postinst board normalization is fail closed"
+fi
+
+FACTORY_LIB="$SCRIPT_DIR/wifi_factory_reset_lib.sh"
+grep -q 'FACTORY_BOARD_CONFIG_SH' "$FACTORY_LIB" \
+    && pass "factory reset uses canonical board helper" \
+    || fail "factory reset does not use canonical board helper"
+
+GUIDE="$SCRIPT_DIR/../../../../../docs/wifi_init_conf_guide.md"
+grep -q 'BOARD_TYPE.*read-only\|BOARD_TYPE.*감지' "$GUIDE" \
+    && pass "guide documents detected BOARD_TYPE ownership" \
+    || fail "guide does not document BOARD_TYPE ownership"
+
 # JSON deep merge는 active 값을 보존하므로 템플릿 기본만 바꾸면 기존 장비의 구형
 # antcfg(false/empty) 또는 알려진 문제값(physical 1x1)이 남는다. 정확히 그 제품 이력만
 # 새 비대칭 계약으로 승격하고 운영자가 정한 다른 값은 건드리지 않아야 한다.
