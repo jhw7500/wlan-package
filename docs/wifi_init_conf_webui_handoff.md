@@ -388,7 +388,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `antcfg.verify.physical_tx` | antcfg physical Tx 기대값 | string | `mlan0="0x0303" / mlan1=""` | 10진 또는 `0x` 16진, 1..0xFFFF | no | boot | SET 후 FW physical Tx GET 검증값. verify가 존재하면 세 verify 필드 모두 필수이며 UI 편집 금지 |
 | `antcfg.verify.physical_rx` | antcfg physical Rx 기대값 | string | `mlan0="0x0303" / mlan1=""` | 10진 또는 `0x` 16진, 1..0xFFFF | no | boot | p149.115의 비대칭 요청 정규화 결과를 검증한다 |
 | `antcfg.verify.user_htstream` | antcfg host NSS 기대값 | string | `mlan0="0x2121" / mlan1=""` | 10진 또는 `0x` 16진, 1..0xFFFF | no | boot | matching 543 mlanutl의 `antcfgnss` 조회 결과. 0x2121=양 밴드 Tx 2SS/Rx 1SS. 불일치·미지원이면 association 중단 |
-| `rate_adapt.enabled` | 레이트 적응 적용 | bool | `true` | true\|false | caution | boot | false면 `rate_adapt_cfg`를 SET하지 않고 FW 기본값 유지. 키 부재 시 true(종전 동작). `wifi <iface> rate`로 값을 바꿔도 이 값이 false면 부팅 시 적용되지 않는다 |
+| `rate_adapt.enabled` | 레이트 적응 적용 | bool | `true` | true\|false | caution | boot | false면 `rate_adapt_cfg`를 SET하지 않는다 — 남는 값은 FW 기본값이 아니라 마지막 SET값이다(콜드부팅 후에만 FW 기본값). 키 부재 시 true(종전 동작). `wifi <iface> rate`로 값을 바꿔도 이 값이 false면 부팅 시 적용되지 않는다 |
 | `rate_adapt.mode` | 레이트 적응 모드 | int | `1` | `0`=legacy\|`1`=SR | caution | boot | section 존재 시 mode/low/high/interval 4개 필수(enabled는 선택) |
 | `rate_adapt.low_thresh` | 레이트 적응 low 임계 | int | `70` | 0..100 또는 255 | caution | boot | static은 low<high, dynamic은 low/high 모두 255 |
 | `rate_adapt.high_thresh` | 레이트 적응 high 임계 | int | `90` | 0..100 또는 255 | caution | boot | 70/90은 실기 결과에 따라 바뀌는 시험값 |

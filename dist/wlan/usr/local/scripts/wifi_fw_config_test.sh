@@ -505,7 +505,8 @@ jq '.mlan0.rate_adapt.interval_ms=105' "$CONF" > "$WORK/bad-interval.json"
 expect_rc "rate interval must be 10ms multiple" 1 wifi_fw_validate_rate_config "$WORK/bad-interval.json" mlan0
 
 # ── rate_adapt.enabled 게이트 ──────────────────────────────────────────────
-# 기본 true(키 부재 = 종전 동작). false면 SET 자체를 하지 않고 FW 기본값을 유지한다.
+# 기본 true(키 부재 = 종전 동작). false면 SET 자체를 하지 않으며, 남는 값은 FW 기본값이
+# 아니라 마지막 SET값이다(콜드부팅 후에만 FW 기본값 — 2026-08-28 실측).
 # 값 검증은 enabled 와 독립이어야 한다 — 아니면 꺼둔 iface 에 대해 `wifi <iface> rate`가
 # 유효한 값을 거부한다(CLI 가 같은 validate 를 공유하므로).
 rm -f "$STATE/mlan0.rate"
