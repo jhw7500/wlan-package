@@ -518,26 +518,9 @@ _fwcfg_prev = {}
 _fwcfg_deadline = 0.0
 _fwcfg_index = 0
 
-def check_fw_settings(now):
-    """FW 커스텀 설정(rate_adapt/antcfg/mcs_tier)을 저빈도로 폴링해 변화만 기록한다.
-
-    관측 전용이다 — 복구하지 않는다. 강제 복구는 pre-association 재적용이 필요해
-    드라이버 재적재·재부팅 정책과 얽히므로 별도 설계 대상이다(mcs_tier 만 예외적으로
-    wifi_event.sh 가 복구 훅을 갖고 있다).
-
-    평상시에는 아무것도 남기지 않고(설정별 최초 1회 baseline info 제외) 변화 시에만
-    warn 을 내보낸다. 같은 로그 스트림의 TX_FAIL/TX_RETRY spike 와 타임스탬프로 바로
-    대조할 수 있다. 한 tick 에 mlanutl 을 하나만 불러 link.json 생산 주기를 지킨다.
-    eth0 에는 mlanutl 이 없으므로 mlan* 에서만 동작한다.
-    """
-    global _fwcfg_deadline, _fwcfg_index
-    if FWCFG_WATCH_SEC <= 0 or not IFACE.startswith("mlan"):
-        return
-    if now < _fwcfg_deadline:
-        return
-    _fwcfg_deadline = now + FWCFG_WATCH_SEC
-    name, sub, norm = FWCFG_WATCH_TABLE[_fwcfg_index % len(FWCFG_WATCH_TABLE)]
-    _fwcfg_index += 1
+def _sample_fwcfg(entry):
+    """설정 하나를 GET·정규화하고, 값이 바뀌었을 때만 기록한다."""
+    name, sub, norm = entry
     cur = norm(run_command(["mlanutl", IFACE, sub]))
     if cur is None:
         return
@@ -548,6 +531,36 @@ def check_fw_settings(now):
         logger.message("warn",
             f"[{IFACE}] fwcfg_watch CHANGED {name}: {prev} -> {cur}", _EXTRA_())
     _fwcfg_prev[name] = cur
+
+
+def check_fw_settings(now):
+    """FW 커스텀 설정(rate_adapt/antcfg/mcs_tier)을 저빈도로 폴링해 변화만 기록한다.
+
+    관측 전용이다 — 복구하지 않는다. 강제 복구는 pre-association 재적용이 필요해
+    드라이버 재적재·재부팅 정책과 얽히므로 별도 설계 대상이다(mcs_tier 만 예외적으로
+    wifi_event.sh 가 복구 훅을 갖고 있다).
+
+    평상시에는 아무것도 남기지 않고(설정별 최초 1회 baseline info 제외) 변화 시에만
+    warn 을 내보낸다. 같은 로그 스트림의 TX_FAIL/TX_RETRY spike 와 타임스탬프로 바로
+    대조할 수 있다. eth0 에는 mlanutl 이 없으므로 mlan* 에서만 동작한다.
+    """
+    global _fwcfg_deadline, _fwcfg_index
+    if FWCFG_WATCH_SEC <= 0 or not IFACE.startswith("mlan"):
+        return
+    if now < _fwcfg_deadline:
+        return
+    _fwcfg_deadline = now + FWCFG_WATCH_SEC
+    # 첫 호출에는 전 항목의 baseline 을 한 번에 잡는다. 라운드로빈으로 하나씩 잡으면
+    # mcs_tier 는 2주기(기본 120s) 뒤에야 처음 읽히는데, 이 로거는 wifi_init 이
+    # supplicant 를 띄운 뒤에 기동하므로(After=wifi_init.service, 실측 0.6s 차) 그
+    # 사이 첫 association 이 값을 되돌리면 되돌아간 값이 baseline 이 되어 CHANGED 가
+    # 영영 나지 않는다(PR #206 Codex P2). 이후 주기는 부하를 위해 라운드로빈한다.
+    if not _fwcfg_prev:
+        for entry in FWCFG_WATCH_TABLE:
+            _sample_fwcfg(entry)
+        return
+    _sample_fwcfg(FWCFG_WATCH_TABLE[_fwcfg_index % len(FWCFG_WATCH_TABLE)])
+    _fwcfg_index += 1
 
 
 _empty_json = b'{}\n'
