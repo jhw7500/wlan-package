@@ -5,8 +5,8 @@
 
 - 소스 저장소: `wlan-driver-v2` (required layout tracked-object verified)
 - 소스 원격: `https://github.com/jhw7500/wlan-driver-v2.git`
-- 소스 설명: `mwifiex-61820-0396-imx93-validated-20260822`
-- 소스 commit: `26400d66cc56e9af0096273b5d25d31d3e001fa6`
+- 소스 설명: `mwifiex-61820-0396-imx93-validated-20260822-13-gc846289`
+- 소스 commit: `c84628989c8248bb710cec8863601cf4c640f32d`
 - 소스 범위: declared commit tracks required layout and is contained by local origin/*; supplied outputs are external
 - 소스 검증: supplied metadata matched; no remote/build attestation; exact board-qualified payload bytes locked below
 - 대상 디렉토리: `dist/wlan/opt/wlan/driver`
@@ -28,5 +28,5 @@
 |-------------|---------|
 | opt/wlan/driver/mlan_imx93.ko | `c351a0d63f75d53f99ca0b74aba3911d79e9aaf1f4e269dac68cba9b06e4c46a` |
 | opt/wlan/driver/moal_imx93.ko | `87b9d0dc5b86c4a40560050f4e9c5a2c8662acc97bea6b516f0f094fcfc9b6a0` |
-| opt/wlan/bin/mlanutl_imx93 | `86ea019edd766b2c426026a4ffd86538af1f6ce85060e68cb02bbd8cc81d6f95` |
+| opt/wlan/bin/mlanutl_imx93 | `87702f82decd7d026a828583ec5144a206007d35cf87db19f99c3a5487d8a084` |
 | usr/lib/firmware/cts/sd9098_wlan_v1.bin | `7c3ef6e12d3cfc9bd638d1571ccf6ddd2e96e0ed179ec70664ccb1df0ba29e57` |
