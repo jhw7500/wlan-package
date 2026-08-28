@@ -6,7 +6,9 @@ LIB="$SCRIPT_DIR/wifi_fw_config_lib.sh"
 WIFI_INIT="$SCRIPT_DIR/wifi_init.sh"
 WIFI_CLI="$SCRIPT_DIR/wifi.sh"
 WIFI_EVENT="$SCRIPT_DIR/wifi_event.sh"
+WIFI_CHECKER="$SCRIPT_DIR/wifi_checker.sh"
 POSTINST="$SCRIPT_DIR/../../../DEBIAN/postinst"
+BOARD_CONFIG="$SCRIPT_DIR/wifi_board_config.sh"
 WIFI_INIT_UNIT="$SCRIPT_DIR/../../../etc/systemd/system/wifi_init.service"
 EMERGENCY_UNIT="$SCRIPT_DIR/../../../etc/systemd/system/wlan_emergency_reboot.service"
 TEMPLATE="$SCRIPT_DIR/../../../opt/wlan/config/wifi_init_conf.json"
@@ -59,8 +61,12 @@ case "$cmd" in
         if [ $# -gt 0 ]; then printf '%s\n' "$*" > "$STATE/$iface.ant"; exit 0; fi
         [ -e "$STATE/$iface.ant" ] || { printf 'Mode of Tx/Rx path is : 0x3\n'; exit 0; }
         read -r m n < "$STATE/$iface.ant"
-        printf 'Mode of Tx path is : %s\n' "$m"
-        printf 'Mode of Rx path is : %s\n' "${n:-$m}"
+        printf 'Mode of Tx path is %s\n' "${ANTCFG_GET_TX:-$m}"
+        printf 'Mode of Rx path is %s\n' "${ANTCFG_GET_RX:-${n:-$m}}"
+        if [ "${ANTCFG_EMIT_USER_HTSTREAM:-0}" = 1 ]; then
+            printf 'NSS limit (antcfg): 2G rx=1 tx=2, 5G rx=1 tx=2  [user_htstream=%s]\n' \
+                "${ANTCFG_GET_USER_HTSTREAM:-0x2121}"
+        fi
         ;;
     mcstiercfg)
         if [ $# -gt 0 ]; then
@@ -115,6 +121,13 @@ printf '%s\n' "$*" >> "$STATE/wpa_calls"
 exit 0
 EOF
 chmod +x "$WIFI_WPA_CLI"
+export WIFI_COMMAND="$WORK/wifi"
+cat > "$WIFI_COMMAND" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "$STATE/wifi_calls"
+exit 0
+EOF
+chmod +x "$WIFI_COMMAND"
 export WIFI_MCS_VERIFY_DELAY_SEC=0
 export WIFI_MCS_VERIFY_ATTEMPTS=3
 export WIFI_MCS_PENDING_DIR="$WORK/pending"
@@ -175,6 +188,122 @@ expect_rc "unknown legacy MCS remains invalid" 1 \
 grep -q 'normalize_legacy_mcs_tier /usr/local/etc/wifi_init_conf.json || exit 1' "$POSTINST" \
     && pass "postinst migrates legacy numeric MCS after merge" \
     || fail "postinst does not migrate legacy numeric MCS after merge"
+
+# JSON deep merge는 active 값을 보존하므로 템플릿 기본만 바꾸면 기존 장비의 구형
+# antcfg(false/empty) 또는 알려진 문제값(physical 1x1)이 남는다. 정확히 그 제품 이력만
+# 새 비대칭 계약으로 승격하고 운영자가 정한 다른 값은 건드리지 않아야 한다.
+jq '.mlan0.antcfg={_comment:["keep"],enabled:false,tx:"",rx:"",operator_note:"preserve"}' \
+    "$CONF" > "$WORK/legacy-antcfg-off.json"
+if declare -F wifi_fw_migrate_product_antcfg_json >/dev/null 2>&1 \
+   && wifi_fw_migrate_product_antcfg_json "$WORK/legacy-antcfg-off.json" \
+        > "$WORK/migrated-antcfg-off.json"; then
+    pass "legacy product antcfg migration succeeds"
+else
+    : > "$WORK/migrated-antcfg-off.json"
+    fail "legacy product antcfg migration succeeds"
+fi
+expect_eq "legacy disabled antcfg becomes asymmetric product workaround" \
+    'true 0x0303 0x0101 0x0303 0x0303 0x2121' \
+    "$(jq -r '.mlan0.antcfg | "\(.enabled) \(.tx) \(.rx) \(.verify.physical_tx) \(.verify.physical_rx) \(.verify.user_htstream)"' \
+        "$WORK/migrated-antcfg-off.json" 2>/dev/null)"
+expect_eq "antcfg migration preserves comments and unrelated operator metadata" 'keep preserve' \
+    "$(jq -r '.mlan0.antcfg | "\(._comment[0]) \(.operator_note)"' \
+        "$WORK/migrated-antcfg-off.json" 2>/dev/null)"
+
+jq '.mlan0.antcfg={enabled:true,tx:"0x0101",rx:""}' "$CONF" \
+    > "$WORK/legacy-antcfg-1x1.json"
+wifi_fw_migrate_product_antcfg_json "$WORK/legacy-antcfg-1x1.json" \
+    > "$WORK/migrated-antcfg-1x1.json" 2>/dev/null
+expect_eq "known physical 1x1 trigger migrates to asymmetric workaround" \
+    '0x0303 0x0101 0x2121' \
+    "$(jq -r '.mlan0.antcfg | "\(.tx) \(.rx) \(.verify.user_htstream)"' \
+        "$WORK/migrated-antcfg-1x1.json" 2>/dev/null)"
+
+jq '.mlan0.antcfg={enabled:true,tx:"0x0303",rx:"0x0303",operator_note:"custom"}' \
+    "$CONF" > "$WORK/custom-antcfg.json"
+wifi_fw_migrate_product_antcfg_json "$WORK/custom-antcfg.json" \
+    > "$WORK/custom-antcfg-after.json" 2>/dev/null
+expect_eq "explicit custom antcfg remains unchanged" \
+    "$(jq -S -c . "$WORK/custom-antcfg.json")" \
+    "$(jq -S -c . "$WORK/custom-antcfg-after.json" 2>/dev/null)"
+
+# 실제 postinst 순서는 template*active deep merge 후 migration이다. 구 active에 verify가
+# 없었어도 템플릿 하위 객체가 custom Tx/Rx에 주입될 수 있으므로 제품 기본 verify만 제거해
+# 종전의 log-only custom 동작을 보존해야 한다.
+jq '.mlan0.antcfg.verify={physical_tx:"0x0303",physical_rx:"0x0303",user_htstream:"0x2121"}' \
+    "$WORK/custom-antcfg.json" > "$WORK/custom-antcfg-merged.json"
+wifi_fw_migrate_product_antcfg_json "$WORK/custom-antcfg-merged.json" \
+    > "$WORK/custom-antcfg-merged-after.json" 2>/dev/null
+expect_eq "post-merge custom mlan0 removes injected product verification" \
+    '0x0303 0x0303 custom false' \
+    "$(jq -r '.mlan0.antcfg | "\(.tx) \(.rx) \(.operator_note) \(.verify != null)"' \
+        "$WORK/custom-antcfg-merged-after.json" 2>/dev/null)"
+
+jq '.mlan1.antcfg={enabled:true,tx:"0x202",rx:"",verify:{physical_tx:"",physical_rx:"",user_htstream:""}}' \
+    "$CONF" > "$WORK/custom-antcfg-mlan1-merged.json"
+wifi_fw_migrate_product_antcfg_json "$WORK/custom-antcfg-mlan1-merged.json" \
+    > "$WORK/custom-antcfg-mlan1-after.json" 2>/dev/null
+expect_eq "post-merge custom mlan1 removes injected empty verification" \
+    'true 0x202  false' \
+    "$(jq -r '.mlan1.antcfg | "\(.enabled) \(.tx) \(.rx) \(.verify != null)"' \
+        "$WORK/custom-antcfg-mlan1-after.json" 2>/dev/null)"
+
+wifi_fw_migrate_product_antcfg_json "$WORK/migrated-antcfg-off.json" \
+    > "$WORK/migrated-antcfg-twice.json" 2>/dev/null
+expect_eq "product antcfg migration is idempotent" \
+    "$(jq -S -c . "$WORK/migrated-antcfg-off.json" 2>/dev/null)" \
+    "$(jq -S -c . "$WORK/migrated-antcfg-twice.json" 2>/dev/null)"
+
+# p149.115/antcfgnss 계약은 현재 imx93 543.p18 조합에만 qualification 됐다.
+# imx8의 505.p14 utility는 user_htstream GET ABI가 없으므로 legacy disabled나
+# 중간 후보 패키지가 주입한 exact product profile을 엄격 verify로 승격하면 안 된다.
+wifi_fw_migrate_product_antcfg_json "$WORK/legacy-antcfg-off.json" imx8mm \
+    > "$WORK/migrated-antcfg-imx8.json" 2>/dev/null
+expect_eq "imx8 legacy disabled antcfg remains disabled" \
+    'false   false' \
+    "$(jq -r '.mlan0.antcfg | "\(.enabled) \(.tx) \(.rx) \(.verify != null)"' \
+        "$WORK/migrated-antcfg-imx8.json" 2>/dev/null)"
+
+wifi_fw_migrate_product_antcfg_json "$TEMPLATE" imx8mm \
+    > "$WORK/migrated-product-antcfg-imx8.json" 2>/dev/null
+expect_eq "imx8 candidate upgrade neutralizes injected strict product profile" \
+    'false   false' \
+    "$(jq -r '.mlan0.antcfg | "\(.enabled) \(.tx) \(.rx) \(.verify != null)"' \
+        "$WORK/migrated-product-antcfg-imx8.json" 2>/dev/null)"
+
+cp "$TEMPLATE" "$WORK/board-imx8.json"
+if "$BOARD_CONFIG" "$WORK/board-imx8.json" >/dev/null 2>&1; then
+    pass "imx8 board config succeeds on package template"
+else
+    fail "imx8 board config succeeds on package template"
+fi
+expect_eq "imx8 board config removes unsupported strict antcfg profile" \
+    'false   false' \
+    "$(jq -r '.mlan0.antcfg | "\(.enabled) \(.tx) \(.rx) \(.verify != null)"' \
+        "$WORK/board-imx8.json" 2>/dev/null)"
+
+expect_rc "imx93 product scan profile accepts shipped defaults" 0 \
+    wifi_fw_validate_product_scan_profile "$TEMPLATE" imx93
+jq '.mlan0.antcfg.enabled=false' "$TEMPLATE" > "$WORK/unsafe-antcfg.json"
+expect_rc "imx93 product scan profile rejects disabled antcfg" 1 \
+    wifi_fw_validate_product_scan_profile "$WORK/unsafe-antcfg.json" imx93
+jq '.mlan0.mcs_tier.he="both 9"' "$TEMPLATE" > "$WORK/unsafe-mcs.json"
+expect_rc "imx93 product scan profile rejects MCS above 7" 1 \
+    wifi_fw_validate_product_scan_profile "$WORK/unsafe-mcs.json" imx93
+jq '.mlan1.antcfg.enabled=true' "$TEMPLATE" > "$WORK/unsafe-mlan1-antcfg.json"
+expect_rc "imx93 product scan profile rejects adapter overwrite from mlan1" 1 \
+    wifi_fw_validate_product_scan_profile "$WORK/unsafe-mlan1-antcfg.json" imx93
+expect_rc "imx93 variant board name cannot bypass product scan profile" 1 \
+    wifi_fw_validate_product_scan_profile "$WORK/unsafe-antcfg.json" imx93-revA
+expect_rc "imx8 skips imx93-only product scan profile" 0 \
+    wifi_fw_validate_product_scan_profile "$WORK/custom-antcfg.json" imx8mm
+
+grep -q 'migrate_product_antcfg /usr/local/etc/wifi_init_conf.json "$BOARD_TYPE" || exit 1' "$POSTINST" \
+    && pass "postinst gates product antcfg migration by detected board" \
+    || fail "postinst does not gate product antcfg migration by detected board"
+grep -q 'wifi_fw_validate_product_scan_profile "$WIFI_INIT_CONF_JSON" "$BOARD_TYPE"' "$WIFI_INIT" \
+    && pass "wifi_init enforces board-qualified product scan profile" \
+    || fail "wifi_init does not enforce board-qualified product scan profile"
 
 expect_rc "static rate config valid" 0 wifi_fw_validate_rate_config "$CONF" mlan0
 expect_rc "dynamic rate config valid" 0 wifi_fw_validate_rate_config "$CONF" mlan1
@@ -242,6 +371,16 @@ expect_eq "rate merge updates values" '0 10 20 50' \
 # mcs_tier 와 같은 opt-in — 지금까지 적용하지 않던 설정이라 기본으로 켜면 출하 기기의
 # RF 경로가 통째로 바뀐다. 꺼져 있으면 SET 자체를 하지 않는다.
 _ant() { jq --arg t "$2" --arg r "$3" ".mlan0.antcfg={enabled:$1, tx:\$t, rx:\$r}" "$CONF"; }
+_ant_verified() {
+    jq --arg t "$1" --arg r "$2" --arg ptx "$3" --arg prx "$4" --arg hs "$5" '
+        .mlan0.antcfg={
+            enabled:true,
+            tx:$t,
+            rx:$r,
+            verify:{physical_tx:$ptx,physical_rx:$prx,user_htstream:$hs}
+        }
+    ' "$CONF"
+}
 
 rm -f "$STATE/mlan0.ant"
 expect_rc "antcfg absent section skips" 0 wifi_fw_apply_antcfg "$CONF" mlan0
@@ -262,6 +401,34 @@ _ant true 0x103 0x303 > "$WORK/ant-txrx.json"
 rm -f "$STATE/mlan0.ant"
 expect_rc "antcfg tx+rx applies" 0 wifi_fw_apply_antcfg "$WORK/ant-txrx.json" mlan0
 expect_eq "antcfg tx+rx passes both args" '0x103 0x303' "$(cat "$STATE/mlan0.ant" 2>/dev/null)"
+
+# 9098 FW는 비대칭 0x0303/0x0101 요청을 physical 0x0303/0x0303으로 정규화하고,
+# 실제 Rx NSS 제한 의도는 user_htstream=0x2121에 보존한다. 요청값과 physical GET을
+# 단순 비교하면 정상 상태를 실패로 판정하므로 세 값을 독립적으로 검증한다.
+_ant_verified 0x0303 0x0101 0x0303 0x0303 0x2121 > "$WORK/ant-verified.json"
+export ANTCFG_GET_TX=0x303 ANTCFG_GET_RX=0x303
+export ANTCFG_EMIT_USER_HTSTREAM=1 ANTCFG_GET_USER_HTSTREAM=0x2121
+rm -f "$STATE/mlan0.ant"
+expect_rc "antcfg accepts normalized physical paths with matching host NSS intent" 0 \
+    wifi_fw_apply_antcfg "$WORK/ant-verified.json" mlan0
+
+export ANTCFG_GET_USER_HTSTREAM=0x2222
+expect_rc "antcfg rejects wrong host NSS intent" 1 \
+    wifi_fw_apply_antcfg "$WORK/ant-verified.json" mlan0
+
+export ANTCFG_GET_USER_HTSTREAM=0x2121 ANTCFG_GET_RX=0x101
+expect_rc "antcfg rejects unexpected physical Rx path" 1 \
+    wifi_fw_apply_antcfg "$WORK/ant-verified.json" mlan0
+
+export ANTCFG_GET_RX=0x303 ANTCFG_EMIT_USER_HTSTREAM=0
+expect_rc "antcfg rejects GET output missing required host NSS intent" 1 \
+    wifi_fw_apply_antcfg "$WORK/ant-verified.json" mlan0
+unset ANTCFG_GET_TX ANTCFG_GET_RX ANTCFG_EMIT_USER_HTSTREAM ANTCFG_GET_USER_HTSTREAM
+
+jq '.mlan0.antcfg.verify.user_htstream="invalid"' "$WORK/ant-verified.json" \
+    > "$WORK/ant-verify-invalid.json"
+expect_rc "antcfg rejects invalid verification contract" 1 \
+    wifi_fw_validate_antcfg_config "$WORK/ant-verify-invalid.json" mlan0
 
 _ant true 3 '' > "$WORK/ant-dec.json"
 expect_rc "antcfg accepts decimal" 0 wifi_fw_validate_antcfg_config "$WORK/ant-dec.json" mlan0
@@ -318,11 +485,17 @@ grep -q 'adapter-level setting' "$LOG" \
     && fail "antcfg warns even when values match (오탐)" \
     || pass "antcfg does not warn when values match"
 
-expect_eq "template ships mlan0 antcfg disabled" 'false' "$(jq -r '.mlan0.antcfg.enabled' "$TEMPLATE")"
+expect_eq "template enables mlan0 asymmetric antcfg workaround" 'true 0x0303 0x0101' \
+    "$(jq -r '.mlan0.antcfg | "\(.enabled) \(.tx) \(.rx)"' "$TEMPLATE")"
+expect_eq "template verifies normalized physical paths and host NSS intent" '0x0303 0x0303 0x2121' \
+    "$(jq -r '.mlan0.antcfg.verify | "\(.physical_tx) \(.physical_rx) \(.user_htstream)"' "$TEMPLATE")"
 expect_eq "template ships mlan1 antcfg disabled" 'false' "$(jq -r '.mlan1.antcfg.enabled' "$TEMPLATE")"
 grep -q 'wifi_fw_apply_antcfg "$WIFI_INIT_CONF_JSON" "$iface"' "$WIFI_INIT" \
     && pass "wifi_init delegates antcfg apply" \
     || fail "wifi_init does not delegate antcfg apply"
+grep -Eq 'wifi_fw_apply_antcfg "\$WIFI_INIT_CONF_JSON" "\$iface"[[:space:]]*\|\|[[:space:]]*return 1' "$WIFI_INIT" \
+    && pass "wifi_init stops before association when verified antcfg fails" \
+    || fail "wifi_init ignores verified antcfg failure"
 
 expect_rc "ax MCS config valid" 0 wifi_fw_validate_mcs_config "$CONF" mlan0
 expect_rc "ac MCS config valid without HE" 0 wifi_fw_validate_mcs_config "$CONF" mlan1
@@ -381,14 +554,18 @@ export MCS_CONNECTED_SET_RECOVERS=1
 connected_recovery_set_count=$(cat "$STATE/mlan0.mcs_set_count")
 expect_rc "connected default HE schedules bounded recovery" 0 wifi_fw_verify_mcs_connected "$CONF" mlan0
 expect_eq "connected recovery SET runs exactly once" "$((connected_recovery_set_count + 1))" "$(cat "$STATE/mlan0.mcs_set_count")"
-expect_eq "connected recovery requests one reassociation" '-i mlan0 reassociate' "$(cat "$STATE/wpa_calls")"
+expect_eq "connected recovery uses serialized wifi connect wrapper" 'mlan0 connect' \
+    "$(cat "$STATE/wifi_calls")"
+expect_eq "connected recovery bypasses no transition lock with direct wpa_cli" 0 \
+    "$(cat "$STATE/wpa_calls" 2>/dev/null | wc -l)"
 expect_eq "reassociation keeps verification pending" yes \
     "$([ -e "$WIFI_MCS_PENDING_DIR/mcs_verify_pending_mlan0" ] && echo yes || echo no)"
 expect_eq "reassociation attempt marker is present" yes \
     "$([ -e "$WIFI_MCS_PENDING_DIR/mcs_reassociate_once_mlan0" ] && echo yes || echo no)"
 expect_rc "post-reassociation GET verifies stored MCS" 0 wifi_fw_verify_mcs_connected "$CONF" mlan0
 expect_eq "post-reassociation verification performs no extra SET" "$((connected_recovery_set_count + 1))" "$(cat "$STATE/mlan0.mcs_set_count")"
-expect_eq "post-reassociation verification performs no extra reassociate" 1 "$(wc -l < "$STATE/wpa_calls")"
+expect_eq "post-reassociation verification performs no extra wifi connect" 1 \
+    "$(wc -l < "$STATE/wifi_calls")"
 expect_eq "post-reassociation verification clears pending" no \
     "$([ -e "$WIFI_MCS_PENDING_DIR/mcs_verify_pending_mlan0" ] && echo yes || echo no)"
 expect_eq "post-reassociation verification clears attempt marker" no \
@@ -428,6 +605,15 @@ grep -q 'wifi_fw_config_lib.sh' "$WIFI_EVENT" \
 grep -q 'wifi_fw_verify_mcs_connected' "$WIFI_EVENT" \
     && pass "wifi_event verifies deferred MCS after connection" \
     || fail "wifi_event does not verify deferred MCS after connection"
+if grep -Eq 'wpa_cli[^\n]*reassociate' "$WIFI_CHECKER"; then
+    fail "wifi_checker bypasses transition lock with direct reassociate"
+elif [ "$(grep -c 'wifi "\$IFACE" connect' "$WIFI_CHECKER" || true)" -eq 2 ]; then
+    pass "wifi_checker routes both lightweight recovery paths through wifi connect"
+else
+    fail "wifi_checker does not route both lightweight recovery paths through wifi connect"
+fi
+expect_eq "wifi_checker routes both heavy recovery paths through serialized wifi restart" 2 \
+    "$(grep -Ec 'wifi "?\$IFACE"? restart' "$WIFI_CHECKER" || true)"
 if grep -q '^apply_mcs_tier()' "$WIFI_INIT"; then fail "legacy unverified MCS apply remains"; else pass "legacy unverified MCS apply removed"; fi
 expect_eq "mlan1 HE template is empty" '' "$(jq -r '.mlan1.mcs_tier.he' "$TEMPLATE")"
 if grep -q 'Applied live.*reconnect to take effect' "$WIFI_CLI"; then

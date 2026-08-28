@@ -230,9 +230,8 @@ while true; do
         STATE=$(get_state)
         TIMESTAMP=$(date +%s)
 
-        # bgscan 가드(경고-only, 300s 주기, mlan0/mlan1): wpa_supplicant 내부 bgscan 활성은
-        # 자율 로밍으로 Roaming(0x04) notify(3훅)를 우회한다 — 운영 전제 감시
-        # (wlan-opc docs/implementation/design-roam-indication-notify.md §8.3/§8.4).
+        # bgscan 가드(경고-only, 300s 주기, mlan0/mlan1): built-in bgscan은 package
+        # wifi_bgscan과 별도 scan/roam 스케줄을 만들어 어느 owner에서도 지원하지 않는다.
         # 전 network id 순회(모드A extra 블록 포함). 한계: 전역 `wpa_cli set bgscan`은 ctrl
         # 조회 불가(hostap 2.10 전역 getter 없음) → wpa.log의 모듈 초기화 로그로 보조 탐지.
         # DBDC 재평가 완료(2026-08-07): checker@mlan1 인스턴스도 자기 iface conf/wpa.log를
@@ -243,7 +242,7 @@ while true; do
                 [[ "$_nid" =~ ^[0-9]+$ ]] || continue
                 _bg=$(wpa_cli -i "$IFACE" get_network "$_nid" bgscan 2>/dev/null)
                 if [[ -n "$_bg" && "$_bg" != "FAIL" && "$_bg" != '""' ]]; then
-                    logger -p local0.warning "[$tag:$LINENO] [$IFACE] network $_nid bgscan=$_bg active — autonomous roaming bypasses Roaming(0x04) notify (design §8.4)"
+                    logger -p local0.warning "[$tag:$LINENO] [$IFACE] network $_nid has unsupported built-in bgscan=$_bg — remove it; package wifi_bgscan owns periodic scan scheduling"
                 fi
             done < <(wpa_cli -i "$IFACE" list_networks 2>/dev/null | tail -n +2)
             # 보조 탐지는 현재 supplicant 실행(InvocationID)의 journal 로 한정 —
@@ -253,7 +252,7 @@ while true; do
             # 있으므로 현재 실행 journal 에 그 라인이 있고, 여전히 경고된다(정당).
             _inv=$(systemctl show -p InvocationID --value "wpa_supplicant@${IFACE}" 2>/dev/null)
             if [[ -n "$_inv" ]] && journalctl -q _SYSTEMD_INVOCATION_ID="$_inv" 2>/dev/null | grep -q "bgscan: Initialized module"; then
-                logger -p local0.warning "[$tag:$LINENO] [$IFACE] journal: bgscan module initialized — runtime global 'set bgscan' suspected (ctrl-undetectable, design §8.3)"
+                logger -p local0.warning "[$tag:$LINENO] [$IFACE] journal: unsupported built-in bgscan module initialized — runtime global 'set bgscan' suspected (ctrl-undetectable)"
             fi
             unset _inv
         fi
@@ -287,13 +286,14 @@ while true; do
                 elif (( DURATION >= RESTART_DURATION )); then
                     # 2차(무거움): 장시간 미연결·무진행 → wpa_supplicant 재시작
                     logger -p local0.err "[$tag:$LINENO] [$IFACE] restart wpa_supplicant@$IFACE (disconnected ${DURATION}s >= ${RESTART_DURATION}s, no progress)"
-                    wifi $IFACE restart
+                    wifi "$IFACE" restart
                     UNSTABLE_START=0
                     REASSOC_DONE=0
                 elif (( DURATION >= MAX_UNSTABLE_DURATION )) && (( REASSOC_DONE == 0 )); then
-                    # 1차(가벼움): reassociate 먼저 (wpa 프로세스/상태 유지)
-                    logger -p local0.warning "[$tag:$LINENO] [$IFACE] reassociate (disconnected ${DURATION}s >= ${MAX_UNSTABLE_DURATION}s, no progress)"
-                    wpa_cli -i "$IFACE" reassociate >/dev/null 2>&1
+                    # 1차(가벼움): 공용 transition lock과 fresh association proof를
+                    # 소유하는 wifi connect로 owner-neutral reassociate를 요청한다.
+                    logger -p local0.warning "[$tag:$LINENO] [$IFACE] serialized reconnect (disconnected ${DURATION}s >= ${MAX_UNSTABLE_DURATION}s, no progress)"
+                    wifi "$IFACE" connect >/dev/null 2>&1
                     REASSOC_DONE=1
                 fi
             fi
@@ -319,10 +319,10 @@ while true; do
                     FAULT_CNT=0
                 elif (( FAULT_CNT >= FAULT_RESTART_CNT )); then
                     logger -p local0.err "[$tag:$LINENO] [$IFACE] station dump fault ($FAULT_CNT >= $FAULT_RESTART_CNT), restarting wpa_supplicant"
-                    wifi $IFACE restart
+                    wifi "$IFACE" restart
                 elif (( FAULT_CNT >= FAULT_REASSOC_CNT )); then
-                    logger -p local0.warning "[$tag:$LINENO] [$IFACE] station dump fault ($FAULT_CNT >= $FAULT_REASSOC_CNT), reassociating"
-                    wpa_cli -i "$IFACE" reassociate >/dev/null 2>&1
+                    logger -p local0.warning "[$tag:$LINENO] [$IFACE] station dump fault ($FAULT_CNT >= $FAULT_REASSOC_CNT), serialized reconnect"
+                    wifi "$IFACE" connect >/dev/null 2>&1
                 fi
             else
                 FAULT_CNT=0

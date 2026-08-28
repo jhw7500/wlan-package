@@ -34,6 +34,7 @@ EXACT_PATHS = {
     "scripts",
     "scripts/exec_bit_targets.py",
     "scripts/gen_config_defaults.py",
+    "scripts/gen_driver_manifest.sh",
     "scripts/package_tar_test.sh",
     "scripts/source_archive_manifest.txt",
     "scripts/validate_release.sh",
@@ -102,6 +103,7 @@ REQUIRED_PATHS = {
     "docs/wifi_init_conf_webui_handoff.md",
     "scripts/exec_bit_targets.py",
     "scripts/gen_config_defaults.py",
+    "scripts/gen_driver_manifest.sh",
     "scripts/package_tar_test.sh",
     "scripts/source_archive_manifest.txt",
     "scripts/validate_release.sh",
@@ -119,6 +121,7 @@ REQUIRED_PATHS = {
 }
 REQUIRED_EXECUTABLES = {
     "build.sh",
+    "scripts/gen_driver_manifest.sh",
     "scripts/package_tar_test.sh",
     "scripts/validate_release.sh",
     "scripts/validate_release_test.sh",
@@ -349,6 +352,7 @@ make_good_fixture() {
     find "$root" -type d -exec chmod 0755 {} +
     find "$root" -type f -exec chmod 0644 {} +
     chmod 0755 "$root/build.sh" \
+        "$root/scripts/gen_driver_manifest.sh" \
         "$root/scripts/package_tar_test.sh" \
         "$root/scripts/validate_release.sh" \
         "$root/scripts/validate_release_test.sh" \

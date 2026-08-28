@@ -12,6 +12,7 @@ import select
 import threading
 from datetime import datetime
 from sUTILS import Logger, _EXTRA_
+from roam_policy import RoamPolicyError, decode_wpa_ssid_text, parse_wpa_ssid_value
 
 LOG_DIR = "/var/log/cantops/scan"
 JSON_DIR = "var/log/cantops/json"
@@ -93,24 +94,38 @@ def cleanup():
 
 def parse_wpa_supplicant_conf(path):
     ssid = None
-    freqs = []
+    global_freqs = []
+    base_freqs = []
+    legacy_scan_freqs = []
     scan_interval = 30  # 기본값
+    in_network = False
+    network_index = 0
 
     with open(path, "r") as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith("ssid=") and not line.startswith("#"):
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line or line.startswith("#") and not line.startswith("#!bgscan="):
+                continue
+            if re.match(r"^network\s*=\s*\{", line):
+                in_network = True
+                network_index += 1
+                continue
+            if in_network and line.startswith("}"):
+                in_network = False
+                continue
+            if in_network and network_index == 1 and line.startswith("ssid="):
                 try:
-                    ssid = line.split("=", 1)[1].strip().strip('"')
-                except ValueError:
+                    ssid = parse_wpa_ssid_value(line.split("=", 1)[1])
+                except (ValueError, RoamPolicyError):
                     logger.message('err', f"[{IFACE}] ssid : {ssid} is invalid in {path}", _EXTRA_())
                     pass
-            elif line.startswith("scan_freq=") and not line.startswith("#"):
-                try:
-                    freqs = line.split("=", 1)[1].strip().split()
-                except ValueError:
-                    logger.message('err', f"[{IFACE}] scan_freq : {freqs} is invalid in {path}", _EXTRA_())
-                    pass
+            elif not in_network and line.startswith("freq_list=") and not global_freqs:
+                global_freqs = line.split("=", 1)[1].split("#", 1)[0].strip().split()
+            elif in_network and network_index == 1 and line.startswith("freq_list=") and not base_freqs:
+                base_freqs = line.split("=", 1)[1].split("#", 1)[0].strip().split()
+            elif in_network and network_index == 1 and line.startswith("scan_freq=") and not legacy_scan_freqs:
+                # Boot compatibility only; canonical writers emit common freq_list.
+                legacy_scan_freqs = line.split("=", 1)[1].split("#", 1)[0].strip().split()
             elif line.startswith("#!bgscan="): #and not line.startswith("#"):
                 parts = line.split("=", 1)[1].strip().strip('"').split(":")
                 if len(parts) == 4:  # bgscan="simple:X:Y:Z"
@@ -120,7 +135,7 @@ def parse_wpa_supplicant_conf(path):
                         logger.message('err', f"[{IFACE}] scan_interval : {scan_interval} is invalid in {path}", _EXTRA_())
                         pass
 
-    return ssid, freqs, scan_interval
+    return ssid, global_freqs or base_freqs or legacy_scan_freqs, scan_interval
 
 def periodic_scan(ssid, freqs, interval):
     if not ssid or not freqs:
@@ -459,18 +474,19 @@ def extract_ap_table(lines):
             continue
 
         # SSID 필터링: 비어있거나 null 바이트(\00)인 항목 제거
-        parts = clean.split('|')
+        raw = line.rstrip("\r\n")
+        parts = raw.split('|')
         if len(parts) >= 7:
-            ssid = parts[6].strip()
+            ssid = "|".join(parts[6:])
             if not ssid or '\\00' in ssid:
                 continue
 
-        data_lines.append(line)
+        data_lines.append(raw)
 
-    # 필터링 후 번호를 연속으로 재부여
+    # 필터링 후 번호를 연속으로 재부여. 마지막 SSID field의 공백은 identity다.
     renumbered = []
     for idx, line in enumerate(data_lines):
-        renumbered.append(re.sub(r'^\s*\d+\|', f'{idx:02d}|', line.strip()))
+        renumbered.append(re.sub(r'^\s*\d+\|', f'{idx:02d}|', line))
 
     return header_section + renumbered
 
@@ -506,7 +522,7 @@ def save_with_timestamp(prefix, content_lines):
     with open(filename, 'a') as f:
         f.write(header + '\n')
         for line in content_lines:
-            f.write(line.rstrip() + '\n')
+            f.write(line.rstrip("\r\n") + '\n')
             #logger.message("info", f"{line.rstrip()}", _EXTRA_()) 
         f.write('\n')
     
@@ -632,7 +648,14 @@ def parse_scan_output(scan_output):
         info['date'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         info['tsf'] = extract(r'TSF: (\d+)', int)
         info['last_seen'] = extract(r'last seen: (\d+)', int)
-        info['ssid'] = extract(r'SSID: (.+)')
+        encoded_ssid = extract(r'SSID: (.+)')
+        try:
+            info['ssid'] = (
+                decode_wpa_ssid_text(encoded_ssid)
+                if encoded_ssid is not None else None
+            )
+        except RoamPolicyError:
+            info['ssid'] = None
         info['freq'] = extract(r'freq: (\d+)', int)
         info['signal'] = extract(r'signal: (-?\d+\.\d+)', lambda x: int(float(x)))
         info['channel'] = extract(r'primary channel: (\d+)', int)

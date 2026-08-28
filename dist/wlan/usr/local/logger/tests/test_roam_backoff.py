@@ -294,3 +294,168 @@ def test_main_good_signal_oscillation_keeps_failure_backoff(monkeypatch):
         monkeypatch, [False], ticks=5, rssi_seq=[-66, -66, -66, -65, -66], gate=True
     )
     assert sleeps == [3, 3, 3, 1, 6]
+
+
+def test_main_pending_cleanup_busy_defers_exactly_one_normal_cycle(monkeypatch):
+    """The recovery-lock busy sentinel is scheduler-neutral, not truthy success."""
+    monkeypatch.setattr(wifi_roam, "ENABLE_PREDICTIVE_ROAM", False)
+    monkeypatch.setattr(wifi_roam, "ENABLE_PING_PONG_PREVENTION", False)
+    monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", False)
+    monkeypatch.setattr(wifi_roam, "CHECK_INTERVAL", 7)
+    monkeypatch.setattr(wifi_roam, "_RELOAD_STATE", {"pending": False})
+    cleanup = MagicMock(return_value=wifi_roam.SCAN_TRANSITION_BUSY)
+    later_boundary = MagicMock(side_effect=AssertionError("cycle did not defer"))
+    monkeypatch.setattr(wifi_roam, "retry_pending_selection_cleanup", cleanup)
+    monkeypatch.setattr(wifi_roam, "reload_supplicant_conf_if_changed", later_boundary)
+    sleeps = []
+
+    def stop_after_defer(seconds):
+        sleeps.append(seconds)
+        raise _StopLoop
+
+    monkeypatch.setattr(wifi_roam, "interruptible_sleep", stop_after_defer)
+    with pytest.raises(_StopLoop):
+        wifi_roam.main()
+
+    cleanup.assert_called_once_with(wifi_roam.IFACE)
+    assert sleeps == [7]
+    later_boundary.assert_not_called()
+
+
+def _drive_main_busy_cycle(monkeypatch, stage_result, *, cross=False):
+    """Run exactly one production main-loop cycle and expose all busy side effects."""
+    _set_sleep(monkeypatch, 3, 30, fast=1)
+    monkeypatch.setattr(wifi_roam, "ENABLE_PREDICTIVE_ROAM", False)
+    monkeypatch.setattr(wifi_roam, "ENABLE_PING_PONG_PREVENTION", False)
+    monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", cross)
+    monkeypatch.setattr(wifi_roam, "ENABLE_STAGED_SCAN", True)
+    monkeypatch.setattr(wifi_roam, "WPA_SSID", "Base")
+    monkeypatch.setattr(wifi_roam, "WPA_TH_2G", -65)
+    monkeypatch.setattr(wifi_roam, "CHECK_INTERVAL", 7)
+    monkeypatch.setattr(wifi_roam, "ROAM_SUCCESS_SLEEP", 11)
+    monkeypatch.setattr(wifi_roam, "_RELOAD_STATE", {"pending": False})
+    monkeypatch.setattr(wifi_roam, "set_flag", MagicMock())
+    monkeypatch.setattr(wifi_roam, "retry_pending_selection_cleanup", lambda *_: True)
+    monkeypatch.setattr(
+        wifi_roam, "reload_supplicant_conf_if_changed", lambda *_: None
+    )
+    monkeypatch.setattr(wifi_roam, "roam_hint_touched", lambda *_: False)
+    monkeypatch.setattr(wifi_roam, "track_association", lambda *_: None)
+    monkeypatch.setattr(
+        wifi_roam,
+        "get_link_info",
+        lambda: {
+            "bssid": "aa:aa:aa:aa:aa:01",
+            "rssi": -70,
+            "freq": 2412,
+            "ssid": "Base",
+        },
+    )
+    monkeypatch.setattr(
+        wifi_roam, "staged_scan_best_candidate", lambda *_: stage_result
+    )
+
+    gate_state = {
+        "bssid": "aa:aa:aa:aa:aa:01",
+        "assoc_ts": 123.0,
+        "reset_rssi": -88,
+        "suppressed": 4,
+    }
+    gate_before = dict(gate_state)
+    monkeypatch.setattr(wifi_roam, "new_gate_state", lambda: gate_state)
+    streak_reset = MagicMock(side_effect=lambda state: state.update(reset_rssi=None))
+    monkeypatch.setattr(wifi_roam, "on_streak_reset", streak_reset)
+
+    active_fallback = MagicMock()
+    same_roam = MagicMock(return_value=wifi_roam.SCAN_TRANSITION_BUSY)
+    cross_roam = MagicMock(return_value=wifi_roam.SCAN_TRANSITION_BUSY)
+    advance = MagicMock(wraps=wifi_roam.advance_no_candidate_backoff)
+    record_cross = MagicMock()
+    settle = MagicMock()
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", active_fallback)
+    monkeypatch.setattr(wifi_roam, "roam_to_bssid", same_roam)
+    monkeypatch.setattr(wifi_roam, "route_cross_ssid_transition", cross_roam)
+    monkeypatch.setattr(wifi_roam, "advance_no_candidate_backoff", advance)
+    monkeypatch.setattr(wifi_roam, "record_cross_ssid_result", record_cross)
+    monkeypatch.setattr(wifi_roam.time, "sleep", settle)
+    wifi_roam.logger.reset_mock()
+
+    sleeps = []
+
+    def stop_after_one(sec):
+        sleeps.append(sec)
+        raise _StopLoop
+
+    monkeypatch.setattr(wifi_roam, "interruptible_sleep", stop_after_one)
+    with pytest.raises(_StopLoop):
+        wifi_roam.main()
+
+    log_text = "\n".join(
+        " ".join(str(part) for part in call.args)
+        for call in wifi_roam.logger.message.call_args_list
+    )
+    return {
+        "sleeps": sleeps,
+        "gate": gate_state,
+        "gate_before": gate_before,
+        "streak_reset": streak_reset,
+        "active_fallback": active_fallback,
+        "same_roam": same_roam,
+        "cross_roam": cross_roam,
+        "advance": advance,
+        "record_cross": record_cross,
+        "settle": settle,
+        "log": log_text,
+    }
+
+
+def _assert_scheduler_neutral_busy(observed):
+    assert observed["sleeps"] == [wifi_roam.CHECK_INTERVAL]
+    assert observed["gate"] == observed["gate_before"]
+    observed["streak_reset"].assert_not_called()
+    observed["advance"].assert_not_called()
+    observed["settle"].assert_not_called()
+    assert "Roaming:" not in observed["log"]
+    assert "Roam attempt failed" not in observed["log"]
+
+
+def test_main_staged_scan_busy_is_scheduler_neutral(monkeypatch):
+    observed = _drive_main_busy_cycle(
+        monkeypatch,
+        (wifi_roam.SCAN_TRANSITION_BUSY, "", 0, False),
+    )
+    _assert_scheduler_neutral_busy(observed)
+    observed["active_fallback"].assert_not_called()
+    observed["same_roam"].assert_not_called()
+    observed["cross_roam"].assert_not_called()
+    observed["record_cross"].assert_not_called()
+
+
+def test_main_same_ssid_transition_busy_is_scheduler_neutral(monkeypatch):
+    best = {
+        "bssid": "aa:aa:aa:aa:aa:02",
+        "ssid": "Base",
+        "rssi": -55,
+        "freq": 2437,
+    }
+    observed = _drive_main_busy_cycle(monkeypatch, (best, "rssi", 10.0, True))
+    _assert_scheduler_neutral_busy(observed)
+    observed["same_roam"].assert_called_once()
+    observed["cross_roam"].assert_not_called()
+    observed["record_cross"].assert_not_called()
+
+
+def test_main_cross_ssid_transition_busy_is_scheduler_neutral(monkeypatch):
+    best = {
+        "bssid": "aa:aa:aa:aa:aa:02",
+        "ssid": "Office",
+        "rssi": -55,
+        "freq": 2437,
+    }
+    observed = _drive_main_busy_cycle(
+        monkeypatch, (best, "rssi", 10.0, True), cross=True
+    )
+    _assert_scheduler_neutral_busy(observed)
+    observed["same_roam"].assert_not_called()
+    observed["cross_roam"].assert_called_once()
+    observed["record_cross"].assert_not_called()

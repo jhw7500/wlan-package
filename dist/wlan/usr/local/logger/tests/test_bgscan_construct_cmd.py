@@ -15,6 +15,14 @@ wifi_bgscan.IFACE = "mlan0"
 wifi_bgscan.logger = MagicMock()   # logger 는 __main__ 에서만 생성 — cap 경고 경로용 mock
 
 
+@pytest.fixture(autouse=True)
+def reset_iw_passive_safety_warning():
+    """Keep the process-wide iw passive safety warning order-independent."""
+    wifi_bgscan._IW_PASSIVE_FORCED_ACTIVE_WARNED = False
+    yield
+    wifi_bgscan._IW_PASSIVE_FORCED_ACTIVE_WARNED = False
+
+
 def _ssid_tokens(cmd):
     """iw 문법상 ssid 그룹은 **종단**(`[ssid <ssid>*|passive]`) — `ssid` 키워드 1회 뒤의
     모든 토큰이 SSID 값이다. 키워드를 반복하면 iw 5.19 파서(SSID 상태에서 키워드 복귀
@@ -36,18 +44,13 @@ def _ssid_tokens(cmd):
     # (4) ssid_filter=False, with extras → wildcard "" first, then extras
     #     (preserves broad scan intent while directed-probing hidden extra SSIDs)
     ("HomeNet", False, ["OfficeNet"], ["", "OfficeNet"]),
-    # (5) dedup: extra_ssids contains current SSID → no duplicate ssid token
-    ("HomeNet", True, ["HomeNet", "OfficeNet"], ["HomeNet", "OfficeNet"]),
-    # (6) ssid=None (conf missing / link.json absent), ssid_filter=True, with extras
+    # (5) ssid=None (conf missing / link.json absent), ssid_filter=True, with extras
     #     → only extras probed (no None token leaks in)
     (None, True, ["OfficeNet"], ["OfficeNet"]),
-    # (7) ssid=None, ssid_filter=False, with extras → wildcard still inserted
+    # (6) ssid=None, ssid_filter=False, with extras → wildcard still inserted
     (None, False, ["OfficeNet"], ["", "OfficeNet"]),
-    # (8) ssid_filter=False, extra_ssids=[] (empty, not None) → no spurious "" wildcard
+    # (7) ssid_filter=False, extra_ssids=[] (empty, not None) → no spurious "" wildcard
     ("HomeNet", False, [], []),
-    # (9) dedup in the ssid_filter=False branch: extra equals current SSID
-    #     → wildcard "" + single HomeNet token (base ssid not probed, no dup)
-    ("HomeNet", False, ["HomeNet"], ["", "HomeNet"]),
 ])
 def test_ssid_probe_tokens(ssid, ssid_filter, extra_ssids, expected):
     cmd = construct_iw_scan_cmd(ssid, [], ssid_filter=ssid_filter, freq_filter=False, extra_ssids=extra_ssids)
@@ -58,6 +61,14 @@ def test_freq_filter_true_adds_freq_tokens():
     cmd = construct_iw_scan_cmd("HomeNet", ["2412", "5180"], ssid_filter=True, freq_filter=True)
     assert "freq" in cmd
     assert "2412" in cmd and "5180" in cmd
+
+
+@pytest.mark.parametrize("extras", [["HomeNet"], ["Office", "Office"]])
+def test_iw_scan_rejects_base_or_duplicate_ssid_identity(extras):
+    with pytest.raises(wifi_bgscan.RoamPolicyError):
+        construct_iw_scan_cmd(
+            "HomeNet", [], ssid_filter=True, freq_filter=False, extra_ssids=extras
+        )
 
 
 def test_freq_filter_false_omits_freq_tokens():
@@ -72,26 +83,51 @@ def test_cmd_prefix():
 
 # --- passive scan mode ---
 
-def test_passive_adds_keyword_and_drops_ssid_probes():
-    # 패시브: probe를 안 쏘므로 ssid 토큰이 전부 빠지고 'passive' 키워드가 붙는다.
+def test_passive_request_is_forced_to_exact_active_directed_command():
     cmd = construct_iw_scan_cmd(
-        "HomeNet", ["2412", "5180"], ssid_filter=True,
-        freq_filter=True, extra_ssids=["OfficeNet"], passive=True,
+        "HomeNet",
+        ["2412", "5180"],
+        ssid_filter=True,
+        freq_filter=True,
+        extra_ssids=["OfficeNet"],
+        passive=True,
     )
-    assert cmd[:3] == ["iw", "mlan0", "scan"]
-    assert _ssid_tokens(cmd) == []          # directed probe 없음
-    assert "freq" in cmd and "2412" in cmd and "5180" in cmd  # freq 스코프는 유지
-    # [회귀] iw 5.19 문법 `scan [freq <freq>*] ... [ssid <ssid>*|passive]` — passive는
-    # 맨 뒤 그룹이라 freq 뒤에 와야 한다. 앞에 두면 iw가 rc=1로 즉시 실패해 스캔이 아예
-    # 안 돈다(온타겟 실측). freq_filter=true가 기본이라 이 순서가 곧 기능 여부를 가른다.
-    assert cmd.index("passive") > cmd.index("freq"), f"passive는 freq 뒤여야 함: {cmd}"
-    assert cmd[-1] == "passive", f"passive는 마지막 토큰이어야 함: {cmd}"
+    assert cmd == [
+        "iw", "mlan0", "scan", "freq", "2412", "5180",
+        "ssid", "HomeNet", "OfficeNet",
+    ]
+    assert "passive" not in cmd
 
 
-def test_passive_freq_filter_false_omits_freq():
-    cmd = construct_iw_scan_cmd("HomeNet", ["2412"], freq_filter=False, passive=True)
-    assert cmd == ["iw", "mlan0", "scan", "passive"]   # freq 없으면 passive만
-    assert "freq" not in cmd
+def test_passive_override_honors_no_freq_and_active_no_probe_case():
+    forced_active = construct_iw_scan_cmd(
+        "HomeNet", ["2412"], ssid_filter=False, freq_filter=False, passive=True
+    )
+    ordinary_active = construct_iw_scan_cmd(
+        "HomeNet", ["2412"], ssid_filter=False, freq_filter=False, passive=False
+    )
+    assert forced_active == ordinary_active == ["iw", "mlan0", "scan"]
+    assert "passive" not in forced_active
+    assert "ssid" not in forced_active
+
+
+def test_passive_override_warns_once_and_explicit_active_does_not_warn():
+    wifi_bgscan.logger.reset_mock()
+
+    construct_iw_scan_cmd("HomeNet", [], passive=True)
+    construct_iw_scan_cmd("HomeNet", [], passive=True)
+    construct_iw_scan_cmd("HomeNet", [], passive=False)
+
+    warnings = [
+        call.args[1]
+        for call in wifi_bgscan.logger.message.call_args_list
+        if call.args[0] == "warn"
+    ]
+    assert len(warnings) == 1
+    assert "[mlan0]" in warnings[0]
+    assert "bgscan.passive=true" in warnings[0]
+    assert "forcing active scanning" in warnings[0]
+    assert "data plane" in warnings[0]
 
 
 def test_active_default_has_no_passive_keyword():
@@ -142,3 +178,63 @@ def test_ssid_probe_cap_preserves_wildcard():
     toks = _ssid_tokens(cmd)
     assert len(toks) == wifi_bgscan.MAX_SCAN_SSIDS
     assert toks[0] == ""                   # wildcard 슬롯 보존
+
+
+# --- wpa_cli SCAN backend ---
+
+def _wpa_ssid_hex_tokens(cmd):
+    return [cmd[i + 1] for i, token in enumerate(cmd[:-1]) if token == "ssid"]
+
+
+def test_wpa_passive_scan_uses_exact_common_frequency_list():
+    cmd = wifi_bgscan.construct_wpa_scan_cmd(
+        "mlan0", "Base", ["5180", "5200"], passive=True
+    )
+    assert cmd == [
+        "wpa_cli", "-i", "mlan0", "scan", "freq=5180,5200", "passive=1"
+    ]
+    assert "TYPE=ONLY" not in cmd
+
+
+def test_wpa_active_scan_hex_encodes_each_configured_ssid():
+    cmd = wifi_bgscan.construct_wpa_scan_cmd(
+        "mlan0",
+        "Base",
+        ["5180"],
+        ssid_filter=True,
+        extra_ssids=["Office", "게스트"],
+        passive=False,
+    )
+    assert cmd[:5] == ["wpa_cli", "-i", "mlan0", "scan", "freq=5180"]
+    assert _wpa_ssid_hex_tokens(cmd) == [
+        "Base".encode("utf-8").hex(),
+        "Office".encode("utf-8").hex(),
+        "게스트".encode("utf-8").hex(),
+    ]
+    assert "TYPE=ONLY" not in cmd
+
+
+def test_wpa_scan_without_common_list_is_unrestricted():
+    cmd = wifi_bgscan.construct_wpa_scan_cmd(
+        "mlan0", "Base", [], ssid_filter=False, extra_ssids=[], passive=False
+    )
+    assert cmd == ["wpa_cli", "-i", "mlan0", "scan"]
+
+
+def test_wpa_scan_caps_unique_directed_ssids():
+    extras = [f"Net{i}" for i in range(20)]
+    cmd = wifi_bgscan.construct_wpa_scan_cmd(
+        "mlan0", "Base", ["2412"], ssid_filter=True, extra_ssids=extras
+    )
+    ssids = _wpa_ssid_hex_tokens(cmd)
+    assert len(ssids) == wifi_bgscan.MAX_SCAN_SSIDS
+    assert ssids[0] == "Base".encode().hex()
+    assert len(set(ssids)) == len(ssids)
+
+
+@pytest.mark.parametrize("extras", [["Base"], ["Office", "Office"]])
+def test_wpa_scan_rejects_base_or_duplicate_ssid_identity(extras):
+    with pytest.raises(wifi_bgscan.RoamPolicyError):
+        wifi_bgscan.construct_wpa_scan_cmd(
+            "mlan0", "Base", ["2412"], ssid_filter=True, extra_ssids=extras
+        )

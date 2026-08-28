@@ -1,12 +1,24 @@
 #!/bin/bash
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-# shellcheck source=./wifi_init_config_lib.sh
-. "/usr/local/scripts/wifi_init_config_lib.sh"
+# Prefer the sibling library for package/development invocation; the installed
+# `/usr/local/bin/wifi` has no sibling and therefore uses the installed copy.
+if [ -r "$SCRIPT_DIR/wifi_init_config_lib.sh" ]; then
+    . "$SCRIPT_DIR/wifi_init_config_lib.sh"
+else
+    # shellcheck source=./wifi_init_config_lib.sh
+    . "/usr/local/scripts/wifi_init_config_lib.sh"
+fi
 # 설치 전 환경(개발/테스트)에서는 스크립트 옆의 lib로 보충.
 # 타깃은 /usr/local/bin/wifi 심볼릭 링크라 SCRIPT_DIR을 1차 경로로 못 쓴다.
 if ! declare -f wifi_init_mode_to_bandcfg_mask >/dev/null 2>&1; then
     # 파일 존재 시에만 source — 없으면 조용히 skip(정상), 있으면 source의
     # syntax error는 그대로 노출(2>/dev/null로 삼키지 않음).
+    [ -f "$SCRIPT_DIR/wifi_init_config_lib.sh" ] && . "$SCRIPT_DIR/wifi_init_config_lib.sh"
+fi
+# Development/test entry points can have an older installed library even though
+# this sibling script is the package under test.  Load the sibling only when
+# the new live-operation primitive is absent; installed images already carry it.
+if ! declare -f wifi_scan_transition_lock_acquire >/dev/null 2>&1; then
     [ -f "$SCRIPT_DIR/wifi_init_config_lib.sh" ] && . "$SCRIPT_DIR/wifi_init_config_lib.sh"
 fi
 # shellcheck source=./wifi_fw_config_lib.sh
@@ -19,6 +31,8 @@ fi
 tag=$(basename "$0")
 IFACE=mlan
 NUM=""
+WPA_CONF_DIR="${WPA_CONF_DIR:-/etc/wpa_supplicant}"
+WIFI_RUN_DIR="${WIFI_RUN_DIR:-/run/wifi}"
 
 if [ "${1:-}" == "0" ] || [ "${1:-}" == "mlan0" ]; then
     IFACE=mlan0
@@ -32,17 +46,42 @@ elif [ "${1:-}" == "2" ] || [ "${1:-}" == "eth0" ]; then
 fi
 
 logger -p local0.info "[$tag:$LINENO] [$IFACE] cmd : wifi $1 $2 $3 $4"
-trap 'sync 2>/dev/null || true' EXIT
+trap 'wifi_wpa_run_child sync 2>/dev/null || true' EXIT
 
 # ----- safe file update helpers -----
+sync_path_or_global() {
+    # BusyBox sync builds without -f may reject a path operand.  A successful
+    # global sync is an acceptable durability fallback; failure of both is not.
+    sync "$1" 2>/dev/null || sync 2>/dev/null
+}
+
 safe_install_sync() {
     # $1: src(tmp), $2: dst(real)
-    local src="$1" dst="$2" mode=0644
+    local src="$1" dst="$2" mode=0644 stage dst_dir
     case "$dst" in
-        /etc/wpa_supplicant/wpa_supplicant-*.conf) mode=0600 ;;
+        */wpa_supplicant-*.conf) mode=0600 ;;
     esac
-    install -o root -g root -m "$mode" "$src" "$dst"
-    sync "$dst" 2>/dev/null || sync
+    # install(1)을 dst에 직접 호출하면 unlink+copy라 power loss/동시 reader가 partial
+    # 파일을 볼 수 있다. 같은 directory stage에 metadata까지 완성한 뒤 rename한다.
+    stage=$(mktemp "${dst}.install.XXXXXX") || return 1
+    if ! install -o root -g root -m "$mode" "$src" "$stage"; then
+        rm -f "$stage"
+        return 1
+    fi
+    if ! sync_path_or_global "$stage"; then
+        rm -f "$stage"
+        return 1
+    fi
+    if ! mv -f "$stage" "$dst"; then
+        rm -f "$stage"
+        return 1
+    fi
+    sync_path_or_global "$dst" || return 1
+    dst_dir=${dst%/*}
+    if [ "$dst_dir" != "$dst" ]; then
+        sync_path_or_global "$dst_dir" || return 1
+    fi
+    return 0
 }
 
 safe_tmp_for() {
@@ -379,9 +418,273 @@ apply_bw_or_exit() { # $1 iface, $2 bw_cap
     esac
 }
 
-# wpa_cli는 데몬 응답이 FAIL이어도 exit 0이므로 출력 문자열로 성공 판정
+# wpa_cli는 데몬 응답이 FAIL이어도 exit 0일 수 있다. 반대로 transport/wrapper가
+# stdout에 OK를 남기고 nonzero로 끝나는 경우도 실패이므로 rc와 reply를 모두 확인한다.
 wpa_cli_ok() {
-    [ "$(wpa_cli -i "$1" "$2" 2>/dev/null)" = "OK" ]
+    local iface="$1" reply
+    shift
+    if ! reply=$(wifi_wpa_child_exec wpa_cli -i "$iface" "$@" 2>/dev/null); then
+        return 1
+    fi
+    [ "$reply" = "OK" ]
+}
+
+# service start/restart 뒤 process active만으로 association 완료를 주장하지 않는다.
+# 새 supplicant 인스턴스의 COMPLETED를 bounded polling하고 그동안 parent가 FD7을 유지한다.
+wifi_wpa_wait_completed_under_transition() {
+    local iface="$1" polls reply line state="" i
+    polls=$((ASSOC_TIMEOUT_DEFAULT * 10))
+    for ((i = 1; i <= polls; i++)); do
+        reply=$(wifi_wpa_child_exec wpa_cli -i "$iface" status 2>/dev/null) || reply=""
+        state=""
+        while IFS= read -r line; do
+            case "$line" in wpa_state=*) state=${line#wpa_state=} ;; esac
+        done <<< "$reply"
+        [ "$state" = COMPLETED ] && return 0
+        [ "$i" -lt "$polls" ] && wifi_wpa_run_child sleep 0.1
+    done
+    return 1
+}
+
+# Store a live process's /proc start-time token in the named caller variable.
+# This liveness path is shell-builtin only: the SIGKILL watchdog must never
+# wait behind a schedulable `cat`/`tr` child before it can enforce its cleanup
+# bound.  Field parsing starts after the final ") " to tolerate spaces in the
+# kernel comm field.
+connect_monitor_proc_start_into() {
+    local output_name="$1" pid="$2" stat rest
+    printf -v "$output_name" '%s' ""
+    case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$pid" -gt 1 ] || return 1
+    [ -r "/proc/$pid/stat" ] || return 1
+    IFS= read -r stat < "/proc/$pid/stat" 2>/dev/null || return 1
+    rest=${stat##*) }
+    set -- $rest
+    [ $# -ge 20 ] && [ "${1:-}" != "Z" ] || return 1
+    printf -v "$output_name" '%s' "${20}"
+}
+
+connect_monitor_pid_matches() {
+    local pid="$1" expected="$2" current
+    [ -n "$expected" ] || return 1
+    connect_monitor_proc_start_into current "$pid" || return 1
+    [ "$current" = "$expected" ]
+}
+
+connect_monitor_pid_is_wpa_cli() {
+    local pid="$1" arg
+    case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$pid" -gt 1 ] || return 1
+    [ -r "/proc/$pid/cmdline" ] || return 1
+    while IFS= read -r -d '' arg; do
+        case "$arg" in wpa_cli|*/wpa_cli) return 0 ;; esac
+    done < "/proc/$pid/cmdline" 2>/dev/null
+    return 1
+}
+
+connect_event_monitor_cleanup() {
+    local pid start watchdog_pid watchdog_start _i
+    watchdog_pid="${CONNECT_MONITOR_WATCHDOG_PID:-}"
+    watchdog_start="${CONNECT_MONITOR_WATCHDOG_START:-}"
+    if connect_monitor_pid_matches "$watchdog_pid" "$watchdog_start"; then
+        kill -TERM "$watchdog_pid" 2>/dev/null || true
+    fi
+    if [ -n "$watchdog_pid" ]; then
+        wait "$watchdog_pid" 2>/dev/null || true
+    fi
+
+    pid="${CONNECT_MONITOR_PID:-}"
+    start="${CONNECT_MONITOR_START:-}"
+    # A signal can arrive after wpa_cli writes its private pidfile but before
+    # start() records the identity.  Recover only a live wpa_cli identity from
+    # our mode-0700 directory; arbitrary/stale numeric PIDs remain unsignalled.
+    if [ -z "$start" ] && [ -n "${CONNECT_MONITOR_DIR:-}" ]; then
+        pid=""
+        if [ -r "$CONNECT_MONITOR_DIR/wpa_cli.pid" ]; then
+            IFS= read -r pid < "$CONNECT_MONITOR_DIR/wpa_cli.pid" || pid=""
+        fi
+        if connect_monitor_pid_is_wpa_cli "$pid"; then
+            connect_monitor_proc_start_into start "$pid" 2>/dev/null || start=""
+        fi
+    fi
+    if connect_monitor_pid_matches "$pid" "$start"; then
+        kill -TERM "$pid" 2>/dev/null || true
+        for _i in 1 2 3 4 5 6 7 8 9 10; do
+            connect_monitor_pid_matches "$pid" "$start" || break
+            wifi_wpa_run_child sleep 0.1
+        done
+        if connect_monitor_pid_matches "$pid" "$start"; then
+            kill -KILL "$pid" 2>/dev/null || true
+        fi
+    fi
+    [ -z "${CONNECT_MONITOR_DIR:-}" ] \
+        || wifi_wpa_run_child rm -rf -- "$CONNECT_MONITOR_DIR"
+    CONNECT_MONITOR_DIR=""
+    CONNECT_MONITOR_PID=""
+    CONNECT_MONITOR_START=""
+    CONNECT_MONITOR_WATCHDOG_PID=""
+    CONNECT_MONITOR_WATCHDOG_START=""
+}
+
+connect_event_monitor_start() { # $1 iface, $2 association timeout seconds
+    local iface="$1" timeout="$2" action pidfile pid start parent_pid parent_start
+    local watchdog_ticks watchdog_pid watchdog_start _i
+
+    wifi_wpa_run_child mkdir -p "$WIFI_RUN_DIR" 2>/dev/null || return 1
+    CONNECT_MONITOR_DIR=$(wifi_wpa_child_exec mktemp -d "$WIFI_RUN_DIR/${iface}.connect-monitor.XXXXXX") \
+        || return 1
+    wifi_wpa_run_child chmod 0700 "$CONNECT_MONITOR_DIR" 2>/dev/null || {
+        connect_event_monitor_cleanup
+        return 1
+    }
+    action="$CONNECT_MONITOR_DIR/action.sh"
+    pidfile="$CONNECT_MONITOR_DIR/wpa_cli.pid"
+    wifi_wpa_run_child cat > "$action" <<'EOF'
+#!/bin/sh
+exec 7>&- 9>&-
+[ "${2:-}" = "CONNECTED" ] || exit 0
+monitor_dir=${0%/*}
+[ -f "$monitor_dir/armed" ] || exit 0
+case "${WPA_ID:-}" in ''|*[!0-9]*) exit 0 ;; esac
+tmp="$monitor_dir/connected-id.tmp.$$"
+(umask 077; printf '%s\n' "$WPA_ID" > "$tmp") || exit 1
+mv -f "$tmp" "$monitor_dir/connected-id"
+EOF
+    wifi_wpa_run_child chmod 0700 "$action" 2>/dev/null || {
+        connect_event_monitor_cleanup
+        return 1
+    }
+
+    # EXIT/signal traps cannot run after SIGKILL.  Start the watchdog before
+    # daemon attachment so even the small pidfile/setup window is covered.
+    # It recovers only a live wpa_cli from our private directory, then pins its
+    # /proc start token before sending any signal.
+    parent_pid=$$
+    connect_monitor_proc_start_into parent_start "$parent_pid" || {
+        connect_event_monitor_cleanup
+        return 1
+    }
+    watchdog_ticks=$((timeout * 10 + 50))
+    (
+        exec 7>&- 9>&-
+        # Survive shell/job-control hangup propagation if the owning command
+        # is killed before its EXIT trap can stop this watchdog.
+        trap '' HUP
+        for ((_i = 1; _i <= watchdog_ticks; _i++)); do
+            [ -d "$CONNECT_MONITOR_DIR" ] || exit 0
+            connect_monitor_pid_matches "$parent_pid" "$parent_start" || break
+            wifi_wpa_run_child sleep 0.1
+        done
+        [ -d "$CONNECT_MONITOR_DIR" ] || exit 0
+        pid=""; start=""
+        for _i in 1 2 3 4 5 6 7 8 9 10; do
+            pid=""
+            if [ -r "$pidfile" ]; then
+                IFS= read -r pid < "$pidfile" || pid=""
+            fi
+            if connect_monitor_pid_is_wpa_cli "$pid"; then
+                connect_monitor_proc_start_into start "$pid" 2>/dev/null || start=""
+                [ -n "$start" ] && break
+            fi
+            wifi_wpa_run_child sleep 0.1
+        done
+        if connect_monitor_pid_matches "$pid" "$start"; then
+            kill -TERM "$pid" 2>/dev/null || true
+            # The parent is already gone (normally SIGKILL), so there is no
+            # caller left to benefit from a long graceful-daemon wait.  Bound
+            # orphan cleanup tightly, then force release of private resources.
+            for _i in 1 2 3; do
+                connect_monitor_pid_matches "$pid" "$start" || break
+                wifi_wpa_run_child sleep 0.1
+            done
+            if connect_monitor_pid_matches "$pid" "$start"; then
+                kill -KILL "$pid" 2>/dev/null || true
+            fi
+        fi
+        wifi_wpa_run_child rm -rf -- "$CONNECT_MONITOR_DIR"
+    ) >/dev/null 2>&1 &
+    watchdog_pid=$!
+    CONNECT_MONITOR_WATCHDOG_PID="$watchdog_pid"
+    connect_monitor_proc_start_into watchdog_start "$watchdog_pid" || {
+        kill -TERM "$watchdog_pid" 2>/dev/null || true
+        wait "$watchdog_pid" 2>/dev/null || true
+        connect_event_monitor_cleanup
+        return 1
+    }
+    CONNECT_MONITOR_WATCHDOG_START="$watchdog_start"
+
+    # Daemon mode's stdout is not part of the request/reply protocol; its rc
+    # plus a live private pidfile prove successful attachment.
+    if ! wifi_wpa_run_child wpa_cli -i "$iface" -a "$action" -B -P "$pidfile" \
+        >/dev/null 2>&1; then
+        connect_event_monitor_cleanup
+        return 1
+    fi
+    pid=""
+    for _i in 1 2 3 4 5 6 7 8 9 10; do
+        pid=""
+        if [ -r "$pidfile" ]; then
+            IFS= read -r pid < "$pidfile" || pid=""
+        fi
+        connect_monitor_proc_start_into start "$pid" 2>/dev/null || start=""
+        [ -n "$start" ] && break
+        wifi_wpa_run_child sleep 0.1
+    done
+    if [ -z "${start:-}" ]; then
+        connect_event_monitor_cleanup
+        return 1
+    fi
+    CONNECT_MONITOR_PID="$pid"
+    CONNECT_MONITOR_START="$start"
+    return 0
+}
+
+connect_event_monitor_arm() {
+    [ -n "${CONNECT_MONITOR_DIR:-}" ] || return 1
+    wifi_wpa_run_child rm -f "$CONNECT_MONITOR_DIR/connected-id" \
+        "$CONNECT_MONITOR_DIR"/connected-id.tmp.*
+    : > "$CONNECT_MONITOR_DIR/armed"
+}
+
+# Read fresh event evidence before status so an accepted COMPLETED snapshot is
+# necessarily subsequent to the CONNECTED epoch.  The connect command sets the
+# target globals before invoking this helper.
+connect_association_poll_matches() {
+    if ! FRESH_EVENT_ID=$(wifi_wpa_child_exec cat "$CONNECT_MONITOR_DIR/connected-id" 2>/dev/null); then
+        FRESH_EVENT_ID=""
+    fi
+    WPA_STATUS=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" status 2>/dev/null) || WPA_STATUS=""
+    WPA_STATE=""; CUR_SSID=""; CUR_FREQ=""; CUR_ID=""; ASSOC_MATCH=0
+    while IFS='=' read -r _key _value; do
+        case "$_key" in
+            wpa_state) WPA_STATE="$_value" ;;
+            ssid)      CUR_SSID="$_value" ;;
+            freq)      CUR_FREQ="$_value" ;;
+            id)        CUR_ID="$_value" ;;
+        esac
+    done <<< "$WPA_STATUS"
+
+    if [ "$WPA_STATE" = "COMPLETED" ]; then
+        if [ "$HAS_TARGET_ID" = "1" ]; then
+            [ "$FRESH_EVENT_ID" = "$TARGET_ID" ] \
+                && [ "$CUR_ID" = "$TARGET_ID" ] && ASSOC_MATCH=1
+        elif [ "$HAS_TARGET" = "0" ]; then
+            [[ "$FRESH_EVENT_ID" =~ ^[0-9]+$ ]] \
+                && [ "$CUR_ID" = "$FRESH_EVENT_ID" ] && ASSOC_MATCH=1
+        elif [ "$CUR_SSID" = "$TARGET_SSID_WPA_TEXT" ]; then
+            if [[ "$FRESH_EVENT_ID" =~ ^[0-9]+$ ]] \
+               && [ "$FRESH_EVENT_ID" = "$CUR_ID" ]; then
+                if [ "$SET_FREQ" = "0" ]; then
+                    ASSOC_MATCH=1
+                else
+                    case " $FREQ_STR " in
+                        *" $CUR_FREQ "*) ASSOC_MATCH=1 ;;
+                    esac
+                fi
+            fi
+        fi
+    fi
+    [ "$ASSOC_MATCH" = "1" ]
 }
 
 # ----- radio staged-apply helpers -----
@@ -506,7 +809,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} psk {password} : persist"
     echo "       wifi {0|1|mlan0|mlan1} key {0|1|NONE|WPA-PSK|SAE|OWE|FT-PSK|WPA-EAP|...} : persist (wpa_supplicant 인식 토큰만; 공백구분 다중 지정 가능)"
     echo "       wifi {0|1|mlan0|mlan1} freq {freq_list|channel_list} : persist"
-    echo "       wifi {0|1|mlan0|mlan1} connect [ssid] [freq_list|channel_list] : ssid+scan_freq+freq_list 변경 후 reconfigure 적용(재연결); 인자 없으면 현재 설정으로 재연결(reassociate)"
+    echo "       wifi {0|1|mlan0|mlan1} connect [ssid] [freq_list|channel_list] : ssid+전역/블록 freq_list 변경 후 reconfigure 적용(재연결); 인자 없으면 현재 설정으로 재연결(reassociate)"
     echo "       wifi {0|1|mlan0|mlan1} scan {freq_list|channel_list|2G|5G} : runtime"
     echo "       wifi {0|1|mlan0|mlan1} mscan {get|channel_list|2G|5G} : runtime (setuserscan/getscantable)"
     echo "       wifi {0|1|mlan0|mlan1} roam [0|1..N] : 0=auto best, N=Nth AP (RSSI order)"
@@ -902,7 +1205,7 @@ show_info() {
         fi
 
     for dev in "${wpa_devs[@]}"; do
-        conf="/etc/wpa_supplicant/wpa_supplicant-${dev}.conf"
+        conf="$WPA_CONF_DIR/wpa_supplicant-${dev}.conf"
         if [ ! -f "$conf" ]; then
             echo "  $dev: not found ($conf)"
             continue
@@ -914,7 +1217,6 @@ show_info() {
         [ -n "${psk:-}" ] && psk_display="********"
         key_mgmt=$(wpa_field "$conf" "key_mgmt")
         freq_list=$(wpa_field "$conf" "freq_list")
-        scan_freq=$(wpa_field "$conf" "scan_freq")
         if [ "$only_iface" = "all" ]; then
             local prefix="  ${dev}: "
             local pad
@@ -926,9 +1228,6 @@ show_info() {
         fi
         if [ -n "${freq_list:-}" ]; then
             echo "${pad}freq_list=$(freqs_with_channels "${freq_list// / }")"
-        fi
-        if [ -n "${scan_freq:-}" ]; then
-            echo "${pad}scan_freq=$(freqs_with_channels "${scan_freq// / }")"
         fi
     done
     echo ""
@@ -1707,18 +2006,42 @@ case "$2" in
     ;;
   restart)
     echo "restart WPA service for $IFACE..."
-    #systemctl restart wpa_supplicant@$IFACE
-    systemctl stop wpa_supplicant@$IFACE
-    sleep 1
-    systemctl start wpa_supplicant@$IFACE
+    wifi_scan_transition_lock_acquire "$IFACE" \
+        || { echo "Error: scan/association transition busy for $IFACE" >&2; exit 6; }
+    # 이미 accepted된 native scan은 먼저 취소한다. supplicant wedge로 quiesce가
+    # 불가능해도 heavy recovery 자체를 막지 않는다; FD7 아래 stop이 scan owner를 종료한다.
+    wifi_wpa_abort_scan_quiesce "$IFACE" \
+        || logger -p local0.warning "[$tag:$LINENO] [$IFACE] native scan did not quiesce before forced WPA restart"
+    wifi_wpa_run_child systemctl stop "wpa_supplicant@$IFACE" \
+        || { echo "Error: failed to stop WPA service for $IFACE" >&2; exit 7; }
+    wifi_wpa_run_child sleep 1
+    wifi_wpa_run_child systemctl start "wpa_supplicant@$IFACE" \
+        || { echo "Error: failed to start WPA service for $IFACE" >&2; exit 7; }
+    wifi_wpa_wait_completed_under_transition "$IFACE" \
+        || { echo "Error: WPA association not completed after restart for $IFACE" >&2; exit 8; }
+    exit 0
     ;;
   start | up)
     echo "Starting WPA service for $IFACE..."
-    systemctl start wpa_supplicant@$IFACE
+    wifi_scan_transition_lock_acquire "$IFACE" \
+        || { echo "Error: scan/association transition busy for $IFACE" >&2; exit 6; }
+    wifi_wpa_abort_scan_quiesce "$IFACE" \
+        || logger -p local0.warning "[$tag:$LINENO] [$IFACE] native scan quiesce unavailable before WPA start"
+    wifi_wpa_run_child systemctl start "wpa_supplicant@$IFACE" \
+        || { echo "Error: failed to start WPA service for $IFACE" >&2; exit 7; }
+    wifi_wpa_wait_completed_under_transition "$IFACE" \
+        || { echo "Error: WPA association not completed after start for $IFACE" >&2; exit 8; }
+    exit 0
     ;;
   stop | down)
     echo "Stopping WPA service for $IFACE..."
-    systemctl stop wpa_supplicant@$IFACE
+    wifi_scan_transition_lock_acquire "$IFACE" \
+        || { echo "Error: scan/association transition busy for $IFACE" >&2; exit 6; }
+    wifi_wpa_abort_scan_quiesce "$IFACE" \
+        || logger -p local0.warning "[$tag:$LINENO] [$IFACE] native scan did not quiesce before forced WPA stop"
+    wifi_wpa_run_child systemctl stop "wpa_supplicant@$IFACE" \
+        || { echo "Error: failed to stop WPA service for $IFACE" >&2; exit 7; }
+    exit 0
     ;;
   status)
     systemctl status wpa_supplicant@$IFACE
@@ -2154,103 +2477,87 @@ case "$2" in
   freq)
     set -euo pipefail
     shift 2
-    CONF="/etc/wpa_supplicant/wpa_supplicant-${IFACE}.conf"
+    CONF="$WPA_CONF_DIR/wpa_supplicant-${IFACE}.conf"
     if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
+    wifi_wpa_conf_lock_acquire "$IFACE" \
+        || { echo "Error: failed to lock $CONF" >&2; exit 1; }
     FREQS=()
     # to_freq_mhz는 비숫자 토큰을 그대로 되돌려주고 1000 미만 정수를 5000+5*v로
     # 매핑한다 → 재검사가 없으면 freq_list=abc(파싱 실패로 주파수 핀 해제) 나
     # freq_list=6000(존재하지 않는 채널)이 conf에 박힌 채 부팅을 넘긴다.
     for arg in "$@"; do
-        _f="$(to_freq_mhz_checked "$arg")" || exit 1
+        _f="$(wifi_wpa_child_call to_freq_mhz_checked "$arg")" || exit 1
         FREQS+=( "$_f" )
     done
     [ ${#FREQS[@]} -eq 0 ] && { echo "configure freq not exist" >&2; exit 1; }
     FREQ_STR="${FREQS[*]}"
-    TMP_FILE="$(mktemp)"
-    trap 'rm -f "$TMP_FILE"; sync 2>/dev/null || true' EXIT
-    # 모든 network={} 블록에 적용 (블록마다 done 플래그 리셋). 블록이 없으면 에러.
-    awk -v freqs="$FREQ_STR" '
-    BEGIN { in_net = 0; blocks = 0 }
-    /^[[:space:]]*#/ { print; next }
-    /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { in_net = 1; blocks++; done_scan = 0; done_list = 0; print; next }
-    in_net && /^[[:space:]]*\}/ {
-        if (!done_scan) { print "    scan_freq=" freqs; done_scan = 1 }
-        if (!done_list) { print "    freq_list=" freqs; done_list = 1 }
-        in_net = 0; print; next
-    }
-    in_net && /^[[:space:]]*scan_freq[[:space:]]*=/ { if (!done_scan) { print "    scan_freq=" freqs; done_scan = 1 } next }
-    in_net && /^[[:space:]]*freq_list[[:space:]]*=/ { if (!done_list) { print "    freq_list=" freqs; done_list = 1 } next }
-    { print }
-    END { if (blocks == 0) { print "error: no network={ block in config" > "/dev/stderr"; exit 1 } }
-    ' "$CONF" > "$TMP_FILE"
-    safe_install_sync "$TMP_FILE" "$CONF"
-    echo "scan_freq / freq_list configure $FREQ_STR in $CONF"
+    TMP_FILE="$(wifi_wpa_child_exec mktemp)"
+    trap 'wifi_wpa_run_child rm -f "$TMP_FILE"; wifi_wpa_run_child sync 2>/dev/null || true' EXIT
+    if ! wifi_wpa_run_child_call wifi_wpa_conf_render_canonical "$CONF" "$TMP_FILE" "$FREQ_STR"; then
+        echo "Error: failed to render canonical frequency policy in $CONF" >&2
+        exit 1
+    fi
+    wifi_wpa_run_child_call safe_install_sync "$TMP_FILE" "$CONF"
+    echo "global/block freq_list configured $FREQ_STR in $CONF"
     ;;
   ssid)
     set -euo pipefail
     shift 2
-    CONF="/etc/wpa_supplicant/wpa_supplicant-${IFACE}.conf"
+    CONF="$WPA_CONF_DIR/wpa_supplicant-${IFACE}.conf"
     if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
+    wifi_wpa_conf_lock_acquire "$IFACE" \
+        || { echo "Error: failed to lock $CONF" >&2; exit 1; }
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> ssid <NEW_SSID>" >&2; exit 1; fi
-    if grep -q '^# >>> wifi_extra_ssid' "$CONF"; then
-        echo "Error: $CONF 는 다중블록 모드(generate_network_blocks=true)입니다." >&2
-        echo "       ssid 일괄교체는 기본 SSID를 소실시킵니다 — cross-SSID 전환은" >&2
-        echo "       wpa_cli select_network <id>를 사용하세요." >&2
+    if wifi_wpa_run_child_call wifi_wpa_conf_is_multi_topology "$IFACE" "$CONF"; then
+        echo "Error: $CONF 는 Mode A 또는 다중 network topology입니다." >&2
+        echo "       SSID 전환은 boot-latched owner policy에 따라 자동 처리됩니다." >&2
+        echo "       SSID 없이 'wifi <iface> connect'를 실행하면 현재 network 재연결을 요청합니다." >&2
         exit 1
     fi
     NEW_SSID="$1"
-    # 빈 SSID는 ssid=""를 써 association이 영영 불가 / 개행·탭은 awk 멀티라인
-    # injection으로 conf에 임의 directive를 주입한다 — connect 경로와 동일 가드.
-    [ -z "$NEW_SSID" ] && { echo "Error: SSID must not be empty" >&2; exit 1; }
-    case "$NEW_SSID" in
-        *[$'\n\r\t']*) echo "Error: SSID에 개행/탭 문자 불가" >&2; exit 1 ;;
-    esac
-    # SSID는 802.11상 최대 32바이트. 넘으면 psk 길이초과와 동일하게 conf 전체
-    # 로드가 실패해 supplicant가 뜨지 않는다(바이트 기준 — 한글 SSID 11자면 33바이트).
-    _SSID_LEN=$(byte_len "$NEW_SSID")
-    if [ "$_SSID_LEN" -gt 32 ]; then
-        echo "Error: SSID must be 1-32 bytes (got $_SSID_LEN)" >&2
+    SSID_HEX=$(wifi_wpa_child_call wifi_ssid_to_hex "$NEW_SSID") || {
+        echo "Error: SSID must be valid UTF-8, 1-32 bytes, without C0 controls or DEL" >&2
         exit 1
-    fi
+    }
     # busybox awk가 ENVIRON 미지원이면 SSID가 ""로 silent 손상(awk exit 0 → 성공 오인)
     # → 적용 전 ENVIRON 지원을 사전 검증(connect 경로와 동일 규약).
-    SSID_ENVIRON_PROBE=ok awk 'BEGIN { exit(ENVIRON["SSID_ENVIRON_PROBE"] == "ok" ? 0 : 1) }' </dev/null \
+    SSID_ENVIRON_PROBE=ok wifi_wpa_run_child awk 'BEGIN { exit(ENVIRON["SSID_ENVIRON_PROBE"] == "ok" ? 0 : 1) }' </dev/null \
         || { echo "Error: awk lacks ENVIRON support — cannot apply ssid safely" >&2; exit 1; }
-    TMP_FILE="$(mktemp)"
+    TMP_FILE="$(wifi_wpa_child_exec mktemp)"
     # active ssid= → 치환 / #ssid=(주석)만 있으면 주석 해제 후 설정 / 둘 다 없으면 network 블록 끝에 append.
     # (블록 인지 방식은 connect 경로와 동일 — 주석처리된 설정도 확실히 반영. 블록당 done 1회.)
-    # SSID는 ENVIRON으로 raw 전달 — awk -v는 값의 \X를 C-escape로 해석해 손상시킨다.
-    # 값은 이스케이프하지 않고 그대로 쓴다: wpa_supplicant의 따옴표 형식 ssid="..."는
-    # raw 바이트다(wpa_config_parse_string이 마지막 "까지를 그대로 복사). C-escape를
-    # 디코드하는 건 P"..." 형식뿐이라, \를 \\로 바꿔 쓰면 리터럴 백슬래시가 저장된다.
-    if WIFI_NEW_SSID="$NEW_SSID" awk '
-        BEGIN { in_net = 0; changed = 0; new_ssid = ENVIRON["WIFI_NEW_SSID"] }
+    # Hex is the sole writer representation: no quoting/escape/whitespace
+    # interpretation can alter the validated UTF-8 identity.
+    if WIFI_NEW_SSID_HEX="$SSID_HEX" wifi_wpa_run_child awk '
+        BEGIN { in_net = 0; changed = 0; new_ssid = ENVIRON["WIFI_NEW_SSID_HEX"] }
         /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { in_net = 1; done = 0; print; next }
         in_net && /^[[:space:]]*\}/ {
-            if (!done) { print "    ssid=\"" new_ssid "\""; changed = 1; done = 1 }
+            if (!done) { print "    ssid=" new_ssid; changed = 1; done = 1 }
             in_net = 0; print; next
         }
         in_net && /^[[:space:]]*ssid[[:space:]]*=/ {
-            if (!done) { print "    ssid=\"" new_ssid "\""; changed = 1; done = 1 } next
+            if (!done) { print "    ssid=" new_ssid; changed = 1; done = 1 } next
         }
         in_net && /^[[:space:]]*#[[:space:]]*ssid[[:space:]]*=/ {
-            if (!done) { print "    ssid=\"" new_ssid "\""; changed = 1; done = 1; next }
+            if (!done) { print "    ssid=" new_ssid; changed = 1; done = 1; next }
             print; next
         }
         /^[[:space:]]*#/ { print; next }
         { print }
         END { if (!changed) exit 1 }
     ' "$CONF" > "$TMP_FILE"; then
-        safe_install_sync "$TMP_FILE" "$CONF"
-        rm -f "$TMP_FILE"
+        wifi_wpa_run_child_call safe_install_sync "$TMP_FILE" "$CONF"
+        wifi_wpa_run_child rm -f "$TMP_FILE"
         echo "ssid changed to \"$NEW_SSID\" in $CONF"
-    else echo "no network={ block found, nothing changed in $CONF" >&2; rm -f "$TMP_FILE"; exit 1; fi
+    else echo "no network={ block found, nothing changed in $CONF" >&2; wifi_wpa_run_child rm -f "$TMP_FILE"; exit 1; fi
     ;;
   psk)
     set -euo pipefail
     shift 2
-    CONF="/etc/wpa_supplicant/wpa_supplicant-${IFACE}.conf"
+    CONF="$WPA_CONF_DIR/wpa_supplicant-${IFACE}.conf"
     if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
+    wifi_wpa_conf_lock_acquire "$IFACE" \
+        || { echo "Error: failed to lock $CONF" >&2; exit 1; }
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> psk <NEW_PSK>" >&2; exit 1; fi
     NEW_PSK="$1"
     # wpa_supplicant는 따옴표 passphrase를 8..63자로 제한한다. 벗어나면 해당 network
@@ -2258,7 +2565,7 @@ case "$2" in
     # (이 핸들러는 항상 psk="..."로 쓰므로 64자 hex PMK는 지원 대상이 아니다.)
     # 길이는 바이트로 센다 — wpa_supplicant가 os_strlen(바이트)로 검사하므로
     # ${#var}(UTF-8 로케일에서 문자 수)로 재면 한글 passphrase가 양방향으로 어긋난다.
-    _PSK_LEN=$(byte_len "$NEW_PSK")
+    _PSK_LEN=$(wifi_wpa_child_call byte_len "$NEW_PSK")
     if [ "$_PSK_LEN" -lt 8 ] || [ "$_PSK_LEN" -gt 63 ]; then
         echo "Error: psk must be 8-63 bytes (got $_PSK_LEN)" >&2
         exit 1
@@ -2268,9 +2575,9 @@ case "$2" in
         *[$'\n\r\t']*) echo "Error: psk에 개행/탭 문자 불가" >&2; exit 1 ;;
     esac
     # busybox awk가 ENVIRON 미지원이면 psk가 ""로 silent 손상 → 사전 검증(connect 규약).
-    PSK_ENVIRON_PROBE=ok awk 'BEGIN { exit(ENVIRON["PSK_ENVIRON_PROBE"] == "ok" ? 0 : 1) }' </dev/null \
+    PSK_ENVIRON_PROBE=ok wifi_wpa_run_child awk 'BEGIN { exit(ENVIRON["PSK_ENVIRON_PROBE"] == "ok" ? 0 : 1) }' </dev/null \
         || { echo "Error: awk lacks ENVIRON support — cannot apply psk safely" >&2; exit 1; }
-    TMP_FILE="$(mktemp)"
+    TMP_FILE="$(wifi_wpa_child_exec mktemp)"
     # active psk= → 치환 / #psk=(주석)만 있으면 주석 해제 후 설정 / 둘 다 없으면 network 블록 끝에 append.
     # (블록 인지 방식은 connect 경로와 동일 — 주석처리된 설정도 확실히 반영. 블록당 done 1회.)
     # psk는 ENVIRON으로 raw 전달 — awk -v는 값의 \X를 C-escape로 해석해 손상시킨다.
@@ -2278,7 +2585,7 @@ case "$2" in
     # raw 바이트다(wpa_config_parse_psk가 os_strrchr로 마지막 "까지를 그대로 취함).
     # \를 \\로 바꿔 쓰면 리터럴 백슬래시가 저장되고, 위 byte_len은 이스케이프 전
     # 길이를 재므로 63바이트 경계에서 conf 전체 로드가 깨진다.
-    if WIFI_NEW_PSK="$NEW_PSK" awk '
+    if WIFI_NEW_PSK="$NEW_PSK" wifi_wpa_run_child awk '
         BEGIN { in_net = 0; changed = 0; new_psk = ENVIRON["WIFI_NEW_PSK"] }
         /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { in_net = 1; done = 0; print; next }
         in_net && /^[[:space:]]*\}/ {
@@ -2296,16 +2603,18 @@ case "$2" in
         { print }
         END { if (!changed) exit 1 }
     ' "$CONF" > "$TMP_FILE"; then
-        safe_install_sync "$TMP_FILE" "$CONF"
-        rm -f "$TMP_FILE"
+        wifi_wpa_run_child_call safe_install_sync "$TMP_FILE" "$CONF"
+        wifi_wpa_run_child rm -f "$TMP_FILE"
         echo "psk changed in $CONF"
-    else echo "no network={ block found, nothing changed in $CONF" >&2; rm -f "$TMP_FILE"; exit 1; fi
+    else echo "no network={ block found, nothing changed in $CONF" >&2; wifi_wpa_run_child rm -f "$TMP_FILE"; exit 1; fi
     ;;
   key)
     set -euo pipefail
     shift 2
-    CONF="/etc/wpa_supplicant/wpa_supplicant-${IFACE}.conf"
+    CONF="$WPA_CONF_DIR/wpa_supplicant-${IFACE}.conf"
     if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
+    wifi_wpa_conf_lock_acquire "$IFACE" \
+        || { echo "Error: failed to lock $CONF" >&2; exit 1; }
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> key <0|1|NONE|WPA-PSK>" >&2; exit 1; fi
     NEW_KEY="$1"
     [ "$NEW_KEY" = "0" ] && NEW_KEY="NONE"
@@ -2332,10 +2641,10 @@ case "$2" in
                 ;;
         esac
     done
-    TMP_FILE="$(mktemp)"
+    TMP_FILE="$(wifi_wpa_child_exec mktemp)"
     # active key_mgmt= → 치환 / #key_mgmt=(주석)만 있으면 주석 해제 후 설정 / 둘 다 없으면 network 블록 끝에 append.
     # (블록 인지 방식은 connect 경로와 동일 — 주석처리된 설정도 확실히 반영. 블록당 done 1회.)
-    if awk -v new_key="$NEW_KEY" '
+    if wifi_wpa_run_child awk -v new_key="$NEW_KEY" '
         BEGIN { in_net = 0; changed = 0 }
         /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { in_net = 1; done = 0; print; next }
         in_net && /^[[:space:]]*\}/ {
@@ -2353,14 +2662,15 @@ case "$2" in
         { print }
         END { if (!changed) exit 1 }
     ' "$CONF" > "$TMP_FILE"; then
-        safe_install_sync "$TMP_FILE" "$CONF"
-        rm -f "$TMP_FILE"
+        wifi_wpa_run_child_call safe_install_sync "$TMP_FILE" "$CONF"
+        wifi_wpa_run_child rm -f "$TMP_FILE"
         echo "key_mgmt changed to $NEW_KEY in $CONF"
-    else echo "no network={ block found, nothing changed in $CONF" >&2; rm -f "$TMP_FILE"; exit 1; fi
+    else echo "no network={ block found, nothing changed in $CONF" >&2; wifi_wpa_run_child rm -f "$TMP_FILE"; exit 1; fi
     ;;
   connect)
-    # 인자 있음: ssid(+scan_freq/freq_list)를 conf에 기록 → wpa_cli reconfigure로 재로드.
-    #            freq 인자 생략 시 ssid만 바꾸고 scan_freq/freq_list는 유지.
+    # 인자 있음(Mode B): ssid(+공통 freq_list)를 canonical conf에 기록한 뒤
+    #                     wpa_cli reconfigure로 재로드한다.
+    #                     freq 생략 시 기존 공통 목록을 유지하되 legacy scan_freq는 제거.
     # 인자 없음: conf 편집/reconfigure 없이 현재 설정으로 강제 재연결만.
     # 공통: reassociate(연결/미연결 모두 강제 재연관 → ssid 변경 반영 확실) 우선,
     #       실패 시 reconnect fallback(rollback_radio_live와 동일 규약) → assoc 대기.
@@ -2370,131 +2680,210 @@ case "$2" in
     #   ssid 변경은 의도된 영속이라 rollback하지 않는다 — 다음 재시도/부팅 시 적용.
     set -euo pipefail
     shift 2
+    HAS_TARGET=0
+    TARGET_SSID=""
+    TARGET_SSID_WPA_TEXT=""
+    HAS_TARGET_ID=0
+    TARGET_ID=""
+    SET_FREQ=0
+    FREQ_STR=""
+    CONNECT_TIMEOUT="$ASSOC_TIMEOUT_DEFAULT"
+    TOTAL_POLLS=$((CONNECT_TIMEOUT * 10))
+    REMAINING_POLLS="$TOTAL_POLLS"
     if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
         echo "Error: connect supports mlan0/mlan1 only" >&2; exit 1
     fi
     if ! command -v wpa_cli >/dev/null 2>&1; then
         echo "Error: wpa_cli not found" >&2; exit 1
     fi
-    CONF="/etc/wpa_supplicant/wpa_supplicant-${IFACE}.conf"
-    # 다중블록 모드 거부 가드: 자동생성 센티넬이 있으면 ssid 일괄교체(conf-edit) 경로를
-    # 차단한다(기본 SSID 영구 소실 방지). ssid 인자가 있을 때만 거부 — 인자 없는
+    CONF="$WPA_CONF_DIR/wpa_supplicant-${IFACE}.conf"
+    wifi_wpa_conf_lock_acquire "$IFACE" \
+        || { echo "Error: failed to lock $CONF" >&2; exit 1; }
+    wifi_scan_transition_lock_acquire "$IFACE" \
+        || { echo "Error: failed to lock scan transition for $IFACE" >&2; exit 1; }
+    if [ "$#" -ge 1 ]; then
+        NEW_SSID="$1"
+        SSID_HEX=$(wifi_wpa_child_call wifi_ssid_to_hex "$NEW_SSID") || {
+            echo "Error: SSID must be valid UTF-8, 1-32 bytes, without C0 controls or DEL" >&2
+            exit 1
+        }
+        TARGET_SSID_WPA_TEXT=$(wifi_wpa_child_call wifi_ssid_to_wpa_text "$NEW_SSID") || {
+            echo "Error: cannot encode SSID for exact association proof" >&2
+            exit 1
+        }
+    fi
+    if ! wifi_wpa_abort_scan_quiesce "$IFACE"; then
+        echo "Error: cannot quiesce scan for $IFACE" >&2; exit 7
+    fi
+    # Every no-argument reconnect captures its current id, including Mode B.
+    # Broad recovery is permitted only when this initial status has no id.
+    if [ "$#" -eq 0 ]; then
+        WPA_STATUS=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" status 2>/dev/null) || WPA_STATUS=""
+        while IFS='=' read -r _key _value; do
+            [ "$_key" = "id" ] && TARGET_ID="$_value"
+        done <<< "$WPA_STATUS"
+        if [[ "$TARGET_ID" =~ ^[0-9]+$ ]]; then HAS_TARGET_ID=1; else TARGET_ID=""; fi
+    fi
+    # Mode A/실제 다중블록 거부 가드: boot snapshot을 우선하고 sentinel/block 수를
+    # fail-safe 보조로 써 ssid 일괄교체를 차단한다. ssid 인자가 있을 때만 거부 — 인자 없는
     # 강제 재연결(reassociate)은 conf를 건드리지 않으므로 허용.
-    if [ $# -ge 1 ] && [ -f "$CONF" ] && grep -q '^# >>> wifi_extra_ssid' "$CONF"; then
-        echo "Error: $CONF 는 다중블록 모드(generate_network_blocks=true)입니다." >&2
-        echo "       ssid 일괄교체는 기본 SSID를 소실시킵니다 — cross-SSID 전환은" >&2
-        echo "       wifi_roam의 select_network(자동) 또는 wpa_cli select_network <id>를 사용하세요." >&2
-        exit 1
+    if [ -f "$CONF" ] \
+       && wifi_wpa_run_child_call wifi_wpa_conf_is_multi_topology "$IFACE" "$CONF"; then
+        if [ $# -ge 1 ]; then
+            echo "Error: $CONF 는 Mode A 또는 다중 network topology입니다." >&2
+            echo "       SSID 전환은 boot-latched owner policy에 따라 자동 처리됩니다." >&2
+            echo "       SSID 없이 'wifi <iface> connect'를 실행하면 현재 network 재연결을 요청합니다." >&2
+            exit 1
+        fi
+
+        # No-argument paths already captured the current numeric id above.
+        # A disconnected/no-id Mode A recovery intentionally remains broad.
+    fi
+    trap 'connect_event_monitor_cleanup; wifi_wpa_run_child sync 2>/dev/null || true' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    if ! connect_event_monitor_start "$IFACE" "$CONNECT_TIMEOUT"; then
+        echo "Error: failed to attach reconnect event monitor for $IFACE" >&2
+        exit 7
     fi
     if [ $# -ge 1 ]; then
         # === conf 편집 경로: ssid(+freq) 기록 → reconfigure ===
         if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
-        NEW_SSID="$1"; shift
-        # 빈 SSID는 conf에 ssid=""를 써 association 불가(silent exit 8) → 즉시 거부.
-        [ -z "$NEW_SSID" ] && { echo "Error: SSID must not be empty" >&2; exit 1; }
-        # SSID 개행/탭 거부 — awk 멀티라인 injection(conf에 임의 directive 주입) 차단.
-        # connect는 conf 직접편집 entry point라 여기서 가드한다.
-        case "$NEW_SSID" in
-            *[$'\n\r\t']*) echo "Error: SSID에 개행/탭 문자 불가" >&2; exit 1 ;;
-        esac
-        # ssid 명령과 동일한 32바이트 상한 — 넘으면 conf 전체 로드가 실패한다.
-        _SSID_LEN=$(byte_len "$NEW_SSID")
-        if [ "$_SSID_LEN" -gt 32 ]; then
-            echo "Error: SSID must be 1-32 bytes (got $_SSID_LEN)" >&2
-            exit 1
-        fi
+        # Identity validation and byte-exact encoding happened before any live
+        # ctrl mutation, while both writer locks were held.
+        shift
+        HAS_TARGET=1
+        TARGET_SSID="$NEW_SSID"
         # busybox awk가 ENVIRON 미지원이면 SSID가 ""로 silent 손상(awk exit 0 → 성공 오인)
         # → SSID 적용 전 ENVIRON 지원을 사전 검증(opc_wlan_apply.sh와 동일 규약).
-        CONNECT_ENVIRON_PROBE=ok awk 'BEGIN { exit(ENVIRON["CONNECT_ENVIRON_PROBE"] == "ok" ? 0 : 1) }' </dev/null \
+        CONNECT_ENVIRON_PROBE=ok wifi_wpa_run_child awk \
+            'BEGIN { exit(ENVIRON["CONNECT_ENVIRON_PROBE"] == "ok" ? 0 : 1) }' </dev/null \
             || { echo "Error: awk lacks ENVIRON support — cannot apply ssid safely" >&2; exit 1; }
         # freq 인자는 freq 명령과 동일하게 채널/MHz 모두 허용(to_freq_mhz로 MHz 정규화)
         # + 동일한 재검사 — SSID는 이 아래에서 두텁게 가드되는데 freq만 무검증이었다.
         FREQS=()
         for arg in "$@"; do
-            _f="$(to_freq_mhz_checked "$arg")" || exit 1
+            _f="$(wifi_wpa_child_call to_freq_mhz_checked "$arg")" || exit 1
             FREQS+=( "$_f" )
         done
-        SET_FREQ=0
-        FREQ_STR=""
         if [ ${#FREQS[@]} -gt 0 ]; then SET_FREQ=1; FREQ_STR="${FREQS[*]}"; fi
-        # 모든 network={} 블록에 ssid(+freq)를 한 awk 패스로 적용(freq/ssid 명령 동일 규약).
-        # 임시파일은 set -e 중 조기 exit 시에도 정리되도록 EXIT trap 설정(freq 명령 패턴).
-        TMP_FILE="$(mktemp)"
-        trap 'rm -f "$TMP_FILE"; sync 2>/dev/null || true' EXIT
-        # SSID는 ENVIRON으로 raw 전달 — awk -v는 값의 \X를 C-escape로 해석해 손상시킨다.
-        # 값은 이스케이프하지 않고 그대로 쓴다: wpa_supplicant의 따옴표 형식 ssid="..."는
-        # raw 바이트다(wpa_config_parse_string이 마지막 "까지를 그대로 복사). C-escape를
-        # 디코드하는 건 P"..." 형식뿐이라, \를 \\로 바꿔 쓰면 리터럴 백슬래시가 저장된다.
-        if CONNECT_SSID="$NEW_SSID" awk -v freqs="$FREQ_STR" -v set_freq="$SET_FREQ" '
-            BEGIN { in_net = 0; blocks = 0; new_ssid = ENVIRON["CONNECT_SSID"] }
+        # freq 생략 시에도 legacy conf를 canonical 형식으로 이행하면서 기존 공통 목록을
+        # 보존한다(전역 > 첫 블록 freq_list > 첫 블록 legacy scan_freq fallback 우선순위).
+        if [ "$SET_FREQ" = "0" ]; then
+            if ! FREQ_STR="$(wifi_wpa_child_call wifi_wpa_conf_common_freqs "$CONF")"; then
+                echo "Error: failed to resolve common frequency policy in $CONF" >&2
+                exit 1
+            fi
+        fi
+
+        # canonical 변환과 SSID 치환을 두 임시파일에서 완료한 뒤 최종 결과만 한 번
+        # install한다. 중간 형식이 실제 conf에 노출되지 않아 reconfigure와 경쟁하지 않는다.
+        CANON_FILE="$(wifi_wpa_child_exec mktemp)"
+        TMP_FILE="$(wifi_wpa_child_exec mktemp)"
+        trap 'wifi_wpa_run_child rm -f "$CANON_FILE" "$TMP_FILE"; connect_event_monitor_cleanup; wifi_wpa_run_child sync 2>/dev/null || true' EXIT
+        if ! wifi_wpa_run_child_call wifi_wpa_conf_render_canonical \
+            "$CONF" "$CANON_FILE" "$FREQ_STR"; then
+            echo "Error: failed to render canonical frequency policy in $CONF" >&2
+            exit 1
+        fi
+        # Hex is byte-exact for spaces, quotes, backslashes, and UTF-8.
+        if CONNECT_SSID_HEX="$SSID_HEX" wifi_wpa_run_child awk '
+            BEGIN { in_net = 0; blocks = 0; new_ssid = ENVIRON["CONNECT_SSID_HEX"] }
             /^[[:space:]]*#/ { print; next }
             /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ {
-                in_net = 1; blocks++; done_ssid = 0; done_scan = 0; done_list = 0; print; next
+                in_net = 1; blocks++; done_ssid = 0; print; next
             }
             in_net && /^[[:space:]]*\}/ {
-                if (!done_ssid) { print "    ssid=\"" new_ssid "\""; done_ssid = 1 }
-                if (set_freq == 1) {
-                    if (!done_scan) { print "    scan_freq=" freqs; done_scan = 1 }
-                    if (!done_list) { print "    freq_list=" freqs; done_list = 1 }
-                }
+                if (!done_ssid) { print "    ssid=" new_ssid; done_ssid = 1 }
                 in_net = 0; print; next
             }
             in_net && /^[[:space:]]*ssid[[:space:]]*=/ {
-                if (!done_ssid) { print "    ssid=\"" new_ssid "\""; done_ssid = 1 } next
-            }
-            in_net && /^[[:space:]]*scan_freq[[:space:]]*=/ {
-                if (set_freq == 1) { if (!done_scan) { print "    scan_freq=" freqs; done_scan = 1 } } else print
-                next
-            }
-            in_net && /^[[:space:]]*freq_list[[:space:]]*=/ {
-                if (set_freq == 1) { if (!done_list) { print "    freq_list=" freqs; done_list = 1 } } else print
-                next
+                if (!done_ssid) { print "    ssid=" new_ssid; done_ssid = 1 } next
             }
             { print }
             END { if (blocks == 0) { print "error: no network={ block in config" > "/dev/stderr"; exit 1 } }
-        ' "$CONF" > "$TMP_FILE"; then
-            safe_install_sync "$TMP_FILE" "$CONF"
-            rm -f "$TMP_FILE"
+        ' "$CANON_FILE" > "$TMP_FILE"; then
+            wifi_wpa_run_child_call safe_install_sync "$TMP_FILE" "$CONF"
+            wifi_wpa_run_child rm -f "$CANON_FILE" "$TMP_FILE"
         else
-            rm -f "$TMP_FILE"
+            wifi_wpa_run_child rm -f "$CANON_FILE" "$TMP_FILE"
             echo "Error: failed to update $CONF (no network={ block?)" >&2
             exit 1
         fi
         if [ "$SET_FREQ" = "1" ]; then
-            echo "conf updated: ssid=\"$NEW_SSID\" scan_freq/freq_list=$FREQ_STR in $CONF"
+            echo "conf updated: ssid=\"$NEW_SSID\" global/block freq_list=$FREQ_STR in $CONF"
+        elif [ -n "$FREQ_STR" ]; then
+            echo "conf updated: ssid=\"$NEW_SSID\" (global/block freq_list 유지: $FREQ_STR) in $CONF"
         else
-            echo "conf updated: ssid=\"$NEW_SSID\" (scan_freq/freq_list 유지) in $CONF"
+            echo "conf updated: ssid=\"$NEW_SSID\" (frequency restriction 없음) in $CONF"
         fi
-        if ! wpa_cli_ok "$IFACE" reconfigure; then
+        if ! connect_event_monitor_arm || ! wpa_cli_ok "$IFACE" reconfigure; then
             echo "Error: wpa_cli reconfigure failed for $IFACE (wpa_supplicant 미동작 또는 conf 문법 오류 확인)" >&2
             exit 7
         fi
         echo "wpa_cli reconfigure OK ($IFACE)"
+        # Reconfigure gets a bounded grace share of the one association poll
+        # budget.  A delayed fresh event plus a subsequent matching status can
+        # complete here without a redundant reassociation.
+        GRACE_POLLS=$((TOTAL_POLLS / 3))
+        [ "$GRACE_POLLS" -ge 1 ] || GRACE_POLLS=1
+        [ "$GRACE_POLLS" -le 20 ] || GRACE_POLLS=20
+        if [ "$GRACE_POLLS" -ge "$TOTAL_POLLS" ]; then
+            GRACE_POLLS=$((TOTAL_POLLS - 1))
+        fi
+        for ((_i = 1; _i <= GRACE_POLLS && REMAINING_POLLS > 0; _i++)); do
+            if connect_association_poll_matches; then
+                ASSOC_MATCH=1
+            fi
+            REMAINING_POLLS=$((REMAINING_POLLS - 1))
+            if [ "$ASSOC_MATCH" = "1" ]; then
+                echo "associated by reconfigure: ssid=\"$CUR_SSID\" freq=$CUR_FREQ id=$CUR_ID"
+                exit 0
+            fi
+            if [ "$_i" -lt "$GRACE_POLLS" ] && [ "$REMAINING_POLLS" -gt 0 ]; then
+                wifi_wpa_run_child sleep 0.1
+            fi
+        done
     else
         # === 인자 없음: conf 그대로 현재 설정으로 재연결만 ===
-        echo "no ssid given — reassociating $IFACE with current conf..."
+        if [ "$HAS_TARGET_ID" = "1" ]; then
+            echo "no ssid given — reassociating current network id=$TARGET_ID on $IFACE..."
+        else
+            echo "no ssid/current id given — reassociating $IFACE with current conf..."
+        fi
     fi
-    # --- 공통: 강제 재연결(reassociate 우선, 실패 시 reconnect) → assoc 대기 ---
+    # --- 공통: owner-neutral 강제 재연결(reassociate 우선, 실패 시 reconnect) → assoc 대기 ---
+    # Mode A도 다른 network 블록의 enabled 상태를 바꾸지 않는다. 최초에 캡처한 id는
+    # fresh CONNECTED event와 그 이후 COMPLETED 폴링으로만 증명한다.
+    if ! connect_event_monitor_arm; then
+        echo "Error: failed to arm reconnect event monitor for $IFACE" >&2
+        exit 7
+    fi
     if ! wpa_cli_ok "$IFACE" reassociate && ! wpa_cli_ok "$IFACE" reconnect; then
         echo "Error: wpa_cli reassociate/reconnect failed for $IFACE" >&2
         exit 7
     fi
     # 연결 완료 대기(best-effort, 최대 15s) — 0.1s grid 폴링으로 COMPLETED를 빨리 감지.
     # (실제 association 시간은 물리 과정이라 불변; 폴링 grid만 줄여 끝맺음 반응성 개선)
-    CONNECT_TIMEOUT="$ASSOC_TIMEOUT_DEFAULT"
-    WPA_STATE=""
-    # 상한 의미 유지 — CONNECT_TIMEOUT(초)×10 회 × sleep 0.1s = CONNECT_TIMEOUT 초
-    for ((_i = 1; _i <= CONNECT_TIMEOUT * 10; _i++)); do
-        WPA_STATE=$(wpa_cli -i "$IFACE" status 2>/dev/null | sed -n 's/^wpa_state=//p') || true
-        [ "$WPA_STATE" = "COMPLETED" ] && break
-        sleep 0.1
+    WPA_STATE=""; CUR_SSID=""; CUR_FREQ=""; CUR_ID=""
+    FRESH_EVENT_ID=""; ASSOC_MATCH=0
+    # No-argument reconnects arrive with the full budget.  Explicit reconnects
+    # use only the remainder after grace; neither phase resets the counter.
+    while [ "$REMAINING_POLLS" -gt 0 ]; do
+        if connect_association_poll_matches; then
+            ASSOC_MATCH=1
+        fi
+        REMAINING_POLLS=$((REMAINING_POLLS - 1))
+        [ "$ASSOC_MATCH" = "1" ] && break
+        [ "$REMAINING_POLLS" -gt 0 ] && wifi_wpa_run_child sleep 0.1
     done
-    if [ "$WPA_STATE" = "COMPLETED" ]; then
-        CUR_SSID=$(wpa_cli -i "$IFACE" status 2>/dev/null | sed -n 's/^ssid=//p') || true
-        echo "associated: ssid=\"${CUR_SSID:-N/A}\" (wpa_state=COMPLETED)"
+    if [ "$ASSOC_MATCH" = "1" ]; then
+        echo "associated: ssid=\"${CUR_SSID:-N/A}\" freq=${CUR_FREQ:-N/A} id=${CUR_ID:-N/A} (wpa_state=COMPLETED)"
         exit 0
     else
-        echo "Warning: association not completed within ${CONNECT_TIMEOUT}s (state=${WPA_STATE:-unknown})" >&2
+        echo "Warning: requested association not completed within ${CONNECT_TIMEOUT}s" >&2
+        echo "         target_id=${TARGET_ID:-any} event_id=${FRESH_EVENT_ID:-none} target_ssid=${TARGET_SSID:-any} target_freq=${FREQ_STR:-any} state=${WPA_STATE:-unknown} id=${CUR_ID:-N/A} ssid=${CUR_SSID:-N/A} freq=${CUR_FREQ:-N/A}" >&2
         echo "         'wifi $NUM scan' / 'wifi $NUM info'로 AP 가용성/대역 점검" >&2
         exit 8
     fi
@@ -2509,6 +2898,12 @@ case "$2" in
             echo "Error: 2G/5G must be used alone (no other channel/freq args)" >&2; exit 1
         fi
         echo "scanning band $1 for $IFACE: $BAND_FREQS"
+        if ! wifi_scan_transition_lock_acquire "$IFACE"; then
+            echo "Error: scan/association transition busy for $IFACE" >&2; exit 6
+        fi
+        if ! wifi_wpa_abort_scan_quiesce "$IFACE"; then
+            echo "Error: native scan did not quiesce for $IFACE" >&2; exit 6
+        fi
         iw $IFACE scan freq $BAND_FREQS
         exit 0
     fi
@@ -2524,6 +2919,12 @@ case "$2" in
     [ ${#FREQS[@]} -eq 0 ] && { echo "configure freq not exist" >&2; exit 1; }
     FREQ_STR="${FREQS[*]}"
     echo "scanning freq_list $FREQ_STR for $IFACE"
+    if ! wifi_scan_transition_lock_acquire "$IFACE"; then
+        echo "Error: scan/association transition busy for $IFACE" >&2; exit 6
+    fi
+    if ! wifi_wpa_abort_scan_quiesce "$IFACE"; then
+        echo "Error: native scan did not quiesce for $IFACE" >&2; exit 6
+    fi
     iw $IFACE scan freq $FREQ_STR
     ;;
   mscan)
@@ -2562,6 +2963,12 @@ case "$2" in
         CHAN_STR="$(IFS=,; echo "${CHANS[*]}")"
     fi
     echo "mscan (setuserscan) chan=$CHAN_STR for $IFACE"
+    if ! wifi_scan_transition_lock_acquire "$IFACE"; then
+        echo "Error: scan/association transition busy for $IFACE" >&2; exit 6
+    fi
+    if ! wifi_wpa_abort_scan_quiesce "$IFACE"; then
+        echo "Error: native scan did not quiesce for $IFACE" >&2; exit 6
+    fi
     mlanutl "$IFACE" setuserscan chan="$CHAN_STR"
     echo "(results: wifi $NUM mscan get)"
     ;;
@@ -2908,7 +3315,7 @@ case "$2" in
         R_CONF="${WPA_CONF_DIR:-/etc/wpa_supplicant}/wpa_supplicant-${IFACE}.conf"
         R_FREQ_BANDS=$(wifi_init_conf_freq_bands "$R_CONF")
         if [ "$R_FREQ_BANDS" = "5G" ]; then
-            echo "Error: mode=$R_MODE is 2.4G-only but freq_list/scan_freq in $R_CONF is 5G-only — STA can never associate." >&2
+            echo "Error: mode=$R_MODE is 2.4G-only but common freq_list in $R_CONF is 5G-only — STA can never associate." >&2
             echo "       Fix with 'wifi $NUM freq <2.4G ch>' or 'wifi $NUM mode a' (or higher), then retry." >&2
             exit 11
         elif [ "$R_FREQ_BANDS" = "2G 5G" ]; then
@@ -2925,6 +3332,17 @@ case "$2" in
             echo "Error: mlan1 does not support ax (11ax)" >&2
             exit 2
         fi
+    fi
+    # 이 지점부터 mlanutl snapshot/SET과 disconnect/reassociate를 수행한다. 외부
+    # bgscan/manual scan/connect와 같은 per-iface transition namespace를 획득해
+    # rollback·association 확인까지 프로세스 수명 동안 직렬화한다.
+    if ! wifi_scan_transition_lock_acquire "$IFACE"; then
+        echo "Error: scan/association transition busy for $IFACE" >&2
+        exit 6
+    fi
+    if ! wifi_wpa_abort_scan_quiesce "$IFACE"; then
+        echo "Error: native scan did not quiesce for $IFACE" >&2
+        exit 6
     fi
     # 실패 시 롤백용 적용 전 스냅샷
     SNAP_BAND=$(mlanutl "$IFACE" bandcfg 2>/dev/null | sed -n 's/.*Infra Band: \(0x[0-9a-fA-F]*\).*/\1/p' | head -1)

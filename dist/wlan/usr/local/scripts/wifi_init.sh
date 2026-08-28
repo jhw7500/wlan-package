@@ -415,19 +415,41 @@ done
 /usr/local/scripts/backup_file.sh /etc/wpa_supplicant/wpa_supplicant-mlan1.conf network= "$_DEFAULT_DIR/wpa_supplicant/wpa_supplicant-mlan1.conf" \
     || logger -p local0.err "[$tag:$LINENO] backup failed: wpa_supplicant-mlan1"
 
-# backup_file 복원(단일블록 원본 가능) 직후 모드 A extra_ssid 자동 블록을 멱등 재생성.
-# 복원-then-확장 순서 의존: backup_file이 default(단일블록)로 복원해도 여기서 자가 복원.
-# 모드 B/빈 배열은 자동 블록만 제거(무회귀). 함수 부재 시(lib 미source) 조용히 skip.
-if command -v wifi_init_sync_extra_ssid_blocks >/dev/null 2>&1; then
-    wifi_init_sync_extra_ssid_blocks mlan0 /etc/wpa_supplicant/wpa_supplicant-mlan0.conf \
-        || logger -p local0.err "[$tag:$LINENO] extra_ssid block sync failed: mlan0"
-    wifi_init_sync_extra_ssid_blocks mlan1 /etc/wpa_supplicant/wpa_supplicant-mlan1.conf \
-        || logger -p local0.err "[$tag:$LINENO] extra_ssid block sync failed: mlan1"
+# backup_file 복원 직후 legacy block별 scan_freq/freq_list를 공통 전역 freq_list +
+# 동일 block filter로 정규화한다. supplicant 시작 전이라 live reconfigure는 필요 없다.
+# 정규화-then-확장 순서 의존: extra block이 base의 canonical filter만 상속하게 한다.
+if ! command -v wifi_wpa_conf_normalize_file >/dev/null 2>&1; then
+    logger -p local0.err "[$tag:$LINENO] required wpa normalization primitive is unavailable"
+    exit 1
+fi
+if ! wifi_wpa_conf_normalize_file /etc/wpa_supplicant/wpa_supplicant-mlan0.conf; then
+    logger -p local0.err "[$tag:$LINENO] wpa conf frequency normalization failed: mlan0"
+    exit 1
+fi
+if ! wifi_wpa_conf_normalize_file /etc/wpa_supplicant/wpa_supplicant-mlan1.conf; then
+    logger -p local0.err "[$tag:$LINENO] wpa conf frequency normalization failed: mlan1"
+    exit 1
 fi
 
-# bgscan 가드(경고-only): conf의 비주석 bgscan=는 wpa_supplicant 자율 로밍을 켜
-# Roaming(0x04) notify(3훅)를 우회한다 — 운영 전제 위반 감시
-# (wlan-opc docs/implementation/design-roam-indication-notify.md §8.3/§8.4).
+# 정규화된 단일블록 원본에서 모드 A extra_ssid 자동 블록을 멱등 재생성.
+# backup_file이 default(단일블록)로 복원해도 여기서 자가 복원한다.
+# 모드 B/빈 배열은 자동 블록만 제거(무회귀). 이 transform은 supplicant
+# 시작 전 필수 topology gate라 부재/실패를 log-and-continue 하지 않는다.
+if ! command -v wifi_init_sync_extra_ssid_blocks >/dev/null 2>&1; then
+    logger -p local0.err "[$tag:$LINENO] required extra-SSID topology primitive is unavailable"
+    exit 1
+fi
+if ! wifi_init_sync_extra_ssid_blocks mlan0 /etc/wpa_supplicant/wpa_supplicant-mlan0.conf; then
+    logger -p local0.err "[$tag:$LINENO] extra_ssid block sync failed: mlan0"
+    exit 1
+fi
+if ! wifi_init_sync_extra_ssid_blocks mlan1 /etc/wpa_supplicant/wpa_supplicant-mlan1.conf; then
+    logger -p local0.err "[$tag:$LINENO] extra_ssid block sync failed: mlan1"
+    exit 1
+fi
+
+# bgscan 가드(경고-only): conf의 비주석 bgscan=는 package wifi_bgscan과 별도
+# scan/roam 스케줄을 만든다. wifi_roam/wpa native 어느 owner에서도 지원하지 않는다.
 # mlan0/mlan1 conf를 순회 검사(파일 존재 시) — DBDC 재평가 완료(2026-08-07)로 mlan1 포함.
 # 런타임 wpa_cli set 경로는 wifi_checker.sh의 주기 가드가 보조한다.
 # (set -e: grep 무매치는 || true로 흡수)
@@ -436,7 +458,7 @@ for _bg_iface in mlan0 mlan1; do
     [ -f "$_bg_conf" ] || continue
     _bgscan_line=$(grep -E '^[[:space:]]*bgscan[[:space:]]*=' "$_bg_conf" 2>/dev/null | head -1) || true
     if [ -n "${_bgscan_line:-}" ]; then
-        logger -p local0.warning "[$tag:$LINENO] [$_bg_iface] active wpa_supplicant bgscan in conf ('${_bgscan_line}') — autonomous roaming bypasses Roaming(0x04) notify (design §8.4)"
+        logger -p local0.warning "[$tag:$LINENO] [$_bg_iface] unsupported built-in wpa_supplicant bgscan in conf ('${_bgscan_line}') — remove it; package wifi_bgscan owns periodic scan scheduling"
     fi
 done
 unset _bgscan_line _bg_iface _bg_conf
@@ -962,7 +984,7 @@ apply_iface_radio_defaults() {
 
     # 안테나 경로(FW Tx/Rx path)는 rate/MCS보다 근본이라 먼저 적용한다. opt-in이며
     # 꺼져 있으면 FW/보드 기본 경로를 그대로 둔다. global.ANT_TYPE(GPIO mux)과는 별개다.
-    wifi_fw_apply_antcfg "$WIFI_INIT_CONF_JSON" "$iface"
+    wifi_fw_apply_antcfg "$WIFI_INIT_CONF_JSON" "$iface" || return 1
 
     # rate는 association 전에만 설정 가능하며 partial/default 혼합을 금지한다.
     wifi_fw_apply_rate "$WIFI_INIT_CONF_JSON" "$iface"
@@ -1427,12 +1449,16 @@ if command -v systemctl >/dev/null 2>&1; then
     # 모듈 로드 + networkd가 mlan 인터페이스를 생성한 직후, association 전에 라디오 기본값 적용.
     # 그 외 자식 데몬은 ExecStartPost(/usr/local/scripts/wifi_services.sh)가 systemctl enable
     # 상태에 따라 일괄 start한다.
+    if ! wifi_fw_validate_product_scan_profile "$WIFI_INIT_CONF_JSON" "$BOARD_TYPE"; then
+        logger -p local0.err "[$tag:$LINENO] board-qualified product scan profile invalid for $BOARD_TYPE; refuse association"
+        exit 1
+    fi
     fw_config_failed=0
     apply_iface_radio_defaults "mlan0" "$MLAN0_ENABLED" || fw_config_failed=1
     apply_iface_radio_defaults "mlan1" "$MLAN1_ENABLED" || fw_config_failed=1
     if [ "$fw_config_failed" -ne 0 ]; then
         mcs_failure_code=$(wifi_fw_mcs_cold_failure_code)
-        logger -p local0.warn "[$tag:$LINENO] MCS verification failed before association; exit=$mcs_failure_code (75=one cold lifecycle retry, 1=persistent failure)"
+        logger -p local0.warn "[$tag:$LINENO] FW radio configuration verification failed before association; exit=$mcs_failure_code (75=one cold lifecycle retry, 1=persistent failure)"
         exit "$mcs_failure_code"
     fi
     wifi_fw_mcs_cold_success

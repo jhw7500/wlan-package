@@ -7,6 +7,7 @@ mlan0 roam 조건이 mlan1 bgscan 을 정지시키거나 두 roam 데몬이 플�
 import os
 import subprocess
 import sys
+import textwrap
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,8 +16,90 @@ sys.modules.setdefault("sUTILS", MagicMock())
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import wifi_bgscan
 import wifi_roam
+import roam_state
 
 wifi_roam.logger = MagicMock()
+
+
+# ── live scan/transition lock ──────────────────────────────────────────────
+
+def test_scan_transition_lock_is_per_iface_exclusive_and_sigkill_releases(tmp_path):
+    """The new live-operation lock is a kernel flock, not a stale-PID marker.
+
+    A killed owner must release its advisory lock immediately while the durable
+    path remains.  A different interface must remain independently lockable.
+    ``run_dir`` is an explicit test seam; production retains /run/wifi.
+    """
+    run_dir = tmp_path / "run-wifi"
+    holder = textwrap.dedent(
+        f"""
+        import sys
+        sys.path.insert(0, {str(tmp_path)!r})
+        sys.path.insert(0, {os.path.dirname(roam_state.__file__)!r})
+        from roam_state import scan_transition_lock
+        with scan_transition_lock('mlan0', run_dir={str(run_dir)!r}) as acquired:
+            assert acquired
+            print('locked', flush=True)
+            import time
+            time.sleep(30)
+        """
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", holder], stdout=subprocess.PIPE, text=True
+    )
+    try:
+        assert proc.stdout.readline().strip() == "locked"
+        with roam_state.scan_transition_lock("mlan0", run_dir=str(run_dir)) as locked:
+            assert locked is False
+        with roam_state.scan_transition_lock("mlan1", run_dir=str(run_dir)) as locked:
+            assert locked is True
+
+        proc.kill()
+        assert proc.wait(timeout=3) < 0
+        lock_path = run_dir / "mlan0.scan-transition.lock"
+        assert lock_path.exists(), "release is by FD/process lifetime, never unlink"
+        with roam_state.scan_transition_lock("mlan0", run_dir=str(run_dir)) as locked:
+            assert locked is True
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=3)
+
+
+def test_scan_transition_lock_path_error_is_visible_and_never_uses_tmp(monkeypatch):
+    calls = []
+
+    def denied(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(roam_state.os, "makedirs", denied)
+    with pytest.raises(PermissionError):
+        with roam_state.scan_transition_lock("mlan0", run_dir="/run/wifi"):
+            pass
+    assert calls == [(("/run/wifi",), {"exist_ok": True})]
+    assert all("/tmp" not in str(call) for call in calls)
+
+
+def test_scan_transition_lock_open_error_propagates_without_alternate_namespace(monkeypatch):
+    makedirs = MagicMock()
+    open_calls = []
+
+    def denied(path, flags, mode):
+        open_calls.append((path, flags, mode))
+        raise PermissionError("open denied")
+
+    monkeypatch.setattr(roam_state.os, "makedirs", makedirs)
+    monkeypatch.setattr(roam_state.os, "open", denied)
+    with pytest.raises(PermissionError, match="open denied"):
+        with roam_state.scan_transition_lock("mlan0", run_dir="/run/wifi"):
+            pass
+
+    makedirs.assert_called_once_with("/run/wifi", exist_ok=True)
+    assert [call[0] for call in open_calls] == [
+        "/run/wifi/mlan0.scan-transition.lock"
+    ]
+    assert all("/tmp" not in call[0] for call in open_calls)
 
 
 # ── 경로 규칙 ──────────────────────────────────────────────────────────────

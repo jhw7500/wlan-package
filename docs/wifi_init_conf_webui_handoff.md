@@ -54,6 +54,11 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `caution` | 고급/위험 — 하드웨어·안전·보안·재부팅 정책에 영향, 검증·경고 필요 |
 | `no` | 읽기전용/자동설정 — UI에서 편집 금지 |
 
+`x-ui-editable-by-board`가 있으면 현재 `global.BOARD_TYPE` 키의 값으로 해당 맵을 먼저
+적용한다. 키를 지원하지 않는 구 UI는 안전한 fallback인 `x-ui-editable`을 사용한다.
+현재 이 조건부 계약은 `mlan0.antcfg.{enabled,tx,rx}`와
+`mlan0.mcs_tier.{enabled,ht,vht,he}`에 적용되며 `imx93=no`, `imx8mm=caution`이다.
+
 ---
 
 ## 2. 최근 변경점 (웹 UI 반영 필요)
@@ -77,6 +82,20 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 - **`mlanN.bgscan`**: `ssid_filter`(true), `freq_filter`(true), `enabled`.
 - **`mlanN.periodic_roam`**: `scan_before_roam`(true).
 - **`mlanN.checker`**: `RECONFIGURE_GRACE_SEC`(20), `enabled`; **`mlanN.arping`**: `enabled`.
+
+### 2.2a 로밍 owner/topology 계약
+
+- `roaming.enabled=true`: `wifi_roam` owner + `iw` bgscan.
+- `roaming.enabled=false`: wpa_supplicant native owner + `wpa_cli` bgscan.
+- backend 선택용 신규 키는 없다. owner/backend/topology는 부팅 최초
+  `/run/wifi/<iface>.roam-policy.json` snapshot에 latch되고 daemon 재시작에도 불변이므로
+  UI 변경은 **재부팅 필요**로 표시한다.
+- snapshot이 same boot에 삭제돼도 `/run/.<iface>.roam-policy.latched`가 live JSON
+  fallback을 차단한다. UI가 일부 데몬/wifi_init만 재시작해 반영하려 하면 안 된다.
+- `generate_network_blocks`와 `extra_ssids`도 부팅 topology이므로 **재부팅 필요**다.
+- `bgscan.enabled=false`는 package 주기 scan만 끈다. wpa 장애 복구 scan은 유지된다.
+- `bgscan.freq_filter=false`는 deprecated다. 공통 `freq_list`가 있으면 계속 강제한다.
+- `periodic_roam.*`은 deprecated/read-only다. `enabled=true`도 경고 후 강제 off된다.
 
 ### 2.3 기본값 변동
 
@@ -363,14 +382,27 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `net_rx` | MGMT 프레임 로깅 비트맵 | int | `0` | `0`\|`2`\|`3`\|`6`\|`7` (bit[1:0]=RX모드, bit[2]=TX로그) | caution | reboot | mod_para 블록 `net_rx=`. 로그는 커널 링버퍼→10초마다 flush |
 | `mgmt_hex_dump_enable` | MGMT hex dump 로깅 | bool | `false` | true\|false | caution | reboot | 디버그용. mod_para 블록 `mgmt_hex_dump=1/0` |
 | `thermal_mgmt` | FW 열관리 | bool | `true` | true\|false | caution | boot | FW thermal management(SUBID 0x113). 명시적 false만 disable |
-| `antcfg.enabled` | 안테나 경로 적용 | bool | `false` | true\|false | caution | boot | FW Tx/Rx path 적용 ON/OFF. false면 FW/보드 기본 경로 유지(출하 기본). **어댑터 단위 설정**이라 mlan0/mlan1에 서로 다른 값을 켜면 나중에 적용된 쪽이 이기며 경고 로그가 남는다. `global.ANT_TYPE`(GPIO mux)와는 별개 |
-| `antcfg.tx` | Tx 경로 비트맵 | string | `""` | 10진 또는 `0x` 16진, 1..0xFFFF (0 거부) | caution | boot | `rx`가 비면 Tx/Rx 공통. 9098은 LOW BYTE=2G / HIGH BYTE=5G, 각 바이트 bit0=path A·bit1=path B. 예 `0x303`=양 밴드 A+B, `0x103`=2G A+B + 5G A, `0x202`=양 밴드 path B. SAD 칩은 `0xFFFF`=다이버시티 |
-| `antcfg.rx` | Rx 경로 비트맵 | string | `""` | 빈값 또는 tx와 동일 범위 | caution | boot | 빈 문자열이면 인자를 생략해 `tx`가 Tx/Rx 양쪽에 적용된다. SAD 칩에서 `tx=0xFFFF`일 때는 평가 주기(기본 `0x1770`=6s) |
+| `antcfg.enabled` | 안테나 경로 적용 | bool | `mlan0=true / mlan1=false` | true\|false | imx93=no / imx8=caution | boot | 표의 기본값은 imx93 package template 기준. imx93 mlan0 제품값은 p149.115 scan wedge 회피 안전 불변식이라 편집 금지. **어댑터 단위 설정**이라 mlan1 enable도 imx93 부팅에서 거부된다. imx8은 strict verify profile을 보드 감지 시 중화한다. `global.ANT_TYPE`과는 별개 |
+| `antcfg.tx` | Tx 경로 비트맵 | string | `mlan0="0x0303" / mlan1=""` | 10진 또는 `0x` 16진, 1..0xFFFF (0 거부) | imx93=no / imx8=caution | boot | 표의 기본값은 imx93 template이며 imx8 strict profile은 빈값으로 중화된다. `rx`가 비면 Tx/Rx 공통. 9098은 LOW BYTE=2G / HIGH BYTE=5G, 각 바이트 bit0=path A·bit1=path B |
+| `antcfg.rx` | Rx 경로 비트맵 | string | `mlan0="0x0101" / mlan1=""` | 빈값 또는 tx와 동일 범위 | imx93=no / imx8=caution | boot | imx8 strict profile은 빈값으로 중화된다. imx93의 0x0101은 host Rx NSS1 의도이며 FW physical Rx GET은 0x0303으로 정규화된다 |
+| `antcfg.verify.physical_tx` | antcfg physical Tx 기대값 | string | `mlan0="0x0303" / mlan1=""` | 10진 또는 `0x` 16진, 1..0xFFFF | no | boot | SET 후 FW physical Tx GET 검증값. verify가 존재하면 세 verify 필드 모두 필수이며 UI 편집 금지 |
+| `antcfg.verify.physical_rx` | antcfg physical Rx 기대값 | string | `mlan0="0x0303" / mlan1=""` | 10진 또는 `0x` 16진, 1..0xFFFF | no | boot | p149.115의 비대칭 요청 정규화 결과를 검증한다 |
+| `antcfg.verify.user_htstream` | antcfg host NSS 기대값 | string | `mlan0="0x2121" / mlan1=""` | 10진 또는 `0x` 16진, 1..0xFFFF | no | boot | matching 543 mlanutl의 `antcfgnss` 조회 결과. 0x2121=양 밴드 Tx 2SS/Rx 1SS. 불일치·미지원이면 association 중단 |
 | `rate_adapt.enabled` | 레이트 적응 적용 | bool | `true` | true\|false | caution | boot | false면 `rate_adapt_cfg`를 SET하지 않고 FW 기본값 유지. 키 부재 시 true(종전 동작). `wifi <iface> rate`로 값을 바꿔도 이 값이 false면 부팅 시 적용되지 않는다 |
 | `rate_adapt.mode` | 레이트 적응 모드 | int | `1` | `0`=legacy\|`1`=SR | caution | boot | section 존재 시 mode/low/high/interval 4개 필수(enabled는 선택) |
 | `rate_adapt.low_thresh` | 레이트 적응 low 임계 | int | `70` | 0..100 또는 255 | caution | boot | static은 low<high, dynamic은 low/high 모두 255 |
 | `rate_adapt.high_thresh` | 레이트 적응 high 임계 | int | `90` | 0..100 또는 255 | caution | boot | 70/90은 실기 결과에 따라 바뀌는 시험값 |
 | `rate_adapt.interval_ms` | 레이트 적응 평가주기(ms) | int | `100` | 양수, 10ms 배수 | caution | boot | association 전 SET+GET. mlan0 roam 및 mlan1 AC association 완료 시 FW 30/50 복귀 실측 |
+
+**비고 (antcfg 업그레이드)** — `postinst`는 active 우선 deep merge 뒤 과거 제품 기본
+`false/empty`, 알려진 physical 1x1 `0x0101`, 이미 선택된 `0x0303/0x0101`만 새 검증 계약으로
+멱등 승격한다. 다른 명시적 Tx/Rx 조합은 사용자 커스텀으로 보존하며, deep merge가 거기에
+제품용 verify를 주입했으면 그 verify만 제거한다. verify 3개 필드는 제품 호환성 계약이므로
+WebUI에서 개별 편집하지 않는다.
+이 처리는 **forward-only safety migration**이며 downgrade 시 구 릴리스와 함께 저장한 구
+설정/backup을 복원해야 한다. imx93에서는 antcfg와 mlan0 MCS 7 조합 전체가 association 전
+불변식이므로 해당 필드들을 읽기 전용으로 표시한다. imx8에서는 strict imx93 profile을
+보드 설정 단계에서 비활성화하고 verify를 제거한다.
 
 #### 3.10.2 mlanN.logger (per-iface 로거)
 
@@ -387,15 +419,20 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 
 | 경로(`mlanN.`) | 라벨 | 타입 | 기본값 (mlan0 / mlan1) | 허용값/범위 | UI편집 | 적용시점 | 설명 |
 |---|---|---|---|---|---|---|---|
-| `periodic_roam.interval` | 주기적 패시브 로밍 주기 | int | `60` | >=10 (10 미만은 10으로 강제) | yes | daemon-restart | passive roam 실행 주기 |
-| `periodic_roam.scan_before_roam` | 로밍 전 스캔 | bool | `true` | true\|false | yes | daemon-restart | true=스캔 후 판단, false=기존 ap.log 사용 |
-| `periodic_roam.enabled` | 주기적 로밍 데몬 | bool | `false` | true\|false | yes | daemon-restart | `wifi_periodic_roam@mlanN` enable/disable |
+| `periodic_roam.interval` | legacy 주기 값 | int | `60` | 호환 보존 | no | na | **DEPRECATED/미사용** |
+| `periodic_roam.scan_before_roam` | legacy 스캔 값 | bool | `true` | 호환 보존 | no | na | **DEPRECATED/미사용** |
+| `periodic_roam.enabled` | legacy periodic owner | bool | `false` | true\|false | no | na | **DEPRECATED**. true도 경고 후 `wifi_periodic_roam@mlanN` 강제 disable+stop, unit ExecCondition으로 실행 차단 |
 | `bgscan.interval` | 백그라운드 스캔 주기 | int | `60` | >0 | yes | runtime | 매 스캔 직전 재로드(무재시작) |
 | `bgscan.ssid_filter` | SSID directed probe | bool | `true` | true\|false | yes | runtime | false면 광범위 undirected 스캔 |
-| `bgscan.freq_filter` | 주파수 필터 | bool | `true` | true\|false | yes | runtime | false면 전 대역 스캔(airtime↑) |
-| `bgscan.passive` | 패시브 스캔 | bool | `true` | true\|false | yes | runtime | true=probe 미송신(beacon 수신만, 공유매체 probe airtime 0). hidden SSID 미발견 — 판단 기준은 로밍 가이드 §2.3 |
-| `bgscan.emit_roam_hint` | roam hint 발행 | bool | `true` | true\|false | yes | runtime | 스캔 성공 시 hint touch → wifi_roam backoff 조기 해제. **단일 iface 에서는 실효 없음**(스키마 주의 참조) |
-| `bgscan.enabled` | 백그라운드 스캔 데몬 | bool | `mlan0=true / mlan1=false` | true\|false | yes | daemon-restart | `wifi_bgscan@mlanN` enable/disable |
+| `bgscan.freq_filter` | 주파수 필터(legacy) | bool | `true` | true\|false | no | runtime | **DEPRECATED**. 공통 global `freq_list`가 있으면 false도 무시하고 iw/wpa_cli 모두 같은 목록 강제 |
+| `bgscan.passive` | iw safety compatibility | bool | `true` | true\|false | yes | runtime | `wifi_roam` owner/`iw` periodic bgscan에서는 `bgscan.passive=true`를 수용하지만 supported mlan hardware의 data-plane safety를 위해 once-per-process warning 후 active scan으로 강제한다. wpa native owner/`wpa_cli`는 계속 `passive=1`을 보낸다. `STAGED_SCAN.home_passive`와 별개이며 변경하지 않는다 |
+| `bgscan.emit_roam_hint` | roam hint 발행 | bool | `true` | true\|false | yes | runtime | iw/wifi_roam owner에서만 유효. wpa native owner에서는 강제 비활성 |
+| `bgscan.enabled` | package 백그라운드 스캔 | bool | `mlan0=true / mlan1=false` | true\|false | yes | boot | `wifi_bgscan@mlanN` enable/disable. false여도 wpa 장애 복구 scan 유지 |
+
+**비고 (bgscan owner)** — 별도 backend 필드를 만들지 않는다. 부팅 정책 적용기가
+`roaming.enabled`/`bgscan.enabled`/topology/extra를 `/run` snapshot으로 한 번 고정하고
+`wifi_bgscan.py`와 `wifi_roam.py`가 이를 읽는다. persisted JSON 편집 뒤 daemon을
+재시작해도 snapshot이 우선하므로 이 토글은 아래 표처럼 **reboot 항목**이다.
 
 #### 3.10.4 mlanN.roaming (wifi_roam.py 로밍)
 
@@ -406,13 +443,13 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `DEFAULT_TH_5G` | 5GHz 로밍 임계값 | int | `-75` | 음수 dBm | yes | daemon-restart | 이 값 이하이면 로밍 시도 (JSON 단일 소스, conf `#!TH_5G=` 마커 미사용) |
 | `DIFF_TH` | 후보 AP 최소 RSSI 차 | int | `7` | >=0 dB | yes | daemon-restart | 클수록 보수적 |
 | `CHECK_INTERVAL` | 로밍 체크 주기 | int | `1` | >=1 초 | yes | daemon-restart | 고정 체크 주기(ADAPTIVE_INTERVAL 은 감사 D1로 제거됨) |
-| `extra_ssids` | 추가 로밍 후보 SSID | array | `[]` | 문자열 배열(같은 psk/key_mgmt) | caution | daemon-restart | 모드B(generate_network_blocks=false)면 강제 무시 |
-| `generate_network_blocks` | 모드 결정자 | bool | `false` | true\|false | caution | daemon-restart | false=모드B(단일 블록), true=모드A(다중+select_network) |
+| `extra_ssids` | 추가 로밍 후보 SSID | array | `[]` | 고유 문자열 배열, 각 UTF-8 1..32 encoded bytes(같은 psk/key_mgmt) | caution | reboot | 모드A에서 추가 network 블록 생성. 모드B에서는 boot-latched 수동 cross-SSID 후보로만 사용 |
+| `generate_network_blocks` | topology 결정자 | bool | `false` | true\|false | caution | reboot | false=모드B(단일 블록/수동 cross-SSID), true=모드A(다중 블록/자동 cross-SSID) |
 | `ROAM_CROSS_FAIL_RETRY_COUNT` | cross-SSID 재시도 횟수 | int | `2` | >=0 (모드A 전용) | yes | daemon-restart | 초과 시 지수 backoff로 후보 제외 |
 | `ROAM_NO_RESULT_FAST_COUNT` | backoff 레벨당 반복 횟수 | int | `3` | >=1 | yes | daemon-restart | 각 주기를 N tick 유지 후 2배(플래토 곡선, 기본 3,3,3,6,6,6,…). 1=레거시(매 tick 2배) |
 | `SCAN_NO_RESULT_SLEEP` | 스캔 무결과 대기 | int | `3` | >=1 초 | yes | daemon-restart | 지수 backoff 시작값 |
 | `ROAM_SUCCESS_SLEEP` | 로밍 성공 후 대기 | int | `3` | >=1 초 | yes | daemon-restart | 성공 후 재체크 대기 |
-| `enabled` | 로밍 데몬 활성화 | bool | `mlan0=true / mlan1=false` | true\|false | yes | daemon-restart | `wifi_roam@mlanN` enable/disable |
+| `enabled` | proactive roam owner | bool | `mlan0=true / mlan1=false` | true\|false | yes | reboot | true=`wifi_roam`+iw, false=wpa native+wpa_cli. boot snapshot에 latch |
 | `PREDICTIVE_ROAM.enable` | 예측 로밍 | bool | `false` | true\|false | yes | daemon-restart | RSSI 하락 추세 시 조기 로밍 |
 | `PREDICTIVE_ROAM.threshold_boost` | 예측 임계 부스트 | int | `5` | >=0 dB | yes | daemon-restart | 하락 추세 시 임계값에 더하는 부스트 |
 | `PREDICTIVE_ROAM.trend_window_size` | 추세 샘플 수 | int | `5` | >=1 | yes | daemon-restart | 추세 계산 RSSI 샘플 수 |
@@ -428,24 +465,29 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `STAGED_SCAN.home_passive` | 단일채널 홈 passive | bool | `true` | true\|false | yes | runtime | 단일 freq 전용. false=directed active; 다중 freq에서는 무시 |
 | `GOOD_SIGNAL_RESET_GATE.enable` | good-signal 리셋 게이트 | bool | `true` | true\|false | yes | runtime | 정체 시 backoff streak 유지. 판정 2dB/결합 유예 40초는 코드 고정. CLI `wifi <n> roam gate` |
 
-**비고 (roaming)** — 소비: `wifi_roam.py`(데몬 시작 시 1회 로드 → daemon-restart), `enabled`류는 `wifi_apply_enabled.sh`.
+**비고 (roaming)** — owner/topology는 부팅 시 확정하며 runtime hot switch하지 않는다.
 - `mlanN.enabled=false`면 하위 로밍/스캔/logger/checker/arping 데몬은 상위 게이트로 강제 disable.
-- `extra_ssids`는 같은 psk/key_mgmt 전제(오설정 시 인증 실패). `generate_network_blocks=true`(모드A)는 wpa_supplicant.conf에 다중 network 블록을 생성하므로 기존 연결 동작이 바뀔 수 있음.
+- Mode A는 `extra_ssids`를 다중 블록으로 생성한다. wifi_roam owner는 exact BSSID를 pin/확인하고, wpa native owner는 wpa 기본 cross-SSID 선택 정책을 수용한다.
+- Mode B는 단일 블록이다. 자동 owner/bgscan은 `extra_ssids`를 무시하지만 boot snapshot은 수동 `passive_roam` 후보로 보존하며, cross-SSID는 `passive_roam` 선택 또는 `wifi connect`로 전환한다.
+- 부팅 snapshot은 base/extra 중복을 거부한다. 다만 Mode B 수동 전환 후 live base가 boot-latched 후보와 같아지는 것은 정상이며, 같은 SSID 내 수동 BSSID 로밍을 계속 지원한다.
+- Mode A 수동 `passive_roam`은 cross-SSID 후보를 표시/실행하지 않는다. Mode A cross-SSID는 선택된 자동 owner만 수행한다.
+- 모든 블록은 전역과 동일한 공통 `freq_list`를 사용한다. SSID별 주파수 분리는 UI에서 제공하지 않는다.
 
 #### 3.10.5 mlanN.mcs_tier
 
 | 경로(`mlanN.mcs_tier.`) | 라벨 | 타입 | 기본값 (mlan0 / mlan1) | 허용값/범위 | UI편집 | 적용시점 | 설명 |
 |---|---|---|---|---|---|---|---|
-| `enabled` | MCS tier 제한 활성화 | bool | `true` | true\|false | caution | boot + link verify/reassociate | association 전 SET 후 GET 검증. mlan0 HE 0x0000은 연결 후 검증하고 FW 기본 복귀 시 SET+reassociate 1회 |
-| `ht` | MCS HT tier 값 | string | `7` | `"7"`\|`"15"` | caution | boot | 양쪽 iface 필수 |
-| `vht` | MCS VHT tier 값 | string | `7` | `"7"`\|`"8"`\|`"9"` | caution | boot | 양쪽 iface 필수 |
-| `he` | MCS HE tier 값 | string | `mlan0="both 7" / mlan1=""` | mlan0=`"both 7"`\|`"both 9"`\|`"both 11"`; mlan1=`""` | caution | boot | mlan0(ax)만 mcstiercfg+11axcfg 검증, mlan1(ac)은 HE 미지원 |
+| `enabled` | MCS tier 제한 활성화 | bool | `true` | true\|false | imx93 mlan0=no / 그 외 caution | boot + link verify/reconnect | association 전 SET 후 GET 검증. imx93 mlan0은 제품 안전 불변식으로 true 고정 |
+| `ht` | MCS HT tier 값 | string | `7` | `"7"`\|`"15"` | imx93 mlan0=no / 그 외 caution | boot | imx93 mlan0은 `"7"` 고정, 양쪽 iface 필수 |
+| `vht` | MCS VHT tier 값 | string | `7` | `"7"`\|`"8"`\|`"9"` | imx93 mlan0=no / 그 외 caution | boot | imx93 mlan0은 `"7"` 고정 |
+| `he` | MCS HE tier 값 | string | `mlan0="both 7" / mlan1=""` | mlan0=`"both 7"`\|`"both 9"`\|`"both 11"`; mlan1=`""` | imx93 mlan0=no / 그 외 caution | boot | imx93 mlan0은 `"both 7"` 고정. mlan1(ac)은 HE 미지원 |
 
 **비고 (mcs_tier)** — 소비: `wifi_init.sh`, `wifi_event.sh`, `wifi_apply_enabled.sh`, `wifi.sh`.
 `enabled=true`인데 필드가 partial/invalid이면 해당 MCS section을 경고 후 skip한다. HT/VHT 또는 명확한
 비영 HE 불일치는 supplicant 시작을 차단한다. 단, mlan0의 association 전 HE Tx/Rx가 모두 0x0000이면
 pending으로 기록한다. 첫 연결 GET이 FW 기본값이면 connected SET으로 다음 association 값을 저장하고
-reassociate를 한 번만 요청한다. 다음 CONNECTED 검증 성공 시 pending/1회 마커를 제거한다. 실패 시
+MCS lock 해제 뒤 `wifi <iface> connect`를 한 번만 요청한다. 이 경로는 scan-transition lock과 fresh
+association proof를 사용한다. 다음 CONNECTED 검증 성공 시 pending/1회 마커를 제거한다. 실패 시
 반복 재연결이나 reboot 없이 링크와 pending을 유지한다. CLI 수정은 다음 부팅에 적용된다.
 
 #### 3.10.6 mlanN.on_connect
@@ -520,7 +562,7 @@ reassociate를 한 번만 요청한다. 다음 CONNECTED 검증 성공 시 pendi
 | **기본/드라이버** | `global.*`(BOARD_TYPE, BUS_TYPE, BLUETOOTH.enable, MOD_PARA, CAL/TXPWR, STANDARD, DEV_CAP_MASK, ANT_TYPE, tx_work), `mac.*`, `mlanN.{STANDARD, CAL_DATA_CFG, TXPWRLIMIT_PATH, Frequency, net_rx, mgmt_hex_dump_enable, rate_adapt.*}` | 대부분 caution/reboot. MAC·펌웨어·표준은 고급 |
 | **인터페이스 활성화** | `mlanN.enabled`, `global.ping_monitor.enabled`, 각 `*.enabled` 토글 | mlan1 기본 off |
 | **브릿지** | `wbridge.{enabled, bridge_iface, mac_mode, ip_discovery, eth_client_ip, eth_link_wait_sec, eth_sweep_subnet, peer_route.enabled, arp_ignore_always.enabled, engine}`, `wbridge.moal.*`(고급), `wbridge.optimize.*`, `wbridge.link_guard.*` | moal.*/arp_ignore_always는 고급 |
-| **로밍** | `mlanN.roaming.*`, `mlanN.periodic_roam.*`, `mlanN.bgscan.*`, `mlanN.mcs_tier.*`, `mlanN.connect_threshold` | 고급기능(PREDICTIVE_ROAM)은 "고급 로밍" 하위로(ADAPTIVE/LOAD/POST_ROAM 은 감사 D1로 제거). `connect_threshold`=연결 최소 RSSI(wpa_supplicant) |
+| **로밍** | `mlanN.roaming.*`, `mlanN.bgscan.*`, `mlanN.mcs_tier.*`, `mlanN.connect_threshold` | owner/topology는 reboot 표시. `periodic_roam.*`은 deprecated read-only. 고급기능(PREDICTIVE_ROAM)은 "고급 로밍" 하위로 |
 | **모니터링·발열** | `temperature.*`, `wbridge.thermal.*`, `mmc.*`, `mcp.*`, `monitor.*`, `logger.*`, `mlanN.logger.*`, `eth0.logger.*`, `mlanN.thermal_mgmt` | 온도 임계·게인은 고급/읽기전용 |
 | **헬스·리부트** | `mlanN.checker.*`, `mlanN.arping.*` | 재부팅 정책 항목(MAX_REBOOT_COUNT 등)은 고급 |
 | **SNMP** | `snmp.enabled`, `snmp.trap.*` | snmp.enabled는 고급(포트 오픈) |
@@ -544,6 +586,23 @@ reassociate를 한 번만 요청한다. 다음 CONNECTED 검증 성공 시 pendi
 
 > **⑤ `mcs_tier.ht/vht/he`는 문자열**
 > 정수처럼 보이지만 타입은 **문자열**이다(`"7"`, `"both 7"`, `""`). 빈 문자열은 "해당 prefix skip" 센티널이며 값은 `mlanutl mcstiercfg`에 verbatim 전달된다. 숫자 입력 컨트롤이 아니라 문자열 입력으로 다룰 것.
+
+> **⑥ 로밍 owner/topology는 runtime 토글이 아님**
+> `roaming.enabled`, `generate_network_blocks`, `extra_ssids`는 저장 후 **재부팅 필요**로
+> 표시할 것. 일부 unit만 재시작해 owner/backend 또는 network block topology를 바꾸는
+> UI 동작은 지원하지 않는다. `periodic_roam.*`은 deprecated read-only로 표시한다.
+
+> **⑦ `extra_ssids` 길이는 문자 수가 아니라 UTF-8 encoded byte 수**
+> JSON Schema의 표준 `maxLength`는 Unicode code point 수를 세므로 32바이트 제한을 단독으로
+> 표현하지 못한다. mlan0/mlan1의 `extra_ssids.items.x-utf8-maxBytes=32`를 UI 계약으로 읽고,
+> 브라우저에서는 먼저 `unpaired surrogate`가 없는 Unicode scalar value 문자열인지 검사한 뒤
+> `new TextEncoder().encode(value).length`로 저장 전에 검사할 것. 표준 validator는 `x-*`
+> custom keyword를 자동 집행하지 않으므로 validator adapter 없이 저장 기능을 활성화하면 안 된다.
+> **32바이트 허용, 33바이트 거부**가 경계 계약이다. Save API는 UI 결과를 신뢰하지 말고
+> server-side authority로서 valid UTF-8, 1..32바이트, C0/DEL 금지, 중복을 다시 검사해야 한다.
+> identity 보존을 위해 자동 Unicode normalization은 하지 않는다. 제품의
+> `wifi_init_config_lib.sh` 검사는 최종 fail-closed 방어선이지 UI/Save API 검사를 대신하지 않는다.
+> 이 문서는 외부 WebUI/Save API의 구현 계약이며 해당 consumer의 통합시험 완료를 뜻하지 않는다.
 
 ---
 

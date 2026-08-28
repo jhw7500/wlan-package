@@ -1237,31 +1237,70 @@
         "antcfg": {
           "type": "object",
           "additionalProperties": true,
-          "description": "FW Tx/Rx 안테나 경로(mlanutl <iface> antcfg). association 전 적용. opt-in(기본 false). 어댑터 단위 설정이라 mlan0/mlan1 값이 다르면 나중에 적용된 쪽이 이긴다. global.ANT_TYPE(GPIO mux)와는 별개",
+          "description": "FW Tx/Rx 안테나 경로. imx93 mlan0의 0x0303/0x0101+verify는 p149.115 scan wedge 회피 제품 안전 불변식이며 mcs_tier 7, mlan1 antcfg off와 함께 association 전에 강제된다. imx8에서는 strict imx93 profile을 보드 감지 시 중화한다.",
           "properties": {
             "enabled": {
               "type": "boolean",
-              "default": false,
+              "default": true,
               "description": "안테나 경로 적용 ON/OFF. false면 FW/보드 기본 경로를 그대로 둔다",
-              "x-ui-editable": "caution",
+              "x-ui-editable": "no",
+              "x-ui-editable-by-board": {"imx93": "no", "imx8mm": "caution"},
               "x-apply-timing": "boot",
               "x-consumer": "wifi_fw_config_lib.sh"
             },
             "tx": {
               "type": "string",
-              "default": "",
+              "default": "0x0303",
               "description": "Tx 경로 비트맵(10진 또는 0x 16진, 1..0xFFFF). rx가 비면 Tx/Rx 공통. 9098은 LOW BYTE=2G/HIGH BYTE=5G, 각 바이트 bit0=path A·bit1=path B. 예 0x303=양 밴드 A+B, 0x103=2G A+B+5G A. SAD 칩은 0xFFFF=다이버시티. 0은 거부(RF 사망)",
-              "x-ui-editable": "caution",
+              "x-ui-editable": "no",
+              "x-ui-editable-by-board": {"imx93": "no", "imx8mm": "caution"},
               "x-apply-timing": "boot",
               "x-consumer": "wifi_fw_config_lib.sh"
             },
             "rx": {
               "type": "string",
-              "default": "",
+              "default": "0x0101",
               "description": "Rx 경로 비트맵. 빈 문자열이면 인자를 생략해 tx가 Tx/Rx 양쪽에 적용된다. SAD 칩에서 tx=0xFFFF일 때는 평가 주기(기본 0x1770=6s)",
-              "x-ui-editable": "caution",
+              "x-ui-editable": "no",
+              "x-ui-editable-by-board": {"imx93": "no", "imx8mm": "caution"},
               "x-apply-timing": "boot",
               "x-consumer": "wifi_fw_config_lib.sh"
+            },
+            "verify": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "선택적 antcfg SET/GET 검증 계약. 요청 mask와 FW가 반환하는 physical path가 다를 수 있으므로 physical Tx/Rx와 host user_htstream을 독립 확인한다. 존재하면 세 필드가 모두 필수이며 불일치 시 association을 중단한다",
+              "required": [
+                "physical_tx",
+                "physical_rx",
+                "user_htstream"
+              ],
+              "properties": {
+                "physical_tx": {
+                  "type": "string",
+                  "default": "0x0303",
+                  "description": "SET 후 기대하는 FW physical Tx path",
+                  "x-ui-editable": "no",
+                  "x-apply-timing": "boot",
+                  "x-consumer": "wifi_fw_config_lib.sh"
+                },
+                "physical_rx": {
+                  "type": "string",
+                  "default": "0x0303",
+                  "description": "SET 후 기대하는 FW physical Rx path",
+                  "x-ui-editable": "no",
+                  "x-apply-timing": "boot",
+                  "x-consumer": "wifi_fw_config_lib.sh"
+                },
+                "user_htstream": {
+                  "type": "string",
+                  "default": "0x2121",
+                  "description": "SET 후 기대하는 host NSS intent. 0x2121은 양 밴드 Tx 2SS/Rx 1SS",
+                  "x-ui-editable": "no",
+                  "x-apply-timing": "boot",
+                  "x-consumer": "wifi_fw_config_lib.sh"
+                }
+              }
             }
           }
         },
@@ -1418,31 +1457,31 @@
         "periodic_roam": {
           "type": "object",
           "additionalProperties": true,
-          "description": "주기적 패시브 로밍(roam 0) 설정",
+          "description": "DEPRECATED 호환 설정. wifi_periodic_roam은 제3의 proactive roam owner라 wifi_apply_enabled.sh가 설정값과 무관하게 강제 disable한다.",
           "properties": {
             "interval": {
               "type": "integer",
               "default": 60,
               "minimum": 10,
-              "description": "passive roam 실행 주기(초). 10 미만은 스크립트가 10초로 강제",
-              "x-ui-editable": "yes",
-              "x-apply-timing": "daemon-restart",
+              "description": "DEPRECATED/미사용. legacy passive roam 실행 주기 값만 호환 보존",
+              "x-ui-editable": "no",
+              "x-apply-timing": "na",
               "x-consumer": "wifi_periodic_roam.sh"
             },
             "scan_before_roam": {
               "type": "boolean",
               "default": true,
-              "description": "true=로밍 전 스캔(최신 RSSI 기반), false=기존 ap.log 사용",
-              "x-ui-editable": "yes",
-              "x-apply-timing": "daemon-restart",
+              "description": "DEPRECATED/미사용. legacy roam 전 scan 선택값만 호환 보존",
+              "x-ui-editable": "no",
+              "x-apply-timing": "na",
               "x-consumer": "wifi_periodic_roam.sh"
             },
             "enabled": {
               "type": "boolean",
               "default": false,
-              "description": "wifi_periodic_roam@mlan0.service enable/disable",
-              "x-ui-editable": "yes",
-              "x-apply-timing": "daemon-restart",
+              "description": "DEPRECATED. true도 무시하고 wifi_periodic_roam@mlan0.service를 강제 disable하며 경고한다",
+              "x-ui-editable": "no",
+              "x-apply-timing": "na",
               "x-consumer": "wifi_apply_enabled.sh"
             }
           }
@@ -1450,7 +1489,7 @@
         "bgscan": {
           "type": "object",
           "additionalProperties": true,
-          "description": "mlan0 백그라운드 스캔 설정",
+          "description": "mlan0 package background scan. backend는 부팅 최초 /run policy snapshot에서 고정: true=iw(wifi_roam owner), false=wpa_cli(wpa native owner). daemon 재시작에도 불변이며 별도 backend 키 없음.",
           "properties": {
             "interval": {
               "type": "integer",
@@ -1472,15 +1511,15 @@
             "freq_filter": {
               "type": "boolean",
               "default": true,
-              "description": "freq 필터 포함 여부. false면 전체 대역 스캔(airtime 증가)",
-              "x-ui-editable": "yes",
+              "description": "DEPRECATED compatibility boolean. 공통 global freq_list가 있으면 false도 무시하고 두 backend 모두 같은 목록을 강제한다; 목록이 없을 때만 제한 없음",
+              "x-ui-editable": "no",
               "x-apply-timing": "runtime",
               "x-consumer": "wifi_bgscan.py"
             },
             "passive": {
               "type": "boolean",
               "default": true,
-              "description": "패시브 스캔(iw scan passive) 사용 여부. true면 probe request 미송신·beacon만 수신(directed ssid probe 무효, hidden SSID 미발견). false면 종전 액티브 스캔",
+              "description": "Config compatibility boolean. wifi_roam owner/iw periodic bgscan forces true to active scanning with a once-per-process warning on supported mlan hardware for data-plane safety; wpa native owner/wpa_cli still sends passive=1. STAGED_SCAN.home_passive is separate and unchanged.",
               "x-ui-editable": "yes",
               "x-apply-timing": "runtime",
               "x-consumer": "wifi_bgscan.py"
@@ -1488,7 +1527,7 @@
             "emit_roam_hint": {
               "type": "boolean",
               "default": true,
-              "description": "bgscan 스캔 성공 시 /tmp/wifi_roam_hint_<iface> touch — wifi_roam 의 후보없음 지수 backoff 를 즉시 해제하는 신호(단방향, race-free). false 면 hint 미발행. 주의: 단일 iface 운용에서는 실효가 없다 — backoff 가 쌓이는 구간은 로밍 컨디션 ON 인데 그때 bgscan 은 스캔을 건너뛰어 hint 가 발행될 수 없다. 듀얼 iface(전역 /tmp/roam_condition 공유)에서만 우발적으로 발화 가능",
+              "description": "iw/wifi_roam owner에서 scan 성공 시 wifi_roam backoff hint를 발행. wpa_cli/native owner에서는 소비자가 없어 강제 비활성",
               "x-ui-editable": "yes",
               "x-apply-timing": "runtime",
               "x-consumer": "wifi_bgscan.py"
@@ -1496,9 +1535,9 @@
             "enabled": {
               "type": "boolean",
               "default": true,
-              "description": "wifi_bgscan@mlan0.service enable/disable",
+              "description": "wifi_bgscan@mlan0.service enable/disable. false면 package periodic scan만 중지하며 wpa_supplicant 장애 복구/재연결 scan은 유지",
               "x-ui-editable": "yes",
-              "x-apply-timing": "daemon-restart",
+              "x-apply-timing": "boot",
               "x-consumer": "wifi_apply_enabled.sh"
             }
           }
@@ -1506,7 +1545,7 @@
         "roaming": {
           "type": "object",
           "additionalProperties": true,
-          "description": "wifi_roam.py 로밍 알고리즘 설정(mlan0). 데몬 시작 시 1회 로드.",
+          "description": "mlan0 proactive roam owner 및 wifi_roam 알고리즘 설정. enabled/topology/extra_ssids는 부팅 최초 /run policy snapshot으로 고정되며 daemon 재시작에도 불변.",
           "properties": {
             "use_signal_avg": {
               "type": "boolean",
@@ -1554,21 +1593,26 @@
             "extra_ssids": {
               "type": "array",
               "default": [],
+              "uniqueItems": true,
               "items": {
-                "type": "string"
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32,
+                "x-utf8-maxBytes": 32,
+                "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
               },
-              "description": "conf 기본 ssid 외 추가 로밍 후보 SSID 목록(같은 psk/key_mgmt 전제). generate_network_blocks=false면 무시",
+              "description": "유효 UTF-8 1..32 encoded bytes의 고유 SSID identity(공백/따옴표/백슬래시 보존, C0/DEL 금지, 부팅 base SSID 중복 금지). 모드A에서는 추가 network 블록용이며 수동 cross-SSID 선택은 지원하지 않는다. 모드B에서는 수동 cross-SSID 후보로 유지하며, 정상 전환 후 live base가 해당 후보와 같아질 수 있다. 변경은 재부팅 필요",
               "x-ui-editable": "caution",
-              "x-apply-timing": "daemon-restart",
-              "x-consumer": "wifi_roam.py"
+              "x-apply-timing": "reboot",
+              "x-consumer": "wifi_init.sh, wifi_roam.py, wifi_bgscan.py"
             },
             "generate_network_blocks": {
               "type": "boolean",
               "default": false,
-              "description": "false=모드B(단일 블록, extra_ssids 무시), true=모드A(다중 network 블록+select_network cross-SSID)",
+              "description": "부팅 topology 결정자: false=모드B(단일 블록·수동 cross-SSID), true=모드A(다중 블록·선택 owner의 자동 cross-SSID). 변경은 재부팅 필요",
               "x-ui-editable": "caution",
-              "x-apply-timing": "daemon-restart",
-              "x-consumer": "wifi_roam.py"
+              "x-apply-timing": "reboot",
+              "x-consumer": "wifi_init.sh, wifi_roam.py, wifi_bgscan.py"
             },
             "ROAM_CROSS_FAIL_RETRY_COUNT": {
               "type": "integer",
@@ -1738,17 +1782,17 @@
             "enabled": {
               "type": "boolean",
               "default": true,
-              "description": "wifi_roam@mlan0.service enable/disable",
+              "description": "proactive roam owner 선택자: true=wifi_roam@mlan0+iw scan, false=wpa_supplicant native selection+wpa_cli scan. 부팅 /run snapshot으로 latch; 변경은 재부팅 필요",
               "x-ui-editable": "yes",
-              "x-apply-timing": "daemon-restart",
-              "x-consumer": "wifi_apply_enabled.sh"
+              "x-apply-timing": "reboot",
+              "x-consumer": "wifi_apply_enabled.sh, wifi_bgscan.py"
             }
           }
         },
         "mcs_tier": {
           "type": "object",
           "additionalProperties": true,
-          "description": "MCS tier capability 제한. association 전 SET 후 GET 검증. mlan0 HE 0x0000은 연결 후 검증하고 FW 기본 복귀 시 connected SET+reassociate 1회.",
+          "description": "MCS tier capability 제한. imx93 mlan0은 antcfg scan-wedge 회피 profile과 묶인 제품 안전 불변식으로 enabled=true, HT/VHT/HE=7 고정. HE 0x0000은 연결 후 검증하고 FW 기본 복귀 시 connected SET 뒤 serialized wifi connect 1회.",
           "required": [
             "enabled",
             "ht",
@@ -1760,7 +1804,8 @@
               "type": "boolean",
               "default": true,
               "description": "MCS tier 제한 활성화. HT/VHT·비영 HE 불일치는 association을 차단하고, HE 0x0000은 연결 후 검증 및 필요 시 1회 재association",
-              "x-ui-editable": "caution",
+              "x-ui-editable": "no",
+              "x-ui-editable-by-board": {"imx93": "no", "imx8mm": "caution"},
               "x-apply-timing": "boot",
               "x-consumer": "wifi_init.sh, wifi_event.sh, wifi_apply_enabled.sh, wifi.sh"
             },
@@ -1772,7 +1817,8 @@
                 "15"
               ],
               "description": "HT(802.11n) MCS tier 제한",
-              "x-ui-editable": "caution",
+              "x-ui-editable": "no",
+              "x-ui-editable-by-board": {"imx93": "no", "imx8mm": "caution"},
               "x-apply-timing": "boot",
               "x-consumer": "wifi_init.sh, wifi_event.sh, wifi.sh"
             },
@@ -1785,7 +1831,8 @@
                 "9"
               ],
               "description": "VHT(802.11ac) MCS tier 제한",
-              "x-ui-editable": "caution",
+              "x-ui-editable": "no",
+              "x-ui-editable-by-board": {"imx93": "no", "imx8mm": "caution"},
               "x-apply-timing": "boot",
               "x-consumer": "wifi_init.sh, wifi_event.sh, wifi.sh"
             },
@@ -1797,8 +1844,9 @@
                 "both 9",
                 "both 11"
               ],
-              "description": "mlan0 HE(802.11ax) Tx/Rx MCS tier 제한. association 전 0x0000이면 연결 후 검증하고 FW 기본 복귀 시 SET+reassociate 1회",
-              "x-ui-editable": "caution",
+              "description": "mlan0 HE(802.11ax) Tx/Rx MCS tier 제한. association 전 0x0000이면 연결 후 검증하고 FW 기본 복귀 시 SET 뒤 serialized wifi connect 1회",
+              "x-ui-editable": "no",
+              "x-ui-editable-by-board": {"imx93": "no", "imx8mm": "caution"},
               "x-apply-timing": "boot",
               "x-consumer": "wifi_init.sh, wifi_event.sh, wifi.sh"
             }
@@ -2123,6 +2171,42 @@
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
               "x-consumer": "wifi_fw_config_lib.sh"
+            },
+            "verify": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "선택적 antcfg SET/GET 검증 계약. 요청 mask와 FW가 반환하는 physical path가 다를 수 있으므로 physical Tx/Rx와 host user_htstream을 독립 확인한다. 존재하면 세 필드가 모두 필수이며 불일치 시 association을 중단한다",
+              "required": [
+                "physical_tx",
+                "physical_rx",
+                "user_htstream"
+              ],
+              "properties": {
+                "physical_tx": {
+                  "type": "string",
+                  "default": "",
+                  "description": "SET 후 기대하는 FW physical Tx path",
+                  "x-ui-editable": "no",
+                  "x-apply-timing": "boot",
+                  "x-consumer": "wifi_fw_config_lib.sh"
+                },
+                "physical_rx": {
+                  "type": "string",
+                  "default": "",
+                  "description": "SET 후 기대하는 FW physical Rx path",
+                  "x-ui-editable": "no",
+                  "x-apply-timing": "boot",
+                  "x-consumer": "wifi_fw_config_lib.sh"
+                },
+                "user_htstream": {
+                  "type": "string",
+                  "default": "",
+                  "description": "SET 후 기대하는 host NSS intent. 0x2121은 양 밴드 Tx 2SS/Rx 1SS",
+                  "x-ui-editable": "no",
+                  "x-apply-timing": "boot",
+                  "x-consumer": "wifi_fw_config_lib.sh"
+                }
+              }
             }
           }
         },
@@ -2279,31 +2363,31 @@
         "periodic_roam": {
           "type": "object",
           "additionalProperties": true,
-          "description": "주기적 패시브 로밍(roam 0) 설정",
+          "description": "DEPRECATED 호환 설정. wifi_periodic_roam은 제3의 proactive roam owner라 wifi_apply_enabled.sh가 설정값과 무관하게 강제 disable한다.",
           "properties": {
             "interval": {
               "type": "integer",
               "default": 60,
               "minimum": 10,
-              "description": "passive roam 실행 주기(초). 10 미만은 스크립트가 10초로 강제",
-              "x-ui-editable": "yes",
-              "x-apply-timing": "daemon-restart",
+              "description": "DEPRECATED/미사용. legacy passive roam 실행 주기 값만 호환 보존",
+              "x-ui-editable": "no",
+              "x-apply-timing": "na",
               "x-consumer": "wifi_periodic_roam.sh"
             },
             "scan_before_roam": {
               "type": "boolean",
               "default": true,
-              "description": "true=로밍 전 스캔(최신 RSSI 기반), false=기존 ap.log 사용",
-              "x-ui-editable": "yes",
-              "x-apply-timing": "daemon-restart",
+              "description": "DEPRECATED/미사용. legacy roam 전 scan 선택값만 호환 보존",
+              "x-ui-editable": "no",
+              "x-apply-timing": "na",
               "x-consumer": "wifi_periodic_roam.sh"
             },
             "enabled": {
               "type": "boolean",
               "default": false,
-              "description": "wifi_periodic_roam@mlan1.service enable/disable",
-              "x-ui-editable": "yes",
-              "x-apply-timing": "daemon-restart",
+              "description": "DEPRECATED. true도 무시하고 wifi_periodic_roam@mlan1.service를 강제 disable하며 경고한다",
+              "x-ui-editable": "no",
+              "x-apply-timing": "na",
               "x-consumer": "wifi_apply_enabled.sh"
             }
           }
@@ -2311,7 +2395,7 @@
         "bgscan": {
           "type": "object",
           "additionalProperties": true,
-          "description": "mlan1 백그라운드 스캔 설정",
+          "description": "mlan1 package background scan. backend는 부팅 최초 /run policy snapshot에서 고정: true=iw(wifi_roam owner), false=wpa_cli(wpa native owner). daemon 재시작에도 불변이며 별도 backend 키 없음.",
           "properties": {
             "interval": {
               "type": "integer",
@@ -2333,15 +2417,15 @@
             "freq_filter": {
               "type": "boolean",
               "default": true,
-              "description": "freq 필터 포함 여부. false면 전체 대역 스캔(airtime 증가)",
-              "x-ui-editable": "yes",
+              "description": "DEPRECATED compatibility boolean. 공통 global freq_list가 있으면 false도 무시하고 두 backend 모두 같은 목록을 강제한다; 목록이 없을 때만 제한 없음",
+              "x-ui-editable": "no",
               "x-apply-timing": "runtime",
               "x-consumer": "wifi_bgscan.py"
             },
             "passive": {
               "type": "boolean",
               "default": true,
-              "description": "패시브 스캔(iw scan passive) 사용 여부. true면 probe request 미송신·beacon만 수신(directed ssid probe 무효, hidden SSID 미발견). false면 종전 액티브 스캔",
+              "description": "Config compatibility boolean. wifi_roam owner/iw periodic bgscan forces true to active scanning with a once-per-process warning on supported mlan hardware for data-plane safety; wpa native owner/wpa_cli still sends passive=1. STAGED_SCAN.home_passive is separate and unchanged.",
               "x-ui-editable": "yes",
               "x-apply-timing": "runtime",
               "x-consumer": "wifi_bgscan.py"
@@ -2349,7 +2433,7 @@
             "emit_roam_hint": {
               "type": "boolean",
               "default": true,
-              "description": "bgscan 스캔 성공 시 /tmp/wifi_roam_hint_<iface> touch — wifi_roam 의 후보없음 지수 backoff 를 즉시 해제하는 신호(단방향, race-free). false 면 hint 미발행. 주의: 단일 iface 운용에서는 실효가 없다 — backoff 가 쌓이는 구간은 로밍 컨디션 ON 인데 그때 bgscan 은 스캔을 건너뛰어 hint 가 발행될 수 없다. 듀얼 iface(전역 /tmp/roam_condition 공유)에서만 우발적으로 발화 가능",
+              "description": "iw/wifi_roam owner에서 scan 성공 시 wifi_roam backoff hint를 발행. wpa_cli/native owner에서는 소비자가 없어 강제 비활성",
               "x-ui-editable": "yes",
               "x-apply-timing": "runtime",
               "x-consumer": "wifi_bgscan.py"
@@ -2357,9 +2441,9 @@
             "enabled": {
               "type": "boolean",
               "default": false,
-              "description": "wifi_bgscan@mlan1.service enable/disable",
+              "description": "wifi_bgscan@mlan1.service enable/disable. false면 package periodic scan만 중지하며 wpa_supplicant 장애 복구/재연결 scan은 유지",
               "x-ui-editable": "yes",
-              "x-apply-timing": "daemon-restart",
+              "x-apply-timing": "boot",
               "x-consumer": "wifi_apply_enabled.sh"
             }
           }
@@ -2367,7 +2451,7 @@
         "roaming": {
           "type": "object",
           "additionalProperties": true,
-          "description": "wifi_roam.py 로밍 알고리즘 설정(mlan1). 데몬 시작 시 1회 로드.",
+          "description": "mlan1 proactive roam owner 및 wifi_roam 알고리즘 설정. enabled/topology/extra_ssids는 부팅 최초 /run policy snapshot으로 고정되며 daemon 재시작에도 불변.",
           "properties": {
             "use_signal_avg": {
               "type": "boolean",
@@ -2415,21 +2499,26 @@
             "extra_ssids": {
               "type": "array",
               "default": [],
+              "uniqueItems": true,
               "items": {
-                "type": "string"
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32,
+                "x-utf8-maxBytes": 32,
+                "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
               },
-              "description": "conf 기본 ssid 외 추가 로밍 후보 SSID 목록(같은 psk/key_mgmt 전제). generate_network_blocks=false면 무시",
+              "description": "유효 UTF-8 1..32 encoded bytes의 고유 SSID identity(공백/따옴표/백슬래시 보존, C0/DEL 금지, base SSID 중복 금지). 모드A에서는 추가 network 블록용이며 수동 cross-SSID 선택은 지원하지 않는다. 모드B에서는 수동 cross-SSID 후보로 유지한다. 변경은 재부팅 필요",
               "x-ui-editable": "caution",
-              "x-apply-timing": "daemon-restart",
-              "x-consumer": "wifi_roam.py"
+              "x-apply-timing": "reboot",
+              "x-consumer": "wifi_init.sh, wifi_roam.py, wifi_bgscan.py"
             },
             "generate_network_blocks": {
               "type": "boolean",
               "default": false,
-              "description": "false=모드B(단일 블록, extra_ssids 무시), true=모드A(다중 network 블록+select_network cross-SSID)",
+              "description": "부팅 topology 결정자: false=모드B(단일 블록·수동 cross-SSID), true=모드A(다중 블록·선택 owner의 자동 cross-SSID). 변경은 재부팅 필요",
               "x-ui-editable": "caution",
-              "x-apply-timing": "daemon-restart",
-              "x-consumer": "wifi_roam.py"
+              "x-apply-timing": "reboot",
+              "x-consumer": "wifi_init.sh, wifi_roam.py, wifi_bgscan.py"
             },
             "ROAM_CROSS_FAIL_RETRY_COUNT": {
               "type": "integer",
@@ -2599,10 +2688,10 @@
             "enabled": {
               "type": "boolean",
               "default": false,
-              "description": "wifi_roam@mlan1.service enable/disable",
+              "description": "proactive roam owner 선택자: true=wifi_roam@mlan1+iw scan, false=wpa_supplicant native selection+wpa_cli scan. 부팅 /run snapshot으로 latch; 변경은 재부팅 필요",
               "x-ui-editable": "yes",
-              "x-apply-timing": "daemon-restart",
-              "x-consumer": "wifi_apply_enabled.sh"
+              "x-apply-timing": "reboot",
+              "x-consumer": "wifi_apply_enabled.sh, wifi_bgscan.py"
             }
           }
         },

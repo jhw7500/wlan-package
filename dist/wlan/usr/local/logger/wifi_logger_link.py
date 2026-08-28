@@ -12,6 +12,7 @@ import argparse
 from datetime import datetime
 import logging
 from sUTILS import Logger, _EXTRA_
+from roam_policy import RoamPolicyError, decode_wpa_ssid_text
 
 VERSION = "0.4"
 IFACE = ""
@@ -206,10 +207,14 @@ def parse_iw_info(output):
     for line in output.splitlines():
         if "addr" in line:
             result["address"] = line.split()[-1]
-        elif line.strip().startswith("ssid "):
-            parts = line.split(None, 1)
-            if len(parts) == 2:
-                result["ssid"] = parts[1].strip()
+        elif line.lstrip().startswith("ssid "):
+            # Consume only iw's structural delimiter.  Its printable SSID
+            # form escapes UTF-8, backslashes, and edge spaces as \xNN.
+            token = line.lstrip()[len("ssid "):]
+            try:
+                result["ssid"] = decode_wpa_ssid_text(token)
+            except RoamPolicyError:
+                pass
         elif "channel" in line:
             match = re.search(r"channel\s+(\d+)\s+\(([\d]+) MHz\),\s+width:\s+([\d]+ MHz)", line)
             if match:

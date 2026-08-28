@@ -388,6 +388,8 @@ fi
 # Factory Reset은 enable/disable 일부 실패를 성공으로 삼으면 안 된다. 일반 boot 경로는
 # 기존 best-effort 동작을 유지하고 strict 호출만 non-zero를 반환한다.
 APPLY_JSON="$WORK/apply.json"
+APPLY_RUN="$WORK/apply-run"
+mkdir -p "$APPLY_RUN"
 cat > "$APPLY_JSON" <<'EOF'
 {
   "global":{"ping_monitor":{"enabled":false}},
@@ -400,6 +402,7 @@ EOF
 rm -f "$STATE"/*
 expect_rc "normal service sync remains best effort" 0 \
     env WIFI_INIT_CONF_JSON="$APPLY_JSON" WIFI_APPLY_STRICT=0 \
+        WIFI_RUN_DIR="$APPLY_RUN" \
         ENABLE_FAIL='wpa_supplicant@mlan0.service' SYSTEMD_STATE="$STATE" \
         PATH="$PATH" bash "$APPLY_SCRIPT"
 [ -e "$STATE/wifi_event@mlan0.service" ] \
@@ -411,6 +414,7 @@ expect_rc "normal service sync remains best effort" 0 \
 rm -f "$STATE"/*
 expect_rc "strict service sync returns non-zero on unit failure" 1 \
     env WIFI_INIT_CONF_JSON="$APPLY_JSON" WIFI_APPLY_STRICT=1 \
+        WIFI_RUN_DIR="$APPLY_RUN" \
         ENABLE_FAIL='wpa_supplicant@mlan0.service' SYSTEMD_STATE="$STATE" \
         PATH="$PATH" bash "$APPLY_SCRIPT"
 
