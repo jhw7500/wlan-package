@@ -64,8 +64,8 @@ wifi_init_conf.json
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `BOARD_TYPE` | enum | `"imx93"` | 보드/드라이버 선택. `imx93*`이면 `mlan_imx93.ko`/`moal_imx93.ko`, 그 외(`imx8mm` 등)면 `mlan_imx8.ko`/`moal_imx8.ko`. insmod할 `.ko` 파일 선택에 사용 (변경 시 드라이버 리로드/재부팅 필요) |
-| `BUS_TYPE` | enum | `"sdio"` | 버스 종류. `sdio`\|`pcie`. **fw_name 자동선택**, `mod_para` 블록 prefix(`sdio`→`SD9098_N`, `pcie`→`PCIE9098_N`), 검증 패턴 결정에 사용. 하드웨어와 반드시 일치 |
+| `BOARD_TYPE` | detected enum (read-only) | N/A (detected) | 실제 SoC에서 `imx93` 또는 `imx8mm`로 정규화된다. 설치·Factory Reset·정상 부팅이 같은 감지 helper를 사용하며 수동 변경은 다음 부팅에 복구된다. 실제 SoC를 확인할 수 없으면 Wi-Fi는 module load 전에 실패한다. |
+| `BUS_TYPE` | detected enum (read-only) | N/A (detected) | 버스 종류. `sdio`\|`pcie`. **fw_name 자동선택**, `mod_para` 블록 prefix(`sdio`→`SD9098_N`, `pcie`→`PCIE9098_N`), 검증 패턴 결정에 사용. 하드웨어와 반드시 일치 |
 | `BLUETOOTH.enable` | bool | `false` | BT combo 펌웨어 사용 여부. **fw_name 자동선택에 반영**(`true`면 `*_combo*.bin`). fw_name이 바뀌면 `wifi_config.py`가 `mod_para.conf`에 자동 기입 |
 | `MOD_PARA` | string | `"cts/wifi_mod_para.conf"` | 모듈 파라미터 설정 파일 (`/lib/firmware/` 기준). moal insmod 인자 `mod_para=`로 전달. dev_cap_mask/cal_data_cfg/mac_addr/net_rx/fw_name 주입 대상 파일 |
 | `CAL_DATA_CFG` | string | `"cts/WlanCalData_ext_RD.conf"` | 캘리브레이션 데이터 파일 **fallback**. 인터페이스별 `mlanN.CAL_DATA_CFG`가 우선하며, 비어있을 때만 이 값 사용. `wifi_init.sh`가 `wifi_mod_para.conf` 블록의 `cal_data_cfg=`로 주입. 자세한 내용은 [CAL_DATA_CFG 매핑](#cal_data_cfg--txpwrlimit_path--인터페이스별-매핑) 참고 |
@@ -979,6 +979,12 @@ association 전에 `mlanutl <iface> antcfg <tx> [rx]`로 FW의 Tx/Rx 경로를 �
 회피를 위해 `tx=0x0303`, `rx=0x0101`을 활성화하고 mlan1은 비활성 상태다. **imx8/505**는
 matching `antcfgnss` GET ABI로 qualification되지 않았으므로 `wifi_board_config.sh`가 이
 strict 제품 profile을 `enabled=false`, 빈 Tx/Rx, verify 없음으로 중화한다.
+
+제품 profile의 보드 판정은 persisted JSON이 아니라 실제 `soc_id`다. JSON의
+`BOARD_TYPE`/`BUS_TYPE`/`mcp.iio_device`가 감지값과 다르면 `crit` 로그 후 원자
+정규화한다. 선택 KO와 로드된 `mlan`/`moal`의 `version` 또는 `srcversion`이
+다르거나 확인되지 않으면 association 전에 fail-closed 한다. i.MX8MM에서는 i.MX93
+strict profile을 적용하지 않으며 custom antcfg/MCS는 보존한다.
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|

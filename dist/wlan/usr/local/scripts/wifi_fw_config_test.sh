@@ -16,6 +16,16 @@ PASS=0
 FAIL=0
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
+LOGGER_BIN="$WORK/logger-bin"
+MODULE_LOG="$WORK/module-identity.log"
+mkdir -p "$LOGGER_BIN"
+cat > "$LOGGER_BIN/logger" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "$LOGGER_CAPTURE"
+EOF
+chmod +x "$LOGGER_BIN/logger"
+export PATH="$LOGGER_BIN:$PATH"
+export LOGGER_CAPTURE="$MODULE_LOG"
 
 pass() { PASS=$((PASS + 1)); printf 'PASS: %s\n' "$1"; }
 fail() { FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; }
@@ -189,6 +199,32 @@ grep -q 'normalize_legacy_mcs_tier /usr/local/etc/wifi_init_conf.json || exit 1'
     && pass "postinst migrates legacy numeric MCS after merge" \
     || fail "postinst does not migrate legacy numeric MCS after merge"
 
+grep -Fq 'if ! _board_facts=$("$BOARD_CONFIG_SH" --detect)' "$POSTINST" \
+    && pass "postinst fails closed through canonical detector" \
+    || fail "postinst does not check canonical detector status"
+
+if grep -q 'SOC_ID=$(cat /sys/devices/soc0/soc_id' "$POSTINST"; then
+    fail "postinst retains duplicate inline SoC detection"
+else
+    pass "postinst has no duplicate inline SoC detection"
+fi
+
+if grep -q 'board_applied=' "$POSTINST"; then
+    fail "postinst retains permissive board-apply fallback"
+else
+    pass "postinst board normalization is fail closed"
+fi
+
+FACTORY_LIB="$SCRIPT_DIR/wifi_factory_reset_lib.sh"
+grep -q 'FACTORY_BOARD_CONFIG_SH' "$FACTORY_LIB" \
+    && pass "factory reset uses canonical board helper" \
+    || fail "factory reset does not use canonical board helper"
+
+GUIDE="$SCRIPT_DIR/../../../../../docs/wifi_init_conf_guide.md"
+grep -q 'BOARD_TYPE.*read-only\|BOARD_TYPE.*감지' "$GUIDE" \
+    && pass "guide documents detected BOARD_TYPE ownership" \
+    || fail "guide does not document BOARD_TYPE ownership"
+
 # JSON deep merge는 active 값을 보존하므로 템플릿 기본만 바꾸면 기존 장비의 구형
 # antcfg(false/empty) 또는 알려진 문제값(physical 1x1)이 남는다. 정확히 그 제품 이력만
 # 새 비대칭 계약으로 승격하고 운영자가 정한 다른 값은 건드리지 않아야 한다.
@@ -271,16 +307,161 @@ expect_eq "imx8 candidate upgrade neutralizes injected strict product profile" \
     "$(jq -r '.mlan0.antcfg | "\(.enabled) \(.tx) \(.rx) \(.verify != null)"' \
         "$WORK/migrated-product-antcfg-imx8.json" 2>/dev/null)"
 
-cp "$TEMPLATE" "$WORK/board-imx8.json"
-if "$BOARD_CONFIG" "$WORK/board-imx8.json" >/dev/null 2>&1; then
+SOC_IMX93="$WORK/soc-imx93"
+SOC_IMX8="$WORK/soc-imx8"
+SOC_UNKNOWN="$WORK/soc-unknown"
+SOC_EMPTY="$WORK/soc-empty"
+SOC_UNSAFE="$WORK/soc-unsafe"
+SOC_SUFFIX="$WORK/soc-suffix"
+printf 'i.MX93\n' > "$SOC_IMX93"
+printf 'i.MX8MM\n' > "$SOC_IMX8"
+printf 'not-an-imx-board\n' > "$SOC_UNKNOWN"
+: > "$SOC_EMPTY"
+printf 'i.MX9/3\n' > "$SOC_UNSAFE"
+printf 'i.MX930\n' > "$SOC_SUFFIX"
+
+case "$(command -v logger)" in
+    "$WORK"/*) pass "detector failure fixtures use test-owned logger" ;;
+    *) fail "detector failure fixtures can reach host logger" ;;
+esac
+
+_detected=$(WIFI_SOC_ID_PATH="$SOC_IMX93" "$BOARD_CONFIG" --detect 2>/dev/null)
+expect_eq "detect maps i.MX93 to canonical identity" \
+    "imx93 sdio" \
+    "$(printf '%s\n' "$_detected" |
+       sed -n "s/^BOARD_TYPE='\\([^']*\\)'/\\1/p; s/^BUS_TYPE='\\([^']*\\)'/\\1/p" |
+       paste -sd ' ' -)"
+
+_detected=$(WIFI_SOC_ID_PATH="$SOC_IMX8" "$BOARD_CONFIG" --detect 2>/dev/null)
+expect_eq "detect maps i.MX8MM to canonical identity" \
+    "imx8mm pcie" \
+    "$(printf '%s\n' "$_detected" |
+       sed -n "s/^BOARD_TYPE='\\([^']*\\)'/\\1/p; s/^BUS_TYPE='\\([^']*\\)'/\\1/p" |
+       paste -sd ' ' -)"
+
+expect_rc "detect rejects unsupported SoC" 1 \
+    env WIFI_SOC_ID_PATH="$SOC_UNKNOWN" "$BOARD_CONFIG" --detect
+expect_rc "detect rejects empty SoC source" 1 \
+    env WIFI_SOC_ID_PATH="$SOC_EMPTY" "$BOARD_CONFIG" --detect
+expect_rc "detect rejects missing SoC source" 1 \
+    env WIFI_SOC_ID_PATH="$WORK/missing-soc-id" "$BOARD_CONFIG" --detect
+expect_rc "detect rejects SoC identity changed by safety normalization" 1 \
+    env WIFI_SOC_ID_PATH="$SOC_UNSAFE" "$BOARD_CONFIG" --detect
+expect_rc "detect rejects SoC identity with canonical prefix only" 1 \
+    env WIFI_SOC_ID_PATH="$SOC_SUFFIX" "$BOARD_CONFIG" --detect
+
+KO_DIR="$WORK/ko"
+SYS_MODULE="$WORK/sys-module"
+mkdir -p "$KO_DIR" "$SYS_MODULE/mlan" "$SYS_MODULE/moal"
+printf 'version=543.p18\0srcversion=MLAN93SRC\0' > "$KO_DIR/mlan_imx93.ko"
+printf 'version=543.p18\0srcversion=MOAL93SRC\0' > "$KO_DIR/moal_imx93.ko"
+printf '543.p18\n' > "$SYS_MODULE/mlan/version"
+printf 'MLAN93SRC\n' > "$SYS_MODULE/mlan/srcversion"
+printf '543.p18\n' > "$SYS_MODULE/moal/version"
+printf 'MOAL93SRC\n' > "$SYS_MODULE/moal/srcversion"
+
+expect_rc "loaded imx93 modules match selected KO metadata" 0 \
+    env WIFI_SYS_MODULE_ROOT="$SYS_MODULE" "$BOARD_CONFIG" --verify-loaded imx93 \
+        "$KO_DIR/mlan_imx93.ko" "$KO_DIR/moal_imx93.ko"
+expect_rc "module verifier rejects board/basename mismatch" 1 \
+    env WIFI_SYS_MODULE_ROOT="$SYS_MODULE" "$BOARD_CONFIG" --verify-loaded imx8mm \
+        "$KO_DIR/mlan_imx93.ko" "$KO_DIR/moal_imx93.ko"
+
+printf 'WRONGVERSION\n' > "$SYS_MODULE/mlan/version"
+expect_rc "module verifier rejects loaded version mismatch" 1 \
+    env WIFI_SYS_MODULE_ROOT="$SYS_MODULE" "$BOARD_CONFIG" --verify-loaded imx93 \
+        "$KO_DIR/mlan_imx93.ko" "$KO_DIR/moal_imx93.ko"
+grep -Fq 'field=version expected=543.p18 actual=WRONGVERSION' "$MODULE_LOG" \
+    && pass "module mismatch log includes expected and actual metadata" \
+    || fail "module mismatch log omits expected or actual metadata"
+printf '543.p18\n' > "$SYS_MODULE/mlan/version"
+
+printf 'WRONGSRC\n' > "$SYS_MODULE/moal/srcversion"
+expect_rc "module verifier rejects loaded srcversion mismatch" 1 \
+    env WIFI_SYS_MODULE_ROOT="$SYS_MODULE" "$BOARD_CONFIG" --verify-loaded imx93 \
+        "$KO_DIR/mlan_imx93.ko" "$KO_DIR/moal_imx93.ko"
+printf 'MOAL93SRC\n' > "$SYS_MODULE/moal/srcversion"
+
+BAD_KO_DIR="$WORK/bad-ko"
+mkdir -p "$BAD_KO_DIR"
+cp "$KO_DIR/mlan_imx93.ko" "$BAD_KO_DIR/mlan_imx93.ko"
+printf 'version=543.p18\0' > "$BAD_KO_DIR/moal_imx93.ko"
+expect_rc "module verifier rejects missing KO metadata" 1 \
+    env WIFI_SYS_MODULE_ROOT="$SYS_MODULE" "$BOARD_CONFIG" --verify-loaded imx93 \
+        "$BAD_KO_DIR/mlan_imx93.ko" "$BAD_KO_DIR/moal_imx93.ko"
+printf 'version=543.p18\0version=duplicate\0srcversion=MOAL93SRC\0' \
+    > "$BAD_KO_DIR/moal_imx93.ko"
+expect_rc "module verifier rejects duplicate KO metadata" 1 \
+    env WIFI_SYS_MODULE_ROOT="$SYS_MODULE" "$BOARD_CONFIG" --verify-loaded imx93 \
+        "$BAD_KO_DIR/mlan_imx93.ko" "$BAD_KO_DIR/moal_imx93.ko"
+printf 'version=543.p18\0version=\0srcversion=MOAL93SRC\0' \
+    > "$BAD_KO_DIR/moal_imx93.ko"
+expect_rc "module verifier rejects trailing-empty duplicate KO metadata" 1 \
+    env WIFI_SYS_MODULE_ROOT="$SYS_MODULE" "$BOARD_CONFIG" --verify-loaded imx93 \
+        "$BAD_KO_DIR/mlan_imx93.ko" "$BAD_KO_DIR/moal_imx93.ko"
+
+jq '.global.BOARD_TYPE="imx93"
+    | .global.BUS_TYPE="sdio"
+    | .mcp.iio_device="/tmp/stale-iio"' \
+    "$TEMPLATE" > "$WORK/board-imx8.json"
+BOARD_CONF_UID=$(id -u)
+BOARD_CONF_GID=$(id -g)
+chmod 0644 "$WORK/board-imx8.json"
+if [ "$BOARD_CONF_UID" -eq 0 ]; then
+    BOARD_CONF_UID=12345
+    BOARD_CONF_GID=12346
+    chown "$BOARD_CONF_UID:$BOARD_CONF_GID" "$WORK/board-imx8.json"
+fi
+if WIFI_SOC_ID_PATH="$SOC_IMX8" \
+   "$BOARD_CONFIG" "$WORK/board-imx8.json" >/dev/null 2>&1; then
     pass "imx8 board config succeeds on package template"
 else
     fail "imx8 board config succeeds on package template"
 fi
-expect_eq "imx8 board config removes unsupported strict antcfg profile" \
-    'false   false' \
-    "$(jq -r '.mlan0.antcfg | "\(.enabled) \(.tx) \(.rx) \(.verify != null)"' \
+expect_eq "detected imx8 identity replaces stale persisted board facts" \
+    'imx8mm pcie' \
+    "$(jq -r '.global | "\(.BOARD_TYPE) \(.BUS_TYPE)"' \
         "$WORK/board-imx8.json" 2>/dev/null)"
+if [ "$(jq -r '.mcp.iio_device' "$WORK/board-imx8.json" 2>/dev/null)" != "/tmp/stale-iio" ]; then
+    pass "detected IIO path replaces stale persisted path"
+else
+    fail "detected IIO path replaces stale persisted path"
+fi
+expect_eq "board normalization preserves existing mode" \
+    '644' "$(stat -c '%a' "$WORK/board-imx8.json")"
+expect_eq "board normalization preserves existing uid/gid" \
+    "$BOARD_CONF_UID:$BOARD_CONF_GID" \
+    "$(stat -c '%u:%g' "$WORK/board-imx8.json")"
+
+MV_FAULT_BIN="$WORK/mv-fault-bin"
+MV_FAULT_DIR="$WORK/board-mv-fault"
+MV_CAPTURE="$WORK/mv-fault.log"
+MV_FAULT_CONF="$MV_FAULT_DIR/wifi_init_conf.json"
+MV_FAULT_ORIGINAL="$WORK/board-mv-fault.original.json"
+mkdir -p "$MV_FAULT_BIN" "$MV_FAULT_DIR"
+cat > "$MV_FAULT_BIN/mv" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "$MV_CAPTURE"
+exit 1
+EOF
+chmod +x "$MV_FAULT_BIN/mv"
+cp "$TEMPLATE" "$MV_FAULT_CONF"
+cp "$MV_FAULT_CONF" "$MV_FAULT_ORIGINAL"
+expect_rc "board normalization fails closed when atomic rename fails" 1 \
+    env PATH="$MV_FAULT_BIN:$PATH" MV_CAPTURE="$MV_CAPTURE" \
+        WIFI_SOC_ID_PATH="$SOC_IMX8" "$BOARD_CONFIG" "$MV_FAULT_CONF"
+if [ -s "$MV_CAPTURE" ]; then
+    pass "rename-fault fixture reaches test-local failing mv"
+else
+    fail "rename-fault fixture does not reach test-local failing mv"
+fi
+if cmp -s "$MV_FAULT_ORIGINAL" "$MV_FAULT_CONF"; then
+    pass "rename failure preserves original JSON byte-for-byte"
+else
+    fail "rename failure changes original JSON"
+fi
+expect_eq "rename failure removes only its temporary output" '' \
+    "$(find "$MV_FAULT_DIR" -mindepth 1 -maxdepth 1 ! -name 'wifi_init_conf.json' -print)"
 
 expect_rc "imx93 product scan profile accepts shipped defaults" 0 \
     wifi_fw_validate_product_scan_profile "$TEMPLATE" imx93
@@ -634,6 +815,26 @@ grep -q '^ExecStart=/usr/local/scripts/wifi_init.sh$' "$WIFI_INIT_UNIT" \
 grep -q 'ExecCondition=.*ExecMainStatus.*75' "$EMERGENCY_UNIT" \
     && pass "emergency reboot skips transitional MCS status" \
     || fail "emergency reboot does not skip transitional MCS status"
+
+_detect_line=$(grep -n -- '--detect' "$WIFI_INIT" | head -1 | cut -d: -f1)
+_json_line=$(grep -n 'MOD_PARA=$(jq' "$WIFI_INIT" | head -1 | cut -d: -f1)
+[ -n "$_detect_line" ] && [ -n "$_json_line" ] &&
+    [ "$_detect_line" -lt "$_json_line" ] \
+    && pass "wifi_init detects hardware before reading JSON settings" \
+    || fail "wifi_init does not detect hardware before JSON settings"
+
+if grep -q 'BOARD_TYPE=$(jq' "$WIFI_INIT"; then
+    fail "wifi_init still trusts persisted BOARD_TYPE"
+else
+    pass "wifi_init does not trust persisted BOARD_TYPE"
+fi
+
+grep -q -- '--verify-loaded "$BOARD_TYPE"' "$WIFI_INIT" \
+    && pass "wifi_init verifies loaded board-qualified modules" \
+    || fail "wifi_init does not verify loaded modules"
+grep -q 'persisted hardware identity mismatch' "$WIFI_INIT" \
+    && pass "wifi_init logs persisted identity drift" \
+    || fail "wifi_init does not log identity drift"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
