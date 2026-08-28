@@ -580,6 +580,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 | `stat_check_interval_sec` | int | `1` | mlan0, mlan1 | WiFi 통계 체크 주기 (초) |
 | `stat_reset_interval_sec` | int | `604800` | mlan0, mlan1 | 통계 누적 리셋 주기 (초, 기본 7일) |
 | `bgscan_stale_threshold_sec` | int | `600` | mlan0, mlan1 | `beacon.json` 스캔 엔트리 stale 프루닝 임계(초, 기본 10분). 소비: `wifi_logger_scan.py`. 양의 정수가 아니면 코드 기본 600 + 경고 |
+| `fwcfg_watch_sec` | float | `60` | mlan0, mlan1 | FW 커스텀 설정(`rate_adapt`/`antcfg`/`mcs_tier`) 변화 감시 주기(초). `0`=끔. 한 주기에 하나씩 라운드로빈하므로 3개 기준 전체 순회는 3배 주기. 관측 전용 — 변화 시 syslog `warn`만 남기고 복구하지 않는다. 소비: `wifi_logger_link.py` |
 | `enabled` | bool | mlan0 `true` / mlan1 `false` / eth0 `true` | mlan0, mlan1, eth0 | `wifi_logger@<iface>` 부팅 정책. `mlanN.enabled=false`면 강제 disable |
 
 > `stat_log_interval_sec`과 `stat_check_interval_sec`의 차이: check는 데이터 수집 주기, log는 실제 파일/syslog 기록 주기이다. log >= check 관계를 유지해야 한다.
@@ -1058,7 +1059,7 @@ mlan0 / mlan1에 개별 적용한다. 섹션이 있으면 `mode`/`low_thresh`/`h
 
 | 키 | 타입 | 기본값 (현재 JSON) | 설명 |
 |----|------|------------------|------|
-| `enabled` | bool | `true` | 섹션 적용 ON/OFF. `false`면 `rate_adapt_cfg`를 SET하지 않고 FW 기본값을 그대로 둔다. 값 검증은 `enabled`와 무관하게 수행되므로 꺼둔 채로도 값을 미리 저장해 둘 수 있다 |
+| `enabled` | bool | `true` | 섹션 적용 ON/OFF. `false`면 `rate_adapt_cfg`를 SET하지 않는다. 이때 남는 값은 FW 기본값이 아니라 **마지막으로 SET된 값**이다 — rate_adapt는 드라이버 재적재를 넘어 유지되며 콜드부팅 후에만 FW 기본값이다(2026-08-28 실측). 값 검증은 `enabled`와 무관하게 수행되므로 꺼둔 채로도 값을 미리 저장해 둘 수 있다 |
 | `mode` | int | `1` | `0`=legacy, `1`=SR(Success Rate) |
 | `low_thresh` | int | `70` | SR 하한 (%). `255`(0xff)=dynamic |
 | `high_thresh` | int | `90` | SR 상한 (%). static은 `low < high`, dynamic은 양쪽 모두 255 |

@@ -350,7 +350,7 @@
         "rate_adapt": {
             "_comment": [
                 "연결 전에 적용하는 FW rate adaptation 설정",
-                "enabled: (bool) 이 섹션 적용 ON/OFF. false면 rate_adapt_cfg를 SET하지 않고 FW 기본값을 그대로 둔다. 키가 없으면 true(종전 동작)",
+                "enabled: (bool) 이 섹션 적용 ON/OFF. false면 rate_adapt_cfg를 SET하지 않는다. 이때 남는 값은 FW 기본값이 아니라 마지막으로 SET된 값이다 — rate_adapt는 드라이버 재적재를 넘어 유지되며 콜드부팅 후에만 FW 기본값이다(2026-08-28 실측). 키가 없으면 true(종전 동작)",
                 "mode: (int) 0=legacy, 1=SR",
                 "low_thresh: (int) SR low threshold. 0xff=노이즈 기반 동적값, 그 외=성공률 기준 정적값 (%)",
                 "high_thresh: (int) SR high threshold. 0xff=노이즈 기반 동적값, 그 외=성공률 기준 정적값 (%)",
@@ -378,6 +378,7 @@
                 "stat_check_interval_sec: (int) 통계 상태 확인 주기 (초)",
                 "stat_reset_interval_sec: (int) 통계 로그 자동 초기화 주기 (초)",
                 "bgscan_stale_threshold_sec: (int) beacon.json stale 엔트리 프루닝 기준 시간 (초). 양의 정수만 유효",
+                "fwcfg_watch_sec: (number) FW 커스텀 설정(rate_adapt/antcfg/mcs_tier) 변화 감시 주기 (초). 0=끔. 한 주기에 하나씩 라운드로빈, 관측 전용",
                 "enabled: (bool) wifi_logger@<iface> 서비스 ON/OFF"
             ],
             "link_interval_sec": 0.9,
@@ -385,6 +386,7 @@
             "stat_check_interval_sec": 1,
             "stat_reset_interval_sec": 604800,
             "bgscan_stale_threshold_sec": 600,
+            "fwcfg_watch_sec": 60,
             "enabled": true
         },
         "periodic_roam": {
@@ -593,6 +595,7 @@
             "stat_check_interval_sec": 1,
             "stat_reset_interval_sec": 604800,
             "bgscan_stale_threshold_sec": 600,
+            "fwcfg_watch_sec": 60,
             "enabled": false
         },
         "periodic_roam": {

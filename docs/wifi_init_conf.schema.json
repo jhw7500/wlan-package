@@ -1318,7 +1318,7 @@
             "enabled": {
               "type": "boolean",
               "default": true,
-              "description": "rate_adapt 섹션 적용 ON/OFF. false면 rate_adapt_cfg를 SET하지 않고 FW 기본값을 유지한다. 키 부재 시 true(종전 동작)",
+              "description": "rate_adapt 섹션 적용 ON/OFF. false면 rate_adapt_cfg를 SET하지 않는다. 이때 남는 값은 FW 기본값이 아니라 마지막으로 SET된 값이다(rate_adapt는 드라이버 재적재를 넘어 유지되며 콜드부팅 후에만 FW 기본값). 키 부재 시 true(종전 동작)",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
               "x-consumer": "wifi_fw_config_lib.sh"
@@ -1443,6 +1443,15 @@
               "x-ui-editable": "yes",
               "x-apply-timing": "daemon-restart",
               "x-consumer": "wifi_logger_scan.py"
+            },
+            "fwcfg_watch_sec": {
+              "type": "number",
+              "default": 60,
+              "minimum": 0,
+              "description": "FW 커스텀 설정(rate_adapt/antcfg/mcs_tier) 변화 감시 주기(초). 0=끔. 한 주기에 설정 하나씩 라운드로빈하므로 설정 3개 기준 전체 순회는 3배 주기다. 관측 전용 — 변화 감지 시 syslog warn 만 남기고 복구하지 않는다",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_logger_link.py"
             },
             "enabled": {
               "type": "boolean",
@@ -2224,7 +2233,7 @@
             "enabled": {
               "type": "boolean",
               "default": true,
-              "description": "rate_adapt 섹션 적용 ON/OFF. false면 rate_adapt_cfg를 SET하지 않고 FW 기본값을 유지한다. 키 부재 시 true(종전 동작)",
+              "description": "rate_adapt 섹션 적용 ON/OFF. false면 rate_adapt_cfg를 SET하지 않는다. 이때 남는 값은 FW 기본값이 아니라 마지막으로 SET된 값이다(rate_adapt는 드라이버 재적재를 넘어 유지되며 콜드부팅 후에만 FW 기본값). 키 부재 시 true(종전 동작)",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
               "x-consumer": "wifi_fw_config_lib.sh"
@@ -2349,6 +2358,15 @@
               "x-ui-editable": "yes",
               "x-apply-timing": "daemon-restart",
               "x-consumer": "wifi_logger_scan.py"
+            },
+            "fwcfg_watch_sec": {
+              "type": "number",
+              "default": 60,
+              "minimum": 0,
+              "description": "FW 커스텀 설정(rate_adapt/antcfg/mcs_tier) 변화 감시 주기(초). 0=끔. 한 주기에 설정 하나씩 라운드로빈하므로 설정 3개 기준 전체 순회는 3배 주기다. 관측 전용 — 변화 감지 시 syslog warn 만 남기고 복구하지 않는다",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_logger_link.py"
             },
             "enabled": {
               "type": "boolean",
