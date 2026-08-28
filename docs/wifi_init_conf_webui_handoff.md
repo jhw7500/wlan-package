@@ -413,6 +413,7 @@ WebUI에서 개별 편집하지 않는다.
 | `stat_check_interval_sec` | 통계 체크 주기 | int | `1` | 초(>0) | yes | daemon-restart | mlanN>global 우선 |
 | `stat_reset_interval_sec` | 통계 리셋 주기 | int | `604800` | 초(7일) | yes | daemon-restart | mlanN>global 우선 |
 | `bgscan_stale_threshold_sec` | bgscan stale 임계 | int | `600` | 초(양의 정수) | yes | daemon-restart | `beacon.json` stale 엔트리 프루닝 기준. 소비 `wifi_logger_scan.py`. 양의 int 아니면 코드 기본 600 + warn |
+| `fwcfg_watch_sec` | FW 설정 변화 감시 주기 | float | `60` | 초(>=0, 0=끔) | yes | daemon-restart | `rate_adapt`/`antcfg`/`mcs_tier` 를 라운드로빈 관측해 변화 시 syslog `warn`. 소비 `wifi_logger_link.py`. 복구는 하지 않는다 |
 | `logger.enabled` | 로거 데몬 활성화 | bool | `mlan0=true / mlan1=false` | true\|false | yes | daemon-restart | `wifi_logger@mlanN` enable/disable. `mlanN.enabled=false`면 강제 disable |
 
 #### 3.10.3 mlanN.periodic_roam / bgscan

@@ -27,6 +27,11 @@ SPIKE_THRESHOLD_RETRY = 10
 # "끊김"으로 표시하지 않기 위한 빠른 재시도. count*delay 가 끊김 무시 윈도우(기본 ~200ms).
 LINK_RETRY_COUNT = 4
 LINK_RETRY_DELAY = 0.05
+# FW 커스텀 설정(rate_adapt/antcfg/mcs_tier) 변화 감시 주기(초). 0=끔.
+# 한 주기에 설정 하나씩 라운드로빈하므로 설정 3개 기준 전체 순회는 3배 주기다.
+# 관측 전용 — mcs_tier 첫 assoc 리셋, rate_adapt 30/50 변화(2026-08-28, 미재현)처럼
+# FW 가 pre-association 설정값을 되돌리는 사건의 다음 발생을 포착하기 위한 계측.
+FWCFG_WATCH_SEC = 60
 
 
 def build_arg_parser():
@@ -49,6 +54,9 @@ def build_arg_parser():
     parser.add_argument("--link-retry-delay", type=float, default=LINK_RETRY_DELAY,
                         help=f"Fast-retry delay between attempts in seconds "
                              f"(default: {LINK_RETRY_DELAY})")
+    parser.add_argument("--fwcfg-watch", type=float, default=FWCFG_WATCH_SEC,
+                        help=f"FW custom-setting change-watch period in seconds, 0=off "
+                             f"(default: {FWCFG_WATCH_SEC})")
     return parser
 
 def handle_sigterm(signum, frame):
@@ -443,6 +451,102 @@ def check_tx_spike(link_data):
     _prev_tx_retries = cur_retry
 
 
+_RE_RA_LOW = re.compile(r"Low\s*:\s*(\d+)")
+_RE_RA_HIGH = re.compile(r"High\s*:\s*(\d+)")
+_RE_RA_IV = re.compile(r"Eval Timer interval\s*:\s*(\d+)")
+_RE_ANT_TX = re.compile(r"Mode of Tx path is\s*(0x[0-9a-fA-F]+)")
+_RE_ANT_RX = re.compile(r"Mode of Rx path is\s*(0x[0-9a-fA-F]+)")
+_RE_ANT_HTS = re.compile(r"user_htstream=(0x[0-9a-fA-F]+)")
+_RE_MCS_HT = re.compile(r"HT\s+\(11n\)\s*:\s*(\S+)")
+_RE_MCS_VTX = re.compile(r"VHT Tx:\s*(0x[0-9a-fA-F]+)")
+_RE_MCS_VRX = re.compile(r"VHT Rx:\s*(0x[0-9a-fA-F]+)")
+_RE_MCS_HTX = re.compile(r"HE Tx:\s*(0x[0-9a-fA-F]+)")
+_RE_MCS_HRX = re.compile(r"HE Rx:\s*(0x[0-9a-fA-F]+)")
+
+
+def _norm_rate_adapt(text):
+    """mlanutl rate_adapt_cfg 출력 -> 비교용 정규 문자열. 파싱 실패 시 None."""
+    if not text or "RateAdapt" not in text:
+        return None
+    if "Legacy RateAdapt Enabled" in text:
+        return "legacy"
+    _iv = _RE_RA_IV.search(text)
+    iv = _iv.group(1) if _iv else "?"
+    if "Dynamic rate adaptation" in text:
+        return f"SR dyn/dyn iv={iv}"
+    low, high = _RE_RA_LOW.search(text), _RE_RA_HIGH.search(text)
+    if not (low and high):
+        return None
+    return f"SR {low.group(1)}/{high.group(1)} iv={iv}"
+
+
+def _norm_antcfg(text):
+    """mlanutl antcfg 출력 -> 비교용 정규 문자열. 파싱 실패 시 None."""
+    tx, rx = _RE_ANT_TX.search(text or ""), _RE_ANT_RX.search(text or "")
+    if not (tx and rx):
+        return None
+    hts = _RE_ANT_HTS.search(text)
+    return f"tx={tx.group(1)} rx={rx.group(1)} hts={hts.group(1) if hts else '?'}"
+
+
+def _norm_mcs_tier(text):
+    """mlanutl mcstiercfg 출력 -> 비교용 정규 문자열. 파싱 실패 시 None.
+
+    출력에 섞여 있는 'NSS limit (antcfg)' 줄은 antcfg 항목이 따로 보므로 제외해
+    두 신호가 서로 독립적으로 움직이게 한다.
+    """
+    ht = _RE_MCS_HT.search(text or "")
+    vtx, vrx = _RE_MCS_VTX.search(text or ""), _RE_MCS_VRX.search(text or "")
+    if not (ht and vtx and vrx):
+        return None
+    htx, hrx = _RE_MCS_HTX.search(text), _RE_MCS_HRX.search(text)
+    he = f"{htx.group(1)}/{hrx.group(1)}" if (htx and hrx) else "?/?"
+    return f"HT={ht.group(1)} VHT={vtx.group(1)}/{vrx.group(1)} HE={he}"
+
+
+# (이름, mlanutl 서브커맨드, 정규화 함수) — 한 tick 에 하나씩 라운드로빈으로 본다.
+FWCFG_WATCH_TABLE = (
+    ("rate_adapt", "rate_adapt_cfg", _norm_rate_adapt),
+    ("antcfg", "antcfg", _norm_antcfg),
+    ("mcs_tier", "mcstiercfg", _norm_mcs_tier),
+)
+
+_fwcfg_prev = {}
+_fwcfg_deadline = 0.0
+_fwcfg_index = 0
+
+def check_fw_settings(now):
+    """FW 커스텀 설정(rate_adapt/antcfg/mcs_tier)을 저빈도로 폴링해 변화만 기록한다.
+
+    관측 전용이다 — 복구하지 않는다. 강제 복구는 pre-association 재적용이 필요해
+    드라이버 재적재·재부팅 정책과 얽히므로 별도 설계 대상이다(mcs_tier 만 예외적으로
+    wifi_event.sh 가 복구 훅을 갖고 있다).
+
+    평상시에는 아무것도 남기지 않고(설정별 최초 1회 baseline info 제외) 변화 시에만
+    warn 을 내보낸다. 같은 로그 스트림의 TX_FAIL/TX_RETRY spike 와 타임스탬프로 바로
+    대조할 수 있다. 한 tick 에 mlanutl 을 하나만 불러 link.json 생산 주기를 지킨다.
+    eth0 에는 mlanutl 이 없으므로 mlan* 에서만 동작한다.
+    """
+    global _fwcfg_deadline, _fwcfg_index
+    if FWCFG_WATCH_SEC <= 0 or not IFACE.startswith("mlan"):
+        return
+    if now < _fwcfg_deadline:
+        return
+    _fwcfg_deadline = now + FWCFG_WATCH_SEC
+    name, sub, norm = FWCFG_WATCH_TABLE[_fwcfg_index % len(FWCFG_WATCH_TABLE)]
+    _fwcfg_index += 1
+    cur = norm(run_command(["mlanutl", IFACE, sub]))
+    if cur is None:
+        return
+    prev = _fwcfg_prev.get(name)
+    if prev is None:
+        logger.message("info", f"[{IFACE}] fwcfg_watch baseline {name}: {cur}", _EXTRA_())
+    elif cur != prev:
+        logger.message("warn",
+            f"[{IFACE}] fwcfg_watch CHANGED {name}: {prev} -> {cur}", _EXTRA_())
+    _fwcfg_prev[name] = cur
+
+
 _empty_json = b'{}\n'
 
 def _write_empty_link():
@@ -509,6 +613,7 @@ def main():
         channel_data = parse_survey_dump(channel_out) if channel_out else {}
 
         check_tx_spike(link_data)
+        check_fw_settings(cycle_start)
 
         info_data = parse_iw_info(info_out) if info_out else {}
         info_data.update(get_ip_info(IFACE))
@@ -560,6 +665,7 @@ if __name__ == "__main__":
     _link_interval = args.interval
     _retry_count = args.link_retry_count
     _retry_delay = args.link_retry_delay
+    _ra_watch = args.fwcfg_watch
     try:
         with open("/usr/local/etc/wifi_init_conf.json") as _f:
             _conf = json.load(_f)
@@ -569,6 +675,8 @@ if __name__ == "__main__":
         _retry_count = _conf.get(IFACE, {}).get("logger", {}).get("link_retry_count", _g_cnt)
         _g_dly = _conf.get("logger", {}).get("link_retry_delay_sec", _retry_delay)
         _retry_delay = _conf.get(IFACE, {}).get("logger", {}).get("link_retry_delay_sec", _g_dly)
+        _g_ra = _conf.get("logger", {}).get("fwcfg_watch_sec", _ra_watch)
+        _ra_watch = _conf.get(IFACE, {}).get("logger", {}).get("fwcfg_watch_sec", _g_ra)
     except (OSError, json.JSONDecodeError) as e:
         print(f"WARN: [{IFACE}] config load failed, using defaults: {e}", file=sys.stderr)
 
@@ -583,12 +691,19 @@ if __name__ == "__main__":
               f"({args.link_retry_count}/{args.link_retry_delay})", file=sys.stderr)
         LINK_RETRY_COUNT = args.link_retry_count
         LINK_RETRY_DELAY = args.link_retry_delay
+    try:
+        FWCFG_WATCH_SEC = max(0.0, float(_ra_watch))
+    except (ValueError, TypeError):
+        print(f"WARN: [{IFACE}] invalid fwcfg_watch_sec, using default "
+              f"({args.fwcfg_watch})", file=sys.stderr)
+        FWCFG_WATCH_SEC = args.fwcfg_watch
 
     LOG_DIR = f"/var/log/cantops/json/{IFACE}"
     logger.message("info",
         f"[{IFACE}] version: {VERSION}, interval: {LOOP_INTERVAL}s, "
         f"spike_fail: {SPIKE_THRESHOLD_FAIL}, spike_retry: {SPIKE_THRESHOLD_RETRY}, "
         f"link_retry: {LINK_RETRY_COUNT}x{LINK_RETRY_DELAY}s, "
+        f"fwcfg_watch: {FWCFG_WATCH_SEC}s, "
         f"log: {LOG_DIR}/link.json", _EXTRA_())
 
     if IFACE == "mlan0":

@@ -378,6 +378,7 @@
                 "stat_check_interval_sec: (int) 통계 상태 확인 주기 (초)",
                 "stat_reset_interval_sec: (int) 통계 로그 자동 초기화 주기 (초)",
                 "bgscan_stale_threshold_sec: (int) beacon.json stale 엔트리 프루닝 기준 시간 (초). 양의 정수만 유효",
+                "fwcfg_watch_sec: (number) FW 커스텀 설정(rate_adapt/antcfg/mcs_tier) 변화 감시 주기 (초). 0=끔. 한 주기에 하나씩 라운드로빈, 관측 전용",
                 "enabled: (bool) wifi_logger@<iface> 서비스 ON/OFF"
             ],
             "link_interval_sec": 0.9,
@@ -385,6 +386,7 @@
             "stat_check_interval_sec": 1,
             "stat_reset_interval_sec": 604800,
             "bgscan_stale_threshold_sec": 600,
+            "fwcfg_watch_sec": 60,
             "enabled": true
         },
         "periodic_roam": {
@@ -593,6 +595,7 @@
             "stat_check_interval_sec": 1,
             "stat_reset_interval_sec": 604800,
             "bgscan_stale_threshold_sec": 600,
+            "fwcfg_watch_sec": 60,
             "enabled": false
         },
         "periodic_roam": {

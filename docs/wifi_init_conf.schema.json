@@ -1444,6 +1444,15 @@
               "x-apply-timing": "daemon-restart",
               "x-consumer": "wifi_logger_scan.py"
             },
+            "fwcfg_watch_sec": {
+              "type": "number",
+              "default": 60,
+              "minimum": 0,
+              "description": "FW 커스텀 설정(rate_adapt/antcfg/mcs_tier) 변화 감시 주기(초). 0=끔. 한 주기에 설정 하나씩 라운드로빈하므로 설정 3개 기준 전체 순회는 3배 주기다. 관측 전용 — 변화 감지 시 syslog warn 만 남기고 복구하지 않는다",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_logger_link.py"
+            },
             "enabled": {
               "type": "boolean",
               "default": true,
@@ -2349,6 +2358,15 @@
               "x-ui-editable": "yes",
               "x-apply-timing": "daemon-restart",
               "x-consumer": "wifi_logger_scan.py"
+            },
+            "fwcfg_watch_sec": {
+              "type": "number",
+              "default": 60,
+              "minimum": 0,
+              "description": "FW 커스텀 설정(rate_adapt/antcfg/mcs_tier) 변화 감시 주기(초). 0=끔. 한 주기에 설정 하나씩 라운드로빈하므로 설정 3개 기준 전체 순회는 3배 주기다. 관측 전용 — 변화 감지 시 syslog warn 만 남기고 복구하지 않는다",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_logger_link.py"
             },
             "enabled": {
               "type": "boolean",
