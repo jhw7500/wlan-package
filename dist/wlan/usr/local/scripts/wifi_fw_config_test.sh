@@ -271,16 +271,109 @@ expect_eq "imx8 candidate upgrade neutralizes injected strict product profile" \
     "$(jq -r '.mlan0.antcfg | "\(.enabled) \(.tx) \(.rx) \(.verify != null)"' \
         "$WORK/migrated-product-antcfg-imx8.json" 2>/dev/null)"
 
-cp "$TEMPLATE" "$WORK/board-imx8.json"
-if "$BOARD_CONFIG" "$WORK/board-imx8.json" >/dev/null 2>&1; then
+SOC_IMX93="$WORK/soc-imx93"
+SOC_IMX8="$WORK/soc-imx8"
+SOC_UNKNOWN="$WORK/soc-unknown"
+SOC_EMPTY="$WORK/soc-empty"
+printf 'i.MX93\n' > "$SOC_IMX93"
+printf 'i.MX8MM\n' > "$SOC_IMX8"
+printf 'not-an-imx-board\n' > "$SOC_UNKNOWN"
+: > "$SOC_EMPTY"
+
+_detected=$(WIFI_SOC_ID_PATH="$SOC_IMX93" "$BOARD_CONFIG" --detect 2>/dev/null)
+expect_eq "detect maps i.MX93 to canonical identity" \
+    "imx93 sdio" \
+    "$(printf '%s\n' "$_detected" |
+       sed -n "s/^BOARD_TYPE='\\([^']*\\)'/\\1/p; s/^BUS_TYPE='\\([^']*\\)'/\\1/p" |
+       paste -sd ' ' -)"
+
+_detected=$(WIFI_SOC_ID_PATH="$SOC_IMX8" "$BOARD_CONFIG" --detect 2>/dev/null)
+expect_eq "detect maps i.MX8MM to canonical identity" \
+    "imx8mm pcie" \
+    "$(printf '%s\n' "$_detected" |
+       sed -n "s/^BOARD_TYPE='\\([^']*\\)'/\\1/p; s/^BUS_TYPE='\\([^']*\\)'/\\1/p" |
+       paste -sd ' ' -)"
+
+expect_rc "detect rejects unsupported SoC" 1 \
+    env WIFI_SOC_ID_PATH="$SOC_UNKNOWN" "$BOARD_CONFIG" --detect
+expect_rc "detect rejects empty SoC source" 1 \
+    env WIFI_SOC_ID_PATH="$SOC_EMPTY" "$BOARD_CONFIG" --detect
+expect_rc "detect rejects missing SoC source" 1 \
+    env WIFI_SOC_ID_PATH="$WORK/missing-soc-id" "$BOARD_CONFIG" --detect
+
+KO_DIR="$WORK/ko"
+SYS_MODULE="$WORK/sys-module"
+mkdir -p "$KO_DIR" "$SYS_MODULE/mlan" "$SYS_MODULE/moal"
+printf 'version=543.p18\0srcversion=MLAN93SRC\0' > "$KO_DIR/mlan_imx93.ko"
+printf 'version=543.p18\0srcversion=MOAL93SRC\0' > "$KO_DIR/moal_imx93.ko"
+printf '543.p18\n' > "$SYS_MODULE/mlan/version"
+printf 'MLAN93SRC\n' > "$SYS_MODULE/mlan/srcversion"
+printf '543.p18\n' > "$SYS_MODULE/moal/version"
+printf 'MOAL93SRC\n' > "$SYS_MODULE/moal/srcversion"
+
+expect_rc "loaded imx93 modules match selected KO metadata" 0 \
+    env WIFI_SYS_MODULE_ROOT="$SYS_MODULE" "$BOARD_CONFIG" --verify-loaded imx93 \
+        "$KO_DIR/mlan_imx93.ko" "$KO_DIR/moal_imx93.ko"
+expect_rc "module verifier rejects board/basename mismatch" 1 \
+    env WIFI_SYS_MODULE_ROOT="$SYS_MODULE" "$BOARD_CONFIG" --verify-loaded imx8mm \
+        "$KO_DIR/mlan_imx93.ko" "$KO_DIR/moal_imx93.ko"
+
+printf 'WRONGVERSION\n' > "$SYS_MODULE/mlan/version"
+LOGGER_BIN="$WORK/logger-bin"
+MODULE_LOG="$WORK/module-identity.log"
+mkdir -p "$LOGGER_BIN"
+cat > "$LOGGER_BIN/logger" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "$LOGGER_CAPTURE"
+EOF
+chmod +x "$LOGGER_BIN/logger"
+expect_rc "module verifier rejects loaded version mismatch" 1 \
+    env PATH="$LOGGER_BIN:$PATH" LOGGER_CAPTURE="$MODULE_LOG" \
+        WIFI_SYS_MODULE_ROOT="$SYS_MODULE" "$BOARD_CONFIG" --verify-loaded imx93 \
+        "$KO_DIR/mlan_imx93.ko" "$KO_DIR/moal_imx93.ko"
+grep -Fq 'field=version expected=543.p18 actual=WRONGVERSION' "$MODULE_LOG" \
+    && pass "module mismatch log includes expected and actual metadata" \
+    || fail "module mismatch log omits expected or actual metadata"
+printf '543.p18\n' > "$SYS_MODULE/mlan/version"
+
+printf 'WRONGSRC\n' > "$SYS_MODULE/moal/srcversion"
+expect_rc "module verifier rejects loaded srcversion mismatch" 1 \
+    env WIFI_SYS_MODULE_ROOT="$SYS_MODULE" "$BOARD_CONFIG" --verify-loaded imx93 \
+        "$KO_DIR/mlan_imx93.ko" "$KO_DIR/moal_imx93.ko"
+printf 'MOAL93SRC\n' > "$SYS_MODULE/moal/srcversion"
+
+BAD_KO_DIR="$WORK/bad-ko"
+mkdir -p "$BAD_KO_DIR"
+cp "$KO_DIR/mlan_imx93.ko" "$BAD_KO_DIR/mlan_imx93.ko"
+printf 'version=543.p18\0' > "$BAD_KO_DIR/moal_imx93.ko"
+expect_rc "module verifier rejects missing KO metadata" 1 \
+    env WIFI_SYS_MODULE_ROOT="$SYS_MODULE" "$BOARD_CONFIG" --verify-loaded imx93 \
+        "$BAD_KO_DIR/mlan_imx93.ko" "$BAD_KO_DIR/moal_imx93.ko"
+printf 'version=543.p18\0version=duplicate\0srcversion=MOAL93SRC\0' \
+    > "$BAD_KO_DIR/moal_imx93.ko"
+expect_rc "module verifier rejects duplicate KO metadata" 1 \
+    env WIFI_SYS_MODULE_ROOT="$SYS_MODULE" "$BOARD_CONFIG" --verify-loaded imx93 \
+        "$BAD_KO_DIR/mlan_imx93.ko" "$BAD_KO_DIR/moal_imx93.ko"
+
+jq '.global.BOARD_TYPE="imx93"
+    | .global.BUS_TYPE="sdio"
+    | .mcp.iio_device="/tmp/stale-iio"' \
+    "$TEMPLATE" > "$WORK/board-imx8.json"
+if WIFI_SOC_ID_PATH="$SOC_IMX8" \
+   "$BOARD_CONFIG" "$WORK/board-imx8.json" >/dev/null 2>&1; then
     pass "imx8 board config succeeds on package template"
 else
     fail "imx8 board config succeeds on package template"
 fi
-expect_eq "imx8 board config removes unsupported strict antcfg profile" \
-    'false   false' \
-    "$(jq -r '.mlan0.antcfg | "\(.enabled) \(.tx) \(.rx) \(.verify != null)"' \
+expect_eq "detected imx8 identity replaces stale persisted board facts" \
+    'imx8mm pcie' \
+    "$(jq -r '.global | "\(.BOARD_TYPE) \(.BUS_TYPE)"' \
         "$WORK/board-imx8.json" 2>/dev/null)"
+if [ "$(jq -r '.mcp.iio_device' "$WORK/board-imx8.json" 2>/dev/null)" != "/tmp/stale-iio" ]; then
+    pass "detected IIO path replaces stale persisted path"
+else
+    fail "detected IIO path replaces stale persisted path"
+fi
 
 expect_rc "imx93 product scan profile accepts shipped defaults" 0 \
     wifi_fw_validate_product_scan_profile "$TEMPLATE" imx93
