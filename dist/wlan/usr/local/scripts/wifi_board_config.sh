@@ -225,6 +225,14 @@ if [ ! -s "$tmp" ]; then
     logger -p local0.err "[$tag:$LINENO] jq update failed; keep existing $WIFI_CONF: empty output"
     exit 1
 fi
+if ! chown --reference="$WIFI_CONF" "$tmp" 2>/dev/null; then
+    logger -p local0.err "[$tag:$LINENO] cannot preserve configuration ownership; keep existing $WIFI_CONF"
+    exit 1
+fi
+if ! chmod --reference="$WIFI_CONF" "$tmp" 2>/dev/null; then
+    logger -p local0.err "[$tag:$LINENO] cannot preserve configuration mode; keep existing $WIFI_CONF"
+    exit 1
+fi
 if ! mv -- "$tmp" "$WIFI_CONF"; then
     logger -p local0.err "[$tag:$LINENO] cannot install normalized configuration; keep existing $WIFI_CONF"
     exit 1

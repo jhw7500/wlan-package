@@ -404,6 +404,14 @@ jq '.global.BOARD_TYPE="imx93"
     | .global.BUS_TYPE="sdio"
     | .mcp.iio_device="/tmp/stale-iio"' \
     "$TEMPLATE" > "$WORK/board-imx8.json"
+BOARD_CONF_UID=$(id -u)
+BOARD_CONF_GID=$(id -g)
+chmod 0644 "$WORK/board-imx8.json"
+if [ "$BOARD_CONF_UID" -eq 0 ]; then
+    BOARD_CONF_UID=12345
+    BOARD_CONF_GID=12346
+    chown "$BOARD_CONF_UID:$BOARD_CONF_GID" "$WORK/board-imx8.json"
+fi
 if WIFI_SOC_ID_PATH="$SOC_IMX8" \
    "$BOARD_CONFIG" "$WORK/board-imx8.json" >/dev/null 2>&1; then
     pass "imx8 board config succeeds on package template"
@@ -419,6 +427,11 @@ if [ "$(jq -r '.mcp.iio_device' "$WORK/board-imx8.json" 2>/dev/null)" != "/tmp/s
 else
     fail "detected IIO path replaces stale persisted path"
 fi
+expect_eq "board normalization preserves existing mode" \
+    '644' "$(stat -c '%a' "$WORK/board-imx8.json")"
+expect_eq "board normalization preserves existing uid/gid" \
+    "$BOARD_CONF_UID:$BOARD_CONF_GID" \
+    "$(stat -c '%u:%g' "$WORK/board-imx8.json")"
 
 MV_FAULT_BIN="$WORK/mv-fault-bin"
 MV_FAULT_DIR="$WORK/board-mv-fault"
