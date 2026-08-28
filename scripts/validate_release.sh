@@ -6,11 +6,13 @@ SDIO_FW_REL="usr/lib/firmware/cts/sd9098_wlan_v1.bin"
 SDIO_FW_SHA256="7c3ef6e12d3cfc9bd638d1571ccf6ddd2e96e0ed179ec70664ccb1df0ba29e57"
 FACTORY_ETH0_REL="opt/wlan/config/systemd/network/22-eth0.network"
 FACTORY_ETH0_ADDRESS="192.168.1.1/24"
+MLANUTL_IMX93_REL="opt/wlan/bin/mlanutl_imx93"
 FW_DOC_DIR_REL="usr/share/doc/wlan-proc/nxp-imx-firmware"
 FW_LICENSE_SHA256="3001cf84018c5cb10d183a678f6ec8a928c797616ba06b398d7ca93c0779aaa2"
 FW_SCR_SHA256="a05d7e1bb43bd7f3a955f3ff5c4dba3c61a5515df6f4fc5bf150a370e413289e"
 FW_SOURCE_SHA256="4dbbbeebe006653040a28669433e6d8fbf596291e77d8e6ecb2efe7010e82745"
 PAYLOAD_MANIFEST_REL="DEBIAN/payload-manifest.txt"
+DRIVER_COMPONENT_LOCK_REL="opt/wlan/driver/DRIVER_COMPONENTS.sha256"
 WBRIDGE_RELEASE_DIR="usr/local/wlan-bridge/wbridge"
 WBRIDGE_DEBUG_DIR="usr/local/wlan-bridge/debug"
 
@@ -29,7 +31,16 @@ is_generated_wbridge_path() {
 validate_source_product_defaults() {
     local fw="$REPO/dist/wlan/$SDIO_FW_REL"
     local network="$REPO/dist/wlan/$FACTORY_ETH0_REL"
+    local mlanutl_imx93="$REPO/dist/wlan/$MLANUTL_IMX93_REL"
     local actual_hash actual_address actual_mode
+
+    # The qualified modules, matching private-command utility, and firmware are
+    # an atomic board-tested set.  Module binaries are gitignored, so version
+    # strings alone cannot prevent an accidental local replacement.
+    if ! bash "$REPO/scripts/gen_driver_manifest.sh" --check; then
+        echo "release gate: driver provenance/component lock validation failed" >&2
+        return 1
+    fi
 
     [ -s "$fw" ] || { echo "release gate: missing/empty SDIO firmware: $fw" >&2; return 1; }
     actual_hash=$(sha256sum "$fw" | awk '{print $1}')
@@ -50,6 +61,19 @@ validate_source_product_defaults() {
         return 1
     fi
 
+    [ -f "$mlanutl_imx93" ] && [ ! -L "$mlanutl_imx93" ] && [ -s "$mlanutl_imx93" ] \
+        && [ -x "$mlanutl_imx93" ] || {
+        echo "release gate: missing/non-executable matching imx93 mlanutl: $mlanutl_imx93" >&2
+        return 1
+    }
+    # 543 driver는 antcfg physical path와 host NSS intent를 별도 private command로
+    # 제공한다. 구 utility를 staging하면 제품 verify가 user_htstream을 읽지 못해
+    # wifi_init이 fail-closed 하므로 패키징 전에 ABI marker를 강제한다.
+    LC_ALL=C grep -aFq 'antcfgnss' "$mlanutl_imx93" || {
+        echo "release gate: imx93 mlanutl lacks required antcfgnss support: $mlanutl_imx93" >&2
+        return 1
+    }
+
     local rel expected
     for rel in \
         "$FW_DOC_DIR_REL/LICENSE.txt|$FW_LICENSE_SHA256" \
@@ -67,6 +91,62 @@ validate_source_product_defaults() {
             return 1
         }
     done
+}
+
+validate_packaged_component_lock() {
+    local deb=$1
+    if ! bash "$REPO/scripts/gen_driver_manifest.sh" --check; then
+        echo "release gate: source component lock is invalid before package comparison" >&2
+        return 1
+    fi
+    REPO_ROOT="$REPO" PACKAGE_DEB="$deb" LOCK_REL="$DRIVER_COMPONENT_LOCK_REL" python3 - <<'PY'
+import hashlib
+import io
+import os
+import re
+import subprocess
+import tarfile
+from pathlib import Path
+
+repo = Path(os.environ["REPO_ROOT"])
+lock_rel = os.environ["LOCK_REL"]
+source_lock = repo / "dist/wlan" / lock_rel
+expected_lock = source_lock.read_bytes()
+payload = subprocess.check_output(["dpkg-deb", "--fsys-tarfile", os.environ["PACKAGE_DEB"]])
+
+with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
+    members = {m.name.removeprefix("./").rstrip("/"): m for m in archive.getmembers()}
+    lock_member = members.get(lock_rel)
+    if lock_member is None or not lock_member.isfile():
+        raise SystemExit(f"release gate: packaged component lock missing/non-regular: {lock_rel}")
+    stream = archive.extractfile(lock_member)
+    packaged_lock = stream.read() if stream else b""
+    if packaged_lock != expected_lock:
+        raise SystemExit("release gate: packaged component lock differs from source")
+
+    entries = {}
+    for number, raw in enumerate(expected_lock.decode("utf-8").splitlines(), 1):
+        if not raw or raw.startswith("# "):
+            continue
+        match = re.fullmatch(r"([0-9a-f]{64})  ([^\s]+)", raw)
+        if not match:
+            raise SystemExit(f"release gate: malformed source component lock line {number}")
+        digest, rel = match.groups()
+        entries[rel] = digest
+
+    errors = []
+    for rel, expected in sorted(entries.items()):
+        member = members.get(rel)
+        if member is None or not member.isfile() or member.size == 0:
+            errors.append(f"qualified component missing/empty/non-regular: {rel}")
+            continue
+        stream = archive.extractfile(member)
+        actual = hashlib.sha256(stream.read() if stream else b"").hexdigest()
+        if actual != expected:
+            errors.append(f"qualified component sha256 mismatch: {rel}: {actual} != {expected}")
+    if errors:
+        raise SystemExit("\n".join(f"release gate: {error}" for error in errors))
+PY
 }
 
 validate_payload_manifest() {
@@ -226,6 +306,7 @@ PY
         dist/wlan/usr/local/scripts/wifi_init_config_test.sh \
         dist/wlan/usr/local/scripts/wifi_link_reset_test.sh \
         dist/wlan/usr/local/scripts/wifi_secret_test.sh \
+        dist/wlan/usr/local/scripts/wifi_wpa_conf_writer_test.sh \
         dist/wlan/usr/local/scripts/tests/test_fake_hwclock.sh \
         dist/wlan/usr/local/scripts/tests/test_wifi_eth_peer.sh \
         dist/wlan/usr/local/scripts/tests/test_wlan_link_lib.sh; do
@@ -282,6 +363,7 @@ validate_package() {
         }
     done
     validate_control_archive "$deb"
+    validate_packaged_component_lock "$deb"
 
     listing=$(mktemp)
     names=$(mktemp)

@@ -327,18 +327,25 @@
         "antcfg": {
             "_comment": [
                 "FW Tx/Rx 안테나 경로. association 전에 mlanutl <iface> antcfg <tx> [rx] 로 적용",
-                "enabled: (bool) 적용 ON/OFF. 기본 false — 끄면 FW/보드 기본 경로를 그대로 둔다",
+        "enabled: (bool) 적용 ON/OFF. imx93 mlan0 제품값은 scan wedge 회피용 비대칭 NSS 설정으로 association 전 강제하며, imx8 board config는 이 strict profile을 비활성화한다",
                 "tx: (string) Tx 경로 비트맵. 10진 또는 0x 16진. rx가 비면 Tx/Rx 공통으로 쓰인다",
                 "rx: (string) Rx 경로 비트맵. 빈 문자열이면 인자를 생략해 tx 값이 Tx/Rx 양쪽에 적용된다",
+                "verify: (object, optional) SET 후 확인할 physical_tx/physical_rx/user_htstream. 존재하면 세 값을 모두 GET으로 확인하며 불일치 시 association을 중단한다",
+                "9098 비대칭 요청 tx=0x0303/rx=0x0101은 physical GET 0x0303/0x0303으로 정규화되고 논리 Rx NSS1 의도는 user_htstream=0x2121에 유지된다",
                 "9098 비트맵: LOW BYTE=2G, HIGH BYTE=5G. 각 바이트에서 bit0=path A, bit1=path B",
                 "예: 0x303=2G/5G 모두 A+B(2x2), 0x103=2G A+B + 5G A, 0x202=2G/5G 모두 path B, 3=A+B(밴드 구분 없는 칩)",
                 "SAD 지원 칩: tx=0xFFFF가 안테나 다이버시티이고 이때 rx는 평가 주기(기본 0x1770=6s)를 뜻한다",
                 "주의: antcfg는 어댑터(라디오) 단위 설정이라 mlan0/mlan1에 서로 다른 값을 켜면 나중에 적용된 쪽(mlan1)이 이긴다",
                 "주의: global.ANT_TYPE(GPIO mux, internal|external)과는 별개 설정이다"
             ],
-            "enabled": false,
-            "tx": "",
-            "rx": ""
+            "enabled": true,
+            "tx": "0x0303",
+            "rx": "0x0101",
+            "verify": {
+                "physical_tx": "0x0303",
+                "physical_rx": "0x0303",
+                "user_htstream": "0x2121"
+            }
         },
         "rate_adapt": {
             "_comment": [
@@ -382,10 +389,9 @@
         },
         "periodic_roam": {
             "_comment": [
-                "주기적 passive roam(roam 0) 설정. 서비스 단위는 wifi_periodic_roam@<iface>",
-                "interval: (int) 로밍 실행 주기 (초)",
-                "scan_before_roam: (bool) true=로밍 전 스캔 수행, false=기존 ap.log 사용",
-                "enabled: (bool) periodic roam 서비스 ON/OFF"
+                "DEPRECATED 호환 블록. wifi_periodic_roam은 제3의 proactive roam owner라 항상 강제 disable+stop됨",
+                "enabled=true도 무시하고 wifi_apply_enabled.sh가 경고 후 wifi_periodic_roam@<iface>를 disable+stop",
+                "interval/scan_before_roam은 기존 JSON 호환을 위해 보존하지만 현재 동작에는 사용되지 않음"
             ],
             "interval": 60,
             "scan_before_roam": true,
@@ -393,13 +399,14 @@
         },
         "bgscan": {
             "_comment": [
-                "백그라운드 AP 스캔 설정",
+                "패키지 백그라운드 AP 스캔. 별도 backend 키 없이 /run boot policy snapshot에서 owner/backend를 결정",
+                "roaming.enabled=true -> wifi_roam owner + iw scan; false -> wpa native owner + wpa_cli scan",
                 "interval: (int) 스캔 주기 (초)",
                 "ssid_filter: (bool) 현재·추가 로밍 SSID만 스캔. passive=false일 때만 유효",
-                "freq_filter: (bool) 설정 주파수만 스캔. false이면 전체 대역 스캔으로 시간과 airtime 증가",
-                "passive: (bool) true=probe 없이 beacon만 수신하여 hidden SSID를 발견하지 못함, false=active scan",
-                "emit_roam_hint: (bool) 스캔 성공 시 /tmp/wifi_roam_hint_<iface>를 갱신하여 roam backoff 해제",
-                "enabled: (bool) background scan 서비스 ON/OFF"
+                "freq_filter: (bool) DEPRECATED. 공통 global freq_list가 있으면 false도 무시하고 두 backend에 같은 목록을 강제",
+                "passive: (bool) config compatibility. wifi_roam owner/iw periodic bgscan forces true to active scan with once-per-process warning on supported mlan hardware for data-plane safety; wpa native owner/wpa_cli keeps passive=1; STAGED_SCAN.home_passive is separate and unchanged",
+                "emit_roam_hint: (bool) iw/wifi_roam owner에서만 roam backoff 해제; wpa native owner에서는 강제 비활성",
+                "enabled: (bool) package periodic scan ON/OFF. false여도 wpa_supplicant 장애 복구/재연결 scan은 유지"
             ],
             "interval": 60,
             "ssid_filter": true,
@@ -410,9 +417,11 @@
         },
         "roaming": {
             "_comment": [
-                "wifi_roam.py 로밍 알고리즘 공통 설정",
-                "extra_ssids: (array[str], 기본 []) conf 기본 ssid 외 추가 로밍 후보 SSID. 같은 psk/key_mgmt 전제. 같은 SSID는 wpa_cli roam(무중단), 다른 SSID는 wifi connect(재연결)로 전환. 빈 배열=기존 단일 SSID 동작. extra_ssids는 bgscan이 ssid_filter와 무관하게 항상 directed probe하므로 hidden SSID도 스캔된다.",
-                "generate_network_blocks: (bool, 기본 false) 모드 결정자. false=모드B(단일 블록, cross-SSID는 외부 wifi connect만, extra_ssids 무시), true=모드A(다중 network 블록 생성 + select_network cross-SSID). 기본 false로 기존 단일 SSID 동작 무회귀.",
+                "proactive roam owner와 wifi_roam.py 알고리즘 설정. owner/topology는 부팅 최초 /run snapshot으로 고정되어 daemon 재시작에도 불변",
+                "enabled: true=wifi_roam owner + iw bgscan, false=wpa_supplicant native owner + wpa_cli bgscan. 변경은 재부팅 필요",
+                "extra_ssids: (array[str], 기본 []) 유효 UTF-8 1..32 encoded bytes, 고유/부팅 base와 다름, C0/DEL 금지. 모드A 다중 network 블록(수동 cross-SSID 미지원), 모드B passive_roam 수동 후보. 모드B 수동 전환 후 live base가 해당 후보와 같아지는 것은 정상. 같은 psk/key_mgmt 전제.",
+                "generate_network_blocks: (bool, 기본 false) 부팅 topology 결정자. false=모드B(단일 블록, 수동 cross-SSID), true=모드A(다중 블록, 선택 owner의 자동 cross-SSID). 변경은 재부팅 필요.",
+                "wpa_supplicant 주파수 정책: 전역 freq_list와 모든 network 블록의 freq_list를 같은 공통 목록으로 유지. legacy scan_freq는 부팅 fallback에서만 읽고 canonical 형식에서 제거.",
                 "ROAM_CROSS_FAIL_RETRY_COUNT: (int, 기본 2) 모드 A cross-SSID(select_network) 전환 실패 시 cooldown 없이 즉시 재시도 허용 횟수. 초과하면 SCAN_NO_RESULT_SLEEP~ROAM_NO_RESULT_MAX_SLEEP 지수 backoff로 해당 SSID를 로밍 후보에서 제외(진동 차단). 모드 B에선 미적용.",
                 "ROAM_NO_RESULT_FAST_COUNT: (int, 기본 3) 후보 미발견 backoff 의 레벨당 반복 횟수. 각 주기를 이 횟수만큼 유지한 뒤 2배로 올린다(기본 3: 3,3,3,6,6,6,…,ROAM_NO_RESULT_MAX_SLEEP 상한). 1이면 레거시 곡선(매 tick 2배).",
                 "use_signal_avg: (bool) true=signal_avg(평균, 안정적), false=signal(순간값, 즉시 반응)",
@@ -483,7 +492,7 @@
         },
         "mcs_tier": {
             "_comment": [
-                "MCS capability 제한(mcstiercfg). 연결 전 SET; mlan0 HE 0x0000은 첫 연결에서 검증하고 FW 기본 복귀 시 SET+reassociate 1회 후 확정",
+        "MCS capability 제한(mcstiercfg). imx93 mlan0의 HT/VHT/HE 7은 antcfg와 묶인 제품 안전 불변식. 연결 전 SET; HE 0x0000은 첫 연결에서 검증하고 FW 기본 복귀 시 SET+serialized wifi connect 1회 후 확정",
                 "enabled: (bool) MCS tier 설정 적용 ON/OFF",
                 "ht: (string) ht prefix 뒤에 전달할 값. 빈 문자열이면 생략",
                 "vht: (string) vht prefix 뒤에 전달할 값. 빈 문자열이면 생략",
@@ -561,7 +570,12 @@
         "antcfg": {
             "enabled": false,
             "tx": "",
-            "rx": ""
+            "rx": "",
+            "verify": {
+                "physical_tx": "",
+                "physical_rx": "",
+                "user_htstream": ""
+            }
         },
         "rate_adapt": {
             "enabled": true,
@@ -582,11 +596,20 @@
             "enabled": false
         },
         "periodic_roam": {
+            "_comment": [
+                "DEPRECATED 호환 블록. enabled=true도 무시하고 wifi_periodic_roam@<iface>는 항상 강제 disable+stop"
+            ],
             "interval": 60,
             "scan_before_roam": true,
             "enabled": false
         },
         "bgscan": {
+            "_comment": [
+                "backend는 boot snapshot에서 latch: roaming.enabled true=iw(wifi_roam owner), false=wpa_cli(wpa native owner)",
+                "freq_filter=false는 deprecated; 공통 global freq_list가 있으면 계속 강제",
+                "passive: (bool) config compatibility. wifi_roam owner/iw periodic bgscan forces true to active scan with once-per-process warning on supported mlan hardware for data-plane safety; wpa native owner/wpa_cli keeps passive=1; STAGED_SCAN.home_passive is separate and unchanged",
+                "enabled=false는 package periodic scan만 중지하며 wpa 장애 복구 scan은 유지"
+            ],
             "interval": 60,
             "ssid_filter": true,
             "freq_filter": true,
@@ -595,6 +618,10 @@
             "enabled": false
         },
         "roaming": {
+            "_comment": [
+                "enabled=true -> wifi_roam owner + iw bgscan; false -> wpa native owner + wpa_cli bgscan",
+                "generate_network_blocks/extra_ssids는 부팅 topology이며 변경 시 재부팅 필요"
+            ],
             "use_signal_avg": true,
             "DEFAULT_TH_2G": -75,
             "DEFAULT_TH_5G": -75,

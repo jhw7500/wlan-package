@@ -71,6 +71,27 @@ def test_parse_generate_default_false(tmp_path, monkeypatch):
     assert wifi_roam.GENERATE_NETWORK_BLOCKS is False
 
 
+def test_boot_policy_overrides_mutated_live_topology(monkeypatch):
+    monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", False)
+    monkeypatch.setattr(wifi_roam, "EXTRA_SSIDS", ["LiveJson"])
+    wifi_roam.apply_boot_roam_policy({
+        "roaming_enabled": True,
+        "generate_network_blocks": True,
+        "extra_ssids": [" BootOffice ", "Guest"],
+    })
+    assert wifi_roam.GENERATE_NETWORK_BLOCKS is True
+    assert wifi_roam.EXTRA_SSIDS == [" BootOffice ", "Guest"]
+
+
+def test_boot_policy_rejects_stale_wifi_roam_owner():
+    with pytest.raises(wifi_roam.RoamPolicyError):
+        wifi_roam.apply_boot_roam_policy({
+            "roaming_enabled": False,
+            "generate_network_blocks": False,
+            "extra_ssids": [],
+        })
+
+
 # --- 메인루프 cross 분기 AND 게이트 (should_cross_connect 헬퍼, live SSID 기준) ---
 
 def test_cross_blocked_in_mode_b(monkeypatch):

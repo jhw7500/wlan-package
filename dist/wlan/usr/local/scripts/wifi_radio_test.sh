@@ -10,6 +10,7 @@ trap 'rm -rf "$TD" /tmp/.radio_pending_mlan0.* /tmp/.radio_pending_mlan1.*' EXIT
 STUB="$TD/bin"
 export STATE_DIR="$TD/state"
 export CALL_LOG="$TD/calls.log"
+export WIFI_RUN_DIR="$TD/run"
 mkdir -p "$STUB" "$STATE_DIR"
 
 # ---- stubs ----
@@ -62,6 +63,14 @@ cat > "$STUB/wpa_cli" <<'EOF'
 #!/bin/bash
 echo "wpa_cli $*" >> "$CALL_LOG"
 case "${3:-}" in
+  abort_scan)
+    n=$(cat "$STATE_DIR/abort_ok_remaining" 2>/dev/null || echo 0)
+    if [ "$n" -gt 0 ]; then
+      echo $((n-1)) > "$STATE_DIR/abort_ok_remaining"
+      echo OK
+    else
+      echo FAIL
+    fi ;;
   disconnect)  if [ -f "$STATE_DIR/disc_fail" ]; then echo FAIL; else echo OK; fi ;;
   reconfigure) if [ -f "$STATE_DIR/reconf_fail" ]; then echo FAIL; else echo OK; fi ;;
   reconnect)   if [ -f "$STATE_DIR/reconn_fail" ]; then echo FAIL; else echo OK; fi ;;
@@ -312,7 +321,6 @@ mkconf() {
 network={
     ssid="test"
     freq_list=$1
-    scan_freq=$1
 }
 EOC
 }
@@ -477,6 +485,37 @@ fresh_json
 rm -f "$STATE_DIR/ip_calls.log"
 touch "$STATE_DIR/networkd_fail"
 bash "$WIFI_SH" ip apply >/dev/null 2>&1; check "T49 ip apply networkd fail → 1" 1 $?
+
+# T50: 외부 scan/connect가 transition lock을 소유하면 radio-apply는 live FW/WPA를
+# 건드리기 전에 fail-closed 해야 한다.
+fresh_json
+bash "$WIFI_SH" 0 bw 40 >/dev/null 2>&1
+export WIFI_RUN_DIR="$TD/run"
+export WIFI_SCAN_TRANSITION_LOCK_TIMEOUT=0
+mkdir -p "$WIFI_RUN_DIR"
+flock "$WIFI_RUN_DIR/mlan0.scan-transition.lock" -c 'sleep 10' &
+_holder=$!
+sleep 0.1
+: > "$CALL_LOG"
+bash "$WIFI_SH" 0 radio-apply 5 >/dev/null 2>&1; rc=$?
+kill "$_holder" 2>/dev/null || true
+wait "$_holder" 2>/dev/null || true
+[ "$rc" -ne 0 ] && [ ! -s "$CALL_LOG" ]
+check "T50 held transition lock blocks radio-apply before live calls" "$rc" "$rc" $?
+unset WIFI_SCAN_TRANSITION_LOCK_TIMEOUT
+
+# T51: FD7 직전에 시작돼 비동기로 남은 native scan은 OK→FAIL quiesce 뒤에만
+# radio live transaction을 시작한다.
+fresh_json
+bash "$WIFI_SH" 0 bw 40 >/dev/null 2>&1
+echo 1 > "$STATE_DIR/abort_ok_remaining"
+: > "$CALL_LOG"
+bash "$WIFI_SH" 0 radio-apply 5 >/dev/null 2>&1; rc=$?
+[ "$(grep -c 'abort_scan' "$CALL_LOG")" -eq 2 ]
+_abort_line=$(grep -n 'abort_scan' "$CALL_LOG" | tail -1 | cut -d: -f1)
+_live_line=$(grep -nE 'mlanutl mlan0 (bandcfg|htcapinfo)|wpa_cli -i mlan0 (disconnect|reassociate)' "$CALL_LOG" | head -1 | cut -d: -f1)
+[ -n "$_abort_line" ] && [ -n "$_live_line" ] && [ "$_abort_line" -lt "$_live_line" ]
+check "T51 radio-apply quiesces native scan before live calls" 0 "$rc" $?
 
 echo ""
 echo "RESULT: PASS=$PASS FAIL=$FAIL"

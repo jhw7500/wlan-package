@@ -91,8 +91,26 @@ fi
 tmp="${WIFI_CONF}.tmp"
 # jq의 stderr는 버리지 않고 캡처해 실패 원인(JSON 구문 오류 등)을 로그로 남긴다.
 # `2>&1 > file`은 stderr를 명령치환으로, stdout을 파일로 보낸다 (순서 중요).
-jq_err=$(jq --arg b "$BOARD_TYPE" --arg bus "$BUS_TYPE" --arg iio "$IIO_DEV" \
-            '.global.BOARD_TYPE = $b | .global.BUS_TYPE = $bus | .global.MOD_PARA = "cts/wifi_mod_para.conf" | .mcp.iio_device = $iio' \
+jq_err=$(jq --arg b "$BOARD_TYPE" --arg bus "$BUS_TYPE" --arg iio "$IIO_DEV" '
+            def is_product_verify($v):
+                (($v | type) == "object"
+                 and $v.physical_tx == "0x0303"
+                 and $v.physical_rx == "0x0303"
+                 and $v.user_htstream == "0x2121");
+            .global.BOARD_TYPE = $b
+            | .global.BUS_TYPE = $bus
+            | .global.MOD_PARA = "cts/wifi_mod_para.conf"
+            | .mcp.iio_device = $iio
+            | if ($b != "imx93"
+                  and .mlan0.antcfg.enabled == true
+                  and .mlan0.antcfg.tx == "0x0303"
+                  and .mlan0.antcfg.rx == "0x0101"
+                  and is_product_verify(.mlan0.antcfg.verify))
+              then .mlan0.antcfg = ((.mlan0.antcfg + {enabled:false, tx:"", rx:""}) | del(.verify))
+              elif ($b != "imx93" and is_product_verify(.mlan0.antcfg.verify))
+              then .mlan0.antcfg |= del(.verify)
+              else . end
+            ' \
             "$WIFI_CONF" 2>&1 > "$tmp")
 if [ -z "$jq_err" ] && [ -s "$tmp" ]; then
     mv "$tmp" "$WIFI_CONF"

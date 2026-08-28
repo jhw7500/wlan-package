@@ -7,6 +7,7 @@
 import sys
 import os
 import re
+from contextlib import contextmanager
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
@@ -24,6 +25,15 @@ from wifi_roam import (
 import pytest
 
 wifi_roam.logger = MagicMock()
+_real_scan_transition_lock = wifi_roam.scan_transition_lock
+
+
+@pytest.fixture(autouse=True)
+def _private_scan_lock_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        wifi_roam, "scan_transition_lock",
+        lambda iface: _real_scan_transition_lock(iface, run_dir=str(tmp_path / "wifi")),
+    )
 
 SCAN_RESULTS = (
     "bssid / frequency / signal level / flags / ssid\n"
@@ -102,8 +112,65 @@ def test_parser_field_mapping_and_float_signal():
     assert row3[2] == "-47"
 
 
+def test_scan_result_and_ap_line_roundtrip_preserves_ssid_identity_spaces(tmp_path, monkeypatch):
+    ssid = '  guest \\ " exact  '
+    encoded = _wpa_printf_encode(ssid)
+    raw = (
+        "bssid / frequency / signal level / flags / ssid\n"
+        f"00:11:22:33:44:55\t5180\t-40\t[ESS]\t{encoded}\n"
+    )
+    lines = scan_results_to_ap_lines(raw)
+    assert lines[0].split("|", 6)[6] == ssid
+
+    ap_log = tmp_path / "ap.log"
+    monkeypatch.setattr(wifi_roam, "SCAN_LOG_FILE", str(ap_log))
+    monkeypatch.setattr(wifi_roam, "WPA_FREQ", ["5180"])
+    wifi_roam.save_with_timestamp(str(ap_log), lines)
+    entries, _ = wifi_roam.get_latest_scan(
+        {"bssid": "aa:bb:cc:dd:ee:ff"}, [ssid], log=False, src="scan"
+    )
+    assert entries[0]["ssid"] == ssid
+
+
 def test_parser_empty_and_none():
     assert scan_results_to_ap_lines("") == []
+
+
+def _wpa_printf_encode(value):
+    out = []
+    for byte in value.encode("utf-8"):
+        if byte == 0x22:
+            out.append(r'\"')
+        elif byte == 0x5C:
+            out.append(r'\\')
+        elif 0x20 <= byte <= 0x7E:
+            out.append(chr(byte))
+        else:
+            out.append(f"\\x{byte:02x}")
+    return "".join(out)
+
+
+def test_scan_results_decodes_wpa_ctrl_escaped_utf8_quote_and_backslash():
+    ssid = '  게스트 \\ " exact  '
+    encoded = _wpa_printf_encode(ssid)
+    raw = (
+        "bssid / frequency / signal level / flags / ssid\n"
+        f"00:11:22:33:44:55\t5180\t-40\t[ESS]\t{encoded}\n"
+    )
+    lines = scan_results_to_ap_lines(raw)
+    assert lines[0].split("|", 6)[6] == ssid
+
+
+def test_logger_ap_table_keeps_last_field_ssid_edges_byte_exact():
+    ssid = '  edge \\ " exact  '
+    rows = [
+        "----------------",
+        "# | Ch | RSSI | Load | BSSID | Cap | SSID",
+        "----------------",
+        f" 7|36|-40|0|00:11:22:33:44:55|cap|{ssid}",
+    ]
+    extracted = wifi_logger_scan.extract_ap_table(rows)
+    assert extracted[-1].split("|", 6)[6] == ssid
     assert scan_results_to_ap_lines(None) == []
 
 
@@ -192,6 +259,75 @@ def test_iw_scan_to_ap_lines_happy(monkeypatch):
     with patch.object(wifi_roam.subprocess, "run", side_effect=_dispatch()):
         out = iw_scan_to_ap_lines("jhw_wlan_", ["5180", "5200"])
     assert out and out[0].split("|")[4] == "00:80:4c:c7:7d:dd"
+
+
+def test_external_roam_scan_lock_contention_skips_iw_without_backend_fallback(monkeypatch):
+    """External owner lock contention is a neutral cycle, never a retry/fallback."""
+    @contextmanager
+    def denied_lock(*_args, **_kwargs):
+        yield False
+
+    monkeypatch.setattr(wifi_roam, "scan_transition_lock", denied_lock, raising=False)
+    run = MagicMock()
+    monkeypatch.setattr(wifi_roam.subprocess, "run", run)
+
+    assert wifi_roam.iw_scan_to_ap_lines(["jhw_wlan_"], ["5180"]) is wifi_roam.SCAN_TRANSITION_BUSY
+    run.assert_not_called()
+
+
+def test_external_roam_transition_lock_contention_skips_wpa_roam_without_failure(monkeypatch):
+    """The selected transition is separately serialized from the scan phase."""
+    @contextmanager
+    def denied_lock(*_args, **_kwargs):
+        yield False
+
+    monkeypatch.setattr(wifi_roam, "scan_transition_lock", denied_lock, raising=False)
+    monkeypatch.setattr(wifi_roam, "ENABLE_PING_PONG_PREVENTION", False)
+    run = MagicMock()
+    monkeypatch.setattr(wifi_roam.subprocess, "run", run)
+
+    assert (
+        wifi_roam.roam_to_bssid("00:11:22:33:44:55", "00:11:22:33:44:66")
+        is wifi_roam.SCAN_TRANSITION_BUSY
+    )
+    run.assert_not_called()
+
+
+def test_cross_ssid_transition_lock_contention_is_neutral_without_selection_or_cooldown(monkeypatch):
+    @contextmanager
+    def denied_lock(*_args, **_kwargs):
+        yield False
+
+    monkeypatch.setattr(wifi_roam, "scan_transition_lock", denied_lock, raising=False)
+    monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", True)
+    monkeypatch.setattr(wifi_roam, "ENABLE_PING_PONG_PREVENTION", False)
+    select = MagicMock()
+    monkeypatch.setattr(wifi_roam, "select_network_for_ssid", select)
+
+    assert wifi_roam.route_cross_ssid_transition(
+        "mlan0", "Office", "00:11:22:33:44:55", "00:11:22:33:44:66"
+    ) is wifi_roam.SCAN_TRANSITION_BUSY
+    select.assert_not_called()
+
+
+def test_staged_home_scan_busy_is_propagated_before_line_filter(monkeypatch):
+    monkeypatch.setattr(wifi_roam, "WPA_FREQ", ["5180"])
+    monkeypatch.setattr(wifi_roam, "HOME_PASSIVE", True)
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", lambda *_a, **_k: wifi_roam.SCAN_TRANSITION_BUSY)
+    station = {"bssid": "00:11:22:33:44:55", "rssi": -80, "freq": 5180}
+    result = wifi_roam.staged_scan_best_candidate(station, ["Base"], "Base", None, None)
+    assert result[0] is wifi_roam.SCAN_TRANSITION_BUSY
+
+
+def test_iw_scan_timeout_is_ordinary_failure_not_lock_contention(monkeypatch):
+    monkeypatch.setattr(
+        wifi_roam.subprocess,
+        "run",
+        MagicMock(side_effect=wifi_roam.subprocess.TimeoutExpired("iw", 15)),
+    )
+    result = wifi_roam.iw_scan_to_ap_lines(["Base"], ["5180"])
+    assert result is None
+    assert result is not wifi_roam.SCAN_TRANSITION_BUSY
 
 
 def test_iw_scan_drops_supplicant_bss_not_refreshed_by_this_scan(monkeypatch):

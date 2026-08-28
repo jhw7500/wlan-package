@@ -17,8 +17,11 @@ ExecStart=/bin/python3 /usr/local/logger/wifi_roam.py %i
 # systemd 가 Restart 대상에서 제외하므로 stack 제어와 충돌하지 않는다.
 Restart=always
 RestartSec=3
+# boot snapshot이 이 owner를 허용하지 않아 exit 3이면 stale queued start로 간주하고
+# 재시작 루프를 만들지 않는다.
+SuccessExitStatus=3
+RestartPreventExitStatus=3
 User=root
 
 [Install]
 WantedBy=wifi-stack.target
-

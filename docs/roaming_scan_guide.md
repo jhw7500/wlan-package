@@ -7,16 +7,44 @@
 
 ---
 
-## 개요 — 스캔은 두 주체가 돌린다
+## 개요 — proactive roam owner는 하나만 선택한다
 
-| 주체 | 언제 | 무엇을 |
+| `roaming.enabled` | proactive owner | `wifi_bgscan.py` requester | 동작 |
+|---|---|---|---|
+| `true` | `wifi_roam.py` | `iw` | 외부 알고리즘이 후보를 평가하고 BSSID/ID를 명시적으로 전환 |
+| `false` | wpa_supplicant native | `wpa_cli scan` | scan 결과를 wpa native selection에 맡김(`TYPE=ONLY` 미사용) |
+
+`wifi_roam`과 wpa native owner는 동시에 쓰지 않는다. 별도 backend JSON 키 대신 부팅
+최초 `/run/wifi/<iface>.roam-policy.json`에 owner/backend/bgscan/topology/extra를 원자
+snapshot한다. daemon crash-restart나 wifi_init 재시작에도 snapshot이 우선하며 변경은
+**재부팅**해야 한다. `bgscan.enabled=false`는 package 주기
+스캔만 끄고 wpa_supplicant의 장애 복구·재연결 scan은 막지 않는다.
+
+### topology(Mode A/B) × owner 매트릭스
+
+| topology | wifi_roam owner (`enabled=true`) | wpa native owner (`enabled=false`) |
 |---|---|---|
-| **bgscan** (`wifi_bgscan.py`) | **로밍 컨디션이 꺼져 있을 때만** — 켜져 있으면 스캔하지 않고 5초 대기로 건너뛴다(§5 #7) | `interval`(기본 60초)마다 `scan_freq` **전 채널** |
-| **roam 판정 scan** (`wifi_roam.py`) | **로밍 컨디션 진입 후에만** | 단일 freq=홈채널 우선, 다중 freq=전체 directed active |
+| **Mode B** `generate_network_blocks=false` | 단일 블록, 같은 SSID 외부 로밍. `passive_roam`의 boot-latched `extra_ssids` 선택 또는 `wifi connect`로 수동 cross-SSID 전환 | 단일 블록 native 선택. cross-SSID는 수동 전환 |
+| **Mode A** `generate_network_blocks=true` | 다중 블록, 목표 BSSID pin+ID/SSID/BSSID 확인으로 자동 cross-SSID. `passive_roam` 수동 cross-SSID는 표시/실행하지 않음 | 다중 블록, wpa 기본 정책으로 자동 cross-SSID. 수동 cross-SSID는 미지원 |
+
+Mode A/B도 부팅 snapshot과 network block topology를 함께 만들므로 변경 후 재부팅이
+필수다. `generate_network_blocks=true`이면 `extra_ssids=[]`여도 Mode A identity와
+명시적 SSID writer 금지는 유지된다. 모든
+블록은 전역과 동일한 **공통 `freq_list`**를 사용한다. 부팅 parser만 legacy `scan_freq`
+fallback을 읽어 canonical `freq_list`로 이행한다.
+Mode B에서 수동 전환한 live base가 boot-latched 후보와 같아질 수 있으며,
+이는 부팅 base/extra 중복이 아닌 의도된 단일-블록 상태다.
+
+wifi_roam owner에서는 스캔 경로가 둘이다.
+
+| 경로 | 언제 | 무엇을 |
+|---|---|---|
+| **bgscan** (`wifi_bgscan.py`, iw backend) | 로밍 컨디션이 꺼져 있을 때 | `interval`마다 공통 `freq_list` 전 채널 |
+| **roam 판정 scan** (`wifi_roam.py`) | 로밍 컨디션 진입 후에만 | 단일 freq=홈채널 우선, 다중 freq=전체 directed active |
 
 `wifi_logger_scan.py` 는 **스스로 스캔하지 않는다.** 커널 scan 완료 이벤트를 관찰해 `mlanutl getscantable` 결과를 `ap.log`에 기록한다. `ap.log`는 진단 기록이며 자동 로밍 후보 RSSI 판정에는 사용하지 않는다.
 
-### 로밍 컨디션이란
+### 로밍 컨디션이란 (wifi_roam owner 전용)
 
 메인루프가 `rssi >= 임계`(good-signal)면 `interruptible_sleep` 후 `continue` 로 빠진다. **그 경로에서는 Stage 스캔이 한 번도 돌지 않는다.** 임계 미달(`rssi < 임계`)일 때만 `staged_scan_best_candidate()` 가 호출된다.
 
@@ -24,11 +52,11 @@
 
 ---
 
-## 1. roam scan 구조
+## 1. roam scan 구조 (wifi_roam owner)
 
 ### 단일 freq — 홈 채널 우선
 
-`scan_freq`가 하나이고 현재 결합 채널과 같을 때만 홈채널 스캔을 먼저 수행한다. 모드는 `STAGED_SCAN.home_passive`:
+공통 `freq_list`가 하나이고 현재 결합 채널과 같을 때만 홈채널 스캔을 먼저 수행한다. 모드는 `STAGED_SCAN.home_passive`:
 
 | 값 | 명령 | 성격 |
 |---|---|---|
@@ -39,10 +67,10 @@
 
 ### 다중 freq — 전 채널 active 1회
 
-`scan_freq`가 2개 이상이면 홈 passive와 `ap.log` cache를 건너뛰고 즉시 다음을 수행한다.
+공통 `freq_list`가 2개 이상이면 홈 passive와 `ap.log` cache를 건너뛰고 즉시 다음을 수행한다.
 
 ```sh
-iw scan freq <scan_freq 전체> ssid <allowed>
+iw scan freq <공통 freq_list 전체> ssid <allowed>
 ```
 
 현재 AP와 후보 AP를 같은 시점/scan source로 비교한다. `ap.log`/bgscan cache RSSI는 최대 bgscan interval만큼 과거 값일 수 있어 최종 결정에는 사용하지 않는다.
@@ -58,7 +86,7 @@ SKIP_REDUNDANT_ACTIVE_SCAN  and  home_scan_ok  and  home_covers_all
 | 조건 | JSON 키 | 의미 |
 |---|---|---|
 | `SKIP_REDUNDANT_ACTIVE_SCAN` | `STAGED_SCAN.skip_redundant_active` | 설정값 (기본 `true`) |
-| `home_covers_all` | — (런타임 판정) | `scan_freq ⊆ {홈채널}` — **단일 채널**이면 성립 |
+| `home_covers_all` | — (런타임 판정) | `freq_list ⊆ {홈채널}` — **단일 채널**이면 성립 |
 | **`home_scan_ok`** | — (런타임 판정) | **홈 채널에서 현재 AP 외 같은 SSID 후보를 실제로 봤음** |
 
 `home_scan_ok` 가 자주 간과된다. `home_passive=true`인 단일 채널에서 **같은 SSID AP가 자기뿐이면** 스킵이 걸리지 않고 directed active fallback이 한 번 실행된다.
@@ -77,14 +105,13 @@ SKIP_REDUNDANT_ACTIVE_SCAN  and  home_scan_ok  and  home_covers_all
 
 #### 전제 — 둘 다 필요
 
-- `scan_freq` 가 홈 채널 **1개**
+- 공통 `freq_list`가 홈 채널 **1개**
 - **그 채널에 같은 SSID AP가 2대 이상** (자기 + 후보 ≥1) → `home_scan_ok` 성립
 
 #### 설정
 
 ```json
 "mlan0": {
-  "bgscan":  { "passive": true, "interval": 60 },
   "roaming": {
     "STAGED_SCAN": {
       "enable": true,
@@ -95,11 +122,14 @@ SKIP_REDUNDANT_ACTIVE_SCAN  and  home_scan_ok  and  home_covers_all
 }
 ```
 
-`wpa_supplicant-mlan0.conf` → `scan_freq=5240` (1개)
+`wpa_supplicant-mlan0.conf` → 전역 및 블록 `freq_list=5240` (1개)
 
 #### 결과
 
-tick당 `['iw','mlan0','scan','freq','5240','passive']` **1회뿐**. Stage 3 스킵으로 **probe 0 → 공유 매체 probe airtime 0**. 단 자기 링크의 off-channel 영향까지 0 은 아니다(§3.2).
+tick당 `['iw','mlan0','scan','freq','5240','passive']` **1회뿐**. 이는
+`STAGED_SCAN.home_passive`가 만든 `wifi_roam.py` 홈 채널 scan이며 periodic bgscan이
+아니다. Stage 3 스킵으로 **probe 0 → 공유 매체 probe airtime 0**. 단 자기 링크의
+off-channel 영향까지 0 은 아니다(§3.2).
 
 #### 한계
 
@@ -109,11 +139,10 @@ tick당 `['iw','mlan0','scan','freq','5240','passive']` **1회뿐**. Stage 3 스
 
 #### 별도 설정이 필요 없다
 
-`scan_freq`가 2개 이상이면 홈 passive/cache 단계를 건너뛰고 **전 채널 directed active가 1회 실행**된다. 기본값 그대로 두면 된다.
+공통 `freq_list`가 2개 이상이면 홈 passive/cache 단계를 건너뛰고 **전 채널 directed active가 1회 실행**된다. 기본값 그대로 두면 된다.
 
 ```json
 "mlan0": {
-  "bgscan":  { "passive": true, "interval": 60 },
   "roaming": {
     "STAGED_SCAN": {
       "enable": true,
@@ -124,34 +153,41 @@ tick당 `['iw','mlan0','scan','freq','5240','passive']` **1회뿐**. Stage 3 스
 }
 ```
 
-`scan_freq=5180 5240` (2개 이상)
+전역 및 모든 블록 `freq_list=5180 5240` (2개 이상)
 
 다채널에서는 `home_passive`와 `skip_redundant_active`가 scan 방식을 바꾸지 않는다. `skip_redundant_active`는 단일 freq passive 모드에서만 평가되며, 단일 freq `home_passive=false`도 directed active 1회로 완결된다.
 
 ### 2.3 `bgscan.passive` 판단
 
-**hidden 로밍 타깃이 없다면 두 구성 모두 `true`(기본) 를 권하며, 이 결론은 단말 수와 무관하다.** hidden 타깃을 운용한다면 이득(고정)과 비용(단말 수 비례)의 교차점이 생겨 단말 밀도가 결정 변수가 된다(아래 각주).
+`bgscan.passive`의 JSON 기본값은 `true`로 유지한다. 이는 wpa native owner의
+`wpa_cli` 호환을 위한 값이다. 그러나 `wifi_roam` owner의 periodic `iw` bgscan에서는
+`bgscan.passive=true`를 수용하되 **active scan으로 안전 강제**하고 프로세스당 한 번
+경고한다. 따라서 지원 mlan hardware에서 periodic `iw ... scan ... passive`는 발행되지
+않으며, 공통 `freq_list`와 base/extra SSID 순서를 그대로 쓰는 directed active scan이 된다.
 
-액티브 bgscan의 **고유 이득은 하나뿐**이다 — hidden SSID를 **평시에 미리** 캐시·BSS 테이블에 넣어두는 것. 패시브는 beacon만 받으므로 hidden을 못 본다.
+반대로 wpa native owner는 `wpa_cli scan ... passive=1`을 계속 보낸다. 이 두 backend의
+차이를 설정 UI와 운영 절차에서 혼동하지 말 것. `STAGED_SCAN.home_passive`는
+`wifi_roam.py`의 단일 홈 채널 staged-scan 설정으로, `bgscan.passive`와 별개이며 이번
+안전 조치로 변경되지 않았다.
 
-| 항목 | 패시브 | 액티브 |
-|---|---|---|
-| 다채널 일반 AP 커버 | **확보** (§3.4 실측) | 확보 |
-| hidden 평시 선점 | 없음 | 있음 (Stage 3 대비 약 1.15초 선점, §3.3 주) |
-| 공유 매체 probe airtime | **0** | 4.56ms/스캔 상시 |
-| RSSI 스케일 | 차이 없음 (§3.3 — roam Stage 1 vs Stage 3 실측. **bgscan 모드 간·`getscantable` 캐시는 미측정**) | 좌동 |
-| 로그 구분 | `passive` 토큰으로 구분 | **Stage 3와 명령 문자열 동일** |
+#### 새로운 target-board 안전 근거
 
-- **다채널**: roam condition에서 direct active가 hidden을 잡는다. active bgscan의 이득은 평시 선점뿐이고 대가는 상시 airtime이다.
-- **단일 채널**: cache는 판정에 쓰이지 않는다. hidden 대상은 `home_passive: false`로 발견한다.
+NXP moal 437.p3에서 idle 상태의 반복 다채널 periodic passive `iw` scan은 약 네 번째
+scan 뒤 data plane을 strand했다. 이때 wpa_supplicant는 계속 `COMPLETED`로 보였으므로
+연결 상태만으로 안전을 판단할 수 없었다. 동일한 daemon, 주파수 목록, lock, cadence로
+비교한 active-directed A/B control은 정상 상태를 유지했다.
 
-단말 수는 **비용 쪽만** 키운다(50대·3초 주기 기준 7.67%). 이득은 단말 수와 무관하므로, 1대여도 `true` 가 낫고 많아지면 격차가 벌어질 뿐이다.
-
-> hidden 로밍 타깃을 운용한다면 "약 1.15초 선점 vs 상시 airtime" 을 견주는 판단이 되고, 단말 밀도가 갈림길이 된다.
+과거의 연속 ping 측정은 idle postcondition을 가렸으므로 periodic mlan `iw` passive가
+현재 권장되거나 안전하다는 근거가 아니다. 이 결과는 staged single-channel path를
+반증한 것이 아니며, 그 경로의 `STAGED_SCAN.home_passive` 동작은 그대로다.
 
 ---
 
 ## 3. 실측 데이터
+
+> **역사적 측정 주의:** 아래의 기존 passive/active airtime·ping 수치는 당시 연속 ping
+> 부하에서 얻은 것이다. idle data-plane postcondition을 검증하지 않았으므로 periodic
+> mlan `iw` passive의 현재 안전성 또는 권장 설정을 뒷받침하지 않는다.
 
 ### 3.1 probe airtime — 공유 매체 비용
 
@@ -223,30 +259,21 @@ active   +0.0~0.5s  med 4.95  (+1.41)   ← 여기만
 | sd | 0.44 |
 | 분포 | −2:2, −1:6, **0:251**, +1:17, +2:4, +3:1 |
 
-**251/281(89.3%)이 정확히 0dB.** 즉 `construct_iw_scan_cmd` 주석의 *"패시브는 beacon 기반이라 `signal_avg` 와 스케일이 가깝다"* 는 논거가 이 하드웨어(NXP moal)에서는 **액티브와 구분되지 않는다.** 모드 선택 기준에서 스케일은 빼도 되고, 남는 것은 **airtime vs hidden 커버**뿐이다.
+**251/281(89.3%)이 정확히 0dB.** 이 기록은 `wifi_roam.py` staged path의 당시
+Stage 1/Stage 3 비교이며, periodic bgscan safety 판단에는 쓰지 않는다.
 
 > **주의**: 전체 로그로 재면 −1.0dB 로 보이는데 그건 시간대가 다른 데이터가 섞인 아티팩트다. **같은 tick 으로 짝지어야** 한다.
 
-### 3.4 다채널 bgscan 커버리지 — 비홈 채널도 남는다
+### 3.4 다채널 periodic bgscan — 이전 passive 커버리지 기록은 superseded
 
-다채널(`scan_freq=5180 5240`) + `bgscan.passive=true` + **로밍 컨디션 미진입** 상태로 200초 관찰:
+이전 기록은 다채널 `bgscan.passive=true`가 `iw ... passive`로 실행되어 비홈 채널
+항목을 남긴 사례였다. 이는 coverage 관찰일 뿐 idle data-plane safety 검증이 아니며,
+새 target-board 결과로 periodic mlan `iw` passive 권장 근거에서 제외한다.
 
-```
-roaming condition: 0     roam 판정 tick: 0     ROAM 스캔 명령: 0
-SCAN(bgscan) 명령: 3
-['iw', 'mlan0', 'scan', 'freq', '5180', '5240', 'passive']   ← 전 채널 포함
-```
-
-`ap.log` 최신 블록 (홈 채널 = ch36):
-
-| 채널 | 개수 | 비고 |
-|---|---|---|
-| ch036 (홈) | 7개 | |
-| **ch048 (비홈)** | **2개** | `04:ba:d6`(`jhw_wlan_`, −44dBm) 포함 — 로밍 후보 |
-
-`construct_iw_scan_cmd` 의 패시브 분기가 `freq_filter and scan_freqs` 면 `["freq"] + scan_freqs` 를 붙이므로, **패시브 bgscan 도 `scan_freq` 전 채널을 훑는다.** 즉 로밍 컨디션에 도달하지 않아도 비홈 채널 일반 AP 가 `ap.log`·캐시에 기록된다.
-
-> 이번 블록에 빈 SSID 항목은 없었다. 다만 **"hidden 이라 안 잡힌 것"인지 "그 시점에 없었던 것"인지는 이 데이터로 구분되지 않는다.**
+현재 periodic `iw` 경로는 같은 공통 `freq_list` 전 채널을 directed active grammar로
+스캔한다. active-directed A/B control이 정상 상태를 유지한 것은 이 runtime guard의
+근거지만, 이전 수치에서 새 airtime 수치를 추정하거나 staged single-channel path까지
+위험하다고 일반화해서는 안 된다.
 
 ### 3.5 good-signal 리셋 게이트 (PR #138)
 
@@ -297,13 +324,17 @@ backoff 가 상한에 머물지 못하는 주 원인은 곡선이 아니라 **go
 | # | 함정 | 내용 |
 |---|---|---|
 | 1 | **JSON 실경로** | 데몬이 읽는 것은 **`/usr/local/etc/wifi_init_conf.json`**. `/opt/wlan/config/` 는 **템플릿**이라 편집해도 반영되지 않는다 |
-| 2 | **`bgscan.passive=false` 의 부작용** | Stage 3와 **명령 문자열이 완전히 동일**해져 로그에서 주체를 로거 태그(`SCAN[` vs `ROAM[`)로만 구분해야 한다. 패시브면 `passive` 토큰으로 구분된다 |
+| 2 | **`bgscan.passive` 로그 구분** | wifi_roam/iw owner에서는 true도 active로 safety override되므로 프로세스당 한 번의 warning과 로거 태그(`SCAN[` vs `ROAM[`)로 구분한다. wpa native owner는 `wpa_cli scan ... passive=1`이라 명령 자체가 다르다 |
 | 3 | **good-signal 분기는 조용하다** | 게이트가 **발동(suppress)하지 않은** tick 은 로그를 남기지 않는다(로그 볼륨 절약 설계). 로그 부재가 "미진입"을 뜻하지 않으므로, 판정은 `streak` 와 `gate_suppressed=N`(no-candidate 줄에 병기) 으로 한다 |
 | 4 | **`MAX_SLEEP` 은 순수 코드 상수다** | `ROAM_NO_RESULT_MAX_SLEEP`(30) 은 JSON 으로 바꿀 수 없다 — 과거엔 로더가 `.get()` 으로 읽어 JSON 에 손으로 넣으면 몰래 실효되는 뒷문이 있었으나 감사 D2(2026-07-31)로 봉쇄됐다(`test_max_sleep_backdoor_closed` 가 고정). 실험에서 상한을 바꾸려면 `wifi_roam.py` 의 `DEFAULT_ROAM_NO_RESULT_MAX_SLEEP` 상수를 직접 수정해야 한다 |
-| 5 | **후보 미발견이 길어져도 빠른 주기로 복귀하지 않는다** | 상한(기본 30초)에 도달하면 그 주기를 유지한다. 복귀는 **후보 발견·bgscan hint·good-signal 리셋** 같은 사건으로만 일어나고 시간 경과로는 일어나지 않는다. 시간 기반 점감(`ROAM_NO_RESULT_BACKOFF_RECOVER_SEC`)이 있었으나 점감이 backoff 계산 뒤에 일어나고 다음 tick 의 `streak+1` 이 즉시 되돌려 **실효가 0**(streak 만 `7↔6` 진동)이었고, 그 코드는 제거됐다 |
-| 6 | **로밍 조건 중 bgscan 정지** | 로밍 조건 동안 bgscan은 정지하지만 로밍 판정은 최신 active/home scan을 직접 사용하므로 cache 고사로 인한 판단 오류는 없다 |
+| 5 | **후보 미발견이 길어져도 빠른 주기로 복귀하지 않는다** | wifi_roam owner에서 상한(기본 30초)에 도달하면 그 주기를 유지한다. 복귀는 **후보 발견·bgscan hint·good-signal 리셋** 같은 사건으로만 일어난다. wpa native owner에서는 이 backoff/hint가 적용되지 않는다 |
+| 6 | **로밍 조건 중 bgscan 정지** | wifi_roam owner에서는 로밍 조건 동안 bgscan을 멈추고 최신 active/home scan으로 직접 판단한다. wpa native owner에는 외부 로밍 컨디션 자체가 없다 |
 | 7 | **`wifi` CLI 경로** | `/usr/local/bin/wifi` 인데 **ssh 비대화형 PATH(`/usr/bin:/bin:/usr/sbin:/sbin`)에 없다.** 스크립트에서는 절대 경로를 쓸 것. `>/dev/null 2>&1` 과 겹치면 `command not found` 가 조용히 묻힌다 |
 | 8 | **`iw dev link` 는 신뢰 불가** | moal 이 cfg80211 `current_bss` 를 갱신하지 않아 연결 중에도 `Not connected.` 를 반환한다. 링크 판정은 `wlan_link_lib.sh`(wpa_cli → station dump 계단식)를 쓸 것 |
+| 9 | **`freq_filter=false`** | deprecated. 공통 global `freq_list`가 있으면 false도 무시하고 iw/wpa_cli 모두 같은 목록을 강제한다. 전대역이 필요하면 공통 목록 자체를 제거해야 한다 |
+| 10 | **`periodic_roam.enabled=true`** | 제3 owner 방지를 위해 무시되고 unit은 강제 disable+stop된다. unit의 항상-false ExecCondition도 stale queued job 실행을 막는다 |
+| 11 | **boot policy snapshot 손상/부재** | owner를 추측하지 않는다. `/run/.<iface>.roam-policy.latched`가 same-boot snapshot 삭제를 감지하고 wifi_apply_enabled/owner daemon/writer가 fail-closed하여 이중 owner보다 기동 실패를 선택한다 |
+| 12 | **Mode A 선택 cleanup 미해결** | BSSID pin **전** `/run/.<iface>.selection-cleanup-pending` JSON WAL을 atomic write+fsync한다. 지속성을 증명하지 못하면 pin을 거부하고 메모리 gate를 유지한다. pin 해제·all-network 복원·canonical reconfigure가 모두 실패해도 WAL/gate가 남는다. daemon 재시작은 boot snapshot 검증보다 cleanup-only preflight를 먼저 수행하므로 `/run/wifi`가 함께 삭제돼도 pin을 복구한 뒤 owner 정책을 fail-closed한다 |
 
 ---
 
@@ -316,11 +347,18 @@ backoff 가 상한에 머물지 못하는 주 원인은 곡선이 아니라 **go
 | 후보 최소 이득 | `wifi <if> roam diff <dB>` | SIGHUP 무재시작 |
 | `STAGED_SCAN` 계열 | JSON 편집 + `systemctl kill --kill-who=main -s SIGHUP wifi_roam@<if>` | SIGHUP |
 | `bgscan.passive` / `interval` | JSON 편집만 | **재시작 불필요** — `wifi_bgscan.py` 가 매 스캔 직전 재로드 (실측 확인) |
-| `scan_freq` | `wpa_supplicant-<if>.conf` 편집 | `wpa_cli reconfigure` (순단·자율선택 유발 주의) |
+| `bgscan.enabled` | JSON 편집 | **재부팅** — package scan service boot snapshot; false여도 wpa 복구 scan 유지 |
+| `roaming.enabled` | JSON 편집 | **재부팅** — owner/backend boot snapshot |
+| `generate_network_blocks` / `extra_ssids` | JSON 편집 | **재부팅** — boot snapshot + network block topology 재생성 |
+| 공통 `freq_list` | `wifi <if> freq <freq...>` | persist-only, 다음 부팅. 즉시 `reconfigure`는 순단·wpa 자율선택 가능성에 주의 |
 
 > 조회형 `wifi <if> roam th`(값 없이)는 **표시 전용**이라 SIGHUP 을 보내지 않는다.
 >
-> `<if>` 는 `mlan0` 같은 실이름이다. 스크립트에서는 `/usr/local/bin/wifi` 절대 경로로 호출할 것(§5 #8).
+> `<if>` 는 `mlan0` 같은 실이름이다. 스크립트에서는 `/usr/local/bin/wifi` 절대 경로로 호출할 것(§5 #7).
+>
+> SIGHUP reload는 트랜잭션이다. JSON 타입, schema 수치 범위, SSID identity 중 하나라도 무효면 전체 변경을 거부하고 기존 런타임 값과 WPA conf mtime을 유지한다.
+>
+> 수동 `scan`/`mscan`, `radio-apply`, `connect`, `start`/`stop`/`restart`, 같은 SSID roam은 동일한 scan-transition lock으로 직렬화된다. live 전환 전 `ABORT_SCAN`이 `FAIL`을 반환할 때까지 bounded quiesce하여 wpa_supplicant의 비동기 native scan 완료가 뒤늦게 전환과 겹치지 않게 한다. supplicant 자체를 내리는 `stop`/`restart` 복구 경로는 quiesce를 얻지 못해도 lock을 유지한 채 종료를 계속한다.
 
 ---
 
@@ -342,7 +380,7 @@ systemctl start wifi_logger_link@mlan0    # 복구
 
 1. **기존 파일을 읽어 `signal` 만 바꿔야 한다.** 새로 만들면 `info.freq` 가 없어 `base_threshold` 결정이 실패하고 데몬이 조용히 `continue` 한다.
 2. **mtime 갱신이 필수**다 — `_LINK_CACHE` 재파싱과 `LINK_STALE_SEC` 게이트를 통과해야 한다.
-3. **backoff 상한이 주입 주기를 삼킨다.** streak 가 상한(30초)이면 데몬이 그만큼 자므로 3초 주기 주입은 깨어나는 순간의 값만 관측된다. 상한을 5초로 낮추고 주입 주기를 맞추면 **tick 수가 주입에 종속돼 구간 간 조건이 자동 정규화**된다. 단 상한은 JSON 으로 바꿀 수 없으므로(§5 #5 — 뒷문 봉쇄) `wifi_roam.py` 의 `DEFAULT_ROAM_NO_RESULT_MAX_SLEEP` 상수를 고쳐 배포해야 하고, 실험 후 원복이 필수다.
+3. **backoff 상한이 주입 주기를 삼킨다.** streak 가 상한(30초)이면 데몬이 그만큼 자므로 3초 주기 주입은 깨어나는 순간의 값만 관측된다. 상한을 5초로 낮추고 주입 주기를 맞추면 **tick 수가 주입에 종속돼 구간 간 조건이 자동 정규화**된다. 단 상한은 JSON 으로 바꿀 수 없으므로(§5 #4 — 뒷문 봉쇄) `wifi_roam.py` 의 `DEFAULT_ROAM_NO_RESULT_MAX_SLEEP` 상수를 고쳐 배포해야 하고, 실험 후 원복이 필수다.
 
 ### 7.2 probe airtime 을 재려면 `wifi_capture` 를 쓴다
 

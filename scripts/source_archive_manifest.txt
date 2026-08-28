@@ -107,6 +107,7 @@ dist/wlan/opt/wlan/config/wlan/wifi_mod_para.conf
 dist/wlan/opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan0.conf
 dist/wlan/opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan1.conf
 dist/wlan/opt/wlan/config/wpa_supplicant/wpa_supplicant@.service
+dist/wlan/opt/wlan/driver/DRIVER_COMPONENTS.sha256
 dist/wlan/opt/wlan/driver/DRIVER_MANIFEST.md
 dist/wlan/opt/wlan/driver/debug/mlan.ko
 dist/wlan/opt/wlan/driver/debug/moal.ko
@@ -210,11 +211,14 @@ dist/wlan/usr/lib/firmware/cts/wifi_mod_para.conf
 dist/wlan/usr/local/logger/passive_roam.py
 dist/wlan/usr/local/logger/print.py
 dist/wlan/usr/local/logger/roam_notify.py
+dist/wlan/usr/local/logger/roam_policy.py
 dist/wlan/usr/local/logger/roam_state.py
 dist/wlan/usr/local/logger/sUTILS.py
 dist/wlan/usr/local/logger/tests/__init__.py
 dist/wlan/usr/local/logger/tests/test_bgscan_construct_cmd.py
 dist/wlan/usr/local/logger/tests/test_bgscan_load_json.py
+dist/wlan/usr/local/logger/tests/test_bgscan_parse_conf.py
+dist/wlan/usr/local/logger/tests/test_bgscan_run_scan.py
 dist/wlan/usr/local/logger/tests/test_config_default_sync.py
 dist/wlan/usr/local/logger/tests/test_cross_ssid_cooldown.py
 dist/wlan/usr/local/logger/tests/test_defaults_template_consistency.py
@@ -239,6 +243,7 @@ dist/wlan/usr/local/logger/tests/test_roam_goodsignal_gate.py
 dist/wlan/usr/local/logger/tests/test_roam_mode_gate.py
 dist/wlan/usr/local/logger/tests/test_roam_notify.py
 dist/wlan/usr/local/logger/tests/test_roam_parse_conf.py
+dist/wlan/usr/local/logger/tests/test_roam_policy.py
 dist/wlan/usr/local/logger/tests/test_roam_runtime_reload.py
 dist/wlan/usr/local/logger/tests/test_roam_scan_logging.py
 dist/wlan/usr/local/logger/tests/test_roam_select_network.py
@@ -302,6 +307,7 @@ dist/wlan/usr/local/scripts/tests/test_fake_hwclock.sh
 dist/wlan/usr/local/scripts/tests/test_logger_log_format.py
 dist/wlan/usr/local/scripts/tests/test_logger_shell_timeouts.py
 dist/wlan/usr/local/scripts/tests/test_logger_supervision_units.py
+dist/wlan/usr/local/scripts/tests/test_roam_owner_service_policy.py
 dist/wlan/usr/local/scripts/tests/test_unit_execstart_exec_bit.py
 dist/wlan/usr/local/scripts/tests/test_wifi_eth_peer.sh
 dist/wlan/usr/local/scripts/tests/test_wifi_log_extract.py
@@ -368,6 +374,7 @@ dist/wlan/usr/local/scripts/wifi_services.sh
 dist/wlan/usr/local/scripts/wifi_services_lib.sh
 dist/wlan/usr/local/scripts/wifi_snmp_trap.sh
 dist/wlan/usr/local/scripts/wifi_thermal_state_update.sh
+dist/wlan/usr/local/scripts/wifi_wpa_conf_writer_test.sh
 dist/wlan/usr/local/scripts/wlan_fw_watch.sh
 dist/wlan/usr/local/scripts/wlan_link_lib.sh
 dist/wlan/usr/local/scripts/wlan_reboot_policy.sh
@@ -466,6 +473,7 @@ docs/wifi_init_conf_guide.md
 docs/wifi_init_conf_webui_handoff.md
 scripts/exec_bit_targets.py
 scripts/gen_config_defaults.py
+scripts/gen_driver_manifest.sh
 scripts/package_tar_test.sh
 scripts/source_archive_manifest.txt
 scripts/validate_release.sh

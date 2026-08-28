@@ -1,8 +1,9 @@
 """SIGHUP 트리거 런타임 config reload 테스트 — 폴링 없음(프로덕션 비용 0).
 
 계약: SIGHUP 수신 시 wifi_init_conf.json 을 1회 재읽어 적용(mtime 디바운스 없음 —
-신호 시점이 곧 '쓰기 완료'). invalid/구조무효 저장은 현행 유지(기본값 회귀 금지)+경고.
-generate_network_blocks/모드 A extra_ssids 는 재시작 전용(경고 후 유지). 인스턴스는
+신호 시점이 곧 '쓰기 완료'). invalid/구조무효/semantic-invalid 저장은 전체 현행 유지
+(부분 적용·기본값 회귀 금지)+경고.
+generate_network_blocks/extra_ssids 는 재부팅 전용(경고 후 boot snapshot 유지). 인스턴스는
 필드 갱신으로 이력 보존, enable off→on 은 생성. 적용 시 WPA_CONF_MTIME 리셋(wpa conf
 재파싱 → TH 전파). interruptible_sleep 은 신호 시 즉시 깨는 커널 블록(폴링 아님).
 """
@@ -109,6 +110,19 @@ def test_invalid_json_keeps_current_and_warns(env):
     assert len(_warn_calls("invalid JSON")) == 1
 
 
+def test_semantically_invalid_reload_is_atomic(env):
+    """뒤쪽 extra_ssids 검증 실패가 앞쪽 파라미터만 부분 적용하면 안 된다."""
+    bad = _conf(check_interval=2, pp_window=99, extra=["dup", "dup"])
+    _write(env, bad)
+
+    assert reload_roaming_config(IFACE) is False
+    assert wifi_roam.PING_PONG_WINDOW == 30
+    assert wifi_roam.CHECK_INTERVAL == 7
+    assert wifi_roam.EXTRA_SSIDS == []
+    assert wifi_roam.WPA_CONF_MTIME == 123.0
+    assert len(_warn_calls("semantic validation")) == 1
+
+
 def test_no_roaming_section_keeps_current(env):
     _write(env, {"other": 1})                     # valid JSON 이나 mlan0.roaming 없음
     assert reload_roaming_config(IFACE) is False
@@ -126,8 +140,8 @@ def test_missing_file_keeps_current(env):
 def test_generate_change_blocked_at_runtime(env):
     _write(env, _conf(gen=True))
     assert reload_roaming_config(IFACE) is True    # 나머지 키는 적용되므로 True
-    assert wifi_roam.GENERATE_NETWORK_BLOCKS is False   # 재시작 전용 — 유지
-    assert len(_warn_calls("requires daemon restart")) == 1
+    assert wifi_roam.GENERATE_NETWORK_BLOCKS is False   # boot snapshot — 유지
+    assert len(_warn_calls("requires reboot")) == 1
 
 
 def test_mode_a_extra_ssids_change_blocked(env):
@@ -139,11 +153,13 @@ def test_mode_a_extra_ssids_change_blocked(env):
     assert len(_warn_calls("extra_ssids change ignored")) == 1
 
 
-def test_mode_b_extra_ssids_applies(env):
-    # 모드 B(gen=False)는 extra_ssids 변경 그대로 적용(데몬 무영향, 재생성 불필요)
+def test_mode_b_extra_ssids_change_is_blocked_by_boot_snapshot(env):
+    # 모드 B에서도 extra_ssids는 boot snapshot 필드다. 현재 consumer가 무시하더라도
+    # mutable JSON 값이 전역으로 새면 향후 consumer 추가 시 topology hot-switch가 된다.
     _write(env, _conf(gen=False, extra=["x"]))
     assert reload_roaming_config(IFACE) is True
-    assert wifi_roam.EXTRA_SSIDS == ["x"]
+    assert wifi_roam.EXTRA_SSIDS == []
+    assert len(_warn_calls("extra_ssids change ignored")) == 1
 
 
 def test_pingpong_history_preserved_on_param_change(env):
@@ -276,15 +292,100 @@ def test_interruptible_sleep_woken_mid_block_by_write():
 
 
 def test_bad_numeric_value_no_crash_keeps_current(env, monkeypatch):
-    """비수치 값(operator 오타)이 와도 데몬 크래시 없이 현행 유지 + 유효 키는 적용
-    (Codex P1 가드 — SIGHUP reload 는 hand-edit 직후 발동해 오타 최빈 트리거)."""
+    """비수치 값(operator 오타)이 오면 데몬 크래시/부분 적용 없이 전체 현행 유지."""
     monkeypatch.setattr(wifi_roam, "SCAN_NO_RESULT_SLEEP", 3)   # 방어 시 유지되어야
     conf = _conf(check_interval=5)
     conf[IFACE]["roaming"]["SCAN_NO_RESULT_SLEEP"] = "bad"      # 비수치 오타
     _write(env, conf)
-    assert reload_roaming_config(IFACE) is True                 # 크래시 없이 적용 수행
-    assert wifi_roam.CHECK_INTERVAL == 5                        # 유효 키는 적용
-    assert wifi_roam.SCAN_NO_RESULT_SLEEP == 3                  # bad 값은 _num 방어로 현행 유지
+    assert reload_roaming_config(IFACE) is False
+    assert wifi_roam.CHECK_INTERVAL == 7
+    assert wifi_roam.SCAN_NO_RESULT_SLEEP == 3
+    assert wifi_roam.WPA_CONF_MTIME == 123.0
+    assert len(_warn_calls("semantic validation")) == 1
+
+
+def test_bad_nested_numeric_value_rejects_entire_reload(env):
+    """중첩 section의 caster 오류도 compile-time default로 부분 회귀하면 안 된다."""
+    conf = _conf(check_interval=2, pp_window="bad")
+    _write(env, conf)
+    assert reload_roaming_config(IFACE) is False
+    assert wifi_roam.PING_PONG_WINDOW == 30
+    assert wifi_roam.CHECK_INTERVAL == 7
+    assert wifi_roam.WPA_CONF_MTIME == 123.0
+    assert len(_warn_calls("semantic validation")) == 1
+
+
+@pytest.mark.parametrize(
+    ("section", "key", "bad_value"),
+    [
+        ("PREDICTIVE_ROAM", "trend_window_size", 0),
+        ("PREDICTIVE_ROAM", "trend_history_max_age", 0),
+        ("PING_PONG_PREVENTION", "window", 0),
+        ("PING_PONG_PREVENTION", "max_roams_in_window", 0),
+        ("PING_PONG_PREVENTION", "detection_time", 0),
+        (None, "DIFF_TH", -1),
+        (None, "DIFF_TH", 31),
+        (None, "CHECK_INTERVAL", 0),
+        (None, "ROAM_CROSS_FAIL_RETRY_COUNT", -1),
+        (None, "ROAM_NO_RESULT_FAST_COUNT", 0),
+        (None, "SCAN_NO_RESULT_SLEEP", 0),
+        (None, "ROAM_SUCCESS_SLEEP", 0),
+    ],
+)
+def test_schema_bounded_numeric_value_rejects_entire_reload(
+    env, section, key, bad_value
+):
+    """모든 schema minimum/maximum 위반은 다른 유효 변경까지 원자적으로 거부한다."""
+    conf = _conf(check_interval=2)
+    roaming = conf[IFACE]["roaming"]
+    if section is None:
+        roaming[key] = bad_value
+    else:
+        roaming.setdefault(section, {})[key] = bad_value
+    _write(env, conf)
+
+    assert reload_roaming_config(IFACE) is False
+    assert wifi_roam.CHECK_INTERVAL == 7
+    assert wifi_roam.WPA_CONF_MTIME == 123.0
+    assert len(_warn_calls("semantic validation")) == 1
+
+
+def test_schema_integer_string_rejects_entire_reload(env):
+    """JSON schema의 integer 필드는 숫자처럼 보이는 문자열도 허용하지 않는다."""
+    conf = _conf(check_interval="2")
+    _write(env, conf)
+
+    assert reload_roaming_config(IFACE) is False
+    assert wifi_roam.CHECK_INTERVAL == 7
+    assert wifi_roam.WPA_CONF_MTIME == 123.0
+    assert len(_warn_calls("semantic validation")) == 1
+
+
+@pytest.mark.parametrize(
+    ("path",),
+    [
+        (("CHECK_INTERVAL",),),
+        (("PING_PONG_PREVENTION", "window"),),
+        (("PING_PONG_PREVENTION", "enable"),),
+        (("PING_PONG_PREVENTION",),),
+        (("use_signal_avg",),),
+    ],
+)
+def test_explicit_null_rejects_entire_reload(env, path):
+    """명시적 null은 키 부재가 아니며 flat/nested/section 모두 schema type 위반이다."""
+    conf = _conf(check_interval=2)
+    roaming = conf[IFACE]["roaming"]
+    target = roaming
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = None
+    _write(env, conf)
+
+    assert reload_roaming_config(IFACE) is False
+    assert wifi_roam.CHECK_INTERVAL == 7
+    assert wifi_roam.PING_PONG_WINDOW == 30
+    assert wifi_roam.WPA_CONF_MTIME == 123.0
+    assert len(_warn_calls("semantic validation")) == 1
 
 
 def test_gen_key_absent_no_spurious_warning(env):
@@ -295,6 +396,6 @@ def test_gen_key_absent_no_spurious_warning(env):
     del conf[IFACE]["roaming"]["generate_network_blocks"]       # 키 부재(parse_bool False 수렴)
     _write(env, conf)
     assert reload_roaming_config(IFACE) is True
-    assert wifi_roam.GENERATE_NETWORK_BLOCKS is True            # 재시작 전용 — 복원
+    assert wifi_roam.GENERATE_NETWORK_BLOCKS is True            # boot snapshot — 복원
     assert wifi_roam.EXTRA_SSIDS == ["a"]                       # 연동 복원
-    assert len(_warn_calls("requires daemon restart")) == 0     # 키 부재는 오탐 경고 없음
+    assert len(_warn_calls("requires reboot")) == 0             # 키 부재는 오탐 경고 없음

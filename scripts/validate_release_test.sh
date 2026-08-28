@@ -7,6 +7,9 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 PKG="$WORK/pkg"
 SOURCE_NETWORK="$REPO/dist/wlan/opt/wlan/config/systemd/network/22-eth0.network"
+SOURCE_MLANUTL_IMX93="$REPO/dist/wlan/opt/wlan/bin/mlanutl_imx93"
+SOURCE_MLAN_IMX93="$REPO/dist/wlan/opt/wlan/driver/mlan_imx93.ko"
+GEN_DRIVER_MANIFEST="$REPO/scripts/gen_driver_manifest.sh"
 
 # DEBIAN/control is the release-version SSoT.  Documentation and build logic
 # must not introduce a second concrete version that every release has to edit.
@@ -50,6 +53,77 @@ if (
     exit 1
 fi
 
+# The source gate must lock the exact board-qualified component bytes.  Module
+# binaries are intentionally gitignored, so metadata/version checks alone do
+# not detect an accidental local replacement.
+if (
+    backup="$WORK/mlan_imx93.backup"
+    cp -p "$SOURCE_MLAN_IMX93" "$backup"
+    trap 'cp -p "$backup" "$SOURCE_MLAN_IMX93"' EXIT
+    printf '\nrelease-gate-corruption\n' >> "$SOURCE_MLAN_IMX93"
+    # shellcheck source=validate_release.sh
+    source "$VALIDATE"
+    validate_source_product_defaults >/dev/null 2>&1
+); then
+    echo "FAIL: source mlan_imx93 outside the qualified SHA lock was accepted" >&2
+    exit 1
+fi
+
+# An unrelated Git repository must never be recorded as wlan-driver-v2 source
+# provenance, even when its caller supplies a fake filesystem layout and copied
+# qualified build outputs.  Required source paths must belong to the declared
+# commit and the declared remote must match the canonical source repository.
+if (
+    manifest="$REPO/dist/wlan/opt/wlan/driver/DRIVER_MANIFEST.md"
+    lock="$REPO/dist/wlan/opt/wlan/driver/DRIVER_COMPONENTS.sha256"
+    manifest_backup="$WORK/DRIVER_MANIFEST.backup"
+    lock_backup="$WORK/DRIVER_COMPONENTS.backup"
+    fake_repo="$WORK/unrelated-driver"
+    cp -p "$manifest" "$manifest_backup"
+    cp -p "$lock" "$lock_backup"
+    trap 'cp -p "$manifest_backup" "$manifest"; cp -p "$lock_backup" "$lock"' EXIT
+    git init -q "$fake_repo"
+    git -C "$fake_repo" config user.name release-test
+    git -C "$fake_repo" config user.email release-test@example.invalid
+    mkdir -p "$fake_repo/mlan" "$fake_repo/mlinux" \
+        "$fake_repo/mapp/mlanutl" "$fake_repo/bin_wlan"
+    printf 'fake\n' > "$fake_repo/mlan/mlan_main.h"
+    printf 'fake\n' > "$fake_repo/mlinux/moal_main.c"
+    printf 'fake\n' > "$fake_repo/mapp/mlanutl/mlanutl.c"
+    git -C "$fake_repo" add mlan mlinux mapp
+    git -C "$fake_repo" commit -qm 'fake driver layout'
+    # A remote URL is only local configuration.  Without a fetched
+    # origin/* ref containing this commit it must not establish provenance.
+    git -C "$fake_repo" remote add origin \
+        https://github.com/jhw7500/wlan-driver-v2.git
+    cp -p "$REPO/dist/wlan/opt/wlan/driver/mlan_imx93.ko" \
+        "$REPO/dist/wlan/opt/wlan/driver/moal_imx93.ko" \
+        "$REPO/dist/wlan/opt/wlan/bin/mlanutl_imx93" \
+        "$fake_repo/bin_wlan/"
+    "$GEN_DRIVER_MANIFEST" --write "$fake_repo" HEAD >/dev/null 2>&1
+); then
+    echo "FAIL: unrelated repository with fake layout/output was accepted as wlan-driver-v2 provenance" >&2
+    exit 1
+fi
+
+# 비대칭 antcfg 제품 검증은 matching 543 utility의 private `antcfgnss` 조회가
+# 필수다. staging이 구형 mlanutl로 되돌아가면 wifi_init이 다음 부팅에서 fail-closed
+# 하므로 release source gate가 패키징 전에 막아야 한다.
+if (
+    backup="$WORK/mlanutl_imx93.backup"
+    cp -p "$SOURCE_MLANUTL_IMX93" "$backup"
+    trap 'cp -p "$backup" "$SOURCE_MLANUTL_IMX93"' EXIT
+    printf '#!/bin/sh\necho legacy-utility\n' \
+        > "$SOURCE_MLANUTL_IMX93"
+    chmod 0755 "$SOURCE_MLANUTL_IMX93"
+    # shellcheck source=validate_release.sh
+    source "$VALIDATE"
+    validate_source_product_defaults >/dev/null 2>&1
+); then
+    echo "FAIL: imx93 mlanutl without antcfgnss support was accepted" >&2
+    exit 1
+fi
+
 make_tree() {
     rm -rf "$PKG"
     mkdir -p "$PKG/DEBIAN" \
@@ -77,6 +151,14 @@ make_tree() {
         "$PKG/opt/wlan/config/systemd/network/22-eth0.network"
     cp "$REPO/dist/wlan/usr/lib/firmware/cts/sd9098_wlan_v1.bin" \
         "$PKG/usr/lib/firmware/cts/sd9098_wlan_v1.bin"
+    cp "$REPO/dist/wlan/opt/wlan/driver/DRIVER_COMPONENTS.sha256" \
+        "$PKG/opt/wlan/driver/DRIVER_COMPONENTS.sha256"
+    cp "$REPO/dist/wlan/opt/wlan/driver/mlan_imx93.ko" \
+        "$PKG/opt/wlan/driver/mlan_imx93.ko"
+    cp "$REPO/dist/wlan/opt/wlan/driver/moal_imx93.ko" \
+        "$PKG/opt/wlan/driver/moal_imx93.ko"
+    cp "$REPO/dist/wlan/opt/wlan/bin/mlanutl_imx93" \
+        "$PKG/opt/wlan/bin/mlanutl_imx93"
     cp "$REPO/dist/wlan/usr/share/doc/wlan-proc/nxp-imx-firmware/"* \
         "$PKG/usr/share/doc/wlan-proc/nxp-imx-firmware/"
     mkdir -p "$PKG/etc/systemd/system"
@@ -108,7 +190,11 @@ make_tree() {
     chmod 0600 "$PKG/opt/wlan/config/wpa_supplicant/"*.conf
     chmod 0644 "$PKG/opt/wlan/config/wifi_init_conf.json" \
         "$PKG/opt/wlan/config/systemd/network/22-eth0.network" \
-        "$PKG/usr/lib/firmware/cts/sd9098_wlan_v1.bin"
+        "$PKG/usr/lib/firmware/cts/sd9098_wlan_v1.bin" \
+        "$PKG/opt/wlan/driver/DRIVER_COMPONENTS.sha256" \
+        "$PKG/opt/wlan/driver/mlan_imx93.ko" \
+        "$PKG/opt/wlan/driver/moal_imx93.ko"
+    chmod 0755 "$PKG/opt/wlan/bin/mlanutl_imx93"
     find "$PKG" -type d -exec chmod 0755 {} +
 }
 
@@ -119,6 +205,22 @@ build() {
 make_tree
 build "$WORK/good.deb"
 bash "$VALIDATE" package "$WORK/good.deb" >/dev/null
+
+make_tree
+printf '\npackage-component-corruption\n' >> "$PKG/opt/wlan/driver/moal_imx93.ko"
+build "$WORK/wrong-qualified-component.deb"
+if bash "$VALIDATE" package "$WORK/wrong-qualified-component.deb" >/dev/null 2>&1; then
+    echo "FAIL: package component outside the qualified SHA lock was accepted" >&2
+    exit 1
+fi
+
+make_tree
+printf '# package-lock-drift\n' >> "$PKG/opt/wlan/driver/DRIVER_COMPONENTS.sha256"
+build "$WORK/wrong-component-lock.deb"
+if bash "$VALIDATE" package "$WORK/wrong-component-lock.deb" >/dev/null 2>&1; then
+    echo "FAIL: packaged component lock differing from source was accepted" >&2
+    exit 1
+fi
 
 expect_metadata_rejected() {
     local field="$1" deb="$2" err
