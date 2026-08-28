@@ -384,11 +384,11 @@ wifi_fw_apply_rate() {
     # 읽기 실패(빈 결과)를 disabled 와 같은 info 로 묻으면, 설정이 켜져 있는데 적용되지
     # 않은 상태가 조용히 지나간다 — 사유를 구분해 warn 으로 남긴다.
     if [ -z "$enabled" ]; then
-        wifi_fw_log local0.warn "[$iface] rate_adapt.enabled read failed; skip (FW 기본값 유지)"
+        wifi_fw_log local0.warn "[$iface] rate_adapt.enabled read failed; skip (마지막 SET값 유지; 콜드부팅 후에만 FW 기본값)"
         return 0
     fi
     if [ "$enabled" != true ]; then
-        wifi_fw_log local0.info "[$iface] rate_adapt disabled; skip (FW 기본값 유지)"
+        wifi_fw_log local0.info "[$iface] rate_adapt disabled; skip (마지막 SET값 유지; 콜드부팅 후에만 FW 기본값)"
         return 0
     fi
     if ! wifi_fw_validate_rate_config "$json" "$iface"; then
