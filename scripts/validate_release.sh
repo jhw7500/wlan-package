@@ -403,6 +403,10 @@ generated_names = {
     "usr/local/opc/bin/vhlctl",
     "usr/local/vhl_daemon/vhld",
 }
+factory_reset_implementation = {
+    "usr/local/scripts/factory_reset.sh",
+    "usr/local/scripts/wifi_factory_reset_lib.sh",
+}
 payload = subprocess.check_output(["dpkg-deb", "--fsys-tarfile", os.environ["PACKAGE_DEB"]])
 actual = set()
 errors = []
@@ -425,6 +429,10 @@ with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
         counts[name] = counts.get(name, 0) + 1
         if member.isfile() and name not in generated_names:
             actual.add(name)
+            if name in factory_reset_implementation:
+                factory_reset = archive.extractfile(member)
+                if factory_reset is not None and b"nginx" in factory_reset.read().lower():
+                    errors.append("package factory reset must not manage nginx")
         elif not member.isfile() and not member.isdir():
             errors.append(f"packaged payload is not a regular file: {name}")
 for name, count in sorted(counts.items()):

@@ -206,6 +206,39 @@ make_tree
 build "$WORK/good.deb"
 bash "$VALIDATE" package "$WORK/good.deb" >/dev/null
 
+# wlan-proc does not own the product image's web server.  A future Factory
+# Reset change must not enable, disable, mask, or otherwise manage nginx.
+make_tree
+printf '#!/bin/bash\nsystemctl enable nginx\n' \
+    > "$PKG/usr/local/scripts/factory_reset.sh"
+chmod 0755 "$PKG/usr/local/scripts/factory_reset.sh"
+build "$WORK/nginx-owned.deb"
+nginx_err="$WORK/nginx-owned.err"
+if bash "$VALIDATE" package "$WORK/nginx-owned.deb" >/dev/null 2>"$nginx_err"; then
+    echo "FAIL: package factory reset was allowed to manage nginx" >&2
+    exit 1
+fi
+if ! grep -Fxq 'release gate: package factory reset must not manage nginx' "$nginx_err"; then
+    echo "FAIL: nginx ownership rejection did not identify the violated contract" >&2
+    cat "$nginx_err" >&2
+    exit 1
+fi
+
+make_tree
+printf '#!/bin/bash\nFACTORY_REQUIRED_UNITS=(nginx.service)\n' \
+    > "$PKG/usr/local/scripts/wifi_factory_reset_lib.sh"
+build "$WORK/nginx-owned-lib.deb"
+nginx_lib_err="$WORK/nginx-owned-lib.err"
+if bash "$VALIDATE" package "$WORK/nginx-owned-lib.deb" >/dev/null 2>"$nginx_lib_err"; then
+    echo "FAIL: package factory reset library was allowed to manage nginx" >&2
+    exit 1
+fi
+if ! grep -Fxq 'release gate: package factory reset must not manage nginx' "$nginx_lib_err"; then
+    echo "FAIL: nginx library ownership rejection did not identify the violated contract" >&2
+    cat "$nginx_lib_err" >&2
+    exit 1
+fi
+
 make_tree
 printf '\npackage-component-corruption\n' >> "$PKG/opt/wlan/driver/moal_imx93.ko"
 build "$WORK/wrong-qualified-component.deb"
