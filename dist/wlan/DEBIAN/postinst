@@ -745,7 +745,12 @@ secure_wpa_conf() {
     # useradd 는 비밀번호를 주지 않으면 shadow 에 '!'(잠금)을 넣는다. 아래가 실패해도
     # 잠긴 채로 남으므로 빈 비밀번호 계정은 생기지 않는다 -- /etc/pam.d/vsftpd 에
     # nullok 이 있어 빈 비밀번호였다면 로그인이 통과하므로 이 순서가 중요하다.
-    if echo "admin:admin" | chpasswd -c SHA512; then
+    # 비밀번호는 해시로 넣는다. postinst 는 기기에 /var/lib/dpkg/info/ 아래
+    # world-readable(0755) 로 설치되므로 여기에 평문을 두면 비-root 사용자가
+    # 그대로 읽는다(주석에 값을 적는 것도 같다). 값 자체는 상위 툴 규격으로
+    # 고정되어 바꿀 수 없고, 접근 범위를 좁히는 것은 vsftpd 의
+    # tcp_wrappers(hosts.allow) 쪽 사안이다.
+    if echo 'admin:$6$wlanftpcmd$tJVVYhDGL1AeMsYJ6yUGE9VC.lvhCz66YbYNd0VGc097s5iHJB9PXYCkYrbns4Oq9R7WNllj5bqYmYbxde1xa0' | chpasswd -e; then
       logger -p local0.info "[$tag:$LINENO] [$KEY] Created FTP account 'admin'"
     else
       logger -p local0.err "[$tag:$LINENO] [$KEY] chpasswd failed for 'admin'; account left locked"
