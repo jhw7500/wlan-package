@@ -299,6 +299,24 @@ customctl() {
   fi
   /usr/local/scripts/wifi_apply_enabled.sh 2>/dev/null || true
 
+  # prerm 이 wifi-stack.target 을 stop 하면 PartOf= 로 묶인 자식 유닛(wifi_logger@mlanN,
+  # wifi_logger_link@mlanN 등)이 함께 내려간다. 바로 위 wifi_apply_enabled.sh 는 enable/
+  # disable 상태만 다루고 start 는 하지 않으므로("no change (all units already in desired
+  # state)"), 내린 주체는 있는데 올리는 주체가 없어 재부팅 전까지 로거가 죽은 채 남는다.
+  # wpa_supplicant 는 살아 있어 통신은 되고 관측만 죽는 형태라 알아채기 어렵다 —
+  # link.json 이 사라져 로밍 판정과 SNMP 연결정보/통계의 소스가 없어진다.
+  #
+  # 부팅 경로(wifi_init.service ExecStartPost)와 같은 스크립트를 같은 순서로 호출해
+  # 업그레이드 직후 상태를 부팅 직후 상태와 같게 만든다. wifi_services.sh 는 is-enabled
+  # 인 유닛만 start --no-block 하므로 멱등하고(이미 떠 있으면 no-op) disable 된 유닛은
+  # 건드리지 않는다. wifi_init 이 살아 있을 때만 부르는 것은 자식만 내려간 상태를
+  # 복구한다는 뜻이며, wifi_init 자체가 정지 중이면 다음 부팅에 함께 올라오는 것이 맞다.
+  if [ -x /usr/local/scripts/wifi_services.sh ] \
+     && systemctl is-active --quiet wifi_init 2>/dev/null; then
+    /usr/local/scripts/wifi_services.sh start 2>/dev/null || true
+    logger -p local0.info "[$tag:$LINENO] [$KEY] restarted wifi_init child units (prerm stopped them)"
+  fi
+
   INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 10))
   dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
   /usr/local/logger/print.py green "\r\n[installer] installing${dots}"
