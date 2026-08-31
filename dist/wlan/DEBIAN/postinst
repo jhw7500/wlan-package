@@ -736,6 +736,29 @@ secure_wpa_conf() {
   /usr/local/scripts/change_line.sh "log-dir=/var/log/cantops" "log-dir" /etc/watchdog.conf
   /usr/local/scripts/add_line.sh "/dev/mmcblk${EMMC_NUM}p3      /var/log/cantops  ext4  noatime,nodiratime,lazytime,commit=60,data=ordered  0  2" /etc/fstab
 
+  # 상위 툴용 FTP 계정(admin). ftpcmd 디스패치는 이미지가 제공하지만, 계정 생성은
+  # rootfs 조립 시점에만 도는 extrausers 라 .deb 배포 경로에서는 만들어지지 않는다.
+  # 이미지가 이미 만든 기기에서는 건드리지 않는다(비밀번호 해시를 덮어쓰지 않기 위해).
+  if id admin >/dev/null 2>&1; then
+    logger -p local0.info "[$tag:$LINENO] [$KEY] FTP account 'admin' already exists; left untouched"
+  elif useradd -m -d /home/admin -s /bin/sh admin; then
+    # useradd 는 비밀번호를 주지 않으면 shadow 에 '!'(잠금)을 넣는다. 아래가 실패해도
+    # 잠긴 채로 남으므로 빈 비밀번호 계정은 생기지 않는다 -- /etc/pam.d/vsftpd 에
+    # nullok 이 있어 빈 비밀번호였다면 로그인이 통과하므로 이 순서가 중요하다.
+    # 비밀번호는 해시로 넣는다. postinst 는 기기에 /var/lib/dpkg/info/ 아래
+    # world-readable(0755) 로 설치되므로 여기에 평문을 두면 비-root 사용자가
+    # 그대로 읽는다(주석에 값을 적는 것도 같다). 값 자체는 상위 툴 규격으로
+    # 고정되어 바꿀 수 없고, 접근 범위를 좁히는 것은 vsftpd 의
+    # tcp_wrappers(hosts.allow) 쪽 사안이다.
+    if echo 'admin:$6$wlanftpcmd$tJVVYhDGL1AeMsYJ6yUGE9VC.lvhCz66YbYNd0VGc097s5iHJB9PXYCkYrbns4Oq9R7WNllj5bqYmYbxde1xa0' | chpasswd -e; then
+      logger -p local0.info "[$tag:$LINENO] [$KEY] Created FTP account 'admin'"
+    else
+      logger -p local0.err "[$tag:$LINENO] [$KEY] chpasswd failed for 'admin'; account left locked"
+    fi
+  else
+    logger -p local0.err "[$tag:$LINENO] [$KEY] useradd 'admin' failed"
+  fi
+
   # /etc/systemd/system.conf 변경(DefaultTimeout*, WatchdogDevice)은 PID1이 부팅 시
   # 읽으므로 다음 부팅에 적용된다. 설치 도중 daemon-reload로 system.conf를 다시
   # 읽게 하지 않는다(WatchdogDevice 재오픈/타이머 재평가 등 부작용 회피).
