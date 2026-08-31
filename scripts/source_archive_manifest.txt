@@ -85,6 +85,7 @@ dist/wlan/opt/wlan/config/logrotate.d/logrotate.rsyslog
 dist/wlan/opt/wlan/config/rc.local
 dist/wlan/opt/wlan/config/rsyslog.conf
 dist/wlan/opt/wlan/config/smb.conf
+dist/wlan/opt/wlan/config/snmp/CANTOPS-CTS-WLAN-MIB.txt
 dist/wlan/opt/wlan/config/snmp/snmpd.conf
 dist/wlan/opt/wlan/config/sysctl.d/99-wifi-thermal.conf
 dist/wlan/opt/wlan/config/systemd/journald.conf
