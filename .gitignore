@@ -12,6 +12,7 @@ docs/01-plan/
 docs/02-design/
 docs/04-report/
 docs/05-runbook/
+# Superpowers spec/plan은 로컬 작업 산출물 — 확정 계약은 README/CHANGELOG/정식 가이드/테스트에 유지
 docs/superpowers/
 network.json
 .base/
