@@ -3,6 +3,19 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.6.1 (2026-08-31)
+
+> SemVer **patch** — 패키지 업그레이드 후 `wifi_init` 자식 유닛이 내려간 채 남던 것을 고친다. 동작 계약 변경 없음.
+
+### 업그레이드 후 로거 미기동 수리 (#218)
+
+- `prerm` 이 `wifi-stack.target` 을 stop 하면 `PartOf=` 로 묶인 자식 유닛(`wifi_logger@mlanN`, `wifi_logger_link@mlanN` 등)이 함께 내려간다. `postinst` 가 부르는 `wifi_apply_enabled.sh` 는 **enable/disable 상태만** 다루고 start 는 하지 않아(`no change (all units already in desired state)`) 내린 주체는 있는데 올리는 주체가 없었다. 결과적으로 **재부팅 전까지 로거가 죽은 채** 남았다.
+- 증상이 조용하다. `wpa_supplicant` 는 살아 있어 무선 통신은 계속되고 관측만 죽는다 — `link.json` 이 사라져 로밍 판정 소스가 없어지고, SNMP 는 실제 연결 중인데 `StaLoginState=notConnected(1)` 로 보고하며 walk 객체수가 39에서 30으로 준다.
+- `postinst` 가 `wifi_apply_enabled.sh` 직후 `wifi_services.sh start` 를 호출한다. 부팅 경로(`wifi_init.service` 의 `ExecStartPre` → `ExecStartPost`)와 **같은 스크립트를 같은 순서로** 재사용해, 업그레이드 직후 상태가 부팅 직후 상태와 같아지게 한다.
+- `wifi_services.sh` 는 `is-enabled` 인 유닛만 `start --no-block` 하므로 멱등하고(이미 떠 있으면 no-op) disable 된 유닛은 건드리지 않는다. MFG 프로파일 가드도 그대로 적용된다.
+- `wifi_init` 이 active 일 때만 호출한다. "자식만 내려간 상태"를 복구한다는 뜻이며, `wifi_init` 자체가 정지 중이면 다음 부팅에 함께 올라오는 것이 맞다.
+- 0.4.0 배포 기록에도 설치 후 게이트를 수동 실행한 흔적이 있어, 이 갭은 이번에 생긴 것이 아니라 계속 있었다.
+
 ## 0.6.0 (2026-08-31)
 
 > SemVer **minor** — SNMP 벤더 OID 트리를 CanTops 자체 PEN(66620)으로 이전하고 CONTEC 호환을 병행한다. 폴링은 두 루트를 모두 서빙하므로 기존 NMS 는 설정 변경 없이 계속 동작하지만, **트랩 OID 는 `.672.65.1.1.x` 에서 `.66620.1.1.1.x` 로 바뀐다**(트랩은 `snmp.trap.enabled` 기본 false 라 opt-in 한 기기에만 영향). 상위 툴용 FTP 계정 `admin` 을 postinst 가 생성한다.
