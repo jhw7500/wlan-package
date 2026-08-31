@@ -392,7 +392,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `rate_adapt.mode` | 레이트 적응 모드 | int | `1` | `0`=legacy\|`1`=SR | caution | boot | section 존재 시 mode/low/high/interval 4개 필수(enabled는 선택) |
 | `rate_adapt.low_thresh` | 레이트 적응 low 임계 | int | `70` | 0..100 또는 255 | caution | boot | static은 low<high, dynamic은 low/high 모두 255 |
 | `rate_adapt.high_thresh` | 레이트 적응 high 임계 | int | `90` | 0..100 또는 255 | caution | boot | 70/90은 실기 결과에 따라 바뀌는 시험값 |
-| `rate_adapt.interval_ms` | 레이트 적응 평가주기(ms) | int | `100` | 양수, 10ms 배수 | caution | boot | association 전 SET+GET. mlan0 roam 및 mlan1 AC association 완료 시 FW 30/50 복귀 실측 |
+| `rate_adapt.interval_ms` | 레이트 적응 평가주기(ms) | int | `100` | 양수, 10ms 배수 | caution | boot | association 전 SET+GET. 종전 "mlan0 roam·mlan1 AC association 완료 시 FW 30/50 복귀 실측" 기재는 2026-08-31 재검증에서 **미재현** — 가이드 §11.5 정정 노트 참조 |
 
 **비고 (antcfg 업그레이드)** — `postinst`는 active 우선 deep merge 뒤 과거 제품 기본
 `false/empty`, 알려진 physical 1x1 `0x0101`, 이미 선택된 `0x0303/0x0101`만 새 검증 계약으로
