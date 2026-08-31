@@ -707,3 +707,105 @@ def test_ap_login_num_not_exposed():
     # .10.3 ApLoginNum 은 AP 가 세는 값 — STA 는 알 수 없어 미노출 유지
     om = pp.build_oid_map(base=pp.CTS_WLAN, **_sources())
     assert pp.CTS_WLAN + ".3.3.1.10.3.0" not in om
+
+
+# --- MIB 파일 ↔ 구현 정합 -----------------------------------------------------
+# MIB 는 "이 장비가 무엇을 주는가"의 계약이다. 구현에만 있으면 NMS 가 이름을 모르고,
+# MIB 에만 있으면 NMS 가 조회했다가 noSuchInstance 를 받는다. 양쪽을 고정한다.
+
+MIB_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..",
+                        "opt", "wlan", "config", "snmp", "CANTOPS-CTS-WLAN-MIB.txt")
+
+
+def _parse_mib():
+    """CANTOPS MIB 를 파싱해 (객체 서브OID 집합, 트랩 서브OID 집합) 반환."""
+    import io as _io, re as _re
+    txt = _io.open(MIB_PATH, encoding="utf-8").read()
+    parent, kind = {}, {}
+    for m in _re.finditer(r'^\s*(\w+)\s+OBJECT IDENTIFIER\s*::=\s*\{\s*(\w+)\s+(\d+)\s*\}', txt, _re.M):
+        parent[m.group(1)] = (m.group(2), int(m.group(3))); kind[m.group(1)] = "node"
+    for m in _re.finditer(r'^\s*(\w+)\s+OBJECT-TYPE\b.*?::=\s*\{\s*(\w+)\s+(\d+)\s*\}', txt, _re.S | _re.M):
+        parent[m.group(1)] = (m.group(2), int(m.group(3))); kind[m.group(1)] = "leaf"
+    for m in _re.finditer(r'^\s*(\w+)\s+NOTIFICATION-TYPE\b.*?::=\s*\{\s*(\w+)\s+(\d+)\s*\}', txt, _re.S | _re.M):
+        parent[m.group(1)] = (m.group(2), int(m.group(3))); kind[m.group(1)] = "trap"
+    # MODULE-IDENTITY 도 OID 노드다 (트랩의 부모)
+    for m in _re.finditer(r'^\s*(\w+)\s+MODULE-IDENTITY\b.*?::=\s*\{\s*(\w+)\s+(\d+)\s*\}', txt, _re.S | _re.M):
+        parent[m.group(1)] = (m.group(2), int(m.group(3))); kind[m.group(1)] = "node"
+
+    def oid(n, seen=None):
+        seen = seen or set()
+        if n == "enterprises":
+            return ".1.3.6.1.4.1"
+        if n in seen or n not in parent:
+            return None
+        seen.add(n)
+        p = oid(parent[n][0], seen)
+        return None if p is None else "%s.%d" % (p, parent[n][1])
+
+    leaves, traps = set(), set()
+    for n, k in kind.items():
+        o = oid(n)
+        if not o or not o.startswith(pp.CTS_WLAN):
+            continue
+        sub = o[len(pp.CTS_WLAN):]
+        if k == "leaf":
+            leaves.add(sub)
+        elif k == "trap":
+            traps.add(sub)
+    return leaves, traps
+
+
+def test_mib_file_declares_exactly_what_is_served():
+    mib_objs, _ = _parse_mib()
+    om = pp.build_oid_map(base=pp.CTS_WLAN, **_sources())
+    # 인스턴스 OID → 객체 OID (마지막 arc 가 인스턴스 접미사: 스칼라 .0, IfTable .1/.2)
+    served = {o[len(pp.CTS_WLAN):].rsplit(".", 1)[0] for o in om}
+    assert mib_objs, "MIB 파싱 실패 — 경로/문법 확인: %s" % MIB_PATH
+    only_mib = sorted(mib_objs - served)
+    only_impl = sorted(served - mib_objs)
+    assert only_mib == [], "MIB 에만 있고 구현이 안 주는 OID(=noSuchInstance): %s" % only_mib
+    assert only_impl == [], "구현은 주는데 MIB 에 이름이 없는 OID: %s" % only_impl
+
+
+def test_mib_traps_match_trap_script():
+    import io as _io, re as _re
+    _, mib_traps = _parse_mib()
+    sh_path = os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "wifi_snmp_trap.sh")
+    sh = _io.open(sh_path, encoding="utf-8").read()
+    sent = {o for o in _re.findall(r'\$CTS(\.[0-9.]+)', sh) if o.startswith(".1.1.")}
+    assert mib_traps == sent, "MIB 트랩 정의와 트랩 스크립트 불일치: MIB=%s 스크립트=%s" % (
+        sorted(mib_traps), sorted(sent))
+
+
+def test_mib_declares_mac_objects_as_displaystring():
+    # 구현은 콜론헥사 텍스트를 준다. MIB 가 MacAddress(OCTET STRING SIZE 6) 로 선언하면
+    # NMS 디코딩이 어긋나므로 SYNTAX 는 DisplayString 이어야 한다(정합 전환은 이슈 #215).
+    # DESCRIPTION 안에서 FXE3000 의 원래 타입을 설명하는 것은 문서화라 검사 대상이 아니다 —
+    # 실제 타입 선언(MacAddress TC 정의 / SYNTAX 절)만 본다.
+    import io as _io, re as _re
+    txt = _io.open(MIB_PATH, encoding="utf-8").read()
+    assert not _re.search(r'^\s*MacAddress\s*::=', txt, _re.M), \
+        "MacAddress TC 를 정의하면 SIZE(6) 계약이 생겨 구현과 어긋난다"
+    for name in ("ctsWlanEthernetAddress", "ctsWlanWLMacAddress",
+                 "ctsWlanWIFInfoWLMacAddress", "ctsWlanWIFInfoStaApMacAddress"):
+        m = _re.search(r'^%s OBJECT-TYPE\s*\n\s*SYNTAX\s+(\S+)' % name, txt, _re.M)
+        assert m, "%s 의 SYNTAX 절을 찾지 못함" % name
+        assert m.group(1) == "DisplayString", "%s SYNTAX=%s (DisplayString 이어야 함)" % (name, m.group(1))
+
+
+def test_mib_uses_smiv2_max_access_not_smiv1_access():
+    """SNMPv2-SMI 를 import 하는 모듈이므로 각 OBJECT-TYPE 은 SMIv1 `ACCESS` 가 아니라
+    SMIv2 `MAX-ACCESS`(RFC 2578) 를 써야 한다.
+
+    net-snmp 파서는 둘 다 받아들여 snmptranslate/snmpwalk 로는 잡히지 않지만, 엄격한 NMS
+    MIB 컴파일러는 SMIv1 문법을 거부할 수 있다 — 그러면 MIB 를 배포한 목적 자체가 무산된다.
+    """
+    import io as _io, re as _re
+    txt = _io.open(MIB_PATH, encoding="utf-8").read()
+    assert "SNMPv2-SMI" in txt, "SMIv2 모듈이 아니면 이 검사의 전제가 다르다"
+    stray = _re.findall(r'^\s*ACCESS\s+\S+', txt, _re.M)
+    assert stray == [], "SMIv1 ACCESS 절이 남아 있다: %s" % stray
+    n_obj = len(_re.findall(r'^\w+ OBJECT-TYPE\s*$', txt, _re.M))
+    n_acc = len(_re.findall(r'^\s*MAX-ACCESS\s+\S+', txt, _re.M))
+    assert n_obj > 0 and n_obj == n_acc, \
+        "OBJECT-TYPE %d개 중 MAX-ACCESS 절은 %d개 — 누락된 객체가 있다" % (n_obj, n_acc)
