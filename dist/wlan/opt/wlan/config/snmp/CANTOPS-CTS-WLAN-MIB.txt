@@ -1,0 +1,418 @@
+-- ////////////////////////////////////////////////////////////////////////////
+--
+--      CanTops CTS-WLAN Private MIB
+--
+--      Enterprise OID : .1.3.6.1.4.1.66620   (IANA PEN 66620, CanTops Co., LTD.)
+--      Product        : .1.3.6.1.4.1.66620.1 (product 1 = CTS-WLAN)
+--
+--      The OID tree mirrors the CONTEC FXE3000 Private MIB (.1.3.6.1.4.1.672.65)
+--      arc-for-arc, so a manager that already polls FXE3000 can reach the same
+--      objects here by swapping only the two leading enterprise arcs. Both roots
+--      are served in parallel during the migration period.
+--
+--      This module declares ONLY the objects this product actually serves.
+--      Objects present in the FXE3000 MIB but not implemented here are listed at
+--      the end of this file with the reason, so a manager never polls an OID that
+--      is guaranteed to return noSuchInstance.
+--
+-- ////////////////////////////////////////////////////////////////////////////
+
+CANTOPS-CTS-WLAN-MIB DEFINITIONS ::= BEGIN
+
+IMPORTS
+    MODULE-IDENTITY, OBJECT-TYPE, NOTIFICATION-TYPE,
+    enterprises, Counter32, IpAddress               FROM SNMPv2-SMI
+    DisplayString                                   FROM SNMPv2-TC;
+
+--
+-- .1.3.6.1.4.1.66620.1
+--
+cantops         OBJECT IDENTIFIER ::= { enterprises 66620 }
+ctsWlan         OBJECT IDENTIFIER ::= { cantops 1 }
+
+ctsWlanMIB MODULE-IDENTITY
+    LAST-UPDATED    "202608310000Z"
+    ORGANIZATION    "CanTops Co., LTD."
+    CONTACT-INFO    ""
+    DESCRIPTION     "The MIB module for CTS-WLAN series."
+    ::= { ctsWlan 1 }
+
+ctsWlanTraps            OBJECT IDENTIFIER ::= { ctsWlanMIB 1 }
+ctsWlanEnvironment      OBJECT IDENTIFIER ::= { ctsWlan 2 }
+ctsWlanStatus           OBJECT IDENTIFIER ::= { ctsWlan 3 }
+ctsWlanStatusInfo       OBJECT IDENTIFIER ::= { ctsWlanStatus 1 }
+ctsWlanIfTable          OBJECT IDENTIFIER ::= { ctsWlanStatus 2 }
+ctsWlanIfEntry          OBJECT IDENTIFIER ::= { ctsWlanIfTable 1 }
+ctsWlanWirelessIf       OBJECT IDENTIFIER ::= { ctsWlanStatus 3 }
+ctsWlanWIFInfo          OBJECT IDENTIFIER ::= { ctsWlanWirelessIf 1 }
+ctsWlanWIFInfoAp        OBJECT IDENTIFIER ::= { ctsWlanWIFInfo 10 }
+ctsWlanWIFInfoStation   OBJECT IDENTIFIER ::= { ctsWlanWIFInfo 11 }
+ctsWlanWIFStatistics    OBJECT IDENTIFIER ::= { ctsWlanWirelessIf 2 }
+
+--
+-- ctsWlanEnvironment(2)
+--
+
+ctsWlanFirmwareVersion OBJECT-TYPE
+    SYNTAX      DisplayString
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Version of Firmware. Package version of wlan-proc."
+    ::= { ctsWlanEnvironment 2 }
+
+ctsWlanHardwareVersion OBJECT-TYPE
+    SYNTAX      DisplayString
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Version of Hardware. Empty when the device is not provisioned."
+    ::= { ctsWlanEnvironment 3 }
+
+ctsWlanEthernetAddress OBJECT-TYPE
+    SYNTAX      DisplayString
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION
+        "Ethernet Address, rendered as colon-separated hex text
+         (for example 'aa:bb:cc:dd:ee:ff').
+         NOTE: the FXE3000 MIB types this object as MacAddress
+         (OCTET STRING (SIZE (6)), six raw bytes). This implementation returns
+         printable text instead, so the type is declared here as it is actually
+         served rather than as FXE3000 declares it. Migrating to the raw 6-byte
+         form requires replacing the pass_persist backend with an AgentX
+         subagent; tracked in wlan-package issue #215."
+    ::= { ctsWlanEnvironment 4 }
+
+ctsWlanWLMacAddress OBJECT-TYPE
+    SYNTAX      DisplayString
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Wireless MAC Address, colon-separated hex text. See
+                 ctsWlanEthernetAddress for the encoding note."
+    ::= { ctsWlanEnvironment 5 }
+
+ctsWlanIPAddress OBJECT-TYPE
+    SYNTAX      IpAddress
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "IP Address of the wired management interface."
+    ::= { ctsWlanEnvironment 6 }
+
+ctsWlanSubnetMask OBJECT-TYPE
+    SYNTAX      IpAddress
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Subnet Mask of the wired management interface."
+    ::= { ctsWlanEnvironment 7 }
+
+ctsWlanDefaultGateway OBJECT-TYPE
+    SYNTAX      IpAddress
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Default Gateway Address of the wired management interface."
+    ::= { ctsWlanEnvironment 8 }
+
+ctsWlanProductNumber OBJECT-TYPE
+    SYNTAX      INTEGER
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Product Number. Zero when unknown or out of Integer32 range."
+    ::= { ctsWlanEnvironment 9 }
+
+--
+-- ctsWlanStatus(3).ctsWlanStatusInfo(1)
+--
+-- These are derived from link state, not read from physical LED hardware.
+--
+
+ctsWlanLedPower OBJECT-TYPE
+    SYNTAX      INTEGER { on(1), off(2) }
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "POWER LED status. Constant on(1): answering SNMP implies power on."
+    ::= { ctsWlanStatusInfo 1 }
+
+ctsWlanLedLan OBJECT-TYPE
+    SYNTAX      INTEGER { on(1), off(2) }
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "LAN LED status, derived from the wired carrier state."
+    ::= { ctsWlanStatusInfo 2 }
+
+ctsWlanLedWlan OBJECT-TYPE
+    SYNTAX      INTEGER { on(1), off(2) }
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "WLAN LED status, derived from the wireless association state."
+    ::= { ctsWlanStatusInfo 3 }
+
+--
+-- ctsWlanStatus(3).ctsWlanIfTable(2)
+--
+-- Degenerate pseudo-table (no INDEX clause), mirroring FXE3000:
+--   instance 1 = wired interface, instance 2 = wireless interface.
+--
+
+ctsWlanIfIndex OBJECT-TYPE
+    SYNTAX      INTEGER
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Interface. 1 = wired, 2 = wireless."
+    ::= { ctsWlanIfEntry 1 }
+
+ctsWlanIfLinkStatus OBJECT-TYPE
+    SYNTAX      INTEGER { up(1), down(2) }
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Link State."
+    ::= { ctsWlanIfEntry 7 }
+
+--
+-- ctsWlanStatus(3).ctsWlanWirelessIf(3).ctsWlanWIFInfo(1)
+--
+
+ctsWlanWIFInfoWirelessMode OBJECT-TYPE
+    SYNTAX      DisplayString
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Wireless LAN Standard, derived from the negotiated tx bitrate
+                 (for example '11ax')."
+    ::= { ctsWlanWIFInfo 1 }
+
+ctsWlanWIFInfoWLM OBJECT-TYPE
+    SYNTAX      DisplayString
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Wireless Link Mode. Constant 'managed': this product is a station."
+    ::= { ctsWlanWIFInfo 2 }
+
+ctsWlanWIFInfoUnitType OBJECT-TYPE
+    SYNTAX      DisplayString
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Unit Type. Constant 'Station'."
+    ::= { ctsWlanWIFInfo 3 }
+
+ctsWlanWIFInfoWLMacAddress OBJECT-TYPE
+    SYNTAX      DisplayString
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Wireless MAC Address, colon-separated hex text. See
+                 ctsWlanEthernetAddress for the encoding note."
+    ::= { ctsWlanWIFInfo 4 }
+
+ctsWlanWIFInfoBandWidth OBJECT-TYPE
+    SYNTAX      DisplayString
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Band Width of the current association (for example '80 MHz')."
+    ::= { ctsWlanWIFInfo 5 }
+
+--
+-- ctsWlanWIFInfo(1).ctsWlanWIFInfoAp(10)
+--
+-- FXE3000 groups these under the access-point role. This product is a station,
+-- so they report the ACCESS POINT IT IS ASSOCIATED WITH. They are served because
+-- the ChannelChange notification names ctsWlanWIFInfoApChannel in its OBJECTS
+-- clause: a manager receiving that trap must be able to GET the same OID.
+--
+
+ctsWlanWIFInfoApEssId OBJECT-TYPE
+    SYNTAX      DisplayString
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "ESSID of the associated access point. Same value as
+                 ctsWlanWIFInfoStaEssId."
+    ::= { ctsWlanWIFInfoAp 1 }
+
+ctsWlanWIFInfoApChannel OBJECT-TYPE
+    SYNTAX      INTEGER
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Channel Number currently in use. Same value as
+                 ctsWlanWIFInfoStaChannel. Carried by ctsWlanTrapChannelChange."
+    ::= { ctsWlanWIFInfoAp 2 }
+
+--
+-- ctsWlanWIFInfo(1).ctsWlanWIFInfoStation(11)
+--
+
+ctsWlanWIFInfoStaLoginState OBJECT-TYPE
+    SYNTAX      INTEGER { notConnected(1), connected(2) }
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Login State."
+    ::= { ctsWlanWIFInfoStation 1 }
+
+ctsWlanWIFInfoStaApMacAddress OBJECT-TYPE
+    SYNTAX      DisplayString
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "MAC Address of login AP (BSSID), colon-separated hex text. See
+                 ctsWlanEthernetAddress for the encoding note."
+    ::= { ctsWlanWIFInfoStation 2 }
+
+ctsWlanWIFInfoStaEssId OBJECT-TYPE
+    SYNTAX      DisplayString
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "ESSID of the associated access point."
+    ::= { ctsWlanWIFInfoStation 3 }
+
+ctsWlanWIFInfoStaChannel OBJECT-TYPE
+    SYNTAX      INTEGER
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Channel Number."
+    ::= { ctsWlanWIFInfoStation 4 }
+
+ctsWlanWIFInfoStaTxRate OBJECT-TYPE
+    SYNTAX      INTEGER
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Tx Rate in Mbps."
+    ::= { ctsWlanWIFInfoStation 5 }
+
+ctsWlanWIFInfoStaRxRate OBJECT-TYPE
+    SYNTAX      INTEGER
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Rx Rate in Mbps."
+    ::= { ctsWlanWIFInfoStation 6 }
+
+ctsWlanWIFInfoStaRssi OBJECT-TYPE
+    SYNTAX      INTEGER
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "RSSI in dBm (negative). Zero when not associated."
+    ::= { ctsWlanWIFInfoStation 7 }
+
+ctsWlanWIFInfoStaSupplicantState OBJECT-TYPE
+    SYNTAX      INTEGER {
+                    invalid(1),
+                    success(2),
+                    failure(3),
+                    authenticating(4)
+                }
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Supplicant State."
+    ::= { ctsWlanWIFInfoStation 8 }
+
+--
+-- ctsWlanWirelessIf(3).ctsWlanWIFStatistics(2)
+--
+-- Counters are absent (noSuchInstance) rather than zero when the driver does not
+-- report them, because a zero would look like a counter reset to a manager.
+-- Octet counters reset to zero on reassociation, which a manager may observe as
+-- a spurious Counter32 wrap; filter on deltas accordingly.
+--
+
+ctsWlanWIFStatTxUnicast OBJECT-TYPE
+    SYNTAX      Counter32
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Number of tx unicast packets. Derived by subtracting group
+                 frames from total transmitted frames; management frames and
+                 fragments are included, so this may over-count."
+    ::= { ctsWlanWIFStatistics 1 }
+
+ctsWlanWIFStatTxMulticast OBJECT-TYPE
+    SYNTAX      Counter32
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Number of tx multicast packets."
+    ::= { ctsWlanWIFStatistics 2 }
+
+ctsWlanWIFStatTxUniOctets OBJECT-TYPE
+    SYNTAX      Counter32
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Number of tx unicast octets. Approximated from interface tx
+                 bytes, so multicast octets are included."
+    ::= { ctsWlanWIFStatistics 3 }
+
+ctsWlanWIFStatTxShortRetries OBJECT-TYPE
+    SYNTAX      Counter32
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Number of tx signal retries, taken from dot11RetryCount. This
+                 does not map one-to-one onto the 802.11 short-retry definition."
+    ::= { ctsWlanWIFStatistics 5 }
+
+ctsWlanWIFStatTxLongRetries OBJECT-TYPE
+    SYNTAX      Counter32
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Number of tx multiple retries, taken from
+                 dot11MultipleRetryCount. See ctsWlanWIFStatTxShortRetries."
+    ::= { ctsWlanWIFStatistics 6 }
+
+ctsWlanWIFStatRxUnicast OBJECT-TYPE
+    SYNTAX      Counter32
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Number of rx unicast packets. Derived by subtracting group
+                 frames from received fragments; see ctsWlanWIFStatTxUnicast."
+    ::= { ctsWlanWIFStatistics 8 }
+
+ctsWlanWIFStatRxMulticast OBJECT-TYPE
+    SYNTAX      Counter32
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Number of rx multicast packets."
+    ::= { ctsWlanWIFStatistics 9 }
+
+ctsWlanWIFStatRxUniOctets OBJECT-TYPE
+    SYNTAX      Counter32
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Number of rx unicast octets. Approximated from interface rx
+                 bytes, so multicast octets are included."
+    ::= { ctsWlanWIFStatistics 10 }
+
+ctsWlanWIFStatRxHwFCSErrors OBJECT-TYPE
+    SYNTAX      Counter32
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION "Number of rx hardware FCS errors. Absolute value accumulates
+                 from boot; interpret as a delta."
+    ::= { ctsWlanWIFStatistics 13 }
+
+--
+-- ctsWlanMIB(1).ctsWlanTraps(1)
+--
+
+ctsWlanTrapLinkStatusChange NOTIFICATION-TYPE
+    OBJECTS { ctsWlanIfIndex, ctsWlanIfLinkStatus }
+    STATUS  current
+    DESCRIPTION "Trap of the link state transition."
+    ::= { ctsWlanTraps 1 }
+
+ctsWlanTrapChannelChange NOTIFICATION-TYPE
+    OBJECTS { ctsWlanWIFInfoApChannel }
+    STATUS  current
+    DESCRIPTION "Trap of the DFS channel change."
+    ::= { ctsWlanTraps 2 }
+
+--
+-- ////////////////////////////////////////////////////////////////////////////
+--  Objects defined by the CONTEC FXE3000 MIB but NOT served by this product.
+--  Listed for traceability; polling them returns noSuchInstance.
+--
+--    .2.1        LoaderVersion        bootloader does not expose a version
+--                                     (no fw_printenv, nothing in device-tree)
+--    .3.1.4/.5   DipSwitch1/2         no physical DIP switch on this platform
+--    .3.3.1.10.3 ApLoginNum           counted by an access point; a station
+--                                     cannot know it
+--    .3.3.2.4    TxMultiOctets        not reported by the driver
+--    .3.3.2.7    TxFifoErrors         not reported by the driver
+--    .3.3.2.11   RxMultiOctets        not reported by the driver
+--    .3.3.2.12   RxFifoErrors         not reported by the driver
+--    .3.3.5.x    WIFCert (8 objects)  EAP-TLS certificates; this product does
+--                                     not use EAP authentication
+--    .3.3.6.x    ConnectedNodeTable   table of stations associated to an access
+--                                     point; not applicable to a station
+--    .1.1.3      TrapInitDipsw        no physical DIP switch
+-- ////////////////////////////////////////////////////////////////////////////
+
+END
