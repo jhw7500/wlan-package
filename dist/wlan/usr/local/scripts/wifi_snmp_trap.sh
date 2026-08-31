@@ -1,12 +1,15 @@
 #!/bin/bash
-# wifi_snmp_trap.sh - CONTEC FXE3000 SNMP 트랩 송신 헬퍼
+# wifi_snmp_trap.sh - CanTops CTS-WLAN SNMP 트랩 송신 헬퍼
 # Usage: wifi_snmp_trap.sh link up|down
 #        wifi_snmp_trap.sh channel <ch>
 # wifi_init_conf.json 의 snmp.trap.{enabled,dest,community,version} 를 읽어
 # 활성 시 snmptrap 으로 vendor 트랩을 송신한다. 비활성/미설정/실패는 조용히 exit 0.
 
 CONF="${WIFI_INIT_CONF:-/usr/local/etc/wifi_init_conf.json}"
-FXE=".1.3.6.1.4.1.672.65"
+# 트랩은 CanTops 정본 루트(.66620.1 = PEN 66620 · product 1 CTS-WLAN)로만 보낸다.
+# 폴링(pass_persist)은 CONTEC .672.65 와 병행하지만 트랩까지 병행하면 두 루트를
+# 모두 등록한 NMS 가 같은 이벤트를 중복 수신하므로 트랩은 정본 단독으로 둔다.
+CTS=".1.3.6.1.4.1.66620.1"
 tag=$(basename "$0")
 
 # 설정·jq 부재 → no-op
@@ -43,15 +46,15 @@ case "$1" in
             down) st=2 ;;
             *)    exit 0 ;;
         esac
-        send '' "$FXE.1.1.1" \
-            "$FXE.3.2.1.1.2" i 2 \
-            "$FXE.3.2.1.7.2" i "$st"
+        send '' "$CTS.1.1.1" \
+            "$CTS.3.2.1.1.2" i 2 \
+            "$CTS.3.2.1.7.2" i "$st"
         ;;
     channel)
         ch="$2"
         [ -n "$ch" ] || exit 0
-        send '' "$FXE.1.1.2" \
-            "$FXE.3.3.1.10.2.0" i "$ch"
+        send '' "$CTS.1.1.2" \
+            "$CTS.3.3.1.10.2.0" i "$ch"
         ;;
     *) exit 0 ;;
 esac
