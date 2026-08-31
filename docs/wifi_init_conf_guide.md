@@ -971,15 +971,19 @@ durable backup을 별도 staging으로 복사해 atomic rename하고 복원 파�
 > 데몬이 읽지 않으므로 무해(stale)하다. `PREDICTIVE_ROAM` 은 2층 판정 계획의 RSSI 이력
 > 소스라 보류로 남았다.
 
-### 11.4b antcfg - FW Tx/Rx 안테나 경로
+### 11.4b antcfg - FW Tx/Rx 안테나 경로 (물리 전용)
 
 **사용 스크립트**: `wifi_init.sh` → `wifi_fw_config_lib.sh`
 
-association 전에 `mlanutl <iface> antcfg <tx> [rx]`로 FW의 Tx/Rx 경로를 지정한다.
-섹션 자체는 opt-in이다. **imx93/543 제품**의 mlan0 기본은 p149.115 scan-return TX wedge
-회피를 위해 `tx=0x0303`, `rx=0x0101`을 활성화하고 mlan1은 비활성 상태다. **imx8/505**는
-matching `antcfgnss` GET ABI로 qualification되지 않았으므로 `wifi_board_config.sh`가 이
-strict 제품 profile을 `enabled=false`, 빈 Tx/Rx, verify 없음으로 중화한다.
+association 전에 `mlanutl <iface> antcfg <tx> [rx]`로 FW의 **물리** Tx/Rx 경로를 지정한다.
+섹션 자체는 opt-in이다. **imx93/543 제품 기본은 mlan0/mlan1 모두 비활성(비움)** — 부팅
+경로에서 RF_ANTENNA HostCmd를 발행하지 않고 물리를 FW 기본(2x2)에 둔다(driver#41).
+광고 NSS intent는 §11.4c `antcfgnss`가 담당한다. physical 1-path(예: `0x0101/0x0101`)는
+p149.115 scan wedge cofactor이므로, 물리 명령 경로 자체를 부팅에서 제거한 것이 새 회피
+형태다. 이 섹션을 켜서 SET하면 안테나 마스크로부터 intent(`user_htstream`)가 재계산돼
+antcfgnss 값을 **덮어쓴다** — 켜야 한다면 적용 순서는 항상 antcfg → antcfgnss다(런타임
+수동 SET도 동일; 연결 중 antcfg SET은 FW가 거부하면서도 intent는 갱신되는 부작용이 실측돼
+있으니 피한다).
 
 제품 profile의 보드 판정은 persisted JSON이 아니라 실제 `soc_id`다. JSON의
 `BOARD_TYPE`/`BUS_TYPE`/`mcp.iio_device`가 감지값과 다르면 `crit` 로그 후 원자
@@ -989,32 +993,31 @@ strict profile을 적용하지 않으며 custom antcfg/MCS는 보존한다.
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `enabled` | bool | mlan0=`true`, mlan1=`false` | 적용 ON/OFF. `false`면 SET 자체를 하지 않는다 |
-| `tx` | string | mlan0=`"0x0303"`, mlan1=`""` | Tx 경로 비트맵. 10진 또는 `0x` 16진, `1`~`0xFFFF`. `rx`가 비면 Tx/Rx 공통 |
-| `rx` | string | mlan0=`"0x0101"`, mlan1=`""` | Rx 경로 비트맵. 빈 문자열이면 인자를 생략한다 |
-| `verify.physical_tx` | string | mlan0=`"0x0303"` | SET 뒤 기대하는 FW physical Tx path |
-| `verify.physical_rx` | string | mlan0=`"0x0303"` | SET 뒤 기대하는 FW physical Rx path |
-| `verify.user_htstream` | string | mlan0=`"0x2121"` | SET 뒤 기대하는 host NSS intent. matching 543 `mlanutl` 필요 |
+| `enabled` | bool | mlan0=`false`, mlan1=`false` | 적용 ON/OFF. 제품 기본은 비활성 — SET 자체를 하지 않는다 |
+| `tx` | string | mlan0=`""`, mlan1=`""` | Tx 경로 비트맵. 10진 또는 `0x` 16진, `1`~`0xFFFF`. `rx`가 비면 Tx/Rx 공통 |
+| `rx` | string | mlan0=`""`, mlan1=`""` | Rx 경로 비트맵. 빈 문자열이면 인자를 생략한다 |
+| `verify.physical_tx` | string | (선택) | SET 뒤 기대하는 FW physical Tx path |
+| `verify.physical_rx` | string | (선택) | SET 뒤 기대하는 FW physical Rx path |
+| `verify.user_htstream` | string | (선택) | SET 뒤 기대하는 host NSS intent. matching 543 `mlanutl` 필요 |
 
-`verify`가 없으면 기존처럼 SET 후 GET 결과를 로그로만 남긴다. `verify`가 있으면 세 하위 키가
-모두 필수이며, 어느 하나라도 파싱되지 않거나 기대값과 다르면 `wifi_init`은 supplicant 시작 전에
-실패한다. 비대칭 요청 `0x0303/0x0101`은 FW physical GET에서 `0x0303/0x0303`으로 정규화되므로
-요청 Rx와 physical Rx를 직접 비교하지 않는다. 논리적 양 밴드 Tx 2SS/Rx 1SS 의도는
-`user_htstream=0x2121`로 별도 검증한다.
-릴리즈 preflight는 staging된 imx93 `mlanutl`에 이 조회용 `antcfgnss` ABI marker가 없으면
-패키징을 거부한다.
+이 섹션을 커스텀으로 켠 경우: `verify`가 없으면 SET 후 GET 결과를 로그로만 남기고,
+`verify`가 있으면 세 하위 키가 모두 필수이며 어느 하나라도 파싱되지 않거나 기대값과 다르면
+`wifi_init`은 supplicant 시작 전에 실패한다. 같은 계약을 §11.4c의 `fallback_antcfg`(구버전
+드라이버 위임 경로)가 그대로 재사용한다.
 
-imx93에서는 이 값만 개별 노브가 아니라 `mcs_tier enabled + HT/VHT/HE 7`, mlan1 antcfg
-비활성과 묶인 **제품 안전 불변식**이다. `wifi_init.sh`가 association 전에 전체 조합을
-검사하며 하나라도 바뀌면 supplicant를 시작하지 않는다. 따라서 WebUI는 imx93에서 이
-antcfg/MCS 제품값을 읽기 전용으로 표시해야 한다.
+imx93에서는 **antcfg 비활성 + antcfgnss `0x2121` + `mcs_tier enabled + HT/VHT/HE 7` +
+mlan1 antcfg/antcfgnss 비활성**이 묶인 **제품 안전 불변식**이다. `wifi_init.sh`가
+association 전에 전체 조합을 검사하며 하나라도 바뀌면 supplicant를 시작하지 않는다.
+따라서 WebUI는 imx93에서 이 antcfg/antcfgnss/MCS 제품값을 읽기 전용으로 표시해야 한다.
 
 업그레이드에서는 active JSON 우선 병합 때문에 템플릿 변경만으로 과거 값이 바뀌지 않는다.
-`postinst`가 병합 직후 과거 제품 기본 `enabled=false, tx="", rx=""`, 알려진 physical 1x1
-`0x0101`, 또는 이미 선택된 `0x0303/0x0101` 요청만 위 검증 계약으로 멱등 승격한다. 그 밖의
-명시적 안테나 경로 값은 운영자 설정으로 보고 보존한다. deep merge가 그런 커스텀 값에
-템플릿의 제품용 `verify`를 자동 주입한 경우에는 주입된 계약만 제거해 기존 log-only 동작을
-유지한다.
+`postinst`가 병합 직후 과거 제품 이력 — 구제품 비대칭 계약 `0x0303/0x0101(+verify)`,
+그 이전의 `enabled=false, tx="", rx=""`, 알려진 physical 1x1 `0x0101` — 만
+**새 계약(antcfg 비움 + antcfgnss `0x2121` 주입)** 으로 멱등 승격한다. 그 밖의 명시적
+안테나 경로 값은 운영자 설정으로 보고 보존하며 antcfgnss도 주입하지 않는다(이 경우 제품
+불변식 검사에 걸리므로 의도적 커스텀은 불변식까지 이해한 구성이어야 한다). deep merge가
+커스텀 값에 템플릿의 제품용 `verify`를 자동 주입한 경우에는 주입된 계약만 제거해 기존
+log-only 동작을 유지한다.
 
 이 마이그레이션은 **forward-only safety migration**이다. 새 패키지로 승격된 설정을 구
 패키지가 이해하는 값으로 자동 역변환하지 않는다. downgrade가 필요하면 해당 구 릴리스와
@@ -1048,6 +1051,35 @@ antcfg/MCS 제품값을 읽기 전용으로 표시해야 한다.
 > **`0` 거부**: `tx`/`rx`에 `0`을 넣으면 어떤 경로도 선택되지 않아 RF가 죽는다. `mlanutl`이 성공을
 > 보고할 수 있고 이 기기는 무선이 유일한 접속 경로이므로, 설정 검증 단계에서 거부하고 섹션 전체를
 > 건너뛴다(FW 기본 경로 유지). 범위를 벗어난 값·비16진 문자열도 같다.
+
+### 11.4c antcfgnss - 광고 NSS intent (user_htstream)
+
+**사용 스크립트**: `wifi_init.sh` → `wifi_fw_config_lib.sh` (antcfg 다음 순서로 적용)
+
+association 전에 `mlanutl <iface> antcfgnss <value>`로 광고 NSS intent(`user_htstream`)를
+직접 기록한다(driver#41, ported b75741f+). **RF_ANTENNA HostCmd를 발행하지 않아 물리
+안테나는 불변**이며, 니블 배치는 `[15:12]`=5G Tx, `[11:8]`=5G Rx, `[7:4]`=2G Tx,
+`[3:0]`=2G Rx다. **imx93 제품값 `0x2121`(양 밴드 Tx2/Rx1)** — 실기 2×2 매트릭스 실측으로
+**실효 TX NSS = min(Tx니블, Rx니블)** 이 확인돼 있어 TX NSS1이 보장된다. 반영은 다음
+(re)association부터다.
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| `enabled` | bool | mlan0=`true`, mlan1=`false` | 적용 ON/OFF. imx93 mlan0은 제품 불변식상 `true` 고정 |
+| `value` | string | mlan0=`"0x2121"` | `0x` 접두 **필수**(드라이버가 강제 — 진수 혼동·파서 fail-open 차단). 지원 밴드 니블은 `1..hw 상한`(0은 드라이버가 거부) |
+| `verify.user_htstream` | string | mlan0=`"0x2121"` | SET 후 read-back 기대값. 불일치 시 association 중단(fail-closed) |
+| `fallback_antcfg` | object | 제품값 `tx=0x0303, rx=0x0101 + verify` | antcfgnss SET 미지원 구버전 드라이버에서 위임할 레거시 antcfg 값. 위임 시 §11.4b의 antcfg 검증 계약을 그대로 재사용한다 |
+
+구버전 드라이버 호환: `antcfgnss <value>` SET이 실패하면(구 ported의 GET 전용 ABI 포함)
+`fallback_antcfg`로 레거시 antcfg 경로에 위임한다 — 과도기 fleet에서 어느 조합이든
+부팅이 Rx NSS1 intent 없이 지나가지 않도록 fail-closed를 유지한다. 릴리즈 preflight는
+staging된 imx93 `mlanutl`에 `antcfgnss` ABI marker가 없으면 패키징을 거부한다.
+
+> **⚠️ 어댑터 단위 상태**: `user_htstream`은 라디오(어댑터) 하나의 상태다. antcfg와 같은
+> last-wins 함정이 있어 mlan1은 비활성을 유지한다(제품 불변식이 검사).
+
+> **⚠️ 순서 제약**: 이후의 `antcfg <mask>` SET과 FW reload는 안테나 마스크로부터
+> intent를 재계산해 이 값을 덮어쓴다. 적용 순서는 항상 antcfg(물리) → antcfgnss(광고)다.
 
 ### 11.5 rate_adapt - FW Rate Adaptation
 
