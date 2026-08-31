@@ -56,7 +56,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 
 `x-ui-editable-by-board`가 있으면 현재 `global.BOARD_TYPE` 키의 값으로 해당 맵을 먼저
 적용한다. 키를 지원하지 않는 구 UI는 안전한 fallback인 `x-ui-editable`을 사용한다.
-현재 이 조건부 계약은 `mlan0.antcfg.{enabled,tx,rx}`와
+현재 이 조건부 계약은 `mlan0.antcfg.{enabled,tx,rx}`, `mlan0.antcfgnss.{enabled,value}`와
 `mlan0.mcs_tier.{enabled,ht,vht,he}`에 적용되며 `imx93=no`, `imx8mm=caution`이다.
 
 ---
@@ -382,23 +382,26 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `net_rx` | MGMT 프레임 로깅 비트맵 | int | `0` | `0`\|`2`\|`3`\|`6`\|`7` (bit[1:0]=RX모드, bit[2]=TX로그) | caution | reboot | mod_para 블록 `net_rx=`. 로그는 커널 링버퍼→10초마다 flush |
 | `mgmt_hex_dump_enable` | MGMT hex dump 로깅 | bool | `false` | true\|false | caution | reboot | 디버그용. mod_para 블록 `mgmt_hex_dump=1/0` |
 | `thermal_mgmt` | FW 열관리 | bool | `true` | true\|false | caution | boot | FW thermal management(SUBID 0x113). 명시적 false만 disable |
-| `antcfg.enabled` | 안테나 경로 적용 | bool | `mlan0=true / mlan1=false` | true\|false | imx93=no / imx8=caution | boot | 표의 기본값은 imx93 package template 기준. imx93 mlan0 제품값은 p149.115 scan wedge 회피 안전 불변식이라 편집 금지. **어댑터 단위 설정**이라 mlan1 enable도 imx93 부팅에서 거부된다. imx8은 strict verify profile을 보드 감지 시 중화한다. `global.ANT_TYPE`과는 별개 |
-| `antcfg.tx` | Tx 경로 비트맵 | string | `mlan0="0x0303" / mlan1=""` | 10진 또는 `0x` 16진, 1..0xFFFF (0 거부) | imx93=no / imx8=caution | boot | 표의 기본값은 imx93 template이며 imx8 strict profile은 빈값으로 중화된다. `rx`가 비면 Tx/Rx 공통. 9098은 LOW BYTE=2G / HIGH BYTE=5G, 각 바이트 bit0=path A·bit1=path B |
-| `antcfg.rx` | Rx 경로 비트맵 | string | `mlan0="0x0101" / mlan1=""` | 빈값 또는 tx와 동일 범위 | imx93=no / imx8=caution | boot | imx8 strict profile은 빈값으로 중화된다. imx93의 0x0101은 host Rx NSS1 의도이며 FW physical Rx GET은 0x0303으로 정규화된다 |
-| `antcfg.verify.physical_tx` | antcfg physical Tx 기대값 | string | `mlan0="0x0303" / mlan1=""` | 10진 또는 `0x` 16진, 1..0xFFFF | no | boot | SET 후 FW physical Tx GET 검증값. verify가 존재하면 세 verify 필드 모두 필수이며 UI 편집 금지 |
-| `antcfg.verify.physical_rx` | antcfg physical Rx 기대값 | string | `mlan0="0x0303" / mlan1=""` | 10진 또는 `0x` 16진, 1..0xFFFF | no | boot | p149.115의 비대칭 요청 정규화 결과를 검증한다 |
-| `antcfg.verify.user_htstream` | antcfg host NSS 기대값 | string | `mlan0="0x2121" / mlan1=""` | 10진 또는 `0x` 16진, 1..0xFFFF | no | boot | matching 543 mlanutl의 `antcfgnss` 조회 결과. 0x2121=양 밴드 Tx 2SS/Rx 1SS. 불일치·미지원이면 association 중단 |
+| `antcfg.enabled` | 물리 안테나 경로 적용 | bool | `mlan0=false / mlan1=false` | true\|false | imx93=no / imx8=caution | boot | **제품 기본 비활성(비움)** — 부팅에서 RF_ANTENNA를 발행하지 않고 물리를 FW 기본(2x2)에 둔다(driver#41). physical 1-path가 p149.115 scan wedge cofactor라 비활성 자체가 안전 불변식. 켜면 intent가 재계산돼 antcfgnss를 덮어쓴다(순서: antcfg→antcfgnss). **어댑터 단위 설정**. `global.ANT_TYPE`과는 별개 |
+| `antcfg.tx` | Tx 경로 비트맵 | string | `mlan0="" / mlan1=""` | 빈값, 또는 10진/`0x` 16진 1..0xFFFF (0 거부) | imx93=no / imx8=caution | boot | 커스텀으로 켤 때만 사용. `rx`가 비면 Tx/Rx 공통. 9098은 LOW BYTE=2G / HIGH BYTE=5G, 각 바이트 bit0=path A·bit1=path B |
+| `antcfg.rx` | Rx 경로 비트맵 | string | `mlan0="" / mlan1=""` | 빈값 또는 tx와 동일 범위 | imx93=no / imx8=caution | boot | 커스텀으로 켤 때만 사용 |
+| `antcfg.verify.*` | antcfg 검증 계약(선택) | string×3 | (템플릿 없음) | 10진 또는 `0x` 16진, 1..0xFFFF | no | boot | 커스텀/fallback 경로에서만 의미. 존재하면 physical_tx/physical_rx/user_htstream 3필드 모두 필수, 불일치 시 association 중단 |
+| `antcfgnss.enabled` | 광고 NSS intent 적용 | bool | `mlan0=true / mlan1=false` | true\|false | imx93=no / imx8=caution | boot | imx93 mlan0 제품 불변식상 `true` 고정, mlan1은 어댑터 덮어쓰기 방지로 `false` 고정(부팅이 검사). RF_ANTENNA 미발행 — 물리 불변 |
+| `antcfgnss.value` | user_htstream 값 | string | `mlan0="0x2121" / mlan1=""` | `0x` 접두 필수, 1..0xFFFF | imx93=no / imx8=caution | boot | 니블 [15:12]5Gtx/[11:8]5Grx/[7:4]2Gtx/[3:0]2Grx. 0x2121=Tx2/Rx1 — 실효 TX NSS=min(Tx,Rx니블) 실측으로 TX NSS1 보장. 반영은 다음 (re)association |
+| `antcfgnss.verify.user_htstream` | antcfgnss read-back 기대값 | string | `mlan0="0x2121"` | `0x` 접두, 1..0xFFFF | no | boot | 불일치 시 association 중단(fail-closed) |
+| `antcfgnss.fallback_antcfg.*` | 구버전 드라이버 위임값 | object | 제품값 `0x0303/0x0101+verify` | §11.4b 계약 | no | boot | antcfgnss SET 미지원 드라이버에서 레거시 antcfg 경로로 위임(기존 검증 재사용). UI 편집 금지 |
 | `rate_adapt.enabled` | 레이트 적응 적용 | bool | `true` | true\|false | caution | boot | false면 `rate_adapt_cfg`를 SET하지 않는다 — 남는 값은 FW 기본값이 아니라 마지막 SET값이다(콜드부팅 후에만 FW 기본값). 키 부재 시 true(종전 동작). `wifi <iface> rate`로 값을 바꿔도 이 값이 false면 부팅 시 적용되지 않는다 |
 | `rate_adapt.mode` | 레이트 적응 모드 | int | `1` | `0`=legacy\|`1`=SR | caution | boot | section 존재 시 mode/low/high/interval 4개 필수(enabled는 선택) |
 | `rate_adapt.low_thresh` | 레이트 적응 low 임계 | int | `70` | 0..100 또는 255 | caution | boot | static은 low<high, dynamic은 low/high 모두 255 |
 | `rate_adapt.high_thresh` | 레이트 적응 high 임계 | int | `90` | 0..100 또는 255 | caution | boot | 70/90은 실기 결과에 따라 바뀌는 시험값 |
 | `rate_adapt.interval_ms` | 레이트 적응 평가주기(ms) | int | `100` | 양수, 10ms 배수 | caution | boot | association 전 SET+GET. 종전 "mlan0 roam·mlan1 AC association 완료 시 FW 30/50 복귀 실측" 기재는 2026-08-31 재검증에서 **미재현** — 가이드 §11.5 정정 노트 참조 |
 
-**비고 (antcfg 업그레이드)** — `postinst`는 active 우선 deep merge 뒤 과거 제품 기본
-`false/empty`, 알려진 physical 1x1 `0x0101`, 이미 선택된 `0x0303/0x0101`만 새 검증 계약으로
-멱등 승격한다. 다른 명시적 Tx/Rx 조합은 사용자 커스텀으로 보존하며, deep merge가 거기에
-제품용 verify를 주입했으면 그 verify만 제거한다. verify 3개 필드는 제품 호환성 계약이므로
-WebUI에서 개별 편집하지 않는다.
+**비고 (antcfg 업그레이드)** — `postinst`는 active 우선 deep merge 뒤 과거 제품 이력
+(구제품 비대칭 계약 `0x0303/0x0101(+verify)`, 그 이전의 `false/empty`, 알려진 physical 1x1
+`0x0101`)만 **새 계약 — antcfg 비움 + antcfgnss `0x2121` 주입 — 으로** 멱등 승격한다.
+다른 명시적 Tx/Rx 조합은 사용자 커스텀으로 보존하며(antcfgnss 미주입), deep merge가 거기에
+제품용 verify를 주입했으면 그 verify만 제거한다. verify/fallback 필드는 제품 호환성
+계약이므로 WebUI에서 개별 편집하지 않는다.
 이 처리는 **forward-only safety migration**이며 downgrade 시 구 릴리스와 함께 저장한 구
 설정/backup을 복원해야 한다. imx93에서는 antcfg와 mlan0 MCS 7 조합 전체가 association 전
 불변식이므로 해당 필드들을 읽기 전용으로 표시한다. imx8에서는 strict imx93 profile을
