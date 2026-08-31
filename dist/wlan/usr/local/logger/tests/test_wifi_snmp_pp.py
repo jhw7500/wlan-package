@@ -791,3 +791,21 @@ def test_mib_declares_mac_objects_as_displaystring():
         m = _re.search(r'^%s OBJECT-TYPE\s*\n\s*SYNTAX\s+(\S+)' % name, txt, _re.M)
         assert m, "%s 의 SYNTAX 절을 찾지 못함" % name
         assert m.group(1) == "DisplayString", "%s SYNTAX=%s (DisplayString 이어야 함)" % (name, m.group(1))
+
+
+def test_mib_uses_smiv2_max_access_not_smiv1_access():
+    """SNMPv2-SMI 를 import 하는 모듈이므로 각 OBJECT-TYPE 은 SMIv1 `ACCESS` 가 아니라
+    SMIv2 `MAX-ACCESS`(RFC 2578) 를 써야 한다.
+
+    net-snmp 파서는 둘 다 받아들여 snmptranslate/snmpwalk 로는 잡히지 않지만, 엄격한 NMS
+    MIB 컴파일러는 SMIv1 문법을 거부할 수 있다 — 그러면 MIB 를 배포한 목적 자체가 무산된다.
+    """
+    import io as _io, re as _re
+    txt = _io.open(MIB_PATH, encoding="utf-8").read()
+    assert "SNMPv2-SMI" in txt, "SMIv2 모듈이 아니면 이 검사의 전제가 다르다"
+    stray = _re.findall(r'^\s*ACCESS\s+\S+', txt, _re.M)
+    assert stray == [], "SMIv1 ACCESS 절이 남아 있다: %s" % stray
+    n_obj = len(_re.findall(r'^\w+ OBJECT-TYPE\s*$', txt, _re.M))
+    n_acc = len(_re.findall(r'^\s*MAX-ACCESS\s+\S+', txt, _re.M))
+    assert n_obj > 0 and n_obj == n_acc, \
+        "OBJECT-TYPE %d개 중 MAX-ACCESS 절은 %d개 — 누락된 객체가 있다" % (n_obj, n_acc)
