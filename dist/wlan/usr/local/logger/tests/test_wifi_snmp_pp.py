@@ -180,12 +180,13 @@ def test_wireless_info_disconnected():
 
 # --- 맵 크기 / GET / GETNEXT -----------------------------------------------
 
-def test_map_has_28_instances():
+def test_map_has_30_instances():
     # Phase1 19 + Phase2a 8(LED3 + WirelessMode + WLM + StaTxRate + StaRxRate +
-    # SupplicantState) + ProductNumber(.2.9) = 28 인스턴스.
+    # SupplicantState) + ProductNumber(.2.9) + AP그룹 2(.3.3.1.10.1 ApEssId /
+    # .10.2 ApChannel) = 30 인스턴스.
     om = _connected_map()
-    assert len(om) == 28, (
-        "기대 28 인스턴스, 실제 %d. Phase2 OID 추가 시 이 기대값 갱신 필요: %s"
+    assert len(om) == 30, (
+        "기대 30 인스턴스, 실제 %d. OID 추가 시 이 기대값 갱신 필요: %s"
         % (len(om), sorted(om, key=pp.oid_key))
     )
 
@@ -231,7 +232,7 @@ def test_getnext_full_walk_covers_all_in_order():
         walked.append(res[0])
         cur = res[0]
     assert walked == sorted_oids          # 전부, 수치 오름차순으로
-    assert len(walked) == 28
+    assert len(walked) == 30
 
 
 def test_getnext_last_oid_returns_none():
@@ -670,3 +671,39 @@ def test_main_invalid_argv_root_falls_back_not_silently_dead():
     # ValueError 를 던져 프로세스는 살아있는데 아무것도 서빙하지 않는 조용한 고장이 된다.
     out = _run_main(["get\n", pp.FXE3000 + ".3.1.1.0\n", "\n"], base_arg="tests/bogus.py")
     assert out == [pp.FXE3000 + ".3.1.1.0", "integer", "1"]
+
+
+# --- CONTEC 정합: AP 그룹(.3.3.1.10.x) + 트랩/폴링 교차 검증 --------------------
+
+def test_trap_varbind_oids_exist_in_polling_map():
+    """트랩 varbind 로 보내는 OID 는 폴링에서도 GET 가능해야 한다.
+
+    MIB 의 ChannelChange 는 OBJECTS { fxe3000WIFInfoApChannel } = .3.3.1.10.2 를 지정한다.
+    트랩만 그 OID 를 쓰고 폴링이 서빙하지 않으면, 트랩을 받은 NMS 가 해당 OID 를 조회할 때
+    noSuchInstance 가 난다.
+    """
+    import io as _io, re as _re
+    sh_path = os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "wifi_snmp_trap.sh")
+    sh = _io.open(sh_path, encoding="utf-8").read()
+    oids = set(_re.findall(r'\$CTS(\.[0-9.]+)', sh))
+    varbinds = {o for o in oids if not o.startswith(".1.1.")}   # trap-OID 자체는 폴링 대상 아님
+    assert varbinds, "트랩 varbind 를 찾지 못함 — 스크립트 구조가 바뀌었는지 확인"
+    om = pp.build_oid_map(base=pp.CTS_WLAN, **_sources())
+    missing = [v for v in sorted(varbinds) if pp.CTS_WLAN + v not in om]
+    assert missing == [], "트랩이 보내지만 폴링에 없는 OID: %s" % missing
+
+
+def test_ap_group_mirrors_station_values():
+    # .10.x(AP 그룹)는 STA 문맥에서 '접속 중인 AP 의 SSID/채널' — Sta 계열과 같은 값
+    om = pp.build_oid_map(base=pp.CTS_WLAN, **_sources())
+    B = pp.CTS_WLAN
+    assert om[B + ".3.3.1.10.1.0"] == om[B + ".3.3.1.11.3.0"]   # ApEssId  == StaEssId
+    assert om[B + ".3.3.1.10.2.0"] == om[B + ".3.3.1.11.4.0"]   # ApChannel == StaChannel
+    assert om[B + ".3.3.1.10.1.0"][0] == "string"
+    assert om[B + ".3.3.1.10.2.0"][0] == "integer"
+
+
+def test_ap_login_num_not_exposed():
+    # .10.3 ApLoginNum 은 AP 가 세는 값 — STA 는 알 수 없어 미노출 유지
+    om = pp.build_oid_map(base=pp.CTS_WLAN, **_sources())
+    assert pp.CTS_WLAN + ".3.3.1.10.3.0" not in om
