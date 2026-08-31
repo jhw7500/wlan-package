@@ -3,6 +3,43 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.6.0 (2026-08-31)
+
+> SemVer **minor** — SNMP 벤더 OID 트리를 CanTops 자체 PEN(66620)으로 이전하고 CONTEC 호환을 병행한다. 폴링은 두 루트를 모두 서빙하므로 기존 NMS 는 설정 변경 없이 계속 동작하지만, **트랩 OID 는 `.672.65.1.1.x` 에서 `.66620.1.1.1.x` 로 바뀐다**(트랩은 `snmp.trap.enabled` 기본 false 라 opt-in 한 기기에만 영향). 상위 툴용 FTP 계정 `admin` 을 postinst 가 생성한다.
+
+### SNMP — CanTops PEN 66620 정본 루트 (#212)
+
+- IANA PEN **66620 = CanTops Co., LTD.** 아래 `.1.3.6.1.4.1.66620.1`(product 1 = CTS-WLAN)을 정본 루트로 노출한다. 서브OID 구조는 종전과 동일해 루트만 바뀐다(예: FirmwareVersion = `.1.3.6.1.4.1.66620.1.2.2.0`).
+- CONTEC FXE3000 `.672.65` 는 레거시 NMS 호환을 위해 **폴링에서 병행 서빙**한다. 같은 데이터를 두 이름으로 준다.
+- 담당 루트는 `snmpd.conf` 의 `pass_persist` 가 PROG 인자로 넘기고 백엔드가 `sys.argv[1]` 로 받는다. `pass_persist` 는 등록 루트마다 별도 프로세스를 띄우므로 각 프로세스가 자기 루트만 서빙한다. 두 루트를 한 맵에 담으면 수치정렬상 `.672 < .66620` 이라 `.672.65` 트리 끝의 GETNEXT 가 등록 범위 밖 OID 를 반환하게 되므로, 프로세스 분리가 정확성 요구다.
+- 인자가 숫자 OID 가 아니면 하위호환 루트로 폴백한다. 그대로 쓰면 매 요청 예외로 프로세스는 살아있는데 아무것도 서빙하지 않는 조용한 고장이 된다.
+- **CONTEC 호환 종료 시**: `snmpd.conf` 의 해당 `pass_persist` 줄 1개만 지우면 된다(백엔드·트랩 무수정). `postinst` 가 `cp` 로 `/etc/snmp/snmpd.conf` 를 덮어쓰므로 업그레이드만으로 전파되며 별도 마이그레이션이 필요 없다.
+- 병행 비용은 백엔드 프로세스 2개(온타겟 RSS 36MB x 2, 보드 available 1,551MB 대비 4.6퍼센트).
+
+### SNMP — CONTEC MIB 정합 및 트랩 varbind 갭 (#214)
+
+- MIB 의 `fxe3000TrapChannelChange` 는 `OBJECTS { fxe3000WIFInfoApChannel }` 로 `.3.3.1.10.2` 를 varbind 에 지정하는데, 폴링이 `.3.3.1.10.x`(AP 그룹)를 "AP 모드용이라 STA 에 무의미"로 보고 서빙하지 않았다. 그 결과 **트랩을 받은 NMS 가 varbind 의 OID 를 조회하면 noSuchInstance** 가 났다.
+- `.3.3.1.10.1 ApEssId` / `.3.3.1.10.2 ApChannel` 을 접속 중인 AP 의 SSID·채널로 채운다(값은 Sta 계열 `.11.3`/`.11.4` 와 동일). `.10.3 ApLoginNum` 은 AP 가 세는 접속 단말 수라 STA 가 알 수 없어 계속 미노출한다.
+- 노출 인스턴스 28 -> 30(연결 상태 기준). 접근가능 MIB leaf 61개 중 **37개 구현**.
+
+### SNMP — CanTops MIB 정의 파일 (#216)
+
+- `/opt/wlan/config/snmp/CANTOPS-CTS-WLAN-MIB.txt` 신설. NMS 가 우리 트리를 숫자 OID 로만 보던 문제를 없앤다. OID 트리는 CONTEC FXE3000 을 arc 단위로 미러링해, FXE3000 을 폴링하던 매니저가 enterprise arc 두 개만 바꾸면 같은 객체에 닿는다.
+- **실제로 서빙하는 것만 선언한다** — 37객체 + 트랩 2종. FXE3000 에 있으나 우리가 주지 않는 24개는 파일 끝에 사유와 함께 주석으로 남겼다(ConnectedNode·WIFCert·DipSwitch·LoaderVersion·드라이버 미제공 통계 등). MIB 는 계약이므로 미지원 객체를 선언하면 매니저가 noSuchInstance 를 받는다.
+- **MacAddress 4종은 `DisplayString` 으로 선언한다.** FXE3000 은 이들을 `OCTET STRING (SIZE (6))` 로 타이핑하지만 구현은 콜론헥사 텍스트를 반환하므로, "선언한 대로"가 아니라 "주는 대로" 적었다. 규격 정합은 AgentX 전환이 필요하며 별도 과제로 둔다.
+- DESCRIPTION 에 값의 성격을 명시했다 — 고정값(LedPower 상수 on / WLM `managed` / UnitType `Station`), 유도값(LED 는 링크 상태 파생, WirelessMode 는 tx bitrate 파생), 근사값(octet 카운터는 멀티캐스트 포함·재연결 시 0 리셋으로 가짜 wrap 가능), 결측 시 0 대신 noSuchInstance 를 주는 이유.
+- MIB 와 구현이 따로 놀지 않도록 회귀 테스트 4종을 둔다(선언 집합 == 서빙 집합 양방향 / MIB 트랩 == 트랩 스크립트 / MacAddress SYNTAX / SMIv1 `ACCESS` 잔존 금지).
+
+### FTP 계정 정비 (#210, #211)
+
+- **상위 툴용 FTP 계정 `admin` 을 postinst 가 생성한다.** ftpcmd 디스패치(`quote rst`/`ifcup`/`ifcdown`)를 호출하려면 전용 계정으로 FTP 로그인해야 하는데 그 계정을 만드는 곳이 아무 데도 없었다. 이미지 레시피의 `extrausers` 는 rootfs 조립 시점에만 도는 클래스라 .deb 배포 경로에서는 계정이 생기지 않고, `ftpcmd-handlers` 패키지에는 postinst 가 없다. 이 제품은 이미지 교체 없이 .deb 로 배포하므로 종전 상태로는 필드에서 상위 툴이 로그인할 수 없었다.
+- 비밀번호는 **SHA-512 해시로 넣는다**(`chpasswd -e`). postinst 는 기기에 `/var/lib/dpkg/info/wlan-proc.postinst` 로 0755 권한으로 설치되어 비-root 사용자가 읽을 수 있으므로, 평문을 두면 그대로 노출된다. 주석에도 값을 적지 않는다 — 규칙은 "해시를 쓴다"가 아니라 "기기에 실리는 산출물에 평문을 두지 않는다"다.
+- **소비자 없던 root FTP 개방을 제거한다.** postinst 가 `/etc/vsftpd.ftpusers` 와 `/etc/vsftpd.user_list` 의 root 줄을 주석 처리해 왔으나, 두 파일은 vsftpd 패키지 소유이면서 conffile 이 아니라 vsftpd 설치·업그레이드 시 무조건 덮어써진다. 실기에서 이미 효과가 사라져 있었고(USER root 는 530 반환), 우리 툴링은 root FTP 를 쓰지 않는다.
+
+### 문서 정정 (#209)
+
+- `wifi rate` 출력과 노트에서 미검증 단정을 조건부·정본 안내로 고치고, mlan1 은 관측으로도 메워지지 않는 범위임을 명시한다.
+
 ## 0.5.5 (2026-08-14)
 
 > SemVer **patch** — Factory Reset의 nginx enable을 유닛 존재 가드로 감싼다. 동작 계약은 변하지 않는다.
