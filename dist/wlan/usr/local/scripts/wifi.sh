@@ -2994,8 +2994,15 @@ case "$2" in
         mlanutl "$IFACE" rate_adapt_cfg 2>/dev/null || echo "(rate_adapt_cfg not available)"
         echo ""
         echo "Note: Connected-state SET is unsupported; configured values apply before association on boot."
-        echo "      A previously documented 30/50 restore on roam COMPLETED did not reproduce (2026-08-31)."
-        echo "      If configured and live differ above, fwcfg_watch logs the change to syslog."
+        echo "      A JSON edit therefore leaves configured != live until the next boot; that gap is expected."
+        echo "      fwcfg_watch logs later changes of the live value to syslog; it never compares live against JSON."
+        if [ "$IFACE" = "mlan0" ]; then
+            echo "      The documented 30/50 restore on roam COMPLETED did not reproduce here (0.5.6, 2026-08-31),"
+            echo "      but a same-ESS BSS roam was not exercised, so it is not fully ruled out. See guide 11.5."
+        else
+            echo "      The documented 30/50 restore on association COMPLETED is untested on this interface;"
+            echo "      treat a reset as still possible. See guide 11.5."
+        fi
     else
         if [ "$#" -ne 6 ]; then
             echo "Usage: wifi $NUM rate <mode:0|1> <low:0..100|255> <high:0..100|255> <interval_ms>" >&2
