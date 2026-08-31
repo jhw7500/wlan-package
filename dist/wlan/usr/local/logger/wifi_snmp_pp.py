@@ -394,6 +394,14 @@ def build_oid_map(eth=None, mlan=None, devinfo=None, fw=None, eth_link_up=None,
     put(".3.3.1.3.0", "string", "Station")     # UnitType 고정
     put(".3.3.1.4.0", "string", _fmt_mac(wl_mac))
     put(".3.3.1.5.0", "string", bandwidth)
+    # AP 정보 (.3.3.1.10.x) — MIB 상 AP 모드 그룹이지만, ChannelChange 트랩이
+    # OBJECTS { fxe3000WIFInfoApChannel } 로 .10.2 를 varbind 에 지정한다. 즉 CONTEC 도 STA
+    # 문맥에서 이 객체를 '현재 무선 채널'로 쓴다. 트랩만 그 OID 를 보내고 폴링이 서빙하지
+    # 않으면 트랩 수신 NMS 의 후속 GET 이 noSuchInstance 가 되므로 여기서 채운다.
+    # 값은 Sta 계열(.11.3/.11.4)과 동일(접속 중인 AP 의 SSID·채널).
+    # .10.3 ApLoginNum 은 AP 가 세는 접속 단말 수라 STA 가 알 수 없어 미노출.
+    put(".3.3.1.10.1.0", "string", ssid)       # ApEssId
+    put(".3.3.1.10.2.0", "integer", channel)   # ApChannel (ChannelChange 트랩 varbind)
     put(".3.3.1.11.1.0", "integer", 2 if associated else 1)  # StaLoginState
     put(".3.3.1.11.2.0", "string", _fmt_mac(bssid))
     put(".3.3.1.11.3.0", "string", ssid)
