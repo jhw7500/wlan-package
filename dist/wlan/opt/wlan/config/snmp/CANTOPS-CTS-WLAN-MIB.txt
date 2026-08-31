@@ -55,21 +55,21 @@ ctsWlanWIFStatistics    OBJECT IDENTIFIER ::= { ctsWlanWirelessIf 2 }
 
 ctsWlanFirmwareVersion OBJECT-TYPE
     SYNTAX      DisplayString
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Version of Firmware. Package version of wlan-proc."
     ::= { ctsWlanEnvironment 2 }
 
 ctsWlanHardwareVersion OBJECT-TYPE
     SYNTAX      DisplayString
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Version of Hardware. Empty when the device is not provisioned."
     ::= { ctsWlanEnvironment 3 }
 
 ctsWlanEthernetAddress OBJECT-TYPE
     SYNTAX      DisplayString
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION
         "Ethernet Address, rendered as colon-separated hex text
@@ -84,7 +84,7 @@ ctsWlanEthernetAddress OBJECT-TYPE
 
 ctsWlanWLMacAddress OBJECT-TYPE
     SYNTAX      DisplayString
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Wireless MAC Address, colon-separated hex text. See
                  ctsWlanEthernetAddress for the encoding note."
@@ -92,28 +92,28 @@ ctsWlanWLMacAddress OBJECT-TYPE
 
 ctsWlanIPAddress OBJECT-TYPE
     SYNTAX      IpAddress
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "IP Address of the wired management interface."
     ::= { ctsWlanEnvironment 6 }
 
 ctsWlanSubnetMask OBJECT-TYPE
     SYNTAX      IpAddress
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Subnet Mask of the wired management interface."
     ::= { ctsWlanEnvironment 7 }
 
 ctsWlanDefaultGateway OBJECT-TYPE
     SYNTAX      IpAddress
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Default Gateway Address of the wired management interface."
     ::= { ctsWlanEnvironment 8 }
 
 ctsWlanProductNumber OBJECT-TYPE
     SYNTAX      INTEGER
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Product Number. Zero when unknown or out of Integer32 range."
     ::= { ctsWlanEnvironment 9 }
@@ -126,21 +126,21 @@ ctsWlanProductNumber OBJECT-TYPE
 
 ctsWlanLedPower OBJECT-TYPE
     SYNTAX      INTEGER { on(1), off(2) }
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "POWER LED status. Constant on(1): answering SNMP implies power on."
     ::= { ctsWlanStatusInfo 1 }
 
 ctsWlanLedLan OBJECT-TYPE
     SYNTAX      INTEGER { on(1), off(2) }
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "LAN LED status, derived from the wired carrier state."
     ::= { ctsWlanStatusInfo 2 }
 
 ctsWlanLedWlan OBJECT-TYPE
     SYNTAX      INTEGER { on(1), off(2) }
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "WLAN LED status, derived from the wireless association state."
     ::= { ctsWlanStatusInfo 3 }
@@ -154,14 +154,14 @@ ctsWlanLedWlan OBJECT-TYPE
 
 ctsWlanIfIndex OBJECT-TYPE
     SYNTAX      INTEGER
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Interface. 1 = wired, 2 = wireless."
     ::= { ctsWlanIfEntry 1 }
 
 ctsWlanIfLinkStatus OBJECT-TYPE
     SYNTAX      INTEGER { up(1), down(2) }
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Link State."
     ::= { ctsWlanIfEntry 7 }
@@ -172,7 +172,7 @@ ctsWlanIfLinkStatus OBJECT-TYPE
 
 ctsWlanWIFInfoWirelessMode OBJECT-TYPE
     SYNTAX      DisplayString
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Wireless LAN Standard, derived from the negotiated tx bitrate
                  (for example '11ax')."
@@ -180,21 +180,21 @@ ctsWlanWIFInfoWirelessMode OBJECT-TYPE
 
 ctsWlanWIFInfoWLM OBJECT-TYPE
     SYNTAX      DisplayString
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Wireless Link Mode. Constant 'managed': this product is a station."
     ::= { ctsWlanWIFInfo 2 }
 
 ctsWlanWIFInfoUnitType OBJECT-TYPE
     SYNTAX      DisplayString
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Unit Type. Constant 'Station'."
     ::= { ctsWlanWIFInfo 3 }
 
 ctsWlanWIFInfoWLMacAddress OBJECT-TYPE
     SYNTAX      DisplayString
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Wireless MAC Address, colon-separated hex text. See
                  ctsWlanEthernetAddress for the encoding note."
@@ -202,7 +202,7 @@ ctsWlanWIFInfoWLMacAddress OBJECT-TYPE
 
 ctsWlanWIFInfoBandWidth OBJECT-TYPE
     SYNTAX      DisplayString
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Band Width of the current association (for example '80 MHz')."
     ::= { ctsWlanWIFInfo 5 }
@@ -218,7 +218,7 @@ ctsWlanWIFInfoBandWidth OBJECT-TYPE
 
 ctsWlanWIFInfoApEssId OBJECT-TYPE
     SYNTAX      DisplayString
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "ESSID of the associated access point. Same value as
                  ctsWlanWIFInfoStaEssId."
@@ -226,7 +226,7 @@ ctsWlanWIFInfoApEssId OBJECT-TYPE
 
 ctsWlanWIFInfoApChannel OBJECT-TYPE
     SYNTAX      INTEGER
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Channel Number currently in use. Same value as
                  ctsWlanWIFInfoStaChannel. Carried by ctsWlanTrapChannelChange."
@@ -238,14 +238,14 @@ ctsWlanWIFInfoApChannel OBJECT-TYPE
 
 ctsWlanWIFInfoStaLoginState OBJECT-TYPE
     SYNTAX      INTEGER { notConnected(1), connected(2) }
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Login State."
     ::= { ctsWlanWIFInfoStation 1 }
 
 ctsWlanWIFInfoStaApMacAddress OBJECT-TYPE
     SYNTAX      DisplayString
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "MAC Address of login AP (BSSID), colon-separated hex text. See
                  ctsWlanEthernetAddress for the encoding note."
@@ -253,35 +253,35 @@ ctsWlanWIFInfoStaApMacAddress OBJECT-TYPE
 
 ctsWlanWIFInfoStaEssId OBJECT-TYPE
     SYNTAX      DisplayString
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "ESSID of the associated access point."
     ::= { ctsWlanWIFInfoStation 3 }
 
 ctsWlanWIFInfoStaChannel OBJECT-TYPE
     SYNTAX      INTEGER
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Channel Number."
     ::= { ctsWlanWIFInfoStation 4 }
 
 ctsWlanWIFInfoStaTxRate OBJECT-TYPE
     SYNTAX      INTEGER
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Tx Rate in Mbps."
     ::= { ctsWlanWIFInfoStation 5 }
 
 ctsWlanWIFInfoStaRxRate OBJECT-TYPE
     SYNTAX      INTEGER
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Rx Rate in Mbps."
     ::= { ctsWlanWIFInfoStation 6 }
 
 ctsWlanWIFInfoStaRssi OBJECT-TYPE
     SYNTAX      INTEGER
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "RSSI in dBm (negative). Zero when not associated."
     ::= { ctsWlanWIFInfoStation 7 }
@@ -293,7 +293,7 @@ ctsWlanWIFInfoStaSupplicantState OBJECT-TYPE
                     failure(3),
                     authenticating(4)
                 }
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Supplicant State."
     ::= { ctsWlanWIFInfoStation 8 }
@@ -309,7 +309,7 @@ ctsWlanWIFInfoStaSupplicantState OBJECT-TYPE
 
 ctsWlanWIFStatTxUnicast OBJECT-TYPE
     SYNTAX      Counter32
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Number of tx unicast packets. Derived by subtracting group
                  frames from total transmitted frames; management frames and
@@ -318,14 +318,14 @@ ctsWlanWIFStatTxUnicast OBJECT-TYPE
 
 ctsWlanWIFStatTxMulticast OBJECT-TYPE
     SYNTAX      Counter32
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Number of tx multicast packets."
     ::= { ctsWlanWIFStatistics 2 }
 
 ctsWlanWIFStatTxUniOctets OBJECT-TYPE
     SYNTAX      Counter32
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Number of tx unicast octets. Approximated from interface tx
                  bytes, so multicast octets are included."
@@ -333,7 +333,7 @@ ctsWlanWIFStatTxUniOctets OBJECT-TYPE
 
 ctsWlanWIFStatTxShortRetries OBJECT-TYPE
     SYNTAX      Counter32
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Number of tx signal retries, taken from dot11RetryCount. This
                  does not map one-to-one onto the 802.11 short-retry definition."
@@ -341,7 +341,7 @@ ctsWlanWIFStatTxShortRetries OBJECT-TYPE
 
 ctsWlanWIFStatTxLongRetries OBJECT-TYPE
     SYNTAX      Counter32
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Number of tx multiple retries, taken from
                  dot11MultipleRetryCount. See ctsWlanWIFStatTxShortRetries."
@@ -349,7 +349,7 @@ ctsWlanWIFStatTxLongRetries OBJECT-TYPE
 
 ctsWlanWIFStatRxUnicast OBJECT-TYPE
     SYNTAX      Counter32
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Number of rx unicast packets. Derived by subtracting group
                  frames from received fragments; see ctsWlanWIFStatTxUnicast."
@@ -357,14 +357,14 @@ ctsWlanWIFStatRxUnicast OBJECT-TYPE
 
 ctsWlanWIFStatRxMulticast OBJECT-TYPE
     SYNTAX      Counter32
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Number of rx multicast packets."
     ::= { ctsWlanWIFStatistics 9 }
 
 ctsWlanWIFStatRxUniOctets OBJECT-TYPE
     SYNTAX      Counter32
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Number of rx unicast octets. Approximated from interface rx
                  bytes, so multicast octets are included."
@@ -372,7 +372,7 @@ ctsWlanWIFStatRxUniOctets OBJECT-TYPE
 
 ctsWlanWIFStatRxHwFCSErrors OBJECT-TYPE
     SYNTAX      Counter32
-    ACCESS      read-only
+    MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION "Number of rx hardware FCS errors. Absolute value accumulates
                  from boot; interpret as a delta."
