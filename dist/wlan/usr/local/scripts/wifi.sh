@@ -2993,8 +2993,19 @@ case "$2" in
         echo "--- Live rate_adapt_cfg ($IFACE) ---"
         mlanutl "$IFACE" rate_adapt_cfg 2>/dev/null || echo "(rate_adapt_cfg not available)"
         echo ""
-        echo "Note: FW may restore 30/50 when a roam association reaches COMPLETED."
-        echo "      Connected-state SET is unsupported; configured values apply before association on boot."
+        echo "Note: Connected-state SET is unsupported. Configured values reach the FW only through the"
+        echo "      boot path, before association, and several gates can skip it (interface enable,"
+        echo "      rate_adapt.enabled; see guide 11.5). The configured block above is an intent, not a"
+        echo "      promise - read the live block above for the current FW state."
+        echo "      fwcfg_watch, when the logger runs for this interface with fwcfg_watch_sec > 0, logs"
+        echo "      later changes of the live value to syslog; it never compares live against JSON."
+        if [ "$IFACE" = "mlan0" ]; then
+            echo "      The documented 30/50 restore on roam COMPLETED did not reproduce here (0.5.6, 2026-08-31),"
+            echo "      but a same-ESS BSS roam was not exercised, so it is not fully ruled out. See guide 11.5."
+        else
+            echo "      The documented 30/50 restore on association COMPLETED is untested on this interface;"
+            echo "      treat a reset as still possible. See guide 11.5."
+        fi
     else
         if [ "$#" -ne 6 ]; then
             echo "Usage: wifi $NUM rate <mode:0|1> <low:0..100|255> <high:0..100|255> <interval_ms>" >&2

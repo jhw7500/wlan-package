@@ -1078,10 +1078,27 @@ mlan0 / mlan1에 개별 적용한다. 섹션이 있으면 `mode`/`low_thresh`/`h
 ```
 
 > **적용 시점과 한계**: 부팅 association 전에만 SET하고 즉시 GET을 로그에 남긴다. NXP 도구 계약상
-> connected 상태 SET은 지원되지 않는다. 실기에서는 mlan0 일반 reconnect에는 70/90이 유지됐지만
-> 직접 roam의 `COMPLETED`에서 FW 기본 `30/50`으로 복귀했다. ac 전용 mlan1은 최초 association과
-> 일반 reconnect의 `COMPLETED`에서도 30/50으로 복귀했다. `wifi <iface> rate`는 configured/live를
-> 함께 표시하며, 수정은 `wifi <iface> rate <mode> <low> <high> <interval_ms>`로 JSON에만 저장한다.
+> connected 상태 SET은 지원되지 않는다(연결 중 SET은 에러 없이 `exit 0`으로 끝나지만 FW가 받지
+> 않으므로, 반영 여부는 종료 코드가 아니라 SET 직후 GET으로 판정한다). `wifi <iface> rate`는
+> configured/live를 함께 표시하며, 수정은 `wifi <iface> rate <mode> <low> <high> <interval_ms>`로
+> JSON에만 저장한다.
+
+> **[정정 2026-08-31] 30/50 복귀는 재현되지 않는다**: 이 절에는 "mlan0 직접 roam의 `COMPLETED`에서
+> FW 기본 `30/50`으로 복귀했고, ac 전용 mlan1은 최초 association과 일반 reconnect에서도 복귀했다"고
+> 적혀 있었으나 재검증에서 **재현되지 않았다**. wlan-proc 0.5.6 / FW `17.92.1.p149.115`의 mlan0에서
+> association 완료를 5회 유발(부팅 1, `reassociate` 2, `wpa_cli roam` 1, 타 벤더 AP·타 채널 전환 1)
+> 했고 전 구간 `SR 70/90 iv=10`이 유지됐다. `fwcfg_watch`의 CHANGED도 0건이다. 종전 기재 중
+> "mlan0 일반 reconnect에서는 70/90 유지" 부분만 이번 결과와 일치한다.
+>
+> **미검증 범위**: ① 동일 SSID 내 다른 BSS로 가는 실제 roam — 시험 환경에 해당 ESS의 BSS가
+> 하나뿐이라 만들지 못했다(대신 타 AP·타 채널 전환으로 대체 자극을 넣었다). ② mlan1 AC 경로 —
+> `mlan1.enabled=false`라 시험하지 못했다. 최초 관측이 0.5.4 무렵이라 그 사이 변경으로 조건이
+> 사라졌을 가능성도 배제하지 못한다.
+>
+> 이후 관측은 **로거가 도는 인터페이스에서만** `fwcfg_watch`가 담당한다. 위 ②의 mlan1 은
+> `mlan1.enabled=false`이므로 `wifi_apply_enabled.sh`가 `wifi_logger@mlan1`을 포함한 자식 유닛을
+> 모두 disable 한다 — `fwcfg_watch_sec` 값과 무관하게 관측 프로세스 자체가 없다. 즉 미검증
+> 항목 ②는 관측으로도 메워지지 않으므로, 확인하려면 mlan1과 그 로거를 켜고 재시험해야 한다.
 
 ### 11.6 mcs_tier - MCS Tier 능력 제한
 
