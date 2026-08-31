@@ -401,17 +401,20 @@ def test_supplicant_oid_fallback():
 
 # --- main() 라인 프로토콜 (Phase1 미커버 갭 보강) ---------------------------
 
-def _run_main(stdin_lines):
+def _run_main(stdin_lines, base_arg=None):
+    # argv 도 함께 제어한다 — main() 이 담당 루트를 sys.argv[1] 로 결정하므로,
+    # 제어하지 않으면 pytest 자신의 인자가 루트로 새어 들어간다(실측 확인).
     import io
     pp._source_cache.clear()
     pp._source_cache.update({"at": None, "data": None})
     stdin, stdout = io.StringIO("".join(stdin_lines)), io.StringIO()
-    old_in, old_out = sys.stdin, sys.stdout
+    old_in, old_out, old_argv = sys.stdin, sys.stdout, sys.argv
     sys.stdin, sys.stdout = stdin, stdout
+    sys.argv = ["wifi_snmp_pp.py"] + ([base_arg] if base_arg is not None else [])
     try:
         pp.main()
     finally:
-        sys.stdin, sys.stdout = old_in, old_out
+        sys.stdin, sys.stdout, sys.argv = old_in, old_out, old_argv
     return stdout.getvalue().splitlines()
 
 
@@ -587,3 +590,83 @@ def test_stats_getnext_walk_includes_stats():
             break
         walked.append(res[0]); cur = res[0]
     assert walked == sorted_oids
+
+
+# ============================ 등록 루트 파라미터화 ============================
+# CanTops PEN 66620(product 1 = CTS-WLAN) 정본 루트를 CONTEC .672.65 와 병행 노출한다.
+# 서브OID 구조는 루트와 무관하게 동일 — 담당 루트는 프로세스마다 argv[1] 로 결정된다.
+
+def _sources():
+    return dict(eth=ETH, mlan=MLAN_STATS, devinfo=DEV, fw="0.5.6", eth_link_up=True)
+
+
+def test_root_constants():
+    assert pp.CANTOPS == ".1.3.6.1.4.1.66620"
+    assert pp.CTS_WLAN == ".1.3.6.1.4.1.66620.1"
+    assert pp.DEFAULT_BASE == pp.FXE3000
+
+
+def test_default_base_is_contec_for_backward_compat():
+    # base 미지정(인자 없는 구 등록줄) → 종전과 동일하게 .672.65 로 서빙
+    om = pp.build_oid_map(**_sources())
+    assert om[pp.FXE3000 + ".2.2.0"] == ("string", "0.5.6")
+    assert all(o.startswith(pp.FXE3000 + ".") for o in om)
+
+
+def test_cantops_firmware_version_matches_spec():
+    # 사양 예시와 1:1 — FirmwareVersion = .1.3.6.1.4.1.66620.1.2.2.0
+    om = pp.build_oid_map(base=pp.CTS_WLAN, **_sources())
+    assert om[".1.3.6.1.4.1.66620.1.2.2.0"] == ("string", "0.5.6")
+
+
+def test_same_subtree_under_both_roots():
+    # 루트만 갈아끼우면 서브OID·타입·값이 그대로 재현된다(같은 데이터, 두 이름)
+    a = pp.build_oid_map(base=pp.FXE3000, **_sources())
+    b = pp.build_oid_map(base=pp.CTS_WLAN, **_sources())
+    strip = lambda om, root: {o[len(root):]: v for o, v in om.items()}
+    assert len(b) > 0
+    assert strip(a, pp.FXE3000) == strip(b, pp.CTS_WLAN)
+
+
+def test_root_isolation_getnext_never_crosses_subtree():
+    # 한 프로세스 맵에는 자기 루트만 존재 → walk 가 다른 루트로 새지 않는다.
+    # (두 루트를 한 맵에 담으면 .672 < .66620 정렬 때문에 .672.65 트리 끝의
+    #  GETNEXT 가 등록 범위 밖인 .66620.1.x 를 반환하게 된다 — 그래서 프로세스 분리)
+    om = pp.build_oid_map(base=pp.CTS_WLAN, **_sources())
+    assert not any(o.startswith(pp.FXE3000) for o in om)
+    sorted_oids = sorted(om, key=pp.oid_key)
+    cur, walked = pp.CTS_WLAN, []
+    for _ in range(len(om) + 5):
+        res = pp.do_getnext(cur, sorted_oids, om)
+        if res == ["NONE"]:
+            break
+        walked.append(res[0]); cur = res[0]
+    assert walked == sorted_oids
+    assert all(o.startswith(pp.CTS_WLAN + ".") for o in walked)
+
+
+def test_main_serves_root_from_argv():
+    # main() 이 argv[1] 로 담당 루트를 바꾼다(LedPower 는 데이터소스 무관 상수)
+    out = _run_main(["get\n", ".1.3.6.1.4.1.66620.1.3.1.1.0\n", "\n"],
+                    base_arg=".1.3.6.1.4.1.66620.1")
+    assert out == [".1.3.6.1.4.1.66620.1.3.1.1.0", "integer", "1"]
+
+
+def test_main_argv_root_excludes_other_root():
+    # 66620 담당 프로세스에 .672.65 를 물으면 자기 트리가 아니므로 NONE
+    out = _run_main(["get\n", pp.FXE3000 + ".3.1.1.0\n", "\n"],
+                    base_arg=".1.3.6.1.4.1.66620.1")
+    assert out == ["NONE"]
+
+
+def test_main_argv_root_normalizes_missing_leading_dot():
+    out = _run_main(["get\n", ".1.3.6.1.4.1.66620.1.3.1.1.0\n", "\n"],
+                    base_arg="1.3.6.1.4.1.66620.1")
+    assert out == [".1.3.6.1.4.1.66620.1.3.1.1.0", "integer", "1"]
+
+
+def test_main_invalid_argv_root_falls_back_not_silently_dead():
+    # 숫자 OID 가 아닌 인자는 폴백해야 한다 — 폴백이 없으면 oid_key() 가 매 요청마다
+    # ValueError 를 던져 프로세스는 살아있는데 아무것도 서빙하지 않는 조용한 고장이 된다.
+    out = _run_main(["get\n", pp.FXE3000 + ".3.1.1.0\n", "\n"], base_arg="tests/bogus.py")
+    assert out == [pp.FXE3000 + ".3.1.1.0", "integer", "1"]

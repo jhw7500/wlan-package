@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
-"""wifi_snmp_pp.py — net-snmp ``pass_persist`` 백엔드 (CONTEC FXE3000 Private MIB).
+"""wifi_snmp_pp.py — net-snmp ``pass_persist`` 백엔드 (벤더 Private MIB 트리).
 
 B안 Phase1 구현. snmpd.conf 의
-``pass_persist .1.3.6.1.4.1.672.65 /usr/bin/python3 -u /usr/local/logger/wifi_snmp_pp.py``
-디렉티브가 이 스크립트를 상주 프로세스로 띄우고 stdin/stdout 라인 프로토콜로
-``.1.3.6.1.4.1.672.65``(CONTEC FXE3000) 서브트리 전체를 위임한다.
+``pass_persist <루트> /usr/bin/python3 -u /usr/local/logger/wifi_snmp_pp.py <루트>``
+디렉티브가 이 스크립트를 등록 루트마다 상주 프로세스로 띄우고, 각 프로세스는
+stdin/stdout 라인 프로토콜로 **자기 루트 하나**의 서브트리 전체를 위임받는다.
+담당 루트는 argv[1] 로 전달되며, 서브OID 구조는 루트와 무관하게 동일하다.
+
+현재 두 루트를 병행 노출한다(같은 데이터를 두 이름으로):
+  * ``.1.3.6.1.4.1.66620.1`` = CanTops PEN 66620 · product 1 CTS-WLAN — 정본
+  * ``.1.3.6.1.4.1.672.65``  = CONTEC FXE3000 호환 — 레거시 NMS 용, 이전 완료 후 제거
+    (제거는 snmpd.conf 의 해당 pass_persist 줄 1개 삭제로 끝난다. 본 파일 무수정)
 
 A안(``wifi_snmp.py``, NET-SNMP-EXTEND-MIB ``.8072`` 아래 9지표)과 달리, 같은
-WiFi 지표를 **CONTEC 벤더 OID 트리**로 노출한다(매핑 문서 §10.4 전환 방향).
+WiFi 지표를 **벤더 OID 트리**로 노출한다(매핑 문서 §10.4 전환 방향).
 A안과 독립적으로 공존하며 데이터 출처는 동일하게 cantops 로거의 link.json 이다.
 
 Phase1 객체 (mapping.md §9.2 🟢, opcd 게터 재사용 — 글루만):
@@ -72,10 +78,15 @@ import sys
 import time
 import traceback
 
-# 등록 서브트리 루트 = CONTEC(672) → fxe3000(65)
+# 등록 서브트리 루트. snmpd.conf 의 pass_persist 는 루트마다 별도 프로세스를 띄우므로,
+# 각 프로세스는 argv[1] 로 받은 자기 루트 하나만 서빙한다(두 루트를 한 맵에 담으면
+# GETNEXT 가 등록 범위 밖 OID 를 반환 — main() 의 BASE 주석 참조).
 ENTERPRISES = ".1.3.6.1.4.1"
 CONTEC = ENTERPRISES + ".672"
-FXE3000 = CONTEC + ".65"
+FXE3000 = CONTEC + ".65"          # CONTEC FXE3000 호환 루트(레거시 NMS 용, 이전 완료 후 제거)
+CANTOPS = ENTERPRISES + ".66620"  # IANA PEN 66620 = CanTops Co., LTD.
+CTS_WLAN = CANTOPS + ".1"         # product 1 = CTS-WLAN
+DEFAULT_BASE = FXE3000            # argv 미지정(수동 실행·구 등록줄) 시 하위호환
 
 DEFAULT_ETH_JSON = "/var/log/cantops/json/eth0/link.json"
 DEFAULT_MLAN_JSON = "/var/log/cantops/json/mlan0/link.json"
@@ -174,7 +185,7 @@ def _wireless_mode(bitrate):
 def _rate_mbps(bitrate):
     """'143.3 MBit/s ...' → Mbps INTEGER(반올림). 결측/미파싱은 0.
     단위 Mbps 는 A안 extend 백엔드(wifi_snmp.py m_txrate)와 동일 → 두 SNMP 트리
-    (.8072 extend / .672.65 CONTEC)가 같은 값을 보고한다. MIB SYNTAX 는 단위 미명시
+    (.8072 extend / .66620.1 CanTops / .672.65 CONTEC)가 같은 값을 보고한다. MIB SYNTAX 는 단위 미명시
     bare INTEGER 이고 Mbps 면 INT32 saturate 가 없다(bps 환산은 160MHz/Wi-Fi6E
     ≥2.15Gbps 에서 넘침)."""
     if not bitrate:
@@ -307,11 +318,14 @@ def collect_sources():
 # ---- OID 맵 구축 (순수 함수 — 테스트 주입 용이) ------------------------------
 
 def build_oid_map(eth=None, mlan=None, devinfo=None, fw=None, eth_link_up=None,
-                  supplicant=None):
+                  supplicant=None, base=None):
     """주입된 데이터 소스로 {full_oid_instance: (type_token, value_str)} 를 만든다.
 
     모든 값은 pass_persist stdout 한 줄로 출력되므로 문자열로 정규화한다.
+    base 는 이 프로세스가 담당하는 등록 루트(예: CTS_WLAN). 서브OID 구조는 루트와
+    무관하게 동일하므로 루트만 갈아끼우면 같은 트리가 그대로 재현된다.
     """
+    base = base or DEFAULT_BASE
     eth = eth or {}
     mlan = mlan or {}
     devinfo = devinfo or {}
@@ -344,7 +358,7 @@ def build_oid_map(eth=None, mlan=None, devinfo=None, fw=None, eth_link_up=None,
     om = {}
 
     def put(suboid, typ, val):
-        om[FXE3000 + suboid] = (typ, str(val))
+        om[base + suboid] = (typ, str(val))
 
     # 환경 (.2.x 스칼라 → .0)
     put(".2.2.0", "string", fw or "")
@@ -462,6 +476,21 @@ def _out(line):
 
 
 def main():
+    # 담당 루트 = argv[1](snmpd.conf 의 pass_persist 등록 OID 와 동일 값). pass_persist 는
+    # 등록 루트마다 별도 프로세스를 띄우므로 한 프로세스는 한 루트만 서빙한다. 두 루트를
+    # 한 맵에 함께 담으면 안 된다 — 숫자 정렬상 .672 < .66620 이라 .672.65 트리 끝에서
+    # GETNEXT 가 등록 범위 밖인 .66620.1.x 를 반환하게 된다. 미지정 시 DEFAULT_BASE
+    # (인자 없는 구 등록줄·수동 실행 하위호환).
+    base = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_BASE
+    base = ("." + base.strip().lstrip(".")).rstrip(".")
+    # 숫자 OID 가 아닌 인자(오타·엉뚱한 인자)를 그대로 쓰면 oid_key() 가 매 GETNEXT 마다
+    # ValueError 를 던져, 프로세스는 살아 있는데 아무것도 서빙하지 않는 조용한 고장이 된다.
+    # 그 상태보다 하위호환 루트로 폴백하고 stderr(→snmpd→syslog)에 남기는 편이 낫다.
+    if not re.fullmatch(r"(\.\d+)+", base):
+        sys.stderr.write("wifi_snmp_pp: invalid base OID %r — falling back to %s\n"
+                         % (sys.argv[1] if len(sys.argv) > 1 else base, DEFAULT_BASE))
+        base = DEFAULT_BASE
+
     # 다른 cantops 데몬과 동일하게 로그를 local0(→ /var/log/cantops/logger.log)에 남긴다.
     # sUTILS 는 top-level 에서 무거운 선택적 의존성(paho/numpy/serial)을 import 하므로,
     # 순수 함수 테스트/의존성 없는 환경을 깨지 않도록 여기서 lazy import 한다. Logger 생성이
@@ -478,7 +507,7 @@ def main():
         logger = None
 
     if logger:
-        logger.message("info", "pass_persist backend start (.1.3.6.1.4.1.672.65)", _extra())
+        logger.message("info", "pass_persist backend start (%s)" % base, _extra())
     while True:
         try:
             line = sys.stdin.readline()
@@ -492,7 +521,7 @@ def main():
                 break
             if cmd in ("get", "getnext"):
                 oid = sys.stdin.readline().strip()
-                omap = build_oid_map(**collect_sources())
+                omap = build_oid_map(base=base, **collect_sources())
                 if cmd == "get":
                     result = do_get(oid, omap)
                 else:
