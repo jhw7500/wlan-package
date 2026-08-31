@@ -1093,7 +1093,12 @@ mlan0 / mlan1에 개별 적용한다. 섹션이 있으면 `mode`/`low_thresh`/`h
 > **미검증 범위**: ① 동일 SSID 내 다른 BSS로 가는 실제 roam — 시험 환경에 해당 ESS의 BSS가
 > 하나뿐이라 만들지 못했다(대신 타 AP·타 채널 전환으로 대체 자극을 넣었다). ② mlan1 AC 경로 —
 > `mlan1.enabled=false`라 시험하지 못했다. 최초 관측이 0.5.4 무렵이라 그 사이 변경으로 조건이
-> 사라졌을 가능성도 배제하지 못한다. 이후 관측은 `fwcfg_watch`가 계속 담당한다.
+> 사라졌을 가능성도 배제하지 못한다.
+>
+> 이후 관측은 **로거가 도는 인터페이스에서만** `fwcfg_watch`가 담당한다. 위 ②의 mlan1 은
+> `mlan1.enabled=false`이므로 `wifi_apply_enabled.sh`가 `wifi_logger@mlan1`을 포함한 자식 유닛을
+> 모두 disable 한다 — `fwcfg_watch_sec` 값과 무관하게 관측 프로세스 자체가 없다. 즉 미검증
+> 항목 ②는 관측으로도 메워지지 않으므로, 확인하려면 mlan1과 그 로거를 켜고 재시험해야 한다.
 
 ### 11.6 mcs_tier - MCS Tier 능력 제한
 
