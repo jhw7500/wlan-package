@@ -734,8 +734,6 @@ secure_wpa_conf() {
   /usr/local/scripts/add_line.sh "kernel.panic_on_oops=1" /etc/sysctl.conf
   /usr/local/scripts/add_line.sh "watchdog-timeout=30" /etc/watchdog.conf
   /usr/local/scripts/change_line.sh "log-dir=/var/log/cantops" "log-dir" /etc/watchdog.conf
-  /usr/local/scripts/change_line.sh "#root" "root" /etc/vsftpd.ftpusers
-  /usr/local/scripts/change_line.sh "#root" "root" /etc/vsftpd.user_list
   /usr/local/scripts/add_line.sh "/dev/mmcblk${EMMC_NUM}p3      /var/log/cantops  ext4  noatime,nodiratime,lazytime,commit=60,data=ordered  0  2" /etc/fstab
 
   # /etc/systemd/system.conf 변경(DefaultTimeout*, WatchdogDevice)은 PID1이 부팅 시
