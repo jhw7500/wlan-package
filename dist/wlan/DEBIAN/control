@@ -1,5 +1,5 @@
 Package: wlan-proc
-Version: 0.5.5
+Version: 0.5.6
 Section: net
 Priority: optional
 Architecture: arm64
@@ -43,3 +43,4 @@ Description: WLAN Application
  0.5.3 : 시스템/인터페이스 로거 6-action 제어, 시스템 자식 개별 감독, bounded restart/command timeout, 온도 unknown 안전처리
  0.5.4 : Factory Reset eth0 공장주소 192.168.1.1 복원, nginx 필수유닛 제외(과거 리셋 disable 복구 enable은 유지), config.json 완전제거 계약 유지
  0.5.5 : Factory Reset의 nginx enable을 유닛 존재 가드로 감싸 미탑재 이미지 err 로그 제거(실패 의존성은 만들지 않음)
+ 0.5.6 : wpa supplicant 재부착 보강(netdev 재생성·StartLimit 소진 failed 구멍·헬퍼 진단 보존), 스캔/연결 락 격리와 전이 경합 예산, 하드웨어 식별 fail-closed·로밍 소유권 트랜잭션·복구 crash-safe, 비대칭 NSS 스캔 정책 배포, FW 커스텀 설정 변화 관측 신설(fwcfg_watch — rate_adapt/antcfg/mcs_tier 라운드로빈 60s, 변화 시에만 warn, 관측 전용), rate_adapt.enabled 의미 문서 정정(재적재를 넘어 마지막 SET값 유지), imx93 드라이버 페이로드 ported c846289 갱신 (#172~#207)
