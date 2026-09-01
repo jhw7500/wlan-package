@@ -199,10 +199,36 @@ def header_candidates(header_text, tops):
 
 # handoff §3 에 행이 없어도 되는 템플릿 leaf (mlanN 정규화 경로 문자열).
 # 항목을 늘릴 땐 왜 WebUI 인수인계에서 빼는지 사유를 함께 적을 것.
-HANDOFF_COVERAGE_ALLOWLIST = set()
+HANDOFF_COVERAGE_ALLOWLIST = {
+    # antcfg/antcfgnss 의 검증·위임 계약 필드. §3 에 대표 요약 행이 이미 있고
+    # (`antcfg.verify.*` / `antcfgnss.verify.user_htstream` /
+    # `antcfgnss.fallback_antcfg.*`), 전부 UI편집=no 라 낱개 행을 더 실어도 WebUI
+    # 인수인계에 보탬이 없다. 게다가 이 leaf 들은 mlan0/mlan1 한쪽에만 존재해서
+    # (mlan0 = antcfgnss 의 verify·fallback_antcfg, mlan1 = antcfg.verify)
+    # `mlan0=X / mlan1=(없음)` 을 적을 셀 포맷이 §3 에 없다.
+    # 템플릿의 iface 비대칭이 해소되면 여기서 빼고 §3 에 정식 행으로 실을 것.
+    "mlanN.antcfg.verify.physical_rx",
+    "mlanN.antcfg.verify.physical_tx",
+    "mlanN.antcfg.verify.user_htstream",
+    "mlanN.antcfgnss.verify.user_htstream",
+    "mlanN.antcfgnss.fallback_antcfg.tx",
+    "mlanN.antcfgnss.fallback_antcfg.rx",
+    "mlanN.antcfgnss.fallback_antcfg.verify.physical_rx",
+    "mlanN.antcfgnss.fallback_antcfg.verify.physical_tx",
+    "mlanN.antcfgnss.fallback_antcfg.verify.user_htstream",
+}
 # 템플릿에 의도적으로 없는 런타임 생성 필드. 이 목록 밖의 미해결 표 행은 typo/유령
 # 후보이므로 --check를 실패시킨다.
-HANDOFF_UNRESOLVED_ALLOWLIST = {"mcp.iio_device"}
+HANDOFF_UNRESOLVED_ALLOWLIST = {
+    "mcp.iio_device",
+    # 아래 셋은 §3 의 대표 요약 행이다. `*` 를 쓴 두 행은 어떤 템플릿 leaf 와도
+    # 매칭될 수 없고, `antcfgnss.verify.user_htstream` 은 실재하는 키지만 mlan0
+    # 에만 있어(resolve 는 mlanN 경로에 두 iface 값을 모두 요구한다) 해결되지
+    # 않는다. 유령/typo 가 아니라 의도된 요약 행이므로 면제한다.
+    "antcfg.verify.*",
+    "antcfgnss.verify.user_htstream",
+    "antcfgnss.fallback_antcfg.*",
+}
 
 
 def handoff_sync(tmpl, lines, write):

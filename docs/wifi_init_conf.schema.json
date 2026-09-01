@@ -1372,6 +1372,42 @@
                   "x-ui-editable": "no",
                   "x-apply-timing": "boot",
                   "x-consumer": "wifi_fw_config_lib.sh"
+                },
+                "verify": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "description": "레거시 antcfg 경로로 위임할 때 함께 넘기는 검증 계약. 위임 시 이 객체가 antcfg.verify 자리로 스플라이스되어 기존 antcfg 검증을 그대로 재사용한다. 존재하면 세 필드가 모두 필수이며 불일치 시 association을 중단한다",
+                  "required": [
+                    "physical_tx",
+                    "physical_rx",
+                    "user_htstream"
+                  ],
+                  "properties": {
+                    "physical_tx": {
+                      "type": "string",
+                      "default": "0x0303",
+                      "description": "위임 SET 후 기대하는 FW physical Tx path",
+                      "x-ui-editable": "no",
+                      "x-apply-timing": "boot",
+                      "x-consumer": "wifi_fw_config_lib.sh"
+                    },
+                    "physical_rx": {
+                      "type": "string",
+                      "default": "0x0303",
+                      "description": "위임 SET 후 기대하는 FW physical Rx path",
+                      "x-ui-editable": "no",
+                      "x-apply-timing": "boot",
+                      "x-consumer": "wifi_fw_config_lib.sh"
+                    },
+                    "user_htstream": {
+                      "type": "string",
+                      "default": "0x2121",
+                      "description": "위임 SET 후 기대하는 host NSS intent. 0x2121은 양 밴드 Tx 2SS/Rx 1SS",
+                      "x-ui-editable": "no",
+                      "x-apply-timing": "boot",
+                      "x-consumer": "wifi_fw_config_lib.sh"
+                    }
+                  }
                 }
               }
             }
