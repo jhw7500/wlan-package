@@ -16,6 +16,16 @@ wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약�
 - postinst 는 드롭인 배치 후 `sshd -t` 로 한 번 검사하고 실패하면 드롭인을 제거한다. 드롭인이 sshd 설정을 깨뜨리면 그 다음 연결부터 **모든** SSH 가 거부되어 원격 복구 경로까지 함께 막히기 때문이다. 제거 후에도 `sshd -t` 가 실패하면 기존 설정 문제로 구분해 기록한다.
 - `hosts.allow` 망 분리(FTP 자체의 접근 대역 제한)는 이 변경으로 대체되지 않는 별개 항목으로 남는다.
 
+### FW 설정 미반영이 더 이상 재부팅·드라이버 재로드를 부르지 않는다
+
+- 종전에는 `antcfg`/`antcfgnss`/`mcs_tier` 중 하나라도 검증에 실패하면 `wifi_init` 이 죽고, `OnFailure` 가 `wlan_emergency_reboot` 를 걸어 **재부팅**했다(콜드부팅 1회는 `exit 75` 로 드라이버 lifecycle 전체 재실행). 설정 하나가 안 먹었다고 무선 스택을 통째로 내렸다 올리거나 보드를 재부팅하는 것은 과하고, **재부팅으로 나아지지도 않는다** — 실기에서 이 경로가 37회 재부팅 루프를 만들었다.
+- 세 축 모두 **재시도 후 관측**으로 바꿨다. `WIFI_FW_VERIFY_ATTEMPTS`(기본 5) 회 SET→read-back→비교를 반복하고, 성공하면 몇 번째 시도였는지 `info` 로 남긴다. `mcs_tier` 가 이미 쓰던 방식을 `antcfg`/`antcfgnss` 로 넓힌 것이다(둘은 종전 1-shot).
+- 재시도를 소진해도 반영되지 않으면 **`local0.err` 로그 + 미반영 마커**를 남기고 `0` 을 돌려준다. 부팅은 계속된다. `wifi_fw_apply_rate` 가 이미 쓰던 규약과 같다.
+- **미반영 상태를 파일로 노출한다** — `/run/wifi/fwcfg_unapplied_<iface>` 에 `축=사유` 한 줄씩. 로그는 흘러가지만 "지금 이 보드가 의도한 RF 설정인가" 는 상태로 물을 수 있어야 한다. 성공하면 해당 축의 줄을 지운다. tmpfs 라 부팅마다 초기화된다.
+- **제품 scan profile 게이트**(`wifi_fw_validate_product_scan_profile`)도 하드 `exit 1` 을 걷어냈다. 설정 파일이 제품 계약과 다른 것은 재부팅으로 낫지 않는다 — `err` 로그와 `product_scan_profile` 미반영 마커로 남기고 부팅을 계속한다.
+- `wifi_init` 의 `exit 75`/`exit 1` 분기는 제거했다. 개별 축이 모두 `0` 을 돌려주므로 도달하지 않으며, 예상치 못한 비-0 은 `err` 로 기록만 하고 부팅을 막지 않는다.
+- **남긴 것**: 기동 실패(드라이버 insmod, 인터페이스 부재)의 fail-closed, `wlan_reboot_policy.sh` 루프 차단, `wlan_fw_watch` 의 드라이버 wedge 감지 → 재로드. 이들은 실제로 재시도·재부팅이 유효한 경로다.
+
 ### fallback_antcfg(레거시 antcfg 위임) 제거
 
 - read-back 을 올바른 명령으로 고친 뒤 이 위임은 발동 경로가 없어졌다. 남겨둘 이유도 없다 — **위임은 `antcfg` SET 을 수행해 RF_ANTENNA HostCmd 를 발행**하므로 driver#41 의 "물리 불변" 계약을 깨고, `fallback_antcfg.rx=0x0101` 은 문서가 p149.115 scan wedge cofactor 라고 경고한 1-path 값이다. 게다가 read-back 이 불가한 드라이버에서는 `fallback_antcfg.verify` 도 같은 `user_htstream` 을 요구하므로 **물리만 건드리고 결국 같은 검증에 걸려 실패**했다.

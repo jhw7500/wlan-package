@@ -1490,18 +1490,22 @@ if command -v systemctl >/dev/null 2>&1; then
     # 모듈 로드 + networkd가 mlan 인터페이스를 생성한 직후, association 전에 라디오 기본값 적용.
     # 그 외 자식 데몬은 ExecStartPost(/usr/local/scripts/wifi_services.sh)가 systemctl enable
     # 상태에 따라 일괄 start한다.
+    # 제품 scan profile 계약 위반은 설정 파일 자체의 문제이므로 재부팅으로 낫지 않는다.
+    # 종전에는 하드 exit 1 이라 OnFailure 가 emergency reboot 를 걸었고, 설정이 그대로인
+    # 채 재부팅만 반복됐다(실기에서 37회). 부팅은 계속하고 미반영 축으로 남긴다.
     if ! wifi_fw_validate_product_scan_profile "$WIFI_INIT_CONF_JSON" "$BOARD_TYPE"; then
-        logger -p local0.err "[$tag:$LINENO] board-qualified product scan profile invalid for $BOARD_TYPE; refuse association"
-        exit 1
+        logger -p local0.err "[$tag:$LINENO] board-qualified product scan profile invalid for $BOARD_TYPE (boot continues; config does not match the product contract)"
+        wifi_fw_mark_unapplied "mlan0" product_scan_profile "config does not match the $BOARD_TYPE contract"
     fi
-    fw_config_failed=0
-    apply_iface_radio_defaults "mlan0" "$MLAN0_ENABLED" || fw_config_failed=1
-    apply_iface_radio_defaults "mlan1" "$MLAN1_ENABLED" || fw_config_failed=1
-    if [ "$fw_config_failed" -ne 0 ]; then
-        mcs_failure_code=$(wifi_fw_mcs_cold_failure_code)
-        logger -p local0.warn "[$tag:$LINENO] FW radio configuration verification failed before association; exit=$mcs_failure_code (75=one cold lifecycle retry, 1=persistent failure)"
-        exit "$mcs_failure_code"
-    fi
+
+    # 개별 설정 축(antcfg/antcfgnss/mcs_tier/rate_adapt)은 각자 재시도한 뒤 미반영을
+    # 로그와 마커로 남기고 0 을 돌려준다 — 설정 미반영으로 드라이버를 재로드하거나
+    # 재부팅하지 않는다. 아래 rc 검사는 그 계약이 깨졌을 때(예상치 못한 비-0)를
+    # 잡기 위한 방어이며, 그때도 부팅을 막지 않고 기록만 한다.
+    apply_iface_radio_defaults "mlan0" "$MLAN0_ENABLED" \
+        || logger -p local0.err "[$tag:$LINENO] apply_iface_radio_defaults mlan0 returned non-zero unexpectedly; boot continues"
+    apply_iface_radio_defaults "mlan1" "$MLAN1_ENABLED" \
+        || logger -p local0.err "[$tag:$LINENO] apply_iface_radio_defaults mlan1 returned non-zero unexpectedly; boot continues"
     wifi_fw_mcs_cold_success
 
     # supplicant 데몬 게이트 — .<iface>.enabled(인터페이스 전체)와

@@ -8,6 +8,47 @@
 : "${WIFI_MCS_VERIFY_ATTEMPTS:=5}"
 : "${WIFI_MCS_VERIFY_DELAY_SEC:=1}"
 : "${WIFI_MCS_PENDING_DIR:=/run/wifi}"
+# antcfg/antcfgnss 의 SET→GET 재시도. mcs_tier 가 쓰던 것과 같은 축이며 기본값도 맞춘다.
+: "${WIFI_FW_VERIFY_ATTEMPTS:=5}"
+: "${WIFI_FW_VERIFY_DELAY_SEC:=1}"
+# 미반영 축을 남기는 곳. 로그는 흘러가지만 "지금 이 보드가 의도한 RF 설정인가" 는
+# 상태로 물을 수 있어야 한다. tmpfs 라 부팅마다 초기화된다.
+: "${WIFI_FW_UNAPPLIED_DIR:=/run/wifi}"
+
+# 미반영 축 상태. 파일 한 줄 = 한 축, "축=사유" 형식.
+# 부팅을 막지 않는 대신 이 파일이 관측 지점이 된다(wifi info / SNMP / fwcfg_watch).
+_wifi_fw_unapplied_file() {
+    printf '%s/fwcfg_unapplied_%s\n' "$WIFI_FW_UNAPPLIED_DIR" "$1"
+}
+
+_wifi_fw_unapplied_mark() {
+    local iface="$1" axis="$2" reason="$3" f
+    f=$(_wifi_fw_unapplied_file "$iface")
+    mkdir -p "$WIFI_FW_UNAPPLIED_DIR" 2>/dev/null || return 0
+    # 같은 축의 이전 기록은 덮어쓴다(재시도 결과가 최신이다).
+    if [ -f "$f" ]; then
+        grep -v "^${axis}=" "$f" > "${f}.tmp" 2>/dev/null || : > "${f}.tmp"
+        mv -f "${f}.tmp" "$f" 2>/dev/null || true
+    fi
+    printf '%s=%s\n' "$axis" "$reason" >> "$f" 2>/dev/null || true
+}
+
+_wifi_fw_unapplied_clear() {
+    local iface="$1" axis="$2" f
+    f=$(_wifi_fw_unapplied_file "$iface")
+    [ -f "$f" ] || return 0
+    grep -v "^${axis}=" "$f" > "${f}.tmp" 2>/dev/null || : > "${f}.tmp"
+    if [ -s "${f}.tmp" ]; then
+        mv -f "${f}.tmp" "$f" 2>/dev/null || true
+    else
+        rm -f "${f}.tmp" "$f" 2>/dev/null || true
+    fi
+}
+
+# 라이브러리 외부(wifi_init 등)에서 미반영 축을 남길 때 쓰는 공개 래퍼.
+wifi_fw_mark_unapplied() {
+    _wifi_fw_unapplied_mark "$@"
+}
 
 wifi_fw_log() {
     local priority="$1"
@@ -244,6 +285,7 @@ wifi_fw_validate_antcfg_config() {
 wifi_fw_apply_antcfg() {
     local json="$1" iface="$2" tx rx live rc other differs verify_enabled
     local expected_tx expected_rx expected_user_htstream actual_tx actual_rx actual_user_htstream
+    local attempt set_rc=0 fail_reason=""
     if ! _wifi_fw_has_section "$json" "$iface" antcfg; then
         wifi_fw_log local0.info "[$iface] antcfg absent; skip"
         return 0
@@ -299,57 +341,71 @@ wifi_fw_apply_antcfg() {
         return 0
     fi
 
-    if [ -n "$rx" ]; then
-        wifi_fw_log local0.info "[$iface] antcfg configured: tx=$tx rx=$rx"
-        "$WIFI_MLANUTL" "$iface" antcfg "$tx" "$rx" >/dev/null 2>&1 || {
-            wifi_fw_log local0.err "[$iface] antcfg SET failed"
-            [ "$verify_enabled" = true ] && return 1
+    # SET → GET → 비교를 재시도한다. 최종 실패해도 부팅은 막지 않는다 — 안테나 설정
+    # 미반영은 링크를 세울 수 없는 조건이 아니고, 재부팅으로 나아지지도 않는다.
+    # 미반영 사실은 err 로그와 마커 파일로 남긴다.
+    for ((attempt = 1; attempt <= WIFI_FW_VERIFY_ATTEMPTS; attempt++)); do
+        if [ -n "$rx" ]; then
+            wifi_fw_log local0.info "[$iface] antcfg configured (attempt $attempt/$WIFI_FW_VERIFY_ATTEMPTS): tx=$tx rx=$rx"
+            "$WIFI_MLANUTL" "$iface" antcfg "$tx" "$rx" >/dev/null 2>&1 || set_rc=1
+        else
+            wifi_fw_log local0.info "[$iface] antcfg configured (attempt $attempt/$WIFI_FW_VERIFY_ATTEMPTS): tx=$tx (rx 생략 — tx가 Tx/Rx 공통)"
+            "$WIFI_MLANUTL" "$iface" antcfg "$tx" >/dev/null 2>&1 || set_rc=1
+        fi
+        if [ "${set_rc:-0}" = 1 ]; then
+            set_rc=0
+            fail_reason="SET failed"
+            wifi_fw_log local0.warn "[$iface] antcfg SET failed on attempt $attempt/$WIFI_FW_VERIFY_ATTEMPTS"
+            [ "$attempt" -lt "$WIFI_FW_VERIFY_ATTEMPTS" ] && sleep "$WIFI_FW_VERIFY_DELAY_SEC"
+            continue
+        fi
+
+        live=$("$WIFI_MLANUTL" "$iface" antcfg 2>&1) || live=""
+        if [ -z "$live" ]; then
+            fail_reason="GET failed"
+            wifi_fw_log local0.warn "[$iface] antcfg GET failed after SET (attempt $attempt/$WIFI_FW_VERIFY_ATTEMPTS)"
+            [ "$attempt" -lt "$WIFI_FW_VERIFY_ATTEMPTS" ] && sleep "$WIFI_FW_VERIFY_DELAY_SEC"
+            continue
+        fi
+        wifi_fw_log local0.info "[$iface] antcfg live after pre-association SET: $(printf '%s' "$live" | tr '\n' ' ')"
+
+        if [ "$verify_enabled" != true ]; then
+            _wifi_fw_unapplied_clear "$iface" antcfg
             return 0
-        }
-    else
-        wifi_fw_log local0.info "[$iface] antcfg configured: tx=$tx (rx 생략 — tx가 Tx/Rx 공통)"
-        "$WIFI_MLANUTL" "$iface" antcfg "$tx" >/dev/null 2>&1 || {
-            wifi_fw_log local0.err "[$iface] antcfg SET failed"
-            [ "$verify_enabled" = true ] && return 1
+        fi
+
+        # 9098 비대칭 NSS 설정은 요청 Rx mask를 physical GET에 그대로 돌려주지 않는다.
+        # physical path와 host intent를 각각 파싱해 명시된 계약과 수치로 비교한다.
+        actual_tx=$(printf '%s\n' "$live" \
+            | sed -n 's/^Mode of Tx path is[[:space:]:]*\([^[:space:]]*\).*$/\1/p' | tail -1)
+        actual_rx=$(printf '%s\n' "$live" \
+            | sed -n 's/^Mode of Rx path is[[:space:]:]*\([^[:space:]]*\).*$/\1/p' | tail -1)
+        actual_user_htstream=$(printf '%s\n' "$live" \
+            | sed -n 's/.*\[user_htstream=\(0[xX][0-9A-Fa-f][0-9A-Fa-f]*\)\].*/\1/p' | tail -1)
+
+        fail_reason=""
+        if ! _wifi_fw_is_ant_path "$actual_tx" \
+           || [ "$((actual_tx))" -ne "$((expected_tx))" ]; then
+            fail_reason="physical_tx expected=$expected_tx actual=${actual_tx:-<missing>}"
+        elif ! _wifi_fw_is_ant_path "$actual_rx" \
+           || [ "$((actual_rx))" -ne "$((expected_rx))" ]; then
+            fail_reason="physical_rx expected=$expected_rx actual=${actual_rx:-<missing>}"
+        elif ! _wifi_fw_is_user_htstream_value "$actual_user_htstream" \
+           || [ "$((actual_user_htstream))" -ne "$((expected_user_htstream))" ]; then
+            fail_reason="user_htstream expected=$expected_user_htstream actual=${actual_user_htstream:-<missing>}"
+        fi
+
+        if [ -z "$fail_reason" ]; then
+            wifi_fw_log local0.info "[$iface] antcfg verified on attempt $attempt: physical_tx=$actual_tx physical_rx=$actual_rx user_htstream=$actual_user_htstream"
+            _wifi_fw_unapplied_clear "$iface" antcfg
             return 0
-        }
-    fi
+        fi
+        wifi_fw_log local0.warn "[$iface] antcfg not yet applied (attempt $attempt/$WIFI_FW_VERIFY_ATTEMPTS): $fail_reason"
+        [ "$attempt" -lt "$WIFI_FW_VERIFY_ATTEMPTS" ] && sleep "$WIFI_FW_VERIFY_DELAY_SEC"
+    done
 
-    live=$("$WIFI_MLANUTL" "$iface" antcfg 2>&1) || {
-        wifi_fw_log local0.warn "[$iface] antcfg GET failed after SET"
-        [ "$verify_enabled" = true ] && return 1
-        return 0
-    }
-    wifi_fw_log local0.info "[$iface] antcfg live after pre-association SET: $(printf '%s' "$live" | tr '\n' ' ')"
-
-    [ "$verify_enabled" = true ] || return 0
-
-    # 9098 비대칭 NSS 설정은 요청 Rx mask를 physical GET에 그대로 돌려주지 않는다.
-    # physical path와 host intent를 각각 파싱해 명시된 계약과 수치로 비교한다.
-    actual_tx=$(printf '%s\n' "$live" \
-        | sed -n 's/^Mode of Tx path is[[:space:]:]*\([^[:space:]]*\).*$/\1/p' | tail -1)
-    actual_rx=$(printf '%s\n' "$live" \
-        | sed -n 's/^Mode of Rx path is[[:space:]:]*\([^[:space:]]*\).*$/\1/p' | tail -1)
-    actual_user_htstream=$(printf '%s\n' "$live" \
-        | sed -n 's/.*\[user_htstream=\(0[xX][0-9A-Fa-f][0-9A-Fa-f]*\)\].*/\1/p' | tail -1)
-
-    if ! _wifi_fw_is_ant_path "$actual_tx" \
-       || [ "$((actual_tx))" -ne "$((expected_tx))" ]; then
-        wifi_fw_log local0.err "[$iface] antcfg physical Tx verification failed: expected=$expected_tx actual=${actual_tx:-<missing>}"
-        return 1
-    fi
-    if ! _wifi_fw_is_ant_path "$actual_rx" \
-       || [ "$((actual_rx))" -ne "$((expected_rx))" ]; then
-        wifi_fw_log local0.err "[$iface] antcfg physical Rx verification failed: expected=$expected_rx actual=${actual_rx:-<missing>}"
-        return 1
-    fi
-    if ! _wifi_fw_is_ant_path "$actual_user_htstream" \
-       || [ "$((actual_user_htstream))" -ne "$((expected_user_htstream))" ]; then
-        wifi_fw_log local0.err "[$iface] antcfg host NSS verification failed: expected=$expected_user_htstream actual=${actual_user_htstream:-<missing>}"
-        return 1
-    fi
-
-    wifi_fw_log local0.info "[$iface] antcfg verified: physical_tx=$actual_tx physical_rx=$actual_rx user_htstream=$actual_user_htstream"
+    wifi_fw_log local0.err "[$iface] antcfg NOT applied after $WIFI_FW_VERIFY_ATTEMPTS attempts: ${fail_reason:-unknown} (boot continues; antenna paths may stay at FW default)"
+    _wifi_fw_unapplied_mark "$iface" antcfg "${fail_reason:-unknown}"
     return 0
 }
 
@@ -401,7 +457,7 @@ wifi_fw_validate_antcfgnss_config() {
 }
 
 wifi_fw_apply_antcfgnss() {
-    local json="$1" iface="$2" value live rc other differs verify_enabled expected actual tmp
+    local json="$1" iface="$2" value live other differs verify_enabled expected actual attempt
     if ! _wifi_fw_has_section "$json" "$iface" antcfgnss; then
         wifi_fw_log local0.info "[$iface] antcfgnss absent; skip"
         return 0
@@ -447,48 +503,43 @@ wifi_fw_apply_antcfgnss() {
     fi
 
     wifi_fw_log local0.info "[$iface] antcfgnss configured: value=$value"
-    # SET 실패는 구버전 드라이버/mlanutl(antcfgnss 미지원) 신호다. 레거시 antcfg 로
-    # 위임하던 경로는 제거했다 — 위임은 RF_ANTENNA HostCmd 를 발행해 driver#41 의
-    # "물리 불변" 계약을 깨면서도, read-back 이 불가한 드라이버에서는 결국 같은
-    # 검증에 걸려 실패했다. 확인할 수 없는 intent 는 통과시키지 않는다.
-    if ! "$WIFI_MLANUTL" "$iface" antcfgnss "$value" >/dev/null 2>&1; then
-        wifi_fw_log local0.err "[$iface] antcfgnss SET unsupported/failed"
-        [ "$verify_enabled" = true ] && return 1
-        return 0
-    fi
 
-    # user_htstream read-back 은 antcfgnss 가 아니라 antcfg 가 제공한다 — mlanutl 의
-    # 출력 형식이 "NSS limit (antcfg): 2G rx=.. tx=.., 5G rx=.. tx=..  [user_htstream=0x....]"
-    # 이다. antcfgnss 는 SET 전용이라 인자 없이 부르면 값이 아닌 응답만 돌아온다
-    # (실측: "antcfgnss command response received: !!"). 인자 없는 antcfg 는 읽기
-    # 전용이므로 RF_ANTENNA HostCmd 를 발행하지 않는다 — driver#41 의 "물리 불변"
-    # 계약을 지키면서 intent 를 확인할 수 있는 경로가 이것뿐이다.
-    live=$("$WIFI_MLANUTL" "$iface" antcfg 2>&1) || {
-        wifi_fw_log local0.warn "[$iface] antcfg GET failed after antcfgnss SET"
-        [ "$verify_enabled" = true ] && return 1
-        return 0
-    }
-    wifi_fw_log local0.info "[$iface] antcfgnss live after pre-association SET (via antcfg read-back): $(printf '%s' "$live" | tr '\n' ' ')"
+    # SET → read-back → 비교를 재시도한다. 콜드부팅 직후 FW 가 SET 을 rc=0 으로 받고도
+    # 실제 반영이 한 박자 늦는 경우가 있어(mcs_tier 에서 관측된 것과 같은 축) 1-shot 은
+    # 취약하다. read-back 은 antcfg 가 제공한다 — mlanutl 출력이
+    # "NSS limit (antcfg): ...  [user_htstream=0x....]" 이고, antcfgnss 는 SET 전용이라
+    # 인자 없이 부르면 값이 아닌 응답만 돌아온다(실측: "...response received: !!").
+    # 인자 없는 antcfg 는 읽기 전용이라 RF_ANTENNA HostCmd 를 발행하지 않는다.
+    for ((attempt = 1; attempt <= WIFI_FW_VERIFY_ATTEMPTS; attempt++)); do
+        if ! "$WIFI_MLANUTL" "$iface" antcfgnss "$value" >/dev/null 2>&1; then
+            wifi_fw_log local0.warn "[$iface] antcfgnss SET failed on attempt $attempt/$WIFI_FW_VERIFY_ATTEMPTS"
+            [ "$attempt" -lt "$WIFI_FW_VERIFY_ATTEMPTS" ] && sleep "$WIFI_FW_VERIFY_DELAY_SEC"
+            continue
+        fi
+        if [ "$verify_enabled" != true ]; then
+            live=$("$WIFI_MLANUTL" "$iface" antcfg 2>&1) || live=""
+            wifi_fw_log local0.info "[$iface] antcfgnss SET ok (verify 미설정; read-back: $(printf '%s' "$live" | tr '\n' ' '))"
+            _wifi_fw_unapplied_clear "$iface" antcfgnss
+            return 0
+        fi
+        live=$("$WIFI_MLANUTL" "$iface" antcfg 2>&1) || live=""
+        actual=$(printf '%s\n' "$live" \
+            | sed -n 's/.*user_htstream=\(0[xX][0-9A-Fa-f][0-9A-Fa-f]*\).*/\1/p' | tail -1)
+        if _wifi_fw_is_user_htstream_value "$actual" \
+           && [ "$((actual))" -eq "$((expected))" ]; then
+            wifi_fw_log local0.info "[$iface] antcfgnss verified on attempt $attempt: user_htstream=$actual"
+            _wifi_fw_unapplied_clear "$iface" antcfgnss
+            return 0
+        fi
+        wifi_fw_log local0.warn "[$iface] antcfgnss not yet applied (attempt $attempt/$WIFI_FW_VERIFY_ATTEMPTS): expected=$expected actual=${actual:-<missing>}"
+        [ "$attempt" -lt "$WIFI_FW_VERIFY_ATTEMPTS" ] && sleep "$WIFI_FW_VERIFY_DELAY_SEC"
+    done
 
-    [ "$verify_enabled" = true ] || return 0
-
-    actual=$(printf '%s\n' "$live" \
-        | sed -n 's/.*user_htstream=\(0[xX][0-9A-Fa-f][0-9A-Fa-f]*\).*/\1/p' | tail -1)
-    # GET 이 rc=0 인데 값을 담지 않는 드라이버(SET 은 받되 read-back 미지원)는
-    # SET 실패와 같은 신호로 보고 레거시 antcfg 경로로 위임한다. 위임하지 않으면
-    # fail-closed verify 가 wifi_init 을 죽이고, OnFailure 가 emergency reboot 를
-    # 걸어 부팅 루프가 된다(cts-wlan/moal_imx93 실측).
-    if [ -z "$actual" ]; then
-        wifi_fw_log local0.err "[$iface] antcfgnss read-back carries no user_htstream; cannot verify intent"
-        return 1
-    fi
-    if ! _wifi_fw_is_user_htstream_value "$actual" \
-       || [ "$((actual))" -ne "$((expected))" ]; then
-        wifi_fw_log local0.err "[$iface] antcfgnss verification failed: expected=$expected actual=${actual:-<missing>}"
-        return 1
-    fi
-
-    wifi_fw_log local0.info "[$iface] antcfgnss verified: user_htstream=$actual"
+    # 재시도를 소진해도 반영되지 않았다. 부팅을 막지 않는다 — 광고 NSS 미반영은
+    # 링크를 세울 수 없는 조건이 아니고, 재부팅으로 나아지지도 않는다(실기에서
+    # 부팅 루프만 만들었다). 대신 err 로 남기고 미반영 상태를 파일로 노출한다.
+    wifi_fw_log local0.err "[$iface] antcfgnss NOT applied after $WIFI_FW_VERIFY_ATTEMPTS attempts: expected=$expected actual=${actual:-<missing>} (boot continues; advertised NSS may stay at FW default)"
+    _wifi_fw_unapplied_mark "$iface" antcfgnss "expected=$expected actual=${actual:-<missing>}"
     return 0
 }
 
@@ -751,6 +802,7 @@ wifi_fw_apply_mcs_verified() {
             if _wifi_fw_verify_mcs_get "$standard" "$ht" "$vht" "$he" "$mcs_get" "$ax_get"; then
                 wifi_fw_mcs_clear_pending "$iface" 2>/dev/null || true
                 wifi_fw_log local0.info "[$iface] mcstiercfg verified before association on attempt $attempt"
+                _wifi_fw_unapplied_clear "$iface" mcs_tier
                 return 0
             fi
         fi
@@ -770,11 +822,12 @@ wifi_fw_apply_mcs_verified() {
             wifi_fw_log local0.warn "[$iface] mcstiercfg HT/VHT applied but HE not observable before association; deferred connected verification"
             return 0
         fi
-        wifi_fw_log local0.emerg "[$iface] cannot persist deferred MCS verification marker"
+        wifi_fw_log local0.err "[$iface] cannot persist deferred MCS verification marker; falling through to unapplied"
     fi
 
-    wifi_fw_log local0.emerg "[$iface] mcstiercfg GET mismatch after $WIFI_MCS_VERIFY_ATTEMPTS attempts; association must not start"
-    return 1
+    wifi_fw_log local0.err "[$iface] mcstiercfg NOT applied after $WIFI_MCS_VERIFY_ATTEMPTS attempts (boot continues; MCS tier may stay at FW default)"
+    _wifi_fw_unapplied_mark "$iface" mcs_tier "not verified after $WIFI_MCS_VERIFY_ATTEMPTS attempts"
+    return 0
 }
 
 # Deferred marker가 있을 때만 연결 후 확인한다. GET이 맞으면 종료하고, 첫 association이
