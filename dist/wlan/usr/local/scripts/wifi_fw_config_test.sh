@@ -86,6 +86,12 @@ case "$cmd" in
             [ "${ANTCFGNSS_SET_FAILS:-0}" = 1 ] && exit 1
             printf '%s\n' "$1" > "$STATE/$iface.nss"
         fi
+        # GET_EMPTY=SET 은 받되 read-back 이 값을 담지 않는 드라이버(실측: moal_imx93).
+        # rc=0 이라 SET_FAILS 경로에 걸리지 않는 것이 이 케이스의 핵심이다.
+        if [ "${ANTCFGNSS_GET_EMPTY:-0}" = 1 ]; then
+            printf 'antcfgnss command response received: ""\n'
+            exit 0
+        fi
         v=$(cat "$STATE/$iface.nss" 2>/dev/null || echo 0x2222)
         printf 'user_htstream=%s  (2G rx=1 tx=2, 5G rx=1 tx=2)\n' \
             "${ANTCFGNSS_GET_OVERRIDE:-$v}"
@@ -369,6 +375,35 @@ expect_eq "fallback applied legacy antcfg values" '0x0303 0x0101' \
 grep -q 'antcfg verified: physical_tx=' "$LOG" \
     && pass "antcfgnss fallback runs legacy verification" \
     || fail "antcfgnss fallback runs legacy verification"
+
+# SET 은 받되 read-back 이 값을 담지 않는 드라이버(moal_imx93 실측) → 같은 신호로 보고
+# fallback_antcfg 로 위임한다. SET 이 rc=0 이라 위 SET_FAILS 경로에는 걸리지 않는 것이
+# 이 케이스의 핵심이다. 위임하지 않으면 fail-closed verify 가 wifi_init 을 죽이고
+# OnFailure 가 emergency reboot 를 걸어 부팅 루프가 된다.
+rm -f "$STATE/mlan0.ant"; : > "$LOG"
+export ANTCFGNSS_GET_EMPTY=1 ANTCFG_EMIT_USER_HTSTREAM=1 ANTCFG_GET_RX=0x0303
+expect_rc "antcfgnss falls back when read-back carries no user_htstream" 0 \
+    wifi_fw_apply_antcfgnss "$NSS_CONF" mlan0
+unset ANTCFGNSS_GET_EMPTY ANTCFG_EMIT_USER_HTSTREAM ANTCFG_GET_RX
+grep -q 'GET returned no user_htstream' "$LOG" \
+    && pass "antcfgnss read-back fallback reason logged" \
+    || fail "antcfgnss read-back fallback reason logged"
+expect_eq "read-back fallback applied legacy antcfg values" '0x0303 0x0101' \
+    "$(cat "$STATE/mlan0.ant" 2>/dev/null)"
+grep -q 'antcfg verified: physical_tx=' "$LOG" \
+    && pass "read-back fallback runs legacy verification" \
+    || fail "read-back fallback runs legacy verification"
+
+# read-back 이 비었는데 fallback_antcfg 도 없으면 위임할 곳이 없다 — fail-closed 유지.
+: > "$LOG"
+jq 'del(.mlan0.antcfgnss.fallback_antcfg)' "$NSS_CONF" > "$WORK/antcfgnss-nofb.json"
+export ANTCFGNSS_GET_EMPTY=1
+expect_rc "no fallback_antcfg keeps read-back failure fail-closed" 1 \
+    wifi_fw_apply_antcfgnss "$WORK/antcfgnss-nofb.json" mlan0
+unset ANTCFGNSS_GET_EMPTY
+grep -q 'read-back unsupported and no fallback_antcfg' "$LOG" \
+    && pass "no-fallback read-back reason logged" \
+    || fail "no-fallback read-back reason logged"
 
 # disabled/absent 는 조용히 skip — 부팅을 막지 않는다.
 jq '.mlan0.antcfgnss.enabled=false' "$NSS_CONF" > "$WORK/antcfgnss-off.json"

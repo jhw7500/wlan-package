@@ -16,6 +16,14 @@ wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약�
 - postinst 는 드롭인 배치 후 `sshd -t` 로 한 번 검사하고 실패하면 드롭인을 제거한다. 드롭인이 sshd 설정을 깨뜨리면 그 다음 연결부터 **모든** SSH 가 거부되어 원격 복구 경로까지 함께 막히기 때문이다. 제거 후에도 `sshd -t` 가 실패하면 기존 설정 문제로 구분해 기록한다.
 - `hosts.allow` 망 분리(FTP 자체의 접근 대역 제한)는 이 변경으로 대체되지 않는 별개 항목으로 남는다.
 
+### antcfgnss read-back 미지원 드라이버에서 부팅이 무너지던 것 수정
+
+- `wifi_fw_apply_antcfgnss` 의 레거시 위임(`fallback_antcfg`)은 **SET 실패**일 때만 트리거됐다. 그런데 `moal_imx93` 은 **SET 은 받아들이고(rc=0) read-back 은 값을 담지 않는** 중간 상태다(`antcfgnss command response received: ""`). 이 경우가 위임 조건에 없어 곧장 fail-closed verify 로 떨어졌다.
+- 결과는 부팅 붕괴였다 — `antcfgnss verification failed: expected=0x2121 actual=<missing>` → `wifi_init` 종료 → `OnFailure` 가 `wlan_emergency_reboot` 를 걸어 **재부팅 루프**. cts-wlan 실측에서 `wlan_reboot_policy.sh` 의 루프 차단기가 37회에서 막아 보드가 살아남았고, 무선은 죽은 채(`mlan0` 미생성) 유선으로만 접근 가능했다.
+- **read-back 에서 `user_htstream` 을 뽑지 못하면 SET 실패와 같은 신호로 보고 `fallback_antcfg` 로 위임**한다. 실기에서 위임 경로가 `antcfg verified: physical_tx=0x303 physical_rx=0x303 user_htstream=0x2121` 로 **제품 의도값을 그대로 달성**함을 확인했다 — 새 우회층이 아니라 기존 위임의 진입 조건을 채운 것이다.
+- `fallback_antcfg` 가 없으면 종전대로 fail-closed(`return 1`)를 유지한다.
+- 설정만으로는 회피할 수 없는 구조임도 확인했다: `wifi_fw_validate_product_scan_profile()` 이 `antcfgnss.enabled==true` + `value=="0x2121"` + `verify.user_htstream=="0x2121"` 을 모두 요구하므로, 게이트를 통과하는 설정은 반드시 read-back 검증을 탄다.
+
 ### admin 계정 비밀번호 변경
 
 - 신규 설치 시 `postinst` 가 넣는 `admin` 비밀번호를 바꾼다. SHA-512 해시로만 넣는 계약은 그대로다(`chpasswd -e`, 주석에도 값 미기재).
