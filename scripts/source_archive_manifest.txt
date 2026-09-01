@@ -304,6 +304,7 @@ dist/wlan/usr/local/scripts/opc_wlan_apply.sh
 dist/wlan/usr/local/scripts/ovs.sh
 dist/wlan/usr/local/scripts/switchd.sh
 dist/wlan/usr/local/scripts/tests/__init__.py
+dist/wlan/usr/local/scripts/tests/test_admin_ssh_deny.py
 dist/wlan/usr/local/scripts/tests/test_fake_hwclock.sh
 dist/wlan/usr/local/scripts/tests/test_logger_log_format.py
 dist/wlan/usr/local/scripts/tests/test_logger_shell_timeouts.py

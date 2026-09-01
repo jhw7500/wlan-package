@@ -3,6 +3,20 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.7.0 (2026-09-01)
+
+> SemVer **minor** — 상위 툴용 FTP 계정 `admin` 의 SSH 로그인을 차단한다. FTP 경로(vsftpd 로컬 로그인 + `/opt/ftpcmd/bin` 디스패치)와 로그인 셸은 그대로이므로 상위 툴 동작에는 영향이 없지만, `admin` 으로 SSH 셸에 붙던 경로는 사라진다.
+
+### admin 계정 SSH 차단 (sshd 드롭인)
+
+- `admin` 은 상위 툴의 FTP 제어 전용 계정이다 — vsftpd 로컬 로그인과 `/opt/ftpcmd/bin` 의 `rst`/`ifcup`/`ifcdown` 디스패치가 그 용도다. 비밀번호가 상위 툴 규격으로 고정된 값이라, SSH 셸까지 열어두면 **알려진 자격증명만으로 uid 1000 셸을 얻는 경로**가 된다. 온타겟 실측에서 `sshd_config` 에 `AllowUsers`/`DenyUsers` 가 없어 이를 막는 것이 아무것도 없었다.
+- payload 에 `/etc/ssh/sshd_config.d/10-wlan-admin.conf`(`DenyUsers admin`)를 추가했다. `sshd_config` 의 `Include /etc/ssh/sshd_config.d/*.conf` 가 이를 읽는다.
+- **로그인 셸은 바꾸지 않는다.** `/sbin/nologin` 으로 바꾸는 방식은 vsftpd 의 `pam_shells` 가 `admin` 을 거부하게 만들어 `/etc/shells`(base-files 소유)까지 함께 고쳐야 하고, 이미 `admin` 이 있는 기기에는 postinst 의 계정 생성 가드(`id admin` 분기)에 막혀 적용되지 않는다. `DenyUsers` 는 계정 존재 여부와 무관하게 걸리므로 **기존 기기에도 적용**되고, 시리얼 콘솔 복구 경로도 그대로 남는다.
+- sshd 는 socket-activated 다(`sshd.socket` + `sshd@.service`; `sshd.service` 는 not-found). 연결마다 설정을 새로 읽으므로 reload/restart 가 필요 없고, 설치 중 기존 SSH 세션도 끊기지 않는다.
+- postinst 는 드롭인 배치 후 `sshd -t` 로 한 번 검사하고 실패하면 드롭인을 제거한다. 드롭인이 sshd 설정을 깨뜨리면 그 다음 연결부터 **모든** SSH 가 거부되어 원격 복구 경로까지 함께 막히기 때문이다. 제거 후에도 `sshd -t` 가 실패하면 기존 설정 문제로 구분해 기록한다.
+- `hosts.allow` 망 분리(FTP 자체의 접근 대역 제한)는 이 변경으로 대체되지 않는 별개 항목으로 남는다.
+
+
 ## 0.6.1 (2026-08-31)
 
 > SemVer **patch** — 패키지 업그레이드 후 `wifi_init` 자식 유닛이 내려간 채 남던 것을 고친다. 동작 계약 변경 없음.
