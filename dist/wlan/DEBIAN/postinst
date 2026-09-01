@@ -777,6 +777,26 @@ secure_wpa_conf() {
     logger -p local0.err "[$tag:$LINENO] [$KEY] useradd 'admin' failed"
   fi
 
+  # root 비밀번호. 출하 이미지의 root 는 비밀번호가 비어 있고(`passwd -S` 가 NP),
+  # sshd 는 PermitEmptyPasswords yes 라 그 상태로 비밀번호 인증이 통과한다. 값을
+  # 채워 그 경로를 닫는다.
+  # 이미 설정돼 있으면(P) 또는 잠겨 있으면(L) 건드리지 않는다 — 현장에서 바꾸거나
+  # 의도적으로 잠근 상태를 패키지가 되돌리면 안 된다.
+  # 평문을 쓰지 않는 이유는 위 admin 과 같다: postinst 는 /var/lib/dpkg/info/ 아래
+  # world-readable(0755) 로 설치되므로 여기 적은 평문은 비-root 도 그대로 읽는다.
+  root_pw_state=$(passwd -S root 2>/dev/null | awk '{print $2}')
+  if [ -z "$root_pw_state" ]; then
+    logger -p local0.warn "[$tag:$LINENO] [$KEY] could not read root password state; left untouched"
+  elif [ "$root_pw_state" = "NP" ]; then
+    if echo 'root:$6$TjhDdTo9Q6sVUGjX$iKv2tmcawlPvUCBAC7IuGlUGv7yRECjFrTcy2/9CLL82v.cuTl2ZCQ4LTYz./4nVudzSK8Q.7q5kp4rYJKqZe/' | chpasswd -e; then
+      logger -p local0.info "[$tag:$LINENO] [$KEY] set root password (was empty)"
+    else
+      logger -p local0.err "[$tag:$LINENO] [$KEY] chpasswd failed for root; password left empty"
+    fi
+  else
+    logger -p local0.info "[$tag:$LINENO] [$KEY] root password already set ($root_pw_state); left untouched"
+  fi
+
   # admin 의 SSH 접근 차단은 payload 의 /etc/ssh/sshd_config.d/10-wlan-admin.conf
   # 가 담당한다(DenyUsers admin). sshd 는 이 보드에서 socket-activated 라
   # (sshd.socket + sshd@.service) 연결마다 설정을 새로 읽는다 -- reload 는 필요
