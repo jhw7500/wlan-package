@@ -4,34 +4,34 @@
         "This file contains global WiFi settings and per-interface roaming configurations"
     ],
     "global": {
-    "fw_watch": {
-      "_comment": [
-        "wlan_fw_watch.service — 드라이버 wedge 감시자 설정",
-        "enabled: (bool) 감시 서비스 ON/OFF",
-        "CHECK_INTERVAL_SEC: (int) /proc/mwlan/wifi_status 폴링 주기 (초)",
-        "INITIAL_DELAY_SEC: (int) 기동 후 첫 판정까지 유예 (초) — 부팅 중 FW 다운로드 창 회피",
-        "TERM_FAULT_CNT: (int) wifi_status=11(FW_RECOVERY_FAIL) 연속 관측 횟수",
-        "ABNORMAL_FAULT_CNT: (int) 그 외 비정상 값 연속 관측 횟수. 0이면 이 계층 비활성",
-        "CONFIRM_TIMEOUT_SEC: (int) hardware_status 확인 읽기 제한 시간 (초)",
-        "RELOAD_ENABLED: (int) 1이면 재부팅 전에 wifi_init.service 재시작을 먼저 시도",
-        "RELOAD_COOLDOWN_SEC: (int) 리로드 간 최소 간격 (초)",
-        "VERIFY_TIMEOUT_SEC: (int) 리로드 후 회복 확인 제한 시간 (초)",
-        "VERIFY_INTERVAL_SEC: (int) 회복 확인 폴링 주기 (초)"
-      ],
-      "enabled": true,
-      "CHECK_INTERVAL_SEC": 5,
-      "INITIAL_DELAY_SEC": 60,
-      "TERM_FAULT_CNT": 3,
-      "ABNORMAL_FAULT_CNT": 36,
-      "CONFIRM_TIMEOUT_SEC": 3,
-      "RELOAD_ENABLED": 1,
-      "RELOAD_COOLDOWN_SEC": 900,
-      "VERIFY_TIMEOUT_SEC": 90,
-      "VERIFY_INTERVAL_SEC": 3,
-      "MAX_REBOOT_COUNT": 3,
-      "REBOOT_COOLDOWN_SEC": 300,
-      "MIN_UPTIME_SEC": 60
-    },
+        "fw_watch": {
+            "_comment": [
+                "wlan_fw_watch.service — 드라이버 wedge 감시자 설정",
+                "enabled: (bool) 감시 서비스 ON/OFF",
+                "CHECK_INTERVAL_SEC: (int) /proc/mwlan/wifi_status 폴링 주기 (초)",
+                "INITIAL_DELAY_SEC: (int) 기동 후 첫 판정까지 유예 (초) — 부팅 중 FW 다운로드 창 회피",
+                "TERM_FAULT_CNT: (int) wifi_status=11(FW_RECOVERY_FAIL) 연속 관측 횟수",
+                "ABNORMAL_FAULT_CNT: (int) 그 외 비정상 값 연속 관측 횟수. 0이면 이 계층 비활성",
+                "CONFIRM_TIMEOUT_SEC: (int) hardware_status 확인 읽기 제한 시간 (초)",
+                "RELOAD_ENABLED: (int) 1이면 재부팅 전에 wifi_init.service 재시작을 먼저 시도",
+                "RELOAD_COOLDOWN_SEC: (int) 리로드 간 최소 간격 (초)",
+                "VERIFY_TIMEOUT_SEC: (int) 리로드 후 회복 확인 제한 시간 (초)",
+                "VERIFY_INTERVAL_SEC: (int) 회복 확인 폴링 주기 (초)"
+            ],
+            "enabled": true,
+            "CHECK_INTERVAL_SEC": 5,
+            "INITIAL_DELAY_SEC": 60,
+            "TERM_FAULT_CNT": 3,
+            "ABNORMAL_FAULT_CNT": 36,
+            "CONFIRM_TIMEOUT_SEC": 3,
+            "RELOAD_ENABLED": 1,
+            "RELOAD_COOLDOWN_SEC": 900,
+            "VERIFY_TIMEOUT_SEC": 90,
+            "VERIFY_INTERVAL_SEC": 3,
+            "MAX_REBOOT_COUNT": 3,
+            "REBOOT_COOLDOWN_SEC": 300,
+            "MIN_UPTIME_SEC": 60
+        },
         "_comment": [
             "드라이버 초기화 전역 설정. wifi_init.sh가 사용. 인터페이스별 값(mlanN)이 있으면 그것이 우선하고 여기 값은 fallback.",
             "BOARD_TYPE: (string) imx8mm|imx93 — 보드/드라이버 선택 (mlan_imx8/moal_imx8 vs _imx93)",
@@ -224,16 +224,16 @@
         }
     },
     "temperature": {
-            "_comment": [
-                "wifi_logger_temp.sh 온도 임계값과 복구 조건 설정",
-                "emerg_cpu: (int) WiFi·bridge 긴급 정지를 시작하는 CPU 온도 임계값 (°C)",
-                "emerg_mlan: (int) WLAN emergency 임계값 예약 키. 현재 스크립트는 값을 로드하지만 긴급 정지 조건에는 사용하지 않음",
-                "crit_*/error_*/warn_*: (int) CPU·WLAN 심각도별 로그 온도 임계값 (°C)",
-                "cooldown_sec: (int) emergency로 WiFi·bridge 서비스를 정지한 후 최초 복구 온도 확인까지의 냉각 대기 시간 (초)",
-                "recover_*: (int) CPU·WLAN 복구 판정 온도 (°C)",
-                "check_interval_sec: (int) 온도 확인 주기 (초)",
-                "emerg_count_threshold: (int) CPU emergency 온도 연속 감지 카운터 임계값. 카운터가 이 값보다 커질 때 정지하므로 기본값 2는 세 번째 연속 감지에서 발동"
-            ],
+        "_comment": [
+            "wifi_logger_temp.sh 온도 임계값과 복구 조건 설정",
+            "emerg_cpu: (int) WiFi·bridge 긴급 정지를 시작하는 CPU 온도 임계값 (°C)",
+            "emerg_mlan: (int) WLAN emergency 임계값 예약 키. 현재 스크립트는 값을 로드하지만 긴급 정지 조건에는 사용하지 않음",
+            "crit_*/error_*/warn_*: (int) CPU·WLAN 심각도별 로그 온도 임계값 (°C)",
+            "cooldown_sec: (int) emergency로 WiFi·bridge 서비스를 정지한 후 최초 복구 온도 확인까지의 냉각 대기 시간 (초)",
+            "recover_*: (int) CPU·WLAN 복구 판정 온도 (°C)",
+            "check_interval_sec: (int) 온도 확인 주기 (초)",
+            "emerg_count_threshold: (int) CPU emergency 온도 연속 감지 카운터 임계값. 카운터가 이 값보다 커질 때 정지하므로 기본값 2는 세 번째 연속 감지에서 발동"
+        ],
         "emerg_cpu": 100,
         "crit_cpu": 95,
         "error_cpu": 90,
@@ -326,25 +326,39 @@
         "thermal_mgmt": true,
         "antcfg": {
             "_comment": [
-                "FW Tx/Rx 안테나 경로. association 전에 mlanutl <iface> antcfg <tx> [rx] 로 적용",
-        "enabled: (bool) 적용 ON/OFF. imx93 mlan0 제품값은 scan wedge 회피용 비대칭 NSS 설정으로 association 전 강제하며, imx8 board config는 이 strict profile을 비활성화한다",
-                "tx: (string) Tx 경로 비트맵. 10진 또는 0x 16진. rx가 비면 Tx/Rx 공통으로 쓰인다",
-                "rx: (string) Rx 경로 비트맵. 빈 문자열이면 인자를 생략해 tx 값이 Tx/Rx 양쪽에 적용된다",
-                "verify: (object, optional) SET 후 확인할 physical_tx/physical_rx/user_htstream. 존재하면 세 값을 모두 GET으로 확인하며 불일치 시 association을 중단한다",
-                "9098 비대칭 요청 tx=0x0303/rx=0x0101은 physical GET 0x0303/0x0303으로 정규화되고 논리 Rx NSS1 의도는 user_htstream=0x2121에 유지된다",
-                "9098 비트맵: LOW BYTE=2G, HIGH BYTE=5G. 각 바이트에서 bit0=path A, bit1=path B",
-                "예: 0x303=2G/5G 모두 A+B(2x2), 0x103=2G A+B + 5G A, 0x202=2G/5G 모두 path B, 3=A+B(밴드 구분 없는 칩)",
-                "SAD 지원 칩: tx=0xFFFF가 안테나 다이버시티이고 이때 rx는 평가 주기(기본 0x1770=6s)를 뜻한다",
-                "주의: antcfg는 어댑터(라디오) 단위 설정이라 mlan0/mlan1에 서로 다른 값을 켜면 나중에 적용된 쪽(mlan1)이 이긴다",
-                "주의: global.ANT_TYPE(GPIO mux, internal|external)과는 별개 설정이다"
+                "FW Tx/Rx 안테나 경로(물리 전용). 제품 기본은 비활성(미적용) — RF_ANTENNA를 발행하지 않고 물리를 FW 기본(2x2)에 둔다 (driver#41)",
+                "광고 NSS intent는 아래 antcfgnss 섹션이 담당한다. 이 섹션을 켜서 SET하면 intent(user_htstream)가 안테나 마스크로부터 재계산돼 antcfgnss 값을 덮어쓴다 — 켜야 한다면 적용 순서는 항상 antcfg → antcfgnss",
+                "enabled: (bool) 적용 ON/OFF. tx/rx: (string) 경로 비트맵(10진 또는 0x 16진; rx가 비면 tx가 Tx/Rx 공통)",
+                "9098 비트맵: LOW BYTE=2G, HIGH BYTE=5G. 각 바이트에서 bit0=path A, bit1=path B. 예: 0x303=2G/5G 모두 A+B(2x2)",
+                "주의: physical 1-path(예: 0x0101/0x0101)는 p149.115 scan wedge cofactor다 — 제품 부팅 불변식이 antcfg 비활성을 강제하는 이유",
+                "주의: 어댑터(라디오) 단위 설정이라 mlan0/mlan1에 서로 다른 값을 켜면 나중에 적용된 쪽이 이긴다. global.ANT_TYPE(GPIO mux)과는 별개"
+            ],
+            "enabled": false,
+            "tx": "",
+            "rx": ""
+        },
+        "antcfgnss": {
+            "_comment": [
+                "광고 NSS intent(user_htstream) 전용 설정 — association 전에 mlanutl <iface> antcfgnss <value> 로 적용 (driver#41)",
+                "RF_ANTENNA HostCmd를 발행하지 않아 물리 안테나는 불변. 니블 배치 [15:12]=5G Tx, [11:8]=5G Rx, [7:4]=2G Tx, [3:0]=2G Rx",
+                "value: (string) 0x 접두 필수(드라이버가 강제). 제품값 0x2121 = 양 밴드 Tx2/Rx1 — 실효 TX NSS = min(Tx니블, Rx니블) 실측이라 TX NSS1이 보장된다",
+                "verify: (object, optional) SET 후 read-back으로 user_htstream을 확인, 불일치 시 association 중단(fail-closed)",
+                "fallback_antcfg: (object, optional) antcfgnss SET 미지원 구버전 드라이버에서 레거시 antcfg 경로(tx/rx+verify)로 위임할 값",
+                "주의: 어댑터 단위 상태(antcfg와 동일). 반영은 다음 (re)association부터"
             ],
             "enabled": true,
-            "tx": "0x0303",
-            "rx": "0x0101",
+            "value": "0x2121",
             "verify": {
-                "physical_tx": "0x0303",
-                "physical_rx": "0x0303",
                 "user_htstream": "0x2121"
+            },
+            "fallback_antcfg": {
+                "tx": "0x0303",
+                "rx": "0x0101",
+                "verify": {
+                    "physical_tx": "0x0303",
+                    "physical_rx": "0x0303",
+                    "user_htstream": "0x2121"
+                }
             }
         },
         "rate_adapt": {
@@ -494,7 +508,7 @@
         },
         "mcs_tier": {
             "_comment": [
-        "MCS capability 제한(mcstiercfg). imx93 mlan0의 HT/VHT/HE 7은 antcfg와 묶인 제품 안전 불변식. 연결 전 SET; HE 0x0000은 첫 연결에서 검증하고 FW 기본 복귀 시 SET+serialized wifi connect 1회 후 확정",
+                "MCS capability 제한(mcstiercfg). imx93 mlan0의 HT/VHT/HE 7은 antcfg와 묶인 제품 안전 불변식. 연결 전 SET; HE 0x0000은 첫 연결에서 검증하고 FW 기본 복귀 시 SET+serialized wifi connect 1회 후 확정",
                 "enabled: (bool) MCS tier 설정 적용 ON/OFF",
                 "ht: (string) ht prefix 뒤에 전달할 값. 빈 문자열이면 생략",
                 "vht: (string) vht prefix 뒤에 전달할 값. 빈 문자열이면 생략",
@@ -578,6 +592,10 @@
                 "physical_rx": "",
                 "user_htstream": ""
             }
+        },
+        "antcfgnss": {
+            "enabled": false,
+            "value": ""
         },
         "rate_adapt": {
             "enabled": true,

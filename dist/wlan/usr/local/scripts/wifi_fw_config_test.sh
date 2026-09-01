@@ -78,6 +78,18 @@ case "$cmd" in
                 "${ANTCFG_GET_USER_HTSTREAM:-0x2121}"
         fi
         ;;
+    antcfgnss)
+        # driver#41 host 전용 knob. UNSUPPORTED=명령 자체 부재(구버전),
+        # SET_FAILS=GET 전용 구버전(SET 인자만 거부), GET_OVERRIDE=verify 불일치 재현.
+        [ "${ANTCFGNSS_UNSUPPORTED:-0}" = 1 ] && exit 1
+        if [ $# -gt 0 ]; then
+            [ "${ANTCFGNSS_SET_FAILS:-0}" = 1 ] && exit 1
+            printf '%s\n' "$1" > "$STATE/$iface.nss"
+        fi
+        v=$(cat "$STATE/$iface.nss" 2>/dev/null || echo 0x2222)
+        printf 'user_htstream=%s  (2G rx=1 tx=2, 5G rx=1 tx=2)\n' \
+            "${ANTCFGNSS_GET_OVERRIDE:-$v}"
+        ;;
     mcstiercfg)
         if [ $# -gt 0 ]; then
             count_file="$STATE/$iface.mcs_set_count"
@@ -238,9 +250,13 @@ else
     : > "$WORK/migrated-antcfg-off.json"
     fail "legacy product antcfg migration succeeds"
 fi
-expect_eq "legacy disabled antcfg becomes asymmetric product workaround" \
-    'true 0x0303 0x0101 0x0303 0x0303 0x2121' \
-    "$(jq -r '.mlan0.antcfg | "\(.enabled) \(.tx) \(.rx) \(.verify.physical_tx) \(.verify.physical_rx) \(.verify.user_htstream)"' \
+expect_eq "legacy disabled antcfg stays emptied and gains antcfgnss contract" \
+    'false - - false true 0x2121 0x2121 0x0303 0x0101' \
+    "$(jq -r '[.mlan0.antcfg.enabled, .mlan0.antcfg.tx, .mlan0.antcfg.rx,
+               (.mlan0.antcfg.verify != null), .mlan0.antcfgnss.enabled,
+               .mlan0.antcfgnss.value, .mlan0.antcfgnss.verify.user_htstream,
+               .mlan0.antcfgnss.fallback_antcfg.tx, .mlan0.antcfgnss.fallback_antcfg.rx]
+              | map(tostring | if . == "" then "-" else . end) | join(" ")' \
         "$WORK/migrated-antcfg-off.json" 2>/dev/null)"
 expect_eq "antcfg migration preserves comments and unrelated operator metadata" 'keep preserve' \
     "$(jq -r '.mlan0.antcfg | "\(._comment[0]) \(.operator_note)"' \
@@ -250,9 +266,11 @@ jq '.mlan0.antcfg={enabled:true,tx:"0x0101",rx:""}' "$CONF" \
     > "$WORK/legacy-antcfg-1x1.json"
 wifi_fw_migrate_product_antcfg_json "$WORK/legacy-antcfg-1x1.json" \
     > "$WORK/migrated-antcfg-1x1.json" 2>/dev/null
-expect_eq "known physical 1x1 trigger migrates to asymmetric workaround" \
-    '0x0303 0x0101 0x2121' \
-    "$(jq -r '.mlan0.antcfg | "\(.tx) \(.rx) \(.verify.user_htstream)"' \
+expect_eq "known physical 1x1 trigger migrates to emptied antcfg + antcfgnss" \
+    'false - true 0x2121' \
+    "$(jq -r '[.mlan0.antcfg.enabled, .mlan0.antcfg.tx,
+               .mlan0.antcfgnss.enabled, .mlan0.antcfgnss.value]
+              | map(tostring | if . == "" then "-" else . end) | join(" ")' \
         "$WORK/migrated-antcfg-1x1.json" 2>/dev/null)"
 
 jq '.mlan0.antcfg={enabled:true,tx:"0x0303",rx:"0x0303",operator_note:"custom"}' \
@@ -306,6 +324,62 @@ expect_eq "imx8 candidate upgrade neutralizes injected strict product profile" \
     'false   false' \
     "$(jq -r '.mlan0.antcfg | "\(.enabled) \(.tx) \(.rx) \(.verify != null)"' \
         "$WORK/migrated-product-antcfg-imx8.json" 2>/dev/null)"
+expect_eq "imx8 candidate upgrade neutralizes injected product antcfgnss" 'false' \
+    "$(jq -r '.mlan0.antcfgnss.enabled' \
+        "$WORK/migrated-product-antcfg-imx8.json" 2>/dev/null)"
+
+# --- antcfgnss 적용 경로 (driver#41: RF_ANTENNA 미발행 host 전용 knob) ---
+NSS_CONF="$WORK/antcfgnss.json"
+jq '.mlan0.antcfgnss = {
+        enabled: true, value: "0x2121",
+        verify: {user_htstream: "0x2121"},
+        fallback_antcfg: {tx: "0x0303", rx: "0x0101",
+            verify: {physical_tx: "0x0303", physical_rx: "0x0303",
+                     user_htstream: "0x2121"}}
+    }' "$CONF" > "$NSS_CONF"
+rm -f "$STATE/mlan0.nss"; : > "$LOG"
+expect_rc "antcfgnss applies and verifies on capable driver" 0 \
+    wifi_fw_apply_antcfgnss "$NSS_CONF" mlan0
+expect_eq "antcfgnss SET reached the utility" '0x2121' \
+    "$(cat "$STATE/mlan0.nss" 2>/dev/null)"
+grep -q 'antcfgnss verified: user_htstream=0x2121' "$LOG" \
+    && pass "antcfgnss verify marker logged" \
+    || fail "antcfgnss verify marker logged"
+
+: > "$LOG"
+export ANTCFGNSS_GET_OVERRIDE=0x1111
+expect_rc "antcfgnss verify mismatch fails closed" 1 \
+    wifi_fw_apply_antcfgnss "$NSS_CONF" mlan0
+unset ANTCFGNSS_GET_OVERRIDE
+grep -q 'antcfgnss verification failed' "$LOG" \
+    && pass "antcfgnss mismatch reason logged" \
+    || fail "antcfgnss mismatch reason logged"
+
+# GET 전용 구버전(SET 인자 거부) → fallback_antcfg 로 위임하고 레거시 verify 까지 수행.
+rm -f "$STATE/mlan0.ant"; : > "$LOG"
+export ANTCFGNSS_SET_FAILS=1 ANTCFG_EMIT_USER_HTSTREAM=1 ANTCFG_GET_RX=0x0303
+expect_rc "antcfgnss falls back to legacy antcfg on unsupported SET" 0 \
+    wifi_fw_apply_antcfgnss "$NSS_CONF" mlan0
+unset ANTCFGNSS_SET_FAILS ANTCFG_EMIT_USER_HTSTREAM ANTCFG_GET_RX
+grep -q 'falling back to legacy antcfg' "$LOG" \
+    && pass "antcfgnss fallback reason logged" \
+    || fail "antcfgnss fallback reason logged"
+expect_eq "fallback applied legacy antcfg values" '0x0303 0x0101' \
+    "$(cat "$STATE/mlan0.ant" 2>/dev/null)"
+grep -q 'antcfg verified: physical_tx=' "$LOG" \
+    && pass "antcfgnss fallback runs legacy verification" \
+    || fail "antcfgnss fallback runs legacy verification"
+
+# disabled/absent 는 조용히 skip — 부팅을 막지 않는다.
+jq '.mlan0.antcfgnss.enabled=false' "$NSS_CONF" > "$WORK/antcfgnss-off.json"
+expect_rc "disabled antcfgnss skips without failing boot" 0 \
+    wifi_fw_apply_antcfgnss "$WORK/antcfgnss-off.json" mlan0
+expect_rc "absent antcfgnss skips without failing boot" 0 \
+    wifi_fw_apply_antcfgnss "$CONF" mlan0
+jq '.mlan0.antcfgnss={enabled:true,value:"2121"}' "$CONF" \
+    > "$WORK/antcfgnss-badvalue.json"
+expect_rc "antcfgnss value without 0x prefix is rejected by validation" 1 \
+    wifi_fw_validate_antcfgnss_config "$WORK/antcfgnss-badvalue.json" mlan0
 
 SOC_IMX93="$WORK/soc-imx93"
 SOC_IMX8="$WORK/soc-imx8"
@@ -433,6 +507,36 @@ expect_eq "board normalization preserves existing uid/gid" \
     "$BOARD_CONF_UID:$BOARD_CONF_GID" \
     "$(stat -c '%u:%g' "$WORK/board-imx8.json")"
 
+# factory reset은 postinst migrate 없이 template+board stage만 타므로, 제품
+# antcfgnss(0x2121) 중화는 board normalization에서도 일어나야 한다 (#221 P1).
+expect_eq "board normalization disables product antcfgnss on imx8" \
+    'false' "$(jq -r '.mlan0.antcfgnss.enabled' "$WORK/board-imx8.json" 2>/dev/null)"
+expect_eq "board normalization keeps neutralized antcfgnss value (log-only)" \
+    '0x2121' "$(jq -r '.mlan0.antcfgnss.value' "$WORK/board-imx8.json" 2>/dev/null)"
+jq '.mlan0.antcfgnss = {enabled: true, value: "0x1111"}' \
+    "$TEMPLATE" > "$WORK/board-imx8-custom-nss.json"
+if WIFI_SOC_ID_PATH="$SOC_IMX8" \
+   "$BOARD_CONFIG" "$WORK/board-imx8-custom-nss.json" >/dev/null 2>&1; then
+    pass "imx8 board config succeeds on custom antcfgnss"
+else
+    fail "imx8 board config succeeds on custom antcfgnss"
+fi
+expect_eq "board normalization preserves custom antcfgnss on imx8" \
+    'true 0x1111' \
+    "$(jq -r '.mlan0.antcfgnss | "\(.enabled) \(.value)"' \
+        "$WORK/board-imx8-custom-nss.json" 2>/dev/null)"
+cp "$TEMPLATE" "$WORK/board-imx93-nss.json"
+if WIFI_SOC_ID_PATH="$SOC_IMX93" \
+   "$BOARD_CONFIG" "$WORK/board-imx93-nss.json" >/dev/null 2>&1; then
+    pass "imx93 board config succeeds on package template"
+else
+    fail "imx93 board config succeeds on package template"
+fi
+expect_eq "board normalization keeps product antcfgnss enabled on imx93" \
+    'true 0x2121' \
+    "$(jq -r '.mlan0.antcfgnss | "\(.enabled) \(.value)"' \
+        "$WORK/board-imx93-nss.json" 2>/dev/null)"
+
 MV_FAULT_BIN="$WORK/mv-fault-bin"
 MV_FAULT_DIR="$WORK/board-mv-fault"
 MV_CAPTURE="$WORK/mv-fault.log"
@@ -465,9 +569,20 @@ expect_eq "rename failure removes only its temporary output" '' \
 
 expect_rc "imx93 product scan profile accepts shipped defaults" 0 \
     wifi_fw_validate_product_scan_profile "$TEMPLATE" imx93
-jq '.mlan0.antcfg.enabled=false' "$TEMPLATE" > "$WORK/unsafe-antcfg.json"
-expect_rc "imx93 product scan profile rejects disabled antcfg" 1 \
+jq '.mlan0.antcfg.enabled=true | .mlan0.antcfg.tx="0x0303" | .mlan0.antcfg.rx="0x0101"' \
+    "$TEMPLATE" > "$WORK/unsafe-antcfg.json"
+expect_rc "imx93 product scan profile rejects re-enabled physical antcfg" 1 \
     wifi_fw_validate_product_scan_profile "$WORK/unsafe-antcfg.json" imx93
+jq '.mlan0.antcfgnss.enabled=false' "$TEMPLATE" > "$WORK/unsafe-nss-off.json"
+expect_rc "imx93 product scan profile rejects disabled antcfgnss" 1 \
+    wifi_fw_validate_product_scan_profile "$WORK/unsafe-nss-off.json" imx93
+jq '.mlan0.antcfgnss.value="0x2222"' "$TEMPLATE" > "$WORK/unsafe-nss-value.json"
+expect_rc "imx93 product scan profile rejects non-product antcfgnss value" 1 \
+    wifi_fw_validate_product_scan_profile "$WORK/unsafe-nss-value.json" imx93
+jq '.mlan1.antcfgnss={enabled:true,value:"0x1111"}' "$TEMPLATE" \
+    > "$WORK/unsafe-mlan1-nss.json"
+expect_rc "imx93 product scan profile rejects adapter overwrite from mlan1 antcfgnss" 1 \
+    wifi_fw_validate_product_scan_profile "$WORK/unsafe-mlan1-nss.json" imx93
 jq '.mlan0.mcs_tier.he="both 9"' "$TEMPLATE" > "$WORK/unsafe-mcs.json"
 expect_rc "imx93 product scan profile rejects MCS above 7" 1 \
     wifi_fw_validate_product_scan_profile "$WORK/unsafe-mcs.json" imx93
@@ -482,6 +597,10 @@ expect_rc "imx8 skips imx93-only product scan profile" 0 \
 grep -q 'migrate_product_antcfg /usr/local/etc/wifi_init_conf.json "$BOARD_TYPE" || exit 1' "$POSTINST" \
     && pass "postinst gates product antcfg migration by detected board" \
     || fail "postinst does not gate product antcfg migration by detected board"
+awk '/wifi_fw_apply_antcfg /{a=NR} /wifi_fw_apply_antcfgnss /{b=NR} END{exit !(a && b && b>a)}' \
+    "$WIFI_INIT" \
+    && pass "wifi_init applies antcfgnss after antcfg (ordering constraint)" \
+    || fail "wifi_init applies antcfgnss after antcfg (ordering constraint)"
 grep -q 'wifi_fw_validate_product_scan_profile "$WIFI_INIT_CONF_JSON" "$BOARD_TYPE"' "$WIFI_INIT" \
     && pass "wifi_init enforces board-qualified product scan profile" \
     || fail "wifi_init does not enforce board-qualified product scan profile"
@@ -667,11 +786,19 @@ grep -q 'adapter-level setting' "$LOG" \
     && fail "antcfg warns even when values match (오탐)" \
     || pass "antcfg does not warn when values match"
 
-expect_eq "template enables mlan0 asymmetric antcfg workaround" 'true 0x0303 0x0101' \
-    "$(jq -r '.mlan0.antcfg | "\(.enabled) \(.tx) \(.rx)"' "$TEMPLATE")"
-expect_eq "template verifies normalized physical paths and host NSS intent" '0x0303 0x0303 0x2121' \
-    "$(jq -r '.mlan0.antcfg.verify | "\(.physical_tx) \(.physical_rx) \(.user_htstream)"' "$TEMPLATE")"
+expect_eq "template ships mlan0 antcfg emptied (no RF_ANTENNA on boot)" 'false - - false' \
+    "$(jq -r '[.mlan0.antcfg.enabled, .mlan0.antcfg.tx, .mlan0.antcfg.rx,
+               (.mlan0.antcfg.verify != null)]
+              | map(tostring | if . == "" then "-" else . end) | join(" ")' "$TEMPLATE")"
+expect_eq "template ships mlan0 antcfgnss product contract with fallback" \
+    'true 0x2121 0x2121 0x0303 0x0101 0x2121' \
+    "$(jq -r '.mlan0.antcfgnss
+              | [.enabled, .value, .verify.user_htstream,
+                 .fallback_antcfg.tx, .fallback_antcfg.rx,
+                 .fallback_antcfg.verify.user_htstream]
+              | map(tostring) | join(" ")' "$TEMPLATE")"
 expect_eq "template ships mlan1 antcfg disabled" 'false' "$(jq -r '.mlan1.antcfg.enabled' "$TEMPLATE")"
+expect_eq "template ships mlan1 antcfgnss disabled" 'false' "$(jq -r '.mlan1.antcfgnss.enabled' "$TEMPLATE")"
 grep -q 'wifi_fw_apply_antcfg "$WIFI_INIT_CONF_JSON" "$iface"' "$WIFI_INIT" \
     && pass "wifi_init delegates antcfg apply" \
     || fail "wifi_init does not delegate antcfg apply"
