@@ -507,6 +507,36 @@ expect_eq "board normalization preserves existing uid/gid" \
     "$BOARD_CONF_UID:$BOARD_CONF_GID" \
     "$(stat -c '%u:%g' "$WORK/board-imx8.json")"
 
+# factory reset은 postinst migrate 없이 template+board stage만 타므로, 제품
+# antcfgnss(0x2121) 중화는 board normalization에서도 일어나야 한다 (#221 P1).
+expect_eq "board normalization disables product antcfgnss on imx8" \
+    'false' "$(jq -r '.mlan0.antcfgnss.enabled' "$WORK/board-imx8.json" 2>/dev/null)"
+expect_eq "board normalization keeps neutralized antcfgnss value (log-only)" \
+    '0x2121' "$(jq -r '.mlan0.antcfgnss.value' "$WORK/board-imx8.json" 2>/dev/null)"
+jq '.mlan0.antcfgnss = {enabled: true, value: "0x1111"}' \
+    "$TEMPLATE" > "$WORK/board-imx8-custom-nss.json"
+if WIFI_SOC_ID_PATH="$SOC_IMX8" \
+   "$BOARD_CONFIG" "$WORK/board-imx8-custom-nss.json" >/dev/null 2>&1; then
+    pass "imx8 board config succeeds on custom antcfgnss"
+else
+    fail "imx8 board config succeeds on custom antcfgnss"
+fi
+expect_eq "board normalization preserves custom antcfgnss on imx8" \
+    'true 0x1111' \
+    "$(jq -r '.mlan0.antcfgnss | "\(.enabled) \(.value)"' \
+        "$WORK/board-imx8-custom-nss.json" 2>/dev/null)"
+cp "$TEMPLATE" "$WORK/board-imx93-nss.json"
+if WIFI_SOC_ID_PATH="$SOC_IMX93" \
+   "$BOARD_CONFIG" "$WORK/board-imx93-nss.json" >/dev/null 2>&1; then
+    pass "imx93 board config succeeds on package template"
+else
+    fail "imx93 board config succeeds on package template"
+fi
+expect_eq "board normalization keeps product antcfgnss enabled on imx93" \
+    'true 0x2121' \
+    "$(jq -r '.mlan0.antcfgnss | "\(.enabled) \(.value)"' \
+        "$WORK/board-imx93-nss.json" 2>/dev/null)"
+
 MV_FAULT_BIN="$WORK/mv-fault-bin"
 MV_FAULT_DIR="$WORK/board-mv-fault"
 MV_CAPTURE="$WORK/mv-fault.log"
