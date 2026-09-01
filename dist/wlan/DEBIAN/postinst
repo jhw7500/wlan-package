@@ -792,9 +792,12 @@ secure_wpa_conf() {
     else
       rm -f "$admin_ssh_dropin"
       if sshd -t >/dev/null 2>&1; then
+        # 드롭인이 원인이었고 치워서 SSH 를 살렸다 — 우리 payload 결함이므로 err.
         logger -p local0.err "[$tag:$LINENO] [$KEY] sshd -t rejected $admin_ssh_dropin; removed it to keep SSH reachable"
       else
-        logger -p local0.warn "[$tag:$LINENO] [$KEY] sshd -t fails without $admin_ssh_dropin too; pre-existing sshd config problem"
+        # 드롭인을 치워도 여전히 깨져 있다 — 다음 연결부터 SSH 가 전부 거부될 수
+        # 있고 원격 복구 경로까지 막힌다. 위 경우보다 심각하므로 crit 으로 올린다.
+        logger -p local0.crit "[$tag:$LINENO] [$KEY] sshd -t still fails without $admin_ssh_dropin; sshd config is broken and the next connection may be refused"
       fi
     fi
   fi
