@@ -310,6 +310,7 @@ dist/wlan/usr/local/scripts/tests/test_logger_log_format.py
 dist/wlan/usr/local/scripts/tests/test_logger_shell_timeouts.py
 dist/wlan/usr/local/scripts/tests/test_logger_supervision_units.py
 dist/wlan/usr/local/scripts/tests/test_roam_owner_service_policy.py
+dist/wlan/usr/local/scripts/tests/test_root_password.py
 dist/wlan/usr/local/scripts/tests/test_unit_execstart_exec_bit.py
 dist/wlan/usr/local/scripts/tests/test_wifi_eth_peer.sh
 dist/wlan/usr/local/scripts/tests/test_wifi_log_extract.py
