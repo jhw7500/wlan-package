@@ -76,8 +76,12 @@ def _guard_block() -> str:
     return "\n".join(lines[start:end + 1])
 
 
-def _run_guard(tmp_path: Path, *, sshd_ok: bool) -> Path:
-    """가드 블록을 실행하고 드롭인 파일의 최종 상태를 돌려준다."""
+def _run_guard(tmp_path: Path, *, sshd_rcs: list[int]) -> tuple[Path, str]:
+    """가드 블록을 실행하고 (드롭인 최종 상태, logger 호출 기록)을 돌려준다.
+
+    ``sshd_rcs`` 는 ``sshd -t`` 호출 순서별 종료코드다. 가드는 첫 검사가 실패하면
+    드롭인을 치우고 **한 번 더** 부르며, 그 두 번째 결과가 심각도를 가른다.
+    """
     # 실제 설치 경로를 그대로 쓰지 않는다 — 그 경로는 치환 결과의 접미사가 되어
     # "원본 경로가 남아 있지 않은가" 단언을 무의미하게 만든다.
     target = tmp_path / "dropin.conf"
@@ -85,10 +89,26 @@ def _run_guard(tmp_path: Path, *, sshd_ok: bool) -> Path:
 
     fakebin = tmp_path / "bin"
     fakebin.mkdir()
-    for name, rc in (("sshd", 0 if sshd_ok else 1), ("logger", 0)):
-        stub = fakebin / name
-        stub.write_text(f"#!/bin/sh\nexit {rc}\n", encoding="utf-8")
-        stub.chmod(0o755)
+    rcfile = tmp_path / "sshd_rcs"
+    rcfile.write_text("".join(f"{rc}\n" for rc in sshd_rcs), encoding="utf-8")
+    counter = tmp_path / "sshd_calls"
+    logfile = tmp_path / "logger_calls"
+
+    sshd = fakebin / "sshd"
+    sshd.write_text(
+        "#!/bin/sh\n"
+        f"n=$(cat {counter} 2>/dev/null || echo 0); n=$((n+1)); echo $n > {counter}\n"
+        f'rc=$(sed -n "${{n}}p" {rcfile})\n'
+        "exit ${rc:-0}\n",
+        encoding="utf-8",
+    )
+    sshd.chmod(0o755)
+
+    logger = fakebin / "logger"
+    logger.write_text(
+        f'#!/bin/sh\nprintf "%s\\n" "$*" >> {logfile}\nexit 0\n', encoding="utf-8"
+    )
+    logger.chmod(0o755)
 
     block = _guard_block()
     redirected = block.replace(f"/{DROPIN_REL}", str(target))
@@ -103,20 +123,38 @@ def _run_guard(tmp_path: Path, *, sshd_ok: bool) -> Path:
         encoding="utf-8",
     )
     subprocess.run(["bash", str(script)], check=True, capture_output=True)
-    return target
+    logged = logfile.read_text(encoding="utf-8") if logfile.exists() else ""
+    return target, logged
 
 
 def test_guard_keeps_dropin_when_sshd_accepts_config(tmp_path):
-    target = _run_guard(tmp_path, sshd_ok=True)
+    target, logged = _run_guard(tmp_path, sshd_rcs=[0])
     assert target.exists(), "guard removed the drop-in even though sshd -t passed"
+    assert "-p local0.info" in logged, logged
 
 
 def test_guard_removes_dropin_when_sshd_rejects_config(tmp_path):
     """드롭인이 sshd 설정을 깨면 그 다음 연결부터 모든 SSH 가 거부된다 —
     원격 복구 경로까지 막히므로 가드는 반드시 물러서야 한다."""
-    target = _run_guard(tmp_path, sshd_ok=False)
+    target, logged = _run_guard(tmp_path, sshd_rcs=[1, 0])
     assert not target.exists(), (
         "guard left a drop-in that sshd rejects — this locks SSH out"
+    )
+    assert "-p local0.err" in logged, logged
+
+
+def test_guard_escalates_when_config_is_broken_without_the_dropin(tmp_path):
+    """드롭인을 치워도 sshd 설정이 깨져 있으면 SSH 가 전면 불통일 수 있다.
+
+    이쪽이 "드롭인이 원인이었고 제거로 복구된" 경우보다 심각하므로, 심각도가
+    그보다 낮으면 안 된다 — err 이상을 감시하는 운영 모니터링에서 진짜 장애가
+    묻히고 정상 백아웃만 경보로 뜨는 역전이 생긴다.
+    """
+    target, logged = _run_guard(tmp_path, sshd_rcs=[1, 1])
+    assert not target.exists()
+    assert "-p local0.crit" in logged, logged
+    assert "-p local0.warn" not in logged, (
+        "a broken sshd config must not be reported below the successful back-out"
     )
 
 
