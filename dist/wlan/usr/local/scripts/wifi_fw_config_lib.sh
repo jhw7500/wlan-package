@@ -104,16 +104,7 @@ wifi_fw_migrate_product_antcfg_json() {
             {
                 enabled: true,
                 value: "0x2121",
-                verify: { user_htstream: "0x2121" },
-                fallback_antcfg: {
-                    tx: "0x0303",
-                    rx: "0x0101",
-                    verify: {
-                        physical_tx: "0x0303",
-                        physical_rx: "0x0303",
-                        user_htstream: "0x2121"
-                    }
-                }
+                verify: { user_htstream: "0x2121" }
             };
         (.mlan0.antcfg // {}) as $a
         | (.mlan0.antcfgnss // {}) as $n
@@ -146,6 +137,12 @@ wifi_fw_migrate_product_antcfg_json() {
               else .
               end
           end
+        # 퇴역 키 정리: fallback_antcfg 는 레거시 antcfg 위임 경로와 함께 제거됐다.
+        # 소비 코드가 없어 남아 있어도 무해하지만, 죽은 키를 설정에 남기지 않는다.
+        | if (.mlan0.antcfgnss | type) == "object"
+          then .mlan0.antcfgnss |= del(.fallback_antcfg) else . end
+        | if (.mlan1.antcfgnss | type) == "object"
+          then .mlan1.antcfgnss |= del(.fallback_antcfg) else . end
         | (.mlan1.antcfg // {}) as $b
         | if is_empty_verify($b.verify)
           then .mlan1.antcfg |= del(.verify)
@@ -400,15 +397,6 @@ wifi_fw_validate_antcfgnss_config() {
         _wifi_fw_is_user_htstream_value "$expected" || return 1
     fi
 
-    # fallback_antcfg 가 있으면 레거시 antcfg 계약과 같은 tx/rx(+선택 verify) 형태여야 한다.
-    if jq -e --arg i "$iface" '.[$i].antcfgnss | has("fallback_antcfg")' "$json" >/dev/null 2>&1; then
-        jq -e --arg i "$iface" '
-            .[$i].antcfgnss.fallback_antcfg as $f
-            | ($f | type) == "object"
-            and ($f | has("tx") and has("rx"))
-            and ([$f.tx, $f.rx] | all(type == "string"))
-        ' "$json" >/dev/null 2>&1 || return 1
-    fi
     return 0
 }
 
@@ -459,29 +447,12 @@ wifi_fw_apply_antcfgnss() {
     fi
 
     wifi_fw_log local0.info "[$iface] antcfgnss configured: value=$value"
-    # SET 실패는 구버전 드라이버/mlanutl(antcfgnss SET 미지원 — GET 전용 포함) 신호로
-    # 보고 레거시 antcfg 경로로 위임한다. fallback_antcfg 를 임시 JSON 의 antcfg 로
-    # 합성해 기존 wifi_fw_apply_antcfg(검증 포함)를 그대로 재사용한다.
+    # SET 실패는 구버전 드라이버/mlanutl(antcfgnss 미지원) 신호다. 레거시 antcfg 로
+    # 위임하던 경로는 제거했다 — 위임은 RF_ANTENNA HostCmd 를 발행해 driver#41 의
+    # "물리 불변" 계약을 깨면서도, read-back 이 불가한 드라이버에서는 결국 같은
+    # 검증에 걸려 실패했다. 확인할 수 없는 intent 는 통과시키지 않는다.
     if ! "$WIFI_MLANUTL" "$iface" antcfgnss "$value" >/dev/null 2>&1; then
-        wifi_fw_log local0.warn "[$iface] antcfgnss SET unsupported/failed; falling back to legacy antcfg path"
-        if jq -e --arg i "$iface" '.[$i].antcfgnss | has("fallback_antcfg")' "$json" >/dev/null 2>&1; then
-            tmp=$(mktemp) || {
-                wifi_fw_log local0.err "[$iface] antcfgnss fallback mktemp failed"
-                return 1
-            }
-            if jq --arg i "$iface" '
-                   .[$i].antcfg = ((.[$i].antcfgnss.fallback_antcfg) + {enabled: true})
-               ' "$json" > "$tmp" 2>/dev/null; then
-                wifi_fw_apply_antcfg "$tmp" "$iface"
-                rc=$?
-            else
-                wifi_fw_log local0.err "[$iface] antcfgnss fallback JSON synth failed"
-                rc=1
-            fi
-            rm -f "$tmp"
-            return "$rc"
-        fi
-        wifi_fw_log local0.err "[$iface] antcfgnss unsupported and no fallback_antcfg"
+        wifi_fw_log local0.err "[$iface] antcfgnss SET unsupported/failed"
         [ "$verify_enabled" = true ] && return 1
         return 0
     fi
@@ -508,25 +479,7 @@ wifi_fw_apply_antcfgnss() {
     # fail-closed verify 가 wifi_init 을 죽이고, OnFailure 가 emergency reboot 를
     # 걸어 부팅 루프가 된다(cts-wlan/moal_imx93 실측).
     if [ -z "$actual" ]; then
-        wifi_fw_log local0.warn "[$iface] antcfgnss GET returned no user_htstream; falling back to legacy antcfg path"
-        if jq -e --arg i "$iface" '.[$i].antcfgnss | has("fallback_antcfg")' "$json" >/dev/null 2>&1; then
-            tmp=$(mktemp) || {
-                wifi_fw_log local0.err "[$iface] antcfgnss fallback mktemp failed"
-                return 1
-            }
-            if jq --arg i "$iface" '
-                   .[$i].antcfg = ((.[$i].antcfgnss.fallback_antcfg) + {enabled: true})
-               ' "$json" > "$tmp" 2>/dev/null; then
-                wifi_fw_apply_antcfg "$tmp" "$iface"
-                rc=$?
-            else
-                wifi_fw_log local0.err "[$iface] antcfgnss fallback JSON synth failed"
-                rc=1
-            fi
-            rm -f "$tmp"
-            return "$rc"
-        fi
-        wifi_fw_log local0.err "[$iface] antcfgnss read-back unsupported and no fallback_antcfg"
+        wifi_fw_log local0.err "[$iface] antcfgnss read-back carries no user_htstream; cannot verify intent"
         return 1
     fi
     if ! _wifi_fw_is_user_htstream_value "$actual" \
