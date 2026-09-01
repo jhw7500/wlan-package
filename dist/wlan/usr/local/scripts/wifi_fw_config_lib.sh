@@ -497,6 +497,32 @@ wifi_fw_apply_antcfgnss() {
 
     actual=$(printf '%s\n' "$live" \
         | sed -n 's/.*user_htstream=\(0[xX][0-9A-Fa-f][0-9A-Fa-f]*\).*/\1/p' | tail -1)
+    # GET 이 rc=0 인데 값을 담지 않는 드라이버(SET 은 받되 read-back 미지원)는
+    # SET 실패와 같은 신호로 보고 레거시 antcfg 경로로 위임한다. 위임하지 않으면
+    # fail-closed verify 가 wifi_init 을 죽이고, OnFailure 가 emergency reboot 를
+    # 걸어 부팅 루프가 된다(cts-wlan/moal_imx93 실측).
+    if [ -z "$actual" ]; then
+        wifi_fw_log local0.warn "[$iface] antcfgnss GET returned no user_htstream; falling back to legacy antcfg path"
+        if jq -e --arg i "$iface" '.[$i].antcfgnss | has("fallback_antcfg")' "$json" >/dev/null 2>&1; then
+            tmp=$(mktemp) || {
+                wifi_fw_log local0.err "[$iface] antcfgnss fallback mktemp failed"
+                return 1
+            }
+            if jq --arg i "$iface" '
+                   .[$i].antcfg = ((.[$i].antcfgnss.fallback_antcfg) + {enabled: true})
+               ' "$json" > "$tmp" 2>/dev/null; then
+                wifi_fw_apply_antcfg "$tmp" "$iface"
+                rc=$?
+            else
+                wifi_fw_log local0.err "[$iface] antcfgnss fallback JSON synth failed"
+                rc=1
+            fi
+            rm -f "$tmp"
+            return "$rc"
+        fi
+        wifi_fw_log local0.err "[$iface] antcfgnss read-back unsupported and no fallback_antcfg"
+        return 1
+    fi
     if ! _wifi_fw_is_user_htstream_value "$actual" \
        || [ "$((actual))" -ne "$((expected))" ]; then
         wifi_fw_log local0.err "[$iface] antcfgnss verification failed: expected=$expected actual=${actual:-<missing>}"
