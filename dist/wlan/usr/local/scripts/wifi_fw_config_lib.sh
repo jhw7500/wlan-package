@@ -486,12 +486,18 @@ wifi_fw_apply_antcfgnss() {
         return 0
     fi
 
-    live=$("$WIFI_MLANUTL" "$iface" antcfgnss 2>&1) || {
-        wifi_fw_log local0.warn "[$iface] antcfgnss GET failed after SET"
+    # user_htstream read-back 은 antcfgnss 가 아니라 antcfg 가 제공한다 — mlanutl 의
+    # 출력 형식이 "NSS limit (antcfg): 2G rx=.. tx=.., 5G rx=.. tx=..  [user_htstream=0x....]"
+    # 이다. antcfgnss 는 SET 전용이라 인자 없이 부르면 값이 아닌 응답만 돌아온다
+    # (실측: "antcfgnss command response received: !!"). 인자 없는 antcfg 는 읽기
+    # 전용이므로 RF_ANTENNA HostCmd 를 발행하지 않는다 — driver#41 의 "물리 불변"
+    # 계약을 지키면서 intent 를 확인할 수 있는 경로가 이것뿐이다.
+    live=$("$WIFI_MLANUTL" "$iface" antcfg 2>&1) || {
+        wifi_fw_log local0.warn "[$iface] antcfg GET failed after antcfgnss SET"
         [ "$verify_enabled" = true ] && return 1
         return 0
     }
-    wifi_fw_log local0.info "[$iface] antcfgnss live after pre-association SET: $(printf '%s' "$live" | tr '\n' ' ')"
+    wifi_fw_log local0.info "[$iface] antcfgnss live after pre-association SET (via antcfg read-back): $(printf '%s' "$live" | tr '\n' ' ')"
 
     [ "$verify_enabled" = true ] || return 0
 
