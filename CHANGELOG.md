@@ -3,9 +3,9 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
-## 0.7.0 (2026-09-01)
+## 0.6.2 (2026-09-01)
 
-> SemVer **minor** — 상위 툴용 FTP 계정 `admin` 의 SSH 로그인을 차단한다. FTP 경로(vsftpd 로컬 로그인 + `/opt/ftpcmd/bin` 디스패치)와 로그인 셸은 그대로이므로 상위 툴 동작에는 영향이 없지만, `admin` 으로 SSH 셸에 붙던 경로는 사라진다.
+> SemVer **patch** — 상위 툴용 FTP 계정 `admin` 의 SSH 로그인을 차단한다. FTP 경로(vsftpd 로컬 로그인 + `/opt/ftpcmd/bin` 디스패치)와 로그인 셸은 그대로이므로 상위 툴 동작에는 영향이 없지만, `admin` 으로 SSH 셸에 붙던 경로는 사라진다.
 
 ### admin 계정 SSH 차단 (sshd 드롭인)
 
