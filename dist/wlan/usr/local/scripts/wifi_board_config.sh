@@ -210,8 +210,8 @@ jq_err=$(jq --arg b "$BOARD_TYPE" --arg bus "$BUS_TYPE" --arg iio "$IIO_DEV" '
               elif ($b != "imx93" and is_product_verify(.mlan0.antcfg.verify))
               then .mlan0.antcfg |= del(.verify)
               else . end
-            # 505.p14/imx8 utility에는 antcfgnss(user_htstream) ABI가 없어 fallback_antcfg
-            # 의 imx93 전용 profile이 적용된다. factory reset은 postinst migrate를 거치지
+            # 505.p14/imx8 utility에는 antcfgnss(user_htstream) ABI가 없다.
+            # factory reset은 postinst migrate를 거치지
             # 않고 template+board stage만 타므로, migrate의 비-imx93 분기와 동일하게
             # 제품 antcfgnss(0x2121)를 여기서도 중화한다(custom 값은 보존, log-only).
             | if ($b != "imx93"
