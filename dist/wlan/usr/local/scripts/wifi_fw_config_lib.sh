@@ -822,10 +822,9 @@ wifi_fw_apply_mcs_verified() {
             wifi_fw_log local0.warn "[$iface] mcstiercfg HT/VHT applied but HE not observable before association; deferred connected verification"
             return 0
         fi
-        wifi_fw_log local0.emerg "[$iface] cannot persist deferred MCS verification marker"
+        wifi_fw_log local0.err "[$iface] cannot persist deferred MCS verification marker; falling through to unapplied"
     fi
 
-    wifi_fw_log local0.emerg "[$iface] mcstiercfg GET mismatch after $WIFI_MCS_VERIFY_ATTEMPTS attempts; association must not start"
     wifi_fw_log local0.err "[$iface] mcstiercfg NOT applied after $WIFI_MCS_VERIFY_ATTEMPTS attempts (boot continues; MCS tier may stay at FW default)"
     _wifi_fw_unapplied_mark "$iface" mcs_tier "not verified after $WIFI_MCS_VERIFY_ATTEMPTS attempts"
     return 0

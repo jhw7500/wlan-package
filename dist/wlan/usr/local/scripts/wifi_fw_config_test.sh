@@ -892,6 +892,13 @@ grep -q 'mcstiercfg NOT applied after' "$LOG" \
 grep -q '^mcs_tier=' "$WIFI_FW_UNAPPLIED_DIR/fwcfg_unapplied_mlan0" 2>/dev/null \
     && pass "MCS exhaustion recorded in the unapplied marker" \
     || fail "MCS exhaustion recorded in the unapplied marker"
+# 로그 심각도와 실제 동작이 어긋나면 안 된다. 부팅을 계속하는 경로에서 emerg 를 쓰면
+# emerg 를 재부팅 트리거로 삼는 운영 자동화가 이 PR 이 없앤 루프를 되살린다.
+expect_eq "fail-open path does not emit emerg" '0' \
+    "$(grep -c 'local0.emerg' "$LOG")"
+grep -q 'association must not start' "$LOG" \
+    && fail "log must not claim association was blocked" \
+    || pass "log must not claim association was blocked"
 expect_eq "MCS attempts are bounded" 3 "$(cat "$STATE/mlan0.mcs_set_count")"
 
 # 88W9098은 association 전 mcstiercfg GET에서 HT/VHT는 적용값을 반환하면서 HE만
