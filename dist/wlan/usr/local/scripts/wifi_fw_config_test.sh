@@ -260,13 +260,27 @@ else
     fail "legacy product antcfg migration succeeds"
 fi
 expect_eq "legacy disabled antcfg stays emptied and gains antcfgnss contract" \
-    'false - - false true 0x2121 0x2121 0x0303 0x0101' \
+    'false - - false true 0x2121 0x2121' \
     "$(jq -r '[.mlan0.antcfg.enabled, .mlan0.antcfg.tx, .mlan0.antcfg.rx,
                (.mlan0.antcfg.verify != null), .mlan0.antcfgnss.enabled,
-               .mlan0.antcfgnss.value, .mlan0.antcfgnss.verify.user_htstream,
-               .mlan0.antcfgnss.fallback_antcfg.tx, .mlan0.antcfgnss.fallback_antcfg.rx]
+               .mlan0.antcfgnss.value, .mlan0.antcfgnss.verify.user_htstream]
               | map(tostring | if . == "" then "-" else . end) | join(" ")' \
         "$WORK/migrated-antcfg-off.json" 2>/dev/null)"
+# 퇴역 키 정리 — 기존 기기 설정에 남아 있는 fallback_antcfg 를 마이그레이션이 지운다.
+jq '.mlan0.antcfgnss = {enabled:true, value:"0x2121", verify:{user_htstream:"0x2121"},
+                        fallback_antcfg:{tx:"0x0303", rx:"0x0101"}}' "$CONF" \
+    > "$WORK/legacy-with-fallback.json"
+if wifi_fw_migrate_product_antcfg_json "$WORK/legacy-with-fallback.json" \
+        > "$WORK/migrated-no-fallback.json" 2>/dev/null; then
+    expect_eq "migration drops retired fallback_antcfg" 'null' \
+        "$(jq -r '.mlan0.antcfgnss.fallback_antcfg | tostring' "$WORK/migrated-no-fallback.json")"
+    expect_eq "migration keeps the antcfgnss contract intact" 'true 0x2121 0x2121' \
+        "$(jq -r '.mlan0.antcfgnss | [.enabled, .value, .verify.user_htstream] | map(tostring) | join(" ")' \
+            "$WORK/migrated-no-fallback.json")"
+else
+    fail "migration drops retired fallback_antcfg"
+fi
+
 expect_eq "antcfg migration preserves comments and unrelated operator metadata" 'keep preserve' \
     "$(jq -r '.mlan0.antcfg | "\(._comment[0]) \(.operator_note)"' \
         "$WORK/migrated-antcfg-off.json" 2>/dev/null)"
@@ -341,10 +355,7 @@ expect_eq "imx8 candidate upgrade neutralizes injected product antcfgnss" 'false
 NSS_CONF="$WORK/antcfgnss.json"
 jq '.mlan0.antcfgnss = {
         enabled: true, value: "0x2121",
-        verify: {user_htstream: "0x2121"},
-        fallback_antcfg: {tx: "0x0303", rx: "0x0101",
-            verify: {physical_tx: "0x0303", physical_rx: "0x0303",
-                     user_htstream: "0x2121"}}
+        verify: {user_htstream: "0x2121"}
     }' "$CONF" > "$NSS_CONF"
 rm -f "$STATE/mlan0.nss"; : > "$LOG"
 expect_rc "antcfgnss applies and verifies on capable driver" 0 \
@@ -364,51 +375,31 @@ grep -q 'antcfgnss verification failed' "$LOG" \
     && pass "antcfgnss mismatch reason logged" \
     || fail "antcfgnss mismatch reason logged"
 
-# GET 전용 구버전(SET 인자 거부) → fallback_antcfg 로 위임하고 레거시 verify 까지 수행.
+# SET 미지원 구버전 드라이버 → 레거시 antcfg 위임은 제거됐다. 확인할 수 없는 intent 를
+# 통과시키지 않고 fail-closed 로 막는다.
 rm -f "$STATE/mlan0.ant"; : > "$LOG"
 export ANTCFGNSS_SET_FAILS=1 ANTCFG_GET_RX=0x0303
-expect_rc "antcfgnss falls back to legacy antcfg on unsupported SET" 0 \
+expect_rc "unsupported antcfgnss SET stays fail-closed (no legacy delegation)" 1 \
     wifi_fw_apply_antcfgnss "$NSS_CONF" mlan0
 unset ANTCFGNSS_SET_FAILS ANTCFG_GET_RX
-grep -q 'falling back to legacy antcfg' "$LOG" \
-    && pass "antcfgnss fallback reason logged" \
-    || fail "antcfgnss fallback reason logged"
-expect_eq "fallback applied legacy antcfg values" '0x0303 0x0101' \
+grep -q 'antcfgnss SET unsupported/failed' "$LOG" \
+    && pass "antcfgnss SET failure reason logged" \
+    || fail "antcfgnss SET failure reason logged"
+expect_eq "no RF_ANTENNA emitted on unsupported SET" '' \
     "$(cat "$STATE/mlan0.ant" 2>/dev/null)"
-grep -q 'antcfg verified: physical_tx=' "$LOG" \
-    && pass "antcfgnss fallback runs legacy verification" \
-    || fail "antcfgnss fallback runs legacy verification"
 
-# antcfg read-back 이 user_htstream 을 아예 담지 않는 드라이버 → 위임을 시도하되
-# fallback_antcfg.verify 도 같은 값을 요구하므로 검증할 수단이 없다. 확인 불가능한
-# intent 를 통과시키지 않고 fail-closed 로 막는 것이 맞다(association 중단).
+# antcfg read-back 이 user_htstream 을 담지 않는 드라이버 → 검증 수단이 없으므로
+# fail-closed. 위임(RF_ANTENNA 발행)으로 우회하지 않는다.
 rm -f "$STATE/mlan0.ant"; : > "$LOG"
 export ANTCFG_NO_USER_HTSTREAM=1 ANTCFG_GET_RX=0x0303
-expect_rc "unreadable user_htstream stays fail-closed even with fallback_antcfg" 1 \
+expect_rc "unreadable user_htstream stays fail-closed" 1 \
     wifi_fw_apply_antcfgnss "$NSS_CONF" mlan0
 unset ANTCFG_NO_USER_HTSTREAM ANTCFG_GET_RX
-grep -q 'GET returned no user_htstream' "$LOG" \
+grep -q 'read-back carries no user_htstream' "$LOG" \
     && pass "unreadable read-back reason logged" \
     || fail "unreadable read-back reason logged"
-grep -q 'antcfg host NSS verification failed' "$LOG" \
-    && pass "fallback verify also refuses unreadable intent" \
-    || fail "fallback verify also refuses unreadable intent"
-# 위임이 RF_ANTENNA 를 발행하고도 결국 실패한다는 사실을 고정한다 — 이 경로가
-# 물리만 건드리고 아무것도 얻지 못한다는 근거다(fallback_antcfg 존치 재검토 대상).
-grep -q 'antcfg configured: tx=' "$LOG" \
-    && pass "fallback emitted RF_ANTENNA before failing" \
-    || fail "fallback emitted RF_ANTENNA before failing"
-
-# read-back 이 비었는데 fallback_antcfg 도 없으면 위임할 곳이 없다 — fail-closed 유지.
-: > "$LOG"
-jq 'del(.mlan0.antcfgnss.fallback_antcfg)' "$NSS_CONF" > "$WORK/antcfgnss-nofb.json"
-export ANTCFG_NO_USER_HTSTREAM=1
-expect_rc "no fallback_antcfg keeps read-back failure fail-closed" 1 \
-    wifi_fw_apply_antcfgnss "$WORK/antcfgnss-nofb.json" mlan0
-unset ANTCFG_NO_USER_HTSTREAM
-grep -q 'read-back unsupported and no fallback_antcfg' "$LOG" \
-    && pass "no-fallback read-back reason logged" \
-    || fail "no-fallback read-back reason logged"
+expect_eq "no RF_ANTENNA emitted when read-back is unusable" '' \
+    "$(cat "$STATE/mlan0.ant" 2>/dev/null)"
 
 # disabled/absent 는 조용히 skip — 부팅을 막지 않는다.
 jq '.mlan0.antcfgnss.enabled=false' "$NSS_CONF" > "$WORK/antcfgnss-off.json"
@@ -830,13 +821,13 @@ expect_eq "template ships mlan0 antcfg emptied (no RF_ANTENNA on boot)" 'false -
     "$(jq -r '[.mlan0.antcfg.enabled, .mlan0.antcfg.tx, .mlan0.antcfg.rx,
                (.mlan0.antcfg.verify != null)]
               | map(tostring | if . == "" then "-" else . end) | join(" ")' "$TEMPLATE")"
-expect_eq "template ships mlan0 antcfgnss product contract with fallback" \
-    'true 0x2121 0x2121 0x0303 0x0101 0x2121' \
+expect_eq "template ships mlan0 antcfgnss product contract" \
+    'true 0x2121 0x2121' \
     "$(jq -r '.mlan0.antcfgnss
-              | [.enabled, .value, .verify.user_htstream,
-                 .fallback_antcfg.tx, .fallback_antcfg.rx,
-                 .fallback_antcfg.verify.user_htstream]
+              | [.enabled, .value, .verify.user_htstream]
               | map(tostring) | join(" ")' "$TEMPLATE")"
+expect_eq "template no longer ships fallback_antcfg" 'null' \
+    "$(jq -r '.mlan0.antcfgnss.fallback_antcfg | tostring' "$TEMPLATE")"
 expect_eq "template ships mlan1 antcfg disabled" 'false' "$(jq -r '.mlan1.antcfg.enabled' "$TEMPLATE")"
 expect_eq "template ships mlan1 antcfgnss disabled" 'false' "$(jq -r '.mlan1.antcfgnss.enabled' "$TEMPLATE")"
 grep -q 'wifi_fw_apply_antcfg "$WIFI_INIT_CONF_JSON" "$iface"' "$WIFI_INIT" \

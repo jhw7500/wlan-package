@@ -1002,8 +1002,7 @@ strict profile을 적용하지 않으며 custom antcfg/MCS는 보존한다.
 
 이 섹션을 커스텀으로 켠 경우: `verify`가 없으면 SET 후 GET 결과를 로그로만 남기고,
 `verify`가 있으면 세 하위 키가 모두 필수이며 어느 하나라도 파싱되지 않거나 기대값과 다르면
-`wifi_init`은 supplicant 시작 전에 실패한다. 같은 계약을 §11.4c의 `fallback_antcfg`(구버전
-드라이버 위임 경로)가 그대로 재사용한다.
+`wifi_init`은 supplicant 시작 전에 실패한다.
 
 imx93에서는 **antcfg 비활성 + antcfgnss `0x2121` + `mcs_tier enabled + HT/VHT/HE 7` +
 mlan1 antcfg/antcfgnss 비활성**이 묶인 **제품 안전 불변식**이다. `wifi_init.sh`가
@@ -1068,12 +1067,13 @@ association 전에 `mlanutl <iface> antcfgnss <value>`로 광고 NSS intent(`use
 | `enabled` | bool | mlan0=`true`, mlan1=`false` | 적용 ON/OFF. imx93 mlan0은 제품 불변식상 `true` 고정 |
 | `value` | string | mlan0=`"0x2121"` | `0x` 접두 **필수**(드라이버가 강제 — 진수 혼동·파서 fail-open 차단). 지원 밴드 니블은 `1..hw 상한`(0은 드라이버가 거부) |
 | `verify.user_htstream` | string | mlan0=`"0x2121"` | SET 후 read-back 기대값. 불일치 시 association 중단(fail-closed) |
-| `fallback_antcfg` | object | 제품값 `tx=0x0303, rx=0x0101 + verify` | antcfgnss SET 미지원 구버전 드라이버에서 위임할 레거시 antcfg 값. 위임 시 §11.4b의 antcfg 검증 계약을 그대로 재사용한다 |
 
-구버전 드라이버 호환: `antcfgnss <value>` SET이 실패하면(구 ported의 GET 전용 ABI 포함)
-`fallback_antcfg`로 레거시 antcfg 경로에 위임한다 — 과도기 fleet에서 어느 조합이든
-부팅이 Rx NSS1 intent 없이 지나가지 않도록 fail-closed를 유지한다. 릴리즈 preflight는
-staging된 imx93 `mlanutl`에 `antcfgnss` ABI marker가 없으면 패키징을 거부한다.
+구버전 드라이버: `antcfgnss <value>` SET이 실패하거나 read-back(`antcfg`의
+`[user_htstream=...]`)에서 값을 읽지 못하면 **fail-closed**로 막는다. 레거시 antcfg로
+위임하던 경로는 제거했다 — 위임은 RF_ANTENNA HostCmd를 발행해 "물리 불변" 계약을 깨면서도,
+read-back이 불가한 드라이버에서는 같은 검증에 걸려 결국 실패했다(확인할 수 없는 intent는
+통과시키지 않는다). 릴리즈 preflight는 staging된 imx93 `mlanutl`에 `antcfgnss` ABI marker가
+없으면 패키징을 거부한다.
 
 > **⚠️ 어댑터 단위 상태**: `user_htstream`은 라디오(어댑터) 하나의 상태다. antcfg와 같은
 > last-wins 함정이 있어 mlan1은 비활성을 유지한다(제품 불변식이 검사).

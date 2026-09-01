@@ -16,6 +16,14 @@ wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약�
 - postinst 는 드롭인 배치 후 `sshd -t` 로 한 번 검사하고 실패하면 드롭인을 제거한다. 드롭인이 sshd 설정을 깨뜨리면 그 다음 연결부터 **모든** SSH 가 거부되어 원격 복구 경로까지 함께 막히기 때문이다. 제거 후에도 `sshd -t` 가 실패하면 기존 설정 문제로 구분해 기록한다.
 - `hosts.allow` 망 분리(FTP 자체의 접근 대역 제한)는 이 변경으로 대체되지 않는 별개 항목으로 남는다.
 
+### fallback_antcfg(레거시 antcfg 위임) 제거
+
+- read-back 을 올바른 명령으로 고친 뒤 이 위임은 발동 경로가 없어졌다. 남겨둘 이유도 없다 — **위임은 `antcfg` SET 을 수행해 RF_ANTENNA HostCmd 를 발행**하므로 driver#41 의 "물리 불변" 계약을 깨고, `fallback_antcfg.rx=0x0101` 은 문서가 p149.115 scan wedge cofactor 라고 경고한 1-path 값이다. 게다가 read-back 이 불가한 드라이버에서는 `fallback_antcfg.verify` 도 같은 `user_htstream` 을 요구하므로 **물리만 건드리고 결국 같은 검증에 걸려 실패**했다.
+- imx8/505 계열은 레거시로 정리되어 이 경로의 잠재 소비자도 없다. `wifi_fw_validate_product_scan_profile()` 은 `imx93*` 만 대상이고 `wifi_board_config.sh` 가 비-imx93 에서 제품 antcfgnss 를 중화한다.
+- 새 계약: `antcfgnss` SET 실패 또는 `user_htstream` read-back 불가 → **err 로그 + fail-closed**(verify 가 있을 때). 확인할 수 없는 intent 는 통과시키지 않는다. **어느 경로에서도 RF_ANTENNA 를 발행하지 않는다** — 테스트가 이를 직접 고정한다.
+- 코드·템플릿·스키마·§3 행·`gen_config_defaults` allowlist·가이드 문서에서 모두 제거했다. allowlist 는 커버리지 9→4, 미해결 4→3 으로 줄었다.
+- **기존 기기 마이그레이션**: 템플릿에서 빼도 `json_merge` 가 기존값을 보존하므로 죽은 키가 남는다. `wifi_fw_migrate_product_antcfg_json` 이 `mlan0`/`mlan1` 의 `fallback_antcfg` 를 지우도록 했다(이 저장소의 퇴역 키 정리 관례와 동일).
+
 ### antcfgnss read-back 을 올바른 명령(antcfg)으로 바로잡음
 
 - 앞 항목의 진짜 원인이 드러났다. `antcfgnss` 는 mlanutl 에서 **SET 전용**이다 — 인자 없이 부르면 값이 아니라 `antcfgnss command response received: !!` 만 돌아온다(실측). `user_htstream` read-back 을 제공하는 것은 **`antcfg`** 이고, 출력 형식이 `NSS limit (antcfg): 2G rx=.. tx=.., 5G rx=.. tx=..  [user_htstream=0x....]` 다.

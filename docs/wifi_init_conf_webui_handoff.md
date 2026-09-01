@@ -389,7 +389,6 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `antcfgnss.enabled` | 광고 NSS intent 적용 | bool | `mlan0=true / mlan1=false` | true\|false | imx93=no / imx8=caution | boot | imx93 mlan0 제품 불변식상 `true` 고정, mlan1은 어댑터 덮어쓰기 방지로 `false` 고정(부팅이 검사). RF_ANTENNA 미발행 — 물리 불변 |
 | `antcfgnss.value` | user_htstream 값 | string | `mlan0="0x2121" / mlan1=""` | `0x` 접두 필수, 1..0xFFFF | imx93=no / imx8=caution | boot | 니블 [15:12]5Gtx/[11:8]5Grx/[7:4]2Gtx/[3:0]2Grx. 0x2121=Tx2/Rx1 — 실효 TX NSS=min(Tx,Rx니블) 실측으로 TX NSS1 보장. 반영은 다음 (re)association |
 | `antcfgnss.verify.user_htstream` | antcfgnss read-back 기대값 | string | `mlan0="0x2121"` | `0x` 접두, 1..0xFFFF | no | boot | 불일치 시 association 중단(fail-closed) |
-| `antcfgnss.fallback_antcfg.*` | 구버전 드라이버 위임값 | object | 제품값 `0x0303/0x0101+verify` | §11.4b 계약 | no | boot | antcfgnss SET 미지원 드라이버에서 레거시 antcfg 경로로 위임(기존 검증 재사용). UI 편집 금지 |
 | `rate_adapt.enabled` | 레이트 적응 적용 | bool | `true` | true\|false | caution | boot | false면 `rate_adapt_cfg`를 SET하지 않는다 — 남는 값은 FW 기본값이 아니라 마지막 SET값이다(콜드부팅 후에만 FW 기본값). 키 부재 시 true(종전 동작). `wifi <iface> rate`로 값을 바꿔도 이 값이 false면 부팅 시 적용되지 않는다 |
 | `rate_adapt.mode` | 레이트 적응 모드 | int | `1` | `0`=legacy\|`1`=SR | caution | boot | section 존재 시 mode/low/high/interval 4개 필수(enabled는 선택) |
 | `rate_adapt.low_thresh` | 레이트 적응 low 임계 | int | `70` | 0..100 또는 255 | caution | boot | static은 low<high, dynamic은 low/high 모두 255 |
