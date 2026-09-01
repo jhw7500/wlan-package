@@ -20,6 +20,7 @@ wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약�
 
 - 출하 이미지의 `root` 는 **비밀번호가 비어 있다**(`passwd -S root` → `NP`, shadow 2번째 필드가 빈 문자열 — cts-wlan 실측). `sshd_config` 는 `PermitEmptyPasswords yes` 라 그 상태로 비밀번호 인증이 통과한다. postinst 가 값을 채워 이 경로를 닫는다.
 - **이미 설정(`P`)되었거나 잠긴(`L`) 계정은 건드리지 않는다.** 현장에서 바꾼 값이나 의도적으로 잠근 상태를 패키지가 되돌리면 안 된다. `passwd -S` 를 읽지 못하면 아무것도 하지 않고 warn 을 남긴다.
+- `chpasswd` 가 실패하면 root 는 **빈 비밀번호로 남는다** — `admin` 처럼 잠긴 채 남는 fail-closed 가 아니다. 그래서 실패를 `local0.crit` 으로 알린다. 계정을 잠그는(`passwd -l`) 쪽은 시리얼 콘솔 root 로그인까지 막아 복구 경로를 끊으므로 택하지 않았고, 설치를 실패시키지도 않는다(half-configured 로 남으면 나머지 복구 로직도 죽는다).
 - 비밀번호는 SHA-512 해시로 넣는다(`chpasswd -e`). postinst 는 기기의 `/var/lib/dpkg/info/` 아래 world-readable(0755)로 설치되므로 평문을 두면 비-root 사용자가 그대로 읽는다 — `admin` 계정과 같은 이유다.
 - `hosts.allow` 대역 제한이 없는 현재 상태에서는 root SSH 가 도달 가능한 모든 망에 열려 있다는 점은 변하지 않는다. 이 변경은 **빈 비밀번호 경로를 닫는 것**이고, 접근 범위 제한은 여전히 별개 과제다.
 

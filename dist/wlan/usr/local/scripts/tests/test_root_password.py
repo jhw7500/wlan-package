@@ -100,9 +100,14 @@ def test_backs_off_when_state_is_unreadable(tmp_path):
     assert "-p local0.warn" in logged
 
 
-def test_reports_chpasswd_failure_as_error(tmp_path):
+def test_escalates_when_chpasswd_leaves_the_password_empty(tmp_path):
+    """실패하면 root 가 빈 비밀번호로 남는다 — 그 상태 자체가 취약하므로
+    admin 의 "잠긴 채 남음"(fail-closed)보다 높은 심각도로 알려야 한다."""
     fed, logged = _run(
         tmp_path, passwd_out="root NP 2011-04-05 0 99999 7 -1\n", chpasswd_rc=1
     )
     assert fed.startswith("root:$6$")
-    assert "-p local0.err" in logged
+    assert "-p local0.crit" in logged, logged
+    assert "-p local0.err" not in logged, (
+        "an empty root password must not be reported below crit"
+    )
