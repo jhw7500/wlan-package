@@ -382,9 +382,9 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `net_rx` | MGMT 프레임 로깅 비트맵 | int | `0` | `0`\|`2`\|`3`\|`6`\|`7` (bit[1:0]=RX모드, bit[2]=TX로그) | caution | reboot | mod_para 블록 `net_rx=`. 로그는 커널 링버퍼→10초마다 flush |
 | `mgmt_hex_dump_enable` | MGMT hex dump 로깅 | bool | `false` | true\|false | caution | reboot | 디버그용. mod_para 블록 `mgmt_hex_dump=1/0` |
 | `thermal_mgmt` | FW 열관리 | bool | `true` | true\|false | caution | boot | FW thermal management(SUBID 0x113). 명시적 false만 disable |
-| `antcfg.enabled` | 물리 안테나 경로 적용 | bool | `mlan0=false / mlan1=false` | true\|false | imx93=no / imx8=caution | boot | **제품 기본 비활성(비움)** — 부팅에서 RF_ANTENNA를 발행하지 않고 물리를 FW 기본(2x2)에 둔다(driver#41). physical 1-path가 p149.115 scan wedge cofactor라 비활성 자체가 안전 불변식. 켜면 intent가 재계산돼 antcfgnss를 덮어쓴다(순서: antcfg→antcfgnss). **어댑터 단위 설정**. `global.ANT_TYPE`과는 별개 |
-| `antcfg.tx` | Tx 경로 비트맵 | string | `mlan0="" / mlan1=""` | 빈값, 또는 10진/`0x` 16진 1..0xFFFF (0 거부) | imx93=no / imx8=caution | boot | 커스텀으로 켤 때만 사용. `rx`가 비면 Tx/Rx 공통. 9098은 LOW BYTE=2G / HIGH BYTE=5G, 각 바이트 bit0=path A·bit1=path B |
-| `antcfg.rx` | Rx 경로 비트맵 | string | `mlan0="" / mlan1=""` | 빈값 또는 tx와 동일 범위 | imx93=no / imx8=caution | boot | 커스텀으로 켤 때만 사용 |
+| `antcfg.enabled` | 물리 안테나 경로 적용 | bool | `false` | true\|false | imx93=no / imx8=caution | boot | **제품 기본 비활성(비움)** — 부팅에서 RF_ANTENNA를 발행하지 않고 물리를 FW 기본(2x2)에 둔다(driver#41). physical 1-path가 p149.115 scan wedge cofactor라 비활성 자체가 안전 불변식. 켜면 intent가 재계산돼 antcfgnss를 덮어쓴다(순서: antcfg→antcfgnss). **어댑터 단위 설정**. `global.ANT_TYPE`과는 별개 |
+| `antcfg.tx` | Tx 경로 비트맵 | string | `""` | 빈값, 또는 10진/`0x` 16진 1..0xFFFF (0 거부) | imx93=no / imx8=caution | boot | 커스텀으로 켤 때만 사용. `rx`가 비면 Tx/Rx 공통. 9098은 LOW BYTE=2G / HIGH BYTE=5G, 각 바이트 bit0=path A·bit1=path B |
+| `antcfg.rx` | Rx 경로 비트맵 | string | `""` | 빈값 또는 tx와 동일 범위 | imx93=no / imx8=caution | boot | 커스텀으로 켤 때만 사용 |
 | `antcfg.verify.*` | antcfg 검증 계약(선택) | string×3 | (템플릿 없음) | 10진 또는 `0x` 16진, 1..0xFFFF | no | boot | 커스텀/fallback 경로에서만 의미. 존재하면 physical_tx/physical_rx/user_htstream 3필드 모두 필수, 불일치 시 association 중단 |
 | `antcfgnss.enabled` | 광고 NSS intent 적용 | bool | `mlan0=true / mlan1=false` | true\|false | imx93=no / imx8=caution | boot | imx93 mlan0 제품 불변식상 `true` 고정, mlan1은 어댑터 덮어쓰기 방지로 `false` 고정(부팅이 검사). RF_ANTENNA 미발행 — 물리 불변 |
 | `antcfgnss.value` | user_htstream 값 | string | `mlan0="0x2121" / mlan1=""` | `0x` 접두 필수, 1..0xFFFF | imx93=no / imx8=caution | boot | 니블 [15:12]5Gtx/[11:8]5Grx/[7:4]2Gtx/[3:0]2Grx. 0x2121=Tx2/Rx1 — 실효 TX NSS=min(Tx,Rx니블) 실측으로 TX NSS1 보장. 반영은 다음 (re)association |
