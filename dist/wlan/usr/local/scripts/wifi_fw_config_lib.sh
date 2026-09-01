@@ -100,33 +100,51 @@ wifi_fw_migrate_product_antcfg_json() {
              and ($v.physical_tx // "") == ""
              and ($v.physical_rx // "") == ""
              and ($v.user_htstream // "") == "");
-        (.mlan0.antcfg // {}) as $a
-        | if $board == "imx93" then
-            if is_legacy_disabled($a) or is_legacy_physical_1x1($a) or is_product_request($a)
-            then .mlan0.antcfg = ($a + {
+        def product_nss:
+            {
                 enabled: true,
-                tx: "0x0303",
-                rx: "0x0101",
-                verify: {
-                    physical_tx: "0x0303",
-                    physical_rx: "0x0303",
-                    user_htstream: "0x2121"
+                value: "0x2121",
+                verify: { user_htstream: "0x2121" },
+                fallback_antcfg: {
+                    tx: "0x0303",
+                    rx: "0x0101",
+                    verify: {
+                        physical_tx: "0x0303",
+                        physical_rx: "0x0303",
+                        user_htstream: "0x2121"
+                    }
                 }
-            })
+            };
+        (.mlan0.antcfg // {}) as $a
+        | (.mlan0.antcfgnss // {}) as $n
+        | if $board == "imx93" then
+            # driver#41 이후 제품 계약: antcfg 는 비워서(RF_ANTENNA 미발행) 물리를 FW
+            # 기본(2x2)에 두고, 광고 Rx NSS1 intent 는 antcfgnss 로 건다. 종전 제품
+            # profile(0x0303/0x0101+verify)과 그 이전 legacy 형태를 모두 새 계약으로
+            # 승격한다. 새 계약의 antcfg 는 legacy_disabled 와 같은 모양이므로 이
+            # 분기는 재실행에도 같은 결과를 낸다(멱등).
+            if is_legacy_disabled($a) or is_legacy_physical_1x1($a) or is_product_request($a)
+            then .mlan0.antcfg = (($a + {enabled: false, tx: "", rx: ""}) | del(.verify))
+                 | .mlan0.antcfgnss = ($n + product_nss)
             elif is_product_verify($a.verify)
             then .mlan0.antcfg |= del(.verify)
             else .
             end
           else
-            # 505.p14/imx8 utility에는 antcfgnss(user_htstream) GET ABI가 없다.
+            # 505.p14/imx8 utility에는 antcfgnss(user_htstream) ABI가 없다.
             # 후보 패키지가 주입한 exact 제품 profile만 안전하게 중화하고, 기존 custom
             # SET(log-only)은 보존한다. deep merge로 verify만 주입된 경우도 제거한다.
-            if is_product_request($a) and is_product_verify($a.verify)
-            then .mlan0.antcfg = (($a + {enabled:false, tx:"", rx:""}) | del(.verify))
-            elif is_product_verify($a.verify)
-            then .mlan0.antcfg |= del(.verify)
-            else .
-            end
+            (if is_product_request($a) and is_product_verify($a.verify)
+             then .mlan0.antcfg = (($a + {enabled:false, tx:"", rx:""}) | del(.verify))
+             elif is_product_verify($a.verify)
+             then .mlan0.antcfg |= del(.verify)
+             else .
+             end)
+            # 템플릿 merge 로 들어온 제품 antcfgnss 도 중화한다(적용 시도 자체를 차단).
+            | if ($n.enabled == true and ($n.value // "") == "0x2121")
+              then .mlan0.antcfgnss |= (. + {enabled: false})
+              else .
+              end
           end
         | (.mlan1.antcfg // {}) as $b
         | if is_empty_verify($b.verify)
@@ -137,24 +155,25 @@ wifi_fw_migrate_product_antcfg_json() {
 }
 
 # p149.115 scan wedge 회피 profile은 imx93/543 계열에서 association 전에 지켜야 하는
-# 제품 안전 불변식이다. generic JSON 노브가 physical Tx/Rx 동시 1-path를 다시 만들거나
-# mlan1의 adapter-level antcfg가 뒤에서 덮어쓰지 못하게 부팅을 fail-closed 한다.
+# 제품 안전 불변식이다. driver#41 이후 형태: antcfg 는 비워서(RF_ANTENNA 미발행) 물리
+# Tx/Rx 를 FW 기본 2x2 로 두고 — wedge cofactor 인 physical 1-path 를 만들 수 있는 경로
+# 자체를 부팅에서 제거 — 광고 Rx NSS1 intent 는 antcfgnss(0x2121)로 fail-closed 강제한다.
+# mlan1 의 adapter-level antcfg/antcfgnss 가 뒤에서 덮어쓰는 것도 함께 차단한다.
 # imx8/505 계열은 이 ABI로 qualification되지 않았으므로 적용 대상이 아니다.
 wifi_fw_validate_product_scan_profile() {
     local json="$1" board_type="${2:-imx93}"
     case "$board_type" in imx93*) ;; *) return 0 ;; esac
     jq -e '
-        .mlan0.antcfg.enabled == true
-        and .mlan0.antcfg.tx == "0x0303"
-        and .mlan0.antcfg.rx == "0x0101"
-        and .mlan0.antcfg.verify.physical_tx == "0x0303"
-        and .mlan0.antcfg.verify.physical_rx == "0x0303"
-        and .mlan0.antcfg.verify.user_htstream == "0x2121"
+        (.mlan0.antcfg.enabled != true)
+        and .mlan0.antcfgnss.enabled == true
+        and .mlan0.antcfgnss.value == "0x2121"
+        and .mlan0.antcfgnss.verify.user_htstream == "0x2121"
         and .mlan0.mcs_tier.enabled == true
         and .mlan0.mcs_tier.ht == "7"
         and .mlan0.mcs_tier.vht == "7"
         and .mlan0.mcs_tier.he == "both 7"
         and (.mlan1.antcfg.enabled != true)
+        and (.mlan1.antcfgnss.enabled != true)
     ' "$json" >/dev/null 2>&1
 }
 
@@ -334,6 +353,157 @@ wifi_fw_apply_antcfg() {
     fi
 
     wifi_fw_log local0.info "[$iface] antcfg verified: physical_tx=$actual_tx physical_rx=$actual_rx user_htstream=$actual_user_htstream"
+    return 0
+}
+
+# antcfgnss SET 값 유효성 — 드라이버가 0x 접두를 요구한다(진수 혼동·파서 fail-open 차단,
+# driver#41). 1..0xFFFF 의 0x 16진만 허용하고 0 은 거부한다. 니블 단위 의미 검증(지원
+# 밴드 니블 1..hw 상한)은 드라이버가 수행하므로 여기서는 형식만 본다.
+_wifi_fw_is_user_htstream_value() {
+    local v="$1"
+    case "$v" in
+        0x*|0X*)
+            case "${v#0[xX]}" in
+                ''|*[!0-9a-fA-F]*) return 1 ;;
+                ?????*) return 1 ;;
+            esac
+            ;;
+        *) return 1 ;;
+    esac
+    [ "$((v))" -ge 1 ] && [ "$((v))" -le 65535 ]
+}
+
+# antcfgnss 는 광고 NSS intent(user_htstream) 전용 host 경로다(driver#41) — RF_ANTENNA
+# HostCmd 를 발행하지 않아 물리 안테나를 건드리지 않는다. antcfg 와 같은 opt-in(기본 false).
+wifi_fw_validate_antcfgnss_config() {
+    local json="$1" iface="$2" enabled value expected
+    _wifi_fw_has_section "$json" "$iface" antcfgnss || return 2
+    enabled=$(jq -r --arg i "$iface" '.[$i].antcfgnss.enabled // false' "$json" 2>/dev/null)
+    [ "$enabled" = true ] || return 2
+
+    jq -e --arg i "$iface" '
+        (.[$i].antcfgnss | type) == "object"
+        and (.[$i].antcfgnss | has("value"))
+        and (.[$i].antcfgnss.value | type == "string")
+    ' "$json" >/dev/null 2>&1 || return 1
+
+    value=$(jq -r --arg i "$iface" '.[$i].antcfgnss.value' "$json" 2>/dev/null) || return 1
+    _wifi_fw_is_user_htstream_value "$value" || return 1
+
+    if jq -e --arg i "$iface" '.[$i].antcfgnss | has("verify")' "$json" >/dev/null 2>&1; then
+        expected=$(jq -er --arg i "$iface" '
+            .[$i].antcfgnss.verify
+            | select(type == "object")
+            | .user_htstream
+            | select(type == "string")
+        ' "$json" 2>/dev/null) || return 1
+        _wifi_fw_is_user_htstream_value "$expected" || return 1
+    fi
+
+    # fallback_antcfg 가 있으면 레거시 antcfg 계약과 같은 tx/rx(+선택 verify) 형태여야 한다.
+    if jq -e --arg i "$iface" '.[$i].antcfgnss | has("fallback_antcfg")' "$json" >/dev/null 2>&1; then
+        jq -e --arg i "$iface" '
+            .[$i].antcfgnss.fallback_antcfg as $f
+            | ($f | type) == "object"
+            and ($f | has("tx") and has("rx"))
+            and ([$f.tx, $f.rx] | all(type == "string"))
+        ' "$json" >/dev/null 2>&1 || return 1
+    fi
+    return 0
+}
+
+wifi_fw_apply_antcfgnss() {
+    local json="$1" iface="$2" value live rc other differs verify_enabled expected actual tmp
+    if ! _wifi_fw_has_section "$json" "$iface" antcfgnss; then
+        wifi_fw_log local0.info "[$iface] antcfgnss absent; skip"
+        return 0
+    fi
+    if wifi_fw_validate_antcfgnss_config "$json" "$iface"; then
+        :
+    else
+        rc=$?
+        case "$rc" in
+            2) wifi_fw_log local0.info "[$iface] antcfgnss disabled; skip (host NSS intent 기본값 유지)" ;;
+            *) wifi_fw_log local0.err "[$iface] invalid antcfgnss section; skip (host NSS intent 기본값 유지)" ;;
+        esac
+        return 0
+    fi
+
+    # user_htstream 은 어댑터(라디오) 단위 상태라 antcfg 와 같은 last-wins 함정이 있다.
+    case "$iface" in mlan0) other=mlan1 ;; mlan1) other=mlan0 ;; *) other="" ;; esac
+    if [ -n "$other" ] && wifi_fw_validate_antcfgnss_config "$json" "$other"; then
+        differs=$(jq -r --arg i "$iface" --arg o "$other" '
+            .[$i].antcfgnss.value != .[$o].antcfgnss.value
+        ' "$json" 2>/dev/null) || differs=""
+        case "$differs" in
+            true)
+                wifi_fw_log local0.warn "[$iface] antcfgnss differs from $other; adapter-level setting — last applied wins"
+                ;;
+            false) ;;
+            *)
+                wifi_fw_log local0.warn "[$iface] antcfgnss cross-check vs $other failed; cannot confirm agreement"
+                ;;
+        esac
+    fi
+
+    value=$(jq -r --arg i "$iface" '.[$i].antcfgnss.value' "$json" 2>/dev/null) || value=""
+    verify_enabled=$(jq -r --arg i "$iface" '.[$i].antcfgnss | has("verify")' "$json" 2>/dev/null) \
+        || verify_enabled=false
+    if [ "$verify_enabled" = true ]; then
+        expected=$(jq -r --arg i "$iface" '.[$i].antcfgnss.verify.user_htstream' "$json" 2>/dev/null) \
+            || expected=""
+    fi
+    if [ -z "$value" ]; then
+        wifi_fw_log local0.err "[$iface] antcfgnss value read failed after validation; skip"
+        return 0
+    fi
+
+    wifi_fw_log local0.info "[$iface] antcfgnss configured: value=$value"
+    # SET 실패는 구버전 드라이버/mlanutl(antcfgnss SET 미지원 — GET 전용 포함) 신호로
+    # 보고 레거시 antcfg 경로로 위임한다. fallback_antcfg 를 임시 JSON 의 antcfg 로
+    # 합성해 기존 wifi_fw_apply_antcfg(검증 포함)를 그대로 재사용한다.
+    if ! "$WIFI_MLANUTL" "$iface" antcfgnss "$value" >/dev/null 2>&1; then
+        wifi_fw_log local0.warn "[$iface] antcfgnss SET unsupported/failed; falling back to legacy antcfg path"
+        if jq -e --arg i "$iface" '.[$i].antcfgnss | has("fallback_antcfg")' "$json" >/dev/null 2>&1; then
+            tmp=$(mktemp) || {
+                wifi_fw_log local0.err "[$iface] antcfgnss fallback mktemp failed"
+                return 1
+            }
+            if jq --arg i "$iface" '
+                   .[$i].antcfg = ((.[$i].antcfgnss.fallback_antcfg) + {enabled: true})
+               ' "$json" > "$tmp" 2>/dev/null; then
+                wifi_fw_apply_antcfg "$tmp" "$iface"
+                rc=$?
+            else
+                wifi_fw_log local0.err "[$iface] antcfgnss fallback JSON synth failed"
+                rc=1
+            fi
+            rm -f "$tmp"
+            return "$rc"
+        fi
+        wifi_fw_log local0.err "[$iface] antcfgnss unsupported and no fallback_antcfg"
+        [ "$verify_enabled" = true ] && return 1
+        return 0
+    fi
+
+    live=$("$WIFI_MLANUTL" "$iface" antcfgnss 2>&1) || {
+        wifi_fw_log local0.warn "[$iface] antcfgnss GET failed after SET"
+        [ "$verify_enabled" = true ] && return 1
+        return 0
+    }
+    wifi_fw_log local0.info "[$iface] antcfgnss live after pre-association SET: $(printf '%s' "$live" | tr '\n' ' ')"
+
+    [ "$verify_enabled" = true ] || return 0
+
+    actual=$(printf '%s\n' "$live" \
+        | sed -n 's/.*user_htstream=\(0[xX][0-9A-Fa-f][0-9A-Fa-f]*\).*/\1/p' | tail -1)
+    if ! _wifi_fw_is_user_htstream_value "$actual" \
+       || [ "$((actual))" -ne "$((expected))" ]; then
+        wifi_fw_log local0.err "[$iface] antcfgnss verification failed: expected=$expected actual=${actual:-<missing>}"
+        return 1
+    fi
+
+    wifi_fw_log local0.info "[$iface] antcfgnss verified: user_htstream=$actual"
     return 0
 }
 

@@ -1016,6 +1016,10 @@ apply_iface_radio_defaults() {
     # 꺼져 있으면 FW/보드 기본 경로를 그대로 둔다. global.ANT_TYPE(GPIO mux)과는 별개다.
     wifi_fw_apply_antcfg "$WIFI_INIT_CONF_JSON" "$iface" || return 1
 
+    # 광고 NSS intent(user_htstream)는 antcfgnss 로 건다(driver#41 — RF_ANTENNA 미발행,
+    # 물리 불변). antcfg SET 은 intent 를 재계산해 덮어쓰므로 순서는 항상 antcfg 다음이다.
+    wifi_fw_apply_antcfgnss "$WIFI_INIT_CONF_JSON" "$iface" || return 1
+
     # rate는 association 전에만 설정 가능하며 partial/default 혼합을 금지한다.
     wifi_fw_apply_rate "$WIFI_INIT_CONF_JSON" "$iface"
 
