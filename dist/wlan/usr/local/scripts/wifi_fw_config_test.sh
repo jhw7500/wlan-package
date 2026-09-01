@@ -162,6 +162,9 @@ chmod +x "$WIFI_COMMAND"
 export WIFI_MCS_VERIFY_DELAY_SEC=0
 export WIFI_MCS_VERIFY_ATTEMPTS=3
 export WIFI_MCS_PENDING_DIR="$WORK/pending"
+export WIFI_FW_VERIFY_DELAY_SEC=0
+export WIFI_FW_VERIFY_ATTEMPTS=3
+export WIFI_FW_UNAPPLIED_DIR="$WORK/unapplied"
 
 # shellcheck source=./wifi_fw_config_lib.sh
 . "$LIB"
@@ -360,46 +363,60 @@ jq '.mlan0.antcfgnss = {
 rm -f "$STATE/mlan0.nss"; : > "$LOG"
 expect_rc "antcfgnss applies and verifies on capable driver" 0 \
     wifi_fw_apply_antcfgnss "$NSS_CONF" mlan0
+expect_eq "success clears any previous unapplied marker" 'absent' \
+    "$([ -e "$WIFI_FW_UNAPPLIED_DIR/fwcfg_unapplied_mlan0" ] && echo present || echo absent)"
 expect_eq "antcfgnss SET reached the utility" '0x2121' \
     "$(cat "$STATE/mlan0.nss" 2>/dev/null)"
-grep -q 'antcfgnss verified: user_htstream=0x2121' "$LOG" \
-    && pass "antcfgnss verify marker logged" \
-    || fail "antcfgnss verify marker logged"
+grep -q 'antcfgnss verified on attempt 1: user_htstream=0x2121' "$LOG" \
+    && pass "antcfgnss verify marker logged (with attempt number)" \
+    || fail "antcfgnss verify marker logged (with attempt number)"
 
 : > "$LOG"
 export ANTCFGNSS_GET_OVERRIDE=0x1111
-expect_rc "antcfgnss verify mismatch fails closed" 1 \
+rm -rf "$WIFI_FW_UNAPPLIED_DIR"; : > "$LOG"
+expect_rc "antcfgnss mismatch no longer blocks boot" 0 \
     wifi_fw_apply_antcfgnss "$NSS_CONF" mlan0
 unset ANTCFGNSS_GET_OVERRIDE
-grep -q 'antcfgnss verification failed' "$LOG" \
-    && pass "antcfgnss mismatch reason logged" \
-    || fail "antcfgnss mismatch reason logged"
+grep -q 'antcfgnss NOT applied after' "$LOG" \
+    && pass "antcfgnss mismatch reported as err" \
+    || fail "antcfgnss mismatch reported as err"
+expect_eq "mismatch retried up to the configured attempts" '3' \
+    "$(grep -c 'antcfgnss not yet applied' "$LOG")"
+expect_eq "mismatch recorded in the unapplied marker" 'antcfgnss=expected=0x2121 actual=0x1111' \
+    "$(cat "$WIFI_FW_UNAPPLIED_DIR/fwcfg_unapplied_mlan0" 2>/dev/null)"
 
-# SET 미지원 구버전 드라이버 → 레거시 antcfg 위임은 제거됐다. 확인할 수 없는 intent 를
-# 통과시키지 않고 fail-closed 로 막는다.
-rm -f "$STATE/mlan0.ant"; : > "$LOG"
+# SET 미지원 구버전 드라이버 → 재시도 후 부팅은 계속하고 미반영으로 남긴다.
+# 레거시 antcfg 위임은 제거됐다(RF_ANTENNA 를 발행하고도 결국 실패했다).
+rm -f "$STATE/mlan0.ant"; rm -rf "$WIFI_FW_UNAPPLIED_DIR"; : > "$LOG"
 export ANTCFGNSS_SET_FAILS=1 ANTCFG_GET_RX=0x0303
-expect_rc "unsupported antcfgnss SET stays fail-closed (no legacy delegation)" 1 \
+expect_rc "unsupported antcfgnss SET does not block boot" 0 \
     wifi_fw_apply_antcfgnss "$NSS_CONF" mlan0
 unset ANTCFGNSS_SET_FAILS ANTCFG_GET_RX
-grep -q 'antcfgnss SET unsupported/failed' "$LOG" \
-    && pass "antcfgnss SET failure reason logged" \
-    || fail "antcfgnss SET failure reason logged"
+expect_eq "SET failure retried up to the configured attempts" '3' \
+    "$(grep -c 'antcfgnss SET failed on attempt' "$LOG")"
+grep -q 'antcfgnss NOT applied after' "$LOG" \
+    && pass "antcfgnss SET failure reported as err" \
+    || fail "antcfgnss SET failure reported as err"
 expect_eq "no RF_ANTENNA emitted on unsupported SET" '' \
     "$(cat "$STATE/mlan0.ant" 2>/dev/null)"
+grep -q '^antcfgnss=' "$WIFI_FW_UNAPPLIED_DIR/fwcfg_unapplied_mlan0" 2>/dev/null \
+    && pass "SET failure recorded in the unapplied marker" \
+    || fail "SET failure recorded in the unapplied marker"
 
-# antcfg read-back 이 user_htstream 을 담지 않는 드라이버 → 검증 수단이 없으므로
-# fail-closed. 위임(RF_ANTENNA 발행)으로 우회하지 않는다.
-rm -f "$STATE/mlan0.ant"; : > "$LOG"
+# antcfg read-back 이 user_htstream 을 담지 않는 드라이버 → 확인은 못 하지만 부팅은
+# 계속한다. 미반영 사실은 로그와 마커로 남는다.
+rm -f "$STATE/mlan0.ant"; rm -rf "$WIFI_FW_UNAPPLIED_DIR"; : > "$LOG"
 export ANTCFG_NO_USER_HTSTREAM=1 ANTCFG_GET_RX=0x0303
-expect_rc "unreadable user_htstream stays fail-closed" 1 \
+expect_rc "unreadable user_htstream does not block boot" 0 \
     wifi_fw_apply_antcfgnss "$NSS_CONF" mlan0
 unset ANTCFG_NO_USER_HTSTREAM ANTCFG_GET_RX
-grep -q 'read-back carries no user_htstream' "$LOG" \
-    && pass "unreadable read-back reason logged" \
-    || fail "unreadable read-back reason logged"
+grep -q 'antcfgnss NOT applied after' "$LOG" \
+    && pass "unreadable read-back reported as err" \
+    || fail "unreadable read-back reported as err"
 expect_eq "no RF_ANTENNA emitted when read-back is unusable" '' \
     "$(cat "$STATE/mlan0.ant" 2>/dev/null)"
+expect_eq "unreadable read-back recorded as missing" 'antcfgnss=expected=0x2121 actual=<missing>' \
+    "$(cat "$WIFI_FW_UNAPPLIED_DIR/fwcfg_unapplied_mlan0" 2>/dev/null)"
 
 # disabled/absent 는 조용히 skip — 부팅을 막지 않는다.
 jq '.mlan0.antcfgnss.enabled=false' "$NSS_CONF" > "$WORK/antcfgnss-off.json"
@@ -744,17 +761,35 @@ rm -f "$STATE/mlan0.ant"
 expect_rc "antcfg accepts normalized physical paths with matching host NSS intent" 0 \
     wifi_fw_apply_antcfg "$WORK/ant-verified.json" mlan0
 
+# 검증 불일치는 더 이상 부팅을 막지 않는다 — 재시도 후 err 로그와 미반영 마커로 남긴다.
 export ANTCFG_GET_USER_HTSTREAM=0x2222
-expect_rc "antcfg rejects wrong host NSS intent" 1 \
+rm -rf "$WIFI_FW_UNAPPLIED_DIR"; : > "$LOG"
+expect_rc "antcfg wrong host NSS intent does not block boot" 0 \
     wifi_fw_apply_antcfg "$WORK/ant-verified.json" mlan0
+expect_eq "wrong intent retried up to the configured attempts" '3' \
+    "$(grep -c 'antcfg not yet applied' "$LOG")"
+expect_eq "wrong intent recorded in the unapplied marker" \
+    'antcfg=user_htstream expected=0x2121 actual=0x2222' \
+    "$(cat "$WIFI_FW_UNAPPLIED_DIR/fwcfg_unapplied_mlan0" 2>/dev/null)"
 
 export ANTCFG_GET_USER_HTSTREAM=0x2121 ANTCFG_GET_RX=0x101
-expect_rc "antcfg rejects unexpected physical Rx path" 1 \
+rm -rf "$WIFI_FW_UNAPPLIED_DIR"; : > "$LOG"
+expect_rc "antcfg unexpected physical Rx does not block boot" 0 \
     wifi_fw_apply_antcfg "$WORK/ant-verified.json" mlan0
+expect_eq "unexpected Rx recorded in the unapplied marker" \
+    'antcfg=physical_rx expected=0x0303 actual=0x101' \
+    "$(cat "$WIFI_FW_UNAPPLIED_DIR/fwcfg_unapplied_mlan0" 2>/dev/null)"
 
 export ANTCFG_GET_RX=0x303 ANTCFG_NO_USER_HTSTREAM=1
-expect_rc "antcfg rejects GET output missing required host NSS intent" 1 \
+rm -rf "$WIFI_FW_UNAPPLIED_DIR"; : > "$LOG"
+expect_rc "antcfg missing host NSS intent does not block boot" 0 \
     wifi_fw_apply_antcfg "$WORK/ant-verified.json" mlan0
+expect_eq "missing intent recorded as <missing>" \
+    'antcfg=user_htstream expected=0x2121 actual=<missing>' \
+    "$(cat "$WIFI_FW_UNAPPLIED_DIR/fwcfg_unapplied_mlan0" 2>/dev/null)"
+grep -q 'antcfg NOT applied after' "$LOG" \
+    && pass "antcfg final failure reported as err" \
+    || fail "antcfg final failure reported as err"
 unset ANTCFG_GET_TX ANTCFG_GET_RX ANTCFG_NO_USER_HTSTREAM ANTCFG_GET_USER_HTSTREAM
 
 jq '.mlan0.antcfg.verify.user_htstream="invalid"' "$WORK/ant-verified.json" \
@@ -849,7 +884,14 @@ expect_eq "MCS required two SET attempts" 2 "$(cat "$STATE/mlan0.mcs_set_count")
 
 rm -f "$STATE/mlan0.mcs" "$STATE/mlan0.mcs_set_count"
 export MCS_ACCEPT_ON_ATTEMPT=99
-expect_rc "MCS fails after bounded verification attempts" 1 wifi_fw_apply_mcs_verified "$CONF" mlan0
+rm -rf "$WIFI_FW_UNAPPLIED_DIR"; : > "$LOG"
+expect_rc "MCS exhausting attempts does not block boot" 0 wifi_fw_apply_mcs_verified "$CONF" mlan0
+grep -q 'mcstiercfg NOT applied after' "$LOG" \
+    && pass "MCS exhaustion reported as err" \
+    || fail "MCS exhaustion reported as err"
+grep -q '^mcs_tier=' "$WIFI_FW_UNAPPLIED_DIR/fwcfg_unapplied_mlan0" 2>/dev/null \
+    && pass "MCS exhaustion recorded in the unapplied marker" \
+    || fail "MCS exhaustion recorded in the unapplied marker"
 expect_eq "MCS attempts are bounded" 3 "$(cat "$STATE/mlan0.mcs_set_count")"
 
 # 88W9098은 association 전 mcstiercfg GET에서 HT/VHT는 적용값을 반환하면서 HE만
@@ -913,11 +955,16 @@ expect_eq "post-reassociation verification clears attempt marker" no \
 unset MCS_CONNECTED_SET_RECOVERS
 
 # 명확한 비영(非零) HE 오설정은 association-dependent visibility가 아니다.
-# HT/VHT가 맞더라도 pending으로 완화하지 않고 기존 fatal 경로를 유지해야 한다.
-rm -rf "$WIFI_MCS_PENDING_DIR"
+# HT/VHT가 맞더라도 pending으로 완화하지 않는다. 다만 부팅은 막지 않는다 —
+# HE 불일치는 재부팅으로 낫지 않고, 미반영 사실은 마커로 관측 가능하다.
+rm -rf "$WIFI_MCS_PENDING_DIR" "$WIFI_FW_UNAPPLIED_DIR"
 rm -f "$STATE/mlan0.mcs" "$STATE/mlan0.mcs_set_count"
 export MCS_HE_WRONG=1
-expect_rc "definite non-zero HE mismatch remains fatal" 1 wifi_fw_apply_mcs_verified "$CONF" mlan0
+: > "$LOG"
+expect_rc "definite non-zero HE mismatch does not block boot" 0 wifi_fw_apply_mcs_verified "$CONF" mlan0
+grep -q '^mcs_tier=' "$WIFI_FW_UNAPPLIED_DIR/fwcfg_unapplied_mlan0" 2>/dev/null \
+    && pass "HE mismatch recorded in the unapplied marker" \
+    || fail "HE mismatch recorded in the unapplied marker"
 expect_eq "definite HE mismatch creates no pending marker" no \
     "$([ -e "$WIFI_MCS_PENDING_DIR/mcs_verify_pending_mlan0" ] && echo yes || echo no)"
 unset MCS_HE_WRONG
