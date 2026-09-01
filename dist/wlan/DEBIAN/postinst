@@ -777,6 +777,28 @@ secure_wpa_conf() {
     logger -p local0.err "[$tag:$LINENO] [$KEY] useradd 'admin' failed"
   fi
 
+  # admin 의 SSH 접근 차단은 payload 의 /etc/ssh/sshd_config.d/10-wlan-admin.conf
+  # 가 담당한다(DenyUsers admin). sshd 는 이 보드에서 socket-activated 라
+  # (sshd.socket + sshd@.service) 연결마다 설정을 새로 읽는다 -- reload 는 필요
+  # 없고 설치 중 기존 세션도 끊기지 않는다. 다만 드롭인이 sshd 설정을 깨뜨리면
+  # 그 다음 연결부터 모든 SSH 가 거부되어 원격 복구 경로까지 함께 막히므로,
+  # 설치 시점에 한 번 검사하고 실패하면 드롭인을 치워 SSH 를 살린다(차단은 포기).
+  admin_ssh_dropin=/etc/ssh/sshd_config.d/10-wlan-admin.conf
+  if [ -f "$admin_ssh_dropin" ]; then
+    if ! command -v sshd >/dev/null 2>&1; then
+      logger -p local0.info "[$tag:$LINENO] [$KEY] sshd not installed; left $admin_ssh_dropin in place"
+    elif sshd -t >/dev/null 2>&1; then
+      logger -p local0.info "[$tag:$LINENO] [$KEY] sshd config accepted; SSH login denied for 'admin'"
+    else
+      rm -f "$admin_ssh_dropin"
+      if sshd -t >/dev/null 2>&1; then
+        logger -p local0.err "[$tag:$LINENO] [$KEY] sshd -t rejected $admin_ssh_dropin; removed it to keep SSH reachable"
+      else
+        logger -p local0.warn "[$tag:$LINENO] [$KEY] sshd -t fails without $admin_ssh_dropin too; pre-existing sshd config problem"
+      fi
+    fi
+  fi
+
   # /etc/systemd/system.conf 변경(DefaultTimeout*, WatchdogDevice)은 PID1이 부팅 시
   # 읽으므로 다음 부팅에 적용된다. 설치 도중 daemon-reload로 system.conf를 다시
   # 읽게 하지 않는다(WatchdogDevice 재오픈/타이머 재평가 등 부작용 회피).

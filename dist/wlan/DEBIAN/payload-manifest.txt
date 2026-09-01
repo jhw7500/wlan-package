@@ -6,6 +6,7 @@ etc/networkd-dispatcher/routable.d/10-set-gateway.sh
 etc/profile.d/00-cantops.sh
 etc/rsyslog.d/10-udp-out.conf
 etc/rsyslog.d/20-mgmt-frame.conf
+etc/ssh/sshd_config.d/10-wlan-admin.conf
 etc/systemd/journald.conf.d/override.conf
 etc/systemd/system/fake-hwclock-save.service
 etc/systemd/system/fake-hwclock.service
