@@ -158,6 +158,23 @@ def test_guard_escalates_when_config_is_broken_without_the_dropin(tmp_path):
     )
 
 
+def test_admin_password_is_stored_as_a_hash_not_plaintext():
+    """postinst 는 기기에서 world-readable 이라 평문을 두면 비-root 도 읽는다.
+
+    root 쪽과 같은 계약이다 — `chpasswd -e` 로 SHA-512 해시만 넣는다.
+    """
+    import re
+
+    body = POSTINST.read_text(encoding="utf-8")
+    line = next(
+        l for l in body.splitlines()
+        if "chpasswd -e" in l and "'admin:" in l
+    )
+    secret = re.search(r"'admin:([^']+)'", line).group(1)
+    assert secret.startswith("$6$"), f"expected a SHA-512 crypt hash, got {secret[:4]!r}"
+    assert len(secret) >= 80, "hash looks truncated"
+
+
 def test_login_shell_is_not_switched_to_nologin():
     """셸 교체 대신 DenyUsers 를 택한 설계 결정을 고정한다.
 
