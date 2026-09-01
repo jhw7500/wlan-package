@@ -343,22 +343,12 @@
                 "RF_ANTENNA HostCmd를 발행하지 않아 물리 안테나는 불변. 니블 배치 [15:12]=5G Tx, [11:8]=5G Rx, [7:4]=2G Tx, [3:0]=2G Rx",
                 "value: (string) 0x 접두 필수(드라이버가 강제). 제품값 0x2121 = 양 밴드 Tx2/Rx1 — 실효 TX NSS = min(Tx니블, Rx니블) 실측이라 TX NSS1이 보장된다",
                 "verify: (object, optional) SET 후 read-back으로 user_htstream을 확인, 불일치 시 association 중단(fail-closed)",
-                "fallback_antcfg: (object, optional) antcfgnss SET 미지원 구버전 드라이버에서 레거시 antcfg 경로(tx/rx+verify)로 위임할 값",
                 "주의: 어댑터 단위 상태(antcfg와 동일). 반영은 다음 (re)association부터"
             ],
             "enabled": true,
             "value": "0x2121",
             "verify": {
                 "user_htstream": "0x2121"
-            },
-            "fallback_antcfg": {
-                "tx": "0x0303",
-                "rx": "0x0101",
-                "verify": {
-                    "physical_tx": "0x0303",
-                    "physical_rx": "0x0303",
-                    "user_htstream": "0x2121"
-                }
             }
         },
         "rate_adapt": {
