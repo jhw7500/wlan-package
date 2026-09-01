@@ -766,9 +766,11 @@ secure_wpa_conf() {
     # 비밀번호는 해시로 넣는다. postinst 는 기기에 /var/lib/dpkg/info/ 아래
     # world-readable(0755) 로 설치되므로 여기에 평문을 두면 비-root 사용자가
     # 그대로 읽는다(주석에 값을 적는 것도 같다). 값 자체는 상위 툴 규격으로
-    # 고정되어 바꿀 수 없고, 접근 범위를 좁히는 것은 vsftpd 의
-    # tcp_wrappers(hosts.allow) 쪽 사안이다.
-    if echo 'admin:$6$wlanftpcmd$tJVVYhDGL1AeMsYJ6yUGE9VC.lvhCz66YbYNd0VGc097s5iHJB9PXYCkYrbns4Oq9R7WNllj5bqYmYbxde1xa0' | chpasswd -e; then
+    # 상위 툴과 합의된 값이어야 한다. 다만 이 분기는 admin 이 **없을 때만** 타므로
+    # 이미지가 계정을 만든 기기에는 적용되지 않는다 — 실질 효과를 보려면 이미지 쪽
+    # 값과 일치시켜야 한다. 접근 범위를 좁히는 것은 vsftpd 의 tcp_wrappers
+    # (hosts.allow) 쪽 사안이고 자격증명으로 대체되지 않는다.
+    if echo 'admin:$6$p0270OJJMAS/jByV$QSv4R7f4h/22i7y5YFlfx9iAPJ5PrK3YC/lRKr1gcGSXUeuUjCkziazGFSHYCQd/lZvtSrZD4R72V4eEehVcK0' | chpasswd -e; then
       logger -p local0.info "[$tag:$LINENO] [$KEY] Created FTP account 'admin'"
     else
       logger -p local0.err "[$tag:$LINENO] [$KEY] chpasswd failed for 'admin'; account left locked"
