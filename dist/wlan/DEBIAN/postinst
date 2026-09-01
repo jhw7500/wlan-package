@@ -791,7 +791,13 @@ secure_wpa_conf() {
     if echo 'root:$6$TjhDdTo9Q6sVUGjX$iKv2tmcawlPvUCBAC7IuGlUGv7yRECjFrTcy2/9CLL82v.cuTl2ZCQ4LTYz./4nVudzSK8Q.7q5kp4rYJKqZe/' | chpasswd -e; then
       logger -p local0.info "[$tag:$LINENO] [$KEY] set root password (was empty)"
     else
-      logger -p local0.err "[$tag:$LINENO] [$KEY] chpasswd failed for root; password left empty"
+      # admin 과 달리 여기는 fail-closed 가 아니다 — root 는 이미 비어 있는 상태라
+      # 실패하면 그 취약한 상태가 그대로 유지된다(PermitEmptyPasswords yes 와
+      # 겹치면 로그인이 통과한다). 그래서 err 가 아니라 crit 으로 올린다.
+      # 계정을 잠그는(passwd -l root) 쪽이 형식상 fail-closed 지만 시리얼 콘솔
+      # root 로그인까지 막아 복구 경로를 끊으므로 택하지 않는다. 설치를 실패시키지도
+      # 않는다 — 패키지가 half-configured 로 남으면 나머지 복구 로직도 함께 죽는다.
+      logger -p local0.crit "[$tag:$LINENO] [$KEY] chpasswd failed for root; password is STILL EMPTY and PermitEmptyPasswords may allow login"
     fi
   else
     logger -p local0.info "[$tag:$LINENO] [$KEY] root password already set ($root_pw_state); left untouched"
