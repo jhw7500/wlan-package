@@ -69,32 +69,35 @@ case "$cmd" in
         ;;
     antcfg)
         if [ $# -gt 0 ]; then printf '%s\n' "$*" > "$STATE/$iface.ant"; exit 0; fi
-        [ -e "$STATE/$iface.ant" ] || { printf 'Mode of Tx/Rx path is : 0x3\n'; exit 0; }
-        read -r m n < "$STATE/$iface.ant"
+        if [ -e "$STATE/$iface.ant" ]; then
+            read -r m n < "$STATE/$iface.ant"
+        else
+            m=0x3; n=0x3
+        fi
         printf 'Mode of Tx path is %s\n' "${ANTCFG_GET_TX:-$m}"
         printf 'Mode of Rx path is %s\n' "${ANTCFG_GET_RX:-${n:-$m}}"
-        if [ "${ANTCFG_EMIT_USER_HTSTREAM:-0}" = 1 ]; then
+        # 실기 mlanutl 은 antcfg GET 에서 이 줄을 항상 낸다. user_htstream 은
+        # antcfgnss SET 이 갱신한 값을 반영한다 — antcfgnss 검증의 read-back 소스다.
+        # ANTCFG_NO_USER_HTSTREAM=1 은 이 줄조차 없는 드라이버(=read-back 불가) 재현.
+        if [ "${ANTCFG_NO_USER_HTSTREAM:-0}" != 1 ]; then
+            nss=$(cat "$STATE/$iface.nss" 2>/dev/null || echo 0x2121)
             printf 'NSS limit (antcfg): 2G rx=1 tx=2, 5G rx=1 tx=2  [user_htstream=%s]\n' \
-                "${ANTCFG_GET_USER_HTSTREAM:-0x2121}"
+                "${ANTCFG_GET_USER_HTSTREAM:-${ANTCFGNSS_GET_OVERRIDE:-$nss}}"
         fi
         ;;
     antcfgnss)
-        # driver#41 host 전용 knob. UNSUPPORTED=명령 자체 부재(구버전),
-        # SET_FAILS=GET 전용 구버전(SET 인자만 거부), GET_OVERRIDE=verify 불일치 재현.
+        # driver#41 host 전용 knob. 실기 mlanutl 에서 antcfgnss 는 **SET 전용**이다 —
+        # 인자 없이 부르면 값이 아니라 "antcfgnss command response received: !!" 만
+        # 돌아온다(실측). user_htstream read-back 은 antcfg 가 담당한다.
+        # UNSUPPORTED=명령 자체 부재(구버전), SET_FAILS=SET 인자만 거부.
         [ "${ANTCFGNSS_UNSUPPORTED:-0}" = 1 ] && exit 1
         if [ $# -gt 0 ]; then
             [ "${ANTCFGNSS_SET_FAILS:-0}" = 1 ] && exit 1
             printf '%s\n' "$1" > "$STATE/$iface.nss"
-        fi
-        # GET_EMPTY=SET 은 받되 read-back 이 값을 담지 않는 드라이버(실측: moal_imx93).
-        # rc=0 이라 SET_FAILS 경로에 걸리지 않는 것이 이 케이스의 핵심이다.
-        if [ "${ANTCFGNSS_GET_EMPTY:-0}" = 1 ]; then
-            printf 'antcfgnss command response received: ""\n'
             exit 0
         fi
-        v=$(cat "$STATE/$iface.nss" 2>/dev/null || echo 0x2222)
-        printf 'user_htstream=%s  (2G rx=1 tx=2, 5G rx=1 tx=2)\n' \
-            "${ANTCFGNSS_GET_OVERRIDE:-$v}"
+        printf 'antcfgnss command response received: !!\n'
+        exit 0
         ;;
     mcstiercfg)
         if [ $# -gt 0 ]; then
@@ -363,10 +366,10 @@ grep -q 'antcfgnss verification failed' "$LOG" \
 
 # GET 전용 구버전(SET 인자 거부) → fallback_antcfg 로 위임하고 레거시 verify 까지 수행.
 rm -f "$STATE/mlan0.ant"; : > "$LOG"
-export ANTCFGNSS_SET_FAILS=1 ANTCFG_EMIT_USER_HTSTREAM=1 ANTCFG_GET_RX=0x0303
+export ANTCFGNSS_SET_FAILS=1 ANTCFG_GET_RX=0x0303
 expect_rc "antcfgnss falls back to legacy antcfg on unsupported SET" 0 \
     wifi_fw_apply_antcfgnss "$NSS_CONF" mlan0
-unset ANTCFGNSS_SET_FAILS ANTCFG_EMIT_USER_HTSTREAM ANTCFG_GET_RX
+unset ANTCFGNSS_SET_FAILS ANTCFG_GET_RX
 grep -q 'falling back to legacy antcfg' "$LOG" \
     && pass "antcfgnss fallback reason logged" \
     || fail "antcfgnss fallback reason logged"
@@ -376,31 +379,33 @@ grep -q 'antcfg verified: physical_tx=' "$LOG" \
     && pass "antcfgnss fallback runs legacy verification" \
     || fail "antcfgnss fallback runs legacy verification"
 
-# SET 은 받되 read-back 이 값을 담지 않는 드라이버(moal_imx93 실측) → 같은 신호로 보고
-# fallback_antcfg 로 위임한다. SET 이 rc=0 이라 위 SET_FAILS 경로에는 걸리지 않는 것이
-# 이 케이스의 핵심이다. 위임하지 않으면 fail-closed verify 가 wifi_init 을 죽이고
-# OnFailure 가 emergency reboot 를 걸어 부팅 루프가 된다.
+# antcfg read-back 이 user_htstream 을 아예 담지 않는 드라이버 → 위임을 시도하되
+# fallback_antcfg.verify 도 같은 값을 요구하므로 검증할 수단이 없다. 확인 불가능한
+# intent 를 통과시키지 않고 fail-closed 로 막는 것이 맞다(association 중단).
 rm -f "$STATE/mlan0.ant"; : > "$LOG"
-export ANTCFGNSS_GET_EMPTY=1 ANTCFG_EMIT_USER_HTSTREAM=1 ANTCFG_GET_RX=0x0303
-expect_rc "antcfgnss falls back when read-back carries no user_htstream" 0 \
+export ANTCFG_NO_USER_HTSTREAM=1 ANTCFG_GET_RX=0x0303
+expect_rc "unreadable user_htstream stays fail-closed even with fallback_antcfg" 1 \
     wifi_fw_apply_antcfgnss "$NSS_CONF" mlan0
-unset ANTCFGNSS_GET_EMPTY ANTCFG_EMIT_USER_HTSTREAM ANTCFG_GET_RX
+unset ANTCFG_NO_USER_HTSTREAM ANTCFG_GET_RX
 grep -q 'GET returned no user_htstream' "$LOG" \
-    && pass "antcfgnss read-back fallback reason logged" \
-    || fail "antcfgnss read-back fallback reason logged"
-expect_eq "read-back fallback applied legacy antcfg values" '0x0303 0x0101' \
-    "$(cat "$STATE/mlan0.ant" 2>/dev/null)"
-grep -q 'antcfg verified: physical_tx=' "$LOG" \
-    && pass "read-back fallback runs legacy verification" \
-    || fail "read-back fallback runs legacy verification"
+    && pass "unreadable read-back reason logged" \
+    || fail "unreadable read-back reason logged"
+grep -q 'antcfg host NSS verification failed' "$LOG" \
+    && pass "fallback verify also refuses unreadable intent" \
+    || fail "fallback verify also refuses unreadable intent"
+# 위임이 RF_ANTENNA 를 발행하고도 결국 실패한다는 사실을 고정한다 — 이 경로가
+# 물리만 건드리고 아무것도 얻지 못한다는 근거다(fallback_antcfg 존치 재검토 대상).
+grep -q 'antcfg configured: tx=' "$LOG" \
+    && pass "fallback emitted RF_ANTENNA before failing" \
+    || fail "fallback emitted RF_ANTENNA before failing"
 
 # read-back 이 비었는데 fallback_antcfg 도 없으면 위임할 곳이 없다 — fail-closed 유지.
 : > "$LOG"
 jq 'del(.mlan0.antcfgnss.fallback_antcfg)' "$NSS_CONF" > "$WORK/antcfgnss-nofb.json"
-export ANTCFGNSS_GET_EMPTY=1
+export ANTCFG_NO_USER_HTSTREAM=1
 expect_rc "no fallback_antcfg keeps read-back failure fail-closed" 1 \
     wifi_fw_apply_antcfgnss "$WORK/antcfgnss-nofb.json" mlan0
-unset ANTCFGNSS_GET_EMPTY
+unset ANTCFG_NO_USER_HTSTREAM
 grep -q 'read-back unsupported and no fallback_antcfg' "$LOG" \
     && pass "no-fallback read-back reason logged" \
     || fail "no-fallback read-back reason logged"
@@ -743,7 +748,7 @@ expect_eq "antcfg tx+rx passes both args" '0x103 0x303' "$(cat "$STATE/mlan0.ant
 # 단순 비교하면 정상 상태를 실패로 판정하므로 세 값을 독립적으로 검증한다.
 _ant_verified 0x0303 0x0101 0x0303 0x0303 0x2121 > "$WORK/ant-verified.json"
 export ANTCFG_GET_TX=0x303 ANTCFG_GET_RX=0x303
-export ANTCFG_EMIT_USER_HTSTREAM=1 ANTCFG_GET_USER_HTSTREAM=0x2121
+export ANTCFG_GET_USER_HTSTREAM=0x2121
 rm -f "$STATE/mlan0.ant"
 expect_rc "antcfg accepts normalized physical paths with matching host NSS intent" 0 \
     wifi_fw_apply_antcfg "$WORK/ant-verified.json" mlan0
@@ -756,10 +761,10 @@ export ANTCFG_GET_USER_HTSTREAM=0x2121 ANTCFG_GET_RX=0x101
 expect_rc "antcfg rejects unexpected physical Rx path" 1 \
     wifi_fw_apply_antcfg "$WORK/ant-verified.json" mlan0
 
-export ANTCFG_GET_RX=0x303 ANTCFG_EMIT_USER_HTSTREAM=0
+export ANTCFG_GET_RX=0x303 ANTCFG_NO_USER_HTSTREAM=1
 expect_rc "antcfg rejects GET output missing required host NSS intent" 1 \
     wifi_fw_apply_antcfg "$WORK/ant-verified.json" mlan0
-unset ANTCFG_GET_TX ANTCFG_GET_RX ANTCFG_EMIT_USER_HTSTREAM ANTCFG_GET_USER_HTSTREAM
+unset ANTCFG_GET_TX ANTCFG_GET_RX ANTCFG_NO_USER_HTSTREAM ANTCFG_GET_USER_HTSTREAM
 
 jq '.mlan0.antcfg.verify.user_htstream="invalid"' "$WORK/ant-verified.json" \
     > "$WORK/ant-verify-invalid.json"
