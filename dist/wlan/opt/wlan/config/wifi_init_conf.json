@@ -142,7 +142,8 @@
             "_comment": [
                 "engine=moal 전용 파라미터. 나머지 키 설명은 wbridge._comment 참조",
                 "peer/consume_link_local: 빈 문자열이면 insmod 인자로 전달하지 않고 드라이버 기본값 사용",
-                "local_hairpin: (string 0|1) 로컬발 TX(dst==클론 MAC)를 무선 대신 유선 peer로 divert하고 ARP tee/inject. 빈 문자열이면 드라이버 기본값 0 사용. 런타임 변경: /sys/module/moal/parameters/bridge_local_hairpin"
+                "local_hairpin: (string 0|1) 로컬발 TX(dst==클론 MAC)를 무선 대신 유선 peer로 divert하고 ARP tee/inject. 빈 문자열이면 드라이버 기본값 0 사용. 런타임 변경: /sys/module/moal/parameters/bridge_local_hairpin",
+                "roam_announce: (string 0|1) 로밍/링크업 시 클론 MAC 소스 L2 update(XID)로 상단 유선 스위치 재학습 강제 (wlan-driver-v2#47). 빈 문자열이면 미전달=드라이버 기본 0. 런타임 변경: /sys/module/moal/parameters/bridge_roam_announce"
             ],
             "keepalive_ms": 1,
             "keepalive_idle_ms": 20,
@@ -150,7 +151,8 @@
             "debug": 0,
             "peer": "",
             "consume_link_local": "",
-            "local_hairpin": "0"
+            "local_hairpin": "0",
+            "roam_announce": ""
         },
         "optimize": {
             "_comment": [

@@ -29,6 +29,10 @@ bridge_consume_link_local="" # 빈값=드라이버 기본(0). JSON 명시 시에
 # peer IP 인지(peer_route/ip_discovery) 없이 성립시킴 (AP intra-BSS 무반사 환경 대응).
 # 빈값=미전달(드라이버 기본 0=off). 신규 param이므로 parmtype 게이트 후에만 insmod 인자 추가.
 bridge_local_hairpin=""
+# roam_announce: 로밍/링크업 완료 시 클론 MAC 소스 L2 update(XID) 발사로 상단 유선 스위치
+# 재학습을 강제 (wlan-driver-v2#47 — 로밍 후 2~5s 하향 갭 대응). 빈값=미전달(드라이버 기본
+# 0=off). 신규 param이므로 parmtype 게이트 후에만 insmod 인자 추가.
+bridge_roam_announce=""
 # deliver_rt_prio: RX deliver leg RT 우선순위 (Direction B — threaded NAPI + FIFO fix).
 # 0=off(deliver가 CFS→moal 다운스트림 RX jitter), 1-99=FIFO prio. 드라이버가 wq_sched_policy
 # param 선언 시에만 전달(아래 moal 블록). 실측: RTT 82ms→9.3ms.
@@ -139,6 +143,12 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
         0|1) bridge_local_hairpin=$_lhp ;;
     esac
     unset _lhp
+    # moal.roam_announce: 로밍 시 클론 MAC L2 재학습 announce (0|1만 수용).
+    _ra=$(jq -r '.wbridge.moal.roam_announce // empty' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    case "$_ra" in
+        0|1) bridge_roam_announce=$_ra ;;
+    esac
+    unset _ra
     # global.tx_work: moal 데이터 TX 제출 방식 (0|1만 수용). 빈값/형식위반은 미전달(드라이버 기본).
     _tw=$(jq -r '.global.tx_work // empty' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
     case "$_tw" in
@@ -301,6 +311,16 @@ elif [ "$WBRIDGE_ENGINE" = "moal" ]; then
             moal_args="$moal_args bridge_local_hairpin=$bridge_local_hairpin"
         else
             logger -p local0.warn "[$tag:$LINENO] moal: $MOAL_KO lacks bridge_local_hairpin param; skip (driver default)"
+        fi
+    fi
+    # bridge_roam_announce: 신규 param — 미선언 .ko 에 전달하면 insmod 실패(부팅 붕괴)하므로
+    # parmtype 게이트(local_hairpin과 동일 방식) 통과 시에만 추가. runtime 변경도 가능:
+    # /sys/module/moal/parameters/bridge_roam_announce
+    if [ -n "$bridge_roam_announce" ]; then
+        if tr '\000' '\n' < "/opt/wlan/driver/$MOAL_KO" 2>/dev/null | grep -F 'parmtype=bridge_roam_announce:' >/dev/null 2>&1; then
+            moal_args="$moal_args bridge_roam_announce=$bridge_roam_announce"
+        else
+            logger -p local0.warn "[$tag:$LINENO] moal: $MOAL_KO lacks bridge_roam_announce param; skip (driver default)"
         fi
     fi
     # deliver_rt_prio>0: Direction B — RX deliver leg를 RT화(threaded NAPI FIFO:prio)해 moal

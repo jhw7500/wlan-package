@@ -1302,10 +1302,11 @@ _bridge_status() {
         pr_raw=$(jq -r '.wbridge.peer_route.enabled' "$J")
         aia_raw=$(jq -r '.wbridge.arp_ignore_always.enabled' "$J")
         lhp_raw=$(jq -r '.wbridge.moal.local_hairpin // ""' "$J")
+        ra_raw=$(jq -r '.wbridge.moal.roam_announce // ""' "$J")
     else
         echo "  (no jq or $J — config fields unavailable, runtime only)"
         engine="?"; bridge_iface="mlan0"; mac_mode="?"; ip_disc="?"; sweep=""; client_ip=""; enabled_raw="?"
-        pr_raw="?"; aia_raw="?"; lhp_raw="?"
+        pr_raw="?"; aia_raw="?"; lhp_raw="?"; ra_raw="?"
     fi
     # wbridge.enabled 실효값 (기본 true). jq의 //는 false도 흡수하므로(`false // true` → true)
     # raw로 읽어 case로 분기 — enabled=false 상태를 진단에서 정확히 표기.
@@ -1339,13 +1340,14 @@ _bridge_status() {
     printf "  %-24s %s\n" "ip_discovery:"       "$ip_disc"
     printf "  %-24s %s\n" "arp_ignore_always:"  "$aia (json=$aia_raw)"
     printf "  %-24s %s\n" "moal.local_hairpin:" "${lhp_raw:-<empty>=driver default 0}"
+    printf "  %-24s %s\n" "moal.roam_announce:" "${ra_raw:-<empty>=driver default 0}"
     printf "  %-24s %s\n" "eth_fallback:"       "$([ "$have_jq" = "1" ] && jq -r '.wbridge.eth_fallback.enabled // false' "$J" || echo "?")"
     printf "  %-24s %s\n" "eth_sweep_subnet:"   "${sweep:-<empty>}"
     printf "  %-24s %s\n" "eth_client_ip:"      "${client_ip:-<empty>}"
     echo ""
 
     # --- Runtime (measured; peer_route on일 때 wifi_init.sh가 부여한 것) ---
-    local mlan_inet eth_mirror rule_cnt arp_ignore host_route t100_cnt topo lhp_rt rpf_eth hp_stats
+    local mlan_inet eth_mirror rule_cnt arp_ignore host_route t100_cnt topo lhp_rt rpf_eth hp_stats ra_rt an_stats
     mlan_inet=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}/\d+' | head -1)
     eth_mirror=$(ip -4 addr show "$eth" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}/32' | head -1)
     rule_cnt=$(ip rule show 2>/dev/null | grep -c "iif $eth")
@@ -1357,6 +1359,9 @@ _bridge_status() {
     rpf_eth=$(sysctl -n net.ipv4.conf.$eth.rp_filter 2>/dev/null || echo "?")
     arp_ignore_if=$(sysctl -n net.ipv4.conf.$iface.arp_ignore 2>/dev/null || echo "?")
     hp_stats=$(grep '^hairpin' /sys/kernel/moal_bridge/stats 2>/dev/null || echo "-")
+    # roam announce runtime: param 파일 부재("-")는 moal 미로드 또는 구버전 드라이버
+    ra_rt=$(cat /sys/module/moal/parameters/bridge_roam_announce 2>/dev/null || echo "-")
+    an_stats=$(grep '^announce' /sys/kernel/moal_bridge/stats 2>/dev/null || echo "-")
 
     echo "[Runtime: measured]"
     printf "  %-24s %s\n" "$iface inet:"        "${mlan_inet:-<none>}"
@@ -1369,6 +1374,8 @@ _bridge_status() {
     printf "  %-24s %s\n" "table 100 routes:"   "${t100_cnt:-0}"
     printf "  %-24s %s\n" "local_hairpin(rt):"  "$lhp_rt"
     printf "  %-24s %s\n" "hairpin counters:"   "$hp_stats"
+    printf "  %-24s %s\n" "roam_announce(rt):"  "$ra_rt"
+    printf "  %-24s %s\n" "announce counters:"  "$an_stats"
     printf "  %-24s %s\n" "fallback route(m200):" "$(ip route show dev "$eth" 2>/dev/null | grep -q "metric 200" && echo present || echo absent)"
     echo ""
 
@@ -1462,6 +1469,23 @@ _bridge_status() {
             lhp_exp="${lhp_raw:-0}"
             if [ "$lhp_exp" != "$lhp_rt" ]; then
                 echo "  [WARN] local_hairpin JSON(${lhp_raw:-<empty>=0}) != runtime($lhp_rt) -> 재부팅 미반영 또는 runtime 수동 토글 상태."
+                warn=1
+            fi
+        fi
+    fi
+    if [ "$engine" = "moal" ] && [ "$ra_raw" != "?" ]; then
+        if [ "$ra_rt" = "-" ]; then
+            # param 파일 부재 = 로드된 .ko 가 bridge_roam_announce 미선언(구버전 드라이버).
+            # wifi_init.sh parmtype 게이트가 인자를 skip 하므로 부팅은 무사하나 announce 미적용.
+            if [ "$ra_raw" = "1" ]; then
+                echo "  [WARN] roam_announce=1(JSON) but loaded driver lacks the param (구버전 .ko) -> announce 미적용."
+                echo "         Fix: announce 지원 드라이버(.ko) 배포 후 재부팅 (parmtype 게이트가 현재 인자를 skip 중)"
+                warn=1
+            fi
+        else
+            ra_exp="${ra_raw:-0}"
+            if [ "$ra_exp" != "$ra_rt" ]; then
+                echo "  [WARN] roam_announce JSON(${ra_raw:-<empty>=0}) != runtime($ra_rt) -> 재부팅 미반영 또는 runtime 수동 토글 상태."
                 warn=1
             fi
         fi
