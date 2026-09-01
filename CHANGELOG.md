@@ -16,6 +16,15 @@ wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약�
 - postinst 는 드롭인 배치 후 `sshd -t` 로 한 번 검사하고 실패하면 드롭인을 제거한다. 드롭인이 sshd 설정을 깨뜨리면 그 다음 연결부터 **모든** SSH 가 거부되어 원격 복구 경로까지 함께 막히기 때문이다. 제거 후에도 `sshd -t` 가 실패하면 기존 설정 문제로 구분해 기록한다.
 - `hosts.allow` 망 분리(FTP 자체의 접근 대역 제한)는 이 변경으로 대체되지 않는 별개 항목으로 남는다.
 
+### antcfgnss read-back 을 올바른 명령(antcfg)으로 바로잡음
+
+- 앞 항목의 진짜 원인이 드러났다. `antcfgnss` 는 mlanutl 에서 **SET 전용**이다 — 인자 없이 부르면 값이 아니라 `antcfgnss command response received: !!` 만 돌아온다(실측). `user_htstream` read-back 을 제공하는 것은 **`antcfg`** 이고, 출력 형식이 `NSS limit (antcfg): 2G rx=.. tx=.., 5G rx=.. tx=..  [user_htstream=0x....]` 다.
+- 즉 **`antcfgnss` SET 은 처음부터 정상 동작하고 있었고**, 검증만 존재하지 않는 GET 을 두드리고 있었다. 실기에서 `mlanutl mlan0 antcfgnss 0x2121` 직후 `mlanutl mlan0 antcfg` 가 `[user_htstream=0x2121]` 을 보고하는 것으로 확인했다.
+- read-back 을 `antcfg` 로 바꿨다. **인자 없는 `antcfg` 는 읽기 전용이라 RF_ANTENNA HostCmd 를 발행하지 않는다** — driver#41 의 "물리 불변" 계약을 지키면서 intent 를 확인할 수 있는 경로가 이것뿐이다.
+- 이 수정으로 `fallback_antcfg` 위임은 실질적으로 발동하지 않는다. 앞 항목의 위임은 부팅 붕괴는 막았지만 `antcfg` SET 을 수행해 **RF_ANTENNA 를 발행**했고, 이는 제품이 피하려던 경로였다(`fallback_antcfg.rx=0x0101` 은 p149.115 scan wedge cofactor 인 1-path 값이다).
+- **테스트 스텁이 실기와 달랐던 것이 이 버그를 통과시킨 원인**이다. 스텁은 `antcfgnss` GET 이 `user_htstream=` 을 반환하도록 되어 있었다. 실기 동작에 맞춰 정정했다 — `antcfgnss` GET 은 SET 전용 응답만 내고, `antcfg` GET 이 항상 NSS limit 줄을 내며 그 값은 `antcfgnss` SET 을 반영한다. 정정된 스텁에서 수정 전 코드는 **4건 실패**한다.
+- read-back 이 아예 불가한 드라이버(=`antcfg` 도 `user_htstream` 을 안 냄)는 **fail-closed 를 유지**한다. 그 경우 `fallback_antcfg.verify` 도 같은 값을 요구하므로 위임해도 검증할 수단이 없다 — 확인 불가능한 intent 를 통과시키지 않는다.
+
 ### antcfgnss read-back 미지원 드라이버에서 부팅이 무너지던 것 수정
 
 - `wifi_fw_apply_antcfgnss` 의 레거시 위임(`fallback_antcfg`)은 **SET 실패**일 때만 트리거됐다. 그런데 `moal_imx93` 은 **SET 은 받아들이고(rc=0) read-back 은 값을 담지 않는** 중간 상태다(`antcfgnss command response received: ""`). 이 경우가 위임 조건에 없어 곧장 fail-closed verify 로 떨어졌다.
