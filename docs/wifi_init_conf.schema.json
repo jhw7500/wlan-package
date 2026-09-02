@@ -1355,7 +1355,7 @@
             "verify": {
               "type": "object",
               "additionalProperties": false,
-              "description": "SET 후 read-back 검증. 불일치 시 association 중단(fail-closed)",
+              "description": "SET 후 read-back 검증. 불일치해도 association 은 계속되며 로그와 /run/wifi/fwcfg_unapplied_<iface> 마커로만 남는다",
               "required": [
                 "user_htstream"
               ],
