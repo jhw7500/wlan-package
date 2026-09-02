@@ -1346,7 +1346,7 @@
             },
             "value": {
               "type": "string",
-              "default": "0x2121",
+              "default": "0x1111",
               "description": "user_htstream 값. 0x 접두 필수(드라이버 강제), 지원 밴드 니블은 1..hw 상한(0 거부)",
               "x-ui-editable": "no",
               "x-apply-timing": "boot",
@@ -1362,7 +1362,7 @@
               "properties": {
                 "user_htstream": {
                   "type": "string",
-                  "default": "0x2121",
+                  "default": "0x1111",
                   "description": "SET 후 기대하는 user_htstream",
                   "x-ui-editable": "no",
                   "x-apply-timing": "boot",
@@ -1891,7 +1891,7 @@
             },
             "ht": {
               "type": "string",
-              "default": "7",
+              "default": "15",
               "enum": [
                 "7",
                 "15"

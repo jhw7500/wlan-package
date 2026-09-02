@@ -343,14 +343,14 @@
             "_comment": [
                 "광고 NSS intent(user_htstream) 전용 설정 — association 전에 mlanutl <iface> antcfgnss <value> 로 적용 (driver#41)",
                 "RF_ANTENNA HostCmd를 발행하지 않아 물리 안테나는 불변. 니블 배치 [15:12]=5G Tx, [11:8]=5G Rx, [7:4]=2G Tx, [3:0]=2G Rx",
-                "value: (string) 0x 접두 필수(드라이버가 강제). 제품값 0x2121 = 양 밴드 Tx2/Rx1 — 실효 TX NSS = min(mcstiercfg ht 티어, Rx니블, Tx니블) OTA 실측(driver#41) — 제품 ht 7 + Rx니블 1 이라 TX NSS1 보장. ht 7 이 상한이라 Tx니블만 올려서는 NSS2 가 서지 않는다",
+                "value: (string) 0x 접두 필수(드라이버가 강제). 제품값 0x1111 = 양 밴드 Tx1/Rx1 — 실효 TX NSS = min(mcstiercfg ht 티어, Rx니블, Tx니블) OTA 실측(driver#41). mcs_tier 는 순수 MCS 상한만 담당하고 NSS 제한은 이 니블이 전담한다 — mcstiercfg ht 는 HT 전용이 아니라 VHT·HE 의 TX NSS 까지 지배하므로(driver-v2#41 실측: ht7 → VHT-NSS1/HE-NSS1, ht15 → VHT-NSS2/HE-NSS2) ht 를 7 로 내려 NSS 를 제한하면 전 대역폭 클래스가 함께 깎인다",
                 "verify: (object, optional) SET 후 read-back으로 user_htstream을 확인, 불일치 시 association 중단(fail-closed)",
                 "주의: 어댑터 단위 상태(antcfg와 동일). 반영은 다음 (re)association부터"
             ],
             "enabled": true,
-            "value": "0x2121",
+            "value": "0x1111",
             "verify": {
-                "user_htstream": "0x2121"
+                "user_htstream": "0x1111"
             }
         },
         "rate_adapt": {
@@ -500,14 +500,14 @@
         },
         "mcs_tier": {
             "_comment": [
-                "MCS capability 제한(mcstiercfg). imx93 mlan0의 HT/VHT/HE 7은 antcfg와 묶인 제품 안전 불변식. 연결 전 SET; HE 0x0000은 첫 연결에서 검증하고 FW 기본 복귀 시 SET+serialized wifi connect 1회 후 확정",
+                "MCS capability 제한(mcstiercfg). 순수 MCS 상한만 담당한다 — NSS 제한은 antcfgnss 니블이 전담. imx93 mlan0 은 ht 15 / vht 7 / he both 7 이 제품 안전 불변식이며 ht 를 7 로 내리면 VHT·HE TX NSS 까지 1 로 떨어진다(driver-v2#41 실측). 연결 전 SET; HE 0x0000은 첫 연결에서 검증하고 FW 기본 복귀 시 SET+serialized wifi connect 1회 후 확정",
                 "enabled: (bool) MCS tier 설정 적용 ON/OFF",
                 "ht: (string) ht prefix 뒤에 전달할 값. 빈 문자열이면 생략",
                 "vht: (string) vht prefix 뒤에 전달할 값. 빈 문자열이면 생략",
                 "he: (string) he prefix 뒤에 전달할 값. 빈 문자열이면 생략"
             ],
             "enabled": true,
-            "ht": "7",
+            "ht": "15",
             "vht": "7",
             "he": "both 7"
         },
