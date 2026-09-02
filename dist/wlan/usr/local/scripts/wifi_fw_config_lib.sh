@@ -197,24 +197,30 @@ wifi_fw_migrate_product_antcfg_json() {
     ' "$json"
 }
 
-# p149.115 scan wedge 회피 profile은 imx93/543 계열에서 association 전에 지켜야 하는
-# 제품 안전 불변식이다. driver#41 이후 형태: antcfg 는 비워서(RF_ANTENNA 미발행) 물리
-# Tx/Rx 를 FW 기본 2x2 로 두고 — wedge cofactor 인 physical 1-path 를 만들 수 있는 경로
-# 자체를 부팅에서 제거 — 광고 Rx NSS1 intent 는 antcfgnss(0x1111)로 fail-closed 강제한다.
-# mlan1 의 adapter-level antcfg/antcfgnss 가 뒤에서 덮어쓰는 것도 함께 차단한다.
+# p149.115 scan wedge 회피 게이트. imx93/543 계열에서 association 전에 한 번 본다.
+#
+# 검사 범위는 **wedge 와 인과가 확인된 축으로 한정**한다 — physical 1-path 를 만들 수
+# 있는 antcfg 경로다. antcfg 를 비워두면(RF_ANTENNA 미발행) 물리 Tx/Rx 가 FW 기본 2x2 로
+# 남아 cofactor 자체가 생기지 않는다. mlan1 의 adapter-level 설정이 뒤에서 덮어쓰는 것도
+# 같은 이유로 막는다.
+#
+# 여기서 검사하지 않는 것과 그 이유:
+#   - mlan0.antcfgnss 값: 광고 Rx NSS 1SS 제한 단독으로는 wedge 가 재현되지 않았다
+#     (docs/ant_rx_nss_scan_gate_2026-08-25.md:100). 게다가 이 축은 apply 단계에서
+#     FW read-back(verify.user_htstream)으로 이미 fail-closed 검증되므로, JSON 값을
+#     여기서 재확인하는 것은 중복이다.
+#   - mlan0.mcs_tier.*: MCS/NSS 튜닝 값이고 wedge 와 인과가 없다.
+#
+# wifi_init_conf.json 은 현장에서 조정 가능한 파일이다. 인과 없는 축까지 정확 일치를
+# 요구하면 정당한 튜닝이 매 부팅 err 로그를 만들어, 진짜 위반이 그 안에 묻힌다.
+# 이 게이트는 "다른 어떤 경로도 검사하지 않는 것" 만 남긴다.
+#
 # imx8/505 계열은 이 ABI로 qualification되지 않았으므로 적용 대상이 아니다.
 wifi_fw_validate_product_scan_profile() {
     local json="$1" board_type="${2:-imx93}"
     case "$board_type" in imx93*) ;; *) return 0 ;; esac
     jq -e '
         (.mlan0.antcfg.enabled != true)
-        and .mlan0.antcfgnss.enabled == true
-        and .mlan0.antcfgnss.value == "0x1111"
-        and .mlan0.antcfgnss.verify.user_htstream == "0x1111"
-        and .mlan0.mcs_tier.enabled == true
-        and .mlan0.mcs_tier.ht == "15"
-        and .mlan0.mcs_tier.vht == "7"
-        and .mlan0.mcs_tier.he == "both 7"
         and (.mlan1.antcfg.enabled != true)
         and (.mlan1.antcfgnss.enabled != true)
     ' "$json" >/dev/null 2>&1

@@ -405,10 +405,10 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `antcfg.enabled` | 물리 안테나 경로 적용 | bool | `false` | true\|false | imx93=no / imx8=caution | boot | **제품 기본 비활성(비움)** — 부팅에서 RF_ANTENNA를 발행하지 않고 물리를 FW 기본(2x2)에 둔다(driver#41). physical 1-path가 p149.115 scan wedge cofactor라 비활성 자체가 안전 불변식. 켜면 intent가 재계산돼 antcfgnss를 덮어쓴다(순서: antcfg→antcfgnss). **어댑터 단위 설정**. `global.ANT_TYPE`과는 별개 |
 | `antcfg.tx` | Tx 경로 비트맵 | string | `""` | 빈값, 또는 10진/`0x` 16진 1..0xFFFF (0 거부) | imx93=no / imx8=caution | boot | 커스텀으로 켤 때만 사용. `rx`가 비면 Tx/Rx 공통. 9098은 LOW BYTE=2G / HIGH BYTE=5G, 각 바이트 bit0=path A·bit1=path B |
 | `antcfg.rx` | Rx 경로 비트맵 | string | `""` | 빈값 또는 tx와 동일 범위 | imx93=no / imx8=caution | boot | 커스텀으로 켤 때만 사용 |
-| `antcfg.verify.*` | antcfg 검증 계약(선택) | string×3 | (템플릿 없음) | 10진 또는 `0x` 16진, 1..0xFFFF | no | boot | 커스텀/fallback 경로에서만 의미. 존재하면 physical_tx/physical_rx/user_htstream 3필드 모두 필수, 불일치 시 association 중단 |
+| `antcfg.verify.*` | antcfg 검증 계약(선택) | string×3 | (템플릿 없음) | 10진 또는 `0x` 16진, 1..0xFFFF | no | boot | 커스텀/fallback 경로에서만 의미. 존재하면 physical_tx/physical_rx/user_htstream 3필드 모두 필수, 불일치 시 재시도 후 미반영 기록(association 은 계속) |
 | `antcfgnss.enabled` | 광고 NSS intent 적용 | bool | `mlan0=true / mlan1=false` | true\|false | imx93=no / imx8=caution | boot | imx93 mlan0 제품 불변식상 `true` 고정, mlan1은 어댑터 덮어쓰기 방지로 `false` 고정(부팅이 검사). RF_ANTENNA 미발행 — 물리 불변 |
 | `antcfgnss.value` | user_htstream 값 | string | `mlan0="0x1111" / mlan1=""` | `0x` 접두 필수, 1..0xFFFF | imx93=no / imx8=caution | boot | 니블 [15:12]5Gtx/[11:8]5Grx/[7:4]2Gtx/[3:0]2Grx. 제품값 0x1111=양 밴드 Tx1/Rx1 — 실효 TX NSS=min(mcstiercfg ht 티어, Rx니블, Tx니블) OTA 실측(driver#41). **mcstiercfg ht 는 HT 전용이 아니라 VHT·HE TX NSS 까지 지배**하므로(실측 driver-v2#41: ht7→VHT-NSS1 72.2M·HE-NSS1 360.3M / ht15→VHT-NSS2 144.4M·HE-NSS2 720.6M), mcs_tier 는 순수 MCS 상한만 두고(ht=15) NSS 제한은 이 니블이 전담한다. 반영은 다음 (re)association |
-| `antcfgnss.verify.user_htstream` | antcfgnss read-back 기대값 | string | `mlan0="0x1111"` | `0x` 접두, 1..0xFFFF | no | boot | 불일치 시 association 중단(fail-closed) |
+| `antcfgnss.verify.user_htstream` | antcfgnss read-back 기대값 | string | `mlan0="0x1111"` | `0x` 접두, 1..0xFFFF | no | boot | 불일치는 재시도 후 `local0.err` + `/run/wifi/fwcfg_unapplied_<iface>` 마커로만 남고 association 은 계속된다 |
 | `rate_adapt.enabled` | 레이트 적응 적용 | bool | `true` | true\|false | caution | boot | false면 `rate_adapt_cfg`를 SET하지 않는다 — 남는 값은 FW 기본값이 아니라 마지막 SET값이다(콜드부팅 후에만 FW 기본값). 키 부재 시 true(종전 동작). `wifi <iface> rate`로 값을 바꿔도 이 값이 false면 부팅 시 적용되지 않는다 |
 | `rate_adapt.mode` | 레이트 적응 모드 | int | `1` | `0`=legacy\|`1`=SR | caution | boot | section 존재 시 mode/low/high/interval 4개 필수(enabled는 선택) |
 | `rate_adapt.low_thresh` | 레이트 적응 low 임계 | int | `70` | 0..100 또는 255 | caution | boot | static은 low<high, dynamic은 low/high 모두 255 |
@@ -500,7 +500,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 
 | 경로(`mlanN.mcs_tier.`) | 라벨 | 타입 | 기본값 (mlan0 / mlan1) | 허용값/범위 | UI편집 | 적용시점 | 설명 |
 |---|---|---|---|---|---|---|---|
-| `enabled` | MCS tier 제한 활성화 | bool | `true` | true\|false | imx93 mlan0=no / 그 외 caution | boot + link verify/reconnect | association 전 SET 후 GET 검증. imx93 mlan0은 제품 안전 불변식으로 true 고정 |
+| `enabled` | MCS tier 제한 활성화 | bool | `true` | true\|false | imx93 mlan0=no / 그 외 caution | boot + link verify/reconnect | association 전 SET 후 GET 검증. imx93 mlan0 제품 기본은 true — 부팅 게이트 대상은 아니라(antcfg 축만 검사) 현장 조정은 가능하나, ht 를 내리면 VHT·HE TX NSS 까지 함께 깎인다 |
 | `ht` | MCS HT tier 값 | string | `mlan0="15" / mlan1="7"` | `"7"`\|`"15"` | imx93 mlan0=no / 그 외 caution | boot | imx93 mlan0은 `"15"` 고정 — mcs_tier 는 순수 MCS 상한만 담당하고 NSS 제한은 antcfgnss 니블이 전담한다. `"7"` 로 내리면 HT 뿐 아니라 **VHT·HE TX NSS 까지 1 로 떨어진다**(실측). mlan1은 `"7"`. 양쪽 iface 필수 |
 | `vht` | MCS VHT tier 값 | string | `7` | `"7"`\|`"8"`\|`"9"` | imx93 mlan0=no / 그 외 caution | boot | imx93 mlan0은 `"7"` 고정 |
 | `he` | MCS HE tier 값 | string | `mlan0="both 7" / mlan1=""` | mlan0=`"both 7"`\|`"both 9"`\|`"both 11"`; mlan1=`""` | imx93 mlan0=no / 그 외 caution | boot | imx93 mlan0은 `"both 7"` 고정. mlan1(ac)은 HE 미지원 |
