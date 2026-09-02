@@ -1014,7 +1014,9 @@ imx93 의 **부팅 게이트**(`wifi_fw_validate_product_scan_profile`)가 검�
 않았다**(`docs/ant_rx_nss_scan_gate_2026-08-25.md:100`).
 
 게이트는 **fail-open** 이다 — 위반해도 부팅은 계속되고 `local0.err` 로그와
-`/run/wifi/fwcfg_unapplied_<iface>` 마커만 남는다(관측 전용, 소비자 없음). 종전에는
+`/run/wifi/fwcfg_unapplied_<iface>` 마커만 남는다. 이 마커는 `wifi <iface> info` 의
+**[FW Config Unapplied]** 섹션에서 확인한다 — 부팅 로그는 흘러가지만 "지금 이 보드가
+의도한 RF 설정으로 도는가" 는 상태로 물을 수 있어야 한다. 종전에는
 하드 실패라 설정이 그대로인 채 재부팅만 반복됐다.
 
 `antcfgnss` 와 `mcs_tier` 는 게이트 대상이 아니라 **현장 조정 가능**하다. 다만 제품
