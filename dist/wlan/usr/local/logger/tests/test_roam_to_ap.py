@@ -144,21 +144,94 @@ def test_foreign_ssid_selection_is_refused_and_spawns_nothing(monkeypatch, mode_
     notify.assert_not_called()
 
 
-def test_unknown_current_ssid_still_attempts_same_ssid_roam(monkeypatch):
-    """link.json unreadable: no SSID to compare against, so keep prior behavior.
+def test_unknown_current_ssid_refuses_to_roam(monkeypatch):
+    """Every SSID source exhausted: the target cannot be proven same-SSID.
 
-    Refusing here would break same-SSID roaming whenever link.json is briefly
-    missing; `wpa_cli roam` itself rejects a foreign BSS anyway.
+    Issuing `wpa_cli roam` anyway would send a roam for a BSS that may belong to
+    another network just because the operator picked its list position.
     """
-    _setup(monkeypatch)
-    with patch.object(passive_roam.subprocess, "run", return_value=_Run(0, "FAIL\n")) as run:
+    notify = _setup(monkeypatch)
+    with patch.object(passive_roam.subprocess, "run") as run:
         assert roam_to_ap(IFACE, _ap(ssid="Office"), current_ssid="") == 1
-    assert run.call_args[0][0][:4] == ["wpa_cli", "-i", IFACE, "roam"]
+    run.assert_not_called()
+    notify.assert_not_called()
+
+
+# --- 현재 SSID 소스 계단식: wpa_cli status(권위) → wpa conf(폴백) ---
+
+_STATUS_OK = "bssid=aa:bb:cc:dd:ee:ff\nssid=Live\nwpa_state=COMPLETED\n"
+
+
+def _conf(tmp_path: Path, *blocks: str) -> str:
+    body = "\n".join("network={\n" + b + "\n}" for b in blocks)
+    path = tmp_path / "wpa_supplicant-mlan0.conf"
+    path.write_text("ctrl_interface=/var/run/wpa_supplicant\n" + body + "\n")
+    return str(path)
+
+
+def test_ssid_source_prefers_supplicant_over_conf(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        passive_roam.subprocess, "run", lambda *_a, **_k: _Run(0, _STATUS_OK)
+    )
+    conf = _conf(tmp_path, '    ssid="FromConf"')
+    assert passive_roam.read_current_ssid(IFACE, conf) == ("Live", "supplicant")
+
+
+def test_ssid_source_ignores_supplicant_until_association_completes(
+    monkeypatch, tmp_path
+):
+    """ssid= 는 결합 전에도 찍힌다 — 그건 목표이지 현재가 아니다."""
+    monkeypatch.setattr(
+        passive_roam.subprocess,
+        "run",
+        lambda *_a, **_k: _Run(0, "ssid=Live\nwpa_state=SCANNING\n"),
+    )
+    conf = _conf(tmp_path, '    ssid="FromConf"')
+    assert passive_roam.read_current_ssid(IFACE, conf) == ("FromConf", "wpa conf")
+
+
+def test_ssid_source_falls_back_to_conf_when_wpa_cli_is_absent(monkeypatch, tmp_path):
+    def _boom(*_a, **_k):
+        raise FileNotFoundError("wpa_cli")
+
+    monkeypatch.setattr(passive_roam.subprocess, "run", _boom)
+    conf = _conf(tmp_path, '    ssid="FromConf"')
+    assert passive_roam.read_current_ssid(IFACE, conf) == ("FromConf", "wpa conf")
+
+
+def test_ssid_source_reads_only_the_first_conf_block(monkeypatch, tmp_path):
+    """Mode A 다중 블록에서 두 번째 블록을 현재 SSID 로 오인하면 안 된다."""
+    monkeypatch.setattr(passive_roam.subprocess, "run", lambda *_a, **_k: _Run(1, ""))
+    conf = _conf(tmp_path, '    ssid="First"', '    ssid="Second"')
+    assert passive_roam.read_current_ssid(IFACE, conf) == ("First", "wpa conf")
+
+
+def test_ssid_source_unknown_when_every_source_fails(monkeypatch, tmp_path):
+    monkeypatch.setattr(passive_roam.subprocess, "run", lambda *_a, **_k: _Run(1, ""))
+    assert passive_roam.read_current_ssid(IFACE, str(tmp_path / "absent.conf")) == (
+        "",
+        "unknown",
+    )
+
+
+def test_ssid_source_decodes_ctrl_iface_escapes_to_exact_identity(
+    monkeypatch, tmp_path
+):
+    """CTRL_IFACE 는 printf_encode 형식 — 바이트 그대로 복원해야 필터가 맞는다."""
+    monkeypatch.setattr(
+        passive_roam.subprocess,
+        "run",
+        lambda *_a, **_k: _Run(0, "ssid=\\xea\\xb2\\x8c\\xec\\x8a\\xa4\\xed\\x8a\\xb8\nwpa_state=COMPLETED\n"),
+    )
+    ssid, source = passive_roam.read_current_ssid(IFACE, str(tmp_path / "absent.conf"))
+    assert (ssid, source) == ("게스트", "supplicant")
 
 
 def test_candidate_list_keeps_connected_ssid_and_drops_foreign_ones(monkeypatch):
     monkeypatch.setattr(passive_roam, "read_current_bssid", lambda *_: FROM)
-    monkeypatch.setattr(passive_roam, "read_current_ssid", lambda *_: "Office")
+    monkeypatch.setattr(
+        passive_roam, "read_current_ssid", lambda *_a, **_k: ("Office", "supplicant")
+    )
     monkeypatch.setattr(
         passive_roam,
         "parse_last_scan_block",
@@ -168,17 +241,23 @@ def test_candidate_list_keeps_connected_ssid_and_drops_foreign_ones(monkeypatch)
         ],
     )
 
-    _bssid, current, candidates = passive_roam.build_candidate_list()
+    _bssid, current, source, candidates = passive_roam.build_candidate_list()
 
-    assert current == "Office"
+    assert (current, source) == ("Office", "supplicant")
     # The stronger "Base" AP is dropped: it is a different network.
     assert [candidate["ssid"] for candidate in candidates] == ["Office"]
 
 
-def _write_cli_fixture(tmp_path: Path, *, scan_rows: str) -> dict:
+def _write_cli_fixture(
+    tmp_path: Path, *, scan_rows: str, conf_ssid: str = "Base", wpa_status: str = ""
+) -> dict:
     """CLI fixture.  The boot snapshot still declares an extra SSID on purpose:
     the contract is that roam ignores it, so a regression that re-reads it is
-    visible as a foreign SSID appearing in the list."""
+    visible as a foreign SSID appearing in the list.
+
+    A stub `wpa_cli` is always installed so the cascade is deterministic
+    regardless of what the build host happens to have on PATH.
+    """
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     (run_dir / "mlan0.roam-policy.json").write_text(
@@ -194,22 +273,36 @@ def _write_cli_fixture(tmp_path: Path, *, scan_rows: str) -> dict:
         )
     )
     link = tmp_path / "link.json"
-    link.write_text(
-        json.dumps(
-            {
-                "link": {"address": FROM},
-                "info": {"ssid": "Base"},
-            }
-        )
-    )
+    link.write_text(json.dumps({"link": {"address": FROM}, "info": {"ssid": "Base"}}))
     scan = tmp_path / "ap.log"
     scan.write_text(f"{datetime.now():%Y-%m-%d %H:%M:%S}\n{scan_rows}")
-    return os.environ | {
+
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    stub = bindir / "wpa_cli"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'if [ "$3" = "status" ] && [ -n "$STUB_WPA_STATUS" ]; then\n'
+        '  printf \'%s\\n\' "$STUB_WPA_STATUS"\n'
+        "  exit 0\n"
+        "fi\n"
+        "exit 1\n"
+    )
+    stub.chmod(0o755)
+
+    env = os.environ | {
         "WIFI_RUN_DIR": str(run_dir),
         "PASSIVE_ROAM_LINK_JSON": str(link),
         "PASSIVE_ROAM_SCAN_LOG": str(scan),
+        "PATH": f"{bindir}:{os.environ.get('PATH', '')}",
+        "STUB_WPA_STATUS": wpa_status,
         "PYTHONPATH": str(Path(passive_roam.__file__).resolve().parent),
     }
+    if conf_ssid:
+        env["PASSIVE_ROAM_WPA_CONF"] = _conf(tmp_path, f'    ssid="{conf_ssid}"')
+    else:
+        env["PASSIVE_ROAM_WPA_CONF"] = str(tmp_path / "absent.conf")
+    return env
 
 
 def _run_cli(env, *args):
@@ -223,19 +316,36 @@ def _run_cli(env, *args):
     )
 
 
+_MIXED_SCAN = (
+    "00|36|-70|0|aa:bb:cc:dd:ee:ff|x|Base\n"
+    "01|44|-55|0|99:88:77:66:55:44|x|Base\n"
+    "02|40|-40|0|11:22:33:44:55:66|x|Office\n"
+)
+
+
 def test_cli_lists_only_the_connected_ssid(tmp_path):
     """Positive control: same-SSID BSSIDs are listed, the extra SSID is not."""
+    env = _write_cli_fixture(tmp_path, scan_rows=_MIXED_SCAN)
+    result = _run_cli(env)
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert "source: wpa conf" in output
+    assert "99:88:77:66:55:44" in output
+    assert "Office" not in output
+
+
+def test_cli_uses_supplicant_ssid_when_available(tmp_path):
+    """권위 소스가 살아 있으면 conf 가 무엇이든 그쪽을 따른다."""
     env = _write_cli_fixture(
         tmp_path,
-        scan_rows=(
-            "00|36|-70|0|aa:bb:cc:dd:ee:ff|x|Base\n"
-            "01|44|-55|0|99:88:77:66:55:44|x|Base\n"
-            "02|40|-40|0|11:22:33:44:55:66|x|Office\n"
-        ),
+        scan_rows=_MIXED_SCAN,
+        conf_ssid="Office",
+        wpa_status="ssid=Base\nwpa_state=COMPLETED",
     )
     result = _run_cli(env)
     output = result.stdout + result.stderr
     assert result.returncode == 0, output
+    assert "source: supplicant" in output
     assert "99:88:77:66:55:44" in output
     assert "Office" not in output
 
@@ -254,4 +364,19 @@ def test_cli_never_switches_networks_for_a_stronger_foreign_ssid(tmp_path):
     assert result.returncode == 1
     assert "Office" not in output
     assert "No other APs available to roam." in output
+    assert "Executing:" not in output
+
+
+def test_cli_shows_the_scan_but_refuses_to_roam_when_ssid_is_unknown(tmp_path):
+    """소스가 전부 실패: 진단용 목록은 남기고 실행만 막는다."""
+    env = _write_cli_fixture(tmp_path, scan_rows=_MIXED_SCAN, conf_ssid="")
+    listing = _run_cli(env)
+    assert listing.returncode == 0, listing.stdout + listing.stderr
+    assert "source: unknown" in listing.stdout
+    assert "Office" in listing.stdout  # 필터 기준이 없으니 전부 보여준다
+
+    roaming = _run_cli(env, "0")
+    output = roaming.stdout + roaming.stderr
+    assert roaming.returncode == 1
+    assert "Not roaming." in output
     assert "Executing:" not in output
