@@ -87,6 +87,9 @@ case "$action" in
         fi
         [ "$state" = active ]
         ;;
+    daemon-reload)
+        printf 'daemon-reload\\n' >> "${FAKE_SYSTEMCTL_LOG:-/dev/null}"
+        ;;
     *)
         echo "unexpected systemctl action: $action" >&2
         exit 64
@@ -104,6 +107,40 @@ def helper_env(fake_bin: Path, **values: str) -> dict[str, str]:
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         **values,
     }
+
+
+DROPIN_BODY = "[Unit]\nConditionPathExists=/run/task10-bgscan-control-allow\n"
+
+
+def install_fake_dropin(directory: Path) -> Path:
+    """Mirror the on-target layout: <unit>.service.d/<name>.conf."""
+    dropin_dir = directory / "wifi_bgscan@mlan0.service.d"
+    dropin_dir.mkdir()
+    dropin = dropin_dir / "task10-bgscan-off-control.conf"
+    dropin.write_text(DROPIN_BODY, encoding="utf-8")
+    return dropin
+
+
+def cleanup_command(
+    artifact: Path, allow_file: Path, dropin: Path, **overrides: str
+) -> str:
+    settings = {
+        "ART": shlex.quote(str(artifact)),
+        "BG_UNIT": "wifi_bgscan@mlan0.service",
+        "ORIGINAL_BG_STATE": "active",
+        "ORIGINAL_BG_WAS_ACTIVE": "1",
+        "BG_STATE_TOUCHED": "1",
+        "ALLOW_FILE": shlex.quote(str(allow_file)),
+        "ALLOW_EXISTED": "0",
+        "ALLOW_CREATED": "0",
+        "DROPIN": shlex.quote(str(dropin)),
+        "FINALIZED": "1",
+    }
+    settings.update(overrides)
+    return "\n".join(
+        [f"{key}={value}" for key, value in settings.items()]
+        + ["product_soak_cleanup"]
+    )
 
 
 class DestructiveEntryPointTest(unittest.TestCase):
@@ -285,22 +322,9 @@ class ProductSoakHelperTest(unittest.TestCase):
             artifact.mkdir()
             state_file = install_fake_systemctl(directory)
             allow_file = directory / "bgscan-allow"
-            command = "\n".join(
-                (
-                    f"ART={shlex.quote(str(artifact))}",
-                    "BG_UNIT=wifi_bgscan@mlan0.service",
-                    "ORIGINAL_BG_STATE=active",
-                    "ORIGINAL_BG_WAS_ACTIVE=1",
-                    "BG_STATE_TOUCHED=1",
-                    f"ALLOW_FILE={shlex.quote(str(allow_file))}",
-                    "ALLOW_EXISTED=0",
-                    "ALLOW_CREATED=0",
-                    "FINALIZED=1",
-                    "product_soak_cleanup",
-                )
-            )
+            dropin = install_fake_dropin(directory)
             result = run_sourced_product_helper(
-                command,
+                cleanup_command(artifact, allow_file, dropin),
                 helper_env(directory, FAKE_SYSTEMCTL_STATE=str(state_file)),
             )
 
@@ -320,22 +344,9 @@ class ProductSoakHelperTest(unittest.TestCase):
             artifact.mkdir()
             state_file = install_fake_systemctl(directory)
             allow_file = directory / "bgscan-allow"
-            command = "\n".join(
-                (
-                    f"ART={shlex.quote(str(artifact))}",
-                    "BG_UNIT=wifi_bgscan@mlan0.service",
-                    "ORIGINAL_BG_STATE=active",
-                    "ORIGINAL_BG_WAS_ACTIVE=1",
-                    "BG_STATE_TOUCHED=1",
-                    f"ALLOW_FILE={shlex.quote(str(allow_file))}",
-                    "ALLOW_EXISTED=0",
-                    "ALLOW_CREATED=0",
-                    "FINALIZED=1",
-                    "product_soak_cleanup",
-                )
-            )
+            dropin = install_fake_dropin(directory)
             result = run_sourced_product_helper(
-                command,
+                cleanup_command(artifact, allow_file, dropin),
                 helper_env(
                     directory,
                     FAKE_SYSTEMCTL_STATE=str(state_file),
@@ -349,6 +360,102 @@ class ProductSoakHelperTest(unittest.TestCase):
             )
             self.assertIn("harness_exit=70", exit_record)
             self.assertIn("bgscan_restore_rc=1", exit_record)
+
+    def test_cleanup_removes_the_reboot_fragile_test_dropin(self) -> None:
+        """The gate lives in /etc but its enabler lives in /run (tmpfs).
+
+        Leaving the gate behind makes the product service fail closed on the
+        next boot, and systemd records a condition skip rather than a failure,
+        so nothing surfaces it.  Cleanup must take the gate with it.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            artifact = directory / "artifacts"
+            artifact.mkdir()
+            state_file = install_fake_systemctl(directory)
+            reload_log = directory / "systemctl-log"
+            allow_file = directory / "bgscan-allow"
+            dropin = install_fake_dropin(directory)
+
+            result = run_sourced_product_helper(
+                cleanup_command(artifact, allow_file, dropin),
+                helper_env(
+                    directory,
+                    FAKE_SYSTEMCTL_STATE=str(state_file),
+                    FAKE_SYSTEMCTL_LOG=str(reload_log),
+                ),
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(dropin.exists(), "test-only drop-in survived cleanup")
+            self.assertFalse(
+                dropin.parent.exists(), "empty drop-in directory survived cleanup"
+            )
+            # Removing the file is not enough: systemd keeps the parsed unit
+            # until it is told to re-read the configuration.
+            self.assertIn(
+                "daemon-reload", reload_log.read_text(encoding="utf-8")
+            )
+            archived = artifact / "removed-test-dropin.conf"
+            self.assertEqual(archived.read_text(encoding="utf-8"), DROPIN_BODY)
+            exit_record = (artifact / "harness-exit.txt").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("dropin_removal_rc=0", exit_record)
+            self.assertIn("dropin_present_after=0", exit_record)
+
+    def test_cleanup_without_a_test_dropin_leaves_systemd_untouched(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            artifact = directory / "artifacts"
+            artifact.mkdir()
+            state_file = install_fake_systemctl(directory)
+            reload_log = directory / "systemctl-log"
+            allow_file = directory / "bgscan-allow"
+            absent = directory / "wifi_bgscan@mlan0.service.d" / "absent.conf"
+
+            result = run_sourced_product_helper(
+                cleanup_command(artifact, allow_file, absent),
+                helper_env(
+                    directory,
+                    FAKE_SYSTEMCTL_STATE=str(state_file),
+                    FAKE_SYSTEMCTL_LOG=str(reload_log),
+                ),
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(reload_log.exists(), "needless daemon-reload issued")
+            self.assertFalse((artifact / "removed-test-dropin.conf").exists())
+            exit_record = (artifact / "harness-exit.txt").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("dropin_removal_rc=0", exit_record)
+            self.assertIn("dropin_present_after=0", exit_record)
+
+    def test_cleanup_promotes_dropin_removal_failure_to_exit_71(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            artifact = directory / "artifacts"
+            artifact.mkdir()
+            state_file = install_fake_systemctl(directory)
+            allow_file = directory / "bgscan-allow"
+            dropin = install_fake_dropin(directory)
+
+            result = run_sourced_product_helper(
+                cleanup_command(artifact, allow_file, dropin),
+                helper_env(
+                    directory,
+                    FAKE_SYSTEMCTL_STATE=str(state_file),
+                    FAKE_SYSTEMCTL_FAIL="daemon-reload",
+                ),
+            )
+
+            self.assertEqual(result.returncode, 71, result.stderr)
+            exit_record = (artifact / "harness-exit.txt").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("harness_exit=71", exit_record)
+            self.assertIn("dropin_removal_rc=1", exit_record)
 
     @unittest.skipUnless(shutil.which("jq"), "jq is required")
     def test_safe_evidence_omits_credentials_and_raw_configs(self) -> None:

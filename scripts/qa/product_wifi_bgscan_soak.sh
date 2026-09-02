@@ -18,6 +18,29 @@ restore_unit_active_state() {
     fi
 }
 
+# The bgscan drop-in is a test-only gate left by the requester-isolation runs:
+# the gate itself lives in /etc (persistent) while the file that satisfies it
+# lives in /run (tmpfs).  Left behind, it makes the product service fail closed
+# on every subsequent boot, and systemd records that as a condition skip rather
+# than a failure, so neither `systemctl --failed` nor a journal error search
+# surfaces it.  Preflight already asserts the product policy is
+# bgscan.enabled=true, so the only correct end state for this harness is no gate.
+remove_test_only_bgscan_dropin() {
+    local dropin="$1" archive="${2:-}"
+
+    [ -e "$dropin" ] || return 0
+    if [ -n "$archive" ]; then
+        cp -a -- "$dropin" "$archive" || return 1
+    fi
+    rm -f -- "$dropin" || return 1
+    # Only succeeds while the directory holds nothing else, so unrelated
+    # drop-ins on the same unit are preserved.
+    rmdir -- "$(dirname -- "$dropin")" 2>/dev/null || true
+    # Deleting the file is not enough — systemd serves the parsed unit until
+    # it is told to re-read the configuration.
+    systemctl daemon-reload || return 1
+}
+
 capture_safe_config_evidence() {
     local art="$1" mod_conf="$2" json_conf="$3" wpa_conf="$4" iface="$5"
 
@@ -122,7 +145,7 @@ validate_new_artifact_dir() {
 }
 
 product_soak_cleanup() {
-    local rc=$? restore_rc=0 bg_state_after_restore
+    local rc=$? restore_rc=0 dropin_removal_rc=0 bg_state_after_restore
     trap - EXIT INT TERM HUP
     if [ "$BG_STATE_TOUCHED" -eq 1 ]; then
         set +e
@@ -137,6 +160,16 @@ product_soak_cleanup() {
     if [ "$ALLOW_CREATED" -eq 1 ]; then
         rm -f -- "$ALLOW_FILE"
     fi
+    # Runs after the activity restore so "restore to as-found" keeps its
+    # meaning; taking the gate away only changes what the NEXT boot does.
+    set +e
+    remove_test_only_bgscan_dropin "$DROPIN" "$ART/removed-test-dropin.conf"
+    dropin_removal_rc=$?
+    set -e
+    if [ "$dropin_removal_rc" -ne 0 ]; then
+        echo "ERROR: failed to remove test-only drop-in $DROPIN" >&2
+        [ "$rc" -ne 0 ] || rc=71
+    fi
     bg_state_after_restore="$(systemctl is-active "$BG_UNIT" 2>/dev/null || true)"
     {
         if [ "$FINALIZED" -eq 0 ]; then
@@ -149,6 +182,8 @@ product_soak_cleanup() {
         echo "bgscan_state_after_restore=$bg_state_after_restore"
         echo "allow_file_preexisted=$ALLOW_EXISTED"
         echo "allow_file_present_after=$([ -e "$ALLOW_FILE" ] && echo 1 || echo 0)"
+        echo "dropin_removal_rc=$dropin_removal_rc"
+        echo "dropin_present_after=$([ -e "$DROPIN" ] && echo 1 || echo 0)"
     } > "$ART/harness-exit.txt"
     touch "$ART/DONE"
     exit "$rc"
@@ -381,6 +416,7 @@ capture_status "$ART/baseline-after-initial-ping.txt"
 
 # The drop-in was installed by the earlier requester-isolation tests.  Satisfy
 # it without changing the deployed unit or JSON, then run the real service.
+# Cleanup removes the drop-in afterwards -- see remove_test_only_bgscan_dropin.
 if [ "$ALLOW_EXISTED" -eq 0 ]; then
     : > "$ALLOW_FILE"
     ALLOW_CREATED=1
