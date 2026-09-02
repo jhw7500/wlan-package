@@ -24,15 +24,15 @@ snapshot한다. daemon crash-restart나 wifi_init 재시작에도 snapshot이 �
 
 | topology | wifi_roam owner (`enabled=true`) | wpa native owner (`enabled=false`) |
 |---|---|---|
-| **Mode B** `generate_network_blocks=false` | 단일 블록, 같은 SSID 외부 로밍. `passive_roam`의 boot-latched `extra_ssids` 선택 또는 `wifi connect`로 수동 cross-SSID 전환 | 단일 블록 native 선택. cross-SSID는 수동 전환 |
-| **Mode A** `generate_network_blocks=true` | 다중 블록, 목표 BSSID pin+ID/SSID/BSSID 확인으로 자동 cross-SSID. `passive_roam` 수동 cross-SSID는 표시/실행하지 않음 | 다중 블록, wpa 기본 정책으로 자동 cross-SSID. 수동 cross-SSID는 미지원 |
+| **Mode B** `generate_network_blocks=false` | 단일 블록, 같은 SSID 로밍. cross-SSID는 `wifi connect` 수동 전환만(`passive_roam`은 같은 SSID 전용) | 단일 블록 native 선택. cross-SSID는 수동 전환 |
+| **Mode A** `generate_network_blocks=true` | 다중 블록, 목표 BSSID pin+ID/SSID/BSSID 확인으로 자동 cross-SSID. `passive_roam`은 같은 SSID 전용이라 관여하지 않음 | 다중 블록, wpa 기본 정책으로 자동 cross-SSID. 수동 cross-SSID는 미지원 |
 
 Mode A/B도 부팅 snapshot과 network block topology를 함께 만들므로 변경 후 재부팅이
 필수다. `generate_network_blocks=true`이면 `extra_ssids=[]`여도 Mode A identity와
 명시적 SSID writer 금지는 유지된다. 모든
 블록은 전역과 동일한 **공통 `freq_list`**를 사용한다. 부팅 parser만 legacy `scan_freq`
 fallback을 읽어 canonical `freq_list`로 이행한다.
-Mode B에서 수동 전환한 live base가 boot-latched 후보와 같아질 수 있으며,
+Mode B에서 `wifi connect`로 전환한 live base가 boot-latched 후보와 같아질 수 있으며,
 이는 부팅 base/extra 중복이 아닌 의도된 단일-블록 상태다.
 
 wifi_roam owner에서는 스캔 경로가 둘이다.
