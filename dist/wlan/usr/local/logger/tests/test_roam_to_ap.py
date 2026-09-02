@@ -411,3 +411,81 @@ def test_cli_refuses_when_mode_a_conf_cannot_identify_the_live_block(tmp_path):
     assert roaming.returncode == 1
     assert "Not roaming." in output
     assert "Executing:" not in output
+
+
+# --- 실기 ap.log 포맷(정렬 패딩) 회귀 ---
+#
+# 기존 픽스처는 `00|36|-70|0|<bssid>|x|Base` 처럼 패딩이 없어, 실제 생산자
+# (wifi_logger_scan.py)가 쓰는 정렬 포맷의 선행 공백을 한 번도 통과시키지 않았다.
+# 그래서 파서가 ssid 컬럼만 strip 하지 않는 결함을 테스트가 놓쳤고, 실기에서는
+# ' jhw_wlan_' != 'jhw_wlan_' 로 후보가 전부 탈락해 목록이 조용히 비었다.
+# 아래 픽스처는 타깃 ap.log 에서 그대로 옮긴 모양이다.
+_REAL_SCAN = (
+    "00| 044 | -48 | 015 | aa:bb:cc:dd:ee:ff | I2DM   NAX | Base\n"
+    "01| 036 | -50 | 012 | 99:88:77:66:55:44 | I2DM   N   | Base\n"
+    "02| 040 | -40 | 015 | 11:22:33:44:55:66 | I2DM   NAX | Office\n"
+)
+
+
+def test_parse_strips_alignment_padding_from_the_ssid_column(tmp_path):
+    log = tmp_path / "ap.log"
+    log.write_text(f"{datetime.now():%Y-%m-%d %H:%M:%S}\n{_REAL_SCAN}")
+
+    aps = passive_roam.parse_last_scan_block(str(log), max_age_sec=10_000)
+
+    assert [ap["ssid"] for ap in aps] == ["Base", "Base", "Office"], (
+        "정렬 패딩이 SSID identity 에 섞이면 supplicant 가 준 SSID 와 절대 같아지지 않는다."
+    )
+
+
+def test_cli_lists_candidates_from_a_real_shaped_scan_log(tmp_path):
+    """실기 포맷 그대로의 로그에서 같은 SSID 후보가 실제로 나열되어야 한다."""
+    env = _write_cli_fixture(
+        tmp_path,
+        scan_rows=_REAL_SCAN,
+        wpa_status="ssid=Base\nwpa_state=COMPLETED",
+    )
+    result = _run_cli(env)
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert "source: supplicant" in output
+    assert "99:88:77:66:55:44" in output   # 같은 SSID 의 다른 BSSID 가 후보로 보인다
+    assert "Office" not in output
+
+
+def test_cli_explains_why_the_candidate_list_is_empty(tmp_path):
+    """스캔에는 AP 가 있는데 현재 SSID 것이 하나도 없으면 이유를 말해야 한다.
+
+    종전에는 메시지 없이 exit 1 이라 운영자가 원인을 알 수 없었다.
+    """
+    env = _write_cli_fixture(
+        tmp_path,
+        scan_rows="00| 040 | -40 | 015 | 11:22:33:44:55:66 | I2DM   NAX | Office\n",
+        wpa_status="ssid=Base\nwpa_state=COMPLETED",
+    )
+    result = _run_cli(env)
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 1
+    assert "none on 'Base'" in output
+
+
+def test_parse_preserves_identity_spaces_from_the_unpadded_producer(tmp_path):
+    """ap.log 에는 wifi_roam(iw scan) 이 쓴 **무패딩** 라인도 섞인다.
+
+    그 경로의 SSID 앞뒤 공백은 진짜 identity 이므로 벗기면 안 된다
+    (wifi_roam 쪽 roundtrip 계약과 같은 규칙).
+    """
+    ssid = "  guest exact  "
+    log = tmp_path / "ap.log"
+    log.write_text(
+        f"{datetime.now():%Y-%m-%d %H:%M:%S}\n"
+        f"00|36|-50|0|aa:bb:cc:dd:ee:ff|5180|{ssid}\n"
+    )
+
+    aps = passive_roam.parse_last_scan_block(str(log), max_age_sec=10_000)
+
+    assert [ap["ssid"] for ap in aps] == [ssid], (
+        "무패딩 생산자의 라인에서 공백을 벗기면 SSID identity 가 손상된다."
+    )

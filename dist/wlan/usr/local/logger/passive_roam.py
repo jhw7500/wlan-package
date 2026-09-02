@@ -226,7 +226,20 @@ def parse_last_scan_block(scan_log_path=SCAN_LOG, max_age_sec=None):
                 "ld": int(parts[3].strip()),
                 "bssid": parts[4].strip(),
                 "cap": parts[5].strip(),
-                "ssid": validate_ssid("|".join(parts[6:])),
+                # ap.log 에는 **두 생산자**의 라인이 섞인다.
+                #  - wifi_roam(iw scan): `NN|ch|rssi|0|bssid|freq|ssid` — 패딩 없음.
+                #    이 경로의 SSID 앞뒤 공백은 진짜 identity 라 보존해야 한다
+                #    (test_iw_scan_roam 의 roundtrip 계약).
+                #  - wifi_logger_scan(getscantable): `NN| ch | rssi | ld | bssid | cap | ssid`
+                #    — 사람이 읽는 정렬 포맷이라 구분자 뒤 패딩이 붙는다. 벗기지 않으면
+                #    ' jhw_wlan_' != 'jhw_wlan_' 로 후보가 전부 탈락한다(실기 실측).
+                # 숫자 컬럼에 패딩이 있는지로 두 포맷을 가른다 — 정렬된 라인이면
+                # SSID 컬럼의 패딩도 표시용이므로 벗기고, 아니면 바이트 그대로 둔다.
+                "ssid": validate_ssid(
+                    "|".join(parts[6:]).strip()
+                    if parts[1] != parts[1].strip()
+                    else "|".join(parts[6:])
+                ),
             })
         except (ValueError, RoamPolicyError):
             continue
@@ -262,8 +275,16 @@ def build_candidate_list():
     # unknown and there is nothing to filter against: still show the scan for
     # diagnosis, and let roam_to_ap refuse — an unverifiable target must not be
     # roamed to just because it holds a list position.
+    scanned = len(aps)
     if current_ssid:
         aps = [ap for ap in aps if ap["ssid"] == current_ssid]
+    if scanned and not aps:
+        # 필터가 전부 걸러낸 경우를 침묵으로 두면 운영자가 이유를 알 수 없다
+        # (종전엔 메시지 없이 exit 1 이었다).
+        print(
+            f"scan has {scanned} AP(s) but none on '{current_ssid}' — "
+            "nothing to roam to within this SSID"
+        )
 
     # Sort by RSSI (higher is better; e.g. -40 > -50)
     aps.sort(key=lambda x: x["ss"], reverse=True)
