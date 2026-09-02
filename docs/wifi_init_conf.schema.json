@@ -1681,7 +1681,8 @@
               "description": "유효 UTF-8 1..32 encoded bytes의 고유 SSID identity(공백/따옴표/백슬래시 보존, C0/DEL 금지, 부팅 base SSID 중복 금지). 모드A에서 추가 network 블록을 만들 SSID이며 cross-SSID 전환은 선택된 자동 owner만 수행한다. 모드B에서는 읽는 소비자가 없다(자동 owner·bgscan이 무시하고 수동 wifi roam 은 같은 SSID 전용) — 망 전환은 wifi <iface> connect <ssid> 로 한다. 변경은 재부팅 필요",
               "x-ui-editable": "caution",
               "x-apply-timing": "reboot",
-              "x-consumer": "wifi_init.sh, wifi_roam.py, wifi_bgscan.py"
+              "x-consumer": "wifi_init.sh, wifi_roam.py, wifi_bgscan.py",
+              "x-inert-in-mode": "B"
             },
             "generate_network_blocks": {
               "type": "boolean",
@@ -1698,7 +1699,8 @@
               "description": "모드A cross-SSID 전환 실패 시 즉시 재시도 허용 횟수(모드B 미적용)",
               "x-ui-editable": "yes",
               "x-apply-timing": "daemon-restart",
-              "x-consumer": "wifi_roam.py"
+              "x-consumer": "wifi_roam.py",
+              "x-inert-in-mode": "B"
             },
             "ROAM_NO_RESULT_FAST_COUNT": {
               "type": "integer",
@@ -2631,7 +2633,8 @@
               "description": "유효 UTF-8 1..32 encoded bytes의 고유 SSID identity(공백/따옴표/백슬래시 보존, C0/DEL 금지, base SSID 중복 금지). 모드A에서 추가 network 블록을 만들 SSID이며 cross-SSID 전환은 선택된 자동 owner만 수행한다. 모드B에서는 읽는 소비자가 없다(자동 owner·bgscan이 무시하고 수동 wifi roam 은 같은 SSID 전용) — 망 전환은 wifi <iface> connect <ssid> 로 한다. 변경은 재부팅 필요",
               "x-ui-editable": "caution",
               "x-apply-timing": "reboot",
-              "x-consumer": "wifi_init.sh, wifi_roam.py, wifi_bgscan.py"
+              "x-consumer": "wifi_init.sh, wifi_roam.py, wifi_bgscan.py",
+              "x-inert-in-mode": "B"
             },
             "generate_network_blocks": {
               "type": "boolean",
@@ -2648,7 +2651,8 @@
               "description": "모드A cross-SSID 전환 실패 시 즉시 재시도 허용 횟수(모드B 미적용)",
               "x-ui-editable": "yes",
               "x-apply-timing": "daemon-restart",
-              "x-consumer": "wifi_roam.py"
+              "x-consumer": "wifi_roam.py",
+              "x-inert-in-mode": "B"
             },
             "ROAM_NO_RESULT_FAST_COUNT": {
               "type": "integer",
