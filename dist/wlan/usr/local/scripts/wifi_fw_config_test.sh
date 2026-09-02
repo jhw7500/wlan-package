@@ -624,19 +624,24 @@ jq '.mlan0.antcfg.enabled=true | .mlan0.antcfg.tx="0x0303" | .mlan0.antcfg.rx="0
     "$TEMPLATE" > "$WORK/unsafe-antcfg.json"
 expect_rc "imx93 product scan profile rejects re-enabled physical antcfg" 1 \
     wifi_fw_validate_product_scan_profile "$WORK/unsafe-antcfg.json" imx93
-jq '.mlan0.antcfgnss.enabled=false' "$TEMPLATE" > "$WORK/unsafe-nss-off.json"
-expect_rc "imx93 product scan profile rejects disabled antcfgnss" 1 \
-    wifi_fw_validate_product_scan_profile "$WORK/unsafe-nss-off.json" imx93
-jq '.mlan0.antcfgnss.value="0x2222"' "$TEMPLATE" > "$WORK/unsafe-nss-value.json"
-expect_rc "imx93 product scan profile rejects non-product antcfgnss value" 1 \
-    wifi_fw_validate_product_scan_profile "$WORK/unsafe-nss-value.json" imx93
+# 아래 두 축은 게이트 대상이 아니다 — 광고 Rx NSS 1SS 단독으로는 wedge 가 재현되지
+# 않았고(docs/ant_rx_nss_scan_gate_2026-08-25.md:100), antcfgnss 는 apply 단계에서
+# FW read-back 으로 이미 fail-closed 검증된다. 현장 튜닝을 막지 않는지 고정한다.
+jq '.mlan0.antcfgnss.enabled=false' "$TEMPLATE" > "$WORK/tuned-nss-off.json"
+expect_rc "imx93 product scan profile allows field-disabled antcfgnss" 0 \
+    wifi_fw_validate_product_scan_profile "$WORK/tuned-nss-off.json" imx93
+jq '.mlan0.antcfgnss.value="0x2222"' "$TEMPLATE" > "$WORK/tuned-nss-value.json"
+expect_rc "imx93 product scan profile allows field-tuned antcfgnss value" 0 \
+    wifi_fw_validate_product_scan_profile "$WORK/tuned-nss-value.json" imx93
 jq '.mlan1.antcfgnss={enabled:true,value:"0x1111"}' "$TEMPLATE" \
     > "$WORK/unsafe-mlan1-nss.json"
 expect_rc "imx93 product scan profile rejects adapter overwrite from mlan1 antcfgnss" 1 \
     wifi_fw_validate_product_scan_profile "$WORK/unsafe-mlan1-nss.json" imx93
-jq '.mlan0.mcs_tier.he="both 9"' "$TEMPLATE" > "$WORK/unsafe-mcs.json"
-expect_rc "imx93 product scan profile rejects MCS above 7" 1 \
-    wifi_fw_validate_product_scan_profile "$WORK/unsafe-mcs.json" imx93
+# mcs_tier 는 MCS/NSS 튜닝 값이고 wedge 와 인과가 없다 — 게이트가 막지 않아야 한다.
+jq '.mlan0.mcs_tier.he="both 9" | .mlan0.mcs_tier.ht="7"' "$TEMPLATE" \
+    > "$WORK/tuned-mcs.json"
+expect_rc "imx93 product scan profile allows field-tuned mcs_tier" 0 \
+    wifi_fw_validate_product_scan_profile "$WORK/tuned-mcs.json" imx93
 jq '.mlan1.antcfg.enabled=true' "$TEMPLATE" > "$WORK/unsafe-mlan1-antcfg.json"
 expect_rc "imx93 product scan profile rejects adapter overwrite from mlan1" 1 \
     wifi_fw_validate_product_scan_profile "$WORK/unsafe-mlan1-antcfg.json" imx93

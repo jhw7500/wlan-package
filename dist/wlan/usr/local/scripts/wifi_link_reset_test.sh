@@ -20,12 +20,21 @@ printf '%s\n' "$*" >> "$LOG_CAPTURE"
 EOF
 chmod +x "$FAKE_LOGGER"
 
+# 경로명 확장 회귀 감시: OriginalName 의 glob 토큰(`mlan*`)이 비인용 확장으로 CWD 의
+# 파일명에 치환되면 판정이 통째로 어긋난다. 실기 /usr/local/scripts 에 mlanutl_silent.sh
+# 가 있어 실제로 발생했으므로, 테스트는 **항상** 그 충돌이 있는 CWD 에서 돌려 회귀를
+# CWD 운에 맡기지 않는다.
+DECOY="$WORK/decoy"
+mkdir -p "$DECOY"
+: > "$DECOY/mlanutl_silent.sh"
+
 run_reset() {
-    SYSTEMD_NETWORK_DIR="$NET" \
-    MAC_LINK_LOCK_DIR="$NET" \
-    WIFI_LINK_RESET_LOGGER="$FAKE_LOGGER" \
-    LOG_CAPTURE="$LOG" \
-        bash "$SCRIPT" "$@"
+    ( cd "$DECOY" && \
+      SYSTEMD_NETWORK_DIR="$NET" \
+      MAC_LINK_LOCK_DIR="$NET" \
+      WIFI_LINK_RESET_LOGGER="$FAKE_LOGGER" \
+      LOG_CAPTURE="$LOG" \
+        bash "$SCRIPT" "$@" )
 }
 
 expect_eq() {

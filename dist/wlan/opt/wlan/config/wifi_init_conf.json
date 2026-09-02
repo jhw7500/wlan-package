@@ -344,7 +344,7 @@
                 "광고 NSS intent(user_htstream) 전용 설정 — association 전에 mlanutl <iface> antcfgnss <value> 로 적용 (driver#41)",
                 "RF_ANTENNA HostCmd를 발행하지 않아 물리 안테나는 불변. 니블 배치 [15:12]=5G Tx, [11:8]=5G Rx, [7:4]=2G Tx, [3:0]=2G Rx",
                 "value: (string) 0x 접두 필수(드라이버가 강제). 제품값 0x1111 = 양 밴드 Tx1/Rx1 — 실효 TX NSS = min(mcstiercfg ht 티어, Rx니블, Tx니블) OTA 실측(driver#41). mcs_tier 는 순수 MCS 상한만 담당하고 NSS 제한은 이 니블이 전담한다 — mcstiercfg ht 는 HT 전용이 아니라 VHT·HE 의 TX NSS 까지 지배하므로(driver-v2#41 실측: ht7 → VHT-NSS1/HE-NSS1, ht15 → VHT-NSS2/HE-NSS2) ht 를 7 로 내려 NSS 를 제한하면 전 대역폭 클래스가 함께 깎인다",
-                "verify: (object, optional) SET 후 read-back으로 user_htstream을 확인, 불일치 시 association 중단(fail-closed)",
+                "verify: (object, optional) SET 후 read-back으로 user_htstream을 확인. 불일치해도 association 은 막지 않고 로그와 /run/wifi/fwcfg_unapplied_<iface> 마커로만 남는다 — 변경 후 mlanutl <iface> antcfgnss 로 실제 반영을 확인할 것",
                 "주의: 어댑터 단위 상태(antcfg와 동일). 반영은 다음 (re)association부터"
             ],
             "enabled": true,
