@@ -1057,5 +1057,46 @@ grep -q 'persisted hardware identity mismatch' "$WIFI_INIT" \
     && pass "wifi_init logs persisted identity drift" \
     || fail "wifi_init does not log identity drift"
 
+# --- 미반영 마커 관측 경로 (wifi_fw_unapplied_read + wifi info) ---
+# 마커는 부팅을 막지 않는 대신 "지금 이 보드가 의도한 RF 설정인가" 를 물을 수 있는
+# 상태여야 한다. 읽는 경로가 없으면 기록은 아무 데도 닿지 않는다.
+rm -rf "$WIFI_FW_UNAPPLIED_DIR"
+if wifi_fw_unapplied_read mlan0 >/dev/null 2>&1; then
+    fail "unapplied read reports success without a marker"
+else
+    pass "unapplied read fails when no marker exists"
+fi
+expect_eq "unapplied read prints nothing without a marker" '' \
+    "$(wifi_fw_unapplied_read mlan0 2>/dev/null)"
+
+wifi_fw_mark_unapplied mlan0 product_scan_profile "config does not match the imx93 contract"
+wifi_fw_mark_unapplied mlan0 antcfgnss "expected=0x1111 actual=0x2222"
+expect_eq "unapplied read returns every recorded axis" 'antcfgnss product_scan_profile' \
+    "$(wifi_fw_unapplied_read mlan0 | cut -d= -f1 | sort | tr '\n' ' ' | sed 's/ $//')"
+
+# CLI 는 실제로 실행해서 확인한다 — 소스 grep 은 출력이 실제로 나오는지 증명하지 못한다.
+CLI_INFO_OUT=$(timeout 30 bash "$WIFI_CLI" mlan0 info 2>/dev/null)
+case "$CLI_INFO_OUT" in
+    *"[FW Config Unapplied]"*) pass "wifi info renders the unapplied section" ;;
+    *) fail "wifi info renders the unapplied section" ;;
+esac
+case "$CLI_INFO_OUT" in
+    *"product_scan_profile=config does not match the imx93 contract"*)
+        pass "wifi info surfaces the recorded product_scan_profile axis" ;;
+    *) fail "wifi info surfaces the recorded product_scan_profile axis" ;;
+esac
+case "$CLI_INFO_OUT" in
+    *"antcfgnss=expected=0x1111 actual=0x2222"*)
+        pass "wifi info surfaces the recorded antcfgnss axis" ;;
+    *) fail "wifi info surfaces the recorded antcfgnss axis" ;;
+esac
+
+rm -rf "$WIFI_FW_UNAPPLIED_DIR"
+CLI_INFO_CLEAN=$(timeout 30 bash "$WIFI_CLI" mlan0 info 2>/dev/null)
+case "$CLI_INFO_CLEAN" in
+    *"[FW Config Unapplied]"*none*) pass "wifi info reports none when every axis applied" ;;
+    *) fail "wifi info reports none when every axis applied" ;;
+esac
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -16,7 +16,8 @@
 : "${WIFI_FW_UNAPPLIED_DIR:=/run/wifi}"
 
 # 미반영 축 상태. 파일 한 줄 = 한 축, "축=사유" 형식.
-# 부팅을 막지 않는 대신 이 파일이 관측 지점이 된다(wifi info / SNMP / fwcfg_watch).
+# 부팅을 막지 않는 대신 이 파일이 관측 지점이 된다 — `wifi <iface> info` 의
+# [FW Config Unapplied] 섹션이 wifi_fw_unapplied_read() 로 읽는다.
 _wifi_fw_unapplied_file() {
     printf '%s/fwcfg_unapplied_%s\n' "$WIFI_FW_UNAPPLIED_DIR" "$1"
 }
@@ -31,6 +32,15 @@ _wifi_fw_unapplied_mark() {
         mv -f "${f}.tmp" "$f" 2>/dev/null || true
     fi
     printf '%s=%s\n' "$axis" "$reason" >> "$f" 2>/dev/null || true
+}
+
+# 미반영 축을 읽는다(관측 전용). 기록이 없으면 출력 없이 1 을 돌려준다.
+# 출력은 파일 그대로 — 한 줄에 "축=사유". 경로·형식 지식을 여기 한 곳에 둔다.
+wifi_fw_unapplied_read() {
+    local f
+    f=$(_wifi_fw_unapplied_file "$1")
+    [ -s "$f" ] || return 1
+    cat "$f" 2>/dev/null
 }
 
 _wifi_fw_unapplied_clear() {
