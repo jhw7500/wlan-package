@@ -1006,15 +1006,18 @@ strict profile을 적용하지 않으며 custom antcfg/MCS는 보존한다.
 `verify`가 있으면 세 하위 키가 모두 필수이며 어느 하나라도 파싱되지 않거나 기대값과 다르면
 `wifi_init`은 supplicant 시작 전에 실패한다.
 
-imx93에서는 **antcfg 비활성 + antcfgnss `0x2121` + `mcs_tier enabled + HT/VHT/HE 7` +
-mlan1 antcfg/antcfgnss 비활성**이 묶인 **제품 안전 불변식**이다. `wifi_init.sh`가
+imx93에서는 **antcfg 비활성 + antcfgnss `0x1111` + `mcs_tier enabled + ht 15 / vht 7 /
+he both 7` + mlan1 antcfg/antcfgnss 비활성**이 묶인 **제품 안전 불변식**이다.
+역할 분리가 핵심이다 — `mcs_tier` 는 순수 MCS 상한만 두고, NSS 제한은 `antcfgnss`
+니블(Tx1/Rx1)이 전담한다. `mcstiercfg ht` 를 `7` 로 내리면 HT 뿐 아니라 **VHT·HE 의
+TX NSS 까지 1 로 떨어지므로**(driver-v2#41 실측) 제품은 `15` 로 둔다. `wifi_init.sh`가
 association 전에 전체 조합을 검사하며 하나라도 바뀌면 supplicant를 시작하지 않는다.
 따라서 WebUI는 imx93에서 이 antcfg/antcfgnss/MCS 제품값을 읽기 전용으로 표시해야 한다.
 
 업그레이드에서는 active JSON 우선 병합 때문에 템플릿 변경만으로 과거 값이 바뀌지 않는다.
 `postinst`가 병합 직후 과거 제품 이력 — 구제품 비대칭 계약 `0x0303/0x0101(+verify)`,
 그 이전의 `enabled=false, tx="", rx=""`, 알려진 physical 1x1 `0x0101` — 만
-**새 계약(antcfg 비움 + antcfgnss `0x2121` 주입)** 으로 멱등 승격한다. 그 밖의 명시적
+**새 계약(antcfg 비움 + antcfgnss `0x1111` 주입)** 으로 멱등 승격한다. 그 밖의 명시적
 안테나 경로 값은 운영자 설정으로 보고 보존하며 antcfgnss도 주입하지 않는다(이 경우 제품
 불변식 검사에 걸리므로 의도적 커스텀은 불변식까지 이해한 구성이어야 한다). deep merge가
 커스텀 값에 템플릿의 제품용 `verify`를 자동 주입한 경우에는 주입된 계약만 제거해 기존
