@@ -270,6 +270,133 @@ class RemoteSafety(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout.strip(), "35")
 
+class RestoreScope(unittest.TestCase):
+    """복원 경로가 **최상위 스코프**에서 돌아야 한다.
+
+    EXIT 트랩은 main 이 반환한 **뒤** 최상위에서 실행된다. 복원 함수를 main 안에
+    중첩해 두고 main 의 local 을 참조하면, `set -u` 가 그 시점에 unbound variable 로
+    복원을 중단시킨다 — 정상 완주 경로만 깨지고 SIGHUP/SIGTERM 경로는 멀쩡해서
+    신호 테스트로는 잡히지 않는다. 실기에서 주입 루프·DIFF_TH·로거가 복원되지 않은
+    채 남았던 실제 사고 모드다(2026-09-02).
+    """
+
+    def _stubs(self):
+        import tempfile
+        d = Path(tempfile.mkdtemp())
+        log = d / "calls"
+        log.write_text("")
+        for name in ("systemctl", "wpa_cli"):
+            stub = d / name
+            stub.write_text(
+                "#!/bin/sh\n"
+                f'echo "{name} $@" >> "$STUB_LOG"\n'
+                'case "$1" in is-active) exit 0 ;; esac\n'
+                "exit 0\n"
+            )
+            stub.chmod(0o755)
+        return d, log
+
+    def _run(self, body: str) -> tuple[subprocess.CompletedProcess, str]:
+        d, log = self._stubs()
+        script = d / "harness.sh"
+        script.write_text(
+            f"source {shlex.quote(str(DRIVER))}\n"
+            "IFACE=mlan0\n"
+            'RESTORE_UNIT="u.service"\n'
+            'RESTORE_ORIG_DIFF="7"\n'
+            "RESTORE_WAS_ACTIVE=1\n"
+            + body
+        )
+        r = subprocess.run(
+            ["bash", str(script)], capture_output=True, text=True, timeout=30,
+            env={**os.environ, "PATH": f"{d}:{os.environ['PATH']}", "STUB_LOG": str(log)},
+        )
+        return r, log.read_text()
+
+    def test_restore_is_callable_from_top_level_scope(self):
+        r, calls = self._run("restore\n")
+        self.assertEqual(r.returncode, 0, f"stdout={r.stdout} stderr={r.stderr}")
+        self.assertIn("DIFF_TH=7", r.stdout)
+        self.assertIn("u.service restored", r.stdout)
+        self.assertIn("start u.service", calls)
+
+    def test_exit_trap_armed_inside_a_function_still_restores_after_it_returns(self):
+        """실기 순서 그대로 — 함수 안에서 트랩을 걸고, 함수가 반환한 뒤 셸이 끝난다."""
+        r, calls = self._run(
+            "arm() { trap restore EXIT INT TERM HUP; return 0; }\n"
+            "arm\n"
+        )
+        self.assertEqual(r.returncode, 0, f"stdout={r.stdout} stderr={r.stderr}")
+        self.assertNotIn("unbound variable", r.stderr)
+        self.assertIn("== restore ==", r.stdout)
+        self.assertIn("start u.service", calls)
+
+    def test_restore_reports_failure_when_the_unit_cannot_be_restored(self):
+        """복원 실패를 조용히 삼키지 않는다(rc=70)."""
+        import tempfile
+        d = Path(tempfile.mkdtemp())
+        stub = d / "systemctl"
+        stub.write_text('#!/bin/sh\ncase "$1" in is-active) exit 3 ;; esac\nexit 0\n')
+        stub.chmod(0o755)
+        (d / "wpa_cli").write_text("#!/bin/sh\nexit 0\n")
+        (d / "wpa_cli").chmod(0o755)
+        script = d / "harness.sh"
+        script.write_text(
+            f"source {shlex.quote(str(DRIVER))}\n"
+            "IFACE=mlan0\n"
+            'RESTORE_UNIT="u.service"\n'
+            'RESTORE_ORIG_DIFF="7"\n'
+            "RESTORE_WAS_ACTIVE=1\n"
+            "restore\n"
+        )
+        r = subprocess.run(
+            ["bash", str(script)], capture_output=True, text=True, timeout=30,
+            env={**os.environ, "PATH": f"{d}:{os.environ['PATH']}"},
+        )
+        self.assertEqual(r.returncode, 70, f"stdout={r.stdout} stderr={r.stderr}")
+        self.assertIn("restore failed for u.service", r.stderr)
+
+
+    def test_restore_survives_a_dead_stdout_pipe(self):
+        """ssh 절단 후 복원이 자기 echo 로 죽지 않아야 한다.
+
+        실기에서 감사 로그에 `restore: enter` 한 줄만 남고 프로세스가 사라졌다 —
+        복원 중 stdout write 가 SIGPIPE 를 맞았고, 그 시점엔 트랩이 이미 해제돼
+        있어 DIFF_TH·로거·주입 루프가 전부 시험 상태로 방치됐다.
+        """
+        import tempfile
+        d, log = self._stubs()
+        audit = d / "restore.log"
+        script = d / "harness.sh"
+        script.write_text(
+            f"source {shlex.quote(str(DRIVER))}\n"
+            "IFACE=mlan0\n"
+            'RESTORE_UNIT="u.service"\n'
+            'RESTORE_ORIG_DIFF="7"\n'
+            "RESTORE_WAS_ACTIVE=1\n"
+            "restore\n"
+        )
+        # stdout 을 곧바로 닫히는 파이프에 물린다 — 절단된 ssh 와 같은 조건.
+        r = subprocess.run(
+            ["bash", "-c",
+             f"bash {shlex.quote(str(script))} | (exec true)"],
+            capture_output=True, text=True, timeout=30,
+            env={**os.environ, "PATH": f"{d}:{os.environ['PATH']}",
+                 "STUB_LOG": str(log), "RESTORE_LOG": str(audit)},
+        )
+        trail = audit.read_text() if audit.exists() else ""
+        self.assertIn("restore: enter", trail, f"복원 진입 자체가 없다: {r.stderr}")
+        self.assertIn("restore: leave", trail,
+                      f"복원이 중간에 죽었다(SIGPIPE) — 남은 감사 로그:\n{trail}")
+        self.assertIn("start u.service", log.read_text())
+
+    def test_session_watchdog_tracks_process_liveness(self):
+        alive = call("harness_session_alive", str(os.getpid()))
+        self.assertEqual(alive.returncode, 0, alive.stderr)
+        # 존재할 수 없는 pid — 절단된 ssh 세션과 같은 상태
+        dead = call("harness_session_alive", "2147483647")
+        self.assertEqual(dead.returncode, 1, dead.stderr)
+
 class ModuleWiring(unittest.TestCase):
     """직접 실행(`python3 <file>`)이 pytest 와 같은 수의 테스트를 돌려야 한다.
 

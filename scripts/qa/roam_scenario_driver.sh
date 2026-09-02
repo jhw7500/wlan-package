@@ -31,6 +31,12 @@
 # `wifi roam diff` CLI) 둘뿐이고 어느 경로로 끝나든 복원한다.
 set -Eeuo pipefail
 
+# ssh 가 끊기면 stdout/stderr 가 죽은 파이프가 된다. 기본 처분이면 그때의 write 가
+# **복원 도중에** 프로세스를 죽인다(트랩은 이미 해제돼 있어 아무것도 남지 않는다).
+# 실기에서 `restore: enter` 한 줄만 남고 장치가 시험 상태로 방치된 원인이다.
+# 무시로 바꾸면 write 는 EPIPE 를 돌려줄 뿐이고, 복원은 끝까지 돈다.
+trap '' PIPE
+
 IFACE=""
 SCHEDULE=""
 ARTIFACT=""
@@ -41,6 +47,21 @@ INJECT_PERIOD_SEC=1
 STALE_GUARD_SEC=30
 DEADLINE_MARGIN_SEC=60
 CMD_TIMEOUT_SEC=5
+
+# 복원에 필요한 상태는 **전역**이어야 한다. EXIT 트랩은 main 이 반환한 뒤 최상위
+# 스코프에서 돌기 때문에, main 의 local 을 참조하면 `set -u` 가 복원을 중단시킨다
+# (정상 완주 경로만 깨지고 신호 경로는 멀쩡해서 눈에 띄지 않는다).
+RESTORE_UNIT=""
+RESTORE_ORIG_DIFF=""
+RESTORE_WAS_ACTIVE=0
+RESTORE_INJ_PID=""
+# 하네스를 띄운 ssh 세션. 사라지면 관측자가 없으므로 즉시 복원하고 끝낸다.
+HARNESS_PARENT="$PPID"
+
+# 복원 감사 로그. stdout/stderr 가 죽은 파이프여도(ssh 절단) 남아야 하므로 파일이다.
+# "복원이 안 됐다"를 만났을 때 **복원이 돌기는 했는지**를 추측 없이 가른다.
+RESTORE_LOG="${RESTORE_LOG:-/var/log/cantops/roam_scenario_restore.log}"
+rlog() { printf '%s [%s] %s\n' "$(date -Is 2>/dev/null)" "$$" "$*" >> "$RESTORE_LOG" 2>/dev/null || true; }
 
 usage() {
     cat >&2 <<'USAGE'
@@ -116,6 +137,9 @@ weakest_other_bssid() {
     printf '%s\n' "$worst_b"
 }
 
+# 하네스를 띄운 세션이 아직 살아 있나. 죽었으면 관측자가 없으므로 조기 복원한다.
+harness_session_alive() { [ -e "/proc/${1}" ]; }
+
 restore_unit_active_state() {
     local unit="$1" was_active="$2"
     if [ "$was_active" = 1 ]; then
@@ -145,6 +169,40 @@ inject_loop() {
 wpa() { timeout "$CMD_TIMEOUT_SEC" wpa_cli -i "$IFACE" "$@"; }
 status_field() { wpa status 2>/dev/null | sed -n "s/^$1=//p"; }
 scan_candidates() { wpa scan_results 2>/dev/null | awk 'NR>1 && NF>=5 {print $1, $3}'; }
+
+# 복원 경로. **최상위 함수 + 전역 상태**여야 한다 — EXIT 트랩은 main 반환 뒤에 돌고,
+# 그때 main 의 local 은 이미 사라져 있다.
+restore() {
+    local rc=$? step_rc
+    trap - EXIT INT TERM HUP
+    rlog "restore: enter rc=$rc"
+    echo "== restore ==" || true
+
+    if [ -n "$RESTORE_INJ_PID" ]; then
+        kill "$RESTORE_INJ_PID" 2>/dev/null && step_rc=0 || step_rc=$?
+        rlog "restore: kill inject pid=$RESTORE_INJ_PID rc=$step_rc"
+    fi
+
+    if [ -n "$RESTORE_ORIG_DIFF" ]; then
+        timeout 20 /usr/local/bin/wifi "$IFACE" roam diff "$RESTORE_ORIG_DIFF" >/dev/null 2>&1 \
+            && step_rc=0 || step_rc=$?
+        rlog "restore: diff_th=$RESTORE_ORIG_DIFF rc=$step_rc"
+    fi
+
+    wpa enable_network all >/dev/null 2>&1 && step_rc=0 || step_rc=$?
+    rlog "restore: enable_network all rc=$step_rc"
+
+    if [ -n "$RESTORE_UNIT" ]; then
+        restore_unit_active_state "$RESTORE_UNIT" "$RESTORE_WAS_ACTIVE" \
+            && step_rc=0 || step_rc=$?
+        rlog "restore: unit=$RESTORE_UNIT was_active=$RESTORE_WAS_ACTIVE rc=$step_rc"
+        [ "$step_rc" = 0 ] || { echo "restore failed for $RESTORE_UNIT" >&2 || true; rc=70; }
+    fi
+
+    rlog "restore: leave rc=$rc"
+    echo "DIFF_TH=$RESTORE_ORIG_DIFF, all networks enabled, $RESTORE_UNIT restored" || true
+    exit "$rc"
+}
 
 main() {
     while [ "$#" -gt 0 ]; do
@@ -179,22 +237,10 @@ main() {
     local unit="wifi_logger_link@${IFACE}"
     [ -f "$link" ] || { echo "missing $link" >&2; exit 68; }
 
-    local orig_diff was_active inj_pid=""
-    orig_diff="$(jq -r --arg i "$IFACE" '.[$i].roaming.DIFF_TH' "$conf")"
-    was_active=0; systemctl is-active --quiet "$unit" && was_active=1
+    RESTORE_UNIT="$unit"
+    RESTORE_ORIG_DIFF="$(jq -r --arg i "$IFACE" '.[$i].roaming.DIFF_TH' "$conf")"
+    RESTORE_WAS_ACTIVE=0; systemctl is-active --quiet "$unit" && RESTORE_WAS_ACTIVE=1
 
-    restore() {
-        local rc=$?
-        trap - EXIT INT TERM HUP
-        echo "== restore =="
-        if [ -n "$inj_pid" ]; then kill "$inj_pid" 2>/dev/null || true; fi
-        timeout 20 /usr/local/bin/wifi "$IFACE" roam diff "$orig_diff" >/dev/null 2>&1 || true
-        wpa enable_network all >/dev/null 2>&1 || true
-        restore_unit_active_state "$unit" "$was_active" \
-            || { echo "restore failed for $unit" >&2; rc=70; }
-        echo "DIFF_TH=$orig_diff, all networks enabled, $unit restored"
-        exit "$rc"
-    }
     # EXIT 만으로는 ssh 절단(SIGHUP)·외부 종료(SIGTERM)에서 복원이 돌지 않는다.
     trap restore EXIT INT TERM HUP
 
@@ -203,7 +249,7 @@ main() {
 
     wpa scan >/dev/null 2>&1 || true; sleep 3
     local cur; cur="$(status_field bssid)"
-    echo "== start: bssid=$cur ssid=$(status_field ssid) DIFF_TH=$orig_diff deadline=+$((total + DEADLINE_MARGIN_SEC))s =="
+    echo "== start: bssid=$cur ssid=$(status_field ssid) DIFF_TH=$RESTORE_ORIG_DIFF deadline=+$((total + DEADLINE_MARGIN_SEC))s =="
 
     if scan_candidates | current_is_strongest "$cur"; then
         if [ "$SEED_WEAK" = 1 ]; then
@@ -228,15 +274,20 @@ main() {
         [ -n "$rssi" ] || continue
         from_b="$(status_field bssid)"
         timeout 20 /usr/local/bin/wifi "$IFACE" roam diff "$diff" >/dev/null 2>&1 || true
-        if [ -n "$inj_pid" ]; then kill "$inj_pid" 2>/dev/null || true; fi
+        if [ -n "$RESTORE_INJ_PID" ]; then kill "$RESTORE_INJ_PID" 2>/dev/null || true; fi
         # stdio 분리 — 이게 없으면 ssh 세션이 닫히지 않아 원격에 하네스가 남는다.
         inject_loop "$link" "$rssi" "$$" </dev/null >/dev/null 2>&1 &
-        inj_pid=$!
+        RESTORE_INJ_PID=$!
 
         to_b="$from_b"
         for ((i = 1; i <= hold; i++)); do
             if [ "$(date +%s)" -ge "$deadline" ]; then
-                echo "!! deadline exceeded — 남은 구간을 중단하고 복원한다" >&2
+                echo "!! deadline exceeded — 남은 구간을 중단하고 복원한다" >&2 || true
+                return 0
+            fi
+            if ! harness_session_alive "$HARNESS_PARENT"; then
+                rlog "parent $HARNESS_PARENT gone — 조기 복원"
+                echo "!! 실행 세션이 사라졌다 — 남은 구간을 중단하고 복원한다" >&2 || true
                 return 0
             fi
             sleep 1
