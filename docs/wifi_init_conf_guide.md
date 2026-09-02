@@ -1003,16 +1003,31 @@ strict profile을 적용하지 않으며 custom antcfg/MCS는 보존한다.
 | `verify.user_htstream` | string | (선택) | SET 뒤 기대하는 host NSS intent. matching 543 `mlanutl` 필요 |
 
 이 섹션을 커스텀으로 켠 경우: `verify`가 없으면 SET 후 GET 결과를 로그로만 남기고,
-`verify`가 있으면 세 하위 키가 모두 필수이며 어느 하나라도 파싱되지 않거나 기대값과 다르면
-`wifi_init`은 supplicant 시작 전에 실패한다.
+`verify`가 있으면 세 하위 키가 모두 필수다. 다만 불일치해도 **부팅과 association 은
+막지 않는다** — 재시도 후 `local0.err` 로그와 `/run/wifi/fwcfg_unapplied_<iface>` 마커만
+남긴다(FW 설정 미반영으로 재부팅하던 경로는 제거됐다).
 
-imx93에서는 **antcfg 비활성 + antcfgnss `0x1111` + `mcs_tier enabled + ht 15 / vht 7 /
-he both 7` + mlan1 antcfg/antcfgnss 비활성**이 묶인 **제품 안전 불변식**이다.
-역할 분리가 핵심이다 — `mcs_tier` 는 순수 MCS 상한만 두고, NSS 제한은 `antcfgnss`
-니블(Tx1/Rx1)이 전담한다. `mcstiercfg ht` 를 `7` 로 내리면 HT 뿐 아니라 **VHT·HE 의
-TX NSS 까지 1 로 떨어지므로**(driver-v2#41 실측) 제품은 `15` 로 둔다. `wifi_init.sh`가
-association 전에 전체 조합을 검사하며 하나라도 바뀌면 supplicant를 시작하지 않는다.
-따라서 WebUI는 imx93에서 이 antcfg/antcfgnss/MCS 제품값을 읽기 전용으로 표시해야 한다.
+imx93 의 **부팅 게이트**(`wifi_fw_validate_product_scan_profile`)가 검사하는 것은
+**antcfg 축뿐**이다 — `mlan0.antcfg` 와 `mlan1.antcfg` 가 비활성이고 `mlan1.antcfgnss`
+가 어댑터 설정을 덮어쓰지 않을 것. 이것만이 p149.115 scan wedge 와 인과가 확인된 축이다
+(physical 1-path 가 cofactor). 광고 Rx NSS 1SS 제한 **단독으로는 wedge 가 재현되지
+않았다**(`docs/ant_rx_nss_scan_gate_2026-08-25.md:100`).
+
+게이트는 **fail-open** 이다 — 위반해도 부팅은 계속되고 `local0.err` 로그와
+`/run/wifi/fwcfg_unapplied_<iface>` 마커만 남는다(관측 전용, 소비자 없음). 종전에는
+하드 실패라 설정이 그대로인 채 재부팅만 반복됐다.
+
+`antcfgnss` 와 `mcs_tier` 는 게이트 대상이 아니라 **현장 조정 가능**하다. 다만 제품
+기본값에는 이유가 있다 — 역할 분리로 `mcs_tier` 는 순수 MCS 상한만 두고(`ht 15`),
+NSS 제한은 `antcfgnss` 니블(`0x1111` = Tx1/Rx1)이 전담한다. `mcstiercfg ht` 를 `7` 로
+내리면 HT 뿐 아니라 **VHT·HE 의 TX NSS 까지 1 로 떨어진다**(driver-v2#41 실측).
+`antcfgnss` 는 apply 단계에서 FW read-back(`verify.user_htstream`)으로 확인되지만
+불일치해도 **막지는 않는다** — 로그와 미반영 마커만 남는다. 즉 잘못된 값은 조용히
+FW 기본값으로 남을 수 있으니, 변경 후에는 `mlanutl <iface> antcfgnss` 로 실제 반영을
+확인할 것.
+
+따라서 WebUI 는 imx93 에서 **`antcfg` 를 읽기 전용**으로 두고, `antcfgnss`/`mcs_tier`
+는 제품 기본값과 위 주의사항을 함께 노출하는 편집 가능 항목으로 다루면 된다.
 
 업그레이드에서는 active JSON 우선 병합 때문에 템플릿 변경만으로 과거 값이 바뀌지 않는다.
 `postinst`가 병합 직후 과거 제품 이력 — 구제품 비대칭 계약 `0x0303/0x0101(+verify)`,
@@ -1073,12 +1088,12 @@ association 전에 `mlanutl <iface> antcfgnss <value>`로 광고 NSS intent(`use
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
-| `enabled` | bool | mlan0=`true`, mlan1=`false` | 적용 ON/OFF. imx93 mlan0은 제품 불변식상 `true` 고정 |
-| `value` | string | mlan0=`"0x2121"` | `0x` 접두 **필수**(드라이버가 강제 — 진수 혼동·파서 fail-open 차단). 지원 밴드 니블은 `1..hw 상한`(0은 드라이버가 거부) |
-| `verify.user_htstream` | string | mlan0=`"0x2121"` | SET 후 read-back 기대값. 불일치 시 association 중단(fail-closed) |
+| `enabled` | bool | mlan0=`true`, mlan1=`false` | 적용 ON/OFF. imx93 mlan0 제품 기본은 `true` (부팅 게이트 대상은 아님 — antcfg 축만 검사) |
+| `value` | string | mlan0=`"0x1111"` | `0x` 접두 **필수**(드라이버가 강제 — 진수 혼동·파서 fail-open 차단). 지원 밴드 니블은 `1..hw 상한`(0은 드라이버가 거부) |
+| `verify.user_htstream` | string | mlan0=`"0x1111"` | SET 후 read-back 기대값. 불일치는 로그+미반영 마커로만 남고 association 은 계속된다 |
 
 구버전 드라이버: `antcfgnss <value>` SET이 실패하거나 read-back(`antcfg`의
-`[user_htstream=...]`)에서 값을 읽지 못하면 **fail-closed**로 막는다. 레거시 antcfg로
+`[user_htstream=...]`)에서 값을 읽지 못하면 재시도 후 미반영으로 기록한다(부팅은 계속). 레거시 antcfg로
 위임하던 경로는 제거했다 — 위임은 RF_ANTENNA HostCmd를 발행해 "물리 불변" 계약을 깨면서도,
 read-back이 불가한 드라이버에서는 같은 검증에 걸려 결국 실패했다(확인할 수 없는 intent는
 통과시키지 않는다). 릴리즈 preflight는 staging된 imx93 `mlanutl`에 `antcfgnss` ABI marker가
