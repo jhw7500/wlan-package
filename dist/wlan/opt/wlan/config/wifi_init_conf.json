@@ -343,7 +343,7 @@
             "_comment": [
                 "광고 NSS intent(user_htstream) 전용 설정 — association 전에 mlanutl <iface> antcfgnss <value> 로 적용 (driver#41)",
                 "RF_ANTENNA HostCmd를 발행하지 않아 물리 안테나는 불변. 니블 배치 [15:12]=5G Tx, [11:8]=5G Rx, [7:4]=2G Tx, [3:0]=2G Rx",
-                "value: (string) 0x 접두 필수(드라이버가 강제). 제품값 0x2121 = 양 밴드 Tx2/Rx1 — 실효 TX NSS = min(Tx니블, Rx니블) 실측이라 TX NSS1이 보장된다",
+                "value: (string) 0x 접두 필수(드라이버가 강제). 제품값 0x2121 = 양 밴드 Tx2/Rx1 — 실효 TX NSS = min(mcstiercfg ht 티어, Rx니블, Tx니블) OTA 실측(driver#41) — 제품 ht 7 + Rx니블 1 이라 TX NSS1 보장. ht 7 이 상한이라 Tx니블만 올려서는 NSS2 가 서지 않는다",
                 "verify: (object, optional) SET 후 read-back으로 user_htstream을 확인, 불일치 시 association 중단(fail-closed)",
                 "주의: 어댑터 단위 상태(antcfg와 동일). 반영은 다음 (re)association부터"
             ],

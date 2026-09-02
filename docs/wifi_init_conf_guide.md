@@ -1059,9 +1059,13 @@ log-only 동작을 유지한다.
 association 전에 `mlanutl <iface> antcfgnss <value>`로 광고 NSS intent(`user_htstream`)를
 직접 기록한다(driver#41, ported b75741f+). **RF_ANTENNA HostCmd를 발행하지 않아 물리
 안테나는 불변**이며, 니블 배치는 `[15:12]`=5G Tx, `[11:8]`=5G Rx, `[7:4]`=2G Tx,
-`[3:0]`=2G Rx다. **imx93 제품값 `0x2121`(양 밴드 Tx2/Rx1)** — 실기 2×2 매트릭스 실측으로
-**실효 TX NSS = min(Tx니블, Rx니블)** 이 확인돼 있어 TX NSS1이 보장된다. 반영은 다음
-(re)association부터다.
+`[3:0]`=2G Rx다. **imx93 제품값 `0x2121`(양 밴드 Tx2/Rx1)** — OTA 실측으로
+**실효 TX NSS = min(`mcstiercfg ht` 티어, Rx니블, Tx니블)** 이 확정됐고(driver#41
+`issuecomment-5503431889`), 제품 구성 `ht 7` + Rx니블 1 이므로 TX NSS1이 보장된다.
+구 기술 `min(Tx니블, Rx니블)` 은 `ht` 항이 빠져 있어 **다른 값으로 바꿀 때 어긋난다** —
+예: `0x2222`(구 규칙 min=2)도 `ht 7` 이 상한이라 실효 TX NSS1 에 머문다. TX NSS2 가
+필요하면 `mcstiercfg ht 15` 를 함께 풀어야 한다. 실효 RX NSS 는 Rx니블 단독이며 `ht`
+티어에 묶이지 않는다. 반영은 다음 (re)association부터다.
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
