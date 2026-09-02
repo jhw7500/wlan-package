@@ -1,9 +1,9 @@
 # source-repository: wlan-driver-v2
 # source-remote: https://github.com/jhw7500/wlan-driver-v2.git
-# source-commit: 3406423fc34b393df0a3aa0969d51bd4b80d2906
+# source-commit: 567b83613752c179236c03fcca047d8bcc128f7b
 # source-scope: declared commit tracks required layout and is contained by local origin/*; supplied outputs are external
 # source-verification: supplied metadata matched; no remote/build attestation; exact board-qualified payload bytes locked below
-3bda99eb3ebac7a93ac880bcc21d6b3cf6f069e2476a1dbee3fe0d733af0e761  opt/wlan/driver/mlan_imx93.ko
-08a204d466a7ca6737c83fbab2f3b7eba666a9096ba7b775df15cdc98269344d  opt/wlan/driver/moal_imx93.ko
-f082df6862a96224c29ae912dc5a406af2a083e8cf3f8127aa2f7590475ad3d9  opt/wlan/bin/mlanutl_imx93
+28e6a2b81f583f33516c06614df45b3ce6d02e26640a8236221b1868ac682c8a  opt/wlan/driver/mlan_imx93.ko
+ad91350619e5bb5ca6e21a627a2ccc7b20385e4a4f3a0223de0a77cb6343bcd2  opt/wlan/driver/moal_imx93.ko
+d1cd869b7d75118fad5ca936e9919dafbe99831fba215ad35a1c2d67de1a914b  opt/wlan/bin/mlanutl_imx93
 7c3ef6e12d3cfc9bd638d1571ccf6ddd2e96e0ed179ec70664ccb1df0ba29e57  usr/lib/firmware/cts/sd9098_wlan_v1.bin
