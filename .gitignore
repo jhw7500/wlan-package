@@ -58,3 +58,6 @@ HANDOFF*.md
 # verify-pr134-target.sh 는 PR #134 에 딸려 들어간 실수 커밋이라 이 PR 에서 untrack 했다
 # (커밋 본문이 로밍 데몬 변경만 서술하고 이 파일을 언급하지 않는다). 파일은 디스크에 남는다.
 .jhw/
+
+# 빌드 산출물 — wlan-driver-v2(mapp/mlanevent)에서 빌드 (mlanevent.exe 는 벤더 제공이라 추적 유지)
+dist/wlan/opt/wlan/bin/mlanevent_*
