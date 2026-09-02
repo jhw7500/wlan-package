@@ -1,8 +1,9 @@
 """passive_roam.roam_to_ap 성공 판정 회귀 테스트 (수동 `wifi roam` 경로).
 
-same-SSID(wpa_cli roam)는 wpa_cli가 "FAIL"에도 exit 0을 주므로 응답 텍스트 "OK" +
-wpa_cli status 폴링(COMPLETED@target, roam_notify.confirm_roam 공용) 확인 시에만
-성공(exit 0, notify)이어야 한다. cross-SSID(wifi connect 래퍼) 경로는 종전 계약 유지.
+wpa_cli가 "FAIL"에도 exit 0을 주므로 응답 텍스트 "OK" + wpa_cli status 폴링
+(COMPLETED@target, roam_notify.confirm_roam 공용) 확인 시에만 성공(exit 0, notify)
+이어야 한다. 그리고 roam은 **같은 SSID 안의 BSS 전환 전용**이라 다른 SSID의 AP는
+목록에도 오르지 않고 실행도 거부한다 — 망 전환은 `wifi <iface> connect`의 역할이다.
 """
 import sys
 import os
@@ -126,89 +127,58 @@ def test_same_ssid_confirm_waits_for_target(monkeypatch):
     notify.assert_called_once()
 
 
-def test_cross_ssid_path_unchanged(monkeypatch):
-    """Mode B cross-SSID keeps the supported wifi-connect contract."""
-    notify = _setup(monkeypatch)
-    with patch.object(passive_roam.subprocess, "run", return_value=_Run(0, "")) as run, \
-         patch.object(passive_roam, "get_associated_bssid", return_value=TARGET):
-        # current_ssid != ap.ssid → cross-SSID 분기
-        assert roam_to_ap(
-            IFACE, _ap(ssid="Net"), current_ssid="Other", mode_a=False
-        ) == 0
-    # 래퍼 명령이 호출됐는지(wifi connect)
-    assert run.call_args[0][0][:3] == ["/usr/local/bin/wifi", IFACE, "connect"]
-    notify.assert_called_once_with(IFACE, FROM, TARGET)
+@pytest.mark.parametrize("mode_a", [False, True])
+def test_foreign_ssid_selection_is_refused_and_spawns_nothing(monkeypatch, mode_a):
+    """roam never switches networks — in either boot topology.
 
-
-def test_mode_a_cross_ssid_is_rejected_before_any_child(monkeypatch):
-    """Mode A manual cross-SSID selection is unsupported, not a doomed connect."""
+    `wpa_cli roam` only moves inside the selected network block, and switching
+    networks costs a reconnect.  A foreign-SSID AP is therefore refused here
+    instead of being silently turned into a `wifi connect`.  The boot topology
+    (Mode A/B) is irrelevant to this CLI: both must refuse.
+    """
+    del mode_a  # the manual path no longer reads the boot topology at all
     notify = _setup(monkeypatch)
     with patch.object(passive_roam.subprocess, "run") as run:
-        assert (
-            roam_to_ap(
-                IFACE,
-                _ap(ssid="Office"),
-                current_ssid="Base",
-                mode_a=True,
-            )
-            == 1
-        )
+        assert roam_to_ap(IFACE, _ap(ssid="Office"), current_ssid="Base") == 1
     run.assert_not_called()
     notify.assert_not_called()
 
 
-def test_manual_policy_reads_immutable_snapshot_and_preserves_ssid_bytes(tmp_path):
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    (run_dir / "mlan0.roam-policy.json").write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "iface": "mlan0",
-                "roaming_enabled": True,
-                "bgscan_enabled": True,
-                "generate_network_blocks": True,
-                "extra_ssids": ['  office \\" exact  '],
-            }
-        )
-    )
-    policy = passive_roam.load_manual_roam_policy("mlan0", run_dir=str(run_dir))
-    assert policy["generate_network_blocks"] is True
-    assert policy["extra_ssids"] == ['  office \\" exact  ']
+def test_unknown_current_ssid_still_attempts_same_ssid_roam(monkeypatch):
+    """link.json unreadable: no SSID to compare against, so keep prior behavior.
 
-
-@pytest.mark.parametrize("mode_a", [False, True])
-def test_current_manual_candidate_remains_available_for_same_ssid_roam(
-    monkeypatch, mode_a
-):
-    """After a legitimate cross-SSID transition, current may equal a boot extra.
-
-    That runtime state is not an invalid boot base/extra declaration.  Both
-    modes must still expose same-SSID BSSID candidates; Mode A merely hides
-    the *other* cross-SSID targets.
+    Refusing here would break same-SSID roaming whenever link.json is briefly
+    missing; `wpa_cli roam` itself rejects a foreign BSS anyway.
     """
+    _setup(monkeypatch)
+    with patch.object(passive_roam.subprocess, "run", return_value=_Run(0, "FAIL\n")) as run:
+        assert roam_to_ap(IFACE, _ap(ssid="Office"), current_ssid="") == 1
+    assert run.call_args[0][0][:4] == ["wpa_cli", "-i", IFACE, "roam"]
+
+
+def test_candidate_list_keeps_connected_ssid_and_drops_foreign_ones(monkeypatch):
     monkeypatch.setattr(passive_roam, "read_current_bssid", lambda *_: FROM)
     monkeypatch.setattr(passive_roam, "read_current_ssid", lambda *_: "Office")
     monkeypatch.setattr(
         passive_roam,
         "parse_last_scan_block",
         lambda *_a, **_k: [
-            {"bssid": TARGET, "ch": 36, "ss": -45, "ssid": "Office"}
+            {"bssid": TARGET, "ch": 36, "ss": -45, "ssid": "Office"},
+            {"bssid": "99:88:77:66:55:44", "ch": 40, "ss": -30, "ssid": "Base"},
         ],
     )
-    policy = {
-        "generate_network_blocks": mode_a,
-        "extra_ssids": ["Office"],
-    }
 
-    _bssid, current, candidates, extras = passive_roam.build_candidate_list(policy)
+    _bssid, current, candidates = passive_roam.build_candidate_list()
 
     assert current == "Office"
+    # The stronger "Base" AP is dropped: it is a different network.
     assert [candidate["ssid"] for candidate in candidates] == ["Office"]
-    assert extras == ([] if mode_a else ["Office"])
 
 
-def _write_cli_fixture(tmp_path: Path, *, mode_a: bool) -> tuple[dict, Path]:
+def _write_cli_fixture(tmp_path: Path, *, scan_rows: str) -> dict:
+    """CLI fixture.  The boot snapshot still declares an extra SSID on purpose:
+    the contract is that roam ignores it, so a regression that re-reads it is
+    visible as a foreign SSID appearing in the list."""
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     (run_dir / "mlan0.roam-policy.json").write_text(
@@ -218,7 +188,7 @@ def _write_cli_fixture(tmp_path: Path, *, mode_a: bool) -> tuple[dict, Path]:
                 "iface": "mlan0",
                 "roaming_enabled": True,
                 "bgscan_enabled": True,
-                "generate_network_blocks": mode_a,
+                "generate_network_blocks": False,
                 "extra_ssids": ["Office"],
             }
         )
@@ -233,56 +203,55 @@ def _write_cli_fixture(tmp_path: Path, *, mode_a: bool) -> tuple[dict, Path]:
         )
     )
     scan = tmp_path / "ap.log"
-    scan.write_text(
-        f"{datetime.now():%Y-%m-%d %H:%M:%S}\n"
-        "00|36|-70|0|aa:bb:cc:dd:ee:ff|x|Base\n"
-        "01|40|-40|0|11:22:33:44:55:66|x|Office\n"
-    )
-    command_log = tmp_path / "wifi.calls"
-    wifi = tmp_path / "wifi"
-    wifi.write_text(
-        "#!/bin/sh\n"
-        "printf '%s\\n' \"$*\" >> \"$PASSIVE_WIFI_CALL_LOG\"\n"
-        "exit 0\n"
-    )
-    wifi.chmod(0o755)
-    env = os.environ | {
+    scan.write_text(f"{datetime.now():%Y-%m-%d %H:%M:%S}\n{scan_rows}")
+    return os.environ | {
         "WIFI_RUN_DIR": str(run_dir),
         "PASSIVE_ROAM_LINK_JSON": str(link),
         "PASSIVE_ROAM_SCAN_LOG": str(scan),
-        "PASSIVE_ROAM_WIFI_COMMAND": str(wifi),
-        "PASSIVE_WIFI_CALL_LOG": str(command_log),
         "PYTHONPATH": str(Path(passive_roam.__file__).resolve().parent),
     }
-    return env, command_log
 
 
-def test_cli_mode_a_hides_cross_ssid_and_invokes_no_wifi_child(tmp_path):
-    """Real CLI integration: a stronger extra SSID is neither listed nor executed."""
-    env, command_log = _write_cli_fixture(tmp_path, mode_a=True)
-    result = subprocess.run(
-        [sys.executable, str(Path(passive_roam.__file__).resolve()), "0", "--iface", IFACE],
+def _run_cli(env, *args):
+    return subprocess.run(
+        [sys.executable, str(Path(passive_roam.__file__).resolve()), *args,
+         "--iface", IFACE],
         env=env,
         text=True,
         capture_output=True,
         timeout=10,
     )
+
+
+def test_cli_lists_only_the_connected_ssid(tmp_path):
+    """Positive control: same-SSID BSSIDs are listed, the extra SSID is not."""
+    env = _write_cli_fixture(
+        tmp_path,
+        scan_rows=(
+            "00|36|-70|0|aa:bb:cc:dd:ee:ff|x|Base\n"
+            "01|44|-55|0|99:88:77:66:55:44|x|Base\n"
+            "02|40|-40|0|11:22:33:44:55:66|x|Office\n"
+        ),
+    )
+    result = _run_cli(env)
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert "99:88:77:66:55:44" in output
+    assert "Office" not in output
+
+
+def test_cli_never_switches_networks_for_a_stronger_foreign_ssid(tmp_path):
+    """A far stronger AP on another SSID must not trigger a reconnect."""
+    env = _write_cli_fixture(
+        tmp_path,
+        scan_rows=(
+            "00|36|-70|0|aa:bb:cc:dd:ee:ff|x|Base\n"
+            "01|40|-40|0|11:22:33:44:55:66|x|Office\n"
+        ),
+    )
+    result = _run_cli(env, "0")
     output = result.stdout + result.stderr
     assert result.returncode == 1
-    assert "manual cross-SSID selection is unsupported in Mode A" in output
-    assert not command_log.exists() or command_log.read_text() == ""
+    assert "Office" not in output
+    assert "No other APs available to roam." in output
     assert "Executing:" not in output
-
-
-def test_cli_mode_b_executes_real_wifi_child_for_cross_ssid(tmp_path):
-    """Real CLI integration: Mode B still supports manual cross-SSID connect."""
-    env, command_log = _write_cli_fixture(tmp_path, mode_a=False)
-    result = subprocess.run(
-        [sys.executable, str(Path(passive_roam.__file__).resolve()), "0", "--iface", IFACE],
-        env=env,
-        text=True,
-        capture_output=True,
-        timeout=10,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert command_log.read_text().splitlines() == ["mlan0 connect Office"]

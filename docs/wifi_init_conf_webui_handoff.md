@@ -447,8 +447,8 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `DEFAULT_TH_5G` | 5GHz 로밍 임계값 | int | `-75` | 음수 dBm | yes | daemon-restart | 이 값 이하이면 로밍 시도 (JSON 단일 소스, conf `#!TH_5G=` 마커 미사용) |
 | `DIFF_TH` | 후보 AP 최소 RSSI 차 | int | `7` | >=0 dB | yes | daemon-restart | 클수록 보수적 |
 | `CHECK_INTERVAL` | 로밍 체크 주기 | int | `1` | >=1 초 | yes | daemon-restart | 고정 체크 주기(ADAPTIVE_INTERVAL 은 감사 D1로 제거됨) |
-| `extra_ssids` | 추가 로밍 후보 SSID | array | `[]` | 고유 문자열 배열, 각 UTF-8 1..32 encoded bytes(같은 psk/key_mgmt) | caution | reboot | 모드A에서 추가 network 블록 생성. 모드B에서는 boot-latched 수동 cross-SSID 후보로만 사용 |
-| `generate_network_blocks` | topology 결정자 | bool | `false` | true\|false | caution | reboot | false=모드B(단일 블록/수동 cross-SSID), true=모드A(다중 블록/자동 cross-SSID) |
+| `extra_ssids` | 추가 로밍 후보 SSID | array | `[]` | 고유 문자열 배열, 각 UTF-8 1..32 encoded bytes(같은 psk/key_mgmt) | caution | reboot | 모드A에서 추가 network 블록 생성. 모드B에서는 스냅샷 보존만 되고 읽는 소비자 없음 |
+| `generate_network_blocks` | topology 결정자 | bool | `false` | true\|false | caution | reboot | false=모드B(단일 블록, cross-SSID 자동전환 없음), true=모드A(다중 블록/자동 cross-SSID) |
 | `ROAM_CROSS_FAIL_RETRY_COUNT` | cross-SSID 재시도 횟수 | int | `2` | >=0 (모드A 전용) | yes | daemon-restart | 초과 시 지수 backoff로 후보 제외 |
 | `ROAM_NO_RESULT_FAST_COUNT` | backoff 레벨당 반복 횟수 | int | `3` | >=1 | yes | daemon-restart | 각 주기를 N tick 유지 후 2배(플래토 곡선, 기본 3,3,3,6,6,6,…). 1=레거시(매 tick 2배) |
 | `SCAN_NO_RESULT_SLEEP` | 스캔 무결과 대기 | int | `3` | >=1 초 | yes | daemon-restart | 지수 backoff 시작값 |
@@ -472,9 +472,9 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 **비고 (roaming)** — owner/topology는 부팅 시 확정하며 runtime hot switch하지 않는다.
 - `mlanN.enabled=false`면 하위 로밍/스캔/logger/checker/arping 데몬은 상위 게이트로 강제 disable.
 - Mode A는 `extra_ssids`를 다중 블록으로 생성한다. wifi_roam owner는 exact BSSID를 pin/확인하고, wpa native owner는 wpa 기본 cross-SSID 선택 정책을 수용한다.
-- Mode B는 단일 블록이다. 자동 owner/bgscan은 `extra_ssids`를 무시하지만 boot snapshot은 수동 `passive_roam` 후보로 보존하며, cross-SSID는 `passive_roam` 선택 또는 `wifi connect`로 전환한다.
-- 부팅 snapshot은 base/extra 중복을 거부한다. 다만 Mode B 수동 전환 후 live base가 boot-latched 후보와 같아지는 것은 정상이며, 같은 SSID 내 수동 BSSID 로밍을 계속 지원한다.
-- Mode A 수동 `passive_roam`은 cross-SSID 후보를 표시/실행하지 않는다. Mode A cross-SSID는 선택된 자동 owner만 수행한다.
+- Mode B는 단일 블록이다. 자동 owner/bgscan이 `extra_ssids`를 무시하고 수동 `passive_roam`도 같은 SSID 전용이라, 이 모드에서 `extra_ssids`는 boot snapshot에 보존만 되고 읽는 소비자가 없다. 망 전환은 `wifi <iface> connect <ssid>`로 한다.
+- 부팅 snapshot은 base/extra 중복을 거부한다. 다만 Mode B에서 `wifi connect` 전환 후 live base가 boot-latched 후보와 같아지는 것은 정상이며, 같은 SSID 내 수동 BSSID 로밍을 계속 지원한다.
+- 수동 `passive_roam`(`wifi <n> roam`)은 두 모드 모두 같은 SSID 안의 BSS 전환 전용이다. cross-SSID는 Mode A에서 자동 owner가, Mode B에서 `wifi connect`가 수행한다.
 - 모든 블록은 전역과 동일한 공통 `freq_list`를 사용한다. SSID별 주파수 분리는 UI에서 제공하지 않는다.
 
 #### 3.10.5 mlanN.mcs_tier
