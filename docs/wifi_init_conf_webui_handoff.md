@@ -56,8 +56,27 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 
 `x-ui-editable-by-board`가 있으면 현재 `global.BOARD_TYPE` 키의 값으로 해당 맵을 먼저
 적용한다. 키를 지원하지 않는 구 UI는 안전한 fallback인 `x-ui-editable`을 사용한다.
-현재 이 조건부 계약은 `mlan0.antcfg.{enabled,tx,rx}`, `mlan0.antcfgnss.{enabled,value}`와
+현재 이 조건부 계약은 `mlan0.antcfg.{enabled,tx,rx}`와
 `mlan0.mcs_tier.{enabled,ht,vht,he}`에 적용되며 `imx93=no`, `imx8mm=caution`이다.
+`mlan0.antcfgnss.*`는 by-board 대상이 **아니다** — 보드 무관하게 `x-ui-editable: "no"`다.
+`mlan1`은 어느 그룹도 by-board를 쓰지 않는다(고정 `x-ui-editable`).
+
+**inert_in_mode (현재 모드에서 무효)**
+
+`x-inert-in-mode`가 있으면 그 키는 해당 topology 모드에서 **읽는 소비자가 없다** —
+저장은 되고 값 검증도 그대로 받지만 동작에 반영되지 않는다. 값은 `A` 또는 `B`이며
+모드는 `mlanN.roaming.generate_network_blocks`가 정한다(`false`=모드B, `true`=모드A).
+
+- 이 키는 **편집 가능 여부와 무관하다.** `x-ui-editable`을 덮어쓰지 않으며, 무효인
+  모드에서도 편집은 계속 허용해야 한다 — 잘못된 값은 모드와 무관하게 부팅 스냅샷
+  생성을 실패시키므로(`roam_policy.py`가 모드 게이트 없이 검증) UI에서 고칠 길을
+  막으면 안 된다. 회색처리·숨김이 아니라 "현재 모드에서 적용 안 됨" 안내가 맞다.
+- 판정 기준은 **저장된 JSON 값 = 다음 부팅 topology**다. 실행 중 topology와 다를 수
+  있으나, 이 키들은 모두 `reboot`/`daemon-restart` 타이밍이라 지금의 편집도 어차피
+  그 부팅에서 함께 적용되므로 불일치 구간은 무해하다.
+- 키를 모르는 구 UI는 무시하면 된다(현행 동작 유지).
+- 현재 적용: `mlanN.roaming.extra_ssids`, `mlanN.roaming.ROAM_CROSS_FAIL_RETRY_COUNT`
+  (양쪽 모두 `B` — 모드B에서 무효).
 
 ---
 
@@ -447,9 +466,9 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `DEFAULT_TH_5G` | 5GHz 로밍 임계값 | int | `-75` | 음수 dBm | yes | daemon-restart | 이 값 이하이면 로밍 시도 (JSON 단일 소스, conf `#!TH_5G=` 마커 미사용) |
 | `DIFF_TH` | 후보 AP 최소 RSSI 차 | int | `7` | >=0 dB | yes | daemon-restart | 클수록 보수적 |
 | `CHECK_INTERVAL` | 로밍 체크 주기 | int | `1` | >=1 초 | yes | daemon-restart | 고정 체크 주기(ADAPTIVE_INTERVAL 은 감사 D1로 제거됨) |
-| `extra_ssids` | 추가 로밍 후보 SSID | array | `[]` | 고유 문자열 배열, 각 UTF-8 1..32 encoded bytes(같은 psk/key_mgmt) | caution | reboot | 모드A에서 추가 network 블록 생성. 모드B에서는 스냅샷 보존만 되고 읽는 소비자 없음 |
+| `extra_ssids` | 추가 로밍 후보 SSID | array | `[]` | 고유 문자열 배열, 각 UTF-8 1..32 encoded bytes(같은 psk/key_mgmt) | caution | reboot | 모드A에서 추가 network 블록 생성. **모드B 무효**(`x-inert-in-mode: B`) — 스냅샷 보존·값 검증은 유지되나 읽는 소비자 없음 |
 | `generate_network_blocks` | topology 결정자 | bool | `false` | true\|false | caution | reboot | false=모드B(단일 블록, cross-SSID 자동전환 없음), true=모드A(다중 블록/자동 cross-SSID) |
-| `ROAM_CROSS_FAIL_RETRY_COUNT` | cross-SSID 재시도 횟수 | int | `2` | >=0 (모드A 전용) | yes | daemon-restart | 초과 시 지수 backoff로 후보 제외 |
+| `ROAM_CROSS_FAIL_RETRY_COUNT` | cross-SSID 재시도 횟수 | int | `2` | >=0 (모드A 전용) | yes | daemon-restart | 초과 시 지수 backoff로 후보 제외. **모드B 무효**(`x-inert-in-mode: B`) |
 | `ROAM_NO_RESULT_FAST_COUNT` | backoff 레벨당 반복 횟수 | int | `3` | >=1 | yes | daemon-restart | 각 주기를 N tick 유지 후 2배(플래토 곡선, 기본 3,3,3,6,6,6,…). 1=레거시(매 tick 2배) |
 | `SCAN_NO_RESULT_SLEEP` | 스캔 무결과 대기 | int | `3` | >=1 초 | yes | daemon-restart | 지수 backoff 시작값 |
 | `ROAM_SUCCESS_SLEEP` | 로밍 성공 후 대기 | int | `3` | >=1 초 | yes | daemon-restart | 성공 후 재체크 대기 |
