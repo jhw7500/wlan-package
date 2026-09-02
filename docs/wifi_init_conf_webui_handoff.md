@@ -56,8 +56,10 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 
 `x-ui-editable-by-board`가 있으면 현재 `global.BOARD_TYPE` 키의 값으로 해당 맵을 먼저
 적용한다. 키를 지원하지 않는 구 UI는 안전한 fallback인 `x-ui-editable`을 사용한다.
-현재 이 조건부 계약은 `mlan0.antcfg.{enabled,tx,rx}`, `mlan0.antcfgnss.{enabled,value}`와
+현재 이 조건부 계약은 `mlan0.antcfg.{enabled,tx,rx}`와
 `mlan0.mcs_tier.{enabled,ht,vht,he}`에 적용되며 `imx93=no`, `imx8mm=caution`이다.
+`mlan0.antcfgnss.*`는 by-board 대상이 **아니다** — 보드 무관하게 `x-ui-editable: "no"`다.
+`mlan1`은 어느 그룹도 by-board를 쓰지 않는다(고정 `x-ui-editable`).
 
 **inert_in_mode (현재 모드에서 무효)**
 
