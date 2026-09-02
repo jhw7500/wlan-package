@@ -199,11 +199,21 @@ def test_ssid_source_falls_back_to_conf_when_wpa_cli_is_absent(monkeypatch, tmp_
     assert passive_roam.read_current_ssid(IFACE, conf) == ("FromConf", "wpa conf")
 
 
-def test_ssid_source_reads_only_the_first_conf_block(monkeypatch, tmp_path):
-    """Mode A 다중 블록에서 두 번째 블록을 현재 SSID 로 오인하면 안 된다."""
+def test_ssid_source_uses_the_only_conf_block(monkeypatch, tmp_path):
+    monkeypatch.setattr(passive_roam.subprocess, "run", lambda *_a, **_k: _Run(1, ""))
+    conf = _conf(tmp_path, '    ssid="Only"\n    key_mgmt=WPA-PSK')
+    assert passive_roam.read_current_ssid(IFACE, conf) == ("Only", "wpa conf")
+
+
+def test_ssid_source_refuses_an_ambiguous_multi_block_conf(monkeypatch, tmp_path):
+    """Mode A 다중 블록: 첫 블록이 라이브라는 보장이 없으므로 추측하지 않는다.
+
+    그럴듯한 오답을 돌려주면 후보 필터와 roam_to_ap 의 same-SSID 가드가 **같은
+    오답을 공유해** 둘 다 통과하고, 결국 다른 망의 BSS 로 roam 이 나간다.
+    """
     monkeypatch.setattr(passive_roam.subprocess, "run", lambda *_a, **_k: _Run(1, ""))
     conf = _conf(tmp_path, '    ssid="First"', '    ssid="Second"')
-    assert passive_roam.read_current_ssid(IFACE, conf) == ("First", "wpa conf")
+    assert passive_roam.read_current_ssid(IFACE, conf) == ("", "unknown")
 
 
 def test_ssid_source_unknown_when_every_source_fails(monkeypatch, tmp_path):
@@ -374,6 +384,27 @@ def test_cli_shows_the_scan_but_refuses_to_roam_when_ssid_is_unknown(tmp_path):
     assert listing.returncode == 0, listing.stdout + listing.stderr
     assert "source: unknown" in listing.stdout
     assert "Office" in listing.stdout  # 필터 기준이 없으니 전부 보여준다
+
+    roaming = _run_cli(env, "0")
+    output = roaming.stdout + roaming.stderr
+    assert roaming.returncode == 1
+    assert "Not roaming." in output
+    assert "Executing:" not in output
+
+
+def test_cli_refuses_when_mode_a_conf_cannot_identify_the_live_block(tmp_path):
+    """Mode A 다중 블록 + supplicant 조회 불가 → 첫 블록으로 추측하지 않는다.
+
+    추측하면 그 SSID 로 필터한 목록이 그럴듯하게 나오고 roam 이 실제로 발행된다.
+    """
+    env = _write_cli_fixture(tmp_path, scan_rows=_MIXED_SCAN, conf_ssid="")
+    env["PASSIVE_ROAM_WPA_CONF"] = _conf(
+        tmp_path, '    ssid="Base"', '    ssid="Office"'
+    )
+
+    listing = _run_cli(env)
+    assert listing.returncode == 0, listing.stdout + listing.stderr
+    assert "source: unknown" in listing.stdout
 
     roaming = _run_cli(env, "0")
     output = roaming.stdout + roaming.stderr
