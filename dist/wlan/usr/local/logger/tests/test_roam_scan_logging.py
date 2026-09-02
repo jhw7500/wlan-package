@@ -315,3 +315,39 @@ def test_multifreq_logs_only_active_entries(staged):
     assert not any("[cache]" in t for t in texts)
     assert not any("dd:dd:dd:dd:dd:dd" in t or "cc:cc:cc:cc:cc:cc" in t for t in texts)
     assert best is not None and best["bssid"] == "ee:ee:ee:ee:ee:ee"
+
+
+# --- ap.log 정렬 포맷 회귀 (생산자 = wifi_logger_scan 의 getscantable) ---
+#
+# 위 apln() 은 데몬 자신의 iw_scan_to_ap_lines 출력(패딩 없음)만 모델링한다. 그런데
+# 이 파서는 get_latest_scan 을 통해 **ap.log** 도 먹고, 그 파일에는 wifi_logger_scan 이
+# 쓴 정렬 포맷(구분자 뒤 패딩) 블록이 섞인다. 모듈 docstring 이 두 생산자를 이미
+# 짚고 있는데도 픽스처가 한쪽만 만들어, ssid 컬럼만 strip 하지 않는 결함을 놓쳤다.
+# (같은 결함이 passive_roam 에서 실기 발현 — `wifi 0 roam` 후보가 전부 탈락했다.)
+def _padded_apln(idx, ch, rssi, bssid, cap, ssid):
+    """타깃 ap.log 에서 그대로 옮긴 모양: `00| 044 | -48 | 015 | <bssid> | <cap> | <ssid>`"""
+    return f"{idx:02d}| {ch:03d} | {rssi} | 015 | {bssid} | {cap} | {ssid}"
+
+
+def test_padded_cache_lines_keep_multi_ssid_candidates(monkeypatch):
+    """정렬 패딩이 남으면 extra_ssids 다중 망 후보가 통째로 탈락한다.
+
+    allowed_set 은 `ssid in allowed_set` 으로 걸러지므로, ' Office' != 'Office' 가
+    되는 순간 Mode A 의 cross-SSID 후보가 하나도 살아남지 못한다.
+    """
+    monkeypatch.setattr(wifi_roam, "WPA_FREQ", [])
+    lines = [
+        _padded_apln(0, 36, -50, "aa:bb:cc:dd:ee:ff", "I2DM   NAX", "Base"),
+        _padded_apln(1, 36, -45, "11:22:33:44:55:66", "I2DM   N  ", "Office"),
+    ]
+
+    entries = wifi_roam.parse_scan_entries(
+        lines, "2026-09-02 00:00:00", allowed_set={"Base", "Office"}, log=False
+    )
+
+    # RSSI 내림차순 — Office(-45) 가 앞
+    assert [e["ssid"] for e in entries] == ["Office", "Base"]
+    assert [e["bssid"] for e in entries] == [
+        "11:22:33:44:55:66",
+        "aa:bb:cc:dd:ee:ff",
+    ]

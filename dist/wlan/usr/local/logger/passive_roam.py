@@ -226,13 +226,20 @@ def parse_last_scan_block(scan_log_path=SCAN_LOG, max_age_sec=None):
                 "ld": int(parts[3].strip()),
                 "bssid": parts[4].strip(),
                 "cap": parts[5].strip(),
-                # ap.log 는 사람이 읽는 정렬 포맷이라 컬럼 구분자 뒤에 패딩 공백이 붙는다
-                # (`... | I2DM   NAX | jhw_wlan_`). 나머지 6개 컬럼처럼 여기서도 벗겨야
-                # supplicant/conf 가 준 SSID 와 비교가 성립한다 — 벗기지 않으면
-                # ' jhw_wlan_' != 'jhw_wlan_' 라 후보가 전부 탈락하고 목록이 조용히 빈다
-                # (실기 실측). 한계: 앞뒤 공백이 진짜 identity 인 SSID 는 이 로그 포맷이
-                # 애초에 구분해 담지 못한다.
-                "ssid": validate_ssid("|".join(parts[6:]).strip()),
+                # ap.log 에는 **두 생산자**의 라인이 섞인다.
+                #  - wifi_roam(iw scan): `NN|ch|rssi|0|bssid|freq|ssid` — 패딩 없음.
+                #    이 경로의 SSID 앞뒤 공백은 진짜 identity 라 보존해야 한다
+                #    (test_iw_scan_roam 의 roundtrip 계약).
+                #  - wifi_logger_scan(getscantable): `NN| ch | rssi | ld | bssid | cap | ssid`
+                #    — 사람이 읽는 정렬 포맷이라 구분자 뒤 패딩이 붙는다. 벗기지 않으면
+                #    ' jhw_wlan_' != 'jhw_wlan_' 로 후보가 전부 탈락한다(실기 실측).
+                # 숫자 컬럼에 패딩이 있는지로 두 포맷을 가른다 — 정렬된 라인이면
+                # SSID 컬럼의 패딩도 표시용이므로 벗기고, 아니면 바이트 그대로 둔다.
+                "ssid": validate_ssid(
+                    "|".join(parts[6:]).strip()
+                    if parts[1] != parts[1].strip()
+                    else "|".join(parts[6:])
+                ),
             })
         except (ValueError, RoamPolicyError):
             continue

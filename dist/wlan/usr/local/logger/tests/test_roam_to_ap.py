@@ -469,3 +469,23 @@ def test_cli_explains_why_the_candidate_list_is_empty(tmp_path):
 
     assert result.returncode == 1
     assert "none on 'Base'" in output
+
+
+def test_parse_preserves_identity_spaces_from_the_unpadded_producer(tmp_path):
+    """ap.log 에는 wifi_roam(iw scan) 이 쓴 **무패딩** 라인도 섞인다.
+
+    그 경로의 SSID 앞뒤 공백은 진짜 identity 이므로 벗기면 안 된다
+    (wifi_roam 쪽 roundtrip 계약과 같은 규칙).
+    """
+    ssid = "  guest exact  "
+    log = tmp_path / "ap.log"
+    log.write_text(
+        f"{datetime.now():%Y-%m-%d %H:%M:%S}\n"
+        f"00|36|-50|0|aa:bb:cc:dd:ee:ff|5180|{ssid}\n"
+    )
+
+    aps = passive_roam.parse_last_scan_block(str(log), max_age_sec=10_000)
+
+    assert [ap["ssid"] for ap in aps] == [ssid], (
+        "무패딩 생산자의 라인에서 공백을 벗기면 SSID identity 가 손상된다."
+    )
