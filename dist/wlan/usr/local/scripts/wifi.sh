@@ -1234,6 +1234,31 @@ show_info() {
     echo ""
     fi
 
+    # FW 설정 축은 미반영이어도 부팅을 막지 않는다(로그는 흘러간다). 지금 이 보드가
+    # 의도한 RF 설정으로 도는지 물을 수 있어야 하므로 상태로 노출한다.
+    echo "[FW Config Unapplied]"
+    if declare -F wifi_fw_unapplied_read >/dev/null 2>&1; then
+        local unapplied_ifaces=() unapplied_dev unapplied_lines unapplied_line
+        local unapplied_any=0
+        if [ "$only_iface" = "all" ]; then
+            unapplied_ifaces=(mlan0 mlan1)
+        else
+            unapplied_ifaces=("$only_iface")
+        fi
+        for unapplied_dev in "${unapplied_ifaces[@]}"; do
+            unapplied_lines=$(wifi_fw_unapplied_read "$unapplied_dev") || continue
+            while IFS= read -r unapplied_line; do
+                [ -n "$unapplied_line" ] || continue
+                unapplied_any=1
+                printf "  %-6s %s\n" "${unapplied_dev}:" "$unapplied_line"
+            done <<< "$unapplied_lines"
+        done
+        [ "$unapplied_any" -eq 1 ] || echo "  none (all FW config axes applied)"
+    else
+        echo "  (reader unavailable)"
+    fi
+    echo ""
+
     echo "[Services]"
     if command -v systemctl >/dev/null 2>&1; then
         local svc_list=()
