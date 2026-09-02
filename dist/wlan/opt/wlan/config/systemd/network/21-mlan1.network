@@ -2,4 +2,8 @@
 Name=mlan1
 
 [Network]
-DHCP=yes
+# ipv4 한정 (#255): DHCP=yes는 DHCPv6 시도까지 포함 — IPv6 비활성
+# (근거는 20-mlan0.network 주석)과 정합하도록 v4로 한정.
+DHCP=ipv4
+LinkLocalAddressing=no
+IPv6AcceptRA=no
