@@ -112,9 +112,17 @@ mac_count_link_original_name() {
 # 호출자는 판정 불가를 "매칭 안 함"으로 취급하지 말고 보수적으로 처리해야 한다.
 mac_link_match_undecidable() {
     local link_file="$1" names token
+    # `local -` 로 아래 set -f 를 이 함수 안에 가둔다(반환 시 자동 복원).
+    local -
     [ "$(mac_count_link_original_name "$link_file")" -le 1 ] || return 0
     names=$(mac_read_link_original_name "$link_file") || return 0
     [ -n "$names" ] || return 0
+    # $names 는 공백 구분 목록이라 워드 분할이 필요해 비인용이어야 한다. 그런데 비인용
+    # 확장은 **경로명 확장까지** 수행하므로 `mlan*` 같은 glob 토큰이 CWD 의 파일명으로
+    # 치환된다 — 실기 /usr/local/scripts 에는 mlanutl_silent.sh 가 있어 실제로 발생한다.
+    # 분할만 남기고 확장은 끈다. case 의 패턴 매칭은 set -f 의 영향을 받지 않으므로
+    # glob OriginalName 판정은 그대로 동작한다.
+    set -f
     for token in $names; do
         case "$token" in
             !*) return 0 ;;
@@ -129,8 +137,11 @@ mac_link_match_undecidable() {
 # mac_link_match_undecidable로 두 경우를 구분해야 한다.
 mac_link_matches_iface() {
     local link_file="$1" iface="$2" names token
+    # set -f 를 함수 스코프로 — 이유는 mac_link_match_undecidable 주석 참조.
+    local -
     mac_link_match_undecidable "$link_file" && return 1
     names=$(mac_read_link_original_name "$link_file") || return 1
+    set -f
     for token in $names; do
         # shellcheck disable=SC2254  # glob 매칭이 목적이라 의도적으로 비인용
         case "$iface" in
