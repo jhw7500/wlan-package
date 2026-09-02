@@ -388,7 +388,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `antcfg.rx` | Rx 경로 비트맵 | string | `""` | 빈값 또는 tx와 동일 범위 | imx93=no / imx8=caution | boot | 커스텀으로 켤 때만 사용 |
 | `antcfg.verify.*` | antcfg 검증 계약(선택) | string×3 | (템플릿 없음) | 10진 또는 `0x` 16진, 1..0xFFFF | no | boot | 커스텀/fallback 경로에서만 의미. 존재하면 physical_tx/physical_rx/user_htstream 3필드 모두 필수, 불일치 시 association 중단 |
 | `antcfgnss.enabled` | 광고 NSS intent 적용 | bool | `mlan0=true / mlan1=false` | true\|false | imx93=no / imx8=caution | boot | imx93 mlan0 제품 불변식상 `true` 고정, mlan1은 어댑터 덮어쓰기 방지로 `false` 고정(부팅이 검사). RF_ANTENNA 미발행 — 물리 불변 |
-| `antcfgnss.value` | user_htstream 값 | string | `mlan0="0x2121" / mlan1=""` | `0x` 접두 필수, 1..0xFFFF | imx93=no / imx8=caution | boot | 니블 [15:12]5Gtx/[11:8]5Grx/[7:4]2Gtx/[3:0]2Grx. 0x2121=Tx2/Rx1 — 실효 TX NSS=min(Tx,Rx니블) 실측으로 TX NSS1 보장. 반영은 다음 (re)association |
+| `antcfgnss.value` | user_htstream 값 | string | `mlan0="0x2121" / mlan1=""` | `0x` 접두 필수, 1..0xFFFF | imx93=no / imx8=caution | boot | 니블 [15:12]5Gtx/[11:8]5Grx/[7:4]2Gtx/[3:0]2Grx. 0x2121=Tx2/Rx1 — 실효 TX NSS=min(mcstiercfg ht 티어, Rx니블, Tx니블) OTA 실측(driver#41) — 제품 ht 7 + Rx니블 1 이라 TX NSS1 보장. ht 7 이 상한이라 Tx니블만 올려서는 NSS2 가 서지 않는다. 반영은 다음 (re)association |
 | `antcfgnss.verify.user_htstream` | antcfgnss read-back 기대값 | string | `mlan0="0x2121"` | `0x` 접두, 1..0xFFFF | no | boot | 불일치 시 association 중단(fail-closed) |
 | `rate_adapt.enabled` | 레이트 적응 적용 | bool | `true` | true\|false | caution | boot | false면 `rate_adapt_cfg`를 SET하지 않는다 — 남는 값은 FW 기본값이 아니라 마지막 SET값이다(콜드부팅 후에만 FW 기본값). 키 부재 시 true(종전 동작). `wifi <iface> rate`로 값을 바꿔도 이 값이 false면 부팅 시 적용되지 않는다 |
 | `rate_adapt.mode` | 레이트 적응 모드 | int | `1` | `0`=legacy\|`1`=SR | caution | boot | section 존재 시 mode/low/high/interval 4개 필수(enabled는 선택) |
