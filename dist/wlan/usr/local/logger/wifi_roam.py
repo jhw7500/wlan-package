@@ -1486,7 +1486,21 @@ def parse_scan_entries(
                         fields[3].strip()
                     )  # 포맷상 자리만 유지(항상 0) — 소비처 없음
                     bssid = fields[4].strip().lower()
-                    ssid = validate_ssid("|".join(fields[6:]))
+                    # ap.log 에는 **두 생산자**의 라인이 섞인다.
+                    #  - wifi_roam(iw scan): `NN|ch|rssi|0|bssid|freq|ssid` — 패딩 없음.
+                    #    이 경로의 SSID 앞뒤 공백은 진짜 identity 라 보존해야 한다
+                    #    (test_iw_scan_roam 의 roundtrip 계약).
+                    #  - wifi_logger_scan(getscantable): `NN| ch | rssi | ld | bssid | cap | ssid`
+                    #    — 사람이 읽는 정렬 포맷이라 구분자 뒤 패딩이 붙는다. 벗기지 않으면
+                    #    ' jhw_wlan_' != 'jhw_wlan_' 로 후보가 전부 탈락한다(실기 실측).
+                    # 숫자 컬럼에 패딩이 있는지로 두 포맷을 가른다 — 정렬된 라인이면
+                    # SSID 컬럼의 패딩도 표시용이므로 벗기고, 아니면 바이트 그대로 둔다.
+                    _raw_ssid = "|".join(fields[6:])
+                    ssid = validate_ssid(
+                        _raw_ssid.strip()
+                        if fields[1] != fields[1].strip()
+                        else _raw_ssid
+                    )
                     rssi_th = WPA_TH_2G if channel < 36 else WPA_TH_5G
                     freq = channel_to_freq(channel)
 
