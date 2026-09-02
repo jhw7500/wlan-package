@@ -115,12 +115,16 @@ def ssid_from_supplicant(iface):
 
 
 def ssid_from_wpa_conf(conf_path):
-    """wpa conf **첫** network 블록의 ssid= — supplicant 조회가 안 될 때의 폴백.
+    """단일 network 블록 conf 의 ssid= — supplicant 조회가 안 될 때의 폴백.
 
-    Mode B 는 블록이 하나라 이 값이 곧 대상 SSID 다. Mode A(다중 블록)에서는 자동
-    owner 가 select_network 로 다른 블록에 붙어 있을 수 있어 라이브와 다를 수 있으므로,
-    권위 소스(ssid_from_supplicant)가 실패한 경우에만 쓴다.
+    **블록이 둘 이상이면 "" 를 돌려준다.** Mode A 다중 블록에서는 자동 owner 가
+    select_network 로 두 번째 이후 블록에 붙어 있을 수 있어 첫 블록이 라이브라는
+    보장이 없다. 그 값을 그대로 쓰면 필터도 roam_to_ap 의 same-SSID 가드도 같은
+    오답을 공유해 통과하고, 결국 다른 망의 BSS 로 `wpa_cli roam` 이 나간다 —
+    그럴듯한 오답보다 "모른다"가 안전하므로 호출자의 unknown 거부 경로로 보낸다.
     """
+    first_ssid = ""
+    blocks = 0
     try:
         with open(conf_path, "r") as f:
             in_network = False
@@ -130,14 +134,18 @@ def ssid_from_wpa_conf(conf_path):
                     continue
                 if re.match(r"^network\s*=\s*\{", line):
                     in_network = True
+                    blocks += 1
+                    if blocks > 1:
+                        return ""  # 어느 블록이 라이브인지 여기서는 알 수 없다
                     continue
                 if in_network and line.startswith("}"):
-                    break  # 첫 블록만 본다
-                if in_network and line.startswith("ssid="):
-                    return parse_wpa_ssid_value(line.split("=", 1)[1])
+                    in_network = False
+                    continue
+                if in_network and not first_ssid and line.startswith("ssid="):
+                    first_ssid = parse_wpa_ssid_value(line.split("=", 1)[1])
     except (OSError, RoamPolicyError):
         return ""
-    return ""
+    return first_ssid
 
 
 def read_current_ssid(iface=WIFI_IFACE, conf_path=None):

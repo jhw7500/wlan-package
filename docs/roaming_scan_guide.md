@@ -335,7 +335,7 @@ backoff 가 상한에 머물지 못하는 주 원인은 곡선이 아니라 **go
 | 10 | **`periodic_roam.enabled=true`** | 제3 owner 방지를 위해 무시되고 unit은 강제 disable+stop된다. unit의 항상-false ExecCondition도 stale queued job 실행을 막는다 |
 | 11 | **boot policy snapshot 손상/부재** | owner를 추측하지 않는다. `/run/.<iface>.roam-policy.latched`가 same-boot snapshot 삭제를 감지하고 wifi_apply_enabled/owner daemon/writer가 fail-closed하여 이중 owner보다 기동 실패를 선택한다 |
 | 12 | **Mode A 선택 cleanup 미해결** | BSSID pin **전** `/run/.<iface>.selection-cleanup-pending` JSON WAL을 atomic write+fsync한다. 지속성을 증명하지 못하면 pin을 거부하고 메모리 gate를 유지한다. pin 해제·all-network 복원·canonical reconfigure가 모두 실패해도 WAL/gate가 남는다. daemon 재시작은 boot snapshot 검증보다 cleanup-only preflight를 먼저 수행하므로 `/run/wifi`가 함께 삭제돼도 pin을 복구한 뒤 owner 정책을 fail-closed한다 |
-| 13 | **수동 `roam` 의 현재 SSID 판정** | `wifi <n> roam` 은 같은 SSID 안의 BSS 전환 전용이라 필터 기준이 필요하다. 판정은 **`wpa_cli status`(권위 — `wpa_state=COMPLETED` 일 때만 채택) → wpa conf 첫 network 블록** 계단식이고, 출력 첫 줄의 `source:` 가 어느 쪽을 썼는지 밝힌다. `link.json` 은 BSSID 표시에만 쓴다(그 `info.ssid` 는 `iw <iface> info` 를 로거가 주기 기록한 비동기 캐시다). 둘 다 실패하면 `source: unknown` 으로 **목록은 보여주되 `roam N` 실행은 거부**한다 — 같은 SSID 임을 증명할 기준이 없기 때문이다 |
+| 13 | **수동 `roam` 의 현재 SSID 판정** | `wifi <n> roam` 은 같은 SSID 안의 BSS 전환 전용이라 필터 기준이 필요하다. 판정은 **`wpa_cli status`(권위 — `wpa_state=COMPLETED` 일 때만 채택) → wpa conf** 계단식이고, conf 폴백은 **network 블록이 하나일 때만** 쓴다(Mode A 다중 블록에서는 owner 가 `select_network` 로 두 번째 이후 블록에 붙어 있을 수 있어 첫 블록이 라이브라는 보장이 없다 — 그럴듯한 오답은 필터와 same-SSID 가드가 함께 통과시켜 다른 망으로 roam 을 내보낸다), 출력 첫 줄의 `source:` 가 어느 쪽을 썼는지 밝힌다. `link.json` 은 BSSID 표시에만 쓴다(그 `info.ssid` 는 `iw <iface> info` 를 로거가 주기 기록한 비동기 캐시다). 둘 다 실패하면 `source: unknown` 으로 **목록은 보여주되 `roam N` 실행은 거부**한다 — 같은 SSID 임을 증명할 기준이 없기 때문이다 |
 
 ---
 
