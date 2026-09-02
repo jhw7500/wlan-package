@@ -4850,6 +4850,12 @@ tx_ampdu_prot_mode
 rate_adapt_cfg
     This command is used to switch between SR rateadapt and Legacy rateadapt.
     FW default Algorithm is Legacy rateadapt
+    [LOCAL NOTE 2026-08-28] Not true on SD9098 FW 17.92.1.p149.115.
+    The measured power-on default is SR rateadapt with dynamic
+    (noise-based) thresholds and a 100 ms eval timer.  Measured on an
+    interface that had received no rate_adapt_cfg SET since cold boot.
+    A SET also survives driver reload -- only a cold FW load restores
+    the default.  Treat the vendor line above as chip/FW dependent.
     when SR rateadapt is enabled then it is used to set static threshold based
     or dynamic noise based rate adaptation and set the timer interval to evaluate
     sw rate adaptation.For static mode, low and high thresholds for Tx aggregated
@@ -5398,10 +5404,10 @@ Legacy rate indexes for group 0:
 	10  48 Mbps
 	11  54 Mbps
 
-For HT groups, <rate_index> is the combined MCS index 0..15; HT NSS 2 MCS 7
-uses index 15, which iw link reports as "MCS 15".  For VHT and HE groups, NSS
-is selected by <group>, so pass the per-NSS MCS index shown by iw link.  For
-example, "80MHz HE-MCS 11 HE-NSS 2" uses group 14 and rate_index 11.
+For HT, VHT, and HE groups, <rate_index> is the MCS index.  For NSS 2
+operation, still pass the MCS index shown by iw link, not the combined MCS
+number.  For example, "80MHz HE-MCS 11 HE-NSS 2" uses group 14 and rate_index
+11.
 
 Examples:
 	1) Read the current TX power table:
@@ -5464,10 +5470,8 @@ Notes:
 	   group 14 is supported.  Increasing the host MAX_POWER_GROUP value
 	   does not add entries that firmware did not return.
 
-	6) /usr/local/scripts/txpower_family_set.sh (repository source:
-	   dist/wlan/usr/local/scripts/txpower_family_set.sh) records successful
-	   SET commands under /run and uses that state for --status.  This is
-	   needed for group 14 and for firmware whose mode field does not change
-	   after 0xFF.
+	6) scripts/txpower_family_set.sh records successful SET commands under
+	   /run and uses that state for --status.  This is needed for group 14
+	   and for firmware whose mode field does not change after 0xFF.
 	   Direct mlanutl commands are not visible to this script state.
 ===============================================================================
