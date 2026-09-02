@@ -1334,7 +1334,7 @@
         "antcfgnss": {
           "type": "object",
           "additionalProperties": true,
-          "description": "광고 NSS intent(user_htstream) 전용 설정(driver#41). RF_ANTENNA HostCmd를 발행하지 않아 물리 안테나 불변. 니블 [15:12]=5G Tx, [11:8]=5G Rx, [7:4]=2G Tx, [3:0]=2G Rx. imx93 mlan0 제품값 0x2121(Tx2/Rx1)은 p149.115 scan wedge 회피 불변식의 새 형태로 antcfg 비활성과 함께 부팅에서 강제된다. 실효 TX NSS = min(Tx니블, Rx니블) 실측. 반영은 다음 (re)association부터. 어댑터 단위 설정(last-wins).",
+          "description": "광고 NSS intent(user_htstream) 전용 설정(driver#41). RF_ANTENNA HostCmd를 발행하지 않아 물리 안테나 불변. 니블 [15:12]=5G Tx, [11:8]=5G Rx, [7:4]=2G Tx, [3:0]=2G Rx. imx93 mlan0 제품값 0x2121(Tx2/Rx1)은 p149.115 scan wedge 회피 불변식의 새 형태로 antcfg 비활성과 함께 부팅에서 강제된다. 실효 TX NSS = min(mcstiercfg ht 티어, Rx니블, Tx니블) OTA 실측(driver#41). 제품 ht 7 + Rx니블 1 이라 TX NSS1 보장이며, ht 7 이 상한이므로 Tx니블만 올려서는 TX NSS2 가 서지 않는다. 실효 RX NSS 는 Rx니블 단독으로 ht 티어에 묶이지 않는다. 반영은 다음 (re)association부터. 어댑터 단위 설정(last-wins).",
           "properties": {
             "enabled": {
               "type": "boolean",
