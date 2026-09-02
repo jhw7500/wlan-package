@@ -2,6 +2,7 @@
 """Contract tests for the reusable MOAL/FW scan profile controller."""
 
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import textwrap
@@ -231,15 +232,23 @@ EXPECTED_THERMAL_SHA={SHA256_A}
         self.assertIn("profile_valid=ant-rx-only", result.stdout)
 
     def test_repository_example_config_is_describable(self) -> None:
-        result = subprocess.run(
-            [str(SCRIPT), "--describe", str(EXAMPLE_CONFIG)],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("profile_name=example-ant-split", result.stdout)
-        self.assertIn("ant_command=mlanutl mlan0 antcfg 0x303 0x101", result.stdout)
+        # 컨트롤러는 group/other writable 설정을 거부한다(정상적인 보안 검사). 저장소
+        # 파일의 git 모드는 100644 지만 체크아웃하는 쪽 umask 가 0002 면 워크트리에서
+        # 664 가 되어 이 테스트가 **환경에 따라** 실패한다(실측). 내용은 저장소 예시를
+        # 그대로 쓰되 모드는 테스트가 직접 정해, 통과/실패가 umask 로 갈리지 않게 한다.
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = Path(tmp) / EXAMPLE_CONFIG.name
+            shutil.copyfile(EXAMPLE_CONFIG, conf)
+            conf.chmod(0o600)
+            result = subprocess.run(
+                [str(SCRIPT), "--describe", str(conf)],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("profile_name=example-ant-split", result.stdout)
+            self.assertIn("ant_command=mlanutl mlan0 antcfg 0x303 0x101", result.stdout)
 
 
 if __name__ == "__main__":
