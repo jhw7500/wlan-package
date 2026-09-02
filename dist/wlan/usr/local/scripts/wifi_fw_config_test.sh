@@ -263,7 +263,7 @@ else
     fail "legacy product antcfg migration succeeds"
 fi
 expect_eq "legacy disabled antcfg stays emptied and gains antcfgnss contract" \
-    'false - - false true 0x2121 0x2121' \
+    'false - - false true 0x1111 0x1111' \
     "$(jq -r '[.mlan0.antcfg.enabled, .mlan0.antcfg.tx, .mlan0.antcfg.rx,
                (.mlan0.antcfg.verify != null), .mlan0.antcfgnss.enabled,
                .mlan0.antcfgnss.value, .mlan0.antcfgnss.verify.user_htstream]
@@ -277,6 +277,9 @@ if wifi_fw_migrate_product_antcfg_json "$WORK/legacy-with-fallback.json" \
         > "$WORK/migrated-no-fallback.json" 2>/dev/null; then
     expect_eq "migration drops retired fallback_antcfg" 'null' \
         "$(jq -r '.mlan0.antcfgnss.fallback_antcfg | tostring' "$WORK/migrated-no-fallback.json")"
+    # 값이 일부러 레거시(0x2121)다 — 이 config 의 antcfg 는 알려진 트리거 모양이
+    # 아니므로 주입 분기가 타지 않아야 하고, 따라서 운영자 값이 그대로 남는 것이
+    # 정답이다. 현행 제품값(0x1111)을 넣으면 "보존" 과 "재주입" 이 구별되지 않는다.
     expect_eq "migration keeps the antcfgnss contract intact" 'true 0x2121 0x2121' \
         "$(jq -r '.mlan0.antcfgnss | [.enabled, .value, .verify.user_htstream] | map(tostring) | join(" ")' \
             "$WORK/migrated-no-fallback.json")"
@@ -293,7 +296,7 @@ jq '.mlan0.antcfg={enabled:true,tx:"0x0101",rx:""}' "$CONF" \
 wifi_fw_migrate_product_antcfg_json "$WORK/legacy-antcfg-1x1.json" \
     > "$WORK/migrated-antcfg-1x1.json" 2>/dev/null
 expect_eq "known physical 1x1 trigger migrates to emptied antcfg + antcfgnss" \
-    'false - true 0x2121' \
+    'false - true 0x1111' \
     "$(jq -r '[.mlan0.antcfg.enabled, .mlan0.antcfg.tx,
                .mlan0.antcfgnss.enabled, .mlan0.antcfgnss.value]
               | map(tostring | if . == "" then "-" else . end) | join(" ")' \
@@ -556,12 +559,12 @@ expect_eq "board normalization preserves existing uid/gid" \
     "$(stat -c '%u:%g' "$WORK/board-imx8.json")"
 
 # factory reset은 postinst migrate 없이 template+board stage만 타므로, 제품
-# antcfgnss(0x2121) 중화는 board normalization에서도 일어나야 한다 (#221 P1).
+# antcfgnss(현행 0x1111) 중화는 board normalization에서도 일어나야 한다 (#221 P1).
 expect_eq "board normalization disables product antcfgnss on imx8" \
     'false' "$(jq -r '.mlan0.antcfgnss.enabled' "$WORK/board-imx8.json" 2>/dev/null)"
 expect_eq "board normalization keeps neutralized antcfgnss value (log-only)" \
-    '0x2121' "$(jq -r '.mlan0.antcfgnss.value' "$WORK/board-imx8.json" 2>/dev/null)"
-jq '.mlan0.antcfgnss = {enabled: true, value: "0x1111"}' \
+    '0x1111' "$(jq -r '.mlan0.antcfgnss.value' "$WORK/board-imx8.json" 2>/dev/null)"
+jq '.mlan0.antcfgnss = {enabled: true, value: "0x2211"}' \
     "$TEMPLATE" > "$WORK/board-imx8-custom-nss.json"
 if WIFI_SOC_ID_PATH="$SOC_IMX8" \
    "$BOARD_CONFIG" "$WORK/board-imx8-custom-nss.json" >/dev/null 2>&1; then
@@ -570,7 +573,7 @@ else
     fail "imx8 board config succeeds on custom antcfgnss"
 fi
 expect_eq "board normalization preserves custom antcfgnss on imx8" \
-    'true 0x1111' \
+    'true 0x2211' \
     "$(jq -r '.mlan0.antcfgnss | "\(.enabled) \(.value)"' \
         "$WORK/board-imx8-custom-nss.json" 2>/dev/null)"
 cp "$TEMPLATE" "$WORK/board-imx93-nss.json"
@@ -581,7 +584,7 @@ else
     fail "imx93 board config succeeds on package template"
 fi
 expect_eq "board normalization keeps product antcfgnss enabled on imx93" \
-    'true 0x2121' \
+    'true 0x1111' \
     "$(jq -r '.mlan0.antcfgnss | "\(.enabled) \(.value)"' \
         "$WORK/board-imx93-nss.json" 2>/dev/null)"
 
@@ -857,7 +860,7 @@ expect_eq "template ships mlan0 antcfg emptied (no RF_ANTENNA on boot)" 'false -
                (.mlan0.antcfg.verify != null)]
               | map(tostring | if . == "" then "-" else . end) | join(" ")' "$TEMPLATE")"
 expect_eq "template ships mlan0 antcfgnss product contract" \
-    'true 0x2121 0x2121' \
+    'true 0x1111 0x1111' \
     "$(jq -r '.mlan0.antcfgnss
               | [.enabled, .value, .verify.user_htstream]
               | map(tostring) | join(" ")' "$TEMPLATE")"

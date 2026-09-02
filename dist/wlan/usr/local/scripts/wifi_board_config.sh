@@ -213,10 +213,12 @@ jq_err=$(jq --arg b "$BOARD_TYPE" --arg bus "$BUS_TYPE" --arg iio "$IIO_DEV" '
             # 505.p14/imx8 utility에는 antcfgnss(user_htstream) ABI가 없다.
             # factory reset은 postinst migrate를 거치지
             # 않고 template+board stage만 타므로, migrate의 비-imx93 분기와 동일하게
-            # 제품 antcfgnss(0x2121)를 여기서도 중화한다(custom 값은 보존, log-only).
+            # 제품 antcfgnss(현행 0x1111, 종전 0x2121)를 여기서도 중화한다
+            # (custom 값은 보존, log-only).
             | if ($b != "imx93"
                   and .mlan0.antcfgnss.enabled == true
-                  and (.mlan0.antcfgnss.value // "") == "0x2121")
+                  and ((.mlan0.antcfgnss.value // "") == "0x1111"
+                       or (.mlan0.antcfgnss.value // "") == "0x2121"))
               then .mlan0.antcfgnss |= (. + {enabled: false})
               else . end
             ' \

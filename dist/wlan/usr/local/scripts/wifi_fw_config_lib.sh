@@ -141,11 +141,15 @@ wifi_fw_migrate_product_antcfg_json() {
              and ($v.physical_tx // "") == ""
              and ($v.physical_rx // "") == ""
              and ($v.user_htstream // "") == "");
+        # 제품 계약값. mcs_tier 는 순수 MCS 상한만 담당하고 NSS 제한은 이 니블이
+        # 전담한다 — 0x1111 = 양 밴드 Tx1/Rx1. 종전 0x2121(Tx2/Rx1)은 mcs_tier
+        # ht 7 과 함께 NSS1 을 만들던 조합이라, ht 를 15 로 올린 지금은 니블만으로
+        # NSS1 을 세워야 한다.
         def product_nss:
             {
                 enabled: true,
-                value: "0x2121",
-                verify: { user_htstream: "0x2121" }
+                value: "0x1111",
+                verify: { user_htstream: "0x1111" }
             };
         (.mlan0.antcfg // {}) as $a
         | (.mlan0.antcfgnss // {}) as $n
@@ -173,7 +177,8 @@ wifi_fw_migrate_product_antcfg_json() {
              else .
              end)
             # 템플릿 merge 로 들어온 제품 antcfgnss 도 중화한다(적용 시도 자체를 차단).
-            | if ($n.enabled == true and ($n.value // "") == "0x2121")
+            | if ($n.enabled == true
+                  and (($n.value // "") | one_of(["0x1111", "0x2121"])))
               then .mlan0.antcfgnss |= (. + {enabled: false})
               else .
               end
@@ -195,7 +200,7 @@ wifi_fw_migrate_product_antcfg_json() {
 # p149.115 scan wedge 회피 profile은 imx93/543 계열에서 association 전에 지켜야 하는
 # 제품 안전 불변식이다. driver#41 이후 형태: antcfg 는 비워서(RF_ANTENNA 미발행) 물리
 # Tx/Rx 를 FW 기본 2x2 로 두고 — wedge cofactor 인 physical 1-path 를 만들 수 있는 경로
-# 자체를 부팅에서 제거 — 광고 Rx NSS1 intent 는 antcfgnss(0x2121)로 fail-closed 강제한다.
+# 자체를 부팅에서 제거 — 광고 Rx NSS1 intent 는 antcfgnss(0x1111)로 fail-closed 강제한다.
 # mlan1 의 adapter-level antcfg/antcfgnss 가 뒤에서 덮어쓰는 것도 함께 차단한다.
 # imx8/505 계열은 이 ABI로 qualification되지 않았으므로 적용 대상이 아니다.
 wifi_fw_validate_product_scan_profile() {
@@ -204,10 +209,10 @@ wifi_fw_validate_product_scan_profile() {
     jq -e '
         (.mlan0.antcfg.enabled != true)
         and .mlan0.antcfgnss.enabled == true
-        and .mlan0.antcfgnss.value == "0x2121"
-        and .mlan0.antcfgnss.verify.user_htstream == "0x2121"
+        and .mlan0.antcfgnss.value == "0x1111"
+        and .mlan0.antcfgnss.verify.user_htstream == "0x1111"
         and .mlan0.mcs_tier.enabled == true
-        and .mlan0.mcs_tier.ht == "7"
+        and .mlan0.mcs_tier.ht == "15"
         and .mlan0.mcs_tier.vht == "7"
         and .mlan0.mcs_tier.he == "both 7"
         and (.mlan1.antcfg.enabled != true)
