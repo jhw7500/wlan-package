@@ -813,7 +813,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} connect [ssid] [freq_list|channel_list] : ssid+전역/블록 freq_list 변경 후 reconfigure 적용(재연결); 인자 없으면 현재 설정으로 재연결(reassociate)"
     echo "       wifi {0|1|mlan0|mlan1} scan {freq_list|channel_list|2G|5G} : runtime"
     echo "       wifi {0|1|mlan0|mlan1} mscan {get|channel_list|2G|5G} : runtime (setuserscan/getscantable)"
-    echo "       wifi {0|1|mlan0|mlan1} roam [0|1..N] : 0=auto best, N=Nth AP (RSSI order)"
+    echo "       wifi {0|1|mlan0|mlan1} roam [0|1..N] : same-SSID BSS 전환 (0=auto best, N=Nth AP, RSSI order)"
     echo "       wifi {0|1|mlan0|mlan1} roam th [2G|5G] [rssi] : 로밍 RSSI 임계값 표시/설정 (persist, SIGHUP 무재시작 반영)"
     echo "       wifi {0|1|mlan0|mlan1} roam diff [dB] : 후보 AP 최소 RSSI 이득 표시/설정 (persist, SIGHUP 무재시작 반영)"
     echo "       wifi {0|1|mlan0|mlan1} roam gate [on|off] : good-signal 리셋 게이트 표시/설정 (delta=2dB, grace=40s 고정)"
@@ -2121,7 +2121,9 @@ case "$2" in
     fi
     ;;
   roam)
-    # wifi 0 roam            → AP 리스트만 표시
+    # 같은 SSID 안의 BSS 전환 전용(wpa_cli roam, 무중단). 다른 SSID 로의 망 전환은
+    # 재연결을 동반하므로 `wifi <iface> connect <ssid>` 의 역할이고 여기서 하지 않는다.
+    # wifi 0 roam            → 현재 SSID의 AP 리스트만 표시
     # wifi 0 roam 0          → 현재 AP 제외 최고 RSSI로 자동 로밍
     # wifi 0 roam 1~N        → RSSI 순서 N번째 AP로 로밍
     # wifi 0 roam th         → 로밍 RSSI 임계값 표시 (2G/5G)
