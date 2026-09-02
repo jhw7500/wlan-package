@@ -537,6 +537,24 @@ L3 observation traffic은 시작/종료 gateway ping에만 사용하고, 중간�
 supplicant 상태와 driver counter만 읽는다. 완료 또는 이상 감지 후 bgscan을 정지하고
 condition 파일을 제거해 직전 inactive 상태로 복구한다.
 
+> **drop-in 자체도 반드시 제거해야 한다.** condition 파일만 지우고 drop-in을 남기면,
+> gate는 `/etc`(영속)에 있고 그것을 만족시키는 파일은 `/run`(tmpfs)에 있으므로 **다음
+> 부팅부터 `wifi_bgscan`이 영구히 fail-closed** 된다. systemd는 이를 실패가 아닌
+> condition skip으로 기록해 `systemctl --failed`에도, 저널 오류 검색에도 걸리지 않는다.
+> 게다가 `wifi_logger_scan`은 스캔을 유발하지 않는 순수 소비자라 서비스는 `active
+> (running)`인 채 `ap.log`/`freq.log`만 조용히 비고, 원인이 로그로테이션으로 오귀속되기
+> 쉽다. (2026-09-01 실제 발생 — 2026-08-19 설치분이 배포 검증 재부팅 때 드러남.)
+>
+> `scripts/qa/product_wifi_bgscan_soak.sh`는 이제 cleanup에서 drop-in을 아티팩트로
+> 백업한 뒤 제거하고 `daemon-reload`까지 수행하며, 결과를 `harness-exit.txt`의
+> `dropin_removal_rc` / `dropin_present_after`에 남긴다. 수동으로 정리할 때는:
+>
+> ```bash
+> rm -f /etc/systemd/system/wifi_bgscan@mlan0.service.d/task10-bgscan-off-control.conf
+> rmdir /etc/systemd/system/wifi_bgscan@mlan0.service.d 2>/dev/null || true
+> systemctl daemon-reload && systemctl start wifi_bgscan@mlan0.service
+> ```
+
 artifact:
 
 ```text
