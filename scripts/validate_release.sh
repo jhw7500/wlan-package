@@ -293,6 +293,10 @@ if errors:
 PY
     python3 -m pytest dist/wlan/usr/local/logger/tests -q
     python3 -m pytest dist/wlan/usr/local/scripts/tests -q
+    # QA 하네스도 게이트에 포함한다. 이 스위트는 실기 상태를 바꾸는 도구의
+    # 안전 계약(복원·원격 절단 대응·스케줄 검증)을 고정하는데, 여기 없으면
+    # 아무도 실행하지 않아 그 계약이 조용히 썩는다.
+    python3 -m pytest scripts/qa -q
 
     local test
     for test in \
