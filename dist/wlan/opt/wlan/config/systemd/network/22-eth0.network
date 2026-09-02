@@ -23,3 +23,7 @@ Address=192.168.1.1/24
 # 경로의 주소 회수 동작과의 상호작용을 다시 검토한 뒤에 활성화할 것.
 #ConfigureWithoutCarrier=yes
 #KeepConfiguration=static
+# IPv6 비활성 (#255, 근거는 20-mlan0.network 주석): eth0도 함께 꺼서
+# 유선 폐쇄망에 불필요한 ND/RA·link-local을 남기지 않는다.
+LinkLocalAddressing=no
+IPv6AcceptRA=no

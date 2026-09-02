@@ -4,4 +4,11 @@ Name=mlan0
 [Network]
 DHCP=no
 Address=192.168.0.100/24
+# IPv6 비활성 (#255): mlan0 MAC은 유선 peer 클론이라 커널 기본 EUI-64
+# link-local(fe80::...)이 peer와 정확히 동일 주소로 생성되어 같은 L2에서
+# DAD 충돌을 일으킬 수 있다. wbridge 필터도 IPv4/ARP 전용이라 ND/RA가
+# 무판정 양방향 통과 — IPv4 격리 보장이 IPv6엔 없다. IPv6 관리 플레인을
+# 도입하는 날 opt-in으로 재개방한다 (질의 Q11 "IPv6 비활성 예정" 정합).
+LinkLocalAddressing=no
+IPv6AcceptRA=no
 
