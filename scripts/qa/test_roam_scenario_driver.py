@@ -177,9 +177,6 @@ class Gates(unittest.TestCase):
         self.assertEqual(r.returncode, 65)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class RemoteSafety(unittest.TestCase):
     """2026-08-29 사고 회귀 — ssh 세션이 끊겨도 실기에 하네스가 남으면 안 된다.
@@ -272,3 +269,39 @@ class RemoteSafety(unittest.TestCase):
         r = call("schedule_total_seconds", stdin="-85\t20\t1\n-40\t15\t7\n")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout.strip(), "35")
+
+class ModuleWiring(unittest.TestCase):
+    """직접 실행(`python3 <file>`)이 pytest 와 같은 수의 테스트를 돌려야 한다.
+
+    `unittest.main()` 뒤에 클래스를 덧붙이면 그 클래스는 직접 실행에서 **조용히
+    누락**된다. 실제로 RemoteSafety(사고 회귀 5건)가 그렇게 빠져 있었고 pytest 로만
+    돌아 22 passed 로 보였다. 실행 경로가 달라 커버리지가 갈리는 것을 여기서 막는다.
+    """
+
+    @unittest.skipIf(os.environ.get("_ROAM_QA_SELFTEST") == "1",
+                     "재귀 방지 — 하위 실행에서는 건너뛴다(집계에는 포함)")
+    def test_direct_execution_runs_every_test_in_this_module(self):
+        import re as _re
+
+        expected = sum(
+            1
+            for obj in list(globals().values())
+            if isinstance(obj, type) and issubclass(obj, unittest.TestCase)
+            for name in dir(obj)
+            if name.startswith("test_")
+        )
+        r = subprocess.run(
+            ["python3", str(Path(__file__).resolve())],
+            capture_output=True, text=True, timeout=120,
+            env={**os.environ, "_ROAM_QA_SELFTEST": "1"},
+        )
+        m = _re.search(r"^Ran (\d+) tests?", r.stderr, _re.M)
+        self.assertIsNotNone(m, f"직접 실행 요약을 못 읽었다:\n{r.stderr[-500:]}")
+        self.assertEqual(
+            int(m.group(1)), expected,
+            "직접 실행이 일부 테스트를 건너뛴다 — unittest.main() 뒤에 클래스가 있는지 확인하라",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
