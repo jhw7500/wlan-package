@@ -3,6 +3,31 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.6.3 (2026-09-02)
+
+> SemVer **patch** — NSS 제한의 강제 지점을 `mcs_tier` 에서 `antcfgnss` 니블로 옮기고, 부팅 scan profile 게이트를 wedge 와 인과가 확인된 `antcfg` 축으로 좁힌다. 미반영 FW 설정 축을 `wifi <iface> info` 에서 확인할 수 있다.
+
+### NSS 제한을 antcfgnss 니블로 위임 (#246)
+
+- `mlanutl mcstiercfg ht` 는 이름과 달리 HT 전용이 아니다. `antcfgnss=0x2222`(양 밴드 rx=2 tx=2)로 니블 제약을 걷어낸 뒤 `ht` 만 바꿔 실측하면 VHT·HE 의 TX NSS 까지 함께 내려간다 — VHT `ht15 → NSS2 144.4M` / `ht7 → NSS1 72.2M`, HE `ht15 → NSS2 720.6M` / `ht7 → NSS1 360.3M`. 레이트가 정확히 절반이 된다(driver-v2#41).
+- 종전 제품값 `antcfgnss 0x2121` + `ht 7` 은 NSS1 을 ht 티어와 Rx 니블 양쪽에서 만들고 있었다. 역할을 분리해 `mcs_tier` 는 순수 MCS 상한만 담당(`ht 15`)하고 NSS 제한은 `antcfgnss` 니블(`0x1111` = 양 밴드 Tx1/Rx1)이 전담한다. 광고 Rx NSS1 intent 는 그대로이므로 p149.115 scan wedge 회피 성질은 유지된다(Tx 는 2→1 로 더 좁아진다).
+
+### 부팅 scan profile 게이트 축소 (#248)
+
+- `wifi_fw_validate_product_scan_profile` 이 10개 키의 정확 일치를 요구했다. `wifi_init_conf.json` 은 현장 조정 가능한 파일이라, 정당한 튜닝이 매 부팅 `local0.err` 를 만들어 진짜 위반이 그 안에 묻혔다.
+- 검사를 wedge 와 인과가 확인된 축으로 한정한다 — `mlan0/mlan1 antcfg` 비활성 + `mlan1.antcfgnss` 비활성. 광고 Rx NSS 1SS 제한 단독으로는 wedge 가 재현되지 않았고(`docs/ant_rx_nss_scan_gate_2026-08-25.md:100`), `mcs_tier` 는 wedge 와 인과가 없다.
+- 문서 5곳이 `c5f1bdd` 이전의 fail-closed 동작("불일치 시 association 중단")을 서술하고 있어 실제 동작(재시도 후 로그 + 미반영 마커, association 계속)으로 정정했다.
+
+### 미반영 FW 설정 축을 wifi info 에 노출 (#251)
+
+- `/run/wifi/fwcfg_unapplied_<iface>` 기록을 읽는 코드가 없어 기록이 아무 데도 닿지 않았다. `wifi_fw_unapplied_read()` 를 신설하고 `wifi <iface> info` 에 `[FW Config Unapplied]` 섹션을 추가한다.
+- 특히 `antcfg` 를 physical 1-path 로 켜면 scan 을 반복하다 비결정적 시점에 조용히 Tx 가 멎는다 — disconnect 도 auth error 도 FW reset 도 없이 `COMPLETED` 를 유지한 채다. 부팅 로그 한 줄이 유일한 단서였다.
+
+### QA 하니스 (#242 / #243)
+
+- `product_wifi_bgscan_soak.sh` cleanup 이 test-only bgscan drop-in 을 아티팩트로 백업한 뒤 제거한다. `/etc` 의 게이트와 `/run` 의 조건 파일이 분리돼 있어, 남겨두면 재부팅부터 `wifi_bgscan` 이 영구히 fail-closed 됐다.
+- QA 러너 5종이 `100644` 로 커밋돼 있어 파괴적 러너의 안전 계약 테스트 17건이 신선한 체크아웃에서 항상 실패했다. 실행 비트를 부여해 되살린다.
+
 ## 0.6.2 (2026-09-01)
 
 > SemVer **patch** — 상위 툴용 FTP 계정 `admin` 의 SSH 로그인을 차단한다. FTP 경로(vsftpd 로컬 로그인 + `/opt/ftpcmd/bin` 디스패치)와 로그인 셸은 그대로이므로 상위 툴 동작에는 영향이 없지만, `admin` 으로 SSH 셸에 붙던 경로는 사라진다.
