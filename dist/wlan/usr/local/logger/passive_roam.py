@@ -11,12 +11,15 @@ from roam_notify import notify_roam, get_associated_bssid, confirm_roam
 from roam_state import scan_transition_lock
 from roam_policy import (
     RoamPolicyError,
+    decode_wpa_ssid_text,
+    parse_wpa_ssid_value,
     validate_ssid,
 )
 
 WIFI_IFACE = "mlan0"
 SCAN_LOG = f"/var/log/cantops/scan/{WIFI_IFACE}/ap.log"
 LINK_JSON = f"/var/log/cantops/json/{WIFI_IFACE}/link.json"
+WPA_CONF_FILE = f"/etc/wpa_supplicant/wpa_supplicant-{WIFI_IFACE}.conf"
 WIFI_INIT_CONF_JSON = "/usr/local/etc/wifi_init_conf.json"
 SCAN_TIMESTAMP_RE = re.compile(
     r"^(?:\[(?P<bracketed>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]"
@@ -79,21 +82,86 @@ def read_current_bssid(link_json_path=LINK_JSON):
         return ""
 
 
-def read_current_ssid(link_json_path=LINK_JSON):
-    """Read current connected SSID from link.json"""
+def ssid_from_supplicant(iface):
+    """`wpa_cli status` 의 ssid= — 결합한 네트워크의 권위 소스.
+
+    wpa_state=COMPLETED 일 때만 채택한다(결합 미완료 시점의 ssid 줄은 목표일 뿐
+    현재가 아니다 — roam_notify._bssid_from_status 와 같은 규칙). CTRL_IFACE 는
+    printf_encode 형식이라 decode_wpa_ssid_text 로 정확한 identity 를 복원한다.
+    조회 실패는 "" — 호출자가 다음 소스로 넘어간다.
+    """
     try:
-        with open(link_json_path, "r") as f:
-            data = json.load(f)
-        return validate_ssid(data.get("info", {}).get("ssid", ""))
-    except (
-        FileNotFoundError,
-        json.JSONDecodeError,
-        KeyError,
-        AttributeError,
-        TypeError,
-        RoamPolicyError,
-    ):
+        result = subprocess.run(
+            ["wpa_cli", "-i", iface, "status"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return ""
+    if result.returncode != 0:
+        return ""
+    state = None
+    ssid = ""
+    for line in (result.stdout or "").splitlines():
+        if line.startswith("wpa_state="):
+            state = line.split("=", 1)[1].strip()
+        elif line.startswith("ssid="):
+            try:
+                ssid = decode_wpa_ssid_text(line.split("=", 1)[1])
+            except RoamPolicyError:
+                ssid = ""
+    return ssid if state == "COMPLETED" else ""
+
+
+def ssid_from_wpa_conf(conf_path):
+    """단일 network 블록 conf 의 ssid= — supplicant 조회가 안 될 때의 폴백.
+
+    **블록이 둘 이상이면 "" 를 돌려준다.** Mode A 다중 블록에서는 자동 owner 가
+    select_network 로 두 번째 이후 블록에 붙어 있을 수 있어 첫 블록이 라이브라는
+    보장이 없다. 그 값을 그대로 쓰면 필터도 roam_to_ap 의 same-SSID 가드도 같은
+    오답을 공유해 통과하고, 결국 다른 망의 BSS 로 `wpa_cli roam` 이 나간다 —
+    그럴듯한 오답보다 "모른다"가 안전하므로 호출자의 unknown 거부 경로로 보낸다.
+    """
+    first_ssid = ""
+    blocks = 0
+    try:
+        with open(conf_path, "r") as f:
+            in_network = False
+            for raw_line in f:
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if re.match(r"^network\s*=\s*\{", line):
+                    in_network = True
+                    blocks += 1
+                    if blocks > 1:
+                        return ""  # 어느 블록이 라이브인지 여기서는 알 수 없다
+                    continue
+                if in_network and line.startswith("}"):
+                    in_network = False
+                    continue
+                if in_network and not first_ssid and line.startswith("ssid="):
+                    first_ssid = parse_wpa_ssid_value(line.split("=", 1)[1])
+    except (OSError, RoamPolicyError):
+        return ""
+    return first_ssid
+
+
+def read_current_ssid(iface=WIFI_IFACE, conf_path=None):
+    """현재 SSID를 (권위 → 폴백) 계단식으로 판정하고 (ssid, source) 를 돌려준다.
+
+    link.json 은 여기서 쓰지 않는다 — 그 info.ssid 는 `iw <iface> info` 를 로거가
+    주기 기록한 비동기 캐시라, 대상 검증 기준으로는 supplicant/conf 보다 약하다.
+    (link.json 은 BSSID 표시용으로 계속 쓴다.)
+    """
+    ssid = ssid_from_supplicant(iface)
+    if ssid:
+        return ssid, "supplicant"
+    ssid = ssid_from_wpa_conf(conf_path or WPA_CONF_FILE)
+    if ssid:
+        return ssid, "wpa conf"
+    return "", "unknown"
 
 
 def parse_last_scan_block(scan_log_path=SCAN_LOG, max_age_sec=None):
@@ -168,7 +236,7 @@ def parse_last_scan_block(scan_log_path=SCAN_LOG, max_age_sec=None):
 
 def build_candidate_list():
     """
-    Return (current_bssid, current_ssid, candidates)
+    Return (current_bssid, current_ssid, ssid_source, candidates)
 
     candidates: list of AP dicts with extra key "is_current"
     All APs are included, including the current one.
@@ -179,27 +247,28 @@ def build_candidate_list():
     Sorted by RSSI (ss) descending (higher is better).
     """
     current_bssid = read_current_bssid(LINK_JSON)
-    current_ssid = read_current_ssid(LINK_JSON)
+    current_ssid, ssid_source = read_current_ssid(WIFI_IFACE)
     aps = parse_last_scan_block(SCAN_LOG)
 
     if not aps:
         print("No scan block found in ap.log")
-        return current_bssid, current_ssid, []
+        return current_bssid, current_ssid, ssid_source, []
 
     for ap in aps:
         bssid_low = ap["bssid"].strip().lower()
         ap["is_current"] = (bssid_low == current_bssid)
 
-    # Keep only the connected SSID.  With link.json unreadable the SSID is
+    # Keep only the connected SSID.  With every source exhausted the SSID is
     # unknown and there is nothing to filter against: still show the scan for
-    # diagnosis, and let roam_to_ap refuse anything it cannot prove same-SSID.
+    # diagnosis, and let roam_to_ap refuse — an unverifiable target must not be
+    # roamed to just because it holds a list position.
     if current_ssid:
         aps = [ap for ap in aps if ap["ssid"] == current_ssid]
 
     # Sort by RSSI (higher is better; e.g. -40 > -50)
     aps.sort(key=lambda x: x["ss"], reverse=True)
 
-    return current_bssid, current_ssid, aps
+    return current_bssid, current_ssid, ssid_source, aps
 
 
 def print_candidate_list(current_bssid, candidates):
@@ -232,7 +301,17 @@ def roam_to_ap(interface, ap, index_label=None, current_ssid=None):
 
     bssid = ap["bssid"]
     ap_ssid = ap.get("ssid") or ""
-    if current_ssid and ap_ssid and ap_ssid != current_ssid:
+    if not current_ssid:
+        # 대상이 같은 SSID 인지 증명할 기준이 없다. 목록은 진단용으로 보여주되
+        # 여기서 멈춘다 — 번호를 골랐다는 이유만으로 검증 못 한 BSS 로 나가면
+        # 다른 망의 AP 에 roam 을 발행하게 된다.
+        print(
+            "\nCannot determine the connected SSID "
+            "(wpa_cli status and wpa conf both unavailable); "
+            "roam needs it to prove the target is same-SSID. Not roaming."
+        )
+        return 1
+    if ap_ssid and ap_ssid != current_ssid:
         print(
             f"\nSelected AP is on SSID '{ap_ssid}', not the connected "
             f"'{current_ssid}'. roam performs a same-SSID BSS transition only; "
@@ -318,7 +397,7 @@ def roam_to_best_non_current(interface, candidates, current_ssid=None):
 
 
 def main():
-    global WIFI_IFACE, SCAN_LOG, LINK_JSON
+    global WIFI_IFACE, SCAN_LOG, LINK_JSON, WPA_CONF_FILE
 
     import argparse
     parser = argparse.ArgumentParser(
@@ -338,9 +417,16 @@ def main():
     LINK_JSON = os.environ.get(
         "PASSIVE_ROAM_LINK_JSON", f"/var/log/cantops/json/{WIFI_IFACE}/link.json"
     )
+    WPA_CONF_FILE = os.environ.get(
+        "PASSIVE_ROAM_WPA_CONF",
+        f"/etc/wpa_supplicant/wpa_supplicant-{WIFI_IFACE}.conf",
+    )
 
-    current_bssid, current_ssid, candidates = build_candidate_list()
-    print(f"Roaming within SSID: {current_ssid or '<unknown>'} (same-SSID only)")
+    current_bssid, current_ssid, ssid_source, candidates = build_candidate_list()
+    print(
+        f"Roaming within SSID: {current_ssid or '<unknown>'} "
+        f"(source: {ssid_source}, same-SSID only)"
+    )
     if not candidates:
         sys.exit(1)
 
