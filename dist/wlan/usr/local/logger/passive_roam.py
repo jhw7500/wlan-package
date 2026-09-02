@@ -226,7 +226,13 @@ def parse_last_scan_block(scan_log_path=SCAN_LOG, max_age_sec=None):
                 "ld": int(parts[3].strip()),
                 "bssid": parts[4].strip(),
                 "cap": parts[5].strip(),
-                "ssid": validate_ssid("|".join(parts[6:])),
+                # ap.log 는 사람이 읽는 정렬 포맷이라 컬럼 구분자 뒤에 패딩 공백이 붙는다
+                # (`... | I2DM   NAX | jhw_wlan_`). 나머지 6개 컬럼처럼 여기서도 벗겨야
+                # supplicant/conf 가 준 SSID 와 비교가 성립한다 — 벗기지 않으면
+                # ' jhw_wlan_' != 'jhw_wlan_' 라 후보가 전부 탈락하고 목록이 조용히 빈다
+                # (실기 실측). 한계: 앞뒤 공백이 진짜 identity 인 SSID 는 이 로그 포맷이
+                # 애초에 구분해 담지 못한다.
+                "ssid": validate_ssid("|".join(parts[6:]).strip()),
             })
         except (ValueError, RoamPolicyError):
             continue
@@ -262,8 +268,16 @@ def build_candidate_list():
     # unknown and there is nothing to filter against: still show the scan for
     # diagnosis, and let roam_to_ap refuse — an unverifiable target must not be
     # roamed to just because it holds a list position.
+    scanned = len(aps)
     if current_ssid:
         aps = [ap for ap in aps if ap["ssid"] == current_ssid]
+    if scanned and not aps:
+        # 필터가 전부 걸러낸 경우를 침묵으로 두면 운영자가 이유를 알 수 없다
+        # (종전엔 메시지 없이 exit 1 이었다).
+        print(
+            f"scan has {scanned} AP(s) but none on '{current_ssid}' — "
+            "nothing to roam to within this SSID"
+        )
 
     # Sort by RSSI (higher is better; e.g. -40 > -50)
     aps.sort(key=lambda x: x["ss"], reverse=True)
