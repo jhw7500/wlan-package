@@ -554,6 +554,24 @@
               "x-ui-editable": "caution",
               "x-apply-timing": "reboot",
               "x-consumer": "wifi_init.sh"
+            },
+            "roam_announce": {
+              "type": [
+                "string",
+                "integer"
+              ],
+              "default": "",
+              "enum": [
+                "",
+                "0",
+                "1",
+                0,
+                1
+              ],
+              "description": "engine=moal 전용 — 로밍/링크업 시 클론 MAC 소스 L2 update(XID)로 상단 유선 스위치 재학습 강제(wlan-driver-v2#47). 빈값=미전달(드라이버 기본 0=off). parmtype 게이트 통과 시에만 insmod 인자 전달. 런타임: /sys/module/moal/parameters/bridge_roam_announce",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "reboot",
+              "x-consumer": "wifi_init.sh"
             }
           }
         },
