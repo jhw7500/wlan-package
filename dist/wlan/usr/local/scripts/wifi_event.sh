@@ -93,11 +93,32 @@ if [ -n "$initial_bssid" ]; then
     # .3.2.1.7.2)으로 현재 링크 상태를 조회할 수 있다(트랩은 변화 통지 전용).
 fi
 
+# 로밍 직후 스위치 FDB 재학습 강제 — 무선 iface IP로 gratuitous ARP(-U) 즉시 발사(#234).
+# 배경: 로밍 후 유선망이 STA 새 위치를 재학습하기까지 ~2-5s 상향 갭이 관측됐고(무선 핸드오프·
+# 하향은 정상), 현재 STA/AP 어느 쪽도 로밍 시 재공지를 하지 않는다(tshark 재검증, 2026-09-01).
+# 스코프 = 무선전용/관리-IP: iface에 IPv4가 있을 때만 발사한다. 순수 MAC클론 투명 브리지는
+# mlan0에 L3 IP가 없어 자동 no-op이며, 그 최종 제품의 근본책은 드라이버측 클론MAC L2 announce
+# (wlan-driver-v2#47, 머지됨)다. 비블로킹 백그라운드(&) — iw event 루프를 막지 않는다(트랩 패턴 동일).
+# 한계: 잔여 갭이 AP측 상향 포워딩 지연이면 이 GARP도 같은 갭에 걸릴 수 있어 갭 소멸을 보장하진
+# 않는다(듀얼AP A/B 판별은 #235). 다만 "아무도 재공지 안 함"은 확정이라 이 발사 자체는 유효.
+# 게이트: `.<iface>.roam_garp.enabled`(bool, 기본 false — opt-in). 효과가 #235에서 확증되기
+# 전까지 default off로 두고, 확증 후 릴리스에서 default 승격을 재검토한다. null/부재/파싱실패는
+# 모두 off로 처리(안전측 — get_bool/wifi_acl get_enabled 관례와 동일).
+roam_gratuitous_arp() {
+    local en ip
+    en=$(jq -r --arg i "$IFACE" 'if (.[$i].roam_garp.enabled) == true then "true" else "false" end' \
+        "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    [ "$en" = "true" ] || return 0
+    ip=$(ip -4 -o addr show "$IFACE" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
+    [ -n "$ip" ] && arping -U -c 3 -I "$IFACE" "$ip" >/dev/null 2>&1 &
+}
+
 iw event -t 2>&1 | while IFS= read -r line; do
     case "$line" in
         *"$IFACE"*"connected to"*)
             bssid=$(echo "$line" | grep -oE '([0-9a-f]{2}:){5}[0-9a-f]{2}' | head -1)
             logger -p local0.info "[$tag:$LINENO] [$IFACE] CONNECTED bssid=$bssid"
+            roam_gratuitous_arp
             run_mcs_post_connect_verify
             run_on_connect
             # 트랩은 &(백그라운드) — dest 가 hostname 이면 DNS 지연이 iw event 루프를 블로킹해
@@ -112,6 +133,7 @@ iw event -t 2>&1 | while IFS= read -r line; do
             # 표면화되어 위 케이스가 커버한다.
             bssid=$(echo "$line" | grep -oE '([0-9a-f]{2}:){5}[0-9a-f]{2}' | head -1)
             logger -p local0.info "[$tag:$LINENO] [$IFACE] ROAMED bssid=$bssid"
+            roam_gratuitous_arp
             run_mcs_post_connect_verify
             ;;
         *"$IFACE"*"channel switch started"*)
