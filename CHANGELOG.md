@@ -30,6 +30,12 @@ wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약�
 - `operstate` 를 쓰지 않는 이유는 실측이다 — 온타겟에서 `lo` 는 `operstate=unknown` 인데 IFF_UP=1 이고, bridge 인터페이스는 `ip link set up` 직후에도 `operstate=unknown` 이었다. operstate 로 판정했으면 두 경우 모두 UP 을 놓친다.
 - 인자 검증·존재 확인·exit code 관례는 `ifcup` / `ifcdown` 과 동일하다(잘못된 이름·없는 인터페이스 = exit 2).
 
+### opc_wlan_apply.sh `freq none` — 미설정 SCAN band 밴드락 제거 (#111)
+
+- opcd 가 미설정 SCAN Frequency Band(0xFFFF)를 "밴드락 없음" 으로 적용할 때, 종전에는 지원 대역 채널 전부를 열거해 근사했다. 이 집합은 Rev1.01 비트표(5GHz ch165)에서 끝나 장치 라이브 채널표(ch169+)보다 좁아, "미설정" 인데도 상위 채널이 잠긴 채 남았다.
+- `opc_wlan_apply.sh` 에 `freq none`(및 `freq ""`) 형식을 추가한다 — 전역·블록 `freq_list` 와 legacy `scan_freq` 를 전부 삭제하고 `wpa_cli reconfigure` 로 밴드락을 완전히 해제한다. opcd 는 미설정 band 에서 센티널 `"none"` 을 보낸다(wlan-opc #117).
+- **동작 변경**: `freq ""` + ssid 는 종전 "SSID-only(밴드락 보존)" 에서 "밴드락 제거 + SSID" 로, `freq ""` 단독은 usage 오류(exit 2)에서 제거로 바뀐다. opcd 는 정수 MHz 목록 또는 소문자 `none` 만 보내므로 실운영 경로에는 영향이 없다(`freq NONE` 등 변형은 방어적으로 exit 2 거부).
+
 ## 0.6.3 (2026-09-02)
 
 > SemVer **patch** — NSS 제한의 강제 지점을 `mcs_tier` 에서 `antcfgnss` 니블로 옮기고, 부팅 scan profile 게이트를 wedge 와 인과가 확인된 `antcfg` 축으로 좁힌다. 미반영 FW 설정 축을 `wifi <iface> info` 에서 확인할 수 있다.
