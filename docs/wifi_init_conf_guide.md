@@ -153,6 +153,27 @@ wifi_init_conf.json
 >
 > **⚠️ `find`/`auto`가 peer를 못 찾을 때 (eth0 타서브넷)**: `eth0`의 IP가 sweep 대역과 다른 서브넷이면(예: `eth0=192.168.1.1/24`, peer=`192.168.0.220`), same-subnet source에만 ARP 응답하는 peer는 발견에 실패한다. #113에서 sweep arping의 source를 **대역 내 우리 IP(mlanN)**로 지정하도록 보정했다(⚠️ **서브넷 인자는 sweep 범위만** 바꾸고 arping source IP는 안 바꾸므로 대역 지정만으로는 안 풀림). 그래도 안 되면 `wifi {0|1} br route set <peer-ip>`로 직접 등록한다.
 
+#### 기배포 기기 마이그레이션 — 공식 경로 (결정, #257)
+
+`DEBIAN/postinst`의 cpchk·json_merge는 **사이트 값 보존**이 목적이라, 위 3종 토글
+(`peer_route.enabled`/`ip_discovery`/`arp_ignore_always.enabled`)을 출하 기본
+(false/false/true)에서 mlan0-IP(옵션 X) 운용값(true/true/false)으로 바꾸는 변경을
+**패키지 업그레이드로는 전파하지 않는다**(의도된 사각 — 업그레이드가 사이트 값을 덮지
+않게 하기 위함). 기배포 기기 전환의 공식 경로는 아래 **명시적 opt-in 운영자 명령** 두
+가지다 — 둘 다 원자적 기록 + 백업, 다음 부팅부터 적용:
+
+- **온디바이스**: `wifi {0|1} br profile dual apply`(moal 권장) 또는 `peer-route apply`
+  (엔진 무관). 3종을 검증된 조합으로 한 번에 json에 기록(개별 편집의 함정 조합 방지 —
+  `_bridge_profile`가 백업 후 원자 `mv`). 적용 후 `wifi {0|1} br status`로 정합성 확인.
+- **호스트 번들**: `bd_provision.sh --profile b`(wlan-opc#88). 3종 토글에 더해
+  `.network`(Address/GW)·`timesyncd.conf`(NTP)·wpa 자격증명까지 한 기기에 원자 적용
+  (plan/apply/verify/rollback + 백업). 수백 대 규모 일괄 전환용.
+
+**결정**: 버전 게이트 postinst 자동 마이그레이션 훅은 만들지 않는다 — (a) "사이트 값 보존"
+원칙과 충돌(업그레이드가 사용자 값을 덮음), (b) "부팅/업그레이드 시 자동 설정변경 금지"
+지침과 충돌. 위 두 opt-in 경로만 두 원칙을 동시에 만족한다. (#91 NTP 결정과 동일 패턴 —
+공식 반영 경로 = 프로비저닝 스크립트.)
+
 #### 클론 MAC 잔재 — `mac_clone_require_peer`
 
 `mac_mode=dynamic`은 유선 peer(BD에 연결된 PC/PLC)의 MAC을 bridge 인터페이스 `.link`에 클론한다. 이 `.link`는 **다음 `insmod`까지 남기 때문에**, 같은 PC로 여러 기기를 차례로 설정하면 각 기기에 같은 MAC이 기록되고 PC를 떼도 그대로 유지돼 **여러 기기가 동일 MAC으로 부팅**하는 문제가 있었다.
