@@ -1443,24 +1443,122 @@ def should_cross_connect(best_ssid, live_ssid):
 # ==============================================================================
 # 개선된 get_latest_scan (Load 정보 포함)
 # ==============================================================================
-def log_scan_candidates(candidates, src):
+# wpa_supplicant BSS 테이블에서 snr/est_throughput/age 를 한 번에 뽑는 마스크.
+# 비트 값의 정본은 타겟에 설치된 wpa_supplicant 의 src/common/wpa_ctrl.h 다
+# (v2.12 기준 :534-553): BSSID=BIT(1) FREQ=BIT(2) LEVEL=BIT(7) AGE=BIT(9)
+# SSID=BIT(12) SNR=BIT(19) EST_THROUGHPUT=BIT(20) → 0x181286.
+# 실기(imx93/v2.12)에서 이 마스크가 정확히 그 7 필드를 돌려주는 것을 확인했다.
+#
+# 비트 번호는 버전에 따라 달라질 수 있다. MASK 를 생략하면 기본값이 ALL 이라 버전
+# 의존이 없어지지만, RANGE=ALL 과 함께 쓰면 BSS 마다 ie= hex 덤프가 붙어 응답이
+# 커진다. 좁은 마스크를 유지하는 대신, 마스크가 통했는지를 _MASK_WARNED 로 한 번만
+# 알린다 — 버전이 어긋나면 값이 조용히 비는 대신 로그에 남는다.
+_BSS_METRICS_MASK = "0x181286"
+_MASK_WARNED = False
+
+
+def fetch_bss_metrics(iface=None):
+    """BSSID -> {snr, est, age} 맵을 반환한다. **관측 전용이며 판정에 쓰지 않는다.**
+
+    `wpa_cli bss RANGE=ALL MASK=...` 한 번으로 전 후보를 받는다(후보 수만큼 호출하지
+    않는다). 어떤 이유로든 실패하면 빈 dict 를 돌려 로그에서 해당 필드만 빠지게 한다 —
+    로그 보조 기능이 로밍 판정 흐름에 영향을 주지 않게 하기 위함이다.
+
+    주의: `wpa_cli` 는 supplicant 가 실패해도 exit 0 을 주고, 없는 BSSID 조회는
+    `FAIL` 이 아니라 **빈 출력**을 준다. 그래서 returncode 가 아니라 파싱 결과로 판정한다.
+
+    est_throughput 은 측정값이 아니라 SNR + AP 가 광고한 능력(HT/VHT/HE/EHT, 채널폭)
+    으로 계산한 추정값이고 AP 부하는 반영되지 않는다. age 는 그 값이 몇 초 전 스캔
+    기준인지를 나타낸다 — 판정에 쓰려면 이 두 성질을 먼저 해결해야 한다."""
+    try:
+        result = subprocess.run(
+            ["wpa_cli", "-i", iface or IFACE, "bss",
+             "RANGE=ALL", "MASK=" + _BSS_METRICS_MASK],
+            capture_output=True, text=True, timeout=5,
+        )
+    except subprocess.TimeoutExpired:
+        return {}
+    except Exception:
+        return {}
+
+    global _MASK_WARNED
+    metrics, cur = {}, {}
+    for line in (result.stdout or "").splitlines():
+        key, sep, val = line.partition("=")
+        if not sep:
+            continue
+        if key == "bssid":
+            cur = {}
+            metrics[val.strip().lower()] = cur
+        elif key in ("snr", "est_throughput", "age") and cur is not None:
+            try:
+                cur["est" if key == "est_throughput" else key] = int(val)
+            except ValueError:
+                pass
+
+    # 항목은 왔는데 snr/est 가 하나도 없으면 마스크 비트가 이 supplicant 와 어긋난
+    # 것이다. 관측 기능이라 동작은 그대로 두되(빈 필드), 원인이 보이도록 한 번만 남긴다.
+    if metrics and not _MASK_WARNED and not any(
+        ("snr" in m or "est" in m) for m in metrics.values()
+    ):
+        _MASK_WARNED = True
+        logger.message(
+            "warn",
+            f"[{IFACE}] bss MASK={_BSS_METRICS_MASK} 로 snr/est_throughput 을 받지 못했다 "
+            f"— 설치된 wpa_supplicant 의 WPA_BSS_MASK_* 비트와 어긋났을 수 있다",
+            _EXTRA_(),
+        )
+    return metrics
+
+
+def _metrics_suffix(metrics, bssid):
+    """로그 행에 붙일 ", snr=.., est=..(age=..s)" 조각. 값이 없으면 빈 문자열."""
+    m = (metrics or {}).get((bssid or "").lower())
+    if not m:
+        return ""
+    parts = []
+    if "snr" in m:
+        parts.append(f"snr={m['snr']}")
+    if "est" in m:
+        age = f"(age={m['age']}s)" if "age" in m else ""
+        parts.append(f"est={m['est']}{age}")
+    return (", " + ", ".join(parts)) if parts else ""
+
+
+def log_scan_candidates(candidates, src, current=None, metrics=None):
     """후보 엔트리를 info 로 기록한다.
 
     **파싱 시점이 아니라 실제 판정에 쓰이는 시점에 호출하는 것이 원칙.**
-    현재 자동 로밍은 최신 scan 결과만 넘긴다. cache src는 수동 진단/구버전 호출 호환용이다."""
+    현재 자동 로밍은 최신 scan 결과만 넘긴다. cache src는 수동 진단/구버전 호출 호환용이다.
+
+    current: 현재 연결 AP(station dict). 주어지면 후보 행 앞에 같은 형식으로 한 줄
+             남겨 현재/후보를 같은 로그에서 비교할 수 있게 한다. link.json stale 게이트
+             때문에 None 일 수 있으므로 그때는 조용히 생략한다.
+    metrics: fetch_bss_metrics() 결과. 관측용이며 후보 선정에는 관여하지 않는다."""
+    if current and current.get("bssid"):
+        logger.message(
+            "info",
+            f"[{IFACE}] [{src}] roam current: "
+            f"ssid={current.get('ssid', '')}, bssid={current['bssid']}, "
+            f"freq={current.get('freq', '')}, rssi={current.get('rssi', '')}"
+            f"{_metrics_suffix(metrics, current['bssid'])}",
+            _EXTRA_(),
+        )
     for i, entry in enumerate(candidates):
         logger.message(
             "info",
             f"[{IFACE}] [{src}] roam candidate {i}: "
             f"ts={entry['timestamp']}, ssid={entry['ssid']}, bssid={entry['bssid']}, "
             f"ch={entry['channel']}, freq={entry['freq']}, ld={entry['ld']}, "
-            f"rssi={entry['rssi']}(th={entry['rssi_th']})",
+            f"rssi={entry['rssi']}(th={entry['rssi_th']})"
+            f"{_metrics_suffix(metrics, entry['bssid'])}",
             _EXTRA_(),
         )
 
 
 def parse_scan_entries(
-    scan_lines, timestamp, allowed_set=None, src="scan", log=True
+    scan_lines, timestamp, allowed_set=None, src="scan", log=True,
+    metrics=None, current=None
 ):
     """pipe 포맷 스캔 라인(`NN|ch|rssi|ld|bssid|freq|ssid`) 리스트를 로밍 후보 엔트리로
     변환한다. 파일(get_latest_scan) 경로와 메모리(홈 패시브/액티브 폴백 스캔) 경로가
@@ -1546,7 +1644,7 @@ def parse_scan_entries(
     candidates = sorted(entries, key=lambda x: x["rssi"], reverse=True)
 
     if log:
-        log_scan_candidates(candidates, src)
+        log_scan_candidates(candidates, src, current=current, metrics=metrics)
 
     return candidates
 
@@ -2806,6 +2904,9 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
     반환: (best_ap, best_reason, best_score, scanned). scanned=실제 스캔 시도 여부
     (LAST_SCAN_TIME 기록/backoff 판단용)."""
     allowed_set = {s for s in allowed if s}
+    # 관측 전용: 현재/후보 AP 의 snr·est_throughput 을 로그에 남기기 위한 1 회 조회.
+    # 판정에는 쓰지 않는다. 실패해도 빈 dict 라 로그에서 해당 필드만 빠진다.
+    bss_metrics = fetch_bss_metrics()
     cur_bssid = station.get("bssid")
     baseline_rssi = station["rssi"]
     scanned = False
@@ -2843,7 +2944,8 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
         _record_roam_scan_time()
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         active_entries = parse_scan_entries(
-            active_lines, now_str, allowed_set, src="scan"
+            active_lines, now_str, allowed_set, src="scan",
+            metrics=bss_metrics, current=station,
         )
         baseline_rssi = baseline_from_entries(
             active_entries, cur_bssid, baseline_rssi
@@ -2882,7 +2984,8 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
         if home_lines:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             home_entries = parse_scan_entries(
-                home_lines, now_str, allowed_set, src="scan"
+                home_lines, now_str, allowed_set, src="scan",
+                metrics=bss_metrics, current=station,
             )
             home_scan_ok = any(
                 e.get("bssid") != cur_bssid for e in home_entries
@@ -2951,7 +3054,8 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
         _record_roam_scan_time()
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         active_entries = parse_scan_entries(
-            active_lines, now_str, allowed_set, src="scan"
+            active_lines, now_str, allowed_set, src="scan",
+            metrics=bss_metrics, current=station,
         )
         baseline_rssi = baseline_from_entries(active_entries, cur_bssid, baseline_rssi)
         best_ap, reason, score = evaluate_candidates(

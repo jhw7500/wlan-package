@@ -351,3 +351,130 @@ def test_padded_cache_lines_keep_multi_ssid_candidates(monkeypatch):
         "11:22:33:44:55:66",
         "aa:bb:cc:dd:ee:ff",
     ]
+
+
+# ── est_throughput 관측 로그 ─────────────────────────────────────────────
+#
+# 판정에는 쓰지 않는다. wpa_supplicant 의 est_throughput 은 측정값이 아니라 SNR + AP 가
+# 광고한 능력으로 계산한 추정이고 AP 부하가 빠져 있으며(upstream scan.c 의
+# "TODO: channel utilization and AP load"), 스캔 시점 값이라 age 가 수십 초다. 반면 이
+# 데몬은 후보 RSSI 를 스캔 소요시간+1초(IW_SCAN_FRESH_SLACK_MS) 안으로 fail-closed 강제한다.
+# 두 신선도가 양립하지 않아 가드로 쓰지 않고, 임계 근거를 만들기 위해 먼저 관측만 남긴다.
+
+_BSS_OUT = (
+    "bssid=aa:aa:aa:aa:aa:aa\nfreq=5220\nlevel=-52\nage=37\nssid=TEST\n"
+    "snr=35\nest_throughput=432402\n"
+    "bssid=bb:bb:bb:bb:bb:bb\nfreq=5180\nlevel=-50\nage=37\nssid=TEST\n"
+    "snr=42\nest_throughput=65000\n"
+)
+
+
+def _run(stdout, rc=0):
+    class R:
+        returncode = rc
+    R.stdout = stdout
+    return R
+
+
+def test_fetch_bss_metrics_parses_batch(monkeypatch):
+    """RANGE=ALL 배치 응답을 BSSID -> {snr, est, age} 로 만든다 (호출 1회)."""
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        return _run(_BSS_OUT)
+
+    monkeypatch.setattr(wifi_roam.subprocess, "run", fake_run)
+    m = wifi_roam.fetch_bss_metrics("mlan0")
+
+    assert len(calls) == 1, "후보 수와 무관하게 1회만 호출한다"
+    assert "RANGE=ALL" in calls[0] and "MASK=0x181286" in calls[0]
+    assert m["aa:aa:aa:aa:aa:aa"] == {"snr": 35, "est": 432402, "age": 37}
+    assert m["bb:bb:bb:bb:bb:bb"]["est"] == 65000
+
+
+def test_fetch_bss_metrics_fail_open(monkeypatch):
+    """wpa_cli 는 실패해도 exit 0 + 빈 출력이다. 예외/타임아웃 포함 전부 빈 dict."""
+    monkeypatch.setattr(wifi_roam.subprocess, "run", lambda *a, **k: _run(""))
+    assert wifi_roam.fetch_bss_metrics("mlan0") == {}
+
+    def boom(*a, **k):
+        raise OSError("no wpa_cli")
+
+    monkeypatch.setattr(wifi_roam.subprocess, "run", boom)
+    assert wifi_roam.fetch_bss_metrics("mlan0") == {}
+
+
+def test_log_includes_current_row_and_metrics(monkeypatch):
+    """현재 AP 행이 후보 행 앞에 오고, 양쪽 모두 snr/est 가 붙는다."""
+    metrics = {
+        "aa:aa:aa:aa:aa:aa": {"snr": 35, "est": 432402, "age": 37},
+        "bb:bb:bb:bb:bb:bb": {"snr": 42, "est": 65000, "age": 37},
+    }
+    station = {
+        "bssid": "aa:aa:aa:aa:aa:aa", "ssid": "TEST", "freq": 5220, "rssi": -52,
+    }
+    wifi_roam.parse_scan_entries(
+        [apln(1, 36, -50, "bb:bb:bb:bb:bb:bb", "TEST")],
+        "ts", {"TEST"}, src="scan", metrics=metrics, current=station,
+    )
+    texts = _texts()
+    cur = [t for t in texts if "roam current:" in t]
+    cand = [t for t in texts if "roam candidate" in t]
+
+    assert len(cur) == 1 and len(cand) == 1
+    assert texts.index(cur[0]) < texts.index(cand[0]), "현재 AP 행이 먼저 와야 비교가 쉽다"
+    assert "snr=35" in cur[0] and "est=432402(age=37s)" in cur[0]
+    assert "snr=42" in cand[0] and "est=65000(age=37s)" in cand[0]
+
+
+def test_log_without_metrics_is_unchanged(monkeypatch):
+    """metrics/current 가 없으면 기존 형식 그대로 — 기존 호출부가 깨지지 않는다."""
+    wifi_roam.parse_scan_entries(
+        [apln(1, 36, -50, "bb:bb:bb:bb:bb:bb", "TEST")], "ts", {"TEST"}, src="scan",
+    )
+    texts = _texts()
+    assert not any("roam current:" in t for t in texts)
+    cand = [t for t in texts if "roam candidate" in t]
+    assert len(cand) == 1
+    assert "est=" not in cand[0] and "snr=" not in cand[0]
+
+
+def test_log_skips_missing_metric_entries(monkeypatch):
+    """BSS 테이블에 없는 후보는 필드만 빠지고 행은 정상 출력된다(fail-open)."""
+    station = {"bssid": "aa:aa:aa:aa:aa:aa", "ssid": "TEST", "freq": 5220, "rssi": -52}
+    wifi_roam.parse_scan_entries(
+        [apln(1, 36, -50, "bb:bb:bb:bb:bb:bb", "TEST")],
+        "ts", {"TEST"}, src="scan", metrics={}, current=station,
+    )
+    cand = [t for t in _texts() if "roam candidate" in t]
+    assert len(cand) == 1 and "est=" not in cand[0]
+
+
+def test_mask_mismatch_warns_once(monkeypatch):
+    """마스크 비트가 supplicant 와 어긋나 snr/est 가 안 오면 원인을 한 번 남긴다.
+
+    비트 번호는 wpa_supplicant 버전에 따라 달라질 수 있고(정본은 타겟의
+    src/common/wpa_ctrl.h), 관측 기능이라 fail-open 이라서 그냥 두면 값이 조용히
+    빈다. 동작은 그대로 두되 로그로만 알린다."""
+    monkeypatch.setattr(wifi_roam, "_MASK_WARNED", False)
+    # age 만 오는 응답 = 마스크가 통하지 않은 모양
+    monkeypatch.setattr(
+        wifi_roam.subprocess, "run",
+        lambda *a, **k: _run("bssid=aa:aa:aa:aa:aa:aa\nage=12\n"),
+    )
+    wifi_roam.fetch_bss_metrics("mlan0")
+    warns = [t for lv, t in _msgs() if lv == "warn" and "MASK=" in t]
+    assert len(warns) == 1
+
+    wifi_roam.logger.reset_mock()
+    wifi_roam.fetch_bss_metrics("mlan0")
+    assert not [t for lv, t in _msgs() if lv == "warn" and "MASK=" in t], "반복하지 않는다"
+
+
+def test_mask_ok_does_not_warn(monkeypatch):
+    """정상 응답에는 경고가 없다."""
+    monkeypatch.setattr(wifi_roam, "_MASK_WARNED", False)
+    monkeypatch.setattr(wifi_roam.subprocess, "run", lambda *a, **k: _run(_BSS_OUT))
+    wifi_roam.fetch_bss_metrics("mlan0")
+    assert not [t for lv, t in _msgs() if lv == "warn" and "MASK=" in t]
