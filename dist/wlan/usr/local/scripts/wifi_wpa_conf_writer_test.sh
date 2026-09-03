@@ -776,6 +776,77 @@ ssid_hex() {
     python3 -c 'import sys; print(sys.argv[1].encode("utf-8").hex())' "$1"
 }
 
+# conf 의 첫 network 블록 ssid= 를 **표기와 무관하게** 정체성으로 되돌린다.
+# 표기(따옴표/hex)를 grep 으로 고정하면 직렬화 정책이 바뀔 때마다 테스트가 깨지고,
+# 정작 지켜야 할 것(바이트 정확한 SSID)은 검증되지 않는다.
+conf_ssid_identity() {
+    python3 - "$1" <<'PYCODE'
+import re, sys
+in_net = False
+for raw in open(sys.argv[1], encoding="utf-8", errors="surrogateescape"):
+    line = raw.strip()
+    if re.match(r"^network\s*=\s*\{", line):
+        in_net = True
+        continue
+    if in_net and line.startswith("}"):
+        break
+    if in_net and line.startswith("ssid="):
+        token = line.split("=", 1)[1].strip()
+        if len(token) >= 2 and token[0] == '"' and token[-1] == '"':
+            sys.stdout.write(token[1:-1])
+        else:
+            sys.stdout.write(bytes.fromhex(token).decode("utf-8"))
+        break
+PYCODE
+}
+
+# **실제 wpa_supplicant 가 되돌려준 바이트**가 원본과 같은지 본다. 가장 엄격한
+# 소비자를 오라클로 삼는 유일한 검사다 — conf 텍스트를 grep 하는 검사는 파서가
+# 그 줄을 어떻게 읽는지에 대해 아무것도 말해주지 않는다.
+# (실측 반례: ssid="a"b#c" 는 텍스트상 멀쩡해 보이지만 conf 전체 파싱이 거부된다.)
+check_ssid_roundtrip_real_parser() {
+    local desc="$1" conf="$2" expected="$3" parser log got
+    parser=$(command -v wpa_supplicant 2>/dev/null || true)
+    if [ -z "$parser" ]; then
+        fail "$desc (wpa_supplicant unavailable)"
+        return
+    fi
+    log="$TD/wpa-roundtrip-$PASS-$FAIL.log"
+    "$parser" -D none -i wlanpkgtest0 -c "$conf" -dd >"$log" 2>&1 || true
+    if grep -q 'Failed to read or parse configuration' "$log"; then
+        fail "$desc (parser rejected the conf)"
+        return
+    fi
+    got=$(python3 - "$log" <<'PYCODE'
+import sys
+def dec(text):
+    out = bytearray(); i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\" and i + 1 < len(text):
+            nxt = text[i + 1]
+            if nxt == "x":
+                out.append(int(text[i + 2:i + 4], 16)); i += 4; continue
+            table = {"n": 10, "r": 13, "t": 9, "e": 27, "\\": 92, '"': 34}
+            if nxt in table:
+                out.append(table[nxt]); i += 2; continue
+        out.extend(ch.encode("utf-8")); i += 1
+    return out
+for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    at = line.find("ssid='")
+    if at == -1:
+        continue
+    body = line[at + 6:]
+    end = body.rfind("'")          # printf_encode 는 ' 를 escape 하지 않는다
+    if end == -1:
+        continue
+    sys.stdout.write(dec(body[:end]).decode("utf-8", "replace"))
+    break
+PYCODE
+)
+    check_equal "$desc" "$got" "$expected"
+}
+
 ssid_wpa_text() {
     python3 - "$1" <<'PYCODE'
 import sys
@@ -969,8 +1040,10 @@ _ssid_33='가가가가가가가가가가가'
 write_mode_b_legacy
 WPA_CONF_DIR="$WPA_DIR" bash "$WIFI_SH" 0 ssid "$_ssid_32" >/dev/null 2>&1
 check_equal "wifi ssid accepts exact 32-byte UTF-8 boundary" "$?" "0"
-check_equal "wifi ssid 32-byte boundary is exact hex" \
-    "$(grep -Ec "^[[:space:]]+ssid=$(ssid_hex "$_ssid_32")$" "$CONF")" "1"
+check_equal "wifi ssid 32-byte boundary keeps its identity" \
+    "$(conf_ssid_identity "$CONF")" "$_ssid_32"
+check_ssid_roundtrip_real_parser "real parser round-trips the 32-byte boundary" \
+    "$CONF" "$_ssid_32"
 
 for _invalid_ssid in '' $'bad\nname' $'bad\tname' $'bad\x7fname' "$_ssid_33"; do
     write_mode_b_legacy
@@ -992,7 +1065,7 @@ write_mode_b_legacy
 set_boot_policy false false '["Office"]'
 WPA_CONF_DIR="$WPA_DIR" bash "$WIFI_SH" 0 ssid Office >/dev/null 2>&1
 rc=$?
-if [ "$rc" -eq 0 ] && grep -Eq '^[[:space:]]+ssid=4f6666696365$' "$CONF"; then
+if [ "$rc" -eq 0 ] && [ "$(conf_ssid_identity "$CONF")" = "Office" ]; then
     pass "wifi ssid accepts an immutable Mode B manual candidate"
 else
     fail "wifi ssid must accept an immutable Mode B manual candidate"
@@ -1007,7 +1080,7 @@ set_monitor_mode reconfigure-event
 WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
     bash "$WIFI_SH" 0 connect Office 5180 >/dev/null 2>&1
 rc=$?
-if [ "$rc" -eq 0 ] && grep -Eq '^[[:space:]]+ssid=4f6666696365$' "$CONF"; then
+if [ "$rc" -eq 0 ] && [ "$(conf_ssid_identity "$CONF")" = "Office" ]; then
     pass "wifi connect accepts an immutable Mode B manual candidate"
 else
     fail "wifi connect must accept an immutable Mode B manual candidate"
@@ -1020,7 +1093,7 @@ set_boot_policy false false '["Office"]'
 WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
     sh "$OPC_SH" mlan0 ssid Office >/dev/null 2>&1
 rc=$?
-if [ "$rc" -eq 0 ] && grep -Eq '^[[:space:]]+ssid=4f6666696365$' "$CONF"; then
+if [ "$rc" -eq 0 ] && [ "$(conf_ssid_identity "$CONF")" = "Office" ]; then
     pass "OPC accepts an immutable Mode B manual candidate"
 else
     fail "OPC must accept an immutable Mode B manual candidate"
@@ -1045,6 +1118,34 @@ check_equal "OPC accepts exact special SSID in Mode B" "$?" "0"
 check_equal "OPC writes exact UTF-8 hex token" \
     "$(grep -Ec "^[[:space:]]+ssid=${_special_hex}$" "$CONF")" "1"
 check_real_wpa_parser "real parser accepts OPC hex output" "$CONF"
+
+echo ""
+echo "=== conf SSID 직렬화 정책 (읽을 수 있으면 따옴표, `\"` 있으면 hex) ==="
+# 정책의 근거는 실측이다 — SSID 안의 `"` 가 그 줄의 인용 패리티를 뒤집어 뒤따르는
+# `#` 을 주석으로 만든다. a"b#c 는 conf 전체 파싱 거부(락아웃), a"#b 는 조용한 손상.
+# 그래서 `"` 를 담은 SSID 만 hex 로 보낸다. 나머지는 사람이 읽을 수 있어야 한다.
+for _case in \
+    'cantops|quoted' \
+    'guest ap|quoted' \
+    '  pad  |quoted' \
+    'a#b|quoted' \
+    "it's here|quoted" \
+    'back\\slash|quoted' \
+    '게스트|quoted' \
+    'a"b|hex' \
+    'a"b#c|hex' \
+    'a"#b|hex' \
+; do
+    _ssid=${_case%|*}
+    _want=${_case##*|}
+    write_mode_b_legacy
+    WPA_CONF_DIR="$WPA_DIR" bash "$WIFI_SH" 0 ssid "$_ssid" >/dev/null 2>&1
+    check_equal "wifi ssid accepts [$_ssid]" "$?" "0"
+    if grep -Eq '^[[:space:]]+ssid="' "$CONF"; then _got=quoted; else _got=hex; fi
+    check_equal "[$_ssid] serialized as $_want" "$_got" "$_want"
+    # 표기가 무엇이든 정체성은 바이트 정확해야 한다 — 실제 파서가 오라클이다.
+    check_ssid_roundtrip_real_parser "real parser round-trips [$_ssid]" "$CONF" "$_ssid"
+done
 
 for _invalid_ssid in $'bad\x1fname' $'bad\x7fname' "$_ssid_33"; do
     write_mode_b_legacy
@@ -1533,7 +1634,7 @@ for wrapper, command in wrapper_re.findall(regions):
 expected = {
     "wifi_wpa_child_exec": {"cat", "mktemp", "wpa_cli"},
     "wifi_wpa_child_call": {
-        "to_freq_mhz_checked", "wifi_ssid_to_hex", "wifi_ssid_to_wpa_text",
+        "to_freq_mhz_checked", "wifi_ssid_to_conf_value", "wifi_ssid_to_wpa_text",
         "wifi_wpa_conf_common_freqs",
     },
     "wifi_wpa_run_child": {

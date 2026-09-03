@@ -26,6 +26,30 @@ log_fail() {
     echo "[FAIL] $*"
 }
 
+# conf 의 모든 network 블록 ssid= 를 **표기와 무관하게** 정체성으로 되돌려
+# 한 줄씩 출력한다. 표기를 grep 으로 고정하면 직렬화 정책이 바뀔 때마다 깨지고,
+# 정작 지켜야 할 것(바이트 정확한 SSID)은 검증되지 않는다.
+conf_ssid_identities() {
+    python3 - "$1" <<'PYCODE'
+import re, sys
+in_net = False
+for raw in open(sys.argv[1], encoding="utf-8", errors="surrogateescape"):
+    line = raw.strip()
+    if re.match(r"^network\s*=\s*\{", line):
+        in_net = True
+        continue
+    if in_net and line.startswith("}"):
+        in_net = False
+        continue
+    if in_net and line.startswith("ssid="):
+        token = line.split("=", 1)[1].strip()
+        if len(token) >= 2 and token[0] == '"' and token[-1] == '"':
+            print(token[1:-1])
+        else:
+            print(bytes.fromhex(token).decode("utf-8"))
+PYCODE
+}
+
 expect_equal() {
     local desc="$1"
     local got="$2"
@@ -532,8 +556,8 @@ if WIFI_INIT_CONF_JSON="$_wpa_tmpd/wifi_init_conf.json" \
         "$(grep -Ec '^[[:space:]]+freq_list=5180 5200$' "$_wpa_tmpd/generated.conf")" "3"
     expect_equal "generated mode A has no scan_freq" \
         "$(grep -Ec '^[[:space:]]*scan_freq[[:space:]]*=' "$_wpa_tmpd/generated.conf" || true)" "0"
-    expect_equal "generated SSIDs use byte-exact UTF-8 hex" \
-        "$(grep -Ec '^[[:space:]]+ssid=(6f6666696365|6775657374)$' "$_wpa_tmpd/generated.conf")" "2"
+    expect_equal "generated SSIDs keep their exact identity" \
+        "$(conf_ssid_identities "$_wpa_tmpd/generated.conf" | grep -Ecx 'office|guest')" "2"
     expect_equal "generated mode A preserves mode" \
         "$(stat -c '%a' "$_wpa_tmpd/generated.conf")" "640"
     expect_equal "generated mode A preserves uid/gid" \
@@ -636,13 +660,14 @@ if WIFI_RUN_DIR="$_wpa_tmpd/run" WIFI_INIT_CONF_JSON="$_wpa_tmpd/live-mode-b.jso
     expect_equal "extra block sync uses boot snapshot after service restart" \
         "$(grep -Ec '^[[:space:]]*network[[:space:]]*=' "$_wpa_tmpd/snapshot-sync.conf")" "2"
     expect_equal "extra block sync ignores mutated live JSON" \
-        "$(grep -Ec '^[[:space:]]+ssid=426f6f744f6666696365$' "$_wpa_tmpd/snapshot-sync.conf")" "1"
+        "$(conf_ssid_identities "$_wpa_tmpd/snapshot-sync.conf" | grep -cx 'BootOffice')" "1"
 else
     log_fail "extra block sync uses boot snapshot after service restart"
 fi
 
 # Shared SSID identity contract: valid leading/trailing spaces, UTF-8,
-# backslash, and quote bytes are preserved as one unambiguous hex token.
+# backslash, and quote bytes survive the writer byte-exactly. 직렬화 표기는
+# wifi_ssid_to_conf_value 가 고른다(안전하면 따옴표, `"` 포함 시 hex).
 cat > "$_wpa_tmpd/special-ssid.json" <<'EOF'
 {"mlan0":{"roaming":{"generate_network_blocks":true,"extra_ssids":["  게스트 \\ \" exact  "]}}}
 EOF
