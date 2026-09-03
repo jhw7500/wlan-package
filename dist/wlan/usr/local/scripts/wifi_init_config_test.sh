@@ -163,9 +163,12 @@ fi
 expect_file_contains "wifi_init.sh defines read_mac_from_json" "$WIFI_INIT_SH" '^read_mac_from_json() {'
 expect_file_contains "wifi_init.sh defines resolve_mac" "$WIFI_INIT_SH" '^resolve_mac() {'
 # 인터페이스별 MAC 쓰기는 한 지점이어야 한다 (base→override 이중 쓰기/불필요한 백업 회전 방지).
+# 호출 앞의 환경변수 대입(예: MAC_SOURCE=...)은 허용한다 — 세는 대상은 "쓰기 지점의
+# 개수"이지 호출 줄의 글자 모양이 아니다. 리터럴로 고정했더니 #268 이 MAC_SOURCE 를
+# 붙이는 순간 0 이 되어 릴리스 게이트를 막았다.
 expect_equal \
     "wifi_init.sh has one update_mac write point" \
-    "$(grep -c '^[[:space:]]*if /usr/local/scripts/update_mac.sh "\$iface" "\$mac" ' "$WIFI_INIT_SH")" \
+    "$(grep -cE '^[[:space:]]*if ([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*/usr/local/scripts/update_mac\.sh "\$iface" "\$mac" ' "$WIFI_INIT_SH")" \
     "1"
 # 쓸 MAC이 없을 때의 클론 폐기(--clear)도 한 지점 — 쓰기 경로와 상호 배타적이어야 한다.
 expect_equal \
