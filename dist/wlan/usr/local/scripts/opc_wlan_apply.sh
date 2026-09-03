@@ -1,7 +1,7 @@
 #!/bin/sh
 # opc_wlan_apply.sh — OPC 무선설정 적용 (wpa_supplicant conf 직접편집 + reconfigure)
 #
-# 사용: opc_wlan_apply.sh <iface> [--netid N] [freq "<mhz ...>"] [ssid <name>]
+# 사용: opc_wlan_apply.sh <iface> [--netid N] [freq "<mhz ...>"|none] [ssid <name>]
 #   --netid N : (하위호환 인자) 단일 network 블록 전제 — 현재는 모든 블록에 적용하므로 무시.
 #   freq/ssid : 하나 이상 지정.
 #
@@ -39,24 +39,28 @@ else
 fi
 
 IFACE="${1:-}"
-[ -n "$IFACE" ] || { echo "usage: $0 <iface> [--netid N] [freq \"<mhz ...>\"] [ssid <name>]" >&2; exit 2; }
+[ -n "$IFACE" ] || { echo "usage: $0 <iface> [--netid N] [freq \"<mhz ...>\"|none] [ssid <name>]" >&2; exit 2; }
 shift
 
 FREQS=""
+HAVE_FREQ=0
 SSID=""
 HAVE_SSID=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --netid) [ $# -gt 1 ] || { echo "opc_wlan_apply: --netid requires an argument" >&2; exit 2; }
                  shift 2 ;;   # 단일 network 블록 전제 — netid 무시(모든 블록에 적용)
-        freq)    [ $# -gt 1 ] || { echo "opc_wlan_apply: freq requires an argument" >&2; exit 2; }
-                 FREQS="$2"; shift 2 ;;
+        freq)    [ $# -gt 1 ] || { echo "opc_wlan_apply: freq requires an argument (MHz list, or 'none' to clear the band lock)" >&2; exit 2; }
+                 HAVE_FREQ=1
+                 # 'none' 또는 빈 문자열 = 밴드락 제거(전역/블록 freq_list + legacy scan_freq 삭제).
+                 case "$2" in none|"") FREQS="" ;; *) FREQS="$2" ;; esac
+                 shift 2 ;;
         ssid)    [ $# -gt 1 ] || { echo "opc_wlan_apply: ssid requires an argument" >&2; exit 2; }
                  SSID="$2"; HAVE_SSID=1; shift 2 ;;
         *)       echo "opc_wlan_apply: unknown arg '$1'" >&2; exit 2 ;;
     esac
 done
-[ -n "$FREQS" ] || [ "$HAVE_SSID" = 1 ] || { echo "opc_wlan_apply: nothing to apply (need freq and/or ssid)" >&2; exit 2; }
+[ "$HAVE_FREQ" = 1 ] || [ "$HAVE_SSID" = 1 ] || { echo "opc_wlan_apply: nothing to apply (need freq and/or ssid)" >&2; exit 2; }
 
 CONF="${WPA_CONF_DIR:-/etc/wpa_supplicant}/wpa_supplicant-${IFACE}.conf"
 CONF_DIR=${CONF%/*}
@@ -98,7 +102,7 @@ fi
 # SSID는 공통 UTF-8/길이/control 계약으로 검증한 뒤 wifi_ssid_to_conf_value가
 # 고른 표기로 쓴다 — 안전하면 따옴표(사람이 읽는다), SSID에 `"`가 있으면 hex.
 # 어느 쪽이든 공백·백슬래시·UTF-8이 byte-exact로 보존된다.
-DO_FREQ=0; [ -n "$FREQS" ] && DO_FREQ=1
+DO_FREQ=0; [ "$HAVE_FREQ" = 1 ] && DO_FREQ=1   # freq 인자가 있으면(none 포함) 렌더 — 빈 목록이면 제거
 # FREQS 는 숫자/공백만 허용 — 직접 호출 시 awk -v 로 들어가는 값에 개행 등이 섞여
 # conf 라인이 인젝션되는 것을 차단(데몬 경로는 정수만 전달하나 방어적으로 검증).
 case "$FREQS" in *[!0-9\ ]*) echo "opc_wlan_apply: invalid freq '$FREQS' (digits/spaces only)" >&2; exit 2 ;; esac

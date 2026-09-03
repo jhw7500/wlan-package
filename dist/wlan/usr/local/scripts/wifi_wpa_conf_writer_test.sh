@@ -1762,6 +1762,37 @@ fi
 check_equal "OPC syncs destination directory" \
     "$(grep -Fxc "sync $WPA_DIR" "$CALL_LOG" || true)" "2"
 
+# freq none clears the band lock entirely (#111): apply a list, then `freq none`
+# must remove every global+block freq_list and legacy scan_freq (canonical
+# renderer with an empty list), and still reconfigure once. This is the
+# "미설정 SCAN band → freq_list 제거" path opcd uses for an unset band.
+write_mode_b_legacy
+set_reconfigure_mode ok
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$TD/run" \
+    sh "$OPC_SH" mlan0 freq "5180 5200" >/dev/null 2>&1
+check_equal "OPC freq-none precondition: list applied" "$(count_global_freq "$CONF")" "1"
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$TD/run" \
+    sh "$OPC_SH" mlan0 freq none >/dev/null 2>&1
+rc=$?
+check_equal "OPC freq none exits zero" "$rc" "0"
+check_equal "OPC freq none removes global freq_list" "$(count_global_freq "$CONF")" "0"
+check_equal "OPC freq none removes every block freq_list" \
+    "$(grep -Ec '^[[:space:]]*freq_list[[:space:]]*=' "$CONF" || true)" "0"
+check_equal "OPC freq none removes scan_freq" \
+    "$(grep -Ec '^[[:space:]]*scan_freq[[:space:]]*=' "$CONF" || true)" "0"
+check_equal "OPC freq none reconfigures once" \
+    "$(grep -c 'reconfigure$' "$CALL_LOG" || true)" "1"
+# `freq ""` (empty string) is the same clear intent as `freq none`.
+write_mode_b_legacy
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$TD/run" \
+    sh "$OPC_SH" mlan0 freq "5180 5200" >/dev/null 2>&1
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$TD/run" \
+    sh "$OPC_SH" mlan0 freq "" >/dev/null 2>&1
+check_equal "OPC freq \"\" also clears the band lock" "$(count_global_freq "$CONF")" "0"
+
 write_mode_b_legacy
 cp "$CONF" "$TD/opc-stage-sync-original.conf"
 set_sync_mode fail-stage
