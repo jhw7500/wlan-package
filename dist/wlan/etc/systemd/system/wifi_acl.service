@@ -4,7 +4,10 @@ Description=Wireless management ACL (wifi_init_conf.json mgmt_acl, opt-in)
 # 불필요. conf(/usr/local/etc)만 있으면 됨. 실패해도 패킷 경로는 fail-open
 # (스크립트가 exit 1 로 failed 를 표면화만 한다) — 다른 유닛이 Requires= 로
 # 이 유닛에 의존하지 말 것.
-After=local-fs.target
+# wifi_init.service의 ExecStartPre가 malformed conf를 복구할 수 있으므로 그 뒤에 적용해야
+# malformed→복구 사이 창에서 헛되이 실패(마지막 상태 보존만)하지 않는다 (Codex). Requires는
+# 걸지 않아 wifi_init 실패가 이 유닛을 막지 않게 한다(fail-open 유지).
+After=local-fs.target wifi_init.service
 Wants=local-fs.target
 
 [Service]

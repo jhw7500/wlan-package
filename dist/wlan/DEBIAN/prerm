@@ -66,6 +66,9 @@ remove|deconfigure)
     disable_service_if_enabled wifi-stack.target
     disable_service_if_enabled wifi_init
     disable_service_if_enabled wifi_apply_enabled
+    # ACL oneshot 비활성 + 남은 nft 룰 제거(제거 후 고아 방화벽 룰 방지, Codex)
+    disable_service_if_enabled wifi_acl
+    [ -x /usr/local/scripts/wifi_acl.sh ] && /usr/local/scripts/wifi_acl.sh clear 2>/dev/null || true
     disable_service_if_enabled wlan_emergency_reboot.service
     for _iface in mlan0 mlan1; do
         for _u in wifi_bridge wifi_checker wifi_logger wifi_led wifi_roam \

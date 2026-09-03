@@ -28,6 +28,7 @@ dist/wlan/etc/systemd/system/log-watchdog.timer
 dist/wlan/etc/systemd/system/snmpd.service.d/override.conf
 dist/wlan/etc/systemd/system/switchd.service
 dist/wlan/etc/systemd/system/wifi-stack.target
+dist/wlan/etc/systemd/system/wifi_acl.service
 dist/wlan/etc/systemd/system/wifi_apply_enabled.service
 dist/wlan/etc/systemd/system/wifi_arping@.service
 dist/wlan/etc/systemd/system/wifi_bgscan@.service
@@ -324,6 +325,7 @@ dist/wlan/usr/local/scripts/update_mac_test.sh
 dist/wlan/usr/local/scripts/verify-he-mu-features.sh
 dist/wlan/usr/local/scripts/wbridge_smoke_test.sh
 dist/wlan/usr/local/scripts/wifi.sh
+dist/wlan/usr/local/scripts/wifi_acl.sh
 dist/wlan/usr/local/scripts/wifi_apply_enabled.sh
 dist/wlan/usr/local/scripts/wifi_arping.sh
 dist/wlan/usr/local/scripts/wifi_arping_sweep.sh
