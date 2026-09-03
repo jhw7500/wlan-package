@@ -2133,6 +2133,21 @@
               "x-consumer": "wifi_apply_enabled.sh"
             }
           }
+        },
+        "roam_garp": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "로밍 직후 gratuitous ARP 발사(#234) — 스위치 FDB 재학습 강제. 무선전용/관리-IP 스코프",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "로밍(connected/roamed) 시 무선 iface IP로 arping -U 발사. 기본 false(opt-in) — iface에 IPv4 있을 때만(순수 브리지 no-op). 갭-소멸 검증=#235, 최종 근본책=wlan-driver-v2#47",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "event",
+              "x-consumer": "wifi_event.sh"
+            }
+          }
         }
       }
     },
@@ -3065,6 +3080,21 @@
               "x-ui-editable": "yes",
               "x-apply-timing": "boot",
               "x-consumer": "wifi_apply_enabled.sh"
+            }
+          }
+        },
+        "roam_garp": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "로밍 직후 gratuitous ARP 발사(#234) — 스위치 FDB 재학습 강제. 무선전용/관리-IP 스코프",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "로밍(connected/roamed) 시 무선 iface IP로 arping -U 발사. 기본 false(opt-in) — iface에 IPv4 있을 때만(순수 브리지 no-op). 갭-소멸 검증=#235, 최종 근본책=wlan-driver-v2#47",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "event",
+              "x-consumer": "wifi_event.sh"
             }
           }
         }
