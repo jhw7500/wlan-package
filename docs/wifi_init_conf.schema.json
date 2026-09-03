@@ -3128,6 +3128,30 @@
         }
       }
     },
+    "mgmt_acl": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "무선측 관리 접점(tcp 22/21/80, udp 50607/50000/161/162) 인바운드 화이트리스트. 기본 opt-in off. 유선 eth0은 구조적으로 제외(iifname mlan0/mlan1 한정).",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "무선측 관리 포트 화이트리스트 ON/OFF. off면 전용 nft 테이블 정리(무규칙). 기본 off(opt-in)",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "boot",
+          "x-consumer": "wifi_acl.sh"
+        },
+        "allowed_hosts": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "허용 IPv4 주소/CIDR 목록. 빈 목록+enabled=true는 무선측 관리 포트 전면 차단(유선 경로 잔존). IPv6는 게이트 포트 무조건 차단",
+          "x-ui-editable": "caution",
+          "x-apply-timing": "boot",
+          "x-consumer": "wifi_acl.sh"
+        }
+      }
+    },
     "opc": {
       "type": "object",
       "additionalProperties": true,

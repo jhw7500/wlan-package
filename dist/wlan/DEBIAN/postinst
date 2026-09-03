@@ -271,7 +271,7 @@ customctl() {
   # wifi_apply_enabled.sh가 JSON(.logger.enabled/.eth0.logger.enabled)과 동기화한다.
   # wifi-stack.target 은 multi-user.target 도달 후 비블로킹으로 wifi 스택을 기동한다.
   /usr/local/logger/print.py green "\r\n[installer] enabling services..."
-  systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer journald-snapshot-boundary.service wifi-stack.target wifi_init wifi_apply_enabled wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 log-watchdog.timer serial-getty@ttyGS0.service wlan-peer-net.service || true
+  systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer journald-snapshot-boundary.service wifi-stack.target wifi_init wifi_apply_enabled wifi_acl wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 log-watchdog.timer serial-getty@ttyGS0.service wlan-peer-net.service || true
   # wlan-peer-net.service 는 PartOf=systemd-networkd.service 로 networkd restart 를
   # 추종하는데, PartOf 는 대상이 이미 active 일 때만 발화한다(inactive 면 restart 가
   # 전파되지 않음 — 실측). enable 만 하면 다음 재부팅 전까지 그 복구 경로가 죽어

@@ -1,0 +1,20 @@
+[Unit]
+Description=Wireless management ACL (wifi_init_conf.json mgmt_acl, opt-in)
+# 규칙은 iifname 문자열 매치라 인터페이스 존재 이전에도 유효 — 네트워크 대기
+# 불필요. conf(/usr/local/etc)만 있으면 됨. 실패해도 패킷 경로는 fail-open
+# (스크립트가 exit 1 로 failed 를 표면화만 한다) — 다른 유닛이 Requires= 로
+# 이 유닛에 의존하지 말 것.
+After=local-fs.target
+Wants=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/scripts/wifi_acl.sh apply
+ExecStop=/usr/local/scripts/wifi_acl.sh clear
+User=root
+StandardOutput=null
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

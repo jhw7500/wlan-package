@@ -21,6 +21,7 @@ etc/systemd/system/switchd.service
 etc/systemd/system/wifi-stack.target
 etc/systemd/system/wifi_apply_enabled.service
 etc/systemd/system/wifi_arping@.service
+etc/systemd/system/wifi_acl.service
 etc/systemd/system/wifi_bgscan@.service
 etc/systemd/system/wifi_capture@.service
 etc/systemd/system/wifi_checker@.service
@@ -246,6 +247,7 @@ usr/local/scripts/txpower_family_set.sh
 usr/local/scripts/update_mac.sh
 usr/local/scripts/verify-he-mu-features.sh
 usr/local/scripts/wifi.sh
+usr/local/scripts/wifi_acl.sh
 usr/local/scripts/wifi_apply_enabled.sh
 usr/local/scripts/wifi_arping.sh
 usr/local/scripts/wifi_arping_sweep.sh
