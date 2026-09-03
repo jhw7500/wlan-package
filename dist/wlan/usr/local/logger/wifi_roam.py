@@ -1444,8 +1444,17 @@ def should_cross_connect(best_ssid, live_ssid):
 # 개선된 get_latest_scan (Load 정보 포함)
 # ==============================================================================
 # wpa_supplicant BSS 테이블에서 snr/est_throughput/age 를 한 번에 뽑는 마스크.
-# BSSID(1)|FREQ(2)|LEVEL(7)|AGE(9)|SSID(12)|SNR(19)|EST_THROUGHPUT(20)
+# 비트 값의 정본은 타겟에 설치된 wpa_supplicant 의 src/common/wpa_ctrl.h 다
+# (v2.12 기준 :534-553): BSSID=BIT(1) FREQ=BIT(2) LEVEL=BIT(7) AGE=BIT(9)
+# SSID=BIT(12) SNR=BIT(19) EST_THROUGHPUT=BIT(20) → 0x181286.
+# 실기(imx93/v2.12)에서 이 마스크가 정확히 그 7 필드를 돌려주는 것을 확인했다.
+#
+# 비트 번호는 버전에 따라 달라질 수 있다. MASK 를 생략하면 기본값이 ALL 이라 버전
+# 의존이 없어지지만, RANGE=ALL 과 함께 쓰면 BSS 마다 ie= hex 덤프가 붙어 응답이
+# 커진다. 좁은 마스크를 유지하는 대신, 마스크가 통했는지를 _MASK_WARNED 로 한 번만
+# 알린다 — 버전이 어긋나면 값이 조용히 비는 대신 로그에 남는다.
 _BSS_METRICS_MASK = "0x181286"
+_MASK_WARNED = False
 
 
 def fetch_bss_metrics(iface=None):
@@ -1472,6 +1481,7 @@ def fetch_bss_metrics(iface=None):
     except Exception:
         return {}
 
+    global _MASK_WARNED
     metrics, cur = {}, {}
     for line in (result.stdout or "").splitlines():
         key, sep, val = line.partition("=")
@@ -1485,6 +1495,19 @@ def fetch_bss_metrics(iface=None):
                 cur["est" if key == "est_throughput" else key] = int(val)
             except ValueError:
                 pass
+
+    # 항목은 왔는데 snr/est 가 하나도 없으면 마스크 비트가 이 supplicant 와 어긋난
+    # 것이다. 관측 기능이라 동작은 그대로 두되(빈 필드), 원인이 보이도록 한 번만 남긴다.
+    if metrics and not _MASK_WARNED and not any(
+        ("snr" in m or "est" in m) for m in metrics.values()
+    ):
+        _MASK_WARNED = True
+        logger.message(
+            "warn",
+            f"[{IFACE}] bss MASK={_BSS_METRICS_MASK} 로 snr/est_throughput 을 받지 못했다 "
+            f"— 설치된 wpa_supplicant 의 WPA_BSS_MASK_* 비트와 어긋났을 수 있다",
+            _EXTRA_(),
+        )
     return metrics
 
 

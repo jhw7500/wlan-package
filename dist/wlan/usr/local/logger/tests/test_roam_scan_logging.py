@@ -449,3 +449,32 @@ def test_log_skips_missing_metric_entries(monkeypatch):
     )
     cand = [t for t in _texts() if "roam candidate" in t]
     assert len(cand) == 1 and "est=" not in cand[0]
+
+
+def test_mask_mismatch_warns_once(monkeypatch):
+    """마스크 비트가 supplicant 와 어긋나 snr/est 가 안 오면 원인을 한 번 남긴다.
+
+    비트 번호는 wpa_supplicant 버전에 따라 달라질 수 있고(정본은 타겟의
+    src/common/wpa_ctrl.h), 관측 기능이라 fail-open 이라서 그냥 두면 값이 조용히
+    빈다. 동작은 그대로 두되 로그로만 알린다."""
+    monkeypatch.setattr(wifi_roam, "_MASK_WARNED", False)
+    # age 만 오는 응답 = 마스크가 통하지 않은 모양
+    monkeypatch.setattr(
+        wifi_roam.subprocess, "run",
+        lambda *a, **k: _run("bssid=aa:aa:aa:aa:aa:aa\nage=12\n"),
+    )
+    wifi_roam.fetch_bss_metrics("mlan0")
+    warns = [t for lv, t in _msgs() if lv == "warn" and "MASK=" in t]
+    assert len(warns) == 1
+
+    wifi_roam.logger.reset_mock()
+    wifi_roam.fetch_bss_metrics("mlan0")
+    assert not [t for lv, t in _msgs() if lv == "warn" and "MASK=" in t], "반복하지 않는다"
+
+
+def test_mask_ok_does_not_warn(monkeypatch):
+    """정상 응답에는 경고가 없다."""
+    monkeypatch.setattr(wifi_roam, "_MASK_WARNED", False)
+    monkeypatch.setattr(wifi_roam.subprocess, "run", lambda *a, **k: _run(_BSS_OUT))
+    wifi_roam.fetch_bss_metrics("mlan0")
+    assert not [t for lv, t in _msgs() if lv == "warn" and "MASK=" in t]
