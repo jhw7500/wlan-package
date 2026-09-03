@@ -12,6 +12,14 @@
 # code mapping -- are defined by 0001-vsftpd-external-command-dispatch.patch
 # in the meta-cts-wlan layer (recipes-daemons/vsftpd/vsftpd/).  Read that
 # patch header before changing anything here.
+#
+# Reply shape: the dispatch takes the **first stdout line** as the 200 reply
+# text when the handler prints one, so that line is the compatibility
+# contract -- the FXE3000 card answers "200 IFCUP command successful." and the upper tool
+# reads it.  Diagnostics go on the lines after it; they stay visible when
+# the handler is run from a shell and are ignored by the dispatch.
+# (Until the dispatch patch lands the reply is still a canned "200 OK: ifcup",
+# so this ordering is safe either way.)
 set -u
 
 IFACE="${1:-mlan0}"
@@ -32,6 +40,7 @@ if ! ip link set "$IFACE" up; then
     exit 1
 fi
 
+echo "IFCUP command successful."
 ip -o link show "$IFACE"
 ip -o -4 addr show "$IFACE"
 exit 0
