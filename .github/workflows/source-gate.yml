@@ -46,7 +46,10 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y jq
+          # wpasupplicant 는 선택 의존이 아니다 — wifi_wpa_conf_writer_test.sh 가
+          # SSID 직렬화 계약을 **실제 파서에 먹여** 검증한다(#265). 없으면 그 커버리지가
+          # 통째로 사라지므로 스킵이 아니라 실패하도록 돼 있고, 그래서 여기서 설치한다.
+          sudo apt-get install -y jq wpasupplicant
           python3 -m pip install --upgrade pytest jsonschema
 
       # 도구 부재를 조용한 성공으로 넘기지 않는다. build-test 의 실패 은폐가
@@ -56,6 +59,8 @@ jobs:
           set -euo pipefail
           command -v jq
           command -v git
+          command -v wpa_supplicant
+          wpa_supplicant -v | head -1
           python3 -c 'import pytest, jsonschema; print("pytest", pytest.__version__)'
           git rev-parse --is-inside-work-tree
 
