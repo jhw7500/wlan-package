@@ -134,7 +134,18 @@ if base is not None and base in checked:
 PY
 }
 
-wifi_ssid_to_hex() {
+# conf 에 쓸 SSID 직렬화. 읽을 수 있으면 따옴표, 위험하면 hex 로 떨어진다.
+#
+# wpa_supplicant v2.10 실측(빌드호스트 / 타깃 실사용 / 동봉 imx8 3종 동일):
+# SSID 자체에 `"` 가 없으면 따옴표 표기가 **바이트 정확**하다 — 공백·앞뒤 공백·
+# `#`·백슬래시·`'`·UTF-8 전부 그대로 복원된다(코퍼스 라운드트립 테스트가 고정).
+# 반대로 SSID 안의 `"` 는 그 줄의 인용 패리티를 뒤집어, 뒤따르는 `#` 이 주석
+# 시작으로 해석된다:
+#     a"b#c → conf 전체 파싱 거부(supplicant 미기동 = 락아웃)
+#     a"#b  → 조용히 `a` 로 손상
+# 그래서 `"` 를 하나라도 담은 SSID 만 hex 로 보낸다. hex 는 언제나 안전하지만
+# 사람이 못 읽으므로 필요한 경우로 좁힌다.
+wifi_ssid_to_conf_value() {
     python3 - "$1" 2>/dev/null <<'PY'
 import sys
 value = sys.argv[1]
@@ -143,7 +154,9 @@ if not 1 <= len(raw) <= 32:
     raise SystemExit(1)
 if any(ord(ch) < 0x20 or ord(ch) == 0x7f for ch in value):
     raise SystemExit(1)
-print(raw.hex())
+# 판정은 `"` 포함 여부 하나뿐이다. 정규식·문자 화이트리스트를 쓰지 않는다 —
+# 로케일에 따라 경계가 새고, 실측상 위험 인자는 `"` 하나로 충분히 좁혀진다.
+print(raw.hex() if '"' in value else '"%s"' % value)
 PY
 }
 
@@ -827,11 +840,11 @@ wifi_init_sync_extra_ssid_blocks() {
     {
         cat "$stripfile"
         printf '%s\n' "$WIFI_EXTRA_SSID_BEGIN"
-        local ssid ssid_hex
+        local ssid ssid_value
         while IFS= read -r ssid; do
-            ssid_hex=$(wifi_ssid_to_hex "$ssid") || return 1
+            ssid_value=$(wifi_ssid_to_conf_value "$ssid") || return 1
             printf 'network={\n'
-            printf '    ssid=%s\n' "$ssid_hex"
+            printf '    ssid=%s\n' "$ssid_value"
             printf '    key_mgmt=%s\n' "$t_keymgmt"
             printf '    psk=%s\n' "$t_psk"
             [ -n "$t_proto" ]    && printf '    proto=%s\n' "$t_proto"
