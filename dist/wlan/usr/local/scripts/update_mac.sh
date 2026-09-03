@@ -205,6 +205,22 @@ if mac_is_assignable "$NEW_MAC"; then
   # 다른 활성 .link에 같은 MAC을 적용하면 인터페이스 간 주소 충돌이 발생한다.
   CONFLICT_LINK=$(mac_find_link_conflict \
     "$NETWORK_DIR" "$LINK_FILE" "$NEW_MAC" "${FINAL_MAC_PLAN[@]}" || true)
+  if [ -n "$CONFLICT_LINK" ] && [ "${MAC_SOURCE:-}" = "dynamic" ]; then
+    # 동적 클론(유선 peer MAC 투명 브릿지 = 제품 본연 기능)은 다른 인터페이스의
+    # stale static override보다 우선한다(사용자 결정 2026-09-03). 충돌 상대가 이번
+    # 부팅에 능동 계획되지 않은 static override(예: 과거 DBDC 실험 잔재)면 그 override를
+    # clear(드라이버 기본 MAC 복원)한 뒤 클론을 진행한다. clear 후에도 남은 충돌만 실패.
+    conflict_iface=$(mac_owned_link_iface "$CONFLICT_LINK" || true)
+    if [ -n "$conflict_iface" ] && [ "$conflict_iface" != "$IFACE" ]; then
+      logger -p local0.warning "[$tag:$LINENO] [$IFACE] dynamic clone $NEW_MAC takes priority over stale MAC on $conflict_iface ($CONFLICT_LINK); clearing it"
+      if MAC_SOURCE="" /usr/local/scripts/update_mac.sh "$conflict_iface" --clear; then
+        CONFLICT_LINK=$(mac_find_link_conflict \
+          "$NETWORK_DIR" "$LINK_FILE" "$NEW_MAC" "${FINAL_MAC_PLAN[@]}" || true)
+      else
+        logger -p local0.err "[$tag:$LINENO] [$IFACE] failed to clear conflicting MAC on $conflict_iface"
+      fi
+    fi
+  fi
   if [ -n "$CONFLICT_LINK" ]; then
     logger -p local0.err "[$tag:$LINENO] [$IFACE] MAC conflict: $NEW_MAC already used by $CONFLICT_LINK"
     exit 1
