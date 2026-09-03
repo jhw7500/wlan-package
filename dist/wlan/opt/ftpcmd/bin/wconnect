@@ -1,0 +1,77 @@
+#!/bin/sh
+# Reassociate a wifi interface, optionally switching it to another SSID.
+# Reached over FTP as: quote wconnect [interface] [ssid]
+#
+# NOT named "connect": vsftpd refuses GET/POST/HEAD/OPTIONS/CONNECT as FTP
+# verbs and drops the control connection, and that check runs before the
+# handler dispatch ever sees the command (postlogin.c, ahead of
+# vsf_extcmd_try).  Those five names are unusable here.
+#
+# With no interface it acts on mlan0.  With no SSID it forces a reassociation
+# to whatever the interface is already configured for.
+#
+# The passphrase is never sent over FTP.  "wifi <iface> connect <ssid>" only
+# rewrites the ssid inside the interface's existing wpa_supplicant profile and
+# reassociates, so the PSK already stored on the board is the one used.
+#
+# Run by vsftpd's privileged parent, as root, with cwd / and a fixed PATH of
+# /usr/sbin:/usr/bin:/sbin:/bin -- which does NOT contain /usr/local/bin, so
+# wifi has to be named by its absolute path here.
+#
+# Timing: wifi's own association wait is ASSOC_TIMEOUT_DEFAULT (15s), and
+# vsftpd kills a handler at 30s, so this stays synchronous and reports the
+# real outcome.  Do not raise the wait past the vsftpd budget.
+#
+# Contract: the dispatch rules this relies on -- argv, the environment
+# vsftpd exports, the private PID namespace, and the exit-status-to-reply-
+# code mapping -- are defined by 0001-vsftpd-external-command-dispatch.patch
+# in the meta-cts-wlan layer (recipes-daemons/vsftpd/vsftpd/).  Read that
+# patch header before changing anything here.
+set -u
+
+WIFI=/usr/local/bin/wifi
+
+IFACE="${1:-mlan0}"
+[ "$#" -gt 0 ] && shift
+
+case "$IFACE" in
+    *[!A-Za-z0-9._-]*)  echo "invalid interface name: $IFACE"; exit 2 ;;
+esac
+
+# wifi's own connect subcommand only handles the two station interfaces, so
+# reject anything else here rather than letting it fail deeper in.
+if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
+    echo "wconnect supports mlan0/mlan1 only, got: $IFACE"
+    exit 2
+fi
+
+if [ ! -x "$WIFI" ]; then
+    echo "not executable: $WIFI"
+    exit 1
+fi
+
+# Refuse to reassociate the interface this very session is riding on.  The
+# reply is written after the handler exits, so reassociating that interface
+# loses the reply and can lock the operator out.  Same check as ifcdown; on a
+# bridged board the lookup names the bridge, not mlan0, so it does not fire
+# for the intended eth0-side operator.
+if [ -n "${FTPCMD_LOCAL_ADDR:-}" ]; then
+    CTRL_IFACE=$(ip -o addr show 2>/dev/null \
+        | awk -v a="$FTPCMD_LOCAL_ADDR" '$4 ~ "^"a"(/|$)" {print $2; exit}')
+    if [ "$CTRL_IFACE" = "$IFACE" ]; then
+        echo "refusing: $IFACE carries this FTP control connection ($FTPCMD_LOCAL_ADDR)"
+        echo "connect over another interface, or run $WIFI $IFACE connect locally"
+        exit 3
+    fi
+fi
+
+# The SSID is everything left.  vsftpd splits on spaces, so an SSID that
+# contains them arrives as several arguments and is rejoined here; repeated
+# spaces collapse to one.  An SSID holding a character outside vsftpd's
+# argument set never reaches this handler at all - the command is refused on
+# the control connection instead.
+if [ "$#" -eq 0 ]; then
+    exec "$WIFI" "$IFACE" connect
+fi
+
+exec "$WIFI" "$IFACE" connect "$*"
