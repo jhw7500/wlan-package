@@ -101,8 +101,14 @@ fi
 # (wlan-driver-v2#47, 머지됨)다. 비블로킹 백그라운드(&) — iw event 루프를 막지 않는다(트랩 패턴 동일).
 # 한계: 잔여 갭이 AP측 상향 포워딩 지연이면 이 GARP도 같은 갭에 걸릴 수 있어 갭 소멸을 보장하진
 # 않는다(듀얼AP A/B 판별은 #235). 다만 "아무도 재공지 안 함"은 확정이라 이 발사 자체는 유효.
+# 게이트: `.<iface>.roam_garp.enabled`(bool, 기본 false — opt-in). 효과가 #235에서 확증되기
+# 전까지 default off로 두고, 확증 후 릴리스에서 default 승격을 재검토한다. null/부재/파싱실패는
+# 모두 off로 처리(안전측 — get_bool/wifi_acl get_enabled 관례와 동일).
 roam_gratuitous_arp() {
-    local ip
+    local en ip
+    en=$(jq -r --arg i "$IFACE" 'if (.[$i].roam_garp.enabled) == true then "true" else "false" end' \
+        "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    [ "$en" = "true" ] || return 0
     ip=$(ip -4 -o addr show "$IFACE" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
     [ -n "$ip" ] && arping -U -c 3 -I "$IFACE" "$ip" >/dev/null 2>&1 &
 }
