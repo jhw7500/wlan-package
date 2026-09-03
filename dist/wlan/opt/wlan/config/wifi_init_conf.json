@@ -717,6 +717,16 @@
             "version": "2c"
         }
     },
+    "mgmt_acl": {
+        "_comment": [
+            "무선측 관리 접점 인바운드 화이트리스트 (#256). 기본 OFF(opt-in)",
+            "enabled: (bool) true면 무선 인터페이스(mlan0/mlan1) 인바운드의 관리 포트(tcp 22/21/80, udp 50607/50000/161/162)를 allowed_hosts로 제한(nftables 전용 테이블 wlan_mgmt_acl). 유선 eth0(OPC/VHL 반송제어 제어평면)은 구조적으로 제외 — 오구성해도 유선 복구 경로 잔존. 적용=wifi_acl.service(boot) 또는 wifi_acl.sh apply",
+            "allowed_hosts: (string[]) 허용 IPv4 주소/CIDR 목록 (예 [\"172.22.1.151\", \"172.22.0.0/22\"]). 빈 목록+enabled=true는 무선측 관리 포트 전면 차단. IPv6는 게이트 포트에서 무조건 차단(#255 정합). 무효 항목이 있으면 전체 적용 거부(원자)",
+            "주의: UDP(50607 등)는 소스 스푸핑에 방어되지 않음 — 스캐닝/우발 접근 차단용이며 인증 대체재 아님. nft 실패 시 fail-open(패킷 통과) + 유닛 failed 표면화"
+        ],
+        "enabled": false,
+        "allowed_hosts": []
+    },
     "opc": {
         "_comment": [
             "opcd(wlan-opc OPC 제어 데몬) 조건부 기동 설정. 기본 OFF",
