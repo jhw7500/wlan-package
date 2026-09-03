@@ -46,7 +46,9 @@ IFACES='"mlan0", "mlan1"'
 TCP_PORTS='22, 21, 80'
 UDP_PORTS='50607, 50000, 161, 162'
 
-log() { logger -p "local0.$1" -t "$LOGTAG" "$2" 2>/dev/null; echo "[$LOGTAG] $2" >&2; }
+# 함수 내부의 $LINENO 는 함수 정의줄로 고정되므로, 호출자 라인은 ${BASH_LINENO[0]} 로 남긴다
+# (wifi_eth_peer_find.sh:30 관례). [file:line] 은 메시지의 첫 필드여야 한다.
+log() { logger -p "local0.$1" -t "$LOGTAG" "[$LOGTAG:${BASH_LINENO[0]}] $2" 2>/dev/null; echo "[$LOGTAG] $2" >&2; }
 
 # jq // 연산자는 false 도 falsey 로 취급하므로 null 검사 방식 사용
 # (wifi_apply_enabled.sh get_bool 관례 — jq 는 패키지 하드 의존)
