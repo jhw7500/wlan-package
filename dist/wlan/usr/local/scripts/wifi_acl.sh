@@ -131,6 +131,14 @@ collect_hosts() {
         log err "allowed_hosts 타입 오류(배열이어야 함, 실제='${t:-parse-error}') — 적용 거부(원자 실패)"
         return 1
     fi
+    # 원소에 개행/CR이 든 문자열은 jq -r가 여러 줄로 흩어 원소 경계를 잃고, 각 줄이 별개
+    # host로 검증되어 예: "192.0.2.5\n0.0.0.0/0"가 전체 허용으로 통과한다(Codex P2). 원소
+    # 단위로 개행/CR 포함을 먼저 걸러 원자 거부한다.
+    if jq -e '(.mgmt_acl.allowed_hosts // []) | any(.[]?; (type=="string") and test("[\n\r]"))' \
+        "$JSON" >/dev/null 2>&1; then
+        log err "allowed_hosts 원소에 개행/CR 포함 — 적용 거부(원자 실패)"
+        return 1
+    fi
     while IFS= read -r h; do
         [ -z "$h" ] && continue
         if valid_host "$h"; then HOSTS+=("$h"); else
@@ -141,6 +149,14 @@ collect_hosts() {
 }
 
 do_apply() {
+    # conf 파일이 존재하나 파싱 불가(malformed/손상)면 의도를 알 수 없다. 이때 disabled로
+    # 오인해 기존 enforcing 테이블을 삭제하면 마지막으로 적용된 보호가 조용히 사라진다
+    # (Codex P1). 룰을 건드리지 않고 실패해 마지막 상태를 보존한다. (파일 부재는 opt-in
+    # 기본 off 상태이므로 아래 get_enabled=false 경로로 정상 처리 — 다른 .enabled 토글과 일관)
+    if [ -f "$JSON" ] && ! jq -e . "$JSON" >/dev/null 2>&1; then
+        log err "$JSON 파싱 불가(malformed) — 룰 미변경, 마지막 상태 보존"
+        return 1
+    fi
     local enabled; enabled=$(get_enabled)
     if [ "$enabled" != "true" ]; then
         # off: 자기 테이블만 정리(멱등). nft 부재/실패는 off 상태에선 무해.
