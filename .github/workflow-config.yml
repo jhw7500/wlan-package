@@ -39,7 +39,6 @@ workflows:
 
   gemini-auto-review:
     enabled: true
-    auto: true
     description: "Automatic PR review with Gemini"
 
   gemini-scheduled-triage:
@@ -53,7 +52,6 @@ workflows:
 
   claude-code-review:
     enabled: true
-    auto: true
     description: "Claude automatic PR review"
 
   # Shared OpenCode workflows (Z.AI GLM)
@@ -63,7 +61,6 @@ workflows:
 
   opencode-auto-review:
     enabled: true
-    auto: true
     description: "OpenCode automatic PR review (zai-coding-plan/glm-4.7)"
 
 # === Shared Settings ===
