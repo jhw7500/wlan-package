@@ -1,0 +1,36 @@
+#!/bin/sh
+# Reboot the board.  Reached over FTP as: quote rst
+#
+# Run by vsftpd's privileged parent, as root, with cwd / and a fixed PATH.
+# Takes no arguments.
+#
+# IMPORTANT - why this does not detach:
+# vsftpd runs each connection inside a private PID namespace (its "isolate"
+# feature, on by default).  When the FTP session ends, the kernel SIGKILLs
+# everything still living in that namespace, so a handler cannot background
+# work and return -- a detached "( sleep 2; /sbin/reboot ) &" is killed while
+# it is still sleeping and the reboot never happens.  Hand the job to systemd
+# instead: it is PID 1 outside the namespace, so once the job is enqueued it
+# owns it, and this process going away changes nothing.
+#
+# Contract: the dispatch rules this relies on -- argv, the environment
+# vsftpd exports, the private PID namespace, and the exit-status-to-reply-
+# code mapping -- are defined by 0001-vsftpd-external-command-dispatch.patch
+# in the meta-cts-wlan layer (recipes-daemons/vsftpd/vsftpd/).  Read that
+# patch header before changing anything here.
+set -u
+
+if [ "$#" -ne 0 ]; then
+    echo "usage: rst  (takes no arguments)"
+    exit 2
+fi
+
+# --no-block so the handler returns at once and vsftpd can flush its reply to
+# the client while systemd starts tearing the system down.
+if systemctl --no-block reboot; then
+    echo "reboot requested"
+    exit 0
+fi
+
+echo "failed to request reboot"
+exit 1

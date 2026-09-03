@@ -754,8 +754,9 @@ secure_wpa_conf() {
   /usr/local/scripts/change_line.sh "log-dir=/var/log/cantops" "log-dir" /etc/watchdog.conf
   /usr/local/scripts/add_line.sh "/dev/mmcblk${EMMC_NUM}p3      /var/log/cantops  ext4  noatime,nodiratime,lazytime,commit=60,data=ordered  0  2" /etc/fstab
 
-  # 상위 툴용 FTP 계정(admin). ftpcmd 디스패치는 이미지가 제공하지만, 계정 생성은
-  # rootfs 조립 시점에만 도는 extrausers 라 .deb 배포 경로에서는 만들어지지 않는다.
+  # 상위 툴용 FTP 계정(admin). 0.6.4 부터 ftpcmd 디스패치 핸들러도 이 패키지가
+  # /opt/ftpcmd/bin 에 배포한다(종전에는 이미지 소유). 계정 생성이 여기 있는 이유는
+  # rootfs 조립 시점에만 도는 extrausers 라 .deb 배포 경로에서는 만들어지지 않아서다.
   # 이미지가 이미 만든 기기에서는 건드리지 않는다(비밀번호 해시를 덮어쓰지 않기 위해).
   if id admin >/dev/null 2>&1; then
     logger -p local0.info "[$tag:$LINENO] [$KEY] FTP account 'admin' already exists; left untouched"

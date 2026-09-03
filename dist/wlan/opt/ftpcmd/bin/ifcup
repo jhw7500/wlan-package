@@ -1,0 +1,37 @@
+#!/bin/sh
+# Bring a network interface up.  Reached over FTP as: quote ifcup [interface]
+#
+# With no argument it acts on mlan0.
+#
+# Run by vsftpd's privileged parent, as root, with cwd / and a fixed PATH.
+# vsftpd already restricts arguments to a narrow character set, but the check
+# below is what actually decides which interfaces may be touched, so keep it.
+#
+# Contract: the dispatch rules this relies on -- argv, the environment
+# vsftpd exports, the private PID namespace, and the exit-status-to-reply-
+# code mapping -- are defined by 0001-vsftpd-external-command-dispatch.patch
+# in the meta-cts-wlan layer (recipes-daemons/vsftpd/vsftpd/).  Read that
+# patch header before changing anything here.
+set -u
+
+IFACE="${1:-mlan0}"
+
+case "$IFACE" in
+    *[!A-Za-z0-9._-]*)  echo "invalid interface name: $IFACE"; exit 2 ;;
+esac
+
+if [ ! -e "/sys/class/net/$IFACE" ]; then
+    echo "no such interface: $IFACE"
+    exit 2
+fi
+
+# No guard here: bringing up the interface that carries this session is a
+# no-op, and bringing up a different one is how you recover from ifcdown.
+if ! ip link set "$IFACE" up; then
+    echo "failed to bring up $IFACE"
+    exit 1
+fi
+
+ip -o link show "$IFACE"
+ip -o -4 addr show "$IFACE"
+exit 0
