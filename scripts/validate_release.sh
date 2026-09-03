@@ -276,10 +276,15 @@ validate_control_archive() {
     done < "$expected_names"
 }
 
-run_prebuild() {
+# 소스만으로 도는 검사. 빌드 산출물(.ko / mlanutl_* / build.sh 가 스테이징하는
+# usr/local/wlan-bridge/*)에 의존하지 않으므로 **깨끗한 체크아웃과 임의 아키텍처**에서
+# 그대로 돈다. CI 가 이것을 돌린다 — `pre` 전체는 gitignore 대상 산출물을 요구해
+# CI 에서 돌 수 없고, 그래서 게이트를 깨는 변경이 초록불로 머지돼 왔다(#279).
+#
+# 새 검사를 추가할 때는 **여기에** 넣어라. `run_prebuild` 에 직접 붙이면 CI 가 놓친다.
+# `scripts/qa/test_release_gate_coverage.py` 가 그 실수를 막는다.
+run_source() {
     cd "$REPO"
-    validate_source_product_defaults
-    validate_payload_manifest
     python3 scripts/gen_config_defaults.py --check
     python3 - <<'PY'
 import json
@@ -309,6 +314,7 @@ PY
         dist/wlan/usr/local/scripts/wifi_fw_config_test.sh \
         dist/wlan/usr/local/scripts/wifi_init_config_test.sh \
         dist/wlan/usr/local/scripts/wifi_link_reset_test.sh \
+        dist/wlan/usr/local/scripts/wifi_radio_test.sh \
         dist/wlan/usr/local/scripts/wifi_secret_test.sh \
         dist/wlan/usr/local/scripts/wifi_wpa_conf_writer_test.sh \
         dist/wlan/usr/local/scripts/tests/test_fake_hwclock.sh \
@@ -320,6 +326,16 @@ PY
     while IFS= read -r -d '' test; do
         bash -n "$test"
     done < <(find dist/wlan -type f -name '*.sh' -print0)
+}
+
+# 릴리스 빌드 직전 게이트 = 산출물 의존 검사 + 게이트 자체 테스트 + 소스 검사.
+# **본문에 검사를 직접 추가하지 마라** — 산출물이 필요한 것이 아니면 run_source 로.
+run_prebuild() {
+    cd "$REPO"
+    validate_source_product_defaults
+    validate_payload_manifest
+    bash scripts/validate_release_test.sh
+    run_source
 }
 
 validate_package() {
@@ -692,8 +708,9 @@ PY
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     case "${1:-}" in
+        source) run_source ;;
         pre) run_prebuild ;;
         package) [ $# -eq 2 ] || { echo "usage: $0 package <deb>" >&2; exit 64; }; validate_package "$2" ;;
-        *) echo "usage: $0 <pre|package <deb>>" >&2; exit 64 ;;
+        *) echo "usage: $0 <source|pre|package <deb>>" >&2; exit 64 ;;
     esac
 fi
