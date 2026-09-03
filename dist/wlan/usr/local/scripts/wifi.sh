@@ -2575,7 +2575,7 @@ case "$2" in
         exit 1
     fi
     NEW_SSID="$1"
-    SSID_HEX=$(wifi_wpa_child_call wifi_ssid_to_hex "$NEW_SSID") || {
+    SSID_CONF_VALUE=$(wifi_wpa_child_call wifi_ssid_to_conf_value "$NEW_SSID") || {
         echo "Error: SSID must be valid UTF-8, 1-32 bytes, without C0 controls or DEL" >&2
         exit 1
     }
@@ -2586,10 +2586,10 @@ case "$2" in
     TMP_FILE="$(wifi_wpa_child_exec mktemp)"
     # active ssid= → 치환 / #ssid=(주석)만 있으면 주석 해제 후 설정 / 둘 다 없으면 network 블록 끝에 append.
     # (블록 인지 방식은 connect 경로와 동일 — 주석처리된 설정도 확실히 반영. 블록당 done 1회.)
-    # Hex is the sole writer representation: no quoting/escape/whitespace
-    # interpretation can alter the validated UTF-8 identity.
-    if WIFI_NEW_SSID_HEX="$SSID_HEX" wifi_wpa_run_child awk '
-        BEGIN { in_net = 0; changed = 0; new_ssid = ENVIRON["WIFI_NEW_SSID_HEX"] }
+    # 직렬화는 wifi_ssid_to_conf_value 가 고른다 — 안전하면 따옴표(사람이 읽는다),
+    # SSID 에 `"` 가 있으면 hex(그 문자가 인용 패리티를 깨 `#` 이 주석이 된다).
+    if WIFI_NEW_SSID_CONF="$SSID_CONF_VALUE" wifi_wpa_run_child awk '
+        BEGIN { in_net = 0; changed = 0; new_ssid = ENVIRON["WIFI_NEW_SSID_CONF"] }
         /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { in_net = 1; done = 0; print; next }
         in_net && /^[[:space:]]*\}/ {
             if (!done) { print "    ssid=" new_ssid; changed = 1; done = 1 }
@@ -2763,7 +2763,7 @@ case "$2" in
         || { echo "Error: failed to lock scan transition for $IFACE" >&2; exit 1; }
     if [ "$#" -ge 1 ]; then
         NEW_SSID="$1"
-        SSID_HEX=$(wifi_wpa_child_call wifi_ssid_to_hex "$NEW_SSID") || {
+        SSID_CONF_VALUE=$(wifi_wpa_child_call wifi_ssid_to_conf_value "$NEW_SSID") || {
             echo "Error: SSID must be valid UTF-8, 1-32 bytes, without C0 controls or DEL" >&2
             exit 1
         }
@@ -2847,9 +2847,9 @@ case "$2" in
             echo "Error: failed to render canonical frequency policy in $CONF" >&2
             exit 1
         fi
-        # Hex is byte-exact for spaces, quotes, backslashes, and UTF-8.
-        if CONNECT_SSID_HEX="$SSID_HEX" wifi_wpa_run_child awk '
-            BEGIN { in_net = 0; blocks = 0; new_ssid = ENVIRON["CONNECT_SSID_HEX"] }
+        # 직렬화는 wifi_ssid_to_conf_value 가 고른다(따옴표 우선, `"` 포함 시 hex).
+        if CONNECT_SSID_CONF="$SSID_CONF_VALUE" wifi_wpa_run_child awk '
+            BEGIN { in_net = 0; blocks = 0; new_ssid = ENVIRON["CONNECT_SSID_CONF"] }
             /^[[:space:]]*#/ { print; next }
             /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ {
                 in_net = 1; blocks++; done_ssid = 0; print; next

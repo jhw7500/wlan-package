@@ -80,7 +80,7 @@ fi
 # control mutation.  In Mode B an immutable extra is intentionally a manual
 # candidate that may replace the sole base block.
 if [ "$HAVE_SSID" = 1 ]; then
-    SSID_HEX=$(wifi_wpa_child_call wifi_ssid_to_hex "$SSID") \
+    SSID_CONF_VALUE=$(wifi_wpa_child_call wifi_ssid_to_conf_value "$SSID") \
         || { echo "opc_wlan_apply: SSID must be valid UTF-8, 1-32 bytes, without C0 controls or DEL" >&2; exit 2; }
 fi
 
@@ -95,8 +95,9 @@ fi
 # --- conf 직접 편집 (atomic: 같은 fs 임시파일 → chmod → rename, 원본은 롤백용 백업) -
 # ssid → 중간파일에서 network 블록의 ssid= 치환(없으면 블록 끝에 추가).
 # freq → 공용 renderer가 전역/모든 블록에 같은 freq_list를 쓰고 legacy scan_freq를 제거.
-# SSID는 공통 UTF-8/길이/control 계약으로 검증한 뒤 byte-exact hex token으로 쓴다.
-# 공백, 백슬래시, 따옴표가 quoting/escape 해석으로 다른 identity가 되지 않는다.
+# SSID는 공통 UTF-8/길이/control 계약으로 검증한 뒤 wifi_ssid_to_conf_value가
+# 고른 표기로 쓴다 — 안전하면 따옴표(사람이 읽는다), SSID에 `"`가 있으면 hex.
+# 어느 쪽이든 공백·백슬래시·UTF-8이 byte-exact로 보존된다.
 DO_FREQ=0; [ -n "$FREQS" ] && DO_FREQ=1
 # FREQS 는 숫자/공백만 허용 — 직접 호출 시 awk -v 로 들어가는 값에 개행 등이 섞여
 # conf 라인이 인젝션되는 것을 차단(데몬 경로는 정수만 전달하나 방어적으로 검증).
@@ -197,8 +198,8 @@ TMP="$(wifi_wpa_child_exec mktemp "${CONF}.XXXXXX")" || { echo "opc_wlan_apply: 
 
 # 검증된 hex token을 ENVIRON으로 전달한다. ENVIRON 미지원 awk는 위 probe에서
 # 걸러져 이 경로에 도달하지 않는다.
-OPC_SSID_HEX="${SSID_HEX:-}" wifi_wpa_run_child awk -v do_ssid="$HAVE_SSID" '
-    BEGIN { in_net = 0; blocks = 0; ssid_done = 0; new_ssid = ENVIRON["OPC_SSID_HEX"] }
+OPC_SSID_CONF="${SSID_CONF_VALUE:-}" wifi_wpa_run_child awk -v do_ssid="$HAVE_SSID" '
+    BEGIN { in_net = 0; blocks = 0; ssid_done = 0; new_ssid = ENVIRON["OPC_SSID_CONF"] }
     /^[[:space:]]*#/ { print; next }
     /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ {
         in_net = 1; blocks++; ssid_done = 0; print; next
