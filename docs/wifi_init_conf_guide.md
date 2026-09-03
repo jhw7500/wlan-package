@@ -174,6 +174,36 @@ wifi_init_conf.json
 지침과 충돌. 위 두 opt-in 경로만 두 원칙을 동시에 만족한다. (#91 NTP 결정과 동일 패턴 —
 공식 반영 경로 = 프로비저닝 스크립트.)
 
+#### `.network` IPv6 비활성(#255)은 기배포 기기에 반영되지 않는다
+
+`20-mlan0.network` / `21-mlan1.network` / `22-eth0.network` 에 들어간 IPv6 자동구성
+차단(`LinkLocalAddressing=no`, `IPv6AcceptRA=no`)은 **신규 설치와 factory reset 에만**
+적용된다. 위 3종 토글과 같은 사각인데, 이쪽은 **opt-in 전파 경로조차 없다**:
+
+- `postinst` 의 `cpchk` 는 대상이 없거나 0바이트일 때만 복사한다. 기존 기기에는
+  이미 파일이 있으므로 새 내용이 들어가지 않는다.
+- `bd_provision.sh` 도 경로가 아니다 — `gen_network()` 가 **기존 `/etc` 파일**을 읽어
+  `Address=` / `Gateway=` 만 바꾸고 나머지 줄은 그대로 통과시킨다. 패키지 템플릿을
+  원본으로 쓰지 않으므로 IPv6 줄이 들어올 자리가 없다.
+
+기배포 기기에 넣으려면 두 줄을 직접 추가하고 `systemctl restart systemd-networkd` 를
+해야 한다(운영자가 손댄 `.network` 를 덮지 않도록 **키가 없을 때만** 추가할 것).
+
+**언제 문제가 되나** — 지금 당장은 아니다. 실측(cts-wlan, 2026-09-03)에서 이 세그먼트의
+`Icmp6InRouterAdvertisements` / `Icmp6InNeighborSolicits` 가 모두 0 이라 IPv6 를 쓰는
+주체가 없다. 다만 **충돌 전제는 이미 성립해 있다**:
+
+    mlan0 MAC        = 00:e0:4c:68:2b:1f   (유선 peer 클론)
+    mlan0 link-local = fe80::2e0:4cff:fe68:2b1f   (클론 MAC 에서 EUI-64 유도)
+    eth0 이웃 192.168.214.3 lladdr = 00:e0:4c:68:2b:1f   (동일 MAC)
+
+peer 가 IPv6 를 켜는 순간 같은 L2 에 동일한 fe80 주소가 둘 생긴다. wbridge 필터에는
+IPv4 쪽 격리 보장이 여기 적용되지 않는다 — `wbridge/filter.c` 가 다루는 ethertype 은
+`ETH_P_IP`(`:117`)와 `ETH_P_ARP`(`:162`) 뿐이고 `ETH_P_IPV6` 는 어디에도 없다. 게다가
+ND/RA 는 멀티캐스트라 `:238` 의 "Always forward multicast/broadcast" 경로로 **무판정
+전달**된다(`return 0` = forward). IPv6 를 쓰는 상위 툴이 들어오기 전에 기배포 기기
+처리를 정해야 한다.
+
 #### 클론 MAC 잔재 — `mac_clone_require_peer`
 
 `mac_mode=dynamic`은 유선 peer(BD에 연결된 PC/PLC)의 MAC을 bridge 인터페이스 `.link`에 클론한다. 이 `.link`는 **다음 `insmod`까지 남기 때문에**, 같은 PC로 여러 기기를 차례로 설정하면 각 기기에 같은 MAC이 기록되고 PC를 떼도 그대로 유지돼 **여러 기기가 동일 MAC으로 부팅**하는 문제가 있었다.
