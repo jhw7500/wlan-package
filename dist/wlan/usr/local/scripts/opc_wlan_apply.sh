@@ -102,7 +102,6 @@ fi
 # SSID는 공통 UTF-8/길이/control 계약으로 검증한 뒤 wifi_ssid_to_conf_value가
 # 고른 표기로 쓴다 — 안전하면 따옴표(사람이 읽는다), SSID에 `"`가 있으면 hex.
 # 어느 쪽이든 공백·백슬래시·UTF-8이 byte-exact로 보존된다.
-DO_FREQ=0; [ "$HAVE_FREQ" = 1 ] && DO_FREQ=1   # freq 인자가 있으면(none 포함) 렌더 — 빈 목록이면 제거
 # FREQS 는 숫자/공백만 허용 — 직접 호출 시 awk -v 로 들어가는 값에 개행 등이 섞여
 # conf 라인이 인젝션되는 것을 차단(데몬 경로는 정수만 전달하나 방어적으로 검증).
 case "$FREQS" in *[!0-9\ ]*) echo "opc_wlan_apply: invalid freq '$FREQS' (digits/spaces only)" >&2; exit 2 ;; esac
@@ -224,7 +223,7 @@ OPC_SSID_CONF="${SSID_CONF_VALUE:-}" wifi_wpa_run_child awk -v do_ssid="$HAVE_SS
 
 # SSID-only 요청도 기존 공통 목록을 해석해 canonical 형식을 보존/이행한다.
 COMMON_FREQS="$FREQS"
-if [ "$DO_FREQ" = 0 ]; then
+if [ "$HAVE_FREQ" = 0 ]; then   # freq 인자 없음(SSID-only) → 기존 목록 보존. freq(none 포함) 있으면 아래 COMMON_FREQS 그대로(빈 목록=제거).
     COMMON_FREQS=$(wifi_wpa_child_call wifi_wpa_conf_common_freqs "$EDIT_TMP") \
         || { echo "opc_wlan_apply: common frequency resolve failed" >&2; exit 4; }
 fi

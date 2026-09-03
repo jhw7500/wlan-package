@@ -1762,16 +1762,14 @@ fi
 check_equal "OPC syncs destination directory" \
     "$(grep -Fxc "sync $WPA_DIR" "$CALL_LOG" || true)" "2"
 
-# freq none clears the band lock entirely (#111): apply a list, then `freq none`
-# must remove every global+block freq_list and legacy scan_freq (canonical
-# renderer with an empty list), and still reconfigure once. This is the
-# "미설정 SCAN band → freq_list 제거" path opcd uses for an unset band.
+# freq none clears the band lock entirely (#111). Global freq_list removal needs
+# a prior list (precondition), so that half applies "5180 5200" first.
 write_mode_b_legacy
 set_reconfigure_mode ok
 : > "$CALL_LOG"
 WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$TD/run" \
     sh "$OPC_SH" mlan0 freq "5180 5200" >/dev/null 2>&1
-check_equal "OPC freq-none precondition: list applied" "$(count_global_freq "$CONF")" "1"
+check_equal "OPC freq-none precondition: global list applied" "$(count_global_freq "$CONF")" "1"
 : > "$CALL_LOG"
 WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$TD/run" \
     sh "$OPC_SH" mlan0 freq none >/dev/null 2>&1
@@ -1780,10 +1778,26 @@ check_equal "OPC freq none exits zero" "$rc" "0"
 check_equal "OPC freq none removes global freq_list" "$(count_global_freq "$CONF")" "0"
 check_equal "OPC freq none removes every block freq_list" \
     "$(grep -Ec '^[[:space:]]*freq_list[[:space:]]*=' "$CONF" || true)" "0"
-check_equal "OPC freq none removes scan_freq" \
-    "$(grep -Ec '^[[:space:]]*scan_freq[[:space:]]*=' "$CONF" || true)" "0"
 check_equal "OPC freq none reconfigures once" \
     "$(grep -c 'reconfigure$' "$CALL_LOG" || true)" "1"
+
+# scan_freq removal is meaningful ONLY when scan_freq is present. The legacy conf
+# carries a block scan_freq (+block freq_list, no global); apply `freq none`
+# DIRECTLY on it so the removal is actually exercised, not pre-cleared by a
+# preceding list apply (Claude, PR #288).
+write_mode_b_legacy
+check_equal "OPC freq-none legacy precondition: scan_freq present" \
+    "$(grep -Ec '^[[:space:]]*scan_freq[[:space:]]*=' "$CONF" || true)" "1"
+check_equal "OPC freq-none legacy precondition: block freq_list present" \
+    "$(grep -Ec '^[[:space:]]*freq_list[[:space:]]*=' "$CONF" || true)" "1"
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$TD/run" \
+    sh "$OPC_SH" mlan0 freq none >/dev/null 2>&1
+check_equal "OPC freq none removes the legacy scan_freq" \
+    "$(grep -Ec '^[[:space:]]*scan_freq[[:space:]]*=' "$CONF" || true)" "0"
+check_equal "OPC freq none removes the legacy block freq_list" \
+    "$(grep -Ec '^[[:space:]]*freq_list[[:space:]]*=' "$CONF" || true)" "0"
+
 # `freq ""` (empty string) is the same clear intent as `freq none`.
 write_mode_b_legacy
 WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$TD/run" \
