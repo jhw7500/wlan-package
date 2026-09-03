@@ -3,7 +3,7 @@ Version: 0.6.4
 Section: net
 Priority: optional
 Architecture: arm64
-Depends: libpcap0.8 | libpcap, systemd, jq, bc, sysstat, vsftpd, iproute2
+Depends: libpcap0.8 | libpcap, systemd, jq, bc, sysstat, vsftpd, iproute2, nftables
 Conflicts: wlan-package, ftpcmd-handlers
 Replaces: wlan-package, ftpcmd-handlers
 Recommends: jq, snmpd

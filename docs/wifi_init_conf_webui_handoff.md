@@ -94,6 +94,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 ### 2.2 신규 섹션/키
 
 - **`snmp` 섹션 신규**: `snmp.enabled` + `snmp.trap.{enabled, dest, community, version}`.
+- **`mgmt_acl` 섹션 신규 (2026-09-03, #256)**: `mgmt_acl.enabled` + `mgmt_acl.allowed_hosts` — 무선측 관리 포트 인바운드 화이트리스트(기본 off/opt-in). §3.12 참조.
 - **`global`**: `BOARD_TYPE`, `BUS_TYPE`, `BLUETOOTH.enable`, `tx_work`, `ping_monitor.enabled`.
 - **`wbridge`**: `ip_discovery`, `eth_client_ip`, `eth_sweep_subnet`, `peer_route.enabled`, `arp_ignore_always.enabled`, `engine`(pcap|tpacket|moal), `moal.{keepalive_ms, keepalive_idle_ms, debug, peer, consume_link_local}`, `optimize.*`, `thermal.*` 재구성.
 - **`mlanN`**: `connect_threshold`(-100), `mgmt_hex_dump_enable`(false), `thermal_mgmt`(true), `rate_adapt`, `logger.enabled`.
@@ -569,7 +570,18 @@ association proof를 사용한다. 다음 CONNECTED 검증 성공 시 pending/1�
 
 ---
 
-### 3.12 opc (OPC 제어 데몬)
+### 3.12 mgmt_acl (무선측 관리 접점 화이트리스트)
+
+| 경로 | 라벨 | 타입 | 기본값 | 허용값/범위 | UI편집 | 적용시점 | 설명 |
+|---|---|---|---|---|---|---|---|
+| `mgmt_acl.enabled` | 무선 관리 ACL 활성화 | bool | `false` | true\|false | caution | boot | 무선(mlan0/mlan1) 인바운드의 관리 포트(tcp 22/21/80, udp 50607/50000/161/162)를 `allowed_hosts` 화이트리스트로 제한(nft 전용 테이블). **기본 off(opt-in)**. 유선 eth0은 구조적으로 제외 — 오구성 시에도 유선 복구 경로 잔존 |
+| `mgmt_acl.allowed_hosts` | 허용 관리 호스트 | string[] | `[]` | IPv4 주소 또는 IPv4/CIDR | caution | boot | 빈 목록+enabled=true는 무선측 관리 포트 전면 차단. IPv6는 게이트 포트 무조건 차단(#255 정합). 무효 항목 존재 시 전체 적용 거부(원자) |
+
+**비고 (mgmt_acl)** — 소비: `wifi_acl.sh`(`wifi_acl.service` oneshot, boot). UDP는 소스 스푸핑 미방어(스캐닝/우발 접근 차단용 — 인증 대체재 아님, #256 리뷰 M1). nft 실패 시 fail-open(패킷 통과) + 유닛 failed 표면화. `enabled`·`allowed_hosts` 모두 caution — 무선 경유 관리 중 자기 자신을 잠글 수 있음(유선 경로로 복구).
+
+---
+
+### 3.13 opc (OPC 제어 데몬)
 
 | 경로 | 라벨 | 타입 | 기본값 | 허용값/범위 | UI편집 | 적용시점 | 설명 |
 |---|---|---|---|---|---|---|---|
