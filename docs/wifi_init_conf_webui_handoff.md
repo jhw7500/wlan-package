@@ -497,6 +497,12 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 - 수동 `passive_roam`(`wifi <n> roam`)은 두 모드 모두 같은 SSID 안의 BSS 전환 전용이다. cross-SSID는 Mode A에서 자동 owner가, Mode B에서 `wifi connect`가 수행한다.
 - 모든 블록은 전역과 동일한 공통 `freq_list`를 사용한다. SSID별 주파수 분리는 UI에서 제공하지 않는다.
 
+#### 3.10.4a mlanN.roam_garp (로밍 직후 gratuitous ARP)
+
+| 경로(`mlanN.roam_garp.`) | 라벨 | 타입 | 기본값 (mlan0 / mlan1) | 허용값/범위 | UI편집 | 적용시점 | 설명 |
+|---|---|---|---|---|---|---|---|
+| `enabled` | 로밍 후 GARP 발사 | bool | `false` | true\|false | caution | event | 로밍(connected/roamed) 시 무선 iface IP로 `arping -U` 발사해 스위치 FDB 재학습을 강제한다(#234). 기본 false(opt-in). 무선전용·관리-IP 스코프 — iface에 IPv4가 있을 때만 발사하므로 순수 브리지 구성에서는 no-op. 갭 소멸 검증=#235, 최종 근본책=wlan-driver-v2#47 |
+
 #### 3.10.5 mlanN.mcs_tier
 
 | 경로(`mlanN.mcs_tier.`) | 라벨 | 타입 | 기본값 (mlan0 / mlan1) | 허용값/범위 | UI편집 | 적용시점 | 설명 |
