@@ -53,6 +53,7 @@ etc/systemd/system/wlan_fw_watch.service
 etc/udev/rules.d/99-wlan-arp-seal.rules
 etc/udev/rules.d/99-wlan-wpa-reattach.rules
 etc/wbridge/quick.conf.example
+opt/ftpcmd/bin/getifstate
 opt/ftpcmd/bin/ifcdown
 opt/ftpcmd/bin/ifcup
 opt/ftpcmd/bin/rst
