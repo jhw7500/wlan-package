@@ -57,7 +57,14 @@ get_enabled() {
 # allowed_hosts 각 항목 검증: IPv4 또는 IPv4/CIDR 만 허용. 무효 항목이 하나라도
 # 있으면 전체 실패(exit 1) — 항목을 조용히 버리면 의도보다 넓게 잠기거나
 # 열리는 양방향 사고가 되므로 원자적으로 거부한다.
+# allowed_hosts의 JSON 타입 반환("array"/"null"/"string"/"number"/... 또는 파싱 실패 시 빈 문자열)
+allowed_hosts_type() {
+    jq -r '.mgmt_acl.allowed_hosts | type' "$JSON" 2>/dev/null
+}
+
 read_allowed_hosts() {
+    # 배열 원소만 방출. 스칼라 등 비배열은 여기서 걸러지지 않으므로(=`.[]` 에러)
+    # 호출부(collect_hosts)가 allowed_hosts_type으로 타입을 먼저 검증한다.
     jq -r '.mgmt_acl.allowed_hosts // [] | .[]' "$JSON" 2>/dev/null
 }
 
@@ -114,7 +121,16 @@ table_present() { "$NFT" list table inet wlan_mgmt_acl >/dev/null 2>&1; }
 
 collect_hosts() {
     HOSTS=()
-    local h bad=0
+    local h bad=0 t
+    # allowed_hosts는 배열이어야 한다. null/부재 → 빈 목록(정상). 스칼라(false/42 등)·객체는
+    # 타입 오류로 원자 거부 — 이 검사가 없으면 `.[]`가 에러(2>/dev/null로 삼켜짐)→빈 목록으로
+    # 오인되어 "전면 차단"이 조용히 적용된다(Claude 리뷰 RVW-9d514af340ba). 파싱 실패(빈 문자열)도
+    # 거부해 무효 conf에 열림/닫힘을 임의로 적용하지 않는다.
+    t=$(allowed_hosts_type)
+    if [ "$t" != "array" ] && [ "$t" != "null" ]; then
+        log err "allowed_hosts 타입 오류(배열이어야 함, 실제='${t:-parse-error}') — 적용 거부(원자 실패)"
+        return 1
+    fi
     while IFS= read -r h; do
         [ -z "$h" ] && continue
         if valid_host "$h"; then HOSTS+=("$h"); else
