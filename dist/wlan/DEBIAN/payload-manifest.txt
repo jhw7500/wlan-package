@@ -19,9 +19,9 @@ etc/systemd/system/log-watchdog.timer
 etc/systemd/system/snmpd.service.d/override.conf
 etc/systemd/system/switchd.service
 etc/systemd/system/wifi-stack.target
+etc/systemd/system/wifi_acl.service
 etc/systemd/system/wifi_apply_enabled.service
 etc/systemd/system/wifi_arping@.service
-etc/systemd/system/wifi_acl.service
 etc/systemd/system/wifi_bgscan@.service
 etc/systemd/system/wifi_capture@.service
 etc/systemd/system/wifi_checker@.service
