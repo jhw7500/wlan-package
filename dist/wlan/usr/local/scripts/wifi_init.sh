@@ -815,7 +815,9 @@ apply_final_mac() {
         logger -p local0.info "[$tag:$LINENO] [$iface] no final MAC configured; skip update_mac"
         return 0
     fi
-    if /usr/local/scripts/update_mac.sh "$iface" "$mac" "$@"; then
+    # source(dynamic/static/base)를 update_mac에 전달 — dynamic 클론은 다른 인터페이스의
+    # stale static MAC override보다 우선 적용되어야 한다(update_mac 충돌 해소, #267 후속).
+    if MAC_SOURCE="$source" /usr/local/scripts/update_mac.sh "$iface" "$mac" "$@"; then
         logger -p local0.info "[$tag:$LINENO] [$iface] final MAC applied: $mac (source=$source)"
         return 0
     fi
