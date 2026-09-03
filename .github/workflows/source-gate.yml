@@ -1,0 +1,78 @@
+name: Source Gate
+
+# 릴리스 게이트의 산출물 비의존 부분을 모든 PR/푸시에서 돌린다.
+#
+# 왜 build-test.yml 에 얹지 않는가 (#279):
+#   * build-test 의 `paths:` 필터에 `scripts/**` 도 `docs/**` 도 없다. 그런데 이
+#     게이트의 입력이 바로 거기 있다 — gen_config_defaults 는
+#     docs/wifi_init_conf.schema.json 과 docs/wifi_init_conf_webui_handoff.md 를
+#     읽는다. 필터를 상속하면 "handoff 행 삭제" 같은 변경이 트리거되지 않아
+#     #274 와 같은 블로커가 그대로 릴리스까지 간다.
+#   * build-test 의 모든 실검사 스텝은 `if: submodules == 'true'` 뒤에 있고,
+#     SUBMODULE_TOKEN 이 없으면 그 스텝이 `exit 0` 으로 끝나 잡이 초록불이 된다.
+#     이 게이트는 서브모듈이 필요 없으므로 그 조건을 상속하면 안 된다.
+#
+# 그래서 필터 없음, 조건 없음, 서브모듈 없음.
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-gate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-gate:
+    name: Source Gate
+    runs-on: ubuntu-latest
+
+    steps:
+      # sparse/shallow 체크아웃을 쓰지 않는다 — 게이트 안의 여러 테스트가
+      # `git ls-files -s` 로 인덱스의 파일 모드를 읽는다(실행비트 계약).
+      # git 저장소가 아닌 트리에서 돌리면 그 테스트들이 fatal 로 죽는다.
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Install gate dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y jq
+          python3 -m pip install --upgrade pytest jsonschema
+
+      # 도구 부재를 조용한 성공으로 넘기지 않는다. build-test 의 실패 은폐가
+      # 정확히 이 지점에서 시작됐다(#279).
+      - name: Assert toolchain is present
+        run: |
+          set -euo pipefail
+          command -v jq
+          command -v git
+          python3 -c 'import pytest, jsonschema; print("pytest", pytest.__version__)'
+          git rev-parse --is-inside-work-tree
+
+      - name: Run source gate
+        run: |
+          set -euo pipefail
+          bash scripts/validate_release.sh source 2>&1 | tee gate.log
+
+      # exit code 는 "돌았다"만 말해준다. 조건부 skip 이 늘어나면 커버리지가
+      # 조용히 줄어드는데 결과는 계속 초록이다 — 그래서 skip 을 실패로 본다.
+      # 러너에 없는 의존성 때문에 스킵되는 것이 있으면 위 설치 스텝에 추가하라.
+      - name: Assert nothing was skipped
+        run: |
+          set -euo pipefail
+          if grep -qE '[0-9]+ skipped' gate.log; then
+            echo "::error::source gate skipped tests — 커버리지가 조용히 줄었다"
+            grep -nE '[0-9]+ skipped' gate.log
+            exit 1
+          fi
+          echo "no skipped tests"
