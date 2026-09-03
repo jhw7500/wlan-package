@@ -114,6 +114,30 @@ def wait_for_eth_link(timeout=ETH_LINK_TIMEOUT):
     logger.message("err", f"[{IFACE}] Timeout waiting for {ETH_IFACE} link", _EXTRA_())
     return False
 
+def provoke_peer_relearn(iface, settle=3):
+    """
+    #267: eth0 링크를 down/up 하여 연결된 유선 peer가 캐리어 이벤트를 보고 링크업
+    announce(gratuitous ARP / IGMP / LLMNR 등)를 재전송하게 유발한다. 이미 부팅되어
+    유휴(자발 송신 없음)인 peer의 MAC은 passive sniff의 3초 창에 잡히지 않으므로, 이
+    능동 자극이 없으면 감지에 실패한다(perf 679efe3이 제거한 동작 — 조용한 peer에서
+    회귀). 능동 경로(quick_arp_probe, eth_client_ip)가 성공한 경우엔 호출되지 않아
+    부팅 지연이 없다. 캐리어 복구까지 대기 후 리턴(직후 sniff가 announce를 받도록).
+    """
+    logger.message("info", f"[{IFACE}] bounce {iface} (down/up) to provoke peer re-announce (#267)", _EXTRA_())
+    subprocess.run(["ip", "link", "set", iface, "down"], check=False)
+    time.sleep(0.5)
+    subprocess.run(["ip", "link", "set", iface, "up"], check=False)
+    carrier_path = f"/sys/class/net/{iface}/carrier"
+    deadline = time.time() + settle
+    while time.time() < deadline:
+        try:
+            with open(carrier_path, "r") as f:
+                if f.read().strip() == "1":
+                    return
+        except Exception:
+            pass
+        time.sleep(0.2)
+
 # ===================== 1) MAC 획득 (원래 흐름 유지) =====================
 
 def passive_mac_sniff(own_mac, timeout=5):
@@ -438,7 +462,11 @@ def main():
             logger.message("info", f"[{IFACE}] Quick ARP: MAC={mac} IP={ip}", _EXTRA_())
 
     # ── 2단계: 능동+패시브 MAC 탐색 (~3초) ──
+    # #267: quick 경로(eth_client_ip)로 못 찾았거나 미설정이면, passive sniff 전에 eth0를
+    # bounce해 조용한(이미 부팅된 유휴) peer가 링크업 announce를 재전송하게 유발한다.
+    # 이 자극이 없으면 자발 송신 없는 peer는 3초 창에 안 잡힌다(온타겟 확증 2026-09-03).
     if not mac:
+        provoke_peer_relearn(ETH_IFACE)
         mac = active_mac_sniff(ETH_IFACE, own_mac, timeout=3)
 
     if not mac:
