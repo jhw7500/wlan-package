@@ -22,6 +22,14 @@ wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약�
 - 제어 연결이 타는 인터페이스는 재연관을 거부한다(exit 3). 응답이 핸들러 종료 뒤에 쓰이므로 그 인터페이스를 끊으면 응답을 잃고 조작자가 갇힌다.
 - 다중 network topology conf(`# >>> wifi_extra_ssid` sentinel 또는 network 블록 2개 이상)에서는 `wifi connect <ssid>` 가 `wifi_wpa_conf_is_multi_topology()` 가드에 막혀 exit 1 로 끝나고 conf 는 건드려지지 않는다. SSID 인자 없는 재연결은 두 경우 모두 동작한다. 현 시점에 다중 topology 에서의 SSID 전환은 요구되지 않으므로 그대로 둔다.
 
+### getifstate — 인터페이스 상태 조회 핸들러 (신규)
+
+- `quote getifstate [iface]` 가 `<iface> UP` 또는 `<iface> DOWN` 한 줄을 돌려준다. 인자가 없으면 `mlan0`.
+- **응답 모양은 호환 계약이다.** 이 보드가 대체하는 FXE3000 카드가 `200 ath0 UP` / `200 ath0 DOWN` 로 답하고 상위 툴이 그 한 줄을 파싱한다. 그래서 같은 모양 한 줄만 내보내고 다른 출력은 붙이지 않는다(`ifcup` 이 `ip -o link show` 를 덧붙이는 것과 다르다).
+- 판정은 **관리 플래그**(`/sys/class/net/<if>/flags` 의 IFF_UP)다. `ifcup` / `ifcdown` 이 토글하는 축이고, 레퍼런스 기록도 `IFCUP` 직후에 곧바로 `UP` 을 보고한다.
+- `operstate` 를 쓰지 않는 이유는 실측이다 — 온타겟에서 `lo` 는 `operstate=unknown` 인데 IFF_UP=1 이고, bridge 인터페이스는 `ip link set up` 직후에도 `operstate=unknown` 이었다. operstate 로 판정했으면 두 경우 모두 UP 을 놓친다.
+- 인자 검증·존재 확인·exit code 관례는 `ifcup` / `ifcdown` 과 동일하다(잘못된 이름·없는 인터페이스 = exit 2).
+
 ## 0.6.3 (2026-09-02)
 
 > SemVer **patch** — NSS 제한의 강제 지점을 `mcs_tier` 에서 `antcfgnss` 니블로 옮기고, 부팅 scan profile 게이트를 wedge 와 인과가 확인된 `antcfg` 축으로 좁힌다. 미반영 FW 설정 축을 `wifi <iface> info` 에서 확인할 수 있다.
