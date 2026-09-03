@@ -3,6 +3,25 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.6.4 (2026-09-03)
+
+> SemVer **patch** — vsftpd 의 quote 커맨드 핸들러를 이미지에서 이 패키지로 옮긴다. 기존 이미지에 deb 만 얹는 배포 경로에서 핸들러가 오지 않던 갭을 메운다.
+
+### ftpcmd 핸들러를 패키지 소유로 이관
+
+- 종전에는 meta-cts-wlan 의 `ftpcmd-handlers` 레시피가 `/opt/ftpcmd/bin` 을 채웠다. 이미지를 새로 구워 플래싱하는 경로에서는 문제가 없지만, **기존 이미지에 `wlan-proc` + `vsftpd` 만 설치하는 배포 경로에서는 핸들러가 오지 않는다.** vsftpd 는 `ftpcmd_enable=YES` / `ftpcmd_dir=/opt/ftpcmd/bin` 인 채로 뜨고, 디렉터리를 채우는 것이 없어 `quote rst` / `ifcup` / `ifcdown` 이 전부 `550` 이 된다.
+- `rst` / `ifcup` / `ifcdown` / `wconnect` 4종을 `dist/wlan/opt/ftpcmd/bin` 으로 옮긴다. `dpkg-deb --build --root-owner-group` 과 `chmod -R a-s,go-w` 덕에 vsftpd 가 요구하는 root:root · 그룹/기타 쓰기 불가 조건이 빌드에서 자동 보장된다.
+- `Conflicts` / `Replaces` 에 `ftpcmd-handlers` 를 추가한다. 그 패키지가 이미 설치된 기기에서 같은 경로를 덮으면 dpkg 가 거부하므로 대체 관계를 선언해야 한다.
+- `Depends` 에 `vsftpd` 와 `iproute2` 를 추가한다. 핸들러를 실행하는 주체가 vsftpd 이고, `ifcup` / `ifcdown` / `wconnect` 가 `ip` 를 쓴다.
+
+### wconnect — wifi 재연결 핸들러 (신규)
+
+- `quote wconnect [iface] [ssid]` 가 `wifi <iface> connect [ssid]` 를 부른다. **패스프레이즈는 FTP 를 타지 않는다** — `wifi connect` 는 SSID 만 받고 보드의 wpa_supplicant 프로필에 있는 PSK 를 그대로 쓴다.
+- 이름이 `connect` 가 아닌 이유: vsftpd 는 `GET` / `POST` / `HEAD` / `OPTIONS` / `CONNECT` 를 HTTP 교차 프로토콜 공격으로 보고 **제어 연결을 끊는다**. 그 검사가 핸들러 디스패치보다 먼저 돈다(`postlogin.c:443-451` 이 `452` 행의 `vsf_extcmd_try` 보다 앞).
+- 핸들러가 받는 PATH 는 `/usr/sbin:/usr/bin:/sbin:/bin` 으로 `/usr/local/bin` 이 없다. 그래서 `wifi` 를 절대경로로 부른다 — 실행 파일 위치를 옮기면 조용히 죽는다.
+- 제어 연결이 타는 인터페이스는 재연관을 거부한다(exit 3). 응답이 핸들러 종료 뒤에 쓰이므로 그 인터페이스를 끊으면 응답을 잃고 조작자가 갇힌다.
+- 다중 network topology conf(`# >>> wifi_extra_ssid` sentinel 또는 network 블록 2개 이상)에서는 `wifi connect <ssid>` 가 `wifi_wpa_conf_is_multi_topology()` 가드에 막혀 exit 1 로 끝나고 conf 는 건드려지지 않는다. SSID 인자 없는 재연결은 두 경우 모두 동작한다. 현 시점에 다중 topology 에서의 SSID 전환은 요구되지 않으므로 그대로 둔다.
+
 ## 0.6.3 (2026-09-02)
 
 > SemVer **patch** — NSS 제한의 강제 지점을 `mcs_tier` 에서 `antcfgnss` 니블로 옮기고, 부팅 scan profile 게이트를 wedge 와 인과가 확인된 `antcfg` 축으로 좁힌다. 미반영 FW 설정 축을 `wifi <iface> info` 에서 확인할 수 있다.
