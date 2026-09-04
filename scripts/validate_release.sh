@@ -16,6 +16,15 @@ DRIVER_COMPONENT_LOCK_REL="opt/wlan/driver/DRIVER_COMPONENTS.sha256"
 WBRIDGE_RELEASE_DIR="usr/local/wlan-bridge/wbridge"
 WBRIDGE_DEBUG_DIR="usr/local/wlan-bridge/debug"
 
+# 게이트는 산출물을 만들지 않은 채 수 분을 돈다. 진행 표시가 없으면 "멈춤"과
+# 구별되지 않아 사람이 빌드를 중단하게 되고, 중단은 자체 테스트가 임시로 교체한
+# staging 파일을 복원 못 한 채 남길 수 있다. 단계마다 경과 시간을 찍는다.
+# stdout 을 캡처하는 호출자를 오염시키지 않도록 stderr 로 낸다.
+GATE_T0=$(date +%s)
+gate_step() {
+    printf '[gate %s] %s (+%ds)\n' "$1" "$2" "$(( $(date +%s) - GATE_T0 ))" >&2
+}
+
 is_generated_wbridge_path() {
     case "$1" in
         "$WBRIDGE_RELEASE_DIR"/wbridge|"$WBRIDGE_RELEASE_DIR"/wbridge-tpacket|\
@@ -285,7 +294,9 @@ validate_control_archive() {
 # `scripts/qa/test_release_gate_coverage.py` 가 그 실수를 막는다.
 run_source() {
     cd "$REPO"
+    gate_step "source" "config defaults"
     python3 scripts/gen_config_defaults.py --check
+    gate_step "source" "wifi_init_conf schema"
     python3 - <<'PY'
 import json
 from jsonschema import Draft7Validator
@@ -296,11 +307,14 @@ errors = list(Draft7Validator(schema).iter_errors(conf))
 if errors:
     raise SystemExit("template/schema validation failed: " + "; ".join(e.message for e in errors[:10]))
 PY
+    gate_step "source" "pytest: logger"
     python3 -m pytest dist/wlan/usr/local/logger/tests -q
+    gate_step "source" "pytest: scripts"
     python3 -m pytest dist/wlan/usr/local/scripts/tests -q
     # QA 하네스도 게이트에 포함한다. 이 스위트는 실기 상태를 바꾸는 도구의
     # 안전 계약(복원·원격 절단 대응·스케줄 검증)을 고정하는데, 여기 없으면
     # 아무도 실행하지 않아 그 계약이 조용히 썩는다.
+    gate_step "source" "pytest: qa"
     python3 -m pytest scripts/qa -q
 
     local test
@@ -320,9 +334,11 @@ PY
         dist/wlan/usr/local/scripts/tests/test_fake_hwclock.sh \
         dist/wlan/usr/local/scripts/tests/test_wifi_eth_peer.sh \
         dist/wlan/usr/local/scripts/tests/test_wlan_link_lib.sh; do
+        gate_step "source" "shell test: ${test##*/}"
         bash "$test"
     done
 
+    gate_step "source" "shell syntax sweep (bash -n)"
     while IFS= read -r -d '' test; do
         bash -n "$test"
     done < <(find dist/wlan -type f -name '*.sh' -print0)
@@ -332,10 +348,15 @@ PY
 # **본문에 검사를 직접 추가하지 마라** — 산출물이 필요한 것이 아니면 run_source 로.
 run_prebuild() {
     cd "$REPO"
+    gate_step "1/4" "source product defaults + driver provenance"
     validate_source_product_defaults
+    gate_step "2/4" "payload manifest"
     validate_payload_manifest
+    gate_step "3/4" "gate self-test (일부러 망가뜨린 패키지로 게이트가 거부하는지 확인)"
     bash scripts/validate_release_test.sh
+    gate_step "4/4" "source tests (schema + pytest + shell)"
     run_source
+    gate_step "done" "prebuild gate PASS"
 }
 
 validate_package() {

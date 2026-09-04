@@ -69,6 +69,21 @@ The build script will:
 ./build.sh
 ```
 
+The default is a development build: it does **not** run the pre-build release
+gate, which is the slowest stage by a wide margin. The package gate and the
+source tarball gate still validate the artifacts themselves.
+
+Build the final, production-quality artifacts with `--release`. That adds the
+pre-build gate — config drift, schema, unit/shell regressions and the gate's own
+self-test:
+
+```bash
+./build.sh --release
+```
+
+Every build states which mode it ran in, both before and after, so an
+unvalidated artifact is never mistaken for a release one.
+
 **Output:**
 - `wlan-bridge/wbridge/release/wbridge_<board>` - libpcap-based bridge binary
 - `wlan-bridge/wbridge/release/wbridge-tpacket_<board>` - TPACKET_V3 bridge binary

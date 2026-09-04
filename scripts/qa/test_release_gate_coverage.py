@@ -34,6 +34,13 @@ PREBUILD_ALLOWED = {
     "run_source",
 }
 
+# 진행 표시는 검사가 아니다. 게이트는 산출물 없이 수 분을 도는데, 그동안 아무것도
+# 찍지 않으면 "멈춤"과 구별되지 않아 사람이 빌드를 중단한다. 중단은 자체 테스트가
+# 임시 교체한 staging 파일을 복원 못 한 채 남길 수 있으므로 침묵 자체가 위험하다.
+# 따라서 `gate_step` 호출은 위 목록의 예외로 둔다 — 다만 그 예외가 검사를 숨기는
+# 통로가 되지 않도록, gate_step 이 정말 출력만 하는지를 아래에서 따로 단언한다.
+PROGRESS_CALL = "gate_step "
+
 # 게이트에서 제외되는 테스트 스크립트 — 전부 실기 자원을 요구한다.
 # 새로 넣으려면 여기에 이유와 함께 적어야 한다(빈칸으로 두면 이 테스트가 막는다).
 ON_TARGET_ONLY = {
@@ -74,6 +81,8 @@ class PrebuildStaysThin(unittest.TestCase):
             line = raw.strip()
             if not line or line.startswith("#"):
                 continue
+            if line.startswith(PROGRESS_CALL):
+                continue
             if line not in PREBUILD_ALLOWED:
                 stray.append(line)
         self.assertEqual(
@@ -84,6 +93,25 @@ class PrebuildStaysThin(unittest.TestCase):
 
     def test_run_prebuild_delegates_to_run_source(self):
         self.assertIn("run_source", _function_body("run_prebuild"))
+
+    def test_progress_helper_only_reports(self):
+        """`gate_step` 예외가 검사를 숨기는 통로가 되지 않게 한다.
+
+        run_prebuild 의 허용 목록은 `gate_step ...` 을 통째로 면제한다. 그 면제가
+        안전한 이유는 gate_step 이 출력만 하기 때문이므로, 그 전제가 깨지면
+        면제도 깨져야 한다.
+        """
+        offenders = [
+            line.strip()
+            for line in _function_body("gate_step").splitlines()
+            if line.strip() and not line.strip().startswith("#")
+            and not line.strip().startswith("printf ")
+        ]
+        self.assertEqual(
+            offenders, [],
+            "gate_step 이 출력 외의 일을 한다. run_prebuild 의 면제 근거가 사라졌으니 "
+            "검사는 run_source 로 옮기고 gate_step 은 printf 만 남겨라.",
+        )
 
 
 class EveryTestScriptIsWiredOrExcluded(unittest.TestCase):
