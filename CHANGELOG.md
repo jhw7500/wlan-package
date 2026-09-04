@@ -3,6 +3,25 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.6.5 (2026-09-04)
+
+> SemVer **patch** — `wifi connect` 의 stdout 첫 줄을 ASCII 로 고정하고, 다중 network 블록(모드 A)에서 인자 없는 재연결이 supplicant 가 고른 다른 블록에 착지해도 성공으로 판정한다. 0.6.4 항목에 없던 factory reset 콘솔·print.py 변경(#290)도 여기에 적는다(2026-09-04 이후의 0.6.4 빌드에는 이미 포함).
+
+### wifi connect 첫 stdout 줄 ASCII 화 (#292 / #294)
+
+- `wifi <iface> connect` 의 첫 stdout 줄은 ftpcmd `wconnect` 의 `200` 응답 본문이 된다. vsftpd 는 비ASCII 바이트를 `?` 로 살균하므로 `freq_list 유지` · `없음` · em-dash 가 `??????` 로 도착했다(cts-wlan 실측 2026-09-04).
+- `(global/block freq_list kept: ...)`, `(no frequency restriction)`, `no ssid given - reassociating ...` 로 바꾼다. stderr 의 한글 안내는 FTP 응답에 실리지 않으므로 그대로 둔다.
+
+### 다중 network 블록에서 인자 없는 connect 의 착지 판정 (#293 / #294)
+
+- 모드 A(`generate_network_blocks=true`) 또는 실제 다중 블록 conf 에서는 REASSOCIATE 뒤 supplicant 가 enable 된 모든 블록 중 best BSS 를 고른다(로밍 데몬이 cross-SSID `select_network` 뒤 `enable_network all` 로 복원하므로 시작 시점 id 에 머문다는 보장이 없다). 종전에는 그 id 를 target 으로 못 박아 다른 블록에 COMPLETED 로 붙어도 15초 뒤 exit 8 을 냈고, FTP `wconnect` 는 550 이 됐다.
+- 이제 다중 블록에서는 fresh CONNECTED event 가 가리킨 id 의 COMPLETED 를 성공으로 본다(`associated: ssid=... id=N`). 이벤트 없는 stale COMPLETED 는 여전히 exit 8, SSID 인자 지정은 여전히 exit 1 거부, 단일 블록(모드 B) 판정은 불변.
+- 실행 기반 테스트 `usr/local/scripts/tests/test_wifi_connect_cli.py` — 스텁 `wpa_cli`(데몬 모드·CONNECTED 이벤트·착지)와 `install` 스텁으로 핸들러를 실제 실행한다. 실기: cts-wlan 에서 jhw_wlan_ 파킹 → 인자 없는 connect → jhw_wlan 착지 exit 0 재현.
+
+### factory reset 콘솔·print.py (#290)
+
+- `factory_reset.sh` 진행 표시를 81줄에서 `[factory] reset 100% (40/40) ... done` 한 줄로 줄이고, `print.py` 에 CR 규칙과 단위테스트 10건을 추가한다. 빌드 도구 기본값 반전(`--release` 명시)·게이트 진행 표시는 패키지 외 변경.
+
 ## 0.6.4 (2026-09-03)
 
 > SemVer **patch** — vsftpd 의 quote 커맨드 핸들러를 이미지에서 이 패키지로 옮긴다. 기존 이미지에 deb 만 얹는 배포 경로에서 핸들러가 오지 않던 갭을 메운다.
