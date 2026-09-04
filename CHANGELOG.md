@@ -3,6 +3,18 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.6.6 (2026-09-04)
+
+> SemVer **patch** — ftpcmd 핸들러가 도는 PID 네임스페이스에서 `wifi connect` 의 재연결 이벤트 모니터가 남의 `/proc` 을 보던 것을 바로잡는다. FTP `quote wconnect` 가 같은 입력에 200 과 550 을 오가던 원인이다.
+
+### PID 네임스페이스에서의 모니터 신원 판정 (#297 / #298)
+
+- vsftpd 는 커넥션마다 ftpcmd 핸들러를 별도 PID 네임스페이스에서 실행하지만 `/proc` 은 재마운트하지 않아 호스트 것이 그대로 보인다. 그래서 `connect_event_monitor_start` 의 `/proc/<pid>/stat` 신원 고정이 네임스페이스 PID 를 호스트 프로세스에 대조했다.
+- 실측(cts-wlan 0.6.5): 핸들러의 `$$` 는 4, 호스트 PID 는 63895, `/proc/4/comm` 은 `kworker/R-rcu_g`. 부모 판정이 무관한 커널 스레드와 잘못 일치했고, `wpa_cli -B -P` 가 pidfile 에 쓴 네임스페이스 PID(26·50)는 호스트에 없어 `failed to attach reconnect event monitor` 로 `exit 7` 이 났다. 보드는 프로세스가 163개뿐이라 부재가 흔하고, 그래서 같은 명령이 200(우연 통과)과 550 을 오갔다.
+- `connect_monitor_proc_is_local` 이 `$$` 와 `/proc` 이 보고하는 자기 PID 가 같은지 한 번 판정한다. 커맨드 치환은 자기 자식을 보고하므로 builtin + 리다이렉션으로 읽는다.
+- `/proc` 이 우리 것이면 기존 시작 토큰 고정을 그대로 쓴다 — SSH 경로 동작은 바뀌지 않는다. 남의 `/proc` 이면 얻을 수 없는 보장을 흉내내지 않고 `kill -0` 생존 확인으로 내린다. `kill` 은 이 네임스페이스에서 해석되므로 탐지도 시그널도 네임스페이스 밖으로 나가지 않는다.
+- 테스트는 `unshare -Upf` 로 같은 조건을 만든다. 프로세스가 많은 빌드 호스트는 낮은 네임스페이스 PID 가 우연히 존재해 조건이 성립하지 않으므로, 자식이 호스트에 없는 번호를 받도록 PID 를 미리 소진하고 그래도 조건이 안 되면 통과시키지 않고 skip 한다. 수정을 되돌리면 두 케이스 모두 실패한다(양쪽 arm 확인).
+
 ## 0.6.5 (2026-09-04)
 
 > SemVer **patch** — `wifi connect` 의 stdout 첫 줄을 ASCII 로 고정하고, 다중 network 블록(모드 A)에서 인자 없는 재연결이 supplicant 가 고른 다른 블록에 착지해도 성공으로 판정한다. 0.6.4 항목에 없던 factory reset 콘솔·print.py 변경(#290)도 여기에 적는다(2026-09-04 이후의 0.6.4 빌드에는 이미 포함).
