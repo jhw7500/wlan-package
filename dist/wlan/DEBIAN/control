@@ -1,5 +1,5 @@
 Package: wlan-proc
-Version: 0.6.4
+Version: 0.6.5
 Section: net
 Priority: optional
 Architecture: arm64
@@ -49,3 +49,4 @@ Description: WLAN Application
  0.6.2 : 상위 툴용 FTP 계정 admin 의 SSH 로그인을 sshd 드롭인(/etc/ssh/sshd_config.d/10-wlan-admin.conf, DenyUsers admin)으로 차단한다 — admin 은 vsftpd 로컬 로그인과 /opt/ftpcmd/bin 디스패치 전용이고 비밀번호가 상위 툴 규격 고정값이라 SSH 셸까지 열려 있으면 알려진 자격증명만으로 uid 1000 셸을 얻는 경로가 된다. FTP 경로와 로그인 셸(/bin/sh — 시리얼 콘솔 복구 경로)은 그대로 두고, DenyUsers 라 계정 존재 여부와 무관하게 기존 기기에도 적용된다. postinst 가 sshd -t 로 검사해 실패하면 드롭인을 치워 SSH 락아웃을 막는다. 아울러 root 의 빈 비밀번호(passwd -S=NP + PermitEmptyPasswords yes 조합) 경로를 닫는다 — postinst 가 SHA-512 해시로 채우되 이미 설정(P)·잠김(L) 상태는 건드리지 않는다
  0.6.3 : NSS 제한의 강제 지점을 mcs_tier 에서 antcfgnss 니블로 옮긴다(제품값 0x1111 = 양 밴드 Tx1/Rx1, mcs_tier.ht 는 15) — mlanutl mcstiercfg ht 는 HT 전용이 아니라 VHT·HE 의 TX NSS 까지 지배하는 것이 실측으로 확인됐고(ht7 → VHT/HE NSS1, ht15 → NSS2, 레이트 정확히 절반), 종전 조합(antcfgnss 0x2121 + ht 7)은 MCS 상한 노브가 전 대역폭 클래스의 NSS 를 좌우하게 만들었다. 부팅 scan profile 게이트는 wedge 와 인과가 확인된 antcfg 축(mlan0/mlan1 antcfg 비활성 + mlan1 antcfgnss 비활성)으로 좁혀, 현장 조정 가능한 파일에 정확 일치를 요구하다 정당한 튜닝이 매 부팅 err 로그를 만들던 문제를 없앤다. 미반영 FW 설정 축은 wifi <iface> info 의 [FW Config Unapplied] 섹션에서 확인한다 — 종전에는 /run/wifi/fwcfg_unapplied_* 기록을 읽는 코드가 없었다. 아울러 QA soak 하니스가 test-only bgscan drop-in 을 정리하고, 100644 로 커밋돼 있던 QA 러너 5종에 실행 비트를 부여해 안전 계약 테스트 17건을 되살린다 (#242 #243 #246 #248 #251)
  0.6.4 : vsftpd 의 quote 커맨드 핸들러(rst / ifcup / ifcdown / wconnect)를 이 패키지가 /opt/ftpcmd/bin 에 배포한다 — 지금까지는 이미지(meta-cts-wlan 의 ftpcmd-handlers 레시피)가 소유했으나, 기존 이미지에 deb 만 얹는 배포 경로에서는 핸들러가 오지 않아 quote 명령이 전부 550 이 된다. wconnect 는 wifi <iface> connect 를 FTP 로 노출한다(SSID 만 전달하고 PSK 는 보드의 wpa_supplicant 프로필을 그대로 쓴다). 구 패키지 ftpcmd-handlers 를 Conflicts/Replaces 하여 이미 설치된 기기에서 파일 충돌 없이 대체한다
+ 0.6.5 : wifi connect 의 stdout 첫 줄을 ASCII 로 고정하고(ftpcmd wconnect 의 200 응답 본문 — vsftpd 가 비ASCII 를 ? 로 살균), 다중 network 블록에서 인자 없는 재연결이 supplicant 가 고른 다른 블록에 COMPLETED 로 붙으면 성공(exit 0)으로 판정한다 — 종전엔 시작 시점 id 를 target 으로 못 박아 exit 8(FTP 550). factory reset 콘솔 1줄·print.py CR 규칙(#290) 포함.
