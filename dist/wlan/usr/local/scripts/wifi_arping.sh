@@ -30,6 +30,35 @@ THRESHOLD=${THRESHOLD:-10}
 COOLDOWN=${COOLDOWN:-10}
 LOOPDELAY=${LOOPDELAY:-10}
 
+# 유선 링크 판정. `link.json` 은 wifi_logger_link@<iface> 이 만드는 파생물이라 부팅 직후엔
+# 아직 없고, 그 로거가 꺼진 구성에서는 영영 없다. 파일 부재를 "링크 다운" 으로 뭉뚱그리면
+# 케이블이 꽂혀 있어도 기다리게 된다(실측 2026-08-31: arping 과 로거가 같은 초에 떠서 부재를
+# down 으로 읽음, 그때 carrier 는 1). 그래서 유효한 link.json 값이 있으면 그것을 쓰고, 없거나
+# 못 읽으면 커널 carrier 로 내려간다. 둘 다 없으면 down 이 아니라 unknown 이다 — 모르는 것을
+# 아는 것처럼 기록하지 않는다.
+eth_link_state() {   # $1 iface, $2 link.json 경로 -> up | down | unknown
+    local iface="$1" json="$2" value=""
+    if [ -r "$json" ] && command -v jq >/dev/null 2>&1; then
+        value=$(jq -r '.eth_stats.phy.link // empty' "$json" 2>/dev/null) || value=""
+        case "$value" in
+            up)   printf 'up\n';   return 0 ;;
+            down) printf 'down\n'; return 0 ;;
+        esac
+    fi
+    value=""
+    if [ -r "${NET_SYSFS_ROOT:-/sys/class/net}/$iface/carrier" ]; then
+        # admin-down 인터페이스의 carrier 는 EINVAL 이라 읽기 자체가 실패한다.
+        IFS= read -r value < "${NET_SYSFS_ROOT:-/sys/class/net}/$iface/carrier" 2>/dev/null \
+            || value=""
+    fi
+    case "$value" in
+        1) printf 'up\n' ;;
+        0) printf 'down\n' ;;
+        *) printf 'unknown\n' ;;
+    esac
+    return 0
+}
+
 get_target_ip() {
     case "$IFACE" in
         eth0)
@@ -81,12 +110,22 @@ is_plausible_host_ip() {
 }
 
 if [ "$IFACE" = "eth0" ]; then
+    ETH_LINK_JSON="${ETH_LINK_JSON:-/var/log/cantops/json/${IFACE}/link.json}"
+    link_logged=""
     while true; do
-        STATE=$(jq -r '.eth_stats.phy.link' "/var/log/cantops/json/eth0/link.json" 2>/dev/null || echo "down")
-        if [[ "$STATE" == "up" ]]; then
+        STATE=$(eth_link_state "$IFACE" "$ETH_LINK_JSON")
+        if [ "$STATE" = "up" ]; then
             break
         fi
-        logger -p $F.info "[$tag:$LINENO] [$IFACE] not ready(link down), waiting..."
+        # 상태가 바뀔 때만 남긴다 — 매 주기 같은 줄을 쌓으면 왜 기다리는지가 묻힌다.
+        if [ "$STATE" != "$link_logged" ]; then
+            if [ "$STATE" = "unknown" ]; then
+                logger -p $F.warning "[$tag:$LINENO] [$IFACE] link state unknown (no $ETH_LINK_JSON, no carrier), waiting..."
+            else
+                logger -p $F.info "[$tag:$LINENO] [$IFACE] not ready(link down), waiting..."
+            fi
+            link_logged="$STATE"
+        fi
         sleep "$LOOPDELAY"
     done
     TARGET_IP=$(get_target_ip)
