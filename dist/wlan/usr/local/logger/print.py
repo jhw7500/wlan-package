@@ -44,8 +44,18 @@ def build_payload(color_arg: str, text: str) -> str:
 
     text = unescape_basic(text)
 
+    # 텍스트가 CR 로 끝나면 "줄을 닫지 말고 컬럼 0 으로 돌아가라"는 뜻이다.
+    # 진행 표시처럼 같은 줄을 반복해서 덮어쓰는 호출을 위한 것으로, 여기서
+    # 줄바꿈을 붙여 버리면 갱신마다 새 줄이 생겨 in-place 갱신이 불가능해진다.
+    # CR 은 색 reset 뒤에 붙여, 다음 write 가 컬럼 0 에서 시작하게 한다.
+    inplace = text.endswith("\r")
+    if inplace:
+        text = text[:-1]
+
     msg = f"{prefix}{text}{reset}"
-    if not text.endswith("\n"):
+    if inplace:
+        msg += "\r"
+    elif not text.endswith("\n"):
         msg += "\r\n"
 
     return msg

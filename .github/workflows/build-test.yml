@@ -143,7 +143,10 @@ jobs:
         if: steps.submodules.outputs.submodules == 'true' && runner.arch == 'ARM64'
         run: |
           chmod +x build.sh
-          ./build.sh
+          # CI 는 릴리스 게이트를 강제하는 자리다. build.sh 의 기본값은 개발 빌드라
+          # 플래그가 없으면 게이트를 건너뛴 산출물이 그대로 'Verify build artifacts'
+          # 를 통과한다 — release/ 정규 이름으로 나오기 때문에 구분되지 않는다.
+          ./build.sh --release
 
       - name: Verify build artifacts
         if: steps.submodules.outputs.submodules == 'true' && runner.arch == 'ARM64'

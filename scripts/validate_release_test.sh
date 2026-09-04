@@ -11,6 +11,13 @@ SOURCE_MLANUTL_IMX93="$REPO/dist/wlan/opt/wlan/bin/mlanutl_imx93"
 SOURCE_MLAN_IMX93="$REPO/dist/wlan/opt/wlan/driver/mlan_imx93.ko"
 GEN_DRIVER_MANIFEST="$REPO/scripts/gen_driver_manifest.sh"
 
+# 이 스크립트 실행 시간의 대부분은 패키지 픽스처 구간이다 — 케이스마다 트리를
+# 새로 만들고(payload manifest 전량) dpkg-deb 로 압축한다. make_tree 가 그 구간의
+# 유일한 공통 진입점이므로 여기 하나만 계측하면 전 구간 진행이 보인다.
+# 총 개수는 호출부를 세어 구하므로 케이스를 늘려도 따로 고칠 곳이 없다.
+SELF_TEST_TOTAL=$(grep -c '^make_tree$' "$0" || true)
+SELF_TEST_N=0
+
 # DEBIAN/control is the release-version SSoT.  Documentation and build logic
 # must not introduce a second concrete version that every release has to edit.
 if grep -Eq 'Current Version:\*\*[[:space:]]*[0-9]+(\.[0-9]+)+' "$REPO/README.md"; then
@@ -125,6 +132,9 @@ if (
 fi
 
 make_tree() {
+    SELF_TEST_N=$((SELF_TEST_N + 1))
+    printf '  [gate 3/4] self-test package fixture %d/%d\n' \
+        "$SELF_TEST_N" "$SELF_TEST_TOTAL" >&2
     rm -rf "$PKG"
     mkdir -p "$PKG/DEBIAN" \
         "$PKG/opt/wlan/config/wpa_supplicant" \
@@ -137,9 +147,18 @@ make_tree() {
     for rel in config templates preinst postinst prerm postrm; do
         cp -p "$REPO/dist/wlan/DEBIAN/$rel" "$PKG/DEBIAN/$rel"
     done
+    # 매니페스트 370줄마다 dirname/mkdir 을 서브프로세스로 부르면 호출당 프로세스가
+    # 740개 뜬다(실측 1.29초 × 31 케이스 = 40초로, 이 스크립트의 최대 비용이었다).
+    # 셸 빌트인 치환 + 디렉터리 중복 제거로 같은 트리를 0.08초에 만든다.
+    local -A made=()
+    local dir
     while IFS= read -r rel; do
         [ -n "$rel" ] || continue
-        mkdir -p "$PKG/$(dirname "$rel")"
+        dir="${rel%/*}"
+        if [ "$dir" != "$rel" ] && [ -z "${made[$dir]:-}" ]; then
+            mkdir -p "$PKG/$dir"
+            made["$dir"]=1
+        fi
         if [ "$rel" = "DEBIAN/payload-manifest.txt" ]; then
             cp "$REPO/dist/wlan/$rel" "$PKG/$rel"
         else

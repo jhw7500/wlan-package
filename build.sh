@@ -1,12 +1,54 @@
 #!/bin/bash
 set -euo pipefail
 
+usage() {
+    cat <<'EOF'
+usage: ./build.sh [--release]
+
+  (기본)       개발 빌드. 빌드 직전 릴리스 게이트를 돌리지 않는다.
+               산출물 자체를 검사하는 패키지 게이트와 소스 tarball 게이트는
+               기본 빌드에서도 그대로 돈다.
+  --release    양산/릴리스 빌드. 위에 더해 빌드 직전 릴리스 게이트
+               (scripts/validate_release.sh pre)를 돌린다 — 설정 drift, schema,
+               단위/shell 회귀, 게이트 자체 테스트까지 전부. 최종 산출물은
+               이 모드로 만든다.
+  -h, --help   이 도움말.
+
+릴리스 모드를 환경변수가 아니라 플래그로 둔 이유: export 된 환경변수는 그 셸의
+모든 후속 빌드에 조용히 남아, 어떤 모드로 만든 산출물인지 알 수 없게 만든다.
+플래그는 호출마다 명시해야 한다.
+EOF
+}
+
+RELEASE_BUILD=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --release)   RELEASE_BUILD=1; shift ;;
+        -h|--help)   usage; exit 0 ;;
+        *)
+            echo "Error: unknown option: $1" >&2
+            usage >&2
+            exit 64
+            ;;
+    esac
+done
+
+# 기본 빌드도 release/ 의 정규 이름으로 발행되므로, 어떤 모드였는지 시작과 끝
+# 양쪽에 남긴다. 스크롤이 길어도 마지막 화면에 사실이 보여야 한다.
+dev_build_notice() {
+    echo "[build] dev build — 릴리스 게이트(pre)를 돌리지 않았습니다. $1" >&2
+}
+
 BASEDIR=${PWD}
 echo "Script location: ${BASEDIR}"
 
-# 오래 걸리는 cross-build 전에 설정 drift·schema·단위/shell 회귀를 먼저 차단한다.
-bash "${BASEDIR}/scripts/validate_release.sh" pre \
-    || { echo "Error: pre-build release gate failed" >&2; exit 1; }
+if [ "${RELEASE_BUILD}" -eq 1 ]; then
+    # 오래 걸리는 cross-build 전에 설정 drift·schema·단위/shell 회귀를 먼저 차단한다.
+    bash "${BASEDIR}/scripts/validate_release.sh" pre \
+        || { echo "Error: pre-build release gate failed" >&2; exit 1; }
+else
+    dev_build_notice "릴리스 산출물은 ./build.sh --release 로 만드십시오."
+fi
 
 # Build wlan-bridge binaries (wbridge)
 echo "Building wbridge binaries..."
@@ -363,3 +405,9 @@ mv -f "${CANDIDATE_SUMS}" "${BASEDIR}/release/SHA256SUMS" || {
     exit 1
 }
 echo "Created: ${BASEDIR}/release/wlan-package.tar"
+
+if [ "${RELEASE_BUILD}" -eq 1 ]; then
+    echo "[build] release build — 릴리스 게이트(pre) 통과." >&2
+else
+    dev_build_notice "위 산출물을 릴리스에 사용하지 마십시오."
+fi
