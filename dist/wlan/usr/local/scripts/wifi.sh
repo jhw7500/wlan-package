@@ -810,7 +810,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} psk {password} : persist"
     echo "       wifi {0|1|mlan0|mlan1} key {0|1|NONE|WPA-PSK|SAE|OWE|FT-PSK|WPA-EAP|...} : persist (wpa_supplicant 인식 토큰만; 공백구분 다중 지정 가능)"
     echo "       wifi {0|1|mlan0|mlan1} freq {freq_list|channel_list} : persist"
-    echo "       wifi {0|1|mlan0|mlan1} connect [ssid] [freq_list|channel_list] : ssid+전역/블록 freq_list 변경 후 reconfigure 적용(재연결); 인자 없으면 현재 설정으로 재연결(reassociate)"
+    echo "       wifi {0|1|mlan0|mlan1} connect [ssid] [freq_list|channel_list] : ssid+전역/블록 freq_list 변경 후 reconfigure 적용(재연결); 인자 없으면 현재 설정으로 재연결(reassociate; 모드 A/다중 블록은 enable된 network 중 supplicant 선택)"
     echo "       wifi {0|1|mlan0|mlan1} scan {freq_list|channel_list|2G|5G} : runtime"
     echo "       wifi {0|1|mlan0|mlan1} mscan {get|channel_list|2G|5G} : runtime (setuserscan/getscantable)"
     echo "       wifi {0|1|mlan0|mlan1} roam [0|1..N] : same-SSID BSS 전환 (0=auto best, N=Nth AP, RSSI order)"
@@ -2745,6 +2745,8 @@ case "$2" in
     TARGET_SSID_WPA_TEXT=""
     HAS_TARGET_ID=0
     TARGET_ID=""
+    MULTI_TOPOLOGY=0
+    MULTI_INITIAL_ID=""
     SET_FREQ=0
     FREQ_STR=""
     CONNECT_TIMEOUT="$ASSOC_TIMEOUT_DEFAULT"
@@ -2792,12 +2794,19 @@ case "$2" in
         if [ $# -ge 1 ]; then
             echo "Error: $CONF 는 Mode A 또는 다중 network topology입니다." >&2
             echo "       SSID 전환은 boot-latched owner policy에 따라 자동 처리됩니다." >&2
-            echo "       SSID 없이 'wifi <iface> connect'를 실행하면 현재 network 재연결을 요청합니다." >&2
+            echo "       SSID 없이 'wifi <iface> connect'를 실행하면 재연결(reassociate)만 요청하며," >&2
+            echo "       enable된 network 블록 중 supplicant가 고른 곳에 붙습니다." >&2
             exit 1
         fi
-
-        # No-argument paths already captured the current numeric id above.
-        # A disconnected/no-id Mode A recovery intentionally remains broad.
+        # 다중 블록에서는 REASSOCIATE 뒤 supplicant가 enable된 모든 블록 중 best BSS를
+        # 고른다(로밍 데몬이 cross-SSID select_network 뒤 enable_network all로 복원하므로
+        # 시작 시점 id에 머문다는 보장이 없다 — #293). 그 id를 target으로 못 박지 않고,
+        # fresh CONNECTED event가 가리킨 id의 COMPLETED로 착지를 증명한다(broad 경로).
+        # disconnected/no-id 복구도 같은 경로다.
+        MULTI_TOPOLOGY=1
+        MULTI_INITIAL_ID="$TARGET_ID"
+        HAS_TARGET_ID=0
+        TARGET_ID=""
     fi
     trap 'connect_event_monitor_cleanup; wifi_wpa_run_child sync 2>/dev/null || true' EXIT
     trap 'exit 129' HUP
@@ -2874,9 +2883,9 @@ case "$2" in
         if [ "$SET_FREQ" = "1" ]; then
             echo "conf updated: ssid=\"$NEW_SSID\" global/block freq_list=$FREQ_STR in $CONF"
         elif [ -n "$FREQ_STR" ]; then
-            echo "conf updated: ssid=\"$NEW_SSID\" (global/block freq_list 유지: $FREQ_STR) in $CONF"
+            echo "conf updated: ssid=\"$NEW_SSID\" (global/block freq_list kept: $FREQ_STR) in $CONF"
         else
-            echo "conf updated: ssid=\"$NEW_SSID\" (frequency restriction 없음) in $CONF"
+            echo "conf updated: ssid=\"$NEW_SSID\" (no frequency restriction) in $CONF"
         fi
         if ! connect_event_monitor_arm || ! wpa_cli_ok "$IFACE" reconfigure; then
             echo "Error: wpa_cli reconfigure failed for $IFACE (wpa_supplicant 미동작 또는 conf 문법 오류 확인)" >&2
@@ -2907,15 +2916,18 @@ case "$2" in
         done
     else
         # === 인자 없음: conf 그대로 현재 설정으로 재연결만 ===
-        if [ "$HAS_TARGET_ID" = "1" ]; then
-            echo "no ssid given — reassociating current network id=$TARGET_ID on $IFACE..."
+        # stdout 첫 줄은 ftpcmd `wconnect`의 200 응답 본문이 되므로 ASCII만 쓴다(#292).
+        if [ "$MULTI_TOPOLOGY" = "1" ]; then
+            echo "no ssid given - reassociating $IFACE (multi-network topology: current id=${MULTI_INITIAL_ID:-none}, supplicant selects among enabled networks)..."
+        elif [ "$HAS_TARGET_ID" = "1" ]; then
+            echo "no ssid given - reassociating current network id=$TARGET_ID on $IFACE..."
         else
-            echo "no ssid/current id given — reassociating $IFACE with current conf..."
+            echo "no ssid/current id given - reassociating $IFACE with current conf..."
         fi
     fi
     # --- 공통: owner-neutral 강제 재연결(reassociate 우선, 실패 시 reconnect) → assoc 대기 ---
-    # Mode A도 다른 network 블록의 enabled 상태를 바꾸지 않는다. 최초에 캡처한 id는
-    # fresh CONNECTED event와 그 이후 COMPLETED 폴링으로만 증명한다.
+    # Mode A도 다른 network 블록의 enabled 상태를 바꾸지 않는다. 단일 블록은 최초에 캡처한
+    # id를, 다중 블록은 fresh CONNECTED event가 가리킨 id를 그 이후 COMPLETED 폴링으로 증명한다.
     if ! connect_event_monitor_arm; then
         echo "Error: failed to arm reconnect event monitor for $IFACE" >&2
         exit 7
