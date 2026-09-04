@@ -128,6 +128,29 @@ exec /usr/bin/install "${args[@]}"
 '''
 
 
+# vsftpd `isolate` 조건 재현 wrapper. 두 가지를 만든다.
+#  1. 새 PID 네임스페이스이지만 `/proc` 은 **호스트 것 그대로**다(--mount-proc 를 쓰지 않는다).
+#  2. 자식이 받는 ns PID 가 호스트 /proc 에 **없도록** 미리 PID 를 소진한다. 실기(cts-wlan)는
+#     프로세스가 163개뿐이라 낮은 ns PID 가 호스트에 없는 것이 정상이지만, 프로세스가 많은
+#     빌드 호스트는 낮은 번호가 우연히 존재해 조건이 성립하지 않는다(실측: 소진 없이는 통과).
+# `"$@"; exit $?` 로 두 문장을 만들어 bash 의 exec 최적화를 막는다 — wifi.sh 가 ns PID 1(init)이
+# 되면 시그널 기본동작과 고아 reaper 규약이 실기와 달라진다.
+# 조건을 못 만들면 조용히 통과시키지 않고 99 로 끝내 테스트가 skip 되게 한다.
+NS_WRAPPER = r'''
+burn="${WIFI_TEST_PIDNS_BURN:-400}"
+i=0
+while [ "$i" -lt "$burn" ]; do (:); i=$((i + 1)); done
+(:) & probe=$!
+wait "$probe" 2>/dev/null
+if [ -r "/proc/$probe/stat" ]; then
+    echo "HARNESS: ns pid $probe still resolves in host /proc" >&2
+    exit 99
+fi
+"$@"
+exit $?
+'''
+
+
 class ConnectHarness(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix="wifi-connect-"))
@@ -158,7 +181,7 @@ class ConnectHarness(unittest.TestCase):
     def land_on(self, net_id, ssid, freq):
         (self.state / "landing").write_text(f"{net_id} {ssid} {freq}\n")
 
-    def run_connect(self, *args):
+    def run_connect(self, *args, pid_namespace=False):
         env = dict(os.environ)
         env.update({
             "PATH": f"{self.stub}:{os.environ['PATH']}",
@@ -169,9 +192,11 @@ class ConnectHarness(unittest.TestCase):
             "WIFI_SCAN_TRANSITION_LOCK_TIMEOUT": "0",
             "ASSOC_TIMEOUT_DEFAULT": "2",
         })
+        argv = ["bash", str(WIFI_SH), "mlan0", "connect", *args]
+        if pid_namespace:
+            argv = ["unshare", "-Upf", "bash", "-c", NS_WRAPPER, "_", *argv]
         return subprocess.run(
-            ["bash", str(WIFI_SH), "mlan0", "connect", *args],
-            capture_output=True, text=True, timeout=60, env=env,
+            argv, capture_output=True, text=True, timeout=60, env=env,
         )
 
     @staticmethod
@@ -245,6 +270,53 @@ class ModeANoArgReconnect(ConnectHarness):
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("Mode A", r.stderr)
         self.assertIn('ssid="jhw_wlan_"', self.conf.read_text())   # conf 는 그대로
+
+
+def _pid_namespace_available():
+    """ns PID ≠ 호스트 /proc PID 조건을 만들 수 있는가. sudo 없이 unprivileged userns 로 만든다."""
+    if shutil.which("unshare") is None:
+        return False
+    try:
+        probe = subprocess.run(
+            ["unshare", "-Upf", "bash", "-c", 'echo "$$ $(cut -d\' \' -f1 /proc/self/stat)"; exit 0'],
+            capture_output=True, text=True, timeout=20,
+        )
+    except Exception:  # noqa: BLE001 - 환경 탐지, 무엇이든 미지원으로 본다
+        return False
+    if probe.returncode != 0:
+        return False
+    fields = probe.stdout.split()
+    return len(fields) == 2 and fields[0] != fields[1]
+
+
+@unittest.skipUnless(_pid_namespace_available(), "PID namespace unavailable")
+class ConnectInsidePidNamespace(ConnectHarness):
+    """#297 — vsftpd 는 커넥션마다 별도 PID 네임스페이스에서 핸들러를 실행하지만 `/proc` 은
+    호스트 것이 그대로 보인다. 재연결 이벤트 모니터가 PID 를 `/proc` 으로 판정하면 자기 자식이
+    아니라 같은 번호의 호스트 프로세스를 보게 된다. 그 조건에서도 connect 는 동작해야 한다."""
+
+    def _run(self, *args):
+        r = self.run_connect(*args, pid_namespace=True)
+        if r.returncode == 99:
+            self.skipTest(f"PID namespace condition unmet: {r.stderr.strip()}")
+        return r
+
+    def test_no_arg_reconnect_attaches_monitor_inside_pid_namespace(self):
+        self.write_conf(CONF_MODE_B)
+        self.land_on(0, "jhw_wlan_", 5220)
+        r = self._run()
+        self.assertNotIn("failed to attach reconnect event monitor", r.stderr)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        # 성공 판정은 스텁 데몬이 넣은 fresh CONNECTED 이벤트를 거쳐야만 나온다 —
+        # 즉 모니터가 남의 호스트 PID 가 아니라 우리 자식에 실제로 붙었다는 증거다.
+        self.assertIn('associated: ssid="jhw_wlan_"', r.stdout)
+
+    def test_ssid_switch_inside_pid_namespace(self):
+        self.write_conf(CONF_MODE_B)
+        self.land_on(0, "jhw_wlan", 5200)
+        r = self._run("jhw_wlan")
+        self.assertNotIn("failed to attach reconnect event monitor", r.stderr)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
 
 if __name__ == "__main__":

@@ -456,12 +456,33 @@ connect_monitor_proc_start_into() {
     printf -v "$output_name" '%s' ""
     case "$pid" in ''|*[!0-9]*) return 1 ;; esac
     [ "$pid" -gt 1 ] || return 1
+    if [ "${CONNECT_MONITOR_PROC_LOCAL:-1}" != "1" ]; then
+        # Foreign /proc (see connect_monitor_proc_is_local): a start token read
+        # here would describe an unrelated host process, so the reuse guard it
+        # normally provides is unobtainable and must not be faked.  Fall back to
+        # liveness.  `kill` resolves in this namespace, so both the probe and any
+        # later signal stay confined to processes this namespace owns.
+        kill -0 "$pid" 2>/dev/null || return 1
+        printf -v "$output_name" '%s' "ns"
+        return 0
+    fi
     [ -r "/proc/$pid/stat" ] || return 1
     IFS= read -r stat < "/proc/$pid/stat" 2>/dev/null || return 1
     rest=${stat##*) }
     set -- $rest
     [ $# -ge 20 ] && [ "${1:-}" != "Z" ] || return 1
     printf -v "$output_name" '%s' "${20}"
+}
+
+# vsftpd runs ftpcmd handlers inside a private PID namespace while /proc stays
+# the host's, so `$$` and the PID /proc reports for this very shell disagree.
+# Read it with a redirection on a builtin: a command substitution would report
+# its own child and make every run look foreign.
+connect_monitor_proc_is_local() {
+    local stat
+    [ -r /proc/self/stat ] || return 1
+    IFS= read -r stat < /proc/self/stat 2>/dev/null || return 1
+    [ "${stat%% *}" = "$$" ]
 }
 
 connect_monitor_pid_matches() {
@@ -475,6 +496,12 @@ connect_monitor_pid_is_wpa_cli() {
     local pid="$1" arg
     case "$pid" in ''|*[!0-9]*) return 1 ;; esac
     [ "$pid" -gt 1 ] || return 1
+    if [ "${CONNECT_MONITOR_PROC_LOCAL:-1}" != "1" ]; then
+        # Foreign /proc: cmdline would belong to a host process.  Recovering the
+        # PID from our own mode-0700 directory plus liveness is all that remains.
+        kill -0 "$pid" 2>/dev/null
+        return
+    fi
     [ -r "/proc/$pid/cmdline" ] || return 1
     while IFS= read -r -d '' arg; do
         case "$arg" in wpa_cli|*/wpa_cli) return 0 ;; esac
@@ -530,6 +557,13 @@ connect_event_monitor_start() { # $1 iface, $2 association timeout seconds
     local iface="$1" timeout="$2" action pidfile pid start parent_pid parent_start
     local watchdog_ticks watchdog_pid watchdog_start _i
 
+    # Decide once, before any identity is pinned, whether /proc describes this
+    # process tree.  The watchdog subshell inherits the answer.
+    if connect_monitor_proc_is_local; then
+        CONNECT_MONITOR_PROC_LOCAL=1
+    else
+        CONNECT_MONITOR_PROC_LOCAL=0
+    fi
     wifi_wpa_run_child mkdir -p "$WIFI_RUN_DIR" 2>/dev/null || return 1
     CONNECT_MONITOR_DIR=$(wifi_wpa_child_exec mktemp -d "$WIFI_RUN_DIR/${iface}.connect-monitor.XXXXXX") \
         || return 1
