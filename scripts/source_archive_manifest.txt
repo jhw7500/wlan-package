@@ -236,6 +236,7 @@ dist/wlan/usr/local/logger/tests/test_logger_scan_real_pipe.py
 dist/wlan/usr/local/logger/tests/test_logger_scan_stale_threshold.py
 dist/wlan/usr/local/logger/tests/test_parse_mwlan.py
 dist/wlan/usr/local/logger/tests/test_passive_roam_stale_gate.py
+dist/wlan/usr/local/logger/tests/test_print.py
 dist/wlan/usr/local/logger/tests/test_roam_backoff.py
 dist/wlan/usr/local/logger/tests/test_roam_candidate_selection.py
 dist/wlan/usr/local/logger/tests/test_roam_conditions.py

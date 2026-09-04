@@ -169,9 +169,27 @@ customctl() {
     status=$(systemctl is-enabled $daemon_name 2>/dev/null)
     echo "$daemon_name is $status"
     INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 1))
+    install_pct=$((INSTALL_DOT_COUNT * 100 / INSTALL_UNIT_TOTAL))
+    [ "$install_pct" -le 100 ] || install_pct=100
     dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
-    safe_print green "\r\n[factory] reset${dots}"
+    # 진행 표시는 유닛마다 줄을 쌓을 게 아니라 같은 줄을 덮어써야 읽힌다.
+    # 끝의 \r 이 print.py 에 "줄을 닫지 말고 컬럼 0 으로 돌아가라"는 표시다.
+    # 덮어쓴 자리에 이전 글자가 남지 않으려면 줄 길이가 단조 증가해야 하므로
+    # 숫자는 고정폭으로 찍고, 점은 어차피 매번 하나씩 늘어난다.
+    safe_print green "$(printf '[factory] reset %3d%% (%2d/%2d) %s' \
+        "$install_pct" "$INSTALL_DOT_COUNT" "$INSTALL_UNIT_TOTAL" "$dots")\r"
 }
+
+# 진행률의 분모. 아래 customctl 호출 줄을 세어 구하므로, 유닛을 늘리거나 주석
+# 처리해도 따로 고칠 곳이 없다. 세지 못하면 0 나눗셈이 되므로 1 로 폴백하되,
+# 진행률만 무의미해질 뿐 factory reset 자체는 계속 진행해야 하므로 경고만 남긴다.
+INSTALL_UNIT_TOTAL=$(grep -cE '^[[:space:]]*customctl[[:space:]]' "$0" 2>/dev/null)
+case "$INSTALL_UNIT_TOTAL" in
+    ''|*[!0-9]*|0)
+        logger -p local0.warn "[$tag:$LINENO] cannot count customctl units in $0; progress percent unreliable"
+        INSTALL_UNIT_TOTAL=1
+        ;;
+esac
 
   customctl mask systemd-networkd-wait-online
   customctl mask nfs-server
@@ -218,6 +236,12 @@ customctl() {
   #customctl enable arping@mlan0
   customctl enable wifi_led@mlan0
   #customctl enable wifi_capture@mlan0
+
+  # 위 진행 표시는 CR 로 같은 줄을 덮어써 왔다. 여기서 한 번 줄을 닫아, 이후
+  # 콘솔 출력이 진행 줄 뒤에 이어붙지 않게 한다. 직전 갱신보다 짧으면 그 꼬리가
+  # 화면에 남으므로, 같은 점 문자열을 유지한 채 " done" 만 덧붙인다.
+  safe_print green "$(printf '[factory] reset %3d%% (%2d/%2d) %s done' \
+      "${install_pct:-0}" "${INSTALL_DOT_COUNT:-0}" "${INSTALL_UNIT_TOTAL:-0}" "${dots:-}")"
 
   safe_cp /opt/wlan/mfg/bridge_init.conf /usr/local/mfg/bridge_init.conf
   safe_cp /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/timesyncd.conf
