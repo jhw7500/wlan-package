@@ -90,6 +90,26 @@ MAX_REBOOT_COUNT=${MAX_REBOOT_COUNT:-3}
 
 STATE_DIR=${STATE_DIR:-/var/log/cantops}
 RUN_DIR=${RUN_DIR:-/run/cantops/wlan-policy}
+# opcd(wlan-opc)가 SIGTERM(시스템 종료 중)에서 읽어 장치 리셋 통지(0x0020)의
+# Reset Cause로 보내는 파일. 한 줄 "0x.." (wlan-opc protocol/ids.h OPC_RESET_CAUSE_*).
+# 없으면 opcd는 0x0002(SYSTEM, 원인 미상)로 통지한다. (#304)
+RESET_CAUSE_PATH=${RESET_CAUSE_PATH:-/run/opc/reset_cause}
+
+# --source/--reason → Reset Cause ID. 매핑에 없으면 빈 문자열(파일을 남기지 않음).
+reset_cause_id() {
+  case "$SOURCE" in
+    wifi_checker)
+      case "$REASON" in
+        *station_dump_fault*) echo 0x11 ;;   # station dump 장애 지속
+        *)                    echo 0x10 ;;   # link / fw_crash: 무선 IF 소실
+                                             # (wifi_checker의 다른 새 CAUSE가 생기면 여기에 추가)
+      esac ;;
+    wlan_fw_watch)    echo 0x12 ;;           # 드라이버 wedge, 리로드 실패
+    wifi_logger_temp) echo 0x20 ;;           # 과열 복구 재부팅
+    wifi_init)        echo 0x30 ;;           # wlan_emergency_reboot: wifi_init 실패
+    *)                echo "" ;;
+  esac
+}
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -185,6 +205,19 @@ fi
 
 log_all "reboot: approved (attempt ${count}/${MAX_REBOOT_COUNT}, cooldown=${REBOOT_COOLDOWN_SEC}s, uptime=${uptime}s) (source=${SOURCE:-n/a} iface=${IFACE:-n/a} reason=$REASON)"
 
+# 승인된 뒤에만(거부 분기에서 stale 파일을 남기지 않도록) Reset Cause를 기록한다.
+# do_reboot 가 systemd 종료를 시작하면 opcd 가 SIGTERM 에서 이 파일을 읽는다.
+# 실패해도 재부팅은 진행한다 — 통지는 best-effort, 복구가 우선.
+_cause=$(reset_cause_id)
+if [ -n "$_cause" ]; then
+  if mkdir -p "$(dirname "$RESET_CAUSE_PATH")" 2>/dev/null \
+     && printf '%s\n' "$_cause" 2>/dev/null > "$RESET_CAUSE_PATH"; then
+    log_syslog "reset cause $_cause recorded for opcd ($RESET_CAUSE_PATH) (source=${SOURCE:-n/a} reason=$REASON)"
+  else
+    log_syslog "reset cause $_cause NOT recorded ($RESET_CAUSE_PATH unwritable) — opcd will report 0x0002 (source=${SOURCE:-n/a})"
+  fi
+fi
+
 # reboot 직전 volatile journal 을 eMMC 로 동기 flush.
 # do_reboot 가 2차(reboot -f)/3차(sysrq)로 escalation 되면 journald-snapshot-boundary
 # 의 ExecStop 이 실행되지 않아 직전 로그가 유실되므로, 여기서 1회 스냅샷한다.
@@ -200,6 +233,9 @@ if do_reboot; then
   exit 0
 else
   rc=$?
+  # 3단계 모두 실패: 시스템은 살아 있고 cause 파일만 남는다. 지워 두지 않으면 나중의
+  # 운용자 재부팅이 이 옛 WLAN 원인을 통지한다(파일 없음 → opcd 0x0002).
+  rm -f "$RESET_CAUSE_PATH" 2>/dev/null || true
   log_all "reboot: failed (rc=$rc) (source=${SOURCE:-n/a} iface=${IFACE:-n/a} reason=$REASON)"
   exit "$rc"
 fi

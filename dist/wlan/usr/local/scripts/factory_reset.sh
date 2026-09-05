@@ -371,5 +371,14 @@ rm -f -- "$FACTORY_STAGED_CONFIG" "$PRESERVE_SNAPSHOT"
 # 3초 sleep은 logger/print 출력이 콘솔/저널에 flush될 시간 확보.
 logger -p local0.info "[$tag:$LINENO] rebooting in 3s to apply all changes"
 safe_print cyan "[factory] rebooting in 3s..."
+# 공장 초기화는 wlan_reboot_policy.sh 를 거치지 않는 유일한 재부팅이라 여기서 직접
+# opcd 의 Reset Cause(0x40 FACTORY_RESET, /run/opc/reset_cause)를 남긴다. 실패해도
+# 재부팅은 진행한다(opcd 는 0x0002 로 통지). (#304)
+if mkdir -p /run/opc 2>/dev/null \
+   && printf '0x40\n' 2>/dev/null > /run/opc/reset_cause; then
+    :
+else
+    logger -p local0.warning "[$tag:$LINENO] reset cause 0x40 not recorded (/run/opc unwritable)"
+fi
 sleep 3
 systemctl reboot

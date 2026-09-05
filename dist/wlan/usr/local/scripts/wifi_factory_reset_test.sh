@@ -360,6 +360,14 @@ if sed -n '/factory_reset\.sh/,+12p' "$SWITCHD" | grep -q 'wlan_reboot_policy\.s
 else
     pass "factory reset remains the single reboot owner"
 fi
+# #304: 공장 초기화는 정책 스크립트를 거치지 않는 유일한 재부팅이라, 직접
+# Reset Cause 0x40을 /run/opc/reset_cause에 남긴 뒤 reboot 해야 opcd가 통지한다.
+# 순서 계약: 기록이 `systemctl reboot` 보다 앞에 있고, 억제(reboot inhibited) 분기 뒤에 있다.
+if awk '/reboot inhibited/{inh=NR} /^[[:space:]]*(if )?mkdir -p \/run\/opc/{m=NR} /^[[:space:]]*(&& )?printf .0x40.*reset_cause/{c=NR} /^systemctl reboot/{r=NR} END{exit !(inh && m && c && r && inh<m && m<=c && c<r)}' "$FACTORY_SCRIPT"; then
+    pass "factory reset writes Reset Cause 0x40 after the inhibit gate and before reboot"
+else
+    fail "factory reset does not write Reset Cause 0x40 before systemctl reboot"
+fi
 if grep -Eq "trap .*exit 0.*(INT TERM EXIT|EXIT)" "$SWITCHD"; then
     fail "switchd EXIT trap masks factory reset failure status"
 else

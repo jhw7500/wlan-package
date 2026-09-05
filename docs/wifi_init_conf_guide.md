@@ -1414,6 +1414,21 @@ do_reboot():
 - **3차 sysrq 경로**는 `device_shutdown()`을 건너뛰어 D state 드라이버 락과 무관하게 HW reset 수행
 - 각 단계는 background 실행으로 block 시에도 다음 단계로 진행
 
+### opcd 장치 리셋 통지용 Reset Cause 기록 (#304)
+
+승인된 재부팅은 `do_reboot` 직전에 `/run/opc/reset_cause`(한 줄, `0x..`)를 남기고, opcd(wlan-opc)가 SIGTERM(시스템 종료 중)에서 이를 읽어 장치 리셋 통지(0x0020)의 Reset Cause로 보낸다. 파일이 없으면 opcd는 `0x0002`(원인 미상)로 통지한다. 거부된 요청(uptime/loop/mfg)은 파일을 남기지 않으며, 기록 실패는 syslog에만 남기고 재부팅은 진행한다. 값(wlan-opc `protocol/ids.h`):
+
+| `--source` (reason) | 값 | 의미 |
+|---|---|---|
+| `wifi_checker` (link / fw_crash — station_dump_fault 외 모든 reason) | `0x10` | 무선 IF 소실·FW 크래시 |
+| `wifi_checker` (station_dump_fault) | `0x11` | station dump 장애 지속 |
+| `wlan_fw_watch` | `0x12` | 드라이버 wedge, 리로드 실패 |
+| `wifi_logger_temp` | `0x20` | 과열 복구 재부팅 |
+| `wifi_init` (wlan_emergency_reboot) | `0x30` | wifi_init 실패 |
+| — `factory_reset.sh` 직접 기록 | `0x40` | 공장 초기화 후 재부팅 (정책 스크립트 미경유) |
+
+경로는 `RESET_CAUSE_PATH` 환경변수로 바꿀 수 있다(테스트용). 1차 graceful 단계에서만 통지가 가능하고 2차 `reboot -f`/3차 sysrq/HW watchdog은 원리상 통지 불가. 3단계가 모두 실패해 스크립트가 돌아오면(rc 127) 파일을 지워 나중의 운용자 재부팅이 옛 원인을 통지하지 않게 한다.
+
 ### 연관 JSON 설정 (요약)
 
 reboot 동작을 조정하는 주요 키들 (상세는 §4 checker 참조):
