@@ -202,38 +202,36 @@ case " $* " in
       printf 'FAIL\n'
       exit 1
     fi
-    # A native wpa_cli daemon has argv[0]="wpa_cli" even when PATH resolved
-    # the executable.  Model that exact /proc identity for safe PID handling.
-    # Publish ordering is part of that model: wifi.sh refuses to signal a PID
-    # recovered from this pidfile unless connect_monitor_pid_is_wpa_cli accepts
-    # it (wifi.sh:495-510, 528-536), so the renamed image -- not its forking
-    # parent -- must be the pidfile's author, and in stubborn mode the TERM trap
-    # must already be installed when that write lands.
-    monitor_body='
-      [ "$1" != stubborn ] || trap "" TERM
-      printf "%s\n" "$$" > "$2"
-      exec -a wpa_cli sleep 60
-    '
-    bash -c 'exec -a wpa_cli bash -c "$0" wpa_cli "$1" "$2"' \
-      "$monitor_body" "$mode" "$pidfile" >/dev/null 2>&1 &
+    # A native wpa_cli daemon has argv[0]="wpa_cli" even when PATH resolved the
+    # executable, and wifi.sh refuses to signal a monitor PID it cannot identify
+    # (connect_monitor_pid_is_wpa_cli, wifi.sh:495-510, reached from the cleanup
+    # recovery path at wifi.sh:528-536).  So publish nothing until argv[0] of
+    # this PID is observed to be wpa_cli; the same observation proves the
+    # stubborn TERM trap already ran, since it is installed before the exec and
+    # a SIG_IGN disposition survives execve.  Bound the wait at wifi.sh's own
+    # tolerance for a late pidfile (10 x 0.1s at wifi.sh:614 and 658) and fail
+    # closed.  The value that gates publication is the value recorded, so a
+    # regression that publishes earlier cannot leave a passing record behind.
+    bash -c '[ "$1" != stubborn ] || trap "" TERM; exec -a wpa_cli sleep 60' \
+      _ "$mode" >/dev/null 2>&1 &
     monitor_pid=$!
-    # Wait no longer than wifi.sh's own tolerance for a late pidfile (10 x 0.1s
-    # at wifi.sh:539, 614 and 658), then fail closed: publishing on expiry would
-    # restore the publish-before-identity state this models away, under a CI
-    # signature indistinguishable from that bug.
     _i=0
-    while [ ! -s "$pidfile" ] && [ "$_i" -lt 100 ]; do
+    _argv0=""
+    while [ "$_i" -lt 100 ]; do
+      _argv0=$(tr '\0' '\n' < "/proc/$monitor_pid/cmdline" 2>/dev/null | head -1)
+      case "$_argv0" in wpa_cli|*/wpa_cli) break ;; esac
       _i=$((_i + 1))
       sleep 0.01
     done
-    [ -s "$pidfile" ] || { printf 'FAIL\n'; exit 1; }
-    # Record what the published PID's identity actually was, so the harness can
-    # assert this ordering instead of trusting it: a fork-time publish records
-    # "bash" here and turns the assertion red.
-    tr '\0' '\n' < "/proc/$monitor_pid/cmdline" 2>/dev/null | head -1 \
-      > "$STATE_DIR/last-monitor-argv0"
-    IFS= read -r _published_pid < "$pidfile"
-    printf '%s\n' "$_published_pid" > "$STATE_DIR/last-monitor-pid"
+    case "$_argv0" in
+      wpa_cli|*/wpa_cli) ;;
+      *) kill -KILL "$monitor_pid" 2>/dev/null
+         printf 'FAIL\n'
+         exit 1 ;;
+    esac
+    printf '%s\n' "$_argv0" > "$STATE_DIR/last-monitor-argv0"
+    printf '%s\n' "$monitor_pid" > "$pidfile"
+    printf '%s\n' "$monitor_pid" > "$STATE_DIR/last-monitor-pid"
     printf 'OK\n'
     exit 0
     ;;
