@@ -233,7 +233,17 @@ case " $* " in
          exit 1 ;;
     esac
     printf '%s\n' "$_argv0" > "$STATE_DIR/last-monitor-argv0"
-    printf '%s\n' "$monitor_pid" > "$pidfile"
+    if [ "$mode" = "late-pidfile" ]; then
+      # Model the deployed daemonize race: `wpa_cli -B -P` returns rc 0 as soon
+      # as the parent _exit()s, and the surviving child writes the pidfile a
+      # moment later.  The delay is bounded on both sides: it must land after
+      # start()'s own pidfile poll (10 x 0.1s, measured 1.04-1.06s wall) so the
+      # arming failure is reached at all, and before the handed-off watchdog
+      # finishes its identical poll (~2.2s) so the monitor is still reapable.
+      ( sleep 1.5; printf '%s\n' "$monitor_pid" > "$pidfile" ) >/dev/null 2>&1 &
+    else
+      printf '%s\n' "$monitor_pid" > "$pidfile"
+    fi
     printf '%s\n' "$monitor_pid" > "$STATE_DIR/last-monitor-pid"
     printf 'OK\n'
     exit 0
@@ -1339,6 +1349,16 @@ check_equal "Mode A matching reconnect never selects a network block" \
     "$(grep -c 'select_network' "$CALL_LOG" || true)" "0"
 check_equal "Mode A matching reconnect never enables network blocks" \
     "$(grep -c 'enable_network' "$CALL_LOG" || true)" "0"
+
+write_mode_a_legacy
+set_status_mode mode-a-steady
+set_monitor_mode late-pidfile
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 connect >/dev/null 2>&1
+rc=$?
+check_equal "Mode A late pidfile is fail-closed" "$rc" "7"
+check_monitor_cleaned "Mode A late pidfile leaves no monitor resources"
 
 write_mode_a_legacy
 set_status_mode mode-a-steady
