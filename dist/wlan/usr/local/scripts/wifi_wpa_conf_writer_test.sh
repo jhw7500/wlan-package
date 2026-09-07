@@ -202,14 +202,37 @@ case " $* " in
       printf 'FAIL\n'
       exit 1
     fi
-    # A native wpa_cli daemon has argv[0]="wpa_cli" even when PATH resolved
-    # the executable.  Model that exact /proc identity for safe PID handling.
-    if [ "$mode" = "stubborn" ]; then
-      bash -c 'trap "" TERM; exec -a wpa_cli sleep 60' >/dev/null 2>&1 &
-    else
-      bash -c 'exec -a wpa_cli sleep 60' >/dev/null 2>&1 &
-    fi
+    # A native wpa_cli daemon has argv[0]="wpa_cli" even when PATH resolved the
+    # executable, and wifi.sh refuses to signal a monitor PID it cannot identify
+    # (connect_monitor_pid_is_wpa_cli, wifi.sh:495-510, reached from the cleanup
+    # recovery path at wifi.sh:528-536).  So publish nothing until argv[0] of
+    # this PID is observed to be wpa_cli; the same observation proves the
+    # stubborn TERM trap already ran, since it is installed before the exec and
+    # a SIG_IGN disposition survives execve.  Bound the wait at wifi.sh's own
+    # tolerance for a late pidfile (10 x 0.1s at wifi.sh:614 and 658) and fail
+    # closed.  The recorded value is the one the gate accepted, so deleting the
+    # gate, neutering it, or dropping the record each turn the assertion below
+    # red.  Moving the publish above an intact gate is NOT covered: the record
+    # would still read wpa_cli, and that shape was measured green 12/12 at
+    # normal host load.
+    bash -c '[ "$1" != stubborn ] || trap "" TERM; exec -a wpa_cli sleep 60' \
+      _ "$mode" >/dev/null 2>&1 &
     monitor_pid=$!
+    _i=0
+    _argv0=""
+    while [ "$_i" -lt 100 ]; do
+      _argv0=$(tr '\0' '\n' < "/proc/$monitor_pid/cmdline" 2>/dev/null | head -1)
+      case "$_argv0" in wpa_cli|*/wpa_cli) break ;; esac
+      _i=$((_i + 1))
+      sleep 0.01
+    done
+    case "$_argv0" in
+      wpa_cli|*/wpa_cli) ;;
+      *) kill -KILL "$monitor_pid" 2>/dev/null
+         printf 'FAIL\n'
+         exit 1 ;;
+    esac
+    printf '%s\n' "$_argv0" > "$STATE_DIR/last-monitor-argv0"
     printf '%s\n' "$monitor_pid" > "$pidfile"
     printf '%s\n' "$monitor_pid" > "$STATE_DIR/last-monitor-pid"
     printf 'OK\n'
@@ -430,7 +453,8 @@ set_assoc_mode() {
 set_monitor_mode() {
     printf '%s\n' "$1" > "$STATE_DIR/monitor-mode"
     rm -f "$STATE_DIR/monitor-action" "$STATE_DIR/last-monitor-pid" \
-          "$STATE_DIR/last-monitor-pidfile" "$STATE_DIR/last-monitor-dir"
+          "$STATE_DIR/last-monitor-pidfile" "$STATE_DIR/last-monitor-dir" \
+          "$STATE_DIR/last-monitor-argv0"
 }
 
 set_abort_scan_mode() {
@@ -686,6 +710,20 @@ monitor_process_running() {
     kill -0 "$pid" 2>/dev/null || return 1
     state=$(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null || true)
     [ "$state" != "Z" ]
+}
+
+# Guard the harness's own publish ordering.  wifi.sh only signals a monitor it
+# can identify, so a PID published before `exec -a wpa_cli` renames the image is
+# unkillable through the signal path -- the #311 flake.  Asserting the recorded
+# identity catches the gate being deleted or neutered and the record being
+# dropped; it does not catch a publish moved above an intact gate.
+check_monitor_publish_identity() {
+    local desc="$1" argv0
+    argv0=$(cat "$STATE_DIR/last-monitor-argv0" 2>/dev/null || true)
+    case "$argv0" in
+        wpa_cli|*/wpa_cli) pass "$desc" ;;
+        *) fail "$desc (argv0=${argv0:-missing})" ;;
+    esac
 }
 
 check_monitor_cleaned() {
@@ -1342,6 +1380,7 @@ if [ -s "$STATE_DIR/last-monitor-pid" ]; then
 else
     fail "Mode A signal test must attach monitor"
 fi
+check_monitor_publish_identity "Mode A monitor PID is published with a wpa_cli identity"
 kill -TERM "$_wifi_pid" 2>/dev/null || true
 wait "$_wifi_pid" 2>/dev/null
 rc=$?
