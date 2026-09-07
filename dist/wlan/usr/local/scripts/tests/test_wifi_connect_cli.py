@@ -134,17 +134,30 @@ exec /usr/bin/install "${args[@]}"
 #  2. 자식이 받는 ns PID 가 호스트 /proc 에 **없도록** 미리 PID 를 소진한다. 실기(cts-wlan)는
 #     프로세스가 163개뿐이라 낮은 ns PID 가 호스트에 없는 것이 정상이지만, 프로세스가 많은
 #     빌드 호스트는 낮은 번호가 우연히 존재해 조건이 성립하지 않는다(실측: 소진 없이는 통과).
+#     소진 뒤에도 겹칠 수 있고 호스트 PID 분포는 러너마다 다르다. 한 번 겹쳤다고 포기하면
+#     같은 커밋이 러너마다 갈린다 — 실측 2026-09-05(UTC): 04:26 러너는 성립해 249 passed,
+#     13:31 러너는 불성립해 2 skipped 로 Source Gate 가 적신호가 됐다. 그래서 호스트에 없는
+#     번호를 만날 때까지 계속 fork 한다. 호스트 PID 공간은 성기므로 대개 몇 번 안에 성립한다.
 # `"$@"; exit $?` 로 두 문장을 만들어 bash 의 exec 최적화를 막는다 — wifi.sh 가 ns PID 1(init)이
 # 되면 시그널 기본동작과 고아 reaper 규약이 실기와 달라진다.
-# 조건을 못 만들면 조용히 통과시키지 않고 99 로 끝내 테스트가 skip 되게 한다.
+# 상한까지 못 만들면 99 로 끝낸다. 이 wrapper 는 아래 `_pid_namespace_available()` 이 수집 전에
+# 그대로 한 번 돌려 보므로 99 는 정상 경로에서 나오지 않는다 — 나오면 skip 이 아니라 실패다.
 NS_WRAPPER = r'''
 burn="${WIFI_TEST_PIDNS_BURN:-400}"
 i=0
 while [ "$i" -lt "$burn" ]; do (:); i=$((i + 1)); done
-(:) & probe=$!
-wait "$probe" 2>/dev/null
-if [ -r "/proc/$probe/stat" ]; then
-    echo "HARNESS: ns pid $probe still resolves in host /proc" >&2
+tries="${WIFI_TEST_PIDNS_TRIES:-256}"
+probe=""
+while [ "$tries" -gt 0 ]; do
+    (:) & pid=$!
+    wait "$pid" 2>/dev/null
+    # 존재 판정은 디렉터리로 한다. `-r .../stat` 은 hidepid=1 이나 LSM 으로 읽기만 막혀도
+    # "없다" 로 읽혀, 조건이 서지 않았는데 선 것으로 오판한다(= 가짜 PASS).
+    if [ ! -e "/proc/$pid" ]; then probe="$pid"; break; fi
+    tries=$((tries - 1))
+done
+if [ -z "$probe" ]; then
+    echo "HARNESS: no ns pid outside host /proc after retries" >&2
     exit 99
 fi
 "$@"
@@ -274,33 +287,41 @@ class ModeANoArgReconnect(ConnectHarness):
 
 
 def _pid_namespace_available():
-    """ns PID ≠ 호스트 /proc PID 조건을 만들 수 있는가. sudo 없이 unprivileged userns 로 만든다."""
+    """ns PID ≠ 호스트 /proc PID 조건을 **실제로 만들 수 있는가**. `(가능한가, 사유)` 를 준다.
+
+    판정과 실행이 다른 로직을 쓰면 "수집은 됐는데 실행에서 조건이 안 선다" 가 생기고, 그건
+    skip 으로 남아 릴리스 게이트를 깨뜨린다(#286 의 skip 금지). 그래서 여기서도 NS_WRAPPER 를
+    그대로 돌린다 — 이 함수가 True 면 같은 wrapper 가 실행 시점에도 성립한다.
+
+    사유를 같이 주는 이유: 미수집은 경고 한 줄로만 남으므로, unshare 부재인지 커널 정책인지
+    재시도 초과인지 구분되지 않으면 러너마다 갈릴 때 원인을 로그에서 되짚을 수 없다.
+    """
     if os.environ.get("WIFI_TEST_PIDNS") == "0":   # 미지원 러너 재현용
-        return False
+        return False, "WIFI_TEST_PIDNS=0"
     if shutil.which("unshare") is None:
-        return False
+        return False, "unshare(1) not on PATH"
     try:
         probe = subprocess.run(
-            ["unshare", "-Upf", "bash", "-c", 'echo "$$ $(cut -d\' \' -f1 /proc/self/stat)"; exit 0'],
+            ["unshare", "-Upf", "bash", "-c", NS_WRAPPER, "_", "true"],
             capture_output=True, text=True, timeout=20,
         )
-    except Exception:  # noqa: BLE001 - 환경 탐지, 무엇이든 미지원으로 본다
-        return False
-    if probe.returncode != 0:
-        return False
-    fields = probe.stdout.split()
-    return len(fields) == 2 and fields[0] != fields[1]
+    except Exception as exc:  # noqa: BLE001 - 환경 탐지, 무엇이든 미지원으로 본다
+        return False, f"probe raised {exc!r}"
+    if probe.returncode == 0:
+        return True, ""
+    return False, f"probe exit {probe.returncode}: {probe.stderr.strip() or '(no stderr)'}"
 
 
-# 러너에 따라 커널/AppArmor 정책이 unprivileged user namespace 를 막는다. 그때 skip 으로
-# 남기면 릴리스 게이트가 "커버리지가 조용히 줄었다" 로 거부하고 같은 커밋이 러너마다 갈린다
-# (실측 2026-09-04: 한 러너 통과, 다른 러너 실패). 조건을 만들 수 없으면 수집하지 않고
+# 조건이 안 서는 경우는 둘이다 — 러너의 커널/AppArmor 정책이 unprivileged user namespace 를
+# 막거나(실측 2026-09-04), 소진·재시도 상한 안에서 호스트 /proc 과 겹치지 않는 ns PID 를 못
+# 얻거나(실측 2026-09-05). 어느 쪽이든 skip 으로 남기면 릴리스 게이트가 "커버리지가 조용히
+# 줄었다" 로 거부하고 같은 커밋이 러너마다 갈린다. 조건을 만들 수 없으면 수집하지 않고
 # 경고만 남긴다 — 새 분기 자체는 아래 MonitorProcIdentityContract 가 어디서나 검증한다.
-_PIDNS = _pid_namespace_available()
+_PIDNS, _PIDNS_REASON = _pid_namespace_available()
 if not _PIDNS:
     warnings.warn(
-        "PID namespace unavailable; #297 end-to-end cases are not collected here "
-        "(MonitorProcIdentityContract still covers the branch)",
+        f"PID namespace unavailable ({_PIDNS_REASON}); #297 end-to-end cases are not "
+        "collected here (MonitorProcIdentityContract still covers the branch)",
         RuntimeWarning, stacklevel=2,
     )
 
@@ -313,7 +334,10 @@ class ConnectInsidePidNamespace(ConnectHarness):
     def _run(self, *args):
         r = self.run_connect(*args, pid_namespace=True)
         if r.returncode == 99:
-            self.skipTest(f"PID namespace condition unmet: {r.stderr.strip()}")
+            # 수집 전 `_pid_namespace_available()` 이 같은 wrapper 로 성립을 확인했으므로 여기는
+            # 도달하지 않는 방어다. skip 으로 덮으면 게이트가 커버리지 감소로 거부하고(#286)
+            # 같은 커밋이 러너마다 갈린다 — 조건이 실행 중에 깨졌다면 알려야 할 사실이다.
+            self.fail(f"PID namespace condition unmet at run time: {r.stderr.strip()}")
         return r
 
     def test_no_arg_reconnect_attaches_monitor_inside_pid_namespace(self):
