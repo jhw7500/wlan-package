@@ -202,6 +202,20 @@ case " $* " in
       printf 'FAIL\n'
       exit 1
     fi
+    if [ "$mode" = "foreign-pid" ]; then
+      # Publish a live PID that is not wpa_cli.  The deployed layout cannot put
+      # one there (fresh mode-0700 mktemp dir per call), so this exercises the
+      # gate rather than a reachable production path: arming pins what cleanup
+      # later kill -TERM/-KILL's, and only an identity check keeps a foreign PID
+      # out of that.  A plain sleep is the probe -- TERM kills it, so its
+      # survival is the assertion and its death is the regression.
+      bash -c 'exec -a wlan_foreign_probe sleep 60' >/dev/null 2>&1 &
+      foreign_pid=$!
+      printf '%s\n' "$foreign_pid" > "$STATE_DIR/last-foreign-pid"
+      printf '%s\n' "$foreign_pid" > "$pidfile"
+      printf 'OK\n'
+      exit 0
+    fi
     # A native wpa_cli daemon has argv[0]="wpa_cli" even when PATH resolved the
     # executable, and wifi.sh refuses to signal a monitor PID it cannot identify
     # (connect_monitor_pid_is_wpa_cli, wifi.sh:495-510, reached from the cleanup
@@ -464,7 +478,7 @@ set_monitor_mode() {
     printf '%s\n' "$1" > "$STATE_DIR/monitor-mode"
     rm -f "$STATE_DIR/monitor-action" "$STATE_DIR/last-monitor-pid" \
           "$STATE_DIR/last-monitor-pidfile" "$STATE_DIR/last-monitor-dir" \
-          "$STATE_DIR/last-monitor-argv0"
+          "$STATE_DIR/last-monitor-argv0" "$STATE_DIR/last-foreign-pid"
 }
 
 set_abort_scan_mode() {
@@ -734,6 +748,19 @@ check_monitor_publish_identity() {
         wpa_cli|*/wpa_cli) pass "$desc" ;;
         *) fail "$desc (argv0=${argv0:-missing})" ;;
     esac
+}
+
+# The arming path pins a PID that cleanup later signals, so it must apply the
+# same identity gate as the two recovery paths.  Removing that gate lets a
+# foreign PID be pinned and then TERM'd, which kills this probe.
+check_foreign_pid_unsignalled() {
+    local desc="$1" pid
+    pid=$(cat "$STATE_DIR/last-foreign-pid" 2>/dev/null || true)
+    if [ -n "$pid" ] && monitor_process_running "$pid"; then
+        pass "$desc"
+    else
+        fail "$desc (pid=${pid:-missing})"
+    fi
 }
 
 check_monitor_cleaned() {
@@ -1371,6 +1398,24 @@ check_equal "Mode A monitor setup failure is fail-closed" "$rc" "7"
 check_equal "Mode A monitor setup failure sends no reconnect request" \
     "$(grep -Ec 'reassociate$|reconnect$' "$CALL_LOG" || true)" "0"
 check_monitor_cleaned "Mode A setup failure removes monitor resources"
+
+write_mode_a_legacy
+set_status_mode mode-a-steady
+set_monitor_mode foreign-pid
+: > "$CALL_LOG"
+WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
+    bash "$WIFI_SH" 0 connect >/dev/null 2>&1
+rc=$?
+check_equal "Mode A foreign monitor PID is fail-closed" "$rc" "7"
+# Without the gate the pin succeeds, so connect goes on to drive the radio on
+# the strength of a monitor that is not one (measured: rc 8, the post-
+# reassociate association timeout, instead of 7).
+check_equal "Mode A foreign monitor PID sends no reconnect request" \
+    "$(grep -Ec 'reassociate$|reconnect$' "$CALL_LOG" || true)" "0"
+check_foreign_pid_unsignalled "Mode A foreign monitor PID is never signalled"
+check_monitor_cleaned "Mode A foreign monitor PID leaves no monitor resources"
+foreign_pid=$(cat "$STATE_DIR/last-foreign-pid" 2>/dev/null || true)
+[ -z "$foreign_pid" ] || kill -KILL "$foreign_pid" 2>/dev/null || true
 
 write_mode_a_legacy
 set_status_mode mode-a-steady
