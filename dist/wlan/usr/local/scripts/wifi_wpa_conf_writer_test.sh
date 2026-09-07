@@ -210,8 +210,11 @@ case " $* " in
     # stubborn TERM trap already ran, since it is installed before the exec and
     # a SIG_IGN disposition survives execve.  Bound the wait at wifi.sh's own
     # tolerance for a late pidfile (10 x 0.1s at wifi.sh:614 and 658) and fail
-    # closed.  The value that gates publication is the value recorded, so a
-    # regression that publishes earlier cannot leave a passing record behind.
+    # closed.  The recorded value is the one the gate accepted, so deleting the
+    # gate, neutering it, or dropping the record each turn the assertion below
+    # red.  Moving the publish above an intact gate is NOT covered: the record
+    # would still read wpa_cli, and that shape was measured green 12/12 at
+    # normal host load.
     bash -c '[ "$1" != stubborn ] || trap "" TERM; exec -a wpa_cli sleep 60' \
       _ "$mode" >/dev/null 2>&1 &
     monitor_pid=$!
@@ -712,7 +715,8 @@ monitor_process_running() {
 # Guard the harness's own publish ordering.  wifi.sh only signals a monitor it
 # can identify, so a PID published before `exec -a wpa_cli` renames the image is
 # unkillable through the signal path -- the #311 flake.  Asserting the recorded
-# identity makes that regression fail here instead of intermittently in CI.
+# identity catches the gate being deleted or neutered and the record being
+# dropped; it does not catch a publish moved above an intact gate.
 check_monitor_publish_identity() {
     local desc="$1" argv0
     argv0=$(cat "$STATE_DIR/last-monitor-argv0" 2>/dev/null || true)
