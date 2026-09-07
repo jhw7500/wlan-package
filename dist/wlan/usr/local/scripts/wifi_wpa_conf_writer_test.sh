@@ -204,15 +204,11 @@ case " $* " in
     fi
     # A native wpa_cli daemon has argv[0]="wpa_cli" even when PATH resolved
     # the executable.  Model that exact /proc identity for safe PID handling.
-    # os_daemonize() writes the pidfile from inside the already-exec'd wpa_cli
-    # image, so a PID recoverable from the pidfile always carries a wpa_cli
-    # identity.  Model that ordering as well: the child takes the identity
-    # (and, when stubborn, installs its TERM trap) before publishing its own
-    # PID, and the harness publishes last-monitor-pid only once that pidfile
-    # exists.  Publishing at fork time instead would hand wifi.sh a PID that
-    # its /proc identity checks must reject -- a state the deployed daemon
-    # cannot produce, and one that leaves signal-path cleanup with nothing to
-    # kill.
+    # Publish ordering is part of that model: wifi.sh refuses to signal a PID
+    # recovered from this pidfile unless connect_monitor_pid_is_wpa_cli accepts
+    # it (wifi.sh:495-510, 528-536), so the renamed image -- not its forking
+    # parent -- must be the pidfile's author, and in stubborn mode the TERM trap
+    # must already be installed when that write lands.
     monitor_body='
       [ "$1" != stubborn ] || trap "" TERM
       printf "%s\n" "$$" > "$2"
@@ -221,12 +217,23 @@ case " $* " in
     bash -c 'exec -a wpa_cli bash -c "$0" wpa_cli "$1" "$2"' \
       "$monitor_body" "$mode" "$pidfile" >/dev/null 2>&1 &
     monitor_pid=$!
+    # Wait no longer than wifi.sh's own tolerance for a late pidfile (10 x 0.1s
+    # at wifi.sh:539, 614 and 658), then fail closed: publishing on expiry would
+    # restore the publish-before-identity state this models away, under a CI
+    # signature indistinguishable from that bug.
     _i=0
-    while [ ! -s "$pidfile" ] && [ "$_i" -lt 500 ]; do
+    while [ ! -s "$pidfile" ] && [ "$_i" -lt 100 ]; do
       _i=$((_i + 1))
       sleep 0.01
     done
-    printf '%s\n' "$monitor_pid" > "$STATE_DIR/last-monitor-pid"
+    [ -s "$pidfile" ] || { printf 'FAIL\n'; exit 1; }
+    # Record what the published PID's identity actually was, so the harness can
+    # assert this ordering instead of trusting it: a fork-time publish records
+    # "bash" here and turns the assertion red.
+    tr '\0' '\n' < "/proc/$monitor_pid/cmdline" 2>/dev/null | head -1 \
+      > "$STATE_DIR/last-monitor-argv0"
+    IFS= read -r _published_pid < "$pidfile"
+    printf '%s\n' "$_published_pid" > "$STATE_DIR/last-monitor-pid"
     printf 'OK\n'
     exit 0
     ;;
@@ -445,7 +452,8 @@ set_assoc_mode() {
 set_monitor_mode() {
     printf '%s\n' "$1" > "$STATE_DIR/monitor-mode"
     rm -f "$STATE_DIR/monitor-action" "$STATE_DIR/last-monitor-pid" \
-          "$STATE_DIR/last-monitor-pidfile" "$STATE_DIR/last-monitor-dir"
+          "$STATE_DIR/last-monitor-pidfile" "$STATE_DIR/last-monitor-dir" \
+          "$STATE_DIR/last-monitor-argv0"
 }
 
 set_abort_scan_mode() {
@@ -701,6 +709,19 @@ monitor_process_running() {
     kill -0 "$pid" 2>/dev/null || return 1
     state=$(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null || true)
     [ "$state" != "Z" ]
+}
+
+# Guard the harness's own publish ordering.  wifi.sh only signals a monitor it
+# can identify, so a PID published before `exec -a wpa_cli` renames the image is
+# unkillable through the signal path -- the #311 flake.  Asserting the recorded
+# identity makes that regression fail here instead of intermittently in CI.
+check_monitor_publish_identity() {
+    local desc="$1" argv0
+    argv0=$(cat "$STATE_DIR/last-monitor-argv0" 2>/dev/null || true)
+    case "$argv0" in
+        wpa_cli|*/wpa_cli) pass "$desc" ;;
+        *) fail "$desc (argv0=${argv0:-missing})" ;;
+    esac
 }
 
 check_monitor_cleaned() {
@@ -1357,6 +1378,7 @@ if [ -s "$STATE_DIR/last-monitor-pid" ]; then
 else
     fail "Mode A signal test must attach monitor"
 fi
+check_monitor_publish_identity "Mode A monitor PID is published with a wpa_cli identity"
 kill -TERM "$_wifi_pid" 2>/dev/null || true
 wait "$_wifi_pid" 2>/dev/null
 rc=$?
