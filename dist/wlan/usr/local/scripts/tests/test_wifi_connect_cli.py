@@ -151,7 +151,9 @@ probe=""
 while [ "$tries" -gt 0 ]; do
     (:) & pid=$!
     wait "$pid" 2>/dev/null
-    if [ ! -r "/proc/$pid/stat" ]; then probe="$pid"; break; fi
+    # 존재 판정은 디렉터리로 한다. `-r .../stat` 은 hidepid=1 이나 LSM 으로 읽기만 막혀도
+    # "없다" 로 읽혀, 조건이 서지 않았는데 선 것으로 오판한다(= 가짜 PASS).
+    if [ ! -e "/proc/$pid" ]; then probe="$pid"; break; fi
     tries=$((tries - 1))
 done
 if [ -z "$probe" ]; then
@@ -285,24 +287,29 @@ class ModeANoArgReconnect(ConnectHarness):
 
 
 def _pid_namespace_available():
-    """ns PID ≠ 호스트 /proc PID 조건을 **실제로 만들 수 있는가**.
+    """ns PID ≠ 호스트 /proc PID 조건을 **실제로 만들 수 있는가**. `(가능한가, 사유)` 를 준다.
 
     판정과 실행이 다른 로직을 쓰면 "수집은 됐는데 실행에서 조건이 안 선다" 가 생기고, 그건
     skip 으로 남아 릴리스 게이트를 깨뜨린다(#286 의 skip 금지). 그래서 여기서도 NS_WRAPPER 를
     그대로 돌린다 — 이 함수가 True 면 같은 wrapper 가 실행 시점에도 성립한다.
+
+    사유를 같이 주는 이유: 미수집은 경고 한 줄로만 남으므로, unshare 부재인지 커널 정책인지
+    재시도 초과인지 구분되지 않으면 러너마다 갈릴 때 원인을 로그에서 되짚을 수 없다.
     """
     if os.environ.get("WIFI_TEST_PIDNS") == "0":   # 미지원 러너 재현용
-        return False
+        return False, "WIFI_TEST_PIDNS=0"
     if shutil.which("unshare") is None:
-        return False
+        return False, "unshare(1) not on PATH"
     try:
         probe = subprocess.run(
             ["unshare", "-Upf", "bash", "-c", NS_WRAPPER, "_", "true"],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, timeout=20,
         )
-    except Exception:  # noqa: BLE001 - 환경 탐지, 무엇이든 미지원으로 본다
-        return False
-    return probe.returncode == 0
+    except Exception as exc:  # noqa: BLE001 - 환경 탐지, 무엇이든 미지원으로 본다
+        return False, f"probe raised {exc!r}"
+    if probe.returncode == 0:
+        return True, ""
+    return False, f"probe exit {probe.returncode}: {probe.stderr.strip() or '(no stderr)'}"
 
 
 # 조건이 안 서는 경우는 둘이다 — 러너의 커널/AppArmor 정책이 unprivileged user namespace 를
@@ -310,11 +317,11 @@ def _pid_namespace_available():
 # 얻거나(실측 2026-09-05). 어느 쪽이든 skip 으로 남기면 릴리스 게이트가 "커버리지가 조용히
 # 줄었다" 로 거부하고 같은 커밋이 러너마다 갈린다. 조건을 만들 수 없으면 수집하지 않고
 # 경고만 남긴다 — 새 분기 자체는 아래 MonitorProcIdentityContract 가 어디서나 검증한다.
-_PIDNS = _pid_namespace_available()
+_PIDNS, _PIDNS_REASON = _pid_namespace_available()
 if not _PIDNS:
     warnings.warn(
-        "PID namespace unavailable; #297 end-to-end cases are not collected here "
-        "(MonitorProcIdentityContract still covers the branch)",
+        f"PID namespace unavailable ({_PIDNS_REASON}); #297 end-to-end cases are not "
+        "collected here (MonitorProcIdentityContract still covers the branch)",
         RuntimeWarning, stacklevel=2,
     )
 
