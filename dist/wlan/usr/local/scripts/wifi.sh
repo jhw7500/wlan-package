@@ -510,18 +510,12 @@ connect_monitor_pid_is_wpa_cli() {
 }
 
 connect_event_monitor_cleanup() {
-    local pid start watchdog_pid watchdog_start _i
+    local pid start pinned watchdog_pid watchdog_start _i
     watchdog_pid="${CONNECT_MONITOR_WATCHDOG_PID:-}"
     watchdog_start="${CONNECT_MONITOR_WATCHDOG_START:-}"
-    if connect_monitor_pid_matches "$watchdog_pid" "$watchdog_start"; then
-        kill -TERM "$watchdog_pid" 2>/dev/null || true
-    fi
-    if [ -n "$watchdog_pid" ]; then
-        wait "$watchdog_pid" 2>/dev/null || true
-    fi
-
     pid="${CONNECT_MONITOR_PID:-}"
     start="${CONNECT_MONITOR_START:-}"
+    pinned="$start"
     # A signal can arrive after wpa_cli writes its private pidfile but before
     # start() records the identity.  Recover only a live wpa_cli identity from
     # our mode-0700 directory; arbitrary/stale numeric PIDs remain unsignalled.
@@ -534,14 +528,37 @@ connect_event_monitor_cleanup() {
             connect_monitor_proc_start_into start "$pid" 2>/dev/null || start=""
         fi
     fi
-    if connect_monitor_pid_matches "$pid" "$start"; then
-        kill -TERM "$pid" 2>/dev/null || true
-        for _i in 1 2 3 4 5 6 7 8 9 10; do
-            connect_monitor_pid_matches "$pid" "$start" || break
-            wifi_wpa_run_child sleep 0.1
-        done
+    if [ -z "$pinned" ] && [ -n "${CONNECT_MONITOR_ATTACHED:-}" ] \
+       && ! connect_monitor_pid_matches "$pid" "$start" \
+       && connect_monitor_pid_matches "$watchdog_pid" "$watchdog_start"; then
+        # A daemon attached but never became identifiable -- its pidfile has not
+        # landed yet.  The watchdog polls that pidfile for 10 x 0.1s where we
+        # read it once, so hand the reap over.  Clearing CONNECT_MONITOR_DIR
+        # skips the removal in the shared tail below, deliberately: the
+        # directory's existence is the watchdog's ownership signal, so removing
+        # it would tell the watchdog a monitor nobody reaped was already handled.
+        # Do not wait() either -- that costs the caller the whole watchdog budget
+        # (measured 35.7s at ASSOC_TIMEOUT_DEFAULT=30).  The trade is that a
+        # watchdog dying before its reap phase leaks this directory in tmpfs
+        # instead of leaking a wpa_cli daemon holding a ctrl socket.
+        CONNECT_MONITOR_DIR=""
+    else
+        # Every other path reaps here, so retire the watchdog before waiting on
+        # it: it waits for exactly this shell to exit, so waiting on a live one
+        # blocks until its own tick budget expires.
+        if connect_monitor_pid_matches "$watchdog_pid" "$watchdog_start"; then
+            kill -TERM "$watchdog_pid" 2>/dev/null || true
+        fi
+        [ -z "$watchdog_pid" ] || wait "$watchdog_pid" 2>/dev/null || true
         if connect_monitor_pid_matches "$pid" "$start"; then
-            kill -KILL "$pid" 2>/dev/null || true
+            kill -TERM "$pid" 2>/dev/null || true
+            for _i in 1 2 3 4 5 6 7 8 9 10; do
+                connect_monitor_pid_matches "$pid" "$start" || break
+                wifi_wpa_run_child sleep 0.1
+            done
+            if connect_monitor_pid_matches "$pid" "$start"; then
+                kill -KILL "$pid" 2>/dev/null || true
+            fi
         fi
     fi
     [ -z "${CONNECT_MONITOR_DIR:-}" ] \
@@ -549,6 +566,7 @@ connect_event_monitor_cleanup() {
     CONNECT_MONITOR_DIR=""
     CONNECT_MONITOR_PID=""
     CONNECT_MONITOR_START=""
+    CONNECT_MONITOR_ATTACHED=""
     CONNECT_MONITOR_WATCHDOG_PID=""
     CONNECT_MONITOR_WATCHDOG_START=""
 }
@@ -638,19 +656,32 @@ EOF
         wifi_wpa_run_child rm -rf -- "$CONNECT_MONITOR_DIR"
     ) >/dev/null 2>&1 &
     watchdog_pid=$!
-    CONNECT_MONITOR_WATCHDOG_PID="$watchdog_pid"
+    # Publish the PID only together with its start token.  A PID visible without
+    # one is unsignallable by connect_monitor_pid_matches yet still wait()-able,
+    # so cleanup would block on a watchdog it never retired.
     connect_monitor_proc_start_into watchdog_start "$watchdog_pid" || {
         kill -TERM "$watchdog_pid" 2>/dev/null || true
         wait "$watchdog_pid" 2>/dev/null || true
         connect_event_monitor_cleanup
         return 1
     }
+    # Token first: a trap can run between two simple commands, and the residue of
+    # this order -- token without PID -- is one cleanup ignores.
     CONNECT_MONITOR_WATCHDOG_START="$watchdog_start"
+    CONNECT_MONITOR_WATCHDOG_PID="$watchdog_pid"
 
     # Daemon mode's stdout is not part of the request/reply protocol; its rc
     # plus a live private pidfile prove successful attachment.
+    # A daemon exists from the moment wpa_cli forks, i.e. during this call, not
+    # after it returns: bash defers a pending trap until the foreground child
+    # completes and runs it before the next assignment, so a flag set afterwards
+    # would be invisible to a cleanup reached from that trap.  Set it first and
+    # clear it again when the attach itself failed, so paths with nothing to
+    # hand off still tear down synchronously.
+    CONNECT_MONITOR_ATTACHED=1
     if ! wifi_wpa_run_child wpa_cli -i "$iface" -a "$action" -B -P "$pidfile" \
         >/dev/null 2>&1; then
+        CONNECT_MONITOR_ATTACHED=""
         connect_event_monitor_cleanup
         return 1
     fi
