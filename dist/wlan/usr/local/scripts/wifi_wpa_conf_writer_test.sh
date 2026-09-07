@@ -204,13 +204,28 @@ case " $* " in
     fi
     # A native wpa_cli daemon has argv[0]="wpa_cli" even when PATH resolved
     # the executable.  Model that exact /proc identity for safe PID handling.
-    if [ "$mode" = "stubborn" ]; then
-      bash -c 'trap "" TERM; exec -a wpa_cli sleep 60' >/dev/null 2>&1 &
-    else
-      bash -c 'exec -a wpa_cli sleep 60' >/dev/null 2>&1 &
-    fi
+    # os_daemonize() writes the pidfile from inside the already-exec'd wpa_cli
+    # image, so a PID recoverable from the pidfile always carries a wpa_cli
+    # identity.  Model that ordering as well: the child takes the identity
+    # (and, when stubborn, installs its TERM trap) before publishing its own
+    # PID, and the harness publishes last-monitor-pid only once that pidfile
+    # exists.  Publishing at fork time instead would hand wifi.sh a PID that
+    # its /proc identity checks must reject -- a state the deployed daemon
+    # cannot produce, and one that leaves signal-path cleanup with nothing to
+    # kill.
+    monitor_body='
+      [ "$1" != stubborn ] || trap "" TERM
+      printf "%s\n" "$$" > "$2"
+      exec -a wpa_cli sleep 60
+    '
+    bash -c 'exec -a wpa_cli bash -c "$0" wpa_cli "$1" "$2"' \
+      "$monitor_body" "$mode" "$pidfile" >/dev/null 2>&1 &
     monitor_pid=$!
-    printf '%s\n' "$monitor_pid" > "$pidfile"
+    _i=0
+    while [ ! -s "$pidfile" ] && [ "$_i" -lt 500 ]; do
+      _i=$((_i + 1))
+      sleep 0.01
+    done
     printf '%s\n' "$monitor_pid" > "$STATE_DIR/last-monitor-pid"
     printf 'OK\n'
     exit 0
