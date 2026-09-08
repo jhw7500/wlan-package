@@ -604,8 +604,8 @@ def test_phy_caps_ignores_width_outside_vht_operation():
     주의 — 이건 **현재 재현되는 충돌에 대한 방어가 아니다.** 설치된 iw 의 `channel width`
     템플릿 4종(`supported channel width` / `channel width trigger scan interval` /
     `STA channel width` / `channel width: %d (%s)`) 중 이 정규식에 매치되는 것은
-    마지막 하나뿐이다 — 정규식이 `width` 바로 뒤 콜론을 요구하기 때문이다(리뷰어 B 실측,
-    최초 커밋의 `scan.c:1622` 인용은 틀렸다). 섹션 추적은 **다른 버전·미래 출력**에 대한
+    마지막 하나뿐이다 — 정규식이 `width` 바로 뒤 콜론을 요구하기 때문이다(실측,
+    커밋 이력의 `scan.c:1622` 인용은 틀렸다). 섹션 추적은 **다른 버전·미래 출력**에 대한
     방어이고, 아래 입력은 그 가드를 직접 겨냥한 합성 입력이다. 가드를 지우면 빨개진다."""
     stray = (
         "BSS aa:bb:cc:dd:ee:ff(on mlan0)\n"
@@ -641,15 +641,6 @@ def test_metrics_suffix_appends_bw_and_gen():
     assert s == ", snr=35, est=432402(age=37s), bw=80, gen=he"
 
 
-def test_metrics_suffix_phy_only_and_metrics_only():
-    """한쪽만 있어도 그쪽만 붙는다. 둘 다 없으면 빈 문자열."""
-    phy = {"aa:bb:cc:dd:ee:ff": {"bw": "20", "gen": "ht"}}
-    assert wifi_roam._metrics_suffix({}, "aa:bb:cc:dd:ee:ff", phy=phy) == ", bw=20, gen=ht"
-    metrics = {"aa:bb:cc:dd:ee:ff": {"snr": 10}}
-    assert wifi_roam._metrics_suffix(metrics, "aa:bb:cc:dd:ee:ff", phy={}) == ", snr=10"
-    assert wifi_roam._metrics_suffix({}, "aa:bb:cc:dd:ee:ff", phy={}) == ""
-
-
 def test_log_rows_carry_bw_and_gen():
     """현재/후보 행 양쪽에 bw/gen 이 실린다 — #285 가 필요로 하는 최종 산출물."""
     phy = {
@@ -669,7 +660,7 @@ def test_log_rows_carry_bw_and_gen():
 
 
 def test_cache_rows_carry_no_bw_gen(monkeypatch):
-    """C-R1-002: phy 를 안 넘기는 경로(get_latest_scan 의 cache 행)엔 붙지 않는다.
+    """phy 를 안 넘기는 경로(get_latest_scan 의 cache 행)엔 붙지 않는다.
 
     leaf 에서 전역을 암묵적으로 읽으면 snr/est 는 없는데 bw/gen 만 실리는 비대칭이
     생긴다. 전역을 **채워 둔 상태**로 확인해야 판별력이 있다 — 비어 있으면 앰비언트
@@ -689,7 +680,7 @@ def test_cache_rows_carry_no_bw_gen(monkeypatch):
 
 
 def test_wire_fills_last_phy_caps_from_the_scan_it_already_ran(monkeypatch):
-    """C-R1-001: 프로덕션 배선 자체를 고정한다.
+    """프로덕션 배선 자체를 고정한다.
 
     이 테스트가 없으면 `_LAST_PHY_CAPS = phy_caps_from_iw_scan(...)` 두 줄을 지워도
     스위트가 전부 초록이었다 — 기능을 통째로 없애는 뮤테이션이 무검출이었다.
@@ -717,7 +708,7 @@ def test_wire_fills_last_phy_caps_from_the_scan_it_already_ran(monkeypatch):
         f"배선이 캐시를 채우지 못했다: {wifi_roam._LAST_PHY_CAPS}"
     assert [c[0] for c in calls] == ["iw", "wpa_cli"], f"추가 명령이 생겼다: {calls}"
     # 배선이 신선 집합을 **실제로 넘기는지**까지 고정한다. 파서를 직접 호출하는 테스트는
-    # allowed_bssids 를 스스로 주므로 이 결선을 검증하지 못한다(C-R1-001 과 같은 함정).
+    # allowed_bssids 를 스스로 주므로 이 결선을 검증하지 못한다(함수만 테스트하고 배선을 빼먹는 함정).
     calls.clear()
     scan_out2 = _IW_SCAN_STALE.replace("last seen: 3 ms ago", "last seen: 0 ms ago")
     monkeypatch.setattr(wifi_roam.subprocess, "run",
@@ -731,7 +722,7 @@ def test_wire_fills_last_phy_caps_from_the_scan_it_already_ran(monkeypatch):
 
 
 def test_stale_bss_block_contributes_no_phy_caps():
-    """B-R1-001: iw 는 커널 BSS 캐시 전체를 뱉는다 — 후보와 같은 age 게이트를 건다.
+    """iw 는 커널 BSS 캐시 전체를 뱉는다 — 후보와 같은 age 게이트를 건다.
 
     게이트가 없으면 수백 초 전 블록의 폭이 [scan] 라벨 행에 실린다(리뷰어 B 실측)."""
     fresh = wifi_roam.fresh_bssids_from_iw_scan(_IW_SCAN_STALE, 2000)
@@ -744,7 +735,7 @@ def test_stale_bss_block_contributes_no_phy_caps():
 
 
 def test_scan_failure_clears_last_phy_caps(monkeypatch):
-    """B-R1-001: 스캔 실패 시 직전 값이 남아 다음 행에 실리면 안 된다."""
+    """스캔 실패 시 직전 값이 남아 다음 행에 실리면 안 된다."""
     monkeypatch.setattr(wifi_roam.time, "sleep", lambda *_a: None)
     monkeypatch.setattr(wifi_roam, "_LAST_PHY_CAPS",
                         {"aa:aa:aa:aa:aa:aa": {"bw": "160", "gen": "he"}})
@@ -762,7 +753,7 @@ def test_scan_failure_clears_last_phy_caps(monkeypatch):
 
 
 def test_unparsable_bss_header_does_not_attribute_to_previous_ap():
-    """A-R1-001: 주소가 안 읽히는 BSS 헤더는 앞 AP 로 되돌아가지 않는다(형제와 동일).
+    """주소가 안 읽히는 BSS 헤더는 앞 AP 로 되돌아가지 않는다(형제와 동일).
 
     되돌아가면 그 AP 가 광고한 적 없는 폭을 지어낸다 — 이 변경이 만들려는 데이터셋에
     허위 값이 들어간다."""
@@ -781,7 +772,7 @@ def test_unparsable_bss_header_does_not_attribute_to_previous_ap():
 
 
 def test_phy_caps_covers_the_whole_advertised_width_table():
-    """C-R1-004: 160 / 80+80 / HT below 는 실기 캡처에 없어 미검증 전사였다.
+    """160 / 80+80 / HT below 는 실기 캡처에 없어 미검증 전사였다.
 
     폭 코드 표는 iw 6.9 scan.c:1519-1523 의 chandwidths[] 가 정본이다
     ({0:"20 or 40 MHz", 1:"80 MHz", 2:"160 MHz", 3:"80+80 MHz"}). 아래 스탠자는
@@ -805,30 +796,94 @@ def test_phy_caps_covers_the_whole_advertised_width_table():
     assert caps["33:33:33:33:33:33"]["bw"] == "40", "HT secondary offset below 도 40 이다"
 
 
-def test_drift_warn_fires_only_when_detail_rows_were_seen(monkeypatch):
-    """A-R1-003 / B-R1-002 / C-R1-005: 세 리뷰어가 독립 지적한 오발·래치 문제.
+def test_staged_scan_rows_carry_bw_and_gen(monkeypatch):
+    """배선의 **소비자 절반**을 고정한다 — 세 리뷰어가 만장일치로 지적한 구멍.
 
-    정상 레거시(HT/VHT/HE IE 없음) 덤프에서 발화하면, 프로세스 수명 래치 때문에
-    이후의 진짜 포맷 드리프트 경보가 영구히 삼켜진다. _MASK_WARNED 와 같은 관례로
-    래치를 리셋해 테스트 순서에 의존하지 않게 한다."""
-    def warns():
-        return [t for lvl, t in _msgs() if lvl == "warn" and "iw scan" in t]
+    직전 라운드에서 생산자(스캔 -> 캐시)만 묶고 끝냈더니, 소비자 3곳
+    (staged_scan_best_candidate 의 parse_scan_entries 호출)에서 phy 인자를 전부 지워도
+    802/802 초록이었다. 그 3곳이 캐시의 유일한 독자라, 지우면 프로덕션 모든 행에서
+    bw=/gen= 이 사라지는데도 CI 는 성공한다. 여기서는 실제 로그 행 문자열을 본다."""
+    monkeypatch.setattr(wifi_roam, "_LAST_PHY_CAPS", {
+        "aa:aa:aa:aa:aa:aa": {"bw": "80", "gen": "he"},
+        "bb:bb:bb:bb:bb:bb": {"bw": "20", "gen": "ht"},
+    })
+    monkeypatch.setattr(wifi_roam, "WPA_FREQ", ["5180", "5220"])
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines",
+                        lambda *a, **k: [apln(0, 44, -52, "aa:aa:aa:aa:aa:aa", "TEST", 5220),
+                                         apln(1, 36, -50, "bb:bb:bb:bb:bb:bb", "TEST", 5180)])
+    monkeypatch.setattr(wifi_roam, "_record_roam_scan_time", lambda *a, **k: None)
+    station = {"bssid": "aa:aa:aa:aa:aa:aa", "ssid": "TEST", "freq": 5220, "rssi": -52}
+    wifi_roam.staged_scan_best_candidate(station, ["TEST"], "TEST", "stable", None)
 
-    legacy = ("BSS 44:44:44:44:44:44(on mlan0)\n"
-              "\tfreq: 2412\n\tsignal: -60.00 dBm\n\tSSID: legacy\n"
-              "\tSupported rates: 1.0* 2.0* 5.5* 11.0*\n")
-    monkeypatch.setattr(wifi_roam, "_PHY_WARNED", False)
+    rows = [t for t in _texts() if "roam current:" in t or "roam candidate" in t]
+    assert rows, f"로그 행이 없다: {_texts()}"
+    assert any("bw=80" in t and "gen=he" in t for t in rows), \
+        f"현재 AP 행에 폭이 없다 — 소비자 배선이 끊겼다: {rows}"
+    assert any("bw=20" in t and "gen=ht" in t for t in rows), \
+        f"후보 행에 폭이 없다: {rows}"
+
+
+def test_legacy_scan_rows_carry_bw_and_gen(tmp_path, monkeypatch):
+    """staged scan 을 끈 배포의 레거시 경로도 [scan] 행에 폭을 싣는다.
+
+    이 경로는 자기 tick 이 돌린 스캔의 전경 실측인데도 phy 를 안 넘겨, 그 배포에서는
+    데이터셋에 폭 컬럼이 통째로 비어 있었다. 반대로 [cache] 행은 계속 비어야 한다."""
+    ap = tmp_path / "ap.log"
+    ap.write_text("2026-09-08 13:00:00\n"
+                  + apln(0, 36, -55, "bb:bb:bb:bb:bb:bb", "TEST", 5180) + "\n")
+    monkeypatch.setattr(wifi_roam, "SCAN_LOG_FILE", str(ap))
+    monkeypatch.setattr(wifi_roam, "_LAST_PHY_CAPS",
+                        {"bb:bb:bb:bb:bb:bb": {"bw": "40", "gen": "vht"}})
+
+    wifi_roam.get_latest_scan({"ssid": "TEST"}, ["TEST"], src="scan")
+    scan_rows = [t for t in _texts() if "roam candidate" in t]
+    assert scan_rows and "bw=40" in scan_rows[0] and "gen=vht" in scan_rows[0], \
+        f"레거시 [scan] 행에 폭이 없다: {scan_rows}"
+
     wifi_roam.logger.reset_mock()
-    assert wifi_roam.phy_caps_from_iw_scan(legacy) == {}
-    assert warns() == [], "레거시 전용 덤프에서 드리프트 경보가 오발했다"
+    wifi_roam.get_latest_scan({"ssid": "TEST"}, ["TEST"], src="cache")
+    cache_rows = [t for t in _texts() if "roam candidate" in t]
+    assert cache_rows and "bw=" not in cache_rows[0], \
+        f"[cache] 행에 폭이 샜다: {cache_rows}"
 
-    # 세부 행은 있는데 섹션 헤더가 어긋난 경우 = 진짜 드리프트. 정확히 1회만 남는다.
-    drift = ("BSS 55:55:55:55:55:55(on mlan0)\n"
-             "\tVHT operation RENAMED:\n"
-             "\t\t * channel width: 1 (80 MHz)\n")
-    monkeypatch.setattr(wifi_roam, "_PHY_WARNED", False)
-    wifi_roam.logger.reset_mock()
-    assert wifi_roam.phy_caps_from_iw_scan(drift) == {}
-    assert len(warns()) == 1, f"드리프트 경보가 안 나왔다: {_texts()}"
-    wifi_roam.phy_caps_from_iw_scan(drift)
-    assert len(warns()) == 1, "래치가 동작하지 않아 매 스캔마다 반복된다"
+
+def test_duplicate_bssid_block_yields_no_key():
+    """한 덤프에 같은 BSSID 가 두 번 나오면 근거 충돌 — 키를 주지 않는다.
+
+    합치면 먼저 온 값이 이겨, 위조 블록이 진짜 AP 행에 남의 폭을 심을 수 있다.
+    피해 AP 는 정상적으로 신선하므로 age 게이트로는 막을 수 없다."""
+    forged = (
+        "BSS 11:11:11:11:11:11(on mlan0)\n"
+        "\tHT capabilities:\n"
+        "\tHT operation:\n"
+        "\t\t * secondary channel offset: no secondary\n"
+        "BSS 22:22:22:22:22:22(on mlan0)\n"          # 위조: 없는 160MHz 를 광고
+        "\tVHT capabilities:\n\tVHT operation:\n"
+        "\t\t * channel width: 2 (160 MHz)\n"
+        "BSS 22:22:22:22:22:22(on mlan0)\n"          # 진짜: HT 20MHz
+        "\tHT capabilities:\n"
+        "\tHT operation:\n"
+        "\t\t * secondary channel offset: no secondary\n"
+    )
+    caps = wifi_roam.phy_caps_from_iw_scan(forged)
+    assert "22:22:22:22:22:22" not in caps, f"위조 폭이 살아남았다: {caps}"
+    assert caps["11:11:11:11:11:11"] == {"bw": "20", "gen": "ht"}, \
+        "충돌하지 않은 AP 는 그대로 남아야 한다"
+
+
+def test_oversized_width_value_does_not_raise():
+    """자릿수 제한을 넘는 폭 값에 int() 가 던지면 로밍 데몬이 통째로 죽는다.
+
+    관측 기능이 판정 경로를 멈춰선 안 된다 — 값만 버리고 계속한다."""
+    huge = (
+        "BSS 33:33:33:33:33:33(on mlan0)\n"
+        "\tHT capabilities:\n"
+        "\tHT operation:\n"
+        "\t\t * secondary channel offset: above\n"
+        "\tVHT operation:\n"
+        "\t\t * channel width: " + "9" * 5000 + " (bogus)\n"
+    )
+    caps = wifi_roam.phy_caps_from_iw_scan(huge)
+    assert caps == {"33:33:33:33:33:33": {"bw": "40", "gen": "ht"}}, \
+        f"과대 값이 예외가 되거나 폭으로 채택됐다: {caps}"
+

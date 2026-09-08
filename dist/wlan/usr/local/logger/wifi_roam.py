@@ -1298,7 +1298,6 @@ def fresh_bssids_from_iw_scan(iw_scan_stdout, max_age_ms):
 # 5GHz 에서는 하위호환으로 VHT operation 을 광고하므로 폭은 그대로 얻어진다.
 # 한계: 11be(EHT) 는 이 iw 로 구분할 수 없어 he 로 보인다.
 _VHT_BW = {1: "80", 2: "160", 3: "80+80"}  # 0 = "20 or 40 MHz" — 모호, HT 로 분해한다
-_PHY_WARNED = False
 # 직전 iw scan 이 관측한 PHY 능력. 로그 행에만 쓰이고 판정 흐름에는 관여하지 않는다.
 # iw_scan_to_ap_lines 의 반환 시그니처를 바꾸면 호출 6곳을 모두 손대야 해서 캐시로 나른다.
 _LAST_PHY_CAPS = {}
@@ -1331,11 +1330,12 @@ def phy_caps_from_iw_scan(iw_scan_stdout, allowed_bssids=None):
         str(b).lower() for b in allowed_bssids
     }
     caps = {}
+    seen = set()
+    conflicted = set()
     bssid = None
     section = None
-    saw_detail = False
     for line in (iw_scan_stdout or "").splitlines():
-        # 형제 파서(fresh_bssids_from_iw_scan:1274)와 같은 fail-closed 규칙: `BSS ` 로
+        # 형제 파서 fresh_bssids_from_iw_scan 과 같은 fail-closed 규칙: `BSS ` 로
         # 시작하는데 주소가 안 읽히면 앞 블록으로 되돌아가지 말고 버린다. 안 그러면 새
         # 블록의 IE 행이 **앞 AP 에 붙어** 그 AP 가 광고한 적 없는 폭을 지어낸다.
         if line.startswith("BSS "):
@@ -1344,6 +1344,13 @@ def phy_caps_from_iw_scan(iw_scan_stdout, allowed_bssids=None):
             if bssid is not None and allowed is not None and bssid not in allowed:
                 bssid = None
             if bssid is not None:
+                # 한 덤프에 같은 BSSID 블록이 두 번 나오면 근거가 충돌하는 것이다.
+                # 합치면 먼저 온 값이 이겨, 위조 블록이 진짜 AP 행에 남의 폭을 심을 수
+                # 있다(주입된 블록은 피해 AP 가 정상적으로 신선해 age 게이트도 못 막는다).
+                # 근거 충돌은 근거 없음으로 처리한다 — 이 파서의 no-guess 계약과 같다.
+                if bssid in seen:
+                    conflicted.add(bssid)
+                seen.add(bssid)
                 caps.setdefault(bssid, {})
             section = None
             continue
@@ -1364,15 +1371,21 @@ def phy_caps_from_iw_scan(iw_scan_stdout, allowed_bssids=None):
         # 정작 섹션 헤더 문자열이 바뀐 경우(가장 흔한 드리프트)에 아무 신호도 안 남는다.
         w = re.match(r"^\s*\*\s*channel width:\s*(\d+)", line)
         o = re.match(r"^\s*\*\s*secondary channel offset:\s*(\S+)", line)
-        if w or o:
-            saw_detail = True
         if section == "VHT operation" and w:
-            caps[bssid]["_vht_bw"] = int(w.group(1))
+            # 자릿수 제한(CPython 기본 4300)을 넘는 값이면 int() 가 ValueError 를 던진다.
+            # 이 함수는 로밍 판정 경로 안에서 불리고 위로 핸들러가 없어 그대로 데몬이
+            # 죽는다 — 관측 기능이 그래선 안 되므로 값만 버린다.
+            try:
+                caps[bssid]["_vht_bw"] = int(w.group(1))
+            except ValueError:
+                pass
         elif section == "HT operation" and o:
             caps[bssid]["_ht_off"] = o.group(1).strip().lower()
 
     out = {}
     for b, c in caps.items():
+        if b in conflicted:
+            continue
         rec = {}
         bw = _VHT_BW.get(c.get("_vht_bw"))
         if bw is None and "_ht_off" in c:
@@ -1387,19 +1400,6 @@ def phy_caps_from_iw_scan(iw_scan_stdout, allowed_bssids=None):
         if rec:
             out[b] = rec
 
-    # 폭·세대 **세부 행을 실제로 봤는데도** 아무것도 못 뽑았을 때만 형식 드리프트다.
-    # 조건을 "BSS 는 읽었는데 out 이 비었다"로 두면 HT/VHT/HE IE 가 없는 **정상 레거시**
-    # 덤프에서도 발화하고, _PHY_WARNED 가 프로세스 수명 래치라 그 한 번의 오발이 이후의
-    # 진짜 드리프트 경보를 영구히 삼킨다(리뷰어 A/B/C 가 각각 독립 지적).
-    global _PHY_WARNED
-    if saw_detail and not out and not _PHY_WARNED:
-        _PHY_WARNED = True
-        logger.message(
-            "warn",
-            f"[{IFACE}] iw scan 출력에서 채널폭/세대를 얻지 못했다 "
-            f"— 설치된 iw 의 HT/VHT/HE 출력 문자열이 파서와 어긋났을 수 있다",
-            _EXTRA_(),
-        )
     return out
 
 
@@ -1643,7 +1643,7 @@ def _metrics_suffix(metrics, bssid, phy=None):
 
     phy 는 metrics 와 **똑같이 호출자가 넘긴다.** 전역을 여기서 암묵적으로 읽으면
     metrics 를 일부러 안 넘기는 경로(get_latest_scan 의 src="cache" 행)에까지 폭이
-    따라붙어, snr/est 는 없는데 bw/gen 만 있는 비대칭이 생긴다(리뷰어 C 실측)."""
+    따라붙어, snr/est 는 없는데 bw/gen 만 있는 비대칭이 생긴다(실측 확인)."""
     key = (bssid or "").lower()
     m = (metrics or {}).get(key) or {}
     p = (phy or {}).get(key) or {}
@@ -1823,8 +1823,13 @@ def get_latest_scan(st, allowed_ssids=None, log=True, src="cache"):
         logger.message("err", f"[{IFACE}] timestamp is not exist", _EXTRA_())
         return [], None
 
+    # src="scan" 은 이번 tick 이 직접 돌린 스캔의 전경 실측이다(staged scan 을 끈 배포의
+    # 레거시 경로). 그 행에는 폭을 실어야 한다 — 안 실으면 그 배포의 데이터셋에 폭 컬럼이
+    # 통째로 빈다. 반대로 src="cache" 는 배경 ap.log 라 snr/est 도 일부러 안 싣는 행이므로
+    # 폭도 싣지 않는다(그러지 않으면 다른 스캔의 값이 연대 표시 없이 따라붙는다).
     candidates = parse_scan_entries(
-        lines[start_idx:], timestamp, allowed_set, src=src, log=log
+        lines[start_idx:], timestamp, allowed_set, src=src, log=log,
+        phy=(_LAST_PHY_CAPS if src == "scan" else None),
     )
     return candidates, timestamp
 
