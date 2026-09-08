@@ -691,8 +691,13 @@ EOF
         if [ -r "$pidfile" ]; then
             IFS= read -r pid < "$pidfile" || pid=""
         fi
-        connect_monitor_proc_start_into start "$pid" 2>/dev/null || start=""
-        [ -n "$start" ] && break
+        # cleanup later kill -TERM/-KILL's whatever this pins, so apply the
+        # identity gate both recovery paths already apply: without it a PID is
+        # signalled on the strength of the pidfile's contents alone.
+        if connect_monitor_pid_is_wpa_cli "$pid"; then
+            connect_monitor_proc_start_into start "$pid" 2>/dev/null || start=""
+            [ -n "$start" ] && break
+        fi
         wifi_wpa_run_child sleep 0.1
     done
     if [ -z "${start:-}" ]; then
