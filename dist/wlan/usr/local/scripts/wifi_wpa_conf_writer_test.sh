@@ -211,6 +211,28 @@ case " $* " in
       # survival is the assertion and its death is the regression.
       bash -c 'exec -a wlan_foreign_probe sleep 60' >/dev/null 2>&1 &
       foreign_pid=$!
+      # Publish nothing until argv[0] is observed to be the probe.  Between the
+      # fork and its execve the child is still a copy of THIS shell, and this
+      # shell's own argv holds the harness wpa_cli path -- which
+      # connect_monitor_pid_is_wpa_cli accepts as */wpa_cli.  Publishing inside
+      # that window would let the gate pin the PID and the case would fail with
+      # the gate present.  Measured 0/800 here (idle and 8-way loaded, sampled
+      # tighter than wifi.sh reads), but the window is real, so close it rather
+      # than bet on scheduling.  Same shape and same fail-closed exit as the
+      # wpa_cli publish below.
+      _i=0
+      _argv0=""
+      while [ "$_i" -lt 100 ]; do
+        _argv0=$(tr '\0' '\n' < "/proc/$foreign_pid/cmdline" 2>/dev/null | head -1)
+        [ "$_argv0" = wlan_foreign_probe ] && break
+        _i=$((_i + 1))
+        sleep 0.01
+      done
+      if [ "$_argv0" != wlan_foreign_probe ]; then
+        kill -KILL "$foreign_pid" 2>/dev/null
+        printf 'FAIL\n'
+        exit 1
+      fi
       printf '%s\n' "$foreign_pid" > "$STATE_DIR/last-foreign-pid"
       printf '%s\n' "$foreign_pid" > "$pidfile"
       printf 'OK\n'
