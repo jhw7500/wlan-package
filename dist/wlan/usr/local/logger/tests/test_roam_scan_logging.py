@@ -789,10 +789,10 @@ def test_phy_caps_covers_the_whole_advertised_width_table():
 
 
 def test_staged_scan_rows_carry_bw_and_gen(monkeypatch):
-    """staged_scan_best_candidate 를 통과해 나온 **실제 로그 행 문자열**을 단언한다.
+    """staged 호출자가 src="scan" 으로 넘겨 그 행에 폭이 실리는지 단언한다.
 
-    파서나 _metrics_suffix 를 직접 부르는 테스트로는 이 경로가 묶이지 않는다 — 폭이
-    로그 행까지 실제로 도달하는지 보는 것은 이 테스트뿐이다."""
+    로그 행 문자열 자체는 다른 테스트도 본다(호출지점은 하나다). 이 테스트가 고정하는
+    것은 staged 경로가 그 호출지점에 도달한다는 것이다."""
     monkeypatch.setattr(wifi_roam, "_LAST_PHY_CAPS", {
         "aa:aa:aa:aa:aa:aa": {"bw": "80", "gen": "he"},
         "bb:bb:bb:bb:bb:bb": {"bw": "20", "gen": "ht"},
@@ -837,42 +837,47 @@ def test_legacy_scan_rows_carry_bw_and_gen(tmp_path, monkeypatch):
         f"[cache] 행에 폭이 샜다: {cache_rows}"
 
 
-def test_duplicate_bssid_block_yields_no_key():
-    """한 덤프에 같은 BSSID 가 두 번 나오면 근거 충돌 — 키를 주지 않는다.
+def test_any_duplicate_bssid_block_drops_the_row():
+    """한 덤프에 같은 BSSID 블록이 두 번 나오면 순서·내용과 무관하게 버린다.
 
-    합치면 먼저 온 값이 이겨, 위조 블록이 진짜 AP 행에 남의 폭을 심을 수 있다.
-    피해 AP 는 정상적으로 신선하므로 age 게이트로는 막을 수 없다."""
-    forged = (
-        "BSS 11:11:11:11:11:11(on mlan0)\n"
-        "\tHT capabilities:\n"
-        "\tHT operation:\n"
-        "\t\t * secondary channel offset: no secondary\n"
-        "BSS 22:22:22:22:22:22(on mlan0)\n"          # 위조: 없는 160MHz 를 광고
-        "\tVHT capabilities:\n\tVHT operation:\n"
-        "\t\t * channel width: 2 (160 MHz)\n"
-        "BSS 22:22:22:22:22:22(on mlan0)\n"          # 진짜: HT 20MHz
-        "\tHT capabilities:\n"
-        "\tHT operation:\n"
-        "\t\t * secondary channel offset: no secondary\n"
-    )
-    caps = wifi_roam.phy_caps_from_iw_scan(forged)
-    assert "22:22:22:22:22:22" not in caps, f"위조 폭이 살아남았다: {caps}"
-    assert caps["11:11:11:11:11:11"] == {"bw": "20", "gen": "ht"}, \
-        "충돌하지 않은 AP 는 그대로 남아야 한다"
+    더 정교한 규칙을 두 번 시도했고 둘 다 뚫렸다 — 필드별 값 비교는 위조가 피해자와
+    **다른 필드**를 세우면 통과했고, "두 번째 이후 블록의 새 증거만 불신"은 위조 블록이
+    **먼저** 오면 통과했다. 아래 케이스가 그 우회들을 전부 덮는다.
 
-    # 교차필드 위조: 위조가 _vht_bw 를, 진짜가 _ht_off 를 세우면 **키가 달라** 값 비교로는
-    # 안 잡힌다. capabilities 헤더까지 빼면 gen 경로도 관여하지 않으므로, 이 케이스는
-    # "두 번째 이후 블록이 낸 새 증거는 못 믿는다"는 규칙만이 유일한 방어다.
-    cross = (
-        "BSS 44:44:44:44:44:44(on mlan0)\n"
-        "\tVHT operation:\n"
-        "\t\t * channel width: 2 (160 MHz)\n"      # 위조: 없는 160MHz
-        "BSS 44:44:44:44:44:44(on mlan0)\n"
-        "\tHT operation:\n"
-        "\t\t * secondary channel offset: no secondary\n"   # 진짜: 20MHz
-    )
-    assert wifi_roam.phy_caps_from_iw_scan(cross) == {}, \
-        f"교차필드 위조가 통과했다: {wifi_roam.phy_caps_from_iw_scan(cross)}"
+    대가는 소거다(케이스 4·5) — 증거 없는 헤더 한 줄로 남의 행이 사라진다. 주입할 수
+    있는 공격자는 언제든 중복을 만들 수 있어 못 막고, 임계 결정용 데이터셋에는 없는 값이
+    틀린 값보다 낫다고 보아 감수한다."""
+    real_ht20 = ("\tHT capabilities:\n"
+                 "\tHT operation:\n"
+                 "\t\t * secondary channel offset: no secondary\n")
+    forged_vht160 = ("\tVHT capabilities:\n\tVHT operation:\n"
+                     "\t\t * channel width: 2 (160 MHz)\n")
+    B = "BSS 22:22:22:22:22:22(on mlan0)\n"
+    other = "BSS 11:11:11:11:11:11(on mlan0)\n" + real_ht20
+
+    # (1) 진짜 먼저 → 위조 나중. (2) 위조 먼저 → 진짜 나중(앞 규칙이 뚫렸던 순서).
+    for name, dump in (
+        ("genuine-first", other + B + real_ht20 + B + forged_vht160),
+        ("forged-first",  other + B + forged_vht160 + B + real_ht20),
+    ):
+        caps = wifi_roam.phy_caps_from_iw_scan(dump)
+        assert "22:22:22:22:22:22" not in caps, f"{name}: 위조가 살아남았다: {caps}"
+        assert caps["11:11:11:11:11:11"] == {"bw": "20", "gen": "ht"}, \
+            f"{name}: 중복 아닌 AP 까지 버려졌다"
+
+    # (3) 교차필드 — 위조는 _vht_bw 만, 진짜는 _ht_off 만. capabilities 가 없어 gen 경로도
+    #     관여하지 않으므로, 값 비교나 키 비교로는 잡히지 않는 형태다.
+    cross = (B + "\tVHT operation:\n\t\t * channel width: 2 (160 MHz)\n"
+             + B + "\tHT operation:\n\t\t * secondary channel offset: no secondary\n")
+    assert wifi_roam.phy_caps_from_iw_scan(cross) == {}, "교차필드 위조가 통과했다"
+
+    # (4) 값이 같은 정상 중복도 함께 버려진다 — 이게 감수한 대가다.
+    assert wifi_roam.phy_caps_from_iw_scan(B + real_ht20 + B + real_ht20) == {}, \
+        "정책상 정상 중복도 버려야 한다(위조와 구별할 수단이 없다)"
+
+    # (5) 증거 없는 헤더 한 줄로도 지워진다 — 문서화된 소거 비용.
+    assert wifi_roam.phy_caps_from_iw_scan(B + real_ht20 + B) == {}, \
+        "증거 없는 중복 헤더도 같은 규칙을 받는다"
 
 
 def test_oversized_width_value_does_not_raise():
@@ -920,24 +925,3 @@ def test_oversized_last_seen_does_not_kill_the_scan(monkeypatch):
     assert wifi_roam._iw_scan_to_ap_lines(None, [5220], passive=True) is None
 
 
-def test_bare_duplicate_header_does_not_erase_a_real_row():
-    """증거 없는 `BSS <피해자>` 한 줄로 남의 행을 지울 수 없다.
-
-    BSSID 전체를 버리는 방식이면 21바이트 주입만으로 소거가 된다. 값이 실제로
-    어긋나는 필드만 버려서, 위조는 막으면서 소거는 못 하게 한다."""
-    victim = (
-        "BSS aa:aa:aa:aa:aa:aa(on mlan0)\n"
-        "\tHT capabilities:\n"
-        "\tHT operation:\n"
-        "\t\t * secondary channel offset: above\n"
-        "\tVHT capabilities:\n\tVHT operation:\n"
-        "\t\t * channel width: 1 (80 MHz)\n"
-        "\tHE capabilities:\n"
-    )
-    want = {"aa:aa:aa:aa:aa:aa": {"bw": "80", "gen": "he"}}
-    assert wifi_roam.phy_caps_from_iw_scan(victim) == want
-    # 증거 없는 헤더만 덧붙임 → 행이 살아 있어야 한다.
-    assert wifi_roam.phy_caps_from_iw_scan(
-        victim + "BSS aa:aa:aa:aa:aa:aa(on mlan0)\n") == want, "맨 헤더로 행이 지워졌다"
-    # 값이 같은 정상 중복(hidden-SSID beacon + probe response)도 보존된다.
-    assert wifi_roam.phy_caps_from_iw_scan(victim + victim) == want, "정상 중복이 버려졌다"

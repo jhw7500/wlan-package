@@ -1311,30 +1311,6 @@ _VHT_BW = {1: "80", 2: "160", 3: "80+80"}  # 0 = "20 or 40 MHz" — 모호, HT �
 _LAST_PHY_CAPS = {}
 
 
-def _record(caps, conflicted, bssid, key, value, first_block):
-    """관측값을 기록하되, **두 번째 이후 블록이 새 증거를 내면** 그 BSSID 를 충돌 처리한다.
-
-    한 덤프에 같은 BSSID 블록이 두 번 나오는 경우는 둘이다 — 위조(주입된 블록이 진짜 AP
-    행에 남의 폭을 심으려는 경우)와 정상 중복(hidden-SSID beacon + probe response 등).
-    세 가지를 동시에 만족해야 한다:
-
-    - 증거 없는 `BSS <피해자>` 한 줄로는 **못 지운다**. 그런 블록은 아무것도 기록하지
-      않으므로 여기 오지 않는다. (BSSID 전체를 버리는 규칙은 21바이트 소거를 허용했다.)
-    - 값이 같은 정상 중복은 **보존**한다. 같은 키에 같은 값이면 충돌이 아니다.
-    - 교차필드 위조도 **막는다**. 위조 블록이 `_vht_bw` 를, 진짜 블록이 `_ht_off` 를 세우면
-      키가 달라 값 비교로는 잡히지 않는다. 그래서 "다른 블록이 낸 새 키"도 충돌로 본다.
-      (필드별 값 비교만으로는 공격자가 피해자가 안 쓰는 필드를 고르면 통과한다.)"""
-    cur = caps[bssid]
-    if key in cur:
-        if cur[key] != value:
-            conflicted.add(bssid)
-        return
-    if not first_block:
-        conflicted.add(bssid)
-        return
-    cur[key] = value
-
-
 def phy_caps_from_iw_scan(iw_scan_stdout, allowed_bssids=None):
     """`iw scan` dump 에서 BSSID -> {bw, gen} 을 뽑는다. **관측 전용이며 판정에 쓰지 않는다.**
 
@@ -1359,19 +1335,29 @@ def phy_caps_from_iw_scan(iw_scan_stdout, allowed_bssids=None):
     않고 판정 경로도 이 맵을 읽지 않지만, **bw/gen 은 검증된 측정이 아니라 참고값**이다.
     출처를 증명할 수단 없이 판정에 승격시키지 말 것.
 
-    잔여 위험(닫히지 않았다): allowed_bssids 는 같은 stdout 을 읽는 형제 파서가 만들므로
-    **주입된 블록은 자기 입장권을 스스로 발급한다** — 이 게이트는 오래된 캐시 항목은
-    걸러도 주입은 제약하지 못한다. 아래 필드별 충돌 판정도 피해 AP 의 진짜 블록이 같은
-    덤프에 함께 있을 때만 발동하므로, 커널 캐시에서 만료됐지만 supplicant 에는 남아 있는
-    BSSID 라면 위조 블록이 유일한 블록이 되어 그 값이 그대로 기록된다. 버퍼 전체가 공격자
-    영향 하에 있어 파서 안에서 닫을 수 있는 문제가 아니다. #285 소비자는 bw/gen 을 다수
-    관측의 분포로 보고 단일 행을 근거로 삼지 말 것."""
+    중복 블록 정책 — **위조를 막고 소거는 감수한다.** 한 덤프에 같은 BSSID 블록이 두 번
+    나오면 순서·내용과 무관하게 그 BSSID 를 통째로 버린다. 정상 중복(hidden-SSID beacon +
+    probe response 등)도 함께 버려진다.
+
+    더 정교한 규칙을 두 번 시도했고 둘 다 뚫렸다. 필드별 값 비교는 위조가 피해자와 다른
+    필드를 세우면 통과했고(교차필드), "두 번째 이후 블록의 새 증거만 불신"은 위조 블록이
+    **먼저** 오면 통과했다(피해자의 진짜 블록이 새 키도 다른 값도 내지 않으므로). 버퍼
+    전체가 공격자 영향 하라 파서 안에 신뢰 앵커가 없다 — 어떤 규칙이든 순서나 필드 선택으로
+    우회된다. 그래서 순서 무관한 가장 단순한 규칙을 쓴다.
+
+    대가는 소거다: 인접 AP 가 `BSS <피해자>` 한 줄만 주입하면 그 AP 의 bw/gen 이 사라진다.
+    이건 못 막는다(주입할 수 있으면 언제든 중복을 만들 수 있다). 임계 결정용 데이터셋에는
+    **없는 값이 틀린 값보다 낫다**고 판단해 이쪽을 택했다.
+
+    닫히지 않은 것: allowed_bssids 는 같은 stdout 을 읽는 형제 파서가 만들므로 **주입된
+    블록은 자기 입장권을 스스로 발급한다**. 커널 캐시에서 만료됐지만 supplicant 에 남아 있는
+    BSSID 라면 위조 블록이 유일한 블록이 되어 그 값이 그대로 기록된다(중복이 아니므로).
+    #285 소비자는 bw/gen 을 다수 관측의 분포로 보고 단일 행을 근거로 삼지 말 것."""
     allowed = None if allowed_bssids is None else {
         str(b).lower() for b in allowed_bssids
     }
     caps = {}
-    conflicted = set()
-    first_block = True   # 이 BSSID 의 첫 블록인가(두 번째 이후의 새 증거는 못 믿는다)
+    conflicted = set()   # 한 덤프에 두 번 이상 나온 BSSID (위 중복 블록 정책 참조)
     bssid = None
     section = None
     for line in (iw_scan_stdout or "").splitlines():
@@ -1384,7 +1370,8 @@ def phy_caps_from_iw_scan(iw_scan_stdout, allowed_bssids=None):
             if bssid is not None and allowed is not None and bssid not in allowed:
                 bssid = None
             if bssid is not None:
-                first_block = bssid not in caps
+                if bssid in caps:
+                    conflicted.add(bssid)
                 caps.setdefault(bssid, {})
             section = None
             continue
@@ -1397,10 +1384,7 @@ def phy_caps_from_iw_scan(iw_scan_stdout, allowed_bssids=None):
             g = {"HT capabilities": "ht", "VHT capabilities": "vht",
                  "HE capabilities": "he"}.get(section)
             if g:
-                if not first_block and g not in (caps[bssid].get("_gen") or set()):
-                    conflicted.add(bssid)
-                else:
-                    caps[bssid].setdefault("_gen", set()).add(g)
+                caps[bssid].setdefault("_gen", set()).add(g)
             continue
         # 세부 행 관측은 **섹션 판정과 독립**이어야 한다. 섹션 분기 안에서만 세우면
         # 정작 섹션 헤더 문자열이 바뀐 경우(가장 흔한 드리프트)에 아무 신호도 안 남는다.
@@ -1411,11 +1395,11 @@ def phy_caps_from_iw_scan(iw_scan_stdout, allowed_bssids=None):
             # 이 함수는 로밍 판정 경로 안에서 불리고 위로 핸들러가 없어 그대로 데몬이
             # 죽는다 — 관측 기능이 그래선 안 되므로 값만 버린다.
             try:
-                _record(caps, conflicted, bssid, "_vht_bw", int(w.group(1)), first_block)
+                caps[bssid]["_vht_bw"] = int(w.group(1))
             except ValueError:
                 pass
         elif section == "HT operation" and o:
-            _record(caps, conflicted, bssid, "_ht_off", o.group(1).strip().lower(), first_block)
+            caps[bssid]["_ht_off"] = o.group(1).strip().lower()
 
     out = {}
     for b, c in caps.items():
