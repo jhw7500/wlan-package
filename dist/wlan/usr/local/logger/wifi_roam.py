@@ -1987,7 +1987,6 @@ def reload_supplicant_conf_if_changed(path):
     후 옛 SSID 로 스캔(No Matching APs)하는 stale 로밍을 유발했다.
     """
     global WPA_SSID, WPA_FREQ, WPA_TH_2G, WPA_TH_5G, WPA_TH_CONNECT, WPA_CONF_MTIME
-    global EXTRA_SSIDS
     try:
         mtime = os.path.getmtime(path)
     except OSError:
@@ -1998,7 +1997,6 @@ def reload_supplicant_conf_if_changed(path):
         ssid, freqs, th2g, th5g, th_connect = parse_supplicant_conf(
             path, def_th2g=DEFAULT_TH_2G, def_th5g=DEFAULT_TH_5G
         )
-        effective_extra_ssids = validate_ssid_list(EXTRA_SSIDS, base_ssid=ssid)
     except Exception as e:
         logger.message("err", f"[{IFACE}] wpa conf reload failed (keep last): {e}", _EXTRA_())
         return
@@ -2011,7 +2009,6 @@ def reload_supplicant_conf_if_changed(path):
     # 의도된 흐름이다. conf 파일 자체의 mtime 이 바뀌어야 하는 것이 아니다.
     changed = (ssid, freqs) != (WPA_SSID, WPA_FREQ) or (th2g, th5g, th_connect) != (WPA_TH_2G, WPA_TH_5G, WPA_TH_CONNECT)
     WPA_SSID, WPA_FREQ, WPA_TH_2G, WPA_TH_5G, WPA_TH_CONNECT = ssid, freqs, th2g, th5g, th_connect
-    EXTRA_SSIDS = effective_extra_ssids
     WPA_CONF_MTIME = mtime
     if changed:
         logger.message(
@@ -3718,11 +3715,6 @@ if __name__ == "__main__":
     WPA_SSID, WPA_FREQ, WPA_TH_2G, WPA_TH_5G, WPA_TH_CONNECT = parse_supplicant_conf(
         WPA_CONF_FILE, def_th2g=DEFAULT_TH_2G, def_th5g=DEFAULT_TH_5G
     )
-    try:
-        EXTRA_SSIDS = validate_ssid_list(EXTRA_SSIDS, base_ssid=WPA_SSID)
-    except RoamPolicyError as exc:
-        logger.message("emerg", f"[{IFACE}] invalid boot SSID topology: {exc}", _EXTRA_())
-        sys.exit(2)
     # 초기 파싱 시점의 mtime 기록 — 이후 main 루프는 mtime 변화(reconfigure) 시에만 재파싱.
     try:
         WPA_CONF_MTIME = os.path.getmtime(WPA_CONF_FILE)

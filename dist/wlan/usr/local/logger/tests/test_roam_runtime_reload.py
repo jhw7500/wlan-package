@@ -140,26 +140,37 @@ def test_duplicate_extra_reload_uses_boot_snapshot_without_secondary_warning(env
     assert len(_warn_calls("extra_ssids deduplicated")) == 0
 
 
-def test_supplicant_reload_filters_new_base_from_effective_extra_ssids(
+def test_supplicant_reload_preserves_boot_extras_across_base_round_trip(
     env, tmp_path, monkeypatch
 ):
     conf = tmp_path / "wpa_supplicant-mlan0.conf"
     conf.write_text('network={\n    ssid="Office"\n}\n')
+    os.utime(conf, (1, 1))
     for name, value in [
         ("WPA_SSID", "Base"),
         ("WPA_FREQ", []),
         ("WPA_TH_2G", wifi_roam.DEFAULT_TH_2G),
         ("WPA_TH_5G", wifi_roam.DEFAULT_TH_5G),
         ("WPA_TH_CONNECT", None),
-        ("WPA_CONF_MTIME", -1),
-        ("EXTRA_SSIDS", ["Office", "Guest", "Guest"]),
+        ("WPA_CONF_MTIME", 0),
+        ("EXTRA_SSIDS", ["Office", "Guest"]),
+        ("GENERATE_NETWORK_BLOCKS", True),
     ]:
         monkeypatch.setattr(wifi_roam, name, value)
 
     wifi_roam.reload_supplicant_conf_if_changed(str(conf))
 
     assert wifi_roam.WPA_SSID == "Office"
-    assert wifi_roam.EXTRA_SSIDS == ["Guest"]
+    assert wifi_roam.EXTRA_SSIDS == ["Office", "Guest"]
+    assert wifi_roam.get_allowed_ssids() == ["Office", "Guest"]
+
+    conf.write_text('network={\n    ssid="Base"\n}\n')
+    os.utime(conf, (2, 2))
+    wifi_roam.reload_supplicant_conf_if_changed(str(conf))
+
+    assert wifi_roam.WPA_SSID == "Base"
+    assert wifi_roam.EXTRA_SSIDS == ["Office", "Guest"]
+    assert wifi_roam.get_allowed_ssids() == ["Base", "Office", "Guest"]
 
 
 def test_no_roaming_section_keeps_current(env):
