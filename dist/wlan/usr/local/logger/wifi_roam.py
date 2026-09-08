@@ -1221,6 +1221,9 @@ def _iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
     # supplicant BSS table에 존재한다는 기존 계약도 유지된다.
     max_seen_age_ms = scan_elapsed_ms + IW_SCAN_FRESH_SLACK_MS
     fresh_bssids = fresh_bssids_from_iw_scan(r.stdout, max_seen_age_ms)
+    # 같은 stdout 에서 관측용 PHY 능력도 뽑아 둔다(추가 명령 0). 판정에는 쓰지 않는다.
+    global _LAST_PHY_CAPS
+    _LAST_PHY_CAPS = phy_caps_from_iw_scan(r.stdout)
     if not fresh_bssids:
         logger.message(
             "warn",
@@ -1274,6 +1277,99 @@ def fresh_bssids_from_iw_scan(iw_scan_stdout, max_age_ms):
         if current_bssid and seen and int(seen.group(1)) <= max_age:
             fresh.add(current_bssid)
     return fresh
+
+
+# `iw scan` 이 찍는 PHY 능력 문자열의 정본은 타겟에 설치된 iw 6.9 의 scan.c 다:
+#   [45] "HT capabilities"(:1830)  [61] "HT operation"(:1836)
+#   [191] "VHT capabilities"(:1838) [192] "VHT operation"(:1839)
+#   ext[35] "HE capabilities"(:2388)
+# 세부 행은 print_ht_op(:1308) 의 `* secondary channel offset: above|below|no secondary`
+# 와 print_vht_oper(:1525) 의 `* channel width: N (20 or 40 MHz|80 MHz|160 MHz|80+80 MHz)`.
+#
+# HE operation(ext 36)과 EHT 계열은 iw 6.9 의 ext_printers 에 항목 자체가 없어 **출력되지
+# 않는다**. 그래서 폭은 VHT operation 으로, 세대는 capabilities 존재로 판정한다 — 11ax AP 도
+# 5GHz 에서는 하위호환으로 VHT operation 을 광고하므로 폭은 그대로 얻어진다.
+# 한계: 11be(EHT) 는 이 iw 로 구분할 수 없어 he 로 보인다.
+_VHT_BW = {1: "80", 2: "160", 3: "80+80"}  # 0 = "20 or 40 MHz" — 모호, HT 로 분해한다
+_PHY_WARNED = False
+# 직전 iw scan 이 관측한 PHY 능력. 로그 행에만 쓰이고 판정 흐름에는 관여하지 않는다.
+# iw_scan_to_ap_lines 의 반환 시그니처를 바꾸면 호출 6곳을 모두 손대야 해서 캐시로 나른다.
+_LAST_PHY_CAPS = {}
+
+
+def phy_caps_from_iw_scan(iw_scan_stdout):
+    """`iw scan` dump 에서 BSSID -> {bw, gen} 을 뽑는다. **관측 전용이며 판정에 쓰지 않는다.**
+
+    이 stdout 은 fresh_bssids_from_iw_scan 이 이미 쓰고 있는 것과 같은 버퍼다 — 추가 명령
+    없이 같은 출력의 다른 부분을 읽을 뿐이다. wpa_supplicant 2.11 의 WPA_BSS_MASK_* 에는
+    채널폭/세대 비트가 없어(BIT0~27 확인) `wpa_cli bss` 로는 원시 IE 를 직접 파싱해야 한다.
+
+    bw: "20"/"40"/"80"/"160"/"80+80". VHT operation 의 폭 코드를 우선하고, 그 값이 0
+        ("20 or 40 MHz") 이거나 VHT 가 없으면 HT operation 의 secondary channel offset 으로
+        분해한다. 근거가 하나도 없으면 키를 넣지 않는다(추정하지 않는다).
+    gen: "he"/"vht"/"ht" — capabilities IE 존재 기준의 최상위 세대.
+
+    파싱 실패는 fail-open 이다: 해당 필드만 로그에서 빠지고 로밍 판정에는 영향이 없다."""
+    caps = {}
+    bssid = None
+    section = None
+    for line in (iw_scan_stdout or "").splitlines():
+        m = re.match(r"^BSS\s+(([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2})", line)
+        if m:
+            bssid = m.group(1).lower()
+            caps.setdefault(bssid, {})
+            section = None
+            continue
+        if bssid is None:
+            continue
+        # IE 헤더는 탭 1개 + 이름 + ':' 이고 세부 행은 탭 2개로 들어간다(scan.c:1794).
+        head = re.match(r"^\t([A-Za-z][^:]*):", line)
+        if head:
+            section = head.group(1).strip()
+            if section == "HT capabilities":
+                caps[bssid].setdefault("_gen", set()).add("ht")
+            elif section == "VHT capabilities":
+                caps[bssid].setdefault("_gen", set()).add("vht")
+            elif section == "HE capabilities":
+                caps[bssid].setdefault("_gen", set()).add("he")
+            continue
+        if section == "VHT operation":
+            w = re.match(r"^\s*\*\s*channel width:\s*(\d+)", line)
+            if w:
+                caps[bssid]["_vht_bw"] = int(w.group(1))
+        elif section == "HT operation":
+            o = re.match(r"^\s*\*\s*secondary channel offset:\s*(\S+)", line)
+            if o:
+                caps[bssid]["_ht_off"] = o.group(1).strip().lower()
+
+    out = {}
+    for b, c in caps.items():
+        rec = {}
+        bw = _VHT_BW.get(c.get("_vht_bw"))
+        if bw is None and "_ht_off" in c:
+            bw = "40" if c["_ht_off"] in ("above", "below") else "20"
+        if bw is not None:
+            rec["bw"] = bw
+        gens = c.get("_gen") or set()
+        for g in ("he", "vht", "ht"):
+            if g in gens:
+                rec["gen"] = g
+                break
+        if rec:
+            out[b] = rec
+
+    # BSS 블록은 읽었는데 폭·세대를 하나도 못 뽑았으면 iw 출력 형식이 어긋난 것이다.
+    # 관측 기능이라 동작은 그대로 두되(빈 필드), 원인이 보이도록 한 번만 남긴다.
+    global _PHY_WARNED
+    if caps and not out and not _PHY_WARNED:
+        _PHY_WARNED = True
+        logger.message(
+            "warn",
+            f"[{IFACE}] iw scan 출력에서 채널폭/세대를 얻지 못했다 "
+            f"— 설치된 iw 의 HT/VHT/HE 출력 문자열이 파서와 어긋났을 수 있다",
+            _EXTRA_(),
+        )
+    return out
 
 
 def scan_results_to_ap_lines(scan_results_stdout, fresh_bssids=None):
@@ -1511,17 +1607,24 @@ def fetch_bss_metrics(iface=None):
     return metrics
 
 
-def _metrics_suffix(metrics, bssid):
-    """로그 행에 붙일 ", snr=.., est=..(age=..s)" 조각. 값이 없으면 빈 문자열."""
-    m = (metrics or {}).get((bssid or "").lower())
-    if not m:
-        return ""
+def _metrics_suffix(metrics, bssid, phy=None):
+    """로그 행에 붙일 ", snr=.., est=..(age=..s), bw=.., gen=.." 조각. 없으면 빈 문자열.
+
+    phy 를 생략하면 직전 iw scan 이 채운 _LAST_PHY_CAPS 를 쓴다(테스트는 명시 전달)."""
+    key = (bssid or "").lower()
+    m = (metrics or {}).get(key) or {}
+    p = (_LAST_PHY_CAPS if phy is None else phy).get(key) or {}
     parts = []
     if "snr" in m:
         parts.append(f"snr={m['snr']}")
     if "est" in m:
         age = f"(age={m['age']}s)" if "age" in m else ""
         parts.append(f"est={m['est']}{age}")
+    # 폭·규격은 est 와 달리 정적 속성이라 age 가 없다 — #285 의 하향 로밍 판정 근거.
+    if "bw" in p:
+        parts.append(f"bw={p['bw']}")
+    if "gen" in p:
+        parts.append(f"gen={p['gen']}")
     return (", " + ", ".join(parts)) if parts else ""
 
 
