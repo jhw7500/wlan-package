@@ -84,11 +84,11 @@ def test_shared_ssid_contract_preserves_valid_utf8_through_32_bytes(ssid):
     assert roam_policy.validate_ssid(ssid) == ssid
 
 
-def test_shared_ssid_list_rejects_duplicates_and_base_identity():
-    with pytest.raises(RoamPolicyError):
-        roam_policy.validate_ssid_list(["Office", "Office"])
-    with pytest.raises(RoamPolicyError):
-        roam_policy.validate_ssid_list(["Base", "Office"], base_ssid="Base")
+def test_shared_ssid_list_stably_deduplicates_and_drops_base_identity():
+    assert roam_policy.validate_ssid_list(
+        ["Base", "Office", "Office", "Guest", "Base"],
+        base_ssid="Base",
+    ) == ["Office", "Guest"]
 
 
 def test_hex_and_existing_quoted_wpa_ssid_values_round_trip_exactly():
@@ -101,16 +101,26 @@ def test_hex_and_existing_quoted_wpa_ssid_values_round_trip_exactly():
 @pytest.mark.parametrize(
     "extras",
     [
-        ["Office", "Office"],
         [""],
         ["bad\x7f"],
         ["가" * 11],
     ],
 )
-def test_boot_policy_rejects_invalid_or_duplicate_ssid_identities(tmp_path, extras):
+def test_boot_policy_rejects_invalid_ssid_identities(tmp_path, extras):
     _write_policy(tmp_path, extra_ssids=extras)
     with pytest.raises(RoamPolicyError):
         load_boot_roam_policy("mlan0", run_dir=str(tmp_path))
+
+
+def test_boot_policy_stably_deduplicates_extra_ssids(tmp_path):
+    _write_policy(
+        tmp_path,
+        extra_ssids=["Office", "Office", "Guest", "Office"],
+    )
+
+    policy = load_boot_roam_policy("mlan0", run_dir=str(tmp_path))
+
+    assert policy["extra_ssids"] == ["Office", "Guest"]
 
 
 def _wpa_printf_encode(value):

@@ -77,9 +77,11 @@ wifi_sync_path_or_global() {
     sync "$1" 2>/dev/null || sync 2>/dev/null
 }
 
-# Validate a JSON SSID array without translating any identity.  When a base
-# supplicant configuration exists, reject an extra/base duplicate as well.
-wifi_ssid_array_validate_json() {
+# Validate a JSON SSID array and print its stable de-duplicated form.  Identity
+# bytes are never translated: the first extra occurrence wins, and an identity
+# equal to the first supplicant network block is omitted because that base block
+# already exists.
+wifi_ssid_array_normalize_json() {
     local extras_json="$1" base_conf="${2:-}"
     python3 - "$extras_json" "$base_conf" 2>/dev/null <<'PY'
 import json
@@ -109,8 +111,6 @@ values = json.loads(sys.argv[1])
 if not isinstance(values, list):
     raise ValueError("extra_ssids must be an array")
 checked = [valid(value) for value in values]
-if len(set(checked)) != len(checked):
-    raise ValueError("duplicate extra SSID identity")
 
 base_conf = sys.argv[2]
 base = None
@@ -129,9 +129,31 @@ if base_conf and os.path.isfile(base_conf):
             if in_network and re.match(r"^ssid\s*=", line):
                 base = parse_value(line.split("=", 1)[1])
                 break
-if base is not None and base in checked:
-    raise ValueError("extra SSID duplicates base SSID identity")
+
+result = []
+seen = set()
+for value in checked:
+    if value == base or value in seen:
+        continue
+    seen.add(value)
+    result.append(value)
+print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
 PY
+}
+
+# Emit one bounded success warning only after the boot snapshot commit.  SSID
+# values are intentionally omitted from syslog.
+wifi_ssid_array_warn_dedup() {
+    local iface="$1" removed="$2"
+    [ "$removed" -gt 0 ] 2>/dev/null || return 0
+    logger -t wifi-init -p local0.warning -- \
+        "[wifi_init_config_lib.sh:$LINENO] extra_ssids deduplicated: iface=$iface removed=$removed" \
+        2>/dev/null || true
+}
+
+# Compatibility validator for callers that only need shape/byte validation.
+wifi_ssid_array_validate_json() {
+    wifi_ssid_array_normalize_json "$@" >/dev/null
 }
 
 # conf 에 쓸 SSID 직렬화. 읽을 수 있으면 따옴표, 위험하면 hex 로 떨어진다.
@@ -234,6 +256,7 @@ wifi_roam_policy_ensure_snapshot() {
     local conf_json="${2:-${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}}"
     local run_dir="${WIFI_RUN_DIR:-/run/wifi}" policy latch tmp base_conf
     local roaming_enabled bgscan_enabled generate extras
+    local raw_extra_count normalized_extra_count dedup_removed=0
 
     policy=$(wifi_roam_policy_path "$iface") || return 1
     latch=$(wifi_roam_policy_latch_path "$iface") || return 1
@@ -252,12 +275,10 @@ wifi_roam_policy_ensure_snapshot() {
         # A policy without the tombstone is an untrusted policy-first crash
         # state.  Never promote it or reconstruct from mutable live JSON.
         [ -e "$latch" ] || return 1
+        # Version-1 snapshots written by an older package may be non-canonical.
+        # Keep the immutable bytes intact; effective consumers normalize them
+        # against the first supplicant network block on read.
         wifi_roam_policy_validate_file "$policy" "$iface" || return 1
-        generate=$(jq -r '.generate_network_blocks' "$policy" 2>/dev/null) || return 1
-        extras=$(jq -c '.extra_ssids' "$policy" 2>/dev/null) || return 1
-        if [ "$generate" = "true" ]; then
-            wifi_ssid_array_validate_json "$extras" "$base_conf" || return 1
-        fi
         return 0
     fi
     # 같은 boot에 snapshot을 삭제한 후 live JSON으로 owner/topology를
@@ -278,11 +299,10 @@ wifi_roam_policy_ensure_snapshot() {
         '(.[$iface].roaming.extra_ssids // []) as $raw
          | if ($raw | type) == "array" then $raw else error("extra_ssids") end' \
         "$conf_json" 2>/dev/null) || return 1
-    if [ "$generate" = "true" ]; then
-        wifi_ssid_array_validate_json "$extras" "$base_conf" || return 1
-    else
-        wifi_ssid_array_validate_json "$extras" || return 1
-    fi
+    raw_extra_count=$(printf '%s' "$extras" | jq -r 'length' 2>/dev/null) || return 1
+    extras=$(wifi_ssid_array_normalize_json "$extras" "$base_conf") || return 1
+    normalized_extra_count=$(printf '%s' "$extras" | jq -r 'length' 2>/dev/null) || return 1
+    dedup_removed=$((raw_extra_count - normalized_extra_count))
 
     tmp=$(mktemp "$run_dir/.${iface}.roam-policy.XXXXXX") || return 1
     if ! jq -cn \
@@ -324,7 +344,9 @@ wifi_roam_policy_ensure_snapshot() {
     fi
     wifi_sync_path_or_global "$policy" || return 1
     wifi_sync_path_or_global "$run_dir" || return 1
-    wifi_roam_policy_validate_file "$policy" "$iface"
+    wifi_roam_policy_validate_file "$policy" "$iface" || return 1
+    wifi_ssid_array_warn_dedup "$iface" "$dedup_removed"
+    return 0
 }
 
 wifi_roam_policy_get_bool() {
@@ -780,11 +802,7 @@ wifi_init_sync_extra_ssid_blocks() {
              | if ($raw | type) == "array" then $raw else error("extra_ssids") end' \
             "$conf_json" 2>/dev/null) || return 1
     fi
-    if [ "$gen" = "true" ]; then
-        wifi_ssid_array_validate_json "$extras_json" "$conf" || return 1
-    else
-        wifi_ssid_array_validate_json "$extras_json" || return 1
-    fi
+    extras_json=$(wifi_ssid_array_normalize_json "$extras_json" "$conf") || return 1
 
     local tmp
     tmp=$(mktemp "${conf}.extra.XXXXXX") || return 1

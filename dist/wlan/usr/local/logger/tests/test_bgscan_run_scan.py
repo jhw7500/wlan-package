@@ -198,7 +198,7 @@ network={
 
 
 @pytest.mark.parametrize("extra_ssids", [["Office", "Office"], ["Base"]])
-def test_build_request_strictly_rejects_invalid_boot_snapshot_extras(
+def test_build_request_deduplicates_boot_snapshot_extras(
     tmp_path, monkeypatch, extra_ssids
 ):
     conf = _write_runtime_config(tmp_path, monkeypatch)
@@ -207,8 +207,11 @@ def test_build_request_strictly_rejects_invalid_boot_snapshot_extras(
         "extra_ssids": extra_ssids,
     }
 
-    with pytest.raises(wifi_bgscan.BgscanConfigError, match="SSID topology"):
-        wifi_bgscan.build_scan_request(conf, "iw", boot_policy=boot_policy)
+    cmd, _, _ = wifi_bgscan.build_scan_request(
+        conf, "iw", boot_policy=boot_policy
+    )
+
+    assert cmd[cmd.index("ssid") + 1 :] == ["Base", "Office"]
 
 
 def test_periodic_scan_lock_contention_defers_full_interval_without_subprocess(

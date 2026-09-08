@@ -687,9 +687,22 @@ else
     log_fail "valid special UTF-8 extra SSID is accepted"
 fi
 
+cat > "$_wpa_tmpd/dedup-extra.json" <<'EOF'
+{"mlan0":{"roaming":{"generate_network_blocks":true,"extra_ssids":["base","office","office","guest","base"]}}}
+EOF
+cp "$_wpa_tmpd/empty-extra.conf" "$_wpa_tmpd/dedup-extra.conf"
+if WIFI_INIT_CONF_JSON="$_wpa_tmpd/dedup-extra.json" \
+   WIFI_RUN_DIR="$_wpa_tmpd/dedup-run" \
+   WIFI_ROAM_POLICY_LATCH_DIR="$_wpa_tmpd/dedup-latch" \
+   wifi_init_sync_extra_ssid_blocks mlan0 "$_wpa_tmpd/dedup-extra.conf"; then
+    expect_equal "base and repeated extras are removed in stable order" \
+        "$(conf_ssid_identities "$_wpa_tmpd/dedup-extra.conf")" \
+        "$(printf 'base\noffice\nguest')"
+else
+    log_fail "base and repeated extra SSIDs are accepted for deduplication"
+fi
+
 for _invalid_extra_json in \
-    '["base"]' \
-    '["dup","dup"]' \
     '[""]' \
     '["bad\u007f"]' \
     '["가가가가가가가가가가가"]'; do
@@ -701,9 +714,9 @@ for _invalid_extra_json in \
        WIFI_RUN_DIR="$_wpa_tmpd/invalid-run" \
        WIFI_ROAM_POLICY_LATCH_DIR="$_wpa_tmpd/invalid-latch" \
        wifi_init_sync_extra_ssid_blocks mlan0 "$_wpa_tmpd/invalid-extra.conf"; then
-        log_fail "invalid/duplicate/base SSID list must be rejected: $_invalid_extra_json"
+        log_fail "invalid SSID list must be rejected: $_invalid_extra_json"
     elif cmp -s "$_wpa_tmpd/invalid-extra.before" "$_wpa_tmpd/invalid-extra.conf"; then
-        log_pass "invalid/duplicate/base SSID rejection is non-mutating: $_invalid_extra_json"
+        log_pass "invalid SSID rejection is non-mutating: $_invalid_extra_json"
     else
         log_fail "invalid SSID rejection mutated conf: $_invalid_extra_json"
     fi

@@ -112,7 +112,7 @@ def test_invalid_json_keeps_current_and_warns(env):
 
 def test_semantically_invalid_reload_is_atomic(env):
     """뒤쪽 extra_ssids 검증 실패가 앞쪽 파라미터만 부분 적용하면 안 된다."""
-    bad = _conf(check_interval=2, pp_window=99, extra=["dup", "dup"])
+    bad = _conf(check_interval=2, pp_window=99, extra=["valid", "valid", 7])
     _write(env, bad)
 
     assert reload_roaming_config(IFACE) is False
@@ -121,6 +121,56 @@ def test_semantically_invalid_reload_is_atomic(env):
     assert wifi_roam.EXTRA_SSIDS == []
     assert wifi_roam.WPA_CONF_MTIME == 123.0
     assert len(_warn_calls("semantic validation")) == 1
+    assert len(_warn_calls("extra_ssids deduplicated")) == 0
+
+
+def test_duplicate_extra_reload_uses_boot_snapshot_without_secondary_warning(env):
+    _write(
+        env,
+        _conf(
+            check_interval=2,
+            extra=["Office", "Office", "Guest", "Office"],
+        ),
+    )
+
+    assert reload_roaming_config(IFACE) is True
+    assert wifi_roam.CHECK_INTERVAL == 2
+    assert wifi_roam.EXTRA_SSIDS == []  # topology remains boot-latched
+    assert len(_warn_calls("extra_ssids change ignored at runtime")) == 1
+    assert len(_warn_calls("extra_ssids deduplicated")) == 0
+
+
+def test_supplicant_reload_preserves_boot_extras_across_base_round_trip(
+    env, tmp_path, monkeypatch
+):
+    conf = tmp_path / "wpa_supplicant-mlan0.conf"
+    conf.write_text('network={\n    ssid="Office"\n}\n')
+    os.utime(conf, (1, 1))
+    for name, value in [
+        ("WPA_SSID", "Base"),
+        ("WPA_FREQ", []),
+        ("WPA_TH_2G", wifi_roam.DEFAULT_TH_2G),
+        ("WPA_TH_5G", wifi_roam.DEFAULT_TH_5G),
+        ("WPA_TH_CONNECT", None),
+        ("WPA_CONF_MTIME", 0),
+        ("EXTRA_SSIDS", ["Office", "Guest"]),
+        ("GENERATE_NETWORK_BLOCKS", True),
+    ]:
+        monkeypatch.setattr(wifi_roam, name, value)
+
+    wifi_roam.reload_supplicant_conf_if_changed(str(conf))
+
+    assert wifi_roam.WPA_SSID == "Office"
+    assert wifi_roam.EXTRA_SSIDS == ["Office", "Guest"]
+    assert wifi_roam.get_allowed_ssids() == ["Office", "Guest"]
+
+    conf.write_text('network={\n    ssid="Base"\n}\n')
+    os.utime(conf, (2, 2))
+    wifi_roam.reload_supplicant_conf_if_changed(str(conf))
+
+    assert wifi_roam.WPA_SSID == "Base"
+    assert wifi_roam.EXTRA_SSIDS == ["Office", "Guest"]
+    assert wifi_roam.get_allowed_ssids() == ["Base", "Office", "Guest"]
 
 
 def test_no_roaming_section_keeps_current(env):

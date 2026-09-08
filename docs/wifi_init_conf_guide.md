@@ -905,7 +905,7 @@ durable backup을 별도 staging으로 복사해 atomic rename하고 복원 파�
 | `SCAN_NO_RESULT_SLEEP` | int | `3` | 스캔 결과 없을 때 대기 (초) |
 | `ROAM_SUCCESS_SLEEP` | int | `3` | 로밍 성공 후 대기 (초) |
 | `enabled` | bool | mlan0 `true` / mlan1 `false` | owner 선택자. `true`=wifi_roam+iw, `false`=wpa native+wpa_cli. boot snapshot에 latch되므로 변경은 **재부팅** |
-| `extra_ssids` | array[str] | `[]` | Mode A에서 추가 network 블록으로 만들 SSID. 같은 psk/key_mgmt 전제. 빈 배열이어도 Mode A identity/SSID writer 금지는 유지. 변경은 **재부팅** |
+| `extra_ssids` | array[str] | `[]` | Mode A에서 추가 network 블록으로 만들 SSID. 부팅 base와 같은 항목 및 extra 간 중복은 첫 출현 순서를 보존해 제거하고, 새 snapshot 커밋 성공 뒤 제거 개수를 warning으로 한 번 남긴다. 같은 psk/key_mgmt 전제. 빈 배열이어도 Mode A identity/SSID writer 금지는 유지. 변경은 **재부팅** |
 | `generate_network_blocks` | bool | `false` | 부팅 topology 결정자. `false`=Mode B 단일 블록/cross-SSID 자동전환 없음, `true`=Mode A 다중 블록/자동 cross-SSID. 변경은 **재부팅** |
 | `ROAM_CROSS_FAIL_RETRY_COUNT` | int | `2` | 모드A cross-SSID(`select_network`) 전환 실패 시 cooldown 없이 즉시 재시도 허용 횟수. 초과 시 지수 backoff로 해당 SSID를 후보에서 제외(진동 차단). 모드B에선 미적용 |
 
@@ -914,8 +914,11 @@ durable backup을 별도 staging으로 복사해 atomic rename하고 복원 파�
 > 안의 BSS 전환 전용이라 `extra_ssids`를 읽지 않으므로, Mode B에서 이 키는 boot
 > snapshot에 보존만 되고 읽는 소비자가 없다. 망 전환은 `wifi connect <ssid> [freq...]`
 > (conf ssid 교체 → reconfigure → 재연결)로 한다.
-> snapshot 생성 시점에는 부팅 base와 중복된 후보를 거부하지만, `wifi connect` 전환
-> 후 live base가 그 후보와 같아지는 것은 의도된 단일-블록 동작이다.
+> snapshot 생성 시점에는 부팅 base와 같은 후보와 extra 간 중복을 순서 보존 방식으로
+> 제거한다. `wifi connect` 전환 후 live base가 boot-latched 후보와 같아지는 것은
+> 의도된 단일-블록 동작이다.
+> 이전 패키지가 만든 비정규 v1 snapshot은 같은 boot에서 파일을 다시 쓰지 않으며,
+> 각 소비자가 적용 전에 같은 중복 제거 규칙으로 정규화한다.
 > Mode A에서는 자동 owner만 cross-SSID를 수행한다. 수동 `roam`은 두 모드 모두 같은
 > SSID 안의 BSS 전환 전용이다.
 >

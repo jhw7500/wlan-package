@@ -157,11 +157,16 @@ def test_extra_ssids_passed_in_mode_a(tmp_path, monkeypatch):
     assert load_bgscan_json("mlan0")[3] == ["  Office  ", "Guest"]
 
 
-def test_duplicate_or_base_duplicate_extra_ssids_are_rejected(tmp_path, monkeypatch):
+def test_duplicate_extra_ssids_are_stably_deduplicated(tmp_path, monkeypatch):
     _write_conf(tmp_path, monkeypatch, {
-        "mlan0": {"roaming": {"generate_network_blocks": True, "extra_ssids": ["Office", "Office"]}}
+        "mlan0": {
+            "roaming": {
+                "generate_network_blocks": True,
+                "extra_ssids": ["Office", "Office", "Guest", "Office"],
+            }
+        }
     })
-    assert load_bgscan_json("mlan0")[3] == []
+    assert load_bgscan_json("mlan0")[3] == ["Office", "Guest"]
 
 def test_extra_ssids_gated_off_when_generate_absent(tmp_path, monkeypatch):
     # generate 키 부재(기본 모드 B): extra가 있어도 []
