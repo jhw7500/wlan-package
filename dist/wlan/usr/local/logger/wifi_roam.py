@@ -1126,6 +1126,11 @@ def iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
       전부 생략하고 beacon만 수신 — 홈채널 후보 저부하 수집 및 baseline 통일용.
     include_wildcard=False: 와일드카드("") broadcast probe를 빼고 directed probe만 —
       액티브 폴백을 conf의 설정 SSID로만 좁힐 때(사용자 요구: configured freq_list+ssid만) 사용."""
+    # 관측 캐시를 먼저 비운다. 스캔이 timeout/rc!=0/락거부/무신선 중 어느 쪽으로 실패해도
+    # **직전 스캔의 폭이 남아** 이후 행(특히 src="cache")에 실리는 일이 없게 하기 위함이다.
+    # 성공 경로에서만 _iw_scan_to_ap_lines 가 다시 채운다.
+    global _LAST_PHY_CAPS
+    _LAST_PHY_CAPS = {}
     with scan_transition_lock(IFACE) as acquired:
         if not acquired:
             logger.message("info", f"[{IFACE}] scan-transition busy; defer roam scan", _EXTRA_())
@@ -1221,6 +1226,11 @@ def _iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
     # supplicant BSS table에 존재한다는 기존 계약도 유지된다.
     max_seen_age_ms = scan_elapsed_ms + IW_SCAN_FRESH_SLACK_MS
     fresh_bssids = fresh_bssids_from_iw_scan(r.stdout, max_seen_age_ms)
+    # 같은 stdout 에서 관측용 PHY 능력도 뽑아 둔다(추가 명령 0). 판정에는 쓰지 않는다.
+    # 신선 집합을 함께 넘겨 후보와 **같은 age 게이트**를 적용한다 — iw 는 커널 BSS 캐시
+    # 전체를 뱉으므로 게이트가 없으면 수백 초 전 블록의 폭이 [scan] 행에 실린다.
+    global _LAST_PHY_CAPS
+    _LAST_PHY_CAPS = phy_caps_from_iw_scan(r.stdout, allowed_bssids=fresh_bssids)
     if not fresh_bssids:
         logger.message(
             "warn",
@@ -1271,9 +1281,177 @@ def fresh_bssids_from_iw_scan(iw_scan_stdout, max_age_ms):
             current_bssid = bss.group(1).lower() if bss else None
             continue
         seen = re.match(r"^\s*last seen:\s*(\d+)\s*ms ago\s*$", line)
-        if current_bssid and seen and int(seen.group(1)) <= max_age:
-            fresh.add(current_bssid)
+        if current_bssid and seen:
+            # 자릿수 제한(CPython 기본 4300)을 넘는 값이면 int() 가 ValueError 를 던지고,
+            # 이 함수는 로밍 판정 경로에서 불리며 위로 핸들러가 없어 데몬이 죽는다.
+            # 형식이 깨진 age 는 이 함수의 기존 계약대로 fail-closed 로 제외한다.
+            try:
+                age = int(seen.group(1))
+            except ValueError:
+                continue
+            if age <= max_age:
+                fresh.add(current_bssid)
     return fresh
+
+
+# `iw scan` 이 찍는 PHY 능력 문자열의 정본은 타겟에 설치된 iw 6.9 의 scan.c 다:
+#   [45] "HT capabilities"(:1830)  [61] "HT operation"(:1836)
+#   [191] "VHT capabilities"(:1838) [192] "VHT operation"(:1839)
+#   ext[35] "HE capabilities"(:2388)
+# 세부 행은 print_ht_op(:1308) 의 `* secondary channel offset: above|below|no secondary`
+# 와 print_vht_oper(:1525) 의 `* channel width: N (20 or 40 MHz|80 MHz|160 MHz|80+80 MHz)`.
+#
+# HE operation(ext 36)과 EHT 계열은 iw 6.9 의 ext_printers 에 항목 자체가 없어 **출력되지
+# 않는다**. 그래서 폭은 VHT operation 으로, 세대는 capabilities 존재로 판정한다 — 11ax AP 도
+# 5GHz 에서는 하위호환으로 VHT operation 을 광고하므로 폭은 그대로 얻어진다.
+# 한계: 11be(EHT) 는 이 iw 로 구분할 수 없어 he 로 보인다.
+# 폭 코드 -> 폭. 0 은 "20 or 40 MHz" 라 모호해 HT 로 분해하고, 1 은 **revised signaling**
+# 때문에 단독으로 결정되지 않는다(아래 _vht_bw_from 참조). 2/3 은 구식 표기지만 여전히 온다.
+_VHT_BW = {2: "160", 3: "80+80"}
+
+
+def _vht_bw_from(code, seg0, seg1):
+    """VHT operation 의 폭 코드와 두 center-frequency segment 로 실제 폭을 정한다.
+
+    코드 1 은 80MHz 를 뜻하지 않는다. 802.11ac revised signaling 에서 코드 2/3 은 폐기되고,
+    160 과 80+80 을 **코드 1 + 두 segment 의 간격**으로 표현한다. 정본은 출하
+    wpa_supplicant 의 get_vht_operation_channel_width (src/common/ieee802_11_common.c):
+
+        case 1: seg1 and abs(seg1-seg0)==8 -> 160 ; seg1 -> 80+80 ; else -> 80
+
+    이걸 빼면 revised signaling 을 쓰는 160/80+80 AP 가 전부 80 으로 기록된다 — #285 가
+    가장 구별하려는 넓은 AP 들이 하필 틀린 값으로 남는다. iw 는 두 segment 를
+    `* center freq segment 1/2` 로 찍는다(각각 CCFS0/CCFS1).
+    근거가 없으면 None 을 돌려준다 — 추정하지 않는다."""
+    if code == 1:
+        if seg1:
+            if seg0 is not None and abs(seg1 - seg0) == 8:
+                return "160"
+            return "80+80"
+        return "80"
+    return _VHT_BW.get(code)
+# 직전 iw scan 이 관측한 PHY 능력. 로그 행에만 쓰이고 판정 흐름에는 관여하지 않는다.
+# iw_scan_to_ap_lines 의 반환 시그니처를 바꾸면 호출 6곳을 모두 손대야 해서 캐시로 나른다.
+_LAST_PHY_CAPS = {}
+
+
+def phy_caps_from_iw_scan(iw_scan_stdout, allowed_bssids=None):
+    """`iw scan` dump 에서 BSSID -> {bw, gen} 을 뽑는다. **관측 전용이며 판정에 쓰지 않는다.**
+
+    이 stdout 은 fresh_bssids_from_iw_scan 이 이미 쓰고 있는 것과 같은 버퍼다 — 추가 명령
+    없이 같은 출력의 다른 부분을 읽을 뿐이다. wpa_supplicant 2.11 의 WPA_BSS_MASK_* 에는
+    채널폭/세대 비트가 없어(BIT0~27 확인) `wpa_cli bss` 로는 원시 IE 를 직접 파싱해야 한다.
+
+    allowed_bssids: fresh_bssids_from_iw_scan 이 돌려준 신선 집합. `iw` 는 이번 스캔이 들은
+        것뿐 아니라 **커널 BSS 캐시 전체**를 뱉으므로, 이걸 주지 않으면 수백 초 전 블록의
+        폭이 `[scan]` 라벨이 붙은 행에 실린다. None 이면 게이트하지 않는다(단위 테스트용).
+    bw: "20"/"40"/"80"/"160"/"80+80". VHT operation 의 폭 코드와 두 center-frequency
+        segment 로 정한다(_vht_bw_from — 코드 1 은 revised signaling 때문에 단독으로
+        결정되지 않는다). 그 값이 0("20 or 40 MHz") 이거나 VHT 가 없으면 HT operation 의
+        secondary channel offset 으로 분해한다. 근거가 없으면 키를 넣지 않는다.
+    gen: "he"/"vht"/"ht" — capabilities IE 존재 기준의 최상위 세대.
+
+    파싱 실패는 fail-open 이다: 해당 필드만 로그에서 빠지고 로밍 판정에는 영향이 없다.
+
+    신뢰경계: 이 버퍼는 **AP 가 통제하는 바이트를 담는다.** `iw` 는 WPS 속성(Device name /
+    Manufacturer / Serial Number)을 `%.*s` 로 이스케이프 없이 찍으므로, 인접 AP 가 그 안에
+    개행·탭을 넣어 `BSS <남의주소>` 를 포함한 줄 전체를 주입할 수 있다(SSID 는 iw 가
+    이스케이프하지만 WPS 속성은 아니다). 값이 열거형에 갇혀 자유 텍스트가 로그에 들어가진
+    않고 판정 경로도 이 맵을 읽지 않지만, **bw/gen 은 검증된 측정이 아니라 참고값**이다.
+    출처를 증명할 수단 없이 판정에 승격시키지 말 것.
+
+    중복 블록 정책 — **위조를 막고 소거는 감수한다.** 한 덤프에 같은 BSSID 블록이 두 번
+    나오면 순서·내용과 무관하게 그 BSSID 를 통째로 버린다. 정상 중복(hidden-SSID beacon +
+    probe response 등)도 함께 버려진다.
+
+    더 정교한 규칙을 두 번 시도했고 둘 다 뚫렸다. 필드별 값 비교는 위조가 피해자와 다른
+    필드를 세우면 통과했고(교차필드), "두 번째 이후 블록의 새 증거만 불신"은 위조 블록이
+    **먼저** 오면 통과했다(피해자의 진짜 블록이 새 키도 다른 값도 내지 않으므로). 버퍼
+    전체가 공격자 영향 하라 파서 안에 신뢰 앵커가 없다 — 어떤 규칙이든 순서나 필드 선택으로
+    우회된다. 그래서 순서 무관한 가장 단순한 규칙을 쓴다.
+
+    대가는 소거다: 인접 AP 가 `BSS <피해자>` 한 줄만 주입하면 그 AP 의 bw/gen 이 사라진다.
+    이건 못 막는다(주입할 수 있으면 언제든 중복을 만들 수 있다). 임계 결정용 데이터셋에는
+    **없는 값이 틀린 값보다 낫다**고 판단해 이쪽을 택했다.
+
+    닫히지 않은 것: allowed_bssids 는 같은 stdout 을 읽는 형제 파서가 만들므로 **주입된
+    블록은 자기 입장권을 스스로 발급한다**. 커널 캐시에서 만료됐지만 supplicant 에 남아 있는
+    BSSID 라면 위조 블록이 유일한 블록이 되어 그 값이 그대로 기록된다(중복이 아니므로).
+    #285 소비자는 bw/gen 을 다수 관측의 분포로 보고 단일 행을 근거로 삼지 말 것."""
+    allowed = None if allowed_bssids is None else {
+        str(b).lower() for b in allowed_bssids
+    }
+    caps = {}
+    conflicted = set()   # 한 덤프에 두 번 이상 나온 BSSID (위 중복 블록 정책 참조)
+    bssid = None
+    section = None
+    for line in (iw_scan_stdout or "").splitlines():
+        # 형제 파서 fresh_bssids_from_iw_scan 과 같은 fail-closed 규칙: `BSS ` 로
+        # 시작하는데 주소가 안 읽히면 앞 블록으로 되돌아가지 말고 버린다. 안 그러면 새
+        # 블록의 IE 행이 **앞 AP 에 붙어** 그 AP 가 광고한 적 없는 폭을 지어낸다.
+        if line.startswith("BSS "):
+            m = re.match(r"^BSS\s+(([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2})", line)
+            bssid = m.group(1).lower() if m else None
+            if bssid is not None and allowed is not None and bssid not in allowed:
+                bssid = None
+            if bssid is not None:
+                if bssid in caps:
+                    conflicted.add(bssid)
+                caps.setdefault(bssid, {})
+            section = None
+            continue
+        if bssid is None:
+            continue
+        # IE 헤더는 탭 1개 + 이름 + ':' 이고 세부 행은 탭 2개로 들어간다(scan.c:1794).
+        head = re.match(r"^\t([A-Za-z][^:]*):", line)
+        if head:
+            section = head.group(1).strip()
+            g = {"HT capabilities": "ht", "VHT capabilities": "vht",
+                 "HE capabilities": "he"}.get(section)
+            if g:
+                caps[bssid].setdefault("_gen", set()).add(g)
+            continue
+        # 세부 행 관측은 **섹션 판정과 독립**이어야 한다. 섹션 분기 안에서만 세우면
+        # 정작 섹션 헤더 문자열이 바뀐 경우(가장 흔한 드리프트)에 아무 신호도 안 남는다.
+        w = re.match(r"^\s*\*\s*channel width:\s*(\d+)", line)
+        o = re.match(r"^\s*\*\s*secondary channel offset:\s*(\S+)", line)
+        if section == "VHT operation":
+            m0 = re.match(r"^\s*\*\s*center freq segment 1:\s*(\d{1,5})", line)
+            m1 = re.match(r"^\s*\*\s*center freq segment 2:\s*(\d{1,5})", line)
+            if m0:
+                caps[bssid]["_seg0"] = int(m0.group(1))
+            elif m1:
+                caps[bssid]["_seg1"] = int(m1.group(1))
+        if section == "VHT operation" and w:
+            # 자릿수 제한(CPython 기본 4300)을 넘는 값이면 int() 가 ValueError 를 던진다.
+            # 이 함수는 로밍 판정 경로 안에서 불리고 위로 핸들러가 없어 그대로 데몬이
+            # 죽는다 — 관측 기능이 그래선 안 되므로 값만 버린다.
+            try:
+                caps[bssid]["_vht_bw"] = int(w.group(1))
+            except ValueError:
+                pass
+        elif section == "HT operation" and o:
+            caps[bssid]["_ht_off"] = o.group(1).strip().lower()
+
+    out = {}
+    for b, c in caps.items():
+        if b in conflicted:
+            continue
+        rec = {}
+        bw = _vht_bw_from(c.get("_vht_bw"), c.get("_seg0"), c.get("_seg1"))
+        if bw is None and "_ht_off" in c:
+            bw = "40" if c["_ht_off"] in ("above", "below") else "20"
+        if bw is not None:
+            rec["bw"] = bw
+        gens = c.get("_gen") or set()
+        for g in ("he", "vht", "ht"):
+            if g in gens:
+                rec["gen"] = g
+                break
+        if rec:
+            out[b] = rec
+
+    return out
 
 
 def scan_results_to_ap_lines(scan_results_stdout, fresh_bssids=None):
@@ -1511,17 +1689,26 @@ def fetch_bss_metrics(iface=None):
     return metrics
 
 
-def _metrics_suffix(metrics, bssid):
-    """로그 행에 붙일 ", snr=.., est=..(age=..s)" 조각. 값이 없으면 빈 문자열."""
-    m = (metrics or {}).get((bssid or "").lower())
-    if not m:
-        return ""
+def _metrics_suffix(metrics, bssid, phy=None):
+    """로그 행에 붙일 ", snr=.., est=..(age=..s), bw=.., gen=.." 조각. 없으면 빈 문자열.
+
+    phy 는 metrics 와 **똑같이 호출자가 넘긴다.** 전역을 여기서 암묵적으로 읽으면
+    metrics 를 일부러 안 넘기는 경로(get_latest_scan 의 src="cache" 행)에까지 폭이
+    따라붙어, snr/est 는 없는데 bw/gen 만 있는 비대칭이 생긴다(실측 확인)."""
+    key = (bssid or "").lower()
+    m = (metrics or {}).get(key) or {}
+    p = (phy or {}).get(key) or {}
     parts = []
     if "snr" in m:
         parts.append(f"snr={m['snr']}")
     if "est" in m:
         age = f"(age={m['age']}s)" if "age" in m else ""
         parts.append(f"est={m['est']}{age}")
+    # 폭·규격은 est 와 달리 정적 속성이라 age 가 없다 — #285 의 하향 로밍 판정 근거.
+    if "bw" in p:
+        parts.append(f"bw={p['bw']}")
+    if "gen" in p:
+        parts.append(f"gen={p['gen']}")
     return (", " + ", ".join(parts)) if parts else ""
 
 
@@ -1535,13 +1722,18 @@ def log_scan_candidates(candidates, src, current=None, metrics=None):
              남겨 현재/후보를 같은 로그에서 비교할 수 있게 한다. link.json stale 게이트
              때문에 None 일 수 있으므로 그때는 조용히 생략한다.
     metrics: fetch_bss_metrics() 결과. 관측용이며 후보 선정에는 관여하지 않는다."""
+    # 폭·규격은 직전 iw scan 이 관측한 것이라 **그 스캔의 행에만** 붙일 수 있다.
+    # src 가 이미 그 한 비트를 나르므로 여기서 한 번만 해석한다 — 호출부마다 phy 를 함께
+    # 넘기면 편집점만 늘고 정보는 같으며, 실제로 그중 일부만 테스트에 묶이는 상태가 됐다.
+    # src="cache" 행은 snr/est 도 일부러 안 싣는 배경 캐시라 폭도 싣지 않는다.
+    phy = _LAST_PHY_CAPS if src == "scan" else None
     if current and current.get("bssid"):
         logger.message(
             "info",
             f"[{IFACE}] [{src}] roam current: "
             f"ssid={current.get('ssid', '')}, bssid={current['bssid']}, "
             f"freq={current.get('freq', '')}, rssi={current.get('rssi', '')}"
-            f"{_metrics_suffix(metrics, current['bssid'])}",
+            f"{_metrics_suffix(metrics, current['bssid'], phy)}",
             _EXTRA_(),
         )
     for i, entry in enumerate(candidates):
@@ -1551,7 +1743,7 @@ def log_scan_candidates(candidates, src, current=None, metrics=None):
             f"ts={entry['timestamp']}, ssid={entry['ssid']}, bssid={entry['bssid']}, "
             f"ch={entry['channel']}, freq={entry['freq']}, ld={entry['ld']}, "
             f"rssi={entry['rssi']}(th={entry['rssi_th']})"
-            f"{_metrics_suffix(metrics, entry['bssid'])}",
+            f"{_metrics_suffix(metrics, entry['bssid'], phy)}",
             _EXTRA_(),
         )
 
