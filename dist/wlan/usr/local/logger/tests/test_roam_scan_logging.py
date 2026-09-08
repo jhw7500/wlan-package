@@ -611,6 +611,7 @@ def test_phy_caps_ignores_width_outside_vht_operation():
         "BSS aa:bb:cc:dd:ee:ff(on mlan0)\n"
         "\tExtended capabilities:\n"
         "\t\t * channel width: 2 (160 MHz)\n"
+        "\t\t * secondary channel offset: above\n"   # 섹션 밖 offset 도 무시돼야 한다
         "\tHT operation:\n"
         "\t\t * secondary channel offset: no secondary\n"
     )
@@ -641,16 +642,16 @@ def test_metrics_suffix_appends_bw_and_gen():
     assert s == ", snr=35, est=432402(age=37s), bw=80, gen=he"
 
 
-def test_log_rows_carry_bw_and_gen():
+def test_log_rows_carry_bw_and_gen(monkeypatch):
     """현재/후보 행 양쪽에 bw/gen 이 실린다 — #285 가 필요로 하는 최종 산출물."""
-    phy = {
+    monkeypatch.setattr(wifi_roam, "_LAST_PHY_CAPS", {
         "aa:aa:aa:aa:aa:aa": {"bw": "80", "gen": "he"},
         "bb:bb:bb:bb:bb:bb": {"bw": "20", "gen": "ht"},
-    }
+    })
     station = {"bssid": "aa:aa:aa:aa:aa:aa", "ssid": "TEST", "freq": 5220, "rssi": -52}
     wifi_roam.parse_scan_entries(
         [apln(1, 36, -50, "bb:bb:bb:bb:bb:bb", "TEST")],
-        "ts", {"TEST"}, src="scan", current=station, phy=phy,
+        "ts", {"TEST"}, src="scan", current=station,
     )
     texts = _texts()
     cur = [t for t in texts if "roam current:" in t][0]
@@ -721,19 +722,6 @@ def test_wire_fills_last_phy_caps_from_the_scan_it_already_ran(monkeypatch):
     assert "bb:bb:bb:bb:bb:bb" in wifi_roam._LAST_PHY_CAPS
 
 
-def test_stale_bss_block_contributes_no_phy_caps():
-    """iw 는 커널 BSS 캐시 전체를 뱉는다 — 후보와 같은 age 게이트를 건다.
-
-    게이트가 없으면 수백 초 전 블록의 폭이 [scan] 라벨 행에 실린다(리뷰어 B 실측)."""
-    fresh = wifi_roam.fresh_bssids_from_iw_scan(_IW_SCAN_STALE, 2000)
-    assert fresh == {"bb:bb:bb:bb:bb:bb"}, f"형제 파서 기준이 달라졌다: {fresh}"
-    caps = wifi_roam.phy_caps_from_iw_scan(_IW_SCAN_STALE, allowed_bssids=fresh)
-    assert "04:ba:d6:ec:0b:08" not in caps, "902 초 전 블록이 걸러지지 않았다"
-    assert caps["bb:bb:bb:bb:bb:bb"]["bw"] == "20"
-    # 게이트를 안 주면(단위 테스트 기본) 예전처럼 전부 뽑힌다 — 대조군.
-    assert "04:ba:d6:ec:0b:08" in wifi_roam.phy_caps_from_iw_scan(_IW_SCAN_STALE)
-
-
 def test_scan_failure_clears_last_phy_caps(monkeypatch):
     """스캔 실패 시 직전 값이 남아 다음 행에 실리면 안 된다."""
     monkeypatch.setattr(wifi_roam.time, "sleep", lambda *_a: None)
@@ -794,15 +782,17 @@ def test_phy_caps_covers_the_whole_advertised_width_table():
     assert caps["11:11:11:11:11:11"]["bw"] == "160"
     assert caps["22:22:22:22:22:22"]["bw"] == "80+80"
     assert caps["33:33:33:33:33:33"]["bw"] == "40", "HT secondary offset below 도 40 이다"
+    # gen 사다리의 중간 단(11ac-only)은 실기 캡처에 없어 미검증이었다. #285 의 판정이
+    # 곧 VHT80 대 HT20 구별이라, 이 단이 잘못 붙으면 대상 집단이 조용히 오염된다.
+    assert caps["11:11:11:11:11:11"]["gen"] == "vht", "VHT capabilities 만 있으면 vht"
+    assert caps["33:33:33:33:33:33"]["gen"] == "ht", "HT capabilities 만 있으면 ht"
 
 
 def test_staged_scan_rows_carry_bw_and_gen(monkeypatch):
-    """배선의 **소비자 절반**을 고정한다 — 세 리뷰어가 만장일치로 지적한 구멍.
+    """staged_scan_best_candidate 를 통과해 나온 **실제 로그 행 문자열**을 단언한다.
 
-    직전 라운드에서 생산자(스캔 -> 캐시)만 묶고 끝냈더니, 소비자 3곳
-    (staged_scan_best_candidate 의 parse_scan_entries 호출)에서 phy 인자를 전부 지워도
-    802/802 초록이었다. 그 3곳이 캐시의 유일한 독자라, 지우면 프로덕션 모든 행에서
-    bw=/gen= 이 사라지는데도 CI 는 성공한다. 여기서는 실제 로그 행 문자열을 본다."""
+    파서나 _metrics_suffix 를 직접 부르는 테스트로는 이 경로가 묶이지 않는다 — 폭이
+    로그 행까지 실제로 도달하는지 보는 것은 이 테스트뿐이다."""
     monkeypatch.setattr(wifi_roam, "_LAST_PHY_CAPS", {
         "aa:aa:aa:aa:aa:aa": {"bw": "80", "gen": "he"},
         "bb:bb:bb:bb:bb:bb": {"bw": "20", "gen": "ht"},
@@ -870,6 +860,20 @@ def test_duplicate_bssid_block_yields_no_key():
     assert caps["11:11:11:11:11:11"] == {"bw": "20", "gen": "ht"}, \
         "충돌하지 않은 AP 는 그대로 남아야 한다"
 
+    # 교차필드 위조: 위조가 _vht_bw 를, 진짜가 _ht_off 를 세우면 **키가 달라** 값 비교로는
+    # 안 잡힌다. capabilities 헤더까지 빼면 gen 경로도 관여하지 않으므로, 이 케이스는
+    # "두 번째 이후 블록이 낸 새 증거는 못 믿는다"는 규칙만이 유일한 방어다.
+    cross = (
+        "BSS 44:44:44:44:44:44(on mlan0)\n"
+        "\tVHT operation:\n"
+        "\t\t * channel width: 2 (160 MHz)\n"      # 위조: 없는 160MHz
+        "BSS 44:44:44:44:44:44(on mlan0)\n"
+        "\tHT operation:\n"
+        "\t\t * secondary channel offset: no secondary\n"   # 진짜: 20MHz
+    )
+    assert wifi_roam.phy_caps_from_iw_scan(cross) == {}, \
+        f"교차필드 위조가 통과했다: {wifi_roam.phy_caps_from_iw_scan(cross)}"
+
 
 def test_oversized_width_value_does_not_raise():
     """자릿수 제한을 넘는 폭 값에 int() 가 던지면 로밍 데몬이 통째로 죽는다.
@@ -887,3 +891,53 @@ def test_oversized_width_value_does_not_raise():
     assert caps == {"33:33:33:33:33:33": {"bw": "40", "gen": "ht"}}, \
         f"과대 값이 예외가 되거나 폭으로 채택됐다: {caps}"
 
+
+
+def test_oversized_last_seen_does_not_kill_the_scan(monkeypatch):
+    """형제 파서의 int() 도 같은 버퍼를 읽는다 — 한쪽만 막으면 아무것도 사지 못한다.
+
+    이 함수는 로밍 판정 경로에서 불리고 위로 핸들러가 없어, 여기서 ValueError 가 나면
+    데몬이 통째로 죽는다(systemd 가 되살려도 같은 비콘이 잡히는 동안 계속 재크래시)."""
+    huge = ("BSS 44:44:44:44:44:44(on mlan0)\n"
+            "\tlast seen: " + "9" * 5000 + " ms ago\n"
+            "\tHT capabilities:\n")
+    assert wifi_roam.fresh_bssids_from_iw_scan(huge, 2000) == set(), \
+        "형식이 깨진 age 는 fail-closed 로 제외되어야 한다"
+
+    calls = []
+
+    class R:
+        def __init__(self, code, out):
+            self.returncode, self.stdout, self.stderr = code, out, ""
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        return R(0, huge) if cmd[0] == "iw" else R(0, "bssid / frequency\n")
+
+    monkeypatch.setattr(wifi_roam.time, "sleep", lambda *_a: None)
+    monkeypatch.setattr(wifi_roam.subprocess, "run", run)
+    # 예외가 나면 여기서 터진다. 신선한 BSS 가 없으니 None 반환이 정상이다.
+    assert wifi_roam._iw_scan_to_ap_lines(None, [5220], passive=True) is None
+
+
+def test_bare_duplicate_header_does_not_erase_a_real_row():
+    """증거 없는 `BSS <피해자>` 한 줄로 남의 행을 지울 수 없다.
+
+    BSSID 전체를 버리는 방식이면 21바이트 주입만으로 소거가 된다. 값이 실제로
+    어긋나는 필드만 버려서, 위조는 막으면서 소거는 못 하게 한다."""
+    victim = (
+        "BSS aa:aa:aa:aa:aa:aa(on mlan0)\n"
+        "\tHT capabilities:\n"
+        "\tHT operation:\n"
+        "\t\t * secondary channel offset: above\n"
+        "\tVHT capabilities:\n\tVHT operation:\n"
+        "\t\t * channel width: 1 (80 MHz)\n"
+        "\tHE capabilities:\n"
+    )
+    want = {"aa:aa:aa:aa:aa:aa": {"bw": "80", "gen": "he"}}
+    assert wifi_roam.phy_caps_from_iw_scan(victim) == want
+    # 증거 없는 헤더만 덧붙임 → 행이 살아 있어야 한다.
+    assert wifi_roam.phy_caps_from_iw_scan(
+        victim + "BSS aa:aa:aa:aa:aa:aa(on mlan0)\n") == want, "맨 헤더로 행이 지워졌다"
+    # 값이 같은 정상 중복(hidden-SSID beacon + probe response)도 보존된다.
+    assert wifi_roam.phy_caps_from_iw_scan(victim + victim) == want, "정상 중복이 버려졌다"

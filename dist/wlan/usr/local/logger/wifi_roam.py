@@ -1281,8 +1281,16 @@ def fresh_bssids_from_iw_scan(iw_scan_stdout, max_age_ms):
             current_bssid = bss.group(1).lower() if bss else None
             continue
         seen = re.match(r"^\s*last seen:\s*(\d+)\s*ms ago\s*$", line)
-        if current_bssid and seen and int(seen.group(1)) <= max_age:
-            fresh.add(current_bssid)
+        if current_bssid and seen:
+            # 자릿수 제한(CPython 기본 4300)을 넘는 값이면 int() 가 ValueError 를 던지고,
+            # 이 함수는 로밍 판정 경로에서 불리며 위로 핸들러가 없어 데몬이 죽는다.
+            # 형식이 깨진 age 는 이 함수의 기존 계약대로 fail-closed 로 제외한다.
+            try:
+                age = int(seen.group(1))
+            except ValueError:
+                continue
+            if age <= max_age:
+                fresh.add(current_bssid)
     return fresh
 
 
@@ -1301,6 +1309,30 @@ _VHT_BW = {1: "80", 2: "160", 3: "80+80"}  # 0 = "20 or 40 MHz" — 모호, HT �
 # 직전 iw scan 이 관측한 PHY 능력. 로그 행에만 쓰이고 판정 흐름에는 관여하지 않는다.
 # iw_scan_to_ap_lines 의 반환 시그니처를 바꾸면 호출 6곳을 모두 손대야 해서 캐시로 나른다.
 _LAST_PHY_CAPS = {}
+
+
+def _record(caps, conflicted, bssid, key, value, first_block):
+    """관측값을 기록하되, **두 번째 이후 블록이 새 증거를 내면** 그 BSSID 를 충돌 처리한다.
+
+    한 덤프에 같은 BSSID 블록이 두 번 나오는 경우는 둘이다 — 위조(주입된 블록이 진짜 AP
+    행에 남의 폭을 심으려는 경우)와 정상 중복(hidden-SSID beacon + probe response 등).
+    세 가지를 동시에 만족해야 한다:
+
+    - 증거 없는 `BSS <피해자>` 한 줄로는 **못 지운다**. 그런 블록은 아무것도 기록하지
+      않으므로 여기 오지 않는다. (BSSID 전체를 버리는 규칙은 21바이트 소거를 허용했다.)
+    - 값이 같은 정상 중복은 **보존**한다. 같은 키에 같은 값이면 충돌이 아니다.
+    - 교차필드 위조도 **막는다**. 위조 블록이 `_vht_bw` 를, 진짜 블록이 `_ht_off` 를 세우면
+      키가 달라 값 비교로는 잡히지 않는다. 그래서 "다른 블록이 낸 새 키"도 충돌로 본다.
+      (필드별 값 비교만으로는 공격자가 피해자가 안 쓰는 필드를 고르면 통과한다.)"""
+    cur = caps[bssid]
+    if key in cur:
+        if cur[key] != value:
+            conflicted.add(bssid)
+        return
+    if not first_block:
+        conflicted.add(bssid)
+        return
+    cur[key] = value
 
 
 def phy_caps_from_iw_scan(iw_scan_stdout, allowed_bssids=None):
@@ -1325,13 +1357,21 @@ def phy_caps_from_iw_scan(iw_scan_stdout, allowed_bssids=None):
     개행·탭을 넣어 `BSS <남의주소>` 를 포함한 줄 전체를 주입할 수 있다(SSID 는 iw 가
     이스케이프하지만 WPS 속성은 아니다). 값이 열거형에 갇혀 자유 텍스트가 로그에 들어가진
     않고 판정 경로도 이 맵을 읽지 않지만, **bw/gen 은 검증된 측정이 아니라 참고값**이다.
-    출처를 증명할 수단 없이 판정에 승격시키지 말 것."""
+    출처를 증명할 수단 없이 판정에 승격시키지 말 것.
+
+    잔여 위험(닫히지 않았다): allowed_bssids 는 같은 stdout 을 읽는 형제 파서가 만들므로
+    **주입된 블록은 자기 입장권을 스스로 발급한다** — 이 게이트는 오래된 캐시 항목은
+    걸러도 주입은 제약하지 못한다. 아래 필드별 충돌 판정도 피해 AP 의 진짜 블록이 같은
+    덤프에 함께 있을 때만 발동하므로, 커널 캐시에서 만료됐지만 supplicant 에는 남아 있는
+    BSSID 라면 위조 블록이 유일한 블록이 되어 그 값이 그대로 기록된다. 버퍼 전체가 공격자
+    영향 하에 있어 파서 안에서 닫을 수 있는 문제가 아니다. #285 소비자는 bw/gen 을 다수
+    관측의 분포로 보고 단일 행을 근거로 삼지 말 것."""
     allowed = None if allowed_bssids is None else {
         str(b).lower() for b in allowed_bssids
     }
     caps = {}
-    seen = set()
     conflicted = set()
+    first_block = True   # 이 BSSID 의 첫 블록인가(두 번째 이후의 새 증거는 못 믿는다)
     bssid = None
     section = None
     for line in (iw_scan_stdout or "").splitlines():
@@ -1344,13 +1384,7 @@ def phy_caps_from_iw_scan(iw_scan_stdout, allowed_bssids=None):
             if bssid is not None and allowed is not None and bssid not in allowed:
                 bssid = None
             if bssid is not None:
-                # 한 덤프에 같은 BSSID 블록이 두 번 나오면 근거가 충돌하는 것이다.
-                # 합치면 먼저 온 값이 이겨, 위조 블록이 진짜 AP 행에 남의 폭을 심을 수
-                # 있다(주입된 블록은 피해 AP 가 정상적으로 신선해 age 게이트도 못 막는다).
-                # 근거 충돌은 근거 없음으로 처리한다 — 이 파서의 no-guess 계약과 같다.
-                if bssid in seen:
-                    conflicted.add(bssid)
-                seen.add(bssid)
+                first_block = bssid not in caps
                 caps.setdefault(bssid, {})
             section = None
             continue
@@ -1360,12 +1394,13 @@ def phy_caps_from_iw_scan(iw_scan_stdout, allowed_bssids=None):
         head = re.match(r"^\t([A-Za-z][^:]*):", line)
         if head:
             section = head.group(1).strip()
-            if section == "HT capabilities":
-                caps[bssid].setdefault("_gen", set()).add("ht")
-            elif section == "VHT capabilities":
-                caps[bssid].setdefault("_gen", set()).add("vht")
-            elif section == "HE capabilities":
-                caps[bssid].setdefault("_gen", set()).add("he")
+            g = {"HT capabilities": "ht", "VHT capabilities": "vht",
+                 "HE capabilities": "he"}.get(section)
+            if g:
+                if not first_block and g not in (caps[bssid].get("_gen") or set()):
+                    conflicted.add(bssid)
+                else:
+                    caps[bssid].setdefault("_gen", set()).add(g)
             continue
         # 세부 행 관측은 **섹션 판정과 독립**이어야 한다. 섹션 분기 안에서만 세우면
         # 정작 섹션 헤더 문자열이 바뀐 경우(가장 흔한 드리프트)에 아무 신호도 안 남는다.
@@ -1376,11 +1411,11 @@ def phy_caps_from_iw_scan(iw_scan_stdout, allowed_bssids=None):
             # 이 함수는 로밍 판정 경로 안에서 불리고 위로 핸들러가 없어 그대로 데몬이
             # 죽는다 — 관측 기능이 그래선 안 되므로 값만 버린다.
             try:
-                caps[bssid]["_vht_bw"] = int(w.group(1))
+                _record(caps, conflicted, bssid, "_vht_bw", int(w.group(1)), first_block)
             except ValueError:
                 pass
         elif section == "HT operation" and o:
-            caps[bssid]["_ht_off"] = o.group(1).strip().lower()
+            _record(caps, conflicted, bssid, "_ht_off", o.group(1).strip().lower(), first_block)
 
     out = {}
     for b, c in caps.items():
@@ -1661,7 +1696,7 @@ def _metrics_suffix(metrics, bssid, phy=None):
     return (", " + ", ".join(parts)) if parts else ""
 
 
-def log_scan_candidates(candidates, src, current=None, metrics=None, phy=None):
+def log_scan_candidates(candidates, src, current=None, metrics=None):
     """후보 엔트리를 info 로 기록한다.
 
     **파싱 시점이 아니라 실제 판정에 쓰이는 시점에 호출하는 것이 원칙.**
@@ -1671,6 +1706,11 @@ def log_scan_candidates(candidates, src, current=None, metrics=None, phy=None):
              남겨 현재/후보를 같은 로그에서 비교할 수 있게 한다. link.json stale 게이트
              때문에 None 일 수 있으므로 그때는 조용히 생략한다.
     metrics: fetch_bss_metrics() 결과. 관측용이며 후보 선정에는 관여하지 않는다."""
+    # 폭·규격은 직전 iw scan 이 관측한 것이라 **그 스캔의 행에만** 붙일 수 있다.
+    # src 가 이미 그 한 비트를 나르므로 여기서 한 번만 해석한다 — 호출부마다 phy 를 함께
+    # 넘기면 편집점만 늘고 정보는 같으며, 실제로 그중 일부만 테스트에 묶이는 상태가 됐다.
+    # src="cache" 행은 snr/est 도 일부러 안 싣는 배경 캐시라 폭도 싣지 않는다.
+    phy = _LAST_PHY_CAPS if src == "scan" else None
     if current and current.get("bssid"):
         logger.message(
             "info",
@@ -1694,7 +1734,7 @@ def log_scan_candidates(candidates, src, current=None, metrics=None, phy=None):
 
 def parse_scan_entries(
     scan_lines, timestamp, allowed_set=None, src="scan", log=True,
-    metrics=None, current=None, phy=None
+    metrics=None, current=None
 ):
     """pipe 포맷 스캔 라인(`NN|ch|rssi|ld|bssid|freq|ssid`) 리스트를 로밍 후보 엔트리로
     변환한다. 파일(get_latest_scan) 경로와 메모리(홈 패시브/액티브 폴백 스캔) 경로가
@@ -1780,7 +1820,7 @@ def parse_scan_entries(
     candidates = sorted(entries, key=lambda x: x["rssi"], reverse=True)
 
     if log:
-        log_scan_candidates(candidates, src, current=current, metrics=metrics, phy=phy)
+        log_scan_candidates(candidates, src, current=current, metrics=metrics)
 
     return candidates
 
@@ -1823,13 +1863,8 @@ def get_latest_scan(st, allowed_ssids=None, log=True, src="cache"):
         logger.message("err", f"[{IFACE}] timestamp is not exist", _EXTRA_())
         return [], None
 
-    # src="scan" 은 이번 tick 이 직접 돌린 스캔의 전경 실측이다(staged scan 을 끈 배포의
-    # 레거시 경로). 그 행에는 폭을 실어야 한다 — 안 실으면 그 배포의 데이터셋에 폭 컬럼이
-    # 통째로 빈다. 반대로 src="cache" 는 배경 ap.log 라 snr/est 도 일부러 안 싣는 행이므로
-    # 폭도 싣지 않는다(그러지 않으면 다른 스캔의 값이 연대 표시 없이 따라붙는다).
     candidates = parse_scan_entries(
-        lines[start_idx:], timestamp, allowed_set, src=src, log=log,
-        phy=(_LAST_PHY_CAPS if src == "scan" else None),
+        lines[start_idx:], timestamp, allowed_set, src=src, log=log
     )
     return candidates, timestamp
 
@@ -3086,7 +3121,7 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         active_entries = parse_scan_entries(
             active_lines, now_str, allowed_set, src="scan",
-            metrics=bss_metrics, current=station, phy=_LAST_PHY_CAPS,
+            metrics=bss_metrics, current=station,
         )
         baseline_rssi = baseline_from_entries(
             active_entries, cur_bssid, baseline_rssi
@@ -3126,7 +3161,7 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             home_entries = parse_scan_entries(
                 home_lines, now_str, allowed_set, src="scan",
-                metrics=bss_metrics, current=station, phy=_LAST_PHY_CAPS,
+                metrics=bss_metrics, current=station,
             )
             home_scan_ok = any(
                 e.get("bssid") != cur_bssid for e in home_entries
@@ -3196,7 +3231,7 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         active_entries = parse_scan_entries(
             active_lines, now_str, allowed_set, src="scan",
-            metrics=bss_metrics, current=station, phy=_LAST_PHY_CAPS,
+            metrics=bss_metrics, current=station,
         )
         baseline_rssi = baseline_from_entries(active_entries, cur_bssid, baseline_rssi)
         best_ap, reason, score = evaluate_candidates(
