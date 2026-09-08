@@ -1126,6 +1126,11 @@ def iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
       전부 생략하고 beacon만 수신 — 홈채널 후보 저부하 수집 및 baseline 통일용.
     include_wildcard=False: 와일드카드("") broadcast probe를 빼고 directed probe만 —
       액티브 폴백을 conf의 설정 SSID로만 좁힐 때(사용자 요구: configured freq_list+ssid만) 사용."""
+    # 관측 캐시를 먼저 비운다. 스캔이 timeout/rc!=0/락거부/무신선 중 어느 쪽으로 실패해도
+    # **직전 스캔의 폭이 남아** 이후 행(특히 src="cache")에 실리는 일이 없게 하기 위함이다.
+    # 성공 경로에서만 _iw_scan_to_ap_lines 가 다시 채운다.
+    global _LAST_PHY_CAPS
+    _LAST_PHY_CAPS = {}
     with scan_transition_lock(IFACE) as acquired:
         if not acquired:
             logger.message("info", f"[{IFACE}] scan-transition busy; defer roam scan", _EXTRA_())
@@ -1222,8 +1227,10 @@ def _iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
     max_seen_age_ms = scan_elapsed_ms + IW_SCAN_FRESH_SLACK_MS
     fresh_bssids = fresh_bssids_from_iw_scan(r.stdout, max_seen_age_ms)
     # 같은 stdout 에서 관측용 PHY 능력도 뽑아 둔다(추가 명령 0). 판정에는 쓰지 않는다.
+    # 신선 집합을 함께 넘겨 후보와 **같은 age 게이트**를 적용한다 — iw 는 커널 BSS 캐시
+    # 전체를 뱉으므로 게이트가 없으면 수백 초 전 블록의 폭이 [scan] 행에 실린다.
     global _LAST_PHY_CAPS
-    _LAST_PHY_CAPS = phy_caps_from_iw_scan(r.stdout)
+    _LAST_PHY_CAPS = phy_caps_from_iw_scan(r.stdout, allowed_bssids=fresh_bssids)
     if not fresh_bssids:
         logger.message(
             "warn",
@@ -1297,27 +1304,47 @@ _PHY_WARNED = False
 _LAST_PHY_CAPS = {}
 
 
-def phy_caps_from_iw_scan(iw_scan_stdout):
+def phy_caps_from_iw_scan(iw_scan_stdout, allowed_bssids=None):
     """`iw scan` dump 에서 BSSID -> {bw, gen} 을 뽑는다. **관측 전용이며 판정에 쓰지 않는다.**
 
     이 stdout 은 fresh_bssids_from_iw_scan 이 이미 쓰고 있는 것과 같은 버퍼다 — 추가 명령
     없이 같은 출력의 다른 부분을 읽을 뿐이다. wpa_supplicant 2.11 의 WPA_BSS_MASK_* 에는
     채널폭/세대 비트가 없어(BIT0~27 확인) `wpa_cli bss` 로는 원시 IE 를 직접 파싱해야 한다.
 
+    allowed_bssids: fresh_bssids_from_iw_scan 이 돌려준 신선 집합. `iw` 는 이번 스캔이 들은
+        것뿐 아니라 **커널 BSS 캐시 전체**를 뱉으므로, 이걸 주지 않으면 수백 초 전 블록의
+        폭이 `[scan]` 라벨이 붙은 행에 실린다. None 이면 게이트하지 않는다(단위 테스트용).
     bw: "20"/"40"/"80"/"160"/"80+80". VHT operation 의 폭 코드를 우선하고, 그 값이 0
         ("20 or 40 MHz") 이거나 VHT 가 없으면 HT operation 의 secondary channel offset 으로
         분해한다. 근거가 하나도 없으면 키를 넣지 않는다(추정하지 않는다).
     gen: "he"/"vht"/"ht" — capabilities IE 존재 기준의 최상위 세대.
 
-    파싱 실패는 fail-open 이다: 해당 필드만 로그에서 빠지고 로밍 판정에는 영향이 없다."""
+    파싱 실패는 fail-open 이다: 해당 필드만 로그에서 빠지고 로밍 판정에는 영향이 없다.
+
+    신뢰경계: 이 버퍼는 **AP 가 통제하는 바이트를 담는다.** `iw` 는 WPS 속성(Device name /
+    Manufacturer / Serial Number)을 `%.*s` 로 이스케이프 없이 찍으므로, 인접 AP 가 그 안에
+    개행·탭을 넣어 `BSS <남의주소>` 를 포함한 줄 전체를 주입할 수 있다(SSID 는 iw 가
+    이스케이프하지만 WPS 속성은 아니다). 값이 열거형에 갇혀 자유 텍스트가 로그에 들어가진
+    않고 판정 경로도 이 맵을 읽지 않지만, **bw/gen 은 검증된 측정이 아니라 참고값**이다.
+    출처를 증명할 수단 없이 판정에 승격시키지 말 것."""
+    allowed = None if allowed_bssids is None else {
+        str(b).lower() for b in allowed_bssids
+    }
     caps = {}
     bssid = None
     section = None
+    saw_detail = False
     for line in (iw_scan_stdout or "").splitlines():
-        m = re.match(r"^BSS\s+(([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2})", line)
-        if m:
-            bssid = m.group(1).lower()
-            caps.setdefault(bssid, {})
+        # 형제 파서(fresh_bssids_from_iw_scan:1274)와 같은 fail-closed 규칙: `BSS ` 로
+        # 시작하는데 주소가 안 읽히면 앞 블록으로 되돌아가지 말고 버린다. 안 그러면 새
+        # 블록의 IE 행이 **앞 AP 에 붙어** 그 AP 가 광고한 적 없는 폭을 지어낸다.
+        if line.startswith("BSS "):
+            m = re.match(r"^BSS\s+(([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2})", line)
+            bssid = m.group(1).lower() if m else None
+            if bssid is not None and allowed is not None and bssid not in allowed:
+                bssid = None
+            if bssid is not None:
+                caps.setdefault(bssid, {})
             section = None
             continue
         if bssid is None:
@@ -1333,14 +1360,16 @@ def phy_caps_from_iw_scan(iw_scan_stdout):
             elif section == "HE capabilities":
                 caps[bssid].setdefault("_gen", set()).add("he")
             continue
-        if section == "VHT operation":
-            w = re.match(r"^\s*\*\s*channel width:\s*(\d+)", line)
-            if w:
-                caps[bssid]["_vht_bw"] = int(w.group(1))
-        elif section == "HT operation":
-            o = re.match(r"^\s*\*\s*secondary channel offset:\s*(\S+)", line)
-            if o:
-                caps[bssid]["_ht_off"] = o.group(1).strip().lower()
+        # 세부 행 관측은 **섹션 판정과 독립**이어야 한다. 섹션 분기 안에서만 세우면
+        # 정작 섹션 헤더 문자열이 바뀐 경우(가장 흔한 드리프트)에 아무 신호도 안 남는다.
+        w = re.match(r"^\s*\*\s*channel width:\s*(\d+)", line)
+        o = re.match(r"^\s*\*\s*secondary channel offset:\s*(\S+)", line)
+        if w or o:
+            saw_detail = True
+        if section == "VHT operation" and w:
+            caps[bssid]["_vht_bw"] = int(w.group(1))
+        elif section == "HT operation" and o:
+            caps[bssid]["_ht_off"] = o.group(1).strip().lower()
 
     out = {}
     for b, c in caps.items():
@@ -1358,10 +1387,12 @@ def phy_caps_from_iw_scan(iw_scan_stdout):
         if rec:
             out[b] = rec
 
-    # BSS 블록은 읽었는데 폭·세대를 하나도 못 뽑았으면 iw 출력 형식이 어긋난 것이다.
-    # 관측 기능이라 동작은 그대로 두되(빈 필드), 원인이 보이도록 한 번만 남긴다.
+    # 폭·세대 **세부 행을 실제로 봤는데도** 아무것도 못 뽑았을 때만 형식 드리프트다.
+    # 조건을 "BSS 는 읽었는데 out 이 비었다"로 두면 HT/VHT/HE IE 가 없는 **정상 레거시**
+    # 덤프에서도 발화하고, _PHY_WARNED 가 프로세스 수명 래치라 그 한 번의 오발이 이후의
+    # 진짜 드리프트 경보를 영구히 삼킨다(리뷰어 A/B/C 가 각각 독립 지적).
     global _PHY_WARNED
-    if caps and not out and not _PHY_WARNED:
+    if saw_detail and not out and not _PHY_WARNED:
         _PHY_WARNED = True
         logger.message(
             "warn",
@@ -1610,10 +1641,12 @@ def fetch_bss_metrics(iface=None):
 def _metrics_suffix(metrics, bssid, phy=None):
     """로그 행에 붙일 ", snr=.., est=..(age=..s), bw=.., gen=.." 조각. 없으면 빈 문자열.
 
-    phy 를 생략하면 직전 iw scan 이 채운 _LAST_PHY_CAPS 를 쓴다(테스트는 명시 전달)."""
+    phy 는 metrics 와 **똑같이 호출자가 넘긴다.** 전역을 여기서 암묵적으로 읽으면
+    metrics 를 일부러 안 넘기는 경로(get_latest_scan 의 src="cache" 행)에까지 폭이
+    따라붙어, snr/est 는 없는데 bw/gen 만 있는 비대칭이 생긴다(리뷰어 C 실측)."""
     key = (bssid or "").lower()
     m = (metrics or {}).get(key) or {}
-    p = (_LAST_PHY_CAPS if phy is None else phy).get(key) or {}
+    p = (phy or {}).get(key) or {}
     parts = []
     if "snr" in m:
         parts.append(f"snr={m['snr']}")
@@ -1628,7 +1661,7 @@ def _metrics_suffix(metrics, bssid, phy=None):
     return (", " + ", ".join(parts)) if parts else ""
 
 
-def log_scan_candidates(candidates, src, current=None, metrics=None):
+def log_scan_candidates(candidates, src, current=None, metrics=None, phy=None):
     """후보 엔트리를 info 로 기록한다.
 
     **파싱 시점이 아니라 실제 판정에 쓰이는 시점에 호출하는 것이 원칙.**
@@ -1644,7 +1677,7 @@ def log_scan_candidates(candidates, src, current=None, metrics=None):
             f"[{IFACE}] [{src}] roam current: "
             f"ssid={current.get('ssid', '')}, bssid={current['bssid']}, "
             f"freq={current.get('freq', '')}, rssi={current.get('rssi', '')}"
-            f"{_metrics_suffix(metrics, current['bssid'])}",
+            f"{_metrics_suffix(metrics, current['bssid'], phy)}",
             _EXTRA_(),
         )
     for i, entry in enumerate(candidates):
@@ -1654,14 +1687,14 @@ def log_scan_candidates(candidates, src, current=None, metrics=None):
             f"ts={entry['timestamp']}, ssid={entry['ssid']}, bssid={entry['bssid']}, "
             f"ch={entry['channel']}, freq={entry['freq']}, ld={entry['ld']}, "
             f"rssi={entry['rssi']}(th={entry['rssi_th']})"
-            f"{_metrics_suffix(metrics, entry['bssid'])}",
+            f"{_metrics_suffix(metrics, entry['bssid'], phy)}",
             _EXTRA_(),
         )
 
 
 def parse_scan_entries(
     scan_lines, timestamp, allowed_set=None, src="scan", log=True,
-    metrics=None, current=None
+    metrics=None, current=None, phy=None
 ):
     """pipe 포맷 스캔 라인(`NN|ch|rssi|ld|bssid|freq|ssid`) 리스트를 로밍 후보 엔트리로
     변환한다. 파일(get_latest_scan) 경로와 메모리(홈 패시브/액티브 폴백 스캔) 경로가
@@ -1747,7 +1780,7 @@ def parse_scan_entries(
     candidates = sorted(entries, key=lambda x: x["rssi"], reverse=True)
 
     if log:
-        log_scan_candidates(candidates, src, current=current, metrics=metrics)
+        log_scan_candidates(candidates, src, current=current, metrics=metrics, phy=phy)
 
     return candidates
 
@@ -3048,7 +3081,7 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         active_entries = parse_scan_entries(
             active_lines, now_str, allowed_set, src="scan",
-            metrics=bss_metrics, current=station,
+            metrics=bss_metrics, current=station, phy=_LAST_PHY_CAPS,
         )
         baseline_rssi = baseline_from_entries(
             active_entries, cur_bssid, baseline_rssi
@@ -3088,7 +3121,7 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             home_entries = parse_scan_entries(
                 home_lines, now_str, allowed_set, src="scan",
-                metrics=bss_metrics, current=station,
+                metrics=bss_metrics, current=station, phy=_LAST_PHY_CAPS,
             )
             home_scan_ok = any(
                 e.get("bssid") != cur_bssid for e in home_entries
@@ -3158,7 +3191,7 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         active_entries = parse_scan_entries(
             active_lines, now_str, allowed_set, src="scan",
-            metrics=bss_metrics, current=station,
+            metrics=bss_metrics, current=station, phy=_LAST_PHY_CAPS,
         )
         baseline_rssi = baseline_from_entries(active_entries, cur_bssid, baseline_rssi)
         best_ap, reason, score = evaluate_candidates(
