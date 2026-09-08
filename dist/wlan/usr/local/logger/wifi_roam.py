@@ -1305,7 +1305,31 @@ def fresh_bssids_from_iw_scan(iw_scan_stdout, max_age_ms):
 # 않는다**. 그래서 폭은 VHT operation 으로, 세대는 capabilities 존재로 판정한다 — 11ax AP 도
 # 5GHz 에서는 하위호환으로 VHT operation 을 광고하므로 폭은 그대로 얻어진다.
 # 한계: 11be(EHT) 는 이 iw 로 구분할 수 없어 he 로 보인다.
-_VHT_BW = {1: "80", 2: "160", 3: "80+80"}  # 0 = "20 or 40 MHz" — 모호, HT 로 분해한다
+# 폭 코드 -> 폭. 0 은 "20 or 40 MHz" 라 모호해 HT 로 분해하고, 1 은 **revised signaling**
+# 때문에 단독으로 결정되지 않는다(아래 _vht_bw_from 참조). 2/3 은 구식 표기지만 여전히 온다.
+_VHT_BW = {2: "160", 3: "80+80"}
+
+
+def _vht_bw_from(code, seg0, seg1):
+    """VHT operation 의 폭 코드와 두 center-frequency segment 로 실제 폭을 정한다.
+
+    코드 1 은 80MHz 를 뜻하지 않는다. 802.11ac revised signaling 에서 코드 2/3 은 폐기되고,
+    160 과 80+80 을 **코드 1 + 두 segment 의 간격**으로 표현한다. 정본은 출하
+    wpa_supplicant 의 get_vht_operation_channel_width (src/common/ieee802_11_common.c):
+
+        case 1: seg1 and abs(seg1-seg0)==8 -> 160 ; seg1 -> 80+80 ; else -> 80
+
+    이걸 빼면 revised signaling 을 쓰는 160/80+80 AP 가 전부 80 으로 기록된다 — #285 가
+    가장 구별하려는 넓은 AP 들이 하필 틀린 값으로 남는다. iw 는 두 segment 를
+    `* center freq segment 1/2` 로 찍는다(각각 CCFS0/CCFS1).
+    근거가 없으면 None 을 돌려준다 — 추정하지 않는다."""
+    if code == 1:
+        if seg1:
+            if seg0 is not None and abs(seg1 - seg0) == 8:
+                return "160"
+            return "80+80"
+        return "80"
+    return _VHT_BW.get(code)
 # 직전 iw scan 이 관측한 PHY 능력. 로그 행에만 쓰이고 판정 흐름에는 관여하지 않는다.
 # iw_scan_to_ap_lines 의 반환 시그니처를 바꾸면 호출 6곳을 모두 손대야 해서 캐시로 나른다.
 _LAST_PHY_CAPS = {}
@@ -1321,9 +1345,10 @@ def phy_caps_from_iw_scan(iw_scan_stdout, allowed_bssids=None):
     allowed_bssids: fresh_bssids_from_iw_scan 이 돌려준 신선 집합. `iw` 는 이번 스캔이 들은
         것뿐 아니라 **커널 BSS 캐시 전체**를 뱉으므로, 이걸 주지 않으면 수백 초 전 블록의
         폭이 `[scan]` 라벨이 붙은 행에 실린다. None 이면 게이트하지 않는다(단위 테스트용).
-    bw: "20"/"40"/"80"/"160"/"80+80". VHT operation 의 폭 코드를 우선하고, 그 값이 0
-        ("20 or 40 MHz") 이거나 VHT 가 없으면 HT operation 의 secondary channel offset 으로
-        분해한다. 근거가 하나도 없으면 키를 넣지 않는다(추정하지 않는다).
+    bw: "20"/"40"/"80"/"160"/"80+80". VHT operation 의 폭 코드와 두 center-frequency
+        segment 로 정한다(_vht_bw_from — 코드 1 은 revised signaling 때문에 단독으로
+        결정되지 않는다). 그 값이 0("20 or 40 MHz") 이거나 VHT 가 없으면 HT operation 의
+        secondary channel offset 으로 분해한다. 근거가 없으면 키를 넣지 않는다.
     gen: "he"/"vht"/"ht" — capabilities IE 존재 기준의 최상위 세대.
 
     파싱 실패는 fail-open 이다: 해당 필드만 로그에서 빠지고 로밍 판정에는 영향이 없다.
@@ -1390,6 +1415,13 @@ def phy_caps_from_iw_scan(iw_scan_stdout, allowed_bssids=None):
         # 정작 섹션 헤더 문자열이 바뀐 경우(가장 흔한 드리프트)에 아무 신호도 안 남는다.
         w = re.match(r"^\s*\*\s*channel width:\s*(\d+)", line)
         o = re.match(r"^\s*\*\s*secondary channel offset:\s*(\S+)", line)
+        if section == "VHT operation":
+            m0 = re.match(r"^\s*\*\s*center freq segment 1:\s*(\d{1,5})", line)
+            m1 = re.match(r"^\s*\*\s*center freq segment 2:\s*(\d{1,5})", line)
+            if m0:
+                caps[bssid]["_seg0"] = int(m0.group(1))
+            elif m1:
+                caps[bssid]["_seg1"] = int(m1.group(1))
         if section == "VHT operation" and w:
             # 자릿수 제한(CPython 기본 4300)을 넘는 값이면 int() 가 ValueError 를 던진다.
             # 이 함수는 로밍 판정 경로 안에서 불리고 위로 핸들러가 없어 그대로 데몬이
@@ -1406,7 +1438,7 @@ def phy_caps_from_iw_scan(iw_scan_stdout, allowed_bssids=None):
         if b in conflicted:
             continue
         rec = {}
-        bw = _VHT_BW.get(c.get("_vht_bw"))
+        bw = _vht_bw_from(c.get("_vht_bw"), c.get("_seg0"), c.get("_seg1"))
         if bw is None and "_ht_off" in c:
             bw = "40" if c["_ht_off"] in ("above", "below") else "20"
         if bw is not None:

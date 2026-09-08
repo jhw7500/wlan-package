@@ -765,7 +765,7 @@ def test_phy_caps_covers_the_whole_advertised_width_table():
     폭 코드 표는 iw 6.9 scan.c:1519-1523 의 chandwidths[] 가 정본이다
     ({0:"20 or 40 MHz", 1:"80 MHz", 2:"160 MHz", 3:"80+80 MHz"}). 아래 스탠자는
     실기 캡처와 같은 형식으로 만든 합성 입력이고, 표를 잘못 옮기면 빨개진다."""
-    def stanza(bssid, vht=None, ht_off=None):
+    def stanza(bssid, vht=None, ht_off=None, seg0=None, seg1=None):
         out = f"BSS {bssid}(on mlan0)\n\tHT capabilities:\n"
         if ht_off:
             out += f"\tHT operation:\n\t\t * secondary channel offset: {ht_off}\n"
@@ -773,6 +773,10 @@ def test_phy_caps_covers_the_whole_advertised_width_table():
             name = {0: "20 or 40 MHz", 1: "80 MHz", 2: "160 MHz", 3: "80+80 MHz"}[vht]
             out += ("\tVHT capabilities:\n\tVHT operation:\n"
                     f"\t\t * channel width: {vht} ({name})\n")
+            if seg0 is not None:
+                out += f"\t\t * center freq segment 1: {seg0}\n"
+            if seg1 is not None:
+                out += f"\t\t * center freq segment 2: {seg1}\n"
         return out
 
     dump = (stanza("11:11:11:11:11:11", vht=2, ht_off="above")
@@ -786,6 +790,19 @@ def test_phy_caps_covers_the_whole_advertised_width_table():
     # 곧 VHT80 대 HT20 구별이라, 이 단이 잘못 붙으면 대상 집단이 조용히 오염된다.
     assert caps["11:11:11:11:11:11"]["gen"] == "vht", "VHT capabilities 만 있으면 vht"
     assert caps["33:33:33:33:33:33"]["gen"] == "ht", "HT capabilities 만 있으면 ht"
+
+    # revised signaling — 코드 1 은 80MHz 를 뜻하지 않는다. 802.11ac 에서 코드 2/3 은
+    # 폐기되고 160·80+80 을 코드 1 + 두 center-frequency segment 간격으로 표현한다.
+    # 정본: 출하 wpa_supplicant 의 get_vht_operation_channel_width
+    # (src/common/ieee802_11_common.c) — seg1 이 있고 간격이 8 이면 160, 있으면 80+80.
+    # 이 분해를 빼면 revised signaling 을 쓰는 넓은 AP 가 전부 80 으로 오분류된다.
+    rev = (stanza("44:44:44:44:44:44", vht=1, ht_off="above", seg0=50, seg1=58)
+           + stanza("55:55:55:55:55:55", vht=1, ht_off="above", seg0=42, seg1=106)
+           + stanza("66:66:66:66:66:66", vht=1, ht_off="above", seg0=42, seg1=0))
+    rc = wifi_roam.phy_caps_from_iw_scan(rev)
+    assert rc["44:44:44:44:44:44"]["bw"] == "160", "간격 8 은 160 (구식 코드 2 와 동치)"
+    assert rc["55:55:55:55:55:55"]["bw"] == "80+80", "간격 8 이 아니면 80+80"
+    assert rc["66:66:66:66:66:66"]["bw"] == "80", "seg1 이 0 이면 80 (실기 캡처가 이 형태)"
 
 
 def test_staged_scan_rows_carry_bw_and_gen(monkeypatch):
