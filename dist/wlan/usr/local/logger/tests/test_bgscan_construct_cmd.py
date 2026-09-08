@@ -63,12 +63,18 @@ def test_freq_filter_true_adds_freq_tokens():
     assert "2412" in cmd and "5180" in cmd
 
 
-@pytest.mark.parametrize("extras", [["HomeNet"], ["Office", "Office"]])
-def test_iw_scan_rejects_base_or_duplicate_ssid_identity(extras):
-    with pytest.raises(wifi_bgscan.RoamPolicyError):
-        construct_iw_scan_cmd(
-            "HomeNet", [], ssid_filter=True, freq_filter=False, extra_ssids=extras
-        )
+@pytest.mark.parametrize(
+    "extras,expected",
+    [
+        (["HomeNet"], ["HomeNet"]),
+        (["Office", "Office"], ["HomeNet", "Office"]),
+    ],
+)
+def test_iw_scan_deduplicates_base_and_extra_ssid_identity(extras, expected):
+    cmd = construct_iw_scan_cmd(
+        "HomeNet", [], ssid_filter=True, freq_filter=False, extra_ssids=extras
+    )
+    assert _ssid_tokens(cmd) == expected
 
 
 def test_freq_filter_false_omits_freq_tokens():
@@ -232,9 +238,17 @@ def test_wpa_scan_caps_unique_directed_ssids():
     assert len(set(ssids)) == len(ssids)
 
 
-@pytest.mark.parametrize("extras", [["Base"], ["Office", "Office"]])
-def test_wpa_scan_rejects_base_or_duplicate_ssid_identity(extras):
-    with pytest.raises(wifi_bgscan.RoamPolicyError):
-        wifi_bgscan.construct_wpa_scan_cmd(
-            "mlan0", "Base", ["2412"], ssid_filter=True, extra_ssids=extras
-        )
+@pytest.mark.parametrize(
+    "extras,expected",
+    [
+        (["Base"], ["Base"]),
+        (["Office", "Office"], ["Base", "Office"]),
+    ],
+)
+def test_wpa_scan_deduplicates_base_and_extra_ssid_identity(extras, expected):
+    cmd = wifi_bgscan.construct_wpa_scan_cmd(
+        "mlan0", "Base", ["2412"], ssid_filter=True, extra_ssids=extras
+    )
+    assert _wpa_ssid_hex_tokens(cmd) == [
+        ssid.encode("utf-8").hex() for ssid in expected
+    ]

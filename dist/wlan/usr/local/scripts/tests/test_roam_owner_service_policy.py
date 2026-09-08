@@ -94,6 +94,15 @@ if [ -n "$actual" ] && [ "$FAULT_POINT" = "$actual" ]; then exit 1; fi
 exec /usr/bin/jq "$@"
 ''',
     )
+    _write_exe(
+        fake_bin / "logger",
+        r'''#!/bin/sh
+if [ -n "${FAULT_STATE:-}" ]; then
+  printf '%s\n' "$*" >> "$FAULT_STATE/logger.calls"
+fi
+exit 0
+''',
+    )
     return fake_bin
 
 
@@ -447,13 +456,11 @@ def test_mode_b_extra_block_sync_accepts_current_manual_candidate(
         [""],
         ["bad\nname"],
         ["bad\x7fname"],
-        ["dup", "dup"],
-        ["Base"],
         ["가" * 11],
         [7],
     ],
 )
-def test_snapshot_rejects_invalid_or_duplicate_ssid_list_before_latching(
+def test_snapshot_rejects_invalid_ssid_list_before_latching(
     tmp_path: Path, extras
 ) -> None:
     config = tmp_path / "wifi_init_conf.json"
@@ -475,6 +482,176 @@ def test_snapshot_rejects_invalid_or_duplicate_ssid_list_before_latching(
     assert result.returncode != 0
     assert not (run_dir / "mlan0.roam-policy.json").exists()
     assert not (latch_dir / ".mlan0.roam-policy.latched").exists()
+
+
+def test_snapshot_stably_deduplicates_extra_and_base_ssids_before_latching(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "wifi_init_conf.json"
+    config.write_text(
+        json.dumps(
+            _config(
+                True,
+                generate_network_blocks=True,
+                extra_ssids=["Base", "Office", "Office", "Guest", "Base"],
+            )
+        )
+    )
+    run_dir = tmp_path / "run"
+    latch_dir = tmp_path / "latches"
+    latch_dir.mkdir()
+    fake_bin = _snapshot_fault_bin(tmp_path)
+
+    result = _run_snapshot_ensure(
+        config,
+        run_dir,
+        latch_dir,
+        fake_bin,
+        tmp_path / "fault-state",
+        "",
+    )
+
+    assert result.returncode == 0, result.stderr
+    policy = json.loads((run_dir / "mlan0.roam-policy.json").read_text())
+    assert policy["extra_ssids"] == ["Office", "Guest"]
+    assert (latch_dir / ".mlan0.roam-policy.latched").exists()
+    fault_state = tmp_path / "fault-state"
+    sync_result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            '. "$1"; wifi_init_sync_extra_ssid_blocks mlan0 "$2"',
+            "_",
+            str(LIB),
+            str(tmp_path / "wpa" / "wpa_supplicant-mlan0.conf"),
+        ],
+        env=os.environ
+        | {
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "WIFI_INIT_CONF_JSON": str(config),
+            "WIFI_RUN_DIR": str(run_dir),
+            "WIFI_ROAM_POLICY_LATCH_DIR": str(latch_dir),
+            "WPA_CONF_DIR": str(tmp_path / "wpa"),
+            "RUN_DIR": str(run_dir),
+            "LATCH_DIR": str(latch_dir),
+            "FAULT_STATE": str(fault_state),
+            "FAULT_POINT": "",
+        },
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+    assert sync_result.returncode == 0, sync_result.stderr
+    warnings = [
+        line
+        for line in (fault_state / "logger.calls").read_text().splitlines()
+        if "extra_ssids deduplicated" in line
+    ]
+    assert len(warnings) == 1
+    assert "removed=3" in warnings[0]
+    assert all(ssid not in warnings[0] for ssid in ("Base", "Office", "Guest"))
+
+
+def test_failed_snapshot_commit_does_not_emit_dedup_success_warning(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "wifi_init_conf.json"
+    config.write_text(
+        json.dumps(
+            _config(
+                True,
+                generate_network_blocks=True,
+                extra_ssids=["Base", "Office", "Office"],
+            )
+        )
+    )
+    run_dir = tmp_path / "run"
+    latch_dir = tmp_path / "latches"
+    latch_dir.mkdir()
+    fake_bin = _snapshot_fault_bin(tmp_path)
+    fault_state = tmp_path / "fault-state"
+
+    result = _run_snapshot_ensure(
+        config,
+        run_dir,
+        latch_dir,
+        fake_bin,
+        fault_state,
+        "policy-rename",
+    )
+
+    assert result.returncode != 0
+    calls = fault_state / "logger.calls"
+    assert not calls.exists() or "extra_ssids deduplicated" not in calls.read_text()
+
+
+def test_existing_v1_snapshot_is_read_only_but_effectively_deduplicated(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "wifi_init_conf.json"
+    config.write_text(json.dumps(_config(True, generate_network_blocks=True)))
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    latch_dir = tmp_path / "latches"
+    latch_dir.mkdir()
+    wpa_dir = tmp_path / "wpa"
+    wpa_dir.mkdir()
+    conf = wpa_dir / "wpa_supplicant-mlan0.conf"
+    conf.write_text(
+        'freq_list=5180\nnetwork={\n    ssid="Base"\n'
+        '    key_mgmt=WPA-PSK\n    psk="password"\n}\n'
+    )
+    policy_path = run_dir / "mlan0.roam-policy.json"
+    policy_text = json.dumps(
+        {
+            "version": 1,
+            "iface": "mlan0",
+            "roaming_enabled": True,
+            "bgscan_enabled": True,
+            "generate_network_blocks": True,
+            "extra_ssids": ["Base", "Office", "Office", "Guest", "Base"],
+        }
+    )
+    policy_path.write_text(policy_text)
+    (latch_dir / ".mlan0.roam-policy.latched").write_text("1\n")
+    fake_bin = _snapshot_fault_bin(tmp_path)
+    fault_state = tmp_path / "fault-state"
+    fault_state.mkdir()
+    env = os.environ | {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "WIFI_INIT_CONF_JSON": str(config),
+        "WIFI_RUN_DIR": str(run_dir),
+        "WIFI_ROAM_POLICY_LATCH_DIR": str(latch_dir),
+        "WPA_CONF_DIR": str(wpa_dir),
+        "RUN_DIR": str(run_dir),
+        "LATCH_DIR": str(latch_dir),
+        "FAULT_STATE": str(fault_state),
+        "FAULT_POINT": "",
+    }
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            '. "$1"; '
+            'wifi_roam_policy_ensure_snapshot mlan0 "$2" && '
+            'wifi_init_sync_extra_ssid_blocks mlan0 "$3"',
+            "_",
+            str(LIB),
+            str(config),
+            str(conf),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert policy_path.read_text() == policy_text
+    assert re.findall(
+        r'^\s*ssid="([^"]*)"', conf.read_text(), re.MULTILINE
+    ) == ["Base", "Office", "Guest"]
 
 
 def test_periodic_owner_is_stopped_even_when_already_disabled(tmp_path: Path) -> None:

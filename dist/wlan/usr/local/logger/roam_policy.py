@@ -49,7 +49,13 @@ def validate_ssid(ssid: Any) -> str:
 def validate_ssid_list(
     ssids: Any, *, base_ssid: Optional[str] = None
 ) -> list[str]:
-    """Validate an ordered SSID list without normalizing any identity."""
+    """Validate and stably deduplicate an ordered SSID list.
+
+    SSID identities remain byte-exact: no trimming, case folding, or Unicode
+    normalization is performed.  The first extra occurrence wins, while an
+    identity equal to the configured base is omitted because its network block
+    already exists.
+    """
     if not isinstance(ssids, list):
         raise RoamPolicyError("extra_ssids must be an array")
     base = validate_ssid(base_ssid) if base_ssid is not None else None
@@ -58,9 +64,9 @@ def validate_ssid_list(
     for item in ssids:
         ssid = validate_ssid(item)
         if ssid in seen:
-            raise RoamPolicyError(f"duplicate SSID identity: {ssid!r}")
+            continue
         if base is not None and ssid == base:
-            raise RoamPolicyError("extra SSID duplicates the base SSID identity")
+            continue
         seen.add(ssid)
         result.append(ssid)
     return result

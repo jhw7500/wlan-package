@@ -166,7 +166,7 @@ def test_schema_default_matches_template(schema, full_tmpl, iface, path):
 def test_schema_extra_ssids_expresses_identity_contract(schema, iface):
     node = schema["properties"][iface]["properties"]["roaming"]["properties"]["extra_ssids"]
     item = node["items"]
-    assert node.get("uniqueItems") is True
+    assert "uniqueItems" not in node
     assert item.get("minLength") == 1
     # JSON Schema counts code points, so this is only an expressible upper guard;
     # every runtime boundary separately enforces 32 encoded UTF-8 bytes.

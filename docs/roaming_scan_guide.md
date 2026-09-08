@@ -32,6 +32,10 @@ Mode A/B도 부팅 snapshot과 network block topology를 함께 만들므로 변
 명시적 SSID writer 금지는 유지된다. 모든
 블록은 전역과 동일한 **공통 `freq_list`**를 사용한다. 부팅 parser만 legacy `scan_freq`
 fallback을 읽어 canonical `freq_list`로 이행한다.
+부팅 시 base와 같은 extra 및 extra 간 중복은 identity를 변형하지 않고 첫 출현 순서를
+보존해 제거하며, 새 snapshot의 원자 커밋이 성공한 뒤 제거 개수를 warning으로 한 번
+남긴다. 이전 버전이 만든 비정규 v1 snapshot은 같은 boot에서 덮어쓰지 않고, 소비자가
+읽을 때 같은 규칙으로 정규화한다.
 Mode B에서 `wifi connect`로 전환한 live base가 boot-latched 후보와 같아질 수 있으며,
 이는 부팅 base/extra 중복이 아닌 의도된 단일-블록 상태다.
 
