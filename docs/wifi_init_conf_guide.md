@@ -153,6 +153,23 @@ wifi_init_conf.json
 >
 > **⚠️ `find`/`auto`가 peer를 못 찾을 때 (eth0 타서브넷)**: `eth0`의 IP가 sweep 대역과 다른 서브넷이면(예: `eth0=192.168.1.1/24`, peer=`192.168.0.220`), same-subnet source에만 ARP 응답하는 peer는 발견에 실패한다. #113에서 sweep arping의 source를 **대역 내 우리 IP(mlanN)**로 지정하도록 보정했다(⚠️ **서브넷 인자는 sweep 범위만** 바꾸고 arping source IP는 안 바꾸므로 대역 지정만으로는 안 풀림). 그래도 안 되면 `wifi {0|1} br route set <peer-ip>`로 직접 등록한다.
 
+#### 브리지 프로파일
+
+`wifi {0|1} br profile <name>`은 변경 예정값만 보여주는 dry-run이고, 끝에 `apply`를
+붙이면 5개 연계 설정을 백업 후 원자적으로 기록한다. IP 배치는 프로파일 범위가 아니므로
+`wifi <iface> ip` 또는 WebUI에서 별도로 설정한다. 기록한 값은 다음 부팅부터 적용된다.
+
+| 프로파일 | peer_route | ip_discovery | arp_ignore_always | local_hairpin | eth_fallback | 용도 |
+|---|---:|---:|---:|---:|---:|---|
+| `mlan0-ip` | off | off | off | `default(0)` | off | 기본 mlan0-IP. BD↔유선 peer 직접 IP 경로는 제공하지 않음 |
+| `hairpin` | off | off | off | `1` | on | peer IP 탐색 없이 BD↔유선 peer 통신 + 무선 down 절체(moal 전용) |
+| `dual` | on | on | off | `1` | on | peer-route + hairpin 보험 + 무선 down 절체(moal 전용) |
+| `peer-route` | on | on | off | `default(0)` | off | 기존 peer-route 방식(엔진 무관) |
+| `eth0-ip` | off | off | on | `default(0)` | off | eth0-IP 토폴로지 |
+
+`mlan0-ip`은 주소를 자동으로 mlan0에 배치하거나 eth0에서 제거하지 않는다. 두 인터페이스에
+같은 서브넷 주소를 동시에 두지 말고, 적용 후 `wifi {0|1} br status`로 정합성을 확인한다.
+
 #### 기배포 기기 마이그레이션 — 공식 경로 (결정, #257)
 
 `DEBIAN/postinst`의 cpchk·json_merge는 **사이트 값 보존**이 목적이라, 위 3종 토글

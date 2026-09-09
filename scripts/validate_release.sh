@@ -320,6 +320,7 @@ PY
     local test
     for test in \
         dist/wlan/usr/local/scripts/update_mac_test.sh \
+        dist/wlan/usr/local/scripts/wifi_bridge_profile_test.sh \
         dist/wlan/usr/local/scripts/wifi_cal_backup_test.sh \
         dist/wlan/usr/local/scripts/wifi_conf_preserve_test.sh \
         dist/wlan/usr/local/scripts/wifi_config_backup_test.sh \
