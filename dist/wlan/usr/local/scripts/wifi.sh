@@ -1416,7 +1416,7 @@ _bridge_status() {
         true|false) pr="$pr_raw" ;;
         *)          pr="true" ;;
     esac
-    # arp_ignore_always 실효값 (기본 false)
+    # arp_ignore_always 실효값 (출하 템플릿 true, 누락/invalid degraded fallback false)
     case "$aia_raw" in
         true) aia="true" ;;
         *)    aia="false" ;;

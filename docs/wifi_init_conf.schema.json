@@ -430,11 +430,11 @@
         "arp_ignore_always": {
           "type": "object",
           "additionalProperties": true,
-          "description": "클론 MAC 이중 ARP 응답 레이스 차단. 기본 false — 기본 토폴로지(mlan0-IP)에서는 false 유지, eth0-IP/동일서브넷 토폴로지에서만 true.",
+          "description": "클론 MAC 이중 ARP 응답 레이스 차단. 출하 기본 true — 기본 eth0-IP 토폴로지에서 사용하며, 순수 mlan0-IP에서는 false.",
           "properties": {
             "enabled": {
               "type": "boolean",
-              "default": false,
+              "default": true,
               "description": "peer_route와 독립. 클론 MAC 이중 ARP 응답 레이스 차단(arp_ignore=1/arp_announce=2). IP 배치(토폴로지) 종속: eth0-IP/동일서브넷=true, 순수 mlan0-IP=false. 토폴로지는 wifi <iface> ip/webui로 결정",
               "x-ui-editable": "caution",
               "x-apply-timing": "boot",
