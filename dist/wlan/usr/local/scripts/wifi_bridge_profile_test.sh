@@ -37,7 +37,7 @@ fresh_config() {
     rm -f "${WIFI_INIT_CONF_JSON}.bak-profile" "${WIFI_INIT_CONF_JSON}.tmp"
 }
 
-# Removing the mlan0-ip profile branch must make this dry-run fail as unknown.
+# The mlan0-ip dry-run must be recognized without changing the configuration.
 fresh_config
 before=$(sha256sum "$WIFI_INIT_CONF_JSON" | awk '{print $1}')
 out=$(bash "$WIFI_SH" 0 br profile mlan0-ip 2>&1)
