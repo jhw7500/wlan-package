@@ -18,6 +18,16 @@ _REPO = os.path.abspath(
     os.path.join(os.path.dirname(__file__), *[".."] * 6)
 )
 _TOOL = os.path.join(_REPO, "scripts", "gen_config_defaults.py")
+_TEMPLATE = os.path.join(
+    _REPO, "dist", "wlan", "opt", "wlan", "config", "wifi_init_conf.json"
+)
+
+
+def test_factory_default_uses_eth0_ip_arp_policy():
+    with open(_TEMPLATE, encoding="utf-8") as f:
+        template = json.load(f)
+
+    assert template["wbridge"]["arp_ignore_always"]["enabled"] is True
 
 
 def test_generated_defaults_are_in_sync():

@@ -229,7 +229,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `wbridge.eth_link_wait_sec` | 유선 링크 대기(초) | int | `5` | 양의 정수 | yes | boot | dynamic MAC 모드에서 유선 링크 up 대기 |
 | `wbridge.eth_sweep_subnet` | peer sweep 대역(CIDR) | string | `""` | CIDR(예: `192.168.1.0/24`) 또는 `""` | caution | boot | 빈값이면 eth0→mlan0 inet 순 폴백. 정적 CIDR 권장 |
 | `wbridge.peer_route.enabled` | 양방향 peer 라우팅 마스터 | bool | `false` | true\|false | caution | boot | 옵션 X. false=기본 투명 브릿지(토폴로지 무관 안전). BD가 유선 peer와 직접 통신하는 mlan0-IP 토폴로지에서만 true(+ip_discovery=true, arp_ignore_always=false). **토폴로지=IP 배치는 `wifi <iface> ip`/webui로 별도 결정** |
-| `wbridge.arp_ignore_always.enabled` | ARP 정책(토폴로지 종속) | bool | `false` | true\|false | caution | boot | `peer_route`와 독립. 클론 MAC 이중 ARP 레이스 차단(`arp_ignore=1`/`arp_announce=2`). eth0-IP/동일서브넷=true, 순수 mlan0-IP=false. **아래 주의** |
+| `wbridge.arp_ignore_always.enabled` | ARP 정책(토폴로지 종속) | bool | `true` | true\|false | caution | boot | `peer_route`와 독립. 클론 MAC 이중 ARP 레이스 차단(`arp_ignore=1`/`arp_announce=2`). eth0-IP/동일서브넷=true, 순수 mlan0-IP=false. **아래 주의** |
 | `wbridge.eth_fallback.enabled` | 무선 down 시 eth0 절체 | bool | `false` | true\|false | caution | boot | mlan0 IP의 eth0 /32 미러 + fallback route(metric 200), 무선 복구 시 환원. mlan0-IP 토폴로지 전용(hairpin/dual 프로파일에 기본 포함) |
 | `wbridge.engine` | 브릿지 엔진 | enum | `moal` | `pcap`\|`tpacket`\|`moal` | caution | daemon-restart | pcap/tpacket=유저스페이스, moal=드라이버 레벨. moal↔전환은 reboot |
 
@@ -237,7 +237,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 - SSoT는 이 JSON. JSON 파싱 실패 시에만 `/etc/default/wbridge`가 폴백.
 - `ip_discovery`=true는 `peer_route.enabled`=true와 조합해야 양방향 라우팅 완성.
 - `engine=moal`이면 `link_guard`는 무시된다.
-- **⚠️ `arp_ignore_always.enabled`**: IP 배치(토폴로지)에 종속된 값. 출하 기본 **false**는 순수 mlan0-IP(기본 토폴로지) 전제 — eth0-IP(또는 eth0/mlan0 동일 서브넷) 구성에서는 true 로 변경. **토폴로지는 이 JSON이 아니라 `wifi <iface> ip`/webui로 결정**하므로 배치 변경 시 함께 점검. 순수 mlan0-IP + 유선↔BD 직접통신이 필요하면 `peer_route=true`+`ip_discovery=true`+`arp_ignore_always=false` 3종 세트. 아래 5장 주의 박스 참조.
+- **⚠️ `arp_ignore_always.enabled`**: IP 배치(토폴로지)에 종속된 값. 출하 기본 **true**는 eth0-IP 기본 토폴로지 전제다. **토폴로지는 이 JSON이 아니라 `wifi <iface> ip`/webui로 결정**하므로 배치 변경 시 함께 점검. 순수 mlan0-IP + 유선↔BD 직접통신이 필요하면 `peer_route=true`+`ip_discovery=true`+`arp_ignore_always=false` 3종 세트. 아래 5장 주의 박스 참조.
 
 #### 3.3.2 wbridge.moal (engine=moal 전용)
 
@@ -614,7 +614,7 @@ association proof를 사용한다. 다음 CONNECTED 검증 성공 시 pending/1�
 ## 5. ⚠️ 주의 박스
 
 > **① `wbridge.arp_ignore_always.enabled`는 IP 배치(토폴로지) 종속**
-> 출하 기본값은 **`false`**(순수 mlan0-IP 기본 토폴로지 전제)다. eth0에 IP를 두거나 eth0/mlan0 동일 서브넷이라 클론 MAC 이중 ARP 응답이 문제되는 구성에서는 `true` 로 바꾼다. **토폴로지(IP 배치)는 이 JSON이 아니라 `wifi <iface> ip`/webui로 결정**되므로, 배치를 바꾸면 이 값도 함께 점검해야 한다. 순수 mlan0-IP에서 BD↔유선peer 직접통신이 필요하면 `peer_route.enabled=true` + `ip_discovery=true` + `arp_ignore_always.enabled=false` 3종 세트로 설정한다(`arp_ignore_always=true` + `peer_route=off` + mlan0-IP + 유선↔BD 필요 조합에서는 `wifi_init.sh`가 `[GUARD]` 경고).
+> 출하 기본값은 **`true`**(eth0-IP 기본 토폴로지 전제)다. **토폴로지(IP 배치)는 이 JSON이 아니라 `wifi <iface> ip`/webui로 결정**되므로, 배치를 바꾸면 이 값도 함께 점검해야 한다. 순수 mlan0-IP에서 BD↔유선peer 직접통신이 필요하면 `peer_route.enabled=true` + `ip_discovery=true` + `arp_ignore_always.enabled=false` 3종 세트로 설정한다(`arp_ignore_always=true` + `peer_route=off` + mlan0-IP + 유선↔BD 필요 조합에서는 `wifi_init.sh`가 `[GUARD]` 경고).
 
 > **② mlan1 기본 비활성 (`mlan1.enabled=false`)**
 > mlan1은 출하 시 비활성이다. mlan1의 하위 데몬(logger/roaming/bgscan/checker/on_connect 등)은 `mlan1.enabled=false`인 동안 모두 강제 disable된다. UI에서 mlan1 설정을 노출할 때 "인터페이스 비활성" 상태를 명확히 표시할 것.
