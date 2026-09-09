@@ -1673,7 +1673,7 @@ _bridge_profile() {
     printf "  %-24s %s -> %s\n" "peer_route.enabled:" "$(jq -r '.wbridge.peer_route.enabled' "$J")" "$pr"
     printf "  %-24s %s -> %s\n" "ip_discovery:"       "$(jq -r '.wbridge.ip_discovery' "$J")" "$disc"
     printf "  %-24s %s -> %s\n" "arp_ignore_always:"  "$(jq -r '.wbridge.arp_ignore_always.enabled' "$J")" "$aia"
-    printf "  %-24s %s -> %s\n" "moal.local_hairpin:" "$(jq -r '.wbridge.moal.local_hairpin // "-"' "$J")" "$lhp_disp"
+    printf "  %-24s %s -> %s\n" "moal.local_hairpin:" "$(jq -r 'if .wbridge.moal.local_hairpin == "" then "<empty>=driver default 0" else (.wbridge.moal.local_hairpin // "<empty>=driver default 0") end' "$J")" "$lhp_disp"
     printf "  %-24s %s -> %s\n" "eth_fallback:"       "$(jq -r '.wbridge.eth_fallback.enabled // "-"' "$J")" "$ef"
     if [ "$do_apply" != "apply" ]; then
         echo "  (dry-run — 적용: wifi {0|1} br profile $name apply)"

@@ -69,6 +69,21 @@ else
     fail "mlan0-ip apply contract (rc=$rc output=$out)"
 fi
 
+# An empty local_hairpin value must be shown as the documented driver default,
+# not as a visually blank current value.
+out=$(bash "$WIFI_SH" 0 br profile mlan0-ip 2>&1)
+rc=$?
+lhp_line=$(printf '%s\n' "$out" | grep -F 'moal.local_hairpin:')
+case "$lhp_line" in
+    *"<empty>=driver default 0 ->"*)
+        [ "$rc" -eq 0 ] && pass "profile view labels an empty local_hairpin value" ||
+            fail "profile view returned rc=$rc"
+        ;;
+    *)
+        fail "profile view left local_hairpin visually blank ($lhp_line)"
+        ;;
+esac
+
 # The operator-facing profile list must expose the new command.
 fresh_config
 out=$(bash "$WIFI_SH" 0 br profile 2>&1)
