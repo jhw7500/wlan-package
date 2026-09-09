@@ -332,6 +332,7 @@ dist/wlan/usr/local/scripts/wifi_arping.sh
 dist/wlan/usr/local/scripts/wifi_arping_sweep.sh
 dist/wlan/usr/local/scripts/wifi_board_config.sh
 dist/wlan/usr/local/scripts/wifi_bridge.sh
+dist/wlan/usr/local/scripts/wifi_bridge_profile_test.sh
 dist/wlan/usr/local/scripts/wifi_bridge_start.sh
 dist/wlan/usr/local/scripts/wifi_bridge_stop.sh
 dist/wlan/usr/local/scripts/wifi_cal_backup.sh

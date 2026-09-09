@@ -864,7 +864,7 @@ usage() {
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} mac {0|1|base|target} {mac_address} : persist"
     echo "       wifi {0|1|mlan0|mlan1} br {up|down|start|stop|restart} : runtime"
     echo "       wifi {0|1|mlan0|mlan1} br status : peer_route/hairpin/브릿지 설정·런타임·정합성 진단 (읽기 전용)"
-    echo "       wifi {0|1|mlan0|mlan1} br profile {hairpin|dual|peer-route|eth0-ip} [apply] : 연계 설정 묶음 조회/적용 (dry-run 기본)"
+    echo "       wifi {0|1|mlan0|mlan1} br profile {mlan0-ip|hairpin|dual|peer-route|eth0-ip} [apply] : 연계 설정 묶음 조회/적용 (dry-run 기본)"
     echo "       wifi {0|1|mlan0|mlan1} br route {find [<subnet>]|set <ip>|auto [<subnet>]} : eth 지연연결 후 peer host route 탐색/등록"
     echo "       wifi {0|1|mlan0|mlan1} br {moal|pcap|tpacket} : wbridge engine+bridge_iface persist"
     echo "       wifi {0|1|mlan0|mlan1} txpwr {0|1|2|3|no|default|low|org|custom_file_name} : persist+runtime"
@@ -1641,14 +1641,16 @@ _bridge_profile() {
     # ef(eth_fallback/B-2): mlan0 IP를 eth0에 병행 부여 — 무선 down 시 eth0 직결 자동
     # 절체 (G2 무선단절 유선 VHL 해소). hairpin/dual에 기본 포함.
     case "$name" in
+        mlan0-ip)   pr=false; disc=false; aia=false; lhp=""; ef=false ;;
         hairpin)    pr=false; disc=false; aia=false; lhp=1;  ef=true ;;
         dual)       pr=true;  disc=true;  aia=false; lhp=1;  ef=true ;;
         peer-route) pr=true;  disc=true;  aia=false; lhp=""; ef=false ;;
         eth0-ip)    pr=false; disc=false; aia=true;  lhp=""; ef=false ;;
         ""|show|list)
-            echo "Usage: wifi {0|1} br profile {hairpin|dual|peer-route|eth0-ip} [apply]"
+            echo "Usage: wifi {0|1} br profile {mlan0-ip|hairpin|dual|peer-route|eth0-ip} [apply]"
             echo "  (apply 없으면 dry-run — 변경될 값만 표시. 적용은 다음 부팅부터)"
             echo ""
+            echo "  mlan0-ip   : peer_route=off disc=off aia=off hairpin=-  ethfb=off — 기본 mlan0-IP (IP 배치는 별도, BD↔유선peer 직접 IP 경로 없음)"
             echo "  hairpin    : peer_route=off disc=off aia=off hairpin=1 ethfb=on  — peer IP 인지 불요 + 무선down 유선 절체 (moal 전용)"
             echo "  dual       : peer_route=on  disc=on  aia=off hairpin=1 ethfb=on  — 기존 방식 + hairpin 보험 + 절체 (moal 전용, 권장)"
             echo "  peer-route : peer_route=on  disc=on  aia=off hairpin=-  ethfb=off — 기존 방식 (엔진 무관)"
@@ -1657,7 +1659,7 @@ _bridge_profile() {
             echo "[Current]"
             jq -r '.wbridge | "  engine=\(.engine // "pcap") peer_route=\(.peer_route.enabled) ip_discovery=\(.ip_discovery) arp_ignore_always=\(.arp_ignore_always.enabled) local_hairpin=\(.moal.local_hairpin // "-") eth_fallback=\(.eth_fallback.enabled // "-")"' "$J"
             return 0 ;;
-        *)  echo "Error: unknown profile '$name' (hairpin|dual|peer-route|eth0-ip)" >&2; return 1 ;;
+        *)  echo "Error: unknown profile '$name' (mlan0-ip|hairpin|dual|peer-route|eth0-ip)" >&2; return 1 ;;
     esac
     engine=$(jq -r '.wbridge.engine // "pcap"' "$J")
     # hairpin 계열은 moal 엔진 전제 — pcap 은 tap 이라 TX 가로채기 불가
