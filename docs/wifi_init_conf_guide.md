@@ -161,11 +161,11 @@ wifi_init_conf.json
 
 | 프로파일 | peer_route | ip_discovery | arp_ignore_always | local_hairpin | eth_fallback | 용도 |
 |---|---:|---:|---:|---:|---:|---|
-| `mlan0-ip` | off | off | off | off | off | 기본 mlan0-IP. BD↔유선 peer 직접 IP 경로는 제공하지 않음 |
-| `hairpin` | off | off | off | on | on | peer IP 탐색 없이 BD↔유선 peer 통신 + 무선 down 절체(moal 전용) |
-| `dual` | on | on | off | on | on | peer-route + hairpin 보험 + 무선 down 절체(moal 전용) |
-| `peer-route` | on | on | off | off | off | 기존 peer-route 방식(엔진 무관) |
-| `eth0-ip` | off | off | on | off | off | eth0-IP 토폴로지 |
+| `mlan0-ip` | off | off | off | `default(0)` | off | 기본 mlan0-IP. BD↔유선 peer 직접 IP 경로는 제공하지 않음 |
+| `hairpin` | off | off | off | `1` | on | peer IP 탐색 없이 BD↔유선 peer 통신 + 무선 down 절체(moal 전용) |
+| `dual` | on | on | off | `1` | on | peer-route + hairpin 보험 + 무선 down 절체(moal 전용) |
+| `peer-route` | on | on | off | `default(0)` | off | 기존 peer-route 방식(엔진 무관) |
+| `eth0-ip` | off | off | on | `default(0)` | off | eth0-IP 토폴로지 |
 
 `mlan0-ip`은 주소를 자동으로 mlan0에 배치하거나 eth0에서 제거하지 않는다. 두 인터페이스에
 같은 서브넷 주소를 동시에 두지 말고, 적용 후 `wifi {0|1} br status`로 정합성을 확인한다.

@@ -75,8 +75,8 @@ out=$(bash "$WIFI_SH" 0 br profile mlan0-ip 2>&1)
 rc=$?
 lhp_line=$(printf '%s\n' "$out" | grep -F 'moal.local_hairpin:')
 case "$lhp_line" in
-    *"<empty>=driver default 0 ->"*)
-        [ "$rc" -eq 0 ] && pass "profile view labels an empty local_hairpin value" ||
+    *"default(0) -> default(0)"*)
+        [ "$rc" -eq 0 ] && pass "profile view uses the canonical default(0) label" ||
             fail "profile view returned rc=$rc"
         ;;
     *)
@@ -85,13 +85,14 @@ case "$lhp_line" in
 esac
 
 # The operator-facing profile list must expose the new command.
-fresh_config
 out=$(bash "$WIFI_SH" 0 br profile 2>&1)
 rc=$?
-if [ "$rc" -eq 0 ] && echo "$out" | grep -Fq 'mlan0-ip'; then
-    pass "profile list advertises mlan0-ip"
+if [ "$rc" -eq 0 ] && echo "$out" | grep -Fq 'mlan0-ip' && \
+   echo "$out" | grep -Fq 'hairpin=default(0)' && \
+   echo "$out" | grep -Fq 'local_hairpin=default(0)'; then
+    pass "profile list advertises mlan0-ip with the canonical default label"
 else
-    fail "profile list omits mlan0-ip (rc=$rc)"
+    fail "profile list has missing or inconsistent mlan0-ip defaults (rc=$rc)"
 fi
 
 echo "RESULT: PASS=$PASS FAIL=$FAIL"

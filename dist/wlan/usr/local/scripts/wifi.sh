@@ -1434,7 +1434,7 @@ _bridge_status() {
     printf "  %-24s %s\n" "peer_route.enabled:" "$pr (json=$pr_raw)"
     printf "  %-24s %s\n" "ip_discovery:"       "$ip_disc"
     printf "  %-24s %s\n" "arp_ignore_always:"  "$aia (json=$aia_raw)"
-    printf "  %-24s %s\n" "moal.local_hairpin:" "${lhp_raw:-<empty>=driver default 0}"
+    printf "  %-24s %s\n" "moal.local_hairpin:" "${lhp_raw:-default(0)}"
     printf "  %-24s %s\n" "moal.roam_announce:" "${ra_raw:-<empty>=driver default 0}"
     printf "  %-24s %s\n" "eth_fallback:"       "$([ "$have_jq" = "1" ] && jq -r '.wbridge.eth_fallback.enabled // false' "$J" || echo "?")"
     printf "  %-24s %s\n" "eth_sweep_subnet:"   "${sweep:-<empty>}"
@@ -1563,7 +1563,7 @@ _bridge_status() {
         else
             lhp_exp="${lhp_raw:-0}"
             if [ "$lhp_exp" != "$lhp_rt" ]; then
-                echo "  [WARN] local_hairpin JSON(${lhp_raw:-<empty>=0}) != runtime($lhp_rt) -> 재부팅 미반영 또는 runtime 수동 토글 상태."
+                echo "  [WARN] local_hairpin JSON(${lhp_raw:-default(0)}) != runtime($lhp_rt) -> 재부팅 미반영 또는 runtime 수동 토글 상태."
                 warn=1
             fi
         fi
@@ -1650,14 +1650,14 @@ _bridge_profile() {
             echo "Usage: wifi {0|1} br profile {mlan0-ip|hairpin|dual|peer-route|eth0-ip} [apply]"
             echo "  (apply 없으면 dry-run — 변경될 값만 표시. 적용은 다음 부팅부터)"
             echo ""
-            echo "  mlan0-ip   : peer_route=off disc=off aia=off hairpin=-  ethfb=off — 기본 mlan0-IP (IP 배치는 별도, BD↔유선peer 직접 IP 경로 없음)"
+            echo "  mlan0-ip   : peer_route=off disc=off aia=off hairpin=default(0) ethfb=off — 기본 mlan0-IP (IP 배치는 별도, BD↔유선peer 직접 IP 경로 없음)"
             echo "  hairpin    : peer_route=off disc=off aia=off hairpin=1 ethfb=on  — peer IP 인지 불요 + 무선down 유선 절체 (moal 전용)"
             echo "  dual       : peer_route=on  disc=on  aia=off hairpin=1 ethfb=on  — 기존 방식 + hairpin 보험 + 절체 (moal 전용, 권장)"
-            echo "  peer-route : peer_route=on  disc=on  aia=off hairpin=-  ethfb=off — 기존 방식 (엔진 무관)"
-            echo "  eth0-ip    : peer_route=off disc=off aia=on  hairpin=-  ethfb=off — eth0-IP 토폴로지 (docs/bridge-eth0-ip-topology.md §6)"
+            echo "  peer-route : peer_route=on  disc=on  aia=off hairpin=default(0) ethfb=off — 기존 방식 (엔진 무관)"
+            echo "  eth0-ip    : peer_route=off disc=off aia=on  hairpin=default(0) ethfb=off — eth0-IP 토폴로지 (docs/bridge-eth0-ip-topology.md §6)"
             echo ""
             echo "[Current]"
-            jq -r '.wbridge | "  engine=\(.engine // "pcap") peer_route=\(.peer_route.enabled) ip_discovery=\(.ip_discovery) arp_ignore_always=\(.arp_ignore_always.enabled) local_hairpin=\(.moal.local_hairpin // "-") eth_fallback=\(.eth_fallback.enabled // "-")"' "$J"
+            jq -r '.wbridge | "  engine=\(.engine // "pcap") peer_route=\(.peer_route.enabled) ip_discovery=\(.ip_discovery) arp_ignore_always=\(.arp_ignore_always.enabled) local_hairpin=\(if .moal.local_hairpin == "" or .moal.local_hairpin == null then "default(0)" else .moal.local_hairpin end) eth_fallback=\(.eth_fallback.enabled // "-")"' "$J"
             return 0 ;;
         *)  echo "Error: unknown profile '$name' (mlan0-ip|hairpin|dual|peer-route|eth0-ip)" >&2; return 1 ;;
     esac
@@ -1668,12 +1668,12 @@ _bridge_profile() {
         echo "       switch first: wifi {0|1} br moal" >&2
         return 1
     fi
-    lhp_disp="${lhp:-\"\" (driver default 0)}"
+    lhp_disp="${lhp:-default(0)}"
     echo "[Profile: $name]  ($J)"
     printf "  %-24s %s -> %s\n" "peer_route.enabled:" "$(jq -r '.wbridge.peer_route.enabled' "$J")" "$pr"
     printf "  %-24s %s -> %s\n" "ip_discovery:"       "$(jq -r '.wbridge.ip_discovery' "$J")" "$disc"
     printf "  %-24s %s -> %s\n" "arp_ignore_always:"  "$(jq -r '.wbridge.arp_ignore_always.enabled' "$J")" "$aia"
-    printf "  %-24s %s -> %s\n" "moal.local_hairpin:" "$(jq -r 'if .wbridge.moal.local_hairpin == "" then "<empty>=driver default 0" else (.wbridge.moal.local_hairpin // "<empty>=driver default 0") end' "$J")" "$lhp_disp"
+    printf "  %-24s %s -> %s\n" "moal.local_hairpin:" "$(jq -r 'if .wbridge.moal.local_hairpin == "" then "default(0)" else (.wbridge.moal.local_hairpin // "default(0)") end' "$J")" "$lhp_disp"
     printf "  %-24s %s -> %s\n" "eth_fallback:"       "$(jq -r '.wbridge.eth_fallback.enabled // "-"' "$J")" "$ef"
     if [ "$do_apply" != "apply" ]; then
         echo "  (dry-run — 적용: wifi {0|1} br profile $name apply)"
