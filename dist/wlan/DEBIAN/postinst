@@ -17,7 +17,44 @@ if [ -r /usr/share/debconf/confmodule ]; then
   DEBCONF_AVAILABLE=1
 fi
 
-INSTALL_DOT_COUNT=0
+INSTALL_PRINT_COMMAND="${INSTALL_PRINT_COMMAND:-/usr/local/logger/print.py}"
+INSTALL_PROGRESS_CURRENT=0
+INSTALL_PROGRESS_TOTAL=6
+
+installer_print() {
+    if ! "$INSTALL_PRINT_COMMAND" "$@" 2>/dev/null; then
+        logger -p local0.warn "[$tag:$LINENO] [$KEY] print.py failed: $*" || true
+    fi
+}
+
+installer_progress_start() {
+    installer_print cyan "[installer] install start"
+}
+
+installer_progress_step() {
+    local percent dots
+    INSTALL_PROGRESS_CURRENT=$((INSTALL_PROGRESS_CURRENT + 1))
+    percent=$((INSTALL_PROGRESS_CURRENT * 100 / INSTALL_PROGRESS_TOTAL))
+    [ "$percent" -le 100 ] || percent=100
+    dots=$(printf "%${INSTALL_PROGRESS_CURRENT}s" | tr ' ' '.')
+
+    # factory_reset.sh와 같은 방식으로 단계마다 새 줄을 만들지 않고 현재 줄을 갱신한다.
+    # print.py는 문자열 끝의 \r을 실제 CR로 바꿔 다음 출력이 컬럼 0에서 시작하게 한다.
+    installer_print green "$(printf '[installer] install %3d%% (%d/%d) %s' \
+        "$percent" "$INSTALL_PROGRESS_CURRENT" "$INSTALL_PROGRESS_TOTAL" "$dots")\r"
+}
+
+installer_progress_done() {
+    local percent dots
+    percent=$((INSTALL_PROGRESS_CURRENT * 100 / INSTALL_PROGRESS_TOTAL))
+    [ "$percent" -le 100 ] || percent=100
+    dots=$(printf "%${INSTALL_PROGRESS_CURRENT}s" | tr ' ' '.')
+
+    # 직전 in-place 진행 줄과 같은 길이를 유지하면서 줄을 닫는다.
+    installer_print green "$(printf '[installer] install %3d%% (%d/%d) %s done' \
+        "$percent" "$INSTALL_PROGRESS_CURRENT" "$INSTALL_PROGRESS_TOTAL" "$dots")"
+    installer_print cyan "[installer] install finish"
+}
 
 disable_services_if_enabled() {
     local services=("$@")
@@ -41,7 +78,7 @@ disable_services_if_enabled() {
 case "$1" in
 configure)
   echo "postinst configure"
-  /usr/local/logger/print.py green "\r\n[installer] start: configuration copy/verify..."
+  installer_progress_start
 
   # CRITICAL: Verify binaries and config exist BEFORE making any system changes.
   # 보드별 suffix(_imx8/_imx93) 바이너리 또는 legacy suffix-less 중 하나 이상 필요.
@@ -204,7 +241,7 @@ EOF
     EMMC_NUM=0
   fi
 
-  /usr/local/logger/print.py green "\r\n[installer] preparing data partition (resize, wait)..."
+  installer_progress_step
   # p3 파티션이 없으면 emmc_fdisk.sh로 생성
   if [ ! -b /dev/mmcblk${EMMC_NUM}p3 ]; then
     logger -p local0.info "[postinst:$LINENO] [$KEY] p3 not found, creating via emmc_fdisk.sh"
@@ -234,9 +271,6 @@ customctl() {
     fi
     status=$(systemctl is-enabled $daemon_name 2>/dev/null)
     echo "$daemon_name is $status"
-    INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 1))
-    dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
-    /usr/local/logger/print.py green "\r\n[installer] installing${dots}"
 }
   if [ -f /etc/init.d/samba ]; then
     mv /etc/init.d/samba /etc/init.d/samba.disabled
@@ -270,7 +304,7 @@ customctl() {
   # enable한다. wifi_logger 글로벌/eth0의 최종 부팅 정책은 아래
   # wifi_apply_enabled.sh가 JSON(.logger.enabled/.eth0.logger.enabled)과 동기화한다.
   # wifi-stack.target 은 multi-user.target 도달 후 비블로킹으로 wifi 스택을 기동한다.
-  /usr/local/logger/print.py green "\r\n[installer] enabling services..."
+  installer_progress_step
   systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer journald-snapshot-boundary.service wifi-stack.target wifi_init wifi_apply_enabled wifi_acl wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 log-watchdog.timer serial-getty@ttyGS0.service wlan-peer-net.service || true
   # wlan-peer-net.service 는 PartOf=systemd-networkd.service 로 networkd restart 를
   # 추종하는데, PartOf 는 대상이 이미 active 일 때만 발화한다(inactive 면 restart 가
@@ -317,9 +351,7 @@ customctl() {
     logger -p local0.info "[$tag:$LINENO] [$KEY] restarted wifi_init child units (prerm stopped them)"
   fi
 
-  INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 10))
-  dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
-  /usr/local/logger/print.py green "\r\n[installer] installing${dots}"
+  installer_progress_step
 
 makeDirectory() {
     if [ ! -d "$1" ]; then
@@ -354,9 +386,7 @@ makeDirectory() {
   echo "$hostname" > /etc/hostname
   sed -i "2s/.*/127.0.1.1 $hostname/" /etc/hosts
 
-  INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 1))
-  dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
-  /usr/local/logger/print.py green "\r\n[installer] installing${dots}"
+  installer_progress_step
 
 cpchk() {
   # 0바이트 파일도 "없음"으로 간주 (이전 설치의 ext4 power-cut 잔재 자동 복구).
@@ -655,9 +685,7 @@ secure_wpa_conf() {
     logger -p local0.warn "[$tag:$LINENO] [$KEY] Missing /opt/wlan/config/sysctl.d/99-wifi-thermal.conf"
   fi
 
-  INSTALL_DOT_COUNT=$((INSTALL_DOT_COUNT + 1))
-  dots=$(printf "%${INSTALL_DOT_COUNT}s" | tr ' ' '.')
-  /usr/local/logger/print.py green "\r\n[installer] create symlinks..."
+  installer_progress_step
 
   # SysV generator 비활성화 (부팅 로그 정리)
   # 원본이 존재하면 백업 후 mask
@@ -739,7 +767,6 @@ secure_wpa_conf() {
   ln -sf /usr/local/logger/print.py /usr/local/bin/print
   ln -sf /usr/local/scripts/wifi_mfg.sh /usr/local/bin/mfg
 
-  /usr/local/logger/print.py green "\r\n[installer] change line..."
   /usr/local/scripts/change_line.sh "#echo 7 > /proc/sys/kernel/printk" "/proc/sys/kernel/printk" /etc/rc.local
   /usr/local/scripts/change_line.sh "kernel.printk = 1 4 1 7" "kernel.printk = " /etc/sysctl.conf
   /usr/local/scripts/change_line.sh "#tmpfs                /var/volatile        tmpfs      defaults              0  0" "tmpfs                /var/volatile" /etc/fstab
@@ -856,7 +883,6 @@ secure_wpa_conf() {
   PACKAGE_NAME="$DPKG_MAINTSCRIPT_PACKAGE"
   echo -e "\e[1m installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)\e[0m"
   logger -p local0.info "[$tag:$LINENO] [$KEY] installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)"
-  /usr/local/logger/print.py green "\r\n[installer] installed $PACKAGE_NAME-$(dpkg-query -W -f='${Version}' $PACKAGE_NAME)"
   # backup_file.sh의 self-healing은 .bak이 존재해야 동작한다.
   # 첫 부팅의 사각지대를 없애기 위해 설치 종료 직전 보호 대상의 .bak을 일괄 선제 생성.
   init_protect_baks() {
@@ -889,6 +915,8 @@ secure_wpa_conf() {
 
   /usr/local/scripts/fake-hwclock.sh save
   sync
+  installer_progress_step
+  installer_progress_done
   ;;
 
 upgrade)
