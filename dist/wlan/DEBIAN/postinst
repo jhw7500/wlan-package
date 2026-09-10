@@ -143,12 +143,12 @@ EOF
   if command -v udevadm >/dev/null 2>&1; then
     if ! udevadm control --reload; then
       logger -p local0.warn "[$tag:$LINENO] [$KEY] udevadm control --reload failed; udev rules apply after reboot" || true
-      printf '[%s:%s] WARN: udevadm control --reload failed — udev rules apply after reboot\n' "$tag" "$LINENO" >&2
+      printf '[%s:%s] WARN: udevadm control --reload failed - udev rules apply after reboot\n' "$tag" "$LINENO" >&2
     fi
   else
     # 두 분기 모두 logger 실패(syslog 미기동 컨테이너 등)에 대비해 stderr 폴백을 둔다.
     logger -p local0.warn "[$tag:$LINENO] [$KEY] udevadm not found; udev rules apply after reboot" || true
-    printf '[%s:%s] WARN: udevadm not found — udev rules apply after reboot\n' "$tag" "$LINENO" >&2
+    printf '[%s:%s] WARN: udevadm not found - udev rules apply after reboot\n' "$tag" "$LINENO" >&2
   fi
   cp /opt/wlan/config/systemd/journald.conf /etc/systemd/
   mkdir -p /etc/snmp
@@ -329,7 +329,7 @@ customctl() {
   if [ -f /usr/local/opc/opcd.service ]; then
     ln -sf /usr/local/opc/opcd.service /etc/systemd/system/opcd.service
     systemctl daemon-reload 2>/dev/null || true
-    logger -p local0.info "[$tag:$LINENO] [$KEY] opcd.service installed via symlink (.opc.enabled 게이트로 제어)"
+    logger -p local0.info "[$tag:$LINENO] [$KEY] opcd.service installed via symlink (.opc.enabled gate-controlled)"
   fi
   /usr/local/scripts/wifi_apply_enabled.sh 2>/dev/null || true
 
@@ -714,7 +714,7 @@ secure_wpa_conf() {
   ln -sf "/usr/local/wlan-bridge/wbridge/wbridge${WBRIDGE_SUFFIX}" /usr/local/bin/wifi-wbridge
   ln -sf "/usr/local/wlan-bridge/wbridge/wbridge-tpacket${WBRIDGE_SUFFIX}" /usr/local/bin/wifi-wbridge-tpacket
   ln -sf "/usr/local/wlan-bridge/wbridge/wifi_bridge@.service" /etc/systemd/system/wifi_bridge@.service
-  logger -p local0.info "[$tag:$LINENO] [$KEY] wbridge symlinks → suffix='${WBRIDGE_SUFFIX}' (BOARD_TYPE=$BOARD_TYPE)"
+  logger -p local0.info "[$tag:$LINENO] [$KEY] wbridge symlinks -> suffix='${WBRIDGE_SUFFIX}' (BOARD_TYPE=$BOARD_TYPE)"
 
   logger -p local0.info "[$tag:$LINENO] [$KEY] Successfully created symlinks for wbridge binaries"
 

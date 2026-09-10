@@ -134,7 +134,7 @@ collect_hosts() {
     # 거부해 무효 conf에 열림/닫힘을 임의로 적용하지 않는다.
     t=$(allowed_hosts_type)
     if [ "$t" != "array" ] && [ "$t" != "null" ]; then
-        log err "allowed_hosts 타입 오류(배열이어야 함, 실제='${t:-parse-error}') — 적용 거부(원자 실패)"
+        log err "allowed_hosts type error (expected array, actual='${t:-parse-error}')"
         return 1
     fi
     # 원소에 제어문자(C0: NUL/LF/CR/TAB 등, 코드포인트<32)가 들면 jq -r가 여러 줄로 흩거나
@@ -143,7 +143,7 @@ collect_hosts() {
     # 제어문자 포함을 먼저 걸러 원자 거부한다(개행·CR·NUL 일괄).
     if jq -e '(.mgmt_acl.allowed_hosts // []) | any(.[]?; (type=="string") and (explode | any(. < 32)))' \
         "$JSON" >/dev/null 2>&1; then
-        log err "allowed_hosts 원소에 제어문자(개행/CR/NUL 등) 포함 — 적용 거부(원자 실패)"
+        log err "allowed_hosts entry contains a control character (LF/CR/NUL)"
         return 1
     fi
     while IFS= read -r h; do
@@ -151,7 +151,7 @@ collect_hosts() {
         # 무효 IPv4로 원자 거부한다(Codex). jq -r는 정상 배열에서 빈 줄을 만들지 않으므로
         # 여기 도달하는 빈 h는 실제 "" 원소뿐이다.
         if valid_host "$h"; then HOSTS+=("$h"); else
-            log err "allowed_hosts 무효 항목 '$h' — 적용 거부(전체 원자 실패)"; bad=1
+            log err "invalid allowed_hosts entry '$h'"; bad=1
         fi
     done < <(read_allowed_hosts)
     return $bad
@@ -163,7 +163,7 @@ do_apply() {
     # (Codex P1). 룰을 건드리지 않고 실패해 마지막 상태를 보존한다. (파일 부재는 opt-in
     # 기본 off 상태이므로 아래 get_enabled=false 경로로 정상 처리 — 다른 .enabled 토글과 일관)
     if [ -f "$JSON" ] && ! jq -e . "$JSON" >/dev/null 2>&1; then
-        log err "$JSON 파싱 불가(malformed) — 룰 미변경, 마지막 상태 보존"
+        log err "$JSON parse failed (malformed) - rules unchanged, last state preserved"
         return 1
     fi
     local enabled; enabled=$(get_enabled)
@@ -172,22 +172,22 @@ do_apply() {
         if command -v "$NFT" >/dev/null 2>&1; then
             emit_clear | "$NFT" -f - 2>/dev/null || true
         fi
-        log info "mgmt_acl disabled — 규칙 미적용(전용 테이블 정리)"
+        log info "mgmt_acl disabled - rules not applied (dedicated table cleared)"
         return 0
     fi
     if ! command -v "$NFT" >/dev/null 2>&1; then
-        log err "enabled=true 이나 nft 부재 — NOT enforcing (fail-open)"
+        log err "enabled=true but nft is unavailable - NOT enforcing (fail-open)"
         return 1
     fi
     collect_hosts || return 1
     if [ "${#HOSTS[@]}" -eq 0 ]; then
-        log warning "enabled=true + allowed_hosts 빈 목록 — 무선측 관리 포트 전면 차단(유선 경로 잔존)"
+        log warning "enabled=true with empty allowed_hosts - blocking all wireless management ports"
     fi
     if emit_ruleset "${HOSTS[@]+"${HOSTS[@]}"}" | "$NFT" -f -; then
-        log info "mgmt_acl enforcing — allowed=${#HOSTS[@]}건, iif={mlan0,mlan1}, tcp{$TCP_PORTS} udp{$UDP_PORTS}"
+        log info "mgmt_acl enforcing - allowed=${#HOSTS[@]}, iif={mlan0,mlan1}, tcp{$TCP_PORTS} udp{$UDP_PORTS}"
         return 0
     fi
-    log err "nft 적용 실패 — NOT enforcing (fail-open, 유닛 failed 로 표면화)"
+    log err "nft apply failed - NOT enforcing (fail-open; unit marked failed)"
     return 1
 }
 
@@ -195,7 +195,7 @@ do_clear() {
     if command -v "$NFT" >/dev/null 2>&1; then
         emit_clear | "$NFT" -f - 2>/dev/null || true
     fi
-    log info "mgmt_acl 규칙 제거"
+    log info "mgmt_acl rules removed"
     return 0
 }
 
@@ -206,11 +206,11 @@ do_status() {
         return 0
     fi
     if table_present; then
-        echo "enabled·enforcing"
+        echo "enabled/enforcing"
         "$NFT" list table inet wlan_mgmt_acl 2>/dev/null
         return 0
     fi
-    echo "enabled·NOT-enforcing (규칙 부재 — 적용 실패 또는 미적용)"
+    echo "enabled/NOT-enforcing (rules absent - apply failed or not run)"
     return 2
 }
 

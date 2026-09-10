@@ -77,7 +77,7 @@ _arp_src_opt() { # $1=network(int) $2=maskbits(int) → stdout: "" | "-s <ip>"
 
 # ── 1) 링크 확인 (arping 전에) ──
 if [ "$(cat "$ETH_CARRIER_PATH" 2>/dev/null)" != "1" ]; then
-    _err "$ETH_IFACE link down (carrier != 1) — cannot probe"
+    _err "$ETH_IFACE link down (carrier != 1) - cannot probe"
     exit 3
 fi
 
@@ -101,16 +101,16 @@ if [ -z "$SUBNET" ]; then
             printf '%s\n' "$_cip"
             exit 0
         fi
-        logger -p local0.info "[$tag:$LINENO] quick path: $_cip no reply → fall back to sweep" 2>/dev/null || true
+        logger -p local0.info "[$tag:$LINENO] quick path: $_cip no reply -> fall back to sweep" 2>/dev/null || true
     fi
     # 폴백 대역: eth_sweep_subnet(wbridge→global) > mlanN CIDR (boot 경로 wired_mac_ip_get.py와 동일 소스)
     SUBNET=$(_cfg '.wbridge.eth_sweep_subnet') || SUBNET=$(_cfg '.global.eth_sweep_subnet') || SUBNET="$_mlan_cidr"
 fi
 
-[ -n "$SUBNET" ] || { _err "no sweep target (subnet 인자·eth_client_ip·eth_sweep_subnet·mlanN CIDR 모두 없음)"; exit 2; }
+[ -n "$SUBNET" ] || { _err "no sweep target (none of subnet argument, eth_client_ip, eth_sweep_subnet, or mlanN CIDR is set)"; exit 2; }
 
 # ── 4) sweep: CIDR → host range 병렬 arping ──
-case "$SUBNET" in */*) : ;; *) _err "invalid subnet (CIDR 필요): '$SUBNET'"; exit 2 ;; esac
+case "$SUBNET" in */*) : ;; *) _err "invalid subnet (CIDR required): '$SUBNET'"; exit 2 ;; esac
 _net=${SUBNET%/*}; _pfx=${SUBNET#*/}
 is_valid_ipv4 "$_net" || { _err "invalid subnet addr: '$SUBNET'"; exit 2; }
 { [ "$_pfx" -ge 1 ] && [ "$_pfx" -le 32 ]; } 2>/dev/null || { _err "invalid prefix: '/$_pfx'"; exit 2; }
@@ -123,7 +123,7 @@ if [ "$_pfx" -ge 31 ]; then _start=$_network; _end=$_bcast; else _start=$((_netw
 _count=$(( _end - _start + 1 ))
 if [ "$_count" -le 0 ]; then _err "empty host range for $SUBNET"; exit 2; fi
 if [ "$_count" -gt "$SWEEP_MAX_HOSTS" ]; then
-    _err "subnet too large ($_count hosts > $SWEEP_MAX_HOSTS) — 좁은 대역을 지정하세요"
+    _err "subnet too large ($_count hosts > $SWEEP_MAX_HOSTS) - specify a narrower subnet"
     exit 2
 fi
 

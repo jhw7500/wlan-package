@@ -214,7 +214,7 @@ if [ -n "$_cause" ]; then
      && printf '%s\n' "$_cause" 2>/dev/null > "$RESET_CAUSE_PATH"; then
     log_syslog "reset cause $_cause recorded for opcd ($RESET_CAUSE_PATH) (source=${SOURCE:-n/a} reason=$REASON)"
   else
-    log_syslog "reset cause $_cause NOT recorded ($RESET_CAUSE_PATH unwritable) — opcd will report 0x0002 (source=${SOURCE:-n/a})"
+    log_syslog "reset cause $_cause NOT recorded ($RESET_CAUSE_PATH unwritable) - opcd will report 0x0002 (source=${SOURCE:-n/a})"
   fi
 fi
 

@@ -11,7 +11,7 @@ ON_CONNECT_CMDS=""
 # initial_bssid 가 비어 **catch-up 이 말없이 누락**된다. 실패를 반드시 남긴다.
 # shellcheck source=./wlan_link_lib.sh
 if ! . /usr/local/scripts/wlan_link_lib.sh 2>/dev/null; then
-    logger -p local0.err "[$tag:$LINENO] [$IFACE] wlan_link_lib.sh load failed — catch-up/BSSID lookup unavailable"
+    logger -p local0.err "[$tag:$LINENO] [$IFACE] wlan_link_lib.sh load failed - catch-up/BSSID lookup unavailable"
     # 로드 실패 후에도 아래에서 wlan_bssid 를 부르므로, stub 이 없으면 매 호출이
     # "command not found" 를 stderr 로 뱉어 서비스 로그를 오염시킨다. 빈 값으로 수렴시켜
     # catch-up 만 조용히 건너뛰게 한다(실패 사실은 위 logger 로 이미 남겼다).
@@ -23,7 +23,7 @@ fi
 # 기본값으로 되돌리면 connected SET + 1회 reassociate로 다음 association을 확정한다.
 # shellcheck source=./wifi_fw_config_lib.sh
 if ! . /usr/local/scripts/wifi_fw_config_lib.sh 2>/dev/null; then
-    logger -p local0.err "[$tag:$LINENO] [$IFACE] wifi_fw_config_lib.sh load failed — deferred MCS verification unavailable"
+    logger -p local0.err "[$tag:$LINENO] [$IFACE] wifi_fw_config_lib.sh load failed - deferred MCS verification unavailable"
     wifi_fw_verify_mcs_connected() { return 0; }
 fi
 

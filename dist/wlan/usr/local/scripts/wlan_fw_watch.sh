@@ -132,7 +132,7 @@ mark_reload() {
     # 쓰기가 조용히 실패하면 reload_allowed() 가 늘 참이 되어 쿨다운이 사라진다
     # (FS full / ro 마운트). 최소한 그 사실이 로그에 남아야 진단이 가능하다.
     if ! echo "$(date +%s) reload" > "$STATE_FILE" 2>/dev/null; then
-        logger -p local0.warning "[$tag:$LINENO] cannot write $STATE_FILE — reload cooldown will not be enforced"
+        logger -p local0.warning "[$tag:$LINENO] cannot write $STATE_FILE - reload cooldown will not be enforced"
     fi
 }
 
@@ -216,7 +216,7 @@ while true; do
     if [ "$crc" -eq 0 ]; then
         # 전 adapter 가 Ready — wifi_status 만 이상한 오탐(FW 이벤트가 임의 값을
         # 실어 보내는 경우 등). 카운터를 접고 계속 감시한다.
-        logger -p local0.warning "[$tag:$LINENO] wifi_status=$ws but all adapters ready ($HW_STATUS_SEEN) — treating as false positive"
+        logger -p local0.warning "[$tag:$LINENO] wifi_status=$ws but all adapters ready ($HW_STATUS_SEEN) - treating as false positive"
         FAULT_CNT=0; FAULT_CLASS=""
         sleep "$CHECK_INTERVAL_SEC"
         continue
@@ -235,7 +235,7 @@ while true; do
         # 리로드 기능이 꺼져 있으면 감지만 보고하고 끝낸다. 설정 이름이 약속하지 않은
         # 재부팅을 여기서 하지 않는다 — 재부팅까지 원한다면 RELOAD_ENABLED=1 로 두고
         # 리로드가 실제로 실패했을 때 에스컬레이션되게 하는 것이 맞다.
-        logger -p local0.emerg "[$tag:$LINENO] reload disabled by config — reporting only, no action taken"
+        logger -p local0.emerg "[$tag:$LINENO] reload disabled by config - reporting only, no action taken"
     elif reload_allowed; then
         logger -p local0.emerg "[$tag:$LINENO] reloading driver via wifi_init.service"
         mark_reload
@@ -247,11 +247,11 @@ while true; do
             sleep "$CHECK_INTERVAL_SEC"
             continue
         fi
-        logger -p local0.emerg "[$tag:$LINENO] reload did not recover within ${VERIFY_TIMEOUT_SEC}s — escalating"
+        logger -p local0.emerg "[$tag:$LINENO] reload did not recover within ${VERIFY_TIMEOUT_SEC}s - escalating"
         request_reboot "driver_wedge (wifi_status=$ws hardware_status=$HW_STATUS_SEEN, reload did not recover)"
     else
         # 쿨다운 중 = 직전 리로드로도 낫지 않고 다시 wedge 라는 뜻이라 에스컬레이션한다.
-        logger -p local0.emerg "[$tag:$LINENO] wedge recurred within reload cooldown — escalating"
+        logger -p local0.emerg "[$tag:$LINENO] wedge recurred within reload cooldown - escalating"
         request_reboot "driver_wedge (wifi_status=$ws hardware_status=$HW_STATUS_SEEN, recurred within reload cooldown)"
     fi
 

@@ -259,7 +259,7 @@ WBRIDGE_ENABLED="${WBRIDGE_ENABLED:-true}"
 BRIDGE_NONE=false
 if [ "$WBRIDGE_ENABLED" = "false" ]; then
     BRIDGE_NONE=true
-    logger -p local0.info "[$tag:$LINENO] wbridge.enabled=false → bridge disabled"
+    logger -p local0.info "[$tag:$LINENO] wbridge.enabled=false -> bridge disabled"
 elif [ "$BRIDGE_IFACE" = "none" ]; then
     BRIDGE_NONE=true
     BRIDGE_IFACE="mlan0"
@@ -330,9 +330,9 @@ elif [ "$WBRIDGE_ENGINE" = "moal" ]; then
     if [ "${bridge_deliver_rt_prio:-0}" -gt 0 ] 2>/dev/null && \
        tr '\000' '\n' < "/opt/wlan/driver/$MOAL_KO" 2>/dev/null | grep -F 'parmtype=wq_sched_policy:' >/dev/null 2>&1; then
         moal_args="$moal_args wq_sched_policy=1 wq_sched_prio=$bridge_deliver_rt_prio"
-        logger -p local0.info "[$tag:$LINENO] moal: deliver_rt_prio=$bridge_deliver_rt_prio → wq_sched_policy=1 wq_sched_prio=$bridge_deliver_rt_prio added"
+        logger -p local0.info "[$tag:$LINENO] moal: deliver_rt_prio=$bridge_deliver_rt_prio -> wq_sched_policy=1 wq_sched_prio=$bridge_deliver_rt_prio added"
     fi
-    logger -p local0.info "[$tag:$LINENO] moal engine: bridge params added → $moal_args"
+    logger -p local0.info "[$tag:$LINENO] moal engine: bridge params added -> $moal_args"
 else
     logger -p local0.info "[$tag:$LINENO] moal_args: $moal_args"
 fi
@@ -342,13 +342,13 @@ fi
 # mfgbridge 제조 테스트가 끊긴다. flag는 mfg 모드 insmod 성공 시에만 생성되므로,
 # mfg_mode=1이어도 flag가 없으면(일반 FW로 로드된 상태) 재로드 경로로 MFG FW 전환된다.
 if [ "${MFG_MODE:-0}" == "1" ] && [ -f "$MFG_LOADED_FLAG" ] && lsmod | grep "^${MOAL_MOD}\b" >/dev/null 2>&1; then
-    logger -p local0.info "[$tag:$LINENO] mfg_mode=1, driver already loaded in mfg mode → no-op (MFG profile)"
+    logger -p local0.info "[$tag:$LINENO] mfg_mode=1, driver already loaded in mfg mode -> no-op (MFG profile)"
     exit 0
 fi
 
 # 이미 로드된 모듈이 있으면 사용 프로세스 종료 후 제거
 if lsmod | grep -q "^${MOAL_MOD}\b" || lsmod | grep -q "^${MLAN_MOD}\b"; then
-    logger -p local0.info "[$tag:$LINENO] $MOAL_MOD/$MLAN_MOD already loaded → unloading"
+    logger -p local0.info "[$tag:$LINENO] $MOAL_MOD/$MLAN_MOD already loaded -> unloading"
 
     # wpa 관련 프로세스 종료 — 반드시 systemctl stop 을 먼저 한다.
     # wpa_supplicant@ 에 Restart=always 가 붙어 있으므로 kill -9 만 하면 systemd 가 이를
@@ -383,7 +383,7 @@ if lsmod | grep -q "^${MOAL_MOD}\b" || lsmod | grep -q "^${MLAN_MOD}\b"; then
     # 무선 인터페이스 체크 및 link down
     for iface in mlan0 mlan1; do
         if [ -d "/sys/class/net/$iface" ]; then
-            logger -p local0.info "[$tag:$LINENO] [$iface] found → link down"
+            logger -p local0.info "[$tag:$LINENO] [$iface] found -> link down"
             ip link set "$iface" down 2>/dev/null || true
         fi
     done
@@ -508,7 +508,7 @@ for _bg_iface in mlan0 mlan1; do
     [ -f "$_bg_conf" ] || continue
     _bgscan_line=$(grep -E '^[[:space:]]*bgscan[[:space:]]*=' "$_bg_conf" 2>/dev/null | head -1) || true
     if [ -n "${_bgscan_line:-}" ]; then
-        logger -p local0.warning "[$tag:$LINENO] [$_bg_iface] unsupported built-in wpa_supplicant bgscan in conf ('${_bgscan_line}') — remove it; package wifi_bgscan owns periodic scan scheduling"
+        logger -p local0.warning "[$tag:$LINENO] [$_bg_iface] unsupported built-in wpa_supplicant bgscan in conf ('${_bgscan_line}') - remove it; package wifi_bgscan owns periodic scan scheduling"
     fi
 done
 unset _bgscan_line _bg_iface _bg_conf
@@ -619,7 +619,7 @@ apply_mod_para_from_json() {
         if [ "$(_std_level "$s")" -ge "$(_std_level "$iface_max")" ]; then
             # native max 이상 → 제한 불필요 = 라인 삭제(칩 기본값)
             if [ "$iface" = "mlan1" ] && [ "$s" = "ax" ]; then
-                logger -p local0.warn "[$tag:$LINENO] ${iface} STANDARD=ax 비권장 — dev_cap_mask 미설정(기본값)"
+                logger -p local0.warn "[$tag:$LINENO] ${iface} STANDARD=ax is discouraged - dev_cap_mask is unset (default)"
             fi
             _del_kv_in_block "$block" "dev_cap_mask"
             return
@@ -806,7 +806,7 @@ apply_final_mac() {
             && [ "${MAC_CLONE_REQUIRE_PEER:-true}" = "true" ]; then
             if /usr/local/scripts/update_mac.sh "$iface" --clear; then
                 logger -p local0.info \
-                    "[$tag:$LINENO] [$iface] no usable MAC (wired peer/base absent); discarded stale clone MAC → driver default"
+                    "[$tag:$LINENO] [$iface] no usable MAC (wired peer/base absent); discarded stale clone MAC -> driver default"
             else
                 logger -p local0.err "[$tag:$LINENO] [$iface] failed to discard stale clone MAC"
             fi
@@ -886,7 +886,7 @@ apply_iface_thermal_mgmt() {
     # 기본 상태(통상 enable)를 유지한다(명시 enable/disable은 config가 있을 때만 송신).
     # 다른 per-iface 설정과 동일하게 config 없으면 미적용이되, silent가 아니라 로그로 남긴다.
     if [ ! -f "$WIFI_INIT_CONF_JSON" ] || ! command -v jq >/dev/null 2>&1; then
-        logger -p local0.warn "[$tag:$LINENO] [$iface] thermal_mgmt: config/jq 부재 → skip (FW power-on 기본 유지)"
+        logger -p local0.warn "[$tag:$LINENO] [$iface] thermal_mgmt: config/jq unavailable - skipped (keeping firmware power-on default)"
         return 0
     fi
 
@@ -938,7 +938,7 @@ apply_radio_mode_bw() {
     if { [ "$mode" = "b" ] || [ "$mode" = "g" ]; }; then
         freq_bands=$(wifi_init_conf_freq_bands "${WPA_CONF_DIR:-/etc/wpa_supplicant}/wpa_supplicant-${iface}.conf")
         if [ "$freq_bands" = "5G" ]; then
-            logger -p local0.err "[$tag:$LINENO] [$iface] radio.mode=$mode with 5G-only freq_list — dead combo; skip mode (fix freq or mode, then 'wifi N radio-apply')"
+            logger -p local0.err "[$tag:$LINENO] [$iface] radio.mode=$mode with 5G-only freq_list - dead combo; skip mode (fix freq or mode, then 'wifi N radio-apply')"
             mode=""
             # bw는 모드와 독립이라 계속 적용 — 모드 미변경 상태(기존 5G 연결)에서도
             # HT/VHT BW 제한은 유효하다 (의도된 동작).
@@ -1227,7 +1227,7 @@ if command -v systemctl >/dev/null 2>&1; then
             [ -d "/sys/class/net/$_nif" ] && networkctl reconfigure "$_nif" 2>/dev/null || true
         done
     else
-        logger -p local0.warn "[$tag:$LINENO] networkctl reload unavailable → restart systemd-networkd"
+        logger -p local0.warn "[$tag:$LINENO] networkctl reload unavailable -> restart systemd-networkd"
         systemctl restart systemd-networkd
     fi
 
@@ -1268,7 +1268,7 @@ if command -v systemctl >/dev/null 2>&1; then
         esac
         unset _val
     else
-        logger -p local0.warn "[$tag:$LINENO] peer_route degraded fallback: no jq or no /usr/local/etc/wifi_init_conf.json → peer_route=off"
+        logger -p local0.warn "[$tag:$LINENO] peer_route degraded fallback: no jq or no /usr/local/etc/wifi_init_conf.json -> peer_route=off"
     fi
 
     # === 헬퍼: sysctl -w wrapper (양쪽 분기에서 공유) ===
@@ -1424,7 +1424,7 @@ if command -v systemctl >/dev/null 2>&1; then
                     ip route replace "$_m_net" dev eth0 metric 200 src "$_m_ip" 2>/dev/null
                     # S1 병용 대응: 철회가 없는 구성에서도 linkdown 라우트 제외로 절체 성립
                     _safe_sysctl net.ipv4.conf.mlan0.ignore_routes_with_linkdown=1
-                    logger -p local0.info "[$tag:$LINENO] eth_fallback=on: ${_m_ip}/32 + $_m_net metric 200 + mlan0 linkdown-skip → eth0"
+                    logger -p local0.info "[$tag:$LINENO] eth_fallback=on: ${_m_ip}/32 + $_m_net metric 200 + mlan0 linkdown-skip -> eth0"
                 else
                     logger -p local0.warn "[$tag:$LINENO] eth_fallback skipped: invalid mlan0 Address ($_m_addr)"
                 fi

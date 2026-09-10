@@ -19,7 +19,7 @@ if command -v networkctl >/dev/null 2>&1 && networkctl reload 2>/dev/null; then
     logger -p local0.info "[$tag:$LINENO] [$IFACE] networkctl reload ok (eth0 not disrupted)"
     networkctl reconfigure "$IFACE" 2>/dev/null || true
 else
-    logger -p local0.warn "[$tag:$LINENO] [$IFACE] networkctl reload unavailable → restart systemd-networkd"
+    logger -p local0.warn "[$tag:$LINENO] [$IFACE] networkctl reload unavailable -> restart systemd-networkd"
     systemctl restart systemd-networkd
 fi
 systemctl restart wifi_bridge@$IFACE
