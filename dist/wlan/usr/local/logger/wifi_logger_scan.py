@@ -57,13 +57,13 @@ def load_stale_threshold(path=WIFI_INIT_CONF_JSON, default=DEFAULT_STALE_THRESHO
         if isinstance(v, int) and not isinstance(v, bool) and v > 0:
             return v
         _STALE_THRESHOLD_LOAD_WARNING = (
-            f"invalid {scope}.bgscan_stale_threshold_sec {v!r} — using default {default}"
+            f"invalid {scope}.bgscan_stale_threshold_sec {v!r} - using default {default}"
         )
     except FileNotFoundError:
         pass
     except Exception as e:
         _STALE_THRESHOLD_LOAD_WARNING = (
-            f"config load failed ({e}) — using default {default}"
+            f"config load failed ({e}) - using default {default}"
         )
     return default
 
@@ -253,7 +253,7 @@ def scan_event(interface, on_event_callback, _clock=time.monotonic):
                     # dmesg 는 단일 스트림이고 COMPLETED 에 iface 가 없어 소유가
                     # 모호하다 — 버린다(다음 자기 스캔에서 자연 복구, 배경 캐시
                     # 1회 미갱신은 무해. 로밍 판정은 별도 iw scan 경로라 무영향).
-                    logger.message("info", f"[{interface}] other-iface scan overlapped — dropping ambiguous COMPLETED", _EXTRA_())
+                    logger.message("info", f"[{interface}] other-iface scan overlapped - dropping ambiguous COMPLETED", _EXTRA_())
                 else:
                     on_event_callback(interface)
 
@@ -327,7 +327,7 @@ def iw_scan_event(interface, on_event_callback, _popen=None, _select=None, _read
             ready, _, _ = select_fn([proc.stdout], [], [], IW_EVENT_POLL_INTERVAL_S)
             if not ready:
                 if _clock() - last_seen > idle_timeout:
-                    logger.message("warn", f"[{interface}] no iw scan event for {idle_timeout}s — restarting stream", _EXTRA_())
+                    logger.message("warn", f"[{interface}] no iw scan event for {idle_timeout}s - restarting stream", _EXTRA_())
                     return consumed
                 continue
             try:
@@ -349,7 +349,7 @@ def iw_scan_event(interface, on_event_callback, _popen=None, _select=None, _read
                     consumed += 1
                     on_event_callback(interface)
                 elif kind == "aborted":
-                    logger.message("info", f"[{interface}] scan aborted — no new results", _EXTRA_())
+                    logger.message("info", f"[{interface}] scan aborted - no new results", _EXTRA_())
     finally:
         # 종료시킨 뒤 반드시 reap 한다 — scan_event_source 가 최대
         # IW_EVENT_MAX_RESTARTS 회 새 `iw event` 를 띄우므로 wait 를 빠뜨리면
@@ -378,15 +378,15 @@ def scan_event_source(interface, on_event_callback, _clock=time.monotonic, _slee
     while True:
         consumed = iw_scan_event(interface, on_event_callback)
         if consumed is None:
-            logger.message("crit", f"[{interface}] iw event source unusable — falling back to dmesg scan_event", _EXTRA_())
+            logger.message("crit", f"[{interface}] iw event source unusable - falling back to dmesg scan_event", _EXTRA_())
             break
         now = _clock()
         restarts = [t for t in restarts if now - t < IW_EVENT_RESTART_WINDOW_S]
         restarts.append(now)
         if len(restarts) > IW_EVENT_MAX_RESTARTS:
-            logger.message("crit", f"[{interface}] iw event restarted {len(restarts) - 1}x (limit {IW_EVENT_MAX_RESTARTS}) within {IW_EVENT_RESTART_WINDOW_S}s — falling back to dmesg scan_event", _EXTRA_())
+            logger.message("crit", f"[{interface}] iw event restarted {len(restarts) - 1}x (limit {IW_EVENT_MAX_RESTARTS}) within {IW_EVENT_RESTART_WINDOW_S}s - falling back to dmesg scan_event", _EXTRA_())
             break
-        logger.message("warn", f"[{interface}] iw event stream ended after {consumed} event(s) — restarting", _EXTRA_())
+        logger.message("warn", f"[{interface}] iw event stream ended after {consumed} event(s) - restarting", _EXTRA_())
         _sleep(1)
     scan_event(interface, on_event_callback)
 
@@ -819,7 +819,7 @@ if __name__ == "__main__":
     try:
         _lock_fp = open(f"/run/wifi_logger_scan_{IFACE}.lock", "w")
     except OSError as e:
-        logger.message("warning", f"[{IFACE}] lock file open failed: {e} — exit", _EXTRA_())
+        logger.message("warning", f"[{IFACE}] lock file open failed: {e} - exit", _EXTRA_())
         sys.exit(1)   # open 실패는 운영 에러(권한/mount) — 중복 회피 exit 0과 구분
     _locked = False
     for _ in range(5):
@@ -830,7 +830,7 @@ if __name__ == "__main__":
         except OSError:
             time.sleep(1)
     if not _locked:
-        logger.message("warning", f"[{IFACE}] another wifi_logger_scan already running — exit", _EXTRA_())
+        logger.message("warning", f"[{IFACE}] another wifi_logger_scan already running - exit", _EXTRA_())
         # exit 3 = 중복 실행(flock-loss). systemd 유닛의 RestartPreventExitStatus=3 이 이
         # 종료를 재시작하지 않게 해 재시작 폭주를 막는다(이미 다른 인스턴스가 생산 중).
         sys.exit(3)

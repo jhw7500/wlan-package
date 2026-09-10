@@ -23,7 +23,9 @@ INSTALL_PROGRESS_TOTAL=6
 
 installer_print() {
     if ! "$INSTALL_PRINT_COMMAND" "$@" 2>/dev/null; then
-        logger -p local0.warn "[$tag:$LINENO] [$KEY] print.py failed: $*" || true
+        local ln=$LINENO warning="[$KEY] print.py failed: $*"
+        logger -p local0.warn "[$tag:$ln] $warning" || true
+        printf '%s\n' "[$tag:$ln] $warning" >&2 || true
     fi
 }
 

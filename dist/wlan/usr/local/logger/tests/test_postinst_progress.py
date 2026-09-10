@@ -4,6 +4,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 POSTINST = Path(__file__).resolve().parents[4] / "DEBIAN" / "postinst"
 
@@ -62,3 +64,48 @@ def test_configure_flow_has_six_progress_stages():
     source = POSTINST.read_text(encoding="utf-8")
     assert "INSTALL_PROGRESS_TOTAL=6" in source
     assert source.count("\n  installer_progress_step\n") == 6
+
+
+@pytest.mark.parametrize("helper_exists", [False, True], ids=["missing", "failing"])
+@pytest.mark.parametrize("logger_status", [0, 1], ids=["logger-ok", "logger-fails"])
+def test_installer_print_failure_warns_stderr_and_syslog_without_failing(
+    tmp_path, helper_exists, logger_status
+):
+    helper = tmp_path / "print.py"
+    if helper_exists:
+        helper.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        helper.chmod(0o755)
+    output = tmp_path / "logger-calls.tsv"
+    logger = tmp_path / "logger"
+    logger.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\t%s\\t%s\\n' \"$1\" \"$2\" \"$3\" >> \"$INSTALL_WARNING_LOG\"\n"
+        f"exit {logger_status}\n",
+        encoding="utf-8",
+    )
+    logger.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": str(tmp_path) + os.pathsep + env["PATH"],
+            "DEBIAN_HAS_FRONTEND": "1",
+            "DPKG_MAINTSCRIPT_PACKAGE": "wlan-proc",
+            "INSTALL_PRINT_COMMAND": str(helper),
+            "INSTALL_WARNING_LOG": str(output),
+        }
+    )
+    result = subprocess.run(
+        [
+            "bash", "-ec", 'source "$1" noop 2>/dev/null; installer_print cyan "install start"',
+            "postinst-fallback-test", str(POSTINST),
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "print.py failed" in result.stderr
+    assert result.stderr.isascii()
+    assert output.read_text().splitlines() == [f"-p\tlocal0.warn\t{result.stderr.strip()}"]
