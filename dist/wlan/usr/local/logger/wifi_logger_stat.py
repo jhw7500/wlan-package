@@ -56,6 +56,7 @@ def load_logger_config(iface):
 
 # 새 로그는 timestamp 대괄호를 쓰지 않는다. 기존 누적 로그도 재시작 후 읽을 수 있도록
 # 여는 괄호가 있을 때만 닫는 괄호를 요구해 두 형식을 모두 허용한다.
+# 마지막 패턴은 끝에 부가 정보가 더 있어도 허용한다.
 LOG_LINE_RE = re.compile(r"""
     ^(?P<timestamp_bracket>\[)?
         (?P<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})
@@ -75,7 +76,7 @@ LOG_LINE_RE = re.compile(r"""
     FAIL:(?P<tx_fail>\d+),\s+
     (?:RETRY:(?P<retry_delta>\d+)\((?P<retry_pct>\d+(?:\.\d+)?)%\),\s+)?
     T:(?P<time>\d+)
-    (?:\s*.*)?$            # 끝에 부가 정보가 더 있어도 허용
+    (?:\s*.*)?$
 """, re.VERBOSE)
 
 def handle_sigterm(signum, frame):

@@ -23,6 +23,7 @@ def test_installer_progress_rewrites_one_line_and_finishes_cleanly(tmp_path):
 
     command = r'''
 source "$1" noop
+INSTALL_PRINT_COMMAND="$2"
 INSTALL_PROGRESS_TOTAL=3
 INSTALL_PROGRESS_CURRENT=0
 installer_progress_start
@@ -36,12 +37,18 @@ installer_progress_done
         {
             "DEBIAN_HAS_FRONTEND": "1",
             "DPKG_MAINTSCRIPT_PACKAGE": "wlan-proc",
-            "INSTALL_PRINT_COMMAND": str(fake_print),
             "INSTALL_PROGRESS_LOG": str(output),
         }
     )
     result = subprocess.run(
-        ["bash", "-c", command, "postinst-progress-test", str(POSTINST)],
+        [
+            "bash",
+            "-c",
+            command,
+            "postinst-progress-test",
+            str(POSTINST),
+            str(fake_print),
+        ],
         env=env,
         capture_output=True,
         text=True,
@@ -64,6 +71,47 @@ def test_configure_flow_has_six_progress_stages():
     source = POSTINST.read_text(encoding="utf-8")
     assert "INSTALL_PROGRESS_TOTAL=6" in source
     assert source.count("\n  installer_progress_step\n") == 6
+
+
+def test_configure_progress_follows_partition_and_service_enable_work():
+    source = POSTINST.read_text(encoding="utf-8")
+    configure = source.split("\nconfigure)\n", 1)[1].split("\nupgrade)\n", 1)[0]
+    step_positions = []
+    cursor = 0
+    needle = "\n  installer_progress_step\n"
+    while (position := configure.find(needle, cursor)) != -1:
+        step_positions.append(position)
+        cursor = position + len(needle)
+
+    assert configure.index('/usr/local/scripts/auto_fs_sizeup.sh "$EMMC_NUM" 3') < step_positions[0]
+    assert configure.index("systemctl enable watchdog switchd") < step_positions[1]
+
+
+def test_installer_ignores_ambient_print_command():
+    env = os.environ.copy()
+    env.update(
+        {
+            "DEBIAN_HAS_FRONTEND": "1",
+            "DPKG_MAINTSCRIPT_PACKAGE": "wlan-proc",
+            "INSTALL_PRINT_COMMAND": "/tmp/untrusted-print-command",
+        }
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1" noop; printf "%s" "$INSTALL_PRINT_COMMAND" >&2',
+            "postinst-command-test",
+            str(POSTINST),
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr.splitlines()[-1] == "/usr/local/logger/print.py"
 
 
 @pytest.mark.parametrize("helper_exists", [False, True], ids=["missing", "failing"])
@@ -90,14 +138,17 @@ def test_installer_print_failure_warns_stderr_and_syslog_without_failing(
             "PATH": str(tmp_path) + os.pathsep + env["PATH"],
             "DEBIAN_HAS_FRONTEND": "1",
             "DPKG_MAINTSCRIPT_PACKAGE": "wlan-proc",
-            "INSTALL_PRINT_COMMAND": str(helper),
             "INSTALL_WARNING_LOG": str(output),
         }
     )
     result = subprocess.run(
         [
-            "bash", "-ec", 'source "$1" noop 2>/dev/null; installer_print cyan "install start"',
-            "postinst-fallback-test", str(POSTINST),
+            "bash",
+            "-ec",
+            'source "$1" noop 2>/dev/null; INSTALL_PRINT_COMMAND="$2"; installer_print cyan "install start"',
+            "postinst-fallback-test",
+            str(POSTINST),
+            str(helper),
         ],
         env=env,
         capture_output=True,

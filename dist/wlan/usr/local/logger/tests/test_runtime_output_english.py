@@ -1,4 +1,4 @@
-"""Guard executable shell and Python runtime output against non-ASCII text."""
+"""Guard shipped runtime output against non-ASCII text."""
 
 import ast
 import re
@@ -12,61 +12,10 @@ ENGINEER_TOOLS = {
     "diag-9098-11ax.sh",
     "verify-he-mu-features.sh",
 }
-PYTHON_RUNTIME_FILES = [
-    WLAN_ROOT / "usr/local/logger/roam_notify.py",
-    WLAN_ROOT / "usr/local/logger/sUTILS.py",
-    WLAN_ROOT / "usr/local/logger/wifi_bgscan.py",
-    WLAN_ROOT / "usr/local/logger/wifi_roam.py",
-    WLAN_ROOT / "usr/local/logger/wired_mac_ip_get.py",
-    WLAN_ROOT / "usr/local/logger/wifi_logger_scan.py",
-    WLAN_ROOT / "usr/local/logger/wifi_logger_link.py",
-    WLAN_ROOT / "usr/local/logger/wifi_logger_stat.py",
-    WLAN_ROOT / "usr/local/logger/wifi_snmp_pp.py",
-    WLAN_ROOT / "usr/local/tools/ping-monitor/ping_monitor.py",
-    WLAN_ROOT / "usr/local/tools/ping-monitor/analyzer.py",
+PYTHON_RUNTIME_ROOTS = [
+    WLAN_ROOT / "usr/local/logger",
+    WLAN_ROOT / "usr/local/tools/ping-monitor",
 ]
-
-
-def python_literal_text(path, node, parents):
-    """Exclude only the existing source comment in the stat log's verbose regex."""
-    call = parents.get(node)
-    assignment = parents.get(call)
-    if (
-        path == WLAN_ROOT / "usr/local/logger/wifi_logger_stat.py"
-        and isinstance(call, ast.Call)
-        and ast.unparse(call.func) == "re.compile"
-        and len(call.args) == 2
-        and call.args[0] is node
-        and ast.unparse(call.args[1]) == "re.VERBOSE"
-        and isinstance(assignment, ast.Assign)
-        and [ast.unparse(target) for target in assignment.targets] == ["LOG_LINE_RE"]
-    ):
-        return node.value.replace(
-            "\n    (?:\\s*.*)?$            # 끝에 부가 정보가 더 있어도 허용\n",
-            "\n    (?:\\s*.*)?$\n",
-        )
-    return node.value
-
-
-def test_regex_comment_exception_does_not_hide_emitted_literals():
-    documented_pattern = "\n    (?:\\s*.*)?$            # 끝에 부가 정보가 더 있어도 허용\n"
-    for source, expected_ascii in [
-        (f"LOG_LINE_RE = re.compile({documented_pattern!r}, re.VERBOSE)", True),
-        (f"print({documented_pattern!r})", False),
-        (f"LOG_LINE_RE = re.compile({documented_pattern!r})", False),
-        (f"LOG_LINE_RE = re.compile({'출력' + documented_pattern!r}, re.VERBOSE)", False),
-    ]:
-        tree = ast.parse(source)
-        parents = {
-            child: parent
-            for parent in ast.walk(tree)
-            for child in ast.iter_child_nodes(parent)
-        }
-        node = next(node for node in ast.walk(tree) if isinstance(node, ast.Constant))
-        text = python_literal_text(
-            WLAN_ROOT / "usr/local/logger/wifi_logger_stat.py", node, parents
-        )
-        assert bool(ASCII.fullmatch(text)) == expected_ascii
 
 
 def strip_shell_comment(line: str) -> str:
@@ -107,7 +56,8 @@ def test_shell_runtime_code_is_ascii_english():
 
 def test_python_runtime_literals_are_ascii_english():
     failures = []
-    for path in PYTHON_RUNTIME_FILES:
+    paths = sorted(path for root in PYTHON_RUNTIME_ROOTS for path in root.glob("*.py"))
+    for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         parents = {
             child: parent
@@ -119,8 +69,23 @@ def test_python_runtime_literals_are_ascii_english():
                 continue
             if isinstance(parents.get(node), ast.Expr):
                 continue
-            if not ASCII.fullmatch(python_literal_text(path, node, parents)):
+            if not ASCII.fullmatch(node.value):
                 failures.append(
                     f"{path.relative_to(WLAN_ROOT)}:{node.lineno}: {node.value!r}"
+                )
+    assert failures == []
+
+
+def test_systemd_runtime_fields_are_ascii_english():
+    failures = []
+    unit_root = WLAN_ROOT / "etc/systemd/system"
+    for path in sorted(path for path in unit_root.glob("*") if path.is_file()):
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            field = line.strip()
+            if not field or field.startswith(("#", ";")):
+                continue
+            if not ASCII.fullmatch(field):
+                failures.append(
+                    f"{path.relative_to(WLAN_ROOT)}:{lineno}: {field}"
                 )
     assert failures == []
