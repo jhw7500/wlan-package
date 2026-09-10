@@ -478,16 +478,25 @@ expect_rc "detect rejects SoC identity with canonical prefix only" 1 \
 KO_DIR="$WORK/ko"
 SYS_MODULE="$WORK/sys-module"
 mkdir -p "$KO_DIR" "$SYS_MODULE/mlan" "$SYS_MODULE/moal"
-printf 'version=543.p18\0srcversion=MLAN93SRC\0' > "$KO_DIR/mlan_imx93.ko"
-printf 'version=543.p18\0srcversion=MOAL93SRC\0' > "$KO_DIR/moal_imx93.ko"
+printf '\377\376binary-noise\0version=543.p18\0srcversion=MLAN93SRC\0' > "$KO_DIR/mlan_imx93.ko"
+printf '\377\376binary-noise\0version=543.p18\0srcversion=MOAL93SRC\0' > "$KO_DIR/moal_imx93.ko"
 printf '543.p18\n' > "$SYS_MODULE/mlan/version"
 printf 'MLAN93SRC\n' > "$SYS_MODULE/mlan/srcversion"
 printf '543.p18\n' > "$SYS_MODULE/moal/version"
 printf 'MOAL93SRC\n' > "$SYS_MODULE/moal/srcversion"
 
-expect_rc "loaded imx93 modules match selected KO metadata" 0 \
-    env WIFI_SYS_MODULE_ROOT="$SYS_MODULE" "$BOARD_CONFIG" --verify-loaded imx93 \
-        "$KO_DIR/mlan_imx93.ko" "$KO_DIR/moal_imx93.ko"
+MODULE_VERIFY_STDERR="$WORK/module-verify.stderr"
+LC_ALL=C.UTF-8 env WIFI_SYS_MODULE_ROOT="$SYS_MODULE" \
+    "$BOARD_CONFIG" --verify-loaded imx93 \
+    "$KO_DIR/mlan_imx93.ko" "$KO_DIR/moal_imx93.ko" \
+    >/dev/null 2>"$MODULE_VERIFY_STDERR"
+_verify_rc=$?
+[ "$_verify_rc" -eq 0 ] \
+    && pass "loaded imx93 modules match selected KO metadata" \
+    || fail "loaded imx93 module verification failed (rc=$_verify_rc)"
+[ ! -s "$MODULE_VERIFY_STDERR" ] \
+    && pass "module metadata scan emits no locale warning" \
+    || fail "module metadata scan wrote stderr: $(tr '\n' ' ' < "$MODULE_VERIFY_STDERR")"
 expect_rc "module verifier rejects board/basename mismatch" 1 \
     env WIFI_SYS_MODULE_ROOT="$SYS_MODULE" "$BOARD_CONFIG" --verify-loaded imx8mm \
         "$KO_DIR/mlan_imx93.ko" "$KO_DIR/moal_imx93.ko"

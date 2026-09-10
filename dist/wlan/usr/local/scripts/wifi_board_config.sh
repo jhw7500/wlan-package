@@ -97,7 +97,7 @@ emit_detection() {
 module_field() {
     local ko="$1" field="$2" values
     [ -f "$ko" ] && [ ! -L "$ko" ] && [ -s "$ko" ] || return 1
-    values=$(tr '\000' '\n' < "$ko" | awk -v field="$field" '
+    values=$(LC_ALL=C tr '\000' '\n' < "$ko" | LC_ALL=C awk -v field="$field" '
         BEGIN { prefix = field "=" }
         index($0, prefix) == 1 {
             count++
