@@ -883,7 +883,7 @@ class PingPongPreventer:
         if reason == "round-trip":
             logger.message(
                 "warn",
-                f"[{IFACE}] Ping-pong detected: {from_bssid} ↔ {to_bssid}",
+                f"[{IFACE}] Ping-pong detected: {from_bssid} <-> {to_bssid}",
                 _EXTRA_(),
             )
             return True
@@ -1215,7 +1215,7 @@ def _iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
     # iw scan이 끝내 실패 → 스테일 테이블로 로밍 판단하지 않고 None 반환(호출측 backoff).
     if not scanned_ok:
         logger.message(
-            "err", f"[{IFACE}] iw scan failed (all attempts) — skip roam decision", _EXTRA_()
+            "err", f"[{IFACE}] iw scan failed (all attempts) - skip roam decision", _EXTRA_()
         )
         return None
 
@@ -1235,7 +1235,7 @@ def _iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
         logger.message(
             "warn",
             f"[{IFACE}] iw scan returned no BSS refreshed within "
-            f"{max_seen_age_ms}ms — skip roam decision",
+            f"{max_seen_age_ms}ms - skip roam decision",
             _EXTRA_(),
         )
         return None
@@ -1522,8 +1522,8 @@ def get_link_info():
             if not _LINK_STALE_WARNED:
                 logger.message(
                     "warn",
-                    f"[{IFACE}] {LINK_LOG_FILE} stale ({age:.0f}s > {LINK_STALE_SEC}s) — "
-                    f"생산자(wifi_logger_link) 갱신 정지 의심, 로밍 판정 보류",
+                    f"[{IFACE}] {LINK_LOG_FILE} stale ({age:.0f}s > {LINK_STALE_SEC}s) - "
+                    f"wifi_logger_link may have stopped updating; roaming decision deferred",
                     _EXTRA_(),
                 )
                 _LINK_STALE_WARNED = True
@@ -1682,8 +1682,8 @@ def fetch_bss_metrics(iface=None):
         _MASK_WARNED = True
         logger.message(
             "warn",
-            f"[{IFACE}] bss MASK={_BSS_METRICS_MASK} 로 snr/est_throughput 을 받지 못했다 "
-            f"— 설치된 wpa_supplicant 의 WPA_BSS_MASK_* 비트와 어긋났을 수 있다",
+            f"[{IFACE}] bss MASK={_BSS_METRICS_MASK} returned no snr/est_throughput - "
+            f"it may not match the installed wpa_supplicant WPA_BSS_MASK_* bits",
             _EXTRA_(),
         )
     return metrics
@@ -2190,7 +2190,7 @@ def roam_to_bssid(from_bssid, to_bssid, channel=None, freq=None, rssi=None):
         if ping_pong_preventer.is_ping_pong(from_bssid, to_bssid):
             logger.message(
                 "info",
-                f"[{IFACE}] Roam blocked: ping-pong prevention ({from_bssid} → {to_bssid})",
+                f"[{IFACE}] Roam blocked: ping-pong prevention ({from_bssid} -> {to_bssid})",
                 _EXTRA_(),
             )
             return False
@@ -2203,7 +2203,7 @@ def roam_to_bssid(from_bssid, to_bssid, channel=None, freq=None, rssi=None):
 
 
 def _roam_to_bssid_locked(from_bssid, to_bssid, channel=None, freq=None, rssi=None):
-    logger.message("emerg", f"[{IFACE}] Roaming: {from_bssid} → {to_bssid}", _EXTRA_())
+    logger.message("emerg", f"[{IFACE}] Roaming: {from_bssid} -> {to_bssid}", _EXTRA_())
 
     try:
         result = subprocess.run(
@@ -2266,14 +2266,14 @@ def connect_to_ssid(iface, to_ssid, from_bssid, to_bssid):
         if ping_pong_preventer.is_ping_pong(from_bssid, to_bssid):
             logger.message(
                 "info",
-                f"[{IFACE}] Cross-SSID roam blocked: ping-pong ({from_bssid} → {to_bssid})",
+                f"[{IFACE}] Cross-SSID roam blocked: ping-pong ({from_bssid} -> {to_bssid})",
                 _EXTRA_(),
             )
             return None
 
     logger.message(
         "notice",
-        f"[{IFACE}] Cross-SSID roam: connect ssid={to_ssid} ({from_bssid} → {to_bssid})",
+        f"[{IFACE}] Cross-SSID roam: connect ssid={to_ssid} ({from_bssid} -> {to_bssid})",
         _EXTRA_(),
     )
     try:
@@ -2827,7 +2827,7 @@ def route_cross_ssid_transition(iface, to_ssid, from_bssid, to_bssid):
             logger.message(
                 "info",
                 f"[{iface}] Cross-SSID roam blocked: ping-pong prevention "
-                f"({from_bssid} → {to_bssid})",
+                f"({from_bssid} -> {to_bssid})",
                 _EXTRA_(),
             )
             return None
@@ -3077,8 +3077,8 @@ def _record_roam_scan_time():
         if not _SCAN_TIME_WRITE_WARNED:
             logger.message(
                 "warn",
-                f"[{IFACE}] {LAST_SCAN_TIME_FILE} write failed ({e}) — bgscan 타이머 "
-                f"리셋 신호 유실(스케줄 영향은 조기 스캔 방향)",
+                f"[{IFACE}] {LAST_SCAN_TIME_FILE} write failed ({e}) - "
+                f"bgscan timer reset signal lost (may only schedule an earlier scan)",
                 _EXTRA_(),
             )
             _SCAN_TIME_WRITE_WARNED = True
@@ -3120,7 +3120,7 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
         else:
             logger.message(
                 "warn",
-                f"[{IFACE}] configured freq_list(WPA_FREQ) unset — full-band active scan (once)",
+                f"[{IFACE}] configured freq_list(WPA_FREQ) unset - full-band active scan (once)",
                 _EXTRA_(),
             )
             active_lines = iw_scan_to_ap_lines(
@@ -3208,7 +3208,7 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
         logger.message(
             "info",
             f"[{IFACE}] home directed active scan already covered configured "
-            f"channel({home_freq}) — skip duplicate active fallback",
+            f"channel({home_freq}) - skip duplicate active fallback",
             _EXTRA_(),
         )
         return None, "", 0, scanned
@@ -3224,7 +3224,7 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
     if SKIP_REDUNDANT_ACTIVE_SCAN and home_scan_ok and home_covers_all:
         logger.message(
             "info",
-            f"[{IFACE}] configured freq_list ⊆ home channel({home_freq}) — home "
+            f"[{IFACE}] configured freq_list is within home channel({home_freq}) - home "
             f"passive scan covered all, "
             f"skip redundant active fallback (no roam candidate)",
             _EXTRA_(),
@@ -3383,8 +3383,8 @@ def main():
                 if gs["suppressed"]:
                     logger.message(
                         "info",
-                        f"[{IFACE}] good-signal streak reset ({why}) — "
-                        f"이전 {gs['suppressed']}회 억제, streak={no_candidate_streak} 유지했었음",
+                        f"[{IFACE}] good-signal streak reset ({why}) - "
+                        f"previously suppressed {gs['suppressed']} times; streak had remained {no_candidate_streak}",
                         _EXTRA_(),
                     )
                 # 리셋 동반 정리는 on_streak_reset 에 위임 — suppressed 초기화가 이 경로와
@@ -3527,7 +3527,7 @@ def main():
             gs["reset_rssi"] = station["rssi"]
             logger.message(
                 "emerg",
-                f"[{IFACE}] Roaming: {station['bssid']} → {best_ap['bssid']}, "
+                f"[{IFACE}] Roaming: {station['bssid']} -> {best_ap['bssid']}, "
                 f"reason={best_reason}, score={best_score:.1f}, "
                 f"{best_ap['ssid']}, {best_ap['rssi']}dB (ch={best_ap['freq']})",
                 _EXTRA_(),
@@ -3555,7 +3555,7 @@ def main():
                 backoff, no_candidate_streak = advance_no_candidate_backoff(prev_streak)
                 logger.message(
                     "err",
-                    f"[{IFACE}] Roam attempt failed: {station['bssid']} → "
+                    f"[{IFACE}] Roam attempt failed: {station['bssid']} -> "
                     f"{best_ap['bssid']} (roam-fail backoff={backoff}s, "
                     f"streak={no_candidate_streak})",
                     _EXTRA_(),

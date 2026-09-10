@@ -35,29 +35,29 @@ def load_config(path: str) -> SessionConfig:
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-        print(f"INFO: 설정 로드: {path}")
+        print(f"INFO: Configuration loaded: {path}")
         return SessionConfig.from_json(data)
     except (OSError, json.JSONDecodeError) as e:
-        print(f"[ERROR] 설정 파일 로드 실패: {e}", file=sys.stderr)
+        print(f"[ERROR] Failed to load configuration: {e}", file=sys.stderr)
         sys.exit(1)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="유무선 브릿지 ICMP 실시간 로거",
+        description="Wired/wireless bridge ICMP real-time logger",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="CLI 옵션이 JSON 설정보다 우선합니다.",
+        epilog="CLI options override JSON settings.",
     )
-    parser.add_argument("-c", "--config", metavar="FILE", help="JSON 설정 파일 경로")
-    parser.add_argument("-1", "--primary", metavar="IFACE", help="첫 번째 인터페이스 (기본: eth0)")
-    parser.add_argument("-2", "--secondary", metavar="IFACE", help="두 번째 인터페이스 (기본: mlan0)")
-    parser.add_argument("-s", "--single", action="store_true", help="단일 인터페이스 모드")
-    parser.add_argument("-t", "--target", metavar="IP", help="특정 IP만 필터")
-    parser.add_argument("-d", "--duration", type=int, metavar="SEC", help="캡처 시간 (초)")
-    parser.add_argument("-o", "--output-dir", metavar="DIR", help="출력 디렉토리")
-    parser.add_argument("-l", "--log-file", metavar="FILE", help="고정 로그 파일 경로 (데몬 모드)")
-    parser.add_argument("-P", "--no-pcap", action="store_true", help="pcap 저장 비활성화")
-    parser.add_argument("-H", "--remote", metavar="HOST", help="원격 타겟 호스트 (SSH)")
+    parser.add_argument("-c", "--config", metavar="FILE", help="JSON configuration file path")
+    parser.add_argument("-1", "--primary", metavar="IFACE", help="first interface (default: eth0)")
+    parser.add_argument("-2", "--secondary", metavar="IFACE", help="second interface (default: mlan0)")
+    parser.add_argument("-s", "--single", action="store_true", help="single-interface mode")
+    parser.add_argument("-t", "--target", metavar="IP", help="filter a specific IP address")
+    parser.add_argument("-d", "--duration", type=int, metavar="SEC", help="capture duration (seconds)")
+    parser.add_argument("-o", "--output-dir", metavar="DIR", help="output directory")
+    parser.add_argument("-l", "--log-file", metavar="FILE", help="fixed log file path (daemon mode)")
+    parser.add_argument("-P", "--no-pcap", action="store_true", help="disable pcap saving")
+    parser.add_argument("-H", "--remote", metavar="HOST", help="remote target host (SSH)")
     return parser.parse_args()
 
 
@@ -100,11 +100,11 @@ def build_config(args: argparse.Namespace) -> SessionConfig:
 def check_prerequisites(cfg: SessionConfig) -> None:
     """전제 조건 확인"""
     if os.geteuid() != 0:
-        print("[ERROR] root 권한이 필요합니다", file=sys.stderr)
+        print("[ERROR] root privileges are required", file=sys.stderr)
         sys.exit(1)
 
     if not shutil.which("tcpdump"):
-        print("[ERROR] 'tcpdump'이(가) 설치되어 있지 않습니다", file=sys.stderr)
+        print("[ERROR] 'tcpdump' is not installed", file=sys.stderr)
         sys.exit(1)
 
     # 인터페이스 존재 확인
@@ -112,24 +112,24 @@ def check_prerequisites(cfg: SessionConfig) -> None:
         ret = subprocess.run(["ip", "link", "show", iface],
                              capture_output=True, timeout=5)
         if ret.returncode != 0:
-            print(f"[ERROR] 인터페이스 없음: {iface}", file=sys.stderr)
+            print(f"[ERROR] interface not found: {iface}", file=sys.stderr)
             sys.exit(1)
 
     if cfg.target_ip:
         try:
             ipaddress.ip_address(cfg.target_ip)
         except ValueError:
-            print(f"[ERROR] 올바른 IP 주소가 아닙니다: {cfg.target_ip}", file=sys.stderr)
+            print(f"[ERROR] invalid IP address: {cfg.target_ip}", file=sys.stderr)
             sys.exit(1)
 
     if cfg.mode == "dual" and cfg.analysis_on_exit and not shutil.which("tshark"):
-        print("WARN: 'tshark' 없음, 종료 시 미전달 분석 불가", file=sys.stderr)
+        print("WARN: 'tshark' is unavailable; undelivered-packet analysis will be skipped on exit", file=sys.stderr)
 
 
 def exec_remote(cfg: SessionConfig, raw_args: list) -> None:
     """원격 호스트에서 실행"""
     host = cfg.remote_host
-    print(f"INFO: 원격 실행: {host}")
+    print(f"INFO: remote execution: {host}")
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     files_to_copy = ["ping_monitor.py", "capture.py", "analyzer.py", "models.py",
@@ -161,7 +161,7 @@ def exec_remote(cfg: SessionConfig, raw_args: list) -> None:
     ret = subprocess.run(["ssh", "-t", f"root@{host}", cmd])
 
     # 결과 복사
-    print("INFO: 결과 파일 복사 중...")
+    print("INFO: copying result files...")
     os.makedirs(cfg.output_dir, exist_ok=True)
     subprocess.run(
         ["scp", "-q", f"root@{host}:{cfg.output_dir}/ping_*.log", f"{cfg.output_dir}/"],
@@ -223,15 +223,15 @@ def _run_session(cfg, log_file, log_path, pcap1_path, pcap2_path, colors) -> Non
     """실제 캡처 세션 실행 (log_file은 호출자가 닫음)"""
     # 세션 헤더
     header_lines = [
-        "=== ping-monitor 세션 시작 ===",
-        f"시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        f"모드: {cfg.mode}",
-        f"인터페이스: {cfg.primary}",
+        "=== ping-monitor session started ===",
+        f"time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"mode: {cfg.mode}",
+        f"interface: {cfg.primary}",
     ]
     if cfg.mode == "dual":
-        header_lines.append(f"인터페이스2: {cfg.secondary}")
+        header_lines.append(f"interface2: {cfg.secondary}")
     if cfg.target_ip:
-        header_lines.append(f"필터: {cfg.target_ip}")
+        header_lines.append(f"filter: {cfg.target_ip}")
     header_lines.append("===")
     header_lines.append("")
 
@@ -240,10 +240,10 @@ def _run_session(cfg, log_file, log_path, pcap1_path, pcap2_path, colors) -> Non
         log_file.write(line + "\n")
     log_file.flush()
 
-    print("INFO: 캡처 시작...")
+    print("INFO: starting capture...")
     if cfg.duration > 0:
-        print(f"INFO: 시간: {cfg.duration}초")
-    print("INFO: 종료: Ctrl+C")
+        print(f"INFO: time: {cfg.duration} seconds")
+    print("INFO: press Ctrl+C to stop")
     print("")
 
     # 캡처 엔진 시작
@@ -268,13 +268,13 @@ def _run_session(cfg, log_file, log_path, pcap1_path, pcap2_path, colors) -> Non
         shutdown_called = True
 
         print("")
-        print("INFO: 캡처 종료...")
+        print("INFO: stopping capture...")
 
         engine.stop()
         time.sleep(0.5)
 
         # 세션 종료 로그
-        end_line = f"\n=== 세션 종료: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ==="
+        end_line = f"\n=== session ended: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ==="
         log_file.write(end_line + "\n")
 
         # 미전달 분석
@@ -288,11 +288,11 @@ def _run_session(cfg, log_file, log_path, pcap1_path, pcap2_path, colors) -> Non
 
         # 결과 요약
         print("")
-        print("INFO: === 결과 ===")
+        print("INFO: === results ===")
         if os.path.exists(log_path):
             with open(log_path, encoding="utf-8") as f:
                 line_count = sum(1 for _ in f)
-            print(f"INFO: 로그: {log_path} ({line_count} 줄)")
+            print(f"INFO: log: {log_path} ({line_count} lines)")
         if cfg.save_pcap:
             for p in [pcap1_path, pcap2_path]:
                 if os.path.exists(p):

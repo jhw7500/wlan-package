@@ -21,7 +21,7 @@ def _run_tshark(pcap_path: str) -> List[Dict]:
 
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     if result.returncode != 0:
-        print(f"[ERROR] tshark 실행 실패: {result.stderr[:200]}", file=sys.stderr)
+        print(f"[ERROR] tshark execution failed: {result.stderr[:200]}", file=sys.stderr)
         return []
 
     packets = []
@@ -59,7 +59,7 @@ def analyze_undelivered(pcap1: str, pcap2: str,
     pkts2 = _run_tshark(pcap2)
 
     if not pkts1 and not pkts2:
-        return "캡처된 ICMP 패킷 없음"
+        return "no captured ICMP packets"
 
     def _build_map(pkts, label: str) -> dict:
         result: dict = {}
@@ -67,8 +67,8 @@ def analyze_undelivered(pcap1: str, pcap2: str,
             key = _make_key(p)
             if key in result:
                 print(
-                    f"WARN: [{label}] 중복 키 감지 (type={key[0]} id={key[1]} seq={key[2]})"
-                    f" — 이전 패킷 폐기, 손실률 분석에 오탐 가능",
+                    f"WARN: [{label}] duplicate key detected (type={key[0]} id={key[1]} seq={key[2]}); "
+                    f"discarding the previous packet may affect loss-rate analysis",
                     file=sys.stderr,
                 )
             result[key] = p
@@ -100,38 +100,38 @@ def analyze_undelivered(pcap1: str, pcap2: str,
 
     lines = []
     lines.append("")
-    lines.append("=== 미전달 패킷 분석 ===")
-    lines.append(f"캡처: {if1}={len(pkts1)}, {if2}={len(pkts2)} 패킷")
-    lines.append(f"매칭: {matched}, {if1}에만={only1}, {if2}에만={only2}")
+    lines.append("=== undelivered packet analysis ===")
+    lines.append(f"captured: {if1}={len(pkts1)}, {if2}={len(pkts2)} packets")
+    lines.append(f"matched: {matched}, only on {if1}={only1}, only on {if2}={only2}")
 
     total_uniq = matched + only1 + only2
     if total_uniq > 0:
         loss_pct = ((only1 + only2) / total_uniq) * 100
-        lines.append(f"손실률: {loss_pct:.1f}%")
+        lines.append(f"loss rate: {loss_pct:.1f}%")
 
     if delays:
         avg_d = sum(delays) / len(delays)
         lines.append("")
-        lines.append(f"브릿지 지연: 평균={avg_d:.3f}ms 최소={min(delays):.3f}ms 최대={max(delays):.3f}ms")
+        lines.append(f"bridge delay: average={avg_d:.3f}ms minimum={min(delays):.3f}ms maximum={max(delays):.3f}ms")
 
     if only1_keys:
         lines.append("")
-        lines.append(f"[{if1}에서 전달되지 않음 → {if2}]")
+        lines.append(f"[not delivered from {if1} -> {if2}]")
         for key in sorted(only1_keys):
             p = map1[key]
             lines.append(f"  {_type_label(p['type'])} id={p['id']} seq={p['seq']} "
-                         f"{p['src']}→{p['dst']} t={p['epoch']}")
+                         f"{p['src']}->{p['dst']} t={p['epoch']}")
 
     if only2_keys:
         lines.append("")
-        lines.append(f"[{if2}에서 전달되지 않음 → {if1}]")
+        lines.append(f"[not delivered from {if2} -> {if1}]")
         for key in sorted(only2_keys):
             p = map2[key]
             lines.append(f"  {_type_label(p['type'])} id={p['id']} seq={p['seq']} "
-                         f"{p['src']}→{p['dst']} t={p['epoch']}")
+                         f"{p['src']}->{p['dst']} t={p['epoch']}")
 
     if not only1_keys and not only2_keys:
         lines.append("")
-        lines.append("모든 패킷이 정상 전달되었습니다.")
+        lines.append("all packets were delivered successfully")
 
     return "\n".join(lines)

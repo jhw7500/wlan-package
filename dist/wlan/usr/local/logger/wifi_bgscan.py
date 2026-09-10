@@ -78,18 +78,18 @@ def is_wpa_connected(interface="mlan0"):
             capture_output=True, text=True, timeout=5
         )
         if result.returncode != 0:
-            logger.message("err", f"[{interface}] wpa_cli status exited {result.returncode} — treating as disconnected", _EXTRA_())
+            logger.message("err", f"[{interface}] wpa_cli status exited {result.returncode} - treating as disconnected", _EXTRA_())
             return False
         for line in result.stdout.splitlines():
             if line.startswith("wpa_state="):
                 return line.split("=", 1)[1].strip() == "COMPLETED"
         # exit 0인데 wpa_state= 라인 부재(소켓 오류 등) — silent False 방지 위해 로그
-        logger.message("err", f"[{interface}] wpa_state not found in wpa_cli output — treating as disconnected", _EXTRA_())
+        logger.message("err", f"[{interface}] wpa_state not found in wpa_cli output - treating as disconnected", _EXTRA_())
     except FileNotFoundError:
         # wpa_cli 부재는 영구 상태 → 매 호출 로그 flood 방지 위해 1회만 남긴다.
         global _WPA_CLI_WARNED
         if not _WPA_CLI_WARNED:
-            logger.message("err", f"[{interface}] wpa_cli not found — bgscan cannot verify connection (skipping scans)", _EXTRA_())
+            logger.message("err", f"[{interface}] wpa_cli not found - bgscan cannot verify connection (skipping scans)", _EXTRA_())
             _WPA_CLI_WARNED = True
     except Exception as e:
         logger.message("err", f"[{interface}] wpa_cli status error: {e}", _EXTRA_())
@@ -435,7 +435,7 @@ def build_scan_request(conf_path, backend, boot_policy=None):
             logger.message(
                 "warn",
                 f"[{IFACE}] ssid_filter=false + extra SSIDs: wildcard(\"\") probe inserted "
-                "— verify broad discovery on new drivers/platforms",
+                "- verify broad discovery on new drivers/platforms",
                 _EXTRA_(),
             )
             _WILDCARD_PROBE_WARNED = True
@@ -543,7 +543,7 @@ def main_loop(backend, boot_policy):
 
     # 스캔 파라미터(ssid/freq/interval/필터)는 periodic_scan이 매 스캔 직전 재로드하며,
     # 초기값은 periodic_scan의 "bgscan start" 로그에 찍힌다(여기서 중복 read 안 함).
-    logger.message("info", f"[{IFACE}] version: {VERSION} (스캔 파라미터는 매 스캔 직전 재로드)", _EXTRA_())
+    logger.message("info", f"[{IFACE}] version: {VERSION} (scan parameters reload immediately before each scan)", _EXTRA_())
     periodic_scan(WPA_CONF_FILE, backend, boot_policy)
 
 if __name__ == "__main__":
