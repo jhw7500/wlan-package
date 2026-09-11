@@ -495,7 +495,7 @@ def main():
     # ValueError 를 던져, 프로세스는 살아 있는데 아무것도 서빙하지 않는 조용한 고장이 된다.
     # 그 상태보다 하위호환 루트로 폴백하고 stderr(→snmpd→syslog)에 남기는 편이 낫다.
     if not re.fullmatch(r"(\.\d+)+", base):
-        sys.stderr.write("wifi_snmp_pp: invalid base OID %r — falling back to %s\n"
+        sys.stderr.write("wifi_snmp_pp: invalid base OID %r - falling back to %s\n"
                          % (sys.argv[1] if len(sys.argv) > 1 else base, DEFAULT_BASE))
         base = DEFAULT_BASE
 

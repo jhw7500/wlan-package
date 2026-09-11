@@ -200,7 +200,7 @@ def parse_last_scan_block(scan_log_path=SCAN_LOG, max_age_sec=None):
     if block_ts is not None:
         age_sec = time.time() - block_ts
         if age_sec > max_age_sec:
-            print(f"scan data stale ({int(age_sec)}s old > {max_age_sec}s limit) — run a scan first")
+            print(f"scan data stale ({int(age_sec)}s old > {max_age_sec}s limit) - run a scan first")
             return []
 
     block_lines = lines[start_idx + 1:]
@@ -282,7 +282,7 @@ def build_candidate_list():
         # 필터가 전부 걸러낸 경우를 침묵으로 두면 운영자가 이유를 알 수 없다
         # (종전엔 메시지 없이 exit 1 이었다).
         print(
-            f"scan has {scanned} AP(s) but none on '{current_ssid}' — "
+            f"scan has {scanned} AP(s) but none on '{current_ssid}' - "
             "nothing to roam to within this SSID"
         )
 

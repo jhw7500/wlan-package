@@ -198,7 +198,7 @@ def notify_roam(iface, from_bssid, to_bssid, port=DEFAULT_PORT,
 
         msg = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         if len(msg) > MAX_DATAGRAM:
-            print(f"[roam_notify] datagram {len(msg)}B > {MAX_DATAGRAM}B cap — dropped",
+            print(f"[roam_notify] datagram {len(msg)}B > {MAX_DATAGRAM}B cap - dropped",
                   file=sys.stderr)
             return False
 
@@ -301,20 +301,20 @@ def confirm_roam(iface, target_bssid, wait_s=CONFIRM_WAIT_S, poll_s=0.5):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="opcd로 로밍 완료 통지(UDP)를 보낸다.")
-    parser.add_argument("--iface", default="mlan0", help="무선 인터페이스 (기본 mlan0)")
+        description="Send a roaming-complete notification to opcd over UDP")
+    parser.add_argument("--iface", default="mlan0", help="wireless interface (default mlan0)")
     parser.add_argument("--from", dest="from_bssid", default="",
-                        help="이전 AP BSSID (로그용, 선택)")
+                        help="previous AP BSSID (for logging, optional)")
     parser.add_argument("--to", dest="to_bssid", default="",
-                        help="대상 AP BSSID (link.address 폴백)")
+                        help="target AP BSSID (link.address fallback)")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT,
-                        help=f"opcd UDP 포트 (기본 {DEFAULT_PORT})")
+                        help=f"opcd UDP port (default {DEFAULT_PORT})")
     parser.add_argument("--channel", type=int, default=None,
-                        help="대상 AP 채널 (권위값; 생략 시 link.json)")
+                        help="target AP channel (authoritative; link.json if omitted)")
     parser.add_argument("--freq", type=int, default=None,
-                        help="대상 AP 주파수 MHz (권위값; 생략 시 channel 파생/link.json)")
+                        help="target AP frequency in MHz (authoritative; derived from channel/link.json if omitted)")
     parser.add_argument("--rssi", type=int, default=None,
-                        help="대상 AP RSSI dBm (권위값; 생략 시 link.json)")
+                        help="target AP RSSI in dBm (authoritative; link.json if omitted)")
     args = parser.parse_args(argv)
 
     ok = notify_roam(args.iface, args.from_bssid, args.to_bssid, args.port,

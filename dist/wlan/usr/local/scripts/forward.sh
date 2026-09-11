@@ -22,5 +22,4 @@ ip addr add 192.168.0.10/24 dev $WLAN_IF
 ip link set $ETH_IF up
 ip link set $WLAN_IF up
 
-echo "3주소 모드 클라이언트 브릿지 설정 완료"
-
+echo "3-address client bridge configured"

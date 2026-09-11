@@ -97,6 +97,8 @@ REQUIRED_PATHS = {
     # The source archive must remain independently buildable: pre-build gates
     # execute both logger and script suites from dist rather than pruning them.
     "dist/wlan/usr/local/logger/tests/test_config_default_sync.py",
+    "dist/wlan/usr/local/logger/tests/test_postinst_progress.py",
+    "dist/wlan/usr/local/logger/tests/test_runtime_output_english.py",
     "dist/wlan/usr/local/scripts/tests/test_wifi_log_extract.py",
     "docs/wifi_init_conf.schema.json",
     "docs/wifi_init_conf_guide.md",

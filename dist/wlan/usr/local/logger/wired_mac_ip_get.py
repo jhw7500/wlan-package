@@ -417,7 +417,7 @@ def apply_peer_host_route(peer_ip, peer_mac=None):
                                f"{' src ' + src_ip if src_ip else ''}", _EXTRA_())
     elif "prefsrc" in (r.stderr or ""):
         logger.message("info",
-            f"[{IFACE}] host route deferred: src {src_ip} not yet local (boot race) — "
+            f"[{IFACE}] host route deferred: src {src_ip} not yet local (boot race) - "
             f"wifi_init.sh reapplies after addr assignment", _EXTRA_())
     else:
         logger.message("err",
@@ -482,7 +482,7 @@ def main():
     # ── 3단계: IP 확보 (MAC은 이미 저장됨) ──
     # wbridge.ip_discovery=false면 IP 탐색을 생략하고 MAC만 확보한 채 즉시 종료(부팅 가속).
     if not IP_DISCOVERY:
-        logger.message("info", f"[{IFACE}] ip_discovery=false → skip IP discovery (MAC only)", _EXTRA_())
+        logger.message("info", f"[{IFACE}] ip_discovery=false -> skip IP discovery (MAC only)", _EXTRA_())
     else:
         if not ip:
             # 3-1) 패시브 관찰 (타임아웃 축소)

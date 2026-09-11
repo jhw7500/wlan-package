@@ -87,7 +87,7 @@ if [ -f "$LINK_FILE" ]; then
     logger -p local0.err "[$tag:$LINENO] [$IFACE] failed to write $LINK_FILE"
     exit 1
   }
-  logger -p local0.info "[$tag:$LINENO] [$IFACE] Written $LINK_FILE → $NEW_MAC"
+  logger -p local0.info "[$tag:$LINENO] [$IFACE] Written $LINK_FILE -> $NEW_MAC"
 else
   logger -p local0.warn "[$tag:$LINENO] [$IFACE] link file not found: $LINK_FILE"
 fi
@@ -103,4 +103,4 @@ fi || {
   logger -p local0.err "[$tag:$LINENO] [$IFACE] failed to write $BACKUP_FILE"
   exit 1
 }
-logger -p local0.info "[$tag:$LINENO] [$IFACE] Written $BACKUP_FILE → $NEW_MAC"
+logger -p local0.info "[$tag:$LINENO] [$IFACE] Written $BACKUP_FILE -> $NEW_MAC"

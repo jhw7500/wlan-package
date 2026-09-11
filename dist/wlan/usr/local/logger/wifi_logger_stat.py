@@ -56,6 +56,7 @@ def load_logger_config(iface):
 
 # 새 로그는 timestamp 대괄호를 쓰지 않는다. 기존 누적 로그도 재시작 후 읽을 수 있도록
 # 여는 괄호가 있을 때만 닫는 괄호를 요구해 두 형식을 모두 허용한다.
+# 마지막 패턴은 끝에 부가 정보가 더 있어도 허용한다.
 LOG_LINE_RE = re.compile(r"""
     ^(?P<timestamp_bracket>\[)?
         (?P<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})
@@ -75,7 +76,7 @@ LOG_LINE_RE = re.compile(r"""
     FAIL:(?P<tx_fail>\d+),\s+
     (?:RETRY:(?P<retry_delta>\d+)\((?P<retry_pct>\d+(?:\.\d+)?)%\),\s+)?
     T:(?P<time>\d+)
-    (?:\s*.*)?$            # 끝에 부가 정보가 더 있어도 허용
+    (?:\s*.*)?$
 """, re.VERBOSE)
 
 def handle_sigterm(signum, frame):
@@ -714,7 +715,7 @@ if __name__ == "__main__":
     try:
         _lock_fp = open(f"/run/wifi_logger_stat_{IFACE}.lock", "w")
     except OSError as e:
-        logger.message("warning", f"[{IFACE}] lock file open failed: {e} — exit", _EXTRA_())
+        logger.message("warning", f"[{IFACE}] lock file open failed: {e} - exit", _EXTRA_())
         sys.exit(1)   # open 실패는 운영 에러(권한/mount) — 중복 회피 exit 0과 구분
     _locked = False
     for _ in range(5):
@@ -725,7 +726,7 @@ if __name__ == "__main__":
         except OSError:
             time.sleep(1)
     if not _locked:
-        logger.message("warning", f"[{IFACE}] another wifi_logger_stat already running — exit", _EXTRA_())
+        logger.message("warning", f"[{IFACE}] another wifi_logger_stat already running - exit", _EXTRA_())
         # exit 3 = 중복 실행(flock-loss). systemd 유닛의 RestartPreventExitStatus=3 이 이
         # 종료를 재시작하지 않게 해 재시작 폭주를 막는다(이미 다른 인스턴스가 생산 중).
         sys.exit(3)

@@ -22,7 +22,7 @@ IFACE="${2:-mlan0}"
 
 usage() {
     echo "usage: $tag <ip> [<iface>]" >&2
-    echo "  <ip>/32 dev $ETH_IFACE peer host route를 등록한다." >&2
+    echo "  Registers the <ip>/32 dev $ETH_IFACE peer host route." >&2
 }
 
 # ── IPv4 검증 (wifi.sh is_valid_ipv4 준용: leading-zero 거부) ──
@@ -55,7 +55,7 @@ fi
 if command -v jq >/dev/null 2>&1 && [ -f "$WIFI_INIT_CONF_JSON" ]; then
     _pr=$(jq -r '.wbridge.peer_route.enabled' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
     if [ "$_pr" = "false" ]; then
-        echo "[WARN] $tag: peer_route.enabled=false — eth0 /32 mirror/sysctl 부재로 반쪽짜리일 수 있음. route는 등록하고 진행." >&2
+        echo "[WARN] $tag: peer_route.enabled=false - eth0 /32 mirror/sysctl may be incomplete. Registering route anyway." >&2
         logger -p local0.warn "[$tag:$LINENO] peer_route=false but registering route for $IP anyway"
     fi
 fi

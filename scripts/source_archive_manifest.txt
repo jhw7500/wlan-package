@@ -236,6 +236,7 @@ dist/wlan/usr/local/logger/tests/test_logger_scan_real_pipe.py
 dist/wlan/usr/local/logger/tests/test_logger_scan_stale_threshold.py
 dist/wlan/usr/local/logger/tests/test_parse_mwlan.py
 dist/wlan/usr/local/logger/tests/test_passive_roam_stale_gate.py
+dist/wlan/usr/local/logger/tests/test_postinst_progress.py
 dist/wlan/usr/local/logger/tests/test_print.py
 dist/wlan/usr/local/logger/tests/test_roam_backoff.py
 dist/wlan/usr/local/logger/tests/test_roam_candidate_selection.py
@@ -253,6 +254,7 @@ dist/wlan/usr/local/logger/tests/test_roam_select_network.py
 dist/wlan/usr/local/logger/tests/test_roam_state_per_iface.py
 dist/wlan/usr/local/logger/tests/test_roam_to_ap.py
 dist/wlan/usr/local/logger/tests/test_roam_to_bssid.py
+dist/wlan/usr/local/logger/tests/test_runtime_output_english.py
 dist/wlan/usr/local/logger/tests/test_staged_scan.py
 dist/wlan/usr/local/logger/tests/test_supplicant_state.py
 dist/wlan/usr/local/logger/tests/test_wifi_snmp_logging.py

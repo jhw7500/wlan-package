@@ -333,7 +333,7 @@ wifi_fw_apply_antcfg() {
         ' "$json" 2>/dev/null) || differs=""
         case "$differs" in
             true)
-                wifi_fw_log local0.warn "[$iface] antcfg differs from $other; adapter-level setting — last applied wins"
+                wifi_fw_log local0.warn "[$iface] antcfg differs from $other; adapter-level setting - last applied wins"
                 ;;
             false) ;;
             *)
@@ -370,7 +370,7 @@ wifi_fw_apply_antcfg() {
             wifi_fw_log local0.info "[$iface] antcfg configured (attempt $attempt/$WIFI_FW_VERIFY_ATTEMPTS): tx=$tx rx=$rx"
             "$WIFI_MLANUTL" "$iface" antcfg "$tx" "$rx" >/dev/null 2>&1 || set_rc=1
         else
-            wifi_fw_log local0.info "[$iface] antcfg configured (attempt $attempt/$WIFI_FW_VERIFY_ATTEMPTS): tx=$tx (rx 생략 — tx가 Tx/Rx 공통)"
+            wifi_fw_log local0.info "[$iface] antcfg configured (attempt $attempt/$WIFI_FW_VERIFY_ATTEMPTS): tx=$tx (rx omitted - tx applies to both Tx/Rx)"
             "$WIFI_MLANUTL" "$iface" antcfg "$tx" >/dev/null 2>&1 || set_rc=1
         fi
         if [ "${set_rc:-0}" = 1 ]; then
@@ -488,8 +488,8 @@ wifi_fw_apply_antcfgnss() {
     else
         rc=$?
         case "$rc" in
-            2) wifi_fw_log local0.info "[$iface] antcfgnss disabled; skip (host NSS intent 기본값 유지)" ;;
-            *) wifi_fw_log local0.err "[$iface] invalid antcfgnss section; skip (host NSS intent 기본값 유지)" ;;
+            2) wifi_fw_log local0.info "[$iface] antcfgnss disabled; skip (keeping default host NSS intent)" ;;
+            *) wifi_fw_log local0.err "[$iface] invalid antcfgnss section; skip (keeping default host NSS intent)" ;;
         esac
         return 0
     fi
@@ -502,7 +502,7 @@ wifi_fw_apply_antcfgnss() {
         ' "$json" 2>/dev/null) || differs=""
         case "$differs" in
             true)
-                wifi_fw_log local0.warn "[$iface] antcfgnss differs from $other; adapter-level setting — last applied wins"
+                wifi_fw_log local0.warn "[$iface] antcfgnss differs from $other; adapter-level setting - last applied wins"
                 ;;
             false) ;;
             *)
@@ -539,7 +539,7 @@ wifi_fw_apply_antcfgnss() {
         fi
         if [ "$verify_enabled" != true ]; then
             live=$("$WIFI_MLANUTL" "$iface" antcfg 2>&1) || live=""
-            wifi_fw_log local0.info "[$iface] antcfgnss SET ok (verify 미설정; read-back: $(printf '%s' "$live" | tr '\n' ' '))"
+            wifi_fw_log local0.info "[$iface] antcfgnss SET ok (verification is not configured; read-back: $(printf '%s' "$live" | tr '\n' ' '))"
             _wifi_fw_unapplied_clear "$iface" antcfgnss
             return 0
         fi
@@ -611,11 +611,11 @@ wifi_fw_apply_rate() {
     # 읽기 실패(빈 결과)를 disabled 와 같은 info 로 묻으면, 설정이 켜져 있는데 적용되지
     # 않은 상태가 조용히 지나간다 — 사유를 구분해 warn 으로 남긴다.
     if [ -z "$enabled" ]; then
-        wifi_fw_log local0.warn "[$iface] rate_adapt.enabled read failed; skip (마지막 SET값 유지; 콜드부팅 후에만 FW 기본값)"
+        wifi_fw_log local0.warn "[$iface] rate_adapt.enabled read failed; skip (keeping last SET value; firmware default only after cold boot)"
         return 0
     fi
     if [ "$enabled" != true ]; then
-        wifi_fw_log local0.info "[$iface] rate_adapt disabled; skip (마지막 SET값 유지; 콜드부팅 후에만 FW 기본값)"
+        wifi_fw_log local0.info "[$iface] rate_adapt disabled; skip (keeping last SET value; firmware default only after cold boot)"
         return 0
     fi
     if ! wifi_fw_validate_rate_config "$json" "$iface"; then

@@ -166,7 +166,7 @@ while true; do
     # 스크립트 내부에서 대기한다. 모드 해제 시 다음 틱부터 정상 감시 재개.
     if [[ "$IFACE" != "eth0" ]] && is_mfg_mode; then
         if (( MFG_IDLE_LOGGED == 0 )); then
-            logger -p local0.info "[$tag:$LINENO] [$IFACE] mfg_mode=1 → checker idle (MFG profile)"
+            logger -p local0.info "[$tag:$LINENO] [$IFACE] mfg_mode=1 -> checker idle (MFG profile)"
             MFG_IDLE_LOGGED=1
         fi
         ERR_CNT=0; FAULT_CNT=0; UNSTABLE_START=0; REASSOC_DONE=0; REBOOT_F=0
@@ -242,7 +242,7 @@ while true; do
                 [[ "$_nid" =~ ^[0-9]+$ ]] || continue
                 _bg=$(wpa_cli -i "$IFACE" get_network "$_nid" bgscan 2>/dev/null)
                 if [[ -n "$_bg" && "$_bg" != "FAIL" && "$_bg" != '""' ]]; then
-                    logger -p local0.warning "[$tag:$LINENO] [$IFACE] network $_nid has unsupported built-in bgscan=$_bg — remove it; package wifi_bgscan owns periodic scan scheduling"
+                    logger -p local0.warning "[$tag:$LINENO] [$IFACE] network $_nid has unsupported built-in bgscan=$_bg - remove it; package wifi_bgscan owns periodic scan scheduling"
                 fi
             done < <(wpa_cli -i "$IFACE" list_networks 2>/dev/null | tail -n +2)
             # 보조 탐지는 현재 supplicant 실행(InvocationID)의 journal 로 한정 —
@@ -252,7 +252,7 @@ while true; do
             # 있으므로 현재 실행 journal 에 그 라인이 있고, 여전히 경고된다(정당).
             _inv=$(systemctl show -p InvocationID --value "wpa_supplicant@${IFACE}" 2>/dev/null)
             if [[ -n "$_inv" ]] && journalctl -q _SYSTEMD_INVOCATION_ID="$_inv" 2>/dev/null | grep -q "bgscan: Initialized module"; then
-                logger -p local0.warning "[$tag:$LINENO] [$IFACE] journal: unsupported built-in bgscan module initialized — runtime global 'set bgscan' suspected (ctrl-undetectable)"
+                logger -p local0.warning "[$tag:$LINENO] [$IFACE] journal: unsupported built-in bgscan module initialized - runtime global 'set bgscan' suspected (ctrl-undetectable)"
             fi
             unset _inv
         fi

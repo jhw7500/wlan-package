@@ -71,11 +71,11 @@ python3 ping_monitor.py -H 10.0.0.100
 ### 실시간 터미널
 
 ```
-=== ping-monitor 세션 시작 ===
-시간: 2026-03-17 14:30:00
-모드: dual
-인터페이스: eth0
-인터페이스2: mlan0
+=== ping-monitor session started ===
+time: 2026-03-17 14:30:00
+mode: dual
+interface: eth0
+interface2: mlan0
 ===
 
 14:30:01.123456 [eth0]  REQ 192.168.1.100 > 192.168.1.1 seq=1
@@ -87,15 +87,15 @@ python3 ping_monitor.py -H 10.0.0.100
 ### 종료 시 분석
 
 ```
-=== 미전달 패킷 분석 ===
-캡처: eth0=200, mlan0=198 패킷
-매칭: 198, eth0에만=2, mlan0에만=0
-손실률: 1.0%
+=== undelivered packet analysis ===
+captured: eth0=200, mlan0=198 packets
+matched: 198, only on eth0=2, only on mlan0=0
+loss rate: 1.0%
 
-브릿지 지연: 평균=1.234ms 최소=0.567ms 최대=5.678ms
+bridge delay: average=1.234ms minimum=0.567ms maximum=5.678ms
 
-[eth0에서 전달되지 않음 → mlan0]
-  REQ id=1234 seq=45 192.168.1.100→192.168.1.1 t=1710654601.123456
+[not delivered from eth0 -> mlan0]
+  REQ id=1234 seq=45 192.168.1.100->192.168.1.1 t=1710654601.123456
 ```
 
 ## 출력 파일

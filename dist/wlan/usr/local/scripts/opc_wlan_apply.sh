@@ -74,9 +74,9 @@ wifi_scan_transition_lock_acquire "$IFACE" \
 # boot snapshot Mode A 또는 실제 다중블록 conf는 SSID 일괄교체가 기본 SSID를
 # 소실시키므로 거부한다(exit 2=usage). freq 변경은 물리 대역 공통이라 허용한다.
 if [ "$HAVE_SSID" = 1 ] && wifi_wpa_run_child_call wifi_wpa_conf_is_multi_topology "$IFACE" "$CONF"; then
-    echo "opc_wlan_apply: $CONF 는 다중블록 모드 — ssid 일괄변경 거부(기본 SSID 소실 방지)." >&2
-    echo "                SSID 전환은 boot-latched owner policy에 따라 자동 처리됩니다." >&2
-    echo "                현재 network 재연결은 SSID 없이 'wifi <iface> connect'를 사용하세요." >&2
+    echo "opc_wlan_apply: $CONF uses multiple network blocks - refusing bulk ssid change" >&2
+    echo "                SSID selection is handled automatically by the boot-latched owner policy." >&2
+    echo "                To reconnect the current network, use 'wifi <iface> connect' without an SSID." >&2
     exit 2
 fi
 
@@ -111,7 +111,7 @@ case "$FREQS" in *[!0-9\ ]*) echo "opc_wlan_apply: invalid freq '$FREQS' (digits
 # 실패를 알린다. (freq 경로는 -v 전달이라 ENVIRON 과 무관 — 밴드락은 영향받지 않는다.)
 if [ "$HAVE_SSID" = 1 ]; then
     OPC_ENVIRON_PROBE=ok wifi_wpa_run_child awk 'BEGIN { exit(ENVIRON["OPC_ENVIRON_PROBE"] == "ok" ? 0 : 1) }' </dev/null \
-        || { echo "opc_wlan_apply: awk lacks ENVIRON support — cannot apply ssid safely" >&2; exit 4; }
+        || { echo "opc_wlan_apply: awk lacks ENVIRON support - cannot apply ssid safely" >&2; exit 4; }
 fi
 # trap 을 mktemp 보다 먼저 등록 — 임시파일 생성과 trap 등록 사이에 시그널이 와도
 # 파일이 남지 않도록(누출 창 제거). ROLLBACK_REQUIRED는 새 conf 설치 직전부터
@@ -165,9 +165,9 @@ opc_transaction_cleanup() {
             # live daemon도 복원본을 읽게 한다. 원래 실패/cancel의 반환값은 보존한다.
             wifi_wpa_run_child wpa_cli -i "$IFACE" reconfigure >/dev/null 2>&1 || true
             if [ "$cleanup_rc" -eq 5 ]; then
-                echo "opc_wlan_apply: reconfigure failed for $IFACE — conf rolled back" >&2
+                echo "opc_wlan_apply: reconfigure failed for $IFACE - conf rolled back" >&2
             else
-                echo "opc_wlan_apply: transaction interrupted — conf rolled back" >&2
+                echo "opc_wlan_apply: transaction interrupted - conf rolled back" >&2
             fi
         else
             [ -z "$TMP" ] || wifi_wpa_run_child rm -f "$TMP"
@@ -217,7 +217,7 @@ OPC_SSID_CONF="${SSID_CONF_VALUE:-}" wifi_wpa_run_child awk -v do_ssid="$HAVE_SS
     { print }
     END {
         if (blocks == 0) { print "error: no network={ block in " FILENAME > "/dev/stderr"; exit 1 }
-        if (blocks > 1) { print "warn: " blocks " network blocks present — all modified (single-block assumed)" > "/dev/stderr" }
+        if (blocks > 1) { print "warn: " blocks " network blocks present - all modified (single-block assumed)" > "/dev/stderr" }
     }
 ' "$CONF" > "$EDIT_TMP" || { echo "opc_wlan_apply: conf edit failed" >&2; exit 4; }
 

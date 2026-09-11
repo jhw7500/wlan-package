@@ -63,8 +63,8 @@ case "$_conf_status" in
     1) logger -p local0.warn "[$tag:$LINENO] $JSON not found, skip"; exit "$STRICT" ;;
     2) logger -p local0.warn "[$tag:$LINENO] jq not available, skip"; exit "$STRICT" ;;
     *)
-        logger -p local0.crit "[$tag:$LINENO] CRITICAL: $JSON parse failed — refusing to apply (would overwrite operator intent with defaults)"
-        printf '[%s:%s] CRITICAL: %s parse failed — aborted\n' "$tag" "$LINENO" "$JSON" >&2
+        logger -p local0.crit "[$tag:$LINENO] CRITICAL: $JSON parse failed - refusing to apply (would overwrite operator intent with defaults)"
+        printf '[%s:%s] CRITICAL: %s parse failed - aborted\n' "$tag" "$LINENO" "$JSON" >&2
         exit 1
         ;;
 esac
@@ -179,7 +179,7 @@ apply wifi_logger.service     "$(get_bool ".logger.enabled" "true")"
 apply wifi_logger@eth0.service "$(get_bool ".eth0.logger.enabled" "true")"
 
 if [ "${MFG_MODE:-0}" = "1" ]; then
-    logger -p local0.info "[$tag:$LINENO] mfg_mode=1 → MFG profile: disable+stop STA/FW-touching units"
+    logger -p local0.info "[$tag:$LINENO] mfg_mode=1 -> MFG profile: disable+stop STA/FW-touching units"
     MFG_UNITS=(wifi_ping_monitor.service wifi_thermal_state.timer wifi_mgmt_log.timer
                snmpd.service opcd.service wlan_fw_watch.service)
     for iface in mlan0 mlan1; do
@@ -247,7 +247,7 @@ SNMP_TRAP_ENABLED=$(get_bool ".snmp.trap.enabled" "false")
 for iface in mlan0 mlan1; do
     iface_en=$(get_bool ".${iface}.enabled" "false")
     if [ "$iface_en" = "false" ]; then
-        logger -p local0.info "[$tag:$LINENO] [$iface] disabled → all child units disable"
+        logger -p local0.info "[$tag:$LINENO] [$iface] disabled -> all child units disable"
         for u in wpa_supplicant wifi_logger wifi_checker wifi_event \
                  wifi_bridge wifi_bgscan wifi_roam wifi_periodic_roam wifi_arping; do
             case "$u" in

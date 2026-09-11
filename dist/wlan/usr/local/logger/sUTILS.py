@@ -354,7 +354,7 @@ def convert_to_hex(self, data):
         # 이미 bytes 객체인 경우
         return data.hex()
     else:
-        raise TypeError("data는 numpy 배열이나 bytes 객체여야 합니다.")
+        raise TypeError("data must be a numpy array or bytes object")
         
 def convert_to_hex_float(self,data):
     if isinstance(data, np.ndarray):
@@ -364,7 +364,7 @@ def convert_to_hex_float(self,data):
         # 이미 bytes 객체인 경우
         return data.hex()
     else:
-        raise TypeError("data는 numpy 배열이나 bytes 객체여야 합니다.")
+        raise TypeError("data must be a numpy array or bytes object")
 
 def hex_to_float_array(self, hex_str, dtype=np.float32):
     # 헥사 문자열을 바이트로 변환

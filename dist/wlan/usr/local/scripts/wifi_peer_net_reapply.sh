@@ -62,7 +62,7 @@ if [ -n "$_e_addr" ] && [ "${_e_addr%/*}" != "$_m_ip" ]; then
     ip addr del "$_e_addr" dev eth0 2>/dev/null
     _del_rc=$?
     ip addr add "$_e_addr" dev eth0 2>/dev/null \
-        || { _fail=1; logger -p local0.warn "[$tag:$LINENO] mgmt addr re-add failed ($_e_addr dev eth0; 선행 del rc=$_del_rc)"; }
+    || { _fail=1; logger -p local0.warn "[$tag:$LINENO] mgmt addr re-add failed ($_e_addr dev eth0; preceding del rc=$_del_rc)"; }
 fi
 
 # 2) peer host route + permanent neigh (발견 결과가 있을 때만)
@@ -78,7 +78,7 @@ if echo "$_p_ip" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
 fi
 
 if [ "$_fail" = "1" ]; then
-    logger -p local0.warn "[$tag:$LINENO] applied with errors (위 warn 참조): mirror=${_m_ip}/32 first, sub=${_e_addr:-<none>}, peer=${_p_ip:-<undiscovered>} (peer_route=$_pr local_hairpin=${_lhp:-0})"
+    logger -p local0.warn "[$tag:$LINENO] applied with errors (see warnings above): mirror=${_m_ip}/32 first, sub=${_e_addr:-<none>}, peer=${_p_ip:-<undiscovered>} (peer_route=$_pr local_hairpin=${_lhp:-0})"
 else
     logger -p local0.info "[$tag:$LINENO] applied: mirror=${_m_ip}/32 first, sub=${_e_addr:-<none>}, peer=${_p_ip:-<undiscovered>} (peer_route=$_pr local_hairpin=${_lhp:-0})"
 fi

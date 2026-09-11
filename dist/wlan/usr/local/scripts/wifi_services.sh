@@ -59,7 +59,7 @@ cmd_start() {
     # MFG 이중 안전장치: wifi_apply_enabled.sh의 MFG disable이 누락/실패해 enable이
     # 남아 있어도 MFG FW 위에서 STA 데몬이 기동되지 않도록 무선 목록을 건너뛴다.
     if [ "$(_mfg_mode)" = "1" ]; then
-        logger -p local0.info "[$tag:$LINENO] mfg_mode=1 → skip wireless child unit start (MFG profile)"
+        logger -p local0.info "[$tag:$LINENO] mfg_mode=1 -> skip wireless child unit start (MFG profile)"
         return 0
     fi
     wifi_services_start_wireless

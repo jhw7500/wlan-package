@@ -57,7 +57,7 @@ esac
 unit="wpa_supplicant@${iface}.service"
 # 조용히 성공하면 배포 오류(경로 오타·권한)가 "아무 일도 없었음"으로 보인다.
 if [ ! -x "$SYSTEMCTL" ]; then
-    _err "$SYSTEMCTL not executable — cannot re-attach $unit"
+    _err "$SYSTEMCTL not executable - cannot re-attach $unit"
     exit 0
 fi
 
@@ -65,14 +65,14 @@ state=$("$SYSTEMCTL" is-active "$unit" 2>/dev/null) || true
 
 case "$state" in
     active|activating)
-        _info "[$iface] netdev re-created while unit $state — restart to re-attach"
+        _info "[$iface] netdev re-created while unit $state - restart to re-attach"
         "$SYSTEMCTL" --no-block restart "$unit" \
             || _err "[$iface] restart $unit failed"
         ;;
     failed)
         # 운영자가 꺼둔 유닛은 되살리지 않는다 — 이 분기만 start 를 쓴다.
         if "$SYSTEMCTL" is-enabled --quiet "$unit" 2>/dev/null; then
-            _warn "[$iface] unit failed (start-limit exhausted while netdev was absent) — reset-failed + start"
+            _warn "[$iface] unit failed (start-limit exhausted while netdev was absent) - reset-failed + start"
             # 실패를 삼키지 않는다 — 다른 분기와 같은 규약. reset-failed 가 실패하면
             # 이어지는 start 도 start-limit 에 다시 걸려 조용히 아무 일도 안 일어난다.
             "$SYSTEMCTL" reset-failed "$unit" \
@@ -80,7 +80,7 @@ case "$state" in
             "$SYSTEMCTL" --no-block start "$unit" \
                 || _err "[$iface] start $unit failed"
         else
-            _info "[$iface] unit failed but disabled — leave stopped (operator intent)"
+            _info "[$iface] unit failed but disabled - leave stopped (operator intent)"
         fi
         ;;
     *)
