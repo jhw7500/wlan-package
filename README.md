@@ -315,6 +315,16 @@ wifi-dumb -i mlan0 -o eth0 -v
 
 See individual component licenses in their respective directories.
 
+## Pull Request Reviews
+
+Managed Claude, Gemini, and OpenCode reviews are opt-in in the current workflow
+configuration. On a ready, same-repository pull request, add `review:request` to
+request the enabled reviewers. Do not combine it with `review:skip`.
+
+When checking the result, verify the reviewed commit and that the provider
+actually ran. A successful `Workflow Skipped` job does not mean a model reviewed
+the pull request.
+
 ## Support
 
 For issues related to:
