@@ -1,4 +1,5 @@
 """9. 로밍 전후 영향 분석 — 각 로밍 이벤트의 retry/RSSI/ping 변화를 측정"""
+from collections import defaultdict, deque
 from typing import List, Dict
 from models import Frame, AnalysisSection
 from detector import mac_name
@@ -76,18 +77,21 @@ def analyze(frames: List[Frame], roles: Dict, index=None) -> AnalysisSection:
 
         # ping 체크 (전후 윈도우 내에서만)
         window_frames = before_f + after_f
-        ping_req = {}
+        ping_req = defaultdict(deque)
         ping_matched = 0
         for f in window_frames:
             if f.is_icmp_request and not f.retry:
                 key = (f.ip_src, f.ip_dst, f.icmp_ident, f.icmp_seq)
-                ping_req[key] = f
+                ping_req[key].append(f)
             elif f.is_icmp_reply:
                 key = (f.ip_dst, f.ip_src, f.icmp_ident, f.icmp_seq)
-                if key in ping_req:
-                    del ping_req[key]
+                pending = ping_req.get(key)
+                if pending:
+                    pending.popleft()
+                    if not pending:
+                        del ping_req[key]
                     ping_matched += 1
-        ping_lost = len(ping_req)
+        ping_lost = sum(len(pending) for pending in ping_req.values())
 
         has_problem = (a["retry_pct"] > 50 or ping_lost > 0)
         if has_problem:

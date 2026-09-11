@@ -1,6 +1,6 @@
 """11. STA별 종합 진단 — 모든 분석 결과를 교차하여 현장 제안 생성"""
 from typing import List, Dict
-from collections import Counter
+from collections import Counter, defaultdict, deque
 from models import Frame, AnalysisSection
 from detector import mac_name
 
@@ -40,18 +40,21 @@ def analyze(frames: List[Frame], roles: Dict, index=None) -> AnalysisSection:
         auth_count = sum(1 for f in roaming_frames if f.subtype == "11")
 
         # Ping loss (STA 프레임 내에서만 검색)
-        ping_req = {}
+        ping_req = defaultdict(deque)
         ping_matched = 0
         for f in sta_frames:
             if f.is_icmp_request and not f.retry:
                 key = (f.ip_src, f.ip_dst, f.icmp_ident, f.icmp_seq)
-                ping_req[key] = f
+                ping_req[key].append(f)
             elif f.is_icmp_reply:
                 key = (f.ip_dst, f.ip_src, f.icmp_ident, f.icmp_seq)
-                if key in ping_req:
-                    del ping_req[key]
+                pending = ping_req.get(key)
+                if pending:
+                    pending.popleft()
+                    if not pending:
+                        del ping_req[key]
                     ping_matched += 1
-        ping_lost = len(ping_req)
+        ping_lost = sum(len(pending) for pending in ping_req.values())
         ping_total = ping_matched + ping_lost
 
         # 분당 최대 retry

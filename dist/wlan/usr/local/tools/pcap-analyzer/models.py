@@ -39,9 +39,9 @@ class Frame:
     tcp_len: str
     tcp_flags: str
     seq: str
-    icmp_ident: str = ""
     icmp_seq: str = ""
     bssid: str = ""
+    icmp_ident: str = ""
 
     @property
     def subtype_name(self) -> str:
