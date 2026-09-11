@@ -32,14 +32,12 @@ def _frame(**kwargs):
         tcp_len="",
         tcp_flags="",
         seq="1",
+        icmp_ident="",
         icmp_seq="",
         bssid="00:80:4c:e1:09:cb",
     )
     defaults.update(kwargs)
-    icmp_ident = defaults.pop("icmp_ident", "")
-    frame = Frame(**defaults)
-    setattr(frame, "icmp_ident", icmp_ident)
-    return frame
+    return Frame(**defaults)
 
 
 def _overlapping_ping_frames():
@@ -71,6 +69,45 @@ def _overlapping_ping_frames():
     ]
 
 
+def _same_key_ping_frames():
+    frames = _overlapping_ping_frames()
+    for frame in frames:
+        frame.icmp_ident = "100"
+    return frames
+
+
+def _with_roaming_event(ping_frames):
+    return [
+        _frame(
+            number=10,
+            epoch=0.0,
+            subtype="11",
+            protocol="802.11",
+            icmp_type="",
+            ip_src="",
+            ip_dst="",
+            icmp_seq="",
+            icmp_ident="",
+            ta="00:50:43:18:fe:01",
+            ra="00:80:4c:e1:09:cb",
+        ),
+        _frame(
+            number=11,
+            epoch=0.01,
+            subtype="2",
+            protocol="802.11",
+            icmp_type="",
+            ip_src="",
+            ip_dst="",
+            icmp_seq="",
+            icmp_ident="",
+            ta="00:50:43:18:fe:01",
+            ra="00:80:4c:e1:09:cb",
+        ),
+        *ping_frames,
+    ]
+
+
 class PingMatchingTests(unittest.TestCase):
     def setUp(self):
         self.roles = {
@@ -82,8 +119,26 @@ class PingMatchingTests(unittest.TestCase):
         section = ping_rtt.analyze(_overlapping_ping_frames(), self.roles)
         self.assertIn("ping 2쌍", section.summary)
 
+    def test_frame_preserves_legacy_positional_optional_fields(self):
+        frame = Frame(
+            1, 0.0, "", False, "40", "", 0, "", "", "", "", "", "",
+            "", "", "", "", "wifi-seq", "icmp-seq", "bssid",
+        )
+
+        self.assertEqual(frame.icmp_seq, "icmp-seq")
+        self.assertEqual(frame.bssid, "bssid")
+        self.assertEqual(frame.icmp_ident, "")
+
+    def test_ping_rtt_preserves_requests_with_the_same_complete_key(self):
+        section = ping_rtt.analyze(_same_key_ping_frames(), self.roles)
+        self.assertIn("ping 2쌍", section.summary)
+
     def test_ping_loss_does_not_report_loss_when_ident_differs(self):
         section = ping_loss.analyze(_overlapping_ping_frames(), self.roles)
+        self.assertEqual(section.summary, "ping loss 없음")
+
+    def test_ping_loss_preserves_requests_with_the_same_complete_key(self):
+        section = ping_loss.analyze(_same_key_ping_frames(), self.roles)
         self.assertEqual(section.summary, "ping loss 없음")
 
     def test_diagnosis_counts_both_ping_replies(self):
@@ -91,36 +146,20 @@ class PingMatchingTests(unittest.TestCase):
         text = "\n".join(section.lines)
         self.assertIn("Ping: 2성공/0손실", text)
 
+    def test_diagnosis_preserves_requests_with_the_same_complete_key(self):
+        section = diagnosis.analyze(_same_key_ping_frames(), self.roles)
+        text = "\n".join(section.lines)
+        self.assertIn("Ping: 2성공/0손실", text)
+
     def test_roaming_impact_uses_ident_aware_ping_matching(self):
-        frames = [
-            _frame(
-                number=10,
-                epoch=0.0,
-                subtype="11",
-                protocol="802.11",
-                icmp_type="",
-                ip_src="",
-                ip_dst="",
-                icmp_seq="",
-                icmp_ident="",
-                ta="00:50:43:18:fe:01",
-                ra="00:80:4c:e1:09:cb",
-            ),
-            _frame(
-                number=11,
-                epoch=0.01,
-                subtype="2",
-                protocol="802.11",
-                icmp_type="",
-                ip_src="",
-                ip_dst="",
-                icmp_seq="",
-                icmp_ident="",
-                ta="00:50:43:18:fe:01",
-                ra="00:80:4c:e1:09:cb",
-            ),
-            *_overlapping_ping_frames(),
-        ]
+        frames = _with_roaming_event(_overlapping_ping_frames())
+        section = roaming_impact.analyze(frames, self.roles)
+        text = "\n".join(section.lines)
+        self.assertIn("Ping: 성공 2, 손실 없음", text)
+        self.assertEqual(section.summary, "로밍 1건, 문제 0건")
+
+    def test_roaming_impact_preserves_requests_with_the_same_complete_key(self):
+        frames = _with_roaming_event(_same_key_ping_frames())
         section = roaming_impact.analyze(frames, self.roles)
         text = "\n".join(section.lines)
         self.assertIn("Ping: 성공 2, 손실 없음", text)

@@ -1,25 +1,28 @@
 """10. Ping Loss 구간 탐지 — 응답 없는 Request + 원인 역추적"""
 from bisect import bisect_left, bisect_right
+from collections import defaultdict, deque
 from typing import List, Dict
 from models import Frame, AnalysisSection
 from detector import mac_name
 
 
 def _find_losses(frames: List[Frame]) -> List[Frame]:
-    requests = {}
+    requests = defaultdict(deque)
     matched_ids = set()
     all_requests = []
 
     for f in frames:
         if f.is_icmp_request and not f.retry:
-            key = (f.ip_src, f.ip_dst, f.icmp_seq) if f.icmp_seq else (f.ip_src, f.ip_dst)
-            requests[key] = f
+            key = (f.ip_src, f.ip_dst, f.icmp_ident, f.icmp_seq)
+            requests[key].append(f)
             all_requests.append((key, f))
         elif f.is_icmp_reply:
-            key = (f.ip_dst, f.ip_src, f.icmp_seq) if f.icmp_seq else (f.ip_dst, f.ip_src)
-            if key in requests:
-                matched_ids.add(id(requests[key]))
-                del requests[key]
+            key = (f.ip_dst, f.ip_src, f.icmp_ident, f.icmp_seq)
+            pending = requests.get(key)
+            if pending:
+                matched_ids.add(id(pending.popleft()))
+                if not pending:
+                    del requests[key]
 
     return [req for _, req in all_requests if id(req) not in matched_ids]
 

@@ -1,5 +1,11 @@
 # WLAN Pcap Analyzer 사용 가이드
 
+> 이 디렉터리는 WLAN 패키지에 포함되는 **타겟 장치 현장 진단용 CLI**입니다.
+> 전체 분석 기능과 웹 UI의 기준 소스는
+> [jhw7500/pcap-analyzer](https://github.com/jhw7500/pcap-analyzer)에서 관리합니다.
+> 웹·AI·다중 캡처 같은 고급 기능은 별도 저장소를 사용하고, 이 배포본에는
+> 타겟에서 즉시 필요한 CLI 분석만 유지합니다. 실행에는 타겟의 `tshark`가 필요합니다.
+
 ## 기본 사용법
 
 ```bash

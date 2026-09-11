@@ -1,4 +1,5 @@
 """5. ICMP Ping Request→Reply 매칭 + RTT 분석"""
+from collections import defaultdict, deque
 from typing import List, Dict
 from models import Frame, AnalysisSection
 from detector import mac_name
@@ -7,17 +8,20 @@ from detector import mac_name
 def analyze(frames: List[Frame], roles: Dict, index=None) -> AnalysisSection:
     lines = []
 
-    requests = {}
+    requests = defaultdict(deque)
     pairs = []
 
     for f in frames:
         if f.is_icmp_request and not f.retry:
-            key = (f.ip_src, f.ip_dst, f.icmp_seq) if f.icmp_seq else (f.ip_src, f.ip_dst)
-            requests[key] = f
+            key = (f.ip_src, f.ip_dst, f.icmp_ident, f.icmp_seq)
+            requests[key].append(f)
         elif f.is_icmp_reply:
-            key = (f.ip_dst, f.ip_src, f.icmp_seq) if f.icmp_seq else (f.ip_dst, f.ip_src)
-            if key in requests:
-                req = requests.pop(key)
+            key = (f.ip_dst, f.ip_src, f.icmp_ident, f.icmp_seq)
+            pending = requests.get(key)
+            if pending:
+                req = pending.popleft()
+                if not pending:
+                    del requests[key]
                 rtt = (f.epoch - req.epoch) * 1000
                 pairs.append({
                     "req": req, "reply": f, "rtt_ms": rtt,

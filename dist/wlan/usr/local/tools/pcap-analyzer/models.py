@@ -41,6 +41,7 @@ class Frame:
     seq: str
     icmp_seq: str = ""
     bssid: str = ""
+    icmp_ident: str = ""
 
     @property
     def subtype_name(self) -> str:

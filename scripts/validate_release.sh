@@ -311,6 +311,11 @@ PY
     python3 -m pytest dist/wlan/usr/local/logger/tests -q
     gate_step "source" "pytest: scripts"
     python3 -m pytest dist/wlan/usr/local/scripts/tests -q
+    gate_step "source" "pytest: pcap-analyzer"
+    python3 -m pytest \
+        dist/wlan/usr/local/tools/pcap-analyzer/tests/test_extractor.py \
+        dist/wlan/usr/local/tools/pcap-analyzer/tests/test_models.py \
+        dist/wlan/usr/local/tools/pcap-analyzer/tests/test_ping_matching.py -q
     # QA 하네스도 게이트에 포함한다. 이 스위트는 실기 상태를 바꾸는 도구의
     # 안전 계약(복원·원격 절단 대응·스케줄 검증)을 고정하는데, 여기 없으면
     # 아무도 실행하지 않아 그 계약이 조용히 썩는다.
