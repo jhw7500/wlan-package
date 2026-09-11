@@ -93,17 +93,17 @@ ping -i 0.5 192.168.1.1
 **분석 결과 해석:**
 
 ```
-=== 미전달 패킷 분석 ===
-캡처: eth0=200, mlan0=195 패킷
-매칭: 195, eth0에만=5, mlan0에만=0
-손실률: 2.5%
+=== undelivered packet analysis ===
+captured: eth0=200, mlan0=195 packets
+matched: 195, only on eth0=5, only on mlan0=0
+loss rate: 2.5%
 
-[eth0에서 전달되지 않음 → mlan0]
-  REQ id=1234 seq=45 192.168.1.100→192.168.1.1 t=1710654601.123
-  REQ id=1234 seq=46 192.168.1.100→192.168.1.1 t=1710654601.623
+[not delivered from eth0 -> mlan0]
+  REQ id=1234 seq=45 192.168.1.100->192.168.1.1 t=1710654601.123
+  REQ id=1234 seq=46 192.168.1.100->192.168.1.1 t=1710654601.623
 ```
 
-- `eth0에만=5`: eth0에서 수신했지만 mlan0에서 나가지 않은 패킷 5개
+- `only on eth0=5`: eth0에서 수신했지만 mlan0에서 나가지 않은 패킷 5개
 - 연속된 seq(45, 46)이면 순간적 무선 끊김 가능성
 
 ### 시나리오 2: 브릿지 지연 측정
@@ -115,7 +115,7 @@ python3 ping_monitor.py -t 192.168.1.1 -d 300
 5분간 캡처 후 브릿지 통과 지연 통계:
 
 ```
-브릿지 지연: 평균=1.234ms 최소=0.567ms 최대=15.678ms
+bridge delay: average=1.234ms minimum=0.567ms maximum=15.678ms
 ```
 
 - 평균 1-2ms: 정상
@@ -313,11 +313,11 @@ JSON에서 `"duration": 60`으로 설정해도 `-d 30`을 주면 30초가 적용
 ### 텍스트 로그 형식
 
 ```
-=== ping-monitor 세션 시작 ===
-시간: 2026-03-17 14:30:00
-모드: dual
-인터페이스: eth0
-인터페이스2: mlan0
+=== ping-monitor session started ===
+time: 2026-03-17 14:30:00
+mode: dual
+interface: eth0
+interface2: mlan0
 ===
 
 14:30:01.123456 [eth0] REQ 192.168.1.100 > 192.168.1.1 seq=1
@@ -326,14 +326,14 @@ JSON에서 `"duration": 60`으로 설정해도 `-d 30`을 주면 30초가 적용
 14:30:01.131567 [eth0] REP 192.168.1.1 > 192.168.1.100 seq=1
 ...
 
-=== 미전달 패킷 분석 ===
-캡처: eth0=200, mlan0=198 패킷
-매칭: 198, eth0에만=2, mlan0에만=0
-손실률: 1.0%
+=== undelivered packet analysis ===
+captured: eth0=200, mlan0=198 packets
+matched: 198, only on eth0=2, only on mlan0=0
+loss rate: 1.0%
 
-브릿지 지연: 평균=1.234ms 최소=0.567ms 최대=5.678ms
+bridge delay: average=1.234ms minimum=0.567ms maximum=5.678ms
 
-=== 세션 종료: 2026-03-17 14:35:00 ===
+=== session ended: 2026-03-17 14:35:00 ===
 ```
 
 ### pcap 파일 활용
