@@ -32,14 +32,12 @@ def _frame(**kwargs):
         tcp_len="",
         tcp_flags="",
         seq="1",
+        icmp_ident="",
         icmp_seq="",
         bssid="00:80:4c:e1:09:cb",
     )
     defaults.update(kwargs)
-    icmp_ident = defaults.pop("icmp_ident", "")
-    frame = Frame(**defaults)
-    setattr(frame, "icmp_ident", icmp_ident)
-    return frame
+    return Frame(**defaults)
 
 
 def _overlapping_ping_frames():

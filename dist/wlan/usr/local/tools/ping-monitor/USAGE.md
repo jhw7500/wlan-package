@@ -347,10 +347,13 @@ tshark -r /tmp/ping-monitor/icmp_eth0_20260317_143000.pcap
 # 특정 seq만 필터
 tshark -r /tmp/ping-monitor/icmp_eth0_20260317_143000.pcap -Y "icmp.seq == 45"
 
-# RTT 분석 (pcap-analyzer 연동)
+# 타겟 장치에서 간단한 RTT 분석 (내장 CLI 연동)
 cd /usr/local/tools/pcap-analyzer
 python3 pcap_analyzer.py /tmp/ping-monitor/icmp_mlan0_20260317_143000.pcap
 ```
+
+웹 UI와 다중 캡처 등 고급 분석은 별도
+[`pcap-analyzer`](https://github.com/jhw7500/pcap-analyzer) 저장소를 사용합니다.
 
 ---
 

@@ -155,6 +155,30 @@ class SourceGateIsReachableFromCI(unittest.TestCase):
     def test_usage_mentions_source(self):
         self.assertIn("<source|pre|package", GATE.read_text(encoding="utf-8"))
 
+    def test_source_runs_pcap_analyzer_unit_tests(self):
+        """source 게이트가 실캡처 없이 도는 pcap 회귀 테스트를 실행한다."""
+        probe = r'''
+source "$1"
+python3() { printf '__PYTHON__ %s\n' "$*"; }
+bash() { :; }
+find() { :; }
+run_source
+'''
+        result = subprocess.run(
+            ["bash", "-c", probe, "gate-probe", str(GATE)],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertIn(
+            "__PYTHON__ -m pytest "
+            "dist/wlan/usr/local/tools/pcap-analyzer/tests/test_extractor.py "
+            "dist/wlan/usr/local/tools/pcap-analyzer/tests/test_models.py "
+            "dist/wlan/usr/local/tools/pcap-analyzer/tests/test_ping_matching.py -q",
+            result.stdout,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
