@@ -1405,7 +1405,7 @@
             },
             "low_thresh": {
               "type": "integer",
-              "default": 70,
+              "default": 40,
               "anyOf": [
                 {
                   "minimum": 0,
@@ -1422,7 +1422,7 @@
             },
             "high_thresh": {
               "type": "integer",
-              "default": 90,
+              "default": 65,
               "anyOf": [
                 {
                   "minimum": 0,
@@ -2371,7 +2371,7 @@
             },
             "low_thresh": {
               "type": "integer",
-              "default": 70,
+              "default": 40,
               "anyOf": [
                 {
                   "minimum": 0,
@@ -2388,7 +2388,7 @@
             },
             "high_thresh": {
               "type": "integer",
-              "default": 90,
+              "default": 65,
               "anyOf": [
                 {
                   "minimum": 0,

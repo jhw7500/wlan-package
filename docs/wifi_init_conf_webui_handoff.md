@@ -412,9 +412,9 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `antcfgnss.verify.user_htstream` | antcfgnss read-back 기대값 | string | `mlan0="0x1111"` | `0x` 접두, 1..0xFFFF | no | boot | 불일치는 재시도 후 `local0.err` + `/run/wifi/fwcfg_unapplied_<iface>` 마커로만 남고 association 은 계속된다 |
 | `rate_adapt.enabled` | 레이트 적응 적용 | bool | `true` | true\|false | caution | boot | false면 `rate_adapt_cfg`를 SET하지 않는다 — 남는 값은 FW 기본값이 아니라 마지막 SET값이다(콜드부팅 후에만 FW 기본값). 키 부재 시 true(종전 동작). `wifi <iface> rate`로 값을 바꿔도 이 값이 false면 부팅 시 적용되지 않는다 |
 | `rate_adapt.mode` | 레이트 적응 모드 | int | `1` | `0`=legacy\|`1`=SR | caution | boot | section 존재 시 mode/low/high/interval 4개 필수(enabled는 선택) |
-| `rate_adapt.low_thresh` | 레이트 적응 low 임계 | int | `70` | 0..100 또는 255 | caution | boot | static은 low<high, dynamic은 low/high 모두 255 |
-| `rate_adapt.high_thresh` | 레이트 적응 high 임계 | int | `90` | 0..100 또는 255 | caution | boot | 70/90은 실기 결과에 따라 바뀌는 시험값 |
-| `rate_adapt.interval_ms` | 레이트 적응 평가주기(ms) | int | `100` | 양수, 10ms 배수 | caution | boot | association 전 SET+GET. 종전 "mlan0 roam·mlan1 AC association 완료 시 FW 30/50 복귀 실측" 기재는 2026-08-31 재검증에서 **미재현** — 가이드 §11.5 정정 노트 참조 |
+| `rate_adapt.low_thresh` | 레이트 적응 low 임계 | int | `40` | 0..100 또는 255 | caution | boot | static은 low<high, dynamic은 low/high 모두 255 |
+| `rate_adapt.high_thresh` | 레이트 적응 high 임계 | int | `65` | 0..100 또는 255 | caution | boot | 0.6.7에서 `70/90`→`40/65`. FW가 정적 pair를 트래픽 2~3초 뒤 `40/65`로 덮어쓰고 그 값이 실사용 상태이므로 기본값을 실제 동작에 맞춘 것이다 — 가이드 §11.5 참조 |
+| `rate_adapt.interval_ms` | 레이트 적응 평가주기(ms) | int | `100` | 양수, 10ms 배수 | caution | boot | association 전 SET+GET. 정적 pair 덮어쓰기의 트리거는 association이 아니라 **집계 Tx 트래픽**이다 — 가이드 §11.5 참조 |
 
 **비고 (antcfg 업그레이드)** — `postinst`는 active 우선 deep merge 뒤 과거 제품 이력
 (구제품 비대칭 계약 `0x0303/0x0101(+verify)`, 그 이전의 `false/empty`, 알려진 physical 1x1
