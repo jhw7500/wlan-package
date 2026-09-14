@@ -364,8 +364,8 @@
             ],
             "enabled": true,
             "mode": 1,
-            "low_thresh": 70,
-            "high_thresh": 90,
+            "low_thresh": 40,
+            "high_thresh": 65,
             "interval_ms": 100
         },
         "wpa_supplicant": {
@@ -601,8 +601,8 @@
         "rate_adapt": {
             "enabled": true,
             "mode": 1,
-            "low_thresh": 70,
-            "high_thresh": 90,
+            "low_thresh": 40,
+            "high_thresh": 65,
             "interval_ms": 100
         },
         "wpa_supplicant": {
