@@ -67,8 +67,15 @@ Observations:
 
 1. Which firmware component writes the `RATE_ADAPT_CFG` low/high fields after they have been set by
    `HostCmd_CMD_RATE_ADAPT_CFG`, and under what condition?
-2. What are the definitions and selection conditions of the `40/65` pair, and of the `70/90` and
-   `30/50` pairs we have seen historically? Are these named static profiles in firmware?
+2. **What are the definitions and selection conditions of the landing pairs, and how is one chosen?**
+   We previously reported that every transition landed on exactly `[40,65]` (18 of 18). That is no
+   longer true. Across all campaigns we now count 21 transitions: 20 landed on `[40,65]` and one, from
+   a configured `60/90`, landed on **`[30,50]`** - in a single step, with no intermediate value, under
+   50 ms polling. `[30,50]` is also the pair recorded in a 2026-08-28 observation that we had wrongly
+   dismissed as unreproducible. Notably the same `LOW=60` landed on `[40,65]` when paired with
+   `HIGH=80` but on `[30,50]` when paired with `HIGH=90`, so `HIGH` participates in choosing the
+   landing pair even though it does not affect whether a transition happens. Are these named static
+   profiles, and what selects among them?
 3. What exactly is the "aggregated data Tx success rate" that the LOW and HIGH thresholds are compared
    against — which counters, over what window, per peer or per TID?
 4. **What quantity is `LOW` compared against?** We have established it is not a fixed constant: the
@@ -85,6 +92,13 @@ Observations:
    We also note the proxy is noisy: the same intermediate profile gave `retries_per_mpdu` of 0.5341
    and 0.5122 on consecutive fresh-FW boots. Please tell us which counters, over which window, and per
    which peer or TID the firmware actually uses.
+
+   **New controlled evidence (2026-09-14).** We have now moved this from correlation to intervention.
+   Holding the traffic profile and the configured pair fixed at `60/90` and changing only the STA Tx
+   power pre-association, the transition happened at default power (`retries_per_mpdu` 0.7225) and did
+   not happen at 2 dBm (0.0050, about 145x better). The boundary therefore rose from below 60 to
+   `60 < LOW <= 70`. This is consistent with a success-rate comparison, but it does not explain
+   item 9 below.
 5. Is the `0xff/0xff` exemption intentional?
 6. ~~Does the GET response report the thresholds actually used by live rate selection?~~
    **We have now measured this: it does.** An interface configured `1 70 90 10` and overwritten to
@@ -109,6 +123,15 @@ Observations:
    one, consistent with your documented pre-association-only restriction. If that is correct, the only
    correction path available to us is a disconnect and reconnect, which the value then drifts away from
    within 2-3 seconds of traffic - so no monitoring-based correction is viable.
+
+9. **Why does a lower `LOW` relax sooner?** With the same light traffic profile and the same fresh-FW
+   boot procedure, a configured `70/90` relaxed 2.90 s after traffic started, while `60/90` relaxed
+   after only 0.24 s. A lower threshold is easier to satisfy, so we would expect it to relax later or
+   not at all. The observed direction is the opposite and we have no mechanism for it.
+
+10. **Is the relaxation ever multi-step?** All 21 transitions we have recorded are single-step at 50 ms
+    polling resolution. If firmware can step through intermediate pairs under conditions we have not
+    produced, we need to know, because our monitoring assumes one discrete change.
 
 ## Artefacts requested
 
