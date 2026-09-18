@@ -25,7 +25,38 @@ def test_extract_state_completed():
     status = ("bssid=00:11:22:33:44:55\nfreq=5240\nssid=Wlan_5g\n"
               "wpa_state=COMPLETED\nip_address=192.168.1.50\n")
     assert wl.extract_supplicant(status) == {"wpa_state": "COMPLETED",
-                                             "temp_disabled": False}
+                                             "temp_disabled": False,
+                                             "ssid": "Wlan_5g"}
+
+
+# --- extract_supplicant: ssid 추출 (link.json info.ssid 의 원천) --------------
+# `iw <IFACE> info` 는 managed STA 에서 ssid 를 출력하지 않고, SSID 를 싣던
+# `iw link` 는 station dump 로 대체되며 빠졌다. 그 결과 link.json 에 info.ssid 가
+# 없어 opcd 의 device-info ESSID(사양 §4.3.4)가 빈 값으로 나갔다(온타겟 관측).
+
+def test_extract_ssid_present():
+    assert wl.extract_supplicant("ssid=jhw_wlan_\nwpa_state=COMPLETED\n")["ssid"] == "jhw_wlan_"
+
+
+def test_extract_ssid_absent_or_disconnected():
+    assert wl.extract_supplicant("wpa_state=DISCONNECTED\n")["ssid"] == ""
+    assert wl.extract_supplicant("")["ssid"] == ""
+    assert wl.extract_supplicant(None)["ssid"] == ""
+
+
+def test_extract_ssid_not_confused_by_other_keys():
+    """'ssid=' 접두만 매치한다 — bssid= 나 list_networks 의 ssid 컬럼에 반응하면 안 된다."""
+    assert wl.extract_supplicant("bssid=00:11:22:33:44:55\nwpa_state=COMPLETED\n")["ssid"] == ""
+
+
+def test_extract_ssid_printf_encoded():
+    """CTRL_IFACE status 는 비ASCII 를 \\xNN 으로 인코딩한다 — 정확한 UTF-8 로 복원."""
+    assert wl.extract_supplicant("ssid=a\\x20b\nwpa_state=COMPLETED\n")["ssid"] == "a b"
+
+
+def test_extract_ssid_first_occurrence_wins():
+    status = "ssid=first\nssid=second\nwpa_state=COMPLETED\n"
+    assert wl.extract_supplicant(status)["ssid"] == "first"
 
 
 def test_extract_state_handshake():
@@ -44,7 +75,7 @@ def test_extract_temp_disabled_true():
     nets = ("network id / ssid / bssid / flags\n"
             "0\tWlan_5g\tany\t[TEMP-DISABLED]\n")
     out = wl.extract_supplicant("wpa_state=SCANNING\n", nets)
-    assert out == {"wpa_state": "SCANNING", "temp_disabled": True}
+    assert out == {"wpa_state": "SCANNING", "temp_disabled": True, "ssid": ""}
 
 
 def test_extract_temp_disabled_false_when_current():
@@ -95,7 +126,8 @@ def test_poll_supplicant_skips_list_networks_when_completed(monkeypatch):
         return "ssid=X\nwpa_state=COMPLETED\n" if cmd[-1] == "status" else "UNEXPECTED"
 
     monkeypatch.setattr(wl, "run_command", fake_run)
-    assert wl.poll_supplicant("mlan0") == {"wpa_state": "COMPLETED", "temp_disabled": False}
+    assert wl.poll_supplicant("mlan0") == {"wpa_state": "COMPLETED", "temp_disabled": False,
+                                           "ssid": "X"}
     assert _LIST_CMD not in calls
 
 
@@ -108,7 +140,7 @@ def test_poll_supplicant_skips_list_networks_when_status_empty(monkeypatch):
         return ""
 
     monkeypatch.setattr(wl, "run_command", fake_run)
-    assert wl.poll_supplicant("mlan0") == {"wpa_state": "", "temp_disabled": False}
+    assert wl.poll_supplicant("mlan0") == {"wpa_state": "", "temp_disabled": False, "ssid": ""}
     assert _LIST_CMD not in calls
 
 
@@ -122,7 +154,8 @@ def test_poll_supplicant_calls_list_networks_when_not_completed(monkeypatch):
         return ""
 
     monkeypatch.setattr(wl, "run_command", fake_run)
-    assert wl.poll_supplicant("mlan0") == {"wpa_state": "SCANNING", "temp_disabled": True}
+    assert wl.poll_supplicant("mlan0") == {"wpa_state": "SCANNING", "temp_disabled": True,
+                                           "ssid": ""}
 
 
 def test_parse_iw_info_decodes_escaped_utf8_and_preserves_ssid_edges():
