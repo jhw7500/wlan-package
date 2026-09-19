@@ -385,19 +385,30 @@ SUPP_FILE = "supplicant.json"
 
 def extract_supplicant(status_text, networks_text=""):
     """wpa_cli status(+list_networks) 출력에서 supplicant '사실'만 추출.
-    {wpa_state: <str>, temp_disabled: <bool>}. temp_disabled 는 인증 반복실패로
-    wpa_supplicant 가 네트워크를 일시비활성([TEMP-DISABLED]) 했는지 — 폴링으로
-    잡히는 실패(3) 신호다(단발 실패는 1Hz 사이로 빠질 수 있음)."""
+    {wpa_state: <str>, temp_disabled: <bool>, ssid: <str>}. temp_disabled 는 인증
+    반복실패로 wpa_supplicant 가 네트워크를 일시비활성([TEMP-DISABLED]) 했는지 —
+    폴링으로 잡히는 실패(3) 신호다(단발 실패는 1Hz 사이로 빠질 수 있음).
+
+    ssid 는 link.json info.ssid 의 원천이다. `iw <IFACE> info` 는 managed STA 에서
+    ssid 줄을 출력하지 않고(AP 모드 전용 필드), SSID 를 싣던 `iw link` 는 station
+    dump 로 대체되면서 빠졌다. wpa_cli status 는 이미 매 주기 호출되므로 추가
+    subprocess 없이 SSID 를 얻는 유일한 경로다. 미연결이면 빈 문자열."""
     wpa_state = ""
+    ssid = ""
     for line in (status_text or "").splitlines():
-        if line.startswith("wpa_state="):
+        if not wpa_state and line.startswith("wpa_state="):
             wpa_state = line.split("=", 1)[1].strip()
-            break
+        elif not ssid and line.startswith("ssid="):
+            # CTRL_IFACE status 는 upstream printf_encode 형식 → 정확한 UTF-8 로 복원.
+            try:
+                ssid = decode_wpa_ssid_text(line.split("=", 1)[1].strip())
+            except RoamPolicyError:
+                ssid = ""
     # single-station/single-network 전제: list_networks 에 [TEMP-DISABLED] 가 하나라도
     # 있으면 실패로 본다. TODO(dual-station): 다중 프로파일 시 대상 네트워크 행의 flags 만
     # 검사해야 타 네트워크 disable 의 오귀속을 막는다.
     temp_disabled = "[TEMP-DISABLED]" in (networks_text or "")
-    return {"wpa_state": wpa_state, "temp_disabled": temp_disabled}
+    return {"wpa_state": wpa_state, "temp_disabled": temp_disabled, "ssid": ssid}
 
 def write_supplicant_json(log_dir, supp):
     """supplicant.json 을 atomic(tmp+fsync+rename)으로 기록 — SNMP pass_persist 가
@@ -616,7 +627,8 @@ def main():
 
         # supplicant 상태(연결/인증중/실패)를 매 주기 기록 — SNMP SupplicantState 원천.
         # station dump 분기(미연결 시 '{}' continue)보다 먼저 써, 인증중/실패도 포착한다.
-        write_supplicant_json(LOG_DIR, poll_supplicant(IFACE))
+        supp = poll_supplicant(IFACE)
+        write_supplicant_json(LOG_DIR, supp)
 
         # station dump로 연결 판별 (iw link 대체).
         # 단일 조회로 시작하고, 공백/무효면 fast-retry로 넘긴다 → 끊김 억제 윈도우가
@@ -644,6 +656,11 @@ def main():
 
         info_data = parse_iw_info(info_out) if info_out else {}
         info_data.update(get_ip_info(IFACE))
+        # `iw info` 의 ssid 분기는 managed STA 에서 절대 매치되지 않으므로(AP 모드 전용),
+        # 비어 있으면 supplicant 값으로 채운다. opcd 가 device-info 의 ESSID(사양 §4.3.4)를
+        # 여기서 읽기 때문에, 비워 두면 상호운용 시 빈 ESSID 가 나간다.
+        if not info_data.get("ssid") and supp.get("ssid"):
+            info_data["ssid"] = supp["ssid"]
 
         data = {
             "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
