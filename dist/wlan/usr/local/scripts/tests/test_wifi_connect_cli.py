@@ -14,10 +14,12 @@ action 스크립트에 `CONNECTED` 이벤트(`WPA_ID`)를 넣는다. 그래서 f
       성공이다. 이벤트 없는 stale COMPLETED 는 여전히 실패(exit 8)여야 한다.
 """
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 import textwrap
+import time
 import unittest
 import warnings
 from pathlib import Path
@@ -76,6 +78,10 @@ if [ "${1:-}" = "--daemon" ]; then
     action="$2"; iface="$3"; pidfile="$4"
     echo "$$" > "$pidfile"
     while :; do
+        if [ -f "$D/fire-disconnected" ]; then
+            rm -f "$D/fire-disconnected"
+            "$action" "$iface" DISCONNECTED
+        fi
         if [ -f "$D/fire" ]; then
             id=$(cat "$D/fire"); rm -f "$D/fire"
             WPA_ID="$id" "$action" "$iface" CONNECTED
@@ -108,6 +114,7 @@ case "$cmd" in
             printf 'bssid=00:00:00:00:00:%02d\nfreq=%s\nssid=%s\nid=%s\nwpa_state=COMPLETED\n' \
                 "$lid" "$lfreq" "$lssid" "$lid" > "$D/status.new"
             mv -f "$D/status.new" "$D/status"
+            : > "$D/fire-disconnected.tmp" && mv -f "$D/fire-disconnected.tmp" "$D/fire-disconnected"
             echo "$lid" > "$D/fire.tmp" && mv -f "$D/fire.tmp" "$D/fire"
         fi
         echo OK ;;
@@ -177,8 +184,11 @@ class ConnectHarness(unittest.TestCase):
         self.conf_dir.mkdir()
         (self.stub / "wpa_cli").write_text(WPA_CLI_STUB)
         (self.stub / "install").write_text(INSTALL_STUB)
-        for noop in ("sync", "logger", "systemctl"):
+        for noop in ("sync", "systemctl"):
             (self.stub / noop).write_text("#!/bin/sh\nexit 0\n")
+        (self.stub / "logger").write_text(
+            '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$WPA_STUB_DIR/logger.log"\n'
+        )
         for p in self.stub.iterdir():
             p.chmod(0o755)
         (self.state / "status").write_text(STATUS_INITIAL)
@@ -195,7 +205,7 @@ class ConnectHarness(unittest.TestCase):
     def land_on(self, net_id, ssid, freq):
         (self.state / "landing").write_text(f"{net_id} {ssid} {freq}\n")
 
-    def run_connect(self, *args, pid_namespace=False):
+    def run_connect(self, *args, pid_namespace=False, trace=False):
         env = dict(os.environ)
         env.update({
             "PATH": f"{self.stub}:{os.environ['PATH']}",
@@ -206,6 +216,11 @@ class ConnectHarness(unittest.TestCase):
             "WIFI_SCAN_TRANSITION_LOCK_TIMEOUT": "0",
             "ASSOC_TIMEOUT_DEFAULT": "2",
         })
+        if trace:
+            env.update({
+                "FTPCMD_TRACE_ID": "test-trace",
+                "FTPCMD_TRACE_START_MS": str(int(time.monotonic() * 1000)),
+            })
         argv = ["bash", str(WIFI_SH), "mlan0", "connect", *args]
         if pid_namespace:
             argv = ["unshare", "-Upf", "bash", "-c", NS_WRAPPER, "_", *argv]
@@ -255,6 +270,87 @@ class FirstLineIsAscii(ConnectHarness):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertTrue(line.isascii(), f"non-ASCII first line: {line!r}")
         self.assertEqual(line, "no ssid given - reassociating current network id=0 on mlan0...")
+
+
+class FtpcmdTimingTrace(ConnectHarness):
+    def test_reconnect_logs_disconnect_connect_verify_phases(self):
+        self.write_conf(CONF_MODE_B)
+        self.land_on(0, "jhw_wlan_", 5220)
+        r = self.run_connect(trace=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+        lines = (self.state / "logger.log").read_text().splitlines()
+        timing = [line for line in lines if "ftpcmd_timing trace=test-trace" in line]
+        for phase in (
+            "wifi_connect_entered",
+            "reconnect_requested",
+            "disconnected_event",
+            "connected_event",
+            "association_verified",
+        ):
+            matches = [line for line in timing if f"phase={phase}" in line]
+            self.assertEqual(len(matches), 1, timing)
+            self.assertRegex(matches[0], r"elapsed_ms=[0-9]+")
+            self.assertIn("iface=mlan0", matches[0])
+
+        elapsed = [int(re.search(r"elapsed_ms=([0-9]+)", line).group(1)) for line in timing]
+        self.assertEqual(elapsed, sorted(elapsed), timing)
+
+    def test_explicit_switch_reloads_full_profile_and_logs_reconfigure_phase(self):
+        self.write_conf(CONF_MODE_B)
+        self.land_on(0, "jhw_wlan", 5200)
+        r = self.run_connect("jhw_wlan", trace=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+        calls = (self.state / "calls.log").read_text().splitlines()
+        self.assertNotIn('wpa_cli -i mlan0 set_network 0 ssid "jhw_wlan"', calls)
+        self.assertIn("wpa_cli -i mlan0 reconfigure", calls)
+
+        timing = (self.state / "logger.log").read_text().splitlines()
+        reconfigure = [line for line in timing if "phase=reconfigure_requested" in line]
+        self.assertEqual(len(reconfigure), 1, timing)
+        self.assertIn("profile_sync=1", reconfigure[0])
+
+    def test_explicit_frequency_is_persisted_before_profile_reload(self):
+        self.write_conf(CONF_MODE_B)
+        self.land_on(0, "jhw_wlan", 5200)
+        r = self.run_connect("jhw_wlan", "5200")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+        calls = (self.state / "calls.log").read_text().splitlines()
+        self.assertNotIn("wpa_cli -i mlan0 set_network 0 freq_list 5200", calls)
+        self.assertIn("wpa_cli -i mlan0 reconfigure", calls)
+        self.assertEqual(self.conf.read_text().count("freq_list=5200"), 2)
+
+    def test_persisted_credentials_are_reloaded_instead_of_reusing_runtime_profile(self):
+        conf = CONF_MODE_B.replace(
+            'psk="stub-psk-not-a-secret"', 'psk="persisted-new-credential"',
+        )
+        self.write_conf(conf)
+        self.land_on(0, "jhw_wlan", 5200)
+        r = self.run_connect("jhw_wlan")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+        calls = (self.state / "calls.log").read_text().splitlines()
+        self.assertFalse(any(" set_network " in call for call in calls), calls)
+        self.assertIn("wpa_cli -i mlan0 reconfigure", calls)
+
+    def test_legacy_scan_freq_is_removed_from_runtime_by_profile_reload(self):
+        legacy = CONF_MODE_B.replace(
+            "freq_list=5180 5200 5220 5240\n", "", 1,
+        ).replace(
+            "    freq_list=5180 5200 5220 5240\n",
+            "    scan_freq=5180 5200 5220 5240\n",
+            1,
+        )
+        self.write_conf(legacy)
+        self.land_on(0, "jhw_wlan", 5200)
+        r = self.run_connect("jhw_wlan")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+        calls = (self.state / "calls.log").read_text().splitlines()
+        self.assertNotIn("scan_freq=", self.conf.read_text())
+        self.assertIn("wpa_cli -i mlan0 reconfigure", calls)
 
 
 class ModeANoArgReconnect(ConnectHarness):
@@ -440,6 +536,21 @@ class MonitorProcIdentityContract(unittest.TestCase):
             CONNECT_MONITOR_PROC_LOCAL="0",
         )
         self.assertIn("rejected", r.stdout, r.stdout + r.stderr)
+
+    def test_foreign_proc_cleanup_uses_one_short_grace_before_kill(self):
+        r = self.run_snippet(
+            'wifi_wpa_run_child() { [ "$1" != sleep ] || echo "sleep=$2"; command "$@"; }',
+            "bash -c 'trap \"\" TERM; while :; do sleep 1; done' & p=$!",
+            "sleep 0.05",
+            'CONNECT_MONITOR_PID="$p"',
+            'CONNECT_MONITOR_START="ns"',
+            'CONNECT_MONITOR_PROC_LOCAL="0"',
+            'CONNECT_MONITOR_DIR=""',
+            'connect_event_monitor_cleanup',
+            'wait "$p" 2>/dev/null || true',
+        )
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.stdout.splitlines().count("sleep=0.1"), 1, r.stdout + r.stderr)
 
 
 if __name__ == "__main__":

@@ -1,14 +1,20 @@
 #!/bin/sh
 # Reassociate a wifi interface, optionally switching it to another SSID.
-# Reached over FTP as: quote wconnect [interface] [ssid]
+# Reached over FTP as:
+#   quote wconnect [mlan0|mlan1] [ssid [freq_or_channel...]]
 #
 # NOT named "connect": vsftpd refuses GET/POST/HEAD/OPTIONS/CONNECT as FTP
 # verbs and drops the control connection, and that check runs before the
 # handler dispatch ever sees the command (postlogin.c, ahead of
 # vsf_extcmd_try).  Those five names are unusable here.
 #
-# With no interface it acts on mlan0.  With no SSID it forces a reassociation
-# to whatever the interface is already configured for.
+# A leading mlan0/mlan1 selects the interface.  Any other first argument is
+# the SSID and implicitly selects mlan0, so `quote wconnect my-ssid` works.
+# The SSID is exactly one FTP argument; every following argument is forwarded
+# as a frequency/channel selector to wifi connect.  Frequency selectors are
+# optional, and omitting them preserves the profile's current frequency policy.
+# With no SSID it forces a reassociation to whatever the selected interface is
+# already configured for.
 #
 # The passphrase is never sent over FTP.  "wifi <iface> connect <ssid>" only
 # rewrites the ssid inside the interface's existing wpa_supplicant profile and
@@ -31,22 +37,91 @@ set -u
 
 WIFI=/usr/local/bin/wifi
 
-IFACE="${1:-mlan0}"
-[ "$#" -gt 0 ] && shift
+ftpcmd_monotonic_ms() {
+    IFS=' .' read -r _ftpcmd_sec _ftpcmd_centi _ftpcmd_rest < /proc/uptime \
+        || return 1
+    case "$_ftpcmd_sec:$_ftpcmd_centi" in
+        *[!0-9:]*|:*) return 1 ;;
+    esac
+    _ftpcmd_centi=${_ftpcmd_centi#0}
+    [ -n "$_ftpcmd_centi" ] || _ftpcmd_centi=0
+    printf '%s\n' "$((_ftpcmd_sec * 1000 + _ftpcmd_centi * 10))"
+}
 
-case "$IFACE" in
-    *[!A-Za-z0-9._-]*)  echo "invalid interface name: $IFACE"; exit 2 ;;
+ftpcmd_trace_log() {
+    _ftpcmd_phase=$1
+    shift
+    case "${FTPCMD_TRACE_START_MS:-}" in ''|*[!0-9]*) return 0 ;; esac
+    case "${FTPCMD_TRACE_ID:-}" in ''|*[!A-Za-z0-9._-]*) return 0 ;; esac
+    _ftpcmd_now_ms=$(ftpcmd_monotonic_ms) || return 0
+    _ftpcmd_elapsed_ms=$((_ftpcmd_now_ms - FTPCMD_TRACE_START_MS))
+    [ "$_ftpcmd_elapsed_ms" -ge 0 ] || _ftpcmd_elapsed_ms=0
+    logger -p local0.info \
+        "ftpcmd_timing trace=$FTPCMD_TRACE_ID phase=$_ftpcmd_phase elapsed_ms=$_ftpcmd_elapsed_ms $*" \
+        >/dev/null 2>&1 || true
+}
+
+ftpcmd_log_failure() {
+    _ftpcmd_code=$1
+    shift
+    _ftpcmd_detail=none
+    if [ "$#" -gt 0 ] && [ -n "$*" ]; then
+        IFS= read -r _ftpcmd_detail <<EOF
+$*
+EOF
+        [ -n "$_ftpcmd_detail" ] || _ftpcmd_detail=none
+    fi
+    logger -p local0.err \
+        "ftpcmd_result trace=${FTPCMD_TRACE_ID:-none} command=wconnect status=fail code=$_ftpcmd_code iface=${IFACE:-unknown} detail=$_ftpcmd_detail" \
+        >/dev/null 2>&1 || true
+}
+
+FTPCMD_TRACE_START_MS=$(ftpcmd_monotonic_ms 2>/dev/null || true)
+FTPCMD_TRACE_PID=$$
+if IFS= read -r _ftpcmd_self_stat < /proc/self/stat 2>/dev/null; then
+    _ftpcmd_host_pid=${_ftpcmd_self_stat%% *}
+    case "$_ftpcmd_host_pid" in
+        ''|*[!0-9]*) ;;
+        *) FTPCMD_TRACE_PID=$_ftpcmd_host_pid ;;
+    esac
+fi
+case "$FTPCMD_TRACE_START_MS" in
+    ''|*[!0-9]*) FTPCMD_TRACE_START_MS=; FTPCMD_TRACE_ID= ;;
+    *) FTPCMD_TRACE_ID="${FTPCMD_TRACE_START_MS}-${FTPCMD_TRACE_PID}" ;;
+esac
+export FTPCMD_TRACE_START_MS FTPCMD_TRACE_ID
+ftpcmd_trace_log dispatch_received "argc=$#"
+
+IFACE=mlan0
+trap 'FTPCMD_RC=$?; trap - EXIT; ftpcmd_trace_log reply_ready "iface=${IFACE:-unknown} rc=$FTPCMD_RC"; if [ "$FTPCMD_RC" -eq 0 ]; then printf "SUCCESS\n"; else printf "FAIL code=%s\n" "$FTPCMD_RC"; fi; exit "$FTPCMD_RC"' EXIT
+case "${1:-}" in
+    mlan0|mlan1)
+        IFACE=$1
+        shift
+        ;;
 esac
 
-# wifi's own connect subcommand only handles the two station interfaces, so
-# reject anything else here rather than letting it fail deeper in.
-if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
-    echo "wconnect supports mlan0/mlan1 only, got: $IFACE"
-    exit 2
-fi
+case "$IFACE" in
+    *[!A-Za-z0-9._-]*)
+        ftpcmd_log_failure 2 "invalid interface name"
+        exit 2
+        ;;
+esac
 
+if [ "$#" -eq 0 ]; then
+    FTPCMD_HAS_SSID=0
+    FTPCMD_FREQ_ARGC=0
+else
+    FTPCMD_HAS_SSID=1
+    FTPCMD_FREQ_ARGC=$(($# - 1))
+fi
+ftpcmd_trace_log arguments_parsed \
+    "iface=$IFACE ssid_supplied=$FTPCMD_HAS_SSID freq_argc=$FTPCMD_FREQ_ARGC"
+
+# wifi's own connect subcommand only handles the two station interfaces; the
+# parser above can therefore select only mlan0 or mlan1.
 if [ ! -x "$WIFI" ]; then
-    echo "not executable: $WIFI"
+    ftpcmd_log_failure 1 "wifi executable unavailable"
     exit 1
 fi
 
@@ -59,19 +134,26 @@ if [ -n "${FTPCMD_LOCAL_ADDR:-}" ]; then
     CTRL_IFACE=$(ip -o addr show 2>/dev/null \
         | awk -v a="$FTPCMD_LOCAL_ADDR" '$4 ~ "^"a"(/|$)" {print $2; exit}')
     if [ "$CTRL_IFACE" = "$IFACE" ]; then
-        echo "refusing: $IFACE carries this FTP control connection ($FTPCMD_LOCAL_ADDR)"
-        echo "connect over another interface, or run $WIFI $IFACE connect locally"
+        ftpcmd_log_failure 3 "target interface carries FTP control connection"
         exit 3
     fi
 fi
 
-# The SSID is everything left.  vsftpd splits on spaces, so an SSID that
-# contains them arrives as several arguments and is rejoined here; repeated
-# spaces collapse to one.  An SSID holding a character outside vsftpd's
-# argument set never reaches this handler at all - the command is refused on
-# the control connection instead.
+# The first remaining argument is the SSID and every later argument is a
+# frequency/channel selector.  Keep the argv boundary intact so wifi connect
+# can validate and normalize those selectors.  SSIDs containing spaces are
+# intentionally unsupported by this FTP command.
 if [ "$#" -eq 0 ]; then
-    exec "$WIFI" "$IFACE" connect
+    ftpcmd_trace_log connect_invoked "iface=$IFACE ssid_supplied=0"
+    FTPCMD_DETAIL=$("$WIFI" "$IFACE" connect 2>&1)
+    FTPCMD_RC=$?
+else
+    ftpcmd_trace_log connect_invoked \
+        "iface=$IFACE ssid_supplied=1 freq_argc=$FTPCMD_FREQ_ARGC"
+    FTPCMD_DETAIL=$("$WIFI" "$IFACE" connect "$@" 2>&1)
+    FTPCMD_RC=$?
 fi
 
-exec "$WIFI" "$IFACE" connect "$*"
+[ "$FTPCMD_RC" -eq 0 ] || ftpcmd_log_failure "$FTPCMD_RC" "$FTPCMD_DETAIL"
+
+exit "$FTPCMD_RC"

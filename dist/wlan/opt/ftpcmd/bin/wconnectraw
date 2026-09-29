@@ -1,0 +1,101 @@
+#!/bin/sh
+# Test-only runtime SSID switch. Reached over FTP as:
+#   quote wconnectraw [mlan0|mlan1] <ssid>
+#
+# This deliberately bypasses the persistent wifi connect transaction: it does
+# not validate the SSID, inspect topology, edit/sync wpa_supplicant.conf, or
+# wait for association. It changes the currently selected network in supplicant
+# memory and submits reassociate, then returns immediately. It does require both
+# wpa_cli commands to return process rc 0 and an exact OK control reply. A later
+# reconfigure or service restart restores the on-disk configuration.
+set -u
+
+WPA_CLI=/usr/sbin/wpa_cli
+
+monotonic_ms() {
+    IFS=' .' read -r _sec _centi _rest < /proc/uptime || return 1
+    case "$_sec:$_centi" in *[!0-9:]*|:*) return 1 ;; esac
+    _centi=${_centi#0}
+    [ -n "$_centi" ] || _centi=0
+    printf '%s\n' "$((_sec * 1000 + _centi * 10))"
+}
+
+START_MS=$(monotonic_ms 2>/dev/null || true)
+TRACE_ID="${START_MS:-0}-$$"
+
+IFACE=mlan0
+raw_log_failure() {
+    _code=$1
+    shift
+    logger -p local0.err \
+        "ftpcmd_raw_result trace=$TRACE_ID command=wconnectraw status=fail code=$_code iface=${IFACE:-unknown} detail=$*" \
+        >/dev/null 2>&1 || true
+}
+
+trap '_rc=$?; trap - EXIT; if [ "$_rc" -eq 0 ]; then printf "SUCCESS\n"; else printf "FAIL code=%s\n" "$_rc"; fi; exit "$_rc"' EXIT
+
+case "${1:-}" in
+    mlan0|mlan1)
+        IFACE=$1
+        shift
+        ;;
+esac
+
+if [ "$#" -eq 0 ]; then
+    raw_log_failure 2 "missing ssid"
+    exit 2
+fi
+SSID=$*
+PARSED_MS=$(monotonic_ms 2>/dev/null || printf '%s\n' "${START_MS:-0}")
+
+STATUS=$($WPA_CLI -i "$IFACE" status 2>/dev/null)
+STATUS_RC=$?
+STATUS_DONE_MS=$(monotonic_ms 2>/dev/null || printf '%s\n' "$PARSED_MS")
+if [ "$STATUS_RC" -ne 0 ]; then
+    raw_log_failure 1 "status command failed rc=$STATUS_RC"
+    exit 1
+fi
+
+NETWORK_ID=""
+while IFS='=' read -r _key _value; do
+    if [ "$_key" = "id" ]; then
+        NETWORK_ID=$_value
+        break
+    fi
+done <<EOF
+$STATUS
+EOF
+if [ -z "$NETWORK_ID" ]; then
+    raw_log_failure 1 "no current network id"
+    exit 1
+fi
+
+# Pass the received identity straight through as a quoted wpa_supplicant value.
+# Quotes/backslashes/control bytes are intentionally not repaired or rejected:
+# this command exists to expose the raw command path for timing experiments.
+SSID_VALUE=\"$SSID\"
+SET_REPLY=$($WPA_CLI -i "$IFACE" set_network "$NETWORK_ID" ssid "$SSID_VALUE" 2>&1)
+SET_RC=$?
+SET_DONE_MS=$(monotonic_ms 2>/dev/null || printf '%s\n' "$STATUS_DONE_MS")
+
+REASSOC_REPLY=$($WPA_CLI -i "$IFACE" reassociate 2>&1)
+REASSOC_RC=$?
+REASSOC_DONE_MS=$(monotonic_ms 2>/dev/null || printf '%s\n' "$SET_DONE_MS")
+
+case "$START_MS:$PARSED_MS:$STATUS_DONE_MS:$SET_DONE_MS:$REASSOC_DONE_MS" in
+    *[!0-9:]*) ;;
+    *)
+        logger -p local0.info \
+            "ftpcmd_raw_timing trace=$TRACE_ID phase=commands_submitted elapsed_ms=$((REASSOC_DONE_MS - START_MS)) iface=$IFACE parse_ms=$((PARSED_MS - START_MS)) id_lookup_ms=$((STATUS_DONE_MS - PARSED_MS)) set_network_ms=$((SET_DONE_MS - STATUS_DONE_MS)) reassociate_ms=$((REASSOC_DONE_MS - SET_DONE_MS)) set_rc=$SET_RC reassociate_rc=$REASSOC_RC" \
+            >/dev/null 2>&1 || true
+        ;;
+esac
+
+if [ "$SET_RC" -eq 0 ] && [ "$SET_REPLY" = "OK" ] \
+   && [ "$REASSOC_RC" -eq 0 ] && [ "$REASSOC_REPLY" = "OK" ]; then
+    exit 0
+fi
+
+raw_log_failure 7 \
+    "set_rc=$SET_RC set_reply=${SET_REPLY:-empty} reassociate_rc=$REASSOC_RC reassociate_reply=${REASSOC_REPLY:-empty}"
+exit 7
