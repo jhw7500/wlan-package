@@ -3,6 +3,29 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.6.8 (2026-09-29)
+
+> SemVer **patch** — FTP `quote wconnect`를 SSID·선택 주파수 전환과 실제 연결 완료 응답까지 확장하고, 시험용 raw 경로와 phase 타이밍을 추가한다. `link.json`의 managed-STA SSID 누락과 wlan-opc 후속 결함을 고치며, imx93 드라이버 payload를 `wlan-driver-v2` `522f9ed` 기준으로 갱신한다.
+
+### FTP quote 무선 전환 확장 (#337)
+
+- `quote wconnect [mlan0|mlan1] [ssid [freq_or_channel...]]`에서 인터페이스를 생략하면 `mlan0`을 사용한다. 첫 번째 인자는 SSID, 이후 인자는 각각 채널 또는 MHz 중심 주파수이며, 주파수를 생략하면 기존 공통 정책을 보존한다.
+- 정식 경로는 SSID와 선택적인 `freq_list`를 canonical conf에 영속 저장한 뒤 전체 profile을 `reconfigure`한다. PSK·`key_mgmt`·legacy `scan_freq`가 supplicant 메모리와 디스크에서 어긋나지 않게 하고, fresh `CONNECTED` 이벤트와 `COMPLETED` 상태의 SSID·ID·주파수 착지를 확인한 뒤 응답한다.
+- Mode A 또는 실제 다중 `network={}` topology에서 명시적 SSID 호출은 모든 블록의 identity를 한 값으로 덮어쓰지 않도록 `FAIL code=1`로 거부한다. 인자 없는 재연결은 enabled network를 유지하고 supplicant가 선택한 ID의 fresh association을 확인한다.
+- 시험용 `wconnectraw`는 현재 network ID에 `set_network ... ssid`와 `reassociate`만 제출하고 즉시 반환한다. 응답 성공은 명령 접수만 의미하며 실제 연결 완료나 영속 적용을 뜻하지 않는다.
+- `wconnect`와 `wconnectraw` 응답은 `SUCCESS` 또는 `FAIL code=N`으로 단순화했다. dispatch·인자 파싱·profile reload·disconnect/connect·association 검증·reply 구간은 동일 trace의 rsyslog 타이밍으로 남긴다.
+- `docs/ftp_quote_protocol.md`에 전체 quote 명령 형식, 응답 코드, 안전 가드, 타이밍 로그와 다중 topology 제약을 정리했다.
+
+### managed STA SSID 및 wlan-opc 반영
+
+- managed STA의 `iw <iface> info`에는 SSID가 없으므로 `wifi_logger_link.py`가 이미 수집하는 `wpa_cli status`의 `ssid=`를 디코딩해 `link.json`의 `info.ssid`를 복구한다. OPC device-info의 ESSID가 비던 문제를 추가 subprocess 없이 해결했다(#336).
+- wlan-opc를 `28f4a5a`로 갱신했다. 저장 큐 포화 시 UDP 루프 블로킹을 줄이고, 동작하지 않던 nl80211 managed-STA SSID 폴백을 제거하며, 폭주 임계에 진입 80%·해제 70% 히스테리시스를 적용한다.
+
+### imx93 드라이버 payload 갱신
+
+- `wlan-driver-v2` source commit을 `53cfcf3`에서 `522f9ed`로 갱신했다. 핵심 드라이버 변경은 `c0d0de7`(`fix(moal): preserve txpwrlimit private-command ABI`)이며, 내부 `pt_base_version` metadata가 기존 private-command wire 응답에 섞이지 않도록 한다.
+- `moal_imx93.ko` SHA-256은 `898b6d1594e82039a1157b9cb17958e21dc19f87b266936088637aedd9f57fcb`다. `.ko` 자체는 외부 supplied output으로 유지하고, `DRIVER_COMPONENTS.sha256`과 `DRIVER_MANIFEST.md`에 최종 source commit·component identity를 기록한다.
+
 ## 0.6.7 (2026-09-14)
 
 > SemVer **patch** — 출하 `rate_adapt` 기본값을 `70/90` 에서 `40/65` 로 바꾼다. 근거는 regime 별로 세기가 다르다 — 부트 게이트 조건의 light arm(15/15)에서는 FW 가 `70/90` 을 트래픽 2~3 초 뒤 `40/65` 로 덮어쓰고 그 값이 실사용 상태이므로 **그 arm 들에서는 두 설정의 귀결이 같다**(전환 관측). light 라고 항상 그렇지는 않다 — 조사 문서 §12.8 참조. 무거운 트래픽에서는 `70/90` 이 살아남고 선택 rate 가 45.53 vs 45.65 Mbps 로 나왔으나 **그 비교는 미해결**이다 — 설정당 1 회 측정이었고 허용오차 1.39 가 잡음에 대해 검증되지 않았다(아래 2026-09-14 정정). 기본값 변경은 **light regime 근거만으로** 유지된다. **신규 설치·factory reset 한정** — 기존 기기는 의도적으로 손대지 않는다.
