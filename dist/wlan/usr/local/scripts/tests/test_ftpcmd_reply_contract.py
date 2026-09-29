@@ -221,15 +221,15 @@ class WconnectDefaultInterface(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(argv, ["mlan0", "connect", "field-ap"])
 
-    def test_multiword_ssid_without_interface_is_rejoined(self):
-        r, argv, _ = run_wconnect("Field", "AP")
+    def test_frequency_and_channel_arguments_are_forwarded_separately(self):
+        r, argv, _ = run_wconnect("field-ap", "36", "5200")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual(argv, ["mlan0", "connect", "Field AP"])
+        self.assertEqual(argv, ["mlan0", "connect", "field-ap", "36", "5200"])
 
     def test_explicit_mlan1_is_preserved(self):
-        r, argv, _ = run_wconnect("mlan1", "field-ap")
+        r, argv, _ = run_wconnect("mlan1", "field-ap", "2412")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual(argv, ["mlan1", "connect", "field-ap"])
+        self.assertEqual(argv, ["mlan1", "connect", "field-ap", "2412"])
 
     def test_timing_log_uses_one_trace_through_reply_ready(self):
         r, _, lines = run_wconnect("field-ap", wifi_rc=8)

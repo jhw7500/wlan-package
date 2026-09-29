@@ -1,6 +1,7 @@
 #!/bin/sh
 # Reassociate a wifi interface, optionally switching it to another SSID.
-# Reached over FTP as: quote wconnect [mlan0|mlan1] [ssid]
+# Reached over FTP as:
+#   quote wconnect [mlan0|mlan1] [ssid [freq_or_channel...]]
 #
 # NOT named "connect": vsftpd refuses GET/POST/HEAD/OPTIONS/CONNECT as FTP
 # verbs and drops the control connection, and that check runs before the
@@ -9,6 +10,9 @@
 #
 # A leading mlan0/mlan1 selects the interface.  Any other first argument is
 # the SSID and implicitly selects mlan0, so `quote wconnect my-ssid` works.
+# The SSID is exactly one FTP argument; every following argument is forwarded
+# as a frequency/channel selector to wifi connect.  Frequency selectors are
+# optional, and omitting them preserves the profile's current frequency policy.
 # With no SSID it forces a reassociation to whatever the selected interface is
 # already configured for.
 #
@@ -106,10 +110,13 @@ esac
 
 if [ "$#" -eq 0 ]; then
     FTPCMD_HAS_SSID=0
+    FTPCMD_FREQ_ARGC=0
 else
     FTPCMD_HAS_SSID=1
+    FTPCMD_FREQ_ARGC=$(($# - 1))
 fi
-ftpcmd_trace_log arguments_parsed "iface=$IFACE ssid_supplied=$FTPCMD_HAS_SSID"
+ftpcmd_trace_log arguments_parsed \
+    "iface=$IFACE ssid_supplied=$FTPCMD_HAS_SSID freq_argc=$FTPCMD_FREQ_ARGC"
 
 # wifi's own connect subcommand only handles the two station interfaces; the
 # parser above can therefore select only mlan0 or mlan1.
@@ -132,18 +139,18 @@ if [ -n "${FTPCMD_LOCAL_ADDR:-}" ]; then
     fi
 fi
 
-# The SSID is everything left.  vsftpd splits on spaces, so an SSID that
-# contains them arrives as several arguments and is rejoined here; repeated
-# spaces collapse to one.  An SSID holding a character outside vsftpd's
-# argument set never reaches this handler at all - the command is refused on
-# the control connection instead.
+# The first remaining argument is the SSID and every later argument is a
+# frequency/channel selector.  Keep the argv boundary intact so wifi connect
+# can validate and normalize those selectors.  SSIDs containing spaces are
+# intentionally unsupported by this FTP command.
 if [ "$#" -eq 0 ]; then
     ftpcmd_trace_log connect_invoked "iface=$IFACE ssid_supplied=0"
     FTPCMD_DETAIL=$("$WIFI" "$IFACE" connect 2>&1)
     FTPCMD_RC=$?
 else
-    ftpcmd_trace_log connect_invoked "iface=$IFACE ssid_supplied=1"
-    FTPCMD_DETAIL=$("$WIFI" "$IFACE" connect "$*" 2>&1)
+    ftpcmd_trace_log connect_invoked \
+        "iface=$IFACE ssid_supplied=1 freq_argc=$FTPCMD_FREQ_ARGC"
+    FTPCMD_DETAIL=$("$WIFI" "$IFACE" connect "$@" 2>&1)
     FTPCMD_RC=$?
 fi
 
