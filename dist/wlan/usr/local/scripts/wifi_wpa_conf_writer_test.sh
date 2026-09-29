@@ -397,12 +397,6 @@ EOT
       printf 'OK\n'
     fi
     ;;
-  *" set_network "*)
-    mode=$(cat "$STATE_DIR/set-network-mode" 2>/dev/null || echo ok)
-    if [ "$mode" = "rc-ok" ]; then printf 'OK\n'; exit 9
-    elif [ "$mode" = "fail" ]; then printf 'FAIL\n'
-    else printf 'OK\n'; fi
-    ;;
   *" enable_network all"*)
     mode=$(cat "$STATE_DIR/enable-mode" 2>/dev/null || echo ok)
     if [ "$mode" = "rc-ok" ]; then printf 'OK\n'; exit 9
@@ -499,10 +493,6 @@ set_status_mode() {
 set_reconfigure_mode() {
     printf '%s\n' "$1" > "$STATE_DIR/reconfigure-mode"
     rm -f "$STATE_DIR/reconfigure-count"
-}
-
-set_set_network_mode() {
-    printf '%s\n' "$1" > "$STATE_DIR/set-network-mode"
 }
 
 set_assoc_mode() {
@@ -834,14 +824,14 @@ check_monitor_attached_before_request() {
     fi
 }
 
-check_monitor_attached_before_live_switch() {
+check_monitor_attached_before_profile_reload() {
     local desc="$1" attach request
     attach=$(grep -n ' -a .* -B -P ' "$CALL_LOG" | head -1 | cut -d: -f1)
-    request=$(grep -n 'set_network [0-9][0-9]* ssid ' "$CALL_LOG" | head -1 | cut -d: -f1)
+    request=$(grep -n 'reconfigure$' "$CALL_LOG" | head -1 | cut -d: -f1)
     if [ -n "$attach" ] && [ -n "$request" ] && [ "$attach" -lt "$request" ]; then
         pass "$desc"
     else
-        fail "$desc (attach=${attach:-missing} set_network=${request:-missing})"
+        fail "$desc (attach=${attach:-missing} reconfigure=${request:-missing})"
     fi
 }
 
@@ -1195,10 +1185,10 @@ if [ "$rc" -eq 0 ] && [ "$(conf_ssid_identity "$CONF")" = "Office" ]; then
 else
     fail "wifi connect must accept an immutable Mode B manual candidate"
 fi
-check_equal "wifi connect Mode B manual candidate updates live ssid once" \
-    "$(grep -c 'set_network 0 ssid ' "$CALL_LOG" || true)" "1"
-check_equal "wifi connect Mode B manual candidate avoids reconfigure" \
-    "$(grep -c 'reconfigure$' "$CALL_LOG" || true)" "0"
+check_equal "wifi connect Mode B manual candidate avoids partial live mutation" \
+    "$(grep -c 'set_network ' "$CALL_LOG" || true)" "0"
+check_equal "wifi connect Mode B manual candidate reloads the full profile" \
+    "$(grep -c 'reconfigure$' "$CALL_LOG" || true)" "1"
 
 write_mode_b_legacy
 set_boot_policy false false '["Office"]'
@@ -1305,12 +1295,10 @@ check_equal "wifi connect writes canonical block list" \
     "$(count_block_freq "$CONF" '5180')" "1"
 check_equal "wifi connect removes scan_freq" \
     "$(grep -Ec '^[[:space:]]*scan_freq[[:space:]]*=' "$CONF" || true)" "0"
-check_equal "wifi connect applies target ssid to current live network" \
-    "$(grep -c 'set_network 0 ssid ' "$CALL_LOG" || true)" "1"
-check_equal "wifi connect applies explicit freq_list to current live network" \
-    "$(grep -c 'set_network 0 freq_list 5180$' "$CALL_LOG" || true)" "1"
-check_equal "wifi connect live success avoids reconfigure" \
-    "$(grep -c 'reconfigure$' "$CALL_LOG" || true)" "0"
+check_equal "wifi connect avoids partial live profile mutation" \
+    "$(grep -c 'set_network ' "$CALL_LOG" || true)" "0"
+check_equal "wifi connect reloads ssid, credentials, and frequency together" \
+    "$(grep -c 'reconfigure$' "$CALL_LOG" || true)" "1"
 
 for _sync_failure in fail-installed fail-dir; do
     write_mode_b_legacy
@@ -1322,9 +1310,9 @@ for _sync_failure in fail-installed fail-dir; do
         bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1
     rc=$?
     if [ "$rc" -ne 0 ]; then
-        pass "wifi connect ${_sync_failure} is fatal before live apply"
+        pass "wifi connect ${_sync_failure} is fatal before profile reload"
     else
-        fail "wifi connect ${_sync_failure} must be fatal before live apply"
+        fail "wifi connect ${_sync_failure} must be fatal before profile reload"
     fi
     check_equal "wifi connect ${_sync_failure} does not reconfigure" \
         "$(grep -c 'reconfigure$' "$CALL_LOG" || true)" "0"
@@ -1332,25 +1320,12 @@ done
 set_sync_mode ok
 
 write_mode_b_legacy
-set_status_mode target
-set_monitor_mode reconfigure-event
-set_set_network_mode rc-ok
-set_reconfigure_mode ok
-: > "$CALL_LOG"
-WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
-    bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1
-check_equal "wifi connect treats set_network OK with nonzero rc as live failure" "$?" "0"
-check_equal "wifi connect falls back to reconfigure after strict live failure" \
-    "$(grep -c 'reconfigure$' "$CALL_LOG" || true)" "1"
-set_set_network_mode ok
-
-write_mode_b_legacy
 set_status_mode no-current-target
 set_monitor_mode reconfigure-event
 : > "$CALL_LOG"
 WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
     bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1
-check_equal "wifi connect without current id succeeds through reconfigure fallback" "$?" "0"
+check_equal "wifi connect without current id succeeds through full profile reload" "$?" "0"
 check_equal "wifi connect without current id sends no set_network" \
     "$(grep -c 'set_network ' "$CALL_LOG" || true)" "0"
 check_equal "wifi connect without current id reconfigures once" \
@@ -1362,7 +1337,7 @@ set_status_mode no-current-target
 set_monitor_mode reconfigure-event
 WPA_CONF_DIR="$WPA_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
     bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1
-check_equal "wifi connect fallback rejects reconfigure stdout OK with nonzero rc" "$?" "7"
+check_equal "wifi connect rejects reconfigure stdout OK with nonzero rc" "$?" "7"
 set_reconfigure_mode ok
 
 write_mode_b_legacy
@@ -2185,12 +2160,12 @@ for _abort_mode in ok-then-fail plain-fail; do
     check_equal "explicit Mode B accepts $_abort_mode ABORT_SCAN" "$rc" "0"
     check_equal "explicit Mode B $_abort_mode reaches quiescent FAIL" \
         "$(grep -c 'abort_scan$' "$CALL_LOG" || true)" "$_expected_abort_calls"
-    check_monitor_attached_before_live_switch \
-        "explicit Mode B attaches fresh-event monitor before live switch ($_abort_mode)"
-    check_equal "explicit Mode B live switch reassociates once ($_abort_mode)" \
+    check_monitor_attached_before_profile_reload \
+        "explicit Mode B attaches fresh-event monitor before profile reload ($_abort_mode)"
+    check_equal "explicit Mode B profile reload reassociates once when grace has no event ($_abort_mode)" \
         "$(grep -c 'reassociate$' "$CALL_LOG" || true)" "1"
-    check_equal "explicit Mode B live switch avoids reconfigure ($_abort_mode)" \
-        "$(grep -c 'reconfigure$' "$CALL_LOG" || true)" "0"
+    check_equal "explicit Mode B reloads the full profile once ($_abort_mode)" \
+        "$(grep -c 'reconfigure$' "$CALL_LOG" || true)" "1"
 done
 
 for _abort_mode in empty other rc-ok; do
@@ -2540,8 +2515,8 @@ WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
 check_equal "Mode A disconnected recovery accepts fresh event id and later matching status" "$?" "0"
 check_monitor_attached_before_request "Mode A disconnected recovery attaches monitor before reassociate"
 
-# The live Mode B switch updates the current network then issues exactly one
-# reassociation under the already-armed fresh-event monitor.
+# The explicit Mode B path reloads the full profile, then issues one
+# reassociation if the reconfigure grace period produced no fresh event.
 write_mode_b_legacy
 set_boot_policy false false
 set_abort_scan_mode plain-fail
@@ -2550,11 +2525,11 @@ set_monitor_mode matching-zero
 : > "$CALL_LOG"
 WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" ASSOC_TIMEOUT_DEFAULT=2 \
     bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1
-check_equal "explicit Mode B live reassociation succeeds with fresh proof" "$?" "0"
-check_equal "explicit Mode B live switch issues exactly one reassociate" \
+check_equal "explicit Mode B profile reload succeeds with fresh proof" "$?" "0"
+check_equal "explicit Mode B reload issues exactly one reassociate after grace" \
     "$(grep -c 'reassociate$' "$CALL_LOG" || true)" "1"
-check_equal "explicit Mode B live switch issues no reconfigure" \
-    "$(grep -c 'reconfigure$' "$CALL_LOG" || true)" "0"
+check_equal "explicit Mode B reload issues exactly one reconfigure" \
+    "$(grep -c 'reconfigure$' "$CALL_LOG" || true)" "1"
 
 # A delayed event created while reading status is accepted only on the next
 # status snapshot.  The initial status is the live network-id lookup.
@@ -2566,9 +2541,9 @@ set_monitor_mode delayed-grace
 WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
     bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1
 check_equal "delayed fresh explicit target proof succeeds" "$?" "0"
-check_equal "delayed live proof uses one reassociate and no reconnect" \
-    "$(grep -Ec 'reassociate$|reconnect$' "$CALL_LOG" || true)" "1"
-check_equal "delayed live proof uses one lookup plus two proof status calls" \
+check_equal "delayed profile-reload proof completes during grace without another request" \
+    "$(grep -Ec 'reassociate$|reconnect$' "$CALL_LOG" || true)" "0"
+check_equal "delayed profile-reload proof uses one lookup plus two proof status calls" \
     "$(grep -c ' status$' "$CALL_LOG" || true)" "3"
 
 # With no event, the live request still gets exactly TOTAL_POLLS proof attempts
@@ -2597,12 +2572,12 @@ set_monitor_mode delayed-fallback
 : > "$CALL_LOG"
 WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" ASSOC_TIMEOUT_DEFAULT=1 \
     bash "$WIFI_SH" 0 connect NewNet 5180 >/dev/null 2>&1
-check_equal "fresh proof succeeds in live-switch budget" "$?" "0"
-check_equal "live proof does not reset total poll budget" \
+check_equal "fresh proof succeeds in profile-reload budget" "$?" "0"
+check_equal "profile-reload proof does not reset total poll budget" \
     "$(grep -c ' status$' "$CALL_LOG" || true)" "7"
-check_equal "live proof uses exactly one reassociate" \
+check_equal "profile-reload proof uses exactly one reassociate" \
     "$(grep -c 'reassociate$' "$CALL_LOG" || true)" "1"
-check_equal "live proof after accepted reassociate uses no reconnect" \
+check_equal "profile-reload proof after accepted reassociate uses no reconnect" \
     "$(grep -c 'reconnect$' "$CALL_LOG" || true)" "0"
 
 write_mode_b_legacy

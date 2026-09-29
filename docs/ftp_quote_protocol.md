@@ -132,12 +132,12 @@ SSID가 지정된 일반 경로는 다음 작업을 수행한다.
 3. 진행 중인 스캔을 정리하고 현재 network ID와 topology를 확인한다.
 4. 설정 파일을 canonical 형식으로 렌더링하여 SSID와 선택적인 `freq_list`를
    영속 저장하고 동기화한다.
-5. 현재 network ID가 있으면 `set_network`와 `reassociate`로 빠른 런타임 전환을
-   요청한다.
-6. 빠른 전환이 불가능하면 저장된 설정을 `reconfigure`하는 경로로 복구한다.
-7. fresh `CONNECTED` 이벤트와 `wpa_state=COMPLETED` 상태에서 목표 SSID, ID,
+5. `reconfigure`로 저장된 전체 프로필을 런타임에 다시 적재한다. SSID와 주파수만
+   부분 변경하지 않으므로 PSK, `key_mgmt`, legacy `scan_freq`가 디스크 설정과
+   어긋난 채 남지 않는다.
+6. fresh `CONNECTED` 이벤트와 `wpa_state=COMPLETED` 상태에서 목표 SSID, ID,
    주파수의 착지를 확인한다.
-8. 최대 15초 안에 연결을 확인하면 성공하고, 아니면 종료 코드 `8`로 실패한다.
+7. 최대 15초 안에 연결을 확인하면 성공하고, 아니면 종료 코드 `8`로 실패한다.
 
 다중 network topology에서는 SSID를 일괄 변경하지 않도록 SSID 지정 호출을
 거부한다. 인자 없는 재연결은 허용하며, enabled network 중 wpa_supplicant가 고른
@@ -304,9 +304,8 @@ ftpcmd_timing trace=<id> phase=<phase> elapsed_ms=<ms> ...
 | `arguments_parsed` | 기본 인터페이스, SSID 유무, 주파수 인자 수 판정 완료 |
 | `connect_invoked` | 실행 파일과 제어 연결 안전 검사 후 `wifi connect` 호출 직전 |
 | `wifi_connect_entered` | `wifi` 스크립트 초기화 후 connect 분기 진입 |
-| `runtime_switch_requested` | 설정 검증·파일 저장·monitor 준비 후 `set_network`/`reassociate` 제출 완료 |
-| `reconfigure_requested` | 빠른 전환 실패 후 `reconfigure` 제출 완료 |
-| `reconnect_requested` | 인자 없는 재연결 또는 fallback `reassociate`/`reconnect` 제출 완료 |
+| `reconfigure_requested` | 설정 검증·파일 저장·monitor 준비 후 전체 프로필 `reconfigure` 제출 완료 |
+| `reconnect_requested` | 인자 없는 재연결 또는 reconfigure grace 이후 `reassociate`/`reconnect` 제출 완료 |
 | `disconnected_event` | wpa_supplicant의 fresh `DISCONNECTED` 이벤트 수신 |
 | `connected_event` | 유효한 network ID가 포함된 fresh `CONNECTED` 이벤트 수신 |
 | `association_verified` | 상태 polling으로 목표 association의 `COMPLETED` 착지 확인 |

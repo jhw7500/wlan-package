@@ -2859,14 +2859,13 @@ case "$2" in
     ;;
   connect)
     # 인자 있음(Mode B): ssid(+공통 freq_list)를 canonical conf에 기록한 뒤
-    #                     현재 network id에 set_network 후 reassociate한다.
-    #                     현재 id가 없거나 live apply가 실패하면 reconfigure fallback.
+    #                     reconfigure로 전체 프로필을 runtime에 다시 적재한다.
     #                     freq 생략 시 기존 공통 목록을 유지하되 legacy scan_freq는 제거.
     # 인자 없음: conf 편집/reconfigure 없이 현재 설정으로 강제 재연결만.
     # 공통: reassociate(연결/미연결 모두 강제 재연관 → ssid 변경 반영 확실) 우선,
     #       실패 시 reconnect fallback(rollback_radio_live와 동일 규약) → assoc 대기.
     # exit: 0=ok 1=usage/env 7=wpa_cli 8=assoc-timeout
-    # known limitation: live apply/reconfigure fallback 뒤 assoc 타임아웃(8) 시 conf는
+    # known limitation: reconfigure 뒤 assoc 타임아웃(8) 시 conf는
     #   새 ssid로 이미 persist된다(라이브는 옛 AP일 수 있음).
     #   ssid 변경은 의도된 영속이라 rollback하지 않는다 — 다음 재시도/부팅 시 적용.
     set -euo pipefail
@@ -2885,7 +2884,6 @@ case "$2" in
     CONNECT_TIMEOUT="$ASSOC_TIMEOUT_DEFAULT"
     TOTAL_POLLS=$((CONNECT_TIMEOUT * 10))
     REMAINING_POLLS="$TOTAL_POLLS"
-    CONNECT_REQUESTED=0
     SSID_ENCODING_OUTPUT=""
     SSID_ENCODINGS=()
     if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
@@ -2917,8 +2915,8 @@ case "$2" in
     if ! wifi_wpa_abort_scan_quiesce "$IFACE"; then
         echo "Error: cannot quiesce scan for $IFACE" >&2; exit 7
     fi
-    # Capture the current id before any live mutation.  Explicit Mode B uses it
-    # for set_network; no-argument reconnect pins it for exact landing proof.
+    # Capture the current id before any live mutation.  Explicit Mode B reports
+    # it in timing diagnostics; no-argument reconnect pins it for exact landing proof.
     WPA_STATUS=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" status 2>/dev/null) || WPA_STATUS=""
     while IFS='=' read -r _key _value; do
         [ "$_key" = "id" ] && LIVE_NETWORK_ID="$_value"
@@ -2959,7 +2957,7 @@ case "$2" in
         exit 7
     fi
     if [ $# -ge 1 ]; then
-        # === conf 편집 경로: ssid(+freq) 영구 기록 → live set_network/reassociate ===
+        # === conf 편집 경로: ssid(+freq) 영구 기록 → 전체 프로필 reconfigure ===
         if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
         # Identity validation and byte-exact encoding happened before any live
         # ctrl mutation, while both writer locks were held.
@@ -3029,56 +3027,40 @@ case "$2" in
         else
             echo "conf updated: ssid=\"$NEW_SSID\" (no frequency restriction) in $CONF"
         fi
-        LIVE_APPLY_OK=0
-        if [ -n "$LIVE_NETWORK_ID" ] && connect_event_monitor_arm \
-           && wpa_cli_ok "$IFACE" set_network "$LIVE_NETWORK_ID" ssid "$SSID_CONF_VALUE"; then
-            if { [ "$SET_FREQ" = "0" ] \
-                 || wpa_cli_ok "$IFACE" set_network "$LIVE_NETWORK_ID" freq_list "$FREQ_STR"; } \
-               && wpa_cli_ok "$IFACE" reassociate; then
-                LIVE_APPLY_OK=1
-            fi
+        # Reload the whole persisted network profile.  Updating only ssid and
+        # freq_list with SET_NETWORK is not sufficient: persist-only psk/key/freq
+        # edits or a legacy scan_freq may leave authentication and scan policy
+        # stale in supplicant memory even when SET_NETWORK/reassociate returns OK.
+        if ! connect_event_monitor_arm || ! wpa_cli_ok "$IFACE" reconfigure; then
+            echo "Error: wpa_cli reconfigure failed for $IFACE (wpa_supplicant 미동작 또는 conf 문법 오류 확인)" >&2
+            exit 7
         fi
-        if [ "$LIVE_APPLY_OK" = "1" ]; then
-            CONNECT_TRIGGER=set_network-reassociate
-            CONNECT_REQUESTED=1
-            ftpcmd_trace_log runtime_switch_requested \
-                "method=set_network_reassociate id=$LIVE_NETWORK_ID"
-            echo "wpa_cli set_network/reassociate OK ($IFACE id=$LIVE_NETWORK_ID)"
-        else
-            # A disconnected supplicant has no current id, and any failed live
-            # mutation may have left only part of the runtime network updated.
-            # Reload the already-durable canonical conf as the recovery path.
-            if ! connect_event_monitor_arm || ! wpa_cli_ok "$IFACE" reconfigure; then
-                echo "Error: wpa_cli live apply/reconfigure failed for $IFACE (wpa_supplicant 미동작 또는 conf 문법 오류 확인)" >&2
-                exit 7
-            fi
-            ftpcmd_trace_log reconfigure_requested \
-                "fallback=1 live_id=${LIVE_NETWORK_ID:-none}"
-            echo "wpa_cli reconfigure fallback OK ($IFACE)"
-            # Reconfigure gets a bounded grace share of the one association
-            # budget.  If it does not prove landing, the common recovery below
-            # re-arms the monitor and requests one reassociation.
-            GRACE_POLLS=$((TOTAL_POLLS / 3))
-            [ "$GRACE_POLLS" -ge 1 ] || GRACE_POLLS=1
-            [ "$GRACE_POLLS" -le 20 ] || GRACE_POLLS=20
-            if [ "$GRACE_POLLS" -ge "$TOTAL_POLLS" ]; then
-                GRACE_POLLS=$((TOTAL_POLLS - 1))
-            fi
-            for ((_i = 1; _i <= GRACE_POLLS && REMAINING_POLLS > 0; _i++)); do
-                if connect_association_poll_matches; then
-                    ASSOC_MATCH=1
-                fi
-                REMAINING_POLLS=$((REMAINING_POLLS - 1))
-                if [ "$ASSOC_MATCH" = "1" ]; then
-                    ftpcmd_trace_log association_verified "path=reconfigure id=${CUR_ID:-N/A}"
-                    echo "associated by reconfigure: ssid=\"$CUR_SSID\" freq=$CUR_FREQ id=$CUR_ID"
-                    exit 0
-                fi
-                if [ "$_i" -lt "$GRACE_POLLS" ] && [ "$REMAINING_POLLS" -gt 0 ]; then
-                    wifi_wpa_run_child sleep 0.1
-                fi
-            done
+        ftpcmd_trace_log reconfigure_requested \
+            "profile_sync=1 live_id=${LIVE_NETWORK_ID:-none}"
+        echo "wpa_cli reconfigure OK ($IFACE)"
+        # Reconfigure gets a bounded grace share of the one association budget.
+        # If it does not prove landing, the common recovery below re-arms the
+        # monitor and requests one reassociation.
+        GRACE_POLLS=$((TOTAL_POLLS / 3))
+        [ "$GRACE_POLLS" -ge 1 ] || GRACE_POLLS=1
+        [ "$GRACE_POLLS" -le 20 ] || GRACE_POLLS=20
+        if [ "$GRACE_POLLS" -ge "$TOTAL_POLLS" ]; then
+            GRACE_POLLS=$((TOTAL_POLLS - 1))
         fi
+        for ((_i = 1; _i <= GRACE_POLLS && REMAINING_POLLS > 0; _i++)); do
+            if connect_association_poll_matches; then
+                ASSOC_MATCH=1
+            fi
+            REMAINING_POLLS=$((REMAINING_POLLS - 1))
+            if [ "$ASSOC_MATCH" = "1" ]; then
+                ftpcmd_trace_log association_verified "path=reconfigure id=${CUR_ID:-N/A}"
+                echo "associated by reconfigure: ssid=\"$CUR_SSID\" freq=$CUR_FREQ id=$CUR_ID"
+                exit 0
+            fi
+            if [ "$_i" -lt "$GRACE_POLLS" ] && [ "$REMAINING_POLLS" -gt 0 ]; then
+                wifi_wpa_run_child sleep 0.1
+            fi
+        done
     else
         # === 인자 없음: conf 그대로 현재 설정으로 재연결만 ===
         # stdout 첫 줄은 ftpcmd `wconnect`의 200 응답 본문이 되므로 ASCII만 쓴다(#292).
@@ -3093,22 +3075,20 @@ case "$2" in
     # --- 공통: owner-neutral 강제 재연결(reassociate 우선, 실패 시 reconnect) → assoc 대기 ---
     # Mode A도 다른 network 블록의 enabled 상태를 바꾸지 않는다. 단일 블록은 최초에 캡처한
     # id를, 다중 블록은 fresh CONNECTED event가 가리킨 id를 그 이후 COMPLETED 폴링으로 증명한다.
-    if [ "$CONNECT_REQUESTED" != "1" ]; then
-        if ! connect_event_monitor_arm; then
-            echo "Error: failed to arm reconnect event monitor for $IFACE" >&2
-            exit 7
-        fi
-        CONNECT_TRIGGER=reassociate
-        if wpa_cli_ok "$IFACE" reassociate; then
-            :
-        elif wpa_cli_ok "$IFACE" reconnect; then
-            CONNECT_TRIGGER=reconnect
-        else
-            echo "Error: wpa_cli reassociate/reconnect failed for $IFACE" >&2
-            exit 7
-        fi
-        ftpcmd_trace_log reconnect_requested "method=$CONNECT_TRIGGER"
+    if ! connect_event_monitor_arm; then
+        echo "Error: failed to arm reconnect event monitor for $IFACE" >&2
+        exit 7
     fi
+    CONNECT_TRIGGER=reassociate
+    if wpa_cli_ok "$IFACE" reassociate; then
+        :
+    elif wpa_cli_ok "$IFACE" reconnect; then
+        CONNECT_TRIGGER=reconnect
+    else
+        echo "Error: wpa_cli reassociate/reconnect failed for $IFACE" >&2
+        exit 7
+    fi
+    ftpcmd_trace_log reconnect_requested "method=$CONNECT_TRIGGER"
     # 연결 완료 대기(best-effort, 최대 15s) — 0.1s grid 폴링으로 COMPLETED를 빨리 감지.
     # (실제 association 시간은 물리 과정이라 불변; 폴링 grid만 줄여 끝맺음 반응성 개선)
     WPA_STATE=""; CUR_SSID=""; CUR_FREQ=""; CUR_ID=""

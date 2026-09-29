@@ -296,31 +296,61 @@ class FtpcmdTimingTrace(ConnectHarness):
         elapsed = [int(re.search(r"elapsed_ms=([0-9]+)", line).group(1)) for line in timing]
         self.assertEqual(elapsed, sorted(elapsed), timing)
 
-    def test_explicit_switch_uses_live_network_and_logs_runtime_phase(self):
+    def test_explicit_switch_reloads_full_profile_and_logs_reconfigure_phase(self):
         self.write_conf(CONF_MODE_B)
         self.land_on(0, "jhw_wlan", 5200)
         r = self.run_connect("jhw_wlan", trace=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
         calls = (self.state / "calls.log").read_text().splitlines()
-        self.assertIn('wpa_cli -i mlan0 set_network 0 ssid "jhw_wlan"', calls)
-        self.assertIn("wpa_cli -i mlan0 reassociate", calls)
-        self.assertNotIn("wpa_cli -i mlan0 reconfigure", calls)
+        self.assertNotIn('wpa_cli -i mlan0 set_network 0 ssid "jhw_wlan"', calls)
+        self.assertIn("wpa_cli -i mlan0 reconfigure", calls)
 
         timing = (self.state / "logger.log").read_text().splitlines()
-        runtime = [line for line in timing if "phase=runtime_switch_requested" in line]
-        self.assertEqual(len(runtime), 1, timing)
-        self.assertIn("method=set_network_reassociate", runtime[0])
-        self.assertIn("id=0", runtime[0])
+        reconfigure = [line for line in timing if "phase=reconfigure_requested" in line]
+        self.assertEqual(len(reconfigure), 1, timing)
+        self.assertIn("profile_sync=1", reconfigure[0])
 
-    def test_explicit_frequency_is_applied_to_live_network(self):
+    def test_explicit_frequency_is_persisted_before_profile_reload(self):
         self.write_conf(CONF_MODE_B)
         self.land_on(0, "jhw_wlan", 5200)
         r = self.run_connect("jhw_wlan", "5200")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
         calls = (self.state / "calls.log").read_text().splitlines()
-        self.assertIn("wpa_cli -i mlan0 set_network 0 freq_list 5200", calls)
+        self.assertNotIn("wpa_cli -i mlan0 set_network 0 freq_list 5200", calls)
+        self.assertIn("wpa_cli -i mlan0 reconfigure", calls)
+        self.assertEqual(self.conf.read_text().count("freq_list=5200"), 2)
+
+    def test_persisted_credentials_are_reloaded_instead_of_reusing_runtime_profile(self):
+        conf = CONF_MODE_B.replace(
+            'psk="stub-psk-not-a-secret"', 'psk="persisted-new-credential"',
+        )
+        self.write_conf(conf)
+        self.land_on(0, "jhw_wlan", 5200)
+        r = self.run_connect("jhw_wlan")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+        calls = (self.state / "calls.log").read_text().splitlines()
+        self.assertFalse(any(" set_network " in call for call in calls), calls)
+        self.assertIn("wpa_cli -i mlan0 reconfigure", calls)
+
+    def test_legacy_scan_freq_is_removed_from_runtime_by_profile_reload(self):
+        legacy = CONF_MODE_B.replace(
+            "freq_list=5180 5200 5220 5240\n", "", 1,
+        ).replace(
+            "    freq_list=5180 5200 5220 5240\n",
+            "    scan_freq=5180 5200 5220 5240\n",
+            1,
+        )
+        self.write_conf(legacy)
+        self.land_on(0, "jhw_wlan", 5200)
+        r = self.run_connect("jhw_wlan")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+        calls = (self.state / "calls.log").read_text().splitlines()
+        self.assertNotIn("scan_freq=", self.conf.read_text())
+        self.assertIn("wpa_cli -i mlan0 reconfigure", calls)
 
 
 class ModeANoArgReconnect(ConnectHarness):
