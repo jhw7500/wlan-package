@@ -220,6 +220,57 @@ echo "=== radio mode/bw helpers ==="
 # shellcheck source=./wifi_init_config_lib.sh
 source "$LIB"
 
+echo ""
+echo "=== shared SSID encoding fast path ==="
+
+for _ssid_case in 'cantops' 'guest ap' 'a"b#c' '게스트\망'; do
+    _ssid_combined=$(wifi_ssid_encode_values "$_ssid_case") || {
+        log_fail "combined SSID encoder accepts [$_ssid_case]"
+        continue
+    }
+    _ssid_expected=$(printf '%s\n%s' \
+        "$(wifi_ssid_to_conf_value "$_ssid_case")" \
+        "$(wifi_ssid_to_wpa_text "$_ssid_case")")
+    expect_equal "combined SSID encoder preserves both representations [$_ssid_case]" \
+        "$_ssid_combined" "$_ssid_expected"
+done
+
+if wifi_ssid_encode_values $'bad\nname' >/dev/null 2>&1; then
+    log_fail "combined SSID encoder rejects control bytes"
+else
+    log_pass "combined SSID encoder rejects control bytes"
+fi
+
+_policy_fast_tmpd=$(mktemp -d)
+cat > "$_policy_fast_tmpd/empty.json" <<'EOF'
+{"version":1,"iface":"mlan0","roaming_enabled":true,"bgscan_enabled":true,"generate_network_blocks":false,"extra_ssids":[]}
+EOF
+cat > "$_policy_fast_tmpd/nonempty.json" <<'EOF'
+{"version":1,"iface":"mlan0","roaming_enabled":true,"bgscan_enabled":true,"generate_network_blocks":false,"extra_ssids":["Office"]}
+EOF
+if (
+    wifi_ssid_array_validate_json() { return 91; }
+    wifi_roam_policy_validate_file "$_policy_fast_tmpd/empty.json" mlan0
+); then
+    log_pass "empty policy skips SSID Python validation after schema validation"
+else
+    log_fail "empty policy must not invoke SSID Python validation"
+fi
+if (
+    wifi_ssid_array_validate_json() { return 91; }
+    wifi_roam_policy_validate_file "$_policy_fast_tmpd/nonempty.json" mlan0
+); then
+    log_fail "non-empty policy must retain SSID byte validation"
+else
+    log_pass "non-empty policy retains SSID byte validation"
+fi
+if wifi_roam_policy_validate_file "$_policy_fast_tmpd/empty.json" mlan1; then
+    log_fail "empty policy fast path still validates the interface"
+else
+    log_pass "empty policy fast path still validates the interface"
+fi
+rm -rf "$_policy_fast_tmpd"
+
 _atomic_bin=$(mktemp -d)
 cat > "$_atomic_bin/mv" <<'EOF'
 #!/bin/sh

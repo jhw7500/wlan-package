@@ -58,6 +58,7 @@ opt/ftpcmd/bin/ifcdown
 opt/ftpcmd/bin/ifcup
 opt/ftpcmd/bin/rst
 opt/ftpcmd/bin/wconnect
+opt/ftpcmd/bin/wconnectraw
 opt/wlan/bin/README
 opt/wlan/bin/README_MLAN
 opt/wlan/bin/README_RBC

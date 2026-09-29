@@ -167,10 +167,11 @@ wifi_ssid_array_validate_json() {
 #     a"#b  → 조용히 `a` 로 손상
 # 그래서 `"` 를 하나라도 담은 SSID 만 hex 로 보낸다. hex 는 언제나 안전하지만
 # 사람이 못 읽으므로 필요한 경우로 좁힌다.
-wifi_ssid_to_conf_value() {
-    python3 - "$1" 2>/dev/null <<'PY'
+_wifi_ssid_encode() {
+    python3 - "$1" "$2" 2>/dev/null <<'PY'
 import sys
 value = sys.argv[1]
+mode = sys.argv[2]
 raw = value.encode("utf-8")
 if not 1 <= len(raw) <= 32:
     raise SystemExit(1)
@@ -178,22 +179,7 @@ if any(ord(ch) < 0x20 or ord(ch) == 0x7f for ch in value):
     raise SystemExit(1)
 # 판정은 `"` 포함 여부 하나뿐이다. 정규식·문자 화이트리스트를 쓰지 않는다 —
 # 로케일에 따라 경계가 새고, 실측상 위험 인자는 `"` 하나로 충분히 좁혀진다.
-print(raw.hex() if '"' in value else '"%s"' % value)
-PY
-}
-
-# Match upstream wpa_ssid_txt()/printf_encode output used by CTRL_IFACE
-# status/list_networks/scan_results.  Writers compare this form to status while
-# retaining the original identity for config serialization and operator text.
-wifi_ssid_to_wpa_text() {
-    python3 - "$1" 2>/dev/null <<'PY'
-import sys
-value = sys.argv[1]
-raw = value.encode("utf-8")
-if not 1 <= len(raw) <= 32:
-    raise SystemExit(1)
-if any(ord(ch) < 0x20 or ord(ch) == 0x7f for ch in value):
-    raise SystemExit(1)
+conf_value = raw.hex() if '"' in value else '"%s"' % value
 out = []
 for byte in raw:
     if byte == 0x22:
@@ -204,8 +190,34 @@ for byte in raw:
         out.append(chr(byte))
     else:
         out.append(f"\\x{byte:02x}")
-print("".join(out))
+wpa_text = "".join(out)
+if mode == "conf":
+    print(conf_value)
+elif mode == "wpa":
+    print(wpa_text)
+elif mode == "both":
+    print(conf_value)
+    print(wpa_text)
+else:
+    raise SystemExit(2)
 PY
+}
+
+wifi_ssid_to_conf_value() {
+    _wifi_ssid_encode "$1" conf
+}
+
+# Match upstream wpa_ssid_txt()/printf_encode output used by CTRL_IFACE
+# status/list_networks/scan_results.  Writers compare this form to status while
+# retaining the original identity for config serialization and operator text.
+wifi_ssid_to_wpa_text() {
+    _wifi_ssid_encode "$1" wpa
+}
+
+# Connect needs both representations of the same already-validated identity.
+# Emit them together so embedded targets pay the Python startup cost once.
+wifi_ssid_encode_values() {
+    _wifi_ssid_encode "$1" both
 }
 
 _wifi_roam_policy_mark_latched() {
@@ -235,17 +247,22 @@ wifi_roam_policy_validate_file() {
     local file="$1" iface="$2" extras
     [ -f "$file" ] || return 1
     command -v jq >/dev/null 2>&1 || return 1
-    jq -e --arg iface "$iface" '
-        type == "object" and
-        .version == 1 and
-        .iface == $iface and
-        (.roaming_enabled | type == "boolean") and
-        (.bgscan_enabled | type == "boolean") and
-        (.generate_network_blocks | type == "boolean") and
-        (.extra_ssids | type == "array") and
-        all(.extra_ssids[]; type == "string")
-    ' "$file" >/dev/null 2>&1 || return 1
-    extras=$(jq -c '.extra_ssids' "$file" 2>/dev/null) || return 1
+    extras=$(jq -ce --arg iface "$iface" '
+        if type == "object" and
+           .version == 1 and
+           .iface == $iface and
+           (.roaming_enabled | type == "boolean") and
+           (.bgscan_enabled | type == "boolean") and
+           (.generate_network_blocks | type == "boolean") and
+           (.extra_ssids | type == "array") and
+           all(.extra_ssids[]; type == "string")
+        then .extra_ssids
+        else error("invalid roam policy")
+        end
+    ' "$file" 2>/dev/null) || return 1
+    # The schema check above completely validates an empty array.  Avoid a
+    # Python startup when there are no SSID byte identities left to inspect.
+    [ "$extras" = "[]" ] && return 0
     wifi_ssid_array_validate_json "$extras"
 }
 

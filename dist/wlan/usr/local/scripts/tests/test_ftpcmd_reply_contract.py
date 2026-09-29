@@ -15,9 +15,12 @@ vsftpd 디스패치는 핸들러의 첫 stdout 줄을 200 응답 본문으로 �
 본다.
 """
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -53,9 +56,121 @@ def first_line(text):
     return text.splitlines()[0] if text.splitlines() else ""
 
 
+def run_wconnect(*args, wifi_rc=0):
+    """Run the shipped handler with only its absolute wifi path test-patched."""
+    root = Path(tempfile.mkdtemp(prefix="wconnect-"))
+    try:
+        capture = root / "wifi.args"
+        timing_log = root / "timing.log"
+        wifi = root / "wifi"
+        wifi.write_text(textwrap.dedent('''\
+            #!/bin/sh
+            printf '%s\\n' "$@" > "$WCONNECT_CAPTURE"
+            echo "wifi connect reply"
+            exit "${WCONNECT_WIFI_RC:-0}"
+        '''))
+        wifi.chmod(0o755)
+
+        logger = root / "logger"
+        logger.write_text(textwrap.dedent('''\
+            #!/bin/sh
+            printf '%s\\n' "$*" >> "$WCONNECT_LOG"
+        '''))
+        logger.chmod(0o755)
+
+        source = (FTPCMD_DIR / "wconnect").read_text()
+        old = "WIFI=/usr/local/bin/wifi\n"
+        replacement = f"WIFI={shlex.quote(str(wifi))}\n"
+        if source.count(old) != 1:
+            raise AssertionError("wconnect WIFI assignment contract changed")
+        handler = root / "wconnect"
+        handler.write_text(source.replace(old, replacement, 1))
+        handler.chmod(0o755)
+
+        env = {k: v for k, v in os.environ.items() if k != "FTPCMD_LOCAL_ADDR"}
+        env.update({
+            "PATH": f"{root}:{os.environ['PATH']}",
+            "WCONNECT_CAPTURE": str(capture),
+            "WCONNECT_LOG": str(timing_log),
+            "WCONNECT_WIFI_RC": str(wifi_rc),
+        })
+        result = subprocess.run(
+            [str(handler), *args], capture_output=True, text=True, timeout=30, env=env,
+        )
+        captured_args = capture.read_text().splitlines() if capture.exists() else []
+        timing_lines = timing_log.read_text().splitlines() if timing_log.exists() else []
+        return result, captured_args, timing_lines
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def run_wconnectraw(*args, status_id="7", set_reply="OK", reassociate_reply="OK"):
+    """Run the raw handler with only its absolute wpa_cli path test-patched."""
+    root = Path(tempfile.mkdtemp(prefix="wconnectraw-"))
+    try:
+        capture = root / "wpa_cli.args"
+        timing_log = root / "timing.log"
+        wpa_cli = root / "wpa_cli"
+        wpa_cli.write_text(textwrap.dedent('''\
+            #!/bin/sh
+            {
+                _sep=
+                printf '['
+                for _arg in "$@"; do
+                    printf '%s%s' "$_sep" "$_arg"
+                    _sep='|'
+                done
+                printf ']\\n'
+            } >> "$WCONNECTRAW_CAPTURE"
+            case "$*" in
+                *" status")
+                    printf 'wpa_state=COMPLETED\\nid=%s\\n' "$WCONNECTRAW_STATUS_ID"
+                    ;;
+                *" set_network "*) printf '%s\\n' "$WCONNECTRAW_SET_REPLY" ;;
+                *" reassociate") printf '%s\\n' "$WCONNECTRAW_REASSOC_REPLY" ;;
+                *) printf 'FAIL\\n' ;;
+            esac
+        '''))
+        wpa_cli.chmod(0o755)
+
+        logger = root / "logger"
+        logger.write_text(textwrap.dedent('''\
+            #!/bin/sh
+            printf '%s\\n' "$*" >> "$WCONNECTRAW_LOG"
+        '''))
+        logger.chmod(0o755)
+
+        source = (FTPCMD_DIR / "wconnectraw").read_text()
+        old = "WPA_CLI=/usr/sbin/wpa_cli\n"
+        replacement = f"WPA_CLI={shlex.quote(str(wpa_cli))}\n"
+        if source.count(old) != 1:
+            raise AssertionError("wconnectraw WPA_CLI assignment contract changed")
+        handler = root / "wconnectraw"
+        handler.write_text(source.replace(old, replacement, 1))
+        handler.chmod(0o755)
+
+        env = dict(os.environ)
+        env.update({
+            "PATH": f"{root}:{os.environ['PATH']}",
+            "WCONNECTRAW_CAPTURE": str(capture),
+            "WCONNECTRAW_LOG": str(timing_log),
+            "WCONNECTRAW_STATUS_ID": status_id,
+            "WCONNECTRAW_SET_REPLY": set_reply,
+            "WCONNECTRAW_REASSOC_REPLY": reassociate_reply,
+        })
+        result = subprocess.run(
+            [str(handler), *args], capture_output=True, text=True, timeout=10, env=env,
+        )
+        calls = capture.read_text().splitlines() if capture.exists() else []
+        timing_lines = timing_log.read_text().splitlines() if timing_log.exists() else []
+        return result, calls, timing_lines
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 class HandlersExist(unittest.TestCase):
     def test_every_handler_is_executable(self):
-        for name in ("getifstate", "ifcup", "ifcdown", "rst", "wconnect"):
+        for name in ("getifstate", "ifcup", "ifcdown", "rst", "wconnect", "wconnectraw"):
             path = FTPCMD_DIR / name
             self.assertTrue(path.is_file(), f"{name} 이 없다")
             self.assertTrue(os.access(path, os.X_OK), f"{name} 에 실행비트가 없다")
@@ -92,6 +207,90 @@ class FirstLineContract(unittest.TestCase):
         else:
             self.assertEqual(r.returncode, 2)
             self.assertIn("no such interface: mlan0", r.stdout)
+
+
+class WconnectDefaultInterface(unittest.TestCase):
+    def test_no_arguments_reassociates_mlan0(self):
+        r, argv, _ = run_wconnect()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(argv, ["mlan0", "connect"])
+        self.assertEqual(r.stdout.splitlines(), ["SUCCESS"])
+
+    def test_ssid_without_interface_uses_mlan0(self):
+        r, argv, _ = run_wconnect("field-ap")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(argv, ["mlan0", "connect", "field-ap"])
+
+    def test_multiword_ssid_without_interface_is_rejoined(self):
+        r, argv, _ = run_wconnect("Field", "AP")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(argv, ["mlan0", "connect", "Field AP"])
+
+    def test_explicit_mlan1_is_preserved(self):
+        r, argv, _ = run_wconnect("mlan1", "field-ap")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(argv, ["mlan1", "connect", "field-ap"])
+
+    def test_timing_log_uses_one_trace_through_reply_ready(self):
+        r, _, lines = run_wconnect("field-ap", wifi_rc=8)
+        self.assertEqual(r.returncode, 8, r.stdout + r.stderr)
+        self.assertEqual(r.stdout.splitlines(), ["FAIL code=8"])
+        phases = ("dispatch_received", "arguments_parsed", "connect_invoked", "reply_ready")
+        trace_ids = set()
+        for phase in phases:
+            matches = [line for line in lines if f"phase={phase}" in line]
+            self.assertEqual(len(matches), 1, lines)
+            match = re.search(r"trace=([0-9]+-[0-9]+).*elapsed_ms=([0-9]+)", matches[0])
+            self.assertIsNotNone(match, matches[0])
+            trace_ids.add(match.group(1))
+        self.assertEqual(len(trace_ids), 1, lines)
+        self.assertIn("rc=8", next(line for line in lines if "phase=reply_ready" in line))
+        failure = [line for line in lines if "ftpcmd_result" in line]
+        self.assertEqual(len(failure), 1, lines)
+        self.assertIn("status=fail", failure[0])
+        self.assertIn("code=8", failure[0])
+        self.assertIn("detail=wifi connect reply", failure[0])
+
+
+class WconnectRawRuntimeSwitch(unittest.TestCase):
+    def test_ssid_without_interface_updates_current_mlan0_network(self):
+        r, calls, timing = run_wconnectraw("Field", "AP")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.stdout.splitlines(), ["SUCCESS"])
+        self.assertEqual(calls, [
+            "[-i|mlan0|status]",
+            '[-i|mlan0|set_network|7|ssid|"Field AP"]',
+            "[-i|mlan0|reassociate]",
+        ])
+        self.assertEqual(len(timing), 1, timing)
+        self.assertIn("phase=commands_submitted", timing[0])
+        self.assertIn("iface=mlan0", timing[0])
+
+    def test_explicit_mlan1_is_preserved(self):
+        r, calls, _ = run_wconnectraw("mlan1", "lab-ap", status_id="3")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(calls[1], '[-i|mlan1|set_network|3|ssid|"lab-ap"]')
+        self.assertEqual(calls[2], "[-i|mlan1|reassociate]")
+
+    def test_missing_ssid_stops_before_wpa_cli(self):
+        r, calls, _ = run_wconnectraw()
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertEqual(calls, [])
+        self.assertEqual(r.stdout.splitlines(), ["FAIL code=2"])
+
+    def test_missing_current_id_stops_before_mutation(self):
+        r, calls, _ = run_wconnectraw("lab-ap", status_id="")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertEqual(calls, ["[-i|mlan0|status]"])
+        self.assertEqual(r.stdout.splitlines(), ["FAIL code=1"])
+
+    def test_fail_payload_is_reported_as_wpa_error(self):
+        r, calls, _ = run_wconnectraw(
+            "lab-ap", set_reply="FAIL", reassociate_reply="FAIL",
+        )
+        self.assertEqual(r.returncode, 7, r.stdout + r.stderr)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(r.stdout.splitlines(), ["FAIL code=7"])
 
 
 class FailurePaths(unittest.TestCase):
