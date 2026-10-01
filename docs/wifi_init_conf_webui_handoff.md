@@ -534,7 +534,7 @@ association proof를 사용한다. 다음 CONNECTED 검증 성공 시 pending/1�
 | 경로(`mlanN.checker.`) | 라벨 | 타입 | 기본값 (mlan0 / mlan1) | 허용값/범위 | UI편집 | 적용시점 | 설명 |
 |---|---|---|---|---|---|---|---|
 | `LIMIT_CNT` | F/W 부재 감내 카운트 | int | `5` | 양의 정수 | caution | daemon-restart | 초과 시 재부팅 정책 트리거 |
-| `MAX_UNSTABLE_DURATION` | 불안정 감내 시간(초) | int | `10` | 양의 정수 | yes | daemon-restart | 초과 시 reassociate, 3배 초과 시 wpa 재시작 |
+| `MAX_UNSTABLE_DURATION` | 불안정 감내 시간(초) | int | `10` | 양의 정수 | yes | daemon-restart | 미연결 지속 시 한 번 재연결 요청. AP 부재만으로 wpa 재시작하지 않음 |
 | `MAX_REBOOT_COUNT` | 재부팅 루프 상한 | int | `3` | 양의 정수 | caution | daemon-restart | 쿨다운 창 내 재부팅 초과 시 거부(exit 11) |
 | `REBOOT_COOLDOWN_SEC` | 재부팅 쿨다운(초) | int | `300` | 양의 정수 | caution | daemon-restart | 이 창 내 재시도는 루프 카운트↑ |
 | `MIN_UPTIME_SEC` | 최소 부팅 후 시간(초) | int | `30` | 0 이상 정수 | caution | daemon-restart | 미만이면 재부팅 거부(exit 10). 커널 uptime 기준 |

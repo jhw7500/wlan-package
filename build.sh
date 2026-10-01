@@ -41,6 +41,16 @@ dev_build_notice() {
 
 BASEDIR=${PWD}
 echo "Script location: ${BASEDIR}"
+HOST_ARCH=$(uname -m)
+
+if [ ! -d "${BASEDIR}/wlan-bridge/wbridge" ]; then
+    export WLAN_PACKAGE_NO_BRIDGE=1
+    echo "[build] wlan-bridge source absent: building without bridge"
+    # A previous full build must not leak bridge files into this package.
+    rm -rf "${BASEDIR}/dist/wlan/usr/local/wlan-bridge"
+else
+    unset WLAN_PACKAGE_NO_BRIDGE
+fi
 
 if [ "${RELEASE_BUILD}" -eq 1 ]; then
     # 오래 걸리는 cross-build 전에 설정 drift·schema·단위/shell 회귀를 먼저 차단한다.
@@ -50,12 +60,9 @@ else
     dev_build_notice "릴리스 산출물은 ./build.sh --release 로 만드십시오."
 fi
 
-# Build wlan-bridge binaries (wbridge)
+# Build wlan-bridge binaries (wbridge) only when the submodule is available.
+if [ "${WLAN_PACKAGE_NO_BRIDGE:-0}" != 1 ]; then
 echo "Building wbridge binaries..."
-if [ ! -d "${BASEDIR}/wlan-bridge/wbridge" ]; then
-    echo "Error: wlan-bridge/wbridge directory not found. Please verify directory name or submodule."
-    exit 1
-fi
 
 WBRIDGE_DIR="${BASEDIR}/wlan-bridge/wbridge"
 MAKE_FOR_IMX8="${WBRIDGE_DIR}/make-for-imx8"
@@ -64,7 +71,6 @@ MAKE_FOR_IMX93="${WBRIDGE_DIR}/make-for-imx93"
 cd "${WBRIDGE_DIR}" || { echo "Error: cannot enter ${WBRIDGE_DIR}" >&2; exit 1; }
 make clean || { echo "Warning: make clean failed"; }
 
-HOST_ARCH=$(uname -m)
 echo "Host arch: ${HOST_ARCH}"
 
 # 산출물: release/wbridge_<board>, release/wbridge-tpacket_<board> 등.
@@ -180,6 +186,7 @@ cp -a "${BASEDIR}/wlan-bridge/docs/." "${BASEDIR}/dist/wlan/usr/local/wlan-bridg
 cp "${BASEDIR}/dist/wlan/usr/local/scripts/wifi_thermal_state_update.sh" \
    "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/scripts/wifi_thermal_state_update.sh" \
     || { echo "Error: Failed to stage WLAN thermal script"; exit 1; }
+fi
 
 # Build wlan-opc (OPC-side control daemon + VHL CLI simulator)
 # 산출물: wlan-opc/build/<arch>/{opcd/opcd,vhlctl/vhlctl}, wlan-opc/opcd/opcd.service
@@ -280,6 +287,27 @@ cleanup_package_stage() {
 trap cleanup_package_stage EXIT
 cp -a "${BASEDIR}/dist/wlan" "${PKG_STAGE}/wlan"
 
+if [ "${WLAN_PACKAGE_NO_BRIDGE:-0}" = 1 ]; then
+    python3 - "${PKG_STAGE}/wlan" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+tree = Path(sys.argv[1])
+manifest = tree / "DEBIAN/payload-manifest.txt"
+entries = manifest.read_text(encoding="utf-8").splitlines()
+entries = [entry for entry in entries if not entry.startswith("usr/local/wlan-bridge/")]
+marker = "opt/wlan/config/no-wbridge"
+entries.append(marker)
+manifest.write_text("\n".join(sorted(entries)) + "\n", encoding="utf-8")
+(tree / marker).write_text("wlan-bridge source was absent at build time\n", encoding="utf-8")
+config = tree / "opt/wlan/config/wifi_init_conf.json"
+data = json.loads(config.read_text(encoding="utf-8"))
+data["wbridge"]["enabled"] = False
+config.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+PY
+fi
+
 find "${PKG_STAGE}/wlan" -type d \
     \( -name .omc -o -name .pytest_cache -o -name __pycache__ -o -name test -o -name tests \) \
     -prune -exec rm -rf {} +
@@ -299,6 +327,7 @@ chmod 0644 "${CANDIDATE_DEB}" || {
     echo "Error: failed to normalize candidate package mode" >&2
     exit 1
 }
+PACKAGE_SOURCE_TREE="${PKG_STAGE}/wlan" \
 bash "${BASEDIR}/scripts/validate_release.sh" package "${CANDIDATE_DEB}" || {
     echo "Error: candidate package failed the release gate" >&2
     exit 1
@@ -318,6 +347,7 @@ while IFS= read -r member; do
     SOURCE_ARCHIVE_MEMBERS+=("$member")
 done < <(python3 - "${BASEDIR}/scripts/source_archive_manifest.txt" <<'PY'
 import posixpath
+import os
 import sys
 
 files = []
@@ -325,6 +355,14 @@ parents = set()
 for raw in open(sys.argv[1], encoding="utf-8"):
     path = raw.strip()
     if not path or path.startswith("#"):
+        continue
+    if os.environ.get("WLAN_PACKAGE_NO_BRIDGE") == "1" and (
+        path.startswith("wlan-bridge/")
+        or path.startswith("dist/wlan/usr/local/wlan-bridge/")
+    ):
+        continue
+    if os.environ.get("WLAN_PACKAGE_NO_BRIDGE") == "1" \
+            and path == "scripts/source_archive_manifest.txt":
         continue
     files.append(path)
     parent = posixpath.dirname(path)
@@ -349,6 +387,30 @@ tar --format=posix \
         echo "Error: failed to create candidate source tarball" >&2
         exit 1
     }
+if [ "${WLAN_PACKAGE_NO_BRIDGE:-0}" = 1 ]; then
+    mkdir -p "${PKG_STAGE}/source/scripts"
+    python3 - "${BASEDIR}/scripts/source_archive_manifest.txt" \
+        "${PKG_STAGE}/source/scripts/source_archive_manifest.txt" <<'PY'
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1]).read_text(encoding="utf-8")
+filtered = [
+    line for line in source.splitlines(keepends=True)
+    if not line.startswith("wlan-bridge/")
+    and not line.startswith("dist/wlan/usr/local/wlan-bridge/")
+]
+Path(sys.argv[2]).write_text("".join(filtered), encoding="utf-8")
+PY
+    tar --append --file="${CANDIDATE_TAR}" --format=posix \
+        --mtime="@${SOURCE_DATE_EPOCH:-0}" \
+        --pax-option=delete=atime,delete=ctime \
+        --numeric-owner --owner=0 --group=0 --mode='u-s,g-s,go-w' \
+        -C "${PKG_STAGE}/source" scripts/source_archive_manifest.txt || {
+            echo "Error: failed to append bridge-less source manifest" >&2
+            exit 1
+        }
+fi
 chmod 0644 "${CANDIDATE_TAR}" || {
     echo "Error: failed to normalize candidate source tarball mode" >&2
     exit 1

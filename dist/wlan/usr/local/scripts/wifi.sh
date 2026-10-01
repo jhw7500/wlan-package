@@ -28,7 +28,7 @@ elif [ -r "$SCRIPT_DIR/wifi_fw_config_lib.sh" ]; then
     . "$SCRIPT_DIR/wifi_fw_config_lib.sh"
 fi
 
-tag=$(basename "$0")
+tag=wifi.sh
 IFACE=mlan
 NUM=""
 WPA_CONF_DIR="${WPA_CONF_DIR:-/etc/wpa_supplicant}"
@@ -45,7 +45,11 @@ elif [ "${1:-}" == "2" ] || [ "${1:-}" == "eth0" ]; then
     NUM=2
 fi
 
-logger -p local0.info "[$tag:$LINENO] [$IFACE] cmd : wifi $1 $2 $3 $4"
+if [ "${2:-}" = "freq" ]; then
+    logger -p local0.info "[$tag:$LINENO] [$IFACE] cmd : wifi $*"
+else
+    logger -p local0.info "[$tag:$LINENO] [$IFACE] cmd : wifi $1 $2 $3 $4"
+fi
 trap 'wifi_wpa_run_child sync 2>/dev/null || true' EXIT
 
 # `wconnect` exports one monotonic start and trace id.  Keep ordinary local
@@ -2793,6 +2797,8 @@ case "$2" in
         { print }
         END { if (!changed) exit 1 }
     ' "$CONF" > "$TMP_FILE"; then
+        wifi_wpa_run_child touch "$WIFI_RUN_DIR/${IFACE}.credential-pending" \
+            || { wifi_wpa_run_child rm -f "$TMP_FILE"; echo "Error: cannot mark pending credential change for $IFACE" >&2; exit 1; }
         wifi_wpa_run_child_call safe_install_sync "$TMP_FILE" "$CONF"
         wifi_wpa_run_child rm -f "$TMP_FILE"
         echo "psk changed in $CONF"
@@ -2852,6 +2858,8 @@ case "$2" in
         { print }
         END { if (!changed) exit 1 }
     ' "$CONF" > "$TMP_FILE"; then
+        wifi_wpa_run_child touch "$WIFI_RUN_DIR/${IFACE}.credential-pending" \
+            || { wifi_wpa_run_child rm -f "$TMP_FILE"; echo "Error: cannot mark pending credential change for $IFACE" >&2; exit 1; }
         wifi_wpa_run_child_call safe_install_sync "$TMP_FILE" "$CONF"
         wifi_wpa_run_child rm -f "$TMP_FILE"
         echo "key_mgmt changed to $NEW_KEY in $CONF"
@@ -2861,9 +2869,9 @@ case "$2" in
     # 인자 있음(Mode B): ssid(+공통 freq_list)를 canonical conf에 기록한 뒤
     #                     reconfigure로 전체 프로필을 runtime에 다시 적재한다.
     #                     freq 생략 시 기존 공통 목록을 유지하되 legacy scan_freq는 제거.
-    # 인자 없음: conf 편집/reconfigure 없이 현재 설정으로 강제 재연결만.
-    # 공통: reassociate(연결/미연결 모두 강제 재연관 → ssid 변경 반영 확실) 우선,
-    #       실패 시 reconnect fallback(rollback_radio_live와 동일 규약) → assoc 대기.
+    # 인자 없음: 일반 CLI는 강제 재연결; FTP wconnect는 이미 연결된 프로필이
+    #            저장된 설정과 일치하면 유지하고, 아니면 conf를 다시 적재한다.
+    # 연결이 필요하면 reassociate 우선, 실패 시 reconnect fallback 후 assoc 대기.
     # exit: 0=ok 1=usage/env 7=wpa_cli 8=assoc-timeout
     # known limitation: reconfigure 뒤 assoc 타임아웃(8) 시 conf는
     #   새 ssid로 이미 persist된다(라이브는 옛 AP일 수 있음).
@@ -2876,7 +2884,12 @@ case "$2" in
     TARGET_SSID_WPA_TEXT=""
     HAS_TARGET_ID=0
     TARGET_ID=""
+    APPLY_STORED_CONF=0
+    if [ "${FTPCMD_APPLY_CONF:-0}" = "1" ]; then APPLY_STORED_CONF=1; fi
     LIVE_NETWORK_ID=""
+    PRE_WPA_STATE=""
+    LIVE_SSID_WPA_TEXT=""
+    LIVE_FREQ=""
     MULTI_TOPOLOGY=0
     MULTI_INITIAL_ID=""
     SET_FREQ=0
@@ -2912,14 +2925,14 @@ case "$2" in
         SSID_CONF_VALUE="${SSID_ENCODINGS[0]}"
         TARGET_SSID_WPA_TEXT="${SSID_ENCODINGS[1]}"
     fi
-    if ! wifi_wpa_abort_scan_quiesce "$IFACE"; then
-        echo "Error: cannot quiesce scan for $IFACE" >&2; exit 7
-    fi
     # Capture the current id before any live mutation.  Explicit Mode B reports
     # it in timing diagnostics; no-argument reconnect pins it for exact landing proof.
     WPA_STATUS=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" status 2>/dev/null) || WPA_STATUS=""
     while IFS='=' read -r _key _value; do
         [ "$_key" = "id" ] && LIVE_NETWORK_ID="$_value"
+        [ "$_key" = "wpa_state" ] && PRE_WPA_STATE="$_value"
+        [ "$_key" = "ssid" ] && LIVE_SSID_WPA_TEXT="$_value"
+        [ "$_key" = "freq" ] && LIVE_FREQ="$_value"
     done <<< "$WPA_STATUS"
     if [[ ! "$LIVE_NETWORK_ID" =~ ^[0-9]+$ ]]; then LIVE_NETWORK_ID=""; fi
     if [ "$#" -eq 0 ] && [ -n "$LIVE_NETWORK_ID" ]; then
@@ -2947,6 +2960,113 @@ case "$2" in
         MULTI_INITIAL_ID="$TARGET_ID"
         HAS_TARGET_ID=0
         TARGET_ID=""
+    fi
+    if [ "$#" -eq 0 ] && [ "$APPLY_STORED_CONF" = "1" ]; then
+        # RECONFIGURE may renumber or reselect a network. Prove the fresh
+        # CONNECTED event's ID instead of pinning the pre-reload status ID.
+        HAS_TARGET_ID=0
+        TARGET_ID=""
+    fi
+    # FTP wconnect is idempotent when the already-associated single network
+    # matches both the stored SSID and the live global/network frequency policy.
+    # Explicit legacy frequency arguments must reach validation and the conf
+    # update below, even when the current profile otherwise matches.
+    # A staged wssid/wfreq change fails this comparison and takes the normal
+    # reconfigure path. Ordinary `wifi connect` keeps its force-reconnect API.
+    if [ "$APPLY_STORED_CONF" = "1" ] \
+       && [ "$#" -le 1 ] \
+       && [ "$PRE_WPA_STATE" = "COMPLETED" ] \
+       && [ "$MULTI_TOPOLOGY" = "0" ] \
+       && [ -n "$LIVE_NETWORK_ID" ] \
+       && [ -n "$LIVE_SSID_WPA_TEXT" ] \
+       && [[ "$LIVE_FREQ" =~ ^[0-9]+$ ]] \
+       && [ ! -e "$WIFI_RUN_DIR/${IFACE}.credential-pending" ] \
+       && [ -f "$CONF" ]; then
+        CONF_SSID_RAW=$(wifi_wpa_run_child awk '
+            /^[[:space:]]*#/ { next }
+            /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ {
+                if (!seen) { seen = 1; in_net = 1 }
+                next
+            }
+            in_net && /^[[:space:]]*\}/ { exit }
+            in_net && /^[[:space:]]*ssid[[:space:]]*=/ {
+                value = $0
+                sub(/^[[:space:]]*ssid[[:space:]]*=[[:space:]]*/, "", value)
+                sub(/[[:space:]]+$/, "", value)
+                print value
+                exit
+            }
+        ' "$CONF" 2>/dev/null) || CONF_SSID_RAW=""
+        LIVE_NETWORK_SSID_RAW=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" \
+            get_network "$LIVE_NETWORK_ID" ssid 2>/dev/null) || LIVE_NETWORK_SSID_RAW=""
+        PROFILE_FREQ_QUERY_OK=1
+        CONF_FREQ_STR=$(wifi_wpa_child_call wifi_wpa_conf_common_freqs "$CONF" 2>/dev/null) \
+            || PROFILE_FREQ_QUERY_OK=0
+        LIVE_GLOBAL_FREQ=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" get freq_list 2>/dev/null) \
+            || PROFILE_FREQ_QUERY_OK=0
+        LIVE_NETWORK_FREQ=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" \
+            get_network "$LIVE_NETWORK_ID" freq_list 2>/dev/null) || PROFILE_FREQ_QUERY_OK=0
+        if [ "$LIVE_GLOBAL_FREQ" = FAIL ]; then LIVE_GLOBAL_FREQ=""; fi
+        if [ "$LIVE_NETWORK_FREQ" = FAIL ]; then LIVE_NETWORK_FREQ=""; fi
+        CONFIGURED_SSID_WPA_TEXT=""
+        if [ "$#" -gt 0 ]; then
+            if [ "$CONF_SSID_RAW" = "$SSID_CONF_VALUE" ]; then
+                CONFIGURED_SSID_WPA_TEXT="$TARGET_SSID_WPA_TEXT"
+            fi
+        else
+            case "$CONF_SSID_RAW" in
+                '"'*'"')
+                    CONFIGURED_SSID=${CONF_SSID_RAW#\"}
+                    CONFIGURED_SSID=${CONFIGURED_SSID%\"}
+                    CONFIGURED_SSID_WPA_TEXT=$(wifi_wpa_child_call \
+                        wifi_ssid_to_wpa_text "$CONFIGURED_SSID" 2>/dev/null) \
+                        || CONFIGURED_SSID_WPA_TEXT=""
+                    ;;
+                *)
+                    if [[ "$CONF_SSID_RAW" =~ ^([[:xdigit:]]{2}){1,32}$ ]]; then
+                        CONFIGURED_SSID=""
+                        _CONF_HEX_REST=$CONF_SSID_RAW
+                        while [ -n "$_CONF_HEX_REST" ]; do
+                            printf -v _CONF_HEX_BYTE '%b' "\\x${_CONF_HEX_REST:0:2}"
+                            if [ -z "$_CONF_HEX_BYTE" ]; then
+                                CONFIGURED_SSID=""
+                                break
+                            fi
+                            CONFIGURED_SSID+=$_CONF_HEX_BYTE
+                            _CONF_HEX_REST=${_CONF_HEX_REST:2}
+                        done
+                        if [ -n "$CONFIGURED_SSID" ]; then
+                            CONFIGURED_SSID_WPA_TEXT=$(wifi_wpa_child_call \
+                                wifi_ssid_to_wpa_text "$CONFIGURED_SSID" 2>/dev/null) \
+                                || CONFIGURED_SSID_WPA_TEXT=""
+                        fi
+                    fi
+                    ;;
+            esac
+        fi
+        LIVE_FREQ_ALLOWED=0
+        if [ -z "$CONF_FREQ_STR" ]; then
+            LIVE_FREQ_ALLOWED=1
+        else
+            case " $CONF_FREQ_STR " in
+                *" $LIVE_FREQ "*) LIVE_FREQ_ALLOWED=1 ;;
+            esac
+        fi
+        if [ "$PROFILE_FREQ_QUERY_OK" = "1" ] \
+           && [ -n "$CONF_SSID_RAW" ] \
+           && [ "$CONF_SSID_RAW" = "$LIVE_NETWORK_SSID_RAW" ] \
+           && [ "$CONFIGURED_SSID_WPA_TEXT" = "$LIVE_SSID_WPA_TEXT" ] \
+           && [ "$CONF_FREQ_STR" = "$LIVE_GLOBAL_FREQ" ] \
+           && [ "$CONF_FREQ_STR" = "$LIVE_NETWORK_FREQ" ] \
+           && [ "$LIVE_FREQ_ALLOWED" = "1" ]; then
+            ftpcmd_trace_log association_verified \
+                "path=already_connected id=$LIVE_NETWORK_ID"
+            echo "already associated: ssid=\"$LIVE_SSID_WPA_TEXT\" freq=$LIVE_FREQ id=$LIVE_NETWORK_ID"
+            exit 0
+        fi
+    fi
+    if ! wifi_wpa_abort_scan_quiesce "$IFACE"; then
+        echo "Error: cannot quiesce scan for $IFACE" >&2; exit 7
     fi
     trap 'connect_event_monitor_cleanup; wifi_wpa_run_child sync 2>/dev/null || true' EXIT
     trap 'exit 129' HUP
@@ -3027,10 +3147,27 @@ case "$2" in
         else
             echo "conf updated: ssid=\"$NEW_SSID\" (no frequency restriction) in $CONF"
         fi
-        # Reload the whole persisted network profile.  Updating only ssid and
-        # freq_list with SET_NETWORK is not sufficient: persist-only psk/key/freq
-        # edits or a legacy scan_freq may leave authentication and scan policy
-        # stale in supplicant memory even when SET_NETWORK/reassociate returns OK.
+    else
+        # === 인자 없음: 현재 설정으로 연결 ===
+        # stdout 첫 줄은 ftpcmd `wconnect`의 200 응답 본문이 되므로 ASCII만 쓴다(#292).
+        if [ "$APPLY_STORED_CONF" = "1" ]; then
+            echo "no ssid given - reloading stored profile and reassociating $IFACE..."
+        elif [ "$MULTI_TOPOLOGY" = "1" ]; then
+            echo "no ssid given - reassociating $IFACE (multi-network topology: current id=${MULTI_INITIAL_ID:-none}, supplicant selects among enabled networks)..."
+        elif [ "$HAS_TARGET_ID" = "1" ]; then
+            echo "no ssid given - reassociating current network id=$TARGET_ID on $IFACE..."
+        else
+            echo "no ssid/current id given - reassociating $IFACE with current conf..."
+        fi
+    fi
+    if [ "$HAS_TARGET" = "1" ] || [ "$APPLY_STORED_CONF" = "1" ]; then
+        # Reload the whole persisted profile. SET_NETWORK alone would leave
+        # pending SSID, credentials, or frequency edits stale in supplicant.
+        if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
+        # wifi_checker treats a long-standing SCANNING state as stalled. Give
+        # this explicit profile reload its existing grace window so the
+        # checker does not queue a competing reconnect or restart.
+        : > "$WIFI_RUN_DIR/${IFACE}.reconfigure-grace" 2>/dev/null || true
         if ! connect_event_monitor_arm || ! wpa_cli_ok "$IFACE" reconfigure; then
             echo "Error: wpa_cli reconfigure failed for $IFACE (wpa_supplicant 미동작 또는 conf 문법 오류 확인)" >&2
             exit 7
@@ -3038,6 +3175,26 @@ case "$2" in
         ftpcmd_trace_log reconfigure_requested \
             "profile_sync=1 live_id=${LIVE_NETWORK_ID:-none}"
         echo "wpa_cli reconfigure OK ($IFACE)"
+        PROFILE_CONNECT_PATH=reconfigure
+        # A disconnected supplicant may be running sched_scan. On the target,
+        # ABORT_SCAN returned FAIL (no ordinary scan) while RECONFIGURE and
+        # REASSOCIATE kept rescheduling a new scan behind that sched_scan.
+        # A manual SCAN cancels sched_scan and requests a full scan using the
+        # freshly loaded frequency list. If an ordinary scan is already active,
+        # SCAN can return FAIL-BUSY; the reassociate fallback below still runs.
+        if [ "$PRE_WPA_STATE" != "COMPLETED" ]; then
+            connect_association_poll_matches || true
+            case "$WPA_STATE" in
+                SCANNING|DISCONNECTED)
+                    if wpa_cli_ok "$IFACE" scan; then
+                        PROFILE_CONNECT_PATH=scan
+                        ftpcmd_trace_log scan_requested "after=reconfigure"
+                    else
+                        ftpcmd_trace_log scan_unavailable "after=reconfigure"
+                    fi
+                    ;;
+            esac
+        fi
         # Reconfigure gets a bounded grace share of the one association budget.
         # If it does not prove landing, the common recovery below re-arms the
         # monitor and requests one reassociation.
@@ -3053,24 +3210,15 @@ case "$2" in
             fi
             REMAINING_POLLS=$((REMAINING_POLLS - 1))
             if [ "$ASSOC_MATCH" = "1" ]; then
-                ftpcmd_trace_log association_verified "path=reconfigure id=${CUR_ID:-N/A}"
-                echo "associated by reconfigure: ssid=\"$CUR_SSID\" freq=$CUR_FREQ id=$CUR_ID"
+                wifi_wpa_run_child rm -f "$WIFI_RUN_DIR/${IFACE}.credential-pending" 2>/dev/null || true
+                ftpcmd_trace_log association_verified "path=$PROFILE_CONNECT_PATH id=${CUR_ID:-N/A}"
+                echo "associated by $PROFILE_CONNECT_PATH: ssid=\"$CUR_SSID\" freq=$CUR_FREQ id=$CUR_ID"
                 exit 0
             fi
             if [ "$_i" -lt "$GRACE_POLLS" ] && [ "$REMAINING_POLLS" -gt 0 ]; then
                 wifi_wpa_run_child sleep 0.1
             fi
         done
-    else
-        # === 인자 없음: conf 그대로 현재 설정으로 재연결만 ===
-        # stdout 첫 줄은 ftpcmd `wconnect`의 200 응답 본문이 되므로 ASCII만 쓴다(#292).
-        if [ "$MULTI_TOPOLOGY" = "1" ]; then
-            echo "no ssid given - reassociating $IFACE (multi-network topology: current id=${MULTI_INITIAL_ID:-none}, supplicant selects among enabled networks)..."
-        elif [ "$HAS_TARGET_ID" = "1" ]; then
-            echo "no ssid given - reassociating current network id=$TARGET_ID on $IFACE..."
-        else
-            echo "no ssid/current id given - reassociating $IFACE with current conf..."
-        fi
     fi
     # --- 공통: owner-neutral 강제 재연결(reassociate 우선, 실패 시 reconnect) → assoc 대기 ---
     # Mode A도 다른 network 블록의 enabled 상태를 바꾸지 않는다. 단일 블록은 최초에 캡처한
@@ -3078,6 +3226,11 @@ case "$2" in
     if ! connect_event_monitor_arm; then
         echo "Error: failed to arm reconnect event monitor for $IFACE" >&2
         exit 7
+    fi
+    if [ "$HAS_TARGET" = "1" ] || [ "$APPLY_STORED_CONF" = "1" ]; then
+        # The grace starts before reconfigure, which can itself take time.
+        # Refresh it for the association wait (15s by default).
+        : > "$WIFI_RUN_DIR/${IFACE}.reconfigure-grace" 2>/dev/null || true
     fi
     CONNECT_TRIGGER=reassociate
     if wpa_cli_ok "$IFACE" reassociate; then
@@ -3093,7 +3246,7 @@ case "$2" in
     # (실제 association 시간은 물리 과정이라 불변; 폴링 grid만 줄여 끝맺음 반응성 개선)
     WPA_STATE=""; CUR_SSID=""; CUR_FREQ=""; CUR_ID=""
     FRESH_EVENT_ID=""; ASSOC_MATCH=0
-    # No-argument reconnects arrive with the full budget.  Explicit reconnects
+    # Plain no-argument reconnects arrive with the full budget. Profile reloads
     # use only the remainder after grace; neither phase resets the counter.
     while [ "$REMAINING_POLLS" -gt 0 ]; do
         if connect_association_poll_matches; then
@@ -3104,6 +3257,9 @@ case "$2" in
         [ "$REMAINING_POLLS" -gt 0 ] && wifi_wpa_run_child sleep 0.1
     done
     if [ "$ASSOC_MATCH" = "1" ]; then
+        if [ "$HAS_TARGET" = "1" ] || [ "$APPLY_STORED_CONF" = "1" ]; then
+            wifi_wpa_run_child rm -f "$WIFI_RUN_DIR/${IFACE}.credential-pending" 2>/dev/null || true
+        fi
         ftpcmd_trace_log association_verified "path=$CONNECT_TRIGGER id=${CUR_ID:-N/A}"
         echo "associated: ssid=\"${CUR_SSID:-N/A}\" freq=${CUR_FREQ:-N/A} id=${CUR_ID:-N/A} (wpa_state=COMPLETED)"
         exit 0

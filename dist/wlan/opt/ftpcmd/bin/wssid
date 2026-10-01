@@ -1,0 +1,101 @@
+#!/usr/bin/python3
+"""Read or store the first network SSID in the wpa_supplicant profile."""
+
+import re
+import subprocess
+import sys
+import syslog
+from pathlib import Path
+
+
+def fail(code: int, detail: str) -> int:
+    try:
+        syslog.syslog(syslog.LOG_ERR, f"ftpcmd_result command=wssid status=fail code={code} detail={detail}")
+    except OSError:
+        pass
+    return code
+
+
+def wifi_ssid_failure_cause(output: str) -> str:
+    """Keep useful failure categories in syslog without copying SSID or secrets."""
+    message = output.lower()
+    for marker, cause in (
+        ("ssid must be valid", "invalid_ssid"),
+        ("mode a", "topology_refused"),
+        ("multi", "topology_refused"),
+        ("not found:", "profile_missing"),
+        ("failed to lock", "lock_failed"),
+        ("awk lacks environ", "writer_unavailable"),
+        ("install", "persist_failed"),
+        ("sync", "persist_failed"),
+    ):
+        if marker in message:
+            return cause
+    return "unknown"
+
+
+def stored_ssid(path: Path) -> str:
+    in_network = False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        if not in_network:
+            in_network = re.match(r"^\s*network\s*=\s*\{", line) is not None
+            continue
+        if re.match(r"^\s*\}", line):
+            break
+        match = re.match(r"^\s*ssid\s*=\s*(.*)$", line)
+        if match is None:
+            continue
+        value = match.group(1).strip()
+        if value.startswith('"'):
+            end = value.rfind('"')
+            tail = value[end + 1 :].strip()
+            if end <= 0 or (tail and not tail.startswith("#")):
+                raise ValueError("invalid quoted SSID")
+            ssid = value[1:end]
+        else:
+            encoded = value.split("#", 1)[0].strip()
+            if not re.fullmatch(r"(?:[0-9a-fA-F]{2}){1,32}", encoded):
+                raise ValueError("invalid hex SSID")
+            ssid = bytes.fromhex(encoded).decode("utf-8")
+        if not ssid or any(ord(char) < 0x20 or ord(char) == 0x7F for char in ssid):
+            raise ValueError("empty or control-character SSID")
+        return ssid
+    raise ValueError("first network has no SSID")
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    iface = "mlan0"
+    if args and args[0] in ("mlan0", "mlan1"):
+        iface = args.pop(0)
+    if args:
+        ssid = " ".join(args)
+        try:
+            result = subprocess.run(
+                ["/usr/local/bin/wifi", iface, "ssid", ssid],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as error:
+            return fail(1, f"iface={iface} wifi ssid unavailable: {error}")
+        if result.returncode != 0:
+            code = result.returncode if 1 <= result.returncode <= 125 else 7
+            cause = wifi_ssid_failure_cause(result.stderr or result.stdout)
+            return fail(code, f"iface={iface} wifi ssid failed rc={result.returncode} cause={cause}")
+        print("SUCCESS")
+        return 0
+
+    path = Path(f"/etc/wpa_supplicant/wpa_supplicant-{iface}.conf")
+    try:
+        ssid = stored_ssid(path)
+    except (OSError, UnicodeError, ValueError) as error:
+        return fail(1, f"iface={iface} profile read failed: {error}")
+    print(ssid)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

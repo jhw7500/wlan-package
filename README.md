@@ -81,6 +81,11 @@ self-test:
 ./build.sh --release
 ```
 
+If the `wlan-bridge` submodule is absent, either command builds a package
+without bridge files. The package carries `opt/wlan/config/no-wbridge`, disables
+`wbridge.enabled` during installation, and removes old bridge service links.
+Initialize the submodule to build the normal bridge-enabled package.
+
 Every build states which mode it ran in, both before and after, so an
 unvalidated artifact is never mistaken for a release one.
 

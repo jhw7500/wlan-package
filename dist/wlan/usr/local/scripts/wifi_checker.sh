@@ -24,6 +24,7 @@ FAULT_REASSOC_CNT=2
 FAULT_RESTART_CNT=4
 FAULT_REBOOT_CNT=6
 RECONFIGURE_GRACE_SEC=20
+HANDSHAKE_STALL_SEC=30
 
 # Load from JSON config
 if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
@@ -41,17 +42,18 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
     RECONFIGURE_GRACE_SEC=$(jq -r ".${IFACE}.checker.RECONFIGURE_GRACE_SEC // 20" "$WIFI_INIT_CONF_JSON")
 fi
 
-# Disconnect 복구 사다리: MAX_UNSTABLE_DURATION 후 reassociate(가벼움),
-# RESTART_DURATION(=3배) 후에도 무진행이면 wpa_supplicant 재시작. AP 부재로 인한
-# 무한 재시작/재부팅을 피하려 disconnect 경로는 reboot까지 가지 않는다.
-# jq 실패(손상/빈 JSON 등)로 MAX_UNSTABLE_DURATION이 빈 값/비숫자가 되면 산술이 0이 되어
-# 무의미한 즉시 재시작을 유발 → 숫자 검증 후 RESTART_DURATION 계산.
+# 미연결 상태가 MAX_UNSTABLE_DURATION 이상 지속되면 한 번만 재연결을 요청한다.
+# AP 부재만으로 supplicant 고장으로 판정하지 않으며 자체 스캔·재시도에 맡긴다.
+# jq 실패(손상/빈 JSON 등)로 임계값이 빈 값/비숫자가 되면 즉시 재연결을
+# 유발할 수 있으므로 기본값으로 복구한다.
 [[ "$MAX_UNSTABLE_DURATION" =~ ^[0-9]+$ ]] || MAX_UNSTABLE_DURATION=10
 [[ "$RECONFIGURE_GRACE_SEC" =~ ^[0-9]+$ ]] || RECONFIGURE_GRACE_SEC=20
-RESTART_DURATION=$((MAX_UNSTABLE_DURATION * 3))
 
 UNSTABLE_START=0
-REASSOC_DONE=0   # 재연결/재시작 시 리셋; 한 unstable 윈도우 내 reassociate 1회만 발화하도록 가드
+REASSOC_DONE=0   # 한 unstable 윈도우 내 재연결 1회만 발화하도록 가드
+HANDSHAKE_STATE=""
+HANDSHAKE_START=0
+HANDSHAKE_LAST_RETRY=0
 ERR_CNT=0
 FAULT_CNT=0
 STATE=""
@@ -119,13 +121,14 @@ is_wpa_completed() {
     [[ "$s" == "COMPLETED" ]]
 }
 
-# 능동 연결 진행 중(auth/assoc/handshake) 여부. 이 상태를 reassoc/restart로 끊으면
-# 연결이 무산되므로 개입을 보류한다. SCANNING/DISCONNECTED 등은 진행으로 보지 않음(사다리 적용).
-wpa_handshake_in_progress() {
+# 능동 연결 진행 상태를 반환한다. 상태가 바뀌면 진행 중으로 보고 stall 타이머를
+# 다시 시작한다. SCANNING/DISCONNECTED 등은 진행으로 보지 않는다.
+wpa_handshake_state() {
     local s
     s=$(wpa_cli -i "$IFACE" status 2>/dev/null | grep "^wpa_state=" | cut -d= -f2)
     case "$s" in
-        AUTHENTICATING|ASSOCIATING|ASSOCIATED|4WAY_HANDSHAKE|GROUP_HANDSHAKE) return 0 ;;
+        AUTHENTICATING|ASSOCIATING|ASSOCIATED|4WAY_HANDSHAKE|GROUP_HANDSHAKE)
+            printf '%s\n' "$s"; return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -170,6 +173,7 @@ while true; do
             MFG_IDLE_LOGGED=1
         fi
         ERR_CNT=0; FAULT_CNT=0; UNSTABLE_START=0; REASSOC_DONE=0; REBOOT_F=0
+        HANDSHAKE_STATE=""; HANDSHAKE_START=0; HANDSHAKE_LAST_RETRY=0
         sleep 10
         continue
     fi
@@ -195,6 +199,7 @@ while true; do
           sleep 1
           continue
     elif [[ ! -d /sys/class/net/$IFACE ]]; then
+        HANDSHAKE_STATE=""; HANDSHAKE_START=0; HANDSHAKE_LAST_RETRY=0
         ((ERR_CNT++))
         logger -p local0.err "[$tag:$LINENO] [$IFACE] is not exist becase F/W dump...(ERR_CNT:$ERR_CNT)"
         if [ "$ERR_CNT" -gt "$LIMIT_CNT" ]; then
@@ -223,6 +228,7 @@ while true; do
             UNSTABLE_START=0
             REASSOC_DONE=0
             FAULT_CNT=0
+            HANDSHAKE_STATE=""; HANDSHAKE_START=0; HANDSHAKE_LAST_RETRY=0
             sleep 3
             continue
         fi
@@ -265,9 +271,10 @@ while true; do
               "$STATE" == "lowerlayerdown" || "$STATE" == "notpresent" ]]; then
             FAULT_CNT=0
             if reconfigure_grace_active "$TIMESTAMP"; then
-                # reconfigure 재연결 과도기 — 정당한 재연결을 끊지 않도록 타이머/사다리 억제
+                # reconfigure 재연결 과도기 — 정당한 재연결을 끊지 않도록 타이머 억제
                 UNSTABLE_START=0
                 REASSOC_DONE=0
+                HANDSHAKE_STATE=""; HANDSHAKE_START=0; HANDSHAKE_LAST_RETRY=0
             else
                 if [[ $UNSTABLE_START -eq 0 ]]; then
                     UNSTABLE_START=$TIMESTAMP
@@ -276,23 +283,32 @@ while true; do
 
                 DURATION=$((TIMESTAMP - UNSTABLE_START))
 
-                # 능동 연결 진행 중(auth/assoc/handshake)이면 개입 보류 — 진행 중 연결을 끊으면
-                # 오히려 연결이 무산된다. SCANNING/DISCONNECTED 등 무진행 상태에서만 사다리 적용.
-                # 단, RESTART_DURATION을 넘도록 handshake 상태에 멈춰(stuck) 있으면 wedge로 보고
-                # 재시작까지 escalate한다(무한 hold 방지). UNSTABLE_START 타이머는 handshake 동안에도
-                # 계속 누적되므로, handshake 실패/정체 시 적절한 단계로 곧바로 escalate된다.
-                if wpa_handshake_in_progress && (( DURATION < RESTART_DURATION )); then
-                    : # 정상 진행 중 → 타이머 유지, 개입 없음
-                elif (( DURATION >= RESTART_DURATION )); then
-                    # 2차(무거움): 장시간 미연결·무진행 → wpa_supplicant 재시작
-                    logger -p local0.err "[$tag:$LINENO] [$IFACE] restart wpa_supplicant@$IFACE (disconnected ${DURATION}s >= ${RESTART_DURATION}s, no progress)"
-                    wifi "$IFACE" restart
-                    UNSTABLE_START=0
-                    REASSOC_DONE=0
-                elif (( DURATION >= MAX_UNSTABLE_DURATION )) && (( REASSOC_DONE == 0 )); then
-                    # 1차(가벼움): 공용 transition lock과 fresh association proof를
+                # 같은 handshake 상태가 30초 넘게 멈춘 경우에만 재연결을
+                # 주기적으로 요청한다. AP 부재(SCANNING/DISCONNECTED)는 기존처럼
+                # 한 번만 요청하고 supplicant 자체 스캔에 맡긴다.
+                CAN_REASSOC=1
+                RECONNECT_REASON="no progress"
+                if CURRENT_HANDSHAKE=$(wpa_handshake_state); then
+                    CAN_REASSOC=0
+                    if [ "$CURRENT_HANDSHAKE" != "$HANDSHAKE_STATE" ]; then
+                        HANDSHAKE_STATE=$CURRENT_HANDSHAKE
+                        HANDSHAKE_START=$TIMESTAMP
+                    elif (( TIMESTAMP - HANDSHAKE_START >= HANDSHAKE_STALL_SEC )) \
+                         && (( TIMESTAMP - HANDSHAKE_LAST_RETRY >= HANDSHAKE_STALL_SEC )); then
+                        CAN_REASSOC=1
+                        REASSOC_DONE=0
+                        HANDSHAKE_LAST_RETRY=$TIMESTAMP
+                        RECONNECT_REASON="handshake stalled state=$CURRENT_HANDSHAKE"
+                    fi
+                else
+                    HANDSHAKE_STATE=""; HANDSHAKE_START=0; HANDSHAKE_LAST_RETRY=0
+                fi
+                if (( CAN_REASSOC == 1 )) \
+                   && (( DURATION >= MAX_UNSTABLE_DURATION )) \
+                   && (( REASSOC_DONE == 0 )); then
+                    # 공용 transition lock과 fresh association proof를
                     # 소유하는 wifi connect로 owner-neutral reassociate를 요청한다.
-                    logger -p local0.warning "[$tag:$LINENO] [$IFACE] serialized reconnect (disconnected ${DURATION}s >= ${MAX_UNSTABLE_DURATION}s, no progress)"
+                    logger -p local0.warning "[$tag:$LINENO] [$IFACE] serialized reconnect (disconnected ${DURATION}s >= ${MAX_UNSTABLE_DURATION}s, $RECONNECT_REASON)"
                     wifi "$IFACE" connect >/dev/null 2>&1
                     REASSOC_DONE=1
                 fi
@@ -300,6 +316,7 @@ while true; do
         else
             UNSTABLE_START=0
             REASSOC_DONE=0
+            HANDSHAKE_STATE=""; HANDSHAKE_START=0; HANDSHAKE_LAST_RETRY=0
             # 연결완료(operstate up) — 단 grace 윈도(TTL) 안에서는 carrier 가 잠깐 up 으로 튀어도
             # flag 를 지우지 않는다. reconfigure 재연결 중 up→down 토글로 grace 가 조기 해제되어
             # 사다리가 false-trigger 되는 것을 막고, TTL 자연 만료에 해제를 위임한다.

@@ -6,6 +6,29 @@ VALIDATE="$REPO/scripts/validate_release.sh"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 PKG="$WORK/pkg"
+SOURCE_TREE="$REPO/dist/wlan"
+if [ "${WLAN_PACKAGE_NO_BRIDGE:-0}" = 1 ]; then
+    SOURCE_TREE="$WORK/source"
+    mkdir -p "$SOURCE_TREE/opt/wlan/config"
+    cp -a "$REPO/dist/wlan/DEBIAN" "$SOURCE_TREE/DEBIAN"
+    python3 - "$SOURCE_TREE" <<'PY'
+import sys
+from pathlib import Path
+
+tree = Path(sys.argv[1])
+manifest = tree / "DEBIAN/payload-manifest.txt"
+entries = manifest.read_text(encoding="utf-8").splitlines()
+entries = [entry for entry in entries if not entry.startswith("usr/local/wlan-bridge/")]
+entries.append("opt/wlan/config/no-wbridge")
+manifest.write_text("\n".join(sorted(entries)) + "\n", encoding="utf-8")
+PY
+    printf 'bridge-less fixture\n' > "$SOURCE_TREE/opt/wlan/config/no-wbridge"
+    jq '.wbridge.enabled = false' "$REPO/dist/wlan/opt/wlan/config/wifi_init_conf.json" \
+        > "$SOURCE_TREE/opt/wlan/config/wifi_init_conf.json"
+fi
+validate_pkg() {
+    PACKAGE_SOURCE_TREE="$SOURCE_TREE" bash "$VALIDATE" package "$@"
+}
 SOURCE_NETWORK="$REPO/dist/wlan/opt/wlan/config/systemd/network/22-eth0.network"
 SOURCE_MLANUTL_IMX93="$REPO/dist/wlan/opt/wlan/bin/mlanutl_imx93"
 SOURCE_MLAN_IMX93="$REPO/dist/wlan/opt/wlan/driver/mlan_imx93.ko"
@@ -143,9 +166,9 @@ make_tree() {
         "$PKG/usr/share/doc/wlan-proc/nxp-imx-firmware"
     # Package identity is part of the release contract.  Keep the positive
     # fixture version-agnostic by deriving it from the source control file.
-    cp "$REPO/dist/wlan/DEBIAN/control" "$PKG/DEBIAN/control"
+    cp "$SOURCE_TREE/DEBIAN/control" "$PKG/DEBIAN/control"
     for rel in config templates preinst postinst prerm postrm; do
-        cp -p "$REPO/dist/wlan/DEBIAN/$rel" "$PKG/DEBIAN/$rel"
+        cp -p "$SOURCE_TREE/DEBIAN/$rel" "$PKG/DEBIAN/$rel"
     done
     # 매니페스트 370줄마다 dirname/mkdir 을 서브프로세스로 부르면 호출당 프로세스가
     # 740개 뜬다(실측 1.29초 × 31 케이스 = 40초로, 이 스크립트의 최대 비용이었다).
@@ -160,11 +183,14 @@ make_tree() {
             made["$dir"]=1
         fi
         if [ "$rel" = "DEBIAN/payload-manifest.txt" ]; then
-            cp "$REPO/dist/wlan/$rel" "$PKG/$rel"
+            cp "$SOURCE_TREE/$rel" "$PKG/$rel"
         else
             printf 'fixture\n' > "$PKG/$rel"
         fi
-    done < "$REPO/dist/wlan/DEBIAN/payload-manifest.txt"
+    done < "$SOURCE_TREE/DEBIAN/payload-manifest.txt"
+
+    cp "$SOURCE_TREE/opt/wlan/config/wifi_init_conf.json" \
+        "$PKG/opt/wlan/config/wifi_init_conf.json"
 
     cp "$REPO/dist/wlan/opt/wlan/config/systemd/network/22-eth0.network" \
         "$PKG/opt/wlan/config/systemd/network/22-eth0.network"
@@ -201,6 +227,9 @@ make_tree() {
         usr/local/wlan-bridge/wbridge/wbridge_imx93 \
         usr/local/wlan-bridge/wbridge/wbridge-tpacket_imx8 \
         usr/local/wlan-bridge/wbridge/wbridge-tpacket_imx93; do
+        if [ "${WLAN_PACKAGE_NO_BRIDGE:-0}" = 1 ] && [[ "$rel" = usr/local/wlan-bridge/* ]]; then
+            continue
+        fi
         mkdir -p "$PKG/$(dirname "$rel")"
         cp "$REPO/dist/wlan/$rel" "$PKG/$rel"
         chmod 0755 "$PKG/$rel"
@@ -223,7 +252,7 @@ build() {
 
 make_tree
 build "$WORK/good.deb"
-bash "$VALIDATE" package "$WORK/good.deb" >/dev/null
+validate_pkg "$WORK/good.deb" >/dev/null
 
 # wlan-proc does not own the product image's web server.  A future Factory
 # Reset change must not enable, disable, mask, or otherwise manage nginx.
@@ -233,7 +262,7 @@ printf '#!/bin/bash\nsystemctl enable nginx\n' \
 chmod 0755 "$PKG/usr/local/scripts/factory_reset.sh"
 build "$WORK/nginx-owned.deb"
 nginx_err="$WORK/nginx-owned.err"
-if bash "$VALIDATE" package "$WORK/nginx-owned.deb" >/dev/null 2>"$nginx_err"; then
+if validate_pkg "$WORK/nginx-owned.deb" >/dev/null 2>"$nginx_err"; then
     echo "FAIL: package factory reset was allowed to manage nginx" >&2
     exit 1
 fi
@@ -248,7 +277,7 @@ printf '#!/bin/bash\nFACTORY_REQUIRED_UNITS=(nginx.service)\n' \
     > "$PKG/usr/local/scripts/wifi_factory_reset_lib.sh"
 build "$WORK/nginx-owned-lib.deb"
 nginx_lib_err="$WORK/nginx-owned-lib.err"
-if bash "$VALIDATE" package "$WORK/nginx-owned-lib.deb" >/dev/null 2>"$nginx_lib_err"; then
+if validate_pkg "$WORK/nginx-owned-lib.deb" >/dev/null 2>"$nginx_lib_err"; then
     echo "FAIL: package factory reset library was allowed to manage nginx" >&2
     exit 1
 fi
@@ -261,7 +290,7 @@ fi
 make_tree
 printf '\npackage-component-corruption\n' >> "$PKG/opt/wlan/driver/moal_imx93.ko"
 build "$WORK/wrong-qualified-component.deb"
-if bash "$VALIDATE" package "$WORK/wrong-qualified-component.deb" >/dev/null 2>&1; then
+if validate_pkg "$WORK/wrong-qualified-component.deb" >/dev/null 2>&1; then
     echo "FAIL: package component outside the qualified SHA lock was accepted" >&2
     exit 1
 fi
@@ -269,7 +298,7 @@ fi
 make_tree
 printf '# package-lock-drift\n' >> "$PKG/opt/wlan/driver/DRIVER_COMPONENTS.sha256"
 build "$WORK/wrong-component-lock.deb"
-if bash "$VALIDATE" package "$WORK/wrong-component-lock.deb" >/dev/null 2>&1; then
+if validate_pkg "$WORK/wrong-component-lock.deb" >/dev/null 2>&1; then
     echo "FAIL: packaged component lock differing from source was accepted" >&2
     exit 1
 fi
@@ -277,7 +306,7 @@ fi
 expect_metadata_rejected() {
     local field="$1" deb="$2" err
     err="$WORK/metadata-${field}.err"
-    if bash "$VALIDATE" package "$deb" >/dev/null 2>"$err"; then
+    if validate_pkg "$deb" >/dev/null 2>"$err"; then
         echo "FAIL: mismatched package metadata accepted: $field" >&2
         exit 1
     fi
@@ -310,14 +339,14 @@ make_tree
 mkdir -p "$PKG/opt/wlan/config"
 printf '{}\n' > "$PKG/opt/wlan/config/config.json"
 build "$WORK/config.deb"
-if bash "$VALIDATE" package "$WORK/config.deb" >/dev/null 2>&1; then
+if validate_pkg "$WORK/config.deb" >/dev/null 2>&1; then
     echo "FAIL: retired config.json accepted" >&2; exit 1
 fi
 
 make_tree
 ln -s /etc/passwd "$PKG/opt/wlan/config/config.json"
 build "$WORK/config-symlink.deb"
-if bash "$VALIDATE" package "$WORK/config-symlink.deb" >/dev/null 2>&1; then
+if validate_pkg "$WORK/config-symlink.deb" >/dev/null 2>&1; then
     echo "FAIL: retired config.json symlink accepted" >&2; exit 1
 fi
 
@@ -325,7 +354,7 @@ make_tree
 rm "$PKG/usr/local/opc/bin/opcd"
 ln -s /bin/true "$PKG/usr/local/opc/bin/opcd"
 build "$WORK/manifest-symlink.deb"
-if bash "$VALIDATE" package "$WORK/manifest-symlink.deb" >/dev/null 2>&1; then
+if validate_pkg "$WORK/manifest-symlink.deb" >/dev/null 2>&1; then
     echo "FAIL: manifest payload symlink accepted" >&2; exit 1
 fi
 
@@ -333,7 +362,7 @@ make_tree
 rm "$PKG/usr/local/opc/bin/opcd"
 mkfifo "$PKG/usr/local/opc/bin/opcd"
 build "$WORK/manifest-fifo.deb"
-if bash "$VALIDATE" package "$WORK/manifest-fifo.deb" >/dev/null 2>&1; then
+if validate_pkg "$WORK/manifest-fifo.deb" >/dev/null 2>&1; then
     echo "FAIL: manifest payload FIFO accepted" >&2; exit 1
 fi
 
@@ -341,7 +370,7 @@ make_tree
 : > "$PKG/usr/local/opc/bin/opcd"
 chmod 0755 "$PKG/usr/local/opc/bin/opcd"
 build "$WORK/empty-runtime-binary.deb"
-if bash "$VALIDATE" package "$WORK/empty-runtime-binary.deb" >/dev/null 2>&1; then
+if validate_pkg "$WORK/empty-runtime-binary.deb" >/dev/null 2>&1; then
     echo "FAIL: empty runtime binary accepted" >&2; exit 1
 fi
 
@@ -349,7 +378,7 @@ make_tree
 printf '#!/bin/sh\nexit 0\n' > "$PKG/usr/local/opc/bin/opcd"
 chmod 0755 "$PKG/usr/local/opc/bin/opcd"
 build "$WORK/non-elf-runtime-binary.deb"
-if bash "$VALIDATE" package "$WORK/non-elf-runtime-binary.deb" >/dev/null 2>&1; then
+if validate_pkg "$WORK/non-elf-runtime-binary.deb" >/dev/null 2>&1; then
     echo "FAIL: non-AArch64 runtime binary accepted" >&2; exit 1
 fi
 
@@ -369,7 +398,7 @@ sys.stdout.buffer.write(h)
 PY2
 chmod 0644 "$PKG/usr/local/opc/bin/opcd"
 build "$WORK/nonexec-runtime-binary.deb"
-if bash "$VALIDATE" package "$WORK/nonexec-runtime-binary.deb" >/dev/null 2>&1; then
+if validate_pkg "$WORK/nonexec-runtime-binary.deb" >/dev/null 2>&1; then
     echo "FAIL: non-executable runtime binary accepted" >&2; exit 1
 fi
 
@@ -389,52 +418,52 @@ sys.stdout.buffer.write(h)
 PY2
 chmod 0755 "$PKG/usr/local/opc/bin/opcd"
 build "$WORK/truncated-elf-runtime-binary.deb"
-if bash "$VALIDATE" package "$WORK/truncated-elf-runtime-binary.deb" >/dev/null 2>&1; then
+if validate_pkg "$WORK/truncated-elf-runtime-binary.deb" >/dev/null 2>&1; then
     echo "FAIL: truncated AArch64 ELF runtime binary accepted" >&2; exit 1
 fi
 
 make_tree
 chmod 0644 "$PKG/usr/local/scripts/wifi_init.sh"
 build "$WORK/nonexec-service-command.deb"
-if bash "$VALIDATE" package "$WORK/nonexec-service-command.deb" >/dev/null 2>&1; then
+if validate_pkg "$WORK/nonexec-service-command.deb" >/dev/null 2>&1; then
     echo "FAIL: non-executable systemd service command accepted" >&2; exit 1
 fi
 
 make_tree
 chmod 0644 "$PKG/usr/local/scripts/wifi_logger_control.sh"
 build "$WORK/nonexec-wifi-cli-helper.deb"
-if bash "$VALIDATE" package "$WORK/nonexec-wifi-cli-helper.deb" >/dev/null 2>&1; then
+if validate_pkg "$WORK/nonexec-wifi-cli-helper.deb" >/dev/null 2>&1; then
     echo "FAIL: non-executable wifi CLI helper accepted" >&2; exit 1
 fi
 
 make_tree
-mkdir -p "$PKG/usr/local/wlan-bridge/wbridge"
-cat > "$PKG/usr/local/wlan-bridge/wbridge/wifi_bridge@.service" <<'EOF'
+mkdir -p "$PKG/usr/local/opc"
+cat > "$PKG/usr/local/opc/opcd.service" <<'EOF'
 [Service]
 ExecStop=/usr/local/scripts/wifi_bridge_stop.sh
 EOF
 printf '#!/bin/sh\nexit 0\n' > "$PKG/usr/local/scripts/wifi_bridge_stop.sh"
 chmod 0644 "$PKG/usr/local/scripts/wifi_bridge_stop.sh"
 build "$WORK/nonexec-installed-unit-command.deb"
-if bash "$VALIDATE" package "$WORK/nonexec-installed-unit-command.deb" >/dev/null 2>&1; then
+if validate_pkg "$WORK/nonexec-installed-unit-command.deb" >/dev/null 2>&1; then
     echo "FAIL: non-executable installed unit command accepted" >&2; exit 1
 fi
 
 make_tree
-mkdir -p "$PKG/usr/local/wlan-bridge/wbridge"
-cat > "$PKG/usr/local/wlan-bridge/wbridge/wifi_bridge@.service" <<'EOF'
+mkdir -p "$PKG/usr/local/opc"
+cat > "$PKG/usr/local/opc/opcd.service" <<'EOF'
 [Service]
 ExecStop=/usr/local/scripts/does-not-exist.sh
 EOF
 build "$WORK/missing-installed-unit-command.deb"
-if bash "$VALIDATE" package "$WORK/missing-installed-unit-command.deb" >/dev/null 2>&1; then
+if validate_pkg "$WORK/missing-installed-unit-command.deb" >/dev/null 2>&1; then
     echo "FAIL: missing package-owned installed unit command accepted" >&2; exit 1
 fi
 
 make_tree
 printf '\nprintf injected-control-script-marker\\n' >> "$PKG/DEBIAN/postinst"
 build "$WORK/control-drift.deb"
-if bash "$VALIDATE" package "$WORK/control-drift.deb" >/dev/null 2>&1; then
+if validate_pkg "$WORK/control-drift.deb" >/dev/null 2>&1; then
     echo "FAIL: maintainer-script drift accepted" >&2; exit 1
 fi
 
@@ -442,7 +471,7 @@ make_tree
 mkdir -p "$PKG/usr/local/__pycache__"
 printf x > "$PKG/usr/local/__pycache__/x.pyc"
 build "$WORK/dev.deb"
-if bash "$VALIDATE" package "$WORK/dev.deb" >/dev/null 2>&1; then
+if validate_pkg "$WORK/dev.deb" >/dev/null 2>&1; then
     echo "FAIL: dev artifact accepted" >&2; exit 1
 fi
 
@@ -455,14 +484,14 @@ chmod 0600 "$PKG/usr/local/runtime/.git/config" \
     "$PKG/usr/local/runtime/.claude/session.json" \
     "$PKG/usr/local/runtime/target-credentials.txt"
 build "$WORK/unapproved-payload.deb"
-if bash "$VALIDATE" package "$WORK/unapproved-payload.deb" >/dev/null 2>&1; then
+if validate_pkg "$WORK/unapproved-payload.deb" >/dev/null 2>&1; then
     echo "FAIL: unapproved payload files accepted" >&2; exit 1
 fi
 
 make_tree
 chmod 0664 "$PKG/opt/wlan/config/wifi_init_conf.json"
 build "$WORK/writable.deb"
-if bash "$VALIDATE" package "$WORK/writable.deb" >/dev/null 2>&1; then
+if validate_pkg "$WORK/writable.deb" >/dev/null 2>&1; then
     echo "FAIL: group-writable payload accepted" >&2; exit 1
 fi
 
@@ -475,7 +504,7 @@ for i in $(seq 1 12000); do
 done
 chmod 0664 "$PKG/usr/share/wlan-release-gate-volume/"*
 build "$WORK/many-writable.deb"
-if bash "$VALIDATE" package "$WORK/many-writable.deb" >/dev/null 2>&1; then
+if validate_pkg "$WORK/many-writable.deb" >/dev/null 2>&1; then
     echo "FAIL: high-volume group-writable payload accepted" >&2; exit 1
 fi
 
@@ -483,7 +512,7 @@ make_tree
 printf x > "$PKG/usr/lib/setuid-helper"
 chmod 4755 "$PKG/usr/lib/setuid-helper"
 build "$WORK/setuid.deb"
-if bash "$VALIDATE" package "$WORK/setuid.deb" >/dev/null 2>&1; then
+if validate_pkg "$WORK/setuid.deb" >/dev/null 2>&1; then
     echo "FAIL: setuid payload accepted" >&2; exit 1
 fi
 
@@ -491,14 +520,14 @@ make_tree
 printf x > "$PKG/usr/lib/setgid-helper"
 chmod 2755 "$PKG/usr/lib/setgid-helper"
 build "$WORK/setgid.deb"
-if bash "$VALIDATE" package "$WORK/setgid.deb" >/dev/null 2>&1; then
+if validate_pkg "$WORK/setgid.deb" >/dev/null 2>&1; then
     echo "FAIL: setgid payload accepted" >&2; exit 1
 fi
 
 make_tree
 printf 'not-p149.115\n' > "$PKG/usr/lib/firmware/cts/sd9098_wlan_v1.bin"
 build "$WORK/wrong-fw.deb"
-if bash "$VALIDATE" package "$WORK/wrong-fw.deb" >/dev/null 2>&1; then
+if validate_pkg "$WORK/wrong-fw.deb" >/dev/null 2>&1; then
     echo "FAIL: unexpected SDIO firmware accepted" >&2; exit 1
 fi
 
@@ -506,21 +535,21 @@ make_tree
 sed -i 's/Address=192\.168\.1\.1\/24/Address=192.168.214.5\/24/' \
     "$PKG/opt/wlan/config/systemd/network/22-eth0.network"
 build "$WORK/wrong-factory-ip.deb"
-if bash "$VALIDATE" package "$WORK/wrong-factory-ip.deb" >/dev/null 2>&1; then
+if validate_pkg "$WORK/wrong-factory-ip.deb" >/dev/null 2>&1; then
     echo "FAIL: wrong factory eth0 address accepted" >&2; exit 1
 fi
 
 make_tree
 chmod 0755 "$PKG/opt/wlan/config/systemd/network/22-eth0.network"
 build "$WORK/executable-factory-network.deb"
-if bash "$VALIDATE" package "$WORK/executable-factory-network.deb" >/dev/null 2>&1; then
+if validate_pkg "$WORK/executable-factory-network.deb" >/dev/null 2>&1; then
     echo "FAIL: executable factory network template accepted" >&2; exit 1
 fi
 
 make_tree
 rm -rf "$PKG/usr/share/doc/wlan-proc/nxp-imx-firmware"
 build "$WORK/missing-fw-provenance.deb"
-if bash "$VALIDATE" package "$WORK/missing-fw-provenance.deb" >/dev/null 2>&1; then
+if validate_pkg "$WORK/missing-fw-provenance.deb" >/dev/null 2>&1; then
     echo "FAIL: package without NXP firmware license/provenance accepted" >&2; exit 1
 fi
 

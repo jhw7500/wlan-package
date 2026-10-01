@@ -960,7 +960,7 @@ def test_wifi_checker_recovery_uses_transition_gateways() -> None:
     body = CHECKER.read_text()
 
     assert body.count('wifi "$IFACE" connect') == 2
-    assert body.count('wifi "$IFACE" restart') == 2
+    assert body.count('wifi "$IFACE" restart') == 1
 
     mutating_wpa_cli = re.compile(
         r"^\s*wpa_cli\b[^\n]*\b"

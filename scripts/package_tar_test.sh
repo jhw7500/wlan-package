@@ -145,7 +145,6 @@ if not EXPECTED_FILES:
     print("FAIL: source archive manifest is empty", file=sys.stderr)
     raise SystemExit(1)
 
-
 def canonical_member_name(raw):
     if raw.startswith("/"):
         raise ValueError("absolute member path")
@@ -232,15 +231,37 @@ with tf:
         if not members_by_name[parent].isdir():
             errors.append(f"{parent!r}: archive ancestor is not a directory")
 
-    # The manifest is self-referential: its member list includes the manifest
-    # itself, while the current validator reads the authoritative local copy.
-    # Compare its bytes too so an archive cannot carry a weaker declaration.
+    # Accept only the full manifest or its exact bridge-less projection. This
+    # makes a bridge-less archive verifiable without the original build env.
     if "scripts/source_archive_manifest.txt" in members_by_name:
         manifest_member = members_by_name["scripts/source_archive_manifest.txt"]
         if manifest_member.isfile():
             archived_manifest = tf.extractfile(manifest_member)
-            if archived_manifest is None or archived_manifest.read() != open(manifest_path, "rb").read():
+            local_bytes = open(manifest_path, "rb").read()
+            filtered_bytes = b"".join(
+                line for line in local_bytes.splitlines(keepends=True)
+                if not line.startswith(b"wlan-bridge/")
+                and not line.startswith(b"dist/wlan/usr/local/wlan-bridge/")
+            )
+            archived_bytes = archived_manifest.read() if archived_manifest else b""
+            if archived_bytes != local_bytes and archived_bytes != filtered_bytes:
                 errors.append("'scripts/source_archive_manifest.txt': archived manifest differs from release gate manifest")
+            elif not any(
+                line.startswith(b"wlan-bridge/")
+                for line in archived_bytes.splitlines()
+            ):
+                EXPECTED_FILES = {
+                    path for path in EXPECTED_FILES
+                    if not path.startswith("wlan-bridge/")
+                    and not path.startswith("dist/wlan/usr/local/wlan-bridge/")
+                }
+                REQUIRED_PATHS = {
+                    path for path in REQUIRED_PATHS if not path.startswith("wlan-bridge/")
+                }
+                REQUIRED_EXECUTABLES = {
+                    path for path in REQUIRED_EXECUTABLES
+                    if not path.startswith("wlan-bridge/")
+                }
 
     for member, name in normalized:
         if not permitted(name):

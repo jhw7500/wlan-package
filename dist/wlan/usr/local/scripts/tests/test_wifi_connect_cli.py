@@ -69,9 +69,10 @@ STATUS_INITIAL = "bssid=04:ba:d6:ec:0b:08\nfreq=5220\nssid=jhw_wlan_\nid=0\nwpa_
 #  - status          -> $WPA_STUB_DIR/status 그대로
 #  - -a ... -B -P    -> 자기 자신을 --daemon 으로 백그라운드 기동(pidfile 기록),
 #                       $WPA_STUB_DIR/fire 가 생기면 action 에 CONNECTED(WPA_ID) 전달
-#  - reassociate/reconnect/reconfigure
+#  - reassociate/reconnect/reconfigure/scan
 #                    -> OK. $WPA_STUB_DIR/landing 이 "id ssid freq" 면 status 를 그 값으로
 #                       바꾸고 fire 를 남긴다(착지). 없으면 status 불변, 이벤트 없음.
+#  - scan            -> scan-landing 파일이 있으면 그것을 착지로 사용한다.
 WPA_CLI_STUB = r'''#!/bin/bash
 D="${WPA_STUB_DIR:?}"
 if [ "${1:-}" = "--daemon" ]; then
@@ -108,9 +109,11 @@ fi
 case "$cmd" in
     abort_scan) echo FAIL ;;
     status) cat "$D/status" ;;
-    reassociate|reconnect|reconfigure)
-        if [ -f "$D/landing" ]; then
-            read -r lid lssid lfreq < "$D/landing"
+    reassociate|reconnect|reconfigure|scan)
+        landing="$D/landing"
+        [ "$cmd" = scan ] && landing="$D/scan-landing"
+        if [ -f "$landing" ]; then
+            read -r lid lssid lfreq < "$landing"
             printf 'bssid=00:00:00:00:00:%02d\nfreq=%s\nssid=%s\nid=%s\nwpa_state=COMPLETED\n' \
                 "$lid" "$lfreq" "$lssid" "$lid" > "$D/status.new"
             mv -f "$D/status.new" "$D/status"
@@ -205,7 +208,7 @@ class ConnectHarness(unittest.TestCase):
     def land_on(self, net_id, ssid, freq):
         (self.state / "landing").write_text(f"{net_id} {ssid} {freq}\n")
 
-    def run_connect(self, *args, pid_namespace=False, trace=False):
+    def run_connect(self, *args, pid_namespace=False, trace=False, apply_stored_conf=False):
         env = dict(os.environ)
         env.update({
             "PATH": f"{self.stub}:{os.environ['PATH']}",
@@ -221,6 +224,8 @@ class ConnectHarness(unittest.TestCase):
                 "FTPCMD_TRACE_ID": "test-trace",
                 "FTPCMD_TRACE_START_MS": str(int(time.monotonic() * 1000)),
             })
+        if apply_stored_conf:
+            env["FTPCMD_APPLY_CONF"] = "1"
         argv = ["bash", str(WIFI_SH), "mlan0", "connect", *args]
         if pid_namespace:
             argv = ["unshare", "-Upf", "bash", "-c", NS_WRAPPER, "_", *argv]
@@ -273,6 +278,25 @@ class FirstLineIsAscii(ConnectHarness):
 
 
 class FtpcmdTimingTrace(ConnectHarness):
+    def test_disconnected_profile_reload_stops_sched_scan(self):
+        self.write_conf(CONF_MODE_B)
+        (self.state / "status").write_text("wpa_state=SCANNING\n")
+        (self.state / "scan-landing").write_text("0 jhw_wlan_ 5200\n")
+        r = self.run_connect(apply_stored_conf=True, trace=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn('associated by scan: ssid="jhw_wlan_" freq=5200 id=0', r.stdout)
+
+        calls = (self.state / "calls.log").read_text().splitlines()
+        self.assertLess(
+            calls.index("wpa_cli -i mlan0 reconfigure"),
+            calls.index("wpa_cli -i mlan0 scan"),
+        )
+        self.assertNotIn("wpa_cli -i mlan0 reassociate", calls)
+        timing = (self.state / "logger.log").read_text()
+        self.assertIn("phase=scan_requested", timing)
+        self.assertIn("phase=association_verified", timing)
+        self.assertIn("path=scan", timing)
+
     def test_reconnect_logs_disconnect_connect_verify_phases(self):
         self.write_conf(CONF_MODE_B)
         self.land_on(0, "jhw_wlan_", 5220)

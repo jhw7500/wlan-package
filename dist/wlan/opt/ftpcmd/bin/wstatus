@@ -1,0 +1,57 @@
+#!/bin/sh
+# Report the current association, not the stored wpa_supplicant profile.
+set -u
+
+WPA_CLI=/usr/sbin/wpa_cli
+IFACE=mlan0
+
+wstatus_fail() {
+    _code=$1
+    shift
+    logger -p local0.err \
+        "ftpcmd_result command=wstatus status=fail code=$_code iface=$IFACE detail=$*" \
+        >/dev/null 2>&1 || true
+    exit "$_code"
+}
+
+if [ "$#" -gt 1 ]; then
+    wstatus_fail 2 "expected optional mlan0 or mlan1"
+fi
+if [ "$#" -eq 1 ]; then
+    case "$1" in
+        mlan0|mlan1) IFACE=$1 ;;
+        *) wstatus_fail 2 "invalid interface" ;;
+    esac
+fi
+
+STATUS=$("$WPA_CLI" -i "$IFACE" status 2>/dev/null) || wstatus_fail 7 "status query failed"
+STATE=
+SSID=
+FREQ=
+while IFS='=' read -r _key _value; do
+    case "$_key" in
+        wpa_state) STATE=$_value ;;
+        ssid) SSID=$_value ;;
+        freq) FREQ=$_value ;;
+    esac
+done <<EOF
+$STATUS
+EOF
+
+[ -n "$STATE" ] || wstatus_fail 7 "status reply has no wpa_state"
+[ "$STATE" = COMPLETED ] || wstatus_fail 8 "no current association state=${STATE:-unknown}"
+[ -n "$SSID" ] || wstatus_fail 7 "associated status has no SSID"
+case "$FREQ" in
+    ''|*[!0-9]*) wstatus_fail 7 "associated status has no numeric frequency" ;;
+esac
+SSID=$(PYTHONPATH=/usr/local/logger /usr/bin/python3 - "$SSID" <<'PY'
+import sys
+
+try:
+    from roam_policy import decode_wpa_ssid_text
+    print(decode_wpa_ssid_text(sys.argv[1]))
+except (ImportError, RuntimeError, ValueError, UnicodeError):
+    raise SystemExit(1)
+PY
+) || wstatus_fail 7 "associated status has invalid SSID"
+printf '%s %s\n' "$SSID" "$FREQ"
