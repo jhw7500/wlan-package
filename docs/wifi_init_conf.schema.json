@@ -1986,7 +1986,7 @@
               "type": "integer",
               "default": 10,
               "minimum": 1,
-              "description": "DISCONNECTED/SCANNING 무진행 지속이 이 초 초과 시 reassociate. 3배 초과 시 wpa_supplicant 재시작(초)",
+              "description": "미연결 상태가 이 초 이상 지속되면 한 번 재연결을 요청. AP 부재만으로 wpa_supplicant를 재시작하지 않음(초)",
               "x-ui-editable": "yes",
               "x-apply-timing": "daemon-restart",
               "x-consumer": "wifi_checker.sh"
@@ -2934,7 +2934,7 @@
               "type": "integer",
               "default": 10,
               "minimum": 1,
-              "description": "DISCONNECTED/SCANNING 무진행 지속이 이 초 초과 시 reassociate. 3배 초과 시 wpa_supplicant 재시작(초)",
+              "description": "미연결 상태가 이 초 이상 지속되면 한 번 재연결을 요청. AP 부재만으로 wpa_supplicant를 재시작하지 않음(초)",
               "x-ui-editable": "yes",
               "x-apply-timing": "daemon-restart",
               "x-consumer": "wifi_checker.sh"

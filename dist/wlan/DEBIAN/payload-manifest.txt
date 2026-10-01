@@ -59,6 +59,9 @@ opt/ftpcmd/bin/ifcup
 opt/ftpcmd/bin/rst
 opt/ftpcmd/bin/wconnect
 opt/ftpcmd/bin/wconnectraw
+opt/ftpcmd/bin/wfreq
+opt/ftpcmd/bin/wssid
+opt/ftpcmd/bin/wstatus
 opt/wlan/bin/README
 opt/wlan/bin/README_MLAN
 opt/wlan/bin/README_RBC

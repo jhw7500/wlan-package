@@ -1,24 +1,20 @@
 #!/bin/sh
 # Reassociate a wifi interface, optionally switching it to another SSID.
 # Reached over FTP as:
-#   quote wconnect [mlan0|mlan1] [ssid [freq_or_channel...]]
+#   quote wconnect [mlan0|mlan1] [ssid words...]
 #
 # NOT named "connect": vsftpd refuses GET/POST/HEAD/OPTIONS/CONNECT as FTP
 # verbs and drops the control connection, and that check runs before the
 # handler dispatch ever sees the command (postlogin.c, ahead of
 # vsf_extcmd_try).  Those five names are unusable here.
 #
-# A leading mlan0/mlan1 selects the interface.  Any other first argument is
-# the SSID and implicitly selects mlan0, so `quote wconnect my-ssid` works.
-# The SSID is exactly one FTP argument; every following argument is forwarded
-# as a frequency/channel selector to wifi connect.  Frequency selectors are
-# optional, and omitting them preserves the profile's current frequency policy.
-# With no SSID it forces a reassociation to whatever the selected interface is
-# already configured for.
+# A leading mlan0/mlan1 selects the interface. Any other first argument is
+# the SSID and implicitly selects mlan0. All remaining FTP arguments form one
+# SSID, joined with spaces. With no SSID, the stored profile is reloaded.
 #
-# The passphrase is never sent over FTP.  "wifi <iface> connect <ssid>" only
-# rewrites the ssid inside the interface's existing wpa_supplicant profile and
-# reassociates, so the PSK already stored on the board is the one used.
+# The passphrase is never sent over FTP. An explicit SSID rewrites only that
+# field in the stored profile; no SSID reloads the profile as stored. Both
+# paths reuse the PSK already on the board.
 #
 # Run by vsftpd's privileged parent, as root, with cwd / and a fixed PATH of
 # /usr/sbin:/usr/bin:/sbin:/bin -- which does NOT contain /usr/local/bin, so
@@ -108,15 +104,12 @@ case "$IFACE" in
         ;;
 esac
 
-if [ "$#" -eq 0 ]; then
-    FTPCMD_HAS_SSID=0
-    FTPCMD_FREQ_ARGC=0
-else
+FTPCMD_HAS_SSID=0
+if [ "$#" -gt 0 ]; then
     FTPCMD_HAS_SSID=1
-    FTPCMD_FREQ_ARGC=$(($# - 1))
+    FTPCMD_SSID=$*
 fi
-ftpcmd_trace_log arguments_parsed \
-    "iface=$IFACE ssid_supplied=$FTPCMD_HAS_SSID freq_argc=$FTPCMD_FREQ_ARGC"
+ftpcmd_trace_log arguments_parsed "iface=$IFACE ssid_supplied=$FTPCMD_HAS_SSID"
 
 # wifi's own connect subcommand only handles the two station interfaces; the
 # parser above can therefore select only mlan0 or mlan1.
@@ -139,21 +132,18 @@ if [ -n "${FTPCMD_LOCAL_ADDR:-}" ]; then
     fi
 fi
 
-# The first remaining argument is the SSID and every later argument is a
-# frequency/channel selector.  Keep the argv boundary intact so wifi connect
-# can validate and normalize those selectors.  SSIDs containing spaces are
-# intentionally unsupported by this FTP command.
-if [ "$#" -eq 0 ]; then
-    ftpcmd_trace_log connect_invoked "iface=$IFACE ssid_supplied=0"
-    FTPCMD_DETAIL=$("$WIFI" "$IFACE" connect 2>&1)
-    FTPCMD_RC=$?
+# Reassemble an explicit SSID as one argument. With no SSID, wifi connect
+# reloads the stored profile and applies settings staged by wssid or wfreq.
+ftpcmd_trace_log connect_invoked "iface=$IFACE ssid_supplied=$FTPCMD_HAS_SSID"
+if [ "$FTPCMD_HAS_SSID" -eq 1 ]; then
+    FTPCMD_DETAIL=$(FTPCMD_APPLY_CONF=1 "$WIFI" "$IFACE" connect "$FTPCMD_SSID" 2>&1)
 else
-    ftpcmd_trace_log connect_invoked \
-        "iface=$IFACE ssid_supplied=1 freq_argc=$FTPCMD_FREQ_ARGC"
-    FTPCMD_DETAIL=$("$WIFI" "$IFACE" connect "$@" 2>&1)
-    FTPCMD_RC=$?
+    FTPCMD_DETAIL=$(FTPCMD_APPLY_CONF=1 "$WIFI" "$IFACE" connect 2>&1)
 fi
+FTPCMD_RC=$?
 
-[ "$FTPCMD_RC" -eq 0 ] || ftpcmd_log_failure "$FTPCMD_RC" "$FTPCMD_DETAIL"
-
-exit "$FTPCMD_RC"
+[ "$FTPCMD_RC" -eq 0 ] || {
+    ftpcmd_log_failure "$FTPCMD_RC" "$FTPCMD_DETAIL"
+    exit "$FTPCMD_RC"
+}
+exit 0

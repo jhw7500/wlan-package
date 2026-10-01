@@ -104,7 +104,8 @@ def run_wconnect(*args, wifi_rc=0):
         shutil.rmtree(root, ignore_errors=True)
 
 
-def run_wconnectraw(*args, status_id="7", set_reply="OK", reassociate_reply="OK"):
+def run_wconnectraw(*args, status_id="7", set_reply="OK", reassociate_reply="OK",
+                    network_rows="7\tcurrent-ap\tany\t"):
     """Run the raw handler with only its absolute wpa_cli path test-patched."""
     root = Path(tempfile.mkdtemp(prefix="wconnectraw-"))
     try:
@@ -124,8 +125,9 @@ def run_wconnectraw(*args, status_id="7", set_reply="OK", reassociate_reply="OK"
             } >> "$WCONNECTRAW_CAPTURE"
             case "$*" in
                 *" status")
-                    printf 'wpa_state=COMPLETED\\nid=%s\\n' "$WCONNECTRAW_STATUS_ID"
+                    printf 'wpa_state=COMPLETED\\nid=%s\\nssid=current-ap\\nfreq=2412\\n' "$WCONNECTRAW_STATUS_ID"
                     ;;
+                *" list_networks") printf 'network id / ssid / bssid / flags\\n%s\\n' "$WCONNECTRAW_NETWORKS" ;;
                 *" set_network "*) printf '%s\\n' "$WCONNECTRAW_SET_REPLY" ;;
                 *" reassociate") printf '%s\\n' "$WCONNECTRAW_REASSOC_REPLY" ;;
                 *) printf 'FAIL\\n' ;;
@@ -155,6 +157,7 @@ def run_wconnectraw(*args, status_id="7", set_reply="OK", reassociate_reply="OK"
             "WCONNECTRAW_CAPTURE": str(capture),
             "WCONNECTRAW_LOG": str(timing_log),
             "WCONNECTRAW_STATUS_ID": status_id,
+            "WCONNECTRAW_NETWORKS": network_rows,
             "WCONNECTRAW_SET_REPLY": set_reply,
             "WCONNECTRAW_REASSOC_REPLY": reassociate_reply,
         })
@@ -170,7 +173,7 @@ def run_wconnectraw(*args, status_id="7", set_reply="OK", reassociate_reply="OK"
 
 class HandlersExist(unittest.TestCase):
     def test_every_handler_is_executable(self):
-        for name in ("getifstate", "ifcup", "ifcdown", "rst", "wconnect", "wconnectraw"):
+        for name in ("getifstate", "ifcup", "ifcdown", "rst", "wconnect", "wconnectraw", "wssid", "wfreq", "wstatus"):
             path = FTPCMD_DIR / name
             self.assertTrue(path.is_file(), f"{name} 이 없다")
             self.assertTrue(os.access(path, os.X_OK), f"{name} 에 실행비트가 없다")
@@ -210,7 +213,7 @@ class FirstLineContract(unittest.TestCase):
 
 
 class WconnectDefaultInterface(unittest.TestCase):
-    def test_no_arguments_reassociates_mlan0(self):
+    def test_no_arguments_apply_stored_mlan0_profile(self):
         r, argv, _ = run_wconnect()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(argv, ["mlan0", "connect"])
@@ -220,16 +223,17 @@ class WconnectDefaultInterface(unittest.TestCase):
         r, argv, _ = run_wconnect("field-ap")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(argv, ["mlan0", "connect", "field-ap"])
+        self.assertEqual(r.stdout.splitlines(), ["SUCCESS"])
 
-    def test_frequency_and_channel_arguments_are_forwarded_separately(self):
-        r, argv, _ = run_wconnect("field-ap", "36", "5200")
+    def test_ssid_words_are_joined_into_one_wifi_argument(self):
+        r, argv, _ = run_wconnect("Field", "AP")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual(argv, ["mlan0", "connect", "field-ap", "36", "5200"])
+        self.assertEqual(argv, ["mlan0", "connect", "Field AP"])
 
     def test_explicit_mlan1_is_preserved(self):
-        r, argv, _ = run_wconnect("mlan1", "field-ap", "2412")
+        r, argv, _ = run_wconnect("mlan1", "field", "ap")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual(argv, ["mlan1", "connect", "field-ap", "2412"])
+        self.assertEqual(argv, ["mlan1", "connect", "field ap"])
 
     def test_timing_log_uses_one_trace_through_reply_ready(self):
         r, _, lines = run_wconnect("field-ap", wifi_rc=8)
@@ -271,17 +275,31 @@ class WconnectRawRuntimeSwitch(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(calls[1], '[-i|mlan1|set_network|3|ssid|"lab-ap"]')
         self.assertEqual(calls[2], "[-i|mlan1|reassociate]")
+        self.assertEqual(len(calls), 3)
 
-    def test_missing_ssid_stops_before_wpa_cli(self):
+    def test_missing_ssid_fails_before_wpa_cli(self):
         r, calls, _ = run_wconnectraw()
         self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
         self.assertEqual(calls, [])
         self.assertEqual(r.stdout.splitlines(), ["FAIL code=2"])
 
-    def test_missing_current_id_stops_before_mutation(self):
-        r, calls, _ = run_wconnectraw("lab-ap", status_id="")
+    def test_disconnected_uses_only_enabled_network(self):
+        r, calls, _ = run_wconnectraw("current-ap", status_id="")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(calls, [
+            "[-i|mlan0|status]",
+            "[-i|mlan0|list_networks]",
+            '[-i|mlan0|set_network|7|ssid|"current-ap"]',
+            "[-i|mlan0|reassociate]",
+        ])
+        self.assertEqual(r.stdout.splitlines(), ["SUCCESS"])
+
+    def test_ambiguous_disconnected_networks_stop_before_mutation(self):
+        r, calls, _ = run_wconnectraw(
+            "other-ap", status_id="", network_rows="7\tfirst\tany\t\n8\tsecond\tany\t",
+        )
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-        self.assertEqual(calls, ["[-i|mlan0|status]"])
+        self.assertEqual(calls, ["[-i|mlan0|status]", "[-i|mlan0|list_networks]"])
         self.assertEqual(r.stdout.splitlines(), ["FAIL code=1"])
 
     def test_fail_payload_is_reported_as_wpa_error(self):

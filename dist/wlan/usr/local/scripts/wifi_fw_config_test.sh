@@ -1023,7 +1023,7 @@ elif [ "$(grep -c 'wifi "\$IFACE" connect' "$WIFI_CHECKER" || true)" -eq 2 ]; th
 else
     fail "wifi_checker does not route both lightweight recovery paths through wifi connect"
 fi
-expect_eq "wifi_checker routes both heavy recovery paths through serialized wifi restart" 2 \
+expect_eq "wifi_checker reserves serialized wifi restart for station dump faults" 1 \
     "$(grep -Ec 'wifi "?\$IFACE"? restart' "$WIFI_CHECKER" || true)"
 if grep -q '^apply_mcs_tier()' "$WIFI_INIT"; then fail "legacy unverified MCS apply remains"; else pass "legacy unverified MCS apply removed"; fi
 expect_eq "mlan1 HE template is empty" '' "$(jq -r '.mlan1.mcs_tier.he' "$TEMPLATE")"
