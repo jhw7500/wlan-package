@@ -244,7 +244,12 @@ with tf:
                 and not line.startswith(b"dist/wlan/usr/local/wlan-bridge/")
             )
             archived_bytes = archived_manifest.read() if archived_manifest else b""
-            if archived_bytes == filtered_bytes and archived_bytes != local_bytes:
+            if archived_bytes != local_bytes and archived_bytes != filtered_bytes:
+                errors.append("'scripts/source_archive_manifest.txt': archived manifest differs from release gate manifest")
+            elif not any(
+                line.startswith(b"wlan-bridge/")
+                for line in archived_bytes.splitlines()
+            ):
                 EXPECTED_FILES = {
                     path for path in EXPECTED_FILES
                     if not path.startswith("wlan-bridge/")
@@ -257,8 +262,6 @@ with tf:
                     path for path in REQUIRED_EXECUTABLES
                     if not path.startswith("wlan-bridge/")
                 }
-            elif archived_bytes != local_bytes:
-                errors.append("'scripts/source_archive_manifest.txt': archived manifest differs from release gate manifest")
 
     for member, name in normalized:
         if not permitted(name):
