@@ -338,7 +338,9 @@ customctl() {
     systemctl daemon-reload 2>/dev/null || true
     logger -p local0.info "[$tag:$LINENO] [$KEY] opcd.service installed via symlink (.opc.enabled gate-controlled)"
   fi
-  /usr/local/scripts/wifi_apply_enabled.sh 2>/dev/null || true
+  if [ "$NO_WBRIDGE" -eq 0 ]; then
+    /usr/local/scripts/wifi_apply_enabled.sh 2>/dev/null || true
+  fi
 
   # prerm 이 wifi-stack.target 을 stop 하면 PartOf= 로 묶인 자식 유닛(wifi_logger@mlanN,
   # wifi_logger_link@mlanN 등)이 함께 내려간다. 바로 위 wifi_apply_enabled.sh 는 enable/
@@ -352,7 +354,8 @@ customctl() {
   # 인 유닛만 start --no-block 하므로 멱등하고(이미 떠 있으면 no-op) disable 된 유닛은
   # 건드리지 않는다. wifi_init 이 살아 있을 때만 부르는 것은 자식만 내려간 상태를
   # 복구한다는 뜻이며, wifi_init 자체가 정지 중이면 다음 부팅에 함께 올라오는 것이 맞다.
-  if [ -x /usr/local/scripts/wifi_services.sh ] \
+  if [ "$NO_WBRIDGE" -eq 0 ] \
+     && [ -x /usr/local/scripts/wifi_services.sh ] \
      && systemctl is-active --quiet wifi_init 2>/dev/null; then
     /usr/local/scripts/wifi_services.sh start 2>/dev/null || true
     logger -p local0.info "[$tag:$LINENO] [$KEY] restarted wifi_init child units (prerm stopped them)"
@@ -671,6 +674,11 @@ secure_wpa_conf() {
   if [ "$NO_WBRIDGE" -eq 1 ]; then
     _no_bridge_json=$(jq '.wbridge.enabled = false' "$WIFI_CONF") || exit 1
     atomic_json_install "$_no_bridge_json" "$WIFI_CONF" || exit 1
+    /usr/local/scripts/wifi_apply_enabled.sh 2>/dev/null || true
+    if [ -x /usr/local/scripts/wifi_services.sh ] \
+       && systemctl is-active --quiet wifi_init 2>/dev/null; then
+      /usr/local/scripts/wifi_services.sh start 2>/dev/null || true
+    fi
   fi
 
   # 첫 부팅 전에 보드 정보까지 반영된 설정을 정상본으로 선제 저장한다. 업그레이드에서는
