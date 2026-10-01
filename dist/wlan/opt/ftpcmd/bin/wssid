@@ -16,6 +16,24 @@ def fail(code: int, detail: str) -> int:
     return code
 
 
+def wifi_ssid_failure_cause(output: str) -> str:
+    """Keep useful failure categories in syslog without copying SSID or secrets."""
+    message = output.lower()
+    for marker, cause in (
+        ("ssid must be valid", "invalid_ssid"),
+        ("mode a", "topology_refused"),
+        ("multi", "topology_refused"),
+        ("not found:", "profile_missing"),
+        ("failed to lock", "lock_failed"),
+        ("awk lacks environ", "writer_unavailable"),
+        ("install", "persist_failed"),
+        ("sync", "persist_failed"),
+    ):
+        if marker in message:
+            return cause
+    return "unknown"
+
+
 def stored_ssid(path: Path) -> str:
     in_network = False
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -65,7 +83,8 @@ def main() -> int:
             return fail(1, f"iface={iface} wifi ssid unavailable: {error}")
         if result.returncode != 0:
             code = result.returncode if 1 <= result.returncode <= 125 else 7
-            return fail(code, f"iface={iface} wifi ssid failed")
+            cause = wifi_ssid_failure_cause(result.stderr or result.stdout)
+            return fail(code, f"iface={iface} wifi ssid failed rc={result.returncode} cause={cause}")
         print("SUCCESS")
         return 0
 

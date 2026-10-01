@@ -2979,7 +2979,7 @@ case "$2" in
        && [[ "$LIVE_FREQ" =~ ^[0-9]+$ ]] \
        && [ ! -e "$WIFI_RUN_DIR/${IFACE}.credential-pending" ] \
        && [ -f "$CONF" ]; then
-        CONF_SSID_RAW=$(wifi_wpa_child_exec awk '
+        CONF_SSID_RAW=$(wifi_wpa_run_child awk '
             /^[[:space:]]*#/ { next }
             /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ {
                 if (!seen) { seen = 1; in_net = 1 }
@@ -3021,9 +3021,17 @@ case "$2" in
                     ;;
                 *)
                     if [[ "$CONF_SSID_RAW" =~ ^([[:xdigit:]]{2}){1,32}$ ]]; then
-                        CONFIGURED_SSID=$(python3 -c \
-                            'import sys; print(bytes.fromhex(sys.argv[1]).decode("utf-8"))' \
-                            "$CONF_SSID_RAW" 2>/dev/null) || CONFIGURED_SSID=""
+                        CONFIGURED_SSID=""
+                        _CONF_HEX_REST=$CONF_SSID_RAW
+                        while [ -n "$_CONF_HEX_REST" ]; do
+                            printf -v _CONF_HEX_BYTE '%b' "\\x${_CONF_HEX_REST:0:2}"
+                            if [ -z "$_CONF_HEX_BYTE" ]; then
+                                CONFIGURED_SSID=""
+                                break
+                            fi
+                            CONFIGURED_SSID+=$_CONF_HEX_BYTE
+                            _CONF_HEX_REST=${_CONF_HEX_REST:2}
+                        done
                         if [ -n "$CONFIGURED_SSID" ]; then
                             CONFIGURED_SSID_WPA_TEXT=$(wifi_wpa_child_call \
                                 wifi_ssid_to_wpa_text "$CONFIGURED_SSID" 2>/dev/null) \
@@ -3156,7 +3164,7 @@ case "$2" in
         # wifi_checker treats a long-standing SCANNING state as stalled. Give
         # this explicit profile reload its existing grace window so the
         # checker does not queue a competing reconnect or restart.
-        wifi_wpa_run_child touch "$WIFI_RUN_DIR/${IFACE}.reconfigure-grace" 2>/dev/null || true
+        : > "$WIFI_RUN_DIR/${IFACE}.reconfigure-grace" 2>/dev/null || true
         if ! connect_event_monitor_arm || ! wpa_cli_ok "$IFACE" reconfigure; then
             echo "Error: wpa_cli reconfigure failed for $IFACE (wpa_supplicant 미동작 또는 conf 문법 오류 확인)" >&2
             exit 7
@@ -3219,7 +3227,7 @@ case "$2" in
     if [ "$HAS_TARGET" = "1" ] || [ "$APPLY_STORED_CONF" = "1" ]; then
         # The grace starts before reconfigure, which can itself take time.
         # Refresh it for the association wait (15s by default).
-        wifi_wpa_run_child touch "$WIFI_RUN_DIR/${IFACE}.reconfigure-grace" 2>/dev/null || true
+        : > "$WIFI_RUN_DIR/${IFACE}.reconfigure-grace" 2>/dev/null || true
     fi
     CONNECT_TRIGGER=reassociate
     if wpa_cli_ok "$IFACE" reassociate; then

@@ -16,6 +16,7 @@ vsftpd 디스패치는 핸들러의 첫 stdout 줄을 200 응답 본문으로 �
 """
 import os
 import re
+import runpy
 import shlex
 import shutil
 import subprocess
@@ -230,6 +231,11 @@ class WconnectDefaultInterface(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(argv, ["mlan0", "connect", "Field AP"])
 
+    def test_released_numeric_frequency_form_does_not_become_ssid(self):
+        r, argv, _ = run_wconnect("field-ap", "36", "5200")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(argv, ["mlan0", "connect", "field-ap", "36", "5200"])
+
     def test_explicit_mlan1_is_preserved(self):
         r, argv, _ = run_wconnect("mlan1", "field", "ap")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -309,6 +315,145 @@ class WconnectRawRuntimeSwitch(unittest.TestCase):
         self.assertEqual(r.returncode, 7, r.stdout + r.stderr)
         self.assertEqual(len(calls), 3)
         self.assertEqual(r.stdout.splitlines(), ["FAIL code=7"])
+
+
+class ProfileHandlerContract(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory(prefix="ftpcmd-profile-")
+        self.root = Path(self.tempdir.name)
+        self.conf = self.root / "wpa_supplicant-mlan0.conf"
+        self.conf.write_text(
+            'freq_list=5180 5200\nnetwork={\n    ssid="Office AP"\n'
+            '    freq_list=5180 5200\n}\n'
+        )
+        self.capture = self.root / "calls"
+        self.wifi = self.root / "wifi"
+        self.wifi.write_text(
+            '#!/bin/sh\nprintf "%s\\n" "$@" > "$PROFILE_CAPTURE"\n'
+            'if [ -n "$PROFILE_DIAG" ]; then printf "%s\\n" "$PROFILE_DIAG" >&2; fi\n'
+            'exit "$PROFILE_RC"\n'
+        )
+        self.wifi.chmod(0o755)
+        self.wpa_cli = self.root / "wpa_cli"
+        self.wpa_cli.write_text(
+            '#!/bin/sh\nprintf "%s\\n" "$@" > "$PROFILE_CAPTURE"\n'
+            'printf "%s\\n" "$PROFILE_STATUS"\n'
+            'exit "$PROFILE_RC"\n'
+        )
+        self.wpa_cli.chmod(0o755)
+        self.log = self.root / "logger.log"
+        logger = self.root / "logger"
+        logger.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$PROFILE_LOG"\n')
+        logger.chmod(0o755)
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    def run_profile(self, name, *args, status="", rc=0, diag=""):
+        source = (FTPCMD_DIR / name).read_text()
+        if name == "wssid":
+            source = source.replace(
+                '"/usr/local/bin/wifi"',
+                repr(str(self.wifi)),
+                1,
+            ).replace(
+                'Path(f"/etc/wpa_supplicant/wpa_supplicant-{iface}.conf")',
+                f"Path({str(self.conf)!r})",
+                1,
+            )
+        elif name == "wfreq":
+            source = source.replace(
+                'WIFI=/usr/local/bin/wifi',
+                f'WIFI={shlex.quote(str(self.wifi))}',
+                1,
+            ).replace(
+                'CONF="/etc/wpa_supplicant/wpa_supplicant-$IFACE.conf"',
+                f'CONF={shlex.quote(str(self.conf))}',
+                1,
+            ).replace(
+                '/usr/local/scripts/wifi_init_config_lib.sh',
+                str(FTPCMD_DIR.parents[2] / "usr/local/scripts/wifi_init_config_lib.sh"),
+                1,
+            )
+        elif name == "wstatus":
+            source = source.replace(
+                'WPA_CLI=/usr/sbin/wpa_cli',
+                f'WPA_CLI={shlex.quote(str(self.wpa_cli))}',
+                1,
+            )
+        handler = self.root / name
+        handler.write_text(source)
+        handler.chmod(0o755)
+        self.capture.unlink(missing_ok=True)
+        env = dict(os.environ)
+        env.update({
+            "PATH": f"{self.root}:{os.environ['PATH']}",
+            "PROFILE_CAPTURE": str(self.capture),
+            "PROFILE_STATUS": status,
+            "PROFILE_RC": str(rc),
+            "PROFILE_DIAG": diag,
+            "PROFILE_LOG": str(self.log),
+        })
+        result = subprocess.run(
+            [str(handler), *args], capture_output=True, text=True,
+            timeout=30, env=env,
+        )
+        calls = self.capture.read_text().splitlines() if self.capture.exists() else []
+        return result, calls
+
+    def test_wssid_query_and_set(self):
+        query, _ = self.run_profile("wssid")
+        self.assertEqual(query.returncode, 0, query.stderr)
+        self.assertEqual(query.stdout.splitlines(), ["Office AP"])
+        set_result, calls = self.run_profile("wssid", "New", "Office")
+        self.assertEqual(set_result.returncode, 0, set_result.stderr)
+        self.assertEqual(set_result.stdout.splitlines(), ["SUCCESS"])
+        self.assertEqual(calls, ["mlan0", "ssid", "New Office"])
+
+    def test_wssid_failure_has_safe_actionable_cause(self):
+        classify = runpy.run_path(str(FTPCMD_DIR / "wssid"))["wifi_ssid_failure_cause"]
+        for diagnostic, expected in (
+            ("Error: SSID must be valid UTF-8", "cause=invalid_ssid"),
+            ("install: permission denied", "cause=persist_failed"),
+        ):
+            failure, _ = self.run_profile("wssid", "New", "Office", rc=1, diag=diagnostic)
+            self.assertEqual(failure.returncode, 1)
+            self.assertEqual(failure.stdout, "")
+            self.assertEqual("cause=" + classify(diagnostic), expected)
+
+    def test_wfreq_query_and_set(self):
+        query, _ = self.run_profile("wfreq")
+        self.assertEqual(query.returncode, 0, query.stderr)
+        self.assertEqual(query.stdout.splitlines(), ["5180,5200"])
+        set_result, calls = self.run_profile("wfreq", "36", "5200")
+        self.assertEqual(set_result.returncode, 0, set_result.stderr)
+        self.assertEqual(set_result.stdout.splitlines(), ["SUCCESS"])
+        self.assertEqual(calls, ["mlan0", "freq", "36", "5200"])
+
+    def test_wstatus_connected_disconnected_and_invalid(self):
+        connected, calls = self.run_profile(
+            "wstatus", status="wpa_state=COMPLETED\nssid=Office AP\nfreq=5200",
+        )
+        self.assertEqual(connected.returncode, 0, connected.stderr)
+        self.assertEqual(connected.stdout.splitlines(), ["Office AP 5200"])
+        self.assertEqual(calls, ["-i", "mlan0", "status"])
+        disconnected, _ = self.run_profile(
+            "wstatus", status="wpa_state=SCANNING",
+        )
+        self.assertEqual(disconnected.returncode, 8)
+        invalid, calls = self.run_profile("wstatus", "invalid")
+        self.assertEqual(invalid.returncode, 2)
+        self.assertEqual(calls, [])
+
+    def test_rst_submits_nonblocking_systemd_request(self):
+        marker = self.root / "systemctl.args"
+        r = run_handler(
+            "rst", env={"RST_CAPTURE": str(marker)},
+            stubs={"systemctl": 'printf "%s\\n" "$@" > "$RST_CAPTURE"\n'},
+        )
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.stdout.splitlines(), ["reboot requested"])
+        self.assertEqual(marker.read_text().splitlines(), ["--no-block", "reboot"])
 
 
 class FailurePaths(unittest.TestCase):

@@ -105,9 +105,25 @@ case "$IFACE" in
 esac
 
 FTPCMD_HAS_SSID=0
+FTPCMD_LEGACY_FREQ=0
 if [ "$#" -gt 0 ]; then
     FTPCMD_HAS_SSID=1
-    FTPCMD_SSID=$*
+    # Released clients pass numeric channel/MHz selectors after the first SSID.
+    # Keep that form separate from the multiword SSID form so it can never be
+    # persisted as SSID text. Use wssid followed by wconnect for an SSID whose
+    # second word is numeric.
+    if [ "$#" -gt 1 ]; then
+        case "$2" in
+            ''|*[!0-9]*) ;;
+            *) FTPCMD_LEGACY_FREQ=1 ;;
+        esac
+    fi
+    if [ "$FTPCMD_LEGACY_FREQ" -eq 1 ]; then
+        FTPCMD_SSID=$1
+        shift
+    else
+        FTPCMD_SSID=$*
+    fi
 fi
 ftpcmd_trace_log arguments_parsed "iface=$IFACE ssid_supplied=$FTPCMD_HAS_SSID"
 
@@ -136,7 +152,11 @@ fi
 # reloads the stored profile and applies settings staged by wssid or wfreq.
 ftpcmd_trace_log connect_invoked "iface=$IFACE ssid_supplied=$FTPCMD_HAS_SSID"
 if [ "$FTPCMD_HAS_SSID" -eq 1 ]; then
-    FTPCMD_DETAIL=$(FTPCMD_APPLY_CONF=1 "$WIFI" "$IFACE" connect "$FTPCMD_SSID" 2>&1)
+    if [ "$FTPCMD_LEGACY_FREQ" -eq 1 ]; then
+        FTPCMD_DETAIL=$(FTPCMD_APPLY_CONF=1 "$WIFI" "$IFACE" connect "$FTPCMD_SSID" "$@" 2>&1)
+    else
+        FTPCMD_DETAIL=$(FTPCMD_APPLY_CONF=1 "$WIFI" "$IFACE" connect "$FTPCMD_SSID" 2>&1)
+    fi
 else
     FTPCMD_DETAIL=$(FTPCMD_APPLY_CONF=1 "$WIFI" "$IFACE" connect 2>&1)
 fi
