@@ -716,7 +716,9 @@ secure_wpa_conf() {
   if [ "$NO_WBRIDGE" -eq 1 ]; then
     systemctl disable --now wifi_bridge@mlan0 wifi_bridge@mlan1 2>/dev/null || true
     rm -f /usr/local/bin/wifi-wbridge /usr/local/bin/wifi-wbridge-tpacket \
-      /etc/systemd/system/wifi_bridge@.service
+      /etc/systemd/system/wifi_bridge@.service \
+      /etc/systemd/system/wifi-stack.target.wants/wifi_bridge@mlan0.service \
+      /etc/systemd/system/wifi-stack.target.wants/wifi_bridge@mlan1.service
     systemctl daemon-reload 2>/dev/null || true
     logger -p local0.info "[$tag:$LINENO] [$KEY] bridge-less package: wifi_bridge disabled"
   else
