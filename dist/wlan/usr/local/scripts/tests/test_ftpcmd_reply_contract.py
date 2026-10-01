@@ -380,6 +380,10 @@ class ProfileHandlerContract(unittest.TestCase):
                 'WPA_CLI=/usr/sbin/wpa_cli',
                 f'WPA_CLI={shlex.quote(str(self.wpa_cli))}',
                 1,
+            ).replace(
+                'PYTHONPATH=/usr/local/logger',
+                f'PYTHONPATH={shlex.quote(str(FTPCMD_DIR.parents[2] / "usr/local/logger"))}',
+                1,
             )
         handler = self.root / name
         handler.write_text(source)

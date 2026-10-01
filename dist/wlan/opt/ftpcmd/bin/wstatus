@@ -44,5 +44,14 @@ EOF
 case "$FREQ" in
     ''|*[!0-9]*) wstatus_fail 7 "associated status has no numeric frequency" ;;
 esac
-SSID=$(printf '%s' "$SSID" | LC_ALL=C tr -c '[:print:]' '?')
+SSID=$(PYTHONPATH=/usr/local/logger /usr/bin/python3 - "$SSID" <<'PY'
+import sys
+
+try:
+    from roam_policy import decode_wpa_ssid_text
+    print(decode_wpa_ssid_text(sys.argv[1]))
+except (ImportError, RuntimeError, ValueError, UnicodeError):
+    raise SystemExit(1)
+PY
+) || wstatus_fail 7 "associated status has invalid SSID"
 printf '%s %s\n' "$SSID" "$FREQ"
