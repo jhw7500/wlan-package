@@ -2969,9 +2969,12 @@ case "$2" in
     fi
     # FTP wconnect is idempotent when the already-associated single network
     # matches both the stored SSID and the live global/network frequency policy.
+    # Explicit legacy frequency arguments must reach validation and the conf
+    # update below, even when the current profile otherwise matches.
     # A staged wssid/wfreq change fails this comparison and takes the normal
     # reconfigure path. Ordinary `wifi connect` keeps its force-reconnect API.
     if [ "$APPLY_STORED_CONF" = "1" ] \
+       && [ "$#" -le 1 ] \
        && [ "$PRE_WPA_STATE" = "COMPLETED" ] \
        && [ "$MULTI_TOPOLOGY" = "0" ] \
        && [ -n "$LIVE_NETWORK_ID" ] \
