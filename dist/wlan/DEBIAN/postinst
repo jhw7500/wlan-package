@@ -85,23 +85,28 @@ configure)
   # CRITICAL: Verify binaries and config exist BEFORE making any system changes.
   # 보드별 suffix(_imx8/_imx93) 바이너리 또는 legacy suffix-less 중 하나 이상 필요.
   # 실제 보드 분기는 아래 BOARD_TYPE detection 후 심볼릭 링크 단계에서 처리.
-  _has_wbridge=0
-  for cand in wbridge wbridge_imx8 wbridge_imx93; do
-    [ -f "/usr/local/wlan-bridge/wbridge/${cand}" ] && _has_wbridge=1 && break
-  done
-  if [ "$_has_wbridge" -ne 1 ]; then
-    echo "ERROR: no wbridge binary in /usr/local/wlan-bridge/wbridge/ (wbridge, wbridge_imx8, wbridge_imx93)" >&2
-    logger -p local0.err "[$tag:$LINENO] [$KEY] Critical: no wbridge binary present"
-    exit 1
-  fi
-  _has_tpacket=0
-  for cand in wbridge-tpacket wbridge-tpacket_imx8 wbridge-tpacket_imx93; do
-    [ -f "/usr/local/wlan-bridge/wbridge/${cand}" ] && _has_tpacket=1 && break
-  done
-  if [ "$_has_tpacket" -ne 1 ]; then
-    echo "ERROR: no wbridge-tpacket binary in /usr/local/wlan-bridge/wbridge/" >&2
-    logger -p local0.err "[$tag:$LINENO] [$KEY] Critical: no wbridge-tpacket binary present"
-    exit 1
+  NO_WBRIDGE=0
+  if [ -f /opt/wlan/config/no-wbridge ]; then
+    NO_WBRIDGE=1
+  else
+    _has_wbridge=0
+    for cand in wbridge wbridge_imx8 wbridge_imx93; do
+      [ -f "/usr/local/wlan-bridge/wbridge/${cand}" ] && _has_wbridge=1 && break
+    done
+    if [ "$_has_wbridge" -ne 1 ]; then
+      echo "ERROR: no wbridge binary in /usr/local/wlan-bridge/wbridge/ (wbridge, wbridge_imx8, wbridge_imx93)" >&2
+      logger -p local0.err "[$tag:$LINENO] [$KEY] Critical: no wbridge binary present"
+      exit 1
+    fi
+    _has_tpacket=0
+    for cand in wbridge-tpacket wbridge-tpacket_imx8 wbridge-tpacket_imx93; do
+      [ -f "/usr/local/wlan-bridge/wbridge/${cand}" ] && _has_tpacket=1 && break
+    done
+    if [ "$_has_tpacket" -ne 1 ]; then
+      echo "ERROR: no wbridge-tpacket binary in /usr/local/wlan-bridge/wbridge/" >&2
+      logger -p local0.err "[$tag:$LINENO] [$KEY] Critical: no wbridge-tpacket binary present"
+      exit 1
+    fi
   fi
 
   mkdir -p /usr/local/etc
@@ -663,6 +668,10 @@ secure_wpa_conf() {
     logger -p local0.emerg "[$tag:$LINENO] [$KEY] canonical board config apply failed: $WIFI_CONF"
     exit 1
   fi
+  if [ "$NO_WBRIDGE" -eq 1 ]; then
+    _no_bridge_json=$(jq '.wbridge.enabled = false' "$WIFI_CONF") || exit 1
+    atomic_json_install "$_no_bridge_json" "$WIFI_CONF" || exit 1
+  fi
 
   # 첫 부팅 전에 보드 정보까지 반영된 설정을 정상본으로 선제 저장한다. 업그레이드에서는
   # 기존 정상본과 내용이 같으면 회전하지 않으며, 손상된 active는 commit이 거부한다.
@@ -696,6 +705,13 @@ secure_wpa_conf() {
   fi
   ln -sf /dev/null /lib/systemd/system-generators/systemd-sysv-generator
   # Create symlinks for wlan-bridge binaries (wbridge) — board별 분기.
+  if [ "$NO_WBRIDGE" -eq 1 ]; then
+    systemctl disable --now wifi_bridge@mlan0 wifi_bridge@mlan1 2>/dev/null || true
+    rm -f /usr/local/bin/wifi-wbridge /usr/local/bin/wifi-wbridge-tpacket \
+      /etc/systemd/system/wifi_bridge@.service
+    systemctl daemon-reload 2>/dev/null || true
+    logger -p local0.info "[$tag:$LINENO] [$KEY] bridge-less package: wifi_bridge disabled"
+  else
   # cross-build 시 wbridge_imx8 / wbridge_imx93 두 가지가 모두 설치되며,
   # postinst가 보드 감지(BOARD_TYPE)에 따라 /usr/local/bin/wifi-wbridge 가
   # 해당 보드 바이너리를 가리키도록 심볼릭 링크 생성.
@@ -719,6 +735,7 @@ secure_wpa_conf() {
   logger -p local0.info "[$tag:$LINENO] [$KEY] wbridge symlinks -> suffix='${WBRIDGE_SUFFIX}' (BOARD_TYPE=$BOARD_TYPE)"
 
   logger -p local0.info "[$tag:$LINENO] [$KEY] Successfully created symlinks for wbridge binaries"
+  fi
 
   # Custom wpa_supplicant (dpkg-divert로 원본 보존, 보드별 바이너리 선택)
   if [ "$BOARD_TYPE" = "imx93" ]; then

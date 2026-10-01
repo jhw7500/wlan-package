@@ -177,6 +177,8 @@ expected = {
     line.strip() for line in manifest.read_text(encoding="utf-8").splitlines()
     if line.strip() and not line.lstrip().startswith("#")
 }
+if os.environ.get("WLAN_PACKAGE_NO_BRIDGE") == "1":
+    expected = {name for name in expected if not name.startswith("usr/local/wlan-bridge/")}
 
 excluded_components = {".omc", ".pytest_cache", "__pycache__", "tmp", "test", "tests"}
 generated_wbridge_names = {
@@ -236,6 +238,7 @@ PY
 
 validate_control_archive() {
     local deb="$1" expected_dir actual_dir expected_names actual_names rel
+    local source_tree="${PACKAGE_SOURCE_TREE:-$REPO/dist/wlan}"
     expected_dir=$(mktemp -d)
     actual_dir=$(mktemp -d)
     rmdir "$actual_dir"
@@ -244,11 +247,11 @@ validate_control_archive() {
     trap 'rm -rf "$expected_dir" "$actual_dir"; rm -f "$expected_names" "$actual_names"' RETURN
 
     for rel in control config templates preinst postinst prerm postrm payload-manifest.txt; do
-        [ -f "$REPO/dist/wlan/DEBIAN/$rel" ] && [ ! -L "$REPO/dist/wlan/DEBIAN/$rel" ] || {
+        [ -f "$source_tree/DEBIAN/$rel" ] && [ ! -L "$source_tree/DEBIAN/$rel" ] || {
             echo "release gate: missing/non-regular source control member: $rel" >&2
             return 1
         }
-        cp -p "$REPO/dist/wlan/DEBIAN/$rel" "$expected_dir/$rel"
+        cp -p "$source_tree/DEBIAN/$rel" "$expected_dir/$rel"
         printf '%s\n' "$rel" >> "$expected_names"
     done
 
@@ -367,7 +370,8 @@ run_prebuild() {
 
 validate_package() {
     local deb="$1" listing names actual_hash actual_address rel expected
-    local source_control="$REPO/dist/wlan/DEBIAN/control"
+    local source_tree="${PACKAGE_SOURCE_TREE:-$REPO/dist/wlan}"
+    local source_control="$source_tree/DEBIAN/control"
     local field actual
     [ -f "$deb" ] && [ ! -L "$deb" ] && [ -s "$deb" ] || {
         echo "release gate: package must be a nonempty regular file: $deb" >&2
@@ -418,7 +422,7 @@ validate_package() {
     dpkg-deb -c "$deb" > "$listing"
     dpkg-deb --fsys-tarfile "$deb" | tar -tf - > "$names"
 
-    if ! REPO_ROOT="$REPO" PACKAGE_DEB="$deb" python3 - <<'PY'
+    if ! PACKAGE_SOURCE_TREE="$source_tree" PACKAGE_DEB="$deb" python3 - <<'PY'
 import io
 import os
 import posixpath
@@ -426,9 +430,9 @@ import subprocess
 import tarfile
 from pathlib import Path
 
-repo = Path(os.environ["REPO_ROOT"])
+source_tree = Path(os.environ["PACKAGE_SOURCE_TREE"])
 expected = {
-    line.strip() for line in (repo / "dist/wlan/DEBIAN/payload-manifest.txt")
+    line.strip() for line in (source_tree / "DEBIAN/payload-manifest.txt")
         .read_text(encoding="utf-8").splitlines()
     if line.strip() and not line.lstrip().startswith("#")
 }
@@ -512,7 +516,22 @@ PY
     done < "$names"
     LC_ALL=C sort -u -o "$generated" "$generated"
     release_count=$(awk -v p="$WBRIDGE_RELEASE_DIR/" 'index($0,p)==1 {n++} END{print n+0}' "$generated")
-    if grep -Fxq "$WBRIDGE_RELEASE_DIR/wbridge" "$generated"; then
+    if [ -f "$source_tree/opt/wlan/config/no-wbridge" ]; then
+        [ "$release_count" -eq 0 ] || {
+            echo "release gate: bridge-less package contains wbridge binaries" >&2
+            return 1
+        }
+        [ "$(jq -r '.wbridge.enabled' "$source_tree/opt/wlan/config/wifi_init_conf.json")" = false ] || {
+            echo "release gate: bridge-less package has bridge enabled" >&2
+            return 1
+        }
+        dpkg-deb --fsys-tarfile "$deb" \
+            | tar -xOf - ./opt/wlan/config/wifi_init_conf.json \
+            | jq -e '.wbridge.enabled == false' >/dev/null || {
+                echo "release gate: packaged bridge-less config has bridge enabled" >&2
+                return 1
+            }
+    elif grep -Fxq "$WBRIDGE_RELEASE_DIR/wbridge" "$generated"; then
         release_variant=native
         [ "$release_count" -eq 2 ] \
             && grep -Fxq "$WBRIDGE_RELEASE_DIR/wbridge-tpacket" "$generated" || {

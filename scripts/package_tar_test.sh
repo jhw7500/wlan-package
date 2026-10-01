@@ -132,6 +132,12 @@ REQUIRED_EXECUTABLES = {
     "wlan-bridge/wbridge/make-for-imx93",
 }
 
+if os.environ.get("WLAN_PACKAGE_NO_BRIDGE") == "1":
+    REQUIRED_PATHS = {path for path in REQUIRED_PATHS if not path.startswith("wlan-bridge/")}
+    REQUIRED_EXECUTABLES = {
+        path for path in REQUIRED_EXECUTABLES if not path.startswith("wlan-bridge/")
+    }
+
 try:
     with open(manifest_path, encoding="utf-8") as stream:
         EXPECTED_FILES = {
@@ -144,6 +150,12 @@ except OSError as exc:
 if not EXPECTED_FILES:
     print("FAIL: source archive manifest is empty", file=sys.stderr)
     raise SystemExit(1)
+if os.environ.get("WLAN_PACKAGE_NO_BRIDGE") == "1":
+    EXPECTED_FILES = {
+        path for path in EXPECTED_FILES
+        if not path.startswith("wlan-bridge/")
+        and not path.startswith("dist/wlan/usr/local/wlan-bridge/")
+    }
 
 
 def canonical_member_name(raw):
