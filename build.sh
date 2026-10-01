@@ -41,6 +41,7 @@ dev_build_notice() {
 
 BASEDIR=${PWD}
 echo "Script location: ${BASEDIR}"
+HOST_ARCH=$(uname -m)
 
 if [ ! -d "${BASEDIR}/wlan-bridge/wbridge" ]; then
     export WLAN_PACKAGE_NO_BRIDGE=1
@@ -70,7 +71,6 @@ MAKE_FOR_IMX93="${WBRIDGE_DIR}/make-for-imx93"
 cd "${WBRIDGE_DIR}" || { echo "Error: cannot enter ${WBRIDGE_DIR}" >&2; exit 1; }
 make clean || { echo "Warning: make clean failed"; }
 
-HOST_ARCH=$(uname -m)
 echo "Host arch: ${HOST_ARCH}"
 
 # 산출물: release/wbridge_<board>, release/wbridge-tpacket_<board> 등.
@@ -361,6 +361,9 @@ for raw in open(sys.argv[1], encoding="utf-8"):
         or path.startswith("dist/wlan/usr/local/wlan-bridge/")
     ):
         continue
+    if os.environ.get("WLAN_PACKAGE_NO_BRIDGE") == "1" \
+            and path == "scripts/source_archive_manifest.txt":
+        continue
     files.append(path)
     parent = posixpath.dirname(path)
     while parent:
@@ -384,6 +387,30 @@ tar --format=posix \
         echo "Error: failed to create candidate source tarball" >&2
         exit 1
     }
+if [ "${WLAN_PACKAGE_NO_BRIDGE:-0}" = 1 ]; then
+    mkdir -p "${PKG_STAGE}/source/scripts"
+    python3 - "${BASEDIR}/scripts/source_archive_manifest.txt" \
+        "${PKG_STAGE}/source/scripts/source_archive_manifest.txt" <<'PY'
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1]).read_text(encoding="utf-8")
+filtered = [
+    line for line in source.splitlines(keepends=True)
+    if not line.startswith("wlan-bridge/")
+    and not line.startswith("dist/wlan/usr/local/wlan-bridge/")
+]
+Path(sys.argv[2]).write_text("".join(filtered), encoding="utf-8")
+PY
+    tar --append --file="${CANDIDATE_TAR}" --format=posix \
+        --mtime="@${SOURCE_DATE_EPOCH:-0}" \
+        --pax-option=delete=atime,delete=ctime \
+        --numeric-owner --owner=0 --group=0 --mode='u-s,g-s,go-w' \
+        -C "${PKG_STAGE}/source" scripts/source_archive_manifest.txt || {
+            echo "Error: failed to append bridge-less source manifest" >&2
+            exit 1
+        }
+fi
 chmod 0644 "${CANDIDATE_TAR}" || {
     echo "Error: failed to normalize candidate source tarball mode" >&2
     exit 1

@@ -38,6 +38,7 @@ done <<EOF
 $STATUS
 EOF
 
+[ -n "$STATE" ] || wstatus_fail 7 "status reply has no wpa_state"
 [ "$STATE" = COMPLETED ] || wstatus_fail 8 "no current association state=${STATE:-unknown}"
 [ -n "$SSID" ] || wstatus_fail 7 "associated status has no SSID"
 case "$FREQ" in
