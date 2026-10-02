@@ -15,7 +15,7 @@ wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약�
 - `wconnect`는 인터페이스(`mlan0`/`mlan1`, 생략 시 `mlan0`) 뒤의 모든 단어를 숫자 단어까지 포함해 하나의 SSID로 합친다. 주파수 인자는 받지 않으며 주파수는 `quote wfreq`로만 저장하므로, `wconnect`가 `wfreq`로 저장한 `freq_list`를 덮어쓰지 않는다(#341). 셸 CLI `wifi <iface> connect <ssid> <freq...>`는 바뀌지 않았다.
 - 인자 없는 `wconnect`는 `FTPCMD_APPLY_CONF=1`로 저장 프로필을 다시 적재한다. 이미 단일 network가 `COMPLETED`이고 저장 SSID, 라이브 SSID, 공통 `freq_list`, 현재 주파수가 모두 일치하면 reconfigure 없이 연결을 유지하고 `SUCCESS`로 응답한다. 그렇지 않으면 `wssid`·`wfreq`로 저장한 변경을 reconfigure로 적용한다. 일반 `wifi connect`의 강제 재연결 동작은 유지한다.
 - `wifi <iface> psk`·`key_mgmt` 변경은 `<iface>.credential-pending` 표식을 남겨, 자격 변경이 대기 중이면 `wconnect`가 already-associated 단축 경로를 타지 않게 한다. 프로필 reload 전에는 `reconfigure-grace` 표식을 갱신해 `wifi_checker`가 경쟁 재연결이나 재시작을 걸지 않게 한다.
-- `wconnectraw`는 `wstatus`에 `id`가 없는 미연결 상태에서 `list_networks`를 조회해 `[CURRENT]` network 하나, 또는 `[DISABLED`가 아닌 network가 하나뿐일 때 그 network를 선택한다. 하나로 정할 수 없으면 code 1로 실패한다. 인터페이스 뒤 SSID 단어도 합쳐서 받는다.
+- `wconnectraw`는 `wpa_cli -i <iface> status` 응답에 `id`가 없는 미연결 상태에서 `list_networks`를 조회해 `[CURRENT]` network 하나, 또는 `[DISABLED`가 아닌 network가 하나뿐일 때 그 network를 선택한다. 하나로 정할 수 없으면 code 1로 실패한다. 인터페이스 뒤 SSID 단어도 합쳐서 받는다.
 - `wifi ... freq` 호출은 인자 전체를 로그에 남긴다.
 - `docs/ftp_quote_protocol.md`를 재작성하고 `docs/ftp_quote_protocol_distribution.md`를 신설했다.
 
