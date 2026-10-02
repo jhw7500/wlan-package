@@ -360,10 +360,51 @@ if sed -n '/factory_reset\.sh/,+12p' "$SWITCHD" | grep -q 'wlan_reboot_policy\.s
 else
     pass "factory reset remains the single reboot owner"
 fi
+# 성공 LED는 critical failure 판정 뒤에만 켜져야 한다.
+if awk '
+    /^if \[ "\$critical_failures" -ne 0 \]; then$/ { gate = NR }
+    /^safe_sysfs_write 1 \/sys\/class\/leds\/(status|lan|wlan)\/brightness$/ {
+        success_leds++
+        if (!gate) early_success_led++
+    }
+    END { exit !(gate && success_leds == 3 && !early_success_led) }
+' "$FACTORY_SCRIPT"; then
+    pass "factory reset success LEDs follow the failure gate"
+else
+    fail "factory reset success LEDs precede the failure gate"
+fi
+# 오류 패턴은 helper만 분리 실행해 sysfs 없이 실제 write 순서를 검증한다.
+LED_ERROR_FUNCTION=$(sed -n '/^factory_reset_led_error() {/,/^}/p' "$FACTORY_SCRIPT")
+LED_ERROR_ACTUAL=$(bash -c '
+    safe_sysfs_write() { printf "%s %s\n" "$1" "$2"; }
+    eval "$1"
+    factory_reset_led_error
+' _ "$LED_ERROR_FUNCTION")
+LED_ERROR_EXPECTED=$(printf '%s\n' \
+    'none /sys/class/leds/status/trigger' \
+    'none /sys/class/leds/lan/trigger' \
+    'none /sys/class/leds/wlan/trigger' \
+    '1 /sys/class/leds/status/brightness' \
+    '0 /sys/class/leds/lan/brightness' \
+    '0 /sys/class/leds/wlan/brightness')
+expect_eq "factory reset error LED pattern is status on, LAN/WLAN off" \
+    "$LED_ERROR_EXPECTED" "$LED_ERROR_ACTUAL"
+if awk '
+    $1 == "factory_reset_led_error" { last_error_led = NR; calls++ }
+    $1 == "exit" && $2 == "1" {
+        exits++
+        if (last_error_led != NR - 1) missing++
+    }
+    END { exit !(exits >= 6 && calls == exits && !missing) }
+' "$FACTORY_SCRIPT"; then
+    pass "factory reset errors show the error LED pattern before exiting"
+else
+    fail "factory reset error path exits without the error LED pattern"
+fi
 # #304: 공장 초기화는 정책 스크립트를 거치지 않는 유일한 재부팅이라, 직접
 # Reset Cause 0x40을 /run/opc/reset_cause에 남긴 뒤 reboot 해야 opcd가 통지한다.
 # 순서 계약: 기록이 `systemctl reboot` 보다 앞에 있고, 억제(reboot inhibited) 분기 뒤에 있다.
-if awk '/reboot inhibited/{inh=NR} /^[[:space:]]*(if )?mkdir -p \/run\/opc/{m=NR} /^[[:space:]]*(&& )?printf .0x40.*reset_cause/{c=NR} /^systemctl reboot/{r=NR} END{exit !(inh && m && c && r && inh<m && m<=c && c<r)}' "$FACTORY_SCRIPT"; then
+if awk '/reboot inhibited/{inh=NR} /^[[:space:]]*(if )?mkdir -p \/run\/opc/{m=NR} /^[[:space:]]*(&& )?printf .0x40.*reset_cause/{c=NR} /^(if ! )?systemctl reboot/{r=NR} END{exit !(inh && m && c && r && inh<m && m<=c && c<r)}' "$FACTORY_SCRIPT"; then
     pass "factory reset writes Reset Cause 0x40 after the inhibit gate and before reboot"
 else
     fail "factory reset does not write Reset Cause 0x40 before systemctl reboot"

@@ -26,6 +26,17 @@ safe_sysfs_write() {
     fi
 }
 
+# 공장 초기화 오류: status 점등, LAN/WLAN 소등. LED 실패는 reset 실패를 가리지 않는다.
+factory_reset_led_error() {
+    safe_sysfs_write none /sys/class/leds/status/trigger
+    safe_sysfs_write none /sys/class/leds/lan/trigger
+    safe_sysfs_write none /sys/class/leds/wlan/trigger
+
+    safe_sysfs_write 1 /sys/class/leds/status/brightness
+    safe_sysfs_write 0 /sys/class/leds/lan/brightness
+    safe_sysfs_write 0 /sys/class/leds/wlan/brightness
+}
+
 # 안전한 print.py wrapper — 콘솔 컬러 출력. 도구 호출 실패 시 logger.warn.
 safe_print() {
     if ! /usr/local/logger/print.py "$@" 2>/dev/null; then
@@ -45,6 +56,7 @@ secure_wpa_conf() {
 # 가능 여부를 모두 확인한다. 실패 시 기존 active 설정과 서비스 상태를 건드리지 않는다.
 if [ ! -r "$FACTORY_RESET_LIB" ]; then
     logger -p local0.emerg "[$tag:$LINENO] missing factory reset library: $FACTORY_RESET_LIB"
+    factory_reset_led_error
     exit 1
 fi
 # shellcheck source=./wifi_factory_reset_lib.sh
@@ -76,6 +88,7 @@ if ! factory_preflight "$WIFI_INIT_CONF_TEMPLATE" "$(dirname "$WIFI_INIT_CONF_JS
    || ! factory_preflight_required_payloads "${FACTORY_REQUIRED_PAYLOADS[@]}"; then
     logger -p local0.emerg "[$tag:$LINENO] factory reset preflight failed; active state unchanged"
     safe_print red "[factory] preflight failed; reset aborted"
+    factory_reset_led_error
     exit 1
 fi
 
@@ -94,6 +107,7 @@ if ! factory_stage_config "$WIFI_INIT_CONF_TEMPLATE" "$FACTORY_STAGED_CONFIG" "$
     rm -f -- "$FACTORY_STAGED_CONFIG" "$PRESERVE_SNAPSHOT"
     logger -p local0.emerg "[$tag:$LINENO] factory config staging failed; active state unchanged"
     safe_print red "[factory] config staging failed; reset aborted"
+    factory_reset_led_error
     exit 1
 fi
 rm -f -- "$PRESERVE_SNAPSHOT"
@@ -105,6 +119,7 @@ trap 'rm -f -- "$FACTORY_STAGED_CONFIG" "$PRESERVE_SNAPSHOT"' EXIT
 if ! factory_install_required_payloads "${FACTORY_REQUIRED_PAYLOADS[@]}"; then
     logger -p local0.emerg "[$tag:$LINENO] required factory payload restore failed; reset aborted"
     safe_print red "[factory] required payload restore failed; reset aborted"
+    factory_reset_led_error
     exit 1
 fi
 
@@ -346,6 +361,14 @@ END
 rm -rf /var/log/cantops/* 2>/dev/null \
     || logger -p local0.warn "[$tag:$LINENO] log cleanup failed: /var/log/cantops/*"
 
+if [ "$critical_failures" -ne 0 ]; then
+    logger -p local0.emerg "[$tag:$LINENO] factory reset incomplete: critical_failures=$critical_failures; reboot inhibited"
+    safe_print red "[factory] reset incomplete; reboot inhibited (see syslog)"
+    factory_reset_led_error
+    exit 1
+fi
+
+# 필수 검증이 모두 통과한 뒤에만 세 LED를 점등한다.
 safe_sysfs_write none /sys/class/leds/status/trigger
 safe_sysfs_write none /sys/class/leds/lan/trigger
 safe_sysfs_write none /sys/class/leds/wlan/trigger
@@ -353,12 +376,6 @@ safe_sysfs_write none /sys/class/leds/wlan/trigger
 safe_sysfs_write 1 /sys/class/leds/status/brightness
 safe_sysfs_write 1 /sys/class/leds/lan/brightness
 safe_sysfs_write 1 /sys/class/leds/wlan/brightness
-
-if [ "$critical_failures" -ne 0 ]; then
-    logger -p local0.emerg "[$tag:$LINENO] factory reset incomplete: critical_failures=$critical_failures; reboot inhibited"
-    safe_print red "[factory] reset incomplete; reboot inhibited (see syslog)"
-    exit 1
-fi
 
 echo "factory reset finish"
 safe_print cyan "[factory] reset finish"
@@ -381,4 +398,9 @@ else
     logger -p local0.warning "[$tag:$LINENO] reset cause 0x40 not recorded (/run/opc unwritable)"
 fi
 sleep 3
-systemctl reboot
+if ! systemctl reboot; then
+    logger -p local0.emerg "[$tag:$LINENO] factory reset reboot command failed"
+    safe_print red "[factory] reboot failed (see syslog)"
+    factory_reset_led_error
+    exit 1
+fi
