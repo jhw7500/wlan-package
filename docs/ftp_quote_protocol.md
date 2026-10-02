@@ -115,9 +115,8 @@ quote wconnect [mlan0|mlan1] [ssid words...]
   `mlan1`의 저장된 프로필을 사용한다.
 - SSID가 있으면 남은 토큰을 공백으로 합쳐 설정 파일에 저장한 뒤
   연결을 시도한다. `quote wconnect My AP`는 `My AP`에 연결을 시도한다.
-- 새 요청에서는 주파수를 먼저 `wfreq`로 저장한다. 기존 클라이언트의
-  `wconnect SSID 36 5200` 형식은 호환을 위해 주파수 인자로 처리한다.
-  SSID의 두 번째 단어가 숫자이면 `wssid`로 저장한 뒤 인자 없이 `wconnect`를 호출한다.
+- 주파수는 인자로 받지 않는다. 주파수를 바꾸려면 먼저 `wfreq`로 저장한다.
+  숫자 단어도 SSID의 일부다. `quote wconnect AP 2`는 `AP 2`에 연결을 시도한다.
 - 기존 PSK와 인증 설정을 재사용한다. FTP 명령으로 PSK를 전달하지 않는다.
 
 이미 연결된 단일 `network`에서 요청 SSID와 저장된 SSID 및 주파수 정책이

@@ -5,12 +5,12 @@ wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약�
 
 ## 0.6.8 (2026-09-29)
 
-> SemVer **patch** — FTP `quote wconnect`를 SSID·선택 주파수 전환과 실제 연결 완료 응답까지 확장하고, 시험용 raw 경로와 phase 타이밍을 추가한다. `link.json`의 managed-STA SSID 누락과 wlan-opc 후속 결함을 고치며, imx93 드라이버 payload를 `wlan-driver-v2` `522f9ed` 기준으로 갱신한다.
+> SemVer **patch** — FTP `quote wconnect`를 SSID 전환과 실제 연결 완료 응답까지 확장하고, 시험용 raw 경로와 phase 타이밍을 추가한다. `link.json`의 managed-STA SSID 누락과 wlan-opc 후속 결함을 고치며, imx93 드라이버 payload를 `wlan-driver-v2` `522f9ed` 기준으로 갱신한다.
 
 ### FTP quote 무선 전환 확장 (#337)
 
-- `quote wconnect [mlan0|mlan1] [ssid [freq_or_channel...]]`에서 인터페이스를 생략하면 `mlan0`을 사용한다. 첫 번째 인자는 SSID, 이후 인자는 각각 채널 또는 MHz 중심 주파수이며, 주파수를 생략하면 기존 공통 정책을 보존한다.
-- 정식 경로는 SSID와 선택적인 `freq_list`를 canonical conf에 영속 저장한 뒤 전체 profile을 `reconfigure`한다. PSK·`key_mgmt`·legacy `scan_freq`가 supplicant 메모리와 디스크에서 어긋나지 않게 하고, fresh `CONNECTED` 이벤트와 `COMPLETED` 상태의 SSID·ID·주파수 착지를 확인한 뒤 응답한다.
+- `quote wconnect [mlan0|mlan1] [ssid words...]`에서 인터페이스를 생략하면 `mlan0`을 사용한다. 인터페이스 뒤의 모든 단어는 숫자 단어를 포함해 하나의 SSID로 합쳐지며, 주파수 인자는 받지 않는다. 주파수는 `quote wfreq`로 저장한 뒤 `wconnect`로 적용하고, `wconnect`는 기존 공통 주파수 정책을 보존한다.
+- 정식 경로는 SSID와 기존 공통 `freq_list`를 canonical conf에 영속 저장한 뒤 전체 profile을 `reconfigure`한다. PSK·`key_mgmt`·legacy `scan_freq`가 supplicant 메모리와 디스크에서 어긋나지 않게 하고, fresh `CONNECTED` 이벤트와 `COMPLETED` 상태의 SSID·ID·주파수 착지를 확인한 뒤 응답한다.
 - Mode A 또는 실제 다중 `network={}` topology에서 명시적 SSID 호출은 모든 블록의 identity를 한 값으로 덮어쓰지 않도록 `FAIL code=1`로 거부한다. 인자 없는 재연결은 enabled network를 유지하고 supplicant가 선택한 ID의 fresh association을 확인한다.
 - 시험용 `wconnectraw`는 현재 network ID에 `set_network ... ssid`와 `reassociate`만 제출하고 즉시 반환한다. 응답 성공은 명령 접수만 의미하며 실제 연결 완료나 영속 적용을 뜻하지 않는다.
 - `wconnect`와 `wconnectraw` 응답은 `SUCCESS` 또는 `FAIL code=N`으로 단순화했다. dispatch·인자 파싱·profile reload·disconnect/connect·association 검증·reply 구간은 동일 trace의 rsyslog 타이밍으로 남긴다.

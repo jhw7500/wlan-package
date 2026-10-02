@@ -231,10 +231,10 @@ class WconnectDefaultInterface(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(argv, ["mlan0", "connect", "Field AP"])
 
-    def test_released_numeric_frequency_form_does_not_become_ssid(self):
+    def test_numeric_words_are_ssid_text_not_frequencies(self):
         r, argv, _ = run_wconnect("field-ap", "36", "5200")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual(argv, ["mlan0", "connect", "field-ap", "36", "5200"])
+        self.assertEqual(argv, ["mlan0", "connect", "field-ap 36 5200"])
 
     def test_explicit_mlan1_is_preserved(self):
         r, argv, _ = run_wconnect("mlan1", "field", "ap")

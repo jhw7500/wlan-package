@@ -64,11 +64,9 @@ ftp> quote wstatus
 - `wfreq`는 MHz 또는 채널 번호를 받는다. 예를 들어 채널 `36 40 44 48`은
   `5180 5200 5220 5240` MHz로 저장된다. 조회 결과가 `200 ANY`면
   주파수 제한이 없다. `2G`, `5G` 단축어는 지원하지 않는다.
-- 새 요청에서 주파수를 변경할 때는 `wfreq`로 저장한 뒤 `wconnect`로
-  적용한다.
-- 기존 클라이언트의 `quote wconnect SSID 36 5200` 형식은 호환을 위해
-  채널/주파수 인자로 해석한다. 두 번째 SSID 단어가 숫자인 경우에는
-  `wssid`로 SSID를 저장한 뒤 인자 없이 `wconnect`를 호출한다.
+- 주파수를 변경할 때는 `wfreq`로 저장한 뒤 `wconnect`로 적용한다.
+  `wconnect`는 주파수 인자를 받지 않으며, 숫자 단어도 SSID의 일부로
+  처리한다(`quote wconnect AP 2` → SSID `AP 2`).
 
 ### 연결 결과
 

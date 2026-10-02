@@ -10,7 +10,9 @@
 #
 # A leading mlan0/mlan1 selects the interface. Any other first argument is
 # the SSID and implicitly selects mlan0. All remaining FTP arguments form one
-# SSID, joined with spaces. With no SSID, the stored profile is reloaded.
+# SSID, joined with spaces, even when a word is numeric. With no SSID, the
+# stored profile is reloaded. Frequencies are not accepted here; stage them
+# with wfreq first.
 #
 # The passphrase is never sent over FTP. An explicit SSID rewrites only that
 # field in the stored profile; no SSID reloads the profile as stored. Both
@@ -105,25 +107,11 @@ case "$IFACE" in
 esac
 
 FTPCMD_HAS_SSID=0
-FTPCMD_LEGACY_FREQ=0
 if [ "$#" -gt 0 ]; then
     FTPCMD_HAS_SSID=1
-    # Released clients pass numeric channel/MHz selectors after the first SSID.
-    # Keep that form separate from the multiword SSID form so it can never be
-    # persisted as SSID text. Use wssid followed by wconnect for an SSID whose
-    # second word is numeric.
-    if [ "$#" -gt 1 ]; then
-        case "$2" in
-            ''|*[!0-9]*) ;;
-            *) FTPCMD_LEGACY_FREQ=1 ;;
-        esac
-    fi
-    if [ "$FTPCMD_LEGACY_FREQ" -eq 1 ]; then
-        FTPCMD_SSID=$1
-        shift
-    else
-        FTPCMD_SSID=$*
-    fi
+    # Every remaining word is SSID text, numeric words included.  Frequencies
+    # are staged only by wfreq, so wconnect never rewrites the freq_list.
+    FTPCMD_SSID=$*
 fi
 ftpcmd_trace_log arguments_parsed "iface=$IFACE ssid_supplied=$FTPCMD_HAS_SSID"
 
@@ -152,11 +140,7 @@ fi
 # reloads the stored profile and applies settings staged by wssid or wfreq.
 ftpcmd_trace_log connect_invoked "iface=$IFACE ssid_supplied=$FTPCMD_HAS_SSID"
 if [ "$FTPCMD_HAS_SSID" -eq 1 ]; then
-    if [ "$FTPCMD_LEGACY_FREQ" -eq 1 ]; then
-        FTPCMD_DETAIL=$(FTPCMD_APPLY_CONF=1 "$WIFI" "$IFACE" connect "$FTPCMD_SSID" "$@" 2>&1)
-    else
-        FTPCMD_DETAIL=$(FTPCMD_APPLY_CONF=1 "$WIFI" "$IFACE" connect "$FTPCMD_SSID" 2>&1)
-    fi
+    FTPCMD_DETAIL=$(FTPCMD_APPLY_CONF=1 "$WIFI" "$IFACE" connect "$FTPCMD_SSID" 2>&1)
 else
     FTPCMD_DETAIL=$(FTPCMD_APPLY_CONF=1 "$WIFI" "$IFACE" connect 2>&1)
 fi
