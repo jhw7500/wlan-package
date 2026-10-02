@@ -1,5 +1,5 @@
 Package: wlan-proc
-Version: 0.6.8
+Version: 0.6.9
 Section: net
 Priority: optional
 Architecture: arm64
@@ -53,3 +53,4 @@ Description: WLAN Application
  0.6.6 : ftpcmd 핸들러처럼 vsftpd 가 만든 PID 네임스페이스 안에서 wifi connect 를 부를 때, 재연결 이벤트 모니터가 네임스페이스 PID 를 호스트 /proc 에 대조하던 것을 바로잡는다 — 우리 /proc 이면 기존 시작 토큰 고정을 그대로 쓰고, 남의 /proc 이면 kill -0 생존 확인으로 내린다. 종전에는 자식 PID 가 호스트에 없으면 exit 7(FTP 550), 우연히 있으면 무관한 프로세스를 자기 모니터로 오인해 같은 명령이 200 과 550 을 오갔다.
  0.6.7 : 출하 rate_adapt 기본값을 70/90 에서 40/65 로 바꾼다 — FW 가 정적 pair 를 집계 Tx 트래픽 2~3 초 뒤 40/65 로 덮어쓰고 그 값이 실사용 상태임을 getdatarate 표본화로 측정했으므로(덮어써진 인터페이스 58.66 Mbps vs 진짜 40/65 58.11 vs 40/90 53.95), 부트 게이트 조건의 가벼운 트래픽 arm 에서는 종전 기본값이 현장 동작을 지배하지 않았다(15/15, 중간 트래픽은 arm 1 개). 무거운 트래픽에서는 70/90 이 살아남으므로 그 조건에서는 실제 동작 변경이며 차이 크기는 미해결이고, 경계 하한이 미측정이므로 경계가 70 위인 세션에서는 가벼운 트래픽에서도 동작 변경이다. 도착값은 대개 40/65 지만 불변은 아니다 — 60/90 은 30/50 으로 착지한다(전수 재계수 전환 21 회 = 40/65 20 회 + 30/50 1 회). 설정 LOW 가 전환 여부를 지배하고 HIGH 는 착지값 선택에만 관여하며, 경계는 링크 품질에 따라 이동한다(통제 시험으로 확인). 현장 튜닝 후보로 45/60 과 50/70 을 이 랩 링크에서 각 2 회 부팅 시험했다 — 전환 0 회(경계 하한이 미측정이므로 현장 보증은 아니다). 다만 성능 차이는 60 초 창 계기로 분해되지 않았다. dynamic 과 FW 기본값 상태는 면제이고 연결 중 재설정은 불가하므로 모니터링 기반 교정은 성립하지 않는다. 신규 설치·factory reset 한정 — postinst deep merge 가 기존 키를 보존하므로 기존 기기는 그대로이며, 마이그레이션은 의도적으로 넣지 않았다 — 부트 게이트 조건 light arm 에서는 귀결이 같았고 무거운 트래픽에서는 차이를 측정하지 못했으므로 근거 없이 사이트 값을 덮어쓰지 않는다
  0.6.8 : FTP quote 무선 전환을 확장한다 — wconnect 는 인터페이스 생략 시 mlan0, 인터페이스 뒤 단어 전체를 SSID 로 받고(주파수는 wfreq 로 저장), 전체 profile reconfigure와 실제 association 확인, SUCCESS/FAIL code 응답 및 phase 타이밍 로그를 제공하고, 시험용 wconnectraw 는 현재 network ID에 런타임 명령만 제출한다. 다중 network topology의 명시적 SSID 일괄 변경은 거부한다. link.json info.ssid 를 wpa_cli status에서 복구해 OPC device-info ESSID 누락을 고치고, wlan-opc 저장 큐·SSID 원천·폭주 히스테리시스 변경을 반영한다. imx93 드라이버 payload는 wlan-driver-v2 522f9ed로 갱신해 txpwrlimit private-command ABI를 보존한다
+ 0.6.9 : FTP quote 에 저장 프로필 명령 wssid·wfreq·wstatus 를 추가하고 wconnect 를 SSID 전용으로 정리한다 — 인터페이스 뒤 모든 단어(숫자 포함)를 SSID 로 받고 주파수는 wfreq 로만 저장하며, 인자 없는 wconnect 는 이미 일치하는 연결이면 reconfigure 없이 유지한다. wifi_checker 는 같은 handshake 상태가 30초 넘게 멈추면 supplicant 재시작 없이 재연결을 반복 요청하고, 공장 초기화는 중단 경로마다 status 점등·LAN/WLAN 소등 오류 LED 를 표시하며, wstatus 는 라이브 SSID 를 디코딩해 응답한다. wlan-bridge 서브모듈이 없으면 bridge 없는 패키지(no-wbridge 표식, wbridge.enabled=false)로 빌드하고 릴리스 게이트가 이를 검증한다
