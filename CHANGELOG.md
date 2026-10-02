@@ -3,6 +3,39 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.6.9 (2026-10-02)
+
+> SemVer **patch** — FTP `quote`에 저장 프로필 조회·설정 명령(`wssid`·`wfreq`·`wstatus`)을 추가하고 `wconnect` 계약을 SSID 전용으로 정리한다. `wlan-bridge` 서브모듈이 없는 소스에서도 bridge 없는 패키지를 빌드할 수 있게 하며, handshake 정체 재시도·공장 초기화 LED 상태·`wstatus` SSID 디코딩을 고친다.
+
+### FTP quote 프로필 명령 정렬 (#339, #341)
+
+- 신규 `quote wssid [mlan0|mlan1] [ssid words...]`는 인자가 없으면 저장 프로필의 첫 `network={}` SSID를 조회하고(quoted·hex 형식을 디코딩하며 빈 값이나 제어문자는 거부), 인자가 있으면 `wifi <iface> ssid`로 저장만 한다. 저장은 연결을 바꾸지 않으며 `wconnect`로 적용한다.
+- 신규 `quote wfreq [mlan0|mlan1] [freq_or_channel...]`는 인자가 없으면 저장된 공통 `freq_list`를 쉼표 목록으로(없으면 `ANY`) 조회하고, 인자가 있으면 `wifi <iface> freq`로 저장한다.
+- 신규 `quote wstatus [mlan0|mlan1]`는 저장 프로필이 아니라 현재 association을 `<ssid> <freq>` 한 줄로 응답한다. `wpa_state`가 `COMPLETED`가 아니면 code 8, 인터페이스 인자 오류는 code 2, 그 밖의 조회 실패는 code 7로 실패한다. 라이브 SSID는 `roam_policy.decode_wpa_ssid_text`로 디코딩하며, 디코딩에 실패하면 code 7이다.
+- `wconnect`는 인터페이스(`mlan0`/`mlan1`, 생략 시 `mlan0`) 뒤의 모든 단어를 숫자 단어까지 포함해 하나의 SSID로 합친다. 주파수 인자는 받지 않으며 주파수는 `quote wfreq`로만 저장하므로, `wconnect`가 `wfreq`로 저장한 `freq_list`를 덮어쓰지 않는다(#341). 셸 CLI `wifi <iface> connect <ssid> <freq...>`는 바뀌지 않았다.
+- 인자 없는 `wconnect`는 `FTPCMD_APPLY_CONF=1`로 저장 프로필을 다시 적재한다. 이미 단일 network가 `COMPLETED`이고 저장 SSID, 라이브 SSID, 공통 `freq_list`, 현재 주파수가 모두 일치하면 reconfigure 없이 연결을 유지하고 `SUCCESS`로 응답한다. 그렇지 않으면 `wssid`·`wfreq`로 저장한 변경을 reconfigure로 적용한다. 일반 `wifi connect`의 강제 재연결 동작은 유지한다.
+- `wifi <iface> psk`·`key_mgmt` 변경은 `<iface>.credential-pending` 표식을 남겨, 자격 변경이 대기 중이면 `wconnect`가 already-associated 단축 경로를 타지 않게 한다. 프로필 reload 전에는 `reconfigure-grace` 표식을 갱신해 `wifi_checker`가 경쟁 재연결이나 재시작을 걸지 않게 한다.
+- `wconnectraw`는 `wpa_cli -i <iface> status` 응답에 `id`가 없는 미연결 상태에서 `list_networks`를 조회해 `[CURRENT]` network 하나, 또는 `[DISABLED`가 아닌 network가 하나뿐일 때 그 network를 선택한다. 하나로 정할 수 없으면 code 1로 실패한다. 인터페이스 뒤 SSID 단어도 합쳐서 받는다.
+- `wifi ... freq` 호출은 인자 전체를 로그에 남긴다.
+- `docs/ftp_quote_protocol.md`를 재작성하고 `docs/ftp_quote_protocol_distribution.md`를 신설했다.
+
+### wifi_checker handshake 정체 재시도 (#339)
+
+- `wpa_state`가 `AUTHENTICATING`·`ASSOCIATING`·`ASSOCIATED`·`4WAY_HANDSHAKE`·`GROUP_HANDSHAKE` 중 같은 값에 `HANDSHAKE_STALL_SEC`(30초) 이상 머물면, supplicant를 재시작하지 않고 `wifi <iface> connect`로 직렬화된 재연결을 30초 간격으로 반복 요청한다. 종전에는 handshake 진행 중이면 상태와 무관하게 개입을 영구 보류했다.
+- 상태가 바뀌면 stall 타이머를 다시 시작한다. `SCANNING`·`DISCONNECTED` 같은 AP 부재 상태는 기존처럼 unstable 윈도우당 한 번만 재연결을 요청하고 supplicant 자체 스캔에 맡긴다. 연결 복구, 인터페이스 소멸, `reconfigure` grace 구간에서는 stall 상태를 초기화한다.
+
+### 공장 초기화 LED 상태
+
+- `factory_reset.sh`에 `factory_reset_led_error`(status 점등, LAN/WLAN 소등)를 추가해 preflight·staging·`critical_failures`·`systemctl reboot` 실패를 포함한 모든 명시적 중단 경로에서 호출한다. 세 LED 전부 점등은 필수 검증이 통과한 뒤에만 한다. 종전에는 `critical_failures`로 중단하는 경우에도 성공과 같은 점등 상태가 먼저 켜졌다. LED sysfs 쓰기 실패는 reset 실패를 가리지 않는다.
+- `wifi_factory_reset_test.sh`에 LED 쓰기 순서와 모든 실패 exit 경로 회귀 검사를 추가했다.
+
+### wlan-bridge 서브모듈 없는 패키지 빌드 (#339)
+
+- `build.sh`는 `wlan-bridge/wbridge`가 없으면 오류로 중단하는 대신 `WLAN_PACKAGE_NO_BRIDGE=1`로 bridge 빌드를 건너뛰고, 이전 전체 빌드가 남긴 `dist/wlan/usr/local/wlan-bridge`를 지운다. 패키지에는 `opt/wlan/config/no-wbridge` 표식을 넣고 `payload-manifest.txt`와 소스 아카이브 manifest에서 `wlan-bridge/` 항목을 제외하며, 패키지 stage의 `wifi_init_conf.json`에서 `wbridge.enabled`를 `false`로 둔다.
+- `postinst`는 표식이 있으면 `wbridge.enabled=false`를 설정에 반영하고, `wifi_bridge@mlan0/mlan1` 서비스와 `wifi-stack.target.wants/` 링크, bridge 바이너리를 제거한다. `wifi_apply_enabled.sh`·`wifi_services.sh start`는 설정이 비활성화된 뒤에 실행하도록 순서를 옮겼다.
+- `validate_release.sh`는 `PACKAGE_SOURCE_TREE`로 stage 소스 트리를 기준 삼고, bridge 없는 패키지에서는 bridge 파일·`wbridge` 바이너리 부재와 `wbridge.enabled=false`를 검사한다. `package_tar_test.sh`·`validate_release_test.sh`에 bridge 없는 산출물과 추출된 소스 아카이브 인식 검증을 추가했다. README에 이 동작을 한 단락 설명했다.
+- 정규 릴리스 패키지는 bridge를 포함해 빌드한다. 빌드 전에 `git submodule update --init wlan-bridge`로 서브모듈을 준비한다.
+
 ## 0.6.8 (2026-09-29)
 
 > SemVer **patch** — FTP `quote wconnect`를 SSID 전환과 실제 연결 완료 응답까지 확장하고, 시험용 raw 경로와 phase 타이밍을 추가한다. `link.json`의 managed-STA SSID 누락과 wlan-opc 후속 결함을 고치며, imx93 드라이버 payload를 `wlan-driver-v2` `522f9ed` 기준으로 갱신한다.
