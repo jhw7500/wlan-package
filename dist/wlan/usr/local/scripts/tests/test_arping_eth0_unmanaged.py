@@ -31,7 +31,7 @@ def make_stub_bin(root: Path) -> Path:
     bin_dir.mkdir()
     stubs = {
         "systemctl": STUB_SYSTEMCTL,
-        "logger": "#!/bin/sh\nexit 0\n",
+        "logger": "#!/bin/sh\n[ -n \"$LOGS\" ] && printf '%s\\n' \"$*\" >> \"$LOGS\"\nexit 0\n",
         "networkctl": "#!/bin/sh\nexit 0\n",
     }
     for name, body in stubs.items():
@@ -53,28 +53,38 @@ class PostinstLegacyCleanup(unittest.TestCase):
         root = Path(tempfile.mkdtemp(prefix="arping-postinst-"))
         bin_dir = make_stub_bin(root)
         calls = root / "calls"
+        logs = root / "logs"
         calls.touch()
+        logs.touch()
         script = "set -e\ntag=postinst\nKEY=PKG\n" + cleanup_block() + "\necho DONE\n"
         env = dict(os.environ, PATH=f"{bin_dir}:/usr/bin:/bin", CALLS=str(calls),
-                   IS_ENABLED_RC=str(is_enabled_rc), DISABLE_RC=str(disable_rc))
+                   LOGS=str(logs), IS_ENABLED_RC=str(is_enabled_rc),
+                   DISABLE_RC=str(disable_rc))
         result = subprocess.run(["bash", "-c", script], env=env,
                                 capture_output=True, text=True, check=False)
-        return result, calls.read_text().splitlines()
+        return result, calls.read_text().splitlines(), logs.read_text().splitlines()
 
     def test_enabled_legacy_unit_is_disabled_and_stopped(self):
-        result, calls = self.run_block(is_enabled_rc=0)
+        result, calls, logs = self.run_block(is_enabled_rc=0)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("disable --now wifi_arping@eth0.service", calls)
+        self.assertEqual(len(logs), 1, logs)
+        self.assertTrue(logs[0].startswith("-p local0.info"), logs)
+        self.assertIn("disabled legacy wifi_arping@eth0", logs[0])
 
     def test_not_enabled_unit_is_left_alone(self):
-        result, calls = self.run_block(is_enabled_rc=1)
+        result, calls, logs = self.run_block(is_enabled_rc=1)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls, ["is-enabled --quiet wifi_arping@eth0.service"])
+        self.assertEqual(logs, [])
 
-    def test_disable_failure_does_not_abort_postinst(self):
-        result, _calls = self.run_block(is_enabled_rc=0, disable_rc=1)
+    def test_disable_failure_warns_and_does_not_abort_postinst(self):
+        result, _calls, logs = self.run_block(is_enabled_rc=0, disable_rc=1)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("DONE", result.stdout)
+        self.assertEqual(len(logs), 1, logs)
+        self.assertTrue(logs[0].startswith("-p local0.warn"), logs)
+        self.assertNotIn("disabled legacy", logs[0])
 
 
 class WifiConfigDoesNotResurrectEth0Arping(unittest.TestCase):

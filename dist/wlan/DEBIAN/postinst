@@ -349,8 +349,12 @@ customctl() {
   # 남아 있어 부팅 때는 뜨지만, 업그레이드 후에는 prerm 이 내리고 wifi_services.sh 가
   # 건너뛰어 죽은 채 남았다. 남은 enable 을 걷어 기본 off 인 mlanN 과 같게 맞춘다.
   if systemctl is-enabled --quiet wifi_arping@eth0.service 2>/dev/null; then
-    systemctl disable --now wifi_arping@eth0.service >/dev/null 2>&1 || true
-    logger -p local0.info "[$tag:$LINENO] [$KEY] disabled legacy wifi_arping@eth0 enablement (unmanaged unit)"
+    # 실패해도 설치는 계속하되, 링크가 남아 다음 부팅에 다시 뜰 수 있으니 경고로 남긴다.
+    if systemctl disable --now wifi_arping@eth0.service >/dev/null 2>&1; then
+      logger -p local0.info "[$tag:$LINENO] [$KEY] disabled legacy wifi_arping@eth0 enablement (unmanaged unit)"
+    else
+      logger -p local0.warn "[$tag:$LINENO] [$KEY] failed to disable legacy wifi_arping@eth0; it may start again at boot"
+    fi
   fi
   # <<< arping-eth0-legacy-cleanup
 
