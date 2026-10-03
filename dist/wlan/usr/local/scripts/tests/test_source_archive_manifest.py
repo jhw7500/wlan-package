@@ -8,7 +8,8 @@
 그래서 두 가지를 고정한다.
 
 * payload-manifest 의 모든 항목은 아카이브 목록에 있어야 한다. 파일 시스템만 보므로
-  압축을 푼 아카이브 안에서도 돈다.
+  압축을 푼 아카이브 안에서도 돈다. bridge 소스(`wlan-bridge/wbridge`)가 없으면 build.sh
+  처럼 bridge payload 를 기대 목록에서 뺀다 — bridge-less 아카이브의 목록은 그렇게 걸러진다.
 * git 이 추적하는 `dist/wlan/**/tests/` 파일은 아카이브 목록에 있어야 한다. `.git` 이
   없는 아카이브 안에서는 이 검사를 건너뛴다(아카이브는 정의상 목록과 같다).
 """
@@ -32,10 +33,12 @@ def manifest_entries(path: Path) -> set:
 class SourceArchiveManifestCoverage(unittest.TestCase):
     def test_every_payload_file_is_archived(self):
         archived = manifest_entries(SOURCE_MANIFEST)
-        missing = sorted(
-            entry for entry in manifest_entries(PAYLOAD_MANIFEST)
-            if f"dist/wlan/{entry}" not in archived
-        )
+        expected = manifest_entries(PAYLOAD_MANIFEST)
+        if not (REPO / "wlan-bridge/wbridge").is_dir():
+            # build.sh 와 같은 규칙: bridge 소스가 없으면 bridge payload 는 패키지에서도,
+            # 아카이브 목록에서도 빠진다(bridge-less 아카이브의 목록은 그렇게 걸러져 있다).
+            expected = {e for e in expected if not e.startswith("usr/local/wlan-bridge/")}
+        missing = sorted(entry for entry in expected if f"dist/wlan/{entry}" not in archived)
         self.assertEqual(missing, [], "payload files missing from source_archive_manifest.txt")
 
     def test_every_tracked_dist_test_is_archived(self):
