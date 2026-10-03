@@ -14,6 +14,7 @@
 """
 import os
 import re
+import stat
 import subprocess
 from pathlib import Path
 
@@ -87,8 +88,16 @@ def test_helper_is_executable():
     반영되지 않으며, 빌드는 신선한 체크아웃에서 이뤄지므로 인덱스 모드(100755)가
     패키지에 실리는 실제 권한을 결정한다. 파일시스템 모드만 확인하면 로컬에서만
     통과하고 CI 빌드 산출물은 non-executable 이 되는 상태를 놓친다.
+
+    압축을 푼 소스 아카이브에는 `.git` 이 없다. 아카이브는 build.sh 가 체크아웃의 파일
+    모드를 그대로 담아 만들므로, 그 안에서는 파일시스템 실행 비트가 곧 빌드에 실릴 권한이다.
     """
     assert HELPER.exists(), "헬퍼가 없다"
+    if not (REPO_ROOT / ".git").exists():
+        assert HELPER.stat().st_mode & stat.S_IXUSR, (
+            "아카이브의 헬퍼에 실행 비트가 없다 — 이 아카이브로 빌드한 패키지에서 udev RUN 이 조용히 실패한다"
+        )
+        return
     r = subprocess.run(["git", "ls-files", "-s", "--", str(HELPER)],
                        capture_output=True, text=True, cwd=str(REPO_ROOT), timeout=30)
     assert r.returncode == 0 and r.stdout.strip(), f"git 인덱스에 없다: {r.stderr}"
