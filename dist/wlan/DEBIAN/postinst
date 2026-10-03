@@ -342,6 +342,18 @@ customctl() {
     /usr/local/scripts/wifi_apply_enabled.sh 2>/dev/null || true
   fi
 
+  # >>> arping-eth0-legacy-cleanup
+  # wifi_arping@eth0 는 설정 게이트가 없다 — wifi_apply_enabled.sh 는 wifi_arping@mlanN
+  # (.mlanN.arping.enabled, 기본 false)만 관리하고 패키지 어디서도 eth0 인스턴스를
+  # enable 하지 않는다. 예전에 프로비저닝된 보드에는 wifi-stack.target.wants 링크가
+  # 남아 있어 부팅 때는 뜨지만, 업그레이드 후에는 prerm 이 내리고 wifi_services.sh 가
+  # 건너뛰어 죽은 채 남았다. 남은 enable 을 걷어 기본 off 인 mlanN 과 같게 맞춘다.
+  if systemctl is-enabled --quiet wifi_arping@eth0.service 2>/dev/null; then
+    systemctl disable --now wifi_arping@eth0.service >/dev/null 2>&1 || true
+    logger -p local0.info "[$tag:$LINENO] [$KEY] disabled legacy wifi_arping@eth0 enablement (unmanaged unit)"
+  fi
+  # <<< arping-eth0-legacy-cleanup
+
   # prerm 이 wifi-stack.target 을 stop 하면 PartOf= 로 묶인 자식 유닛(wifi_logger@mlanN,
   # wifi_logger_link@mlanN 등)이 함께 내려간다. 바로 위 wifi_apply_enabled.sh 는 enable/
   # disable 상태만 다루고 start 는 하지 않으므로("no change (all units already in desired
