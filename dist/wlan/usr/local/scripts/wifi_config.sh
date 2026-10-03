@@ -23,4 +23,5 @@ else
     systemctl restart systemd-networkd
 fi
 systemctl restart wifi_bridge@$IFACE
-systemctl restart wifi_arping@eth0
+# eth0 arping 은 기본 off(패키지가 enable 하지 않음) — 이미 떠 있을 때만 재시작한다.
+systemctl try-restart wifi_arping@eth0

@@ -31,8 +31,8 @@
 #
 # .mlanN.enabled=false 이면 위 mlanN 자식 유닛은 개별 키와 무관하게 전부 disable된다.
 #
-# 관리 외 (운영자가 systemctl로 직접): wifi_arping@*, wifi_capture@*,
-# wifi_led@*, wifi_ping@*
+# 관리 외 (운영자가 systemctl로 직접): wifi_arping@eth0, wifi_capture@*,
+# wifi_led@*, wifi_ping@*   (wifi_arping@mlanN 은 위 .mlanN.arping.enabled 로 관리)
 #
 set -u
 
