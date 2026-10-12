@@ -67,9 +67,10 @@ def stored_ssid(path: Path) -> str:
 
 def main() -> int:
     args = sys.argv[1:]
-    iface = "mlan0"
-    if args and args[0] in ("mlan0", "mlan1"):
-        iface = args.pop(0)
+    interfaces = {"mlan0": "mlan0", "0": "mlan0", "mlan1": "mlan1", "1": "mlan1"}
+    if not args or args[0] not in interfaces:
+        return fail(2, "expected interface mlan0, mlan1, 0 or 1")
+    iface = interfaces[args.pop(0)]
     if args:
         ssid = " ".join(args)
         try:

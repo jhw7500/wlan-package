@@ -60,6 +60,10 @@ opt/ftpcmd/bin/rst
 opt/ftpcmd/bin/wconnect
 opt/ftpcmd/bin/wconnectraw
 opt/ftpcmd/bin/wfreq
+opt/ftpcmd/bin/wgetifstate
+opt/ftpcmd/bin/wifcdown
+opt/ftpcmd/bin/wifcup
+opt/ftpcmd/bin/wrst
 opt/ftpcmd/bin/wssid
 opt/ftpcmd/bin/wstatus
 opt/wlan/bin/README

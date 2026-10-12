@@ -1,10 +1,10 @@
 #!/bin/sh
 # Read or store the frequency policy in wpa_supplicant's config file.
-#   quote wfreq [mlan0|mlan1] [freq_or_channel...]
+#   quote wfreq <mlan0|mlan1|0|1> [freq_or_channel...]
 set -u
 
 WIFI=/usr/local/bin/wifi
-IFACE=mlan0
+IFACE=unknown
 
 wfreq_fail() {
     _code=$1
@@ -16,11 +16,11 @@ wfreq_fail() {
 }
 
 case "${1:-}" in
-    mlan0|mlan1)
-        IFACE=$1
-        shift
-        ;;
+    mlan0|0) IFACE=mlan0 ;;
+    mlan1|1) IFACE=mlan1 ;;
+    *) wfreq_fail 2 "expected interface mlan0, mlan1, 0 or 1" ;;
 esac
+shift
 
 if [ "$#" -gt 0 ]; then
     [ -x "$WIFI" ] || wfreq_fail 1 "wifi executable unavailable"

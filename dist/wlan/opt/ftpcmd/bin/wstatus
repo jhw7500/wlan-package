@@ -1,9 +1,10 @@
 #!/bin/sh
 # Report the current association, not the stored wpa_supplicant profile.
+#   quote wstatus <mlan0|mlan1|0|1>
 set -u
 
 WPA_CLI=/usr/sbin/wpa_cli
-IFACE=mlan0
+IFACE=unknown
 
 wstatus_fail() {
     _code=$1
@@ -14,15 +15,14 @@ wstatus_fail() {
     exit "$_code"
 }
 
-if [ "$#" -gt 1 ]; then
-    wstatus_fail 2 "expected optional mlan0 or mlan1"
+if [ "$#" -ne 1 ]; then
+    wstatus_fail 2 "expected exactly one interface: mlan0, mlan1, 0 or 1"
 fi
-if [ "$#" -eq 1 ]; then
-    case "$1" in
-        mlan0|mlan1) IFACE=$1 ;;
-        *) wstatus_fail 2 "invalid interface" ;;
-    esac
-fi
+case "$1" in
+    mlan0|0) IFACE=mlan0 ;;
+    mlan1|1) IFACE=mlan1 ;;
+    *) wstatus_fail 2 "invalid interface" ;;
+esac
 
 STATUS=$("$WPA_CLI" -i "$IFACE" status 2>/dev/null) || wstatus_fail 7 "status query failed"
 STATE=

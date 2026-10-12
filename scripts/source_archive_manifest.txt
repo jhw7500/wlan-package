@@ -70,6 +70,10 @@ dist/wlan/opt/ftpcmd/bin/rst
 dist/wlan/opt/ftpcmd/bin/wconnect
 dist/wlan/opt/ftpcmd/bin/wconnectraw
 dist/wlan/opt/ftpcmd/bin/wfreq
+dist/wlan/opt/ftpcmd/bin/wgetifstate
+dist/wlan/opt/ftpcmd/bin/wifcdown
+dist/wlan/opt/ftpcmd/bin/wifcup
+dist/wlan/opt/ftpcmd/bin/wrst
 dist/wlan/opt/ftpcmd/bin/wssid
 dist/wlan/opt/ftpcmd/bin/wstatus
 dist/wlan/opt/wlan/bin/README
