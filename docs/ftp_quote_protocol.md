@@ -21,10 +21,11 @@ ftp> quote <command> [arguments...]
 자세한 원인은 장비의 `ftpcmd_result` 또는 `ftpcmd_raw_result` 로그에서 확인한다.
 종료 코드의 의미는 명령마다 다르며, `8`이 모든 오류를 뜻하지 않는다.
 
-`w`로 시작하는 모든 명령은 첫 번째 인자로 인터페이스를 **필수로** 받는다.
+`wrst`를 제외한 `w`로 시작하는 모든 명령은 첫 번째 인자로 인터페이스를 **필수로** 받는다.
 `mlan0`과 `0`은 `mlan0`, `mlan1`과 `1`은 `mlan1`을 선택한다. 인자가
 없거나 이 네 값 이외의 값을 주면 하위 명령 실행 전에 코드 `2`로 거부한다.
 인터페이스 뒤에 오는 SSID·주파수의 숫자 토큰은 별칭으로 변환하지 않는다.
+`wrst`는 예외로 인터페이스를 생략할 수 있으며, 지정한 경우에는 같은 네 값만 허용한다.
 기존 `getifstate`, `ifcdown`, `ifcup`, `rst`의 인자 규칙은 유지한다.
 
 ## 2. 무선 명령 요약
@@ -222,18 +223,20 @@ SSID의 `wconnect` 요청은 하위 SSID 검증에서 코드 `1`로 실패할 �
 요청을 거부한다. `rst`는 systemd에 재부팅을 요청하므로 성공 응답 직후
 FTP 연결이 끊길 수 있다.
 
-같은 동작을 인터페이스 필수 규칙으로 호출하는 명령도 제공한다.
+같은 동작을 하는 `w` 명령도 제공한다. `wrst`의 인터페이스는 선택적이다.
 
 | 신규 명령 | 형식 | 기존 동작·성공 응답 | 주요 오류 코드 |
 | --- | --- | --- | --- |
 | `wgetifstate` | `quote wgetifstate <mlan0\|mlan1\|0\|1>` | `getifstate`: `200 <interface> UP` 또는 `DOWN` | `1`: 상태 읽기 실패, `2`: 인자 오류/인터페이스 없음 |
 | `wifcup` | `quote wifcup <mlan0\|mlan1\|0\|1>` | `ifcup`: `200 IFCUP command successful.` | `1`: UP 실패, `2`: 인자 오류/인터페이스 없음 |
 | `wifcdown` | `quote wifcdown <mlan0\|mlan1\|0\|1>` | `ifcdown`: `200 IFCDOWN command successful.` | `1`: DOWN 실패, `2`: 인자 오류/인터페이스 없음, `3`: FTP 연결 보호 |
-| `wrst` | `quote wrst <mlan0\|mlan1\|0\|1>` | `rst`: `200 reboot requested` | `1`: 재부팅 요청 실패, `2`: 인자 오류 |
+| `wrst` | `quote wrst [mlan0\|mlan1\|0\|1]` | `rst`: `200 reboot requested` | `1`: 재부팅 요청 실패, `2`: 인자 오류 |
 
-이 네 명령은 인터페이스 한 개만 허용하며 추가 인자는 코드 `2`로 거부한다.
+`wgetifstate`, `wifcup`, `wifcdown`은 인터페이스 한 개를 필수로 받는다.
+`wrst`는 인자 없이 호출하거나 유효한 인터페이스 한 개를 지정할 수 있다.
+네 명령 모두 잘못된 인터페이스나 추가 인자는 코드 `2`로 거부한다.
 `wgetifstate 1`의 응답에는 별칭 `1`이 아니라 `mlan1`이 표시된다.
-`wrst`는 인터페이스 인자를 검증한 뒤 **장비 전체**를 재부팅한다.
+`quote wrst`와 `quote wrst 0` 모두 **장비 전체**를 재부팅한다.
 인터페이스만 재시작하는 명령이 아니다. 기존 세 인터페이스 명령의
 숫자 인자는 계속 그대로 인터페이스 이름으로 처리하며 별칭 변환은 하지 않는다.
 

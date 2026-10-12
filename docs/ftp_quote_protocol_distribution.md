@@ -16,9 +16,10 @@ ftp> quote <명령> [인자...]
 | 명령 실행 실패 | `550 Failed: <명령> exited <오류 코드>` |
 | 명령 실행 30초 초과 | `550 Command timed out: <명령>` |
 
-`w`로 시작하는 모든 명령은 첫 인자로 인터페이스를 필수로 받는다.
+`wrst`를 제외한 `w`로 시작하는 모든 명령은 첫 인자로 인터페이스를 필수로 받는다.
 `mlan0` 또는 `0`은 `mlan0`, `mlan1` 또는 `1`은 `mlan1`을 선택한다.
-인터페이스 누락이나 잘못된 값은 오류 코드 `2`다. 성공한 설정 명령과
+`wrst`는 인터페이스를 생략할 수 있으며, 지정하면 같은 네 값만 허용한다.
+나머지 `w` 명령의 인터페이스 누락이나 잘못된 값은 오류 코드 `2`다. 성공한 설정 명령과
 `wconnect`의 결과는 `200 SUCCESS`이며,
 `wconnect` 응답에는 SSID와 주파수를 포함하지 않는다.
 
@@ -118,17 +119,19 @@ FTP 명령 인자로 변경할 수 없다.
 `ifcdown`은 현재 FTP 제어 연결을 운반하는 인터페이스를 내리는 요청을
 거부한다. `rst` 성공 후에는 장비가 재부팅되므로 FTP 연결이 끊길 수 있다.
 
-같은 동작을 하는 인터페이스 필수 명령은 다음과 같다.
+같은 동작을 하는 `w` 명령은 다음과 같다. `wrst`의 인터페이스는 선택적이다.
 
 | 신규 명령 | 형식 | 기존 명령과 동일한 성공 응답 |
 | --- | --- | --- |
 | `wgetifstate` | `quote wgetifstate <mlan0\|mlan1\|0\|1>` | `200 <인터페이스> UP` 또는 `200 <인터페이스> DOWN` |
 | `wifcup` | `quote wifcup <mlan0\|mlan1\|0\|1>` | `200 IFCUP command successful.` |
 | `wifcdown` | `quote wifcdown <mlan0\|mlan1\|0\|1>` | `200 IFCDOWN command successful.` |
-| `wrst` | `quote wrst <mlan0\|mlan1\|0\|1>` | `200 reboot requested` |
+| `wrst` | `quote wrst [mlan0\|mlan1\|0\|1]` | `200 reboot requested` |
 
-이 네 명령은 인터페이스 한 개만 받는다. 누락·오류·추가 인자는 코드 `2`,
+`wgetifstate`, `wifcup`, `wifcdown`은 인터페이스 한 개를 필수로 받는다.
+`wrst`는 인자 없이 호출하거나 유효한 인터페이스 한 개를 지정할 수 있다.
+잘못된 인터페이스나 추가 인자, 나머지 세 명령의 인터페이스 누락은 코드 `2`,
 그 밖의 실패 코드는 위 기존 명령과 같다. `wifcdown`은 FTP 연결 보호도 유지한다.
-`wrst`는 인터페이스를 검증한 뒤 `rst`와 동일하게 **장비 전체**를 재부팅한다.
+`quote wrst`와 `quote wrst 0` 모두 `rst`와 동일하게 **장비 전체**를 재부팅한다.
 기존 `getifstate`, `ifcup`, `ifcdown`의 기본값과 `rst`의 무인자 규칙은 유지하며,
 `0`/`1` 별칭은 `w` 명령에 적용한다.

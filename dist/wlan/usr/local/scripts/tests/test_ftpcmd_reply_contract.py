@@ -643,8 +643,26 @@ exit "$COMMAND_RC"
                 self.assertEqual(result.stdout.splitlines(), ["reboot requested"])
                 self.assertEqual(calls, ["--no-block reboot"])
 
+    def test_wrst_without_an_interface_requests_board_reboot(self):
+        result, calls = self.run_interface("wrst")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ["reboot requested"])
+        self.assertEqual(calls, ["--no-block reboot"])
+
+    def test_wrst_without_an_interface_propagates_reboot_failure(self):
+        result, calls = self.run_interface("wrst", rc=9)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(calls, ["--no-block reboot"])
+
+    def test_wrst_rejects_invalid_or_extra_arguments_before_reboot(self):
+        for args in (("",), ("2",), ("mlan2",), ("eth0",), ("0", "extra")):
+            with self.subTest(args=args):
+                result, calls = self.run_interface("wrst", *args)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertEqual(calls, [])
+
     def test_wireless_aliases_require_exactly_one_valid_interface(self):
-        for name in ("wgetifstate", "wifcup", "wifcdown", "wrst"):
+        for name in ("wgetifstate", "wifcup", "wifcdown"):
             for args in ((), ("",), ("2",), ("mlan2",), ("eth0",), ("0", "extra")):
                 with self.subTest(name=name, args=args):
                     result, calls = self.run_interface(name, *args)
