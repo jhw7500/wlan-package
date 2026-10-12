@@ -3,6 +3,7 @@
 장비의 vsftpd가 제공하는 커스텀 QUOTE 명령의 호출 형식과 응답을 정의한다.
 핸들러 원본은 `dist/wlan/opt/ftpcmd/bin/`, 타겟 설치 경로는 `/opt/ftpcmd/bin/`이다.
 외부 배포용 명령·응답 요약은 [WLAN 장비 FTP QUOTE 명령 규격](ftp_quote_protocol_distribution.md)을 참조한다.
+아래 인터페이스 필수 규칙은 `wlan-proc` 0.7.0부터 적용된다.
 
 ## 1. 공통 응답
 
@@ -20,19 +21,20 @@ ftp> quote <command> [arguments...]
 자세한 원인은 장비의 `ftpcmd_result` 또는 `ftpcmd_raw_result` 로그에서 확인한다.
 종료 코드의 의미는 명령마다 다르며, `8`이 모든 오류를 뜻하지 않는다.
 
-무선 명령은 인터페이스를 생략하면 `mlan0`을 사용한다. `wconnect`,
-`wconnectraw`, `wssid`, `wfreq`는 첫 번째 인자가 정확히 `mlan0` 또는
-`mlan1`일 때만 인터페이스로 해석한다. 그 외의 첫 인자는 SSID 또는
-주파수 인자다. `wstatus`는 선택적 인터페이스 인자를 엄격하게 검사한다.
+`w`로 시작하는 모든 명령은 첫 번째 인자로 인터페이스를 **필수로** 받는다.
+`mlan0`과 `0`은 `mlan0`, `mlan1`과 `1`은 `mlan1`을 선택한다. 인자가
+없거나 이 네 값 이외의 값을 주면 하위 명령 실행 전에 코드 `2`로 거부한다.
+인터페이스 뒤에 오는 SSID·주파수의 숫자 토큰은 별칭으로 변환하지 않는다.
+기존 `getifstate`, `ifcdown`, `ifcup`, `rst`의 인자 규칙은 유지한다.
 
 ## 2. 무선 명령 요약
 
-| 명령 | 인자 없음 | 값 지정 | 성공 응답 |
+| 명령 | 인터페이스만 지정 | 인터페이스 뒤 값 지정 | 성공 응답 |
 | --- | --- | --- | --- |
 | `wssid` | 설정 파일의 SSID 조회 | 설정 파일에 SSID 저장 | 조회: `200 <SSID>` / 저장: `200 SUCCESS` |
 | `wfreq` | 설정 파일의 주파수 조회 | 설정 파일에 주파수 저장 | 조회: `200 <MHz 목록>` / 저장: `200 SUCCESS` |
 | `wconnect` | 저장된 프로필로 연결 확인 | SSID 저장 후 연결 확인 | `200 SUCCESS` |
-| `wstatus` | 현재 연결 조회 | 선택적 인터페이스만 허용 | `200 <SSID> <MHz>` |
+| `wstatus` | 현재 연결 조회 | 추가 인자 오류 | `200 <SSID> <MHz>` |
 | `wconnectraw` | SSID 누락 오류 | 런타임 전환 명령 제출 | `200 SUCCESS` |
 
 ~~~text
@@ -50,20 +52,21 @@ wssid / wfreq --> wpa_supplicant 설정 파일에 저장
 반환한다.
 
 ~~~text
-ftp> quote wssid
+ftp> quote wssid 0
 200 jhw_wlan_
-ftp> quote wfreq
+ftp> quote wfreq 0
 200 5180,5200,5220,5240
-ftp> quote wstatus
+ftp> quote wstatus 0
 200 jhw_wlan_ 5180
 
-ftp> quote wfreq 5180 5200 5220 5240
+ftp> quote wfreq 0 5180 5200 5220 5240
 200 SUCCESS
-ftp> quote wconnect
+ftp> quote wconnect 0
 200 SUCCESS
 ~~~
 
-위 조회 예는 타겟에서 확인한 값이다. `wfreq` 조회는 허용 목록 전체를,
+위 조회 값은 이전 버전의 타겟에서 확인한 값이며 호출 형식은 0.7.0 기준이다.
+`wfreq` 조회는 허용 목록 전체를,
 `wstatus` 조회는 실제 연결 주파수 한 개를 보여 준다.
 
 ## 3. 명령별 동작
@@ -71,22 +74,22 @@ ftp> quote wconnect
 ### 3.1 wssid: 설정 SSID
 
 ~~~text
-quote wssid [mlan0|mlan1] [ssid words...]
+quote wssid <mlan0|mlan1|0|1> [ssid words...]
 ~~~
 
 - 값이 없으면 첫 번째 `network` 블록의 SSID를 반환한다.
 - 값이 있으면 남은 토큰을 공백으로 합쳐 설정 파일에 저장한다.
-  예: `quote wssid My AP`는 `My AP`를 저장한다.
+  예: `quote wssid 0 My AP`는 `mlan0`에 `My AP`를 저장한다.
 - SSID는 UTF-8 기준 1~32바이트이며 제어 문자는 허용하지 않는다.
-- SSID 자체가 `mlan0` 또는 `mlan1`이면 인터페이스를 먼저 명시한다.
-  예: `quote wssid mlan0 mlan0`.
+- SSID는 인터페이스 다음부터 시작한다. SSID 자체가 `mlan0`이면
+  `quote wssid 0 mlan0`, `1`이면 `quote wssid 0 1`로 입력한다.
 - 조회 또는 저장 실패는 주로 코드 `1`이다. 하위 `wifi ssid`의 다른
   종료 코드가 전달될 수도 있다.
 
 ### 3.2 wfreq: 설정 주파수
 
 ~~~text
-quote wfreq [mlan0|mlan1] [freq_or_channel...]
+quote wfreq <mlan0|mlan1|0|1> [freq_or_channel...]
 ~~~
 
 - 값이 없으면 설정 파일의 주파수 목록을 MHz와 쉼표로 반환한다.
@@ -99,24 +102,24 @@ quote wfreq [mlan0|mlan1] [freq_or_channel...]
 - 검증 또는 설정 파일 처리 실패는 주로 코드 `1`이다.
 
 ~~~text
-ftp> quote wfreq 36 40 44 48
+ftp> quote wfreq 0 36 40 44 48
 200 SUCCESS
-ftp> quote wfreq
+ftp> quote wfreq 0
 200 5180,5200,5220,5240
 ~~~
 
 ### 3.3 wconnect: 프로필 적용과 연결 확인
 
 ~~~text
-quote wconnect [mlan0|mlan1] [ssid words...]
+quote wconnect <mlan0|mlan1|0|1> [ssid words...]
 ~~~
 
 - SSID가 없으면 저장된 프로필을 사용한다. `quote wconnect mlan1`은
   `mlan1`의 저장된 프로필을 사용한다.
 - SSID가 있으면 남은 토큰을 공백으로 합쳐 설정 파일에 저장한 뒤
-  연결을 시도한다. `quote wconnect My AP`는 `My AP`에 연결을 시도한다.
+  연결을 시도한다. `quote wconnect 0 My AP`는 `mlan0`에서 `My AP`에 연결을 시도한다.
 - 주파수는 인자로 받지 않는다. 주파수를 바꾸려면 먼저 `wfreq`로 저장한다.
-  숫자 단어도 SSID의 일부다. `quote wconnect AP 2`는 `AP 2`에 연결을 시도한다.
+  숫자 단어도 SSID의 일부다. `quote wconnect 0 AP 2`는 `AP 2`에 연결을 시도한다.
 - 기존 PSK와 인증 설정을 재사용한다. FTP 명령으로 PSK를 전달하지 않는다.
 
 이미 연결된 단일 `network`에서 요청 SSID와 저장된 SSID 및 주파수 정책이
@@ -128,7 +131,7 @@ quote wconnect [mlan0|mlan1] [ssid words...]
 명령의 전체 실행 시간이 반드시 15초 이내라는 뜻은 아니다.
 
 SSID 없이 호출할 때는 설정 파일을 수정하지 않는다. 다중 `network`
-구성에서는 명시적 SSID 일괄 변경을 거부하지만 무인자 연결은 허용한다.
+구성에서는 명시적 SSID 일괄 변경을 거부하지만 인터페이스만 지정한 연결은 허용한다.
 `200 SUCCESS`는 목표 association을 확인했다는 뜻이다.
 `550 Failed: wconnect exited 8`은 제한 시간 안에 확인하지 못했다는 뜻이며,
 이후 늦게 연결될 수 있으므로 `wstatus`로 다시 조회한다.
@@ -136,7 +139,7 @@ SSID 없이 호출할 때는 설정 파일을 수정하지 않는다. 다중 `ne
 ### 3.4 wstatus: 현재 연결
 
 ~~~text
-quote wstatus [mlan0|mlan1]
+quote wstatus <mlan0|mlan1|0|1>
 ~~~
 
 `wpa_cli status`가 `wpa_state=COMPLETED`일 때 현재 SSID와 연결 주파수
@@ -147,7 +150,7 @@ quote wstatus [mlan0|mlan1]
 ### 3.5 wconnectraw: 시험용 런타임 전환
 
 ~~~text
-quote wconnectraw [mlan0|mlan1] <ssid words...>
+quote wconnectraw <mlan0|mlan1|0|1> <ssid words...>
 ~~~
 
 SSID는 필수다. 현재 선택된 `network` ID가 없으면 유일하게 활성화된
@@ -167,10 +170,11 @@ vsftpd가 핸들러를 30초에 강제 종료하면 `550 Command timed out: <com
 
 | 명령 | 코드 | 의미 |
 | --- | ---: | --- |
+| `wssid`, `wfreq` | `2` | 필수 인터페이스 누락 또는 잘못된 값 |
 | `wssid` | `1` | 설정 조회, SSID 검증 또는 저장 실패 |
 | `wfreq` | `1` | 설정 조회, 주파수 검증 또는 저장 실패 |
 | `wconnect` | `1` | SSID 또는 설정 검증 실패, 실행 환경 오류 |
-| `wconnect` | `2` | 인터페이스 검증 실패; 일반적인 인자 파싱에서는 발생하지 않음 |
+| `wconnect` | `2` | 필수 인터페이스 누락 또는 잘못된 값 |
 | `wconnect` | `3` | 대상 인터페이스가 FTP 제어 연결을 운반하여 거부 |
 | `wconnect` | `7` | supplicant 제어 명령 또는 연결 이벤트 감시 실패 |
 | `wconnect` | `8` | 제한 시간 내 목표 연결 확인 실패 |
@@ -178,18 +182,19 @@ vsftpd가 핸들러를 30초에 강제 종료하면 `550 Command timed out: <com
 | `wstatus` | `7` | supplicant 상태 조회 실패 또는 필수 상태값 누락 |
 | `wstatus` | `8` | 상태 조회는 성공했으나 현재 연결되지 않음 |
 | `wconnectraw` | `1` | 상태 조회 실패 또는 사용할 `network`를 결정할 수 없음 |
-| `wconnectraw` | `2` | SSID 누락 |
+| `wconnectraw` | `2` | 필수 인터페이스 누락·오류 또는 SSID 누락 |
 | `wconnectraw` | `7` | `set_network` 또는 `reassociate` 명령 실패 |
 
 `wssid`, `wfreq`, `wconnect`는 하위 명령의 종료 코드를 전달할 수 있으므로
 표에 없는 `N`이 나올 수도 있다. 핸들러 로그의 `code`와 `detail`을 함께
-확인한다. 첫 토큰이 `mlan0`/`mlan1`이 아닌 `wconnect` 요청은 인터페이스
-오류가 아니라 SSID 요청으로 해석된다.
+확인한다. 첫 토큰이 `mlan0`, `mlan1`, `0`, `1` 이외인 `wconnect`
+요청은 SSID 요청으로 해석하지 않고 코드 `2`로 거부한다.
 
-다음은 타겟에서 연결 설정을 바꾸지 않는 입력으로 확인한 실패 응답이다.
+다음은 0.7.0의 실패 응답 형식이다. `wstatus mlan1`의 코드 `7`은
+해당 인터페이스에서 supplicant 상태 조회가 실패하는 경우의 예다.
 
 ~~~text
-ftp> quote wfreq invalid-frequency
+ftp> quote wfreq 0 invalid-frequency
 550 Failed: wfreq exited 1
 ftp> quote wstatus invalid-interface
 550 Failed: wstatus exited 2
@@ -199,9 +204,8 @@ ftp> quote wstatus mlan1
 550 Failed: wstatus exited 7
 ~~~
 
-마지막 예의 `7`은 확인 당시 타겟의 `mlan1`에서 상태 조회가 실패한 결과다.
-`mlan1`이 연결되어 있다면 응답은 달라진다. 유효하지 않은 33바이트 SSID로
-`wconnect`를 호출했을 때도 `550 Failed: wconnect exited 1`을 확인했다.
+`mlan1`이 연결되어 있다면 응답은 달라진다. 유효하지 않은 33바이트
+SSID의 `wconnect` 요청은 하위 SSID 검증에서 코드 `1`로 실패할 수 있다.
 
 ## 5. 인터페이스와 재부팅 명령
 
@@ -217,6 +221,21 @@ ftp> quote wstatus mlan1
 관리 상태다. `ifcdown`은 FTP 제어 연결을 운반하는 인터페이스를 내리는
 요청을 거부한다. `rst`는 systemd에 재부팅을 요청하므로 성공 응답 직후
 FTP 연결이 끊길 수 있다.
+
+같은 동작을 인터페이스 필수 규칙으로 호출하는 명령도 제공한다.
+
+| 신규 명령 | 형식 | 기존 동작·성공 응답 | 주요 오류 코드 |
+| --- | --- | --- | --- |
+| `wgetifstate` | `quote wgetifstate <mlan0\|mlan1\|0\|1>` | `getifstate`: `200 <interface> UP` 또는 `DOWN` | `1`: 상태 읽기 실패, `2`: 인자 오류/인터페이스 없음 |
+| `wifcup` | `quote wifcup <mlan0\|mlan1\|0\|1>` | `ifcup`: `200 IFCUP command successful.` | `1`: UP 실패, `2`: 인자 오류/인터페이스 없음 |
+| `wifcdown` | `quote wifcdown <mlan0\|mlan1\|0\|1>` | `ifcdown`: `200 IFCDOWN command successful.` | `1`: DOWN 실패, `2`: 인자 오류/인터페이스 없음, `3`: FTP 연결 보호 |
+| `wrst` | `quote wrst <mlan0\|mlan1\|0\|1>` | `rst`: `200 reboot requested` | `1`: 재부팅 요청 실패, `2`: 인자 오류 |
+
+이 네 명령은 인터페이스 한 개만 허용하며 추가 인자는 코드 `2`로 거부한다.
+`wgetifstate 1`의 응답에는 별칭 `1`이 아니라 `mlan1`이 표시된다.
+`wrst`는 인터페이스 인자를 검증한 뒤 **장비 전체**를 재부팅한다.
+인터페이스만 재시작하는 명령이 아니다. 기존 세 인터페이스 명령의
+숫자 인자는 계속 그대로 인터페이스 이름으로 처리하며 별칭 변환은 하지 않는다.
 
 ## 6. 로그와 시간 측정
 
@@ -259,7 +278,7 @@ ftpcmd_raw_result trace=<id> command=wconnectraw status=fail code=<N> iface=<ifa
 
 - FTP 제어 연결이 암호화되지 않았다면 SSID 등 명령 인자가 평문으로
   전달된다. PSK를 `wconnect`나 `wconnectraw` 인자로 넣지 않는다.
-- `wconnect`와 `ifcdown`은 FTP 제어 연결을 운반하는 인터페이스를
+- `wconnect`, `ifcdown`, `wifcdown`은 FTP 제어 연결을 운반하는 인터페이스를
   변경하지 않도록 검사한다. 판정은 실제 제어 연결 주소와 인터페이스
   구성에 따른다.
 - `wifi.sh`의 연결 확인 폴링 기본값은 `ASSOC_TIMEOUT_DEFAULT=15`초다.

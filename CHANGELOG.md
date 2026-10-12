@@ -3,6 +3,18 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.7.0 (2026-10-09)
+
+> SemVer **minor** — FTP `quote`의 모든 `w` 명령에 인터페이스를 필수로 받고 `0`/`1` 별칭을 지원한다. 기존 인터페이스·재부팅 명령의 계약을 유지하며 대응하는 `w` 명령을 추가한다.
+
+### FTP quote 인터페이스 필수 계약 (#351, PR #341 후속)
+
+- `wssid`, `wfreq`, `wconnect`, `wconnectraw`, `wstatus`의 첫 인자는 `mlan0`, `mlan1`, `0`, `1` 중 하나여야 한다. `0`은 `mlan0`, `1`은 `mlan1`로 변환하며, 누락하거나 잘못된 값을 주면 하위 명령 실행 전에 code 2로 거부한다. 기존의 인터페이스 생략 호출은 이제 실패한다.
+- 인터페이스 뒤의 SSID·주파수 인자와 조회·설정·연결 응답 계약은 유지한다. 예를 들어 `quote wconnect 1 Office AP`는 `mlan1`에서 `Office AP` 연결을 시도하고, `quote wssid 0`은 `mlan0`의 저장 SSID를 조회한다.
+- 인터페이스 한 개를 필수로 받는 `wgetifstate`, `wifcdown`, `wifcup`, `wrst`를 추가한다. 기존 핸들러를 호출하여 성공 응답, 실패 코드와 `ifcdown`의 FTP 제어 연결 보호를 유지한다. `wrst`는 인터페이스를 검증한 뒤 `rst`와 동일하게 장비 전체 재부팅을 요청한다.
+- 기존 `getifstate`, `ifcdown`, `ifcup`의 선택적 인터페이스·기본 `mlan0` 및 `rst`의 무인자 계약은 그대로다. 숫자 별칭은 `w` 명령에 적용한다.
+- 내부·외부 배포용 FTP 프로토콜 문서와 payload·소스 아카이브 manifest를 동기화하고 필수 인터페이스, 숫자 별칭, 기존 응답·보호 동작의 실행 회귀 테스트를 추가했다.
+
 ## 0.6.9 (2026-10-02)
 
 > SemVer **patch** — FTP `quote`에 저장 프로필 조회·설정 명령(`wssid`·`wfreq`·`wstatus`)을 추가하고 `wconnect` 계약을 SSID 전용으로 정리한다. `wlan-bridge` 서브모듈이 없는 소스에서도 bridge 없는 패키지를 빌드할 수 있게 하며, handshake 정체 재시도·공장 초기화 LED 상태·`wstatus` SSID 디코딩을 고친다.
