@@ -342,6 +342,7 @@ dist/wlan/usr/local/scripts/tests/test_unit_execstart_exec_bit.py
 dist/wlan/usr/local/scripts/tests/test_wifi_arping_link_state.py
 dist/wlan/usr/local/scripts/tests/test_wifi_connect_cli.py
 dist/wlan/usr/local/scripts/tests/test_wifi_eth_peer.sh
+dist/wlan/usr/local/scripts/tests/test_wifi_event_garp.py
 dist/wlan/usr/local/scripts/tests/test_wifi_log_extract.py
 dist/wlan/usr/local/scripts/tests/test_wifi_logger_control.py
 dist/wlan/usr/local/scripts/tests/test_wifi_snmp_trap.py
@@ -554,6 +555,8 @@ wlan-bridge/wbridge/wbridge-tpacket.c
 wlan-bridge/wbridge/wifi_bridge@.service
 wlan-opc/Makefile
 wlan-opc/README.md
+wlan-opc/docs/testing/persistence-admission.md
+wlan-opc/docs/testing/persistence-outcomes.md
 wlan-opc/opcd/Makefile
 wlan-opc/opcd/chan_encode.c
 wlan-opc/opcd/chan_encode.h
@@ -608,12 +611,15 @@ wlan-opc/opcd/tests/test_json_util.c
 wlan-opc/opcd/tests/test_nl80211_parse.c
 wlan-opc/opcd/tests/test_ntp_parse.c
 wlan-opc/opcd/tests/test_opcd_log.c
+wlan-opc/opcd/tests/test_persist_admission.c
+wlan-opc/opcd/tests/test_persist_failure.c
 wlan-opc/opcd/tests/test_platform_nxp_radio.c
 wlan-opc/opcd/tests/test_reset_cause.c
 wlan-opc/opcd/tests/test_roam_datagram.c
 wlan-opc/opcd/tests/test_roam_notify_conf.c
 wlan-opc/opcd/tests/test_snapshot.c
 wlan-opc/opcd/tests/test_store_async.c
+wlan-opc/opcd/tests/test_store_atomic.c
 wlan-opc/opcd/tests/test_systemd_notify.c
 wlan-opc/opcd/tests/test_topology.c
 wlan-opc/opcd/topology.c

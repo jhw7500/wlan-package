@@ -170,6 +170,21 @@ wifi_init_conf.json
 `mlan0-ip`은 주소를 자동으로 mlan0에 배치하거나 eth0에서 제거하지 않는다. 두 인터페이스에
 같은 서브넷 주소를 동시에 두지 말고, 적용 후 `wifi {0|1} br status`로 정합성을 확인한다.
 
+운용 사양별 검증 기준은 다음과 같다.
+
+| Specification | Protocol | Profile | Management IP |
+|---|---|---|---|
+| SEMES | FTP QUOTE | `eth0-ip` | `eth0` |
+| DFK | OPCd/VHL | `peer-route` | `mlan0`, mirrored as `/32` on `eth0` |
+
+DFK는 `wifi 0 br profile peer-route apply`로 연계 설정을 저장하고 다음 부팅에 적용한다.
+관리 IP를 `mlan0`에 배치한 뒤 `eth0`의 같은 IP `/32` 미러, `iif eth0`의 table 100 규칙과
+유선 peer host route도 함께 확인한다. 같은 IP만 추가한 상태로 검증을 완료하지 않는다.
+`wifi 0 br restart`는 브리지 서비스만 재시작하며 주소·정책 라우팅을 적용하지 않는다.
+SEMES의 FTP QUOTE 시험 결과를 DFK OPCd의 실기 검증 결과로 사용하지 않는다.
+DFK 관리 IP와 운영 JSON 기준은
+[Notion의 peer-route 결정](https://app.notion.com/p/Rev1-01-3-0x0010-Q10-IP-peer_route-3d18a230a04e81c39731e72f6488117b)을 참고한다.
+
 #### 기배포 기기 마이그레이션 — 공식 경로 (결정, #257)
 
 `DEBIAN/postinst`의 cpchk·json_merge는 **사이트 값 보존**이 목적이라, 위 3종 토글

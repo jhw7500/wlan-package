@@ -1689,7 +1689,8 @@ _bridge_status() {
         echo "  [INFO] eth_sweep_subnet empty -> last-resort sweep falls back to $iface net (${mlan_inet:-<none>}). Set it to pin the range."
     fi
     if [ "$pr" = "true" ] && [ -z "$eth_mirror" ]; then
-        echo "  [WARN] peer_route=on but no /32 mirror on $eth (runtime). Reboot or 'wifi <0|1> br restart'."
+        echo "  [WARN] peer_route=on but no /32 mirror on $eth (runtime). Reboot to apply the saved profile."
+        echo "         'wifi <0|1> br restart' restarts only the bridge service; it does not apply IP addresses or routes."
         warn=1
     fi
     if [ "$pr" = "false" ] && [ -n "$eth_mirror" ] && [ "$ef_json" != "true" ] && [ "$lhp_raw" != "1" ]; then
