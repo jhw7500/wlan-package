@@ -33,6 +33,7 @@ IFACE=mlan
 NUM=""
 WPA_CONF_DIR="${WPA_CONF_DIR:-/etc/wpa_supplicant}"
 WIFI_RUN_DIR="${WIFI_RUN_DIR:-/run/wifi}"
+RADIO_JSON_LOCKED=0
 
 if [ "${1:-}" == "0" ] || [ "${1:-}" == "mlan0" ]; then
     IFACE=mlan0
@@ -336,7 +337,6 @@ update_json_roaming_section() {
         echo "Error: jq not installed" >&2
         return 1
     fi
-
     # 섹션이 없을 수도 있다(구버전 config) → `// {}` 로 만들어 넣는다.
     if jq --arg i "$iface" --arg s "$section" --arg k "$key" --argjson v "$value" \
          '.[$i].roaming[$s] = ((.[$i].roaming[$s] // {}) | .[$k] = $v)' \
@@ -430,13 +430,13 @@ apply_bw_caps() { # $1 iface, $2 bw
 # 성공 시 반환, 실패 시 적절한 exit 코드로 스크립트 종료(같은 셸, subshell 아님).
 apply_bw_or_exit() { # $1 iface, $2 bw_cap
     local iface="$1" bw_cap="$2" msg rc
-    msg=$(apply_bw_caps "$iface" "$bw_cap"); rc=$?
+    msg=$(wifi_wpa_child_call apply_bw_caps "$iface" "$bw_cap"); rc=$?
     [ -n "$msg" ] && echo "$msg"
     case "$rc" in
         0) return 0 ;;
         2) echo "Error: invalid radio.bw '$R_BW'" >&2; rollback_radio_live "$iface"; exit 2 ;;
-        5) echo "Error: htcapinfo failed for $iface" >&2; logger -p local0.err "[$tag:$LINENO] [$iface] htcapinfo failed"; rollback_radio_live "$iface"; exit 5 ;;
-        6) echo "Error: vhtcfg failed for $iface" >&2; logger -p local0.err "[$tag:$LINENO] [$iface] vhtcfg failed"; rollback_radio_live "$iface"; exit 6 ;;
+        5) echo "Error: htcapinfo failed for $iface" >&2; wifi_wpa_run_child logger -p local0.err "[$tag:$LINENO] [$iface] htcapinfo failed"; rollback_radio_live "$iface"; exit 5 ;;
+        6) echo "Error: vhtcfg failed for $iface" >&2; wifi_wpa_run_child logger -p local0.err "[$tag:$LINENO] [$iface] vhtcfg failed"; rollback_radio_live "$iface"; exit 6 ;;
         *) echo "Error: apply_bw_caps unexpected rc=$rc for $iface" >&2; rollback_radio_live "$iface"; exit 6 ;;
     esac
 }
@@ -844,31 +844,31 @@ radio_stage_get() { # $1 iface, $2 key → stdout (없으면 빈값)
 # 의도적으로 없음. 향후 11axcfg로 user_he_cap을 직접 SET하는 코드가 추가되면
 # 여기에 HE cap 스냅샷/복원도 추가할 것.
 rollback_radio_live() { # $1 iface
-    logger -p local0.warning "[$tag:$LINENO] [$1] radio-apply: rolling back to pre-apply settings"
+    wifi_wpa_run_child logger -p local0.warning "[$tag:$LINENO] [$1] radio-apply: rolling back to pre-apply settings"
     echo "rolling back to pre-apply settings..." >&2
     if [ -n "${SNAP_BAND:-}" ]; then
-        mlanutl "$1" bandcfg "$SNAP_BAND" >/dev/null 2>&1 || \
-            logger -p local0.warning "[$tag:$LINENO] [$1] rollback: bandcfg $SNAP_BAND restore failed"
+        wifi_wpa_run_child mlanutl "$1" bandcfg "$SNAP_BAND" >/dev/null 2>&1 || \
+            wifi_wpa_run_child logger -p local0.warning "[$tag:$LINENO] [$1] rollback: bandcfg $SNAP_BAND restore failed"
     else
-        logger -p local0.warning "[$tag:$LINENO] [$1] rollback: SNAP_BAND empty — bandcfg not restored"
+        wifi_wpa_run_child logger -p local0.warning "[$tag:$LINENO] [$1] rollback: SNAP_BAND empty — bandcfg not restored"
     fi
     if [ -n "${SNAP_HT_BG:-}" ] && [ -n "${SNAP_HT_A:-}" ]; then
         # A && B || C: BG 복원(A) 실패 시 B 건너뛰고 C(logger), 또는 A 성공+B 실패 시 C.
         # 즉 두 밴드 중 하나라도 복원 실패하면 경고 — 의도된 동작.
-        mlanutl "$1" htcapinfo "$SNAP_HT_BG" 1 >/dev/null 2>&1 && \
-        mlanutl "$1" htcapinfo "$SNAP_HT_A" 2 >/dev/null 2>&1 || \
-            logger -p local0.warning "[$tag:$LINENO] [$1] rollback: htcapinfo restore failed"
+        wifi_wpa_run_child mlanutl "$1" htcapinfo "$SNAP_HT_BG" 1 >/dev/null 2>&1 && \
+        wifi_wpa_run_child mlanutl "$1" htcapinfo "$SNAP_HT_A" 2 >/dev/null 2>&1 || \
+            wifi_wpa_run_child logger -p local0.warning "[$tag:$LINENO] [$1] rollback: htcapinfo restore failed"
     else
-        logger -p local0.warning "[$tag:$LINENO] [$1] rollback: htcapinfo snapshot incomplete (BG=${SNAP_HT_BG:-none} A=${SNAP_HT_A:-none}) — not restored"
+        wifi_wpa_run_child logger -p local0.warning "[$tag:$LINENO] [$1] rollback: htcapinfo snapshot incomplete (BG=${SNAP_HT_BG:-none} A=${SNAP_HT_A:-none}) — not restored"
     fi
     if [ -n "${SNAP_VHTBW:-}" ] && [ -n "${SNAP_VHTCAP:-}" ]; then
-        mlanutl "$1" vhtcfg 2 2 "$SNAP_VHTBW" "$SNAP_VHTCAP" >/dev/null 2>&1 || \
-            logger -p local0.warning "[$tag:$LINENO] [$1] rollback: vhtcfg restore failed"
+        wifi_wpa_run_child mlanutl "$1" vhtcfg 2 2 "$SNAP_VHTBW" "$SNAP_VHTCAP" >/dev/null 2>&1 || \
+            wifi_wpa_run_child logger -p local0.warning "[$tag:$LINENO] [$1] rollback: vhtcfg restore failed"
     else
-        logger -p local0.warning "[$tag:$LINENO] [$1] rollback: vht snapshot incomplete — vhtcfg not restored"
+        wifi_wpa_run_child logger -p local0.warning "[$tag:$LINENO] [$1] rollback: vht snapshot incomplete — vhtcfg not restored"
     fi
     # reassociate가 reconnect보다 부드럽고 cap 변경 반영이 확실 (실기 검증)
-    wpa_cli -i "$1" reassociate >/dev/null 2>&1 || wpa_cli -i "$1" reconnect >/dev/null 2>&1
+    wifi_wpa_run_child wpa_cli -i "$1" reassociate >/dev/null 2>&1 || wifi_wpa_run_child wpa_cli -i "$1" reconnect >/dev/null 2>&1
 }
 # ------------------------------------
 
@@ -876,7 +876,7 @@ rollback_radio_live() { # $1 iface
 # 두 키를 별도 호출로 쓰면 첫 키만 기록되고 둘째가 실패하는 부분 커밋
 # 윈도우가 생기므로 한 번에 기록한다.
 update_json_radio() {
-    local iface="$1" mode="$2" bw="$3" tmp filter
+    local iface="$1" mode="$2" bw="$3" tmp filter own_json_lock=0
     [ -z "$mode" ] && [ -z "$bw" ] && return 0
     if [ ! -f "$WIFI_INIT_CONF_JSON" ]; then
         echo "Error: $WIFI_INIT_CONF_JSON not found" >&2
@@ -885,6 +885,16 @@ update_json_radio() {
     if ! command -v jq >/dev/null 2>&1; then
         echo "Error: jq not installed" >&2
         return 1
+    fi
+    # radio-apply already owns FD8 before reading/applying settings. Other
+    # direct callers acquire the same lock here before their JSON read.
+    if [ "${RADIO_JSON_LOCKED:-0}" != 1 ]; then
+        if ! wifi_radio_json_lock_acquire; then
+            exec 8>&-
+            echo "Error: radio JSON transaction busy" >&2
+            return 1
+        fi
+        own_json_lock=1
     fi
     filter="."
     [ -n "$mode" ] && filter="$filter | .[\$i].radio.mode = \$m"
@@ -896,17 +906,21 @@ update_json_radio() {
     # 고정 .tmp 대신 고유 tmp — 동시 호출(wifi 0 ... + wifi 1 ...) 시 파손 방지.
     # EXIT trap은 22행의 글로벌 sync trap을 덮어쓰므로 RETURN trap 사용
     # (apply_sed_update와 동일 패턴).
-    tmp="$(safe_tmp_for "$WIFI_INIT_CONF_JSON")"
-    trap 'rm -f "$tmp"' RETURN
-    if jq --arg i "$iface" --arg m "$mode" --arg b "$bw" "$filter" \
+    trap 'wifi_wpa_run_child rm -f "${tmp:-}"; if [ "$own_json_lock" = 1 ]; then exec 8>&-; fi' RETURN
+    tmp="$(wifi_wpa_child_call safe_tmp_for "$WIFI_INIT_CONF_JSON")" || return 1
+    if wifi_wpa_run_child jq --arg i "$iface" --arg m "$mode" --arg b "$bw" "$filter" \
         "$WIFI_INIT_CONF_JSON" > "$tmp"; then
-        chmod 0644 "$tmp" 2>/dev/null
-        mv "$tmp" "$WIFI_INIT_CONF_JSON"
-        sync "$WIFI_INIT_CONF_JSON" 2>/dev/null || sync
+        wifi_wpa_run_child chmod 0644 "$tmp" 2>/dev/null
+        if ! wifi_wpa_run_child mv "$tmp" "$WIFI_INIT_CONF_JSON"; then
+            return 1
+        fi
+        wifi_wpa_run_child sync "$WIFI_INIT_CONF_JSON" 2>/dev/null || wifi_wpa_run_child sync
         trap - RETURN
+        [ "$own_json_lock" != 1 ] || exec 8>&-
     else
-        rm -f "$tmp"
+        wifi_wpa_run_child rm -f "$tmp"
         trap - RETURN
+        [ "$own_json_lock" != 1 ] || exec 8>&-
         echo "Error: JSON radio commit failed for ${iface} (mode=${mode:-keep} bw=${bw:-keep})" >&2
         return 1
     fi
@@ -3670,22 +3684,35 @@ case "$2" in
         echo "Error: $WIFI_INIT_CONF_JSON not found" >&2
         exit 3
     fi
+    # Lock before reading committed radio settings: OPC may update them while
+    # a CLI caller waits for the interface transition. Keep global JSON FD8
+    # through live apply/rollback and commit, in scan -> JSON order.
+    if ! wifi_scan_transition_lock_acquire "$IFACE"; then
+        echo "Error: scan/association transition busy for $IFACE" >&2
+        exit 6
+    fi
+    if ! wifi_radio_json_lock_acquire; then
+        echo "Error: radio JSON transaction busy" >&2
+        exit 9
+    fi
+    RADIO_JSON_LOCKED=1
+    trap 'wifi_wpa_run_child sync' EXIT
     # JSON 파손이 '설정 없음(exit 0)'으로 위장하지 않도록 유효성 선검사
-    if ! jq -e . "$WIFI_INIT_CONF_JSON" >/dev/null 2>&1; then
+    if ! wifi_wpa_run_child jq -e . "$WIFI_INIT_CONF_JSON" >/dev/null 2>&1; then
         echo "Error: invalid JSON in $WIFI_INIT_CONF_JSON" >&2
         exit 9
     fi
-    R_MODE_JSON=$(jq -r ".${IFACE}.radio.mode // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null) || {
+    R_MODE_JSON=$(wifi_wpa_child_exec jq -r ".${IFACE}.radio.mode // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null) || {
         echo "Error: cannot read .${IFACE}.radio.mode from $WIFI_INIT_CONF_JSON" >&2
         exit 9
     }
-    R_BW_JSON=$(jq -r ".${IFACE}.radio.bw // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null) || {
+    R_BW_JSON=$(wifi_wpa_child_exec jq -r ".${IFACE}.radio.bw // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null) || {
         echo "Error: cannot read .${IFACE}.radio.bw from $WIFI_INIT_CONF_JSON" >&2
         exit 9
     }
     # 적용 대상 = staged(pending) 우선, 없으면 committed 재적용
-    R_MODE_PEND=$(radio_stage_get "$IFACE" mode)
-    R_BW_PEND=$(radio_stage_get "$IFACE" bw)
+    R_MODE_PEND=$(wifi_wpa_child_call radio_stage_get "$IFACE" mode)
+    R_BW_PEND=$(wifi_wpa_child_call radio_stage_get "$IFACE" bw)
     R_MODE="${R_MODE_PEND:-$R_MODE_JSON}"
     R_BW="${R_BW_PEND:-$R_BW_JSON}"
     if [ -z "$R_MODE" ] && [ -z "$R_BW" ]; then
@@ -3707,7 +3734,7 @@ case "$2" in
     # 빠진다 → 링크를 건드리기 전에 즉시 거부. 2G+5G 혼합이면 안내만 출력.
     if [ "$R_MODE" = "b" ] || [ "$R_MODE" = "g" ]; then
         R_CONF="${WPA_CONF_DIR:-/etc/wpa_supplicant}/wpa_supplicant-${IFACE}.conf"
-        R_FREQ_BANDS=$(wifi_init_conf_freq_bands "$R_CONF")
+        R_FREQ_BANDS=$(wifi_wpa_child_call wifi_init_conf_freq_bands "$R_CONF")
         if [ "$R_FREQ_BANDS" = "5G" ]; then
             echo "Error: mode=$R_MODE is 2.4G-only but common freq_list in $R_CONF is 5G-only — STA can never associate." >&2
             echo "       Fix with 'wifi $NUM freq <2.4G ch>' or 'wifi $NUM mode a' (or higher), then retry." >&2
@@ -3717,7 +3744,7 @@ case "$2" in
         fi
     fi
     if [ -n "$R_MODE" ]; then
-        MODE_MASK=$(wifi_init_mode_to_bandcfg_mask "$R_MODE")
+        MODE_MASK=$(wifi_wpa_child_call wifi_init_mode_to_bandcfg_mask "$R_MODE")
         if [ -z "$MODE_MASK" ]; then
             echo "Error: invalid radio.mode '$R_MODE' in $WIFI_INIT_CONF_JSON" >&2
             exit 2
@@ -3727,24 +3754,18 @@ case "$2" in
             exit 2
         fi
     fi
-    # 이 지점부터 mlanutl snapshot/SET과 disconnect/reassociate를 수행한다. 외부
-    # bgscan/manual scan/connect와 같은 per-iface transition namespace를 획득해
-    # rollback·association 확인까지 프로세스 수명 동안 직렬화한다.
-    if ! wifi_scan_transition_lock_acquire "$IFACE"; then
-        echo "Error: scan/association transition busy for $IFACE" >&2
-        exit 6
-    fi
+    # FD7/FD8 were acquired before the committed-setting read above.
     if ! wifi_wpa_abort_scan_quiesce "$IFACE"; then
         echo "Error: native scan did not quiesce for $IFACE" >&2
         exit 6
     fi
     # 실패 시 롤백용 적용 전 스냅샷
-    SNAP_BAND=$(mlanutl "$IFACE" bandcfg 2>/dev/null | sed -n 's/.*Infra Band: \(0x[0-9a-fA-F]*\).*/\1/p' | head -1)
-    SNAP_HT_OUT=$(mlanutl "$IFACE" htcapinfo 2>/dev/null)
-    SNAP_HT_BG=$(printf '%s\n' "$SNAP_HT_OUT" | sed -n 's/^[[:space:]]*BG band:[[:space:]]*\(0x[0-9a-fA-F]*\).*/\1/p' | head -1)
-    SNAP_HT_A=$(printf '%s\n' "$SNAP_HT_OUT" | sed -n 's/^[[:space:]]*A band:[[:space:]]*\(0x[0-9a-fA-F]*\).*/\1/p' | head -1)
-    SNAP_VHT_OUT=$(mlanutl "$IFACE" vhtcfg 2 2 2>/dev/null)
-    SNAP_VHTCAP=$(printf '%s\n' "$SNAP_VHT_OUT" | awk '/VHT Capabilities Info/ {print $NF; exit}')
+    SNAP_BAND=$(wifi_wpa_child_close; mlanutl "$IFACE" bandcfg 2>/dev/null | sed -n 's/.*Infra Band: \(0x[0-9a-fA-F]*\).*/\1/p' | head -1)
+    SNAP_HT_OUT=$(wifi_wpa_child_exec mlanutl "$IFACE" htcapinfo 2>/dev/null)
+    SNAP_HT_BG=$(wifi_wpa_child_close; printf '%s\n' "$SNAP_HT_OUT" | sed -n 's/^[[:space:]]*BG band:[[:space:]]*\(0x[0-9a-fA-F]*\).*/\1/p' | head -1)
+    SNAP_HT_A=$(wifi_wpa_child_close; printf '%s\n' "$SNAP_HT_OUT" | sed -n 's/^[[:space:]]*A band:[[:space:]]*\(0x[0-9a-fA-F]*\).*/\1/p' | head -1)
+    SNAP_VHT_OUT=$(wifi_wpa_child_exec mlanutl "$IFACE" vhtcfg 2 2 2>/dev/null)
+    SNAP_VHTCAP=$(wifi_wpa_child_close; printf '%s\n' "$SNAP_VHT_OUT" | awk '/VHT Capabilities Info/ {print $NF; exit}')
     case "$SNAP_VHT_OUT" in
         *"Follow BW in the 11N"*) SNAP_VHTBW=0 ;;
         *"Follow BW in VHT"*)     SNAP_VHTBW=1 ;;
@@ -3761,21 +3782,21 @@ case "$2" in
     elif [ -n "$R_MODE" ] && [ -n "$MODE_MASK" ]; then
         # committed mode가 라이브와 다르면 bandcfg 재적용 — 부팅 connected-skip
         # (wifi_init.sh) 후 'wifi N radio-apply' 복구 경로가 mode를 실제 적용하도록.
-        _live_band=$(printf '%s' "${SNAP_BAND:-}" | tr 'ABCDEF' 'abcdef')
-        _want_band=$(printf '%s' "$MODE_MASK" | tr 'ABCDEF' 'abcdef')
+        _live_band=$(wifi_wpa_child_close; printf '%s' "${SNAP_BAND:-}" | tr 'ABCDEF' 'abcdef')
+        _want_band=$(wifi_wpa_child_close; printf '%s' "$MODE_MASK" | tr 'ABCDEF' 'abcdef')
         if [ "$_live_band" != "$_want_band" ]; then
             APPLY_MODE=1
-            logger -p local0.info "[$tag:$LINENO] [$IFACE] committed mode=$R_MODE not live (band ${_live_band:-none} != $_want_band) — applying via bandcfg"
+            wifi_wpa_run_child logger -p local0.info "[$tag:$LINENO] [$IFACE] committed mode=$R_MODE not live (band ${_live_band:-none} != $_want_band) — applying via bandcfg"
         fi
     fi
-    logger -p local0.info "[$tag:$LINENO] [$IFACE] radio-apply: mode=${R_MODE:-keep} bw=${R_BW:-keep} (pending: mode=${R_MODE_PEND:-no} bw=${R_BW_PEND:-no}, path=$([ -n "$APPLY_MODE" ] && echo mode || echo bw-only))"
+    wifi_wpa_run_child logger -p local0.info "[$tag:$LINENO] [$IFACE] radio-apply: mode=${R_MODE:-keep} bw=${R_BW:-keep} (pending: mode=${R_MODE_PEND:-no} bw=${R_BW_PEND:-no}, path=$([ -n "$APPLY_MODE" ] && echo mode || echo bw-only))"
 
     if [ -n "$APPLY_MODE" ]; then
         # === mode 변경 경로: disconnect → bandcfg(재시도) → cap → reconfigure → reconnect ===
         # disconnect 는 재연결(끊김)을 유발 — wifi_checker 가 과도기를 '불안정'으로 오판해
         # reassociate/restart 하지 않도록 grace flag 를 세운다(TTL 은 checker 의 RECONFIGURE_GRACE_SEC).
-        mkdir -p /run/wifi 2>/dev/null || true
-        : > "/run/wifi/${IFACE}.reconfigure-grace" 2>/dev/null || true
+        wifi_wpa_run_child mkdir -p "$WIFI_RUN_DIR" 2>/dev/null || true
+        : > "$WIFI_RUN_DIR/${IFACE}.reconfigure-grace" 2>/dev/null || true
         if ! wpa_cli_ok "$IFACE" disconnect; then
             echo "Error: wpa_cli disconnect failed for $IFACE" >&2
             exit 7
@@ -3784,15 +3805,15 @@ case "$2" in
         # 실패할 수 있음 → 최대 3초(0.1s×30) 재시도
         BANDCFG_OK=""
         for ((_i = 1; _i <= 30; _i++)); do
-            if mlanutl "$IFACE" bandcfg "$MODE_MASK" >/dev/null 2>&1; then
+            if wifi_wpa_run_child mlanutl "$IFACE" bandcfg "$MODE_MASK" >/dev/null 2>&1; then
                 BANDCFG_OK=1
                 break
             fi
-            sleep 0.1
+            wifi_wpa_run_child sleep 0.1
         done
         if [ -z "$BANDCFG_OK" ]; then
             echo "Error: bandcfg $MODE_MASK failed for $IFACE (still connected, or band unsupported by FW — check 'wifi $NUM mode get' STANDARD)" >&2
-            logger -p local0.err "[$tag:$LINENO] [$IFACE] radio-apply: bandcfg $MODE_MASK failed"
+            wifi_wpa_run_child logger -p local0.err "[$tag:$LINENO] [$IFACE] radio-apply: bandcfg $MODE_MASK failed"
             rollback_radio_live "$IFACE"
             exit 4
         fi
@@ -3800,7 +3821,7 @@ case "$2" in
         [ -n "$R_BW" ] && apply_bw_or_exit "$IFACE" "$R_BW_CAP"
         # 2차 과도기(reconfigure→reconnect)도 grace 로 덮는다 — 1차(disconnect) set 으로부터
         # bandcfg 재시도+assoc 대기로 TTL 이 소모됐을 수 있어 여기서 flag mtime 을 다시 갱신한다.
-        : > "/run/wifi/${IFACE}.reconfigure-grace" 2>/dev/null || true
+        : > "$WIFI_RUN_DIR/${IFACE}.reconfigure-grace" 2>/dev/null || true
         if ! wpa_cli_ok "$IFACE" reconfigure; then
             echo "Error: wpa_cli reconfigure failed for $IFACE (check wpa_supplicant conf syntax)" >&2
             rollback_radio_live "$IFACE"
@@ -3831,13 +3852,13 @@ case "$2" in
     WPA_STATE=""
     # 0.1s grid 폴링 — connect와 동일 (상한 ASSOC_TIMEOUT초 유지; ASSOC_TIMEOUT은 위에서 정수 검증됨)
     for ((_i = 1; _i <= ASSOC_TIMEOUT * 10; _i++)); do
-        WPA_STATE=$(wpa_cli -i "$IFACE" status 2>/dev/null | sed -n 's/^wpa_state=//p')
+        WPA_STATE=$(wifi_wpa_child_close; wpa_cli -i "$IFACE" status 2>/dev/null | sed -n 's/^wpa_state=//p')
         [ "$WPA_STATE" = "COMPLETED" ] && break
-        sleep 0.1
+        wifi_wpa_run_child sleep 0.1
     done
     if [ "$WPA_STATE" != "COMPLETED" ]; then
         echo "Error: association not completed within ${ASSOC_TIMEOUT}s (state=${WPA_STATE:-unknown})" >&2
-        logger -p local0.err "[$tag:$LINENO] [$IFACE] radio-apply: assoc timeout (state=${WPA_STATE:-unknown})"
+        wifi_wpa_run_child logger -p local0.err "[$tag:$LINENO] [$IFACE] radio-apply: assoc timeout (state=${WPA_STATE:-unknown})"
         rollback_radio_live "$IFACE"
         echo "(previous settings restored; staged changes kept — fix and retry radio-apply, or radio-discard)" >&2
         exit 8
@@ -3852,21 +3873,21 @@ case "$2" in
         exit 9
     fi
     if [ -n "$R_MODE_PEND" ] || [ -n "$R_BW_PEND" ]; then
-        rm -f "$(radio_pending_path "$IFACE" mode)" "$(radio_pending_path "$IFACE" bw)"
+        wifi_wpa_run_child rm -f "$(radio_pending_path "$IFACE" mode)" "$(radio_pending_path "$IFACE" bw)"
         if [ -n "$R_BW_DEFAULT" ]; then
             echo "radio.bw reset to default (AP-driven) for $IFACE in $WIFI_INIT_CONF_JSON"
         else
             echo "committed to $WIFI_INIT_CONF_JSON (mode=${R_MODE:-keep} bw=${R_BW:-keep})"
         fi
     fi
-    logger -p local0.info "[$tag:$LINENO] [$IFACE] radio-apply: done (mode=${R_MODE:-keep} bw=${R_BW:-keep})"
+    wifi_wpa_run_child logger -p local0.info "[$tag:$LINENO] [$IFACE] radio-apply: done (mode=${R_MODE:-keep} bw=${R_BW:-keep})"
     echo "radio-apply done for $IFACE (mode=${R_MODE:-keep} bw=${R_BW:-keep})"
     echo "--- link ---"
     # `iw link` 는 moal 에서 연결 중에도 "Not connected." 를 낼 수 있어 표시가 오해를 준다.
-    wpa_cli -i "$IFACE" status 2>/dev/null | grep -E '^(bssid|freq|ssid|wpa_state)='
-    iw dev "$IFACE" station dump 2>/dev/null | head -8
+    wifi_wpa_run_child wpa_cli -i "$IFACE" status 2>/dev/null | wifi_wpa_run_child grep -E '^(bssid|freq|ssid|wpa_state)='
+    wifi_wpa_run_child iw dev "$IFACE" station dump 2>/dev/null | wifi_wpa_run_child head -8
     echo "--- datarate ---"
-    mlanutl "$IFACE" getdatarate 2>/dev/null || true
+    wifi_wpa_run_child mlanutl "$IFACE" getdatarate 2>/dev/null || true
     ;;
   log)
     case "${3:-}" in

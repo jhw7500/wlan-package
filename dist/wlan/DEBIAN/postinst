@@ -80,6 +80,17 @@ disable_services_if_enabled() {
 case "$1" in
 configure)
   echo "postinst configure"
+  # >>> opcd-upgrade-state-capture
+  # dpkg replaces the OPCd ELF and unit before postinst runs. Remember whether an
+  # old daemon was live at configure entry so only that upgrade case is handed
+  # over to the replacement binary later; a previously inactive unit must stay
+  # inactive even if configuration processing enables it.
+  OPCD_WAS_ACTIVE=0
+  if command -v systemctl >/dev/null 2>&1 \
+     && systemctl is-active --quiet opcd.service 2>/dev/null; then
+    OPCD_WAS_ACTIVE=1
+  fi
+  # <<< opcd-upgrade-state-capture
   installer_progress_start
 
   # CRITICAL: Verify binaries and config exist BEFORE making any system changes.
@@ -696,6 +707,31 @@ secure_wpa_conf() {
       /usr/local/scripts/wifi_services.sh start 2>/dev/null || true
     fi
   fi
+
+  # >>> opcd-upgrade-restart
+  # wifi_services.sh deliberately treats an already-active service as a no-op,
+  # so an upgrade would otherwise leave the old OPCd process mapped to the
+  # replaced ELF. Restart only the daemon observed at configure entry and only
+  # after config migration while the final .opc.enabled gate still allows it.
+  # A synchronous try-restart waits for Type=notify READY and inherits the
+  # unit's start/stop timeouts. Its failure must fail package configuration
+  # rather than report a successful install with an old or unready daemon.
+  if [ "$OPCD_WAS_ACTIVE" -eq 1 ] \
+     && systemctl is-enabled --quiet opcd.service 2>/dev/null \
+     && systemctl is-active --quiet opcd.service 2>/dev/null; then
+    systemctl try-restart opcd.service
+    _opcd_restart_rc=$?
+    if [ "$_opcd_restart_rc" -ne 0 ]; then
+      logger -p local0.err "[$tag:$LINENO] [$KEY] failed to restart active opcd.service after upgrade" || true
+      exit "$_opcd_restart_rc"
+    fi
+    if ! systemctl is-active --quiet opcd.service 2>/dev/null; then
+      logger -p local0.err "[$tag:$LINENO] [$KEY] opcd.service is not active after upgrade restart" || true
+      exit 1
+    fi
+    logger -p local0.info "[$tag:$LINENO] [$KEY] restarted active opcd.service with upgraded binary"
+  fi
+  # <<< opcd-upgrade-restart
 
   # 첫 부팅 전에 보드 정보까지 반영된 설정을 정상본으로 선제 저장한다. 업그레이드에서는
   # 기존 정상본과 내용이 같으면 회전하지 않으며, 손상된 active는 commit이 거부한다.
