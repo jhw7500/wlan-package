@@ -206,6 +206,48 @@ DFK 관리 IP와 운영 JSON 기준은
 지침과 충돌. 위 두 opt-in 경로만 두 원칙을 동시에 만족한다. (#91 NTP 결정과 동일 패턴 —
 공식 반영 경로 = 프로비저닝 스크립트.)
 
+#### 공장 초기화용 영구 프로필 (#324)
+
+운용 설정과 공장 초기화 후 돌아갈 설정은 별도로 선택한다. 일반
+`wifi {0|1} br profile <name> apply`는 현재 운용 JSON만 바꾸며 공장 초기화용 선택을
+기록하지 않는다. 초기화용 선택은 `/usr/local/etc/wifi_factory_topology.json`에 보관하고,
+패키지 업그레이드와 공장 초기화 중에도 보존한다.
+
+```bash
+wifi 0 br factory-profile show                 # 현재 초기화용 선택 조회
+wifi 0 br factory-profile peer-route           # 변경 내용 확인; 기록 없음
+wifi 0 br factory-profile peer-route apply     # DFK 초기화용 선택만 기록
+wifi 0 br factory-profile eth0-ip apply        # SEMES 초기화용 선택만 기록
+```
+
+이 명령은 현재 IP·운용 JSON·서비스를 바꾸거나 재부팅하지 않는다. DFK의 현재 운용 설정도
+전환하려면 기존 `wifi 0 br profile peer-route apply`를 별도로 실행한다. 호스트의
+`bd_provision.sh`에는 명시적인 `--factory-topology eth0-ip|peer-route` 옵션을 사용하며,
+`--profile a`(현재 토글 유지)나 `--profile b`(운용 토글 설정)만으로 초기화용 선택을
+추론하지 않는다. 초기화용 옵션도 기존 plan/apply/verify/rollback 단계에서 처리한다.
+초기화용 선택을 포함하는 프로비저닝과 선택 파일의 저장 명령은 같은 잠금을 사용해,
+다른 저장 명령이 적용 또는 rollback 사이에 끼어들어 선택값을 잃지 않게 한다.
+
+선택 파일이 없는 기존 장치는 현행 eth0-ip 초기화를 유지한다. 기존 DFK 장치는 새 패키지의
+명시적 명령으로 peer-route를 등록해야 초기화 뒤에도 DFK 프로필이 유지된다. 설치·업그레이드·
+부팅에서 자동 등록하지 않는다. 손상되거나 권한·소유자가 잘못된 선택 파일은 초기화의 첫
+설정 변경 전에 오류로 중단하며 재부팅하지 않는다.
+
+초기화가 선택한 프로필의 세대를 후조건 검사 뒤 다시 확인한다. 처리 도중 운영자가 선택
+파일을 변경한 경우에는 초기화가 바꾼 설정을 복구하고 재부팅을 막으며, 운영자가 새로
+기록한 선택 파일은 덮어쓰지 않는다.
+
+DFK 초기화도 유선 복구 주소 `eth0=192.168.1.1/24`를 유지한다. 다음 부팅에 mlan0의 관리
+IP를 같은 값의 eth0 `/32`로 추가하고, 기존 peer-route의 rule/table/host route 설정을 함께
+적용한다. WPA와 network의 공통 공장 템플릿은 유지하며 고객사 SSID·암호를 추론하지 않는다.
+
+필수 JSON·network·WPA 파일은 같은 초기화 rollback 범위에 포함한다. commit 또는 필수
+후조건 검사에 실패하면 교체한 파일을 복구하고 재부팅을 막는다. 이는 감지한 정상 오류의
+복구 범위이며, SIGKILL·전원 차단 중 여러 파일의 동시 원자성이나 모든 OS·서비스 변경의
+복구 보장은 아니다. 검증된 commit 이후 임시 rollback 사본을 지우는 정리만 실패했다면
+초기화 성공을 취소하지 않고 남은 사본을 로그에 기록한다. FTP QUOTE의 `rst`는 기존
+재부팅 전용 명령으로 유지한다.
+
 #### `.network` IPv6 비활성(#255)은 기배포 기기에 반영되지 않는다
 
 `20-mlan0.network` / `21-mlan1.network` / `22-eth0.network` 에 들어간 IPv6 자동구성

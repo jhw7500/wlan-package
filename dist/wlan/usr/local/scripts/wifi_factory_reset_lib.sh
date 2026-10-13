@@ -8,8 +8,11 @@
 : "${FACTORY_PRESERVE_SH:=/usr/local/scripts/wifi_conf_preserve.sh}"
 : "${FACTORY_LINK_RESET_SH:=/usr/local/scripts/wifi_link_reset.sh}"
 : "${FACTORY_CAL_BACKUP_SH:=/usr/local/scripts/wifi_cal_backup.sh}"
-: "${FACTORY_CONFIG_BACKUP_SH:=/usr/local/scripts/wifi_config_backup.sh}"
 : "${FACTORY_APPLY_ENABLED_SH:=/usr/local/scripts/wifi_apply_enabled.sh}"
+: "${FACTORY_TOPOLOGY_HELPER:=/usr/local/scripts/wifi_factory_topology.py}"
+: "${FACTORY_TOPOLOGY_FILE:=/usr/local/etc/wifi_factory_topology.json}"
+: "${FACTORY_TOPOLOGY_OWNER_UID:=0}"
+: "${FACTORY_TOPOLOGY_OWNER_GID:=0}"
 : "${FACTORY_INSTALL_CMD:=install}"
 : "${FACTORY_MOVE_CMD:=mv}"
 : "${FACTORY_SYNC_CMD:=sync}"
@@ -23,11 +26,119 @@ FACTORY_REQUIRED_UNITS=(
     wifi_init.service
 )
 FACTORY_OPTIONAL_UNITS=()
+FACTORY_TRANSACTION_ACTIVE=0
+FACTORY_TRANSACTION_RECORDS=()
+FACTORY_TRANSACTION_ENTRIES=()
+FACTORY_TRANSACTION_CLEANUP_DEBT=()
 
 factory_log() {
     local priority="$1"
     shift
     "$FACTORY_LOGGER" -p "$priority" "[wifi_factory_reset:$LINENO] $*" 2>/dev/null || true
+}
+
+factory_read_topology() {
+    local topology
+
+    [ -x "$FACTORY_TOPOLOGY_HELPER" ] || {
+        factory_log local0.emerg "factory topology helper unavailable: $FACTORY_TOPOLOGY_HELPER"
+        return 1
+    }
+    topology=$("$FACTORY_TOPOLOGY_HELPER" read \
+        --path "$FACTORY_TOPOLOGY_FILE" \
+        --owner-uid "$FACTORY_TOPOLOGY_OWNER_UID" \
+        --owner-gid "$FACTORY_TOPOLOGY_OWNER_GID") || {
+        factory_log local0.emerg "factory topology selector invalid or unsafe: $FACTORY_TOPOLOGY_FILE"
+        return 1
+    }
+    case "$topology" in
+        eth0-ip|peer-route) printf '%s\n' "$topology" ;;
+        *)
+            factory_log local0.emerg "factory topology helper returned invalid profile: $topology"
+            return 1
+            ;;
+    esac
+}
+
+factory_snapshot_topology() {
+    local snapshot normalized
+
+    [ -x "$FACTORY_TOPOLOGY_HELPER" ] || {
+        factory_log local0.emerg "factory topology helper unavailable: $FACTORY_TOPOLOGY_HELPER"
+        return 1
+    }
+    snapshot=$("$FACTORY_TOPOLOGY_HELPER" snapshot \
+        --path "$FACTORY_TOPOLOGY_FILE" \
+        --owner-uid "$FACTORY_TOPOLOGY_OWNER_UID" \
+        --owner-gid "$FACTORY_TOPOLOGY_OWNER_GID") || {
+        factory_log local0.emerg "factory topology snapshot failed: $FACTORY_TOPOLOGY_FILE"
+        return 1
+    }
+    normalized=$(jq -ce '
+        if type == "object"
+           and (keys | sort) == ["generation", "topology"]
+           and (.topology | type) == "string"
+           and (.generation | type) == "string"
+           and (.generation == "absent"
+                or (.generation | test("^v1-[0-9a-f]{64}$")))
+        then {topology: .topology, generation: .generation}
+        else error("invalid factory topology snapshot")
+        end
+    ' <<< "$snapshot" 2>/dev/null) || {
+        factory_log local0.emerg "factory topology helper returned invalid snapshot"
+        return 1
+    }
+    case "$(jq -r '.topology' <<< "$normalized")" in
+        eth0-ip|peer-route) printf '%s\n' "$normalized" ;;
+        *)
+            factory_log local0.emerg "factory topology snapshot has invalid profile"
+            return 1
+            ;;
+    esac
+}
+
+factory_topology_snapshot_matches() {
+    local expected="$1" current
+
+    current=$(factory_snapshot_topology) || return 1
+    if [ "$current" != "$expected" ]; then
+        factory_log local0.emerg "factory topology selector changed during reset"
+        return 1
+    fi
+}
+
+_factory_apply_topology_profile() {
+    local staged="$1" topology="$2" candidate
+
+    case "$topology" in
+        eth0-ip|peer-route) ;;
+        *) return 1 ;;
+    esac
+    candidate="${staged}.topology"
+    rm -f -- "$candidate"
+    if ! jq --arg topology "$topology" '
+        if $topology == "eth0-ip" then
+            .wbridge.peer_route.enabled = false
+            | .wbridge.ip_discovery = false
+            | .wbridge.arp_ignore_always.enabled = true
+            | .wbridge.moal.local_hairpin = ""
+            | .wbridge.eth_fallback.enabled = false
+        else
+            .wbridge.peer_route.enabled = true
+            | .wbridge.ip_discovery = true
+            | .wbridge.arp_ignore_always.enabled = false
+            | .wbridge.moal.local_hairpin = ""
+            | .wbridge.eth_fallback.enabled = false
+        end
+    ' "$staged" > "$candidate"; then
+        rm -f -- "$candidate"
+        return 1
+    fi
+    _factory_install_0644 "$candidate" "$staged" || {
+        rm -f -- "$candidate"
+        return 1
+    }
+    rm -f -- "$candidate"
 }
 
 _factory_template_valid() {
@@ -89,7 +200,7 @@ _factory_normalize_required_dir() {
 
 _factory_sync_required_path() {
     local path="$1"
-    "$FACTORY_SYNC_CMD" "$path" 2>/dev/null || "$FACTORY_SYNC_CMD"
+    "$FACTORY_SYNC_CMD" "$path" 2>/dev/null
 }
 
 _factory_verify_required_file() {
@@ -221,43 +332,100 @@ _factory_stage_required_file() {
     _factory_sync_required_path "$staged"
 }
 
+_factory_restore_required_payload() {
+    local dst="$1" backup="$2" original_mode="$3" original_uid="$4" original_gid="$5"
+    local original_type="$6" dst_dir base restore
+
+    dst_dir=$(dirname -- "$dst")
+    if [ -z "$backup" ]; then
+        rm -f -- "$dst" || return 1
+        _factory_sync_required_path "$dst_dir"
+        return
+    fi
+    [ -f "$backup" ] || [ -L "$backup" ] || return 1
+    base=$(basename -- "$dst")
+    restore=$(mktemp "$dst_dir/.${base}.factory-restore.XXXXXX") || return 1
+    if [ "$original_type" = link ]; then
+        rm -f -- "$restore" || return 1
+        if ! cp -a -- "$backup" "$restore"; then
+            rm -f -- "$restore"
+            return 1
+        fi
+        _factory_sync_required_path "$dst_dir" || {
+            rm -f -- "$restore"
+            return 1
+        }
+    elif [ "$original_type" = file ]; then
+        if ! "$FACTORY_INSTALL_CMD" -m "$original_mode" -- "$backup" "$restore" \
+           || ! chown "$original_uid:$original_gid" "$restore" \
+           || ! chmod "$original_mode" "$restore" \
+           || ! _factory_sync_required_path "$restore"; then
+            rm -f -- "$restore"
+            return 1
+        fi
+    else
+        rm -f -- "$restore"
+        return 1
+    fi
+    if ! "$FACTORY_MOVE_CMD" -fT -- "$restore" "$dst"; then
+        rm -f -- "$restore"
+        return 1
+    fi
+    if [ "$original_type" = file ]; then
+        _factory_sync_required_path "$dst" || return 1
+    fi
+    _factory_sync_required_path "$dst_dir"
+}
+
+_factory_cleanup_transaction_backups() {
+    local entry dst backup debt
+    local -a cleanup_entries=("$@")
+
+    FACTORY_TRANSACTION_CLEANUP_DEBT=()
+    for entry in "${cleanup_entries[@]}"; do
+        IFS='|' read -r dst backup _ _ _ _ <<< "$entry"
+        [ -n "$backup" ] || continue
+        if [ -e "$backup" ] || [ -L "$backup" ]; then
+            if ! rm -f -- "$backup"; then
+                debt="backup:$backup"
+                FACTORY_TRANSACTION_CLEANUP_DEBT+=("$debt")
+                factory_log local0.warn "factory transaction cleanup debt retained: $backup"
+                continue
+            fi
+        fi
+        if ! _factory_sync_required_path "$(dirname -- "$dst")"; then
+            debt="directory-sync:$(dirname -- "$dst")"
+            FACTORY_TRANSACTION_CLEANUP_DEBT+=("$debt")
+            factory_log local0.warn "factory transaction cleanup directory sync debt: $(dirname -- "$dst")"
+        fi
+    done
+}
+
 _factory_rollback_required_payloads() {
-    local entry dst backup original_mode original_uid original_gid original_type dst_dir failed=0 i
+    local entry dst backup original_mode original_uid original_gid original_type failed=0 i
     local -a rollback_entries=("$@")
 
     for ((i=${#rollback_entries[@]} - 1; i >= 0; i--)); do
         IFS='|' read -r dst backup original_mode original_uid original_gid original_type \
             <<< "${rollback_entries[$i]}"
-        dst_dir=$(dirname -- "$dst")
-        if [ -n "$backup" ]; then
-            if ! "$FACTORY_MOVE_CMD" -fT -- "$backup" "$dst"; then
-                factory_log local0.emerg "required payload rollback restore failed: $backup -> $dst"
-                failed=1
-                continue
-            fi
-            if [ "$original_type" = file ]; then
-                chown "$original_uid:$original_gid" "$dst" || failed=1
-                chmod "$original_mode" "$dst" || failed=1
-                _factory_sync_required_path "$dst" || failed=1
-            fi
-        elif ! rm -f -- "$dst"; then
-            factory_log local0.emerg "required payload rollback remove failed: $dst"
+        if ! _factory_restore_required_payload "$dst" "$backup" "$original_mode" \
+            "$original_uid" "$original_gid" "$original_type"; then
+            factory_log local0.emerg "required payload rollback restore failed: $backup -> $dst"
             failed=1
-            continue
         fi
-        _factory_sync_required_path "$dst_dir" || {
-            factory_log local0.emerg "required payload rollback directory sync failed: $dst_dir"
-            failed=1
-        }
     done
     [ "$failed" -eq 0 ]
 }
 
-factory_install_required_payloads() {
+factory_begin_required_payloads() {
     local record src dst mode extra dst_dir base staged backup entry failed=0
     local original_mode original_uid original_gid original_type
-    local -a staged_entries=() committed_entries=()
+    local -a staged_entries=()
 
+    [ "$FACTORY_TRANSACTION_ACTIVE" -eq 0 ] || {
+        factory_log local0.emerg "required payload transaction already active"
+        return 1
+    }
     factory_preflight_required_payloads "$@" || return 1
 
     # 전체 manifest를 먼저 준비한다. stage 하나라도 실패하면 destination은 하나도
@@ -285,6 +453,13 @@ factory_install_required_payloads() {
         done
         return 1
     fi
+
+    # 첫 destination rename 전에 복구 상태를 공개한다. EXIT cleanup은 commit loop 어느
+    # 지점에서 중단돼도 이미 등록된 항목을 복원할 수 있다.
+    FACTORY_TRANSACTION_RECORDS=("$@")
+    FACTORY_TRANSACTION_ENTRIES=()
+    FACTORY_TRANSACTION_CLEANUP_DEBT=()
+    FACTORY_TRANSACTION_ACTIVE=1
 
     # 기존 destination은 같은 디렉터리에 권한을 제한한 rollback copy로 보존한다.
     # active는 staged rename 시점까지 존재하므로 power-loss에도 missing-file window가 없다.
@@ -324,9 +499,12 @@ factory_install_required_payloads() {
                 fi
             fi
         fi
-        if [ "$failed" -eq 0 ] && "$FACTORY_MOVE_CMD" -fT -- "$staged" "$dst"; then
-            committed_entries+=("$dst|$backup|$original_mode|$original_uid|$original_gid|$original_type")
-        else
+        if [ "$failed" -eq 0 ]; then
+            FACTORY_TRANSACTION_ENTRIES+=(
+                "$dst|$backup|$original_mode|$original_uid|$original_gid|$original_type"
+            )
+        fi
+        if [ "$failed" -ne 0 ] || ! "$FACTORY_MOVE_CMD" -fT -- "$staged" "$dst"; then
             factory_log local0.emerg "required payload commit failed: $src -> $dst"
             failed=1
             break
@@ -334,8 +512,11 @@ factory_install_required_payloads() {
     done
 
     if [ "$failed" -ne 0 ]; then
-        _factory_rollback_required_payloads "${committed_entries[@]}" || true
-        if [ -n "$backup" ] && ! rm -f -- "$backup"; then
+        if ! factory_rollback_required_payloads; then
+            factory_log local0.emerg "CRITICAL: required payload rollback failed during publish"
+        elif [ -n "$backup" ] && [ "$FACTORY_TRANSACTION_ACTIVE" -eq 0 ] \
+             && { [ -e "$backup" ] || [ -L "$backup" ]; } \
+             && ! rm -f -- "$backup"; then
             factory_log local0.emerg "required payload rollback cleanup failed: $backup"
         fi
         for entry in "${staged_entries[@]}"; do
@@ -345,7 +526,7 @@ factory_install_required_payloads() {
         return 1
     fi
 
-    for entry in "${committed_entries[@]}"; do
+    for entry in "${FACTORY_TRANSACTION_ENTRIES[@]}"; do
         IFS='|' read -r dst backup _ _ _ _ <<< "$entry"
         dst_dir=$(dirname -- "$dst")
         _factory_sync_required_path "$dst" || failed=1
@@ -353,18 +534,56 @@ factory_install_required_payloads() {
     done
     factory_verify_required_payloads "$@" || failed=1
     if [ "$failed" -ne 0 ]; then
-        _factory_rollback_required_payloads "${committed_entries[@]}" || true
+        if ! factory_rollback_required_payloads; then
+            factory_log local0.emerg "CRITICAL: required payload rollback failed after post-commit verification"
+        fi
         return 1
     fi
+}
 
-    for entry in "${committed_entries[@]}"; do
-        IFS='|' read -r dst backup _ _ _ _ <<< "$entry"
-        if [ -n "$backup" ] && ! rm -f -- "$backup"; then
-            factory_log local0.emerg "required payload rollback cleanup failed: $backup"
-            return 1
-        fi
-        _factory_sync_required_path "$(dirname -- "$dst")" || return 1
-    done
+factory_rollback_required_payloads() {
+    local -a restored_entries
+
+    [ "$FACTORY_TRANSACTION_ACTIVE" -eq 1 ] || {
+        factory_log local0.emerg "no required payload transaction to roll back"
+        return 1
+    }
+    if ! _factory_rollback_required_payloads "${FACTORY_TRANSACTION_ENTRIES[@]}"; then
+        factory_log local0.emerg "required payload transaction rollback incomplete"
+        return 1
+    fi
+    restored_entries=("${FACTORY_TRANSACTION_ENTRIES[@]}")
+    FACTORY_TRANSACTION_RECORDS=()
+    FACTORY_TRANSACTION_ENTRIES=()
+    FACTORY_TRANSACTION_ACTIVE=0
+    _factory_cleanup_transaction_backups "${restored_entries[@]}"
+}
+
+factory_commit_required_payloads() {
+    local expected_topology_snapshot="${1:-}"
+    local -a committed_entries
+
+    [ "$FACTORY_TRANSACTION_ACTIVE" -eq 1 ] || {
+        factory_log local0.emerg "no required payload transaction to commit"
+        return 1
+    }
+    factory_verify_required_payloads "${FACTORY_TRANSACTION_RECORDS[@]}" || return 1
+    if [ -n "$expected_topology_snapshot" ] \
+       && ! factory_topology_snapshot_matches "$expected_topology_snapshot"; then
+        return 1
+    fi
+    # 후조건을 통과한 시점이 transaction의 선형화 지점이다. 이후 private rollback
+    # backup 정리는 best-effort이며 실패해도 검증된 factory 상태를 다시 뒤집지 않는다.
+    committed_entries=("${FACTORY_TRANSACTION_ENTRIES[@]}")
+    FACTORY_TRANSACTION_RECORDS=()
+    FACTORY_TRANSACTION_ENTRIES=()
+    FACTORY_TRANSACTION_ACTIVE=0
+    _factory_cleanup_transaction_backups "${committed_entries[@]}"
+}
+
+factory_install_required_payloads() {
+    factory_begin_required_payloads "$@" || return 1
+    factory_commit_required_payloads
 }
 
 factory_verify_required_payloads() {
@@ -398,7 +617,8 @@ factory_preflight() {
 
     for helper in "$FACTORY_BOARD_CONFIG_SH" "$FACTORY_LINK_RESET_SH" \
                   "$FACTORY_CAL_BACKUP_SH" \
-                  "$FACTORY_CONFIG_BACKUP_SH" "$FACTORY_APPLY_ENABLED_SH"; do
+                  "$FACTORY_APPLY_ENABLED_SH" \
+                  "$FACTORY_TOPOLOGY_HELPER"; do
         [ -x "$helper" ] || {
             factory_log local0.emerg "required helper missing or not executable: $helper"
             return 1
@@ -429,7 +649,7 @@ factory_preflight() {
 }
 
 factory_stage_config() {
-    local template="$1" staged="$2" snapshot="${3:-}" candidate
+    local template="$1" staged="$2" snapshot="${3:-}" topology="${4:-eth0-ip}" candidate
 
     rm -f -- "$staged" "${staged}.preserve"
     _factory_install_0644 "$template" "$staged" || return 1
@@ -456,6 +676,12 @@ factory_stage_config() {
             rm -f -- "$candidate"
             factory_log local0.warn "preserved values not applied; using template+board stage"
         fi
+    fi
+
+    if ! _factory_apply_topology_profile "$staged" "$topology"; then
+        factory_log local0.emerg "factory topology profile rejected: $topology"
+        rm -f -- "$staged"
+        return 1
     fi
 
     chmod 0644 "$staged" || return 1

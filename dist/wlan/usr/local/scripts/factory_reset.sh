@@ -6,7 +6,8 @@ FACTORY_RESET_LIB="/usr/local/scripts/wifi_factory_reset_lib.sh"
 FACTORY_STAGED_CONFIG="/usr/local/etc/.wifi_init_conf.factory.$$"
 PRESERVE_SNAPSHOT=""
 critical_failures=0
-config_committed=0
+FACTORY_TOPOLOGY=""
+FACTORY_TOPOLOGY_SNAPSHOT=""
 
 # === 헬퍼 함수 (LED/print/cp 호출 전에 정의) ===
 
@@ -62,6 +63,29 @@ fi
 # shellcheck source=./wifi_factory_reset_lib.sh
 . "$FACTORY_RESET_LIB"
 
+factory_reset_cleanup() {
+    local status="$1"
+    trap - EXIT
+    if [ "$FACTORY_TRANSACTION_ACTIVE" -eq 1 ]; then
+        status=1
+        if ! factory_rollback_required_payloads; then
+            logger -p local0.emerg "[$tag:$LINENO] CRITICAL: interrupted factory transaction rollback incomplete"
+        fi
+    fi
+    rm -f -- "$FACTORY_STAGED_CONFIG" "$PRESERVE_SNAPSHOT"
+    exit "$status"
+}
+
+# selector는 payload preflight가 destination 디렉터리를 정규화하기 전에 한 번 snapshot한다.
+# 손상·권한 오류·symlink는 어떤 active 파일이나 서비스도 바꾸기 전에 reset을 중단한다.
+if ! FACTORY_TOPOLOGY_SNAPSHOT=$(factory_snapshot_topology) \
+   || ! FACTORY_TOPOLOGY=$(jq -er '.topology' <<< "$FACTORY_TOPOLOGY_SNAPSHOT"); then
+    logger -p local0.emerg "[$tag:$LINENO] factory topology selection failed; active state unchanged"
+    safe_print red "[factory] topology selection failed; reset aborted"
+    factory_reset_led_error
+    exit 1
+fi
+
 # Factory Reset 성공의 필수 복구 계약. wifi_init의 self-healing 대상은 active와 .bak을
 # 같은 factory source로 함께 재시드해 reset 이전 SSID/IP/FW 설정이 부활하지 않게 한다.
 # 그 밖의 OS 편의 설정과 .link는 아래 best-effort 복사 후 wifi_link_reset의 MAC 후조건으로
@@ -103,7 +127,8 @@ if [ -x /usr/local/scripts/wifi_conf_preserve.sh ]; then
     fi
 fi
 
-if ! factory_stage_config "$WIFI_INIT_CONF_TEMPLATE" "$FACTORY_STAGED_CONFIG" "$PRESERVE_SNAPSHOT"; then
+if ! factory_stage_config "$WIFI_INIT_CONF_TEMPLATE" "$FACTORY_STAGED_CONFIG" \
+    "$PRESERVE_SNAPSHOT" "$FACTORY_TOPOLOGY"; then
     rm -f -- "$FACTORY_STAGED_CONFIG" "$PRESERVE_SNAPSHOT"
     logger -p local0.emerg "[$tag:$LINENO] factory config staging failed; active state unchanged"
     safe_print red "[factory] config staging failed; reset aborted"
@@ -112,11 +137,19 @@ if ! factory_stage_config "$WIFI_INIT_CONF_TEMPLATE" "$FACTORY_STAGED_CONFIG" "$
 fi
 rm -f -- "$PRESERVE_SNAPSHOT"
 PRESERVE_SNAPSHOT=""
-trap 'rm -f -- "$FACTORY_STAGED_CONFIG" "$PRESERVE_SNAPSHOT"' EXIT
+trap 'factory_reset_cleanup $?' EXIT
 
-# 필수 payload는 다른 reset 변경보다 먼저 같은 디렉터리의 temp에 검증한 뒤 rename한다.
-# 하나라도 실패하면 기존 destination을 보존하고 서비스/JSON 변경 및 reboot 전에 중단한다.
-if ! factory_install_required_payloads "${FACTORY_REQUIRED_PAYLOADS[@]}"; then
+# JSON active/정상본 세대와 필수 network/WPA/FW payload를 하나의 rollback 단위로 묶는다.
+# rollback copy는 서비스·링크·파일 후조건이 모두 끝날 때까지 유지한다.
+# 이 트랜잭션 밖의 systemd enable/mask, calibration helper, 로그 정리는 원복하지 않는다.
+# 그런 후속 단계가 실패하면 파일은 복원하고 reboot을 막아 수동 진단 상태로 남긴다.
+FACTORY_TRANSACTION_PAYLOADS=(
+    "${FACTORY_REQUIRED_PAYLOADS[@]}"
+    "$FACTORY_STAGED_CONFIG|$WIFI_INIT_CONF_JSON|0644"
+    "$FACTORY_STAGED_CONFIG|${WIFI_INIT_CONF_JSON}.bak|0644"
+    "$FACTORY_STAGED_CONFIG|${WIFI_INIT_CONF_JSON}.bak.1|0644"
+)
+if ! factory_begin_required_payloads "${FACTORY_TRANSACTION_PAYLOADS[@]}"; then
     logger -p local0.emerg "[$tag:$LINENO] required factory payload restore failed; reset aborted"
     safe_print red "[factory] required payload restore failed; reset aborted"
     factory_reset_led_error
@@ -281,29 +314,8 @@ esac
       critical_failures=$((critical_failures + 1))
       logger -p local0.err "[$tag:$LINENO] missing wifi_link_reset.sh; stale .link MAC not cleaned"
   fi
-  # 검증을 끝낸 stage만 같은 파일시스템의 temp+rename으로 active에 승격한다.
-  # link reset 실패가 있어도 active는 valid factory config로 남기되, 아래 gate가 reboot을 막는다.
-  if ! factory_commit_config "$FACTORY_STAGED_CONFIG" "$WIFI_INIT_CONF_JSON"; then
-      critical_failures=$((critical_failures + 1))
-      logger -p local0.emerg "[$tag:$LINENO] atomic factory config commit failed"
-  else
-      config_committed=1
-  fi
-  rm -f -- "$FACTORY_STAGED_CONFIG"
-
-  # 공장 초기화 전 운영 설정이 다음 부팅의 복구 후보로 남지 않게 JSON 정상본 세대도
-  # 초기화된 active로 교체한다. 실패하더라도 예전 정상본은 직접 제거해 부활을 막는다.
-  if [ "$config_committed" -eq 1 ]; then
-      if ! /usr/local/scripts/wifi_config_backup.sh reset; then
-          if rm -f -- "${WIFI_INIT_CONF_JSON}.bak" "${WIFI_INIT_CONF_JSON}.bak.1" \
-             && { sync "$(dirname "$WIFI_INIT_CONF_JSON")" 2>/dev/null || sync; }; then
-              logger -p local0.emerg "[$tag:$LINENO] JSON backup reset failed; stale generations removed (no recovery seed)"
-          else
-              critical_failures=$((critical_failures + 1))
-              logger -p local0.emerg "[$tag:$LINENO] JSON backup reset and stale-generation cleanup both failed"
-          fi
-      fi
-  fi
+  # JSON은 위 트랜잭션에서 이미 active와 .bak 두 세대에 같은 factory stage로 승격됐다.
+  # 아래 교정 작업과 후조건이 실패하면 필수 payload와 함께 이전 세대로 복원한다.
   if [ -x "$FACTORY_CAL_BACKUP_SH" ]; then
       if ! "$FACTORY_CAL_BACKUP_SH" reset; then
           critical_failures=$((critical_failures + 1))
@@ -314,20 +326,18 @@ esac
       logger -p local0.emerg "[$tag:$LINENO] missing wifi_cal_backup.sh; cannot protect selected production calibration"
   fi
 
-  if ! factory_verify_required_payloads "${FACTORY_REQUIRED_PAYLOADS[@]}"; then
+  if ! factory_verify_required_payloads "${FACTORY_TRANSACTION_PAYLOADS[@]}"; then
       critical_failures=$((critical_failures + 1))
       logger -p local0.emerg "[$tag:$LINENO] required factory payload postcondition failed"
   fi
 
-  if [ "$config_committed" -eq 1 ]; then
-      if ! factory_restore_service_state "$WIFI_INIT_CONF_JSON"; then
-          critical_failures=$((critical_failures + 1))
-          logger -p local0.emerg "[$tag:$LINENO] factory service state restore failed"
-      fi
-      if ! factory_verify_postconditions "$WIFI_INIT_CONF_JSON"; then
-          critical_failures=$((critical_failures + 1))
-          logger -p local0.emerg "[$tag:$LINENO] factory reset postcondition verification failed"
-      fi
+  if ! factory_restore_service_state "$WIFI_INIT_CONF_JSON"; then
+      critical_failures=$((critical_failures + 1))
+      logger -p local0.emerg "[$tag:$LINENO] factory service state restore failed"
+  fi
+  if ! factory_verify_postconditions "$WIFI_INIT_CONF_JSON"; then
+      critical_failures=$((critical_failures + 1))
+      logger -p local0.emerg "[$tag:$LINENO] factory reset postcondition verification failed"
   fi
 
 #find /var/log/cantops -mindepth 1 -maxdepth 1 ! -name journald -exec rm -rf {} +
@@ -361,12 +371,26 @@ END
 rm -rf /var/log/cantops/* 2>/dev/null \
     || logger -p local0.warn "[$tag:$LINENO] log cleanup failed: /var/log/cantops/*"
 
+if [ "$critical_failures" -eq 0 ]; then
+    if ! factory_commit_required_payloads "$FACTORY_TOPOLOGY_SNAPSHOT"; then
+        critical_failures=$((critical_failures + 1))
+        logger -p local0.emerg "[$tag:$LINENO] factory transaction finalization failed"
+    fi
+fi
+
 if [ "$critical_failures" -ne 0 ]; then
+    if [ "$FACTORY_TRANSACTION_ACTIVE" -eq 1 ] \
+       && ! factory_rollback_required_payloads; then
+        critical_failures=$((critical_failures + 1))
+        logger -p local0.emerg "[$tag:$LINENO] CRITICAL: factory topology rollback incomplete"
+    fi
+    rm -f -- "$FACTORY_STAGED_CONFIG"
     logger -p local0.emerg "[$tag:$LINENO] factory reset incomplete: critical_failures=$critical_failures; reboot inhibited"
     safe_print red "[factory] reset incomplete; reboot inhibited (see syslog)"
     factory_reset_led_error
     exit 1
 fi
+rm -f -- "$FACTORY_STAGED_CONFIG"
 
 # 필수 검증이 모두 통과한 뒤에만 세 LED를 점등한다.
 safe_sysfs_write none /sys/class/leds/status/trigger

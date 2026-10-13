@@ -179,6 +179,25 @@ run_source
             result.stdout,
         )
 
+    def test_source_runs_factory_provision_with_packaged_helper(self):
+        """CI must exercise provisioning with this checkout's actual selector helper."""
+        probe = r'''
+source "$1"
+python3() { :; }
+bash() { printf '__SHELL__ %s helper=%s\n' "$1" "${PROVISION_TEST_TOPOLOGY_HELPER:-}"; }
+find() { :; }
+run_source
+'''
+        result = subprocess.run(
+            ["bash", "-c", probe, "gate-probe", str(GATE)],
+            cwd=REPO, capture_output=True, text=True, check=True,
+        )
+        self.assertIn(
+            "__SHELL__ wlan-opc/scripts/provision/test_bd_provision_factory_topology.sh "
+            f"helper={REPO}/dist/wlan/usr/local/scripts/wifi_factory_topology.py",
+            result.stdout,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
