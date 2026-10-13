@@ -8,29 +8,92 @@ SOURCE=""
 IFACE=""
 REASON=""
 FORCE=0
+EXECUTOR=0
+
+# Internal entry point for the independent systemd executor. The whole policy
+# (including MFG, uptime/count gates and the lock) runs there exactly once.
+if [ "${1:-}" = "--executor" ]; then
+  EXECUTOR=1
+  shift
+fi
 
 usage() {
   echo "Usage: $tag --reason <text> [--source <name>] [--iface <iface>] [--force]" >&2
 }
 
+run_bounded_io() {
+  local seconds="$1"
+  shift
+  if ! command -v timeout >/dev/null 2>&1; then
+    return 125
+  fi
+  # These best-effort I/O helpers must end as a group at the deadline. A
+  # TERM-first wrapper can exit before -k sends KILL, leaving resistant
+  # grandchildren alive. Keep timeout's separate group and kill it directly.
+  timeout -s KILL "$seconds" "$@"
+}
+
+io_warning() {
+  # A failed diagnostic sink must not cancel the recovery or change a refusal
+  # code. The fallback can also block (for example, on a full journal pipe).
+  # Save the original sink on fd 3 before suppressing timeout's diagnostics.
+  {
+    run_bounded_io 1 /bin/bash -c 'printf "%s: %s\n" "$1" "$2" >&3' \
+      _ "$tag" "$*"
+  } 3>&2 2>/dev/null || true
+}
+
 log_kmsg() {
   local msg="$1"
   if [ -w /dev/kmsg ]; then
-    echo "wlan-policy: $msg" > /dev/kmsg
+    run_bounded_io 1 /bin/bash -c 'printf "wlan-policy: %s\n" "$1" > /dev/kmsg' \
+      _ "$msg" 2>/dev/null || io_warning "kernel log write failed/timed out: $msg"
   fi
+  return 0
 }
 
 log_syslog() {
   local msg="$1"
   if command -v logger >/dev/null 2>&1; then
-    logger -p local0.warning "[$tag:$LINENO] $msg"
+    run_bounded_io 1 logger -p local0.warning "[$tag:$LINENO] $msg" \
+      2>/dev/null || io_warning "syslog write failed/timed out: $msg"
   fi
+  return 0
 }
 
 log_all() {
   local msg="$1"
-  log_syslog "$msg"
-  log_kmsg "$msg"
+  log_syslog "$msg" || true
+  log_kmsg "$msg" || true
+}
+
+systemd_is_running() {
+  [ -d /run/systemd/system ]
+}
+
+handoff_to_systemd() {
+  local script
+  script=$(readlink -f "${BASH_SOURCE[0]}")
+  local -a args=(--executor --source "$SOURCE" --reason "$REASON")
+  [ -z "$IFACE" ] || args+=(--iface "$IFACE")
+  [ "$FORCE" -ne 1 ] || args+=(--force)
+
+  # wifi_checker/fw_watch/emergency units stop at shutdown and kill their
+  # entire cgroup. A background child or nohup cannot survive that stop.
+  # This separate transient service deliberately has no shutdown conflict.
+  # --wait preserves refusal/failure status while the caller is still alive;
+  # its death does not terminate the independently managed executor.
+  # A launch failure must not run the reboot inside the caller's cgroup.
+  exec systemd-run --quiet --wait --collect --service-type=exec \
+    --unit="wlan-reboot-policy-$$.service" \
+    --property=DefaultDependencies=no --property=TimeoutStopSec=5s \
+    --expand-environment=no \
+    --setenv="MIN_UPTIME_SEC=$MIN_UPTIME_SEC" \
+    --setenv="REBOOT_COOLDOWN_SEC=$REBOOT_COOLDOWN_SEC" \
+    --setenv="MAX_REBOOT_COUNT=$MAX_REBOOT_COUNT" \
+    --setenv="STATE_DIR=$STATE_DIR" --setenv="RUN_DIR=$RUN_DIR" \
+    --setenv="RESET_CAUSE_PATH=$RESET_CAUSE_PATH" \
+    -- /bin/bash "$script" "${args[@]}"
 }
 
 do_reboot() {
@@ -39,8 +102,6 @@ do_reboot() {
   # sysrq-trigger 를 사용하여 kernel emergency_restart() 경로로 직접 reset.
   # (emergency_restart 는 device_shutdown() 을 건너뛰므로 moal 등 드라이버가
   #  D state 락을 잡고 있어도 HW reset 이 즉시 수행된다.)
-  sync
-
   # 1차: graceful reboot (systemd shutdown.target → unit stop → reboot(2))
   if [ -x /sbin/reboot ]; then
     /sbin/reboot 2>/dev/null &
@@ -137,6 +198,10 @@ if [ -z "$REASON" ]; then
   exit 2
 fi
 
+if [ "$EXECUTOR" -ne 1 ] && systemd_is_running; then
+  handoff_to_systemd
+fi
+
 if [[ "$REASON" == *overtemp* ]] || [[ "$SOURCE" == "wifi_logger_temp" ]]; then
   MIN_UPTIME_SEC=0
 fi
@@ -148,21 +213,51 @@ fi
 # mfg 성공 종료로 제거된 뒤에는 실제 드라이버 로드 실패에서만 발생하며, FW wedge
 # ('get fw info failed' 류)는 재부팅(카드 파워사이클)이 유일한 자동 복구다.
 # 남용은 아래 uptime/count 게이트가 계속 바운드한다.
-_mod_para="cts/wifi_mod_para.conf"
-if command -v jq >/dev/null 2>&1 && [ -f /usr/local/etc/wifi_init_conf.json ]; then
-  _mod_para=$(jq -r '.global.MOD_PARA // "cts/wifi_mod_para.conf"' /usr/local/etc/wifi_init_conf.json 2>/dev/null) || _mod_para="cts/wifi_mod_para.conf"
-  [ -n "$_mod_para" ] || _mod_para="cts/wifi_mod_para.conf"
-fi
-_mfg_mode=$(grep -m1 '^[[:space:]]*mfg_mode=' "/lib/firmware/$_mod_para" 2>/dev/null | sed 's/.*mfg_mode=//' | tr -d ' ' || echo "0")
-if [ "$FORCE" -ne 1 ] && [ "${_mfg_mode:-0}" = "1" ] \
-   && [[ "$REASON" != *overtemp* ]] && [ "$SOURCE" != "wifi_logger_temp" ] \
+if [ "$FORCE" -ne 1 ] && [[ "$REASON" != *overtemp* ]] && [ "$SOURCE" != "wifi_logger_temp" ] \
    && [ "$SOURCE" != "wifi_init" ]; then
-  log_all "refuse: mfg_mode=1 (MFG profile) (source=${SOURCE:-n/a} iface=${IFACE:-n/a} reason=$REASON)"
-  exit 12
+  # Existing safety exceptions do not need this persistent-storage probe.
+  # Other callers must not interpret a stalled/invalid guard as normal mode.
+  if _mfg_mode=$(run_bounded_io 1 /bin/bash -c '
+    set -o pipefail
+    mod_para="cts/wifi_mod_para.conf"
+    if command -v jq >/dev/null 2>&1 && [ -f /usr/local/etc/wifi_init_conf.json ]; then
+      mod_para=$(jq -r '\''.global.MOD_PARA // "cts/wifi_mod_para.conf"'\'' /usr/local/etc/wifi_init_conf.json) || exit 65
+      [ -n "$mod_para" ] || mod_para="cts/wifi_mod_para.conf"
+    fi
+    if [ ! -f "/lib/firmware/$mod_para" ]; then
+      printf "0\n"
+      exit 0
+    fi
+    if mode=$(grep -m1 '\''^[[:space:]]*mfg_mode='\'' "/lib/firmware/$mod_para" | sed '\''s/.*mfg_mode=//'\'' | tr -d " "); then
+      :
+    else
+      status=$?
+      [ "$status" -eq 1 ] || exit 65
+      mode=0
+    fi
+    case "${mode:-0}" in
+      0|1) printf "%s\n" "${mode:-0}" ;;
+      *) exit 65 ;;
+    esac
+  ' 2>/dev/null); then
+    if [ "$_mfg_mode" = "1" ]; then
+      log_all "refuse: mfg_mode=1 (MFG profile) (source=${SOURCE:-n/a} iface=${IFACE:-n/a} reason=$REASON)"
+      exit 12
+    fi
+  else
+    log_all "refuse: MFG mode unavailable/invalid (source=${SOURCE:-n/a} iface=${IFACE:-n/a} reason=$REASON)"
+    exit 13
+  fi
 fi
 
 mkdir -p "$RUN_DIR" 2>/dev/null || true
-mkdir -p "$STATE_DIR" 2>/dev/null || true
+if ! run_bounded_io 1 mkdir -p -- "$STATE_DIR" 2>/dev/null; then
+  io_warning "reboot budget directory unavailable: $STATE_DIR"
+  if [ "$FORCE" -ne 1 ]; then
+    log_all "refuse: reboot budget directory unavailable (source=${SOURCE:-n/a} reason=$REASON)"
+    exit 14
+  fi
+fi
 
 lockdir="$RUN_DIR/reboot.lockdir"
 if ! mkdir "$lockdir" 2>/dev/null; then
@@ -179,10 +274,26 @@ state_file="$STATE_DIR/reboot_policy_${state_suffix}.state"
 
 last_ts=0
 count=0
-if [ -f "$state_file" ]; then
-  read -r last_ts count < "$state_file" 2>/dev/null || true
-  last_ts=${last_ts:-0}
-  count=${count:-0}
+if _budget=$(run_bounded_io 1 /bin/bash -c '
+  last=0; count=0
+  if [ -e "$1" ] || [ -L "$1" ]; then
+    [ -f "$1" ] && [ ! -L "$1" ] || exit 65
+    read -r last count extra < "$1" || exit 65
+    [ -z "$extra" ] || exit 65
+  fi
+  if [[ "$last" =~ ^[0-9]{1,10}$ && "$count" =~ ^[0-9]{1,9}$ ]]; then
+    printf "%d %d\n" "$((10#$last))" "$((10#$count))"
+  else
+    exit 65
+  fi
+' _ "$state_file" 2>/dev/null); then
+  read -r last_ts count <<< "$_budget"
+else
+  io_warning "reboot budget unavailable/invalid: $state_file"
+  if [ "$FORCE" -ne 1 ]; then
+    log_all "refuse: reboot budget unavailable/invalid (source=${SOURCE:-n/a} reason=$REASON)"
+    exit 14
+  fi
 fi
 
 if [ "$FORCE" -ne 1 ] && [ "$uptime" -lt "$MIN_UPTIME_SEC" ]; then
@@ -196,7 +307,23 @@ else
   count=1
 fi
 
-echo "$now $count" > "$state_file" 2>/dev/null || true
+if ! run_bounded_io 1 /bin/bash -c '
+  set -euo pipefail
+  dir=$(dirname -- "$1")
+  tmp=$(mktemp "$dir/.reboot-policy.XXXXXX")
+  trap '\''rm -f -- "$tmp"'\'' EXIT
+  printf "%s %s\n" "$2" "$3" > "$tmp"
+  chmod 0600 "$tmp"
+  sync "$tmp"
+  mv -f -- "$tmp" "$1"
+  sync "$dir"
+' _ "$state_file" "$now" "$count" 2>/dev/null; then
+  io_warning "reboot budget not persisted: $state_file"
+  if [ "$FORCE" -ne 1 ]; then
+    log_all "refuse: reboot budget not persisted (source=${SOURCE:-n/a} reason=$REASON)"
+    exit 14
+  fi
+fi
 
 if [ "$FORCE" -ne 1 ] && [ "$count" -ge "$MAX_REBOOT_COUNT" ]; then
   log_all "refuse: reboot loop detected (count=${count}/${MAX_REBOOT_COUNT}, cooldown=${REBOOT_COOLDOWN_SEC}s) (source=${SOURCE:-n/a} iface=${IFACE:-n/a} reason=$REASON)"
@@ -210,11 +337,12 @@ log_all "reboot: approved (attempt ${count}/${MAX_REBOOT_COUNT}, cooldown=${REBO
 # 실패해도 재부팅은 진행한다 — 통지는 best-effort, 복구가 우선.
 _cause=$(reset_cause_id)
 if [ -n "$_cause" ]; then
-  if mkdir -p "$(dirname "$RESET_CAUSE_PATH")" 2>/dev/null \
-     && printf '%s\n' "$_cause" 2>/dev/null > "$RESET_CAUSE_PATH"; then
+  if run_bounded_io 1 /bin/bash -c \
+    'mkdir -p -- "$(dirname -- "$1")" && printf "%s\n" "$2" > "$1"' \
+    _ "$RESET_CAUSE_PATH" "$_cause" 2>/dev/null; then
     log_syslog "reset cause $_cause recorded for opcd ($RESET_CAUSE_PATH) (source=${SOURCE:-n/a} reason=$REASON)"
   else
-    log_syslog "reset cause $_cause NOT recorded ($RESET_CAUSE_PATH unwritable) - opcd will report 0x0002 (source=${SOURCE:-n/a})"
+    log_all "reset cause $_cause NOT recorded ($RESET_CAUSE_PATH unavailable) - opcd reports 0x0002 when cause is absent/invalid (source=${SOURCE:-n/a})"
   fi
 fi
 
@@ -223,19 +351,18 @@ fi
 # 의 ExecStop 이 실행되지 않아 직전 로그가 유실되므로, 여기서 1회 스냅샷한다.
 # snapshot.sh 의 flock 으로 타이머와 직렬화되며, reboot 지연 방지를 위해 timeout 을 둔다.
 _snap=/usr/local/scripts/journald_snapshot.sh
-if command -v timeout >/dev/null 2>&1; then
-  timeout 10 "$_snap" 2>/dev/null || log_all "pre-reboot journal snapshot failed/timed out (source=${SOURCE:-n/a} reason=$REASON)"
-else
-  "$_snap" 2>/dev/null || log_all "pre-reboot journal snapshot failed (source=${SOURCE:-n/a} reason=$REASON)"
-fi
-sync
+run_bounded_io 10 "$_snap" 2>/dev/null \
+  || log_all "pre-reboot journal snapshot failed/timed out/skipped (source=${SOURCE:-n/a} reason=$REASON)"
+run_bounded_io 2 sync 2>/dev/null \
+  || log_all "pre-reboot sync failed/timed out/skipped (source=${SOURCE:-n/a} reason=$REASON)"
 if do_reboot; then
   exit 0
 else
   rc=$?
   # 3단계 모두 실패: 시스템은 살아 있고 cause 파일만 남는다. 지워 두지 않으면 나중의
   # 운용자 재부팅이 이 옛 WLAN 원인을 통지한다(파일 없음 → opcd 0x0002).
-  rm -f "$RESET_CAUSE_PATH" 2>/dev/null || true
+  run_bounded_io 1 rm -f -- "$RESET_CAUSE_PATH" 2>/dev/null \
+    || io_warning "stale reset cause cleanup failed/timed out: $RESET_CAUSE_PATH"
   log_all "reboot: failed (rc=$rc) (source=${SOURCE:-n/a} iface=${IFACE:-n/a} reason=$REASON)"
   exit "$rc"
 fi

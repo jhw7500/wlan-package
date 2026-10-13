@@ -3,6 +3,13 @@
 tag=$(basename "$0")
 key=LOG
 
+LOGGER_COMMAND_LIB="${WIFI_LOGGER_COMMAND_LIB:-/usr/local/scripts/wifi_logger_command_lib.sh}"
+if [ ! -r "$LOGGER_COMMAND_LIB" ]; then
+    LOGGER_COMMAND_LIB="$(dirname "$0")/wifi_logger_command_lib.sh"
+fi
+# shellcheck source=wifi_logger_command_lib.sh
+. "$LOGGER_COMMAND_LIB"
+
 IFACE="${1:-}"
 if [ -z "$IFACE" ]; then
     echo "usage: $0 <iface>" >&2
@@ -218,8 +225,8 @@ while true; do
             logger -p local0.info "[$tag:$LINENO] [$IFACE] saving kernel logs to '$LOG_FILE'"
             #journalctl -k --since "1 min ago" > "$LOG_FILE"
             dmesg > $LOG_FILE
-            /usr/local/scripts/journald_snapshot.sh
-            sync
+            logger_run_bounded 10 /usr/local/scripts/journald_snapshot.sh >/dev/null 2>&1 || true
+            logger_run_bounded 2 sync >/dev/null 2>&1 || true
             REBOOT_F=1
         fi
     else
@@ -354,7 +361,7 @@ while true; do
         now=$(date +"%Y-%m-%d %H:%M:%S")
         reboot_at=$(date -d "+${REBOOT_COOLDOWN_SEC} seconds" +"%Y-%m-%d %H:%M:%S")
         logger -p local0.emerg "[$tag:$LINENO] [$IFACE] Requesting reboot via policy (cause=$reason, attempts<=${MAX_REBOOT_COUNT}, cooldown=${REBOOT_COOLDOWN_SEC}s, now=$now, reboot_at=$reboot_at)"
-        sync
+        logger_run_bounded 2 sync >/dev/null 2>&1 || true
         ERR_CNT=0
         REBOOT_F=0
         MAX_REBOOT_COUNT="$MAX_REBOOT_COUNT" REBOOT_COOLDOWN_SEC="$REBOOT_COOLDOWN_SEC" MIN_UPTIME_SEC="$MIN_UPTIME_SEC" \

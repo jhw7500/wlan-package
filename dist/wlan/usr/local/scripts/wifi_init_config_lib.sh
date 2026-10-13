@@ -430,7 +430,17 @@ wifi_wpa_conf_lock_acquire() {
 # The owning transaction shell never calls this directly and remains the sole
 # lock owner until exit.
 wifi_wpa_child_close() {
-    exec 7>&- 9>&-
+    exec 7>&- 8>&- 9>&-
+}
+
+# Radio writers use one JSON file for both interfaces. Keep FD 8 on the
+# transaction owner only, after the per-interface conf/transition locks.
+wifi_radio_json_lock_acquire() {
+    local run_dir="${WIFI_RUN_DIR:-/run/wifi}"
+    command -v flock >/dev/null 2>&1 || return 1
+    wifi_wpa_run_child mkdir -p "$run_dir" || return 1
+    exec 8>"$run_dir/radio-json.lock" || return 1
+    ( exec 7>&- 9>&-; flock -n -x 8 )
 }
 
 # Replace the current child shell with an external command.  Direct command
