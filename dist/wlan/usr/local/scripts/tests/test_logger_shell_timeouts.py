@@ -92,7 +92,7 @@ def test_bounded_runner_kills_hung_command(run_shell):
         'logger_run_bounded 0.2 sh -c "sleep 30"'
     )
 
-    assert result.returncode == 124
+    assert result.returncode in (124, 137)
     assert result.elapsed < 2.0
 
 
@@ -147,7 +147,7 @@ time.sleep(60)
         try:
             proc_stat = Path(f"/proc/{pid}/stat").read_text().split()
             cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
             return False
         return proc_stat[21] == start_time and token.encode() in cmdline
 
@@ -165,7 +165,7 @@ time.sleep(60)
         if descendant_survived:
             pidfd = os.pidfd_open(pid)
 
-        assert result.returncode == 124
+        assert result.returncode in (124, 137)
         assert result.elapsed < 2.0
         assert not descendant_survived
     finally:

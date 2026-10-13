@@ -101,10 +101,12 @@ confirm_hw_not_ready() {
     rc=$?
     # 값만 남긴다 — 접두사를 그대로 두면 로그가 hardware_status=hardware_status=5 가 된다
     HW_STATUS_SEEN=$(printf '%s' "$out" | sed 's/^hardware_status=//' | tr '\n' ',' | sed 's/,$//')
-    if [ "$rc" -eq 124 ]; then
-        HW_STATUS_SEEN="timeout"
-        return 1
-    fi
+    case "$rc" in
+        124|137)
+            HW_STATUS_SEEN="timeout"
+            return 1
+            ;;
+    esac
     [ -n "$out" ] || return 2
     printf '%s' "$out" | grep -qv '^hardware_status=0$' && return 1
     return 0
