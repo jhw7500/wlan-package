@@ -314,9 +314,9 @@ if ! run_bounded_io 1 /bin/bash -c '
   trap '\''rm -f -- "$tmp"'\'' EXIT
   printf "%s %s\n" "$2" "$3" > "$tmp"
   chmod 0600 "$tmp"
-  sync "$tmp"
+  sync "$tmp" 2>/dev/null || sync
   mv -f -- "$tmp" "$1"
-  sync "$dir"
+  sync "$dir" 2>/dev/null || sync
 ' _ "$state_file" "$now" "$count" 2>/dev/null; then
   io_warning "reboot budget not persisted: $state_file"
   if [ "$FORCE" -ne 1 ]; then

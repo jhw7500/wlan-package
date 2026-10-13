@@ -88,6 +88,20 @@ CONF="${WPA_CONF_DIR:-/etc/wpa_supplicant}/wpa_supplicant-${IFACE}.conf"
 CONF_DIR=${CONF%/*}
 WIFI_RUN_DIR="${WIFI_RUN_DIR:-/run/wifi}"
 [ -f "$CONF" ] || { echo "opc_wlan_apply: conf not found: $CONF" >&2; exit 4; }
+RADIO_JSON="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
+RADIO_DIR=${RADIO_JSON%/*}
+if [ -n "$MODE$BW" ]; then
+    command -v mlanutl >/dev/null 2>&1 \
+        && wifi_init_conf_status "$RADIO_JSON" \
+        && jq -e 'type == "object"' "$RADIO_JSON" >/dev/null 2>&1 \
+        || { echo "opc_wlan_apply: invalid/unavailable radio tools or JSON" >&2; exit 4; }
+fi
+wifi_wpa_conf_lock_acquire "$IFACE" \
+    || { echo "opc_wlan_apply: failed to lock $CONF" >&2; exit 4; }
+# A mode-only request derives its effective frequencies from CONF. Resolve and
+# validate them only while holding the writer lock, so a concurrent frequency
+# update cannot replace the checked 2.4GHz list with a 5GHz-only list before
+# this transaction applies a b/g radio cap.
 if [ "$MODE" = b ] || [ "$MODE" = g ]; then
     CHECK_FREQS="$FREQS"
     if [ "$HAVE_FREQ" = 0 ]; then
@@ -103,16 +117,6 @@ if [ "$MODE" = b ] || [ "$MODE" = g ]; then
         exit 2
     fi
 fi
-RADIO_JSON="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
-RADIO_DIR=${RADIO_JSON%/*}
-if [ -n "$MODE$BW" ]; then
-    command -v mlanutl >/dev/null 2>&1 \
-        && wifi_init_conf_status "$RADIO_JSON" \
-        && jq -e 'type == "object"' "$RADIO_JSON" >/dev/null 2>&1 \
-        || { echo "opc_wlan_apply: invalid/unavailable radio tools or JSON" >&2; exit 4; }
-fi
-wifi_wpa_conf_lock_acquire "$IFACE" \
-    || { echo "opc_wlan_apply: failed to lock $CONF" >&2; exit 4; }
 wifi_scan_transition_lock_acquire "$IFACE" \
     || { echo "opc_wlan_apply: failed to lock scan transition for $IFACE" >&2; exit 4; }
 if [ -n "$MODE$BW" ]; then

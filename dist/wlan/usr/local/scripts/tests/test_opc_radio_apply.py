@@ -7,6 +7,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -269,6 +270,47 @@ class OpcRadioApplyTests(unittest.TestCase):
         self.assertEqual(self.driver("mlan1"), INITIAL_DRIVER)
         self.assertEqual(self.config.read_bytes(), before)
         self.assertEqual(self.calls(), [])
+
+    def test_mode_only_revalidates_concurrent_frequency_change_under_conf_lock(self):
+        run_dir = Path(self.env["WIFI_RUN_DIR"])
+        run_dir.mkdir()
+        flock_marker = self.state / "flock-entered"
+        flock = self.bin / "flock"
+        flock.write_text(
+            "#!/bin/sh\n"
+            ": > \"$OPC_TEST_STATE/flock-entered\"\n"
+            f"exec {shutil.which('flock')} \"$@\"\n"
+        )
+        flock.chmod(0o755)
+        lock_path = run_dir / "mlan0.wpa-conf.lock"
+        with lock_path.open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            process = subprocess.Popen(
+                ["sh", str(HELPER), "mlan0", "mode", "b"],
+                env=self.env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            self.addCleanup(lambda: process.poll() is None and process.kill())
+            deadline = time.monotonic() + 2
+            while not flock_marker.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(flock_marker.exists(), "helper did not attempt the configuration lock")
+            # The helper is now waiting for this exact configuration lock.
+            # Change the protected profile while it waits, then let it acquire
+            # the lock and validate the effective frequency list.
+            self.assertIsNone(process.poll())
+            concurrent_profile = PROFILE.replace("freq_list=2412", "freq_list=5180")
+            self.profile().write_text(concurrent_profile)
+            fcntl.flock(lock, fcntl.LOCK_UN)
+            stdout, stderr = process.communicate(timeout=6)
+
+        self.assertEqual(process.returncode, 2, stdout + stderr)
+        self.assertIn("mode=b cannot use a 5GHz-only frequency list", stderr)
+        self.assertEqual(self.driver(), INITIAL_DRIVER)
+        self.assertEqual(json.loads(self.config.read_text()), self.initial_config)
+        self.assertEqual(self.profile().read_text(), concurrent_profile)
+        self.assertEqual(self.calls(), [])
+        with lock_path.open("w") as released_lock:
+            fcntl.flock(released_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
     def test_term_before_commit_restores_all_settings_and_releases_all_locks(self):
         before = self.config.read_bytes()

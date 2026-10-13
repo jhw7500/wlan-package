@@ -136,6 +136,11 @@ export -f [
     if io_fault in ("logger_error", "sync_error"):
         name = io_fault.removesuffix("_error")
         _write_executable(fake_bin / name, "#!/bin/sh\nexit 23\n")
+    elif io_fault == "sync_path_unsupported":
+        _write_executable(
+            fake_bin / "sync",
+            "#!/bin/sh\n[ \"$#\" -eq 0 ] && exit 0\nexit 1\n",
+        )
     elif io_fault in ("logger_hang", "sync_hang"):
         name = io_fault.removesuffix("_hang")
         _write_executable(
@@ -320,14 +325,28 @@ def test_unpersisted_budget_refuses_automatic_reboot(tmp_path):
         budget.chmod(0o644)
 
 
-def test_stalled_budget_write_preserves_old_record_and_refuses_reboot(tmp_path):
+def test_path_sync_unsupported_uses_global_sync_and_allows_reboot(tmp_path):
+    """BusyBox without path sync support must fall back to a successful global sync."""
+    result, _ = _run_policy(
+        tmp_path, ["--source", "wifi_checker", "--reason", "link lost"],
+        uptime="9999", io_fault="sync_path_unsupported",
+    )
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "reboot.mark").read_text() == "attempted"
+    budget = (tmp_path / "state/reboot_policy_global.state").read_text()
+    assert re.fullmatch(r"[0-9]+ 1\n", budget)
+
+
+@pytest.mark.parametrize("io_fault", ["sync_error", "sync_hang"])
+def test_failed_budget_sync_preserves_old_record_and_refuses_reboot(tmp_path, io_fault):
+    """Failure of both path and global sync must preserve the conservative refusal."""
     state = tmp_path / "state"
     state.mkdir()
     budget = state / "reboot_policy_global.state"
     budget.write_text("0 0\n")
     result, cause = _run_policy(
         tmp_path, ["--source", "wifi_checker", "--reason", "link lost"],
-        uptime="9999", io_fault="sync_hang",
+        uptime="9999", io_fault=io_fault,
     )
     assert result.returncode == 14, result.stderr
     assert budget.read_text() == "0 0\n"
