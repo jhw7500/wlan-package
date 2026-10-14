@@ -24,7 +24,8 @@
 #   .mlanN.roaming.enabled                    → wifi_roam@mlanN.service
 #   .mlanN.periodic_roam.enabled              → deprecated; wifi_periodic_roam@mlanN.service forced disabled
 #   .mlanN.arping.enabled                     → wifi_arping@mlanN.service
-#   (.mlanN.on_connect.enabled OR .snmp.trap.enabled OR
+#   (.mlanN.roam_garp.enabled is JSON boolean true OR
+#    .mlanN.on_connect.enabled OR .snmp.trap.enabled OR
 #    (AX iface AND .mlanN.mcs_tier.enabled AND HE configured))
 #                                               → wifi_event@mlanN.service
 #   (.wbridge.enabled AND .wbridge.bridge_iface == mlanN) → wifi_bridge@mlanN.service
@@ -292,8 +293,9 @@ for iface in mlan0 mlan1; do
     # deprecated third owner는 is-enabled=false/수동 active 상태까지 포함해 항상 중지.
     ensure_stopped_owner_unit "wifi_periodic_roam@${iface}.service" || true
 
-    # wifi_event: on_connect 명령, SNMP 링크/채널 트랩, 또는 association 후 deferred
-    # MCS 검증/1회 제한 복구가 필요하면 enable한다.
+    # wifi_event: strict opt-in roam GARP, on_connect 명령, SNMP 링크/채널 트랩,
+    # 또는 association 후 deferred MCS 검증/1회 제한 복구가 필요하면 enable한다.
+    _garp=$(jq -r "if (.${iface}.roam_garp.enabled) == true then \"true\" else \"false\" end" "$JSON" 2>/dev/null) || _garp="false"
     _oc=$(get_bool ".${iface}.on_connect.enabled" "false")
     _mcs=$(get_bool ".${iface}.mcs_tier.enabled" "false")
     _standard=$(jq -r ".${iface}.STANDARD // \"\" | ascii_downcase" "$JSON" 2>/dev/null)
@@ -303,7 +305,7 @@ for iface in mlan0 mlan1; do
        && [ -n "$_mcs_he" ]; then
         _mcs_verify="true"
     fi
-    if [ "$_oc" = "true" ] || [ "$SNMP_TRAP_ENABLED" = "true" ] || [ "$_mcs_verify" = "true" ]; then
+    if [ "$_garp" = "true" ] || [ "$_oc" = "true" ] || [ "$SNMP_TRAP_ENABLED" = "true" ] || [ "$_mcs_verify" = "true" ]; then
         apply "wifi_event@${iface}.service" "true"
     else
         apply "wifi_event@${iface}.service" "false"

@@ -1462,7 +1462,7 @@ AC 전용 mlan1은 이 deferred HE 경로와 `11axcfg` 검증 대상이 아니�
 
 ### 11.11 roam_garp - 로밍 직후 gratuitous ARP (per-iface)
 
-`mlan0.roam_garp` / `mlan1.roam_garp`. **사용 스크립트**: `wifi_event.sh`.
+`mlan0.roam_garp` / `mlan1.roam_garp`. **사용 스크립트**: `wifi_event.sh`(송신), `wifi_apply_enabled.sh`(이벤트 서비스 활성화).
 
 로밍 후 유선 스위치의 FDB가 STA 새 위치를 재학습하기까지 ~2–5초 상향 통신 갭이 관측되는데(무선 핸드오프·STA 하향은 정상, 로밍 시 STA/AP 어느 쪽도 재공지 안 함 — tshark 확정), `wifi_event.sh`의 로밍 case(`connected to`/`roamed to`)에서 BSSID 확인 직후 무선 iface IP로 gratuitous ARP(`arping -U -c 3`)를 즉시 발사해 스위치 재학습을 앞당긴다(#234).
 
@@ -1472,6 +1472,7 @@ AC 전용 mlan1은 이 deferred HE 경로와 `11axcfg` 검증 대상이 아니�
 
 - **스코프 = 무선전용/관리-IP**: iface에 IPv4가 있을 때만 발사한다. 순수 MAC클론 투명 브리지는 mlan0에 L3 IP가 없어 **자동 no-op** — 최종 브리지 제품의 로밍 갭 근본책은 드라이버측 클론 MAC L2 announce(**wlan-driver-v2#47**, 머지됨)다.
 - **로밍 데몬(`.roaming.enabled`)과 독립**: iw 이벤트 반응이라 FW 로밍·수동 로밍이면 로밍 데몬이 꺼져 있어도 발사된다. (같은 이유로 `.roaming` 하위가 아니라 top-level per-iface 키 — `arping`과 동일 배치)
+- **GARP만 사용해도 이벤트 서비스 활성화**: 인터페이스가 활성화되어 있고 `roam_garp.enabled`가 JSON boolean `true`이면, 부팅 또는 `wifi_init` 적용 시 `wifi_event@<iface>.service`를 활성화한다. 다른 이벤트 사용 기능(on_connect/SNMP trap/deferred MCS)은 없어도 된다. 서비스가 이미 실행 중이면 송신 게이트는 이벤트마다 현재 설정을 읽는다. 문자열 `"true"`나 숫자 `1`은 GARP 활성화 값이 아니다.
 - 비블로킹 백그라운드(`&`)로 `iw event` 루프를 막지 않는다. `arping`은 iputils(`-U` gratuitous announce 지원, 온타겟 확인).
 - **기본 off 이유**: 갭-소멸 효과가 미검증(AP측 상향 포워딩 지연 병존 가능) — 듀얼AP A/B(**#235**)에서 확증 후 릴리스에서 default 승격 재검토.
 
