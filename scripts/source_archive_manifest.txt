@@ -334,6 +334,7 @@ dist/wlan/usr/local/scripts/tests/test_logger_log_format.py
 dist/wlan/usr/local/scripts/tests/test_logger_shell_timeouts.py
 dist/wlan/usr/local/scripts/tests/test_logger_supervision_units.py
 dist/wlan/usr/local/scripts/tests/test_opc_radio_apply.py
+dist/wlan/usr/local/scripts/tests/test_postinst_factory_parent.py
 dist/wlan/usr/local/scripts/tests/test_recovery_diagnostic_timeouts.py
 dist/wlan/usr/local/scripts/tests/test_roam_owner_service_policy.py
 dist/wlan/usr/local/scripts/tests/test_root_password.py

@@ -117,6 +117,7 @@ REQUIRED_PATHS = {
     "dist/wlan/usr/local/logger/tests/test_runtime_output_english.py",
     "dist/wlan/usr/local/scripts/tests/test_wifi_log_extract.py",
     "dist/wlan/usr/local/scripts/tests/test_wifi_factory_topology.py",
+    "dist/wlan/usr/local/scripts/tests/test_postinst_factory_parent.py",
     "dist/wlan/usr/local/scripts/wifi_factory_topology.py",
     "docs/wifi_init_conf.schema.json",
     "docs/wifi_init_conf_guide.md",
