@@ -122,8 +122,9 @@ prepare_factory_selector_parent() {
     fi
 }
 
-# Test and maintenance harnesses may source the helper without running package actions.
-if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+# Helper-only sourcing skips package actions. Explicit noop retains the existing
+# maintenance contract that also loads installer progress functions.
+if [[ "${BASH_SOURCE[0]}" != "$0" && "${1:-}" != "noop" ]]; then
     return 0
 fi
 
