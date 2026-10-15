@@ -941,6 +941,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} br {up|down|start|stop|restart} : runtime"
     echo "       wifi {0|1|mlan0|mlan1} br status : peer_route/hairpin/브릿지 설정·런타임·정합성 진단 (읽기 전용)"
     echo "       wifi {0|1|mlan0|mlan1} br profile {mlan0-ip|hairpin|dual|peer-route|eth0-ip} [apply] : 연계 설정 묶음 조회/적용 (dry-run 기본)"
+    echo "       wifi {0|1|mlan0|mlan1} br factory-profile [show|eth0-ip|peer-route] [apply] : 공장 초기화 토폴로지 조회/설정 (dry-run 기본)"
     echo "       wifi {0|1|mlan0|mlan1} br route {find [<subnet>]|set <ip>|auto [<subnet>]} : eth 지연연결 후 peer host route 탐색/등록"
     echo "       wifi {0|1|mlan0|mlan1} br {moal|pcap|tpacket} : wbridge engine+bridge_iface persist"
     echo "       wifi {0|1|mlan0|mlan1} txpwr {0|1|2|3|no|default|low|org|custom_file_name} : persist+runtime"
@@ -1689,7 +1690,8 @@ _bridge_status() {
         echo "  [INFO] eth_sweep_subnet empty -> last-resort sweep falls back to $iface net (${mlan_inet:-<none>}). Set it to pin the range."
     fi
     if [ "$pr" = "true" ] && [ -z "$eth_mirror" ]; then
-        echo "  [WARN] peer_route=on but no /32 mirror on $eth (runtime). Reboot or 'wifi <0|1> br restart'."
+        echo "  [WARN] peer_route=on but no /32 mirror on $eth (runtime). Reboot to apply the saved profile."
+        echo "         'wifi <0|1> br restart' restarts only the bridge service; it does not apply IP addresses or routes."
         warn=1
     fi
     if [ "$pr" = "false" ] && [ -n "$eth_mirror" ] && [ "$ef_json" != "true" ] && [ "$lhp_raw" != "1" ]; then
@@ -1772,6 +1774,69 @@ _bridge_profile() {
         echo "Error: JSON update failed (config unchanged)" >&2
         return 1
     fi
+}
+
+# 공장 초기화 때 사용할 영구 토폴로지 selector만 다룬다. runtime profile과
+# active wifi_init_conf.json은 건드리지 않으며, 명시적인 apply에만 기록한다.
+_factory_profile() {
+    local name="${1:-show}" action="${2:-}" extra="${3:-}"
+    local selector="${WIFI_FACTORY_TOPOLOGY_PATH:-/usr/local/etc/wifi_factory_topology.json}"
+    local helper="${WIFI_FACTORY_TOPOLOGY_SCRIPT:-}"
+    local -a owner_args=()
+
+    if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
+        echo "Error: br factory-profile supports mlan0/mlan1 only" >&2
+        return 2
+    fi
+    if [ -z "$helper" ]; then
+        if [ -r /usr/local/scripts/wifi_factory_topology.py ]; then
+            helper=/usr/local/scripts/wifi_factory_topology.py
+        elif [ -r "$SCRIPT_DIR/wifi_factory_topology.py" ]; then
+            helper="$SCRIPT_DIR/wifi_factory_topology.py"
+        else
+            echo "Error: wifi_factory_topology.py not found" >&2
+            return 1
+        fi
+    fi
+    if [ ! -r "$helper" ]; then
+        echo "Error: factory topology helper is not readable: $helper" >&2
+        return 1
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "Error: python3 not installed" >&2
+        return 1
+    fi
+    if [ -n "${WIFI_FACTORY_TOPOLOGY_OWNER_UID:-}" ]; then
+        owner_args+=(--owner-uid "$WIFI_FACTORY_TOPOLOGY_OWNER_UID")
+    fi
+    if [ -n "${WIFI_FACTORY_TOPOLOGY_OWNER_GID:-}" ]; then
+        owner_args+=(--owner-gid "$WIFI_FACTORY_TOPOLOGY_OWNER_GID")
+    fi
+
+    case "$name" in
+        ""|show)
+            if [ -n "$action" ] || [ -n "$extra" ]; then
+                echo "Usage: wifi {0|1} br factory-profile [show|eth0-ip|peer-route] [apply]" >&2
+                return 2
+            fi
+            python3 "$helper" read --path "$selector" "${owner_args[@]}"
+            ;;
+        eth0-ip|peer-route)
+            if [ -n "$extra" ] || { [ -n "$action" ] && [ "$action" != "apply" ]; }; then
+                echo "Usage: wifi {0|1} br factory-profile [show|eth0-ip|peer-route] [apply]" >&2
+                return 2
+            fi
+            if [ "$action" != "apply" ]; then
+                echo "$name (dry-run; selector unchanged)"
+                return 0
+            fi
+            python3 "$helper" set --path "$selector" --topology "$name" "${owner_args[@]}"
+            ;;
+        *)
+            echo "Error: unknown factory profile '$name' (eth0-ip|peer-route)" >&2
+            return 2
+            ;;
+    esac
 }
 
 # wifi <0|1|mlan0|mlan1> br route {find|set|auto} : eth 유선 peer host route 탐색/등록
@@ -2266,6 +2331,8 @@ case "$2" in
         _bridge_status "$IFACE"
     elif [ "$3" == "profile" ]; then
         _bridge_profile "${4:-}" "${5:-}"
+    elif [ "$3" == "factory-profile" ]; then
+        _factory_profile "${4:-}" "${5:-}" "${6:-}"
     elif [ "$3" == "route" ]; then
         _bridge_route "${4:-}" "${5:-}" "$IFACE"
     elif [ "$3" == "moal" ] || [ "$3" == "pcap" ] || [ "$3" == "tpacket" ]; then

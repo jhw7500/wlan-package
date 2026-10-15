@@ -15,6 +15,16 @@ def executable(path, body):
     path.chmod(0o700)
 
 
+def systemctl_with_nonblocking_parent_status():
+    return """if [ "$*" = "show wifi_init.service -p ActiveState -p ExecMainStatus" ]; then
+    printf 'ActiveState=active\\nExecMainStatus=0\\n'
+    exit 0
+fi
+printf 'systemctl %s\\n' "$*" >> "$UNEXPECTED_CALLS"
+exit 91
+"""
+
+
 @pytest.mark.parametrize("caller", ["wifi_checker.sh", "wlan_fw_watch.sh"])
 @pytest.mark.parametrize("stalled", ["sync", "snapshot"])
 def test_stalled_diagnostics_do_not_prevent_reboot_policy_request(tmp_path, caller, stalled):
@@ -28,7 +38,8 @@ def test_stalled_diagnostics_do_not_prevent_reboot_policy_request(tmp_path, call
     executable(fake_bin / "lsmod", "printf 'moal 1 0\\n'\n")
     executable(fake_bin / "dmesg", "printf 'private kernel diagnostic\\n'\n")
     executable(fake_bin / "sleep", 'if [ -f "$POLICY_MARK" ]; then kill -TERM "$PPID"; fi\nexit 0\n')
-    for name in ("systemctl", "wifi", "reboot"):
+    executable(fake_bin / "systemctl", systemctl_with_nonblocking_parent_status())
+    for name in ("wifi", "reboot"):
         executable(fake_bin / name, f'printf "{name} %s\\n" "$*" >> "$UNEXPECTED_CALLS"\nexit 91\n')
     hang = "trap '' TERM\nwhile :; do /bin/sleep 1; done\n"
     executable(fake_bin / "sync", hang if stalled == "sync" else "exit 0\n")
@@ -108,7 +119,8 @@ def test_fw_watch_treats_timeout_status_as_confirmed_wedge(tmp_path, timeout_sta
         fake_bin / "sleep",
         'if [ -f "$POLICY_MARK" ]; then kill -TERM "$PPID"; fi\nexit 0\n',
     )
-    for name in ("systemctl", "reboot"):
+    executable(fake_bin / "systemctl", systemctl_with_nonblocking_parent_status())
+    for name in ("reboot",):
         executable(
             fake_bin / name,
             f'printf "{name} %s\\n" "$*" >> "$UNEXPECTED_CALLS"\nexit 91\n',

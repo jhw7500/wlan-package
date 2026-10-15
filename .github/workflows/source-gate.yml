@@ -12,7 +12,8 @@ name: Source Gate
 #     SUBMODULE_TOKEN 이 없으면 그 스텝이 `exit 0` 으로 끝나 잡이 초록불이 된다.
 #     이 게이트는 서브모듈이 필요 없으므로 그 조건을 상속하면 안 된다.
 #
-# 그래서 필터 없음, 조건 없음, 서브모듈 없음.
+# 그래서 필터와 실행 조건을 두지 않는다. factory provisioning 회귀에 필요한
+# 공개 wlan-opc만 명시적으로 받고, 비공개 wlan-bridge는 필요하지 않다.
 
 on:
   push:
@@ -41,6 +42,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: false
+
+      - name: Checkout public OPC provisioning tests
+        run: git submodule update --init --depth 1 -- wlan-opc
 
       - name: Install gate dependencies
         run: |

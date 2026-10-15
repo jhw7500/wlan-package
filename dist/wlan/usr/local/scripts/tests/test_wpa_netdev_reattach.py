@@ -342,9 +342,11 @@ def test_stop_wait_is_bounded():
     m = re.search(r"^TimeoutStopSec=(\d+)", text, re.M)
     assert m, "TimeoutStopSec 미설정 — 재로드가 기본 90초까지 지연될 수 있다"
     assert 1 <= int(m.group(1)) <= 30, f"상한이 비현실적이다: {m.group(1)}s"
-    assert "--timeout" not in WIFI_INIT.read_text(encoding="utf-8"), (
-        "systemctl 에 없는 --timeout 옵션이 쓰였다 — 명령 전체가 실패한다"
-    )
+    init = WIFI_INIT.read_text(encoding="utf-8")
+    for command in re.finditer(r"(?m)^[ \t]*systemctl\b", init):
+        assert "--timeout" not in _logical_line(init, command.start()), (
+            "systemctl 에 없는 --timeout 옵션이 쓰였다 — 명령 전체가 실패한다"
+        )
 
 
 def test_critical_path_loggers_cannot_abort_script():

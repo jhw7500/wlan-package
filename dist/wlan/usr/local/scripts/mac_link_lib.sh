@@ -22,6 +22,29 @@ mac_is_assignable() {
     esac
 }
 
+# udev 초기화 완료와 실제 주소 일치를 모두 확인한다. 선택된 .link 파일명만으로는
+# 적용 성공을 알 수 없으며, netdev 재생성 뒤 supplicant start에도 같은 검증을 쓴다.
+mac_verify_live_address() {
+    local iface="$1" expected="$2" actual tag="${tag:-mac_link}"
+    if ! mac_is_assignable "$expected"; then
+        logger -p local0.err "[$tag:$LINENO] [$iface] invalid expected MAC: $expected" || true
+        return 1
+    fi
+    if ! udevadm wait --timeout=5 "/sys/class/net/$iface"; then
+        logger -p local0.err "[$tag:$LINENO] [$iface] MAC verification failed: udev initialization unavailable/timed out (expected=$expected)" || true
+        return 1
+    fi
+    if ! actual=$(cat "/sys/class/net/$iface/address"); then
+        logger -p local0.err "[$tag:$LINENO] [$iface] MAC verification failed: cannot read actual address (expected=$expected)" || true
+        return 1
+    fi
+    if [ "$(mac_normalize "$actual")" != "$(mac_normalize "$expected")" ]; then
+        logger -p local0.err "[$tag:$LINENO] [$iface] MAC verification failed: expected=$expected actual=$actual" || true
+        return 1
+    fi
+    logger -p local0.info "[$tag:$LINENO] [$iface] final MAC verified: expected=$expected actual=$actual" || true
+}
+
 mac_read_link_address() {
     local link_file="$1"
     [ -f "$link_file" ] || return 1

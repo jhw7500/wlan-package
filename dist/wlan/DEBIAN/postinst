@@ -1,5 +1,133 @@
 #!/bin/bash
 
+prepare_factory_selector_parent() {
+    local target="${1:-/usr/local/etc}"
+    local trusted_root="${2:-/}"
+    local required_uid="${3:-0}"
+    local required_gid="${4:-0}"
+    local relative current component owner mode mode_value
+    local -a components
+
+    case "$target:$trusted_root" in
+        /*:/*) ;;
+        *)
+            printf 'ERROR: factory selector target and trusted root must be absolute paths\n' >&2
+            return 1
+            ;;
+    esac
+    case "$target" in
+        *//*|*/./*|*/../*|*/.|*/..|*/)
+            printf 'ERROR: unsafe factory selector path syntax: %s\n' "$target" >&2
+            return 1
+            ;;
+    esac
+    case "$trusted_root" in
+        /) ;;
+        *//*|*/./*|*/../*|*/.|*/..|*/)
+            printf 'ERROR: unsafe trusted root path syntax: %s\n' "$trusted_root" >&2
+            return 1
+            ;;
+    esac
+
+    if [ "$trusted_root" = "/" ]; then
+        relative=${target#/}
+        current=
+    else
+        trusted_root=${trusted_root%/}
+        case "$target" in
+            "$trusted_root"/*)
+                relative=${target#"$trusted_root"/}
+                current=$trusted_root
+                ;;
+            *)
+                printf 'ERROR: factory selector target is outside trusted root: %s\n' "$target" >&2
+                return 1
+                ;;
+        esac
+    fi
+    if [ -z "$relative" ]; then
+        printf 'ERROR: factory selector target must be below trusted root: %s\n' "$target" >&2
+        return 1
+    fi
+
+    IFS=/ read -r -a components <<< "$relative"
+    if [ -n "$current" ]; then
+        if [ -L "$current" ] || [ ! -d "$current" ]; then
+            printf 'ERROR: unsafe factory selector path component: %s\n' "$current" >&2
+            return 1
+        fi
+        owner=$(stat -c '%u:%g' -- "$current") || return 1
+        mode=$(stat -c '%a' -- "$current") || return 1
+        mode_value=$((8#$mode))
+        if [ "$owner" != "$required_uid:$required_gid" ] || (( mode_value & 0022 )); then
+            printf 'ERROR: unsafe factory selector path component metadata: %s\n' "$current" >&2
+            return 1
+        fi
+    fi
+
+    for component in "${components[@]}"; do
+        [ -n "$component" ] || {
+            printf 'ERROR: unsafe factory selector path syntax: %s\n' "$target" >&2
+            return 1
+        }
+        current="${current%/}/$component"
+        if [ "$current" = "$target" ]; then
+            break
+        fi
+        if [ -L "$current" ] || [ ! -d "$current" ]; then
+            printf 'ERROR: unsafe factory selector path component: %s\n' "$current" >&2
+            return 1
+        fi
+        owner=$(stat -c '%u:%g' -- "$current") || return 1
+        mode=$(stat -c '%a' -- "$current") || return 1
+        mode_value=$((8#$mode))
+        if [ "$owner" != "$required_uid:$required_gid" ] || (( mode_value & 0022 )); then
+            printf 'ERROR: unsafe factory selector path component metadata: %s\n' "$current" >&2
+            return 1
+        fi
+    done
+
+    if [ -L "$target" ] || { [ -e "$target" ] && [ ! -d "$target" ]; }; then
+        printf 'ERROR: unsafe factory selector path leaf: %s\n' "$target" >&2
+        return 1
+    fi
+    if [ ! -e "$target" ]; then
+        if ! mkdir -m 0755 -- "$target"; then
+            printf 'ERROR: failed to create factory selector parent: %s\n' "$target" >&2
+            return 1
+        fi
+    fi
+    if [ -L "$target" ] || [ ! -d "$target" ]; then
+        printf 'ERROR: unsafe factory selector path leaf after creation: %s\n' "$target" >&2
+        return 1
+    fi
+    if ! chown "$required_uid:$required_gid" -- "$target"; then
+        printf 'ERROR: failed to chown factory selector parent: %s\n' "$target" >&2
+        return 1
+    fi
+    if ! chmod go-w -- "$target"; then
+        printf 'ERROR: failed to chmod factory selector parent: %s\n' "$target" >&2
+        return 1
+    fi
+    owner=$(stat -c '%u:%g' -- "$target") || return 1
+    mode=$(stat -c '%a' -- "$target") || return 1
+    mode_value=$((8#$mode))
+    if [ "$owner" != "$required_uid:$required_gid" ] || (( mode_value & 0022 )); then
+        printf 'ERROR: factory selector parent metadata verification failed: %s\n' "$target" >&2
+        return 1
+    fi
+    if ! sync "$target"; then
+        printf 'ERROR: failed to sync factory selector parent: %s\n' "$target" >&2
+        return 1
+    fi
+}
+
+# Helper-only sourcing skips package actions. Explicit noop retains the existing
+# maintenance contract that also loads installer progress functions.
+if [[ "${BASH_SOURCE[0]}" != "$0" && "${1:-}" != "noop" ]]; then
+    return 0
+fi
+
 ############################################################
 # postinst script main
 ############################################################
@@ -120,7 +248,7 @@ configure)
     fi
   fi
 
-  mkdir -p /usr/local/etc
+  prepare_factory_selector_parent /usr/local/etc / || exit 1
 
   # 0.5.1 이전 패키지가 payload로 설치했던 개발용 테스트/cache는 새 패키지에서
   # 제거해도 Python이 만든 비소유 파일 때문에 dpkg가 빈 디렉터리를 지우지 못할 수 있다.
@@ -409,7 +537,6 @@ makeDirectory() {
   makeDirectory /usr/local/bin
   makeDirectory /usr/local/logger
   makeDirectory /usr/local/scripts
-  makeDirectory /usr/local/etc
   makeDirectory /usr/lib/sysctl.d
   makeDirectory /var/log/cantops/mgmt/mlan0
   makeDirectory /var/log/cantops/mgmt/mlan1

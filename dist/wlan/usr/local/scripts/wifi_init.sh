@@ -346,6 +346,17 @@ if [ "${MFG_MODE:-0}" == "1" ] && [ -f "$MFG_LOADED_FLAG" ] && lsmod | grep "^${
     exit 0
 fi
 
+# MAC 초기화 중이거나 실패한 동안 독립 supplicant/checker 복구 경로도 대기한다.
+# wait 미지원은 teardown 전에 판별해 기존 무선을 불필요하게 제거하지 않는다.
+if [ "${MFG_MODE:-0}" != "1" ]; then
+    mkdir -p /run/wifi || exit 78
+    : > /run/wifi/mac-contract-blocked || exit 78
+    if ! command -v udevadm >/dev/null 2>&1 || ! LC_ALL=C udevadm wait --help >/dev/null 2>&1; then
+        logger -p local0.err "[$tag:$LINENO] MAC initialization requires udevadm wait; stop before module teardown" || true
+        exit 78
+    fi
+fi
+
 # 이미 로드된 모듈이 있으면 사용 프로세스 종료 후 제거
 if lsmod | grep -q "^${MOAL_MOD}\b" || lsmod | grep -q "^${MLAN_MOD}\b"; then
     logger -p local0.info "[$tag:$LINENO] $MOAL_MOD/$MLAN_MOD already loaded -> unloading"
@@ -809,6 +820,7 @@ apply_final_mac() {
                     "[$tag:$LINENO] [$iface] no usable MAC (wired peer/base absent); discarded stale clone MAC -> driver default"
             else
                 logger -p local0.err "[$tag:$LINENO] [$iface] failed to discard stale clone MAC"
+                return 1
             fi
             return 0
         fi
@@ -818,11 +830,20 @@ apply_final_mac() {
     # source(dynamic/static/base)를 update_mac에 전달 — dynamic 클론은 다른 인터페이스의
     # stale static MAC override보다 우선 적용되어야 한다(update_mac 충돌 해소, #267 후속).
     if MAC_SOURCE="$source" /usr/local/scripts/update_mac.sh "$iface" "$mac" "$@"; then
-        logger -p local0.info "[$tag:$LINENO] [$iface] final MAC applied: $mac (source=$source)"
+        logger -p local0.info "[$tag:$LINENO] [$iface] final MAC configured in .link: $mac (source=$source)"
         return 0
     fi
     logger -p local0.err "[$tag:$LINENO] update_mac.sh $iface ($source) failed"
     return 1
+}
+
+verify_final_mac() {
+    local iface="$1" expected="$2" enabled="$3"
+    [ "$enabled" = "true" ] && [ -n "$expected" ] || return 0
+    if ! mac_verify_live_address "$iface" "$expected"; then
+        ip link set "$iface" down || true
+        return 1
+    fi
 }
 
 iface_enabled_value() {
@@ -1122,22 +1143,30 @@ FINAL_MAC_PLAN=(
 # 전체 계획을 전달한다. 외부/legacy 파일 충돌은 계속 거부한다.
 if validate_final_mac_plan "${FINAL_MAC_PLAN[@]}"; then
     if ! mac_acquire_global_lock "${SYSTEMD_NETWORK_DIR:-/etc/systemd/network}"; then
-        logger -p local0.emerg "[$tag:$LINENO] failed to acquire global MAC plan lock"
+        logger -p local0.emerg "[$tag:$LINENO] failed to acquire global MAC plan lock" || true
+        exit 78
     else
         apply_final_mac "$BRIDGE_IFACE" "$BRIDGE_MAC" "$BRIDGE_MAC_SOURCE" \
             "${FINAL_MAC_PLAN[@]}" \
-            || logger -p local0.err "[$tag:$LINENO] [$BRIDGE_IFACE] final MAC apply failed"
+            || { logger -p local0.err "[$tag:$LINENO] [$BRIDGE_IFACE] final MAC configuration failed" || true; exit 78; }
         apply_final_mac "$SECONDARY_IFACE" "$SECONDARY_MAC" "base" \
             "${FINAL_MAC_PLAN[@]}" \
-            || logger -p local0.err "[$tag:$LINENO] [$SECONDARY_IFACE] final MAC apply failed"
+            || { logger -p local0.err "[$tag:$LINENO] [$SECONDARY_IFACE] final MAC configuration failed" || true; exit 78; }
         apply_final_mac "eth0" "$ETH0_MAC" "base" \
             "${FINAL_MAC_PLAN[@]}" \
-            || logger -p local0.err "[$tag:$LINENO] [eth0] final MAC apply failed"
-        mac_release_global_lock \
-            || logger -p local0.err "[$tag:$LINENO] failed to release global MAC plan lock"
+            || { logger -p local0.err "[$tag:$LINENO] [eth0] final MAC configuration failed" || true; exit 78; }
     fi
 else
-    logger -p local0.emerg "[$tag:$LINENO] invalid/duplicate final MAC plan; skip all MAC writes"
+    logger -p local0.emerg "[$tag:$LINENO] invalid/duplicate final MAC plan; stop before driver load" || true
+    exit 78
+fi
+
+# .link 갱신/클론 제거 뒤 새 netdev add 이벤트가 최신 설정을 읽도록 한다.
+# networkctl reload는 .network용이며 udev의 .link 설정 reload를 대신하지 않는다.
+# 기존 eth0는 재생성하지 않으므로 이 경로에서 live eth0 MAC 변경을 요구하지 않는다.
+if ! udevadm control --timeout=5 --reload; then
+    logger -p local0.err "[$tag:$LINENO] MAC configuration reload failed; stop before driver load" || true
+    exit 78
 fi
 
 # wifi_bridge / wifi_event / wifi_periodic_roam / wifi_ping_monitor / wifi_mgmt_log.timer 등
@@ -1201,6 +1230,14 @@ if [ "${MFG_MODE:-0}" == "1" ]; then
     exit 0
 fi
 rm -f "$MFG_LOADED_FLAG" 2>/dev/null || true
+
+# 전용 status 78은 parent를 failed로 남기되 자동 재시작/비상 reboot를 막는다.
+# supplicant의 별도 start도 같은 status를 확인해 잘못된 MAC으로 연결하지 않는다.
+verify_final_mac "$BRIDGE_IFACE" "$BRIDGE_MAC" "$(iface_enabled_value "$BRIDGE_IFACE")" || exit 78
+verify_final_mac "$SECONDARY_IFACE" "$SECONDARY_MAC" "$(iface_enabled_value "$SECONDARY_IFACE")" || exit 78
+mac_release_global_lock \
+    || { logger -p local0.err "[$tag:$LINENO] failed to release global MAC plan lock" || true; exit 78; }
+rm -f /run/wifi/mac-contract-blocked || exit 78
 
 apply_iface_txpwrlimit "mlan0" "$MLAN0_ENABLED"
 apply_iface_txpwrlimit "mlan1" "$MLAN1_ENABLED"

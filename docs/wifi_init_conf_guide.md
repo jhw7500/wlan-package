@@ -108,8 +108,8 @@ wifi_init_conf.json
 
 | 키 | 설명 |
 |----|------|
-| `base` | 인터페이스 기본(baseline) MAC. **`enabled` 여부와 무관하게 항상 반영**된다(#110). 빈 문자열이면 생략 |
-| `target` | static 모드 소스 + 드라이버 `mod_para`(`wifi_mod_para__.conf`)의 `mac_addr=` 주입값(펌웨어/어댑터 MAC). 빈 문자열이면 생략 |
+| `base` | 인터페이스 기본(baseline) MAC. **`enabled` 여부와 무관하게 `.link`에 기록**한다. 실제 적용은 netdev 생성 시 이루어지며 활성 무선 인터페이스만 기동 중 검증한다. 빈 문자열이면 생략 |
+| `target` | `mac_mode=static`일 때 bridge 인터페이스의 MAC 소스. 빈 문자열이면 base로 폴백. `wifi <iface> mac target <MAC>`은 target만 저장하며 mac_mode는 별도로 설정해야 한다 |
 
 > **적용 규칙 (#110~)**
 > - mlan0/mlan1 모두 `enabled` 여부와 무관하게 `base`를 먼저 반영(baseline). (기존: iface `enabled=false`면 MAC 설정 전체 skip → mlan1 비활성 시 base 미반영)
@@ -118,7 +118,9 @@ wifi_init_conf.json
 > - 빈 문자열이면 해당 소스 생략(기존 `/opt/wlan/mac` 디렉토리 대체).
 > - **쓸 MAC이 하나도 없으면**(dynamic peer 없음 + base 없음) `wbridge.mac_clone_require_peer=true`(기본)일 때 bridge iface `.link`의 `MACAddress`를 **제거**해 드라이버 기본 MAC으로 되돌린다. 아래 [클론 MAC 잔재](#클론-mac-잔재--mac_clone_require_peer) 참고.
 
-> **적용 계층·시점**: `update_mac.sh`가 systemd `.link`(`/etc/systemd/network/2X-<iface>.link`)의 `MACAddress=`를 기록하며, **udev가 netdev 생성 시(=부팅/드라이버 리로드)에만 적용**한다 — JSON만 고치고 재부팅하지 않으면 live 인터페이스 MAC은 바뀌지 않는다. `target`은 추가로 `mod_para`의 `mac_addr=`로 주입돼 insmod 시 어댑터 MAC이 된다. `.link`가 없거나 비어 있으면(구버전 잔재) `update_mac.sh`가 `[Match]/[Link]`를 갖춘 파일을 재생성하고(#111), 변경 시 인터페이스당 최대 5개 회전 백업(`.bak.1`~`.bak.5`, 동일 MAC 중복 제외)한다.
+> **적용 계층·시점**: `update_mac.sh`가 systemd `.link`(`/etc/systemd/network/2X-<iface>.link`)의 `MACAddress=`를 기록한다. `wifi_init.sh`는 기록 후 udev 설정을 reload하고 무선 드라이버를 다시 로드한다. 선택한 MAC이 있는 활성 무선 인터페이스는 udev 초기화 완료를 최대 5초 기다린 뒤 `/sys/class/net/<iface>/address`가 선택값과 같은지 확인한다. JSON·`.link`·`ID_NET_LINK_FILE`만으로 실제 적용 성공을 판단하지 않는다. JSON 저장만으로 live MAC은 바뀌지 않으며, `wifi_init`의 target 적용 경로는 `mod_para`에 `mac_addr=`를 주입하지 않는다. `.link`가 없거나 비어 있으면 `update_mac.sh`가 `[Match]/[Link]`를 갖춘 파일을 재생성하고, 변경 시 최대 5개 회전 백업(`.bak.1`~`.bak.5`, 동일 MAC 중복 제외)을 유지한다. 비활성 무선 인터페이스와 기존 eth0의 live MAC 검증은 이 경로의 범위 밖이다.
+
+> **MAC 설정 실패 복구**: 계획 충돌·`.link` 기록 실패·udev reload/초기화 실패·실제 무선 MAC 불일치는 `wifi_init.service`를 status **78**의 failed 상태로 남긴다. 자동 parent 재시작과 비상 재부팅은 하지 않고, supplicant의 별도 start도 차단한다. 유선/시리얼에서 journal의 `expected`/`actual` 또는 실패 원인을 확인해 설정을 수정한 뒤 `systemctl restart wifi_init.service`를 실행한다. 정상 기동은 실제 MAC, 새 supplicant의 `COMPLETED`, 통신 복구를 함께 확인한다. MFG 프로파일은 이 MAC 적용·검증 경로를 건너뛴다.
 
 ---
 
@@ -170,6 +172,21 @@ wifi_init_conf.json
 `mlan0-ip`은 주소를 자동으로 mlan0에 배치하거나 eth0에서 제거하지 않는다. 두 인터페이스에
 같은 서브넷 주소를 동시에 두지 말고, 적용 후 `wifi {0|1} br status`로 정합성을 확인한다.
 
+운용 사양별 검증 기준은 다음과 같다.
+
+| Specification | Protocol | Profile | Management IP |
+|---|---|---|---|
+| SEMES | FTP QUOTE | `eth0-ip` | `eth0` |
+| DFK | OPCd/VHL | `peer-route` | `mlan0`, mirrored as `/32` on `eth0` |
+
+DFK는 `wifi 0 br profile peer-route apply`로 연계 설정을 저장하고 다음 부팅에 적용한다.
+관리 IP를 `mlan0`에 배치한 뒤 `eth0`의 같은 IP `/32` 미러, `iif eth0`의 table 100 규칙과
+유선 peer host route도 함께 확인한다. 같은 IP만 추가한 상태로 검증을 완료하지 않는다.
+`wifi 0 br restart`는 브리지 서비스만 재시작하며 주소·정책 라우팅을 적용하지 않는다.
+SEMES의 FTP QUOTE 시험 결과를 DFK OPCd의 실기 검증 결과로 사용하지 않는다.
+DFK 관리 IP와 운영 JSON 기준은
+[Notion의 peer-route 결정](https://app.notion.com/p/Rev1-01-3-0x0010-Q10-IP-peer_route-3d18a230a04e81c39731e72f6488117b)을 참고한다.
+
 #### 기배포 기기 마이그레이션 — 공식 경로 (결정, #257)
 
 `DEBIAN/postinst`의 cpchk·json_merge는 **사이트 값 보존**이 목적이라, 위 3종 토글
@@ -190,6 +207,48 @@ wifi_init_conf.json
 원칙과 충돌(업그레이드가 사용자 값을 덮음), (b) "부팅/업그레이드 시 자동 설정변경 금지"
 지침과 충돌. 위 두 opt-in 경로만 두 원칙을 동시에 만족한다. (#91 NTP 결정과 동일 패턴 —
 공식 반영 경로 = 프로비저닝 스크립트.)
+
+#### 공장 초기화용 영구 프로필 (#324)
+
+운용 설정과 공장 초기화 후 돌아갈 설정은 별도로 선택한다. 일반
+`wifi {0|1} br profile <name> apply`는 현재 운용 JSON만 바꾸며 공장 초기화용 선택을
+기록하지 않는다. 초기화용 선택은 `/usr/local/etc/wifi_factory_topology.json`에 보관하고,
+패키지 업그레이드와 공장 초기화 중에도 보존한다.
+
+```bash
+wifi 0 br factory-profile show                 # 현재 초기화용 선택 조회
+wifi 0 br factory-profile peer-route           # 변경 내용 확인; 기록 없음
+wifi 0 br factory-profile peer-route apply     # DFK 초기화용 선택만 기록
+wifi 0 br factory-profile eth0-ip apply        # SEMES 초기화용 선택만 기록
+```
+
+이 명령은 현재 IP·운용 JSON·서비스를 바꾸거나 재부팅하지 않는다. DFK의 현재 운용 설정도
+전환하려면 기존 `wifi 0 br profile peer-route apply`를 별도로 실행한다. 호스트의
+`bd_provision.sh`에는 명시적인 `--factory-topology eth0-ip|peer-route` 옵션을 사용하며,
+`--profile a`(현재 토글 유지)나 `--profile b`(운용 토글 설정)만으로 초기화용 선택을
+추론하지 않는다. 초기화용 옵션도 기존 plan/apply/verify/rollback 단계에서 처리한다.
+초기화용 선택을 포함하는 프로비저닝과 선택 파일의 저장 명령은 같은 잠금을 사용해,
+다른 저장 명령이 적용 또는 rollback 사이에 끼어들어 선택값을 잃지 않게 한다.
+
+선택 파일이 없는 기존 장치는 현행 eth0-ip 초기화를 유지한다. 기존 DFK 장치는 새 패키지의
+명시적 명령으로 peer-route를 등록해야 초기화 뒤에도 DFK 프로필이 유지된다. 설치·업그레이드·
+부팅에서 자동 등록하지 않는다. 손상되거나 권한·소유자가 잘못된 선택 파일은 초기화의 첫
+설정 변경 전에 오류로 중단하며 재부팅하지 않는다.
+
+초기화가 선택한 프로필의 세대를 후조건 검사 뒤 다시 확인한다. 처리 도중 운영자가 선택
+파일을 변경한 경우에는 초기화가 바꾼 설정을 복구하고 재부팅을 막으며, 운영자가 새로
+기록한 선택 파일은 덮어쓰지 않는다.
+
+DFK 초기화도 유선 복구 주소 `eth0=192.168.1.1/24`를 유지한다. 다음 부팅에 mlan0의 관리
+IP를 같은 값의 eth0 `/32`로 추가하고, 기존 peer-route의 rule/table/host route 설정을 함께
+적용한다. WPA와 network의 공통 공장 템플릿은 유지하며 고객사 SSID·암호를 추론하지 않는다.
+
+필수 JSON·network·WPA 파일은 같은 초기화 rollback 범위에 포함한다. commit 또는 필수
+후조건 검사에 실패하면 교체한 파일을 복구하고 재부팅을 막는다. 이는 감지한 정상 오류의
+복구 범위이며, SIGKILL·전원 차단 중 여러 파일의 동시 원자성이나 모든 OS·서비스 변경의
+복구 보장은 아니다. 검증된 commit 이후 임시 rollback 사본을 지우는 정리만 실패했다면
+초기화 성공을 취소하지 않고 남은 사본을 로그에 기록한다. FTP QUOTE의 `rst`는 기존
+재부팅 전용 명령으로 유지한다.
 
 #### `.network` IPv6 비활성(#255)은 기배포 기기에 반영되지 않는다
 
@@ -1405,7 +1464,7 @@ AC 전용 mlan1은 이 deferred HE 경로와 `11axcfg` 검증 대상이 아니�
 
 ### 11.11 roam_garp - 로밍 직후 gratuitous ARP (per-iface)
 
-`mlan0.roam_garp` / `mlan1.roam_garp`. **사용 스크립트**: `wifi_event.sh`.
+`mlan0.roam_garp` / `mlan1.roam_garp`. **사용 스크립트**: `wifi_event.sh`(송신), `wifi_apply_enabled.sh`(이벤트 서비스 활성화).
 
 로밍 후 유선 스위치의 FDB가 STA 새 위치를 재학습하기까지 ~2–5초 상향 통신 갭이 관측되는데(무선 핸드오프·STA 하향은 정상, 로밍 시 STA/AP 어느 쪽도 재공지 안 함 — tshark 확정), `wifi_event.sh`의 로밍 case(`connected to`/`roamed to`)에서 BSSID 확인 직후 무선 iface IP로 gratuitous ARP(`arping -U -c 3`)를 즉시 발사해 스위치 재학습을 앞당긴다(#234).
 
@@ -1415,6 +1474,7 @@ AC 전용 mlan1은 이 deferred HE 경로와 `11axcfg` 검증 대상이 아니�
 
 - **스코프 = 무선전용/관리-IP**: iface에 IPv4가 있을 때만 발사한다. 순수 MAC클론 투명 브리지는 mlan0에 L3 IP가 없어 **자동 no-op** — 최종 브리지 제품의 로밍 갭 근본책은 드라이버측 클론 MAC L2 announce(**wlan-driver-v2#47**, 머지됨)다.
 - **로밍 데몬(`.roaming.enabled`)과 독립**: iw 이벤트 반응이라 FW 로밍·수동 로밍이면 로밍 데몬이 꺼져 있어도 발사된다. (같은 이유로 `.roaming` 하위가 아니라 top-level per-iface 키 — `arping`과 동일 배치)
+- **GARP만 사용해도 이벤트 서비스 활성화**: 인터페이스가 활성화되어 있고 `roam_garp.enabled`가 JSON boolean `true`이면, 부팅 또는 `wifi_init` 적용 시 `wifi_event@<iface>.service`를 활성화한다. 다른 이벤트 사용 기능(on_connect/SNMP trap/deferred MCS)은 없어도 된다. 서비스가 이미 실행 중이면 송신 게이트는 이벤트마다 현재 설정을 읽는다. 문자열 `"true"`나 숫자 `1`은 GARP 활성화 값이 아니다.
 - 비블로킹 백그라운드(`&`)로 `iw event` 루프를 막지 않는다. `arping`은 iputils(`-U` gratuitous announce 지원, 온타겟 확인).
 - **기본 off 이유**: 갭-소멸 효과가 미검증(AP측 상향 포워딩 지연 병존 가능) — 듀얼AP A/B(**#235**)에서 확증 후 릴리스에서 default 승격 재검토.
 

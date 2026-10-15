@@ -75,6 +75,27 @@ is_mfg_mode() {
     [ "${m:-0}" = "1" ]
 }
 
+mac_contract_blocked() {
+    local metadata active_state="" status="" key value marker=0
+    [ -e /run/wifi/mac-contract-blocked ] && marker=1
+    metadata=$(logger_run_bounded 2 systemctl show wifi_init.service -p ActiveState -p ExecMainStatus 2>/dev/null) || {
+        [ "$marker" -eq 1 ]
+        return
+    }
+    while IFS='=' read -r key value; do
+        case "$key" in
+            ActiveState) active_state=$value ;;
+            ExecMainStatus) status=$value ;;
+        esac
+    done <<< "$metadata"
+    [ "$status" = "78" ] && return 0
+    if [ "$marker" -eq 1 ]; then
+        [ "$active_state" = "failed" ] && [[ "$status" =~ ^[0-9]+$ ]] && [ "$status" -ne 0 ] && return 1
+        return 0
+    fi
+    return 1
+}
+
 # fork 없이 읽는다. 파일 부재/빈 값은 빈 문자열 — 0 으로 취급하지 않는 것이 중요하다
 # (rmmod 중에는 MODULE_GET 실패로 exit 0 + 0바이트가 나온다).
 read_wifi_status() {
@@ -160,6 +181,10 @@ verify_recovered() {
 
 request_reboot() {
     local reason="$1" rc
+    if mac_contract_blocked; then
+        logger -p local0.warning "[$tag:$LINENO] MAC initialization blocked; suppress automatic reboot" || true
+        return 0
+    fi
     MAX_REBOOT_COUNT="$MAX_REBOOT_COUNT" REBOOT_COOLDOWN_SEC="$REBOOT_COOLDOWN_SEC" MIN_UPTIME_SEC="$MIN_UPTIME_SEC" \
       "$POLICY_BIN" \
         --source wlan_fw_watch \
@@ -182,6 +207,11 @@ FAULT_CNT=0
 FAULT_CLASS=""
 
 while true; do
+    if mac_contract_blocked; then
+        FAULT_CNT=0; FAULT_CLASS=""
+        sleep "$CHECK_INTERVAL_SEC"
+        continue
+    fi
     if is_mfg_mode; then
         FAULT_CNT=0; FAULT_CLASS=""
         sleep 10
@@ -242,9 +272,20 @@ while true; do
         logger -p local0.emerg "[$tag:$LINENO] reload disabled by config - reporting only, no action taken"
     elif reload_allowed; then
         logger -p local0.emerg "[$tag:$LINENO] reloading driver via wifi_init.service"
-        mark_reload
+        # 로그/스냅샷 대기 중 parent 초기화가 시작되었을 수 있으므로 직전에 재확인한다.
+        if mac_contract_blocked; then
+            FAULT_CNT=0; FAULT_CLASS=""
+            sleep "$CHECK_INTERVAL_SEC"
+            continue
+        fi
         # --no-block 필수: TimeoutStartSec 동안 감시 루프가 눈이 멀면 안 된다.
-        systemctl --no-block restart wifi_init.service
+        if ! systemctl --no-block restart wifi_init.service; then
+            logger -p local0.warning "[$tag:$LINENO] driver reload request rejected; do not record cooldown or escalate" || true
+            FAULT_CNT=0; FAULT_CLASS=""
+            sleep "$CHECK_INTERVAL_SEC"
+            continue
+        fi
+        mark_reload
         if verify_recovered; then
             logger -p local0.info "[$tag:$LINENO] driver recovered after reload (wifi_status=0)"
             FAULT_CNT=0; FAULT_CLASS=""
