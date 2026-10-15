@@ -75,11 +75,10 @@ ctsWlanEthernetAddress OBJECT-TYPE
         "Ethernet Address, rendered as colon-separated hex text
          (for example 'aa:bb:cc:dd:ee:ff').
          NOTE: the FXE3000 MIB types this object as MacAddress
-         (OCTET STRING (SIZE (6)), six raw bytes). This implementation returns
-         printable text instead, so the type is declared here as it is actually
-         served rather than as FXE3000 declares it. Migrating to the raw 6-byte
-         form requires replacing the pass_persist backend with an AgentX
-         subagent; tracked in wlan-package issue #215."
+          (OCTET STRING (SIZE (6)), six raw bytes). The CONTEC compatibility
+          root returns that raw form using pass_persist's octet/ASCII-hex
+          encoding. This CanTops root retains its existing printable-text
+          contract, so its type remains DisplayString."
     ::= { ctsWlanEnvironment 4 }
 
 ctsWlanWLMacAddress OBJECT-TYPE

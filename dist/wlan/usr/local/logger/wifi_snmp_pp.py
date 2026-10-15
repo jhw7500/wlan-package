@@ -54,9 +54,9 @@ Phase2b 객체 (mapping.md §6, mlan0 무선통계 — Counter32):
 구현 규약 / 한계 (MIB 미정의 → 본 구현에서 확정, 사양 확정 시 정정 필요):
   * IfTable(.3.2.1)은 INDEX 절 없는 degenerate pseudo-table → 유선=인스턴스 .1,
     무선=.2 로 노출. 그 외 그룹은 모두 스칼라 → GET 시 ``.0`` 인스턴스 접미사.
-  * MacAddress 는 MIB 상 OCTET STRING(SIZE 6) binary 이나, pass_persist 표준 타입에
-    binary octet 토큰이 없어 ``string`` + 콜론 hex("aa:bb:cc:dd:ee:ff")로 노출한다.
-    정확한 6옥텟 binary 가 필요하면 AgentX 서브에이전트 전환이 필요하다.
+  * CONTEC MacAddress 는 ``octet`` + 공백 구분 ASCII hex로 전달해 snmpd 가
+    OCTET STRING(SIZE 6) 으로 변환한다. 원시 바이트를 줄 프로토콜에 쓰지 않는다.
+    CanTops 루트는 자체 MIB 의 DisplayString(콜론 hex) 계약을 유지한다.
   * RSSI 는 dBm 음수값 그대로(INTEGER). 미연결/결측은 0.
   * Sta* (.11.x) 는 FXE3000(.672.65) 전용 트리. 본 제품은 STA 라 정합.
 
@@ -360,11 +360,21 @@ def build_oid_map(eth=None, mlan=None, devinfo=None, fw=None, eth_link_up=None,
     def put(suboid, typ, val):
         om[base + suboid] = (typ, str(val))
 
+    def put_mac(suboid, value):
+        mac = _fmt_mac(value)
+        if base == FXE3000:
+            # Net-SNMP 'octet' decodes printable hex, preserving NUL/LF bytes.
+            if not re.fullmatch(r"(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}", mac):
+                mac = NULL_MAC
+            put(suboid, "octet", mac.replace(":", " ").upper())
+        else:
+            put(suboid, "string", mac)
+
     # 환경 (.2.x 스칼라 → .0)
     put(".2.2.0", "string", fw or "")
     put(".2.3.0", "string", devinfo.get("hardware_version") or "")
-    put(".2.4.0", "string", _fmt_mac(_eth_field(eth, "mac_address")))
-    put(".2.5.0", "string", _fmt_mac(wl_mac))
+    put_mac(".2.4.0", _eth_field(eth, "mac_address"))
+    put_mac(".2.5.0", wl_mac)
     put(".2.6.0", "ipaddress", _fmt_ip(_eth_field(eth, "ip_address")))
     put(".2.7.0", "ipaddress", _fmt_ip(_eth_field(eth, "netmask")))
     put(".2.8.0", "ipaddress", _fmt_ip(_eth_field(eth, "gateway")))
@@ -392,7 +402,7 @@ def build_oid_map(eth=None, mlan=None, devinfo=None, fw=None, eth_link_up=None,
     put(".3.3.1.1.0", "string", _wireless_mode(tx_bitrate))  # WirelessMode(규격)
     put(".3.3.1.2.0", "string", "managed")     # WLM(Link Mode) STA 고정(사양 확정 대기)
     put(".3.3.1.3.0", "string", "Station")     # UnitType 고정
-    put(".3.3.1.4.0", "string", _fmt_mac(wl_mac))
+    put_mac(".3.3.1.4.0", wl_mac)
     put(".3.3.1.5.0", "string", bandwidth)
     # AP 정보 (.3.3.1.10.x) — MIB 상 AP 모드 그룹이지만, ChannelChange 트랩이
     # OBJECTS { fxe3000WIFInfoApChannel } 로 .10.2 를 varbind 에 지정한다. 즉 CONTEC 도 STA
@@ -403,7 +413,7 @@ def build_oid_map(eth=None, mlan=None, devinfo=None, fw=None, eth_link_up=None,
     put(".3.3.1.10.1.0", "string", ssid)       # ApEssId
     put(".3.3.1.10.2.0", "integer", channel)   # ApChannel (ChannelChange 트랩 varbind)
     put(".3.3.1.11.1.0", "integer", 2 if associated else 1)  # StaLoginState
-    put(".3.3.1.11.2.0", "string", _fmt_mac(bssid))
+    put_mac(".3.3.1.11.2.0", bssid)
     put(".3.3.1.11.3.0", "string", ssid)
     put(".3.3.1.11.4.0", "integer", channel)
     put(".3.3.1.11.5.0", "integer", _rate_mbps(tx_bitrate))   # StaTxRate (Mbps)
