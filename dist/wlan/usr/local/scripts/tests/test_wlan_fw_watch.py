@@ -14,7 +14,10 @@
   - 복구는 재부팅이 아니라 모듈 리로드를 먼저 시도해야 하고, 그 리로드 호출은
     --no-block 이어야 한다(블로킹하면 감시 루프가 눈이 먼다).
 """
+import os
 import re
+import signal
+import subprocess
 from pathlib import Path
 
 WLAN_ROOT = Path(__file__).resolve().parents[4]
@@ -213,3 +216,215 @@ def test_conf_load_does_not_use_eval():
     text = SCRIPT.read_text()
     assert "eval " not in text, "eval 대신 printf -v 를 쓴다"
     assert 'printf -v "$k"' in text
+
+
+def _executable(path: Path, body: str) -> None:
+    path.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+    path.chmod(0o700)
+
+
+def _run_marker_race(tmp_path: Path, scenario: str) -> tuple[list[str], Path, Path]:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    events = tmp_path / "events"
+    sleep_count = tmp_path / "sleep-count"
+    marker = tmp_path / "run/mac-contract-blocked"
+    parent_status = tmp_path / "parent-status"
+    marker.parent.mkdir()
+    if scenario == "loop-start":
+        marker.touch()
+    if scenario == "parent-78-start":
+        parent_status.write_text("78\n", encoding="utf-8")
+
+    _executable(
+        fake_bin / "logger",
+        """printf 'logger %s\\n' "$*" >> "$EVENTS"
+if [ "$SCENARIO" = before-restart ]; then
+  case "$*" in
+    *"reloading driver via"*)
+        printf 'marker-created-before-restart\\n' >> "$EVENTS"
+        touch "$MAC_BLOCK_MARKER" ;;
+  esac
+fi
+if [ "$SCENARIO" = parent-78-before-restart ]; then
+  case "$*" in
+    *"reloading driver via"*)
+        printf 'parent-status-78-before-restart\n' >> "$EVENTS"
+        printf '78\n' > "$PARENT_STATUS" ;;
+  esac
+fi
+""",
+    )
+    _executable(
+        fake_bin / "jq",
+        """case "$*" in
+    *CHECK_INTERVAL_SEC*) echo 1 ;;
+    *INITIAL_DELAY_SEC*) echo 0 ;;
+    *TERM_FAULT_CNT*|*ABNORMAL_FAULT_CNT*) echo 1 ;;
+    *CONFIRM_TIMEOUT_SEC*) echo 1 ;;
+    *RELOAD_ENABLED*) echo 1 ;;
+    *RELOAD_COOLDOWN_SEC*) echo 0 ;;
+    *VERIFY_TIMEOUT_SEC*) echo 0 ;;
+    *VERIFY_INTERVAL_SEC*) echo 1 ;;
+    *MAX_REBOOT_COUNT*) echo 3 ;;
+    *REBOOT_COOLDOWN_SEC*) echo 1 ;;
+    *MIN_UPTIME_SEC*) echo 0 ;;
+    *) echo ;;
+esac
+""",
+    )
+    _executable(
+        fake_bin / "sleep",
+        """n=0
+[ ! -f "$SLEEP_COUNT" ] || n=$(cat "$SLEEP_COUNT")
+n=$((n + 1))
+printf '%s\\n' "$n" > "$SLEEP_COUNT"
+printf 'sleep %s\\n' "$n" >> "$EVENTS"
+if [ "$SCENARIO" = loop-start ] && [ "$n" -ge 3 ]; then kill -TERM "$PPID"; fi
+if [ "$SCENARIO" = before-restart ] && [ "$n" -ge 3 ]; then kill -TERM "$PPID"; fi
+if [ "$SCENARIO" = restart-blocks-escalation ] && [ "$n" -ge 3 ]; then kill -TERM "$PPID"; fi
+if [ "$SCENARIO" = restart-rejected ] && [ "$n" -ge 2 ]; then kill -TERM "$PPID"; fi
+if [ "$SCENARIO" = parent-78-start ] && [ "$n" -ge 3 ]; then kill -TERM "$PPID"; fi
+if [ "$SCENARIO" = parent-78-before-restart ] && [ "$n" -ge 3 ]; then kill -TERM "$PPID"; fi
+if [ -f "$POLICY_MARK" ]; then kill -TERM "$PPID"; fi
+exit 0
+""",
+    )
+    _executable(
+        fake_bin / "systemctl",
+        """printf 'systemctl %s\\n' "$*" >> "$EVENTS"
+if [ "$*" = "show wifi_init.service -p ExecMainStatus --value" ]; then
+    if [ -f "$PARENT_STATUS" ]; then cat "$PARENT_STATUS"; else printf 'malformed\\n'; fi
+    exit 0
+fi
+if [ "$SCENARIO" = restart-blocks-escalation ]; then
+    printf 'marker-created-by-restart\\n' >> "$EVENTS"
+    touch "$MAC_BLOCK_MARKER"
+elif [ "$SCENARIO" = restart-rejected ]; then
+    exit 7
+else
+    kill -TERM "$PPID"
+fi
+exit 0
+""",
+    )
+    for name in ("sync", "snapshot"):
+        _executable(fake_bin / name, "exit 0\n")
+    policy = tmp_path / "policy"
+    _executable(
+        policy,
+        'printf "policy %s\\n" "$*" >> "$EVENTS"\ntouch "$POLICY_MARK"\nexit 42\n',
+    )
+    logger_lib = tmp_path / "logger-lib.sh"
+    logger_lib.write_text(
+        "logger_run_bounded() { shift; \"$@\"; }\n"
+        "logger_read_bounded() { return 1; }\n",
+        encoding="utf-8",
+    )
+    config = tmp_path / "config.json"
+    config.write_text("{}\n", encoding="utf-8")
+    wifi_status = tmp_path / "wifi_status"
+    wifi_status.write_text("11\n", encoding="utf-8")
+    adapter = tmp_path / "adapter-config"
+    adapter.write_text("hardware_status=5\n", encoding="utf-8")
+
+    source = SCRIPT.read_text(encoding="utf-8")
+    replacements = {
+        "/lib/firmware/": str(tmp_path / "firmware") + "/",
+        "/sys/class/net/": str(tmp_path / "net") + "/",
+        "/run/wifi/": str(tmp_path / "run") + "/",
+    }
+    for old, new in replacements.items():
+        source = source.replace(old, new)
+    for boundary in replacements:
+        assert boundary not in source, f"unsafe test path: {boundary}"
+    runnable = tmp_path / "wlan_fw_watch.sh"
+    runnable.write_text(source, encoding="utf-8")
+
+    policy_mark = tmp_path / "policy.mark"
+    state_file = tmp_path / "reload.state"
+    env = os.environ | {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "EVENTS": str(events),
+        "SLEEP_COUNT": str(sleep_count),
+        "MAC_BLOCK_MARKER": str(marker),
+        "PARENT_STATUS": str(parent_status),
+        "POLICY_MARK": str(policy_mark),
+        "SCENARIO": scenario,
+        "WIFI_LOGGER_COMMAND_LIB": str(logger_lib),
+        "WIFI_INIT_CONF_JSON": str(config),
+        "WIFI_STATUS_PROC": str(wifi_status),
+        "ADAPTER_CONFIG_GLOB": str(adapter),
+        "STATE_FILE": str(state_file),
+        "POLICY_BIN": str(policy),
+        "SNAPSHOT_BIN": str(fake_bin / "snapshot"),
+    }
+    proc = subprocess.Popen(
+        ["/bin/bash", str(runnable)],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=8)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        stdout, stderr = proc.communicate(timeout=3)
+        raise AssertionError(f"watcher did not reach bounded stop\n{stdout}\n{stderr}")
+    assert proc.returncode == 0, (stdout, stderr)
+    return events.read_text(encoding="utf-8").splitlines(), policy_mark, state_file
+
+
+def test_mac_contract_marker_at_loop_start_suppresses_recovery(tmp_path):
+    events, policy_mark, _ = _run_marker_race(tmp_path, "loop-start")
+    assert not any(line.startswith(("systemctl ", "policy ")) for line in events), events
+    assert not policy_mark.exists()
+
+
+def test_marker_created_before_reload_suppresses_wifi_init_restart(tmp_path):
+    events, policy_mark, state_file = _run_marker_race(tmp_path, "before-restart")
+    created_at = events.index("marker-created-before-restart")
+    assert not any(line.startswith(("systemctl ", "policy ")) for line in events[created_at:]), events
+    assert not policy_mark.exists()
+    assert not state_file.exists(), "aborted restart must not consume reload cooldown"
+
+
+def test_restart_created_marker_suppresses_reboot_escalation(tmp_path):
+    events, policy_mark, _ = _run_marker_race(tmp_path, "restart-blocks-escalation")
+    created_at = events.index("marker-created-by-restart")
+    assert any(line.startswith("systemctl --no-block restart wifi_init.service") for line in events)
+    assert not any(line.startswith("policy ") for line in events[created_at:]), events
+    assert not policy_mark.exists()
+
+
+def test_rejected_restart_does_not_mark_cooldown_or_escalate(tmp_path):
+    events, policy_mark, state_file = _run_marker_race(tmp_path, "restart-rejected")
+    assert any(line.startswith("systemctl --no-block restart wifi_init.service") for line in events)
+    assert not state_file.exists(), "rejected restart must not consume reload cooldown"
+    assert not any(line.startswith("policy ") for line in events), events
+    assert not policy_mark.exists()
+
+
+def test_parent_status_78_at_start_suppresses_reload_and_reboot(tmp_path):
+    events, policy_mark, state_file = _run_marker_race(tmp_path, "parent-78-start")
+    assert not any(
+        line.startswith(("systemctl --no-block restart ", "policy "))
+        for line in events
+    ), events
+    assert not policy_mark.exists()
+    assert not state_file.exists(), "suppressed reload must not consume cooldown"
+
+
+def test_parent_status_becoming_78_before_reload_suppresses_actions(tmp_path):
+    events, policy_mark, state_file = _run_marker_race(
+        tmp_path, "parent-78-before-restart"
+    )
+    changed_at = events.index("parent-status-78-before-restart")
+    assert not any(
+        line.startswith(("systemctl --no-block restart ", "policy "))
+        for line in events[changed_at:]
+    ), events
+    assert not policy_mark.exists()
+    assert not state_file.exists(), "aborted reload must not consume cooldown"

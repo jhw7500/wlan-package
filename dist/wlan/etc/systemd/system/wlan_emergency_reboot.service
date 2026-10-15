@@ -1,7 +1,7 @@
 [Unit]
 Description=Emergency reboot when wifi_init permanently fails
 # wifi_init.service 의 OnFailure= 에서 각 실패마다 트리거된다. 냉부팅 첫 MCS
-# lifecycle retry(status 75)는 아래 ExecCondition으로 제외한다.
+# lifecycle retry(status 75)와 MAC 설정 실패(status 78)는 ExecCondition으로 제외한다.
 DefaultDependencies=no
 Conflicts=shutdown.target
 Before=shutdown.target
@@ -10,10 +10,11 @@ Before=shutdown.target
 Type=oneshot
 # status 75는 association 전에 FW/module lifecycle을 한 번 다시 시작하기 위한
 # transitional 실패다. 비상 reboot를 호출하지 않고 wifi_init.service Restart=on-failure에 맡긴다.
-ExecCondition=/bin/sh -c '[ "$(systemctl show wifi_init.service -p ExecMainStatus --value 2>/dev/null)" != 75 ]'
+# status 78은 MAC 설정을 운영자가 수정할 때까지 자동 재시작/비상 reboot를 하지 않는다.
+ExecCondition=/bin/sh -c 'case "$(systemctl show wifi_init.service -p ExecMainStatus --value 2>/dev/null)" in 75|78) exit 1;; esac'
 # wlan_reboot_policy.sh 가 uptime/cooldown 기반 loop 방지를 처리한다.
 # reason은 journal 에 기록되어 사후 분석 가능.
 Environment=MAX_REBOOT_COUNT=3
 Environment=REBOOT_COOLDOWN_SEC=300
 Environment=MIN_UPTIME_SEC=60
-ExecStart=/usr/local/scripts/wlan_reboot_policy.sh --source wifi_init --reason "wifi_init persistent failure (excluding one cold MCS lifecycle retry)"
+ExecStart=/usr/local/scripts/wlan_reboot_policy.sh --source wifi_init --reason "wifi_init persistent failure (excluding cold MCS retry and MAC configuration failure)"

@@ -159,6 +159,13 @@ is_mfg_mode() {
 }
 MFG_IDLE_LOGGED=0
 
+mac_contract_blocked() {
+    local status
+    [ -e /run/wifi/mac-contract-blocked ] && return 0
+    status=$(logger_run_bounded 2 systemctl show wifi_init.service -p ExecMainStatus --value 2>/dev/null) || return 1
+    [ "$status" = "78" ]
+}
+
 if [ "$IFACE" != "eth0" ]; then
     for i in {1..3}; do
         if lsmod |grep -q "^$MODULE_NAME"; then
@@ -185,6 +192,14 @@ while true; do
         continue
     fi
     MFG_IDLE_LOGGED=0
+    # MAC 초기화 실패는 FW crash가 아니다. parent가 실패해도 독립 기동하는
+    # checker가 장치 부재/미연결을 재부팅 사유로 누적하지 않도록 기다린다.
+    if [[ "$IFACE" != "eth0" ]] && mac_contract_blocked; then
+        ERR_CNT=0; FAULT_CNT=0; UNSTABLE_START=0; REASSOC_DONE=0; REBOOT_F=0
+        HANDSHAKE_STATE=""; HANDSHAKE_START=0; HANDSHAKE_LAST_RETRY=0
+        sleep 3
+        continue
+    fi
     if [[ "$IFACE" == "eth0" ]]; then
           #STATE=$(jq -r '.eth_stats.phy.link' "/var/log/cantops/json/eth0/link.json")
           STATE=$(cat /sys/class/net/eth0/operstate)
@@ -356,7 +371,7 @@ while true; do
 
     sleep 5
 
-    if (( REBOOT_F == 1 )); then
+    if (( REBOOT_F == 1 )) && ! mac_contract_blocked; then
         reason=${CAUSE:-unknown}
         now=$(date +"%Y-%m-%d %H:%M:%S")
         reboot_at=$(date -d "+${REBOOT_COOLDOWN_SEC} seconds" +"%Y-%m-%d %H:%M:%S")

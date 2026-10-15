@@ -21,6 +21,9 @@ RestartSec=3
 # 하나가 재로드 전체를 90초 지연시킨다. 10초 뒤 systemd 가 SIGKILL 한다.
 # (systemctl 에는 --timeout 옵션이 없으므로 상한은 유닛에 둘 수밖에 없다.)
 TimeoutStopSec=10
+# After=의 순서만으로 parent 성공은 보장되지 않는다. udev reattach/별도 start도
+# MAC 초기화 실패(status 78)에서는 차단하고, 설정 수정 뒤 parent restart로 복구한다.
+ExecCondition=/usr/local/scripts/wlan_mac_ready.sh %i
 ExecStartPre=/bin/mkdir -p /var/log/cantops/wpa/%I
 ExecStartPre=/bin/sh -c 'echo "$(date "+%%Y-%%m-%%d %%H:%%M:%%S.%%3N") wpa_supplicant[info] %I: START" >> /var/log/cantops/wpa/%I/wpa.log'
 ExecStart=/usr/sbin/wpa_supplicant -c/etc/wpa_supplicant/wpa_supplicant-%I.conf -i%I -d

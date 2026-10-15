@@ -108,8 +108,8 @@ wifi_init_conf.json
 
 | 키 | 설명 |
 |----|------|
-| `base` | 인터페이스 기본(baseline) MAC. **`enabled` 여부와 무관하게 항상 반영**된다(#110). 빈 문자열이면 생략 |
-| `target` | static 모드 소스 + 드라이버 `mod_para`(`wifi_mod_para__.conf`)의 `mac_addr=` 주입값(펌웨어/어댑터 MAC). 빈 문자열이면 생략 |
+| `base` | 인터페이스 기본(baseline) MAC. **`enabled` 여부와 무관하게 `.link`에 기록**한다. 실제 적용은 netdev 생성 시 이루어지며 활성 무선 인터페이스만 기동 중 검증한다. 빈 문자열이면 생략 |
+| `target` | `mac_mode=static`일 때 bridge 인터페이스의 MAC 소스. 빈 문자열이면 base로 폴백. `wifi <iface> mac target <MAC>`은 target만 저장하며 mac_mode는 별도로 설정해야 한다 |
 
 > **적용 규칙 (#110~)**
 > - mlan0/mlan1 모두 `enabled` 여부와 무관하게 `base`를 먼저 반영(baseline). (기존: iface `enabled=false`면 MAC 설정 전체 skip → mlan1 비활성 시 base 미반영)
@@ -118,7 +118,9 @@ wifi_init_conf.json
 > - 빈 문자열이면 해당 소스 생략(기존 `/opt/wlan/mac` 디렉토리 대체).
 > - **쓸 MAC이 하나도 없으면**(dynamic peer 없음 + base 없음) `wbridge.mac_clone_require_peer=true`(기본)일 때 bridge iface `.link`의 `MACAddress`를 **제거**해 드라이버 기본 MAC으로 되돌린다. 아래 [클론 MAC 잔재](#클론-mac-잔재--mac_clone_require_peer) 참고.
 
-> **적용 계층·시점**: `update_mac.sh`가 systemd `.link`(`/etc/systemd/network/2X-<iface>.link`)의 `MACAddress=`를 기록하며, **udev가 netdev 생성 시(=부팅/드라이버 리로드)에만 적용**한다 — JSON만 고치고 재부팅하지 않으면 live 인터페이스 MAC은 바뀌지 않는다. `target`은 추가로 `mod_para`의 `mac_addr=`로 주입돼 insmod 시 어댑터 MAC이 된다. `.link`가 없거나 비어 있으면(구버전 잔재) `update_mac.sh`가 `[Match]/[Link]`를 갖춘 파일을 재생성하고(#111), 변경 시 인터페이스당 최대 5개 회전 백업(`.bak.1`~`.bak.5`, 동일 MAC 중복 제외)한다.
+> **적용 계층·시점**: `update_mac.sh`가 systemd `.link`(`/etc/systemd/network/2X-<iface>.link`)의 `MACAddress=`를 기록한다. `wifi_init.sh`는 기록 후 udev 설정을 reload하고 무선 드라이버를 다시 로드한다. 선택한 MAC이 있는 활성 무선 인터페이스는 udev 초기화 완료를 최대 5초 기다린 뒤 `/sys/class/net/<iface>/address`가 선택값과 같은지 확인한다. JSON·`.link`·`ID_NET_LINK_FILE`만으로 실제 적용 성공을 판단하지 않는다. JSON 저장만으로 live MAC은 바뀌지 않으며, `wifi_init`의 target 적용 경로는 `mod_para`에 `mac_addr=`를 주입하지 않는다. `.link`가 없거나 비어 있으면 `update_mac.sh`가 `[Match]/[Link]`를 갖춘 파일을 재생성하고, 변경 시 최대 5개 회전 백업(`.bak.1`~`.bak.5`, 동일 MAC 중복 제외)을 유지한다. 비활성 무선 인터페이스와 기존 eth0의 live MAC 검증은 이 경로의 범위 밖이다.
+
+> **MAC 설정 실패 복구**: 계획 충돌·`.link` 기록 실패·udev reload/초기화 실패·실제 무선 MAC 불일치는 `wifi_init.service`를 status **78**의 failed 상태로 남긴다. 자동 parent 재시작과 비상 재부팅은 하지 않고, supplicant의 별도 start도 차단한다. 유선/시리얼에서 journal의 `expected`/`actual` 또는 실패 원인을 확인해 설정을 수정한 뒤 `systemctl restart wifi_init.service`를 실행한다. 정상 기동은 실제 MAC, 새 supplicant의 `COMPLETED`, 통신 복구를 함께 확인한다. MFG 프로파일은 이 MAC 적용·검증 경로를 건너뛴다.
 
 ---
 
