@@ -229,12 +229,32 @@ def _run_marker_race(tmp_path: Path, scenario: str) -> tuple[list[str], Path, Pa
     events = tmp_path / "events"
     sleep_count = tmp_path / "sleep-count"
     marker = tmp_path / "run/mac-contract-blocked"
-    parent_status = tmp_path / "parent-status"
+    parent_metadata = tmp_path / "parent-metadata"
     marker.parent.mkdir()
-    if scenario == "loop-start":
+    if scenario in {
+        "loop-start",
+        "stale-marker-non78",
+        "marker-active-transition",
+        "marker-metadata-unavailable",
+        "marker-malformed-metadata",
+    }:
         marker.touch()
     if scenario == "parent-78-start":
-        parent_status.write_text("78\n", encoding="utf-8")
+        parent_metadata.write_text(
+            "ActiveState=failed\nExecMainStatus=78\n", encoding="utf-8"
+        )
+    elif scenario == "stale-marker-non78":
+        parent_metadata.write_text(
+            "ActiveState=failed\nExecMainStatus=1\n", encoding="utf-8"
+        )
+    elif scenario == "marker-active-transition":
+        parent_metadata.write_text(
+            "ActiveState=activating\nExecMainStatus=1\n", encoding="utf-8"
+        )
+    elif scenario == "marker-malformed-metadata":
+        parent_metadata.write_text(
+            "ActiveState=failed\nExecMainStatus=not-a-number\n", encoding="utf-8"
+        )
 
     _executable(
         fake_bin / "logger",
@@ -250,7 +270,7 @@ if [ "$SCENARIO" = parent-78-before-restart ]; then
   case "$*" in
     *"reloading driver via"*)
         printf 'parent-status-78-before-restart\n' >> "$EVENTS"
-        printf '78\n' > "$PARENT_STATUS" ;;
+        printf 'ActiveState=failed\nExecMainStatus=78\n' > "$PARENT_METADATA" ;;
   esac
 fi
 """,
@@ -286,6 +306,10 @@ if [ "$SCENARIO" = restart-blocks-escalation ] && [ "$n" -ge 3 ]; then kill -TER
 if [ "$SCENARIO" = restart-rejected ] && [ "$n" -ge 2 ]; then kill -TERM "$PPID"; fi
 if [ "$SCENARIO" = parent-78-start ] && [ "$n" -ge 3 ]; then kill -TERM "$PPID"; fi
 if [ "$SCENARIO" = parent-78-before-restart ] && [ "$n" -ge 3 ]; then kill -TERM "$PPID"; fi
+if [ "$SCENARIO" = marker-active-transition ] && [ "$n" -ge 3 ]; then kill -TERM "$PPID"; fi
+if [ "$SCENARIO" = marker-metadata-unavailable ] && [ "$n" -ge 3 ]; then kill -TERM "$PPID"; fi
+if [ "$SCENARIO" = marker-malformed-metadata ] && [ "$n" -ge 3 ]; then kill -TERM "$PPID"; fi
+if [ "$SCENARIO" = stale-marker-non78 ] && [ "$n" -ge 5 ]; then kill -TERM "$PPID"; fi
 if [ -f "$POLICY_MARK" ]; then kill -TERM "$PPID"; fi
 exit 0
 """,
@@ -293,8 +317,13 @@ exit 0
     _executable(
         fake_bin / "systemctl",
         """printf 'systemctl %s\\n' "$*" >> "$EVENTS"
-if [ "$*" = "show wifi_init.service -p ExecMainStatus --value" ]; then
-    if [ -f "$PARENT_STATUS" ]; then cat "$PARENT_STATUS"; else printf 'malformed\\n'; fi
+if [ "$*" = "show wifi_init.service -p ActiveState -p ExecMainStatus" ]; then
+    [ "$SCENARIO" != marker-metadata-unavailable ] || exit 1
+    if [ -f "$PARENT_METADATA" ]; then
+        cat "$PARENT_METADATA"
+    else
+        printf 'ActiveState=active\\nExecMainStatus=0\\n'
+    fi
     exit 0
 fi
 if [ "$SCENARIO" = restart-blocks-escalation ]; then
@@ -302,6 +331,8 @@ if [ "$SCENARIO" = restart-blocks-escalation ]; then
     touch "$MAC_BLOCK_MARKER"
 elif [ "$SCENARIO" = restart-rejected ]; then
     exit 7
+elif [ "$SCENARIO" = stale-marker-non78 ]; then
+    exit 0
 else
     kill -TERM "$PPID"
 fi
@@ -348,7 +379,7 @@ exit 0
         "EVENTS": str(events),
         "SLEEP_COUNT": str(sleep_count),
         "MAC_BLOCK_MARKER": str(marker),
-        "PARENT_STATUS": str(parent_status),
+        "PARENT_METADATA": str(parent_metadata),
         "POLICY_MARK": str(policy_mark),
         "SCENARIO": scenario,
         "WIFI_LOGGER_COMMAND_LIB": str(logger_lib),
@@ -377,16 +408,28 @@ exit 0
     return events.read_text(encoding="utf-8").splitlines(), policy_mark, state_file
 
 
+def _recovery_actions(events: list[str]) -> list[str]:
+    return [
+        line
+        for line in events
+        if line.startswith(("systemctl --no-block restart ", "policy "))
+    ]
+
+
 def test_mac_contract_marker_at_loop_start_suppresses_recovery(tmp_path):
     events, policy_mark, _ = _run_marker_race(tmp_path, "loop-start")
-    assert not any(line.startswith(("systemctl ", "policy ")) for line in events), events
+    assert any(
+        line == "systemctl show wifi_init.service -p ActiveState -p ExecMainStatus"
+        for line in events
+    ), events
+    assert not _recovery_actions(events), events
     assert not policy_mark.exists()
 
 
 def test_marker_created_before_reload_suppresses_wifi_init_restart(tmp_path):
     events, policy_mark, state_file = _run_marker_race(tmp_path, "before-restart")
     created_at = events.index("marker-created-before-restart")
-    assert not any(line.startswith(("systemctl ", "policy ")) for line in events[created_at:]), events
+    assert not _recovery_actions(events[created_at:]), events
     assert not policy_mark.exists()
     assert not state_file.exists(), "aborted restart must not consume reload cooldown"
 
@@ -428,3 +471,40 @@ def test_parent_status_becoming_78_before_reload_suppresses_actions(tmp_path):
     ), events
     assert not policy_mark.exists()
     assert not state_file.exists(), "aborted reload must not consume cooldown"
+
+
+def test_failed_non78_parent_with_stale_marker_resumes_recovery(tmp_path):
+    events, policy_mark, state_file = _run_marker_race(tmp_path, "stale-marker-non78")
+    assert any(
+        line.startswith("systemctl --no-block restart wifi_init.service")
+        for line in events
+    ), events
+    assert state_file.exists(), "accepted reload must consume reload cooldown"
+    assert policy_mark.exists(), "failed reload did not resume ordinary escalation"
+
+
+def test_marker_during_parent_activation_remains_blocked(tmp_path):
+    events, policy_mark, state_file = _run_marker_race(
+        tmp_path, "marker-active-transition"
+    )
+    assert not _recovery_actions(events), events
+    assert not policy_mark.exists()
+    assert not state_file.exists()
+
+
+def test_marker_with_unavailable_parent_metadata_remains_blocked(tmp_path):
+    events, policy_mark, state_file = _run_marker_race(
+        tmp_path, "marker-metadata-unavailable"
+    )
+    assert not _recovery_actions(events), events
+    assert not policy_mark.exists()
+    assert not state_file.exists()
+
+
+def test_marker_with_malformed_parent_metadata_remains_blocked(tmp_path):
+    events, policy_mark, state_file = _run_marker_race(
+        tmp_path, "marker-malformed-metadata"
+    )
+    assert not _recovery_actions(events), events
+    assert not policy_mark.exists()
+    assert not state_file.exists()

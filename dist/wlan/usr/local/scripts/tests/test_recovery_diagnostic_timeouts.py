@@ -16,8 +16,8 @@ def executable(path, body):
 
 
 def systemctl_with_nonblocking_parent_status():
-    return """if [ "$*" = "show wifi_init.service -p ExecMainStatus --value" ]; then
-    printf 'malformed\\n'
+    return """if [ "$*" = "show wifi_init.service -p ActiveState -p ExecMainStatus" ]; then
+    printf 'ActiveState=active\\nExecMainStatus=0\\n'
     exit 0
 fi
 printf 'systemctl %s\\n' "$*" >> "$UNEXPECTED_CALLS"

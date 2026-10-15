@@ -16,19 +16,39 @@ def executable(path: Path, body: str) -> None:
 
 def prepare_checker(
     tmp_path: Path, *, iface: str, scenario: str = "initial-block"
-) -> tuple[subprocess.Popen, Path, Path]:
+) -> tuple[subprocess.Popen, Path, Path, Path]:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     events = tmp_path / "events"
     calls = tmp_path / "calls"
     sleep_count = tmp_path / "sleep-count"
     marker = tmp_path / "run/mac-contract-blocked"
-    parent_status = tmp_path / "parent-status"
+    parent_metadata = tmp_path / "parent-metadata"
     marker.parent.mkdir()
-    if scenario == "initial-block":
+    if scenario in {
+        "initial-block",
+        "stale-marker-non78",
+        "marker-active-transition",
+        "marker-metadata-unavailable",
+        "marker-malformed-metadata",
+    }:
         marker.touch()
     if scenario == "parent-78-start":
-        parent_status.write_text("78\n", encoding="utf-8")
+        parent_metadata.write_text(
+            "ActiveState=failed\nExecMainStatus=78\n", encoding="utf-8"
+        )
+    elif scenario == "stale-marker-non78":
+        parent_metadata.write_text(
+            "ActiveState=failed\nExecMainStatus=1\n", encoding="utf-8"
+        )
+    elif scenario == "marker-active-transition":
+        parent_metadata.write_text(
+            "ActiveState=activating\nExecMainStatus=1\n", encoding="utf-8"
+        )
+    elif scenario == "marker-malformed-metadata":
+        parent_metadata.write_text(
+            "ActiveState=failed\nExecMainStatus=not-a-number\n", encoding="utf-8"
+        )
 
     executable(fake_bin / "logger", 'printf "logger %s\\n" "$*" >> "$EVENTS"\n')
     executable(fake_bin / "print", 'printf "print %s\\n" "$*" >> "$EVENTS"\n')
@@ -40,8 +60,13 @@ def prepare_checker(
     executable(
         fake_bin / "systemctl",
         """printf "systemctl %s\\n" "$*" >> "$CALLS"
-if [ "$*" = "show wifi_init.service -p ExecMainStatus --value" ]; then
-    [ ! -f "$PARENT_STATUS" ] || cat "$PARENT_STATUS"
+if [ "$*" = "show wifi_init.service -p ActiveState -p ExecMainStatus" ]; then
+    [ "$TEST_SCENARIO" != marker-metadata-unavailable ] || exit 1
+    if [ -f "$PARENT_METADATA" ]; then
+        cat "$PARENT_METADATA"
+    else
+        printf 'ActiveState=active\nExecMainStatus=0\n'
+    fi
     exit 0
 fi
 exit 1
@@ -64,7 +89,7 @@ if [ "$TEST_SCENARIO" = mid-loop ] && [ "$n" -eq 6 ]; then
 fi
 if [ "$TEST_SCENARIO" = parent-78-mid-loop ] && [ "$n" -eq 6 ]; then
     printf 'parent-status-78\n' >> "$EVENTS"
-    printf '78\n' > "$PARENT_STATUS"
+    printf 'ActiveState=failed\nExecMainStatus=78\n' > "$PARENT_METADATA"
 fi
 if [ "$TEST_SCENARIO" = mid-loop ] && [ "$n" -ge 8 ]; then
     kill -TERM "$PPID"
@@ -73,6 +98,18 @@ if [ "$TEST_SCENARIO" = parent-78-mid-loop ] && [ "$n" -ge 8 ]; then
     kill -TERM "$PPID"
 fi
 if [ "$TEST_SCENARIO" = parent-78-start ] && [ "$n" -ge 8 ]; then
+    kill -TERM "$PPID"
+fi
+if [ "$TEST_SCENARIO" = marker-active-transition ] && [ "$n" -ge 8 ]; then
+    kill -TERM "$PPID"
+fi
+if [ "$TEST_SCENARIO" = marker-metadata-unavailable ] && [ "$n" -ge 8 ]; then
+    kill -TERM "$PPID"
+fi
+if [ "$TEST_SCENARIO" = marker-malformed-metadata ] && [ "$n" -ge 8 ]; then
+    kill -TERM "$PPID"
+fi
+if [ "$TEST_SCENARIO" = stale-marker-non78 ] && [ "$n" -ge 15 ]; then
     kill -TERM "$PPID"
 fi
 if [ "$n" -eq 7 ]; then
@@ -135,7 +172,7 @@ exit 0
         "CALLS": str(calls),
         "SLEEP_COUNT": str(sleep_count),
         "MAC_BLOCK_MARKER": str(marker),
-        "PARENT_STATUS": str(parent_status),
+        "PARENT_METADATA": str(parent_metadata),
         "POLICY_MARK": str(tmp_path / "policy.mark"),
         "TEST_IFACE": iface,
         "TEST_SCENARIO": scenario,
@@ -149,7 +186,7 @@ exit 0
         text=True,
         start_new_session=True,
     )
-    return proc, events, Path(env["POLICY_MARK"])
+    return proc, events, calls, Path(env["POLICY_MARK"])
 
 
 def finish(proc: subprocess.Popen, timeout: int = 8) -> tuple[str, str]:
@@ -161,8 +198,19 @@ def finish(proc: subprocess.Popen, timeout: int = 8) -> tuple[str, str]:
         raise AssertionError(f"checker did not reach bounded stop\n{stdout}\n{stderr}")
 
 
+def recovery_actions(calls_path: Path) -> list[str]:
+    if not calls_path.exists():
+        return []
+    return [
+        line
+        for line in calls_path.read_text(encoding="utf-8").splitlines()
+        if line.startswith("systemctl ")
+        and " show wifi_init.service " not in f" {line} "
+    ]
+
+
 def test_wireless_checker_defers_recovery_until_mac_contract_unblocks(tmp_path):
-    proc, events_path, policy_mark = prepare_checker(tmp_path, iface="mlan0")
+    proc, events_path, calls_path, policy_mark = prepare_checker(tmp_path, iface="mlan0")
     stdout, stderr = finish(proc)
     assert proc.returncode == 0, (stdout, stderr)
 
@@ -171,12 +219,13 @@ def test_wireless_checker_defers_recovery_until_mac_contract_unblocks(tmp_path):
     policy_at = next(i for i, line in enumerate(events) if line.startswith("policy "))
     assert removed_at < policy_at, events
     assert not any(line.startswith(("policy ", "wifi ")) for line in events[:removed_at])
+    assert not recovery_actions(calls_path)
     assert events[removed_at:policy_at].count("unblocked-tick") >= 6, events
     assert policy_mark.exists(), "wireless monitoring did not resume after marker removal"
 
 
 def test_eth0_monitoring_ignores_wireless_mac_contract_block(tmp_path):
-    proc, events_path, policy_mark = prepare_checker(tmp_path, iface="eth0")
+    proc, events_path, _, policy_mark = prepare_checker(tmp_path, iface="eth0")
     stdout, stderr = finish(proc)
     assert proc.returncode == 0, (stdout, stderr)
 
@@ -186,7 +235,7 @@ def test_eth0_monitoring_ignores_wireless_mac_contract_block(tmp_path):
 
 
 def test_marker_created_after_fatal_detection_still_blocks_policy(tmp_path):
-    proc, events_path, policy_mark = prepare_checker(
+    proc, events_path, calls_path, policy_mark = prepare_checker(
         tmp_path, iface="mlan0", scenario="mid-loop"
     )
     stdout, stderr = finish(proc)
@@ -196,11 +245,12 @@ def test_marker_created_after_fatal_detection_still_blocks_policy(tmp_path):
     created_at = events.index("marker-created")
     assert "blocked-tick" in events[created_at:]
     assert not any(line.startswith(("policy ", "wifi ")) for line in events[created_at:])
+    assert not recovery_actions(calls_path)
     assert not policy_mark.exists()
 
 
 def test_parent_status_78_at_start_suppresses_wireless_recovery(tmp_path):
-    proc, events_path, policy_mark = prepare_checker(
+    proc, events_path, calls_path, policy_mark = prepare_checker(
         tmp_path, iface="mlan0", scenario="parent-78-start"
     )
     stdout, stderr = finish(proc)
@@ -208,11 +258,12 @@ def test_parent_status_78_at_start_suppresses_wireless_recovery(tmp_path):
 
     events = events_path.read_text(encoding="utf-8").splitlines()
     assert not any(line.startswith(("policy ", "wifi ")) for line in events), events
+    assert not recovery_actions(calls_path)
     assert not policy_mark.exists()
 
 
 def test_parent_status_becoming_78_before_policy_suppresses_recovery(tmp_path):
-    proc, events_path, policy_mark = prepare_checker(
+    proc, events_path, calls_path, policy_mark = prepare_checker(
         tmp_path, iface="mlan0", scenario="parent-78-mid-loop"
     )
     stdout, stderr = finish(proc)
@@ -221,4 +272,57 @@ def test_parent_status_becoming_78_before_policy_suppresses_recovery(tmp_path):
     events = events_path.read_text(encoding="utf-8").splitlines()
     changed_at = events.index("parent-status-78")
     assert not any(line.startswith(("policy ", "wifi ")) for line in events[changed_at:]), events
+    assert not recovery_actions(calls_path)
+    assert not policy_mark.exists()
+
+
+def test_failed_non78_parent_with_stale_marker_resumes_recovery(tmp_path):
+    proc, events_path, calls_path, policy_mark = prepare_checker(
+        tmp_path, iface="mlan0", scenario="stale-marker-non78"
+    )
+    stdout, stderr = finish(proc)
+    assert proc.returncode == 0, (stdout, stderr)
+
+    events = events_path.read_text(encoding="utf-8").splitlines()
+    assert any(line.startswith("policy ") for line in events), events
+    assert policy_mark.exists(), "stale marker suppressed ordinary non-MAC recovery"
+    assert not recovery_actions(calls_path)
+
+
+def test_marker_during_parent_activation_remains_blocked(tmp_path):
+    proc, events_path, calls_path, policy_mark = prepare_checker(
+        tmp_path, iface="mlan0", scenario="marker-active-transition"
+    )
+    stdout, stderr = finish(proc)
+    assert proc.returncode == 0, (stdout, stderr)
+
+    events = events_path.read_text(encoding="utf-8").splitlines()
+    assert not any(line.startswith(("policy ", "wifi ")) for line in events), events
+    assert not recovery_actions(calls_path)
+    assert not policy_mark.exists()
+
+
+def test_marker_with_unavailable_parent_metadata_remains_blocked(tmp_path):
+    proc, events_path, calls_path, policy_mark = prepare_checker(
+        tmp_path, iface="mlan0", scenario="marker-metadata-unavailable"
+    )
+    stdout, stderr = finish(proc)
+    assert proc.returncode == 0, (stdout, stderr)
+
+    events = events_path.read_text(encoding="utf-8").splitlines()
+    assert not any(line.startswith(("policy ", "wifi ")) for line in events), events
+    assert not recovery_actions(calls_path)
+    assert not policy_mark.exists()
+
+
+def test_marker_with_malformed_parent_metadata_remains_blocked(tmp_path):
+    proc, events_path, calls_path, policy_mark = prepare_checker(
+        tmp_path, iface="mlan0", scenario="marker-malformed-metadata"
+    )
+    stdout, stderr = finish(proc)
+    assert proc.returncode == 0, (stdout, stderr)
+
+    events = events_path.read_text(encoding="utf-8").splitlines()
+    assert not any(line.startswith(("policy ", "wifi ")) for line in events), events
+    assert not recovery_actions(calls_path)
     assert not policy_mark.exists()

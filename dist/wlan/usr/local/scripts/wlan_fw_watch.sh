@@ -76,10 +76,24 @@ is_mfg_mode() {
 }
 
 mac_contract_blocked() {
-    local status
-    [ -e /run/wifi/mac-contract-blocked ] && return 0
-    status=$(logger_run_bounded 2 systemctl show wifi_init.service -p ExecMainStatus --value 2>/dev/null) || return 1
-    [ "$status" = "78" ]
+    local metadata active_state="" status="" key value marker=0
+    [ -e /run/wifi/mac-contract-blocked ] && marker=1
+    metadata=$(logger_run_bounded 2 systemctl show wifi_init.service -p ActiveState -p ExecMainStatus 2>/dev/null) || {
+        [ "$marker" -eq 1 ]
+        return
+    }
+    while IFS='=' read -r key value; do
+        case "$key" in
+            ActiveState) active_state=$value ;;
+            ExecMainStatus) status=$value ;;
+        esac
+    done <<< "$metadata"
+    [ "$status" = "78" ] && return 0
+    if [ "$marker" -eq 1 ]; then
+        [ "$active_state" = "failed" ] && [[ "$status" =~ ^[0-9]+$ ]] && [ "$status" -ne 0 ] && return 1
+        return 0
+    fi
+    return 1
 }
 
 # fork 없이 읽는다. 파일 부재/빈 값은 빈 문자열 — 0 으로 취급하지 않는 것이 중요하다
