@@ -1,13 +1,16 @@
 """`wifi_event.sh` roam GARP behavior regression tests (#234).
 
-The production script is executed end to end.  A private mount namespace supplies
-the absolute-path helper scripts, while PATH stubs model the external `iw`, `ip`,
-`jq`, and `arping` boundaries.  This proves local dispatch behavior only; it does
-not prove that GARP removes the measured on-target roaming gap.
+The production script is executed end to end with helper paths redirected to a
+private copy. PATH stubs model the external `iw`, `ip`, `jq`, and `arping`
+boundaries; an owned process group contains background handlers without needing
+user/mount namespaces. This proves local dispatch behavior only; it does not
+prove that GARP removes the measured on-target roaming gap.
 """
 
 import json
 import os
+import shlex
+import signal
 import subprocess
 import textwrap
 import time
@@ -28,7 +31,7 @@ if [ "${1:-}" = "event" ] && [ "${2:-}" = "-t" ]; then
     done < "$WIFI_EVENT_EVENTS"
     # The real `iw event` is long lived.  Keep this producer alive briefly so
     # background handlers can cross their external-command boundary before the
-    # private PID namespace exits and reaps them.
+    # test reaps the owned process group.
     sleep "${WIFI_EVENT_TAIL_DELAY:-0.1}"
     exit 0
 fi
@@ -67,19 +70,13 @@ printf 'trap %s\n' "$*" >> "$WIFI_EVENT_CALLS"
 LINK_LIB_STUB = "wlan_bssid() { :; }\n"
 FW_LIB_STUB = "wifi_fw_verify_mcs_connected() { return 0; }\n"
 
-NS_WRAPPER = r"""
-set -eu
-mount --bind "$WIFI_EVENT_USR_LOCAL" /usr/local
-exec "$@"
-"""
-
-
 class WifiEventHarness:
     def __init__(self, tmp_path: Path):
         self.root = tmp_path
         self.bin = tmp_path / "bin"
         self.usr_local = tmp_path / "usr-local"
         self.helpers = self.usr_local / "scripts"
+        self.script = tmp_path / "wifi_event.sh"
         self.calls = tmp_path / "calls.log"
         self.events = tmp_path / "events.log"
         self.ipv4 = tmp_path / "ipv4"
@@ -99,6 +96,12 @@ class WifiEventHarness:
         self._write_executable(self.helpers / "wifi_snmp_trap.sh", TRAP_STUB)
         (self.helpers / "wlan_link_lib.sh").write_text(LINK_LIB_STUB)
         (self.helpers / "wifi_fw_config_lib.sh").write_text(FW_LIB_STUB)
+        self._write_executable(
+            self.script,
+            WIFI_EVENT.read_text().replace(
+                "/usr/local/scripts/", f"{shlex.quote(str(self.helpers))}/"
+            ),
+        )
 
     @staticmethod
     def _write_executable(path: Path, body: str) -> None:
@@ -136,31 +139,33 @@ class WifiEventHarness:
             "WIFI_EVENT_ARPING_RC": str(arping_rc),
             "WIFI_EVENT_CALLS": str(self.calls),
             "WIFI_EVENT_EVENTS": str(self.events),
-            "WIFI_EVENT_USR_LOCAL": str(self.usr_local),
             "WIFI_EVENT_IFACE": "mlan0",
             "WIFI_EVENT_IPV4": str(self.ipv4),
             "WIFI_EVENT_LINE_DELAY": str(line_delay),
             "WIFI_EVENT_TAIL_DELAY": str(tail_delay),
         }
         started = time.monotonic()
-        result = subprocess.run(
-            [
-                "unshare",
-                "-Urmpf",
-                "--mount-proc",
-                "bash",
-                "-c",
-                NS_WRAPPER,
-                "_",
-                "bash",
-                str(WIFI_EVENT),
-                "mlan0",
-            ],
+        proc = subprocess.Popen(
+            ["bash", str(self.script), "mlan0"],
             env=env,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=10,
+            start_new_session=True,
         )
+        try:
+            stdout, stderr = proc.communicate(timeout=10)
+            result = subprocess.CompletedProcess(
+                proc.args, proc.returncode, stdout, stderr
+            )
+        finally:
+            # The removed PID namespace used to reap these same descendants.
+            # Only this subprocess's newly created process group is signalled.
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.wait()
         return result, time.monotonic() - started
 
     def call_lines(self) -> list[str]:
