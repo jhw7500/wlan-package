@@ -3203,7 +3203,7 @@
         "enabled": {
           "type": "boolean",
           "default": false,
-          "description": "opcd 서비스 ON/OFF. wifi_apply_enabled.sh가 systemctl 상태를 동기화",
+          "description": "opcd 서비스 ON/OFF. wifi_apply_enabled.sh가 opcd.service와 부팅 1회 opcd-essid-restore.service(ChangeIp ESSID 복원, opcd -R)의 systemctl 상태를 함께 동기화",
           "x-ui-editable": "caution",
           "x-apply-timing": "boot",
           "x-consumer": "postinst, wifi_apply_enabled.sh"

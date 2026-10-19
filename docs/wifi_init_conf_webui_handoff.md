@@ -592,7 +592,7 @@ association proof를 사용한다. 다음 CONNECTED 검증 성공 시 pending/1�
 
 | 경로 | 라벨 | 타입 | 기본값 | 허용값/범위 | UI편집 | 적용시점 | 설명 |
 |---|---|---|---|---|---|---|---|
-| `opc.enabled` | opcd 서비스 | bool | `false` | true\|false | caution | boot | wlan-opc OPC 제어 데몬 조건부 기동. `wifi_apply_enabled.sh`가 systemctl 상태 동기화. 기본 opt-in off |
+| `opc.enabled` | opcd 서비스 | bool | `false` | true\|false | caution | boot | wlan-opc OPC 제어 데몬 조건부 기동. `wifi_apply_enabled.sh`가 `opcd.service`와 부팅 1회 `opcd-essid-restore.service`(ChangeIp ESSID 복원)의 systemctl 상태를 함께 동기화. 기본 opt-in off |
 
 
 ## 4. 웹 UI 그룹핑 권장

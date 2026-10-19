@@ -1135,6 +1135,24 @@ check_equal "wifi ssid writes exact UTF-8 hex token" \
     "$(grep -Ec "^[[:space:]]+ssid=${_special_hex}$" "$CONF")" "1"
 check_real_wpa_parser "real parser accepts wifi ssid hex output" "$CONF"
 
+# #362: 운영자의 영구 SSID 변경(wifi 0 ssid)은 OPC ChangeIp ESSID 복원 표식을 지워 체인을 끝낸다.
+# 표식은 mlan0 conf 에만 있으므로 mlan1 의 변경은 건드리지 않는다.
+_marker="$TD/changeip_essid.restore"
+printf 'ssid=x\n' > "$_marker"
+write_mode_b_legacy
+OPC_ESSID_MARKER="$_marker" WPA_CONF_DIR="$WPA_DIR" bash "$WIFI_SH" 0 ssid "Office" >/dev/null 2>&1
+check_equal "wifi 0 ssid succeeds with a ChangeIp restore marker present" "$?" "0"
+check_equal "wifi 0 ssid removes the ChangeIp ESSID restore marker" \
+    "$([ -e "$_marker" ] && echo kept || echo removed)" "removed"
+printf 'ssid=x\n' > "$_marker"
+write_mode_b_legacy
+cp "$CONF" "$WPA_DIR/wpa_supplicant-mlan1.conf"
+OPC_ESSID_MARKER="$_marker" WPA_CONF_DIR="$WPA_DIR" bash "$WIFI_SH" 1 ssid "Office" >/dev/null 2>&1
+check_equal "wifi 1 ssid succeeds on its own conf" "$?" "0"
+check_equal "wifi 1 ssid keeps the mlan0-only ChangeIp restore marker" \
+    "$([ -e "$_marker" ] && echo kept || echo removed)" "kept"
+rm -f "$_marker" "$WPA_DIR/wpa_supplicant-mlan1.conf"
+
 _ssid_32='가가가가가가가가가가ab'
 _ssid_33='가가가가가가가가가가가'
 write_mode_b_legacy
