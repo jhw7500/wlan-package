@@ -106,7 +106,7 @@ wifi_wpa_conf_lock_acquire "$IFACE" \
 # settle 로 처리한다(conf 가 요청값이 아니면 커밋하지 않음).
 OPC_ESSID_MARKER="${OPC_ESSID_MARKER:-/usr/local/opc/etc/changeip_essid.restore}"
 if [ "$HAVE_SSID" = 1 ] && [ "$IFACE" = "mlan0" ] && [ ! -e "$OPC_ESSID_MARKER" ]; then
-    echo "opc_wlan_apply: ChangeIp ESSID restore marker is missing — refusing to install ssid on mlan0" >&2
+    echo "opc_wlan_apply: ChangeIp ESSID restore marker is missing; refusing to install ssid on mlan0" >&2
     exit 6
 fi
 # A mode-only request derives its effective frequencies from CONF. Resolve and
