@@ -114,6 +114,20 @@ def test_false_disables_timesyncd_when_it_is_enabled(tmp_path: Path, value) -> N
     assert result.returncode == 0, result.stderr
     assert f"disable {UNIT}" in calls
     assert f"enable {UNIT}" not in calls
+    # disable changes only the unit file; an instance sysinit already started (boot after an
+    # unclean shutdown that skipped the ExecStop sync) must be brought down here as well.
+    assert f"stop {UNIT}" in calls
+
+
+def test_false_stops_timesyncd_even_when_already_disabled(tmp_path: Path) -> None:
+    data = _config(False)
+    data["global"]["ntp"] = {"enabled": False}
+
+    result, calls = _run_apply(tmp_path, data, ntp_initially_enabled=False)
+
+    assert result.returncode == 0, result.stderr
+    assert f"disable {UNIT}" not in calls
+    assert f"stop {UNIT}" in calls
 
 
 def test_matching_state_issues_no_change(tmp_path: Path) -> None:
@@ -126,6 +140,7 @@ def test_matching_state_issues_no_change(tmp_path: Path) -> None:
     assert f"is-enabled --quiet {UNIT}" in calls
     assert f"enable {UNIT}" not in calls
     assert f"disable {UNIT}" not in calls
+    assert f"stop {UNIT}" not in calls
 
 
 def test_ntp_gate_is_applied_before_the_mfg_early_return() -> None:
@@ -133,12 +148,22 @@ def test_ntp_gate_is_applied_before_the_mfg_early_return() -> None:
     ordering contract is checked on the script text: the toggle must sit with the other
     non-wireless units that precede the ``MFG_MODE`` branch, or an MFG board would ignore it."""
     source = APPLY.read_text()
-    ntp = source.index('apply systemd-timesyncd.service "$(get_bool ".global.ntp.enabled" "true")"')
+    ntp = source.index('apply systemd-timesyncd.service "$_ntp_enabled"')
     mfg_branch = source.index('if [ "${MFG_MODE:-0}" = "1" ]; then')
     logger_line = source.index('apply wifi_logger.service')
 
     assert logger_line < ntp < mfg_branch
     assert source.count("apply systemd-timesyncd.service") == 1
+    assert source.count('get_bool ".global.ntp.enabled" "true"') == 1
+
+
+def test_package_removal_restores_the_image_default() -> None:
+    """prerm mirrors the snmpd precedent: the package enabled a distribution-owned unit, so
+    removing the policy owner (JSON + wifi_apply_enabled.sh) puts it back to disabled."""
+    text = (WLAN_ROOT / "DEBIAN/prerm").read_text()
+
+    assert "stop_service_if_active systemd-timesyncd" in text
+    assert "disable_service_if_enabled systemd-timesyncd" in text
 
 
 def test_boot_start_list_includes_timesyncd_outside_the_wireless_group() -> None:

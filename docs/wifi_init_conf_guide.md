@@ -391,7 +391,7 @@ lsmod 대기(최대 15초)를 먼저 한다. 따라서 별도의 grace 플래그
 
 | 키 | 타입 | 기본값 | 설명 |
 |---|---|---|---|
-| `enabled` | bool | `true` | `systemd-timesyncd.service` 활성화. `wifi_apply_enabled.sh` 가 systemd enable/disable 로 동기화. `false` 로 끄면 실행 중 인스턴스는 다음 부팅부터 멈춘다(다른 `*.enabled` 토글과 같다) |
+| `enabled` | bool | `true` | `systemd-timesyncd.service` 활성화. `wifi_apply_enabled.sh` 가 systemd enable/disable 로 동기화하고, `false` 면 게이트가 도는 시점(부팅 ExecStartPre·패키지 설치·정상 종료 ExecStop)에 실행 중 인스턴스도 `stop` 한다 — 전원 단절 뒤 sysinit 이 먼저 띄운 인스턴스가 그 부팅 내내 남지 않게 하기 위해서다. 패키지 제거(prerm)는 이미지 기본(disabled)으로 원복한다 |
 
 > 업그레이드 장비에는 `json_merge` 가 이 키를 기본값 `true` 로 추가하므로 그 설치부터 시각 동기가
 > 켜진다. 끄려면 웹 UI 또는 JSON 에서 `false` 로 바꾼다.

@@ -148,7 +148,7 @@
             "enabled": {
               "type": "boolean",
               "default": true,
-              "description": "systemd-timesyncd.service enable/disable — systemctl로 동기화. false 로 끄면 실행 중 인스턴스는 다음 부팅부터 멈춘다",
+              "description": "systemd-timesyncd.service enable/disable — systemctl로 동기화. false 면 게이트가 도는 시점(부팅·패키지 설치·정상 종료)에 실행 중 인스턴스도 내린다",
               "x-ui-editable": "yes",
               "x-apply-timing": "boot",
               "x-consumer": "wifi_apply_enabled.sh"

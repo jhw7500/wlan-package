@@ -180,7 +180,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `global.ANT_TYPE` | 안테나 경로 | enum | `""` | `""`\|`internal`\|`external` (또는 0\|1). 빈값=설정 안 함 | caution | boot | 부팅 시 GPIO(SW_SEL1/2)로 적용. 런타임 변경은 `wifi ant` |
 | `global.tx_work` | moal TX 제출 방식 | int | `0` | `0`\|`1` (빈값/형식위반=미전달) | caution | reboot | 0=동기 제출(홉1), 1=tx_workqueue 비동기(홉2, NXP iMX 기본). capability-gate |
 | `global.ping_monitor.enabled` | ping 모니터 서비스 | bool | `false` | true\|false | yes | daemon-restart | `wifi_ping_monitor.service` enable/disable |
-| `global.ntp.enabled` | 시각 동기(NTP) 서비스 | bool | `true` | true\|false | yes | boot | `systemd-timesyncd.service` enable/disable. 서버는 `timesyncd.conf`. false 로 끄면 실행 중 인스턴스는 다음 부팅부터 멈춤 |
+| `global.ntp.enabled` | 시각 동기(NTP) 서비스 | bool | `true` | true\|false | yes | boot | `systemd-timesyncd.service` enable/disable. 서버는 `timesyncd.conf`. false 면 게이트가 도는 시점(부팅·설치·정상 종료)에 실행 중 인스턴스도 내림 |
 | `global.fw_watch.enabled` | 드라이버 wedge 감시 | bool | `true` | true\|false | yes | daemon-restart | `wlan_fw_watch.service` enable/disable |
 | `global.fw_watch.CHECK_INTERVAL_SEC` | wedge 폴링 주기 | int | `5` | 1~60 | yes | daemon-restart | `wifi_status` 확인 간격(초) |
 | `global.fw_watch.INITIAL_DELAY_SEC` | 감시 시작 유예 | int | `60` | 0~600 | yes | daemon-restart | 부팅 중 FW 다운로드 창 회피(초) |

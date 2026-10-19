@@ -181,7 +181,14 @@ apply wifi_logger.service     "$(get_bool ".logger.enabled" "true")"
 apply wifi_logger@eth0.service "$(get_bool ".eth0.logger.enabled" "true")"
 # 시각 동기(systemd-timesyncd, 배포판 유닛)도 무선과 무관하다 — .global.ntp.enabled(기본 true, 웹 UI
 # 토글)가 모든 모드에서 on/off 를 소유하도록 MFG early-return 앞에서 적용한다(#361).
-apply systemd-timesyncd.service "$(get_bool ".global.ntp.enabled" "true")"
+_ntp_enabled=$(get_bool ".global.ntp.enabled" "true")
+apply systemd-timesyncd.service "$_ntp_enabled"
+if [ "$_ntp_enabled" = "false" ]; then
+    # disable 은 unit file 만 바꾼다. 정상 종료의 ExecStop 동기화를 거치지 못한 부팅(전원 단절 뒤)에는
+    # sysinit 이 이미 띄운 인스턴스가 남으므로, false 는 이 시점에 실제로 내린다(inactive 면 무비용).
+    systemctl stop systemd-timesyncd.service 2>/dev/null \
+        || logger -p local0.warn "[$tag:$LINENO] stop systemd-timesyncd.service failed"
+fi
 
 if [ "${MFG_MODE:-0}" = "1" ]; then
     logger -p local0.info "[$tag:$LINENO] mfg_mode=1 -> MFG profile: disable+stop STA/FW-touching units"
