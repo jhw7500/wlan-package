@@ -12,7 +12,6 @@ dist/wlan/DEBIAN/templates
 dist/wlan/etc/default/wbridge
 dist/wlan/etc/modules-load.d/99-cts-mods.conf
 dist/wlan/etc/nanorc
-dist/wlan/etc/networkd-dispatcher/routable.d/10-set-gateway.sh
 dist/wlan/etc/profile.d/00-cantops.sh
 dist/wlan/etc/rsyslog.d/10-udp-out.conf
 dist/wlan/etc/rsyslog.d/20-mgmt-frame.conf
@@ -326,6 +325,7 @@ dist/wlan/usr/local/scripts/ovs.sh
 dist/wlan/usr/local/scripts/switchd.sh
 dist/wlan/usr/local/scripts/tests/__init__.py
 dist/wlan/usr/local/scripts/tests/test_admin_ssh_deny.py
+dist/wlan/usr/local/scripts/tests/test_apply_enabled_ntp.py
 dist/wlan/usr/local/scripts/tests/test_arping_eth0_unmanaged.py
 dist/wlan/usr/local/scripts/tests/test_fake_hwclock.sh
 dist/wlan/usr/local/scripts/tests/test_ftpcmd_reply_contract.py
@@ -523,6 +523,7 @@ scripts/package_tar_test.sh
 scripts/qa/ftp_quote_verify.py
 scripts/qa/test_ftp_quote_verify.py
 scripts/qa/test_opcd_upgrade.py
+scripts/qa/test_timesyncd_lab_gateway.py
 scripts/source_archive_manifest.txt
 scripts/validate_release.sh
 scripts/validate_release_test.sh

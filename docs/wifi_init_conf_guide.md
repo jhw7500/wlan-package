@@ -18,7 +18,8 @@ wifi_init_conf.json
 ├── global              # 드라이버 초기화 (보드/버스/펌웨어 자동선택, 모듈 파라미터)
 │   ├── BLUETOOTH       #   BT combo 펌웨어 사용 여부 (enable, fw 자동선택 반영)
 │   ├── ping_monitor    #   ping 모니터 서비스 제어
-│   └── fw_watch        #   드라이버 wedge 감시·복구
+│   ├── fw_watch        #   드라이버 wedge 감시·복구
+│   └── ntp             #   시각 동기(systemd-timesyncd) 서비스 제어
 ├── mac                 # MAC 주소 설정 (인터페이스별)
 ├── wbridge             # wifi_bridge 프로세스 설정
 │   ├── peer_route      #   양방향 peer 라우팅 마스터 스위치 (enabled)
@@ -205,8 +206,10 @@ DFK 관리 IP와 운영 JSON 기준은
 
 **결정**: 버전 게이트 postinst 자동 마이그레이션 훅은 만들지 않는다 — (a) "사이트 값 보존"
 원칙과 충돌(업그레이드가 사용자 값을 덮음), (b) "부팅/업그레이드 시 자동 설정변경 금지"
-지침과 충돌. 위 두 opt-in 경로만 두 원칙을 동시에 만족한다. (#91 NTP 결정과 동일 패턴 —
-공식 반영 경로 = 프로비저닝 스크립트.)
+지침과 충돌. 위 두 opt-in 경로만 두 원칙을 동시에 만족한다. NTP **서버 값**(`timesyncd.conf`)도
+같은 패턴으로 프로비저닝 스크립트가 반영한다. 시각 동기 **서비스의 on/off** 는 이와 별개로
+`global.ntp.enabled`(기본 `true`, 웹 UI 토글, §1.4)가 정한다 — postinst 의 안전시각 분기가
+`timedatectl set-ntp false` 로 내린 서비스를 꺼진 채 남기던 종전 동작은 #361 로 끝났다.
 
 #### 공장 초기화용 영구 프로필 (#324)
 
@@ -372,6 +375,26 @@ lsmod 대기(최대 15초)를 먼저 한다. 따라서 별도의 grace 플래그
 
 부재가 실제로 30초를 넘는다면 그것은 오탐이 아니라 리로드가 실패했다는 뜻이므로,
 그때 checker 가 재부팅을 요청하는 것은 의도된 동작이다.
+
+### 1.4 global.ntp - 시각 동기(systemd-timesyncd) 서비스
+
+**사용 스크립트**: `wifi_apply_enabled.sh`(enable/disable 동기화), `wifi_services.sh`(부팅 시 start), `DEBIAN/postinst`(설치 직후 기동)
+
+이미지 기본은 `systemd-timesyncd` disabled 이고, postinst 의 안전시각 분기(`timedatectl set-time`
+전의 `set-ntp false`)도 서비스를 내린다. 그래서 설정 파일(`/etc/systemd/timesyncd.conf`)만으로는
+시각 동기가 일어나지 않았고 OPC KeepAlive Timestamp·로그 시각이 어긋났다(#361). 이 키가
+서비스의 on/off 를 소유한다 — 부팅(`wifi_init.service` ExecStartPre)과 패키지 설치 때
+`wifi_apply_enabled.sh` 가 systemd enable 상태를 JSON 과 맞추고, enable 이면 부팅 때
+`wifi_services.sh start`, 설치 직후엔 postinst 가 `--no-block` 으로 기동한다. NTP **서버 주소**는
+이 키가 아니라 `timesyncd.conf`(프로비저닝 `bd_provision.sh --ntp`)와 OPC ChangeIp 의 NTP 필드
+(휘발, `/run` 드롭인)가 정한다.
+
+| 키 | 타입 | 기본값 | 설명 |
+|---|---|---|---|
+| `enabled` | bool | `true` | `systemd-timesyncd.service` 활성화. `wifi_apply_enabled.sh` 가 systemd enable/disable 로 동기화하고, `false` 면 게이트가 도는 시점(부팅 ExecStartPre·패키지 설치·정상 종료 ExecStop)에 실행 중 인스턴스도 `stop` 한다 — 전원 단절 뒤 sysinit 이 먼저 띄운 인스턴스가 그 부팅 내내 남지 않게 하기 위해서다. 패키지 제거(prerm)는 이미지 기본(disabled)으로 원복한다 |
+
+> 업그레이드 장비에는 `json_merge` 가 이 키를 기본값 `true` 로 추가하므로 그 설치부터 시각 동기가
+> 켜진다. 끄려면 웹 UI 또는 JSON 에서 `false` 로 바꾼다.
 
 ### 3.1 wbridge.optimize - 커널 레벨 네트워크 튜닝
 
