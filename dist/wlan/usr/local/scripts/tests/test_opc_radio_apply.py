@@ -145,11 +145,16 @@ class OpcRadioApplyTests(unittest.TestCase):
         }
         self.config.write_text(json.dumps(self.initial_config, indent=2) + "\n")
         self.config.chmod(0o640)
+        # #362: the helper installs an mlan0 ssid only while opcd's ChangeIp ESSID restore
+        # marker exists (opcd arms it before calling the helper); model that armed state.
+        self.marker = self.root / "changeip_essid.restore"
+        self.marker.write_text("slot=1\n")
         self.env = dict(os.environ, PATH=str(self.bin) + ":" + os.environ["PATH"],
                         OPC_TEST_STATE=str(self.state), WPA_CONF_DIR=str(self.wpa),
                         WIFI_RUN_DIR=str(self.root / "run"),
                         WIFI_INIT_CONF_JSON=str(self.config),
-                        WIFI_SCAN_TRANSITION_LOCK_TIMEOUT="0")
+                        WIFI_SCAN_TRANSITION_LOCK_TIMEOUT="0",
+                        OPC_ESSID_MARKER=str(self.marker))
 
     def run_helper(self, *args, failure=""):
         return subprocess.run(["sh", str(HELPER), *args],
@@ -165,6 +170,23 @@ class OpcRadioApplyTests(unittest.TestCase):
 
     def profile(self, iface="mlan0"):
         return self.wpa / ("wpa_supplicant-" + iface + ".conf")
+
+    def test_mlan0_ssid_without_restore_marker_is_refused_before_any_mutation(self):
+        """#362 (tribunal A-R1-002): if another writer removed the ChangeIp ESSID restore
+        marker between opcd's arm and this install, that writer's SSID is final — the helper
+        must leave the conf untouched and exit 6 so opcd's settle does not commit."""
+        self.marker.unlink()
+        result = self.run_helper("mlan0", "ssid", "late-changeip")
+        self.assertEqual(result.returncode, 6, result.stdout + result.stderr)
+        self.assertIn("restore marker is missing", result.stderr)
+        self.assertEqual(self.profile().read_text(), PROFILE)
+        self.assertEqual(self.calls(), [])
+
+    def test_mlan1_ssid_does_not_require_the_restore_marker(self):
+        self.marker.unlink()
+        result = self.run_helper("mlan1", "ssid", "second-net")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('ssid="second-net"', self.profile("mlan1").read_text())
 
     def test_request_applies_driver_and_persists_settings_for_boot(self):
         result = self.run_helper("mlan0", "freq", "5180 5200", "mode", "ac", "bw", "40")

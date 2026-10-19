@@ -33,6 +33,9 @@ IFACE=mlan
 NUM=""
 WPA_CONF_DIR="${WPA_CONF_DIR:-/etc/wpa_supplicant}"
 WIFI_RUN_DIR="${WIFI_RUN_DIR:-/run/wifi}"
+# OPC ChangeIp 가 바꾼 ESSID 를 재부팅 때 되돌리기 위한 표식(wlan-opc#161, opcd essid_marker.h).
+# 운영자가 mlan0 의 SSID 를 영구 변경(ssid/connect <ssid>)하면 지워 ChangeIp 체인을 끝낸다(#362).
+OPC_ESSID_MARKER="${OPC_ESSID_MARKER:-/usr/local/opc/etc/changeip_essid.restore}"
 RADIO_JSON_LOCKED=0
 
 if [ "${1:-}" == "0" ] || [ "${1:-}" == "mlan0" ]; then
@@ -2823,6 +2826,11 @@ case "$2" in
     ' "$CONF" > "$TMP_FILE"; then
         wifi_wpa_run_child_call safe_install_sync "$TMP_FILE" "$CONF"
         wifi_wpa_run_child rm -f "$TMP_FILE"
+        if [ "$IFACE" = "mlan0" ]; then
+            # 영구 SSID 변경 — OPC ChangeIp ESSID 복원 표식을 지워 다음 부팅의 opcd -R 이
+            # 이 값을 되돌리지 않게 한다(#362). 표식은 mlan0 conf 에만 있다.
+            wifi_wpa_run_child rm -f "$OPC_ESSID_MARKER"
+        fi
         echo "ssid changed to \"$NEW_SSID\" in $CONF"
     else echo "no network={ block found, nothing changed in $CONF" >&2; wifi_wpa_run_child rm -f "$TMP_FILE"; exit 1; fi
     ;;
@@ -3216,6 +3224,10 @@ case "$2" in
         ' "$CANON_FILE" > "$TMP_FILE"; then
             wifi_wpa_run_child_call safe_install_sync "$TMP_FILE" "$CONF"
             wifi_wpa_run_child rm -f "$CANON_FILE" "$TMP_FILE"
+            if [ "$IFACE" = "mlan0" ]; then
+                # 영구 SSID 변경 — OPC ChangeIp ESSID 복원 표식을 지운다(#362, ssid 와 동일).
+                wifi_wpa_run_child rm -f "$OPC_ESSID_MARKER"
+            fi
         else
             wifi_wpa_run_child rm -f "$CANON_FILE" "$TMP_FILE"
             echo "Error: failed to update $CONF (no network={ block?)" >&2

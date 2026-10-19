@@ -378,6 +378,17 @@ if [ "$critical_failures" -eq 0 ]; then
     fi
 fi
 
+# OPC ChangeIp 의 ESSID 복원 표식(wlan-opc#161)은 방금 공장값으로 되돌린 mlan0 conf 에 대한 것이라
+# 함께 지운다. 복원은 커밋값이 일치할 때만 일어나므로 안전 문제는 아니고, 다음 부팅의 opcd -R 이
+# "marker dropped" 로그를 남기지 않게 하는 위생이다(#362). 실패는 경고만 남기고 진행한다.
+if [ "$critical_failures" -eq 0 ] && [ -e /usr/local/opc/etc/changeip_essid.restore ]; then
+    if rm -f /usr/local/opc/etc/changeip_essid.restore 2>/dev/null; then
+        logger -p local0.info "[$tag:$LINENO] removed the ChangeIp ESSID restore marker"
+    else
+        logger -p local0.warn "[$tag:$LINENO] could not remove /usr/local/opc/etc/changeip_essid.restore"
+    fi
+fi
+
 if [ "$critical_failures" -ne 0 ]; then
     if [ "$FACTORY_TRANSACTION_ACTIVE" -eq 1 ] \
        && ! factory_rollback_required_payloads; then

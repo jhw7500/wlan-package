@@ -1608,6 +1608,37 @@ do_reboot():
 - **3차 sysrq 경로**는 `device_shutdown()`을 건너뛰어 D state 드라이버 락과 무관하게 HW reset 수행
 - 각 단계는 background 실행으로 block 시에도 다음 단계로 진행
 
+### opcd ChangeIp ESSID 복원 — 부팅 유닛과 표식 소유 (#362, wlan-opc#161)
+
+OPC ChangeIpAddress 가 바꾼 ESSID 는 사양상 재부팅 때 설정값으로 돌아가야 한다. opcd 는 conf 를
+편집하기 전에 복원 표식 `/usr/local/opc/etc/changeip_essid.restore`(원래 `ssid=` 토큰·슬롯·시각,
+적용 성공 뒤 커밋값)를 쓰고, 되돌리는 쪽은 일회성 `opcd -R` 이다 — 표식이 있고 conf 의 `ssid=` 가
+커밋값 그대로면 원래 값으로 편집한 뒤 표식을 지우고, 값이 다르면(다른 작성자가 바꿈) 표식만 지운다.
+
+- **부팅 유닛** `opcd-essid-restore.service`: `wifi_init.service` 와 같은 층위(`DefaultDependencies=no`,
+  `After=local-fs.target sysinit.target`)에서 `Before=wifi_init.service wpa_supplicant@mlan0.service`
+  로 한 번 돈다(`Type=oneshot`, `ConditionPathExists=` 표식). `-R` 은 conf writer lock 을 잡지 않으므로
+  이 순서가 `wifi_init.sh` 의 extra-SSID 블록 재생성·`wpa_supplicant` 의 conf 읽기와의 배타성을
+  보장한다. `WantedBy=wifi-stack.target` 이라 부팅 경로에서만 돌고, 런타임 `wifi_init` 재시작은
+  끌어오지 않는다. postinst 가 **항상 enable** 하며 `opc.enabled` 게이트에 걸지 않는다 — OPC 를 끈
+  뒤 재부팅해도 남은 ChangeIp ESSID 는 되돌아가야 하고(게이트에 걸면 정상 종료의 ExecStop 동기화가
+  유닛을 먼저 꺼 영구화되고 전원 단절 재부팅과 결과가 갈린다), 표식이 없으면 `ConditionPathExists`
+  가 실행을 거른다. 실패(exit 1: 표식·conf 읽기 불가)는 `wifi_init` 을 막지 않는다.
+- **표식 소유 규약**: opcd 는 표식을 arm 한 뒤 `opc_wlan_apply.sh` 로 ESSID 를 설치하고 성공하면
+  커밋한다. `opc_wlan_apply.sh` 는 mlan0 `ssid` 설치 전에 conf writer lock 안에서 표식 존재를 확인하고
+  없으면 conf 를 건드리지 않고 exit 6 으로 거부한다 — arm 과 설치 사이에 다른 작성자가 표식을 지웠다면
+  그 작성자의 SSID 가 최종값이다(opcd 는 비0 종료를 settle 로 처리해 요청값이 아니면 커밋하지 않는다).
+- **공장 초기화**: `factory_reset.sh` 가 mlan0 conf 를 공장값으로 되돌린 뒤 표식을 함께 지운다.
+  복원은 커밋값 일치 때만 일어나므로 표식이 남아도 공장값을 되돌리지는 않는다. 다만 삭제는 conf
+  lock 없이 하고 opcd 를 멈추지 않으므로, payload commit 과 삭제 사이의 짧은 창에 ChangeIp 가
+  arm·설치·커밋을 마치면 그 ESSID 가 표식 없이 남는다 — 공장 초기화는 곧바로 재부팅하고 OPC 세션이
+  그 창에 겹칠 일이 드물어 받아들인 한계다.
+- **운영자의 영구 SSID 변경**: `wifi 0 ssid <SSID>` 와 `wifi 0 connect <SSID>` 는 conf 를 설치한 뒤
+  표식을 지워 ChangeIp 체인을 끝낸다. 그러지 않으면 커밋값과 같은 토큰을 다시 쓴 경우(ChangeIp
+  위치를 영구화하려는 조작)를 `-R` 이 구별하지 못해 다음 부팅에 원래 값으로 되돌린다. FTP `wssid`
+  는 `wifi ssid` 를 거치므로 포함된다. `bd_provision.sh`(wlan-opc)는 conf 를 통째로 재생성하면서
+  표식을 지우지 않는다 — 같은 SSID 를 다시 쓰는 경우가 남은 한계이며 wlan-opc#176 으로 추적한다.
+
 ### opcd 장치 리셋 통지용 Reset Cause 기록 (#304)
 
 승인된 재부팅은 `do_reboot` 직전에 `/run/opc/reset_cause`(한 줄, `0x..`)를 남기고, opcd(wlan-opc)가 SIGTERM(시스템 종료 중)에서 이를 읽어 장치 리셋 통지(0x0020)의 Reset Cause로 보낸다. 파일이 없으면 opcd는 `0x0002`(원인 미상)로 통지한다. 거부된 요청(uptime/loop/mfg)은 파일을 남기지 않으며, 기록 실패는 syslog에만 남기고 재부팅은 진행한다. 값(wlan-opc `protocol/ids.h`):

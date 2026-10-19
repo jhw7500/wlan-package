@@ -699,6 +699,13 @@ if awk '/reboot inhibited/{inh=NR} /^[[:space:]]*(if )?mkdir -p \/run\/opc/{m=NR
 else
     fail "factory reset does not write Reset Cause 0x40 before systemctl reboot"
 fi
+# #362: 공장값으로 되돌린 mlan0 conf 에 대한 OPC ChangeIp ESSID 복원 표식은 payload commit 뒤,
+# 재부팅 전에 지운다(순서 계약: commit < rm < systemctl reboot).
+if awk '/factory_commit_required_payloads "\$FACTORY_TOPOLOGY_SNAPSHOT"/{c=NR} /rm -f \/usr\/local\/opc\/etc\/changeip_essid.restore/{m=NR} /^(if ! )?systemctl reboot/{r=NR} END{exit !(c && m && r && c<m && m<r)}' "$FACTORY_SCRIPT"; then
+    pass "factory reset removes the ChangeIp ESSID restore marker after the payload commit and before reboot"
+else
+    fail "factory reset does not remove the ChangeIp ESSID restore marker between commit and reboot"
+fi
 if grep -Eq "trap .*exit 0.*(INT TERM EXIT|EXIT)" "$SWITCHD"; then
     fail "switchd EXIT trap masks factory reset failure status"
 else
