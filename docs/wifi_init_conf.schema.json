@@ -140,6 +140,21 @@
             }
           }
         },
+        "ntp": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "systemd-timesyncd(시각 동기) 서비스 설정. 서버 주소는 /etc/systemd/timesyncd.conf(프로비저닝)·ChangeIp NTP 필드가 정한다",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "systemd-timesyncd.service enable/disable — systemctl로 동기화. false 로 끄면 실행 중 인스턴스는 다음 부팅부터 멈춘다",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_apply_enabled.sh"
+            }
+          }
+        },
         "fw_watch": {
           "type": "object",
           "additionalProperties": true,

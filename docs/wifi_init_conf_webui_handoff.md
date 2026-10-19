@@ -180,6 +180,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `global.ANT_TYPE` | 안테나 경로 | enum | `""` | `""`\|`internal`\|`external` (또는 0\|1). 빈값=설정 안 함 | caution | boot | 부팅 시 GPIO(SW_SEL1/2)로 적용. 런타임 변경은 `wifi ant` |
 | `global.tx_work` | moal TX 제출 방식 | int | `0` | `0`\|`1` (빈값/형식위반=미전달) | caution | reboot | 0=동기 제출(홉1), 1=tx_workqueue 비동기(홉2, NXP iMX 기본). capability-gate |
 | `global.ping_monitor.enabled` | ping 모니터 서비스 | bool | `false` | true\|false | yes | daemon-restart | `wifi_ping_monitor.service` enable/disable |
+| `global.ntp.enabled` | 시각 동기(NTP) 서비스 | bool | `true` | true\|false | yes | boot | `systemd-timesyncd.service` enable/disable. 서버는 `timesyncd.conf`. false 로 끄면 실행 중 인스턴스는 다음 부팅부터 멈춤 |
 | `global.fw_watch.enabled` | 드라이버 wedge 감시 | bool | `true` | true\|false | yes | daemon-restart | `wlan_fw_watch.service` enable/disable |
 | `global.fw_watch.CHECK_INTERVAL_SEC` | wedge 폴링 주기 | int | `5` | 1~60 | yes | daemon-restart | `wifi_status` 확인 간격(초) |
 | `global.fw_watch.INITIAL_DELAY_SEC` | 감시 시작 유예 | int | `60` | 0~600 | yes | daemon-restart | 부팅 중 FW 다운로드 창 회피(초) |
@@ -194,7 +195,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `global.fw_watch.REBOOT_COOLDOWN_SEC` | 재부팅 쿨다운 | int | `300` | 60~86400 | yes | daemon-restart | 정책에 전달(초) |
 | `global.fw_watch.MIN_UPTIME_SEC` | 최소 uptime | int | `60` | 0~3600 | yes | daemon-restart | 정책에 전달(초) |
 
-**비고 (global)** — 소비: 대부분 `wifi_init.sh`(부팅). `ping_monitor.enabled`는 `wifi_apply_enabled.sh`.
+**비고 (global)** — 소비: 대부분 `wifi_init.sh`(부팅). `ping_monitor.enabled`·`ntp.enabled`는 `wifi_apply_enabled.sh`.
 - `BUS_TYPE`/`BLUETOOTH.enable`/`BOARD_TYPE`는 하드웨어와 일치해야 함(fw_name·mod_para 블록·.ko 선택 결정). fw_name이 바뀌면 `wifi_config.py`가 `mod_para.conf`에 자동 기입.
 - `tx_work`: .ko의 `.modinfo`에 `tx_work` param이 선언된 경우에만 insmod 인자로 전달(미선언 .ko면 skip해 붕괴 방지). 런타임 sysfs는 init 때 latch라 무효.
 - `STANDARD`: n→`0xfffcdfff`, ac→`0xfffcffff`. native max 이상이면 dev_cap_mask 라인 삭제(제한 없음). mlan1의 ax는 미지원(경고).

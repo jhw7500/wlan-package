@@ -522,6 +522,7 @@ scripts/package_tar_test.sh
 scripts/qa/ftp_quote_verify.py
 scripts/qa/test_ftp_quote_verify.py
 scripts/qa/test_opcd_upgrade.py
+scripts/qa/test_timesyncd_lab_gateway.py
 scripts/source_archive_manifest.txt
 scripts/validate_release.sh
 scripts/validate_release_test.sh

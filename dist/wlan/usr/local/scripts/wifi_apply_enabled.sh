@@ -11,6 +11,7 @@
 # 매핑 (JSON 키 → systemd unit):
 #   .global.ping_monitor.enabled              → wifi_ping_monitor.service
 #   .global.fw_watch.enabled                  → wlan_fw_watch.service
+#   .global.ntp.enabled                       → systemd-timesyncd.service (배포판 유닛, 기본 true)
 #   .mlan0.net_rx + .mlan1.net_rx > 0         → wifi_mgmt_log.timer
 #   .wbridge.thermal.enabled                  → wifi_thermal_state.timer
 #   .snmp.enabled                             → snmpd.service (배포판 net-snmp 유닛)
@@ -226,6 +227,7 @@ fi
 # 글로벌 데몬
 apply wifi_ping_monitor.service     "$(get_bool ".global.ping_monitor.enabled" "false")"
 apply wlan_fw_watch.service         "$(get_bool ".global.fw_watch.enabled"     "true")"
+apply systemd-timesyncd.service     "$(get_bool ".global.ntp.enabled"          "true")"
 apply wifi_thermal_state.timer      "$(get_bool ".wbridge.thermal.enabled"     "false")"
 apply snmpd.service                 "$(get_bool ".snmp.enabled"                "false")"
 apply opcd.service                  "$(get_bool ".opc.enabled"                 "false")"

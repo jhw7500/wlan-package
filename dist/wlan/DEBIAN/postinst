@@ -354,6 +354,9 @@ EOF
 
   if [ "$CURRENT_TS" -lt "$SAFE_TS" ]; then
     echo "WARNING: System time is before $SAFE_TIME, setting to safe time"
+    # set-time 은 NTP 가 켜져 있으면 거부되므로 먼저 끈다. 여기서 내린 서비스는 아래
+    # wifi_apply_enabled.sh(.global.ntp.enabled, 기본 true)가 다시 enable 하고
+    # `# >>> timesyncd-start` 블록이 기동한다 — 꺼진 채 남기는 래치가 아니다(#361).
     timedatectl set-ntp false 2>/dev/null || true
     timedatectl set-timezone Asia/Seoul 2>/dev/null || true
     timedatectl set-time "$SAFE_TIME" 2>/dev/null || true
@@ -801,21 +804,6 @@ secure_wpa_conf() {
 
   cpchk /opt/wlan/mfg/bridge_init.conf /usr/local/mfg/bridge_init.conf
   cpchk /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/timesyncd.conf
-  # >>> timesyncd-enable
-  # 이미지 기본은 systemd-timesyncd disabled 라 위 conf 복사만으로는 시각 동기가 일어나지
-  # 않는다(#361: 시험 장비의 시각이 며칠 어긋나 OPC KeepAlive Timestamp 와 로그 시각이
-  # 틀렸다). 업그레이드 설치에도 적용되도록 매번 enable 하고, 복사·보존된 conf 를 읽게
-  # --no-block restart 한다(동기 start 는 PID1 잡 대기와 맞물릴 수 있어 이 postinst 는
-  # 큐잉만 한다). enable/restart 실패는 설치를 막지 않고 경고로 남긴다 — 시각 동기는
-  # 통지 Timestamp 품질의 문제이지 설치 성립 조건이 아니다.
-  if systemctl enable systemd-timesyncd.service; then
-    logger -p local0.info "[$tag:$LINENO] [$KEY] systemd-timesyncd.service enabled (NTP from /etc/systemd/timesyncd.conf)"
-    systemctl restart --no-block systemd-timesyncd.service || \
-      logger -p local0.warn "[$tag:$LINENO] [$KEY] systemd-timesyncd.service restart failed; it starts at the next boot"
-  else
-    logger -p local0.warn "[$tag:$LINENO] [$KEY] systemd-timesyncd.service enable failed; time sync stays off"
-  fi
-  # <<< timesyncd-enable
   cpchk /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan0.conf /etc/wpa_supplicant/wpa_supplicant-mlan0.conf
   cpchk /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan1.conf /etc/wpa_supplicant/wpa_supplicant-mlan1.conf
   cleanup_mlan1_supplicant_bgscan /etc/wpa_supplicant/wpa_supplicant-mlan1.conf
@@ -849,6 +837,25 @@ secure_wpa_conf() {
       /usr/local/scripts/wifi_services.sh start 2>/dev/null || true
     fi
   fi
+
+  # >>> timesyncd-start
+  # systemd-timesyncd 의 enable/disable 은 .global.ntp.enabled(기본 true, 웹 UI 토글) 를 읽는
+  # wifi_apply_enabled.sh 가 위에서 동기화했다(#361: 이미지 기본은 disabled 라 conf 복사만으로는
+  # 시각 동기가 없었고, 위 안전시각 분기의 `timedatectl set-ntp false` 도 서비스를 내린다).
+  # 게이트가 enable 로 끝났으면 다음 부팅을 기다리지 않고 지금 --no-block 으로 (재)기동해
+  # 복사·보존된 /etc/systemd/timesyncd.conf 를 읽게 한다(동기 start 는 PID1 잡 대기와 맞물릴
+  # 수 있어 큐잉만 한다). 실패는 설치를 막지 않는다 — 시각 동기는 통지 Timestamp 품질의
+  # 문제이지 설치 성립 조건이 아니다.
+  if systemctl is-enabled --quiet systemd-timesyncd.service 2>/dev/null; then
+    if systemctl restart --no-block systemd-timesyncd.service; then
+      logger -p local0.info "[$tag:$LINENO] [$KEY] systemd-timesyncd.service restarted (.global.ntp.enabled)"
+    else
+      logger -p local0.warn "[$tag:$LINENO] [$KEY] systemd-timesyncd.service restart failed; it starts at the next boot"
+    fi
+  else
+    logger -p local0.info "[$tag:$LINENO] [$KEY] systemd-timesyncd.service left disabled (.global.ntp.enabled false or enable failed)"
+  fi
+  # <<< timesyncd-start
 
   # >>> opcd-upgrade-restart
   # wifi_services.sh deliberately treats an already-active service as a no-op,

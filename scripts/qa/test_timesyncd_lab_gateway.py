@@ -1,11 +1,15 @@
-"""#361: postinst turns on systemd-timesyncd and the lab default-route script is gone.
+"""#361: postinst starts systemd-timesyncd when the .global.ntp.enabled gate left it enabled,
+and the lab default-route script is gone.
 
 The timesyncd checks execute the marked postinst fragment with a ``systemctl``
 boundary double that records every call, so they assert what the package asks
-systemd to do (and that a refusal does not abort the install), not merely that the
-source text contains a command.  The lab-gateway checks assert the package
-payload, the source archive manifest and the source tree agree that
-``etc/networkd-dispatcher/routable.d/10-set-gateway.sh`` is no longer shipped.
+systemd to do (restart only after the gate enabled the unit; a refusal does not
+abort the install), not merely that the source text contains a command.  The
+enable/disable decision itself lives in wifi_apply_enabled.sh and is covered by
+dist/wlan/usr/local/scripts/tests/test_apply_enabled_ntp.py.  The lab-gateway
+checks assert the package payload, the source archive manifest and the source
+tree agree that ``etc/networkd-dispatcher/routable.d/10-set-gateway.sh`` is no
+longer shipped.
 """
 
 from __future__ import annotations
@@ -34,8 +38,8 @@ def _block(name: str) -> str:
     return source.split(start, 1)[1].split(end, 1)[0]
 
 
-def _run_timesyncd_block(*, enable_rc: int, restart_rc: int = 0) -> tuple[subprocess.CompletedProcess[str], list[str], list[str]]:
-    with tempfile.TemporaryDirectory(prefix="timesyncd-enable-") as tmp:
+def _run_timesyncd_block(*, enabled: bool, restart_rc: int = 0) -> tuple[subprocess.CompletedProcess[str], list[str], list[str]]:
+    with tempfile.TemporaryDirectory(prefix="timesyncd-start-") as tmp:
         root = Path(tmp)
         bin_dir = root / "bin"
         bin_dir.mkdir()
@@ -49,7 +53,7 @@ def _run_timesyncd_block(*, enable_rc: int, restart_rc: int = 0) -> tuple[subpro
             """#!/bin/sh
 printf '%s\\n' "$*" >> "$CALLS"
 case "$1" in
-  enable) exit "$ENABLE_RC" ;;
+  is-enabled) [ "$ENABLED" = 1 ] ;;
   restart) exit "$RESTART_RC" ;;
   *) exit 65 ;;
 esac
@@ -64,7 +68,7 @@ esac
                 "tag=postinst-test",
                 "KEY=PKG",
                 'logger() { printf \'%s\\n\' "$*" >> "$LOGS"; }',
-                _block("timesyncd-enable"),
+                _block("timesyncd-start"),
                 "printf 'completed\\n'",
             )
         )
@@ -72,7 +76,7 @@ esac
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
             "CALLS": str(calls),
             "LOGS": str(logs),
-            "ENABLE_RC": str(enable_rc),
+            "ENABLED": "1" if enabled else "0",
             "RESTART_RC": str(restart_rc),
         }
         result = subprocess.run(
@@ -81,38 +85,51 @@ esac
         return result, calls.read_text().splitlines(), logs.read_text().splitlines()
 
 
-def test_timesyncd_is_enabled_and_restarted_to_read_the_installed_conf() -> None:
-    result, calls, logs = _run_timesyncd_block(enable_rc=0)
+def test_enabled_timesyncd_is_restarted_to_read_the_installed_conf() -> None:
+    result, calls, logs = _run_timesyncd_block(enabled=True)
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "completed"
     assert calls == [
-        f"enable {TIMESYNCD_UNIT}",
+        f"is-enabled --quiet {TIMESYNCD_UNIT}",
         f"restart --no-block {TIMESYNCD_UNIT}",
     ]
-    assert any(TIMESYNCD_UNIT in line and "enabled" in line for line in logs), logs
+    assert any(TIMESYNCD_UNIT in line and "restarted" in line for line in logs), logs
 
 
-@pytest.mark.parametrize("enable_rc", (1, 5))
-def test_timesyncd_enable_failure_is_logged_and_does_not_abort_the_install(enable_rc: int) -> None:
-    result, calls, logs = _run_timesyncd_block(enable_rc=enable_rc)
+def test_disabled_timesyncd_is_left_alone() -> None:
+    result, calls, logs = _run_timesyncd_block(enabled=False)
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "completed"
-    assert calls == [f"enable {TIMESYNCD_UNIT}"], calls
-    assert any("local0.warn" in line and TIMESYNCD_UNIT in line for line in logs), logs
+    assert calls == [f"is-enabled --quiet {TIMESYNCD_UNIT}"], calls
+    assert not any(line.startswith("restart") or line.startswith("enable") for line in calls)
+    assert any(TIMESYNCD_UNIT in line and "left disabled" in line for line in logs), logs
 
 
-def test_timesyncd_restart_failure_is_logged_and_does_not_abort_the_install() -> None:
-    result, calls, logs = _run_timesyncd_block(enable_rc=0, restart_rc=1)
+@pytest.mark.parametrize("restart_rc", (1, 5))
+def test_restart_failure_is_logged_and_does_not_abort_the_install(restart_rc: int) -> None:
+    result, calls, logs = _run_timesyncd_block(enabled=True, restart_rc=restart_rc)
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "completed"
     assert calls == [
-        f"enable {TIMESYNCD_UNIT}",
+        f"is-enabled --quiet {TIMESYNCD_UNIT}",
         f"restart --no-block {TIMESYNCD_UNIT}",
     ]
-    assert any("local0.warn" in line and "restart" in line for line in logs), logs
+    assert any("local0.warn" in line and "restart failed" in line for line in logs), logs
+
+
+def test_block_runs_after_the_gate_has_synchronised_the_unit() -> None:
+    source = POSTINST.read_text()
+    gate = source.index("/usr/local/scripts/wifi_apply_enabled.sh 2>/dev/null || true")
+    merge = source.index("json_merge /opt/wlan/config/wifi_init_conf.json /usr/local/etc/wifi_init_conf.json")
+    block = source.index("  # >>> timesyncd-start\n")
+    no_bridge_gate = source.rindex("/usr/local/scripts/wifi_apply_enabled.sh 2>/dev/null || true", 0, block)
+
+    assert gate < merge < block, "the restart block must follow json_merge and the first gate call"
+    assert no_bridge_gate > merge, "the NO_WBRIDGE gate call must also precede the restart block"
+    assert "systemctl enable systemd-timesyncd" not in source, "enable belongs to wifi_apply_enabled.sh"
 
 
 def test_lab_gateway_script_is_not_in_the_package_payload() -> None:
@@ -126,6 +143,7 @@ def test_lab_gateway_script_is_not_in_the_source_archive() -> None:
     archive = SOURCE_ARCHIVE_MANIFEST.read_text().splitlines()
 
     assert f"dist/wlan/{LAB_GATEWAY_SCRIPT}" not in archive
+    assert "scripts/qa/test_timesyncd_lab_gateway.py" in archive
 
 
 def test_lab_gateway_script_is_not_in_the_source_tree() -> None:
