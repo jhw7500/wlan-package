@@ -120,15 +120,20 @@ def test_restart_failure_is_logged_and_does_not_abort_the_install(restart_rc: in
     assert any("local0.warn" in line and "restart failed" in line for line in logs), logs
 
 
-def test_block_runs_after_the_gate_has_synchronised_the_unit() -> None:
+def test_block_runs_after_the_gate_has_synchronised_the_merged_json() -> None:
     source = POSTINST.read_text()
-    gate = source.index("/usr/local/scripts/wifi_apply_enabled.sh 2>/dev/null || true")
+    gate_call = "/usr/local/scripts/wifi_apply_enabled.sh 2>/dev/null || true"
+    gate = source.index(gate_call)
     merge = source.index("json_merge /opt/wlan/config/wifi_init_conf.json /usr/local/etc/wifi_init_conf.json")
     block = source.index("  # >>> timesyncd-start\n")
-    no_bridge_gate = source.rindex("/usr/local/scripts/wifi_apply_enabled.sh 2>/dev/null || true", 0, block)
+    between = source[merge:block]
 
     assert gate < merge < block, "the restart block must follow json_merge and the first gate call"
-    assert no_bridge_gate > merge, "the NO_WBRIDGE gate call must also precede the restart block"
+    # On a first install the pre-merge gate call skips (no JSON yet), so the merged JSON must be
+    # applied again on BOTH package flavours before the block decides: once inside the
+    # NO_WBRIDGE=1 branch and once for the ordinary NO_WBRIDGE=0 flavour.
+    assert between.count(gate_call) == 2, between
+    assert 'if [ "$NO_WBRIDGE" -eq 0 ]; then\n    ' + gate_call in between
     assert "systemctl enable systemd-timesyncd" not in source, "enable belongs to wifi_apply_enabled.sh"
 
 

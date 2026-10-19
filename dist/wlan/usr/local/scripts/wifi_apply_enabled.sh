@@ -179,6 +179,9 @@ MFG_MODE=$(grep -m1 '^[[:space:]]*mfg_mode=' "/lib/firmware/$_MOD_PARA" 2>/dev/n
 # 적용해야 wifi log system|eth0 enable/disable이 모든 모드에서 같은 의미를 가진다.
 apply wifi_logger.service     "$(get_bool ".logger.enabled" "true")"
 apply wifi_logger@eth0.service "$(get_bool ".eth0.logger.enabled" "true")"
+# 시각 동기(systemd-timesyncd, 배포판 유닛)도 무선과 무관하다 — .global.ntp.enabled(기본 true, 웹 UI
+# 토글)가 모든 모드에서 on/off 를 소유하도록 MFG early-return 앞에서 적용한다(#361).
+apply systemd-timesyncd.service "$(get_bool ".global.ntp.enabled" "true")"
 
 if [ "${MFG_MODE:-0}" = "1" ]; then
     logger -p local0.info "[$tag:$LINENO] mfg_mode=1 -> MFG profile: disable+stop STA/FW-touching units"
@@ -227,7 +230,6 @@ fi
 # 글로벌 데몬
 apply wifi_ping_monitor.service     "$(get_bool ".global.ping_monitor.enabled" "false")"
 apply wlan_fw_watch.service         "$(get_bool ".global.fw_watch.enabled"     "true")"
-apply systemd-timesyncd.service     "$(get_bool ".global.ntp.enabled"          "true")"
 apply wifi_thermal_state.timer      "$(get_bool ".wbridge.thermal.enabled"     "false")"
 apply snmpd.service                 "$(get_bool ".snmp.enabled"                "false")"
 apply opcd.service                  "$(get_bool ".opc.enabled"                 "false")"

@@ -128,6 +128,19 @@ def test_matching_state_issues_no_change(tmp_path: Path) -> None:
     assert f"disable {UNIT}" not in calls
 
 
+def test_ntp_gate_is_applied_before_the_mfg_early_return() -> None:
+    """MFG mode cannot be exercised here (the flag is read from /lib/firmware), so the
+    ordering contract is checked on the script text: the toggle must sit with the other
+    non-wireless units that precede the ``MFG_MODE`` branch, or an MFG board would ignore it."""
+    source = APPLY.read_text()
+    ntp = source.index('apply systemd-timesyncd.service "$(get_bool ".global.ntp.enabled" "true")"')
+    mfg_branch = source.index('if [ "${MFG_MODE:-0}" = "1" ]; then')
+    logger_line = source.index('apply wifi_logger.service')
+
+    assert logger_line < ntp < mfg_branch
+    assert source.count("apply systemd-timesyncd.service") == 1
+
+
 def test_boot_start_list_includes_timesyncd_outside_the_wireless_group() -> None:
     script = f'. "{SERVICES_LIB}"; wifi_services_non_wireless_list; echo ---; wifi_services_wireless_list'
     result = subprocess.run(["bash", "-c", script], text=True, capture_output=True, timeout=5)
