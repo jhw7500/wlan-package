@@ -801,6 +801,21 @@ secure_wpa_conf() {
 
   cpchk /opt/wlan/mfg/bridge_init.conf /usr/local/mfg/bridge_init.conf
   cpchk /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/timesyncd.conf
+  # >>> timesyncd-enable
+  # 이미지 기본은 systemd-timesyncd disabled 라 위 conf 복사만으로는 시각 동기가 일어나지
+  # 않는다(#361: 시험 장비의 시각이 며칠 어긋나 OPC KeepAlive Timestamp 와 로그 시각이
+  # 틀렸다). 업그레이드 설치에도 적용되도록 매번 enable 하고, 복사·보존된 conf 를 읽게
+  # --no-block restart 한다(동기 start 는 PID1 잡 대기와 맞물릴 수 있어 이 postinst 는
+  # 큐잉만 한다). enable/restart 실패는 설치를 막지 않고 경고로 남긴다 — 시각 동기는
+  # 통지 Timestamp 품질의 문제이지 설치 성립 조건이 아니다.
+  if systemctl enable systemd-timesyncd.service; then
+    logger -p local0.info "[$tag:$LINENO] [$KEY] systemd-timesyncd.service enabled (NTP from /etc/systemd/timesyncd.conf)"
+    systemctl restart --no-block systemd-timesyncd.service || \
+      logger -p local0.warn "[$tag:$LINENO] [$KEY] systemd-timesyncd.service restart failed; it starts at the next boot"
+  else
+    logger -p local0.warn "[$tag:$LINENO] [$KEY] systemd-timesyncd.service enable failed; time sync stays off"
+  fi
+  # <<< timesyncd-enable
   cpchk /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan0.conf /etc/wpa_supplicant/wpa_supplicant-mlan0.conf
   cpchk /opt/wlan/config/wpa_supplicant/wpa_supplicant-mlan1.conf /etc/wpa_supplicant/wpa_supplicant-mlan1.conf
   cleanup_mlan1_supplicant_bgscan /etc/wpa_supplicant/wpa_supplicant-mlan1.conf

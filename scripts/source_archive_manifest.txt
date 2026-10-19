@@ -12,7 +12,6 @@ dist/wlan/DEBIAN/templates
 dist/wlan/etc/default/wbridge
 dist/wlan/etc/modules-load.d/99-cts-mods.conf
 dist/wlan/etc/nanorc
-dist/wlan/etc/networkd-dispatcher/routable.d/10-set-gateway.sh
 dist/wlan/etc/profile.d/00-cantops.sh
 dist/wlan/etc/rsyslog.d/10-udp-out.conf
 dist/wlan/etc/rsyslog.d/20-mgmt-frame.conf

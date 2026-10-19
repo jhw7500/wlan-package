@@ -2,7 +2,6 @@ DEBIAN/payload-manifest.txt
 etc/default/wbridge
 etc/modules-load.d/99-cts-mods.conf
 etc/nanorc
-etc/networkd-dispatcher/routable.d/10-set-gateway.sh
 etc/profile.d/00-cantops.sh
 etc/rsyslog.d/10-udp-out.conf
 etc/rsyslog.d/20-mgmt-frame.conf
