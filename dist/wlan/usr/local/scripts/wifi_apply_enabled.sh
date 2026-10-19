@@ -16,7 +16,7 @@
 #   .wbridge.thermal.enabled                  → wifi_thermal_state.timer
 #   .snmp.enabled                             → snmpd.service (배포판 net-snmp 유닛)
 #   .opc.enabled                              → opcd.service (wlan-opc OPC 제어 데몬)
-#   .opc.enabled                              → opcd-essid-restore.service (부팅 1회 opcd -R, #362)
+#   (게이트 없음)                              opcd-essid-restore.service 는 항상 enable, 표식 유무로만 실행(#362)
 #   .logger.enabled                           → wifi_logger.service (시스템 로거 그룹)
 #   .eth0.logger.enabled                      → wifi_logger@eth0.service
 #   .mlanN.wpa_supplicant.enabled             → wpa_supplicant@mlanN.service
@@ -241,8 +241,9 @@ apply wlan_fw_watch.service         "$(get_bool ".global.fw_watch.enabled"     "
 apply wifi_thermal_state.timer      "$(get_bool ".wbridge.thermal.enabled"     "false")"
 apply snmpd.service                 "$(get_bool ".snmp.enabled"                "false")"
 apply opcd.service                  "$(get_bool ".opc.enabled"                 "false")"
-# 부팅 1회 oneshot(ChangeIp ESSID 복원, wlan-opc#161) — opcd 와 같은 게이트를 따른다(#362).
-apply opcd-essid-restore.service    "$(get_bool ".opc.enabled"                 "false")"
+# opcd-essid-restore.service(부팅 1회 opcd -R, #362)는 이 게이트에 걸지 않는다 — OPC 를 끈 뒤
+# 재부팅해도 남은 ChangeIp ESSID 는 되돌아가야 하고(wlan-opc#161), 표식이 없으면 유닛의
+# ConditionPathExists 가 어차피 no-op 이다. postinst 가 무조건 enable 한다.
 
 # wifi_mgmt_log.timer: net_rx 값이 어느 한 쪽이라도 양수면 enable
 _m0_rx=$(jq -r '.mlan0.net_rx // 0' "$JSON")

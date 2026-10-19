@@ -25,7 +25,8 @@
 #
 # exit: 0=ok / 2=usage / 3=ctrl_interface 부재 /
 #       4=conf/JSON/드라이버 적용 실패 / 5=reconfigure 실패 /
-#       6=transaction 취소 또는 rollback 실패
+#       6=transaction 취소 또는 rollback 실패 / mlan0 ssid 설치 시 ChangeIp ESSID
+#         복원 표식 부재(conf 미변경, #362)
 set -u
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
@@ -98,6 +99,16 @@ if [ -n "$MODE$BW" ]; then
 fi
 wifi_wpa_conf_lock_acquire "$IFACE" \
     || { echo "opc_wlan_apply: failed to lock $CONF" >&2; exit 4; }
+# OPC ChangeIp 의 ESSID 는 opcd 가 복원 표식(essid_marker, "표식 없으면 conf 편집 없음")을 arm 한
+# 뒤에만 mlan0 conf 에 설치할 수 있다 — 표식 없는 설치는 재부팅 때 되돌릴 수 없는 영구 변경이다.
+# arm 과 이 lock 사이에 다른 작성자(wifi 0 ssid/connect, 공장초기화)가 표식을 지웠다면 그 작성자의
+# SSID 가 최종값이므로 conf 를 건드리지 않고 거부한다(#362 Tribunal A-R1-002). opcd 는 비0 종료를
+# settle 로 처리한다(conf 가 요청값이 아니면 커밋하지 않음).
+OPC_ESSID_MARKER="${OPC_ESSID_MARKER:-/usr/local/opc/etc/changeip_essid.restore}"
+if [ "$HAVE_SSID" = 1 ] && [ "$IFACE" = "mlan0" ] && [ ! -e "$OPC_ESSID_MARKER" ]; then
+    echo "opc_wlan_apply: ChangeIp ESSID restore marker is missing — refusing to install ssid on mlan0" >&2
+    exit 6
+fi
 # A mode-only request derives its effective frequencies from CONF. Resolve and
 # validate them only while holding the writer lock, so a concurrent frequency
 # update cannot replace the checked 2.4GHz list with a 5GHz-only list before

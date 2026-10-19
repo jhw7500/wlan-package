@@ -440,6 +440,14 @@ EOF
 chmod +x "$BIN"/*
 export PATH="$BIN:$PATH"
 export CALL_LOG STATE_DIR WPA_DIR WIFI_RUN_DIR="$RUN_DIR"
+# #362: opc_wlan_apply.sh 는 mlan0 ssid 설치 전에 ChangeIp ESSID 복원 표식을 요구한다(opcd 가 arm 한
+# 뒤에만 호출되는 계약). 하네스는 그 상태를 흉내 내 표식을 둔다; 부재 케이스는 전용 검사에서 본다.
+OPC_ESSID_MARKER="$TD/opc-essid.restore"
+export OPC_ESSID_MARKER
+# `wifi 0 ssid`/`wifi 0 connect <ssid>` 는 설치 뒤 표식을 지우므로(ChangeIp 체인 종료) 그런 케이스를 지난
+# 뒤의 OPC ssid 케이스는 opcd 의 arm 을 흉내 내 직전에 다시 arm 한다.
+opc_arm_essid_marker() { printf 'slot=1\n' > "$OPC_ESSID_MARKER"; }
+opc_arm_essid_marker
 
 PASS=0
 FAIL=0
@@ -1210,6 +1218,7 @@ check_equal "wifi connect Mode B manual candidate reloads the full profile" \
 
 write_mode_b_legacy
 set_boot_policy false false '["Office"]'
+opc_arm_essid_marker
 WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
     sh "$OPC_SH" mlan0 ssid Office >/dev/null 2>&1
 rc=$?
@@ -1218,6 +1227,19 @@ if [ "$rc" -eq 0 ] && [ "$(conf_ssid_identity "$CONF")" = "Office" ]; then
 else
     fail "OPC must accept an immutable Mode B manual candidate"
 fi
+
+# #362 (Tribunal A-R1-002): arm 뒤 다른 작성자가 ChangeIp ESSID 복원 표식을 지웠으면 그 작성자의
+# SSID 가 최종값이다 — opc_wlan_apply.sh 는 lock 안에서 표식 부재를 보고 conf 를 건드리지 않고 exit 6.
+write_mode_b_legacy
+_before_sha=$(sha256sum "$CONF" | cut -d' ' -f1)
+OPC_ESSID_MARKER="$TD/absent-marker" WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
+    sh "$OPC_SH" mlan0 ssid Office >/dev/null 2>&1
+check_equal "OPC ssid install without the ChangeIp restore marker exits 6" "$?" "6"
+check_equal "OPC ssid install without the marker leaves the conf untouched" \
+    "$(sha256sum "$CONF" | cut -d' ' -f1)" "$_before_sha"
+OPC_ESSID_MARKER="$TD/absent-marker" WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
+    sh "$OPC_SH" mlan0 freq "5180 5200" >/dev/null 2>&1
+check_equal "OPC freq-only install does not require the marker" "$?" "0"
 
 write_mode_b_legacy
 set_status_mode target-custom
@@ -1232,6 +1254,7 @@ check_real_wpa_parser "real parser accepts wifi connect hex output" "$CONF"
 
 write_mode_b_legacy
 set_reconfigure_mode ok
+opc_arm_essid_marker
 WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
     sh "$OPC_SH" mlan0 ssid "$_special_ssid" >/dev/null 2>&1
 check_equal "OPC accepts exact special SSID in Mode B" "$?" "0"
@@ -1282,6 +1305,7 @@ for _invalid_ssid in $'bad\x1fname' $'bad\x7fname' "$_ssid_33"; do
 
     write_mode_b_legacy
     cp "$CONF" "$TD/invalid-opc.before"
+    opc_arm_essid_marker
     WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
         sh "$OPC_SH" mlan0 ssid "$_invalid_ssid" >/dev/null 2>&1
     rc=$?
@@ -2118,6 +2142,7 @@ set_mv_mode ok
 write_mode_a_legacy
 set_boot_policy true true '["Office"]'
 before=$(sha256sum "$CONF" | awk '{print $1}')
+opc_arm_essid_marker
 WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$TD/run" \
     sh "$OPC_SH" mlan0 ssid NewNet >/dev/null 2>&1
 rc=$?
@@ -2128,6 +2153,7 @@ check_equal "OPC Mode A rejection leaves conf unchanged" "$after" "$before"
 write_mode_b_legacy
 set_boot_policy true true '[]'
 before=$(sha256sum "$CONF" | awk '{print $1}')
+opc_arm_essid_marker
 WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
     sh "$OPC_SH" mlan0 ssid NewNet >/dev/null 2>&1
 rc=$?

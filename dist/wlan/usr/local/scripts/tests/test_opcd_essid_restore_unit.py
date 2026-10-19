@@ -14,6 +14,8 @@ import os
 from pathlib import Path
 import subprocess
 
+import pytest
+
 _SIBLING = Path(__file__).with_name("test_roam_owner_service_policy.py")
 _spec = importlib.util.spec_from_file_location("_roam_owner_service_policy_helpers", _SIBLING)
 assert _spec is not None and _spec.loader is not None
@@ -107,28 +109,29 @@ exit 0
     return result, calls.read_text().splitlines()
 
 
-def test_opc_gate_enables_the_restore_unit_with_opcd(tmp_path: Path) -> None:
+@pytest.mark.parametrize("opc_enabled", [True, False])
+def test_opc_gate_leaves_the_restore_unit_alone(tmp_path: Path, opc_enabled: bool) -> None:
+    """The restore unit is NOT gated by .opc.enabled: turning OPC off must not disable it, or
+    a ChangeIp ESSID left behind would survive the next (clean) reboot while a power-cut
+    reboot would restore it (tribunal A-R1-001).  ConditionPathExists already makes a boot
+    without a marker a no-op."""
     data = _config(False)
-    data["opc"] = {"enabled": True}
+    data["opc"] = {"enabled": opc_enabled}
 
-    result, calls = _run_apply(tmp_path, data, opc_initially_enabled=False)
+    result, calls = _run_apply(tmp_path, data, opc_initially_enabled=not opc_enabled)
 
     assert result.returncode == 0, result.stderr
-    assert "enable opcd.service" in calls
-    assert f"enable {RESTORE_UNIT}" in calls
-    assert f"disable {RESTORE_UNIT}" not in calls
+    assert ("enable opcd.service" in calls) is opc_enabled
+    assert ("disable opcd.service" in calls) is not opc_enabled
+    assert not any(RESTORE_UNIT in c for c in calls), calls
 
 
-def test_opc_gate_disables_the_restore_unit_with_opcd(tmp_path: Path) -> None:
-    data = _config(False)
-    data["opc"] = {"enabled": False}
+def test_postinst_enables_the_restore_unit_unconditionally() -> None:
+    text = (WLAN_ROOT / "DEBIAN/postinst").read_text()
+    enable_line = next(l for l in text.splitlines() if l.strip().startswith("systemctl enable watchdog"))
 
-    result, calls = _run_apply(tmp_path, data, opc_initially_enabled=True)
-
-    assert result.returncode == 0, result.stderr
-    assert "disable opcd.service" in calls
-    assert f"disable {RESTORE_UNIT}" in calls
-    assert f"enable {RESTORE_UNIT}" not in calls
+    assert RESTORE_UNIT in enable_line.split()
+    assert "apply opcd-essid-restore.service" not in (WLAN_ROOT / "usr/local/scripts/wifi_apply_enabled.sh").read_text()
 
 
 def test_prerm_tears_the_restore_unit_down_with_opcd() -> None:

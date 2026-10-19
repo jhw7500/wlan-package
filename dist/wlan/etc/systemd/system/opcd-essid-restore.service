@@ -20,5 +20,6 @@ ExecStart=/usr/local/opc/bin/opcd -R
 [Install]
 # wifi_init.service 와 같은 target 에 걸어 부팅 경로에서만 돈다. 런타임의 wifi_init 재시작은 이
 # 유닛을 끌어오지 않는다 — ChangeIp 의 ESSID 는 재부팅 때 되돌아가는 것이 사양이다.
-# enable/disable 은 .opc.enabled 게이트(wifi_apply_enabled.sh)가 opcd.service 와 함께 소유한다.
+# postinst 가 항상 enable 한다(.opc.enabled 게이트와 무관): OPC 를 끈 뒤 재부팅해도 남은 ChangeIp
+# ESSID 는 되돌아가야 하고, 표식이 없으면 위 ConditionPathExists 가 실행 자체를 거른다.
 WantedBy=wifi-stack.target
