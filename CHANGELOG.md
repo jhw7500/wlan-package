@@ -3,6 +3,39 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.7.1 (2026-10-20)
+
+> SemVer **patch** — 시각 동기 서비스를 JSON 토글로 켜고 시험용 기본 경로 스크립트를 제품 패키지에서 뺀다. OPC ChangeIp 가 바꾼 ESSID 를 부팅 때 되돌리는 유닛과 표식 소유 규칙을 넣고, 출하 토폴로지 보존·MAC 검증·초기화 복구를 보강하며, CONTEC SNMP MAC 을 원시 6바이트로 돌려준다. OPCd 를 DFK 사양 정합 머지본(wlan-opc 0b4dfe7)으로 올린다.
+
+### 시각 동기 서비스와 시험용 기본 경로 스크립트 (#361, PR #363)
+
+- `global.ntp.enabled`(기본 `true`)를 두고 `wifi_apply_enabled.sh` 가 `systemd-timesyncd.service` 의 enable/disable 을 동기화한다. MFG early-return 앞에서 적용하며, `false` 면 실행 중 인스턴스도 내린다. postinst 는 json_merge 뒤 게이트를 한 번 더 돌리고, enable 로 끝났을 때만 `restart --no-block` 으로 기동한다(복사·보존된 `timesyncd.conf` 를 읽게). 종전에는 postinst 의 안전시각 분기가 `set-ntp false` 로 내린 서비스를 다시 켜지 않아 꺼진 채 남았다. prerm 은 패키지 제거 때 stop+disable 로 이미지 기본으로 되돌린다.
+- 시험용 AP BSSID 와 고정 fallback 주소를 하드코딩한 `etc/networkd-dispatcher/routable.d/10-set-gateway.sh` 를 payload·소스 아카이브 manifest 에서 뺐다. mlan0 routable 이벤트마다 기본 경로를 바꿔 wlan-opc#162 의 ChangeIpAddress 기본 경로를 덮어쓸 수 있었다. conffile 이 아니므로 업그레이드에서 dpkg 가 기존 파일을 제거한다.
+- 실기(cts-wlan, 0.7.0+qa.20261016 → 로컬 QA 후보 업그레이드): 설치 직후 timesyncd enabled/active·`NTPSynchronized=yes`(시계 5일 보정), 스크립트 부재·기본 경로 없음, 재부팅 뒤 유지.
+
+### OPC ChangeIp ESSID 복원 부팅 유닛과 표식 소유 (#362, PR #364)
+
+- `opcd-essid-restore.service`(`Type=oneshot`, `ExecStart=/usr/local/opc/bin/opcd -R`, `DefaultDependencies=no`, `After=local-fs.target sysinit.target`, `Before=wifi_init.service wpa_supplicant@mlan0.service`, `ConditionPathExists=` 표식, `WantedBy=wifi-stack.target`)를 추가한다. postinst 가 항상 enable 하며 `opc.enabled` 게이트에 걸지 않는다 — 게이트에 걸면 OPC 를 끈 뒤 정상 종료 동기화가 유닛을 먼저 꺼 ChangeIp ESSID 가 영구화되고 전원 단절 재부팅과 결과가 갈린다. 표식이 없으면 실행되지 않는다. prerm 은 remove 경로에서 opcd 와 함께 stop/disable 한다.
+- 표식 소유: `factory_reset.sh` 는 필수 payload commit 뒤 표식을 지우고, `wifi.sh` 의 `ssid`·`connect`(SSID 인자)는 mlan0 conf 설치 뒤 표식을 지워 ChangeIp 체인을 끝낸다(FTP `wssid` 포함). `opc_wlan_apply.sh` 는 mlan0 `ssid` 설치 때 conf writer lock 안에서 표식 존재를 확인하고 없으면 conf 를 건드리지 않고 exit 6 으로 거부한다 — opcd 는 비0 종료를 settle 로 처리해 표식이 없으면 커밋하지 않는다. `bd_provision.sh --ssid` 는 wlan-opc#176 으로 추적한다.
+- 실기: ChangeIp(ESSID) → 재부팅 → 유닛이 wifi_init 앞에서 `-R ChangeIp ESSID restore: original ESSID restored (rc=1)`, conf·연결 원상, 표식 삭제. `wifi 0 ssid` 뒤 재부팅에서는 유닛이 조건 미충족으로 건너뛰고 conf 가 유지된다. 공장초기화 뒤 표식 부재는 호스트 셸 테스트로 고정했고 실기는 #324 공장초기화 실기 때 수행한다.
+
+### OPCd 서브모듈 0b4dfe7 — DFK 사양 정합 (PR #365; wlan-opc PR #168~#175)
+
+- wlan-opc gitlink 를 912c172 에서 0b4dfe7 로 올린다. 반영: Logout·idle auto-logout 뒤 indication config 유지(#160), Roaming SNR/RSSI 를 2바이트 int16 으로(-128 = 값 없음, #158), disconnect 에 마지막 CH 전달·RadioUp 은 associated 일 때만, zero-IP slot clear·idle refresh on receipt·off-segment 0x0012, ChangeIp ESSID 복원 표식·휘발 게이트웨이(/32 onlink)·NTP 적용(#161·#162), ChangeIp 후속(중단된 ESSID 적용 복원·idempotent address), indication/route 후속(이벤트 래치 RadioUp·disconnect CH 시드·no-interface 경로·Logout 시 in-flight slot clear), Reset 이 reboot policy 스크립트로 보드를 재부팅하고 ResetNotice 는 ack 뒤(#164), 리뷰 후속(연기된 IP 적용 시 구주소 세션 종료·SIGTERM 전용 reboot hand-off·InitComplete 순서).
+- 와이어 포맷 변경(Roaming int16, off-segment 0x0012)은 DFK 클라이언트 쪽 호환 주의가 필요하다.
+
+### 출하 토폴로지 보존·MAC 검증·초기화 복구 (#324·#234, PR #359)
+
+- 프로비저닝된 출하 토폴로지 선택자를 영속화하고 공장초기화·롤백이 관련 파일을 함께 되돌린다(legacy eth0-ip 동작 유지).
+- 새 netdev 를 만든 뒤 실제 적용된 MAC 을 검증하고 나서 station 서비스를 시작한다. status78 association/recovery 가드를 유지하고 FW cooldown 은 수락된 재시작 뒤에만 기록한다. 확인된 일반 초기화 종료 실패는 stale 표식이 있어도 복구한다.
+- `wifi_event` 는 GARP 만 소비자인 엄격 불리언 설정에서도 켠다(GARP 기본값 OFF 유지). 소스 아카이브 회귀와 GARP 테스트의 비특권 실행 경로를 추가했다.
+- wlan-opc 1908a1be 의 persistence admission/outcome 처리와 최신 완료 프로비저닝 백업 선택을 포함한다(이후 PR #360·#365 로 912c172·0b4dfe7 로 갱신).
+
+### CONTEC SNMP MAC 원시 6바이트와 OPC AP MAC (#215, PR #360; wlan-opc#130)
+
+- CONTEC 루트의 MAC 4개 OID 를 기존 pass_persist 의 octet/ASCII hex 로 원시 6바이트로 돌려준다. 결측·형식 오류는 6개 0바이트다. 자체 CanTops 루트는 DisplayString 계약을 유지한다.
+- wlan-opc 를 912c172 로 고정해 AP 해제 통지의 MAC 누락 보완을 포함한다.
+
 ## 0.7.0 (2026-10-09)
 
 > SemVer **minor** — FTP `quote`의 `wrst`를 제외한 모든 `w` 명령에 인터페이스를 필수로 받고 `0`/`1` 별칭을 지원한다. 기존 인터페이스·재부팅 명령의 계약을 유지하며 대응하는 `w` 명령을 추가한다.
