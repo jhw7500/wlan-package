@@ -3418,9 +3418,13 @@ def main():
         # 사양 §4.4.3: 임계 하회(트리거 검출) 시점의 현재 AP 로 Roaming(0x0004)을 보낸다 —
         # AP MAC = 로밍 전 현재 AP, RSSI = 이 판정의 값. channel/freq 는 넘기지 않아
         # roam_notify 가 link.json 의 현재 접속 값을 쓰고, SNR 도 그 주파수 noise 로 계산한다.
+        # 그 사이 다른 AP 로 재결합했으면 값이 섞이므로 보내지 않는다(require_link_match).
+        # 보내지 못한 AP 는 '통지함'으로 기록하지 않아, 조건이 이어지는 동안 다음 판정이
+        # 그때의 현재 AP(같은 AP 로 돌아왔어도)로 다시 보낸다.
         if trigger_notified_bssid != station["bssid"]:
-            notify_roam(IFACE, "", station["bssid"], rssi=station["rssi"])
-            trigger_notified_bssid = station["bssid"]
+            if notify_roam(IFACE, "", station["bssid"], rssi=station["rssi"],
+                           require_link_match=True):
+                trigger_notified_bssid = station["bssid"]
 
         # 인터벌 계산 (루프 내 모든 경로에서 공유)
         interval = CHECK_INTERVAL
