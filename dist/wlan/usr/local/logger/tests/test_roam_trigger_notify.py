@@ -71,7 +71,7 @@ def _run_main(monkeypatch, stations):
 
 def test_entering_condition_notifies_once_with_current_values(monkeypatch):
     notify = _run_main(monkeypatch, [_sta(A, -50), _sta(A, -80), _sta(A, -82)])
-    assert notify.call_args_list == [call(wifi_roam.IFACE, "", A, rssi=-80)]
+    assert notify.call_args_list == [call(wifi_roam.IFACE, "", A, rssi=-80, require_link_match=True)]
 
 
 def test_rearms_after_signal_recovers(monkeypatch):
@@ -79,24 +79,24 @@ def test_rearms_after_signal_recovers(monkeypatch):
         monkeypatch, [_sta(A, -80), _sta(A, -81), _sta(A, -50), _sta(A, -79)]
     )
     assert notify.call_args_list == [
-        call(wifi_roam.IFACE, "", A, rssi=-80),
-        call(wifi_roam.IFACE, "", A, rssi=-79),
+        call(wifi_roam.IFACE, "", A, rssi=-80, require_link_match=True),
+        call(wifi_roam.IFACE, "", A, rssi=-79, require_link_match=True),
     ]
 
 
 def test_rearms_after_disconnect(monkeypatch):
     notify = _run_main(monkeypatch, [_sta(A, -80), None, _sta(A, -81)])
     assert notify.call_args_list == [
-        call(wifi_roam.IFACE, "", A, rssi=-80),
-        call(wifi_roam.IFACE, "", A, rssi=-81),
+        call(wifi_roam.IFACE, "", A, rssi=-80, require_link_match=True),
+        call(wifi_roam.IFACE, "", A, rssi=-81, require_link_match=True),
     ]
 
 
 def test_new_bssid_while_in_condition_notifies_for_that_ap(monkeypatch):
     notify = _run_main(monkeypatch, [_sta(A, -80), _sta(B, -83), _sta(B, -84)])
     assert notify.call_args_list == [
-        call(wifi_roam.IFACE, "", A, rssi=-80),
-        call(wifi_roam.IFACE, "", B, rssi=-83),
+        call(wifi_roam.IFACE, "", A, rssi=-80, require_link_match=True),
+        call(wifi_roam.IFACE, "", B, rssi=-83, require_link_match=True),
     ]
 
 

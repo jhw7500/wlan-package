@@ -172,10 +172,12 @@ def build_payload(data, iface, from_bssid, to_bssid,
 
 
 def notify_roam(iface, from_bssid, to_bssid, port=DEFAULT_PORT,
-                channel=None, freq=None, rssi=None):
+                channel=None, freq=None, rssi=None, require_link_match=False):
     """Roaming 통지 1건을 opcd에 보낸다. 절대 raise 하지 않는다.
 
     to_bssid: 통지할 AP(ap_mac). channel/freq/rssi: 주면 link.json보다 우선.
+    require_link_match: True면 다시 읽은 link.json의 접속 AP가 to_bssid와 같을 때만
+    보낸다 — 판정 뒤 재결합이 끼면 channel·noise가 다른 AP 값이라 섞이므로 건너뛴다.
 
     Returns True on datagram sent, False otherwise(미연결/에러/skip).
     """
@@ -186,6 +188,15 @@ def notify_roam(iface, from_bssid, to_bssid, port=DEFAULT_PORT,
         if data is None:
             # 미연결/파일없음
             return False
+
+        if require_link_match:
+            link = data.get("link") if isinstance(data, dict) else None
+            addr = link.get("address") if isinstance(link, dict) else None
+            if (not isinstance(addr, str)
+                    or addr.strip().lower() != (to_bssid or "").strip().lower()):
+                print(f"[roam_notify] link.json now on {addr!r}, not {to_bssid!r} - "
+                      f"skipped (fields would mix two APs)", file=sys.stderr)
+                return False
 
         payload = build_payload(data, iface, from_bssid, to_bssid,
                                 channel=channel, freq=freq, rssi=rssi)
