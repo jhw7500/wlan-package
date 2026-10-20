@@ -11,6 +11,7 @@ etc/systemd/system/fake-hwclock-save.service
 etc/systemd/system/fake-hwclock.service
 etc/systemd/system/fake-hwclock.timer
 etc/systemd/system/journald-snapshot-boundary.service
+etc/systemd/system/journald-snapshot-shutdown.service
 etc/systemd/system/journald-snapshot.service
 etc/systemd/system/journald-snapshot.timer
 etc/systemd/system/log-watchdog.service

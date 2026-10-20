@@ -347,7 +347,7 @@ if [ -n "$_cause" ]; then
 fi
 
 # reboot 직전 volatile journal 을 eMMC 로 동기 flush.
-# do_reboot 가 2차(reboot -f)/3차(sysrq)로 escalation 되면 journald-snapshot-boundary
+# do_reboot 가 2차(reboot -f)/3차(sysrq)로 escalation 되면 journald-snapshot-shutdown
 # 의 ExecStop 이 실행되지 않아 직전 로그가 유실되므로, 여기서 1회 스냅샷한다.
 # snapshot.sh 의 flock 으로 타이머와 직렬화되며, reboot 지연 방지를 위해 timeout 을 둔다.
 _snap=/usr/local/scripts/journald_snapshot.sh

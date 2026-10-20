@@ -456,7 +456,7 @@ customctl() {
   # opcd-essid-restore.service: 부팅 1회 `opcd -R`(ChangeIp ESSID 복원, #362). .opc.enabled 게이트에
   # 걸지 않고 항상 enable 한다 — 표식이 없으면 ConditionPathExists 로 no-op 이고, OPC 를 끈 뒤의
   # 재부팅에서도 남은 ChangeIp ESSID 는 되돌아가야 한다(wlan-opc#161).
-  systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer journald-snapshot-boundary.service wifi-stack.target wifi_init wifi_apply_enabled wifi_acl wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 log-watchdog.timer serial-getty@ttyGS0.service wlan-peer-net.service opcd-essid-restore.service || true
+  systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer journald-snapshot-boundary.service journald-snapshot-shutdown.service wifi-stack.target wifi_init wifi_apply_enabled wifi_acl wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 log-watchdog.timer serial-getty@ttyGS0.service wlan-peer-net.service opcd-essid-restore.service || true
   installer_progress_step
   # wlan-peer-net.service 는 PartOf=systemd-networkd.service 로 networkd restart 를
   # 추종하는데, PartOf 는 대상이 이미 active 일 때만 발화한다(inactive 면 restart 가
@@ -464,6 +464,10 @@ customctl() {
   # 있으므로 설치 시점에 한 번 띄운다. Type=oneshot RemainAfterExit=yes 라 즉시
   # active(exited) 가 되고, 게이트가 꺼져 있으면 스크립트가 내부에서 no-op 한다.
   systemctl start --no-block wlan-peer-net.service || true
+  # journald-snapshot-shutdown.service 의 ExecStop 이 셧다운 구간 journal 을 내보낸다(#371).
+  # enable 만 하면 다음 부팅 전까지 inactive 라 업그레이드 직후 첫 셧다운에서 돌지 않으므로
+  # 설치 시점에 띄운다. ExecStart=/bin/true(oneshot, RemainAfterExit)라 즉시 active 가 된다.
+  systemctl start --no-block journald-snapshot-shutdown.service || true
   # serial-getty@ttyGS0는 커널 콘솔이자 이 설치 로그 출력 대상이라 동기 start가
   # 위험하다(PID1 잡 대기와 맞물려 데드락 가능). --no-block로 큐잉만 하고 진행한다.
   systemctl start --no-block switchd wifi_led@eth0 serial-getty@ttyGS0.service || true
