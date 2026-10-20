@@ -21,6 +21,7 @@ dist/wlan/etc/systemd/system/fake-hwclock-save.service
 dist/wlan/etc/systemd/system/fake-hwclock.service
 dist/wlan/etc/systemd/system/fake-hwclock.timer
 dist/wlan/etc/systemd/system/journald-snapshot-boundary.service
+dist/wlan/etc/systemd/system/journald-snapshot-shutdown.service
 dist/wlan/etc/systemd/system/journald-snapshot.service
 dist/wlan/etc/systemd/system/journald-snapshot.timer
 dist/wlan/etc/systemd/system/log-watchdog.service
@@ -332,6 +333,7 @@ dist/wlan/usr/local/scripts/tests/test_arping_eth0_unmanaged.py
 dist/wlan/usr/local/scripts/tests/test_fake_hwclock.sh
 dist/wlan/usr/local/scripts/tests/test_ftpcmd_reply_contract.py
 dist/wlan/usr/local/scripts/tests/test_iface_enabled_default_parity.py
+dist/wlan/usr/local/scripts/tests/test_journald_snapshot_units.py
 dist/wlan/usr/local/scripts/tests/test_logger_log_format.py
 dist/wlan/usr/local/scripts/tests/test_logger_shell_timeouts.py
 dist/wlan/usr/local/scripts/tests/test_logger_supervision_units.py
