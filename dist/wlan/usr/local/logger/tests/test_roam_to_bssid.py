@@ -88,16 +88,14 @@ def test_ok_but_never_confirmed_is_failure(monkeypatch):
 
 
 def test_ok_and_confirmed_is_success(monkeypatch):
-    """OK + status가 목표 BSSID로 COMPLETED → 성공. 이때만 통지/카운트."""
+    """OK + status가 목표 BSSID로 COMPLETED → 성공. 이때만 카운트(통지는 조건 진입 시, #368)."""
     prev, notify = _setup(monkeypatch)
     with patch.object(wifi_roam.subprocess, "run", return_value=_Run(0, "OK\n")), \
          patch.object(roam_notify, "get_associated_bssid", return_value=TARGET), \
          patch.object(roam_notify.time, "monotonic", return_value=0.0):
-        assert roam_to_bssid(FROM, TARGET, channel=36, freq=5180, rssi=-60) is True
+        assert roam_to_bssid(FROM, TARGET) is True
     prev.add_roam.assert_called_once_with(FROM, TARGET)
-    notify.assert_called_once()
-    args, kwargs = notify.call_args
-    assert args[0] == wifi_roam.IFACE and args[1] == FROM and args[2] == TARGET
+    notify.assert_not_called()       # 통지는 로밍 조건 진입 시점(#368) — 로밍 결과로는 보내지 않는다
 
 
 def test_confirm_waits_for_target_not_first_completed(monkeypatch):
@@ -108,7 +106,7 @@ def test_confirm_waits_for_target_not_first_completed(monkeypatch):
          patch.object(roam_notify.time, "monotonic", return_value=0.0):
         assert roam_to_bssid(FROM, TARGET) is True
     assert gab.call_count == 2       # 첫 조회(이전 AP) 무시, 둘째(목표)에서 확정
-    notify.assert_called_once()
+    notify.assert_not_called()
 
 
 def test_transport_failure_nonzero_exit_is_failure(monkeypatch):

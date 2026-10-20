@@ -45,7 +45,9 @@ def _setup(monkeypatch):
     def acquired_lock(_iface):
         yield True
 
-    monkeypatch.setattr(passive_roam, "notify_roam", notify)
+    # passive_roam 은 더는 notify_roam 을 import 하지 않는다(#368). raising=False 로 심어 두면
+    # 누군가 import+호출을 되살렸을 때 이 mock 이 호출을 받아 not_called 단언이 깨진다.
+    monkeypatch.setattr(passive_roam, "notify_roam", notify, raising=False)
     monkeypatch.setattr(passive_roam, "read_current_bssid", lambda *_a, **_k: FROM)
     monkeypatch.setattr(passive_roam, "scan_transition_lock", acquired_lock)
     monkeypatch.setattr(passive_roam, "abort_scan_quiesce", lambda _iface: True, raising=False)
@@ -86,10 +88,7 @@ def test_same_ssid_ok_and_confirmed_is_success(monkeypatch):
          patch.object(roam_notify, "get_associated_bssid", return_value=TARGET), \
          patch.object(roam_notify.time, "monotonic", return_value=0.0):
         assert roam_to_ap(IFACE, _ap(), current_ssid="Net") == 0
-    notify.assert_called_once()
-    args, kwargs = notify.call_args
-    assert args[0] == IFACE and args[1] == FROM and args[2] == TARGET
-    assert kwargs.get("channel") == 36 and kwargs.get("rssi") == -60
+    notify.assert_not_called()       # 수동·주기 로밍은 임계 하회가 아니므로 통지 대상 아님(#368)
 
 
 def test_same_ssid_roam_fails_closed_when_transition_lock_is_busy(monkeypatch):
@@ -124,7 +123,7 @@ def test_same_ssid_confirm_waits_for_target(monkeypatch):
          patch.object(roam_notify.time, "monotonic", return_value=0.0):
         assert roam_to_ap(IFACE, _ap(), current_ssid="Net") == 0
     assert gab.call_count == 2
-    notify.assert_called_once()
+    notify.assert_not_called()
 
 
 @pytest.mark.parametrize("mode_a", [False, True])

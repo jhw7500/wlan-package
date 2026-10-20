@@ -7,7 +7,7 @@ import subprocess
 import time
 from datetime import datetime
 
-from roam_notify import notify_roam, get_associated_bssid, confirm_roam
+from roam_notify import confirm_roam
 from roam_state import scan_transition_lock
 from roam_policy import (
     RoamPolicyError,
@@ -351,10 +351,6 @@ def roam_to_ap(interface, ap, index_label=None, current_ssid=None):
     print(f"  RSSI:  {ap['ss']}")
     print(f"\nExecuting: {' '.join(cmd)}")
 
-    # from_bssid는 roam 실행 전에 캡처한다: read_current_bssid()가 읽는 link.json은
-    # 재결합 후 비동기로 갱신되므로, roam 이후 호출하면 이미 새 AP를 반환해 from==to가
-    # 된다. LINK_JSON을 명시 전달 — 기본인자는 def 시점 값(mlan0)으로 고정되어
-    # --iface 변경(모듈변수 갱신)을 반영하지 못한다.
     # 공용 transition 잠금을 획득해 bgscan/manual scan/connect와 association 변경을
     # 직렬화한다.
     with scan_transition_lock(interface) as acquired:
@@ -365,7 +361,6 @@ def roam_to_ap(interface, ap, index_label=None, current_ssid=None):
             print(f"native scan did not quiesce for {interface}; roam not started")
             return 1
 
-        from_bssid = read_current_bssid(LINK_JSON)
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             stdout = result.stdout.strip() if result.stdout else ""
@@ -380,17 +375,11 @@ def roam_to_ap(interface, ap, index_label=None, current_ssid=None):
             note = "confirmed" if confirmed else ("not confirmed" if accepted else "rejected")
             # 한줄 요약 (wifi_periodic_roam.sh에서 grep "ROAM_RESULT"로 추출)
             print(f"ROAM_RESULT: {bssid} ch:{ap['ch']} rssi:{ap['ss']} -> {stdout or stderr or 'unknown'} ({note})")
-            if confirmed:
-                # 재결합 확인된 경우에만 통지 — bssid=목표 BSS, ch/rssi=스캔 권위값.
-                notify_roam(interface, from_bssid, bssid, channel=ap["ch"], rssi=ap["ss"])
+            # opcd Roaming(0x0004) 통지는 데몬이 임계 하회(로밍 조건)에 들어설 때만 보낸다
+            # (사양 §4.4.3, #368). 수동·주기 로밍은 그 계기가 아니므로 통지하지 않는다.
             return 0 if confirmed else 1
         except subprocess.TimeoutExpired:
             print(f"ROAM_RESULT: {bssid} ch:{ap['ch']} rssi:{ap['ss']} -> timeout")
-            # timeout이어도 로밍이 뒤늦게 성공했을 수 있다(설계 §8.1 미세갭): 실 결합 BSS가
-            # from과 다르면 통지. 조회 실패("")나 미변경이면 통지 생략 — 오발행 없음.
-            cur = get_associated_bssid(interface)
-            if cur and cur.lower() != (from_bssid or "").lower():
-                notify_roam(interface, from_bssid, cur)
             return 1
         except FileNotFoundError:
             print("roam command not found.")

@@ -59,13 +59,13 @@ def test_blocked_returns_none_without_attempt(monkeypatch):
 
 
 def test_mode_a_success_counts_actual_bssid(monkeypatch):
-    """모드 A 성공 → add_roam(from, 실 결합 BSS) + notify."""
+    """모드 A 성공 → add_roam(from, 실 결합 BSS). 통지는 조건 진입 시(#368)라 여기선 없음."""
     prev, notify = _setup(monkeypatch)
     with patch.object(wifi_roam, "select_network_for_ssid", return_value=True), \
          patch.object(wifi_roam, "get_associated_bssid", return_value=ACTUAL):
         assert route_cross_ssid_transition(IFACE, "Net", FROM, TO) is True
     prev.add_roam.assert_called_once_with(FROM, ACTUAL)
-    notify.assert_called_once_with(IFACE, FROM, ACTUAL)
+    notify.assert_not_called()
 
 
 def test_mode_a_success_fallback_to_target_bssid(monkeypatch):
@@ -93,7 +93,7 @@ def test_mode_b_no_route_level_count(monkeypatch):
          patch.object(wifi_roam, "get_associated_bssid", return_value=ACTUAL):
         assert route_cross_ssid_transition(IFACE, "Net", FROM, TO) is True
     prev.add_roam.assert_not_called()   # route 레벨에선 안 함(내부 몫)
-    notify.assert_called_once()
+    notify.assert_not_called()
 
 
 def test_mode_b_pingpong_blocked_returns_none(monkeypatch):
@@ -121,7 +121,7 @@ def test_pingpong_disabled_normal_flow(monkeypatch):
     with patch.object(wifi_roam, "select_network_for_ssid", return_value=True), \
          patch.object(wifi_roam, "get_associated_bssid", return_value=ACTUAL):
         assert route_cross_ssid_transition(IFACE, "Net", FROM, TO) is True
-    notify.assert_called_once()
+    notify.assert_not_called()
 
 
 def test_record_none_is_noop():
