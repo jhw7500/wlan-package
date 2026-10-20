@@ -3,7 +3,7 @@
 systemd 는 셧다운 때 시작의 역순으로 정지한다. 부팅 완료 유닛(After=multi-user.target)의
 ExecStop 은 셧다운 맨 앞에서 돌아 서비스 정지 구간(D-Bus·opcd 정지 등)을 놓쳤다
 (랩 보드 실측: 셧다운 시작 2초 뒤에서 내보내기가 끝남). 셧다운 스냅샷은 일반 서비스보다
-먼저 시작해(Before=basic.target) 그들이 다 멈춘 뒤 정지하고, journald 와 내보내기
+먼저 시작해(Before=sysinit.target) 그들이 다 멈춘 뒤 정지하고, journald 와 내보내기
 마운트보다는 먼저 정지하는(After=) 유닛이 맡는다.
 """
 import re
@@ -37,8 +37,9 @@ def directives(name):
 def test_shutdown_unit_stops_after_services_and_before_journald_and_mount():
     d = directives(SHUTDOWN_UNIT)
     assert d["DefaultDependencies"] == ["no"]
-    # 일반 서비스는 basic.target 뒤에 시작하므로 셧다운 때 이 유닛보다 먼저 정지한다.
-    assert "basic.target" in d["Before"]
+    # sysinit.target 뒤에 시작하는 유닛(일반 서비스와, DefaultDependencies=no 이지만
+    # After=sysinit.target 인 wifi_checker@·wlan_fw_watch 등)은 셧다운 때 이 유닛보다 먼저 정지한다.
+    assert "sysinit.target" in d["Before"]
     assert "shutdown.target" in d["Conflicts"] and "shutdown.target" in d["Before"]
     # journald 와 내보내기 마운트는 이 유닛 뒤에 정지한다. /var/log 는 심볼릭 링크라
     # 실제 마운트 경로도 함께 적는다(fake-hwclock.service 와 같은 이유).
@@ -46,7 +47,7 @@ def test_shutdown_unit_stops_after_services_and_before_journald_and_mount():
     assert {"/var/volatile/log/cantops", "/var/log/cantops"} <= set(d["RequiresMountsFor"])
     assert d["Type"] == ["oneshot"] and d["RemainAfterExit"] == ["yes"]
     assert d["ExecStop"] == [SNAPSHOT]
-    assert d["WantedBy"] == ["basic.target"]
+    assert d["WantedBy"] == ["sysinit.target"]
 
 
 def test_boundary_unit_keeps_only_the_boot_completion_snapshot():
