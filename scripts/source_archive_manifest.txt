@@ -269,6 +269,7 @@ dist/wlan/usr/local/logger/tests/test_roam_select_network.py
 dist/wlan/usr/local/logger/tests/test_roam_state_per_iface.py
 dist/wlan/usr/local/logger/tests/test_roam_to_ap.py
 dist/wlan/usr/local/logger/tests/test_roam_to_bssid.py
+dist/wlan/usr/local/logger/tests/test_roam_trigger_notify.py
 dist/wlan/usr/local/logger/tests/test_runtime_output_english.py
 dist/wlan/usr/local/logger/tests/test_schema_by_board_sync.py
 dist/wlan/usr/local/logger/tests/test_schema_inert_in_mode.py
