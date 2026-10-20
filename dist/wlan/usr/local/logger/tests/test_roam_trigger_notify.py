@@ -31,8 +31,10 @@ class StopLoop(Exception):
     pass
 
 
-def _run_main(monkeypatch, stations):
-    """stations 를 반복마다 하나씩 get_link_info 로 돌려준 뒤 루프를 멈추고 notify mock 을 반환."""
+def _run_main(monkeypatch, stations, notify_results=None):
+    """stations 를 반복마다 하나씩 get_link_info 로 돌려준 뒤 루프를 멈추고 notify mock 을 반환.
+
+    notify_results: notify_roam 이 호출 순서대로 돌려줄 값(None 이면 MagicMock 기본값, 참)."""
     seq = iter(stations)
 
     def next_station():
@@ -62,7 +64,7 @@ def _run_main(monkeypatch, stations):
     )
     monkeypatch.setattr(wifi_roam, "interruptible_sleep", lambda seconds: None)
     monkeypatch.setattr(wifi_roam, "get_link_info", next_station)
-    notify = MagicMock()
+    notify = MagicMock(side_effect=notify_results)
     monkeypatch.setattr(wifi_roam, "notify_roam", notify)
     with pytest.raises(StopLoop):
         wifi_roam.main()
@@ -97,6 +99,17 @@ def test_new_bssid_while_in_condition_notifies_for_that_ap(monkeypatch):
     assert notify.call_args_list == [
         call(wifi_roam.IFACE, "", A, rssi=-80, require_link_match=True),
         call(wifi_roam.IFACE, "", B, rssi=-83, require_link_match=True),
+    ]
+
+
+def test_skipped_send_retries_same_ap_until_sent(monkeypatch):
+    # 재읽기가 다른 AP 라 건너뛴 통지(False)는 '통지함'이 아니다: 같은 AP 로 남은 다음 판정에서
+    # 다시 보내고, 보낸 뒤(True)에는 조건이 이어져도 반복하지 않는다.
+    notify = _run_main(monkeypatch, [_sta(A, -80), _sta(A, -81), _sta(A, -82)],
+                       notify_results=[False, True])
+    assert notify.call_args_list == [
+        call(wifi_roam.IFACE, "", A, rssi=-80, require_link_match=True),
+        call(wifi_roam.IFACE, "", A, rssi=-81, require_link_match=True),
     ]
 
 
