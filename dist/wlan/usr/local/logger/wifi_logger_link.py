@@ -462,6 +462,182 @@ def check_tx_spike(link_data):
     _prev_tx_retries = cur_retry
 
 
+# RX 불일치 감지(디버깅 보조 로그) — 펌웨어는 유니캐스트를 받는데 호스트로 거의 안 올라오는 상태.
+# 같은 AP 에 같은 MAC 이 둘 붙으면(동적 클론 잔존) wpa 는 COMPLETED 인 채 유니캐스트 무수신이
+# 이어지고, 브로드캐스트는 계속 올라온다(2026-10-21 cts-wlan 실측 10s 창, ping 5/s:
+# 좀비 fw 유니캐스트 20/31 · 호스트 2/0, 정상 51/50/53 · 51/50/52). 그래서 유니캐스트끼리 비교한다.
+# - 펌웨어 유니캐스트 = dot11ReceivedFragmentCount − dot11GroupReceivedFrameCount
+# - 호스트 유니캐스트 = netdev + 브리지 w2p − 2 × 호스트 브로드캐스트. 브리지가 eth0 으로 넘긴
+#   프레임은 moal_recv_packet 의 rx_packets++ 앞에서 빠지고, 그룹 프레임은 복제+스택 배달로
+#   양쪽에 잡힌다. 펌웨어가 센 그룹 프레임이 호스트에 다 오지는 않으므로(11:34 실측 그룹 173 >
+#   브리지 111) 호스트 브로드캐스트는 min(그룹, netdev, 브리지) 로 상한을 잡는다.
+RX_MISMATCH_ENABLED = True  # 코드 폴백 — 템플릿 <iface>.logger.rx_mismatch_enabled 와 fail-same
+RX_MISMATCH_WINDOW_SEC = 10.0
+RX_MISMATCH_MIN_FW = 20
+# 의심 보고 최소 간격 — 디버깅 보조 로그가 logger.log 를 채우지 않게 한다(운용 무영향).
+RX_MISMATCH_REPORT_GAP_SEC = 60.0
+NETDEV_RX_PATH_FMT = "/sys/class/net/{}/statistics/rx_packets"
+BRIDGE_STATS_PATH = "/sys/kernel/moal_bridge/stats"
+
+
+def _parse_bridge_w2p(text, iface):
+    """moal 브리지 stats 에서 iface 쪽 무선→유선 방향으로 브리지가 가져간 프레임 수
+    (w2p fwd+drop+err+oom). 브리지 비활성이거나 다른 iface 의 브리지면 None.
+    판정은 0/비0 만 보므로 drop/err 중복 집계는 무해하다."""
+    w2p = None
+    br_iface = None
+    for line in text.splitlines():
+        if line.startswith("w2p "):
+            fields = {}
+            for kv in line.split()[1:]:
+                k, _, v = kv.partition("=")
+                fields[k] = v
+            try:
+                w2p = sum(int(fields[k]) for k in ("fwd", "drop", "err", "oom"))
+            except (KeyError, ValueError):
+                return None
+        elif line.startswith("iface="):
+            br_iface = line.split()[0].partition("=")[2]
+    return w2p if br_iface == iface else None
+
+
+def _read_int(path):
+    try:
+        with open(path) as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _read_bridge_w2p(iface):
+    try:
+        with open(BRIDGE_STATS_PATH) as f:
+            return _parse_bridge_w2p(f.read(), iface)
+    except OSError:
+        return None
+
+
+class RxMismatchDetector:
+    """창(window_sec)마다 펌웨어/호스트 유니캐스트 증가량을 비교해 사건당 의심 1줄, 해소 1줄을
+    (level, text) 로 돌려준다. 의심 = 호스트가 펌웨어의 1/4 미만, 해소 = 1/2 이상. 펌웨어 유니캐스트가
+    min_fw 미만인 창은 판정하지 않는다. 의심 보고는 report_gap_sec 에 1번이고, 보고하지 않은
+    사건은 해소도 남기지 않는다."""
+
+    def __init__(self, window_sec, min_fw, report_gap_sec):
+        self.window_sec = window_sec
+        self.min_fw = min_fw
+        self.report_gap_sec = report_gap_sec
+        self._base = None         # (t, fw, group, netdev, bridge, bcn)
+        self._since = None        # 진행 중 사건의 시작 시각
+        self._reported = False    # 진행 중 사건을 로그로 남겼는지
+        self._last_report = None  # 마지막 의심 보고 시각
+
+    def update(self, now, fw, group, netdev, bridge, bcn):
+        if fw is None or netdev is None:
+            return None
+        cur = (now, fw, group if group is not None else 0, netdev, bridge, bcn)
+        base = self._base
+        if (base is None or now - base[0] > 2 * self.window_sec
+                or (base[4] is None) != (bridge is None)):
+            # 첫 표본 / 갱신이 멈췄던 구간(미연결) / 브리지 유무 변화 → 기준점만 다시 잡는다
+            self._base = cur
+            return None
+        if now - base[0] < self.window_sec:
+            return None
+        self._base = cur
+        d_fw, d_grp, d_net = fw - base[1], cur[2] - base[2], netdev - base[3]
+        d_br = bridge - base[4] if bridge is not None else 0
+        if min(d_fw, d_grp, d_net, d_br) < 0:
+            # 카운터 리셋(fw_reload·netdev 재생성) — 이 창은 판정하지 않는다
+            return None
+        fw_uc = d_fw - d_grp
+        if bridge is not None:
+            host_uc = d_net + d_br - 2 * min(d_grp, d_net, d_br)
+        else:
+            host_uc = d_net - min(d_grp, d_net)
+        if fw_uc < self.min_fw:
+            return None
+        d_bcn = bcn - base[5] if bcn is not None and base[5] is not None else None
+        suspect = host_uc * 4 < fw_uc and (d_bcn is None or d_bcn > 0)
+        gap_elapsed = (self._last_report is None
+                       or now - self._last_report >= self.report_gap_sec)
+        if self._since is not None:
+            if host_uc * 2 >= fw_uc:
+                duration = int(now - self._since)
+                self._since = None
+                if self._reported:
+                    return ("info", f"RX_MISMATCH cleared after {duration}s: "
+                                    f"fw_unicast=+{fw_uc} host_unicast={host_uc:+d}")
+                return None
+            # 보고 간격 때문에 억제된 사건이 계속되면 간격이 지난 첫 의심 창에서 보고한다
+            if self._reported or not (suspect and gap_elapsed):
+                return None
+        elif suspect:
+            self._since = base[0]
+            if not gap_elapsed:
+                self._reported = False
+                return None
+        else:
+            return None
+        self._reported = True
+        self._last_report = now
+        br_txt = f"+{d_br}" if bridge is not None else "n/a"
+        bcn_txt = f"+{d_bcn}" if d_bcn is not None else "n/a"
+        return ("warn", f"RX_MISMATCH suspect (duplicate MAC or key mismatch): "
+                        f"fw_unicast=+{fw_uc} host_unicast={host_uc:+d} "
+                        f"(netdev=+{d_net} bridge={br_txt} group=+{d_grp}) "
+                        f"beacon={bcn_txt} in {int(now - base[0])}s")
+
+
+_rx_mismatch = RxMismatchDetector(RX_MISMATCH_WINDOW_SEC, RX_MISMATCH_MIN_FW,
+                                  RX_MISMATCH_REPORT_GAP_SEC)
+_rx_mismatch_disabled = False
+
+
+def rx_mismatch_enabled_from_conf(conf, iface):
+    """<iface>.logger.rx_mismatch_enabled → logger.rx_mismatch_enabled → 코드 기본값.
+    JSON boolean 만 인정한다(문자열 "false" 를 켜짐으로 읽지 않게) — 그 밖의 값이면 None."""
+    value = conf.get(iface, {}).get("logger", {}).get(
+        "rx_mismatch_enabled",
+        conf.get("logger", {}).get("rx_mismatch_enabled", RX_MISMATCH_ENABLED))
+    return value if isinstance(value, bool) else None
+
+
+def _counter(mwlan_log, *keys):
+    """첫 번째로 있는 키의 정수 카운터. 같은 카운터가 드라이버 /proc 와 getlog 에서 이름이 다르다
+    (dot11Group* / dot11Multicast*, README_MLAN) — wifi_snmp_pp.py 와 같이 둘 다 받는다."""
+    for key in keys:
+        value = mwlan_log.get(key)
+        if isinstance(value, int):
+            return value
+    return None
+
+
+def check_rx_mismatch(mwlan_log, now):
+    """RX 불일치 판정 → 의심/해소 시 syslog 기록 (local0 → logger.log).
+    디버깅 보조 기능이라 어떤 예외도 메인 루프로 내보내지 않는다 — 예외가 나면 1회 기록하고
+    이 프로세스에서는 끈다(link.json 생산 등 운용 경로 무영향)."""
+    global _rx_mismatch_disabled
+    if _rx_mismatch_disabled:
+        return
+    try:
+        event = _rx_mismatch.update(
+            now,
+            _counter(mwlan_log, "dot11ReceivedFragmentCount"),
+            _counter(mwlan_log, "dot11GroupReceivedFrameCount", "dot11MulticastReceivedFrameCount"),
+            _read_int(NETDEV_RX_PATH_FMT.format(IFACE)),
+            _read_bridge_w2p(IFACE),
+            _counter(mwlan_log, "beaconReceivedCount"))
+        if event:
+            logger.message(event[0], f"[{IFACE}] {event[1]}", _EXTRA_())
+    except Exception as e:
+        _rx_mismatch_disabled = True
+        try:
+            logger.message("warn", f"[{IFACE}] RX_MISMATCH check disabled: {e}", _EXTRA_())
+        except Exception:
+            pass
+
+
 _RE_RA_LOW = re.compile(r"Low\s*:\s*(\d+)")
 _RE_RA_HIGH = re.compile(r"High\s*:\s*(\d+)")
 _RE_RA_IV = re.compile(r"Eval Timer interval\s*:\s*(\d+)")
@@ -662,12 +838,15 @@ def main():
         if not info_data.get("ssid") and supp.get("ssid"):
             info_data["ssid"] = supp["ssid"]
 
+        mwlan_log = parse_mwlan_log()
+        check_rx_mismatch(mwlan_log, time.monotonic())
+
         data = {
             "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "info": info_data,
             "link": link_data,
             "channel_info": channel_data,
-            "mwlan_log": parse_mwlan_log()
+            "mwlan_log": mwlan_log
         }
 
         save_db(data, LOG_DIR)
@@ -710,6 +889,7 @@ if __name__ == "__main__":
     _retry_count = args.link_retry_count
     _retry_delay = args.link_retry_delay
     _ra_watch = args.fwcfg_watch
+    _rx_enabled = RX_MISMATCH_ENABLED
     try:
         with open("/usr/local/etc/wifi_init_conf.json") as _f:
             _conf = json.load(_f)
@@ -721,6 +901,7 @@ if __name__ == "__main__":
         _retry_delay = _conf.get(IFACE, {}).get("logger", {}).get("link_retry_delay_sec", _g_dly)
         _g_ra = _conf.get("logger", {}).get("fwcfg_watch_sec", _ra_watch)
         _ra_watch = _conf.get(IFACE, {}).get("logger", {}).get("fwcfg_watch_sec", _g_ra)
+        _rx_enabled = rx_mismatch_enabled_from_conf(_conf, IFACE)
     except (OSError, json.JSONDecodeError) as e:
         print(f"WARN: [{IFACE}] config load failed, using defaults: {e}", file=sys.stderr)
 
@@ -741,6 +922,11 @@ if __name__ == "__main__":
         print(f"WARN: [{IFACE}] invalid fwcfg_watch_sec, using default "
               f"({args.fwcfg_watch})", file=sys.stderr)
         FWCFG_WATCH_SEC = args.fwcfg_watch
+    if _rx_enabled is None:
+        print(f"WARN: [{IFACE}] invalid rx_mismatch_enabled, using default "
+              f"({RX_MISMATCH_ENABLED})", file=sys.stderr)
+        _rx_enabled = RX_MISMATCH_ENABLED
+    _rx_mismatch_disabled = not _rx_enabled
 
     LOG_DIR = f"/var/log/cantops/json/{IFACE}"
     logger.message("info",
@@ -748,6 +934,7 @@ if __name__ == "__main__":
         f"spike_fail: {SPIKE_THRESHOLD_FAIL}, spike_retry: {SPIKE_THRESHOLD_RETRY}, "
         f"link_retry: {LINK_RETRY_COUNT}x{LINK_RETRY_DELAY}s, "
         f"fwcfg_watch: {FWCFG_WATCH_SEC}s, "
+        f"rx_mismatch: {'on' if _rx_enabled else 'off'}, "
         f"log: {LOG_DIR}/link.json", _EXTRA_())
 
     if IFACE == "mlan0":

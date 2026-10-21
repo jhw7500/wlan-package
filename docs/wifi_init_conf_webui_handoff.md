@@ -438,6 +438,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `stat_reset_interval_sec` | 통계 리셋 주기 | int | `604800` | 초(7일) | yes | daemon-restart | mlanN>global 우선 |
 | `bgscan_stale_threshold_sec` | bgscan stale 임계 | int | `600` | 초(양의 정수) | yes | daemon-restart | `beacon.json` stale 엔트리 프루닝 기준. 소비 `wifi_logger_scan.py`. 양의 int 아니면 코드 기본 600 + warn |
 | `fwcfg_watch_sec` | FW 설정 변화 감시 주기 | float | `60` | 초(>=0, 0=끔) | yes | daemon-restart | `rate_adapt`/`antcfg`/`mcs_tier` 를 라운드로빈 관측해 변화 시 syslog `warn`. 소비 `wifi_logger_link.py`. 복구는 하지 않는다 |
+| `rx_mismatch_enabled` | RX 불일치(MAC 중복 의심) 감지 로그 | bool | `true` | true\|false | yes | daemon-restart | 10초 창마다 펌웨어 유니캐스트 대비 호스트 수신이 1/4 미만이면 logger.log `warn` 1줄(최대 1분 1줄), 회복 시 `info`. 소비 `wifi_logger_link.py`. 복구는 하지 않는다 (#375) |
 | `logger.enabled` | 로거 데몬 활성화 | bool | `mlan0=true / mlan1=false` | true\|false | yes | daemon-restart | `wifi_logger@mlanN` enable/disable. `mlanN.enabled=false`면 강제 disable |
 
 #### 3.10.3 mlanN.periodic_roam / bgscan
