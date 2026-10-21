@@ -3,6 +3,45 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.7.3 (2026-10-21)
+
+> SemVer **patch** — logger 가 같은 클론 MAC 중복으로 의심되는 RX 불일치를 logger.log 에 남긴다. OPCd 를 wlan-opc 0787633 으로 올려 FaultDetect Memory(0x0002)를 전체 메모리 사용률로 판정해 보낸다. 빌드 서버 배포 스크립트가 `wlan.deb` 만 복사한다.
+
+### RX 불일치(같은 MAC 중복 의심) 로그 (#375, PR #377)
+
+- 같은 AP 에 같은 클론 MAC 을 쓰는 브리지 보드 두 대가 붙으면, 한쪽이 wpa COMPLETED 인 채 유니캐스트를 받지 못한다. 종전에는 이 상태를 알려 주는 로그가 없었다.
+- `wifi_logger_link.py` 의 `RxMismatchDetector` 가 10초 창마다 두 값을 비교한다.
+  - 펌웨어 유니캐스트: `dot11ReceivedFragmentCount` − 그룹 수신 카운터
+  - 호스트 유니캐스트: netdev + 브리지 w2p − 2·min(group, netdev, w2p). 브리지가 비활성이면 netdev − min(group, netdev).
+- 판정 결과는 logger.log 에 남긴다.
+  - 호스트 유니캐스트가 펌웨어 유니캐스트의 1/4 미만이면 의심(warn), 1/2 이상이면 해소(info)를 남긴다. 의심 보고는 60초에 1번이다.
+  - 판정하지 않는 창: 카운터가 리셋된 창, 미연결 창, 브리지 유무가 바뀐 창. 펌웨어 유니캐스트가 20 미만인 창은 판정을 보류한다.
+  - 감지 코드에서 예외가 나면 한 번 기록하고 기능을 끈다. link.json 생산에는 영향을 주지 않는다.
+- 그룹 수신 카운터는 `dot11GroupReceivedFrameCount` 를 먼저 찾고, 없으면 `dot11MulticastReceivedFrameCount` 를 쓴다.
+- 설정: `wifi_init_conf.json` 의 `<iface>.logger.rx_mismatch_enabled`(기본 `true`)로 켜고 끈다. 업그레이드하면 postinst json_merge 가 기존 기기에도 `true` 로 넣는다. 시작 로그에 `rx_mismatch: on|off` 를 남긴다.
+- 실기(랩 보드, 0.7.2 위에 임시 배포):
+  - 실측한 10초 창 값을 테스트 fixture 로 고정했다.
+  - 첫 재현 때의 1초 카운터 샘플을 재생하면 좀비 구간을 검출했다. 정상 샘플과 트래픽 폭주 샘플을 재생하면 0줄이었다.
+  - 최종 식을 배포한 뒤 정상 트래픽 14분 동안 새 줄은 0줄이었다.
+  - 세 번째 재현(2026-10-21)에서 최종 식이 좀비 상태를 실시간으로 감지했다. 10초 창에서 펌웨어 유니캐스트는 +58, 호스트 유니캐스트는 +0 이었다. 그 재현에서 트래픽 폭주는 일어나지 않았다(#376).
+- 알려진 한계:
+  - 브리지가 비활성이면서 멀티캐스트가 많은 망에서는 오탐이 날 수 있다.
+  - `link_interval_sec` 가 20초를 넘으면 감지가 꺼진다.
+
+### OPCd 서브모듈 0787633 (PR #378; wlan-opc PR #181·#183)
+
+- FaultDetect Memory(0x0002)(wlan-opc#182, PR #183):
+  - 종전: 이 장치는 스왑을 쓰지 않는다. 그래서 사양의 Memory 정의(스왑 페이징 증대)가 성립하지 않아 Memory 통지를 보내지 않았다.
+  - 이제: 전체 메모리 사용률 (MemTotal − MemFree − Buffers − Cached − Slab) ÷ MemTotal 로 판정한다. 측정은 10초마다 하고, 진입 80 % / 해제 70 % 이며, 진입할 때 1회 보낸다. 이 식은 logger cpu.log 의 MEM(sysstat `sar -r` %memused)과 같다.
+  - Cached 에 tmpfs(Shmem)가 들어 있어서, tmpfs 로 찬 RAM 은 사용량에서 빠진다.
+  - 판정 기준과 임계값은 아직 발주처 합의 전이다.
+  - 실기(랩 보드, 0.7.2 위에 opcd 를 임시 배포했다가 원복): 임계를 20/10 % 로 낮추고 익명 메모리 300 MB 를 점유했다. FaultDetect 1개(Congestion ID 0x0002, Current Val 28)가 나갔고, 부하가 이어지는 동안 재통지는 없었다. 출하 기본값 80 % 와 Period ≥ 1 s 경로는 실기로 확인하지 않았다.
+- wlan-opc PR #181: 로밍 통지 설계·시험 문서를 현행 동작(#368)에 맞게 고쳤다. 문서만 바뀌었다.
+
+### 빌드 서버 배포 스크립트
+
+- `scripts/update_host.sh` 가 imx93 빌드 트리로 `release/wlan.deb` 하나만 복사한다. 종전의 `release/wlan*` 글롭은 과거 버전 `.deb` 까지 복사했다. mini-6.6.3 복사 줄은 주석으로 바꿨다. 패키지 내용에는 영향이 없다.
+
 ## 0.7.2 (2026-10-20)
 
 > SemVer **patch** — 로밍 통지(0x0004)를 로밍 조건 진입 시점에 현재 AP 값으로 보내고, 정상 재부팅의 서비스 정지 구간을 journal 내보내기에 담으며, OPCd Reset 이 정상 재부팅을 "재부팅 없음"으로 기록하던 분류를 고친다. OPCd 를 wlan-opc 31a6c70 으로 올린다.
