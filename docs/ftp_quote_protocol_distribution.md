@@ -94,8 +94,30 @@ ftp> quote wstatus 0
 저장 설정과 현재 런타임 설정이 일치하면 연결을 유지하고 성공을 반환한다.
 연결 확인에 실패하면 `550 Failed: wconnect exited 8`을 반환할 수 있다.
 이후 연결될 수도 있으므로 `quote wstatus 0`으로 실제 상태를 확인한다.
-저장된 새 SSID·주파수는 연결 실패 후에도 유지한다. 이전 망으로 돌아가려면
-이전 설정을 다시 저장하고 `wconnect`로 적용한다.
+
+출하 기본값(`mlanN.connect_fallback.enabled=false`)에서는 저장된 새 SSID·주파수를
+연결 실패 후에도 유지한다. 이전 망으로 돌아가려면 이전 설정을 다시 저장하고
+`wconnect`로 적용한다. fallback을 opt-in으로 활성화하면 수동 CLI/FTP connect에 한해
+직전 검증 완료 프로필(SSID, 주파수 정책, 인증 설정)을 실패 시 복원하고 reconfigure한
+뒤 이전 association을 확인한다. 복원 성공 여부와 무관하게 새 연결의 원래 nonzero 결과를
+반환한다(일반 association/control 오류는 7/8). 사용자 출력은 `fallback restored`/
+`fallback failed`/`fallback unavailable`, syslog는 `outcome=restored`/
+`outcome=restore-failed`/`outcome=fallback-unavailable`로 구분한다. known-good이 없어도
+새 연결 시도는 허용한다.
+
+known-good은 가능한 경우 `wssid`/`wfreq` 또는 CLI의 PSK/key 변경 전에 캡처하고 새 목표
+연결 성공 뒤 갱신한다. 검증되지 않은 사본은 사용하지 않는다. 상태는 `/run/wifi` 아래
+mode `0600` 파일이며 재부팅 후 유지되지 않는다. fallback 활성 시 새 연결 대기는 기본
+15초(설정 1~15), 복원 확인은 기본 5초(설정 1~5)이고 실제 경과 시간을 차감해 FTP 30초
+제한 안의 예산을 관리한다. 비활성 경로는 기존 연결 제한시간 동작을 유지한다. 커널 I/O
+hang까지 제한하는 hard cap은 아니다.
+
+fallback 진행 중 같은 인터페이스의 변경은 코드 6(busy)으로 거부하지만 조회는 허용한다.
+`wconnectraw`, `ifcup`/`ifcdown`, `wifcup`/`wifcdown`도 이 change guard를 사용한다.
+OPC의 경쟁 wireless profile/radio helper write도 busy로 거부되지만 ChangeIp의 IP/route
+처리는 기존의 별도 계약을 유지한다. OPC helper와 checker/background reconnect/roam은
+fallback을 시작하지 않는다. `wconnectraw`, Mode A와 다중 `network` 구성도 대상이 아니며, 다중 프로필의
+선택·복구는 supplicant가 소유한다.
 
 `wconnectraw`는 시험용 명령이다. `200 SUCCESS`는 무선 제어 명령의 제출
 성공만 뜻하며 AP 연결 성공을 보장하지 않는다. 설정 파일을 바꾸지 않고
@@ -109,6 +131,7 @@ ftp> quote wstatus 0
 | `wssid`, `wfreq` | `1` | 설정 조회, 입력 검증 또는 저장 실패 |
 | `wconnect` | `1` | SSID 또는 설정 검증 실패 |
 | `wconnect` | `3` | 대상 인터페이스가 현재 FTP 연결을 운반하여 요청 거부 |
+| `wssid`, `wfreq`, `wconnect`, `wconnectraw`, `ifcup`, `ifcdown`, `wifcup`, `wifcdown` | `6` | 같은 인터페이스에서 fallback 또는 경쟁 변경이 진행 중(busy) |
 | `wconnect` | `7` | 무선 제어 명령 또는 연결 이벤트 확인 실패 |
 | `wconnect` | `8` | 제한 시간 내 목표 연결 확인 실패 |
 | `wstatus` | `2` | 잘못된 인터페이스 인자 또는 인자 초과 |
@@ -128,8 +151,8 @@ FTP 명령 인자로 변경할 수 없다.
 | 명령 | 형식 | 성공 응답 | 주요 오류 코드 |
 | --- | --- | --- | --- |
 | `getifstate` | `quote getifstate [인터페이스]` | `200 <인터페이스> UP` 또는 `200 <인터페이스> DOWN` | `1`: 상태 읽기 실패, `2`: 인터페이스 오류 |
-| `ifcup` | `quote ifcup [인터페이스]` | `200 IFCUP command successful.` | `1`: UP 실패, `2`: 인터페이스 오류 |
-| `ifcdown` | `quote ifcdown [인터페이스]` | `200 IFCDOWN command successful.` | `1`: DOWN 실패, `2`: 인터페이스 오류, `3`: FTP 연결 보호 |
+| `ifcup` | `quote ifcup [인터페이스]` | `200 IFCUP command successful.` | `1`: UP 실패, `2`: 인터페이스 오류, `6`: fallback busy |
+| `ifcdown` | `quote ifcdown [인터페이스]` | `200 IFCDOWN command successful.` | `1`: DOWN 실패, `2`: 인터페이스 오류, `3`: FTP 연결 보호, `6`: fallback busy |
 | `rst` | `quote rst` | `200 reboot requested` | `1`: 재부팅 요청 실패, `2`: 인자 오류 |
 
 인터페이스 명령도 인자를 생략하면 `mlan0`을 사용한다. `getifstate`의
@@ -149,7 +172,8 @@ FTP 명령 인자로 변경할 수 없다.
 `wgetifstate`, `wifcup`, `wifcdown`은 인터페이스 한 개를 필수로 받는다.
 `wrst`는 인자 없이 호출하거나 유효한 인터페이스 한 개를 지정할 수 있다.
 잘못된 인터페이스나 추가 인자, 나머지 세 명령의 인터페이스 누락은 코드 `2`,
-그 밖의 실패 코드는 위 기존 명령과 같다. `wifcdown`은 FTP 연결 보호도 유지한다.
+그 밖의 실패 코드는 위 기존 명령과 같다. `wifcup`/`wifcdown`도 active fallback 중에는
+코드 `6`을 반환하며, `wifcdown`은 FTP 연결 보호도 유지한다.
 `quote wrst`와 `quote wrst 0` 모두 `rst`와 동일하게 **장비 전체**를 재부팅한다.
 기존 `getifstate`, `ifcup`, `ifcdown`의 기본값과 `rst`의 무인자 규칙은 유지하며,
 `0`/`1` 별칭은 `w` 명령에 적용한다.
@@ -174,7 +198,8 @@ SSID·주파수가 목표와 일치하는지 확인한다. 이미 목표 SSID·�
 경우에는 변경 전에 중단한다.
 
 테스트 후 원래 SSID·주파수를 새 FTP 연결로 복원하고 재연결을 확인한다.
-이것은 테스트 정리 절차이며 일반 `wconnect`의 자동 복구 기능이 아니다.
+이것은 테스트 도구 자체의 정리 절차다. 출하 기본값처럼
+`connect_fallback.enabled=false`인 일반 `wconnect`에는 자동 복구가 없다.
 성공·실패와 복구 결과는 JSON 보고서에 별도로 기록하고 SSID 원문은 마스킹한다.
 제어 연결은 유선 등 별도 관리 경로로 유지한다. 초기 주파수가 `ANY`이거나
 목록이 7개를 넘고, 초기 SSID를 FTP로 다시 저장할 수 없거나 저장 설정과 현재

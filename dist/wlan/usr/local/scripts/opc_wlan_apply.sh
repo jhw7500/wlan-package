@@ -97,6 +97,8 @@ if [ -n "$MODE$BW" ]; then
         && jq -e 'type == "object"' "$RADIO_JSON" >/dev/null 2>&1 \
         || { echo "opc_wlan_apply: invalid/unavailable radio tools or JSON" >&2; exit 4; }
 fi
+wifi_change_guard_acquire "$IFACE" shared \
+    || { echo "opc_wlan_apply: configuration/connection change busy for $IFACE" >&2; exit 4; }
 wifi_wpa_conf_lock_acquire "$IFACE" \
     || { echo "opc_wlan_apply: failed to lock $CONF" >&2; exit 4; }
 # OPC ChangeIp 의 ESSID 는 opcd 가 복원 표식(essid_marker, "표식 없으면 conf 편집 없음")을 arm 한

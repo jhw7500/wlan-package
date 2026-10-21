@@ -43,6 +43,7 @@ def run_handler(name, *args, env=None, stubs=None):
     d = _stub_dir(**(stubs or {}))
     base = {k: v for k, v in os.environ.items() if k != "FTPCMD_LOCAL_ADDR"}
     base["PATH"] = f"{d}:{os.environ['PATH']}"
+    base["WIFI_RUN_DIR"] = str(d / "wifi-run")
     base.update(env or {})
     try:
         return subprocess.run(
@@ -156,6 +157,7 @@ def run_wconnectraw(*args, status_id="7", set_reply="OK", reassociate_reply="OK"
         env.update({
             "PATH": f"{root}:{os.environ['PATH']}",
             "WCONNECTRAW_CAPTURE": str(capture),
+            "WIFI_RUN_DIR": str(root / "wifi-run"),
             "WCONNECTRAW_LOG": str(timing_log),
             "WCONNECTRAW_STATUS_ID": status_id,
             "WCONNECTRAW_NETWORKS": network_rows,
@@ -600,6 +602,7 @@ exit "$COMMAND_RC"
             "PATH": f"{self.bin}:{os.environ['PATH']}",
             "IFACE_CAPTURE": str(self.capture), "CONTROL_IFACE": control,
             "COMMAND_RC": str(rc),
+            "WIFI_RUN_DIR": str(self.root / "wifi-run"),
         })
         if control:
             env["FTPCMD_LOCAL_ADDR"] = "192.0.2.1"

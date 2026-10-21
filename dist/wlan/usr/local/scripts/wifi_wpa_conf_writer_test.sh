@@ -1753,13 +1753,14 @@ check_missing_pid_cleanup_set_e
 # source slice that execute after FD9/FD7 acquisition.  Every raw external
 # token must sit behind one of the close-first boundaries; the exact boundary
 # inventory also forces future wrapped children to be reviewed deliberately.
-if python3 - "$WIFI_SH" "$SCRIPT_DIR/wifi_init_config_lib.sh" <<'PY'
+if python3 - "$WIFI_SH" "$SCRIPT_DIR/wifi_init_config_lib.sh" "$SCRIPT_DIR/wifi_connect_fallback_lib.sh" <<'PY'
 import re
 import sys
 
-wifi_path, lib_path = sys.argv[1:]
+wifi_path, lib_path, fallback_path = sys.argv[1:]
 wifi = open(wifi_path, encoding="utf-8").read()
 lib = open(lib_path, encoding="utf-8").read()
+fallback = open(fallback_path, encoding="utf-8").read()
 
 helper_start = wifi.index("wpa_cli_ok() {")
 helper_end = wifi.index("# ----- radio staged-apply helpers -----", helper_start)
@@ -1769,11 +1770,11 @@ connect_end = wifi.index("\n    ;;\n  scan)", connect_start)
 abort_start = lib.index("wifi_wpa_abort_scan_quiesce() {")
 abort_end = lib.index("\n}\n\n# FD 7 serializes", abort_start) + 2
 regions = wifi[helper_start:helper_end] + wifi[connect_start:connect_end] \
-    + lib[abort_start:abort_end]
+    + lib[abort_start:abort_end] + fallback[fallback.index("# Capture only"):]
 
 external = (
     "awk", "cat", "chmod", "dirname", "grep", "install", "jq", "mkdir",
-    "mktemp", "mv", "rm", "sleep", "sync", "tr", "wpa_cli",
+    "mktemp", "mv", "rm", "sleep", "sync", "tr", "wpa_cli", "logger", "timeout",
 )
 command = "(" + "|".join(external) + r")\b"
 command_start = re.compile(
@@ -1810,8 +1811,8 @@ for number, line in enumerate(regions.splitlines(), 1):
     if has_raw_command and not any(wrapper in line for wrapper in wrappers):
         violations.append(f"line {number}: {stripped}")
 
-if "exec 7>&- 9>&-" not in action_body:
-    violations.append("monitor action heredoc lacks an explicit FD7/FD9 close")
+if not any(line.startswith("exec ") and all(f"{fd}>&-" in line for fd in (6, 7, 8, 9)) for line in action_body):
+    violations.append("monitor action heredoc lacks explicit private-FD closes")
 
 inventory = {wrapper: set() for wrapper in wrappers}
 wrapper_re = re.compile(
@@ -1822,17 +1823,19 @@ for wrapper, command in wrapper_re.findall(regions):
     inventory[wrapper].add(command)
 
 expected = {
-    "wifi_wpa_child_exec": {"cat", "mktemp", "wpa_cli"},
+    "wifi_wpa_child_exec": {"cat", "mktemp", "wpa_cli", "timeout", "jq"},
     "wifi_wpa_child_call": {
         "to_freq_mhz_checked", "wifi_ssid_encode_values",
         "wifi_wpa_conf_common_freqs",
+        "wifi_wpa_conf_network_count", "wifi_ssid_conf_to_wpa_text",
     },
     "wifi_wpa_run_child": {
-        "awk", "cat", "chmod", "mkdir", "rm", "sleep", "sync", "wpa_cli",
+        "awk", "cat", "chmod", "mkdir", "rm", "sleep", "sync", "wpa_cli", "jq", "mv", "logger",
     },
     "wifi_wpa_run_child_call": {
         "safe_install_sync", "wifi_wpa_conf_is_multi_topology",
         "wifi_wpa_conf_render_canonical",
+        "sync_path_or_global",
     },
 }
 if inventory != expected:

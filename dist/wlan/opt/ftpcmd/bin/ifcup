@@ -28,6 +28,15 @@ case "$IFACE" in
     *[!A-Za-z0-9._-]*)  echo "invalid interface name: $IFACE"; exit 2 ;;
 esac
 
+case "$IFACE" in
+    mlan0|mlan1)
+        CHANGE_RUN_DIR=${WIFI_RUN_DIR:-/run/wifi}
+        mkdir -p "$CHANGE_RUN_DIR" || exit 1
+        exec 6>"$CHANGE_RUN_DIR/${IFACE}.change.lock" || exit 1
+        flock -n -s 6 || { echo "configuration/connection change busy for $IFACE"; exit 6; }
+        ;;
+esac
+
 if [ ! -e "/sys/class/net/$IFACE" ]; then
     echo "no such interface: $IFACE"
     exit 2

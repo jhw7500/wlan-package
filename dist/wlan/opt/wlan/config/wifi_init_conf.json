@@ -328,6 +328,17 @@
         "CAL_DATA_CFG": "",
         "TXPWRLIMIT_PATH": "",
         "connect_threshold": -100,
+        "connect_fallback": {
+            "_comment": [
+                "수동 CLI/FTP wifi connect 실패 시 직전 검증 완료 프로필로 복구하는 opt-in 정책. 기본 false",
+                "enabled: (bool) wifi.sh의 수동 connect 경로에만 적용. OPC helper, checker/background reconnect/roam, Mode A 다중 network는 제외",
+                "attempt_timeout_sec: (int 1..15) 새 연결 확인 예산(초)",
+                "rollback_timeout_sec: (int 1..5) 이전 프로필 복원 후 연결 확인 예산(초)"
+            ],
+            "enabled": false,
+            "attempt_timeout_sec": 15,
+            "rollback_timeout_sec": 5
+        },
         "enabled": true,
         "Frequency": "auto",
         "net_rx": 0,
@@ -588,6 +599,11 @@
         "CAL_DATA_CFG": "",
         "TXPWRLIMIT_PATH": "",
         "connect_threshold": -100,
+        "connect_fallback": {
+            "enabled": false,
+            "attempt_timeout_sec": 15,
+            "rollback_timeout_sec": 5
+        },
         "enabled": false,
         "Frequency": "auto",
         "net_rx": 0,

@@ -332,6 +332,7 @@ def test_wifi_dispatches_logger_lifecycle_to_helper(tmp_path, argv, expected):
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "WIFI_LOGGER_CONTROL_SH": str(fake_control),
         "FAKE_CONTROL_CALLS": str(calls),
+        "WIFI_RUN_DIR": str(tmp_path / "wifi-run"),
     }
     cp = subprocess.run(
         ["bash", str(WIFI), *argv],

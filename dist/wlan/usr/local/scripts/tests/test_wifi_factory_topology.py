@@ -554,6 +554,7 @@ def run_wifi(selector: Path, active_json: Path, *args: str) -> subprocess.Comple
             "WIFI_FACTORY_TOPOLOGY_OWNER_UID": str(os.getuid()),
             "WIFI_FACTORY_TOPOLOGY_OWNER_GID": str(os.getgid()),
             "WIFI_INIT_CONF_JSON": str(active_json),
+            "WIFI_RUN_DIR": str(active_json.parent / "wifi-run"),
         }
     )
     return subprocess.run(
@@ -652,6 +653,7 @@ def test_runtime_bridge_profile_does_not_change_factory_selector(tmp_path: Path)
     before_stat = selector.stat()
     env = os.environ.copy()
     env["WIFI_INIT_CONF_JSON"] = str(active_json)
+    env["WIFI_RUN_DIR"] = str(tmp_path / "wifi-run")
 
     result = subprocess.run(
         ["bash", str(WIFI), "0", "br", "profile", "eth0-ip", "apply"],

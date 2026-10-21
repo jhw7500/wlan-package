@@ -79,7 +79,8 @@ wssid / wfreq --> wpa_supplicant 설정 파일에 저장
 
 `wssid`와 `wfreq`는 설정 파일만 변경한다. supplicant 재설정이나 연결 시도는
 `wconnect`가 담당한다. `wstatus`는 설정 파일의 희망값이 아닌 현재 연결값을
-반환한다.
+반환한다. `mlanN.connect_fallback.enabled=true`이면 가능한 경우 이 저장 변경 전에
+현재 검증 완료 프로필을 fallback 후보로 캡처하고, 다음 `wconnect` 실패 시 복구에 쓴다.
 
 ~~~text
 ftp> quote wssid 0
@@ -158,15 +159,37 @@ quote wconnect <mlan0|mlan1|0|1> [ssid words...]
 현재 supplicant 설정과 일치하고 현재 연결 주파수도 허용 목록에 있으면
 연결을 유지하며 `200 SUCCESS`를 반환한다. 인증 설정 변경이 적용 대기
 중이거나, 설정이 다르거나, 미연결이면 프로필 `reconfigure` 후 필요한
-스캔과 재연결을 요청한다. 연결 확인에는 기본 15초에 해당하는 폴링
-예산을 사용한다. 설정 처리와 `reconfigure` 소요 시간은 별도이므로 FTP
-명령의 전체 실행 시간이 반드시 15초 이내라는 뜻은 아니다.
+스캔과 재연결을 요청한다. fallback이 비활성인 기존 경로는
+`ASSOC_TIMEOUT_DEFAULT`를 그대로 사용한다. `mlanN.connect_fallback.enabled=true`일 때만
+`attempt_timeout_sec`(기본 15초)을 1~15초 범위에서 새 연결 예산으로 사용한다.
 
-SSID 없이 호출할 때는 설정 파일을 수정하지 않는다. 다중 `network`
+SSID 없이 호출할 때 정상 적용 경로는 설정 파일을 수정하지 않는다. 단, fallback을
+활성화했고 연결이 실패하면 rollback이 저장된 이전 설정 파일을 복원할 수 있다. 다중 `network`
 구성에서는 명시적 SSID 일괄 변경을 거부하지만 인터페이스만 지정한 연결은 허용한다.
 `200 SUCCESS`는 목표 association을 확인했다는 뜻이다.
 `550 Failed: wconnect exited 8`은 제한 시간 안에 확인하지 못했다는 뜻이며,
 이후 늦게 연결될 수 있으므로 `wstatus`로 다시 조회한다.
+
+`mlanN.connect_fallback.enabled=false`(기본)이면 실패한 새 SSID·주파수·인증 설정을
+그대로 유지하며 자동 복구하지 않는다. 활성화했고 직전 검증 완료 프로필이 있으면
+실패 시 SSID, 주파수 정책, 인증 설정을 함께 복원하고 reconfigure한 뒤 이전 association을
+`rollback_timeout_sec`(기본 5초, 1~5) 안에서 확인한다. 복원에 성공해도 새 연결 실패가
+성공으로 바뀌지는 않으며 원래 nonzero 결과를 반환한다. 일반 association/control 오류는
+7/8이고, 검증·설치 오류 1이나 signal 결과 129/130/143도 보존될 수 있다. 사용자 출력은
+`fallback restored`/`fallback failed`/`fallback unavailable`, syslog는
+`outcome=restored`/`outcome=restore-failed`/`outcome=fallback-unavailable`로 구분한다.
+known-good이 없는 경우에도 새 연결은
+시도하지만 실패 시 복구할 설정이 없음을 명시한다. active fallback 중 같은 인터페이스의
+변경 명령은 코드 6(busy)으로 거부하며 `wssid`/`wfreq`/`wstatus` 조회는 허용한다.
+`wconnectraw`, `ifcup`/`ifcdown`, `wifcup`/`wifcdown`도 이 change guard를 사용한다.
+
+마지막 검증 완료 프로필은 `/run/wifi` 아래 mode `0600` 런타임 상태로만 보관되어
+재부팅 뒤에는 남지 않는다. Mode A와 다중 `network` 구성은 supplicant가 소유하므로
+fallback에서 제외된다. `wconnectraw`, OPC helper, checker/background reconnect/roam도
+fallback을 시작하지 않는다. OPC의 경쟁 wireless profile/radio helper write는 active
+fallback 동안 busy로 거부되지만 ChangeIp의 IP/route 처리는 기존의 별도 계약을 유지한다.
+새 연결과 복원의 시간값은 FTP 30초 제한 안에서 실제
+경과 시간을 차감하는 userspace 예산이며 커널 I/O hang의 hard cap을 보장하지 않는다.
 
 ### 3.4 wstatus: 현재 연결
 
@@ -210,6 +233,7 @@ vsftpd가 핸들러를 30초에 강제 종료하면 `550 Command timed out: <com
 | `wconnect` | `1` | SSID 또는 설정 검증 실패, 실행 환경 오류 |
 | `wconnect` | `2` | 필수 인터페이스 누락 또는 잘못된 값 |
 | `wconnect` | `3` | 대상 인터페이스가 FTP 제어 연결을 운반하여 거부 |
+| `wssid`, `wfreq`, `wconnect`, `wconnectraw`, `ifcup`, `ifcdown`, `wifcup`, `wifcdown` | `6` | 같은 인터페이스에서 fallback 또는 경쟁 변경이 진행 중(busy) |
 | `wconnect` | `7` | supplicant 제어 명령 또는 연결 이벤트 감시 실패 |
 | `wconnect` | `8` | 제한 시간 내 목표 연결 확인 실패 |
 | `wstatus` | `2` | 인터페이스 인자 오류 또는 인자 초과 |
@@ -248,8 +272,8 @@ SSID의 `wconnect` 요청은 하위 SSID 검증에서 코드 `1`로 실패할 �
 | 명령 | 호출 형식 | 성공 응답 | 실패 코드 |
 | --- | --- | --- | --- |
 | `getifstate` | `quote getifstate [interface]` | `200 <interface> UP` 또는 `200 <interface> DOWN` | `1`: 상태 읽기 실패, `2`: 이름 오류/인터페이스 없음 |
-| `ifcup` | `quote ifcup [interface]` | `200 IFCUP command successful.` | `1`: UP 실패, `2`: 이름 오류/인터페이스 없음 |
-| `ifcdown` | `quote ifcdown [interface]` | `200 IFCDOWN command successful.` | `1`: DOWN 실패, `2`: 이름 오류/인터페이스 없음, `3`: FTP 제어 연결 보호 |
+| `ifcup` | `quote ifcup [interface]` | `200 IFCUP command successful.` | `1`: UP 실패, `2`: 이름 오류/인터페이스 없음, `6`: fallback busy |
+| `ifcdown` | `quote ifcdown [interface]` | `200 IFCDOWN command successful.` | `1`: DOWN 실패, `2`: 이름 오류/인터페이스 없음, `3`: FTP 제어 연결 보호, `6`: fallback busy |
 | `rst` | `quote rst` | `200 reboot requested` | `1`: 재부팅 요청 실패, `2`: 인자 오류 |
 
 인터페이스 명령은 인자를 생략하면 `mlan0`을 사용한다. `getifstate`의
@@ -263,8 +287,8 @@ FTP 연결이 끊길 수 있다.
 | 신규 명령 | 형식 | 기존 동작·성공 응답 | 주요 오류 코드 |
 | --- | --- | --- | --- |
 | `wgetifstate` | `quote wgetifstate <mlan0\|mlan1\|0\|1>` | `getifstate`: `200 <interface> UP` 또는 `DOWN` | `1`: 상태 읽기 실패, `2`: 인자 오류/인터페이스 없음 |
-| `wifcup` | `quote wifcup <mlan0\|mlan1\|0\|1>` | `ifcup`: `200 IFCUP command successful.` | `1`: UP 실패, `2`: 인자 오류/인터페이스 없음 |
-| `wifcdown` | `quote wifcdown <mlan0\|mlan1\|0\|1>` | `ifcdown`: `200 IFCDOWN command successful.` | `1`: DOWN 실패, `2`: 인자 오류/인터페이스 없음, `3`: FTP 연결 보호 |
+| `wifcup` | `quote wifcup <mlan0\|mlan1\|0\|1>` | `ifcup`: `200 IFCUP command successful.` | `1`: UP 실패, `2`: 인자 오류/인터페이스 없음, `6`: fallback busy |
+| `wifcdown` | `quote wifcdown <mlan0\|mlan1\|0\|1>` | `ifcdown`: `200 IFCDOWN command successful.` | `1`: DOWN 실패, `2`: 인자 오류/인터페이스 없음, `3`: FTP 연결 보호, `6`: fallback busy |
 | `wrst` | `quote wrst [mlan0\|mlan1\|0\|1]` | `rst`: `200 reboot requested` | `1`: 재부팅 요청 실패, `2`: 인자 오류 |
 
 `wgetifstate`, `wifcup`, `wifcdown`은 인터페이스 한 개를 필수로 받는다.

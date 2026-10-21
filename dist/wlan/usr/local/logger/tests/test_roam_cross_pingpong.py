@@ -115,6 +115,16 @@ def test_connect_to_ssid_internal_block_returns_none(monkeypatch):
     prev.add_roam.assert_not_called()
 
 
+def test_busy_manual_connect_defers_background_roam_without_failure_cooldown(monkeypatch):
+    _setup(monkeypatch, mode_a=False)
+    result = type("Result", (), {"returncode": 6, "stdout": "", "stderr": "busy"})()
+    with patch.object(wifi_roam.subprocess, "run", return_value=result) as run:
+        outcome = wifi_roam.connect_to_ssid(IFACE, "Net", FROM, TO)
+    assert outcome is None
+    # This environment routes the real CLI away from manual fallback policy.
+    assert run.call_args.kwargs["env"]["WIFI_CONNECT_ORIGIN"] == "roam"
+
+
 def test_pingpong_disabled_normal_flow(monkeypatch):
     """기능 off → 차단/카운트 없이 정상 전환."""
     prev, notify = _setup(monkeypatch, pingpong=False)

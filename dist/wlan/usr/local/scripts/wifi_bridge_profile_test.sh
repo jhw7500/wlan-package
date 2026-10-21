@@ -5,6 +5,7 @@ set -u
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 WIFI_SH="$SCRIPT_DIR/wifi.sh"
 WORK=$(mktemp -d)
+export WIFI_RUN_DIR="$WORK/run"
 trap 'rm -rf "$WORK"' EXIT
 
 PASS=0
