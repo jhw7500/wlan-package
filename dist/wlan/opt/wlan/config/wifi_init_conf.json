@@ -392,6 +392,7 @@
                 "stat_reset_interval_sec: (int) 통계 로그 자동 초기화 주기 (초)",
                 "bgscan_stale_threshold_sec: (int) beacon.json stale 엔트리 프루닝 기준 시간 (초). 양의 정수만 유효",
                 "fwcfg_watch_sec: (number) FW 커스텀 설정(rate_adapt/antcfg/mcs_tier) 변화 감시 주기 (초). 0=끔. 한 주기에 하나씩 라운드로빈, 관측 전용",
+                "rx_mismatch_enabled: (bool) 펌웨어는 받는데 호스트로 유니캐스트가 거의 안 올라오는 상태(같은 MAC 중복·키 불일치 의심)를 logger.log 에 기록(최대 1분 1줄). 디버깅 보조, 복구 동작 없음",
                 "enabled: (bool) wifi_logger@<iface> 서비스 ON/OFF"
             ],
             "link_interval_sec": 0.9,
@@ -400,6 +401,7 @@
             "stat_reset_interval_sec": 604800,
             "bgscan_stale_threshold_sec": 600,
             "fwcfg_watch_sec": 60,
+            "rx_mismatch_enabled": true,
             "enabled": true
         },
         "periodic_roam": {
@@ -622,6 +624,7 @@
             "stat_reset_interval_sec": 604800,
             "bgscan_stale_threshold_sec": 600,
             "fwcfg_watch_sec": 60,
+            "rx_mismatch_enabled": true,
             "enabled": false
         },
         "periodic_roam": {

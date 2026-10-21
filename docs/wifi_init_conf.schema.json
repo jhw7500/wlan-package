@@ -1536,6 +1536,14 @@
               "x-apply-timing": "daemon-restart",
               "x-consumer": "wifi_logger_link.py"
             },
+            "rx_mismatch_enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "RX 불일치 감지 로그. 10초 창마다 펌웨어 유니캐스트 수신 대비 호스트 수신이 1/4 미만이면 같은 MAC 중복·키 불일치 의심을 logger.log 에 warn 1줄(최대 1분 1줄), 1/2 이상으로 회복되면 info 1줄 남긴다. 디버깅 보조 — 복구 동작 없음",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_logger_link.py"
+            },
             "enabled": {
               "type": "boolean",
               "default": true,
@@ -2498,6 +2506,14 @@
               "default": 60,
               "minimum": 0,
               "description": "FW 커스텀 설정(rate_adapt/antcfg/mcs_tier) 변화 감시 주기(초). 0=끔. 한 주기에 설정 하나씩 라운드로빈하므로 설정 3개 기준 전체 순회는 3배 주기다. 관측 전용 — 변화 감지 시 syslog warn 만 남기고 복구하지 않는다",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "daemon-restart",
+              "x-consumer": "wifi_logger_link.py"
+            },
+            "rx_mismatch_enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "RX 불일치 감지 로그. 10초 창마다 펌웨어 유니캐스트 수신 대비 호스트 수신이 1/4 미만이면 같은 MAC 중복·키 불일치 의심을 logger.log 에 warn 1줄(최대 1분 1줄), 1/2 이상으로 회복되면 info 1줄 남긴다. 디버깅 보조 — 복구 동작 없음",
               "x-ui-editable": "yes",
               "x-apply-timing": "daemon-restart",
               "x-consumer": "wifi_logger_link.py"

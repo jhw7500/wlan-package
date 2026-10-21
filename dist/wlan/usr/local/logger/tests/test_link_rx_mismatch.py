@@ -1,3 +1,4 @@
+import json
 import sys
 import os
 from unittest.mock import MagicMock
@@ -260,6 +261,44 @@ def test_parse_bridge_other_iface_is_none():
 
 def test_parse_bridge_inactive_is_none():
     assert wifi_logger_link._parse_bridge_w2p(_BRIDGE_STATS_INACTIVE, "mlan0") is None
+
+
+# ---- 설정 (wifi_init_conf.json) ----------------------------------------------
+
+_TEMPLATE = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..",
+                         "opt", "wlan", "config", "wifi_init_conf.json")
+
+
+def test_enabled_by_default():
+    assert wifi_logger_link.rx_mismatch_enabled_from_conf({}, "mlan0") is True
+
+
+def test_iface_setting_disables_only_that_iface():
+    conf = {"mlan0": {"logger": {"rx_mismatch_enabled": False}}}
+    assert wifi_logger_link.rx_mismatch_enabled_from_conf(conf, "mlan0") is False
+    assert wifi_logger_link.rx_mismatch_enabled_from_conf(conf, "mlan1") is True
+
+
+def test_iface_setting_overrides_global():
+    conf = {"logger": {"rx_mismatch_enabled": False},
+            "mlan0": {"logger": {"rx_mismatch_enabled": True}}}
+    assert wifi_logger_link.rx_mismatch_enabled_from_conf(conf, "mlan0") is True
+    assert wifi_logger_link.rx_mismatch_enabled_from_conf(conf, "mlan1") is False
+
+
+def test_non_boolean_setting_is_invalid():
+    """문자열 "false" 를 켜짐으로 읽지 않는다 — JSON boolean 만 인정하고 나머지는 None."""
+    conf = {"mlan0": {"logger": {"rx_mismatch_enabled": "false"}}}
+    assert wifi_logger_link.rx_mismatch_enabled_from_conf(conf, "mlan0") is None
+
+
+def test_template_default_matches_code_default():
+    """템플릿과 코드 기본값이 같아야 설정 파일이 없거나 깨진 기기도 같은 동작을 한다(fail-same)."""
+    with open(_TEMPLATE, encoding="utf-8") as f:
+        template = json.load(f)
+    for iface in ("mlan0", "mlan1"):
+        assert template[iface]["logger"]["rx_mismatch_enabled"] is True
+        assert wifi_logger_link.rx_mismatch_enabled_from_conf({}, iface) is True
 
 
 # ---- 루프 연결부 -----------------------------------------------------------

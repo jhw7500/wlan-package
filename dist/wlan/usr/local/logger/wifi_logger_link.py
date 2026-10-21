@@ -471,6 +471,7 @@ def check_tx_spike(link_data):
 #   프레임은 moal_recv_packet 의 rx_packets++ 앞에서 빠지고, 그룹 프레임은 복제+스택 배달로
 #   양쪽에 잡힌다. 펌웨어가 센 그룹 프레임이 호스트에 다 오지는 않으므로(11:34 실측 그룹 173 >
 #   브리지 111) 호스트 브로드캐스트는 min(그룹, netdev, 브리지) 로 상한을 잡는다.
+RX_MISMATCH_ENABLED = True  # 코드 폴백 — 템플릿 <iface>.logger.rx_mismatch_enabled 와 fail-same
 RX_MISMATCH_WINDOW_SEC = 10.0
 RX_MISMATCH_MIN_FW = 20
 # 의심 보고 최소 간격 — 디버깅 보조 로그가 logger.log 를 채우지 않게 한다(운용 무영향).
@@ -584,6 +585,15 @@ class RxMismatchDetector:
 _rx_mismatch = RxMismatchDetector(RX_MISMATCH_WINDOW_SEC, RX_MISMATCH_MIN_FW,
                                   RX_MISMATCH_REPORT_GAP_SEC)
 _rx_mismatch_disabled = False
+
+
+def rx_mismatch_enabled_from_conf(conf, iface):
+    """<iface>.logger.rx_mismatch_enabled → logger.rx_mismatch_enabled → 코드 기본값.
+    JSON boolean 만 인정한다(문자열 "false" 를 켜짐으로 읽지 않게) — 그 밖의 값이면 None."""
+    value = conf.get(iface, {}).get("logger", {}).get(
+        "rx_mismatch_enabled",
+        conf.get("logger", {}).get("rx_mismatch_enabled", RX_MISMATCH_ENABLED))
+    return value if isinstance(value, bool) else None
 
 
 def _counter(mwlan_log, key):
@@ -867,6 +877,7 @@ if __name__ == "__main__":
     _retry_count = args.link_retry_count
     _retry_delay = args.link_retry_delay
     _ra_watch = args.fwcfg_watch
+    _rx_enabled = RX_MISMATCH_ENABLED
     try:
         with open("/usr/local/etc/wifi_init_conf.json") as _f:
             _conf = json.load(_f)
@@ -878,6 +889,7 @@ if __name__ == "__main__":
         _retry_delay = _conf.get(IFACE, {}).get("logger", {}).get("link_retry_delay_sec", _g_dly)
         _g_ra = _conf.get("logger", {}).get("fwcfg_watch_sec", _ra_watch)
         _ra_watch = _conf.get(IFACE, {}).get("logger", {}).get("fwcfg_watch_sec", _g_ra)
+        _rx_enabled = rx_mismatch_enabled_from_conf(_conf, IFACE)
     except (OSError, json.JSONDecodeError) as e:
         print(f"WARN: [{IFACE}] config load failed, using defaults: {e}", file=sys.stderr)
 
@@ -898,6 +910,11 @@ if __name__ == "__main__":
         print(f"WARN: [{IFACE}] invalid fwcfg_watch_sec, using default "
               f"({args.fwcfg_watch})", file=sys.stderr)
         FWCFG_WATCH_SEC = args.fwcfg_watch
+    if _rx_enabled is None:
+        print(f"WARN: [{IFACE}] invalid rx_mismatch_enabled, using default "
+              f"({RX_MISMATCH_ENABLED})", file=sys.stderr)
+        _rx_enabled = RX_MISMATCH_ENABLED
+    _rx_mismatch_disabled = not _rx_enabled
 
     LOG_DIR = f"/var/log/cantops/json/{IFACE}"
     logger.message("info",
@@ -905,6 +922,7 @@ if __name__ == "__main__":
         f"spike_fail: {SPIKE_THRESHOLD_FAIL}, spike_retry: {SPIKE_THRESHOLD_RETRY}, "
         f"link_retry: {LINK_RETRY_COUNT}x{LINK_RETRY_DELAY}s, "
         f"fwcfg_watch: {FWCFG_WATCH_SEC}s, "
+        f"rx_mismatch: {'on' if _rx_enabled else 'off'}, "
         f"log: {LOG_DIR}/link.json", _EXTRA_())
 
     if IFACE == "mlan0":
