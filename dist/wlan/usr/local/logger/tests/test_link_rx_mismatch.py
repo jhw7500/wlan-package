@@ -370,6 +370,20 @@ def test_check_rx_mismatch_uses_group_counter(wired):
     assert len(calls) == 1 and "host_unicast=+0" in calls[0].args[1]
 
 
+def test_check_rx_mismatch_accepts_multicast_counter_name(wired):
+    """getlog 명칭(dot11MulticastReceivedFrameCount, README_MLAN)만 있는 펌웨어에서도 그룹 수를 뺀다
+    — 빼지 않으면 브리지 모드에서 브로드캐스트가 호스트 유니캐스트로 두 번 잡혀 좀비를 놓친다."""
+    def mw(fw, mc, bcn):
+        return {"dot11ReceivedFragmentCount": fw, "dot11MulticastReceivedFrameCount": mc,
+                "beaconReceivedCount": bcn}
+    wired(3111, 4138)
+    wifi_logger_link.check_rx_mismatch(mw(4473, 3674, 289100), 0.0)
+    wired(3121, 4148)
+    wifi_logger_link.check_rx_mismatch(mw(4503, 3684, 289199), 10.0)
+    calls = wifi_logger_link.logger.message.call_args_list
+    assert len(calls) == 1 and "host_unicast=+0" in calls[0].args[1]
+
+
 def test_check_rx_mismatch_reads_bridge_counter(wired):
     """브리지 카운터 파일이 실제로 판정에 들어간다."""
     wired(3111, 4138)

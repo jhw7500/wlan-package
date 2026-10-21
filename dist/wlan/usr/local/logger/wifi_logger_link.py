@@ -603,9 +603,14 @@ def rx_mismatch_enabled_from_conf(conf, iface):
     return value if isinstance(value, bool) else None
 
 
-def _counter(mwlan_log, key):
-    value = mwlan_log.get(key)
-    return value if isinstance(value, int) else None
+def _counter(mwlan_log, *keys):
+    """첫 번째로 있는 키의 정수 카운터. 같은 카운터가 드라이버 /proc 와 getlog 에서 이름이 다르다
+    (dot11Group* / dot11Multicast*, README_MLAN) — wifi_snmp_pp.py 와 같이 둘 다 받는다."""
+    for key in keys:
+        value = mwlan_log.get(key)
+        if isinstance(value, int):
+            return value
+    return None
 
 
 def check_rx_mismatch(mwlan_log, now):
@@ -619,7 +624,7 @@ def check_rx_mismatch(mwlan_log, now):
         event = _rx_mismatch.update(
             now,
             _counter(mwlan_log, "dot11ReceivedFragmentCount"),
-            _counter(mwlan_log, "dot11GroupReceivedFrameCount"),
+            _counter(mwlan_log, "dot11GroupReceivedFrameCount", "dot11MulticastReceivedFrameCount"),
             _read_int(NETDEV_RX_PATH_FMT.format(IFACE)),
             _read_bridge_w2p(IFACE),
             _counter(mwlan_log, "beaconReceivedCount"))
