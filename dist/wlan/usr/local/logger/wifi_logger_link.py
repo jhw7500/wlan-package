@@ -557,6 +557,10 @@ class RxMismatchDetector:
             host_uc = d_net - min(d_grp, d_net)
         if fw_uc < self.min_fw:
             return None
+        d_bcn = bcn - base[5] if bcn is not None and base[5] is not None else None
+        suspect = host_uc * 4 < fw_uc and (d_bcn is None or d_bcn > 0)
+        gap_elapsed = (self._last_report is None
+                       or now - self._last_report >= self.report_gap_sec)
         if self._since is not None:
             if host_uc * 2 >= fw_uc:
                 duration = int(now - self._since)
@@ -564,22 +568,25 @@ class RxMismatchDetector:
                 if self._reported:
                     return ("info", f"RX_MISMATCH cleared after {duration}s: "
                                     f"fw_unicast=+{fw_uc} host_unicast={host_uc:+d}")
-            return None
-        d_bcn = bcn - base[5] if bcn is not None and base[5] is not None else None
-        if host_uc * 4 < fw_uc and (d_bcn is None or d_bcn > 0):
-            self._since = base[0]
-            self._reported = (self._last_report is None
-                              or now - self._last_report >= self.report_gap_sec)
-            if not self._reported:
                 return None
-            self._last_report = now
-            br_txt = f"+{d_br}" if bridge is not None else "n/a"
-            bcn_txt = f"+{d_bcn}" if d_bcn is not None else "n/a"
-            return ("warn", f"RX_MISMATCH suspect (duplicate MAC or key mismatch): "
-                            f"fw_unicast=+{fw_uc} host_unicast={host_uc:+d} "
-                            f"(netdev=+{d_net} bridge={br_txt} group=+{d_grp}) "
-                            f"beacon={bcn_txt} in {int(now - base[0])}s")
-        return None
+            # 보고 간격 때문에 억제된 사건이 계속되면 간격이 지난 첫 의심 창에서 보고한다
+            if self._reported or not (suspect and gap_elapsed):
+                return None
+        elif suspect:
+            self._since = base[0]
+            if not gap_elapsed:
+                self._reported = False
+                return None
+        else:
+            return None
+        self._reported = True
+        self._last_report = now
+        br_txt = f"+{d_br}" if bridge is not None else "n/a"
+        bcn_txt = f"+{d_bcn}" if d_bcn is not None else "n/a"
+        return ("warn", f"RX_MISMATCH suspect (duplicate MAC or key mismatch): "
+                        f"fw_unicast=+{fw_uc} host_unicast={host_uc:+d} "
+                        f"(netdev=+{d_net} bridge={br_txt} group=+{d_grp}) "
+                        f"beacon={bcn_txt} in {int(now - base[0])}s")
 
 
 _rx_mismatch = RxMismatchDetector(RX_MISMATCH_WINDOW_SEC, RX_MISMATCH_MIN_FW,

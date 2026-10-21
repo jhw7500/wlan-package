@@ -196,6 +196,25 @@ def test_reports_rate_limited(det):
     assert events[7] is not None and events[7][0] == "warn"  # t=80: 10+60 이후 재보고
 
 
+def test_long_episode_reported_once(det):
+    """보고 간격(60s)보다 오래 이어지는 사건도 의심 줄은 처음 한 번뿐이다."""
+    events = run(det, [_SYN_ZOMBIE] * 8)
+    assert events[0][0] == "warn"
+    assert all(e is None for e in events[1:])
+
+
+def test_suppressed_episode_reported_once_gap_elapses(det):
+    """억제된 사건이 계속되면 보고 간격이 지난 첫 의심 창에서 보고한다 — 좀비가 계속되는데
+    logger.log 의 마지막 줄이 거짓 해소로 남지 않게(tribunal A-R1-001)."""
+    z, n = _SYN_ZOMBIE, _NORMAL[0]
+    events = run(det, [z, n] + [z] * 6)
+    assert events[0][0] == "warn"                    # t=10 보고
+    assert events[1][0] == "info"                    # t=20 해소
+    assert all(e is None for e in events[2:6])       # t=30..60 억제(마지막 보고 t=10 + 60 전)
+    assert events[6] is not None and events[6][0] == "warn"  # t=70 계속되는 사건 보고
+    assert events[7] is None                         # t=80 같은 사건은 다시 보고하지 않음
+
+
 def test_report_gap_boundary(det):
     z, n = _SYN_ZOMBIE, _NORMAL[0]
     events = run(det, [z, n, n, n, n, n, z])
