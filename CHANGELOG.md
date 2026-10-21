@@ -3,6 +3,28 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.7.2 (2026-10-20)
+
+> SemVer **patch** — 로밍 통지(0x0004)를 로밍 조건 진입 시점에 현재 AP 값으로 보내고, 정상 재부팅의 서비스 정지 구간을 journal 내보내기에 담으며, OPCd Reset 이 정상 재부팅을 "재부팅 없음"으로 기록하던 분류를 고친다. OPCd 를 wlan-opc 31a6c70 으로 올린다.
+
+### 로밍 통지 시점과 필드 정합 (#368, PR #369·#370)
+
+- `wifi_roam.py` 가 로밍 조건에 들어서는 순간(로밍 임계 하회) 현재 접속 AP 의 BSSID 와 판정 RSSI 로 Roaming(0x0004) 을 1회 보낸다. 조건이 이어지는 동안에는 다시 보내지 않고, 임계 위로 회복하거나 연결이 끊기면 재무장하며, 조건 중 BSSID 가 바뀌면 새 AP 로 1회 보낸다. 종전에는 로밍 성공이 확인된 뒤에만 대상 AP 값으로 보내 임계를 밑돌았지만 로밍하지 않으면 통지가 없었다. 로밍 성공 뒤 통지 4곳(`_roam_to_bssid_locked`, `route_cross_ssid_transition`, `passive_roam` 의 성공·timeout 경로)을 없앴고, 수동·주기 로밍은 임계 하회 계기가 아니므로 통지하지 않는다.
+- 조건 진입 통지는 `notify_roam(..., require_link_match=True)` 로 보낸다. CH·SNR 은 보내기 직전 link.json 에서 읽으므로, 그 사이 다른 AP 로 재결합했으면 두 AP 의 값이 한 통지에 섞일 수 있었다. 이제 link.json 의 접속 AP 가 통지할 BSSID 와 다르면 보내지 않고 기록도 하지 않아, 같은 AP 에서 조건이 이어지면 다음 판정 때 다시 시도한다(PR #370).
+- 실기(랩 보드, QA 0.7.1 패키지 위에 세 파일 임시 배포 후 원복): link.json RSSI 를 good → bad → good → bad 로 주입하자 bad 진입마다 1회씩 2회 나갔고 AP MAC·CH·RSSI·SNR 은 현재 AP 값이었다. 조건 판정 6회 중 재통지와 로밍 실행은 없었다(PR #369). PR #370 의 재결합 경합은 보드에서 만들기 어려워 호스트 테스트로만 고정했다.
+
+### 정상 재부팅의 서비스 정지 구간 journal 내보내기 (#371, PR #372)
+
+- 새 `journald-snapshot-shutdown.service` 가 셧다운 때 journal 을 내보낸다. `DefaultDependencies=no`, `After=systemd-journald.service local-fs.target`, 로그 경로 `RequiresMountsFor=`, `Before=sysinit.target`, `Conflicts=`/`Before=shutdown.target`, `WantedBy=sysinit.target` 로, sysinit 뒤에 시작한 유닛(wifi_checker@·wlan_fw_watch 포함)이 모두 정지한 다음 `ExecStop=journald_snapshot.sh` 가 돈다. 종전에는 부팅 완료 스냅샷 유닛의 ExecStop 이 이 일을 했는데, 그 유닛이 셧다운 초반에 정지해 재부팅 직전 구간이 내보내기에 빠졌다. `journald-snapshot-boundary.service` 는 ExecStop 을 빼고 부팅 완료 스냅샷만 맡는다.
+- postinst 가 새 유닛을 enable 하고 `start --no-block` 으로 올려, 설치 뒤 첫 재부팅부터 적용된다. payload·소스 아카이브 manifest 와 유닛 순서 테스트를 추가했다.
+- 실기(랩 보드, 유닛 임시 배포 후 원복): 정상 재부팅에서 wifi_checker@·wlan_fw_watch·D-Bus 의 정지 줄이 모두 스냅샷 유닛 정지보다 앞서 내보내기에 담겼고, 재부팅 뒤 유닛이 부팅 때 자동 시작(active)됐으며 ordering cycle 경고는 없었다.
+
+### OPCd 서브모듈 31a6c70 (PR #367·#373; wlan-opc PR #177·#180)
+
+- Reset 분류(#179, wlan-opc PR #180): 셧다운이 D-Bus 를 먼저 내리면 재부팅 정책 클라이언트(`systemd-run --wait`)가 연결 끊김으로 exit 1 을 돌려, opcd 가 정상 재부팅을 "no reboot started" 로 기록했다. 이제 비0 종료 뒤 opcd 자신의 SIGTERM 을 최대 5초 기다려, 오면 재부팅 진행 중으로 분류한다. 126/127 은 종전대로 실행 실패, 그 밖에 SIGTERM 이 오지 않으면 재부팅 없음이다. 점검 스크립트 `test-all.sh` §8 도 새 분류 문구를 셈한다.
+- wlan-opc PR #177: 클라이언트가 SIGTERM 이 아닌 시그널로 죽으면 "미확인"(`OPC_RESET_UNCONFIRMED`, WARN)으로 구분한다. `bd_provision.sh --ssid` 가 ChangeIp ESSID 복원 표식을 지워, 운영자의 영구 SSID 지정이 ChangeIp 체인을 끝낸다(wlan-opc#176). 연기된 ChangeIp 적용의 주석을 코드 동작대로 고치고 apply 실패 시 세션·indication 유지를 테스트로 고정했다.
+- 실기: #179 는 랩 보드 Reset 2회로 두 분기를 확인했다 — stop job 의 TERM 이 클라이언트에 먼저 닿은 회차는 `policy client terminated by signal 15`, D-Bus 가 먼저 끊긴 회차는 `policy client exited 1, then opcd received its stop signal (SIGTERM)` 으로 재부팅 진행 중에 분류됐다. PR #177 은 실기를 하지 않았다.
+
 ## 0.7.1 (2026-10-20)
 
 > SemVer **patch** — 시각 동기 서비스를 JSON 토글로 켜고 시험용 기본 경로 스크립트를 제품 패키지에서 뺀다. OPC ChangeIp 가 바꾼 ESSID 를 부팅 때 되돌리는 유닛과 표식 소유 규칙을 넣고, 출하 토폴로지 보존·MAC 검증·초기화 복구를 보강하며, CONTEC SNMP MAC 을 원시 6바이트로 돌려준다. OPCd 를 DFK 사양 정합 머지본(wlan-opc 0b4dfe7)으로 올린다.
