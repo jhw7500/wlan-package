@@ -241,6 +241,36 @@ else
     log_pass "combined SSID encoder rejects control bytes"
 fi
 
+# 영문·숫자·`_` `.` `-`·공백 SSID 는 python3 를 띄우지 않는다(타깃 기동 ~190ms).
+# 그 밖의 SSID 는 계속 python 이 판정한다. python3 를 호출 기록 래퍼로 가려 확인한다.
+_enc_tmpd=$(mktemp -d)
+printf '#!/bin/sh\necho call >> "%s/calls"\nexec "%s" "$@"\n' \
+    "$_enc_tmpd" "$(command -v python3)" > "$_enc_tmpd/python3"
+chmod +x "$_enc_tmpd/python3"
+_enc_saved_path=$PATH
+PATH="$_enc_tmpd:$PATH"
+for _ssid_case in 'jhw_wlan_' ' -n ' 'Guest-AP.2 ' 'abcdefghijklmnopqrstuvwxyzABCDEF'; do
+    expect_equal "plain SSID keeps both representations [$_ssid_case]" \
+        "$(wifi_ssid_encode_values "$_ssid_case")" \
+        "$(printf '"%s"\n%s' "$_ssid_case" "$_ssid_case")"
+done
+if [ -e "$_enc_tmpd/calls" ]; then
+    log_fail "plain SSIDs are encoded without starting python3"
+else
+    log_pass "plain SSIDs are encoded without starting python3"
+fi
+for _ssid_case in 'a"b' $'caf\xc3\xa9' 'a\b' 'x#y' 'abcdefghijklmnopqrstuvwxyzABCDEFG'; do
+    rm -f "$_enc_tmpd/calls"
+    wifi_ssid_encode_values "$_ssid_case" >/dev/null 2>&1 || :
+    if [ -e "$_enc_tmpd/calls" ]; then
+        log_pass "python3 still judges [$_ssid_case]"
+    else
+        log_fail "python3 still judges [$_ssid_case]"
+    fi
+done
+PATH=$_enc_saved_path
+rm -rf "$_enc_tmpd"
+
 _policy_fast_tmpd=$(mktemp -d)
 cat > "$_policy_fast_tmpd/empty.json" <<'EOF'
 {"version":1,"iface":"mlan0","roaming_enabled":true,"bgscan_enabled":true,"generate_network_blocks":false,"extra_ssids":[]}

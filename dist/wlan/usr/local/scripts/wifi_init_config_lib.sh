@@ -167,7 +167,29 @@ wifi_ssid_array_validate_json() {
 #     a"#b  → 조용히 `a` 로 손상
 # 그래서 `"` 를 하나라도 담은 SSID 만 hex 로 보낸다. hex 는 언제나 안전하지만
 # 사람이 못 읽으므로 필요한 경우로 좁힌다.
+#
+# 영문·숫자·`_`·`.`·`-`·공백만으로 된 1~32자 SSID 는 아래 python 과 출력이 같다
+# (conf 는 따옴표 표기, wpa 텍스트는 원문). 타깃에서 python3 기동이 한 번에
+# ~190ms 라 이 경우는 셸에서 끝낸다. 범위 표기(a-z)는 로케일에 따라 경계가
+# 새므로 문자를 나열한다. 그 밖의 문자와 conf-wpa 모드는 python 이 판정한다.
 _wifi_ssid_encode() {
+    case "$2" in
+        conf|wpa|both)
+            case "$1" in
+                ''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.\ -]*) ;;
+                *)
+                    if [ "${#1}" -le 32 ]; then
+                        case "$2" in
+                            conf) printf '"%s"\n' "$1" ;;
+                            wpa) printf '%s\n' "$1" ;;
+                            both) printf '"%s"\n%s\n' "$1" "$1" ;;
+                        esac
+                        return 0
+                    fi
+                    ;;
+            esac
+            ;;
+    esac
     python3 - "$1" "$2" 2>/dev/null <<'PY'
 import re
 import sys
