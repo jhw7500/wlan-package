@@ -37,13 +37,40 @@ if [ "${1:-}" != --daemon ]; then
             esac
             exit 0 ;;
         get)
-            awk '/^[[:space:]]*freq_list=/{sub(/^[[:space:]]*freq_list=/, ""); print; exit}' "$runtime"
+            if [ "${4:-}" = scan_res_valid_for_connect ]; then
+                cat "$D/scan-valid" 2>/dev/null || echo 5
+            else
+                awk '/^[[:space:]]*freq_list=/{sub(/^[[:space:]]*freq_list=/, ""); print; exit}' "$runtime"
+            fi
+            exit 0 ;;
+        set)
+            echo "wpa_cli $*" >> "$D/calls.log"
+            [ "${4:-}" = scan_res_valid_for_connect ] && printf '%s\n' "${5:-}" > "$D/scan-valid"
+            echo OK
+            exit 0 ;;
+        bss)
+            cat "$D/bss" 2>/dev/null
+            exit 0 ;;
+        set_network)
+            echo "wpa_cli $*" >> "$D/calls.log"
+            if [ "${5:-}" = ssid ]; then
+                if [ -f "$D/fail-set-network" ]; then echo FAIL; exit 0; fi
+                NEW_SSID="${6:-}" awk '/^[[:space:]]*ssid=/{sub(/ssid=.*/, "ssid=" ENVIRON["NEW_SSID"])} {print}' \
+                    "$runtime" > "$runtime.new" && mv -f "$runtime.new" "$runtime"
+            fi
+            echo OK
             exit 0 ;;
         status)
+            if [ -f "$D/scan-valid.log" ]; then
+                echo "status valid=$(cat "$D/scan-valid" 2>/dev/null || echo 5)" >> "$D/scan-valid.log"
+            fi
             if [ -f "$D/delay-target" ] && grep -q 'ssid="unreachable"' "$runtime"; then
                 sleep 3
             fi ;;
         reconfigure|reassociate|reconnect|scan)
+            if [ "$command" = reassociate ]; then
+                echo "reassociate valid=$(cat "$D/scan-valid" 2>/dev/null || echo 5)" >> "$D/scan-valid.log"
+            fi
             if [ "$command" = reconfigure ]; then
                 cp "$WPA_CONF_DIR/wpa_supplicant-${2}.conf" "$runtime"
                 if grep -q 'ssid="unreachable"' "$runtime"; then
@@ -77,6 +104,8 @@ class ConnectFallbackTests(_cli.ConnectHarness):
         self.write_conf(CONF_MODE_B)
         (self.state / "runtime.conf").write_text(CONF_MODE_B)
         (self.state / "available").write_text("jhw_wlan_\ngood-B\n")
+        # Both SSIDs were in a scan 5 s ago (BSS RANGE=ALL MASK=id|age|ssid).
+        (self.state / "bss").write_text("id=1\nage=5\nssid=jhw_wlan_\nid=2\nage=5\nssid=good-B\n")
         self.config = self.root / "wifi.json"
         self.marker = self.root / "changeip_essid.restore"
         mlanutl = self.stub / "mlanutl"
@@ -273,7 +302,10 @@ exec /bin/cp "$@"
         result = self.run_connect("good-B", apply_stored_conf=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("ssid=good-B\n", (self.state / "status").read_text())
-        self.assertFalse((self.state / "profile-queries.log").exists())
+        # Only the cache check reads the live profile, once per value.
+        log = self.state / "profile-queries.log"
+        queries = log.read_text().splitlines() if log.exists() else []
+        self.assertEqual(sorted(queries), sorted(set(queries)), queries)
 
     def test_ftp_same_ssid_keeps_association_without_reload(self):
         self.set_policy(enabled=False)
@@ -283,6 +315,96 @@ exec /bin/cp "$@"
         self.assertIn("already associated", result.stdout)
         self.assertTrue((self.state / "profile-queries.log").exists())
         self.assertNotIn("reconfigure", (self.state / "calls.log").read_text())
+
+    def ftp_switch_commands(self):
+        return [line for line in (self.state / "calls.log").read_text().splitlines()
+                if any(f" {c}" in line for c in (
+                    "set_network", "disconnect", "set scan_res", "reassociate", "reconfigure"))]
+
+    def test_ftp_ssid_switch_reassociates_from_cache_when_only_ssid_differs(self):
+        self.set_policy(enabled=False)
+        result = self.run_connect("good-B", apply_stored_conf=True, trace=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.ftp_switch_commands(), [
+            'wpa_cli -i mlan0 set_network 0 ssid "good-B"',
+            "wpa_cli -i mlan0 disconnect",
+            "wpa_cli -i mlan0 set scan_res_valid_for_connect 70",
+            "wpa_cli -i mlan0 reassociate",
+            "wpa_cli -i mlan0 set scan_res_valid_for_connect 5",
+        ])
+        # 70 s applies to that one REASSOCIATE; the association wait sees 5 again.
+        valid_log = (self.state / "scan-valid.log").read_text().splitlines()
+        self.assertEqual(valid_log[0], "reassociate valid=70")
+        self.assertGreater(len(valid_log), 1, valid_log)
+        self.assertEqual(set(valid_log[1:]), {"status valid=5"}, valid_log)
+        self.assertEqual((self.state / "scan-valid").read_text(), "5\n")
+        self.assertIn('ssid="good-B"', self.conf.read_text())
+        self.assertIn('ssid="good-B"', (self.state / "runtime.conf").read_text())
+        self.assertIn("phase=cache_connect_requested", (self.state / "logger.log").read_text())
+        self.assertIn("path=cache", (self.state / "logger.log").read_text())
+
+    def assert_profile_reload(self, result):
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        commands = self.ftp_switch_commands()
+        self.assertIn("wpa_cli -i mlan0 reconfigure", commands)
+        self.assertFalse(any("set scan_res" in c for c in commands), commands)
+        self.assertFalse((self.state / "scan-valid").exists())
+        self.assertIn("ssid=good-B\n", (self.state / "status").read_text())
+
+    def test_ftp_ssid_switch_reloads_profile_when_credentials_are_staged(self):
+        self.set_policy(enabled=False)
+        self.run_dir.mkdir(exist_ok=True)
+        (self.run_dir / "mlan0.credential-pending").touch()
+        result = self.run_connect("good-B", apply_stored_conf=True)
+        self.assert_profile_reload(result)
+        self.assertFalse(any("set_network" in c for c in self.ftp_switch_commands()))
+
+    def test_ftp_ssid_switch_reloads_profile_when_frequency_is_staged(self):
+        self.set_policy(enabled=False)
+        self.write_conf(_cli.CONF_MODE_B.replace("5180 5200 5220 5240", "5180 5200"))
+        result = self.run_connect("good-B", apply_stored_conf=True)
+        self.assert_profile_reload(result)
+        self.assertIn("freq_list=5180 5200\n", (self.state / "runtime.conf").read_text())
+
+    def test_ftp_ssid_switch_reloads_profile_when_target_was_not_scanned_recently(self):
+        self.set_policy(enabled=False)
+        (self.state / "bss").write_text("id=1\nage=5\nssid=jhw_wlan_\nid=2\nage=86\nssid=good-B\n")
+        result = self.run_connect("good-B", apply_stored_conf=True)
+        self.assert_profile_reload(result)
+        self.assertFalse(any("set_network" in c for c in self.ftp_switch_commands()))
+
+    def test_ftp_ssid_switch_reloads_profile_when_rendering_changes_more_than_ssid(self):
+        self.set_policy(enabled=False)
+        legacy = _cli.CONF_MODE_B.replace("    scan_ssid=1\n", "    scan_ssid=1\n    scan_freq=5180 5200 5220 5240\n")
+        self.write_conf(legacy)
+        (self.state / "runtime.conf").write_text(legacy)
+        result = self.run_connect("good-B", apply_stored_conf=True)
+        self.assert_profile_reload(result)
+        self.assertNotIn("scan_freq", self.conf.read_text())
+
+    def test_ftp_ssid_switch_with_frequency_arguments_reloads_profile(self):
+        self.set_policy(enabled=False)
+        result = self.run_connect("good-B", "5220", apply_stored_conf=True)
+        self.assert_profile_reload(result)
+
+    def test_ftp_ssid_switch_reloads_profile_when_not_associated(self):
+        self.set_policy(enabled=False)
+        (self.state / "status").write_text(
+            _cli.STATUS_INITIAL.replace("wpa_state=COMPLETED", "wpa_state=ASSOCIATING"))
+        result = self.run_connect("good-B", apply_stored_conf=True)
+        self.assert_profile_reload(result)
+
+    def test_ordinary_connect_keeps_the_full_profile_reload(self):
+        self.set_policy(enabled=False)
+        result = self.run_connect("good-B")
+        self.assert_profile_reload(result)
+
+    def test_rejected_ssid_change_falls_back_to_profile_reload(self):
+        self.set_policy(enabled=False)
+        (self.state / "fail-set-network").touch()
+        result = self.run_connect("good-B", apply_stored_conf=True)
+        self.assert_profile_reload(result)
+        self.assertNotIn("wpa_cli -i mlan0 disconnect", self.ftp_switch_commands())
 
     def test_unverified_profile_is_never_used_as_a_fallback(self):
         self.write_conf(CONF_MODE_B.replace('ssid="jhw_wlan_"', 'ssid="unverified"'))

@@ -159,7 +159,23 @@ quote wconnect <mlan0|mlan1|0|1> [ssid words...]
 현재 supplicant 설정과 일치하고 현재 연결 주파수도 허용 목록에 있으면
 연결을 유지하며 `200 SUCCESS`를 반환한다. 인증 설정 변경이 적용 대기
 중이거나, 설정이 다르거나, 미연결이면 프로필 `reconfigure` 후 필요한
-스캔과 재연결을 요청한다. fallback이 비활성인 기존 경로는
+스캔과 재연결을 요청한다.
+
+다른 SSID로 전환할 때 다음을 모두 만족하면 `reconfigure`(항상 새로 스캔한다)
+대신 supplicant 메모리의 SSID만 바꾸고 `disconnect`와 `reassociate`를 요청한다:
+단일 `network`에 연결된 상태, supplicant의 BSS 목록에서 요청 SSID를 마지막으로 본 지
+70초 미만, 현재 supplicant의 SSID와 전역·네트워크 `freq_list`가
+저장된 설정과 같음, 새 설정 파일이 SSID 줄만 다름, 인증 설정 변경 대기와
+fallback 없음. 이 `reassociate`에 한해 `scan_res_valid_for_connect`를 70초로 올렸다가
+바로 되돌리므로, 마지막 스캔이 70초 안이고 그 결과에 대상 AP가 있으면 새 스캔 없이
+연결한다. 없으면 supplicant가 곧바로 스캔한다. 백그라운드 스캔이 현재 SSID만
+지정하는 기본 설정(`bgscan.ssid_filter=true`)에서는 다른 SSID의 AP 정보가 갱신되지
+않으므로 대개 위 조건에서 걸러져 `reconfigure` 경로를 쓴다(설정 가이드의
+`ssid_filter` 참조). 이 경로는
+`connect_threshold`처럼 supplicant가 설정을 읽을 때 함께 읽는 `wifi_init_conf.json`
+값을 다시 읽지 않으므로, 그런 값을 바꾼 뒤에는 supplicant를 재시작해 적용한다.
+
+fallback이 비활성인 기존 경로는
 `ASSOC_TIMEOUT_DEFAULT`를 그대로 사용한다. `mlanN.connect_fallback.enabled=true`일 때만
 `attempt_timeout_sec`(기본 15초)을 1~15초 범위에서 새 연결 예산으로 사용한다.
 
@@ -330,6 +346,7 @@ ftpcmd_result trace=<id> command=wconnect status=fail code=<N> iface=<iface> det
 | `dispatch_received`, `arguments_parsed`, `connect_invoked` | FTP 수신, 인자 분석, `wifi connect` 호출 |
 | `wifi_connect_entered` | `wifi.sh`의 연결 분기 진입 |
 | `reconfigure_requested`, `scan_requested`, `scan_unavailable` | 프로필 적용과 필요한 스캔 요청 |
+| `cache_connect_requested` | SSID만 메모리에서 바꾸고 최근 스캔 결과로 `reassociate` 요청 |
 | `reconnect_requested` | `reassociate` 또는 `reconnect` 요청 |
 | `connected_event`, `disconnected_event` | supplicant 비동기 이벤트 수신 |
 | `association_verified`, `association_timeout` | 목표 연결 확인 또는 시간 초과 |

@@ -824,6 +824,99 @@ connect_association_poll_matches() {
     [ "$ASSOC_MATCH" = "1" ]
 }
 
+# An FTP SSID switch may be applied in supplicant memory only while the running
+# profile equals the stored one: the same SSID and global/network frequency
+# lists live and on disk (a staged wssid/wfreq edit fails this), and the newly
+# rendered file differs from the stored one only in its ssid line. Staged
+# credentials are covered by the credential-pending marker. $1 stored, $2 rendered.
+connect_cache_profile_matches() {
+    local stored_ssid live_ssid live_global live_network
+    # One awk: fail unless both files agree outside ssid lines, then print the
+    # stored first-block ssid value.
+    stored_ssid=$(wifi_wpa_run_child awk '
+        FNR == 1 { file++ }
+        !/^[[:space:]]*ssid[[:space:]]*=/ { rest[file] = rest[file] $0 "\n" }
+        file == 1 && !done && /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { in_net = 1 }
+        file == 1 && in_net && /^[[:space:]]*\}/ { in_net = 0; done = 1 }
+        file == 1 && in_net && !done && /^[[:space:]]*ssid[[:space:]]*=/ {
+            value = $0
+            sub(/^[[:space:]]*ssid[[:space:]]*=[[:space:]]*/, "", value)
+            sub(/[[:space:]]+$/, "", value)
+            done = 1
+        }
+        END {
+            if (file != 2 || rest[1] != rest[2]) exit 1
+            print value
+        }
+    ' "$1" "$2" 2>/dev/null) || return 1
+    live_ssid=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" \
+        get_network "$LIVE_NETWORK_ID" ssid 2>/dev/null) || return 1
+    [ -n "$stored_ssid" ] && [ "$stored_ssid" = "$live_ssid" ] || return 1
+    live_global=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" get freq_list 2>/dev/null) || return 1
+    live_network=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" \
+        get_network "$LIVE_NETWORK_ID" freq_list 2>/dev/null) || return 1
+    [ "$live_global" != FAIL ] || live_global=""
+    [ "$live_network" != FAIL ] || live_network=""
+    [ "$FREQ_STR" = "$live_global" ] && [ "$FREQ_STR" = "$live_network" ]
+}
+
+# The cached path pays off only if the last scan saw the target. A scan that
+# directs probes at the current SSID (bgscan.ssid_filter=true, the default)
+# leaves other SSIDs' BSS entries un-refreshed, so their age gives that away
+# for one ctrl request; a miss would otherwise cost the checks above on top of
+# the same scan that RECONFIGURE does.
+connect_cache_target_recent() {
+    local reply line age=""
+    reply=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" bss RANGE=ALL MASK=0x1201 2>/dev/null) || return 1
+    while IFS= read -r line; do
+        case "$line" in
+            age=*) age=${line#age=} ;;
+            ssid=*)
+                if [ "${line#ssid=}" = "$TARGET_SSID_WPA_TEXT" ] && [[ "$age" =~ ^[0-9]+$ ]] \
+                   && [ "$age" -lt "$CONNECT_CACHE_VALID_SEC" ]; then
+                    return 0
+                fi
+                ;;
+        esac
+    done <<< "$reply"
+    return 1
+}
+
+# RECONFIGURE always rescans. With only the SSID changed, set it in memory and
+# reassociate: the supplicant then connects from its last scan results if they
+# are younger than scan_res_valid_for_connect (5 s by default) and contain the
+# target, and otherwise starts a normal scan at once. REASSOCIATE makes that
+# choice synchronously, so the limit is raised for this one command only, to
+# cover the 60 s background scan interval. Nonzero means a control command
+# failed and the caller reloads the stored profile instead.
+CONNECT_CACHE_VALID_SEC=70
+CONNECT_CACHE_VALID_RESTORE=""
+connect_cache_reassociate() {
+    local previous rc=0
+    previous=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" get scan_res_valid_for_connect 2>/dev/null) \
+        || return 1
+    [[ "$previous" =~ ^[0-9]+$ ]] || return 1
+    wpa_cli_ok "$IFACE" set_network "$LIVE_NETWORK_ID" ssid "$SSID_CONF_VALUE" || return 1
+    wpa_cli_ok "$IFACE" disconnect || return 1
+    connect_event_monitor_arm || return 1
+    CONNECT_CACHE_VALID_RESTORE="$previous"
+    if ! wpa_cli_ok "$IFACE" set scan_res_valid_for_connect "$CONNECT_CACHE_VALID_SEC" \
+       || ! wpa_cli_ok "$IFACE" reassociate; then
+        rc=1
+    fi
+    connect_cache_valid_restore
+    return "$rc"
+}
+
+# Also called from wifi_connect_cleanup if a signal lands between the two sets.
+connect_cache_valid_restore() {
+    [ -n "$CONNECT_CACHE_VALID_RESTORE" ] || return 0
+    if ! wpa_cli_ok "$IFACE" set scan_res_valid_for_connect "$CONNECT_CACHE_VALID_RESTORE"; then
+        echo "Warning: could not restore scan_res_valid_for_connect=$CONNECT_CACHE_VALID_RESTORE for $IFACE" >&2
+    fi
+    CONNECT_CACHE_VALID_RESTORE=""
+}
+
 # ----- radio staged-apply helpers -----
 # mode/bw는 /tmp(휘발)에 stage하고 radio-apply 성공 시에만 JSON에 commit한다.
 # 미커밋 stage는 재부팅 시 자동 소멸 (mcstier 마커와 동일한 /tmp 관례) —
@@ -3031,6 +3124,7 @@ case "$2" in
     MULTI_INITIAL_ID=""
     SET_FREQ=0
     FREQ_STR=""
+    CACHE_CONNECT=0
     CONNECT_TIMEOUT="$ASSOC_TIMEOUT_DEFAULT"
     TOTAL_POLLS=$((CONNECT_TIMEOUT * 10))
     REMAINING_POLLS="$TOTAL_POLLS"
@@ -3291,6 +3385,17 @@ case "$2" in
             { print }
             END { if (blocks == 0) { print "error: no network={ block in config" > "/dev/stderr"; exit 1 } }
         ' "$CANON_FILE" > "$TMP_FILE"; then
+            # Decide before the install, while the stored profile is still the
+            # one the supplicant loaded (#388). Ordinary `wifi connect` keeps
+            # the full profile reload.
+            if [ "$APPLY_STORED_CONF" = "1" ] && [ "$SET_FREQ" = "0" ] \
+               && [ "$PRE_WPA_STATE" = "COMPLETED" ] && [ "$MULTI_TOPOLOGY" = "0" ] \
+               && [ "$CONNECT_FALLBACK_ENABLED" != 1 ] && [ -n "$LIVE_NETWORK_ID" ] \
+               && [ ! -e "$WIFI_RUN_DIR/${IFACE}.credential-pending" ] \
+               && connect_cache_target_recent \
+               && connect_cache_profile_matches "$CONF" "$TMP_FILE"; then
+                CACHE_CONNECT=1
+            fi
             wifi_wpa_run_child_call safe_install_sync "$TMP_FILE" "$CONF"
             wifi_wpa_run_child rm -f "$CANON_FILE" "$TMP_FILE"
             if [ "$IFACE" = "mlan0" ] && [ "$CONNECT_FALLBACK_ENABLED" != 1 ]; then
@@ -3325,20 +3430,27 @@ case "$2" in
     wifi_connect_fallback_attempt_start
     if [ "$HAS_TARGET" = "1" ] || [ "$APPLY_STORED_CONF" = "1" ]; then
         # Reload the whole persisted profile. SET_NETWORK alone would leave
-        # pending SSID, credentials, or frequency edits stale in supplicant.
+        # pending SSID, credentials, or frequency edits stale in supplicant;
+        # it is used only when connect_cache_profile_matches ruled those out.
         if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
         # wifi_checker treats a long-standing SCANNING state as stalled. Give
         # this explicit profile reload its existing grace window so the
         # checker does not queue a competing reconnect or restart.
         : > "$WIFI_RUN_DIR/${IFACE}.reconfigure-grace" 2>/dev/null || true
-        if ! connect_event_monitor_arm || ! wpa_cli_ok "$IFACE" reconfigure; then
-            echo "Error: wpa_cli reconfigure failed for $IFACE (wpa_supplicant 미동작 또는 conf 문법 오류 확인)" >&2
-            exit 7
+        if [ "$CACHE_CONNECT" = "1" ] && connect_cache_reassociate; then
+            ftpcmd_trace_log cache_connect_requested "live_id=$LIVE_NETWORK_ID"
+            echo "wpa_cli set_network/reassociate OK ($IFACE)"
+            PROFILE_CONNECT_PATH=cache
+        else
+            if ! connect_event_monitor_arm || ! wpa_cli_ok "$IFACE" reconfigure; then
+                echo "Error: wpa_cli reconfigure failed for $IFACE (wpa_supplicant 미동작 또는 conf 문법 오류 확인)" >&2
+                exit 7
+            fi
+            ftpcmd_trace_log reconfigure_requested \
+                "profile_sync=1 live_id=${LIVE_NETWORK_ID:-none}"
+            echo "wpa_cli reconfigure OK ($IFACE)"
+            PROFILE_CONNECT_PATH=reconfigure
         fi
-        ftpcmd_trace_log reconfigure_requested \
-            "profile_sync=1 live_id=${LIVE_NETWORK_ID:-none}"
-        echo "wpa_cli reconfigure OK ($IFACE)"
-        PROFILE_CONNECT_PATH=reconfigure
         # A disconnected supplicant may be running sched_scan. On the target,
         # ABORT_SCAN returned FAIL (no ordinary scan) while RECONFIGURE and
         # REASSOCIATE kept rescheduling a new scan behind that sched_scan.
