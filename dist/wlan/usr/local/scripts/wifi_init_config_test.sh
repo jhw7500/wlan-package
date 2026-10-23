@@ -836,6 +836,55 @@ if WIFI_RUN_DIR="$_wpa_tmpd/run" \
 else
     log_fail "manual multi-block conf is protected from single-SSID writers"
 fi
+
+# 구성 검사는 boot snapshot을 jq 한 번으로 검증하면서 generate_network_blocks도
+# 읽는다. jq를 호출 기록 래퍼로 가려 횟수를 보고, 경우별 판정을 고정한다.
+cat > "$_wpa_tmpd/single.conf" <<'EOF'
+network={
+    ssid="one"
+}
+EOF
+{ cat "$_wpa_tmpd/single.conf"
+  echo '# >>> wifi_extra_ssid auto-generated (do not edit) >>>'; } > "$_wpa_tmpd/sentinel.conf"
+_topo_jq=$(mktemp -d)
+printf '#!/bin/sh\necho call >> "%s/calls"\nexec "%s" "$@"\n' \
+    "$_topo_jq" "$(command -v jq)" > "$_topo_jq/jq"
+chmod +x "$_topo_jq/jq"
+_topo_policy() {
+    printf '{"version":1,"iface":"%s","roaming_enabled":true,"bgscan_enabled":true,"generate_network_blocks":%s,"extra_ssids":%s}\n' \
+        "$1" "$2" "$3"
+}
+_topo_case() {
+    printf '%s\n' "$3" > "$_wpa_tmpd/run/mlan0.roam-policy.json"
+    rm -f "$_topo_jq/calls"
+    if PATH="$_topo_jq:$PATH" WIFI_RUN_DIR="$_wpa_tmpd/run" \
+        wifi_wpa_conf_is_multi_topology mlan0 "$4"; then
+        _topo_got=multi
+    else
+        _topo_got=single
+    fi
+    expect_equal "topology check: $1" "$_topo_got" "$2"
+    _topo_calls=0
+    [ -e "$_topo_jq/calls" ] && _topo_calls=$(wc -l < "$_topo_jq/calls")
+    expect_equal "topology check reads the snapshot with one jq call: $1" "$_topo_calls" "1"
+}
+_topo_case "Mode B on one block" single "$(_topo_policy mlan0 false '[]')" "$_wpa_tmpd/single.conf"
+_topo_case "Mode B with valid extras" single \
+    "$(_topo_policy mlan0 false '["office","guest net"]')" "$_wpa_tmpd/single.conf"
+_topo_case "Mode B with an empty extra SSID" multi \
+    "$(_topo_policy mlan0 false '[""]')" "$_wpa_tmpd/single.conf"
+_topo_case "Mode A snapshot on one block" multi "$(_topo_policy mlan0 true '[]')" "$_wpa_tmpd/single.conf"
+_topo_case "snapshot of another interface" multi "$(_topo_policy mlan1 false '[]')" "$_wpa_tmpd/single.conf"
+_topo_case "Mode B with the extra-SSID sentinel" multi \
+    "$(_topo_policy mlan0 false '[]')" "$_wpa_tmpd/sentinel.conf"
+_topo_case "Mode B on two blocks" multi "$(_topo_policy mlan0 false '[]')" "$_wpa_tmpd/manual-multi.conf"
+if [ "$(id -u)" != 0 ]; then
+    cp "$_wpa_tmpd/single.conf" "$_wpa_tmpd/unreadable.conf"
+    chmod 000 "$_wpa_tmpd/unreadable.conf"
+    _topo_case "unreadable conf" multi "$(_topo_policy mlan0 false '[]')" "$_wpa_tmpd/unreadable.conf"
+    chmod 600 "$_wpa_tmpd/unreadable.conf"
+fi
+rm -rf "$_topo_jq"
 rm -rf "$_wpa_tmpd"
 
 echo ""
