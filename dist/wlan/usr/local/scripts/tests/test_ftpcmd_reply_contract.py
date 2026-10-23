@@ -106,8 +106,8 @@ def run_wconnect(*args, wifi_rc=0):
         shutil.rmtree(root, ignore_errors=True)
 
 
-def run_wconnectraw(*args, status_id="7", set_reply="OK", reassociate_reply="OK",
-                    network_rows="7\tcurrent-ap\tany\t"):
+def run_wconnectraw(*args, status_id="7", set_reply="OK", disconnect_reply="OK",
+                    reassociate_reply="OK", network_rows="7\tcurrent-ap\tany\t"):
     """Run the raw handler with only its absolute wpa_cli path test-patched."""
     root = Path(tempfile.mkdtemp(prefix="wconnectraw-"))
     try:
@@ -131,6 +131,7 @@ def run_wconnectraw(*args, status_id="7", set_reply="OK", reassociate_reply="OK"
                     ;;
                 *" list_networks") printf 'network id / ssid / bssid / flags\\n%s\\n' "$WCONNECTRAW_NETWORKS" ;;
                 *" set_network "*) printf '%s\\n' "$WCONNECTRAW_SET_REPLY" ;;
+                *" disconnect") printf '%s\\n' "$WCONNECTRAW_DISC_REPLY" ;;
                 *" reassociate") printf '%s\\n' "$WCONNECTRAW_REASSOC_REPLY" ;;
                 *) printf 'FAIL\\n' ;;
             esac
@@ -162,6 +163,7 @@ def run_wconnectraw(*args, status_id="7", set_reply="OK", reassociate_reply="OK"
             "WCONNECTRAW_STATUS_ID": status_id,
             "WCONNECTRAW_NETWORKS": network_rows,
             "WCONNECTRAW_SET_REPLY": set_reply,
+            "WCONNECTRAW_DISC_REPLY": disconnect_reply,
             "WCONNECTRAW_REASSOC_REPLY": reassociate_reply,
         })
         result = subprocess.run(
@@ -288,18 +290,22 @@ class WconnectRawRuntimeSwitch(unittest.TestCase):
         self.assertEqual(calls, [
             "[-i|mlan0|status]",
             '[-i|mlan0|set_network|7|ssid|"Field AP"]',
+            "[-i|mlan0|disconnect]",
             "[-i|mlan0|reassociate]",
         ])
         self.assertEqual(len(timing), 1, timing)
         self.assertIn("phase=commands_submitted", timing[0])
         self.assertIn("iface=mlan0", timing[0])
+        self.assertRegex(timing[0], r" disconnect_ms=\d+ reassociate_ms=\d+ ")
+        self.assertIn("set_rc=0 disconnect_rc=0 reassociate_rc=0", timing[0])
 
     def test_explicit_mlan1_is_preserved(self):
         r, calls, _ = run_wconnectraw("mlan1", "lab-ap", status_id="3")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(calls[1], '[-i|mlan1|set_network|3|ssid|"lab-ap"]')
-        self.assertEqual(calls[2], "[-i|mlan1|reassociate]")
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(calls[2], "[-i|mlan1|disconnect]")
+        self.assertEqual(calls[3], "[-i|mlan1|reassociate]")
+        self.assertEqual(len(calls), 4)
 
     def test_interface_names_and_numbers_select_the_same_network(self):
         for interface, expected in (
@@ -312,6 +318,7 @@ class WconnectRawRuntimeSwitch(unittest.TestCase):
                 self.assertEqual(calls, [
                     f"[-i|{expected}|status]",
                     f'[-i|{expected}|set_network|3|ssid|"1"]',
+                    f"[-i|{expected}|disconnect]",
                     f"[-i|{expected}|reassociate]",
                 ])
 
@@ -338,6 +345,7 @@ class WconnectRawRuntimeSwitch(unittest.TestCase):
             "[-i|mlan0|status]",
             "[-i|mlan0|list_networks]",
             '[-i|mlan0|set_network|7|ssid|"current-ap"]',
+            "[-i|mlan0|disconnect]",
             "[-i|mlan0|reassociate]",
         ])
         self.assertEqual(r.stdout.splitlines(), ["SUCCESS"])
@@ -350,13 +358,38 @@ class WconnectRawRuntimeSwitch(unittest.TestCase):
         self.assertEqual(calls, ["[-i|mlan0|status]", "[-i|mlan0|list_networks]"])
         self.assertEqual(r.stdout.splitlines(), ["FAIL code=1"])
 
-    def test_fail_payload_is_reported_as_wpa_error(self):
-        r, calls, _ = run_wconnectraw(
+    def test_set_network_failure_leaves_the_link_alone(self):
+        r, calls, timing = run_wconnectraw(
             "0", "lab-ap", set_reply="FAIL", reassociate_reply="FAIL",
         )
         self.assertEqual(r.returncode, 7, r.stdout + r.stderr)
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(calls, [
+            "[-i|mlan0|status]",
+            '[-i|mlan0|set_network|7|ssid|"lab-ap"]',
+        ])
         self.assertEqual(r.stdout.splitlines(), ["FAIL code=7"])
+        self.assertEqual(len(timing), 1, timing)
+        self.assertIn("status=fail code=7", timing[0])
+        self.assertIn("set_rc=0 set_reply=FAIL", timing[0])
+
+    def test_disconnect_failure_still_requests_reconnection(self):
+        r, calls, timing = run_wconnectraw("0", "lab-ap", disconnect_reply="FAIL")
+        self.assertEqual(r.returncode, 7, r.stdout + r.stderr)
+        self.assertEqual(calls[2:], ["[-i|mlan0|disconnect]", "[-i|mlan0|reassociate]"])
+        self.assertEqual(r.stdout.splitlines(), ["FAIL code=7"])
+        failure = [line for line in timing if "status=fail" in line]
+        self.assertEqual(len(failure), 1, timing)
+        self.assertIn("disconnect_rc=0 disconnect_reply=FAIL", failure[0])
+        self.assertIn("reassociate_rc=0 reassociate_reply=OK", failure[0])
+
+    def test_reassociate_failure_after_disconnect_is_reported(self):
+        r, calls, timing = run_wconnectraw("0", "lab-ap", reassociate_reply="FAIL")
+        self.assertEqual(r.returncode, 7, r.stdout + r.stderr)
+        self.assertEqual(calls[2:], ["[-i|mlan0|disconnect]", "[-i|mlan0|reassociate]"])
+        self.assertEqual(r.stdout.splitlines(), ["FAIL code=7"])
+        failure = [line for line in timing if "status=fail" in line]
+        self.assertEqual(len(failure), 1, timing)
+        self.assertIn("reassociate_rc=0 reassociate_reply=FAIL", failure[0])
 
 
 class ProfileHandlerContract(unittest.TestCase):
