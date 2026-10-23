@@ -3234,7 +3234,7 @@ case "$2" in
         echo "Error: failed to attach reconnect event monitor for $IFACE" >&2
         exit 7
     fi
-    CONNECT_FALLBACK_ARMED="$CONNECT_FALLBACK_ENABLED"
+    wifi_connect_fallback_arm || exit 1
     if [ $# -ge 1 ]; then
         # === conf 편집 경로: ssid(+freq) 영구 기록 → 전체 프로필 reconfigure ===
         if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
@@ -3322,6 +3322,7 @@ case "$2" in
             echo "no ssid/current id given - reassociating $IFACE with current conf..."
         fi
     fi
+    wifi_connect_fallback_attempt_start
     if [ "$HAS_TARGET" = "1" ] || [ "$APPLY_STORED_CONF" = "1" ]; then
         # Reload the whole persisted profile. SET_NETWORK alone would leave
         # pending SSID, credentials, or frequency edits stale in supplicant.

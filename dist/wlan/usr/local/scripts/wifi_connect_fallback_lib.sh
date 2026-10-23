@@ -8,6 +8,7 @@ wifi_connect_fallback_load() {
     CONNECT_ATTEMPT_TIMEOUT=15
     CONNECT_ROLLBACK_TIMEOUT=5
     CONNECT_FALLBACK_ARMED=0
+    CONNECT_ROLLBACK_SOURCE=""
     CONNECT_LAST_GOOD="${WIFI_RUN_DIR:-/run/wifi}/${iface}.last-good.json"
     [ "${WIFI_CONNECT_ORIGIN:-manual}" = manual ] || return 0
     [ -f "$json" ] || return 0
@@ -102,7 +103,29 @@ wifi_connect_fallback_capture() {
 wifi_connect_fallback_start() {
     [ "${CONNECT_FALLBACK_ENABLED:-0}" = 1 ] || return 0
     CONNECT_OPERATION_DEADLINE_MS=$(($(wifi_wpa_monotonic_ms) + 25000))
+    WIFI_WPA_DEADLINE_MS="$CONNECT_OPERATION_DEADLINE_MS"
+}
+
+wifi_connect_fallback_attempt_start() {
+    [ "${CONNECT_FALLBACK_ENABLED:-0}" = 1 ] || return 0
+    local latest=$((CONNECT_OPERATION_DEADLINE_MS - CONNECT_ROLLBACK_TIMEOUT * 1000))
     WIFI_WPA_DEADLINE_MS=$(($(wifi_wpa_monotonic_ms) + CONNECT_ATTEMPT_TIMEOUT * 1000))
+    [ "$WIFI_WPA_DEADLINE_MS" -le "$latest" ] || WIFI_WPA_DEADLINE_MS="$latest"
+}
+
+wifi_connect_fallback_arm() {
+    [ "${CONNECT_FALLBACK_ENABLED:-0}" = 1 ] || return 0
+    # Publication may replace last-good before its directory sync fails. Keep
+    # the pre-attempt bytes independent until the target commit is complete.
+    if [ -f "$CONNECT_LAST_GOOD" ]; then
+        CONNECT_ROLLBACK_SOURCE=$(wifi_wpa_child_exec mktemp "$CONNECT_LAST_GOOD.rollback.XXXXXX") || return 1
+        if ! wifi_wpa_run_child cp "$CONNECT_LAST_GOOD" "$CONNECT_ROLLBACK_SOURCE" \
+            || ! wifi_wpa_run_child chmod 0600 "$CONNECT_ROLLBACK_SOURCE"; then
+            echo "Error: could not preserve previous checkpoint for $IFACE" >&2
+            return 1
+        fi
+    fi
+    CONNECT_FALLBACK_ARMED=1
 }
 
 wifi_connect_fallback_time_left() {
@@ -122,13 +145,13 @@ wifi_connect_fallback_log() {
 }
 
 wifi_connect_fallback_restore() {
-    local tmp marker_tmp ssid freqs polls
-    if [ ! -f "$CONNECT_LAST_GOOD" ] || ! wifi_wpa_run_child jq -e --arg iface "$IFACE" '
+    local tmp marker_tmp ssid freqs polls snapshot="$CONNECT_ROLLBACK_SOURCE"
+    if [ ! -f "$snapshot" ] || ! wifi_wpa_run_child jq -e --arg iface "$IFACE" '
         .version == 1 and .iface == $iface and
         (.profile | type == "string" and length > 0) and
         (.ssid | type == "string" and length > 0) and (.freqs | type == "string") and
         (.marker == null or (.marker | type == "string"))
-    ' "$CONNECT_LAST_GOOD" >/dev/null 2>&1; then
+    ' "$snapshot" >/dev/null 2>&1; then
         return 2
     fi
     WIFI_WPA_DEADLINE_MS=$(($(wifi_wpa_monotonic_ms) + CONNECT_ROLLBACK_TIMEOUT * 1000))
@@ -136,16 +159,16 @@ wifi_connect_fallback_restore() {
         WIFI_WPA_DEADLINE_MS="$CONNECT_OPERATION_DEADLINE_MS"
     fi
     tmp=$(wifi_wpa_child_exec mktemp "$CONF.fallback.XXXXXX") || return 1
-    if ! wifi_wpa_run_child jq -j '.profile' "$CONNECT_LAST_GOOD" > "$tmp" \
+    if ! wifi_wpa_run_child jq -j '.profile' "$snapshot" > "$tmp" \
         || ! wifi_wpa_run_child_call safe_install_sync "$tmp" "$CONF"; then
         wifi_wpa_run_child rm -f "$tmp"
         return 1
     fi
     wifi_wpa_run_child rm -f "$tmp"
     if [ "$IFACE" = mlan0 ]; then
-        if wifi_wpa_run_child jq -e '.marker != null' "$CONNECT_LAST_GOOD" >/dev/null; then
+        if wifi_wpa_run_child jq -e '.marker != null' "$snapshot" >/dev/null; then
             marker_tmp=$(wifi_wpa_child_exec mktemp "$OPC_ESSID_MARKER.fallback.XXXXXX") || return 1
-            if ! wifi_wpa_run_child jq -j '.marker' "$CONNECT_LAST_GOOD" > "$marker_tmp" \
+            if ! wifi_wpa_run_child jq -j '.marker' "$snapshot" > "$marker_tmp" \
                 || ! wifi_wpa_run_child_call safe_install_sync "$marker_tmp" "$OPC_ESSID_MARKER" 0600; then
                 wifi_wpa_run_child rm -f "$marker_tmp"
                 return 1
@@ -155,8 +178,8 @@ wifi_connect_fallback_restore() {
             wifi_wpa_run_child rm -f "$OPC_ESSID_MARKER" || return 1
         fi
     fi
-    ssid=$(wifi_wpa_child_exec jq -r '.ssid' "$CONNECT_LAST_GOOD") || return 1
-    freqs=$(wifi_wpa_child_exec jq -r '.freqs' "$CONNECT_LAST_GOOD") || return 1
+    ssid=$(wifi_wpa_child_exec jq -r '.ssid' "$snapshot") || return 1
+    freqs=$(wifi_wpa_child_exec jq -r '.freqs' "$snapshot") || return 1
     HAS_TARGET=1; HAS_TARGET_ID=0; TARGET_SSID_WPA_TEXT="$ssid"
     FREQ_STR="$freqs"; SET_FREQ=0
     [ -z "$freqs" ] || SET_FREQ=1
@@ -202,8 +225,17 @@ wifi_connect_cleanup() {
                 *) wifi_connect_fallback_log restore-failed ;;
             esac
         fi
+        if [ -n "$CONNECT_ROLLBACK_SOURCE" ]; then
+            if ! wifi_wpa_run_child mv -f "$CONNECT_ROLLBACK_SOURCE" "$CONNECT_LAST_GOOD"; then
+                # Retain the private recovery copy if cache publication itself
+                # fails; deleting it could discard the sole previous profile.
+                echo "Error: could not restore previous checkpoint for $IFACE" >&2
+            fi
+            CONNECT_ROLLBACK_SOURCE=""
+        fi
     fi
     WIFI_WPA_DEADLINE_MS=""
+    [ -z "${CONNECT_ROLLBACK_SOURCE:-}" ] || wifi_wpa_run_child rm -f "$CONNECT_ROLLBACK_SOURCE"
     [ -z "${CANON_FILE:-}" ] || wifi_wpa_run_child rm -f "$CANON_FILE"
     [ -z "${TMP_FILE:-}" ] || wifi_wpa_run_child rm -f "$TMP_FILE"
     connect_event_monitor_cleanup

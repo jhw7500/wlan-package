@@ -1773,7 +1773,7 @@ regions = wifi[helper_start:helper_end] + wifi[connect_start:connect_end] \
     + lib[abort_start:abort_end] + fallback[fallback.index("# Capture only"):]
 
 external = (
-    "awk", "cat", "chmod", "dirname", "grep", "install", "jq", "mkdir",
+    "awk", "cat", "chmod", "cp", "dirname", "grep", "install", "jq", "mkdir",
     "mktemp", "mv", "rm", "sleep", "sync", "tr", "wpa_cli", "logger", "timeout",
 )
 command = "(" + "|".join(external) + r")\b"
@@ -1830,7 +1830,7 @@ expected = {
         "wifi_wpa_conf_network_count", "wifi_ssid_conf_to_wpa_text",
     },
     "wifi_wpa_run_child": {
-        "awk", "cat", "chmod", "mkdir", "rm", "sleep", "sync", "wpa_cli", "jq", "mv", "logger",
+        "awk", "cat", "chmod", "cp", "mkdir", "rm", "sleep", "sync", "wpa_cli", "jq", "mv", "logger",
     },
     "wifi_wpa_run_child_call": {
         "safe_install_sync", "wifi_wpa_conf_is_multi_topology",

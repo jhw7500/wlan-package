@@ -188,6 +188,71 @@ class ConnectFallbackTests(_cli.ConnectHarness):
         self.assertEqual(self.conf.read_text(), verified)
         self.assertIn("ssid=good-B\n", (self.state / "status").read_text())
 
+    def test_checkpoint_directory_sync_failure_restores_pre_attempt_connection(self):
+        original_marker = "essid=original\nslot=1\n"
+        self.marker.write_text(original_marker)
+        (self.stub / "sync").write_text('''#!/bin/sh
+if [ "${1:-}" = "$WIFI_RUN_DIR" ] || [ "$#" -eq 0 ]; then
+    if [ -f "$WIFI_RUN_DIR/mlan0.last-good.json" ] \\
+       && jq -e '.ssid == "good-B"' "$WIFI_RUN_DIR/mlan0.last-good.json" >/dev/null; then
+        exit 1
+    fi
+fi
+exit 0
+''')
+        result = self.run_connect("good-B")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(self.conf.read_text(), CONF_MODE_B)
+        self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+        self.assertIn("ssid=jhw_wlan_\n", (self.state / "status").read_text())
+        self.assertEqual(self.marker.read_text(), original_marker)
+        checkpoint = self.run_dir / "mlan0.last-good.json"
+        self.assertEqual(json.loads(checkpoint.read_text())["profile"], CONF_MODE_B)
+        self.assertEqual(stat.S_IMODE(checkpoint.stat().st_mode), 0o600)
+        self.assertEqual(list(self.run_dir.glob("*.rollback.*")), [])
+        self.assertIn("fallback restored", result.stderr)
+
+    def test_recovery_copy_failure_prevents_target_submission(self):
+        original_marker = "essid=original\nslot=1\n"
+        self.marker.write_text(original_marker)
+        cp = self.stub / "cp"
+        cp.write_text('''#!/bin/bash
+case "${!#}" in
+    *.rollback.*) printf 'incomplete' > "${!#}"; exit 1 ;;
+esac
+exec /bin/cp "$@"
+''')
+        cp.chmod(0o755)
+        result = self.run_connect("good-B")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(self.conf.read_text(), CONF_MODE_B)
+        self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+        self.assertEqual(self.marker.read_text(), original_marker)
+        self.assertNotIn("reconfigure", (self.state / "calls.log").read_text())
+        self.assertEqual(list(self.run_dir.glob("*.rollback.*")), [])
+        self.assertIn("could not preserve previous checkpoint", result.stderr)
+
+    def test_checkpoint_queries_do_not_consume_one_second_connection_budget(self):
+        self.set_policy(attempt=1)
+        stub = self.stub / "wpa_cli"
+        stub.write_text(stub.read_text().replace(
+            '    case "$command" in\n', '''    if grep -q 'ssid="jhw_wlan_"' "$runtime"; then
+        case "$command" in status|get_network|get) sleep 0.3 ;; esac
+    fi
+    case "$command" in
+''', 1).replace(
+            '                cp "$WPA_CONF_DIR/wpa_supplicant-${2}.conf" "$runtime"\n',
+            '                cp "$WPA_CONF_DIR/wpa_supplicant-${2}.conf" "$runtime"\n'
+            '                if grep -q \'ssid="good-B"\' "$runtime"; then sleep 0.5; fi\n', 1))
+        start = time.monotonic()
+        result = self.run_connect("good-B")
+        elapsed = time.monotonic() - start
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('ssid="good-B"', self.conf.read_text())
+        self.assertIn("ssid=good-B\n", (self.state / "status").read_text())
+        self.assertGreater(elapsed, 1.5)
+        self.assertLess(elapsed, 6)
+
     def test_disabled_policy_keeps_existing_persist_on_failure_behavior(self):
         self.set_policy(enabled=False)
         result = self.run_connect("unreachable")
@@ -372,11 +437,16 @@ args=()''', 1))
         process = self.start_connect()
         try:
             self.wait_for_target(process)
+            recovery = list(self.run_dir.glob("*.rollback.*"))
+            self.assertEqual(len(recovery), 1)
+            self.assertEqual(stat.S_IMODE(recovery[0].stat().st_mode), 0o600)
+            self.assertEqual(json.loads(recovery[0].read_text())["profile"], CONF_MODE_B)
             process.send_signal(signal.SIGTERM)
             stdout, stderr = process.communicate(timeout=8)
             self.assertEqual(process.returncode, 143, stdout + stderr)
             self.assertEqual(self.conf.read_text(), CONF_MODE_B)
             self.assertIn("fallback restored", stdout + stderr)
+            self.assertEqual(list(self.run_dir.glob("*.rollback.*")), [])
         finally:
             if process.poll() is None:
                 process.kill()
