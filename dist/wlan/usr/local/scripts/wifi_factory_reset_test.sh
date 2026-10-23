@@ -773,6 +773,14 @@ if awk '/^if ! systemctl reboot; then/{inb=1; next} inb && /rm -f -- \/run\/opc\
 else
     fail "factory reset leaves the Reset Cause 0x40 file when systemctl reboot fails"
 fi
+
+# #380 성공 경로: 0x40 을 기록한 뒤 `if ! systemctl reboot; then` 까지(실패 분기 밖) 원인 파일을 지우거나
+# 다시 쓰는 줄이 없어야, 재부팅이 시작될 때 opcd 가 0x40 을 읽는다.
+if awk '/^[[:space:]]*(&& )?printf .0x40.*reset_cause/{c=NR; next} c && !r && /^if ! systemctl reboot; then/{r=NR} c && !r && /reset_cause/{bad=NR} END{exit !(c && r && !bad)}' "$FACTORY_SCRIPT"; then
+    pass "factory reset keeps the Reset Cause 0x40 file until systemctl reboot starts"
+else
+    fail "factory reset touches the Reset Cause 0x40 file between recording it and systemctl reboot"
+fi
 if grep -Eq "trap .*exit 0.*(INT TERM EXIT|EXIT)" "$SWITCHD"; then
     fail "switchd EXIT trap masks factory reset failure status"
 else
