@@ -584,9 +584,11 @@ connect_event_monitor_cleanup() {
         if connect_monitor_pid_matches "$pid" "$start"; then
             kill -TERM "$pid" 2>/dev/null || true
             if [ "${CONNECT_MONITOR_PROC_LOCAL:-1}" = "1" ]; then
-                for _i in 1 2 3 4 5 6 7 8 9 10; do
+                # wpa_cli leaves within a few ms of TERM (under 8 ms on the lab
+                # board), so check every 10 ms; about 1 s in all before KILL.
+                for ((_i = 0; _i < 60; _i++)); do
                     connect_monitor_pid_matches "$pid" "$start" || break
-                    wifi_wpa_run_child sleep 0.1
+                    wifi_wpa_run_child sleep 0.01
                 done
             else
                 # In the vsftpd PID namespace /proc belongs to the host, so we
@@ -594,8 +596,9 @@ connect_event_monitor_cleanup() {
                 # zombie: kill -0 remains true for both and the old ten-probe
                 # loop added a fixed ~1s to every FTP reply.  The PID is already
                 # pinned from our private mode-0700 pidfile and kill is namespace
-                # confined.  Give TERM one scheduler tick, then force cleanup.
-                wifi_wpa_run_child sleep 0.1
+                # confined.  wpa_cli leaves within a few ms of TERM (under 8 ms
+                # on the lab board), so give it 20 ms, then force cleanup.
+                wifi_wpa_run_child sleep 0.02
             fi
             if connect_monitor_pid_matches "$pid" "$start"; then
                 kill -KILL "$pid" 2>/dev/null || true

@@ -591,7 +591,40 @@ class MonitorProcIdentityContract(unittest.TestCase):
             'wait "$p" 2>/dev/null || true',
         )
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual(r.stdout.splitlines().count("sleep=0.1"), 1, r.stdout + r.stderr)
+        sleeps = [l for l in r.stdout.splitlines() if l.startswith("sleep=")]
+        self.assertEqual(sleeps, ["sleep=0.02"], r.stdout + r.stderr)
+
+    def local_proc_cleanup(self, monitor):
+        return self.run_snippet(
+            'wifi_wpa_run_child() { [ "$1" != sleep ] || echo "sleep=$2"; command "$@"; }',
+            monitor + " & p=$!",
+            "sleep 0.05",
+            'connect_monitor_proc_start_into tok "$p"',
+            'CONNECT_MONITOR_PID="$p"',
+            'CONNECT_MONITOR_START="$tok"',
+            'CONNECT_MONITOR_DIR=""',
+            'connect_event_monitor_cleanup',
+            'wait "$p" 2>/dev/null || true',
+            'connect_monitor_pid_matches "$p" "$tok" && echo alive || echo gone',
+            CONNECT_MONITOR_PROC_LOCAL="1",
+        )
+
+    def test_local_proc_cleanup_checks_every_10ms_until_the_monitor_exits(self):
+        # Leaves 50 ms after TERM; the reply should not wait a whole 100 ms tick.
+        r = self.local_proc_cleanup(
+            "bash -c 'trap \"sleep 0.05; exit 0\" TERM; while :; do sleep 0.01; done'")
+        lines = r.stdout.splitlines()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn("sleep=0.1", lines, r.stdout + r.stderr)
+        self.assertTrue(1 <= lines.count("sleep=0.01") <= 20, r.stdout + r.stderr)
+        self.assertEqual(lines[-1], "gone", r.stdout + r.stderr)
+
+    def test_local_proc_cleanup_kills_a_monitor_that_ignores_term_after_60_checks(self):
+        r = self.local_proc_cleanup("bash -c 'trap \"\" TERM; while :; do sleep 1; done'")
+        lines = r.stdout.splitlines()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(lines.count("sleep=0.01"), 60, r.stdout + r.stderr)
+        self.assertEqual(lines[-1], "gone", r.stdout + r.stderr)
 
 
 if __name__ == "__main__":
