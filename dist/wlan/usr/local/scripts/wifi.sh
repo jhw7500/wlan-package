@@ -3123,8 +3123,11 @@ case "$2" in
     # update below, even when the current profile otherwise matches.
     # A staged wssid/wfreq change fails this comparison and takes the normal
     # reconfigure path. Ordinary `wifi connect` keeps its force-reconnect API.
+    # An explicit SSID can only match when it equals the live SSID, so a real
+    # switch skips the conf/wpa_cli probes below instead of failing them.
     if [ "$APPLY_STORED_CONF" = "1" ] \
        && [ "$#" -le 1 ] \
+       && { [ "$#" -eq 0 ] || [ "$TARGET_SSID_WPA_TEXT" = "$LIVE_SSID_WPA_TEXT" ]; } \
        && [ "$PRE_WPA_STATE" = "COMPLETED" ] \
        && [ "$MULTI_TOPOLOGY" = "0" ] \
        && [ -n "$LIVE_NETWORK_ID" ] \

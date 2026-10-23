@@ -260,6 +260,30 @@ exec /bin/cp "$@"
         self.assertIn('ssid="unreachable"', self.conf.read_text())
         self.assertNotIn("fallback restored", result.stdout + result.stderr)
 
+    def record_profile_queries(self):
+        stub = self.stub / "wpa_cli"
+        stub.write_text(stub.read_text().replace(
+            '    case "$command" in\n',
+            '    case "$command" in get_network|get) echo "$*" >> "$D/profile-queries.log" ;; esac\n'
+            '    case "$command" in\n', 1))
+
+    def test_ftp_switch_to_another_ssid_skips_already_associated_queries(self):
+        self.set_policy(enabled=False)
+        self.record_profile_queries()
+        result = self.run_connect("good-B", apply_stored_conf=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("ssid=good-B\n", (self.state / "status").read_text())
+        self.assertFalse((self.state / "profile-queries.log").exists())
+
+    def test_ftp_same_ssid_keeps_association_without_reload(self):
+        self.set_policy(enabled=False)
+        self.record_profile_queries()
+        result = self.run_connect("jhw_wlan_", apply_stored_conf=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("already associated", result.stdout)
+        self.assertTrue((self.state / "profile-queries.log").exists())
+        self.assertNotIn("reconfigure", (self.state / "calls.log").read_text())
+
     def test_unverified_profile_is_never_used_as_a_fallback(self):
         self.write_conf(CONF_MODE_B.replace('ssid="jhw_wlan_"', 'ssid="unverified"'))
         result = self.run_connect("unreachable")
