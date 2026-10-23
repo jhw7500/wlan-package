@@ -218,6 +218,10 @@ SSID는 필수다. 현재 선택된 `network` ID가 없으면 유일하게 활�
 ignore list에 올린 뒤 스캔을 한 번 더 하고 나서야 연결하기 때문이다. 같은
 SSID를 지정해도 연결을 한 번 끊고 다시 연결한다.
 
+`wpa_cli status`가 `wpa_state=INTERFACE_DISABLED`(예: `quote ifcdown` 뒤)이면
+아무것도 바꾸지 않고 코드 `1`로 끝난다. 이 상태에서는 `reassociate`가
+거부되는데, `disconnect`만 적용되면 인터페이스를 다시 올린 뒤에도
+wpa_supplicant가 스스로 연결하지 않기 때문이다.
 `set_network`가 실패하면 그 뒤 명령을 보내지 않으므로 현재 연결은 그대로다.
 `disconnect` 뒤의 wpa_supplicant는 `reassociate`나 `reconnect`가 올 때까지
 다시 연결하지 않는다. 그래서 `disconnect`가 실패해도 `reassociate`는 보낸다.
@@ -252,7 +256,7 @@ vsftpd가 핸들러를 30초에 강제 종료하면 `550 Command timed out: <com
 | `wstatus` | `2` | 인터페이스 인자 오류 또는 인자 초과 |
 | `wstatus` | `7` | supplicant 상태 조회 실패 또는 필수 상태값 누락 |
 | `wstatus` | `8` | 상태 조회는 성공했으나 현재 연결되지 않음 |
-| `wconnectraw` | `1` | 상태 조회 실패 또는 사용할 `network`를 결정할 수 없음 |
+| `wconnectraw` | `1` | 상태 조회 실패, 인터페이스 비활성(`INTERFACE_DISABLED`), 또는 사용할 `network`를 결정할 수 없음 |
 | `wconnectraw` | `2` | 필수 인터페이스 누락·오류 또는 SSID 누락 |
 | `wconnectraw` | `7` | `set_network`, `disconnect` 또는 `reassociate` 명령 실패. `set_network` 실패면 현재 연결은 그대로이고, 그 뒤 단계 실패면 연결이 끊긴 채 남을 수 있다 |
 

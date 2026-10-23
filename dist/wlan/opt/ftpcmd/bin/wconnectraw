@@ -70,13 +70,21 @@ if [ "$STATUS_RC" -ne 0 ]; then
 fi
 
 NETWORK_ID=""
+WPA_STATE=""
 while IFS='=' read -r _key _value; do
     case "$_key" in
         id) NETWORK_ID=$_value ;;
+        wpa_state) WPA_STATE=$_value ;;
     esac
 done <<EOF
 $STATUS
 EOF
+if [ "$WPA_STATE" = "INTERFACE_DISABLED" ]; then
+    # wpa_supplicant refuses reassociate here, but disconnect would still keep it
+    # down after the interface comes back up, so change nothing.
+    raw_log_failure 1 "interface disabled (wpa_state=INTERFACE_DISABLED)"
+    exit 1
+fi
 if [ -z "$NETWORK_ID" ]; then
     # Disconnected status has no id. Use the selected network if one is marked
     # CURRENT, or the only enabled network when there is no current selection.

@@ -107,7 +107,8 @@ def run_wconnect(*args, wifi_rc=0):
 
 
 def run_wconnectraw(*args, status_id="7", set_reply="OK", disconnect_reply="OK",
-                    reassociate_reply="OK", network_rows="7\tcurrent-ap\tany\t"):
+                    reassociate_reply="OK", network_rows="7\tcurrent-ap\tany\t",
+                    wpa_state="COMPLETED"):
     """Run the raw handler with only its absolute wpa_cli path test-patched."""
     root = Path(tempfile.mkdtemp(prefix="wconnectraw-"))
     try:
@@ -127,7 +128,7 @@ def run_wconnectraw(*args, status_id="7", set_reply="OK", disconnect_reply="OK",
             } >> "$WCONNECTRAW_CAPTURE"
             case "$*" in
                 *" status")
-                    printf 'wpa_state=COMPLETED\\nid=%s\\nssid=current-ap\\nfreq=2412\\n' "$WCONNECTRAW_STATUS_ID"
+                    printf 'wpa_state=%s\\nid=%s\\nssid=current-ap\\nfreq=2412\\n' "$WCONNECTRAW_WPA_STATE" "$WCONNECTRAW_STATUS_ID"
                     ;;
                 *" list_networks") printf 'network id / ssid / bssid / flags\\n%s\\n' "$WCONNECTRAW_NETWORKS" ;;
                 *" set_network "*) printf '%s\\n' "$WCONNECTRAW_SET_REPLY" ;;
@@ -161,6 +162,7 @@ def run_wconnectraw(*args, status_id="7", set_reply="OK", disconnect_reply="OK",
             "WIFI_RUN_DIR": str(root / "wifi-run"),
             "WCONNECTRAW_LOG": str(timing_log),
             "WCONNECTRAW_STATUS_ID": status_id,
+            "WCONNECTRAW_WPA_STATE": wpa_state,
             "WCONNECTRAW_NETWORKS": network_rows,
             "WCONNECTRAW_SET_REPLY": set_reply,
             "WCONNECTRAW_DISC_REPLY": disconnect_reply,
@@ -357,6 +359,19 @@ class WconnectRawRuntimeSwitch(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertEqual(calls, ["[-i|mlan0|status]", "[-i|mlan0|list_networks]"])
         self.assertEqual(r.stdout.splitlines(), ["FAIL code=1"])
+
+    def test_disabled_interface_stops_before_any_wpa_change(self):
+        for status_id in ("7", ""):
+            with self.subTest(status_id=status_id):
+                r, calls, timing = run_wconnectraw(
+                    "0", "lab-ap", status_id=status_id, wpa_state="INTERFACE_DISABLED",
+                )
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertEqual(calls, ["[-i|mlan0|status]"])
+                self.assertEqual(r.stdout.splitlines(), ["FAIL code=1"])
+                self.assertEqual(len(timing), 1, timing)
+                self.assertIn("status=fail code=1", timing[0])
+                self.assertIn("wpa_state=INTERFACE_DISABLED", timing[0])
 
     def test_set_network_failure_leaves_the_link_alone(self):
         r, calls, timing = run_wconnectraw(

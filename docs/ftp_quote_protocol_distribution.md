@@ -139,7 +139,7 @@ fallback을 시작하지 않는다. `wconnectraw`, Mode A와 다중 `network` �
 | `wstatus` | `2` | 잘못된 인터페이스 인자 또는 인자 초과 |
 | `wstatus` | `7` | 무선 상태 조회 실패 또는 필수 값 누락 |
 | `wstatus` | `8` | 상태 조회는 가능하지만 현재 연결되지 않음 |
-| `wconnectraw` | `1` | 상태 조회 또는 대상 네트워크 선택 실패 |
+| `wconnectraw` | `1` | 상태 조회 실패, 인터페이스 비활성, 또는 대상 네트워크 선택 실패 |
 | `wconnectraw` | `2` | 필수 인터페이스 누락·오류 또는 SSID 누락 |
 | `wconnectraw` | `7` | 런타임 명령 실패 |
 
