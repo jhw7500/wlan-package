@@ -741,6 +741,23 @@ factory_restore_service_state() {
     }
 }
 
+# OPC 저장값(비밀번호·IP 주소 리스트·무선 설정)을 지워 opcd 가 다음 기동에 초기값(초기 비밀번호,
+# 빈 IP 주소 리스트, 미설정 무선 설정)으로 시작하게 한다(#383). 생산 정보(device_info.json)와 데몬
+# 설정(opc.conf)은 남긴다. opcd 는 멈추지 않는다 — 재부팅 종료 절차에서 Reset Cause 0x40 을
+# 통지해야 하고, 서비스만 멈추면 통지하지 않는다. 지우지 못해도 공장 초기화는 계속한다(경고만).
+factory_reset_clear_opc_state() {
+    local dir="$1" name
+    for name in password iplist.cfg radio.conf; do
+        [ -e "$dir/$name" ] || [ -L "$dir/$name" ] || continue
+        if rm -f -- "$dir/$name" 2>/dev/null && [ ! -e "$dir/$name" ]; then
+            factory_log local0.info "removed OPC stored value $dir/$name"
+        else
+            factory_log local0.warn "could not remove OPC stored value $dir/$name (previous value stays)"
+        fi
+    done
+    return 0
+}
+
 factory_verify_postconditions() {
     local active="$1" unit owner_group mode
     _factory_active_valid "$active" || return 1

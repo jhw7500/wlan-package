@@ -706,6 +706,73 @@ if awk '/factory_commit_required_payloads "\$FACTORY_TOPOLOGY_SNAPSHOT"/{c=NR} /
 else
     fail "factory reset does not remove the ChangeIp ESSID restore marker between commit and reboot"
 fi
+# #383: 공장 초기화는 OPC 저장값(비밀번호·IP 주소 리스트·무선 설정)을 지워 opcd 가 다음 기동에
+# 초기값으로 시작하게 한다. 생산 정보(device_info.json)와 데몬 설정(opc.conf)은 남긴다.
+OPC_ETC="$WORK/opc-etc"
+mkdir -p "$OPC_ETC"
+for opc_file in password iplist.cfg radio.conf device_info.json opc.conf; do
+    printf 'x\n' > "$OPC_ETC/$opc_file"
+done
+cat > "$BIN/logger-capture" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "$OPC_LOG"
+EOF
+chmod +x "$BIN/logger-capture"
+export OPC_LOG="$WORK/opc-clear.log"
+if declare -F factory_reset_clear_opc_state >/dev/null; then
+    FACTORY_LOGGER="$BIN/logger-capture" factory_reset_clear_opc_state "$OPC_ETC"
+    expect_eq "factory OPC state clear returns success" 0 "$?"
+    for opc_file in password iplist.cfg radio.conf; do
+        [ ! -e "$OPC_ETC/$opc_file" ] && pass "factory OPC state clear removes $opc_file" \
+            || fail "factory OPC state clear leaves $opc_file"
+    done
+    for opc_file in device_info.json opc.conf; do
+        [ -e "$OPC_ETC/$opc_file" ] && pass "factory OPC state clear keeps $opc_file" \
+            || fail "factory OPC state clear removed $opc_file"
+    done
+    : > "$OPC_LOG"
+    FACTORY_LOGGER="$BIN/logger-capture" factory_reset_clear_opc_state "$OPC_ETC"
+    expect_eq "factory OPC state clear tolerates already-missing files" 0 "$?"
+    if grep -q 'removed' "$OPC_LOG"; then
+        fail "factory OPC state clear logs a removal for a missing file"
+    else
+        pass "factory OPC state clear logs nothing for missing files"
+    fi
+    if [ "$(id -u)" -ne 0 ]; then
+        printf 'x\n' > "$OPC_ETC/password"
+        : > "$OPC_LOG"
+        chmod 0555 "$OPC_ETC"
+        FACTORY_LOGGER="$BIN/logger-capture" factory_reset_clear_opc_state "$OPC_ETC"
+        opc_clear_rc=$?
+        chmod 0755 "$OPC_ETC"
+        expect_eq "factory OPC state clear continues when a file cannot be removed" 0 "$opc_clear_rc"
+        if grep -q 'local0.warn' "$OPC_LOG" && grep -q 'password' "$OPC_LOG"; then
+            pass "factory OPC state clear warns about the file it could not remove"
+        else
+            fail "factory OPC state clear does not warn about an undeletable file"
+        fi
+    fi
+else
+    fail "factory_reset_clear_opc_state is defined"
+fi
+# 호출 자리 계약: payload commit 뒤, 성공 게이트(critical_failures == 0) 안, systemctl reboot 앞.
+# opcd 는 멈추지 않는다 — 재부팅 종료 절차에서 Reset Cause 0x40 을 통지해야 한다.
+if awk '/factory_commit_required_payloads "\$FACTORY_TOPOLOGY_SNAPSHOT"/{c=NR} /^[[:space:]]+factory_reset_clear_opc_state \/usr\/local\/opc\/etc/{o=NR; g=prev} {prev=$0} /^(if ! )?systemctl reboot/{r=NR} END{exit !(c && o && r && c<o && o<r && g ~ /critical_failures" -eq 0/)}' "$FACTORY_SCRIPT"; then
+    pass "factory reset clears OPC stored values after the payload commit, inside the success gate, before reboot"
+else
+    fail "factory reset does not clear OPC stored values between commit and reboot inside the success gate"
+fi
+if grep -Eq 'systemctl (stop|kill)[^#]*opcd' "$FACTORY_SCRIPT"; then
+    fail "factory reset stops opcd (the reboot would lose the 0x40 ResetNotice)"
+else
+    pass "factory reset leaves opcd running so the reboot announces Reset Cause 0x40"
+fi
+# #380: systemctl reboot 이 실패하면 0x40 원인 파일을 지워, 뒤의 다른 재부팅이 0x40 으로 통지되지 않게 한다.
+if awk '/^if ! systemctl reboot; then/{inb=1; next} inb && /rm -f -- \/run\/opc\/reset_cause/{rm=NR} inb && /^[[:space:]]*exit 1/{ex=NR} inb && /^fi/{inb=0} END{exit !(rm && ex && rm<ex)}' "$FACTORY_SCRIPT"; then
+    pass "factory reset removes the Reset Cause 0x40 file when systemctl reboot fails"
+else
+    fail "factory reset leaves the Reset Cause 0x40 file when systemctl reboot fails"
+fi
 if grep -Eq "trap .*exit 0.*(INT TERM EXIT|EXIT)" "$SWITCHD"; then
     fail "switchd EXIT trap masks factory reset failure status"
 else

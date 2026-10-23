@@ -389,6 +389,12 @@ if [ "$critical_failures" -eq 0 ] && [ -e /usr/local/opc/etc/changeip_essid.rest
     fi
 fi
 
+# OPC 저장값(비밀번호·IP 주소 리스트·무선 설정)도 초기값으로 되돌린다(#383). opcd 는 멈추지 않는다 —
+# 재부팅 종료 절차에서 Reset Cause 0x40 을 통지해야 한다. 재부팅이 억제되는 실패(롤백) 때는 지우지 않는다.
+if [ "$critical_failures" -eq 0 ]; then
+    factory_reset_clear_opc_state /usr/local/opc/etc
+fi
+
 if [ "$critical_failures" -ne 0 ]; then
     if [ "$FACTORY_TRANSACTION_ACTIVE" -eq 1 ] \
        && ! factory_rollback_required_payloads; then
@@ -435,6 +441,11 @@ fi
 sleep 3
 if ! systemctl reboot; then
     logger -p local0.emerg "[$tag:$LINENO] factory reset reboot command failed"
+    # 재부팅이 시작되지 않았으므로 0x40 원인 파일을 지운다. 남기면 뒤의 다른 재부팅이 0x40 으로
+    # 통지된다(#380). OPC 저장값은 이미 지웠으므로 opcd 는 다음에 재시작할 때 초기값으로 시작한다.
+    rm -f -- /run/opc/reset_cause 2>/dev/null \
+        || logger -p local0.warn "[$tag:$LINENO] could not remove /run/opc/reset_cause after the failed reboot"
+    logger -p local0.warn "[$tag:$LINENO] OPC stored values were cleared; opcd keeps the previous values in memory until it restarts"
     safe_print red "[factory] reboot failed (see syslog)"
     factory_reset_led_error
     exit 1
