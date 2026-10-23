@@ -612,6 +612,70 @@ args=()''', 1))
         self.assertEqual(stat.S_IMODE(snapshots[0].stat().st_mode), 0o600)
         self.assertNotIn("stub-psk-not-a-secret", result.stdout + result.stderr)
 
+    def record_sync_calls(self, fail_directory_sync=False):
+        # One line per call: its arguments, or <global> for a system-wide sync.
+        fail = 'if [ "$#" -ge 2 ]; then exit 1; fi\n' if fail_directory_sync else ""
+        (self.stub / "sync").write_text(
+            '#!/bin/sh\n'
+            'if [ "$#" -eq 0 ]; then echo "<global>"; else echo "$*"; fi >> "$WPA_STUB_DIR/sync.log"\n'
+            + fail + 'exit 0\n')
+
+    def sync_calls(self):
+        log = self.state / "sync.log"
+        return log.read_text().splitlines() if log.exists() else []
+
+    def persistent_directories(self):
+        return f"{self.conf_dir} {self.marker.parent}"
+
+    def test_switch_syncs_the_profile_and_marker_directories_not_everything(self):
+        self.record_sync_calls()
+        for name, ftp, fallback in (("ordinary", False, True), ("ftp-cache", True, False)):
+            with self.subTest(name):
+                self.write_conf(CONF_MODE_B)
+                (self.state / "runtime.conf").write_text(CONF_MODE_B)
+                (self.state / "status").write_text(_cli.STATUS_INITIAL)
+                (self.state / "sync.log").write_text("")
+                self.marker.write_text("essid=original\nslot=1\n")
+                self.set_policy(enabled=fallback)
+                result = self.run_connect("good-B", apply_stored_conf=ftp)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                # The marker removal is made durable by the directory sync.
+                self.assertFalse(self.marker.exists())
+                calls = self.sync_calls()
+                self.assertNotIn("<global>", calls, calls)
+                self.assertEqual(calls[-1], self.persistent_directories(), calls)
+
+    def test_failed_switch_leaves_no_temp_file_next_to_the_profile_or_marker(self):
+        self.record_sync_calls()
+        self.marker.write_text("essid=original\nslot=1\n")
+        result = self.run_connect("unreachable")
+        self.assertEqual(result.returncode, 8, result.stdout + result.stderr)
+        self.assertIn("fallback restored", result.stderr)
+        leftovers = [p.name for p in (*self.conf_dir.iterdir(), *self.marker.parent.iterdir())
+                     if ".fallback." in p.name or ".install." in p.name]
+        self.assertEqual(leftovers, [])
+        calls = self.sync_calls()
+        self.assertNotIn("<global>", calls, calls)
+        self.assertEqual(calls[-1], self.persistent_directories(), calls)
+
+    def test_directory_sync_failure_falls_back_to_a_global_sync(self):
+        self.record_sync_calls(fail_directory_sync=True)
+        result = self.run_connect("good-B")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.sync_calls()[-2:], [self.persistent_directories(), "<global>"])
+
+    def test_switch_removes_its_temp_files_and_rollback_copy(self):
+        tmp = self.root / "tmp"
+        tmp.mkdir()
+        self.set_policy(enabled=True)
+        result = self.run_connect("good-B")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        # The first switch only checkpoints; the second one arms a rollback copy.
+        result = self.run_connect("jhw_wlan_", extra_env={"TMPDIR": str(tmp)})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(sorted(p.name for p in tmp.iterdir()), [])
+        self.assertEqual(list(self.run_dir.glob("*.rollback.*")), [])
+
     def test_slow_status_calls_do_not_consume_the_rollback_budget(self):
         (self.state / "delay-target").touch()
         start = time.monotonic()

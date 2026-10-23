@@ -235,10 +235,28 @@ wifi_connect_cleanup() {
         fi
     fi
     WIFI_WPA_DEADLINE_MS=""
-    [ -z "${CONNECT_ROLLBACK_SOURCE:-}" ] || wifi_wpa_run_child rm -f "$CONNECT_ROLLBACK_SOURCE"
-    [ -z "${CANON_FILE:-}" ] || wifi_wpa_run_child rm -f "$CANON_FILE"
-    [ -z "${TMP_FILE:-}" ] || wifi_wpa_run_child rm -f "$TMP_FILE"
+    local leftovers=()
+    [ -z "${CONNECT_ROLLBACK_SOURCE:-}" ] || leftovers+=("$CONNECT_ROLLBACK_SOURCE")
+    [ -z "${CANON_FILE:-}" ] || leftovers+=("$CANON_FILE")
+    [ -z "${TMP_FILE:-}" ] || leftovers+=("$TMP_FILE")
+    [ "${#leftovers[@]}" -eq 0 ] || wifi_wpa_run_child rm -f "${leftovers[@]}"
     connect_event_monitor_cleanup
-    wifi_wpa_run_child sync 2>/dev/null || true
+    wifi_connect_sync_persistent
     exit "$rc"
+}
+
+# Make this connect's persistent changes durable before the reply without a
+# system-wide sync. They are all in the CONF and OPC marker directories:
+# installs there sync their own file (safe_install_sync), while deletions there
+# (the marker, fallback temp files) become durable with the directory. Runtime
+# state is under /run and temp files are under /tmp.
+wifi_connect_sync_persistent() {
+    local dirs=() dir
+    for dir in "${CONF%/*}" "${OPC_ESSID_MARKER%/*}"; do
+        [ -d "$dir" ] && dirs+=("$dir")
+    done
+    if [ "${#dirs[@]}" -gt 0 ] && wifi_wpa_run_child sync "${dirs[@]}" 2>/dev/null; then
+        return 0
+    fi
+    wifi_wpa_run_child sync 2>/dev/null || true
 }
