@@ -51,8 +51,11 @@ if [ "${1:-}" != --daemon ]; then
         bss)
             cat "$D/bss" 2>/dev/null
             exit 0 ;;
+        disconnect)
+            printf 'wpa_state=DISCONNECTED\n' > "$D/status" ;;
         set_network)
             echo "wpa_cli $*" >> "$D/calls.log"
+            sed -n 's/^wpa_state=//p' "$D/status" >> "$D/state-at-set-network"
             if [ "${5:-}" = ssid ]; then
                 if [ -f "$D/fail-set-network" ]; then echo FAIL; exit 0; fi
                 NEW_SSID="${6:-}" awk '/^[[:space:]]*ssid=/{sub(/ssid=.*/, "ssid=" ENVIRON["NEW_SSID"])} {print}' \
@@ -326,8 +329,8 @@ exec /bin/cp "$@"
         result = self.run_connect("good-B", apply_stored_conf=True, trace=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.ftp_switch_commands(), [
-            'wpa_cli -i mlan0 set_network 0 ssid "good-B"',
             "wpa_cli -i mlan0 disconnect",
+            'wpa_cli -i mlan0 set_network 0 ssid "good-B"',
             "wpa_cli -i mlan0 set scan_res_valid_for_connect 70",
             "wpa_cli -i mlan0 reassociate",
             "wpa_cli -i mlan0 set scan_res_valid_for_connect 5",
@@ -342,6 +345,9 @@ exec /bin/cp "$@"
         self.assertIn('ssid="good-B"', (self.state / "runtime.conf").read_text())
         self.assertIn("phase=cache_connect_requested", (self.state / "logger.log").read_text())
         self.assertIn("path=cache", (self.state / "logger.log").read_text())
+        # The SSID only changes once the old association is gone, so no stop
+        # in between can leave COMPLETED reported under the new SSID.
+        self.assertEqual((self.state / "state-at-set-network").read_text(), "DISCONNECTED\n")
 
     def assert_profile_reload(self, result):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -404,7 +410,7 @@ exec /bin/cp "$@"
         (self.state / "fail-set-network").touch()
         result = self.run_connect("good-B", apply_stored_conf=True)
         self.assert_profile_reload(result)
-        self.assertNotIn("wpa_cli -i mlan0 disconnect", self.ftp_switch_commands())
+        self.assertEqual((self.state / "state-at-set-network").read_text(), "DISCONNECTED\n")
 
     def test_unverified_profile_is_never_used_as_a_fallback(self):
         self.write_conf(CONF_MODE_B.replace('ssid="jhw_wlan_"', 'ssid="unverified"'))

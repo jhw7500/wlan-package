@@ -888,7 +888,9 @@ connect_cache_target_recent() {
 # target, and otherwise starts a normal scan at once. REASSOCIATE makes that
 # choice synchronously, so the limit is raised for this one command only, to
 # cover the 60 s background scan interval. Nonzero means a control command
-# failed and the caller reloads the stored profile instead.
+# failed and the caller reloads the stored profile instead. Disconnect before
+# changing the SSID: stopping in between would otherwise leave COMPLETED on the
+# old AP reported under the new SSID, which the next wconnect takes as done.
 CONNECT_CACHE_VALID_SEC=70
 CONNECT_CACHE_VALID_RESTORE=""
 connect_cache_reassociate() {
@@ -896,8 +898,8 @@ connect_cache_reassociate() {
     previous=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" get scan_res_valid_for_connect 2>/dev/null) \
         || return 1
     [[ "$previous" =~ ^[0-9]+$ ]] || return 1
-    wpa_cli_ok "$IFACE" set_network "$LIVE_NETWORK_ID" ssid "$SSID_CONF_VALUE" || return 1
     wpa_cli_ok "$IFACE" disconnect || return 1
+    wpa_cli_ok "$IFACE" set_network "$LIVE_NETWORK_ID" ssid "$SSID_CONF_VALUE" || return 1
     connect_event_monitor_arm || return 1
     CONNECT_CACHE_VALID_RESTORE="$previous"
     if ! wpa_cli_ok "$IFACE" set scan_res_valid_for_connect "$CONNECT_CACHE_VALID_SEC" \
