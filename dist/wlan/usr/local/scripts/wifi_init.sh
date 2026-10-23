@@ -524,6 +524,27 @@ for _bg_iface in mlan0 mlan1; do
 done
 unset _bgscan_line _bg_iface _bg_conf
 
+# mlanN.wpa_supplicant.scan_res_valid_for_connect → conf 전역 줄. supplicant는 시작과
+# reconfigure 때 이 줄을 읽으므로 런타임 wpa_cli set과 달리 reconfigure 뒤에도 유지된다.
+# 연결 지연 설정일 뿐이라 적용 실패는 기록만 하고 부팅을 계속한다.
+for _sv_iface in mlan0 mlan1; do
+    _sv_rc=0
+    _sv_value=$(wifi_init_get_scan_res_valid_for_connect "$_sv_iface") || _sv_rc=$?
+    case "$_sv_rc" in
+        0) ;;
+        2) logger -p local0.warning "[$tag:$LINENO] [$_sv_iface] wpa_supplicant.scan_res_valid_for_connect must be an integer 0-3600 - using $_sv_value" ;;
+        *)
+            logger -p local0.warning "[$tag:$LINENO] [$_sv_iface] config unreadable - keeping scan_res_valid_for_connect in wpa conf"
+            continue
+            ;;
+    esac
+    if ! wifi_wpa_conf_set_global "/etc/wpa_supplicant/wpa_supplicant-${_sv_iface}.conf" \
+            scan_res_valid_for_connect "$_sv_value"; then
+        logger -p local0.err "[$tag:$LINENO] [$_sv_iface] wpa conf scan_res_valid_for_connect update failed"
+    fi
+done
+unset _sv_iface _sv_rc _sv_value
+
 # Apply wifi_init_conf.json values to wifi_mod_para.conf
 # Mappings (PCIE9098_0/SD9098_0 ← mlan0, PCIE9098_1/SD9098_1 ← mlan1):
 #   - net_rx        ← mlanN.net_rx (int)

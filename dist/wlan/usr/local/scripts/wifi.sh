@@ -860,63 +860,52 @@ connect_cache_profile_matches() {
     [ "$FREQ_STR" = "$live_global" ] && [ "$FREQ_STR" = "$live_network" ]
 }
 
-# The cached path pays off only if the last scan saw the target. A scan that
-# directs probes at the current SSID (bgscan.ssid_filter=true, the default)
-# leaves other SSIDs' BSS entries un-refreshed, so their age gives that away
-# for one ctrl request; a miss would otherwise cost the checks above on top of
-# the same scan that RECONFIGURE does.
+# The cached path pays off only if the last scan saw the target and is younger
+# than the live scan_res_valid_for_connect. BSS ages show when each entry was
+# last seen; the youngest marks the last scan, and the entries of one scan
+# differ by the time it took to cover its channels. A scan that directs probes
+# at the current SSID (bgscan.ssid_filter=true, the default) leaves other
+# SSIDs' entries older than that; a miss would otherwise cost the checks above
+# on top of the same scan that RECONFIGURE does.
+CONNECT_CACHE_SCAN_SPREAD_SEC=5
 connect_cache_target_recent() {
-    local reply line age=""
+    local valid reply line age="" newest="" target=""
+    valid=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" get scan_res_valid_for_connect 2>/dev/null) \
+        || return 1
+    [[ "$valid" =~ ^[0-9]+$ ]] || return 1
     reply=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" bss RANGE=ALL MASK=0x1201 2>/dev/null) || return 1
     while IFS= read -r line; do
         case "$line" in
-            age=*) age=${line#age=} ;;
+            age=*)
+                age=${line#age=}
+                [[ "$age" =~ ^[0-9]+$ ]] || return 1
+                if [ -z "$newest" ] || [ "$age" -lt "$newest" ]; then newest=$age; fi
+                ;;
             ssid=*)
-                if [ "${line#ssid=}" = "$TARGET_SSID_WPA_TEXT" ] && [[ "$age" =~ ^[0-9]+$ ]] \
-                   && [ "$age" -lt "$CONNECT_CACHE_VALID_SEC" ]; then
-                    return 0
+                if [ "${line#ssid=}" = "$TARGET_SSID_WPA_TEXT" ] \
+                   && { [ -z "$target" ] || [ "$age" -lt "$target" ]; }; then
+                    target=$age
                 fi
                 ;;
         esac
     done <<< "$reply"
-    return 1
+    [ -n "$target" ] && [ "$target" -lt "$valid" ] \
+        && [ "$target" -le $((newest + CONNECT_CACHE_SCAN_SPREAD_SEC)) ]
 }
 
 # RECONFIGURE always rescans. With only the SSID changed, set it in memory and
 # reassociate: the supplicant then connects from its last scan results if they
-# are younger than scan_res_valid_for_connect (5 s by default) and contain the
-# target, and otherwise starts a normal scan at once. REASSOCIATE makes that
-# choice synchronously, so the limit is raised for this one command only, to
-# cover the 60 s background scan interval. Nonzero means a control command
-# failed and the caller reloads the stored profile instead. Disconnect before
-# changing the SSID: stopping in between would otherwise leave COMPLETED on the
-# old AP reported under the new SSID, which the next wconnect takes as done.
-CONNECT_CACHE_VALID_SEC=70
-CONNECT_CACHE_VALID_RESTORE=""
+# are younger than scan_res_valid_for_connect (the conf line wifi_init.sh
+# writes from wpa_supplicant.scan_res_valid_for_connect) and contain the
+# target, and otherwise starts a normal scan at once. Nonzero means a control
+# command failed and the caller reloads the stored profile instead. Disconnect
+# before changing the SSID: stopping in between would otherwise leave COMPLETED
+# on the old AP reported under the new SSID, which the next wconnect takes as done.
 connect_cache_reassociate() {
-    local previous rc=0
-    previous=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" get scan_res_valid_for_connect 2>/dev/null) \
-        || return 1
-    [[ "$previous" =~ ^[0-9]+$ ]] || return 1
     wpa_cli_ok "$IFACE" disconnect || return 1
     wpa_cli_ok "$IFACE" set_network "$LIVE_NETWORK_ID" ssid "$SSID_CONF_VALUE" || return 1
     connect_event_monitor_arm || return 1
-    CONNECT_CACHE_VALID_RESTORE="$previous"
-    if ! wpa_cli_ok "$IFACE" set scan_res_valid_for_connect "$CONNECT_CACHE_VALID_SEC" \
-       || ! wpa_cli_ok "$IFACE" reassociate; then
-        rc=1
-    fi
-    connect_cache_valid_restore
-    return "$rc"
-}
-
-# Also called from wifi_connect_cleanup if a signal lands between the two sets.
-connect_cache_valid_restore() {
-    [ -n "$CONNECT_CACHE_VALID_RESTORE" ] || return 0
-    if ! wpa_cli_ok "$IFACE" set scan_res_valid_for_connect "$CONNECT_CACHE_VALID_RESTORE"; then
-        echo "Warning: could not restore scan_res_valid_for_connect=$CONNECT_CACHE_VALID_RESTORE for $IFACE" >&2
-    fi
-    CONNECT_CACHE_VALID_RESTORE=""
+    wpa_cli_ok "$IFACE" reassociate
 }
 
 # ----- radio staged-apply helpers -----

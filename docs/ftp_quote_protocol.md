@@ -163,12 +163,13 @@ quote wconnect <mlan0|mlan1|0|1> [ssid words...]
 
 다른 SSID로 전환할 때 다음을 모두 만족하면 `reconfigure`(항상 새로 스캔한다)
 대신 supplicant 메모리의 SSID만 바꾸고 `disconnect`와 `reassociate`를 요청한다:
-단일 `network`에 연결된 상태, supplicant의 BSS 목록에서 요청 SSID를 마지막으로 본 지
-70초 미만, 현재 supplicant의 SSID와 전역·네트워크 `freq_list`가
+단일 `network`에 연결된 상태, supplicant의 BSS 목록에서 요청 SSID를 마지막 스캔에서
+봤고(가장 최근에 본 AP와 5초 이내) 그 시점이 supplicant의 `scan_res_valid_for_connect`
+(설정 `mlanN.wpa_supplicant.scan_res_valid_for_connect`, 기본 180초)보다 최근,
+현재 supplicant의 SSID와 전역·네트워크 `freq_list`가
 저장된 설정과 같음, 새 설정 파일이 SSID 줄만 다름, 인증 설정 변경 대기와
-fallback 없음. 이 `reassociate`에 한해 `scan_res_valid_for_connect`를 70초로 올렸다가
-바로 되돌리므로, 마지막 스캔이 70초 안이고 그 결과에 대상 AP가 있으면 새 스캔 없이
-연결한다. 없으면 supplicant가 곧바로 스캔한다. 백그라운드 스캔이 현재 SSID만
+fallback 없음. supplicant는 마지막 스캔이 이 유효시간 안이고 그 결과에 대상 AP가
+있으면 새 스캔 없이 연결한다. 없으면 supplicant가 곧바로 스캔한다. 백그라운드 스캔이 현재 SSID만
 지정하는 기본 설정(`bgscan.ssid_filter=true`)에서는 다른 SSID의 AP 정보가 갱신되지
 않으므로 대개 위 조건에서 걸러져 `reconfigure` 경로를 쓴다(설정 가이드의
 `ssid_filter` 참조). 이 경로는
