@@ -45,7 +45,6 @@ if [ "${1:-}" != --daemon ]; then
             exit 0 ;;
         set)
             echo "wpa_cli $*" >> "$D/calls.log"
-            [ "${4:-}" = scan_res_valid_for_connect ] && printf '%s\n' "${5:-}" > "$D/scan-valid"
             echo OK
             exit 0 ;;
         bss)
@@ -64,16 +63,10 @@ if [ "${1:-}" != --daemon ]; then
             echo OK
             exit 0 ;;
         status)
-            if [ -f "$D/scan-valid.log" ]; then
-                echo "status valid=$(cat "$D/scan-valid" 2>/dev/null || echo 5)" >> "$D/scan-valid.log"
-            fi
             if [ -f "$D/delay-target" ] && grep -q 'ssid="unreachable"' "$runtime"; then
                 sleep 3
             fi ;;
         reconfigure|reassociate|reconnect|scan)
-            if [ "$command" = reassociate ]; then
-                echo "reassociate valid=$(cat "$D/scan-valid" 2>/dev/null || echo 5)" >> "$D/scan-valid.log"
-            fi
             if [ "$command" = reconfigure ]; then
                 cp "$WPA_CONF_DIR/wpa_supplicant-${2}.conf" "$runtime"
                 if grep -q 'ssid="unreachable"' "$runtime"; then
@@ -107,8 +100,10 @@ class ConnectFallbackTests(_cli.ConnectHarness):
         self.write_conf(CONF_MODE_B)
         (self.state / "runtime.conf").write_text(CONF_MODE_B)
         (self.state / "available").write_text("jhw_wlan_\ngood-B\n")
-        # Both SSIDs were in a scan 5 s ago (BSS RANGE=ALL MASK=id|age|ssid).
+        # Both SSIDs were in a scan 5 s ago (BSS RANGE=ALL MASK=id|age|ssid),
+        # and the supplicant loaded the conf line wifi_init.sh writes.
         (self.state / "bss").write_text("id=1\nage=5\nssid=jhw_wlan_\nid=2\nage=5\nssid=good-B\n")
+        (self.state / "scan-valid").write_text("180\n")
         self.config = self.root / "wifi.json"
         self.marker = self.root / "changeip_essid.restore"
         mlanutl = self.stub / "mlanutl"
@@ -328,19 +323,7 @@ exec /bin/cp "$@"
         self.set_policy(enabled=False)
         result = self.run_connect("good-B", apply_stored_conf=True, trace=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(self.ftp_switch_commands(), [
-            "wpa_cli -i mlan0 disconnect",
-            'wpa_cli -i mlan0 set_network 0 ssid "good-B"',
-            "wpa_cli -i mlan0 set scan_res_valid_for_connect 70",
-            "wpa_cli -i mlan0 reassociate",
-            "wpa_cli -i mlan0 set scan_res_valid_for_connect 5",
-        ])
-        # 70 s applies to that one REASSOCIATE; the association wait sees 5 again.
-        valid_log = (self.state / "scan-valid.log").read_text().splitlines()
-        self.assertEqual(valid_log[0], "reassociate valid=70")
-        self.assertGreater(len(valid_log), 1, valid_log)
-        self.assertEqual(set(valid_log[1:]), {"status valid=5"}, valid_log)
-        self.assertEqual((self.state / "scan-valid").read_text(), "5\n")
+        self.assert_cache_reassociate()
         self.assertIn('ssid="good-B"', self.conf.read_text())
         self.assertIn('ssid="good-B"', (self.state / "runtime.conf").read_text())
         self.assertIn("phase=cache_connect_requested", (self.state / "logger.log").read_text())
@@ -349,12 +332,20 @@ exec /bin/cp "$@"
         # in between can leave COMPLETED reported under the new SSID.
         self.assertEqual((self.state / "state-at-set-network").read_text(), "DISCONNECTED\n")
 
+    def assert_cache_reassociate(self):
+        # The supplicant's own scan_res_valid_for_connect decides; the switch
+        # no longer changes it.
+        self.assertEqual(self.ftp_switch_commands(), [
+            "wpa_cli -i mlan0 disconnect",
+            'wpa_cli -i mlan0 set_network 0 ssid "good-B"',
+            "wpa_cli -i mlan0 reassociate",
+        ])
+
     def assert_profile_reload(self, result):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         commands = self.ftp_switch_commands()
         self.assertIn("wpa_cli -i mlan0 reconfigure", commands)
         self.assertFalse(any("set scan_res" in c for c in commands), commands)
-        self.assertFalse((self.state / "scan-valid").exists())
         self.assertIn("ssid=good-B\n", (self.state / "status").read_text())
 
     def test_ftp_ssid_switch_reloads_profile_when_credentials_are_staged(self):
@@ -372,9 +363,56 @@ exec /bin/cp "$@"
         self.assert_profile_reload(result)
         self.assertIn("freq_list=5180 5200\n", (self.state / "runtime.conf").read_text())
 
-    def test_ftp_ssid_switch_reloads_profile_when_target_was_not_scanned_recently(self):
+    def test_ftp_ssid_switch_reloads_profile_when_last_scan_missed_target(self):
+        # The last scan (5 s ago) probed only the current SSID; the target is
+        # still within the limit from an older scan, which the supplicant ignores.
         self.set_policy(enabled=False)
         (self.state / "bss").write_text("id=1\nage=5\nssid=jhw_wlan_\nid=2\nage=86\nssid=good-B\n")
+        result = self.run_connect("good-B", apply_stored_conf=True)
+        self.assert_profile_reload(result)
+        self.assertFalse(any("set_network" in c for c in self.ftp_switch_commands()))
+
+    def test_ftp_ssid_switch_uses_cache_for_target_seen_while_last_scan_covered_channels(self):
+        # Entries of one scan differ by the seconds it spent on its channels.
+        self.set_policy(enabled=False)
+        (self.state / "bss").write_text("id=1\nage=10\nssid=jhw_wlan_\nid=2\nage=15\nssid=good-B\n")
+        result = self.run_connect("good-B", apply_stored_conf=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assert_cache_reassociate()
+
+    def test_ftp_ssid_switch_uses_cache_within_configured_scan_validity(self):
+        # A 150 s old scan still counts when the supplicant keeps results 180 s.
+        self.set_policy(enabled=False)
+        (self.state / "bss").write_text("id=1\nage=150\nssid=jhw_wlan_\nid=2\nage=150\nssid=good-B\n")
+        result = self.run_connect("good-B", apply_stored_conf=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assert_cache_reassociate()
+
+    def test_ssid_switch_keeps_the_global_scan_validity_line(self):
+        # wifi_init.sh writes this line once per boot; a connect rewrites the
+        # file and must keep it for the supplicant's next reconfigure.
+        line = "scan_res_valid_for_connect=180\n"
+        conf = CONF_MODE_B.replace("update_config=0\n", line + "update_config=0\n")
+        for name, ftp in (("ordinary", False), ("ftp-cache", True)):
+            with self.subTest(name):
+                self.write_conf(conf)
+                (self.state / "runtime.conf").write_text(conf)
+                (self.state / "status").write_text(_cli.STATUS_INITIAL)
+                (self.state / "calls.log").write_text("")
+                self.set_policy(enabled=False)
+                result = self.run_connect("good-B", apply_stored_conf=ftp)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                stored = self.conf.read_text()
+                self.assertIn('ssid="good-B"', stored)
+                self.assertEqual(stored.count("scan_res_valid_for_connect="), 1, stored)
+                self.assertIn(line + "update_config=0\n", stored)
+                if ftp:
+                    self.assert_cache_reassociate()
+
+    def test_ftp_ssid_switch_reloads_profile_when_scan_is_older_than_supplicant_limit(self):
+        # A supplicant started before the conf line exists keeps its 5 s default.
+        self.set_policy(enabled=False)
+        (self.state / "scan-valid").write_text("5\n")
         result = self.run_connect("good-B", apply_stored_conf=True)
         self.assert_profile_reload(result)
         self.assertFalse(any("set_network" in c for c in self.ftp_switch_commands()))

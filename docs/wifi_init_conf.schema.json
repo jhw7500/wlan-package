@@ -1511,6 +1511,16 @@
               "x-ui-editable": "yes",
               "x-apply-timing": "boot",
               "x-consumer": "wifi_apply_enabled.sh, wifi_init.sh"
+            },
+            "scan_res_valid_for_connect": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 3600,
+              "default": 180,
+              "description": "연결 요청(reassociate, select_network 등) 때 새 스캔 없이 마지막 스캔 결과로 연결하는 유효시간(초). wifi_init.sh 가 부팅 때 wpa_supplicant-mlan0.conf 전역 scan_res_valid_for_connect 줄로 적용하고 supplicant 가 시작·reconfigure 때 읽는다. 0=항상 스캔, 범위 밖이면 경고 후 180",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh (wpa_supplicant conf)"
             }
           }
         },
@@ -2520,6 +2530,16 @@
               "x-ui-editable": "yes",
               "x-apply-timing": "boot",
               "x-consumer": "wifi_apply_enabled.sh, wifi_init.sh"
+            },
+            "scan_res_valid_for_connect": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 3600,
+              "default": 180,
+              "description": "연결 요청(reassociate, select_network 등) 때 새 스캔 없이 마지막 스캔 결과로 연결하는 유효시간(초). wifi_init.sh 가 부팅 때 wpa_supplicant-mlan1.conf 전역 scan_res_valid_for_connect 줄로 적용하고 supplicant 가 시작·reconfigure 때 읽는다. 0=항상 스캔, 범위 밖이면 경고 후 180",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh (wpa_supplicant conf)"
             }
           }
         },

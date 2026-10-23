@@ -349,7 +349,7 @@ network={
 }
 EOF
     case "$operation" in
-        normalize)
+        normalize|set-global)
             printf '{"mlan0":{"roaming":{"generate_network_blocks":false,"extra_ssids":[]}}}\n' > "$json"
             ;;
         generate)
@@ -390,6 +390,7 @@ EOF
           . "$1"
           case "$2" in
             normalize) wifi_wpa_conf_normalize_file "$3" ;;
+            set-global) wifi_wpa_conf_set_global "$3" scan_res_valid_for_connect 180 ;;
             *) wifi_init_sync_extra_ssid_blocks mlan0 "$3" ;;
           esac
        ' _ "$LIB" "$operation" "$conf"; then
@@ -889,7 +890,7 @@ rm -rf "$_wpa_tmpd"
 
 echo ""
 echo "=== checked boot topology atomic install failures ==="
-for _boot_operation in normalize generate remove-empty remove-mode-b remove-missing-template; do
+for _boot_operation in normalize generate remove-empty remove-mode-b remove-missing-template set-global; do
     for _boot_fault in stage mv installed dir; do
         run_boot_atomic_fault_case "$_boot_operation" "$_boot_fault"
     done
@@ -956,6 +957,156 @@ for _template in "$WPA_TEMPLATE0" "$WPA_TEMPLATE1"; do
     expect_equal "$(basename "$_template") has no scan_freq" \
         "$(grep -Ec '^[[:space:]]*scan_freq[[:space:]]*=' "$_template" || true)" "0"
 done
+
+echo ""
+echo "=== wpa_supplicant scan_res_valid_for_connect ==="
+_sv_tmpd=$(mktemp -d)
+
+# JSON 값 해석: 값 / 키 부재 기본값 / 범위 밖 기본값(rc 2) / 읽기 실패(rc 1, 출력 없음)
+sv_resolve() {
+    local out rc=0
+    out=$(WIFI_INIT_CONF_JSON="$_sv_tmpd/conf.json" wifi_init_get_scan_res_valid_for_connect "$1") || rc=$?
+    printf '%s rc=%s' "$out" "$rc"
+}
+printf '{"mlan0":{"wpa_supplicant":{"enabled":true,"scan_res_valid_for_connect":30}},"mlan1":{"wpa_supplicant":{"enabled":true}}}\n' \
+    > "$_sv_tmpd/conf.json"
+expect_equal "scan validity reads mlan0 value" "$(sv_resolve mlan0)" "30 rc=0"
+expect_equal "scan validity defaults when key is absent" "$(sv_resolve mlan1)" "180 rc=0"
+for _sv_case in 0:0 3600:3600; do
+    printf '{"mlan0":{"wpa_supplicant":{"scan_res_valid_for_connect":%s}}}\n' "${_sv_case%%:*}" > "$_sv_tmpd/conf.json"
+    expect_equal "scan validity accepts ${_sv_case%%:*}" "$(sv_resolve mlan0)" "${_sv_case#*:} rc=0"
+done
+for _sv_bad in 3601 -1 12.5 '"180"' true; do
+    printf '{"mlan0":{"wpa_supplicant":{"scan_res_valid_for_connect":%s}}}\n' "$_sv_bad" > "$_sv_tmpd/conf.json"
+    expect_equal "scan validity rejects $_sv_bad with default" "$(sv_resolve mlan0)" "180 rc=2"
+done
+printf '{"mlan0":' > "$_sv_tmpd/conf.json"
+expect_equal "scan validity reports unreadable config" "$(sv_resolve mlan0)" " rc=1"
+rm -f "$_sv_tmpd/conf.json"
+expect_equal "scan validity reports missing config" "$(sv_resolve mlan0)" " rc=1"
+
+# conf 전역 줄: 첫 update_config 앞에 하나, 멱등, 기존 줄 갱신·중복 제거
+cp "$WPA_TEMPLATE0" "$_sv_tmpd/wpa.conf"
+wifi_wpa_conf_normalize_file "$_sv_tmpd/wpa.conf"
+cp "$_sv_tmpd/wpa.conf" "$_sv_tmpd/normalized.conf"
+wifi_wpa_conf_set_global "$_sv_tmpd/wpa.conf" scan_res_valid_for_connect 180
+expect_equal "global line is inserted once" \
+    "$(grep -c '^scan_res_valid_for_connect=180$' "$_sv_tmpd/wpa.conf" || true)" "1"
+expect_equal "global line precedes update_config" \
+    "$(grep -A1 '^scan_res_valid_for_connect=' "$_sv_tmpd/wpa.conf" | tail -1)" "update_config=0"
+expect_equal "global line changes nothing else" \
+    "$(diff "$_sv_tmpd/normalized.conf" "$_sv_tmpd/wpa.conf" | grep -c '^[<>]' || true)" "1"
+cp "$_sv_tmpd/wpa.conf" "$_sv_tmpd/once.conf"
+wifi_wpa_conf_set_global "$_sv_tmpd/wpa.conf" scan_res_valid_for_connect 180
+if cmp -s "$_sv_tmpd/once.conf" "$_sv_tmpd/wpa.conf"; then
+    log_pass "global line update is idempotent"
+else
+    log_fail "global line update is idempotent"
+fi
+{ printf 'scan_res_valid_for_connect=5\n# scan_res_valid_for_connect=1\n'; cat "$_sv_tmpd/normalized.conf"; } \
+    > "$_sv_tmpd/stale.conf"
+sed -i 's/^update_config=0$/scan_res_valid_for_connect=7\nupdate_config=0/' "$_sv_tmpd/stale.conf"
+wifi_wpa_conf_set_global "$_sv_tmpd/stale.conf" scan_res_valid_for_connect 60
+expect_equal "global line replaces every stale copy" \
+    "$(grep -c '^scan_res_valid_for_connect=' "$_sv_tmpd/stale.conf" || true)" "1"
+expect_equal "global line keeps comments" \
+    "$(grep -c '^# scan_res_valid_for_connect=1$' "$_sv_tmpd/stale.conf" || true)" "1"
+expect_equal "global line carries the new value" \
+    "$(grep -A1 '^scan_res_valid_for_connect=' "$_sv_tmpd/stale.conf")" \
+    "$(printf 'scan_res_valid_for_connect=60\nupdate_config=0')"
+
+# 다른 writer: canonical 재렌더와 extra SSID 블록 생성을 거쳐도 다시 적용하면 바뀌지 않는다
+wifi_wpa_conf_render_canonical "$_sv_tmpd/wpa.conf" "$_sv_tmpd/rendered.conf" "5180 5200 5220 5240"
+if cmp -s "$_sv_tmpd/wpa.conf" "$_sv_tmpd/rendered.conf"; then
+    log_pass "canonical render keeps the global line in place"
+else
+    log_fail "canonical render keeps the global line in place"
+fi
+mkdir -p "$_sv_tmpd/run" "$_sv_tmpd/latches"
+printf '{"mlan0":{"roaming":{"generate_network_blocks":true,"extra_ssids":["office"]}}}\n' > "$_sv_tmpd/extra.json"
+if WIFI_INIT_CONF_JSON="$_sv_tmpd/extra.json" WIFI_RUN_DIR="$_sv_tmpd/run" \
+   WIFI_ROAM_POLICY_LATCH_DIR="$_sv_tmpd/latches" \
+   wifi_init_sync_extra_ssid_blocks mlan0 "$_sv_tmpd/wpa.conf"; then
+    cp "$_sv_tmpd/wpa.conf" "$_sv_tmpd/extra.conf"
+    wifi_wpa_conf_set_global "$_sv_tmpd/wpa.conf" scan_res_valid_for_connect 180
+    if grep -q 'ssid="office"' "$_sv_tmpd/extra.conf" \
+       && cmp -s "$_sv_tmpd/extra.conf" "$_sv_tmpd/wpa.conf"; then
+        log_pass "extra SSID blocks keep the global line in place"
+    else
+        log_fail "extra SSID blocks keep the global line in place"
+    fi
+else
+    log_fail "extra SSID sync accepts conf with the global line"
+fi
+
+printf 'country=KR\n' > "$_sv_tmpd/no-network.conf"
+wifi_wpa_conf_set_global "$_sv_tmpd/no-network.conf" scan_res_valid_for_connect 180
+expect_equal "global line is appended without network block" \
+    "$(cat "$_sv_tmpd/no-network.conf")" "$(printf 'country=KR\nscan_res_valid_for_connect=180')"
+if wifi_wpa_conf_set_global "$_sv_tmpd/absent.conf" scan_res_valid_for_connect 180 \
+   && [ ! -e "$_sv_tmpd/absent.conf" ]; then
+    log_pass "global line skips a missing conf"
+else
+    log_fail "global line skips a missing conf"
+fi
+
+# wifi_init.sh 의 실제 부팅 블록을 임시 conf 경로로 실행한다.
+_sv_block=$(awk '
+    /^# mlanN\.wpa_supplicant\.scan_res_valid_for_connect/ { on = 1 }
+    on { print }
+    on && /^unset _sv_iface/ { exit }
+' "$WIFI_INIT_SH")
+run_sv_boot_block() {
+    local json="$1" override="${2:-}"
+    WIFI_INIT_CONF_JSON="$json" bash -c '
+        set -euo pipefail
+        . "$1"
+        log_file="$2/logger.log"
+        logger() { printf "%s\n" "$*" >> "$log_file"; }
+        tag=wifi_init
+        eval "$3"
+        eval "$4"
+        echo reached
+    ' _ "$LIB" "$_sv_tmpd" "$override" "${_sv_block//\/etc\/wpa_supplicant/$_sv_tmpd/boot}"
+}
+mkdir -p "$_sv_tmpd/boot"
+cp "$_sv_tmpd/normalized.conf" "$_sv_tmpd/boot/wpa_supplicant-mlan0.conf"
+cp "$_sv_tmpd/normalized.conf" "$_sv_tmpd/boot/wpa_supplicant-mlan1.conf"
+printf '{"mlan0":{"wpa_supplicant":{"scan_res_valid_for_connect":45}},"mlan1":{"wpa_supplicant":{"scan_res_valid_for_connect":"x"}}}\n' \
+    > "$_sv_tmpd/boot.json"
+: > "$_sv_tmpd/logger.log"
+expect_equal "boot block runs to completion" "$(run_sv_boot_block "$_sv_tmpd/boot.json")" "reached"
+expect_equal "boot block applies mlan0 value" \
+    "$(grep '^scan_res_valid_for_connect=' "$_sv_tmpd/boot/wpa_supplicant-mlan0.conf")" "scan_res_valid_for_connect=45"
+expect_equal "boot block applies default for invalid mlan1 value" \
+    "$(grep '^scan_res_valid_for_connect=' "$_sv_tmpd/boot/wpa_supplicant-mlan1.conf")" "scan_res_valid_for_connect=180"
+expect_file_contains "boot block warns about the invalid value" "$_sv_tmpd/logger.log" \
+    'local0.warning .*\[mlan1\] wpa_supplicant.scan_res_valid_for_connect must be an integer'
+cp "$_sv_tmpd/boot/wpa_supplicant-mlan0.conf" "$_sv_tmpd/boot-before.conf"
+printf '{"mlan0":' > "$_sv_tmpd/broken.json"
+: > "$_sv_tmpd/logger.log"
+expect_equal "boot block continues with unreadable config" "$(run_sv_boot_block "$_sv_tmpd/broken.json")" "reached"
+if cmp -s "$_sv_tmpd/boot-before.conf" "$_sv_tmpd/boot/wpa_supplicant-mlan0.conf"; then
+    log_pass "unreadable config keeps the existing conf value"
+else
+    log_fail "unreadable config keeps the existing conf value"
+fi
+expect_file_contains "boot block warns about unreadable config" "$_sv_tmpd/logger.log" \
+    'config unreadable - keeping scan_res_valid_for_connect'
+: > "$_sv_tmpd/logger.log"
+expect_equal "boot block continues when conf update fails" \
+    "$(run_sv_boot_block "$_sv_tmpd/boot.json" 'wifi_wpa_conf_set_global() { return 1; }')" "reached"
+expect_file_contains "boot block logs the failed conf update" "$_sv_tmpd/logger.log" \
+    'local0.err .*\[mlan0\] wpa conf scan_res_valid_for_connect update failed'
+
+_sv_extra_line=$(grep -n 'wifi_init_sync_extra_ssid_blocks mlan1' "$WIFI_INIT_SH" | head -1 | cut -d: -f1 || true)
+_sv_apply_line=$(grep -n 'wifi_wpa_conf_set_global' "$WIFI_INIT_SH" | head -1 | cut -d: -f1 || true)
+if [ -n "$_sv_extra_line" ] && [ -n "$_sv_apply_line" ] && [ "$_sv_extra_line" -lt "$_sv_apply_line" ]; then
+    log_pass "wifi_init applies scan validity after the conf topology transforms"
+else
+    log_fail "wifi_init applies scan validity after the conf topology transforms"
+fi
+rm -rf "$_sv_tmpd"
 
 echo "PASS: $PASS_COUNT"
 echo "FAIL: $FAIL_COUNT"

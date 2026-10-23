@@ -637,6 +637,32 @@ wifi_init_get_iface_frequency() {
     printf '%s\n' "$value"
 }
 
+# mlanN.wpa_supplicant.scan_res_valid_for_connect(초) — wpa_supplicant가 연결 요청에서
+# 새 스캔 없이 마지막 스캔 결과를 쓰는 유효시간. 키가 없으면 기본값을 출력한다.
+#   0 = 설정값 또는 기본값 출력
+#   1 = 설정을 읽지 못함(출력 없음 — 호출자는 conf의 기존 값을 그대로 둔다)
+#   2 = 0~3600 정수가 아니어서 기본값 출력
+WIFI_SCAN_RES_VALID_DEFAULT=180
+wifi_init_get_scan_res_valid_for_connect() {
+    local iface="$1" value
+    local conf_json="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
+
+    wifi_init_conf_status "$conf_json" || return 1
+    value=$(jq -r --arg i "$iface" '
+        (.[$i] | if type == "object" then .wpa_supplicant else null end
+               | if type == "object" then .scan_res_valid_for_connect else null end) as $v
+        | if $v == null then "default"
+          elif ($v | type) == "number" and $v == ($v | floor) and $v >= 0 and $v <= 3600
+          then ($v | floor | tostring)
+          else "invalid" end
+    ' "$conf_json" 2>/dev/null) || return 1
+    case "$value" in
+        default) printf '%s\n' "$WIFI_SCAN_RES_VALID_DEFAULT" ;;
+        invalid) printf '%s\n' "$WIFI_SCAN_RES_VALID_DEFAULT"; return 2 ;;
+        *) printf '%s\n' "$value" ;;
+    esac
+}
+
 wifi_init_iface_is_enabled() {
     [ "$(wifi_init_get_iface_enabled "$1" "${2:-true}")" = "true" ]
 }
@@ -808,6 +834,45 @@ wifi_wpa_conf_normalize_file() {
     tmp=$(mktemp "${conf}.normalize.XXXXXX") || return 1
 
     if ! wifi_wpa_conf_render_canonical "$conf" "$tmp" "$freqs"; then
+        rm -f "$tmp"
+        return 1
+    fi
+
+    if cmp -s "$tmp" "$conf"; then
+        rm -f "$tmp"
+        return 0
+    fi
+    if ! wifi_wpa_conf_atomic_install "$tmp" "$conf"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    return 0
+}
+
+# wpa_supplicant conf에 전역 설정 한 줄(key=value)을 넣거나 바꾼다.
+# 같은 키의 전역 줄은 모두 지우고 첫 전역 update_config/freq_list 또는 첫 network 블록
+# 앞에 한 줄을 둔다(셋 다 없으면 끝). render_canonical이 update_config/freq_list를 첫
+# network 직전으로 옮겨도 이 줄은 그 앞에 남으므로, 다른 writer를 거친 뒤 다시 적용해도
+# 내용이 같다. 파일 부재는 no-op 성공, 변환/설치 실패는 nonzero다.
+wifi_wpa_conf_set_global() {
+    local conf="$1" key="$2" value="$3" tmp
+    [ -f "$conf" ] || return 0
+
+    tmp=$(mktemp "${conf}.global.XXXXXX") || return 1
+    if ! awk -v key="$key" -v value="$value" '
+        function emit() {
+            if (done) return
+            print key "=" value
+            done = 1
+        }
+        /^[[:space:]]*#/ { print; next }
+        !in_net && $0 ~ ("^[[:space:]]*" key "[[:space:]]*=") { next }
+        !in_net && /^[[:space:]]*(update_config|freq_list)[[:space:]]*=/ { emit() }
+        /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { emit(); in_net = 1 }
+        in_net && /^[[:space:]]*\}/ { in_net = 0 }
+        { print }
+        END { emit() }
+    ' "$conf" > "$tmp"; then
         rm -f "$tmp"
         return 1
     fi
