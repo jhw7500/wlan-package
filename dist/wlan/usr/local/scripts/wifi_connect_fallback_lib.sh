@@ -235,6 +235,7 @@ wifi_connect_cleanup() {
         fi
     fi
     WIFI_WPA_DEADLINE_MS=""
+    [ -z "${CONNECT_CACHE_VALID_RESTORE:-}" ] || connect_cache_valid_restore
     [ -z "${CONNECT_ROLLBACK_SOURCE:-}" ] || wifi_wpa_run_child rm -f "$CONNECT_ROLLBACK_SOURCE"
     [ -z "${CANON_FILE:-}" ] || wifi_wpa_run_child rm -f "$CANON_FILE"
     [ -z "${TMP_FILE:-}" ] || wifi_wpa_run_child rm -f "$TMP_FILE"
