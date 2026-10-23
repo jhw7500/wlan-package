@@ -16,6 +16,7 @@ action 스크립트에 `CONNECTED` 이벤트(`WPA_ID`)를 넣는다. 그래서 f
 import os
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import textwrap
@@ -599,6 +600,89 @@ class WaitPollSlot(unittest.TestCase):
     def test_without_the_fifo_sleeps_one_slot(self):
         ms, forks = self.wait_slot()
         self.assertEqual(forks, ["forked=sleep 0.1"])
+
+
+class SlotSignalExit(unittest.TestCase):
+    """connect's HUP/INT/TERM traps while the slot waits in read -t."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp(prefix="wifi-slot-signal-"))
+        text = WIFI_SH.read_text(encoding="utf-8")
+        traps = re.findall(r"^    trap '([^']*143)' TERM$", text, re.M)
+        assert len(traps) == 1, traps
+        cls.term_trap = traps[0]
+        lines = text.splitlines(keepends=True)
+        helpers = []
+        for name in ("connect_signal_exit", "connect_wait_poll_slot"):
+            starts = [i for i, l in enumerate(lines) if l.startswith(name + "() {")]
+            if starts:
+                end = next(i for i in range(starts[0], len(lines)) if lines[i] == "}\n") + 1
+                helpers += lines[starts[0]:end]
+        cls.helpers = cls.tmp / "helpers.sh"
+        cls.helpers.write_text("".join(helpers), encoding="utf-8")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_term_during_the_slot_wait_still_runs_the_exit_cleanup(self):
+        # Like the fallback restore, the EXIT cleanup runs an external command,
+        # a command substitution and another slot wait. A trap that exits from
+        # inside read -t left bash's timeout armed, and this cleanup crashed;
+        # a deferred exit status left set would end the cleanup's slot wait.
+        d = self.tmp / "monitor"
+        d.mkdir()
+        os.mkfifo(d / "tick")
+        script = self.tmp / "connect.sh"
+        script.write_text("\n".join([
+            '. "%s"' % self.helpers,
+            'wifi_wpa_run_child() ( exec "$@" )',
+            'CONNECT_MONITOR_DIR="%s"; FRESH_EVENT_ID=""' % d,
+            'cleanup() { local rc=$?; trap - EXIT HUP INT TERM; /bin/sleep 0.03;'
+            ' t=$(cat /proc/uptime); connect_wait_poll_slot; echo "cleanup-done rc=$rc"; }',
+            "trap cleanup EXIT",
+            "trap '%s' TERM" % self.term_trap,
+            "while :; do connect_wait_poll_slot; done",
+        ]) + "\n", encoding="utf-8")
+        results = []
+        for i in range(12):
+            p = subprocess.Popen(["bash", str(script)], stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, text=True)
+            time.sleep(0.15 + 0.017 * i)
+            p.send_signal(signal.SIGTERM)
+            out, _ = p.communicate(timeout=10)
+            results.append((p.returncode, "cleanup-done rc=143" in out))
+        self.assertEqual(results, [(143, True)] * 12)
+
+    def test_signal_during_the_read_leaves_a_newline_for_read(self):
+        # A signal landing as read's timeout fires can leave read blocked on
+        # the FIFO with no timeout; the newline is what lets it return.
+        script = "\n".join([
+            '. "%s"' % self.helpers,
+            'd=$(mktemp -d); mkfifo "$d/tick"; CONNECT_MONITOR_DIR="$d"',
+            'exec 7<> "$d/tick"',
+            "CONNECT_SLOT_READING=1",
+            "connect_signal_exit 143",
+            'echo "status=$CONNECT_SLOT_EXIT_STATUS"',
+            'if IFS= read -r -t 1 line <&7; then echo "fifo=newline"; else echo "fifo=empty"; fi',
+            'exec 7>&-; rm -rf "$d"',
+        ])
+        r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=10)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.stdout, "status=143\nfifo=newline\n")
+
+    def test_signal_outside_the_read_exits_at_once(self):
+        script = "\n".join([
+            '. "%s"' % self.helpers,
+            "trap 'echo \"cleanup rc=$?\"' EXIT",
+            "trap 'connect_signal_exit 129' HUP",
+            "kill -HUP $$",
+            "echo not-reached",
+        ])
+        r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=10)
+        self.assertEqual(r.returncode, 129, r.stdout + r.stderr)
+        self.assertEqual(r.stdout, "cleanup rc=129\n")
 
 
 class MonitorActionRecordsBeforeLogging(unittest.TestCase):

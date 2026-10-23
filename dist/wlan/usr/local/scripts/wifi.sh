@@ -836,8 +836,25 @@ connect_association_poll_matches() {
 # event cannot shorten the wait, and end the slot by the clock so poll counts
 # keep their time budget. The 20 ms ticks block in read -t on the monitor's
 # FIFO instead of forking sleep.
+#
+# connect's HUP/INT/TERM traps exit through connect_signal_exit. A trap that
+# exits while read -t is waiting skips bash's timeout cleanup, and the EXIT trap
+# that follows can then crash with SIGSEGV halfway through the fallback
+# restore. During the read the trap only records the status; the slot exits
+# with it once read has returned. A signal landing as the timeout fires can
+# also cost read its timeout, leaving it blocked on the FIFO, so the trap
+# writes a newline there for read to return on.
+connect_signal_exit() {
+    if [ "${CONNECT_SLOT_READING:-0}" = 1 ]; then
+        CONNECT_SLOT_EXIT_STATUS="$1"
+        { printf '\n' 1<> "$CONNECT_MONITOR_DIR/tick"; } 2>/dev/null || :
+        return 0
+    fi
+    exit "$1"
+}
+
 connect_wait_poll_slot() {
-    local tick="${CONNECT_MONITOR_DIR:-}/tick" id sec centi rest start now junk
+    local tick="${CONNECT_MONITOR_DIR:-}/tick" id sec centi rest start now junk status
     if [ -z "${CONNECT_MONITOR_DIR:-}" ] || [ ! -p "$tick" ] \
        || ! IFS=' .' read -r sec centi rest < /proc/uptime; then
         wifi_wpa_run_child sleep 0.1
@@ -851,7 +868,15 @@ connect_wait_poll_slot() {
         IFS=' .' read -r sec centi rest < /proc/uptime || return 0
         now=$((sec * 100 + 10#$centi))
         [ $((now - start)) -lt 10 ] || return 0
+        CONNECT_SLOT_READING=1
         { IFS= read -r -t 0.02 junk || :; } 2>/dev/null <> "$tick" || :
+        CONNECT_SLOT_READING=0
+        if [ -n "${CONNECT_SLOT_EXIT_STATUS:-}" ]; then
+            # Clear it first: the fallback restore in the EXIT trap waits here too.
+            status="$CONNECT_SLOT_EXIT_STATUS"
+            CONNECT_SLOT_EXIT_STATUS=""
+            exit "$status"
+        fi
     done
 }
 
@@ -3341,9 +3366,9 @@ case "$2" in
     if ! wifi_wpa_abort_scan_quiesce "$IFACE"; then
         echo "Error: cannot quiesce scan for $IFACE" >&2; exit 7
     fi
-    trap 'exit 129' HUP
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
+    trap 'connect_signal_exit 129' HUP
+    trap 'connect_signal_exit 130' INT
+    trap 'connect_signal_exit 143' TERM
     MONITOR_TIMEOUT="$CONNECT_TIMEOUT"
     [ "$CONNECT_FALLBACK_ENABLED" != 1 ] || MONITOR_TIMEOUT=$((CONNECT_TIMEOUT + CONNECT_ROLLBACK_TIMEOUT))
     if ! connect_event_monitor_start "$IFACE" "$MONITOR_TIMEOUT"; then
