@@ -1,0 +1,16 @@
+#!/bin/sh
+# Bring down a required station interface, preserving FTP connection protection.
+#   quote wifcdown <mlan0|mlan1|0|1>
+set -u
+
+if [ "$#" -ne 1 ]; then
+    echo "usage: wifcdown <mlan0|mlan1|0|1>"
+    exit 2
+fi
+case "$1" in
+    mlan0|0) IFACE=mlan0 ;;
+    mlan1|1) IFACE=mlan1 ;;
+    *) echo "invalid interface: $1"; exit 2 ;;
+esac
+
+exec "$(dirname "$0")/ifcdown" "$IFACE"

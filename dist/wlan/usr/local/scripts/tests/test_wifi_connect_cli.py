@@ -208,7 +208,8 @@ class ConnectHarness(unittest.TestCase):
     def land_on(self, net_id, ssid, freq):
         (self.state / "landing").write_text(f"{net_id} {ssid} {freq}\n")
 
-    def run_connect(self, *args, pid_namespace=False, trace=False, apply_stored_conf=False):
+    def run_connect(self, *args, pid_namespace=False, trace=False, apply_stored_conf=False,
+                    extra_env=None):
         env = dict(os.environ)
         env.update({
             "PATH": f"{self.stub}:{os.environ['PATH']}",
@@ -219,6 +220,8 @@ class ConnectHarness(unittest.TestCase):
             "WIFI_SCAN_TRANSITION_LOCK_TIMEOUT": "0",
             "ASSOC_TIMEOUT_DEFAULT": "2",
         })
+        if extra_env:
+            env.update(extra_env)
         if trace:
             env.update({
                 "FTPCMD_TRACE_ID": "test-trace",
@@ -237,6 +240,20 @@ class ConnectHarness(unittest.TestCase):
     def first_line(text):
         lines = text.splitlines()
         return lines[0] if lines else ""
+
+
+class ChangeIpEssidMarker(ConnectHarness):
+    """#362 — `wifi mlan0 connect <ssid>` 는 영구 SSID 변경이라 OPC ChangeIp ESSID 복원
+    표식(wlan-opc#161)을 지워, 다음 부팅의 `opcd -R` 이 이 값을 되돌리지 않게 한다."""
+
+    def test_connect_with_ssid_removes_the_restore_marker(self):
+        marker = self.root / "changeip_essid.restore"
+        marker.write_text("ssid=x\n")
+        self.write_conf(CONF_MODE_B)
+        self.land_on(0, "jhw_wlan", 5200)
+        r = self.run_connect("jhw_wlan", extra_env={"OPC_ESSID_MARKER": str(marker)})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse(marker.exists(), "the restore marker must be removed after the conf install")
 
 
 class FirstLineIsAscii(ConnectHarness):

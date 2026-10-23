@@ -342,9 +342,15 @@ PY
         dist/wlan/usr/local/scripts/wifi_wpa_conf_writer_test.sh \
         dist/wlan/usr/local/scripts/tests/test_fake_hwclock.sh \
         dist/wlan/usr/local/scripts/tests/test_wifi_eth_peer.sh \
-        dist/wlan/usr/local/scripts/tests/test_wlan_link_lib.sh; do
+        dist/wlan/usr/local/scripts/tests/test_wlan_link_lib.sh \
+        wlan-opc/scripts/provision/test_bd_provision_factory_topology.sh; do
         gate_step "source" "shell test: ${test##*/}"
-        bash "$test"
+        if [ "$test" = wlan-opc/scripts/provision/test_bd_provision_factory_topology.sh ]; then
+            PROVISION_TEST_TOPOLOGY_HELPER="$REPO/dist/wlan/usr/local/scripts/wifi_factory_topology.py" \
+                bash "$test"
+        else
+            bash "$test"
+        fi
     done
 
     gate_step "source" "shell syntax sweep (bash -n)"

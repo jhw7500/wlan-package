@@ -1,0 +1,17 @@
+#!/bin/sh
+# Reboot the board like rst; an optional interface is validated, not a target.
+#   quote wrst [mlan0|mlan1|0|1]
+set -u
+
+if [ "$#" -gt 1 ]; then
+    echo "usage: wrst [mlan0|mlan1|0|1]"
+    exit 2
+fi
+if [ "$#" -eq 1 ]; then
+    case "$1" in
+        mlan0|mlan1|0|1) ;;
+        *) echo "invalid interface: $1"; exit 2 ;;
+    esac
+fi
+
+exec "$(dirname "$0")/rst"

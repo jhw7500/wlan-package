@@ -11,10 +11,12 @@
 # 매핑 (JSON 키 → systemd unit):
 #   .global.ping_monitor.enabled              → wifi_ping_monitor.service
 #   .global.fw_watch.enabled                  → wlan_fw_watch.service
+#   .global.ntp.enabled                       → systemd-timesyncd.service (배포판 유닛, 기본 true)
 #   .mlan0.net_rx + .mlan1.net_rx > 0         → wifi_mgmt_log.timer
 #   .wbridge.thermal.enabled                  → wifi_thermal_state.timer
 #   .snmp.enabled                             → snmpd.service (배포판 net-snmp 유닛)
 #   .opc.enabled                              → opcd.service (wlan-opc OPC 제어 데몬)
+#   (게이트 없음)                              opcd-essid-restore.service 는 항상 enable, 표식 유무로만 실행(#362)
 #   .logger.enabled                           → wifi_logger.service (시스템 로거 그룹)
 #   .eth0.logger.enabled                      → wifi_logger@eth0.service
 #   .mlanN.wpa_supplicant.enabled             → wpa_supplicant@mlanN.service
@@ -24,7 +26,8 @@
 #   .mlanN.roaming.enabled                    → wifi_roam@mlanN.service
 #   .mlanN.periodic_roam.enabled              → deprecated; wifi_periodic_roam@mlanN.service forced disabled
 #   .mlanN.arping.enabled                     → wifi_arping@mlanN.service
-#   (.mlanN.on_connect.enabled OR .snmp.trap.enabled OR
+#   (.mlanN.roam_garp.enabled is JSON boolean true OR
+#    .mlanN.on_connect.enabled OR .snmp.trap.enabled OR
 #    (AX iface AND .mlanN.mcs_tier.enabled AND HE configured))
 #                                               → wifi_event@mlanN.service
 #   (.wbridge.enabled AND .wbridge.bridge_iface == mlanN) → wifi_bridge@mlanN.service
@@ -177,6 +180,16 @@ MFG_MODE=$(grep -m1 '^[[:space:]]*mfg_mode=' "/lib/firmware/$_MOD_PARA" 2>/dev/n
 # 적용해야 wifi log system|eth0 enable/disable이 모든 모드에서 같은 의미를 가진다.
 apply wifi_logger.service     "$(get_bool ".logger.enabled" "true")"
 apply wifi_logger@eth0.service "$(get_bool ".eth0.logger.enabled" "true")"
+# 시각 동기(systemd-timesyncd, 배포판 유닛)도 무선과 무관하다 — .global.ntp.enabled(기본 true, 웹 UI
+# 토글)가 모든 모드에서 on/off 를 소유하도록 MFG early-return 앞에서 적용한다(#361).
+_ntp_enabled=$(get_bool ".global.ntp.enabled" "true")
+apply systemd-timesyncd.service "$_ntp_enabled"
+if [ "$_ntp_enabled" = "false" ]; then
+    # disable 은 unit file 만 바꾼다. 정상 종료의 ExecStop 동기화를 거치지 못한 부팅(전원 단절 뒤)에는
+    # sysinit 이 이미 띄운 인스턴스가 남으므로, false 는 이 시점에 실제로 내린다(inactive 면 무비용).
+    systemctl stop systemd-timesyncd.service 2>/dev/null \
+        || logger -p local0.warn "[$tag:$LINENO] stop systemd-timesyncd.service failed"
+fi
 
 if [ "${MFG_MODE:-0}" = "1" ]; then
     logger -p local0.info "[$tag:$LINENO] mfg_mode=1 -> MFG profile: disable+stop STA/FW-touching units"
@@ -228,6 +241,9 @@ apply wlan_fw_watch.service         "$(get_bool ".global.fw_watch.enabled"     "
 apply wifi_thermal_state.timer      "$(get_bool ".wbridge.thermal.enabled"     "false")"
 apply snmpd.service                 "$(get_bool ".snmp.enabled"                "false")"
 apply opcd.service                  "$(get_bool ".opc.enabled"                 "false")"
+# opcd-essid-restore.service(부팅 1회 opcd -R, #362)는 이 게이트에 걸지 않는다 — OPC 를 끈 뒤
+# 재부팅해도 남은 ChangeIp ESSID 는 되돌아가야 하고(wlan-opc#161), 표식이 없으면 유닛의
+# ConditionPathExists 가 어차피 no-op 이다. postinst 가 무조건 enable 한다.
 
 # wifi_mgmt_log.timer: net_rx 값이 어느 한 쪽이라도 양수면 enable
 _m0_rx=$(jq -r '.mlan0.net_rx // 0' "$JSON")
@@ -292,8 +308,9 @@ for iface in mlan0 mlan1; do
     # deprecated third owner는 is-enabled=false/수동 active 상태까지 포함해 항상 중지.
     ensure_stopped_owner_unit "wifi_periodic_roam@${iface}.service" || true
 
-    # wifi_event: on_connect 명령, SNMP 링크/채널 트랩, 또는 association 후 deferred
-    # MCS 검증/1회 제한 복구가 필요하면 enable한다.
+    # wifi_event: strict opt-in roam GARP, on_connect 명령, SNMP 링크/채널 트랩,
+    # 또는 association 후 deferred MCS 검증/1회 제한 복구가 필요하면 enable한다.
+    _garp=$(jq -r "if (.${iface}.roam_garp.enabled) == true then \"true\" else \"false\" end" "$JSON" 2>/dev/null) || _garp="false"
     _oc=$(get_bool ".${iface}.on_connect.enabled" "false")
     _mcs=$(get_bool ".${iface}.mcs_tier.enabled" "false")
     _standard=$(jq -r ".${iface}.STANDARD // \"\" | ascii_downcase" "$JSON" 2>/dev/null)
@@ -303,7 +320,7 @@ for iface in mlan0 mlan1; do
        && [ -n "$_mcs_he" ]; then
         _mcs_verify="true"
     fi
-    if [ "$_oc" = "true" ] || [ "$SNMP_TRAP_ENABLED" = "true" ] || [ "$_mcs_verify" = "true" ]; then
+    if [ "$_garp" = "true" ] || [ "$_oc" = "true" ] || [ "$SNMP_TRAP_ENABLED" = "true" ] || [ "$_mcs_verify" = "true" ]; then
         apply "wifi_event@${iface}.service" "true"
     else
         apply "wifi_event@${iface}.service" "false"

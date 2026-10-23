@@ -1,6 +1,6 @@
 #!/bin/sh
 # Test-only runtime SSID switch. Reached over FTP as:
-#   quote wconnectraw [mlan0|mlan1] <ssid words...>
+#   quote wconnectraw <mlan0|mlan1|0|1> <ssid words...>
 #
 # This deliberately bypasses the persistent wifi connect transaction: it does
 # not validate the SSID, inspect topology, edit/sync wpa_supplicant.conf, or
@@ -23,7 +23,7 @@ monotonic_ms() {
 START_MS=$(monotonic_ms 2>/dev/null || true)
 TRACE_ID="${START_MS:-0}-$$"
 
-IFACE=mlan0
+IFACE=unknown
 raw_log_failure() {
     _code=$1
     shift
@@ -35,11 +35,14 @@ raw_log_failure() {
 trap '_rc=$?; trap - EXIT; if [ "$_rc" -eq 0 ]; then printf "SUCCESS\n"; else printf "FAIL code=%s\n" "$_rc"; fi; exit "$_rc"' EXIT
 
 case "${1:-}" in
-    mlan0|mlan1)
-        IFACE=$1
-        shift
+    mlan0|0) IFACE=mlan0 ;;
+    mlan1|1) IFACE=mlan1 ;;
+    *)
+        raw_log_failure 2 "expected interface mlan0, mlan1, 0 or 1"
+        exit 2
         ;;
 esac
+shift
 
 if [ "$#" -eq 0 ]; then
     raw_log_failure 2 "missing ssid"
@@ -47,6 +50,17 @@ if [ "$#" -eq 0 ]; then
 fi
 SSID=$*
 PARSED_MS=$(monotonic_ms 2>/dev/null || printf '%s\n' "${START_MS:-0}")
+
+# Share the same gate as ordinary wifi/OPC writers. This command still bypasses
+# persistence and fallback, but may not disturb an active fallback transaction.
+CHANGE_RUN_DIR=${WIFI_RUN_DIR:-/run/wifi}
+mkdir -p "$CHANGE_RUN_DIR" || exit 1
+exec 6>"$CHANGE_RUN_DIR/${IFACE}.change.lock" || exit 1
+if ! flock -n -s 6; then
+    raw_log_failure 6 "configuration/connection change busy for $IFACE"
+    echo "configuration/connection change busy for $IFACE" >&2
+    exit 6
+fi
 
 STATUS=$($WPA_CLI -i "$IFACE" status 2>/dev/null)
 STATUS_RC=$?

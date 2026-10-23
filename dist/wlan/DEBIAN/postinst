@@ -1,5 +1,133 @@
 #!/bin/bash
 
+prepare_factory_selector_parent() {
+    local target="${1:-/usr/local/etc}"
+    local trusted_root="${2:-/}"
+    local required_uid="${3:-0}"
+    local required_gid="${4:-0}"
+    local relative current component owner mode mode_value
+    local -a components
+
+    case "$target:$trusted_root" in
+        /*:/*) ;;
+        *)
+            printf 'ERROR: factory selector target and trusted root must be absolute paths\n' >&2
+            return 1
+            ;;
+    esac
+    case "$target" in
+        *//*|*/./*|*/../*|*/.|*/..|*/)
+            printf 'ERROR: unsafe factory selector path syntax: %s\n' "$target" >&2
+            return 1
+            ;;
+    esac
+    case "$trusted_root" in
+        /) ;;
+        *//*|*/./*|*/../*|*/.|*/..|*/)
+            printf 'ERROR: unsafe trusted root path syntax: %s\n' "$trusted_root" >&2
+            return 1
+            ;;
+    esac
+
+    if [ "$trusted_root" = "/" ]; then
+        relative=${target#/}
+        current=
+    else
+        trusted_root=${trusted_root%/}
+        case "$target" in
+            "$trusted_root"/*)
+                relative=${target#"$trusted_root"/}
+                current=$trusted_root
+                ;;
+            *)
+                printf 'ERROR: factory selector target is outside trusted root: %s\n' "$target" >&2
+                return 1
+                ;;
+        esac
+    fi
+    if [ -z "$relative" ]; then
+        printf 'ERROR: factory selector target must be below trusted root: %s\n' "$target" >&2
+        return 1
+    fi
+
+    IFS=/ read -r -a components <<< "$relative"
+    if [ -n "$current" ]; then
+        if [ -L "$current" ] || [ ! -d "$current" ]; then
+            printf 'ERROR: unsafe factory selector path component: %s\n' "$current" >&2
+            return 1
+        fi
+        owner=$(stat -c '%u:%g' -- "$current") || return 1
+        mode=$(stat -c '%a' -- "$current") || return 1
+        mode_value=$((8#$mode))
+        if [ "$owner" != "$required_uid:$required_gid" ] || (( mode_value & 0022 )); then
+            printf 'ERROR: unsafe factory selector path component metadata: %s\n' "$current" >&2
+            return 1
+        fi
+    fi
+
+    for component in "${components[@]}"; do
+        [ -n "$component" ] || {
+            printf 'ERROR: unsafe factory selector path syntax: %s\n' "$target" >&2
+            return 1
+        }
+        current="${current%/}/$component"
+        if [ "$current" = "$target" ]; then
+            break
+        fi
+        if [ -L "$current" ] || [ ! -d "$current" ]; then
+            printf 'ERROR: unsafe factory selector path component: %s\n' "$current" >&2
+            return 1
+        fi
+        owner=$(stat -c '%u:%g' -- "$current") || return 1
+        mode=$(stat -c '%a' -- "$current") || return 1
+        mode_value=$((8#$mode))
+        if [ "$owner" != "$required_uid:$required_gid" ] || (( mode_value & 0022 )); then
+            printf 'ERROR: unsafe factory selector path component metadata: %s\n' "$current" >&2
+            return 1
+        fi
+    done
+
+    if [ -L "$target" ] || { [ -e "$target" ] && [ ! -d "$target" ]; }; then
+        printf 'ERROR: unsafe factory selector path leaf: %s\n' "$target" >&2
+        return 1
+    fi
+    if [ ! -e "$target" ]; then
+        if ! mkdir -m 0755 -- "$target"; then
+            printf 'ERROR: failed to create factory selector parent: %s\n' "$target" >&2
+            return 1
+        fi
+    fi
+    if [ -L "$target" ] || [ ! -d "$target" ]; then
+        printf 'ERROR: unsafe factory selector path leaf after creation: %s\n' "$target" >&2
+        return 1
+    fi
+    if ! chown "$required_uid:$required_gid" -- "$target"; then
+        printf 'ERROR: failed to chown factory selector parent: %s\n' "$target" >&2
+        return 1
+    fi
+    if ! chmod go-w -- "$target"; then
+        printf 'ERROR: failed to chmod factory selector parent: %s\n' "$target" >&2
+        return 1
+    fi
+    owner=$(stat -c '%u:%g' -- "$target") || return 1
+    mode=$(stat -c '%a' -- "$target") || return 1
+    mode_value=$((8#$mode))
+    if [ "$owner" != "$required_uid:$required_gid" ] || (( mode_value & 0022 )); then
+        printf 'ERROR: factory selector parent metadata verification failed: %s\n' "$target" >&2
+        return 1
+    fi
+    if ! sync "$target"; then
+        printf 'ERROR: failed to sync factory selector parent: %s\n' "$target" >&2
+        return 1
+    fi
+}
+
+# Helper-only sourcing skips package actions. Explicit noop retains the existing
+# maintenance contract that also loads installer progress functions.
+if [[ "${BASH_SOURCE[0]}" != "$0" && "${1:-}" != "noop" ]]; then
+    return 0
+fi
+
 ############################################################
 # postinst script main
 ############################################################
@@ -80,6 +208,17 @@ disable_services_if_enabled() {
 case "$1" in
 configure)
   echo "postinst configure"
+  # >>> opcd-upgrade-state-capture
+  # dpkg replaces the OPCd ELF and unit before postinst runs. Remember whether an
+  # old daemon was live at configure entry so only that upgrade case is handed
+  # over to the replacement binary later; a previously inactive unit must stay
+  # inactive even if configuration processing enables it.
+  OPCD_WAS_ACTIVE=0
+  if command -v systemctl >/dev/null 2>&1 \
+     && systemctl is-active --quiet opcd.service 2>/dev/null; then
+    OPCD_WAS_ACTIVE=1
+  fi
+  # <<< opcd-upgrade-state-capture
   installer_progress_start
 
   # CRITICAL: Verify binaries and config exist BEFORE making any system changes.
@@ -109,7 +248,7 @@ configure)
     fi
   fi
 
-  mkdir -p /usr/local/etc
+  prepare_factory_selector_parent /usr/local/etc / || exit 1
 
   # 0.5.1 이전 패키지가 payload로 설치했던 개발용 테스트/cache는 새 패키지에서
   # 제거해도 Python이 만든 비소유 파일 때문에 dpkg가 빈 디렉터리를 지우지 못할 수 있다.
@@ -215,6 +354,9 @@ EOF
 
   if [ "$CURRENT_TS" -lt "$SAFE_TS" ]; then
     echo "WARNING: System time is before $SAFE_TIME, setting to safe time"
+    # set-time 은 NTP 가 켜져 있으면 거부되므로 먼저 끈다. 여기서 내린 서비스는 아래
+    # wifi_apply_enabled.sh(.global.ntp.enabled, 기본 true)가 다시 enable 하고
+    # `# >>> timesyncd-start` 블록이 기동한다 — 꺼진 채 남기는 래치가 아니다(#361).
     timedatectl set-ntp false 2>/dev/null || true
     timedatectl set-timezone Asia/Seoul 2>/dev/null || true
     timedatectl set-time "$SAFE_TIME" 2>/dev/null || true
@@ -311,7 +453,10 @@ customctl() {
   # enable한다. wifi_logger 글로벌/eth0의 최종 부팅 정책은 아래
   # wifi_apply_enabled.sh가 JSON(.logger.enabled/.eth0.logger.enabled)과 동기화한다.
   # wifi-stack.target 은 multi-user.target 도달 후 비블로킹으로 wifi 스택을 기동한다.
-  systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer journald-snapshot-boundary.service wifi-stack.target wifi_init wifi_apply_enabled wifi_acl wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 log-watchdog.timer serial-getty@ttyGS0.service wlan-peer-net.service || true
+  # opcd-essid-restore.service: 부팅 1회 `opcd -R`(ChangeIp ESSID 복원, #362). .opc.enabled 게이트에
+  # 걸지 않고 항상 enable 한다 — 표식이 없으면 ConditionPathExists 로 no-op 이고, OPC 를 끈 뒤의
+  # 재부팅에서도 남은 ChangeIp ESSID 는 되돌아가야 한다(wlan-opc#161).
+  systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer journald-snapshot-boundary.service journald-snapshot-shutdown.service wifi-stack.target wifi_init wifi_apply_enabled wifi_acl wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 log-watchdog.timer serial-getty@ttyGS0.service wlan-peer-net.service opcd-essid-restore.service || true
   installer_progress_step
   # wlan-peer-net.service 는 PartOf=systemd-networkd.service 로 networkd restart 를
   # 추종하는데, PartOf 는 대상이 이미 active 일 때만 발화한다(inactive 면 restart 가
@@ -319,6 +464,10 @@ customctl() {
   # 있으므로 설치 시점에 한 번 띄운다. Type=oneshot RemainAfterExit=yes 라 즉시
   # active(exited) 가 되고, 게이트가 꺼져 있으면 스크립트가 내부에서 no-op 한다.
   systemctl start --no-block wlan-peer-net.service || true
+  # journald-snapshot-shutdown.service 의 ExecStop 이 셧다운 구간 journal 을 내보낸다(#371).
+  # enable 만 하면 다음 부팅 전까지 inactive 라 업그레이드 직후 첫 셧다운에서 돌지 않으므로
+  # 설치 시점에 띄운다. ExecStart=/bin/true(oneshot, RemainAfterExit)라 즉시 active 가 된다.
+  systemctl start --no-block journald-snapshot-shutdown.service || true
   # serial-getty@ttyGS0는 커널 콘솔이자 이 설치 로그 출력 대상이라 동기 start가
   # 위험하다(PID1 잡 대기와 맞물려 데드락 가능). --no-block로 큐잉만 하고 진행한다.
   systemctl start --no-block switchd wifi_led@eth0 serial-getty@ttyGS0.service || true
@@ -398,7 +547,6 @@ makeDirectory() {
   makeDirectory /usr/local/bin
   makeDirectory /usr/local/logger
   makeDirectory /usr/local/scripts
-  makeDirectory /usr/local/etc
   makeDirectory /usr/lib/sysctl.d
   makeDirectory /var/log/cantops/mgmt/mlan0
   makeDirectory /var/log/cantops/mgmt/mlan1
@@ -696,6 +844,58 @@ secure_wpa_conf() {
       /usr/local/scripts/wifi_services.sh start 2>/dev/null || true
     fi
   fi
+
+  # 최초 설치에서는 위의 첫 wifi_apply_enabled.sh 호출이 JSON 부재로 건너뛴다(json_merge 가 그 뒤에
+  # /usr/local/etc/wifi_init_conf.json 을 만든다). 합쳐진 JSON 으로 한 번 더 동기화해 설치 시점의
+  # enable/disable 이 첫 부팅을 기다리지 않게 한다. 업그레이드에서는 상태가 이미 같아 no-op 이고,
+  # NO_WBRIDGE=1 경로는 바로 위에서 이미 같은 호출을 했다(#361).
+  if [ "$NO_WBRIDGE" -eq 0 ]; then
+    /usr/local/scripts/wifi_apply_enabled.sh 2>/dev/null || true
+  fi
+
+  # >>> timesyncd-start
+  # systemd-timesyncd 의 enable/disable 은 .global.ntp.enabled(기본 true, 웹 UI 토글) 를 읽는
+  # wifi_apply_enabled.sh 가 바로 위에서 동기화했다(#361: 이미지 기본은 disabled 라 conf 복사만으로는
+  # 시각 동기가 없었고, 위 안전시각 분기의 `timedatectl set-ntp false` 도 서비스를 내린다).
+  # 게이트가 enable 로 끝났으면 다음 부팅을 기다리지 않고 지금 --no-block 으로 (재)기동해
+  # 복사·보존된 /etc/systemd/timesyncd.conf 를 읽게 한다(동기 start 는 PID1 잡 대기와 맞물릴
+  # 수 있어 큐잉만 한다). 실패는 설치를 막지 않는다 — 시각 동기는 통지 Timestamp 품질의
+  # 문제이지 설치 성립 조건이 아니다.
+  if systemctl is-enabled --quiet systemd-timesyncd.service 2>/dev/null; then
+    if systemctl restart --no-block systemd-timesyncd.service; then
+      logger -p local0.info "[$tag:$LINENO] [$KEY] systemd-timesyncd.service restarted (.global.ntp.enabled)"
+    else
+      logger -p local0.warn "[$tag:$LINENO] [$KEY] systemd-timesyncd.service restart failed; it starts at the next boot"
+    fi
+  else
+    logger -p local0.info "[$tag:$LINENO] [$KEY] systemd-timesyncd.service left disabled (.global.ntp.enabled false or enable failed)"
+  fi
+  # <<< timesyncd-start
+
+  # >>> opcd-upgrade-restart
+  # wifi_services.sh deliberately treats an already-active service as a no-op,
+  # so an upgrade would otherwise leave the old OPCd process mapped to the
+  # replaced ELF. Restart only the daemon observed at configure entry and only
+  # after config migration while the final .opc.enabled gate still allows it.
+  # A synchronous try-restart waits for Type=notify READY and inherits the
+  # unit's start/stop timeouts. Its failure must fail package configuration
+  # rather than report a successful install with an old or unready daemon.
+  if [ "$OPCD_WAS_ACTIVE" -eq 1 ] \
+     && systemctl is-enabled --quiet opcd.service 2>/dev/null \
+     && systemctl is-active --quiet opcd.service 2>/dev/null; then
+    systemctl try-restart opcd.service
+    _opcd_restart_rc=$?
+    if [ "$_opcd_restart_rc" -ne 0 ]; then
+      logger -p local0.err "[$tag:$LINENO] [$KEY] failed to restart active opcd.service after upgrade" || true
+      exit "$_opcd_restart_rc"
+    fi
+    if ! systemctl is-active --quiet opcd.service 2>/dev/null; then
+      logger -p local0.err "[$tag:$LINENO] [$KEY] opcd.service is not active after upgrade restart" || true
+      exit 1
+    fi
+    logger -p local0.info "[$tag:$LINENO] [$KEY] restarted active opcd.service with upgraded binary"
+  fi
+  # <<< opcd-upgrade-restart
 
   # 첫 부팅 전에 보드 정보까지 반영된 설정을 정상본으로 선제 저장한다. 업그레이드에서는
   # 기존 정상본과 내용이 같으면 회전하지 않으며, 손상된 active는 commit이 거부한다.

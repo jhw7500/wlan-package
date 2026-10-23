@@ -440,6 +440,14 @@ EOF
 chmod +x "$BIN"/*
 export PATH="$BIN:$PATH"
 export CALL_LOG STATE_DIR WPA_DIR WIFI_RUN_DIR="$RUN_DIR"
+# #362: opc_wlan_apply.sh 는 mlan0 ssid 설치 전에 ChangeIp ESSID 복원 표식을 요구한다(opcd 가 arm 한
+# 뒤에만 호출되는 계약). 하네스는 그 상태를 흉내 내 표식을 둔다; 부재 케이스는 전용 검사에서 본다.
+OPC_ESSID_MARKER="$TD/opc-essid.restore"
+export OPC_ESSID_MARKER
+# `wifi 0 ssid`/`wifi 0 connect <ssid>` 는 설치 뒤 표식을 지우므로(ChangeIp 체인 종료) 그런 케이스를 지난
+# 뒤의 OPC ssid 케이스는 opcd 의 arm 을 흉내 내 직전에 다시 arm 한다.
+opc_arm_essid_marker() { printf 'slot=1\n' > "$OPC_ESSID_MARKER"; }
+opc_arm_essid_marker
 
 PASS=0
 FAIL=0
@@ -1135,6 +1143,24 @@ check_equal "wifi ssid writes exact UTF-8 hex token" \
     "$(grep -Ec "^[[:space:]]+ssid=${_special_hex}$" "$CONF")" "1"
 check_real_wpa_parser "real parser accepts wifi ssid hex output" "$CONF"
 
+# #362: 운영자의 영구 SSID 변경(wifi 0 ssid)은 OPC ChangeIp ESSID 복원 표식을 지워 체인을 끝낸다.
+# 표식은 mlan0 conf 에만 있으므로 mlan1 의 변경은 건드리지 않는다.
+_marker="$TD/changeip_essid.restore"
+printf 'ssid=x\n' > "$_marker"
+write_mode_b_legacy
+OPC_ESSID_MARKER="$_marker" WPA_CONF_DIR="$WPA_DIR" bash "$WIFI_SH" 0 ssid "Office" >/dev/null 2>&1
+check_equal "wifi 0 ssid succeeds with a ChangeIp restore marker present" "$?" "0"
+check_equal "wifi 0 ssid removes the ChangeIp ESSID restore marker" \
+    "$([ -e "$_marker" ] && echo kept || echo removed)" "removed"
+printf 'ssid=x\n' > "$_marker"
+write_mode_b_legacy
+cp "$CONF" "$WPA_DIR/wpa_supplicant-mlan1.conf"
+OPC_ESSID_MARKER="$_marker" WPA_CONF_DIR="$WPA_DIR" bash "$WIFI_SH" 1 ssid "Office" >/dev/null 2>&1
+check_equal "wifi 1 ssid succeeds on its own conf" "$?" "0"
+check_equal "wifi 1 ssid keeps the mlan0-only ChangeIp restore marker" \
+    "$([ -e "$_marker" ] && echo kept || echo removed)" "kept"
+rm -f "$_marker" "$WPA_DIR/wpa_supplicant-mlan1.conf"
+
 _ssid_32='가가가가가가가가가가ab'
 _ssid_33='가가가가가가가가가가가'
 write_mode_b_legacy
@@ -1192,6 +1218,7 @@ check_equal "wifi connect Mode B manual candidate reloads the full profile" \
 
 write_mode_b_legacy
 set_boot_policy false false '["Office"]'
+opc_arm_essid_marker
 WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
     sh "$OPC_SH" mlan0 ssid Office >/dev/null 2>&1
 rc=$?
@@ -1200,6 +1227,19 @@ if [ "$rc" -eq 0 ] && [ "$(conf_ssid_identity "$CONF")" = "Office" ]; then
 else
     fail "OPC must accept an immutable Mode B manual candidate"
 fi
+
+# #362 (Tribunal A-R1-002): arm 뒤 다른 작성자가 ChangeIp ESSID 복원 표식을 지웠으면 그 작성자의
+# SSID 가 최종값이다 — opc_wlan_apply.sh 는 lock 안에서 표식 부재를 보고 conf 를 건드리지 않고 exit 6.
+write_mode_b_legacy
+_before_sha=$(sha256sum "$CONF" | cut -d' ' -f1)
+OPC_ESSID_MARKER="$TD/absent-marker" WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
+    sh "$OPC_SH" mlan0 ssid Office >/dev/null 2>&1
+check_equal "OPC ssid install without the ChangeIp restore marker exits 6" "$?" "6"
+check_equal "OPC ssid install without the marker leaves the conf untouched" \
+    "$(sha256sum "$CONF" | cut -d' ' -f1)" "$_before_sha"
+OPC_ESSID_MARKER="$TD/absent-marker" WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
+    sh "$OPC_SH" mlan0 freq "5180 5200" >/dev/null 2>&1
+check_equal "OPC freq-only install does not require the marker" "$?" "0"
 
 write_mode_b_legacy
 set_status_mode target-custom
@@ -1214,6 +1254,7 @@ check_real_wpa_parser "real parser accepts wifi connect hex output" "$CONF"
 
 write_mode_b_legacy
 set_reconfigure_mode ok
+opc_arm_essid_marker
 WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
     sh "$OPC_SH" mlan0 ssid "$_special_ssid" >/dev/null 2>&1
 check_equal "OPC accepts exact special SSID in Mode B" "$?" "0"
@@ -1264,6 +1305,7 @@ for _invalid_ssid in $'bad\x1fname' $'bad\x7fname' "$_ssid_33"; do
 
     write_mode_b_legacy
     cp "$CONF" "$TD/invalid-opc.before"
+    opc_arm_essid_marker
     WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
         sh "$OPC_SH" mlan0 ssid "$_invalid_ssid" >/dev/null 2>&1
     rc=$?
@@ -1711,13 +1753,14 @@ check_missing_pid_cleanup_set_e
 # source slice that execute after FD9/FD7 acquisition.  Every raw external
 # token must sit behind one of the close-first boundaries; the exact boundary
 # inventory also forces future wrapped children to be reviewed deliberately.
-if python3 - "$WIFI_SH" "$SCRIPT_DIR/wifi_init_config_lib.sh" <<'PY'
+if python3 - "$WIFI_SH" "$SCRIPT_DIR/wifi_init_config_lib.sh" "$SCRIPT_DIR/wifi_connect_fallback_lib.sh" <<'PY'
 import re
 import sys
 
-wifi_path, lib_path = sys.argv[1:]
+wifi_path, lib_path, fallback_path = sys.argv[1:]
 wifi = open(wifi_path, encoding="utf-8").read()
 lib = open(lib_path, encoding="utf-8").read()
+fallback = open(fallback_path, encoding="utf-8").read()
 
 helper_start = wifi.index("wpa_cli_ok() {")
 helper_end = wifi.index("# ----- radio staged-apply helpers -----", helper_start)
@@ -1727,11 +1770,11 @@ connect_end = wifi.index("\n    ;;\n  scan)", connect_start)
 abort_start = lib.index("wifi_wpa_abort_scan_quiesce() {")
 abort_end = lib.index("\n}\n\n# FD 7 serializes", abort_start) + 2
 regions = wifi[helper_start:helper_end] + wifi[connect_start:connect_end] \
-    + lib[abort_start:abort_end]
+    + lib[abort_start:abort_end] + fallback[fallback.index("# Capture only"):]
 
 external = (
-    "awk", "cat", "chmod", "dirname", "grep", "install", "jq", "mkdir",
-    "mktemp", "mv", "rm", "sleep", "sync", "tr", "wpa_cli",
+    "awk", "cat", "chmod", "cp", "dirname", "grep", "install", "jq", "mkdir",
+    "mktemp", "mv", "rm", "sleep", "sync", "tr", "wpa_cli", "logger", "timeout",
 )
 command = "(" + "|".join(external) + r")\b"
 command_start = re.compile(
@@ -1768,8 +1811,8 @@ for number, line in enumerate(regions.splitlines(), 1):
     if has_raw_command and not any(wrapper in line for wrapper in wrappers):
         violations.append(f"line {number}: {stripped}")
 
-if "exec 7>&- 9>&-" not in action_body:
-    violations.append("monitor action heredoc lacks an explicit FD7/FD9 close")
+if not any(line.startswith("exec ") and all(f"{fd}>&-" in line for fd in (6, 7, 8, 9)) for line in action_body):
+    violations.append("monitor action heredoc lacks explicit private-FD closes")
 
 inventory = {wrapper: set() for wrapper in wrappers}
 wrapper_re = re.compile(
@@ -1780,17 +1823,19 @@ for wrapper, command in wrapper_re.findall(regions):
     inventory[wrapper].add(command)
 
 expected = {
-    "wifi_wpa_child_exec": {"cat", "mktemp", "wpa_cli"},
+    "wifi_wpa_child_exec": {"cat", "mktemp", "wpa_cli", "timeout", "jq"},
     "wifi_wpa_child_call": {
         "to_freq_mhz_checked", "wifi_ssid_encode_values",
         "wifi_wpa_conf_common_freqs",
+        "wifi_wpa_conf_network_count", "wifi_ssid_conf_to_wpa_text",
     },
     "wifi_wpa_run_child": {
-        "awk", "cat", "chmod", "mkdir", "rm", "sleep", "sync", "wpa_cli",
+        "awk", "cat", "chmod", "cp", "mkdir", "rm", "sleep", "sync", "wpa_cli", "jq", "mv", "logger",
     },
     "wifi_wpa_run_child_call": {
         "safe_install_sync", "wifi_wpa_conf_is_multi_topology",
         "wifi_wpa_conf_render_canonical",
+        "sync_path_or_global",
     },
 }
 if inventory != expected:
@@ -2100,6 +2145,7 @@ set_mv_mode ok
 write_mode_a_legacy
 set_boot_policy true true '["Office"]'
 before=$(sha256sum "$CONF" | awk '{print $1}')
+opc_arm_essid_marker
 WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$TD/run" \
     sh "$OPC_SH" mlan0 ssid NewNet >/dev/null 2>&1
 rc=$?
@@ -2110,6 +2156,7 @@ check_equal "OPC Mode A rejection leaves conf unchanged" "$after" "$before"
 write_mode_b_legacy
 set_boot_policy true true '[]'
 before=$(sha256sum "$CONF" | awk '{print $1}')
+opc_arm_essid_marker
 WPA_CONF_DIR="$WPA_DIR" WIFI_RUN_DIR="$RUN_DIR" \
     sh "$OPC_SH" mlan0 ssid NewNet >/dev/null 2>&1
 rc=$?

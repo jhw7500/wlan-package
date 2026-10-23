@@ -43,6 +43,7 @@ def run_handler(name, *args, env=None, stubs=None):
     d = _stub_dir(**(stubs or {}))
     base = {k: v for k, v in os.environ.items() if k != "FTPCMD_LOCAL_ADDR"}
     base["PATH"] = f"{d}:{os.environ['PATH']}"
+    base["WIFI_RUN_DIR"] = str(d / "wifi-run")
     base.update(env or {})
     try:
         return subprocess.run(
@@ -156,6 +157,7 @@ def run_wconnectraw(*args, status_id="7", set_reply="OK", reassociate_reply="OK"
         env.update({
             "PATH": f"{root}:{os.environ['PATH']}",
             "WCONNECTRAW_CAPTURE": str(capture),
+            "WIFI_RUN_DIR": str(root / "wifi-run"),
             "WCONNECTRAW_LOG": str(timing_log),
             "WCONNECTRAW_STATUS_ID": status_id,
             "WCONNECTRAW_NETWORKS": network_rows,
@@ -174,7 +176,10 @@ def run_wconnectraw(*args, status_id="7", set_reply="OK", reassociate_reply="OK"
 
 class HandlersExist(unittest.TestCase):
     def test_every_handler_is_executable(self):
-        for name in ("getifstate", "ifcup", "ifcdown", "rst", "wconnect", "wconnectraw", "wssid", "wfreq", "wstatus"):
+        for name in (
+            "getifstate", "ifcup", "ifcdown", "rst", "wconnect", "wconnectraw",
+            "wssid", "wfreq", "wstatus", "wgetifstate", "wifcup", "wifcdown", "wrst",
+        ):
             path = FTPCMD_DIR / name
             self.assertTrue(path.is_file(), f"{name} 이 없다")
             self.assertTrue(os.access(path, os.X_OK), f"{name} 에 실행비트가 없다")
@@ -213,26 +218,39 @@ class FirstLineContract(unittest.TestCase):
             self.assertIn("no such interface: mlan0", r.stdout)
 
 
-class WconnectDefaultInterface(unittest.TestCase):
-    def test_no_arguments_apply_stored_mlan0_profile(self):
+class WconnectRequiredInterface(unittest.TestCase):
+    def test_missing_interface_stops_before_wifi(self):
         r, argv, _ = run_wconnect()
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual(argv, ["mlan0", "connect"])
-        self.assertEqual(r.stdout.splitlines(), ["SUCCESS"])
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertEqual(argv, [])
+        self.assertEqual(r.stdout.splitlines(), ["FAIL code=2"])
 
-    def test_ssid_without_interface_uses_mlan0(self):
-        r, argv, _ = run_wconnect("field-ap")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual(argv, ["mlan0", "connect", "field-ap"])
-        self.assertEqual(r.stdout.splitlines(), ["SUCCESS"])
+    def test_invalid_interface_is_not_interpreted_as_ssid(self):
+        for interface in ("", "field-ap", "2", "mlan2", "eth0"):
+            with self.subTest(interface=interface):
+                r, argv, _ = run_wconnect(interface, "AP")
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertEqual(argv, [])
+                self.assertEqual(r.stdout.splitlines(), ["FAIL code=2"])
+
+    def test_interface_names_and_numbers_apply_the_selected_profile(self):
+        for interface, expected in (
+            ("mlan0", "mlan0"), ("0", "mlan0"),
+            ("mlan1", "mlan1"), ("1", "mlan1"),
+        ):
+            with self.subTest(interface=interface):
+                r, argv, _ = run_wconnect(interface)
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertEqual(argv, [expected, "connect"])
+                self.assertEqual(r.stdout.splitlines(), ["SUCCESS"])
 
     def test_ssid_words_are_joined_into_one_wifi_argument(self):
-        r, argv, _ = run_wconnect("Field", "AP")
+        r, argv, _ = run_wconnect("0", "Field", "AP")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(argv, ["mlan0", "connect", "Field AP"])
 
     def test_numeric_words_are_ssid_text_not_frequencies(self):
-        r, argv, _ = run_wconnect("field-ap", "36", "5200")
+        r, argv, _ = run_wconnect("0", "field-ap", "36", "5200")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(argv, ["mlan0", "connect", "field-ap 36 5200"])
 
@@ -242,7 +260,7 @@ class WconnectDefaultInterface(unittest.TestCase):
         self.assertEqual(argv, ["mlan1", "connect", "field ap"])
 
     def test_timing_log_uses_one_trace_through_reply_ready(self):
-        r, _, lines = run_wconnect("field-ap", wifi_rc=8)
+        r, _, lines = run_wconnect("0", "field-ap", wifi_rc=8)
         self.assertEqual(r.returncode, 8, r.stdout + r.stderr)
         self.assertEqual(r.stdout.splitlines(), ["FAIL code=8"])
         phases = ("dispatch_received", "arguments_parsed", "connect_invoked", "reply_ready")
@@ -263,8 +281,8 @@ class WconnectDefaultInterface(unittest.TestCase):
 
 
 class WconnectRawRuntimeSwitch(unittest.TestCase):
-    def test_ssid_without_interface_updates_current_mlan0_network(self):
-        r, calls, timing = run_wconnectraw("Field", "AP")
+    def test_explicit_interface_updates_current_mlan0_network(self):
+        r, calls, timing = run_wconnectraw("0", "Field", "AP")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(r.stdout.splitlines(), ["SUCCESS"])
         self.assertEqual(calls, [
@@ -283,14 +301,38 @@ class WconnectRawRuntimeSwitch(unittest.TestCase):
         self.assertEqual(calls[2], "[-i|mlan1|reassociate]")
         self.assertEqual(len(calls), 3)
 
+    def test_interface_names_and_numbers_select_the_same_network(self):
+        for interface, expected in (
+            ("mlan0", "mlan0"), ("0", "mlan0"),
+            ("mlan1", "mlan1"), ("1", "mlan1"),
+        ):
+            with self.subTest(interface=interface):
+                r, calls, _ = run_wconnectraw(interface, "1", status_id="3")
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertEqual(calls, [
+                    f"[-i|{expected}|status]",
+                    f'[-i|{expected}|set_network|3|ssid|"1"]',
+                    f"[-i|{expected}|reassociate]",
+                ])
+
+    def test_invalid_interface_stops_before_wpa_cli(self):
+        for interface in ("", "Field", "2", "mlan2", "eth0"):
+            with self.subTest(interface=interface):
+                r, calls, _ = run_wconnectraw(interface, "AP")
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertEqual(calls, [])
+                self.assertEqual(r.stdout.splitlines(), ["FAIL code=2"])
+
     def test_missing_ssid_fails_before_wpa_cli(self):
-        r, calls, _ = run_wconnectraw()
-        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
-        self.assertEqual(calls, [])
-        self.assertEqual(r.stdout.splitlines(), ["FAIL code=2"])
+        for args in ((), ("0",), ("mlan1",)):
+            with self.subTest(args=args):
+                r, calls, _ = run_wconnectraw(*args)
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertEqual(calls, [])
+                self.assertEqual(r.stdout.splitlines(), ["FAIL code=2"])
 
     def test_disconnected_uses_only_enabled_network(self):
-        r, calls, _ = run_wconnectraw("current-ap", status_id="")
+        r, calls, _ = run_wconnectraw("0", "current-ap", status_id="")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(calls, [
             "[-i|mlan0|status]",
@@ -302,7 +344,7 @@ class WconnectRawRuntimeSwitch(unittest.TestCase):
 
     def test_ambiguous_disconnected_networks_stop_before_mutation(self):
         r, calls, _ = run_wconnectraw(
-            "other-ap", status_id="", network_rows="7\tfirst\tany\t\n8\tsecond\tany\t",
+            "0", "other-ap", status_id="", network_rows="7\tfirst\tany\t\n8\tsecond\tany\t",
         )
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertEqual(calls, ["[-i|mlan0|status]", "[-i|mlan0|list_networks]"])
@@ -310,7 +352,7 @@ class WconnectRawRuntimeSwitch(unittest.TestCase):
 
     def test_fail_payload_is_reported_as_wpa_error(self):
         r, calls, _ = run_wconnectraw(
-            "lab-ap", set_reply="FAIL", reassociate_reply="FAIL",
+            "0", "lab-ap", set_reply="FAIL", reassociate_reply="FAIL",
         )
         self.assertEqual(r.returncode, 7, r.stdout + r.stderr)
         self.assertEqual(len(calls), 3)
@@ -325,6 +367,10 @@ class ProfileHandlerContract(unittest.TestCase):
         self.conf.write_text(
             'freq_list=5180 5200\nnetwork={\n    ssid="Office AP"\n'
             '    freq_list=5180 5200\n}\n'
+        )
+        (self.root / "wpa_supplicant-mlan1.conf").write_text(
+            'freq_list=2412\nnetwork={\n    ssid="Warehouse AP"\n'
+            '    freq_list=2412\n}\n'
         )
         self.capture = self.root / "calls"
         self.wifi = self.root / "wifi"
@@ -358,7 +404,7 @@ class ProfileHandlerContract(unittest.TestCase):
                 1,
             ).replace(
                 'Path(f"/etc/wpa_supplicant/wpa_supplicant-{iface}.conf")',
-                f"Path({str(self.conf)!r})",
+                f'Path({str(self.root)!r}) / f"wpa_supplicant-{{iface}}.conf"',
                 1,
             )
         elif name == "wfreq":
@@ -368,7 +414,7 @@ class ProfileHandlerContract(unittest.TestCase):
                 1,
             ).replace(
                 'CONF="/etc/wpa_supplicant/wpa_supplicant-$IFACE.conf"',
-                f'CONF={shlex.quote(str(self.conf))}',
+                f'CONF={shlex.quote(str(self.root))}/wpa_supplicant-$IFACE.conf',
                 1,
             ).replace(
                 '/usr/local/scripts/wifi_init_config_lib.sh',
@@ -406,10 +452,10 @@ class ProfileHandlerContract(unittest.TestCase):
         return result, calls
 
     def test_wssid_query_and_set(self):
-        query, _ = self.run_profile("wssid")
+        query, _ = self.run_profile("wssid", "0")
         self.assertEqual(query.returncode, 0, query.stderr)
         self.assertEqual(query.stdout.splitlines(), ["Office AP"])
-        set_result, calls = self.run_profile("wssid", "New", "Office")
+        set_result, calls = self.run_profile("wssid", "0", "New", "Office")
         self.assertEqual(set_result.returncode, 0, set_result.stderr)
         self.assertEqual(set_result.stdout.splitlines(), ["SUCCESS"])
         self.assertEqual(calls, ["mlan0", "ssid", "New Office"])
@@ -420,29 +466,82 @@ class ProfileHandlerContract(unittest.TestCase):
             ("Error: SSID must be valid UTF-8", "cause=invalid_ssid"),
             ("install: permission denied", "cause=persist_failed"),
         ):
-            failure, _ = self.run_profile("wssid", "New", "Office", rc=1, diag=diagnostic)
+            failure, _ = self.run_profile("wssid", "0", "New", "Office", rc=1, diag=diagnostic)
             self.assertEqual(failure.returncode, 1)
             self.assertEqual(failure.stdout, "")
             self.assertEqual("cause=" + classify(diagnostic), expected)
 
     def test_wfreq_query_and_set(self):
-        query, _ = self.run_profile("wfreq")
+        query, _ = self.run_profile("wfreq", "0")
         self.assertEqual(query.returncode, 0, query.stderr)
         self.assertEqual(query.stdout.splitlines(), ["5180,5200"])
-        set_result, calls = self.run_profile("wfreq", "36", "5200")
+        set_result, calls = self.run_profile("wfreq", "0", "36", "5200")
         self.assertEqual(set_result.returncode, 0, set_result.stderr)
         self.assertEqual(set_result.stdout.splitlines(), ["SUCCESS"])
         self.assertEqual(calls, ["mlan0", "freq", "36", "5200"])
 
+    def test_profile_queries_normalize_interface_and_read_its_file(self):
+        for interface, ssid, frequencies in (
+            ("mlan0", "Office AP", "5180,5200"), ("0", "Office AP", "5180,5200"),
+            ("mlan1", "Warehouse AP", "2412"), ("1", "Warehouse AP", "2412"),
+        ):
+            for name, expected in (("wssid", ssid), ("wfreq", frequencies)):
+                with self.subTest(name=name, interface=interface):
+                    result, calls = self.run_profile(name, interface)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout.splitlines(), [expected])
+                    self.assertEqual(calls, [])
+
+    def test_profile_writes_normalize_only_the_interface_argument(self):
+        for interface, expected in (
+            ("mlan0", "mlan0"), ("0", "mlan0"),
+            ("mlan1", "mlan1"), ("1", "mlan1"),
+        ):
+            for name, operation, values in (
+                ("wssid", "ssid", ["1"]), ("wfreq", "freq", ["1", "5200"]),
+            ):
+                with self.subTest(name=name, interface=interface):
+                    result, calls = self.run_profile(name, interface, *values)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout.splitlines(), ["SUCCESS"])
+                    self.assertEqual(calls, [expected, operation, *values])
+
+    def test_profiles_require_a_valid_interface_before_access(self):
+        for name in ("wssid", "wfreq", "wstatus"):
+            for args in ((), ("",), ("2",), ("mlan2",), ("eth0",), ("Office", "AP")):
+                with self.subTest(name=name, args=args):
+                    result, calls = self.run_profile(
+                        name, *args, status="wpa_state=COMPLETED\nssid=Office AP\nfreq=5200",
+                    )
+                    self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout, "")
+                    self.assertEqual(calls, [])
+
+    def test_wstatus_normalizes_interface_and_rejects_extra_arguments(self):
+        for interface, expected in (
+            ("mlan0", "mlan0"), ("0", "mlan0"),
+            ("mlan1", "mlan1"), ("1", "mlan1"),
+        ):
+            with self.subTest(interface=interface):
+                result, calls = self.run_profile(
+                    "wstatus", interface, status="wpa_state=COMPLETED\nssid=Office AP\nfreq=5200",
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout.splitlines(), ["Office AP 5200"])
+                self.assertEqual(calls, ["-i", expected, "status"])
+        result, calls = self.run_profile("wstatus", "0", "extra")
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(calls, [])
+
     def test_wstatus_connected_disconnected_and_invalid(self):
         connected, calls = self.run_profile(
-            "wstatus", status="wpa_state=COMPLETED\nssid=Office AP\nfreq=5200",
+            "wstatus", "0", status="wpa_state=COMPLETED\nssid=Office AP\nfreq=5200",
         )
         self.assertEqual(connected.returncode, 0, connected.stderr)
         self.assertEqual(connected.stdout.splitlines(), ["Office AP 5200"])
         self.assertEqual(calls, ["-i", "mlan0", "status"])
         disconnected, _ = self.run_profile(
-            "wstatus", status="wpa_state=SCANNING",
+            "wstatus", "0", status="wpa_state=SCANNING",
         )
         self.assertEqual(disconnected.returncode, 8)
         invalid, calls = self.run_profile("wstatus", "invalid")
@@ -458,6 +557,151 @@ class ProfileHandlerContract(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(r.stdout.splitlines(), ["reboot requested"])
         self.assertEqual(marker.read_text().splitlines(), ["--no-block", "reboot"])
+
+
+class WirelessInterfaceHandlerContract(unittest.TestCase):
+    """Run the aliases and legacy handlers with a private sysfs and command doubles."""
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory(prefix="ftpcmd-interface-")
+        self.root = Path(self.tempdir.name)
+        self.bin = self.root / "bin"
+        shutil.copytree(FTPCMD_DIR, self.bin)
+        net = self.root / "net"
+        for interface, flags in (("mlan0", "0x1"), ("mlan1", "0x0"), ("eth0", "0x1")):
+            (net / interface).mkdir(parents=True)
+            (net / interface / "flags").write_text(flags + "\n")
+        for name in ("getifstate", "ifcup", "ifcdown"):
+            handler = self.bin / name
+            handler.write_text(handler.read_text().replace("/sys/class/net/", str(net) + "/"))
+        self.capture = self.root / "commands"
+        for name, body in {
+            "ip": '''printf '%s\\n' "$*" >> "$IFACE_CAPTURE"
+if [ "$*" = "-o addr show" ] && [ -n "$CONTROL_IFACE" ]; then
+    printf '3: %s inet 192.0.2.1/24 scope global %s\\n' "$CONTROL_IFACE" "$CONTROL_IFACE"
+fi
+if [ "$1" = link ]; then exit "$COMMAND_RC"; fi
+''',
+            "systemctl": '''printf '%s\\n' "$*" >> "$IFACE_CAPTURE"
+exit "$COMMAND_RC"
+''',
+        }.items():
+            command = self.bin / name
+            command.write_text("#!/bin/sh\n" + body)
+            command.chmod(0o755)
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    def run_interface(self, name, *args, control="", rc=0):
+        handler = self.bin / name
+        self.assertTrue(handler.is_file(), f"missing handler: {name}")
+        self.capture.unlink(missing_ok=True)
+        env = {key: value for key, value in os.environ.items() if key != "FTPCMD_LOCAL_ADDR"}
+        env.update({
+            "PATH": f"{self.bin}:{os.environ['PATH']}",
+            "IFACE_CAPTURE": str(self.capture), "CONTROL_IFACE": control,
+            "COMMAND_RC": str(rc),
+            "WIFI_RUN_DIR": str(self.root / "wifi-run"),
+        })
+        if control:
+            env["FTPCMD_LOCAL_ADDR"] = "192.0.2.1"
+        result = subprocess.run(
+            [str(handler), *args], capture_output=True, text=True, timeout=10, env=env,
+        )
+        calls = self.capture.read_text().splitlines() if self.capture.exists() else []
+        return result, calls
+
+    def test_wgetifstate_reports_normalized_interface_and_admin_state(self):
+        for interface, expected in (
+            ("mlan0", "mlan0 UP"), ("0", "mlan0 UP"),
+            ("mlan1", "mlan1 DOWN"), ("1", "mlan1 DOWN"),
+        ):
+            with self.subTest(interface=interface):
+                result, calls = self.run_interface("wgetifstate", interface)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout.splitlines(), [expected])
+                self.assertEqual(calls, [])
+
+    def test_wifcup_and_wifcdown_act_on_the_normalized_interface(self):
+        for interface, expected in (
+            ("mlan0", "mlan0"), ("0", "mlan0"),
+            ("mlan1", "mlan1"), ("1", "mlan1"),
+        ):
+            for name, operation, reply in (
+                ("wifcup", "up", "IFCUP command successful."),
+                ("wifcdown", "down", "IFCDOWN command successful."),
+            ):
+                with self.subTest(name=name, interface=interface):
+                    result, calls = self.run_interface(name, interface)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(first_line(result.stdout), reply)
+                    self.assertEqual(calls[0], f"link set {expected} {operation}")
+
+    def test_wrst_preserves_the_board_reboot_operation(self):
+        for interface in ("mlan0", "0", "mlan1", "1"):
+            with self.subTest(interface=interface):
+                result, calls = self.run_interface("wrst", interface)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout.splitlines(), ["reboot requested"])
+                self.assertEqual(calls, ["--no-block reboot"])
+
+    def test_wrst_without_an_interface_requests_board_reboot(self):
+        result, calls = self.run_interface("wrst")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ["reboot requested"])
+        self.assertEqual(calls, ["--no-block reboot"])
+
+    def test_wrst_without_an_interface_propagates_reboot_failure(self):
+        result, calls = self.run_interface("wrst", rc=9)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(calls, ["--no-block reboot"])
+
+    def test_wrst_rejects_invalid_or_extra_arguments_before_reboot(self):
+        for args in (("",), ("2",), ("mlan2",), ("eth0",), ("0", "extra")):
+            with self.subTest(args=args):
+                result, calls = self.run_interface("wrst", *args)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertEqual(calls, [])
+
+    def test_wireless_aliases_require_exactly_one_valid_interface(self):
+        for name in ("wgetifstate", "wifcup", "wifcdown"):
+            for args in ((), ("",), ("2",), ("mlan2",), ("eth0",), ("0", "extra")):
+                with self.subTest(name=name, args=args):
+                    result, calls = self.run_interface(name, *args)
+                    self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                    self.assertEqual(calls, [])
+
+    def test_wifcdown_preserves_control_connection_guard(self):
+        for interface, control in (("0", "mlan0"), ("1", "mlan1")):
+            with self.subTest(interface=interface):
+                result, calls = self.run_interface("wifcdown", interface, control=control)
+                self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+                self.assertIn("refusing", result.stdout)
+                self.assertEqual(calls, ["-o addr show"])
+
+    def test_wireless_aliases_propagate_operation_failure(self):
+        for name in ("wifcup", "wifcdown", "wrst"):
+            with self.subTest(name=name):
+                result, _ = self.run_interface(name, "0", rc=9)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+
+    def test_legacy_interface_defaults_and_other_names_are_preserved(self):
+        result, _ = self.run_interface("getifstate")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ["mlan0 UP"])
+        for name, operation in (("ifcup", "up"), ("ifcdown", "down")):
+            result, calls = self.run_interface(name)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(calls[0], f"link set mlan0 {operation}")
+            result, calls = self.run_interface(name, "eth0")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(calls[0], f"link set eth0 {operation}")
+
+    def test_legacy_rst_still_takes_no_arguments(self):
+        result, calls = self.run_interface("rst", "0")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertEqual(calls, [])
 
 
 class FailurePaths(unittest.TestCase):

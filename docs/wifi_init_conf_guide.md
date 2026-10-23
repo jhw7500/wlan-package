@@ -18,7 +18,8 @@ wifi_init_conf.json
 ├── global              # 드라이버 초기화 (보드/버스/펌웨어 자동선택, 모듈 파라미터)
 │   ├── BLUETOOTH       #   BT combo 펌웨어 사용 여부 (enable, fw 자동선택 반영)
 │   ├── ping_monitor    #   ping 모니터 서비스 제어
-│   └── fw_watch        #   드라이버 wedge 감시·복구
+│   ├── fw_watch        #   드라이버 wedge 감시·복구
+│   └── ntp             #   시각 동기(systemd-timesyncd) 서비스 제어
 ├── mac                 # MAC 주소 설정 (인터페이스별)
 ├── wbridge             # wifi_bridge 프로세스 설정
 │   ├── peer_route      #   양방향 peer 라우팅 마스터 스위치 (enabled)
@@ -108,8 +109,8 @@ wifi_init_conf.json
 
 | 키 | 설명 |
 |----|------|
-| `base` | 인터페이스 기본(baseline) MAC. **`enabled` 여부와 무관하게 항상 반영**된다(#110). 빈 문자열이면 생략 |
-| `target` | static 모드 소스 + 드라이버 `mod_para`(`wifi_mod_para__.conf`)의 `mac_addr=` 주입값(펌웨어/어댑터 MAC). 빈 문자열이면 생략 |
+| `base` | 인터페이스 기본(baseline) MAC. **`enabled` 여부와 무관하게 `.link`에 기록**한다. 실제 적용은 netdev 생성 시 이루어지며 활성 무선 인터페이스만 기동 중 검증한다. 빈 문자열이면 생략 |
+| `target` | `mac_mode=static`일 때 bridge 인터페이스의 MAC 소스. 빈 문자열이면 base로 폴백. `wifi <iface> mac target <MAC>`은 target만 저장하며 mac_mode는 별도로 설정해야 한다 |
 
 > **적용 규칙 (#110~)**
 > - mlan0/mlan1 모두 `enabled` 여부와 무관하게 `base`를 먼저 반영(baseline). (기존: iface `enabled=false`면 MAC 설정 전체 skip → mlan1 비활성 시 base 미반영)
@@ -118,7 +119,9 @@ wifi_init_conf.json
 > - 빈 문자열이면 해당 소스 생략(기존 `/opt/wlan/mac` 디렉토리 대체).
 > - **쓸 MAC이 하나도 없으면**(dynamic peer 없음 + base 없음) `wbridge.mac_clone_require_peer=true`(기본)일 때 bridge iface `.link`의 `MACAddress`를 **제거**해 드라이버 기본 MAC으로 되돌린다. 아래 [클론 MAC 잔재](#클론-mac-잔재--mac_clone_require_peer) 참고.
 
-> **적용 계층·시점**: `update_mac.sh`가 systemd `.link`(`/etc/systemd/network/2X-<iface>.link`)의 `MACAddress=`를 기록하며, **udev가 netdev 생성 시(=부팅/드라이버 리로드)에만 적용**한다 — JSON만 고치고 재부팅하지 않으면 live 인터페이스 MAC은 바뀌지 않는다. `target`은 추가로 `mod_para`의 `mac_addr=`로 주입돼 insmod 시 어댑터 MAC이 된다. `.link`가 없거나 비어 있으면(구버전 잔재) `update_mac.sh`가 `[Match]/[Link]`를 갖춘 파일을 재생성하고(#111), 변경 시 인터페이스당 최대 5개 회전 백업(`.bak.1`~`.bak.5`, 동일 MAC 중복 제외)한다.
+> **적용 계층·시점**: `update_mac.sh`가 systemd `.link`(`/etc/systemd/network/2X-<iface>.link`)의 `MACAddress=`를 기록한다. `wifi_init.sh`는 기록 후 udev 설정을 reload하고 무선 드라이버를 다시 로드한다. 선택한 MAC이 있는 활성 무선 인터페이스는 udev 초기화 완료를 최대 5초 기다린 뒤 `/sys/class/net/<iface>/address`가 선택값과 같은지 확인한다. JSON·`.link`·`ID_NET_LINK_FILE`만으로 실제 적용 성공을 판단하지 않는다. JSON 저장만으로 live MAC은 바뀌지 않으며, `wifi_init`의 target 적용 경로는 `mod_para`에 `mac_addr=`를 주입하지 않는다. `.link`가 없거나 비어 있으면 `update_mac.sh`가 `[Match]/[Link]`를 갖춘 파일을 재생성하고, 변경 시 최대 5개 회전 백업(`.bak.1`~`.bak.5`, 동일 MAC 중복 제외)을 유지한다. 비활성 무선 인터페이스와 기존 eth0의 live MAC 검증은 이 경로의 범위 밖이다.
+
+> **MAC 설정 실패 복구**: 계획 충돌·`.link` 기록 실패·udev reload/초기화 실패·실제 무선 MAC 불일치는 `wifi_init.service`를 status **78**의 failed 상태로 남긴다. 자동 parent 재시작과 비상 재부팅은 하지 않고, supplicant의 별도 start도 차단한다. 유선/시리얼에서 journal의 `expected`/`actual` 또는 실패 원인을 확인해 설정을 수정한 뒤 `systemctl restart wifi_init.service`를 실행한다. 정상 기동은 실제 MAC, 새 supplicant의 `COMPLETED`, 통신 복구를 함께 확인한다. MFG 프로파일은 이 MAC 적용·검증 경로를 건너뛴다.
 
 ---
 
@@ -170,6 +173,21 @@ wifi_init_conf.json
 `mlan0-ip`은 주소를 자동으로 mlan0에 배치하거나 eth0에서 제거하지 않는다. 두 인터페이스에
 같은 서브넷 주소를 동시에 두지 말고, 적용 후 `wifi {0|1} br status`로 정합성을 확인한다.
 
+운용 사양별 검증 기준은 다음과 같다.
+
+| Specification | Protocol | Profile | Management IP |
+|---|---|---|---|
+| SEMES | FTP QUOTE | `eth0-ip` | `eth0` |
+| DFK | OPCd/VHL | `peer-route` | `mlan0`, mirrored as `/32` on `eth0` |
+
+DFK는 `wifi 0 br profile peer-route apply`로 연계 설정을 저장하고 다음 부팅에 적용한다.
+관리 IP를 `mlan0`에 배치한 뒤 `eth0`의 같은 IP `/32` 미러, `iif eth0`의 table 100 규칙과
+유선 peer host route도 함께 확인한다. 같은 IP만 추가한 상태로 검증을 완료하지 않는다.
+`wifi 0 br restart`는 브리지 서비스만 재시작하며 주소·정책 라우팅을 적용하지 않는다.
+SEMES의 FTP QUOTE 시험 결과를 DFK OPCd의 실기 검증 결과로 사용하지 않는다.
+DFK 관리 IP와 운영 JSON 기준은
+[Notion의 peer-route 결정](https://app.notion.com/p/Rev1-01-3-0x0010-Q10-IP-peer_route-3d18a230a04e81c39731e72f6488117b)을 참고한다.
+
 #### 기배포 기기 마이그레이션 — 공식 경로 (결정, #257)
 
 `DEBIAN/postinst`의 cpchk·json_merge는 **사이트 값 보존**이 목적이라, 위 3종 토글
@@ -188,8 +206,52 @@ wifi_init_conf.json
 
 **결정**: 버전 게이트 postinst 자동 마이그레이션 훅은 만들지 않는다 — (a) "사이트 값 보존"
 원칙과 충돌(업그레이드가 사용자 값을 덮음), (b) "부팅/업그레이드 시 자동 설정변경 금지"
-지침과 충돌. 위 두 opt-in 경로만 두 원칙을 동시에 만족한다. (#91 NTP 결정과 동일 패턴 —
-공식 반영 경로 = 프로비저닝 스크립트.)
+지침과 충돌. 위 두 opt-in 경로만 두 원칙을 동시에 만족한다. NTP **서버 값**(`timesyncd.conf`)도
+같은 패턴으로 프로비저닝 스크립트가 반영한다. 시각 동기 **서비스의 on/off** 는 이와 별개로
+`global.ntp.enabled`(기본 `true`, 웹 UI 토글, §1.4)가 정한다 — postinst 의 안전시각 분기가
+`timedatectl set-ntp false` 로 내린 서비스를 꺼진 채 남기던 종전 동작은 #361 로 끝났다.
+
+#### 공장 초기화용 영구 프로필 (#324)
+
+운용 설정과 공장 초기화 후 돌아갈 설정은 별도로 선택한다. 일반
+`wifi {0|1} br profile <name> apply`는 현재 운용 JSON만 바꾸며 공장 초기화용 선택을
+기록하지 않는다. 초기화용 선택은 `/usr/local/etc/wifi_factory_topology.json`에 보관하고,
+패키지 업그레이드와 공장 초기화 중에도 보존한다.
+
+```bash
+wifi 0 br factory-profile show                 # 현재 초기화용 선택 조회
+wifi 0 br factory-profile peer-route           # 변경 내용 확인; 기록 없음
+wifi 0 br factory-profile peer-route apply     # DFK 초기화용 선택만 기록
+wifi 0 br factory-profile eth0-ip apply        # SEMES 초기화용 선택만 기록
+```
+
+이 명령은 현재 IP·운용 JSON·서비스를 바꾸거나 재부팅하지 않는다. DFK의 현재 운용 설정도
+전환하려면 기존 `wifi 0 br profile peer-route apply`를 별도로 실행한다. 호스트의
+`bd_provision.sh`에는 명시적인 `--factory-topology eth0-ip|peer-route` 옵션을 사용하며,
+`--profile a`(현재 토글 유지)나 `--profile b`(운용 토글 설정)만으로 초기화용 선택을
+추론하지 않는다. 초기화용 옵션도 기존 plan/apply/verify/rollback 단계에서 처리한다.
+초기화용 선택을 포함하는 프로비저닝과 선택 파일의 저장 명령은 같은 잠금을 사용해,
+다른 저장 명령이 적용 또는 rollback 사이에 끼어들어 선택값을 잃지 않게 한다.
+
+선택 파일이 없는 기존 장치는 현행 eth0-ip 초기화를 유지한다. 기존 DFK 장치는 새 패키지의
+명시적 명령으로 peer-route를 등록해야 초기화 뒤에도 DFK 프로필이 유지된다. 설치·업그레이드·
+부팅에서 자동 등록하지 않는다. 손상되거나 권한·소유자가 잘못된 선택 파일은 초기화의 첫
+설정 변경 전에 오류로 중단하며 재부팅하지 않는다.
+
+초기화가 선택한 프로필의 세대를 후조건 검사 뒤 다시 확인한다. 처리 도중 운영자가 선택
+파일을 변경한 경우에는 초기화가 바꾼 설정을 복구하고 재부팅을 막으며, 운영자가 새로
+기록한 선택 파일은 덮어쓰지 않는다.
+
+DFK 초기화도 유선 복구 주소 `eth0=192.168.1.1/24`를 유지한다. 다음 부팅에 mlan0의 관리
+IP를 같은 값의 eth0 `/32`로 추가하고, 기존 peer-route의 rule/table/host route 설정을 함께
+적용한다. WPA와 network의 공통 공장 템플릿은 유지하며 고객사 SSID·암호를 추론하지 않는다.
+
+필수 JSON·network·WPA 파일은 같은 초기화 rollback 범위에 포함한다. commit 또는 필수
+후조건 검사에 실패하면 교체한 파일을 복구하고 재부팅을 막는다. 이는 감지한 정상 오류의
+복구 범위이며, SIGKILL·전원 차단 중 여러 파일의 동시 원자성이나 모든 OS·서비스 변경의
+복구 보장은 아니다. 검증된 commit 이후 임시 rollback 사본을 지우는 정리만 실패했다면
+초기화 성공을 취소하지 않고 남은 사본을 로그에 기록한다. FTP QUOTE의 `rst`는 기존
+재부팅 전용 명령으로 유지한다.
 
 #### `.network` IPv6 비활성(#255)은 기배포 기기에 반영되지 않는다
 
@@ -313,6 +375,26 @@ lsmod 대기(최대 15초)를 먼저 한다. 따라서 별도의 grace 플래그
 
 부재가 실제로 30초를 넘는다면 그것은 오탐이 아니라 리로드가 실패했다는 뜻이므로,
 그때 checker 가 재부팅을 요청하는 것은 의도된 동작이다.
+
+### 1.4 global.ntp - 시각 동기(systemd-timesyncd) 서비스
+
+**사용 스크립트**: `wifi_apply_enabled.sh`(enable/disable 동기화), `wifi_services.sh`(부팅 시 start), `DEBIAN/postinst`(설치 직후 기동)
+
+이미지 기본은 `systemd-timesyncd` disabled 이고, postinst 의 안전시각 분기(`timedatectl set-time`
+전의 `set-ntp false`)도 서비스를 내린다. 그래서 설정 파일(`/etc/systemd/timesyncd.conf`)만으로는
+시각 동기가 일어나지 않았고 OPC KeepAlive Timestamp·로그 시각이 어긋났다(#361). 이 키가
+서비스의 on/off 를 소유한다 — 부팅(`wifi_init.service` ExecStartPre)과 패키지 설치 때
+`wifi_apply_enabled.sh` 가 systemd enable 상태를 JSON 과 맞추고, enable 이면 부팅 때
+`wifi_services.sh start`, 설치 직후엔 postinst 가 `--no-block` 으로 기동한다. NTP **서버 주소**는
+이 키가 아니라 `timesyncd.conf`(프로비저닝 `bd_provision.sh --ntp`)와 OPC ChangeIp 의 NTP 필드
+(휘발, `/run` 드롭인)가 정한다.
+
+| 키 | 타입 | 기본값 | 설명 |
+|---|---|---|---|
+| `enabled` | bool | `true` | `systemd-timesyncd.service` 활성화. `wifi_apply_enabled.sh` 가 systemd enable/disable 로 동기화하고, `false` 면 게이트가 도는 시점(부팅 ExecStartPre·패키지 설치·정상 종료 ExecStop)에 실행 중 인스턴스도 `stop` 한다 — 전원 단절 뒤 sysinit 이 먼저 띄운 인스턴스가 그 부팅 내내 남지 않게 하기 위해서다. 패키지 제거(prerm)는 이미지 기본(disabled)으로 원복한다 |
+
+> 업그레이드 장비에는 `json_merge` 가 이 키를 기본값 `true` 로 추가하므로 그 설치부터 시각 동기가
+> 켜진다. 끄려면 웹 UI 또는 JSON 에서 `false` 로 바꾼다.
 
 ### 3.1 wbridge.optimize - 커널 레벨 네트워크 튜닝
 
@@ -650,6 +732,7 @@ eMMC 수명은 JEDEC 표준 EXT_CSD 레지스터에서 읽으며, hex 값 기반
 | `stat_reset_interval_sec` | int | `604800` | mlan0, mlan1 | 통계 누적 리셋 주기 (초, 기본 7일) |
 | `bgscan_stale_threshold_sec` | int | `600` | mlan0, mlan1 | `beacon.json` 스캔 엔트리 stale 프루닝 임계(초, 기본 10분). 소비: `wifi_logger_scan.py`. 양의 정수가 아니면 코드 기본 600 + 경고 |
 | `fwcfg_watch_sec` | float | `60` | mlan0, mlan1 | FW 커스텀 설정(`rate_adapt`/`antcfg`/`mcs_tier`) 변화 감시 주기(초). `0`=끔. 한 주기에 하나씩 라운드로빈하므로 3개 기준 전체 순회는 3배 주기. 관측 전용 — 변화 시 syslog `warn`만 남기고 복구하지 않는다. 소비: `wifi_logger_link.py` |
+| `rx_mismatch_enabled` | bool | `true` | mlan0, mlan1 | 펌웨어는 받는데 호스트로 유니캐스트가 거의 안 올라오는 상태(같은 MAC 중복·키 불일치 의심)를 logger.log 에 `warn` 1줄(최대 1분 1줄), 회복 시 `info` 1줄로 남긴다. 디버깅 보조 — 복구 동작 없음. `false`면 감지하지 않는다. 소비: `wifi_logger_link.py` |
 | `enabled` | bool | mlan0 `true` / mlan1 `false` / eth0 `true` | mlan0, mlan1, eth0 | `wifi_logger@<iface>` 부팅 정책. `mlanN.enabled=false`면 강제 disable |
 
 > `stat_log_interval_sec`과 `stat_check_interval_sec`의 차이: check는 데이터 수집 주기, log는 실제 파일/syslog 기록 주기이다. log >= check 관계를 유지해야 한다.
@@ -694,7 +777,7 @@ wifi eth0  log start|stop|restart|status|enable|disable
 
 ## 11. mlan0 / mlan1 - 인터페이스별 설정
 
-**사용 스크립트**: `wifi_bgscan.py`, `wifi_roam.py`, `wifi_init.sh`, `wifi_apply_enabled.sh`, `wifi_event.sh`
+**사용 스크립트**: `wifi_bgscan.py`, `wifi_roam.py`, `wifi_init.sh`, `wifi_apply_enabled.sh`, `wifi_event.sh`, `wifi.sh`
 
 ### 11.1 interface defaults - 인터페이스 기본 활성/주파수
 
@@ -717,6 +800,48 @@ wifi eth0  log start|stop|restart|status|enable|disable
 > 별도 외부 설정 파일과의 우선순위 병합은 없다.
 
 > **⚠️ 패키지 기본값 주의**: 출하 `wifi_init_conf.json`은 `mlan0.enabled=true`, **`mlan1.enabled=false`**로 설정되어 있다 — 즉 **mlan1은 기본적으로 초기화되지 않는다**(`wifi_init.sh`가 radio setup·bridge enable을 건너뛰고, `wifi_apply_enabled.sh`가 mlan1 child unit을 disable). 신규 설치·공장초기화로 이 기본 config를 그대로 쓰는 환경에서 mlan1을 사용하려면 본 파일의 `mlan1.enabled=true`로 변경한다.
+
+#### connect_fallback — 수동 연결 실패 시 이전 프로필 복구
+
+`mlanN.connect_fallback`은 수동 `wifi <iface> connect`와 이를 호출하는 FTP
+`wconnect`에만 적용하는 opt-in 정책이다. 출하 기본은 비활성이다.
+
+| 키 | 타입 | 기본값 | 범위 | 설명 |
+|----|------|--------|------|------|
+| `enabled` | bool | `false` | true/false | 수동 connect 실패 복구 활성화. 다음 connect 명령부터 반영 |
+| `attempt_timeout_sec` | int | `15` | 1~15 | `enabled=true`일 때 새 association 확인 경과 시간 예산(초). false이면 기존 `ASSOC_TIMEOUT_DEFAULT` 유지 |
+| `rollback_timeout_sec` | int | `5` | 1~5 | 이전 프로필 복원·reconfigure 뒤 기존 association 확인 경과 시간 예산(초) |
+
+활성화하면 인터페이스별 마지막 **검증 완료된 완전한 프로필**을 `/run/wifi`
+아래 mode `0600` 일반 파일로 보관한다. 프로필은 SSID, 주파수 정책, 인증 설정을
+함께 포함하며 부팅을 넘겨 유지하지 않는다. 가능하면 `wssid`/`wfreq`와 CLI의
+PSK/key 변경을 staging하기 전에 현재 연결 프로필을 검증해 캡처하고, 목표 연결이
+성공하면 새 프로필로 갱신한다. 단순 설정 사본이나 association이 확인되지 않은
+프로필은 known-good으로 취급하지 않는다.
+
+known-good이 없더라도 목표 연결은 시도한다. 실패하면 `fallback-unavailable`을
+로그에 남기고 원래 실패 코드로 종료한다. known-good이 있으면 이전 프로필 전체를
+복원하고 supplicant를 reconfigure한 뒤 이전 association을 확인한다. 복원 결과는
+사용자 출력에서 `fallback restored` 또는 `fallback failed`로, syslog에서는
+`outcome=restored` 또는 `outcome=restore-failed`로 구분한다. known-good이 없으면
+`fallback unavailable`/`outcome=fallback-unavailable`을 기록한다. 복원에 성공해도 요청한
+새 연결은 실패했으므로 원래 nonzero 결과를 그대로 반환한다. 일반 association/control
+오류는 7/8이고, 검증·설치 오류 1이나 signal 결과 129/130/143도 보존될 수 있다.
+
+fallback이 진행 중인 인터페이스에는 다른 설정 변경과 런타임 연결 변경을 허용하지
+않으며 busy(코드 6)로 거부한다. OPC의 경쟁 wireless profile/radio helper write도 이
+충돌 규칙을 따르지만 OPC helper는 fallback을 시작하지 않는다. ChangeIp의 IP/route
+처리는 기존의 별도 계약을 유지한다. 상태와 설정을 읽는 조회는 허용한다. checker/background
+reconnect/roam도 fallback 실행 경로가 아니다. Mode A
+(`roaming.generate_network_blocks=true`)와 다중 `network` 구성은 network 선택·복구를
+supplicant가 소유하므로 fallback 대상에서 제외된다.
+
+fallback이 활성화된 경우 새 연결 예산은 기본 15초(1~15), 복원 예산은 기본 5초(1~5)다.
+새 연결 확인 예산은 체크포인트 조회와 요청 설정 준비를 마친 뒤 시작한다. 준비 단계부터
+계산하는 전체 25초 예산에서는 복귀 시간을 남기므로, 준비가 길어지면 새 연결 확인 시간이
+설정값보다 짧아질 수 있다. 비활성 경로는 기존 `ASSOC_TIMEOUT_DEFAULT`를 그대로 사용한다.
+활성 경로는 실제 경과 시간을 차감해 FTP 디스패처의 30초 제한 안에 두 단계를 마칠 예산을 관리한다. 이 값은 userspace
+폴링 예산이며, 커널 I/O 자체가 멈춘 경우까지 끊는 hard cap을 약속하지 않는다.
 
 #### net_rx 비트맵
 
@@ -1405,7 +1530,7 @@ AC 전용 mlan1은 이 deferred HE 경로와 `11axcfg` 검증 대상이 아니�
 
 ### 11.11 roam_garp - 로밍 직후 gratuitous ARP (per-iface)
 
-`mlan0.roam_garp` / `mlan1.roam_garp`. **사용 스크립트**: `wifi_event.sh`.
+`mlan0.roam_garp` / `mlan1.roam_garp`. **사용 스크립트**: `wifi_event.sh`(송신), `wifi_apply_enabled.sh`(이벤트 서비스 활성화).
 
 로밍 후 유선 스위치의 FDB가 STA 새 위치를 재학습하기까지 ~2–5초 상향 통신 갭이 관측되는데(무선 핸드오프·STA 하향은 정상, 로밍 시 STA/AP 어느 쪽도 재공지 안 함 — tshark 확정), `wifi_event.sh`의 로밍 case(`connected to`/`roamed to`)에서 BSSID 확인 직후 무선 iface IP로 gratuitous ARP(`arping -U -c 3`)를 즉시 발사해 스위치 재학습을 앞당긴다(#234).
 
@@ -1415,6 +1540,7 @@ AC 전용 mlan1은 이 deferred HE 경로와 `11axcfg` 검증 대상이 아니�
 
 - **스코프 = 무선전용/관리-IP**: iface에 IPv4가 있을 때만 발사한다. 순수 MAC클론 투명 브리지는 mlan0에 L3 IP가 없어 **자동 no-op** — 최종 브리지 제품의 로밍 갭 근본책은 드라이버측 클론 MAC L2 announce(**wlan-driver-v2#47**, 머지됨)다.
 - **로밍 데몬(`.roaming.enabled`)과 독립**: iw 이벤트 반응이라 FW 로밍·수동 로밍이면 로밍 데몬이 꺼져 있어도 발사된다. (같은 이유로 `.roaming` 하위가 아니라 top-level per-iface 키 — `arping`과 동일 배치)
+- **GARP만 사용해도 이벤트 서비스 활성화**: 인터페이스가 활성화되어 있고 `roam_garp.enabled`가 JSON boolean `true`이면, 부팅 또는 `wifi_init` 적용 시 `wifi_event@<iface>.service`를 활성화한다. 다른 이벤트 사용 기능(on_connect/SNMP trap/deferred MCS)은 없어도 된다. 서비스가 이미 실행 중이면 송신 게이트는 이벤트마다 현재 설정을 읽는다. 문자열 `"true"`나 숫자 `1`은 GARP 활성화 값이 아니다.
 - 비블로킹 백그라운드(`&`)로 `iw event` 루프를 막지 않는다. `arping`은 iputils(`-U` gratuitous announce 지원, 온타겟 확인).
 - **기본 off 이유**: 갭-소멸 효과가 미검증(AP측 상향 포워딩 지연 병존 가능) — 듀얼AP A/B(**#235**)에서 확증 후 릴리스에서 default 승격 재검토.
 
@@ -1524,6 +1650,37 @@ do_reboot():
 
 - **3차 sysrq 경로**는 `device_shutdown()`을 건너뛰어 D state 드라이버 락과 무관하게 HW reset 수행
 - 각 단계는 background 실행으로 block 시에도 다음 단계로 진행
+
+### opcd ChangeIp ESSID 복원 — 부팅 유닛과 표식 소유 (#362, wlan-opc#161)
+
+OPC ChangeIpAddress 가 바꾼 ESSID 는 사양상 재부팅 때 설정값으로 돌아가야 한다. opcd 는 conf 를
+편집하기 전에 복원 표식 `/usr/local/opc/etc/changeip_essid.restore`(원래 `ssid=` 토큰·슬롯·시각,
+적용 성공 뒤 커밋값)를 쓰고, 되돌리는 쪽은 일회성 `opcd -R` 이다 — 표식이 있고 conf 의 `ssid=` 가
+커밋값 그대로면 원래 값으로 편집한 뒤 표식을 지우고, 값이 다르면(다른 작성자가 바꿈) 표식만 지운다.
+
+- **부팅 유닛** `opcd-essid-restore.service`: `wifi_init.service` 와 같은 층위(`DefaultDependencies=no`,
+  `After=local-fs.target sysinit.target`)에서 `Before=wifi_init.service wpa_supplicant@mlan0.service`
+  로 한 번 돈다(`Type=oneshot`, `ConditionPathExists=` 표식). `-R` 은 conf writer lock 을 잡지 않으므로
+  이 순서가 `wifi_init.sh` 의 extra-SSID 블록 재생성·`wpa_supplicant` 의 conf 읽기와의 배타성을
+  보장한다. `WantedBy=wifi-stack.target` 이라 부팅 경로에서만 돌고, 런타임 `wifi_init` 재시작은
+  끌어오지 않는다. postinst 가 **항상 enable** 하며 `opc.enabled` 게이트에 걸지 않는다 — OPC 를 끈
+  뒤 재부팅해도 남은 ChangeIp ESSID 는 되돌아가야 하고(게이트에 걸면 정상 종료의 ExecStop 동기화가
+  유닛을 먼저 꺼 영구화되고 전원 단절 재부팅과 결과가 갈린다), 표식이 없으면 `ConditionPathExists`
+  가 실행을 거른다. 실패(exit 1: 표식·conf 읽기 불가)는 `wifi_init` 을 막지 않는다.
+- **표식 소유 규약**: opcd 는 표식을 arm 한 뒤 `opc_wlan_apply.sh` 로 ESSID 를 설치하고 성공하면
+  커밋한다. `opc_wlan_apply.sh` 는 mlan0 `ssid` 설치 전에 conf writer lock 안에서 표식 존재를 확인하고
+  없으면 conf 를 건드리지 않고 exit 6 으로 거부한다 — arm 과 설치 사이에 다른 작성자가 표식을 지웠다면
+  그 작성자의 SSID 가 최종값이다(opcd 는 비0 종료를 settle 로 처리해 요청값이 아니면 커밋하지 않는다).
+- **공장 초기화**: `factory_reset.sh` 가 mlan0 conf 를 공장값으로 되돌린 뒤 표식을 함께 지운다.
+  복원은 커밋값 일치 때만 일어나므로 표식이 남아도 공장값을 되돌리지는 않는다. 다만 삭제는 conf
+  lock 없이 하고 opcd 를 멈추지 않으므로, payload commit 과 삭제 사이의 짧은 창에 ChangeIp 가
+  arm·설치·커밋을 마치면 그 ESSID 가 표식 없이 남는다 — 공장 초기화는 곧바로 재부팅하고 OPC 세션이
+  그 창에 겹칠 일이 드물어 받아들인 한계다.
+- **운영자의 영구 SSID 변경**: `wifi 0 ssid <SSID>` 와 `wifi 0 connect <SSID>` 는 conf 를 설치한 뒤
+  표식을 지워 ChangeIp 체인을 끝낸다. 그러지 않으면 커밋값과 같은 토큰을 다시 쓴 경우(ChangeIp
+  위치를 영구화하려는 조작)를 `-R` 이 구별하지 못해 다음 부팅에 원래 값으로 되돌린다. FTP `wssid`
+  는 `wifi ssid` 를 거치므로 포함된다. `bd_provision.sh`(wlan-opc)는 conf 를 통째로 재생성하면서
+  표식을 지우지 않는다 — 같은 SSID 를 다시 쓰는 경우가 남은 한계이며 wlan-opc#176 으로 추적한다.
 
 ### opcd 장치 리셋 통지용 Reset Cause 기록 (#304)
 

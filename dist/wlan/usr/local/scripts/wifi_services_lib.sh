@@ -13,7 +13,10 @@
 #   - wifi_logger@eth0 외 eth0 관련 wifi_* 인스턴스                              : 무선과 무관
 
 wifi_services_non_wireless_list() {
-    printf '%s\n' wifi_logger.service wifi_logger@eth0.service
+    # systemd-timesyncd: 배포판 유닛, .global.ntp.enabled 토글(wifi_apply_enabled.sh)로 조건부 기동.
+    # 부팅 중 wifi_apply_enabled 가 enable 한 직후에는 sysinit 이 이미 지나 스스로 뜨지 않으므로
+    # 여기서 start 한다. 무선과 무관하므로 MFG 프로파일에서도 기동한다.
+    printf '%s\n' wifi_logger.service wifi_logger@eth0.service systemd-timesyncd.service
 }
 
 wifi_services_wireless_list() {

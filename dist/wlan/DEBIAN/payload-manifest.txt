@@ -2,7 +2,6 @@ DEBIAN/payload-manifest.txt
 etc/default/wbridge
 etc/modules-load.d/99-cts-mods.conf
 etc/nanorc
-etc/networkd-dispatcher/routable.d/10-set-gateway.sh
 etc/profile.d/00-cantops.sh
 etc/rsyslog.d/10-udp-out.conf
 etc/rsyslog.d/20-mgmt-frame.conf
@@ -12,10 +11,12 @@ etc/systemd/system/fake-hwclock-save.service
 etc/systemd/system/fake-hwclock.service
 etc/systemd/system/fake-hwclock.timer
 etc/systemd/system/journald-snapshot-boundary.service
+etc/systemd/system/journald-snapshot-shutdown.service
 etc/systemd/system/journald-snapshot.service
 etc/systemd/system/journald-snapshot.timer
 etc/systemd/system/log-watchdog.service
 etc/systemd/system/log-watchdog.timer
+etc/systemd/system/opcd-essid-restore.service
 etc/systemd/system/snmpd.service.d/override.conf
 etc/systemd/system/switchd.service
 etc/systemd/system/wifi-stack.target
@@ -60,6 +61,10 @@ opt/ftpcmd/bin/rst
 opt/ftpcmd/bin/wconnect
 opt/ftpcmd/bin/wconnectraw
 opt/ftpcmd/bin/wfreq
+opt/ftpcmd/bin/wgetifstate
+opt/ftpcmd/bin/wifcdown
+opt/ftpcmd/bin/wifcup
+opt/ftpcmd/bin/wrst
 opt/ftpcmd/bin/wssid
 opt/ftpcmd/bin/wstatus
 opt/wlan/bin/README
@@ -266,10 +271,12 @@ usr/local/scripts/wifi_checker.sh
 usr/local/scripts/wifi_conf_preserve.sh
 usr/local/scripts/wifi_config.sh
 usr/local/scripts/wifi_config_backup.sh
+usr/local/scripts/wifi_connect_fallback_lib.sh
 usr/local/scripts/wifi_eth_peer_find.sh
 usr/local/scripts/wifi_eth_peer_route.sh
 usr/local/scripts/wifi_event.sh
 usr/local/scripts/wifi_factory_reset_lib.sh
+usr/local/scripts/wifi_factory_topology.py
 usr/local/scripts/wifi_fw_config_lib.sh
 usr/local/scripts/wifi_init.sh
 usr/local/scripts/wifi_init_config_lib.sh
@@ -298,6 +305,7 @@ usr/local/scripts/wifi_snmp_trap.sh
 usr/local/scripts/wifi_thermal_state_update.sh
 usr/local/scripts/wlan_fw_watch.sh
 usr/local/scripts/wlan_link_lib.sh
+usr/local/scripts/wlan_mac_ready.sh
 usr/local/scripts/wlan_reboot_policy.sh
 usr/local/scripts/wlan_wpa_reattach.sh
 usr/local/scripts/wpa_supplicant.sh

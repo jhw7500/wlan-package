@@ -3,6 +3,120 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.7.3 (2026-10-21)
+
+> SemVer **patch** — logger 가 같은 클론 MAC 중복으로 의심되는 RX 불일치를 logger.log 에 남긴다. OPCd 를 wlan-opc 0787633 으로 올려 FaultDetect Memory(0x0002)를 전체 메모리 사용률로 판정해 보낸다. 빌드 서버 배포 스크립트가 `wlan.deb` 만 복사한다.
+
+### RX 불일치(같은 MAC 중복 의심) 로그 (#375, PR #377)
+
+- 같은 AP 에 같은 클론 MAC 을 쓰는 브리지 보드 두 대가 붙으면, 한쪽이 wpa COMPLETED 인 채 유니캐스트를 받지 못한다. 종전에는 이 상태를 알려 주는 로그가 없었다.
+- `wifi_logger_link.py` 의 `RxMismatchDetector` 가 10초 창마다 두 값을 비교한다.
+  - 펌웨어 유니캐스트: `dot11ReceivedFragmentCount` − 그룹 수신 카운터
+  - 호스트 유니캐스트: netdev + 브리지 w2p − 2·min(group, netdev, w2p). 브리지가 비활성이면 netdev − min(group, netdev).
+- 판정 결과는 logger.log 에 남긴다.
+  - 호스트 유니캐스트가 펌웨어 유니캐스트의 1/4 미만이면 의심(warn), 1/2 이상이면 해소(info)를 남긴다. 의심 보고는 60초에 1번이다.
+  - 판정하지 않는 창: 카운터가 리셋된 창, 미연결 창, 브리지 유무가 바뀐 창. 펌웨어 유니캐스트가 20 미만인 창은 판정을 보류한다.
+  - 감지 코드에서 예외가 나면 한 번 기록하고 기능을 끈다. link.json 생산에는 영향을 주지 않는다.
+- 그룹 수신 카운터는 `dot11GroupReceivedFrameCount` 를 먼저 찾고, 없으면 `dot11MulticastReceivedFrameCount` 를 쓴다.
+- 설정: `wifi_init_conf.json` 의 `<iface>.logger.rx_mismatch_enabled`(기본 `true`)로 켜고 끈다. 업그레이드하면 postinst json_merge 가 기존 기기에도 `true` 로 넣는다. 시작 로그에 `rx_mismatch: on|off` 를 남긴다.
+- 실기(랩 보드, 0.7.2 위에 임시 배포):
+  - 실측한 10초 창 값을 테스트 fixture 로 고정했다.
+  - 첫 재현 때의 1초 카운터 샘플을 재생하면 좀비 구간을 검출했다. 정상 샘플과 트래픽 폭주 샘플을 재생하면 0줄이었다.
+  - 최종 식을 배포한 뒤 정상 트래픽 14분 동안 새 줄은 0줄이었다.
+  - 세 번째 재현(2026-10-21)에서 최종 식이 좀비 상태를 실시간으로 감지했다. 10초 창에서 펌웨어 유니캐스트는 +58, 호스트 유니캐스트는 +0 이었다. 그 재현에서 트래픽 폭주는 일어나지 않았다(#376).
+- 알려진 한계:
+  - 브리지가 비활성이면서 멀티캐스트가 많은 망에서는 오탐이 날 수 있다.
+  - `link_interval_sec` 가 20초를 넘으면 감지가 꺼진다.
+
+### OPCd 서브모듈 0787633 (PR #378; wlan-opc PR #181·#183)
+
+- FaultDetect Memory(0x0002)(wlan-opc#182, PR #183):
+  - 종전: 이 장치는 스왑을 쓰지 않는다. 그래서 사양의 Memory 정의(스왑 페이징 증대)가 성립하지 않아 Memory 통지를 보내지 않았다.
+  - 이제: 전체 메모리 사용률 (MemTotal − MemFree − Buffers − Cached − Slab) ÷ MemTotal 로 판정한다. 측정은 10초마다 하고, 진입 80 % / 해제 70 % 이며, 진입할 때 1회 보낸다. 이 식은 logger cpu.log 의 MEM(sysstat `sar -r` %memused)과 같다.
+  - Cached 에 tmpfs(Shmem)가 들어 있어서, tmpfs 로 찬 RAM 은 사용량에서 빠진다.
+  - 판정 기준과 임계값은 아직 발주처 합의 전이다.
+  - 실기(랩 보드, 0.7.2 위에 opcd 를 임시 배포했다가 원복): 임계를 20/10 % 로 낮추고 익명 메모리 300 MB 를 점유했다. FaultDetect 1개(Congestion ID 0x0002, Current Val 28)가 나갔고, 부하가 이어지는 동안 재통지는 없었다. 출하 기본값 80 % 와 Period ≥ 1 s 경로는 실기로 확인하지 않았다.
+- wlan-opc PR #181: 로밍 통지 설계·시험 문서를 현행 동작(#368)에 맞게 고쳤다. 문서만 바뀌었다.
+
+### 빌드 서버 배포 스크립트
+
+- `scripts/update_host.sh` 가 imx93 빌드 트리로 `release/wlan.deb` 하나만 복사한다. 종전의 `release/wlan*` 글롭은 과거 버전 `.deb` 까지 복사했다. mini-6.6.3 복사 줄은 주석으로 바꿨다. 패키지 내용에는 영향이 없다.
+
+## 0.7.2 (2026-10-20)
+
+> SemVer **patch** — 로밍 통지(0x0004)를 로밍 조건 진입 시점에 현재 AP 값으로 보내고, 정상 재부팅의 서비스 정지 구간을 journal 내보내기에 담으며, OPCd Reset 이 정상 재부팅을 "재부팅 없음"으로 기록하던 분류를 고친다. OPCd 를 wlan-opc 31a6c70 으로 올린다.
+
+### 로밍 통지 시점과 필드 정합 (#368, PR #369·#370)
+
+- `wifi_roam.py` 가 로밍 조건에 들어서는 순간(로밍 임계 하회) 현재 접속 AP 의 BSSID 와 판정 RSSI 로 Roaming(0x0004) 을 1회 보낸다. 조건이 이어지는 동안에는 다시 보내지 않고, 임계 위로 회복하거나 연결이 끊기면 재무장하며, 조건 중 BSSID 가 바뀌면 새 AP 로 1회 보낸다. 종전에는 로밍 성공이 확인된 뒤에만 대상 AP 값으로 보내 임계를 밑돌았지만 로밍하지 않으면 통지가 없었다. 로밍 성공 뒤 통지 4곳(`_roam_to_bssid_locked`, `route_cross_ssid_transition`, `passive_roam` 의 성공·timeout 경로)을 없앴고, 수동·주기 로밍은 임계 하회 계기가 아니므로 통지하지 않는다.
+- 조건 진입 통지는 `notify_roam(..., require_link_match=True)` 로 보낸다. CH·SNR 은 보내기 직전 link.json 에서 읽으므로, 그 사이 다른 AP 로 재결합했으면 두 AP 의 값이 한 통지에 섞일 수 있었다. 이제 link.json 의 접속 AP 가 통지할 BSSID 와 다르면 보내지 않고 기록도 하지 않아, 같은 AP 에서 조건이 이어지면 다음 판정 때 다시 시도한다(PR #370).
+- 실기(랩 보드, QA 0.7.1 패키지 위에 세 파일 임시 배포 후 원복): link.json RSSI 를 good → bad → good → bad 로 주입하자 bad 진입마다 1회씩 2회 나갔고 AP MAC·CH·RSSI·SNR 은 현재 AP 값이었다. 조건 판정 6회 중 재통지와 로밍 실행은 없었다(PR #369). PR #370 의 재결합 경합은 보드에서 만들기 어려워 호스트 테스트로만 고정했다.
+
+### 정상 재부팅의 서비스 정지 구간 journal 내보내기 (#371, PR #372)
+
+- 새 `journald-snapshot-shutdown.service` 가 셧다운 때 journal 을 내보낸다. `DefaultDependencies=no`, `After=systemd-journald.service local-fs.target`, 로그 경로 `RequiresMountsFor=`, `Before=sysinit.target`, `Conflicts=`/`Before=shutdown.target`, `WantedBy=sysinit.target` 로, sysinit 뒤에 시작한 유닛(wifi_checker@·wlan_fw_watch 포함)이 모두 정지한 다음 `ExecStop=journald_snapshot.sh` 가 돈다. 종전에는 부팅 완료 스냅샷 유닛의 ExecStop 이 이 일을 했는데, 그 유닛이 셧다운 초반에 정지해 재부팅 직전 구간이 내보내기에 빠졌다. `journald-snapshot-boundary.service` 는 ExecStop 을 빼고 부팅 완료 스냅샷만 맡는다.
+- postinst 가 새 유닛을 enable 하고 `start --no-block` 으로 올려, 설치 뒤 첫 재부팅부터 적용된다. payload·소스 아카이브 manifest 와 유닛 순서 테스트를 추가했다.
+- 실기(랩 보드, 유닛 임시 배포 후 원복): 정상 재부팅에서 wifi_checker@·wlan_fw_watch·D-Bus 의 정지 줄이 모두 스냅샷 유닛 정지보다 앞서 내보내기에 담겼고, 재부팅 뒤 유닛이 부팅 때 자동 시작(active)됐으며 ordering cycle 경고는 없었다.
+
+### OPCd 서브모듈 31a6c70 (PR #367·#373; wlan-opc PR #177·#180)
+
+- Reset 분류(#179, wlan-opc PR #180): 셧다운이 D-Bus 를 먼저 내리면 재부팅 정책 클라이언트(`systemd-run --wait`)가 연결 끊김으로 exit 1 을 돌려, opcd 가 정상 재부팅을 "no reboot started" 로 기록했다. 이제 비0 종료 뒤 opcd 자신의 SIGTERM 을 최대 5초 기다려, 오면 재부팅 진행 중으로 분류한다. 126/127 은 종전대로 실행 실패, 그 밖에 SIGTERM 이 오지 않으면 재부팅 없음이다. 점검 스크립트 `test-all.sh` §8 도 새 분류 문구를 셈한다.
+- wlan-opc PR #177: 클라이언트가 SIGTERM 이 아닌 시그널로 죽으면 "미확인"(`OPC_RESET_UNCONFIRMED`, WARN)으로 구분한다. `bd_provision.sh --ssid` 가 ChangeIp ESSID 복원 표식을 지워, 운영자의 영구 SSID 지정이 ChangeIp 체인을 끝낸다(wlan-opc#176). 연기된 ChangeIp 적용의 주석을 코드 동작대로 고치고 apply 실패 시 세션·indication 유지를 테스트로 고정했다.
+- 실기: #179 는 랩 보드 Reset 2회로 두 분기를 확인했다 — stop job 의 TERM 이 클라이언트에 먼저 닿은 회차는 `policy client terminated by signal 15`, D-Bus 가 먼저 끊긴 회차는 `policy client exited 1, then opcd received its stop signal (SIGTERM)` 으로 재부팅 진행 중에 분류됐다. PR #177 은 실기를 하지 않았다.
+
+## 0.7.1 (2026-10-20)
+
+> SemVer **patch** — 시각 동기 서비스를 JSON 토글로 켜고 시험용 기본 경로 스크립트를 제품 패키지에서 뺀다. OPC ChangeIp 가 바꾼 ESSID 를 부팅 때 되돌리는 유닛과 표식 소유 규칙을 넣고, 출하 토폴로지 보존·MAC 검증·초기화 복구를 보강하며, CONTEC SNMP MAC 을 원시 6바이트로 돌려준다. OPCd 를 DFK 사양 정합 머지본(wlan-opc 0b4dfe7)으로 올린다.
+
+### 시각 동기 서비스와 시험용 기본 경로 스크립트 (#361, PR #363)
+
+- `global.ntp.enabled`(기본 `true`)를 두고 `wifi_apply_enabled.sh` 가 `systemd-timesyncd.service` 의 enable/disable 을 동기화한다. MFG early-return 앞에서 적용하며, `false` 면 실행 중 인스턴스도 내린다. postinst 는 json_merge 뒤 게이트를 한 번 더 돌리고, enable 로 끝났을 때만 `restart --no-block` 으로 기동한다(복사·보존된 `timesyncd.conf` 를 읽게). 종전에는 postinst 의 안전시각 분기가 `set-ntp false` 로 내린 서비스를 다시 켜지 않아 꺼진 채 남았다. prerm 은 패키지 제거 때 stop+disable 로 이미지 기본으로 되돌린다.
+- 시험용 AP BSSID 와 고정 fallback 주소를 하드코딩한 `etc/networkd-dispatcher/routable.d/10-set-gateway.sh` 를 payload·소스 아카이브 manifest 에서 뺐다. mlan0 routable 이벤트마다 기본 경로를 바꿔 wlan-opc#162 의 ChangeIpAddress 기본 경로를 덮어쓸 수 있었다. conffile 이 아니므로 업그레이드에서 dpkg 가 기존 파일을 제거한다.
+- 실기(cts-wlan, 0.7.0+qa.20261016 → 로컬 QA 후보 업그레이드): 설치 직후 timesyncd enabled/active·`NTPSynchronized=yes`(시계 5일 보정), 스크립트 부재·기본 경로 없음, 재부팅 뒤 유지.
+
+### OPC ChangeIp ESSID 복원 부팅 유닛과 표식 소유 (#362, PR #364)
+
+- `opcd-essid-restore.service`(`Type=oneshot`, `ExecStart=/usr/local/opc/bin/opcd -R`, `DefaultDependencies=no`, `After=local-fs.target sysinit.target`, `Before=wifi_init.service wpa_supplicant@mlan0.service`, `ConditionPathExists=` 표식, `WantedBy=wifi-stack.target`)를 추가한다. postinst 가 항상 enable 하며 `opc.enabled` 게이트에 걸지 않는다 — 게이트에 걸면 OPC 를 끈 뒤 정상 종료 동기화가 유닛을 먼저 꺼 ChangeIp ESSID 가 영구화되고 전원 단절 재부팅과 결과가 갈린다. 표식이 없으면 실행되지 않는다. prerm 은 remove 경로에서 opcd 와 함께 stop/disable 한다.
+- 표식 소유: `factory_reset.sh` 는 필수 payload commit 뒤 표식을 지우고, `wifi.sh` 의 `ssid`·`connect`(SSID 인자)는 mlan0 conf 설치 뒤 표식을 지워 ChangeIp 체인을 끝낸다(FTP `wssid` 포함). `opc_wlan_apply.sh` 는 mlan0 `ssid` 설치 때 conf writer lock 안에서 표식 존재를 확인하고 없으면 conf 를 건드리지 않고 exit 6 으로 거부한다 — opcd 는 비0 종료를 settle 로 처리해 표식이 없으면 커밋하지 않는다. `bd_provision.sh --ssid` 는 wlan-opc#176 으로 추적한다.
+- 실기: ChangeIp(ESSID) → 재부팅 → 유닛이 wifi_init 앞에서 `-R ChangeIp ESSID restore: original ESSID restored (rc=1)`, conf·연결 원상, 표식 삭제. `wifi 0 ssid` 뒤 재부팅에서는 유닛이 조건 미충족으로 건너뛰고 conf 가 유지된다. 공장초기화 뒤 표식 부재는 호스트 셸 테스트로 고정했고 실기는 #324 공장초기화 실기 때 수행한다.
+
+### OPCd 서브모듈 0b4dfe7 — DFK 사양 정합 (PR #365; wlan-opc PR #168~#175)
+
+- wlan-opc gitlink 를 912c172 에서 0b4dfe7 로 올린다. 반영: Logout·idle auto-logout 뒤 indication config 유지(#160), Roaming SNR/RSSI 를 2바이트 int16 으로(-128 = 값 없음, #158), disconnect 에 마지막 CH 전달·RadioUp 은 associated 일 때만, zero-IP slot clear·idle refresh on receipt·off-segment 0x0012, ChangeIp ESSID 복원 표식·휘발 게이트웨이(/32 onlink)·NTP 적용(#161·#162), ChangeIp 후속(중단된 ESSID 적용 복원·idempotent address), indication/route 후속(이벤트 래치 RadioUp·disconnect CH 시드·no-interface 경로·Logout 시 in-flight slot clear), Reset 이 reboot policy 스크립트로 보드를 재부팅하고 ResetNotice 는 ack 뒤(#164), 리뷰 후속(연기된 IP 적용 시 구주소 세션 종료·SIGTERM 전용 reboot hand-off·InitComplete 순서).
+- 와이어 포맷 변경(Roaming int16, off-segment 0x0012)은 DFK 클라이언트 쪽 호환 주의가 필요하다.
+
+### 출하 토폴로지 보존·MAC 검증·초기화 복구 (#324·#234, PR #359)
+
+- 프로비저닝된 출하 토폴로지 선택자를 영속화하고 공장초기화·롤백이 관련 파일을 함께 되돌린다(legacy eth0-ip 동작 유지).
+- 새 netdev 를 만든 뒤 실제 적용된 MAC 을 검증하고 나서 station 서비스를 시작한다. status78 association/recovery 가드를 유지하고 FW cooldown 은 수락된 재시작 뒤에만 기록한다. 확인된 일반 초기화 종료 실패는 stale 표식이 있어도 복구한다.
+- `wifi_event` 는 GARP 만 소비자인 엄격 불리언 설정에서도 켠다(GARP 기본값 OFF 유지). 소스 아카이브 회귀와 GARP 테스트의 비특권 실행 경로를 추가했다.
+- wlan-opc 1908a1be 의 persistence admission/outcome 처리와 최신 완료 프로비저닝 백업 선택을 포함한다(이후 PR #360·#365 로 912c172·0b4dfe7 로 갱신).
+
+### CONTEC SNMP MAC 원시 6바이트와 OPC AP MAC (#215, PR #360; wlan-opc#130)
+
+- CONTEC 루트의 MAC 4개 OID 를 기존 pass_persist 의 octet/ASCII hex 로 원시 6바이트로 돌려준다. 결측·형식 오류는 6개 0바이트다. 자체 CanTops 루트는 DisplayString 계약을 유지한다.
+- wlan-opc 를 912c172 로 고정해 AP 해제 통지의 MAC 누락 보완을 포함한다.
+
+## 0.7.0 (2026-10-09)
+
+> SemVer **minor** — FTP `quote`의 `wrst`를 제외한 모든 `w` 명령에 인터페이스를 필수로 받고 `0`/`1` 별칭을 지원한다. 기존 인터페이스·재부팅 명령의 계약을 유지하며 대응하는 `w` 명령을 추가한다.
+
+### FTP quote 인터페이스 필수 계약 (#351, PR #341 후속)
+
+- `wssid`, `wfreq`, `wconnect`, `wconnectraw`, `wstatus`의 첫 인자는 `mlan0`, `mlan1`, `0`, `1` 중 하나여야 한다. `0`은 `mlan0`, `1`은 `mlan1`로 변환하며, 누락하거나 잘못된 값을 주면 하위 명령 실행 전에 code 2로 거부한다. 기존의 인터페이스 생략 호출은 이제 실패한다.
+- 인터페이스 뒤의 SSID·주파수 인자와 조회·설정·연결 응답 계약은 유지한다. 예를 들어 `quote wconnect 1 Office AP`는 `mlan1`에서 `Office AP` 연결을 시도하고, `quote wssid 0`은 `mlan0`의 저장 SSID를 조회한다.
+- 인터페이스 한 개를 필수로 받는 `wgetifstate`, `wifcdown`, `wifcup`을 추가한다. 기존 핸들러를 호출하여 성공 응답, 실패 코드와 `ifcdown`의 FTP 제어 연결 보호를 유지한다. `wrst`는 인터페이스를 생략할 수 있으며, 지정하면 `mlan0`, `mlan1`, `0`, `1` 중 하나인지 검증한다. `quote wrst`와 `quote wrst 0` 모두 `rst`와 동일하게 장비 전체 재부팅을 요청하며, 잘못된 값이나 추가 인자는 code 2로 거부한다.
+- 기존 `getifstate`, `ifcdown`, `ifcup`의 선택적 인터페이스·기본 `mlan0` 및 `rst`의 무인자 계약은 그대로다. 숫자 별칭은 `w` 명령에 적용한다.
+- 내부·외부 배포용 FTP 프로토콜 문서와 payload·소스 아카이브 manifest를 동기화하고 필수 인터페이스, 숫자 별칭, 기존 응답·보호 동작의 실행 회귀 테스트를 추가했다.
+- 기존 vsftpd의 ASCII 입력·8개 토큰·255바이트 제한과 `501`/`550` 응답 차이를 실기 결과로 문서에 구체화했다. FTP 자동 검증 프로그램 `scripts/qa/ftp_quote_verify.py`와 소켓 기반 회귀 테스트를 추가하여 입력 경계·오류 후 세션 유지·타임아웃 후 새 연결 검사를 반복하고 JSON으로 기록할 수 있다. 선택적 망 전환 모드는 목표 SSID·주파수를 실행 인자로 받아 실제 연결을 확인하고, 테스트 후 원래 SSID·주파수와 연결을 복원해 결과를 별도로 기록한다. 두 프로토콜 문서와 검증 프로그램·테스트를 소스 아카이브에 포함한다(PR #353 후속).
+
+### OPCd 무선 설정과 복구 경로 보강
+
+- OPCd의 NXP 무선 설정 적용 결과와 오류 원인을 구분하고, 설정 파일·드라이버·JSON 적용 실패 시 이전 상태로 되돌린다. 지원하지 않는 무선 설정은 실제 변경 전에 거부한다.
+- OPCd는 systemd READY·watchdog 통지를 사용한다. 업그레이드 때 기존에 실행 중이며 설정 게이트가 허용한 OPCd를 새 ELF와 unit으로 교체하고, READY 실패를 설치 실패로 전달한다.
+- 재부팅 정책은 호출 서비스와 독립된 systemd executor에서 실행한다. 진단 I/O 시간 제한을 적용하며 일반 자동 요청은 재부팅 횟수 기록 오류 시 종료 코드 14로 거부한다. 횟수 기록은 원자적으로 저장하고 기존 `--force` 긴급 복구 예외를 유지한다.
+- logger·checker·firmware monitor의 진단 명령과 설정 쓰기 경로를 보강하고 실행 회귀 테스트를 추가했다. 실기 확인 범위와 실제 패키지 설치·HW watchdog 만료 등 미검증 범위는 릴리즈 검증 보고서에 구분한다.
+
 ## 0.6.9 (2026-10-02)
 
 > SemVer **patch** — FTP `quote`에 저장 프로필 조회·설정 명령(`wssid`·`wfreq`·`wstatus`)을 추가하고 `wconnect` 계약을 SSID 전용으로 정리한다. `wlan-bridge` 서브모듈이 없는 소스에서도 bridge 없는 패키지를 빌드할 수 있게 하며, handshake 정체 재시도·공장 초기화 LED 상태·`wstatus` SSID 디코딩을 고친다.

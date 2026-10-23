@@ -8,6 +8,8 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import wifi_snmp_pp as pp  # noqa: E402
@@ -73,8 +75,8 @@ def test_env_values_connected():
     om = _connected_map()
     assert om[BASE + ".2.2.0"] == ("string", "0.4.0")              # FirmwareVersion
     assert om[BASE + ".2.3.0"] == ("string", "HW-1.0.0")          # HardwareVersion
-    assert om[BASE + ".2.4.0"] == ("string", "de:ad:be:ef:00:11")  # EthernetAddress
-    assert om[BASE + ".2.5.0"] == ("string", "aa:bb:cc:dd:ee:01")  # WLMacAddress
+    assert om[BASE + ".2.4.0"] == ("octet", "DE AD BE EF 00 11")  # EthernetAddress
+    assert om[BASE + ".2.5.0"] == ("octet", "AA BB CC DD EE 01")  # WLMacAddress
     assert om[BASE + ".2.6.0"] == ("ipaddress", "192.168.1.50")    # IPAddress
     assert om[BASE + ".2.7.0"] == ("ipaddress", "255.255.255.0")   # SubnetMask
     assert om[BASE + ".2.8.0"] == ("ipaddress", "192.168.1.1")     # DefaultGateway
@@ -86,7 +88,7 @@ def test_env_eth_flat_fallback():
                 "netmask": "255.0.0.0", "gateway": "10.0.0.1"}
     om = pp.build_oid_map(eth=eth_flat, mlan=MLAN_CONN, devinfo=DEV,
                           fw="x", eth_link_up=True)
-    assert om[BASE + ".2.4.0"] == ("string", "11:22:33:44:55:66")
+    assert om[BASE + ".2.4.0"] == ("octet", "11 22 33 44 55 66")
     assert om[BASE + ".2.6.0"] == ("ipaddress", "10.0.0.2")
 
 
@@ -94,7 +96,7 @@ def test_env_missing_defaults():
     om = pp.build_oid_map(eth={}, mlan={}, devinfo={}, fw="", eth_link_up=False)
     assert om[BASE + ".2.2.0"] == ("string", "")                  # fw 없음
     assert om[BASE + ".2.3.0"] == ("string", "")                  # hw 없음
-    assert om[BASE + ".2.4.0"] == ("string", pp.NULL_MAC)         # eth MAC 없음
+    assert om[BASE + ".2.4.0"] == ("octet", "00 00 00 00 00 00")  # eth MAC 없음
     assert om[BASE + ".2.6.0"] == ("ipaddress", pp.NULL_IP)       # IP 없음
     assert om[BASE + ".2.9.0"] == ("integer", "0")               # ProductNumber 없음→0
 
@@ -159,10 +161,10 @@ def test_eth_link_fallback_down_from_json_phy():
 def test_wireless_info_connected():
     om = _connected_map()
     assert om[BASE + ".3.3.1.3.0"] == ("string", "Station")           # UnitType
-    assert om[BASE + ".3.3.1.4.0"] == ("string", "aa:bb:cc:dd:ee:01")  # WIFInfoWLMacAddress
+    assert om[BASE + ".3.3.1.4.0"] == ("octet", "AA BB CC DD EE 01")  # WIFInfoWLMacAddress
     assert om[BASE + ".3.3.1.5.0"] == ("string", "80 MHz")           # BandWidth
     assert om[BASE + ".3.3.1.11.1.0"] == ("integer", "2")            # StaLoginState connected
-    assert om[BASE + ".3.3.1.11.2.0"] == ("string", "00:00:91:08:61:4b")  # BSSID
+    assert om[BASE + ".3.3.1.11.2.0"] == ("octet", "00 00 91 08 61 4B")  # BSSID
     assert om[BASE + ".3.3.1.11.3.0"] == ("string", "Wlan_5g")       # StaEssId
     assert om[BASE + ".3.3.1.11.4.0"] == ("integer", "48")           # StaChannel
     assert om[BASE + ".3.3.1.11.7.0"] == ("integer", "-43")          # StaRssi (dBm)
@@ -172,7 +174,7 @@ def test_wireless_info_disconnected():
     om = _disconnected_map()
     assert om[BASE + ".3.3.1.3.0"] == ("string", "Station")          # 고정
     assert om[BASE + ".3.3.1.11.1.0"] == ("integer", "1")           # notConnected
-    assert om[BASE + ".3.3.1.11.2.0"] == ("string", pp.NULL_MAC)    # BSSID 0
+    assert om[BASE + ".3.3.1.11.2.0"] == ("octet", "00 00 00 00 00 00")  # BSSID 0
     assert om[BASE + ".3.3.1.11.3.0"] == ("string", "")             # ESSID 빈값
     assert om[BASE + ".3.3.1.11.4.0"] == ("integer", "0")           # Channel 0
     assert om[BASE + ".3.3.1.11.7.0"] == ("integer", "0")           # RSSI 0
@@ -448,6 +450,45 @@ def test_main_eof_exits_clean():
     assert _run_main([]) == []
 
 
+def test_contec_mac_control_bytes_stay_hex_in_all_four_oids():
+    mac = "00:0a:0d:ff:00:01"
+    om = pp.build_oid_map(eth={"mac_address": mac},
+                          mlan={"info": {"address": mac}, "link": {"address": mac}})
+    for suboid in (".2.4.0", ".2.5.0", ".3.3.1.4.0", ".3.3.1.11.2.0"):
+        typ, value = om[BASE + suboid]
+        assert (typ, value) == ("octet", "00 0A 0D FF 00 01")
+        assert bytes.fromhex(value) == b"\x00\x0a\x0d\xff\x00\x01"
+
+
+@pytest.mark.parametrize("mac", [None, "aa:bb:cc:dd:ee", "aa:bb:cc:dd:ee:zz"])
+def test_contec_missing_or_malformed_mac_defaults_to_six_zero_bytes(mac):
+    om = pp.build_oid_map(eth={"mac_address": mac},
+                          mlan={"info": {"address": mac}, "link": {"address": mac}})
+    for suboid in (".2.4.0", ".2.5.0", ".3.3.1.4.0", ".3.3.1.11.2.0"):
+        assert om[BASE + suboid] == ("octet", "00 00 00 00 00 00")
+
+
+def test_main_mac_hex_response_preserves_following_getnext_and_get(tmp_path, monkeypatch):
+    import json
+
+    eth_path = tmp_path / "eth.json"
+    mlan_path = tmp_path / "mlan.json"
+    eth_path.write_text(json.dumps({"mac_address": "00:0a:0d:ff:00:01"}))
+    mlan_path.write_text(json.dumps({"info": {"address": "aa:bb:cc:dd:ee:ff"}}))
+    monkeypatch.setenv("WIFI_SNMP_ETH_JSON", str(eth_path))
+    monkeypatch.setenv("WIFI_SNMP_MLAN_JSON", str(mlan_path))
+    out = _run_main([
+        "PING\n", "get\n", BASE + ".2.4.0\n",
+        "PING\n", "getnext\n", BASE + ".2.4.0\n",
+        "PING\n", "get\n", BASE + ".3.1.1.0\n", "\n",
+    ])
+    assert out == [
+        "PONG", BASE + ".2.4.0", "octet", "00 0A 0D FF 00 01",
+        "PONG", BASE + ".2.5.0", "octet", "AA BB CC DD EE FF",
+        "PONG", BASE + ".3.1.1.0", "integer", "1",
+    ]
+
+
 # ============================ Phase2b ============================
 # mlan0 무선통계 9개(.3.3.2.x, Counter32). 데이터소스 = link.json 의 mwlan_log
 # (로거 parse_mwlan_log 가 /proc getlog 파싱). 측정 불가 시 noSuchInstance(omap 누락).
@@ -620,13 +661,24 @@ def test_cantops_firmware_version_matches_spec():
     assert om[".1.3.6.1.4.1.66620.1.2.2.0"] == ("string", "0.5.6")
 
 
-def test_same_subtree_under_both_roots():
-    # 루트만 갈아끼우면 서브OID·타입·값이 그대로 재현된다(같은 데이터, 두 이름)
+def test_subtrees_only_differ_in_mac_encoding_and_keep_cantops_text_contract():
+    # CONTEC MAC은 raw 6바이트, 자체 CanTops MIB는 기존 DisplayString을 유지한다.
     a = pp.build_oid_map(base=pp.FXE3000, **_sources())
     b = pp.build_oid_map(base=pp.CTS_WLAN, **_sources())
+    macs = {
+        ".2.4.0": "de:ad:be:ef:00:11",
+        ".2.5.0": "aa:bb:cc:dd:ee:01",
+        ".3.3.1.4.0": "aa:bb:cc:dd:ee:01",
+        ".3.3.1.11.2.0": "00:00:91:08:61:4b",
+    }
+    for suboid, value in macs.items():
+        assert b[pp.CTS_WLAN + suboid] == ("string", value)
     strip = lambda om, root: {o[len(root):]: v for o, v in om.items()}
-    assert len(b) > 0
-    assert strip(a, pp.FXE3000) == strip(b, pp.CTS_WLAN)
+    a, b = strip(a, pp.FXE3000), strip(b, pp.CTS_WLAN)
+    assert a.keys() == b.keys()
+    assert {o: v for o, v in a.items() if o not in macs} == {
+        o: v for o, v in b.items() if o not in macs
+    }
 
 
 def test_root_isolation_getnext_never_crosses_subtree():
@@ -778,8 +830,8 @@ def test_mib_traps_match_trap_script():
 
 
 def test_mib_declares_mac_objects_as_displaystring():
-    # 구현은 콜론헥사 텍스트를 준다. MIB 가 MacAddress(OCTET STRING SIZE 6) 로 선언하면
-    # NMS 디코딩이 어긋나므로 SYNTAX 는 DisplayString 이어야 한다(정합 전환은 이슈 #215).
+    # 자체 CanTops 루트는 콜론헥사 텍스트 계약을 유지한다. CONTEC 루트의 raw MAC과
+    # 별개이므로 이 MIB 의 SYNTAX 는 계속 DisplayString 이어야 한다.
     # DESCRIPTION 안에서 FXE3000 의 원래 타입을 설명하는 것은 문서화라 검사 대상이 아니다 —
     # 실제 타입 선언(MacAddress TC 정의 / SYNTAX 절)만 본다.
     import io as _io, re as _re

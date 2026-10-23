@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""로밍 완료 통지 헬퍼 — opcd Roaming Indication(0x04) 구동.
+"""로밍 통지 헬퍼 — opcd Roaming Indication(0x04) 구동.
 
-로밍 실행체(wifi_roam.py / passive_roam.py)가 로밍 성공 직후 호출한다.
-post-roam link.json(/var/log/cantops/json/<iface>/link.json)을 재독해
+로밍 데몬(wifi_roam.py)이 로밍 조건(임계 하회)에 들어서는 순간 현재 접속 AP 로 호출한다
+(사양 §4.4.3, #368). link.json(/var/log/cantops/json/<iface>/link.json)을 읽어
 페이로드를 구성하고, opcd에 로컬 UDP 데이터그램 1개를 보낸다.
 
 WIRE CONTRACT (opcd 파서와 정확히 일치해야 함):
@@ -10,7 +10,7 @@ WIRE CONTRACT (opcd 파서와 정확히 일치해야 함):
   format    : 1 datagram = JSON object 1개, UTF-8, <=512 bytes
   keys      : iface(str) ap_mac(str) 는 항상 포함. from/rssi/snr/channel/freq/band 는
               값이 있을 때만 포함(생략 가능). opcd 파서 기준 ap_mac/channel/freq 는
-              필수(누락 시 datagram drop), rssi/snr 은 선택(부재→0), iface/from/band 는
+              필수(누락 시 datagram drop), rssi/snr 은 선택(부재→-128), iface/from/band 는
               opcd에서 log 전용.
 
 전 구간 try/except로 감싸 절대 raise 하지 않는다(로밍 return 경로 보호).
@@ -93,8 +93,8 @@ def build_payload(data, iface, from_bssid, to_bssid,
                   channel=None, freq=None, rssi=None):
     """link.json dict → opcd wire 페이로드 dict. 미연결이면 None.
 
-    channel/freq/rssi가 주어지면(호출자의 대상 AP 스캔값=권위) link.json보다 우선한다
-    — 로밍 직후 비동기로 지연되는 link.json이 이전 AP 값을 담고 있어도 정확하게 발행.
+    channel/freq/rssi가 주어지면 link.json보다 우선한다(호출자가 이미 판정에 쓴 값을
+    그대로 싣기 위함). 주지 않은 값은 link.json 의 현재 접속 값으로 채운다.
 
     파일 read와 분리한 순수 함수(self-test 용이).
     """
@@ -105,10 +105,8 @@ def build_payload(data, iface, from_bssid, to_bssid,
     if not isinstance(link, dict):
         return None
 
-    # ap_mac: same-SSID 로밍은 to_bssid가 목표 BSS(정확)이므로 우선 사용 — link.json이
-    # 아직 이전 AP를 담고 있어도 정확하고, 블로킹 폴링도 불필요. cross-SSID는 펌웨어가
-    # BSS를 자율 선택하므로 호출자가 to_bssid=""를 넘기며, 이때 link.address(실 결합
-    # BSS)로 폴백한다. (rssi/snr/channel은 link.json 1회 읽기 — 소폭 staleness 허용)
+    # ap_mac: 호출자가 준 to_bssid를 우선 사용하고, 빈 값이면 link.address(실 결합 BSS)로
+    # 폴백한다. (rssi/snr/channel은 link.json 1회 읽기 — 소폭 staleness 허용)
     ap_mac = (to_bssid or "").strip()
     if not ap_mac:
         addr = link.get("address")
@@ -118,8 +116,7 @@ def build_payload(data, iface, from_bssid, to_bssid,
 
     info = data.get("info") if isinstance(data.get("info"), dict) else {}
 
-    # channel/freq/rssi: 호출자가 대상 AP 스캔값(권위)을 주면 우선 — 로밍 직후 link.json이
-    # 아직 이전 AP를 담고 있어도 정확. 없으면 link.json에서 읽는다.
+    # channel/freq/rssi: 호출자가 준 값이 우선, 없으면 link.json에서 읽는다.
     if rssi is None:
         rssi = _parse_rssi(link.get("signal_avg"))
         if rssi is None:
@@ -175,21 +172,31 @@ def build_payload(data, iface, from_bssid, to_bssid,
 
 
 def notify_roam(iface, from_bssid, to_bssid, port=DEFAULT_PORT,
-                channel=None, freq=None, rssi=None):
-    """로밍 완료를 opcd에 통지한다. 절대 raise 하지 않는다.
+                channel=None, freq=None, rssi=None, require_link_match=False):
+    """Roaming 통지 1건을 opcd에 보낸다. 절대 raise 하지 않는다.
 
-    channel/freq/rssi: 호출자가 아는 대상 AP 스캔값(권위). 주면 link.json보다 우선.
+    to_bssid: 통지할 AP(ap_mac). channel/freq/rssi: 주면 link.json보다 우선.
+    require_link_match: True면 다시 읽은 link.json의 접속 AP가 to_bssid와 같을 때만
+    보낸다 — 판정 뒤 재결합이 끼면 channel·noise가 다른 AP 값이라 섞이므로 건너뛴다.
 
     Returns True on datagram sent, False otherwise(미연결/에러/skip).
     """
     try:
         # link.json 1회 읽기(폴링 없음). ap_mac은 build_payload에서 to_bssid를 우선
-        # 사용하므로 link.json 비동기 지연에도 정확하다(same-SSID). cross-SSID는
-        # 호출자가 to_bssid=""를 넘겨 link.address(실 결합 BSS)를 쓴다.
+        # 사용하고, 빈 값이면 link.address(실 결합 BSS)를 쓴다.
         data = _read_link_json(iface)
         if data is None:
             # 미연결/파일없음
             return False
+
+        if require_link_match:
+            link = data.get("link") if isinstance(data, dict) else None
+            addr = link.get("address") if isinstance(link, dict) else None
+            if (not isinstance(addr, str)
+                    or addr.strip().lower() != (to_bssid or "").strip().lower()):
+                print(f"[roam_notify] link.json now on {addr!r}, not {to_bssid!r} - "
+                      f"skipped (fields would mix two APs)", file=sys.stderr)
+                return False
 
         payload = build_payload(data, iface, from_bssid, to_bssid,
                                 channel=channel, freq=freq, rssi=rssi)
@@ -248,7 +255,7 @@ def get_associated_bssid(iface, wait_s=3.0, poll_s=0.5):
 
     cross-SSID 전환은 펌웨어가 BSS를 자율 선택해 호출자가 목표 BSSID를 모르고,
     link.json은 비동기(~1s 주기) 갱신이라 전환 직후엔 이전 AP가 남을 수 있다.
-    → 전환 성공 직후 이 헬퍼로 실 결합 BSS를 얻어 notify_roam(to_bssid=..)에 넘긴다.
+    → 전환 성공 직후 이 헬퍼로 실 결합 BSS를 얻는다(ping-pong 카운트 등).
 
     wifi connect 가 결합 완료 전에 rc==0 을 반환할 수 있어 wpa_state=COMPLETED 까지
     wait_s 한도로 poll_s 간격 재시도한다(이미 결합 상태면 첫 호출에서 즉시 반환).

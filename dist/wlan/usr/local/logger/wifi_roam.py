@@ -2169,14 +2169,14 @@ def reload_roaming_config(iface):
 # ==============================================================================
 # 개선된 roam_to_bssid (Ping-pong 방지 포함)
 # ==============================================================================
-def roam_to_bssid(from_bssid, to_bssid, channel=None, freq=None, rssi=None):
+def roam_to_bssid(from_bssid, to_bssid):
     """
-    Ping-pong 확인 후 로밍 실행 (channel/freq/rssi=대상 AP 스캔 권위값)
+    Ping-pong 확인 후 로밍 실행
 
     성공 판정은 `wpa_cli roam`의 종료코드가 아니라 (1) 응답 텍스트가 "OK"(명령 수락)이고
     (2) 이후 wpa_cli status 폴링으로 wpa_state=COMPLETED@target(재결합 완료)이 확인될 때만
     성공으로 본다. wpa_cli는 supplicant가 "FAIL"을 응답해도 exit 0을 주므로(_wpa_ctrl_command),
-    returncode==0 판정은 실패를 성공으로 오인하고 add_roam/notify_roam까지 잘못 수행한다.
+    returncode==0 판정은 실패를 성공으로 오인하고 add_roam까지 잘못 수행한다.
 
     Args:
         from_bssid: 현재 연결된 BSSID
@@ -2199,10 +2199,10 @@ def roam_to_bssid(from_bssid, to_bssid, channel=None, freq=None, rssi=None):
         if not acquired:
             logger.message("info", f"[{IFACE}] scan-transition busy; defer roam", _EXTRA_())
             return SCAN_TRANSITION_BUSY
-        return _roam_to_bssid_locked(from_bssid, to_bssid, channel, freq, rssi)
+        return _roam_to_bssid_locked(from_bssid, to_bssid)
 
 
-def _roam_to_bssid_locked(from_bssid, to_bssid, channel=None, freq=None, rssi=None):
+def _roam_to_bssid_locked(from_bssid, to_bssid):
     logger.message("emerg", f"[{IFACE}] Roaming: {from_bssid} -> {to_bssid}", _EXTRA_())
 
     try:
@@ -2239,15 +2239,12 @@ def _roam_to_bssid_locked(from_bssid, to_bssid, channel=None, freq=None, rssi=No
         )
         return False
 
-    # 재결합이 확인된 경우에만 카운터/통지/최적화 수행 — 가짜 성공에 의한
-    # ping-pong 카운터 오염과 opcd 오통지를 제거한다.
+    # 재결합이 확인된 경우에만 카운터/최적화 수행 — 가짜 성공에 의한 ping-pong 카운터
+    # 오염을 막는다. opcd Roaming 통지는 로밍 결과가 아니라 조건 진입 시점에 보낸다(main, #368).
     if ENABLE_PING_PONG_PREVENTION and ping_pong_preventer:
         ping_pong_preventer.add_roam(from_bssid, to_bssid)
 
     logger.message("info", f"[{IFACE}] Roam successful (confirmed): {to_bssid}", _EXTRA_())
-
-    notify_roam(IFACE, from_bssid, to_bssid,
-                channel=channel, freq=freq, rssi=rssi)
 
     return True
 
@@ -2282,6 +2279,7 @@ def connect_to_ssid(iface, to_ssid, from_bssid, to_bssid):
             capture_output=True,
             text=True,
             timeout=30,
+            env=dict(os.environ, WIFI_CONNECT_ORIGIN="roam"),
         )
         if result.returncode == 0:
             if ENABLE_PING_PONG_PREVENTION and ping_pong_preventer:
@@ -2290,6 +2288,9 @@ def connect_to_ssid(iface, to_ssid, from_bssid, to_bssid):
                 "info", f"[{IFACE}] Cross-SSID connect successful: {to_ssid}", _EXTRA_()
             )
             return True
+        elif result.returncode == 6:
+            logger.message("info", f"[{IFACE}] Cross-SSID connect deferred: interface busy", _EXTRA_())
+            return None
         else:
             logger.message(
                 "err",
@@ -2842,16 +2843,14 @@ def route_cross_ssid_transition(iface, to_ssid, from_bssid, to_bssid):
         # 모드 B: connect_to_ssid가 내부에서 자체 check+add_roam 수행(기존 동작 유지)
         ok = connect_to_ssid(iface, to_ssid, from_bssid, to_bssid)
     # Mode A는 목표 BSSID pin+status exact match로 이미 보장했고, Mode B는 connect
-    # 과정에서 펌웨어가 실제 BSS를 선택한다. 두 경우 모두 통지에는 전환 후 status의
+    # 과정에서 펌웨어가 실제 BSS를 선택한다. 두 경우 모두 카운트에는 전환 후 status의
     # 권위 BSSID를 사용한다(link.json은 ~1s 주기라 직후 stale일 수 있음).
-    if ok:
+    if ok and GENERATE_NETWORK_BLOCKS and ENABLE_PING_PONG_PREVENTION and ping_pong_preventer:
         # 소문자 정규화: PingPongPreventer가 (from,to) 문자열 비교로 왕복을 감지하므로
         # 스캔 파서(.lower())·link.json(.lower())과 표기를 일치시킨다.
         assoc = (get_associated_bssid(iface) or "").strip().lower()
-        if GENERATE_NETWORK_BLOCKS and ENABLE_PING_PONG_PREVENTION and ping_pong_preventer:
-            # 실 결합 BSS(권위)로 카운트, 조회 실패 시 목표 to_bssid 폴백.
-            ping_pong_preventer.add_roam(from_bssid, assoc or to_bssid)
-        notify_roam(iface, from_bssid, assoc)
+        # 실 결합 BSS(권위)로 카운트, 조회 실패 시 목표 to_bssid 폴백.
+        ping_pong_preventer.add_roam(from_bssid, assoc or to_bssid)
     return ok
 
 
@@ -3299,6 +3298,9 @@ def main():
     hint_state = {"hint_mtime": None}
     # good-signal 게이트 상태(new_gate_state / track_association 참조).
     gs = new_gate_state()
+    # 로밍 조건 진입을 opcd 에 통지한 BSSID(#368). 조건이 이어지는 동안 같은 AP 로는 다시
+    # 보내지 않고, 임계 위로 회복하거나 연결이 끊기면 None 으로 재무장한다.
+    trigger_notified_bssid = None
 
     while True:
         # SIGHUP 수신 시에만 wifi_init_conf.json 재읽어 반영(폴링 없음 → 프로덕션 비용 0).
@@ -3329,6 +3331,7 @@ def main():
         track_association(station, gs)
 
         if not station:
+            trigger_notified_bssid = None
             interruptible_sleep(CHECK_INTERVAL)
             continue
 
@@ -3372,6 +3375,7 @@ def main():
         # 로밍 조건 확인
         if station["rssi"] >= predictive_threshold:
             set_flag(0, ROAM_CONDITION_FLAG)
+            trigger_notified_bssid = None
             # 신호 양호(로밍 불필요) → 후보없음 streak 해제. 다음 악화 시 시작값부터 backoff.
             # 단 게이트가 켜져 있으면 **위치가 실제로 변했을 때만** 리셋한다 — 임계 바로
             # 위에서의 Δ0dB 진동이 backoff 를 3초로 되돌려 스캔을 폭증시키던 경로다
@@ -3415,6 +3419,16 @@ def main():
             _EXTRA_(),
         )
         set_flag(1, ROAM_CONDITION_FLAG)
+        # 사양 §4.4.3: 임계 하회(트리거 검출) 시점의 현재 AP 로 Roaming(0x0004)을 보낸다 —
+        # AP MAC = 로밍 전 현재 AP, RSSI = 이 판정의 값. channel/freq 는 넘기지 않아
+        # roam_notify 가 link.json 의 현재 접속 값을 쓰고, SNR 도 그 주파수 noise 로 계산한다.
+        # 그 사이 다른 AP 로 재결합했으면 값이 섞이므로 보내지 않는다(require_link_match).
+        # 보내지 못한 AP 는 '통지함'으로 기록하지 않아, 조건이 이어지는 동안 다음 판정이
+        # 그때의 현재 AP(같은 AP 로 돌아왔어도)로 다시 보낸다.
+        if trigger_notified_bssid != station["bssid"]:
+            if notify_roam(IFACE, "", station["bssid"], rssi=station["rssi"],
+                           require_link_match=True):
+                trigger_notified_bssid = station["bssid"]
 
         # 인터벌 계산 (루프 내 모든 경로에서 공유)
         interval = CHECK_INTERVAL
@@ -3508,12 +3522,7 @@ def main():
                     interruptible_sleep(CHECK_INTERVAL)
                     continue
             else:
-                ok = roam_to_bssid(
-                    station["bssid"], best_ap["bssid"],
-                    channel=best_ap.get("channel"),
-                    freq=best_ap.get("freq"),
-                    rssi=best_ap.get("rssi"),
-                )
+                ok = roam_to_bssid(station["bssid"], best_ap["bssid"])
                 if ok is SCAN_TRANSITION_BUSY:
                     interruptible_sleep(CHECK_INTERVAL)
                     continue

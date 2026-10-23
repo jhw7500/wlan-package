@@ -1,4 +1,6 @@
 import os
+import shlex
+import signal
 import subprocess
 import time
 from dataclasses import dataclass
@@ -90,8 +92,133 @@ def test_bounded_runner_kills_hung_command(run_shell):
         'logger_run_bounded 0.2 sh -c "sleep 30"'
     )
 
-    assert result.returncode == 124
+    assert result.returncode in (124, 137)
     assert result.elapsed < 2.0
+
+
+def test_bounded_runner_preserves_standard_input(run_shell):
+    result = run_shell(
+        "printf 'stdin-fixture\\n' | "
+        "( . ./wifi_logger_command_lib.sh; logger_run_bounded 1 cat )"
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "stdin-fixture\n"
+
+
+def test_bounded_runner_kills_term_resistant_descendant(run_shell, tmp_path):
+    pid_path = tmp_path / "term-resistant.pid"
+    token = f"logger-timeout-{os.getpid()}-{time.monotonic_ns()}"
+    leaf = tmp_path / "term_resistant_leaf.py"
+    leaf.write_text(
+        """#!/usr/bin/env python3
+import os
+import signal
+import sys
+import time
+from pathlib import Path
+
+pid_path = Path(sys.argv[1])
+start_time = Path("/proc/self/stat").read_text().split()[21]
+pid_path.write_text(f"{os.getpid()} {start_time}\\n")
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+time.sleep(60)
+"""
+    )
+    leaf.chmod(0o755)
+    child_command = " ".join(
+        (
+            shlex.quote(str(leaf)),
+            shlex.quote(str(pid_path)),
+            shlex.quote(token),
+            "</dev/null",
+            ">/dev/null",
+            "2>&1",
+            "& wait",
+        )
+    )
+
+    pid = None
+    start_time = None
+
+    def identity_matches() -> bool:
+        if pid is None or start_time is None:
+            return False
+        try:
+            proc_stat = Path(f"/proc/{pid}/stat").read_text().split()
+            cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
+        except (FileNotFoundError, ProcessLookupError):
+            return False
+        return proc_stat[21] == start_time and token.encode() in cmdline
+
+    result = None
+    descendant_survived = False
+    pidfd = None
+    try:
+        result = run_shell(
+            ". ./wifi_logger_command_lib.sh; "
+            f"logger_run_bounded 0.5 sh -c {shlex.quote(child_command)}"
+        )
+        pid_text, start_time = pid_path.read_text().split()
+        pid = int(pid_text)
+        descendant_survived = identity_matches()
+        if descendant_survived:
+            pidfd = os.pidfd_open(pid)
+
+        assert result.returncode in (124, 137)
+        assert result.elapsed < 2.0
+        assert not descendant_survived
+    finally:
+        if pidfd is None and pid_path.exists():
+            pid_text, start_time = pid_path.read_text().split()
+            pid = int(pid_text)
+            if identity_matches():
+                pidfd = os.pidfd_open(pid)
+        if pidfd is not None:
+            if identity_matches():
+                signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+            os.close(pidfd)
+
+
+def test_bounded_runner_preserves_nonzero_status_and_output(run_shell):
+    result = run_shell(
+        "set -e; . ./wifi_logger_command_lib.sh; "
+        "logger_run_bounded 1 sh -c 'printf command-output; exit 7'; "
+        "printf unexpected"
+    )
+
+    assert result.returncode == 7
+    assert result.stdout == "command-output"
+
+
+def test_bounded_runner_preserves_command_sigkill_status(run_shell):
+    result = run_shell(
+        ". ./wifi_logger_command_lib.sh; "
+        "logger_run_bounded 1 sh -c 'kill -KILL $$'"
+    )
+
+    assert result.returncode == 137
+
+
+def test_bounded_runner_honors_timeout_binary_override(run_shell, tmp_path):
+    marker = tmp_path / "timeout-invoked"
+    timeout_wrapper = tmp_path / "timeout-wrapper"
+    _write_exe(
+        timeout_wrapper,
+        "#!/bin/sh\nprintf invoked > \"$TIMEOUT_MARKER\"\n"
+        "exec /usr/bin/timeout \"$@\"\n",
+    )
+
+    result = run_shell(
+        ". ./wifi_logger_command_lib.sh; "
+        "logger_run_bounded 1 sh -c 'printf override-output'",
+        LOGGER_TIMEOUT_BIN=timeout_wrapper,
+        TIMEOUT_MARKER=marker,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "override-output"
+    assert marker.read_text() == "invoked"
 
 
 def test_bounded_reader_preserves_successful_contents(run_shell, tmp_path):

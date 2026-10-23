@@ -169,9 +169,19 @@ wifi_ssid_array_validate_json() {
 # 사람이 못 읽으므로 필요한 경우로 좁힌다.
 _wifi_ssid_encode() {
     python3 - "$1" "$2" 2>/dev/null <<'PY'
+import re
 import sys
 value = sys.argv[1]
 mode = sys.argv[2]
+if mode == "conf-wpa":
+    token = value.strip()
+    if len(token) >= 2 and token[0] == token[-1] == '"':
+        value = token[1:-1]
+    elif re.fullmatch(r"(?:[0-9a-fA-F]{2}){1,32}", token):
+        value = bytes.fromhex(token).decode("utf-8")
+    else:
+        raise SystemExit(1)
+    mode = "wpa"
 raw = value.encode("utf-8")
 if not 1 <= len(raw) <= 32:
     raise SystemExit(1)
@@ -212,6 +222,10 @@ wifi_ssid_to_conf_value() {
 # retaining the original identity for config serialization and operator text.
 wifi_ssid_to_wpa_text() {
     _wifi_ssid_encode "$1" wpa
+}
+
+wifi_ssid_conf_to_wpa_text() {
+    _wifi_ssid_encode "$1" conf-wpa
 }
 
 # Connect needs both representations of the same already-validated identity.
@@ -415,22 +429,58 @@ wifi_wpa_conf_is_multi_topology() {
     return 1
 }
 
+# Ordinary writers share FD6; a manual fallback transaction takes it exclusively.
+# Acquire before FD9/FD7, so competing mutations fail immediately rather than
+# waiting behind a connect and unexpectedly applying after its rollback.
+wifi_change_guard_acquire() {
+    local iface="$1" mode="${2:-shared}" run_dir="${WIFI_RUN_DIR:-/run/wifi}"
+    command -v flock >/dev/null 2>&1 || return 1
+    mkdir -p "$run_dir" || return 1
+    exec 6>"$run_dir/${iface}.change.lock" || return 1
+    case "$mode" in
+        exclusive) ( exec 7>&- 8>&- 9>&-; flock -n -x 6 ) ;;
+        shared) ( exec 7>&- 8>&- 9>&-; flock -n -s 6 ) ;;
+        *) return 1 ;;
+    esac
+}
+
 # wifi CLI와 OPC writer가 공유하는 per-interface advisory lock. FD 9는 process
 # 종료까지 열린 채 유지되어 render/install/reconfigure/rollback 전체를 직렬화한다.
 wifi_wpa_conf_lock_acquire() {
-    local iface="$1" run_dir="${WIFI_RUN_DIR:-/run/wifi}" lock_file
+    local iface="$1" run_dir="${WIFI_RUN_DIR:-/run/wifi}" lock_file mode="${2:-wait}"
     command -v flock >/dev/null 2>&1 || return 1
     mkdir -p "$run_dir" || return 1
     lock_file="$run_dir/${iface}.wpa-conf.lock"
     exec 9>"$lock_file" || return 1
-    ( exec 7>&-; flock -x 9 )
+    if [ "$mode" = try ]; then
+        ( exec 6>&- 7>&- 8>&-; flock -n -x 9 )
+    else
+        ( exec 6>&- 7>&- 8>&-; flock -x 9 )
+    fi
 }
 
 # Close the connect transaction's private descriptors in the current child.
 # The owning transaction shell never calls this directly and remains the sole
 # lock owner until exit.
 wifi_wpa_child_close() {
-    exec 7>&- 9>&-
+    exec 6>&- 7>&- 8>&- 9>&-
+}
+
+wifi_wpa_monotonic_ms() {
+    local sec centi rest
+    IFS=' .' read -r sec centi rest < /proc/uptime || return 1
+    centi=${centi#0}
+    printf '%s\n' "$((sec * 1000 + ${centi:-0} * 10))"
+}
+
+# Radio writers use one JSON file for both interfaces. Keep FD 8 on the
+# transaction owner only, after the per-interface conf/transition locks.
+wifi_radio_json_lock_acquire() {
+    local run_dir="${WIFI_RUN_DIR:-/run/wifi}"
+    command -v flock >/dev/null 2>&1 || return 1
+    wifi_wpa_run_child mkdir -p "$run_dir" || return 1
+    exec 8>"$run_dir/radio-json.lock" || return 1
+    ( exec 6>&- 7>&- 9>&-; flock -n -x 8 )
 }
 
 # Replace the current child shell with an external command.  Direct command
@@ -438,6 +488,14 @@ wifi_wpa_child_close() {
 # the locks.
 wifi_wpa_child_exec() {
     wifi_wpa_child_close
+    if [ "$1" = wpa_cli ] && [ -n "${WIFI_WPA_DEADLINE_MS:-}" ]; then
+        local remaining
+        remaining=$((WIFI_WPA_DEADLINE_MS - $(wifi_wpa_monotonic_ms)))
+        [ "$remaining" -gt 0 ] || return 124
+        # Integer seconds also work with the target BusyBox timeout. At most
+        # one final call rounds up; elapsed-time polling never resets a budget.
+        exec timeout -k 1 "$(((remaining + 999) / 1000))" "$@"
+    fi
     exec "$@"
 }
 
@@ -493,7 +551,7 @@ wifi_wpa_abort_scan_quiesce() {
 # Tests may use a zero timeout; production defaults to a bounded 15 seconds.
 wifi_scan_transition_lock_acquire() {
     local iface="$1" run_dir="${WIFI_RUN_DIR:-/run/wifi}" lock_file timeout
-    timeout="${WIFI_SCAN_TRANSITION_LOCK_TIMEOUT:-15}"
+    timeout="${2:-${WIFI_SCAN_TRANSITION_LOCK_TIMEOUT:-15}}"
     case "$timeout" in
         0) ;;
         ''|*[!0-9]*|*) timeout=15 ;;
@@ -502,7 +560,7 @@ wifi_scan_transition_lock_acquire() {
     wifi_wpa_run_child mkdir -p "$run_dir" || return 1
     lock_file="$run_dir/${iface}.scan-transition.lock"
     exec 7>"$lock_file" || return 1
-    ( exec 9>&-; flock -w "$timeout" -x 7 )
+    ( exec 9>&-; exec 6>&- 8>&-; flock -w "$timeout" -x 7 )
 }
 
 wifi_init_get_iface_enabled() {

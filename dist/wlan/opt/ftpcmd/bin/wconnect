@@ -1,16 +1,16 @@
 #!/bin/sh
 # Reassociate a wifi interface, optionally switching it to another SSID.
 # Reached over FTP as:
-#   quote wconnect [mlan0|mlan1] [ssid words...]
+#   quote wconnect <mlan0|mlan1|0|1> [ssid words...]
 #
 # NOT named "connect": vsftpd refuses GET/POST/HEAD/OPTIONS/CONNECT as FTP
 # verbs and drops the control connection, and that check runs before the
 # handler dispatch ever sees the command (postlogin.c, ahead of
 # vsf_extcmd_try).  Those five names are unusable here.
 #
-# A leading mlan0/mlan1 selects the interface. Any other first argument is
-# the SSID and implicitly selects mlan0. All remaining FTP arguments form one
-# SSID, joined with spaces, even when a word is numeric. With no SSID, the
+# The first argument must select mlan0/mlan1 (0/1 are aliases). All remaining
+# FTP arguments form one SSID, joined with spaces, even when a word is
+# numeric. With no SSID, the
 # stored profile is reloaded. Frequencies are not accepted here; stage them
 # with wfreq first.
 #
@@ -90,21 +90,17 @@ esac
 export FTPCMD_TRACE_START_MS FTPCMD_TRACE_ID
 ftpcmd_trace_log dispatch_received "argc=$#"
 
-IFACE=mlan0
+IFACE=unknown
 trap 'FTPCMD_RC=$?; trap - EXIT; ftpcmd_trace_log reply_ready "iface=${IFACE:-unknown} rc=$FTPCMD_RC"; if [ "$FTPCMD_RC" -eq 0 ]; then printf "SUCCESS\n"; else printf "FAIL code=%s\n" "$FTPCMD_RC"; fi; exit "$FTPCMD_RC"' EXIT
 case "${1:-}" in
-    mlan0|mlan1)
-        IFACE=$1
-        shift
-        ;;
-esac
-
-case "$IFACE" in
-    *[!A-Za-z0-9._-]*)
-        ftpcmd_log_failure 2 "invalid interface name"
+    mlan0|0) IFACE=mlan0 ;;
+    mlan1|1) IFACE=mlan1 ;;
+    *)
+        ftpcmd_log_failure 2 "expected interface mlan0, mlan1, 0 or 1"
         exit 2
         ;;
 esac
+shift
 
 FTPCMD_HAS_SSID=0
 if [ "$#" -gt 0 ]; then

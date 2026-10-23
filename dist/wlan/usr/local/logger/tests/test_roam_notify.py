@@ -3,10 +3,12 @@
 build_payload는 파일 I/O와 분리된 순수 함수이므로 fixture 없이 직접 검증한다.
 roam_notify는 stdlib만 import하므로 stub 불필요.
 """
+import json
 import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import roam_notify
 from roam_notify import build_payload, _parse_rssi, _bssid_from_status
 
 
@@ -192,3 +194,49 @@ def test_get_associated_bssid_exception_empty(monkeypatch):
 
     monkeypatch.setattr(roam_notify.subprocess, "run", _boom)
     assert roam_notify.get_associated_bssid("mlan0", wait_s=0.05, poll_s=0.01) == ""
+
+
+# ---- notify_roam require_link_match (#368 후속: 통지 필드 스냅샷 일치) ----
+class _FakeSock:
+    sent = []
+
+    def __init__(self, *a, **k):
+        pass
+
+    def sendto(self, msg, addr):
+        _FakeSock.sent.append(msg)
+
+    def close(self):
+        pass
+
+
+def _notify_with_link(monkeypatch, link_address, to_bssid, **kw):
+    _FakeSock.sent = []
+    monkeypatch.setattr(roam_notify, "_read_link_json",
+                        lambda iface: _data(address=link_address))
+    monkeypatch.setattr(roam_notify.socket, "socket", _FakeSock)
+    return roam_notify.notify_roam("mlan0", "", to_bssid, rssi=-80, **kw)
+
+
+def test_require_link_match_skips_when_link_moved_to_another_ap(monkeypatch):
+    # 판정에 쓴 AP(to_bssid)와 다시 읽은 link.json의 AP가 다르면 채널·잡음이 다른 AP 값이다.
+    ok = _notify_with_link(monkeypatch, "04:ba:d6:ec:0b:08", "aa:bb:cc:dd:ee:ff",
+                           require_link_match=True)
+    assert ok is False
+    assert _FakeSock.sent == []
+
+
+def test_require_link_match_sends_when_same_ap_any_case(monkeypatch):
+    ok = _notify_with_link(monkeypatch, "04:BA:D6:EC:0B:08", "04:ba:d6:ec:0b:08",
+                           require_link_match=True)
+    assert ok is True
+    payload = json.loads(_FakeSock.sent[0])
+    assert payload["ap_mac"] == "04:ba:d6:ec:0b:08"
+    assert payload["channel"] == 40 and payload["rssi"] == -80 and payload["snr"] == 16
+
+
+def test_link_mismatch_still_sends_without_require_link_match(monkeypatch):
+    # 수동 CLI(--to) 경로는 기존 동작 유지: to_bssid 를 ap_mac 으로 보낸다.
+    ok = _notify_with_link(monkeypatch, "04:ba:d6:ec:0b:08", "aa:bb:cc:dd:ee:ff")
+    assert ok is True
+    assert json.loads(_FakeSock.sent[0])["ap_mac"] == "aa:bb:cc:dd:ee:ff"

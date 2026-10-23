@@ -3,6 +3,13 @@
 tag=$(basename "$0")
 key=LOG
 
+LOGGER_COMMAND_LIB="${WIFI_LOGGER_COMMAND_LIB:-/usr/local/scripts/wifi_logger_command_lib.sh}"
+if [ ! -r "$LOGGER_COMMAND_LIB" ]; then
+    LOGGER_COMMAND_LIB="$(dirname "$0")/wifi_logger_command_lib.sh"
+fi
+# shellcheck source=wifi_logger_command_lib.sh
+. "$LOGGER_COMMAND_LIB"
+
 IFACE="${1:-}"
 if [ -z "$IFACE" ]; then
     echo "usage: $0 <iface>" >&2
@@ -152,6 +159,27 @@ is_mfg_mode() {
 }
 MFG_IDLE_LOGGED=0
 
+mac_contract_blocked() {
+    local metadata active_state="" status="" key value marker=0
+    [ -e /run/wifi/mac-contract-blocked ] && marker=1
+    metadata=$(logger_run_bounded 2 systemctl show wifi_init.service -p ActiveState -p ExecMainStatus 2>/dev/null) || {
+        [ "$marker" -eq 1 ]
+        return
+    }
+    while IFS='=' read -r key value; do
+        case "$key" in
+            ActiveState) active_state=$value ;;
+            ExecMainStatus) status=$value ;;
+        esac
+    done <<< "$metadata"
+    [ "$status" = "78" ] && return 0
+    if [ "$marker" -eq 1 ]; then
+        [ "$active_state" = "failed" ] && [[ "$status" =~ ^[0-9]+$ ]] && [ "$status" -ne 0 ] && return 1
+        return 0
+    fi
+    return 1
+}
+
 if [ "$IFACE" != "eth0" ]; then
     for i in {1..3}; do
         if lsmod |grep -q "^$MODULE_NAME"; then
@@ -178,6 +206,14 @@ while true; do
         continue
     fi
     MFG_IDLE_LOGGED=0
+    # MAC 초기화 실패는 FW crash가 아니다. parent가 실패해도 독립 기동하는
+    # checker가 장치 부재/미연결을 재부팅 사유로 누적하지 않도록 기다린다.
+    if [[ "$IFACE" != "eth0" ]] && mac_contract_blocked; then
+        ERR_CNT=0; FAULT_CNT=0; UNSTABLE_START=0; REASSOC_DONE=0; REBOOT_F=0
+        HANDSHAKE_STATE=""; HANDSHAKE_START=0; HANDSHAKE_LAST_RETRY=0
+        sleep 3
+        continue
+    fi
     if [[ "$IFACE" == "eth0" ]]; then
           #STATE=$(jq -r '.eth_stats.phy.link' "/var/log/cantops/json/eth0/link.json")
           STATE=$(cat /sys/class/net/eth0/operstate)
@@ -218,8 +254,8 @@ while true; do
             logger -p local0.info "[$tag:$LINENO] [$IFACE] saving kernel logs to '$LOG_FILE'"
             #journalctl -k --since "1 min ago" > "$LOG_FILE"
             dmesg > $LOG_FILE
-            /usr/local/scripts/journald_snapshot.sh
-            sync
+            logger_run_bounded 10 /usr/local/scripts/journald_snapshot.sh >/dev/null 2>&1 || true
+            logger_run_bounded 2 sync >/dev/null 2>&1 || true
             REBOOT_F=1
         fi
     else
@@ -309,7 +345,7 @@ while true; do
                     # 공용 transition lock과 fresh association proof를
                     # 소유하는 wifi connect로 owner-neutral reassociate를 요청한다.
                     logger -p local0.warning "[$tag:$LINENO] [$IFACE] serialized reconnect (disconnected ${DURATION}s >= ${MAX_UNSTABLE_DURATION}s, $RECONNECT_REASON)"
-                    wifi "$IFACE" connect >/dev/null 2>&1
+                    WIFI_CONNECT_ORIGIN=checker wifi "$IFACE" connect >/dev/null 2>&1
                     REASSOC_DONE=1
                 fi
             fi
@@ -339,7 +375,7 @@ while true; do
                     wifi "$IFACE" restart
                 elif (( FAULT_CNT >= FAULT_REASSOC_CNT )); then
                     logger -p local0.warning "[$tag:$LINENO] [$IFACE] station dump fault ($FAULT_CNT >= $FAULT_REASSOC_CNT), serialized reconnect"
-                    wifi "$IFACE" connect >/dev/null 2>&1
+                    WIFI_CONNECT_ORIGIN=checker wifi "$IFACE" connect >/dev/null 2>&1
                 fi
             else
                 FAULT_CNT=0
@@ -349,12 +385,12 @@ while true; do
 
     sleep 5
 
-    if (( REBOOT_F == 1 )); then
+    if (( REBOOT_F == 1 )) && ! mac_contract_blocked; then
         reason=${CAUSE:-unknown}
         now=$(date +"%Y-%m-%d %H:%M:%S")
         reboot_at=$(date -d "+${REBOOT_COOLDOWN_SEC} seconds" +"%Y-%m-%d %H:%M:%S")
         logger -p local0.emerg "[$tag:$LINENO] [$IFACE] Requesting reboot via policy (cause=$reason, attempts<=${MAX_REBOOT_COUNT}, cooldown=${REBOOT_COOLDOWN_SEC}s, now=$now, reboot_at=$reboot_at)"
-        sync
+        logger_run_bounded 2 sync >/dev/null 2>&1 || true
         ERR_CNT=0
         REBOOT_F=0
         MAX_REBOOT_COUNT="$MAX_REBOOT_COUNT" REBOOT_COOLDOWN_SEC="$REBOOT_COOLDOWN_SEC" MIN_UPTIME_SEC="$MIN_UPTIME_SEC" \

@@ -59,13 +59,13 @@ def test_blocked_returns_none_without_attempt(monkeypatch):
 
 
 def test_mode_a_success_counts_actual_bssid(monkeypatch):
-    """모드 A 성공 → add_roam(from, 실 결합 BSS) + notify."""
+    """모드 A 성공 → add_roam(from, 실 결합 BSS). 통지는 조건 진입 시(#368)라 여기선 없음."""
     prev, notify = _setup(monkeypatch)
     with patch.object(wifi_roam, "select_network_for_ssid", return_value=True), \
          patch.object(wifi_roam, "get_associated_bssid", return_value=ACTUAL):
         assert route_cross_ssid_transition(IFACE, "Net", FROM, TO) is True
     prev.add_roam.assert_called_once_with(FROM, ACTUAL)
-    notify.assert_called_once_with(IFACE, FROM, ACTUAL)
+    notify.assert_not_called()
 
 
 def test_mode_a_success_fallback_to_target_bssid(monkeypatch):
@@ -93,7 +93,7 @@ def test_mode_b_no_route_level_count(monkeypatch):
          patch.object(wifi_roam, "get_associated_bssid", return_value=ACTUAL):
         assert route_cross_ssid_transition(IFACE, "Net", FROM, TO) is True
     prev.add_roam.assert_not_called()   # route 레벨에선 안 함(내부 몫)
-    notify.assert_called_once()
+    notify.assert_not_called()
 
 
 def test_mode_b_pingpong_blocked_returns_none(monkeypatch):
@@ -115,13 +115,23 @@ def test_connect_to_ssid_internal_block_returns_none(monkeypatch):
     prev.add_roam.assert_not_called()
 
 
+def test_busy_manual_connect_defers_background_roam_without_failure_cooldown(monkeypatch):
+    _setup(monkeypatch, mode_a=False)
+    result = type("Result", (), {"returncode": 6, "stdout": "", "stderr": "busy"})()
+    with patch.object(wifi_roam.subprocess, "run", return_value=result) as run:
+        outcome = wifi_roam.connect_to_ssid(IFACE, "Net", FROM, TO)
+    assert outcome is None
+    # This environment routes the real CLI away from manual fallback policy.
+    assert run.call_args.kwargs["env"]["WIFI_CONNECT_ORIGIN"] == "roam"
+
+
 def test_pingpong_disabled_normal_flow(monkeypatch):
     """기능 off → 차단/카운트 없이 정상 전환."""
     prev, notify = _setup(monkeypatch, pingpong=False)
     with patch.object(wifi_roam, "select_network_for_ssid", return_value=True), \
          patch.object(wifi_roam, "get_associated_bssid", return_value=ACTUAL):
         assert route_cross_ssid_transition(IFACE, "Net", FROM, TO) is True
-    notify.assert_called_once()
+    notify.assert_not_called()
 
 
 def test_record_none_is_noop():

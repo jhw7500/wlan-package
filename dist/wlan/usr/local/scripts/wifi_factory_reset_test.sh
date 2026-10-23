@@ -71,6 +71,23 @@ cat > "$BIN/config-backup" <<'EOF'
 exit 0
 EOF
 
+cat > "$BIN/topology" <<'EOF'
+#!/bin/bash
+[ "${TOPOLOGY_FAIL:-0}" = 1 ] && exit 1
+printf '%s\n' "$*" > "${TOPOLOGY_ARGS_FILE:?}"
+case "${1:-}" in
+    read) printf '%s\n' "${TOPOLOGY_OUTPUT:-eth0-ip}" ;;
+    snapshot)
+        if [ -n "${TOPOLOGY_SNAPSHOT_OUTPUT:-}" ]; then
+            printf '%s\n' "$TOPOLOGY_SNAPSHOT_OUTPUT"
+        else
+            printf '%s\n' '{"topology":"eth0-ip","generation":"absent"}'
+        fi
+        ;;
+    *) exit 64 ;;
+esac
+EOF
+
 cat > "$BIN/apply-enabled" <<'EOF'
 #!/bin/bash
 [ "${APPLY_FAIL:-0}" = 1 ] && exit 1
@@ -110,9 +127,15 @@ export FACTORY_LINK_RESET_SH="$BIN/link-reset"
 export FACTORY_CAL_BACKUP_SH="$SCRIPT_DIR/wifi_cal_backup.sh"
 export FACTORY_CONFIG_BACKUP_SH="$BIN/config-backup"
 export FACTORY_APPLY_ENABLED_SH="$BIN/apply-enabled"
+export FACTORY_TOPOLOGY_HELPER="$BIN/topology"
+export FACTORY_TOPOLOGY_FILE="$WORK/wifi_factory_topology.json"
+FACTORY_TOPOLOGY_OWNER_UID="$(id -u)"
+FACTORY_TOPOLOGY_OWNER_GID="$(id -g)"
+export FACTORY_TOPOLOGY_OWNER_UID FACTORY_TOPOLOGY_OWNER_GID
 export FACTORY_FILE_OWNER=""
 export FACTORY_FILE_GROUP=""
 export SYSTEMD_STATE="$STATE"
+export TOPOLOGY_ARGS_FILE="$WORK/topology-args"
 
 # shellcheck source=./wifi_factory_reset_lib.sh
 . "$LIB"
@@ -126,13 +149,48 @@ cat > "$TEMPLATE" <<'EOF'
 {
   "global": {"BOARD_TYPE":"template", "CAL_DATA_CFG":"template-cal.bin"},
   "mcp": {}, "mlan0":{"enabled":true}, "mlan1":{"enabled":false},
-  "mac": {}, "wbridge": {}
+  "mac": {},
+  "wbridge": {
+    "ip_discovery": true,
+    "peer_route":{"enabled":true},
+    "arp_ignore_always":{"enabled":false},
+    "moal":{"local_hairpin":"1"},
+    "eth_fallback":{"enabled":true}
+  }
 }
 EOF
 printf '{"old":true}\n' > "$ACTIVE"
 printf '{}\n' > "$SNAPSHOT"
 
 expect_rc "valid preflight" 0 factory_preflight "$TEMPLATE" "$(dirname "$ACTIVE")"
+TOPOLOGY_OUTPUT=eth0-ip
+export TOPOLOGY_OUTPUT
+expect_eq "legacy topology helper default is accepted" 'eth0-ip' "$(factory_read_topology)"
+expect_eq "topology helper receives the strict selector contract" \
+    "read --path $FACTORY_TOPOLOGY_FILE --owner-uid $FACTORY_TOPOLOGY_OWNER_UID --owner-gid $FACTORY_TOPOLOGY_OWNER_GID" \
+    "$(cat "$TOPOLOGY_ARGS_FILE")"
+TOPOLOGY_FAIL=1
+export TOPOLOGY_FAIL
+expect_rc "invalid or unsafe topology aborts before reset mutation" 1 factory_read_topology
+unset TOPOLOGY_FAIL
+TOPOLOGY_GENERATION_A="v1-$(printf 'a%.0s' {1..64})"
+TOPOLOGY_GENERATION_B="v1-$(printf 'b%.0s' {1..64})"
+TOPOLOGY_SNAPSHOT_OUTPUT="{\"topology\":\"peer-route\",\"generation\":\"$TOPOLOGY_GENERATION_A\"}"
+export TOPOLOGY_SNAPSHOT_OUTPUT
+expect_eq "topology snapshot freezes profile and generation" \
+    "$TOPOLOGY_SNAPSHOT_OUTPUT" "$(factory_snapshot_topology)"
+expect_rc "unchanged topology snapshot passes final generation check" 0 \
+    factory_topology_snapshot_matches "$TOPOLOGY_SNAPSHOT_OUTPUT"
+TOPOLOGY_SNAPSHOT_OUTPUT="{\"topology\":\"peer-route\",\"generation\":\"$TOPOLOGY_GENERATION_B\"}"
+expect_rc "changed topology generation fails the final check" 1 \
+    factory_topology_snapshot_matches \
+        "{\"topology\":\"peer-route\",\"generation\":\"$TOPOLOGY_GENERATION_A\"}"
+TOPOLOGY_SNAPSHOT_OUTPUT='{"topology":"peer-route","generation":"not-a-selector-generation"}'
+expect_rc "malformed topology generation fails closed" 1 factory_snapshot_topology
+TOPOLOGY_SNAPSHOT_OUTPUT='{"topology":"peer-route","generation":7}'
+expect_rc "malformed topology snapshot fails closed" 1 factory_snapshot_topology
+TOPOLOGY_SNAPSHOT_OUTPUT='{"topology":"eth0-ip","generation":"absent"}'
+export TOPOLOGY_SNAPSHOT_OUTPUT
 FACTORY_CAL_BACKUP_SH="$WORK/missing-cal-helper"
 expect_rc "missing required calibration helper fails preflight" 1 \
     factory_preflight "$TEMPLATE" "$(dirname "$ACTIVE")"
@@ -154,8 +212,21 @@ expect_eq "board fact exists after preserve fallback" 'imx93' "$(jq -r '.global.
 expect_eq "template value kept after preserve failure" 'template-cal.bin' "$(jq -r '.global.CAL_DATA_CFG' "$STAGED")"
 unset PRESERVE_FAIL
 
-expect_rc "preserve apply success" 0 factory_stage_config "$TEMPLATE" "$STAGED" "$SNAPSHOT"
+expect_rc "eth0-ip profile overrides mismatched runtime topology" 0 \
+    factory_stage_config "$TEMPLATE" "$STAGED" "$SNAPSHOT" eth0-ip
 expect_eq "preserved production value restored" 'preserved-cal.bin' "$(jq -r '.global.CAL_DATA_CFG' "$STAGED")"
+expect_eq "eth0-ip profile writes the exact five-field mapping" \
+    'false|false|true||false' \
+    "$(jq -r '[.wbridge.peer_route.enabled,.wbridge.ip_discovery,.wbridge.arp_ignore_always.enabled,.wbridge.moal.local_hairpin,.wbridge.eth_fallback.enabled] | map(tostring) | join("|")' "$STAGED")"
+expect_rc "peer-route profile stages successfully" 0 \
+    factory_stage_config "$TEMPLATE" "$STAGED" "$SNAPSHOT" peer-route
+expect_eq "peer-route profile writes the exact five-field mapping" \
+    'true|true|false||false' \
+    "$(jq -r '[.wbridge.peer_route.enabled,.wbridge.ip_discovery,.wbridge.arp_ignore_always.enabled,.wbridge.moal.local_hairpin,.wbridge.eth_fallback.enabled] | map(tostring) | join("|")' "$STAGED")"
+expect_rc "unknown topology cannot stage factory JSON" 1 \
+    factory_stage_config "$TEMPLATE" "$STAGED" "$SNAPSHOT" unknown
+expect_rc "peer-route profile restages after invalid-input test" 0 \
+    factory_stage_config "$TEMPLATE" "$STAGED" "$SNAPSHOT" peer-route
 expect_rc "atomic commit succeeds" 0 factory_commit_config "$STAGED" "$ACTIVE"
 expect_eq "committed active is valid" 'imx93' "$(jq -r '.global.BOARD_TYPE' "$ACTIVE")"
 expect_eq "committed mode is 0644" '644' "$(stat -c %a "$ACTIVE")"
@@ -281,10 +352,30 @@ FACTORY_SYNC_CMD="$BIN/sync-fail-after-commit"
 expect_rc "post-rename sync failure rolls back payload" 1 \
     factory_install_required_payloads \
     "$ROLLBACK1_SRC|$ROLLBACK1_DST|0644"
+expect_eq "post-rename sync failure retains recovery transaction" 1 \
+    "$FACTORY_TRANSACTION_ACTIVE"
+FACTORY_SYNC_CMD=sync
+expect_rc "post-rename sync rollback retries after storage recovers" 0 \
+    factory_rollback_required_payloads
 expect_eq "post-rename sync rollback restores destination" \
     'runtime-sync-rollback' "$(cat "$ROLLBACK1_DST")"
-FACTORY_SYNC_CMD=sync
 unset FACTORY_SYNC_COUNT_FILE
+
+cat > "$BIN/sync-path-eio-global-ok" <<'EOF'
+#!/bin/bash
+[ "$#" -eq 0 ] && exit 0
+exit 5
+EOF
+chmod +x "$BIN/sync-path-eio-global-ok"
+printf 'runtime-path-eio\n' > "$ROLLBACK1_DST"
+FACTORY_SYNC_CMD="$BIN/sync-path-eio-global-ok"
+expect_rc "path-specific sync EIO is not masked by successful global sync" 1 \
+    factory_install_required_payloads \
+    "$ROLLBACK1_SRC|$ROLLBACK1_DST|0644"
+expect_eq "path-specific sync EIO preserves destination" \
+    'runtime-path-eio' "$(cat "$ROLLBACK1_DST")"
+FACTORY_SYNC_CMD=sync
+printf 'runtime-path-eio\n' > "$ROLLBACK1_DST"
 
 FACTORY_SYNC_CMD=false
 expect_rc "required payload pre-rename sync failure is fatal" 1 \
@@ -298,7 +389,11 @@ expect_rc "required payload rename failure is fatal" 1 \
     factory_install_required_payloads "$REQUIRED_PAYLOAD"
 expect_eq "failed required payload rename preserves old destination" \
     'stale-runtime-value' "$(cat "$PAYLOAD_DST")"
+expect_eq "failed required payload rename retains recovery transaction" 1 \
+    "$FACTORY_TRANSACTION_ACTIVE"
 FACTORY_MOVE_CMD=mv
+expect_rc "failed required payload rename rollback retries after mover recovers" 0 \
+    factory_rollback_required_payloads
 
 expect_rc "required payload atomic install succeeds" 0 \
     factory_install_required_payloads "$REQUIRED_PAYLOAD"
@@ -307,6 +402,179 @@ expect_eq "required payload replaces stale destination" \
 expect_eq "required payload mode is normalized" '600' "$(stat -c %a "$PAYLOAD_DST")"
 expect_rc "required payload postcondition accepts exact copy" 0 \
     factory_verify_required_payloads "$REQUIRED_PAYLOAD"
+
+# JSON active와 그 정상본 세대, network/WPA/FW payload는 후조건 완료 전까지 하나의
+# rollback 단위여야 한다. 아래 세 파일은 작은 통합 fixture로 실제 rename/복원을 검증한다.
+TX_JSON_SRC="$WORK/tx-json-source"
+TX_BAK_SRC="$WORK/tx-bak-source"
+TX_PAYLOAD_SRC="$WORK/tx-payload-source"
+TX_JSON_DST="$WORK/active/tx.json"
+TX_BAK_DST="$WORK/active/tx.json.bak"
+TX_PAYLOAD_DST="$PAYLOAD_DST_DIR/tx-payload"
+printf 'factory-json\n' > "$TX_JSON_SRC"
+printf 'factory-bak\n' > "$TX_BAK_SRC"
+printf 'factory-payload\n' > "$TX_PAYLOAD_SRC"
+printf 'runtime-json\n' > "$TX_JSON_DST"
+printf 'runtime-bak\n' > "$TX_BAK_DST"
+printf 'runtime-payload\n' > "$TX_PAYLOAD_DST"
+TX_RECORDS=(
+    "$TX_JSON_SRC|$TX_JSON_DST|0644"
+    "$TX_BAK_SRC|$TX_BAK_DST|0644"
+    "$TX_PAYLOAD_SRC|$TX_PAYLOAD_DST|0600"
+)
+
+# 첫 rename 전에 transaction 상태와 해당 rollback record가 공개되어야 EXIT trap이
+# commit loop 중단에도 이미 바뀐 파일을 복원할 수 있다.
+OBSERVED_PUBLISHES=0
+move_require_published_transaction() {
+    local src="${@: -2:1}"
+    if [[ "$src" == *.factory.* ]] && [[ "$src" != *.factory-rollback.* ]]; then
+        OBSERVED_PUBLISHES=$((OBSERVED_PUBLISHES + 1))
+        [ "$FACTORY_TRANSACTION_ACTIVE" -eq 1 ] || return 91
+        [ "${#FACTORY_TRANSACTION_ENTRIES[@]}" -eq "$OBSERVED_PUBLISHES" ] || return 92
+    fi
+    mv "$@"
+}
+FACTORY_MOVE_CMD=move_require_published_transaction
+expect_rc "transaction is recoverable before every publish rename" 0 \
+    factory_begin_required_payloads "${TX_RECORDS[@]}"
+FACTORY_MOVE_CMD=mv
+expect_eq "all publish renames observed registered rollback state" 3 "$OBSERVED_PUBLISHES"
+if [ "$FACTORY_TRANSACTION_ACTIVE" -eq 1 ]; then
+    expect_rc "observed publish transaction rolls back" 0 factory_rollback_required_payloads
+else
+    FACTORY_TRANSACTION_RECORDS=()
+    FACTORY_TRANSACTION_ENTRIES=()
+fi
+
+expect_rc "combined JSON and payload transaction begins" 0 \
+    factory_begin_required_payloads "${TX_RECORDS[@]}"
+expect_eq "combined transaction publishes JSON" 'factory-json' "$(cat "$TX_JSON_DST")"
+expect_eq "combined transaction publishes JSON backup" 'factory-bak' "$(cat "$TX_BAK_DST")"
+expect_eq "combined transaction publishes payload" 'factory-payload' "$(cat "$TX_PAYLOAD_DST")"
+expect_rc "later postcondition failure can roll back the whole transaction" 0 \
+    factory_rollback_required_payloads
+expect_eq "rollback restores prior JSON" 'runtime-json' "$(cat "$TX_JSON_DST")"
+expect_eq "rollback restores prior JSON backup" 'runtime-bak' "$(cat "$TX_BAK_DST")"
+expect_eq "rollback restores prior payload" 'runtime-payload' "$(cat "$TX_PAYLOAD_DST")"
+
+expect_rc "combined transaction can begin again" 0 \
+    factory_begin_required_payloads "${TX_RECORDS[@]}"
+FACTORY_MOVE_CMD=false
+expect_rc "rollback failure is explicit" 1 factory_rollback_required_payloads
+FACTORY_MOVE_CMD=mv
+expect_rc "rollback can be retried after transient failure" 0 factory_rollback_required_payloads
+
+# 역순 rollback 일부가 성공하고 중간 항목이 실패해도 backup을 소비하지 않아야 한다.
+expect_rc "mixed rollback fixture transaction begins" 0 \
+    factory_begin_required_payloads "${TX_RECORDS[@]}"
+ROLLBACK_MOVE_COUNT=0
+ROLLBACK_FAIL_ONCE=1
+move_fail_second_rollback_once() {
+    local src="${@: -2:1}"
+    if [[ "$src" == *.factory-rollback.* || "$src" == *.factory-restore.* ]]; then
+        ROLLBACK_MOVE_COUNT=$((ROLLBACK_MOVE_COUNT + 1))
+        if [ "$ROLLBACK_FAIL_ONCE" -eq 1 ] && [ "$ROLLBACK_MOVE_COUNT" -eq 2 ]; then
+            ROLLBACK_FAIL_ONCE=0
+            return 1
+        fi
+    fi
+    mv "$@"
+}
+FACTORY_MOVE_CMD=move_fail_second_rollback_once
+expect_rc "mixed reverse rollback reports the one failed restore" 1 \
+    factory_rollback_required_payloads
+expect_eq "mixed rollback keeps transaction active for retry" 1 "$FACTORY_TRANSACTION_ACTIVE"
+FACTORY_MOVE_CMD=mv
+expect_rc "mixed reverse rollback retry restores every destination" 0 \
+    factory_rollback_required_payloads
+expect_eq "mixed rollback retry restores JSON bytes" 'runtime-json' "$(cat "$TX_JSON_DST")"
+expect_eq "mixed rollback retry restores backup bytes" 'runtime-bak' "$(cat "$TX_BAK_DST")"
+expect_eq "mixed rollback retry restores payload bytes" 'runtime-payload' "$(cat "$TX_PAYLOAD_DST")"
+if [ "$FACTORY_TRANSACTION_ACTIVE" -eq 1 ]; then
+    printf 'runtime-json\n' > "$TX_JSON_DST"
+    printf 'runtime-bak\n' > "$TX_BAK_DST"
+    printf 'runtime-payload\n' > "$TX_PAYLOAD_DST"
+    FACTORY_TRANSACTION_ACTIVE=0
+    FACTORY_TRANSACTION_RECORDS=()
+    FACTORY_TRANSACTION_ENTRIES=()
+fi
+
+# publish 실패와 동시에 rollback도 실패하면 ACTIVE/ENTRIES를 보존해 EXIT cleanup이나
+# 운영자가 같은 backup으로 복구를 재시도할 수 있어야 한다.
+COMMIT_MOVE_COUNT=0
+move_fail_second_commit_and_rollback() {
+    local src="${@: -2:1}"
+    if [[ "$src" == *.factory-rollback.* || "$src" == *.factory-restore.* ]]; then
+        return 1
+    fi
+    if [[ "$src" == *.factory.* ]]; then
+        COMMIT_MOVE_COUNT=$((COMMIT_MOVE_COUNT + 1))
+        [ "$COMMIT_MOVE_COUNT" -eq 2 ] && return 1
+    fi
+    mv "$@"
+}
+FACTORY_MOVE_CMD=move_fail_second_commit_and_rollback
+expect_rc "commit error plus rollback error fails transaction begin" 1 \
+    factory_begin_required_payloads "${TX_RECORDS[@]}"
+expect_eq "failed rollback preserves active transaction state" 1 "$FACTORY_TRANSACTION_ACTIVE"
+[ "${#FACTORY_TRANSACTION_ENTRIES[@]}" -ge 1 ] \
+    && pass "failed rollback preserves pending recovery entries" \
+    || fail "failed rollback discarded pending recovery entries"
+FACTORY_MOVE_CMD=mv
+if [ "$FACTORY_TRANSACTION_ACTIVE" -eq 1 ]; then
+    expect_rc "preserved commit-error rollback can be retried" 0 \
+        factory_rollback_required_payloads
+else
+    printf 'runtime-json\n' > "$TX_JSON_DST"
+    printf 'runtime-bak\n' > "$TX_BAK_DST"
+    printf 'runtime-payload\n' > "$TX_PAYLOAD_DST"
+    FACTORY_TRANSACTION_RECORDS=()
+    FACTORY_TRANSACTION_ENTRIES=()
+fi
+
+TOPOLOGY_SNAPSHOT_OUTPUT="{\"topology\":\"peer-route\",\"generation\":\"$TOPOLOGY_GENERATION_A\"}"
+expect_rc "transaction begins for selector generation race" 0 \
+    factory_begin_required_payloads "${TX_RECORDS[@]}"
+TOPOLOGY_SNAPSHOT_OUTPUT="{\"topology\":\"peer-route\",\"generation\":\"$TOPOLOGY_GENERATION_B\"}"
+expect_rc "changed selector blocks transaction finalization" 1 \
+    factory_commit_required_payloads \
+        "{\"topology\":\"peer-route\",\"generation\":\"$TOPOLOGY_GENERATION_A\"}"
+expect_eq "selector race keeps transaction recoverable" 1 \
+    "$FACTORY_TRANSACTION_ACTIVE"
+FACTORY_MOVE_CMD=mv
+expect_rc "selector race rolls back owned files" 0 factory_rollback_required_payloads
+
+expect_rc "successful combined transaction begins" 0 \
+    factory_begin_required_payloads "${TX_RECORDS[@]}"
+expect_rc "successful combined transaction discards rollback generations" 0 \
+    factory_commit_required_payloads
+expect_eq "successful transaction retains factory JSON" 'factory-json' "$(cat "$TX_JSON_DST")"
+expect_eq "successful transaction retains factory payload" 'factory-payload' "$(cat "$TX_PAYLOAD_DST")"
+
+expect_rc "transaction begins for finalization cleanup failure" 0 \
+    factory_begin_required_payloads "${TX_RECORDS[@]}"
+CLEANUP_OBSERVED_ACTIVE=-1
+sync_fail_observe_finalized_transaction() {
+    CLEANUP_OBSERVED_ACTIVE="$FACTORY_TRANSACTION_ACTIVE"
+    return 1
+}
+FACTORY_SYNC_CMD=sync_fail_observe_finalized_transaction
+expect_rc "verified finalization cleanup sync failure is nonfatal" 0 factory_commit_required_payloads
+FACTORY_SYNC_CMD=sync
+expect_eq "failed finalization cleanup cannot trigger partial rollback" 0 \
+    "$FACTORY_TRANSACTION_ACTIVE"
+expect_eq "cleanup starts only after transaction finalization" 0 \
+    "$CLEANUP_OBSERVED_ACTIVE"
+if [ "${#FACTORY_TRANSACTION_CLEANUP_DEBT[@]}" -gt 0 ]; then
+    pass "finalization cleanup records private-backup debt"
+else
+    fail "finalization cleanup lost private-backup debt"
+fi
+# RED 실행에서도 뒤쪽 독립 fixture가 활성 transaction에 묶이지 않게 테스트 상태만 정리한다.
+FACTORY_TRANSACTION_ACTIVE=0
+FACTORY_TRANSACTION_RECORDS=()
+FACTORY_TRANSACTION_ENTRIES=()
 
 printf 'tampered-after-copy\n' > "$PAYLOAD_DST"
 expect_rc "required payload postcondition rejects stale content" 1 \
@@ -373,6 +641,28 @@ if awk '
 else
     fail "factory reset success LEDs precede the failure gate"
 fi
+if grep -Fq 'factory_commit_required_payloads "$FACTORY_TOPOLOGY_SNAPSHOT"' \
+        "$FACTORY_SCRIPT" \
+   && awk '
+       /factory_verify_required_payloads .*FACTORY_TRANSACTION_RECORDS/ && !payloads { payloads=NR }
+       /factory_topology_snapshot_matches .*expected_topology_snapshot/ && !generation_check { generation_check=NR }
+       /FACTORY_TRANSACTION_ACTIVE=0/ && generation_check && !linearized { linearized=NR }
+       END { exit !(payloads && generation_check && linearized && payloads < generation_check && generation_check < linearized) }
+   ' "$LIB"; then
+    pass "factory selector generation is rechecked at the finalization point"
+else
+    fail "factory selector generation is not checked immediately before finalization"
+fi
+if awk '
+    /^factory_reset_cleanup\(\)/ { in_cleanup=1 }
+    in_cleanup && /factory_rollback_required_payloads/ { rollback=1 }
+    in_cleanup && /^}/ { exit !rollback }
+    END { if (!in_cleanup) exit 1 }
+' "$FACTORY_SCRIPT"; then
+    pass "factory entrypoint EXIT cleanup rolls back an interrupted active transaction"
+else
+    fail "factory entrypoint interruption can leave a transaction partially applied"
+fi
 # 오류 패턴은 helper만 분리 실행해 sysfs 없이 실제 write 순서를 검증한다.
 LED_ERROR_FUNCTION=$(sed -n '/^factory_reset_led_error() {/,/^}/p' "$FACTORY_SCRIPT")
 LED_ERROR_ACTUAL=$(bash -c '
@@ -408,6 +698,13 @@ if awk '/reboot inhibited/{inh=NR} /^[[:space:]]*(if )?mkdir -p \/run\/opc/{m=NR
     pass "factory reset writes Reset Cause 0x40 after the inhibit gate and before reboot"
 else
     fail "factory reset does not write Reset Cause 0x40 before systemctl reboot"
+fi
+# #362: 공장값으로 되돌린 mlan0 conf 에 대한 OPC ChangeIp ESSID 복원 표식은 payload commit 뒤,
+# 재부팅 전에 지운다(순서 계약: commit < rm < systemctl reboot).
+if awk '/factory_commit_required_payloads "\$FACTORY_TOPOLOGY_SNAPSHOT"/{c=NR} /rm -f \/usr\/local\/opc\/etc\/changeip_essid.restore/{m=NR} /^(if ! )?systemctl reboot/{r=NR} END{exit !(c && m && r && c<m && m<r)}' "$FACTORY_SCRIPT"; then
+    pass "factory reset removes the ChangeIp ESSID restore marker after the payload commit and before reboot"
+else
+    fail "factory reset does not remove the ChangeIp ESSID restore marker between commit and reboot"
 fi
 if grep -Eq "trap .*exit 0.*(INT TERM EXIT|EXIT)" "$SWITCHD"; then
     fail "switchd EXIT trap masks factory reset failure status"
@@ -449,14 +746,44 @@ expect_rc "strict service sync returns non-zero on unit failure" 1 \
         PATH="$PATH" bash "$APPLY_SCRIPT"
 
 # 실제 entrypoint가 검증된 상태기계를 우회하지 않는지 정적으로 고정한다.
-for call in factory_preflight factory_preflight_required_payloads \
-            factory_stage_config factory_install_required_payloads \
-            factory_commit_config factory_restore_service_state \
+for call in factory_snapshot_topology \
+            factory_preflight factory_preflight_required_payloads \
+            factory_stage_config factory_begin_required_payloads \
+            factory_commit_required_payloads factory_rollback_required_payloads \
+            factory_restore_service_state \
             factory_verify_required_payloads factory_verify_postconditions; do
     grep -q "$call" "$FACTORY_SCRIPT" \
         && pass "factory entrypoint calls $call" \
         || fail "factory entrypoint missing $call"
 done
+if awk '
+    /factory_snapshot_topology/ && !read_topology { read_topology=NR }
+    /factory_preflight_required_payloads/ && !payload_preflight { payload_preflight=NR }
+    END { exit !(read_topology && payload_preflight && read_topology < payload_preflight) }
+' "$FACTORY_SCRIPT"; then
+    pass "factory selector is read before payload preflight can normalize directories"
+else
+    fail "factory selector is not read before payload preflight mutation"
+fi
+for transactional_record in \
+    '$FACTORY_STAGED_CONFIG|$WIFI_INIT_CONF_JSON|0644' \
+    '$FACTORY_STAGED_CONFIG|${WIFI_INIT_CONF_JSON}.bak|0644' \
+    '$FACTORY_STAGED_CONFIG|${WIFI_INIT_CONF_JSON}.bak.1|0644'; do
+    grep -Fq "$transactional_record" "$FACTORY_SCRIPT" \
+        && pass "factory transaction includes JSON generation: $transactional_record" \
+        || fail "factory transaction misses JSON generation: $transactional_record"
+done
+if awk '
+    /factory_begin_required_payloads/ && !begin_tx { begin_tx=NR }
+    /factory_restore_service_state/ && !services { services=NR }
+    /factory_verify_postconditions/ && !postconditions { postconditions=NR }
+    /factory_commit_required_payloads/ && !commit_tx { commit_tx=NR }
+    END { exit !(begin_tx && services && postconditions && commit_tx && begin_tx < services && services < postconditions && postconditions < commit_tx) }
+' "$FACTORY_SCRIPT"; then
+    pass "factory transaction retains rollback copies through required postconditions"
+else
+    fail "factory transaction finalizes before required postconditions"
+fi
 if grep -Eq 'if[[:space:]]+![[:space:]]+"\$FACTORY_CAL_BACKUP_SH"[[:space:]]+reset' "$FACTORY_SCRIPT"; then
     pass "factory entrypoint treats production calibration reset failure as fatal"
 else

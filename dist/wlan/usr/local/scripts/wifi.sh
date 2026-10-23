@@ -27,12 +27,21 @@ if [ -r /usr/local/scripts/wifi_fw_config_lib.sh ]; then
 elif [ -r "$SCRIPT_DIR/wifi_fw_config_lib.sh" ]; then
     . "$SCRIPT_DIR/wifi_fw_config_lib.sh"
 fi
+if [ -r "$SCRIPT_DIR/wifi_connect_fallback_lib.sh" ]; then
+    . "$SCRIPT_DIR/wifi_connect_fallback_lib.sh"
+else
+    . /usr/local/scripts/wifi_connect_fallback_lib.sh
+fi
 
 tag=wifi.sh
 IFACE=mlan
 NUM=""
 WPA_CONF_DIR="${WPA_CONF_DIR:-/etc/wpa_supplicant}"
 WIFI_RUN_DIR="${WIFI_RUN_DIR:-/run/wifi}"
+# OPC ChangeIp 가 바꾼 ESSID 를 재부팅 때 되돌리기 위한 표식(wlan-opc#161, opcd essid_marker.h).
+# 운영자가 mlan0 의 SSID 를 영구 변경(ssid/connect <ssid>)하면 지워 ChangeIp 체인을 끝낸다(#362).
+OPC_ESSID_MARKER="${OPC_ESSID_MARKER:-/usr/local/opc/etc/changeip_essid.restore}"
+RADIO_JSON_LOCKED=0
 
 if [ "${1:-}" == "0" ] || [ "${1:-}" == "mlan0" ]; then
     IFACE=mlan0
@@ -80,7 +89,7 @@ sync_path_or_global() {
 
 safe_install_sync() {
     # $1: src(tmp), $2: dst(real)
-    local src="$1" dst="$2" mode=0644 stage dst_dir
+    local src="$1" dst="$2" mode="${3:-0644}" stage dst_dir
     case "$dst" in
         */wpa_supplicant-*.conf) mode=0600 ;;
     esac
@@ -336,7 +345,6 @@ update_json_roaming_section() {
         echo "Error: jq not installed" >&2
         return 1
     fi
-
     # 섹션이 없을 수도 있다(구버전 config) → `// {}` 로 만들어 넣는다.
     if jq --arg i "$iface" --arg s "$section" --arg k "$key" --argjson v "$value" \
          '.[$i].roaming[$s] = ((.[$i].roaming[$s] // {}) | .[$k] = $v)' \
@@ -430,13 +438,13 @@ apply_bw_caps() { # $1 iface, $2 bw
 # 성공 시 반환, 실패 시 적절한 exit 코드로 스크립트 종료(같은 셸, subshell 아님).
 apply_bw_or_exit() { # $1 iface, $2 bw_cap
     local iface="$1" bw_cap="$2" msg rc
-    msg=$(apply_bw_caps "$iface" "$bw_cap"); rc=$?
+    msg=$(wifi_wpa_child_call apply_bw_caps "$iface" "$bw_cap"); rc=$?
     [ -n "$msg" ] && echo "$msg"
     case "$rc" in
         0) return 0 ;;
         2) echo "Error: invalid radio.bw '$R_BW'" >&2; rollback_radio_live "$iface"; exit 2 ;;
-        5) echo "Error: htcapinfo failed for $iface" >&2; logger -p local0.err "[$tag:$LINENO] [$iface] htcapinfo failed"; rollback_radio_live "$iface"; exit 5 ;;
-        6) echo "Error: vhtcfg failed for $iface" >&2; logger -p local0.err "[$tag:$LINENO] [$iface] vhtcfg failed"; rollback_radio_live "$iface"; exit 6 ;;
+        5) echo "Error: htcapinfo failed for $iface" >&2; wifi_wpa_run_child logger -p local0.err "[$tag:$LINENO] [$iface] htcapinfo failed"; rollback_radio_live "$iface"; exit 5 ;;
+        6) echo "Error: vhtcfg failed for $iface" >&2; wifi_wpa_run_child logger -p local0.err "[$tag:$LINENO] [$iface] vhtcfg failed"; rollback_radio_live "$iface"; exit 6 ;;
         *) echo "Error: apply_bw_caps unexpected rc=$rc for $iface" >&2; rollback_radio_live "$iface"; exit 6 ;;
     esac
 }
@@ -626,7 +634,7 @@ connect_event_monitor_start() { # $1 iface, $2 association timeout seconds
     pidfile="$CONNECT_MONITOR_DIR/wpa_cli.pid"
     wifi_wpa_run_child cat > "$action" <<'EOF'
 #!/bin/sh
-exec 7>&- 9>&-
+exec 6>&- 7>&- 8>&- 9>&-
 monitor_dir=${0%/*}
 [ -f "$monitor_dir/armed" ] || exit 0
 
@@ -680,7 +688,7 @@ EOF
     }
     watchdog_ticks=$((timeout * 10 + 50))
     (
-        exec 7>&- 9>&-
+        exec 6>&- 7>&- 8>&- 9>&-
         # Survive shell/job-control hangup propagation if the owning command
         # is killed before its EXIT trap can stop this watchdog.
         trap '' HUP
@@ -844,31 +852,31 @@ radio_stage_get() { # $1 iface, $2 key → stdout (없으면 빈값)
 # 의도적으로 없음. 향후 11axcfg로 user_he_cap을 직접 SET하는 코드가 추가되면
 # 여기에 HE cap 스냅샷/복원도 추가할 것.
 rollback_radio_live() { # $1 iface
-    logger -p local0.warning "[$tag:$LINENO] [$1] radio-apply: rolling back to pre-apply settings"
+    wifi_wpa_run_child logger -p local0.warning "[$tag:$LINENO] [$1] radio-apply: rolling back to pre-apply settings"
     echo "rolling back to pre-apply settings..." >&2
     if [ -n "${SNAP_BAND:-}" ]; then
-        mlanutl "$1" bandcfg "$SNAP_BAND" >/dev/null 2>&1 || \
-            logger -p local0.warning "[$tag:$LINENO] [$1] rollback: bandcfg $SNAP_BAND restore failed"
+        wifi_wpa_run_child mlanutl "$1" bandcfg "$SNAP_BAND" >/dev/null 2>&1 || \
+            wifi_wpa_run_child logger -p local0.warning "[$tag:$LINENO] [$1] rollback: bandcfg $SNAP_BAND restore failed"
     else
-        logger -p local0.warning "[$tag:$LINENO] [$1] rollback: SNAP_BAND empty — bandcfg not restored"
+        wifi_wpa_run_child logger -p local0.warning "[$tag:$LINENO] [$1] rollback: SNAP_BAND empty — bandcfg not restored"
     fi
     if [ -n "${SNAP_HT_BG:-}" ] && [ -n "${SNAP_HT_A:-}" ]; then
         # A && B || C: BG 복원(A) 실패 시 B 건너뛰고 C(logger), 또는 A 성공+B 실패 시 C.
         # 즉 두 밴드 중 하나라도 복원 실패하면 경고 — 의도된 동작.
-        mlanutl "$1" htcapinfo "$SNAP_HT_BG" 1 >/dev/null 2>&1 && \
-        mlanutl "$1" htcapinfo "$SNAP_HT_A" 2 >/dev/null 2>&1 || \
-            logger -p local0.warning "[$tag:$LINENO] [$1] rollback: htcapinfo restore failed"
+        wifi_wpa_run_child mlanutl "$1" htcapinfo "$SNAP_HT_BG" 1 >/dev/null 2>&1 && \
+        wifi_wpa_run_child mlanutl "$1" htcapinfo "$SNAP_HT_A" 2 >/dev/null 2>&1 || \
+            wifi_wpa_run_child logger -p local0.warning "[$tag:$LINENO] [$1] rollback: htcapinfo restore failed"
     else
-        logger -p local0.warning "[$tag:$LINENO] [$1] rollback: htcapinfo snapshot incomplete (BG=${SNAP_HT_BG:-none} A=${SNAP_HT_A:-none}) — not restored"
+        wifi_wpa_run_child logger -p local0.warning "[$tag:$LINENO] [$1] rollback: htcapinfo snapshot incomplete (BG=${SNAP_HT_BG:-none} A=${SNAP_HT_A:-none}) — not restored"
     fi
     if [ -n "${SNAP_VHTBW:-}" ] && [ -n "${SNAP_VHTCAP:-}" ]; then
-        mlanutl "$1" vhtcfg 2 2 "$SNAP_VHTBW" "$SNAP_VHTCAP" >/dev/null 2>&1 || \
-            logger -p local0.warning "[$tag:$LINENO] [$1] rollback: vhtcfg restore failed"
+        wifi_wpa_run_child mlanutl "$1" vhtcfg 2 2 "$SNAP_VHTBW" "$SNAP_VHTCAP" >/dev/null 2>&1 || \
+            wifi_wpa_run_child logger -p local0.warning "[$tag:$LINENO] [$1] rollback: vhtcfg restore failed"
     else
-        logger -p local0.warning "[$tag:$LINENO] [$1] rollback: vht snapshot incomplete — vhtcfg not restored"
+        wifi_wpa_run_child logger -p local0.warning "[$tag:$LINENO] [$1] rollback: vht snapshot incomplete — vhtcfg not restored"
     fi
     # reassociate가 reconnect보다 부드럽고 cap 변경 반영이 확실 (실기 검증)
-    wpa_cli -i "$1" reassociate >/dev/null 2>&1 || wpa_cli -i "$1" reconnect >/dev/null 2>&1
+    wifi_wpa_run_child wpa_cli -i "$1" reassociate >/dev/null 2>&1 || wifi_wpa_run_child wpa_cli -i "$1" reconnect >/dev/null 2>&1
 }
 # ------------------------------------
 
@@ -876,7 +884,7 @@ rollback_radio_live() { # $1 iface
 # 두 키를 별도 호출로 쓰면 첫 키만 기록되고 둘째가 실패하는 부분 커밋
 # 윈도우가 생기므로 한 번에 기록한다.
 update_json_radio() {
-    local iface="$1" mode="$2" bw="$3" tmp filter
+    local iface="$1" mode="$2" bw="$3" tmp filter own_json_lock=0
     [ -z "$mode" ] && [ -z "$bw" ] && return 0
     if [ ! -f "$WIFI_INIT_CONF_JSON" ]; then
         echo "Error: $WIFI_INIT_CONF_JSON not found" >&2
@@ -885,6 +893,16 @@ update_json_radio() {
     if ! command -v jq >/dev/null 2>&1; then
         echo "Error: jq not installed" >&2
         return 1
+    fi
+    # radio-apply already owns FD8 before reading/applying settings. Other
+    # direct callers acquire the same lock here before their JSON read.
+    if [ "${RADIO_JSON_LOCKED:-0}" != 1 ]; then
+        if ! wifi_radio_json_lock_acquire; then
+            exec 8>&-
+            echo "Error: radio JSON transaction busy" >&2
+            return 1
+        fi
+        own_json_lock=1
     fi
     filter="."
     [ -n "$mode" ] && filter="$filter | .[\$i].radio.mode = \$m"
@@ -896,17 +914,21 @@ update_json_radio() {
     # 고정 .tmp 대신 고유 tmp — 동시 호출(wifi 0 ... + wifi 1 ...) 시 파손 방지.
     # EXIT trap은 22행의 글로벌 sync trap을 덮어쓰므로 RETURN trap 사용
     # (apply_sed_update와 동일 패턴).
-    tmp="$(safe_tmp_for "$WIFI_INIT_CONF_JSON")"
-    trap 'rm -f "$tmp"' RETURN
-    if jq --arg i "$iface" --arg m "$mode" --arg b "$bw" "$filter" \
+    trap 'wifi_wpa_run_child rm -f "${tmp:-}"; if [ "$own_json_lock" = 1 ]; then exec 8>&-; fi' RETURN
+    tmp="$(wifi_wpa_child_call safe_tmp_for "$WIFI_INIT_CONF_JSON")" || return 1
+    if wifi_wpa_run_child jq --arg i "$iface" --arg m "$mode" --arg b "$bw" "$filter" \
         "$WIFI_INIT_CONF_JSON" > "$tmp"; then
-        chmod 0644 "$tmp" 2>/dev/null
-        mv "$tmp" "$WIFI_INIT_CONF_JSON"
-        sync "$WIFI_INIT_CONF_JSON" 2>/dev/null || sync
+        wifi_wpa_run_child chmod 0644 "$tmp" 2>/dev/null
+        if ! wifi_wpa_run_child mv "$tmp" "$WIFI_INIT_CONF_JSON"; then
+            return 1
+        fi
+        wifi_wpa_run_child sync "$WIFI_INIT_CONF_JSON" 2>/dev/null || wifi_wpa_run_child sync
         trap - RETURN
+        [ "$own_json_lock" != 1 ] || exec 8>&-
     else
-        rm -f "$tmp"
+        wifi_wpa_run_child rm -f "$tmp"
         trap - RETURN
+        [ "$own_json_lock" != 1 ] || exec 8>&-
         echo "Error: JSON radio commit failed for ${iface} (mode=${mode:-keep} bw=${bw:-keep})" >&2
         return 1
     fi
@@ -927,6 +949,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} br {up|down|start|stop|restart} : runtime"
     echo "       wifi {0|1|mlan0|mlan1} br status : peer_route/hairpin/브릿지 설정·런타임·정합성 진단 (읽기 전용)"
     echo "       wifi {0|1|mlan0|mlan1} br profile {mlan0-ip|hairpin|dual|peer-route|eth0-ip} [apply] : 연계 설정 묶음 조회/적용 (dry-run 기본)"
+    echo "       wifi {0|1|mlan0|mlan1} br factory-profile [show|eth0-ip|peer-route] [apply] : 공장 초기화 토폴로지 조회/설정 (dry-run 기본)"
     echo "       wifi {0|1|mlan0|mlan1} br route {find [<subnet>]|set <ip>|auto [<subnet>]} : eth 지연연결 후 peer host route 탐색/등록"
     echo "       wifi {0|1|mlan0|mlan1} br {moal|pcap|tpacket} : wbridge engine+bridge_iface persist"
     echo "       wifi {0|1|mlan0|mlan1} txpwr {0|1|2|3|no|default|low|org|custom_file_name} : persist+runtime"
@@ -1675,7 +1698,8 @@ _bridge_status() {
         echo "  [INFO] eth_sweep_subnet empty -> last-resort sweep falls back to $iface net (${mlan_inet:-<none>}). Set it to pin the range."
     fi
     if [ "$pr" = "true" ] && [ -z "$eth_mirror" ]; then
-        echo "  [WARN] peer_route=on but no /32 mirror on $eth (runtime). Reboot or 'wifi <0|1> br restart'."
+        echo "  [WARN] peer_route=on but no /32 mirror on $eth (runtime). Reboot to apply the saved profile."
+        echo "         'wifi <0|1> br restart' restarts only the bridge service; it does not apply IP addresses or routes."
         warn=1
     fi
     if [ "$pr" = "false" ] && [ -n "$eth_mirror" ] && [ "$ef_json" != "true" ] && [ "$lhp_raw" != "1" ]; then
@@ -1758,6 +1782,69 @@ _bridge_profile() {
         echo "Error: JSON update failed (config unchanged)" >&2
         return 1
     fi
+}
+
+# 공장 초기화 때 사용할 영구 토폴로지 selector만 다룬다. runtime profile과
+# active wifi_init_conf.json은 건드리지 않으며, 명시적인 apply에만 기록한다.
+_factory_profile() {
+    local name="${1:-show}" action="${2:-}" extra="${3:-}"
+    local selector="${WIFI_FACTORY_TOPOLOGY_PATH:-/usr/local/etc/wifi_factory_topology.json}"
+    local helper="${WIFI_FACTORY_TOPOLOGY_SCRIPT:-}"
+    local -a owner_args=()
+
+    if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
+        echo "Error: br factory-profile supports mlan0/mlan1 only" >&2
+        return 2
+    fi
+    if [ -z "$helper" ]; then
+        if [ -r /usr/local/scripts/wifi_factory_topology.py ]; then
+            helper=/usr/local/scripts/wifi_factory_topology.py
+        elif [ -r "$SCRIPT_DIR/wifi_factory_topology.py" ]; then
+            helper="$SCRIPT_DIR/wifi_factory_topology.py"
+        else
+            echo "Error: wifi_factory_topology.py not found" >&2
+            return 1
+        fi
+    fi
+    if [ ! -r "$helper" ]; then
+        echo "Error: factory topology helper is not readable: $helper" >&2
+        return 1
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "Error: python3 not installed" >&2
+        return 1
+    fi
+    if [ -n "${WIFI_FACTORY_TOPOLOGY_OWNER_UID:-}" ]; then
+        owner_args+=(--owner-uid "$WIFI_FACTORY_TOPOLOGY_OWNER_UID")
+    fi
+    if [ -n "${WIFI_FACTORY_TOPOLOGY_OWNER_GID:-}" ]; then
+        owner_args+=(--owner-gid "$WIFI_FACTORY_TOPOLOGY_OWNER_GID")
+    fi
+
+    case "$name" in
+        ""|show)
+            if [ -n "$action" ] || [ -n "$extra" ]; then
+                echo "Usage: wifi {0|1} br factory-profile [show|eth0-ip|peer-route] [apply]" >&2
+                return 2
+            fi
+            python3 "$helper" read --path "$selector" "${owner_args[@]}"
+            ;;
+        eth0-ip|peer-route)
+            if [ -n "$extra" ] || { [ -n "$action" ] && [ "$action" != "apply" ]; }; then
+                echo "Usage: wifi {0|1} br factory-profile [show|eth0-ip|peer-route] [apply]" >&2
+                return 2
+            fi
+            if [ "$action" != "apply" ]; then
+                echo "$name (dry-run; selector unchanged)"
+                return 0
+            fi
+            python3 "$helper" set --path "$selector" --topology "$name" "${owner_args[@]}"
+            ;;
+        *)
+            echo "Error: unknown factory profile '$name' (eth0-ip|peer-route)" >&2
+            return 2
+            ;;
+    esac
 }
 
 # wifi <0|1|mlan0|mlan1> br route {find|set|auto} : eth 유선 peer host route 탐색/등록
@@ -2179,6 +2266,47 @@ if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ] && [ "$IFACE" != "eth0" ];
     usage
 fi
 
+# Queries remain available during a manual fallback. Runtime mutations share a
+# gate with OPC; the connect owning fallback holds it exclusively until cleanup.
+if [ "$IFACE" = mlan0 ] || [ "$IFACE" = mlan1 ]; then
+    CHANGE_GUARD=1
+    CHANGE_GUARD_MODE=shared
+    case "${2:-}" in
+        connect|freq|ssid|psk|key)
+            wifi_connect_fallback_load "$IFACE" || exit 1
+            CHANGE_GUARD=1
+            if [ "$2" = connect ] && [ "$CONNECT_FALLBACK_ENABLED" = 1 ]; then
+                CHANGE_GUARD_MODE=exclusive
+            fi
+            ;;
+        info|status|mon|'') CHANGE_GUARD=0 ;;
+        mode|bw|rate|mcs|standard|ip)
+            case "${3:-}" in ''|get) CHANGE_GUARD=0 ;; esac ;;
+        mscan)
+            [ "${3:-}" != get ] || CHANGE_GUARD=0 ;;
+        roam)
+            case "${3:-}" in
+                '') CHANGE_GUARD=0 ;;
+                th) [ -n "${5:-}" ] || CHANGE_GUARD=0 ;;
+                diff|gate) [ -n "${4:-}" ] || CHANGE_GUARD=0 ;;
+            esac ;;
+        br)
+            case "${3:-}" in
+                status) CHANGE_GUARD=0 ;;
+                profile|factory-profile)
+                    [ "${5:-}" = apply ] || CHANGE_GUARD=0 ;;
+                route)
+                    case "${4:-}" in ''|get|show|status|find) CHANGE_GUARD=0 ;; esac ;;
+            esac ;;
+        log)
+            case "${3:-}" in ''|status) CHANGE_GUARD=0 ;; esac ;;
+    esac
+    if [ "$CHANGE_GUARD" = 1 ] && ! wifi_change_guard_acquire "$IFACE" "$CHANGE_GUARD_MODE"; then
+        echo "Error: configuration/connection change busy for $IFACE" >&2
+        exit 6
+    fi
+fi
+
 case "$2" in
   info)
     show_info "$IFACE"
@@ -2252,6 +2380,8 @@ case "$2" in
         _bridge_status "$IFACE"
     elif [ "$3" == "profile" ]; then
         _bridge_profile "${4:-}" "${5:-}"
+    elif [ "$3" == "factory-profile" ]; then
+        _factory_profile "${4:-}" "${5:-}" "${6:-}"
     elif [ "$3" == "route" ]; then
         _bridge_route "${4:-}" "${5:-}" "$IFACE"
     elif [ "$3" == "moal" ] || [ "$3" == "pcap" ] || [ "$3" == "tpacket" ]; then
@@ -2675,6 +2805,7 @@ case "$2" in
     if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
     wifi_wpa_conf_lock_acquire "$IFACE" \
         || { echo "Error: failed to lock $CONF" >&2; exit 1; }
+    wifi_connect_fallback_capture "$IFACE" "$CONF" || exit 1
     FREQS=()
     # to_freq_mhz는 비숫자 토큰을 그대로 되돌려주고 1000 미만 정수를 5000+5*v로
     # 매핑한다 → 재검사가 없으면 freq_list=abc(파싱 실패로 주파수 핀 해제) 나
@@ -2701,6 +2832,7 @@ case "$2" in
     if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
     wifi_wpa_conf_lock_acquire "$IFACE" \
         || { echo "Error: failed to lock $CONF" >&2; exit 1; }
+    wifi_connect_fallback_capture "$IFACE" "$CONF" || exit 1
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> ssid <NEW_SSID>" >&2; exit 1; fi
     if wifi_wpa_run_child_call wifi_wpa_conf_is_multi_topology "$IFACE" "$CONF"; then
         echo "Error: $CONF 는 Mode A 또는 다중 network topology입니다." >&2
@@ -2742,6 +2874,11 @@ case "$2" in
     ' "$CONF" > "$TMP_FILE"; then
         wifi_wpa_run_child_call safe_install_sync "$TMP_FILE" "$CONF"
         wifi_wpa_run_child rm -f "$TMP_FILE"
+        if [ "$IFACE" = "mlan0" ]; then
+            # 영구 SSID 변경 — OPC ChangeIp ESSID 복원 표식을 지워 다음 부팅의 opcd -R 이
+            # 이 값을 되돌리지 않게 한다(#362). 표식은 mlan0 conf 에만 있다.
+            wifi_wpa_run_child rm -f "$OPC_ESSID_MARKER"
+        fi
         echo "ssid changed to \"$NEW_SSID\" in $CONF"
     else echo "no network={ block found, nothing changed in $CONF" >&2; wifi_wpa_run_child rm -f "$TMP_FILE"; exit 1; fi
     ;;
@@ -2753,6 +2890,7 @@ case "$2" in
     wifi_wpa_conf_lock_acquire "$IFACE" \
         || { echo "Error: failed to lock $CONF" >&2; exit 1; }
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> psk <NEW_PSK>" >&2; exit 1; fi
+    wifi_connect_fallback_capture "$IFACE" "$CONF" || exit 1
     NEW_PSK="$1"
     # wpa_supplicant는 따옴표 passphrase를 8..63자로 제한한다. 벗어나면 해당 network
     # 블록만 버리는 게 아니라 conf 전체 로드에 실패해 supplicant가 아예 뜨지 않는다.
@@ -2812,6 +2950,7 @@ case "$2" in
     wifi_wpa_conf_lock_acquire "$IFACE" \
         || { echo "Error: failed to lock $CONF" >&2; exit 1; }
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> key <0|1|NONE|WPA-PSK>" >&2; exit 1; fi
+    wifi_connect_fallback_capture "$IFACE" "$CONF" || exit 1
     NEW_KEY="$1"
     [ "$NEW_KEY" = "0" ] && NEW_KEY="NONE"
     [ "$NEW_KEY" = "1" ] && NEW_KEY="WPA-PSK"
@@ -2872,12 +3011,13 @@ case "$2" in
     # 인자 없음: 일반 CLI는 강제 재연결; FTP wconnect는 이미 연결된 프로필이
     #            저장된 설정과 일치하면 유지하고, 아니면 conf를 다시 적재한다.
     # 연결이 필요하면 reassociate 우선, 실패 시 reconnect fallback 후 assoc 대기.
-    # exit: 0=ok 1=usage/env 7=wpa_cli 8=assoc-timeout
-    # known limitation: reconfigure 뒤 assoc 타임아웃(8) 시 conf는
-    #   새 ssid로 이미 persist된다(라이브는 옛 AP일 수 있음).
-    #   ssid 변경은 의도된 영속이라 rollback하지 않는다 — 다음 재시도/부팅 시 적용.
+    # exit: 0=target connected 1=usage/env 6=busy 7=wpa_cli 8=assoc-timeout
+    # Default: failed switches retain the new persisted profile. Optional manual
+    # fallback restores the last verified profile but preserves the failure rc.
     set -euo pipefail
     shift 2
+    CONNECT_EXPLICIT_SSID=0
+    [ "$#" -eq 0 ] || CONNECT_EXPLICIT_SSID=1
     ftpcmd_trace_log wifi_connect_entered
     HAS_TARGET=0
     TARGET_SSID=""
@@ -2906,10 +3046,18 @@ case "$2" in
         echo "Error: wpa_cli not found" >&2; exit 1
     fi
     CONF="$WPA_CONF_DIR/wpa_supplicant-${IFACE}.conf"
-    wifi_wpa_conf_lock_acquire "$IFACE" \
-        || { echo "Error: failed to lock $CONF" >&2; exit 1; }
-    wifi_scan_transition_lock_acquire "$IFACE" \
-        || { echo "Error: failed to lock scan transition for $IFACE" >&2; exit 1; }
+    if [ "$CONNECT_FALLBACK_ENABLED" = 1 ]; then
+        wifi_wpa_conf_lock_acquire "$IFACE" try \
+            && wifi_scan_transition_lock_acquire "$IFACE" 0 \
+            || { echo "Error: configuration/connection change busy for $IFACE" >&2; exit 6; }
+    else
+        wifi_wpa_conf_lock_acquire "$IFACE" \
+            || { echo "Error: failed to lock $CONF" >&2; exit 1; }
+        wifi_scan_transition_lock_acquire "$IFACE" \
+            || { echo "Error: failed to lock scan transition for $IFACE" >&2; exit 1; }
+    fi
+    wifi_connect_fallback_start
+    wifi_connect_fallback_capture "$IFACE" "$CONF" || exit 1
     if [ "$#" -ge 1 ]; then
         NEW_SSID="$1"
         SSID_ENCODING_OUTPUT=$(wifi_wpa_child_call wifi_ssid_encode_values "$NEW_SSID") || {
@@ -2957,6 +3105,8 @@ case "$2" in
         # fresh CONNECTED event가 가리킨 id의 COMPLETED로 착지를 증명한다(broad 경로).
         # disconnected/no-id 복구도 같은 경로다.
         MULTI_TOPOLOGY=1
+        CONNECT_FALLBACK_ENABLED=0
+        WIFI_WPA_DEADLINE_MS=""
         MULTI_INITIAL_ID="$TARGET_ID"
         HAS_TARGET_ID=0
         TARGET_ID=""
@@ -3062,20 +3212,29 @@ case "$2" in
             ftpcmd_trace_log association_verified \
                 "path=already_connected id=$LIVE_NETWORK_ID"
             echo "already associated: ssid=\"$LIVE_SSID_WPA_TEXT\" freq=$LIVE_FREQ id=$LIVE_NETWORK_ID"
+            wifi_connect_fallback_commit || exit 1
             exit 0
         fi
     fi
+    if [ "$CONNECT_FALLBACK_ENABLED" = 1 ]; then
+        CONNECT_TIMEOUT="$CONNECT_ATTEMPT_TIMEOUT"
+        TOTAL_POLLS=$((CONNECT_TIMEOUT * 10))
+        REMAINING_POLLS="$TOTAL_POLLS"
+    fi
+    trap 'wifi_connect_cleanup' EXIT
     if ! wifi_wpa_abort_scan_quiesce "$IFACE"; then
         echo "Error: cannot quiesce scan for $IFACE" >&2; exit 7
     fi
-    trap 'connect_event_monitor_cleanup; wifi_wpa_run_child sync 2>/dev/null || true' EXIT
     trap 'exit 129' HUP
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    if ! connect_event_monitor_start "$IFACE" "$CONNECT_TIMEOUT"; then
+    MONITOR_TIMEOUT="$CONNECT_TIMEOUT"
+    [ "$CONNECT_FALLBACK_ENABLED" != 1 ] || MONITOR_TIMEOUT=$((CONNECT_TIMEOUT + CONNECT_ROLLBACK_TIMEOUT))
+    if ! connect_event_monitor_start "$IFACE" "$MONITOR_TIMEOUT"; then
         echo "Error: failed to attach reconnect event monitor for $IFACE" >&2
         exit 7
     fi
+    wifi_connect_fallback_arm || exit 1
     if [ $# -ge 1 ]; then
         # === conf 편집 경로: ssid(+freq) 영구 기록 → 전체 프로필 reconfigure ===
         if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
@@ -3110,7 +3269,6 @@ case "$2" in
         # install한다. 중간 형식이 실제 conf에 노출되지 않아 reconfigure와 경쟁하지 않는다.
         CANON_FILE="$(wifi_wpa_child_exec mktemp)"
         TMP_FILE="$(wifi_wpa_child_exec mktemp)"
-        trap 'wifi_wpa_run_child rm -f "$CANON_FILE" "$TMP_FILE"; connect_event_monitor_cleanup; wifi_wpa_run_child sync 2>/dev/null || true' EXIT
         if ! wifi_wpa_run_child_call wifi_wpa_conf_render_canonical \
             "$CONF" "$CANON_FILE" "$FREQ_STR"; then
             echo "Error: failed to render canonical frequency policy in $CONF" >&2
@@ -3135,6 +3293,10 @@ case "$2" in
         ' "$CANON_FILE" > "$TMP_FILE"; then
             wifi_wpa_run_child_call safe_install_sync "$TMP_FILE" "$CONF"
             wifi_wpa_run_child rm -f "$CANON_FILE" "$TMP_FILE"
+            if [ "$IFACE" = "mlan0" ] && [ "$CONNECT_FALLBACK_ENABLED" != 1 ]; then
+                # 영구 SSID 변경 — OPC ChangeIp ESSID 복원 표식을 지운다(#362, ssid 와 동일).
+                wifi_wpa_run_child rm -f "$OPC_ESSID_MARKER"
+            fi
         else
             wifi_wpa_run_child rm -f "$CANON_FILE" "$TMP_FILE"
             echo "Error: failed to update $CONF (no network={ block?)" >&2
@@ -3160,6 +3322,7 @@ case "$2" in
             echo "no ssid/current id given - reassociating $IFACE with current conf..."
         fi
     fi
+    wifi_connect_fallback_attempt_start
     if [ "$HAS_TARGET" = "1" ] || [ "$APPLY_STORED_CONF" = "1" ]; then
         # Reload the whole persisted profile. SET_NETWORK alone would leave
         # pending SSID, credentials, or frequency edits stale in supplicant.
@@ -3205,6 +3368,7 @@ case "$2" in
             GRACE_POLLS=$((TOTAL_POLLS - 1))
         fi
         for ((_i = 1; _i <= GRACE_POLLS && REMAINING_POLLS > 0; _i++)); do
+            wifi_connect_fallback_time_left || break
             if connect_association_poll_matches; then
                 ASSOC_MATCH=1
             fi
@@ -3213,6 +3377,7 @@ case "$2" in
                 wifi_wpa_run_child rm -f "$WIFI_RUN_DIR/${IFACE}.credential-pending" 2>/dev/null || true
                 ftpcmd_trace_log association_verified "path=$PROFILE_CONNECT_PATH id=${CUR_ID:-N/A}"
                 echo "associated by $PROFILE_CONNECT_PATH: ssid=\"$CUR_SSID\" freq=$CUR_FREQ id=$CUR_ID"
+                wifi_connect_fallback_commit || exit 1
                 exit 0
             fi
             if [ "$_i" -lt "$GRACE_POLLS" ] && [ "$REMAINING_POLLS" -gt 0 ]; then
@@ -3223,6 +3388,10 @@ case "$2" in
     # --- 공통: owner-neutral 강제 재연결(reassociate 우선, 실패 시 reconnect) → assoc 대기 ---
     # Mode A도 다른 network 블록의 enabled 상태를 바꾸지 않는다. 단일 블록은 최초에 캡처한
     # id를, 다중 블록은 fresh CONNECTED event가 가리킨 id를 그 이후 COMPLETED 폴링으로 증명한다.
+    if ! wifi_connect_fallback_time_left; then
+        echo "Warning: requested association not completed within ${CONNECT_TIMEOUT}s" >&2
+        exit 8
+    fi
     if ! connect_event_monitor_arm; then
         echo "Error: failed to arm reconnect event monitor for $IFACE" >&2
         exit 7
@@ -3249,6 +3418,7 @@ case "$2" in
     # Plain no-argument reconnects arrive with the full budget. Profile reloads
     # use only the remainder after grace; neither phase resets the counter.
     while [ "$REMAINING_POLLS" -gt 0 ]; do
+        wifi_connect_fallback_time_left || break
         if connect_association_poll_matches; then
             ASSOC_MATCH=1
         fi
@@ -3262,6 +3432,7 @@ case "$2" in
         fi
         ftpcmd_trace_log association_verified "path=$CONNECT_TRIGGER id=${CUR_ID:-N/A}"
         echo "associated: ssid=\"${CUR_SSID:-N/A}\" freq=${CUR_FREQ:-N/A} id=${CUR_ID:-N/A} (wpa_state=COMPLETED)"
+        wifi_connect_fallback_commit || exit 1
         exit 0
     else
         ftpcmd_trace_log association_timeout "path=$CONNECT_TRIGGER state=${WPA_STATE:-unknown}"
@@ -3670,22 +3841,35 @@ case "$2" in
         echo "Error: $WIFI_INIT_CONF_JSON not found" >&2
         exit 3
     fi
+    # Lock before reading committed radio settings: OPC may update them while
+    # a CLI caller waits for the interface transition. Keep global JSON FD8
+    # through live apply/rollback and commit, in scan -> JSON order.
+    if ! wifi_scan_transition_lock_acquire "$IFACE"; then
+        echo "Error: scan/association transition busy for $IFACE" >&2
+        exit 6
+    fi
+    if ! wifi_radio_json_lock_acquire; then
+        echo "Error: radio JSON transaction busy" >&2
+        exit 9
+    fi
+    RADIO_JSON_LOCKED=1
+    trap 'wifi_wpa_run_child sync' EXIT
     # JSON 파손이 '설정 없음(exit 0)'으로 위장하지 않도록 유효성 선검사
-    if ! jq -e . "$WIFI_INIT_CONF_JSON" >/dev/null 2>&1; then
+    if ! wifi_wpa_run_child jq -e . "$WIFI_INIT_CONF_JSON" >/dev/null 2>&1; then
         echo "Error: invalid JSON in $WIFI_INIT_CONF_JSON" >&2
         exit 9
     fi
-    R_MODE_JSON=$(jq -r ".${IFACE}.radio.mode // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null) || {
+    R_MODE_JSON=$(wifi_wpa_child_exec jq -r ".${IFACE}.radio.mode // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null) || {
         echo "Error: cannot read .${IFACE}.radio.mode from $WIFI_INIT_CONF_JSON" >&2
         exit 9
     }
-    R_BW_JSON=$(jq -r ".${IFACE}.radio.bw // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null) || {
+    R_BW_JSON=$(wifi_wpa_child_exec jq -r ".${IFACE}.radio.bw // empty" "$WIFI_INIT_CONF_JSON" 2>/dev/null) || {
         echo "Error: cannot read .${IFACE}.radio.bw from $WIFI_INIT_CONF_JSON" >&2
         exit 9
     }
     # 적용 대상 = staged(pending) 우선, 없으면 committed 재적용
-    R_MODE_PEND=$(radio_stage_get "$IFACE" mode)
-    R_BW_PEND=$(radio_stage_get "$IFACE" bw)
+    R_MODE_PEND=$(wifi_wpa_child_call radio_stage_get "$IFACE" mode)
+    R_BW_PEND=$(wifi_wpa_child_call radio_stage_get "$IFACE" bw)
     R_MODE="${R_MODE_PEND:-$R_MODE_JSON}"
     R_BW="${R_BW_PEND:-$R_BW_JSON}"
     if [ -z "$R_MODE" ] && [ -z "$R_BW" ]; then
@@ -3707,7 +3891,7 @@ case "$2" in
     # 빠진다 → 링크를 건드리기 전에 즉시 거부. 2G+5G 혼합이면 안내만 출력.
     if [ "$R_MODE" = "b" ] || [ "$R_MODE" = "g" ]; then
         R_CONF="${WPA_CONF_DIR:-/etc/wpa_supplicant}/wpa_supplicant-${IFACE}.conf"
-        R_FREQ_BANDS=$(wifi_init_conf_freq_bands "$R_CONF")
+        R_FREQ_BANDS=$(wifi_wpa_child_call wifi_init_conf_freq_bands "$R_CONF")
         if [ "$R_FREQ_BANDS" = "5G" ]; then
             echo "Error: mode=$R_MODE is 2.4G-only but common freq_list in $R_CONF is 5G-only — STA can never associate." >&2
             echo "       Fix with 'wifi $NUM freq <2.4G ch>' or 'wifi $NUM mode a' (or higher), then retry." >&2
@@ -3717,7 +3901,7 @@ case "$2" in
         fi
     fi
     if [ -n "$R_MODE" ]; then
-        MODE_MASK=$(wifi_init_mode_to_bandcfg_mask "$R_MODE")
+        MODE_MASK=$(wifi_wpa_child_call wifi_init_mode_to_bandcfg_mask "$R_MODE")
         if [ -z "$MODE_MASK" ]; then
             echo "Error: invalid radio.mode '$R_MODE' in $WIFI_INIT_CONF_JSON" >&2
             exit 2
@@ -3727,24 +3911,18 @@ case "$2" in
             exit 2
         fi
     fi
-    # 이 지점부터 mlanutl snapshot/SET과 disconnect/reassociate를 수행한다. 외부
-    # bgscan/manual scan/connect와 같은 per-iface transition namespace를 획득해
-    # rollback·association 확인까지 프로세스 수명 동안 직렬화한다.
-    if ! wifi_scan_transition_lock_acquire "$IFACE"; then
-        echo "Error: scan/association transition busy for $IFACE" >&2
-        exit 6
-    fi
+    # FD7/FD8 were acquired before the committed-setting read above.
     if ! wifi_wpa_abort_scan_quiesce "$IFACE"; then
         echo "Error: native scan did not quiesce for $IFACE" >&2
         exit 6
     fi
     # 실패 시 롤백용 적용 전 스냅샷
-    SNAP_BAND=$(mlanutl "$IFACE" bandcfg 2>/dev/null | sed -n 's/.*Infra Band: \(0x[0-9a-fA-F]*\).*/\1/p' | head -1)
-    SNAP_HT_OUT=$(mlanutl "$IFACE" htcapinfo 2>/dev/null)
-    SNAP_HT_BG=$(printf '%s\n' "$SNAP_HT_OUT" | sed -n 's/^[[:space:]]*BG band:[[:space:]]*\(0x[0-9a-fA-F]*\).*/\1/p' | head -1)
-    SNAP_HT_A=$(printf '%s\n' "$SNAP_HT_OUT" | sed -n 's/^[[:space:]]*A band:[[:space:]]*\(0x[0-9a-fA-F]*\).*/\1/p' | head -1)
-    SNAP_VHT_OUT=$(mlanutl "$IFACE" vhtcfg 2 2 2>/dev/null)
-    SNAP_VHTCAP=$(printf '%s\n' "$SNAP_VHT_OUT" | awk '/VHT Capabilities Info/ {print $NF; exit}')
+    SNAP_BAND=$(wifi_wpa_child_close; mlanutl "$IFACE" bandcfg 2>/dev/null | sed -n 's/.*Infra Band: \(0x[0-9a-fA-F]*\).*/\1/p' | head -1)
+    SNAP_HT_OUT=$(wifi_wpa_child_exec mlanutl "$IFACE" htcapinfo 2>/dev/null)
+    SNAP_HT_BG=$(wifi_wpa_child_close; printf '%s\n' "$SNAP_HT_OUT" | sed -n 's/^[[:space:]]*BG band:[[:space:]]*\(0x[0-9a-fA-F]*\).*/\1/p' | head -1)
+    SNAP_HT_A=$(wifi_wpa_child_close; printf '%s\n' "$SNAP_HT_OUT" | sed -n 's/^[[:space:]]*A band:[[:space:]]*\(0x[0-9a-fA-F]*\).*/\1/p' | head -1)
+    SNAP_VHT_OUT=$(wifi_wpa_child_exec mlanutl "$IFACE" vhtcfg 2 2 2>/dev/null)
+    SNAP_VHTCAP=$(wifi_wpa_child_close; printf '%s\n' "$SNAP_VHT_OUT" | awk '/VHT Capabilities Info/ {print $NF; exit}')
     case "$SNAP_VHT_OUT" in
         *"Follow BW in the 11N"*) SNAP_VHTBW=0 ;;
         *"Follow BW in VHT"*)     SNAP_VHTBW=1 ;;
@@ -3761,21 +3939,21 @@ case "$2" in
     elif [ -n "$R_MODE" ] && [ -n "$MODE_MASK" ]; then
         # committed mode가 라이브와 다르면 bandcfg 재적용 — 부팅 connected-skip
         # (wifi_init.sh) 후 'wifi N radio-apply' 복구 경로가 mode를 실제 적용하도록.
-        _live_band=$(printf '%s' "${SNAP_BAND:-}" | tr 'ABCDEF' 'abcdef')
-        _want_band=$(printf '%s' "$MODE_MASK" | tr 'ABCDEF' 'abcdef')
+        _live_band=$(wifi_wpa_child_close; printf '%s' "${SNAP_BAND:-}" | tr 'ABCDEF' 'abcdef')
+        _want_band=$(wifi_wpa_child_close; printf '%s' "$MODE_MASK" | tr 'ABCDEF' 'abcdef')
         if [ "$_live_band" != "$_want_band" ]; then
             APPLY_MODE=1
-            logger -p local0.info "[$tag:$LINENO] [$IFACE] committed mode=$R_MODE not live (band ${_live_band:-none} != $_want_band) — applying via bandcfg"
+            wifi_wpa_run_child logger -p local0.info "[$tag:$LINENO] [$IFACE] committed mode=$R_MODE not live (band ${_live_band:-none} != $_want_band) — applying via bandcfg"
         fi
     fi
-    logger -p local0.info "[$tag:$LINENO] [$IFACE] radio-apply: mode=${R_MODE:-keep} bw=${R_BW:-keep} (pending: mode=${R_MODE_PEND:-no} bw=${R_BW_PEND:-no}, path=$([ -n "$APPLY_MODE" ] && echo mode || echo bw-only))"
+    wifi_wpa_run_child logger -p local0.info "[$tag:$LINENO] [$IFACE] radio-apply: mode=${R_MODE:-keep} bw=${R_BW:-keep} (pending: mode=${R_MODE_PEND:-no} bw=${R_BW_PEND:-no}, path=$([ -n "$APPLY_MODE" ] && echo mode || echo bw-only))"
 
     if [ -n "$APPLY_MODE" ]; then
         # === mode 변경 경로: disconnect → bandcfg(재시도) → cap → reconfigure → reconnect ===
         # disconnect 는 재연결(끊김)을 유발 — wifi_checker 가 과도기를 '불안정'으로 오판해
         # reassociate/restart 하지 않도록 grace flag 를 세운다(TTL 은 checker 의 RECONFIGURE_GRACE_SEC).
-        mkdir -p /run/wifi 2>/dev/null || true
-        : > "/run/wifi/${IFACE}.reconfigure-grace" 2>/dev/null || true
+        wifi_wpa_run_child mkdir -p "$WIFI_RUN_DIR" 2>/dev/null || true
+        : > "$WIFI_RUN_DIR/${IFACE}.reconfigure-grace" 2>/dev/null || true
         if ! wpa_cli_ok "$IFACE" disconnect; then
             echo "Error: wpa_cli disconnect failed for $IFACE" >&2
             exit 7
@@ -3784,15 +3962,15 @@ case "$2" in
         # 실패할 수 있음 → 최대 3초(0.1s×30) 재시도
         BANDCFG_OK=""
         for ((_i = 1; _i <= 30; _i++)); do
-            if mlanutl "$IFACE" bandcfg "$MODE_MASK" >/dev/null 2>&1; then
+            if wifi_wpa_run_child mlanutl "$IFACE" bandcfg "$MODE_MASK" >/dev/null 2>&1; then
                 BANDCFG_OK=1
                 break
             fi
-            sleep 0.1
+            wifi_wpa_run_child sleep 0.1
         done
         if [ -z "$BANDCFG_OK" ]; then
             echo "Error: bandcfg $MODE_MASK failed for $IFACE (still connected, or band unsupported by FW — check 'wifi $NUM mode get' STANDARD)" >&2
-            logger -p local0.err "[$tag:$LINENO] [$IFACE] radio-apply: bandcfg $MODE_MASK failed"
+            wifi_wpa_run_child logger -p local0.err "[$tag:$LINENO] [$IFACE] radio-apply: bandcfg $MODE_MASK failed"
             rollback_radio_live "$IFACE"
             exit 4
         fi
@@ -3800,7 +3978,7 @@ case "$2" in
         [ -n "$R_BW" ] && apply_bw_or_exit "$IFACE" "$R_BW_CAP"
         # 2차 과도기(reconfigure→reconnect)도 grace 로 덮는다 — 1차(disconnect) set 으로부터
         # bandcfg 재시도+assoc 대기로 TTL 이 소모됐을 수 있어 여기서 flag mtime 을 다시 갱신한다.
-        : > "/run/wifi/${IFACE}.reconfigure-grace" 2>/dev/null || true
+        : > "$WIFI_RUN_DIR/${IFACE}.reconfigure-grace" 2>/dev/null || true
         if ! wpa_cli_ok "$IFACE" reconfigure; then
             echo "Error: wpa_cli reconfigure failed for $IFACE (check wpa_supplicant conf syntax)" >&2
             rollback_radio_live "$IFACE"
@@ -3831,13 +4009,13 @@ case "$2" in
     WPA_STATE=""
     # 0.1s grid 폴링 — connect와 동일 (상한 ASSOC_TIMEOUT초 유지; ASSOC_TIMEOUT은 위에서 정수 검증됨)
     for ((_i = 1; _i <= ASSOC_TIMEOUT * 10; _i++)); do
-        WPA_STATE=$(wpa_cli -i "$IFACE" status 2>/dev/null | sed -n 's/^wpa_state=//p')
+        WPA_STATE=$(wifi_wpa_child_close; wpa_cli -i "$IFACE" status 2>/dev/null | sed -n 's/^wpa_state=//p')
         [ "$WPA_STATE" = "COMPLETED" ] && break
-        sleep 0.1
+        wifi_wpa_run_child sleep 0.1
     done
     if [ "$WPA_STATE" != "COMPLETED" ]; then
         echo "Error: association not completed within ${ASSOC_TIMEOUT}s (state=${WPA_STATE:-unknown})" >&2
-        logger -p local0.err "[$tag:$LINENO] [$IFACE] radio-apply: assoc timeout (state=${WPA_STATE:-unknown})"
+        wifi_wpa_run_child logger -p local0.err "[$tag:$LINENO] [$IFACE] radio-apply: assoc timeout (state=${WPA_STATE:-unknown})"
         rollback_radio_live "$IFACE"
         echo "(previous settings restored; staged changes kept — fix and retry radio-apply, or radio-discard)" >&2
         exit 8
@@ -3852,21 +4030,21 @@ case "$2" in
         exit 9
     fi
     if [ -n "$R_MODE_PEND" ] || [ -n "$R_BW_PEND" ]; then
-        rm -f "$(radio_pending_path "$IFACE" mode)" "$(radio_pending_path "$IFACE" bw)"
+        wifi_wpa_run_child rm -f "$(radio_pending_path "$IFACE" mode)" "$(radio_pending_path "$IFACE" bw)"
         if [ -n "$R_BW_DEFAULT" ]; then
             echo "radio.bw reset to default (AP-driven) for $IFACE in $WIFI_INIT_CONF_JSON"
         else
             echo "committed to $WIFI_INIT_CONF_JSON (mode=${R_MODE:-keep} bw=${R_BW:-keep})"
         fi
     fi
-    logger -p local0.info "[$tag:$LINENO] [$IFACE] radio-apply: done (mode=${R_MODE:-keep} bw=${R_BW:-keep})"
+    wifi_wpa_run_child logger -p local0.info "[$tag:$LINENO] [$IFACE] radio-apply: done (mode=${R_MODE:-keep} bw=${R_BW:-keep})"
     echo "radio-apply done for $IFACE (mode=${R_MODE:-keep} bw=${R_BW:-keep})"
     echo "--- link ---"
     # `iw link` 는 moal 에서 연결 중에도 "Not connected." 를 낼 수 있어 표시가 오해를 준다.
-    wpa_cli -i "$IFACE" status 2>/dev/null | grep -E '^(bssid|freq|ssid|wpa_state)='
-    iw dev "$IFACE" station dump 2>/dev/null | head -8
+    wifi_wpa_run_child wpa_cli -i "$IFACE" status 2>/dev/null | wifi_wpa_run_child grep -E '^(bssid|freq|ssid|wpa_state)='
+    wifi_wpa_run_child iw dev "$IFACE" station dump 2>/dev/null | wifi_wpa_run_child head -8
     echo "--- datarate ---"
-    mlanutl "$IFACE" getdatarate 2>/dev/null || true
+    wifi_wpa_run_child mlanutl "$IFACE" getdatarate 2>/dev/null || true
     ;;
   log)
     case "${3:-}" in

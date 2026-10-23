@@ -197,6 +197,133 @@ def _config(
     }
 
 
+def _run_event_service_policy(
+    tmp_path: Path, data: dict, *, event_initially_enabled: bool
+) -> tuple[subprocess.CompletedProcess[str], list[str], list[str]]:
+    config = tmp_path / "wifi_init_conf.json"
+    config.write_text(json.dumps(data))
+    calls = tmp_path / "systemctl.calls"
+    logs = tmp_path / "logger.calls"
+    calls.write_text("")
+    logs.write_text("")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_exe(
+        fake_bin / "systemctl",
+        """#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_SYSTEMCTL_CALLS"
+if [ "$1" = "is-enabled" ]; then
+  if [ "$3" = "wifi_event@mlan0.service" ] && [ "$FAKE_EVENT_ENABLED" = "1" ]; then
+    exit 0
+  fi
+  exit 1
+fi
+exit 0
+""",
+    )
+    _write_exe(
+        fake_bin / "logger",
+        """#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_LOGGER_CALLS"
+exit 0
+""",
+    )
+    result = subprocess.run(
+        ["bash", str(APPLY)],
+        env=os.environ
+        | {
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "WIFI_INIT_CONF_JSON": str(config),
+            "WIFI_APPLY_STRICT": "1",
+            "WIFI_RUN_DIR": str(tmp_path / "run"),
+            "FAKE_SYSTEMCTL_CALLS": str(calls),
+            "FAKE_LOGGER_CALLS": str(logs),
+            "FAKE_EVENT_ENABLED": "1" if event_initially_enabled else "0",
+        },
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+    return result, calls.read_text().splitlines(), logs.read_text().splitlines()
+
+
+def test_roam_garp_json_true_enables_wifi_event_as_sole_consumer(
+    tmp_path: Path,
+) -> None:
+    data = _config(False)
+    data["mlan0"]["roam_garp"] = {"enabled": True}
+
+    result, calls, _logs = _run_event_service_policy(
+        tmp_path, data, event_initially_enabled=False
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "enable wifi_event@mlan0.service" in calls
+    assert "disable wifi_event@mlan0.service" not in calls
+
+
+@pytest.mark.parametrize("garp_value", [False, None, "true", 1])
+def test_roam_garp_requires_strict_json_true(
+    tmp_path: Path, garp_value: object
+) -> None:
+    data = _config(False)
+    data["mlan0"]["roam_garp"] = {"enabled": garp_value}
+
+    result, calls, _logs = _run_event_service_policy(
+        tmp_path, data, event_initially_enabled=True
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "disable wifi_event@mlan0.service" in calls
+    assert "enable wifi_event@mlan0.service" not in calls
+
+
+def test_wifi_event_default_remains_off_without_any_consumer(tmp_path: Path) -> None:
+    result, calls, _logs = _run_event_service_policy(
+        tmp_path, _config(False), event_initially_enabled=True
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "disable wifi_event@mlan0.service" in calls
+    assert "enable wifi_event@mlan0.service" not in calls
+
+
+def test_disabled_iface_overrides_roam_garp_true(tmp_path: Path) -> None:
+    data = _config(False)
+    data["mlan0"]["enabled"] = False
+    data["mlan0"]["roam_garp"] = {"enabled": True}
+
+    result, calls, _logs = _run_event_service_policy(
+        tmp_path, data, event_initially_enabled=True
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "disable wifi_event@mlan0.service" in calls
+    assert "enable wifi_event@mlan0.service" not in calls
+
+
+@pytest.mark.parametrize("consumer", ["on-connect", "snmp-trap", "deferred-he-mcs"])
+def test_existing_wifi_event_consumers_still_enable_service(
+    tmp_path: Path, consumer: str
+) -> None:
+    data = _config(False)
+    if consumer == "on-connect":
+        data["mlan0"]["on_connect"]["enabled"] = True
+    elif consumer == "snmp-trap":
+        data["snmp"]["trap"]["enabled"] = True
+    else:
+        data["mlan0"]["STANDARD"] = "ax"
+        data["mlan0"]["mcs_tier"] = {"enabled": True, "he": "0-11"}
+
+    result, calls, _logs = _run_event_service_policy(
+        tmp_path, data, event_initially_enabled=False
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "enable wifi_event@mlan0.service" in calls
+    assert "disable wifi_event@mlan0.service" not in calls
+
+
 @pytest.mark.parametrize("roaming_enabled", [True, False])
 def test_roam_owner_drives_services_and_periodic_owner_is_forced_off(
     tmp_path: Path, roaming_enabled: bool
