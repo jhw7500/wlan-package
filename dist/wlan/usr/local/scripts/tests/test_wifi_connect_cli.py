@@ -73,6 +73,8 @@ STATUS_INITIAL = "bssid=04:ba:d6:ec:0b:08\nfreq=5220\nssid=jhw_wlan_\nid=0\nwpa_
 #                    -> OK. $WPA_STUB_DIR/landing 이 "id ssid freq" 면 status 를 그 값으로
 #                       바꾸고 fire 를 남긴다(착지). 없으면 status 불변, 이벤트 없음.
 #  - scan            -> scan-landing 파일이 있으면 그것을 착지로 사용한다.
+#  - fire-unmatched  -> landing 이 없을 때 이 id 로 CONNECTED 만 보내고 status 는 그대로 둔다.
+#  - fire-delay / daemon-interval -> 착지 이벤트를 그 초만큼 늦추고, 데몬 확인 간격을 바꾼다.
 WPA_CLI_STUB = r'''#!/bin/bash
 D="${WPA_STUB_DIR:?}"
 if [ "${1:-}" = "--daemon" ]; then
@@ -87,7 +89,9 @@ if [ "${1:-}" = "--daemon" ]; then
             id=$(cat "$D/fire"); rm -f "$D/fire"
             WPA_ID="$id" "$action" "$iface" CONNECTED
         fi
-        sleep 0.05
+        interval=0.05
+        [ -f "$D/daemon-interval" ] && read -r interval < "$D/daemon-interval"
+        sleep "$interval"
     done
 fi
 echo "wpa_cli $*" >> "$D/calls.log"
@@ -118,7 +122,14 @@ case "$cmd" in
                 "$lid" "$lfreq" "$lssid" "$lid" > "$D/status.new"
             mv -f "$D/status.new" "$D/status"
             : > "$D/fire-disconnected.tmp" && mv -f "$D/fire-disconnected.tmp" "$D/fire-disconnected"
-            echo "$lid" > "$D/fire.tmp" && mv -f "$D/fire.tmp" "$D/fire"
+            if [ -f "$D/fire-delay" ]; then
+                read -r delay < "$D/fire-delay"
+                ( sleep "$delay"; echo "$lid" > "$D/fire.tmp" && mv -f "$D/fire.tmp" "$D/fire" ) &
+            else
+                echo "$lid" > "$D/fire.tmp" && mv -f "$D/fire.tmp" "$D/fire"
+            fi
+        elif [ -f "$D/fire-unmatched" ]; then
+            cp "$D/fire-unmatched" "$D/fire.tmp" && mv -f "$D/fire.tmp" "$D/fire"
         fi
         echo OK ;;
     *) echo OK ;;
@@ -314,6 +325,28 @@ class FtpcmdTimingTrace(ConnectHarness):
         self.assertIn("phase=association_verified", timing)
         self.assertIn("path=scan", timing)
 
+    def test_association_is_verified_soon_after_the_connected_record(self):
+        # The event lands 30 ms after the request, just after the first poll
+        # already saw COMPLETED. A 0.1 s poll grid verifies on the next slot
+        # (about 60-70 ms after the event here); the wait wakes on the record.
+        # No argument: reassociate wait; an SSID: reconfigure grace wait.
+        for args, ssid in (((), "jhw_wlan_"), (("good-B",), "good-B")):
+            with self.subTest(args=args):
+                gaps = []
+                for _ in range(3):
+                    self.write_conf(CONF_MODE_B)
+                    (self.state / "status").write_text(STATUS_INITIAL)
+                    (self.state / "logger.log").write_text("")
+                    self.land_on(0, ssid, 5220)
+                    (self.state / "fire-delay").write_text("0.03\n")
+                    (self.state / "daemon-interval").write_text("0.005\n")
+                    r = self.run_connect(*args, trace=True)
+                    self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                    phase = {m.group(1): int(m.group(2)) for m in re.finditer(
+                        r"phase=(\w+) elapsed_ms=([0-9]+)", (self.state / "logger.log").read_text())}
+                    gaps.append(phase["association_verified"] - phase["connected_event"])
+                self.assertLessEqual(sorted(gaps)[1], 40, gaps)
+
     def test_reconnect_logs_disconnect_connect_verify_phases(self):
         self.write_conf(CONF_MODE_B)
         self.land_on(0, "jhw_wlan_", 5220)
@@ -415,6 +448,18 @@ class ModeANoArgReconnect(ConnectHarness):
         self.assertEqual(r.returncode, 8, r.stdout + r.stderr)
         self.assertIn("requested association not completed", r.stderr)
 
+    def test_unmatched_event_keeps_the_whole_association_budget(self):
+        """CONNECTED for another id leaves connected-id in place without a match.
+        The wait must not treat that record as news on every slot and run the
+        2 s budget (ASSOC_TIMEOUT_DEFAULT) down in a burst of polls."""
+        self.write_conf(CONF_MODE_A)
+        (self.state / "fire-unmatched").write_text("5\n")
+        started = time.monotonic()
+        r = self.run_connect()
+        elapsed = time.monotonic() - started
+        self.assertEqual(r.returncode, 8, r.stdout + r.stderr)
+        self.assertGreaterEqual(elapsed, 1.5, r.stdout + r.stderr)
+
     def test_ssid_argument_is_still_refused(self):
         self.write_conf(CONF_MODE_A)
         r = self.run_connect("jhw_wlan")
@@ -498,6 +543,91 @@ class ConnectInsidePidNamespace(ConnectHarness):
 # skip 이 아니라 미수집이어야 게이트가 커버리지 감소로 보지 않는다.
 if not _PIDNS:
     del ConnectInsidePidNamespace
+
+
+class WaitPollSlot(unittest.TestCase):
+    """connect_wait_poll_slot: wakes on a new CONNECTED record, else one clock slot."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp(prefix="wifi-wait-slot-"))
+        cls.helpers = cls.tmp / "helpers.sh"
+        lines = WIFI_SH.read_text(encoding="utf-8").splitlines(keepends=True)
+        start = next(i for i, l in enumerate(lines) if l.startswith("connect_wait_poll_slot() {"))
+        end = next(i for i in range(start, len(lines)) if lines[i] == "}\n") + 1
+        cls.helpers.write_text("".join(lines[start:end]), encoding="utf-8")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def wait_slot(self, *setup):
+        script = "\n".join([
+            "set -euo pipefail",
+            '. "%s"' % self.helpers,
+            'wifi_wpa_run_child() { echo "forked=$*"; command "$@"; }',
+            'd=$(mktemp -d); CONNECT_MONITOR_DIR="$d"; FRESH_EVENT_ID=""',
+            *setup,
+            's=$EPOCHREALTIME; connect_wait_poll_slot; e=$EPOCHREALTIME',
+            'echo "ms=$(( (${e/./} - ${s/./}) / 1000 ))"',
+            'wait; rm -rf "$d"',
+        ])
+        r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=10)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        ms = int(next(l for l in r.stdout.splitlines() if l.startswith("ms="))[3:])
+        forks = [l for l in r.stdout.splitlines() if l.startswith("forked=")]
+        return ms, forks
+
+    def test_new_record_wakes_within_a_tick(self):
+        ms, forks = self.wait_slot(
+            'mkfifo "$d/tick"',
+            '( sleep 0.03; printf "7\\n" > "$d/connected-id" ) &')
+        self.assertLess(ms, 75)
+        self.assertEqual(forks, [])
+
+    def test_record_the_last_poll_saw_waits_the_whole_slot(self):
+        ms, forks = self.wait_slot(
+            'mkfifo "$d/tick"', 'printf "7\\n" > "$d/connected-id"', 'FRESH_EVENT_ID=7')
+        self.assertGreaterEqual(ms, 80)
+        self.assertEqual(forks, [])
+
+    def test_missing_record_waits_the_whole_slot(self):
+        ms, forks = self.wait_slot('mkfifo "$d/tick"')
+        self.assertGreaterEqual(ms, 80)
+        self.assertEqual(forks, [])
+
+    def test_without_the_fifo_sleeps_one_slot(self):
+        ms, forks = self.wait_slot()
+        self.assertEqual(forks, ["forked=sleep 0.1"])
+
+
+class MonitorActionRecordsBeforeLogging(unittest.TestCase):
+    """The connect waits on connected-id, so the action writes it before the trace log."""
+
+    def test_connected_id_exists_when_the_event_is_logged(self):
+        text = WIFI_SH.read_text(encoding="utf-8")
+        start = text.index("wifi_wpa_run_child cat > \"$action\" <<'EOF'\n") + len("wifi_wpa_run_child cat > \"$action\" <<'EOF'\n")
+        body = text[start:text.index("\nEOF\n", start) + 1]
+        tmp = Path(tempfile.mkdtemp(prefix="wifi-action-"))
+        try:
+            mon, bin_dir = tmp / "mon", tmp / "bin"
+            mon.mkdir()
+            bin_dir.mkdir()
+            (mon / "action.sh").write_text(body)
+            (mon / "action.sh").chmod(0o700)
+            (mon / "armed").touch()
+            logger = bin_dir / "logger"
+            logger.write_text('#!/bin/sh\n[ -s "$MON/connected-id" ] && echo present >> "$MON/log" || echo absent >> "$MON/log"\n')
+            logger.chmod(0o755)
+            env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", MON=str(mon), WPA_ID="3",
+                       FTPCMD_TRACE_ID="test-trace", FTPCMD_TRACE_START_MS=str(int(time.monotonic() * 1000)))
+            r = subprocess.run(["sh", str(mon / "action.sh"), "mlan0", "CONNECTED"],
+                               capture_output=True, text=True, timeout=10, env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertEqual((mon / "connected-id").read_text(), "3\n")
+            self.assertEqual((mon / "log").read_text(), "present\n")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 class MonitorProcIdentityContract(unittest.TestCase):

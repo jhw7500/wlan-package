@@ -632,6 +632,8 @@ connect_event_monitor_start() { # $1 iface, $2 association timeout seconds
         || return 1
     action="$CONNECT_MONITOR_DIR/action.sh"
     pidfile="$CONNECT_MONITOR_DIR/wpa_cli.pid"
+    # Nothing writes to this FIFO; connect_wait_poll_slot times out on it.
+    wifi_wpa_run_child mkfifo -m 600 "$CONNECT_MONITOR_DIR/tick" 2>/dev/null || true
     wifi_wpa_run_child cat > "$action" <<'EOF'
 #!/bin/sh
 exec 6>&- 7>&- 8>&- 9>&-
@@ -667,10 +669,11 @@ case "${2:-}" in
         ;;
 esac
 case "${WPA_ID:-}" in ''|*[!0-9]*) exit 0 ;; esac
-ftpcmd_trace_event connected_event "$1"
+# Record the event before logging it: the connect waits on this file.
 tmp="$monitor_dir/connected-id.tmp.$$"
 (umask 077; printf '%s\n' "$WPA_ID" > "$tmp") || exit 1
 mv -f "$tmp" "$monitor_dir/connected-id"
+ftpcmd_trace_event connected_event "$1"
 EOF
     wifi_wpa_run_child chmod 0700 "$action" 2>/dev/null || {
         connect_event_monitor_cleanup
@@ -790,9 +793,8 @@ connect_event_monitor_arm() {
 # necessarily subsequent to the CONNECTED epoch.  The connect command sets the
 # target globals before invoking this helper.
 connect_association_poll_matches() {
-    if ! FRESH_EVENT_ID=$(wifi_wpa_child_exec cat "$CONNECT_MONITOR_DIR/connected-id" 2>/dev/null); then
-        FRESH_EVENT_ID=""
-    fi
+    FRESH_EVENT_ID=""
+    { IFS= read -r FRESH_EVENT_ID || :; } 2>/dev/null < "$CONNECT_MONITOR_DIR/connected-id" || :
     WPA_STATUS=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" status 2>/dev/null) || WPA_STATUS=""
     WPA_STATE=""; CUR_SSID=""; CUR_FREQ=""; CUR_ID=""; ASSOC_MATCH=0
     while IFS='=' read -r _key _value; do
@@ -825,6 +827,32 @@ connect_association_poll_matches() {
         fi
     fi
     [ "$ASSOC_MATCH" = "1" ]
+}
+
+# Wait one 0.1 s association poll slot. The monitor writes connected-id a few
+# tens of ms after CONNECTED, often just after a poll that already saw
+# COMPLETED, and that poll used to cost a whole slot. Wake early only when the
+# file holds an id the last poll did not see, so a record left from an earlier
+# event cannot shorten the wait, and end the slot by the clock so poll counts
+# keep their time budget. The 20 ms ticks block in read -t on the monitor's
+# FIFO instead of forking sleep.
+connect_wait_poll_slot() {
+    local tick="${CONNECT_MONITOR_DIR:-}/tick" id sec centi rest start now junk
+    if [ -z "${CONNECT_MONITOR_DIR:-}" ] || [ ! -p "$tick" ] \
+       || ! IFS=' .' read -r sec centi rest < /proc/uptime; then
+        wifi_wpa_run_child sleep 0.1
+        return 0
+    fi
+    start=$((sec * 100 + 10#$centi))
+    while :; do
+        id=""
+        { IFS= read -r id || :; } 2>/dev/null < "$CONNECT_MONITOR_DIR/connected-id" || :
+        [ -n "$id" ] && [ "$id" != "${FRESH_EVENT_ID:-}" ] && return 0
+        IFS=' .' read -r sec centi rest < /proc/uptime || return 0
+        now=$((sec * 100 + 10#$centi))
+        [ $((now - start)) -lt 10 ] || return 0
+        { IFS= read -r -t 0.02 junk || :; } 2>/dev/null <> "$tick" || :
+    done
 }
 
 # An FTP SSID switch may be applied in supplicant memory only while the running
@@ -3487,7 +3515,7 @@ case "$2" in
                 exit 0
             fi
             if [ "$_i" -lt "$GRACE_POLLS" ] && [ "$REMAINING_POLLS" -gt 0 ]; then
-                wifi_wpa_run_child sleep 0.1
+                connect_wait_poll_slot
             fi
         done
     fi
@@ -3530,7 +3558,7 @@ case "$2" in
         fi
         REMAINING_POLLS=$((REMAINING_POLLS - 1))
         [ "$ASSOC_MATCH" = "1" ] && break
-        [ "$REMAINING_POLLS" -gt 0 ] && wifi_wpa_run_child sleep 0.1
+        [ "$REMAINING_POLLS" -gt 0 ] && connect_wait_poll_slot
     done
     if [ "$ASSOC_MATCH" = "1" ]; then
         if [ "$HAS_TARGET" = "1" ] || [ "$APPLY_STORED_CONF" = "1" ]; then

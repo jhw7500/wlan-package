@@ -1823,14 +1823,14 @@ for wrapper, command in wrapper_re.findall(regions):
     inventory[wrapper].add(command)
 
 expected = {
-    "wifi_wpa_child_exec": {"cat", "mktemp", "wpa_cli", "timeout", "jq"},
+    "wifi_wpa_child_exec": {"mktemp", "wpa_cli", "timeout", "jq"},
     "wifi_wpa_child_call": {
         "to_freq_mhz_checked", "wifi_ssid_encode_values",
         "wifi_wpa_conf_common_freqs",
         "wifi_wpa_conf_network_count", "wifi_ssid_conf_to_wpa_text",
     },
     "wifi_wpa_run_child": {
-        "awk", "cat", "chmod", "cp", "mkdir", "rm", "sleep", "sync", "wpa_cli", "jq", "mv", "logger",
+        "awk", "cat", "chmod", "cp", "mkdir", "mkfifo", "rm", "sleep", "sync", "wpa_cli", "jq", "mv", "logger",
     },
     "wifi_wpa_run_child_call": {
         "safe_install_sync", "wifi_wpa_conf_is_multi_topology",
