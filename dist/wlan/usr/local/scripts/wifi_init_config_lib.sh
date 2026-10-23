@@ -279,23 +279,27 @@ _wifi_roam_policy_mark_latched() {
     wifi_sync_path_or_global "$latch_dir" || return 1
 }
 
-wifi_roam_policy_validate_file() {
-    local file="$1" iface="$2" extras
-    [ -f "$file" ] || return 1
-    command -v jq >/dev/null 2>&1 || return 1
-    extras=$(jq -ce --arg iface "$iface" '
-        if type == "object" and
+# Roam-policy snapshot schema as a jq condition ($iface bound by the caller).
+# wifi_wpa_conf_is_multi_topology checks the same schema in its own jq call.
+WIFI_ROAM_POLICY_JQ_VALID='type == "object" and
            .version == 1 and
            .iface == $iface and
            (.roaming_enabled | type == "boolean") and
            (.bgscan_enabled | type == "boolean") and
            (.generate_network_blocks | type == "boolean") and
            (.extra_ssids | type == "array") and
-           all(.extra_ssids[]; type == "string")
+           all(.extra_ssids[]; type == "string")'
+
+wifi_roam_policy_validate_file() {
+    local file="$1" iface="$2" extras
+    [ -f "$file" ] || return 1
+    command -v jq >/dev/null 2>&1 || return 1
+    extras=$(jq -ce --arg iface "$iface" "
+        if $WIFI_ROAM_POLICY_JQ_VALID
         then .extra_ssids
-        else error("invalid roam policy")
+        else error(\"invalid roam policy\")
         end
-    ' "$file" 2>/dev/null) || return 1
+    " "$file" 2>/dev/null) || return 1
     # The schema check above completely validates an empty array.  Avoid a
     # Python startup when there are no SSID byte identities left to inspect.
     [ "$extras" = "[]" ] && return 0
@@ -425,28 +429,44 @@ wifi_wpa_conf_network_count() {
 # 우선순위: 이 boot snapshot > (테스트/boot 전) live JSON > 실제 conf shape/sentinel.
 # snapshot이 존재하지만 invalid면 안전하게 multi로 판정해 mutation을 차단한다.
 wifi_wpa_conf_is_multi_topology() {
-    local iface="$1" conf="$2" policy latch gen="" count
+    local iface="$1" conf="$2" policy latch gen="" count state extras
     local conf_json="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
     policy=$(wifi_roam_policy_path "$iface") || return 0
-    latch=$(wifi_roam_policy_latch_path "$iface") || return 0
     if [ -e "$policy" ]; then
-        if ! wifi_roam_policy_validate_file "$policy" "$iface"; then
-            return 0
-        fi
-        gen=$(jq -r '.generate_network_blocks' "$policy" 2>/dev/null) || return 0
+        # Same checks as wifi_roam_policy_validate_file, but one jq call also
+        # returns generate_network_blocks. true is multi whether or not the
+        # extras would validate, so only false needs the SSID check.
+        [ -f "$policy" ] || return 0
+        command -v jq >/dev/null 2>&1 || return 0
+        state=$(jq -ce --arg iface "$iface" "
+            if $WIFI_ROAM_POLICY_JQ_VALID
+            then [.generate_network_blocks, .extra_ssids]
+            else error(\"invalid roam policy\")
+            end
+        " "$policy" 2>/dev/null) || return 0
+        case "$state" in
+            '[false,'*']') extras=${state#'[false,'}; extras=${extras%']'} ;;
+            *) return 0 ;;
+        esac
+        [ "$extras" = "[]" ] || wifi_ssid_array_validate_json "$extras" || return 0
     else
         # Snapshot이 이미 생성된 boot에 파일만 유실된 상태. live JSON으로
         # 단일 topology를 추측해 writer가 SSID를 일괄 치환하지 못하게 차단.
+        latch=$(wifi_roam_policy_latch_path "$iface") || return 0
         [ ! -e "$latch" ] || return 0
         if wifi_init_conf_status "$conf_json"; then
             gen=$(wifi_init_normalize_bool \
                 "$(wifi_init_json_read_raw "$conf_json" ".${iface}.roaming.generate_network_blocks")" \
                 false)
         fi
+        [ "$gen" = "true" ] && return 0
     fi
-    [ "$gen" = "true" ] && return 0
-    grep -q '^# >>> wifi_extra_ssid' "$conf" 2>/dev/null && return 0
-    count=$(wifi_wpa_conf_network_count "$conf") || return 0
+    # Sentinel and network block count (wifi_wpa_conf_network_count) in one awk.
+    [ -f "$conf" ] || return 1
+    count=$(awk '/^# >>> wifi_extra_ssid/ { sentinel = 1 }
+                 /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { n++ }
+                 END { print (sentinel ? "sentinel" : n + 0) }' "$conf") || return 0
+    [ "$count" = sentinel ] && return 0
     [ "${count:-0}" -gt 1 ] 2>/dev/null && return 0
     return 1
 }
@@ -457,7 +477,7 @@ wifi_wpa_conf_is_multi_topology() {
 wifi_change_guard_acquire() {
     local iface="$1" mode="${2:-shared}" run_dir="${WIFI_RUN_DIR:-/run/wifi}"
     command -v flock >/dev/null 2>&1 || return 1
-    mkdir -p "$run_dir" || return 1
+    [ -d "$run_dir" ] || mkdir -p "$run_dir" || return 1
     exec 6>"$run_dir/${iface}.change.lock" || return 1
     case "$mode" in
         exclusive) ( exec 7>&- 8>&- 9>&-; flock -n -x 6 ) ;;
@@ -471,7 +491,7 @@ wifi_change_guard_acquire() {
 wifi_wpa_conf_lock_acquire() {
     local iface="$1" run_dir="${WIFI_RUN_DIR:-/run/wifi}" lock_file mode="${2:-wait}"
     command -v flock >/dev/null 2>&1 || return 1
-    mkdir -p "$run_dir" || return 1
+    [ -d "$run_dir" ] || mkdir -p "$run_dir" || return 1
     lock_file="$run_dir/${iface}.wpa-conf.lock"
     exec 9>"$lock_file" || return 1
     if [ "$mode" = try ]; then
@@ -579,7 +599,7 @@ wifi_scan_transition_lock_acquire() {
         ''|*[!0-9]*|*) timeout=15 ;;
     esac
     command -v flock >/dev/null 2>&1 || return 1
-    wifi_wpa_run_child mkdir -p "$run_dir" || return 1
+    [ -d "$run_dir" ] || wifi_wpa_run_child mkdir -p "$run_dir" || return 1
     lock_file="$run_dir/${iface}.scan-transition.lock"
     exec 7>"$lock_file" || return 1
     ( exec 9>&-; exec 6>&- 8>&-; flock -w "$timeout" -x 7 )

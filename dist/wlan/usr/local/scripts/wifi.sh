@@ -623,13 +623,10 @@ connect_event_monitor_start() { # $1 iface, $2 association timeout seconds
     else
         CONNECT_MONITOR_PROC_LOCAL=0
     fi
-    wifi_wpa_run_child mkdir -p "$WIFI_RUN_DIR" 2>/dev/null || return 1
+    [ -d "$WIFI_RUN_DIR" ] || wifi_wpa_run_child mkdir -p "$WIFI_RUN_DIR" 2>/dev/null || return 1
+    # mktemp -d creates the directory 0700 (mkdtemp), so no chmod is needed.
     CONNECT_MONITOR_DIR=$(wifi_wpa_child_exec mktemp -d "$WIFI_RUN_DIR/${iface}.connect-monitor.XXXXXX") \
         || return 1
-    wifi_wpa_run_child chmod 0700 "$CONNECT_MONITOR_DIR" 2>/dev/null || {
-        connect_event_monitor_cleanup
-        return 1
-    }
     action="$CONNECT_MONITOR_DIR/action.sh"
     pidfile="$CONNECT_MONITOR_DIR/wpa_cli.pid"
     wifi_wpa_run_child cat > "$action" <<'EOF'
