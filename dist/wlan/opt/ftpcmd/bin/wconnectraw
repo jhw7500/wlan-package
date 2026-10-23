@@ -5,9 +5,9 @@
 # This deliberately bypasses the persistent wifi connect transaction: it does
 # not validate the SSID, inspect topology, edit/sync wpa_supplicant.conf, or
 # wait for association. It changes the selected network in supplicant memory,
-# submits reassociate and returns. Both commands must return process rc 0 and
-# an exact OK control reply. A later reconfigure or service restart restores
-# the on-disk configuration.
+# drops the current link, submits reassociate and returns. Every command must
+# return process rc 0 and an exact OK control reply. A later reconfigure or
+# service restart restores the on-disk configuration.
 set -u
 
 WPA_CLI=/usr/sbin/wpa_cli
@@ -70,13 +70,21 @@ if [ "$STATUS_RC" -ne 0 ]; then
 fi
 
 NETWORK_ID=""
+WPA_STATE=""
 while IFS='=' read -r _key _value; do
     case "$_key" in
         id) NETWORK_ID=$_value ;;
+        wpa_state) WPA_STATE=$_value ;;
     esac
 done <<EOF
 $STATUS
 EOF
+if [ "$WPA_STATE" = "INTERFACE_DISABLED" ]; then
+    # wpa_supplicant refuses reassociate here, but disconnect would still keep it
+    # down after the interface comes back up, so change nothing.
+    raw_log_failure 1 "interface disabled (wpa_state=INTERFACE_DISABLED)"
+    exit 1
+fi
 if [ -z "$NETWORK_ID" ]; then
     # Disconnected status has no id. Use the selected network if one is marked
     # CURRENT, or the only enabled network when there is no current selection.
@@ -111,25 +119,39 @@ SSID_VALUE=\"$SSID\"
 SET_REPLY=$($WPA_CLI -i "$IFACE" set_network "$NETWORK_ID" ssid "$SSID_VALUE" 2>&1)
 SET_RC=$?
 SET_DONE_MS=$(monotonic_ms 2>/dev/null || printf '%s\n' "$STATUS_DONE_MS")
+if [ "$SET_RC" -ne 0 ] || [ "$SET_REPLY" != "OK" ]; then
+    # Nothing has touched the link yet, so leave it as it is.
+    raw_log_failure 7 "set_rc=$SET_RC set_reply=${SET_REPLY:-empty}"
+    exit 7
+fi
+
+# An association to another BSS while the old link is still up is refused with
+# EALREADY; wpa_supplicant then puts the target BSSID on its ignore list and
+# connects only after another scan. Drop the link first. After disconnect
+# wpa_supplicant stays down until a reassociate or reconnect, so reassociate is
+# sent even if disconnect failed.
+DISC_REPLY=$($WPA_CLI -i "$IFACE" disconnect 2>&1)
+DISC_RC=$?
+DISC_DONE_MS=$(monotonic_ms 2>/dev/null || printf '%s\n' "$SET_DONE_MS")
 
 REASSOC_REPLY=$($WPA_CLI -i "$IFACE" reassociate 2>&1)
 REASSOC_RC=$?
-REASSOC_DONE_MS=$(monotonic_ms 2>/dev/null || printf '%s\n' "$SET_DONE_MS")
+REASSOC_DONE_MS=$(monotonic_ms 2>/dev/null || printf '%s\n' "$DISC_DONE_MS")
 
-case "$START_MS:$PARSED_MS:$STATUS_DONE_MS:$SET_DONE_MS:$REASSOC_DONE_MS" in
+case "$START_MS:$PARSED_MS:$STATUS_DONE_MS:$SET_DONE_MS:$DISC_DONE_MS:$REASSOC_DONE_MS" in
     *[!0-9:]*) ;;
     *)
         logger -p local0.info \
-            "ftpcmd_raw_timing trace=$TRACE_ID phase=commands_submitted elapsed_ms=$((REASSOC_DONE_MS - START_MS)) iface=$IFACE parse_ms=$((PARSED_MS - START_MS)) id_lookup_ms=$((STATUS_DONE_MS - PARSED_MS)) set_network_ms=$((SET_DONE_MS - STATUS_DONE_MS)) reassociate_ms=$((REASSOC_DONE_MS - SET_DONE_MS)) set_rc=$SET_RC reassociate_rc=$REASSOC_RC" \
+            "ftpcmd_raw_timing trace=$TRACE_ID phase=commands_submitted elapsed_ms=$((REASSOC_DONE_MS - START_MS)) iface=$IFACE parse_ms=$((PARSED_MS - START_MS)) id_lookup_ms=$((STATUS_DONE_MS - PARSED_MS)) set_network_ms=$((SET_DONE_MS - STATUS_DONE_MS)) disconnect_ms=$((DISC_DONE_MS - SET_DONE_MS)) reassociate_ms=$((REASSOC_DONE_MS - DISC_DONE_MS)) set_rc=$SET_RC disconnect_rc=$DISC_RC reassociate_rc=$REASSOC_RC" \
             >/dev/null 2>&1 || true
         ;;
 esac
 
-if [ "$SET_RC" -eq 0 ] && [ "$SET_REPLY" = "OK" ] \
+if [ "$DISC_RC" -eq 0 ] && [ "$DISC_REPLY" = "OK" ] \
    && [ "$REASSOC_RC" -eq 0 ] && [ "$REASSOC_REPLY" = "OK" ]; then
     exit 0
 fi
 
 raw_log_failure 7 \
-    "set_rc=$SET_RC set_reply=${SET_REPLY:-empty} reassociate_rc=$REASSOC_RC reassociate_reply=${REASSOC_REPLY:-empty}"
+    "disconnect_rc=$DISC_RC disconnect_reply=${DISC_REPLY:-empty} reassociate_rc=$REASSOC_RC reassociate_reply=${REASSOC_REPLY:-empty}"
 exit 7

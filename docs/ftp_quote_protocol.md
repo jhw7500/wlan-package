@@ -209,9 +209,26 @@ quote wconnectraw <mlan0|mlan1|0|1> <ssid words...>
 ~~~
 
 SSID는 필수다. 현재 선택된 `network` ID가 없으면 유일하게 활성화된
-`network`를 찾는다. `wpa_cli set_network <id> ssid ...`와
-`wpa_cli reassociate`를 제출하고 두 응답이 정확히 `OK`이면 즉시
-`200 SUCCESS`를 반환한다.
+`network`를 찾는다. `wpa_cli set_network <id> ssid ...`, `wpa_cli disconnect`,
+`wpa_cli reassociate`를 차례로 제출하고 세 응답이 모두 정확히 `OK`이면
+즉시 `200 SUCCESS`를 반환한다.
+
+`disconnect`를 먼저 보내는 이유는 기존 연결을 유지한 채 다른 AP로 연결을
+요청하면 연결 요청이 `EALREADY`로 거부되고, wpa_supplicant가 목표 BSSID를
+ignore list에 올린 뒤 스캔을 한 번 더 하고 나서야 연결하기 때문이다. 같은
+SSID를 지정해도 연결을 한 번 끊고 다시 연결한다.
+
+`wpa_cli status`가 `wpa_state=INTERFACE_DISABLED`(예: `quote ifcdown` 뒤)이면
+아무것도 바꾸지 않고 코드 `1`로 끝난다. 이 상태에서는 `reassociate`가
+거부되는데, `disconnect`만 적용되면 인터페이스를 다시 올린 뒤에도
+wpa_supplicant가 스스로 연결하지 않기 때문이다.
+`set_network`가 실패하면 그 뒤 명령을 보내지 않으므로 현재 연결은 그대로다.
+`disconnect` 뒤의 wpa_supplicant는 `reassociate`나 `reconnect`가 올 때까지
+다시 연결하지 않는다. 그래서 `disconnect`가 실패해도 `reassociate`는 보낸다.
+`disconnect` 이후 단계가 실패해 코드 `7`이 나오면 연결이 끊긴 채 남을 수
+있다. `wifi_checker`가 동작 중이면 미연결이 `MAX_UNSTABLE_DURATION`(기본
+10초) 이상 이어질 때 재연결을 한 번 요청한다. 바로 복구하려면
+`quote wconnect <iface>`로 저장된 프로필을 다시 적용한다.
 
 이 성공은 **명령 제출 성공**만 뜻한다. AP 연결 완료를 기다리지 않으며,
 SSID 검증, 설정 파일 저장, 주파수 적용도 하지 않는다. 이후
@@ -239,9 +256,9 @@ vsftpd가 핸들러를 30초에 강제 종료하면 `550 Command timed out: <com
 | `wstatus` | `2` | 인터페이스 인자 오류 또는 인자 초과 |
 | `wstatus` | `7` | supplicant 상태 조회 실패 또는 필수 상태값 누락 |
 | `wstatus` | `8` | 상태 조회는 성공했으나 현재 연결되지 않음 |
-| `wconnectraw` | `1` | 상태 조회 실패 또는 사용할 `network`를 결정할 수 없음 |
+| `wconnectraw` | `1` | 상태 조회 실패, 인터페이스 비활성(`INTERFACE_DISABLED`), 또는 사용할 `network`를 결정할 수 없음 |
 | `wconnectraw` | `2` | 필수 인터페이스 누락·오류 또는 SSID 누락 |
-| `wconnectraw` | `7` | `set_network` 또는 `reassociate` 명령 실패 |
+| `wconnectraw` | `7` | `set_network`, `disconnect` 또는 `reassociate` 명령 실패. `set_network` 실패면 현재 연결은 그대로이고, 그 뒤 단계 실패면 연결이 끊긴 채 남을 수 있다 |
 
 `wssid`, `wfreq`, `wconnect`는 하위 명령의 종료 코드를 전달할 수 있으므로
 표에 없는 `N`이 나올 수도 있다. 핸들러 로그의 `code`와 `detail`을 함께
@@ -324,10 +341,11 @@ ftpcmd_result trace=<id> command=wconnect status=fail code=<N> iface=<iface> det
 로그는 `[wifi.sh:<line>]` 태그를 사용하며 `freq` 명령의 모든 주파수
 인자를 기록한다.
 
-`wconnectraw`는 연결 완료가 아닌 명령 제출 시간만 기록한다.
+`wconnectraw`는 연결 완료가 아닌 명령 제출 시간만 기록한다. `set_network`가
+실패하면 타이밍 줄 없이 실패 줄만 남긴다.
 
 ~~~text
-ftpcmd_raw_timing trace=<id> phase=commands_submitted elapsed_ms=<ms> iface=<iface> parse_ms=<ms> id_lookup_ms=<ms> set_network_ms=<ms> reassociate_ms=<ms> set_rc=<rc> reassociate_rc=<rc>
+ftpcmd_raw_timing trace=<id> phase=commands_submitted elapsed_ms=<ms> iface=<iface> parse_ms=<ms> id_lookup_ms=<ms> set_network_ms=<ms> disconnect_ms=<ms> reassociate_ms=<ms> set_rc=<rc> disconnect_rc=<rc> reassociate_rc=<rc>
 ftpcmd_raw_result trace=<id> command=wconnectraw status=fail code=<N> iface=<iface> detail=<detail>
 ~~~
 
