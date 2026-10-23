@@ -97,7 +97,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 - **`mgmt_acl` 섹션 신규 (2026-09-03, #256)**: `mgmt_acl.enabled` + `mgmt_acl.allowed_hosts` — 무선측 관리 포트 인바운드 화이트리스트(기본 off/opt-in). §3.12 참조.
 - **`global`**: `BOARD_TYPE`, `BUS_TYPE`, `BLUETOOTH.enable`, `tx_work`, `ping_monitor.enabled`.
 - **`wbridge`**: `ip_discovery`, `eth_client_ip`, `eth_sweep_subnet`, `peer_route.enabled`, `arp_ignore_always.enabled`, `engine`(pcap|tpacket|moal), `moal.{keepalive_ms, keepalive_idle_ms, debug, peer, consume_link_local}`, `optimize.*`, `thermal.*` 재구성.
-- **`mlanN`**: `connect_threshold`(-100), `mgmt_hex_dump_enable`(false), `thermal_mgmt`(true), `rate_adapt`, `logger.enabled`.
+- **`mlanN`**: `connect_threshold`(-100), `connect_fallback.{enabled, attempt_timeout_sec, rollback_timeout_sec}`, `mgmt_hex_dump_enable`(false), `thermal_mgmt`(true), `rate_adapt`, `logger.enabled`.
 - **`mlanN.roaming`**: `generate_network_blocks`(false), `ROAM_CROSS_FAIL_RETRY_COUNT`(2), `extra_ssids`([]), `enabled`.
 - **`mlanN.bgscan`**: `ssid_filter`(true), `freq_filter`(true), `enabled`.
 - **`mlanN.periodic_roam`**: `scan_before_roam`(true).
@@ -428,6 +428,37 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 불변식이므로 해당 필드들을 읽기 전용으로 표시한다. imx8에서는 strict imx93 profile을
 보드 설정 단계에서 비활성화하고 verify를 제거한다.
 
+#### 3.10.1a mlanN.connect_fallback (수동 연결 실패 복구)
+
+| 경로(`mlanN.connect_fallback.`) | 라벨 | 타입 | 기본값 (mlan0 / mlan1) | 허용값/범위 | UI편집 | 적용시점 | 설명 |
+|---|---|---|---|---|---|---|---|
+| `enabled` | 수동 연결 실패 복구 | bool | `false` | true\|false | yes | next-command | `wifi <iface> connect`와 이를 호출하는 FTP `wconnect`의 실패 복구를 opt-in. false면 기존처럼 실패한 대상 설정을 유지 |
+| `attempt_timeout_sec` | 새 연결 확인 예산 | int | `15` | 1~15초 | yes | next-command | `enabled=true`일 때의 목표 association 확인 예산. FTP 30초 제한 안에 복원 예산을 남기도록 최대 15초. false이면 기존 `ASSOC_TIMEOUT_DEFAULT` 유지 |
+| `rollback_timeout_sec` | 이전 연결 복원 확인 예산 | int | `5` | 1~5초 | yes | next-command | 이전 프로필 복원·reconfigure 후 이전 association 확인 예산 |
+
+**비고 (connect_fallback)** — 소비: `wifi.sh`. 이 정책은 사용자가 직접 실행한 CLI/FTP
+connect에만 적용된다. OPC의 경쟁 wireless profile/radio helper write는 같은 인터페이스의
+active fallback과 충돌하면 busy로 거부되지만 OPC helper가 스스로 fallback을 시작하지는
+않는다. ChangeIp의 IP/route 처리는 기존의 별도 계약을 유지한다. checker/background reconnect/roam도 실행
+주체가 아니며, Mode A(`generate_network_blocks=true`)와 다중 `network` 구성의 선택·복구는
+supplicant가 소유하므로 이 정책에서 제외된다.
+
+마지막으로 association까지 검증된 완전한 프로필(SSID, 주파수 정책, 인증 설정)만
+`/run/wifi` 아래 인터페이스별 mode `0600` 상태로 보관한다. 재부팅 뒤에는 유지되지 않는다.
+가능하면 `wssid`/`wfreq` 및 CLI의 PSK/key 변경을 staging하기 전에 현재 연결 프로필을
+검증해 저장하고, 목표 연결 성공 뒤 새 프로필로 갱신한다. 검증되지 않은 설정 사본은
+known-good으로 승격하지 않는다. known-good이 없어도 새 연결 시도는 허용하되 실패 시
+`fallback-unavailable`을 로그에 명시한다.
+
+복구 가능한 실패면 이전 프로필을 되쓰고 reconfigure한 뒤 이전 association까지 확인한다.
+복원 성공 여부와 무관하게 원래 nonzero connect 결과를 반환한다(일반 association/control
+오류는 7/8). 사용자 출력은 `fallback restored`/`fallback failed`/`fallback unavailable`,
+syslog는 `outcome=restored`/`outcome=restore-failed`/`outcome=fallback-unavailable`로
+구분한다. active fallback 동안 같은 인터페이스의 설정 변경과 런타임 연결 변경(OPC의
+wireless profile/radio helper write 포함)은 busy(코드 6)로 거부하고 조회는
+허용한다. 시간값은 userspace의 경과 시간 예산이며 커널 I/O가 멈춘 경우까지 강제로
+중단하는 hard cap을 보장하지 않는다.
+
 #### 3.10.2 mlanN.logger (per-iface 로거)
 
 | 경로(`mlanN.logger.`) | 라벨 | 타입 | 기본값 (mlan0 / mlan1) | 허용값/범위 | UI편집 | 적용시점 | 설명 |
@@ -605,7 +636,7 @@ association proof를 사용한다. 다음 CONNECTED 검증 성공 시 pending/1�
 | **기본/드라이버** | `global.*`(BOARD_TYPE, BUS_TYPE, BLUETOOTH.enable, MOD_PARA, CAL/TXPWR, STANDARD, DEV_CAP_MASK, ANT_TYPE, tx_work), `mac.*`, `mlanN.{STANDARD, CAL_DATA_CFG, TXPWRLIMIT_PATH, Frequency, net_rx, mgmt_hex_dump_enable, rate_adapt.*}` | 대부분 caution/reboot. MAC·펌웨어·표준은 고급 |
 | **인터페이스 활성화** | `mlanN.enabled`, `global.ping_monitor.enabled`, 각 `*.enabled` 토글 | mlan1 기본 off |
 | **브릿지** | `wbridge.{enabled, bridge_iface, mac_mode, ip_discovery, eth_client_ip, eth_link_wait_sec, eth_sweep_subnet, peer_route.enabled, arp_ignore_always.enabled, engine}`, `wbridge.moal.*`(고급), `wbridge.optimize.*`, `wbridge.link_guard.*` | moal.*/arp_ignore_always는 고급 |
-| **로밍** | `mlanN.roaming.*`, `mlanN.bgscan.*`, `mlanN.mcs_tier.*`, `mlanN.connect_threshold` | owner/topology는 reboot 표시. `periodic_roam.*`은 deprecated read-only. 고급기능(PREDICTIVE_ROAM)은 "고급 로밍" 하위로 |
+| **로밍·연결** | `mlanN.roaming.*`, `mlanN.bgscan.*`, `mlanN.mcs_tier.*`, `mlanN.connect_threshold`, `mlanN.connect_fallback.*` | owner/topology는 reboot 표시. connect_fallback은 next-command 표시. `periodic_roam.*`은 deprecated read-only. 고급기능(PREDICTIVE_ROAM)은 "고급 로밍" 하위로 |
 | **모니터링·발열** | `temperature.*`, `wbridge.thermal.*`, `mmc.*`, `mcp.*`, `monitor.*`, `logger.*`, `mlanN.logger.*`, `eth0.logger.*`, `mlanN.thermal_mgmt` | 온도 임계·게인은 고급/읽기전용 |
 | **헬스·리부트** | `mlanN.checker.*`, `mlanN.arping.*` | 재부팅 정책 항목(MAX_REBOOT_COUNT 등)은 고급 |
 | **SNMP** | `snmp.enabled`, `snmp.trap.*` | snmp.enabled는 고급(포트 오픈) |

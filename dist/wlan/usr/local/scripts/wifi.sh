@@ -27,6 +27,11 @@ if [ -r /usr/local/scripts/wifi_fw_config_lib.sh ]; then
 elif [ -r "$SCRIPT_DIR/wifi_fw_config_lib.sh" ]; then
     . "$SCRIPT_DIR/wifi_fw_config_lib.sh"
 fi
+if [ -r "$SCRIPT_DIR/wifi_connect_fallback_lib.sh" ]; then
+    . "$SCRIPT_DIR/wifi_connect_fallback_lib.sh"
+else
+    . /usr/local/scripts/wifi_connect_fallback_lib.sh
+fi
 
 tag=wifi.sh
 IFACE=mlan
@@ -84,7 +89,7 @@ sync_path_or_global() {
 
 safe_install_sync() {
     # $1: src(tmp), $2: dst(real)
-    local src="$1" dst="$2" mode=0644 stage dst_dir
+    local src="$1" dst="$2" mode="${3:-0644}" stage dst_dir
     case "$dst" in
         */wpa_supplicant-*.conf) mode=0600 ;;
     esac
@@ -629,7 +634,7 @@ connect_event_monitor_start() { # $1 iface, $2 association timeout seconds
     pidfile="$CONNECT_MONITOR_DIR/wpa_cli.pid"
     wifi_wpa_run_child cat > "$action" <<'EOF'
 #!/bin/sh
-exec 7>&- 9>&-
+exec 6>&- 7>&- 8>&- 9>&-
 monitor_dir=${0%/*}
 [ -f "$monitor_dir/armed" ] || exit 0
 
@@ -683,7 +688,7 @@ EOF
     }
     watchdog_ticks=$((timeout * 10 + 50))
     (
-        exec 7>&- 9>&-
+        exec 6>&- 7>&- 8>&- 9>&-
         # Survive shell/job-control hangup propagation if the owning command
         # is killed before its EXIT trap can stop this watchdog.
         trap '' HUP
@@ -2261,6 +2266,47 @@ if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ] && [ "$IFACE" != "eth0" ];
     usage
 fi
 
+# Queries remain available during a manual fallback. Runtime mutations share a
+# gate with OPC; the connect owning fallback holds it exclusively until cleanup.
+if [ "$IFACE" = mlan0 ] || [ "$IFACE" = mlan1 ]; then
+    CHANGE_GUARD=1
+    CHANGE_GUARD_MODE=shared
+    case "${2:-}" in
+        connect|freq|ssid|psk|key)
+            wifi_connect_fallback_load "$IFACE" || exit 1
+            CHANGE_GUARD=1
+            if [ "$2" = connect ] && [ "$CONNECT_FALLBACK_ENABLED" = 1 ]; then
+                CHANGE_GUARD_MODE=exclusive
+            fi
+            ;;
+        info|status|mon|'') CHANGE_GUARD=0 ;;
+        mode|bw|rate|mcs|standard|ip)
+            case "${3:-}" in ''|get) CHANGE_GUARD=0 ;; esac ;;
+        mscan)
+            [ "${3:-}" != get ] || CHANGE_GUARD=0 ;;
+        roam)
+            case "${3:-}" in
+                '') CHANGE_GUARD=0 ;;
+                th) [ -n "${5:-}" ] || CHANGE_GUARD=0 ;;
+                diff|gate) [ -n "${4:-}" ] || CHANGE_GUARD=0 ;;
+            esac ;;
+        br)
+            case "${3:-}" in
+                status) CHANGE_GUARD=0 ;;
+                profile|factory-profile)
+                    [ "${5:-}" = apply ] || CHANGE_GUARD=0 ;;
+                route)
+                    case "${4:-}" in ''|get|show|status|find) CHANGE_GUARD=0 ;; esac ;;
+            esac ;;
+        log)
+            case "${3:-}" in ''|status) CHANGE_GUARD=0 ;; esac ;;
+    esac
+    if [ "$CHANGE_GUARD" = 1 ] && ! wifi_change_guard_acquire "$IFACE" "$CHANGE_GUARD_MODE"; then
+        echo "Error: configuration/connection change busy for $IFACE" >&2
+        exit 6
+    fi
+fi
+
 case "$2" in
   info)
     show_info "$IFACE"
@@ -2759,6 +2805,7 @@ case "$2" in
     if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
     wifi_wpa_conf_lock_acquire "$IFACE" \
         || { echo "Error: failed to lock $CONF" >&2; exit 1; }
+    wifi_connect_fallback_capture "$IFACE" "$CONF" || exit 1
     FREQS=()
     # to_freq_mhz는 비숫자 토큰을 그대로 되돌려주고 1000 미만 정수를 5000+5*v로
     # 매핑한다 → 재검사가 없으면 freq_list=abc(파싱 실패로 주파수 핀 해제) 나
@@ -2785,6 +2832,7 @@ case "$2" in
     if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
     wifi_wpa_conf_lock_acquire "$IFACE" \
         || { echo "Error: failed to lock $CONF" >&2; exit 1; }
+    wifi_connect_fallback_capture "$IFACE" "$CONF" || exit 1
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> ssid <NEW_SSID>" >&2; exit 1; fi
     if wifi_wpa_run_child_call wifi_wpa_conf_is_multi_topology "$IFACE" "$CONF"; then
         echo "Error: $CONF 는 Mode A 또는 다중 network topology입니다." >&2
@@ -2842,6 +2890,7 @@ case "$2" in
     wifi_wpa_conf_lock_acquire "$IFACE" \
         || { echo "Error: failed to lock $CONF" >&2; exit 1; }
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> psk <NEW_PSK>" >&2; exit 1; fi
+    wifi_connect_fallback_capture "$IFACE" "$CONF" || exit 1
     NEW_PSK="$1"
     # wpa_supplicant는 따옴표 passphrase를 8..63자로 제한한다. 벗어나면 해당 network
     # 블록만 버리는 게 아니라 conf 전체 로드에 실패해 supplicant가 아예 뜨지 않는다.
@@ -2901,6 +2950,7 @@ case "$2" in
     wifi_wpa_conf_lock_acquire "$IFACE" \
         || { echo "Error: failed to lock $CONF" >&2; exit 1; }
     if [ $# -lt 1 ]; then echo "usage: wifi <iface> key <0|1|NONE|WPA-PSK>" >&2; exit 1; fi
+    wifi_connect_fallback_capture "$IFACE" "$CONF" || exit 1
     NEW_KEY="$1"
     [ "$NEW_KEY" = "0" ] && NEW_KEY="NONE"
     [ "$NEW_KEY" = "1" ] && NEW_KEY="WPA-PSK"
@@ -2961,12 +3011,13 @@ case "$2" in
     # 인자 없음: 일반 CLI는 강제 재연결; FTP wconnect는 이미 연결된 프로필이
     #            저장된 설정과 일치하면 유지하고, 아니면 conf를 다시 적재한다.
     # 연결이 필요하면 reassociate 우선, 실패 시 reconnect fallback 후 assoc 대기.
-    # exit: 0=ok 1=usage/env 7=wpa_cli 8=assoc-timeout
-    # known limitation: reconfigure 뒤 assoc 타임아웃(8) 시 conf는
-    #   새 ssid로 이미 persist된다(라이브는 옛 AP일 수 있음).
-    #   ssid 변경은 의도된 영속이라 rollback하지 않는다 — 다음 재시도/부팅 시 적용.
+    # exit: 0=target connected 1=usage/env 6=busy 7=wpa_cli 8=assoc-timeout
+    # Default: failed switches retain the new persisted profile. Optional manual
+    # fallback restores the last verified profile but preserves the failure rc.
     set -euo pipefail
     shift 2
+    CONNECT_EXPLICIT_SSID=0
+    [ "$#" -eq 0 ] || CONNECT_EXPLICIT_SSID=1
     ftpcmd_trace_log wifi_connect_entered
     HAS_TARGET=0
     TARGET_SSID=""
@@ -2995,10 +3046,18 @@ case "$2" in
         echo "Error: wpa_cli not found" >&2; exit 1
     fi
     CONF="$WPA_CONF_DIR/wpa_supplicant-${IFACE}.conf"
-    wifi_wpa_conf_lock_acquire "$IFACE" \
-        || { echo "Error: failed to lock $CONF" >&2; exit 1; }
-    wifi_scan_transition_lock_acquire "$IFACE" \
-        || { echo "Error: failed to lock scan transition for $IFACE" >&2; exit 1; }
+    if [ "$CONNECT_FALLBACK_ENABLED" = 1 ]; then
+        wifi_wpa_conf_lock_acquire "$IFACE" try \
+            && wifi_scan_transition_lock_acquire "$IFACE" 0 \
+            || { echo "Error: configuration/connection change busy for $IFACE" >&2; exit 6; }
+    else
+        wifi_wpa_conf_lock_acquire "$IFACE" \
+            || { echo "Error: failed to lock $CONF" >&2; exit 1; }
+        wifi_scan_transition_lock_acquire "$IFACE" \
+            || { echo "Error: failed to lock scan transition for $IFACE" >&2; exit 1; }
+    fi
+    wifi_connect_fallback_start
+    wifi_connect_fallback_capture "$IFACE" "$CONF" || exit 1
     if [ "$#" -ge 1 ]; then
         NEW_SSID="$1"
         SSID_ENCODING_OUTPUT=$(wifi_wpa_child_call wifi_ssid_encode_values "$NEW_SSID") || {
@@ -3046,6 +3105,8 @@ case "$2" in
         # fresh CONNECTED event가 가리킨 id의 COMPLETED로 착지를 증명한다(broad 경로).
         # disconnected/no-id 복구도 같은 경로다.
         MULTI_TOPOLOGY=1
+        CONNECT_FALLBACK_ENABLED=0
+        WIFI_WPA_DEADLINE_MS=""
         MULTI_INITIAL_ID="$TARGET_ID"
         HAS_TARGET_ID=0
         TARGET_ID=""
@@ -3151,20 +3212,29 @@ case "$2" in
             ftpcmd_trace_log association_verified \
                 "path=already_connected id=$LIVE_NETWORK_ID"
             echo "already associated: ssid=\"$LIVE_SSID_WPA_TEXT\" freq=$LIVE_FREQ id=$LIVE_NETWORK_ID"
+            wifi_connect_fallback_commit || exit 1
             exit 0
         fi
     fi
+    if [ "$CONNECT_FALLBACK_ENABLED" = 1 ]; then
+        CONNECT_TIMEOUT="$CONNECT_ATTEMPT_TIMEOUT"
+        TOTAL_POLLS=$((CONNECT_TIMEOUT * 10))
+        REMAINING_POLLS="$TOTAL_POLLS"
+    fi
+    trap 'wifi_connect_cleanup' EXIT
     if ! wifi_wpa_abort_scan_quiesce "$IFACE"; then
         echo "Error: cannot quiesce scan for $IFACE" >&2; exit 7
     fi
-    trap 'connect_event_monitor_cleanup; wifi_wpa_run_child sync 2>/dev/null || true' EXIT
     trap 'exit 129' HUP
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    if ! connect_event_monitor_start "$IFACE" "$CONNECT_TIMEOUT"; then
+    MONITOR_TIMEOUT="$CONNECT_TIMEOUT"
+    [ "$CONNECT_FALLBACK_ENABLED" != 1 ] || MONITOR_TIMEOUT=$((CONNECT_TIMEOUT + CONNECT_ROLLBACK_TIMEOUT))
+    if ! connect_event_monitor_start "$IFACE" "$MONITOR_TIMEOUT"; then
         echo "Error: failed to attach reconnect event monitor for $IFACE" >&2
         exit 7
     fi
+    wifi_connect_fallback_arm || exit 1
     if [ $# -ge 1 ]; then
         # === conf 편집 경로: ssid(+freq) 영구 기록 → 전체 프로필 reconfigure ===
         if [ ! -f "$CONF" ]; then echo "not found: $CONF" >&2; exit 1; fi
@@ -3199,7 +3269,6 @@ case "$2" in
         # install한다. 중간 형식이 실제 conf에 노출되지 않아 reconfigure와 경쟁하지 않는다.
         CANON_FILE="$(wifi_wpa_child_exec mktemp)"
         TMP_FILE="$(wifi_wpa_child_exec mktemp)"
-        trap 'wifi_wpa_run_child rm -f "$CANON_FILE" "$TMP_FILE"; connect_event_monitor_cleanup; wifi_wpa_run_child sync 2>/dev/null || true' EXIT
         if ! wifi_wpa_run_child_call wifi_wpa_conf_render_canonical \
             "$CONF" "$CANON_FILE" "$FREQ_STR"; then
             echo "Error: failed to render canonical frequency policy in $CONF" >&2
@@ -3224,7 +3293,7 @@ case "$2" in
         ' "$CANON_FILE" > "$TMP_FILE"; then
             wifi_wpa_run_child_call safe_install_sync "$TMP_FILE" "$CONF"
             wifi_wpa_run_child rm -f "$CANON_FILE" "$TMP_FILE"
-            if [ "$IFACE" = "mlan0" ]; then
+            if [ "$IFACE" = "mlan0" ] && [ "$CONNECT_FALLBACK_ENABLED" != 1 ]; then
                 # 영구 SSID 변경 — OPC ChangeIp ESSID 복원 표식을 지운다(#362, ssid 와 동일).
                 wifi_wpa_run_child rm -f "$OPC_ESSID_MARKER"
             fi
@@ -3253,6 +3322,7 @@ case "$2" in
             echo "no ssid/current id given - reassociating $IFACE with current conf..."
         fi
     fi
+    wifi_connect_fallback_attempt_start
     if [ "$HAS_TARGET" = "1" ] || [ "$APPLY_STORED_CONF" = "1" ]; then
         # Reload the whole persisted profile. SET_NETWORK alone would leave
         # pending SSID, credentials, or frequency edits stale in supplicant.
@@ -3298,6 +3368,7 @@ case "$2" in
             GRACE_POLLS=$((TOTAL_POLLS - 1))
         fi
         for ((_i = 1; _i <= GRACE_POLLS && REMAINING_POLLS > 0; _i++)); do
+            wifi_connect_fallback_time_left || break
             if connect_association_poll_matches; then
                 ASSOC_MATCH=1
             fi
@@ -3306,6 +3377,7 @@ case "$2" in
                 wifi_wpa_run_child rm -f "$WIFI_RUN_DIR/${IFACE}.credential-pending" 2>/dev/null || true
                 ftpcmd_trace_log association_verified "path=$PROFILE_CONNECT_PATH id=${CUR_ID:-N/A}"
                 echo "associated by $PROFILE_CONNECT_PATH: ssid=\"$CUR_SSID\" freq=$CUR_FREQ id=$CUR_ID"
+                wifi_connect_fallback_commit || exit 1
                 exit 0
             fi
             if [ "$_i" -lt "$GRACE_POLLS" ] && [ "$REMAINING_POLLS" -gt 0 ]; then
@@ -3316,6 +3388,10 @@ case "$2" in
     # --- 공통: owner-neutral 강제 재연결(reassociate 우선, 실패 시 reconnect) → assoc 대기 ---
     # Mode A도 다른 network 블록의 enabled 상태를 바꾸지 않는다. 단일 블록은 최초에 캡처한
     # id를, 다중 블록은 fresh CONNECTED event가 가리킨 id를 그 이후 COMPLETED 폴링으로 증명한다.
+    if ! wifi_connect_fallback_time_left; then
+        echo "Warning: requested association not completed within ${CONNECT_TIMEOUT}s" >&2
+        exit 8
+    fi
     if ! connect_event_monitor_arm; then
         echo "Error: failed to arm reconnect event monitor for $IFACE" >&2
         exit 7
@@ -3342,6 +3418,7 @@ case "$2" in
     # Plain no-argument reconnects arrive with the full budget. Profile reloads
     # use only the remainder after grace; neither phase resets the counter.
     while [ "$REMAINING_POLLS" -gt 0 ]; do
+        wifi_connect_fallback_time_left || break
         if connect_association_poll_matches; then
             ASSOC_MATCH=1
         fi
@@ -3355,6 +3432,7 @@ case "$2" in
         fi
         ftpcmd_trace_log association_verified "path=$CONNECT_TRIGGER id=${CUR_ID:-N/A}"
         echo "associated: ssid=\"${CUR_SSID:-N/A}\" freq=${CUR_FREQ:-N/A} id=${CUR_ID:-N/A} (wpa_state=COMPLETED)"
+        wifi_connect_fallback_commit || exit 1
         exit 0
     else
         ftpcmd_trace_log association_timeout "path=$CONNECT_TRIGGER state=${WPA_STATE:-unknown}"

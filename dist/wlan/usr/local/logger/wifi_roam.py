@@ -2279,6 +2279,7 @@ def connect_to_ssid(iface, to_ssid, from_bssid, to_bssid):
             capture_output=True,
             text=True,
             timeout=30,
+            env=dict(os.environ, WIFI_CONNECT_ORIGIN="roam"),
         )
         if result.returncode == 0:
             if ENABLE_PING_PONG_PREVENTION and ping_pong_preventer:
@@ -2287,6 +2288,9 @@ def connect_to_ssid(iface, to_ssid, from_bssid, to_bssid):
                 "info", f"[{IFACE}] Cross-SSID connect successful: {to_ssid}", _EXTRA_()
             )
             return True
+        elif result.returncode == 6:
+            logger.message("info", f"[{IFACE}] Cross-SSID connect deferred: interface busy", _EXTRA_())
+            return None
         else:
             logger.message(
                 "err",

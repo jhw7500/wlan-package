@@ -349,6 +349,7 @@ dist/wlan/usr/local/scripts/tests/test_unit_execstart_exec_bit.py
 dist/wlan/usr/local/scripts/tests/test_wifi_arping_link_state.py
 dist/wlan/usr/local/scripts/tests/test_wifi_checker_mac_block.py
 dist/wlan/usr/local/scripts/tests/test_wifi_connect_cli.py
+dist/wlan/usr/local/scripts/tests/test_wifi_connect_fallback.py
 dist/wlan/usr/local/scripts/tests/test_wifi_eth_peer.sh
 dist/wlan/usr/local/scripts/tests/test_wifi_event_garp.py
 dist/wlan/usr/local/scripts/tests/test_wifi_factory_topology.py
@@ -384,6 +385,7 @@ dist/wlan/usr/local/scripts/wifi_conf_preserve_test.sh
 dist/wlan/usr/local/scripts/wifi_config.sh
 dist/wlan/usr/local/scripts/wifi_config_backup.sh
 dist/wlan/usr/local/scripts/wifi_config_backup_test.sh
+dist/wlan/usr/local/scripts/wifi_connect_fallback_lib.sh
 dist/wlan/usr/local/scripts/wifi_eth_peer_find.sh
 dist/wlan/usr/local/scripts/wifi_eth_peer_find_test.sh
 dist/wlan/usr/local/scripts/wifi_eth_peer_route.sh

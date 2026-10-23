@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "wifi_init_conf.json 설정 스키마",
-  "description": "wlan-package WiFi 초기화/로밍/브릿지 설정 파일(wifi_init_conf.json)의 웹 UI 폼 자동 생성·검증용 JSON Schema. 실제 출하 기본값(dist/wlan/opt/wlan/config/wifi_init_conf.json)을 미러링. 커스텀 키워드: x-ui-editable(yes|caution|no) = UI 편집 허용도, x-apply-timing(runtime|daemon-restart|boot|reboot|na) = 변경 반영 시점, x-consumer = 값을 소비하는 스크립트. required는 강제하지 않으며(부분 설정 허용), 각 오브젝트는 additionalProperties=true로 _comment 등 부가 키를 허용한다. mlan0/mlan1은 인터페이스별 기본값이 다르므로 공유 $ref 없이 각각 완전 전개했다. 참고(JSON 키 아님): logger.link_retry_count(기본 4) / logger.link_retry_delay_sec(기본 0.05)는 JSON 실재 키가 아니며 wifi_logger_link.py 모듈/CLI 기본값이므로 스키마에 포함하지 않는다. 필요 시 CLI --link-retry-count / --link-retry-delay로만 조정한다.",
+  "description": "wlan-package WiFi 초기화/로밍/브릿지 설정 파일(wifi_init_conf.json)의 웹 UI 폼 자동 생성·검증용 JSON Schema. 실제 출하 기본값(dist/wlan/opt/wlan/config/wifi_init_conf.json)을 미러링. 커스텀 키워드: x-ui-editable(yes|caution|no) = UI 편집 허용도, x-apply-timing(runtime|next-command|daemon-restart|boot|reboot|na) = 변경 반영 시점, x-consumer = 값을 소비하는 스크립트. required는 강제하지 않으며(부분 설정 허용), 각 오브젝트는 additionalProperties=true로 _comment 등 부가 키를 허용한다. mlan0/mlan1은 인터페이스별 기본값이 다르므로 공유 $ref 없이 각각 완전 전개했다. 참고(JSON 키 아님): logger.link_retry_count(기본 4) / logger.link_retry_delay_sec(기본 0.05)는 JSON 실재 키가 아니며 wifi_logger_link.py 모듈/CLI 기본값이므로 스키마에 포함하지 않는다. 필요 시 CLI --link-retry-count / --link-retry-delay로만 조정한다.",
   "type": "object",
   "additionalProperties": true,
   "properties": {
@@ -1215,6 +1215,41 @@
           "x-apply-timing": "daemon-restart",
           "x-consumer": "wpa_supplicant(patched, /opt/wlan/bin/wpa_supplicant.imx8|.imx93)"
         },
+        "connect_fallback": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "수동 CLI/FTP wifi connect 실패 시 직전 검증 완료 프로필로 복구하는 opt-in 정책. OPC helper, checker/background reconnect/roam 및 Mode A 다중 network 구성에는 적용하지 않음",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "수동 wifi connect 경로의 실패 복구 활성화. false면 기존처럼 실패한 대상 설정을 유지",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "next-command",
+              "x-consumer": "wifi.sh"
+            },
+            "attempt_timeout_sec": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 15,
+              "default": 15,
+              "description": "connect_fallback.enabled=true일 때만 쓰는 새 연결 확인 시간 예산(초). FTP 30초 제한 안에서 복구 예산을 남기기 위해 최대 15초. false이면 기존 ASSOC_TIMEOUT_DEFAULT 동작 유지",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "next-command",
+              "x-consumer": "wifi.sh"
+            },
+            "rollback_timeout_sec": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5,
+              "default": 5,
+              "description": "이전 프로필 복원·reconfigure 후 이전 association 확인 시간 예산(초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "next-command",
+              "x-consumer": "wifi.sh"
+            }
+          }
+        },
         "enabled": {
           "type": "boolean",
           "default": true,
@@ -2218,6 +2253,41 @@
           "x-ui-editable": "caution",
           "x-apply-timing": "daemon-restart",
           "x-consumer": "wpa_supplicant(patched, /opt/wlan/bin/wpa_supplicant.imx8|.imx93)"
+        },
+        "connect_fallback": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "수동 CLI/FTP wifi connect 실패 시 직전 검증 완료 프로필로 복구하는 opt-in 정책. OPC helper, checker/background reconnect/roam 및 Mode A 다중 network 구성에는 적용하지 않음",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "수동 wifi connect 경로의 실패 복구 활성화. false면 기존처럼 실패한 대상 설정을 유지",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "next-command",
+              "x-consumer": "wifi.sh"
+            },
+            "attempt_timeout_sec": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 15,
+              "default": 15,
+              "description": "connect_fallback.enabled=true일 때만 쓰는 새 연결 확인 시간 예산(초). FTP 30초 제한 안에서 복구 예산을 남기기 위해 최대 15초. false이면 기존 ASSOC_TIMEOUT_DEFAULT 동작 유지",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "next-command",
+              "x-consumer": "wifi.sh"
+            },
+            "rollback_timeout_sec": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5,
+              "default": 5,
+              "description": "이전 프로필 복원·reconfigure 후 이전 association 확인 시간 예산(초)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "next-command",
+              "x-consumer": "wifi.sh"
+            }
+          }
         },
         "enabled": {
           "type": "boolean",

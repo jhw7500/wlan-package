@@ -271,6 +271,7 @@ usr/local/scripts/wifi_checker.sh
 usr/local/scripts/wifi_conf_preserve.sh
 usr/local/scripts/wifi_config.sh
 usr/local/scripts/wifi_config_backup.sh
+usr/local/scripts/wifi_connect_fallback_lib.sh
 usr/local/scripts/wifi_eth_peer_find.sh
 usr/local/scripts/wifi_eth_peer_route.sh
 usr/local/scripts/wifi_event.sh

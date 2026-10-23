@@ -51,6 +51,17 @@ fi
 SSID=$*
 PARSED_MS=$(monotonic_ms 2>/dev/null || printf '%s\n' "${START_MS:-0}")
 
+# Share the same gate as ordinary wifi/OPC writers. This command still bypasses
+# persistence and fallback, but may not disturb an active fallback transaction.
+CHANGE_RUN_DIR=${WIFI_RUN_DIR:-/run/wifi}
+mkdir -p "$CHANGE_RUN_DIR" || exit 1
+exec 6>"$CHANGE_RUN_DIR/${IFACE}.change.lock" || exit 1
+if ! flock -n -s 6; then
+    raw_log_failure 6 "configuration/connection change busy for $IFACE"
+    echo "configuration/connection change busy for $IFACE" >&2
+    exit 6
+fi
+
 STATUS=$($WPA_CLI -i "$IFACE" status 2>/dev/null)
 STATUS_RC=$?
 if [ "$STATUS_RC" -ne 0 ]; then

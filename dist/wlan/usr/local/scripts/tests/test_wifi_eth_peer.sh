@@ -73,6 +73,7 @@ STUBEOF
 
     chmod +x "$STUB/bin/"*
     export WIFI_INIT_CONF_JSON="$CONF"
+    export WIFI_RUN_DIR="$STUB/run"
     export ETH_CLIENT_IP_FILE="$CLIENT_FILE"
     export ETH_CARRIER_PATH="$CARRIER"
     export WIFI_PEER_SCRIPT_DIR="$SCRIPTS_DIR"   # wifi.sh가 실제 peer 스크립트를 여기서 찾게

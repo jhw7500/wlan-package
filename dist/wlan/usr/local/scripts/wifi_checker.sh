@@ -345,7 +345,7 @@ while true; do
                     # 공용 transition lock과 fresh association proof를
                     # 소유하는 wifi connect로 owner-neutral reassociate를 요청한다.
                     logger -p local0.warning "[$tag:$LINENO] [$IFACE] serialized reconnect (disconnected ${DURATION}s >= ${MAX_UNSTABLE_DURATION}s, $RECONNECT_REASON)"
-                    wifi "$IFACE" connect >/dev/null 2>&1
+                    WIFI_CONNECT_ORIGIN=checker wifi "$IFACE" connect >/dev/null 2>&1
                     REASSOC_DONE=1
                 fi
             fi
@@ -375,7 +375,7 @@ while true; do
                     wifi "$IFACE" restart
                 elif (( FAULT_CNT >= FAULT_REASSOC_CNT )); then
                     logger -p local0.warning "[$tag:$LINENO] [$IFACE] station dump fault ($FAULT_CNT >= $FAULT_REASSOC_CNT), serialized reconnect"
-                    wifi "$IFACE" connect >/dev/null 2>&1
+                    WIFI_CONNECT_ORIGIN=checker wifi "$IFACE" connect >/dev/null 2>&1
                 fi
             else
                 FAULT_CNT=0

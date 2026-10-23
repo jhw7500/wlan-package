@@ -777,7 +777,7 @@ wifi eth0  log start|stop|restart|status|enable|disable
 
 ## 11. mlan0 / mlan1 - 인터페이스별 설정
 
-**사용 스크립트**: `wifi_bgscan.py`, `wifi_roam.py`, `wifi_init.sh`, `wifi_apply_enabled.sh`, `wifi_event.sh`
+**사용 스크립트**: `wifi_bgscan.py`, `wifi_roam.py`, `wifi_init.sh`, `wifi_apply_enabled.sh`, `wifi_event.sh`, `wifi.sh`
 
 ### 11.1 interface defaults - 인터페이스 기본 활성/주파수
 
@@ -800,6 +800,48 @@ wifi eth0  log start|stop|restart|status|enable|disable
 > 별도 외부 설정 파일과의 우선순위 병합은 없다.
 
 > **⚠️ 패키지 기본값 주의**: 출하 `wifi_init_conf.json`은 `mlan0.enabled=true`, **`mlan1.enabled=false`**로 설정되어 있다 — 즉 **mlan1은 기본적으로 초기화되지 않는다**(`wifi_init.sh`가 radio setup·bridge enable을 건너뛰고, `wifi_apply_enabled.sh`가 mlan1 child unit을 disable). 신규 설치·공장초기화로 이 기본 config를 그대로 쓰는 환경에서 mlan1을 사용하려면 본 파일의 `mlan1.enabled=true`로 변경한다.
+
+#### connect_fallback — 수동 연결 실패 시 이전 프로필 복구
+
+`mlanN.connect_fallback`은 수동 `wifi <iface> connect`와 이를 호출하는 FTP
+`wconnect`에만 적용하는 opt-in 정책이다. 출하 기본은 비활성이다.
+
+| 키 | 타입 | 기본값 | 범위 | 설명 |
+|----|------|--------|------|------|
+| `enabled` | bool | `false` | true/false | 수동 connect 실패 복구 활성화. 다음 connect 명령부터 반영 |
+| `attempt_timeout_sec` | int | `15` | 1~15 | `enabled=true`일 때 새 association 확인 경과 시간 예산(초). false이면 기존 `ASSOC_TIMEOUT_DEFAULT` 유지 |
+| `rollback_timeout_sec` | int | `5` | 1~5 | 이전 프로필 복원·reconfigure 뒤 기존 association 확인 경과 시간 예산(초) |
+
+활성화하면 인터페이스별 마지막 **검증 완료된 완전한 프로필**을 `/run/wifi`
+아래 mode `0600` 일반 파일로 보관한다. 프로필은 SSID, 주파수 정책, 인증 설정을
+함께 포함하며 부팅을 넘겨 유지하지 않는다. 가능하면 `wssid`/`wfreq`와 CLI의
+PSK/key 변경을 staging하기 전에 현재 연결 프로필을 검증해 캡처하고, 목표 연결이
+성공하면 새 프로필로 갱신한다. 단순 설정 사본이나 association이 확인되지 않은
+프로필은 known-good으로 취급하지 않는다.
+
+known-good이 없더라도 목표 연결은 시도한다. 실패하면 `fallback-unavailable`을
+로그에 남기고 원래 실패 코드로 종료한다. known-good이 있으면 이전 프로필 전체를
+복원하고 supplicant를 reconfigure한 뒤 이전 association을 확인한다. 복원 결과는
+사용자 출력에서 `fallback restored` 또는 `fallback failed`로, syslog에서는
+`outcome=restored` 또는 `outcome=restore-failed`로 구분한다. known-good이 없으면
+`fallback unavailable`/`outcome=fallback-unavailable`을 기록한다. 복원에 성공해도 요청한
+새 연결은 실패했으므로 원래 nonzero 결과를 그대로 반환한다. 일반 association/control
+오류는 7/8이고, 검증·설치 오류 1이나 signal 결과 129/130/143도 보존될 수 있다.
+
+fallback이 진행 중인 인터페이스에는 다른 설정 변경과 런타임 연결 변경을 허용하지
+않으며 busy(코드 6)로 거부한다. OPC의 경쟁 wireless profile/radio helper write도 이
+충돌 규칙을 따르지만 OPC helper는 fallback을 시작하지 않는다. ChangeIp의 IP/route
+처리는 기존의 별도 계약을 유지한다. 상태와 설정을 읽는 조회는 허용한다. checker/background
+reconnect/roam도 fallback 실행 경로가 아니다. Mode A
+(`roaming.generate_network_blocks=true`)와 다중 `network` 구성은 network 선택·복구를
+supplicant가 소유하므로 fallback 대상에서 제외된다.
+
+fallback이 활성화된 경우 새 연결 예산은 기본 15초(1~15), 복원 예산은 기본 5초(1~5)다.
+새 연결 확인 예산은 체크포인트 조회와 요청 설정 준비를 마친 뒤 시작한다. 준비 단계부터
+계산하는 전체 25초 예산에서는 복귀 시간을 남기므로, 준비가 길어지면 새 연결 확인 시간이
+설정값보다 짧아질 수 있다. 비활성 경로는 기존 `ASSOC_TIMEOUT_DEFAULT`를 그대로 사용한다.
+활성 경로는 실제 경과 시간을 차감해 FTP 디스패처의 30초 제한 안에 두 단계를 마칠 예산을 관리한다. 이 값은 userspace
+폴링 예산이며, 커널 I/O 자체가 멈춘 경우까지 끊는 hard cap을 약속하지 않는다.
 
 #### net_rx 비트맵
 
