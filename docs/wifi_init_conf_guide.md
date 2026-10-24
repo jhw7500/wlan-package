@@ -1000,12 +1000,15 @@ wpa_supplicant의 장애 복구·재연결 스캔은 계속 동작한다.
 >
 > `ssid_filter=true`이면 bgscan이 conf 기본 ssid를 directed probe한다. iw backend의 active 문법은 `iw <iface> scan ... ssid <SSID>`이고, native backend는 `wpa_cli -i <iface> SCAN ... ssid <UTF-8 hex>`를 쓴다. native active SSID filters are UTF-8 hex encoded because the control interface accepts bytes rather than a quoted SSID. non-hidden SSID는 probe 없이 beacon으로도 잡히지만 **hidden SSID는 directed probe가 있어야 발견**된다. 따라서 `roaming.extra_ssids`(§11.4)는 명시적 로밍 후보로서 `ssid_filter` 값과 **무관하게 항상 directed probe**에 포함된다 — `ssid_filter=false`로 두어도 extra SSID(hidden 포함)는 누락되지 않는다. ssid_filter on/off의 스캔 시간·통신 영향 차이는 작고, 실제 비용은 `freq_filter`(채널 수)가 좌우한다.
 
-> FTP `wconnect`로 다른 SSID에 전환하는 시간을 줄이려면 `ssid_filter=false`로 둔다.
-> 전환은 마지막 스캔 결과에 대상 AP가 있으면 새 스캔(4채널 약 450ms) 없이 연결하는데,
-> `true`이면 bgscan 결과에 현재 SSID의 AP만 남는다(2026-10-23 랩 4채널 실측: SSID 지정
-> 스캔 1개, 와일드카드 스캔 10~12개). `false`이면 60초마다 주변 AP가 모두 probe에
-> 응답하므로 그만큼 프레임이 늘고, hidden SSID는 여전히 `roaming.extra_ssids`의 directed
-> probe로만 발견된다. 기본값은 `true`이며 업그레이드 시 기존 값이 유지된다.
+> FTP `wconnect`로 다른 SSID에 전환할 때, 마지막 스캔 결과에 대상 AP가 있으면 새 스캔
+> 없이 연결한다. `true`이면 bgscan 결과에 현재 SSID의 AP만 남는다(2026-10-23 랩 4채널
+> 실측: SSID 지정 스캔 1개, 와일드카드 스캔 10~12개). 그래서 `wconnect`는 연결을 끊기 전에
+> 대상 SSID를 먼저 지정 스캔한 뒤 연결한다(4채널 약 270ms, #399). 따라서 기본값 `true`에서도
+> 무선 연결이 끊겨 있는 시간은 짧다(랩 실측: 약 0.5초 → 약 0.15초).
+> `false`로 두면 대상이 이미 최근 스캔에 있어 이 사전 스캔을 건너뛴다. 대신 60초마다
+> 주변 AP가 모두 probe에 응답하므로 그만큼 프레임이 는다. hidden SSID는 여전히
+> `roaming.extra_ssids`의 directed probe로만 발견된다. 기본값은 `true`이며 업그레이드 시
+> 기존 값이 유지된다.
 
 > both backends require the same `wpa_state=COMPLETED` safety gate before bgscan sends either `iw <iface> scan` or the native `wpa_cli ... SCAN` request. 미연결 시엔 wpa_supplicant의 재연결 스캔/association과 라디오 경합을 피하려 skip한다.
 >

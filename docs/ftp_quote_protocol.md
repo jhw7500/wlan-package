@@ -169,10 +169,21 @@ quote wconnect <mlan0|mlan1|0|1> [ssid words...]
 현재 supplicant의 SSID와 전역·네트워크 `freq_list`가
 저장된 설정과 같음, 새 설정 파일이 SSID 줄만 다름, 인증 설정 변경 대기와
 fallback 없음. supplicant는 마지막 스캔이 이 유효시간 안이고 그 결과에 대상 AP가
-있으면 새 스캔 없이 연결한다. 없으면 supplicant가 곧바로 스캔한다. 백그라운드 스캔이 현재 SSID만
-지정하는 기본 설정(`bgscan.ssid_filter=true`)에서는 다른 SSID의 AP 정보가 갱신되지
-않으므로 대개 위 조건에서 걸러져 `reconfigure` 경로를 쓴다(설정 가이드의
-`ssid_filter` 참조). 이 경로는
+있으면 새 스캔 없이 연결한다. 없으면 supplicant가 곧바로 스캔한다.
+
+백그라운드 스캔이 현재 SSID만 지정하는 기본 설정(`bgscan.ssid_filter=true`)에서는
+대개 마지막 스캔에 요청 SSID가 없다. 이때 다음 조건이면 연결을 끊기 전에 요청 SSID를
+먼저 스캔한다(#399).
+- SSID 인자 하나인 전환
+- fallback 없음
+- 연결된 상태
+- 저장 설정에 `freq_list`가 있음
+- 인증 설정 변경 대기 없음
+
+스캔 명령은 `iw <iface> scan freq <freq_list> ssid <SSID>`이다. 연결된 상태에서 4채널에
+약 270ms가 걸리고, 핸들러는 그 끝을 기다린다. 상한은 채널당 0.15초에 0.3초를 더해 정수 초로
+올린 값이다. 스캔으로 요청 SSID를 보면 위 경로로 연결한다. 스캔이 실패하거나(EBUSY 등),
+상한을 넘거나, 요청 SSID가 보이지 않으면 `reconfigure` 경로를 쓴다. 이 경로는
 `connect_threshold`처럼 supplicant가 설정을 읽을 때 함께 읽는 `wifi_init_conf.json`
 값을 다시 읽지 않으므로, 그런 값을 바꾼 뒤에는 supplicant를 재시작해 적용한다.
 
@@ -352,6 +363,12 @@ ftpcmd_result trace=<id> command=wconnect status=fail code=<N> iface=<iface> det
 | `connected_event`, `disconnected_event` | supplicant 비동기 이벤트 수신 |
 | `association_verified`, `association_timeout` | 목표 연결 확인 또는 시간 초과 |
 | `reply_ready` | 핸들러 종료 및 FTP 응답 준비 |
+
+`cache_connect_requested`와 `reconfigure_requested`의 `prescan=` 값은 §3.3의 사전 스캔
+결과다. 값의 뜻은 다음과 같다.
+- `none`: 스캔하지 않음(요청 SSID가 이미 마지막 스캔에 있거나 조건이 맞지 않음)
+- `0`: 스캔 완료
+- 그 밖의 값: 스캔 명령의 종료 코드(예: `124` 상한 초과, `240` 다른 스캔과 겹침)
 
 `elapsed_ms`는 핸들러 시작 이후 누적 시간이다. 연속 단계의 차이가 해당
 구간 시간이다. 비동기 이벤트는 다른 단계와 출력 순서가 바뀔 수 있다.
