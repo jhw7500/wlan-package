@@ -190,12 +190,12 @@ wifi_connect_fallback_restore() {
     for ((polls = 0; polls < 3; polls++)); do
         wifi_connect_fallback_time_left || return 1
         if connect_association_poll_matches; then return 0; fi
-        wifi_wpa_run_child sleep 0.1
+        connect_wait_poll_slot
     done
     wpa_cli_ok "$IFACE" reassociate || wpa_cli_ok "$IFACE" reconnect || return 1
     while wifi_connect_fallback_time_left; do
         if connect_association_poll_matches; then return 0; fi
-        wifi_wpa_run_child sleep 0.1
+        connect_wait_poll_slot
     done
     return 1
 }

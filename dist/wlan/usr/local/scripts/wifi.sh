@@ -632,6 +632,8 @@ connect_event_monitor_start() { # $1 iface, $2 association timeout seconds
         || return 1
     action="$CONNECT_MONITOR_DIR/action.sh"
     pidfile="$CONNECT_MONITOR_DIR/wpa_cli.pid"
+    # Nothing writes to this FIFO; connect_wait_poll_slot times out on it.
+    wifi_wpa_run_child mkfifo -m 600 "$CONNECT_MONITOR_DIR/tick" 2>/dev/null || true
     wifi_wpa_run_child cat > "$action" <<'EOF'
 #!/bin/sh
 exec 6>&- 7>&- 8>&- 9>&-
@@ -667,10 +669,11 @@ case "${2:-}" in
         ;;
 esac
 case "${WPA_ID:-}" in ''|*[!0-9]*) exit 0 ;; esac
-ftpcmd_trace_event connected_event "$1"
+# Record the event before logging it: the connect waits on this file.
 tmp="$monitor_dir/connected-id.tmp.$$"
 (umask 077; printf '%s\n' "$WPA_ID" > "$tmp") || exit 1
 mv -f "$tmp" "$monitor_dir/connected-id"
+ftpcmd_trace_event connected_event "$1"
 EOF
     wifi_wpa_run_child chmod 0700 "$action" 2>/dev/null || {
         connect_event_monitor_cleanup
@@ -790,9 +793,8 @@ connect_event_monitor_arm() {
 # necessarily subsequent to the CONNECTED epoch.  The connect command sets the
 # target globals before invoking this helper.
 connect_association_poll_matches() {
-    if ! FRESH_EVENT_ID=$(wifi_wpa_child_exec cat "$CONNECT_MONITOR_DIR/connected-id" 2>/dev/null); then
-        FRESH_EVENT_ID=""
-    fi
+    FRESH_EVENT_ID=""
+    { IFS= read -r FRESH_EVENT_ID || :; } 2>/dev/null < "$CONNECT_MONITOR_DIR/connected-id" || :
     WPA_STATUS=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" status 2>/dev/null) || WPA_STATUS=""
     WPA_STATE=""; CUR_SSID=""; CUR_FREQ=""; CUR_ID=""; ASSOC_MATCH=0
     while IFS='=' read -r _key _value; do
@@ -825,6 +827,57 @@ connect_association_poll_matches() {
         fi
     fi
     [ "$ASSOC_MATCH" = "1" ]
+}
+
+# Wait one 0.1 s association poll slot. The monitor writes connected-id a few
+# tens of ms after CONNECTED, often just after a poll that already saw
+# COMPLETED, and that poll used to cost a whole slot. Wake early only when the
+# file holds an id the last poll did not see, so a record left from an earlier
+# event cannot shorten the wait, and end the slot by the clock so poll counts
+# keep their time budget. The 20 ms ticks block in read -t on the monitor's
+# FIFO instead of forking sleep.
+#
+# connect's HUP/INT/TERM traps exit through connect_signal_exit. A trap that
+# exits while read -t is waiting skips bash's timeout cleanup, and the EXIT trap
+# that follows can then crash with SIGSEGV halfway through the fallback
+# restore. During the read the trap only records the status; the slot exits
+# with it once read has returned. A signal landing as the timeout fires can
+# also cost read its timeout, leaving it blocked on the FIFO, so the trap
+# writes a newline there for read to return on.
+connect_signal_exit() {
+    if [ "${CONNECT_SLOT_READING:-0}" = 1 ]; then
+        CONNECT_SLOT_EXIT_STATUS="$1"
+        { printf '\n' 1<> "$CONNECT_MONITOR_DIR/tick"; } 2>/dev/null || :
+        return 0
+    fi
+    exit "$1"
+}
+
+connect_wait_poll_slot() {
+    local tick="${CONNECT_MONITOR_DIR:-}/tick" id sec centi rest start now junk status
+    if [ -z "${CONNECT_MONITOR_DIR:-}" ] || [ ! -p "$tick" ] \
+       || ! IFS=' .' read -r sec centi rest < /proc/uptime; then
+        wifi_wpa_run_child sleep 0.1
+        return 0
+    fi
+    start=$((sec * 100 + 10#$centi))
+    while :; do
+        id=""
+        { IFS= read -r id || :; } 2>/dev/null < "$CONNECT_MONITOR_DIR/connected-id" || :
+        [ -n "$id" ] && [ "$id" != "${FRESH_EVENT_ID:-}" ] && return 0
+        IFS=' .' read -r sec centi rest < /proc/uptime || return 0
+        now=$((sec * 100 + 10#$centi))
+        [ $((now - start)) -lt 10 ] || return 0
+        CONNECT_SLOT_READING=1
+        { IFS= read -r -t 0.02 junk || :; } 2>/dev/null <> "$tick" || :
+        CONNECT_SLOT_READING=0
+        if [ -n "${CONNECT_SLOT_EXIT_STATUS:-}" ]; then
+            # Clear it first: the fallback restore in the EXIT trap waits here too.
+            status="$CONNECT_SLOT_EXIT_STATUS"
+            CONNECT_SLOT_EXIT_STATUS=""
+            exit "$status"
+        fi
+    done
 }
 
 # An FTP SSID switch may be applied in supplicant memory only while the running
@@ -3313,9 +3366,9 @@ case "$2" in
     if ! wifi_wpa_abort_scan_quiesce "$IFACE"; then
         echo "Error: cannot quiesce scan for $IFACE" >&2; exit 7
     fi
-    trap 'exit 129' HUP
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
+    trap 'connect_signal_exit 129' HUP
+    trap 'connect_signal_exit 130' INT
+    trap 'connect_signal_exit 143' TERM
     MONITOR_TIMEOUT="$CONNECT_TIMEOUT"
     [ "$CONNECT_FALLBACK_ENABLED" != 1 ] || MONITOR_TIMEOUT=$((CONNECT_TIMEOUT + CONNECT_ROLLBACK_TIMEOUT))
     if ! connect_event_monitor_start "$IFACE" "$MONITOR_TIMEOUT"; then
@@ -3487,7 +3540,7 @@ case "$2" in
                 exit 0
             fi
             if [ "$_i" -lt "$GRACE_POLLS" ] && [ "$REMAINING_POLLS" -gt 0 ]; then
-                wifi_wpa_run_child sleep 0.1
+                connect_wait_poll_slot
             fi
         done
     fi
@@ -3530,7 +3583,7 @@ case "$2" in
         fi
         REMAINING_POLLS=$((REMAINING_POLLS - 1))
         [ "$ASSOC_MATCH" = "1" ] && break
-        [ "$REMAINING_POLLS" -gt 0 ] && wifi_wpa_run_child sleep 0.1
+        [ "$REMAINING_POLLS" -gt 0 ] && connect_wait_poll_slot
     done
     if [ "$ASSOC_MATCH" = "1" ]; then
         if [ "$HAS_TARGET" = "1" ] || [ "$APPLY_STORED_CONF" = "1" ]; then

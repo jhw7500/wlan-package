@@ -163,6 +163,41 @@ class ConnectFallbackTests(_cli.ConnectHarness):
         self.assertIn("ssid=jhw_wlan_\n", (self.state / "status").read_text())
         self.assertIn("fallback restored", result.stdout + result.stderr)
 
+    def test_restore_is_verified_soon_after_its_connected_record(self):
+        # The restored profile's event lands 30 ms after reconfigure, just after
+        # the first restore poll already saw COMPLETED. A 0.1 s poll grid checks
+        # again about 70 ms after the event; the restore wait wakes on the record.
+        # The delayed event must not hold the stub's stdout, or reconfigure
+        # would return only after the event and the first poll would see it.
+        stub = self.stub / "wpa_cli"
+        text = stub.read_text()
+        delayed = '( sleep "$delay"; echo "$lid" > "$D/fire.tmp" && mv -f "$D/fire.tmp" "$D/fire" ) &'
+        for old, new in (
+                (delayed, delayed[:-1] + '>/dev/null 2>&1 &'),
+                ('            WPA_ID="$id" "$action" "$iface" CONNECTED\n',
+                 '            echo "fire $EPOCHREALTIME" >> "$D/timeline"\n'
+                 '            WPA_ID="$id" "$action" "$iface" CONNECTED\n'),
+                ('    status) cat "$D/status" ;;\n',
+                 '    status) echo "status $EPOCHREALTIME" >> "$D/timeline"; cat "$D/status" ;;\n')):
+            self.assertEqual(text.count(old), 1, old)
+            text = text.replace(old, new)
+        stub.write_text(text)
+        (self.state / "fire-delay").write_text("0.03\n")
+        (self.state / "daemon-interval").write_text("0.005\n")
+        gaps = []
+        for _ in range(3):
+            self.write_conf(CONF_MODE_B)
+            (self.state / "timeline").write_text("")
+            result = self.run_connect("unreachable")
+            self.assertEqual(result.returncode, 8, result.stdout + result.stderr)
+            self.assertIn("fallback restored", result.stdout + result.stderr)
+            events = [line.split() for line in (self.state / "timeline").read_text().splitlines()]
+            fires = [i for i, (kind, _) in enumerate(events) if kind == "fire"]
+            fire = float(events[fires[-1]][1])
+            check = next(float(t) for kind, t in events[fires[-1]:] if kind == "status")
+            gaps.append(round((check - fire) * 1000))
+        self.assertLessEqual(sorted(gaps)[1], 40, gaps)
+
     def test_staged_ssid_and_frequency_restore_previous_verified_profile(self):
         for command, value in (("ssid", "unreachable"), ("freq", "5180")):
             result = self.run_wifi(command, value)
