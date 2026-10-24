@@ -216,6 +216,7 @@ wifi_connect_fallback_commit() {
 wifi_connect_cleanup() {
     local rc=$?
     trap - EXIT HUP INT TERM
+    connect_prescan_stop
     if [ "${CONNECT_FALLBACK_ARMED:-0}" = 1 ] && [ "$rc" -ne 0 ]; then
         if wifi_connect_fallback_restore; then
             wifi_connect_fallback_log restored

@@ -407,6 +407,129 @@ exec /bin/cp "$@"
         self.assert_profile_reload(result)
         self.assertFalse(any("set_network" in c for c in self.ftp_switch_commands()))
 
+    def miss_target_until_scanned(self, target="good-B"):
+        # The last scan probed only the current SSID; a scan for the target sees it.
+        (self.state / "bss").write_text(f"id=1\nage=5\nssid=jhw_wlan_\nid=2\nage=86\nssid={target}\n")
+        (self.state / "iw-bss").write_text(f"id=1\nage=0\nssid=jhw_wlan_\nid=2\nage=0\nssid={target}\n")
+
+    def iw_calls(self):
+        log = self.state / "calls.log"
+        return [line for line in (log.read_text().splitlines() if log.exists() else [])
+                if line.startswith("iw ")]
+
+    def stub_processes_left(self, *patterns):
+        return [p for p in patterns
+                if subprocess.run(["pgrep", "-f", p], capture_output=True).returncode == 0]
+
+    def test_ftp_ssid_switch_scans_for_a_missed_target_and_reassociates_from_cache(self):
+        # Scanning while still connected replaces RECONFIGURE's scan with the
+        # link down (#399): the switch disconnects only after the scan ended.
+        self.set_policy(enabled=False)
+        self.miss_target_until_scanned()
+        (self.state / "iw-delay").write_text("0.3\n")
+        result = self.run_connect("good-B", apply_stored_conf=True, trace=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.iw_calls(), [
+            "iw [mlan0] [scan] [freq] [5180] [5200] [5220] [5240] [ssid] [good-B]"])
+        self.assert_cache_reassociate()
+        calls = (self.state / "calls.log").read_text().splitlines()
+        self.assertLess(calls.index("iw-exit"), calls.index("wpa_cli -i mlan0 disconnect"))
+        self.assertIn("prescan=0", (self.state / "logger.log").read_text())
+        # A scan left running by a killed connect must not keep its locks.
+        fds = (self.state / "iw-fds").read_text()
+        self.assertIn(str(self.state), fds)
+        self.assertNotIn(".lock", fds)
+
+    def test_ftp_ssid_switch_passes_the_target_ssid_as_one_scan_argument(self):
+        # The stub's landing record splits on spaces, so only the commands are
+        # checked here, not the association that follows.
+        self.set_policy(enabled=False)
+        (self.state / "available").write_text("jhw_wlan_\ngood B\n")
+        self.miss_target_until_scanned("good B")
+        self.run_connect("good B", apply_stored_conf=True)
+        self.assertEqual(self.iw_calls(), [
+            "iw [mlan0] [scan] [freq] [5180] [5200] [5220] [5240] [ssid] [good B]"])
+        self.assertIn('wpa_cli -i mlan0 set_network 0 ssid "good B"', self.ftp_switch_commands())
+
+    def test_ftp_ssid_switch_does_not_scan_when_the_last_scan_saw_the_target(self):
+        self.set_policy(enabled=False)
+        result = self.run_connect("good-B", apply_stored_conf=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.iw_calls(), [])
+        self.assert_cache_reassociate()
+
+    def test_busy_or_slow_scan_leaves_the_profile_reload(self):
+        # EBUSY from another scanner, or a scan past its 1 s cap for 4
+        # channels: reload as before, with no scan process left behind.
+        for name, setup, rc in (("busy", ("iw-rc", "240\n"), "240"),
+                                ("slow", ("iw-delay", "4.71\n"), "124")):
+            with self.subTest(name):
+                self.write_conf(CONF_MODE_B)
+                (self.state / "runtime.conf").write_text(CONF_MODE_B)
+                (self.state / "status").write_text(_cli.STATUS_INITIAL)
+                for name_ in ("calls.log", "logger.log"):
+                    (self.state / name_).write_text("")
+                for name_ in ("iw-rc", "iw-delay", "iw-bss"):
+                    (self.state / name_).unlink(missing_ok=True)
+                self.set_policy(enabled=False)
+                (self.state / "bss").write_text("id=1\nage=5\nssid=jhw_wlan_\nid=2\nage=86\nssid=good-B\n")
+                (self.state / setup[0]).write_text(setup[1])
+                started = time.monotonic()
+                result = self.run_connect("good-B", apply_stored_conf=True, trace=True)
+                self.assert_profile_reload(result)
+                self.assertLess(time.monotonic() - started, 4)
+                self.assertEqual(len(self.iw_calls()), 1)
+                self.assertIn(f"prescan={rc}", (self.state / "logger.log").read_text())
+                self.assertEqual(self.stub_processes_left(f"{self.stub}/iw", "sleep 4.71"), [])
+
+    def test_signal_during_the_scan_stops_it_before_any_link_change(self):
+        self.set_policy(enabled=False)
+        self.miss_target_until_scanned()
+        (self.state / "iw-delay").write_text("4.72\n")
+        env = dict(self.environment(), FTPCMD_APPLY_CONF="1")
+        process = subprocess.Popen(["bash", str(WIFI_SH), "mlan0", "connect", "good-B"],
+                                   env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True)
+        try:
+            deadline = time.monotonic() + 5
+            while not self.iw_calls() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertEqual(len(self.iw_calls()), 1)
+            process.send_signal(signal.SIGTERM)
+            stdout, stderr = process.communicate(timeout=8)
+            self.assertEqual(process.returncode, 143, stdout + stderr)
+            self.assertEqual(self.stub_processes_left(f"{self.stub}/iw", "sleep 4.72"), [])
+            self.assertEqual(self.ftp_switch_commands(), [])
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate(timeout=3)
+
+    def test_scan_is_started_only_for_ftp_switches_that_can_reassociate(self):
+        cases = (
+            ("ordinary connect", False, True, ("good-B",)),
+            ("fallback enabled", True, False, ("good-B",)),
+            ("staged credentials", True, True, ("good-B",)),
+            ("frequency argument", True, True, ("good-B", "5220")),
+        )
+        for name, ftp, disabled, args in cases:
+            with self.subTest(name):
+                self.write_conf(CONF_MODE_B)
+                (self.state / "runtime.conf").write_text(CONF_MODE_B)
+                (self.state / "status").write_text(_cli.STATUS_INITIAL)
+                (self.state / "calls.log").write_text("")
+                self.set_policy(enabled=not disabled)
+                self.miss_target_until_scanned()
+                self.run_dir.mkdir(exist_ok=True)
+                pending = self.run_dir / "mlan0.credential-pending"
+                if name == "staged credentials":
+                    pending.touch()
+                else:
+                    pending.unlink(missing_ok=True)
+                result = self.run_connect(*args, apply_stored_conf=ftp)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(self.iw_calls(), [])
+
     def test_ftp_ssid_switch_uses_cache_for_target_seen_while_last_scan_covered_channels(self):
         # Entries of one scan differ by the seconds it spent on its channels.
         self.set_policy(enabled=False)

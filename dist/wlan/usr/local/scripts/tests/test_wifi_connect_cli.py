@@ -137,6 +137,21 @@ case "$cmd" in
 esac
 '''
 
+# iw(8) 스텁: 호출을 인자별 [ ] 로 calls.log 에 남긴다(호스트의 진짜 iw 를 부르지 않게).
+#  - iw-delay -> 그 초만큼 걸린다. iw-rc -> 그 값으로 끝난다. 끝나면 iw-exit 를 남긴다.
+#  - iw-bss   -> 끝날 때 bss 를 그 내용으로 바꾼다(스캔이 대상을 새로 본 효과).
+#  - 열린 FD 의 대상을 iw-fds 에 남긴다(connect 의 lock 을 물려받지 않았는지).
+IW_STUB = r'''#!/bin/bash
+D="${WPA_STUB_DIR:?}"
+{ printf 'iw'; printf ' [%s]' "$@"; printf '\n'; } >> "$D/calls.log"
+for fd in /proc/$$/fd/*; do readlink "$fd"; done > "$D/iw-fds" 2>/dev/null
+if [ -f "$D/iw-delay" ]; then read -r delay < "$D/iw-delay"; sleep "$delay"; fi
+if [ -f "$D/iw-bss" ]; then cp "$D/iw-bss" "$D/bss"; fi
+echo iw-exit >> "$D/calls.log"
+if [ -f "$D/iw-rc" ]; then read -r rc < "$D/iw-rc"; exit "$rc"; fi
+exit 0
+'''
+
 # install(1) 스텁: safe_install_sync 의 `-o root -g root` 만 떼고 진짜 install 로 넘긴다.
 INSTALL_STUB = r'''#!/bin/bash
 args=()
@@ -199,6 +214,7 @@ class ConnectHarness(unittest.TestCase):
         self.conf_dir.mkdir()
         (self.stub / "wpa_cli").write_text(WPA_CLI_STUB)
         (self.stub / "install").write_text(INSTALL_STUB)
+        (self.stub / "iw").write_text(IW_STUB)
         for noop in ("sync", "systemctl"):
             (self.stub / noop).write_text("#!/bin/sh\nexit 0\n")
         (self.stub / "logger").write_text(
