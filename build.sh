@@ -191,7 +191,7 @@ fi
 # Build wlan-opc (OPC-side control daemon + VHL CLI simulator)
 # 산출물: wlan-opc/build/<arch>/{opcd/opcd,vhlctl/vhlctl}, wlan-opc/opcd/opcd.service
 # 설치 트리: /usr/local/opc/{bin/opcd, bin/vhlctl, opcd.service}
-# postinst가 /etc/systemd/system/opcd.service symlink + enable 처리한다.
+# postinst가 /etc/systemd/system/opcd.service 에 실제 파일로 복사한다(#400). enable 은 .opc.enabled 게이트.
 WLAN_OPC_DIR="${BASEDIR}/wlan-opc"
 if [ -d "${WLAN_OPC_DIR}" ]; then
     echo "Building wlan-opc..."
