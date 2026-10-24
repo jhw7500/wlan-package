@@ -964,6 +964,51 @@ connect_cache_reassociate() {
     wpa_cli_ok "$IFACE" reassociate
 }
 
+# A switch whose target is not in the last scan used to RECONFIGURE, which
+# disconnects first and then scans while the link is down (~0.5 s on the
+# board). Scanning for the target while still connected (~270 ms for 4
+# channels) overlaps with the rest of the connect preparation, and the cache
+# path then needs only the association (#399). Only FTP switches that can take
+# the cache path start one; the scan-transition lock the connect holds keeps
+# bgscan and roaming scans out. The integer cap also suits BusyBox timeout.
+CONNECT_PRESCAN_PID=""
+CONNECT_PRESCAN_RC=none
+CONNECT_TARGET_RECENT=""
+connect_prescan_start() {
+    local common freqs cap
+    [ "$#" -eq 1 ] && [ "$APPLY_STORED_CONF" = "1" ] && [ "$CONNECT_FALLBACK_ENABLED" != 1 ] \
+        && [ "$PRE_WPA_STATE" = "COMPLETED" ] && [ -n "$LIVE_NETWORK_ID" ] \
+        && [ "$TARGET_SSID_WPA_TEXT" != "$LIVE_SSID_WPA_TEXT" ] \
+        && [ ! -e "$WIFI_RUN_DIR/${IFACE}.credential-pending" ] && [ -f "$CONF" ] \
+        || return 0
+    common=$(wifi_wpa_child_call wifi_wpa_conf_common_freqs "$CONF") || return 0
+    read -r -a freqs <<< "$common"
+    [ "${#freqs[@]}" -gt 0 ] || return 0
+    if connect_cache_target_recent; then
+        CONNECT_TARGET_RECENT=1
+        return 0
+    fi
+    cap=$(((${#freqs[@]} * 150 + 300 + 999) / 1000))
+    ( wifi_wpa_child_exec timeout -k 1 "$cap" iw "$IFACE" scan freq "${freqs[@]}" ssid "$1" ) \
+        >/dev/null 2>&1 &
+    CONNECT_PRESCAN_PID=$!
+}
+
+# The supplicant must not scan or associate while the background scan runs.
+connect_prescan_wait() {
+    [ -n "$CONNECT_PRESCAN_PID" ] || return 0
+    CONNECT_PRESCAN_RC=0
+    wait "$CONNECT_PRESCAN_PID" || CONNECT_PRESCAN_RC=$?
+    CONNECT_PRESCAN_PID=""
+}
+
+connect_prescan_stop() {
+    [ -n "${CONNECT_PRESCAN_PID:-}" ] || return 0
+    kill -TERM "$CONNECT_PRESCAN_PID" 2>/dev/null || :
+    wait "$CONNECT_PRESCAN_PID" 2>/dev/null || :
+    CONNECT_PRESCAN_PID=""
+}
+
 # ----- radio staged-apply helpers -----
 # mode/bw는 /tmp(휘발)에 stage하고 radio-apply 성공 시에만 JSON에 commit한다.
 # 미커밋 stage는 재부팅 시 자동 소멸 (mcstier 마커와 동일한 /tmp 관례) —
@@ -3369,6 +3414,7 @@ case "$2" in
     trap 'connect_signal_exit 129' HUP
     trap 'connect_signal_exit 130' INT
     trap 'connect_signal_exit 143' TERM
+    connect_prescan_start "$@"
     MONITOR_TIMEOUT="$CONNECT_TIMEOUT"
     [ "$CONNECT_FALLBACK_ENABLED" != 1 ] || MONITOR_TIMEOUT=$((CONNECT_TIMEOUT + CONNECT_ROLLBACK_TIMEOUT))
     if ! connect_event_monitor_start "$IFACE" "$MONITOR_TIMEOUT"; then
@@ -3432,14 +3478,15 @@ case "$2" in
             { print }
             END { if (blocks == 0) { print "error: no network={ block in config" > "/dev/stderr"; exit 1 } }
         ' "$CANON_FILE" > "$TMP_FILE"; then
-            # Decide before the install, while the stored profile is still the
-            # one the supplicant loaded (#388). Ordinary `wifi connect` keeps
-            # the full profile reload.
+            # Compare profiles before the install, while the stored profile is
+            # still the one the supplicant loaded (#388). Whether the last scan
+            # saw the target is checked just before the switch, after any
+            # background scan (#399). Ordinary `wifi connect` keeps the full
+            # profile reload.
             if [ "$APPLY_STORED_CONF" = "1" ] && [ "$SET_FREQ" = "0" ] \
                && [ "$PRE_WPA_STATE" = "COMPLETED" ] && [ "$MULTI_TOPOLOGY" = "0" ] \
                && [ "$CONNECT_FALLBACK_ENABLED" != 1 ] && [ -n "$LIVE_NETWORK_ID" ] \
                && [ ! -e "$WIFI_RUN_DIR/${IFACE}.credential-pending" ] \
-               && connect_cache_target_recent \
                && connect_cache_profile_matches "$CONF" "$TMP_FILE"; then
                 CACHE_CONNECT=1
             fi
@@ -3484,8 +3531,12 @@ case "$2" in
         # this explicit profile reload its existing grace window so the
         # checker does not queue a competing reconnect or restart.
         : > "$WIFI_RUN_DIR/${IFACE}.reconfigure-grace" 2>/dev/null || true
-        if [ "$CACHE_CONNECT" = "1" ] && connect_cache_reassociate; then
-            ftpcmd_trace_log cache_connect_requested "live_id=$LIVE_NETWORK_ID"
+        connect_prescan_wait
+        if [ "$CACHE_CONNECT" = "1" ] \
+           && { [ "$CONNECT_TARGET_RECENT" = 1 ] || connect_cache_target_recent; } \
+           && connect_cache_reassociate; then
+            ftpcmd_trace_log cache_connect_requested \
+                "live_id=$LIVE_NETWORK_ID prescan=$CONNECT_PRESCAN_RC"
             echo "wpa_cli set_network/reassociate OK ($IFACE)"
             PROFILE_CONNECT_PATH=cache
         else
@@ -3494,7 +3545,7 @@ case "$2" in
                 exit 7
             fi
             ftpcmd_trace_log reconfigure_requested \
-                "profile_sync=1 live_id=${LIVE_NETWORK_ID:-none}"
+                "profile_sync=1 live_id=${LIVE_NETWORK_ID:-none} prescan=$CONNECT_PRESCAN_RC"
             echo "wpa_cli reconfigure OK ($IFACE)"
             PROFILE_CONNECT_PATH=reconfigure
         fi
