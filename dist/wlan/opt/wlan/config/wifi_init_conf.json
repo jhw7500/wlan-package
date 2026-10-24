@@ -94,7 +94,7 @@
     "wbridge": {
         "_comment": [
             "WiFi Bridge 프로세스 설정. 이 JSON이 SSoT이며, JSON 파싱 실패 시에만 /etc/default/wbridge가 폴백으로 사용됨.",
-            "enabled: (bool) bridge 전체 ON/OFF. false이면 bridge 서비스 전부 stop+disable",
+            "enabled: (bool) bridge 전체 ON/OFF. false이면 bridge 서비스 전부 stop+disable하고, engine=moal이면 드라이버 브리지 인자(bridge_mode 등)도 넘기지 않는다(재부팅 후 반영)",
             "bridge_iface: (string) mlan0|mlan1 — bridge에 사용할 무선 인터페이스",
             "mac_mode: (string) default|dynamic|static — bridge 인터페이스 MAC 결정 방식. dynamic=유선측 MAC 동적 획득",
             "mac_clone_require_peer: (bool) mac_mode=dynamic 전용. true(기본)면 클론 MAC은 유선 peer를 실제로 찾은 부팅에서만 유지된다 — peer가 없으면 .link의 이전 클론을 버리고 mac.<iface>.base로, base도 없으면 [Link] MACAddress를 제거해 드라이버 기본 MAC을 쓴다. false면 종전처럼 직전 클론이 .link에 남아 다음 부팅에도 재적용된다(같은 PC로 여러 기기를 설정하면 MAC 중복). true면 매 부팅 탐색 전 /tmp/eth0_client_mac도 지운다",

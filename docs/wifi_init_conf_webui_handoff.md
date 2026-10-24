@@ -221,7 +221,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 
 | 경로 | 라벨 | 타입 | 기본값 | 허용값/범위 | UI편집 | 적용시점 | 설명 |
 |---|---|---|---|---|---|---|---|
-| `wbridge.enabled` | 브릿지 전체 활성화 | bool | `true` | true\|false | yes | boot | false면 bridge 서비스 전부 stop+disable |
+| `wbridge.enabled` | 브릿지 전체 활성화 | bool | `true` | true\|false | yes | boot | false면 bridge 서비스 전부 stop+disable, engine=moal이면 드라이버 브리지 인자도 넘기지 않음(재부팅 후 반영) |
 | `wbridge.bridge_iface` | 브릿지 무선 인터페이스 | enum | `mlan0` | `mlan0`\|`mlan1` | caution | boot | mlan1이면 moal `bridge_wlan_idx=1`. pcap 트랙은 mlan0 하드코딩 |
 | `wbridge.mac_mode` | 브릿지 MAC 결정 방식 | enum | `dynamic` | `default`\|`dynamic`\|`static` | caution | boot | dynamic=유선측 MAC 동적 획득 |
 | `wbridge.mac_clone_require_peer` | 클론 MAC 유선 peer 필수 | bool | `true` | true\|false | caution | boot | `mac_mode=dynamic` 전용. true=유선 peer를 찾은 부팅에서만 클론 유지(없으면 `mac.<iface>.base` → base도 없으면 `.link` MACAddress 제거 → 드라이버 기본 MAC). false=직전 클론이 `.link`에 남아 다음 부팅에도 재적용(같은 PC로 여러 기기 설정 시 MAC 중복) |
