@@ -92,8 +92,8 @@ DEFAULT_ETH_JSON = "/var/log/cantops/json/eth0/link.json"
 DEFAULT_MLAN_JSON = "/var/log/cantops/json/mlan0/link.json"
 DEFAULT_DEVINFO = "/usr/local/opc/etc/device_info.json"
 # Phase2a: wifi_logger_link.py 가 매 주기 기록하는 supplicant 상태({wpa_state,
-# temp_disabled}). link.json 의 미연결 '{}' 계약(opcd/passive_roam 의존)을
-# 건드리지 않으려 별도 파일로 둔다.
+# temp_disabled}). link.json 의 미연결 계약(link 섹션 없음 — opcd/passive_roam
+# 의존)을 건드리지 않으려 별도 파일로 둔다.
 DEFAULT_SUPP_JSON = "/var/log/cantops/json/mlan0/supplicant.json"
 
 NULL_MAC = "00:00:00:00:00:00"

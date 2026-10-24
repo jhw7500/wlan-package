@@ -380,7 +380,7 @@ def is_wifi_connected_wpa(interface="mlan0") -> bool:
 # 매 주기 wpa_cli status(+필요시 list_networks)를 폴링해 supplicant.json 에
 # {wpa_state, temp_disabled} 를 기록한다. wpa_state→MIB enum(invalid/success/
 # failure/authenticating) 매핑은 SNMP 소비자(wifi_snmp_pp.py)가 한다. link.json 의
-# 미연결 '{}' 계약(opcd/passive_roam 의존)을 깨지 않으려 별도 파일로 분리.
+# 미연결 계약(link 섹션 없음 — opcd/passive_roam 의존)을 깨지 않으려 별도 파일로 분리.
 SUPP_FILE = "supplicant.json"
 
 def extract_supplicant(status_text, networks_text=""):
@@ -764,6 +764,40 @@ def _write_empty_link():
     with open(path, 'wb') as f:
         f.write(_empty_json)
 
+SYSFS_NET = "/sys/class/net"
+_MAC_RE = re.compile(r"[0-9a-f]{2}(?::[0-9a-f]{2}){5}")
+
+def _own_mac():
+    """인터페이스 자기 MAC(sysfs). 런타임 MAC 변경도 따르도록 매 주기 읽는다.
+    읽기 실패·형식 이상이면 None — 인터페이스가 사라지는 경합(fw_reload 등)에서
+    예외로 로거가 죽어 재시작 한도에 걸리지 않게 한다(#406)."""
+    try:
+        with open(os.path.join(SYSFS_NET, IFACE, "address")) as f:
+            mac = f.read().strip().lower()
+    except OSError:
+        return None
+    return mac if _MAC_RE.fullmatch(mac) else None
+
+def _write_disconnected_link():
+    """미연결 link.json: link 섹션 없이 자기 MAC(info.address)만 쓴다(#406).
+    소비자는 모두 link.address 로 접속을 판정하므로 미연결 판정은 그대로이고,
+    GetDeviceInfo·SNMP 의 무선 MAC 만 비지 않게 된다. ssid·channel·IP 같은 다른
+    info 필드는 소비자가 접속 판정 없이 보고하므로 쓰지 않는다. MAC 을 못 읽으면 '{}'."""
+    mac = _own_mac()
+    if mac is None:
+        _write_empty_link()
+        return
+    save_db({"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+             "info": {"address": mac}}, LOG_DIR)
+
+def _ensure_own_mac(info):
+    """`iw info` 가 실패해 address 가 비면 sysfs 자기 MAC 으로 채운다(#406 의 미연결과 같은 증상)."""
+    if not info.get("address"):
+        mac = _own_mac()
+        if mac:
+            info["address"] = mac
+    return info
+
 def main():
     os.makedirs(LOG_DIR, exist_ok=True)
     while True:
@@ -795,14 +829,14 @@ def main():
         check_fw_settings(cycle_start)
 
         if not is_wpa_running(IFACE):
-            # wpa 미실행 → supplicant 무효. link.json 은 기존대로 '{}'.
+            # wpa 미실행 → supplicant 무효. link.json 은 미연결 형식(link 섹션 없음).
             write_supplicant_json(LOG_DIR, {"wpa_state": "", "temp_disabled": False})
-            _write_empty_link()
+            _write_disconnected_link()
             time.sleep(1)
             continue
 
         # supplicant 상태(연결/인증중/실패)를 매 주기 기록 — SNMP SupplicantState 원천.
-        # station dump 분기(미연결 시 '{}' continue)보다 먼저 써, 인증중/실패도 포착한다.
+        # station dump 분기(미연결 시 link 섹션 없이 continue)보다 먼저 써, 인증중/실패도 포착한다.
         supp = poll_supplicant(IFACE)
         write_supplicant_json(LOG_DIR, supp)
 
@@ -816,7 +850,7 @@ def main():
             # 않도록 빠르게 재시도. 윈도우 안에서 회복되면 정상 처리로 진행한다.
             link_out = fast_retry_station_dump(LINK_RETRY_COUNT, LINK_RETRY_DELAY)
         if not link_out:
-            _write_empty_link()
+            _write_disconnected_link()
             time.sleep(1)
             continue
 
@@ -830,7 +864,7 @@ def main():
 
         check_tx_spike(link_data)
 
-        info_data = parse_iw_info(info_out) if info_out else {}
+        info_data = _ensure_own_mac(parse_iw_info(info_out) if info_out else {})
         info_data.update(get_ip_info(IFACE))
         # `iw info` 의 ssid 분기는 managed STA 에서 절대 매치되지 않으므로(AP 모드 전용),
         # 비어 있으면 supplicant 값으로 채운다. opcd 가 device-info 의 ESSID(사양 §4.3.4)를
