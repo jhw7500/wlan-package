@@ -283,8 +283,12 @@ logger -p local0.info "[$tag:$LINENO] mlan0: enabled=$MLAN0_ENABLED freq=$MLAN0_
 [ "$BRIDGE_IFACE" = "mlan1" ] && bridge_wlan_idx=1
 # MFG 프로파일: moal bridge 인자(bridge_mode=1 등) 미전달 — MFG FW에서 브릿지는
 # 무의미하고, moal bridge가 eth0에 attach(promisc)해 labtool 이더넷 링크를 건드릴 수 있다.
+# wbridge.enabled=false 또는 bridge_iface=none(BRIDGE_NONE): 서비스만 멈추면 moal 엔진의
+# 드라이버 브리지는 bridge_mode=1 로 계속 동작하므로 인자 자체를 넘기지 않는다(#402).
 if [ "${MFG_MODE:-0}" == "1" ] && [ "$WBRIDGE_ENGINE" = "moal" ]; then
     logger -p local0.info "[$tag:$LINENO] MFG profile: skip moal bridge params (moal_args: $moal_args)"
+elif [ "$WBRIDGE_ENGINE" = "moal" ] && [ "$BRIDGE_NONE" = "true" ]; then
+    logger -p local0.info "[$tag:$LINENO] bridge disabled: skip moal bridge params (moal_args: $moal_args)"
 elif [ "$WBRIDGE_ENGINE" = "moal" ]; then
     moal_args="$moal_args bridge_mode=1 bridge_debug=$bridge_debug bridge_wlan_idx=$bridge_wlan_idx bridge_keepalive_ms=$bridge_keepalive_ms"
     # bridge_keepalive_idle_ms: 신규 param — 미선언 드라이버(예: 현재 moal_imx8.ko)에 전달하면

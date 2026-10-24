@@ -251,3 +251,66 @@ def test_missing_udev_wait_capability_stops_before_driver_operations(tmp_path):
     assert "insmod" not in calls
     assert "association-ready" not in calls
     assert (tmp_path / "wifi/mac-contract-blocked").exists()
+
+
+def run_moal_args(tmp_path, *, enabled=True, engine="moal", bridge_iface="mlan0"):
+    """Run the bridge-switch and moal-argument section of wifi_init.sh."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "calls"
+    calls.write_text("")
+    logger = bin_dir / "logger"
+    logger.write_text('#!/bin/bash\nprintf "log %s\\n" "$*" >> "$CALLS"\n')
+    logger.chmod(0o755)
+    # A module that declares every gated parameter, so the gates add them.
+    module = tmp_path / "moal_imx93.ko"
+    module.write_bytes(b"\0".join(
+        b"parmtype=%s:int" % name
+        for name in (b"bridge_keepalive_idle_ms", b"wq_sched_policy")))
+    source = (SCRIPTS / "wifi_init.sh").read_text()
+    section = source[source.index('BRIDGE_IFACE="${BRIDGE_IFACE:-mlan0}"'):
+                     source.index("# MFG 프로파일 멱등 가드")]
+    section = section.replace("/opt/wlan/driver/$MOAL_KO", str(module))
+    harness = f"""set -euo pipefail
+tag=wifi_init-test
+WBRIDGE_ENABLED={'true' if enabled else 'false'}
+BRIDGE_IFACE={shlex.quote(bridge_iface)}
+WBRIDGE_ENGINE={shlex.quote(engine)}
+MAC_MODE=default
+MAC_CLONE_REQUIRE_PEER=true
+BOARD_TYPE=imx93 MLAN_KO=mlan_imx93.ko MOAL_KO=moal_imx93.ko
+MLAN0_ENABLED=true MLAN0_FREQ=auto MLAN1_ENABLED=false MLAN1_FREQ=auto
+MFG_MODE=0
+moal_args='mod_para=cts/wifi_mod_para.conf'
+bridge_debug=0 bridge_wlan_idx=0 bridge_keepalive_ms=1 bridge_keepalive_idle_ms=20
+bridge_peer='' bridge_consume_link_local='' bridge_local_hairpin='' bridge_roam_announce=''
+bridge_deliver_rt_prio=45
+{section}
+printf 'moal_args=%s\\n' "$moal_args"
+"""
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "CALLS": str(calls)}
+    result = subprocess.run(["bash", "-c", harness], env=env, text=True,
+                            capture_output=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    args = next(line for line in result.stdout.splitlines() if line.startswith("moal_args="))
+    return args.split("=", 1)[1].split(), calls.read_text()
+
+
+def test_enabled_moal_bridge_passes_its_driver_arguments(tmp_path):
+    args, _ = run_moal_args(tmp_path)
+    assert "bridge_mode=1" in args
+    assert "bridge_keepalive_idle_ms=20" in args
+    assert "wq_sched_policy=1" in args
+
+
+@pytest.mark.parametrize("setting", [{"enabled": False}, {"bridge_iface": "none"}])
+def test_disabled_bridge_passes_no_moal_bridge_arguments(tmp_path, setting):
+    # Stopping only the services leaves the moal driver bridging (#402).
+    args, calls = run_moal_args(tmp_path, **setting)
+    assert args == ["mod_para=cts/wifi_mod_para.conf"]
+    assert "bridge disabled: skip moal bridge params" in calls
+
+
+def test_userspace_engine_never_passes_moal_bridge_arguments(tmp_path):
+    args, _ = run_moal_args(tmp_path, engine="pcap")
+    assert args == ["mod_para=cts/wifi_mod_para.conf"]
