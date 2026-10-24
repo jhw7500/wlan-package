@@ -148,6 +148,13 @@ wifi_init_conf.json
 | `arp_ignore_always.enabled` | bool | `true` | `peer_route`와 **독립**으로 `arp_ignore=1`/`arp_announce=2`를 적용해 클론 MAC 이중 ARP 응답 레이스를 차단. **IP 배치에 종속**: eth0-IP(또는 eth0/mlan0 동일 서브넷) 구성에서 `true`, 순수 mlan0-IP에서 `false`. ⚠️ 아래 주의 박스 참고 |
 | `engine` | string | `"pcap"` | 브릿지 엔진. `pcap`\|`tpacket`(유저스페이스) \| `moal`(드라이버 레벨, `mod_para` `bridge_mode=1`). invalid면 pcap 폴백. moal↔그 외 전환은 드라이버 리로드/재부팅 필요. engine=moal이면 `link_guard` 무시 |
 
+> **⚠️ 결선 금지 — 브리지 고리 (#376)**: 유선(eth0) 세그먼트와 무선(AP) 쪽 사이의 L2 경로는 브리지 하나뿐이어야 한다. 드라이버 브리지(`engine=moal`)에는 STP 같은 루프 방지가 없다(wlan-driver-v2 #117). 유저스페이스 엔진은 확인하지 않았으므로 같은 결선을 피한다.
+>
+> - 브리지가 켜진 보드 두 대의 eth0을 같은 스위치에 연결하고 두 무선이 같은 AP에 붙으면, 프레임이 두 브리지 사이를 계속 돈다. 랩에서 이 결선으로 두 보드 모두 SSH 배너를 보내지 않는 폭주가 났다(ping과 닫힌 포트의 RST는 응답).
+> - 두 보드의 mlan0 MAC이 같으면 폭주 대신 한쪽이 유니캐스트를 받지 못하는 상태가 될 수 있다. 어느 쪽도 정상 운용이 아니다.
+> - 같은 원리로 eth0 세그먼트를 AP의 유선 쪽 네트워크와 연결하지 않는다(실측하지 않음).
+> - 현장 기본 결선(eth0에 유선 클라이언트 한 대를 직결)은 해당하지 않는다. 시험 랩에서 여러 보드를 한 스위치에 모을 때는 한 대만 브리지를 켜고 나머지는 `enabled=false`로 끈다. `engine=moal`은 #402 수정이 들어간 패키지부터 `enabled=false`로 드라이버 브리지가 꺼진다(재부팅 후 반영). 그 이전 패키지에서는 `engine=pcap`과 `enabled=false`를 함께 쓴다.
+
 > **⚠️ `arp_ignore_always.enabled`는 IP 배치(토폴로지)에 종속**: 출하 기본값 **`true`**는 eth0에 IP를 두거나 eth0/mlan0가 동일 서브넷이라 클론 MAC 이중 ARP 응답이 문제되는 구성을 전제로 한다. **토폴로지(IP 배치)는 이 JSON이 아니라 `wifi <iface> ip`/webui로 결정**되므로, 배치를 바꾸면 이 값도 함께 점검해야 한다. 순수 mlan0-IP에서 BD↔유선peer 직접통신이 필요하면 `peer_route.enabled=true` + `ip_discovery=true` + `arp_ignore_always.enabled=false` 3종 세트로 설정한다(이때 mlan0 IP 배치도 `wifi mlan0 ip`/webui로 수행). `arp_ignore_always=true` + `peer_route=off` 조합에서 mlan0-IP + 유선↔BD가 필요하면 `wifi_init.sh`가 `[GUARD]` 경고를 남긴다.
 >
 > **진단 명령**: 현재 3종 토글·런타임 상태·정합성을 한눈에 보려면 **`wifi {0|1} br status`** (읽기 전용, 값 변경 없음). `peer_route↔ip_discovery`, `arp_ignore_always↔토폴로지(추정)`, 설정↔런타임(`/32` 미러 등)의 불일치를 `[WARN]`/`[INFO]`로 표시한다. 매번 3종 세트를 외우지 않아도 이 명령으로 현재 구성이 맞는지 확인할 수 있다.
