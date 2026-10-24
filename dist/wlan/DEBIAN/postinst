@@ -122,6 +122,18 @@ prepare_factory_selector_parent() {
     fi
 }
 
+# opcd unit 을 실제 파일로 둔다(#400). 심볼릭 링크로 두면 `systemctl disable` 이
+# enable 링크와 함께 지워 유닛을 잃는다. 같은 디렉터리 임시 파일에 복사한 뒤 mv 로
+# 바꾸므로, 이전 패키지가 남긴 링크도 따라가지 않고 파일로 교체된다.
+install_opcd_unit() {
+    local src="$1" dest="$2" tmp
+    tmp=$(mktemp "${dest%/*}/.${dest##*/}.XXXXXX") || return 1
+    if ! cp -- "$src" "$tmp" || ! chmod 0644 "$tmp" || ! mv -f -- "$tmp" "$dest"; then
+        rm -f -- "$tmp"
+        return 1
+    fi
+}
+
 # Helper-only sourcing skips package actions. Explicit noop retains the existing
 # maintenance contract that also loads installer progress functions.
 if [[ "${BASH_SOURCE[0]}" != "$0" && "${1:-}" != "noop" ]]; then
@@ -478,14 +490,18 @@ customctl() {
   # 따라 wifi_apply_enabled.sh가 일괄 enable/disable한다.
   #
   # opcd (wlan-opc: OPC-side UDP control plane, spec Rev1.00 §3): 원본 unit 은
-  # /usr/local/opc/opcd.service 단일 트리에 두고 systemd 표준 위치로 symlink 만 만든다.
+  # /usr/local/opc/opcd.service 단일 트리에 두고 systemd 표준 위치에는 설치·업그레이드마다
+  # 실제 파일로 복사한다(install_opcd_unit, #400 — 심볼릭 링크는 disable 이 지운다).
   # 라이프사이클(enable/disable/start)은 wifi_init_conf.json .opc.enabled 게이트가 소유한다
-  # (아래 wifi_apply_enabled.sh enable/disable + 부팅 wifi_services.sh start). 심링크는
+  # (아래 wifi_apply_enabled.sh enable/disable + 부팅 wifi_services.sh start). unit 파일은
   # apply_enabled 호출 전에 존재해야 설치 시점 enable/disable 이 동작하므로 이 위치에 둔다.
   if [ -f /usr/local/opc/opcd.service ]; then
-    ln -sf /usr/local/opc/opcd.service /etc/systemd/system/opcd.service
-    systemctl daemon-reload 2>/dev/null || true
-    logger -p local0.info "[$tag:$LINENO] [$KEY] opcd.service installed via symlink (.opc.enabled gate-controlled)"
+    if install_opcd_unit /usr/local/opc/opcd.service /etc/systemd/system/opcd.service; then
+      systemctl daemon-reload 2>/dev/null || true
+      logger -p local0.info "[$tag:$LINENO] [$KEY] opcd.service installed as a unit file (.opc.enabled gate-controlled)"
+    else
+      logger -p local0.err "[$tag:$LINENO] [$KEY] opcd.service install to /etc/systemd/system failed"
+    fi
   fi
   if [ "$NO_WBRIDGE" -eq 0 ]; then
     /usr/local/scripts/wifi_apply_enabled.sh 2>/dev/null || true
