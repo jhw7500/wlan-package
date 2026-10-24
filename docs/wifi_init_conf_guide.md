@@ -148,7 +148,7 @@ wifi_init_conf.json
 | `arp_ignore_always.enabled` | bool | `true` | `peer_route`와 **독립**으로 `arp_ignore=1`/`arp_announce=2`를 적용해 클론 MAC 이중 ARP 응답 레이스를 차단. **IP 배치에 종속**: eth0-IP(또는 eth0/mlan0 동일 서브넷) 구성에서 `true`, 순수 mlan0-IP에서 `false`. ⚠️ 아래 주의 박스 참고 |
 | `engine` | string | `"pcap"` | 브릿지 엔진. `pcap`\|`tpacket`(유저스페이스) \| `moal`(드라이버 레벨, `mod_para` `bridge_mode=1`). invalid면 pcap 폴백. moal↔그 외 전환은 드라이버 리로드/재부팅 필요. engine=moal이면 `link_guard` 무시 |
 
-> **⚠️ 결선 금지 — 브리지 고리 (#376)**: 유선(eth0) 세그먼트와 무선(AP) 쪽 사이의 L2 경로는 브리지 하나뿐이어야 한다. 드라이버 브리지(`engine=moal`)에는 STP 같은 루프 방지가 없다(wlan-driver-v2 #117). 유저스페이스 엔진은 확인하지 않았으므로 같은 결선을 피한다.
+> **⚠️ 결선 금지 — 브리지 고리 (#376)**: 유선(eth0) 세그먼트와 무선(AP) 쪽 사이의 L2 경로는 브리지 하나뿐이어야 한다. 드라이버 브리지(`engine=moal`, wlan-driver-v2 #117)와 pcap 엔진(`engine=pcap`, wlan-bridge #76) 모두 STP 같은 루프 방지가 없고, 아래 결선에서 두 엔진 모두 프레임을 순환시켰다(실측). `tpacket` 엔진은 확인하지 않았으므로 같은 결선을 피한다.
 >
 > - 브리지가 켜진 보드 두 대의 eth0을 같은 스위치에 연결하고 두 무선이 같은 AP에 붙으면, 프레임이 두 브리지 사이를 계속 돈다. 랩에서 이 결선으로 두 보드 모두 SSH 배너를 보내지 않는 폭주가 났다(ping과 닫힌 포트의 RST는 응답).
 > - 두 보드의 mlan0 MAC이 같으면 폭주 대신 한쪽이 유니캐스트를 받지 못하는 상태가 될 수 있다. 어느 쪽도 정상 운용이 아니다.
