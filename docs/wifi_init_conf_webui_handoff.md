@@ -95,6 +95,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 
 - **`snmp` 섹션 신규**: `snmp.enabled` + `snmp.trap.{enabled, dest, community, version}`.
 - **`mgmt_acl` 섹션 신규 (2026-09-03, #256)**: `mgmt_acl.enabled` + `mgmt_acl.allowed_hosts` — 무선측 관리 포트 인바운드 화이트리스트(기본 off/opt-in). §3.12 참조.
+- **OPC IP 주소 리스트 파일 (0.7.4, wlan-opc #194)**: JSON 키가 아니라 `/home/admin/iplist.txt` 텍스트 파일. 파일을 쓴 뒤 opcd 재시작으로 적용. §3.14 참조.
 - **`global`**: `BOARD_TYPE`, `BUS_TYPE`, `BLUETOOTH.enable`, `tx_work`, `ping_monitor.enabled`.
 - **`wbridge`**: `ip_discovery`, `eth_client_ip`, `eth_sweep_subnet`, `peer_route.enabled`, `arp_ignore_always.enabled`, `engine`(pcap|tpacket|moal), `moal.{keepalive_ms, keepalive_idle_ms, debug, peer, consume_link_local}`, `optimize.*`, `thermal.*` 재구성.
 - **`mlanN`**: `connect_threshold`(-100), `connect_fallback.{enabled, attempt_timeout_sec, rollback_timeout_sec}`, `mgmt_hex_dump_enable`(false), `thermal_mgmt`(true), `rate_adapt`, `logger.enabled`.
@@ -626,6 +627,23 @@ association proof를 사용한다. 다음 CONNECTED 검증 성공 시 pending/1�
 | 경로 | 라벨 | 타입 | 기본값 | 허용값/범위 | UI편집 | 적용시점 | 설명 |
 |---|---|---|---|---|---|---|---|
 | `opc.enabled` | opcd 서비스 | bool | `false` | true\|false | caution | boot | wlan-opc OPC 제어 데몬 조건부 기동. `wifi_apply_enabled.sh`가 systemctl 상태 동기화. 기본 opt-in off. 부팅 1회 `opcd-essid-restore.service`(ChangeIp ESSID 복원)는 이 키와 무관하게 항상 enable(표식 있을 때만 실행) |
+
+### 3.14 OPC IP 주소 리스트 파일 (JSON 밖, wlan-opc #194)
+
+ChangeIpAddress 가 고르는 IP 주소 리스트(통신 사양서 6.5)는 `wifi_init_conf.json` 이 아니라 별도 텍스트 파일이다. 웹 UI 가 리스트를 보여 주거나 바꿀 때는 아래 계약을 따른다.
+
+| 항목 | 내용 |
+|---|---|
+| 파일 | `/home/admin/iplist.txt` (admin 소유. FTP admin 접속에서는 `/iplist.txt`) |
+| 형식 | 통신 사양서 6.5. 번호(1~128)마다 `IPAddressN`·`IPSubnetMaskN`·`IPDefaultGatewayN`·`WL54EssIdN`(값은 큰따옴표)·`NTPServerN` 다섯 줄, 순서 자유. 쓰지 않는 번호는 줄이 없다. ASCII(맨 앞 UTF-8 BOM 무시), LF·CRLF 모두 허용, 마지막 줄 줄바꿈 생략 가능, 빈 줄 허용, 주석 줄 불가(잘못된 줄) |
+| 적용 | 파일을 다 쓴 뒤 `systemctl restart opcd`. opcd 는 기동할 때만 이 파일을 읽는다(재부팅 때도 적용). 적용시점은 daemon-restart |
+| 결과 | 유효한 파일 → 리스트 전체 교체. 잘못된 줄이 하나라도 있으면 → 적용하지 않고 이전 리스트 유지, 그 파일은 `iplist.txt.rejected` 로 이름이 바뀌고(이전 것 덮어씀) `iplist.txt` 는 유지된 리스트로 다시 써진다. 사유(줄 번호)는 장치 로그. 0 B 또는 빈 줄뿐 → 모든 번호가 빈 리스트. 파일 없음 → 이전 리스트 유지, 그 리스트로 파일 재생성 |
+| 읽기 | 현재 리스트는 이 파일을 읽어 보여 준다. SetIpConfigList 로 바뀐 리스트도 opcd 가 이 파일에 다시 쓴다. opcd 자체 사본 `/usr/local/opc/etc/iplist.txt` 와 기록 `iplist.user.last` 에는 쓰지 않는다 |
+| 소유 | 쓴 뒤에도 admin 소유를 유지한다(FTP 로 다시 덮어쓸 수 있게). 같은 디렉터리의 임시 파일에 쓰고 rename 하면 재시작 전에 파일이 완전하다 |
+| 공장 초기화 | 장치 사본·기록·변환 흔적과 이 파일(`.rejected` 포함)을 모두 지운다. 다음 기동 때 빈 리스트로 시작하고 빈 파일(0 B)을 만든다 |
+| 업그레이드 | 0.7.4 이전의 바이너리 `iplist.cfg` 는 처음 기동 때 이 형식으로 바뀌고 `iplist.cfg.migrated` 로 이름이 바뀐다(보존). 0.7.4 이전 판으로 되돌리면 리스트는 비어 있다 |
+
+**주의 (iplist.txt)** — 파일 전송·쓰기가 끝난 것을 확인한 뒤 opcd 를 재시작한다. 중간에 끊긴 파일이 리스트 경계에서 끝나면 그 앞까지만 적용되고, 0 B 로 남으면 리스트가 모두 비워진다.
 
 
 ## 4. 웹 UI 그룹핑 권장
