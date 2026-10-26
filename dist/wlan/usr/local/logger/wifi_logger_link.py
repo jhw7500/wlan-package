@@ -273,6 +273,28 @@ def parse_survey_dump(output):
 
     return survey_data
 
+def parse_survey_in_use(output):
+    """운용 채널(`[in use]`) 행의 누적 active·busy 시간(ms). 없으면 None.
+
+    moal 은 이 행만 연결 이후 누적값을 주고(나머지 행은 마지막 스캔 구간값), 연결할 때마다
+    0 부터 다시 센다. opcd 는 이 값의 증가분으로 Network 혼잡(채널 점유율)을 계산한다(#192).
+    """
+    in_use = None
+    for line in output.strip().splitlines():
+        line = line.strip()
+        if line.startswith("frequency:"):
+            if in_use is not None:
+                break
+            if "[in use]" in line:
+                in_use = {"freq": int(re.findall(r'\d+', line)[0])}
+        elif in_use is not None and line.startswith("channel active time:"):
+            in_use["active_time_ms"] = int(re.findall(r'\d+', line)[0])
+        elif in_use is not None and line.startswith("channel busy time:"):
+            in_use["busy_time_ms"] = int(re.findall(r'\d+', line)[0])
+    if in_use is None or "active_time_ms" not in in_use or "busy_time_ms" not in in_use:
+        return None
+    return in_use
+
 def get_ip_info(iface):
     info = {
         "ip_address": None,
@@ -882,6 +904,9 @@ def main():
             "channel_info": channel_data,
             "mwlan_log": mwlan_log
         }
+        survey_in_use = parse_survey_in_use(channel_out) if channel_out else None
+        if survey_in_use:
+            data["survey_in_use"] = survey_in_use
 
         save_db(data, LOG_DIR)
         time.sleep(max(0.0, LOOP_INTERVAL - (time.monotonic() - cycle_start)))

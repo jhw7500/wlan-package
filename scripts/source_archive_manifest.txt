@@ -246,6 +246,7 @@ dist/wlan/usr/local/logger/tests/test_link_disconnected_mac.py
 dist/wlan/usr/local/logger/tests/test_link_fast_retry.py
 dist/wlan/usr/local/logger/tests/test_link_rx_mismatch.py
 dist/wlan/usr/local/logger/tests/test_link_stale_gate.py
+dist/wlan/usr/local/logger/tests/test_link_survey_in_use.py
 dist/wlan/usr/local/logger/tests/test_logger_command_timeout.py
 dist/wlan/usr/local/logger/tests/test_logger_scan_iface_guard.py
 dist/wlan/usr/local/logger/tests/test_logger_scan_iw_event.py
