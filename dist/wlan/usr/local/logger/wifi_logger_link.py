@@ -295,6 +295,17 @@ def parse_survey_in_use(output):
         return None
     return in_use
 
+def survey_in_use_record(output, mono_ms):
+    """link.json 의 survey_in_use 레코드. 운용 채널 행이 없으면 None.
+
+    active time 은 드라이버가 벽시계로 세므로, survey 를 읽은 직후의 단조 시각(mono_ms)을
+    함께 싣는다. opcd 는 두 증가분을 대조해 시계 조정이 낀 구간을 버린다(#192).
+    """
+    record = parse_survey_in_use(output) if output else None
+    if record:
+        record["mono_ms"] = mono_ms
+    return record
+
 def get_ip_info(iface):
     info = {
         "ip_address": None,
@@ -882,6 +893,7 @@ def main():
         info_out = run_command_with_retry(["iw", IFACE, "info"], validate_fn=validate_info)
 
         channel_out = run_command(["iw", IFACE, "survey", "dump"])
+        survey_mono_ms = int(time.monotonic() * 1000)
         channel_data = parse_survey_dump(channel_out) if channel_out else {}
 
         check_tx_spike(link_data)
@@ -904,7 +916,7 @@ def main():
             "channel_info": channel_data,
             "mwlan_log": mwlan_log
         }
-        survey_in_use = parse_survey_in_use(channel_out) if channel_out else None
+        survey_in_use = survey_in_use_record(channel_out, survey_mono_ms)
         if survey_in_use:
             data["survey_in_use"] = survey_in_use
 

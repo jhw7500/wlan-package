@@ -59,6 +59,14 @@ def test_in_use_row_at_the_end_of_the_dump():
         "freq": 5240, "active_time_ms": 1000, "busy_time_ms": 500}
 
 
+def test_record_carries_the_monotonic_read_time():
+    # active time 은 벽시계 기준이라 opcd 가 이 단조 시각과 대조한다(#192 리뷰 A-R1-001).
+    assert wifi_logger_link.survey_in_use_record(SURVEY, 123456) == {
+        "freq": 5200, "active_time_ms": 8331505, "busy_time_ms": 368025, "mono_ms": 123456}
+    assert wifi_logger_link.survey_in_use_record(SURVEY.replace(" [in use]", ""), 123456) is None
+    assert wifi_logger_link.survey_in_use_record("", 123456) is None
+
+
 def test_existing_channel_info_shape_is_unchanged():
     info = wifi_logger_link.parse_survey_dump(SURVEY)
     assert info["5200"] == {"noise": -92, "active_time_ms": 8331505, "busy_time_ms": 368025}
