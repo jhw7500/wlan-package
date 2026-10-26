@@ -1,5 +1,5 @@
 Package: wlan-proc
-Version: 0.7.3
+Version: 0.7.4
 Section: net
 Priority: optional
 Architecture: arm64
@@ -58,3 +58,4 @@ Description: WLAN Application
  0.7.1 : 시각 동기(systemd-timesyncd)를 global.ntp.enabled 토글(기본 true)로 켜고 시험용 기본 경로 스크립트 10-set-gateway.sh 를 제품 패키지에서 뺀다(#361). OPC ChangeIp 가 바꾼 ESSID 를 부팅 때 되돌리는 opcd-essid-restore.service(opcd -R, wifi_init 앞)와 표식 소유 규칙(공장초기화·wifi ssid/connect 가 표식 삭제, opc_wlan_apply 는 표식 없으면 ssid 설치 거부)을 넣는다(#362). 출하 토폴로지 보존·MAC 검증 뒤 station 기동·초기화 복구·GARP 전용 wifi_event 기동(#324·#234), CONTEC SNMP MAC 4종 원시 6바이트(#215). OPCd 를 DFK 사양 정합 머지본 wlan-opc 0b4dfe7(Roaming int16·off-segment 0x0012 와이어 변경 포함)로 올린다
  0.7.2 : 로밍 통지(0x0004)를 로밍 조건 진입 시점에 현재 AP 값으로 1회 보내고 로밍 성공 뒤 통지를 없앤다. 보내기 직전 link.json 의 접속 AP 가 바뀌었으면 보내지 않아 두 AP 의 값이 섞이지 않게 한다(#368). 정상 재부팅의 서비스 정지 구간까지 journal 을 내보내는 셧다운 스냅샷 유닛을 sysinit 단계에 둔다(#371). OPCd 를 wlan-opc 31a6c70 으로 올려 Reset 정상 재부팅을 재부팅 없음으로 기록하던 분류를 고치고(#179), SIGTERM 아닌 시그널 종료를 미확인으로 구분하며 bd_provision --ssid 가 ChangeIp ESSID 표식을 지운다
  0.7.3 : logger 가 같은 클론 MAC 중복으로 의심되는 RX 불일치(펌웨어가 받은 유니캐스트에 비해 호스트로 올라온 유니캐스트가 크게 적음)를 logger.log 에 남기고 <iface>.logger.rx_mismatch_enabled(기본 true)로 켜고 끈다(#375). OPCd 를 wlan-opc 0787633 으로 올려 FaultDetect Memory(0x0002)를 전체 메모리 사용률(진입 80 %·해제 70 %)로 판정해 보낸다(wlan-opc#182). 빌드 서버 배포 스크립트는 wlan.deb 만 복사한다
+ 0.7.4 : 수동 CLI/FTP 망 전환이 실패하면 직전 검증된 프로필로 복귀하는 <iface>.connect_fallback 정책을 추가한다(기본 비활성). FTP wconnect 전환 지연을 줄이고(최근·사전 스캔 캐시 연결, <iface>.wpa_supplicant.scan_res_valid_for_connect 기본 180초) 공장 초기화가 OPC 저장값과 IP 주소 리스트 파일을 지운다(#383·#381). postinst 가 opcd 유닛을 실제 파일로 설치해 OPC 를 다시 켤 수 있게 하고(#400) wbridge.enabled=false 이면 moal 브리지 인자를 넘기지 않으며(#402) 미연결에도 link.json 에 자기 무선 MAC 을 남긴다(#406). OPCd 를 wlan-opc d048403 으로 올려 통신 사양서 0.7.4 판 동작(IP 주소 리스트 텍스트 파일, Dual·빈 비밀번호·형식 오류 응답, ChangeIp GW·NTP 미설정)을 싣는다
