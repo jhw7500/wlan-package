@@ -329,7 +329,6 @@ usr/local/tools/pcap-analyzer/extractor.py
 usr/local/tools/pcap-analyzer/indexer.py
 usr/local/tools/pcap-analyzer/log_merger.py
 usr/local/tools/pcap-analyzer/models.py
-usr/local/tools/pcap-analyzer/network.json
 usr/local/tools/pcap-analyzer/network.json.example
 usr/local/tools/pcap-analyzer/pcap_analyzer.py
 usr/local/tools/pcap-analyzer/reporter.py
