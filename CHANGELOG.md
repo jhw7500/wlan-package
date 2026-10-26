@@ -10,7 +10,7 @@ wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약�
 ### 수동 망 전환 실패 시 이전 프로필 복귀 (PR #382)
 
 - CLI·FTP 의 수동 SSID·주파수 전환이 실패하면, 이번 부팅에서 마지막으로 검증된 전체 프로필로 되돌린다. 되돌림에 성공해도 요청한 새 연결은 실패로 응답한다. 종전에는 실패하면 끊긴 채로 남았다.
-- 되돌리는 동안 같은 인터페이스의 설정 변경은 즉시 거부한다(CLI/FTP 코드 6, OPC helper 코드 4). 상태 조회는 된다. checker·roam·OPC helper 는 되돌림을 시작하지 않고, Mode A 다중 network 구성은 대상이 아니다.
+- 정책이 켜져 있으면 수동 connect 가 진행되는 동안(새 연결 시도와 되돌림 모두) 같은 인터페이스의 설정 변경은 즉시 거부한다(CLI/FTP 코드 6, OPC helper 코드 4). 상태 조회는 된다. checker·roam·OPC helper 는 되돌림을 시작하지 않고, Mode A 다중 network 구성은 대상이 아니다.
 - 설정: `<iface>.connect_fallback.{enabled(기본 false), attempt_timeout_sec(15, 1..15), rollback_timeout_sec(5, 1..5)}`. 업그레이드하면 postinst json_merge 가 기본값으로 넣으며, 기본이 false 라 동작은 바뀌지 않는다.
 - 실기(랩, 같은 SSID/PSK 의 AP 두 대): 5 GHz 두 채널 사이 양방향 전환, 실패 3종(사용 불가 주파수·잘못된 PSK·없는 SSID)에서 이전 연결과 WPA 프로필이 바이트 단위로 복원됐다.
 - 한계: 타임아웃은 userspace 경과 시간 예산이라 커널 I/O 정지의 상한은 아니다.
@@ -27,12 +27,12 @@ wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약�
   - #403(대상을 최근에 보지 못한 경우): 링크 끊김 538→152 ms, 클라이언트 왕복 1108→815 ms
 - 한계: 기본 `bgscan.ssid_filter=true` 에서는 캐시 연결 효과가 작다. 대상이 없으면 사전 스캔 대기(약 210 ms)만큼 늦고, 연결 중 스캔이 채널을 잠깐 비운다. moal 은 지정 스캔에도 내부 스캔 표를 다시 보고하므로 스캔 성공이 "이번에 대상을 들었다"를 보증하지 않는다.
 
-### 공장 초기화와 OPC 상태 (#380·#400·#381; PR #397·#404·#410)
+### 공장 초기화와 OPC 상태 (#383·#380·#400·#381; PR #397·#404·#410)
 
-- 공장 초기화가 OPC 저장값을 지워 opcd 가 초기 비밀번호·빈 IP 주소 리스트·미설정 무선 설정으로 시작한다(#380). wlan-opc #194 의 텍스트 리스트 파일(장치 사본·기록·변환 흔적)과 고객 파일 `/home/admin/iplist.txt`(·`.rejected`)도 지워, 다음 기동 때 빈 리스트와 빈 고객 파일(0 B)이 된다(#410). `systemctl reboot` 가 실패하면 Reset Cause 파일을 지운다.
+- 공장 초기화가 OPC 저장값을 지워 opcd 가 초기 비밀번호·빈 IP 주소 리스트·미설정 무선 설정으로 시작한다(#383). wlan-opc #194 의 텍스트 리스트 파일(장치 사본·기록·변환 흔적)과 고객 파일 `/home/admin/iplist.txt`(·`.rejected`)도 지워, 다음 기동 때 빈 리스트와 빈 고객 파일(0 B)이 된다(#410). `systemctl reboot` 가 실패하면 Reset Cause 파일을 지운다(#380).
 - postinst 가 `/etc/systemd/system/opcd.service` 를 링크가 아닌 실제 파일로 설치한다. 종전에는 OPC 를 끄면(공장 초기화 포함) 유닛 링크가 지워져 다시 켤 수 없었고, 공장 초기화 재부팅의 ResetNotice(0x40)도 호스트에 오지 않았다(#400). 실기(QA 패키지): 공장 초기화 뒤 호스트가 0x40 을 받았고 `.opc.enabled=true` 만으로 opcd 가 active 가 됐다.
 - Reset Cause 값을 wlan-opc `protocol/ids.h`(상위 니블 분류·재사용 금지 규칙의 정본)와 `wlan_reboot_policy.sh`·`factory_reset.sh` 사이에서 대조하는 테스트를 넣었다(#381).
-- 한계: 초기화 직전 몇 초 안의 호스트 저장 요청은 파일을 다시 만들 수 있다. `dpkg -r` 뒤에는 바이너리 없는 유닛 파일이 남고, 실제 파일이 있으면 `systemctl mask opcd` 는 실패한다. 패키지 purge 는 고객 홈의 `iplist.txt` 를 지우지 않는다.
+- 한계: 초기화 직전 몇 초 안의 호스트 저장 요청은 파일을 다시 만들 수 있다. 유닛이 실제 파일이라 `systemctl mask opcd` 는 실패한다(`dpkg -r` 때는 postrm 이 이 파일을 지운다). 패키지 purge 는 고객 홈의 `iplist.txt` 를 지우지 않는다.
 
 ### 브리지 끄기와 결선 금지 (#402·#376; PR #405·#407·#408)
 
@@ -48,7 +48,7 @@ wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약�
 통신 사양서 0.7.4 판이 고객에게 먼저 알린 동작이다.
 
 - GetDeviceInfo 의 ESSID·Mode·BW 를 접속 링크 값이 아니라 설정값으로 보고한다. 미연결에도 ESSID 가 나온다(#193). Firmware Version 은 기동 때 읽어 첫 요청 지연과 빈 값 고착을 없앤다(#187).
-- IP 주소 리스트를 사양 6.5 의 텍스트 파일로 보유한다. 고객 파일 `/home/admin/iplist.txt`(FTP admin 접속의 `/iplist.txt`)를 교체하면 다음 opcd 기동 때 일괄 적용되고, 잘못된 파일은 `iplist.txt.rejected` 로 남긴다. 기존 바이너리 `iplist.cfg` 는 첫 기동 때 한 번 변환한다(#194). 0.7.4 이전 판으로 되돌리면 리스트가 비므로 `iplist.cfg.migrated` 를 `iplist.cfg` 로 되돌린다.
+- IP 주소 리스트를 사양 6.5 의 텍스트 파일로 보유한다. 고객 파일 `/home/admin/iplist.txt`(FTP admin 접속의 `/iplist.txt`)를 교체하면 다음 opcd 기동 때 일괄 적용되고, 잘못된 파일은 `iplist.txt.rejected` 로 남긴다. 기존 바이너리 `iplist.cfg` 는 첫 기동 때 한 번 변환한다(#194). 0.7.4 이전 판으로 되돌리면 리스트가 빈다. `iplist.cfg.migrated` 를 `iplist.cfg` 로 이름을 바꾸면(`mv`, 복사가 아니다) 0.7.4 첫 기동의 변환 시점 리스트가 돌아오고, 그 뒤의 변경은 돌아오지 않는다.
 - 응답 코드: SetRadioConfig Station Type Dual → NG 0x0010, 적용·저장 안 함(#198). 11a + 2.4 GHz → 0x0013(#186). SetPassword 빈 새 비밀번호 → 0x0013(#200). 형식이 맞지 않는 GetBasicInfo → 68 B NG 0x0003(#195). GetDeviceInfo 길이 위반 → 416 B NG 0x0003, 채널을 모르는 접속·채널 변경·로밍 통지 → CH 0xFFFF(#185).
 - ChangeIpAddress 슬롯의 Gateway·NTP 0.0.0.0 은 "설정하지 않음"이다. 관리 인터페이스의 기본 경로와 ChangeIp NTP 설정을 지워 장치 설정으로 돌아간다(#196).
 - 디렉터리 fsync 실패(0x0004) 뒤 같은 SetPassword 재전송은 OK 로 수렴한다(#184).
