@@ -708,10 +708,16 @@ else
 fi
 # #383: 공장 초기화는 OPC 저장값(비밀번호·IP 주소 리스트·무선 설정)을 지워 opcd 가 다음 기동에
 # 초기값으로 시작하게 한다. 생산 정보(device_info.json)와 데몬 설정(opc.conf)은 남긴다.
+# wlan-opc #194: IP 주소 리스트의 장치 사본·기록·변환 흔적과 고객 홈의 iplist.txt(·.rejected)도 지운다.
 OPC_ETC="$WORK/opc-etc"
-mkdir -p "$OPC_ETC"
-for opc_file in password iplist.cfg radio.conf device_info.json opc.conf; do
+OPC_HOME="$WORK/opc-home"
+mkdir -p "$OPC_ETC" "$OPC_HOME"
+OPC_CLEARED="password iplist.cfg iplist.cfg.migrated iplist.txt iplist.user.last radio.conf"
+for opc_file in $OPC_CLEARED device_info.json opc.conf; do
     printf 'x\n' > "$OPC_ETC/$opc_file"
+done
+for home_file in iplist.txt iplist.txt.rejected .profile; do
+    printf 'x\n' > "$OPC_HOME/$home_file"
 done
 cat > "$BIN/logger-capture" <<'EOF'
 #!/bin/bash
@@ -720,9 +726,9 @@ EOF
 chmod +x "$BIN/logger-capture"
 export OPC_LOG="$WORK/opc-clear.log"
 if declare -F factory_reset_clear_opc_state >/dev/null; then
-    FACTORY_LOGGER="$BIN/logger-capture" factory_reset_clear_opc_state "$OPC_ETC"
+    FACTORY_LOGGER="$BIN/logger-capture" factory_reset_clear_opc_state "$OPC_ETC" "$OPC_HOME"
     expect_eq "factory OPC state clear returns success" 0 "$?"
-    for opc_file in password iplist.cfg radio.conf; do
+    for opc_file in $OPC_CLEARED; do
         [ ! -e "$OPC_ETC/$opc_file" ] && pass "factory OPC state clear removes $opc_file" \
             || fail "factory OPC state clear leaves $opc_file"
     done
@@ -730,8 +736,14 @@ if declare -F factory_reset_clear_opc_state >/dev/null; then
         [ -e "$OPC_ETC/$opc_file" ] && pass "factory OPC state clear keeps $opc_file" \
             || fail "factory OPC state clear removed $opc_file"
     done
+    for home_file in iplist.txt iplist.txt.rejected; do
+        [ ! -e "$OPC_HOME/$home_file" ] && pass "factory OPC state clear removes the customer $home_file (#194)" \
+            || fail "factory OPC state clear leaves the customer $home_file (#194)"
+    done
+    [ -e "$OPC_HOME/.profile" ] && pass "factory OPC state clear keeps other files in the customer home" \
+        || fail "factory OPC state clear removed another file in the customer home"
     : > "$OPC_LOG"
-    FACTORY_LOGGER="$BIN/logger-capture" factory_reset_clear_opc_state "$OPC_ETC"
+    FACTORY_LOGGER="$BIN/logger-capture" factory_reset_clear_opc_state "$OPC_ETC" "$OPC_HOME"
     expect_eq "factory OPC state clear tolerates already-missing files" 0 "$?"
     if grep -q 'removed' "$OPC_LOG"; then
         fail "factory OPC state clear logs a removal for a missing file"
@@ -754,6 +766,11 @@ if declare -F factory_reset_clear_opc_state >/dev/null; then
     fi
 else
     fail "factory_reset_clear_opc_state is defined"
+fi
+if grep -Eq '^[[:space:]]+factory_reset_clear_opc_state /usr/local/opc/etc /home/admin$' "$FACTORY_SCRIPT"; then
+    pass "factory reset passes the customer home /home/admin to the OPC state clear (#194)"
+else
+    fail "factory reset does not pass /home/admin to the OPC state clear (#194)"
 fi
 # 호출 자리 계약: payload commit 뒤, 성공 게이트(critical_failures == 0) 안, systemctl reboot 앞.
 # opcd 는 멈추지 않는다 — 재부팅 종료 절차에서 Reset Cause 0x40 을 통지해야 한다.

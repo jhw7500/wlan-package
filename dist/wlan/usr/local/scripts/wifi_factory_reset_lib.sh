@@ -742,17 +742,26 @@ factory_restore_service_state() {
 }
 
 # OPC 저장값(비밀번호·IP 주소 리스트·무선 설정)을 지워 opcd 가 다음 기동에 초기값(초기 비밀번호,
-# 빈 IP 주소 리스트, 미설정 무선 설정)으로 시작하게 한다(#383). 생산 정보(device_info.json)와 데몬
-# 설정(opc.conf)은 남긴다. opcd 는 멈추지 않는다 — 재부팅 종료 절차에서 Reset Cause 0x40 을
-# 통지해야 하고, 서비스만 멈추면 통지하지 않는다. 지우지 못해도 공장 초기화는 계속한다(경고만).
+# 빈 IP 주소 리스트, 미설정 무선 설정)으로 시작하게 한다(#383). IP 주소 리스트는 장치 사본과 기록
+# (iplist.txt·iplist.user.last), 0.7.4 이전 바이너리와 그 변환 흔적(iplist.cfg·iplist.cfg.migrated),
+# 둘째 인자로 받은 고객 홈의 파일(iplist.txt·iplist.txt.rejected)까지 지운다 — 고객 파일이 남으면
+# opcd 가 다음 기동에 그 리스트를 다시 적용한다(wlan-opc #194). 다음 기동 때 opcd 는 빈 리스트로
+# 시작하고 빈 고객 파일(0 B)을 만든다. 생산 정보(device_info.json)와 데몬 설정(opc.conf), 고객 홈의
+# 다른 파일은 남긴다. opcd 는 멈추지 않는다 — 재부팅 종료 절차에서 Reset Cause 0x40 을 통지해야
+# 하고, 서비스만 멈추면 통지하지 않는다. 지우지 못해도 공장 초기화는 계속한다(경고만).
 factory_reset_clear_opc_state() {
-    local dir="$1" name
-    for name in password iplist.cfg radio.conf; do
-        [ -e "$dir/$name" ] || [ -L "$dir/$name" ] || continue
-        if rm -f -- "$dir/$name" 2>/dev/null && [ ! -e "$dir/$name" ]; then
-            factory_log local0.info "removed OPC stored value $dir/$name"
+    local dir="$1" home="${2:-}" name path
+    local -a paths=()
+    for name in password iplist.cfg iplist.cfg.migrated iplist.txt iplist.user.last radio.conf; do
+        paths+=("$dir/$name")
+    done
+    [ -z "$home" ] || paths+=("$home/iplist.txt" "$home/iplist.txt.rejected")
+    for path in "${paths[@]}"; do
+        [ -e "$path" ] || [ -L "$path" ] || continue
+        if rm -f -- "$path" 2>/dev/null && [ ! -e "$path" ]; then
+            factory_log local0.info "removed OPC stored value $path"
         else
-            factory_log local0.warn "could not remove OPC stored value $dir/$name (previous value stays)"
+            factory_log local0.warn "could not remove OPC stored value $path (previous value stays)"
         fi
     done
     return 0
