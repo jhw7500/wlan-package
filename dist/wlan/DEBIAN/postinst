@@ -542,6 +542,28 @@ customctl() {
     logger -p local0.info "[$tag:$LINENO] [$KEY] restarted wifi_init child units (prerm stopped them)"
   fi
 
+  # >>> wifi-event-upgrade-restart
+  # dpkg passes the previously configured version as $2 only for an upgrade.
+  # wifi_services.sh start leaves active units untouched, so a live wifi_event
+  # process would otherwise keep executing the replaced script. Restart only
+  # the active event monitors; starting inactive instances would override the
+  # configuration gate. wpa_supplicant and the remaining boot-loaded components
+  # stay live to preserve the wireless link and take the new files after reboot.
+  if [ -n "${2:-}" ]; then
+    for _wifi_event_iface in mlan0 mlan1; do
+      _wifi_event_unit="wifi_event@${_wifi_event_iface}.service"
+      if systemctl is-active --quiet "$_wifi_event_unit" 2>/dev/null; then
+        if systemctl restart "$_wifi_event_unit"; then
+          logger -p local0.info "[$tag:$LINENO] [$KEY] restarted active $_wifi_event_unit with upgraded script"
+        else
+          logger -p local0.warn "[$tag:$LINENO] [$KEY] failed to restart active $_wifi_event_unit; reboot required"
+        fi
+      fi
+    done
+    logger -p local0.notice "[$tag:$LINENO] [$KEY] package upgrade: reboot required to load upgraded wpa_supplicant and other boot-loaded components (wireless link preserved during install)"
+  fi
+  # <<< wifi-event-upgrade-restart
+
   installer_progress_step
 
 makeDirectory() {

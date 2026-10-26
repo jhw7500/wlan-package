@@ -486,7 +486,26 @@ def main():
     else:
         if not ip:
             # 3-1) 패시브 관찰 (타임아웃 축소)
-            ip = passive_ip_for_mac(ETH_IFACE, mac, timeout=3)
+            passive_ip = passive_ip_for_mac(ETH_IFACE, mac, timeout=3)
+            if passive_ip:
+                sweep_net = get_sweep_network()
+                try:
+                    in_sweep_net = bool(sweep_net) and (
+                        ipaddress.ip_address(passive_ip)
+                        in ipaddress.ip_network(sweep_net, strict=False)
+                    )
+                except ValueError:
+                    in_sweep_net = False
+
+                if in_sweep_net:
+                    ip = passive_ip
+                else:
+                    logger.message(
+                        "warn",
+                        f"[{IFACE}] passive IP {passive_ip} outside sweep network "
+                        f"{sweep_net or 'unavailable'} -> continue discovery",
+                        _EXTRA_(),
+                    )
 
         if not ip and ETH_CLIENT_IP:
             # 3-2) 알려진 후보 IP에 유니캐스트 ARP

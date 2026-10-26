@@ -77,3 +77,84 @@ def test_sweep_explicit_subnet_wins(monkeypatch):
     monkeypatch.setattr(w, "ETH_SWEEP_SUBNET", "192.168.5.0/24")
     monkeypatch.setattr(w, "get_iface_config_addr", lambda i, **k: ("1.1.1.1", "1.1.1.0/24"))  # 쓰이면 안 됨
     assert w.get_sweep_network() == "192.168.5.0/24"
+
+
+def _run_ip_discovery(monkeypatch, passive_ip, sweep_network=None, *, eth_client_ip=None):
+    saved = {}
+    calls = []
+
+    monkeypatch.setattr(w, "IP_DISCOVERY", True)
+    monkeypatch.setattr(w, "ETH_CLIENT_IP", eth_client_ip)
+    monkeypatch.setattr(w, "PEER_ROUTE_ENABLED", False)
+    monkeypatch.setattr(w, "LOCAL_HAIRPIN", False)
+    monkeypatch.setattr(w, "logger", MagicMock(), raising=False)
+    monkeypatch.setattr(w, "wait_for_eth_link", lambda: True)
+    monkeypatch.setattr(w, "get_own_mac", lambda _iface: "02:00:00:00:00:01")
+    monkeypatch.setattr(w, "provoke_peer_relearn", lambda _iface: None)
+    monkeypatch.setattr(w, "active_mac_sniff", lambda *_a, **_k: "02:00:00:00:00:02")
+    monkeypatch.setattr(w, "passive_ip_for_mac", lambda *_a, **_k: passive_ip)
+    if sweep_network is not None:
+        monkeypatch.setattr(w, "get_sweep_network", lambda: sweep_network)
+    monkeypatch.setattr(
+        w,
+        "quick_arp_probe",
+        lambda *_a, **_k: (calls.append("quick") or (None, None)),
+    )
+    monkeypatch.setattr(
+        w,
+        "arp_unicast_probe_for_ip",
+        lambda *_a, **_k: (calls.append("unicast") or None),
+    )
+    monkeypatch.setattr(
+        w,
+        "arp_broadcast_sweep_for_mac",
+        lambda *_a, **_k: (calls.append("sweep") or "192.0.2.22"),
+    )
+    monkeypatch.setattr(w, "save_data", lambda path, value: saved.__setitem__(path, value))
+
+    w.main()
+    return saved[f"/tmp/{w.ETH_IFACE}_client_ip"], calls
+
+
+def test_ip_discovery_accepts_passive_ip_inside_sweep_network(monkeypatch):
+    resolved, calls = _run_ip_discovery(
+        monkeypatch,
+        passive_ip="192.0.2.10",
+        sweep_network="192.0.2.0/24",
+    )
+    assert resolved == "192.0.2.10"
+    assert calls == []
+
+
+def test_ip_discovery_accepts_passive_ip_against_eth0_fallback_network(monkeypatch):
+    monkeypatch.setattr(w, "ETH_SWEEP_SUBNET", None)
+    monkeypatch.setattr(w, "get_iface_config_addr", lambda i, **k: (None, None))
+    monkeypatch.setattr(
+        w,
+        "get_iface_network",
+        lambda i: "192.0.2.0/24" if i == w.ETH_IFACE else None,
+    )
+
+    resolved, calls = _run_ip_discovery(
+        monkeypatch,
+        passive_ip="192.0.2.10",
+    )
+    assert resolved == "192.0.2.10"
+    assert calls == []
+
+
+def test_ip_discovery_rejects_off_subnet_passive_ip_and_continues(monkeypatch):
+    resolved, calls = _run_ip_discovery(
+        monkeypatch,
+        passive_ip="198.51.100.10",
+        sweep_network="192.0.2.0/24",
+        eth_client_ip="192.0.2.22",
+    )
+    assert resolved == "192.0.2.22"
+    assert calls == ["quick", "unicast", "sweep"]
+    assert any(
+        call.args[0] == "warn"
+        and "198.51.100.10" in call.args[1]
+        and "192.0.2.0/24" in call.args[1]
+        for call in w.logger.message.call_args_list
+    )

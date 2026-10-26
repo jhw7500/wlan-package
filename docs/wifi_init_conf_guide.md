@@ -141,7 +141,7 @@ wifi_init_conf.json
 | `mac_mode` | string | `"dynamic"` | MAC 주소 모드. `"default"` (base만), `"dynamic"` (유선측 MAC 동적 획득→base), `"static"` (target→base) |
 | `mac_clone_require_peer` | bool | `true` | `mac_mode=dynamic` 전용. 클론 MAC을 **유선 peer를 실제로 찾은 부팅에서만** 유지한다. 아래 [클론 MAC 잔재](#클론-mac-잔재--mac_clone_require_peer) 참고 |
 | `ip_discovery` | bool | `false` | dynamic MAC 모드에서 MAC 확보 후 클라이언트 IP까지 탐색할지. `false`면 MAC만 확보 후 즉시 종료(부팅 가속, host route 미등록). `true`면 IP 탐색(passive→unicast→sweep) + host route(`/32 dev eth0` src=무선IP) + peer neigh(permanent) 자동 등록. 양방향 라우팅 완성에는 `peer_route.enabled=true` **또는 `moal.local_hairpin=1`** 필요 (등록 게이트가 둘 중 하나면 열림) |
-| `eth_client_ip` | string | `""` | 유선 클라이언트 고정 IP. 빈 문자열이면 quick ARP probe 비활성. 네트워크 토폴로지 종속 |
+| `eth_client_ip` | string | `""` | 유선 클라이언트 고정 IP. 빈 문자열이면 quick ARP probe 비활성. 네트워크 토폴로지 종속. 유선 호스트가 동일·상이 서브넷을 포함해 여러 IP 주소를 쓰면 의도한 peer 주소를 이 값으로 명시한다. |
 | `eth_link_wait_sec` | int | `5` | dynamic MAC 모드에서 유선 링크 준비 대기 시간 (초). `wired_mac_ip_get.py`에서 사용 (구 기본값 3 → **5**) |
 | `eth_sweep_subnet` | string | `""` | peer 발견 최후 sweep 대역 (CIDR). sweep는 eth0로 전송되지만 **peer는 mlan0-IP 토폴로지에서 mlan0와 같은 대역**에 있다. 빈값이면 `mlanN.network의 Address 설정값 → mlanN 런타임 inet → eth0 런타임 inet` 순 폴백 — **설정값을 우선 읽어 부팅 race(mlanN IP 미부여 시점에 eth0 관리대역으로 오판)를 차단**한다. ⚠️ 순수 eth0-IP 토폴로지에서 `mlanN.network`에 이전 구성의 `Address`가 남아 있으면 mlanN 대역이 잡히므로, 그 구성에서는 이 값을 명시해 우회, 예: `"192.168.0.0/24"` |
 | `peer_route.enabled` | bool | `false` | 양방향 BD↔유선peer 라우팅(eth0 host scope IP/table 100 + host route + ARP/RPF sysctl) **마스터 스위치**(옵션 X). `false`면 부팅 시 모든 변경을 revert(기본 투명 브릿지 — 토폴로지 무관 안전). BD가 유선 peer와 **직접** 통신해야 하는 mlan0-IP 토폴로지에서만 `true`(+ `ip_discovery=true`, `arp_ignore_always.enabled=false` 권장). **토폴로지(IP 배치)는 이 JSON이 아니라 `wifi <iface> ip`/webui로 결정.** invalid/missing이면 factory default=`true` |
@@ -1550,13 +1550,13 @@ AC 전용 mlan1은 이 deferred HE 경로와 `11axcfg` 검증 대상이 아니�
 
 `mlan0.roam_garp` / `mlan1.roam_garp`. **사용 스크립트**: `wifi_event.sh`(송신), `wifi_apply_enabled.sh`(이벤트 서비스 활성화).
 
-로밍 후 유선 스위치의 FDB가 STA 새 위치를 재학습하기까지 ~2–5초 상향 통신 갭이 관측되는데(무선 핸드오프·STA 하향은 정상, 로밍 시 STA/AP 어느 쪽도 재공지 안 함 — tshark 확정), `wifi_event.sh`의 로밍 case(`connected to`/`roamed to`)에서 BSSID 확인 직후 무선 iface IP로 gratuitous ARP(`arping -U -c 3`)를 즉시 발사해 스위치 재학습을 앞당긴다(#234).
+로밍 후 유선 스위치의 FDB가 STA 새 위치를 재학습하기까지 ~2–5초 상향 통신 갭이 관측되는데(무선 핸드오프·STA 하향은 정상, 로밍 시 STA/AP 어느 쪽도 재공지 안 함 — tshark 확정), `wifi_event.sh`의 로밍 case(`connected to`/`roamed to`)에서 BSSID 확인 뒤 무선 iface IPv4를 최대 2초(100 ms 간격) 기다린 다음 gratuitous ARP(`arping -U -c 3`)를 발사해 스위치 재학습을 앞당긴다(#234).
 
 | 키 | 타입 | 기본값 | 설명 |
 |----|------|--------|------|
 | `roam_garp.enabled` | bool | `false` | 로밍(connected/roamed) 시 gratuitous ARP 발사 ON/OFF. **기본 off(opt-in)** |
 
-- **스코프 = 무선전용/관리-IP**: iface에 IPv4가 있을 때만 발사한다. DFK 사양의 `peer-route` 프로파일은 관리 IP를 mlan0에 두고 eth0에 같은 IP를 `/32`로 미러하므로(위 브리지 프로파일의 운용 사양 표) 발사 대상이다. mlan0에 IP가 없는 구성(순수 MAC클론 투명 브리지, 관리 IP를 eth0에만 둔 구성)은 **자동 no-op**이며, 그 로밍 갭 근본책은 드라이버측 클론 MAC L2 announce(**wlan-driver-v2#47**, 머지됨)다.
+- **스코프 = 무선전용/관리-IP**: iface에 IPv4가 있을 때만 발사한다. DFK 사양의 `peer-route` 프로파일은 관리 IP를 mlan0에 두고 eth0에 같은 IP를 `/32`로 미러하므로(위 브리지 프로파일의 운용 사양 표) 발사 대상이다. 최대 2초를 기다려도 mlan0에 IP가 없는 구성(순수 MAC클론 투명 브리지, 관리 IP를 eth0에만 둔 구성)은 송신을 건너뛰고 `ROAM_GARP skipped reason=no_ipv4`를 journal에 남긴다. 그 로밍 갭 근본책은 드라이버측 클론 MAC L2 announce(**wlan-driver-v2#47**, 머지됨)다.
 - **로밍 데몬(`.roaming.enabled`)과 독립**: iw 이벤트 반응이라 FW 로밍·수동 로밍이면 로밍 데몬이 꺼져 있어도 발사된다. (같은 이유로 `.roaming` 하위가 아니라 top-level per-iface 키 — `arping`과 동일 배치)
 - **GARP만 사용해도 이벤트 서비스 활성화**: 인터페이스가 활성화되어 있고 `roam_garp.enabled`가 JSON boolean `true`이면, 부팅 또는 `wifi_init` 적용 시 `wifi_event@<iface>.service`를 활성화한다. 다른 이벤트 사용 기능(on_connect/SNMP trap/deferred MCS)은 없어도 된다. 서비스가 이미 실행 중이면 송신 게이트는 이벤트마다 현재 설정을 읽는다. 문자열 `"true"`나 숫자 `1`은 GARP 활성화 값이 아니다.
 - 비블로킹 백그라운드(`&`)로 `iw event` 루프를 막지 않는다. `arping`은 iputils(`-U` gratuitous announce 지원, 온타겟 확인).

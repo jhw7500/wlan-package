@@ -3,6 +3,14 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.7.6 (2026-10-26)
+
+> SemVer **patch** — 로밍 직후 IPv4 재부여 경쟁을 해결하고(#234), 유선 패시브 IP 탐색이 대역 밖 주소를 채택하지 않게 하며(#417), 업그레이드에서 `wifi_event@`를 재시작하고 완전 적용에 필요한 재부팅을 알린다(#418).
+
+- `roam_garp.enabled=true`일 때 CONNECTED/ROAMED 뒤 무선 IPv4가 늦게 돌아오면 최대 2초(100 ms 간격) 기다린 다음 GARP를 보낸다. 끝내 주소가 없으면 송신을 건너뛰고 `ROAM_GARP skipped reason=no_ipv4`를 기록한다. 대기는 백그라운드에서 실행해 다음 이벤트를 막지 않는다(#234).
+- 유선 peer의 패시브 탐색 IP가 `get_sweep_network()` 밖이면 경고를 남기고 기존 유니캐스트·스윕 탐색으로 진행한다. 주소가 여러 개인 유선 호스트는 `eth_client_ip`를 지정한다(#417).
+- 패키지 업그레이드 뒤 실행 중인 `wifi_event@` 인스턴스를 재시작해 새 이벤트 스크립트를 적용한다. `wpa_supplicant@` 등의 전체 런타임 갱신과 새 패키지의 완전 적용에는 재부팅이 필요하며, 설치 로그와 운영 가이드에 이를 명시한다(#418).
+
 ## 0.7.5 (2026-10-26)
 
 > SemVer **patch** — FaultDetect Network 혼잡(0x0004)을 유선 송수신량 대신 운용 채널의 무선 점유율로 판정한다(logger `link.json` 의 `survey_in_use` 와 OPCd). pcap-analyzer 의 랩 접속 설정을 출하물에서 뺀다(업그레이드하면 기기의 `network.json` 이 지워진다). 로밍 GARP 를 보내면 journal 에 한 줄을 남긴다. OPCd 를 wlan-opc ee47738 로 올린다.
