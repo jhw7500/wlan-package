@@ -70,7 +70,7 @@ python3 pcap_analyzer.py capture.pcap
 python3 pcap_analyzer.py capture.pcap --config network.json --ssid OTHER_SSID
 ```
 
-예시 파일: `network.json.example`
+예시 파일: `network.json.example`. 패키지에는 이 예시만 들어 있으므로, 장치에서 쓰려면 `network.json` 을 직접 만들거나 `--config`·CLI 인자로 지정한다.
 
 ### WPA 복호화
 

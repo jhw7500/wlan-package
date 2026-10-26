@@ -454,7 +454,6 @@ dist/wlan/usr/local/tools/pcap-analyzer/extractor.py
 dist/wlan/usr/local/tools/pcap-analyzer/indexer.py
 dist/wlan/usr/local/tools/pcap-analyzer/log_merger.py
 dist/wlan/usr/local/tools/pcap-analyzer/models.py
-dist/wlan/usr/local/tools/pcap-analyzer/network.json
 dist/wlan/usr/local/tools/pcap-analyzer/network.json.example
 dist/wlan/usr/local/tools/pcap-analyzer/pcap_analyzer.py
 dist/wlan/usr/local/tools/pcap-analyzer/reporter.py

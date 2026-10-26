@@ -12,7 +12,13 @@
   처럼 bridge payload 를 기대 목록에서 뺀다 — bridge-less 아카이브의 목록은 그렇게 걸러진다.
 * git 이 추적하는 `dist/wlan/**/tests/` 파일은 아카이브 목록에 있어야 한다. `.git` 이
   없는 아카이브 안에서는 이 검사를 건너뛴다(아카이브는 정의상 목록과 같다).
+* 두 목록의 항목은 git 이 추적하거나 빌드가 채우는 파일이어야 한다(#411).
+  빌드 호스트에 손으로 둔 gitignore 파일(pcap-analyzer `network.json`)이 목록에 올라
+  `.deb`·소스 tar 에 실렸다. 빌드가 채우는 것은 build.sh 가 서브모듈에서 staging 하는
+  `usr/local/wlan-bridge/` 와 외부 드라이버 빌드 산출물(`.ko`, `mlanutl_*`)뿐이다.
+  소스 목록의 `wlan-bridge/`·`wlan-opc/` 항목은 서브모듈이 추적한다.
 """
+import fnmatch
 import subprocess
 import unittest
 from pathlib import Path
@@ -20,6 +26,13 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[6]
 SOURCE_MANIFEST = REPO / "scripts/source_archive_manifest.txt"
 PAYLOAD_MANIFEST = REPO / "dist/wlan/DEBIAN/payload-manifest.txt"
+# git 밖에서 빌드가 채우는 payload. 그 밖의 gitignore 파일은 목록에 올리지 않는다.
+BUILD_FILLED_PAYLOAD = (
+    "usr/local/wlan-bridge/*",
+    "opt/wlan/driver/*.ko",
+    "opt/wlan/bin/mlanutl_*",
+)
+SUBMODULES = ("wlan-bridge/", "wlan-opc/")
 
 
 def manifest_entries(path: Path) -> set:
@@ -53,6 +66,41 @@ class SourceArchiveManifestCoverage(unittest.TestCase):
         archived = manifest_entries(SOURCE_MANIFEST)
         missing = sorted(path for path in tests if path not in archived)
         self.assertEqual(missing, [], "tracked dist tests missing from source_archive_manifest.txt")
+
+    def test_every_payload_entry_is_tracked_or_build_filled(self):
+        if not (REPO / ".git").exists():
+            self.skipTest("not a git checkout (extracted source archive)")
+        tracked = {
+            path[len("dist/wlan/"):]
+            for path in subprocess.run(
+                ["git", "-C", str(REPO), "ls-files", "dist/wlan"],
+                capture_output=True, text=True, check=True,
+            ).stdout.splitlines()
+        }
+        self.assertIn("DEBIAN/payload-manifest.txt", tracked, "git ls-files matcher is broken")
+        untracked = sorted(
+            entry for entry in manifest_entries(PAYLOAD_MANIFEST)
+            if entry not in tracked
+            and not any(fnmatch.fnmatch(entry, pattern) for pattern in BUILD_FILLED_PAYLOAD)
+        )
+        self.assertEqual(untracked, [], "payload-manifest lists files that neither git nor the build provides")
+
+    def test_every_source_archive_entry_is_tracked_or_build_filled(self):
+        if not (REPO / ".git").exists():
+            self.skipTest("not a git checkout (extracted source archive)")
+        tracked = set(subprocess.run(
+            ["git", "-C", str(REPO), "ls-files"],
+            capture_output=True, text=True, check=True,
+        ).stdout.splitlines())
+        self.assertIn("scripts/source_archive_manifest.txt", tracked, "git ls-files matcher is broken")
+        untracked = sorted(
+            entry for entry in manifest_entries(SOURCE_MANIFEST)
+            if entry not in tracked
+            and not entry.startswith(SUBMODULES)
+            and not (entry.startswith("dist/wlan/") and any(
+                fnmatch.fnmatch(entry[len("dist/wlan/"):], pattern) for pattern in BUILD_FILLED_PAYLOAD))
+        )
+        self.assertEqual(untracked, [], "source_archive_manifest lists files that neither git nor the build provides")
 
 
 if __name__ == "__main__":
