@@ -93,7 +93,7 @@ if [ -n "$initial_bssid" ]; then
     # .3.2.1.7.2)으로 현재 링크 상태를 조회할 수 있다(트랩은 변화 통지 전용).
 fi
 
-# 로밍 직후 스위치 FDB 재학습 강제 — 무선 iface IP로 gratuitous ARP(-U) 즉시 발사(#234).
+# 로밍 직후 스위치 FDB 재학습 강제 — 무선 iface IPv4가 준비되면 gratuitous ARP(-U) 발사(#234).
 # 배경: 로밍 후 유선망이 STA 새 위치를 재학습하기까지 ~2-5s 상향 갭이 관측됐고(무선 핸드오프·
 # 하향은 정상), 현재 STA/AP 어느 쪽도 로밍 시 재공지를 하지 않는다(tshark 재검증, 2026-09-01).
 # 스코프 = iface에 IPv4가 있을 때만 발사한다. DFK 사양의 peer-route 프로파일은 관리 IP를 mlan0에
@@ -107,17 +107,27 @@ fi
 # 전까지 default off로 두고, 확증 후 릴리스에서 default 승격을 재검토한다. null/부재/파싱실패는
 # 모두 off로 처리(안전측 — get_bool/wifi_acl get_enabled 관례와 동일).
 # 기록: arping이 끝나면 `ROAM_GARP ip=<IP> rc=<종료 코드>`를 남긴다(iputils: 0 송신, 2 오류).
+# CONNECTED 직후 networkd가 IPv4를 다시 붙이기까지 최대 2초(100ms 간격) 기다린다.
+# 대기는 arping과 같은 백그라운드 그룹 안에서 수행해 iw event 소비를 막지 않는다.
+# 주소가 끝내 없으면 `ROAM_GARP skipped reason=no_ipv4`를 남긴다.
 # A/B 시험에서 발사 여부를 사후에 확인할 흔적이다(#234).
 roam_gratuitous_arp() {
-    local en ip
+    local en ip attempt
     en=$(jq -r --arg i "$IFACE" 'if (.[$i].roam_garp.enabled) == true then "true" else "false" end' \
         "$WIFI_INIT_CONF_JSON" 2>/dev/null)
     [ "$en" = "true" ] || return 0
-    ip=$(ip -4 -o addr show "$IFACE" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
-    [ -n "$ip" ] || return 0
     {
-        arping -U -c 3 -I "$IFACE" "$ip" >/dev/null 2>&1
-        logger -p local0.info "[$tag:$LINENO] [$IFACE] ROAM_GARP ip=$ip rc=$?"
+        for ((attempt = 0; attempt <= 20; attempt++)); do
+            ip=$(ip -4 -o addr show "$IFACE" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
+            [ -n "$ip" ] && break
+            [ "$attempt" -eq 20 ] || sleep 0.1
+        done
+        if [ -n "$ip" ]; then
+            arping -U -c 3 -I "$IFACE" "$ip" >/dev/null 2>&1
+            logger -p local0.info "[$tag:$LINENO] [$IFACE] ROAM_GARP ip=$ip rc=$?"
+        else
+            logger -p local0.info "[$tag:$LINENO] [$IFACE] ROAM_GARP skipped reason=no_ipv4"
+        fi
     } &
 }
 

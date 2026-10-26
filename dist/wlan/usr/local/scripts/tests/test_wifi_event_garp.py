@@ -40,6 +40,10 @@ exit 0
 
 IP_STUB = r"""#!/bin/sh
 printf 'ip %s\n' "$*" >> "$WIFI_EVENT_CALLS"
+attempt=$(grep -c '^ip ' "$WIFI_EVENT_CALLS")
+if [ "$attempt" -le "$WIFI_EVENT_IPV4_AFTER_ATTEMPTS" ]; then
+    exit 0
+fi
 if [ "$*" = "-4 -o addr show $WIFI_EVENT_IFACE" ] && [ -s "$WIFI_EVENT_IPV4" ]; then
     ip=$(cat "$WIFI_EVENT_IPV4")
     printf '7: %s    inet %s/24 brd 192.0.2.255 scope global %s\n' \
@@ -61,6 +65,11 @@ exit "${WIFI_EVENT_ARPING_RC:-0}"
 
 LOGGER_STUB = r"""#!/bin/sh
 printf 'logger %s\n' "$*" >> "$WIFI_EVENT_CALLS"
+"""
+
+SLEEP_STUB = r"""#!/bin/sh
+printf 'sleep %s\n' "$*" >> "$WIFI_EVENT_CALLS"
+exec /bin/sleep "$@"
 """
 
 TRAP_STUB = r"""#!/bin/sh
@@ -93,6 +102,7 @@ class WifiEventHarness:
         self._write_executable(self.bin / "jq", JQ_STUB)
         self._write_executable(self.bin / "arping", ARPING_STUB)
         self._write_executable(self.bin / "logger", LOGGER_STUB)
+        self._write_executable(self.bin / "sleep", SLEEP_STUB)
         self._write_executable(self.helpers / "wifi_snmp_trap.sh", TRAP_STUB)
         (self.helpers / "wlan_link_lib.sh").write_text(LINK_LIB_STUB)
         (self.helpers / "wifi_fw_config_lib.sh").write_text(FW_LIB_STUB)
@@ -114,6 +124,7 @@ class WifiEventHarness:
         config: object | str | None,
         events: list[str],
         ipv4: str | None = "192.0.2.10",
+        ipv4_after_attempts: int = 0,
         arping_delay: float = 0,
         arping_rc: int = 0,
         line_delay: float = 0,
@@ -141,6 +152,7 @@ class WifiEventHarness:
             "WIFI_EVENT_EVENTS": str(self.events),
             "WIFI_EVENT_IFACE": "mlan0",
             "WIFI_EVENT_IPV4": str(self.ipv4),
+            "WIFI_EVENT_IPV4_AFTER_ATTEMPTS": str(ipv4_after_attempts),
             "WIFI_EVENT_LINE_DELAY": str(line_delay),
             "WIFI_EVENT_TAIL_DELAY": str(tail_delay),
         }
@@ -229,18 +241,64 @@ def test_non_true_configuration_never_sends_garp(
     assert harness.garp_logs() == []
 
 
-def test_enabled_without_interface_ipv4_is_pure_bridge_noop(
+def test_enabled_without_interface_ipv4_logs_bounded_skip(
     harness: WifiEventHarness,
 ) -> None:
     result, _ = harness.run(
         config={"mlan0": {"roam_garp": {"enabled": True}}},
         events=["1700000000.0: mlan0 roamed to 02:00:00:00:00:02"],
         ipv4=None,
+        tail_delay=2.3,
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert harness.arping_starts() == []
-    assert harness.garp_logs() == []
+    assert len([line for line in harness.call_lines() if line.startswith("ip ")]) == 21
+    assert harness.call_lines().count("sleep 0.1") == 20
+    logs = harness.garp_logs()
+    assert len(logs) == 1
+    assert logs[0].startswith("logger -p local0.info ")
+    assert logs[0].endswith("[mlan0] ROAM_GARP skipped reason=no_ipv4")
+
+
+def test_enabled_waits_for_late_interface_ipv4(harness: WifiEventHarness) -> None:
+    result, _ = harness.run(
+        config={"mlan0": {"roam_garp": {"enabled": True}}},
+        events=["1700000000.0: mlan0 roamed to 02:00:00:00:00:02"],
+        ipv4_after_attempts=3,
+        tail_delay=0.7,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert len([line for line in harness.call_lines() if line.startswith("ip ")]) == 4
+    assert harness.call_lines().count("sleep 0.1") == 3
+    assert harness.arping_starts() == [
+        "arping:start -U -c 3 -I mlan0 192.0.2.10"
+    ]
+    logs = harness.garp_logs()
+    assert len(logs) == 1
+    assert logs[0].startswith("logger -p local0.info ")
+    assert logs[0].endswith("[mlan0] ROAM_GARP ip=192.0.2.10 rc=0")
+
+
+def test_ipv4_wait_does_not_block_following_event(harness: WifiEventHarness) -> None:
+    result, _ = harness.run(
+        config={"mlan0": {"roam_garp": {"enabled": True}}},
+        events=[
+            "1700000000.0: mlan0 connected to 02:00:00:00:00:01",
+            "1700000000.1: mlan0 roamed to 02:00:00:00:00:02",
+        ],
+        ipv4=None,
+        line_delay=0.05,
+        tail_delay=2.3,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    lines = harness.call_lines()
+    roamed = next(i for i, line in enumerate(lines) if "ROAMED bssid=" in line)
+    skips = [i for i, line in enumerate(lines) if "ROAM_GARP skipped" in line]
+    assert len(skips) == 2, lines
+    assert roamed < skips[0], lines
 
 
 def test_other_interface_event_is_ignored(harness: WifiEventHarness) -> None:
@@ -310,5 +368,8 @@ def test_garp_logs_ip_and_exit_code_after_arping_returns(
     logs = [i for i, line in enumerate(lines) if "ROAM_GARP" in line]
     done = [i for i, line in enumerate(lines) if line.startswith("arping:done ")]
     assert len(logs) == 1, lines
-    assert lines[logs[0]].endswith(f"[mlan0] ROAM_GARP ip=192.0.2.10 rc={arping_rc}")
+    assert lines[logs[0]].startswith("logger -p local0.info ")
+    assert lines[logs[0]].endswith(
+        f"[mlan0] ROAM_GARP ip=192.0.2.10 rc={arping_rc}"
+    )
     assert done and done[0] < logs[0], lines

@@ -171,6 +171,14 @@ The `postinst` script will automatically:
 - Enable required systemd units
 - Create symbolic links for binaries
 
+After an upgrade, `postinst` restarts each `wifi_event@mlan0` or
+`wifi_event@mlan1` instance that was active so it runs the installed script.
+It preserves the wireless link by leaving `wpa_supplicant` and other
+boot-loaded components running. A reboot is therefore required after the
+upgrade to load all installed components; until then, some running processes
+may still be from the previous package. The installer records this requirement
+in the journal with `local0.notice` priority.
+
 Notes on configuration ownership:
 
 - `/usr/local/etc/wifi_init_conf.json` is the single runtime configuration source.
