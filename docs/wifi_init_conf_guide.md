@@ -1556,11 +1556,12 @@ AC 전용 mlan1은 이 deferred HE 경로와 `11axcfg` 검증 대상이 아니�
 |----|------|--------|------|
 | `roam_garp.enabled` | bool | `false` | 로밍(connected/roamed) 시 gratuitous ARP 발사 ON/OFF. **기본 off(opt-in)** |
 
-- **스코프 = 무선전용/관리-IP**: iface에 IPv4가 있을 때만 발사한다. 순수 MAC클론 투명 브리지는 mlan0에 L3 IP가 없어 **자동 no-op** — 최종 브리지 제품의 로밍 갭 근본책은 드라이버측 클론 MAC L2 announce(**wlan-driver-v2#47**, 머지됨)다.
+- **스코프 = 무선전용/관리-IP**: iface에 IPv4가 있을 때만 발사한다. DFK 사양의 `peer-route` 프로파일은 관리 IP를 mlan0에 두고 eth0에 같은 IP를 `/32`로 미러하므로(위 브리지 프로파일의 운용 사양 표) 발사 대상이다. mlan0에 IP가 없는 구성(순수 MAC클론 투명 브리지, 관리 IP를 eth0에만 둔 구성)은 **자동 no-op**이며, 그 로밍 갭 근본책은 드라이버측 클론 MAC L2 announce(**wlan-driver-v2#47**, 머지됨)다.
 - **로밍 데몬(`.roaming.enabled`)과 독립**: iw 이벤트 반응이라 FW 로밍·수동 로밍이면 로밍 데몬이 꺼져 있어도 발사된다. (같은 이유로 `.roaming` 하위가 아니라 top-level per-iface 키 — `arping`과 동일 배치)
 - **GARP만 사용해도 이벤트 서비스 활성화**: 인터페이스가 활성화되어 있고 `roam_garp.enabled`가 JSON boolean `true`이면, 부팅 또는 `wifi_init` 적용 시 `wifi_event@<iface>.service`를 활성화한다. 다른 이벤트 사용 기능(on_connect/SNMP trap/deferred MCS)은 없어도 된다. 서비스가 이미 실행 중이면 송신 게이트는 이벤트마다 현재 설정을 읽는다. 문자열 `"true"`나 숫자 `1`은 GARP 활성화 값이 아니다.
 - 비블로킹 백그라운드(`&`)로 `iw event` 루프를 막지 않는다. `arping`은 iputils(`-U` gratuitous announce 지원, 온타겟 확인).
-- **기본 off 이유**: 갭-소멸 효과가 미검증(AP측 상향 포워딩 지연 병존 가능) — 듀얼AP A/B(**#235**)에서 확증 후 릴리스에서 default 승격 재검토.
+- **발사 기록**: `arping`이 끝나면 journal에 `ROAM_GARP ip=<IP> rc=<종료 코드>` 한 줄을 남긴다(iputils `arping`: 0 송신, 2 오류 — 온타겟 확인). A/B 시험에서 발사 여부를 사후에 확인하는 흔적이다.
+- **기본 off 이유**: 갭-소멸 효과가 미검증(AP측 상향 포워딩 지연 병존 가능) — 듀얼AP A/B(**#234**)에서 확증 후 릴리스에서 default 승격 재검토.
 
 ---
 

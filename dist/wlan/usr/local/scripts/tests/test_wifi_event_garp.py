@@ -174,6 +174,9 @@ class WifiEventHarness:
     def arping_starts(self) -> list[str]:
         return [line for line in self.call_lines() if line.startswith("arping:start ")]
 
+    def garp_logs(self) -> list[str]:
+        return [line for line in self.call_lines() if "ROAM_GARP" in line]
+
 
 @pytest.fixture
 def harness(tmp_path: Path) -> WifiEventHarness:
@@ -223,6 +226,7 @@ def test_non_true_configuration_never_sends_garp(
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert harness.arping_starts() == []
+    assert harness.garp_logs() == []
 
 
 def test_enabled_without_interface_ipv4_is_pure_bridge_noop(
@@ -236,6 +240,7 @@ def test_enabled_without_interface_ipv4_is_pure_bridge_noop(
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert harness.arping_starts() == []
+    assert harness.garp_logs() == []
 
 
 def test_other_interface_event_is_ignored(harness: WifiEventHarness) -> None:
@@ -287,3 +292,23 @@ def test_failed_arping_does_not_stop_event_loop(harness: WifiEventHarness) -> No
         "arping:start -U -c 3 -I mlan0 192.0.2.10",
         "arping:start -U -c 3 -I mlan0 192.0.2.10",
     ]
+
+
+@pytest.mark.parametrize("arping_rc", [0, 2])
+def test_garp_logs_ip_and_exit_code_after_arping_returns(
+    harness: WifiEventHarness, arping_rc: int
+) -> None:
+    result, _ = harness.run(
+        config={"mlan0": {"roam_garp": {"enabled": True}}},
+        events=["1700000000.0: mlan0 roamed to 02:00:00:00:00:02"],
+        arping_rc=arping_rc,
+        tail_delay=0.5,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    lines = harness.call_lines()
+    logs = [i for i, line in enumerate(lines) if "ROAM_GARP" in line]
+    done = [i for i, line in enumerate(lines) if line.startswith("arping:done ")]
+    assert len(logs) == 1, lines
+    assert lines[logs[0]].endswith(f"[mlan0] ROAM_GARP ip=192.0.2.10 rc={arping_rc}")
+    assert done and done[0] < logs[0], lines
