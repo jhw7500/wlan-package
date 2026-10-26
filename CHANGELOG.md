@@ -3,6 +3,35 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.7.5 (2026-10-26)
+
+> SemVer **patch** — FaultDetect Network 혼잡(0x0004)을 유선 송수신량 대신 운용 채널의 무선 점유율로 판정한다(logger `link.json` 의 `survey_in_use` 와 OPCd). pcap-analyzer 의 랩 접속 설정을 출하물에서 뺀다(업그레이드하면 기기의 `network.json` 이 지워진다). 로밍 GARP 를 보내면 journal 에 한 줄을 남긴다. OPCd 를 wlan-opc ee47738 로 올린다.
+
+### FaultDetect Network 혼잡을 무선 채널 점유율로 판정 (wlan-opc #192; PR #414, wlan-opc PR #207)
+
+- **동작 변경**: Network(0x0004)를 eth0 송수신량 ÷ 링크 속도가 아니라 운용 채널 survey 의 Δbusy ÷ Δactive 로 판정한다. 진입 80 %·해제 70 % 는 그대로다. 출하 구성에서 유선 포트는 호스트와 1:1 이라, 대역이 모자라는 곳은 무선이다.
+- logger 가 `link.json` 최상위에 `survey_in_use` 를 싣는다. 운용 채널의 연결 이후 누적 `active_time_ms`·`busy_time_ms` 와 survey 를 읽은 단조 시각 `mono_ms` 다. 기존 `channel_info` 는 그대로다.
+- opcd 는 다음 표본을 UNKNOWN 으로 버리고 기준을 다시 잡는다(래치는 유지): 카운터 감소(로밍·재연결), 파일 미갱신, active 증가와 `mono_ms` 경과가 0.5초 넘게 어긋난 표본(벽시계 조정). `survey_in_use` 가 없어도 UNKNOWN 이다.
+- 설정: `congestion_net_if` 는 `mlan0`·`mlan1` 만 받고, 다른 값(종전 기본 `eth0` 포함)은 경고 뒤 `mlan0` 이다. `congestion_net_capacity_mbps` 는 받되 무시하고 경고한다. 출하 설정에는 두 키가 없다.
+- 실기(랩 보드, 원천 PR 통합 시험 2회): 무선 UDP 포화(채널 busy 94~95 %)에서 Network 통지 1회와 해제 뒤 재진입 1회, 유선 iperf3 941~943 Mbit/s 에서는 통지 없음.
+- 한계: 채널 점유율은 같은 채널의 다른 단말과 이웃 BSS 트래픽도 포함한다. 다운링크 포화와 `congestion_probe_interval_s` 1초 운용은 확인하지 않았다.
+
+### pcap-analyzer 접속 설정을 출하물에서 제외 (#411; PR #413)
+
+- 빌드 호스트의 gitignore 파일 `usr/local/tools/pcap-analyzer/network.json` 이 `.deb` 와 `wlan-package.tar` 에 실리던 것을 뺐다. 패키지에는 자리표시 값의 `network.json.example` 만 실린다.
+- **업그레이드하면 dpkg 가 기기의 `/usr/local/tools/pcap-analyzer/network.json` 을 지운다**(conffile 이 아니다). 장치에서 분석에 쓰려면 `network.json` 을 다시 만들거나 `pcap_analyzer.py --config` 로 지정한다.
+- payload 목록 항목은 git 이 추적하거나 빌드가 채우는 파일이어야 한다는 검사를 넣었다(`test_source_archive_manifest.py`).
+
+### 로밍 GARP 기록 (#234; PR #415)
+
+- `<iface>.roam_garp.enabled` 가 켜져 있으면 로밍 GARP 를 보낸 뒤 journal 에 `ROAM_GARP ip=<IP> rc=<arping 종료 코드>` 한 줄을 남긴다. 기본값(off)과 발사 조건은 그대로다.
+- 문서: DFK 사양의 peer-route 프로파일(관리 IP 를 mlan0 에 둠)에서는 GARP 가 나가고, mlan0 에 IP 가 없는 구성에서는 no-op 이다.
+
+### OPCd 서브모듈 ee47738 (wlan-opc PR #207·#208)
+
+- #192 (위 절).
+- 비동기 저장 eventfd 가 논블로킹이 아니면 생성을 실패시켜 동기 쓰기로 넘어간다(현재 빌드에는 해당 없음). 쓰이지 않던 no-ack 토큰과 낡은 주석을 정리했다(#178).
+
 ## 0.7.4 (2026-10-26)
 
 > SemVer **patch** — 수동 CLI/FTP 망 전환이 실패하면 직전 검증된 프로필로 복귀하는 opt-in 정책(`<iface>.connect_fallback`, 기본 비활성)을 넣고 FTP SSID 전환 지연을 줄인다(`<iface>.wpa_supplicant.scan_res_valid_for_connect` 기본 180초 포함). 공장 초기화가 OPC 저장값과 IP 주소 리스트 파일을 지우고, opcd 유닛을 실제 파일로 설치해 OPC 를 다시 켤 수 있게 한다. `wbridge.enabled=false` 이면 moal 브리지 인자를 넘기지 않는다. OPCd 를 wlan-opc d048403 으로 올린다(통신 사양서 0.7.4 판 동작).
