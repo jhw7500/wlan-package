@@ -43,14 +43,15 @@ FX3000_PCAP = os.path.join(BASE, "PacketCapture/mon1_00016_20260226134651.pcap")
 FXE5000_PCAP = os.path.join(BASE, "mon1_00010_20260226102542.pcap")
 
 
-# 랩 접속 정보는 저장소에 두지 않는다(#411). 환경변수나 gitignore 된 로컬 network.json 에서 읽는다.
+# 랩 접속 정보는 저장소에 두지 않는다(#411). 환경변수나 gitignore 된 tests/network.json 에서 읽는다.
+# 도구 디렉터리의 ../network.json 은 패키지 게이트가 목록 밖 파일로 거부하므로 쓰지 않는다.
 def _lab_credentials():
     ssid = os.environ.get("PCAP_TEST_SSID", "")
     passphrase = os.environ.get("PCAP_TEST_PASSPHRASE", "")
     if ssid and passphrase:
         return ssid, passphrase
     try:
-        with open(os.path.join(os.path.dirname(__file__), "..", "network.json"), encoding="utf-8") as f:
+        with open(os.path.join(os.path.dirname(__file__), "network.json"), encoding="utf-8") as f:
             cfg = json.load(f)
     except (OSError, ValueError):
         return "", ""
@@ -59,7 +60,7 @@ def _lab_credentials():
 
 SSID, PASS = _lab_credentials()
 if not (SSID and PASS):
-    print("SKIP: 랩 접속 정보가 없다 — PCAP_TEST_SSID·PCAP_TEST_PASSPHRASE 환경변수나 ../network.json 을 둔다")
+    print("SKIP: 랩 접속 정보가 없다 — PCAP_TEST_SSID·PCAP_TEST_PASSPHRASE 환경변수나 tests/network.json 을 둔다")
     sys.exit(0)
 
 
