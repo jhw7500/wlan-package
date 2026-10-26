@@ -639,7 +639,8 @@ ChangeIpAddress 가 고르는 IP 주소 리스트(통신 사양서 6.5)는 `wifi
 | 적용 | 파일을 다 쓴 뒤 `systemctl restart opcd`. opcd 는 기동할 때만 이 파일을 읽는다(재부팅 때도 적용). 적용시점은 daemon-restart |
 | 결과 | 유효한 파일 → 리스트 전체 교체. 잘못된 줄이 하나라도 있으면 → 적용하지 않고 이전 리스트 유지, 그 파일은 `iplist.txt.rejected` 로 이름이 바뀌고(이전 것 덮어씀) `iplist.txt` 는 유지된 리스트로 다시 써진다. 사유(줄 번호)는 장치 로그. 0 B 또는 빈 줄뿐 → 모든 번호가 빈 리스트. 파일 없음 → 이전 리스트 유지, 그 리스트로 파일 재생성 |
 | 읽기 | 현재 리스트는 이 파일을 읽어 보여 준다. SetIpConfigList 로 바뀐 리스트도 opcd 가 이 파일에 다시 쓴다. opcd 자체 사본 `/usr/local/opc/etc/iplist.txt` 와 기록 `iplist.user.last` 에는 쓰지 않는다 |
-| 소유 | 쓴 뒤에도 admin 소유를 유지한다(FTP 로 다시 덮어쓸 수 있게). 같은 디렉터리의 임시 파일에 쓰고 rename 하면 재시작 전에 파일이 완전하다 |
+| 소유 | 쓴 뒤에도 admin 소유를 유지한다(FTP 로 다시 덮어쓸 수 있게). 방법은 아래 "파일 다루기" |
+| 파일 다루기(root) | 이 디렉터리는 admin 이 쓸 수 있으므로, root 백엔드는 opcd 와 같은 규칙으로 다룬다. 읽기: `O_NOFOLLOW` 로 열고 `fstat` 으로 일반 파일이고 65536 B(opcd 가 읽는 상한) 이하인지 확인한다. 쓰기: 같은 디렉터리에 `mkstemp`(또는 `O_CREAT\|O_EXCL\|O_NOFOLLOW`)로 임시 파일을 만들어 쓰고, 그 fd 에 `fchown`(admin)·`fchmod`(0644)·`fsync` 를 한 뒤 rename 한다. rename 뒤에 경로로 chown·chmod 하지 않는다. 또는 읽기·쓰기를 admin 사용자 권한으로 한다 |
 | 공장 초기화 | 장치 사본·기록·변환 흔적과 이 파일(`.rejected` 포함)을 모두 지운다. 다음 기동 때 빈 리스트로 시작하고 빈 파일(0 B)을 만든다 |
 | 업그레이드 | 0.7.4 이전의 바이너리 `iplist.cfg` 는 처음 기동 때 이 형식으로 바뀌고 `iplist.cfg.migrated` 로 이름이 바뀐다(보존). 0.7.4 이전 판으로 되돌리면 리스트는 비어 있다 |
 

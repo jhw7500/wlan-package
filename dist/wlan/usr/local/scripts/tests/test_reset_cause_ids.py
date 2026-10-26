@@ -43,13 +43,26 @@ POLICY_CASES = [
 ]
 
 
+def _int_literal(token, what):
+    """C 정수 리터럴(16진·10진, u/l 접미사 허용)을 읽는다. 다른 꼴이면 검사가 새지 않게 실패한다."""
+    try:
+        return int(re.sub(r"[uUlL]+$", "", token), 0)
+    except ValueError:
+        pytest.fail(f"{what}: {token!r} is not an integer literal this test can check — extend it")
+
+
 def _ids_causes():
     if not IDS_H.is_file():
         pytest.fail(f"{IDS_H} not found: run `git submodule update --init wlan-opc`")
-    text = IDS_H.read_text(encoding="utf-8")
-    found = re.findall(r"^#define\s+OPC_RESET_CAUSE_([A-Z0-9_]+)\s+(0x[0-9A-Fa-f]+)\b", text, re.M)
-    causes = {name: int(value, 16) for name, value in found}
-    assert len(causes) == len(found), "an OPC_RESET_CAUSE_ name is defined twice"
+    causes = {}
+    for line in IDS_H.read_text(encoding="utf-8").splitlines():
+        if not re.match(r"\s*#\s*define\s+OPC_RESET_CAUSE_", line):
+            continue
+        match = re.match(r"\s*#\s*define\s+OPC_RESET_CAUSE_([A-Z0-9_]+)\s+(\S+)", line)
+        assert match, f"cannot parse Reset Cause define: {line!r}"
+        name, token = match.groups()
+        assert name not in causes, f"OPC_RESET_CAUSE_{name} is defined twice"
+        causes[name] = _int_literal(token, f"OPC_RESET_CAUSE_{name}")
     assert causes, "no OPC_RESET_CAUSE_ definitions found in ids.h"
     return causes
 
@@ -92,14 +105,21 @@ def test_policy_writes_the_ids_value(source, reason, name):
 
 def test_policy_emits_only_ids_values():
     values = set(_ids_causes().values())
-    emitted = re.findall(r"echo\s+(0x[0-9A-Fa-f]+)", _reset_cause_id_body())
+    body = _reset_cause_id_body()
+    assert "printf" not in body, "reset_cause_id() uses printf — extend this test to read it"
+    emitted = [arg.strip().strip("\"'") for arg in re.findall(r"\becho\b([^;\n]*)", body)]
+    emitted = [arg for arg in emitted if arg]   # echo "" is the no-cause default
     assert emitted, "reset_cause_id() emits no value"
-    for value in emitted:
-        assert int(value, 16) in values, f"reset_cause_id() emits {value}, not defined in ids.h"
+    for arg in emitted:
+        value = _int_literal(arg, "reset_cause_id() echo")
+        assert value in values, f"reset_cause_id() emits {arg}, not defined in ids.h"
 
 
 def test_factory_reset_writes_the_ids_value():
     text = FACTORY.read_text(encoding="utf-8")
+    writers = re.findall(r"^[^#\n]*>\s*/run/opc/reset_cause\b.*$", text, re.M)
     writes = re.findall(r"printf '(0x[0-9A-Fa-f]+)\\n'[^\n]*>\s*/run/opc/reset_cause", text)
-    assert len(writes) == 1, f"expected one Reset Cause write in factory_reset.sh, found {writes}"
+    assert len(writers) == 1 and len(writes) == 1, (
+        f"expected one parsable Reset Cause write in factory_reset.sh, found {writers}"
+    )
     assert int(writes[0], 16) == _ids_causes()["FACTORY_RESET"]
