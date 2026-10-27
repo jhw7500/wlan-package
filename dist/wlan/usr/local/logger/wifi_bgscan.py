@@ -151,17 +151,6 @@ def parse_wpa_supplicant_conf(path):
     freqs = global_freqs or base_freqs or legacy_scan_freqs
     return base_ssid, network_ssids, freqs, interval
 
-def _parse_bool(value):
-    """bool 해석을 roam parse_bool / lib normalize_bool과 통일(true/1/yes/on/enabled → True).
-    JSON 정규 bool뿐 아니라 비정규 truthy 값도 동일 해석해 generate_network_blocks의
-    3-way(roam/lib/bgscan) 모드 정합을 보장한다."""
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.lower() in ("true", "1", "yes", "on", "enabled")
-    return bool(value)
-
-
 def load_scan_policy(iface, run_dir=None):
     """이 boot에서 불변인 owner/topology snapshot을 fail-closed로 읽는다."""
     try:
@@ -183,8 +172,8 @@ def load_bgscan_json(iface, boot_policy=None):
     `.iface.roaming.extra_ssids`에서 추가 스캔 SSID를 한 번의 파일 읽기로 로드.
     interval은 양의 정수만, 필터/emit_roam_hint는 bool만, extra_ssids는 문자열 리스트만
     수용. 없음/형식오류면 (None, True, True, [], True).
-    roaming.generate_network_blocks가 비-truthy(모드 B/부재)면 extra_ssids=[] 강제
-    (spec §3.5 3차 게이트, 모드 B airtime 회귀 제거). bool 해석은 roam/lib와 통일(_parse_bool)."""
+    extra_ssids는 두 topology 모두에서 directed scan 대상이다. production main은
+    boot_policy를 전달하므로 런타임 JSON 편집은 scan 대상을 바꾸지 않는다."""
     interval, ssid_filter, freq_filter, extra_ssids = None, True, True, []
     emit_roam_hint = True
     # Native wpa_cli compatibility default. The iw constructor safety-overrides it to active.
@@ -209,9 +198,8 @@ def load_bgscan_json(iface, boot_policy=None):
         # boot_policy=None은 단위테스트/구버전 직접호출 호환 경로일 뿐 daemon 경로가 아니다.
         roaming_cfg = iface_cfg.get("roaming", {})
         topology_cfg = boot_policy if boot_policy is not None else roaming_cfg
-        if _parse_bool(topology_cfg.get("generate_network_blocks")):
-            extra = topology_cfg.get("extra_ssids")
-            extra_ssids = validate_ssid_list(extra)
+        extra = topology_cfg.get("extra_ssids")
+        extra_ssids = validate_ssid_list(extra)
     except FileNotFoundError:
         pass
     except Exception as e:
@@ -231,7 +219,8 @@ def emit_roam_hint_touch(iface):
     except OSError as e:
         logger.message("err", f"[{iface}] roam hint touch failed: {e}", _EXTRA_())
 
-def construct_iw_scan_cmd(ssid, configured_freqs, ssid_filter=True, freq_filter=True, extra_ssids=None, passive=False):
+def construct_iw_scan_cmd(ssid, configured_freqs, ssid_filter=True, freq_filter=True,
+                          extra_ssids=None, passive=False, probe_base_on_unfiltered=False):
     global _IW_PASSIVE_FORCED_ACTIVE_WARNED
 
     cmd = ["iw", IFACE, "scan"]
@@ -255,8 +244,9 @@ def construct_iw_scan_cmd(ssid, configured_freqs, ssid_filter=True, freq_filter=
         cmd += ["freq"] + configured_freqs
 
     # directed probe(ssid 토큰) 대상 수집:
-    #  - 기본/현재 ssid: ssid_filter=true일 때만 probe. false면 광범위(undirected) 스캔.
-    #  - roaming.extra_ssids: 명시적 로밍 후보이므로 ssid_filter와 무관하게 항상 probe.
+    #  - 기본/현재 ssid: ssid_filter=true일 때 probe. Mode B + extras에서는 false여도
+    #    이슈 #419 계약에 따라 기본 SSID를 probe하고 wildcard로 광범위 탐색을 유지한다.
+    #  - roaming.extra_ssids: 두 topology에서 스캔 probe 대상이며 ssid_filter와 무관하다.
     #    hidden extra SSID는 directed probe로만 발견되므로 ssid_filter=false에서도 누락되면 안 된다.
     # iw는 다중 ssid 토큰을 지원. 중복 제거하여 추가.
     #  - ssid_filter=false인데 extra_ssids가 있으면 directed probe만 남아 와일드카드
@@ -272,13 +262,15 @@ def construct_iw_scan_cmd(ssid, configured_freqs, ssid_filter=True, freq_filter=
     validated_extras = validate_ssid_list(
         list(extra_ssids or []), base_ssid=ssid if ssid is not None else None
     )
-    probe = ([validate_ssid(ssid)] if (ssid_filter and ssid) else []) + validated_extras
+    probe = (
+        [validate_ssid(ssid)] if (ssid_filter or probe_base_on_unfiltered) and ssid else []
+    ) + validated_extras
     if not ssid_filter and validated_extras:
         probe.insert(0, "")
     probe = [s for s in probe if s is not None]
     # 드라이버 max-scan-SSID 초과 시 iw 가 -EINVAL 로 스캔 전체를 실패시킨다 → bgscan 이
     # 매 주기 전량 실패하면 ap.log 배경 캐시가 갱신되지 않아 로밍 Stage 2 까지 연쇄로 죽는다.
-    # 현재 ssid/wildcard 가 리스트 앞이라 slice 가 우선순위를 보존한다.
+    # wildcard/현재 ssid가 리스트 앞이라 slice가 우선순위를 보존한다.
     if len(probe) > MAX_SCAN_SSIDS:
         logger.message(
             "warn",
@@ -300,6 +292,7 @@ def construct_wpa_scan_cmd(
     ssid_filter=True,
     extra_ssids=None,
     passive=False,
+    probe_base_on_unfiltered=False,
 ):
     """wpa_supplicant가 결과를 native selection에 쓰는 SCAN 요청을 만든다.
 
@@ -317,7 +310,12 @@ def construct_wpa_scan_cmd(
     validated_extras = validate_ssid_list(
         list(extra_ssids or []), base_ssid=ssid if ssid is not None else None
     )
-    probe = ([validate_ssid(ssid)] if (ssid_filter and ssid) else []) + validated_extras
+    probe = (
+        [validate_ssid(ssid)] if (ssid_filter or probe_base_on_unfiltered) and ssid else []
+    ) + validated_extras
+    if not ssid_filter and validated_extras and probe_base_on_unfiltered:
+        # Mode B의 기존 광범위 탐색도 유지한다. ctrl_iface의 빈 hex SSID는 wildcard다.
+        probe.insert(0, "")
     if len(probe) > MAX_SCAN_SSIDS:
         logger.message(
             "warn",
@@ -409,9 +407,7 @@ def build_scan_request(conf_path, backend, boot_policy=None):
     try:
         conf_extras = validate_ssid_list(network_ssids[1:], base_ssid=ssid)
         snapshot_source = extra_ssids
-        if boot_policy is not None and _parse_bool(
-            boot_policy.get("generate_network_blocks")
-        ):
+        if boot_policy is not None:
             snapshot_source = boot_policy.get("extra_ssids")
         snapshot_extras = validate_ssid_list(snapshot_source, base_ssid=ssid)
         conf_extra_identities = set(conf_extras)
@@ -422,6 +418,12 @@ def build_scan_request(conf_path, backend, boot_policy=None):
         ]
     except RoamPolicyError as exc:
         raise BgscanConfigError(f"invalid scan SSID topology: {exc}") from exc
+    mode_b_unfiltered_extras = bool(
+        boot_policy is not None
+        and boot_policy.get("generate_network_blocks") is False
+        and not ssid_filter
+        and scan_extras
+    )
     if backend == "iw":
         cmd = construct_iw_scan_cmd(
             ssid,
@@ -430,6 +432,7 @@ def build_scan_request(conf_path, backend, boot_policy=None):
             freq_filter,
             scan_extras,
             passive=passive,
+            probe_base_on_unfiltered=mode_b_unfiltered_extras,
         )
         if not ssid_filter and scan_extras and not _WILDCARD_PROBE_WARNED:
             logger.message(
@@ -448,6 +451,7 @@ def build_scan_request(conf_path, backend, boot_policy=None):
             ssid_filter=ssid_filter,
             extra_ssids=scan_extras,
             passive=passive,
+            probe_base_on_unfiltered=mode_b_unfiltered_extras,
         )
         # wifi_roam.py가 실행되지 않는 native owner에는 backoff hint 소비자가 없다.
         return cmd, interval, False

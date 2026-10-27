@@ -986,7 +986,7 @@ wpa_supplicant의 장애 복구·재연결 스캔은 계속 동작한다.
 |----|------|--------|------|
 | `enabled` | bool | mlan0 `true` / mlan1 `false` | package background scan 서비스 활성화. false여도 wpa 복구 scan은 유지 |
 | `interval` | int | `60` | 백그라운드 스캔 주기 (초) |
-| `ssid_filter` | bool | `true` | active scan의 **기본 ssid** directed probe 포함 여부. `true`면 conf 기본 ssid를 probe, `false`면 기본 ssid는 probe 없이 스캔. `roaming.extra_ssids`(§11.4)는 이 값과 **무관하게 항상 probe**된다. wifi_roam/iw periodic bgscan은 `passive=true`도 safety override 뒤 active construction을 쓰므로 이 규칙이 적용된다 |
+| `ssid_filter` | bool | `true` | active scan의 **기본 ssid** directed probe 포함 여부. `true`면 conf 기본 ssid를 probe한다. `false`에 Mode B extras가 있으면 기본 SSID와 extras를 함께 probe하고 wildcard 탐색도 유지한다. extras가 비면 기존 광범위 스캔 명령을 유지한다. wifi_roam/iw periodic bgscan은 `passive=true`도 safety override 뒤 active construction을 쓴다 |
 | `freq_filter` | bool | `true` | **DEPRECATED**. 공통 `freq_list`가 있으면 `false`도 무시하고 iw/wpa_cli 모두 같은 목록을 사용. 목록 자체가 없을 때만 전대역 |
 | `passive` | bool | `true` | compatibility 값. wifi_roam owner의 periodic iw bgscan은 `bgscan.passive=true`를 수용하지만 supported mlan hardware의 data-plane safety를 위해 프로세스당 한 번 경고하고 active scan으로 강제한다. wpa native owner는 계속 `wpa_cli -i <iface> SCAN passive=1`을 요청한다. `false`는 native backend에서도 active scan을 요청한다 |
 | `emit_roam_hint` | bool | `true` | iw/wifi_roam owner에서 스캔 성공 시 roam backoff hint 발행. wpa native owner에서는 소비자가 없어 강제 비활성 |
@@ -1005,7 +1005,7 @@ wpa_supplicant의 장애 복구·재연결 스캔은 계속 동작한다.
 > bgscan은 `passive` 값과 무관하게 safety override 뒤 이 construction을 사용한다. wpa
 > native backend는 `passive=false`일 때만 아래 directed `ssid` 인자를 사용한다.
 >
-> `ssid_filter=true`이면 bgscan이 conf 기본 ssid를 directed probe한다. iw backend의 active 문법은 `iw <iface> scan ... ssid <SSID>`이고, native backend는 `wpa_cli -i <iface> SCAN ... ssid <UTF-8 hex>`를 쓴다. native active SSID filters are UTF-8 hex encoded because the control interface accepts bytes rather than a quoted SSID. non-hidden SSID는 probe 없이 beacon으로도 잡히지만 **hidden SSID는 directed probe가 있어야 발견**된다. 따라서 `roaming.extra_ssids`(§11.4)는 명시적 로밍 후보로서 `ssid_filter` 값과 **무관하게 항상 directed probe**에 포함된다 — `ssid_filter=false`로 두어도 extra SSID(hidden 포함)는 누락되지 않는다. ssid_filter on/off의 스캔 시간·통신 영향 차이는 작고, 실제 비용은 `freq_filter`(채널 수)가 좌우한다.
+> `ssid_filter=true`이면 bgscan이 conf 기본 ssid를 directed probe한다. iw backend의 active 문법은 `iw <iface> scan ... ssid <SSID>`이고, native backend는 `wpa_cli -i <iface> SCAN ... ssid <UTF-8 hex>`를 쓴다. native active SSID filters are UTF-8 hex encoded because the control interface accepts bytes rather than a quoted SSID. non-hidden SSID는 probe 없이 beacon으로도 잡히지만 **hidden SSID는 directed probe가 있어야 발견**된다. `roaming.extra_ssids`(§11.4)는 두 topology의 active scan에서 `ssid_filter` 값과 무관하게 directed probe에 포함된다. Mode B에서는 스캔에서 발견해도 자동 로밍 후보가 되지 않는다. Mode B에서 `ssid_filter=false`와 extras가 함께 있으면 iw와 native active 요청 모두 wildcard + 기본 SSID + extras를 보낸다. Mode A의 기존 false 명령은 유지한다. 실제 비용은 공통 `freq_list`의 채널 수가 좌우한다.
 
 > FTP `wconnect`로 다른 SSID에 전환할 때, 마지막 스캔 결과에 대상 AP가 있으면 새 스캔
 > 없이 연결한다. `true`이면 bgscan 결과에 현재 SSID의 AP만 남는다(2026-10-23 랩 4채널
@@ -1065,18 +1065,27 @@ durable backup을 별도 staging으로 복사해 atomic rename하고 복원 파�
 | `SCAN_NO_RESULT_SLEEP` | int | `3` | 스캔 결과 없을 때 대기 (초) |
 | `ROAM_SUCCESS_SLEEP` | int | `3` | 로밍 성공 후 대기 (초) |
 | `enabled` | bool | mlan0 `true` / mlan1 `false` | owner 선택자. `true`=wifi_roam+iw, `false`=wpa native+wpa_cli. boot snapshot에 latch되므로 변경은 **재부팅** |
-| `extra_ssids` | array[str] | `[]` | Mode A에서 추가 network 블록으로 만들 SSID. 부팅 base와 같은 항목 및 extra 간 중복은 첫 출현 순서를 보존해 제거하고, 새 snapshot 커밋 성공 뒤 제거 개수를 warning으로 한 번 남긴다. 같은 psk/key_mgmt 전제. 빈 배열이어도 Mode A identity/SSID writer 금지는 유지. 변경은 **재부팅** |
+| `extra_ssids` | array[str] | `[]` | 두 topology의 bgscan active probe 대상. Mode A에서는 추가 network 블록과 자동 cross-SSID 후보에도 포함한다. 두 모드의 wifi_roam active probe 포함 여부는 `extra_ssids_in_roam_scan`으로 정한다. 부팅 base와 같은 항목 및 extra 간 중복은 첫 출현 순서를 보존해 제거한다. 같은 psk/key_mgmt 전제. 변경은 **재부팅** |
+| `extra_ssids_in_roam_scan` | bool | `true` | 두 모드의 wifi_roam active scan에서 extras directed probe 포함 여부. `false`여도 현재/base SSID probe, bgscan probe·로밍 후보·network 블록은 바뀌지 않는다. Mode A에서 숨김 extra SSID 자동 발견이 늦거나 실패할 수 있다. `roaming.enabled=false`에서는 효과가 없다. JSON 변경 후 wifi_roam SIGHUP 적용 |
 | `generate_network_blocks` | bool | `false` | 부팅 topology 결정자. `false`=Mode B 단일 블록/cross-SSID 자동전환 없음, `true`=Mode A 다중 블록/자동 cross-SSID. 변경은 **재부팅** |
 | `ROAM_CROSS_FAIL_RETRY_COUNT` | int | `2` | 모드A cross-SSID(`select_network`) 전환 실패 시 cooldown 없이 즉시 재시도 허용 횟수. 초과 시 지수 backoff로 해당 SSID를 후보에서 제외(진동 차단). 모드B에선 미적용 |
 
-> **Mode B (`generate_network_blocks=false`)**: 단일 network 블록만 유지하고
-> 자동 owner/bgscan은 `extra_ssids`를 무시한다. 수동 `wifi <iface> roam`도 같은 SSID
-> 안의 BSS 전환 전용이라 `extra_ssids`를 읽지 않으므로, Mode B에서 이 키는 boot
-> snapshot에 보존만 되고 읽는 소비자가 없다. 망 전환은 `wifi connect <ssid> [freq...]`
-> (conf ssid 교체 → reconfigure → 재연결)로 한다.
+> **Mode B (`generate_network_blocks=false`)**: 단일 network 블록을 유지한다.
+> bgscan active scan은 `extra_ssids`를 probe한다. wifi_roam의 active scan은
+> `extra_ssids_in_roam_scan=true`일 때 extras를 probe한다(현재 연결 SSID는 항상 유지). 자동 로밍 후보는
+> 현재/base SSID로 제한한다. native owner에서 `bgscan.passive=true`면 지정 probe를
+> 보내지 않는다. 수동 `wifi <iface> roam`은 같은 SSID의 BSS 전환 전용이며, 망
+> 전환은 `wifi connect <ssid> [freq...]`(conf ssid 교체 → reconfigure → 재연결)로 한다.
+> `extra_ssids_in_roam_scan=false`는 directed probe만 제외한다. 비콘 수신이나
+> 전대역 fallback의 wildcard scan에서 다른 SSID가 관측될 수 있지만 후보로 채택하지 않는다.
 > snapshot 생성 시점에는 부팅 base와 같은 후보와 extra 간 중복을 순서 보존 방식으로
 > 제거한다. `wifi connect` 전환 후 live base가 boot-latched 후보와 같아지는 것은
 > 의도된 단일-블록 동작이다.
+> 부팅 base A·extra B에서 수동으로 B로 전환하면 B는 계속 probe하지만 A가 boot
+> extras에 없으면 A로의 복귀는 미리 probe하지 않는다. 부팅 base와 같은 extra는
+> 중복 제거되므로 같은 부팅에서 왕복 probe를 보장하지 않는다.
+> wifi_roam은 시작할 때 bgscan 대상까지 고려한 기본 SSID와 extras의 probe 수가 드라이버 상한 10
+> (와일드카드 1슬롯 포함)을 넘으면 경고하며 실제 스캔은 상한에 맞춰 자른다.
 > 이전 패키지가 만든 비정규 v1 snapshot은 같은 boot에서 파일을 다시 쓰지 않으며,
 > 각 소비자가 적용 전에 같은 중복 제거 규칙으로 정규화한다.
 > Mode A에서는 자동 owner만 cross-SSID를 수행한다. 수동 `roam`은 두 모드 모두 같은
@@ -1089,6 +1098,9 @@ durable backup을 별도 staging으로 복사해 atomic rename하고 복원 파�
 > 해당 network ID에 임시 pin하고 `id+ssid+bssid+COMPLETED`를 정확히 확인한 뒤 pin을
 > 해제하고 모든 블록을 복구한다. `false`이면 wpa_supplicant의 native cross-SSID 선택
 > 정책(우선순위·신호·blacklist 등)을 그대로 수용한다.
+> `extra_ssids_in_roam_scan=false`면 현재 연결 SSID와 설정 base SSID만 directed probe한다.
+> extra network 블록과 자동 로밍 후보는 유지되지만, 숨김 extra SSID의 새 스캔 결과를
+> 얻지 못해 자동 전환이 늦거나 실패할 수 있다. 현재 연결된 extra SSID는 probe 대상에 남는다.
 > BSSID pin 전에 `/run/.<iface>.selection-cleanup-pending` JSON WAL을 atomic write+fsync한다.
 > WAL 지속성을 확인하지 못하면 pin 자체를 거부하고 process-local gate도 유지한다.
 > pin 해제/all-network 복구와 canonical reconfigure가 모두 실패하면 WAL을 남긴 채
@@ -1104,7 +1116,7 @@ durable backup을 별도 staging으로 복사해 atomic rename하고 복원 파�
 
 > **로밍 판정 스캔**: 현재 링크 RSSI가 임계값 아래로 떨어지면 주파수 구성에 따라 분기한다.
 > 1. **단일 freq = 현재 채널**: `home_passive=true`면 홈채널 passive scan을 수행한다. 현재 AP 외 후보 beacon을 못 받았을 때만 같은 채널 directed active scan으로 재확인한다. `home_passive=false`면 처음부터 directed active 1회다.
-> 2. **다중 freq**: 홈 passive와 `ap.log` cache 판정을 건너뛰고 `iw scan freq <공통 freq_list 전체> ssid <allowed>` directed active를 1회 수행한다.
+> 2. **다중 freq**: 홈 passive와 `ap.log` cache 판정을 건너뛰고 `iw scan freq <공통 freq_list 전체> ssid <probe 대상>` directed active를 1회 수행한다. 두 모드 모두 `extra_ssids_in_roam_scan=true`일 때 extra를 probe 대상에 포함한다(현재 연결 SSID는 항상 유지). Mode B의 자동 로밍 후보는 어느 값이든 현재/base SSID로 제한되며, Mode A의 extra 후보는 유지된다.
 > 3. **공통 freq_list 미설정**: 안전장치로 전대역 active scan 1회를 수행한다.
 >
 > `ap.log`/bgscan RSSI는 최대 bgscan interval만큼 과거 값일 수 있으므로 **최종 로밍 후보 판정에는 사용하지 않는다.** bgscan은 평상시 BSS 테이블 충전과 roam backoff hint 용도로 유지된다.

@@ -169,12 +169,16 @@ MAX_ROAMS_IN_WINDOW = DEFAULT_MAX_ROAMS_IN_WINDOW
 PING_PONG_DETECTION_TIME = DEFAULT_PING_PONG_DETECTION_TIME
 USE_SIGNAL_AVG = DEFAULT_USE_SIGNAL_AVG
 
-# 다중 SSID 로밍: conf 기본 ssid 외 추가 로밍 후보 SSID (roaming.extra_ssids에서 로드)
+# 부팅에 고정된 추가 스캔 SSID. Mode A에서는 로밍 후보에도 포함된다.
 EXTRA_SSIDS = []
+# 로밍 판단용 active scan의 추가 SSID directed probe를 제어한다.
+# bgscan probe 및 자동 로밍 후보 정책에는 영향을 주지 않는다.
+DEFAULT_EXTRA_SSIDS_IN_ROAM_SCAN = True
+EXTRA_SSIDS_IN_ROAM_SCAN = DEFAULT_EXTRA_SSIDS_IN_ROAM_SCAN
 
 # 모드 결정자: true=모드A(다중 network 블록 생성 + select_network cross-SSID),
 # false=모드B(단일 블록, cross-SSID는 외부 wifi connect만). 기본 false(무회귀).
-# extra_ssids는 generate=false면 무시(get_allowed_ssids/메인루프 cross/bgscan 3중 게이트).
+# Mode B는 추가 SSID를 스캔하되 로밍 후보·자동 cross-SSID에는 포함하지 않는다.
 GENERATE_NETWORK_BLOCKS = False
 
 # Sleep 설정
@@ -503,6 +507,7 @@ def _apply_runtime_globals(config: Dict[str, Any]) -> None:
             "ENABLE_STAGED_SCAN": config["ENABLE_STAGED_SCAN"],
             "SKIP_REDUNDANT_ACTIVE_SCAN": config["SKIP_REDUNDANT_ACTIVE_SCAN"],
             "HOME_PASSIVE": config["HOME_PASSIVE"],
+            "EXTRA_SSIDS_IN_ROAM_SCAN": config["EXTRA_SSIDS_IN_ROAM_SCAN"],
             "ENABLE_GOOD_SIGNAL_GATE": config["ENABLE_GOOD_SIGNAL_GATE"],
             "USE_SIGNAL_AVG": config["USE_SIGNAL_AVG"],
         }
@@ -546,6 +551,7 @@ def load_roaming_config(iface, data=None):
         "ENABLE_STAGED_SCAN": DEFAULT_ENABLE_STAGED_SCAN,
         "SKIP_REDUNDANT_ACTIVE_SCAN": DEFAULT_SKIP_REDUNDANT_ACTIVE_SCAN,
         "HOME_PASSIVE": DEFAULT_HOME_PASSIVE,
+        "EXTRA_SSIDS_IN_ROAM_SCAN": DEFAULT_EXTRA_SSIDS_IN_ROAM_SCAN,
         "USE_SIGNAL_AVG": DEFAULT_USE_SIGNAL_AVG,
     }
 
@@ -634,6 +640,12 @@ def load_roaming_config(iface, data=None):
                 raise ValueError("extra_ssids must be an array")
             new_extra_ssids = validate_ssid_list(extra) if isinstance(extra, list) else []
 
+            _set_config_value(
+                config, "EXTRA_SSIDS_IN_ROAM_SCAN",
+                roam_config.get("extra_ssids_in_roam_scan", _MISSING), parse_bool,
+                strict=strict_runtime_reload,
+            )
+
             # 후보없음 backoff 파라미터(평탄 대문자 키). 양의 정수만 수용, 형식오류 시 기본값 유지.
             # ROAM_NO_RESULT_MAX_SLEEP 은 JSON 에서 읽지 않는다(상수 고정 — 감사 D2).
             _set_config_value(
@@ -699,7 +711,8 @@ def load_roaming_config(iface, data=None):
         f"predictive={ENABLE_PREDICTIVE_ROAM}, "
         f"ping_pong={ENABLE_PING_PONG_PREVENTION}, "
         f"rssi_source={'signal_avg' if USE_SIGNAL_AVG else 'signal'}, "
-        f"extra_ssids={EXTRA_SSIDS}",
+        f"extra_ssids={EXTRA_SSIDS}, "
+        f"extra_ssids_in_roam_scan={EXTRA_SSIDS_IN_ROAM_SCAN}",
         _EXTRA_(),
     )
 
@@ -730,7 +743,7 @@ def apply_boot_roam_policy(policy):
         raise RoamPolicyError("generate_network_blocks must be boolean")
     extras = validate_ssid_list(extras)
     GENERATE_NETWORK_BLOCKS = generate
-    EXTRA_SSIDS = list(extras) if generate else []
+    EXTRA_SSIDS = list(extras)
 
 
 # ==============================================================================
@@ -1586,11 +1599,11 @@ def get_current_bssid():
 
 
 def get_allowed_ssids(live_ssid=None):
-    """로밍 허용 SSID 목록: 라이브 연결 SSID + conf 기본 ssid(WPA_SSID) + roaming.extra_ssids.
+    """로밍 후보 SSID 목록: 라이브 연결 SSID + conf 기본 ssid(WPA_SSID) + Mode A extras.
     라이브 SSID를 항상 1차로 포함해 cross-SSID connect 후 conf ssid가 교체되어도 현재
     네트워크 후보를 잃지 않는다(passive_roam.py와 동일 원칙).
     extra_ssids가 비고 라이브==WPA_SSID면 [WPA_SSID] → 기존 단일 SSID 동작(무회귀).
-    GENERATE_NETWORK_BLOCKS=false(모드 B)면 extra_ssids를 무시(1차 게이트, spec §3.5)."""
+    GENERATE_NETWORK_BLOCKS=false(모드 B)면 extras는 후보가 아니다."""
     allowed = []
     for s in (live_ssid, WPA_SSID):
         if s and s not in allowed:
@@ -1600,6 +1613,43 @@ def get_allowed_ssids(live_ssid=None):
             if s and s not in allowed:
                 allowed.append(s)
     return allowed
+
+
+def get_scan_probe_ssids(candidate_ssids, live_ssid):
+    """후보 정책은 유지하고 extra directed probe만 선택한다.
+
+    extra probe를 꺼도 현재 연결 SSID가 extra라면 이를 계속 probe해야 같은 SSID
+    BSSID 로밍과 현재 AP baseline 측정이 가능하다. conf 기본 SSID도 유지한다.
+    """
+    if EXTRA_SSIDS_IN_ROAM_SCAN:
+        probes = list(candidate_ssids)
+        for ssid in EXTRA_SSIDS:
+            if ssid and ssid not in probes:
+                probes.append(ssid)
+        return probes
+    probes = []
+    for ssid in (live_ssid, WPA_SSID):
+        if ssid and ssid not in probes:
+            probes.append(ssid)
+    return probes
+
+
+def warn_scan_probe_limit():
+    """부팅 시 base/extras 상한을 알린다. 실제 스캔의 capping은 그대로 둔다."""
+    # 로밍 probe 옵션이 꺼져도 bgscan은 extras를 probe하므로 전체를 센다.
+    # wildcard를 쓸 수 있는 scan을 위해 한 슬롯을 예약한다.
+    probes = get_allowed_ssids(WPA_SSID)
+    for ssid in EXTRA_SSIDS:
+        if ssid and ssid not in probes:
+            probes.append(ssid)
+    count = len(probes) + 1
+    if count > MAX_SCAN_SSIDS:
+        logger.message(
+            "warn",
+            f"[{IFACE}] scan SSIDs {count} > driver max {MAX_SCAN_SSIDS}; "
+            "excess directed probes may be capped (hidden SSIDs may be missed)",
+            _EXTRA_(),
+        )
 
 
 def should_cross_connect(best_ssid, live_ssid):
@@ -3094,6 +3144,7 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
     반환: (best_ap, best_reason, best_score, scanned). scanned=실제 스캔 시도 여부
     (LAST_SCAN_TIME 기록/backoff 판단용)."""
     allowed_set = {s for s in allowed if s}
+    probe_ssids = get_scan_probe_ssids(allowed, live_ssid)
     # 관측 전용: 현재/후보 AP 의 snr·est_throughput 을 로그에 남기기 위한 1 회 조회.
     # 판정에는 쓰지 않는다. 실패해도 빈 dict 라 로그에서 해당 필드만 빠진다.
     bss_metrics = fetch_bss_metrics()
@@ -3114,7 +3165,7 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
     if not single_home_channel:
         if configured_freqs:
             active_lines = iw_scan_to_ap_lines(
-                allowed, configured_freqs, include_wildcard=False
+                probe_ssids, configured_freqs, include_wildcard=False
             )
         else:
             logger.message(
@@ -3123,7 +3174,7 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
                 _EXTRA_(),
             )
             active_lines = iw_scan_to_ap_lines(
-                allowed, None, include_wildcard=True
+                probe_ssids, None, include_wildcard=True
             )
         scanned = True
         if active_lines is SCAN_TRANSITION_BUSY:
@@ -3165,7 +3216,7 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
             # 타깃 배포용. Stage 3와 동일하게 wildcard 없이 allowed 만 probe 하고, 이후
             # 파이프라인(freq 필터·baseline 통일·home_scan_ok·스킵 가드)은 패시브와 동일.
             home_scan_lines = iw_scan_to_ap_lines(
-                allowed, [home_freq], include_wildcard=False
+                probe_ssids, [home_freq], include_wildcard=False
             )
         if home_scan_lines is SCAN_TRANSITION_BUSY:
             return SCAN_TRANSITION_BUSY, "", 0, False
@@ -3233,7 +3284,7 @@ def staged_scan_best_candidate(station, allowed, live_ssid, trend, cooldown):
     # passive scan이 현재 AP 외 후보 비콘을 하나도 못 받았거나 스킵 옵션이 꺼졌으면
     # 동일 채널 directed active scan으로 한 번 재확인한다(hidden/beacon loss 보완).
     active_lines = iw_scan_to_ap_lines(
-        allowed, configured_freqs, include_wildcard=False
+        probe_ssids, configured_freqs, include_wildcard=False
     )
     scanned = True
     if active_lines is SCAN_TRANSITION_BUSY:
@@ -3458,7 +3509,9 @@ def main():
         else:
             # 종전 단일 액티브 스캔 경로(ENABLE_STAGED_SCAN=False 또는 WPA_SSID 부재 시 무회귀).
             if WPA_SSID:
-                ap_lines = iw_scan_to_ap_lines(allowed, WPA_FREQ)
+                ap_lines = iw_scan_to_ap_lines(
+                    get_scan_probe_ssids(allowed, live_ssid), WPA_FREQ
+                )
                 if ap_lines is SCAN_TRANSITION_BUSY:
                     interruptible_sleep(CHECK_INTERVAL)
                     continue
@@ -3724,6 +3777,7 @@ if __name__ == "__main__":
     WPA_SSID, WPA_FREQ, WPA_TH_2G, WPA_TH_5G, WPA_TH_CONNECT = parse_supplicant_conf(
         WPA_CONF_FILE, def_th2g=DEFAULT_TH_2G, def_th5g=DEFAULT_TH_5G
     )
+    warn_scan_probe_limit()
     # 초기 파싱 시점의 mtime 기록 — 이후 main 루프는 mtime 변화(reconfigure) 시에만 재파싱.
     try:
         WPA_CONF_MTIME = os.path.getmtime(WPA_CONF_FILE)

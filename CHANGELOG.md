@@ -3,6 +3,15 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.7.7 (2026-10-27)
+
+> SemVer **patch** — Mode B에서 `roaming.extra_ssids`를 bgscan에 지정 probe로 추가하고 로밍 active probe는 선택할 수 있게 하되 자동 로밍은 현재/base SSID로 제한한다(#419).
+
+- Mode B의 boot snapshot에 있는 추가 SSID를 `iw`/`wpa_cli` active bgscan에 포함한다. 기본 설정에서는 `wifi_roam`의 홈·다중채널 active scan에도 포함한다. 후보 필터와 단일 network 블록은 유지하며 `extra_ssids=[]`일 때의 스캔 명령은 그대로다. 기존 Mode B 설정에 extras가 있다면 업그레이드 후 재부팅부터 해당 SSID도 스캔한다.
+- Mode B에서 `ssid_filter=false`와 extras가 함께 있으면 wildcard 탐색과 기본 SSID·extras 지정 probe를 함께 요청한다. extras가 비면 기존 명령을 유지한다. native owner의 `bgscan.passive=true`는 지정 probe를 보내지 않는다. `extra_ssids` 변경은 재부팅해야 적용된다.
+- `roaming.extra_ssids_in_roam_scan`(기본 `true`)으로 두 모드의 wifi_roam active scan에서 extras directed probe를 끌 수 있다. `false`여도 현재/base SSID probe, bgscan probe와 로밍 후보 정책은 그대로다. Mode A에서는 숨김 extra SSID의 자동 발견이 늦거나 실패할 수 있다. JSON 변경 후 wifi_roam SIGHUP으로 적용한다.
+- wifi_roam 시작 시 와일드카드 슬롯을 포함한 probe 수가 드라이버 상한 10을 넘으면 경고한다. 실제 스캔은 상한에 맞춰 잘라 hidden SSID가 누락될 수 있다. 부팅 base A에서 extra B로 수동 전환한 뒤 A로의 복귀 probe는 보장하지 않는다.
+
 ## 0.7.6 (2026-10-26)
 
 > SemVer **patch** — 로밍 직후 IPv4 재부여 경쟁을 해결하고(#234), 유선 패시브 IP 탐색이 대역 밖 주소를 채택하지 않게 하며(#417), 업그레이드에서 `wifi_event@`를 재시작하고 완전 적용에 필요한 재부팅을 알린다(#418).

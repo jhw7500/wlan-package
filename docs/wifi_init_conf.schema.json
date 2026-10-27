@@ -1745,11 +1745,18 @@
                 "x-utf8-maxBytes": 32,
                 "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
               },
-              "description": "유효 UTF-8 1..32 encoded bytes의 SSID identity(공백/따옴표/백슬래시 보존, C0/DEL 금지). 부팅 시 base와 같은 항목 및 extra 간 중복은 첫 출현 순서를 보존해 제거한다. 모드A에서 추가 network 블록을 만들 SSID이며 cross-SSID 전환은 선택된 자동 owner만 수행한다. 모드B에서는 읽는 소비자가 없다(자동 owner·bgscan이 무시하고 수동 wifi roam 은 같은 SSID 전용) — 망 전환은 wifi <iface> connect <ssid> 로 한다. 변경은 재부팅 필요",
+              "description": "유효 UTF-8 1..32 encoded bytes의 SSID identity(공백/따옴표/백슬래시 보존, C0/DEL 금지). 부팅 시 base와 같은 항목 및 extra 간 중복은 첫 출현 순서를 보존해 제거한다. 두 모드의 bgscan active probe에 추가하며 wifi_roam active probe 포함 여부는 extra_ssids_in_roam_scan이 결정한다. 모드A에서는 추가 network 블록과 자동 cross-SSID 후보가 된다. 모드B에서는 단일 network 블록과 현재/base SSID 자동 로밍 후보를 유지하며 수동 망 전환은 wifi <iface> connect <ssid> 로 한다. 변경은 재부팅 필요",
               "x-ui-editable": "caution",
               "x-apply-timing": "reboot",
-              "x-consumer": "wifi_init.sh, wifi_roam.py, wifi_bgscan.py",
-              "x-inert-in-mode": "B"
+              "x-consumer": "wifi_init.sh, wifi_roam.py, wifi_bgscan.py"
+            },
+            "extra_ssids_in_roam_scan": {
+              "type": "boolean",
+              "default": true,
+              "description": "두 모드의 wifi_roam active scan에 extra_ssids directed probe를 포함할지 선택. false여도 현재/base SSID probe, bgscan extra probe, network 블록과 자동 로밍 후보 정책은 그대로다. Mode A에서는 숨김 extra SSID 자동 발견이 늦거나 실패할 수 있다. wifi_roam SIGHUP으로 적용",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_roam.py"
             },
             "generate_network_blocks": {
               "type": "boolean",
@@ -2764,11 +2771,18 @@
                 "x-utf8-maxBytes": 32,
                 "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
               },
-              "description": "유효 UTF-8 1..32 encoded bytes의 SSID identity(공백/따옴표/백슬래시 보존, C0/DEL 금지). 부팅 시 base와 같은 항목 및 extra 간 중복은 첫 출현 순서를 보존해 제거한다. 모드A에서 추가 network 블록을 만들 SSID이며 cross-SSID 전환은 선택된 자동 owner만 수행한다. 모드B에서는 읽는 소비자가 없다(자동 owner·bgscan이 무시하고 수동 wifi roam 은 같은 SSID 전용) — 망 전환은 wifi <iface> connect <ssid> 로 한다. 변경은 재부팅 필요",
+              "description": "유효 UTF-8 1..32 encoded bytes의 SSID identity(공백/따옴표/백슬래시 보존, C0/DEL 금지). 부팅 시 base와 같은 항목 및 extra 간 중복은 첫 출현 순서를 보존해 제거한다. 두 모드의 bgscan active probe에 추가하며 wifi_roam active probe 포함 여부는 extra_ssids_in_roam_scan이 결정한다. 모드A에서는 추가 network 블록과 자동 cross-SSID 후보가 된다. 모드B에서는 단일 network 블록과 현재/base SSID 자동 로밍 후보를 유지하며 수동 망 전환은 wifi <iface> connect <ssid> 로 한다. 변경은 재부팅 필요",
               "x-ui-editable": "caution",
               "x-apply-timing": "reboot",
-              "x-consumer": "wifi_init.sh, wifi_roam.py, wifi_bgscan.py",
-              "x-inert-in-mode": "B"
+              "x-consumer": "wifi_init.sh, wifi_roam.py, wifi_bgscan.py"
+            },
+            "extra_ssids_in_roam_scan": {
+              "type": "boolean",
+              "default": true,
+              "description": "두 모드의 wifi_roam active scan에 extra_ssids directed probe를 포함할지 선택. false여도 현재/base SSID probe, bgscan extra probe, network 블록과 자동 로밍 후보 정책은 그대로다. Mode A에서는 숨김 extra SSID 자동 발견이 늦거나 실패할 수 있다. wifi_roam SIGHUP으로 적용",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_roam.py"
             },
             "generate_network_blocks": {
               "type": "boolean",
