@@ -371,7 +371,7 @@
           "description": "브릿지에 사용할 무선 인터페이스",
           "x-ui-editable": "caution",
           "x-apply-timing": "boot",
-          "x-consumer": "wifi_init.sh"
+          "x-consumer": "wifi_init.sh, wifi_apply_enabled.sh, wifi_services.sh"
         },
         "mac_mode": {
           "type": "string",

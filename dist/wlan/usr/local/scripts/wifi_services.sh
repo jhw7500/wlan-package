@@ -52,6 +52,10 @@ wifi_services_start_wireless() {
     for manager in wifi_manager wifi-manager; do
         if systemctl is-enabled "$manager" >/dev/null 2>&1; then
             manager_iface=$(jq -r '.wbridge.bridge_iface // .global.BRIDGE_IFACE // "mlan0"' "$config" 2>/dev/null) || manager_iface=mlan0
+            case "$manager_iface" in
+                mlan0|mlan1) ;;
+                *) manager_iface=mlan0 ;;
+            esac
             break
         fi
     done

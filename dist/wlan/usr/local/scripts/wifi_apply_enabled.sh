@@ -259,6 +259,10 @@ apply wifi_mgmt_log.timer "$_mgmt"
 # wbridge 정책
 WBRIDGE_ENABLED=$(get_bool ".wbridge.enabled" "false")
 BRIDGE_IFACE=$(jq -r '.wbridge.bridge_iface // .global.BRIDGE_IFACE // "mlan0"' "$JSON")
+case "$BRIDGE_IFACE" in
+    mlan0|mlan1) MANAGER_IFACE="$BRIDGE_IFACE" ;;
+    *) MANAGER_IFACE=mlan0 ;;
+esac
 SNMP_TRAP_ENABLED=$(get_bool ".snmp.trap.enabled" "false")
 WIFI_MANAGER_ENABLED=false
 for _manager_unit in wifi_manager wifi-manager; do
@@ -291,7 +295,7 @@ for iface in mlan0 mlan1; do
     fi
 
     _wpa_want=$(get_bool ".${iface}.wpa_supplicant.enabled" "true")
-    if [ "$WIFI_MANAGER_ENABLED" = "true" ] && [ "$BRIDGE_IFACE" = "$iface" ]; then
+    if [ "$WIFI_MANAGER_ENABLED" = "true" ] && [ "$MANAGER_IFACE" = "$iface" ]; then
         _wpa_want=false
     fi
     apply "wpa_supplicant@${iface}.service" "$_wpa_want"
