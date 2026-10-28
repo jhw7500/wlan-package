@@ -45,6 +45,8 @@ etc/systemd/system/wifi_mgmt_log.timer
 etc/systemd/system/wifi_periodic_roam@.service
 etc/systemd/system/wifi_ping@.service
 etc/systemd/system/wifi_ping_monitor.service
+etc/systemd/system/wifi_raw_commit@.path
+etc/systemd/system/wifi_raw_commit@.service
 etc/systemd/system/wifi_roam@.service
 etc/systemd/system/wifi_thermal_state.service
 etc/systemd/system/wifi_thermal_state.timer
@@ -64,7 +66,9 @@ opt/ftpcmd/bin/wfreq
 opt/ftpcmd/bin/wgetifstate
 opt/ftpcmd/bin/wifcdown
 opt/ftpcmd/bin/wifcup
+opt/ftpcmd/bin/wpsk
 opt/ftpcmd/bin/wrst
+opt/ftpcmd/bin/wscan
 opt/ftpcmd/bin/wssid
 opt/ftpcmd/bin/wstatus
 opt/wlan/bin/README
@@ -299,6 +303,7 @@ usr/local/scripts/wifi_mgmt_log.sh
 usr/local/scripts/wifi_peer_net_reapply.sh
 usr/local/scripts/wifi_periodic_roam.sh
 usr/local/scripts/wifi_ping.sh
+usr/local/scripts/wifi_raw_commit.py
 usr/local/scripts/wifi_services.sh
 usr/local/scripts/wifi_services_lib.sh
 usr/local/scripts/wifi_snmp_trap.sh

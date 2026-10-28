@@ -34,13 +34,39 @@ ftp> quote <명령> [인자...]
 | --- | --- | --- | --- |
 | `wssid` | `quote wssid <mlan0\|mlan1\|0\|1> [SSID...]` | 설정 파일의 SSID 조회 | 설정 파일에 SSID 저장 |
 | `wfreq` | `quote wfreq <mlan0\|mlan1\|0\|1> [주파수/채널...]` | 설정 파일의 주파수 조회 | 설정 파일에 주파수 저장 |
+| `wscan` | `quote wscan <mlan0\|mlan1\|0\|1> <SSID...>` | SSID 누락 오류 | 최신 스캔에서 SSID·RSSI·주파수 조회 |
+| `wpsk` | `quote wpsk <mlan0\|mlan1\|0\|1> [--stage] <비밀번호...>` | 비밀번호 누락 오류 | PSK 저장 또는 휘발 저장 |
 | `wconnect` | `quote wconnect <mlan0\|mlan1\|0\|1> [SSID...]` | 저장된 설정으로 연결 | SSID를 저장한 뒤 연결 |
 | `wstatus` | `quote wstatus <mlan0\|mlan1\|0\|1>` | 현재 연결 조회 | 추가 인자 오류 |
-| `wconnectraw` | `quote wconnectraw <mlan0\|mlan1\|0\|1> <SSID...>` | SSID 누락 오류 | 시험용 런타임 전환 요청 |
+| `wconnectraw` | `quote wconnectraw <mlan0\|mlan1\|0\|1> <SSID...>` | SSID 누락 오류 | 빠른 런타임 전환과 성공 시 비동기 SSID 저장 요청 |
 
 `wssid`와 `wfreq`의 설정은 파일에만 저장된다. 저장한 값을 연결에 적용하려면
 `wconnect`를 호출한다. `wstatus`는 저장된 값이 아니라 현재 연결된 SSID와
 주파수(MHz)를 반환한다.
+
+`wpsk <iface> <비밀번호>`는 8~63바이트 비밀번호를 설정 파일의 모든
+`network` 블록에 저장한다. 다음 `wconnect`가 적용하며, 기본
+`connect_fallback.enabled=false`에서는 연결 실패 뒤에도 새 PSK가 남는다.
+`wpsk <iface> --stage <비밀번호>`는 `/run/wifi`에 mode `0600`으로만
+저장한다. 단일 PSK network의 Mode B에서 `wconnect <iface> <SSID>`가
+연결 성공을 확인하면 SSID와 PSK를 함께 파일에 저장한다. 성공한
+전환은 재부팅 후에도 유지된다. `--stage`는 인터페이스 바로 뒤에 놓는다.
+같은 인터페이스에 파일 저장 PSK가 적용 대기 중이면 `--stage`를, 휘발
+PSK가 대기 중이면 일반 `wpsk`를 코드 `6`으로 거절한다. 먼저 선택한
+방식의 `wconnect`를 마쳐야 다른 방식으로 바꿀 수 있다. 휘발 stage는
+재부팅하면 사라지고, 파일 저장 PSK는 남는다.
+FTP 제어 연결이 암호화되지 않았다면 비밀번호가 평문으로 전달된다.
+
+`wscan`은 설정 파일의 공통 주파수 목록에서 대상 SSID를 지정해 스캔한다.
+목록이 없으면 전대역 스캔을 한다. 이번 스캔에서 확인한 동일 SSID 중
+가장 강한 BSS를 `200 SSID="<SSID>" RSSI=<dBm> FREQ=<MHz>`로 반환한다.
+발견되지 않으면 오류 코드 `4`다. 이 명령은 설정을 저장하거나 연결을
+전환하지 않는다. 예를 들어 전환 전에 다음처럼 확인할 수 있다.
+
+```text
+ftp> quote wscan 0 Office AP B
+200 SSID="Office AP B" RSSI=-50.00 FREQ=5180
+```
 
 ```text
 ftp> quote wssid 0 Office AP
@@ -90,7 +116,7 @@ ftp> quote wstatus 0
 
 ### 연결 결과
 
-`wconnect`는 저장된 인증 정보로 연결을 시도한다. 단일 네트워크 프로필에서
+일반 `wconnect`는 저장된 인증 정보로 연결을 시도한다. 단일 네트워크 프로필에서
 저장 설정과 현재 런타임 설정이 일치하면 연결을 유지하고 성공을 반환한다.
 다른 SSID로 전환할 때 SSID 외의 설정이 그대로이면 최근 스캔 결과로 바로 연결해
 스캔 시간을 줄인다. 최근 스캔 결과에 대상 AP가 없으면 연결을 끊기 전에 대상 SSID를
@@ -99,8 +125,12 @@ ftp> quote wstatus 0
 연결 확인에 실패하면 `550 Failed: wconnect exited 8`을 반환할 수 있다.
 이후 연결될 수도 있으므로 `quote wstatus 0`으로 실제 상태를 확인한다.
 
-출하 기본값(`mlanN.connect_fallback.enabled=false`)에서는 저장된 새 SSID·주파수를
-연결 실패 후에도 유지한다. 이전 망으로 돌아가려면 이전 설정을 다시 저장하고
+일반 저장 우선 경로의 출하 기본값(`mlanN.connect_fallback.enabled=false`)에서는
+저장된 새 SSID·주파수·PSK를 연결 실패 후에도 유지한다.
+`wpsk --stage` 경로는 실패 시 이전 설정과 연결로 복구를 시도하며, 성공한
+연결의 SSID·PSK만 파일에 저장한다. 이 경로는 연결된 단일 PSK network의
+Mode B와 명시적 목표 SSID가 필요하다. 이전 망으로 돌아가려면 일반 경로에서는
+이전 설정을 다시 저장하고
 `wconnect`로 적용한다. fallback을 opt-in으로 활성화하면 수동 CLI/FTP connect에 한해
 직전 검증 완료 프로필(SSID, 주파수 정책, 인증 설정)을 실패 시 복원하고 reconfigure한
 뒤 이전 association을 확인한다. 복원 성공 여부와 무관하게 새 연결의 원래 nonzero 결과를
@@ -108,6 +138,13 @@ ftp> quote wstatus 0
 `fallback failed`/`fallback unavailable`, syslog는 `outcome=restored`/
 `outcome=restore-failed`/`outcome=fallback-unavailable`로 구분한다. known-good이 없어도
 새 연결 시도는 허용한다.
+
+`wpsk --stage` 전환 중 프로세스가 강제 종료돼 미완료 표식이 남으면
+유선·시리얼 경로에서 SSID 없이 `wconnect <iface>`를 호출해 원본 복구를
+재시도할 수 있다. 복구가 확인되지 않으면 표식이 남는다. 전원 차단 시
+`/run`의 복구 스냅샷은 사라지며, 저장 직후 응답 전에 차단됐다면 새
+프로필이 남을 수 있다. 이 경우 저장 SSID·PSK를 유선·시리얼 경로에서
+확인하고 필요한 기존 값을 다시 설정한다.
 
 known-good은 가능한 경우 `wssid`/`wfreq` 또는 CLI의 PSK/key 변경 전에 캡처하고 새 목표
 연결 성공 뒤 갱신한다. 검증되지 않은 사본은 사용하지 않는다. 상태는 `/run/wifi` 아래
@@ -123,17 +160,34 @@ OPC의 경쟁 wireless profile/radio helper write도 busy로 거부되지만 Cha
 fallback을 시작하지 않는다. `wconnectraw`, Mode A와 다중 `network` 구성도 대상이 아니며, 다중 프로필의
 선택·복구는 supplicant가 소유한다.
 
-`wconnectraw`는 시험용 명령이다. `200 SUCCESS`는 무선 제어 명령의 제출
-성공만 뜻하며 AP 연결 성공을 보장하지 않는다. 설정 파일을 바꾸지 않고
-연결 완료도 기다리지 않는다. 다시 연결을 요청하기 전에 현재 연결을 끊으므로,
-코드 7로 실패하면 연결이 끊긴 채 남을 수 있다. 이때는 `quote wconnect`로
-복구한다.
+`wconnectraw`의 `200 SUCCESS`는 무선 제어 명령 제출과 `/run/wifi` 저장 요청
+게시의 성공이다. FTP 프로세스 밖의 systemd path/service가 요청을 처리하며,
+AP 연결 및 저장 완료를 기다리지 않는다. 연결이 확인되면
+단일 `network`의 Mode B에서 변경되지 않은 설정 파일의 SSID만 저장한다.
+PSK·주파수는 유지한다. `wstatus`로 연결을, `wssid`로 저장 결과를 확인한다.
+저장 완료 뒤에는 재부팅해도 새 SSID가 유지된다. 저장 전 재부팅하면 휘발성
+요청이 사라질 수 있고, 연속 명령의 최신 요청은 앞선 미완료 요청을 대체한다.
+저장 작업 로그의 `association_timeout`은 연결 미완료, `wpa_cli_timeout`과
+`wpa_cli_error`는 supplicant 제어 실패를 뜻한다.
+연결 실패·시간 초과·
+다중망·경쟁 설정 변경에서는 이전 저장 설정이 남는다. 다른 PSK를 쓰는
+망에는 `wpsk --stage`와 `wconnect`를 사용한다. 코드 7 또는 9로 실패해도
+링크가 끊기거나 전환 중일 수 있으므로 `wstatus`로 확인하고 필요하면
+`quote wconnect <iface>`로 저장된 프로필을 다시 적용한다.
 
 ## 오류 코드
 
 | 명령 | 코드 | 의미 |
 | --- | ---: | --- |
 | `wssid`, `wfreq`, `wconnect`, `wconnectraw`, `wstatus` | `2` | 필수 인터페이스 누락 또는 잘못된 값 |
+| `wscan` | `1` | 스캔 실행 환경 또는 설정 주파수 조회 실패 |
+| `wscan` | `2` | 인터페이스 또는 대상 SSID 누락·오류 |
+| `wscan` | `4` | 이번 스캔의 유효한 대상 BSS 없음 |
+| `wscan` | `6` | 같은 인터페이스의 설정·스캔 전환이 진행 중(busy) |
+| `wscan` | `124` | 내부 25초 스캔 제한 시간 초과 |
+| `wpsk` | `1` | 비밀번호 검증 또는 저장 실패 |
+| `wpsk` | `2` | 인터페이스 또는 비밀번호 누락·오류 |
+| `wpsk` | `6` | 같은 인터페이스의 설정 변경 진행 중 또는 파일 저장·휘발 PSK 방식 충돌(busy) |
 | `wssid`, `wfreq` | `1` | 설정 조회, 입력 검증 또는 저장 실패 |
 | `wconnect` | `1` | SSID 또는 설정 검증 실패 |
 | `wconnect` | `3` | 대상 인터페이스가 현재 FTP 연결을 운반하여 요청 거부 |
@@ -143,14 +197,16 @@ fallback을 시작하지 않는다. `wconnectraw`, Mode A와 다중 `network` �
 | `wstatus` | `2` | 잘못된 인터페이스 인자 또는 인자 초과 |
 | `wstatus` | `7` | 무선 상태 조회 실패 또는 필수 값 누락 |
 | `wstatus` | `8` | 상태 조회는 가능하지만 현재 연결되지 않음 |
-| `wconnectraw` | `1` | 상태 조회 실패, 인터페이스 비활성, 또는 대상 네트워크 선택 실패 |
-| `wconnectraw` | `2` | 필수 인터페이스 누락·오류 또는 SSID 누락 |
+| `wconnectraw` | `1` | 상태·프로필 조회 실패, 인터페이스 비활성, 저장 작업 실행 환경 오류 또는 대상 네트워크 선택 실패 |
+| `wconnectraw` | `2` | 필수 인터페이스 누락·오류 또는 SSID 누락·검증 실패 |
 | `wconnectraw` | `7` | 런타임 명령 실패 |
+| `wconnectraw` | `9` | 런타임 전환 요청 후 저장 요청 파일 게시 실패 |
 
 `501 Invalid command arguments.`와 `550 Command timed out: <명령>`에는
 위 표의 핸들러 종료 코드가 없다. `wconnect`의 연결 확인 폴링 기본값은 15초지만
 설정 처리 시간까지 포함한 전체 명령 시간의 상한은 아니다. 두 시간은
 FTP 명령 인자로 변경할 수 없다.
+`wscan`은 하위 스캔 명령의 다른 종료 코드도 전달할 수 있다.
 
 ## 인터페이스 및 재부팅 명령
 

@@ -1,16 +1,18 @@
 #!/bin/sh
-# Test-only runtime SSID switch. Reached over FTP as:
+# Fast runtime SSID switch. Reached over FTP as:
 #   quote wconnectraw <mlan0|mlan1|0|1> <ssid words...>
 #
-# This deliberately bypasses the persistent wifi connect transaction: it does
-# not validate the SSID, inspect topology, edit/sync wpa_supplicant.conf, or
-# wait for association. It changes the selected network in supplicant memory,
-# drops the current link, submits reassociate and returns. Every command must
-# return process rc 0 and an exact OK control reply. A later reconfigure or
-# service restart restores the on-disk configuration.
+# The radio commands stay on the short path. After their exact OK replies,
+# a systemd path unit starts an independent worker that confirms the target
+# association and then saves only its SSID. SUCCESS means the radio commands
+# and request were submitted, not that association or save has finished.
 set -u
 
 WPA_CLI=/usr/sbin/wpa_cli
+WPA_CONF_DIR=${WPA_CONF_DIR:-/etc/wpa_supplicant}
+RAW_COMMIT_HELPER=${WIFI_RAW_COMMIT_HELPER:-/usr/local/scripts/wifi_raw_commit.py}
+LC_ALL=C
+export LC_ALL
 
 monotonic_ms() {
     IFS=' .' read -r _sec _centi _rest < /proc/uptime || return 1
@@ -49,17 +51,39 @@ if [ "$#" -eq 0 ]; then
     exit 2
 fi
 SSID=$*
+case "$SSID" in
+    ''|*[!A-Za-z0-9_.:,=+@/\ -]*)
+        raw_log_failure 2 "invalid SSID characters"
+        exit 2
+        ;;
+esac
+if [ "${#SSID}" -gt 32 ]; then
+    raw_log_failure 2 "SSID exceeds 32 bytes"
+    exit 2
+fi
 PARSED_MS=$(monotonic_ms 2>/dev/null || printf '%s\n' "${START_MS:-0}")
 
-# Share the same gate as ordinary wifi/OPC writers. This command still bypasses
-# persistence and fallback, but may not disturb an active fallback transaction.
+# Hold the change gate exclusively across the live mutation and profile digest.
+# Other writers cannot alter the profile before the commit worker is queued.
 CHANGE_RUN_DIR=${WIFI_RUN_DIR:-/run/wifi}
 mkdir -p "$CHANGE_RUN_DIR" || exit 1
 exec 6>"$CHANGE_RUN_DIR/${IFACE}.change.lock" || exit 1
-if ! flock -n -s 6; then
+if ! flock -n -x 6; then
     raw_log_failure 6 "configuration/connection change busy for $IFACE"
     echo "configuration/connection change busy for $IFACE" >&2
     exit 6
+fi
+
+CONF="$WPA_CONF_DIR/wpa_supplicant-$IFACE.conf"
+if [ ! -f "$CONF" ] || [ -L "$CONF" ] || [ ! -x "$RAW_COMMIT_HELPER" ]; then
+    raw_log_failure 1 "profile or persistence worker unavailable"
+    exit 1
+fi
+CONF_SHA=$(sha256sum "$CONF" 2>/dev/null)
+CONF_SHA=${CONF_SHA%% *}
+if [ "${#CONF_SHA}" -ne 64 ]; then
+    raw_log_failure 1 "profile digest unavailable"
+    exit 1
 fi
 
 STATUS=$($WPA_CLI -i "$IFACE" status 2>/dev/null)
@@ -71,10 +95,14 @@ fi
 
 NETWORK_ID=""
 WPA_STATE=""
+ORIGINAL_SSID=""
+ORIGINAL_BSSID="-"
 while IFS='=' read -r _key _value; do
     case "$_key" in
         id) NETWORK_ID=$_value ;;
         wpa_state) WPA_STATE=$_value ;;
+        ssid) ORIGINAL_SSID=$_value ;;
+        bssid) ORIGINAL_BSSID=$_value ;;
     esac
 done <<EOF
 $STATUS
@@ -84,6 +112,15 @@ if [ "$WPA_STATE" = "INTERFACE_DISABLED" ]; then
     # down after the interface comes back up, so change nothing.
     raw_log_failure 1 "interface disabled (wpa_state=INTERFACE_DISABLED)"
     exit 1
+fi
+REQUIRE_NEW_BSSID=0
+if [ "$ORIGINAL_SSID" != "$SSID" ]; then
+    if [ "$ORIGINAL_BSSID" != - ]; then
+        REQUIRE_NEW_BSSID=1
+    elif [ "$WPA_STATE" = COMPLETED ]; then
+        raw_log_failure 1 "connected status has no original BSSID"
+        exit 1
+    fi
 fi
 if [ -z "$NETWORK_ID" ]; then
     # Disconnected status has no id. Use the selected network if one is marked
@@ -112,9 +149,7 @@ fi
 
 STATUS_DONE_MS=$(monotonic_ms 2>/dev/null || printf '%s\n' "$PARSED_MS")
 
-# Pass an explicit identity straight through as a quoted wpa_supplicant value.
-# Quotes/backslashes/control bytes are intentionally not repaired or rejected:
-# this command exists to expose the raw command path for timing experiments.
+# The FTP-safe ASCII validation above makes this quoted ctrl value unambiguous.
 SSID_VALUE=\"$SSID\"
 SET_REPLY=$($WPA_CLI -i "$IFACE" set_network "$NETWORK_ID" ssid "$SSID_VALUE" 2>&1)
 SET_RC=$?
@@ -149,6 +184,20 @@ esac
 
 if [ "$DISC_RC" -eq 0 ] && [ "$DISC_REPLY" = "OK" ] \
    && [ "$REASSOC_RC" -eq 0 ] && [ "$REASSOC_REPLY" = "OK" ]; then
+    # A path unit outside vsftpd's private PID namespace observes this atomic
+    # request. No D-Bus client or child process is needed in the FTP handler.
+    REQUEST_TMP=$(mktemp "$CHANGE_RUN_DIR/.${IFACE}.raw-commit.XXXXXX") || {
+        raw_log_failure 9 "association requested but request file could not be created"
+        exit 9
+    }
+    if ! printf 'wifi-raw-commit-v1\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+        "$NETWORK_ID" "$SSID" "$CONF_SHA" "$TRACE_ID" \
+        "$ORIGINAL_BSSID" "$REQUIRE_NEW_BSSID" > "$REQUEST_TMP" \
+       || ! mv -fT -- "$REQUEST_TMP" "$CHANGE_RUN_DIR/${IFACE}.raw-commit"; then
+        rm -f -- "$REQUEST_TMP"
+        raw_log_failure 9 "association requested but request file could not be published"
+        exit 9
+    fi
     exit 0
 fi
 

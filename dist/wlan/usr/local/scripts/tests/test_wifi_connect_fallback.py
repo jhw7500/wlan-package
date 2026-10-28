@@ -33,6 +33,13 @@ if [ "${1:-}" != --daemon ]; then
             case "${5:-}" in
                 ssid) awk '/^[[:space:]]*ssid=/{sub(/^[[:space:]]*ssid=/, ""); print; exit}' "$runtime" ;;
                 freq_list) awk '/^[[:space:]]*freq_list=/{sub(/^[[:space:]]*freq_list=/, ""); print; exit}' "$runtime" ;;
+                key_mgmt) echo WPA-PSK ;;
+                psk)
+                    if [ -f "$D/mask-psk" ]; then
+                        echo '*'
+                    else
+                        awk '/^[[:space:]]*psk=/{sub(/^[[:space:]]*psk=/, ""); print; exit}' "$runtime"
+                    fi ;;
                 *) echo FAIL ;;
             esac
             exit 0 ;;
@@ -58,6 +65,10 @@ if [ "${1:-}" != --daemon ]; then
             if [ "${5:-}" = ssid ]; then
                 if [ -f "$D/fail-set-network" ]; then echo FAIL; exit 0; fi
                 NEW_SSID="${6:-}" awk '/^[[:space:]]*ssid=/{sub(/ssid=.*/, "ssid=" ENVIRON["NEW_SSID"])} {print}' \
+                    "$runtime" > "$runtime.new" && mv -f "$runtime.new" "$runtime"
+            elif [ "${5:-}" = psk ]; then
+                if [ -f "$D/fail-set-psk" ]; then echo FAIL; exit 0; fi
+                NEW_PSK="${6:-}" awk '/^[[:space:]]*psk=/{sub(/psk=.*/, "psk=" ENVIRON["NEW_PSK"])} {print}' \
                     "$runtime" > "$runtime.new" && mv -f "$runtime.new" "$runtime"
             fi
             echo OK
@@ -95,6 +106,8 @@ fi
 class ConnectFallbackTests(_cli.ConnectHarness):
     def setUp(self):
         super().setUp()
+        self.run_dir.mkdir(exist_ok=True)
+        self.run_dir.chmod(0o755)
         stub = _cli.WPA_CLI_STUB.replace('D="${WPA_STUB_DIR:?}"', 'D="${WPA_STUB_DIR:?}"\n' + PROFILE_BOUNDARY, 1)
         (self.stub / "wpa_cli").write_text(stub)
         self.write_conf(CONF_MODE_B)
@@ -128,6 +141,7 @@ class ConnectFallbackTests(_cli.ConnectHarness):
                     WIFI_RUN_DIR=str(self.run_dir), WIFI_INIT_CONF_JSON=str(self.config),
                     WIFI_PEER_SCRIPT_DIR=str(self.root / "peer"),
                     WIFI_SCAN_TRANSITION_LOCK_TIMEOUT="0", ASSOC_TIMEOUT_DEFAULT="2",
+                    WIFI_RUNTIME_STAGE_EXPECT_UID=str(os.getuid()),
                     OPC_ESSID_MARKER=str(self.marker))
 
     def run_connect(self, *args, extra_env=None, **kwargs):
@@ -144,6 +158,501 @@ class ConnectFallbackTests(_cli.ConnectHarness):
         return subprocess.Popen(["bash", str(WIFI_SH), "mlan0", "connect", "unreachable"],
                                 env=self.environment(), stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True)
+
+    def stage_runtime_psk(self, secret="runtime-secret"):
+        self.run_dir.mkdir(exist_ok=True)
+        stage = self.run_dir / "mlan0.runtime-psk"
+        stage.write_text(secret)
+        stage.chmod(0o600)
+        return stage
+
+    def run_runtime_connect(self, ssid, secret="runtime-secret", **kwargs):
+        self.stage_runtime_psk(secret)
+        extra_env = dict(kwargs.pop("extra_env", {}) or {}, FTPCMD_RUNTIME_PSK="1")
+        return self.run_connect(ssid, apply_stored_conf=True, extra_env=extra_env, **kwargs)
+
+    def test_runtime_first_switch_persists_both_fields_only_after_verified_landing(self):
+        result = self.run_runtime_connect("good-B")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        stored = self.conf.read_text()
+        self.assertIn('ssid="good-B"', stored)
+        self.assertIn('psk="runtime-secret"', stored)
+        calls = (self.state / "calls.log").read_text().splitlines()
+        switch = [line for line in calls if any(command in line for command in (
+            " disconnect", " set_network", " reassociate", " reconfigure"))]
+        self.assertEqual(switch[:4], [
+            "wpa_cli -i mlan0 disconnect",
+            'wpa_cli -i mlan0 set_network 0 ssid "good-B"',
+            'wpa_cli -i mlan0 set_network 0 psk "runtime-secret"',
+            "wpa_cli -i mlan0 reassociate",
+        ])
+        self.assertFalse((self.run_dir / "mlan0.runtime-psk").exists())
+        self.assertFalse((self.run_dir / "mlan0.runtime-psk.active").exists())
+        self.assertFalse((self.run_dir / "mlan0.runtime-switch-in-progress").exists())
+        self.assertNotIn("runtime-secret", result.stdout + result.stderr)
+
+    def test_runtime_first_timeout_restores_original_file_marker_and_association(self):
+        marker = "essid=original\nslot=7\n"
+        self.marker.write_text(marker)
+        result = self.run_runtime_connect("unreachable")
+        self.assertEqual(result.returncode, 8, result.stdout + result.stderr)
+        self.assertEqual(self.conf.read_text(), CONF_MODE_B)
+        self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+        self.assertEqual(self.marker.read_text(), marker)
+        self.assertIn("ssid=jhw_wlan_\n", (self.state / "status").read_text())
+        self.assertFalse((self.run_dir / "mlan0.runtime-psk.active").exists())
+        self.assertFalse((self.run_dir / "mlan0.runtime-switch-in-progress").exists())
+        self.assertNotIn("runtime-secret", result.stdout + result.stderr)
+
+    def test_runtime_first_rejected_psk_is_rolled_back_without_persisting(self):
+        (self.state / "fail-set-psk").touch()
+        result = self.run_runtime_connect("good-B")
+        self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+        self.assertEqual(self.conf.read_text(), CONF_MODE_B)
+        self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+
+    def test_runtime_first_rejects_a_live_credential_that_differs_from_storage(self):
+        runtime = CONF_MODE_B.replace(
+            'psk="stub-psk-not-a-secret"', 'psk="runtime-only-credential"')
+        (self.state / "runtime.conf").write_text(runtime)
+        result = self.run_runtime_connect("good-B")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("stored and live credentials do not match", result.stderr)
+        self.assertEqual(self.conf.read_text(), CONF_MODE_B)
+        calls = self.state / "calls.log"
+        self.assertNotIn(" disconnect", calls.read_text() if calls.exists() else "")
+
+    def test_runtime_first_masked_live_psk_is_proved_by_stored_profile_reassociation(self):
+        (self.state / "mask-psk").touch()
+        result = self.run_runtime_connect("good-B")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = (self.state / "calls.log").read_text().splitlines()
+        reconfigure = calls.index("wpa_cli -i mlan0 reconfigure")
+        disconnect = calls.index("wpa_cli -i mlan0 disconnect")
+        self.assertLess(reconfigure, disconnect)
+        self.assertIn('ssid="good-B"', self.conf.read_text())
+        self.assertIn('psk="runtime-secret"', self.conf.read_text())
+
+    def test_runtime_first_rejects_a_symlink_stage_without_touching_the_link(self):
+        target = self.root / "outside-secret"
+        target.write_text("runtime-secret")
+        self.run_dir.mkdir(exist_ok=True)
+        (self.run_dir / "mlan0.runtime-psk").symlink_to(target)
+        result = self.run_connect("good-B", apply_stored_conf=True,
+                                  extra_env={"FTPCMD_RUNTIME_PSK": "1"})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(target.read_text(), "runtime-secret")
+        self.assertEqual(self.conf.read_text(), CONF_MODE_B)
+
+    def test_stage_psk_creates_a_private_runtime_file_without_logging_the_secret(self):
+        secret = "private-runtime-secret"
+        result = self.run_wifi("stage-psk", secret)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        stage = self.run_dir / "mlan0.runtime-psk"
+        self.assertEqual(stage.read_text(), secret)
+        self.assertEqual(stat.S_IMODE(stage.stat().st_mode), 0o600)
+        log = (self.state / "logger.log").read_text()
+        self.assertIn("stage-psk [redacted]", log)
+        self.assertNotIn(secret, log + result.stdout + result.stderr)
+
+    def test_stage_psk_rejects_characters_outside_the_ftp_command_set(self):
+        for secret in ('bad"credential', r"bad\credential", "bad$credential"):
+            with self.subTest(secret=secret):
+                result = self.run_wifi("stage-psk", secret)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertFalse((self.run_dir / "mlan0.runtime-psk").exists())
+
+    def test_stage_psk_refuses_to_replace_state_from_an_active_transaction(self):
+        self.run_dir.mkdir(exist_ok=True)
+        active = self.run_dir / "mlan0.runtime-psk.active"
+        active.write_text("active-secret")
+        active.chmod(0o600)
+        result = self.run_wifi("stage-psk", "next-secret")
+        self.assertEqual(result.returncode, 6, result.stdout + result.stderr)
+        self.assertEqual(active.read_text(), "active-secret")
+        self.assertFalse((self.run_dir / "mlan0.runtime-psk").exists())
+
+    def test_persistent_psk_then_stage_rejects_conflicting_credential_mode(self):
+        persistent = self.run_wifi("psk", "persistent-secret")
+        self.assertEqual(persistent.returncode, 0, persistent.stdout + persistent.stderr)
+        stored = self.conf.read_text()
+        self.assertIn('psk="persistent-secret"', stored)
+        self.assertTrue((self.run_dir / "mlan0.credential-pending").exists())
+
+        staged = self.run_wifi("stage-psk", "staged-secret")
+        self.assertEqual(staged.returncode, 6, staged.stdout + staged.stderr)
+        self.assertEqual(self.conf.read_text(), stored)
+        self.assertFalse((self.run_dir / "mlan0.runtime-psk").exists())
+
+        applied = self.run_connect("jhw_wlan_", apply_stored_conf=True)
+        self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+        self.assertFalse((self.run_dir / "mlan0.credential-pending").exists())
+
+    def test_staged_psk_then_persistent_psk_rejects_conflicting_credential_mode(self):
+        staged = self.run_wifi("stage-psk", "staged-secret")
+        self.assertEqual(staged.returncode, 0, staged.stdout + staged.stderr)
+
+        persistent = self.run_wifi("psk", "persistent-secret")
+        self.assertEqual(persistent.returncode, 6, persistent.stdout + persistent.stderr)
+        self.assertEqual(self.conf.read_text(), CONF_MODE_B)
+        self.assertEqual((self.run_dir / "mlan0.runtime-psk").read_text(), "staged-secret")
+        self.assertFalse((self.run_dir / "mlan0.credential-pending").exists())
+
+        applied = self.run_connect("good-B", apply_stored_conf=True,
+                                   extra_env={"FTPCMD_RUNTIME_PSK": "1"})
+        self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+        self.assertIn('psk="staged-secret"', self.conf.read_text())
+        self.assertFalse((self.run_dir / "mlan0.runtime-psk").exists())
+
+    def test_staged_psk_blocks_persistent_key_change_too(self):
+        staged = self.run_wifi("stage-psk", "staged-secret")
+        self.assertEqual(staged.returncode, 0, staged.stdout + staged.stderr)
+
+        changed = self.run_wifi("key", "NONE")
+        self.assertEqual(changed.returncode, 6, changed.stdout + changed.stderr)
+        self.assertEqual(self.conf.read_text(), CONF_MODE_B)
+        self.assertEqual((self.run_dir / "mlan0.runtime-psk").read_text(), "staged-secret")
+
+    def test_concurrent_stage_psk_publish_is_rejected_by_the_exclusive_guard(self):
+        mv = self.stub / "mv"
+        mv.write_text('''#!/bin/bash
+last="${!#}"
+case "$last" in
+    *.runtime-psk)
+        if [ ! -e "$WPA_STUB_DIR/stage-entered" ]; then
+            : > "$WPA_STUB_DIR/stage-entered"
+            while [ ! -e "$WPA_STUB_DIR/stage-release" ]; do sleep 0.01; done
+        fi ;;
+esac
+exec /bin/mv "$@"
+''')
+        mv.chmod(0o755)
+        first = subprocess.Popen(
+            ["bash", str(WIFI_SH), "mlan0", "stage-psk", "first-secret"],
+            env=self.environment(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            deadline = time.monotonic() + 5
+            while not (self.state / "stage-entered").exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue((self.state / "stage-entered").exists())
+            second = self.run_wifi("stage-psk", "second-secret")
+            self.assertEqual(second.returncode, 6, second.stdout + second.stderr)
+            (self.state / "stage-release").touch()
+            stdout, stderr = first.communicate(timeout=5)
+            self.assertEqual(first.returncode, 0, stdout + stderr)
+            self.assertEqual((self.run_dir / "mlan0.runtime-psk").read_text(), "first-secret")
+        finally:
+            (self.state / "stage-release").touch()
+            if first.poll() is None:
+                first.kill()
+                first.communicate(timeout=3)
+
+    def test_stage_psk_rejects_a_group_or_world_writable_runtime_directory(self):
+        self.run_dir.mkdir(exist_ok=True)
+        for mode in (0o775, 0o757):
+            with self.subTest(mode=oct(mode)):
+                self.run_dir.chmod(mode)
+                result = self.run_wifi("stage-psk", "next-secret")
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertFalse((self.run_dir / "mlan0.runtime-psk").exists())
+        self.run_dir.chmod(0o755)
+
+    def test_runtime_first_late_sync_failure_restores_original_persistence_and_link(self):
+        sync = self.stub / "sync"
+        sync.write_text('''#!/bin/sh
+conf="$WPA_CONF_DIR/wpa_supplicant-mlan0.conf"
+if grep -q 'ssid="good-B"' "$conf"; then
+    count=$(cat "$WPA_STUB_DIR/sync-fail-count" 2>/dev/null || echo 0)
+    count=$((count + 1))
+    echo "$count" > "$WPA_STUB_DIR/sync-fail-count"
+    [ "$count" -gt 2 ] || exit 1
+fi
+exec /bin/sync "$@"
+''')
+        sync.chmod(0o755)
+        result = self.run_runtime_connect("good-B")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(self.conf.read_text(), CONF_MODE_B)
+        self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+        self.assertIn("ssid=jhw_wlan_\n", (self.state / "status").read_text())
+        self.assertFalse((self.run_dir / "mlan0.runtime-switch-in-progress").exists())
+
+    def test_runtime_first_checkpoint_publication_failure_restores_previous_checkpoint(self):
+        sync = self.stub / "sync"
+        sync.write_text('''#!/bin/sh
+if [ "${1:-}" = "$WIFI_RUN_DIR" ] || [ "$#" -eq 0 ]; then
+    checkpoint="$WIFI_RUN_DIR/mlan0.last-good.json"
+    if [ -f "$checkpoint" ] \
+       && jq -e '.ssid == "good-B"' "$checkpoint" >/dev/null 2>&1; then
+        exit 1
+    fi
+fi
+exec /bin/sync "$@"
+''')
+        sync.chmod(0o755)
+        result = self.run_runtime_connect("good-B")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(self.conf.read_text(), CONF_MODE_B)
+        self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+        checkpoint = json.loads((self.run_dir / "mlan0.last-good.json").read_text())
+        self.assertEqual(checkpoint["ssid"], "jhw_wlan_")
+        self.assertEqual(checkpoint["profile"], CONF_MODE_B)
+        self.assertEqual(list(self.run_dir.glob("*.rollback.*")), [])
+
+    def test_runtime_first_cleanup_failure_after_commit_restores_previous_checkpoint(self):
+        rm = self.stub / "rm"
+        rm.write_text('''#!/bin/sh
+for arg in "$@"; do
+    case "$arg" in
+        *.runtime-switch-in-progress)
+            if grep -q 'ssid="good-B"' "$WPA_CONF_DIR/wpa_supplicant-mlan0.conf" \
+               && [ ! -e "$WPA_STUB_DIR/failed-marker-remove" ]; then
+                : > "$WPA_STUB_DIR/failed-marker-remove"
+                exit 1
+            fi ;;
+    esac
+done
+exec /bin/rm "$@"
+''')
+        rm.chmod(0o755)
+        result = self.run_runtime_connect("good-B")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(self.conf.read_text(), CONF_MODE_B)
+        self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+        checkpoint = json.loads((self.run_dir / "mlan0.last-good.json").read_text())
+        self.assertEqual(checkpoint["ssid"], "jhw_wlan_")
+        self.assertEqual(checkpoint["profile"], CONF_MODE_B)
+        self.assertFalse((self.run_dir / "mlan0.runtime-switch-in-progress").exists())
+
+    def test_term_after_commit_marker_removal_preserves_the_target_checkpoint(self):
+        rm = self.stub / "rm"
+        rm.write_text('''#!/bin/sh
+for arg in "$@"; do
+    case "$arg" in
+        *.runtime-switch-in-progress)
+            if grep -q 'ssid="good-B"' "$WPA_CONF_DIR/wpa_supplicant-mlan0.conf"; then
+                /bin/rm "$@" || exit $?
+                kill -TERM "$PPID"
+                exit 0
+            fi ;;
+    esac
+done
+exec /bin/rm "$@"
+''')
+        rm.chmod(0o755)
+        result = self.run_runtime_connect("good-B")
+        self.assertEqual(result.returncode, 143, result.stdout + result.stderr)
+        self.assertIn('ssid="good-B"', self.conf.read_text())
+        self.assertIn('psk="runtime-secret"', self.conf.read_text())
+        self.assertIn('ssid="good-B"', (self.state / "runtime.conf").read_text())
+        checkpoint = json.loads((self.run_dir / "mlan0.last-good.json").read_text())
+        self.assertEqual(checkpoint["ssid"], "good-B")
+        self.assertIn('ssid="good-B"', checkpoint["profile"])
+        self.assertFalse((self.run_dir / "mlan0.runtime-switch-in-progress").exists())
+
+    def test_failed_rollback_keeps_original_snapshot_for_the_next_connect(self):
+        self.set_policy(enabled=False)
+        sync = self.stub / "sync"
+        sync.write_text('''#!/bin/sh
+conf="$WPA_CONF_DIR/wpa_supplicant-mlan0.conf"
+if grep -q 'ssid="good-B"' "$conf"; then
+    count=$(cat "$WPA_STUB_DIR/recovery-sync-count" 2>/dev/null || echo 0)
+    count=$((count + 1))
+    echo "$count" > "$WPA_STUB_DIR/recovery-sync-count"
+    [ "$count" -gt 4 ] || exit 1
+fi
+exec /bin/sync "$@"
+''')
+        sync.chmod(0o755)
+        result = self.run_runtime_connect("good-B")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('ssid="good-B"', self.conf.read_text())
+        marker = self.run_dir / "mlan0.runtime-switch-in-progress"
+        original = self.run_dir / "mlan0.runtime-original.conf"
+        self.assertTrue(marker.is_file())
+        self.assertTrue(original.is_file())
+        self.assertEqual(original.read_text(), CONF_MODE_B)
+        self.assertEqual(stat.S_IMODE(marker.stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(original.stat().st_mode), 0o600)
+
+        sync.write_text("#!/bin/sh\nexec /bin/sync \"$@\"\n")
+        recovered = self.run_connect(apply_stored_conf=True)
+        self.assertEqual(recovered.returncode, 0, recovered.stdout + recovered.stderr)
+        self.assertEqual(self.conf.read_text(), CONF_MODE_B)
+        self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+        self.assertFalse(marker.exists())
+        self.assertFalse(original.exists())
+
+    def test_runtime_first_term_restores_before_returning_the_signal_status(self):
+        self.stage_runtime_psk()
+        (self.state / "block-target").touch()
+        env = dict(self.environment(), FTPCMD_APPLY_CONF="1", FTPCMD_RUNTIME_PSK="1")
+        process = subprocess.Popen(
+            ["bash", str(WIFI_SH), "mlan0", "connect", "unreachable"],
+            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                log = self.state / "calls.log"
+                calls = log.read_text() if log.exists() else ""
+                if "set_network 0 psk" in calls:
+                    break
+                if process.poll() is not None:
+                    break
+                time.sleep(0.02)
+            self.assertIn("set_network 0 psk", (self.state / "calls.log").read_text())
+            process.send_signal(signal.SIGTERM)
+            stdout, stderr = process.communicate(timeout=8)
+            self.assertEqual(process.returncode, 143, stdout + stderr)
+            self.assertEqual(self.conf.read_text(), CONF_MODE_B)
+            self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+            self.assertIn("ssid=jhw_wlan_\n", (self.state / "status").read_text())
+            self.assertFalse((self.run_dir / "mlan0.runtime-switch-in-progress").exists())
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate(timeout=3)
+
+    def test_no_ssid_connect_restores_stale_profile_and_checkpoint_before_capture(self):
+        # Model SIGKILL after target conf/link/checkpoint publication but before
+        # the in-progress marker is removed. Recovery must consume the fixed
+        # original snapshots before fallback capture can overwrite last-good.
+        runtime = CONF_MODE_B.replace('ssid="jhw_wlan_"', 'ssid="good-B"').replace(
+            'psk="stub-psk-not-a-secret"', 'psk="runtime-secret"')
+        (self.state / "runtime.conf").write_text(runtime)
+        (self.state / "status").write_text(
+            _cli.STATUS_INITIAL.replace("ssid=jhw_wlan_", "ssid=good-B"))
+        self.run_dir.mkdir(exist_ok=True)
+        marker = self.run_dir / "mlan0.runtime-switch-in-progress"
+        marker.write_text("marker=absent\ncheckpoint=present\n")
+        marker.chmod(0o600)
+        original = self.run_dir / "mlan0.runtime-original.conf"
+        original.write_text(CONF_MODE_B)
+        original.chmod(0o600)
+        original_checkpoint = {
+            "version": 1, "iface": "mlan0", "ssid": "jhw_wlan_",
+            "freqs": "5180 5200 5220 5240", "profile": CONF_MODE_B, "marker": None,
+        }
+        checkpoint_snapshot = self.run_dir / "mlan0.runtime-original.last-good"
+        checkpoint_snapshot.write_text(json.dumps(original_checkpoint))
+        checkpoint_snapshot.chmod(0o600)
+        target_checkpoint = dict(original_checkpoint, ssid="good-B", profile=runtime)
+        live_checkpoint = self.run_dir / "mlan0.last-good.json"
+        live_checkpoint.write_text(json.dumps(target_checkpoint))
+        live_checkpoint.chmod(0o600)
+        active = self.run_dir / "mlan0.runtime-psk.active"
+        active.write_text("runtime-secret")
+        active.chmod(0o600)
+        result = self.run_connect(apply_stored_conf=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = (self.state / "calls.log").read_text()
+        self.assertIn("wpa_cli -i mlan0 reconfigure", calls)
+        self.assertNotIn("already associated", result.stdout)
+        checkpoint = json.loads(live_checkpoint.read_text())
+        self.assertEqual(checkpoint["ssid"], "jhw_wlan_")
+        self.assertEqual(checkpoint["profile"], CONF_MODE_B)
+        self.assertFalse((self.run_dir / "mlan0.runtime-switch-in-progress").exists())
+        self.assertFalse(active.exists())
+
+    def test_no_ssid_connect_recovers_marker_published_before_stage_claim(self):
+        self.run_dir.mkdir(exist_ok=True)
+        marker = self.run_dir / "mlan0.runtime-switch-in-progress"
+        marker.write_text("marker=absent\ncheckpoint=present\n")
+        marker.chmod(0o600)
+        original = self.run_dir / "mlan0.runtime-original.conf"
+        original.write_text(CONF_MODE_B)
+        original.chmod(0o600)
+        original_checkpoint = {
+            "version": 1, "iface": "mlan0", "ssid": "jhw_wlan_",
+            "freqs": "5180 5200 5220 5240", "profile": CONF_MODE_B,
+            "marker": None,
+        }
+        checkpoint_snapshot = self.run_dir / "mlan0.runtime-original.last-good"
+        checkpoint_snapshot.write_text(json.dumps(original_checkpoint))
+        checkpoint_snapshot.chmod(0o600)
+        live_checkpoint = self.run_dir / "mlan0.last-good.json"
+        live_checkpoint.write_text(json.dumps(original_checkpoint))
+        live_checkpoint.chmod(0o600)
+        stage = self.run_dir / "mlan0.runtime-psk"
+        stage.write_text("runtime-secret")
+        stage.chmod(0o600)
+
+        # Model a stale wrapper environment too: wifi's marker validation must
+        # override the new-switch flag before enforcing explicit-SSID syntax.
+        result = self.run_connect(
+            apply_stored_conf=True, extra_env={"FTPCMD_RUNTIME_PSK": "1"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("runtime credential switch requires", result.stderr)
+        self.assertEqual(self.conf.read_text(), CONF_MODE_B)
+        self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+        checkpoint = json.loads(live_checkpoint.read_text())
+        self.assertEqual(checkpoint["ssid"], "jhw_wlan_")
+        self.assertFalse(marker.exists())
+        self.assertFalse(stage.exists())
+
+    def test_explicit_ssid_stops_after_recovering_marker_before_stage_claim(self):
+        self.run_dir.mkdir(exist_ok=True)
+        marker = self.run_dir / "mlan0.runtime-switch-in-progress"
+        marker.write_text("marker=absent\ncheckpoint=present\n")
+        marker.chmod(0o600)
+        original = self.run_dir / "mlan0.runtime-original.conf"
+        original.write_text(CONF_MODE_B)
+        original.chmod(0o600)
+        original_checkpoint = {
+            "version": 1, "iface": "mlan0", "ssid": "jhw_wlan_",
+            "freqs": "5180 5200 5220 5240", "profile": CONF_MODE_B,
+            "marker": None,
+        }
+        checkpoint_snapshot = self.run_dir / "mlan0.runtime-original.last-good"
+        checkpoint_snapshot.write_text(json.dumps(original_checkpoint))
+        checkpoint_snapshot.chmod(0o600)
+        live_checkpoint = self.run_dir / "mlan0.last-good.json"
+        live_checkpoint.write_text(json.dumps(original_checkpoint))
+        live_checkpoint.chmod(0o600)
+        stage = self.run_dir / "mlan0.runtime-psk"
+        stage.write_text("runtime-secret")
+        stage.chmod(0o600)
+
+        result = self.run_connect("good-B", apply_stored_conf=True)
+        self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+        self.assertIn("stage the PSK again", result.stderr)
+        self.assertEqual(self.conf.read_text(), CONF_MODE_B)
+        self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+        checkpoint = json.loads(live_checkpoint.read_text())
+        self.assertEqual(checkpoint["ssid"], "jhw_wlan_")
+        self.assertEqual(checkpoint["profile"], CONF_MODE_B)
+        calls = (self.state / "calls.log").read_text()
+        self.assertNotIn('set_network 0 ssid "good-B"', calls)
+        self.assertFalse(marker.exists())
+        self.assertFalse(stage.exists())
+
+    def test_plain_no_ssid_connect_uses_the_network_id_assigned_by_stale_recovery(self):
+        stub = self.stub / "wpa_cli"
+        text = stub.read_text()
+        old = "printf '0 %s 5220\\n' \"$ssid\" > \"$D/landing\""
+        new = "printf '1 %s 5220\\n' \"$ssid\" > \"$D/landing\""
+        self.assertEqual(text.count(old), 1)
+        stub.write_text(text.replace(old, new, 1))
+
+        marker = self.run_dir / "mlan0.runtime-switch-in-progress"
+        marker.write_text("marker=absent\ncheckpoint=absent\n")
+        marker.chmod(0o600)
+        original = self.run_dir / "mlan0.runtime-original.conf"
+        original.write_text(CONF_MODE_B)
+        original.chmod(0o600)
+        active = self.run_dir / "mlan0.runtime-psk.active"
+        active.write_text("runtime-secret")
+        active.chmod(0o600)
+
+        result = self.run_connect()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        status = (self.state / "status").read_text()
+        self.assertIn("id=1\n", status)
+        calls = (self.state / "calls.log").read_text()
+        self.assertIn("wpa_cli -i mlan0 reconfigure", calls)
+        self.assertIn("wpa_cli -i mlan0 reassociate", calls)
+        self.assertFalse(marker.exists())
+        self.assertFalse(active.exists())
 
     def wait_for_target(self, process):
         deadline = time.monotonic() + 5
@@ -214,6 +723,15 @@ class ConnectFallbackTests(_cli.ConnectHarness):
         self.assertEqual(result.returncode, 8, result.stdout + result.stderr)
         self.assertEqual(self.conf.read_text(), CONF_MODE_B)
         self.assertFalse((self.run_dir / "mlan0.credential-pending").exists())
+
+    def test_psk_setter_does_not_log_the_passphrase(self):
+        secret = "replacement-secret"
+        result = self.run_wifi("psk", secret)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f'psk="{secret}"', self.conf.read_text())
+        log = (self.state / "logger.log").read_text()
+        self.assertIn("psk [redacted]", log)
+        self.assertNotIn(secret, log)
 
     def test_corrupt_checkpoint_is_unavailable_and_never_installed(self):
         result = self.run_wifi("ssid", "unreachable")
