@@ -171,6 +171,102 @@ class ConnectFallbackTests(_cli.ConnectHarness):
         extra_env = dict(kwargs.pop("extra_env", {}) or {}, FTPCMD_RUNTIME_PSK="1")
         return self.run_connect(ssid, apply_stored_conf=True, extra_env=extra_env, **kwargs)
 
+    def prepare_mlan1(self):
+        self.conf = self.conf_dir / "wpa_supplicant-mlan1.conf"
+        self.write_conf(CONF_MODE_B)
+        (self.state / "runtime.conf").write_text(CONF_MODE_B)
+        self.config.write_text(json.dumps({"mlan1": {"connect_fallback": {
+            "enabled": False, "attempt_timeout_sec": 1,
+            "rollback_timeout_sec": 1,
+        }}}))
+
+    def run_mlan1_connect(self, *args, runtime=False):
+        env = self.environment()
+        env["FTPCMD_APPLY_CONF"] = "1"
+        if runtime:
+            env["FTPCMD_RUNTIME_PSK"] = "1"
+        return subprocess.run(
+            ["bash", str(WIFI_SH), "mlan1", "connect", *args],
+            env=env, capture_output=True, text=True, timeout=60)
+
+    def test_mlan1_runtime_rollback_keeps_new_mlan0_marker(self):
+        self.prepare_mlan1()
+        stage = self.run_dir / "mlan1.runtime-psk"
+        stage.write_text("runtime-secret")
+        stage.chmod(0o600)
+        (self.state / "fail-set-psk").touch()
+        marker_text = "essid=new-mlan0-value\nslot=9\n"
+        (self.state / "new-opc-marker").write_text(marker_text)
+        stub = self.stub / "wpa_cli"
+        source = stub.read_text()
+        before = 'if [ -f "$D/fail-set-psk" ]; then echo FAIL; exit 0; fi'
+        after = 'cat "$D/new-opc-marker" > "$OPC_ESSID_MARKER"\n                ' + before
+        self.assertEqual(source.count(before), 1)
+        stub.write_text(source.replace(before, after, 1))
+
+        result = self.run_mlan1_connect("good-B", runtime=True)
+        self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+        self.assertEqual(self.conf.read_text(), CONF_MODE_B)
+        self.assertEqual(self.marker.read_text(), marker_text)
+
+    def test_mlan1_stale_recovery_keeps_changed_mlan0_marker(self):
+        self.prepare_mlan1()
+        target = CONF_MODE_B.replace('ssid="jhw_wlan_"', 'ssid="good-B"')
+        self.conf.write_text(target)
+        (self.state / "runtime.conf").write_text(target)
+        marker = self.run_dir / "mlan1.runtime-switch-in-progress"
+        marker.write_text("marker=present:600\ncheckpoint=absent\n")
+        marker.chmod(0o600)
+        original = self.run_dir / "mlan1.runtime-original.conf"
+        original.write_text(CONF_MODE_B)
+        original.chmod(0o600)
+        original_marker = self.run_dir / "mlan1.runtime-original.marker"
+        original_marker.write_text("essid=old-mlan0-value\n")
+        original_marker.chmod(0o600)
+        marker_text = "essid=new-mlan0-value\nslot=9\n"
+        self.marker.write_text(marker_text)
+
+        result = self.run_mlan1_connect()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.conf.read_text(), CONF_MODE_B)
+        self.assertEqual(self.marker.read_text(), marker_text)
+        self.assertFalse(marker.exists())
+
+    def test_mlan1_stale_unmanaged_marker_recovers_without_touching_mlan0(self):
+        self.prepare_mlan1()
+        target = CONF_MODE_B.replace('ssid="jhw_wlan_"', 'ssid="good-B"')
+        self.conf.write_text(target)
+        (self.state / "runtime.conf").write_text(target)
+        marker = self.run_dir / "mlan1.runtime-switch-in-progress"
+        marker.write_text("marker=unmanaged\ncheckpoint=absent\n")
+        marker.chmod(0o600)
+        original = self.run_dir / "mlan1.runtime-original.conf"
+        original.write_text(CONF_MODE_B)
+        original.chmod(0o600)
+        marker_text = "essid=concurrent-mlan0-value\n"
+        self.marker.write_text(marker_text)
+
+        result = self.run_mlan1_connect()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.conf.read_text(), CONF_MODE_B)
+        self.assertEqual(self.marker.read_text(), marker_text)
+        self.assertFalse(marker.exists())
+
+    def test_mlan1_runtime_switch_does_not_snapshot_mlan0_marker(self):
+        self.prepare_mlan1()
+        stage = self.run_dir / "mlan1.runtime-psk"
+        stage.write_text("runtime-secret")
+        stage.chmod(0o600)
+        target = self.root / "outside-opc-marker"
+        target.write_text("essid=other\n")
+        self.marker.symlink_to(target)
+
+        result = self.run_mlan1_connect("good-B", runtime=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.marker.resolve(), target)
+        self.assertEqual(target.read_text(), "essid=other\n")
+        self.assertFalse((self.run_dir / "mlan1.runtime-original.marker").exists())
+
     def test_runtime_first_switch_persists_both_fields_only_after_verified_landing(self):
         result = self.run_runtime_connect("good-B")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

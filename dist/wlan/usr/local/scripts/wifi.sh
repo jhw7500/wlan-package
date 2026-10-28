@@ -1044,11 +1044,13 @@ runtime_switch_restore_original() {
     local restored=0 polls cleanup_paths=()
     [ -n "${RUNTIME_ORIGINAL_CONF:-}" ] && [ -f "$RUNTIME_ORIGINAL_CONF" ] || return 1
     if wifi_wpa_run_child_call safe_install_sync "$RUNTIME_ORIGINAL_CONF" "$CONF"; then
-        if [ "${RUNTIME_ORIGINAL_MARKER_PRESENT:-0}" = 1 ]; then
-            wifi_wpa_run_child_call safe_install_sync "$RUNTIME_ORIGINAL_MARKER" \
-                "$OPC_ESSID_MARKER" "${RUNTIME_ORIGINAL_MARKER_MODE:-0600}" || return 1
-        else
-            wifi_wpa_run_child rm -f "$OPC_ESSID_MARKER" || return 1
+        if [ "$IFACE" = mlan0 ]; then
+            if [ "${RUNTIME_ORIGINAL_MARKER_PRESENT:-0}" = 1 ]; then
+                wifi_wpa_run_child_call safe_install_sync "$RUNTIME_ORIGINAL_MARKER" \
+                    "$OPC_ESSID_MARKER" "${RUNTIME_ORIGINAL_MARKER_MODE:-0600}" || return 1
+            else
+                wifi_wpa_run_child rm -f "$OPC_ESSID_MARKER" || return 1
+            fi
         fi
         : > "$WIFI_RUN_DIR/${IFACE}.reconfigure-grace" 2>/dev/null || true
         WIFI_WPA_DEADLINE_MS=${RUNTIME_OPERATION_DEADLINE_MS:-}
@@ -1183,17 +1185,27 @@ runtime_switch_recover_stale() {
         IFS= read -r checkpoint_state || return 1
     } < "$RUNTIME_IN_PROGRESS"
     case "$marker_state" in
+        marker=unmanaged)
+            [ "$IFACE" = mlan1 ] || return 1
+            wifi_wpa_run_child_call safe_install_sync "$RUNTIME_ORIGINAL_CONF" "$CONF" || return 1
+            ;;
         marker=absent)
             wifi_wpa_run_child_call safe_install_sync "$RUNTIME_ORIGINAL_CONF" "$CONF" || return 1
-            wifi_wpa_run_child rm -f "$OPC_ESSID_MARKER" || return 1
+            if [ "$IFACE" = mlan0 ]; then
+                wifi_wpa_run_child rm -f "$OPC_ESSID_MARKER" || return 1
+            fi
             ;;
         marker=present:*)
             marker_mode=${marker_state#marker=present:}
             case "$marker_mode" in ''|*[!0-7]*) return 1 ;; esac
-            runtime_switch_stage_metadata_ok "$RUNTIME_ORIGINAL_MARKER" || return 1
+            if [ "$IFACE" = mlan0 ]; then
+                runtime_switch_stage_metadata_ok "$RUNTIME_ORIGINAL_MARKER" || return 1
+            fi
             wifi_wpa_run_child_call safe_install_sync "$RUNTIME_ORIGINAL_CONF" "$CONF" || return 1
-            wifi_wpa_run_child_call safe_install_sync "$RUNTIME_ORIGINAL_MARKER" \
-                "$OPC_ESSID_MARKER" "$marker_mode" || return 1
+            if [ "$IFACE" = mlan0 ]; then
+                wifi_wpa_run_child_call safe_install_sync "$RUNTIME_ORIGINAL_MARKER" \
+                    "$OPC_ESSID_MARKER" "$marker_mode" || return 1
+            fi
             ;;
         *) return 1 ;;
     esac
@@ -1326,7 +1338,8 @@ runtime_switch_execute() {
         wifi_wpa_run_child rm -f "$snapshot_tmp" "$RUNTIME_ORIGINAL_CONF"
         return 1
     fi
-    if [ -e "$OPC_ESSID_MARKER" ] || [ -L "$OPC_ESSID_MARKER" ]; then
+    if [ "$IFACE" = mlan0 ] \
+       && { [ -e "$OPC_ESSID_MARKER" ] || [ -L "$OPC_ESSID_MARKER" ]; }; then
         [ -f "$OPC_ESSID_MARKER" ] && [ ! -L "$OPC_ESSID_MARKER" ] || {
             runtime_switch_discard_snapshots; return 1;
         }
@@ -1368,7 +1381,9 @@ runtime_switch_execute() {
         "$WIFI_RUN_DIR/.${IFACE}.runtime-switch.XXXXXX") || {
         runtime_switch_discard_snapshots; return 1;
     }
-    if [ "$RUNTIME_ORIGINAL_MARKER_PRESENT" = 1 ]; then
+    if [ "$IFACE" = mlan1 ]; then
+        marker_state=marker=unmanaged
+    elif [ "$RUNTIME_ORIGINAL_MARKER_PRESENT" = 1 ]; then
         marker_state="marker=present:$RUNTIME_ORIGINAL_MARKER_MODE"
     else
         marker_state=marker=absent
