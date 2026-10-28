@@ -20,6 +20,7 @@ NETWORK_START = re.compile(rb"^[ \t]*network[ \t]*=[ \t]*\{")
 NETWORK_END = re.compile(rb"^[ \t]*\}")
 SSID_LINE = re.compile(rb"^([ \t]*)ssid[ \t]*=")
 COMMENTED_SSID = re.compile(rb"^[ \t]*#[ \t]*ssid[ \t]*=")
+FREQUENCY_LINE = re.compile(rb"^[ \t]*(freq_list|scan_freq)[ \t]*=[ \t]*(.*)$")
 
 
 def log_result(trace, iface, result, reason=""):
@@ -51,8 +52,8 @@ def wpa_call(wpa_cli, iface, *args):
     return output
 
 
-def target_is_connected(wpa_cli, iface, network_id, ssid, old_bssid,
-                        require_new_bssid, check_profile=False):
+def target_connection(wpa_cli, iface, network_id, ssid, old_bssid,
+                      require_new_bssid, check_profile=False):
     status = parse_status(wpa_call(wpa_cli, iface, "status"))
     if "wpa_state" not in status:
         raise WpaCliFailure("wpa_cli_error")
@@ -62,9 +63,36 @@ def target_is_connected(wpa_cli, iface, network_id, ssid, old_bssid,
             and (status.get("freq") or "").isdigit()
             and re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", status.get("bssid", ""))
             and not (require_new_bssid and status.get("bssid") == old_bssid)):
+        return None
+    if check_profile and wpa_call(wpa_cli, iface, "get_network", network_id, "ssid") != f'"{ssid}"':
+        return None
+    return status
+
+
+def profile_allows_frequency(content, connected_freq):
+    target = int(connected_freq)
+    if target <= 0:
         return False
-    if check_profile:
-        return wpa_call(wpa_cli, iface, "get_network", network_id, "ssid") == f'"{ssid}"'
+    # Any stored scan/association restriction can strand this SSID after reload.
+    in_network = False
+    for line in content.splitlines():
+        if line.lstrip().startswith(b"#"):
+            continue
+        if NETWORK_START.match(line):
+            in_network = True
+            continue
+        if in_network and NETWORK_END.match(line):
+            in_network = False
+            continue
+        setting = FREQUENCY_LINE.match(line)
+        if setting is None or (setting.group(1) == b"scan_freq" and not in_network):
+            continue
+        value = re.split(rb"[ \t]+#", setting.group(2), maxsplit=1)[0]
+        freqs = value.split()
+        if not freqs or any(re.fullmatch(rb"[0-9]+", freq) is None for freq in freqs):
+            return False
+        if target not in {int(freq) for freq in freqs}:
+            return False
     return True
 
 
@@ -202,7 +230,7 @@ def commit(iface, network_id, ssid, expected_sha, trace, old_bssid,
             log_result(trace, iface, "skipped", "superseded")
             return 10
         try:
-            connected = target_is_connected(
+            connected = target_connection(
                 wpa_cli, iface, network_id, ssid, old_bssid, require_new_bssid)
             last_control_error = None
         except WpaCliFailure as error:
@@ -229,14 +257,14 @@ def commit(iface, network_id, ssid, expected_sha, trace, old_bssid,
                     log_result(trace, iface, "skipped", "superseded")
                     return 10
                 try:
-                    profile_matches = target_is_connected(
+                    connection = target_connection(
                         wpa_cli, iface, network_id, ssid, old_bssid,
                         require_new_bssid, check_profile=True)
                     last_control_error = None
                 except WpaCliFailure as error:
                     last_control_error = str(error)
                     continue
-                if not profile_matches:
+                if connection is None:
                     continue
                 content, info = read_profile(conf)
                 if hashlib.sha256(content).hexdigest() != expected_sha:
@@ -244,6 +272,9 @@ def commit(iface, network_id, ssid, expected_sha, trace, old_bssid,
                     return 7
                 if not topology_supported(run_dir, iface):
                     log_result(trace, iface, "skipped", "mode_or_topology")
+                    return 6
+                if not profile_allows_frequency(content, connection["freq"]):
+                    log_result(trace, iface, "skipped", "frequency_outside_profile")
                     return 6
                 try:
                     updated = single_network_profile(content, ssid)

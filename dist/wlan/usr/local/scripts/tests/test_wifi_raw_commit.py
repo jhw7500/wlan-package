@@ -248,6 +248,32 @@ class RawCommit(unittest.TestCase):
         self.assertEqual(self.conf.read_bytes(), updated)
         self.assertTrue(self.marker.exists())
 
+    def test_target_outside_stored_frequency_policy_is_not_persisted(self):
+        profiles = {
+            "global-and-network": ORIGINAL.replace(b'5180 5200', b'2412'),
+            "network-only": ORIGINAL.replace(b'    freq_list=5180 5200',
+                                             b'    freq_list=2412'),
+            "legacy-scan": ORIGINAL.replace(b'freq_list=5180 5200\n', b'').replace(
+                b'network={\n', b'network={\n    scan_freq=2412\n'),
+        }
+        for name, restricted in profiles.items():
+            with self.subTest(name=name):
+                self.conf.write_bytes(restricted)
+                request = self.write_request(digest=hashlib.sha256(restricted).hexdigest())
+                result = self.run_command("--from-request", "mlan0")
+                self.assertEqual(result.returncode, 6, result.stderr)
+                self.assertFalse(request.exists())
+                self.assertEqual(self.conf.read_bytes(), restricted)
+                self.assertTrue(self.marker.exists())
+
+    def test_unrestricted_profile_can_persist_confirmed_target(self):
+        unrestricted = ORIGINAL.replace(b'freq_list=5180 5200\n', b'')
+        self.conf.write_bytes(unrestricted)
+        result = self.run_worker(digest=hashlib.sha256(unrestricted).hexdigest())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.conf.read_bytes(), unrestricted.replace(
+            b'"Old AP"', b'"Office AP B"'))
+
     def test_multi_network_profile_is_not_rewritten(self):
         multi = ORIGINAL + b'network={\n    ssid="Other AP"\n    psk="password123"\n}\n'
         self.conf.write_bytes(multi)

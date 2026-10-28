@@ -330,6 +330,8 @@ SSID는 필수이며 1~32바이트, FTP 디스패처의 허용 문자여야 한�
 `wpa_state=COMPLETED`, 목표 SSID와 동일한
 `network` ID·BSSID 변경을 확인한다. 단일 `network`의 Mode B이고 그 사이
 저장 프로필이 바뀌지 않았을 때만 SSID 행을 원자적으로 저장한다.
+저장 파일의 전역·`network` `freq_list` 또는 기존 `scan_freq`가 현재 연결
+주파수를 제외하면 저장하지 않고 `frequency_outside_profile`을 기록한다.
 PSK와 주파수 설정은 바꾸지 않는다. `mlan0`의 영구 SSID 변경이면 OPC의
 이전 ESSID 복원 표식도 제거한다. 완료 여부는 `quote wstatus <iface>`로
 현재 연결을, `quote wssid <iface>`로 저장된 SSID를 각각 조회한다.
