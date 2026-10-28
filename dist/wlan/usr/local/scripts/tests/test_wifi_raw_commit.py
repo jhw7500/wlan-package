@@ -237,6 +237,17 @@ class RawCommit(unittest.TestCase):
         self.assertIn(b'newpassword', self.conf.read_bytes())
         self.assertTrue(self.marker.exists())
 
+    def test_pending_credential_is_not_persisted_with_new_profile_digest(self):
+        updated = ORIGINAL.replace(b'password123', b'newpassword')
+        self.conf.write_bytes(updated)
+        (self.run_dir / "mlan0.credential-pending").touch()
+        request = self.write_request(digest=hashlib.sha256(updated).hexdigest())
+        result = self.run_command("--from-request", "mlan0")
+        self.assertEqual(result.returncode, 6, result.stderr)
+        self.assertFalse(request.exists())
+        self.assertEqual(self.conf.read_bytes(), updated)
+        self.assertTrue(self.marker.exists())
+
     def test_multi_network_profile_is_not_rewritten(self):
         multi = ORIGINAL + b'network={\n    ssid="Other AP"\n    psk="password123"\n}\n'
         self.conf.write_bytes(multi)

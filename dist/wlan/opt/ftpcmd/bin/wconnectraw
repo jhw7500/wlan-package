@@ -73,6 +73,12 @@ if ! flock -n -x 6; then
     echo "configuration/connection change busy for $IFACE" >&2
     exit 6
 fi
+if [ -e "$CHANGE_RUN_DIR/${IFACE}.credential-pending" ] \
+   || [ -L "$CHANGE_RUN_DIR/${IFACE}.credential-pending" ]; then
+    raw_log_failure 6 "credential edit pending for $IFACE"
+    echo "credential edit pending for $IFACE" >&2
+    exit 6
+fi
 
 CONF="$WPA_CONF_DIR/wpa_supplicant-$IFACE.conf"
 if [ ! -f "$CONF" ] || [ -L "$CONF" ] || [ ! -x "$RAW_COMMIT_HELPER" ]; then

@@ -128,7 +128,8 @@ def run_wconnect(*args, wifi_rc=0, runtime_stage=False, runtime_active=False,
 
 def run_wconnectraw(*args, status_id="7", set_reply="OK", disconnect_reply="OK",
                     reassociate_reply="OK", network_rows="7\tcurrent-ap\tany\t",
-                    wpa_state="COMPLETED", capture_request=False):
+                    wpa_state="COMPLETED", capture_request=False,
+                    pending_credential=False):
     """Run the raw handler with only its absolute wpa_cli path test-patched."""
     root = Path(tempfile.mkdtemp(prefix="wconnectraw-"))
     try:
@@ -172,6 +173,10 @@ def run_wconnectraw(*args, status_id="7", set_reply="OK", disconnect_reply="OK",
             conf = conf_dir / f"wpa_supplicant-{iface}.conf"
             conf.write_text('update_config=0\nnetwork={\n    ssid="current-ap"\n    psk="password123"\n}\n')
             conf.chmod(0o600)
+        if pending_credential:
+            run_dir = root / "wifi-run"
+            run_dir.mkdir()
+            (run_dir / "mlan0.credential-pending").touch()
 
         source = (FTPCMD_DIR / "wconnectraw").read_text()
         old = "WPA_CLI=/usr/sbin/wpa_cli\n"
@@ -334,6 +339,13 @@ class WconnectRequiredInterface(unittest.TestCase):
 
 
 class WconnectRawRuntimeSwitch(unittest.TestCase):
+    def test_pending_credential_stops_before_runtime_switch(self):
+        result, calls, _, request = run_wconnectraw(
+            "0", "Field", "AP", pending_credential=True, capture_request=True)
+        self.assertEqual(result.returncode, 6, result.stdout + result.stderr)
+        self.assertEqual(calls, [])
+        self.assertEqual(request, [])
+
     def test_success_queues_independent_persistence_after_radio_commands(self):
         r, calls, _, request = run_wconnectraw("0", "Field", "AP", capture_request=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)

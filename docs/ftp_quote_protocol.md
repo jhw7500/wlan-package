@@ -343,6 +343,11 @@ PSK와 주파수 설정은 바꾸지 않는다. `mlan0`의 영구 SSID 변경이
 이 경우 `reconfigure` 또는 supplicant 재시작은 저장된 이전 프로필을 적용한다.
 다른 PSK가 필요한 전환에는 `wpsk --stage`와 일반 `wconnect`를 사용한다.
 `wconnectraw`는 staged PSK를 적용하지 않는다.
+일반 `wpsk` 또는 `wifi psk`/`wifi key`로 저장한 인증 정보가 아직 연결
+검증되지 않아 `credential-pending` 상태이면 `wconnectraw`는 코드 `6`으로
+무선 명령 전에 거절한다. 저장 요청 이후 이 상태가 생겨도 비동기 작업은
+SSID를 저장하지 않는다. 일반 `wconnect`로 새 인증 정보를 적용하고 연결을
+검증한 뒤 다시 시도한다.
 
 `disconnect`를 먼저 보내는 이유는 기존 연결을 유지한 채 다른 AP로 연결을
 요청하면 연결 요청이 `EALREADY`로 거부되고, wpa_supplicant가 목표 BSSID를
@@ -389,7 +394,7 @@ vsftpd가 핸들러를 30초에 강제 종료하면 `550 Command timed out: <com
 | `wconnect` | `1` | SSID 또는 설정 검증 실패, 실행 환경 오류 |
 | `wconnect` | `2` | 필수 인터페이스 누락 또는 잘못된 값 |
 | `wconnect` | `3` | 대상 인터페이스가 FTP 제어 연결을 운반하여 거부 |
-| `wssid`, `wfreq`, `wconnect`, `wconnectraw`, `ifcup`, `ifcdown`, `wifcup`, `wifcdown` | `6` | 같은 인터페이스에서 fallback 또는 경쟁 변경이 진행 중(busy) |
+| `wssid`, `wfreq`, `wconnect`, `wconnectraw`, `ifcup`, `ifcdown`, `wifcup`, `wifcdown` | `6` | 같은 인터페이스에서 fallback 또는 경쟁 변경이 진행 중(busy). `wconnectraw`는 미검증 인증 정보가 대기 중이어도 거절 |
 | `wconnect` | `7` | supplicant 제어 명령 또는 연결 이벤트 감시 실패 |
 | `wconnect` | `8` | 제한 시간 내 목표 연결 확인 실패 |
 | `wstatus` | `2` | 인터페이스 인자 오류 또는 인자 초과 |

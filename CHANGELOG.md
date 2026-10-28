@@ -10,6 +10,7 @@ wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약�
 - `wscan <iface> <SSID>`은 현재 프로필의 공통 주파수 목록으로 지정 스캔하고, 이번 스캔의 유효한 BSS 중 신호가 가장 강한 항목의 SSID·RSSI·주파수를 반환한다. 연결 설정은 바꾸지 않는다.
 - `wpsk <iface> <비밀번호>`는 설정 파일의 PSK를 저장한다. `wpsk <iface> --stage <비밀번호>`와 `wconnect <iface> <SSID>`를 함께 쓰면 런타임에서 다른 PSK로 먼저 연결을 시도하고, 확인된 전환만 설정 파일에 저장한다. 실패·중단 시 이전 설정과 연결 복구를 시도한다.
 - staged PSK 전환은 상태 조회가 느려도 연결 확인을 절대 마감 시각에 중단해 이전 연결의 복구 시간을 보존한다.
+- `wconnectraw`는 검증 전 PSK·인증 설정 변경이 대기 중이면 전환을 거절하고, 비동기 저장 작업도 같은 상태에서 SSID를 저장하지 않는다.
 - `wconnectraw <iface> <SSID>`는 기존 PSK로 `set_network`·`disconnect`·`reassociate`를 제출하고 즉시 응답한다. 별도 systemd path/service가 실제 연결을 확인한 뒤 단일 `network`의 Mode B 프로필에서 SSID만 원자적으로 저장한다. `SUCCESS`는 저장 완료가 아니므로 `wstatus`와 `wssid`로 각각 연결과 저장을 확인한다. 저장 전 재부팅·연속 전환의 앞선 미완료 요청·다중망/Mode A에서는 새 SSID가 저장되지 않을 수 있다.
 - 실기(유선 관리, 같은 PSK의 두 AP, 사전 지정 스캔 후 PID 격리 명령 6회): 명령 응답 130~200 ms, 연결 확인 상한 160~250 ms, 설정 저장 1080~1160 ms. 원래 프로필 SHA-256과 연결 상태를 복구했다. 수치는 랩 조건의 관측값이며 FTP 디스패처 왕복시간은 포함하지 않는다.
 

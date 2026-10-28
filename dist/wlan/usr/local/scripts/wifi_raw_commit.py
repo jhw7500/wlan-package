@@ -217,6 +217,9 @@ def commit(iface, network_id, ssid, expected_sha, trace, old_bssid,
             time.sleep(interval)
             continue
         try:
+            if os.path.lexists(run_dir / f"{iface}.credential-pending"):
+                log_result(trace, iface, "skipped", "credential_pending")
+                return 6
             profile_fd = lock_file(run_dir / f"{iface}.wpa-conf.lock")
             if profile_fd is None:
                 time.sleep(interval)
