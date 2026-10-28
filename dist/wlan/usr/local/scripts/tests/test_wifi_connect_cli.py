@@ -625,8 +625,8 @@ class SlotSignalExit(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = Path(tempfile.mkdtemp(prefix="wifi-slot-signal-"))
         text = WIFI_SH.read_text(encoding="utf-8")
-        traps = re.findall(r"^    trap '([^']*143)' TERM$", text, re.M)
-        assert len(traps) == 1, traps
+        traps = re.findall(r"^    trap '(connect_signal_exit 143)' TERM$", text, re.M)
+        assert traps, "connect's TERM trap must remain installed"
         cls.term_trap = traps[0]
         lines = text.splitlines(keepends=True)
         helpers = []

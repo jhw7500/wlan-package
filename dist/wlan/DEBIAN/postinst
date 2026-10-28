@@ -491,6 +491,15 @@ customctl() {
   # 걸지 않고 항상 enable 한다 — 표식이 없으면 ConditionPathExists 로 no-op 이고, OPC 를 끈 뒤의
   # 재부팅에서도 남은 ChangeIp ESSID 는 되돌아가야 한다(wlan-opc#161).
   systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer journald-snapshot-boundary.service journald-snapshot-shutdown.service wifi-stack.target wifi_init wifi_apply_enabled wifi_acl wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 log-watchdog.timer serial-getty@ttyGS0.service wlan-peer-net.service opcd-essid-restore.service || true
+  # wconnectraw의 저장 요청은 vsftpd의 private PID namespace 밖에서 처리한다.
+  # 부팅 시점과 업그레이드 직후 모두 path watcher를 올린다.
+  if ! systemctl enable wifi_raw_commit@mlan0.path wifi_raw_commit@mlan1.path; then
+    logger -p local0.err "[$tag:$LINENO] [$KEY] failed to enable raw switch save watchers"
+  fi
+  if systemctl is-active --quiet wifi_init.service 2>/dev/null; then
+    systemctl start --no-block wifi_raw_commit@mlan0.path wifi_raw_commit@mlan1.path || \
+      logger -p local0.err "[$tag:$LINENO] [$KEY] failed to start raw switch save watchers"
+  fi
   installer_progress_step
   # wlan-peer-net.service 는 PartOf=systemd-networkd.service 로 networkd restart 를
   # 추종하는데, PartOf 는 대상이 이미 active 일 때만 발화한다(inactive 면 restart 가

@@ -1773,10 +1773,10 @@ regions = wifi[helper_start:helper_end] + wifi[connect_start:connect_end] \
     + lib[abort_start:abort_end] + fallback[fallback.index("# Capture only"):]
 
 external = (
-    "awk", "cat", "chmod", "cp", "dirname", "grep", "install", "jq", "mkdir",
-    "mktemp", "mv", "rm", "sleep", "sync", "tr", "wpa_cli", "logger", "timeout",
+    "awk", "cat", "chmod", "cp", "dirname", "grep", "id", "install", "jq", "mkdir",
+    "mktemp", "mv", "rm", "sleep", "stat", "sync", "tr", "wpa_cli", "logger", "timeout",
 )
-command = "(" + "|".join(external) + r")\b"
+command = "(" + "|".join(external) + r")(?=\s|$|[;&|)])"
 command_start = re.compile(
     r"^(?:(?:if|elif|while|until)\s+)?(?:!\s+)?"
     r"(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S+)\s+)*"
@@ -1804,8 +1804,10 @@ for number, line in enumerate(regions.splitlines(), 1):
         continue
     if not stripped or stripped.startswith("#"):
         continue
-    has_raw_command = bool(command_start.search(stripped) \
-        or command_after_operator.search(line))
+    # A case label such as `id)` is not a child command; inspect its body.
+    scan_line = re.sub(r"^[A-Za-z_][A-Za-z0-9_]*\)\s*", "", stripped)
+    has_raw_command = bool(command_start.search(scan_line) \
+        or command_after_operator.search(scan_line))
     if stripped.startswith("trap ") and re.search(command, line):
         has_raw_command = True
     if has_raw_command and not any(wrapper in line for wrapper in wrappers):
@@ -1823,9 +1825,9 @@ for wrapper, command in wrapper_re.findall(regions):
     inventory[wrapper].add(command)
 
 expected = {
-    "wifi_wpa_child_exec": {"mktemp", "wpa_cli", "timeout", "jq"},
+    "wifi_wpa_child_exec": {"id", "jq", "mktemp", "stat", "timeout", "wpa_cli"},
     "wifi_wpa_child_call": {
-        "to_freq_mhz_checked", "wifi_ssid_encode_values",
+        "byte_len", "to_freq_mhz_checked", "wifi_ssid_encode_values",
         "wifi_wpa_conf_common_freqs",
         "wifi_wpa_conf_network_count", "wifi_ssid_conf_to_wpa_text",
     },
