@@ -58,7 +58,8 @@ def first_line(text):
     return text.splitlines()[0] if text.splitlines() else ""
 
 
-def run_wconnect(*args, wifi_rc=0):
+def run_wconnect(*args, wifi_rc=0, runtime_stage=False, runtime_active=False,
+                 runtime_marker=False):
     """Run the shipped handler with only its absolute wifi path test-patched."""
     root = Path(tempfile.mkdtemp(prefix="wconnect-"))
     try:
@@ -67,6 +68,7 @@ def run_wconnect(*args, wifi_rc=0):
         wifi = root / "wifi"
         wifi.write_text(textwrap.dedent('''\
             #!/bin/sh
+            [ "${FTPCMD_RUNTIME_PSK:-0}" = "${WCONNECT_EXPECT_RUNTIME:-0}" ] || exit 98
             printf '%s\\n' "$@" > "$WCONNECT_CAPTURE"
             echo "wifi connect reply"
             exit "${WCONNECT_WIFI_RC:-0}"
@@ -89,12 +91,30 @@ def run_wconnect(*args, wifi_rc=0):
         handler.write_text(source.replace(old, replacement, 1))
         handler.chmod(0o755)
 
+        run_dir = root / "run"
+        run_dir.mkdir()
+        if runtime_stage:
+            stage = run_dir / "mlan0.runtime-psk"
+            stage.write_text("runtime-secret")
+            stage.chmod(0o600)
+        if runtime_active:
+            active = run_dir / "mlan0.runtime-psk.active"
+            active.write_text("runtime-secret")
+            active.chmod(0o600)
+        if runtime_marker:
+            marker = run_dir / "mlan0.runtime-switch-in-progress"
+            marker.write_text("marker=absent\ncheckpoint=absent\n")
+            marker.chmod(0o600)
+
         env = {k: v for k, v in os.environ.items() if k != "FTPCMD_LOCAL_ADDR"}
         env.update({
             "PATH": f"{root}:{os.environ['PATH']}",
             "WCONNECT_CAPTURE": str(capture),
             "WCONNECT_LOG": str(timing_log),
             "WCONNECT_WIFI_RC": str(wifi_rc),
+            "WCONNECT_EXPECT_RUNTIME": (
+                "1" if runtime_stage and not runtime_marker else "0"),
+            "WIFI_RUN_DIR": str(run_dir),
         })
         result = subprocess.run(
             [str(handler), *args], capture_output=True, text=True, timeout=30, env=env,
@@ -108,7 +128,8 @@ def run_wconnect(*args, wifi_rc=0):
 
 def run_wconnectraw(*args, status_id="7", set_reply="OK", disconnect_reply="OK",
                     reassociate_reply="OK", network_rows="7\tcurrent-ap\tany\t",
-                    wpa_state="COMPLETED"):
+                    wpa_state="COMPLETED", capture_request=False,
+                    pending_credential=False):
     """Run the raw handler with only its absolute wpa_cli path test-patched."""
     root = Path(tempfile.mkdtemp(prefix="wconnectraw-"))
     try:
@@ -128,7 +149,7 @@ def run_wconnectraw(*args, status_id="7", set_reply="OK", disconnect_reply="OK",
             } >> "$WCONNECTRAW_CAPTURE"
             case "$*" in
                 *" status")
-                    printf 'wpa_state=%s\\nid=%s\\nssid=current-ap\\nfreq=2412\\n' "$WCONNECTRAW_WPA_STATE" "$WCONNECTRAW_STATUS_ID"
+                    printf 'wpa_state=%s\\nid=%s\\nssid=current-ap\\nbssid=aa:bb:cc:dd:ee:ff\\nfreq=2412\\n' "$WCONNECTRAW_WPA_STATE" "$WCONNECTRAW_STATUS_ID"
                     ;;
                 *" list_networks") printf 'network id / ssid / bssid / flags\\n%s\\n' "$WCONNECTRAW_NETWORKS" ;;
                 *" set_network "*) printf '%s\\n' "$WCONNECTRAW_SET_REPLY" ;;
@@ -146,6 +167,17 @@ def run_wconnectraw(*args, status_id="7", set_reply="OK", disconnect_reply="OK",
         '''))
         logger.chmod(0o755)
 
+        conf_dir = root / "etc" / "wpa_supplicant"
+        conf_dir.mkdir(parents=True)
+        for iface in ("mlan0", "mlan1"):
+            conf = conf_dir / f"wpa_supplicant-{iface}.conf"
+            conf.write_text('update_config=0\nnetwork={\n    ssid="current-ap"\n    psk="password123"\n}\n')
+            conf.chmod(0o600)
+        if pending_credential:
+            run_dir = root / "wifi-run"
+            run_dir.mkdir()
+            (run_dir / "mlan0.credential-pending").touch()
+
         source = (FTPCMD_DIR / "wconnectraw").read_text()
         old = "WPA_CLI=/usr/sbin/wpa_cli\n"
         replacement = f"WPA_CLI={shlex.quote(str(wpa_cli))}\n"
@@ -159,6 +191,8 @@ def run_wconnectraw(*args, status_id="7", set_reply="OK", disconnect_reply="OK",
         env.update({
             "PATH": f"{root}:{os.environ['PATH']}",
             "WCONNECTRAW_CAPTURE": str(capture),
+            "WIFI_RAW_COMMIT_HELPER": "/bin/true",
+            "WPA_CONF_DIR": str(conf_dir),
             "WIFI_RUN_DIR": str(root / "wifi-run"),
             "WCONNECTRAW_LOG": str(timing_log),
             "WCONNECTRAW_STATUS_ID": status_id,
@@ -173,6 +207,10 @@ def run_wconnectraw(*args, status_id="7", set_reply="OK", disconnect_reply="OK",
         )
         calls = capture.read_text().splitlines() if capture.exists() else []
         timing_lines = timing_log.read_text().splitlines() if timing_log.exists() else []
+        request = root / "wifi-run" / "mlan0.raw-commit"
+        request_lines = request.read_text().splitlines() if request.exists() else []
+        if capture_request:
+            return result, calls, timing_lines, request_lines
         return result, calls, timing_lines
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -182,7 +220,7 @@ class HandlersExist(unittest.TestCase):
     def test_every_handler_is_executable(self):
         for name in (
             "getifstate", "ifcup", "ifcdown", "rst", "wconnect", "wconnectraw",
-            "wssid", "wfreq", "wstatus", "wgetifstate", "wifcup", "wifcdown", "wrst",
+            "wssid", "wfreq", "wstatus", "wscan", "wpsk", "wgetifstate", "wifcup", "wifcdown", "wrst",
         ):
             path = FTPCMD_DIR / name
             self.assertTrue(path.is_file(), f"{name} 이 없다")
@@ -253,6 +291,22 @@ class WconnectRequiredInterface(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(argv, ["mlan0", "connect", "Field AP"])
 
+    def test_staged_runtime_psk_is_forwarded_as_a_secret_free_environment_flag(self):
+        r, argv, _ = run_wconnect("0", "Field", "AP", runtime_stage=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(argv, ["mlan0", "connect", "Field AP"])
+
+    def test_active_runtime_psk_does_not_turn_no_ssid_recovery_into_a_new_switch(self):
+        r, argv, _ = run_wconnect("0", runtime_active=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(argv, ["mlan0", "connect"])
+
+    def test_marker_owns_a_pending_stage_during_no_ssid_recovery(self):
+        r, argv, _ = run_wconnect(
+            "0", runtime_stage=True, runtime_marker=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(argv, ["mlan0", "connect"])
+
     def test_numeric_words_are_ssid_text_not_frequencies(self):
         r, argv, _ = run_wconnect("0", "field-ap", "36", "5200")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -285,6 +339,30 @@ class WconnectRequiredInterface(unittest.TestCase):
 
 
 class WconnectRawRuntimeSwitch(unittest.TestCase):
+    def test_pending_credential_stops_before_runtime_switch(self):
+        result, calls, _, request = run_wconnectraw(
+            "0", "Field", "AP", pending_credential=True, capture_request=True)
+        self.assertEqual(result.returncode, 6, result.stdout + result.stderr)
+        self.assertEqual(calls, [])
+        self.assertEqual(request, [])
+
+    def test_success_queues_independent_persistence_after_radio_commands(self):
+        r, calls, _, request = run_wconnectraw("0", "Field", "AP", capture_request=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.stdout.splitlines(), ["SUCCESS"])
+        self.assertEqual(calls[-2:], ["[-i|mlan0|disconnect]", "[-i|mlan0|reassociate]"])
+        self.assertEqual(request[0], "wifi-raw-commit-v1")
+        self.assertEqual(request[1:3], ["7", "Field AP"])
+        self.assertRegex(request[3], r"^[0-9a-f]{64}$")
+        self.assertRegex(request[4], r"^[0-9]+-[0-9]+$")
+        self.assertEqual(request[5:], ["aa:bb:cc:dd:ee:ff", "1"])
+
+    def test_failed_radio_command_does_not_queue_persistence(self):
+        r, _, _, request = run_wconnectraw(
+            "0", "Field", "AP", reassociate_reply="FAIL", capture_request=True)
+        self.assertEqual(r.returncode, 7)
+        self.assertEqual(request, [])
+
     def test_explicit_interface_updates_current_mlan0_network(self):
         r, calls, timing = run_wconnectraw("0", "Field", "AP")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)

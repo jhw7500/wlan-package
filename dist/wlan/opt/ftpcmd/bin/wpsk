@@ -1,0 +1,42 @@
+#!/bin/sh
+# Store a WPA passphrase for the next wconnect. Never echo or log the secret.
+#   quote wpsk <mlan0|mlan1|0|1> <passphrase words...>
+#   quote wpsk <mlan0|mlan1|0|1> --stage <passphrase words...>
+set -u
+
+WIFI=/usr/local/bin/wifi
+
+wpsk_log_failure() {
+    _wpsk_code=$1
+    _wpsk_reason=$2
+    logger -p local0.err \
+        "ftpcmd_result command=wpsk status=fail code=$_wpsk_code iface=${IFACE:-unknown} reason=$_wpsk_reason" \
+        >/dev/null 2>&1 || true
+}
+
+case "${1:-}" in
+    mlan0|0) IFACE=mlan0 ;;
+    mlan1|1) IFACE=mlan1 ;;
+    *) wpsk_log_failure 2 expected-interface; exit 2 ;;
+esac
+shift
+
+WIFI_COMMAND=psk
+if [ "${1:-}" = "--stage" ]; then
+    WIFI_COMMAND=stage-psk
+    shift
+fi
+
+[ "$#" -gt 0 ] || { wpsk_log_failure 2 missing-passphrase; exit 2; }
+[ -x "$WIFI" ] || { wpsk_log_failure 1 wifi-unavailable; exit 1; }
+
+# The FTP dispatcher splits words and accepts only a restricted ASCII set.
+# Rejoin here, as wssid/wconnect do, and keep the value out of diagnostics.
+PASSPHRASE=$*
+if "$WIFI" "$IFACE" "$WIFI_COMMAND" "$PASSPHRASE" >/dev/null 2>&1; then
+    printf 'SUCCESS\n'
+else
+    WPSK_RC=$?
+    wpsk_log_failure "$WPSK_RC" apply-failed
+    exit "$WPSK_RC"
+fi
