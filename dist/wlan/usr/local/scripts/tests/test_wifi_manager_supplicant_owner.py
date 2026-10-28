@@ -128,11 +128,13 @@ def test_postinst_fails_when_legacy_boot_link_path_is_not_a_symlink(tmp_path):
     assert str(link) in result.stderr
 
 
-def _run_with_systemctl(tmp_path, script, *, bridge_iface, enabled_units):
+def _run_with_systemctl(tmp_path, script, *, bridge_iface, enabled_units, wpa_disabled_iface=None):
     config = json.loads(TEMPLATE.read_text())
     config["global"]["MOD_PARA"] = "does-not-exist.conf"
     config["wbridge"]["bridge_iface"] = bridge_iface
     config["mlan1"]["enabled"] = True
+    if wpa_disabled_iface is not None:
+        config[wpa_disabled_iface]["wpa_supplicant"]["enabled"] = False
     config_path = tmp_path / "wifi_init_conf.json"
     config_path.write_text(json.dumps(config))
 
@@ -192,27 +194,19 @@ def test_services_list_uses_its_adjacent_library():
 
 @needs_jq
 @pytest.mark.parametrize("manager", ["wifi_manager", "wifi-manager"])
-@pytest.mark.parametrize(
-    "bridge_iface, owner_iface",
-    [("mlan0", "mlan0"), ("mlan1", "mlan1"), ("none", "mlan0"), ("invalid", "mlan0")],
-)
-def test_manager_enabled_disables_package_supplicant_autostart(tmp_path, manager, bridge_iface, owner_iface):
+@pytest.mark.parametrize("bridge_iface", ["mlan0", "mlan1"])
+def test_manager_enabled_preserves_supplicant_recovery_marker(tmp_path, manager, bridge_iface):
     result, calls = _run_with_systemctl(
         tmp_path,
         APPLY,
         bridge_iface=bridge_iface,
-        enabled_units=[
-            manager,
-            "wpa_supplicant@mlan0.service",
-            "wpa_supplicant@mlan1.service",
-        ],
+        enabled_units=[manager],
     )
 
     assert result.returncode == 0, result.stderr
-    other_iface = "mlan1" if owner_iface == "mlan0" else "mlan0"
-    assert f"disable wpa_supplicant@{owner_iface}.service" in calls
-    assert f"disable wpa_supplicant@{other_iface}.service" not in calls
-    assert f"stop wpa_supplicant@{owner_iface}.service" not in calls
+    for iface in ("mlan0", "mlan1"):
+        assert f"enable wpa_supplicant@{iface}.service" in calls
+        assert f"start wpa_supplicant@{iface}.service" not in calls
 
 
 @needs_jq
@@ -262,19 +256,25 @@ def test_wifi_init_normalizes_owner_interface(bridge_iface, owner_iface):
 
 
 @needs_jq
-def test_manager_only_suppresses_selected_bridge_interface(tmp_path):
+@pytest.mark.parametrize("disabled_iface", ["mlan0", "mlan1"])
+def test_manager_preserves_explicit_supplicant_disable(tmp_path, disabled_iface):
     enabled_units = [
         "wifi_manager",
         "wpa_supplicant@mlan0.service",
         "wpa_supplicant@mlan1.service",
     ]
     result, calls = _run_with_systemctl(
-        tmp_path, APPLY, bridge_iface="mlan1", enabled_units=enabled_units
+        tmp_path,
+        APPLY,
+        bridge_iface=disabled_iface,
+        enabled_units=enabled_units,
+        wpa_disabled_iface=disabled_iface,
     )
 
     assert result.returncode == 0, result.stderr
-    assert "disable wpa_supplicant@mlan1.service" in calls
-    assert "disable wpa_supplicant@mlan0.service" not in calls
+    other_iface = "mlan1" if disabled_iface == "mlan0" else "mlan0"
+    assert f"disable wpa_supplicant@{disabled_iface}.service" in calls
+    assert f"disable wpa_supplicant@{other_iface}.service" not in calls
 
 
 @needs_jq
