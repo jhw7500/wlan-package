@@ -4090,6 +4090,17 @@ case "$2" in
     connect_prescan_start "$@"
     MONITOR_TIMEOUT="$CONNECT_TIMEOUT"
     [ "$CONNECT_FALLBACK_ENABLED" != 1 ] || MONITOR_TIMEOUT=$((CONNECT_TIMEOUT + CONNECT_ROLLBACK_TIMEOUT))
+    if [ "$RUNTIME_SWITCH_REQUESTED" = 1 ] || [ "$RUNTIME_STALE" = 1 ]; then
+        # Masked-PSK preflight can outlive a short attempt+rollback budget.
+        # Keep the watchdog through the full runtime deadline and cleanup grace.
+        MONITOR_NOW_MS=$(wifi_wpa_monotonic_ms) || exit 7
+        MONITOR_REMAINING_MS=$((RUNTIME_OPERATION_DEADLINE_MS - MONITOR_NOW_MS))
+        if [ "$MONITOR_REMAINING_MS" -gt 0 ]; then
+            MONITOR_RUNTIME_TIMEOUT=$(((MONITOR_REMAINING_MS + 999) / 1000))
+            [ "$MONITOR_TIMEOUT" -ge "$MONITOR_RUNTIME_TIMEOUT" ] \
+                || MONITOR_TIMEOUT=$MONITOR_RUNTIME_TIMEOUT
+        fi
+    fi
     if ! connect_event_monitor_start "$IFACE" "$MONITOR_TIMEOUT"; then
         echo "Error: failed to attach reconnect event monitor for $IFACE" >&2
         exit 7

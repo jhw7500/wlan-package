@@ -82,6 +82,13 @@ if [ "${1:-}" != --daemon ]; then
         reconfigure|reassociate|reconnect|scan)
             if [ "$command" = reconfigure ]; then
                 cp "$WPA_CONF_DIR/wpa_supplicant-${2}.conf" "$runtime"
+                if [ -f "$D/delay-first-source-reconfigure" ] \
+                   && ! grep -q 'ssid="unreachable"' "$runtime"; then
+                    delay=6.5
+                    read -r delay < "$D/delay-first-source-reconfigure" || delay=6.5
+                    rm -f "$D/delay-first-source-reconfigure"
+                    sleep "$delay"
+                fi
                 if grep -q 'ssid="unreachable"' "$runtime"; then
                     : > "$D/target-entered"
                     while [ -f "$D/block-target" ]; do sleep 0.02; done
@@ -305,6 +312,19 @@ class ConnectFallbackTests(_cli.ConnectHarness):
     def test_runtime_slow_status_preserves_time_to_restore_original_association(self):
         self.set_policy(attempt=15, rollback=5)
         (self.state / "delay-target").write_text("0.3\n")
+
+        result = self.run_runtime_connect("unreachable")
+
+        self.assertEqual(result.returncode, 8, result.stdout + result.stderr)
+        self.assertEqual(self.conf.read_text(), CONF_MODE_B)
+        self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+        self.assertIn("ssid=jhw_wlan_\n", (self.state / "status").read_text())
+        self.assertFalse((self.run_dir / "mlan0.runtime-switch-in-progress").exists())
+
+    def test_runtime_masked_psk_preflight_keeps_monitor_for_switch_and_restore(self):
+        self.set_policy(attempt=1, rollback=1)
+        (self.state / "mask-psk").touch()
+        (self.state / "delay-first-source-reconfigure").write_text("6.5\n")
 
         result = self.run_runtime_connect("unreachable")
 
