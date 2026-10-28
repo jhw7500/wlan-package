@@ -1507,10 +1507,10 @@
             "enabled": {
               "type": "boolean",
               "default": true,
-              "description": "supplicant 데몬(wpa_supplicant@mlan0) 활성화. false면 유닛 disable + wifi_init.sh 의 직접 start 도 skip. mlan0.enabled=false 이면 이 값과 무관하게 disable",
+              "description": "supplicant 패키지 시작 정책(wpa_supplicant@mlan0). enable 링크는 부팅되지 않는 wifi-supplicant-manual.target에 둔다. false면 유닛 disable + wifi_init.sh 직접 start skip. wifi_manager/wifi-manager가 enable이고 bridge_iface=mlan0이면 true여도 패키지 유닛 disable/start skip. 매니저의 같은 유닛 restart는 가능. mlan0.enabled=false 이면 이 값과 무관하게 disable",
               "x-ui-editable": "yes",
               "x-apply-timing": "boot",
-              "x-consumer": "wifi_apply_enabled.sh, wifi_init.sh"
+              "x-consumer": "wifi_apply_enabled.sh, wifi_init.sh, wifi_services.sh"
             },
             "scan_res_valid_for_connect": {
               "type": "integer",
@@ -2526,10 +2526,10 @@
             "enabled": {
               "type": "boolean",
               "default": true,
-              "description": "supplicant 데몬(wpa_supplicant@mlan1) 활성화. false면 유닛 disable + wifi_init.sh 의 직접 start 도 skip. mlan1.enabled=false 이면 이 값과 무관하게 disable",
+              "description": "supplicant 패키지 시작 정책(wpa_supplicant@mlan1). enable 링크는 부팅되지 않는 wifi-supplicant-manual.target에 둔다. false면 유닛 disable + wifi_init.sh 직접 start skip. wifi_manager/wifi-manager가 enable이고 bridge_iface=mlan1이면 true여도 패키지 유닛 disable/start skip. 매니저의 같은 유닛 restart는 가능. mlan1.enabled=false 이면 이 값과 무관하게 disable",
               "x-ui-editable": "yes",
               "x-apply-timing": "boot",
-              "x-consumer": "wifi_apply_enabled.sh, wifi_init.sh"
+              "x-consumer": "wifi_apply_enabled.sh, wifi_init.sh, wifi_services.sh"
             },
             "scan_res_valid_for_connect": {
               "type": "integer",

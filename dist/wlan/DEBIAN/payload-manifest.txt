@@ -20,6 +20,7 @@ etc/systemd/system/opcd-essid-restore.service
 etc/systemd/system/snmpd.service.d/override.conf
 etc/systemd/system/switchd.service
 etc/systemd/system/wifi-stack.target
+etc/systemd/system/wifi-supplicant-manual.target
 etc/systemd/system/wifi_acl.service
 etc/systemd/system/wifi_apply_enabled.service
 etc/systemd/system/wifi_arping@.service

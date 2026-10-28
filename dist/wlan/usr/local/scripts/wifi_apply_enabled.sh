@@ -2,7 +2,7 @@
 # wifi_apply_enabled.sh
 #
 # JSON wifi_init_conf.json의 데몬 *.enabled 키를 읽어 systemctl enable/disable
-# 상태를 동기화한다. 실제 start/stop은 wifi_services.sh가 처리한다.
+# 상태를 동기화한다. supplicant의 start는 wifi_init.sh/wifi_services.sh가 처리한다.
 #
 # wifi_init.service의 ExecStartPre로 호출되어 wifi_init.sh 실행 전에 systemd
 # enable 상태를 JSON과 일치시킨 다음, ExecStartPost의 wifi_services.sh가
@@ -20,6 +20,8 @@
 #   .logger.enabled                           → wifi_logger.service (시스템 로거 그룹)
 #   .eth0.logger.enabled                      → wifi_logger@eth0.service
 #   .mlanN.wpa_supplicant.enabled             → wpa_supplicant@mlanN.service
+#   wifi_manager/wifi-manager enabled         → bridge_iface의 package supplicant start 정책 disable
+#                                                (매니저의 같은 유닛 restart는 허용)
 #   .mlanN.logger.enabled                     → wifi_logger@mlanN.service
 #   .mlanN.checker.enabled                    → wifi_checker@mlanN.service
 #   .mlanN.bgscan.enabled                     → wifi_bgscan@mlanN.service
@@ -256,8 +258,15 @@ apply wifi_mgmt_log.timer "$_mgmt"
 
 # wbridge 정책
 WBRIDGE_ENABLED=$(get_bool ".wbridge.enabled" "false")
-BRIDGE_IFACE=$(jq -r '.wbridge.bridge_iface // "mlan0"' "$JSON")
+BRIDGE_IFACE=$(jq -r '.wbridge.bridge_iface // .global.BRIDGE_IFACE // "mlan0"' "$JSON")
 SNMP_TRAP_ENABLED=$(get_bool ".snmp.trap.enabled" "false")
+WIFI_MANAGER_ENABLED=false
+for _manager_unit in wifi_manager wifi-manager; do
+    if systemctl is-enabled "$_manager_unit" >/dev/null 2>&1; then
+        WIFI_MANAGER_ENABLED=true
+        break
+    fi
+done
 
 # per-iface 데몬
 for iface in mlan0 mlan1; do
@@ -281,7 +290,11 @@ for iface in mlan0 mlan1; do
         continue
     fi
 
-    apply "wpa_supplicant@${iface}.service"     "$(get_bool ".${iface}.wpa_supplicant.enabled" "true")"
+    _wpa_want=$(get_bool ".${iface}.wpa_supplicant.enabled" "true")
+    if [ "$WIFI_MANAGER_ENABLED" = "true" ] && [ "$BRIDGE_IFACE" = "$iface" ]; then
+        _wpa_want=false
+    fi
+    apply "wpa_supplicant@${iface}.service" "$_wpa_want"
 
     apply "wifi_logger@${iface}.service"        "$(get_bool ".${iface}.logger.enabled"        "true")"
     apply "wifi_checker@${iface}.service"       "$(get_bool ".${iface}.checker.enabled"       "true")"

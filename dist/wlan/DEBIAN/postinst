@@ -459,6 +459,15 @@ customctl() {
       [ "$_unit_name" = "wifi_apply_enabled.service" ] && continue
       rm -f "$_old_link" 2>/dev/null || true
   done
+  # >>> wpa-boot-link-migration
+  # 구 wpa_supplicant@.service 의 multi-user.target 링크를 제거한다. 새 unit의
+  # enable 링크는 부팅하지 않는 wifi-supplicant-manual.target 아래에 놓이고,
+  # 아래 wifi_apply_enabled.sh가 JSON/매니저 상태에 맞춰 다시 enable한다.
+  # disable은 실행 중인 동일 유닛을 멈추지 않으므로 매니저의 연결은 유지된다.
+  if ! systemctl disable wpa_supplicant@mlan0.service wpa_supplicant@mlan1.service 2>/dev/null; then
+    logger -p local0.warn "[$tag:$LINENO] [$KEY] failed to remove legacy wpa_supplicant boot links" || true
+  fi
+  # <<< wpa-boot-link-migration
   systemctl daemon-reload 2>/dev/null || true
 
   # 시스템 unit + wifi 진입점(wifi_init/wifi_apply_enabled) + 기본 복구 unit을 먼저

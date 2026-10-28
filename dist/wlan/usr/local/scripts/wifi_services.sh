@@ -8,10 +8,13 @@
 # 정책:
 #   - 가동 결정 (enable/disable)은 운영자의 systemctl 상태가 진실
 #   - 이 스크립트는 enable된 unit만 start --no-block 호출
+#   - wifi_manager가 enable되면 bridge_iface supplicant의 package start를 건너뛴다
+#     (매니저가 같은 유닛을 restart한다)
 #
 set -u
 
-LIB="/usr/local/scripts/wifi_services_lib.sh"
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+LIB="$SCRIPT_DIR/wifi_services_lib.sh"
 # shellcheck source=./wifi_services_lib.sh
 . "$LIB"
 
@@ -45,8 +48,18 @@ wifi_services_start_non_wireless() {
 }
 
 wifi_services_start_wireless() {
-    local u
+    local u manager manager_iface="" config="${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}"
+    for manager in wifi_manager wifi-manager; do
+        if systemctl is-enabled "$manager" >/dev/null 2>&1; then
+            manager_iface=$(jq -r '.wbridge.bridge_iface // .global.BRIDGE_IFACE // "mlan0"' "$config" 2>/dev/null) || manager_iface=mlan0
+            break
+        fi
+    done
     while IFS= read -r u; do
+        if [ "$u" = "wpa_supplicant@${manager_iface}.service" ]; then
+            logger -p local0.info "[$tag:$LINENO] wifi_manager owns $u; skip package start"
+            continue
+        fi
         _wifi_start_if_enabled "$u"
     done < <(wifi_services_wireless_list)
 }
