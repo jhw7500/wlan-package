@@ -1021,27 +1021,37 @@ runtime_switch_exact_poll() {
     fi
 }
 
+# Status calls can outlast the 100 ms poll interval; the loop and each call
+# must share the same deadline to leave the reserved rollback time intact.
 runtime_switch_wait_exact() {
-    local expected_ssid="$1" expected_id="$2" freqs="$3" polls="$4" i
-    for ((i = 1; i <= polls; i++)); do
-        runtime_switch_exact_poll "$expected_ssid" "$expected_id" "$freqs" && return 0
-        [ "$i" -lt "$polls" ] && wifi_wpa_run_child sleep 0.1
+    local expected_ssid="$1" expected_id="$2" freqs="$3" deadline_ms="$4" now
+    local WIFI_WPA_DEADLINE_MS="$deadline_ms"
+    while :; do
+        now=$(wifi_wpa_monotonic_ms) || return 1
+        [ "$now" -lt "$deadline_ms" ] || return 1
+        if runtime_switch_exact_poll "$expected_ssid" "$expected_id" "$freqs"; then
+            now=$(wifi_wpa_monotonic_ms) || return 1
+            [ "$now" -lt "$deadline_ms" ] && return 0
+            return 1
+        fi
+        now=$(wifi_wpa_monotonic_ms) || return 1
+        [ "$now" -lt "$deadline_ms" ] || return 1
+        wifi_wpa_run_child sleep 0.1
     done
-    return 1
 }
 
-runtime_switch_poll_budget() {
+runtime_switch_poll_deadline() {
     local cap_seconds="$1" reserve_ms="$2" now remaining cap_ms
     now=$(wifi_wpa_monotonic_ms) || return 1
     remaining=$((${RUNTIME_OPERATION_DEADLINE_MS:-0} - now - reserve_ms))
-    [ "$remaining" -gt 0 ] || return 1
+    [ "$remaining" -ge 100 ] || return 1
     cap_ms=$((cap_seconds * 1000))
     [ "$remaining" -le "$cap_ms" ] || remaining=$cap_ms
-    printf '%s\n' "$((remaining / 100))"
+    printf '%s\n' "$((now + remaining))"
 }
 
 runtime_switch_restore_original() {
-    local restored=0 polls cleanup_paths=()
+    local restored=0 restore_deadline cleanup_paths=()
     [ -n "${RUNTIME_ORIGINAL_CONF:-}" ] && [ -f "$RUNTIME_ORIGINAL_CONF" ] || return 1
     if wifi_wpa_run_child_call safe_install_sync "$RUNTIME_ORIGINAL_CONF" "$CONF"; then
         if [ "$IFACE" = mlan0 ]; then
@@ -1053,14 +1063,15 @@ runtime_switch_restore_original() {
             fi
         fi
         : > "$WIFI_RUN_DIR/${IFACE}.reconfigure-grace" 2>/dev/null || true
-        WIFI_WPA_DEADLINE_MS=${RUNTIME_OPERATION_DEADLINE_MS:-}
-        polls=$(runtime_switch_poll_budget 5 0) || polls=0
-        if [ "$polls" -gt 0 ] \
+        restore_deadline=$(runtime_switch_poll_deadline 5 0) || restore_deadline=0
+        WIFI_WPA_DEADLINE_MS=$restore_deadline
+        if [ "$restore_deadline" -gt 0 ] \
            && connect_event_monitor_arm && wpa_cli_ok "$IFACE" reconfigure \
            && runtime_switch_wait_exact "$RUNTIME_ORIGINAL_SSID" "" \
-                "$RUNTIME_ORIGINAL_FREQS" "$polls"; then
+                "$RUNTIME_ORIGINAL_FREQS" "$restore_deadline"; then
             restored=1
         fi
+        WIFI_WPA_DEADLINE_MS=${RUNTIME_OPERATION_DEADLINE_MS:-}
     fi
     # The staged/candidate credential is never needed for recovery.  Keep the
     # original snapshots and in-progress marker until restoration is verified,
@@ -1163,7 +1174,7 @@ runtime_switch_signal_exit() {
 }
 
 runtime_switch_recover_stale() {
-    local raw expected_ssid freqs polls marker_state marker_mode checkpoint_state
+    local raw expected_ssid freqs recovery_deadline marker_state marker_mode checkpoint_state
     if [ ! -e "$RUNTIME_IN_PROGRESS" ] && [ ! -L "$RUNTIME_IN_PROGRESS" ]; then
         [ ! -e "$RUNTIME_ACTIVE_STAGE" ] && [ ! -L "$RUNTIME_ACTIVE_STAGE" ] || {
             echo "Error: active runtime credential has no recovery marker" >&2
@@ -1226,18 +1237,19 @@ runtime_switch_recover_stale() {
     expected_ssid=$(wifi_wpa_child_call wifi_ssid_conf_to_wpa_text "$raw") || return 1
     freqs=$(wifi_wpa_child_call wifi_wpa_conf_common_freqs "$CONF") || return 1
     : > "$WIFI_RUN_DIR/${IFACE}.reconfigure-grace" 2>/dev/null || true
-    WIFI_WPA_DEADLINE_MS=${RUNTIME_OPERATION_DEADLINE_MS:-}
-    polls=$(runtime_switch_poll_budget 8 6000) || return 1
+    recovery_deadline=$(runtime_switch_poll_deadline 8 6000) || return 1
+    WIFI_WPA_DEADLINE_MS=$recovery_deadline
     connect_event_monitor_arm && wpa_cli_ok "$IFACE" reconfigure \
         && runtime_switch_wait_exact "$expected_ssid" "" "$freqs" \
-            "$polls" || return 1
+            "$recovery_deadline" || return 1
+    WIFI_WPA_DEADLINE_MS=$RUNTIME_OPERATION_DEADLINE_MS
     runtime_switch_restore_checkpoint || return 1
     runtime_switch_recovery_cleanup
 }
 
 runtime_switch_execute() {
     local key_mgmt stored_psk live_psk psk_len canon marker_tmp marker_state checkpoint_state snapshot_tmp
-    local preflight_polls attempt_polls attempt_deadline
+    local preflight_deadline attempt_deadline
     RUNTIME_STAGE="$WIFI_RUN_DIR/${IFACE}.runtime-psk"
     RUNTIME_ACTIVE_STAGE="$WIFI_RUN_DIR/${IFACE}.runtime-psk.active"
     RUNTIME_IN_PROGRESS="$WIFI_RUN_DIR/${IFACE}.runtime-switch-in-progress"
@@ -1300,18 +1312,19 @@ runtime_switch_execute() {
         # from the unchanged stored profile is the only available proof that
         # its credential can restore the source AP; do it before snapshots or
         # runtime mutation, then continue with the newly assigned network ID.
-        preflight_polls=$(runtime_switch_poll_budget 7 12000) || {
+        preflight_deadline=$(runtime_switch_poll_deadline 7 12000) || {
             echo "Error: insufficient time to verify stored credentials" >&2
             return 1
         }
-        WIFI_WPA_DEADLINE_MS=${RUNTIME_OPERATION_DEADLINE_MS:-}
+        WIFI_WPA_DEADLINE_MS=$preflight_deadline
         : > "$WIFI_RUN_DIR/${IFACE}.reconfigure-grace" 2>/dev/null || true
         if ! connect_event_monitor_arm || ! wpa_cli_ok "$IFACE" reconfigure \
            || ! runtime_switch_wait_exact "$LIVE_SSID_WPA_TEXT" "" "$FREQ_STR" \
-                "$preflight_polls"; then
+                "$preflight_deadline"; then
             echo "Error: stored credential could not re-associate the source profile" >&2
             return 1
         fi
+        WIFI_WPA_DEADLINE_MS=$RUNTIME_OPERATION_DEADLINE_MS
         LIVE_NETWORK_ID=$RUNTIME_POLL_ID
         LIVE_SSID_WPA_TEXT=$RUNTIME_POLL_SSID
         LIVE_FREQ=$RUNTIME_POLL_FREQ
@@ -1460,10 +1473,9 @@ runtime_switch_execute() {
     trap 'runtime_switch_signal_exit 129' HUP
     trap 'runtime_switch_signal_exit 130' INT
     trap 'runtime_switch_signal_exit 143' TERM
-    attempt_polls=$(runtime_switch_poll_budget "$CONNECT_TIMEOUT" 6000) || {
+    attempt_deadline=$(runtime_switch_poll_deadline "$CONNECT_TIMEOUT" 6000) || {
         runtime_switch_fail 8; return $?;
     }
-    attempt_deadline=$(($(wifi_wpa_monotonic_ms) + attempt_polls * 100))
     WIFI_WPA_DEADLINE_MS=$attempt_deadline
     if ! wpa_cli_ok "$IFACE" disconnect \
        || ! wpa_cli_ok "$IFACE" set_network "$LIVE_NETWORK_ID" ssid "$SSID_CONF_VALUE" \
@@ -1474,7 +1486,7 @@ runtime_switch_execute() {
         return $?
     fi
     if ! runtime_switch_wait_exact "$TARGET_SSID_WPA_TEXT" "$LIVE_NETWORK_ID" "$FREQ_STR" \
-        "$attempt_polls"; then
+        "$attempt_deadline"; then
         runtime_switch_fail 8
         return $?
     fi

@@ -75,7 +75,9 @@ if [ "${1:-}" != --daemon ]; then
             exit 0 ;;
         status)
             if [ -f "$D/delay-target" ] && grep -q 'ssid="unreachable"' "$runtime"; then
-                sleep 3
+                delay=3
+                read -r delay < "$D/delay-target" || delay=3
+                sleep "$delay"
             fi ;;
         reconfigure|reassociate|reconnect|scan)
             if [ "$command" = reconfigure ]; then
@@ -299,6 +301,18 @@ class ConnectFallbackTests(_cli.ConnectHarness):
         self.assertFalse((self.run_dir / "mlan0.runtime-psk.active").exists())
         self.assertFalse((self.run_dir / "mlan0.runtime-switch-in-progress").exists())
         self.assertNotIn("runtime-secret", result.stdout + result.stderr)
+
+    def test_runtime_slow_status_preserves_time_to_restore_original_association(self):
+        self.set_policy(attempt=15, rollback=5)
+        (self.state / "delay-target").write_text("0.3\n")
+
+        result = self.run_runtime_connect("unreachable")
+
+        self.assertEqual(result.returncode, 8, result.stdout + result.stderr)
+        self.assertEqual(self.conf.read_text(), CONF_MODE_B)
+        self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+        self.assertIn("ssid=jhw_wlan_\n", (self.state / "status").read_text())
+        self.assertFalse((self.run_dir / "mlan0.runtime-switch-in-progress").exists())
 
     def test_runtime_first_rejected_psk_is_rolled_back_without_persisting(self):
         (self.state / "fail-set-psk").touch()
