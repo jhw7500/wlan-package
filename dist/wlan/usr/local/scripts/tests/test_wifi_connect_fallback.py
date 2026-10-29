@@ -874,6 +874,71 @@ exec /bin/sync "$@"
         self.assertIn('psk="runtime-secret"', runtime)
         self.assertFalse(stage.exists())
 
+    def test_no_save_staged_psk_activation_failure_allows_next_connect(self):
+        self.marker.write_text("essid=opc-owned\nslot=6\n")
+        self.stage_runtime_psk()
+        before = self.persistent_state()
+        mv = self.stub / "mv"
+        mv.write_text('''#!/bin/sh
+case "$*" in
+    *runtime-psk*runtime-psk.active*)
+        /bin/mv "$@"
+        exit 1 ;;
+esac
+exec /bin/mv "$@"
+''')
+        mv.chmod(0o755)
+
+        result = self.run_connect("--no-save", "good-B")
+
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(self.persistent_state(), before)
+        self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+        self.assertFalse((self.run_dir / "mlan0.runtime-psk.active").exists())
+        calls = (self.state / "calls.log").read_text()
+        for command in (" set_network", " disconnect", " reassociate", " reconfigure"):
+            self.assertNotIn(command, calls)
+        retry = self.run_connect()
+        self.assertEqual(retry.returncode, 0, retry.stdout + retry.stderr)
+        runtime_retry = self.run_connect("--no-save", "good-B")
+        self.assertEqual(runtime_retry.returncode, 0, runtime_retry.stdout + runtime_retry.stderr)
+
+    def assert_no_save_staged_psk_activation_signal(self, signal_name, expected_rc):
+        self.marker.write_text("essid=opc-owned\nslot=6\n")
+        self.stage_runtime_psk()
+        before = self.persistent_state()
+        mv = self.stub / "mv"
+        mv.write_text('''#!/bin/sh
+case "$*" in
+    *runtime-psk*runtime-psk.active*)
+        /bin/mv "$@" || exit 1
+        kill -SIGNAL "$PPID"
+        exit 0 ;;
+esac
+exec /bin/mv "$@"
+'''.replace("SIGNAL", signal_name))
+        mv.chmod(0o755)
+
+        result = self.run_connect("--no-save", "good-B")
+
+        self.assertEqual(result.returncode, expected_rc, result.stdout + result.stderr)
+        self.assertEqual(self.persistent_state(), before)
+        self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+        self.assertFalse((self.run_dir / "mlan0.runtime-psk.active").exists())
+        retry = self.run_connect()
+        self.assertEqual(retry.returncode, 0, retry.stdout + retry.stderr)
+        runtime_retry = self.run_connect("--no-save", "good-B")
+        self.assertEqual(runtime_retry.returncode, 0, runtime_retry.stdout + runtime_retry.stderr)
+
+    def test_no_save_staged_psk_activation_hup_allows_next_connect(self):
+        self.assert_no_save_staged_psk_activation_signal("HUP", 129)
+
+    def test_no_save_staged_psk_activation_int_allows_next_connect(self):
+        self.assert_no_save_staged_psk_activation_signal("INT", 130)
+
+    def test_no_save_staged_psk_activation_term_allows_next_connect(self):
+        self.assert_no_save_staged_psk_activation_signal("TERM", 143)
+
     def test_no_save_unsafe_staged_psk_preserves_pending_raw_commit(self):
         raw_commit = self.run_dir / "mlan0.raw-commit"
         raw_bytes = b"prior-raw-request\nsecond-line\n"

@@ -1688,16 +1688,19 @@ runtime_no_save_execute() {
         return 8
     }
     runtime_no_save_cancel_raw_commit || return 1
-    if [ "$staged_psk_present" = 1 ]; then
-        wifi_wpa_run_child mv -f "$RUNTIME_STAGE" "$RUNTIME_ACTIVE_STAGE" || return 1
-        runtime_switch_stage_metadata_ok "$RUNTIME_ACTIVE_STAGE" || {
-            runtime_no_save_cleanup_stage
-            return 1
-        }
-    fi
+    # mv may rename the stage before its child fails or a signal is handled.
+    # Own cleanup before publishing the active name, not just before ctrl writes.
     trap 'runtime_no_save_signal_exit 129' HUP
     trap 'runtime_no_save_signal_exit 130' INT
     trap 'runtime_no_save_signal_exit 143' TERM
+    if [ "$staged_psk_present" = 1 ]; then
+        if ! wifi_wpa_run_child mv -f "$RUNTIME_STAGE" "$RUNTIME_ACTIVE_STAGE" \
+           || ! runtime_switch_stage_metadata_ok "$RUNTIME_ACTIVE_STAGE"; then
+            runtime_no_save_cleanup_stage \
+                || echo "Error: runtime-only credential cleanup is incomplete" >&2
+            return 1
+        fi
+    fi
     WIFI_WPA_DEADLINE_MS=$attempt_deadline
     if ! wpa_cli_ok "$IFACE" disconnect \
        || ! wpa_cli_ok "$IFACE" set_network "$LIVE_NETWORK_ID" ssid "$SSID_CONF_VALUE"; then
