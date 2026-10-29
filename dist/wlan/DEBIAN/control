@@ -1,5 +1,5 @@
 Package: wlan-proc
-Version: 0.7.11
+Version: 0.7.13
 Section: net
 Priority: optional
 Architecture: arm64
@@ -66,3 +66,4 @@ Description: WLAN Application
  0.7.9 : wifi 상태 조회에 wlan-proc·wifi-manager·무선 F/W·드라이버·mlanutl 버전을 추가하고 compact 모니터의 RoamAP 행에 beacon 누락/수신 누적값을 표시한다. 조회할 수 없는 항목은 없음으로 표시한다(#427)
  0.7.10 : i.MX8·i.MX93 wpa_supplicant 를 29a017c 로 갱신해 GET_NETWORK 가 PSK·비밀번호·PIN 등 인증 비밀값을 설정 파일 형식으로 반환한다(wpa-supplicant#49)
  0.7.11 : wconnectraw 저장 감시 path 가 paths.target 을 막아 wifi_init 과 networkd 가 서로 기다리던 부팅 지연을 없앤다(#422)
+ 0.7.13 : FTP quote 에 설치 명령 도움말(whelp), NTP 상태 조회·서버 저장·재시작(wntp), 밀리초 현지 시각 조회·수동 설정(wtime)을 추가하고 커스텀 명령 처리 시작 시각을 밀리초까지 기록한다(#432)

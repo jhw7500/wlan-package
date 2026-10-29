@@ -4,6 +4,7 @@
 핸들러 원본은 `dist/wlan/opt/ftpcmd/bin/`, 타겟 설치 경로는 `/opt/ftpcmd/bin/`이다.
 외부 배포용 명령·응답 요약은 [WLAN 장비 FTP QUOTE 명령 규격](ftp_quote_protocol_distribution.md)을 참조한다.
 아래 인터페이스 필수 규칙은 `wlan-proc` 0.7.0부터 적용된다.
+`whelp`, `wntp`, `wtime`은 `wlan-proc` 0.7.13부터 제공한다.
 
 ## 1. 공통 응답
 
@@ -13,7 +14,7 @@ ftp> quote <command> [arguments...]
 
 | 처리 결과 | FTP 응답 | 의미 |
 | --- | --- | --- |
-| `0` | `200 <첫 번째 stdout 줄>` | 명령별 성공 본문은 아래 표 참조 |
+| `0` | `200 <첫 번째 출력 줄>` | 명령별 성공 본문은 아래 표 참조 |
 | 디스패처 입력 검증 실패 | `501 Invalid command arguments.` | 핸들러 실행 전 거부; 핸들러 종료 코드 없음 |
 | `0` 이외 | `550 Failed: <command> exited <N>` | `N`은 핸들러 종료 코드 |
 | vsftpd의 핸들러 제한 시간 초과 | `550 Command timed out: <command>` | 핸들러 강제 종료; 종료 코드 `N` 없음 |
@@ -21,12 +22,16 @@ ftp> quote <command> [arguments...]
 실패 시 핸들러의 `FAIL code=N`이나 진단문은 FTP 응답 본문으로 전달되지 않는다.
 자세한 원인은 장비의 `ftpcmd_result` 또는 `ftpcmd_raw_result` 로그에서 확인한다.
 종료 코드의 의미는 명령마다 다르며, `8`이 모든 오류를 뜻하지 않는다.
+실기 디스패처는 stderr도 수집한다. 성공 종료하는 조회 핸들러의 진단문은
+응답 첫 줄을 덮지 않도록 stdout·stderr 대신 syslog에만 기록한다.
 
-`wrst`를 제외한 `w`로 시작하는 모든 명령은 첫 번째 인자로 인터페이스를 **필수로** 받는다.
+`wrst`, `whelp`, `wntp`, `wtime`을 제외한 `w`로 시작하는 모든 명령은 첫 번째 인자로 인터페이스를 **필수로** 받는다.
 `mlan0`과 `0`은 `mlan0`, `mlan1`과 `1`은 `mlan1`을 선택한다. 인자가
 없거나 이 네 값 이외의 값을 주면 하위 명령 실행 전에 코드 `2`로 거부한다.
 인터페이스 뒤에 오는 SSID·주파수의 숫자 토큰은 별칭으로 변환하지 않는다.
 `wrst`는 예외로 인터페이스를 생략할 수 있으며, 지정한 경우에는 같은 네 값만 허용한다.
+`whelp`는 인터페이스 없이 명령 목록 또는 지정한 명령의 도움말을 조회한다.
+`wntp`와 `wtime`도 인터페이스 없이 장치 전체의 NTP와 시각을 다룬다.
 기존 `getifstate`, `ifcdown`, `ifcup`, `rst`의 인자 규칙은 유지한다.
 
 ### 1.1 FTP 인자 입력 제한
@@ -56,6 +61,106 @@ ftp> quote <command> [arguments...]
 이 제한은 FTP로 전달하는 입력에 적용된다. 다른 경로로 저장한 SSID의 문자
 지원 여부나 무선 연결 가능 여부를 뜻하지 않는다. 입력 문자나 한도를 바꾸려면
 이미지의 vsftpd 패치 변경과 재빌드·검증이 필요하다.
+
+### 1.2 whelp: 커스텀 명령 도움말
+
+~~~text
+quote whelp [command]
+~~~
+
+- 인자가 없으면 패키지가 제공하는 핸들러 중 같은 디렉터리에 설치된 실행 가능한
+  명령을 이름순으로 나열한다. `whelp` 자체도 포함한다.
+- 명령 이름을 지정하면 역할, 호출 형식, 예제를 반환한다. 도움말 조회 시 실제
+  명령을 실행하거나 무선 설정·인증 정보를 읽지 않는다. 명령 이름의 대소문자는
+  구분하지 않는다.
+- 성공 출력은 기존 디스패처가 전달하는 **인쇄 가능한 ASCII 한 줄·256바이트 이내**다.
+  전체 상세 도움말을 여러 줄로 보내지 않고 필요한 명령을 각각 조회한다.
+- 알 수 없거나 설치되지 않은 명령, 실행 권한이 없는 명령, 두 개 이상의 인자는
+  코드 `2`로 실패한다(`550 Failed: whelp exited 2`).
+
+~~~text
+ftp> quote whelp
+200 Commands: getifstate ifcdown ifcup rst wconnect wconnectraw wfreq wgetifstate whelp wifcdown wifcup wntp wpsk wrst wscan wssid wstatus wtime; Details: quote whelp <command>
+ftp> quote whelp wstatus
+200 Read current connected SSID/frequency, not saved settings. Usage: quote wstatus <iface>. Example: quote wstatus 0; iface=0|1|mlan0|mlan1
+ftp> quote whelp wrst
+200 Reboot the whole board; optional iface is only validated. Usage: quote wrst [iface]. Example: quote wrst; iface=0|1|mlan0|mlan1
+~~~
+
+`<iface>`는 `mlan0|mlan1|0|1` 중 하나다. 꺾쇠·대괄호는 형식 설명이므로
+실제 요청에 넣지 않는다. 목록은 설치 상태에 따라 달라질 수 있다.
+
+### 1.3 wntp: NTP 조회·서버 저장·적용
+
+| 호출 | 동작 | 성공 본문 |
+| --- | --- | --- |
+| `quote wntp` | 현재 상태와 장치의 저장 서버 조회 | `SERVICE=<상태> ENABLED=<유닛 enable 상태> SYNC=<yes/no> CONFIG=<저장 목록> SERVER=<선택 서버>` |
+| `quote wntp ip <IP>` | 장치의 기본 NTP 서버 저장 | `SUCCESS NTP=<IP>; run wntp apply` |
+| `quote wntp apply` | `systemd-timesyncd.service` 재시작 | `SUCCESS restarted systemd-timesyncd; synchronization not confirmed` |
+
+- `CONFIG`는 `/etc/systemd/timesyncd.conf`의 `[Time]` 안에 저장된 `NTP=` 목록이다.
+  여러 주소는 쉼표로 구분하고 지정값이 없으면 `unset`이다. `SERVER`는 실행 중
+  서비스가 선택한 주소이며, 저장 후 `apply` 전에는 두 값이 다를 수 있다.
+- `SERVICE`와 `ENABLED`는 systemd 유닛 상태다. `SYNC`는 커널의 NTP 동기화
+  플래그로 서비스가 active라는 뜻과 다르다. 조회할 수 없는 값은 `unknown`,
+  서비스가 inactive/failed이면 선택 서버는 `none`이다. 중지된 timesyncd를
+  조회 과정에서 기동하지 않는다. 긴 필드는 `...`로 생략해 256바이트 한도를 지킨다.
+- `ip`는 호스트명·CIDR·zone ID가 없는 유니캐스트 IPv4/IPv6 리터럴을 받는다.
+  `[Time]`의 기존 `NTP=` 목록만 교체하고 다른 설정·파일 소유자·권한은 유지한다.
+  설정은 원자적으로 교체하며 재시작은 하지 않는다. 일반 파일이 아닌 설정 경로는 거부한다.
+- OPC가 만든 `/run/systemd/timesyncd.conf.d/opc-ntp.conf`와 다른 drop-in,
+  networkd/DHCP가 제공한 서버는 기존 소유자가 관리한다. 이 명령은 해당 값을
+  삭제하지 않는다. 이 값들이 장치 기본 서버를 덮어쓰거나 추가할 수 있으므로
+  `apply` 뒤에도 `SERVER`를 확인한다. 설정 우선순위는
+  [systemd timesyncd.conf 규격](https://www.freedesktop.org/software/systemd/man/latest/timesyncd.conf.html)을 따른다.
+- `apply`는 inactive인 유닛도 기동할 수 있다. 유닛 enable 여부와
+  `wifi_init_conf.json`의 `global.ntp.enabled`는 바꾸지 않는다. 이후 서비스 조정은
+  기존 설정을 따른다. 재시작 성공은 NTP 서버 응답이나 동기화 완료를 보장하지 않는다.
+- FTP 실행 환경에서 PID 1의 private bus 연결이 실패하는 경우를 위해
+  systemctl 자식에 `SYSTEMCTL_FORCE_BUS=1`을 지정해 인증되는 public system bus를
+  사용한다. systemd 254에서 검증했으며 이 변수의 지원 범위는
+  [upstream 환경변수 문서](https://github.com/systemd/systemd/blob/994c7978608a0bd9b317f4f74ff266dd50a3e74e/docs/ENVIRONMENT.md)를 따른다.
+- 잘못된 인자는 코드 `2`, 파일·재시작 오류는 `1`, 내부 20초 재시작 제한 시간
+  초과는 `124`다. 제한 시간이 지나도 systemd 작업은 완료될 수 있으므로 상태를 다시 조회한다.
+
+~~~text
+ftp> quote wntp ip 192.168.0.3
+200 SUCCESS NTP=192.168.0.3; run wntp apply
+ftp> quote wntp apply
+200 SUCCESS restarted systemd-timesyncd; synchronization not confirmed
+ftp> quote wntp
+200 SERVICE=active ENABLED=enabled SYNC=yes CONFIG=192.168.0.3 SERVER=192.168.0.3
+~~~
+
+### 1.4 wtime: 밀리초 시각 조회·수동 설정
+
+| 호출 | 동작 | 성공 본문 |
+| --- | --- | --- |
+| `quote wtime` | 장치 현지 시각 조회 | `TIME=YYYY-MM-DD HH:MM:SS.mmm OFFSET=+0900` |
+| `quote wtime sync YYYY-MM-DD HH:MM:SS[.mmm]` | 현지 시각을 수동 설정·저장 | `SUCCESS TIME=<현재 시각> OFFSET=<UTC 오프셋>; NTP unchanged` |
+
+- 날짜와 시각을 공백으로 구분하며 따옴표를 보내지 않는다. 소수부는 생략하거나
+  1~3자리로 지정한다. `.1`은 100ms, `.123`은 123ms다. 조회는 항상 소수 3자리다.
+  별도 시간대 인자는 없으며 장치의 현지 시간대를 사용한다.
+- 달력 날짜·시각·인자 개수를 검증한 뒤 기존
+  `/usr/local/scripts/fake-hwclock.sh set`에 소수부를 포함한 시각을 한 인자로
+  전달한다. 이 경로가 시스템 시각 설정, 영속 상태 저장, RTC 쓰기 시도를 담당한다.
+  영속 상태 파일과 RTC는 기존의 초 단위 정밀도를 유지한다.
+- NTP 설정과 서비스 상태는 바꾸지 않는다. NTP가 활성화되어 있으면 이후
+  서버 기준으로 다시 보정될 수 있다. FTP 전송·명령 실행 지연은 자동 보상하지
+  않으므로 입력의 밀리초 정밀도가 원격 기준 시계와 1ms 이내의 동기화를 보장하지 않는다.
+- 인자·날짜 오류는 코드 `2`, 시간 설정·저장 오류는 `1`, 내부 20초 제한 시간
+  초과는 `124`다. 설정 후 저장 실패나 제한 시간 초과가 발생하면 시각은 이미
+  변경되었을 수 있으므로 다시 조회한다. RTC 쓰기는 기존 helper와 같이 best-effort다.
+
+~~~text
+ftp> quote wtime
+200 TIME=2026-10-29 16:30:00.123 OFFSET=+0900
+ftp> quote wtime sync 2026-10-29 16:30:00.123
+200 SUCCESS TIME=2026-10-29 16:30:00.125 OFFSET=+0900; NTP unchanged
+~~~
+
+위 시각과 offset은 응답 형식 예시다. 설정 응답의 `TIME`은 명령 완료 뒤 실제 조회한 시각이다.
 
 ## 2. 무선 명령 요약
 
@@ -465,6 +570,31 @@ FTP 연결이 끊길 수 있다.
 
 ## 6. 로그와 시간 측정
 
+### 공통 처리 시작 로그
+
+0.7.13부터 모든 커스텀 핸들러는 인자 검사 전에 명령명과 보드의 처리 시작
+시각을 기록한다. 시각에는 밀리초와 현지 UTC 오프셋이 포함된다.
+
+~~~text
+ftpcmd_start command=wconnectraw time=2026-10-29T17:45:41.279+09:00
+~~~
+
+`local0.info`를 사용하며 패키지의 rsyslog 설정에서는
+`/var/log/cantops/logger.log`에 저장된다. `wifcup`처럼 다른 핸들러로 위임하는
+명령도 입력한 명령명으로 한 건만 기록한다. PSK·SSID 등 입력 인자는 이 이벤트에
+포함하지 않으며, 로그 기록 실패는 FTP 응답이나 종료 코드를 바꾸지 않는다.
+
+이는 PC에서 입력한 시각이나 정확한 패킷 수신 시각이 아니다. 실행된 핸들러가
+인자를 거부해도 시작 로그는 남지만, 미등록 명령이나 문자 제한 위반 등으로
+vsftpd가 핸들러 실행 전에 거부한 입력은 기록되지 않는다. `wtime sync`의 시작
+시각은 시계를 변경하기 전에 기록하므로 변경 후 로그와 시각 순서가 다를 수 있다.
+
+~~~sh
+tail -f /var/log/cantops/logger.log | grep ftpcmd_start
+~~~
+
+### 연결 단계와 결과 로그
+
 `wconnect`는 같은 `trace`로 누적 시간과 실패 상세를 기록한다.
 
 ~~~text
@@ -474,7 +604,7 @@ ftpcmd_result trace=<id> command=wconnect status=fail code=<N> iface=<iface> det
 
 | phase | 의미 |
 | --- | --- |
-| `dispatch_received`, `arguments_parsed`, `connect_invoked` | FTP 수신, 인자 분석, `wifi connect` 호출 |
+| `dispatch_received`, `arguments_parsed`, `connect_invoked` | 핸들러 진입, 인자 분석, `wifi connect` 호출 |
 | `wifi_connect_entered` | `wifi.sh`의 연결 분기 진입 |
 | `reconfigure_requested`, `scan_requested`, `scan_unavailable` | 프로필 적용과 필요한 스캔 요청 |
 | `cache_connect_requested` | SSID만 메모리에서 바꾸고 최근 스캔 결과로 `reassociate` 요청 |

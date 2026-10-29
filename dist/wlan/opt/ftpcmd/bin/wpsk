@@ -4,6 +4,8 @@
 #   quote wpsk <mlan0|mlan1|0|1> --stage <passphrase words...>
 set -u
 
+/usr/bin/python3 "$(dirname "$0")/../lib/ftpcmd_log.py" wpsk >/dev/null 2>&1 || true
+
 WIFI=/usr/local/bin/wifi
 
 wpsk_log_failure() {

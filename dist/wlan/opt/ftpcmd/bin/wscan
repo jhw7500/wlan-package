@@ -3,6 +3,8 @@
 #   quote wscan <mlan0|mlan1|0|1> <ssid words...>
 set -u
 
+/usr/bin/python3 "$(dirname "$0")/../lib/ftpcmd_log.py" wscan >/dev/null 2>&1 || true
+
 WIFI=/usr/local/bin/wifi
 CONFIG_LIB=/usr/local/scripts/wifi_init_config_lib.sh
 WPA_CONF_DIR=/etc/wpa_supplicant

@@ -8,6 +8,8 @@
 # and request were submitted, not that association or save has finished.
 set -u
 
+/usr/bin/python3 "$(dirname "$0")/../lib/ftpcmd_log.py" wconnectraw >/dev/null 2>&1 || true
+
 WPA_CLI=/usr/sbin/wpa_cli
 WPA_CONF_DIR=${WPA_CONF_DIR:-/etc/wpa_supplicant}
 RAW_COMMIT_HELPER=${WIFI_RAW_COMMIT_HELPER:-/usr/local/scripts/wifi_raw_commit.py}
