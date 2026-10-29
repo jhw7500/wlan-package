@@ -21,6 +21,13 @@ NETWORK_END = re.compile(rb"^[ \t]*\}")
 SSID_LINE = re.compile(rb"^([ \t]*)ssid[ \t]*=")
 COMMENTED_SSID = re.compile(rb"^[ \t]*#[ \t]*ssid[ \t]*=")
 FREQUENCY_LINE = re.compile(rb"^[ \t]*(freq_list|scan_freq)[ \t]*=[ \t]*(.*)$")
+AUTH_LINE = re.compile(
+    rb"^[ \t]*(key_mgmt|psk|proto|pairwise|group|auth_alg|ieee80211w|wep_key[0-3])"
+    rb"[ \t]*=[ \t]*(.*)$")
+QUOTED_PSK = re.compile(rb'"(?:[^"\\]|\\.){8,63}"\Z')
+RAW_PSK = re.compile(rb"[0-9A-Fa-f]{64}\Z")
+TOKEN_AUTH_FIELDS = (b"key_mgmt", b"proto", b"pairwise", b"group", b"auth_alg")
+SECURITY_FIELDS = (b"proto", b"pairwise", b"group", b"auth_alg", b"ieee80211w")
 
 
 def log_result(trace, iface, result, reason=""):
@@ -36,7 +43,11 @@ class WpaCliFailure(Exception):
     """A control-interface failure, distinct from an unmatched association."""
 
 
-def wpa_call(wpa_cli, iface, *args):
+class AuthenticationUnverifiable(Exception):
+    """The live authentication value cannot safely prove persistence."""
+
+
+def wpa_call(wpa_cli, iface, *args, allow_fail=False):
     try:
         result = subprocess.run(
             [wpa_cli, "-i", iface, *args], capture_output=True, text=True,
@@ -47,7 +58,8 @@ def wpa_call(wpa_cli, iface, *args):
     except OSError as error:
         raise WpaCliFailure("wpa_cli_error") from error
     output = result.stdout.strip()
-    if result.returncode != 0 or output == "FAIL" or output.startswith("Failed to connect"):
+    if (result.returncode != 0 or (output == "FAIL" and not allow_fail)
+            or output.startswith("Failed to connect")):
         raise WpaCliFailure("wpa_cli_error")
     return output
 
@@ -144,6 +156,83 @@ def single_network_profile(content, ssid):
     else:
         lines.insert(close_index, b'    ssid="' + ssid.encode("ascii") + b'"' + newline)
     return b"".join(lines)
+
+
+def stored_authentication(content):
+    """Return the explicit authentication fields from one stored network."""
+    in_network = False
+    fields = {}
+    for line in content.splitlines():
+        if line.lstrip().startswith(b"#"):
+            continue
+        if NETWORK_START.match(line):
+            in_network = True
+            continue
+        if in_network and NETWORK_END.match(line):
+            break
+        if not in_network:
+            continue
+        setting = AUTH_LINE.match(line)
+        if setting is None:
+            continue
+        name, value = setting.groups()
+        value = value.strip()
+        if name in fields or not value:
+            raise ValueError("authentication_unverifiable")
+        fields[name] = value
+    if any(name.startswith(b"wep_key") for name in fields):
+        raise ValueError("authentication_unverifiable")
+    if fields.get(b"key_mgmt") == b"NONE" and b"psk" not in fields:
+        return "open", fields
+    psk = fields.get(b"psk", b"")
+    if (fields.get(b"key_mgmt") == b"WPA-PSK"
+            and (QUOTED_PSK.fullmatch(psk) or RAW_PSK.fullmatch(psk))):
+        return "psk", fields
+    raise ValueError("authentication_unverifiable")
+
+
+def normalized_auth_value(name, value):
+    encoded = value.encode("ascii", "strict") if isinstance(value, str) else value
+    if name not in TOKEN_AUTH_FIELDS:
+        return encoded
+    tokens = encoded.split()
+    if not tokens or len(tokens) != len(set(tokens)):
+        raise AuthenticationUnverifiable
+    return tuple(sorted(tokens))
+
+
+def normalized_psk(value):
+    encoded = value.encode("ascii", "strict") if isinstance(value, str) else value
+    return encoded.lower() if RAW_PSK.fullmatch(encoded) else encoded
+
+
+def authentication_matches(wpa_cli, iface, network_id, stored):
+    mode, fields = stored
+    live_key_mgmt = wpa_call(wpa_cli, iface, "get_network", network_id, "key_mgmt")
+    if normalized_auth_value(b"key_mgmt", live_key_mgmt) != normalized_auth_value(
+            b"key_mgmt", fields[b"key_mgmt"]):
+        return False
+    if mode == "psk":
+        live_psk = wpa_call(wpa_cli, iface, "get_network", network_id, "psk")
+        if live_psk == "*":
+            raise AuthenticationUnverifiable
+        if normalized_psk(live_psk) != normalized_psk(fields[b"psk"]):
+            return False
+    else:
+        for index in range(4):
+            if wpa_call(
+                    wpa_cli, iface, "get_network", network_id, f"wep_key{index}",
+                    allow_fail=True) != "FAIL":
+                return False
+    for name in SECURITY_FIELDS:
+        if name not in fields:
+            continue
+        live_value = wpa_call(
+            wpa_cli, iface, "get_network", network_id, name.decode("ascii"))
+        if normalized_auth_value(name, live_value) != normalized_auth_value(
+                name, fields[name]):
+            return False
+    return True
 
 
 def topology_supported(run_dir, iface):
@@ -280,6 +369,26 @@ def commit(iface, network_id, ssid, expected_sha, trace, old_bssid,
                     updated = single_network_profile(content, ssid)
                 except ValueError:
                     log_result(trace, iface, "skipped", "mode_or_topology")
+                    return 6
+                try:
+                    stored_auth = stored_authentication(content)
+                except ValueError:
+                    log_result(trace, iface, "skipped", "authentication_unverifiable")
+                    return 6
+                try:
+                    auth_matches = authentication_matches(
+                        wpa_cli, iface, network_id, stored_auth)
+                    last_control_error = None
+                except AuthenticationUnverifiable:
+                    log_result(trace, iface, "skipped", "authentication_unverifiable")
+                    return 6
+                except (UnicodeError, WpaCliFailure) as error:
+                    last_control_error = (
+                        str(error) if isinstance(error, WpaCliFailure) else
+                        "authentication_unverifiable")
+                    continue
+                if not auth_matches:
+                    log_result(trace, iface, "skipped", "authentication_mismatch")
                     return 6
                 marker = None
                 if iface == "mlan0":

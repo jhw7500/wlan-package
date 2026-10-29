@@ -13,6 +13,7 @@ import pytest
 
 
 FTPCMD = Path(__file__).resolve().parents[4] / "opt/ftpcmd"
+NATIVE_LOGGER_SOURCE = FTPCMD / "lib/ftpcmd_start_log.c"
 COMMANDS = (
     "getifstate", "ifcdown", "ifcup", "rst", "wconnect", "wconnectraw",
     "wfreq", "wgetifstate", "whelp", "wifcdown", "wifcup", "wntp", "wpsk",
@@ -66,6 +67,58 @@ def syslog(priority, message):
         'import sys\nimport ftpcmd_test_syslog\nsys.modules["syslog"] = ftpcmd_test_syslog\n'
     )
     capture = tmp_path / "events.jsonl"
+    native_transport = tmp_path / "native_transport.c"
+    native_transport.write_text(r'''
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+static void capture_syslog(int priority, const char *format, va_list arguments)
+{
+    const char *capture = getenv("FTPCMD_LOG_CAPTURE");
+    const char *fail = getenv("FTPCMD_LOG_FAIL");
+    char message[256];
+    FILE *output;
+
+    if (capture == NULL || (fail != NULL && fail[0] == '1')) {
+        return;
+    }
+    if (vsnprintf(message, sizeof(message), format, arguments) < 0) {
+        return;
+    }
+    output = fopen(capture, "a");
+    if (output == NULL) {
+        return;
+    }
+    (void)fprintf(output, "[%d, \"%s\"]\n", priority, message);
+    (void)fclose(output);
+}
+
+void __wrap_syslog(int priority, const char *format, ...)
+{
+    va_list arguments;
+
+    va_start(arguments, format);
+    capture_syslog(priority, format, arguments);
+    va_end(arguments);
+}
+
+void __wrap___syslog_chk(int priority, int flag, const char *format, ...)
+{
+    va_list arguments;
+
+    (void)flag;
+    va_start(arguments, format);
+    capture_syslog(priority, format, arguments);
+    va_end(arguments);
+}
+''')
+    subprocess.run([
+        "cc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+        "-Wl,--wrap=syslog", "-Wl,--wrap=__syslog_chk",
+        str(NATIVE_LOGGER_SOURCE), str(native_transport),
+        "-o", str(root / "lib/ftpcmd_start_log"),
+    ], check=True, capture_output=True, text=True)
     env = {key: value for key, value in os.environ.items()
            if key not in ("FTPCMD_LOCAL_ADDR", "FTPCMD_START_LOGGED_FOR")}
     env.update({
@@ -132,6 +185,97 @@ def test_start_event_never_contains_secret_arguments(installed):
     assert_start(events, "wpsk")
     assert "PrivatePass123" not in json.dumps(events)
     assert "--stage" not in json.dumps(events)
+
+
+def test_shell_entry_logs_without_starting_python(installed):
+    root, _, run = installed
+    (root / "lib/ftpcmd_log.py").unlink()
+
+    result, events = run("wscan", "invalid/interface")
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert_start(events, "wscan")
+
+
+def test_shell_entry_does_not_spawn_a_path_resolution_tool(installed):
+    root, _, run = installed
+    dirname = root.parent / "stubs/dirname"
+    dirname.write_text("#!/bin/sh\nexit 91\n")
+    dirname.chmod(0o755)
+
+    result, events = run("wscan", "invalid/interface")
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert_start(events, "wscan")
+
+
+@pytest.mark.parametrize("timezone,offset", (
+    ("UTC", "+00:00"),
+    ("Asia/Seoul", "+09:00"),
+    ("Asia/Kathmandu", "+05:45"),
+    ("XXX-9:30:45", "+09:30:45"),
+))
+def test_native_start_event_uses_local_utc_offset(installed, timezone, offset):
+    root, capture, _ = installed
+    before = time.time()
+    result = subprocess.run(
+        [str(root / "lib/ftpcmd_start_log"), "wscan"],
+        capture_output=True, text=True, timeout=5,
+        env={**os.environ, "TZ": timezone, "FTPCMD_LOG_CAPTURE": str(capture)},
+    )
+    after = time.time()
+
+    assert result.returncode == 0
+    assert result.stdout == result.stderr == ""
+    events = [json.loads(line) for line in capture.read_text().splitlines()]
+    assert len(events) == 1
+    priority, message = events[0]
+    assert priority == 134
+    match = re.fullmatch(
+        r"ftpcmd_start command=wscan time=(.+" + re.escape(offset) + r")", message,
+    )
+    assert match, message
+    timestamp = datetime.datetime.fromisoformat(match[1]).timestamp()
+    assert before - 0.001 <= timestamp <= after
+
+
+@pytest.mark.parametrize("arguments", (
+    (),
+    ("wscan", "unexpected"),
+    ("",),
+    ("bad/name",),
+    ("PrivatePass123!",),
+    ("명령",),
+    ("a" * 65,),
+))
+def test_native_logger_rejects_invalid_command_quietly(installed, arguments):
+    root, capture, _ = installed
+    result = subprocess.run(
+        [str(root / "lib/ftpcmd_start_log"), *arguments],
+        capture_output=True, text=True, timeout=5,
+        env={**os.environ, "FTPCMD_LOG_CAPTURE": str(capture)},
+    )
+
+    assert result.returncode == 2
+    assert result.stdout == result.stderr == ""
+    assert not capture.exists()
+
+
+def test_native_logger_accepts_full_ascii_command_boundary(installed):
+    root, capture, _ = installed
+    command = "A_b-" + "9" * 60
+    result = subprocess.run(
+        [str(root / "lib/ftpcmd_start_log"), command],
+        capture_output=True, text=True, timeout=5,
+        env={**os.environ, "TZ": "UTC", "FTPCMD_LOG_CAPTURE": str(capture)},
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == result.stderr == ""
+    events = [json.loads(line) for line in capture.read_text().splitlines()]
+    assert len(events) == 1
+    assert events[0][0] == 134
+    assert events[0][1].startswith(f"ftpcmd_start command={command} time=")
 
 
 @pytest.mark.parametrize("name,args,first_line", (

@@ -85,7 +85,9 @@ dist/wlan/opt/ftpcmd/bin/wscan
 dist/wlan/opt/ftpcmd/bin/wssid
 dist/wlan/opt/ftpcmd/bin/wstatus
 dist/wlan/opt/ftpcmd/bin/wtime
+dist/wlan/opt/ftpcmd/lib/Makefile
 dist/wlan/opt/ftpcmd/lib/ftpcmd_log.py
+dist/wlan/opt/ftpcmd/lib/ftpcmd_start_log.c
 dist/wlan/opt/wlan/bin/README
 dist/wlan/opt/wlan/bin/README_MLAN
 dist/wlan/opt/wlan/bin/README_RBC

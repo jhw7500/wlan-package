@@ -443,6 +443,10 @@ quote wconnectraw <mlan0|mlan1|0|1> [--save|--no-save] [--] <ssid words...>
 실행한다. FTP 핸들러도 이 명령을 호출하며 검증·무선 명령·비동기 저장 경로를
 공유한다. 일반 `wifi connect`의 설정 재적재·사전 스캔·연결 대기는 수행하지 않는다.
 
+FTP 제어 연결이 대상 무선 인터페이스를 사용하면 코드 `3`으로 거절한다.
+이 검사는 무선 변경과 저장 요청 게시 전에 수행한다. 유선 또는 다른 무선
+인터페이스를 통한 관리 연결에서 전환을 요청해야 한다.
+
 SSID는 필수이며 1~32바이트, FTP 디스패처의 허용 문자여야 한다.
 현재 선택된 `network` ID가 없으면 유일하게 활성화된
 `network`를 찾는다. `wpa_cli set_network <id> ssid ...`, `wpa_cli disconnect`,
@@ -471,6 +475,18 @@ checker는 이 보호 구간(기본 20초) 동안 자동 재연결을 시작하�
 저장 프로필이 바뀌지 않았을 때만 SSID 행을 원자적으로 저장한다.
 저장 파일의 전역·`network` `freq_list` 또는 기존 `scan_freq`가 현재 연결
 주파수를 제외하면 저장하지 않고 `frequency_outside_profile`을 기록한다.
+저장 직전에는 현재 `network`의 키 관리 방식·PSK와 저장 프로필에 명시한
+보안 제약도 비교한다. 불일치하면 `authentication_mismatch`, 지원하지 않는
+인증 방식이나 마스킹된 값 등으로 확인할 수 없으면
+`authentication_unverifiable`을 기록하고 파일과 OPC 복원 표식을 보존한다.
+저장은 명시적 `key_mgmt=WPA-PSK`와 확인 가능한 PSK 또는 WEP 키가 없는
+명시적 `key_mgmt=NONE` 프로필에서만 지원한다. 생략된 키 관리 방식이나
+Enterprise·SAE·WEP 등 확인 범위 밖의 인증은 저장하지 않는다.
+인증 정보는 로그에 남기지 않는다. 이 검사는 비동기 저장 작업 안에서
+수행하므로 원래 명령의 응답을 연결·인증 확인까지 기다리게 하지 않는다.
+`wconnect --no-save`로 PSK를 런타임에서만 바꾼 뒤 raw 저장을 요청해도
+새 SSID와 이전 PSK를 함께 확정하지 않는다. 새 PSK까지 영구 저장하는
+전환에는 처음부터 `wpsk --stage`와 일반 `wconnect --save` 경로를 사용한다.
 PSK와 주파수 설정은 바꾸지 않는다. `mlan0`의 영구 SSID 변경이면 OPC의
 이전 ESSID 복원 표식도 제거한다. 완료 여부는 `quote wstatus <iface>`로
 현재 연결을, `quote wssid <iface>`로 저장된 SSID를 각각 조회한다.
@@ -543,6 +559,7 @@ vsftpd가 핸들러를 30초에 강제 종료하면 `550 Command timed out: <com
 | `wstatus` | `8` | 상태 조회는 성공했으나 현재 연결되지 않음 |
 | `wconnectraw` | `1` | 상태·프로필 조회 실패, 인터페이스 비활성(`INTERFACE_DISABLED`), 저장 작업 실행 환경 오류, 또는 사용할 `network`를 결정할 수 없음 |
 | `wconnectraw` | `2` | 필수 인터페이스 누락·오류, 저장 옵션 오류 또는 SSID 누락·검증 실패 |
+| `wconnectraw` | `3` | 대상 인터페이스가 FTP 제어 연결을 운반하여 무선 변경 전에 거부 |
 | `wconnectraw` | `7` | `set_network`, `disconnect` 또는 `reassociate` 명령 실패. `set_network` 실패면 현재 연결은 그대로이고, 그 뒤 단계 실패면 연결이 끊긴 채 남을 수 있다 |
 | `wconnectraw` | `9` | 무선 명령 제출 후 저장 요청 파일 게시 실패. 연결은 전환될 수 있지만 파일은 이전 상태 |
 
@@ -617,6 +634,11 @@ ftpcmd_start command=wconnectraw time=2026-10-29T17:45:41.279+09:00
 `/var/log/cantops/logger.log`에 저장된다. `wifcup`처럼 다른 핸들러로 위임하는
 명령도 입력한 명령명으로 한 건만 기록한다. PSK·SSID 등 입력 인자는 이 이벤트에
 포함하지 않으며, 로그 기록 실패는 FTP 응답이나 종료 코드를 바꾸지 않는다.
+
+0.7.15부터 셸 핸들러는 패키지에 포함된 `ftpcmd_start_log` C 헬퍼를 사용한다.
+시작 로그만을 위해 Python 인터프리터와 모듈을 새로 기동하지 않는다. Python
+핸들러는 기존 프로세스의 로깅 함수를 사용하며 이벤트 형식과 기록 순서는 같다.
+배포 시에는 이 헬퍼를 포함한 패키지 전체를 설치한다.
 
 이는 PC에서 입력한 시각이나 정확한 패킷 수신 시각이 아니다. 실행된 핸들러가
 인자를 거부해도 시작 로그는 남지만, 미등록 명령이나 문자 제한 위반 등으로

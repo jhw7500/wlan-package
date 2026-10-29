@@ -196,6 +196,7 @@ generated_wbridge_names = {
     "usr/local/wlan-bridge/debug/wbridge-tpacket_imx93",
 }
 generated_runtime_names = generated_wbridge_names | {
+    "opt/ftpcmd/lib/ftpcmd_start_log",
     "usr/local/opc/bin/opcd",
     "usr/local/opc/bin/vhlctl",
     "usr/local/vhl_daemon/vhld",
@@ -444,6 +445,7 @@ expected = {
 }
 expected.discard("DEBIAN/payload-manifest.txt")
 generated_names = {
+    "opt/ftpcmd/lib/ftpcmd_start_log",
     "usr/local/wlan-bridge/wbridge/wbridge",
     "usr/local/wlan-bridge/wbridge/wbridge-tpacket",
     "usr/local/wlan-bridge/wbridge/wbridge_imx8",
@@ -565,6 +567,7 @@ import tarfile
 from pathlib import Path
 
 runtime = {
+    "opt/ftpcmd/lib/ftpcmd_start_log",
     "usr/local/opc/bin/opcd",
     "usr/local/opc/bin/vhlctl",
     "usr/local/vhl_daemon/vhld",

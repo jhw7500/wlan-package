@@ -220,6 +220,7 @@ make_tree() {
         chmod 0755 "$PKG/$rel"
     done
     for rel in \
+        opt/ftpcmd/lib/ftpcmd_start_log \
         usr/local/opc/bin/opcd \
         usr/local/opc/bin/vhlctl \
         usr/local/vhl_daemon/vhld \
@@ -253,6 +254,58 @@ build() {
 make_tree
 build "$WORK/good.deb"
 validate_pkg "$WORK/good.deb" >/dev/null
+
+make_tree
+rm "$PKG/opt/ftpcmd/lib/ftpcmd_start_log"
+build "$WORK/missing-ftpcmd-start-log.deb"
+missing_start_log_err="$WORK/missing-ftpcmd-start-log.err"
+if validate_pkg "$WORK/missing-ftpcmd-start-log.deb" \
+    >/dev/null 2>"$missing_start_log_err"; then
+    echo "FAIL: package without ftpcmd_start_log runtime binary accepted" >&2
+    exit 1
+fi
+if ! grep -Fxq \
+    'release gate: runtime binary is missing/empty/non-regular: opt/ftpcmd/lib/ftpcmd_start_log' \
+    "$missing_start_log_err"; then
+    echo "FAIL: missing ftpcmd_start_log rejection did not identify the runtime binary" >&2
+    cat "$missing_start_log_err" >&2
+    exit 1
+fi
+
+make_tree
+printf '\076\000' | dd of="$PKG/opt/ftpcmd/lib/ftpcmd_start_log" \
+    bs=1 seek=18 conv=notrunc status=none
+build "$WORK/wrong-arch-ftpcmd-start-log.deb"
+wrong_arch_start_log_err="$WORK/wrong-arch-ftpcmd-start-log.err"
+if validate_pkg "$WORK/wrong-arch-ftpcmd-start-log.deb" \
+    >/dev/null 2>"$wrong_arch_start_log_err"; then
+    echo "FAIL: non-AArch64 ftpcmd_start_log runtime binary accepted" >&2
+    exit 1
+fi
+if ! grep -Fxq \
+    'release gate: runtime binary is not AArch64: opt/ftpcmd/lib/ftpcmd_start_log' \
+    "$wrong_arch_start_log_err"; then
+    echo "FAIL: ftpcmd_start_log architecture rejection did not identify the runtime binary" >&2
+    cat "$wrong_arch_start_log_err" >&2
+    exit 1
+fi
+
+make_tree
+chmod 0644 "$PKG/opt/ftpcmd/lib/ftpcmd_start_log"
+build "$WORK/nonexec-ftpcmd-start-log.deb"
+nonexec_start_log_err="$WORK/nonexec-ftpcmd-start-log.err"
+if validate_pkg "$WORK/nonexec-ftpcmd-start-log.deb" \
+    >/dev/null 2>"$nonexec_start_log_err"; then
+    echo "FAIL: non-executable ftpcmd_start_log runtime binary accepted" >&2
+    exit 1
+fi
+if ! grep -Fxq \
+    'release gate: runtime binary is not executable: opt/ftpcmd/lib/ftpcmd_start_log' \
+    "$nonexec_start_log_err"; then
+    echo "FAIL: ftpcmd_start_log mode rejection did not identify the runtime binary" >&2
+    cat "$nonexec_start_log_err" >&2
+    exit 1
+fi
 
 # wlan-proc does not own the product image's web server.  A future Factory
 # Reset change must not enable, disable, mask, or otherwise manage nginx.

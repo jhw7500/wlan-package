@@ -11,9 +11,30 @@ if IFS=' .' read -r _raw_sec _raw_centi _raw_rest < /proc/uptime; then
             ;;
     esac
 fi
-/usr/bin/python3 "$(dirname "$0")/../lib/ftpcmd_log.py" wconnectraw >/dev/null 2>&1 || true
+case "$0" in */*) _ftpcmd_dir=${0%/*} ;; *) _ftpcmd_dir=. ;; esac
+"$_ftpcmd_dir/../lib/ftpcmd_start_log" wconnectraw >/dev/null 2>&1 || true
 
 WIFI=/usr/local/bin/wifi
+case "${1:-}" in
+    mlan0|0) IFACE=mlan0 ;;
+    mlan1|1) IFACE=mlan1 ;;
+    *) IFACE= ;;
+esac
+
+# Refuse to move the WLAN carrying this FTP control session before the shared
+# raw engine can change supplicant state or persistence requests.
+if [ -n "${FTPCMD_LOCAL_ADDR:-}" ] && [ -n "$IFACE" ]; then
+    CTRL_IFACE=$(ip -o addr show 2>/dev/null \
+        | awk -v a="$FTPCMD_LOCAL_ADDR" '$4 ~ "^"a"(/|$)" {print $2; exit}')
+    if [ "$CTRL_IFACE" = "$IFACE" ]; then
+        logger -p local0.err \
+            "ftpcmd_result command=wconnectraw status=fail code=3 iface=$IFACE detail=target interface carries FTP control connection" \
+            >/dev/null 2>&1 || true
+        printf 'FAIL code=3\n'
+        exit 3
+    fi
+fi
+
 IFACE=${1:-}
 [ "$#" -eq 0 ] || shift
 WIFI_CONNECT_RAW_ORIGIN=ftp
