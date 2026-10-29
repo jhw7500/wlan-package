@@ -1,5 +1,5 @@
 Package: wlan-proc
-Version: 0.7.8
+Version: 0.7.9
 Section: net
 Priority: optional
 Architecture: arm64
@@ -63,3 +63,4 @@ Description: WLAN Application
  0.7.6 : 로밍 직후 IPv4 재부여를 기다려 GARP 를 보내고(#234), 유선 패시브 IP 탐색의 대역 밖 주소를 거른다(#417). 업그레이드 때 실행 중인 wifi_event 를 재시작하고 전체 적용을 위한 재부팅 필요를 알린다(#418)
  0.7.7 : FTP quote 에 대상 SSID 지정 스캔(wscan)과 PSK 저장·휘발 준비(wpsk)를 추가한다. wconnect 는 준비한 PSK 로 런타임 전환한 뒤 연결 성공을 확인해 설정을 저장하고, wconnectraw 는 빠른 SSID 전환 후 독립 path/service 가 연결을 확인해 비동기로 SSID 를 저장한다
  0.7.8 : wconnectraw 의 비동기 설정 저장 서비스에서 500ms 고정 대기를 제거해 연결 속도를 유지하면서 저장 지연을 줄인다(#422)
+ 0.7.9 : i.MX8·i.MX93 wpa_supplicant 를 29a017c 로 갱신해 GET_NETWORK 가 PSK·비밀번호·PIN 등 인증 비밀값을 설정 파일 형식으로 반환한다(wpa-supplicant#49)

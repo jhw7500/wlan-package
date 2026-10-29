@@ -3,6 +3,13 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.7.9 (2026-10-29)
+
+> SemVer **patch** — i.MX8·i.MX93의 `wpa_supplicant`를 갱신해 `GET_NETWORK`가 PSK·비밀번호·PIN 등 인증 비밀값을 설정 파일 형식으로 반환한다([wpa-supplicant#49](https://github.com/jhw7500/wpa-supplicant/issues/49)).
+
+- 두 플랫폼 바이너리를 [wpa-supplicant 29a017c](https://github.com/jhw7500/wpa-supplicant/commit/29a017c39ec8b27068bfeecc28b1a3b1fe49e679) 소스로 빌드했다. PSK는 따옴표로 감싼 문자열 또는 64자리 원시 키로 반환되며, 제어 소켓 접근자는 설정된 인증 비밀값을 읽을 수 있다.
+- i.MX93은 실기에서 비밀 필드 조회·실패 응답·설정 보존 등 28개 검사를 통과했고, 서비스 재시작 뒤 무선 연결이 `COMPLETED`로 복구됐다. i.MX8은 SDK 빌드와 AArch64 ELF 검증을 수행했으며 실제 i.MX8 장치에서의 동작은 검증하지 않았다.
+
 ## 0.7.8 (2026-10-29)
 
 > SemVer **patch** — `wconnectraw` 비동기 설정 저장 서비스의 500ms 고정 대기를 제거해 저장 확인을 앞당긴다(#422).
