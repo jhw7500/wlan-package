@@ -1,0 +1,111 @@
+#!/usr/bin/python3
+"""Read-only help that fits the external dispatcher's single-line reply."""
+
+import os
+import sys
+from pathlib import Path
+
+
+HELP = {
+    "getifstate": (
+        "Read interface state (default mlan0). Usage: quote getifstate [interface]. "
+        "Example: quote getifstate eth0"
+    ),
+    "ifcdown": (
+        "Bring an interface down (default mlan0); refuses the FTP control interface. "
+        "Usage: quote ifcdown [interface]. Example: quote ifcdown mlan1"
+    ),
+    "ifcup": (
+        "Bring an interface up (default mlan0). Usage: quote ifcup [interface]. "
+        "Example: quote ifcup mlan1"
+    ),
+    "rst": (
+        "Reboot the whole board. Usage: quote rst. Example: quote rst"
+    ),
+    "wconnect": (
+        "Apply/connect saved settings; staged PSK requires explicit SSID. "
+        "Usage: quote wconnect <iface> [SSID...]. Example: quote wconnect 0 Office AP; "
+        "iface=0|1|mlan0|mlan1"
+    ),
+    "wconnectraw": (
+        "Switch with current credentials; SUCCESS means accepted, not connected/saved; "
+        "check wstatus/wssid. Usage: quote wconnectraw <iface> <SSID...>. "
+        "Example: quote wconnectraw 0 Office AP; iface=0|1|mlan0|mlan1"
+    ),
+    "wfreq": (
+        "Get/set saved MHz/channel list; apply with wconnect. "
+        "Usage: quote wfreq <iface> [MHz/channel...]. "
+        "Example: quote wfreq 0 36 40; iface=0|1|mlan0|mlan1"
+    ),
+    "wgetifstate": (
+        "Read wireless interface state. Usage: quote wgetifstate <iface>. "
+        "Example: quote wgetifstate 0; iface=0|1|mlan0|mlan1"
+    ),
+    "whelp": (
+        "List installed custom commands or show usage and an example. "
+        "Usage: quote whelp [command]. Example: quote whelp wconnect"
+    ),
+    "wifcdown": (
+        "Bring a wireless interface down; refuses the FTP control interface. "
+        "Usage: quote wifcdown <iface>. Example: quote wifcdown 1; "
+        "iface=0|1|mlan0|mlan1"
+    ),
+    "wifcup": (
+        "Bring a wireless interface up. Usage: quote wifcup <iface>. "
+        "Example: quote wifcup 1; iface=0|1|mlan0|mlan1"
+    ),
+    "wntp": (
+        "Read NTP state; ip saves device server, apply restarts (sync not confirmed). "
+        "Usage: quote wntp [apply | ip <IP>]. Example: quote wntp ip 192.168.0.3"
+    ),
+    "wpsk": (
+        "Save PSK, or --stage in RAM; apply with wconnect; staged PSK requires explicit SSID. "
+        "Usage: quote wpsk <iface> [--stage] <passphrase...>. "
+        "Example: quote wpsk 0 --stage ExamplePass123; iface=0|1|mlan0|mlan1"
+    ),
+    "wrst": (
+        "Reboot the whole board; optional iface is only validated. "
+        "Usage: quote wrst [iface]. Example: quote wrst; iface=0|1|mlan0|mlan1"
+    ),
+    "wscan": (
+        "Scan for an SSID; return strongest observed SSID/RSSI/frequency. "
+        "Usage: quote wscan <iface> <SSID...>. Example: quote wscan 0 Office AP; "
+        "iface=0|1|mlan0|mlan1"
+    ),
+    "wssid": (
+        "Get/set saved SSID; apply changes with wconnect. "
+        "Usage: quote wssid <iface> [SSID...]. Example: quote wssid 0 Office AP; "
+        "iface=0|1|mlan0|mlan1"
+    ),
+    "wstatus": (
+        "Read current connected SSID/frequency, not saved settings. "
+        "Usage: quote wstatus <iface>. Example: quote wstatus 0; "
+        "iface=0|1|mlan0|mlan1"
+    ),
+    "wtime": (
+        "Read/set local time with milliseconds; NTP unchanged. "
+        "Usage: quote wtime [sync YYYY-MM-DD HH:MM:SS[.mmm]]. "
+        "Example: quote wtime sync 2026-10-29 16:30:00.123"
+    ),
+}
+
+
+def main():
+    directory = Path(__file__).resolve().parent
+    installed = sorted(
+        name for name in HELP
+        if (directory / name).is_file() and os.access(directory / name, os.X_OK)
+    )
+    args = sys.argv[1:]
+    if not args:
+        print("Commands: " + " ".join(installed) + "; Details: quote whelp <command>")
+        return 0
+    if len(args) == 1 and args[0].lower() in installed:
+        print(HELP[args[0].lower()])
+        return 0
+    print("Usage: quote whelp [installed-command]", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

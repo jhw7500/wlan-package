@@ -1,0 +1,210 @@
+#!/usr/bin/python3
+"""Query timesyncd, save its device server, or explicitly restart it."""
+
+import ipaddress
+import os
+import stat
+import subprocess
+import sys
+import syslog
+import tempfile
+from pathlib import Path
+
+
+CONF = Path("/etc/systemd/timesyncd.conf")
+UNIT = "systemd-timesyncd.service"
+SYSTEMCTL = "/usr/bin/systemctl"
+TIMEDATECTL = "/usr/bin/timedatectl"
+
+
+def command_environment():
+    # FTP's PID namespace can hide PID 1's private-bus peer credentials.
+    # Use systemd's authenticated public bus for systemctl queries/restarts.
+    return {**os.environ, "SYSTEMCTL_FORCE_BUS": "1"}
+
+
+def log(detail):
+    try:
+        syslog.syslog(syslog.LOG_ERR, f"ftpcmd_result command=wntp {detail}")
+    except OSError:
+        pass
+
+
+def fail(code, detail):
+    log(f"status=fail code={code} detail={detail}")
+    print(f"wntp: {detail}", file=sys.stderr)
+    return code
+
+
+def records(text):
+    """Keep original text while joining systemd continuation lines for parsing."""
+    raw, parts = [], []
+    for line in text.splitlines(keepends=True):
+        raw.append(line)
+        value = line.strip()
+        if value.startswith(("#", ";")):
+            if parts:
+                continue
+            yield "".join(raw), ""
+        elif value.endswith("\\"):
+            parts.append(value[:-1])
+            continue
+        else:
+            parts.append(value)
+            yield "".join(raw), " ".join(parts)
+        raw, parts = [], []
+    if raw:
+        yield "".join(raw), " ".join(parts)
+
+
+def configured_servers(text):
+    servers = []
+    in_time = False
+    for _, line in records(text):
+        if line.startswith("[") and line.endswith("]"):
+            in_time = line == "[Time]"
+        elif in_time:
+            key, separator, value = line.partition("=")
+            if separator and key.strip() == "NTP":
+                values = value.split()
+                if values:
+                    servers.extend(values)
+                else:
+                    servers = []
+    return servers
+
+
+def save_server(address):
+    try:
+        info = CONF.lstat()
+    except FileNotFoundError:
+        info, original = None, ""
+    else:
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError("device NTP configuration is not a regular file")
+        original = CONF.read_text(encoding="utf-8")
+
+    output = []
+    in_time = written = False
+    for raw, line in records(original):
+        if line.startswith("[") and line.endswith("]"):
+            in_time = line == "[Time]"
+        key, separator, _ = line.partition("=")
+        if in_time and separator and key.strip() == "NTP":
+            if not written:
+                output.append(f"NTP={address}\n")
+                written = True
+        else:
+            output.append(raw)
+    text = "".join(output)
+    if not written:
+        if text and not text.endswith("\n"):
+            text += "\n"
+        if not in_time:
+            text += "[Time]\n"
+        text += f"NTP={address}\n"
+
+    fd, temporary = tempfile.mkstemp(prefix=".timesyncd-", dir=CONF.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            if info is not None:
+                os.fchown(stream.fileno(), info.st_uid, info.st_gid)
+            os.fchmod(stream.fileno(), stat.S_IMODE(info.st_mode) if info else 0o644)
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, CONF)
+        directory_fd = os.open(CONF.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+
+
+def properties(argv):
+    try:
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=5,
+                                env=command_environment())
+    except (OSError, subprocess.TimeoutExpired) as error:
+        log(f"status=query_unavailable detail={error}")
+        return {}
+    if result.returncode != 0:
+        # The board dispatcher merges child stderr into the first reply line.
+        # Degraded successful queries must therefore log without printing.
+        log(f"status=query_unavailable rc={result.returncode} detail={result.stderr.strip()[:300]}")
+        return {}
+    return dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+
+
+def field(value, limit):
+    value = "".join(char if 0x21 <= ord(char) <= 0x7E else "?" for char in value)
+    return value if len(value) <= limit else value[:limit - 3] + "..."
+
+
+def query():
+    try:
+        saved = configured_servers(CONF.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        saved = []
+    service = properties([SYSTEMCTL, "show", "--no-pager", "--property=ActiveState", "--property=UnitFileState", UNIT])
+    clock = properties([TIMEDATECTL, "show", "--no-pager", "--property=NTPSynchronized"])
+    state = service.get("ActiveState") or "unknown"
+    server = "none" if state in ("inactive", "failed") else "unknown"
+    # timesync1 can be D-Bus activated; do not query a stopped service.
+    if state == "active":
+        sync = properties([TIMEDATECTL, "show-timesync", "--all", "--no-pager", "--property=ServerAddress", "--property=ServerName"])
+        server = sync.get("ServerAddress") or sync.get("ServerName") or "unknown"
+    print(" ".join((
+        "SERVICE=" + field(state, 20),
+        "ENABLED=" + field(service.get("UnitFileState") or "unknown", 20),
+        "SYNC=" + field(clock.get("NTPSynchronized") or "unknown", 7),
+        "CONFIG=" + field(",".join(saved) or "unset", 96),
+        "SERVER=" + field(server, 64),
+    )))
+    return 0
+
+
+def main(args=None):
+    args = sys.argv[1:] if args is None else args
+    if not args:
+        try:
+            return query()
+        except (OSError, UnicodeError) as error:
+            return fail(1, f"configuration read failed: {error}")
+    if len(args) == 2 and args[0] == "ip":
+        try:
+            address = ipaddress.ip_address(args[1])
+            if "%" in args[1] or address.is_unspecified or address.is_multicast or str(address) == "255.255.255.255":
+                raise ValueError("expected a unicast IP literal")
+        except ValueError:
+            return fail(2, "expected a unicast IPv4 or IPv6 literal")
+        try:
+            save_server(str(address))
+        except (OSError, UnicodeError) as error:
+            return fail(1, f"configuration save failed: {error}")
+        print(f"SUCCESS NTP={address}; run wntp apply")
+        return 0
+    if args == ["apply"]:
+        try:
+            result = subprocess.run(
+                [SYSTEMCTL, "--no-ask-password", "restart", UNIT],
+                capture_output=True, text=True, timeout=20, env=command_environment(),
+            )
+        except subprocess.TimeoutExpired:
+            return fail(124, "restart timed out; the systemd job may still complete")
+        except OSError as error:
+            return fail(1, f"restart unavailable: {error}")
+        if result.returncode != 0:
+            return fail(1, f"restart failed rc={result.returncode}")
+        print("SUCCESS restarted systemd-timesyncd; synchronization not confirmed")
+        return 0
+    return fail(2, "Usage: quote wntp [apply | ip <IP>]")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
