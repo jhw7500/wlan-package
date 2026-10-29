@@ -81,14 +81,17 @@ def test_invalid_topics_or_extra_arguments_fail(args):
 
 
 def test_help_uses_its_own_directory_and_never_executes_handlers(tmp_path):
-    helper = tmp_path / "whelp"
+    directory = tmp_path / "bin"
+    directory.mkdir()
+    shutil.copytree(HANDLERS.parent / "lib", tmp_path / "lib")
+    helper = directory / "whelp"
     shutil.copyfile(WHELP, helper)
     helper.chmod(0o755)
     marker = tmp_path / "executed"
-    command = tmp_path / "wstatus"
+    command = directory / "wstatus"
     command.write_text("#!/bin/sh\nprintf executed > '" + str(marker) + "'\n")
     command.chmod(0o755)
-    hidden = tmp_path / "rst"
+    hidden = directory / "rst"
     hidden.write_text("#!/bin/sh\nexit 99\n")
     hidden.chmod(0o644)
 

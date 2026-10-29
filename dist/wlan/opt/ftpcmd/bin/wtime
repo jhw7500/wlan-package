@@ -6,6 +6,10 @@ import re
 import subprocess
 import sys
 import syslog
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+from ftpcmd_log import log_start
 
 
 FAKE_HWCLOCK = "/usr/local/scripts/fake-hwclock.sh"
@@ -26,6 +30,7 @@ def current_time():
 
 
 def main(args=None):
+    log_start("wtime")
     args = sys.argv[1:] if args is None else args
     if not args:
         print(current_time())

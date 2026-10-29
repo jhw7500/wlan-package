@@ -5,6 +5,9 @@ import os
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+from ftpcmd_log import log_start
+
 
 HELP = {
     "getifstate": (
@@ -91,6 +94,7 @@ HELP = {
 
 
 def main():
+    log_start("whelp")
     directory = Path(__file__).resolve().parent
     installed = sorted(
         name for name in HELP

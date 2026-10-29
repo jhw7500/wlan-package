@@ -3,6 +3,8 @@
 #   quote wrst [mlan0|mlan1|0|1]
 set -u
 
+/usr/bin/python3 "$(dirname "$0")/../lib/ftpcmd_log.py" wrst >/dev/null 2>&1 || true
+
 if [ "$#" -gt 1 ]; then
     echo "usage: wrst [mlan0|mlan1|0|1]"
     exit 2
@@ -14,4 +16,5 @@ if [ "$#" -eq 1 ]; then
     esac
 fi
 
+export FTPCMD_START_LOGGED_FOR=rst
 exec "$(dirname "$0")/rst"

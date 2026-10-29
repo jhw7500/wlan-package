@@ -20,6 +20,12 @@
 # patch header before changing anything here.
 set -u
 
+# An alias already recorded its own entry before this delegation.
+if [ "${FTPCMD_START_LOGGED_FOR:-}" != rst ]; then
+    /usr/bin/python3 "$(dirname "$0")/../lib/ftpcmd_log.py" rst >/dev/null 2>&1 || true
+fi
+unset FTPCMD_START_LOGGED_FOR
+
 if [ "$#" -ne 0 ]; then
     echo "usage: rst  (takes no arguments)"
     exit 2

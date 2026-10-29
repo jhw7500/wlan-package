@@ -570,6 +570,31 @@ FTP 연결이 끊길 수 있다.
 
 ## 6. 로그와 시간 측정
 
+### 공통 처리 시작 로그
+
+0.7.13부터 모든 커스텀 핸들러는 인자 검사 전에 명령명과 보드의 처리 시작
+시각을 기록한다. 시각에는 밀리초와 현지 UTC 오프셋이 포함된다.
+
+~~~text
+ftpcmd_start command=wconnectraw time=2026-10-29T17:45:41.279+09:00
+~~~
+
+`local0.info`를 사용하며 패키지의 rsyslog 설정에서는
+`/var/log/cantops/logger.log`에 저장된다. `wifcup`처럼 다른 핸들러로 위임하는
+명령도 입력한 명령명으로 한 건만 기록한다. PSK·SSID 등 입력 인자는 이 이벤트에
+포함하지 않으며, 로그 기록 실패는 FTP 응답이나 종료 코드를 바꾸지 않는다.
+
+이는 PC에서 입력한 시각이나 정확한 패킷 수신 시각이 아니다. 실행된 핸들러가
+인자를 거부해도 시작 로그는 남지만, 미등록 명령이나 문자 제한 위반 등으로
+vsftpd가 핸들러 실행 전에 거부한 입력은 기록되지 않는다. `wtime sync`의 시작
+시각은 시계를 변경하기 전에 기록하므로 변경 후 로그와 시각 순서가 다를 수 있다.
+
+~~~sh
+tail -f /var/log/cantops/logger.log | grep ftpcmd_start
+~~~
+
+### 연결 단계와 결과 로그
+
 `wconnect`는 같은 `trace`로 누적 시간과 실패 상세를 기록한다.
 
 ~~~text
@@ -579,7 +604,7 @@ ftpcmd_result trace=<id> command=wconnect status=fail code=<N> iface=<iface> det
 
 | phase | 의미 |
 | --- | --- |
-| `dispatch_received`, `arguments_parsed`, `connect_invoked` | FTP 수신, 인자 분석, `wifi connect` 호출 |
+| `dispatch_received`, `arguments_parsed`, `connect_invoked` | 핸들러 진입, 인자 분석, `wifi connect` 호출 |
 | `wifi_connect_entered` | `wifi.sh`의 연결 분기 진입 |
 | `reconfigure_requested`, `scan_requested`, `scan_unavailable` | 프로필 적용과 필요한 스캔 요청 |
 | `cache_connect_requested` | SSID만 메모리에서 바꾸고 최근 스캔 결과로 `reassociate` 요청 |

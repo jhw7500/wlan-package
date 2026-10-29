@@ -31,6 +31,26 @@ ftp> quote <명령> [인자...]
 `wconnect`의 결과는 `200 SUCCESS`이며,
 `wconnect` 응답에는 SSID와 주파수를 포함하지 않는다.
 
+## 명령 처리 시작 로그
+
+0.7.13부터 모든 커스텀 명령은 처리 시작 시각을 밀리초와 현지 UTC 오프셋까지
+`/var/log/cantops/logger.log`에 기록한다(패키지 rsyslog 설정 기준).
+
+```text
+ftpcmd_start command=wconnectraw time=2026-10-29T17:45:41.279+09:00
+```
+
+명령명만 기록하며 비밀번호·SSID 등 인자는 포함하지 않는다. 다른 핸들러로
+위임하는 명령도 한 건만 기록한다. 로그 기록 실패는 명령 응답을 바꾸지 않는다.
+시각은 보드의 핸들러 처리 시작 기준이며 PC 입력 시각이나 정확한 패킷 수신
+시각이 아니다. 핸들러의 인자 오류도 기록되지만, vsftpd가 실행 전에 거부한
+미등록 명령이나 입력 제한 위반은 포함되지 않는다. `wtime sync`는 시계 변경
+전의 시작 시각을 남긴다.
+
+```sh
+tail -f /var/log/cantops/logger.log | grep ftpcmd_start
+```
+
 ## 명령 도움말
 
 | 명령 | 결과 |

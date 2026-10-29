@@ -10,6 +10,9 @@ import syslog
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+from ftpcmd_log import log_start
+
 
 CONF = Path("/etc/systemd/timesyncd.conf")
 UNIT = "systemd-timesyncd.service"
@@ -170,6 +173,7 @@ def query():
 
 
 def main(args=None):
+    log_start("wntp")
     args = sys.argv[1:] if args is None else args
     if not args:
         try:

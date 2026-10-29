@@ -75,6 +75,7 @@ opt/ftpcmd/bin/wscan
 opt/ftpcmd/bin/wssid
 opt/ftpcmd/bin/wstatus
 opt/ftpcmd/bin/wtime
+opt/ftpcmd/lib/ftpcmd_log.py
 opt/wlan/bin/README
 opt/wlan/bin/README_MLAN
 opt/wlan/bin/README_RBC
