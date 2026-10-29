@@ -1,7 +1,13 @@
 [Unit]
 Description=Watch WiFi raw switch save requests for %i
-After=wifi_init.service
+# The default Before=paths.target would hold basic.target (and networkd)
+# while wifi_init waits for networkd during cold boot.
+DefaultDependencies=no
+Requires=sysinit.target
+After=sysinit.target wifi_init.service
 PartOf=wifi_init.service
+Conflicts=shutdown.target
+Before=shutdown.target
 
 [Path]
 PathExists=/run/wifi/%i.raw-commit

@@ -208,6 +208,27 @@ class RawCommit(unittest.TestCase):
         self.assertIn("TriggerLimitIntervalSec=30s", path_unit)
         self.assertIn("TriggerLimitBurst=30", path_unit)
 
+    def test_path_does_not_hold_paths_target_until_wifi_init_finishes(self):
+        # systemd gives .path units Before=paths.target unless defaults are off.
+        # Holding paths.target also holds basic.target and networkd at cold boot.
+        path_unit = (UNITS / "wifi_raw_commit@.path").read_text()
+        directives = {}
+        for line in path_unit.splitlines():
+            if line.startswith(("#", "[")) or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            directives.setdefault(key, []).extend(value.split())
+
+        before = set(directives.get("Before", []))
+        if directives.get("DefaultDependencies", ["yes"]) != ["no"]:
+            before.add("paths.target")
+        self.assertNotIn("paths.target", before)
+        self.assertIn("wifi_init.service", directives.get("After", []))
+        self.assertIn("sysinit.target", directives.get("After", []))
+        self.assertIn("sysinit.target", directives.get("Requires", []))
+        self.assertIn("shutdown.target", directives.get("Before", []))
+        self.assertIn("shutdown.target", directives.get("Conflicts", []))
+
     def test_confirmed_target_updates_only_ssid_and_clears_restore_marker(self):
         result = self.run_worker()
         self.assertEqual(result.returncode, 0, result.stderr)
