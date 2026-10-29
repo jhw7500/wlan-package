@@ -22,6 +22,12 @@
 # so this ordering is safe either way.)
 set -u
 
+# An alias already recorded its own entry before this delegation.
+if [ "${FTPCMD_START_LOGGED_FOR:-}" != ifcup ]; then
+    /usr/bin/python3 "$(dirname "$0")/../lib/ftpcmd_log.py" ifcup >/dev/null 2>&1 || true
+fi
+unset FTPCMD_START_LOGGED_FOR
+
 IFACE="${1:-mlan0}"
 
 case "$IFACE" in

@@ -29,6 +29,14 @@ from pathlib import Path
 FTPCMD_DIR = Path(__file__).resolve().parents[4] / "opt" / "ftpcmd" / "bin"
 
 
+def _handler_directory(root):
+    """Keep the installed bin/lib layout when patching isolated handlers."""
+    directory = root / "bin"
+    directory.mkdir(exist_ok=True)
+    shutil.copytree(FTPCMD_DIR.parent / "lib", root / "lib", dirs_exist_ok=True)
+    return directory
+
+
 def _stub_dir(**commands):
     """PATH 앞에 끼울 스텁 디렉터리. 값은 스텁이 실행할 sh 본문."""
     d = Path(tempfile.mkdtemp())
@@ -88,7 +96,7 @@ def run_wconnect(*args, wifi_rc=0, runtime_stage=False, runtime_active=False,
         replacement = f"WIFI={shlex.quote(str(wifi))}\n"
         if source.count(old) != 1:
             raise AssertionError("wconnect WIFI assignment contract changed")
-        handler = root / "wconnect"
+        handler = _handler_directory(root) / "wconnect"
         handler.write_text(source.replace(old, replacement, 1))
         handler.chmod(0o755)
 
@@ -232,7 +240,7 @@ def run_wconnectraw(*args, status_id="7", status_rc=0, set_reply="OK", disconnec
         old = "WIFI=/usr/local/bin/wifi\n"
         if source.count(old) != 1:
             raise AssertionError("wconnectraw WIFI assignment contract changed")
-        handler = root / "wconnectraw"
+        handler = _handler_directory(root) / "wconnectraw"
         handler.write_text(source.replace(old, f"WIFI={shlex.quote(str(wifi))}\n", 1))
         handler.chmod(0o755)
 
@@ -800,7 +808,7 @@ class ProfileHandlerContract(unittest.TestCase):
                 f'PYTHONPATH={shlex.quote(str(FTPCMD_DIR.parents[2] / "usr/local/logger"))}',
                 1,
             )
-        handler = self.root / name
+        handler = _handler_directory(self.root) / name
         handler.write_text(source)
         handler.chmod(0o755)
         self.capture.unlink(missing_ok=True)
@@ -936,6 +944,7 @@ class WirelessInterfaceHandlerContract(unittest.TestCase):
         self.root = Path(self.tempdir.name)
         self.bin = self.root / "bin"
         shutil.copytree(FTPCMD_DIR, self.bin)
+        shutil.copytree(FTPCMD_DIR.parent / "lib", self.root / "lib")
         net = self.root / "net"
         for interface, flags in (("mlan0", "0x1"), ("mlan1", "0x0"), ("eth0", "0x1")):
             (net / interface).mkdir(parents=True)

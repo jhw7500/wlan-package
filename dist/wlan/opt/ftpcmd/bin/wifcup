@@ -3,6 +3,8 @@
 #   quote wifcup <mlan0|mlan1|0|1>
 set -u
 
+/usr/bin/python3 "$(dirname "$0")/../lib/ftpcmd_log.py" wifcup >/dev/null 2>&1 || true
+
 if [ "$#" -ne 1 ]; then
     echo "usage: wifcup <mlan0|mlan1|0|1>"
     exit 2
@@ -13,4 +15,5 @@ case "$1" in
     *) echo "invalid interface: $1"; exit 2 ;;
 esac
 
+export FTPCMD_START_LOGGED_FOR=ifcup
 exec "$(dirname "$0")/ifcup" "$IFACE"
