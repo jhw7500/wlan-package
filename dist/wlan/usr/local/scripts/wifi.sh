@@ -1925,13 +1925,63 @@ band_chans() {
     esac
 }
 
+wifi_info_package_version() {
+    local record state version
+    record=$(dpkg-query -W -f='${db:Status-Abbrev} ${Version}' "$1" 2>/dev/null) || record=""
+    read -r state version <<< "$record"
+    if [ "${state:1:1}" = i ] && [ -n "$version" ]; then
+        printf '%s' "$version"
+    else
+        printf '없음'
+    fi
+}
+
+wifi_info_show_versions() {
+    local iface="$1" mlanutl_bin=/usr/local/bin/mlanutl
+    local mlanutl_version=없음 fw_version=없음 driver_version=없음 output
+
+    [ -x "$mlanutl_bin" ] || mlanutl_bin=$(command -v mlanutl 2>/dev/null || true)
+    if [ -n "$mlanutl_bin" ]; then
+        if output=$("$mlanutl_bin" -v 2>/dev/null); then
+            output=${output%%$'\n'*}
+            case "$output" in
+                'NXP mlanutl version '*) mlanutl_version=${output#NXP mlanutl version } ;;
+            esac
+        fi
+        if output=$("$mlanutl_bin" "$iface" version 2>/dev/null) \
+            && [[ "$output" =~ ([0-9]+\.[0-9]+\.[0-9]+\.p[0-9]+(\.[0-9]+)?) ]]; then
+            fw_version=${BASH_REMATCH[1]}
+        fi
+    fi
+    if [ -r /sys/module/moal/version ]; then
+        driver_version=$(cat /sys/module/moal/version 2>/dev/null) || driver_version=없음
+        [ -n "$driver_version" ] || driver_version=없음
+    fi
+
+    echo "[Versions]"
+    printf '  %-14s %s\n' 'wlan-proc:' "$(wifi_info_package_version wlan-proc)"
+    printf '  %-14s %s\n' 'wifi-manager:' "$(wifi_info_package_version wifi-manager)"
+    printf '  %-14s %s\n' 'WLAN F/W:' "$fw_version"
+    printf '  %-14s %s\n' 'WLAN driver:' "$driver_version"
+    printf '  %-14s %s\n' 'mlanutl:' "$mlanutl_version"
+    echo ""
+}
+
 show_info() {
     local only_iface="${1:-all}"
 
     echo "=========================================================="
     echo "  WLAN System Information & Status"
     echo "=========================================================="
-    
+
+    if [ "$only_iface" != "eth0" ]; then
+        if [ "$only_iface" = "mlan1" ]; then
+            wifi_info_show_versions mlan1
+        else
+            wifi_info_show_versions mlan0
+        fi
+    fi
+
     # 1. Interface Status
     echo "[Network Interfaces]"
     local devs=()

@@ -18,6 +18,12 @@ PYTHON_RUNTIME_ROOTS = [
 ]
 
 
+def _ancestors(node, parents):
+    while node in parents:
+        node = parents[node]
+        yield node
+
+
 def strip_shell_comment(line: str) -> str:
     quote = None
     escaped = False
@@ -68,6 +74,13 @@ def test_python_runtime_literals_are_ascii_english():
             if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
                 continue
             if isinstance(parents.get(node), ast.Expr):
+                continue
+            # Compact curses UI explicitly uses this missing-value marker;
+            # keep logger messages and protocol output ASCII-only.
+            if (path.name == "wifi_link_monitor.py" and node.value == "없음"
+                    and any(isinstance(parent, ast.FunctionDef)
+                            and parent.name == "format_roam_beacon_line"
+                            for parent in _ancestors(node, parents))):
                 continue
             if not ASCII.fullmatch(node.value):
                 failures.append(
