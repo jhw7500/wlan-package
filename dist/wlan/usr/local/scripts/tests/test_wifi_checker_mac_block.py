@@ -3,6 +3,7 @@
 import os
 import signal
 import subprocess
+import time
 from pathlib import Path
 
 
@@ -55,6 +56,18 @@ def prepare_checker(
     executable(fake_bin / "lsmod", "printf 'moal 1 0\\n'\n")
     executable(fake_bin / "dmesg", "printf 'private diagnostic\\n'\n")
     executable(fake_bin / "sync", "exit 0\n")
+    executable(
+        fake_bin / "date",
+        """if [ "$TEST_SCENARIO" = raw-switch-lock-race ] && [ "${1:-}" = +%s ]; then
+    n=0
+    [ ! -f "$DATE_COUNT" ] || n=$(cat "$DATE_COUNT")
+    printf '%s\\n' "$((TEST_EPOCH + n * 5))"
+    printf '%s\\n' "$((n + 1))" > "$DATE_COUNT"
+    exit 0
+fi
+exec /bin/date "$@"
+""",
+    )
     executable(fake_bin / "iw", 'printf "iw %s\\n" "$*" >> "$CALLS"\nexit 1\n')
     executable(fake_bin / "wpa_cli", 'printf "wpa_cli %s\\n" "$*" >> "$CALLS"\nexit 1\n')
     executable(
@@ -69,10 +82,27 @@ if [ "$*" = "show wifi_init.service -p ActiveState -p ExecMainStatus" ]; then
     fi
     exit 0
 fi
+if [ "$TEST_SCENARIO" = raw-switch-lock-race ] \
+   && [ "$1" = is-active ] && [ "$2" = --quiet ]; then
+    exit 0
+fi
 exit 1
 """,
     )
-    executable(fake_bin / "wifi", 'printf "wifi %s\\n" "$*" >> "$EVENTS"\nexit 0\n')
+    executable(
+        fake_bin / "wifi",
+        """printf "wifi %s\\n" "$*" >> "$EVENTS"
+if [ "$TEST_SCENARIO" = raw-switch-lock-race ] && [ "${2:-}" = connect ]; then
+    exec 8>"$WIFI_RUN_DIR/${1}.change.lock" || exit 1
+    flock -n -x 8 || exit 6
+    : > "$CHECKER_LOCKED"
+    while [ ! -e "$RELEASE_CHECKER" ]; do /bin/sleep 0.01; done
+elif [ "$TEST_SCENARIO" = raw-switch-lock-race ] && [ "${2:-}" = connectraw ]; then
+    exec /bin/bash "$REAL_WIFI" "$@"
+fi
+exit 0
+""",
+    )
     executable(
         fake_bin / "sleep",
         """n=0
@@ -81,6 +111,10 @@ n=$((n + 1))
 printf '%s\\n' "$n" > "$SLEEP_COUNT"
 if [ "$TEST_IFACE" = eth0 ]; then
     [ "$n" -lt 2 ] || kill -TERM "$PPID"
+    exit 0
+fi
+if [ "$TEST_SCENARIO" = raw-switch-lock-race ]; then
+    /bin/sleep 0.03
     exit 0
 fi
 if [ "$TEST_SCENARIO" = mid-loop ] && [ "$n" -eq 6 ]; then
@@ -148,6 +182,9 @@ exit 0
     if iface == "eth0":
         (sysfs / "eth0").mkdir(parents=True)
         (sysfs / "eth0/operstate").write_text("up\n", encoding="utf-8")
+    elif scenario == "raw-switch-lock-race":
+        (sysfs / iface).mkdir(parents=True)
+        (sysfs / iface / "operstate").write_text("up\n", encoding="utf-8")
 
     source = (SCRIPTS / "wifi_checker.sh").read_text(encoding="utf-8")
     replacements = {
@@ -177,6 +214,11 @@ exit 0
         "TEST_IFACE": iface,
         "TEST_SCENARIO": scenario,
         "WIFI_LOGGER_COMMAND_LIB": str(logger_lib),
+        "WIFI_RUN_DIR": str(tmp_path / "run"),
+        "DATE_COUNT": str(tmp_path / "date-count"),
+        "TEST_EPOCH": str(int(time.time())),
+        "CHECKER_LOCKED": str(tmp_path / "checker-locked"),
+        "RELEASE_CHECKER": str(tmp_path / "release-checker"),
     }
     proc = subprocess.Popen(
         ["/bin/bash", str(runnable), iface],
@@ -187,6 +229,73 @@ exit 0
         start_new_session=True,
     )
     return proc, events, calls, Path(env["POLICY_MARK"])
+
+
+def run_raw_switch(tmp_path: Path, ssid: str) -> subprocess.CompletedProcess:
+    fake_bin = tmp_path / "bin"
+    sysfs = tmp_path / "net"
+    conf_dir = tmp_path / "wpa"
+    conf_dir.mkdir(exist_ok=True)
+    conf = conf_dir / "wpa_supplicant-mlan0.conf"
+    conf.write_text('network={\n    ssid="old-ap"\n}\n', encoding="utf-8")
+    conf.chmod(0o600)
+
+    executable(tmp_path / "raw-commit", "exit 0\n")
+    product_scripts = tmp_path / "product-scripts"
+    product_scripts.mkdir(exist_ok=True)
+    real_wifi = product_scripts / "wifi.sh"
+    real_wifi.write_text((SCRIPTS / "wifi.sh").read_text(encoding="utf-8"), encoding="utf-8")
+    raw_helper = SCRIPTS / "wifi_connect_raw.sh"
+    if raw_helper.exists():
+        installed_helper = product_scripts / raw_helper.name
+        installed_helper.write_text(
+            raw_helper.read_text(encoding="utf-8").replace(
+                "WPA_CLI=/usr/sbin/wpa_cli", f"WPA_CLI={fake_bin / 'wpa_cli'}"
+            ),
+            encoding="utf-8",
+        )
+        installed_helper.chmod(0o700)
+    executable(
+        fake_bin / "wpa_cli",
+        """case "$*" in
+    *" status")
+        printf 'wpa_state=COMPLETED\\nid=7\\nssid=old-ap\\nbssid=00:11:22:33:44:55\\n'
+        ;;
+    *" set_network "*) printf 'OK\\n' ;;
+    *" disconnect") printf 'down\\n' > "$RAW_OPERSTATE"; printf 'OK\\n' ;;
+    *" reassociate") printf 'OK\\n' ;;
+    *) printf 'FAIL\\n'; exit 1 ;;
+esac
+""",
+    )
+    handler_source = (SCRIPTS.parents[2] / "opt/ftpcmd/bin/wconnectraw").read_text(
+        encoding="utf-8"
+    )
+    handler_source = handler_source.replace(
+        "WPA_CLI=/usr/sbin/wpa_cli", f"WPA_CLI={fake_bin / 'wpa_cli'}"
+    ).replace("WIFI=/usr/local/bin/wifi", f"WIFI={fake_bin / 'wifi'}")
+    handler = tmp_path / "wconnectraw"
+    handler.write_text(handler_source, encoding="utf-8")
+
+    env = os.environ | {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "EVENTS": str(tmp_path / "events"),
+        "TEST_SCENARIO": "raw-switch-lock-race",
+        "WIFI_RUN_DIR": str(tmp_path / "run"),
+        "WPA_CONF_DIR": str(conf_dir),
+        "WIFI_RAW_COMMIT_HELPER": str(tmp_path / "raw-commit"),
+        "RAW_OPERSTATE": str(sysfs / "mlan0/operstate"),
+        "CHECKER_LOCKED": str(tmp_path / "checker-locked"),
+        "RELEASE_CHECKER": str(tmp_path / "release-checker"),
+        "REAL_WIFI": str(real_wifi),
+    }
+    return subprocess.run(
+        ["/bin/sh", str(handler), "0", ssid],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=3,
+    )
 
 
 def finish(proc: subprocess.Popen, timeout: int = 8) -> tuple[str, str]:
@@ -207,6 +316,37 @@ def recovery_actions(calls_path: Path) -> list[str]:
         if line.startswith("systemctl ")
         and " show wifi_init.service " not in f" {line} "
     ]
+
+
+def test_raw_switch_grace_keeps_checker_from_blocking_immediate_retry(tmp_path):
+    proc, _, _, _ = prepare_checker(
+        tmp_path, iface="mlan0", scenario="raw-switch-lock-race"
+    )
+    try:
+        submitted = run_raw_switch(tmp_path, "field-ap")
+        assert submitted.returncode == 0, submitted.stdout + submitted.stderr
+
+        deadline = time.monotonic() + 2
+        checker_locked = tmp_path / "checker-locked"
+        sleep_count = tmp_path / "sleep-count"
+        while time.monotonic() < deadline:
+            ticks = int(sleep_count.read_text()) if sleep_count.exists() else 0
+            if checker_locked.exists() or ticks >= 3:
+                break
+            time.sleep(0.01)
+        else:
+            raise AssertionError("checker did not reach the reconnect decision window")
+
+        retried = run_raw_switch(tmp_path, "field-ap")
+    finally:
+        (tmp_path / "release-checker").touch()
+        os.killpg(proc.pid, signal.SIGTERM)
+        finish(proc)
+
+    assert retried.returncode == 0, (
+        "checker occupied the raw switch change gate during its retry window: "
+        f"stdout={retried.stdout!r} stderr={retried.stderr!r}"
+    )
 
 
 def test_wireless_checker_defers_recovery_until_mac_contract_unblocks(tmp_path):

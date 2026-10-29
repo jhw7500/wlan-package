@@ -66,6 +66,14 @@ def test_raw_help_does_not_claim_connection_or_save_completion():
     assert "wstatus" in text and "wssid" in text
 
 
+@pytest.mark.parametrize("command", ("wconnect", "wconnectraw"))
+def test_connection_help_explains_persistence_selection(command):
+    text = reply(run_help(command))
+    assert "[--save|--no-save]" in text
+    assert "default=--save" in text
+    assert "--no-save=runtime only" in text
+
+
 @pytest.mark.parametrize("command", ("wconnect", "wpsk"))
 def test_staged_psk_help_requires_an_explicit_target_ssid(command):
     text = reply(run_help(command))

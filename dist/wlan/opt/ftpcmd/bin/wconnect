@@ -1,7 +1,7 @@
 #!/bin/sh
 # Reassociate a wifi interface, optionally switching it to another SSID.
 # Reached over FTP as:
-#   quote wconnect <mlan0|mlan1|0|1> [ssid words...]
+#   quote wconnect <mlan0|mlan1|0|1> [--save|--no-save] [--] [ssid words...]
 #
 # NOT named "connect": vsftpd refuses GET/POST/HEAD/OPTIONS/CONNECT as FTP
 # verbs and drops the control connection, and that check runs before the
@@ -9,7 +9,8 @@
 # vsf_extcmd_try).  Those five names are unusable here.
 #
 # The first argument must select mlan0/mlan1 (0/1 are aliases). All remaining
-# FTP arguments form one SSID, joined with spaces, even when a word is
+# FTP arguments after optional save policy/separator form one SSID,
+# joined with spaces, even when a word is
 # numeric. With no SSID, the
 # stored profile is reloaded. Frequencies are not accepted here; stage them
 # with wfreq first.
@@ -18,6 +19,8 @@
 # rewrites only that field in the stored profile, while no SSID reloads the
 # profile as stored. If wpsk staged a runtime credential, the explicit-SSID
 # path tries SSID and PSK in supplicant memory and persists both only on success.
+# --no-save applies only to runtime, including staged credentials; it never
+# rewrites the WPA profile or OPC restore marker. The default is --save.
 #
 # Run by vsftpd's privileged parent, as root, with cwd / and a fixed PATH of
 # /usr/sbin:/usr/bin:/sbin:/bin -- which does NOT contain /usr/local/bin, so
@@ -106,6 +109,31 @@ case "${1:-}" in
 esac
 shift
 
+FTPCMD_SAVE_OPTION=
+FTPCMD_END_OPTIONS=0
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --save|--no-save)
+            if [ -n "$FTPCMD_SAVE_OPTION" ]; then
+                ftpcmd_log_failure 2 "specify only one save option"
+                exit 2
+            fi
+            FTPCMD_SAVE_OPTION=$1
+            shift
+            ;;
+        --)
+            FTPCMD_END_OPTIONS=1
+            shift
+            break
+            ;;
+        --*)
+            ftpcmd_log_failure 2 "unknown option; use -- before an SSID beginning with --"
+            exit 2
+            ;;
+        *) break ;;
+    esac
+done
+
 FTPCMD_HAS_SSID=0
 if [ "$#" -gt 0 ]; then
     FTPCMD_HAS_SSID=1
@@ -149,11 +177,17 @@ if { [ ! -e "$RUNTIME_SWITCH_MARKER" ] && [ ! -L "$RUNTIME_SWITCH_MARKER" ]; } \
     FTPCMD_RUNTIME_PSK=1
 fi
 export FTPCMD_RUNTIME_PSK
-if [ "$FTPCMD_HAS_SSID" -eq 1 ]; then
-    FTPCMD_DETAIL=$(FTPCMD_APPLY_CONF=1 "$WIFI" "$IFACE" connect "$FTPCMD_SSID" 2>&1)
-else
-    FTPCMD_DETAIL=$(FTPCMD_APPLY_CONF=1 "$WIFI" "$IFACE" connect 2>&1)
+set -- "$IFACE" connect
+if [ -n "$FTPCMD_SAVE_OPTION" ]; then
+    set -- "$@" "$FTPCMD_SAVE_OPTION"
 fi
+if [ "$FTPCMD_END_OPTIONS" -eq 1 ]; then
+    set -- "$@" --
+fi
+if [ "$FTPCMD_HAS_SSID" -eq 1 ]; then
+    set -- "$@" "$FTPCMD_SSID"
+fi
+FTPCMD_DETAIL=$(FTPCMD_APPLY_CONF=1 "$WIFI" "$@" 2>&1)
 FTPCMD_RC=$?
 
 [ "$FTPCMD_RC" -eq 0 ] || {

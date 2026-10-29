@@ -24,6 +24,17 @@ COMMANDS = (
 def installed(tmp_path):
     root = tmp_path / "ftpcmd"
     shutil.copytree(FTPCMD, root)
+    # Exercise the shipped raw CLI dispatch with its sibling engine, rather
+    # than relying on a host-installed /usr/local/bin/wifi.
+    scripts = FTPCMD.parents[1] / "usr/local/scripts"
+    for name in ("wifi.sh", "wifi_connect_raw.sh"):
+        shutil.copy2(scripts / name, root / name)
+    raw = root / "bin/wconnectraw"
+    source = raw.read_text()
+    assert source.count("WIFI=/usr/local/bin/wifi\n") == 1
+    raw.write_text(source.replace(
+        "WIFI=/usr/local/bin/wifi\n", f"WIFI={root / 'wifi.sh'}\n", 1,
+    ))
     # The real handlers see a private station interface and inert device tools.
     net = tmp_path / "net"
     (net / "mlan0").mkdir(parents=True)

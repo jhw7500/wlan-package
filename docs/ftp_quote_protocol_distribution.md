@@ -115,9 +115,9 @@ FTP 전달·실행 지연을 자동 보상하지 않으므로 1ms 이내의 원�
 | `wfreq` | `quote wfreq <mlan0\|mlan1\|0\|1> [주파수/채널...]` | 설정 파일의 주파수 조회 | 설정 파일에 주파수 저장 |
 | `wscan` | `quote wscan <mlan0\|mlan1\|0\|1> <SSID...>` | SSID 누락 오류 | 최신 스캔에서 SSID·RSSI·주파수 조회 |
 | `wpsk` | `quote wpsk <mlan0\|mlan1\|0\|1> [--stage] <비밀번호...>` | 비밀번호 누락 오류 | PSK 저장 또는 휘발 저장 |
-| `wconnect` | `quote wconnect <mlan0\|mlan1\|0\|1> [SSID...]` | 저장된 설정으로 연결 | SSID를 저장한 뒤 연결 |
+| `wconnect` | `quote wconnect <mlan0\|mlan1\|0\|1> [--save\|--no-save] [--] [SSID...]` | 저장된 설정으로 연결 | SSID를 저장한 뒤 연결 |
 | `wstatus` | `quote wstatus <mlan0\|mlan1\|0\|1>` | 현재 연결 조회 | 추가 인자 오류 |
-| `wconnectraw` | `quote wconnectraw <mlan0\|mlan1\|0\|1> <SSID...>` | SSID 누락 오류 | 빠른 런타임 전환과 성공 시 비동기 SSID 저장 요청 |
+| `wconnectraw` | `quote wconnectraw <mlan0\|mlan1\|0\|1> [--save\|--no-save] [--] <SSID...>` | SSID 누락 오류 | 빠른 런타임 전환과 성공 시 비동기 SSID 저장 요청 |
 
 `wssid`와 `wfreq`의 설정은 파일에만 저장된다. 저장한 값을 연결에 적용하려면
 `wconnect`를 호출한다. `wstatus`는 저장된 값이 아니라 현재 연결된 SSID와
@@ -243,8 +243,18 @@ OPC의 경쟁 wireless profile/radio helper write도 busy로 거부되지만 Cha
 fallback을 시작하지 않는다. `wconnectraw`, Mode A와 다중 `network` 구성도 대상이 아니며, 다중 프로필의
 선택·복구는 supplicant가 소유한다.
 
-`wconnectraw`의 `200 SUCCESS`는 무선 제어 명령 제출과 `/run/wifi` 저장 요청
-게시의 성공이다. FTP 프로세스 밖의 systemd path/service가 요청을 처리하며,
+`wconnect`·`wconnectraw`는 인터페이스 뒤, SSID 앞에 `--save` 또는 `--no-save`를
+받는다. 기본값은 기존 저장 동작이다. `--no-save`는 conf·OPC 복원 표식을 변경하지
+않고 런타임 연결에만 적용하며, 이전의 미완료 raw 저장 요청도 취소한다. 옵션처럼
+생긴 SSID 앞에는 `--`를 넣는다. 설정 재적재·무선 재시작·재부팅 시 저장 설정이
+다시 적용된다. 보드 셸의 `wifi <iface> connect`·`connectraw`도 같은 옵션을 받는다.
+
+기본 저장 경로에서 `wconnectraw`의 `200 SUCCESS`는 무선 제어 명령 제출과 `/run/wifi` 저장 요청
+게시의 성공이다. 보드 셸의 `wifi <iface> connectraw <SSID...>`와 같은 경로를
+사용한다. 유효한 명령의 수신은 `ftpcmd_raw_timing phase=dispatch_received`로 기록하며,
+무선 변경 전 checker의 자동 재연결 보호 구간(기본 20초)을 갱신한다. 이 구간은
+고정 대기가 아니며, checker가 전환 확인 중 락을 점유해 수동 재시도를 막는 것을 방지한다.
+FTP 프로세스 밖의 systemd path/service가 요청을 처리하며,
 AP 연결 및 저장 완료를 기다리지 않는다. 연결이 확인되면
 단일 `network`의 Mode B에서 변경되지 않은 설정 파일의 SSID만 저장한다.
 PSK·주파수는 유지한다. `wstatus`로 연결을, `wssid`로 저장 결과를 확인한다.
@@ -257,6 +267,9 @@ PSK·주파수는 유지한다. `wstatus`로 연결을, `wssid`로 저장 결과
 망에는 `wpsk --stage`와 `wconnect`를 사용한다. 코드 7 또는 9로 실패해도
 링크가 끊기거나 전환 중일 수 있으므로 `wstatus`로 확인하고 필요하면
 `quote wconnect <iface>`로 저장된 프로필을 다시 적용한다.
+
+`wconnectraw --no-save` 경로는 비동기 저장 요청을 만들지 않는다. `200 SUCCESS`는
+무선 명령 제출만 뜻하므로 실제 연결은 `wstatus`로 확인한다.
 
 ## 오류 코드
 
@@ -281,7 +294,7 @@ PSK·주파수는 유지한다. `wstatus`로 연결을, `wssid`로 저장 결과
 | `wstatus` | `7` | 무선 상태 조회 실패 또는 필수 값 누락 |
 | `wstatus` | `8` | 상태 조회는 가능하지만 현재 연결되지 않음 |
 | `wconnectraw` | `1` | 상태·프로필 조회 실패, 인터페이스 비활성, 저장 작업 실행 환경 오류 또는 대상 네트워크 선택 실패 |
-| `wconnectraw` | `2` | 필수 인터페이스 누락·오류 또는 SSID 누락·검증 실패 |
+| `wconnectraw` | `2` | 필수 인터페이스 누락·오류, 저장 옵션 오류 또는 SSID 누락·검증 실패 |
 | `wconnectraw` | `7` | 런타임 명령 실패 |
 | `wconnectraw` | `9` | 런타임 전환 요청 후 저장 요청 파일 게시 실패 |
 

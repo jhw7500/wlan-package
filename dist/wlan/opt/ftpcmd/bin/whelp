@@ -26,14 +26,16 @@ HELP = {
         "Reboot the whole board. Usage: quote rst. Example: quote rst"
     ),
     "wconnect": (
-        "Apply/connect saved settings; staged PSK requires explicit SSID. "
-        "Usage: quote wconnect <iface> [SSID...]. Example: quote wconnect 0 Office AP; "
-        "iface=0|1|mlan0|mlan1"
+        "Apply/connect; staged PSK requires explicit SSID. "
+        "Usage: quote wconnect <iface> [--save|--no-save] [SSID...]. "
+        "Example: quote wconnect 0 --no-save Office AP; "
+        "default=--save; --no-save=runtime only; iface=0|1|mlan0|mlan1"
     ),
     "wconnectraw": (
-        "Switch with current credentials; SUCCESS means accepted, not connected/saved; "
-        "check wstatus/wssid. Usage: quote wconnectraw <iface> <SSID...>. "
-        "Example: quote wconnectraw 0 Office AP; iface=0|1|mlan0|mlan1"
+        "Switch: SUCCESS means accepted, not connected/saved; check wstatus/wssid. "
+        "Usage: quote wconnectraw <iface> [--save|--no-save] <SSID...>. "
+        "Example: quote wconnectraw 0 Office AP; "
+        "default=--save; --no-save=runtime only; iface=0|1|mlan0|mlan1"
     ),
     "wfreq": (
         "Get/set saved MHz/channel list; apply with wconnect. "
