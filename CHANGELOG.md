@@ -3,6 +3,13 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.7.9 (2026-10-29)
+
+> SemVer **patch** — Wi-Fi 상태 조회에 패키지·펌웨어·드라이버·mlanutl 버전을 추가하고 compact 모니터의 RoamAP 행에 beacon 누락/수신 누적값을 표시한다(#427).
+
+- `wifi 0`과 `wifi 1`에 wlan-proc·wifi-manager·WLAN F/W·WLAN driver·mlanutl 버전을 표시한다. 조회할 수 없는 항목은 `없음`으로 표시한다.
+- `wifi 0 mon c`의 기존 `RoamAP:` 행에 `beacon count : miss/receive`를 표시한다. 값 0을 유지하며, 유효한 값이 없으면 `없음/없음`으로 표시한다. 로밍 이력과 한 행을 공유하고 터미널 너비에 맞춰 자른다.
+
 ## 0.7.8 (2026-10-29)
 
 > SemVer **patch** — `wconnectraw` 비동기 설정 저장 서비스의 500ms 고정 대기를 제거해 저장 확인을 앞당긴다(#422).

@@ -284,6 +284,7 @@ dist/wlan/usr/local/logger/tests/test_schema_by_board_sync.py
 dist/wlan/usr/local/logger/tests/test_schema_inert_in_mode.py
 dist/wlan/usr/local/logger/tests/test_staged_scan.py
 dist/wlan/usr/local/logger/tests/test_supplicant_state.py
+dist/wlan/usr/local/logger/tests/test_wifi_link_monitor_beacons.py
 dist/wlan/usr/local/logger/tests/test_wifi_snmp_logging.py
 dist/wlan/usr/local/logger/tests/test_wifi_snmp_pp.py
 dist/wlan/usr/local/logger/tests/test_wpa_event_tracker.py
