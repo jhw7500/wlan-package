@@ -3,6 +3,12 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.7.9 (2026-10-29)
+
+> SemVer **patch** — `wconnectraw` 저장 감시 path가 `paths.target`을 막아 `wifi_init`과 networkd가 서로 기다리던 부팅 지연을 없앤다(#422, PR #424 후속).
+
+- path의 기본 의존성 중 `Before=paths.target`만 제외하고, sysinit 뒤 시작·`wifi_init` 뒤 감시·셧다운 시 정지 순서는 명시적으로 유지한다. 연결 확인과 비동기 설정 저장 동작은 그대로다.
+
 ## 0.7.8 (2026-10-29)
 
 > SemVer **patch** — `wconnectraw` 비동기 설정 저장 서비스의 500ms 고정 대기를 제거해 저장 확인을 앞당긴다(#422).
