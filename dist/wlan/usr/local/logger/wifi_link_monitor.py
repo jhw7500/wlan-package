@@ -434,7 +434,7 @@ class InterruptTracker:
 # ── 화면 그리기 ────────────────────────────────────────────────
 
 def format_roam_beacon_line(roam_display, mwlan_log, width):
-    """Keep roam history and the firmware beacon counters on one screen row."""
+    """Keep firmware beacon counters before roam history on one screen row."""
     if not isinstance(mwlan_log, dict):
         mwlan_log = {}
 
@@ -462,7 +462,7 @@ def format_roam_beacon_line(roam_display, mwlan_log, width):
         room = width - columns(beacon_text) - 2
         if room >= len("RoamAP:"):
             roam_text = clip(roam_text, room)
-    return clip(f"{roam_text}  {beacon_text}", max(width, 0))
+    return clip(f"{beacon_text}  {roam_text}", max(width, 0))
 
 
 def draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, summary_path, ping_log_path=None, ip_gw=None, irq_tracker=None, start_time=None):

@@ -3,6 +3,12 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.7.12 (2026-10-29)
+
+> SemVer **patch** — compact 모니터의 같은 행에서 `beacon count`를 먼저, `RoamAP`를 뒤에 표시한다(#427, PR #428 후속).
+
+- `wifi 0 mon c`와 `wifi 1 mon c`의 beacon 누락/수신 누적값을 로밍 이력 앞에 둔다. 값이 없을 때의 `없음` 표기와 터미널 너비에 맞춘 잘림은 유지한다.
+
 ## 0.7.11 (2026-10-29)
 
 > SemVer **patch** — `wconnectraw` 저장 감시 path가 `paths.target`을 막아 `wifi_init`과 networkd가 서로 기다리던 부팅 지연을 없앤다(#422, PR #424 후속).
