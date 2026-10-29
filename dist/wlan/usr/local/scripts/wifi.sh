@@ -4200,6 +4200,8 @@ case "$2" in
         # Preserve the configured attempt/rollback budgets, but never arm the
         # file-backed fallback for a runtime-only transaction.
         CONNECT_TIMEOUT=$CONNECT_ATTEMPT_TIMEOUT
+        TOTAL_POLLS=$((CONNECT_TIMEOUT * 10))
+        REMAINING_POLLS=$TOTAL_POLLS
         CONNECT_FALLBACK_ENABLED=0
         APPLY_STORED_CONF=0
         RUNTIME_SWITCH_REQUESTED=0
@@ -4605,6 +4607,14 @@ case "$2" in
         fi
     fi
     wifi_connect_fallback_attempt_start
+    if [ "$CONNECT_SAVE_PROFILE" = 0 ] && [ "$#" -eq 0 ]; then
+        # No file-backed fallback is armed, so give the runtime reconnect its
+        # own attempt deadline after preflight and before the first request.
+        WIFI_WPA_DEADLINE_MS=$(runtime_switch_poll_deadline "$CONNECT_TIMEOUT" 0) || {
+            echo "Warning: requested association not completed within ${CONNECT_TIMEOUT}s" >&2
+            exit 8
+        }
+    fi
     if [ "$HAS_TARGET" = "1" ] || [ "$APPLY_STORED_CONF" = "1" ]; then
         # Reload the whole persisted profile. SET_NETWORK alone would leave
         # pending SSID, credentials, or frequency edits stale in supplicant;
@@ -4720,6 +4730,12 @@ case "$2" in
         wifi_connect_fallback_time_left || break
         if connect_association_poll_matches; then
             ASSOC_MATCH=1
+        fi
+        # A slow status call may finish after its whole-second timeout rounded
+        # past the deadline. Such a late proof cannot complete this attempt.
+        if ! wifi_connect_fallback_time_left; then
+            ASSOC_MATCH=0
+            break
         fi
         REMAINING_POLLS=$((REMAINING_POLLS - 1))
         [ "$ASSOC_MATCH" = "1" ] && break

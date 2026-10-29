@@ -102,12 +102,19 @@ if [ "${1:-}" != --daemon ]; then
             echo OK
             exit 0 ;;
         status)
+            if [ -f "$D/delay-reconnect-status" ] && [ -f "$D/reconnect-requested" ]; then
+                read -r delay < "$D/delay-reconnect-status" || exit 1
+                : > "$D/slow-reconnect-status-started"
+                sleep "$delay"
+                : > "$D/slow-reconnect-status-finished"
+            fi
             if [ -f "$D/delay-target" ] && grep -q 'ssid="unreachable"' "$runtime"; then
                 delay=3
                 read -r delay < "$D/delay-target" || delay=3
                 sleep "$delay"
             fi ;;
         reconfigure|reassociate|reconnect|scan)
+            case "$command" in reassociate|reconnect) : > "$D/reconnect-requested" ;; esac
             if [ "$command" = reconfigure ]; then
                 cp "$WPA_CONF_DIR/wpa_supplicant-${2}.conf" "$runtime"
                 if [ -f "$D/delay-first-source-reconfigure" ] \
@@ -1061,6 +1068,94 @@ exec /bin/rm "$@"
         self.assertEqual(raw_commit.read_bytes(), raw_bytes)
         calls = (self.state / "calls.log").read_text()
         self.assertNotIn("wpa_cli -i mlan0 reassociate", calls)
+
+    def test_no_save_without_ssid_timeout_uses_attempt_budget(self):
+        (self.state / "available").write_text("")
+        (self.state / "status").write_text("wpa_state=DISCONNECTED\nid=0\n")
+        before = self.persistent_state()
+        started = time.monotonic()
+
+        result = self.run_connect("--no-save", extra_env={"ASSOC_TIMEOUT_DEFAULT": "4"})
+
+        elapsed = time.monotonic() - started
+        self.assertEqual(result.returncode, 8, result.stdout + result.stderr)
+        self.assertIn("not completed within 1s", result.stderr)
+        self.assertLess(elapsed, 3, f"1s attempt took {elapsed:.3f}s")
+        self.assertEqual(self.persistent_state(), before)
+        self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+        self.assertEqual(list(self.run_dir.glob("mlan0.connect-monitor.*")), [])
+
+    def test_no_save_without_ssid_slow_status_respects_attempt_deadline(self):
+        (self.state / "available").write_text("")
+        (self.state / "delay-reconnect-status").write_text("4\n")
+        before = self.persistent_state()
+        started = time.monotonic()
+
+        result = self.run_connect("--no-save", extra_env={"ASSOC_TIMEOUT_DEFAULT": "4"})
+
+        elapsed = time.monotonic() - started
+        self.assertEqual(result.returncode, 8, result.stdout + result.stderr)
+        self.assertTrue((self.state / "slow-reconnect-status-started").exists())
+        self.assertFalse((self.state / "slow-reconnect-status-finished").exists())
+        self.assertLess(elapsed, 3, f"slow status exceeded 1s attempt: {elapsed:.3f}s")
+        self.assertEqual(self.persistent_state(), before)
+        self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+        self.assertEqual(list(self.run_dir.glob("mlan0.connect-monitor.*")), [])
+
+    def test_no_save_without_ssid_uses_full_configured_poll_budget(self):
+        self.set_policy(attempt=3)
+        # The event must arrive after reassociate returns, not keep the
+        # command's stdout open until the delayed association is available.
+        stub = self.stub / "wpa_cli"
+        text = stub.read_text()
+        delayed = '( sleep "$delay"; echo "$lid" > "$D/fire.tmp" && mv -f "$D/fire.tmp" "$D/fire" ) &'
+        self.assertEqual(text.count(delayed), 1)
+        stub.write_text(text.replace(delayed, delayed[:-1] + '>/dev/null 2>&1 &', 1))
+        (self.state / "fire-delay").write_text("1.5\n")
+        before = self.persistent_state()
+
+        result = self.run_connect("--no-save", extra_env={"ASSOC_TIMEOUT_DEFAULT": "1"})
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("wpa_state=COMPLETED", result.stdout)
+        self.assertEqual(self.persistent_state(), before)
+        self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+
+    def test_no_save_without_ssid_rejects_proof_returned_after_deadline(self):
+        # A second slow status can complete beyond the deadline because the
+        # BusyBox-compatible command timeout rounds up to whole seconds.
+        (self.state / "delay-reconnect-status").write_text("0.7\n")
+        stub = self.stub / "wpa_cli"
+        text = stub.read_text()
+        event = '            WPA_ID="$id" "$action" "$iface" CONNECTED\n'
+        self.assertEqual(text.count(event), 1)
+        wait_for_poll = '            while [ ! -f "$D/slow-reconnect-status-started" ]; do sleep 0.01; done\n'
+        stub.write_text(text.replace(event, wait_for_poll + event, 1))
+        before = self.persistent_state()
+
+        result = self.run_connect("--no-save")
+
+        self.assertEqual(result.returncode, 8, result.stdout + result.stderr)
+        self.assertIn("not completed within 1s", result.stderr)
+        self.assertEqual(self.persistent_state(), before)
+        self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+
+    def test_no_save_multi_network_reconnect_obeys_attempt_timeout(self):
+        self.write_conf(_cli.CONF_MODE_A)
+        (self.state / "runtime.conf").write_text(_cli.CONF_MODE_A)
+        (self.state / "available").write_text("")
+        (self.state / "status").write_text("wpa_state=DISCONNECTED\nid=0\n")
+        before = self.persistent_state()
+        started = time.monotonic()
+
+        result = self.run_connect("--no-save", extra_env={"ASSOC_TIMEOUT_DEFAULT": "4"})
+
+        elapsed = time.monotonic() - started
+        self.assertEqual(result.returncode, 8, result.stdout + result.stderr)
+        self.assertIn("multi-network topology", result.stdout)
+        self.assertLess(elapsed, 3, f"1s multi-network attempt took {elapsed:.3f}s")
+        self.assertEqual(self.persistent_state(), before)
+        self.assertEqual((self.state / "runtime.conf").read_text(), _cli.CONF_MODE_A)
 
     def test_no_save_rejects_pending_or_stale_transactions_without_repair(self):
         for state_name in ("mlan0.credential-pending", "mlan0.runtime-switch-in-progress"):
