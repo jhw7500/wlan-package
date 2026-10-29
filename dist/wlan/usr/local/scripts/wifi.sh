@@ -4438,8 +4438,9 @@ case "$2" in
     connect_prescan_start "$@"
     MONITOR_TIMEOUT="$CONNECT_TIMEOUT"
     [ "$CONNECT_FALLBACK_ENABLED" != 1 ] || MONITOR_TIMEOUT=$((CONNECT_TIMEOUT + CONNECT_ROLLBACK_TIMEOUT))
-    if [ "$RUNTIME_SWITCH_REQUESTED" = 1 ] || [ "$RUNTIME_STALE" = 1 ]; then
-        # Masked-PSK preflight can outlive a short attempt+rollback budget.
+    if [ "$CONNECT_SAVE_PROFILE" = 0 ] \
+       || [ "$RUNTIME_SWITCH_REQUESTED" = 1 ] || [ "$RUNTIME_STALE" = 1 ]; then
+        # Runtime snapshots can outlive a short attempt+rollback budget.
         # Keep the watchdog through the full runtime deadline and cleanup grace.
         MONITOR_NOW_MS=$(wifi_wpa_monotonic_ms) || exit 7
         MONITOR_REMAINING_MS=$((RUNTIME_OPERATION_DEADLINE_MS - MONITOR_NOW_MS))

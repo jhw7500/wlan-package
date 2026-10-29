@@ -31,7 +31,13 @@ if [ "${1:-}" != --daemon ]; then
     case "$command" in
         get_network)
             case "${5:-}" in
-                ssid) awk '/^[[:space:]]*ssid=/{sub(/^[[:space:]]*ssid=/, ""); print; exit}' "$runtime" ;;
+                ssid)
+                    if [ -f "$D/delay-first-ssid-query" ]; then
+                        read -r delay < "$D/delay-first-ssid-query" || exit 1
+                        rm -f "$D/delay-first-ssid-query"
+                        sleep "$delay"
+                    fi
+                    awk '/^[[:space:]]*ssid=/{sub(/^[[:space:]]*ssid=/, ""); print; exit}' "$runtime" ;;
                 freq_list) awk '/^[[:space:]]*freq_list=/{sub(/^[[:space:]]*freq_list=/, ""); print; exit}' "$runtime" ;;
                 key_mgmt) echo WPA-PSK ;;
                 psk)
@@ -859,6 +865,38 @@ exec /bin/sync "$@"
         self.assertEqual(self.persistent_state(), before)
         self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
         self.assertIn("ssid=jhw_wlan_\n", (self.state / "status").read_text())
+
+    def _run_no_save_with_slow_snapshot(self, target):
+        self.set_policy(attempt=1, rollback=1)
+        self.marker.write_text("essid=opc-owned\nslot=5\n")
+        (self.state / "delay-first-ssid-query").write_text("8\n")
+        before = self.persistent_state()
+
+        result = self.run_connect("--no-save", target)
+
+        self.assertEqual(self.persistent_state(), before)
+        self.assertFalse((self.state / "delay-first-ssid-query").exists())
+        self.assertEqual(list(self.run_dir.glob("mlan0.connect-monitor.*")), [])
+        return result
+
+    def test_no_save_slow_snapshot_keeps_monitor_through_success(self):
+        result = self._run_no_save_with_slow_snapshot("good-B")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('ssid="good-B"', (self.state / "runtime.conf").read_text())
+        status = (self.state / "status").read_text()
+        self.assertIn("wpa_state=COMPLETED\n", status)
+        self.assertIn("ssid=good-B\n", status)
+
+    def test_no_save_slow_snapshot_keeps_monitor_through_rollback(self):
+        result = self._run_no_save_with_slow_snapshot("unreachable")
+
+        self.assertEqual(result.returncode, 8, result.stdout + result.stderr)
+        self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+        status = (self.state / "status").read_text()
+        self.assertIn("wpa_state=COMPLETED\n", status)
+        self.assertIn("ssid=jhw_wlan_\n", status)
+        self.assertNotIn("runtime-only rollback could not verify", result.stderr)
 
     def test_no_save_staged_psk_success_does_not_commit_credentials(self):
         self.marker.write_text("essid=opc-owned\nslot=6\n")
