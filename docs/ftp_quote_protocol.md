@@ -206,12 +206,16 @@ ftp> quote wconnect 0 Office AP B
 ### 3.3 wconnect: 프로필 적용과 연결 확인
 
 ~~~text
-quote wconnect <mlan0|mlan1|0|1> [ssid words...]
+quote wconnect <mlan0|mlan1|0|1> [--save|--no-save] [--] [ssid words...]
 ~~~
 
-- SSID가 없으면 저장된 프로필을 사용한다. `quote wconnect mlan1`은
+- 저장 옵션이 없거나 `--save`이면 기존 저장 동작을 유지한다.
+- `--no-save`이면 WPA conf와 OPC 복원 표식을 변경하지 않고 런타임 연결만
+  변경한다. SSID가 없으면 저장 프로필을 다시 읽지 않고 현재 런타임 프로필로
+  재연결한다. SSID가 있으면 해당 SSID의 연결을 확인한 뒤 응답한다.
+- 기본 저장 경로에서 SSID가 없으면 저장된 프로필을 사용한다. `quote wconnect mlan1`은
   `mlan1`의 저장된 프로필을 사용한다.
-- SSID가 있으면 남은 토큰을 공백으로 합쳐 설정 파일에 저장한 뒤
+- 기본 저장 경로에서 SSID가 있으면 남은 토큰을 공백으로 합쳐 설정 파일에 저장한 뒤
   연결을 시도한다. `quote wconnect 0 My AP`는 `mlan0`에서 `My AP`에 연결을 시도한다.
 - 주파수는 인자로 받지 않는다. 주파수를 바꾸려면 먼저 `wfreq`로 저장한다.
   숫자 단어도 SSID의 일부다. `quote wconnect 0 AP 2`는 `AP 2`에 연결을 시도한다.
@@ -226,6 +230,17 @@ SSID와 PSK를 함께 저장한다. 같은 SSID의 새 PSK도 실제 재연결�
 이 경로는 `connect_fallback.enabled`와 관계없이 이전 설정·연결 복구를
 시도하고 실패 코드를 유지한다. 저장 전 전원 차단 시 휘발 stage는 사라진다.
 `wscan` 성공은 발견 사실이며 `wconnect` 연결 성공의 증거가 아니다.
+
+`--no-save`와 휘발 PSK stage를 함께 사용하면 새 SSID·PSK는 연결 성공 후에도
+런타임에만 남는다. 저장 옵션은 SSID 앞에 한 번만 지정한다. SSID가 `--`로
+시작하면 `--` 구분자를 넣는다(예: `quote wconnect 0 --no-save -- --save`).
+`--no-save` 전환은 이전의 미완료 raw 저장 요청도 취소하므로 그 요청이 나중에
+현재 런타임 값을 저장하지 않는다. 이미 완료된 이전 저장은 되돌리지 않는다.
+설정 재적재·무선 재시작·재부팅 시에는 저장된 설정이 다시 적용된다.
+
+OPCd의 현재 ChangeIp 경로는 별도 `opc_wlan_apply.sh`와 부팅 시 SSID 복원 계약을
+사용한다. `--no-save`는 위 연결 명령을 호출할 때 선택하는 정책이며 OPCd의
+기존 처리에 자동 적용되지 않는다.
 
 전환 실패·TERM에는 원래 설정, OPC 복원 표식, fallback 체크포인트와
 연결을 복구하려고 시도하며 원래 실패 코드를 반환한다. 프로세스가 강제
@@ -316,15 +331,34 @@ quote wstatus <mlan0|mlan1|0|1>
 ### 3.5 wconnectraw: 빠른 런타임 전환과 성공 시 저장
 
 ~~~text
-quote wconnectraw <mlan0|mlan1|0|1> <ssid words...>
+quote wconnectraw <mlan0|mlan1|0|1> [--save|--no-save] [--] <ssid words...>
 ~~~
+
+보드 셸에서는 `wifi <mlan0|mlan1|0|1> connectraw [--save|--no-save] [--] <SSID...>`로 같은 기능을
+실행한다. FTP 핸들러도 이 명령을 호출하며 검증·무선 명령·비동기 저장 경로를
+공유한다. 일반 `wifi connect`의 설정 재적재·사전 스캔·연결 대기는 수행하지 않는다.
 
 SSID는 필수이며 1~32바이트, FTP 디스패처의 허용 문자여야 한다.
 현재 선택된 `network` ID가 없으면 유일하게 활성화된
 `network`를 찾는다. `wpa_cli set_network <id> ssid ...`, `wpa_cli disconnect`,
-`wpa_cli reassociate`를 차례로 제출한다. 세 응답이 모두 정확히 `OK`이고
-`/run/wifi`에 저장 요청을 원자적으로 게시하면 `200 SUCCESS`를 반환한다.
+`wpa_cli reassociate`를 차례로 제출한다. 기본 저장 경로에서는 세 응답이 모두
+정확히 `OK`이고 `/run/wifi`에 저장 요청을 원자적으로 게시하면 `200 SUCCESS`를 반환한다.
 이 응답은 목표 AP 연결이나 파일 저장의 완료를 뜻하지 않는다.
+
+저장 옵션이 없거나 `--save`이면 아래 비동기 성공 확인·저장 경로를 사용한다.
+`--no-save`이면 무선 명령만 제출하고 저장 요청을 만들지 않는다. WPA conf와
+OPC 복원 표식은 그대로이며, 이전의 미완료 raw 저장 요청은 변경 락 안에서
+취소한다. 상태 조회·네트워크 선택 등 사전 검증에 실패하면 이전 저장 요청은 유지한다.
+이 경로는 저장 작업 실행 파일이나 저장 프로필의 존재를 요구하지 않는다.
+이미 완료된 이전 저장은 되돌리지 않는다. 옵션은 SSID 앞에 지정하고 `--`로
+옵션처럼 생긴 SSID를 구분한다. 옵션과 구분자도 FTP 디스패처의 최대 8토큰에
+포함된다. 런타임 전환의 성공 여부는 `wstatus`로 확인한다.
+
+무선 변경 전에 일반 `wifi connect`와 같은 `reconfigure-grace`를 갱신한다.
+checker는 이 보호 구간(기본 20초) 동안 자동 재연결을 시작하지 않으므로,
+15초 연결 확인 중 checker가 변경 락을 점유해 후속 수동 요청을 막는 것을 방지한다.
+보호 구간은 대기 시간이 아니며 명령 제출을 지연시키지 않는다. 다른 실제 설정 변경과
+충돌하거나 미검증 인증 정보가 대기 중이면 기존처럼 코드 `6`으로 거절한다.
 
 별도 systemd path/service가 FTP 프로세스 밖에서 요청을 받고, 최대 15초 동안
 `wpa_state=COMPLETED`, 목표 SSID와 동일한
@@ -394,7 +428,7 @@ vsftpd가 핸들러를 30초에 강제 종료하면 `550 Command timed out: <com
 | `wpsk` | `2` | 인터페이스 또는 비밀번호 누락·오류 |
 | `wpsk` | `6` | 같은 인터페이스의 설정 변경 진행 중 또는 파일 저장·휘발 PSK 방식 충돌(busy) |
 | `wconnect` | `1` | SSID 또는 설정 검증 실패, 실행 환경 오류 |
-| `wconnect` | `2` | 필수 인터페이스 누락 또는 잘못된 값 |
+| `wconnect` | `2` | 필수 인터페이스 누락·오류 또는 저장 옵션 오류 |
 | `wconnect` | `3` | 대상 인터페이스가 FTP 제어 연결을 운반하여 거부 |
 | `wssid`, `wfreq`, `wconnect`, `wconnectraw`, `ifcup`, `ifcdown`, `wifcup`, `wifcdown` | `6` | 같은 인터페이스에서 fallback 또는 경쟁 변경이 진행 중(busy). `wconnectraw`는 미검증 인증 정보가 대기 중이어도 거절 |
 | `wconnect` | `7` | supplicant 제어 명령 또는 연결 이벤트 감시 실패 |
@@ -403,7 +437,7 @@ vsftpd가 핸들러를 30초에 강제 종료하면 `550 Command timed out: <com
 | `wstatus` | `7` | supplicant 상태 조회 실패 또는 필수 상태값 누락 |
 | `wstatus` | `8` | 상태 조회는 성공했으나 현재 연결되지 않음 |
 | `wconnectraw` | `1` | 상태·프로필 조회 실패, 인터페이스 비활성(`INTERFACE_DISABLED`), 저장 작업 실행 환경 오류, 또는 사용할 `network`를 결정할 수 없음 |
-| `wconnectraw` | `2` | 필수 인터페이스 누락·오류 또는 SSID 누락·검증 실패 |
+| `wconnectraw` | `2` | 필수 인터페이스 누락·오류, 저장 옵션 오류 또는 SSID 누락·검증 실패 |
 | `wconnectraw` | `7` | `set_network`, `disconnect` 또는 `reassociate` 명령 실패. `set_network` 실패면 현재 연결은 그대로이고, 그 뒤 단계 실패면 연결이 끊긴 채 남을 수 있다 |
 | `wconnectraw` | `9` | 무선 명령 제출 후 저장 요청 파일 게시 실패. 연결은 전환될 수 있지만 파일은 이전 상태 |
 
@@ -495,13 +529,16 @@ ftpcmd_result trace=<id> command=wconnect status=fail code=<N> iface=<iface> det
 로그는 `[wifi.sh:<line>]` 태그를 사용하며 `freq` 명령의 모든 주파수
 인자를 기록한다.
 
-`wconnectraw`는 연결 완료가 아닌 명령 제출 시간만 기록한다. `set_network`가
-실패하면 타이밍 줄 없이 실패 줄만 남긴다. 비동기 저장 작업은 같은 trace로
+`wconnectraw`와 `wifi ... connectraw`는 유효한 요청을 받으면 변경 락 획득 전에
+`dispatch_received`로 명령·인터페이스·대상 SSID를 기록한다. 이후 연결 완료가 아닌
+명령 제출 시간을 `commands_submitted`로 기록한다. `set_network` 이전이나 해당 명령에서
+실패하면 수신 로그와 실패 로그가 남는다. 비동기 저장 작업은 같은 trace로
 `status=saved`, `status=skipped` 또는 `status=failed`를 별도 기록한다.
 
 ~~~text
-ftpcmd_raw_timing trace=<id> phase=commands_submitted elapsed_ms=<ms> iface=<iface> parse_ms=<ms> id_lookup_ms=<ms> set_network_ms=<ms> disconnect_ms=<ms> reassociate_ms=<ms> set_rc=<rc> disconnect_rc=<rc> reassociate_rc=<rc>
-ftpcmd_raw_result trace=<id> command=wconnectraw status=fail code=<N> iface=<iface> detail=<detail>
+ftpcmd_raw_timing trace=<id> phase=dispatch_received elapsed_ms=<ms> iface=<iface> command=<wconnectraw|connectraw> origin=<ftp|cli> save_policy=<save|no-save> ssid="<SSID>"
+ftpcmd_raw_timing trace=<id> phase=commands_submitted elapsed_ms=<ms> iface=<iface> save_policy=<save|no-save> parse_ms=<ms> id_lookup_ms=<ms> set_network_ms=<ms> disconnect_ms=<ms> reassociate_ms=<ms> set_rc=<rc> disconnect_rc=<rc> reassociate_rc=<rc>
+ftpcmd_raw_result trace=<id> command=<wconnectraw|connectraw> status=fail code=<N> iface=<iface> detail=<detail>
 ftpcmd_raw_commit trace=<id> iface=<iface> status=<saved|skipped|failed> reason=<reason>
 ~~~
 

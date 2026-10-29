@@ -401,6 +401,7 @@ dist/wlan/usr/local/scripts/wifi_config.sh
 dist/wlan/usr/local/scripts/wifi_config_backup.sh
 dist/wlan/usr/local/scripts/wifi_config_backup_test.sh
 dist/wlan/usr/local/scripts/wifi_connect_fallback_lib.sh
+dist/wlan/usr/local/scripts/wifi_connect_raw.sh
 dist/wlan/usr/local/scripts/wifi_eth_peer_find.sh
 dist/wlan/usr/local/scripts/wifi_eth_peer_find_test.sh
 dist/wlan/usr/local/scripts/wifi_eth_peer_route.sh

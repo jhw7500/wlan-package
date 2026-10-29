@@ -50,8 +50,21 @@ if [ "${1:-}" != --daemon ]; then
                 awk '/^[[:space:]]*freq_list=/{sub(/^[[:space:]]*freq_list=/, ""); print; exit}' "$runtime"
             fi
             exit 0 ;;
+        list_networks)
+            if [ -f "$D/network-list" ]; then cat "$D/network-list"; exit 0; fi
+            ssid=$(awk '/^[[:space:]]*ssid=/{sub(/^[[:space:]]*ssid="/, ""); sub(/"$/, ""); print; exit}' "$runtime")
+            printf 'network id / ssid / bssid / flags\n0\t%s\tany\t\n' "$ssid"
+            exit 0 ;;
         set)
             echo "wpa_cli $*" >> "$D/calls.log"
+            if [ "${4:-}" = freq_list ]; then
+                NEW_FREQ="${5:-}" awk '
+                    /^[[:space:]]*freq_list=/{
+                        if (!done) { sub(/freq_list=.*/, "freq_list=" ENVIRON["NEW_FREQ"]); done=1 }
+                    }
+                    { print }
+                ' "$runtime" > "$runtime.new" && mv -f "$runtime.new" "$runtime"
+            fi
             echo OK
             exit 0 ;;
         bss)
@@ -70,6 +83,15 @@ if [ "${1:-}" != --daemon ]; then
                 if [ -f "$D/fail-set-psk" ]; then echo FAIL; exit 0; fi
                 NEW_PSK="${6:-}" awk '/^[[:space:]]*psk=/{sub(/psk=.*/, "psk=" ENVIRON["NEW_PSK"])} {print}' \
                     "$runtime" > "$runtime.new" && mv -f "$runtime.new" "$runtime"
+            elif [ "${5:-}" = freq_list ]; then
+                NEW_FREQ="${6:-}" awk '
+                    BEGIN { in_net=0 }
+                    /^[[:space:]]*network[[:space:]]*=/ { in_net=1 }
+                    in_net && /^[[:space:]]*freq_list=/{
+                        if (!done) { sub(/freq_list=.*/, "freq_list=" ENVIRON["NEW_FREQ"]); done=1 }
+                    }
+                    { print }
+                ' "$runtime" > "$runtime.new" && mv -f "$runtime.new" "$runtime"
             fi
             echo OK
             exit 0 ;;
@@ -100,7 +122,7 @@ if [ "${1:-}" != --daemon ]; then
                 fi
             fi
             ssid=$(awk '/^[[:space:]]*ssid=/{sub(/^[[:space:]]*ssid="/, ""); sub(/"$/, ""); print; exit}' "$runtime")
-            if grep -Fxq "$ssid" "$D/available"; then
+            if grep -Fxq -- "$ssid" "$D/available"; then
                 printf '0 %s 5220\n' "$ssid" > "$D/landing"
                 cp "$D/landing" "$D/scan-landing"
             else
@@ -179,6 +201,18 @@ class ConnectFallbackTests(_cli.ConnectHarness):
         self.stage_runtime_psk(secret)
         extra_env = dict(kwargs.pop("extra_env", {}) or {}, FTPCMD_RUNTIME_PSK="1")
         return self.run_connect(ssid, apply_stored_conf=True, extra_env=extra_env, **kwargs)
+
+    def persistent_state(self):
+        conf_stat = self.conf.stat()
+        marker_stat = self.marker.stat() if self.marker.exists() else None
+        return {
+            "conf": self.conf.read_bytes(),
+            "conf_inode": conf_stat.st_ino,
+            "conf_mtime_ns": conf_stat.st_mtime_ns,
+            "marker": self.marker.read_bytes() if marker_stat else None,
+            "marker_inode": marker_stat.st_ino if marker_stat else None,
+            "marker_mtime_ns": marker_stat.st_mtime_ns if marker_stat else None,
+        }
 
     def prepare_mlan1(self):
         self.conf = self.conf_dir / "wpa_supplicant-mlan1.conf"
@@ -802,6 +836,256 @@ exec /bin/sync "$@"
         self.assertIn("ssid=jhw_wlan_\n", (self.state / "status").read_text())
         self.assertIn("fallback restored", result.stdout + result.stderr)
 
+    def test_no_save_success_changes_only_the_live_profile(self):
+        self.marker.write_text("essid=opc-owned\nslot=4\n")
+        raw_commit = self.run_dir / "mlan0.raw-commit"
+        raw_commit.write_text("obsolete request\n")
+        before = self.persistent_state()
+
+        result = self.run_connect("--no-save", "good-B")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.persistent_state(), before)
+        self.assertIn('ssid="good-B"', (self.state / "runtime.conf").read_text())
+        self.assertFalse(raw_commit.exists())
+
+    def test_no_save_timeout_rolls_back_live_profile_without_rewriting_persistence(self):
+        self.marker.write_text("essid=opc-owned\nslot=5\n")
+        before = self.persistent_state()
+
+        result = self.run_connect("--no-save", "unreachable")
+
+        self.assertEqual(result.returncode, 8, result.stdout + result.stderr)
+        self.assertEqual(self.persistent_state(), before)
+        self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+        self.assertIn("ssid=jhw_wlan_\n", (self.state / "status").read_text())
+
+    def test_no_save_staged_psk_success_does_not_commit_credentials(self):
+        self.marker.write_text("essid=opc-owned\nslot=6\n")
+        stage = self.stage_runtime_psk()
+        before = self.persistent_state()
+
+        result = self.run_connect("--no-save", "good-B")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.persistent_state(), before)
+        runtime = (self.state / "runtime.conf").read_text()
+        self.assertIn('ssid="good-B"', runtime)
+        self.assertIn('psk="runtime-secret"', runtime)
+        self.assertFalse(stage.exists())
+
+    def test_no_save_unsafe_staged_psk_preserves_pending_raw_commit(self):
+        raw_commit = self.run_dir / "mlan0.raw-commit"
+        raw_bytes = b"prior-raw-request\nsecond-line\n"
+        raw_commit.write_bytes(raw_bytes)
+        stage = self.stage_runtime_psk()
+        stage.chmod(0o644)
+        runtime_before = (self.state / "runtime.conf").read_bytes()
+        status_before = (self.state / "status").read_bytes()
+
+        result = self.run_connect("--no-save", "good-B")
+
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(raw_commit.read_bytes(), raw_bytes)
+        self.assertEqual((self.state / "runtime.conf").read_bytes(), runtime_before)
+        self.assertEqual((self.state / "status").read_bytes(), status_before)
+        calls = (self.state / "calls.log").read_text()
+        for command in (" set_network", " disconnect", " reassociate", " reconfigure"):
+            self.assertNotIn(command, calls)
+
+    def test_no_save_raw_commit_cancel_failure_does_not_consume_staged_psk(self):
+        raw_commit = self.run_dir / "mlan0.raw-commit"
+        raw_commit.write_text("prior-raw-request\n")
+        stage = self.stage_runtime_psk()
+        rm = self.stub / "rm"
+        rm.write_text('''#!/bin/sh
+for arg in "$@"; do
+    case "$arg" in *.raw-commit) exit 1 ;; esac
+done
+exec /bin/rm "$@"
+''')
+        rm.chmod(0o755)
+        runtime_before = (self.state / "runtime.conf").read_bytes()
+
+        result = self.run_connect("--no-save", "good-B")
+
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(stage.read_text(), "runtime-secret")
+        self.assertEqual((self.state / "runtime.conf").read_bytes(), runtime_before)
+        self.assertTrue(raw_commit.exists())
+        calls = (self.state / "calls.log").read_text()
+        for command in (" set_network", " disconnect", " reassociate", " reconfigure"):
+            self.assertNotIn(command, calls)
+
+    def test_no_save_staged_psk_timeout_restores_live_credentials_without_file_writes(self):
+        self.marker.write_text("essid=opc-owned\nslot=7\n")
+        self.stage_runtime_psk()
+        before = self.persistent_state()
+
+        result = self.run_connect("--no-save", "unreachable")
+
+        self.assertEqual(result.returncode, 8, result.stdout + result.stderr)
+        self.assertEqual(self.persistent_state(), before)
+        self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+
+    def test_no_save_without_ssid_reassociates_runtime_without_reconfigure(self):
+        raw_commit = self.run_dir / "mlan0.raw-commit"
+        raw_commit.write_text("obsolete request\n")
+        before = self.persistent_state()
+
+        result = self.run_connect("--no-save", apply_stored_conf=True)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.persistent_state(), before)
+        calls = (self.state / "calls.log").read_text()
+        self.assertIn("wpa_cli -i mlan0 reassociate", calls)
+        self.assertNotIn("wpa_cli -i mlan0 reconfigure", calls)
+        self.assertFalse(raw_commit.exists())
+
+    def test_no_save_without_ssid_monitor_failure_preserves_pending_raw_commit(self):
+        raw_commit = self.run_dir / "mlan0.raw-commit"
+        raw_bytes = b"prior-raw-request\nsecond-line\n"
+        raw_commit.write_bytes(raw_bytes)
+        stub = self.stub / "wpa_cli"
+        text = stub.read_text()
+        needle = 'if [ -n "$action" ]; then\n'
+        self.assertEqual(text.count(needle), 1)
+        stub.write_text(text.replace(needle, needle + "    exit 1\n", 1))
+
+        result = self.run_connect("--no-save")
+
+        self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+        self.assertEqual(raw_commit.read_bytes(), raw_bytes)
+        calls = (self.state / "calls.log").read_text()
+        self.assertNotIn("wpa_cli -i mlan0 reassociate", calls)
+
+    def test_no_save_rejects_pending_or_stale_transactions_without_repair(self):
+        for state_name in ("mlan0.credential-pending", "mlan0.runtime-switch-in-progress"):
+            with self.subTest(state_name=state_name):
+                state = self.run_dir / state_name
+                state.write_text("marker=absent\ncheckpoint=absent\n")
+                state.chmod(0o600)
+                before = self.persistent_state()
+                runtime_before = (self.state / "runtime.conf").read_bytes()
+
+                result = self.run_connect("--no-save", "good-B")
+
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(self.persistent_state(), before)
+                self.assertEqual((self.state / "runtime.conf").read_bytes(), runtime_before)
+                self.assertTrue(state.exists())
+                state.unlink()
+
+    def test_no_save_frequency_policy_is_runtime_only(self):
+        stub = self.stub / "wpa_cli"
+        text = stub.read_text()
+        self.assertEqual(text.count("printf '0 %s 5220\\n'"), 1)
+        stub.write_text(text.replace("printf '0 %s 5220\\n'", "printf '0 %s 5200\\n'", 1))
+        before = self.persistent_state()
+
+        result = self.run_connect("--no-save", "good-B", "36", "40")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.persistent_state(), before)
+        runtime = (self.state / "runtime.conf").read_text()
+        self.assertEqual(runtime.count("freq_list=5180 5200\n"), 2)
+
+    def test_explicit_save_keeps_the_existing_persistent_connect_contract(self):
+        result = self.run_connect("--save", "good-B")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('ssid="good-B"', self.conf.read_text())
+
+    def test_option_delimiter_allows_a_literal_save_named_ssid(self):
+        (self.state / "available").write_text("jhw_wlan_\n--save\n")
+
+        result = self.run_connect("--", "--save")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('ssid="--save"', self.conf.read_text())
+
+    def test_no_save_then_delimiter_allows_a_literal_save_named_ssid(self):
+        (self.state / "available").write_text("jhw_wlan_\n--save\n")
+        before = self.persistent_state()
+
+        result = self.run_connect("--no-save", "--", "--save")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.persistent_state(), before)
+        self.assertIn('ssid="--save"', (self.state / "runtime.conf").read_text())
+
+    def test_duplicate_or_conflicting_save_policy_is_rejected(self):
+        for args in (("--save", "--save", "good-B"),
+                     ("--no-save", "--no-save", "good-B"),
+                     ("--save", "--no-save", "good-B"),
+                     ("--no-save", "--save", "good-B")):
+            with self.subTest(args=args):
+                before = self.persistent_state()
+                result = self.run_connect(*args)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertEqual(self.persistent_state(), before)
+                self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+
+    def test_no_save_selects_the_only_enabled_network_while_disconnected(self):
+        (self.state / "status").write_text("wpa_state=DISCONNECTED\n")
+        before = self.persistent_state()
+
+        result = self.run_connect("--no-save", "good-B")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.persistent_state(), before)
+        self.assertIn('ssid="good-B"', (self.state / "runtime.conf").read_text())
+
+    def test_no_save_prefers_one_current_network_while_disconnected(self):
+        (self.state / "status").write_text("wpa_state=DISCONNECTED\n")
+        (self.state / "network-list").write_text(
+            "network id / ssid / bssid / flags\n"
+            "0\tjhw_wlan_\tany\t[CURRENT]\n"
+            "1\tother\tany\t\n")
+        before = self.persistent_state()
+
+        result = self.run_connect("--no-save", "good-B")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.persistent_state(), before)
+        self.assertIn('ssid="good-B"', (self.state / "runtime.conf").read_text())
+
+    def test_no_save_rejects_ambiguous_enabled_networks_while_disconnected(self):
+        (self.state / "status").write_text("wpa_state=DISCONNECTED\n")
+        (self.state / "network-list").write_text(
+            "network id / ssid / bssid / flags\n"
+            "0\tjhw_wlan_\tany\t\n"
+            "1\tother\tany\t\n")
+        before = self.persistent_state()
+
+        result = self.run_connect("--no-save", "good-B")
+
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(self.persistent_state(), before)
+        self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+        self.assertIn("cannot select one live network", result.stderr)
+
+    def test_no_save_disconnected_timeout_restores_live_fields_without_source_reconnect(self):
+        (self.state / "status").write_text("wpa_state=DISCONNECTED\n")
+        before = self.persistent_state()
+
+        result = self.run_connect("--no-save", "unreachable")
+
+        self.assertEqual(result.returncode, 8, result.stdout + result.stderr)
+        self.assertEqual(self.persistent_state(), before)
+        self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+        self.assertEqual((self.state / "status").read_text(), "wpa_state=DISCONNECTED\n")
+
+    def test_unknown_leading_connect_option_is_rejected_before_mutation(self):
+        before = self.persistent_state()
+
+        result = self.run_connect("--temporary", "good-B")
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertEqual(self.persistent_state(), before)
+        self.assertEqual((self.state / "runtime.conf").read_text(), CONF_MODE_B)
+        self.assertIn("unknown connect option", result.stderr)
+
     def test_restore_is_verified_soon_after_its_connected_record(self):
         # The restored profile's event lands 30 ms after reconfigure, just after
         # the first restore poll already saw COMPLETED. A 0.1 s poll grid checks
@@ -1378,9 +1662,18 @@ args=()''', 1))
         ip.write_text("#!/bin/sh\nexit 0\n")
         ip.chmod(0o755)
         handlers = SCRIPTS_DIR.parents[2] / "opt/ftpcmd/bin"
+        raw_scripts = self.root / "raw-scripts"
+        raw_scripts.mkdir()
+        raw_wifi = raw_scripts / "wifi.sh"
+        raw_wifi.write_text(WIFI_SH.read_text())
+        raw_wifi.chmod(0o755)
+        raw_helper = raw_scripts / "wifi_connect_raw.sh"
+        raw_helper.write_text((SCRIPTS_DIR / raw_helper.name).read_text().replace(
+            "WPA_CLI=/usr/sbin/wpa_cli", "WPA_CLI=" + shlex.quote(str(self.stub / "wpa_cli"))))
+        raw_helper.chmod(0o755)
         raw = self.root / "wconnectraw"
         raw.write_text((handlers / "wconnectraw").read_text().replace(
-            "WPA_CLI=/usr/sbin/wpa_cli", "WPA_CLI=" + shlex.quote(str(self.stub / "wpa_cli"))))
+            "WIFI=/usr/local/bin/wifi", "WIFI=" + shlex.quote(str(raw_wifi))))
         process = self.start_connect()
         try:
             self.wait_for_target(process)

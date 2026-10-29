@@ -3,6 +3,15 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.7.13 (2026-10-29)
+
+> SemVer **patch** — `wifi <iface> connectraw <SSID>`와 FTP `wconnectraw`의 빠른 전환을 공통화하고, 연결 실패 뒤 checker의 변경 락 때문에 수동 재시도가 거절되던 경합을 막는다(#422 후속).
+
+- CLI와 FTP가 같은 검증·무선 명령·성공 후 비동기 SSID 저장 경로를 사용한다. 일반 `wifi connect`의 초기화·설정 적용·연결 대기를 raw 요청 앞에 추가하지 않는다.
+- 유효한 요청은 변경 락 획득 전에 명령·인터페이스·대상 SSID를 기록한다. 같은 trace의 제출 시간은 각 진입점 시작부터 측정한다.
+- 무선 변경 전에 기존 `reconfigure-grace`를 갱신해 checker가 연결 확인 중 자동 재연결로 개입하지 않게 한다. 다른 실제 설정 변경과 미검증 인증 정보에 대한 코드 `6` 거절은 유지한다.
+- `wconnect`·`wconnectraw`와 해당 `wifi` 명령은 저장 기본값을 유지하며 `--no-save`로 런타임 적용을 선택한다. 이 경로는 WPA conf·OPC 복원 표식을 변경하지 않고, 이전의 미완료 raw 저장 요청도 취소한다.
+
 ## 0.7.11 (2026-10-29)
 
 > SemVer **patch** — `wconnectraw` 저장 감시 path가 `paths.target`을 막아 `wifi_init`과 networkd가 서로 기다리던 부팅 지연을 없앤다(#422, PR #424 후속).

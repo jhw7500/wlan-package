@@ -1,5 +1,33 @@
 #!/bin/bash
+if [ "${2:-}" = connectraw ] \
+   && ! [[ "${WIFI_RAW_TRACE_START_MS:-}" =~ ^(0|[1-9][0-9]{0,13})$ \
+           && "${WIFI_RAW_TRACE_ID:-}" =~ ^${WIFI_RAW_TRACE_START_MS:-none}-[0-9]{1,10}$ ]]; then
+    if IFS=' .' read -r _raw_sec _raw_centi _raw_rest < /proc/uptime; then
+        case "$_raw_sec:$_raw_centi" in
+            *[!0-9:]*|:*) ;;
+            *)
+                _raw_centi=${_raw_centi#0}
+                WIFI_RAW_TRACE_START_MS=$((_raw_sec * 1000 + ${_raw_centi:-0} * 10))
+                WIFI_RAW_TRACE_ID="$WIFI_RAW_TRACE_START_MS-$$"
+                export WIFI_RAW_TRACE_START_MS WIFI_RAW_TRACE_ID
+                ;;
+        esac
+    fi
+fi
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+# The fast path owns its change guard and reply. Dispatch before the regular
+# initialization and EXIT sync so FTP and local commands have the same cost.
+if [ "${2:-}" = connectraw ]; then
+    if [ -x "$SCRIPT_DIR/wifi_connect_raw.sh" ]; then
+        RAW_CONNECT_HELPER="$SCRIPT_DIR/wifi_connect_raw.sh"
+    else
+        RAW_CONNECT_HELPER=/usr/local/scripts/wifi_connect_raw.sh
+    fi
+    RAW_CONNECT_IFACE=${1:-}
+    shift 2
+    exec "$RAW_CONNECT_HELPER" "$RAW_CONNECT_IFACE" "$@"
+fi
+
 # Prefer the sibling library for package/development invocation; the installed
 # `/usr/local/bin/wifi` has no sibling and therefore uses the installed copy.
 if [ -r "$SCRIPT_DIR/wifi_init_config_lib.sh" ]; then
@@ -1518,6 +1546,194 @@ runtime_switch_execute() {
     return 0
 }
 
+# Runtime-only normal connect.  The canonical profile and OPC marker are never
+# used as rollback media: capture the live network values before mutation and
+# restore them through the control interface on every failed attempt.
+runtime_no_save_restore() {
+    local restore_deadline
+    WIFI_WPA_DEADLINE_MS=${RUNTIME_OPERATION_DEADLINE_MS:-}
+    wpa_cli_ok "$IFACE" disconnect || return 1
+    wpa_cli_ok "$IFACE" set_network "$LIVE_NETWORK_ID" ssid "$RUNTIME_ORIGINAL_LIVE_SSID" \
+        || return 1
+    if [ "${RUNTIME_PSK_CHANGED:-0}" = 1 ]; then
+        wpa_cli_ok "$IFACE" set_network "$LIVE_NETWORK_ID" psk "$RUNTIME_ORIGINAL_LIVE_PSK" \
+            || return 1
+    fi
+    if [ "${RUNTIME_FREQ_CHANGED:-0}" = 1 ]; then
+        wpa_cli_ok "$IFACE" set freq_list "$RUNTIME_ORIGINAL_GLOBAL_FREQ" || return 1
+        wpa_cli_ok "$IFACE" set_network "$LIVE_NETWORK_ID" freq_list \
+            "$RUNTIME_ORIGINAL_NETWORK_FREQ" || return 1
+    fi
+    if [ "${RUNTIME_ORIGINAL_WAS_COMPLETED:-0}" != 1 ]; then
+        runtime_no_save_live_fields_match
+        return $?
+    fi
+    restore_deadline=$(runtime_switch_poll_deadline "$CONNECT_ROLLBACK_TIMEOUT" 0) || return 1
+    WIFI_WPA_DEADLINE_MS=$restore_deadline
+    connect_event_monitor_arm && wpa_cli_ok "$IFACE" reassociate \
+        && runtime_switch_wait_exact "$RUNTIME_ORIGINAL_SSID_WPA_TEXT" "$LIVE_NETWORK_ID" \
+            "$RUNTIME_ORIGINAL_PROOF_FREQS" "$restore_deadline"
+}
+
+runtime_no_save_live_fields_match() {
+    local ssid psk global_freq network_freq
+    ssid=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" \
+        get_network "$LIVE_NETWORK_ID" ssid 2>/dev/null) || return 1
+    [ "$ssid" = "$RUNTIME_ORIGINAL_LIVE_SSID" ] || return 1
+    if [ "${RUNTIME_PSK_CHANGED:-0}" = 1 ]; then
+        psk=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" \
+            get_network "$LIVE_NETWORK_ID" psk 2>/dev/null) || return 1
+        [ "$psk" = "$RUNTIME_ORIGINAL_LIVE_PSK" ] || return 1
+    fi
+    if [ "${RUNTIME_FREQ_CHANGED:-0}" = 1 ]; then
+        global_freq=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" get freq_list 2>/dev/null) \
+            || return 1
+        network_freq=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" \
+            get_network "$LIVE_NETWORK_ID" freq_list 2>/dev/null) || return 1
+        [ "$global_freq" != FAIL ] || global_freq=""
+        [ "$network_freq" != FAIL ] || network_freq=""
+        [ "$global_freq" = "$RUNTIME_ORIGINAL_GLOBAL_FREQ" ] \
+            && [ "$network_freq" = "$RUNTIME_ORIGINAL_NETWORK_FREQ" ] || return 1
+    fi
+}
+
+runtime_no_save_cleanup_stage() {
+    [ -z "${RUNTIME_ACTIVE_STAGE:-}" ] \
+        || wifi_wpa_run_child rm -f "$RUNTIME_ACTIVE_STAGE" 2>/dev/null
+}
+
+runtime_no_save_cancel_raw_commit() {
+    local request="$WIFI_RUN_DIR/${IFACE}.raw-commit"
+    if { [ -e "$request" ] || [ -L "$request" ]; } \
+       && ! wifi_wpa_run_child rm -f "$request"; then
+        echo "Error: cannot cancel pending raw persistence request" >&2
+        return 1
+    fi
+}
+
+runtime_no_save_fail() {
+    local rc="$1"
+    if ! runtime_no_save_restore; then
+        echo "Error: runtime-only rollback could not verify the original association" >&2
+    fi
+    runtime_no_save_cleanup_stage \
+        || echo "Error: runtime-only credential cleanup is incomplete" >&2
+    return "$rc"
+}
+
+runtime_no_save_signal_exit() {
+    local rc="$1"
+    trap - HUP INT TERM
+    runtime_no_save_restore \
+        || echo "Error: runtime-only rollback could not verify the original association" >&2
+    runtime_no_save_cleanup_stage \
+        || echo "Error: runtime-only credential cleanup is incomplete" >&2
+    exit "$rc"
+}
+
+runtime_no_save_execute() {
+    local attempt_deadline staged_psk="" psk_len staged_psk_present=0
+    RUNTIME_ACTIVE_STAGE="$WIFI_RUN_DIR/${IFACE}.runtime-psk.active"
+    RUNTIME_PSK_CHANGED=0
+    RUNTIME_FREQ_CHANGED=0
+    [ -n "$LIVE_NETWORK_ID" ] || {
+        echo "Error: runtime-only switch requires one selected live network" >&2
+        return 1
+    }
+    RUNTIME_ORIGINAL_WAS_COMPLETED=0
+    [ "$PRE_WPA_STATE" != COMPLETED ] || RUNTIME_ORIGINAL_WAS_COMPLETED=1
+    RUNTIME_ORIGINAL_LIVE_SSID=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" \
+        get_network "$LIVE_NETWORK_ID" ssid 2>/dev/null) || return 1
+    RUNTIME_ORIGINAL_SSID_WPA_TEXT=$(wifi_wpa_child_call \
+        wifi_ssid_conf_to_wpa_text "$RUNTIME_ORIGINAL_LIVE_SSID") || return 1
+    if [ "$RUNTIME_ORIGINAL_WAS_COMPLETED" = 1 ] \
+       && [ "$RUNTIME_ORIGINAL_SSID_WPA_TEXT" != "$LIVE_SSID_WPA_TEXT" ]; then
+        echo "Error: selected network does not match the associated runtime profile" >&2
+        return 1
+    fi
+    RUNTIME_ORIGINAL_LIVE_PSK=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" \
+        get_network "$LIVE_NETWORK_ID" psk 2>/dev/null) || return 1
+    RUNTIME_ORIGINAL_GLOBAL_FREQ=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" \
+        get freq_list 2>/dev/null) || return 1
+    RUNTIME_ORIGINAL_NETWORK_FREQ=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" \
+        get_network "$LIVE_NETWORK_ID" freq_list 2>/dev/null) || return 1
+    [ "$RUNTIME_ORIGINAL_GLOBAL_FREQ" != FAIL ] || RUNTIME_ORIGINAL_GLOBAL_FREQ=""
+    [ "$RUNTIME_ORIGINAL_NETWORK_FREQ" != FAIL ] || RUNTIME_ORIGINAL_NETWORK_FREQ=""
+    RUNTIME_ORIGINAL_PROOF_FREQS=$RUNTIME_ORIGINAL_NETWORK_FREQ
+
+    if [ -e "$RUNTIME_STAGE" ] || [ -L "$RUNTIME_STAGE" ]; then
+        runtime_switch_stage_metadata_ok "$RUNTIME_STAGE" || {
+            echo "Error: staged runtime credential is unsafe" >&2
+            return 1
+        }
+        [ "$RUNTIME_ORIGINAL_LIVE_PSK" != "*" ] && [ "$RUNTIME_ORIGINAL_LIVE_PSK" != FAIL ] \
+            && [ -n "$RUNTIME_ORIGINAL_LIVE_PSK" ] || {
+            echo "Error: current runtime credential cannot be captured for rollback" >&2
+            return 1
+        }
+        staged_psk=$(<"$RUNTIME_STAGE")
+        psk_len=$(wifi_wpa_child_call byte_len "$staged_psk") || {
+            return 1;
+        }
+        if [ "$psk_len" -lt 8 ] || [ "$psk_len" -gt 63 ]; then
+            return 1
+        fi
+        staged_psk_present=1
+    fi
+    RUNTIME_PSK_CHANGED=$staged_psk_present
+    [ "$SET_FREQ" = 0 ] || RUNTIME_FREQ_CHANGED=1
+
+    attempt_deadline=$(runtime_switch_poll_deadline "$CONNECT_TIMEOUT" \
+        "$((CONNECT_ROLLBACK_TIMEOUT * 1000))") || {
+        return 8
+    }
+    runtime_no_save_cancel_raw_commit || return 1
+    if [ "$staged_psk_present" = 1 ]; then
+        wifi_wpa_run_child mv -f "$RUNTIME_STAGE" "$RUNTIME_ACTIVE_STAGE" || return 1
+        runtime_switch_stage_metadata_ok "$RUNTIME_ACTIVE_STAGE" || {
+            runtime_no_save_cleanup_stage
+            return 1
+        }
+    fi
+    trap 'runtime_no_save_signal_exit 129' HUP
+    trap 'runtime_no_save_signal_exit 130' INT
+    trap 'runtime_no_save_signal_exit 143' TERM
+    WIFI_WPA_DEADLINE_MS=$attempt_deadline
+    if ! wpa_cli_ok "$IFACE" disconnect \
+       || ! wpa_cli_ok "$IFACE" set_network "$LIVE_NETWORK_ID" ssid "$SSID_CONF_VALUE"; then
+        runtime_no_save_fail 7
+        return $?
+    fi
+    if [ "$RUNTIME_PSK_CHANGED" = 1 ] \
+       && ! wpa_cli_ok "$IFACE" set_network "$LIVE_NETWORK_ID" psk "\"$staged_psk\""; then
+        runtime_no_save_fail 7
+        return $?
+    fi
+    if [ "$RUNTIME_FREQ_CHANGED" = 1 ] \
+       && { ! wpa_cli_ok "$IFACE" set freq_list "$FREQ_STR" \
+            || ! wpa_cli_ok "$IFACE" set_network "$LIVE_NETWORK_ID" freq_list "$FREQ_STR"; }; then
+        runtime_no_save_fail 7
+        return $?
+    fi
+    if ! connect_event_monitor_arm || ! wpa_cli_ok "$IFACE" reassociate; then
+        runtime_no_save_fail 7
+        return $?
+    fi
+    if ! runtime_switch_wait_exact "$TARGET_SSID_WPA_TEXT" "$LIVE_NETWORK_ID" \
+        "$FREQ_STR" "$attempt_deadline"; then
+        runtime_no_save_fail 8
+        return $?
+    fi
+    if ! runtime_no_save_cleanup_stage; then
+        runtime_no_save_fail 1
+        return $?
+    fi
+    trap - HUP INT TERM
+    ftpcmd_trace_log association_verified "path=runtime-only id=$RUNTIME_POLL_ID"
+    echo "associated by runtime-only: ssid=\"$RUNTIME_POLL_SSID\" freq=$RUNTIME_POLL_FREQ id=$RUNTIME_POLL_ID"
+    return 0
+}
+
 # A switch whose target is not in the last scan used to RECONFIGURE, which
 # disconnects first and then scans while the link is down (~0.5 s on the
 # board). Scanning for the target while still connected (~270 ms for 4
@@ -1702,7 +1918,8 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} psk {password} : persist"
     echo "       wifi {0|1|mlan0|mlan1} key {0|1|NONE|WPA-PSK|SAE|OWE|FT-PSK|WPA-EAP|...} : persist (wpa_supplicant 인식 토큰만; 공백구분 다중 지정 가능)"
     echo "       wifi {0|1|mlan0|mlan1} freq {freq_list|channel_list} : persist"
-    echo "       wifi {0|1|mlan0|mlan1} connect [ssid] [freq_list|channel_list] : ssid+전역/블록 freq_list 변경 후 reconfigure 적용(재연결); 인자 없으면 현재 설정으로 재연결(reassociate; 모드 A/다중 블록은 enable된 network 중 supplicant 선택)"
+    echo "       wifi {0|1|mlan0|mlan1} connectraw <ssid> : 빠른 SSID 전환 요청(기존 PSK), 연결 성공 시 비동기 SSID 저장"
+    echo "       wifi {0|1|mlan0|mlan1} connect [--save|--no-save] [--] [ssid [freq_list|channel_list]] : 기본은 저장 후 연결; --no-save는 runtime만 변경"
     echo "       wifi {0|1|mlan0|mlan1} scan [--ssid <ssid>] [freq_list|channel_list|2G|5G] : runtime (--ssid permits full-band scan without a frequency list)"
     echo "       wifi {0|1|mlan0|mlan1} mscan {get|channel_list|2G|5G} : runtime (setuserscan/getscantable)"
     echo "       wifi {0|1|mlan0|mlan1} roam [0|1..N] : same-SSID BSS 전환 (0=auto best, N=Nth AP, RSSI order)"
@@ -3064,6 +3281,8 @@ if [ "$IFACE" = mlan0 ] || [ "$IFACE" = mlan1 ]; then
             CHANGE_GUARD=1
             if [ "$2" = stage-psk ] || [ "$2" = psk ] || [ "$2" = key ]; then
                 CHANGE_GUARD_MODE=exclusive
+            elif [ "$2" = connect ] && [ "${3:-}" = --no-save ]; then
+                CHANGE_GUARD_MODE=exclusive
             elif [ "$2" = connect ] \
                && { [ "$CONNECT_FALLBACK_ENABLED" = 1 ] \
                     || [ "${FTPCMD_RUNTIME_PSK:-0}" = 1 ] \
@@ -3890,6 +4109,20 @@ case "$2" in
     # fallback restores the last verified profile but preserves the failure rc.
     set -euo pipefail
     shift 2
+    CONNECT_SAVE_PROFILE=1
+    CONNECT_POLICY_SEEN=0
+    case "${1:-}" in
+        --save) CONNECT_POLICY_SEEN=1; shift ;;
+        --no-save) CONNECT_POLICY_SEEN=1; CONNECT_SAVE_PROFILE=0; shift ;;
+        --) shift ;;
+        --*) echo "Error: unknown connect option '$1'" >&2; exit 2 ;;
+    esac
+    if [ "$CONNECT_POLICY_SEEN" = 1 ]; then
+        case "${1:-}" in
+            --) shift ;;
+            --*) echo "Error: duplicate or conflicting connect save policy '$1'" >&2; exit 2 ;;
+        esac
+    fi
     CONNECT_EXPLICIT_SSID=0
     [ "$#" -eq 0 ] || CONNECT_EXPLICIT_SSID=1
     ftpcmd_trace_log wifi_connect_entered
@@ -3935,6 +4168,13 @@ case "$2" in
         # it as a new runtime switch after stale recovery.
         RUNTIME_SWITCH_REQUESTED=0
     fi
+    if [ "$CONNECT_SAVE_PROFILE" = 0 ] \
+       && { [ "$RUNTIME_STALE" = 1 ] \
+            || [ -e "$WIFI_RUN_DIR/${IFACE}.credential-pending" ] \
+            || [ -L "$WIFI_RUN_DIR/${IFACE}.credential-pending" ]; }; then
+        echo "Error: runtime-only connect is blocked by a pending transaction" >&2
+        exit 6
+    fi
     if [ "$CONNECT_FALLBACK_ENABLED" = 1 ]; then
         wifi_wpa_conf_lock_acquire "$IFACE" try \
             && wifi_scan_transition_lock_acquire "$IFACE" 0 \
@@ -3945,7 +4185,26 @@ case "$2" in
         wifi_scan_transition_lock_acquire "$IFACE" \
             || { echo "Error: failed to lock scan transition for $IFACE" >&2; exit 1; }
     fi
-    wifi_connect_fallback_start
+    if [ "$CONNECT_SAVE_PROFILE" = 0 ] \
+       && { [ -e "$WIFI_RUN_DIR/${IFACE}.credential-pending" ] \
+            || [ -L "$WIFI_RUN_DIR/${IFACE}.credential-pending" ] \
+            || [ -e "$RUNTIME_IN_PROGRESS" ] || [ -L "$RUNTIME_IN_PROGRESS" ] \
+            || [ -e "$RUNTIME_ACTIVE_STAGE" ] || [ -L "$RUNTIME_ACTIVE_STAGE" ]; }; then
+        echo "Error: runtime-only connect is blocked by a pending transaction" >&2
+        exit 6
+    fi
+    if [ "$CONNECT_SAVE_PROFILE" = 0 ]; then
+        # Preserve the configured attempt/rollback budgets, but never arm the
+        # file-backed fallback for a runtime-only transaction.
+        CONNECT_TIMEOUT=$CONNECT_ATTEMPT_TIMEOUT
+        CONNECT_FALLBACK_ENABLED=0
+        APPLY_STORED_CONF=0
+        RUNTIME_SWITCH_REQUESTED=0
+        RUNTIME_OPERATION_DEADLINE_MS=$(($(wifi_wpa_monotonic_ms) + 25000))
+        WIFI_WPA_DEADLINE_MS=$RUNTIME_OPERATION_DEADLINE_MS
+    else
+        wifi_connect_fallback_start
+    fi
     if [ "$RUNTIME_SWITCH_REQUESTED" = 1 ] || [ "$RUNTIME_STALE" = 1 ]; then
         RUNTIME_OPERATION_DEADLINE_MS=$(($(wifi_wpa_monotonic_ms) + 25000))
         if [ -n "${CONNECT_OPERATION_DEADLINE_MS:-}" ] \
@@ -3971,6 +4230,17 @@ case "$2" in
         fi
         SSID_CONF_VALUE="${SSID_ENCODINGS[0]}"
         TARGET_SSID_WPA_TEXT="${SSID_ENCODINGS[1]}"
+        if [ "$CONNECT_SAVE_PROFILE" = 0 ]; then
+            FREQS=()
+            for arg in "${@:2}"; do
+                _f="$(wifi_wpa_child_call to_freq_mhz_checked "$arg")" || exit 1
+                FREQS+=( "$_f" )
+            done
+            if [ "${#FREQS[@]}" -gt 0 ]; then
+                SET_FREQ=1
+                FREQ_STR="${FREQS[*]}"
+            fi
+        fi
     fi
     # Capture the current id before any live mutation.  Explicit Mode B reports
     # it in timing diagnostics; no-argument reconnect pins it for exact landing proof.
@@ -3982,6 +4252,25 @@ case "$2" in
         [ "$_key" = "freq" ] && LIVE_FREQ="$_value"
     done <<< "$WPA_STATUS"
     if [[ ! "$LIVE_NETWORK_ID" =~ ^[0-9]+$ ]]; then LIVE_NETWORK_ID=""; fi
+    if [ "$CONNECT_SAVE_PROFILE" = 0 ] && [ "$#" -ge 1 ] \
+       && [ -z "$LIVE_NETWORK_ID" ]; then
+        LIVE_NETWORKS=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" list_networks 2>/dev/null) \
+            || LIVE_NETWORKS=""
+        LIVE_NETWORK_ID=$(printf '%s\n' "$LIVE_NETWORKS" | wifi_wpa_run_child awk -F '\t' '
+            $1 ~ /^[0-9]+$/ {
+                if ($4 ~ /\[CURRENT\]/) { current = $1; current_count++ }
+                if ($4 !~ /\[DISABLED\]/) { enabled = $1; enabled_count++ }
+            }
+            END {
+                if (current_count == 1) print current
+                else if (current_count == 0 && enabled_count == 1) print enabled
+            }
+        ')
+        if [[ ! "$LIVE_NETWORK_ID" =~ ^[0-9]+$ ]]; then
+            echo "Error: runtime-only switch cannot select one live network" >&2
+            exit 1
+        fi
+    fi
     if [ "$#" -eq 0 ] && [ -n "$LIVE_NETWORK_ID" ]; then
         TARGET_ID="$LIVE_NETWORK_ID"
         HAS_TARGET_ID=1
@@ -4015,6 +4304,12 @@ case "$2" in
         # CONNECTED event's ID instead of pinning the pre-reload status ID.
         HAS_TARGET_ID=0
         TARGET_ID=""
+    fi
+    if [ "$CONNECT_SAVE_PROFILE" = 0 ] && [ "$#" -ge 1 ]; then
+        [ "$(wifi_wpa_child_call wifi_wpa_conf_network_count "$CONF")" = 1 ] || {
+            echo "Error: runtime-only SSID switch requires one network block" >&2
+            exit 1
+        }
     fi
     if [ "$RUNTIME_SWITCH_REQUESTED" = 1 ] \
        && { [ "$APPLY_STORED_CONF" != 1 ] || [ "$#" -ne 1 ]; }; then
@@ -4193,6 +4488,16 @@ case "$2" in
         else
             RUNTIME_SWITCH_RC=$?
             exit "$RUNTIME_SWITCH_RC"
+        fi
+    fi
+    if [ "$CONNECT_SAVE_PROFILE" = 0 ] && [ "$#" -ge 1 ]; then
+        HAS_TARGET=1
+        TARGET_SSID=$NEW_SSID
+        if runtime_no_save_execute; then
+            exit 0
+        else
+            RUNTIME_NO_SAVE_RC=$?
+            exit "$RUNTIME_NO_SAVE_RC"
         fi
     fi
     wifi_connect_fallback_arm || exit 1
@@ -4384,6 +4689,12 @@ case "$2" in
         # The grace starts before reconfigure, which can itself take time.
         # Refresh it for the association wait (15s by default).
         : > "$WIFI_RUN_DIR/${IFACE}.reconfigure-grace" 2>/dev/null || true
+    fi
+    if [ "$CONNECT_SAVE_PROFILE" = 0 ] && [ "$#" -eq 0 ]; then
+        # Monitor attachment/arming and all no-SSID reconnect preflight
+        # succeeded. Cancel the older asynchronous save immediately before the
+        # first reassociation request, while the exclusive guard is held.
+        runtime_no_save_cancel_raw_commit || exit 1
     fi
     CONNECT_TRIGGER=reassociate
     if wpa_cli_ok "$IFACE" reassociate; then
