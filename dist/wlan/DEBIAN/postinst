@@ -459,6 +459,28 @@ customctl() {
       [ "$_unit_name" = "wifi_apply_enabled.service" ] && continue
       rm -f "$_old_link" 2>/dev/null || true
   done
+  # >>> wpa-boot-link-migration
+  # 구 wpa_supplicant@.service 의 multi-user.target 링크를 제거한다. 새 unit의
+  # enable 링크는 부팅하지 않는 wifi-supplicant-manual.target 아래에 놓이고,
+  # 아래 wifi_apply_enabled.sh가 JSON/매니저 상태에 맞춰 다시 enable한다.
+  # 정확한 이전 부팅 링크만 제거하고 실행 중인 매니저 소유 유닛은 멈추지 않는다.
+  # 제거에 실패하면 다음 부팅에서 매니저보다 먼저 자동 기동될 수 있으므로 설치를 실패 처리한다.
+  for _wpa_iface in mlan0 mlan1; do
+    _wpa_boot_link="/etc/systemd/system/multi-user.target.wants/wpa_supplicant@${_wpa_iface}.service"
+    if [ -L "$_wpa_boot_link" ]; then
+      if ! rm -- "$_wpa_boot_link"; then
+        printf '[%s] [%s] failed to remove legacy wpa_supplicant boot link: %s\n' "$tag" "$KEY" "$_wpa_boot_link" >&2
+        logger -p local0.err "[$tag:$LINENO] [$KEY] failed to remove legacy wpa_supplicant boot link: $_wpa_boot_link" || true
+        exit 1
+      fi
+    fi
+    if [ -e "$_wpa_boot_link" ] || [ -L "$_wpa_boot_link" ]; then
+      printf '[%s] [%s] legacy wpa_supplicant boot link remains: %s\n' "$tag" "$KEY" "$_wpa_boot_link" >&2
+      logger -p local0.err "[$tag:$LINENO] [$KEY] legacy wpa_supplicant boot link remains: $_wpa_boot_link" || true
+      exit 1
+    fi
+  done
+  # <<< wpa-boot-link-migration
   systemctl daemon-reload 2>/dev/null || true
 
   # 시스템 unit + wifi 진입점(wifi_init/wifi_apply_enabled) + 기본 복구 unit을 먼저

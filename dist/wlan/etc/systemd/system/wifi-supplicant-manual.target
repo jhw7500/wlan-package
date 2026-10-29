@@ -1,0 +1,4 @@
+[Unit]
+Description=Enablement marker for WiFi supplicant instances
+# 이 target은 부팅 경로에서 시작하지 않는다. wifi_init.sh/wifi_services.sh가
+# 직접 start하고, wifi_manager는 같은 인스턴스를 명시적으로 restart한다.
