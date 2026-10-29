@@ -201,7 +201,7 @@ class RawCommit(unittest.TestCase):
         self.assertIn("PathExists=/run/wifi/%i.raw-commit", path_unit)
         self.assertIn("Unit=wifi_raw_commit@%i.service", path_unit)
         self.assertIn("ExecStart=/usr/local/scripts/wifi_raw_commit.py --from-request %i", service_unit)
-        self.assertIn("ExecStartPre=/bin/sleep 0.5", service_unit)
+        self.assertNotIn("ExecStartPre=", service_unit)
         self.assertIn("PartOf=wifi_init.service", service_unit)
         self.assertIn("StartLimitIntervalSec=30s", service_unit)
         self.assertIn("StartLimitBurst=30", service_unit)
