@@ -268,6 +268,42 @@ for _ssid_case in 'a"b' $'caf\xc3\xa9' 'a\b' 'x#y' 'abcdefghijklmnopqrstuvwxyzAB
         log_fail "python3 still judges [$_ssid_case]"
     fi
 done
+# runtime-only 전환은 live SSID(`get_network ssid`, conf 표기)를 wpa 텍스트로 되돌린다.
+# 정확히 `"<플레인 1~32자>"` 형태면 셸이 끝내고, hex·`"`·비ASCII·앞뒤 공백·길이 초과는
+# 계속 python 이 판정한다. 두 경로의 결과가 같아야 한다.
+for _ssid_case in 'jhw_wlan_' ' -n ' 'Guest-AP.2 ' 'abcdefghijklmnopqrstuvwxyzABCDEF'; do
+    rm -f "$_enc_tmpd/calls"
+    expect_equal "quoted plain conf SSID decodes to wpa text [$_ssid_case]" \
+        "$(wifi_ssid_conf_to_wpa_text "\"$_ssid_case\"")" "$_ssid_case"
+    if [ -e "$_enc_tmpd/calls" ]; then
+        log_fail "quoted plain conf SSID decodes without starting python3 [$_ssid_case]"
+    else
+        log_pass "quoted plain conf SSID decodes without starting python3 [$_ssid_case]"
+    fi
+done
+for _ssid_case in '6a68775f776c616e5f' '"a"b"' $'"caf\xc3\xa9"' ' "jhw_wlan_"' \
+    '"abcdefghijklmnopqrstuvwxyzABCDEFG"' '""' '"'; do
+    rm -f "$_enc_tmpd/calls"
+    wifi_ssid_conf_to_wpa_text "$_ssid_case" >/dev/null 2>&1 || :
+    if [ -e "$_enc_tmpd/calls" ]; then
+        log_pass "python3 still judges conf SSID [$_ssid_case]"
+    else
+        log_fail "python3 still judges conf SSID [$_ssid_case]"
+    fi
+done
+expect_equal "hex conf SSID decodes to wpa text" \
+    "$(wifi_ssid_conf_to_wpa_text '6a68775f776c616e5f')" 'jhw_wlan_'
+expect_equal "surrounding whitespace around a quoted conf SSID is stripped" \
+    "$(wifi_ssid_conf_to_wpa_text ' "jhw_wlan_" ')" 'jhw_wlan_'
+expect_equal "non-ASCII conf SSID decodes to escaped wpa text" \
+    "$(wifi_ssid_conf_to_wpa_text $'"caf\xc3\xa9"')" 'caf\xc3\xa9'
+for _ssid_case in '""' '"abcdefghijklmnopqrstuvwxyzABCDEFG"' 'jhw_wlan_' '"'; do
+    if wifi_ssid_conf_to_wpa_text "$_ssid_case" >/dev/null 2>&1; then
+        log_fail "conf SSID decoder rejects [$_ssid_case]"
+    else
+        log_pass "conf SSID decoder rejects [$_ssid_case]"
+    fi
+done
 PATH=$_enc_saved_path
 rm -rf "$_enc_tmpd"
 

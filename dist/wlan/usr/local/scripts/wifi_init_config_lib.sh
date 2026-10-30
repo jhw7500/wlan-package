@@ -171,23 +171,27 @@ wifi_ssid_array_validate_json() {
 # 영문·숫자·`_`·`.`·`-`·공백만으로 된 1~32자 SSID 는 아래 python 과 출력이 같다
 # (conf 는 따옴표 표기, wpa 텍스트는 원문). 타깃에서 python3 기동이 한 번에
 # ~190ms 라 이 경우는 셸에서 끝낸다. 범위 표기(a-z)는 로케일에 따라 경계가
-# 새므로 문자를 나열한다. 그 밖의 문자와 conf-wpa 모드는 python 이 판정한다.
+# 새므로 문자를 나열한다. conf-wpa 는 live `get_network ssid` 의 conf 표기(`"<ssid>"` 또는 hex)를
+# wpa 텍스트로 되돌리며, 정확히 따옴표로만 감싼 플레인 SSID 는 그 안이 그대로 답이다.
+# 그 밖의 문자·hex·앞뒤 공백은 python 이 판정한다.
 _wifi_ssid_encode() {
+    local plain
     case "$2" in
-        conf|wpa|both)
-            case "$1" in
-                ''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.\ -]*) ;;
-                *)
-                    if [ "${#1}" -le 32 ]; then
-                        case "$2" in
-                            conf) printf '"%s"\n' "$1" ;;
-                            wpa) printf '%s\n' "$1" ;;
-                            both) printf '"%s"\n%s\n' "$1" "$1" ;;
-                        esac
-                        return 0
-                    fi
-                    ;;
-            esac
+        conf|wpa|both) plain=$1 ;;
+        conf-wpa) case "$1" in \"?*\") plain=${1#\"}; plain=${plain%\"} ;; *) plain= ;; esac ;;
+        *) plain= ;;
+    esac
+    case "$plain" in
+        ''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.\ -]*) ;;
+        *)
+            if [ "${#plain}" -le 32 ]; then
+                case "$2" in
+                    conf) printf '"%s"\n' "$plain" ;;
+                    wpa|conf-wpa) printf '%s\n' "$plain" ;;
+                    both) printf '"%s"\n%s\n' "$plain" "$plain" ;;
+                esac
+                return 0
+            fi
             ;;
     esac
     python3 - "$1" "$2" 2>/dev/null <<'PY'
