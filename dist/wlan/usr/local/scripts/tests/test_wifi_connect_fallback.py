@@ -1857,7 +1857,7 @@ args=()''', 1))
         (self.state / "block-target").touch()
         # Even on a test host with a real mlan0, never run its ip command.
         ip = self.stub / "ip"
-        ip.write_text("#!/bin/sh\nexit 0\n")
+        ip.write_text("#!/bin/sh\nprintf '7: eth0 inet 192.0.2.15/24 scope global eth0\\n'\n")
         ip.chmod(0o755)
         handlers = SCRIPTS_DIR.parents[2] / "opt/ftpcmd/bin"
         raw_scripts = self.root / "raw-scripts"
@@ -1880,7 +1880,8 @@ args=()''', 1))
                                   (handlers / "ifcdown", ["mlan0"])):
                 with self.subTest(handler=handler.name):
                     result = subprocess.run(["sh", str(handler), *args],
-                                            env=self.environment(), capture_output=True,
+                                            env=dict(self.environment(), FTPCMD_LOCAL_ADDR="192.0.2.15"),
+                                            capture_output=True,
                                             text=True, timeout=2)
                     self.assertEqual(result.returncode, 6, result.stdout + result.stderr)
                     self.assertIn("busy", result.stdout + result.stderr)

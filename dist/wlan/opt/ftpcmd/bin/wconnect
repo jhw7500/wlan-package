@@ -37,7 +37,8 @@
 # patch header before changing anything here.
 set -u
 
-/usr/bin/python3 "$(dirname "$0")/../lib/ftpcmd_log.py" wconnect >/dev/null 2>&1 || true
+case "$0" in */*) _ftpcmd_dir=${0%/*} ;; *) _ftpcmd_dir=. ;; esac
+"$_ftpcmd_dir/../lib/ftpcmd_start_log" wconnect >/dev/null 2>&1 || true
 
 WIFI=/usr/local/bin/wifi
 WIFI_RUN_DIR=${WIFI_RUN_DIR:-/run/wifi}

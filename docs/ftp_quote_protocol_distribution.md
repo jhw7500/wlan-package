@@ -249,6 +249,13 @@ fallback을 시작하지 않는다. `wconnectraw`, Mode A와 다중 `network` �
 생긴 SSID 앞에는 `--`를 넣는다. 설정 재적재·무선 재시작·재부팅 시 저장 설정이
 다시 적용된다. 보드 셸의 `wifi <iface> connect`·`connectraw`도 같은 옵션을 받는다.
 
+`wconnectraw`는 FTP 제어 연결이 대상 무선 인터페이스를 사용하면 코드 `3`으로
+거절한다. `FTPCMD_LOCAL_ADDR`가 누락·빈 값이거나 제어 주소 조회가 실패한 경우,
+주소를 찾지 못하거나 같은 주소가 여러 인터페이스에 있어 하나로 확인할 수 없는
+경우도 코드 `3`으로 거절한다. 이 검사는 무선 변경과 저장 요청 변경 전에 수행한다.
+유선 또는 다른 무선 인터페이스로 관리 연결을 유지해야 한다. FTP 제어 주소가
+필요 없는 로컬 실행은 `wifi <iface> connectraw`를 사용한다.
+
 기본 저장 경로에서 `wconnectraw`의 `200 SUCCESS`는 무선 제어 명령 제출과 `/run/wifi` 저장 요청
 게시의 성공이다. 보드 셸의 `wifi <iface> connectraw <SSID...>`와 같은 경로를
 사용한다. 유효한 명령의 수신은 `ftpcmd_raw_timing phase=dispatch_received`로 기록하며,
@@ -257,6 +264,15 @@ fallback을 시작하지 않는다. `wconnectraw`, Mode A와 다중 `network` �
 FTP 프로세스 밖의 systemd path/service가 요청을 처리하며,
 AP 연결 및 저장 완료를 기다리지 않는다. 연결이 확인되면
 단일 `network`의 Mode B에서 변경되지 않은 설정 파일의 SSID만 저장한다.
+저장 직전에는 실제 연결의 키 관리 방식·PSK와 저장 프로필에 명시한 보안 제약도
+비교한다. 불일치하면 `authentication_mismatch`, 지원하지 않는 인증 방식이나
+마스킹된 값 등으로 확인할 수 없으면 `authentication_unverifiable`을 기록하고
+설정 파일과 OPC 복원 표식을 보존한다. 명시적 `key_mgmt=WPA-PSK`와 확인 가능한
+PSK 또는 WEP 키가 없는 명시적 `key_mgmt=NONE` 프로필만 저장을 지원한다.
+키 관리 방식이 생략되거나 Enterprise·SAE·WEP 등 확인 범위 밖이면 저장하지 않는다.
+인증값은 로그에 남기지 않으며, 이 검사는 비동기 작업 안에서 수행하므로 원래
+명령의 응답에 연결·인증 확인 대기를 추가하지 않는다. `wconnect --no-save`로
+PSK를 바꾼 뒤 raw 저장을 요청해도 새 SSID와 이전 PSK를 함께 확정하지 않는다.
 PSK·주파수는 유지한다. `wstatus`로 연결을, `wssid`로 저장 결과를 확인한다.
 저장 완료 뒤에는 재부팅해도 새 SSID가 유지된다. 저장 전 재부팅하면 휘발성
 요청이 사라질 수 있고, 연속 명령의 최신 요청은 앞선 미완료 요청을 대체한다.
@@ -295,6 +311,7 @@ PSK·주파수는 유지한다. `wstatus`로 연결을, `wssid`로 저장 결과
 | `wstatus` | `8` | 상태 조회는 가능하지만 현재 연결되지 않음 |
 | `wconnectraw` | `1` | 상태·프로필 조회 실패, 인터페이스 비활성, 저장 작업 실행 환경 오류 또는 대상 네트워크 선택 실패 |
 | `wconnectraw` | `2` | 필수 인터페이스 누락·오류, 저장 옵션 오류 또는 SSID 누락·검증 실패 |
+| `wconnectraw` | `3` | FTP 제어 연결이 대상 인터페이스를 사용하거나 제어 주소 누락·빈 값·조회 실패·미확인·모호함으로 요청 거부 |
 | `wconnectraw` | `7` | 런타임 명령 실패 |
 | `wconnectraw` | `9` | 런타임 전환 요청 후 저장 요청 파일 게시 실패 |
 

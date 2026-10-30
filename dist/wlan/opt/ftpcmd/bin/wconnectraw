@@ -11,9 +11,48 @@ if IFS=' .' read -r _raw_sec _raw_centi _raw_rest < /proc/uptime; then
             ;;
     esac
 fi
-/usr/bin/python3 "$(dirname "$0")/../lib/ftpcmd_log.py" wconnectraw >/dev/null 2>&1 || true
+case "$0" in */*) _ftpcmd_dir=${0%/*} ;; *) _ftpcmd_dir=. ;; esac
+"$_ftpcmd_dir/../lib/ftpcmd_start_log" wconnectraw >/dev/null 2>&1 || true
 
 WIFI=/usr/local/bin/wifi
+case "${1:-}" in
+    mlan0|0) IFACE=mlan0 ;;
+    mlan1|1) IFACE=mlan1 ;;
+    *) IFACE= ;;
+esac
+
+# Refuse to move the WLAN carrying this FTP control session before the shared
+# raw engine can change supplicant state or persistence requests.
+if [ -n "$IFACE" ]; then
+    CTRL_IFACE=
+    if [ -n "${FTPCMD_LOCAL_ADDR:-}" ] && CTRL_ADDRS=$(ip -o addr show 2>/dev/null); then
+        CTRL_IFACE=$(awk -v a="$FTPCMD_LOCAL_ADDR" '
+            $1 ~ /^[0-9]+:$/ && ($3 == "inet" || $3 == "inet6") {
+                if (split($4, addr, "/") == 2 && addr[1] == a &&
+                    addr[2] ~ /^[0-9]+$/ && !seen[$2]++) {
+                    iface = $2
+                    count++
+                }
+            }
+            END { if (count == 1) print iface; else exit 1 }
+        ' <<EOF
+$CTRL_ADDRS
+EOF
+        ) || CTRL_IFACE=
+    fi
+    if [ -z "$CTRL_IFACE" ] || [ "$CTRL_IFACE" = "$IFACE" ]; then
+        DETAIL="FTP control interface lookup failed or ambiguous"
+        if [ "$CTRL_IFACE" = "$IFACE" ]; then
+            DETAIL="target interface carries FTP control connection"
+        fi
+        logger -p local0.err \
+            "ftpcmd_result command=wconnectraw status=fail code=3 iface=$IFACE detail=$DETAIL" \
+            >/dev/null 2>&1 || true
+        printf 'FAIL code=3\n'
+        exit 3
+    fi
+fi
+
 IFACE=${1:-}
 [ "$#" -eq 0 ] || shift
 WIFI_CONNECT_RAW_ORIGIN=ftp

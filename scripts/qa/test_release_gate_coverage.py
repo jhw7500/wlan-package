@@ -17,7 +17,10 @@ exit code 만 보는 검사로는 둘 다 안 잡힌다 — 빠진 검사는 실
 그래서 게이트 스크립트의 **모양**을 단언한다(이 저장소가 이미 쓰는 관용구:
 ``wifi_init_config_test.sh`` 의 "has one update_mac write point").
 """
+import os
 import re
+import shutil
+import tempfile
 import subprocess
 import unittest
 from pathlib import Path
@@ -197,6 +200,48 @@ run_source
             f"helper={REPO}/dist/wlan/usr/local/scripts/wifi_factory_topology.py",
             result.stdout,
         )
+
+
+class NativeLoggerBuildPreparation(unittest.TestCase):
+    def test_release_prepares_start_logger_before_prebuild_gate(self):
+        # Both targets use host cc here; the ARM64 package gate checks ABI.
+        for arch in ("aarch64", "arm64", "x86_64"):
+            with self.subTest(arch=arch), tempfile.TemporaryDirectory() as scratch:
+                root = Path(scratch)
+                lib = root / "dist/wlan/opt/ftpcmd/lib"
+                lib.mkdir(parents=True)
+                for name in ("Makefile", "ftpcmd_start_log.c"):
+                    shutil.copy2(REPO / "dist/wlan/opt/ftpcmd/lib" / name, lib / name)
+                shutil.copy2(REPO / "build.sh", root / "build.sh")
+                scripts = root / "scripts"
+                scripts.mkdir()
+                gate = scripts / "validate_release.sh"
+                gate.write_text('''#!/bin/sh
+helper="$PWD/dist/wlan/opt/ftpcmd/lib/ftpcmd_start_log"
+[ "$1" = pre ] || exit 80
+if [ ! -f "$helper" ] || [ ! -x "$helper" ] || [ -L "$helper" ]; then
+    printf 'TEST: native logger missing at pre gate\n'
+    exit 78
+fi
+printf 'TEST: native logger ready at pre gate\n'
+exit 77
+''')
+                stubs = root / "stubs"
+                stubs.mkdir()
+                uname = stubs / "uname"
+                uname.write_text("#!/bin/sh\nprintf '%s\\n' '" + arch + "'\n")
+                uname.chmod(0o755)
+                result = subprocess.run(
+                    ["bash", str(root / "build.sh"), "--release"], cwd=root,
+                    env={**os.environ, "PATH": str(stubs) + ":" + os.environ["PATH"],
+                         "CC": "cc", "CROSS_CC": "cc", "CPPFLAGS": "", "CFLAGS": "",
+                         "LDFLAGS": "", "LDLIBS": ""},
+                    capture_output=True, text=True, timeout=15,
+                )
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("TEST: native logger ready at pre gate", result.stdout)
+                self.assertNotIn("Building wbridge", result.stdout)
+                self.assertFalse((root / "release").exists())
 
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@ from unittest import mock
 
 WORKER = Path(__file__).resolve().parents[1] / "wifi_raw_commit.py"
 UNITS = Path(__file__).resolve().parents[4] / "etc/systemd/system"
-ORIGINAL = b'update_config=0\nfreq_list=5180 5200\nnetwork={\n    ssid="Old AP"\n    psk="password123"\n    freq_list=5180 5200\n}\n'
+ORIGINAL = b'update_config=0\nfreq_list=5180 5200\nnetwork={\n    ssid="Old AP"\n    key_mgmt=WPA-PSK\n    psk="password123"\n    freq_list=5180 5200\n    proto=RSN\n    pairwise=CCMP\n    group=CCMP\n}\n'
 SPEC = importlib.util.spec_from_file_location("wifi_raw_commit", WORKER)
 RAW_COMMIT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(RAW_COMMIT)
@@ -55,7 +55,18 @@ class RawCommit(unittest.TestCase):
             '  status) if [ -n "$RAW_TEST_STATUS_SLEEP" ]; then sleep "$RAW_TEST_STATUS_SLEEP"; fi; '
             'if [ -n "$RAW_TEST_STATUS_RC" ]; then exit "$RAW_TEST_STATUS_RC"; fi; '
             'touch "$RAW_TEST_STATUS_READ"; cat "$RAW_TEST_STATUS" ;;\n'
-            '  get_network) printf \'"%s"\\n\' "$RAW_TEST_NETWORK_SSID" ;;\n'
+            '  get_network) case "$5" in\n'
+            '    ssid) printf \'"%s"\\n\' "$RAW_TEST_NETWORK_SSID" ;;\n'
+            '    key_mgmt) printf \'%s\\n\' "$RAW_TEST_NETWORK_KEY_MGMT" ;;\n'
+            '    psk) printf \'%s\\n\' "$RAW_TEST_NETWORK_PSK" ;;\n'
+            '    proto) printf \'%s\\n\' "$RAW_TEST_NETWORK_PROTO" ;;\n'
+            '    pairwise) printf \'%s\\n\' "$RAW_TEST_NETWORK_PAIRWISE" ;;\n'
+            '    group) printf \'%s\\n\' "$RAW_TEST_NETWORK_GROUP" ;;\n'
+            '    auth_alg) printf \'%s\\n\' "$RAW_TEST_NETWORK_AUTH_ALG" ;;\n'
+            '    ieee80211w) printf \'%s\\n\' "$RAW_TEST_NETWORK_IEEE80211W" ;;\n'
+            '    wep_key0) printf \'%s\\n\' "$RAW_TEST_NETWORK_WEP_KEY0" ;;\n'
+            '    *) printf \'FAIL\\n\' ;;\n'
+            '  esac ;;\n'
             '  *) exit 2 ;;\n'
             'esac\n'
         )
@@ -78,7 +89,10 @@ class RawCommit(unittest.TestCase):
             env=self.worker_env(target_ssid),
         )
 
-    def worker_env(self, target_ssid="Office AP B", status_sleep="", status_rc=""):
+    def worker_env(self, target_ssid="Office AP B", status_sleep="", status_rc="",
+                   key_mgmt="WPA-PSK", psk='"password123"', proto="RSN",
+                   pairwise="CCMP", group="CCMP", auth_alg="OPEN",
+                   ieee80211w="0", wep_key0="FAIL"):
         env = os.environ.copy()
         env.update({
             "WIFI_RUN_DIR": str(self.run_dir),
@@ -92,6 +106,14 @@ class RawCommit(unittest.TestCase):
             "RAW_TEST_STATUS_SLEEP": status_sleep,
             "RAW_TEST_STATUS_RC": status_rc,
             "RAW_TEST_NETWORK_SSID": target_ssid,
+            "RAW_TEST_NETWORK_KEY_MGMT": key_mgmt,
+            "RAW_TEST_NETWORK_PSK": psk,
+            "RAW_TEST_NETWORK_PROTO": proto,
+            "RAW_TEST_NETWORK_PAIRWISE": pairwise,
+            "RAW_TEST_NETWORK_GROUP": group,
+            "RAW_TEST_NETWORK_AUTH_ALG": auth_alg,
+            "RAW_TEST_NETWORK_IEEE80211W": ieee80211w,
+            "RAW_TEST_NETWORK_WEP_KEY0": wep_key0,
         })
         return env
 
@@ -235,6 +257,153 @@ class RawCommit(unittest.TestCase):
         self.assertEqual(self.conf.read_bytes(), ORIGINAL.replace(b'"Old AP"', b'"Office AP B"'))
         self.assertEqual(stat.S_IMODE(self.conf.stat().st_mode), 0o600)
         self.assertFalse(self.marker.exists())
+
+    def test_different_live_passphrase_refuses_persistence_without_disclosure(self):
+        live_psk = '"runtime-new-secret"'
+        with mock.patch.dict(
+                os.environ, self.worker_env(psk=live_psk), clear=True), \
+             mock.patch.object(RAW_COMMIT.syslog, "syslog") as logged:
+            result = RAW_COMMIT.commit(
+                "mlan0", "7", "Office AP B", hashlib.sha256(ORIGINAL).hexdigest(),
+                "test-trace", "aa:bb:cc:dd:ee:ff", True)
+
+        self.assertEqual(result, 6)
+        self.assertEqual(self.conf.read_bytes(), ORIGINAL)
+        self.assertTrue(self.marker.exists())
+        message = logged.call_args.args[1]
+        self.assertIn("reason=authentication_mismatch", message)
+        self.assertNotIn("password123", message)
+        self.assertNotIn("runtime-new-secret", message)
+
+    def test_masked_live_passphrase_is_unverifiable_and_not_persisted(self):
+        with mock.patch.dict(
+                os.environ, self.worker_env(psk="*"), clear=True), \
+             mock.patch.object(RAW_COMMIT.syslog, "syslog") as logged:
+            result = RAW_COMMIT.commit(
+                "mlan0", "7", "Office AP B", hashlib.sha256(ORIGINAL).hexdigest(),
+                "test-trace", "aa:bb:cc:dd:ee:ff", True)
+
+        self.assertEqual(result, 6)
+        self.assertEqual(self.conf.read_bytes(), ORIGINAL)
+        self.assertTrue(self.marker.exists())
+        self.assertIn("reason=authentication_unverifiable", logged.call_args.args[1])
+
+    def test_matching_explicit_open_profile_can_persist_target(self):
+        open_profile = ORIGINAL.replace(
+            b"    key_mgmt=WPA-PSK\n    psk=\"password123\"\n",
+            b"    key_mgmt=NONE\n",
+        ).replace(b"    proto=RSN\n    pairwise=CCMP\n    group=CCMP\n", b"")
+        self.conf.write_bytes(open_profile)
+        with mock.patch.dict(
+                os.environ,
+                self.worker_env(key_mgmt="NONE", psk="FAIL"), clear=True):
+            result = RAW_COMMIT.commit(
+                "mlan0", "7", "Office AP B",
+                hashlib.sha256(open_profile).hexdigest(), "test-trace",
+                "aa:bb:cc:dd:ee:ff", True)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            self.conf.read_bytes(),
+            open_profile.replace(b'"Old AP"', b'"Office AP B"'),
+        )
+        self.assertFalse(self.marker.exists())
+
+    def test_live_wep_material_is_not_accepted_as_an_open_profile(self):
+        open_profile = ORIGINAL.replace(
+            b"    key_mgmt=WPA-PSK\n    psk=\"password123\"\n",
+            b"    key_mgmt=NONE\n",
+        ).replace(b"    proto=RSN\n    pairwise=CCMP\n    group=CCMP\n", b"")
+        self.conf.write_bytes(open_profile)
+        with mock.patch.dict(
+                os.environ,
+                self.worker_env(key_mgmt="NONE", psk="FAIL", wep_key0='"abcde"'),
+                clear=True), \
+             mock.patch.object(RAW_COMMIT.syslog, "syslog") as logged:
+            result = RAW_COMMIT.commit(
+                "mlan0", "7", "Office AP B",
+                hashlib.sha256(open_profile).hexdigest(), "test-trace",
+                "aa:bb:cc:dd:ee:ff", True)
+
+        self.assertEqual(result, 6)
+        self.assertEqual(self.conf.read_bytes(), open_profile)
+        self.assertTrue(self.marker.exists())
+        self.assertIn("reason=authentication_mismatch", logged.call_args.args[1])
+
+    def test_malformed_unquoted_stored_passphrase_is_unverifiable(self):
+        malformed = ORIGINAL.replace(b'psk="password123"', b"psk=password123")
+        self.conf.write_bytes(malformed)
+        with mock.patch.dict(
+                os.environ, self.worker_env(psk="password123"), clear=True), \
+             mock.patch.object(RAW_COMMIT.syslog, "syslog") as logged:
+            result = RAW_COMMIT.commit(
+                "mlan0", "7", "Office AP B", hashlib.sha256(malformed).hexdigest(),
+                "test-trace", "aa:bb:cc:dd:ee:ff", True)
+
+        self.assertEqual(result, 6)
+        self.assertEqual(self.conf.read_bytes(), malformed)
+        self.assertTrue(self.marker.exists())
+        self.assertIn("reason=authentication_unverifiable", logged.call_args.args[1])
+
+    def test_live_pairwise_security_drift_refuses_persistence(self):
+        with mock.patch.dict(
+                os.environ, self.worker_env(pairwise="TKIP"), clear=True), \
+             mock.patch.object(RAW_COMMIT.syslog, "syslog") as logged:
+            result = RAW_COMMIT.commit(
+                "mlan0", "7", "Office AP B", hashlib.sha256(ORIGINAL).hexdigest(),
+                "test-trace", "aa:bb:cc:dd:ee:ff", True)
+
+        self.assertEqual(result, 6)
+        self.assertEqual(self.conf.read_bytes(), ORIGINAL)
+        self.assertTrue(self.marker.exists())
+        self.assertIn("reason=authentication_mismatch", logged.call_args.args[1])
+
+    def test_raw_psk_matches_only_the_same_live_raw_psk(self):
+        raw_psk = "a" * 64
+        profile = ORIGINAL.replace(b'"password123"', raw_psk.encode("ascii"))
+        self.conf.write_bytes(profile)
+        with mock.patch.dict(
+                os.environ, self.worker_env(psk=raw_psk), clear=True):
+            result = RAW_COMMIT.commit(
+                "mlan0", "7", "Office AP B", hashlib.sha256(profile).hexdigest(),
+                "test-trace", "aa:bb:cc:dd:ee:ff", True)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            self.conf.read_bytes(), profile.replace(b'"Old AP"', b'"Office AP B"'))
+
+    def test_raw_psk_hex_case_does_not_create_false_authentication_drift(self):
+        stored_psk = "ABCDEF" * 10 + "ABCD"
+        live_psk = stored_psk.lower()
+        profile = ORIGINAL.replace(b'"password123"', stored_psk.encode("ascii"))
+        self.conf.write_bytes(profile)
+        with mock.patch.dict(
+                os.environ, self.worker_env(psk=live_psk), clear=True):
+            result = RAW_COMMIT.commit(
+                "mlan0", "7", "Office AP B", hashlib.sha256(profile).hexdigest(),
+                "test-trace", "aa:bb:cc:dd:ee:ff", True)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            self.conf.read_bytes(), profile.replace(b'"Old AP"', b'"Office AP B"'))
+
+    def test_explicit_auth_alg_and_pmf_drift_refuse_persistence(self):
+        cases = (
+            (b"    auth_alg=OPEN\n", {"auth_alg": "SHARED"}),
+            (b"    ieee80211w=1\n", {"ieee80211w": "0"}),
+        )
+        for setting, live_override in cases:
+            with self.subTest(setting=setting):
+                profile = ORIGINAL.replace(b"}\n", setting + b"}\n")
+                self.conf.write_bytes(profile)
+                with mock.patch.dict(
+                        os.environ, self.worker_env(**live_override), clear=True):
+                    result = RAW_COMMIT.commit(
+                        "mlan0", "7", "Office AP B",
+                        hashlib.sha256(profile).hexdigest(), "test-trace",
+                        "aa:bb:cc:dd:ee:ff", True)
+                self.assertEqual(result, 6)
+                self.assertEqual(self.conf.read_bytes(), profile)
 
     def test_old_association_does_not_persist_target(self):
         self.set_status("Old AP")

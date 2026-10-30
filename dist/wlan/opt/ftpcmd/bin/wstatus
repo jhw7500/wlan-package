@@ -3,7 +3,8 @@
 #   quote wstatus <mlan0|mlan1|0|1>
 set -u
 
-/usr/bin/python3 "$(dirname "$0")/../lib/ftpcmd_log.py" wstatus >/dev/null 2>&1 || true
+case "$0" in */*) _ftpcmd_dir=${0%/*} ;; *) _ftpcmd_dir=. ;; esac
+"$_ftpcmd_dir/../lib/ftpcmd_start_log" wstatus >/dev/null 2>&1 || true
 
 WPA_CLI=/usr/sbin/wpa_cli
 IFACE=unknown

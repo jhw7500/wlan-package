@@ -1,5 +1,5 @@
 Package: wlan-proc
-Version: 0.7.14
+Version: 0.7.15
 Section: net
 Priority: optional
 Architecture: arm64
@@ -68,3 +68,4 @@ Description: WLAN Application
  0.7.11 : wconnectraw 저장 감시 path 가 paths.target 을 막아 wifi_init 과 networkd 가 서로 기다리던 부팅 지연을 없앤다(#422)
  0.7.13 : FTP quote 에 설치 명령 도움말(whelp), NTP 상태 조회·서버 저장·재시작(wntp), 밀리초 현지 시각 조회·수동 설정(wtime)을 추가하고 커스텀 명령 처리 시작 시각을 밀리초까지 기록한다(#432)
  0.7.14 : wifi connectraw와 FTP wconnectraw의 빠른 전환을 공통화하고 수신 로그와 checker 보호 구간을 추가한다. wconnect·wconnectraw는 저장 기본값을 유지하며 --no-save로 설정 파일을 바꾸지 않는 런타임 전환을 지원한다(#422 후속)
+ 0.7.15 : wconnectraw가 FTP 제어 연결을 운반하는 무선의 변경을 거절하고, 비동기 SSID 저장 전 런타임 인증 정보와 저장 프로필의 일치를 확인한다. 셸 FTP 시작 로그를 C 헬퍼로 기록해 Python 기동 지연을 없앤다(#422 후속)

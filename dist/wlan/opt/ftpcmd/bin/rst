@@ -22,7 +22,8 @@ set -u
 
 # An alias already recorded its own entry before this delegation.
 if [ "${FTPCMD_START_LOGGED_FOR:-}" != rst ]; then
-    /usr/bin/python3 "$(dirname "$0")/../lib/ftpcmd_log.py" rst >/dev/null 2>&1 || true
+    case "$0" in */*) _ftpcmd_dir=${0%/*} ;; *) _ftpcmd_dir=. ;; esac
+    "$_ftpcmd_dir/../lib/ftpcmd_start_log" rst >/dev/null 2>&1 || true
 fi
 unset FTPCMD_START_LOGGED_FOR
 
