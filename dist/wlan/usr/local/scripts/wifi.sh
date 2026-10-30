@@ -878,18 +878,24 @@ connect_association_poll_matches() {
 # restore. During the read the trap only records the status; the slot exits
 # with it once read has returned. A signal landing as the timeout fires can
 # also cost read its timeout, leaving it blocked on the FIFO, so the trap
-# writes a newline there for read to return on.
+# writes a newline there for read to return on. The runtime-only and staged-PSK
+# paths install their own rollback handlers; they defer the same way and name
+# themselves in CONNECT_SLOT_SIGNAL_EXIT, so the slot hands the status to that
+# handler instead of exiting (#437). $1 of the slot is the id the last poll saw.
+connect_slot_defer_signal() {
+    [ "${CONNECT_SLOT_READING:-0}" = 1 ] || return 1
+    CONNECT_SLOT_EXIT_STATUS="$1"
+    { printf '\n' 1<> "$CONNECT_MONITOR_DIR/tick"; } 2>/dev/null || :
+}
+
 connect_signal_exit() {
-    if [ "${CONNECT_SLOT_READING:-0}" = 1 ]; then
-        CONNECT_SLOT_EXIT_STATUS="$1"
-        { printf '\n' 1<> "$CONNECT_MONITOR_DIR/tick"; } 2>/dev/null || :
-        return 0
-    fi
+    connect_slot_defer_signal "$1" && return 0
     exit "$1"
 }
 
 connect_wait_poll_slot() {
     local tick="${CONNECT_MONITOR_DIR:-}/tick" id sec centi rest start now junk status
+    local last_seen="${1-${FRESH_EVENT_ID:-}}"
     if [ -z "${CONNECT_MONITOR_DIR:-}" ] || [ ! -p "$tick" ] \
        || ! IFS=' .' read -r sec centi rest < /proc/uptime; then
         wifi_wpa_run_child sleep 0.1
@@ -899,7 +905,7 @@ connect_wait_poll_slot() {
     while :; do
         id=""
         { IFS= read -r id || :; } 2>/dev/null < "$CONNECT_MONITOR_DIR/connected-id" || :
-        [ -n "$id" ] && [ "$id" != "${FRESH_EVENT_ID:-}" ] && return 0
+        [ -n "$id" ] && [ "$id" != "$last_seen" ] && return 0
         IFS=' .' read -r sec centi rest < /proc/uptime || return 0
         now=$((sec * 100 + 10#$centi))
         [ $((now - start)) -lt 10 ] || return 0
@@ -910,7 +916,7 @@ connect_wait_poll_slot() {
             # Clear it first: the fallback restore in the EXIT trap waits here too.
             status="$CONNECT_SLOT_EXIT_STATUS"
             CONNECT_SLOT_EXIT_STATUS=""
-            exit "$status"
+            "${CONNECT_SLOT_SIGNAL_EXIT:-exit}" "$status"
         fi
     done
 }
@@ -1026,9 +1032,12 @@ runtime_switch_dir_metadata_ok() {
     [ "$owner" = "$expected_uid" ] && [[ "$mode" =~ ^[0-7]*[0145][0145]$ ]]
 }
 
+# The record read before status stays in RUNTIME_POLL_EVENT_ID so the slot wait
+# can tell a new one from it.
 runtime_switch_exact_poll() {
-    local expected_ssid="$1" expected_id="$2" freqs="$3" event_id="" status key value
-    { IFS= read -r event_id || :; } 2>/dev/null < "$CONNECT_MONITOR_DIR/connected-id" || :
+    local expected_ssid="$1" expected_id="$2" freqs="$3" status key value
+    RUNTIME_POLL_EVENT_ID=""
+    { IFS= read -r RUNTIME_POLL_EVENT_ID || :; } 2>/dev/null < "$CONNECT_MONITOR_DIR/connected-id" || :
     status=$(wifi_wpa_child_exec wpa_cli -i "$IFACE" status 2>/dev/null) || status=""
     RUNTIME_POLL_STATE=""; RUNTIME_POLL_SSID=""; RUNTIME_POLL_FREQ=""; RUNTIME_POLL_ID=""
     while IFS='=' read -r key value; do
@@ -1040,8 +1049,8 @@ runtime_switch_exact_poll() {
         esac
     done <<< "$status"
     [ "$RUNTIME_POLL_STATE" = COMPLETED ] \
-        && [[ "$event_id" =~ ^[0-9]+$ ]] \
-        && [ "$event_id" = "$RUNTIME_POLL_ID" ] \
+        && [[ "$RUNTIME_POLL_EVENT_ID" =~ ^[0-9]+$ ]] \
+        && [ "$RUNTIME_POLL_EVENT_ID" = "$RUNTIME_POLL_ID" ] \
         && [ "$RUNTIME_POLL_SSID" = "$expected_ssid" ] || return 1
     [ -z "$expected_id" ] || [ "$RUNTIME_POLL_ID" = "$expected_id" ] || return 1
     if [ -n "$freqs" ]; then
@@ -1050,7 +1059,8 @@ runtime_switch_exact_poll() {
 }
 
 # Status calls can outlast the 100 ms poll interval; the loop and each call
-# must share the same deadline to leave the reserved rollback time intact.
+# must share the same deadline to leave the reserved rollback time intact. A
+# CONNECTED record the last poll did not see ends a slot early (#437).
 runtime_switch_wait_exact() {
     local expected_ssid="$1" expected_id="$2" freqs="$3" deadline_ms="$4" now
     local WIFI_WPA_DEADLINE_MS="$deadline_ms"
@@ -1064,7 +1074,7 @@ runtime_switch_wait_exact() {
         fi
         now=$(wifi_wpa_monotonic_ms) || return 1
         [ "$now" -lt "$deadline_ms" ] || return 1
-        wifi_wpa_run_child sleep 0.1
+        connect_wait_poll_slot "$RUNTIME_POLL_EVENT_ID"
     done
 }
 
@@ -1178,6 +1188,7 @@ runtime_switch_fail() {
 
 runtime_switch_signal_exit() {
     local rc="$1"
+    connect_slot_defer_signal "$rc" && return 0
     trap - HUP INT TERM
     # Removing the in-progress marker publishes a complete target commit. If
     # the signal lands in the following shell-command boundary, preserve that
@@ -1501,6 +1512,7 @@ runtime_switch_execute() {
     trap 'runtime_switch_signal_exit 129' HUP
     trap 'runtime_switch_signal_exit 130' INT
     trap 'runtime_switch_signal_exit 143' TERM
+    CONNECT_SLOT_SIGNAL_EXIT=runtime_switch_signal_exit
     attempt_deadline=$(runtime_switch_poll_deadline "$CONNECT_TIMEOUT" 6000) || {
         runtime_switch_fail 8; return $?;
     }
@@ -1623,6 +1635,7 @@ runtime_no_save_fail() {
 
 runtime_no_save_signal_exit() {
     local rc="$1"
+    connect_slot_defer_signal "$rc" && return 0
     trap - HUP INT TERM
     runtime_no_save_restore \
         || echo "Error: runtime-only rollback could not verify the original association" >&2
@@ -1693,6 +1706,7 @@ runtime_no_save_execute() {
     trap 'runtime_no_save_signal_exit 129' HUP
     trap 'runtime_no_save_signal_exit 130' INT
     trap 'runtime_no_save_signal_exit 143' TERM
+    CONNECT_SLOT_SIGNAL_EXIT=runtime_no_save_signal_exit
     if [ "$staged_psk_present" = 1 ]; then
         if ! wifi_wpa_run_child mv -f "$RUNTIME_STAGE" "$RUNTIME_ACTIVE_STAGE" \
            || ! runtime_switch_stage_metadata_ok "$RUNTIME_ACTIVE_STAGE"; then

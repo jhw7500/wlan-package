@@ -3,6 +3,14 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.7.16 (2026-10-30)
+
+> SemVer **patch** — `wconnect --no-save`와 `wifi <iface> connect --no-save`의 런타임 전환에서 SSID 변환의 Python 기동과 연결 확인의 고정 대기를 줄인다(#437).
+
+- 런타임 전환 준비에서 현재 network의 `ssid`(conf 표기)를 wpa 텍스트로 되돌릴 때, 정확히 따옴표로만 감싼 영문·숫자·`_`·`.`·`-`·공백 1~32자 SSID는 셸에서 변환한다. hex·`"`·비ASCII·앞뒤 공백·길이 초과는 기존 Python 판정을 그대로 사용하므로 인코딩·검증 결과는 바뀌지 않는다.
+- 런타임 전환·staged PSK 전환·실패 시 원복의 연결 확인 대기는 save 캐시 경로와 같은 이벤트 대기 슬롯을 사용한다. 마지막 조회가 보지 못한 새 CONNECTED 기록이 오면 0.1 s 슬롯을 일찍 끝내고 status를 다시 확인하며, 이미 본 기록·이벤트 없음·작업기한은 기존과 같이 처리한다. 목표 SSID·network ID·주파수·COMPLETED·fresh 이벤트 확인과 snapshot·rollback 계약은 그대로다.
+- 런타임 전환의 HUP/INT/TERM 처리기는 슬롯이 `read -t`로 대기하는 동안 상태만 기록하고, 슬롯이 끝난 뒤 같은 처리기가 원복을 수행한다. save 캐시 경로의 connect 처리기와 같은 규칙이며, 슬롯 대기 중 트랩이 바로 종료해 EXIT 정리가 비정상 종료하지 않게 한다.
+
 ## 0.7.15 (2026-10-30)
 
 > SemVer **patch** — `wconnectraw`의 FTP 제어 연결·인증 정보 저장을 보호하고, 셸 FTP 명령의 Python 시작 로그 기동 지연을 줄인다(#422 후속).
