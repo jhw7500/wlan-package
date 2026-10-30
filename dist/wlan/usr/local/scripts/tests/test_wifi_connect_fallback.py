@@ -5,6 +5,7 @@ commands are replaced; the fake AP is unavailable unless listed in `available`.
 """
 
 import fcntl
+import hashlib
 import importlib.util
 import json
 import os
@@ -1737,6 +1738,113 @@ exec /bin/cp "$@"
         result = self.run_connect("good-B", apply_stored_conf=True)
         self.assert_profile_reload(result)
         self.assertEqual((self.state / "state-at-set-network").read_text(), "DISCONNECTED\n")
+
+    # #435: the FTP cache switch saves the profile only after the target
+    # association is verified. Until then the stored profile is untouched, and
+    # a failed switch restores the live SSID instead of persisting the new one.
+    def record_conf_at_reassociate(self):
+        stub = self.stub / "wpa_cli"
+        before = '            case "$command" in reassociate|reconnect) : > "$D/reconnect-requested" ;; esac\n'
+        source = stub.read_text()
+        self.assertEqual(source.count(before), 1)
+        stub.write_text(source.replace(before, before +
+            '            sha256sum "$WPA_CONF_DIR/wpa_supplicant-${2}.conf" | cut -c1-64 >> "$D/conf-at-reassociate"\n', 1))
+
+    def make_target_recent_but_unreachable(self):
+        # The last scan saw it, so the cache path is taken, but no AP answers.
+        (self.state / "bss").write_text(
+            "id=1\nage=5\nssid=jhw_wlan_\nid=2\nage=5\nssid=good-B\nid=3\nage=5\nssid=unreachable\n")
+
+    def fail_install(self):
+        stub = self.stub / "install"
+        source = stub.read_text()
+        self.assertEqual(source.count("args=()\n"), 1)
+        stub.write_text(source.replace(
+            "args=()\n", 'if [ -e "$WPA_STUB_DIR/fail-install" ]; then exit 1; fi\nargs=()\n', 1))
+        (self.state / "fail-install").touch()
+
+    def test_ftp_cache_switch_saves_the_profile_only_after_the_verified_landing(self):
+        self.set_policy(enabled=False)
+        self.record_conf_at_reassociate()
+        before = hashlib.sha256(self.conf.read_bytes()).hexdigest()
+        result = self.run_connect("good-B", apply_stored_conf=True, trace=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assert_cache_reassociate()
+        self.assertIn('ssid="good-B"', self.conf.read_text())
+        self.assertEqual((self.state / "conf-at-reassociate").read_text().split(), [before])
+        timing = (self.state / "logger.log").read_text()
+        self.assertIn("path=cache", timing)
+        self.assertIn("phase=profile_saved", timing)
+        self.assertLess(timing.index("phase=association_verified"), timing.index("phase=profile_saved"))
+
+    def test_ftp_cache_switch_timeout_keeps_the_stored_profile_and_restores_the_live_ssid(self):
+        self.set_policy(enabled=False)
+        self.make_target_recent_but_unreachable()
+        self.marker.write_text("essid=jhw_wlan_\nslot=1\n")
+        before = self.persistent_state()
+        result = self.run_connect("unreachable", apply_stored_conf=True)
+        self.assertEqual(result.returncode, 8, result.stdout + result.stderr)
+        self.assertEqual(self.persistent_state(), before)
+        self.assertIn('ssid="jhw_wlan_"', (self.state / "runtime.conf").read_text())
+        self.assertIn("ssid=jhw_wlan_\n", (self.state / "status").read_text())
+        commands = self.ftp_switch_commands()
+        self.assertEqual(commands[:3], [
+            "wpa_cli -i mlan0 disconnect",
+            'wpa_cli -i mlan0 set_network 0 ssid "unreachable"',
+            "wpa_cli -i mlan0 reassociate",
+        ])
+        self.assertIn('wpa_cli -i mlan0 set_network 0 ssid "jhw_wlan_"', commands[3:])
+        self.assertNotIn("wpa_cli -i mlan0 reconfigure", commands)
+
+    def test_ftp_cache_switch_install_failure_restores_the_live_ssid(self):
+        self.set_policy(enabled=False)
+        self.fail_install()
+        self.marker.write_text("essid=jhw_wlan_\nslot=1\n")
+        before = self.persistent_state()
+        result = self.run_connect("good-B", apply_stored_conf=True)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(self.persistent_state(), before)
+        commands = self.ftp_switch_commands()
+        self.assertIn('wpa_cli -i mlan0 set_network 0 ssid "good-B"', commands)
+        self.assertIn('wpa_cli -i mlan0 set_network 0 ssid "jhw_wlan_"', commands)
+        self.assertIn('ssid="jhw_wlan_"', (self.state / "runtime.conf").read_text())
+        self.assertIn("ssid=jhw_wlan_\n", (self.state / "status").read_text())
+
+    def test_ftp_cache_switch_marker_removal_failure_keeps_the_saved_profile(self):
+        # Once the profile is installed the target is committed: a failure to
+        # drop the OPC marker is reported (exit 1) without rolling the live
+        # association back, and the marker is left for the operator.
+        self.set_policy(enabled=False)
+        self.marker.mkdir()
+        result = self.run_connect("good-B", apply_stored_conf=True)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('ssid="good-B"', self.conf.read_text())
+        self.assertIn('ssid="good-B"', (self.state / "runtime.conf").read_text())
+        self.assertIn("ssid=good-B\n", (self.state / "status").read_text())
+        self.assertTrue(self.marker.is_dir())
+        self.assertNotIn('wpa_cli -i mlan0 set_network 0 ssid "jhw_wlan_"', self.ftp_switch_commands())
+
+    def test_term_during_the_cache_switch_wait_keeps_the_stored_profile(self):
+        self.set_policy(enabled=False)
+        self.make_target_recent_but_unreachable()
+        self.marker.write_text("essid=jhw_wlan_\nslot=1\n")
+        before = self.persistent_state()
+        env = self.environment()
+        env["FTPCMD_APPLY_CONF"] = "1"
+        proc = subprocess.Popen(["bash", str(WIFI_SH), "mlan0", "connect", "unreachable"],
+                                env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        for _ in range(200):
+            if (self.state / "reconnect-requested").exists():
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("the switch was not requested before the TERM")
+        time.sleep(0.3)
+        proc.send_signal(signal.SIGTERM)
+        out, err = proc.communicate(timeout=30)
+        self.assertEqual(proc.returncode, 143, out + err)
+        self.assertEqual(self.persistent_state(), before)
+        self.assertIn('ssid="jhw_wlan_"', (self.state / "runtime.conf").read_text())
 
     def test_unverified_profile_is_never_used_as_a_fallback(self):
         self.write_conf(CONF_MODE_B.replace('ssid="jhw_wlan_"', 'ssid="unverified"'))

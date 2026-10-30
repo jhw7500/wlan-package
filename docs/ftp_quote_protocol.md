@@ -320,8 +320,10 @@ quote wconnect <mlan0|mlan1|0|1> [--save|--no-save] [--] [ssid words...]
   재연결한다. SSID가 있으면 해당 SSID의 연결을 확인한 뒤 응답한다.
 - 기본 저장 경로에서 SSID가 없으면 저장된 프로필을 사용한다. `quote wconnect mlan1`은
   `mlan1`의 저장된 프로필을 사용한다.
-- 기본 저장 경로에서 SSID가 있으면 남은 토큰을 공백으로 합쳐 설정 파일에 저장한 뒤
-  연결을 시도한다. `quote wconnect 0 My AP`는 `mlan0`에서 `My AP`에 연결을 시도한다.
+- 기본 저장 경로에서 SSID가 있으면 남은 토큰을 공백으로 합친 SSID로 연결하고 설정 파일에
+  저장한다. 아래 캐시 조건을 만족하면 supplicant 메모리의 SSID만 바꿔 목표 연결을 확인한
+  뒤에 저장하고(0.7.17), 그 밖에는 저장한 뒤 프로필을 다시 읽어 연결한다.
+  `quote wconnect 0 My AP`는 `mlan0`에서 `My AP`에 연결을 시도한다.
 - 주파수는 인자로 받지 않는다. 주파수를 바꾸려면 먼저 `wfreq`로 저장한다.
   숫자 단어도 SSID의 일부다. `quote wconnect 0 AP 2`는 `AP 2`에 연결을 시도한다.
 - 별도 `wpsk`를 사용하지 않았다면 기존 PSK와 인증 설정을 재사용한다.
@@ -373,6 +375,14 @@ OPCd의 현재 ChangeIp 경로는 별도 `opc_wlan_apply.sh`와 부팅 시 SSID 
 fallback 없음. supplicant는 마지막 스캔이 이 유효시간 안이고 그 결과에 대상 AP가
 있으면 새 스캔 없이 연결한다. 없으면 supplicant가 곧바로 스캔한다.
 
+이 캐시 경로는 저장 파일을 먼저 바꾸지 않는다(0.7.17). 목표 SSID·network ID·주파수·
+COMPLETED 연결을 새 CONNECTED 이벤트로 확인한 뒤에만 설정 파일을 원자적으로 교체하고
+OPC 복원 표식을 지운다. 제한 시간 안에 확인하지 못하거나 저장에 실패하면 설정 파일과
+표식을 그대로 두고 이전 SSID로 런타임 연결을 복구한 뒤 `550 Failed: wconnect exited 8`
+또는 `1`로 응답한다. 설정 파일이 교체된 뒤의 동기화·표식 삭제 실패는 새 설정과 연결을
+그대로 두고 `1`로 응답하며, 표식이 남으면 운영자가 지운다. 전환 요청 자체가 거절되면 저장 후 `reconfigure` 경로를 따른다.
+저장이 끝나기 전에 전원이 끊기면 이전 설정이 남는다.
+
 백그라운드 스캔이 현재 SSID만 지정하는 기본 설정(`bgscan.ssid_filter=true`)에서는
 대개 마지막 스캔에 요청 SSID가 없다. 이때 다음 조건이면 연결을 끊기 전에 요청 SSID를
 먼저 스캔한다(#399).
@@ -390,7 +400,8 @@ fallback 없음. supplicant는 마지막 스캔이 이 유효시간 안이고 �
 값을 다시 읽지 않으므로, 그런 값을 바꾼 뒤에는 supplicant를 재시작해 적용한다.
 
 fallback이 비활성인 기존 경로는
-`ASSOC_TIMEOUT_DEFAULT`를 그대로 사용한다. `mlanN.connect_fallback.enabled=true`일 때만
+`ASSOC_TIMEOUT_DEFAULT`를 그대로 사용한다. 캐시 경로는 그 시도 시간 뒤에 이전 SSID 복구를
+`rollback_timeout_sec`(기본 5초, 비활성이어도 읽음)만큼 더 기다릴 수 있다. `mlanN.connect_fallback.enabled=true`일 때만
 `attempt_timeout_sec`(기본 15초)을 1~15초 범위에서 새 연결 예산으로 사용한다.
 
 SSID 없이 호출할 때 정상 적용 경로는 설정 파일을 수정하지 않는다. 단, fallback을
@@ -400,8 +411,9 @@ SSID 없이 호출할 때 정상 적용 경로는 설정 파일을 수정하지 
 `550 Failed: wconnect exited 8`은 제한 시간 안에 확인하지 못했다는 뜻이며,
 이후 늦게 연결될 수 있으므로 `wstatus`로 다시 조회한다.
 
-일반 저장 우선 경로에서 `mlanN.connect_fallback.enabled=false`(기본)이면
-실패한 새 SSID·주파수·인증 설정을 그대로 유지하며 자동 복구하지 않는다.
+일반 저장 우선(`reconfigure`) 경로에서 `mlanN.connect_fallback.enabled=false`(기본)이면
+실패한 새 SSID·주파수·인증 설정을 그대로 유지하며 자동 복구하지 않는다. 위 캐시 경로의
+실패는 저장 파일을 바꾸지 않고 이전 SSID로 런타임 연결을 복구한다.
 활성화했고 직전 검증 완료 프로필이 있으면
 실패 시 SSID, 주파수 정책, 인증 설정을 함께 복원하고 reconfigure한 뒤 이전 association을
 `rollback_timeout_sec`(기본 5초, 1~5) 안에서 확인한다. 복원에 성공해도 새 연결 실패가

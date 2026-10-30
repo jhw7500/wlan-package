@@ -115,7 +115,7 @@ FTP 전달·실행 지연을 자동 보상하지 않으므로 1ms 이내의 원�
 | `wfreq` | `quote wfreq <mlan0\|mlan1\|0\|1> [주파수/채널...]` | 설정 파일의 주파수 조회 | 설정 파일에 주파수 저장 |
 | `wscan` | `quote wscan <mlan0\|mlan1\|0\|1> <SSID...>` | SSID 누락 오류 | 최신 스캔에서 SSID·RSSI·주파수 조회 |
 | `wpsk` | `quote wpsk <mlan0\|mlan1\|0\|1> [--stage] <비밀번호...>` | 비밀번호 누락 오류 | PSK 저장 또는 휘발 저장 |
-| `wconnect` | `quote wconnect <mlan0\|mlan1\|0\|1> [--save\|--no-save] [--] [SSID...]` | 저장된 설정으로 연결 | SSID를 저장한 뒤 연결 |
+| `wconnect` | `quote wconnect <mlan0\|mlan1\|0\|1> [--save\|--no-save] [--] [SSID...]` | 저장된 설정으로 연결 | SSID로 연결 후 저장(캐시 경로) 또는 저장 후 연결 |
 | `wstatus` | `quote wstatus <mlan0\|mlan1\|0\|1>` | 현재 연결 조회 | 추가 인자 오류 |
 | `wconnectraw` | `quote wconnectraw <mlan0\|mlan1\|0\|1> [--save\|--no-save] [--] <SSID...>` | SSID 누락 오류 | 빠른 런타임 전환과 성공 시 비동기 SSID 저장 요청 |
 
@@ -233,7 +233,8 @@ known-good은 가능한 경우 `wssid`/`wfreq` 또는 CLI의 PSK/key 변경 전�
 연결 성공 뒤 갱신한다. 검증되지 않은 사본은 사용하지 않는다. 상태는 `/run/wifi` 아래
 mode `0600` 파일이며 재부팅 후 유지되지 않는다. fallback 활성 시 새 연결 대기는 기본
 15초(설정 1~15), 복원 확인은 기본 5초(설정 1~5)이고 실제 경과 시간을 차감해 FTP 30초
-제한 안의 예산을 관리한다. 비활성 경로는 기존 연결 제한시간 동작을 유지한다. 커널 I/O
+제한 안의 예산을 관리한다. 비활성 경로는 기존 연결 제한시간 동작을 유지하되, `wconnect` 캐시
+경로는 시도 뒤 이전 SSID 복구에 복원 확인 시간을 더 쓸 수 있다. 커널 I/O
 hang까지 제한하는 hard cap은 아니다.
 
 fallback 진행 중 같은 인터페이스의 변경은 코드 6(busy)으로 거부하지만 조회는 허용한다.
