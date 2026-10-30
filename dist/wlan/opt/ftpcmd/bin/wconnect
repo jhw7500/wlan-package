@@ -16,7 +16,8 @@
 # with wfreq first.
 #
 # wconnect itself never accepts a passphrase argument. An explicit SSID normally
-# rewrites only that field in the stored profile, while no SSID reloads the
+# rewrites only that field in the stored profile — on the cache path only after
+# the target association is verified (#435) — while no SSID reloads the
 # profile as stored. If wpsk staged a runtime credential, the explicit-SSID
 # path tries SSID and PSK in supplicant memory and persists both only on success.
 # --no-save applies only to runtime, including staged credentials; it never
