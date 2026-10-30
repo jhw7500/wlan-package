@@ -23,9 +23,9 @@ esac
 
 # Refuse to move the WLAN carrying this FTP control session before the shared
 # raw engine can change supplicant state or persistence requests.
-if [ -n "${FTPCMD_LOCAL_ADDR:-}" ] && [ -n "$IFACE" ]; then
+if [ -n "$IFACE" ]; then
     CTRL_IFACE=
-    if CTRL_ADDRS=$(ip -o addr show 2>/dev/null); then
+    if [ -n "${FTPCMD_LOCAL_ADDR:-}" ] && CTRL_ADDRS=$(ip -o addr show 2>/dev/null); then
         CTRL_IFACE=$(awk -v a="$FTPCMD_LOCAL_ADDR" '
             $1 ~ /^[0-9]+:$/ && ($3 == "inet" || $3 == "inet6") {
                 if (split($4, addr, "/") == 2 && addr[1] == a &&

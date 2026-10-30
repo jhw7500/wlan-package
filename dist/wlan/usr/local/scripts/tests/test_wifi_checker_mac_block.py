@@ -233,6 +233,10 @@ exit 0
 
 def run_raw_switch(tmp_path: Path, ssid: str) -> subprocess.CompletedProcess:
     fake_bin = tmp_path / "bin"
+    executable(
+        fake_bin / "ip",
+        "printf '7: eth0 inet 192.0.2.15/24 scope global eth0\\n'\n",
+    )
     sysfs = tmp_path / "net"
     conf_dir = tmp_path / "wpa"
     conf_dir.mkdir(exist_ok=True)
@@ -280,6 +284,7 @@ esac
     env = os.environ | {
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "EVENTS": str(tmp_path / "events"),
+        "FTPCMD_LOCAL_ADDR": "192.0.2.15",
         "TEST_SCENARIO": "raw-switch-lock-race",
         "WIFI_RUN_DIR": str(tmp_path / "run"),
         "WPA_CONF_DIR": str(conf_dir),

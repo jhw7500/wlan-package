@@ -142,8 +142,10 @@ def run_wconnectraw(*args, status_id="7", status_rc=0, set_reply="OK", disconnec
                     change_busy=False, slow_path_resolution=False,
                     profile_available=True, worker_available=True,
                     existing_request=None, require_request_absent=False,
-                    capture_state=False, local_addr=None, ip_addr_rows="", ip_addr_rc=0):
-    """Run FTP/local entrypoints with real dispatch and boundary-only stubs."""
+                    capture_state=False, local_addr="192.0.2.15",
+                    ip_addr_rows="7: eth0 inet 192.0.2.15/24 scope global eth0\n",
+                    ip_addr_rc=0):
+    """Run real dispatch; FTP defaults to a resolved wired control connection."""
     root = Path(tempfile.mkdtemp(prefix="wconnectraw-"))
     change_guard = None
     try:
@@ -439,6 +441,38 @@ class WconnectRequiredInterface(unittest.TestCase):
 
 
 class WconnectRawRuntimeSwitch(unittest.TestCase):
+    def test_missing_or_empty_ftp_control_address_preserves_runtime_and_files(self):
+        prior = b"older-request\n"
+        for local_addr in (None, ""):
+            for save_flag in ("--save", "--no-save"):
+                with self.subTest(local_addr=local_addr, save_flag=save_flag):
+                    result, calls, lines, state = run_wconnectraw(
+                        "0", save_flag, "Field", "AP", local_addr=local_addr,
+                        existing_request=prior, capture_state=True)
+                    self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout.splitlines(), ["FAIL code=3"])
+                    self.assertEqual(calls, [])
+                    self.assertEqual(state, {
+                        "request": prior,
+                        "profile": (
+                            b'update_config=0\nnetwork={\n    ssid="current-ap"\n'
+                            b'    psk="password123"\n}\n'),
+                        "opc_marker": b"opc-marker\n",
+                        "grace": False,
+                    })
+                    self.assertEqual(len(lines), 1, lines)
+                    self.assertIn("status=fail code=3", lines[0])
+
+    def test_local_raw_cli_needs_no_ftp_control_address(self):
+        result, calls, _ = run_wconnectraw(
+            "0", "--no-save", "Field", "AP", via_wifi=True,
+            local_addr=None, ip_addr_rows="")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ["SUCCESS"])
+        self.assertEqual(calls[-2:], [
+            "[-i|mlan0|disconnect]", "[-i|mlan0|reassociate]",
+        ])
+
     def test_unresolved_or_ambiguous_control_lookup_preserves_runtime_and_files(self):
         prior = b"older-request\n"
         wired = "7: eth0    inet 192.0.2.15/24 brd 192.0.2.255 scope global eth0\n"
