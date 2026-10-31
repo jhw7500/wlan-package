@@ -25,7 +25,8 @@ wifi_roam.logger = MagicMock()
 IFACE = "mlan0"
 
 
-def _conf(check_interval=3, gen=False, pp_enable=True, pp_window=30, extra=None):
+def _conf(check_interval=3, gen=False, pp_enable=True, pp_window=30,
+          extra=None, extra_in_roam_scan=None):
     roaming = {
         "CHECK_INTERVAL": check_interval,
         "generate_network_blocks": gen,
@@ -38,6 +39,8 @@ def _conf(check_interval=3, gen=False, pp_enable=True, pp_window=30, extra=None)
     }
     if extra is not None:
         roaming["extra_ssids"] = extra
+    if extra_in_roam_scan is not None:
+        roaming["extra_ssids_in_roam_scan"] = extra_in_roam_scan
     return {IFACE: {"roaming": roaming}}
 
 
@@ -86,6 +89,7 @@ def env(tmp_path, monkeypatch):
         ("cross_ssid_cooldown", None),
         ("WPA_CONF_MTIME", 123.0),             # sentinel — 적용 시 None 리셋 확인
         ("EXTRA_SSIDS", []),
+        ("EXTRA_SSIDS_IN_ROAM_SCAN", True),
     ]:
         monkeypatch.setattr(wifi_roam, name, val)
     wifi_roam.logger.reset_mock()
@@ -204,12 +208,34 @@ def test_mode_a_extra_ssids_change_blocked(env):
 
 
 def test_mode_b_extra_ssids_change_is_blocked_by_boot_snapshot(env):
-    # 모드 B에서도 extra_ssids는 boot snapshot 필드다. 현재 consumer가 무시하더라도
-    # mutable JSON 값이 전역으로 새면 향후 consumer 추가 시 topology hot-switch가 된다.
+    # 모드 B의 스캔 대상도 boot snapshot에 고정된다.
+    wifi_roam.EXTRA_SSIDS = ["boot"]
     _write(env, _conf(gen=False, extra=["x"]))
     assert reload_roaming_config(IFACE) is True
-    assert wifi_roam.EXTRA_SSIDS == []
+    assert wifi_roam.EXTRA_SSIDS == ["boot"]
     assert len(_warn_calls("extra_ssids change ignored")) == 1
+
+
+def test_mode_b_roam_scan_option_reloads_without_changing_boot_extras(env):
+    wifi_roam.EXTRA_SSIDS = ["boot"]
+    wifi_roam.WPA_SSID = "Base"
+    _write(env, _conf(extra=["boot"], extra_in_roam_scan=False))
+
+    assert reload_roaming_config(IFACE) is True
+    assert wifi_roam.EXTRA_SSIDS == ["boot"]
+    assert wifi_roam.get_scan_probe_ssids(["Base"], "Base") == ["Base"]
+
+    _write(env, _conf(extra=["boot"], extra_in_roam_scan=True))
+    assert reload_roaming_config(IFACE) is True
+    assert wifi_roam.get_scan_probe_ssids(["Base"], "Base") == ["Base", "boot"]
+
+
+def test_invalid_roam_scan_option_rejects_entire_reload(env):
+    _write(env, _conf(check_interval=2, extra_in_roam_scan="false"))
+
+    assert reload_roaming_config(IFACE) is False
+    assert wifi_roam.CHECK_INTERVAL == 7
+    assert wifi_roam.EXTRA_SSIDS_IN_ROAM_SCAN is True
 
 
 def test_pingpong_history_preserved_on_param_change(env):

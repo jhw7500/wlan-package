@@ -67,6 +67,7 @@ CASES = [
     ("DEFAULT_ENABLE_STAGED_SCAN", ["STAGED_SCAN", "enable"]),
     ("DEFAULT_SKIP_REDUNDANT_ACTIVE_SCAN", ["STAGED_SCAN", "skip_redundant_active"]),
     ("DEFAULT_HOME_PASSIVE", ["STAGED_SCAN", "home_passive"]),
+    ("DEFAULT_EXTRA_SSIDS_IN_ROAM_SCAN", ["extra_ssids_in_roam_scan"]),
 ]
 
 

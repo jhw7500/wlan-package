@@ -1,5 +1,5 @@
 Package: wlan-proc
-Version: 0.7.17
+Version: 0.7.18
 Section: net
 Priority: optional
 Architecture: arm64
@@ -71,3 +71,4 @@ Description: WLAN Application
  0.7.15 : wconnectraw가 FTP 제어 연결을 운반하는 무선의 변경을 거절하고, 비동기 SSID 저장 전 런타임 인증 정보와 저장 프로필의 일치를 확인한다. 셸 FTP 시작 로그를 C 헬퍼로 기록해 Python 기동 지연을 없앤다(#422 후속)
  0.7.16 : wconnect --no-save의 런타임 전환에서 현재 SSID 변환의 Python 기동을 없애고, 연결 확인 대기를 새 CONNECTED 이벤트로 일찍 끝낸다. 런타임 전환 처리기는 슬롯 대기 중 시그널을 미뤄 원복을 유지한다(#437)
  0.7.17 : FTP wconnect --save의 캐시 전환이 목표 연결을 확인한 뒤에만 설정 파일을 저장하고, 실패 시 저장 파일을 바꾸지 않고 이전 SSID로 런타임 연결을 복구한다(#435)
+ 0.7.18 : Mode B에서도 extra_ssids 를 bgscan·로밍 판정의 active scan probe 에 추가하되 자동 로밍 후보는 현재/base SSID 로 유지한다(#419). 설정 변경은 재부팅으로 반영한다

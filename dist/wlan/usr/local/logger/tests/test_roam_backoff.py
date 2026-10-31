@@ -322,13 +322,13 @@ def test_main_pending_cleanup_busy_defers_exactly_one_normal_cycle(monkeypatch):
     later_boundary.assert_not_called()
 
 
-def _drive_main_busy_cycle(monkeypatch, stage_result, *, cross=False):
+def _drive_main_busy_cycle(monkeypatch, stage_result, *, cross=False, legacy=False):
     """Run exactly one production main-loop cycle and expose all busy side effects."""
     _set_sleep(monkeypatch, 3, 30, fast=1)
     monkeypatch.setattr(wifi_roam, "ENABLE_PREDICTIVE_ROAM", False)
     monkeypatch.setattr(wifi_roam, "ENABLE_PING_PONG_PREVENTION", False)
     monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", cross)
-    monkeypatch.setattr(wifi_roam, "ENABLE_STAGED_SCAN", True)
+    monkeypatch.setattr(wifi_roam, "ENABLE_STAGED_SCAN", not legacy)
     monkeypatch.setattr(wifi_roam, "WPA_SSID", "Base")
     monkeypatch.setattr(wifi_roam, "WPA_TH_2G", -65)
     monkeypatch.setattr(wifi_roam, "CHECK_INTERVAL", 7)
@@ -366,7 +366,9 @@ def _drive_main_busy_cycle(monkeypatch, stage_result, *, cross=False):
     streak_reset = MagicMock(side_effect=lambda state: state.update(reset_rssi=None))
     monkeypatch.setattr(wifi_roam, "on_streak_reset", streak_reset)
 
-    active_fallback = MagicMock()
+    active_fallback = MagicMock(
+        return_value=wifi_roam.SCAN_TRANSITION_BUSY if legacy else None
+    )
     same_roam = MagicMock(return_value=wifi_roam.SCAN_TRANSITION_BUSY)
     cross_roam = MagicMock(return_value=wifi_roam.SCAN_TRANSITION_BUSY)
     advance = MagicMock(wraps=wifi_roam.advance_no_candidate_backoff)
@@ -426,6 +428,17 @@ def test_main_staged_scan_busy_is_scheduler_neutral(monkeypatch):
     )
     _assert_scheduler_neutral_busy(observed)
     observed["active_fallback"].assert_not_called()
+    observed["same_roam"].assert_not_called()
+    observed["cross_roam"].assert_not_called()
+
+
+def test_main_legacy_scan_probes_mode_b_extra_without_attempting_roam(monkeypatch):
+    monkeypatch.setattr(wifi_roam, "EXTRA_SSIDS", ["Office"])
+    observed = _drive_main_busy_cycle(monkeypatch, None, legacy=True)
+
+    observed["active_fallback"].assert_called_once_with(
+        ["Base", "Office"], wifi_roam.WPA_FREQ
+    )
     observed["same_roam"].assert_not_called()
     observed["cross_roam"].assert_not_called()
     observed["record_cross"].assert_not_called()

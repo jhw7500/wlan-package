@@ -6,10 +6,9 @@
 이 어휘만큼은 스키마와 handoff 를 대조해 고정한다.
 
 핵심 계약 두 가지:
-1. 표기 대상 — 모드B 에서 읽는 소비자가 없는 roaming 키.
-2. **무효성은 편집성과 별개다.** 잘못된 `extra_ssids` 는 모드와 무관하게 부팅
-   스냅샷 생성을 실패시키므로(roam_policy 가 모드 게이트 없이 검증), 무효 표기를
-   이유로 편집을 잠그면 UI 로 고칠 길이 사라진다.
+1. 표기 대상 — 특정 Mode에서 효과가 없는 roaming 키.
+2. **무효성은 편집성과 별개다.** 잘못된 값은 부팅 스냅샷 생성을 실패시킬 수
+   있으므로, 무효 표기를 이유로 편집을 잠그면 UI 로 고칠 길이 사라진다.
 """
 import json
 import os
@@ -21,7 +20,7 @@ _SCHEMA = os.path.join(_REPO, "docs/wifi_init_conf.schema.json")
 _HANDOFF = os.path.join(_REPO, "docs/wifi_init_conf_webui_handoff.md")
 
 _MARKER = "x-inert-in-mode"
-_MODE_B_ONLY_ROAMING_KEYS = ("extra_ssids", "ROAM_CROSS_FAIL_RETRY_COUNT")
+_MODE_B_ONLY_ROAMING_KEYS = ("ROAM_CROSS_FAIL_RETRY_COUNT",)
 
 
 def _schema():
@@ -62,6 +61,19 @@ def test_inert_marker_never_locks_editing(iface, key):
         f"{iface}.roaming.{key}: 모드B 에서 무효라는 이유로 편집을 잠그면, "
         "부팅 스냅샷을 깨뜨리는 값을 UI 로 고칠 수 없게 된다."
     )
+
+
+@pytest.mark.parametrize("iface", ["mlan0", "mlan1"])
+def test_extra_ssids_is_active_in_mode_b(iface):
+    prop = _roaming_props(_schema(), iface)["extra_ssids"]
+    assert _MARKER not in prop
+
+
+@pytest.mark.parametrize("iface", ["mlan0", "mlan1"])
+def test_roam_scan_extra_option_is_active_in_both_modes(iface):
+    prop = _roaming_props(_schema(), iface)["extra_ssids_in_roam_scan"]
+    assert _MARKER not in prop
+    assert prop["x-ui-editable"] != "no"
 
 
 def test_marker_value_is_from_the_defined_vocabulary():

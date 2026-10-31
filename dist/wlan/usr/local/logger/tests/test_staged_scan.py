@@ -71,6 +71,8 @@ def _globals(monkeypatch, tmp_path):
     monkeypatch.setattr(wifi_roam, "ENABLE_STAGED_SCAN", True)
     monkeypatch.setattr(wifi_roam, "SKIP_REDUNDANT_ACTIVE_SCAN", True)
     monkeypatch.setattr(wifi_roam, "HOME_PASSIVE", True)
+    monkeypatch.setattr(wifi_roam, "EXTRA_SSIDS_IN_ROAM_SCAN", True)
+    monkeypatch.setattr(wifi_roam, "WPA_SSID", "Net")
 
 
 def test_multifreq_runs_one_directed_active_scan(monkeypatch):
@@ -98,6 +100,79 @@ def test_multifreq_runs_one_directed_active_scan(monkeypatch):
         }
     ]
     cache.assert_not_called()
+
+
+@pytest.mark.parametrize("include_extra", [True, False])
+@pytest.mark.parametrize(
+    ("freqs", "home_passive", "expected_wildcard", "expected_passive"),
+    [
+        (["5180", "5200"], True, False, False),
+        ([], True, True, False),
+        (["5180"], False, False, False),
+        (["5180"], True, False, True),
+    ],
+)
+def test_mode_b_roam_probe_option_never_selects_extra(
+    monkeypatch, freqs, home_passive, expected_wildcard, expected_passive,
+    include_extra,
+):
+    monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", False)
+    monkeypatch.setattr(wifi_roam, "EXTRA_SSIDS", ["Other"])
+    monkeypatch.setattr(wifi_roam, "EXTRA_SSIDS_IN_ROAM_SCAN", include_extra)
+    monkeypatch.setattr(wifi_roam, "WPA_FREQ", freqs)
+    monkeypatch.setattr(wifi_roam, "HOME_PASSIVE", home_passive)
+    calls = []
+    scan_lines = [
+        apln(0, 36, -70, CUR, "Net"),
+        apln(1, 36, -20, "cc:cc:cc:cc:cc:cc", "Other"),
+        apln(2, 36, -45, "bb:bb:bb:bb:bb:bb", "Net"),
+    ]
+    passive_lines = [
+        apln(0, 36, -70, CUR, "Net"),
+        apln(1, 36, -20, "cc:cc:cc:cc:cc:cc", "Other"),
+    ]
+    monkeypatch.setattr(
+        wifi_roam,
+        "iw_scan_to_ap_lines",
+        _fake_iw(passive_lines, scan_lines, calls),
+    )
+
+    best, _, _, scanned = wifi_roam.staged_scan_best_candidate(
+        _station(), ["Net"], "Net", STABLE, None
+    )
+
+    assert scanned is True
+    assert best is not None and best["bssid"] == "bb:bb:bb:bb:bb:bb"
+    assert [call["passive"] for call in calls] == (
+        [True, False] if expected_passive else [False]
+    )
+    active = calls[-1]
+    assert active["ssids"] == (["Net", "Other"] if include_extra else ["Net"])
+    assert active["wildcard"] is expected_wildcard
+
+
+@pytest.mark.parametrize(
+    "live_ssid,expected_probes",
+    [("Net", ["Net"]), ("Other", ["Other", "Net"])],
+)
+def test_mode_a_roam_probe_off_keeps_current_network(
+    monkeypatch, live_ssid, expected_probes
+):
+    monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", True)
+    monkeypatch.setattr(wifi_roam, "EXTRA_SSIDS", ["Other", "Guest"])
+    monkeypatch.setattr(wifi_roam, "EXTRA_SSIDS_IN_ROAM_SCAN", False)
+    monkeypatch.setattr(wifi_roam, "WPA_SSID", "Net")
+    calls = []
+    monkeypatch.setattr(wifi_roam, "iw_scan_to_ap_lines", _fake_iw(None, None, calls))
+    candidates = wifi_roam.get_allowed_ssids(live_ssid)
+
+    wifi_roam.staged_scan_best_candidate(
+        _station(ssid=live_ssid), candidates, live_ssid, STABLE, None
+    )
+
+    assert "Guest" in candidates
+    assert len(calls) == 1
+    assert calls[0]["ssids"] == expected_probes
 
 
 def test_multifreq_cache_candidate_is_never_used(monkeypatch):
