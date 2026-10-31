@@ -1175,7 +1175,8 @@ def _iw_scan_to_ap_lines(ssids, freqs, passive=False, include_wildcard=True):
         # include_wildcard=True면 ""를 함께 넣어 beacon/broadcast 광범위 스캔을 보존한다.
         # 드라이버 max-scan-SSID 초과 방지: iw는 초과 시 -EINVAL로 스캔 전체를 실패시키므로
         # (→ 로밍 정지) directed SSID 수를 제한한다. wildcard 사용 시 슬롯 1개를 남겨 보존한다.
-        # ssid_list=get_allowed_ssids라 live/base가 앞이므로 slice가 현재 네트워크를 우선 보존.
+        # ssid_list는 get_allowed_ssids 또는 get_scan_probe_ssids 출력이며 둘 다 live/base가
+        # 앞이므로 slice가 현재 네트워크를 우선 보존.
         probe = list(dict.fromkeys(ssid_list + ([""] if include_wildcard else [])))
         if len(probe) > MAX_SCAN_SSIDS:
             logger.message(
