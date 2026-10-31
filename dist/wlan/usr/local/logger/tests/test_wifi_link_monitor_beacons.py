@@ -12,23 +12,22 @@ import wifi_link_monitor as monitor  # noqa: E402
 def test_beacon_line_uses_miss_receive_order_and_keeps_zero():
     line = monitor.format_roam_beacon_line(
         None, {"beaconMissedCount": 0, "beaconReceivedCount": 49779}, 78)
-    assert line == "RoamAP: -  beacon count : 0/49779"
+    assert line == "beacon count : 0/49779  RoamAP: -"
 
 
 def test_beacon_line_marks_unavailable_values():
     assert monitor.format_roam_beacon_line(None, {}, 78) == (
-        "RoamAP: -  beacon count : 없음/없음")
+        "beacon count : 없음/없음  RoamAP: -")
     assert monitor.format_roam_beacon_line(
         None, {"beaconMissedCount": True, "beaconReceivedCount": "10"}, 78
-    ).endswith("beacon count : 없음/없음")
+    ).startswith("beacon count : 없음/없음")
 
 
 def test_roam_history_yields_space_to_beacon_count():
     roam = "00:11:22:33:44:55 -> 66:77:88:99:aa:bb  (1s ago)"
     line = monitor.format_roam_beacon_line(
         roam, {"beaconMissedCount": 12, "beaconReceivedCount": 123456}, 60)
-    assert line.startswith("RoamAP: * ")
-    assert line.endswith("beacon count : 12/123456")
+    assert line.startswith("beacon count : 12/123456  RoamAP: * ")
     assert len(line) <= 60
 
 
@@ -75,8 +74,8 @@ def test_compact_screen_keeps_beacons_on_roam_row(monkeypatch):
                                "beaconReceivedCount": 49779}},
         wpa, roam, "/missing", ip_gw=("-", "-"))
     roam_rows = [(y, text) for y, _x, text in screen.lines
-                 if text.startswith("RoamAP:")]
+                 if "RoamAP:" in text]
     assert len(roam_rows) == 1
-    assert "beacon count : 0/49779" in roam_rows[0][1]
+    assert roam_rows[0][1] == "beacon count : 0/49779  RoamAP: -"
     assert not any(y != roam_rows[0][0] and "beacon count" in text
                    for y, _x, text in screen.lines)

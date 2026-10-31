@@ -3,6 +3,12 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.7.19 (2026-10-31)
+
+> SemVer **patch** — compact 모니터의 같은 행에서 `beacon count`를 먼저, `RoamAP`를 뒤에 표시한다(#427, PR #428 후속).
+
+- `wifi 0 mon c`와 `wifi 1 mon c`의 beacon 누락/수신 누적값을 로밍 이력 앞에 둔다. 값이 없을 때의 `없음` 표기와 터미널 너비에 맞춘 잘림은 유지한다.
+
 ## 0.7.18 (2026-10-31)
 
 > SemVer **patch** — Mode B에서 `roaming.extra_ssids`를 bgscan에 지정 probe로 추가하고 로밍 active probe는 선택할 수 있게 하되 자동 로밍은 현재/base SSID로 제한한다(#419).
