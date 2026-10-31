@@ -263,7 +263,6 @@ esac
   customctl disable thttpd
   customctl disable named
   customctl disable bind
-  customctl disable fake-hwclock.timer
   customctl disable journald-snapshot.timer
   customctl disable ifplugd
   customctl disable systemd-resolved
@@ -273,6 +272,7 @@ esac
   customctl enable watchdog
   customctl enable switchd
   customctl enable fake-hwclock
+  customctl enable fake-hwclock.timer
   customctl enable wifi_logger
   customctl enable log-watchdog.timer
   customctl enable journald-snapshot.timer

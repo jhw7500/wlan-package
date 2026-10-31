@@ -3,6 +3,13 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.8.2 (2026-11-01)
+
+> SemVer **patch** — 공장초기화가 `fake-hwclock.timer`를 끄지 않고 postinst와 같이 켠다(#443). 공장초기화 뒤에도 1분 주기 시각 저장이 유지된다.
+
+- **factory_reset.sh**: `customctl disable fake-hwclock.timer`를 제거하고 `customctl enable fake-hwclock.timer`를 추가해 postinst의 enable 목록과 같은 상태를 만든다. 타이머는 `fake-hwclock-save.service`를 1분마다 돌리는 유일한 주기 저장 경로이고, 서비스 단독으로는 부팅 load와 정상 종료 save만 한다. 2025-11(e0e9aac)에 cron으로 대체하며 타이머를 끈 목록을 공장초기화 구현(e0ec7c0)이 복사했고, 2026-03-20 cron→timer 복귀(b5f863f·eebbb16)에서 postinst만 갱신돼 생긴 drift다. 2026-11-01 공식 0.8.0 보드 공장초기화 실기에서 타이머가 enabled→disabled로 바뀌는 것을 확인했다.
+- **테스트**: `wifi_factory_reset_test.sh`가 공장초기화 스크립트의 `customctl enable fake-hwclock.timer` 존재와 `customctl disable fake-hwclock.timer` 부재를 고정한다.
+
 ## 0.8.1 (2026-11-01)
 
 > SemVer **patch** — OPCd를 wlan-opc 11262bd → 6b84326으로 올린다. ChangeIp 뒤 indication 비활성을 `platform_nxp.c`·`handler.c` 주석에 실제 동작대로 적는 변경만 담겨 바이너리 동작은 0.8.0과 같다(wlan-opc#211, PR #213).
