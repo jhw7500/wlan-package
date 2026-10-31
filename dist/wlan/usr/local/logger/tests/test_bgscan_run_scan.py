@@ -117,6 +117,153 @@ network={
     return str(conf)
 
 
+def _write_mode_b_config(tmp_path, monkeypatch, *, ssid_filter=True, extras=None,
+                         passive=False, extra_in_roam_scan=None):
+    json_path = tmp_path / "wifi_init_conf.json"
+    json_path.write_text(json.dumps({
+        "mlan0": {
+            "bgscan": {"ssid_filter": ssid_filter, "passive": passive},
+            "roaming": {
+                "generate_network_blocks": False,
+                "extra_ssids": ["LiveJsonMustNotWin"],
+                **({"extra_ssids_in_roam_scan": extra_in_roam_scan}
+                   if extra_in_roam_scan is not None else {}),
+            },
+        }
+    }))
+    monkeypatch.setattr(wifi_bgscan, "WIFI_INIT_CONF_JSON", str(json_path))
+    conf = tmp_path / "wpa.conf"
+    conf.write_text('freq_list=5180 5200\nnetwork={\n    ssid="Base"\n}\n')
+    policy = {"generate_network_blocks": False, "extra_ssids": extras or []}
+    return str(conf), policy
+
+
+@pytest.mark.parametrize("backend", ["iw", "wpa_cli"])
+@pytest.mark.parametrize("extra_in_roam_scan", [None, False])
+def test_mode_b_uses_boot_extras_without_generating_network_blocks(
+    tmp_path, monkeypatch, backend, extra_in_roam_scan
+):
+    conf, policy = _write_mode_b_config(
+        tmp_path, monkeypatch, extras=["Office", "Guest"],
+        extra_in_roam_scan=extra_in_roam_scan,
+    )
+
+    cmd, _, _ = wifi_bgscan.build_scan_request(conf, backend, boot_policy=policy)
+
+    if backend == "iw":
+        assert cmd[cmd.index("ssid") + 1:] == ["Base", "Office", "Guest"]
+    else:
+        assert [cmd[i + 1] for i, part in enumerate(cmd[:-1]) if part == "ssid"] == [
+            ssid.encode().hex() for ssid in ("Base", "Office", "Guest")
+        ]
+    assert Path(conf).read_text().count("network={") == 1
+
+
+def test_mode_b_boot_extras_survive_missing_live_json(tmp_path, monkeypatch):
+    conf, policy = _write_mode_b_config(tmp_path, monkeypatch, extras=["Office"])
+    monkeypatch.setattr(
+        wifi_bgscan, "WIFI_INIT_CONF_JSON", str(tmp_path / "missing.json")
+    )
+
+    cmd, _, _ = wifi_bgscan.build_scan_request(conf, "iw", boot_policy=policy)
+
+    assert cmd[cmd.index("ssid") + 1:] == ["Base", "Office"]
+
+
+@pytest.mark.parametrize("backend", ["iw", "wpa_cli"])
+def test_mode_b_unfiltered_scan_keeps_broad_discovery_and_probes_extras(
+    tmp_path, monkeypatch, backend
+):
+    conf, policy = _write_mode_b_config(
+        tmp_path, monkeypatch, ssid_filter=False, extras=["Office"]
+    )
+
+    cmd, _, _ = wifi_bgscan.build_scan_request(conf, backend, boot_policy=policy)
+
+    if backend == "iw":
+        assert cmd[cmd.index("ssid") + 1:] == ["", "Base", "Office"]
+    else:
+        assert [cmd[i + 1] for i, token in enumerate(cmd[:-1]) if token == "ssid"] == [
+            "",
+            "Base".encode().hex(),
+            "Office".encode().hex()
+        ]
+
+
+@pytest.mark.parametrize("backend", ["iw", "wpa_cli"])
+def test_mode_a_unfiltered_extra_probe_command_is_unchanged(
+    tmp_path, monkeypatch, backend
+):
+    conf, policy = _write_mode_b_config(
+        tmp_path, monkeypatch, ssid_filter=False, extras=["Office"]
+    )
+    policy["generate_network_blocks"] = True
+
+    cmd, _, _ = wifi_bgscan.build_scan_request(conf, backend, boot_policy=policy)
+
+    if backend == "iw":
+        assert cmd[cmd.index("ssid") + 1:] == ["", "Office"]
+    else:
+        assert [cmd[i + 1] for i, token in enumerate(cmd[:-1]) if token == "ssid"] == [
+            "Office".encode().hex()
+        ]
+
+
+@pytest.mark.parametrize("backend", ["iw", "wpa_cli"])
+def test_mode_b_unfiltered_probe_cap_preserves_wildcard_and_base(
+    tmp_path, monkeypatch, backend
+):
+    conf, policy = _write_mode_b_config(
+        tmp_path, monkeypatch, ssid_filter=False,
+        extras=[f"Office{i}" for i in range(10)],
+    )
+
+    cmd, _, _ = wifi_bgscan.build_scan_request(conf, backend, boot_policy=policy)
+
+    if backend == "iw":
+        probes = cmd[cmd.index("ssid") + 1:]
+    else:
+        probes = [cmd[i + 1] for i, token in enumerate(cmd[:-1]) if token == "ssid"]
+        probes = [bytes.fromhex(probe).decode() for probe in probes]
+    assert probes[:2] == ["", "Base"]
+    assert len(probes) == wifi_bgscan.MAX_SCAN_SSIDS
+
+
+def test_mode_b_native_passive_keeps_existing_no_probe_contract(
+    tmp_path, monkeypatch
+):
+    conf, policy = _write_mode_b_config(
+        tmp_path, monkeypatch, extras=["Office"], passive=True
+    )
+
+    cmd, _, _ = wifi_bgscan.build_scan_request(conf, "wpa_cli", boot_policy=policy)
+
+    assert "passive=1" in cmd
+    assert "ssid" not in cmd
+
+
+@pytest.mark.parametrize("backend", ["iw", "wpa_cli"])
+@pytest.mark.parametrize("ssid_filter", [True, False])
+def test_mode_b_empty_extras_preserve_scan_command(
+    tmp_path, monkeypatch, backend, ssid_filter
+):
+    conf, policy = _write_mode_b_config(
+        tmp_path, monkeypatch, ssid_filter=ssid_filter
+    )
+
+    cmd, _, _ = wifi_bgscan.build_scan_request(conf, backend, boot_policy=policy)
+
+    if backend == "iw":
+        expected = ["iw", "mlan0", "scan", "freq", "5180", "5200"]
+        if ssid_filter:
+            expected += ["ssid", "Base"]
+    else:
+        expected = ["wpa_cli", "-i", "mlan0", "scan", "freq=5180,5200"]
+        if ssid_filter:
+            expected += ["ssid", "Base".encode().hex()]
+    assert cmd == expected
+
+
 def test_build_request_uses_passed_backend_not_reloadable_owner(tmp_path, monkeypatch):
     conf = _write_runtime_config(tmp_path, monkeypatch)
 

@@ -140,14 +140,13 @@ def test_emit_roam_hint_non_bool_falls_back_true(tmp_path, monkeypatch):
     })
     assert load_bgscan_json("mlan0")[4] is True
 
-# --- generate_network_blocks 게이트 (모드 B는 extra probe 제외) ---
+# --- extra_ssids는 두 topology 모두에서 부팅 스캔 대상 ---
 
-def test_extra_ssids_gated_off_in_mode_b(tmp_path, monkeypatch):
-    # generate_network_blocks=false(기본): extra_ssids가 있어도 [] 강제
+def test_extra_ssids_passed_in_mode_b(tmp_path, monkeypatch):
     _write_conf(tmp_path, monkeypatch, {
         "mlan0": {"roaming": {"generate_network_blocks": False, "extra_ssids": ["Office", "Guest"]}}
     })
-    assert load_bgscan_json("mlan0")[3] == []
+    assert load_bgscan_json("mlan0")[3] == ["Office", "Guest"]
 
 def test_extra_ssids_passed_in_mode_a(tmp_path, monkeypatch):
     # generate_network_blocks=true(모드 A): identity bytes are not trimmed.
@@ -168,12 +167,12 @@ def test_duplicate_extra_ssids_are_stably_deduplicated(tmp_path, monkeypatch):
     })
     assert load_bgscan_json("mlan0")[3] == ["Office", "Guest"]
 
-def test_extra_ssids_gated_off_when_generate_absent(tmp_path, monkeypatch):
-    # generate 키 부재(기본 모드 B): extra가 있어도 []
+def test_extra_ssids_passed_when_generate_absent(tmp_path, monkeypatch):
+    # generate 키 부재(기본 모드 B)도 동일한 스캔 대상이다.
     _write_conf(tmp_path, monkeypatch, {
         "mlan0": {"roaming": {"extra_ssids": ["Office"]}}
     })
-    assert load_bgscan_json("mlan0")[3] == []
+    assert load_bgscan_json("mlan0")[3] == ["Office"]
 
 def test_extra_ssids_included_when_generate_truthy_str(tmp_path, monkeypatch):
     # 비정규 truthy("true"/1)는 roam parse_bool / lib normalize_bool과 통일되어 모드 A → extra 포함.
@@ -184,12 +183,11 @@ def test_extra_ssids_included_when_generate_truthy_str(tmp_path, monkeypatch):
     assert load_bgscan_json("mlan0")[3] == ["Office"]
 
 
-def test_extra_ssids_gated_off_when_generate_false(tmp_path, monkeypatch):
-    # 정규 false(모드 B)는 extra 무시 → []
+def test_extra_ssids_passed_when_generate_false(tmp_path, monkeypatch):
     _write_conf(tmp_path, monkeypatch, {
         "mlan0": {"roaming": {"generate_network_blocks": False, "extra_ssids": ["Office"]}}
     })
-    assert load_bgscan_json("mlan0")[3] == []
+    assert load_bgscan_json("mlan0")[3] == ["Office"]
 
 
 def test_boot_topology_policy_does_not_hot_reload_from_json(tmp_path, monkeypatch):

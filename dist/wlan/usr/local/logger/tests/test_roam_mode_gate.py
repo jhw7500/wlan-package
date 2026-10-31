@@ -19,21 +19,80 @@ def _reset_globals(monkeypatch):
     monkeypatch.setattr(wifi_roam, "EXTRA_SSIDS", [])
     monkeypatch.setattr(wifi_roam, "WPA_SSID", "BaseNet")
     monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", False)
+    monkeypatch.setattr(wifi_roam, "EXTRA_SSIDS_IN_ROAM_SCAN", True)
     yield
 
 # --- get_allowed_ssids extra 게이트 ---
 
 def test_mode_b_ignores_extra(monkeypatch):
-    # 모드 B(generate=false): extra_ssids가 있어도 무시 → [live, WPA_SSID]
+    # 모드 B의 로밍 후보는 extra_ssids를 포함하지 않는다.
     monkeypatch.setattr(wifi_roam, "EXTRA_SSIDS", ["Office", "Guest"])
     monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", False)
     assert wifi_roam.get_allowed_ssids("LiveNet") == ["LiveNet", "BaseNet"]
+
+
+def test_mode_b_probes_extra_without_admitting_it_as_a_candidate(monkeypatch):
+    monkeypatch.setattr(wifi_roam, "EXTRA_SSIDS", ["Office", "Guest"])
+    monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", False)
+    candidates = wifi_roam.get_allowed_ssids("LiveNet")
+
+    assert wifi_roam.get_scan_probe_ssids(candidates, "LiveNet") == [
+        "LiveNet", "BaseNet", "Office", "Guest"
+    ]
+    assert candidates == ["LiveNet", "BaseNet"]
+
+
+def test_mode_b_can_exclude_extra_from_roam_scan_without_changing_candidates(monkeypatch):
+    monkeypatch.setattr(wifi_roam, "EXTRA_SSIDS", ["Office", "Guest"])
+    monkeypatch.setattr(wifi_roam, "EXTRA_SSIDS_IN_ROAM_SCAN", False)
+    candidates = wifi_roam.get_allowed_ssids("LiveNet")
+
+    assert wifi_roam.get_scan_probe_ssids(candidates, "LiveNet") == ["LiveNet", "BaseNet"]
+    assert candidates == ["LiveNet", "BaseNet"]
+
+
+def test_mode_b_keeps_current_extra_ssid_in_probe_list(monkeypatch):
+    monkeypatch.setattr(wifi_roam, "EXTRA_SSIDS", ["Office", "Guest"])
+    monkeypatch.setattr(wifi_roam, "EXTRA_SSIDS_IN_ROAM_SCAN", False)
+
+    candidates = wifi_roam.get_allowed_ssids("Office")
+    assert candidates == ["Office", "BaseNet"]
+    assert wifi_roam.get_scan_probe_ssids(candidates, "Office") == [
+        "Office", "BaseNet"
+    ]
 
 def test_mode_a_includes_extra(monkeypatch):
     # 모드 A(generate=true): extra 합집합
     monkeypatch.setattr(wifi_roam, "EXTRA_SSIDS", ["Office", "Guest"])
     monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", True)
     assert wifi_roam.get_allowed_ssids("LiveNet") == ["LiveNet", "BaseNet", "Office", "Guest"]
+    assert wifi_roam.get_scan_probe_ssids(wifi_roam.get_allowed_ssids("LiveNet"), "LiveNet") == [
+        "LiveNet", "BaseNet", "Office", "Guest"
+    ]
+
+
+def test_mode_a_can_exclude_extra_probes_without_removing_candidates(monkeypatch):
+    monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", True)
+    monkeypatch.setattr(wifi_roam, "EXTRA_SSIDS", ["Office"])
+    monkeypatch.setattr(wifi_roam, "EXTRA_SSIDS_IN_ROAM_SCAN", False)
+
+    candidates = wifi_roam.get_allowed_ssids("LiveNet")
+    assert candidates == ["LiveNet", "BaseNet", "Office"]
+    assert wifi_roam.get_scan_probe_ssids(candidates, "LiveNet") == [
+        "LiveNet", "BaseNet"
+    ]
+
+
+def test_mode_a_keeps_current_extra_ssid_in_probe_list(monkeypatch):
+    monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", True)
+    monkeypatch.setattr(wifi_roam, "EXTRA_SSIDS", ["Office", "Guest"])
+    monkeypatch.setattr(wifi_roam, "EXTRA_SSIDS_IN_ROAM_SCAN", False)
+
+    candidates = wifi_roam.get_allowed_ssids("Office")
+    assert candidates == ["Office", "BaseNet", "Guest"]
+    assert wifi_roam.get_scan_probe_ssids(candidates, "Office") == [
+        "Office", "BaseNet"
+    ]
 
 def test_mode_a_dedups_extra(monkeypatch):
     # 모드 A: live/WPA_SSID와 중복되는 extra는 제거
@@ -46,6 +105,7 @@ def test_mode_b_no_extra_single_ssid(monkeypatch):
     monkeypatch.setattr(wifi_roam, "EXTRA_SSIDS", [])
     monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", False)
     assert wifi_roam.get_allowed_ssids("BaseNet") == ["BaseNet"]
+    assert wifi_roam.get_scan_probe_ssids(["BaseNet"], "BaseNet") == ["BaseNet"]
 
 # --- generate_network_blocks 파싱 ---
 
@@ -81,6 +141,46 @@ def test_boot_policy_overrides_mutated_live_topology(monkeypatch):
     })
     assert wifi_roam.GENERATE_NETWORK_BLOCKS is True
     assert wifi_roam.EXTRA_SSIDS == [" BootOffice ", "Guest"]
+
+
+def test_mode_b_boot_policy_keeps_probe_identities(monkeypatch):
+    monkeypatch.setattr(wifi_roam, "EXTRA_SSIDS", ["LiveJson"])
+    wifi_roam.apply_boot_roam_policy({
+        "roaming_enabled": True,
+        "generate_network_blocks": False,
+        "extra_ssids": ["BootOffice", "Guest"],
+    })
+
+    assert wifi_roam.EXTRA_SSIDS == ["BootOffice", "Guest"]
+    assert wifi_roam.get_allowed_ssids("BaseNet") == ["BaseNet"]
+
+
+@pytest.mark.parametrize("extra_count,include_extra,expects_warning", [
+    (8, True, False),
+    (9, True, True),
+    (9, False, True),
+])
+def test_boot_probe_limit_warning_preserves_snapshot_extras(
+    monkeypatch, extra_count, include_extra, expects_warning
+):
+    extras = [f"Network{i}" for i in range(extra_count)]
+    monkeypatch.setattr(wifi_roam, "EXTRA_SSIDS", extras)
+    monkeypatch.setattr(wifi_roam, "GENERATE_NETWORK_BLOCKS", False)
+    monkeypatch.setattr(wifi_roam, "EXTRA_SSIDS_IN_ROAM_SCAN", include_extra)
+    log = MagicMock()
+    monkeypatch.setattr(wifi_roam, "logger", log)
+
+    wifi_roam.warn_scan_probe_limit()
+
+    warnings = [
+        call.args[1] for call in log.message.call_args_list
+        if call.args[0] == "warn"
+    ]
+    assert bool(warnings) is expects_warning
+    if warnings:
+        assert "driver max 10" in warnings[0]
+        assert not any(ssid in warnings[0] for ssid in extras)
+    assert wifi_roam.EXTRA_SSIDS == extras
 
 
 def test_boot_policy_rejects_stale_wifi_roam_owner():

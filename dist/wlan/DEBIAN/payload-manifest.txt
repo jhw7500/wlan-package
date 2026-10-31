@@ -65,13 +65,19 @@ opt/ftpcmd/bin/wconnect
 opt/ftpcmd/bin/wconnectraw
 opt/ftpcmd/bin/wfreq
 opt/ftpcmd/bin/wgetifstate
+opt/ftpcmd/bin/whelp
 opt/ftpcmd/bin/wifcdown
 opt/ftpcmd/bin/wifcup
+opt/ftpcmd/bin/wntp
 opt/ftpcmd/bin/wpsk
 opt/ftpcmd/bin/wrst
 opt/ftpcmd/bin/wscan
 opt/ftpcmd/bin/wssid
 opt/ftpcmd/bin/wstatus
+opt/ftpcmd/bin/wtime
+opt/ftpcmd/lib/Makefile
+opt/ftpcmd/lib/ftpcmd_log.py
+opt/ftpcmd/lib/ftpcmd_start_log.c
 opt/wlan/bin/README
 opt/wlan/bin/README_MLAN
 opt/wlan/bin/README_RBC
@@ -277,6 +283,7 @@ usr/local/scripts/wifi_conf_preserve.sh
 usr/local/scripts/wifi_config.sh
 usr/local/scripts/wifi_config_backup.sh
 usr/local/scripts/wifi_connect_fallback_lib.sh
+usr/local/scripts/wifi_connect_raw.sh
 usr/local/scripts/wifi_eth_peer_find.sh
 usr/local/scripts/wifi_eth_peer_route.sh
 usr/local/scripts/wifi_event.sh

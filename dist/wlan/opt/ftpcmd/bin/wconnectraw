@@ -1,212 +1,60 @@
 #!/bin/sh
-# Fast runtime SSID switch. Reached over FTP as:
-#   quote wconnectraw <mlan0|mlan1|0|1> <ssid words...>
-#
-# The radio commands stay on the short path. After their exact OK replies,
-# a systemd path unit starts an independent worker that confirms the target
-# association and then saves only its SSID. SUCCESS means the radio commands
-# and request were submitted, not that association or save has finished.
-set -u
-
-WPA_CLI=/usr/sbin/wpa_cli
-WPA_CONF_DIR=${WPA_CONF_DIR:-/etc/wpa_supplicant}
-RAW_COMMIT_HELPER=${WIFI_RAW_COMMIT_HELPER:-/usr/local/scripts/wifi_raw_commit.py}
-LC_ALL=C
-export LC_ALL
-
-monotonic_ms() {
-    IFS=' .' read -r _sec _centi _rest < /proc/uptime || return 1
-    case "$_sec:$_centi" in *[!0-9:]*|:*) return 1 ;; esac
-    _centi=${_centi#0}
-    [ -n "$_centi" ] || _centi=0
-    printf '%s\n' "$((_sec * 1000 + _centi * 10))"
-}
-
-START_MS=$(monotonic_ms 2>/dev/null || true)
-TRACE_ID="${START_MS:-0}-$$"
-
-IFACE=unknown
-raw_log_failure() {
-    _code=$1
-    shift
-    logger -p local0.err \
-        "ftpcmd_raw_result trace=$TRACE_ID command=wconnectraw status=fail code=$_code iface=${IFACE:-unknown} detail=$*" \
-        >/dev/null 2>&1 || true
-}
-
-trap '_rc=$?; trap - EXIT; if [ "$_rc" -eq 0 ]; then printf "SUCCESS\n"; else printf "FAIL code=%s\n" "$_rc"; fi; exit "$_rc"' EXIT
-
-case "${1:-}" in
-    mlan0|0) IFACE=mlan0 ;;
-    mlan1|1) IFACE=mlan1 ;;
-    *)
-        raw_log_failure 2 "expected interface mlan0, mlan1, 0 or 1"
-        exit 2
-        ;;
-esac
-shift
-
-if [ "$#" -eq 0 ]; then
-    raw_log_failure 2 "missing ssid"
-    exit 2
-fi
-SSID=$*
-case "$SSID" in
-    ''|*[!A-Za-z0-9_.:,=+@/\ -]*)
-        raw_log_failure 2 "invalid SSID characters"
-        exit 2
-        ;;
-esac
-if [ "${#SSID}" -gt 32 ]; then
-    raw_log_failure 2 "SSID exceeds 32 bytes"
-    exit 2
-fi
-PARSED_MS=$(monotonic_ms 2>/dev/null || printf '%s\n' "${START_MS:-0}")
-
-# Hold the change gate exclusively across the live mutation and profile digest.
-# Other writers cannot alter the profile before the commit worker is queued.
-CHANGE_RUN_DIR=${WIFI_RUN_DIR:-/run/wifi}
-mkdir -p "$CHANGE_RUN_DIR" || exit 1
-exec 6>"$CHANGE_RUN_DIR/${IFACE}.change.lock" || exit 1
-if ! flock -n -x 6; then
-    raw_log_failure 6 "configuration/connection change busy for $IFACE"
-    echo "configuration/connection change busy for $IFACE" >&2
-    exit 6
-fi
-if [ -e "$CHANGE_RUN_DIR/${IFACE}.credential-pending" ] \
-   || [ -L "$CHANGE_RUN_DIR/${IFACE}.credential-pending" ]; then
-    raw_log_failure 6 "credential edit pending for $IFACE"
-    echo "credential edit pending for $IFACE" >&2
-    exit 6
-fi
-
-CONF="$WPA_CONF_DIR/wpa_supplicant-$IFACE.conf"
-if [ ! -f "$CONF" ] || [ -L "$CONF" ] || [ ! -x "$RAW_COMMIT_HELPER" ]; then
-    raw_log_failure 1 "profile or persistence worker unavailable"
-    exit 1
-fi
-CONF_SHA=$(sha256sum "$CONF" 2>/dev/null)
-CONF_SHA=${CONF_SHA%% *}
-if [ "${#CONF_SHA}" -ne 64 ]; then
-    raw_log_failure 1 "profile digest unavailable"
-    exit 1
-fi
-
-STATUS=$($WPA_CLI -i "$IFACE" status 2>/dev/null)
-STATUS_RC=$?
-if [ "$STATUS_RC" -ne 0 ]; then
-    raw_log_failure 1 "status command failed rc=$STATUS_RC"
-    exit 1
-fi
-
-NETWORK_ID=""
-WPA_STATE=""
-ORIGINAL_SSID=""
-ORIGINAL_BSSID="-"
-while IFS='=' read -r _key _value; do
-    case "$_key" in
-        id) NETWORK_ID=$_value ;;
-        wpa_state) WPA_STATE=$_value ;;
-        ssid) ORIGINAL_SSID=$_value ;;
-        bssid) ORIGINAL_BSSID=$_value ;;
-    esac
-done <<EOF
-$STATUS
-EOF
-if [ "$WPA_STATE" = "INTERFACE_DISABLED" ]; then
-    # wpa_supplicant refuses reassociate here, but disconnect would still keep it
-    # down after the interface comes back up, so change nothing.
-    raw_log_failure 1 "interface disabled (wpa_state=INTERFACE_DISABLED)"
-    exit 1
-fi
-REQUIRE_NEW_BSSID=0
-if [ "$ORIGINAL_SSID" != "$SSID" ]; then
-    if [ "$ORIGINAL_BSSID" != - ]; then
-        REQUIRE_NEW_BSSID=1
-    elif [ "$WPA_STATE" = COMPLETED ]; then
-        raw_log_failure 1 "connected status has no original BSSID"
-        exit 1
-    fi
-fi
-if [ -z "$NETWORK_ID" ]; then
-    # Disconnected status has no id. Use the selected network if one is marked
-    # CURRENT, or the only enabled network when there is no current selection.
-    NETWORKS=$($WPA_CLI -i "$IFACE" list_networks 2>/dev/null)
-    LIST_RC=$?
-    if [ "$LIST_RC" -eq 0 ]; then
-        NETWORK_ID=$(printf '%s\n' "$NETWORKS" | awk -F '\t' '
-            $1 ~ /^[0-9]+$/ {
-                if ($4 ~ /\[CURRENT\]/) { current = $1; current_count++ }
-                if ($4 !~ /\[DISABLED\]/) { enabled = $1; enabled_count++ }
-            }
-            END {
-                if (current_count == 1) print current
-                else if (current_count == 0 && enabled_count == 1) print enabled
-            }
-        ')
-    fi
-    case "$NETWORK_ID" in
-        ''|*[!0-9]*)
-            raw_log_failure 1 "cannot select one configured network while disconnected"
-            exit 1
+# Keep FTP output/exit status identical to the local fast-switch command.
+if IFS=' .' read -r _raw_sec _raw_centi _raw_rest < /proc/uptime; then
+    case "$_raw_sec:$_raw_centi" in
+        *[!0-9:]*|:*) ;;
+        *)
+            _raw_centi=${_raw_centi#0}
+            WIFI_RAW_TRACE_START_MS=$((_raw_sec * 1000 + ${_raw_centi:-0} * 10))
+            WIFI_RAW_TRACE_ID="$WIFI_RAW_TRACE_START_MS-$$"
+            export WIFI_RAW_TRACE_START_MS WIFI_RAW_TRACE_ID
             ;;
     esac
 fi
+case "$0" in */*) _ftpcmd_dir=${0%/*} ;; *) _ftpcmd_dir=. ;; esac
+"$_ftpcmd_dir/../lib/ftpcmd_start_log" wconnectraw >/dev/null 2>&1 || true
 
-STATUS_DONE_MS=$(monotonic_ms 2>/dev/null || printf '%s\n' "$PARSED_MS")
-
-# The FTP-safe ASCII validation above makes this quoted ctrl value unambiguous.
-SSID_VALUE=\"$SSID\"
-SET_REPLY=$($WPA_CLI -i "$IFACE" set_network "$NETWORK_ID" ssid "$SSID_VALUE" 2>&1)
-SET_RC=$?
-SET_DONE_MS=$(monotonic_ms 2>/dev/null || printf '%s\n' "$STATUS_DONE_MS")
-if [ "$SET_RC" -ne 0 ] || [ "$SET_REPLY" != "OK" ]; then
-    # Nothing has touched the link yet, so leave it as it is.
-    raw_log_failure 7 "set_rc=$SET_RC set_reply=${SET_REPLY:-empty}"
-    exit 7
-fi
-
-# An association to another BSS while the old link is still up is refused with
-# EALREADY; wpa_supplicant then puts the target BSSID on its ignore list and
-# connects only after another scan. Drop the link first. After disconnect
-# wpa_supplicant stays down until a reassociate or reconnect, so reassociate is
-# sent even if disconnect failed.
-DISC_REPLY=$($WPA_CLI -i "$IFACE" disconnect 2>&1)
-DISC_RC=$?
-DISC_DONE_MS=$(monotonic_ms 2>/dev/null || printf '%s\n' "$SET_DONE_MS")
-
-REASSOC_REPLY=$($WPA_CLI -i "$IFACE" reassociate 2>&1)
-REASSOC_RC=$?
-REASSOC_DONE_MS=$(monotonic_ms 2>/dev/null || printf '%s\n' "$DISC_DONE_MS")
-
-case "$START_MS:$PARSED_MS:$STATUS_DONE_MS:$SET_DONE_MS:$DISC_DONE_MS:$REASSOC_DONE_MS" in
-    *[!0-9:]*) ;;
-    *)
-        logger -p local0.info \
-            "ftpcmd_raw_timing trace=$TRACE_ID phase=commands_submitted elapsed_ms=$((REASSOC_DONE_MS - START_MS)) iface=$IFACE parse_ms=$((PARSED_MS - START_MS)) id_lookup_ms=$((STATUS_DONE_MS - PARSED_MS)) set_network_ms=$((SET_DONE_MS - STATUS_DONE_MS)) disconnect_ms=$((DISC_DONE_MS - SET_DONE_MS)) reassociate_ms=$((REASSOC_DONE_MS - DISC_DONE_MS)) set_rc=$SET_RC disconnect_rc=$DISC_RC reassociate_rc=$REASSOC_RC" \
-            >/dev/null 2>&1 || true
-        ;;
+WIFI=/usr/local/bin/wifi
+case "${1:-}" in
+    mlan0|0) IFACE=mlan0 ;;
+    mlan1|1) IFACE=mlan1 ;;
+    *) IFACE= ;;
 esac
 
-if [ "$DISC_RC" -eq 0 ] && [ "$DISC_REPLY" = "OK" ] \
-   && [ "$REASSOC_RC" -eq 0 ] && [ "$REASSOC_REPLY" = "OK" ]; then
-    # A path unit outside vsftpd's private PID namespace observes this atomic
-    # request. No D-Bus client or child process is needed in the FTP handler.
-    REQUEST_TMP=$(mktemp "$CHANGE_RUN_DIR/.${IFACE}.raw-commit.XXXXXX") || {
-        raw_log_failure 9 "association requested but request file could not be created"
-        exit 9
-    }
-    if ! printf 'wifi-raw-commit-v1\n%s\n%s\n%s\n%s\n%s\n%s\n' \
-        "$NETWORK_ID" "$SSID" "$CONF_SHA" "$TRACE_ID" \
-        "$ORIGINAL_BSSID" "$REQUIRE_NEW_BSSID" > "$REQUEST_TMP" \
-       || ! mv -fT -- "$REQUEST_TMP" "$CHANGE_RUN_DIR/${IFACE}.raw-commit"; then
-        rm -f -- "$REQUEST_TMP"
-        raw_log_failure 9 "association requested but request file could not be published"
-        exit 9
+# Refuse to move the WLAN carrying this FTP control session before the shared
+# raw engine can change supplicant state or persistence requests.
+if [ -n "$IFACE" ]; then
+    CTRL_IFACE=
+    if [ -n "${FTPCMD_LOCAL_ADDR:-}" ] && CTRL_ADDRS=$(ip -o addr show 2>/dev/null); then
+        CTRL_IFACE=$(awk -v a="$FTPCMD_LOCAL_ADDR" '
+            $1 ~ /^[0-9]+:$/ && ($3 == "inet" || $3 == "inet6") {
+                if (split($4, addr, "/") == 2 && addr[1] == a &&
+                    addr[2] ~ /^[0-9]+$/ && !seen[$2]++) {
+                    iface = $2
+                    count++
+                }
+            }
+            END { if (count == 1) print iface; else exit 1 }
+        ' <<EOF
+$CTRL_ADDRS
+EOF
+        ) || CTRL_IFACE=
     fi
-    exit 0
+    if [ -z "$CTRL_IFACE" ] || [ "$CTRL_IFACE" = "$IFACE" ]; then
+        DETAIL="FTP control interface lookup failed or ambiguous"
+        if [ "$CTRL_IFACE" = "$IFACE" ]; then
+            DETAIL="target interface carries FTP control connection"
+        fi
+        logger -p local0.err \
+            "ftpcmd_result command=wconnectraw status=fail code=3 iface=$IFACE detail=$DETAIL" \
+            >/dev/null 2>&1 || true
+        printf 'FAIL code=3\n'
+        exit 3
+    fi
 fi
 
-raw_log_failure 7 \
-    "disconnect_rc=$DISC_RC disconnect_reply=${DISC_REPLY:-empty} reassociate_rc=$REASSOC_RC reassociate_reply=${REASSOC_REPLY:-empty}"
-exit 7
+IFACE=${1:-}
+[ "$#" -eq 0 ] || shift
+WIFI_CONNECT_RAW_ORIGIN=ftp
+export WIFI_CONNECT_RAW_ORIGIN
+exec "$WIFI" "$IFACE" connectraw "$@"

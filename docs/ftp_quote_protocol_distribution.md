@@ -3,6 +3,7 @@
 이 문서는 FTP 클라이언트에서 WLAN 장비를 제어할 때 사용하는 `quote` 명령과
 응답을 정의한다. 명령은 FTP 제어 연결에서 실행한다.
 인터페이스 필수 규칙은 `wlan-proc` 0.7.0부터 적용된다.
+도움말·NTP·시각 명령인 `whelp`, `wntp`, `wtime`은 0.7.13부터 제공한다.
 
 ## 공통 규칙
 
@@ -21,12 +22,90 @@ ftp> quote <명령> [인자...]
 `550 Failed: ... exited ...`의 숫자는 실행된 핸들러의 종료 코드다.
 아래 입력 제한은 장비 이미지의 FTP 디스패처 기준이다.
 
-`wrst`를 제외한 `w`로 시작하는 모든 명령은 첫 인자로 인터페이스를 필수로 받는다.
+`wrst`, `whelp`, `wntp`, `wtime`을 제외한 `w`로 시작하는 모든 명령은 첫 인자로 인터페이스를 필수로 받는다.
 `mlan0` 또는 `0`은 `mlan0`, `mlan1` 또는 `1`은 `mlan1`을 선택한다.
 `wrst`는 인터페이스를 생략할 수 있으며, 지정하면 같은 네 값만 허용한다.
+`whelp`는 인터페이스 없이 명령 목록이나 개별 명령의 사용법·예제를 조회한다.
+`wntp`와 `wtime`도 인터페이스 없이 장치 전체에 적용한다.
 나머지 `w` 명령의 인터페이스 누락이나 잘못된 값은 오류 코드 `2`다. 성공한 설정 명령과
 `wconnect`의 결과는 `200 SUCCESS`이며,
 `wconnect` 응답에는 SSID와 주파수를 포함하지 않는다.
+
+## 명령 처리 시작 로그
+
+0.7.13부터 모든 커스텀 명령은 처리 시작 시각을 밀리초와 현지 UTC 오프셋까지
+`/var/log/cantops/logger.log`에 기록한다(패키지 rsyslog 설정 기준).
+
+```text
+ftpcmd_start command=wconnectraw time=2026-10-29T17:45:41.279+09:00
+```
+
+명령명만 기록하며 비밀번호·SSID 등 인자는 포함하지 않는다. 다른 핸들러로
+위임하는 명령도 한 건만 기록한다. 로그 기록 실패는 명령 응답을 바꾸지 않는다.
+시각은 보드의 핸들러 처리 시작 기준이며 PC 입력 시각이나 정확한 패킷 수신
+시각이 아니다. 핸들러의 인자 오류도 기록되지만, vsftpd가 실행 전에 거부한
+미등록 명령이나 입력 제한 위반은 포함되지 않는다. `wtime sync`는 시계 변경
+전의 시작 시각을 남긴다.
+
+```sh
+tail -f /var/log/cantops/logger.log | grep ftpcmd_start
+```
+
+## 명령 도움말
+
+| 명령 | 결과 |
+| --- | --- |
+| `quote whelp` | 설치된 커스텀 명령 목록 |
+| `quote whelp wconnect` | `wconnect`의 역할·호출 형식·예제 |
+| `quote whelp wpsk` | PSK 저장·휘발 저장 호출 형식과 예제 |
+| `quote whelp wrst` | 보드 전체 재부팅 명령의 호출 형식과 예제 |
+
+도움말은 각 요청마다 영문 ASCII 한 줄로 반환한다. 실제 명령을 실행하지 않으므로
+설정과 연결 상태를 바꾸지 않는다. 예를 들어 현재 연결 조회의 사용법은 다음과 같다.
+
+```text
+ftp> quote whelp wstatus
+200 Read current connected SSID/frequency, not saved settings. Usage: quote wstatus <iface>. Example: quote wstatus 0; iface=0|1|mlan0|mlan1
+```
+
+`<iface>`는 인터페이스 자리에 실제 값을 넣으라는 표기이며, 예제는 `mlan0`의 별칭
+`0`을 사용한다. 명령 이름의 대소문자는 구분하지 않는다. 존재하지 않거나 실행할 수
+없는 명령, 불필요한 추가 인자를 요청하면 `550 Failed: whelp exited 2`로 실패한다.
+
+## NTP와 시각 명령
+
+| 명령 | 동작 | 성공 응답 예시 |
+| --- | --- | --- |
+| `quote wntp` | 저장 서버와 실행 상태 조회 | `200 SERVICE=active ENABLED=enabled SYNC=yes CONFIG=192.168.0.3 SERVER=192.168.0.3` |
+| `quote wntp ip 192.168.0.3` | 장치 기본 NTP 서버 저장 | `200 SUCCESS NTP=192.168.0.3; run wntp apply` |
+| `quote wntp apply` | NTP 서비스 재시작 | `200 SUCCESS restarted systemd-timesyncd; synchronization not confirmed` |
+| `quote wtime` | 현지 시각을 밀리초까지 조회 | `200 TIME=2026-10-29 16:30:00.123 OFFSET=+0900` |
+| `quote wtime sync 2026-10-29 16:30:00.123` | 현지 시각을 수동 설정·저장 | `200 SUCCESS TIME=2026-10-29 16:30:00.125 OFFSET=+0900; NTP unchanged` |
+
+`wntp ip <IP>`는 유니캐스트 IPv4/IPv6 주소만 받으며 호스트명·CIDR·zone ID는
+받지 않는다. `/etc/systemd/timesyncd.conf`의 장치 기본 `NTP=`만 저장하고,
+`apply`가 `systemd-timesyncd.service`를 재시작한다. enable 여부와
+`global.ntp.enabled` 설정은 유지한다. inactive 유닛도 `apply`로 기동될 수 있다.
+재시작 성공 뒤 실제 동기화 완료는 `quote wntp`의 `SYNC`로 확인한다.
+
+`CONFIG`는 장치에 저장한 서버 목록이고 `SERVER`는 실행 중 선택된 서버다.
+OPC 런타임 drop-in과 networkd/DHCP 서버는 유지되므로 두 값이 다를 수 있다.
+`SERVICE`는 서비스 상태, `ENABLED`는 유닛 enable 상태, `SYNC`는 커널의 동기화
+플래그다. 조회 불가 값은 `unknown`, inactive/failed 서비스의 서버는 `none`,
+저장 서버 미지정은 `CONFIG=unset`이다. 긴 필드는 `...`로 생략한다.
+단순 조회는 중지된 NTP 서비스를 기동하지 않는다.
+
+`wtime sync`는 `YYYY-MM-DD HH:MM:SS` 뒤에 소수 1~3자리를 선택적으로 받는다.
+따옴표·시간대 인자 없이 입력하며 장치 현지 시간대를 사용한다. 응답은 항상
+밀리초와 UTC 오프셋을 표시한다. 시각은 기존 fake-hwclock 경로로 설정·저장하고
+RTC 쓰기를 시도한다. 재부팅용 저장값과 RTC는 기존의 초 단위 정밀도다.
+NTP는 그대로 유지하므로 이후 서버 기준으로 다시 보정될 수 있다.
+FTP 전달·실행 지연을 자동 보상하지 않으므로 1ms 이내의 원격 동기화는 보장하지 않는다.
+
+두 명령의 인자 오류는 코드 `2`, 파일·서비스·시각 처리 오류는 `1`, 내부 20초
+작업 제한 시간 초과는 `124`다. 실패는 공통 `550 Failed: ... exited <코드>` 형식이다.
+제한 시간 초과 후 NTP 재시작이 완료되거나 시간 설정·저장 실패 전에 시계가
+이미 바뀌었을 수 있으므로 조회 명령으로 확인한다.
 
 ## 무선 명령
 
@@ -36,9 +115,9 @@ ftp> quote <명령> [인자...]
 | `wfreq` | `quote wfreq <mlan0\|mlan1\|0\|1> [주파수/채널...]` | 설정 파일의 주파수 조회 | 설정 파일에 주파수 저장 |
 | `wscan` | `quote wscan <mlan0\|mlan1\|0\|1> <SSID...>` | SSID 누락 오류 | 최신 스캔에서 SSID·RSSI·주파수 조회 |
 | `wpsk` | `quote wpsk <mlan0\|mlan1\|0\|1> [--stage] <비밀번호...>` | 비밀번호 누락 오류 | PSK 저장 또는 휘발 저장 |
-| `wconnect` | `quote wconnect <mlan0\|mlan1\|0\|1> [SSID...]` | 저장된 설정으로 연결 | SSID를 저장한 뒤 연결 |
+| `wconnect` | `quote wconnect <mlan0\|mlan1\|0\|1> [--save\|--no-save] [--] [SSID...]` | 저장된 설정으로 연결 | SSID로 연결 후 저장(캐시 경로) 또는 저장 후 연결 |
 | `wstatus` | `quote wstatus <mlan0\|mlan1\|0\|1>` | 현재 연결 조회 | 추가 인자 오류 |
-| `wconnectraw` | `quote wconnectraw <mlan0\|mlan1\|0\|1> <SSID...>` | SSID 누락 오류 | 빠른 런타임 전환과 성공 시 비동기 SSID 저장 요청 |
+| `wconnectraw` | `quote wconnectraw <mlan0\|mlan1\|0\|1> [--save\|--no-save] [--] <SSID...>` | SSID 누락 오류 | 빠른 런타임 전환과 성공 시 비동기 SSID 저장 요청 |
 
 `wssid`와 `wfreq`의 설정은 파일에만 저장된다. 저장한 값을 연결에 적용하려면
 `wconnect`를 호출한다. `wstatus`는 저장된 값이 아니라 현재 연결된 SSID와
@@ -154,7 +233,8 @@ known-good은 가능한 경우 `wssid`/`wfreq` 또는 CLI의 PSK/key 변경 전�
 연결 성공 뒤 갱신한다. 검증되지 않은 사본은 사용하지 않는다. 상태는 `/run/wifi` 아래
 mode `0600` 파일이며 재부팅 후 유지되지 않는다. fallback 활성 시 새 연결 대기는 기본
 15초(설정 1~15), 복원 확인은 기본 5초(설정 1~5)이고 실제 경과 시간을 차감해 FTP 30초
-제한 안의 예산을 관리한다. 비활성 경로는 기존 연결 제한시간 동작을 유지한다. 커널 I/O
+제한 안의 예산을 관리한다. 비활성 경로는 기존 연결 제한시간 동작을 유지하되, `wconnect` 캐시
+경로는 시도 뒤 이전 SSID 복구에 복원 확인 시간을 더 쓸 수 있다. 커널 I/O
 hang까지 제한하는 hard cap은 아니다.
 
 fallback 진행 중 같은 인터페이스의 변경은 코드 6(busy)으로 거부하지만 조회는 허용한다.
@@ -164,10 +244,36 @@ OPC의 경쟁 wireless profile/radio helper write도 busy로 거부되지만 Cha
 fallback을 시작하지 않는다. `wconnectraw`, Mode A와 다중 `network` 구성도 대상이 아니며, 다중 프로필의
 선택·복구는 supplicant가 소유한다.
 
-`wconnectraw`의 `200 SUCCESS`는 무선 제어 명령 제출과 `/run/wifi` 저장 요청
-게시의 성공이다. FTP 프로세스 밖의 systemd path/service가 요청을 처리하며,
+`wconnect`·`wconnectraw`는 인터페이스 뒤, SSID 앞에 `--save` 또는 `--no-save`를
+받는다. 기본값은 기존 저장 동작이다. `--no-save`는 conf·OPC 복원 표식을 변경하지
+않고 런타임 연결에만 적용하며, 이전의 미완료 raw 저장 요청도 취소한다. 옵션처럼
+생긴 SSID 앞에는 `--`를 넣는다. 설정 재적재·무선 재시작·재부팅 시 저장 설정이
+다시 적용된다. 보드 셸의 `wifi <iface> connect`·`connectraw`도 같은 옵션을 받는다.
+
+`wconnectraw`는 FTP 제어 연결이 대상 무선 인터페이스를 사용하면 코드 `3`으로
+거절한다. `FTPCMD_LOCAL_ADDR`가 누락·빈 값이거나 제어 주소 조회가 실패한 경우,
+주소를 찾지 못하거나 같은 주소가 여러 인터페이스에 있어 하나로 확인할 수 없는
+경우도 코드 `3`으로 거절한다. 이 검사는 무선 변경과 저장 요청 변경 전에 수행한다.
+유선 또는 다른 무선 인터페이스로 관리 연결을 유지해야 한다. FTP 제어 주소가
+필요 없는 로컬 실행은 `wifi <iface> connectraw`를 사용한다.
+
+기본 저장 경로에서 `wconnectraw`의 `200 SUCCESS`는 무선 제어 명령 제출과 `/run/wifi` 저장 요청
+게시의 성공이다. 보드 셸의 `wifi <iface> connectraw <SSID...>`와 같은 경로를
+사용한다. 유효한 명령의 수신은 `ftpcmd_raw_timing phase=dispatch_received`로 기록하며,
+무선 변경 전 checker의 자동 재연결 보호 구간(기본 20초)을 갱신한다. 이 구간은
+고정 대기가 아니며, checker가 전환 확인 중 락을 점유해 수동 재시도를 막는 것을 방지한다.
+FTP 프로세스 밖의 systemd path/service가 요청을 처리하며,
 AP 연결 및 저장 완료를 기다리지 않는다. 연결이 확인되면
 단일 `network`의 Mode B에서 변경되지 않은 설정 파일의 SSID만 저장한다.
+저장 직전에는 실제 연결의 키 관리 방식·PSK와 저장 프로필에 명시한 보안 제약도
+비교한다. 불일치하면 `authentication_mismatch`, 지원하지 않는 인증 방식이나
+마스킹된 값 등으로 확인할 수 없으면 `authentication_unverifiable`을 기록하고
+설정 파일과 OPC 복원 표식을 보존한다. 명시적 `key_mgmt=WPA-PSK`와 확인 가능한
+PSK 또는 WEP 키가 없는 명시적 `key_mgmt=NONE` 프로필만 저장을 지원한다.
+키 관리 방식이 생략되거나 Enterprise·SAE·WEP 등 확인 범위 밖이면 저장하지 않는다.
+인증값은 로그에 남기지 않으며, 이 검사는 비동기 작업 안에서 수행하므로 원래
+명령의 응답에 연결·인증 확인 대기를 추가하지 않는다. `wconnect --no-save`로
+PSK를 바꾼 뒤 raw 저장을 요청해도 새 SSID와 이전 PSK를 함께 확정하지 않는다.
 PSK·주파수는 유지한다. `wstatus`로 연결을, `wssid`로 저장 결과를 확인한다.
 저장 완료 뒤에는 재부팅해도 새 SSID가 유지된다. 저장 전 재부팅하면 휘발성
 요청이 사라질 수 있고, 연속 명령의 최신 요청은 앞선 미완료 요청을 대체한다.
@@ -178,6 +284,9 @@ PSK·주파수는 유지한다. `wstatus`로 연결을, `wssid`로 저장 결과
 망에는 `wpsk --stage`와 `wconnect`를 사용한다. 코드 7 또는 9로 실패해도
 링크가 끊기거나 전환 중일 수 있으므로 `wstatus`로 확인하고 필요하면
 `quote wconnect <iface>`로 저장된 프로필을 다시 적용한다.
+
+`wconnectraw --no-save` 경로는 비동기 저장 요청을 만들지 않는다. `200 SUCCESS`는
+무선 명령 제출만 뜻하므로 실제 연결은 `wstatus`로 확인한다.
 
 ## 오류 코드
 
@@ -202,7 +311,8 @@ PSK·주파수는 유지한다. `wstatus`로 연결을, `wssid`로 저장 결과
 | `wstatus` | `7` | 무선 상태 조회 실패 또는 필수 값 누락 |
 | `wstatus` | `8` | 상태 조회는 가능하지만 현재 연결되지 않음 |
 | `wconnectraw` | `1` | 상태·프로필 조회 실패, 인터페이스 비활성, 저장 작업 실행 환경 오류 또는 대상 네트워크 선택 실패 |
-| `wconnectraw` | `2` | 필수 인터페이스 누락·오류 또는 SSID 누락·검증 실패 |
+| `wconnectraw` | `2` | 필수 인터페이스 누락·오류, 저장 옵션 오류 또는 SSID 누락·검증 실패 |
+| `wconnectraw` | `3` | FTP 제어 연결이 대상 인터페이스를 사용하거나 제어 주소 누락·빈 값·조회 실패·미확인·모호함으로 요청 거부 |
 | `wconnectraw` | `7` | 런타임 명령 실패 |
 | `wconnectraw` | `9` | 런타임 전환 요청 후 저장 요청 파일 게시 실패 |
 

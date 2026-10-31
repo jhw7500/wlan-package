@@ -630,7 +630,7 @@ class SlotSignalExit(unittest.TestCase):
         cls.term_trap = traps[0]
         lines = text.splitlines(keepends=True)
         helpers = []
-        for name in ("connect_signal_exit", "connect_wait_poll_slot"):
+        for name in ("connect_slot_defer_signal", "connect_signal_exit", "connect_wait_poll_slot"):
             starts = [i for i, l in enumerate(lines) if l.startswith(name + "() {")]
             if starts:
                 end = next(i for i in range(starts[0], len(lines)) if lines[i] == "}\n") + 1
@@ -699,6 +699,174 @@ class SlotSignalExit(unittest.TestCase):
         r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=10)
         self.assertEqual(r.returncode, 129, r.stdout + r.stderr)
         self.assertEqual(r.stdout, "cleanup rc=129\n")
+
+
+def _wifi_sh_functions(*names):
+    """Extract whole `name() {` ... `}` function bodies from wifi.sh, in order."""
+    lines = WIFI_SH.read_text(encoding="utf-8").splitlines(keepends=True)
+    out = []
+    for name in names:
+        start = next(i for i, l in enumerate(lines) if l.startswith(name + "() {"))
+        end = next(i for i in range(start, len(lines)) if lines[i] == "}\n") + 1
+        out += lines[start:end]
+    return "".join(out)
+
+
+RUNTIME_WAIT_PRELUDE = [
+    'wifi_wpa_monotonic_ms() { local s c _; IFS=" ." read -r s c _ < /proc/uptime;'
+    ' echo $((s * 1000 + 10#$c * 10)); }',
+    'wifi_wpa_child_exec() { echo poll >> "$d/polls"; cat "$d/status"; }',
+    'd=$(mktemp -d); CONNECT_MONITOR_DIR="$d"; IFACE=mlan0; mkfifo "$d/tick"',
+    'printf "wpa_state=SCANNING\\n" > "$d/status"',
+]
+RUNTIME_WAIT_COMPLETED = (
+    'printf "wpa_state=COMPLETED\\nssid=target\\nfreq=5180\\nid=3\\n" > "$d/status.tmp"'
+    ' && mv "$d/status.tmp" "$d/status"')
+
+
+class RuntimeWaitExact(unittest.TestCase):
+    """runtime_switch_wait_exact (runtime-only / staged-PSK association proof):
+    a CONNECTED record that arrives during the 0.1 s slot ends the slot early,
+    as it already does for the save cache path, instead of sleeping it out (#437)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp(prefix="wifi-runtime-wait-"))
+        cls.helpers = cls.tmp / "helpers.sh"
+        cls.helpers.write_text(_wifi_sh_functions(
+            "runtime_switch_exact_poll", "runtime_switch_wait_exact",
+            "connect_wait_poll_slot"), encoding="utf-8")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def wait_exact(self, *setup, budget_ms=2000):
+        script = "\n".join([
+            "set -uo pipefail",
+            '. "%s"' % self.helpers,
+            'wifi_wpa_run_child() { echo "forked=$*"; command "$@"; }',
+            *RUNTIME_WAIT_PRELUDE,
+            *setup,
+            'deadline=$(( $(wifi_wpa_monotonic_ms) + %d ))' % budget_ms,
+            's=$EPOCHREALTIME; runtime_switch_wait_exact target 3 5180 "$deadline"; rc=$?; e=$EPOCHREALTIME',
+            'echo "rc=$rc"; echo "ms=$(( (${e/./} - ${s/./}) / 1000 ))"',
+            'wait; rm -rf "$d"',
+        ])
+        r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=10)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        rc = int(next(l for l in r.stdout.splitlines() if l.startswith("rc="))[3:])
+        ms = int(next(l for l in r.stdout.splitlines() if l.startswith("ms="))[3:])
+        forks = [l for l in r.stdout.splitlines() if l.startswith("forked=")]
+        return rc, ms, forks
+
+    def test_connected_record_during_the_slot_ends_the_wait_early(self):
+        rc, ms, forks = self.wait_exact(
+            '( sleep 0.03; %s; printf "3\\n" > "$d/connected-id" ) &' % RUNTIME_WAIT_COMPLETED)
+        self.assertEqual(rc, 0)
+        # Event at 30 ms + one 20 ms tick + poll forks: ~60 ms on a loaded host;
+        # the old fixed sleep is never under 100 ms.
+        self.assertLess(ms, 95)
+        self.assertEqual(forks, [])
+
+    def test_record_the_last_poll_saw_does_not_shorten_the_slot(self):
+        # The record is already there when the first poll fails on status; the
+        # status flips later without a new record, so the slot runs out first.
+        rc, ms, forks = self.wait_exact(
+            'printf "3\\n" > "$d/connected-id"',
+            '( sleep 0.03; %s ) &' % RUNTIME_WAIT_COMPLETED)
+        self.assertEqual(rc, 0)
+        self.assertGreaterEqual(ms, 90)
+        self.assertEqual(forks, [])
+
+    def test_deadline_without_an_event_fails_without_forking_sleep(self):
+        rc, ms, forks = self.wait_exact(budget_ms=250)
+        self.assertEqual(rc, 1)
+        self.assertGreaterEqual(ms, 150)
+        self.assertEqual(forks, [])
+
+
+class RuntimeSlotSignalExit(unittest.TestCase):
+    """The runtime-only and staged-PSK HUP/INT/TERM traps while their association
+    wait is in the slot's read -t: record the status and let the slot hand it to
+    the same handler afterwards, as connect_signal_exit does (#437)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp(prefix="wifi-runtime-slot-signal-"))
+        cls.helpers = cls.tmp / "helpers.sh"
+        cls.helpers.write_text(_wifi_sh_functions(
+            "connect_slot_defer_signal", "runtime_no_save_signal_exit",
+            "runtime_switch_signal_exit", "runtime_switch_exact_poll",
+            "runtime_switch_wait_exact", "connect_wait_poll_slot"), encoding="utf-8")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_both_runtime_traps_hand_the_slot_their_own_handler(self):
+        text = WIFI_SH.read_text(encoding="utf-8")
+        for handler in ("runtime_no_save_signal_exit", "runtime_switch_signal_exit"):
+            self.assertTrue(re.search(r"^    trap '%s 143' TERM$" % handler, text, re.M), handler)
+            self.assertIn("CONNECT_SLOT_SIGNAL_EXIT=%s\n" % handler, text, handler)
+
+    def handler_during_read(self, handler):
+        script = "\n".join([
+            '. "%s"' % self.helpers,
+            'd=$(mktemp -d); mkfifo "$d/tick"; CONNECT_MONITOR_DIR="$d"',
+            'exec 7<> "$d/tick"',
+            'runtime_no_save_restore() { echo rollback; }',
+            'runtime_switch_restore_original() { echo rollback; }',
+            'runtime_no_save_cleanup_stage() { echo cleanup; }',
+            "CONNECT_SLOT_READING=1",
+            "%s 143" % handler,
+            'echo "status=$CONNECT_SLOT_EXIT_STATUS"',
+            'if IFS= read -r -t 1 line <&7; then echo "fifo=newline"; else echo "fifo=empty"; fi',
+            'exec 7>&-; rm -rf "$d"',
+        ])
+        return subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=10)
+
+    def test_no_save_handler_during_the_read_only_records_the_status(self):
+        r = self.handler_during_read("runtime_no_save_signal_exit")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.stdout, "status=143\nfifo=newline\n")
+
+    def test_stage_handler_during_the_read_only_records_the_status(self):
+        r = self.handler_during_read("runtime_switch_signal_exit")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.stdout, "status=143\nfifo=newline\n")
+
+    def test_term_during_the_runtime_wait_still_runs_the_rollback(self):
+        # Like the real rollback, the stub runs an external command, a command
+        # substitution and another association wait, which must not be cut
+        # short by a deferred exit status left behind.
+        d = self.tmp / "monitor"
+        d.mkdir()
+        os.mkfifo(d / "tick")
+        script = self.tmp / "runtime.sh"
+        script.write_text("\n".join([
+            '. "%s"' % self.helpers,
+            'wifi_wpa_run_child() ( exec "$@" )',
+            RUNTIME_WAIT_PRELUDE[0],
+            'wifi_wpa_child_exec() { printf "wpa_state=SCANNING\\n"; }',
+            'CONNECT_MONITOR_DIR="%s"; IFACE=mlan0' % d,
+            'wait_a_while() { runtime_switch_wait_exact target 3 5180 "$(( $(wifi_wpa_monotonic_ms) + $1 ))"; }',
+            'runtime_no_save_restore() { /bin/sleep 0.03; t=$(cat /proc/uptime); wait_a_while 150;'
+            ' echo "rollback-done"; }',
+            'runtime_no_save_cleanup_stage() { echo "cleanup-done"; }',
+            "trap 'runtime_no_save_signal_exit 143' TERM",
+            "CONNECT_SLOT_SIGNAL_EXIT=runtime_no_save_signal_exit",
+            "while :; do wait_a_while 5000; done",
+        ]) + "\n", encoding="utf-8")
+        results = []
+        for i in range(12):
+            p = subprocess.Popen(["bash", str(script)], stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, text=True)
+            time.sleep(0.15 + 0.017 * i)
+            p.send_signal(signal.SIGTERM)
+            out, _ = p.communicate(timeout=10)
+            results.append((p.returncode, "rollback-done" in out, "cleanup-done" in out))
+        self.assertEqual(results, [(143, True, True)] * 12)
 
 
 class MonitorActionRecordsBeforeLogging(unittest.TestCase):

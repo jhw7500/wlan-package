@@ -3,11 +3,68 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
-## 0.7.12 (2026-10-29)
+## 0.7.19 (2026-10-31)
 
 > SemVer **patch** — compact 모니터의 같은 행에서 `beacon count`를 먼저, `RoamAP`를 뒤에 표시한다(#427, PR #428 후속).
 
 - `wifi 0 mon c`와 `wifi 1 mon c`의 beacon 누락/수신 누적값을 로밍 이력 앞에 둔다. 값이 없을 때의 `없음` 표기와 터미널 너비에 맞춘 잘림은 유지한다.
+
+## 0.7.18 (2026-10-31)
+
+> SemVer **patch** — Mode B에서 `roaming.extra_ssids`를 bgscan에 지정 probe로 추가하고 로밍 active probe는 선택할 수 있게 하되 자동 로밍은 현재/base SSID로 제한한다(#419).
+
+- Mode B의 boot snapshot에 있는 추가 SSID를 `iw`/`wpa_cli` active bgscan에 포함한다. 기본 설정에서는 `wifi_roam`의 홈·다중채널 active scan에도 포함한다. 후보 필터와 단일 network 블록은 유지하며 `extra_ssids=[]`일 때의 스캔 명령은 그대로다. 기존 Mode B 설정에 extras가 있다면 업그레이드 후 재부팅부터 해당 SSID도 스캔한다.
+- Mode B에서 `ssid_filter=false`와 extras가 함께 있으면 wildcard 탐색과 기본 SSID·extras 지정 probe를 함께 요청한다. extras가 비면 기존 명령을 유지한다. native owner의 `bgscan.passive=true`는 지정 probe를 보내지 않는다. `extra_ssids` 변경은 재부팅해야 적용된다.
+- `roaming.extra_ssids_in_roam_scan`(기본 `true`)으로 두 모드의 wifi_roam active scan에서 extras directed probe를 끌 수 있다. `false`여도 현재/base SSID probe, bgscan probe와 로밍 후보 정책은 그대로다. Mode A에서는 숨김 extra SSID의 자동 발견이 늦거나 실패할 수 있다. JSON 변경 후 wifi_roam SIGHUP으로 적용한다.
+- wifi_roam 시작 시 와일드카드 슬롯을 포함한 probe 수가 드라이버 상한 10을 넘으면 경고한다. 실제 스캔은 상한에 맞춰 잘라 hidden SSID가 누락될 수 있다. 부팅 base A에서 extra B로 수동 전환한 뒤 A로의 복귀 probe는 보장하지 않는다.
+
+## 0.7.17 (2026-10-30)
+
+> SemVer **patch** — FTP `wconnect --save`의 캐시 전환이 목표 연결을 확인한 뒤에만 설정 파일을 저장하고, 실패하면 저장 파일을 바꾸지 않고 이전 SSID로 런타임 연결을 복구한다(#435).
+
+- 캐시 조건(단일 network에 연결된 상태, 요청 SSID가 마지막 스캔에 있음, 새 설정 파일이 SSID 줄만 다름, 인증 변경 대기·fallback 없음)을 만족하는 FTP SSID 전환은 설정 파일을 먼저 설치하지 않는다. supplicant 메모리의 SSID만 바꿔 `reassociate`한 뒤 목표 SSID·network ID·주파수·COMPLETED를 새 CONNECTED 이벤트로 확인하고(`--no-save`와 같은 확인), 그때 렌더된 설정 파일을 원자적으로 설치하고 OPC 복원 표식을 지운다. trace는 `association_verified` 뒤에 `profile_saved`를 남긴다.
+- 확인 제한 시간 초과나 설치 실패에서는 설정 파일과 OPC 표식을 그대로 두고 `--no-save`의 런타임 복구로 이전 SSID에 다시 연결한 뒤 기존 코드(8 또는 1)로 실패한다. 전환 요청이 시작 전에 거절되면 기존처럼 설정 파일을 설치하고 `reconfigure`한다. 설정 파일이 교체된 뒤의 동기화·OPC 표식 삭제 실패는 새 설정과 연결을 그대로 두고 1로 응답한다(이전 버전도 이 실패에 1로 응답했지만 설정 파일만 새 SSID로 바뀌고 연결은 이전 SSID에 남았다. 이제는 저장된 설정과 연결이 모두 새 SSID다). HUP/INT/TERM은 슬롯 대기 중 지연되고 같은 런타임 복구를 수행하며, 이미 교체된 설정은 되돌리지 않는다.
+- 캐시 조건 밖의 경로(`reconfigure`, `--freq`, 인증 변경 대기, 다중망, fallback 활성)와 CLI `wifi connect`, `--no-save`, `wconnectraw`의 동작과 응답 계약은 바뀌지 않는다. 롤백 스냅샷은 캐시 판정이 읽은 라이브 값을 재사용하므로 프로필 조회가 늘지 않는다.
+
+## 0.7.16 (2026-10-30)
+
+> SemVer **patch** — `wconnect --no-save`와 `wifi <iface> connect --no-save`의 런타임 전환에서 SSID 변환의 Python 기동과 연결 확인의 고정 대기를 줄인다(#437).
+
+- 런타임 전환 준비에서 현재 network의 `ssid`(conf 표기)를 wpa 텍스트로 되돌릴 때, 정확히 따옴표로만 감싼 영문·숫자·`_`·`.`·`-`·공백 1~32자 SSID는 셸에서 변환한다. hex·`"`·비ASCII·앞뒤 공백·길이 초과는 기존 Python 판정을 그대로 사용하므로 인코딩·검증 결과는 바뀌지 않는다.
+- 런타임 전환·staged PSK 전환·실패 시 원복의 연결 확인 대기는 save 캐시 경로와 같은 이벤트 대기 슬롯을 사용한다. 마지막 조회가 보지 못한 새 CONNECTED 기록이 오면 0.1 s 슬롯을 일찍 끝내고 status를 다시 확인하며, 이미 본 기록·이벤트 없음·작업기한은 기존과 같이 처리한다. 목표 SSID·network ID·주파수·COMPLETED·fresh 이벤트 확인과 snapshot·rollback 계약은 그대로다.
+- 런타임 전환의 HUP/INT/TERM 처리기는 슬롯이 `read -t`로 대기하는 동안 상태만 기록하고, 슬롯이 끝난 뒤 같은 처리기가 원복을 수행한다. save 캐시 경로의 connect 처리기와 같은 규칙이며, 슬롯 대기 중 트랩이 바로 종료해 EXIT 정리가 비정상 종료하지 않게 한다.
+- i.MX93 A/B 실측(0.7.15 동결 하네스 그대로, 매 회 A 연결 유지 → 대상 `wscan` → 선행 disconnect 없이 전환, 방향별 5회·셀당 n=10, PSK 변환 제외, 중앙값 ms): 보드 그룹 `wconnect --no-save` 명령→CONNECTED 731.651 → 550.564, 명령→FTP 응답 967.612 → 709.857; 유선 호스트 명령→응답 978.958 → 734.621. `--save`는 보드 588.214 → 588.128, 유선 759.092 → 762.448로 변화 없고 `wconnectraw` 두 행도 범위 안이다. 전환 명령부터 목표 CONNECTED까지 추가 스캔은 80회 모두 0건. 제품 trace(10 ms 해상도) runtime-only 경로는 wifi.sh→CONNECTED 590 → 380, CONNECTED→연결 확인 140 → 60이고 save 캐시 경로 단계는 그대로다(#437).
+
+## 0.7.15 (2026-10-30)
+
+> SemVer **patch** — `wconnectraw`의 FTP 제어 연결·인증 정보 저장을 보호하고, 셸 FTP 명령의 Python 시작 로그 기동 지연을 줄인다(#422 후속).
+
+- FTP 제어 연결이 대상 무선 인터페이스를 사용하거나, 제어 주소가 누락·빈 값이거나, 주소 조회가 실패·미확인·다중 인터페이스로 모호하면 무선 명령과 저장 요청 변경 전에 코드 `3`으로 거절한다. 제어 주소는 정확히 일치하는 값으로 확인하며, 유선 또는 다른 무선 인터페이스 하나로 확인된 요청은 기존 공통 raw 경로를 사용한다. 로컬 `wifi connectraw`는 FTP 제어 주소를 요구하지 않는다.
+- 비동기 저장 작업은 연결 확인 뒤 저장 프로필과 런타임의 키 관리 방식·PSK 및 명시한 보안 제약을 비교한다. 일치하지 않거나 확인할 수 없으면 설정 파일과 OPC 복원 표식을 보존하며 고정된 사유만 기록한다. 인증값 자체는 로그에 남기지 않는다.
+- 인증 정보 검사는 별도 저장 작업에서 수행하므로 raw 명령의 연결 요청 제출·응답 앞에 인증 조회나 연결 대기를 추가하지 않는다. `--no-save`는 저장 작업을 만들지 않는다.
+- 셸 FTP 핸들러는 libc만 사용하는 작은 C 헬퍼로 시작 로그를 기록해 명령마다 Python을 새로 실행하던 비용을 없앤다. 밀리초 현지 시각·UTC 오프셋·입력 명령명과 위임 시 한 건 기록을 유지한다. Python 핸들러는 기존 프로세스 안에서 기록한다. 패키지 빌드·검증은 AArch64 헬퍼의 포함과 실행 권한을 필수로 확인한다.
+
+## 0.7.14 (2026-10-29)
+
+> SemVer **patch** — `wifi <iface> connectraw <SSID>`와 FTP `wconnectraw`의 빠른 전환을 공통화하고, 연결 실패 뒤 checker의 변경 락 때문에 수동 재시도가 거절되던 경합을 막는다(#422 후속).
+
+- CLI와 FTP가 같은 검증·무선 명령·성공 후 비동기 SSID 저장 경로를 사용한다. 일반 `wifi connect`의 초기화·설정 적용·연결 대기를 raw 요청 앞에 추가하지 않는다.
+- 유효한 요청은 변경 락 획득 전에 명령·인터페이스·대상 SSID를 기록한다. 같은 trace의 제출 시간은 각 진입점 시작부터 측정한다.
+- 무선 변경 전에 기존 `reconfigure-grace`를 갱신해 checker가 연결 확인 중 자동 재연결로 개입하지 않게 한다. 다른 실제 설정 변경과 미검증 인증 정보에 대한 코드 `6` 거절은 유지한다.
+- `wconnect`·`wconnectraw`와 해당 `wifi` 명령은 저장 기본값을 유지하며 `--no-save`로 런타임 적용을 선택한다. 이 경로는 WPA conf·OPC 복원 표식을 변경하지 않고, 이전의 미완료 raw 저장 요청도 취소한다.
+- master의 FTP 시작 로그를 raw 공통 엔진에서도 유지하고, `whelp`에 저장 옵션과 런타임 전용 적용을 안내한다(PR #434).
+- `--no-save` 연결도 기존 런타임 작업기한 동안 이벤트 모니터를 유지한다. 짧은 연결 제한시간에 설정 조회가 지연돼도 목표 연결과 실패 후 원래 AP 복구가 모니터 만료 때문에 실패하지 않게 한다(PR #434).
+- SSID 없는 `connect --no-save`도 단일망·다중망에서 설정한 연결 제한시간으로 폴링과 `wpa_cli` 호출을 제한한다. 이전 기본 폴링 횟수에 따른 조기 실패·초과 대기와 제한시간 뒤 반환된 연결 증거의 성공 처리를 막는다(PR #434).
+
+## 0.7.13 (2026-10-29)
+
+> SemVer **patch** — FTP에서 커스텀 명령 도움말과 NTP·시각 제어를 제공하고, 명령 처리 시작 시각을 밀리초까지 기록한다(#432).
+
+- `quote whelp`는 설치된 실행 가능한 명령을 나열하고 `quote whelp <command>`는 역할·사용법·예제를 ASCII 한 줄로 반환한다. 실제 제어 명령을 실행하거나 인증 정보를 읽지 않는다.
+- `quote wntp`는 서비스·enable·커널 동기화 상태와 저장 서버·선택 서버를 구분한다. `ip <IP>`는 장치 기본 서버만 원자적으로 저장하고 `apply`가 timesyncd를 재시작한다. enable·JSON 설정과 OPC/runtime/link 서버는 기존 소유자가 관리한다.
+- `quote wtime`은 현지 시각과 UTC 오프셋을 밀리초까지 표시한다. `sync YYYY-MM-DD HH:MM:SS[.mmm]`는 기존 fake-hwclock 경로로 수동 설정·영속 저장·RTC 쓰기를 시도하며 NTP 상태는 유지한다. 재부팅용 저장값·RTC는 기존 초 단위 정밀도이고 FTP 전달 지연은 보상하지 않는다.
+- FTP 실행 환경의 systemctl 조회는 public system bus를 사용하고, 조회 실패 진단은 syslog에만 남겨 성공 응답의 첫 줄이 오염되지 않게 한다. 세 명령은 인터페이스 인자를 받지 않는다.
+- 모든 커스텀 핸들러는 인자 검사 전에 명령명과 밀리초 현지 시각·UTC 오프셋을 `local0.info`로 기록한다. 위임 명령도 입력한 이름으로 한 건만 남기며 인자는 기록하지 않는다. 시각은 보드의 처리 시작 기준이고, FTP 디스패처가 실행 전에 거부한 입력은 포함되지 않는다.
 
 ## 0.7.11 (2026-10-29)
 

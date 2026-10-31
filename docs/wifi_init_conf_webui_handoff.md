@@ -63,20 +63,20 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 
 **inert_in_mode (현재 모드에서 무효)**
 
-`x-inert-in-mode`가 있으면 그 키는 해당 topology 모드에서 **읽는 소비자가 없다** —
-저장은 되고 값 검증도 그대로 받지만 동작에 반영되지 않는다. 값은 `A` 또는 `B`이며
+`x-inert-in-mode`가 있으면 그 키는 해당 topology 모드에서 **동작에 효과가 없다** —
+저장은 되고 값 검증도 그대로 받지만 정책 결과에 반영되지 않는다. 값은 `A` 또는 `B`이며
 모드는 `mlanN.roaming.generate_network_blocks`가 정한다(`false`=모드B, `true`=모드A).
 
 - 이 키는 **편집 가능 여부와 무관하다.** `x-ui-editable`을 덮어쓰지 않으며, 무효인
-  모드에서도 편집은 계속 허용해야 한다 — 잘못된 값은 모드와 무관하게 부팅 스냅샷
-  생성을 실패시키므로(`roam_policy.py`가 모드 게이트 없이 검증) UI에서 고칠 길을
+  모드에서도 편집은 계속 허용해야 한다 — 일부 키의 잘못된 값은 부팅 스냅샷
+  생성을 실패시키므로 UI에서 고칠 길을
   막으면 안 된다. 회색처리·숨김이 아니라 "현재 모드에서 적용 안 됨" 안내가 맞다.
-- 판정 기준은 **저장된 JSON 값 = 다음 부팅 topology**다. 실행 중 topology와 다를 수
-  있으나, 이 키들은 모두 `reboot`/`daemon-restart` 타이밍이라 지금의 편집도 어차피
-  그 부팅에서 함께 적용되므로 불일치 구간은 무해하다.
+- runtime 키는 **실행 중 boot snapshot의 topology**, reboot 키는 **저장된 JSON의 다음
+  부팅 topology**를 기준으로 효과를 표시한다. 저장값과 현재 모드가 다를 때는 적용
+  시점을 함께 안내한다.
 - 키를 모르는 구 UI는 무시하면 된다(현행 동작 유지).
-- 현재 적용: `mlanN.roaming.extra_ssids`, `mlanN.roaming.ROAM_CROSS_FAIL_RETRY_COUNT`
-  (양쪽 모두 `B` — 모드B에서 무효).
+- 현재 적용: `mlanN.roaming.ROAM_CROSS_FAIL_RETRY_COUNT` (`B` — 모드B에서 무효).
+  `extra_ssids`와 `extra_ssids_in_roam_scan`은 두 모드의 스캔 probe에 적용되므로 무효 표시를 하지 않는다.
 
 ---
 
@@ -99,7 +99,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 - **`global`**: `BOARD_TYPE`, `BUS_TYPE`, `BLUETOOTH.enable`, `tx_work`, `ping_monitor.enabled`.
 - **`wbridge`**: `ip_discovery`, `eth_client_ip`, `eth_sweep_subnet`, `peer_route.enabled`, `arp_ignore_always.enabled`, `engine`(pcap|tpacket|moal), `moal.{keepalive_ms, keepalive_idle_ms, debug, peer, consume_link_local}`, `optimize.*`, `thermal.*` 재구성.
 - **`mlanN`**: `connect_threshold`(-100), `connect_fallback.{enabled, attempt_timeout_sec, rollback_timeout_sec}`, `mgmt_hex_dump_enable`(false), `thermal_mgmt`(true), `rate_adapt`, `logger.enabled`.
-- **`mlanN.roaming`**: `generate_network_blocks`(false), `ROAM_CROSS_FAIL_RETRY_COUNT`(2), `extra_ssids`([]), `enabled`.
+- **`mlanN.roaming`**: `generate_network_blocks`(false), `ROAM_CROSS_FAIL_RETRY_COUNT`(2), `extra_ssids`([]), `extra_ssids_in_roam_scan`(true), `enabled`.
 - **`mlanN.bgscan`**: `ssid_filter`(true), `freq_filter`(true), `enabled`.
 - **`mlanN.periodic_roam`**: `scan_before_roam`(true).
 - **`mlanN.checker`**: `RECONFIGURE_GRACE_SEC`(20), `enabled`; **`mlanN.arping`**: `enabled`.
@@ -114,6 +114,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 - snapshot이 same boot에 삭제돼도 `/run/.<iface>.roam-policy.latched`가 live JSON
   fallback을 차단한다. UI가 일부 데몬/wifi_init만 재시작해 반영하려 하면 안 된다.
 - `generate_network_blocks`와 `extra_ssids`도 부팅 topology이므로 **재부팅 필요**다.
+- `extra_ssids_in_roam_scan`은 두 모드의 wifi_roam active probe만 바꾸며 JSON 저장 후 wifi_roam SIGHUP으로 반영한다. bgscan·network 블록·로밍 후보 정책은 그대로다. Mode A에서 끄면 숨김 extra SSID의 자동 발견이 늦거나 실패할 수 있다.
 - `bgscan.enabled=false`는 package 주기 scan만 끈다. wpa 장애 복구 scan은 유지된다.
 - `bgscan.freq_filter=false`는 deprecated다. 공통 `freq_list`가 있으면 계속 강제한다.
 - `periodic_roam.*`은 deprecated/read-only다. `enabled=true`도 경고 후 강제 off된다.
@@ -502,7 +503,8 @@ wireless profile/radio helper write 포함)은 busy(코드 6)로 거부하고 �
 | `DEFAULT_TH_5G` | 5GHz 로밍 임계값 | int | `-75` | 음수 dBm | yes | daemon-restart | 이 값 이하이면 로밍 시도 (JSON 단일 소스, conf `#!TH_5G=` 마커 미사용) |
 | `DIFF_TH` | 후보 AP 최소 RSSI 차 | int | `7` | >=0 dB | yes | daemon-restart | 클수록 보수적 |
 | `CHECK_INTERVAL` | 로밍 체크 주기 | int | `1` | >=1 초 | yes | daemon-restart | 고정 체크 주기(ADAPTIVE_INTERVAL 은 감사 D1로 제거됨) |
-| `extra_ssids` | 추가 로밍 후보 SSID | array | `[]` | 문자열 배열, 각 UTF-8 1..32 encoded bytes(같은 psk/key_mgmt) | caution | reboot | 저장 순서를 유지하며 base/extra 중복을 제거한 뒤 모드A 추가 network 블록 생성. **모드B 무효**(`x-inert-in-mode: B`) — 정규화된 스냅샷 보존·값 검증은 유지되나 읽는 소비자 없음 |
+| `extra_ssids` | 추가 스캔 대상 SSID | array | `[]` | 문자열 배열, 각 UTF-8 1..32 encoded bytes(같은 psk/key_mgmt) | caution | reboot | base/extra 중복을 제거한다. 두 모드의 bgscan active probe에 추가한다. 모드A에서는 추가 network 블록과 자동 로밍 후보를 만들고, 모드B에서는 후보를 현재/base SSID로 제한한다. wifi_roam active probe는 별도 옵션으로 제어한다 |
+| `extra_ssids_in_roam_scan` | 추가 SSID 로밍 스캔 probe | bool | `true` | true\|false | yes | runtime | 두 모드의 wifi_roam active scan에 적용. false여도 현재/base SSID probe, bgscan probe, network 블록과 로밍 후보는 그대로. Mode A에서 끄면 숨김 extra SSID 발견이 늦거나 실패할 수 있다. JSON 저장 후 wifi_roam SIGHUP 적용 |
 | `generate_network_blocks` | topology 결정자 | bool | `false` | true\|false | caution | reboot | false=모드B(단일 블록, cross-SSID 자동전환 없음), true=모드A(다중 블록/자동 cross-SSID) |
 | `ROAM_CROSS_FAIL_RETRY_COUNT` | cross-SSID 재시도 횟수 | int | `2` | >=0 (모드A 전용) | yes | daemon-restart | 초과 시 지수 backoff로 후보 제외. **모드B 무효**(`x-inert-in-mode: B`) |
 | `ROAM_NO_RESULT_FAST_COUNT` | backoff 레벨당 반복 횟수 | int | `3` | >=1 | yes | daemon-restart | 각 주기를 N tick 유지 후 2배(플래토 곡선, 기본 3,3,3,6,6,6,…). 1=레거시(매 tick 2배) |
@@ -526,8 +528,9 @@ wireless profile/radio helper write 포함)은 busy(코드 6)로 거부하고 �
 
 **비고 (roaming)** — owner/topology는 부팅 시 확정하며 runtime hot switch하지 않는다.
 - `mlanN.enabled=false`면 하위 로밍/스캔/logger/checker/arping 데몬은 상위 게이트로 강제 disable.
-- Mode A는 `extra_ssids`를 다중 블록으로 생성한다. wifi_roam owner는 exact BSSID를 pin/확인하고, wpa native owner는 wpa 기본 cross-SSID 선택 정책을 수용한다.
-- Mode B는 단일 블록이다. 자동 owner/bgscan이 `extra_ssids`를 무시하고 수동 `passive_roam`도 같은 SSID 전용이라, 이 모드에서 `extra_ssids`는 boot snapshot에 보존만 되고 읽는 소비자가 없다. 망 전환은 `wifi <iface> connect <ssid>`로 한다.
+- Mode A는 `extra_ssids`를 다중 블록으로 생성한다. wifi_roam owner는 exact BSSID를 pin/확인하고, wpa native owner는 wpa 기본 cross-SSID 선택 정책을 수용한다. `extra_ssids_in_roam_scan=false`여도 extra는 wifi_roam 자동 로밍 후보로 남지만 directed probe가 없어 숨김 SSID의 발견이 늦거나 실패할 수 있다.
+- Mode B는 단일 블록이다. `extra_ssids`는 boot snapshot에서 bgscan active scan에 들어가고, `extra_ssids_in_roam_scan=true`일 때 wifi_roam active scan에도 들어간다(현재 연결 SSID는 항상 유지). 자동 로밍 후보와 network 블록은 늘리지 않는다. `ssid_filter=false`와 extras가 함께 있으면 bgscan은 기본 SSID와 extras를 지정 probe하고 wildcard로 광범위 탐색도 유지한다. extras가 비면 기존 스캔 명령을 유지한다. native owner에서 `bgscan.passive=true`면 probe를 보내지 않는다. 수동 `passive_roam`은 같은 SSID 전용이며 망 전환은 `wifi <iface> connect <ssid>`로 한다.
+- Mode B에서 부팅 base A·extra B로 시작한 뒤 수동으로 B에 연결하면 conf의 현재 base가 B로 바뀐다. 다음 스캔은 B를 probe하지만 A가 extra에 없으면 A로의 복귀를 미리 probe하지 않는다. `extra_ssids` 변경은 재부팅해야 적용된다.
 - 부팅 snapshot은 base와 같은 항목 및 extra 간 중복을 첫 출현 순서를 보존해 제거하고, 새 snapshot 커밋 성공 뒤 제거 개수를 warning으로 한 번 남긴다. 이전 패키지가 만든 비정규 v1 snapshot은 덮어쓰지 않고 소비 시 같은 규칙으로 정규화한다. 다만 Mode B에서 `wifi connect` 전환 후 live base가 boot-latched 후보와 같아지는 것은 정상이며, 같은 SSID 내 수동 BSSID 로밍을 계속 지원한다.
 - 수동 `passive_roam`(`wifi <n> roam`)은 두 모드 모두 같은 SSID 안의 BSS 전환 전용이다. cross-SSID는 Mode A에서 자동 owner가, Mode B에서 `wifi connect`가 수행한다.
 - 모든 블록은 전역과 동일한 공통 `freq_list`를 사용한다. SSID별 주파수 분리는 UI에서 제공하지 않는다.

@@ -24,8 +24,8 @@ snapshot한다. daemon crash-restart나 wifi_init 재시작에도 snapshot이 �
 
 | topology | wifi_roam owner (`enabled=true`) | wpa native owner (`enabled=false`) |
 |---|---|---|
-| **Mode B** `generate_network_blocks=false` | 단일 블록, 같은 SSID 로밍. cross-SSID는 `wifi connect` 수동 전환만(`passive_roam`은 같은 SSID 전용) | 단일 블록 native 선택. cross-SSID는 수동 전환 |
-| **Mode A** `generate_network_blocks=true` | 다중 블록, 목표 BSSID pin+ID/SSID/BSSID 확인으로 자동 cross-SSID. `passive_roam`은 같은 SSID 전용이라 관여하지 않음 | 다중 블록, wpa 기본 정책으로 자동 cross-SSID. 수동 cross-SSID는 미지원 |
+| **Mode B** `generate_network_blocks=false` | 단일 블록, bgscan은 base+extra probe. 로밍 active scan의 extra probe는 `extra_ssids_in_roam_scan`으로 제어. 로밍 후보는 현재/base SSID만. cross-SSID는 `wifi connect` 수동 전환만(`passive_roam`은 같은 SSID 전용) | 단일 블록 native 선택. active bgscan은 extra를 probe하지만 passive는 보내지 않음. cross-SSID는 수동 전환 |
+| **Mode A** `generate_network_blocks=true` | 다중 블록, 목표 BSSID pin+ID/SSID/BSSID 확인으로 자동 cross-SSID. 로밍 active scan의 extra probe는 `extra_ssids_in_roam_scan`으로 제어하되 후보는 유지. `passive_roam`은 같은 SSID 전용이라 관여하지 않음 | 다중 블록, wpa 기본 정책으로 자동 cross-SSID. 수동 cross-SSID는 미지원 |
 
 Mode A/B도 부팅 snapshot과 network block topology를 함께 만들므로 변경 후 재부팅이
 필수다. `generate_network_blocks=true`이면 `extra_ssids=[]`여도 Mode A identity와
@@ -38,6 +38,21 @@ fallback을 읽어 canonical `freq_list`로 이행한다.
 읽을 때 같은 규칙으로 정규화한다.
 Mode B에서 `wifi connect`로 전환한 live base가 boot-latched 후보와 같아질 수 있으며,
 이는 부팅 base/extra 중복이 아닌 의도된 단일-블록 상태다.
+두 모드 모두 추가 SSID는 bgscan 요청에 들어가며, wifi_roam의 로밍 active scan에는
+`extra_ssids_in_roam_scan=true`일 때 directed probe로 들어간다. `false`여도 현재 연결
+SSID와 설정 base SSID probe는 유지하며 wpa native owner에는 효과가 없다. Mode A의 extra network
+블록과 자동 로밍 후보도 유지하지만, 숨김 extra SSID의 새 스캔 결과를 얻지 못해 자동
+전환이 늦거나 실패할 수 있다. Mode B에서는 비콘이나 전대역 fallback의 wildcard scan에서
+extra BSS를 보더라도 로밍 후보로 채택하지 않는다.
+bgscan의 `ssid_filter=false`에
+extras가 있으면 와일드카드 탐색을 유지하면서 기본 SSID와 extras를 지정 probe한다.
+extras가 비면 기존 스캔 명령을 유지한다. 스캔 결과의 extra BSS는 자동 로밍 후보로
+통과하지 않는다. 부팅 base
+A·extra B에서 수동으로 B로 전환하면 현재 B는 probe하지만 A가 boot extras에
+남아 있지 않아 같은 부팅의 A 복귀를 미리 probe하지 않는다. boot snapshot이
+base와 같은 extra를 제거하므로 이 구성만으로 양방향 probe를 보장할 수 없다.
+wifi_roam은 시작 시 bgscan 대상까지 고려한 기본 SSID와 extras의 probe 수가 드라이버 상한 10(와일드카드 1슬롯 포함)을 넘으면
+경고하고, 실제 스캔에서는 초과 항목을 잘라 요청한다.
 
 wifi_roam owner에서는 스캔 경로가 둘이다.
 
@@ -65,7 +80,7 @@ wifi_roam owner에서는 스캔 경로가 둘이다.
 | 값 | 명령 | 성격 |
 |---|---|---|
 | `true` (기본) | `iw scan freq <홈> passive` | probe 미송신, beacon 수신 |
-| `false` | `iw scan freq <홈> ssid <allowed>` | directed probe (hidden 커버) |
+| `false` | `iw scan freq <홈> ssid <probe>` | directed probe (hidden 커버); 두 모드 모두 현재 연결·설정 base SSID는 항상 probe하고 다른 extra는 옵션이 켜진 경우에만 probe. Mode A에서는 후보 유지, Mode B에서는 후보 제외 |
 
 후보를 찾으면 즉시 반환한다. 현재 AP RSSI도 같은 scan 결과에서 찾아 `DIFF_TH` 비교 source를 통일한다. 현재 AP 외 같은 SSID BSS를 관측했지만 이득이 부족하면 중복 active scan을 생략한다. 후보 beacon을 받지 못했거나 scan이 실패하면 동일 채널 directed active로 한 번 재확인한다.
 
@@ -74,7 +89,7 @@ wifi_roam owner에서는 스캔 경로가 둘이다.
 공통 `freq_list`가 2개 이상이면 홈 passive와 `ap.log` cache를 건너뛰고 즉시 다음을 수행한다.
 
 ```sh
-iw scan freq <공통 freq_list 전체> ssid <allowed>
+iw scan freq <공통 freq_list 전체> ssid <probe>
 ```
 
 현재 AP와 후보 AP를 같은 시점/scan source로 비교한다. `ap.log`/bgscan cache RSSI는 최대 bgscan interval만큼 과거 값일 수 있어 최종 결정에는 사용하지 않는다.
@@ -351,6 +366,7 @@ backoff 가 상한에 머물지 못하는 주 원인은 곡선이 아니라 **go
 | 로밍 임계 | `wifi <if> roam th {2G\|5G} <rssi>` | SIGHUP 무재시작 |
 | 후보 최소 이득 | `wifi <if> roam diff <dB>` | SIGHUP 무재시작 |
 | `STAGED_SCAN` 계열 | JSON 편집 + `systemctl kill --kill-who=main -s SIGHUP wifi_roam@<if>` | SIGHUP |
+| `extra_ssids_in_roam_scan` | JSON 편집 + `systemctl kill --kill-who=main -s SIGHUP wifi_roam@<if>` | SIGHUP — 두 모드의 wifi_roam active probe만 변경; bgscan·후보 정책은 그대로 |
 | `bgscan.passive` / `interval` | JSON 편집만 | **재시작 불필요** — `wifi_bgscan.py` 가 매 스캔 직전 재로드 (실측 확인) |
 | `bgscan.enabled` | JSON 편집 | **재부팅** — package scan service boot snapshot; false여도 wpa 복구 scan 유지 |
 | `roaming.enabled` | JSON 편집 | **재부팅** — owner/backend boot snapshot |

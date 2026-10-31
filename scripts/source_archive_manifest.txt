@@ -75,13 +75,19 @@ dist/wlan/opt/ftpcmd/bin/wconnect
 dist/wlan/opt/ftpcmd/bin/wconnectraw
 dist/wlan/opt/ftpcmd/bin/wfreq
 dist/wlan/opt/ftpcmd/bin/wgetifstate
+dist/wlan/opt/ftpcmd/bin/whelp
 dist/wlan/opt/ftpcmd/bin/wifcdown
 dist/wlan/opt/ftpcmd/bin/wifcup
+dist/wlan/opt/ftpcmd/bin/wntp
 dist/wlan/opt/ftpcmd/bin/wpsk
 dist/wlan/opt/ftpcmd/bin/wrst
 dist/wlan/opt/ftpcmd/bin/wscan
 dist/wlan/opt/ftpcmd/bin/wssid
 dist/wlan/opt/ftpcmd/bin/wstatus
+dist/wlan/opt/ftpcmd/bin/wtime
+dist/wlan/opt/ftpcmd/lib/Makefile
+dist/wlan/opt/ftpcmd/lib/ftpcmd_log.py
+dist/wlan/opt/ftpcmd/lib/ftpcmd_start_log.c
 dist/wlan/opt/wlan/bin/README
 dist/wlan/opt/wlan/bin/README_MLAN
 dist/wlan/opt/wlan/bin/README_RBC
@@ -341,6 +347,9 @@ dist/wlan/usr/local/scripts/tests/test_apply_enabled_ntp.py
 dist/wlan/usr/local/scripts/tests/test_arping_eth0_unmanaged.py
 dist/wlan/usr/local/scripts/tests/test_fake_hwclock.sh
 dist/wlan/usr/local/scripts/tests/test_ftpcmd_reply_contract.py
+dist/wlan/usr/local/scripts/tests/test_ftpcmd_start_log.py
+dist/wlan/usr/local/scripts/tests/test_ftpcmd_time.py
+dist/wlan/usr/local/scripts/tests/test_ftpcmd_whelp.py
 dist/wlan/usr/local/scripts/tests/test_iface_enabled_default_parity.py
 dist/wlan/usr/local/scripts/tests/test_journald_snapshot_units.py
 dist/wlan/usr/local/scripts/tests/test_logger_log_format.py
@@ -401,6 +410,7 @@ dist/wlan/usr/local/scripts/wifi_config.sh
 dist/wlan/usr/local/scripts/wifi_config_backup.sh
 dist/wlan/usr/local/scripts/wifi_config_backup_test.sh
 dist/wlan/usr/local/scripts/wifi_connect_fallback_lib.sh
+dist/wlan/usr/local/scripts/wifi_connect_raw.sh
 dist/wlan/usr/local/scripts/wifi_eth_peer_find.sh
 dist/wlan/usr/local/scripts/wifi_eth_peer_find_test.sh
 dist/wlan/usr/local/scripts/wifi_eth_peer_route.sh
