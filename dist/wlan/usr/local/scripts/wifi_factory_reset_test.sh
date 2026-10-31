@@ -891,6 +891,18 @@ if grep -q 'customctl enable wifi_init\|customctl enable wifi_\(logger\|checker\
 else
     pass "factory entrypoint delegates JSON-managed Wi-Fi service policy"
 fi
+# #443: postinst enables fake-hwclock.timer (the only periodic save path); the factory
+# reset must leave the board in the same state instead of disabling the timer.
+if grep -Eq '^[[:space:]]*customctl enable fake-hwclock\.timer$' "$FACTORY_SCRIPT"; then
+    pass "factory entrypoint enables fake-hwclock.timer like postinst (#443)"
+else
+    fail "factory entrypoint does not enable fake-hwclock.timer (#443)"
+fi
+if grep -Eq '^[[:space:]]*customctl disable fake-hwclock\.timer$' "$FACTORY_SCRIPT"; then
+    fail "factory entrypoint still disables fake-hwclock.timer (#443)"
+else
+    pass "factory entrypoint no longer disables fake-hwclock.timer (#443)"
+fi
 grep -Fq '"$_DEFAULT_DIR/wlan/wifi_mod_para.conf"' "$WIFI_INIT_SCRIPT" \
     && pass "wifi_init self-heals MOD_PARA from canonical factory source" \
     || fail "wifi_init MOD_PARA fallback still uses legacy source"
