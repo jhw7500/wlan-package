@@ -1712,6 +1712,17 @@ OPC ChangeIpAddress 가 바꾼 ESSID 는 사양상 재부팅 때 설정값으로
   위치를 영구화하려는 조작)를 `-R` 이 구별하지 못해 다음 부팅에 원래 값으로 되돌린다. FTP `wssid`
   는 `wifi ssid` 를 거치므로 포함된다. `bd_provision.sh`(wlan-opc)는 conf 를 통째로 재생성하면서
   표식을 지우지 않는다 — 같은 SSID 를 다시 쓰는 경우가 남은 한계이며 wlan-opc#176 으로 추적한다.
+- **런타임 전용 연결 API 를 쓰지 않는 이유(wlan-opc#209)**: 패키지에는 conf 와 표식을 건드리지 않는
+  `wifi <iface> connect --no-save`(0.7.14+)가 있지만 ChangeIp ESSID 에는 쓰지 않는다. ① SetRadioConfig 가
+  같은 `opc_wlan_apply.sh` 로 무조건 `wpa_cli reconfigure` 를 호출하므로 런타임만 바꾼 SSID 는 그때 conf
+  값으로 돌아간다(wlan-opc#161 이 런타임 방식을 기각한 이유 그대로). ② GetDeviceInfo 의 ESSID 는 영구
+  conf 의 `ssid=` 를 읽는 설정값 계약(wlan-opc#193)이라 conf 를 바꾸지 않으면 ChangeIp 뒤에도 이전 ESSID
+  를 보고한다. ③ opcd 는 헬퍼 한 번에 900 ms 예산을 주고 단일 스레드로 기다리는데 `connect --no-save`
+  는 연결 확인 대기 기본 15 s 와 롤백 5 s 를 블로킹하고, 예산에 드는 `connectraw --no-save` 는 연결
+  확인·롤백이 없어 현행 `reconfigure` 와 정보량이 같다. 적용이 Logout 응답 뒤라 연결 확인 결과를
+  호스트에 돌려줄 수도 없다. 재검토 조건은 헬퍼가 `reconfigure` 대신 런타임 재적용을 지원하거나,
+  wlan-opc#193 계약이 바뀌거나, opcd 적용이 비동기화될 때다. 비교표와 검증 계획은
+  https://github.com/jhw7500/wlan-opc/issues/209#issuecomment-6540439045 에 있다.
 
 ### opcd 장치 리셋 통지용 Reset Cause 기록 (#304)
 
