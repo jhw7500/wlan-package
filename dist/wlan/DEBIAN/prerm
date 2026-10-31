@@ -29,6 +29,10 @@ upgrade)
     # Stop services before upgrade
     stop_service_if_active wifi_bridge@mlan0
     stop_service_if_active wifi_bridge@mlan1
+    for _iface in mlan0 mlan1; do
+        stop_service_if_active "wifi_raw_commit@${_iface}.path"
+        stop_service_if_active "wifi_raw_commit@${_iface}.service"
+    done
     ;;
 
 remove|deconfigure)
@@ -44,6 +48,8 @@ remove|deconfigure)
     stop_service_if_active wifi_apply_enabled
     stop_service_if_active wlan_emergency_reboot.service
     for _iface in mlan0 mlan1; do
+        stop_service_if_active "wifi_raw_commit@${_iface}.path"
+        stop_service_if_active "wifi_raw_commit@${_iface}.service"
         for _u in wifi_bridge wifi_checker wifi_logger wifi_led wifi_roam \
                   wifi_bgscan wifi_arping wifi_event wifi_periodic_roam \
                   wifi_capture wifi_ping wpa_supplicant; do
@@ -73,6 +79,7 @@ remove|deconfigure)
     [ -x /usr/local/scripts/wifi_acl.sh ] && /usr/local/scripts/wifi_acl.sh clear 2>/dev/null || true
     disable_service_if_enabled wlan_emergency_reboot.service
     for _iface in mlan0 mlan1; do
+        disable_service_if_enabled "wifi_raw_commit@${_iface}.path"
         for _u in wifi_bridge wifi_checker wifi_logger wifi_led wifi_roam \
                   wifi_bgscan wifi_arping wifi_event wifi_periodic_roam \
                   wifi_capture wifi_ping wpa_supplicant; do

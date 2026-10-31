@@ -1,0 +1,146 @@
+#!/bin/sh
+# Scan for one SSID using the profile's common frequency policy.
+#   quote wscan <mlan0|mlan1|0|1> <ssid words...>
+set -u
+
+case "$0" in */*) _ftpcmd_dir=${0%/*} ;; *) _ftpcmd_dir=. ;; esac
+"$_ftpcmd_dir/../lib/ftpcmd_start_log" wscan >/dev/null 2>&1 || true
+
+WIFI=/usr/local/bin/wifi
+CONFIG_LIB=/usr/local/scripts/wifi_init_config_lib.sh
+WPA_CONF_DIR=/etc/wpa_supplicant
+SCAN_FRESH_SLACK_MS=1000
+SCAN_TIMEOUT_SEC=25
+IFACE=unknown
+
+wscan_fail() {
+    _code=$1
+    shift
+    logger -p local0.err \
+        "ftpcmd_result command=wscan status=fail code=$_code iface=$IFACE detail=$*" \
+        >/dev/null 2>&1 || true
+    printf '%s\n' "Error: $*" >&2
+    exit "$_code"
+}
+
+wscan_monotonic_ms() {
+    IFS=' .' read -r _sec _centi _rest < /proc/uptime || return 1
+    case "$_sec:$_centi" in
+        *[!0-9:]*|:*) return 1 ;;
+    esac
+    _centi=${_centi#0}
+    [ -n "$_centi" ] || _centi=0
+    printf '%s\n' "$((_sec * 1000 + _centi * 10))"
+}
+
+case "${1:-}" in
+    mlan0|0) IFACE=mlan0 ;;
+    mlan1|1) IFACE=mlan1 ;;
+    *) wscan_fail 2 "expected interface mlan0, mlan1, 0 or 1" ;;
+esac
+shift
+
+[ "$#" -gt 0 ] || wscan_fail 2 "SSID is required"
+TARGET_SSID=$*
+[ -n "$TARGET_SSID" ] || wscan_fail 2 "SSID is required"
+[ -x "$WIFI" ] || wscan_fail 1 "wifi executable unavailable"
+[ -r "$CONFIG_LIB" ] || wscan_fail 1 "wifi config library unavailable"
+
+CONF="$WPA_CONF_DIR/wpa_supplicant-$IFACE.conf"
+[ -r "$CONF" ] || wscan_fail 1 "profile unavailable"
+FREQ_RAW=$(/bin/bash -c '. "$1"; wifi_wpa_conf_common_freqs "$2"' \
+    _ "$CONFIG_LIB" "$CONF" 2>/dev/null) \
+    || wscan_fail 1 "profile frequency lookup failed"
+
+# The helper returns a whitespace-separated list. Validate before expanding it
+# into wifi argv so malformed profile text cannot become an option.
+set -f
+set -- $FREQ_RAW
+for _freq in "$@"; do
+    case "$_freq" in
+        ''|*[!0-9]*) wscan_fail 1 "invalid profile frequency list" ;;
+    esac
+done
+
+SCAN_OUTPUT=$(WIFI_SCAN_REPORT_START_MS=1 \
+    timeout -k 1 "$SCAN_TIMEOUT_SEC" \
+    "$WIFI" "$IFACE" scan --ssid "$TARGET_SSID" "$@" 2>&1)
+SCAN_RC=$?
+SCAN_END_MS=$(wscan_monotonic_ms) || wscan_fail 1 "monotonic clock unavailable"
+[ "$SCAN_RC" -eq 0 ] || wscan_fail "$SCAN_RC" "directed scan failed"
+SCAN_START_MS=$(printf '%s\n' "$SCAN_OUTPUT" | awk '
+    /^WIFI_SCAN_START_MS=[0-9]+$/ {
+        sub(/^WIFI_SCAN_START_MS=/, "")
+        print
+        exit
+    }
+')
+case "$SCAN_START_MS" in
+    ''|*[!0-9]*) wscan_fail 1 "trusted scan start marker unavailable" ;;
+esac
+MAX_AGE_MS=$((SCAN_END_MS - SCAN_START_MS))
+[ "$MAX_AGE_MS" -ge 0 ] || wscan_fail 1 "monotonic clock moved backwards"
+# Keep the same short age tolerance as wifi_roam.py. It covers timestamp and
+# driver reporting skew while still excluding old entries from the kernel BSS cache.
+MAX_AGE_MS=$((MAX_AGE_MS + SCAN_FRESH_SLACK_MS))
+
+RESULT=$(printf '%s\n' "$SCAN_OUTPUT" | awk \
+    -v target="$TARGET_SSID" -v max_age="$MAX_AGE_MS" -v allowed="$*" '
+    function reset_record() {
+        freq = signal = signal_text = age = ssid = ""
+    }
+    function finish_record() {
+        if (ssid == target && freq ~ /^[0-9]+$/ &&
+            (allowed == "" || index(" " allowed " ", " " freq " ") > 0) &&
+            signal ~ /^-?[0-9]+([.][0-9]+)?$/ && age ~ /^[0-9]+$/ &&
+            (age + 0) <= (max_age + 0)) {
+            if (!found || (signal + 0) > (best_signal + 0)) {
+                found = 1
+                best_signal = signal
+                best_signal_text = signal_text
+                best_freq = freq
+            }
+        }
+    }
+    /^BSS[[:space:]]/ {
+        if (in_bss) finish_record()
+        in_bss = 1
+        reset_record()
+        next
+    }
+    in_bss && /^[[:space:]]*freq:[[:space:]]*/ {
+        value = $0
+        sub(/^[[:space:]]*freq:[[:space:]]*/, "", value)
+        sub(/[[:space:]].*$/, "", value)
+        freq = value
+        next
+    }
+    in_bss && /^[[:space:]]*signal:[[:space:]]*/ {
+        value = $0
+        sub(/^[[:space:]]*signal:[[:space:]]*/, "", value)
+        sub(/[[:space:]].*$/, "", value)
+        signal = value
+        signal_text = value
+        next
+    }
+    in_bss && /^[[:space:]]*last seen:[[:space:]]*/ {
+        value = $0
+        sub(/^[[:space:]]*last seen:[[:space:]]*/, "", value)
+        sub(/[[:space:]].*$/, "", value)
+        age = value
+        next
+    }
+    in_bss && /^[[:space:]]*SSID:[[:space:]]*/ {
+        value = $0
+        sub(/^[[:space:]]*SSID:[[:space:]]*/, "", value)
+        ssid = value
+        next
+    }
+    END {
+        if (in_bss) finish_record()
+        if (!found) exit 1
+        printf "SSID=\"%s\" RSSI=%s FREQ=%s\n", target, best_signal_text, best_freq
+    }
+') || wscan_fail 4 "target SSID not found in fresh scan results"
+
+printf '%s\n' "$RESULT"

@@ -2,7 +2,7 @@
 # wifi_apply_enabled.sh
 #
 # JSON wifi_init_conf.json의 데몬 *.enabled 키를 읽어 systemctl enable/disable
-# 상태를 동기화한다. 실제 start/stop은 wifi_services.sh가 처리한다.
+# 상태를 동기화한다. supplicant의 start는 wifi_init.sh/wifi_services.sh가 처리한다.
 #
 # wifi_init.service의 ExecStartPre로 호출되어 wifi_init.sh 실행 전에 systemd
 # enable 상태를 JSON과 일치시킨 다음, ExecStartPost의 wifi_services.sh가
@@ -20,6 +20,8 @@
 #   .logger.enabled                           → wifi_logger.service (시스템 로거 그룹)
 #   .eth0.logger.enabled                      → wifi_logger@eth0.service
 #   .mlanN.wpa_supplicant.enabled             → wpa_supplicant@mlanN.service
+#   wifi_manager/wifi-manager enabled         → supplicant enable 상태는 JSON대로 유지;
+#                                                패키지 start는 wifi_init/wifi_services가 skip
 #   .mlanN.logger.enabled                     → wifi_logger@mlanN.service
 #   .mlanN.checker.enabled                    → wifi_checker@mlanN.service
 #   .mlanN.bgscan.enabled                     → wifi_bgscan@mlanN.service
@@ -256,7 +258,7 @@ apply wifi_mgmt_log.timer "$_mgmt"
 
 # wbridge 정책
 WBRIDGE_ENABLED=$(get_bool ".wbridge.enabled" "false")
-BRIDGE_IFACE=$(jq -r '.wbridge.bridge_iface // "mlan0"' "$JSON")
+BRIDGE_IFACE=$(jq -r '.wbridge.bridge_iface // .global.BRIDGE_IFACE // "mlan0"' "$JSON")
 SNMP_TRAP_ENABLED=$(get_bool ".snmp.trap.enabled" "false")
 
 # per-iface 데몬
@@ -281,7 +283,9 @@ for iface in mlan0 mlan1; do
         continue
     fi
 
-    apply "wpa_supplicant@${iface}.service"     "$(get_bool ".${iface}.wpa_supplicant.enabled" "true")"
+    # enable은 부팅 자동 기동이 아닌 복구 정책 표시다. 매니저가 소유해도 JSON 값을
+    # 유지해야 netdev 재생성 후 failed 유닛을 wlan_wpa_reattach.sh가 복구할 수 있다.
+    apply "wpa_supplicant@${iface}.service" "$(get_bool ".${iface}.wpa_supplicant.enabled" "true")"
 
     apply "wifi_logger@${iface}.service"        "$(get_bool ".${iface}.logger.enabled"        "true")"
     apply "wifi_checker@${iface}.service"       "$(get_bool ".${iface}.checker.enabled"       "true")"

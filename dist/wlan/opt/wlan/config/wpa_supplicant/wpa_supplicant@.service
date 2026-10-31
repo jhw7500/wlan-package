@@ -31,4 +31,7 @@ ExecStopPost=/bin/sh -c 'echo "$(date "+%%Y-%%m-%%d %%H:%%M:%%S.%%3N") wpa_suppl
 #ExecStopPost=/bin/sleep 1
 
 [Install]
-WantedBy=multi-user.target
+# enable은 패키지의 시작 및 netdev 재생성 복구 정책 표시로 사용한다. wifi_init.sh도
+# JSON이 허용하고 매니저가 없으면 bridge iface를 직접 start한다. 부팅 target이 직접
+# 이 유닛을 pull하면 wifi_init ExecStartPre의 disable로도 예약된 start가 취소되지 않는다.
+WantedBy=wifi-supplicant-manual.target

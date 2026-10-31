@@ -145,7 +145,16 @@ def test_persistent_ssid_writers_delete_the_marker_through_the_lock_child() -> N
     text = WIFI_SH.read_text()
 
     assert f'OPC_ESSID_MARKER="${{OPC_ESSID_MARKER:-{MARKER}}}"' in text
-    assert text.count('wifi_wpa_run_child rm -f "$OPC_ESSID_MARKER"') == 2, "ssid) and connect) each delete it"
+    ssid_branch = text.split("  ssid)", 1)[1].split("  stage-psk)", 1)[0]
+    connect_branch = text.split("  connect)", 1)[1].split("  scan)", 1)[0]
+    assert 'wifi_wpa_run_child rm -f "$OPC_ESSID_MARKER"' in ssid_branch
+    # connect deletes the marker from the helpers it calls for the two save
+    # orders (#435): install-first and the cache switch that saves after the
+    # verified association.
+    for helper in ("connect_install_rendered_profile", "connect_cache_save_execute"):
+        assert helper in connect_branch
+        body = text.split(f"{helper}() {{", 1)[1].split("\n}\n", 1)[0]
+        assert 'wifi_wpa_run_child rm -f "$OPC_ESSID_MARKER"' in body, helper
     assert 'rm -f "$OPC_ESSID_MARKER"' not in text.replace('wifi_wpa_run_child rm -f "$OPC_ESSID_MARKER"', ""), (
         "a bare rm would run outside the lock-holder child"
     )

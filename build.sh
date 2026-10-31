@@ -52,6 +52,19 @@ else
     unset WLAN_PACKAGE_NO_BRIDGE
 fi
 
+# The pre gate packages this generated helper in its runtime fixtures. Build
+# it first so the initial release does not require a previous development build.
+# Keep it target-architecture-specific before either validation or staging.
+echo "Building FTP start logger..."
+FTPCMD_LOG_DIR="${BASEDIR}/dist/wlan/opt/ftpcmd/lib"
+make -C "${FTPCMD_LOG_DIR}" clean || { echo "Error: cannot clean FTP start logger" >&2; exit 1; }
+if [ "${HOST_ARCH}" = "aarch64" ] || [ "${HOST_ARCH}" = "arm64" ]; then
+    make -C "${FTPCMD_LOG_DIR}" release || { echo "Error: failed to build FTP start logger" >&2; exit 1; }
+else
+    make -C "${FTPCMD_LOG_DIR}" cross || { echo "Error: failed to cross-build FTP start logger" >&2; exit 1; }
+fi
+
+
 if [ "${RELEASE_BUILD}" -eq 1 ]; then
     # 오래 걸리는 cross-build 전에 설정 drift·schema·단위/shell 회귀를 먼저 차단한다.
     bash "${BASEDIR}/scripts/validate_release.sh" pre \

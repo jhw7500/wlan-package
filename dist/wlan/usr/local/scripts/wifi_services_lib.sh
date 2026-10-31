@@ -32,6 +32,7 @@ wifi_services_wireless_list() {
         svcs+=("wifi_logger@${iface}.service")
         svcs+=("wifi_checker@${iface}.service")
         svcs+=("wifi_event@${iface}.service")
+        svcs+=("wifi_raw_commit@${iface}.path")
         svcs+=("wifi_bridge@${iface}.service")
         svcs+=("wifi_arping@${iface}.service")
         svcs+=("wifi_bgscan@${iface}.service")

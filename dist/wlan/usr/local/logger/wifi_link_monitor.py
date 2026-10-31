@@ -8,6 +8,7 @@ import signal
 import subprocess
 import re
 from datetime import datetime
+from unicodedata import east_asian_width
 
 INTERVAL = 1.0
 FILE_PATH = None
@@ -432,6 +433,38 @@ class InterruptTracker:
 
 # ── 화면 그리기 ────────────────────────────────────────────────
 
+def format_roam_beacon_line(roam_display, mwlan_log, width):
+    """Keep roam history and the firmware beacon counters on one screen row."""
+    if not isinstance(mwlan_log, dict):
+        mwlan_log = {}
+
+    def columns(text):
+        return sum(2 if east_asian_width(ch) in ("F", "W") else 1 for ch in text)
+
+    def clip(text, limit):
+        shown, used = [], 0
+        for ch in text:
+            size = 2 if east_asian_width(ch) in ("F", "W") else 1
+            if used + size > limit:
+                break
+            shown.append(ch)
+            used += size
+        return "".join(shown)
+
+    def counter(key):
+        value = mwlan_log.get(key)
+        return str(value) if type(value) is int and value >= 0 else "없음"
+
+    roam_text = f"RoamAP: * {roam_display}" if roam_display else "RoamAP: -"
+    beacon_text = (f"beacon count : {counter('beaconMissedCount')}/"
+                   f"{counter('beaconReceivedCount')}")
+    if columns(roam_text) + 2 + columns(beacon_text) > width:
+        room = width - columns(beacon_text) - 2
+        if room >= len("RoamAP:"):
+            roam_text = clip(roam_text, room)
+    return clip(f"{roam_text}  {beacon_text}", max(width, 0))
+
+
 def draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, summary_path, ping_log_path=None, ip_gw=None, irq_tracker=None, start_time=None):
     """Compact 모드: 최소 라인으로 핵심 WiFi 상태 표시"""
     stdscr.clear()
@@ -503,6 +536,8 @@ def draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, summary_path, p
     sig_a = sig_avg.replace(" dBm", "") if isinstance(sig_avg, str) else str(sig_avg)
     tx_fail = link.get("tx_failed", "-")
     mwlan_log = data.get("mwlan_log", {}) if isinstance(data, dict) else {}
+    if not isinstance(mwlan_log, dict):
+        mwlan_log = {}
     tx_retry = mwlan_log.get("dot11RetryCount", link.get("tx_retries", "-"))
     safe_addstr(y, 1, f"RSSI: {sig_s}/{sig_a} dBm  TX_FAIL: {tx_fail}  TX_RETRY: {tx_retry}")
     y += 1
@@ -587,10 +622,8 @@ def draw_compact_screen(stdscr, data, wpa_tracker, roam_tracker, summary_path, p
 
     # 로밍 이벤트 (AP 변경 감지)
     roam_disp = roam_tracker.get_display()
-    if roam_disp:
-        safe_addstr(y, 1, f"RoamAP: * {roam_disp}", curses.A_BOLD)
-    else:
-        safe_addstr(y, 1, "RoamAP: -")
+    safe_addstr(y, 1, format_roam_beacon_line(roam_disp, mwlan_log, max_x - 2),
+                curses.A_BOLD if roam_disp else 0)
     y += 1
 
     safe_addstr(y, 1, sep)

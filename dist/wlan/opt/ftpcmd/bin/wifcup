@@ -3,6 +3,9 @@
 #   quote wifcup <mlan0|mlan1|0|1>
 set -u
 
+case "$0" in */*) _ftpcmd_dir=${0%/*} ;; *) _ftpcmd_dir=. ;; esac
+"$_ftpcmd_dir/../lib/ftpcmd_start_log" wifcup >/dev/null 2>&1 || true
+
 if [ "$#" -ne 1 ]; then
     echo "usage: wifcup <mlan0|mlan1|0|1>"
     exit 2
@@ -13,4 +16,5 @@ case "$1" in
     *) echo "invalid interface: $1"; exit 2 ;;
 esac
 
+export FTPCMD_START_LOGGED_FOR=ifcup
 exec "$(dirname "$0")/ifcup" "$IFACE"

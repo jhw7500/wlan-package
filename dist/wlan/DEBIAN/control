@@ -1,5 +1,5 @@
 Package: wlan-proc
-Version: 0.7.7
+Version: 0.7.18
 Section: net
 Priority: optional
 Architecture: arm64
@@ -61,4 +61,14 @@ Description: WLAN Application
  0.7.4 : 수동 CLI/FTP 망 전환이 실패하면 직전 검증된 프로필로 복귀하는 <iface>.connect_fallback 정책을 추가한다(기본 비활성). FTP wconnect 전환 지연을 줄이고(최근·사전 스캔 캐시 연결, <iface>.wpa_supplicant.scan_res_valid_for_connect 기본 180초) 공장 초기화가 OPC 저장값과 IP 주소 리스트 파일을 지운다(#383·#381). postinst 가 opcd 유닛을 실제 파일로 설치해 OPC 를 다시 켤 수 있게 하고(#400) wbridge.enabled=false 이면 moal 브리지 인자를 넘기지 않으며(#402) 미연결에도 link.json 에 자기 무선 MAC 을 남긴다(#406). OPCd 를 wlan-opc d048403 으로 올려 통신 사양서 0.7.4 판 동작(IP 주소 리스트 텍스트 파일, Dual·빈 비밀번호·형식 오류 응답, ChangeIp GW·NTP 미설정)을 싣는다
  0.7.5 : FaultDetect Network 혼잡(0x0004)을 eth0 송수신량 대신 운용 채널의 무선 점유율로 판정한다 — logger 가 link.json 에 survey_in_use 를 싣고 OPCd 를 wlan-opc ee47738 로 올린다(wlan-opc#192, congestion_net_if 는 mlan0·mlan1 만). pcap-analyzer 의 network.json 을 출하물에서 빼며 업그레이드하면 기기의 해당 파일이 지워진다(#411). 로밍 GARP 를 보내면 journal 에 ROAM_GARP 한 줄을 남긴다(#234)
  0.7.6 : 로밍 직후 IPv4 재부여를 기다려 GARP 를 보내고(#234), 유선 패시브 IP 탐색의 대역 밖 주소를 거른다(#417). 업그레이드 때 실행 중인 wifi_event 를 재시작하고 전체 적용을 위한 재부팅 필요를 알린다(#418)
- 0.7.7 : Mode B에서도 extra_ssids 를 bgscan·로밍 판정의 active scan probe 에 추가하되 자동 로밍 후보는 현재/base SSID 로 유지한다(#419). 설정 변경은 재부팅으로 반영한다
+ 0.7.7 : FTP quote 에 대상 SSID 지정 스캔(wscan)과 PSK 저장·휘발 준비(wpsk)를 추가한다. wconnect 는 준비한 PSK 로 런타임 전환한 뒤 연결 성공을 확인해 설정을 저장하고, wconnectraw 는 빠른 SSID 전환 후 독립 path/service 가 연결을 확인해 비동기로 SSID 를 저장한다
+ 0.7.8 : wconnectraw 의 비동기 설정 저장 서비스에서 500ms 고정 대기를 제거해 연결 속도를 유지하면서 저장 지연을 줄인다(#422)
+ 0.7.9 : wifi 상태 조회에 wlan-proc·wifi-manager·무선 F/W·드라이버·mlanutl 버전을 추가하고 compact 모니터의 RoamAP 행에 beacon 누락/수신 누적값을 표시한다. 조회할 수 없는 항목은 없음으로 표시한다(#427)
+ 0.7.10 : i.MX8·i.MX93 wpa_supplicant 를 29a017c 로 갱신해 GET_NETWORK 가 PSK·비밀번호·PIN 등 인증 비밀값을 설정 파일 형식으로 반환한다(wpa-supplicant#49)
+ 0.7.11 : wconnectraw 저장 감시 path 가 paths.target 을 막아 wifi_init 과 networkd 가 서로 기다리던 부팅 지연을 없앤다(#422)
+ 0.7.13 : FTP quote 에 설치 명령 도움말(whelp), NTP 상태 조회·서버 저장·재시작(wntp), 밀리초 현지 시각 조회·수동 설정(wtime)을 추가하고 커스텀 명령 처리 시작 시각을 밀리초까지 기록한다(#432)
+ 0.7.14 : wifi connectraw와 FTP wconnectraw의 빠른 전환을 공통화하고 수신 로그와 checker 보호 구간을 추가한다. wconnect·wconnectraw는 저장 기본값을 유지하며 --no-save로 설정 파일을 바꾸지 않는 런타임 전환을 지원한다(#422 후속)
+ 0.7.15 : wconnectraw가 FTP 제어 연결을 운반하는 무선의 변경을 거절하고, 비동기 SSID 저장 전 런타임 인증 정보와 저장 프로필의 일치를 확인한다. 셸 FTP 시작 로그를 C 헬퍼로 기록해 Python 기동 지연을 없앤다(#422 후속)
+ 0.7.16 : wconnect --no-save의 런타임 전환에서 현재 SSID 변환의 Python 기동을 없애고, 연결 확인 대기를 새 CONNECTED 이벤트로 일찍 끝낸다. 런타임 전환 처리기는 슬롯 대기 중 시그널을 미뤄 원복을 유지한다(#437)
+ 0.7.17 : FTP wconnect --save의 캐시 전환이 목표 연결을 확인한 뒤에만 설정 파일을 저장하고, 실패 시 저장 파일을 바꾸지 않고 이전 SSID로 런타임 연결을 복구한다(#435)
+ 0.7.18 : Mode B에서도 extra_ssids 를 bgscan·로밍 판정의 active scan probe 에 추가하되 자동 로밍 후보는 현재/base SSID 로 유지한다(#419). 설정 변경은 재부팅으로 반영한다

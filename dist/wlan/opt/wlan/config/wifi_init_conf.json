@@ -389,7 +389,7 @@
         "wpa_supplicant": {
             "_comment": [
                 "wpa_supplicant@<iface> 데몬 관리. wifi_apply_enabled.sh가 systemctl enable/disable로 동기화",
-                "enabled: (bool) supplicant 데몬 ON/OFF. false면 유닛을 disable하고 wifi_init.sh의 직접 start도 건너뛴다. 외부(wifi_manager 등)가 supplicant를 소유하거나 association을 수동 제어할 때 사용",
+                "enabled: (bool) supplicant 패키지 시작 및 netdev 재생성 복구 정책. enable 링크는 부팅되지 않는 wifi-supplicant-manual.target에 둔다. false면 유닛을 disable하고 wifi_init.sh의 직접 start도 건너뛴다. wifi_manager/wifi-manager가 enable이면 bridge_iface의 패키지 start만 건너뛰고 유닛 enable 상태는 이 값대로 유지한다. 매니저의 같은 유닛 restart는 가능하다",
                 "주의: mlanN.enabled가 false이면 이 값과 무관하게 disable된다(인터페이스 전체 차단이 우선)",
                 "scan_res_valid_for_connect: (int 0~3600, 초) 연결 요청(reassociate, select_network 등) 때 새 스캔 없이 마지막 스캔 결과로 연결하는 유효시간. wifi_init.sh가 부팅 때 wpa conf 전역 줄로 적용. 0=항상 스캔, 범위 밖이면 경고 후 180"
             ],

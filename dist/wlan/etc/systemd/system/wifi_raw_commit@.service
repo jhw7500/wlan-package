@@ -1,0 +1,14 @@
+[Unit]
+Description=Save confirmed WiFi raw switch for %i
+After=wifi_init.service
+PartOf=wifi_init.service
+# Each request is a separate oneshot run; allow rapid switches but bound faults.
+StartLimitIntervalSec=30s
+StartLimitBurst=30
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/scripts/wifi_raw_commit.py --from-request %i
+TimeoutStartSec=45s
+User=root
+StandardOutput=null
