@@ -3,6 +3,14 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.8.0 (2026-10-31)
+
+> SemVer **minor** — 0.7.16~0.7.19의 FTP 망 전환·저장 순서·Mode B extra_ssids 스캔·compact 모니터 변경을 묶어 발행하고, OPCd를 wlan-opc 11262bd로 올려 `opc_wlan_apply.sh` 실패 사유를 로그에 남긴다(wlan-opc#210). 동작 계약은 각 패치 절과 같고 이 절은 묶음 경계와 opcd 변경만 적는다.
+
+- **묶음 범위**: 0.7.16(#437 `wconnect --no-save` 지연), 0.7.17(#435 `wconnect --save`를 연결 확인 뒤 저장), 0.7.18(#419 Mode B `extra_ssids` bgscan·roam probe, `extra_ssids_in_roam_scan`), 0.7.19(compact 모니터 beacon count 우선, #427 후속). 각 절의 동작·응답 계약은 그대로다.
+- **OPCd(wlan-opc ee47738 → 11262bd, PR #212 / #210)**: ChangeIpAddress ESSID·SetRadioConfig 적용 헬퍼 `opc_wlan_apply.sh`가 0이 아닌 코드로 끝나면 `opcd: opc_wlan_apply: exit=<n> reason=<사유>`(2 usage·다중 network 거부, 3 ctrl_interface 부재, 4 conf/JSON/드라이버 적용 실패, 5 reconfigure 실패, 6 transaction 취소·rollback 실패·복원 표식 부재, 그 밖 unknown, 시그널 종료 `signal=<n>`) 한 줄을 추가로 남긴다. 반환값·응답·표식 계약은 바뀌지 않는다.
+- **문서**: `docs/wifi_init_conf_guide.md` opcd ChangeIp ESSID 절에 런타임 전용 연결 API(`connect --no-save`)를 ChangeIp에 쓰지 않는 이유와 재검토 조건을 기록했다(#440, wlan-opc#209).
+
 ## 0.7.19 (2026-10-31)
 
 > SemVer **patch** — compact 모니터의 같은 행에서 `beacon count`를 먼저, `RoamAP`를 뒤에 표시한다(#427, PR #428 후속).
