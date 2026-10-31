@@ -3,6 +3,13 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.8.1 (2026-11-01)
+
+> SemVer **patch** — OPCd를 wlan-opc 11262bd → 6b84326으로 올린다. ChangeIp 뒤 indication 비활성을 `platform_nxp.c`·`handler.c` 주석에 실제 동작대로 적는 변경만 담겨 바이너리 동작은 0.8.0과 같다(wlan-opc#211, PR #213).
+
+- **OPCd(wlan-opc 11262bd → 6b84326, PR #213 / #211)**: ChangeIpAddress의 ESSID 적용 주석이 "재연결 결과는 WlanStatusChange로 따로 보고된다"고 적던 것을 실제 동작으로 고쳤다. IP 적용 성공 시 indication 대상이 지워져 WlanStatusChange는 송신되지 않고 opcd 로그에도 남지 않으며(재연결은 wpa_supplicant journal에만 보임), IP 적용 파이프라인이 실패하면 ESSID 블록은 그대로 실행되고 indication은 유지된다. 발주처 사양 Rev1.02 §4.3.9(IP 변경 시 통지 설정 파기)가 현행 동작을 지지하므로 코드는 바꾸지 않았다(코드 토큰 변화 0, `make check` PASS). 2026-10-31 공식 0.8.0 보드 실기로 미전달을 확인했다.
+- **CHANGELOG 보충**: 0.7.8(2026-10-29)에 포함된 PR #425(#423 — wifi_manager가 소유한 인터페이스의 supplicant 부팅 중복 기동 방지: `wpa_supplicant@.service`를 `wifi-supplicant-manual.target`으로 옮기고, `wifi_services.sh`가 매니저 소유 유닛의 패키지 시작을 건너뛰며, postinst가 옛 `multi-user.target.wants` 링크를 제거한다. 테스트 파일 1개 `test_wifi_manager_supplicant_owner.py`: 함수 11개·수집 26건)이 당시 절에 기재되지 않아 여기에 적는다.
+
 ## 0.8.0 (2026-10-31)
 
 > SemVer **minor** — 0.7.16~0.7.19의 FTP 망 전환·저장 순서·Mode B extra_ssids 스캔·compact 모니터 변경을 묶어 발행하고, OPCd를 wlan-opc 11262bd로 올려 `opc_wlan_apply.sh` 실패 사유를 로그에 남긴다(wlan-opc#210). 동작 계약은 각 패치 절과 같고 이 절은 묶음 경계와 opcd 변경만 적는다.

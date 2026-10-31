@@ -1,5 +1,5 @@
 Package: wlan-proc
-Version: 0.8.0
+Version: 0.8.1
 Section: net
 Priority: optional
 Architecture: arm64
@@ -74,3 +74,4 @@ Description: WLAN Application
  0.7.18 : Mode B에서도 extra_ssids 를 bgscan·로밍 판정의 active scan probe 에 추가하되 자동 로밍 후보는 현재/base SSID 로 유지한다(#419). 설정 변경은 재부팅으로 반영한다
  0.7.19 : compact 모니터의 같은 행에서 beacon count 를 먼저, RoamAP 를 뒤에 표시한다(#427)
  0.8.0 : 0.7.16~0.7.19(FTP wconnect --no-save 지연 단축·--save 연결 확인 뒤 저장·Mode B extra_ssids 스캔 probe·compact 모니터 beacon 우선)를 묶어 발행하고 OPCd 를 wlan-opc 11262bd 로 올려 opc_wlan_apply.sh 실패 사유(exit 코드 매핑)를 로그에 남긴다(wlan-opc#210). 가이드에 ChangeIp ESSID 에 --no-save 를 쓰지 않는 이유를 적었다(#440)
+ 0.8.1 : OPCd 를 wlan-opc 6b84326 로 올린다. ChangeIp 뒤 indication 비활성을 주석에 실제 동작대로 적는 변경만 담겨 동작은 0.8.0 과 같다(wlan-opc#211, PR #213). 0.7.8 에 포함됐던 #423(PR #425) 변경 이력을 CHANGELOG 에 보충한다
