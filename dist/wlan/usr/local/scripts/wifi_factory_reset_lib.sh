@@ -752,7 +752,7 @@ factory_restore_service_state() {
 factory_reset_clear_opc_state() {
     local dir="$1" home="${2:-}" name path
     local -a paths=()
-    for name in password iplist.cfg iplist.cfg.migrated iplist.txt iplist.user.last radio.conf; do
+    for name in password iplist.cfg iplist.cfg.migrated iplist.txt iplist.user.last radio.conf radio.txn; do
         paths+=("$dir/$name")
     done
     [ -z "$home" ] || paths+=("$home/iplist.txt" "$home/iplist.txt.rejected")
