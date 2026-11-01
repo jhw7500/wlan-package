@@ -712,7 +712,7 @@ fi
 OPC_ETC="$WORK/opc-etc"
 OPC_HOME="$WORK/opc-home"
 mkdir -p "$OPC_ETC" "$OPC_HOME"
-OPC_CLEARED="password iplist.cfg iplist.cfg.migrated iplist.txt iplist.user.last radio.conf"
+OPC_CLEARED="password iplist.cfg iplist.cfg.migrated iplist.txt iplist.user.last radio.conf radio.txn"
 for opc_file in $OPC_CLEARED device_info.json opc.conf; do
     printf 'x\n' > "$OPC_ETC/$opc_file"
 done

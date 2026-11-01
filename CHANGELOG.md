@@ -3,6 +3,13 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.8.3 (2026-11-01)
+
+> SemVer **patch** — OPCd를 wlan-opc 6b84326 → a1809392로 올려 SetRadioConfig에 트랜잭션 표식 `radio.txn`을 둔다(wlan-opc#178, PR #214). 공장초기화가 지우는 OPC 저장값 목록에 `radio.txn`을 추가한다.
+
+- **OPCd(wlan-opc 6b84326 → a1809392, PR #214 / #178)**: SetRadioConfig는 wlan-package 헬퍼 `opc_wlan_apply.sh`가 새 wpa_supplicant conf를 durable하게 쓴 뒤에야 `radio.conf`를 저장하므로, 그 사이에 전원이 끊기면 conf는 새 설정·`radio.conf`는 옛 설정으로 갈라지고 다음 부팅이 옛 설정을 committed로 읽어 구 설정 재전송이 apply 없이 OK로 끝났다(2026-11-01 공식 0.8.2 보드에서 sysrq-b로 재현). opcd는 이제 apply 직전 `/usr/local/opc/etc/radio.txn`을 durable하게 만들고 `radio.conf`가 durable이 된 뒤에만 지운다. 기동 시 표식이 남아 있으면 저장 설정을 uncommitted로 읽어 같은 설정 재전송이 apply + 저장을 타고, 표식을 쓸 수 없으면 apply를 거절하고 NG 0x0004로 답한다(ChangeIp ESSID 표식과 같은 규칙). 정상 경로에서는 표식이 응답 전에 지워지므로 파일이 남지 않는다. 수정 opcd로 같은 보드 절차를 반복해 표식 동작을 확인했다.
+- **factory_reset**: `wifi_factory_reset_lib.sh`의 OPC 저장값 삭제 목록에 `radio.txn`을 추가한다. 표식이 남은 상태로 공장초기화하면 다음 기동이 (이미 지운) 무선 설정과 무관하게 uncommitted로 시작할 뿐이지만, 초기화 뒤에는 OPC 저장값이 남지 않아야 하므로 함께 지운다. `wifi_factory_reset_test.sh`의 `OPC_CLEARED`와 postrm의 런타임 생성 파일 주석도 갱신한다.
+
 ## 0.8.2 (2026-11-01)
 
 > SemVer **patch** — 공장초기화가 `fake-hwclock.timer`를 끄지 않고 postinst와 같이 켠다(#443). 공장초기화 뒤에도 1분 주기 시각 저장이 유지된다.
