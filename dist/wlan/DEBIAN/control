@@ -1,5 +1,5 @@
 Package: wlan-proc
-Version: 0.8.3
+Version: 0.8.4
 Section: net
 Priority: optional
 Architecture: arm64
@@ -77,3 +77,4 @@ Description: WLAN Application
  0.8.1 : OPCd 를 wlan-opc 6b84326 로 올린다. ChangeIp 뒤 indication 비활성을 주석에 실제 동작대로 적는 변경만 담겨 동작은 0.8.0 과 같다(wlan-opc#211, PR #213). 0.7.8 에 포함됐던 #423(PR #425) 변경 이력을 CHANGELOG 에 보충한다
  0.8.2 : 공장초기화가 fake-hwclock.timer 를 끄지 않고 postinst 처럼 켠다(#443). 2026-03 cron→timer 복귀 때 갱신되지 않은 목록을 맞춰 공장초기화 뒤에도 1분 주기 시각 저장이 유지된다
  0.8.3 : OPCd 를 wlan-opc a1809392 로 올려 SetRadioConfig 에 트랜잭션 표식 radio.txn 을 둔다(wlan-opc#178, PR #214). 정전으로 wpa conf 와 radio.conf 가 갈라져도 다음 기동의 구 설정 재전송이 apply 된다. 공장초기화 OPC 저장값 삭제 목록에 radio.txn 을 추가한다.
+ 0.8.4 : imx93 moal 드라이버를 wlan-driver-v2 220496b1로 올림 — 브리지 루프 가드 bridge_loop_guard(wlan-driver-v2 #117): 브리지 두 대가 같은 유선 세그먼트·ESS에 있을 때의 유니캐스트 순환을 드라이버가 끊음(기본 on, 런타임 토글)

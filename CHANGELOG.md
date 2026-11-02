@@ -3,6 +3,15 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.8.4 (2026-11-02)
+
+> SemVer **patch** — imx93 moal 드라이버를 wlan-driver-v2 522f9ed → 220496b1로 올려 브리지 루프 가드 `bridge_loop_guard`(wlan-driver-v2 #117, PR #118)를 싣는다. 브리지 보드 두 대의 eth0가 같은 유선 세그먼트에 있고 두 STA가 같은 ESS에 붙을 때 생기는 유니캐스트 순환(AP가 멀티캐스트를 STA별 유니캐스트로 바꿔 보내 한쪽의 w2p와 다른 쪽의 p2w 사이를 돈다)을 드라이버가 끊는다.
+
+- **moal_imx93.ko(543.p18, srcversion 69D92F25… → B3E3FC43…)**: 방향(w2p·p2w)별 중복 억제. L2 유니캐스트의 앞 128 B + 프레임 길이를 해시해 첫 관측부터 고정 50 ms 창 안에 같은 키가 세 번째로 오면 버린다. 그룹 주소(브로드캐스트·멀티캐스트)는 판정하지 않고, 24비트 tick 리산을 막기 위해 2^23 tick마다 테이블을 비운다. 모듈 파라미터 `bridge_loop_guard`(기본 1, `/sys/module/moal/parameters/bridge_loop_guard`로 런타임 토글)와 `/sys/kernel/moal_bridge/stats`의 `loop on= w2p_dup= w2p_drop= p2w_dup= p2w_drop=` 줄이 추가된다. 패키지에 실린 바이트는 보드 1에서 두 보드 재현(guard를 한쪽만 켜도 수 초 안에 고리 소멸, 재형성 없음)과 1:1 클론 경로 부하 시험(가드 폐기는 TCP 연결 종료 때의 동일 RST 폭주 억제 외 0, UDP·ping 폐기 0, 처리량·지연은 guard=0과 같은 범위)을 통과한 모듈 그대로다.
+- **DRIVER_MANIFEST.md · DRIVER_COMPONENTS.sha256**: 소스 commit 220496b1, `moal_imx93.ko` 잠금 해시를 `scripts/gen_driver_manifest.sh --write`로 갱신(220496b1 클린 재빌드와 version/srcversion/vermagic, `mlanutl_imx93` 정규화 ELF 대조). `mlan_imx93.ko`·`mlanutl_imx93`·펌웨어·imx8 모듈은 바뀌지 않는다.
+- **한계(wlan-driver-v2 `docs/moal-bridge-loop-guard.md` §4)**: 앞 128 B와 길이가 같은 유니캐스트를 25 ms 미만 주기로 계속 보내는 스트림은 50 ms 창마다 2개만 통과한다(산업용 주기 트래픽 표본은 아직 없음). 재귀 간격 25 ms를 넘는 고리와 그룹 주소 고리는 끊지 못한다. 문제가 보이면 `bridge_loop_guard`에 0을 써서 즉시 끌 수 있다.
+- **업그레이드**: 모듈 파일은 설치 때 바뀌지만 실행 중인 드라이버는 wifi_init 재시작 또는 재부팅 뒤에 바뀐다. `/sys/module/moal/srcversion`이 `B3E3FC437B1ACCCF3F3CBCF`인지로 확인한다.
+
 ## 0.8.3 (2026-11-01)
 
 > SemVer **patch** — OPCd를 wlan-opc 6b84326 → a1809392로 올려 SetRadioConfig에 트랜잭션 표식 `radio.txn`을 둔다(wlan-opc#178, PR #214). 공장초기화가 지우는 OPC 저장값 목록에 `radio.txn`을 추가한다.
