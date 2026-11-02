@@ -108,7 +108,7 @@ exit 0
         """n=0
 [ ! -f "$SLEEP_COUNT" ] || n=$(cat "$SLEEP_COUNT")
 n=$((n + 1))
-printf '%s\\n' "$n" > "$SLEEP_COUNT"
+printf '%s\\n' "$n" > "$SLEEP_COUNT.tmp" && mv -f "$SLEEP_COUNT.tmp" "$SLEEP_COUNT"
 if [ "$TEST_IFACE" = eth0 ]; then
     [ "$n" -lt 2 ] || kill -TERM "$PPID"
     exit 0
@@ -335,7 +335,8 @@ def test_raw_switch_grace_keeps_checker_from_blocking_immediate_retry(tmp_path):
         checker_locked = tmp_path / "checker-locked"
         sleep_count = tmp_path / "sleep-count"
         while time.monotonic() < deadline:
-            ticks = int(sleep_count.read_text()) if sleep_count.exists() else 0
+            raw = sleep_count.read_text().strip() if sleep_count.exists() else ""
+            ticks = int(raw) if raw.isdigit() else 0
             if checker_locked.exists() or ticks >= 3:
                 break
             time.sleep(0.01)
