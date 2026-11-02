@@ -3,6 +3,14 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## 0.8.5 (2026-11-03)
+
+> SemVer **patch** — `wifi_init_conf.json`에 `wbridge.moal.loop_guard` 키를 두어 moal 루프 가드(`bridge_loop_guard`, 0.8.4부터 기본 on)를 재부팅·`wifi_init` 재시작 뒤에도 유지되게 끌 수 있다(#448). `apply_iface_radio_defaults`의 `mlanutl reassoctrl 1` 호출은 host MLME=1에서 영향이 없는 설정이라 제거한다.
+
+- **`wbridge.moal.loop_guard`(string `"0"`|`"1"`|`""`, 기본 `""`)**: 기존 `local_hairpin`·`roam_announce`와 같은 형식이다. 빈값이면 insmod 인자를 넘기지 않아 드라이버 기본(1=on)이고 0.8.4와 동작이 같다. `"0"`을 쓰면 `wifi_init.sh`가 moal insmod 인자 `bridge_loop_guard=0`을 붙이므로 sysfs 토글과 달리 재부팅·`wifi_init` 재시작(`wlan_fw_watch` 복구 포함) 뒤에도 꺼진 채 유지된다. 로드 대상 `.ko`가 `bridge_loop_guard` param을 선언한 경우에만 전달하는 parmtype 게이트(기존 `tr '\000' '\n' | grep -F` 방식)를 거치므로 param이 없는 모듈(imx8 505.p14, 0.8.3 imx93)에서는 인자를 생략하고 `lacks bridge_loop_guard param; skip` 경고만 남긴다. 템플릿·`docs/wifi_init_conf.schema.json`·`docs/wifi_init_conf_webui_handoff.md`·`docs/wifi_init_conf_guide.md`에 같은 키를 추가했고, 기존 설치에는 postinst `json_merge`가 빈값으로 주입한다. 0.8.4 CHANGELOG의 "영속 해제는 0.8.3 다운그레이드뿐"은 이 키로 대체된다.
+- **테스트**: `test_wifi_init_mac.py`에 moal_args 하네스의 `loop_guard` 인자와 가짜 `.ko`의 param 선언 여부를 넣어 세 경우(param 있는 모듈에 `"0"` → `bridge_loop_guard=0` 전달, param 없는 모듈 → 생략 + 경고, 빈값 → 미전달)를 고정한다.
+- **`wifi_init.sh` `apply_iface_radio_defaults`**: `mlanutl reassoctrl 1`과 그 앞의 `sleep 0.2`를 제거하고 로그 문구를 정리한다. 드라이버는 host MLME(`host_mlme=1`)로 동작하므로 펌웨어 reassoc 제어 값은 효과가 없다.
+
 ## 0.8.4 (2026-11-02)
 
 > SemVer **patch** — imx93 moal 드라이버를 wlan-driver-v2 522f9ed → 220496b1로 올려 브리지 루프 가드 `bridge_loop_guard`(wlan-driver-v2 #117, PR #118)를 싣는다. 브리지 보드 두 대의 eth0가 같은 유선 세그먼트에 있고 두 STA가 같은 ESS에 붙을 때 생기는 유니캐스트 순환(AP가 멀티캐스트를 STA별 유니캐스트로 바꿔 보내 한쪽의 w2p와 다른 쪽의 p2w 사이를 돈다)을 드라이버가 끊는다.
