@@ -1093,9 +1093,7 @@ apply_iface_radio_defaults() {
     #logger -p local0.info "[$tag:$LINENO] [$iface] htcapinfo 0x05c20000"
     mlanutl "$iface" htcapinfo 0x05c20000 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] htcapinfo failed"
 
-    sleep 0.2
-    logger -p local0.info "[$tag:$LINENO] [$iface] macctrl: 0x00010e13, httxcfg: 0x00000063, htcapinfo: 0x05c20000, reassoctrl: enable"
-    mlanutl "$iface" reassoctrl 1 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] reassoctrl failed"
+    logger -p local0.info "[$tag:$LINENO] [$iface] macctrl: 0x00010e13, httxcfg: 0x00000063, htcapinfo: 0x05c20000"
 
     # Re-apply persisted radio mode/bw (위 htcapinfo 기본값을 의도적으로 덮어씀).
     # 함수는 부팅 보호를 위해 항상 0을 반환하고 실패는 내부에서 logger로 남긴다.
