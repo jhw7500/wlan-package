@@ -32,7 +32,7 @@ concurrency:
 jobs:
   source-gate:
     name: Source Gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       # sparse/shallow 체크아웃을 쓰지 않는다 — 게이트 안의 여러 테스트가

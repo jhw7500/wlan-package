@@ -41,7 +41,7 @@ on:
 jobs:
   check-enabled:
     name: Check if enabled
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     outputs:
@@ -63,7 +63,7 @@ jobs:
     name: Build Package
     needs: check-enabled
     if: needs.check-enabled.outputs.enabled == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout code
