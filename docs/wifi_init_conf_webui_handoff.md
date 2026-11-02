@@ -254,6 +254,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `wbridge.moal.deliver_rt_prio` | RX deliver RT 우선순위 | int | `45` | 0~99, 0=RT 미적용 | caution | reboot | threaded NAPI deliver leg 의 SCHED_FIFO 우선순위 |
 | `wbridge.moal.local_hairpin` | 로컬발 hairpin | string | `0` | `0`\|`1` 또는 `""`(=드라이버 기본) | caution | reboot | 로컬발 TX(dst==클론 MAC) 유선 divert + ARP tee/inject(BD↔유선 peer). CLI(`br profile apply`)는 숫자로 기록 — 문자열·숫자 모두 유효 |
 | `wbridge.moal.roam_announce` | 로밍 announce | string | `""` | `0`\|`1` 또는 `""`(=드라이버 기본) | caution | reboot | 로밍/링크업 시 클론 MAC L2 update(XID)로 상단 유선 스위치 재학습 강제(driver#47). parmtype 게이트 통과 시에만 insmod 인자. 런타임: `/sys/module/moal/parameters/bridge_roam_announce` |
+| `wbridge.moal.loop_guard` | 브리지 루프 가드 | string | `""` | `0`\|`1` 또는 `""`(=드라이버 기본 1) | caution | reboot | 브리지 두 대가 같은 유선 세그먼트·ESS에 있을 때의 유니캐스트 순환 차단(wlan-driver-v2#117). `0`=영속 해제(재부팅 뒤 유지, #448). parmtype 게이트 통과 시에만 insmod 인자 `bridge_loop_guard` 전달 |
 
 **비고 (moal)** — 소비: `wifi_init.sh`. `engine=moal`일 때만 insmod 인자로 전달.
 - `keepalive_idle_ms`는 대상 .ko가 `bridge_keepalive_idle_ms` param을 선언한 경우에만 전달(현 `moal_imx8.ko` 등 미선언 드라이버엔 자동 미전달).

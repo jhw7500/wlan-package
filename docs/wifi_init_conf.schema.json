@@ -587,6 +587,24 @@
               "x-ui-editable": "caution",
               "x-apply-timing": "reboot",
               "x-consumer": "wifi_init.sh"
+            },
+            "loop_guard": {
+              "type": [
+                "string",
+                "integer"
+              ],
+              "default": "",
+              "enum": [
+                "",
+                "0",
+                "1",
+                0,
+                1
+              ],
+              "description": "engine=moal 전용 — 브리지 두 대가 같은 유선 세그먼트·ESS에 있을 때의 유니캐스트 순환을 끊는 방향별 중복 억제(wlan-driver-v2#117). 빈값=미전달(드라이버 기본 1=on). 0이면 재부팅·wifi_init 재시작 뒤에도 꺼진 채 유지(#448). parmtype 게이트 통과 시에만 insmod 인자 전달. 런타임: /sys/module/moal/parameters/bridge_loop_guard",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "reboot",
+              "x-consumer": "wifi_init.sh"
             }
           }
         },
