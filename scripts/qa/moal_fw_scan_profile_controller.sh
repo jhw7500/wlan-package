@@ -467,8 +467,6 @@ if [ "$APPLY_AB" = 1 ]; then
     run_logged 031-httxcfg "$MLANUTL" "$IFACE" httxcfg 0x00000063
     sleep 0.2
     run_logged 032-htcapinfo "$MLANUTL" "$IFACE" htcapinfo 0x05c20000
-    sleep 0.2
-    run_logged 033-reassoctrl "$MLANUTL" "$IFACE" reassoctrl 1
 fi
 
 if [ "$APPLY_RATE" = 1 ] || [ "$APPLY_MCS" = 1 ]; then

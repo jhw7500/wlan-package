@@ -33,6 +33,11 @@ bridge_local_hairpin=""
 # 재학습을 강제 (wlan-driver-v2#47 — 로밍 후 2~5s 하향 갭 대응). 빈값=미전달(드라이버 기본
 # 0=off). 신규 param이므로 parmtype 게이트 후에만 insmod 인자 추가.
 bridge_roam_announce=""
+# loop_guard: 브리지 두 대의 peer 가 같은 유선 세그먼트·같은 ESS 에 있을 때 생기는 유니캐스트
+# 순환을 드라이버가 끊는 방향별 중복 억제(wlan-driver-v2#117). 빈값=미전달(드라이버 기본 1=on).
+# "0" 이면 재부팅·wifi_init 재시작 뒤에도 꺼진 채 유지(#448). 신규 param이므로 parmtype 게이트
+# 후에만 insmod 인자 추가(구버전 .ko 부팅 안전).
+bridge_loop_guard=""
 # deliver_rt_prio: RX deliver leg RT 우선순위 (Direction B — threaded NAPI + FIFO fix).
 # 0=off(deliver가 CFS→moal 다운스트림 RX jitter), 1-99=FIFO prio. 드라이버가 wq_sched_policy
 # param 선언 시에만 전달(아래 moal 블록). 실측: RTT 82ms→9.3ms.
@@ -149,6 +154,12 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
         0|1) bridge_roam_announce=$_ra ;;
     esac
     unset _ra
+    # moal.loop_guard: 브리지 루프 가드 (0|1만 수용). 빈값/형식위반은 미전달(드라이버 기본 1=on).
+    _lg=$(jq -r '.wbridge.moal.loop_guard // empty' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    case "$_lg" in
+        0|1) bridge_loop_guard=$_lg ;;
+    esac
+    unset _lg
     # global.tx_work: moal 데이터 TX 제출 방식 (0|1만 수용). 빈값/형식위반은 미전달(드라이버 기본).
     _tw=$(jq -r '.global.tx_work // empty' "$WIFI_INIT_CONF_JSON" 2>/dev/null)
     case "$_tw" in
@@ -325,6 +336,16 @@ elif [ "$WBRIDGE_ENGINE" = "moal" ]; then
             moal_args="$moal_args bridge_roam_announce=$bridge_roam_announce"
         else
             logger -p local0.warn "[$tag:$LINENO] moal: $MOAL_KO lacks bridge_roam_announce param; skip (driver default)"
+        fi
+    fi
+    # bridge_loop_guard: 신규 param — 미선언 .ko 에 전달하면 insmod 실패(부팅 붕괴)하므로
+    # parmtype 게이트(local_hairpin과 동일 방식) 통과 시에만 추가. runtime 변경도 가능:
+    # /sys/module/moal/parameters/bridge_loop_guard (단, 재시작·재부팅 때 이 값으로 돌아온다)
+    if [ -n "$bridge_loop_guard" ]; then
+        if tr '\000' '\n' < "/opt/wlan/driver/$MOAL_KO" 2>/dev/null | grep -F 'parmtype=bridge_loop_guard:' >/dev/null 2>&1; then
+            moal_args="$moal_args bridge_loop_guard=$bridge_loop_guard"
+        else
+            logger -p local0.warn "[$tag:$LINENO] moal: $MOAL_KO lacks bridge_loop_guard param; skip (driver default)"
         fi
     fi
     # deliver_rt_prio>0: Direction B — RX deliver leg를 RT화(threaded NAPI FIFO:prio)해 moal
@@ -1072,9 +1093,7 @@ apply_iface_radio_defaults() {
     #logger -p local0.info "[$tag:$LINENO] [$iface] htcapinfo 0x05c20000"
     mlanutl "$iface" htcapinfo 0x05c20000 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] htcapinfo failed"
 
-    sleep 0.2
-    logger -p local0.info "[$tag:$LINENO] [$iface] macctrl: 0x00010e13, httxcfg: 0x00000063, htcapinfo: 0x05c20000, reassoctrl: enable"
-    mlanutl "$iface" reassoctrl 1 > /dev/null 2>&1 || logger -p local0.err "[$tag:$LINENO] [$iface] reassoctrl failed"
+    logger -p local0.info "[$tag:$LINENO] [$iface] macctrl: 0x00010e13, httxcfg: 0x00000063, htcapinfo: 0x05c20000"
 
     # Re-apply persisted radio mode/bw (위 htcapinfo 기본값을 의도적으로 덮어씀).
     # 함수는 부팅 보호를 위해 항상 0을 반환하고 실패는 내부에서 logger로 남긴다.

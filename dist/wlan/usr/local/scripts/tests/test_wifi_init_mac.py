@@ -253,7 +253,8 @@ def test_missing_udev_wait_capability_stops_before_driver_operations(tmp_path):
     assert (tmp_path / "wifi/mac-contract-blocked").exists()
 
 
-def run_moal_args(tmp_path, *, enabled=True, engine="moal", bridge_iface="mlan0"):
+def run_moal_args(tmp_path, *, enabled=True, engine="moal", bridge_iface="mlan0",
+                  loop_guard="", module_declares_loop_guard=True):
     """Run the bridge-switch and moal-argument section of wifi_init.sh."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -264,9 +265,10 @@ def run_moal_args(tmp_path, *, enabled=True, engine="moal", bridge_iface="mlan0"
     logger.chmod(0o755)
     # A module that declares every gated parameter, so the gates add them.
     module = tmp_path / "moal_imx93.ko"
-    module.write_bytes(b"\0".join(
-        b"parmtype=%s:int" % name
-        for name in (b"bridge_keepalive_idle_ms", b"wq_sched_policy")))
+    declared = [b"bridge_keepalive_idle_ms", b"wq_sched_policy"]
+    if module_declares_loop_guard:
+        declared.append(b"bridge_loop_guard")
+    module.write_bytes(b"\0".join(b"parmtype=%s:int" % name for name in declared))
     source = (SCRIPTS / "wifi_init.sh").read_text()
     section = source[source.index('BRIDGE_IFACE="${BRIDGE_IFACE:-mlan0}"'):
                      source.index("# MFG 프로파일 멱등 가드")]
@@ -284,6 +286,7 @@ MFG_MODE=0
 moal_args='mod_para=cts/wifi_mod_para.conf'
 bridge_debug=0 bridge_wlan_idx=0 bridge_keepalive_ms=1 bridge_keepalive_idle_ms=20
 bridge_peer='' bridge_consume_link_local='' bridge_local_hairpin='' bridge_roam_announce=''
+bridge_loop_guard={shlex.quote(loop_guard)}
 bridge_deliver_rt_prio=45
 {section}
 printf 'moal_args=%s\\n' "$moal_args"
@@ -314,3 +317,22 @@ def test_disabled_bridge_passes_no_moal_bridge_arguments(tmp_path, setting):
 def test_userspace_engine_never_passes_moal_bridge_arguments(tmp_path):
     args, _ = run_moal_args(tmp_path, engine="pcap")
     assert args == ["mod_para=cts/wifi_mod_para.conf"]
+
+
+# wbridge.moal.loop_guard (#448): "0" persists the loop guard off across reboots,
+# but only when the module declares the parameter (old .ko would fail insmod).
+def test_loop_guard_zero_reaches_a_module_that_declares_the_param(tmp_path):
+    args, calls = run_moal_args(tmp_path, loop_guard="0")
+    assert "bridge_loop_guard=0" in args
+    assert "lacks bridge_loop_guard" not in calls
+
+
+def test_loop_guard_is_skipped_with_a_warning_when_the_module_lacks_the_param(tmp_path):
+    args, calls = run_moal_args(tmp_path, loop_guard="0", module_declares_loop_guard=False)
+    assert not any(a.startswith("bridge_loop_guard=") for a in args)
+    assert "lacks bridge_loop_guard param; skip (driver default)" in calls
+
+
+def test_loop_guard_empty_passes_no_argument(tmp_path):
+    args, _ = run_moal_args(tmp_path, loop_guard="")
+    assert not any(a.startswith("bridge_loop_guard=") for a in args)
