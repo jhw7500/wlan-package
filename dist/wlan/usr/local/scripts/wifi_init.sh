@@ -93,7 +93,8 @@ if [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1; then
     MAC_MODE=$(jq -r '.wbridge.mac_mode // .global.MAC_MODE // "default"' "$WIFI_INIT_CONF_JSON")
     # mac_clone_require_peer: dynamic 클론 MAC을 유선 peer가 실제로 있을 때만 유지한다.
     # true면 peer를 못 찾은 부팅에서 이전 클론이 .link에 남지 않는다(base → 없으면 MAC 미지정).
-    MAC_CLONE_REQUIRE_PEER=$(jq -r 'if (.wbridge.mac_clone_require_peer // true) then "true" else "false" end' \
+    # jq의 `//`는 false도 alternative 대상이라(`false // true` → true) false를 명시 비교한다(#452).
+    MAC_CLONE_REQUIRE_PEER=$(jq -r 'if .wbridge.mac_clone_require_peer == false then "false" else "true" end' \
         "$WIFI_INIT_CONF_JSON" 2>/dev/null || echo "true")
     WBRIDGE_ENGINE=$(jq -r '.wbridge.engine // "pcap"' "$WIFI_INIT_CONF_JSON")
     # moal keepalive: 발열↔레이턴시 노브 (engine=moal 전용 insmod 인자).
