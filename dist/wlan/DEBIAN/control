@@ -1,5 +1,5 @@
 Package: wlan-proc
-Version: 0.8.5
+Version: 0.8.6
 Section: net
 Priority: optional
 Architecture: arm64
@@ -79,3 +79,4 @@ Description: WLAN Application
  0.8.3 : OPCd 를 wlan-opc a1809392 로 올려 SetRadioConfig 에 트랜잭션 표식 radio.txn 을 둔다(wlan-opc#178, PR #214). 정전으로 wpa conf 와 radio.conf 가 갈라져도 다음 기동의 구 설정 재전송이 apply 된다. 공장초기화 OPC 저장값 삭제 목록에 radio.txn 을 추가한다.
  0.8.4 : imx93 moal 드라이버를 wlan-driver-v2 220496b1로 올림 — 브리지 루프 가드 bridge_loop_guard(wlan-driver-v2 #117): 브리지 두 대가 같은 유선 세그먼트·ESS에 있을 때의 유니캐스트 순환을 드라이버가 끊음(기본 on, 런타임 토글)
  0.8.5 : wifi_init_conf.json wbridge.moal.loop_guard 키로 moal 루프 가드를 재부팅 뒤에도 유지되게 끌 수 있음(#448, parmtype 게이트); apply_iface_radio_defaults 의 reassoctrl 호출 제거(host MLME=1 에서 영향 없음)
+ 0.8.6 : wifi_init.sh 가 wbridge.mac_clone_require_peer 의 JSON false 를 반영(#452, jq // 함정 — 종전에는 항상 true)

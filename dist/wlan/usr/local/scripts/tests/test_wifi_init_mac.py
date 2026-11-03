@@ -336,3 +336,37 @@ def test_loop_guard_is_skipped_with_a_warning_when_the_module_lacks_the_param(tm
 def test_loop_guard_empty_passes_no_argument(tmp_path):
     args, _ = run_moal_args(tmp_path, loop_guard="")
     assert not any(a.startswith("bridge_loop_guard=") for a in args)
+
+
+def read_mac_clone_require_peer(tmp_path, wbridge):
+    """Run the config-reading block of wifi_init.sh with real jq and return
+    the MAC_CLONE_REQUIRE_PEER value it settles on."""
+    conf = tmp_path / "wifi_init_conf.json"
+    conf.write_text(json.dumps({"global": {}, "wbridge": wbridge}))
+    source = (SCRIPTS / "wifi_init.sh").read_text()
+    section = source[source.index('#logger -p local0.info "[$tag:$LINENO] wifi initializing"'):
+                     source.index("# 커널 모듈 (보드별 드라이버 선택)")]
+    harness = f"""set -euo pipefail
+tag=wifi_init-test
+WIFI_INIT_CONF_JSON={shlex.quote(str(conf))}
+{section}
+printf 'MAC_CLONE_REQUIRE_PEER=%s\\n' "${{MAC_CLONE_REQUIRE_PEER-unset}}"
+"""
+    result = subprocess.run(["bash", "-c", harness], text=True,
+                            capture_output=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    line = next(l for l in result.stdout.splitlines()
+                if l.startswith("MAC_CLONE_REQUIRE_PEER="))
+    return line.split("=", 1)[1]
+
+
+# wbridge.mac_clone_require_peer (#452): jq's `//` also replaces false, so
+# `.k // true` turned an operator's false into true.
+def test_mac_clone_require_peer_false_in_json_is_honoured(tmp_path):
+    assert read_mac_clone_require_peer(tmp_path, {"mac_clone_require_peer": False}) == "false"
+
+
+@pytest.mark.parametrize("wbridge", [{"mac_clone_require_peer": True},
+                                     {"mac_clone_require_peer": None}, {}])
+def test_mac_clone_require_peer_defaults_to_true(tmp_path, wbridge):
+    assert read_mac_clone_require_peer(tmp_path, wbridge) == "true"
