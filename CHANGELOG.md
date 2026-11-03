@@ -7,7 +7,7 @@ wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약�
 
 > SemVer **patch** — `wifi_init.sh`가 `wbridge.mac_clone_require_peer: false`를 무시하고 항상 `true`로 읽던 결함을 고친다(#452).
 
-- **`wbridge.mac_clone_require_peer`**: jq의 `//`가 `false`도 대체하는 탓에 `(.k // true)`로 읽던 값이 항상 `true`였다. `== false` 명시 비교로 바꿔 운영자가 쓴 `false`가 반영된다. 누락·null·true는 종전대로 `true`(기본)다. 영향은 `mac_mode=dynamic`이면서 이 키를 `false`로 바꾼 설치뿐이고, 기본 템플릿(`true`)에서는 동작이 같다. 이제 `false`이면 유선 peer를 찾지 못한 부팅에서도 직전 클론 MAC이 `.link`에 남아 다음 부팅에 재적용된다(`docs/wifi_init_conf_guide.md` 설명대로).
+- **`wbridge.mac_clone_require_peer`**: jq의 `//`가 `false`도 대체하는 탓에 `(.k // true)`로 읽던 값이 항상 `true`였다. `== false` 명시 비교로 바꿔 운영자가 쓴 `false`가 반영된다. 누락·null·true는 종전대로 `true`(기본)다. 영향은 `mac_mode=dynamic`이면서 이 키를 `false`로 바꾼 설치뿐이고, 기본 템플릿(`true`)에서는 동작이 같다. 이제 `false`이면 유선 peer도 base MAC(`mac.<bridge_iface>.base`)도 없는 부팅에서 `.link`의 직전 클론 MAC을 지우지 않아 다음 부팅에 재적용되고, `systemctl restart wifi_init` 때 `/tmp/eth0_client_mac`도 지우지 않는다. base가 있으면 peer 없는 부팅에서 `true`·`false` 모두 base를 기록한다(`resolve_mac` 폴백, `docs/wifi_init_conf_guide.md` 3절).
 - **테스트**: `test_wifi_init_mac.py`에 `wifi_init.sh` 설정 읽기 블록을 실제 jq로 실행하는 하네스와 false·기본값 테스트를 추가했다.
 
 ## 0.8.5 (2026-11-03)
