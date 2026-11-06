@@ -380,7 +380,7 @@
                 "mode: (int) 0=legacy, 1=SR",
                 "low_thresh: (int) SR low threshold. 0xff=노이즈 기반 동적값, 그 외=성공률 기준 정적값 (%)",
                 "high_thresh: (int) SR high threshold. 0xff=노이즈 기반 동적값, 그 외=성공률 기준 정적값 (%)",
-                "interval_ms: (int) rate 평가 주기 (ms)"
+                "interval_ms: (int) rate 평가 주기 (ms). 100~655350, 10ms 배수"
             ],
             "enabled": true,
             "mode": 1,

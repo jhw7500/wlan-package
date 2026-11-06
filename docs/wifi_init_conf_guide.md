@@ -1348,7 +1348,7 @@ mlan0 / mlan1에 개별 적용한다. 섹션이 있으면 `mode`/`low_thresh`/`h
 | `mode` | int | `1` | `0`=legacy, `1`=SR(Success Rate) |
 | `low_thresh` | int | `40` | SR 하한 (%). `255`(0xff)=dynamic |
 | `high_thresh` | int | `65` | SR 상한 (%). static은 `low < high`, dynamic은 양쪽 모두 255 |
-| `interval_ms` | int | `100` | 양수이며 10ms 배수인 평가 주기 |
+| `interval_ms` | int | `100` | 100~655350이며 10ms 배수인 평가 주기(드라이버는 10 ms 단위 10~0xffff만 받는다) |
 
 0.6.7부터 출하 기본값은 `40/65`다. FW가 정적 pair를 트래픽 중 `40/65`로 덮어쓰고 그 값이 실사용
 상태이므로, 기본값을 실제 동작에 맞춘 것이다 — 아래 정정 노트 참조. 확정 상수는 아니며 벤더

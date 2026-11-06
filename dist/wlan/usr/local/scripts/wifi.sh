@@ -5068,7 +5068,7 @@ case "$2" in
         if ! declare -f wifi_fw_validate_rate_config >/dev/null 2>&1 \
            || ! wifi_fw_validate_rate_config "$_rate_tmp" "$IFACE"; then
             rm -f -- "$_rate_tmp"
-            echo "Error: invalid rate config (mode 0|1; static 0..100 with low<high, or 255/255; interval positive 10ms multiple)" >&2
+            echo "Error: invalid rate config (mode 0|1; static 0..100 with low<high, or 255/255; interval 100..655350 ms, 10ms multiple)" >&2
             exit 1
         fi
         if ! safe_install_sync "$_rate_tmp" "$WIFI_INIT_CONF_JSON"; then

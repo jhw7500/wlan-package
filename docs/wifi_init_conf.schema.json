@@ -1508,7 +1508,8 @@
             "interval_ms": {
               "type": "integer",
               "default": 100,
-              "minimum": 10,
+              "minimum": 100,
+              "maximum": 655350,
               "multipleOf": 10,
               "description": "레이트 적응 평가 주기(ms)",
               "x-ui-editable": "caution",
@@ -2534,7 +2535,8 @@
             "interval_ms": {
               "type": "integer",
               "default": 100,
-              "minimum": 10,
+              "minimum": 100,
+              "maximum": 655350,
               "multipleOf": 10,
               "description": "레이트 적응 평가 주기(ms)",
               "x-ui-editable": "caution",
