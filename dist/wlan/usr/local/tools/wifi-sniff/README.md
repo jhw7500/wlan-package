@@ -120,15 +120,31 @@ wpa_cli -i mlan0 status | grep freq
 | GAC | 32 | 802.11ac 2.4GHz | 2.4GHz VHT |
 | **AAC** | **64** | **802.11ac 5GHz** | **5GHz VHT (고속)** |
 
-**자동 추론:** `-b`를 생략하면 채널 번호에서 자동 추론합니다.
-- 채널 1~14 → GN (2.4GHz)
-- 채널 36 이상 → AN (5GHz)
+**자동 추론:** `-b`를 생략하면 채널 번호로 밴드를 정합니다. `-c`도 생략하면(자동감지) 현재 연결 주파수로 정합니다.
+- 채널 1~14 → 11 (B+G+GN, 2.4GHz)
+- 채널 36 이상 → 20 (A+AN, 5GHz)
 
-STA가 연결된 상태에서 `-c`도 생략하면 HT/VHT 정보까지 읽어 더 정확하게 감지합니다.
+STA가 연결된 상태에서 `-c`도 생략하면 station dump의 대역폭(40/80MHz)을 읽어 `-w`도 정합니다.
 
 **복합 밴드:** 숫자를 직접 지정하여 OR 조합 가능.
 - `-b 11` = B(1) + G(2) + GN(8)
 - `-b 20` = A(4) + AN(16)
+
+**드라이버별 netmon 밴드 값:** `-b`의 이름과 숫자는 항상 위 옛 비트맵 뜻입니다. 드라이버에 넘기는 값은 로드된 moal 모듈의 버전(`/sys/module/moal/version`)으로 정합니다.
+
+| moal 버전 | 보드 | 드라이버에 넘기는 밴드 값 |
+|-----------|------|---------------------------|
+| 505.* | i.MX8 | 비트맵 그대로 (예: 20, 16, 11) |
+| 543.* | i.MX93 | 2.4GHz 비트(B, G, GN, GAC)만 있으면 `0`, 5GHz 비트(A, AN, AAC)만 있으면 `1`. 두 대역이 섞이거나 비트가 없으면 netmon을 켜기 전에 멈춤 |
+| 그 밖의 버전 | - | 추측하지 않고 STA 연결을 끊기 전에 멈춤. `NETMON_BAND_MODE`로 형식을 지정 |
+
+- i.MX93에서도 `-b 1`은 B(2.4GHz)로 해석되어 `0`으로 넘어갑니다. 5GHz를 캡처하려면 `-b AN`처럼 5GHz 밴드를 지정하세요.
+- 환경변수 `NETMON_BAND_MODE=bitmap`(옛 비트맵) 또는 `NETMON_BAND_MODE=enum`(0=2.4GHz, 1=5GHz)은 버전 표보다 우선하며 `-H` 원격 실행에도 전달됩니다.
+
+```bash
+# 버전 표에 없는 드라이버에서 0/1 형식으로 실행
+NETMON_BAND_MODE=enum wifi-capture.sh -c 36
+```
 
 #### -f (필터)
 
@@ -452,12 +468,21 @@ wifi-capture.sh -c 40 -b AN
 ### netmon 활성화 실패
 
 ```
-ERROR: netmon 활성화 실패 (채널=40, 밴드=16)
+ERROR: netmon 활성화 실패: mlanutl mlan0 netmon 1 7 1 40 0 (밴드=1, 채널=40, 대역폭=0, moal 543.p18, 밴드 형식 enum)
 ```
 
-- 채널/밴드 조합이 올바른지 확인
+- 메시지의 `mlanutl ...`이 실제로 넘긴 인자입니다. 채널과 밴드가 같은 대역인지 확인 (예: 채널 40에 `-b GN`이면 실패)
 - 드라이버가 로드되어 있는지 확인: `lsmod | grep moal`
 - 이전 세션이 남아있을 수 있음: `mlanutl mlan0 netmon 0`
+
+### netmon 밴드 형식을 모르는 moal 버전
+
+```
+ERROR: netmon 밴드 형식을 모르는 moal 버전입니다: 5xx.pNN. NETMON_BAND_MODE=bitmap(옛 비트맵) 또는 enum(0=2.4GHz, 1=5GHz)으로 지정하세요
+```
+
+버전 표(505.*, 543.*)에 없는 드라이버입니다. 드라이버 소스나 배포 정보로 netmon 밴드 형식을 확인한 뒤 `NETMON_BAND_MODE`를 지정하세요.
+버전을 읽지 못했다는 메시지(`moal 드라이버 버전을 읽지 못했습니다`)는 moal이 로드되지 않았을 때 나옵니다: `lsmod | grep moal`
 
 ### mon0 생성 실패
 
