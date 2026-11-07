@@ -7,8 +7,8 @@ wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약�
 
 > 다음 릴리스에 묶일 변경이다. 릴리스 PR이 이 절을 버전 절로 바꾼다.
 
-- **`rate_adapt.interval_ms` 범위**(#461, SemVer patch): `wifi_fw_validate_rate_config`와 `wifi <iface> rate`가 `interval_ms`를 드라이버가 받는 100~655350 ms(10 ms 배수)로 검증한다. 펌웨어 주기는 10 ms 단위이고 moal `rate_adapt_cfg`는 10 미만·0xffff 초과를 거부하는데, 종전 검증은 양수·10 배수만 봐서 `10` 같은 값이 저장·부팅 검증을 통과했고 SET 거부로 임계값까지 섹션 전체가 FW 기본값으로 남았다. 이제 `wifi <iface> rate`는 설정을 바꾸지 않고 허용 범위를 알리며 실패한다. 이미 범위 밖 값이 저장된 장치는 업그레이드 뒤에도 값이 남지만(postinst `json_merge`는 기존 값을 보존), 부팅 검증이 `invalid/partial rate_adapt section; skip entire section`을 남기고 섹션을 건너뛰어 원인이 로그에 드러난다. 스키마(`minimum: 100`, `maximum: 655350`), 가이드, Web UI 인계 문서, 템플릿 주석을 같은 범위로 고쳤다.
-- **테스트**: `wifi_fw_config_test.sh`에 경계값 시험(10·90·655360 거부, 100·655350 허용)과 `wifi mlan0 rate 1 40 65 10` 실제 실행 시험을 추가했다.
+- **`rate_adapt.interval_ms` 범위**(#461, SemVer patch): `wifi_fw_validate_rate_config`와 `wifi <iface> rate`가 SR 모드(`mode: 1`)의 `interval_ms`를 드라이버가 받는 100~655350 ms(10 ms 배수)로 검증한다. 펌웨어 주기는 10 ms 단위이고 moal `rate_adapt_cfg`는 SR 모드에서 10 미만·0xffff 초과를 거부하는데, 종전 검증은 양수·10 배수만 봐서 `10` 같은 값이 저장·부팅 검증을 통과했고 SET 거부로 임계값까지 섹션 전체가 FW 기본값으로 남았다. 이제 `wifi <iface> rate`는 설정을 바꾸지 않고 허용 범위를 알리며 실패한다. legacy(`mode: 0`)는 드라이버가 임계값·주기를 검사하지도 쓰지도 않으므로 종전 규칙(양수·10 ms 배수)을 그대로 둔다. SR 모드에 이미 범위 밖 값이 저장된 장치는 업그레이드 뒤에도 값이 남지만(postinst `json_merge`는 기존 값을 보존), 부팅 검증이 `invalid/partial rate_adapt section; skip entire section`을 남기고 섹션을 건너뛰어 원인이 로그에 드러난다. 스키마(`minimum: 100`, `maximum: 655350` — SR 기준의 UI 안내로 두 모드에 같이 걸린다), 가이드, Web UI 인계 문서, 템플릿 주석을 고쳤다.
+- **테스트**: `wifi_fw_config_test.sh`에 SR 경계값 시험(10·90·655360 거부, 100·655350 허용), legacy 시험(10·90·655360 허용, 0·105 거부, 주기 10 ms 섹션의 부팅 SET), `wifi mlan0 rate 1 40 65 10` 거부와 `wifi mlan0 rate 0 40 65 10` 저장을 실제로 실행하는 시험을 추가했다.
 
 ## 0.8.6 (2026-11-03)
 
