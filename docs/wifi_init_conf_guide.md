@@ -862,16 +862,18 @@ fallback이 활성화된 경우 새 연결 예산은 기본 15초(1~15), 복원 
 | `6` | 로밍 프레임만 | 활성 | RX 로밍 + TX 로깅 |
 | `7` | 전체 프레임 | 활성 | RX 전체 + TX 로깅 |
 
-> **로그 출력 위치**: dmesg가 아닌 `/proc/mwlan/adapterX/mgmt_log` 커널 링버퍼에 기록됨. `mgmt-log-flush.timer`가 10초 주기로 `/var/log/cantops/mgmt/mlanX/gmgmt.log`에 flush.
+> **로그 출력 위치**: dmesg가 아닌 `/proc/mwlan/adapterX/mgmt_log` 커널 링버퍼에 기록됨. `wifi_mgmt_log.timer`가 10초 주기로 `wifi_mgmt_log.service`(`wifi_mgmt_log.sh`)를 실행해 `/var/log/cantops/mgmt/mlanX/mgmt.log`로 flush한다. 타이머는 `wifi_apply_enabled.sh`가 net_rx가 한 쪽이라도 양수일 때만 켜고, 둘 다 0이면 `wifi_init` 재시작 때 disable과 함께 멈춘다.
 
 #### net_rx → wifi_mod_para.conf 매핑
 
-| JSON 경로 | conf 블록 |
-|-----------|----------|
-| `.mlan0.net_rx` | `PCIE9098_0` |
-| `.mlan1.net_rx` | `PCIE9098_1` |
+`wifi_init.sh`가 `.global.BUS_TYPE`(기본 `pcie`)으로 블록을 고른다 — `sdio`면 `SD9098_N`, 그 밖에는 `PCIE9098_N`.
 
-값이 0이면 conf에서 `net_rx=` 줄이 제거되고, 0보다 크면 `net_rx=값`이 블록 내에 추가/갱신된다.
+| JSON 경로 | PCIe 블록 | SDIO 블록 |
+|-----------|----------|----------|
+| `.mlan0.net_rx` | `PCIE9098_0` | `SD9098_0` |
+| `.mlan1.net_rx` | `PCIE9098_1` | `SD9098_1` |
+
+정상 모드에서는 값이 0이어도 블록에 `net_rx=0`을 기록하고, 0보다 크면 `net_rx=값`으로 추가/갱신한다. 블록에서 `net_rx=` 키를 지우는 것은 MFG 프로파일(`mfg_mode=1`)뿐이다.
 
 #### STANDARD → wifi_mod_para.conf 매핑
 

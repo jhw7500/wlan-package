@@ -11,6 +11,7 @@ wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약�
 - **테스트**: `wifi_fw_config_test.sh`에 SR 경계값 시험(10·90·655360 거부, 100·655350 허용), legacy 시험(10·90·655360 허용, 0·105 거부, 주기 10 ms 섹션의 부팅 SET), `wifi mlan0 rate 1 40 65 10` 거부와 `wifi mlan0 rate 0 40 65 10` 저장을 실제로 실행하는 시험을 추가했다.
 - **끈 PartOf 유닛 정지**(#458, SemVer patch): `wifi_apply_enabled.sh`가 끄는 값인 `PartOf=wifi_init` 유닛(`wifi_mgmt_log.timer`, `wifi_thermal_state.timer`, `wifi_ping_monitor`, `wifi_logger@`(eth0·mlanN), `wifi_checker@`, `wifi_event@`, `wifi_arping@`)을 disable 뒤 stop한다. 이 유닛들은 `wifi_init` 재시작에 함께 재시작되는데 disable은 그 job을 취소하지 못해, `net_rx`를 0으로 바꾸고 `wifi_init`을 재시작해도 `wifi_mgmt_log.timer`가 `disabled`/`active`로 남아 10초마다 빈 flush를 했다. stop은 대기 job을 취소하고 inactive 유닛에는 무비용이다(MFG 경로·owner 유닛과 같은 방식). PartOf가 아닌 `wpa_supplicant@`·`wifi_bridge@`·`wlan_fw_watch`·`snmpd`·`opcd`는 종전처럼 disable만 한다. stop 실패는 err 로그와 실패 목록에 남고, strict 모드에서만 실패로 끝난다.
 - **테스트**: `tests/test_apply_enabled_partof_stop.py`가 가짜 `systemctl`로 스크립트를 실행해, 유닛 파일의 `PartOf=wifi_init.service`로 고른 계열이 끄는 값이면 전부 stop되고 그 밖의 유닛은 stop되지 않는지 확인한다. `test_wifi_logger_control.py`의 eth0 매핑 문자열을 `apply_partof`로 맞췄다.
+- **가이드 net_rx 절 정정**(#457, 문서만): flush 유닛을 `wifi_mgmt_log.timer`, 출력 파일을 `/var/log/cantops/mgmt/mlanX/mgmt.log`로 고쳤다(종전의 `mgmt-log-flush.timer`·`gmgmt.log`는 실제 유닛·파일이 아니다). 블록 매핑에 `.global.BUS_TYPE`에 따른 SDIO 블록 `SD9098_N`을 더했고, 0 값은 정상 모드에서 `net_rx=0`으로 기록되며 MFG 프로파일에서만 키가 지워진다고 고쳤다.
 
 ## 0.8.6 (2026-11-03)
 
