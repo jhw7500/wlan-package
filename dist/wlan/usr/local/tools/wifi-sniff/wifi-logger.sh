@@ -17,6 +17,9 @@ SAVE_PCAP=0
 FILTER_CONF=""
 TCPDUMP_PID=""
 TSHARK_PID=""
+MOAL_VERSION=""
+NETMON_FAMILY=""
+NETMON_BAND=""
 
 # 필터 변수 (JSON에서 파싱)
 TSHARK_DISPLAY_FILTER=""
@@ -40,7 +43,8 @@ NXP 88Q9098 channel specified sniffer mode 실시간 프레임 로깅 도구.
 
 Options:
   -c <channel>     모니터 채널 (미지정 시 자동감지)
-  -b <band>        밴드 (미지정 시 자동감지 또는 채널에서 추론)
+  -b <band>        밴드: B,G,A,GN,AN,GAC,AAC 또는 옛 비트맵 숫자
+                   (미지정 시 자동감지 또는 채널에서 추론)
   -f <filter>      filter_flag 비트맵 (기본값: 7 = 관리+제어+데이터)
   -w <bandwidth>   채널 대역폭: 0=20MHz, 1=40MHz↑, 3=40MHz↓, 4=80MHz
   -i <interface>   mlan 인터페이스 (기본값: mlan0)
@@ -61,6 +65,13 @@ Filter JSON 예제 (filter.json):
 
   mode: "all" = 필터 없음, "include" = list만 표시, "exclude" = list 제외
   management_subtypes.exclude: beacon, probe-req, probe-resp, auth, deauth 등
+
+Band values (옛 비트맵, OR 조합 가능):
+  B=1, G=2, A=4, GN=8, AN=16, GAC=32, AAC=64 (자동: 2.4GHz 11, 5GHz 20)
+  드라이버가 받는 값은 로드된 moal 버전으로 정한다:
+    505.* (i.MX8)         : 비트맵을 그대로 넘긴다
+    543.*, 552.* (i.MX93) : 2.4GHz 비트만 있으면 0, 5GHz 비트만 있으면 1 (섞이면 거부)
+    그 밖의 버전          : NETMON_BAND_MODE=bitmap 또는 enum 환경변수로 지정
 
 Examples:
   wifi-logger.sh -c 40                         # 기본 필터
@@ -102,6 +113,63 @@ bitmap_to_label() {
         20) echo "AAN" ;; 32) echo "GAC" ;; 64) echo "AAC" ;;
         *) echo "$1" ;;
     esac
+}
+
+# --- netmon 밴드 형식 (#456) ---
+# netmon 의 밴드 인자는 드라이버마다 뜻이 다르다(드라이버 원문 기준).
+#   bitmap: moal 505.* (i.MX8 payload) — 위 옛 비트맵을 그대로 받는다. 밴드 값을 사실상 검사하지
+#           않아 틀린 값도 받아들이므로, 넣어 보고 실패하면 바꾸는 식으로는 형식을 가를 수 없다.
+#   enum:   moal 543.* (i.MX93 payload) — 0=2.4GHz, 1=5GHz, 2=6GHz 만 받고 나머지는 -EINVAL.
+#           moal 552.* 도 같다(i.MX93 보드 실측 2026-11-07: 1·0 으로 캡처, 옛 값 20 은 Invalid band).
+# 형식은 로드된 모듈 버전으로 정하고, 표에 없는 버전은 추측하지 않는다.
+# NETMON_BAND_MODE=bitmap|enum 을 주면 버전 표 대신 그 형식을 쓴다.
+
+check_band_mode_env() {
+    case "${NETMON_BAND_MODE:-}" in
+        ""|bitmap|enum) ;;
+        *) die "NETMON_BAND_MODE=$NETMON_BAND_MODE 은(는) 지원하지 않습니다 (bitmap 또는 enum)" ;;
+    esac
+}
+
+detect_netmon_family() {
+    local vfile="${WIFI_SYS_MODULE_ROOT:-/sys/module}/moal/version"
+    check_band_mode_env
+    MOAL_VERSION=""
+    if [ -r "$vfile" ]; then
+        IFS= read -r MOAL_VERSION < "$vfile" || true
+    fi
+    if [ -n "${NETMON_BAND_MODE:-}" ]; then
+        NETMON_FAMILY="$NETMON_BAND_MODE"
+        return 0
+    fi
+    case "$MOAL_VERSION" in
+        505.*) NETMON_FAMILY=bitmap ;;
+        543.*|552.*) NETMON_FAMILY=enum ;;
+        "") die "moal 드라이버 버전을 읽지 못했습니다($vfile). 드라이버가 로드됐는지 확인하거나 NETMON_BAND_MODE=bitmap|enum 으로 netmon 밴드 형식을 지정하세요" ;;
+        *) die "netmon 밴드 형식을 모르는 moal 버전입니다: $MOAL_VERSION. NETMON_BAND_MODE=bitmap(옛 비트맵) 또는 enum(0=2.4GHz, 1=5GHz)으로 지정하세요" ;;
+    esac
+}
+
+# 옛 비트맵 밴드 값을 드라이버가 받는 netmon 밴드 값으로 바꾼다.
+# enum 형식: 2.4GHz 비트(B,G,GN,GAC)만 있으면 0, 5GHz 비트(A,AN,AAC)만 있으면 1.
+netmon_band_arg() {
+    local bm="$1"
+    if [ "$NETMON_FAMILY" != enum ]; then
+        echo "$bm"
+        return 0
+    fi
+    case "$bm" in
+        ""|*[!0-9]*) die "밴드 값 $bm 은(는) 숫자가 아닙니다" ;;
+    esac
+    local v=$((10#$bm))
+    local g24=$((v & 43)) g5=$((v & 84)) extra=$((v & ~127))
+    if [ "$extra" -eq 0 ] && [ "$g24" -ne 0 ] && [ "$g5" -eq 0 ]; then
+        echo 0
+    elif [ "$extra" -eq 0 ] && [ "$g5" -ne 0 ] && [ "$g24" -eq 0 ]; then
+        echo 1
+    else
+        die "밴드 값 $bm 은(는) moal ${MOAL_VERSION:-?} 의 netmon 밴드(0=2.4GHz, 1=5GHz)로 바꿀 수 없습니다. 2.4GHz(B,G,GN) 또는 5GHz(A,AN,AAC) 한쪽만 지정하세요"
+    fi
 }
 
 # --- 자동감지 ---
@@ -262,9 +330,9 @@ start_logger() {
     wpa_cli -i "$IFACE" disconnect >/dev/null 2>&1 || true
     sleep 1
 
-    info "netmon 활성화: 채널=$CHANNEL, 밴드=$BAND, 필터=$FILTER, 대역폭=$BANDWIDTH"
-    if ! mlanutl "$IFACE" netmon 1 "$FILTER" "$BAND" "$CHANNEL" "$BANDWIDTH"; then
-        die "netmon 활성화 실패"
+    info "netmon 활성화: 채널=$CHANNEL, 밴드=$NETMON_BAND, 필터=$FILTER, 대역폭=$BANDWIDTH (moal ${MOAL_VERSION:-?}, 밴드 형식 $NETMON_FAMILY)"
+    if ! mlanutl "$IFACE" netmon 1 "$FILTER" "$NETMON_BAND" "$CHANNEL" "$BANDWIDTH"; then
+        die "netmon 활성화 실패: mlanutl $IFACE netmon 1 $FILTER $NETMON_BAND $CHANNEL $BANDWIDTH (밴드=$NETMON_BAND, 채널=$CHANNEL, 대역폭=$BANDWIDTH, moal ${MOAL_VERSION:-?}, 밴드 형식 $NETMON_FAMILY)"
     fi
 
     local retry=0
@@ -460,6 +528,8 @@ parse_args() {
 main() {
     parse_args "$@"
     check_prerequisites
+    # 드라이버를 건드리기 전에 netmon 밴드 형식부터 정한다(모르면 여기서 멈춘다)
+    detect_netmon_family
     cleanup_existing
 
     if [ -z "$CHANNEL" ] && [ -z "$BAND" ]; then
@@ -471,6 +541,9 @@ main() {
     elif [ -z "$CHANNEL" ] && [ -n "$BAND" ]; then
         die "밴드(-b)만 지정됨. 채널(-c)도 지정하세요"
     fi
+
+    # 드라이버가 받는 밴드 값으로 바꾼다(바꿀 수 없으면 STA 연결을 끊기 전에 멈춘다)
+    NETMON_BAND=$(netmon_band_arg "$BAND") || exit 1
 
     # 필터 설정 로드
     if [ -z "$FILTER_CONF" ] && [ -f "$SCRIPT_DIR/filter.json" ]; then
