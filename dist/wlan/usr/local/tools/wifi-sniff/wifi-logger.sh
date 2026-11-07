@@ -69,9 +69,9 @@ Filter JSON 예제 (filter.json):
 Band values (옛 비트맵, OR 조합 가능):
   B=1, G=2, A=4, GN=8, AN=16, GAC=32, AAC=64 (자동: 2.4GHz 11, 5GHz 20)
   드라이버가 받는 값은 로드된 moal 버전으로 정한다:
-    505.* (i.MX8)  : 비트맵을 그대로 넘긴다
-    543.* (i.MX93) : 2.4GHz 비트만 있으면 0, 5GHz 비트만 있으면 1 (섞이면 거부)
-    그 밖의 버전   : NETMON_BAND_MODE=bitmap 또는 enum 환경변수로 지정
+    505.* (i.MX8)         : 비트맵을 그대로 넘긴다
+    543.*, 552.* (i.MX93) : 2.4GHz 비트만 있으면 0, 5GHz 비트만 있으면 1 (섞이면 거부)
+    그 밖의 버전          : NETMON_BAND_MODE=bitmap 또는 enum 환경변수로 지정
 
 Examples:
   wifi-logger.sh -c 40                         # 기본 필터
@@ -120,6 +120,7 @@ bitmap_to_label() {
 #   bitmap: moal 505.* (i.MX8 payload) — 위 옛 비트맵을 그대로 받는다. 밴드 값을 사실상 검사하지
 #           않아 틀린 값도 받아들이므로, 넣어 보고 실패하면 바꾸는 식으로는 형식을 가를 수 없다.
 #   enum:   moal 543.* (i.MX93 payload) — 0=2.4GHz, 1=5GHz, 2=6GHz 만 받고 나머지는 -EINVAL.
+#           moal 552.* 도 같다(i.MX93 보드 실측 2026-11-07: 1·0 으로 캡처, 옛 값 20 은 Invalid band).
 # 형식은 로드된 모듈 버전으로 정하고, 표에 없는 버전은 추측하지 않는다.
 # NETMON_BAND_MODE=bitmap|enum 을 주면 버전 표 대신 그 형식을 쓴다.
 
@@ -143,7 +144,7 @@ detect_netmon_family() {
     fi
     case "$MOAL_VERSION" in
         505.*) NETMON_FAMILY=bitmap ;;
-        543.*) NETMON_FAMILY=enum ;;
+        543.*|552.*) NETMON_FAMILY=enum ;;
         "") die "moal 드라이버 버전을 읽지 못했습니다($vfile). 드라이버가 로드됐는지 확인하거나 NETMON_BAND_MODE=bitmap|enum 으로 netmon 밴드 형식을 지정하세요" ;;
         *) die "netmon 밴드 형식을 모르는 moal 버전입니다: $MOAL_VERSION. NETMON_BAND_MODE=bitmap(옛 비트맵) 또는 enum(0=2.4GHz, 1=5GHz)으로 지정하세요" ;;
     esac

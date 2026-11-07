@@ -8,6 +8,8 @@
   값도 거부하지 않는다. 그래서 넣어 보고 실패하면 바꾸는 식으로는 계열을 가를 수 없다.
 * 543.p18(i.MX93 payload, `ported`): `BAND_2GHZ=0`·`BAND_5GHZ=1`·`BAND_6GHZ=2` 만 받고
   나머지는 `NET_MON: Invalid band`(-EINVAL)로 거부한다. 채널도 그 밴드에 속해야 한다.
+* 552.p22(i.MX93 보드 실측 2026-11-07, 소스 없음): 1(36채널)·0(6채널)로 캡처되고 옛 값 20 은
+  `NET_MON: Invalid band` 로 거부돼 543 과 같은 형식이다.
 
 가짜 mlanutl 이 두 계열의 검사를 흉내 내고, 두 스크립트가 실제로 넘긴 인자를 기록한다.
 계열은 `$WIFI_SYS_MODULE_ROOT/moal/version`(기본 /sys/module)의 로드된 모듈 버전으로 정한다.
@@ -33,7 +35,9 @@ SCRIPTS = {
 README = SNIFF_DIR / "README.md"
 
 ENUM_VERSION = "543.p18"
+ENUM_VERSIONS = (ENUM_VERSION, "552.p22")
 BITMAP_VERSION = "505.p14"
+UNKNOWN_VERSION = "999.p0"
 
 LEGACY_BITS = {"B": 1, "G": 2, "A": 4, "GN": 8, "AN": 16, "GAC": 32, "AAC": 64}
 BITS_24 = 1 | 2 | 8 | 32
@@ -191,9 +195,10 @@ def remote_runs(calls):
 
 
 @pytest.mark.parametrize("script", SCRIPTS)
+@pytest.mark.parametrize("version", ENUM_VERSIONS)
 @pytest.mark.parametrize("freq, channel, band", [("5180", "36", "1"), ("2437", "6", "0")])
-def test_enum_driver_auto_detect_passes_the_driver_band(rig, script, freq, channel, band):
-    proc, calls = rig.run(script, *AUTO_ARGS[script], freq=freq)
+def test_enum_driver_auto_detect_passes_the_driver_band(rig, script, version, freq, channel, band):
+    proc, calls = rig.run(script, *AUTO_ARGS[script], version=version, freq=freq)
     assert proc.returncode == 0, proc.stderr
     assert netmon_starts(calls) == [["7", band, channel, "0"]]
     assert rig.pcaps(), "pcap 이 만들어지지 않았다"
@@ -252,9 +257,9 @@ def test_enum_driver_rejects_a_band_it_cannot_express(rig, script, band):
 
 @pytest.mark.parametrize("script", SCRIPTS)
 def test_unknown_driver_version_stops_before_touching_the_link(rig, script):
-    proc, calls = rig.run(script, version="552.p22")
+    proc, calls = rig.run(script, version=UNKNOWN_VERSION)
     assert proc.returncode != 0
-    assert "552.p22" in proc.stderr
+    assert UNKNOWN_VERSION in proc.stderr
     assert "NETMON_BAND_MODE" in proc.stderr
     assert netmon_starts(calls) == []
     assert touched_link(calls) == []
@@ -273,7 +278,7 @@ def test_missing_driver_version_stops_before_touching_the_link(rig, script):
 @pytest.mark.parametrize("script", SCRIPTS)
 @pytest.mark.parametrize(
     "mode, version, family, band",
-    [("enum", "552.p22", "enum", "1"), ("bitmap", ENUM_VERSION, "bitmap", "20")],
+    [("enum", UNKNOWN_VERSION, "enum", "1"), ("bitmap", ENUM_VERSION, "bitmap", "20")],
 )
 def test_band_mode_override_wins_over_the_version_table(rig, script, mode, version, family, band):
     proc, calls = rig.run(script, version=version, family=family, env={"NETMON_BAND_MODE": mode})
