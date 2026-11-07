@@ -687,6 +687,35 @@ jq '.mlan0.rate_adapt.low_thresh=255 | .mlan0.rate_adapt.high_thresh=90' "$CONF"
 expect_rc "dynamic rate requires both thresholds 255" 1 wifi_fw_validate_rate_config "$WORK/half-dynamic.json" mlan0
 jq '.mlan0.rate_adapt.interval_ms=105' "$CONF" > "$WORK/bad-interval.json"
 expect_rc "rate interval must be 10ms multiple" 1 wifi_fw_validate_rate_config "$WORK/bad-interval.json" mlan0
+# moal 은 SR(mode 1)에서 10 ms 단위 주기 10..0xffff 만 받는다 — ms 로 100..655350. 범위 밖
+# 값은 SET 이 거부돼 임계값까지 섹션 전체가 FW 기본값으로 남으므로 저장·부팅 검증에서
+# 막는다(#461). $CONF 의 mlan0 은 mode 1 이다.
+for _iv in 10 90 655360; do
+    jq ".mlan0.rate_adapt.interval_ms=$_iv" "$CONF" > "$WORK/interval-$_iv.json"
+    expect_rc "rate interval ${_iv}ms outside driver range rejected" 1 \
+        wifi_fw_validate_rate_config "$WORK/interval-$_iv.json" mlan0
+done
+for _iv in 100 655350; do
+    jq ".mlan0.rate_adapt.interval_ms=$_iv" "$CONF" > "$WORK/interval-$_iv.json"
+    expect_rc "rate interval ${_iv}ms at driver boundary accepted" 0 \
+        wifi_fw_validate_rate_config "$WORK/interval-$_iv.json" mlan0
+done
+# legacy(mode 0)에서는 드라이버가 임계값·주기를 검사하지도 쓰지도 않는다(SR 블록 밖).
+# 범위 검사를 걸면 종전에 받던 저장 설정이 업그레이드 뒤 부팅에서 섹션째 건너뛰어지므로
+# mode 0 은 종전 규칙(양수·10 ms 배수)만 본다(#461 리뷰 A-R1-001).
+for _iv in 10 90 655360; do
+    jq ".mlan0.rate_adapt.mode=0 | .mlan0.rate_adapt.interval_ms=$_iv" "$CONF" > "$WORK/legacy-interval-$_iv.json"
+    expect_rc "legacy rate interval ${_iv}ms keeps the pre-range rule" 0 \
+        wifi_fw_validate_rate_config "$WORK/legacy-interval-$_iv.json" mlan0
+done
+for _iv in 0 105; do
+    jq ".mlan0.rate_adapt.mode=0 | .mlan0.rate_adapt.interval_ms=$_iv" "$CONF" > "$WORK/legacy-interval-$_iv.json"
+    expect_rc "legacy rate interval ${_iv}ms still needs a positive 10ms multiple" 1 \
+        wifi_fw_validate_rate_config "$WORK/legacy-interval-$_iv.json" mlan0
+done
+rm -f "$STATE/mlan0.rate"
+expect_rc "legacy rate with 10ms interval applies at boot" 0 wifi_fw_apply_rate "$WORK/legacy-interval-10.json" mlan0
+expect_eq "legacy rate section is SET, not skipped" '0 70 90 1' "$(cat "$STATE/mlan0.rate" 2>/dev/null)"
 
 # ── rate_adapt.enabled 게이트 ──────────────────────────────────────────────
 # 기본 true(키 부재 = 종전 동작). false면 SET 자체를 하지 않으며, 남는 값은 FW 기본값이
@@ -1034,6 +1063,40 @@ else
 fi
 grep -q '^  rate)' "$WIFI_CLI" && pass "CLI exposes rate command" || fail "CLI rate command missing"
 grep -q 'wifi_fw_validate_rate_config' "$WIFI_CLI" && pass "CLI shares rate validation" || fail "CLI does not share rate validation"
+# 거부 경로는 실제로 실행해서 확인한다 — SR(mode 1)에서 드라이버 최소 주기 미만은 저장 전에 막히고
+# 오류 문구가 허용 범위를 알려야 한다(#461). 저장 단계의 `install -o root` 는 비 root 에서
+# 실패하므로 -o/-g 만 버리는 스텁을 앞세운다. 검증을 통과한 값이면 파일이 실제로 바뀐다.
+mkdir -p "$WORK/cli-bin"
+cat > "$WORK/cli-bin/install" <<'EOF'
+#!/bin/bash
+args=()
+while [ "$#" -gt 0 ]; do
+    case "$1" in -o|-g) shift 2 ;; *) args+=("$1"); shift ;; esac
+done
+exec "$CLI_REAL_INSTALL" "${args[@]}"
+EOF
+chmod +x "$WORK/cli-bin/install"
+CLI_REAL_INSTALL=$(command -v install)
+cp "$TEMPLATE" "$WORK/cli-rate.json"
+CLI_RATE_BEFORE=$(sha256sum < "$WORK/cli-rate.json")
+CLI_RATE_ERR=$(CLI_REAL_INSTALL="$CLI_REAL_INSTALL" PATH="$WORK/cli-bin:$PATH" \
+    WIFI_RUN_DIR="$WORK/cli-run" WIFI_INIT_CONF_JSON="$WORK/cli-rate.json" \
+    timeout 30 bash "$WIFI_CLI" mlan0 rate 1 40 65 10 2>&1 >/dev/null)
+CLI_RATE_RC=$?
+case "$CLI_RATE_RC:$CLI_RATE_ERR" in
+    0:*) fail "wifi rate rejects interval below driver minimum (rc=0)" ;;
+    *"interval 100..655350 ms"*) pass "wifi rate rejects interval below driver minimum and names the range" ;;
+    *) fail "wifi rate rejects interval below driver minimum and names the range (rc=$CLI_RATE_RC)" ;;
+esac
+expect_eq "rejected wifi rate leaves config unchanged" "$CLI_RATE_BEFORE" "$(sha256sum < "$WORK/cli-rate.json")"
+# legacy(mode 0)의 짧은 주기는 같은 하네스로 저장된다(A-R1-001). 위 무변경 단언이 하네스가
+# 파일을 못 써서 통과한 것이 아님을 보이는 양성 대조이기도 하다.
+CLI_REAL_INSTALL="$CLI_REAL_INSTALL" PATH="$WORK/cli-bin:$PATH" \
+    WIFI_RUN_DIR="$WORK/cli-run" WIFI_INIT_CONF_JSON="$WORK/cli-rate.json" \
+    timeout 30 bash "$WIFI_CLI" mlan0 rate 0 40 65 10 >/dev/null 2>&1
+CLI_LEGACY_RC=$?
+expect_eq "wifi rate stores legacy mode with 10ms interval (rc=$CLI_LEGACY_RC)" '0 40 65 10' \
+    "$(jq -r '.mlan0.rate_adapt | "\(.mode) \(.low_thresh) \(.high_thresh) \(.interval_ms)"' "$WORK/cli-rate.json")"
 if grep -q 'mlanutl "$IFACE" rate_adapt_cfg "$' "$WIFI_CLI"; then
     fail "CLI performs ineffective connected rate SET"
 else

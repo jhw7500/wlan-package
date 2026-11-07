@@ -583,6 +583,11 @@ wifi_fw_validate_rate_config() {
 
     case "$mode" in 0|1) ;; *) return 1 ;; esac
     [ "$interval" -gt 0 ] 2>/dev/null && [ $((interval % 10)) -eq 0 ] || return 1
+    # moal 은 SR(mode 1)일 때만 10 ms 단위 주기 10..0xffff 를 검사하고 쓴다
+    # (woal_priv_rate_adapt_cfg) — ms 로 100..655350. legacy(mode 0)는 주기를 쓰지 않는다.
+    if [ "$mode" -eq 1 ]; then
+        [ "$interval" -ge 100 ] && [ "$interval" -le 655350 ] || return 1
+    fi
 
     if [ "$low" -eq 255 ] 2>/dev/null || [ "$high" -eq 255 ] 2>/dev/null; then
         [ "$low" -eq 255 ] && [ "$high" -eq 255 ] || return 1
