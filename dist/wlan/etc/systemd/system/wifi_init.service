@@ -29,6 +29,10 @@ ExecStartPre=/usr/local/scripts/wifi_config_backup.sh restore
 ExecStartPre=/usr/local/scripts/wifi_cal_backup.sh protect
 # 3) JSON *.enabled → systemctl enable/disable 동기화 (비정상 종료 후에도 일관 보장).
 #    정상 reboot은 wifi_apply_enabled.service ExecStop도 동기화하므로 변경 없으면 idempotent (~100ms).
+#    끄는 값인 PartOf=wifi_init 유닛은 이 시작 경로에서만 stop 한다(#458) — 재시작에 딸려 다시 잡힌
+#    job 은 disable 이 취소하지 못한다. 다른 호출처(로거 CLI·postinst 등)는 이 변수를 넘기지 않는다.
+#    실행 줄은 경로 그대로 둔다(env 접두를 붙이면 릴리스 게이트의 실행 대상 검사가 스크립트를 놓친다).
+Environment=WIFI_APPLY_STOP_PARTOF=1
 ExecStartPre=/usr/local/scripts/wifi_apply_enabled.sh
 # 4) 모듈 로드 / 펌웨어 / MAC / 라디오 설정
 ExecStart=/usr/local/scripts/wifi_init.sh

@@ -128,7 +128,8 @@ def test_apply_enabled_maps_system_and_eth0_before_mfg_gate():
     mfg_gate = text.index("if [ \"${MFG_MODE:-0}\" = \"1\" ]")
 
     system_mapping = 'apply wifi_logger.service     "$(get_bool ".logger.enabled" "true")"'
-    eth0_mapping = 'apply wifi_logger@eth0.service "$(get_bool ".eth0.logger.enabled" "true")"'
+    # wifi_logger@eth0 is PartOf=wifi_init, so it goes through apply_partof (#458).
+    eth0_mapping = 'apply_partof wifi_logger@eth0.service "$(get_bool ".eth0.logger.enabled" "true")"'
     assert system_mapping in text
     assert eth0_mapping in text
     assert text.index(system_mapping) < mfg_gate

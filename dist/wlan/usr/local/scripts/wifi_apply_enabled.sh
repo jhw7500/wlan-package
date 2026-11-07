@@ -168,6 +168,30 @@ ensure_stopped_owner_unit() {
     return 1
 }
 
+# PartOf=wifi_init 유닛은 wifi_init 재시작에 함께 재시작된다 — After=wifi_init 이 없으면 곧바로
+# 다시 뜨고, 있으면 시작 job 이 큐에서 기다린다. disable 은 그 job 을 취소하지 못해 끈 유닛이
+# 재시작 뒤에도 돈다(#458). 끄는 값이면 enable 상태와 무관하게 stop 해 큐와 active 를 함께
+# 닫는다. stop 은 job-mode=replace 로 대기 job 을 취소하고 inactive 유닛에는 무비용이다(MFG
+# 경로·owner 유닛과 같은 방식).
+# 이 stop 은 wifi_init 시작 경로에서만 한다 — wifi_init.service 가 Environment=WIFI_APPLY_STOP_PARTOF=1
+# 로 켠다. 같은 스크립트를 부르는 로거 CLI(wifi_logger_control.sh)·postinst·공장초기화·종료 동기화
+# (wifi_apply_enabled.service ExecStop)는 종전처럼 enable 상태만 바꾼다. 로거 CLI 는 "enable/disable
+# 은 부팅 정책만 바꾸고 즉시 start/stop 하지 않는다"가 계약이다(README).
+# PartOf=wifi_init 이지만 disable 만 하는 유닛: wpa_supplicant@(wifi_init.sh 가 모듈 재적재 전에 직접
+# stop 한다), wifi_bridge@(BindsTo 한 netdev 와 함께 내려간다). wlan_fw_watch·snmpd·opcd 는 PartOf 가
+# 아니라 wifi_init 재시작에 딸려 오지 않는다.
+STOP_PARTOF=0
+[ "${WIFI_APPLY_STOP_PARTOF:-0}" = "1" ] && STOP_PARTOF=1
+apply_partof() {
+    local unit="$1" want="$2"
+    apply "$unit" "$want"
+    [ "$want" = "false" ] && [ "$STOP_PARTOF" -eq 1 ] || return 0
+    if ! systemctl stop "$unit" 2>/dev/null; then
+        FAILED_UNITS+=("stop:$unit")
+        logger -p local0.err "[$tag:$LINENO] stop $unit failed"
+    fi
+}
+
 # MFG 프로파일: mfg_mode=1(SoT: mod_para.conf)이면 STA/FW 접촉 유닛을 일괄
 # disable+stop 하고 종료한다. MFG FW에서는 scan/connect가 동작하지 않아
 # checker/roam 등이 오판 → 복구 사다리/재부팅 요청이 오발되므로 systemd 레벨에서
@@ -181,7 +205,7 @@ MFG_MODE=$(grep -m1 '^[[:space:]]*mfg_mode=' "/lib/firmware/$_MOD_PARA" 2>/dev/n
 # 시스템/유선 로거는 MFG STA 프로파일과 독립이다. MFG early-return보다 먼저
 # 적용해야 wifi log system|eth0 enable/disable이 모든 모드에서 같은 의미를 가진다.
 apply wifi_logger.service     "$(get_bool ".logger.enabled" "true")"
-apply wifi_logger@eth0.service "$(get_bool ".eth0.logger.enabled" "true")"
+apply_partof wifi_logger@eth0.service "$(get_bool ".eth0.logger.enabled" "true")"
 # 시각 동기(systemd-timesyncd, 배포판 유닛)도 무선과 무관하다 — .global.ntp.enabled(기본 true, 웹 UI
 # 토글)가 모든 모드에서 on/off 를 소유하도록 MFG early-return 앞에서 적용한다(#361).
 _ntp_enabled=$(get_bool ".global.ntp.enabled" "true")
@@ -238,9 +262,9 @@ if [ "${MFG_MODE:-0}" = "1" ]; then
 fi
 
 # 글로벌 데몬
-apply wifi_ping_monitor.service     "$(get_bool ".global.ping_monitor.enabled" "false")"
+apply_partof wifi_ping_monitor.service "$(get_bool ".global.ping_monitor.enabled" "false")"
 apply wlan_fw_watch.service         "$(get_bool ".global.fw_watch.enabled"     "true")"
-apply wifi_thermal_state.timer      "$(get_bool ".wbridge.thermal.enabled"     "false")"
+apply_partof wifi_thermal_state.timer  "$(get_bool ".wbridge.thermal.enabled"     "false")"
 apply snmpd.service                 "$(get_bool ".snmp.enabled"                "false")"
 apply opcd.service                  "$(get_bool ".opc.enabled"                 "false")"
 # opcd-essid-restore.service(부팅 1회 opcd -R, #362)는 이 게이트에 걸지 않는다 — OPC 를 끈 뒤
@@ -254,7 +278,7 @@ _mgmt="false"
 if [ "${_m0_rx:-0}" -gt 0 ] 2>/dev/null || [ "${_m1_rx:-0}" -gt 0 ] 2>/dev/null; then
     _mgmt="true"
 fi
-apply wifi_mgmt_log.timer "$_mgmt"
+apply_partof wifi_mgmt_log.timer "$_mgmt"
 
 # wbridge 정책
 WBRIDGE_ENABLED=$(get_bool ".wbridge.enabled" "false")
@@ -272,6 +296,9 @@ for iface in mlan0 mlan1; do
                 wifi_bgscan|wifi_roam|wifi_periodic_roam)
                     apply "${u}@${iface}.service" "false" "true"
                     ;;
+                wifi_logger|wifi_checker|wifi_event|wifi_arping)
+                    apply_partof "${u}@${iface}.service" "false"
+                    ;;
                 *)
                     apply "${u}@${iface}.service" "false"
                     ;;
@@ -287,8 +314,8 @@ for iface in mlan0 mlan1; do
     # 유지해야 netdev 재생성 후 failed 유닛을 wlan_wpa_reattach.sh가 복구할 수 있다.
     apply "wpa_supplicant@${iface}.service" "$(get_bool ".${iface}.wpa_supplicant.enabled" "true")"
 
-    apply "wifi_logger@${iface}.service"        "$(get_bool ".${iface}.logger.enabled"        "true")"
-    apply "wifi_checker@${iface}.service"       "$(get_bool ".${iface}.checker.enabled"       "true")"
+    apply_partof "wifi_logger@${iface}.service"  "$(get_bool ".${iface}.logger.enabled"        "true")"
+    apply_partof "wifi_checker@${iface}.service" "$(get_bool ".${iface}.checker.enabled"       "true")"
     _bgscan_want=$(boot_policy_bool "$iface" bgscan_enabled) || exit 1
     _roam_want=$(boot_policy_bool "$iface" roaming_enabled) || exit 1
     if [ "$_bgscan_want" = "false" ]; then
@@ -301,7 +328,7 @@ for iface in mlan0 mlan1; do
     else
         apply "wifi_roam@${iface}.service" "true"
     fi
-    apply "wifi_arping@${iface}.service"        "$(get_bool ".${iface}.arping.enabled"        "false")"
+    apply_partof "wifi_arping@${iface}.service"  "$(get_bool ".${iface}.arping.enabled"        "false")"
     apply "wifi_periodic_roam@${iface}.service" "false" "true"
     if [ "$_bgscan_want" = "false" ]; then
         ensure_stopped_owner_unit "wifi_bgscan@${iface}.service" || true
@@ -325,9 +352,9 @@ for iface in mlan0 mlan1; do
         _mcs_verify="true"
     fi
     if [ "$_garp" = "true" ] || [ "$_oc" = "true" ] || [ "$SNMP_TRAP_ENABLED" = "true" ] || [ "$_mcs_verify" = "true" ]; then
-        apply "wifi_event@${iface}.service" "true"
+        apply_partof "wifi_event@${iface}.service" "true"
     else
-        apply "wifi_event@${iface}.service" "false"
+        apply_partof "wifi_event@${iface}.service" "false"
     fi
 
     # wifi_bridge: wbridge.enabled이고 bridge_iface가 이 iface일 때만 enable
