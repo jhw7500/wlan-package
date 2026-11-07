@@ -172,12 +172,20 @@ ensure_stopped_owner_unit() {
 # 다시 뜨고, 있으면 시작 job 이 큐에서 기다린다. disable 은 그 job 을 취소하지 못해 끈 유닛이
 # 재시작 뒤에도 돈다(#458). 끄는 값이면 enable 상태와 무관하게 stop 해 큐와 active 를 함께
 # 닫는다. stop 은 job-mode=replace 로 대기 job 을 취소하고 inactive 유닛에는 무비용이다(MFG
-# 경로·owner 유닛과 같은 방식). PartOf 가 아닌 유닛(wpa_supplicant@·wifi_bridge@·wlan_fw_watch
-# 등)은 wifi_init 재시작에 딸려 오지 않으므로 disable 만 한다.
+# 경로·owner 유닛과 같은 방식).
+# 이 stop 은 wifi_init 시작 경로에서만 한다 — wifi_init.service 가 Environment=WIFI_APPLY_STOP_PARTOF=1
+# 로 켠다. 같은 스크립트를 부르는 로거 CLI(wifi_logger_control.sh)·postinst·공장초기화·종료 동기화
+# (wifi_apply_enabled.service ExecStop)는 종전처럼 enable 상태만 바꾼다. 로거 CLI 는 "enable/disable
+# 은 부팅 정책만 바꾸고 즉시 start/stop 하지 않는다"가 계약이다(README).
+# PartOf=wifi_init 이지만 disable 만 하는 유닛: wpa_supplicant@(wifi_init.sh 가 모듈 재적재 전에 직접
+# stop 한다), wifi_bridge@(BindsTo 한 netdev 와 함께 내려간다). wlan_fw_watch·snmpd·opcd 는 PartOf 가
+# 아니라 wifi_init 재시작에 딸려 오지 않는다.
+STOP_PARTOF=0
+[ "${WIFI_APPLY_STOP_PARTOF:-0}" = "1" ] && STOP_PARTOF=1
 apply_partof() {
     local unit="$1" want="$2"
     apply "$unit" "$want"
-    [ "$want" = "false" ] || return 0
+    [ "$want" = "false" ] && [ "$STOP_PARTOF" -eq 1 ] || return 0
     if ! systemctl stop "$unit" 2>/dev/null; then
         FAILED_UNITS+=("stop:$unit")
         logger -p local0.err "[$tag:$LINENO] stop $unit failed"
