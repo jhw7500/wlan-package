@@ -104,7 +104,7 @@ alias plogf1='tail -f $PINGDIR1/ping.log'
 alias rlogg='cat $WPADIR0/wpa.log |grep -i -E "ROAM|CTRL-EVENT-CONNECTED|Associated with|Trying to authenticate with|Trying to associate" | grep -i $1 -a'
 alias rlogt='cat $WPADIR0/wpa.log |grep -i -E "ROAM|CTRL-EVENT-CONNECTED|Associated with|Trying to authenticate with|Trying to associate" | tail -n $1'
 alias rlogh='cat $WPADIR0/wpa.log |grep -i -E "ROAM|CTRL-EVENT-CONNECTED|Associated with|Trying to authenticate with|Trying to associate" | head -n $1'
-alias rlogf='tail -f $WPADIR0/mgmt.log |grep -i -E "ROAM|CTRL-EVENT-CONNECTED|Associated with|Trying to authenticate with|Trying to associate"'
+alias rlogf='tail -f $WPADIR0/wpa.log |grep -i -E "ROAM|CTRL-EVENT-CONNECTED|Associated with|Trying to authenticate with|Trying to associate"'
 
 alias wlog='cat $WPADIR0/wpa.log'
 alias wlogg='cat $WPADIR0/wpa.log | grep -i $1 -a'
