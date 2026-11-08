@@ -236,3 +236,12 @@ def test_link_logger_default_matches_template(full_tmpl, iface):
     import wifi_logger_link
 
     assert wifi_logger_link.LOOP_INTERVAL == full_tmpl[iface]["logger"]["link_interval_sec"]
+
+
+@pytest.mark.parametrize("iface", ["mlan0", "mlan1"])
+def test_radio_log_interval_default_matches_template(full_tmpl, iface):
+    """radio.log(local4) 주기 코드 기본값 = 템플릿 기본값(#459)."""
+    import wifi_logger_link
+
+    assert (wifi_logger_link.RADIO_LOG_INTERVAL_SEC
+            == full_tmpl[iface]["logger"]["radio_log_interval_sec"])
