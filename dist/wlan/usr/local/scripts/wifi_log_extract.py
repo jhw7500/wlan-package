@@ -1,14 +1,24 @@
 #!/usr/bin/env python3
-"""Extract timestamped Wi-Fi log records into a cp-style directory."""
+"""Extract timestamped Wi-Fi log records.
+
+The default CLI copies a time range into a cp-style directory
+(`wifi <iface> log extract`). `today-archive` writes one day's records of the
+given logs into a tar.gz that keeps their paths (`wifi log dump today`, #462).
+"""
 
 from __future__ import annotations
 
 import argparse
+import gzip
+import os
 import re
 import sys
-from datetime import date, datetime
+import tarfile
+import tempfile
+import zlib
+from datetime import date, datetime, time as dtime
 from pathlib import Path
-from typing import Iterable, Optional, Sequence, Tuple
+from typing import BinaryIO, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 
 TIME_ONLY_RE = re.compile(r"^\d{2}:\d{2}(?::\d{2})?$")
@@ -130,6 +140,144 @@ def extract_logs(
     return len(source_list), nonempty
 
 
+ROTATED_NAME_RE = re.compile(r"-(?P<ymd>\d{8})(?:\.gz)?$")
+
+
+class SourceReadError(Exception):
+    """Raised when a log source cannot be read to the end."""
+
+
+def is_day_source(path: Path, mtime: float, day: date, day_start: float) -> bool:
+    """Return whether ``path`` can hold records of ``day``.
+
+    logrotate ``dateext`` names a rotated copy with the day it was rotated, so a
+    copy named before ``day`` holds older records only, unless a writer kept
+    appending to it after rotation (failed HUP). Its mtime then reaches ``day``.
+    """
+    match = ROTATED_NAME_RE.search(path.name)
+    if not match:
+        return True
+    return match.group("ymd") >= day.strftime("%Y%m%d") or mtime >= day_start
+
+
+def _checked_lines(reader: Iterable[bytes]) -> Iterator[bytes]:
+    try:
+        yield from reader
+    except (OSError, EOFError, zlib.error) as exc:
+        raise SourceReadError(str(exc)) from exc
+
+
+def copy_day_records(reader: Iterable[bytes], writer: BinaryIO, day: date) -> int:
+    """Copy records dated ``day`` and return the written byte count.
+
+    As in ``extract_file``, an untimestamped line belongs to the record above it.
+    """
+    day_key = day.isoformat().encode("ascii")
+    include = False
+    written = 0
+    for line in reader:
+        match = LOG_TIMESTAMP_RE.match(line)
+        if match:
+            include = match.group("date") == day_key
+        if include:
+            writer.write(line)
+            written += len(line)
+    return written
+
+
+def write_day_archive(
+    sources: Iterable[Path], base: Path, day: date, archive: Path
+) -> Tuple[int, List[str]]:
+    """Archive ``day``'s records of each source as ``<base name>/<relative path>``.
+
+    Return (archived log count, warnings). A ``.gz`` source is read decompressed
+    and stored without the suffix. A log without a record of ``day`` is left out.
+    An unreadable source is skipped with a warning. The archive appears only when
+    it is complete, with the mode a plain file would get under the umask.
+    """
+    day_start = datetime.combine(day, dtime()).timestamp()
+    archive_dir = archive.parent
+    archived = set()
+    warnings: List[str] = []
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{archive.name}.", dir=archive_dir)
+    os.close(fd)
+    try:
+        with tarfile.open(tmp_name, "w:gz") as tar:
+            for source in sorted(set(sources)):
+                rel = source.relative_to(base).as_posix()
+                name = rel[:-3] if rel.endswith(".gz") else rel
+                try:
+                    mtime = source.stat().st_mtime
+                    if not is_day_source(source, mtime, day, day_start):
+                        continue
+                    reader = (gzip.open if source.name.endswith(".gz") else open)(source, "rb")
+                except OSError as exc:
+                    warnings.append(f"unreadable log skipped: {rel} ({exc})")
+                    continue
+                if name in archived:
+                    reader.close()
+                    warnings.append(f"duplicate log name skipped: {rel}")
+                    continue
+                with reader, tempfile.TemporaryFile(dir=archive_dir) as spool:
+                    try:
+                        size = copy_day_records(_checked_lines(reader), spool, day)
+                    except SourceReadError as exc:
+                        warnings.append(f"unreadable log skipped: {rel} ({exc})")
+                        continue
+                    if not size:
+                        continue
+                    spool.seek(0)
+                    info = tarfile.TarInfo(f"{base.name}/{name}")
+                    info.size = size
+                    info.mtime = int(mtime)
+                    info.mode = 0o644
+                    tar.addfile(info, spool)
+                archived.add(name)
+        umask = os.umask(0)
+        os.umask(umask)
+        os.chmod(tmp_name, 0o666 & ~umask)
+        os.replace(tmp_name, archive)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    return len(archived), warnings
+
+
+def build_day_archive_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="wifi_log_extract.py today-archive",
+        description="Archive one day's records of the given logs into a tar.gz.",
+    )
+    parser.add_argument("--base", required=True, type=Path,
+                        help="log root; members keep paths relative to it")
+    parser.add_argument("--date", required=True, type=date.fromisoformat,
+                        help="day to keep, YYYY-MM-DD")
+    parser.add_argument("--archive", required=True, type=Path)
+    parser.add_argument("sources", nargs="*", type=Path)
+    return parser
+
+
+def day_archive_main(argv: Sequence[str]) -> int:
+    args = build_day_archive_parser().parse_args(argv)
+    try:
+        archived, warnings = write_day_archive(
+            args.sources, args.base, args.date, args.archive
+        )
+    except (OSError, ValueError, tarfile.TarError) as exc:
+        print(f"Error: log dump today failed: {exc}", file=sys.stderr)
+        return 2
+    for warning in warnings:
+        print(f"Warning: {warning}", file=sys.stderr)
+    print(
+        f"Archived {args.date.isoformat()} records from {archived} log(s) "
+        f"into {args.archive}"
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -146,6 +294,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["today-archive"]:
+        return day_archive_main(argv[1:])
     args = build_parser().parse_args(argv)
     try:
         start, end = normalize_range(args.start, args.end)

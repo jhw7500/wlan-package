@@ -356,7 +356,7 @@ def test_wifi_dispatches_logger_lifecycle_to_helper(tmp_path, argv, expected):
         ("status", ["log", "system", "status"]),
         ("enable", ["log", "system", "enable"]),
         ("disable", ["log", "system", "disable"]),
-        ("clean", ["log", "reset"]),
+        ("clean", ["log", "clear", "today"]),
     ],
 )
 def test_logctl_is_only_a_wifi_sh_compatibility_wrapper(tmp_path, action, expected):

@@ -2084,12 +2084,164 @@ usage() {
     echo "       wifi ant {0|1|internal|external} : runtime"
     echo "       wifi set {fem|azure} : apply preset configuration profile"
     echo "       wifi stand {n|ac|ax|4|5|6} : persist"
-    echo "       wifi log dump : /var/log/cantops 전체 압축(현재 디렉터리)"
-    echo "       wifi log reset : 전체 로그 초기화(전역+모든 iface truncate + rsyslog HUP)"
+    echo "       wifi log dump [all|today] : all(기본) /var/log/cantops 전체, today 오늘 레코드만 압축(현재 디렉터리)"
+    echo "       wifi log clear [today|all] : 대상 로그(logrotate.rsyslog cantops 항목+전역 ping.log) 비움, all 은 회전본·압축본도 삭제"
+    echo "       wifi log reset : 전체 로그 초기화(clear all + journald 날짜별 스냅샷·err 삭제, 상태 파일·커서 유지)"
     echo "       wifi log system {start|stop|restart|status|enable|disable} : 시스템 로거 그룹 제어"
     echo "       wifi {0|1|2|mlan0|mlan1|eth0} log {start|stop|restart|status|enable|disable} : iface 로거 그룹 제어"
     echo "       wifi backup : 로그·설정 백업(/var/log/cantops/backup)"
     exit 1
+}
+
+# === wifi log 대상 로그(#462) ===
+# 대상 = logrotate.rsyslog 의 /var/log/cantops/ 항목(글롭 포함) + 전역 ping.log.
+# 목록의 정본은 logrotate 설정이다. 새 로그는 그 설정에만 등록하면 dump today·clear·reset 대상이 된다.
+WIFI_LOG_CONF_PREFIX=/var/log/cantops/
+WIFI_LOG_DATE_GLOB='[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'
+
+# stdout: LOG_BASE 기준 상대 패턴 한 줄씩. 설정을 못 읽거나 cantops 항목이 없으면 1.
+wifi_log_target_patterns() {
+    local conf="${WIFI_LOGROTATE_CONF:-/etc/logrotate.d/logrotate.rsyslog}" found=""
+    if [ ! -r "$conf" ]; then
+        echo "Error: log targets unavailable: cannot read $conf" >&2
+        return 1
+    fi
+    found=$(awk -v pfx="$WIFI_LOG_CONF_PREFIX" '
+        {
+            sub(/#.*/, "")
+            gsub(/[{]/, " { ")
+            gsub(/[}]/, " } ")
+            n = split($0, w, /[ \t]+/)
+            first = ""
+            for (i = 1; i <= n; i++) if (w[i] != "") { first = w[i]; break }
+            if (inscript) { if (first == "endscript") inscript = 0; next }
+            if (depth > 0 && first ~ /^(postrotate|prerotate|firstaction|lastaction|preremove)$/) { inscript = 1; next }
+            for (i = 1; i <= n; i++) {
+                if (w[i] == "") continue
+                if (w[i] == "{") { depth++; continue }
+                if (w[i] == "}") { if (depth > 0) depth--; continue }
+                if (depth > 0 || index(w[i], pfx) != 1) continue
+                rel = substr(w[i], length(pfx) + 1)
+                if (rel == "" || rel ~ /(^|\/)\.\.(\/|$)/ || seen[rel]++) continue
+                print rel
+            }
+        }' "$conf")
+    if [ -z "$found" ]; then
+        echo "Error: log targets unavailable: no ${WIFI_LOG_CONF_PREFIX} entries in $conf" >&2
+        return 1
+    fi
+    printf '%s\n' "$found"
+    printf '%s\n' "$found" | grep -qx 'ping.log' || echo ping.log
+}
+
+# $@ = 상대 패턴. stdout: 그 패턴에 맞는 현재 로그 파일(일반 파일, 심볼릭 링크·회전본 제외).
+wifi_log_current_files() {
+    local p f
+    for p in "$@"; do
+        while IFS= read -r f; do
+            case "$f" in *-$WIFI_LOG_DATE_GLOB|*-$WIFI_LOG_DATE_GLOB.gz) continue ;; esac
+            [ -f "$f" ] && [ ! -L "$f" ] && printf '%s\n' "$f"
+        done < <(compgen -G "$LOG_BASE/$p" || true)
+    done | awk '!seen[$0]++'
+}
+
+# $@ = 상대 패턴. stdout: 그 패턴의 dateext 회전본(<패턴>-YYYYMMDD, .gz 포함). 현재 파일이 없어도 찾는다.
+wifi_log_rotated_files() {
+    local p f
+    for p in "$@"; do
+        while IFS= read -r f; do
+            [ -f "$f" ] && [ ! -L "$f" ] && printf '%s\n' "$f"
+        done < <(compgen -G "$LOG_BASE/$p-$WIFI_LOG_DATE_GLOB" || true
+                 compgen -G "$LOG_BASE/$p-$WIFI_LOG_DATE_GLOB.gz" || true)
+    done | awk '!seen[$0]++'
+}
+
+# fd 9 에 journald 스냅샷 잠금 파일을 열어 두고 부른다. stdout: 지운 날짜별 스냅샷 수.
+# 스냅샷(journald_snapshot.sh)이 쓰는 중이면 10초까지 기다리고, 그래도 못 잡으면 1.
+wifi_log_remove_snapshots() {
+    local d n=0 rc=0
+    if ! flock -w 10 9; then
+        echo "Warning: journald snapshot lock busy — snapshots kept" >&2
+        return 1
+    fi
+    for d in "$LOG_BASE"/journald/$WIFI_LOG_DATE_GLOB; do
+        [ -d "$d" ] && [ ! -L "$d" ] || continue
+        if rm -rf -- "$d"; then n=$((n + 1)); else echo "Warning: remove failed: ${d#"$LOG_BASE"/}" >&2; rc=1; fi
+    done
+    echo "$n"
+    return "$rc"
+}
+
+# $1 = today|all|reset. 대상 로그의 현재 파일을 비우고, all·reset 은 회전본을, reset 은 journald
+# 날짜별 스냅샷(스냅샷과 같은 잠금 아래)과 err/ 파일도 지운다. 상태 파일(json/, base_mac,
+# .fake-hwclock.data, journald/.cursor*)은 건드리지 않는다. 순서: 비움 → 삭제 → rsyslog HUP.
+wifi_log_clear() {
+    local scope=$1 patterns f out rc=0 cleared=0 removed=0 snaps=0 errs=0 summary
+    local lock="${WIFI_JOURNALD_LOCK:-/run/journald_snapshot.lock}"
+    local -a pats=()
+    patterns=$(wifi_log_target_patterns) || return 1
+    mapfile -t pats <<< "$patterns"
+    while IFS= read -r f; do
+        if : > "$f"; then cleared=$((cleared + 1)); else echo "Warning: truncate failed: ${f#"$LOG_BASE"/}" >&2; rc=1; fi
+    done < <(wifi_log_current_files "${pats[@]}")
+    summary="Cleared $cleared log(s)"
+    if [ "$scope" != today ]; then
+        while IFS= read -r f; do
+            if rm -f -- "$f"; then removed=$((removed + 1)); else echo "Warning: remove failed: ${f#"$LOG_BASE"/}" >&2; rc=1; fi
+        done < <(wifi_log_rotated_files "${pats[@]}")
+        summary="$summary, removed $removed rotated file(s)"
+    fi
+    if [ "$scope" = reset ]; then
+        if [ -d "$LOG_BASE/journald" ]; then
+            if out=$(wifi_log_remove_snapshots 9>"$lock"); then snaps=$out; else snaps=${out:-0}; rc=1; fi
+        fi
+        for f in "$LOG_BASE"/err/*; do
+            [ -f "$f" ] && [ ! -L "$f" ] || continue
+            if rm -f -- "$f"; then errs=$((errs + 1)); else echo "Warning: remove failed: ${f#"$LOG_BASE"/}" >&2; rc=1; fi
+        done
+        summary="$summary, removed $snaps journald snapshot(s), $errs err file(s)"
+    fi
+    if systemctl kill -s HUP rsyslog 2>/dev/null; then
+        echo "$summary (rsyslog reopened, HUP)"
+    else
+        echo "$summary"
+        echo "Warning: rsyslog HUP failed — rsyslog-owned logs may need manual reopen" >&2
+    fi
+    return "$rc"
+}
+
+# stdout: wifi_log_extract.py 경로. 설치본이 없으면 스크립트 옆 사본(개발 트리).
+wifi_log_extract_script() {
+    local script="${WIFI_LOG_EXTRACT_SCRIPT:-/usr/local/scripts/wifi_log_extract.py}"
+    [ -f "$script" ] || script="$SCRIPT_DIR/wifi_log_extract.py"
+    if [ ! -f "$script" ]; then
+        echo "Error: wifi_log_extract.py not found" >&2
+        return 1
+    fi
+    printf '%s\n' "$script"
+}
+
+# 오늘(보드 로컬 날짜) 레코드만 현재 디렉터리의 cantops_log_today_<시각>.tar.gz 로 묶는다.
+# 대상 로그의 현재 파일·회전본과 오늘 journald 스냅샷을 넘기고, 어느 회전본을 읽을지는
+# wifi_log_extract.py 가 이름 날짜·mtime 으로 정한다.
+wifi_log_dump_today() {
+    local patterns script today stamp ymd f
+    local -a pats=() files=()
+    patterns=$(wifi_log_target_patterns) || return 1
+    mapfile -t pats <<< "$patterns"
+    script=$(wifi_log_extract_script) || return 1
+    read -r today stamp <<< "$(date '+%F %Y%m%d_%H%M%S')"
+    case "$today" in
+        [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
+        *) echo "Error: cannot read today's date" >&2; return 1 ;;
+    esac
+    ymd=${today//-/}
+    mapfile -t files < <(wifi_log_current_files "${pats[@]}"; wifi_log_rotated_files "${pats[@]}")
+    for f in "$LOG_BASE/journald/$ymd/journal.log" "$LOG_BASE/journald/$ymd/journal.log.gz"; do
+        [ -f "$f" ] && [ ! -L "$f" ] && files+=("$f")
+    done
+    python3 "$script" today-archive --base "$LOG_BASE" --date "$today" \
+        --archive "$(pwd)/cantops_log_today_${stamp}.tar.gz" -- "${files[@]}"
 }
 
 # === 입력 검증 헬퍼 ===
@@ -3324,7 +3476,7 @@ case "$1" in
     fi
     ;;
   log)
-    LOG_BASE=/var/log/cantops
+    LOG_BASE="${WIFI_LOG_BASE:-/var/log/cantops}"
     if [ "${2:-}" == "system" ]; then
         exec "$WIFI_LOGGER_CONTROL_SH" system "${3:-}"
     elif [ "$2" == "dump" ]; then
@@ -3332,6 +3484,11 @@ case "$1" in
             echo "Error: $LOG_BASE not found" >&2
             exit 1
         fi
+        case "${3:-all}" in
+            all) ;;
+            today) wifi_log_dump_today; exit $? ;;
+            *) echo "Error: invalid log dump scope '$3' (expected: all|today)" >&2; exit 1 ;;
+        esac
         if ! command -v tar >/dev/null 2>&1; then
             echo "Error: tar not installed" >&2
             exit 1
@@ -3350,49 +3507,18 @@ case "$1" in
             echo "Error: tar failed (rc=$rc)" >&2
             exit 1
         fi
+    elif [ "$2" == "clear" ]; then
+        # 대상 로그(#462) 비우기. today(기본)=현재 파일 truncate, all=회전본·압축본도 삭제.
+        # rsyslog 소유 로그는 truncate 뒤 HUP으로 재오픈해야 sparse hole 없이 비워진다.
+        case "${3:-today}" in
+            today|all) wifi_log_clear "${3:-today}"; exit $? ;;
+            *) echo "Error: invalid log clear scope '$3' (expected: today|all)" >&2; exit 1 ;;
+        esac
     elif [ "$2" == "reset" ]; then
-        # 전체 로그 초기화: 전역 + 모든 iface 로그 truncate. 파일 유지(inode 보존), 서비스 재시작 없음.
-        # rsyslog 소유(cpu/logger/kern/sys)는 HUP으로 재오픈해야 sparse hole 없이 비워짐.
-        # 대상 = cantops 로그 전체(logrotate.rsyslog 관리분 + rsyslog.conf omfile).
-        # 전역 ping.log는 wifi_ping local1 라우팅으로 실재하나 logrotate 미등록이라 별도 포함.
-        RESET_ALL=(
-            "$LOG_BASE/kern.log"
-            "$LOG_BASE/sys.log"
-            "$LOG_BASE/logger.log"
-            "$LOG_BASE/ui.log"
-            "$LOG_BASE/summary/summary.log"
-            "$LOG_BASE/cpu/cpu.log"
-            "$LOG_BASE/ping.log"
-        )
-        for _if in mlan0 mlan1; do
-            RESET_ALL+=(
-                "$LOG_BASE/scan/$_if/ap.log"
-                "$LOG_BASE/scan/$_if/freq.log"
-                "$LOG_BASE/stat/$_if/stat.log"
-                "$LOG_BASE/stat/$_if/snap.log"
-                "$LOG_BASE/wpa/$_if/wpa.log"
-                "$LOG_BASE/mgmt/$_if/mgmt.log"
-                "$LOG_BASE/mgmt/$_if/gmgmt.log"
-                "$LOG_BASE/ping/$_if/ping.log"
-            )
-        done
-        _rn=0; _rmiss=()
-        for _lf in "${RESET_ALL[@]}"; do
-            if [ -f "$_lf" ]; then
-                if : > "$_lf"; then _rn=$((_rn+1)); else echo "Warning: truncate failed: $_lf" >&2; fi
-            else
-                _rmiss+=("${_lf#"$LOG_BASE"/}")
-            fi
-        done
-        # rsyslog 소유 로그(cpu/logger/kern/sys/ui/wpa/mgmt/ping)를 재오픈시켜 truncate 반영
-        if systemctl kill -s HUP rsyslog 2>/dev/null; then
-            echo "Reset $_rn log(s) (rsyslog reopened, HUP)"
-        else
-            echo "Reset $_rn log(s)"
-            echo "Warning: rsyslog HUP failed — rsyslog-owned logs may need manual reopen" >&2
-        fi
-        [ ${#_rmiss[@]} -gt 0 ] && echo "Skipped ${#_rmiss[@]} missing: ${_rmiss[*]}"
-        exit 0
+        # 전체 로그 초기화(#462): clear all + journald 날짜별 스냅샷·err/ 삭제.
+        # 상태 파일(json/, base_mac, .fake-hwclock.data)과 journald 커서는 남긴다.
+        wifi_log_clear reset
+        exit $?
     else
         usage
     fi
