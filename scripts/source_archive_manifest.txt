@@ -255,6 +255,7 @@ dist/wlan/usr/local/logger/tests/test_iw_scan_roam.py
 dist/wlan/usr/local/logger/tests/test_last_scan_time_gate.py
 dist/wlan/usr/local/logger/tests/test_link_disconnected_mac.py
 dist/wlan/usr/local/logger/tests/test_link_fast_retry.py
+dist/wlan/usr/local/logger/tests/test_link_radio_log.py
 dist/wlan/usr/local/logger/tests/test_link_rx_mismatch.py
 dist/wlan/usr/local/logger/tests/test_link_stale_gate.py
 dist/wlan/usr/local/logger/tests/test_link_survey_in_use.py
@@ -366,6 +367,7 @@ dist/wlan/usr/local/scripts/tests/test_recovery_diagnostic_timeouts.py
 dist/wlan/usr/local/scripts/tests/test_reset_cause_ids.py
 dist/wlan/usr/local/scripts/tests/test_roam_owner_service_policy.py
 dist/wlan/usr/local/scripts/tests/test_root_password.py
+dist/wlan/usr/local/scripts/tests/test_rsyslog_radio_log.py
 dist/wlan/usr/local/scripts/tests/test_source_archive_manifest.py
 dist/wlan/usr/local/scripts/tests/test_unit_execstart_exec_bit.py
 dist/wlan/usr/local/scripts/tests/test_wifi_arping_link_state.py

@@ -11,6 +11,7 @@ import shutil
 import argparse
 from datetime import datetime
 import logging
+import logging.handlers
 from sUTILS import Logger, _EXTRA_
 from roam_policy import RoamPolicyError, decode_wpa_ssid_text
 
@@ -32,6 +33,14 @@ LINK_RETRY_DELAY = 0.05
 # 관측 전용 — mcs_tier 첫 assoc 리셋, rate_adapt 30/50 변화(2026-08-28, 미재현)처럼
 # FW 가 pre-association 설정값을 되돌리는 사건의 다음 발생을 포착하기 위한 계측.
 FWCFG_WATCH_SEC = 60
+# radio.log(syslog local4) 한 줄 주기(초, #459). 0=끔. 코드 폴백 — 템플릿
+# <iface>.logger.radio_log_interval_sec 와 fail-same.
+RADIO_LOG_INTERVAL_SEC = 5
+# 사용률 구간의 |Δactive − Δmono| 허용치(ms) — opcd OPCD_FAULT_NET_CLOCK_SLACK_MS(#192)와 같다.
+RADIO_CU_CLOCK_SLACK_MS = 500
+# __main__ 이 채운다. eth0·주기 0·syslog 소켓 실패면 None 으로 남아 radio.log 를 쓰지 않는다.
+RADIO = None
+RADIO_EMIT = None
 
 
 def build_arg_parser():
@@ -57,6 +66,9 @@ def build_arg_parser():
     parser.add_argument("--fwcfg-watch", type=float, default=FWCFG_WATCH_SEC,
                         help=f"FW custom-setting change-watch period in seconds, 0=off "
                              f"(default: {FWCFG_WATCH_SEC})")
+    parser.add_argument("--radio-log-interval", type=int, default=RADIO_LOG_INTERVAL_SEC,
+                        help=f"radio.log (syslog local4) line period in seconds, 0=off "
+                             f"(default: {RADIO_LOG_INTERVAL_SEC})")
     return parser
 
 def handle_sigterm(signum, frame):
@@ -305,6 +317,156 @@ def survey_in_use_record(output, mono_ms):
     if record:
         record["mono_ms"] = mono_ms
     return record
+
+
+def radio_log_interval_from_conf(conf, iface, default=None):
+    """<iface>.logger.radio_log_interval_sec → logger.radio_log_interval_sec → 기본값.
+    정수 0 이상만 인정한다(0=끔, bool·실수·문자열 제외) — 그 밖의 값이면 None."""
+    if default is None:
+        default = RADIO_LOG_INTERVAL_SEC
+    value = conf.get(iface, {}).get("logger", {}).get(
+        "radio_log_interval_sec",
+        conf.get("logger", {}).get("radio_log_interval_sec", default))
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _make_radio_emitter(address="/dev/log"):
+    """radio.log 줄을 syslog local4 로 보내는 함수(rsyslog.conf 의 local4.* 선택자).
+    태그 RADIO 는 wifi_ 로 시작하면 안 된다 — rsyslog.conf 의 ^wifi_ 규칙이 logger.log 로
+    보내고 멈춰 local4 선택자에 닿지 않는다. 소켓을 열지 못하면 OSError."""
+    handler = logging.handlers.SysLogHandler(
+        address=address, facility=logging.handlers.SysLogHandler.LOG_LOCAL4)
+    handler.setFormatter(logging.Formatter("RADIO %(message)s"))
+    radio = logging.getLogger("wifi_logger_link.radio")
+    radio.handlers[:] = [handler]
+    radio.propagate = False
+    radio.setLevel(logging.INFO)
+    return radio.info
+
+
+def _connected_seconds(link):
+    """station dump 의 `connected time: N seconds`(parse_station_dump 의 connected_time)."""
+    match = re.match(r"\s*(\d+)\s+seconds", str(link.get("connected_time", "")))
+    return int(match.group(1)) if match else None
+
+
+class RadioLog:
+    """radio.log(syslog local4) 한 줄을 만든다(#459). 링크 로거가 매 주기 sample() 을 부른다.
+
+    줄: `<iface> bssid=<bssid> ch=<ch> bw=<MHz> bcn=+N miss=+N cu=N%`. bcn·miss 는 직전 줄 이후
+    beaconReceivedCount·beaconMissedCount 증가분, cu 는 운용 채널 survey 의 Δbusy/Δactive 다.
+    재연결·로밍(bssid·채널 변경, connected time 감소, survey 누적값 감소 — moal 은 연결마다
+    0 부터 센다)이 구간에 끼면 세 값 모두, 카운터 하나가 줄면 그 값만 '-'로 쓰고 다음 줄은
+    새 기준에서 센다. cu 는 opcd(#192)와 같은 규칙으로만 낸다: busy·active·단조 시각이 모두
+    늘고 |Δactive − Δmono| ≤ RADIO_CU_CLOCK_SLACK_MS 일 때만, busy 가 active 이상이면 100%.
+    연결이 끊긴 동안은 reset() 으로 기준을 버리고 줄을 쓰지 않는다.
+    """
+
+    def __init__(self, iface, interval_sec):
+        self.iface = iface
+        self.interval = interval_sec
+        self.reset()
+
+    def reset(self):
+        self._base = None   # 직전 줄(또는 연결 뒤 첫 표본)
+        self._prev = None   # 바로 앞 표본 — 재연결·감소는 연속 표본 사이에서 본다
+        self._due = None
+        self._tainted = set()
+
+    def sample(self, now, link, info, mwlan_log, survey):
+        """주기가 찼으면 줄(str), 아니면 None."""
+        if self.interval <= 0:
+            return None
+        cur = self._read(link, info, mwlan_log, survey)
+        if self._base is None:
+            self._base = self._prev = cur
+            self._due = now + self.interval
+            return None
+        self._taint(self._prev, cur)
+        self._prev = cur
+        if now < self._due:
+            return None
+        text = self._format(self._base, cur)
+        self._base = cur
+        self._tainted = set()
+        self._due += self.interval
+        if self._due <= now:
+            self._due = now + self.interval
+        return text
+
+    @staticmethod
+    def _read(link, info, mwlan_log, survey):
+        survey = survey or {}
+        return {
+            "bssid": link.get("address"),
+            "channel": info.get("channel"),
+            "freq": survey.get("freq", info.get("freq")),
+            "width": info.get("width"),
+            "conn": _connected_seconds(link),
+            "bcn": _counter(mwlan_log or {}, "beaconReceivedCount"),
+            "miss": _counter(mwlan_log or {}, "beaconMissedCount"),
+            "busy": survey.get("busy_time_ms"),
+            "active": survey.get("active_time_ms"),
+            "mono": survey.get("mono_ms"),
+        }
+
+    def _taint(self, prev, cur):
+        def known(key):
+            return prev[key] is not None and cur[key] is not None
+
+        if (any(known(k) and prev[k] != cur[k] for k in ("bssid", "channel", "freq"))
+                or any(known(k) and cur[k] < prev[k] for k in ("conn", "busy", "active"))):
+            self._tainted |= {"bcn", "miss", "cu"}
+        for key in ("bcn", "miss"):
+            if known(key) and cur[key] < prev[key]:
+                self._tainted.add(key)
+
+    def _format(self, base, cur):
+        def inc(key):
+            if (key in self._tainted or base[key] is None or cur[key] is None
+                    or cur[key] < base[key]):
+                return "-"
+            return f"+{cur[key] - base[key]}"
+
+        width = re.match(r"\d+", str(cur["width"] or ""))
+        channel = cur["channel"] if cur["channel"] is not None else "-"
+        return (f"{self.iface} bssid={cur['bssid'] or '-'} ch={channel} "
+                f"bw={width.group(0) if width else '-'} "
+                f"bcn={inc('bcn')} miss={inc('miss')} cu={self._cu(base, cur)}")
+
+    def _cu(self, base, cur):
+        if "cu" in self._tainted or any(
+                base[k] is None or cur[k] is None for k in ("busy", "active", "mono")):
+            return "-"
+        d_busy = cur["busy"] - base["busy"]
+        d_active = cur["active"] - base["active"]
+        d_mono = cur["mono"] - base["mono"]
+        if (d_busy < 0 or d_active <= 0 or d_mono <= 0
+                or abs(d_active - d_mono) > RADIO_CU_CLOCK_SLACK_MS):
+            return "-"
+        return "100%" if d_busy >= d_active else f"{d_busy * 100 // d_active}%"
+
+
+def _radio_reset():
+    if RADIO is not None:
+        RADIO.reset()
+
+
+def _radio_tick(now, link, info, mwlan_log, survey):
+    """radio.log 한 주기. 관측 전용 — 어떤 예외도 메인 루프(link.json 생산)로 내보내지 않고,
+    예외가 나면 1회 기록하고 radio.log 를 끈다."""
+    global RADIO
+    if RADIO is None:
+        return
+    try:
+        line = RADIO.sample(now, link, info, mwlan_log, survey)
+        if line and RADIO_EMIT is not None:
+            RADIO_EMIT(line)
+    except Exception as e:
+        RADIO = None
+        logger.message("warning", f"[{IFACE}] radio log off after error: {e}", _EXTRA_())
 
 def get_ip_info(iface):
     info = {
@@ -839,6 +1001,7 @@ def main():
         # roam tick(1s) 을 넘어 매 tick 신선한 link.json 보장이 깨진다(#162 리뷰).
         cycle_start = time.monotonic()
         if not os.path.exists(f"/sys/class/net/{IFACE}"):
+            _radio_reset()
             logger.message("info", f"[{IFACE}] waiting for interface...", _EXTRA_())
             time.sleep(1)
             continue
@@ -864,6 +1027,7 @@ def main():
         if not is_wpa_running(IFACE):
             # wpa 미실행 → supplicant 무효. link.json 은 미연결 형식(link 섹션 없음).
             write_supplicant_json(LOG_DIR, {"wpa_state": "", "temp_disabled": False})
+            _radio_reset()
             _write_disconnected_link()
             time.sleep(1)
             continue
@@ -883,6 +1047,7 @@ def main():
             # 않도록 빠르게 재시도. 윈도우 안에서 회복되면 정상 처리로 진행한다.
             link_out = fast_retry_station_dump(LINK_RETRY_COUNT, LINK_RETRY_DELAY)
         if not link_out:
+            _radio_reset()
             _write_disconnected_link()
             time.sleep(1)
             continue
@@ -919,6 +1084,7 @@ def main():
         survey_in_use = survey_in_use_record(channel_out, survey_mono_ms)
         if survey_in_use:
             data["survey_in_use"] = survey_in_use
+        _radio_tick(cycle_start, link_data, info_data, mwlan_log, survey_in_use)
 
         save_db(data, LOG_DIR)
         time.sleep(max(0.0, LOOP_INTERVAL - (time.monotonic() - cycle_start)))
@@ -961,6 +1127,7 @@ if __name__ == "__main__":
     _retry_delay = args.link_retry_delay
     _ra_watch = args.fwcfg_watch
     _rx_enabled = RX_MISMATCH_ENABLED
+    _radio_interval = args.radio_log_interval
     try:
         with open("/usr/local/etc/wifi_init_conf.json") as _f:
             _conf = json.load(_f)
@@ -973,6 +1140,7 @@ if __name__ == "__main__":
         _g_ra = _conf.get("logger", {}).get("fwcfg_watch_sec", _ra_watch)
         _ra_watch = _conf.get(IFACE, {}).get("logger", {}).get("fwcfg_watch_sec", _g_ra)
         _rx_enabled = rx_mismatch_enabled_from_conf(_conf, IFACE)
+        _radio_interval = radio_log_interval_from_conf(_conf, IFACE, args.radio_log_interval)
     except (OSError, json.JSONDecodeError) as e:
         print(f"WARN: [{IFACE}] config load failed, using defaults: {e}", file=sys.stderr)
 
@@ -998,6 +1166,11 @@ if __name__ == "__main__":
               f"({RX_MISMATCH_ENABLED})", file=sys.stderr)
         _rx_enabled = RX_MISMATCH_ENABLED
     _rx_mismatch_disabled = not _rx_enabled
+    if _radio_interval is None or _radio_interval < 0:
+        print(f"WARN: [{IFACE}] invalid radio_log_interval_sec, using default "
+              f"({RADIO_LOG_INTERVAL_SEC})", file=sys.stderr)
+        _radio_interval = RADIO_LOG_INTERVAL_SEC
+    RADIO_LOG_INTERVAL_SEC = _radio_interval
 
     LOG_DIR = f"/var/log/cantops/json/{IFACE}"
     logger.message("info",
@@ -1006,6 +1179,7 @@ if __name__ == "__main__":
         f"link_retry: {LINK_RETRY_COUNT}x{LINK_RETRY_DELAY}s, "
         f"fwcfg_watch: {FWCFG_WATCH_SEC}s, "
         f"rx_mismatch: {'on' if _rx_enabled else 'off'}, "
+        f"radio_log: {RADIO_LOG_INTERVAL_SEC}s, "
         f"log: {LOG_DIR}/link.json", _EXTRA_())
 
     if IFACE == "mlan0":
@@ -1028,5 +1202,13 @@ if __name__ == "__main__":
 
     if not os.path.exists(LOG_DIR):
         os.makedirs(LOG_DIR, exist_ok=True)
+
+    if IFACE != "eth0" and RADIO_LOG_INTERVAL_SEC > 0:
+        try:
+            RADIO_EMIT = _make_radio_emitter()
+            RADIO = RadioLog(IFACE, RADIO_LOG_INTERVAL_SEC)
+        except OSError as e:
+            logger.message("warning",
+                f"[{IFACE}] radio.log syslog unavailable, radio log off: {e}", _EXTRA_())
 
     main()
