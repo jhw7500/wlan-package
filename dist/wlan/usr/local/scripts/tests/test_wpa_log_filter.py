@@ -3,8 +3,9 @@
 운영 `rsyslog.conf`의 wpa_supplicant 블록 두 개와 `$template myformat` 줄을 그대로
 잘라 실제 rsyslogd에 먹이고, 출하 wpa_supplicant(imx8·imx93) 문자열로 만든 줄을
 imuxsock 소켓으로 보낸다. 생긴 `wpa.log`는 `profile.d/00-cantops.sh`의 실제 rlog
-별칭(bash)으로 읽는다. rsyslogd가 없거나 이 환경에서 소켓을 열지 못하면 사유를 남기고
-건너뛴다. `rlogf` 시험은 rsyslogd 없이 돈다.
+별칭(bash)으로 읽는다. rsyslogd는 선택 의존이 아니다: 없거나 시험 소켓을 열지 못하면
+건너뛰지 않고 실패한다(Source Gate는 설치 단계에서 rsyslog를 설치한다). `rlogf` 시험은
+rsyslogd 없이 돈다.
 """
 
 from __future__ import annotations
@@ -125,15 +126,20 @@ def _has(lines: list[str], message: str) -> bool:
 def filtered():
     rsyslogd = _rsyslogd()
     if rsyslogd is None:
-        pytest.skip("rsyslogd가 없어 실제 필터 실행 시험을 건너뛴다")
+        pytest.fail("rsyslogd가 없다 — 이 시험은 실제 rsyslogd로 필터를 확인한다(rsyslog 설치 필요)")
     # Unix 소켓 경로는 108바이트 제한이 있어 TMPDIR이 길어도 짧은 /tmp 아래에 둔다.
     work = Path(tempfile.mkdtemp(prefix="rsy", dir="/tmp"))
     proc = None
     try:
+        # Ubuntu 24.04 rsyslog의 AppArmor 프로파일은 /usr/sbin/rsyslogd 경로에 붙어 설정 읽기를
+        # /etc/rsyslog.conf·/etc/rsyslog.d로 제한한다(/tmp 하네스 설정은 Permission denied).
+        # 프로파일은 실행 경로로 붙으므로 같은 바이너리의 사본을 실행한다. 권한은 일반 사용자 그대로다.
+        binary = work / "rsyslogd"
+        shutil.copy2(rsyslogd, binary)
         conf = work / "harness.conf"
         conf.write_text(_harness_conf(work), encoding="utf-8")
         check = subprocess.run(
-            [rsyslogd, "-N1", "-f", str(conf)],
+            [str(binary), "-N1", "-f", str(conf)],
             capture_output=True,
             text=True,
             timeout=30,
@@ -141,14 +147,14 @@ def filtered():
         assert check.returncode == 0, check.stdout + check.stderr
         with open(work / "rsyslogd.out", "wb") as out:
             proc = subprocess.Popen(
-                [rsyslogd, "-n", "-f", str(conf), "-i", str(work / "rsyslogd.pid")],
+                [str(binary), "-n", "-f", str(conf), "-i", str(work / "rsyslogd.pid")],
                 stdout=out,
                 stderr=subprocess.STDOUT,
             )
         sock = work / "log.sock"
         _wait(lambda: sock.is_socket() or proc.poll() is not None, 10)
         if not sock.is_socket():
-            pytest.skip(
+            pytest.fail(
                 "rsyslogd가 시험 소켓을 열지 못했다: "
                 + (work / "rsyslogd.out").read_text(errors="replace")
             )
