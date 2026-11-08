@@ -42,6 +42,8 @@ class Frame:
     icmp_seq: str = ""
     bssid: str = ""
     icmp_ident: str = ""
+    status_code: str = ""   # (재)연결 응답 상태 코드(10진, 없으면 "")
+    eapol_msgnr: str = ""   # EAPOL-Key 4-way 메시지 번호 "1"~"4"(없으면 "")
 
     @property
     def subtype_name(self) -> str:

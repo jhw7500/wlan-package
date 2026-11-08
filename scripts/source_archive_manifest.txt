@@ -467,6 +467,7 @@ dist/wlan/usr/local/scripts/wpa_supplicant.sh
 dist/wlan/usr/local/scripts/write_mac.sh
 dist/wlan/usr/local/tools/pcap-analyzer/USAGE.md
 dist/wlan/usr/local/tools/pcap-analyzer/analyzers/__init__.py
+dist/wlan/usr/local/tools/pcap-analyzer/analyzers/assoc_4way.py
 dist/wlan/usr/local/tools/pcap-analyzer/analyzers/compare_ap.py
 dist/wlan/usr/local/tools/pcap-analyzer/analyzers/control_traffic.py
 dist/wlan/usr/local/tools/pcap-analyzer/analyzers/diagnosis.py
@@ -488,6 +489,7 @@ dist/wlan/usr/local/tools/pcap-analyzer/network.json.example
 dist/wlan/usr/local/tools/pcap-analyzer/pcap_analyzer.py
 dist/wlan/usr/local/tools/pcap-analyzer/reporter.py
 dist/wlan/usr/local/tools/pcap-analyzer/tests/__init__.py
+dist/wlan/usr/local/tools/pcap-analyzer/tests/test_assoc_4way.py
 dist/wlan/usr/local/tools/pcap-analyzer/tests/test_extractor.py
 dist/wlan/usr/local/tools/pcap-analyzer/tests/test_integration.py
 dist/wlan/usr/local/tools/pcap-analyzer/tests/test_models.py

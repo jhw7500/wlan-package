@@ -191,7 +191,7 @@ python3 pcap_analyzer.py capture.pcap --ssid ... --pass ... --compare-ap
 python3 pcap_analyzer.py capture.pcap --ssid ... --pass ... --brief
 ```
 
-요약 섹션에는 전체 12개 모듈의 summary가 모두 표시되지만, 상세 내용은 진단 관련 섹션만 포함된다.
+요약 섹션에는 전체 13개 모듈의 summary가 모두 표시되지만, 상세 내용은 진단 관련 섹션만 포함된다.
 
 ### 외부 로그 병합
 
@@ -227,7 +227,7 @@ python3 pcap_analyzer.py capture.pcap -o /tmp/result.txt
 
 ---
 
-## 분석 리포트 구성 (12개 섹션)
+## 분석 리포트 구성 (13개 섹션)
 
 | # | 섹션 | 내용 | 항상 실행 |
 |---|------|------|-----------|
@@ -243,7 +243,30 @@ python3 pcap_analyzer.py capture.pcap -o /tmp/result.txt
 | 10 | Ping Loss | 응답 없는 Request + 원인 역추적 | O |
 | 11 | 종합 진단 | STA별 WARNING/INFO + 현장 제안 | O |
 | 12 | AP 비교 | AP 간 성능 비교 + BSSID 기반 프레임 분포/불균형 분석 | `--compare-ap` |
+| 13 | 연결·4-way 판정 | (재)연결 응답별 AP 재전송, STA ACK, M1~M4 도착, 판정 | O |
 | - | 외부 로그 | 로밍 키워드 필터 타임라인 | `--with-log` |
+
+### 13. 연결·4-way 판정
+
+AP가 보낸 (재)연결 응답마다 4-way 핸드셰이크가 어디서 멈췄는지 한 줄로 보여 준다(#460). STA와 AP 양쪽 프레임이 함께 담긴 모니터 캡처(예: `wifi-capture.sh`)가 대상이다.
+
+- **시도**: 같은 AP→STA 응답 복사본을 하나로 묶는다. Retry=0인 응답, seq가 바뀐 응답, 앞 복사본과 0.5초 넘게 떨어진 응답은 새 시도다(모든 응답을 같은 seq로 보내는 AP도 있다).
+- **Retx**: 시도 안의 Retry=1 복사본 수(AP 재전송 횟수).
+- **ACK**: 복사본 바로 다음 번호의 프레임이 AP를 받는 ACK인 수 / 확인한 수. 다음 번호 프레임이 캡처에 없으면 판정 불가(`?`)로 따로 센다. ACK에는 수신 주소만 있으므로 `--mac`/`--sta` 필터를 쓰면 ACK가 빠져 판정 불가가 된다.
+- **M1~M4**: 첫 응답 복사본 뒤 각 메시지가 처음 보인 시각(ms). 같은 STA의 다음 시도 또는 10초 전까지 본다. 방향(M1·M3는 AP→STA, M2·M4는 STA→AP)이 맞는 것만 센다.
+- **판정**: 관측된 가장 높은 메시지로 정한다.
+
+| 판정 | 뜻 |
+|------|----|
+| `OK` | M4까지 보임 |
+| `AP_NO_M1` | 응답 뒤 M1이 안 보임 — AP가 4-way를 시작하지 않음 |
+| `STA_NO_M2` | M1 뒤 M2가 안 보임 |
+| `AP_NO_M3` | M2 뒤 M3가 안 보임 |
+| `STA_NO_M4` | M3 뒤 M4가 안 보임 |
+| `ASSOC_REJECTED` | 응답 상태 코드가 0이 아님 |
+| `CAPTURE_END` | 캡처가 10초 창 안에서 끝나 판정을 미룸 |
+
+판정은 "캡처에서 보이지 않음"을 뜻한다. 모니터가 놓친 프레임도 없는 것으로 보이므로, 더 높은 메시지가 보이면 그 아래 빠진 메시지는 받았음이 확실한 것으로 보고 `(캡처 누락 M2)`처럼 따로 적는다. WPA2-PSK 연결 기준이라 개방 망에서는 모든 시도가 `AP_NO_M1`로 나온다. 간결 모드(`--brief`)에는 요약 한 줄(판정별 건수, 응답 재전송 평균)만 나온다. tshark 필드 `wlan.fixed.status_code`, `wlan_rsna_eapol.keydes.msgnr`를 쓴다(보드 tshark 4.0.10에 있음).
 
 ---
 

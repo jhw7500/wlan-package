@@ -55,8 +55,10 @@ jobs:
           # 통째로 사라지므로 스킵이 아니라 실패하도록 돼 있고, 그래서 여기서 설치한다.
           # rsyslog 도 같다 — test_wpa_log_filter.py 가 wpa.log 필터를 실제 rsyslogd 에
           # 먹여 검증한다(#459). 러너 이미지에 우연히 있는 패키지에 기대지 않는다.
+          # tshark 도 같다 — pcap-analyzer test_assoc_4way.py 가 시험 중에 만든 합성 pcap 을
+          # 실제 tshark 로 돌려 필드 추출부터 판정까지 확인한다(#460).
           # Compile the native FTP start logger in the handler contract tests.
-          sudo apt-get install -y build-essential jq wpasupplicant rsyslog
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential jq wpasupplicant rsyslog tshark
           python3 -m pip install --upgrade pytest jsonschema
 
       # 도구 부재를 조용한 성공으로 넘기지 않는다. build-test 의 실패 은폐가
@@ -69,6 +71,8 @@ jobs:
           command -v cc
           command -v wpa_supplicant
           wpa_supplicant -v | head -1
+          command -v tshark
+          tshark -v | head -1
           python3 -c 'import pytest, jsonschema; print("pytest", pytest.__version__)'
           git rev-parse --is-inside-work-tree
 

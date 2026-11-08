@@ -31,6 +31,7 @@ from reporter import format_report
 from analyzers import overview, retry_mcs, retry_burst, roaming, ping_rtt
 from analyzers import control_traffic, signal_quality, per_second
 from analyzers import roaming_impact, ping_loss, diagnosis, compare_ap
+from analyzers import assoc_4way
 from log_merger import merge_logs
 
 
@@ -141,6 +142,7 @@ def main():
 
     if args.compare_ap:
         analyzer_list.append(("AP 비교", compare_ap))
+    analyzer_list.append(("연결·4-way", assoc_4way))
 
     sections = []
     for name, mod in analyzer_list:

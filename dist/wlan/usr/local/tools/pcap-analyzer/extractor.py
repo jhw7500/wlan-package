@@ -37,6 +37,9 @@ TSHARK_FIELDS = [
     "wlan.seq",
     "icmp.ident",
     "icmp.seq",
+    # 연결·4-way 판정(#460). 위치로 파싱하므로 새 필드는 항상 끝에 붙인다.
+    "wlan.fixed.status_code",
+    "wlan_rsna_eapol.keydes.msgnr",
 ]
 
 
@@ -130,6 +133,9 @@ def parse_tsv_line(line: str) -> Optional[FrameType]:
             seq=cols[18] if len(cols) > 18 else "",
             icmp_ident=cols[19] if len(cols) > 19 else "",
             icmp_seq=cols[20] if len(cols) > 20 else "",
+            # 상태 코드는 "0x0000" 꼴 → 10진 문자열(첫 값)
+            status_code=_normalize_subtype(cols[21]),
+            eapol_msgnr=cols[22].split(",")[0].strip(),
         )
     except (ValueError, IndexError):
         return None
