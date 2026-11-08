@@ -262,6 +262,25 @@ Potentially blocking stat/snapshot/CPU/MMC/MCP operations time out after 5
 seconds; each WLAN temperature query times out after 3 seconds and is recorded
 as `unknown` rather than `0`.
 
+### Log Dump and Cleanup
+
+```bash
+wifi log dump [all|today]    # all (default): whole /var/log/cantops; today: only today's records
+wifi log clear [today|all]   # today (default): empty the target logs; all: also delete rotated copies
+wifi log reset               # clear all + delete dated journald snapshots and err/ files
+```
+
+The target logs are the `/var/log/cantops/` entries of
+`/etc/logrotate.d/logrotate.rsyslog` (globs included, so per-AP MAC logs are
+covered) plus the global `ping.log`. Registering a new log in that file is
+enough to make it a target. `dump today` keeps the records whose leading date is
+today's local date, from the current files, the rotated copies named today or
+still written today, and today's journald snapshot, with paths relative to
+`/var/log/cantops`. `clear` truncates and then reopens rsyslog (HUP). `reset`
+keeps state files (`json/`, `base_mac`, `.fake-hwclock.data`, `backup/`) and the
+journald cursor, so the next snapshot continues where it left off.
+`logctl clean` runs `wifi log clear today`.
+
 ## Configuration
 
 ### Bridge Configuration

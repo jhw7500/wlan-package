@@ -7,7 +7,7 @@ case "${1:-}" in
         exec "$WIFI_SH" log system "$1"
         ;;
     clean)
-        exec "$WIFI_SH" log reset
+        exec "$WIFI_SH" log clear today
         ;;
     *)
         echo "Usage: $0 {start|stop|restart|status|enable|disable|clean}" >&2
