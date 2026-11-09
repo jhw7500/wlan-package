@@ -13,6 +13,11 @@ import pytest
 HANDLERS = Path(__file__).resolve().parents[4] / "opt/ftpcmd/bin"
 NTP_UNIT = "systemd-timesyncd.service"
 SNMP_UNIT = "snmpd.service"
+LAN_UNIT = "wifi_lan_apply.service"
+UNIT_FILE = Path(__file__).resolve().parents[4] / "etc/systemd/system" / LAN_UNIT
+ETH0_TEXT = ("[Match]\nName=eth0\n\n[Network]\nDHCP=no\n# management address, factory-reset recovery path\n"
+             "Address=192.0.2.1/24\n#KeepConfiguration=static\nLinkLocalAddressing=no\nIPv6AcceptRA=no\n")
+MLAN0_TEXT = "[Match]\nName=mlan0\n\n[Network]\nDHCP=no\nAddress=198.51.100.100/24\nLinkLocalAddressing=no\n"
 
 
 def load_handler(name):
@@ -32,11 +37,20 @@ class System:
         self.apply_rc = 0
         self.queue_rc = 0
         self.enabled = {NTP_UNIT: True, SNMP_UNIT: False}
+        # Live IPv4 per existing link, as `ip -4 -o addr show dev X` lists it.
+        self.addresses = {"mlan0": [], "mlan1": []}
 
     def run(self, argv, **kwargs):
         argv = list(argv)
         self.calls.append((argv, kwargs))
         assert 0 < kwargs["timeout"] < 30
+        if Path(argv[0]).name == "ip":
+            iface = argv[-1]
+            if iface not in self.addresses:
+                return subprocess.CompletedProcess(argv, 1, "", f'Device "{iface}" does not exist.\n')
+            out = "".join(f"5: {iface}    inet {cidr} brd 0.0.0.0 scope global {iface}\\"
+                          "       valid_lft forever preferred_lft forever\n" for cidr in self.addresses[iface])
+            return subprocess.CompletedProcess(argv, 0, out, "")
         if argv[0].endswith("wifi_apply_enabled.sh"):
             if self.apply_rc == 0:
                 data = json.loads(self.json_path.read_text())
@@ -69,13 +83,20 @@ def env(tmp_path, monkeypatch):
         "# vendor header\n[Time]\nNTP=192.168.0.3\n"
         "FallbackNTP=time1.google.com time2.google.com\nPollIntervalMinSec=32\n"
     )
+    eth0 = tmp_path / "22-eth0.network"
+    eth0.write_text(ETH0_TEXT)
+    mlan0 = tmp_path / "20-mlan0.network"
+    mlan0.write_text(MLAN0_TEXT)
     system = System(conf)
     monkeypatch.setattr(subprocess, "run", system.run)
     monkeypatch.setattr(module, "HOME", home)
     monkeypatch.setattr(module, "JSON_PATH", conf)
     monkeypatch.setattr(module, "TIMESYNCD_CONF", timesyncd)
+    monkeypatch.setattr(module, "ETH0_NETWORK", eth0, raising=False)
+    monkeypatch.setattr(module, "MLAN0_NETWORK", mlan0, raising=False)
     monkeypatch.setattr(module.syslog, "syslog", lambda *args: None)
-    return types.SimpleNamespace(module=module, home=home, conf=conf, timesyncd=timesyncd, system=system)
+    return types.SimpleNamespace(module=module, home=home, conf=conf, timesyncd=timesyncd, eth0=eth0,
+                                 mlan0=mlan0, system=system)
 
 
 def write_settings(env, text):
@@ -158,17 +179,20 @@ def test_get_then_apply_is_unchanged_but_still_resyncs_services(env, capsys):
     assert env.module.main(["get"]) == 0
     capsys.readouterr()
     written = (env.home / "wconfig.txt").read_text().splitlines()
-    for expected in ("NTP_FUNC=enabled", "NTP_SERVER=192.168.0.3", "SNMP_FUNC=disabled", "SNMP_TRAP_IPADDR=0.0.0.0"):
+    for expected in ("NTP_FUNC=enabled", "NTP_SERVER=192.168.0.3", "SNMP_FUNC=disabled", "SNMP_TRAP_IPADDR=0.0.0.0",
+                     "LAN_MODE=static", "LAN_IPADDR=192.0.2.1", "LAN_NETMASK=255.255.255.0", "LAN_GATEWAY=0.0.0.0"):
         assert expected in written
-    conf_before, ntp_before = env.conf.read_bytes(), env.timesyncd.read_bytes()
+    conf_before, ntp_before, eth0_before = env.conf.read_bytes(), env.timesyncd.read_bytes(), env.eth0.read_bytes()
 
     assert env.module.main(["apply"]) == 0
 
     assert env.conf.read_bytes() == conf_before
     assert env.timesyncd.read_bytes() == ntp_before
-    assert one_line(capsys).startswith("SUCCESS applied=0 unchanged=4 ")
+    assert env.eth0.read_bytes() == eth0_before
+    assert one_line(capsys).startswith("SUCCESS applied=0 unchanged=8 ")
     # A retry after a failed service step must still bring services in line, and
     # timesyncd only reads its servers when it starts, so a listed server restarts it.
+    # Unchanged LAN values hand nothing to the LAN unit: eth0 is not reconfigured.
     assert len(env.system.apply_calls()) == 1
     assert sorted(env.system.queued()) == [("restart", NTP_UNIT), ("stop", SNMP_UNIT)]
 
@@ -368,3 +392,263 @@ def test_missing_settings_file_is_an_io_error(env):
 
 def test_handler_is_executable():
     assert os.access(HANDLERS / "wconfig", os.X_OK)
+
+
+# --- wired LAN (eth0) ---------------------------------------------------------------
+
+def network_lines(env, key):
+    return [line for line in env.eth0.read_text().splitlines() if line.partition("=")[0].strip() == key]
+
+
+def result_line(env, key):
+    [line] = [line for line in result_lines(env) if line.split(" ", 1)[0] == key]
+    return line
+
+
+def test_get_reports_the_lan_values_of_the_eth0_network_file(env, capsys):
+    assert env.module.main(["get"]) == 0
+    assert one_line(capsys) == "SUCCESS wrote 8 keys to wconfig.txt"
+    written = (env.home / "wconfig.txt").read_text().splitlines()
+    for expected in ("LAN_MODE=static", "LAN_IPADDR=192.0.2.1", "LAN_NETMASK=255.255.255.0", "LAN_GATEWAY=0.0.0.0"):
+        assert expected in written
+
+    env.eth0.write_text(ETH0_TEXT.replace("DHCP=no\n", "DHCP=ipv4\n")
+                        .replace("Address=192.0.2.1/24\n", "Address=192.0.2.1/24\nGateway=192.0.2.254\n"))
+    assert env.module.main(["get", "LAN_MODE"]) == 0
+    assert capsys.readouterr().out == "LAN_MODE=ipv4\n"
+    assert env.module.main(["get", "LAN_GATEWAY"]) == 0
+    assert capsys.readouterr().out == "LAN_GATEWAY=192.0.2.254\n"
+
+
+def test_reapplying_get_output_is_not_blocked_by_a_clash_that_already_exists(env):
+    # A wireless address can appear next to eth0's subnet at any time (a DHCP lease, a
+    # reconnect).  Values that do not change are never re-validated, so the rest applies.
+    env.system.addresses["mlan0"] = ["192.0.2.77/24"]
+    write_settings(env, "NTP_SERVER=203.0.113.5\nLAN_MODE=static\nLAN_IPADDR=192.0.2.1\n"
+                        "LAN_NETMASK=255.255.255.0\nLAN_GATEWAY=0.0.0.0\n")
+    eth0_before = env.eth0.read_bytes()
+
+    assert env.module.main(["apply"]) == 0
+
+    assert "NTP_SERVER applied" in result_lines(env)
+    for key in ("LAN_MODE", "LAN_IPADDR", "LAN_NETMASK", "LAN_GATEWAY"):
+        assert result_line(env, key) == f"{key} unchanged"
+    assert env.eth0.read_bytes() == eth0_before
+    assert ("restart", LAN_UNIT) not in env.system.queued()
+
+
+def test_get_output_of_a_dhcp_eth0_applies_as_unchanged(env, capsys):
+    # The LAN rules run only for values that change, so reading back an eth0 that
+    # this command could not have written still applies.
+    env.eth0.write_text(ETH0_TEXT.replace("DHCP=no\n", "DHCP=ipv4\n"))
+    assert env.module.main(["get"]) == 0
+    capsys.readouterr()
+    eth0_before = env.eth0.read_bytes()
+
+    assert env.module.main(["apply"]) == 0
+
+    assert env.eth0.read_bytes() == eth0_before
+    assert result_line(env, "LAN_MODE") == "LAN_MODE unchanged"
+
+
+def test_the_lan_unit_is_queued_after_every_other_service_action(env):
+    # The unit's wait starts once it is queued, so nothing slow may follow it.
+    write_settings(env, "NTP_FUNC=enabled\nNTP_SERVER=203.0.113.5\nSNMP_FUNC=enabled\nLAN_IPADDR=192.0.2.50\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    assert len(env.system.apply_calls()) == 1
+    assert env.system.calls[-1][0][-2:] == ["restart", LAN_UNIT]
+
+
+def test_a_changed_lan_address_is_saved_and_handed_to_the_lan_unit(env, capsys):
+    write_settings(env, "LAN_IPADDR=192.0.2.50\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    text = env.eth0.read_text()
+    assert network_lines(env, "Address") == ["Address=192.0.2.50/24"]
+    assert network_lines(env, "DHCP") == ["DHCP=no"]
+    assert text.startswith("[Match]\nName=eth0\n\n[Network]\n")
+    for kept in ("# management address, factory-reset recovery path\n", "#KeepConfiguration=static\n",
+                 "LinkLocalAddressing=no\n", "IPv6AcceptRA=no\n"):
+        assert kept in text
+    assert env.system.queued() == [("restart", LAN_UNIT)]
+    for argv, kwargs in env.system.calls:
+        if "--no-block" in argv:
+            assert argv[0].endswith("systemctl") and kwargs["env"]["SYSTEMCTL_FORCE_BUS"] == "1"
+    assert result_line(env, "LAN_IPADDR").startswith("LAN_IPADDR scheduled")
+    assert one_line(capsys).startswith("SUCCESS applied=0 unchanged=0 scheduled=1 failed=0 ")
+
+
+def test_a_full_lan_block_writes_address_prefix_and_gateway_in_network(env):
+    write_settings(env, "LAN_MODE=static\nLAN_IPADDR=203.0.113.10\nLAN_NETMASK=255.255.255.128\n"
+                        "LAN_GATEWAY=203.0.113.1\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    assert network_lines(env, "Address") == ["Address=203.0.113.10/25"]
+    assert network_lines(env, "Gateway") == ["Gateway=203.0.113.1"]
+    text = env.eth0.read_text()
+    assert text.index("[Network]") < text.index("Gateway=203.0.113.1")
+    assert result_line(env, "LAN_MODE") == "LAN_MODE unchanged"
+    for key in ("LAN_IPADDR", "LAN_NETMASK", "LAN_GATEWAY"):
+        assert result_line(env, key).startswith(f"{key} scheduled")
+    assert env.system.queued() == [("restart", LAN_UNIT)]
+
+
+def test_gateway_zero_removes_it_and_one_address_line_remains(env):
+    env.eth0.write_text(ETH0_TEXT.replace("Address=192.0.2.1/24\n", "Address=192.0.2.1/24\nAddress=192.0.2.2/24\n"
+                                          "Gateway=192.0.2.254\nGateway=192.0.2.253\n"))
+    write_settings(env, "LAN_IPADDR=192.0.2.60\nLAN_GATEWAY=0.0.0.0\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    assert network_lines(env, "Address") == ["Address=192.0.2.60/24"]
+    assert network_lines(env, "Gateway") == []
+
+
+def test_a_dhcp_eth0_needs_lan_mode_static_in_the_same_file(env):
+    env.eth0.write_text(ETH0_TEXT.replace("DHCP=no\n", "DHCP=ipv4\n"))
+    before = env.eth0.read_bytes()
+    write_settings(env, "LAN_IPADDR=192.0.2.50\n")
+
+    assert env.module.main(["apply"]) == 3
+    assert env.eth0.read_bytes() == before
+    assert "LAN_MODE" in result_line(env, "LAN_IPADDR")
+
+    write_settings(env, "LAN_MODE=static\nLAN_IPADDR=192.0.2.50\n")
+    assert env.module.main(["apply"]) == 0
+    assert network_lines(env, "DHCP") == ["DHCP=no"]
+    assert network_lines(env, "Address") == ["Address=192.0.2.50/24"]
+
+
+@pytest.mark.parametrize("line", [
+    "LAN_MODE=dhcp", "LAN_MODE=Static", "LAN_IPADDR=999.1.1.1", "LAN_IPADDR=127.0.0.1", "LAN_IPADDR=0.1.2.3",
+    "LAN_IPADDR=224.0.0.1", "LAN_IPADDR=192.0.2.0", "LAN_IPADDR=192.0.2.255",
+    "LAN_NETMASK=255.0.255.0", "LAN_NETMASK=255.255.255.254", "LAN_NETMASK=254.0.0.0", "LAN_NETMASK=24",
+    "LAN_NETMASK=0.0.0.255",
+    "LAN_GATEWAY=host.example", "LAN_GATEWAY=198.51.100.1", "LAN_GATEWAY=192.0.2.1", "LAN_GATEWAY=192.0.2.255"])
+def test_each_bad_lan_value_blocks_the_whole_apply(env, line):
+    write_settings(env, f"NTP_SERVER=203.0.113.5\n{line}\n")
+    eth0_before, ntp_before = env.eth0.read_bytes(), env.timesyncd.read_bytes()
+
+    assert env.module.main(["apply"]) == 3
+
+    assert env.eth0.read_bytes() == eth0_before
+    assert env.timesyncd.read_bytes() == ntp_before
+    assert env.system.queued() == []
+    key = line.partition("=")[0]
+    assert result_line(env, key).startswith(f"{key} invalid")
+
+
+@pytest.mark.parametrize("line,reason", [("LAN_MODE=dhcp", "DHCP is not supported"),
+                                         ("LAN_NETMASK=255.255.255.254", "255.255.255.252")])
+def test_a_refused_lan_mode_or_netmask_names_the_limit(env, line, reason):
+    # The combined check would refuse these too, but with a reason about the address.
+    write_settings(env, f"{line}\n")
+
+    assert env.module.main(["apply"]) == 3
+
+    key = line.partition("=")[0]
+    assert reason in result_line(env, key)
+
+
+def test_moving_eth0_to_another_subnet_does_not_keep_an_outside_gateway(env):
+    env.eth0.write_text(ETH0_TEXT.replace("Address=192.0.2.1/24\n", "Address=192.0.2.1/24\nGateway=192.0.2.254\n"))
+    before = env.eth0.read_bytes()
+    write_settings(env, "LAN_IPADDR=203.0.113.10\n")
+
+    assert env.module.main(["apply"]) == 3
+
+    assert env.eth0.read_bytes() == before
+    line = result_line(env, "LAN_IPADDR")
+    assert line.startswith("LAN_IPADDR invalid") and "LAN_GATEWAY" in line
+
+
+@pytest.mark.parametrize("settings,live", [
+    ("LAN_IPADDR=198.51.100.5\n", []),                                      # mlan0's static Address= while it is down
+    ("LAN_IPADDR=203.0.113.10\n", ["203.0.113.77/24"]),                     # mlan0's live address
+    ("LAN_IPADDR=198.51.0.10\nLAN_NETMASK=255.255.0.0\n", []),              # a wider eth0 prefix holds mlan0's subnet
+    ("LAN_IPADDR=203.0.113.10\nLAN_NETMASK=255.255.255.128\n", ["203.0.0.1/16"]),  # a wider mlan0 prefix
+])
+def test_an_eth0_subnet_that_overlaps_mlan0_is_invalid(env, settings, live):
+    env.system.addresses["mlan0"] = live
+    before = env.eth0.read_bytes()
+    write_settings(env, settings)
+
+    assert env.module.main(["apply"]) == 3
+
+    assert env.eth0.read_bytes() == before
+    assert env.system.queued() == []
+    line = result_line(env, "LAN_IPADDR")
+    assert line.startswith("LAN_IPADDR invalid") and "mlan0" in line
+
+
+@pytest.mark.parametrize("iface,cidr", [("mlan0", "203.0.113.77/32"), ("mlan1", "203.0.113.77/24")])
+def test_mlan0_host_addresses_and_mlan1_do_not_block_an_eth0_subnet(env, iface, cidr):
+    # A /32 is the peer_route mirror, not a subnet; the rule covers mlan0 only (#464 decision).
+    env.system.addresses[iface] = [cidr]
+    write_settings(env, "LAN_IPADDR=203.0.113.10\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    assert network_lines(env, "Address") == ["Address=203.0.113.10/24"]
+
+
+def test_a_gateway_change_alone_does_not_recheck_the_subnet(env):
+    env.system.addresses["mlan0"] = ["192.0.2.77/24"]  # already next to eth0 before this apply
+    write_settings(env, "LAN_GATEWAY=192.0.2.254\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    assert network_lines(env, "Gateway") == ["Gateway=192.0.2.254"]
+
+
+def test_a_lan_unit_that_cannot_be_queued_restores_the_eth0_file(env):
+    before = env.eth0.read_bytes()
+    env.system.queue_rc = 1
+    write_settings(env, "LAN_IPADDR=192.0.2.50\n")
+
+    assert env.module.main(["apply"]) == 4
+
+    assert env.eth0.read_bytes() == before
+    line = result_line(env, "LAN_IPADDR")
+    assert line.startswith("LAN_IPADDR failed") and "restored" in line
+    # The restored value differs again, so applying the same file retries the change.
+    env.system.queue_rc = 0
+    assert env.module.main(["apply"]) == 0
+    assert network_lines(env, "Address") == ["Address=192.0.2.50/24"]
+
+
+def test_lan_values_are_never_written_into_a_missing_eth0_file(env):
+    env.eth0.unlink()
+    write_settings(env, "LAN_MODE=static\nLAN_IPADDR=192.0.2.50\nLAN_NETMASK=255.255.255.0\nLAN_GATEWAY=0.0.0.0\n")
+
+    assert env.module.main(["apply"]) == 4
+
+    assert not env.eth0.exists()
+    assert env.system.queued() == []
+
+
+def test_lan_unit_applies_eth0_after_the_reply_and_restores_the_peer_channel():
+    sections, current = {}, []
+    for raw in UNIT_FILE.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        if line.startswith("["):
+            current = sections.setdefault(line, [])
+            continue
+        key, _, value = line.partition("=")
+        current.append((key.strip(), value.strip()))
+    assert "[Install]" not in sections  # started only by wconfig, never at boot
+    unit, service = dict(sections["[Unit]"]), sections["[Service]"]
+    assert unit["StartLimitIntervalSec"] == "0"  # a refused start would still look queued
+    assert "PartOf" not in unit
+    assert ("Type", "oneshot") in service
+    assert ("ExecStartPre", "/bin/sleep 2") in service  # the FTP reply leaves first
+    assert [value for key, value in service if key == "ExecStart"] == [
+        "/usr/local/scripts/wifi.sh net apply eth0", "/usr/local/scripts/wifi_peer_net_reapply.sh"]
+    assert any(key == "TimeoutStartSec" for key, _ in service)
+    assert load_handler("wconfig").LAN_UNIT == UNIT_FILE.name

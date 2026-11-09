@@ -177,10 +177,10 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
   `put`은 첫 인자 뒤의 단어를 공백 한 칸으로 이어 값에 붙인다. 따옴표·한글처럼 FTP 인자로
   보낼 수 없는 값은 `ftp put`으로 파일을 올려 넣는다.
 - 키는 네 가지로 나뉜다. 어느 분류든 파일에 있어도 된다.
-  - 적용: `NTP_FUNC`, `NTP_SERVER`, `SNMP_FUNC`, `SNMP_TRAP_IPADDR`.
-  - `pending`(#464의 이후 변경에서 적용): `LAN_MODE`, `LAN_IPADDR`, `LAN_NETMASK`, `LAN_GATEWAY`,
-    `TIMEZONE`, `SNMP_COMMUNITY`, `SNMP_SYSCONTACT`, `SNMP_SYSLOCATION`, `SNMP_SYSNAME`,
-    `SNMP_TRAP_WLAN`, `SNMP_TRAP_CHAN`.
+  - 적용: `NTP_FUNC`, `NTP_SERVER`, `SNMP_FUNC`, `SNMP_TRAP_IPADDR`, `LAN_MODE`, `LAN_IPADDR`,
+    `LAN_NETMASK`, `LAN_GATEWAY`.
+  - `pending`(#464의 이후 변경에서 적용): `TIMEZONE`, `SNMP_COMMUNITY`, `SNMP_SYSCONTACT`,
+    `SNMP_SYSLOCATION`, `SNMP_SYSNAME`, `SNMP_TRAP_WLAN`, `SNMP_TRAP_CHAN`.
   - `unsupported`(이 장치에 대응 기능 없음, #463): `LANGUAGE`, `SNMP_TRAP_LAN`, `SNMP_TRAP_INITSW`,
     `NTP_INTERVAL`, `LOG_FUNC`, `LOG_SERVER`, `LOG_DEBUG`, `LOG_SAVE`, `LOG_INTERVAL`, `LAN_PORTSPEED`.
   - `unknown`: 위 25개 밖의 키. 받아들이되 적용하지 않는다. 무선 설정 등 다른 키가 섞인
@@ -197,6 +197,19 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
     OPC drop-in 등 다른 출처의 서버는 이 명령이 바꾸지 않는다(1.3절과 같다).
   - `SNMP_TRAP_IPADDR`: 유니캐스트 IPv4 또는 `0.0.0.0`. `snmp.trap.dest`에 저장한다.
     호스트만 비교하고 기존 `:port`는 유지한다. `0.0.0.0`은 빈 값(트랩 미송신)이다.
+  - `LAN_MODE`, `LAN_IPADDR`, `LAN_NETMASK`, `LAN_GATEWAY`: 유선 eth0의
+    `/etc/systemd/network/22-eth0.network` `[Network]`에 `DHCP=no`, `Address=<IP>/<prefix>`, `Gateway=`로
+    저장한다. `wifi eth0 ip`·`gt`와 같은 파일·규칙이다(키의 첫 줄을 바꾸고 같은 키의 나머지 줄은 지운다).
+    `LAN_MODE`는 `static`만 받는다(DHCP 미지원). `LAN_IPADDR`은 `0.0.0.0/8`·`127.0.0.0/8`·`224.0.0.0`
+    이상과 그 서브넷의 네트워크·브로드캐스트 주소를 뺀 IPv4다. `LAN_NETMASK`는 `255.0.0.0`부터
+    `255.255.255.252`까지의 점 표기다. `LAN_GATEWAY`는 같은 서브넷의 다른 주소이거나 `0.0.0.0`(게이트웨이
+    없음, `Gateway=` 삭제)이다. 하나라도 바뀌면 파일에 없는 LAN 키를 현재 값으로 채워 네 값을 함께
+    검증한다. 예를 들어 eth0을 다른 서브넷으로 옮기면서 기존 게이트웨이를 그대로 두면 `invalid`다.
+    `get`은 첫 `Address=`와 첫 `Gateway=`를 돌려준다. `DHCP=`가 `no`가 아니면 그 값을 `LAN_MODE`로
+    돌려주며, 그 장치에 주소를 주려면 `LAN_MODE=static`을 함께 쓴다.
+  - 관리 IP 규칙: eth0 서브넷이 바뀌면 mlan0의 현재 주소(`ip -4 addr`)와 `20-mlan0.network`의 정적
+    `Address=`(mlan0이 끊겨 있을 때를 위해)와 겹치는지 본다. 두 서브넷 가운데 짧은 prefix로 비교해
+    겹치면 `invalid`다(opcd ChangeIp와 같은 규칙). `/32`는 미러 주소라 보지 않고, mlan1은 보지 않는다.
 - `apply`는 다음 순서로 동작한다.
   1. 파일 전체를 검증한다. 하나라도 `invalid`(값 오류, 25개 키의 중복, `KEY=VALUE`가 아닌 줄)면
      아무것도 바꾸지 않고 결과 파일에 `invalid` 줄만 남긴 뒤 코드 `3`으로 끝난다.
@@ -211,10 +224,18 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
      실행하므로 실패 뒤 다시 `apply`하면 서비스가 맞춰진다. 서비스 단계를 건너뛰거나 실패하면 그
      서비스에 걸린 키(`NTP_SERVER` 포함)는 모두 `failed`다.
      핸들러는 30초 안에 끝나고 서비스 작업은 PID 1이 이어서 처리한다.
-  4. 저장 뒤 서비스 단계가 실패해도 되돌리지 않는다. 그 키는 `failed`다.
+  4. LAN 키가 바뀌었으면 마지막에 `22-eth0.network`를 교체하고 `wifi_lan_apply.service`를
+     `systemctl --no-block restart`로 넘긴다. 그 키는 `scheduled`다. 유닛은 2초 기다려 이 응답이 먼저
+     나가게 한 뒤 `wifi net apply eth0`(`networkctl reload`와 `networkctl reconfigure eth0`)과
+     `wifi_peer_net_reapply.sh`를 실행한다. 기다리는 동안 다시 `apply`하면 앞 실행을 멈추고 마지막
+     파일로 다시 시작한다.
+  5. 저장 뒤 서비스 단계가 실패해도 되돌리지 않는다. 그 키는 `failed`다. LAN 키만 예외다. LAN은 값이
+     같으면 다시 적용하지 않으므로, 유닛을 넘기지 못하면 `22-eth0.network`를 원래대로 되돌리고
+     `failed`로 남긴다. 그러면 같은 파일로 다시 `apply`해 재시도할 수 있다. 되돌리기마저 실패하면
+     저장한 값이 다음 부팅(`quote rst`)에 적용된다고 사유에 적는다.
 - 결과 파일 `/home/admin/wconfig.result`는 첫 줄이 시각, 둘째 줄이 `SUMMARY` 개수, 그 뒤가
-  키마다 `<KEY> <상태>[ <사유>]`다. 상태는 `applied`, `unchanged`, `scheduled`(응답 뒤 적용, 이후
-  변경의 LAN 키용), `failed`, `invalid`, `pending`, `unsupported`, `unknown`이다.
+  키마다 `<KEY> <상태>[ <사유>]`다. 상태는 `applied`, `unchanged`, `scheduled`(LAN 키, 이 응답 뒤
+  eth0이 바뀜), `failed`, `invalid`, `pending`, `unsupported`, `unknown`이다.
 - 종료 코드: `0` 성공, `1` 설정 파일·장치 설정 읽기/쓰기 오류(설정 파일 없음 포함), `2` 잘못된
   인자(읽을 수 없는 키의 `get` 포함), `3` 검증 실패(아무것도 바꾸지 않음), `4` 일부 키 실패,
   `5` `pending` 키가 있음(나머지는 적용함). `550` 응답에는 개수가 실리지 않으므로
@@ -223,14 +244,28 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
   따라가지 않고 새로 만든 뒤 홈 디렉터리 소유자(admin)에게 넘기므로 `ftp put`으로 다시 덮어쓸
   수 있다. `put`은 그 이름에 링크나 특수 파일이 있으면 읽지 않고 새 파일로 바꾼다.
   공장 초기화는 `wconfig.txt`와 `wconfig.result`를 지운다.
+- LAN 변경 주의:
+  - eth0로 접속한 FTP 세션은 응답 2초 뒤 eth0이 바뀌면서 끊길 수 있다. 새 주소로 다시 접속한다.
+    응답이 `200`이려면 파일에 `pending` 키가 없어야 한다(있으면 코드 `5`).
+  - `networkctl reload`는 저장만 하고 적용하지 않은 다른 `.network` 변경(예: `wifi mlan0 ip`)도 함께
+    적용한다.
+  - `LAN_GATEWAY`는 eth0으로 가는 기본 경로를 더한다. 무선 쪽 기본 경로와 겹치지 않는지 확인한다.
+  - peer_route나 local_hairpin을 켠 장치는 LAN 변경 뒤 `quote rst`로 재부팅해 peer 채널을 다시
+    맞춘다. 재적용 스크립트는 `ip rule iif eth0`과 table 100 경로를 다시 깔지 않는다.
+  - 유선 접속을 잃으면 무선으로 접속해 되돌리거나, 공장 초기화로 eth0 기본 주소 `192.168.1.1/24`를
+    되살린다.
 
 ~~~text
 ftp> quote wconfig get
-200 SUCCESS wrote 4 keys to wconfig.txt
+200 SUCCESS wrote 8 keys to wconfig.txt
 ftp> quote wconfig put NTP_SERVER=192.0.2.10
 200 SUCCESS NTP_SERVER saved to wconfig.txt; run wconfig apply
 ftp> quote wconfig apply
-200 SUCCESS applied=1 unchanged=3 scheduled=0 failed=0 invalid=0 pending=0 unsupported=0 unknown=0; see wconfig.result
+200 SUCCESS applied=1 unchanged=7 scheduled=0 failed=0 invalid=0 pending=0 unsupported=0 unknown=0; see wconfig.result
+ftp> quote wconfig put LAN_IPADDR=192.0.2.50
+200 SUCCESS LAN_IPADDR saved to wconfig.txt; run wconfig apply
+ftp> quote wconfig apply
+200 SUCCESS applied=0 unchanged=7 scheduled=1 failed=0 invalid=0 pending=0 unsupported=0 unknown=0; see wconfig.result
 ~~~
 
 ## 2. 무선 명령 요약

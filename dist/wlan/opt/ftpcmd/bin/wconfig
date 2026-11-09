@@ -7,7 +7,9 @@ The file is KEY=VALUE text using the key names of the CONTEC settings export.
 apply validates every line first and changes nothing when one is wrong.  It then
 saves each store and hands PID 1 a single systemctl --no-block action per
 service, so the handler ends well inside the dispatcher's 30 s limit; a detached
-child would be killed with the FTP session (see rst).  Per-key results go to
+child would be killed with the FTP session (see rst).  LAN_* values rewrite
+22-eth0.network last and restart wifi_lan_apply.service, which reconfigures eth0
+only after a short wait so this reply leaves first.  Per-key results go to
 /home/admin/wconfig.result.
 """
 
@@ -37,19 +39,22 @@ APPLY_ENABLED = "/usr/local/scripts/wifi_apply_enabled.sh"
 SYSTEMCTL = "/usr/bin/systemctl"
 NTP_UNIT = "systemd-timesyncd.service"
 SNMP_UNIT = "snmpd.service"
+ETH0_NETWORK = Path("/etc/systemd/network/22-eth0.network")
+MLAN0_NETWORK = Path("/etc/systemd/network/20-mlan0.network")
+LAN_UNIT = "wifi_lan_apply.service"
 MAX_BYTES = 64 * 1024
 
 # The 25 system keys of the CONTEC settings export.  IMPLEMENTED keys are applied
 # here; PENDING keys get their appliers in later #464 changes; UNSUPPORTED keys
 # have no matching function on this device (#463).  Any other key is unknown.
-IMPLEMENTED = ("NTP_FUNC", "NTP_SERVER", "SNMP_FUNC", "SNMP_TRAP_IPADDR")
-PENDING = ("LAN_MODE", "LAN_IPADDR", "LAN_NETMASK", "LAN_GATEWAY", "TIMEZONE",
-           "SNMP_COMMUNITY", "SNMP_SYSCONTACT", "SNMP_SYSLOCATION", "SNMP_SYSNAME",
+LAN_KEYS = ("LAN_MODE", "LAN_IPADDR", "LAN_NETMASK", "LAN_GATEWAY")
+IMPLEMENTED = ("NTP_FUNC", "NTP_SERVER", "SNMP_FUNC", "SNMP_TRAP_IPADDR") + LAN_KEYS
+PENDING = ("TIMEZONE", "SNMP_COMMUNITY", "SNMP_SYSCONTACT", "SNMP_SYSLOCATION", "SNMP_SYSNAME",
            "SNMP_TRAP_WLAN", "SNMP_TRAP_CHAN")
 UNSUPPORTED = ("LANGUAGE", "SNMP_TRAP_LAN", "SNMP_TRAP_INITSW", "NTP_INTERVAL", "LOG_FUNC",
                "LOG_SERVER", "LOG_DEBUG", "LOG_SAVE", "LOG_INTERVAL", "LAN_PORTSPEED")
 KNOWN = IMPLEMENTED + PENDING + UNSUPPORTED
-# "scheduled" is reserved for keys applied after the FTP reply (eth0, a later change).
+# "scheduled" marks LAN_* keys: eth0 changes after the FTP reply (LAN_UNIT).
 STATUSES = ("applied", "unchanged", "scheduled", "failed", "invalid", "pending", "unsupported", "unknown")
 # Keys whose service must follow them, and the keys that change an enable state.
 SERVICE_KEYS = ((NTP_UNIT, ("NTP_FUNC", "NTP_SERVER")), (SNMP_UNIT, ("SNMP_FUNC",)))
@@ -347,6 +352,84 @@ def read_timesyncd():
         return ""
 
 
+def read_network(path):
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+
+
+def network_entries(text, name):
+    """Values of NAME in [Network] of a systemd-networkd file, in file order."""
+    values, in_network = [], False
+    for _, line in records(text):
+        if line.startswith("[") and line.endswith("]"):
+            in_network = line == "[Network]"
+        elif in_network:
+            key, separator, value = line.partition("=")
+            if separator and key.strip() == name:
+                values.append(value.strip())
+    return values
+
+
+def lan_values(text):
+    """LAN_* as get reports them: the first Address= and Gateway=, as wifi.sh ip/gt edit them."""
+    dhcp = network_entries(text, "DHCP")
+    mode = dhcp[-1] if dhcp else "no"
+    addresses, gateways = network_entries(text, "Address"), network_entries(text, "Gateway")
+    address, netmask = "0.0.0.0", "0.0.0.0"
+    if addresses:
+        try:
+            interface = ipaddress.IPv4Interface(addresses[0])
+        except ValueError:
+            address = addresses[0]
+        else:
+            address, netmask = str(interface.ip), str(interface.netmask)
+    return {
+        "LAN_MODE": "static" if mode.lower() in ("no", "false", "0", "off") else mode,
+        "LAN_IPADDR": address,
+        "LAN_NETMASK": netmask,
+        "LAN_GATEWAY": gateways[0] if gateways else "0.0.0.0",
+    }
+
+
+def set_network_values(text, assignments):
+    """Rewrite [Network] keys as wifi.sh ip/gt do: the first line of a key takes the value
+    and later lines of it go; a None value removes the key; a missing key ends the section."""
+    output, handled, in_network, seen_network = [], set(), False, False
+
+    def add_missing():
+        for key, value in assignments.items():
+            if key not in handled and value is not None:
+                output.append(f"{key}={value}\n")
+                handled.add(key)
+
+    for raw, line in records(text):
+        if line.startswith("[") and line.endswith("]"):
+            if in_network:
+                add_missing()
+            in_network = line == "[Network]"
+            seen_network = seen_network or in_network
+            output.append(raw)
+            continue
+        key, separator, _ = line.partition("=")
+        key = key.strip()
+        if in_network and separator and key in assignments:
+            if key not in handled and assignments[key] is not None:
+                output.append(f"{key}={assignments[key]}\n")
+            handled.add(key)
+            continue
+        output.append(raw)
+    if output and not output[-1].endswith("\n"):
+        output[-1] += "\n"
+    if not seen_network:
+        output.append("[Network]\n")
+        in_network = True
+    if in_network:
+        add_missing()
+    return "".join(output)
+
+
 def current_values():
     data = json.loads(JSON_PATH.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
@@ -357,6 +440,7 @@ def current_values():
         "NTP_SERVER": ntp_server(read_timesyncd()),
         "SNMP_FUNC": "enabled" if json_switch(data, ("snmp", "enabled"), False) else "disabled",
         "SNMP_TRAP_IPADDR": host or "0.0.0.0",
+        **lan_values(read_network(ETH0_NETWORK)),
     }
 
 
@@ -378,8 +462,110 @@ def check_address(value):
     return str(address)
 
 
+def check_mode(value):
+    if value == "static":
+        return value
+    raise Invalid("expected static; DHCP is not supported")
+
+
+def check_host(value):
+    """A unicast host address: not 0/8, loopback, multicast or the reserved block above it."""
+    try:
+        address = ipaddress.IPv4Address(value)
+    except ValueError:
+        raise Invalid("expected an IPv4 address") from None
+    if address in ipaddress.IPv4Network("0.0.0.0/8") or address.is_loopback or int(address) >= 0xE0000000:
+        raise Invalid("expected a unicast host address")
+    return str(address)
+
+
+def check_netmask(value):
+    """A dotted mask from /8 to /30: /31 and /32 leave no LAN, and wifi_init.sh deletes eth0's /32s."""
+    try:
+        mask = ipaddress.IPv4Address(value)
+        prefix = ipaddress.IPv4Network(f"0.0.0.0/{mask}").prefixlen
+    except ValueError:
+        raise Invalid("expected a dotted netmask such as 255.255.255.0") from None
+    if str(ipaddress.IPv4Network(f"0.0.0.0/{prefix}").netmask) != str(mask):
+        # ipaddress also takes a host mask such as 0.0.0.255; a LAN netmask is never one.
+        raise Invalid("expected a dotted netmask such as 255.255.255.0")
+    if not 8 <= prefix <= 30:
+        raise Invalid("expected a netmask from 255.0.0.0 to 255.255.255.252")
+    return str(mask)
+
+
+def check_gateway(value):
+    return value if value == "0.0.0.0" else check_host(value)
+
+
 CHECKS = {"NTP_FUNC": check_switch, "NTP_SERVER": check_address,
-          "SNMP_FUNC": check_switch, "SNMP_TRAP_IPADDR": check_address}
+          "SNMP_FUNC": check_switch, "SNMP_TRAP_IPADDR": check_address,
+          "LAN_MODE": check_mode, "LAN_IPADDR": check_host, "LAN_NETMASK": check_netmask,
+          "LAN_GATEWAY": check_gateway}
+
+
+def lan_network(values):
+    """eth0's subnet for these LAN values, or None when they do not form one."""
+    if values["LAN_IPADDR"] == "0.0.0.0":
+        return None
+    try:
+        return ipaddress.IPv4Network(f"{values['LAN_IPADDR']}/{values['LAN_NETMASK']}", strict=False)
+    except ValueError:
+        return None
+
+
+def mlan0_networks():
+    """mlan0's subnets: its live addresses and its static Address= (it may be down now).
+
+    A /32 is not a subnet (the peer_route mirror), as in opcd's management-plane guard.
+    """
+    try:
+        result = subprocess.run(["ip", "-4", "-o", "addr", "show", "dev", "mlan0"],
+                                capture_output=True, text=True, timeout=4)
+        words = result.stdout.split() if result.returncode == 0 else []
+    except (OSError, subprocess.TimeoutExpired) as error:
+        log(f"status=command_unavailable command=ip detail={error}")
+        words = []
+    cidrs = [words[index + 1] for index, word in enumerate(words[:-1]) if word == "inet"]
+    cidrs += network_entries(read_network(MLAN0_NETWORK), "Address")
+    found = []
+    for cidr in cidrs:
+        try:
+            network = ipaddress.IPv4Interface(cidr).network
+        except ValueError:
+            continue
+        if network.prefixlen < 32:
+            found.append(network)
+    return found
+
+
+def check_lan(current, wanted):
+    """Why the LAN values would not work together, or None.  Called only when one changes,
+    so a file written by get still applies whatever has changed around eth0 since."""
+    target = {key: wanted.get(key, current[key]) for key in LAN_KEYS}
+    if target["LAN_MODE"] != "static":
+        return f"eth0 is {target['LAN_MODE']}; add LAN_MODE=static"
+    for key, check in (("LAN_IPADDR", check_host), ("LAN_NETMASK", check_netmask),
+                       ("LAN_GATEWAY", check_gateway)):
+        try:
+            check(target[key])
+        except Invalid as error:
+            return f"{key} {target[key]}: {error}"
+    network = lan_network(target)
+    address = ipaddress.IPv4Address(target["LAN_IPADDR"])
+    if address in (network.network_address, network.broadcast_address):
+        return f"LAN_IPADDR {address} is the network or broadcast address of {network}"
+    if target["LAN_GATEWAY"] != "0.0.0.0":
+        gateway = ipaddress.IPv4Address(target["LAN_GATEWAY"])
+        if gateway not in network or gateway in (address, network.network_address, network.broadcast_address):
+            return f"LAN_GATEWAY {gateway} must be another host in {network}"
+    if network != lan_network(current):
+        # Management IP rule (opcd ipcfg_clashes_other_iface): eth0 and mlan0 never share
+        # a subnet, compared under the shorter prefix.
+        for other in mlan0_networks():
+            if network.overlaps(other):
+                return f"eth0 subnet {network} overlaps mlan0 {other}; keep them on different subnets"
+    return None
 
 
 # --- commands ------------------------------------------------------------------------
@@ -416,6 +602,15 @@ def classify(entries, malformed, current):
             else:
                 wanted[key] = normalized
                 report.append([key, "applied", ""])
+    changed = [key for key in LAN_KEYS if key in wanted]
+    if changed and not any(entry[0] in LAN_KEYS and entry[1] == "invalid" for entry in report):
+        error = check_lan(current, wanted)
+        if error:
+            for entry in report:
+                if entry[0] in changed:
+                    entry[1], entry[2] = "invalid", error
+            for key in changed:
+                del wanted[key]
     report.extend([f"line{number}", "invalid", "expected KEY=VALUE"] for number in malformed)
     return report, wanted
 
@@ -487,6 +682,42 @@ def follow_services(present, wanted, status):
                 status.setdefault(key, ("failed", f"{action} {unit} failed rc={rc}"))
 
 
+def apply_lan(wanted, current, status):
+    """Rewrite eth0's [Network] and hand the reconfigure to LAN_UNIT, which waits for this reply."""
+    keys = [key for key in LAN_KEYS if key in wanted]
+    if not keys:
+        return
+    target = {key: wanted.get(key, current[key]) for key in LAN_KEYS}
+    assignments = {
+        "DHCP": "no",
+        "Address": f"{target['LAN_IPADDR']}/{lan_network(target).prefixlen}",
+        "Gateway": None if target["LAN_GATEWAY"] == "0.0.0.0" else target["LAN_GATEWAY"],
+    }
+    try:
+        before = ETH0_NETWORK.read_text(encoding="utf-8")
+        replace_file(ETH0_NETWORK, set_network_values(before, assignments))
+    except (OSError, UnicodeError) as error:
+        for key in keys:
+            status[key] = ("failed", f"eth0 network save failed: {error}")
+        return
+    rc = run([SYSTEMCTL, "--no-ask-password", "--no-block", "restart", LAN_UNIT], 4)
+    if rc == 0:
+        for key in keys:
+            status[key] = ("scheduled", f"eth0 changes after this reply ({LAN_UNIT})")
+        return
+    # Restore so that failed means eth0 is unchanged: applying the same file then retries,
+    # whereas a kept file would read as unchanged and change eth0 only at the next boot.
+    try:
+        replace_file(ETH0_NETWORK, before)
+    except (OSError, UnicodeError) as error:
+        detail = (f"restart {LAN_UNIT} failed rc={rc}; restoring 22-eth0.network failed ({error}), "
+                  "the saved values apply at the next boot (quote rst)")
+    else:
+        detail = f"restart {LAN_UNIT} failed rc={rc}; 22-eth0.network restored"
+    for key in keys:
+        status[key] = ("failed", detail)
+
+
 def write_result(report, counts):
     stamp = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     summary = "SUMMARY " + " ".join(f"{name}={counts[name]}" for name in STATUSES)
@@ -521,6 +752,8 @@ def apply_settings():
     save_stores(document, wanted, status)
     present = {entry[0] for entry in report if entry[0] in IMPLEMENTED}
     follow_services(present, wanted, status)
+    # Last, so the unit's wait starts only when nothing but the reply is left to do.
+    apply_lan(wanted, current, status)
     for entry in report:
         if entry[0] in status:
             entry[1], entry[2] = status[entry[0]]

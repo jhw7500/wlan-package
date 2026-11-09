@@ -39,6 +39,7 @@ dist/wlan/etc/systemd/system/wifi_capture@.service
 dist/wlan/etc/systemd/system/wifi_checker@.service
 dist/wlan/etc/systemd/system/wifi_event@.service
 dist/wlan/etc/systemd/system/wifi_init.service
+dist/wlan/etc/systemd/system/wifi_lan_apply.service
 dist/wlan/etc/systemd/system/wifi_led@.service
 dist/wlan/etc/systemd/system/wifi_link_snapshot@.service
 dist/wlan/etc/systemd/system/wifi_logger.service
