@@ -2,6 +2,7 @@
 
 import json
 import os
+import stat
 import subprocess
 import types
 from pathlib import Path
@@ -166,22 +167,70 @@ def test_get_then_apply_is_unchanged_but_still_resyncs_services(env, capsys):
     assert env.conf.read_bytes() == conf_before
     assert env.timesyncd.read_bytes() == ntp_before
     assert one_line(capsys).startswith("SUCCESS applied=0 unchanged=4 ")
-    # A retry after a failed service step must still bring services in line.
+    # A retry after a failed service step must still bring services in line, and
+    # timesyncd only reads its servers when it starts, so a listed server restarts it.
     assert len(env.system.apply_calls()) == 1
-    assert sorted(env.system.queued()) == [("start", NTP_UNIT), ("stop", SNMP_UNIT)]
+    assert sorted(env.system.queued()) == [("restart", NTP_UNIT), ("stop", SNMP_UNIT)]
 
 
-def test_ntp_server_zero_means_no_server_at_all(env, capsys):
+def test_ntp_server_zero_clears_only_the_device_server(env, capsys):
+    # systemd 254 refills an empty FallbackNTP= with its compiled default list, so
+    # 0.0.0.0 cannot mean "no server at all"; it clears the device server only.
     write_settings(env, "NTP_SERVER=0.0.0.0\n")
 
     assert env.module.main(["apply"]) == 0
 
     lines = env.timesyncd.read_text().splitlines()
-    assert "NTP=" in lines and "FallbackNTP=" in lines
-    assert not any(line.startswith(("NTP=1", "FallbackNTP=t")) for line in lines)
+    assert "NTP=" in lines
+    assert "FallbackNTP=time1.google.com time2.google.com" in lines
     capsys.readouterr()
     assert env.module.main(["get", "NTP_SERVER"]) == 0
     assert one_line(capsys) == "NTP_SERVER=0.0.0.0"
+
+
+def test_an_empty_device_server_reads_as_zero_whatever_the_fallback(env, capsys):
+    env.timesyncd.write_text("[Time]\nNTP=\nFallbackNTP=time1.google.com\n")
+
+    assert env.module.main(["get", "NTP_SERVER"]) == 0
+
+    assert one_line(capsys) == "NTP_SERVER=0.0.0.0"
+
+
+def test_a_skipped_timesyncd_step_fails_the_saved_server(env):
+    env.system.apply_rc = 1
+    write_settings(env, "NTP_FUNC=enabled\nNTP_SERVER=192.0.2.10\n")
+
+    assert env.module.main(["apply"]) == 4
+
+    lines = result_lines(env)
+    assert any(line.startswith("NTP_SERVER failed") for line in lines)
+    assert "NTP=192.0.2.10\n" in env.timesyncd.read_text()
+
+
+def test_reapplying_after_a_failed_restart_restarts_timesyncd(env):
+    env.system.queue_rc = 1
+    write_settings(env, "NTP_SERVER=192.0.2.10\n")
+    assert env.module.main(["apply"]) == 4
+    assert any(line.startswith("NTP_SERVER failed") for line in result_lines(env))
+
+    env.system.queue_rc = 0
+    env.system.calls.clear()
+    assert env.module.main(["apply"]) == 0
+
+    assert "NTP_SERVER unchanged" in result_lines(env)
+    assert env.system.queued() == [("restart", NTP_UNIT)]
+
+
+def test_another_sessions_temporary_file_is_left_alone(env):
+    # Each FTP session runs in its own PID namespace, so PIDs repeat across sessions.
+    foreign = env.home / f".wconfig.txt.{os.getpid()}.tmp"
+    foreign.write_text("other session in flight\n")
+
+    assert env.module.main(["put", "NTP_FUNC=enabled"]) == 0
+
+    assert foreign.read_text() == "other session in flight\n"
+    assert (env.home / "wconfig.txt").read_text() == "NTP_FUNC=enabled\n"
+    assert sorted(path.name for path in env.home.iterdir()) == [foreign.name, "wconfig.txt"]
 
 
 def test_trap_destination_compares_the_host_and_keeps_the_port(env, capsys):
@@ -261,6 +310,19 @@ def test_put_edits_one_key_without_applying(env, capsys):
 
 def test_files_are_handed_to_the_home_owner_and_links_are_not_followed(env, monkeypatch):
     owners = []
+    real_fstat = os.fstat
+
+    def fstat(fd):
+        # The device home belongs to the FTP account.  Report that owner for the
+        # directory even when the test itself runs as root and owns the home.
+        info = real_fstat(fd)
+        if not stat.S_ISDIR(info.st_mode):
+            return info
+        fields = list(info[:10])
+        fields[4], fields[5] = 1000, 1000
+        return os.stat_result(fields)
+
+    monkeypatch.setattr(env.module.os, "fstat", fstat)
     monkeypatch.setattr(env.module.os, "geteuid", lambda: 0)
     monkeypatch.setattr(env.module.os, "fchown", lambda fd, uid, gid: owners.append((uid, gid)))
     outside = env.home.parent / "outside.txt"
@@ -271,8 +333,7 @@ def test_files_are_handed_to_the_home_owner_and_links_are_not_followed(env, monk
     assert env.system.calls == []
 
     assert env.module.main(["put", "NTP_FUNC=enabled"]) == 0
-    home = env.home.stat()
-    assert owners == [(home.st_uid, home.st_gid)]
+    assert owners == [(1000, 1000)]
     assert outside.read_text() == "NTP_FUNC=disabled\n"
     assert not (env.home / "wconfig.txt").is_symlink()
 

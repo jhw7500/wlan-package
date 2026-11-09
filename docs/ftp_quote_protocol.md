@@ -190,9 +190,10 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
   - `NTP_FUNC`, `SNMP_FUNC`: `enabled` 또는 `disabled`. `wifi_init_conf.json`의
     `global.ntp.enabled`, `snmp.enabled`에 저장한다.
   - `NTP_SERVER`: 유니캐스트 IPv4 또는 `0.0.0.0`. `/etc/systemd/timesyncd.conf`의 `[Time]`
-    `NTP=`를 교체한다(`wntp ip`와 같은 파일). `0.0.0.0`은 서버 없음이며 `NTP=`와 `FallbackNTP=`를
-    모두 비운다. `NTP=`만 비우면 timesyncd가 `FallbackNTP=` 서버로 동기화하기 때문이다.
-    `get`은 첫 `NTP=` 서버를, 둘 다 비었으면 `0.0.0.0`을, `NTP=`만 비었으면 빈 값을 돌려준다.
+    `NTP=`를 교체한다(`wntp ip`와 같은 파일). `0.0.0.0`은 장치 지정 서버 없음이며 `NTP=`만 비운다.
+    이때 timesyncd는 `FallbackNTP=` 서버로 동기화를 시도한다. systemd 254는 빈 `FallbackNTP=`를
+    컴파일 기본 목록(time1~4.google.com)으로 채우므로, 설정 파일만으로는 서버를 모두 없앨 수 없다.
+    시간 동기를 끄려면 `NTP_FUNC=disabled`를 쓴다. `get`은 첫 `NTP=` 서버를, 비었으면 `0.0.0.0`을 돌려준다.
     OPC drop-in 등 다른 출처의 서버는 이 명령이 바꾸지 않는다(1.3절과 같다).
   - `SNMP_TRAP_IPADDR`: 유니캐스트 IPv4 또는 `0.0.0.0`. `snmp.trap.dest`에 저장한다.
     호스트만 비교하고 기존 `:port`는 유지한다. `0.0.0.0`은 빈 값(트랩 미송신)이다.
@@ -205,8 +206,10 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
   3. 서비스를 맞춘다. `NTP_FUNC`·`SNMP_FUNC`가 파일에 있으면 `wifi_apply_enabled.sh`를
      `SYSTEMCTL_FORCE_BUS=1 WIFI_APPLY_STRICT=1`로 실행해 enable 상태를 JSON에 맞춘다. 이어서
      파일에 있는 키의 서비스(timesyncd: `NTP_FUNC`·`NTP_SERVER`, snmpd: `SNMP_FUNC`)마다 동작 하나만
-     `systemctl --no-block`으로 넘긴다. enable이면 `start`(서버를 바꿨으면 `restart`), disable이면
-     `stop`이다. 값이 그대로여도 실행하므로 실패 뒤 다시 `apply`하면 서비스가 맞춰진다.
+     `systemctl --no-block`으로 넘긴다. enable이면 `start`, disable이면 `stop`이다. timesyncd는
+     서버를 기동할 때만 읽으므로 `NTP_SERVER`가 파일에 있으면 값이 같아도 `restart`한다. 값이 그대로여도
+     실행하므로 실패 뒤 다시 `apply`하면 서비스가 맞춰진다. 서비스 단계를 건너뛰거나 실패하면 그
+     서비스에 걸린 키(`NTP_SERVER` 포함)는 모두 `failed`다.
      핸들러는 30초 안에 끝나고 서비스 작업은 PID 1이 이어서 처리한다.
   4. 저장 뒤 서비스 단계가 실패해도 되돌리지 않는다. 그 키는 `failed`다.
 - 결과 파일 `/home/admin/wconfig.result`는 첫 줄이 시각, 둘째 줄이 `SUMMARY` 개수, 그 뒤가

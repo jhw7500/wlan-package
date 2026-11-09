@@ -15,6 +15,7 @@ import errno
 import ipaddress
 import json
 import os
+import secrets
 import stat
 import subprocess
 import sys
@@ -135,14 +136,21 @@ def write_home(name, text):
     """Replace NAME in HOME without following links, owned by the home's owner."""
     data = text.encode("utf-8", "surrogateescape")
     dir_fd = open_home()
-    temporary = f".{name}.{os.getpid()}.tmp"
+    temporary = None
     try:
-        try:
-            os.unlink(temporary, dir_fd=dir_fd)
-        except FileNotFoundError:
-            pass
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
-                     0o644, dir_fd=dir_fd)
+        # Every FTP session has its own PID namespace, so a PID-based name could be
+        # another session's file in flight; a random name is never shared or removed.
+        for _ in range(8):
+            candidate = f".{name}.{secrets.token_hex(8)}.tmp"
+            try:
+                fd = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                             0o644, dir_fd=dir_fd)
+            except FileExistsError:
+                continue
+            temporary = candidate
+            break
+        else:
+            raise OSError(errno.EEXIST, f"no free temporary name for {name}")
         try:
             # The handler runs as root; hand the file to the account so that a
             # later "ftp put" can replace it (as opcd does for iplist.txt).
@@ -158,10 +166,11 @@ def write_home(name, text):
         os.rename(temporary, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
         os.fsync(dir_fd)
     except BaseException:
-        try:
-            os.unlink(temporary, dir_fd=dir_fd)
-        except OSError:
-            pass
+        if temporary is not None:
+            try:
+                os.unlink(temporary, dir_fd=dir_fd)
+            except OSError:
+                pass
         raise
     finally:
         os.close(dir_fd)
@@ -326,11 +335,9 @@ def set_time_values(text, assignments):
 
 
 def ntp_server(text):
-    """First device server; 0.0.0.0 only when NTP= and FallbackNTP= are both empty."""
+    """First device server (NTP=), or 0.0.0.0 when none is set; FallbackNTP= is not a device server."""
     servers = time_values(text, "NTP") or []
-    if servers:
-        return servers[0]
-    return "0.0.0.0" if time_values(text, "FallbackNTP") == [] else ""
+    return servers[0] if servers else "0.0.0.0"
 
 
 def read_timesyncd():
@@ -432,8 +439,10 @@ def save_stores(document, wanted, status):
                 status[key] = ("failed", f"settings save failed: {error}")
     if "NTP_SERVER" in wanted:
         server = wanted["NTP_SERVER"]
-        # 0.0.0.0 means no server: an empty NTP= alone would fall back to FallbackNTP=.
-        assignments = {"NTP": "", "FallbackNTP": ""} if server == "0.0.0.0" else {"NTP": server}
+        # 0.0.0.0 clears the device server only.  timesyncd then uses FallbackNTP=, and
+        # systemd 254 refills an empty FallbackNTP= with its compiled default list, so
+        # no file setting means "no server"; NTP_FUNC=disabled stops time sync.
+        assignments = {"NTP": "" if server == "0.0.0.0" else server}
         try:
             replace_file(TIMESYNCD_CONF, set_time_values(read_timesyncd(), assignments))
         except (OSError, UnicodeError) as error:
@@ -452,7 +461,13 @@ def follow_services(present, wanted, status):
                     status[key] = ("failed", f"enable state sync failed rc={rc}")
     for unit, keys in SERVICE_KEYS:
         keys = [key for key in keys if key in present]
-        if not keys or (sync_failed and any(key in ENABLE_KEYS for key in keys)):
+        if not keys:
+            continue
+        if sync_failed and any(key in ENABLE_KEYS for key in keys):
+            # The enable state is unknown, so the service is left alone; every key
+            # that needed this service stays failed until a later apply succeeds.
+            for key in keys:
+                status.setdefault(key, ("failed", f"{unit} not changed after the enable state sync failed"))
             continue
         enabled = run([SYSTEMCTL, "is-enabled", "--quiet", unit], 4)
         if enabled is None:
@@ -460,7 +475,9 @@ def follow_services(present, wanted, status):
         else:
             if enabled != 0:
                 action = "stop"
-            elif "NTP_SERVER" in keys and "NTP_SERVER" in wanted and "NTP_SERVER" not in status:
+            elif "NTP_SERVER" in keys:
+                # timesyncd reads its servers only at start; restarting whenever the
+                # key is listed also completes an earlier apply whose restart failed.
                 action = "restart"
             else:
                 action = "start"
