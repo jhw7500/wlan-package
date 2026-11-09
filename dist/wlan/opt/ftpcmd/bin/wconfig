@@ -1,0 +1,617 @@
+#!/usr/bin/python3
+"""Save, read and apply the device settings file /home/admin/wconfig.txt (#464).
+
+Reached over FTP as: quote wconfig get [KEY] | put KEY=VALUE [WORD...] | apply
+
+The file is KEY=VALUE text using the key names of the CONTEC settings export.
+apply validates every line first and changes nothing when one is wrong.  It then
+saves each store and hands PID 1 a single systemctl --no-block action per
+service, so the handler ends well inside the dispatcher's 30 s limit; a detached
+child would be killed with the FTP session (see rst).  Per-key results go to
+/home/admin/wconfig.result.
+"""
+
+import errno
+import ipaddress
+import json
+import os
+import secrets
+import stat
+import subprocess
+import sys
+import syslog
+import tempfile
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+from ftpcmd_log import log_start
+
+
+HOME = Path("/home/admin")
+SETTINGS = "wconfig.txt"
+RESULT = "wconfig.result"
+JSON_PATH = Path("/usr/local/etc/wifi_init_conf.json")
+TIMESYNCD_CONF = Path("/etc/systemd/timesyncd.conf")
+APPLY_ENABLED = "/usr/local/scripts/wifi_apply_enabled.sh"
+SYSTEMCTL = "/usr/bin/systemctl"
+NTP_UNIT = "systemd-timesyncd.service"
+SNMP_UNIT = "snmpd.service"
+MAX_BYTES = 64 * 1024
+
+# The 25 system keys of the CONTEC settings export.  IMPLEMENTED keys are applied
+# here; PENDING keys get their appliers in later #464 changes; UNSUPPORTED keys
+# have no matching function on this device (#463).  Any other key is unknown.
+IMPLEMENTED = ("NTP_FUNC", "NTP_SERVER", "SNMP_FUNC", "SNMP_TRAP_IPADDR")
+PENDING = ("LAN_MODE", "LAN_IPADDR", "LAN_NETMASK", "LAN_GATEWAY", "TIMEZONE",
+           "SNMP_COMMUNITY", "SNMP_SYSCONTACT", "SNMP_SYSLOCATION", "SNMP_SYSNAME",
+           "SNMP_TRAP_WLAN", "SNMP_TRAP_CHAN")
+UNSUPPORTED = ("LANGUAGE", "SNMP_TRAP_LAN", "SNMP_TRAP_INITSW", "NTP_INTERVAL", "LOG_FUNC",
+               "LOG_SERVER", "LOG_DEBUG", "LOG_SAVE", "LOG_INTERVAL", "LAN_PORTSPEED")
+KNOWN = IMPLEMENTED + PENDING + UNSUPPORTED
+# "scheduled" is reserved for keys applied after the FTP reply (eth0, a later change).
+STATUSES = ("applied", "unchanged", "scheduled", "failed", "invalid", "pending", "unsupported", "unknown")
+# Keys whose service must follow them, and the keys that change an enable state.
+SERVICE_KEYS = ((NTP_UNIT, ("NTP_FUNC", "NTP_SERVER")), (SNMP_UNIT, ("SNMP_FUNC",)))
+ENABLE_KEYS = ("NTP_FUNC", "SNMP_FUNC")
+TRUE_WORDS = ("true", "TRUE", "True", "1", "yes", "YES", "Yes")
+
+EXIT_IO, EXIT_USAGE, EXIT_INVALID, EXIT_FAILED, EXIT_PENDING = 1, 2, 3, 4, 5
+USAGE = "Usage: quote wconfig get [KEY] | put KEY=VALUE | apply"
+
+
+class Invalid(ValueError):
+    """A value the device cannot apply."""
+
+
+class NotRegular(OSError):
+    """The settings name is a link or a special file; it is never followed."""
+
+
+def log(detail, priority=syslog.LOG_ERR):
+    try:
+        syslog.syslog(priority, f"ftpcmd_result command=wconfig {detail}")
+    except OSError:
+        pass
+
+
+def fail(code, detail):
+    log(f"status=fail code={code} detail={detail}")
+    print(f"wconfig: {detail}", file=sys.stderr)
+    return code
+
+
+def run(argv, timeout, **extra_env):
+    # FTP's PID namespace can hide PID 1's private-bus peer credentials, so
+    # systemctl (also inside wifi_apply_enabled.sh) must use the public bus.
+    environment = {**os.environ, "SYSTEMCTL_FORCE_BUS": "1", **extra_env}
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
+                              env=environment).returncode
+    except (OSError, subprocess.TimeoutExpired) as error:
+        log(f"status=command_unavailable command={argv[0]} detail={error}")
+        return None
+
+
+# --- files in the FTP account's home -------------------------------------------------
+
+def open_home():
+    return os.open(HOME, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+
+
+def read_home(name):
+    """Text of a regular file in HOME, or None when it is absent; links are not followed."""
+    dir_fd = open_home()
+    try:
+        try:
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+                         dir_fd=dir_fd)
+        except FileNotFoundError:
+            return None
+        except OSError as error:
+            if error.errno == errno.ELOOP:
+                raise NotRegular(errno.ELOOP, f"{name} is a symbolic link") from None
+            raise
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise NotRegular(errno.EINVAL, f"{name} is not a regular file")
+            chunks, total = [], 0
+            while True:
+                chunk = os.read(fd, MAX_BYTES + 1 - total)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+                if total > MAX_BYTES:
+                    raise OSError(errno.EFBIG, f"{name} is larger than {MAX_BYTES} bytes")
+        finally:
+            os.close(fd)
+    finally:
+        os.close(dir_fd)
+    # Values of keys this device ignores may use any encoding; keep their bytes.
+    return b"".join(chunks).decode("utf-8", "surrogateescape")
+
+
+def write_home(name, text):
+    """Replace NAME in HOME without following links, owned by the home's owner."""
+    data = text.encode("utf-8", "surrogateescape")
+    dir_fd = open_home()
+    temporary = None
+    try:
+        # Every FTP session has its own PID namespace, so a PID-based name could be
+        # another session's file in flight; a random name is never shared or removed.
+        for _ in range(8):
+            candidate = f".{name}.{secrets.token_hex(8)}.tmp"
+            try:
+                fd = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                             0o644, dir_fd=dir_fd)
+            except FileExistsError:
+                continue
+            temporary = candidate
+            break
+        else:
+            raise OSError(errno.EEXIST, f"no free temporary name for {name}")
+        try:
+            # The handler runs as root; hand the file to the account so that a
+            # later "ftp put" can replace it (as opcd does for iplist.txt).
+            home = os.fstat(dir_fd)
+            if os.geteuid() == 0 and home.st_uid != 0:
+                os.fchown(fd, home.st_uid, home.st_gid)
+            view = memoryview(data)
+            while view:
+                view = view[os.write(fd, view):]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.rename(temporary, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        os.fsync(dir_fd)
+    except BaseException:
+        if temporary is not None:
+            try:
+                os.unlink(temporary, dir_fd=dir_fd)
+            except OSError:
+                pass
+        raise
+    finally:
+        os.close(dir_fd)
+
+
+def parse(text):
+    """Entries (line, key, value) and the numbers of lines that are not KEY=VALUE."""
+    if text.startswith("\ufeff"):
+        text = text[1:]
+    entries, malformed = [], []
+    for number, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, separator, value = line.partition("=")
+        key, value = key.strip(), value.strip()
+        if not separator or not key:
+            malformed.append(number)
+            continue
+        entries.append((number, key, value))
+    return entries, malformed
+
+
+# --- device stores -------------------------------------------------------------------
+
+def replace_file(path, text):
+    """Atomically replace PATH keeping its owner and mode, as wntp does."""
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        info = None
+    else:
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError(f"{path} is not a regular file")
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            if info is not None:
+                os.fchown(stream.fileno(), info.st_uid, info.st_gid)
+            os.fchmod(stream.fileno(), stat.S_IMODE(info.st_mode) if info else 0o644)
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+
+
+def json_switch(data, path, default):
+    """wifi_apply_enabled.sh get_bool: null or missing -> default, else tostring in TRUE_WORDS."""
+    node = data
+    for part in path:
+        if not isinstance(node, dict) or node.get(part) is None:
+            return default
+        node = node[part]
+    if isinstance(node, bool):
+        text = "true" if node else "false"
+    elif isinstance(node, str):
+        text = node
+    else:
+        text = json.dumps(node)
+    return text in TRUE_WORDS
+
+
+def trap_destination(data):
+    node = data.get("snmp") if isinstance(data, dict) else None
+    node = node.get("trap") if isinstance(node, dict) else None
+    dest = node.get("dest") if isinstance(node, dict) else ""
+    return dest if isinstance(dest, str) else ""
+
+
+def split_destination(dest):
+    """'host:port' -> ('host', ':port'); anything else keeps its text as the host."""
+    if dest.count(":") == 1:
+        host, _, port = dest.partition(":")
+        return host, ":" + port
+    return dest, ""
+
+
+def save_json(changes):
+    """Re-read the settings JSON just before writing and change only CHANGES."""
+    if not stat.S_ISREG(JSON_PATH.lstat().st_mode):
+        raise OSError(f"{JSON_PATH} is not a regular file")
+    data = json.loads(JSON_PATH.read_text(encoding="utf-8"))
+    for path, value in changes:
+        node = data
+        for part in path[:-1]:
+            child = node.get(part)
+            if not isinstance(child, dict):
+                child = node[part] = {}
+            node = child
+        node[path[-1]] = value
+    replace_file(JSON_PATH, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+
+
+def records(text):
+    """Keep original text while joining systemd continuation lines for parsing (as wntp)."""
+    raw, parts = [], []
+    for line in text.splitlines(keepends=True):
+        raw.append(line)
+        value = line.strip()
+        if value.startswith(("#", ";")):
+            if parts:
+                continue
+            yield "".join(raw), ""
+        elif value.endswith("\\"):
+            parts.append(value[:-1])
+            continue
+        else:
+            parts.append(value)
+            yield "".join(raw), " ".join(parts)
+        raw, parts = [], []
+    if raw:
+        yield "".join(raw), " ".join(parts)
+
+
+def time_values(text, name):
+    """Effective list for NAME in [Time], or None when it is never assigned."""
+    values, seen, in_time = [], False, False
+    for _, line in records(text):
+        if line.startswith("[") and line.endswith("]"):
+            in_time = line == "[Time]"
+        elif in_time:
+            key, separator, value = line.partition("=")
+            if separator and key.strip() == name:
+                seen = True
+                # An empty assignment resets the list in systemd configuration.
+                values = values + value.split() if value.split() else []
+    return values if seen else None
+
+
+def set_time_values(text, assignments):
+    output, written, in_time = [], set(), False
+    for raw, line in records(text):
+        if line.startswith("[") and line.endswith("]"):
+            in_time = line == "[Time]"
+        key, separator, _ = line.partition("=")
+        key = key.strip()
+        if in_time and separator and key in assignments:
+            if key not in written:
+                output.append(f"{key}={assignments[key]}\n")
+                written.add(key)
+            continue
+        output.append(raw)
+    result = "".join(output)
+    missing = [key for key in assignments if key not in written]
+    if missing:
+        if result and not result.endswith("\n"):
+            result += "\n"
+        if not in_time:
+            result += "[Time]\n"
+        result += "".join(f"{key}={assignments[key]}\n" for key in missing)
+    return result
+
+
+def ntp_server(text):
+    """First device server (NTP=), or 0.0.0.0 when none is set; FallbackNTP= is not a device server."""
+    servers = time_values(text, "NTP") or []
+    return servers[0] if servers else "0.0.0.0"
+
+
+def read_timesyncd():
+    try:
+        return TIMESYNCD_CONF.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+
+
+def current_values():
+    data = json.loads(JSON_PATH.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("settings JSON is not an object")
+    host, _ = split_destination(trap_destination(data))
+    return data, {
+        "NTP_FUNC": "enabled" if json_switch(data, ("global", "ntp", "enabled"), True) else "disabled",
+        "NTP_SERVER": ntp_server(read_timesyncd()),
+        "SNMP_FUNC": "enabled" if json_switch(data, ("snmp", "enabled"), False) else "disabled",
+        "SNMP_TRAP_IPADDR": host or "0.0.0.0",
+    }
+
+
+def check_switch(value):
+    if value in ("enabled", "disabled"):
+        return value
+    raise Invalid("expected enabled or disabled")
+
+
+def check_address(value):
+    if value == "0.0.0.0":
+        return value
+    try:
+        address = ipaddress.IPv4Address(value)
+    except ValueError:
+        raise Invalid("expected an IPv4 address or 0.0.0.0") from None
+    if address.is_multicast or address.is_unspecified or str(address) == "255.255.255.255":
+        raise Invalid("expected a unicast IPv4 address or 0.0.0.0")
+    return str(address)
+
+
+CHECKS = {"NTP_FUNC": check_switch, "NTP_SERVER": check_address,
+          "SNMP_FUNC": check_switch, "SNMP_TRAP_IPADDR": check_address}
+
+
+# --- commands ------------------------------------------------------------------------
+
+def classify(entries, malformed, current):
+    """Per-key report in file order and the implemented values that would change."""
+    lines_of = {}
+    for number, key, _ in entries:
+        if key in KNOWN:
+            lines_of.setdefault(key, []).append(number)
+    report, wanted, seen = [], {}, set()
+    for _, key, value in entries:
+        if key in seen:
+            continue
+        seen.add(key)
+        if len(lines_of.get(key, ())) > 1:
+            report.append([key, "invalid", "duplicate key on lines " + ",".join(map(str, lines_of[key]))])
+        elif key in UNSUPPORTED:
+            report.append([key, "unsupported", ""])
+        elif key in PENDING:
+            report.append([key, "pending", ""])
+        elif key not in IMPLEMENTED:
+            report.append([key, "unknown", ""])
+        elif value == current[key]:
+            report.append([key, "unchanged", ""])
+        else:
+            try:
+                normalized = CHECKS[key](value)
+            except Invalid as error:
+                report.append([key, "invalid", str(error)])
+                continue
+            if normalized == current[key]:
+                report.append([key, "unchanged", ""])
+            else:
+                wanted[key] = normalized
+                report.append([key, "applied", ""])
+    report.extend([f"line{number}", "invalid", "expected KEY=VALUE"] for number in malformed)
+    return report, wanted
+
+
+def save_stores(document, wanted, status):
+    changes, json_keys = [], []
+    for key, path in (("NTP_FUNC", ("global", "ntp", "enabled")), ("SNMP_FUNC", ("snmp", "enabled"))):
+        if key in wanted:
+            changes.append((path, wanted[key] == "enabled"))
+            json_keys.append(key)
+    if "SNMP_TRAP_IPADDR" in wanted:
+        host = wanted["SNMP_TRAP_IPADDR"]
+        _, port = split_destination(trap_destination(document))
+        changes.append((("snmp", "trap", "dest"), "" if host == "0.0.0.0" else host + port))
+        json_keys.append("SNMP_TRAP_IPADDR")
+    if changes:
+        try:
+            save_json(changes)
+        except (OSError, ValueError) as error:
+            for key in json_keys:
+                status[key] = ("failed", f"settings save failed: {error}")
+    if "NTP_SERVER" in wanted:
+        server = wanted["NTP_SERVER"]
+        # 0.0.0.0 clears the device server only.  timesyncd then uses FallbackNTP=, and
+        # systemd 254 refills an empty FallbackNTP= with its compiled default list, so
+        # no file setting means "no server"; NTP_FUNC=disabled stops time sync.
+        assignments = {"NTP": "" if server == "0.0.0.0" else server}
+        try:
+            replace_file(TIMESYNCD_CONF, set_time_values(read_timesyncd(), assignments))
+        except (OSError, UnicodeError) as error:
+            status["NTP_SERVER"] = ("failed", f"timesyncd save failed: {error}")
+
+
+def follow_services(present, wanted, status):
+    """One --no-block action per service, chosen from its enable state after the sync."""
+    sync_failed = False
+    if any(key in present for key in ENABLE_KEYS):
+        rc = run([APPLY_ENABLED], 12, WIFI_APPLY_STRICT="1")
+        if rc != 0:
+            sync_failed = True
+            for key in ENABLE_KEYS:
+                if key in present:
+                    status[key] = ("failed", f"enable state sync failed rc={rc}")
+    for unit, keys in SERVICE_KEYS:
+        keys = [key for key in keys if key in present]
+        if not keys:
+            continue
+        if sync_failed and any(key in ENABLE_KEYS for key in keys):
+            # The enable state is unknown, so the service is left alone; every key
+            # that needed this service stays failed until a later apply succeeds.
+            for key in keys:
+                status.setdefault(key, ("failed", f"{unit} not changed after the enable state sync failed"))
+            continue
+        enabled = run([SYSTEMCTL, "is-enabled", "--quiet", unit], 4)
+        if enabled is None:
+            action, rc = "is-enabled", None
+        else:
+            if enabled != 0:
+                action = "stop"
+            elif "NTP_SERVER" in keys:
+                # timesyncd reads its servers only at start; restarting whenever the
+                # key is listed also completes an earlier apply whose restart failed.
+                action = "restart"
+            else:
+                action = "start"
+            rc = run([SYSTEMCTL, "--no-ask-password", "--no-block", action, unit], 4)
+        if rc != 0:
+            for key in keys:
+                status.setdefault(key, ("failed", f"{action} {unit} failed rc={rc}"))
+
+
+def write_result(report, counts):
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    summary = "SUMMARY " + " ".join(f"{name}={counts[name]}" for name in STATUSES)
+    lines = [" ".join(part for part in entry if part) for entry in report]
+    write_home(RESULT, "\n".join([f"# wconfig apply {stamp}", summary, *lines]) + "\n")
+    return summary
+
+
+def apply_settings():
+    try:
+        text = read_home(SETTINGS)
+    except OSError as error:
+        return fail(EXIT_IO, f"cannot read {SETTINGS}: {error}")
+    if text is None:
+        return fail(EXIT_IO, f"{SETTINGS} not found; upload it or run wconfig get")
+    try:
+        document, current = current_values()
+    except (OSError, ValueError) as error:
+        return fail(EXIT_IO, f"cannot read the device settings: {error}")
+    report, wanted = classify(*parse(text), current)
+    invalid = [entry for entry in report if entry[1] == "invalid"]
+    if invalid:
+        counts = {name: 0 for name in STATUSES}
+        counts["invalid"] = len(invalid)
+        try:
+            summary = write_result(invalid, counts)
+        except OSError as error:
+            return fail(EXIT_IO, f"nothing changed; result save failed: {error}")
+        return fail(EXIT_INVALID, f"nothing changed; {summary}")
+
+    status = {}
+    save_stores(document, wanted, status)
+    present = {entry[0] for entry in report if entry[0] in IMPLEMENTED}
+    follow_services(present, wanted, status)
+    for entry in report:
+        if entry[0] in status:
+            entry[1], entry[2] = status[entry[0]]
+    counts = {name: 0 for name in STATUSES}
+    for entry in report:
+        counts[entry[1]] += 1
+    try:
+        summary = write_result(report, counts)
+    except OSError as error:
+        return fail(EXIT_IO, f"applied but the result save failed: {error}")
+    if counts["failed"]:
+        return fail(EXIT_FAILED, summary)
+    if counts["pending"]:
+        return fail(EXIT_PENDING, summary)
+    log(f"status=ok {summary}", syslog.LOG_INFO)
+    print("SUCCESS " + summary[len("SUMMARY "):] + f"; see {RESULT}")
+    return 0
+
+
+def get_settings(key=None):
+    if key is not None and key not in IMPLEMENTED:
+        return fail(EXIT_USAGE, f"{key} cannot be read; readable keys: {' '.join(IMPLEMENTED)}")
+    try:
+        _, current = current_values()
+    except (OSError, ValueError) as error:
+        return fail(EXIT_IO, f"cannot read the device settings: {error}")
+    if key is not None:
+        print(f"{key}={current[key]}")
+        return 0
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    lines = [f"# wconfig get {stamp}"] + [f"{name}={current[name]}" for name in IMPLEMENTED]
+    try:
+        write_home(SETTINGS, "\n".join(lines) + "\n")
+    except OSError as error:
+        return fail(EXIT_IO, f"cannot write {SETTINGS}: {error}")
+    print(f"SUCCESS wrote {len(IMPLEMENTED)} keys to {SETTINGS}")
+    return 0
+
+
+def valid_key(key):
+    return bool(key) and key[0].isascii() and key[0].isupper() and all(
+        char.isascii() and (char.isupper() or char.isdigit() or char == "_") for char in key)
+
+
+def put_setting(args):
+    key, separator, value = args[0].partition("=")
+    if not separator or not valid_key(key):
+        return fail(EXIT_USAGE, "expected KEY=VALUE with an upper-case key; " + USAGE)
+    value = " ".join([value, *args[1:]]).strip()
+    try:
+        text = read_home(SETTINGS) or ""
+    except NotRegular as error:
+        # A planted link or special file is replaced, never read or followed.
+        log(f"status=replaced_non_regular detail={error}")
+        text = ""
+    except OSError as error:
+        return fail(EXIT_IO, f"cannot read {SETTINGS}: {error}")
+    if text.startswith("\ufeff"):
+        text = text[1:]
+    lines, written = [], False
+    for line in text.splitlines():
+        name, has_equals, _ = line.strip().partition("=")
+        if has_equals and name.strip() == key:
+            if not written:
+                lines.append(f"{key}={value}")
+                written = True
+            continue
+        lines.append(line)
+    if not written:
+        lines.append(f"{key}={value}")
+    try:
+        write_home(SETTINGS, "\n".join(lines) + "\n")
+    except OSError as error:
+        return fail(EXIT_IO, f"cannot write {SETTINGS}: {error}")
+    print(f"SUCCESS {key} saved to {SETTINGS}; run wconfig apply")
+    return 0
+
+
+def main(args=None):
+    log_start("wconfig")
+    args = sys.argv[1:] if args is None else args
+    if args == ["apply"]:
+        return apply_settings()
+    if args == ["get"]:
+        return get_settings()
+    if len(args) == 2 and args[0] == "get":
+        return get_settings(args[1])
+    if len(args) >= 2 and args[0] == "put":
+        return put_setting(args[1:])
+    return fail(EXIT_USAGE, USAGE)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

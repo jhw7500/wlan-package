@@ -15,7 +15,7 @@ import pytest
 FTPCMD = Path(__file__).resolve().parents[4] / "opt/ftpcmd"
 NATIVE_LOGGER_SOURCE = FTPCMD / "lib/ftpcmd_start_log.c"
 COMMANDS = (
-    "getifstate", "ifcdown", "ifcup", "rst", "wconnect", "wconnectraw",
+    "getifstate", "ifcdown", "ifcup", "rst", "wconfig", "wconnect", "wconnectraw",
     "wfreq", "wgetifstate", "whelp", "wifcdown", "wifcup", "wntp", "wpsk",
     "wrst", "wscan", "wssid", "wstatus", "wtime",
 )

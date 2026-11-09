@@ -71,6 +71,7 @@ dist/wlan/opt/ftpcmd/bin/getifstate
 dist/wlan/opt/ftpcmd/bin/ifcdown
 dist/wlan/opt/ftpcmd/bin/ifcup
 dist/wlan/opt/ftpcmd/bin/rst
+dist/wlan/opt/ftpcmd/bin/wconfig
 dist/wlan/opt/ftpcmd/bin/wconnect
 dist/wlan/opt/ftpcmd/bin/wconnectraw
 dist/wlan/opt/ftpcmd/bin/wfreq
@@ -351,6 +352,7 @@ dist/wlan/usr/local/scripts/tests/test_fake_hwclock.sh
 dist/wlan/usr/local/scripts/tests/test_ftpcmd_reply_contract.py
 dist/wlan/usr/local/scripts/tests/test_ftpcmd_start_log.py
 dist/wlan/usr/local/scripts/tests/test_ftpcmd_time.py
+dist/wlan/usr/local/scripts/tests/test_ftpcmd_wconfig.py
 dist/wlan/usr/local/scripts/tests/test_ftpcmd_whelp.py
 dist/wlan/usr/local/scripts/tests/test_guide_net_rx_section.py
 dist/wlan/usr/local/scripts/tests/test_iface_enabled_default_parity.py

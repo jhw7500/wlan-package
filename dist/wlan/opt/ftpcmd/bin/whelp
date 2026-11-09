@@ -25,6 +25,11 @@ HELP = {
     "rst": (
         "Reboot the whole board. Usage: quote rst. Example: quote rst"
     ),
+    "wconfig": (
+        "Save, read or apply the settings file wconfig.txt (KEY=VALUE, CONTEC key names); "
+        "apply checks every line first. Usage: quote wconfig get [KEY] | put KEY=VALUE | apply. "
+        "Example: quote wconfig put NTP_SERVER=192.168.0.3"
+    ),
     "wconnect": (
         "Apply/connect; staged PSK requires explicit SSID. "
         "Usage: quote wconnect <iface> [--save|--no-save] [SSID...]. "
