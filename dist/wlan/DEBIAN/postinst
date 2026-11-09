@@ -311,6 +311,24 @@ EOF
   cp /opt/wlan/config/systemd/journald.conf /etc/systemd/
   mkdir -p /etc/snmp
   cp /opt/wlan/config/snmp/snmpd.conf /etc/snmp/snmpd.conf
+  # >>> snmpd-local
+  # SNMP 적용값 정본 /etc/snmp/snmpd.local.conf(#464 quote wconfig SNMP_COMMUNITY·SNMP_SYS*).
+  # snmpd 는 snmpd.conf 뒤에 이 파일을 읽어 그 값을 쓴다. snmpd.conf 는 위에서 설치마다 템플릿으로
+  # 덮고 local 만 보존한다. snmpd.conf 에는 rocommunity 가 없으므로 아래 try-restart 전에 local 이
+  # 있어야 첫 업그레이드에서도 조회가 된다. cpchk 는 아래에서 정의되므로 같은 규칙(없거나 비면
+  # 복사)을 여기 직접 쓴다. 커뮤니티 줄이 없는 기존 local(snmpd.conf 의 syslocation 문구가 이 파일을
+  # 권했다)에는 snmpd.conf 에서 옮겨 간 템플릿 줄을 덧붙여 조회를 유지한다.
+  if [ ! -s /etc/snmp/snmpd.local.conf ]; then
+    logger -s -p local0.info "[$tag:$LINENO] [$KEY] cp /opt/wlan/config/snmp/snmpd.local.conf /etc/snmp/snmpd.local.conf (target empty or missing)"
+    cp /opt/wlan/config/snmp/snmpd.local.conf /etc/snmp/snmpd.local.conf
+    sync /etc/snmp/snmpd.local.conf 2>/dev/null || sync
+  elif ! grep -qiE '^[[:space:]]*rocommunity[[:space:]]' /etc/snmp/snmpd.local.conf; then
+    logger -s -p local0.warn "[$tag:$LINENO] [$KEY] /etc/snmp/snmpd.local.conf has no rocommunity; appending the template line"
+    [ -z "$(tail -c 1 /etc/snmp/snmpd.local.conf)" ] || echo >> /etc/snmp/snmpd.local.conf
+    grep -iE '^[[:space:]]*rocommunity[[:space:]]' /opt/wlan/config/snmp/snmpd.local.conf >> /etc/snmp/snmpd.local.conf
+    sync /etc/snmp/snmpd.local.conf 2>/dev/null || sync
+  fi
+  # <<< snmpd-local
   # snmpd 라이프사이클은 wifi_init_conf.json .snmp.enabled 게이트가 소유
   # (wifi_apply_enabled.sh enable/disable + wifi_services.sh start).
   # 업그레이드 시 백엔드가 /usr/local/scripts → /usr/local/logger 로 이동하고 snmpd.conf 도

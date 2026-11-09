@@ -7,16 +7,19 @@ The file is KEY=VALUE text using the key names of the CONTEC settings export.
 apply validates every line first and changes nothing when one is wrong.  It then
 saves each store and hands PID 1 a single systemctl --no-block action per
 service, so the handler ends well inside the dispatcher's 30 s limit; a detached
-child would be killed with the FTP session (see rst).  LAN_* values rewrite
-22-eth0.network last and restart wifi_lan_apply.service, which reconfigures eth0
-only after a short wait so this reply leaves first.  Per-key results go to
-/home/admin/wconfig.result.
+child would be killed with the FTP session (see rst).  SNMP_COMMUNITY and
+SNMP_SYS* rewrite /etc/snmp/snmpd.local.conf, which snmpd reads after the
+snmpd.conf that every package install rewrites, and restart snmpd only when that
+file changes.  LAN_* values rewrite 22-eth0.network last and restart
+wifi_lan_apply.service, which reconfigures eth0 only after a short wait so this
+reply leaves first.  Per-key results go to /home/admin/wconfig.result.
 """
 
 import errno
 import ipaddress
 import json
 import os
+import re
 import secrets
 import stat
 import subprocess
@@ -24,6 +27,7 @@ import sys
 import syslog
 import tempfile
 import time
+import unicodedata
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
@@ -35,6 +39,7 @@ SETTINGS = "wconfig.txt"
 RESULT = "wconfig.result"
 JSON_PATH = Path("/usr/local/etc/wifi_init_conf.json")
 TIMESYNCD_CONF = Path("/etc/systemd/timesyncd.conf")
+SNMPD_LOCAL_CONF = Path("/etc/snmp/snmpd.local.conf")
 APPLY_ENABLED = "/usr/local/scripts/wifi_apply_enabled.sh"
 SYSTEMCTL = "/usr/bin/systemctl"
 NTP_UNIT = "systemd-timesyncd.service"
@@ -43,6 +48,8 @@ ETH0_NETWORK = Path("/etc/systemd/network/22-eth0.network")
 MLAN0_NETWORK = Path("/etc/systemd/network/20-mlan0.network")
 LAN_UNIT = "wifi_lan_apply.service"
 MAX_BYTES = 64 * 1024
+# The dispatcher relays one printable ASCII line of at most this many bytes (1.1).
+REPLY_BYTES = 256
 
 # The 25 system keys of the CONTEC settings export.  IMPLEMENTED keys are applied
 # here; PENDING keys get their appliers in later #464 changes; UNSUPPORTED keys
@@ -50,9 +57,13 @@ MAX_BYTES = 64 * 1024
 LAN_KEYS = ("LAN_MODE", "LAN_IPADDR", "LAN_NETMASK", "LAN_GATEWAY")
 # Per-type trap switches and the snmp.trap key each one owns.
 TRAP_TYPES = (("SNMP_TRAP_WLAN", "link"), ("SNMP_TRAP_CHAN", "channel"))
+# SNMP strings kept in snmpd.local.conf, and the snmpd directive each sys* key owns.
+SNMPD_DIRECTIVES = (("SNMP_SYSCONTACT", "syscontact"), ("SNMP_SYSLOCATION", "syslocation"),
+                    ("SNMP_SYSNAME", "sysname"))
+SNMPD_KEYS = ("SNMP_COMMUNITY",) + tuple(key for key, _ in SNMPD_DIRECTIVES)
 IMPLEMENTED = ("NTP_FUNC", "NTP_SERVER", "SNMP_FUNC", "SNMP_TRAP_IPADDR",
-               "SNMP_TRAP_WLAN", "SNMP_TRAP_CHAN") + LAN_KEYS
-PENDING = ("TIMEZONE", "SNMP_COMMUNITY", "SNMP_SYSCONTACT", "SNMP_SYSLOCATION", "SNMP_SYSNAME")
+               "SNMP_TRAP_WLAN", "SNMP_TRAP_CHAN") + SNMPD_KEYS + LAN_KEYS
+PENDING = ("TIMEZONE",)
 UNSUPPORTED = ("LANGUAGE", "SNMP_TRAP_LAN", "SNMP_TRAP_INITSW", "NTP_INTERVAL", "LOG_FUNC",
                "LOG_SERVER", "LOG_DEBUG", "LOG_SAVE", "LOG_INTERVAL", "LAN_PORTSPEED")
 KNOWN = IMPLEMENTED + PENDING + UNSUPPORTED
@@ -264,6 +275,16 @@ def trap_destination(data):
     return dest if isinstance(dest, str) else ""
 
 
+def trap_community(data):
+    """snmp.trap.community as wifi_snmp_trap.sh reads it (jq: .snmp.trap.community // "public")."""
+    node = data.get("snmp") if isinstance(data, dict) else None
+    node = node.get("trap") if isinstance(node, dict) else None
+    value = node.get("community") if isinstance(node, dict) else None
+    if value is None or value is False:
+        return "public"
+    return value if isinstance(value, str) else json.dumps(value)
+
+
 def split_destination(dest):
     """'host:port' -> ('host', ':port'); anything else keeps its text as the host."""
     if dest.count(":") == 1:
@@ -361,6 +382,75 @@ def read_timesyncd():
         return ""
 
 
+def read_snmpd_local():
+    """Text of snmpd.local.conf, or None when it is absent; bytes that are not UTF-8 are kept."""
+    try:
+        return SNMPD_LOCAL_CONF.read_bytes().decode("utf-8", "surrogateescape")
+    except FileNotFoundError:
+        return None
+
+
+def snmpd_words(line):
+    """(directive in lower case, rest of the line) of an snmpd.conf line, or None for a comment
+    or a blank line.  snmpd drops trailing blanks and joins no continuation lines."""
+    words = line.split(None, 1)
+    if not words or words[0].startswith("#"):
+        return None
+    return words[0].lower(), words[1].rstrip() if len(words) > 1 else ""
+
+
+def snmpd_values(text):
+    """SNMP strings as get reports them: the community of the first rocommunity line, and the
+    last line of each sys* directive, which is the one snmpd keeps.  Missing means empty."""
+    values, community = {key: "" for key, _ in SNMPD_DIRECTIVES}, None
+    for line in (text or "").split("\n"):
+        words = snmpd_words(line)
+        if words is None:
+            continue
+        name, rest = words
+        if name == "rocommunity" and community is None:
+            community = rest.split()[0] if rest.split() else ""
+        for key, directive in SNMPD_DIRECTIVES:
+            if name == directive:
+                values[key] = rest
+    return {"SNMP_COMMUNITY": community or "", **values}
+
+
+def set_snmpd_values(text, assignments):
+    """snmpd.local.conf with ASSIGNMENTS {key: value} applied.
+
+    The community replaces only the community word of every rocommunity line, so a source or
+    OID narrowed by hand stays, and "rocommunity VALUE default" is added when there is none.
+    A sys* value replaces every line of its directive with one line where the first was (or
+    at the end); an empty value removes them, so snmpd falls back to its default."""
+    lines = text.split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    owner = {directive: key for key, directive in SNMPD_DIRECTIVES if key in assignments}
+    community = assignments.get("SNMP_COMMUNITY")
+    output, placed, communities = [], set(), 0
+    for line in lines:
+        words = snmpd_words(line)
+        name = words[0] if words else None
+        if name == "rocommunity" and community is not None:
+            match = re.match(r"(\s*\S+\s+)\S+(.*)", line)
+            line = match.group(1) + community + match.group(2) if match else f"rocommunity {community} default"
+            communities += 1
+        elif name in owner:
+            key = owner[name]
+            if key not in placed and assignments[key]:
+                output.append(f"{name} {assignments[key]}")
+            placed.add(key)
+            continue
+        output.append(line)
+    if community is not None and not communities:
+        output.append(f"rocommunity {community} default")
+    for key, directive in SNMPD_DIRECTIVES:
+        if key in assignments and key not in placed and assignments[key]:
+            output.append(f"{directive} {assignments[key]}")
+    return "".join(line + "\n" for line in output)
+
+
 def read_network(path):
     try:
         return path.read_text(encoding="utf-8")
@@ -450,6 +540,7 @@ def current_values():
         "SNMP_FUNC": "enabled" if json_switch(data, ("snmp", "enabled"), False) else "disabled",
         "SNMP_TRAP_IPADDR": host or "0.0.0.0",
         **{key: "enabled" if trap_on(data, kind) else "disabled" for key, kind in TRAP_TYPES},
+        **snmpd_values(read_snmpd_local()),
         **lan_values(read_network(ETH0_NETWORK)),
     }
 
@@ -508,9 +599,36 @@ def check_gateway(value):
     return value if value == "0.0.0.0" else check_host(value)
 
 
+def check_community(value):
+    """The query and trap community: 1 to 32 visible ASCII characters other than # " ' \\."""
+    if not 1 <= len(value) <= 32 or any(not "!" <= char <= "~" or char in "#\"'\\" for char in value):
+        raise Invalid("expected 1 to 32 visible ASCII characters other than # \" ' \\")
+    return value
+
+
+def check_snmp_text(value):
+    """A sys* string as snmpd keeps it: UTF-8 without control characters, at most 255 bytes
+    (snmpd drops a longer token), not starting with # (snmpd reads no value).  parse() has
+    already removed surrounding blanks; empty means the default."""
+    for char in value:
+        category = unicodedata.category(char)
+        if category == "Cs":
+            # read_home keeps bytes that are not UTF-8 as lone surrogates.
+            raise Invalid("expected UTF-8 text")
+        if category in ("Cc", "Zl", "Zp"):
+            raise Invalid("control characters are not allowed")
+    if value.startswith("#"):
+        raise Invalid("must not start with #")
+    if len(value.encode("utf-8")) > 255:
+        raise Invalid("expected at most 255 bytes")
+    return value
+
+
 CHECKS = {"NTP_FUNC": check_switch, "NTP_SERVER": check_address,
           "SNMP_FUNC": check_switch, "SNMP_TRAP_IPADDR": check_address,
           "SNMP_TRAP_WLAN": check_switch, "SNMP_TRAP_CHAN": check_switch,
+          "SNMP_COMMUNITY": check_community, "SNMP_SYSCONTACT": check_snmp_text,
+          "SNMP_SYSLOCATION": check_snmp_text, "SNMP_SYSNAME": check_snmp_text,
           "LAN_MODE": check_mode, "LAN_IPADDR": check_host, "LAN_NETMASK": check_netmask,
           "LAN_GATEWAY": check_gateway}
 
@@ -581,6 +699,20 @@ def check_lan(current, wanted):
 
 # --- commands ------------------------------------------------------------------------
 
+def compare_values(document, current):
+    """CURRENT for classify, except that SNMP_COMMUNITY differs while the trap community does:
+    the key sets both, and the web UI edits snmp.trap.community alone.  A community wconfig
+    could not write (none at all, say) stays as it is, so a file written by get still applies."""
+    community = current["SNMP_COMMUNITY"]
+    if community == trap_community(document):
+        return current
+    try:
+        check_community(community)
+    except Invalid:
+        return current
+    return {**current, "SNMP_COMMUNITY": None}
+
+
 def classify(entries, malformed, current):
     """Per-key report in file order and the implemented values that would change."""
     lines_of = {}
@@ -650,6 +782,10 @@ def save_stores(document, wanted, status):
             # snmp.trap.enabled back on elsewhere (web UI) sends them again.
             changes.append((("snmp", "trap", "enabled"), False))
         json_keys.extend(trap_keys)
+    if "SNMP_COMMUNITY" in wanted:
+        # The trap community goes first: when it fails, apply_snmpd leaves the query one.
+        changes.append((("snmp", "trap", "community"), wanted["SNMP_COMMUNITY"]))
+        json_keys.append("SNMP_COMMUNITY")
     if changes:
         try:
             save_json(changes)
@@ -704,6 +840,48 @@ def follow_services(present, wanted, status):
         if rc != 0:
             for key in keys:
                 status.setdefault(key, ("failed", f"{action} {unit} failed rc={rc}"))
+
+
+def apply_snmpd(wanted, status):
+    """Rewrite snmpd.local.conf for the SNMP strings that changed and restart an enabled snmpd.
+
+    Only a changed file restarts snmpd, because a restart resets sysUpTime and drops queries
+    for a moment.  A restart that cannot be queued puts the file back, so failed means snmpd
+    still has the old values and applying the same file again retries."""
+    keys = [key for key in SNMPD_KEYS if key in wanted and key not in status]
+    if not keys:
+        return
+    try:
+        before = read_snmpd_local()
+        after = set_snmpd_values(before or "", {key: wanted[key] for key in keys})
+        if after == (before or ""):
+            return
+        replace_file(SNMPD_LOCAL_CONF, after)
+    except (OSError, UnicodeError) as error:
+        for key in keys:
+            status[key] = ("failed", f"snmpd.local.conf save failed: {error}")
+        return
+    enabled = run([SYSTEMCTL, "is-enabled", "--quiet", SNMP_UNIT], 4)
+    if enabled is None:
+        action, rc = "is-enabled", None
+    elif enabled != 0:
+        return  # a stopped snmpd reads the file when it next starts
+    else:
+        action = "restart"
+        rc = run([SYSTEMCTL, "--no-ask-password", "--no-block", action, SNMP_UNIT], 4)
+        if rc == 0:
+            return
+    try:
+        if before is None:
+            SNMPD_LOCAL_CONF.unlink()
+        else:
+            replace_file(SNMPD_LOCAL_CONF, before)
+    except (OSError, UnicodeError) as error:
+        detail = f"{action} {SNMP_UNIT} failed rc={rc}; restoring snmpd.local.conf failed ({error})"
+    else:
+        detail = f"{action} {SNMP_UNIT} failed rc={rc}; snmpd.local.conf restored"
+    for key in keys:
+        status[key] = ("failed", detail)
 
 
 def apply_lan(wanted, current, status):
@@ -761,7 +939,7 @@ def apply_settings():
         document, current = current_values()
     except (OSError, ValueError) as error:
         return fail(EXIT_IO, f"cannot read the device settings: {error}")
-    report, wanted = classify(*parse(text), current)
+    report, wanted = classify(*parse(text), compare_values(document, current))
     invalid = [entry for entry in report if entry[1] == "invalid"]
     if invalid:
         counts = {name: 0 for name in STATUSES}
@@ -776,6 +954,7 @@ def apply_settings():
     save_stores(document, wanted, status)
     present = {entry[0] for entry in report if entry[0] in IMPLEMENTED}
     follow_services(present, wanted, status)
+    apply_snmpd(wanted, status)
     # Last, so the unit's wait starts only when nothing but the reply is left to do.
     apply_lan(wanted, current, status)
     for entry in report:
@@ -805,7 +984,11 @@ def get_settings(key=None):
     except (OSError, ValueError) as error:
         return fail(EXIT_IO, f"cannot read the device settings: {error}")
     if key is not None:
-        print(f"{key}={current[key]}")
+        line = f"{key}={current[key]}"
+        if not (line.isascii() and line.isprintable()) or len(line) > REPLY_BYTES:
+            # Such a value (Korean, say) is only written with ftp put; it is read the same way.
+            return fail(EXIT_USAGE, f"{key} does not fit the reply line; run wconfig get and read {SETTINGS}")
+        print(line)
         return 0
     stamp = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     lines = [f"# wconfig get {stamp}"] + [f"{name}={current[name]}" for name in IMPLEMENTED]

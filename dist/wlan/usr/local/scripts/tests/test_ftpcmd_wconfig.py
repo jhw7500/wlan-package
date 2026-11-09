@@ -18,6 +18,7 @@ UNIT_FILE = Path(__file__).resolve().parents[4] / "etc/systemd/system" / LAN_UNI
 ETH0_TEXT = ("[Match]\nName=eth0\n\n[Network]\nDHCP=no\n# management address, factory-reset recovery path\n"
              "Address=192.0.2.1/24\n#KeepConfiguration=static\nLinkLocalAddressing=no\nIPv6AcceptRA=no\n")
 MLAN0_TEXT = "[Match]\nName=mlan0\n\n[Network]\nDHCP=no\nAddress=198.51.100.100/24\nLinkLocalAddressing=no\n"
+SNMPD_LOCAL_TEXT = "# values applied by quote wconfig (#464)\nrocommunity public  default\n"
 
 
 def load_handler(name):
@@ -87,6 +88,9 @@ def env(tmp_path, monkeypatch):
     eth0.write_text(ETH0_TEXT)
     mlan0 = tmp_path / "20-mlan0.network"
     mlan0.write_text(MLAN0_TEXT)
+    snmpd_local = tmp_path / "snmpd.local.conf"
+    snmpd_local.write_text(SNMPD_LOCAL_TEXT)
+    snmpd_local.chmod(0o644)
     system = System(conf)
     monkeypatch.setattr(subprocess, "run", system.run)
     monkeypatch.setattr(module, "HOME", home)
@@ -94,9 +98,10 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "TIMESYNCD_CONF", timesyncd)
     monkeypatch.setattr(module, "ETH0_NETWORK", eth0, raising=False)
     monkeypatch.setattr(module, "MLAN0_NETWORK", mlan0, raising=False)
+    monkeypatch.setattr(module, "SNMPD_LOCAL_CONF", snmpd_local, raising=False)
     monkeypatch.setattr(module.syslog, "syslog", lambda *args: None)
     return types.SimpleNamespace(module=module, home=home, conf=conf, timesyncd=timesyncd, eth0=eth0,
-                                 mlan0=mlan0, system=system)
+                                 mlan0=mlan0, snmpd_local=snmpd_local, system=system)
 
 
 def write_settings(env, text):
@@ -180,17 +185,20 @@ def test_get_then_apply_is_unchanged_but_still_resyncs_services(env, capsys):
     capsys.readouterr()
     written = (env.home / "wconfig.txt").read_text().splitlines()
     for expected in ("NTP_FUNC=enabled", "NTP_SERVER=192.168.0.3", "SNMP_FUNC=disabled", "SNMP_TRAP_IPADDR=0.0.0.0",
-                     "SNMP_TRAP_WLAN=disabled", "SNMP_TRAP_CHAN=disabled",
+                     "SNMP_TRAP_WLAN=disabled", "SNMP_TRAP_CHAN=disabled", "SNMP_COMMUNITY=public",
+                     "SNMP_SYSCONTACT=", "SNMP_SYSLOCATION=", "SNMP_SYSNAME=",
                      "LAN_MODE=static", "LAN_IPADDR=192.0.2.1", "LAN_NETMASK=255.255.255.0", "LAN_GATEWAY=0.0.0.0"):
         assert expected in written
     conf_before, ntp_before, eth0_before = env.conf.read_bytes(), env.timesyncd.read_bytes(), env.eth0.read_bytes()
+    local_before = env.snmpd_local.read_bytes()
 
     assert env.module.main(["apply"]) == 0
 
     assert env.conf.read_bytes() == conf_before
     assert env.timesyncd.read_bytes() == ntp_before
     assert env.eth0.read_bytes() == eth0_before
-    assert one_line(capsys).startswith("SUCCESS applied=0 unchanged=10 ")
+    assert env.snmpd_local.read_bytes() == local_before
+    assert one_line(capsys).startswith("SUCCESS applied=0 unchanged=14 ")
     # A retry after a failed service step must still bring services in line, and
     # timesyncd only reads its servers when it starts, so a listed server restarts it.
     # Unchanged LAN values hand nothing to the LAN unit: eth0 is not reconfigured.
@@ -408,7 +416,7 @@ def result_line(env, key):
 
 def test_get_reports_the_lan_values_of_the_eth0_network_file(env, capsys):
     assert env.module.main(["get"]) == 0
-    assert one_line(capsys) == "SUCCESS wrote 10 keys to wconfig.txt"
+    assert one_line(capsys) == "SUCCESS wrote 14 keys to wconfig.txt"
     written = (env.home / "wconfig.txt").read_text().splitlines()
     for expected in ("LAN_MODE=static", "LAN_IPADDR=192.0.2.1", "LAN_NETMASK=255.255.255.0", "LAN_GATEWAY=0.0.0.0"):
         assert expected in written
@@ -743,3 +751,265 @@ def test_a_failed_enable_sync_fails_the_trap_keys(env):
     assert env.module.main(["apply"]) == 4
 
     assert result_line(env, "SNMP_TRAP_WLAN").startswith("SNMP_TRAP_WLAN failed")
+
+
+# --- SNMP strings: /etc/snmp/snmpd.local.conf, which snmpd reads after snmpd.conf ------------
+
+def set_local(env, text):
+    env.snmpd_local.write_bytes(text.encode("utf-8"))
+    env.snmpd_local.chmod(0o644)
+
+
+def write_settings_utf8(env, text):
+    (env.home / "wconfig.txt").write_bytes(text.encode("utf-8"))
+
+
+def snmpd_on(env):
+    """snmpd enabled both in the JSON and in systemd, as SNMP_FUNC=enabled leaves it."""
+    data = json.loads(env.conf.read_text())
+    data["snmp"]["enabled"] = True
+    env.conf.write_text(json.dumps(data, indent=2) + "\n")
+    env.system.enabled[SNMP_UNIT] = True
+
+
+def written_settings(env):
+    return (env.home / "wconfig.txt").read_text(encoding="utf-8").splitlines()
+
+
+def test_get_reports_the_snmp_strings_of_the_local_file(env, capsys):
+    set_local(env, "# comment\nrocommunity mycomm 192.0.2.0/24\nrocommunity6 other default\n"
+                   "SysContact Kim <kim@example.com>\nsyslocation Old place\n"
+                   'syslocation 서울 3F #2 "quoted"\nsysname Box-1\n')
+    set_trap(env, community="mycomm")
+
+    assert env.module.main(["get"]) == 0
+
+    assert one_line(capsys) == "SUCCESS wrote 14 keys to wconfig.txt"
+    # The first rocommunity's community; a sys* directive takes its last line, as snmpd does.
+    for expected in ("SNMP_COMMUNITY=mycomm", "SNMP_SYSCONTACT=Kim <kim@example.com>",
+                     'SNMP_SYSLOCATION=서울 3F #2 "quoted"', "SNMP_SYSNAME=Box-1"):
+        assert expected in written_settings(env)
+
+
+def test_a_missing_local_file_reads_as_empty_and_its_get_output_still_applies(env, capsys):
+    env.snmpd_local.unlink()
+    assert env.module.main(["get"]) == 0
+    capsys.readouterr()
+    for key in ("SNMP_COMMUNITY", "SNMP_SYSCONTACT", "SNMP_SYSLOCATION", "SNMP_SYSNAME"):
+        assert f"{key}=" in written_settings(env)
+
+    assert env.module.main(["apply"]) == 0
+
+    # An empty community is not one wconfig can write, so the trap community does not make it
+    # differ: a file written by get still applies, and nothing is created.
+    assert one_line(capsys).startswith("SUCCESS applied=0 unchanged=14 ")
+    assert not env.snmpd_local.exists()
+
+
+def test_a_changed_location_rewrites_only_its_line_and_restarts_an_enabled_snmpd(env):
+    env.system.enabled[SNMP_UNIT] = True
+    set_local(env, "# keep\nrocommunity public 192.0.2.0/24\nsyslocation Old\nsysname Box-1\n")
+    conf_before = env.conf.read_bytes()
+    write_settings_utf8(env, 'SNMP_SYSLOCATION=서울 3F #2 "quoted"\n')
+
+    assert env.module.main(["apply"]) == 0
+
+    assert env.snmpd_local.read_text(encoding="utf-8") == (
+        '# keep\nrocommunity public 192.0.2.0/24\nsyslocation 서울 3F #2 "quoted"\nsysname Box-1\n')
+    assert stat.S_IMODE(env.snmpd_local.stat().st_mode) == 0o644
+    assert env.conf.read_bytes() == conf_before
+    assert env.system.queued() == [("restart", SNMP_UNIT)]
+    assert result_line(env, "SNMP_SYSLOCATION") == "SNMP_SYSLOCATION applied"
+
+
+def test_an_empty_string_removes_every_line_of_the_directive(env):
+    env.system.enabled[SNMP_UNIT] = True
+    set_local(env, "rocommunity public  default\nsysname Box-1\nSYSNAME Box-2\nsyslocation Here\n")
+    write_settings(env, "SNMP_SYSNAME=\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    # snmpd then falls back to the host name; the other directives stay as they were.
+    assert env.snmpd_local.read_text() == "rocommunity public  default\nsyslocation Here\n"
+    assert env.system.queued() == [("restart", SNMP_UNIT)]
+
+
+def test_a_disabled_snmpd_keeps_the_strings_for_its_next_start(env):
+    write_settings(env, "SNMP_SYSCONTACT=ops@example.com\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    assert env.snmpd_local.read_text() == SNMPD_LOCAL_TEXT + "syscontact ops@example.com\n"
+    assert env.system.queued() == []
+    assert result_line(env, "SNMP_SYSCONTACT") == "SNMP_SYSCONTACT applied"
+
+
+def test_reapplying_unchanged_strings_does_not_restart_snmpd(env, capsys):
+    # A restart resets sysUpTime and drops queries for a moment, so only a change restarts it.
+    snmpd_on(env)
+    set_local(env, "rocommunity public  default\nsyslocation Here\n")
+    before = env.snmpd_local.read_bytes()
+    assert env.module.main(["get"]) == 0
+    capsys.readouterr()
+
+    assert env.module.main(["apply"]) == 0
+
+    assert env.snmpd_local.read_bytes() == before
+    assert one_line(capsys).startswith("SUCCESS applied=0 unchanged=14 ")
+    assert sorted(env.system.queued()) == [("restart", NTP_UNIT), ("start", SNMP_UNIT)]
+
+
+def test_a_community_sets_the_trap_community_and_only_the_community_word(env):
+    env.system.enabled[SNMP_UNIT] = True
+    set_local(env, "rocommunity public 192.0.2.0/24 .1.3.6.1.2.1\nROCOMMUNITY  public default\n"
+                   "rocommunity6 public default\n")
+    write_settings(env, "SNMP_COMMUNITY=Secret-1\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    assert json.loads(env.conf.read_text())["snmp"]["trap"]["community"] == "Secret-1"
+    # A source or OID narrowed by hand is kept, and rocommunity6 is another directive.
+    assert env.snmpd_local.read_text() == ("rocommunity Secret-1 192.0.2.0/24 .1.3.6.1.2.1\n"
+                                           "ROCOMMUNITY  Secret-1 default\nrocommunity6 public default\n")
+    assert env.system.queued() == [("restart", SNMP_UNIT)]
+    assert result_line(env, "SNMP_COMMUNITY") == "SNMP_COMMUNITY applied"
+
+
+def test_a_community_without_a_line_is_added_for_every_source(env):
+    set_local(env, "syslocation Here")
+    write_settings(env, "SNMP_COMMUNITY=abc\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    assert env.snmpd_local.read_text() == "syslocation Here\nrocommunity abc default\n"
+
+
+def test_a_trap_community_changed_elsewhere_makes_the_same_community_apply(env, capsys):
+    # SNMP_COMMUNITY sets both communities (#464); the web UI edits only snmp.trap.community.
+    env.system.enabled[SNMP_UNIT] = True
+    set_trap(env, community="webui")
+    before = env.snmpd_local.read_bytes()
+    assert env.module.main(["get", "SNMP_COMMUNITY"]) == 0
+    assert capsys.readouterr().out == "SNMP_COMMUNITY=public\n"
+    write_settings(env, "SNMP_COMMUNITY=public\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    assert json.loads(env.conf.read_text())["snmp"]["trap"]["community"] == "public"
+    assert result_line(env, "SNMP_COMMUNITY") == "SNMP_COMMUNITY applied"
+    # The query community was already right: the file stays and snmpd keeps running.
+    assert env.snmpd_local.read_bytes() == before
+    assert env.system.queued() == []
+
+
+def test_a_failed_trap_community_save_leaves_the_query_community(env, monkeypatch):
+    env.system.enabled[SNMP_UNIT] = True
+
+    def broken(changes):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(env.module, "save_json", broken)
+    write_settings(env, "SNMP_COMMUNITY=Secret-1\nSNMP_SYSNAME=Box-9\n")
+
+    assert env.module.main(["apply"]) == 4
+
+    assert env.snmpd_local.read_text() == SNMPD_LOCAL_TEXT + "sysname Box-9\n"
+    assert result_line(env, "SNMP_COMMUNITY").startswith("SNMP_COMMUNITY failed settings save failed")
+    assert result_line(env, "SNMP_SYSNAME") == "SNMP_SYSNAME applied"
+
+
+def test_a_restart_that_cannot_be_queued_restores_the_local_file(env):
+    env.system.enabled[SNMP_UNIT] = True
+    before = env.snmpd_local.read_bytes()
+    env.system.queue_rc = 1
+    write_settings(env, "SNMP_SYSLOCATION=New place\n")
+
+    assert env.module.main(["apply"]) == 4
+
+    # failed means snmpd still runs with the old values, so the file keeps them too and
+    # applying the same file again retries instead of reading as unchanged.
+    assert env.snmpd_local.read_bytes() == before
+    assert result_line(env, "SNMP_SYSLOCATION").startswith(
+        "SNMP_SYSLOCATION failed restart snmpd.service failed rc=1")
+    env.system.queue_rc = 0
+
+    assert env.module.main(["apply"]) == 0
+
+    assert env.snmpd_local.read_text() == SNMPD_LOCAL_TEXT + "syslocation New place\n"
+    assert env.system.queued()[-1] == ("restart", SNMP_UNIT)
+
+
+def test_a_failed_restart_removes_a_local_file_it_created(env):
+    env.system.enabled[SNMP_UNIT] = True
+    env.snmpd_local.unlink()
+    env.system.queue_rc = 1
+    write_settings(env, "SNMP_SYSNAME=Box-9\n")
+
+    assert env.module.main(["apply"]) == 4
+
+    assert not env.snmpd_local.exists()
+
+
+@pytest.mark.parametrize("line", [
+    "SNMP_COMMUNITY=", "SNMP_COMMUNITY=" + "a" * 33, "SNMP_COMMUNITY=pub lic", "SNMP_COMMUNITY=pub#lic",
+    'SNMP_COMMUNITY=pub"lic', "SNMP_COMMUNITY=pub'lic", "SNMP_COMMUNITY=pub\\lic", "SNMP_COMMUNITY=공개",
+    "SNMP_SYSLOCATION=#2F", "SNMP_SYSNAME=" + "a" * 256, "SNMP_SYSNAME=" + "가" * 86,
+    "SNMP_SYSCONTACT=tab\there", "SNMP_SYSCONTACT=bell\x07",
+])
+def test_each_bad_snmp_string_blocks_the_whole_apply(env, line):
+    env.system.enabled[SNMP_UNIT] = True
+    local_before, conf_before = env.snmpd_local.read_bytes(), env.conf.read_bytes()
+    write_settings_utf8(env, f"NTP_SERVER=192.0.2.10\n{line}\n")
+
+    assert env.module.main(["apply"]) == 3
+
+    assert env.snmpd_local.read_bytes() == local_before
+    assert env.conf.read_bytes() == conf_before
+    assert env.system.calls == []
+    key = line.split("=", 1)[0]
+    assert result_line(env, key).startswith(f"{key} invalid")
+
+
+def test_a_snmp_string_that_is_not_utf8_is_invalid_rather_than_a_crash(env):
+    (env.home / "wconfig.txt").write_bytes(b"SNMP_SYSLOCATION=\x93\x8c\x8b\x9e\n")
+
+    assert env.module.main(["apply"]) == 3
+
+    assert result_line(env, "SNMP_SYSLOCATION").startswith("SNMP_SYSLOCATION invalid")
+
+
+@pytest.mark.parametrize("key,value", [
+    ("SNMP_SYSLOCATION", "a" * 255), ("SNMP_SYSLOCATION", "가" * 85),
+    ("SNMP_SYSCONTACT", 'Kim "ops" <k@example.com>'), ("SNMP_SYSNAME", "x\\y #2"),
+    ("SNMP_COMMUNITY", "a!b$c%d&e(f)g*h"), ("SNMP_COMMUNITY", "Z" * 32),
+])
+def test_snmp_strings_take_utf8_quotes_and_a_hash_inside_up_to_their_limits(env, capsys, key, value):
+    write_settings_utf8(env, f"{key}={value}\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    assert result_line(env, key) == f"{key} applied"
+    capsys.readouterr()
+    assert env.module.main(["get"]) == 0
+    assert f"{key}={value}" in written_settings(env)
+
+
+def test_get_of_one_key_prints_a_value_that_fits_the_reply_line(env, capsys):
+    set_local(env, "rocommunity public  default\nsyslocation " + "a" * 239 + "\n")
+
+    assert env.module.main(["get", "SNMP_SYSLOCATION"]) == 0
+
+    assert capsys.readouterr().out == "SNMP_SYSLOCATION=" + "a" * 239 + "\n"
+
+
+@pytest.mark.parametrize("value", ["서울 3F", "a" * 240])
+def test_get_of_one_key_refuses_a_value_the_reply_line_cannot_carry(env, capsys, value):
+    # The dispatcher relays one printable ASCII line of at most 256 bytes; such a value is
+    # read from wconfig.txt after a full get, as it can only be written with ftp put.
+    set_local(env, f"rocommunity public  default\nsyslocation {value}\n")
+
+    assert env.module.main(["get", "SNMP_SYSLOCATION"]) == 2
+
+    assert capsys.readouterr().out == ""
+    assert env.module.main(["get"]) == 0
+    assert f"SNMP_SYSLOCATION={value}" in written_settings(env)

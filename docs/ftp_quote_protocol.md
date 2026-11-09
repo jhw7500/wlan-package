@@ -176,11 +176,13 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
   키 이름은 CONTEC 설정 내보내기 파일의 이름을 쓴다. FTP admin 접속에서는 `/wconfig.txt`로 보인다.
   `put`은 첫 인자 뒤의 단어를 공백 한 칸으로 이어 값에 붙인다. 따옴표·한글처럼 FTP 인자로
   보낼 수 없는 값은 `ftp put`으로 파일을 올려 넣는다.
+- `get <KEY>`의 응답은 인쇄 가능한 ASCII 한 줄, 256바이트 이내다. 한글이 든 값처럼 그 안에 실을 수
+  없는 값은 코드 `2`로 끝나므로 `get` 뒤 `wconfig.txt`를 받아 읽는다.
 - 키는 네 가지로 나뉜다. 어느 분류든 파일에 있어도 된다.
   - 적용: `NTP_FUNC`, `NTP_SERVER`, `SNMP_FUNC`, `SNMP_TRAP_IPADDR`, `SNMP_TRAP_WLAN`,
-    `SNMP_TRAP_CHAN`, `LAN_MODE`, `LAN_IPADDR`, `LAN_NETMASK`, `LAN_GATEWAY`.
-  - `pending`(#464의 이후 변경에서 적용): `TIMEZONE`, `SNMP_COMMUNITY`, `SNMP_SYSCONTACT`,
-    `SNMP_SYSLOCATION`, `SNMP_SYSNAME`.
+    `SNMP_TRAP_CHAN`, `SNMP_COMMUNITY`, `SNMP_SYSCONTACT`, `SNMP_SYSLOCATION`, `SNMP_SYSNAME`,
+    `LAN_MODE`, `LAN_IPADDR`, `LAN_NETMASK`, `LAN_GATEWAY`.
+  - `pending`(#464의 이후 변경에서 적용): `TIMEZONE`.
   - `unsupported`(이 장치에 대응 기능 없음, #463): `LANGUAGE`, `SNMP_TRAP_LAN`, `SNMP_TRAP_INITSW`,
     `NTP_INTERVAL`, `LOG_FUNC`, `LOG_SERVER`, `LOG_DEBUG`, `LOG_SAVE`, `LOG_INTERVAL`, `LAN_PORTSPEED`.
   - `unknown`: 위 25개 밖의 키. 받아들이되 적용하지 않는다. 무선 설정 등 다른 키가 섞인
@@ -205,6 +207,21 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
     다시 켜면 그 선택대로 보낸다. 트랩 송신기는 호출마다 JSON을 읽어 다음 이벤트부터 반영한다. 다만
     이벤트 리스너 `wifi_event@`가 꺼져 있던 장치(`on_connect`·`roam_garp`·MCS 검증이 모두 꺼짐)는
     다음 부팅부터 보낸다.
+  - `SNMP_COMMUNITY`: 조회용과 트랩용에 함께 쓰는 community. 1~32자의 보이는 ASCII이며 `#`·따옴표·`\`는
+    받지 않는다. `snmp.trap.community`에 먼저 저장한 뒤 `/etc/snmp/snmpd.local.conf`의 `rocommunity` 줄마다
+    community 단어만 바꾼다(손으로 좁힌 출발지·OID는 유지, 줄이 없으면 `rocommunity <값> default`를
+    더한다). JSON 저장이 실패하면 조회용은 바꾸지 않는다. `get`은 첫 `rocommunity`의 community를
+    돌려준다. 웹 UI가 `snmp.trap.community`만 바꿔 두 값이 다르면 같은 값도 `applied`로 다시 맞춘다.
+  - `SNMP_SYSCONTACT`, `SNMP_SYSLOCATION`, `SNMP_SYSNAME`: snmpd의 sysContact·sysLocation·sysName.
+    `snmpd.local.conf`에 `syscontact`·`syslocation`·`sysname` 한 줄로 저장한다(같은 지시어의 다른 줄은
+    지운다). UTF-8 255바이트 이하, 제어 문자 없음, `#`로 시작하지 않음이 조건이다. snmpd는 256바이트
+    이상인 값을 버리고, `#`로 시작하면 값이 없다고 본다. 한글·따옴표는 받으며 `ftp put`으로 넣는다.
+    빈 값은 그 줄을 지워 기본값(`snmpd.conf`의 sysLocation·sysContact 문구, sysName은 호스트명)으로
+    돌린다. `get`은 마지막 줄의 값을, 줄이 없으면 빈 값을 돌려준다.
+  - `snmpd.local.conf`: snmpd는 `snmpd.conf` 뒤에 이 파일을 읽어 그 값을 쓴다. 패키지 설치는
+    `snmpd.conf`를 템플릿으로 다시 쓰고, local은 없거나 비었을 때만 템플릿(`rocommunity public  default`)으로
+    만든다. 커뮤니티 줄이 없는 기존 local에는 템플릿 줄을 덧붙인다. 그래서 적용값이 업그레이드 뒤에도
+    남는다. 공장 초기화는 local을 템플릿으로 되돌린다.
   - `LAN_MODE`, `LAN_IPADDR`, `LAN_NETMASK`, `LAN_GATEWAY`: 유선 eth0의
     `/etc/systemd/network/22-eth0.network` `[Network]`에 `DHCP=no`, `Address=<IP>/<prefix>`, `Gateway=`로
     저장한다. `wifi eth0 ip`·`gt`와 같은 파일·규칙이다(키의 첫 줄을 바꾸고 같은 키의 나머지 줄은 지운다).
@@ -233,20 +250,24 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
      실행하므로 실패 뒤 다시 `apply`하면 서비스가 맞춰진다. 서비스 단계를 건너뛰거나 실패하면 그
      서비스에 걸린 키(`NTP_SERVER` 포함)는 모두 `failed`다.
      핸들러는 30초 안에 끝나고 서비스 작업은 PID 1이 이어서 처리한다.
-  4. LAN 키가 바뀌었으면 마지막에 `22-eth0.network`를 교체하고 `wifi_lan_apply.service`를
+  4. SNMP 문자열이 바뀌었으면 `snmpd.local.conf`를 교체하고, snmpd가 enable이면 `systemctl --no-block
+     restart snmpd.service`로 넘긴다. 파일이 바뀔 때만 재시작한다. 재시작은 sysUpTime을 0으로 돌리고
+     잠깐 조회를 끊기 때문이다. disable이면 파일만 바꾸고 snmpd가 다음에 기동할 때 읽는다.
+  5. LAN 키가 바뀌었으면 마지막에 `22-eth0.network`를 교체하고 `wifi_lan_apply.service`를
      `systemctl --no-block restart`로 넘긴다. 그 키는 `scheduled`다. 유닛은 2초 기다려 이 응답이 먼저
      나가게 한 뒤 `wifi net apply eth0`(`networkctl reload`와 `networkctl reconfigure eth0`)과
      `wifi_peer_net_reapply.sh`를 실행한다. 기다리는 동안 다시 `apply`하면 앞 실행을 멈추고 마지막
      파일로 다시 시작한다.
-  5. 저장 뒤 서비스 단계가 실패해도 되돌리지 않는다. 그 키는 `failed`다. LAN 키만 예외다. LAN은 값이
-     같으면 다시 적용하지 않으므로, 유닛을 넘기지 못하면 `22-eth0.network`를 원래대로 되돌리고
-     `failed`로 남긴다. 그러면 같은 파일로 다시 `apply`해 재시도할 수 있다. 되돌리기마저 실패하면
-     저장한 값이 다음 부팅(`quote rst`)에 적용된다고 사유에 적는다.
+  6. 저장 뒤 서비스 단계가 실패해도 되돌리지 않는다. 그 키는 `failed`다. LAN 키와 SNMP 문자열만
+     예외다. 둘 다 값이 같으면 다시 적용하지 않으므로, 유닛을 넘기지 못하면 `22-eth0.network`나
+     `snmpd.local.conf`를 원래대로 되돌리고 `failed`로 남긴다. 그러면 같은 파일로 다시 `apply`해
+     재시도할 수 있다. 되돌리기마저 실패하면 그 사실을 사유에 적는다. 저장한 값은 다음 부팅(`quote rst`)에
+     적용된다.
 - 결과 파일 `/home/admin/wconfig.result`는 첫 줄이 시각, 둘째 줄이 `SUMMARY` 개수, 그 뒤가
   키마다 `<KEY> <상태>[ <사유>]`다. 상태는 `applied`, `unchanged`, `scheduled`(LAN 키, 이 응답 뒤
   eth0이 바뀜), `failed`, `invalid`, `pending`, `unsupported`, `unknown`이다.
 - 종료 코드: `0` 성공, `1` 설정 파일·장치 설정 읽기/쓰기 오류(설정 파일 없음 포함), `2` 잘못된
-  인자(읽을 수 없는 키의 `get` 포함), `3` 검증 실패(아무것도 바꾸지 않음), `4` 일부 키 실패,
+  인자(읽을 수 없는 키, 응답 한 줄에 실을 수 없는 값의 `get <KEY>` 포함), `3` 검증 실패(아무것도 바꾸지 않음), `4` 일부 키 실패,
   `5` `pending` 키가 있음(나머지는 적용함). `550` 응답에는 개수가 실리지 않으므로
   `wconfig.result`를 받아 확인한다.
 - `wconfig.txt`는 링크를 따라가지 않고 일반 파일만 읽는다(64 KiB 한도). 쓰는 파일은 링크를
@@ -269,15 +290,15 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
 
 ~~~text
 ftp> quote wconfig get
-200 SUCCESS wrote 10 keys to wconfig.txt
+200 SUCCESS wrote 14 keys to wconfig.txt
 ftp> quote wconfig put NTP_SERVER=192.0.2.10
 200 SUCCESS NTP_SERVER saved to wconfig.txt; run wconfig apply
 ftp> quote wconfig apply
-200 SUCCESS applied=1 unchanged=9 scheduled=0 failed=0 invalid=0 pending=0 unsupported=0 unknown=0; see wconfig.result
+200 SUCCESS applied=1 unchanged=13 scheduled=0 failed=0 invalid=0 pending=0 unsupported=0 unknown=0; see wconfig.result
 ftp> quote wconfig put LAN_IPADDR=192.0.2.50
 200 SUCCESS LAN_IPADDR saved to wconfig.txt; run wconfig apply
 ftp> quote wconfig apply
-200 SUCCESS applied=0 unchanged=9 scheduled=1 failed=0 invalid=0 pending=0 unsupported=0 unknown=0; see wconfig.result
+200 SUCCESS applied=0 unchanged=13 scheduled=1 failed=0 invalid=0 pending=0 unsupported=0 unknown=0; see wconfig.result
 ~~~
 
 ## 2. 무선 명령 요약

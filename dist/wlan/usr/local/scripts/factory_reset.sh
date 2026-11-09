@@ -293,6 +293,8 @@ esac
 
   safe_cp /opt/wlan/mfg/bridge_init.conf /usr/local/mfg/bridge_init.conf
   safe_cp /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/timesyncd.conf
+  # SNMP 조회 커뮤니티·sys* 적용값(#464 quote wconfig)을 템플릿으로 되돌린다. 재부팅이 snmpd 에 적용한다.
+  safe_cp /opt/wlan/config/snmp/snmpd.local.conf /etc/snmp/snmpd.local.conf
   secure_wpa_conf /etc/wpa_supplicant/wpa_supplicant-mlan0.conf || critical_failures=$((critical_failures + 1))
   secure_wpa_conf /etc/wpa_supplicant/wpa_supplicant-mlan1.conf || critical_failures=$((critical_failures + 1))
   safe_cp /opt/wlan/config/systemd/network/10-lo.network /etc/systemd/network/10-lo.network

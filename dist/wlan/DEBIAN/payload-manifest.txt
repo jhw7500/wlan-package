@@ -106,6 +106,7 @@ opt/wlan/config/rsyslog.conf
 opt/wlan/config/smb.conf
 opt/wlan/config/snmp/CANTOPS-CTS-WLAN-MIB.txt
 opt/wlan/config/snmp/snmpd.conf
+opt/wlan/config/snmp/snmpd.local.conf
 opt/wlan/config/sysctl.d/99-wifi-thermal.conf
 opt/wlan/config/systemd/journald.conf
 opt/wlan/config/systemd/network/10-lo.network
