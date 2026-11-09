@@ -48,17 +48,21 @@ MAX_BYTES = 64 * 1024
 # here; PENDING keys get their appliers in later #464 changes; UNSUPPORTED keys
 # have no matching function on this device (#463).  Any other key is unknown.
 LAN_KEYS = ("LAN_MODE", "LAN_IPADDR", "LAN_NETMASK", "LAN_GATEWAY")
-IMPLEMENTED = ("NTP_FUNC", "NTP_SERVER", "SNMP_FUNC", "SNMP_TRAP_IPADDR") + LAN_KEYS
-PENDING = ("TIMEZONE", "SNMP_COMMUNITY", "SNMP_SYSCONTACT", "SNMP_SYSLOCATION", "SNMP_SYSNAME",
-           "SNMP_TRAP_WLAN", "SNMP_TRAP_CHAN")
+# Per-type trap switches and the snmp.trap key each one owns.
+TRAP_TYPES = (("SNMP_TRAP_WLAN", "link"), ("SNMP_TRAP_CHAN", "channel"))
+IMPLEMENTED = ("NTP_FUNC", "NTP_SERVER", "SNMP_FUNC", "SNMP_TRAP_IPADDR",
+               "SNMP_TRAP_WLAN", "SNMP_TRAP_CHAN") + LAN_KEYS
+PENDING = ("TIMEZONE", "SNMP_COMMUNITY", "SNMP_SYSCONTACT", "SNMP_SYSLOCATION", "SNMP_SYSNAME")
 UNSUPPORTED = ("LANGUAGE", "SNMP_TRAP_LAN", "SNMP_TRAP_INITSW", "NTP_INTERVAL", "LOG_FUNC",
                "LOG_SERVER", "LOG_DEBUG", "LOG_SAVE", "LOG_INTERVAL", "LAN_PORTSPEED")
 KNOWN = IMPLEMENTED + PENDING + UNSUPPORTED
 # "scheduled" marks LAN_* keys: eth0 changes after the FTP reply (LAN_UNIT).
 STATUSES = ("applied", "unchanged", "scheduled", "failed", "invalid", "pending", "unsupported", "unknown")
 # Keys whose service must follow them, and the keys that change an enable state.
+# The trap switches move snmp.trap.enabled, which decides whether wifi_event@ is enabled;
+# the trap sender itself reads the JSON on every trap, so they need no unit action.
 SERVICE_KEYS = ((NTP_UNIT, ("NTP_FUNC", "NTP_SERVER")), (SNMP_UNIT, ("SNMP_FUNC",)))
-ENABLE_KEYS = ("NTP_FUNC", "SNMP_FUNC")
+ENABLE_KEYS = ("NTP_FUNC", "SNMP_FUNC", "SNMP_TRAP_WLAN", "SNMP_TRAP_CHAN")
 TRUE_WORDS = ("true", "TRUE", "True", "1", "yes", "YES", "Yes")
 
 EXIT_IO, EXIT_USAGE, EXIT_INVALID, EXIT_FAILED, EXIT_PENDING = 1, 2, 3, 4, 5
@@ -230,6 +234,11 @@ def replace_file(path, text):
             os.unlink(temporary)
         except FileNotFoundError:
             pass
+
+
+def trap_on(data, kind):
+    """A trap type is sent only while traps are on and its own switch (null = on) is on."""
+    return json_switch(data, ("snmp", "trap", "enabled"), False) and json_switch(data, ("snmp", "trap", kind), True)
 
 
 def json_switch(data, path, default):
@@ -440,6 +449,7 @@ def current_values():
         "NTP_SERVER": ntp_server(read_timesyncd()),
         "SNMP_FUNC": "enabled" if json_switch(data, ("snmp", "enabled"), False) else "disabled",
         "SNMP_TRAP_IPADDR": host or "0.0.0.0",
+        **{key: "enabled" if trap_on(data, kind) else "disabled" for key, kind in TRAP_TYPES},
         **lan_values(read_network(ETH0_NETWORK)),
     }
 
@@ -500,6 +510,7 @@ def check_gateway(value):
 
 CHECKS = {"NTP_FUNC": check_switch, "NTP_SERVER": check_address,
           "SNMP_FUNC": check_switch, "SNMP_TRAP_IPADDR": check_address,
+          "SNMP_TRAP_WLAN": check_switch, "SNMP_TRAP_CHAN": check_switch,
           "LAN_MODE": check_mode, "LAN_IPADDR": check_host, "LAN_NETMASK": check_netmask,
           "LAN_GATEWAY": check_gateway}
 
@@ -626,6 +637,19 @@ def save_stores(document, wanted, status):
         _, port = split_destination(trap_destination(document))
         changes.append((("snmp", "trap", "dest"), "" if host == "0.0.0.0" else host + port))
         json_keys.append("SNMP_TRAP_IPADDR")
+    trap_keys = [key for key, _ in TRAP_TYPES if key in wanted]
+    if trap_keys:
+        # A type not in the file keeps the state it was reported in (on only while traps are on).
+        target = {kind: wanted[key] == "enabled" if key in wanted else trap_on(document, kind)
+                  for key, kind in TRAP_TYPES}
+        if any(target.values()):
+            changes.append((("snmp", "trap", "enabled"), True))
+            changes.extend((("snmp", "trap", kind), on) for kind, on in target.items())
+        else:
+            # Both off: switch traps off and keep each type's own switch, so turning
+            # snmp.trap.enabled back on elsewhere (web UI) sends them again.
+            changes.append((("snmp", "trap", "enabled"), False))
+        json_keys.extend(trap_keys)
     if changes:
         try:
             save_json(changes)

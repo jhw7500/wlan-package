@@ -76,3 +76,26 @@ def test_trap_uses_cantops_root_only(tmp_path):
         out = _run(args, conf, tmp_path).stdout
         assert ".1.3.6.1.4.1.66620.1." in out
         assert ".1.3.6.1.4.1.672.65" not in out
+
+
+# --- per-type switches (#464 SNMP_TRAP_WLAN / SNMP_TRAP_CHAN) -------------------------
+
+def test_link_trap_switched_off_sends_nothing(tmp_path):
+    # A plain jq `.link // true` would turn this false back into true.
+    r = _run(["link", "up"], '{"snmp":{"trap":{"enabled":true,"dest":"192.0.2.9","link":false}}}', tmp_path)
+    assert r.returncode == 0
+    assert r.stdout.strip() == ""
+
+
+def test_channel_trap_switched_off_still_lets_link_traps_through(tmp_path):
+    conf = '{"snmp":{"trap":{"enabled":true,"dest":"192.0.2.9","link":true,"channel":false}}}'
+    assert _run(["channel", "36"], conf, tmp_path).stdout.strip() == ""
+    out = _run(["link", "down"], conf, tmp_path).stdout
+    assert ".1.3.6.1.4.1.66620.1.1.1.1" in out
+    assert ".1.3.6.1.4.1.66620.1.3.2.1.7.2 i 2" in out
+
+
+def test_a_missing_type_switch_means_on(tmp_path):
+    conf = '{"snmp":{"trap":{"enabled":true,"dest":"192.0.2.9","link":null}}}'
+    assert "snmptrap -v2c -c public 192.0.2.9" in _run(["link", "up"], conf, tmp_path).stdout
+    assert ".1.3.6.1.4.1.66620.1.1.1.2" in _run(["channel", "6"], conf, tmp_path).stdout

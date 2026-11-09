@@ -1591,14 +1591,18 @@ SNMP는 **기본 off(opt-in)**이다. `snmp.enabled=true`일 때만 `wifi_apply_
 |----|------|--------|------|
 | `enabled` | bool | `false` | `snmpd.service` enable/disable + 기동 마스터 스위치. `true`면 UDP 161 노출 |
 | `trap.enabled` | bool | `false` | SNMP 트랩 송신 활성화. `true`면 링크/채널 이벤트 시 `wifi_event.sh`가 `snmptrap` 송신 |
+| `trap.link` | bool | `true` | 무선 링크 up/down 트랩을 보낼지. `trap.enabled`가 켜졌을 때만 의미가 있다 |
+| `trap.channel` | bool | `true` | 채널 변경 트랩을 보낼지. `trap.enabled`가 켜졌을 때만 의미가 있다 |
 | `trap.dest` | string | `""` | 트랩 수신지. `host` 또는 `host:port` 형식. 빈 문자열이면 트랩 미송신 |
 | `trap.community` | string | `"public"` | 트랩 community 문자열 |
 | `trap.version` | enum | `"2c"` | SNMP 트랩 버전. `1` \| `2c` |
 
+`trap.link`·`trap.channel`은 트랩 종류별 스위치다. 키가 없으면 켜짐으로 본다. FTP `quote wconfig`의 `SNMP_TRAP_WLAN`·`SNMP_TRAP_CHAN`이 이 두 키와 `trap.enabled`를 함께 맞춘다(`docs/ftp_quote_protocol.md` 1.5절). 트랩 송신은 호출마다 JSON을 읽으므로 바로 반영된다. 다만 이벤트 리스너 `wifi_event@`가 꺼져 있던 장치(`on_connect`·`roam_garp`·MCS 검증이 모두 꺼짐)는 다음 부팅부터 트랩을 보낸다.
+
 ```json
 "snmp": {
     "enabled": false,
-    "trap": { "enabled": false, "dest": "", "community": "public", "version": "2c" }
+    "trap": { "enabled": false, "link": true, "channel": true, "dest": "", "community": "public", "version": "2c" }
 }
 ```
 

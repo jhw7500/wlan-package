@@ -757,12 +757,16 @@
             "enabled: (bool) snmpd 서비스 ON/OFF. wifi_apply_enabled.sh가 systemctl 상태를 동기화",
             "trap.enabled: (bool) 무선 링크·채널 이벤트 SNMP trap 전송 ON/OFF",
             "trap.dest: (string) trap 수신지 주소",
+            "trap.link: (bool) 무선 링크 up/down 트랩 ON/OFF. trap.enabled가 켜졌을 때만 송신. 기본 true(FTP wconfig SNMP_TRAP_WLAN)",
+            "trap.channel: (bool) 채널 변경 트랩 ON/OFF. trap.enabled가 켜졌을 때만 송신. 기본 true(FTP wconfig SNMP_TRAP_CHAN)",
             "trap.community: (string) SNMP community",
             "trap.version: (string) SNMP 버전"
         ],
         "enabled": false,
         "trap": {
             "enabled": false,
+            "link": true,
+            "channel": true,
             "dest": "",
             "community": "public",
             "version": "2c"

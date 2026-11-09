@@ -180,6 +180,7 @@ def test_get_then_apply_is_unchanged_but_still_resyncs_services(env, capsys):
     capsys.readouterr()
     written = (env.home / "wconfig.txt").read_text().splitlines()
     for expected in ("NTP_FUNC=enabled", "NTP_SERVER=192.168.0.3", "SNMP_FUNC=disabled", "SNMP_TRAP_IPADDR=0.0.0.0",
+                     "SNMP_TRAP_WLAN=disabled", "SNMP_TRAP_CHAN=disabled",
                      "LAN_MODE=static", "LAN_IPADDR=192.0.2.1", "LAN_NETMASK=255.255.255.0", "LAN_GATEWAY=0.0.0.0"):
         assert expected in written
     conf_before, ntp_before, eth0_before = env.conf.read_bytes(), env.timesyncd.read_bytes(), env.eth0.read_bytes()
@@ -189,7 +190,7 @@ def test_get_then_apply_is_unchanged_but_still_resyncs_services(env, capsys):
     assert env.conf.read_bytes() == conf_before
     assert env.timesyncd.read_bytes() == ntp_before
     assert env.eth0.read_bytes() == eth0_before
-    assert one_line(capsys).startswith("SUCCESS applied=0 unchanged=8 ")
+    assert one_line(capsys).startswith("SUCCESS applied=0 unchanged=10 ")
     # A retry after a failed service step must still bring services in line, and
     # timesyncd only reads its servers when it starts, so a listed server restarts it.
     # Unchanged LAN values hand nothing to the LAN unit: eth0 is not reconfigured.
@@ -407,7 +408,7 @@ def result_line(env, key):
 
 def test_get_reports_the_lan_values_of_the_eth0_network_file(env, capsys):
     assert env.module.main(["get"]) == 0
-    assert one_line(capsys) == "SUCCESS wrote 8 keys to wconfig.txt"
+    assert one_line(capsys) == "SUCCESS wrote 10 keys to wconfig.txt"
     written = (env.home / "wconfig.txt").read_text().splitlines()
     for expected in ("LAN_MODE=static", "LAN_IPADDR=192.0.2.1", "LAN_NETMASK=255.255.255.0", "LAN_GATEWAY=0.0.0.0"):
         assert expected in written
@@ -652,3 +653,93 @@ def test_lan_unit_applies_eth0_after_the_reply_and_restores_the_peer_channel():
         "/usr/local/scripts/wifi.sh net apply eth0", "/usr/local/scripts/wifi_peer_net_reapply.sh"]
     assert any(key == "TimeoutStartSec" for key, _ in service)
     assert load_handler("wconfig").LAN_UNIT == UNIT_FILE.name
+
+
+# --- SNMP per-type traps (#464 PR-3) ---------------------------------------------------
+
+def trap_json(env):
+    return json.loads(env.conf.read_text())["snmp"]["trap"]
+
+
+def set_trap(env, **values):
+    data = json.loads(env.conf.read_text())
+    data["snmp"]["trap"].update(values)
+    env.conf.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def test_get_reports_a_trap_type_as_enabled_only_while_traps_are_on(env, capsys):
+    assert env.module.main(["get", "SNMP_TRAP_WLAN"]) == 0
+    assert capsys.readouterr().out == "SNMP_TRAP_WLAN=disabled\n"  # snmp.trap.enabled is off
+    set_trap(env, enabled=True, link=False)
+    assert env.module.main(["get", "SNMP_TRAP_WLAN"]) == 0
+    assert capsys.readouterr().out == "SNMP_TRAP_WLAN=disabled\n"
+    assert env.module.main(["get", "SNMP_TRAP_CHAN"]) == 0
+    assert capsys.readouterr().out == "SNMP_TRAP_CHAN=enabled\n"  # a missing switch means on
+
+
+def test_turning_on_link_traps_alone_leaves_channel_traps_off(env):
+    write_settings(env, "SNMP_TRAP_WLAN=enabled\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    trap = trap_json(env)
+    assert (trap["enabled"], trap["link"], trap["channel"]) == (True, True, False)
+    assert (trap["dest"], trap["community"]) == ("", "public")
+    assert result_line(env, "SNMP_TRAP_WLAN") == "SNMP_TRAP_WLAN applied"
+    # wifi_event@ follows snmp.trap.enabled through the enable sync; no unit action of its own.
+    assert len(env.system.apply_calls()) == 1
+    assert env.system.queued() == []
+
+
+def test_turning_both_trap_types_off_only_turns_traps_off(env):
+    set_trap(env, enabled=True, link=True, channel=True)
+    write_settings(env, "SNMP_TRAP_WLAN=disabled\nSNMP_TRAP_CHAN=disabled\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    # The per-type choice stays, so turning snmp.trap.enabled back on (web UI) sends traps again.
+    trap = trap_json(env)
+    assert (trap["enabled"], trap["link"], trap["channel"]) == (False, True, True)
+
+
+def test_turning_one_type_back_on_keeps_the_other_as_it_was_reported(env):
+    set_trap(env, enabled=False, link=True, channel=True)  # both reported disabled
+    write_settings(env, "SNMP_TRAP_CHAN=enabled\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    trap = trap_json(env)
+    assert (trap["enabled"], trap["link"], trap["channel"]) == (True, False, True)
+
+
+def test_get_output_with_trap_types_applies_as_unchanged(env, capsys):
+    set_trap(env, enabled=True, link=True, channel=False, dest="192.0.2.20")
+    assert env.module.main(["get"]) == 0
+    capsys.readouterr()
+    before = env.conf.read_bytes()
+
+    assert env.module.main(["apply"]) == 0
+
+    assert env.conf.read_bytes() == before
+    assert result_line(env, "SNMP_TRAP_WLAN") == "SNMP_TRAP_WLAN unchanged"
+    assert result_line(env, "SNMP_TRAP_CHAN") == "SNMP_TRAP_CHAN unchanged"
+
+
+@pytest.mark.parametrize("line", ["SNMP_TRAP_WLAN=on", "SNMP_TRAP_CHAN=true"])
+def test_a_bad_trap_switch_blocks_the_whole_apply(env, line):
+    write_settings(env, f"{line}\n")
+    before = env.conf.read_bytes()
+
+    assert env.module.main(["apply"]) == 3
+
+    assert env.conf.read_bytes() == before
+    assert env.system.calls == []
+
+
+def test_a_failed_enable_sync_fails_the_trap_keys(env):
+    env.system.apply_rc = 1
+    write_settings(env, "SNMP_TRAP_WLAN=enabled\n")
+
+    assert env.module.main(["apply"]) == 4
+
+    assert result_line(env, "SNMP_TRAP_WLAN").startswith("SNMP_TRAP_WLAN failed")
