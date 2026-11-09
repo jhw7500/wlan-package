@@ -29,6 +29,7 @@ etc/systemd/system/wifi_capture@.service
 etc/systemd/system/wifi_checker@.service
 etc/systemd/system/wifi_event@.service
 etc/systemd/system/wifi_init.service
+etc/systemd/system/wifi_lan_apply.service
 etc/systemd/system/wifi_led@.service
 etc/systemd/system/wifi_link_snapshot@.service
 etc/systemd/system/wifi_logger.service

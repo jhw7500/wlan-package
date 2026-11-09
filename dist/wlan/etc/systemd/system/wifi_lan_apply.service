@@ -1,0 +1,17 @@
+# Reconfigure eth0 after `quote wconfig apply` changed its LAN_* values (#464).
+# /opt/ftpcmd/bin/wconfig starts it with `systemctl --no-block restart` after saving
+# 22-eth0.network.  No [Install]: at boot systemd-networkd reads the file itself.
+[Unit]
+Description=Apply wconfig LAN settings to eth0 after the FTP reply
+# A start refused by the rate limit would still look queued to --no-block.
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+# Let the FTP reply leave on the old address before eth0 changes.
+ExecStartPre=/bin/sleep 2
+ExecStart=/usr/local/scripts/wifi.sh net apply eth0
+# Reconfiguring eth0 drops its foreign addresses and routes; put the peer channel ones
+# back (the script exits at once unless peer_route or local_hairpin is on).
+ExecStart=/usr/local/scripts/wifi_peer_net_reapply.sh
+TimeoutStartSec=45s

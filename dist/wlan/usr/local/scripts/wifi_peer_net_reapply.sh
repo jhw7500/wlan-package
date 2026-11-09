@@ -13,8 +13,11 @@
 #      networkd는 restart/reconfigure 시 foreign 주소·라우트를 flush하므로(실측 2026-07-18,
 #      systemd 254: /32 미러·host route·permanent neigh 모두 소멸) 재적용이 필수다.
 #      restart는 코드 fallback(wifi_init.sh/wifi_config.sh)과 수동 명령(wifi net restart)
-#      양쪽에서 실사용된다. networkctl reload는 무해(실측), reconfigure eth0은 코드
-#      미사용(수동 시 이 스크립트를 직접 실행해 복구).
+#      양쪽에서 실사용된다. networkctl reload는 무해(실측).
+#   3) wifi_lan_apply.service — FTP `quote wconfig apply`가 LAN_* 값을 바꾸면(#464)
+#      `wifi net apply eth0`(reconfigure eth0) 직후 이 스크립트를 실행한다. reconfigure eth0을
+#      손으로 했으면 이 스크립트를 직접 실행해 복구한다. ip rule iif eth0 → table 100과
+#      table 100 경로는 wifi_init.sh 몫이라 여기서 다시 깔지 않는다.
 #
 # src 고정/neigh 고정 이유: docs/wifi_init_conf_guide.md 및 wired_mac_ip_get.py 주석 참조
 # (커널 첫-주소 src 선택, arp_announce=2 sender 광고, off-subnet sender ARP 무시 peer).
