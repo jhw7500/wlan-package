@@ -3297,6 +3297,22 @@
               "x-apply-timing": "runtime",
               "x-consumer": "wifi_event.sh"
             },
+            "link": {
+              "type": "boolean",
+              "default": true,
+              "description": "무선 링크 up/down 트랩 ON/OFF. trap.enabled가 켜졌을 때만 송신한다. 기본 true(FTP wconfig SNMP_TRAP_WLAN)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_snmp_trap.sh"
+            },
+            "channel": {
+              "type": "boolean",
+              "default": true,
+              "description": "채널 변경 트랩 ON/OFF. trap.enabled가 켜졌을 때만 송신한다. 기본 true(FTP wconfig SNMP_TRAP_CHAN)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "runtime",
+              "x-consumer": "wifi_snmp_trap.sh"
+            },
             "dest": {
               "type": "string",
               "default": "",

@@ -608,6 +608,8 @@ association proof를 사용한다. 다음 CONNECTED 검증 성공 시 pending/1�
 |---|---|---|---|---|---|---|---|
 | `snmp.enabled` | snmpd 서비스 활성화 | bool | `false` | true\|false | caution | boot | `wifi_apply_enabled.sh`가 `snmpd.service` enable/disable 동기화 + `wifi_services.sh` start. **기본 off(opt-in, UDP161 보안)** |
 | `snmp.trap.enabled` | SNMP 트랩 송신 활성화 | bool | `false` | true\|false | yes | runtime | 무선 링크/채널 이벤트 시 snmptrap 송신 |
+| `snmp.trap.link` | 무선 링크 트랩 송신 | bool | `true` | true\|false | yes | runtime | `snmp.trap.enabled`가 켜졌을 때 링크 up/down 트랩을 보낼지(FTP `SNMP_TRAP_WLAN`) |
+| `snmp.trap.channel` | 채널 변경 트랩 송신 | bool | `true` | true\|false | yes | runtime | `snmp.trap.enabled`가 켜졌을 때 채널 변경 트랩을 보낼지(FTP `SNMP_TRAP_CHAN`) |
 | `snmp.trap.dest` | 트랩 수신지 | string | `""` | `host` 또는 `host:port` | yes | runtime | 빈값이면 트랩 미송신 |
 | `snmp.trap.community` | 트랩 community | string | `public` | 문자열 | yes | runtime | SNMP community 문자열 |
 | `snmp.trap.version` | 트랩 SNMP 버전 | enum | `2c` | `1`\|`2c` | yes | runtime | SNMP 프로토콜 버전 |

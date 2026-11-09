@@ -177,10 +177,10 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
   `put`은 첫 인자 뒤의 단어를 공백 한 칸으로 이어 값에 붙인다. 따옴표·한글처럼 FTP 인자로
   보낼 수 없는 값은 `ftp put`으로 파일을 올려 넣는다.
 - 키는 네 가지로 나뉜다. 어느 분류든 파일에 있어도 된다.
-  - 적용: `NTP_FUNC`, `NTP_SERVER`, `SNMP_FUNC`, `SNMP_TRAP_IPADDR`, `LAN_MODE`, `LAN_IPADDR`,
-    `LAN_NETMASK`, `LAN_GATEWAY`.
+  - 적용: `NTP_FUNC`, `NTP_SERVER`, `SNMP_FUNC`, `SNMP_TRAP_IPADDR`, `SNMP_TRAP_WLAN`,
+    `SNMP_TRAP_CHAN`, `LAN_MODE`, `LAN_IPADDR`, `LAN_NETMASK`, `LAN_GATEWAY`.
   - `pending`(#464의 이후 변경에서 적용): `TIMEZONE`, `SNMP_COMMUNITY`, `SNMP_SYSCONTACT`,
-    `SNMP_SYSLOCATION`, `SNMP_SYSNAME`, `SNMP_TRAP_WLAN`, `SNMP_TRAP_CHAN`.
+    `SNMP_SYSLOCATION`, `SNMP_SYSNAME`.
   - `unsupported`(이 장치에 대응 기능 없음, #463): `LANGUAGE`, `SNMP_TRAP_LAN`, `SNMP_TRAP_INITSW`,
     `NTP_INTERVAL`, `LOG_FUNC`, `LOG_SERVER`, `LOG_DEBUG`, `LOG_SAVE`, `LOG_INTERVAL`, `LAN_PORTSPEED`.
   - `unknown`: 위 25개 밖의 키. 받아들이되 적용하지 않는다. 무선 설정 등 다른 키가 섞인
@@ -197,6 +197,14 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
     OPC drop-in 등 다른 출처의 서버는 이 명령이 바꾸지 않는다(1.3절과 같다).
   - `SNMP_TRAP_IPADDR`: 유니캐스트 IPv4 또는 `0.0.0.0`. `snmp.trap.dest`에 저장한다.
     호스트만 비교하고 기존 `:port`는 유지한다. `0.0.0.0`은 빈 값(트랩 미송신)이다.
+  - `SNMP_TRAP_WLAN`, `SNMP_TRAP_CHAN`: `enabled` 또는 `disabled`. 무선 링크 up/down 트랩과 채널 변경
+    트랩을 종류별로 켜고 끈다. `get`은 `snmp.trap.enabled`와 그 종류의 스위치(`snmp.trap.link`·
+    `snmp.trap.channel`, 키가 없으면 켜짐)가 모두 켜졌을 때만 `enabled`를 돌려준다. 파일에 없는 쪽은
+    그렇게 보고된 상태를 유지한다. 하나라도 켜면 `snmp.trap.enabled`와 두 스위치를 함께 저장하고,
+    둘 다 끄면 `snmp.trap.enabled`만 끈다. 종류별 스위치를 남겨 두므로 웹 UI가 `snmp.trap.enabled`를
+    다시 켜면 그 선택대로 보낸다. 트랩 송신기는 호출마다 JSON을 읽어 다음 이벤트부터 반영한다. 다만
+    이벤트 리스너 `wifi_event@`가 꺼져 있던 장치(`on_connect`·`roam_garp`·MCS 검증이 모두 꺼짐)는
+    다음 부팅부터 보낸다.
   - `LAN_MODE`, `LAN_IPADDR`, `LAN_NETMASK`, `LAN_GATEWAY`: 유선 eth0의
     `/etc/systemd/network/22-eth0.network` `[Network]`에 `DHCP=no`, `Address=<IP>/<prefix>`, `Gateway=`로
     저장한다. `wifi eth0 ip`·`gt`와 같은 파일·규칙이다(키의 첫 줄을 바꾸고 같은 키의 나머지 줄은 지운다).
@@ -216,8 +224,9 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
   2. 바뀐 값만 저장한다. 임시 파일을 fsync한 뒤 교체하고, JSON은 쓰기 직전에 다시 읽어 해당
      키만 바꾼다. JSON 공통 잠금은 없으므로 같은 순간 다른 작성자(웹 UI 등)의 변경과 겹치면
      한쪽이 사라질 수 있다.
-  3. 서비스를 맞춘다. `NTP_FUNC`·`SNMP_FUNC`가 파일에 있으면 `wifi_apply_enabled.sh`를
-     `SYSTEMCTL_FORCE_BUS=1 WIFI_APPLY_STRICT=1`로 실행해 enable 상태를 JSON에 맞춘다. 이어서
+  3. 서비스를 맞춘다. `NTP_FUNC`·`SNMP_FUNC`·`SNMP_TRAP_WLAN`·`SNMP_TRAP_CHAN`이 파일에 있으면
+     `wifi_apply_enabled.sh`를 `SYSTEMCTL_FORCE_BUS=1 WIFI_APPLY_STRICT=1`로 실행해 enable 상태를
+     JSON에 맞춘다(트랩 두 키는 `wifi_event@`의 enable만 따르고 유닛 동작은 없다). 이어서
      파일에 있는 키의 서비스(timesyncd: `NTP_FUNC`·`NTP_SERVER`, snmpd: `SNMP_FUNC`)마다 동작 하나만
      `systemctl --no-block`으로 넘긴다. enable이면 `start`, disable이면 `stop`이다. timesyncd는
      서버를 기동할 때만 읽으므로 `NTP_SERVER`가 파일에 있으면 값이 같아도 `restart`한다. 값이 그대로여도
@@ -260,15 +269,15 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
 
 ~~~text
 ftp> quote wconfig get
-200 SUCCESS wrote 8 keys to wconfig.txt
+200 SUCCESS wrote 10 keys to wconfig.txt
 ftp> quote wconfig put NTP_SERVER=192.0.2.10
 200 SUCCESS NTP_SERVER saved to wconfig.txt; run wconfig apply
 ftp> quote wconfig apply
-200 SUCCESS applied=1 unchanged=7 scheduled=0 failed=0 invalid=0 pending=0 unsupported=0 unknown=0; see wconfig.result
+200 SUCCESS applied=1 unchanged=9 scheduled=0 failed=0 invalid=0 pending=0 unsupported=0 unknown=0; see wconfig.result
 ftp> quote wconfig put LAN_IPADDR=192.0.2.50
 200 SUCCESS LAN_IPADDR saved to wconfig.txt; run wconfig apply
 ftp> quote wconfig apply
-200 SUCCESS applied=0 unchanged=7 scheduled=1 failed=0 invalid=0 pending=0 unsupported=0 unknown=0; see wconfig.result
+200 SUCCESS applied=0 unchanged=9 scheduled=1 failed=0 invalid=0 pending=0 unsupported=0 unknown=0; see wconfig.result
 ~~~
 
 ## 2. 무선 명령 요약

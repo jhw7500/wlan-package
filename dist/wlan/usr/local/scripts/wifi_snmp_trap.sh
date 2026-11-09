@@ -2,7 +2,7 @@
 # wifi_snmp_trap.sh - CanTops CTS-WLAN SNMP 트랩 송신 헬퍼
 # Usage: wifi_snmp_trap.sh link up|down
 #        wifi_snmp_trap.sh channel <ch>
-# wifi_init_conf.json 의 snmp.trap.{enabled,dest,community,version} 를 읽어
+# wifi_init_conf.json 의 snmp.trap.{enabled,link,channel,dest,community,version} 를 읽어
 # 활성 시 snmptrap 으로 vendor 트랩을 송신한다. 비활성/미설정/실패는 조용히 exit 0.
 
 CONF="${WIFI_INIT_CONF:-/usr/local/etc/wifi_init_conf.json}"
@@ -22,6 +22,15 @@ _perm=$(stat -c '%a' "$CONF" 2>/dev/null || echo "000")
 
 enabled=$(jq -r '.snmp.trap.enabled // false' "$CONF" 2>/dev/null)
 [ "$enabled" = "true" ] || exit 0
+
+# 종류별 스위치 snmp.trap.link·channel(#464 SNMP_TRAP_WLAN·SNMP_TRAP_CHAN). 키가 없으면 켜짐.
+# jq 의 `//` 는 false 도 기본값으로 덮으므로 null 만 기본값으로 바꾼다(wifi_apply_enabled.sh get_bool 과 같음).
+case "$1" in
+    link|channel)
+        want=$(jq -r ".snmp.trap.$1 | if . == null then true else . end" "$CONF" 2>/dev/null)
+        [ "$want" = "true" ] || exit 0
+        ;;
+esac
 
 dest=$(jq -r '.snmp.trap.dest // ""' "$CONF" 2>/dev/null)
 [ -n "$dest" ] || { logger -p local0.err "[$tag:$LINENO] snmp.trap.dest is unset - trap skipped"; exit 0; }
