@@ -179,7 +179,8 @@ def analyze(
         "",
         "판정 뜻(캡처에서 보이는 것 기준): OK=M4까지, AP_NO_M1=응답 뒤 M1 없음, STA_NO_M2=M1 뒤 M2 없음,",
         "  AP_NO_M3=M2 뒤 M3 없음, STA_NO_M4=M3 뒤 M4 없음, ASSOC_REJECTED=상태≠0,",
-        f"  CAPTURE_END=캡처가 창({WINDOW_S:.0f}초) 안에서 끝남. '캡처 누락'은 더 높은 메시지가 보여 받았음이 확실한 메시지.",
+        f"  CAPTURE_END=분석한 프레임이 창({WINDOW_S:.0f}초) 안에서 끝남(--mac·--sta·--start·--end 를 쓰면 필터를 통과한 프레임 기준).",
+        "  '캡처 누락'은 더 높은 메시지가 보여 받았음이 확실한 메시지.",
     ]
 
     summary = f"연결 응답 {len(attempts)}건: {verdict_text}, 응답 재전송 평균 {retx_avg:.1f}회"
