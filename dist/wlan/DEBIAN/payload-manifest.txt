@@ -325,6 +325,7 @@ usr/local/scripts/wpa_supplicant.sh
 usr/local/scripts/write_mac.sh
 usr/local/tools/pcap-analyzer/USAGE.md
 usr/local/tools/pcap-analyzer/analyzers/__init__.py
+usr/local/tools/pcap-analyzer/analyzers/assoc_4way.py
 usr/local/tools/pcap-analyzer/analyzers/compare_ap.py
 usr/local/tools/pcap-analyzer/analyzers/control_traffic.py
 usr/local/tools/pcap-analyzer/analyzers/diagnosis.py

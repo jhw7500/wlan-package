@@ -75,7 +75,8 @@ pytest는 루트에서 한 번에 돌리지 않는다. 게이트가 쓰는 단�
 ```bash
 python3 -m pytest dist/wlan/usr/local/logger/tests -q
 python3 -m pytest dist/wlan/usr/local/scripts/tests -q
-python3 -m pytest dist/wlan/usr/local/tools/pcap-analyzer/tests/test_extractor.py \
+python3 -m pytest dist/wlan/usr/local/tools/pcap-analyzer/tests/test_assoc_4way.py \
+    dist/wlan/usr/local/tools/pcap-analyzer/tests/test_extractor.py \
     dist/wlan/usr/local/tools/pcap-analyzer/tests/test_models.py \
     dist/wlan/usr/local/tools/pcap-analyzer/tests/test_ping_matching.py -q
 python3 -m pytest scripts/qa -q

@@ -317,6 +317,7 @@ PY
     python3 -m pytest dist/wlan/usr/local/scripts/tests -q
     gate_step "source" "pytest: pcap-analyzer"
     python3 -m pytest \
+        dist/wlan/usr/local/tools/pcap-analyzer/tests/test_assoc_4way.py \
         dist/wlan/usr/local/tools/pcap-analyzer/tests/test_extractor.py \
         dist/wlan/usr/local/tools/pcap-analyzer/tests/test_models.py \
         dist/wlan/usr/local/tools/pcap-analyzer/tests/test_ping_matching.py -q
