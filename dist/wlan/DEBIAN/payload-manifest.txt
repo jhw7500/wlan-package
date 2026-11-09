@@ -61,6 +61,7 @@ opt/ftpcmd/bin/getifstate
 opt/ftpcmd/bin/ifcdown
 opt/ftpcmd/bin/ifcup
 opt/ftpcmd/bin/rst
+opt/ftpcmd/bin/wconfig
 opt/ftpcmd/bin/wconnect
 opt/ftpcmd/bin/wconnectraw
 opt/ftpcmd/bin/wfreq

@@ -716,7 +716,7 @@ OPC_CLEARED="password iplist.cfg iplist.cfg.migrated iplist.txt iplist.user.last
 for opc_file in $OPC_CLEARED device_info.json opc.conf; do
     printf 'x\n' > "$OPC_ETC/$opc_file"
 done
-for home_file in iplist.txt iplist.txt.rejected .profile; do
+for home_file in iplist.txt iplist.txt.rejected wconfig.txt wconfig.result .profile; do
     printf 'x\n' > "$OPC_HOME/$home_file"
 done
 cat > "$BIN/logger-capture" <<'EOF'
@@ -739,6 +739,10 @@ if declare -F factory_reset_clear_opc_state >/dev/null; then
     for home_file in iplist.txt iplist.txt.rejected; do
         [ ! -e "$OPC_HOME/$home_file" ] && pass "factory OPC state clear removes the customer $home_file (#194)" \
             || fail "factory OPC state clear leaves the customer $home_file (#194)"
+    done
+    for home_file in wconfig.txt wconfig.result; do
+        [ ! -e "$OPC_HOME/$home_file" ] && pass "factory reset removes the customer $home_file (#464)" \
+            || fail "factory reset leaves the customer $home_file (#464)"
     done
     [ -e "$OPC_HOME/.profile" ] && pass "factory OPC state clear keeps other files in the customer home" \
         || fail "factory OPC state clear removed another file in the customer home"

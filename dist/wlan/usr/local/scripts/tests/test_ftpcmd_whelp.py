@@ -12,7 +12,7 @@ import pytest
 HANDLERS = Path(__file__).resolve().parents[4] / "opt/ftpcmd/bin"
 WHELP = HANDLERS / "whelp"
 COMMANDS = (
-    "getifstate", "ifcdown", "ifcup", "rst", "wconnect", "wconnectraw",
+    "getifstate", "ifcdown", "ifcup", "rst", "wconfig", "wconnect", "wconnectraw",
     "wfreq", "wgetifstate", "whelp", "wifcdown", "wifcup", "wntp", "wpsk",
     "wrst", "wscan", "wssid", "wstatus", "wtime",
 )
@@ -51,7 +51,7 @@ def test_each_help_reply_survives_dispatcher(command):
     text = reply(run_help(command))
     assert "Usage: quote " + command in text
     assert "Example: quote " + command in text
-    if command.startswith("w") and command not in ("whelp", "wntp", "wrst", "wtime"):
+    if command.startswith("w") and command not in ("wconfig", "whelp", "wntp", "wrst", "wtime"):
         assert "0|1|mlan0|mlan1" in text
 
 

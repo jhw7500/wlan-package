@@ -25,13 +25,14 @@ ftp> quote <command> [arguments...]
 실기 디스패처는 stderr도 수집한다. 성공 종료하는 조회 핸들러의 진단문은
 응답 첫 줄을 덮지 않도록 stdout·stderr 대신 syslog에만 기록한다.
 
-`wrst`, `whelp`, `wntp`, `wtime`을 제외한 `w`로 시작하는 모든 명령은 첫 번째 인자로 인터페이스를 **필수로** 받는다.
+`wrst`, `whelp`, `wntp`, `wtime`, `wconfig`을 제외한 `w`로 시작하는 모든 명령은 첫 번째 인자로 인터페이스를 **필수로** 받는다.
 `mlan0`과 `0`은 `mlan0`, `mlan1`과 `1`은 `mlan1`을 선택한다. 인자가
 없거나 이 네 값 이외의 값을 주면 하위 명령 실행 전에 코드 `2`로 거부한다.
 인터페이스 뒤에 오는 SSID·주파수의 숫자 토큰은 별칭으로 변환하지 않는다.
 `wrst`는 예외로 인터페이스를 생략할 수 있으며, 지정한 경우에는 같은 네 값만 허용한다.
 `whelp`는 인터페이스 없이 명령 목록 또는 지정한 명령의 도움말을 조회한다.
 `wntp`와 `wtime`도 인터페이스 없이 장치 전체의 NTP와 시각을 다룬다.
+`wconfig`도 인터페이스 없이 장치 설정 파일을 다룬다(1.5절).
 기존 `getifstate`, `ifcdown`, `ifcup`, `rst`의 인자 규칙은 유지한다.
 
 ### 1.1 FTP 인자 입력 제한
@@ -161,6 +162,73 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
 ~~~
 
 위 시각과 offset은 응답 형식 예시다. 설정 응답의 `TIME`은 명령 완료 뒤 실제 조회한 시각이다.
+
+### 1.5 wconfig: 장치 설정 파일 저장·조회·적용
+
+| 호출 | 동작 | 성공 본문 |
+| --- | --- | --- |
+| `quote wconfig get` | 장치의 현재 값을 `/home/admin/wconfig.txt`에 씀 | `SUCCESS wrote <N> keys to wconfig.txt` |
+| `quote wconfig get <KEY>` | 키 하나의 현재 값 조회 | `<KEY>=<VALUE>` |
+| `quote wconfig put <KEY>=<VALUE> [단어...]` | `wconfig.txt`의 그 키만 고치거나 추가(적용하지 않음) | `SUCCESS <KEY> saved to wconfig.txt; run wconfig apply` |
+| `quote wconfig apply` | `wconfig.txt` 전체를 검증한 뒤 적용 | `SUCCESS applied=<N> unchanged=<N> scheduled=<N> failed=<N> invalid=<N> pending=<N> unsupported=<N> unknown=<N>; see wconfig.result` |
+
+- 파일은 한 줄에 `KEY=VALUE` 하나다. UTF-8 BOM, CRLF, 빈 줄, `#`으로 시작하는 줄을 허용한다.
+  키 이름은 CONTEC 설정 내보내기 파일의 이름을 쓴다. FTP admin 접속에서는 `/wconfig.txt`로 보인다.
+  `put`은 첫 인자 뒤의 단어를 공백 한 칸으로 이어 값에 붙인다. 따옴표·한글처럼 FTP 인자로
+  보낼 수 없는 값은 `ftp put`으로 파일을 올려 넣는다.
+- 키는 네 가지로 나뉜다. 어느 분류든 파일에 있어도 된다.
+  - 적용: `NTP_FUNC`, `NTP_SERVER`, `SNMP_FUNC`, `SNMP_TRAP_IPADDR`.
+  - `pending`(#464의 이후 변경에서 적용): `LAN_MODE`, `LAN_IPADDR`, `LAN_NETMASK`, `LAN_GATEWAY`,
+    `TIMEZONE`, `SNMP_COMMUNITY`, `SNMP_SYSCONTACT`, `SNMP_SYSLOCATION`, `SNMP_SYSNAME`,
+    `SNMP_TRAP_WLAN`, `SNMP_TRAP_CHAN`.
+  - `unsupported`(이 장치에 대응 기능 없음, #463): `LANGUAGE`, `SNMP_TRAP_LAN`, `SNMP_TRAP_INITSW`,
+    `NTP_INTERVAL`, `LOG_FUNC`, `LOG_SERVER`, `LOG_DEBUG`, `LOG_SAVE`, `LOG_INTERVAL`, `LAN_PORTSPEED`.
+  - `unknown`: 위 25개 밖의 키. 받아들이되 적용하지 않는다. 무선 설정 등 다른 키가 섞인
+    CONTEC 파일을 그대로 올릴 수 있다. 오타 난 키도 여기로 가므로 응답의 개수를 확인한다.
+- 값은 다음과 같다. 현재 값과 같은 값은 검증 없이 `unchanged`이므로, `get`이 쓴 파일을
+  그대로 `apply`하면 모두 `unchanged`다.
+  - `NTP_FUNC`, `SNMP_FUNC`: `enabled` 또는 `disabled`. `wifi_init_conf.json`의
+    `global.ntp.enabled`, `snmp.enabled`에 저장한다.
+  - `NTP_SERVER`: 유니캐스트 IPv4 또는 `0.0.0.0`. `/etc/systemd/timesyncd.conf`의 `[Time]`
+    `NTP=`를 교체한다(`wntp ip`와 같은 파일). `0.0.0.0`은 서버 없음이며 `NTP=`와 `FallbackNTP=`를
+    모두 비운다. `NTP=`만 비우면 timesyncd가 `FallbackNTP=` 서버로 동기화하기 때문이다.
+    `get`은 첫 `NTP=` 서버를, 둘 다 비었으면 `0.0.0.0`을, `NTP=`만 비었으면 빈 값을 돌려준다.
+    OPC drop-in 등 다른 출처의 서버는 이 명령이 바꾸지 않는다(1.3절과 같다).
+  - `SNMP_TRAP_IPADDR`: 유니캐스트 IPv4 또는 `0.0.0.0`. `snmp.trap.dest`에 저장한다.
+    호스트만 비교하고 기존 `:port`는 유지한다. `0.0.0.0`은 빈 값(트랩 미송신)이다.
+- `apply`는 다음 순서로 동작한다.
+  1. 파일 전체를 검증한다. 하나라도 `invalid`(값 오류, 25개 키의 중복, `KEY=VALUE`가 아닌 줄)면
+     아무것도 바꾸지 않고 결과 파일에 `invalid` 줄만 남긴 뒤 코드 `3`으로 끝난다.
+  2. 바뀐 값만 저장한다. 임시 파일을 fsync한 뒤 교체하고, JSON은 쓰기 직전에 다시 읽어 해당
+     키만 바꾼다. JSON 공통 잠금은 없으므로 같은 순간 다른 작성자(웹 UI 등)의 변경과 겹치면
+     한쪽이 사라질 수 있다.
+  3. 서비스를 맞춘다. `NTP_FUNC`·`SNMP_FUNC`가 파일에 있으면 `wifi_apply_enabled.sh`를
+     `SYSTEMCTL_FORCE_BUS=1 WIFI_APPLY_STRICT=1`로 실행해 enable 상태를 JSON에 맞춘다. 이어서
+     파일에 있는 키의 서비스(timesyncd: `NTP_FUNC`·`NTP_SERVER`, snmpd: `SNMP_FUNC`)마다 동작 하나만
+     `systemctl --no-block`으로 넘긴다. enable이면 `start`(서버를 바꿨으면 `restart`), disable이면
+     `stop`이다. 값이 그대로여도 실행하므로 실패 뒤 다시 `apply`하면 서비스가 맞춰진다.
+     핸들러는 30초 안에 끝나고 서비스 작업은 PID 1이 이어서 처리한다.
+  4. 저장 뒤 서비스 단계가 실패해도 되돌리지 않는다. 그 키는 `failed`다.
+- 결과 파일 `/home/admin/wconfig.result`는 첫 줄이 시각, 둘째 줄이 `SUMMARY` 개수, 그 뒤가
+  키마다 `<KEY> <상태>[ <사유>]`다. 상태는 `applied`, `unchanged`, `scheduled`(응답 뒤 적용, 이후
+  변경의 LAN 키용), `failed`, `invalid`, `pending`, `unsupported`, `unknown`이다.
+- 종료 코드: `0` 성공, `1` 설정 파일·장치 설정 읽기/쓰기 오류(설정 파일 없음 포함), `2` 잘못된
+  인자(읽을 수 없는 키의 `get` 포함), `3` 검증 실패(아무것도 바꾸지 않음), `4` 일부 키 실패,
+  `5` `pending` 키가 있음(나머지는 적용함). `550` 응답에는 개수가 실리지 않으므로
+  `wconfig.result`를 받아 확인한다.
+- `wconfig.txt`는 링크를 따라가지 않고 일반 파일만 읽는다(64 KiB 한도). 쓰는 파일은 링크를
+  따라가지 않고 새로 만든 뒤 홈 디렉터리 소유자(admin)에게 넘기므로 `ftp put`으로 다시 덮어쓸
+  수 있다. `put`은 그 이름에 링크나 특수 파일이 있으면 읽지 않고 새 파일로 바꾼다.
+  공장 초기화는 `wconfig.txt`와 `wconfig.result`를 지운다.
+
+~~~text
+ftp> quote wconfig get
+200 SUCCESS wrote 4 keys to wconfig.txt
+ftp> quote wconfig put NTP_SERVER=192.0.2.10
+200 SUCCESS NTP_SERVER saved to wconfig.txt; run wconfig apply
+ftp> quote wconfig apply
+200 SUCCESS applied=1 unchanged=3 scheduled=0 failed=0 invalid=0 pending=0 unsupported=0 unknown=0; see wconfig.result
+~~~
 
 ## 2. 무선 명령 요약
 
