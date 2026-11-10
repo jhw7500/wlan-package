@@ -11,7 +11,8 @@ child would be killed with the FTP session (see rst).  SNMP_COMMUNITY and
 SNMP_SYS* rewrite /etc/snmp/snmpd.local.conf, which snmpd reads after the
 snmpd.conf that every package install rewrites, and restart a running snmpd only
 when that file changes.  TIMEZONE has timedated replace /etc/localtime, the zone's
-only store, which package installs leave alone after the first one.  LAN_* values
+only store, which package installs leave alone after the first one, and restarts a
+running rsyslog so the log times follow.  LAN_* values
 rewrite 22-eth0.network last and restart
 wifi_lan_apply.service, which reconfigures eth0 only after a short wait so this
 reply leaves first.  Per-key results go to /home/admin/wconfig.result.
@@ -49,6 +50,7 @@ APPLY_ENABLED = "/usr/local/scripts/wifi_apply_enabled.sh"
 SYSTEMCTL = "/usr/bin/systemctl"
 NTP_UNIT = "systemd-timesyncd.service"
 SNMP_UNIT = "snmpd.service"
+RSYSLOG_UNIT = "rsyslog.service"
 ETH0_NETWORK = Path("/etc/systemd/network/22-eth0.network")
 MLAN0_NETWORK = Path("/etc/systemd/network/20-mlan0.network")
 LAN_UNIT = "wifi_lan_apply.service"
@@ -933,13 +935,21 @@ def apply_snmpd(wanted, status):
 
 def apply_timezone(wanted, status):
     """Have timedated point /etc/localtime at the zone.  That link is the only store: postinst
-    sets the default zone on the first install alone, so the choice survives upgrades."""
+    sets the default zone on the first install alone, so the choice survives upgrades.
+
+    A running process keeps the offset it read when it started, so rsyslog, which stamps most
+    /var/log/cantops logs, is restarted to follow; other running daemons follow at the next boot."""
     if "TIMEZONE" not in wanted:
         return
     zone = timezone_zone(wanted["TIMEZONE"])
     rc = run([TIMEDATECTL, "--no-ask-password", "set-timezone", zone], 10)
     if rc != 0:
         status["TIMEZONE"] = ("failed", f"timedatectl set-timezone {zone} failed rc={rc}")
+        return
+    rc = run([SYSTEMCTL, "--no-ask-password", "--no-block", "try-restart", RSYSLOG_UNIT], 4)
+    if rc != 0:
+        status["TIMEZONE"] = ("applied", f"try-restart {RSYSLOG_UNIT} failed rc={rc}; "
+                              "log times keep the old offset until quote rst")
 
 
 def apply_lan(wanted, current, status):

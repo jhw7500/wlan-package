@@ -1113,6 +1113,7 @@ def test_the_contec_value_of_the_default_zone_is_unchanged(env):
 
     assert result_line(env, "TIMEZONE") == "TIMEZONE unchanged"
     assert timezone_calls(env) == []
+    assert env.system.queued() == []
 
 
 @pytest.mark.parametrize("value, zone", [
@@ -1189,6 +1190,31 @@ def test_a_timedatectl_failure_is_reported_and_the_zone_stays(env):
     assert result_line(env, "TIMEZONE") == "TIMEZONE failed timedatectl set-timezone Asia/Tokyo failed rc=1"
     assert result_line(env, "SNMP_TRAP_IPADDR") == "SNMP_TRAP_IPADDR applied"
     assert env.localtime.resolve() == (env.zoneinfo / "Asia/Seoul").resolve()
+    assert ("try-restart", "rsyslog.service") not in env.system.queued()
+
+
+def test_a_zone_change_restarts_a_running_rsyslog_so_log_times_follow(env):
+    # A running process keeps the offset it read at start: rsyslog, which stamps most
+    # /var/log/cantops logs, wrote the old offset on the board until it restarted.
+    write_settings(env, "TIMEZONE=JST-9\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    names = [Path(argv[0]).name for argv, _ in env.system.calls]
+    assert names == ["timedatectl", "systemctl"]
+    assert env.system.queued() == [("try-restart", "rsyslog.service")]
+
+
+def test_an_rsyslog_hand_off_failure_keeps_the_zone_and_says_so(env):
+    # The zone has changed; only the log times lag, so the key stays applied with the reason.
+    env.system.queue_rc = 1
+    write_settings(env, "TIMEZONE=JST-9\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    assert result_line(env, "TIMEZONE") == ("TIMEZONE applied try-restart rsyslog.service failed rc=1; "
+                                            "log times keep the old offset until quote rst")
+    assert env.localtime.resolve() == (env.zoneinfo / "Asia/Tokyo").resolve()
 
 
 def test_get_output_of_a_zone_outside_the_table_applies_unchanged(env, capsys):

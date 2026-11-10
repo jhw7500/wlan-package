@@ -248,7 +248,12 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
     (`Asia/Seoul`이면 `KST-9`, `Etc/GMT-9`이면 `<+09>-9`). 다른 방법으로 정한 표 밖의 zone도 그 문자열을
     그대로 돌려주므로 `get` 파일은 다시 적용해도 `unchanged`다. 패키지 설치는 최초 설치(활성
     `wifi_init_conf.json`이 아직 없을 때)에만 `Asia/Seoul`로 정한다. 업그레이드·재설치는 시간대를 건드리지
-    않고, 공장 초기화는 `Asia/Seoul`로 되돌린다.
+    않고, 공장 초기화는 `Asia/Seoul`로 되돌린다. 이미 실행 중인 프로세스는 시작할 때 읽은 시차를 계속
+    쓴다(보드 실측: rsyslog). 그래서 시간대가 바뀌면 `systemctl --no-block try-restart rsyslog.service`로
+    rsyslog를 재시작한다. 그러면 rsyslog가 시각을 찍는 `/var/log/cantops` 로그(wpa·mgmt·cpu·logger·kern·
+    sys·ui·ping)도 새 시차를 따른다. 재시작을 넘기지 못해도 시간대는 이미 바뀌었으므로 `applied`로 두고
+    사유를 적는다. 그 밖에 실행 중인 데몬이 직접 시각을 찍는 로그(파이썬 로거의 stat·summary 로그 등)는
+    재부팅할 때까지 이전 시차다(보드 실측). 모든 로그를 맞추려면 적용 뒤 `quote rst`로 재부팅한다.
 - `apply`는 다음 순서로 동작한다.
   1. 파일 전체를 검증한다. 하나라도 `invalid`(값 오류, 25개 키의 중복, `KEY=VALUE`가 아닌 줄)면
      아무것도 바꾸지 않고 결과 파일에 `invalid` 줄만 남긴 뒤 코드 `3`으로 끝난다.
@@ -267,8 +272,8 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
   4. SNMP 문자열이 바뀌었으면 `snmpd.local.conf`를 교체하고 `systemctl --no-block try-restart
      snmpd.service`로 넘긴다. 실행 중인 snmpd만 재시작하고, 멈춰 있으면 다음에 기동할 때 파일을 읽는다.
      파일이 바뀔 때만 넘긴다. 재시작은 sysUpTime을 0으로 돌리고 잠깐 조회를 끊기 때문이다.
-  5. `TIMEZONE`이 바뀌었으면 `timedatectl set-timezone <zone>`으로 바꾼다. 실패하면 시간대는 그대로이고
-     그 키는 `failed`다.
+  5. `TIMEZONE`이 바뀌었으면 `timedatectl set-timezone <zone>`으로 바꾸고, rsyslog를 `systemctl
+     --no-block try-restart`로 넘긴다. timedatectl이 실패하면 시간대는 그대로이고 그 키는 `failed`다.
   6. LAN 키가 바뀌었으면 마지막에 `22-eth0.network`를 교체하고 `wifi_lan_apply.service`를
      `systemctl --no-block restart`로 넘긴다. 그 키는 `scheduled`다. 유닛은 2초 기다려 이 응답이 먼저
      나가게 한 뒤 `wifi net apply eth0`(`networkctl reload`와 `networkctl reconfigure eth0`)과
