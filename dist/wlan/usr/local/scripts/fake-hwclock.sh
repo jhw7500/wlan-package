@@ -51,8 +51,12 @@ write_state() {
         logger -p local0.err "[$tag:$LINENO] mkdir failed: ${STATE%/*}"
         return 1
     }
-    # tmp+mv 원자적 교체 — 쓰기 도중 전원 차단 시 상태 파일 손상 방지
-    if date +"%Y-%m-%d %H:%M:%S" > "${STATE}.tmp" 2>/dev/null && mv -f "${STATE}.tmp" "$STATE" 2>/dev/null; then
+    # tmp+mv 원자적 교체 — 쓰기 도중 전원 차단 시 상태 파일 손상 방지.
+    # UTC 로 적고 " UTC" 를 붙인다: 현지 문자열은 시간대가 바뀌면(quote wconfig TIMEZONE, #464)
+    # 다른 순간으로 읽혀, 서쪽으로 바꾼 장치는 저장값이 미래로 보여 save 가 멈추고 다음 부팅
+    # load 가 시계를 시차만큼 앞으로 맞춘다. 읽는 쪽(date -d / date -s)은 예전 현지 문자열도
+    # 그대로 읽는다.
+    if date -u +"%Y-%m-%d %H:%M:%S UTC" > "${STATE}.tmp" 2>/dev/null && mv -f "${STATE}.tmp" "$STATE" 2>/dev/null; then
         return 0
     fi
     logger -p local0.err "[$tag:$LINENO] failed to write state: $STATE"
