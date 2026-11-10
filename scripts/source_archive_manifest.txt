@@ -13,7 +13,6 @@ dist/wlan/etc/default/wbridge
 dist/wlan/etc/modules-load.d/99-cts-mods.conf
 dist/wlan/etc/nanorc
 dist/wlan/etc/profile.d/00-cantops.sh
-dist/wlan/etc/rsyslog.d/10-udp-out.conf
 dist/wlan/etc/rsyslog.d/20-mgmt-frame.conf
 dist/wlan/etc/ssh/sshd_config.d/10-wlan-admin.conf
 dist/wlan/etc/systemd/journald.conf.d/override.conf
@@ -368,6 +367,7 @@ dist/wlan/usr/local/scripts/tests/test_opcd_unit_install.py
 dist/wlan/usr/local/scripts/tests/test_postinst_factory_parent.py
 dist/wlan/usr/local/scripts/tests/test_postinst_upgrade_wifi_event.py
 dist/wlan/usr/local/scripts/tests/test_recovery_diagnostic_timeouts.py
+dist/wlan/usr/local/scripts/tests/test_remote_syslog_wpa.py
 dist/wlan/usr/local/scripts/tests/test_reset_cause_ids.py
 dist/wlan/usr/local/scripts/tests/test_roam_owner_service_policy.py
 dist/wlan/usr/local/scripts/tests/test_root_password.py

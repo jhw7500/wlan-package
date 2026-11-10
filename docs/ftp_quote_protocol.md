@@ -182,10 +182,10 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
 - 키는 네 가지로 나뉜다. 어느 분류든 파일에 있어도 된다.
   - 적용: `NTP_FUNC`, `NTP_SERVER`, `SNMP_FUNC`, `SNMP_TRAP_IPADDR`, `SNMP_TRAP_WLAN`,
     `SNMP_TRAP_CHAN`, `SNMP_COMMUNITY`, `SNMP_SYSCONTACT`, `SNMP_SYSLOCATION`, `SNMP_SYSNAME`,
-    `LAN_MODE`, `LAN_IPADDR`, `LAN_NETMASK`, `LAN_GATEWAY`, `TIMEZONE`.
+    `LAN_MODE`, `LAN_IPADDR`, `LAN_NETMASK`, `LAN_GATEWAY`, `TIMEZONE`, `LOG_FUNC`, `LOG_SERVER`.
   - `pending`(이후 변경에서 적용할 키): 현재 없다.
   - `unsupported`(이 장치에 대응 기능 없음, #463): `LANGUAGE`, `SNMP_TRAP_LAN`, `SNMP_TRAP_INITSW`,
-    `NTP_INTERVAL`, `LOG_FUNC`, `LOG_SERVER`, `LOG_DEBUG`, `LOG_SAVE`, `LOG_INTERVAL`, `LAN_PORTSPEED`.
+    `NTP_INTERVAL`, `LOG_DEBUG`, `LOG_SAVE`, `LOG_INTERVAL`, `LAN_PORTSPEED`.
   - `unknown`: 위 25개 밖의 키. 받아들이되 적용하지 않는다. 무선 설정 등 다른 키가 섞인
     CONTEC 파일을 그대로 올릴 수 있다. 오타 난 키도 여기로 가므로 응답의 개수를 확인한다.
 - 값은 다음과 같다. 현재 값과 같은 값은 검증 없이 `unchanged`이므로, `get`이 쓴 파일을
@@ -254,6 +254,19 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
     sys·ui·ping)도 새 시차를 따른다. 재시작을 넘기지 못해도 시간대는 이미 바뀌었으므로 `applied`로 두고
     사유를 적는다. 그 밖에 실행 중인 데몬이 직접 시각을 찍는 로그(파이썬 로거의 stat·summary 로그 등)는
     재부팅할 때까지 이전 시차다(보드 실측). 모든 로그를 맞추려면 적용 뒤 `quote rst`로 재부팅한다.
+  - `LOG_FUNC`(`enabled`·`disabled`), `LOG_SERVER`(유니캐스트 IPv4 또는 `0.0.0.0`): wpa.log 줄을 원격
+    syslog 서버로 UDP 514번 포트에 보낸다(#482). `LOG_FUNC=enabled`이고 `LOG_SERVER`가 `0.0.0.0`이 아닐 때만
+    보낸다. 서버가 없는 `enabled`는 `applied`이지만 아무것도 보내지 않는다. 값은
+    `/etc/rsyslog.d/wpa-remote.inc`에 `# LOG_FUNC=`·`# LOG_SERVER=` 주석 두 줄로 두고, 보낼 때만
+    `action(type="omfwd" … protocol="udp" queue.type="LinkedList" …)` 한 줄을 더한다. 이 전송은 rsyslog 메인 큐가 아닌
+    자체 큐(1000줄)를 쓰고 가득 차면 기다리지 않고 버리므로, 전송 경로가 패킷을 붙잡아도 장치의 로그 기록은 멈추지 않는다. rsyslog.conf의 wpa.log 블록이 `mlan0:`·`mlan1:` 줄을
+    wpa.log에 쓴 직후 이 파일을 include하므로, wpa.log에 남는 줄과 같은 줄만 나간다. 형식은 rsyslog 전송
+    기본값(RFC 3164)이라 wpa.log 줄의 시각 형식과 다르다. 파일이 없거나 표시 줄이 없으면 `disabled`·`0.0.0.0`으로
+    읽고 보내지 않는다. 패키지는 이 파일을 싣지 않으므로 업그레이드·재설치는 값을 바꾸지 않는다. 공장 초기화는
+    파일을 지워 끈다. UDP라 서버나 무선 경로가 끊긴 동안의 줄은 다시 보내지 않고 사라진다(전송 오류는 sys.log).
+    포트는 코드 상수다. 바꾸면 이미 보내고 있는 장치는 `LOG_FUNC`·`LOG_SERVER`를 다시 적용해야 새 포트로 쓴다
+    (같은 값은 다시 쓰지 않는다). 예전 패키지의 `/etc/rsyslog.d/10-udp-out.conf`(전송 줄이 모두 주석)는 업그레이드 때
+    패키지와 함께 지워진다.
 - `apply`는 다음 순서로 동작한다.
   1. 파일 전체를 검증한다. 하나라도 `invalid`(값 오류, 25개 키의 중복, `KEY=VALUE`가 아닌 줄)면
      아무것도 바꾸지 않고 결과 파일에 `invalid` 줄만 남긴 뒤 코드 `3`으로 끝난다.
@@ -272,16 +285,18 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
   4. SNMP 문자열이 바뀌었으면 `snmpd.local.conf`를 교체하고 `systemctl --no-block try-restart
      snmpd.service`로 넘긴다. 실행 중인 snmpd만 재시작하고, 멈춰 있으면 다음에 기동할 때 파일을 읽는다.
      파일이 바뀔 때만 넘긴다. 재시작은 sysUpTime을 0으로 돌리고 잠깐 조회를 끊기 때문이다.
-  5. `TIMEZONE`이 바뀌었으면 `timedatectl set-timezone <zone>`으로 바꾸고, rsyslog를 `systemctl
-     --no-block try-restart`로 넘긴다. timedatectl이 실패하면 시간대는 그대로이고 그 키는 `failed`다.
+  5. `TIMEZONE`이 바뀌었으면 `timedatectl set-timezone <zone>`으로 바꾼다. timedatectl이 실패하면 시간대는
+     그대로이고 그 키는 `failed`다. `LOG_FUNC`·`LOG_SERVER`가 바뀌었으면 `wpa-remote.inc`를 교체한다. 둘 중
+     하나라도 바뀌었으면 rsyslog를 `systemctl --no-block try-restart`로 한 번만 넘긴다.
   6. LAN 키가 바뀌었으면 마지막에 `22-eth0.network`를 교체하고 `wifi_lan_apply.service`를
      `systemctl --no-block restart`로 넘긴다. 그 키는 `scheduled`다. 유닛은 2초 기다려 이 응답이 먼저
      나가게 한 뒤 `wifi net apply eth0`(`networkctl reload`와 `networkctl reconfigure eth0`)과
      `wifi_peer_net_reapply.sh`를 실행한다. 기다리는 동안 다시 `apply`하면 앞 실행을 멈추고 마지막
      파일로 다시 시작한다.
-  7. 저장 뒤 서비스 단계가 실패해도 되돌리지 않는다. 그 키는 `failed`다. LAN 키와 SNMP 문자열만
-     예외다. 둘 다 값이 같으면 다시 적용하지 않으므로, 유닛을 넘기지 못하면 `22-eth0.network`나
-     `snmpd.local.conf`를 원래대로 되돌리고 `failed`로 남긴다. 그러면 같은 파일로 다시 `apply`해
+  7. 저장 뒤 서비스 단계가 실패해도 되돌리지 않는다. 그 키는 `failed`다. LAN 키, SNMP 문자열, `LOG_*`만
+     예외다. 셋 다 값이 같으면 다시 적용하지 않으므로, 유닛을 넘기지 못하면 `22-eth0.network`나
+     `snmpd.local.conf`, `wpa-remote.inc`를 원래대로 되돌리고 `failed`로 남긴다(`TIMEZONE`은 이미 바뀌었으므로
+     `applied`와 사유). 그러면 같은 파일로 다시 `apply`해
      재시도할 수 있다. 되돌리기마저 실패하면 그 사실을 사유에 적는다. 저장한 값은 다음 부팅(`quote rst`)에
      적용된다.
 - 결과 파일 `/home/admin/wconfig.result`는 첫 줄이 시각, 둘째 줄이 `SUMMARY` 개수, 그 뒤가
@@ -311,15 +326,15 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
 
 ~~~text
 ftp> quote wconfig get
-200 SUCCESS wrote 15 keys to wconfig.txt
+200 SUCCESS wrote 17 keys to wconfig.txt
 ftp> quote wconfig put NTP_SERVER=192.0.2.10
 200 SUCCESS NTP_SERVER saved to wconfig.txt; run wconfig apply
 ftp> quote wconfig apply
-200 SUCCESS applied=1 unchanged=14 scheduled=0 failed=0 invalid=0 pending=0 unsupported=0 unknown=0; see wconfig.result
+200 SUCCESS applied=1 unchanged=16 scheduled=0 failed=0 invalid=0 pending=0 unsupported=0 unknown=0; see wconfig.result
 ftp> quote wconfig put LAN_IPADDR=192.0.2.50
 200 SUCCESS LAN_IPADDR saved to wconfig.txt; run wconfig apply
 ftp> quote wconfig apply
-200 SUCCESS applied=0 unchanged=14 scheduled=1 failed=0 invalid=0 pending=0 unsupported=0 unknown=0; see wconfig.result
+200 SUCCESS applied=0 unchanged=16 scheduled=1 failed=0 invalid=0 pending=0 unsupported=0 unknown=0; see wconfig.result
 ~~~
 
 ## 2. 무선 명령 요약
