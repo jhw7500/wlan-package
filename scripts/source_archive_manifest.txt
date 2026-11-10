@@ -116,6 +116,7 @@ dist/wlan/opt/wlan/config/rsyslog.conf
 dist/wlan/opt/wlan/config/smb.conf
 dist/wlan/opt/wlan/config/snmp/CANTOPS-CTS-WLAN-MIB.txt
 dist/wlan/opt/wlan/config/snmp/snmpd.conf
+dist/wlan/opt/wlan/config/snmp/snmpd.local.conf
 dist/wlan/opt/wlan/config/sysctl.d/99-wifi-thermal.conf
 dist/wlan/opt/wlan/config/systemd/journald.conf
 dist/wlan/opt/wlan/config/systemd/network/10-lo.network
@@ -371,6 +372,7 @@ dist/wlan/usr/local/scripts/tests/test_reset_cause_ids.py
 dist/wlan/usr/local/scripts/tests/test_roam_owner_service_policy.py
 dist/wlan/usr/local/scripts/tests/test_root_password.py
 dist/wlan/usr/local/scripts/tests/test_rsyslog_radio_log.py
+dist/wlan/usr/local/scripts/tests/test_snmpd_local_conf.py
 dist/wlan/usr/local/scripts/tests/test_source_archive_manifest.py
 dist/wlan/usr/local/scripts/tests/test_unit_execstart_exec_bit.py
 dist/wlan/usr/local/scripts/tests/test_wifi_arping_link_state.py

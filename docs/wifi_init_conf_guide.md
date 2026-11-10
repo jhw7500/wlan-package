@@ -1599,6 +1599,8 @@ SNMP는 **기본 off(opt-in)**이다. `snmp.enabled=true`일 때만 `wifi_apply_
 
 `trap.link`·`trap.channel`은 트랩 종류별 스위치다. 키가 없으면 켜짐으로 본다. FTP `quote wconfig`의 `SNMP_TRAP_WLAN`·`SNMP_TRAP_CHAN`이 이 두 키와 `trap.enabled`를 함께 맞춘다(`docs/ftp_quote_protocol.md` 1.5절). 트랩 송신은 호출마다 JSON을 읽으므로 바로 반영된다. 다만 이벤트 리스너 `wifi_event@`가 꺼져 있던 장치(`on_connect`·`roam_garp`·MCS 검증이 모두 꺼짐)는 다음 부팅부터 트랩을 보낸다.
 
+조회용 community(`rocommunity`)와 sysContact·sysLocation·sysName은 이 JSON이 아니라 `/etc/snmp/snmpd.local.conf`에 있다(템플릿 `/opt/wlan/config/snmp/snmpd.local.conf`, 기본 `rocommunity public  default`). snmpd는 `snmpd.conf` 뒤에 이 파일을 읽어 그 값을 쓴다. 패키지 설치는 `snmpd.conf`만 다시 쓰고 local은 없거나 비었을 때만 만든다(커뮤니티 줄이 없으면 덧붙인다). 공장 초기화는 local을 템플릿으로 되돌린다. FTP `quote wconfig`의 `SNMP_COMMUNITY`가 `trap.community`와 조회용 community를 함께 바꾸고, `SNMP_SYSCONTACT`·`SNMP_SYSLOCATION`·`SNMP_SYSNAME`이 sys* 값을 바꾼다(`docs/ftp_quote_protocol.md` 1.5절).
+
 ```json
 "snmp": {
     "enabled": false,
