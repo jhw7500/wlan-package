@@ -1235,7 +1235,10 @@ def test_get_output_of_a_zone_outside_the_table_applies_unchanged(env, capsys):
 
 # --- remote syslog of wpa.log lines (#482) ------------------------------------------------
 
-FORWARD = 'action(type="omfwd" target="192.0.2.30" port="514" protocol="udp")'
+# The forward has its own bounded queue that drops instead of waiting when full: run on the main
+# queue, a path that holds packets blocked sendto and stopped every rsyslog log (Tribunal A-R1-001).
+FORWARD = ('action(type="omfwd" target="192.0.2.30" port="514" protocol="udp" '
+           'queue.type="LinkedList" queue.size="1000" queue.timeoutEnqueue="0")')
 
 
 def rsyslog_restarts(env):

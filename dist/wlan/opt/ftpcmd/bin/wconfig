@@ -437,7 +437,10 @@ def remote_syslog_text(function, server, port=SYSLOG_PORT):
              "# rsyslog.conf includes this file from its wpa.log block; delete it to send nothing.",
              f"# LOG_FUNC={function}", f"# LOG_SERVER={server}"]
     if function == "enabled" and server != "0.0.0.0":
-        lines.append(f'action(type="omfwd" target="{server}" port="{port}" protocol="udp")')
+        # Its own bounded queue that drops when full: on rsyslog's main queue, a path that holds
+        # packets (instead of failing them) blocks sendto and stops every rsyslog log.
+        lines.append(f'action(type="omfwd" target="{server}" port="{port}" protocol="udp" '
+                     'queue.type="LinkedList" queue.size="1000" queue.timeoutEnqueue="0")')
     return "\n".join(lines) + "\n"
 
 

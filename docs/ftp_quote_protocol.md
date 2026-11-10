@@ -258,7 +258,8 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
     syslog 서버로 UDP 514번 포트에 보낸다(#482). `LOG_FUNC=enabled`이고 `LOG_SERVER`가 `0.0.0.0`이 아닐 때만
     보낸다. 서버가 없는 `enabled`는 `applied`이지만 아무것도 보내지 않는다. 값은
     `/etc/rsyslog.d/wpa-remote.inc`에 `# LOG_FUNC=`·`# LOG_SERVER=` 주석 두 줄로 두고, 보낼 때만
-    `action(type="omfwd" … protocol="udp")` 한 줄을 더한다. rsyslog.conf의 wpa.log 블록이 `mlan0:`·`mlan1:` 줄을
+    `action(type="omfwd" … protocol="udp" queue.type="LinkedList" …)` 한 줄을 더한다. 이 전송은 rsyslog 메인 큐가 아닌
+    자체 큐(1000줄)를 쓰고 가득 차면 기다리지 않고 버리므로, 전송 경로가 패킷을 붙잡아도 장치의 로그 기록은 멈추지 않는다. rsyslog.conf의 wpa.log 블록이 `mlan0:`·`mlan1:` 줄을
     wpa.log에 쓴 직후 이 파일을 include하므로, wpa.log에 남는 줄과 같은 줄만 나간다. 형식은 rsyslog 전송
     기본값(RFC 3164)이라 wpa.log 줄의 시각 형식과 다르다. 파일이 없거나 표시 줄이 없으면 `disabled`·`0.0.0.0`으로
     읽고 보내지 않는다. 패키지는 이 파일을 싣지 않으므로 업그레이드·재설치는 값을 바꾸지 않는다. 공장 초기화는
