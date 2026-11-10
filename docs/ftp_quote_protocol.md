@@ -206,7 +206,11 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
     `snmp.trap.channel`, 키가 없으면 켜짐)가 모두 켜졌을 때만 `enabled`를 돌려준다. 파일에 없는 쪽은
     그렇게 보고된 상태를 유지한다. 하나라도 켜면 `snmp.trap.enabled`와 두 스위치를 함께 저장하고,
     둘 다 끄면 `snmp.trap.enabled`만 끈다. 종류별 스위치를 남겨 두므로 웹 UI가 `snmp.trap.enabled`를
-    다시 켜면 그 선택대로 보낸다. 트랩 송신기는 호출마다 JSON을 읽어 다음 이벤트부터 반영한다. 다만
+    다시 켜면 그 선택대로 보낸다. 그래서 트랩이 모두 꺼진 상태에서 한 종류만 적은 파일로 켜면, 적지
+    않은 종류는 꺼짐으로 보고된 그대로 두려고 그 스위치를 `false`로 저장하고, 나중에 둘 다 꺼도 그 값이
+    남는다. 이때 웹 UI 등에서 `snmp.trap.enabled`만 켜면 그 종류는 보내지 않는다. 두 스위치를
+    기본값(켜짐)으로 되돌리려면 `SNMP_TRAP_WLAN=enabled`·`SNMP_TRAP_CHAN=enabled`를 함께 적용한 뒤 둘 다
+    `disabled`로 적용한다(#484). 트랩 송신기는 호출마다 JSON을 읽어 다음 이벤트부터 반영한다. 다만
     이벤트 리스너 `wifi_event@`가 꺼져 있던 장치(`on_connect`·`roam_garp`·MCS 검증이 모두 꺼짐)는
     다음 부팅부터 보낸다.
   - `SNMP_COMMUNITY`: 조회용과 트랩용에 함께 쓰는 community. 1~32자의 보이는 ASCII이며 `#`·따옴표·`\`는
