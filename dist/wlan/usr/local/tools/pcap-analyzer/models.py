@@ -44,6 +44,7 @@ class Frame:
     icmp_ident: str = ""
     status_code: str = ""   # (재)연결 응답 상태 코드(10진, 없으면 "")
     eapol_msgnr: str = ""   # tshark EAPOL-Key 메시지 번호 "1"~"4"(그룹 키 메시지도 1·2, 없으면 "")
+    eapol_key_type: str = ""  # EAPOL-Key 키 종류 "1"=쌍(pairwise), "0"=그룹, ""=모름 — 4-way 판정은 그룹 키를 뺀다
 
     @property
     def subtype_name(self) -> str:
