@@ -600,9 +600,12 @@ def check_gateway(value):
 
 
 def check_community(value):
-    """The query and trap community: 1 to 32 visible ASCII characters other than # " ' \\."""
+    """The query and trap community: 1 to 32 visible ASCII characters other than # " ' \\, not
+    starting with - (snmpd reads that as an option: "rocommunity -v default" is an illegal line)."""
     if not 1 <= len(value) <= 32 or any(not "!" <= char <= "~" or char in "#\"'\\" for char in value):
         raise Invalid("expected 1 to 32 visible ASCII characters other than # \" ' \\")
+    if value.startswith("-"):
+        raise Invalid("must not start with -")
     return value
 
 

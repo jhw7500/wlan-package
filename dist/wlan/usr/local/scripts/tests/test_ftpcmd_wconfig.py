@@ -974,6 +974,8 @@ def test_an_unreachable_systemd_fails_the_strings_even_when_snmpd_looks_disabled
 @pytest.mark.parametrize("line", [
     "SNMP_COMMUNITY=", "SNMP_COMMUNITY=" + "a" * 33, "SNMP_COMMUNITY=pub lic", "SNMP_COMMUNITY=pub#lic",
     'SNMP_COMMUNITY=pub"lic', "SNMP_COMMUNITY=pub'lic", "SNMP_COMMUNITY=pub\\lic", "SNMP_COMMUNITY=공개",
+    # snmpd reads a leading - as an option: "rocommunity -v default" is an illegal line (Codex P2).
+    "SNMP_COMMUNITY=-v", "SNMP_COMMUNITY=-public",
     "SNMP_SYSLOCATION=#2F", "SNMP_SYSNAME=" + "a" * 256, "SNMP_SYSNAME=" + "가" * 86,
     "SNMP_SYSCONTACT=tab\there", "SNMP_SYSCONTACT=bell\x07",
 ])

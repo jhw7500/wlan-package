@@ -209,7 +209,7 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
     이벤트 리스너 `wifi_event@`가 꺼져 있던 장치(`on_connect`·`roam_garp`·MCS 검증이 모두 꺼짐)는
     다음 부팅부터 보낸다.
   - `SNMP_COMMUNITY`: 조회용과 트랩용에 함께 쓰는 community. 1~32자의 보이는 ASCII이며 `#`·따옴표·`\`는
-    받지 않는다. `snmp.trap.community`에 먼저 저장한 뒤 `/etc/snmp/snmpd.local.conf`의 `rocommunity` 줄마다
+    받지 않고 `-`로 시작할 수 없다(snmpd는 `-v`를 옵션으로 읽어 그 줄을 버린다). `snmp.trap.community`에 먼저 저장한 뒤 `/etc/snmp/snmpd.local.conf`의 `rocommunity` 줄마다
     community 단어만 바꾼다(손으로 좁힌 출발지·OID는 유지, 줄이 없으면 `rocommunity <값> default`를
     더한다). JSON 저장이 실패하면 조회용은 바꾸지 않는다. `get`은 첫 `rocommunity`의 community를
     돌려준다. 웹 UI가 `snmp.trap.community`만 바꿔 두 값이 다르면 같은 값도 `applied`로 다시 맞춘다.
