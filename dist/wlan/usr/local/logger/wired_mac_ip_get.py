@@ -299,7 +299,7 @@ def get_iface_config_addr(iface, netdir="/etc/systemd/network"):
         # 있으므로 진단용으로 남긴다. logger는 main()에서 할당되므로 부팅 경로에선 기록되고,
         # import(단위테스트)에선 미정의라 내부 except로 조용히 무시된다.
         try:
-            logger.message("warning",
+            logger.message("warn",
                            "[%s] get_iface_config_addr(%s) parse failed: %s" % (IFACE, iface, e),
                            _EXTRA_())
         except Exception:
