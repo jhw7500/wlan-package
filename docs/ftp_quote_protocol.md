@@ -188,7 +188,8 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
   - `unknown`: 위 25개 밖의 키. 받아들이되 적용하지 않는다. 무선 설정 등 다른 키가 섞인
     CONTEC 파일을 그대로 올릴 수 있다. 오타 난 키도 여기로 가므로 응답의 개수를 확인한다.
 - 값은 다음과 같다. 현재 값과 같은 값은 검증 없이 `unchanged`이므로, `get`이 쓴 파일을
-  그대로 `apply`하면 모두 `unchanged`다.
+  그대로 `apply`하면 모두 `unchanged`다. 예외는 `SNMP_COMMUNITY` 하나다. 조회 커뮤니티와
+  `snmp.trap.community`가 다르면(웹 UI가 트랩 커뮤니티만 바꾼 경우) 같은 값도 `applied`로 두 값을 맞춘다.
   - `NTP_FUNC`, `SNMP_FUNC`: `enabled` 또는 `disabled`. `wifi_init_conf.json`의
     `global.ntp.enabled`, `snmp.enabled`에 저장한다.
   - `NTP_SERVER`: 유니캐스트 IPv4 또는 `0.0.0.0`. `/etc/systemd/timesyncd.conf`의 `[Time]`
@@ -250,9 +251,9 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
      실행하므로 실패 뒤 다시 `apply`하면 서비스가 맞춰진다. 서비스 단계를 건너뛰거나 실패하면 그
      서비스에 걸린 키(`NTP_SERVER` 포함)는 모두 `failed`다.
      핸들러는 30초 안에 끝나고 서비스 작업은 PID 1이 이어서 처리한다.
-  4. SNMP 문자열이 바뀌었으면 `snmpd.local.conf`를 교체하고, snmpd가 enable이면 `systemctl --no-block
-     restart snmpd.service`로 넘긴다. 파일이 바뀔 때만 재시작한다. 재시작은 sysUpTime을 0으로 돌리고
-     잠깐 조회를 끊기 때문이다. disable이면 파일만 바꾸고 snmpd가 다음에 기동할 때 읽는다.
+  4. SNMP 문자열이 바뀌었으면 `snmpd.local.conf`를 교체하고 `systemctl --no-block try-restart
+     snmpd.service`로 넘긴다. 실행 중인 snmpd만 재시작하고, 멈춰 있으면 다음에 기동할 때 파일을 읽는다.
+     파일이 바뀔 때만 넘긴다. 재시작은 sysUpTime을 0으로 돌리고 잠깐 조회를 끊기 때문이다.
   5. LAN 키가 바뀌었으면 마지막에 `22-eth0.network`를 교체하고 `wifi_lan_apply.service`를
      `systemctl --no-block restart`로 넘긴다. 그 키는 `scheduled`다. 유닛은 2초 기다려 이 응답이 먼저
      나가게 한 뒤 `wifi net apply eth0`(`networkctl reload`와 `networkctl reconfigure eth0`)과

@@ -9,8 +9,8 @@ saves each store and hands PID 1 a single systemctl --no-block action per
 service, so the handler ends well inside the dispatcher's 30 s limit; a detached
 child would be killed with the FTP session (see rst).  SNMP_COMMUNITY and
 SNMP_SYS* rewrite /etc/snmp/snmpd.local.conf, which snmpd reads after the
-snmpd.conf that every package install rewrites, and restart snmpd only when that
-file changes.  LAN_* values rewrite 22-eth0.network last and restart
+snmpd.conf that every package install rewrites, and restart a running snmpd only
+when that file changes.  LAN_* values rewrite 22-eth0.network last and restart
 wifi_lan_apply.service, which reconfigures eth0 only after a short wait so this
 reply leaves first.  Per-key results go to /home/admin/wconfig.result.
 """
@@ -843,11 +843,14 @@ def follow_services(present, wanted, status):
 
 
 def apply_snmpd(wanted, status):
-    """Rewrite snmpd.local.conf for the SNMP strings that changed and restart an enabled snmpd.
+    """Rewrite snmpd.local.conf for the SNMP strings that changed and have a running snmpd reread it.
 
     Only a changed file restarts snmpd, because a restart resets sysUpTime and drops queries
-    for a moment.  A restart that cannot be queued puts the file back, so failed means snmpd
-    still has the old values and applying the same file again retries."""
+    for a moment.  try-restart restarts a running snmpd and leaves a stopped one, which reads the
+    file when it next starts, so no enable-state lookup is needed: is-enabled exits 1 both for a
+    disabled unit and for an unreachable systemd.  A try-restart that cannot be queued puts the
+    file back, so failed means snmpd still has the old values and applying the same file again
+    retries."""
     keys = [key for key in SNMPD_KEYS if key in wanted and key not in status]
     if not keys:
         return
@@ -861,25 +864,18 @@ def apply_snmpd(wanted, status):
         for key in keys:
             status[key] = ("failed", f"snmpd.local.conf save failed: {error}")
         return
-    enabled = run([SYSTEMCTL, "is-enabled", "--quiet", SNMP_UNIT], 4)
-    if enabled is None:
-        action, rc = "is-enabled", None
-    elif enabled != 0:
-        return  # a stopped snmpd reads the file when it next starts
-    else:
-        action = "restart"
-        rc = run([SYSTEMCTL, "--no-ask-password", "--no-block", action, SNMP_UNIT], 4)
-        if rc == 0:
-            return
+    rc = run([SYSTEMCTL, "--no-ask-password", "--no-block", "try-restart", SNMP_UNIT], 4)
+    if rc == 0:
+        return
     try:
         if before is None:
             SNMPD_LOCAL_CONF.unlink()
         else:
             replace_file(SNMPD_LOCAL_CONF, before)
     except (OSError, UnicodeError) as error:
-        detail = f"{action} {SNMP_UNIT} failed rc={rc}; restoring snmpd.local.conf failed ({error})"
+        detail = f"try-restart {SNMP_UNIT} failed rc={rc}; restoring snmpd.local.conf failed ({error})"
     else:
-        detail = f"{action} {SNMP_UNIT} failed rc={rc}; snmpd.local.conf restored"
+        detail = f"try-restart {SNMP_UNIT} failed rc={rc}; snmpd.local.conf restored"
     for key in keys:
         status[key] = ("failed", detail)
 

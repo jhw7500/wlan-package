@@ -806,7 +806,7 @@ def test_a_missing_local_file_reads_as_empty_and_its_get_output_still_applies(en
     assert not env.snmpd_local.exists()
 
 
-def test_a_changed_location_rewrites_only_its_line_and_restarts_an_enabled_snmpd(env):
+def test_a_changed_location_rewrites_only_its_line_and_restarts_a_running_snmpd(env):
     env.system.enabled[SNMP_UNIT] = True
     set_local(env, "# keep\nrocommunity public 192.0.2.0/24\nsyslocation Old\nsysname Box-1\n")
     conf_before = env.conf.read_bytes()
@@ -818,7 +818,7 @@ def test_a_changed_location_rewrites_only_its_line_and_restarts_an_enabled_snmpd
         '# keep\nrocommunity public 192.0.2.0/24\nsyslocation 서울 3F #2 "quoted"\nsysname Box-1\n')
     assert stat.S_IMODE(env.snmpd_local.stat().st_mode) == 0o644
     assert env.conf.read_bytes() == conf_before
-    assert env.system.queued() == [("restart", SNMP_UNIT)]
+    assert env.system.queued() == [("try-restart", SNMP_UNIT)]
     assert result_line(env, "SNMP_SYSLOCATION") == "SNMP_SYSLOCATION applied"
 
 
@@ -831,7 +831,7 @@ def test_an_empty_string_removes_every_line_of_the_directive(env):
 
     # snmpd then falls back to the host name; the other directives stay as they were.
     assert env.snmpd_local.read_text() == "rocommunity public  default\nsyslocation Here\n"
-    assert env.system.queued() == [("restart", SNMP_UNIT)]
+    assert env.system.queued() == [("try-restart", SNMP_UNIT)]
 
 
 def test_a_disabled_snmpd_keeps_the_strings_for_its_next_start(env):
@@ -840,7 +840,8 @@ def test_a_disabled_snmpd_keeps_the_strings_for_its_next_start(env):
     assert env.module.main(["apply"]) == 0
 
     assert env.snmpd_local.read_text() == SNMPD_LOCAL_TEXT + "syscontact ops@example.com\n"
-    assert env.system.queued() == []
+    # try-restart leaves a stopped snmpd stopped; it reads the file when it next starts.
+    assert env.system.queued() == [("try-restart", SNMP_UNIT)]
     assert result_line(env, "SNMP_SYSCONTACT") == "SNMP_SYSCONTACT applied"
 
 
@@ -871,7 +872,7 @@ def test_a_community_sets_the_trap_community_and_only_the_community_word(env):
     # A source or OID narrowed by hand is kept, and rocommunity6 is another directive.
     assert env.snmpd_local.read_text() == ("rocommunity Secret-1 192.0.2.0/24 .1.3.6.1.2.1\n"
                                            "ROCOMMUNITY  Secret-1 default\nrocommunity6 public default\n")
-    assert env.system.queued() == [("restart", SNMP_UNIT)]
+    assert env.system.queued() == [("try-restart", SNMP_UNIT)]
     assert result_line(env, "SNMP_COMMUNITY") == "SNMP_COMMUNITY applied"
 
 
@@ -930,13 +931,13 @@ def test_a_restart_that_cannot_be_queued_restores_the_local_file(env):
     # applying the same file again retries instead of reading as unchanged.
     assert env.snmpd_local.read_bytes() == before
     assert result_line(env, "SNMP_SYSLOCATION").startswith(
-        "SNMP_SYSLOCATION failed restart snmpd.service failed rc=1")
+        "SNMP_SYSLOCATION failed try-restart snmpd.service failed rc=1")
     env.system.queue_rc = 0
 
     assert env.module.main(["apply"]) == 0
 
     assert env.snmpd_local.read_text() == SNMPD_LOCAL_TEXT + "syslocation New place\n"
-    assert env.system.queued()[-1] == ("restart", SNMP_UNIT)
+    assert env.system.queued()[-1] == ("try-restart", SNMP_UNIT)
 
 
 def test_a_failed_restart_removes_a_local_file_it_created(env):
@@ -948,6 +949,26 @@ def test_a_failed_restart_removes_a_local_file_it_created(env):
     assert env.module.main(["apply"]) == 4
 
     assert not env.snmpd_local.exists()
+
+
+def test_an_unreachable_systemd_fails_the_strings_even_when_snmpd_looks_disabled(env):
+    # A failed lookup is not a stopped snmpd (Codex P2, tribunal A-R1-002): with systemd
+    # unreachable every systemctl call fails, and the same file must retry once it answers.
+    before = env.snmpd_local.read_bytes()
+    env.system.enabled[SNMP_UNIT] = False
+    env.system.queue_rc = 1
+    write_settings(env, "SNMP_SYSNAME=Box-9\n")
+
+    assert env.module.main(["apply"]) == 4
+
+    assert env.snmpd_local.read_bytes() == before
+    assert result_line(env, "SNMP_SYSNAME").startswith("SNMP_SYSNAME failed try-restart snmpd.service failed rc=1")
+    env.system.queue_rc = 0
+
+    assert env.module.main(["apply"]) == 0
+
+    assert env.snmpd_local.read_text() == SNMPD_LOCAL_TEXT + "sysname Box-9\n"
+    assert env.system.queued()[-1] == ("try-restart", SNMP_UNIT)
 
 
 @pytest.mark.parametrize("line", [
