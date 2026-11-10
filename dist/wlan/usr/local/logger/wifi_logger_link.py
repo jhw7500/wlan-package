@@ -466,7 +466,7 @@ def _radio_tick(now, link, info, mwlan_log, survey):
             RADIO_EMIT(line)
     except Exception as e:
         RADIO = None
-        logger.message("warning", f"[{IFACE}] radio log off after error: {e}", _EXTRA_())
+        logger.message("warn", f"[{IFACE}] radio log off after error: {e}", _EXTRA_())
 
 def get_ip_info(iface):
     info = {
@@ -1104,7 +1104,7 @@ if __name__ == "__main__":
     try:
         _lock_fp = open(f"/run/wifi_logger_link_{IFACE}.lock", "w")
     except OSError as e:
-        logger.message("warning", f"[{IFACE}] lock file open failed: {e} - exit", _EXTRA_())
+        logger.message("warn", f"[{IFACE}] lock file open failed: {e} - exit", _EXTRA_())
         sys.exit(1)   # open 실패는 운영 에러(권한/mount) — 중복 회피 exit 0과 구분
     _locked = False
     for _ in range(5):
@@ -1115,7 +1115,7 @@ if __name__ == "__main__":
         except OSError:
             time.sleep(1)
     if not _locked:
-        logger.message("warning", f"[{IFACE}] another wifi_logger_link already running - exit", _EXTRA_())
+        logger.message("warn", f"[{IFACE}] another wifi_logger_link already running - exit", _EXTRA_())
         # exit 3 = 중복 실행(flock-loss). systemd 유닛의 RestartPreventExitStatus=3 이 이
         # 종료를 재시작하지 않게 해 재시작 폭주를 막는다(이미 다른 인스턴스가 link.json 생산 중).
         sys.exit(3)
@@ -1208,7 +1208,7 @@ if __name__ == "__main__":
             RADIO_EMIT = _make_radio_emitter()
             RADIO = RadioLog(IFACE, RADIO_LOG_INTERVAL_SEC)
         except OSError as e:
-            logger.message("warning",
+            logger.message("warn",
                 f"[{IFACE}] radio.log syslog unavailable, radio log off: {e}", _EXTRA_())
 
     main()
