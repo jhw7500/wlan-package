@@ -142,7 +142,8 @@ ftp> quote wntp
 
 - 날짜와 시각을 공백으로 구분하며 따옴표를 보내지 않는다. 소수부는 생략하거나
   1~3자리로 지정한다. `.1`은 100ms, `.123`은 123ms다. 조회는 항상 소수 3자리다.
-  별도 시간대 인자는 없으며 장치의 현지 시간대를 사용한다.
+  별도 시간대 인자는 없으며 장치의 현지 시간대를 사용한다. 시간대는 `quote wconfig`의
+  `TIMEZONE`으로 바꾼다(1.5절).
 - 달력 날짜·시각·인자 개수를 검증한 뒤 기존
   `/usr/local/scripts/fake-hwclock.sh set`에 소수부를 포함한 시각을 한 인자로
   전달한다. 이 경로가 시스템 시각 설정, 영속 상태 저장, RTC 쓰기 시도를 담당한다.
@@ -181,8 +182,8 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
 - 키는 네 가지로 나뉜다. 어느 분류든 파일에 있어도 된다.
   - 적용: `NTP_FUNC`, `NTP_SERVER`, `SNMP_FUNC`, `SNMP_TRAP_IPADDR`, `SNMP_TRAP_WLAN`,
     `SNMP_TRAP_CHAN`, `SNMP_COMMUNITY`, `SNMP_SYSCONTACT`, `SNMP_SYSLOCATION`, `SNMP_SYSNAME`,
-    `LAN_MODE`, `LAN_IPADDR`, `LAN_NETMASK`, `LAN_GATEWAY`.
-  - `pending`(#464의 이후 변경에서 적용): `TIMEZONE`.
+    `LAN_MODE`, `LAN_IPADDR`, `LAN_NETMASK`, `LAN_GATEWAY`, `TIMEZONE`.
+  - `pending`(이후 변경에서 적용할 키): 현재 없다.
   - `unsupported`(이 장치에 대응 기능 없음, #463): `LANGUAGE`, `SNMP_TRAP_LAN`, `SNMP_TRAP_INITSW`,
     `NTP_INTERVAL`, `LOG_FUNC`, `LOG_SERVER`, `LOG_DEBUG`, `LOG_SAVE`, `LOG_INTERVAL`, `LAN_PORTSPEED`.
   - `unknown`: 위 25개 밖의 키. 받아들이되 적용하지 않는다. 무선 설정 등 다른 키가 섞인
@@ -236,6 +237,18 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
   - 관리 IP 규칙: eth0 서브넷이 바뀌면 mlan0의 현재 주소(`ip -4 addr`)와 `20-mlan0.network`의 정적
     `Address=`(mlan0이 끊겨 있을 때를 위해)와 겹치는지 본다. 두 서브넷 가운데 짧은 prefix로 비교해
     겹치면 `invalid`다(opcd ChangeIp와 같은 규칙). `/32`는 미러 주소라 보지 않고, mlan1은 보지 않는다.
+  - `TIMEZONE`: POSIX TZ 표기 `<이름><시차>`다(CONTEC 예시 `KST-9`). 이름은 영문 3자 이상이거나
+    `<+09>`처럼 `<>`로 감싼 3자 이상이다. 시차는 정시 단위만 받으며 POSIX 부호는 UTC 기준과 반대다
+    (`KST-9`가 UTC+9, `EST5`가 UTC−5). 범위는 `-14`~`12`다. `KST-9`는 `Asia/Seoul`, `JST-9`는
+    `Asia/Tokyo`, `UTC0`은 `UTC`, `GMT0`은 `Etc/GMT`로 적용하고, 그 밖의 값은 부호가 같은
+    `Etc/GMT±N`(예: `EST5`는 `Etc/GMT+5`)으로 적용한다. 분 단위 시차(`IST-5:30`)와 일광절약 규칙이 붙은
+    값(`EST5EDT,M3.2.0,M11.1.0`)은 `invalid`다. 이슈 #464의 "같은 UTC 오프셋의 시간대" 가운데 정시
+    시차만 지원한다. 장치에 그 zone 파일이 없어도 `invalid`다. `timedatectl set-timezone`으로 바꾸며
+    `/etc/localtime`이 유일한 저장소다(JSON 키 없음). `get`은 현재 zone 파일 끝의 POSIX 문자열을 돌려준다
+    (`Asia/Seoul`이면 `KST-9`, `Etc/GMT-9`이면 `<+09>-9`). 다른 방법으로 정한 표 밖의 zone도 그 문자열을
+    그대로 돌려주므로 `get` 파일은 다시 적용해도 `unchanged`다. 패키지 설치는 최초 설치(활성
+    `wifi_init_conf.json`이 아직 없을 때)에만 `Asia/Seoul`로 정한다. 업그레이드·재설치는 시간대를 건드리지
+    않고, 공장 초기화는 `Asia/Seoul`로 되돌린다.
 - `apply`는 다음 순서로 동작한다.
   1. 파일 전체를 검증한다. 하나라도 `invalid`(값 오류, 25개 키의 중복, `KEY=VALUE`가 아닌 줄)면
      아무것도 바꾸지 않고 결과 파일에 `invalid` 줄만 남긴 뒤 코드 `3`으로 끝난다.
@@ -254,12 +267,14 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
   4. SNMP 문자열이 바뀌었으면 `snmpd.local.conf`를 교체하고 `systemctl --no-block try-restart
      snmpd.service`로 넘긴다. 실행 중인 snmpd만 재시작하고, 멈춰 있으면 다음에 기동할 때 파일을 읽는다.
      파일이 바뀔 때만 넘긴다. 재시작은 sysUpTime을 0으로 돌리고 잠깐 조회를 끊기 때문이다.
-  5. LAN 키가 바뀌었으면 마지막에 `22-eth0.network`를 교체하고 `wifi_lan_apply.service`를
+  5. `TIMEZONE`이 바뀌었으면 `timedatectl set-timezone <zone>`으로 바꾼다. 실패하면 시간대는 그대로이고
+     그 키는 `failed`다.
+  6. LAN 키가 바뀌었으면 마지막에 `22-eth0.network`를 교체하고 `wifi_lan_apply.service`를
      `systemctl --no-block restart`로 넘긴다. 그 키는 `scheduled`다. 유닛은 2초 기다려 이 응답이 먼저
      나가게 한 뒤 `wifi net apply eth0`(`networkctl reload`와 `networkctl reconfigure eth0`)과
      `wifi_peer_net_reapply.sh`를 실행한다. 기다리는 동안 다시 `apply`하면 앞 실행을 멈추고 마지막
      파일로 다시 시작한다.
-  6. 저장 뒤 서비스 단계가 실패해도 되돌리지 않는다. 그 키는 `failed`다. LAN 키와 SNMP 문자열만
+  7. 저장 뒤 서비스 단계가 실패해도 되돌리지 않는다. 그 키는 `failed`다. LAN 키와 SNMP 문자열만
      예외다. 둘 다 값이 같으면 다시 적용하지 않으므로, 유닛을 넘기지 못하면 `22-eth0.network`나
      `snmpd.local.conf`를 원래대로 되돌리고 `failed`로 남긴다. 그러면 같은 파일로 다시 `apply`해
      재시도할 수 있다. 되돌리기마저 실패하면 그 사실을 사유에 적는다. 저장한 값은 다음 부팅(`quote rst`)에
@@ -291,15 +306,15 @@ ftp> quote wtime sync 2026-10-29 16:30:00.123
 
 ~~~text
 ftp> quote wconfig get
-200 SUCCESS wrote 14 keys to wconfig.txt
+200 SUCCESS wrote 15 keys to wconfig.txt
 ftp> quote wconfig put NTP_SERVER=192.0.2.10
 200 SUCCESS NTP_SERVER saved to wconfig.txt; run wconfig apply
 ftp> quote wconfig apply
-200 SUCCESS applied=1 unchanged=13 scheduled=0 failed=0 invalid=0 pending=0 unsupported=0 unknown=0; see wconfig.result
+200 SUCCESS applied=1 unchanged=14 scheduled=0 failed=0 invalid=0 pending=0 unsupported=0 unknown=0; see wconfig.result
 ftp> quote wconfig put LAN_IPADDR=192.0.2.50
 200 SUCCESS LAN_IPADDR saved to wconfig.txt; run wconfig apply
 ftp> quote wconfig apply
-200 SUCCESS applied=0 unchanged=13 scheduled=1 failed=0 invalid=0 pending=0 unsupported=0 unknown=0; see wconfig.result
+200 SUCCESS applied=0 unchanged=14 scheduled=1 failed=0 invalid=0 pending=0 unsupported=0 unknown=0; see wconfig.result
 ~~~
 
 ## 2. 무선 명령 요약

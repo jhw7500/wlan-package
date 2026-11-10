@@ -295,6 +295,9 @@ esac
   safe_cp /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/timesyncd.conf
   # SNMP 조회 커뮤니티·sys* 적용값(#464 quote wconfig)을 템플릿으로 되돌린다. 재부팅이 snmpd 에 적용한다.
   safe_cp /opt/wlan/config/snmp/snmpd.local.conf /etc/snmp/snmpd.local.conf
+  # 시간대(#464 quote wconfig TIMEZONE)도 설치 기본값으로 되돌린다. 업그레이드는 시간대를 건드리지 않는다.
+  timedatectl set-timezone Asia/Seoul 2>/dev/null \
+    || logger -p local0.warn "[$tag:$LINENO] timedatectl set-timezone Asia/Seoul failed; time zone kept"
   secure_wpa_conf /etc/wpa_supplicant/wpa_supplicant-mlan0.conf || critical_failures=$((critical_failures + 1))
   secure_wpa_conf /etc/wpa_supplicant/wpa_supplicant-mlan1.conf || critical_failures=$((critical_failures + 1))
   safe_cp /opt/wlan/config/systemd/network/10-lo.network /etc/systemd/network/10-lo.network

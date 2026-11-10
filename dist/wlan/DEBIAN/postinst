@@ -382,16 +382,23 @@ EOF
   SAFE_TS=$(date -d "$SAFE_TIME" +%s 2>/dev/null || echo 1767225600)
   echo "date : $(date '+%Y-%m-%d %H:%M:%S')"
 
+  # 시간대는 /etc/localtime 에만 있다. 기본 시간대는 최초 설치에만 정한다: 활성 JSON 은 아래
+  # json_merge 가 처음 만들므로 없으면 최초 설치다(이미지의 wlan-proc 0.1-r0 는 이 파일을 싣지
+  # 않는다). 이후 설치는 quote wconfig TIMEZONE 으로 고른 시간대를 덮어쓰지 않는다(#464).
+  # set-time 이 인자를 그때의 시간대로 읽으므로 그보다 먼저 둔다.
+  # >>> timezone-default
+  if [ ! -e /usr/local/etc/wifi_init_conf.json ]; then
+    timedatectl set-timezone Asia/Seoul 2>/dev/null || true
+  fi
+  # <<< timezone-default
+
   if [ "$CURRENT_TS" -lt "$SAFE_TS" ]; then
     echo "WARNING: System time is before $SAFE_TIME, setting to safe time"
     # set-time 은 NTP 가 켜져 있으면 거부되므로 먼저 끈다. 여기서 내린 서비스는 아래
     # wifi_apply_enabled.sh(.global.ntp.enabled, 기본 true)가 다시 enable 하고
     # `# >>> timesyncd-start` 블록이 기동한다 — 꺼진 채 남기는 래치가 아니다(#361).
     timedatectl set-ntp false 2>/dev/null || true
-    timedatectl set-timezone Asia/Seoul 2>/dev/null || true
     timedatectl set-time "$SAFE_TIME" 2>/dev/null || true
-  else
-    timedatectl set-timezone Asia/Seoul 2>/dev/null || true
   fi
 
   # Locale: C → C.UTF-8 (한글 바이트 정상 처리, 별도 로케일 생성 불필요)
