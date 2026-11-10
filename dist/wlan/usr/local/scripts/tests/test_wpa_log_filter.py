@@ -10,7 +10,9 @@ rsyslogd 없이 돈다.
 
 from __future__ import annotations
 
+import contextlib
 import os
+import types
 import shlex
 import shutil
 import socket
@@ -29,6 +31,9 @@ FILTER_HEAD = "if $programname == 'wpa_supplicant' and ("
 STOP_HEAD = "if $programname == 'wpa_supplicant' then {"
 TEMPLATE_HEAD = "$template myformat,"
 WPA_LOG_ROOT = "/var/log/cantops/wpa/"
+# quote wconfig LOG_FUNC·LOG_SERVER가 쓰는 원격 syslog 파일(#482).
+REMOTE_INC = "/etc/rsyslog.d/wpa-remote.inc"
+WCONFIG = WLAN_ROOT / "opt/ftpcmd/bin/wconfig"
 
 # MAC·SSID는 자리표시 값이다(공개 저장소).
 PEER = "02:00:00:00:00:01"
@@ -81,9 +86,9 @@ def _harness_conf(work: Path) -> str:
     assert len(templates) == 1, templates
     body = "\n".join(_block(lines, FILTER_HEAD) + _block(lines, STOP_HEAD))
     assert WPA_LOG_ROOT in body
-    body = body.replace(WPA_LOG_ROOT, f"{work}/wpa/")
-    # 시험이 실제 로그 경로에 쓰지 않게 한다.
-    assert "/var/log" not in body, body
+    body = body.replace(WPA_LOG_ROOT, f"{work}/wpa/").replace(REMOTE_INC, f"{work}/remote.inc")
+    # 시험이 실제 로그 경로에 쓰거나 장치 설정을 읽지 않게 한다.
+    assert "/var/log" not in body and "/etc/" not in body, body
     return "\n".join(
         [
             f'global(workDirectory="{work}")',
@@ -122,8 +127,10 @@ def _has(lines: list[str], message: str) -> bool:
     return any(line.endswith(" " + message) for line in lines)
 
 
-@pytest.fixture(scope="module")
-def filtered():
+@contextlib.contextmanager
+def _rsyslogd_run(remote_text: str | None = None):
+    """Feed every test line to the production wpa blocks in a real rsyslogd; REMOTE_TEXT is the
+    file the blocks include for remote syslog (absent when None)."""
     rsyslogd = _rsyslogd()
     if rsyslogd is None:
         pytest.fail("rsyslogd가 없다 — 이 시험은 실제 rsyslogd로 필터를 확인한다(rsyslog 설치 필요)")
@@ -138,6 +145,8 @@ def filtered():
         shutil.copy2(rsyslogd, binary)
         conf = work / "harness.conf"
         conf.write_text(_harness_conf(work), encoding="utf-8")
+        if remote_text is not None:
+            (work / "remote.inc").write_text(remote_text, encoding="utf-8")
         check = subprocess.run(
             [str(binary), "-N1", "-f", str(conf)],
             capture_output=True,
@@ -162,6 +171,7 @@ def filtered():
             _send(sock, "wpa_supplicant", message)
         _send(sock, "sentinel", SENTINEL)
         rest = work / "rest.log"
+        started = time.monotonic()
         assert _wait(lambda: _has(_lines(rest), SENTINEL), 10), (
             "rsyslogd가 마지막 줄을 기록하지 않았다: "
             + (work / "rsyslogd.out").read_text(errors="replace")
@@ -173,12 +183,77 @@ def filtered():
             "mlan0": _lines(work / "wpa/mlan0/wpa.log"),
             "mlan1": _lines(work / "wpa/mlan1/wpa.log"),
             "rest": _lines(rest),
+            "sentinel_seconds": time.monotonic() - started,
+            # rsyslogd -n prints its own errors (omfwd sendto failures) here, not to rest.log.
+            "out": (work / "rsyslogd.out").read_text(errors="replace"),
         }
     finally:
         if proc is not None and proc.poll() is None:
             proc.kill()
             proc.wait()
         shutil.rmtree(work, ignore_errors=True)
+
+
+@pytest.fixture(scope="module")
+def filtered():
+    with _rsyslogd_run() as result:
+        yield result
+
+
+def _wconfig():
+    module = types.ModuleType("wconfig")
+    module.__file__ = str(WCONFIG)
+    exec(compile(WCONFIG.read_text(encoding="utf-8"), str(WCONFIG), "exec"), module.__dict__)
+    return module
+
+
+def _forward(server: str, port: int) -> dict:
+    """Run the harness with the file wconfig writes for LOG_FUNC=enabled and LOG_SERVER=SERVER."""
+    text = _wconfig().remote_syslog_text("enabled", server, port)
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as receiver:
+        receiver.bind(("127.0.0.1", 0))
+        receiver.settimeout(0.5)
+        if port == 0:
+            text = _wconfig().remote_syslog_text("enabled", server, receiver.getsockname()[1])
+        with _rsyslogd_run(text) as result:
+            received = []
+            while True:
+                try:
+                    received.append(receiver.recv(65535).decode("utf-8", "replace"))
+                except socket.timeout:
+                    break
+            return {**result, "received": received}
+
+
+@pytest.fixture(scope="module")
+def forwarded():
+    return _forward("127.0.0.1", 0)
+
+
+def _sent(received: list[str], message: str) -> bool:
+    return any(datagram.endswith(" " + message) or datagram.endswith(" " + message + "\n")
+               for datagram in received)
+
+
+def test_wpa_log_lines_and_only_those_go_to_the_syslog_server(forwarded):
+    for message in (*NEW_MLAN0, *NEW_MLAN1, *KEPT_MLAN0):
+        assert _sent(forwarded["received"], message), (message, forwarded["received"])
+        assert _has(forwarded["mlan0"] + forwarded["mlan1"], message)
+    # A line wpa.log does not keep (no interface prefix) is not sent either.
+    for message in DROPPED:
+        assert not _sent(forwarded["received"], message), (message, forwarded["received"])
+    assert len(forwarded["received"]) == len(NEW_MLAN0) + len(NEW_MLAN1) + len(KEPT_MLAN0)
+
+
+def test_an_unreachable_server_does_not_hold_up_wpa_log():
+    # sendto() to the limited broadcast address without SO_BROADCAST fails (EACCES); a closed
+    # local port would not fail at all, which would prove nothing.
+    result = _forward("255.255.255.255", 514)
+    for message in NEW_MLAN0:
+        assert _has(result["mlan0"], message), result["mlan0"]
+    assert result["received"] == []
+    assert "sendto() error" in result["out"], result["out"][-500:]
+    assert result["sentinel_seconds"] < 5
 
 
 def test_connection_phase_lines_reach_wpa_log(filtered):

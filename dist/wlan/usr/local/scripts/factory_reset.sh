@@ -176,6 +176,8 @@ rm -f /etc/sysctl.d/99-bd-arp.conf
 safe_cp /opt/wlan/config/logrotate.d/logrotate.rsyslog /etc/logrotate.d/
 safe_cp /opt/wlan/config/rc.local /etc/
 safe_cp /opt/wlan/config/rsyslog.conf /etc/
+# 원격 syslog(#482 quote wconfig LOG_FUNC·LOG_SERVER)를 끈다. 파일이 없으면 보내지 않는다.
+rm -f /etc/rsyslog.d/wpa-remote.inc
 safe_cp /opt/wlan/config/smb.conf /etc/samba/
 #cp /opt/wlan/config/systemd/timesyncd.conf /etc/systemd/
 safe_cp /opt/wlan/config/crontab /etc/

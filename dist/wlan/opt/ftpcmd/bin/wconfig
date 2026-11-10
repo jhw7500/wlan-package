@@ -12,7 +12,10 @@ SNMP_SYS* rewrite /etc/snmp/snmpd.local.conf, which snmpd reads after the
 snmpd.conf that every package install rewrites, and restart a running snmpd only
 when that file changes.  TIMEZONE has timedated replace /etc/localtime, the zone's
 only store, which package installs leave alone after the first one, and restarts a
-running rsyslog so the log times follow.  LAN_* values
+running rsyslog so the log times follow.  LOG_FUNC and LOG_SERVER write
+/etc/rsyslog.d/wpa-remote.inc, which the wpa.log block of rsyslog.conf includes to send
+those lines to a syslog server (no file sends nothing), and share that one rsyslog
+restart.  LAN_* values
 rewrite 22-eth0.network last and restart
 wifi_lan_apply.service, which reconfigures eth0 only after a short wait so this
 reply leaves first.  Per-key results go to /home/admin/wconfig.result.
@@ -51,6 +54,10 @@ SYSTEMCTL = "/usr/bin/systemctl"
 NTP_UNIT = "systemd-timesyncd.service"
 SNMP_UNIT = "snmpd.service"
 RSYSLOG_UNIT = "rsyslog.service"
+REMOTE_SYSLOG = Path("/etc/rsyslog.d/wpa-remote.inc")
+# UDP port of the remote syslog server (the CONTEC setting).  A device that already sends keeps
+# the port in its file until LOG_FUNC or LOG_SERVER changes, since equal values are not rewritten.
+SYSLOG_PORT = 514
 ETH0_NETWORK = Path("/etc/systemd/network/22-eth0.network")
 MLAN0_NETWORK = Path("/etc/systemd/network/20-mlan0.network")
 LAN_UNIT = "wifi_lan_apply.service"
@@ -68,11 +75,13 @@ TRAP_TYPES = (("SNMP_TRAP_WLAN", "link"), ("SNMP_TRAP_CHAN", "channel"))
 SNMPD_DIRECTIVES = (("SNMP_SYSCONTACT", "syscontact"), ("SNMP_SYSLOCATION", "syslocation"),
                     ("SNMP_SYSNAME", "sysname"))
 SNMPD_KEYS = ("SNMP_COMMUNITY",) + tuple(key for key, _ in SNMPD_DIRECTIVES)
+# Remote syslog of the wpa.log lines, kept as comments in REMOTE_SYSLOG.
+LOG_KEYS = ("LOG_FUNC", "LOG_SERVER")
 IMPLEMENTED = ("NTP_FUNC", "NTP_SERVER", "SNMP_FUNC", "SNMP_TRAP_IPADDR",
-               "SNMP_TRAP_WLAN", "SNMP_TRAP_CHAN") + SNMPD_KEYS + LAN_KEYS + ("TIMEZONE",)
+               "SNMP_TRAP_WLAN", "SNMP_TRAP_CHAN") + SNMPD_KEYS + LAN_KEYS + ("TIMEZONE",) + LOG_KEYS
 PENDING = ()
-UNSUPPORTED = ("LANGUAGE", "SNMP_TRAP_LAN", "SNMP_TRAP_INITSW", "NTP_INTERVAL", "LOG_FUNC",
-               "LOG_SERVER", "LOG_DEBUG", "LOG_SAVE", "LOG_INTERVAL", "LAN_PORTSPEED")
+UNSUPPORTED = ("LANGUAGE", "SNMP_TRAP_LAN", "SNMP_TRAP_INITSW", "NTP_INTERVAL",
+               "LOG_DEBUG", "LOG_SAVE", "LOG_INTERVAL", "LAN_PORTSPEED")
 KNOWN = IMPLEMENTED + PENDING + UNSUPPORTED
 # "scheduled" marks LAN_* keys: eth0 changes after the FTP reply (LAN_UNIT).
 STATUSES = ("applied", "unchanged", "scheduled", "failed", "invalid", "pending", "unsupported", "unknown")
@@ -403,6 +412,35 @@ def read_snmpd_local():
         return None
 
 
+def read_remote_syslog():
+    """Text of the remote syslog file, or None when it is absent (nothing is sent)."""
+    try:
+        return REMOTE_SYSLOG.read_bytes().decode("utf-8", "surrogateescape")
+    except FileNotFoundError:
+        return None
+
+
+def remote_syslog_values(text):
+    """LOG_FUNC and LOG_SERVER from the `# KEY=value` lines wconfig writes; off without them."""
+    values = {"LOG_FUNC": "disabled", "LOG_SERVER": "0.0.0.0"}
+    for line in (text or "").splitlines():
+        name, separator, value = line.strip().lstrip("#").strip().partition("=")
+        if separator and line.lstrip().startswith("#") and name in values:
+            values[name] = value.strip()
+    return values
+
+
+def remote_syslog_text(function, server, port=SYSLOG_PORT):
+    """The file for these values: the two keys as comments, and the forward action only when
+    sending is on and a server is set.  rsyslog.conf includes it inside the wpa.log block."""
+    lines = ["# Remote syslog of the wpa.log lines, written by quote wconfig (#482).",
+             "# rsyslog.conf includes this file from its wpa.log block; delete it to send nothing.",
+             f"# LOG_FUNC={function}", f"# LOG_SERVER={server}"]
+    if function == "enabled" and server != "0.0.0.0":
+        lines.append(f'action(type="omfwd" target="{server}" port="{port}" protocol="udp")')
+    return "\n".join(lines) + "\n"
+
+
 def snmpd_words(line):
     """(directive in lower case, rest of the line) of an snmpd.conf line, or None for a comment
     or a blank line.  snmpd drops trailing blanks and joins no continuation lines."""
@@ -556,6 +594,7 @@ def current_values():
         **snmpd_values(read_snmpd_local()),
         **lan_values(read_network(ETH0_NETWORK)),
         "TIMEZONE": zone_posix(),
+        **remote_syslog_values(read_remote_syslog()),
     }
 
 
@@ -683,7 +722,8 @@ CHECKS = {"NTP_FUNC": check_switch, "NTP_SERVER": check_address,
           "SNMP_COMMUNITY": check_community, "SNMP_SYSCONTACT": check_snmp_text,
           "SNMP_SYSLOCATION": check_snmp_text, "SNMP_SYSNAME": check_snmp_text,
           "LAN_MODE": check_mode, "LAN_IPADDR": check_host, "LAN_NETMASK": check_netmask,
-          "LAN_GATEWAY": check_gateway, "TIMEZONE": check_timezone}
+          "LAN_GATEWAY": check_gateway, "TIMEZONE": check_timezone,
+          "LOG_FUNC": check_switch, "LOG_SERVER": check_address}
 
 
 def lan_network(values):
@@ -938,18 +978,61 @@ def apply_timezone(wanted, status):
     sets the default zone on the first install alone, so the choice survives upgrades.
 
     A running process keeps the offset it read when it started, so rsyslog, which stamps most
-    /var/log/cantops logs, is restarted to follow; other running daemons follow at the next boot."""
+    /var/log/cantops logs, is restarted to follow (restart_rsyslog); other running daemons
+    follow at the next boot.  Returns whether the zone changed."""
     if "TIMEZONE" not in wanted:
-        return
+        return False
     zone = timezone_zone(wanted["TIMEZONE"])
     rc = run([TIMEDATECTL, "--no-ask-password", "set-timezone", zone], 10)
     if rc != 0:
         status["TIMEZONE"] = ("failed", f"timedatectl set-timezone {zone} failed rc={rc}")
+        return False
+    return True
+
+
+def apply_remote_syslog(wanted, current, status):
+    """Rewrite REMOTE_SYSLOG for changed LOG_* values.  Returns (keys, previous text or None) when
+    the file changed, so a failed rsyslog restart can put it back; None otherwise."""
+    keys = [key for key in LOG_KEYS if key in wanted]
+    if not keys:
+        return None
+    target = {key: wanted.get(key, current[key]) for key in LOG_KEYS}
+    try:
+        before = read_remote_syslog()
+        replace_file(REMOTE_SYSLOG, remote_syslog_text(target["LOG_FUNC"], target["LOG_SERVER"]))
+    except (OSError, UnicodeError) as error:
+        for key in keys:
+            status[key] = ("failed", f"{REMOTE_SYSLOG.name} save failed: {error}")
+        return None
+    return keys, before
+
+
+def restart_rsyslog(zone_changed, remote, status):
+    """One try-restart for both rsyslog followers: it restarts a running rsyslog only.  If it cannot
+    be queued, the zone stays (logs keep the old offset) and the remote syslog file goes back, so
+    failed means rsyslog still sends as before and applying the same file again retries."""
+    if not zone_changed and remote is None:
         return
     rc = run([SYSTEMCTL, "--no-ask-password", "--no-block", "try-restart", RSYSLOG_UNIT], 4)
-    if rc != 0:
+    if rc == 0:
+        return
+    if zone_changed:
         status["TIMEZONE"] = ("applied", f"try-restart {RSYSLOG_UNIT} failed rc={rc}; "
                               "log times keep the old offset until quote rst")
+    if remote is None:
+        return
+    keys, before = remote
+    try:
+        if before is None:
+            REMOTE_SYSLOG.unlink()
+        else:
+            replace_file(REMOTE_SYSLOG, before)
+    except (OSError, UnicodeError) as error:
+        detail = f"try-restart {RSYSLOG_UNIT} failed rc={rc}; restoring {REMOTE_SYSLOG.name} failed ({error})"
+    else:
+        detail = f"try-restart {RSYSLOG_UNIT} failed rc={rc}; {REMOTE_SYSLOG.name} restored"
+    for key in keys:
+        status[key] = ("failed", detail)
 
 
 def apply_lan(wanted, current, status):
@@ -1023,7 +1106,9 @@ def apply_settings():
     present = {entry[0] for entry in report if entry[0] in IMPLEMENTED}
     follow_services(present, wanted, status)
     apply_snmpd(wanted, status)
-    apply_timezone(wanted, status)
+    zone_changed = apply_timezone(wanted, status)
+    remote = apply_remote_syslog(wanted, current, status)
+    restart_rsyslog(zone_changed, remote, status)
     # Last, so the unit's wait starts only when nothing but the reply is left to do.
     apply_lan(wanted, current, status)
     for entry in report:

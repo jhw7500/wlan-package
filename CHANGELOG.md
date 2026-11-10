@@ -42,6 +42,8 @@ wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약�
 
 - **기본 cal 데이터·txpwrlimit 출력 테이블 갱신**(#480, SemVer patch): `usr/lib/firmware/cts/WlanCalData_ext_RD.conf`와 `usr/lib/firmware/cts/txpwrlimit_cfg_9098.conf`를 담당자가 준 새 기준값으로 바꿨다. 공장 초기화가 `opt/wlan/config/wlan/txpwrlimit_cfg_9098.conf`를 펌웨어 위치로 복사하므로 `opt/wlan/config/wlan/`의 두 사본도 같은 값으로 맞췄다. txpwrlimit은 기존대로 LF 줄 끝을 유지한다. 보드에서 txpwrlimit hostcmd 적용은 배치 릴리스 보드 시험에서 확인한다.
 
+- **FTP `quote wconfig` — wpa.log 원격 syslog**(#482, SemVer patch): `LOG_FUNC`·`LOG_SERVER`를 적용한다(#463에서 분리). `LOG_FUNC=enabled`이고 서버가 `0.0.0.0`이 아니면 wpa.log에 쓰는 `mlan0:`·`mlan1:` 줄을 그 서버의 UDP 514번으로 보낸다(형식은 rsyslog 전송 기본값 RFC 3164). `rsyslog.conf`의 wpa.log 블록이 `stop` 전에 `include(file="/etc/rsyslog.d/wpa-remote.inc" mode="optional")`를 부르고, 이 파일은 wconfig만 쓴다(`# LOG_FUNC=`·`# LOG_SERVER=` 주석 + 보낼 때만 `omfwd` 한 줄). 파일이 없으면 보내지 않는다. 패키지는 이 파일을 싣지 않아 업그레이드가 값을 바꾸지 않고, 공장 초기화는 파일을 지운다. **패키지가 싣던 `/etc/rsyslog.d/10-udp-out.conf`(전송 줄이 모두 주석)는 빠지며 업그레이드 때 지워진다.** 값이 바뀔 때만 rsyslog를 `try-restart`하고, `TIMEZONE`과 함께 바뀌어도 한 번만 넘긴다. 넘기지 못하면 파일을 되돌려 `failed`로 남긴다. UDP라 서버나 무선 경로가 끊긴 동안의 줄은 사라진다. `get`은 17개를 쓴다.
+
 ## 0.8.6 (2026-11-03)
 
 > SemVer **patch** — `wifi_init.sh`가 `wbridge.mac_clone_require_peer: false`를 무시하고 항상 `true`로 읽던 결함을 고친다(#452).

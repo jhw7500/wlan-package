@@ -124,10 +124,12 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "ETH0_NETWORK", eth0, raising=False)
     monkeypatch.setattr(module, "MLAN0_NETWORK", mlan0, raising=False)
     monkeypatch.setattr(module, "SNMPD_LOCAL_CONF", snmpd_local, raising=False)
+    remote = tmp_path / "wpa-remote.inc"
+    monkeypatch.setattr(module, "REMOTE_SYSLOG", remote, raising=False)
     monkeypatch.setattr(module.syslog, "syslog", lambda *args: None)
     return types.SimpleNamespace(module=module, home=home, conf=conf, timesyncd=timesyncd, eth0=eth0,
                                  mlan0=mlan0, snmpd_local=snmpd_local, system=system,
-                                 localtime=localtime, zoneinfo=zoneinfo)
+                                 localtime=localtime, zoneinfo=zoneinfo, remote=remote)
 
 
 def write_settings(env, text):
@@ -224,7 +226,7 @@ def test_get_then_apply_is_unchanged_but_still_resyncs_services(env, capsys):
     assert env.timesyncd.read_bytes() == ntp_before
     assert env.eth0.read_bytes() == eth0_before
     assert env.snmpd_local.read_bytes() == local_before
-    assert one_line(capsys).startswith("SUCCESS applied=0 unchanged=15 ")
+    assert one_line(capsys).startswith("SUCCESS applied=0 unchanged=17 ")
     # A retry after a failed service step must still bring services in line, and
     # timesyncd only reads its servers when it starts, so a listed server restarts it.
     # Unchanged LAN values hand nothing to the LAN unit: eth0 is not reconfigured.
@@ -444,7 +446,7 @@ def result_line(env, key):
 
 def test_get_reports_the_lan_values_of_the_eth0_network_file(env, capsys):
     assert env.module.main(["get"]) == 0
-    assert one_line(capsys) == "SUCCESS wrote 15 keys to wconfig.txt"
+    assert one_line(capsys) == "SUCCESS wrote 17 keys to wconfig.txt"
     written = (env.home / "wconfig.txt").read_text().splitlines()
     for expected in ("LAN_MODE=static", "LAN_IPADDR=192.0.2.1", "LAN_NETMASK=255.255.255.0", "LAN_GATEWAY=0.0.0.0"):
         assert expected in written
@@ -812,7 +814,7 @@ def test_get_reports_the_snmp_strings_of_the_local_file(env, capsys):
 
     assert env.module.main(["get"]) == 0
 
-    assert one_line(capsys) == "SUCCESS wrote 15 keys to wconfig.txt"
+    assert one_line(capsys) == "SUCCESS wrote 17 keys to wconfig.txt"
     # The first rocommunity's community; a sys* directive takes its last line, as snmpd does.
     for expected in ("SNMP_COMMUNITY=mycomm", "SNMP_SYSCONTACT=Kim <kim@example.com>",
                      'SNMP_SYSLOCATION=서울 3F #2 "quoted"', "SNMP_SYSNAME=Box-1"):
@@ -830,7 +832,7 @@ def test_a_missing_local_file_reads_as_empty_and_its_get_output_still_applies(en
 
     # An empty community is not one wconfig can write, so the trap community does not make it
     # differ: a file written by get still applies, and nothing is created.
-    assert one_line(capsys).startswith("SUCCESS applied=0 unchanged=15 ")
+    assert one_line(capsys).startswith("SUCCESS applied=0 unchanged=17 ")
     assert not env.snmpd_local.exists()
 
 
@@ -884,7 +886,7 @@ def test_reapplying_unchanged_strings_does_not_restart_snmpd(env, capsys):
     assert env.module.main(["apply"]) == 0
 
     assert env.snmpd_local.read_bytes() == before
-    assert one_line(capsys).startswith("SUCCESS applied=0 unchanged=15 ")
+    assert one_line(capsys).startswith("SUCCESS applied=0 unchanged=17 ")
     assert sorted(env.system.queued()) == [("restart", NTP_UNIT), ("start", SNMP_UNIT)]
 
 
@@ -1083,7 +1085,7 @@ def test_get_reports_the_posix_string_the_zone_file_ends_with(env, capsys):
 
     set_zone(env, "Etc/GMT+5")
     assert env.module.main(["get"]) == 0
-    assert one_line(capsys) == "SUCCESS wrote 15 keys to wconfig.txt"
+    assert one_line(capsys) == "SUCCESS wrote 17 keys to wconfig.txt"
     assert "TIMEZONE=<-05>5" in written_settings(env)
     assert timezone_calls(env) == []
 
@@ -1229,3 +1231,159 @@ def test_get_output_of_a_zone_outside_the_table_applies_unchanged(env, capsys):
 
     assert result_line(env, "TIMEZONE") == "TIMEZONE unchanged"
     assert timezone_calls(env) == []
+
+
+# --- remote syslog of wpa.log lines (#482) ------------------------------------------------
+
+FORWARD = 'action(type="omfwd" target="192.0.2.30" port="514" protocol="udp")'
+
+
+def rsyslog_restarts(env):
+    return [entry for entry in env.system.queued() if entry == ("try-restart", "rsyslog.service")]
+
+
+def remote_lines(env):
+    return env.remote.read_text().splitlines() if env.remote.exists() else None
+
+
+def test_without_the_file_remote_syslog_reads_as_off(env, capsys):
+    assert env.module.main(["get"]) == 0
+
+    assert one_line(capsys) == "SUCCESS wrote 17 keys to wconfig.txt"
+    assert "LOG_FUNC=disabled" in written_settings(env)
+    assert "LOG_SERVER=0.0.0.0" in written_settings(env)
+    assert env.module.main(["get", "LOG_SERVER"]) == 0
+    assert capsys.readouterr().out == "LOG_SERVER=0.0.0.0\n"
+
+
+def test_enabling_writes_one_forward_action_and_restarts_rsyslog(env, capsys):
+    write_settings(env, "LOG_FUNC=enabled\nLOG_SERVER=192.0.2.30\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    assert result_line(env, "LOG_FUNC") == "LOG_FUNC applied"
+    assert result_line(env, "LOG_SERVER") == "LOG_SERVER applied"
+    lines = remote_lines(env)
+    assert "# LOG_FUNC=enabled" in lines and "# LOG_SERVER=192.0.2.30" in lines
+    assert [line for line in lines if not line.startswith("#")] == [FORWARD]
+    assert stat.S_IMODE(env.remote.stat().st_mode) == 0o644
+    assert rsyslog_restarts(env) == [("try-restart", "rsyslog.service")]
+    capsys.readouterr()
+    assert env.module.main(["get"]) == 0
+    assert "LOG_FUNC=enabled" in written_settings(env)
+    assert "LOG_SERVER=192.0.2.30" in written_settings(env)
+
+
+def test_disabling_keeps_the_server_but_sends_nothing(env):
+    write_settings(env, "LOG_FUNC=enabled\nLOG_SERVER=192.0.2.30\n")
+    assert env.module.main(["apply"]) == 0
+    write_settings(env, "LOG_FUNC=disabled\nLOG_SERVER=192.0.2.30\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    assert result_line(env, "LOG_FUNC") == "LOG_FUNC applied"
+    assert result_line(env, "LOG_SERVER") == "LOG_SERVER unchanged"
+    lines = remote_lines(env)
+    assert "# LOG_SERVER=192.0.2.30" in lines
+    assert [line for line in lines if not line.startswith("#")] == []
+    assert len(rsyslog_restarts(env)) == 2
+
+
+def test_enabled_without_a_server_sends_nothing(env):
+    write_settings(env, "LOG_FUNC=enabled\nLOG_SERVER=0.0.0.0\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    assert result_line(env, "LOG_FUNC") == "LOG_FUNC applied"
+    assert [line for line in remote_lines(env) if not line.startswith("#")] == []
+
+
+def test_get_output_reapplies_without_rewriting_or_restarting(env, capsys):
+    write_settings(env, "LOG_FUNC=enabled\nLOG_SERVER=192.0.2.30\n")
+    assert env.module.main(["apply"]) == 0
+    before = env.remote.read_bytes()
+    capsys.readouterr()
+    assert env.module.main(["get"]) == 0
+    env.system.calls.clear()
+
+    assert env.module.main(["apply"]) == 0
+
+    assert result_line(env, "LOG_FUNC") == "LOG_FUNC unchanged"
+    assert result_line(env, "LOG_SERVER") == "LOG_SERVER unchanged"
+    assert env.remote.read_bytes() == before
+    assert rsyslog_restarts(env) == []
+
+
+@pytest.mark.parametrize("key, value", [("LOG_SERVER", "224.0.0.1"), ("LOG_SERVER", "999.1.1.1"),
+                                        ("LOG_SERVER", "host.example"), ("LOG_SERVER", "192.0.2.30:514"),
+                                        ("LOG_FUNC", "on")])
+def test_a_bad_log_value_blocks_the_apply(env, key, value):
+    write_settings(env, f"{key}={value}\n")
+
+    assert env.module.main(["apply"]) == 3
+
+    assert result_line(env, key).startswith(f"{key} invalid")
+    assert not env.remote.exists()
+    assert env.system.calls == []
+
+
+def test_a_restart_failure_removes_a_new_file_and_fails_both_keys(env):
+    env.system.queue_rc = 1
+    write_settings(env, "LOG_FUNC=enabled\nLOG_SERVER=192.0.2.30\n")
+
+    assert env.module.main(["apply"]) == 4
+
+    assert result_line(env, "LOG_FUNC").startswith("LOG_FUNC failed try-restart rsyslog.service failed rc=1")
+    assert result_line(env, "LOG_SERVER").startswith("LOG_SERVER failed")
+    assert not env.remote.exists()
+
+
+def test_a_restart_failure_puts_the_previous_file_back(env):
+    write_settings(env, "LOG_FUNC=enabled\nLOG_SERVER=192.0.2.30\n")
+    assert env.module.main(["apply"]) == 0
+    before = env.remote.read_bytes()
+    env.system.queue_rc = 1
+    write_settings(env, "LOG_FUNC=enabled\nLOG_SERVER=192.0.2.31\n")
+
+    assert env.module.main(["apply"]) == 4
+
+    assert result_line(env, "LOG_SERVER").startswith("LOG_SERVER failed")
+    assert env.remote.read_bytes() == before
+
+
+def test_timezone_and_log_changes_restart_rsyslog_once(env):
+    # Both follow rsyslog; one queued restart reads the new zone and the new file together.
+    write_settings(env, "TIMEZONE=JST-9\nLOG_FUNC=enabled\nLOG_SERVER=192.0.2.30\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    assert [Path(argv[0]).name for argv, _ in env.system.calls] == ["timedatectl", "systemctl"]
+    assert rsyslog_restarts(env) == [("try-restart", "rsyslog.service")]
+
+
+def test_a_shared_restart_failure_keeps_the_zone_and_fails_the_log_keys(env):
+    env.system.queue_rc = 1
+    write_settings(env, "TIMEZONE=JST-9\nLOG_FUNC=enabled\nLOG_SERVER=192.0.2.30\n")
+
+    assert env.module.main(["apply"]) == 4
+
+    assert result_line(env, "TIMEZONE").startswith("TIMEZONE applied try-restart rsyslog.service failed rc=1")
+    assert result_line(env, "LOG_FUNC").startswith("LOG_FUNC failed")
+    assert not env.remote.exists()
+
+
+def test_a_file_without_the_markers_reads_as_off(env, capsys):
+    env.remote.write_text('action(type="omfwd" target="192.0.2.99" port="514" protocol="udp")\n')
+
+    assert env.module.main(["get", "LOG_FUNC"]) == 0
+
+    assert capsys.readouterr().out == "LOG_FUNC=disabled\n"
+
+
+def test_only_the_comment_markers_count(env, capsys):
+    # rsyslog cannot parse a bare KEY=value line, so it never sends; get must not claim it does.
+    env.remote.write_text("LOG_FUNC=enabled\nLOG_SERVER=192.0.2.99\n")
+
+    assert env.module.main(["get", "LOG_FUNC"]) == 0
+
+    assert capsys.readouterr().out == "LOG_FUNC=disabled\n"
