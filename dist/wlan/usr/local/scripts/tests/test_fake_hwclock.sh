@@ -99,6 +99,22 @@ else
     ok "save with unwritable state -> exits non-zero (failure propagated)"
 fi
 
+# --- 10) 저장 시각은 시간대와 무관한 같은 순간이다(#464 quote wconfig TIMEZONE) ---
+#     현지 문자열로 저장하면 시간대를 서쪽(KST→EST)으로 바꾼 순간 저장값이 시차만큼 미래로
+#     읽혀, NTP 없는 장치는 save 가 멈추고 다음 부팅 load 가 시계를 그만큼 앞으로 맞춘다.
+#     TZ 는 POSIX 문자열이라 tzdata 가 없는 호스트에서도 같은 결과다.
+rm -f "$STATE_F"
+(export TZ=KST-9; run_save no)
+E_KST=$(TZ=KST-9 date -d "$(cat "$STATE_F")" +%s)
+E_EST=$(TZ=EST5 date -d "$(cat "$STATE_F")" +%s)
+if [ "$E_KST" = "$E_EST" ]; then ok "saved time is the same instant in any zone"; else ng "saved time shifts with the zone ($((E_EST - E_KST)) s)"; fi
+
+# --- 11) 서쪽 시간대로 바꾼 뒤에도 NTP 없이 save 가 계속 갱신된다 ---
+sleep 1
+BEFORE=$(cat "$STATE_F")
+(export TZ=EST5; run_save no)
+if [ "$(cat "$STATE_F")" != "$BEFORE" ]; then ok "zone moved west, no NTP -> save advances"; else ng "zone moved west, no NTP -> save refused"; fi
+
 echo "-----"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

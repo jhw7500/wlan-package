@@ -19,6 +19,16 @@ ETH0_TEXT = ("[Match]\nName=eth0\n\n[Network]\nDHCP=no\n# management address, fa
              "Address=192.0.2.1/24\n#KeepConfiguration=static\nLinkLocalAddressing=no\nIPv6AcceptRA=no\n")
 MLAN0_TEXT = "[Match]\nName=mlan0\n\n[Network]\nDHCP=no\nAddress=198.51.100.100/24\nLinkLocalAddressing=no\n"
 SNMPD_LOCAL_TEXT = "# values applied by quote wconfig (#464)\nrocommunity public  default\n"
+# Fake zone files and the POSIX string each real tzdata file ends with.
+ZONES = {"Asia/Seoul": "KST-9", "Asia/Tokyo": "JST-9", "UTC": "UTC0", "Etc/GMT": "GMT0",
+         "Etc/GMT-9": "<+09>-9", "Etc/GMT+5": "<-05>5", "Etc/GMT-14": "<+14>-14",
+         "Etc/GMT+12": "<-12>12", "America/New_York": "EST5EDT,M3.2.0,M11.1.0"}
+TIMEDATECTL = "/usr/bin/timedatectl"
+
+
+def tzif(footer):
+    """A version 2 zone file reduced to what wconfig reads: the magic and the POSIX footer line."""
+    return b"TZif2" + bytes(39) + b"\n" + footer.encode() + b"\n"
 
 
 def load_handler(name):
@@ -32,8 +42,9 @@ def load_handler(name):
 class System:
     """Fake systemd: enable state follows the JSON once wifi_apply_enabled.sh has run."""
 
-    def __init__(self, json_path):
+    def __init__(self, json_path, localtime, zoneinfo):
         self.json_path = json_path
+        self.localtime, self.zoneinfo, self.timezone_rc = localtime, zoneinfo, 0
         self.calls = []
         self.apply_rc = 0
         self.queue_rc = 0
@@ -52,6 +63,12 @@ class System:
             out = "".join(f"5: {iface}    inet {cidr} brd 0.0.0.0 scope global {iface}\\"
                           "       valid_lft forever preferred_lft forever\n" for cidr in self.addresses[iface])
             return subprocess.CompletedProcess(argv, 0, out, "")
+        if Path(argv[0]).name == "timedatectl":
+            # timedated replaces the /etc/localtime link with one to the new zone file.
+            if self.timezone_rc == 0:
+                self.localtime.unlink()
+                self.localtime.symlink_to(self.zoneinfo / argv[-1])
+            return subprocess.CompletedProcess(argv, self.timezone_rc, "", "")
         if argv[0].endswith("wifi_apply_enabled.sh"):
             if self.apply_rc == 0:
                 data = json.loads(self.json_path.read_text())
@@ -91,8 +108,16 @@ def env(tmp_path, monkeypatch):
     snmpd_local = tmp_path / "snmpd.local.conf"
     snmpd_local.write_text(SNMPD_LOCAL_TEXT)
     snmpd_local.chmod(0o644)
-    system = System(conf)
+    zoneinfo = tmp_path / "zoneinfo"
+    for zone, footer in ZONES.items():
+        (zoneinfo / zone).parent.mkdir(parents=True, exist_ok=True)
+        (zoneinfo / zone).write_bytes(tzif(footer))
+    localtime = tmp_path / "localtime"
+    localtime.symlink_to(zoneinfo / "Asia/Seoul")
+    system = System(conf, localtime, zoneinfo)
     monkeypatch.setattr(subprocess, "run", system.run)
+    monkeypatch.setattr(module, "LOCALTIME", localtime, raising=False)
+    monkeypatch.setattr(module, "ZONEINFO", zoneinfo, raising=False)
     monkeypatch.setattr(module, "HOME", home)
     monkeypatch.setattr(module, "JSON_PATH", conf)
     monkeypatch.setattr(module, "TIMESYNCD_CONF", timesyncd)
@@ -101,7 +126,8 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "SNMPD_LOCAL_CONF", snmpd_local, raising=False)
     monkeypatch.setattr(module.syslog, "syslog", lambda *args: None)
     return types.SimpleNamespace(module=module, home=home, conf=conf, timesyncd=timesyncd, eth0=eth0,
-                                 mlan0=mlan0, snmpd_local=snmpd_local, system=system)
+                                 mlan0=mlan0, snmpd_local=snmpd_local, system=system,
+                                 localtime=localtime, zoneinfo=zoneinfo)
 
 
 def write_settings(env, text):
@@ -198,7 +224,7 @@ def test_get_then_apply_is_unchanged_but_still_resyncs_services(env, capsys):
     assert env.timesyncd.read_bytes() == ntp_before
     assert env.eth0.read_bytes() == eth0_before
     assert env.snmpd_local.read_bytes() == local_before
-    assert one_line(capsys).startswith("SUCCESS applied=0 unchanged=14 ")
+    assert one_line(capsys).startswith("SUCCESS applied=0 unchanged=15 ")
     # A retry after a failed service step must still bring services in line, and
     # timesyncd only reads its servers when it starts, so a listed server restarts it.
     # Unchanged LAN values hand nothing to the LAN unit: eth0 is not reconfigured.
@@ -287,13 +313,15 @@ def test_trap_destination_compares_the_host_and_keeps_the_port(env, capsys):
     assert json.loads(env.conf.read_text())["snmp"]["trap"]["dest"] == ""
 
 
-def test_later_unsupported_and_unknown_keys_are_reported_separately(env):
-    write_settings(env, "TIMEZONE=KST-9\nLANGUAGE=en\nWLAN_SSID=x\nNTP_FUNC=enabled\n")
+def test_later_unsupported_and_unknown_keys_are_reported_separately(env, monkeypatch):
+    # Every #464 key has an applier now; a key listed as pending still makes apply exit 5.
+    monkeypatch.setattr(env.module, "PENDING", ("LATER_KEY",))
+    write_settings(env, "LATER_KEY=x\nLANGUAGE=en\nWLAN_SSID=x\nNTP_FUNC=enabled\n")
 
     assert env.module.main(["apply"]) == 5
 
     lines = result_lines(env)
-    assert "TIMEZONE pending" in lines
+    assert "LATER_KEY pending" in lines
     assert "LANGUAGE unsupported" in lines
     assert "WLAN_SSID unknown" in lines
     assert "NTP_FUNC unchanged" in lines
@@ -383,7 +411,7 @@ def test_a_failed_service_step_is_reported_without_rollback(env):
     assert json.loads(env.conf.read_text())["global"]["ntp"]["enabled"] is False
 
 
-@pytest.mark.parametrize("args", [[], ["invalid/interface"], ["get", "TIMEZONE"], ["get", "WLAN_SSID"],
+@pytest.mark.parametrize("args", [[], ["invalid/interface"], ["get", "LANGUAGE"], ["get", "WLAN_SSID"],
                                   ["put", "NO_EQUALS"], ["put", "lower=x"], ["apply", "extra"]])
 def test_usage_errors_exit_2_without_changes(env, args):
     conf_before = env.conf.read_bytes()
@@ -416,7 +444,7 @@ def result_line(env, key):
 
 def test_get_reports_the_lan_values_of_the_eth0_network_file(env, capsys):
     assert env.module.main(["get"]) == 0
-    assert one_line(capsys) == "SUCCESS wrote 14 keys to wconfig.txt"
+    assert one_line(capsys) == "SUCCESS wrote 15 keys to wconfig.txt"
     written = (env.home / "wconfig.txt").read_text().splitlines()
     for expected in ("LAN_MODE=static", "LAN_IPADDR=192.0.2.1", "LAN_NETMASK=255.255.255.0", "LAN_GATEWAY=0.0.0.0"):
         assert expected in written
@@ -784,7 +812,7 @@ def test_get_reports_the_snmp_strings_of_the_local_file(env, capsys):
 
     assert env.module.main(["get"]) == 0
 
-    assert one_line(capsys) == "SUCCESS wrote 14 keys to wconfig.txt"
+    assert one_line(capsys) == "SUCCESS wrote 15 keys to wconfig.txt"
     # The first rocommunity's community; a sys* directive takes its last line, as snmpd does.
     for expected in ("SNMP_COMMUNITY=mycomm", "SNMP_SYSCONTACT=Kim <kim@example.com>",
                      'SNMP_SYSLOCATION=서울 3F #2 "quoted"', "SNMP_SYSNAME=Box-1"):
@@ -802,7 +830,7 @@ def test_a_missing_local_file_reads_as_empty_and_its_get_output_still_applies(en
 
     # An empty community is not one wconfig can write, so the trap community does not make it
     # differ: a file written by get still applies, and nothing is created.
-    assert one_line(capsys).startswith("SUCCESS applied=0 unchanged=14 ")
+    assert one_line(capsys).startswith("SUCCESS applied=0 unchanged=15 ")
     assert not env.snmpd_local.exists()
 
 
@@ -856,7 +884,7 @@ def test_reapplying_unchanged_strings_does_not_restart_snmpd(env, capsys):
     assert env.module.main(["apply"]) == 0
 
     assert env.snmpd_local.read_bytes() == before
-    assert one_line(capsys).startswith("SUCCESS applied=0 unchanged=14 ")
+    assert one_line(capsys).startswith("SUCCESS applied=0 unchanged=15 ")
     assert sorted(env.system.queued()) == [("restart", NTP_UNIT), ("start", SNMP_UNIT)]
 
 
@@ -1036,3 +1064,168 @@ def test_get_of_one_key_refuses_a_value_the_reply_line_cannot_carry(env, capsys,
     assert capsys.readouterr().out == ""
     assert env.module.main(["get"]) == 0
     assert f"SNMP_SYSLOCATION={value}" in written_settings(env)
+
+
+# --- time zone ------------------------------------------------------------------------
+
+def set_zone(env, zone):
+    env.localtime.unlink()
+    env.localtime.symlink_to(env.zoneinfo / zone)
+
+
+def timezone_calls(env):
+    return [argv for argv, _ in env.system.calls if Path(argv[0]).name == "timedatectl"]
+
+
+def test_get_reports_the_posix_string_the_zone_file_ends_with(env, capsys):
+    assert env.module.main(["get", "TIMEZONE"]) == 0
+    assert capsys.readouterr().out == "TIMEZONE=KST-9\n"
+
+    set_zone(env, "Etc/GMT+5")
+    assert env.module.main(["get"]) == 0
+    assert one_line(capsys) == "SUCCESS wrote 15 keys to wconfig.txt"
+    assert "TIMEZONE=<-05>5" in written_settings(env)
+    assert timezone_calls(env) == []
+
+
+def test_a_missing_localtime_reads_as_utc(env, capsys):
+    # systemd and the C library treat a device without /etc/localtime as UTC.
+    env.localtime.unlink()
+
+    assert env.module.main(["get", "TIMEZONE"]) == 0
+
+    assert capsys.readouterr().out == "TIMEZONE=UTC0\n"
+
+
+def test_a_localtime_that_is_no_zone_file_reads_empty(env, capsys):
+    env.localtime.unlink()
+    env.localtime.write_text("not a zone\n")
+
+    assert env.module.main(["get", "TIMEZONE"]) == 0
+
+    assert capsys.readouterr().out == "TIMEZONE=\n"
+
+
+def test_the_contec_value_of_the_default_zone_is_unchanged(env):
+    write_settings(env, "TIMEZONE=KST-9\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    assert result_line(env, "TIMEZONE") == "TIMEZONE unchanged"
+    assert timezone_calls(env) == []
+    assert env.system.queued() == []
+
+
+@pytest.mark.parametrize("value, zone", [
+    ("JST-9", "Asia/Tokyo"), ("UTC0", "UTC"), ("GMT0", "Etc/GMT"),
+    # Any other whole-hour offset: the Etc/GMT zone keeps the POSIX sign (Etc/GMT-9 is UTC+9).
+    ("EST5", "Etc/GMT+5"), ("<-05>5", "Etc/GMT+5"), ("XYZ+5", "Etc/GMT+5"), ("<+09>-9", "Etc/GMT-9"),
+    ("ABC-14", "Etc/GMT-14"), ("ABC12", "Etc/GMT+12"), ("XYZ0", "Etc/GMT"),
+])
+def test_a_posix_zone_sets_the_zone_with_the_same_offset(env, capsys, value, zone):
+    write_settings(env, f"TIMEZONE={value}\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    assert result_line(env, "TIMEZONE") == "TIMEZONE applied"
+    assert timezone_calls(env) == [[TIMEDATECTL, "--no-ask-password", "set-timezone", zone]]
+    capsys.readouterr()
+    assert env.module.main(["get", "TIMEZONE"]) == 0
+    assert capsys.readouterr().out == f"TIMEZONE={ZONES[zone]}\n"
+
+
+def test_kst_sets_seoul_from_another_zone(env):
+    set_zone(env, "UTC")
+    write_settings(env, "TIMEZONE=KST-9\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    assert timezone_calls(env) == [[TIMEDATECTL, "--no-ask-password", "set-timezone", "Asia/Seoul"]]
+    assert env.localtime.resolve() == (env.zoneinfo / "Asia/Seoul").resolve()
+
+
+@pytest.mark.parametrize("value", [
+    "", "KST", "-9", "KS-9", "Asia/Seoul", "IST-5:30", "EST5EDT", "EST5EDT,M3.2.0,M11.1.0",
+    "XYZ-15", "XYZ13", "XYZ+13", "<+09-9", "KST-09x", "KST--9",
+])
+def test_a_zone_without_a_whole_hour_fixed_offset_blocks_the_apply(env, value):
+    write_settings(env, f"NTP_SERVER=192.0.2.10\nTIMEZONE={value}\n")
+    ntp_before = env.timesyncd.read_bytes()
+
+    assert env.module.main(["apply"]) == 3
+
+    assert result_line(env, "TIMEZONE").startswith("TIMEZONE invalid")
+    assert env.timesyncd.read_bytes() == ntp_before
+    assert env.system.calls == []
+
+
+@pytest.mark.parametrize("value", ["XYZ-15", "XYZ13", "XYZ+13"])
+def test_an_offset_outside_the_etc_gmt_range_is_invalid_even_with_a_zone_file(env, value):
+    # tzdata ends at Etc/GMT-14 and Etc/GMT+12; the range check names the limit itself.
+    for zone in ("Etc/GMT-15", "Etc/GMT+13"):
+        (env.zoneinfo / zone).write_bytes(tzif("XYZ"))
+    write_settings(env, f"TIMEZONE={value}\n")
+
+    assert env.module.main(["apply"]) == 3
+
+    assert result_line(env, "TIMEZONE") == "TIMEZONE invalid expected an offset from -14 to 12"
+
+
+def test_a_zone_the_device_has_no_file_for_is_invalid(env):
+    (env.zoneinfo / "Etc/GMT+5").unlink()
+    write_settings(env, "TIMEZONE=EST5\n")
+
+    assert env.module.main(["apply"]) == 3
+
+    assert result_line(env, "TIMEZONE") == "TIMEZONE invalid zone Etc/GMT+5 is not installed"
+    assert env.system.calls == []
+
+
+def test_a_timedatectl_failure_is_reported_and_the_zone_stays(env):
+    env.system.timezone_rc = 1
+    write_settings(env, "TIMEZONE=JST-9\nSNMP_TRAP_IPADDR=192.0.2.20\n")
+
+    assert env.module.main(["apply"]) == 4
+
+    assert result_line(env, "TIMEZONE") == "TIMEZONE failed timedatectl set-timezone Asia/Tokyo failed rc=1"
+    assert result_line(env, "SNMP_TRAP_IPADDR") == "SNMP_TRAP_IPADDR applied"
+    assert env.localtime.resolve() == (env.zoneinfo / "Asia/Seoul").resolve()
+    assert ("try-restart", "rsyslog.service") not in env.system.queued()
+
+
+def test_a_zone_change_restarts_a_running_rsyslog_so_log_times_follow(env):
+    # A running process keeps the offset it read at start: rsyslog, which stamps most
+    # /var/log/cantops logs, wrote the old offset on the board until it restarted.
+    write_settings(env, "TIMEZONE=JST-9\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    names = [Path(argv[0]).name for argv, _ in env.system.calls]
+    assert names == ["timedatectl", "systemctl"]
+    assert env.system.queued() == [("try-restart", "rsyslog.service")]
+
+
+def test_an_rsyslog_hand_off_failure_keeps_the_zone_and_says_so(env):
+    # The zone has changed; only the log times lag, so the key stays applied with the reason.
+    env.system.queue_rc = 1
+    write_settings(env, "TIMEZONE=JST-9\n")
+
+    assert env.module.main(["apply"]) == 0
+
+    assert result_line(env, "TIMEZONE") == ("TIMEZONE applied try-restart rsyslog.service failed rc=1; "
+                                            "log times keep the old offset until quote rst")
+    assert env.localtime.resolve() == (env.zoneinfo / "Asia/Tokyo").resolve()
+
+
+def test_get_output_of_a_zone_outside_the_table_applies_unchanged(env, capsys):
+    # A zone set some other way (with daylight saving here) is read back as its POSIX string,
+    # which apply would reject; the same value is never validated, so the file still applies.
+    set_zone(env, "America/New_York")
+    assert env.module.main(["get"]) == 0
+    assert "TIMEZONE=EST5EDT,M3.2.0,M11.1.0" in written_settings(env)
+    capsys.readouterr()
+
+    assert env.module.main(["apply"]) == 0
+
+    assert result_line(env, "TIMEZONE") == "TIMEZONE unchanged"
+    assert timezone_calls(env) == []

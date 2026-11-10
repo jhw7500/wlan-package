@@ -10,7 +10,10 @@ service, so the handler ends well inside the dispatcher's 30 s limit; a detached
 child would be killed with the FTP session (see rst).  SNMP_COMMUNITY and
 SNMP_SYS* rewrite /etc/snmp/snmpd.local.conf, which snmpd reads after the
 snmpd.conf that every package install rewrites, and restart a running snmpd only
-when that file changes.  LAN_* values rewrite 22-eth0.network last and restart
+when that file changes.  TIMEZONE has timedated replace /etc/localtime, the zone's
+only store, which package installs leave alone after the first one, and restarts a
+running rsyslog so the log times follow.  LAN_* values
+rewrite 22-eth0.network last and restart
 wifi_lan_apply.service, which reconfigures eth0 only after a short wait so this
 reply leaves first.  Per-key results go to /home/admin/wconfig.result.
 """
@@ -40,10 +43,14 @@ RESULT = "wconfig.result"
 JSON_PATH = Path("/usr/local/etc/wifi_init_conf.json")
 TIMESYNCD_CONF = Path("/etc/systemd/timesyncd.conf")
 SNMPD_LOCAL_CONF = Path("/etc/snmp/snmpd.local.conf")
+LOCALTIME = Path("/etc/localtime")
+ZONEINFO = Path("/usr/share/zoneinfo")
+TIMEDATECTL = "/usr/bin/timedatectl"
 APPLY_ENABLED = "/usr/local/scripts/wifi_apply_enabled.sh"
 SYSTEMCTL = "/usr/bin/systemctl"
 NTP_UNIT = "systemd-timesyncd.service"
 SNMP_UNIT = "snmpd.service"
+RSYSLOG_UNIT = "rsyslog.service"
 ETH0_NETWORK = Path("/etc/systemd/network/22-eth0.network")
 MLAN0_NETWORK = Path("/etc/systemd/network/20-mlan0.network")
 LAN_UNIT = "wifi_lan_apply.service"
@@ -52,8 +59,8 @@ MAX_BYTES = 64 * 1024
 REPLY_BYTES = 256
 
 # The 25 system keys of the CONTEC settings export.  IMPLEMENTED keys are applied
-# here; PENDING keys get their appliers in later #464 changes; UNSUPPORTED keys
-# have no matching function on this device (#463).  Any other key is unknown.
+# here; PENDING would list keys whose appliers are still to come (none now); UNSUPPORTED
+# keys have no matching function on this device (#463).  Any other key is unknown.
 LAN_KEYS = ("LAN_MODE", "LAN_IPADDR", "LAN_NETMASK", "LAN_GATEWAY")
 # Per-type trap switches and the snmp.trap key each one owns.
 TRAP_TYPES = (("SNMP_TRAP_WLAN", "link"), ("SNMP_TRAP_CHAN", "channel"))
@@ -62,8 +69,8 @@ SNMPD_DIRECTIVES = (("SNMP_SYSCONTACT", "syscontact"), ("SNMP_SYSLOCATION", "sys
                     ("SNMP_SYSNAME", "sysname"))
 SNMPD_KEYS = ("SNMP_COMMUNITY",) + tuple(key for key, _ in SNMPD_DIRECTIVES)
 IMPLEMENTED = ("NTP_FUNC", "NTP_SERVER", "SNMP_FUNC", "SNMP_TRAP_IPADDR",
-               "SNMP_TRAP_WLAN", "SNMP_TRAP_CHAN") + SNMPD_KEYS + LAN_KEYS
-PENDING = ("TIMEZONE",)
+               "SNMP_TRAP_WLAN", "SNMP_TRAP_CHAN") + SNMPD_KEYS + LAN_KEYS + ("TIMEZONE",)
+PENDING = ()
 UNSUPPORTED = ("LANGUAGE", "SNMP_TRAP_LAN", "SNMP_TRAP_INITSW", "NTP_INTERVAL", "LOG_FUNC",
                "LOG_SERVER", "LOG_DEBUG", "LOG_SAVE", "LOG_INTERVAL", "LAN_PORTSPEED")
 KNOWN = IMPLEMENTED + PENDING + UNSUPPORTED
@@ -75,6 +82,12 @@ STATUSES = ("applied", "unchanged", "scheduled", "failed", "invalid", "pending",
 SERVICE_KEYS = ((NTP_UNIT, ("NTP_FUNC", "NTP_SERVER")), (SNMP_UNIT, ("SNMP_FUNC",)))
 ENABLE_KEYS = ("NTP_FUNC", "SNMP_FUNC", "SNMP_TRAP_WLAN", "SNMP_TRAP_CHAN")
 TRUE_WORDS = ("true", "TRUE", "True", "1", "yes", "YES", "Yes")
+# CONTEC writes the zone as a POSIX TZ string.  A name below keeps its own zone, whose file
+# ends with that same string, so get reads it back as written.  Any other whole-hour offset
+# without daylight saving takes the Etc/GMT zone of the same sign (Etc/GMT-9 is UTC+9, as
+# KST-9 is).
+NAMED_ZONES = {"KST-9": "Asia/Seoul", "JST-9": "Asia/Tokyo", "UTC0": "UTC", "GMT0": "Etc/GMT"}
+POSIX_ZONE = re.compile(r"(?:[A-Za-z]{3,}|<[A-Za-z0-9+-]{3,}>)([+-]?)([0-9]{1,2})")
 
 EXIT_IO, EXIT_USAGE, EXIT_INVALID, EXIT_FAILED, EXIT_PENDING = 1, 2, 3, 4, 5
 USAGE = "Usage: quote wconfig get [KEY] | put KEY=VALUE | apply"
@@ -542,7 +555,23 @@ def current_values():
         **{key: "enabled" if trap_on(data, kind) else "disabled" for key, kind in TRAP_TYPES},
         **snmpd_values(read_snmpd_local()),
         **lan_values(read_network(ETH0_NETWORK)),
+        "TIMEZONE": zone_posix(),
     }
+
+
+def zone_posix():
+    """The zone in force as CONTEC writes it: the POSIX string that ends a version 2+ zone file
+    (KST-9 for Asia/Seoul).  No /etc/localtime means UTC; a file without that line reads empty."""
+    try:
+        data = LOCALTIME.read_bytes()
+    except FileNotFoundError:
+        return "UTC0"
+    if data[:4] != b"TZif" or data[4:5] not in (b"2", b"3", b"4") or not data.endswith(b"\n"):
+        return ""
+    footer = data[:-1].rpartition(b"\n")[2]
+    if not footer.isascii() or not footer.decode("ascii").isprintable():
+        return ""
+    return footer.decode("ascii")
 
 
 def check_switch(value):
@@ -627,13 +656,34 @@ def check_snmp_text(value):
     return value
 
 
+def timezone_zone(value):
+    """The zone file for a POSIX TZ string with a whole-hour offset and no daylight saving."""
+    zone = NAMED_ZONES.get(value)
+    if zone is None:
+        match = POSIX_ZONE.fullmatch(value)
+        if not match:
+            raise Invalid("expected a POSIX zone with a whole-hour offset and no daylight saving, such as KST-9")
+        sign, hours = match.group(1) or "+", int(match.group(2))
+        if hours > (14 if sign == "-" else 12):
+            raise Invalid("expected an offset from -14 to 12")
+        zone = "Etc/GMT" if hours == 0 else f"Etc/GMT{sign}{hours}"
+    if not (ZONEINFO / zone).is_file():
+        raise Invalid(f"zone {zone} is not installed")
+    return zone
+
+
+def check_timezone(value):
+    timezone_zone(value)
+    return value
+
+
 CHECKS = {"NTP_FUNC": check_switch, "NTP_SERVER": check_address,
           "SNMP_FUNC": check_switch, "SNMP_TRAP_IPADDR": check_address,
           "SNMP_TRAP_WLAN": check_switch, "SNMP_TRAP_CHAN": check_switch,
           "SNMP_COMMUNITY": check_community, "SNMP_SYSCONTACT": check_snmp_text,
           "SNMP_SYSLOCATION": check_snmp_text, "SNMP_SYSNAME": check_snmp_text,
           "LAN_MODE": check_mode, "LAN_IPADDR": check_host, "LAN_NETMASK": check_netmask,
-          "LAN_GATEWAY": check_gateway}
+          "LAN_GATEWAY": check_gateway, "TIMEZONE": check_timezone}
 
 
 def lan_network(values):
@@ -883,6 +933,25 @@ def apply_snmpd(wanted, status):
         status[key] = ("failed", detail)
 
 
+def apply_timezone(wanted, status):
+    """Have timedated point /etc/localtime at the zone.  That link is the only store: postinst
+    sets the default zone on the first install alone, so the choice survives upgrades.
+
+    A running process keeps the offset it read when it started, so rsyslog, which stamps most
+    /var/log/cantops logs, is restarted to follow; other running daemons follow at the next boot."""
+    if "TIMEZONE" not in wanted:
+        return
+    zone = timezone_zone(wanted["TIMEZONE"])
+    rc = run([TIMEDATECTL, "--no-ask-password", "set-timezone", zone], 10)
+    if rc != 0:
+        status["TIMEZONE"] = ("failed", f"timedatectl set-timezone {zone} failed rc={rc}")
+        return
+    rc = run([SYSTEMCTL, "--no-ask-password", "--no-block", "try-restart", RSYSLOG_UNIT], 4)
+    if rc != 0:
+        status["TIMEZONE"] = ("applied", f"try-restart {RSYSLOG_UNIT} failed rc={rc}; "
+                              "log times keep the old offset until quote rst")
+
+
 def apply_lan(wanted, current, status):
     """Rewrite eth0's [Network] and hand the reconfigure to LAN_UNIT, which waits for this reply."""
     keys = [key for key in LAN_KEYS if key in wanted]
@@ -954,6 +1023,7 @@ def apply_settings():
     present = {entry[0] for entry in report if entry[0] in IMPLEMENTED}
     follow_services(present, wanted, status)
     apply_snmpd(wanted, status)
+    apply_timezone(wanted, status)
     # Last, so the unit's wait starts only when nothing but the reply is left to do.
     apply_lan(wanted, current, status)
     for entry in report:
