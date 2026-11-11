@@ -533,3 +533,49 @@ def test_a_message_with_unknown_key_type_is_still_counted():
     frames = [_resp(1, 0.0), _ack(2, 0.0001), *_handshake(3, 0.01, "1234"), _tail(7, 12.0)]
 
     assert assoc_4way.collect_attempts(frames)[0].verdict == "OK"
+
+
+# ------------------------------------- pre-PR Tribunal 권고(A-R1-001·A-R1-002, #474)
+
+def test_a_pipe_input_is_not_read_ahead_and_the_analysis_still_runs(synthetic_pcap, tmp_path):
+    """A-R1-001: 파이프·/dev/stdin 을 미리 읽으면 tshark 가 받을 데이터가 사라진다."""
+    path = tmp_path / "filtered.pcap"
+    _write_classic(path, _filtered_records())
+    tool = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "pcap_analyzer.py"))
+
+    run = subprocess.run([sys.executable, tool, "/dev/stdin", "--brief", "-o", str(tmp_path / "r.txt")],
+                         input=path.read_bytes(), cwd=tmp_path, capture_output=True, timeout=120)
+
+    assert run.returncode == 0, run.stderr.decode(errors="replace")
+    assert "[13. 연결·4-way 판정] 연결 응답 1건: AP_NO_M1 1" in run.stdout.decode()
+
+
+def test_capture_end_does_not_open_a_fifo(tmp_path):
+    """FIFO 를 열면 쓰는 쪽이 올 때까지 막히고, 열리면 데이터를 소비한다."""
+    fifo = tmp_path / "live.pcap"
+    os.mkfifo(fifo)
+    tool_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    code = (f"import sys; sys.path.insert(0, {tool_dir!r}); import capture_bounds as c; "
+            f"print(c.capture_end_epoch({str(fifo)!r}), c.capture_end({str(fifo)!r}, ''))")
+
+    run = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=10)
+
+    assert run.stdout.split() == ["None", "(None,", "False)"], run.stderr
+
+
+STEPPED_BACK = [(100.0, _ack_frame(OTHER_STA)), (0.0, _assoc_resp(0, False)), (0.0001, _ack_frame(AP)),
+                (1.0, _ack_frame(OTHER_STA))]
+
+
+@pytest.mark.parametrize("fmt", ["pcap", "pcapng"])
+def test_capture_end_is_the_last_record_in_file_order(synthetic_pcap, tmp_path, fmt):
+    """A-R1-002: 캡처 중 시계가 뒤로 가면 최대 시각은 실제 캡처 끝보다 늦다."""
+    path = tmp_path / f"step.{fmt}"
+    if fmt == "pcap":
+        _write_classic(path, STEPPED_BACK)
+    else:
+        _write_pcapng(path, STEPPED_BACK, tsresol=9)
+
+    assert _bounds().capture_end_epoch(str(path)) == pytest.approx(T0 + 1.0, abs=1e-6)
+    # 필터 없이 돌리면 예전처럼 마지막 프레임(응답 뒤 1초) 기준으로 판정을 미룬다.
+    assert "CAPTURE_END 1" in _cli(path, tmp_path)

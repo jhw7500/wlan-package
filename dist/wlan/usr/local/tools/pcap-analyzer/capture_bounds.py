@@ -3,7 +3,9 @@
 연결·4-way 판정은 응답 뒤 10초 창이 캡처 안에 다 들어왔는지로 판정을 미룰지 정한다. 필터
 (--mac·--sta·--start·--end)는 tshark -Y 로 걸리므로 분석기가 받은 마지막 프레임은 캡처 끝이
 아니다. 그래서 tshark 를 다시 돌리지 않고 파일의 레코드 헤더만 따라가며(페이로드는 건너뜀)
-가장 늦은 패킷 시각을 읽는다.
+파일 순서상 마지막 패킷 시각을 읽는다. 최대값이 아니라 마지막 레코드다 — 캡처 중 시계가 뒤로
+가면 최대값은 실제 캡처 끝보다 늦어 판정을 너무 일찍 확정한다. 일반 파일만 읽는다. 파이프·
+/dev/stdin·FIFO 를 미리 읽으면 tshark 가 받을 데이터가 사라지므로 열지 않고 None 이다.
 
 classic pcap(µs·ns, LE·BE)과 pcapng(섹션마다 인터페이스 표를 새로 만들고, IDB 마다
 if_tsresol, 패킷이 아닌 블록은 길이만큼 건너뜀)만 읽는다. 그 밖의 형식(gzip 등), 잘린 파일,
@@ -13,6 +15,7 @@ if_tsresol, 패킷이 아닌 블록은 길이만큼 건너뜀)만 읽는다. 그
 
 import os
 import re
+import stat
 import struct
 import time
 from typing import BinaryIO, Optional, Tuple
@@ -54,8 +57,7 @@ def _classic_end(stream: BinaryIO, file_size: int, order: str, scale: int) -> Op
         if fraction >= scale or stream.tell() + captured > file_size:
             raise _Unreadable
         stream.seek(captured, os.SEEK_CUR)
-        stamp = seconds + fraction / scale
-        latest = stamp if latest is None or stamp > latest else latest
+        latest = seconds + fraction / scale
 
 
 def _resolution(options: bytes, order: str) -> float:
@@ -116,14 +118,15 @@ def _pcapng_end(stream: BinaryIO, file_size: int) -> Optional[float]:
                 interface, _, high, low = struct.unpack(order + "HHII", _read_exact(stream, 12))
             if interface >= len(units):
                 raise _Unreadable
-            stamp = ((high << 32) | low) * units[interface]
-            latest = stamp if latest is None or stamp > latest else latest
+            latest = ((high << 32) | low) * units[interface]
         stream.seek(start + total)                   # ISB·NRB·DSB·사용자 정의 블록도 길이만큼 건너뛴다
 
 
 def capture_end_epoch(path: str) -> Optional[float]:
-    """캡처에 든 가장 늦은 패킷 시각(epoch 초). 정확히 읽을 수 없으면 None."""
+    """캡처의 파일 순서상 마지막 패킷 시각(epoch 초). 일반 파일이 아니거나 정확히 읽을 수 없으면 None."""
     try:
+        if not stat.S_ISREG(os.stat(path).st_mode):
+            return None
         with open(path, "rb") as stream:
             file_size = os.fstat(stream.fileno()).st_size
             magic = stream.read(4)
