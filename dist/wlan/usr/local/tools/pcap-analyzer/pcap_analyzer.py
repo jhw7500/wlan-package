@@ -25,6 +25,7 @@ import sys
 from datetime import datetime
 
 from extractor import extract_frames
+from capture_bounds import capture_end as read_capture_end
 from detector import detect_roles
 from indexer import FrameIndex
 from reporter import format_report
@@ -96,6 +97,10 @@ def main():
 
     wpa_used = bool(args.ssid and args.passphrase)
 
+    # 연결·4-way 판정의 창 완료 기준(#474). 캡처 중에 커지는 파일이라도 tshark 가 읽은 범위를
+    # 넘지 않도록 tshark 를 돌리기 전에 읽는다.
+    capture_end, end_exclusive = read_capture_end(args.pcap, args.end)
+
     # 1. 프레임 추출
     print(f"[1/4] tshark로 프레임 추출 중... ({os.path.basename(args.pcap)})")
     if args.mac:
@@ -147,7 +152,10 @@ def main():
     sections = []
     for name, mod in analyzer_list:
         print(f"  -> {name} 분석...")
-        sections.append(mod.analyze(frames, roles, index))
+        if mod is assoc_4way:
+            sections.append(mod.analyze(frames, roles, index, capture_end=capture_end, end_exclusive=end_exclusive))
+        else:
+            sections.append(mod.analyze(frames, roles, index))
 
     # 외부 로그 병합
     if args.with_log:

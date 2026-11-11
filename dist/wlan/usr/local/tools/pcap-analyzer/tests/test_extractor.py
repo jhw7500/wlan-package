@@ -69,7 +69,8 @@ class AssocFourWayFieldTests(unittest.TestCase):
     def test_new_fields_are_appended_after_the_legacy_columns(self):
         fields = importlib.import_module("extractor").TSHARK_FIELDS
         self.assertEqual(fields[20], "icmp.seq")
-        self.assertEqual(fields[21:], ["wlan.fixed.status_code", "wlan_rsna_eapol.keydes.msgnr"])
+        self.assertEqual(fields[21:], ["wlan.fixed.status_code", "wlan_rsna_eapol.keydes.msgnr",
+                                       "wlan_rsna_eapol.keydes.key_info.key_type"])
 
     def test_parse_tsv_line_reads_hex_status_code(self):
         frame = parse_tsv_line("\t".join(_assoc_columns()))

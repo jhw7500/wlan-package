@@ -79,14 +79,21 @@ def _verdict(attempt: Attempt, window_complete: bool) -> Tuple[str, List[str]]:
     return VERDICT_BY_HIGHEST[highest], missing
 
 
-def collect_attempts(frames: List[FrameType]) -> List[Attempt]:
-    """응답 복사본을 시도로 묶고, 시도마다 ACK·M1~M4·판정을 채운다(frames 는 캡처 순서)."""
+def collect_attempts(
+    frames: List[FrameType], capture_end: Optional[float] = None, end_exclusive: bool = False
+) -> List[Attempt]:
+    """응답 복사본을 시도로 묶고, 시도마다 ACK·M1~M4·판정을 채운다(frames 는 캡처 순서).
+
+    capture_end 는 필터와 무관한 캡처 끝 시각(capture_bounds.capture_end). 없거나 마지막 프레임보다
+    이르면 마지막 프레임 시각을 쓴다. end_exclusive 는 그 끝이 --end(그 시각 미포함)에서 왔다는 뜻이다.
+    """
     attempts: List[Attempt] = []
     current: Dict[Tuple[str, str], Attempt] = {}
     eapol: List[FrameType] = []
     for index, frame in enumerate(frames):
         if frame.eapol_msgnr in MESSAGES:
-            eapol.append(frame)
+            if frame.eapol_key_type != "0":     # 그룹 키(Group Message 1·2)는 4-way 가 아니다
+                eapol.append(frame)
             continue
         if frame.subtype not in RESPONSE_SUBTYPES:
             continue
@@ -107,6 +114,10 @@ def collect_attempts(frames: List[FrameType]) -> List[Attempt]:
             attempt.acked += int(state)
 
     last_epoch = frames[-1].epoch if frames else 0.0
+    if capture_end is not None and capture_end > last_epoch:
+        last_epoch = capture_end
+    else:
+        end_exclusive = False                   # 끝이 분석한 프레임이면 그 시각까지 보았다
     eapol_numbers = [f.number for f in eapol]
     for position, attempt in enumerate(attempts):
         following = next((a for a in attempts[position + 1:] if a.sta == attempt.sta), None)
@@ -124,7 +135,8 @@ def collect_attempts(frames: List[FrameType]) -> List[Attempt]:
             attempt.msg_ms.setdefault(msg, (frame.epoch - attempt.first.epoch) * 1000.0)
             if "4" in attempt.msg_ms:
                 break
-        window_complete = following is not None or last_epoch - attempt.first.epoch >= WINDOW_S
+        covered = last_epoch - attempt.first.epoch
+        window_complete = following is not None or (covered > WINDOW_S if end_exclusive else covered >= WINDOW_S)
         attempt.verdict, attempt.missing = _verdict(attempt, window_complete)
     return attempts
 
@@ -134,10 +146,11 @@ def _ms(value: Optional[float]) -> str:
 
 
 def analyze(
-    frames: List[FrameType], roles: Dict[str, Dict[str, Any]], index: Any = None
+    frames: List[FrameType], roles: Dict[str, Dict[str, Any]], index: Any = None,
+    capture_end: Optional[float] = None, end_exclusive: bool = False,
 ) -> AnalysisSectionType:
     del index
-    attempts = collect_attempts(frames)
+    attempts = collect_attempts(frames, capture_end, end_exclusive)
     if not attempts:
         return AnalysisSection(title=TITLE, lines=["(재)연결 응답 프레임 없음"], summary="연결 응답 없음")
 
@@ -179,7 +192,9 @@ def analyze(
         "",
         "판정 뜻(캡처에서 보이는 것 기준): OK=M4까지, AP_NO_M1=응답 뒤 M1 없음, STA_NO_M2=M1 뒤 M2 없음,",
         "  AP_NO_M3=M2 뒤 M3 없음, STA_NO_M4=M3 뒤 M4 없음, ASSOC_REJECTED=상태≠0,",
-        f"  CAPTURE_END=분석한 프레임이 창({WINDOW_S:.0f}초) 안에서 끝남(--mac·--sta·--start·--end 를 쓰면 필터를 통과한 프레임 기준).",
+        f"  CAPTURE_END=캡처(--end 가 있으면 그 시각 전)가 창({WINDOW_S:.0f}초) 안에서 끝남. 캡처 끝은 필터와 무관하게",
+        "  파일 헤더에서 읽고, 읽지 못하는 파일(gzip 등)이면 필터를 통과한 마지막 프레임 기준.",
+        "  M1~M4 는 쌍(pairwise) 키 EAPOL-Key 만 센다(그룹 키 메시지 제외).",
         "  '캡처 누락'은 더 높은 메시지가 보여 받았음이 확실한 메시지.",
     ]
 

@@ -340,6 +340,7 @@ usr/local/tools/pcap-analyzer/analyzers/retry_mcs.py
 usr/local/tools/pcap-analyzer/analyzers/roaming.py
 usr/local/tools/pcap-analyzer/analyzers/roaming_impact.py
 usr/local/tools/pcap-analyzer/analyzers/signal_quality.py
+usr/local/tools/pcap-analyzer/capture_bounds.py
 usr/local/tools/pcap-analyzer/detector.py
 usr/local/tools/pcap-analyzer/extractor.py
 usr/local/tools/pcap-analyzer/indexer.py

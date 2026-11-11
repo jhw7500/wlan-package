@@ -40,12 +40,24 @@ TSHARK_FIELDS = [
     # 연결·4-way 판정(#460). 위치로 파싱하므로 새 필드는 항상 끝에 붙인다.
     "wlan.fixed.status_code",
     "wlan_rsna_eapol.keydes.msgnr",
+    # 그룹 키 메시지를 M1·M2 에서 빼려고 키 종류를 읽는다(#474). 보드 tshark 4.0.10 에도 있다.
+    "wlan_rsna_eapol.keydes.key_info.key_type",
 ]
 
 
 def _normalize_retry(value: str) -> bool:
     first = value.split(",")[0].strip().lower()
     return first in {"1", "true", "yes"}
+
+
+def _normalize_flag(value: str) -> str:
+    """tshark 불리언 필드("True"/"False" 또는 "1"/"0") → "1"/"0", 비거나 모르면 ""."""
+    first = value.split(",")[0].strip().lower()
+    if first in {"1", "true"}:
+        return "1"
+    if first in {"0", "false"}:
+        return "0"
+    return ""
 
 
 def _normalize_subtype(value: str) -> str:
@@ -136,6 +148,7 @@ def parse_tsv_line(line: str) -> Optional[FrameType]:
             # 상태 코드는 "0x0000" 꼴 → 10진 문자열(첫 값)
             status_code=_normalize_subtype(cols[21]),
             eapol_msgnr=cols[22].split(",")[0].strip(),
+            eapol_key_type=_normalize_flag(cols[23]),
         )
     except (ValueError, IndexError):
         return None

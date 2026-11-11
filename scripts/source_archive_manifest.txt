@@ -487,6 +487,7 @@ dist/wlan/usr/local/tools/pcap-analyzer/analyzers/retry_mcs.py
 dist/wlan/usr/local/tools/pcap-analyzer/analyzers/roaming.py
 dist/wlan/usr/local/tools/pcap-analyzer/analyzers/roaming_impact.py
 dist/wlan/usr/local/tools/pcap-analyzer/analyzers/signal_quality.py
+dist/wlan/usr/local/tools/pcap-analyzer/capture_bounds.py
 dist/wlan/usr/local/tools/pcap-analyzer/detector.py
 dist/wlan/usr/local/tools/pcap-analyzer/extractor.py
 dist/wlan/usr/local/tools/pcap-analyzer/indexer.py
