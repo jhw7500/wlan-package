@@ -3,14 +3,14 @@ set -euo pipefail
 
 REPO=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 SDIO_FW_REL="usr/lib/firmware/cts/sd9098_wlan_v1.bin"
-SDIO_FW_SHA256="7c3ef6e12d3cfc9bd638d1571ccf6ddd2e96e0ed179ec70664ccb1df0ba29e57"
+SDIO_FW_SHA256="a05ba158efb0262791a471b90c0e0e616316097ccf6e17f6a170778ee4758813"
 FACTORY_ETH0_REL="opt/wlan/config/systemd/network/22-eth0.network"
 FACTORY_ETH0_ADDRESS="192.168.1.1/24"
 MLANUTL_IMX93_REL="opt/wlan/bin/mlanutl_imx93"
 FW_DOC_DIR_REL="usr/share/doc/wlan-proc/nxp-imx-firmware"
-FW_LICENSE_SHA256="3001cf84018c5cb10d183a678f6ec8a928c797616ba06b398d7ca93c0779aaa2"
+FW_LICENSE_SHA256="09fc7cbaffd4b91cb3b464be0a71f420bc84c2b674de9c1895a292dbb326b3c6"
 FW_SCR_SHA256="a05d7e1bb43bd7f3a955f3ff5c4dba3c61a5515df6f4fc5bf150a370e413289e"
-FW_SOURCE_SHA256="4dbbbeebe006653040a28669433e6d8fbf596291e77d8e6ecb2efe7010e82745"
+FW_SOURCE_SHA256="ef201e00ba66f559bc984bdca1e020b8a66e80209d0ac17213f768dee3807d41"
 PAYLOAD_MANIFEST_REL="DEBIAN/payload-manifest.txt"
 DRIVER_COMPONENT_LOCK_REL="opt/wlan/driver/DRIVER_COMPONENTS.sha256"
 WBRIDGE_RELEASE_DIR="usr/local/wlan-bridge/wbridge"
