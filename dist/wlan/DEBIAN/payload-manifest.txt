@@ -289,6 +289,7 @@ usr/local/scripts/wifi_config_backup.sh
 usr/local/scripts/wifi_connect_fallback_lib.sh
 usr/local/scripts/wifi_connect_raw.sh
 usr/local/scripts/wifi_devinfo.py
+usr/local/scripts/wifi_devinfo_write.py
 usr/local/scripts/wifi_eth_peer_find.sh
 usr/local/scripts/wifi_eth_peer_route.sh
 usr/local/scripts/wifi_event.sh

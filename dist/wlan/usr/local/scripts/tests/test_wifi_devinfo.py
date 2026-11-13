@@ -290,17 +290,46 @@ def test_undetermined_changes_nothing(board, monkeypatch, setup, existing):
     assert "판정 불가" in board.log_text()
 
 
-def test_main_uses_shipping_keys_and_default_paths(monkeypatch):
+def test_main_uses_shipping_keys_and_default_paths(monkeypatch, tmp_path):
     seen = {}
 
     def fake_run(record_path, info_path, *, uid_path=None, public_keys=None, log=None):
         seen.update(record_path=record_path, info_path=info_path, keys=public_keys)
         return 7
 
+    monkeypatch.setattr(wd, "LOCK_PATH", str(tmp_path / "lock"))
     monkeypatch.setattr(wd, "run", fake_run)
     assert wd.main([]) == 7
     assert seen == {"record_path": wd.RECORD_DEVICE, "info_path": wd.DEVICE_INFO_PATH,
                     "keys": wd.SHIPPING_PUBLIC_KEYS}
+
+
+def test_lock_path_is_shared_with_the_writer():
+    assert wd.LOCK_PATH == "/run/wifi_devinfo.lock"
+
+
+def test_main_holds_the_lock_while_judging(monkeypatch, tmp_path):
+    # 기록 도구(wifi_devinfo_write.py)와 postinst·부팅 실행이 겹쳐 옛 판정이 새 파일을 지우지 않게
+    # 같은 잠금 파일을 쓴다. 다른 fd 로 잠금을 시도하면 실패해야 한다.
+    import fcntl
+    lock = tmp_path / "lock"
+    seen = {}
+
+    def probe(*a, **k):
+        fd = os.open(lock, os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            seen["held"] = False
+        except BlockingIOError:
+            seen["held"] = True
+        finally:
+            os.close(fd)
+        return 0
+
+    monkeypatch.setattr(wd, "LOCK_PATH", str(lock))
+    monkeypatch.setattr(wd, "run", probe)
+    assert wd.main([]) == 0
+    assert seen == {"held": True}
 
 
 def test_script_runs_as_a_file_like_execstart(tmp_path):
