@@ -3,6 +3,13 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## Unreleased
+
+> 다음 릴리스에 묶일 변경이다. 릴리스 PR이 이 절을 버전 절로 바꾼다.
+
+- **출하 고정값 서명 레코드 형식·모듈**(#481 PR-1, SemVer patch): 장치마다 출하 때 기록하는 고정값(Vendor·Product Code, 시리얼, 제조·출하일, IEEE 802.11r/ai/k/v)을 eMMC boot1 에 두는 512 바이트 Ed25519 서명 레코드 형식 v1 을 `docs/devinfo_record_format.md` 로 정했다. 같은 문서에 판정 순서(없음·무효·모르는 키·판정 불가), UID 정본(i.MX93 OCOTP 퓨즈 워드 48~51), 사양서 R2 6.2·6.3절 값 규칙, `device_info.json` 으로 옮기는 규칙, 키 관리를 적었다. 레코드를 만들고 판정하는 `usr/local/scripts/devinfo_record.py` 를 더했다. 아직 이 모듈을 부르는 곳은 없어 장치 동작은 바뀌지 않는다(부팅 검증 서비스는 PR-2).
+- **테스트**: `tests/test_devinfo_record.py` 가 모듈과 별개로 만든 골든 레코드(시험 전용 키)를 바이트 단위로 고정한다. 판정 순서별 결과(magic 없음, 크기, 버전, 모르는 키, 서명, 다시 서명한 구조 위반 13종, UID 불일치와 양쪽 값 로그, cryptography 없음), `device_info.json` 형식, R2 규칙, UID 읽기 위치를 확인한다. Source Gate CI 가 `python3-cryptography` 를 설치한다.
+
 ## 0.8.7 (2026-11-13)
 
 > SemVer **patch** — imx93 무선 스택(드라이버 552.p22, 88W9098 FW 17.92.1.p149.159, wpa_supplicant)을 올리고 0.8.6 이후 수정(#456~#482)을 묶는다.
