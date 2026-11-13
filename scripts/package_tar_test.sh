@@ -28,6 +28,7 @@ EXACT_PATHS = {
     "dist",
     "dist/wlan",
     "docs",
+    "docs/devinfo_record_format.md",
     "docs/ftp_quote_protocol.md",
     "docs/ftp_quote_protocol_distribution.md",
     "docs/wifi_init_conf.schema.json",
