@@ -224,6 +224,9 @@ def test_pack_rejects_values_that_would_not_verify(change):
     dr.Record(256, dr.UID_SOURCE_IMX93_OCOTP, UID, GOLDEN_VALUES),
     dr.Record(1, dr.UID_SOURCE_IMX93_OCOTP, b"", GOLDEN_VALUES),
     dr.Record(1, dr.UID_SOURCE_IMX93_OCOTP, bytes(17), GOLDEN_VALUES),
+    dr.Record(1, 0, UID, GOLDEN_VALUES),                              # 등록되지 않은 출처
+    dr.Record(1, 2, UID, GOLDEN_VALUES),
+    dr.Record(1, dr.UID_SOURCE_IMX93_OCOTP, UID[:8], GOLDEN_VALUES),  # 출처의 길이(16)와 다름
 ])
 def test_pack_rejects_bad_header(record):
     with pytest.raises(dr.RecordError):

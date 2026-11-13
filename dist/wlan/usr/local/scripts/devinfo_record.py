@@ -106,9 +106,13 @@ def pack_payload(record):
     """서명 범위(앞 448 바이트)를 만든다. 장치가 무효로 볼 값은 RecordError 로 거부한다."""
     if not isinstance(record.key_id, int) or not 1 <= record.key_id <= 255:
         raise RecordError("key_id: 1..255")
-    _check_uint("uid_source", record.uid_source, 8)
-    if not isinstance(record.uid, bytes) or not 1 <= len(record.uid) <= UID_FIELD_SIZE:
-        raise RecordError(f"uid: 1..{UID_FIELD_SIZE} bytes")
+    # 장치는 read_device_uid() 로 등록된 출처의 정해진 길이만 읽으므로, 그 밖의 조합은
+    # 어느 장치에서도 uid-mismatch 가 된다. 그런 레코드는 만들지 않는다.
+    if record.uid_source not in UID_SOURCES:
+        raise RecordError(f"uid_source: one of {sorted(UID_SOURCES)}")
+    uid_length = UID_SOURCES[record.uid_source][2]
+    if not isinstance(record.uid, bytes) or len(record.uid) != uid_length:
+        raise RecordError(f"uid: {uid_length} bytes for uid_source {record.uid_source}")
     v = record.values
     _check_uint("vendor_code", v.vendor_code, 32)
     _check_uint("product_code", v.product_code, 16)
