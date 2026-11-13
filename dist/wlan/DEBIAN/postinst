@@ -515,7 +515,9 @@ customctl() {
   # opcd-essid-restore.service: 부팅 1회 `opcd -R`(ChangeIp ESSID 복원, #362). .opc.enabled 게이트에
   # 걸지 않고 항상 enable 한다 — 표식이 없으면 ConditionPathExists 로 no-op 이고, OPC 를 끈 뒤의
   # 재부팅에서도 남은 ChangeIp ESSID 는 되돌아가야 한다(wlan-opc#161).
-  systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer journald-snapshot-boundary.service journald-snapshot-shutdown.service wifi-stack.target wifi_init wifi_apply_enabled wifi_acl wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 log-watchdog.timer serial-getty@ttyGS0.service wlan-peer-net.service opcd-essid-restore.service || true
+  # wifi_devinfo.service: 부팅 1회 boot1 서명 레코드 → device_info.json(#481). opcd 와 SNMP 가 같이
+  # 읽으므로 .opc.enabled 게이트에 걸지 않는다. boot1 이 없으면 ConditionPathExists 로 no-op 이다.
+  systemctl enable watchdog switchd fake-hwclock fake-hwclock.timer journald-snapshot.timer journald-snapshot-boundary.service journald-snapshot-shutdown.service wifi-stack.target wifi_init wifi_apply_enabled wifi_acl wifi_logger wifi_led@eth0 wifi_logger@eth0 wifi_led@mlan0 log-watchdog.timer serial-getty@ttyGS0.service wlan-peer-net.service opcd-essid-restore.service wifi_devinfo.service || true
   # wconnectraw의 저장 요청은 vsftpd의 private PID namespace 밖에서 처리한다.
   # 부팅 시점과 업그레이드 직후 모두 path watcher를 올린다.
   if ! systemctl enable wifi_raw_commit@mlan0.path wifi_raw_commit@mlan1.path; then
@@ -578,6 +580,22 @@ customctl() {
     fi
   fi
   # <<< arping-eth0-legacy-cleanup
+
+  # >>> devinfo-apply
+  # 출하 고정값 서명 레코드(eMMC boot1, #481)를 device_info.json 에 반영한다. opcd 는 시작할 때
+  # 한 번 읽으므로, 멈춰 있던 opcd 를 띄우는 아래 wifi_services.sh start 와 업그레이드 재시작
+  # (opcd-upgrade-restart)보다 먼저 돈다. systemctl start 대신 유닛과 같은 스크립트를 직접
+  # 실행한다 — postinst 는 부팅 중 oneshot 안에서도 돌 수 있어 동기 start 는 PID1 잡 대기와 맞물릴
+  # 수 있다. 무효·판정 불가여도 설치는 계속한다(파일은 판정이 확정될 때만 바뀐다). boot1 이 없는
+  # 보드는 유닛의 ConditionPathExists 처럼 건너뛴다.
+  if [ -e /dev/mmcblk0boot1 ]; then
+    _devinfo_rc=0
+    _devinfo_out=$(/usr/local/scripts/wifi_devinfo.py 2>&1) || _devinfo_rc=$?
+    _devinfo_pri=info
+    [ "$_devinfo_rc" -eq 0 ] || _devinfo_pri=warn
+    logger -p "local0.$_devinfo_pri" "[$tag:$LINENO] [$KEY] wifi_devinfo rc=$_devinfo_rc: $_devinfo_out" || true
+  fi
+  # <<< devinfo-apply
 
   # prerm 이 wifi-stack.target 을 stop 하면 PartOf= 로 묶인 자식 유닛(wifi_logger@mlanN,
   # wifi_logger_link@mlanN 등)이 함께 내려간다. 바로 위 wifi_apply_enabled.sh 는 enable/
