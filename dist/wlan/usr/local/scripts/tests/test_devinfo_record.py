@@ -5,7 +5,9 @@ struct.pack 과 cryptography 를 직접 써서 만든 레코드이고(시험 전
 모듈이 형식을 바꾸면 여기서 실패한다.
 """
 import datetime
+import json
 import struct
+import subprocess
 import sys
 from pathlib import Path
 
@@ -93,10 +95,11 @@ def test_missing_magic_is_absent(blob):
 
 
 @pytest.mark.parametrize("size", [0, 511, 513])
-def test_wrong_size_is_invalid(size):
+def test_wrong_size_is_undetermined(size):
+    """문서 판정 순서 1단계: 512 바이트를 읽지 못하면 판정 불가(파일을 바꾸지 않는다)."""
     blob = (GOLDEN * 2)[:size]
     result = dr.check(blob, KEYS, DEVICE_UID)
-    assert (result.status, result.reason) == (dr.STATUS_INVALID, "size")
+    assert (result.status, result.reason) == (dr.STATUS_UNDETERMINED, "size")
 
 
 def test_unknown_format_version_is_invalid():
@@ -138,6 +141,10 @@ def test_signature_from_other_key_is_invalid():
     (84, b"\xc3\xa9", "serial_number"),    # 비 ASCII
     (84, b"\x01", "serial_number"),        # 제어 문자
     (84, b"A" * 32, "serial_number"),      # NUL 없이 32 자
+    (84, b'SN"1', "serial_number"),        # opcd 가 따옴표에서 자른다
+    (52, b"HW\\1", "hardware_version"),    # opcd 가 이스케이프를 풀지 않는다
+    (44, struct.pack("<H", 1969), "manufacture_date"),  # opcd parse_date 는 1970 미만을 거부
+    (48, struct.pack("<H", 1969), "shipment_date"),
 ])
 def test_resigned_structural_violations_are_invalid(offset, data, reason):
     result = dr.check(patched(offset, data), KEYS, DEVICE_UID)
@@ -201,6 +208,10 @@ def test_device_info_json_hex_codes_are_upper_case_and_zero_padded():
     {"ieee_11k": 2},
     {"product_code": 0x10000},
     {"vendor_code": -1},
+    {"serial_number": 'SN"0001'},
+    {"hardware_version": "HW\\1.0"},
+    {"manufacture_date": datetime.date(1969, 12, 31)},
+    {"shipment_date": datetime.date(1, 1, 1)},
 ])
 def test_pack_rejects_values_that_would_not_verify(change):
     values = dr.DeviceValues(**{**GOLDEN_VALUES.__dict__, **change})
@@ -258,3 +269,90 @@ def test_read_imx93_uid_rejects_short_nvmem(tmp_path):
     nvmem.write_bytes(bytes(200))
     with pytest.raises(OSError):
         dr.read_device_uid(dr.UID_SOURCE_IMX93_OCOTP, nvmem)
+
+
+# --- 소비자 오라클: 실제 opcd 로더 ------------------------------------------
+# v1 이 유효로 보는 값은 opcd(wlan-opc/opcd/inventory.c)가 그대로 읽어야 한다.
+# 서브모듈 소스를 작은 main 과 함께 컴파일해 device_info_json 출력을 먹인다.
+# wlan-opc 서브모듈과 cc 가 없으면 건너뛰지 않고 실패한다(test_reset_cause_ids.py 와 같다).
+
+REPO = Path(__file__).resolve().parents[6]
+OPCD = REPO / "wlan-opc/opcd"
+_OPCD_MAIN = r"""
+#include <stdio.h>
+#include "inventory.h"
+int main(int argc, char **argv) {
+    (void)argc;
+    int rc = opcd_inventory_load(argv[1]);
+    const opcd_inventory_t *i = opcd_inventory();
+    printf("rc=%d\nvendor=%u\nproduct=%u\nsubcode=%u\nhw=%s\nsn=%s\n"
+           "mfg=%u-%u-%u\nship=%u-%u-%u\nieee=%u%u%u%u\n",
+           rc, (unsigned)i->vendor_code, (unsigned)i->product_code, (unsigned)i->product_subcode,
+           i->hardware_version, i->serial_number,
+           i->manufacture_date.year, i->manufacture_date.month, i->manufacture_date.day,
+           i->shipment_date.year, i->shipment_date.month, i->shipment_date.day,
+           i->ieee_11r, i->ieee_11ai, i->ieee_11k, i->ieee_11v);
+    return 0;
+}
+"""
+
+
+@pytest.fixture(scope="module")
+def opcd_loader(tmp_path_factory):
+    if not (OPCD / "inventory.c").is_file():
+        pytest.fail(f"{OPCD}/inventory.c not found: run `git submodule update --init wlan-opc`")
+    d = tmp_path_factory.mktemp("opcd")
+    (d / "main.c").write_text(_OPCD_MAIN, encoding="ascii")
+    exe = d / "loader"
+    subprocess.run(["cc", "-std=c11", "-I", str(OPCD), "-o", str(exe), str(d / "main.c"),
+                    str(OPCD / "inventory.c"), str(OPCD / "json_util.c")],
+                   check=True, capture_output=True)
+
+    def load(values):
+        path = d / "device_info.json"
+        path.write_text(json.dumps(dr.device_info_json(values)), encoding="ascii")
+        out = subprocess.run([str(exe), str(path)], check=True, capture_output=True, text=True).stdout
+        return dict(line.split("=", 1) for line in out.splitlines())
+    return load
+
+
+def _expected(values):
+    m, s = values.manufacture_date, values.shipment_date
+    return {
+        "rc": "0", "vendor": str(values.vendor_code), "product": str(values.product_code),
+        "subcode": str(values.product_subcode), "hw": values.hardware_version, "sn": values.serial_number,
+        "mfg": f"{m.year}-{m.month}-{m.day}", "ship": f"{s.year}-{s.month}-{s.day}",
+        "ieee": f"{values.ieee_11r}{values.ieee_11ai}{values.ieee_11k}{values.ieee_11v}",
+    }
+
+
+# v1 이 문자열에 허용하는 문자 전부(출력 가능한 ASCII 에서 '"'·'\' 를 뺀 93 자)를 31 자씩 나눈다.
+_ALLOWED = "".join(chr(c) for c in range(0x20, 0x7F) if chr(c) not in "\"\\")
+_CHUNKS = [_ALLOWED[i:i + 31] for i in range(0, len(_ALLOWED), 31)]
+
+
+@pytest.mark.parametrize("change", [
+    {},
+    *[{"hardware_version": chunk, "serial_number": chunk[::-1]} for chunk in _CHUNKS],
+    {"manufacture_date": datetime.date(1970, 1, 1), "shipment_date": datetime.date(9999, 12, 31)},
+    {"vendor_code": 0xFFFFFFFF, "product_code": 0xFFFF, "product_subcode": 0,
+     "ieee_11r": 0, "ieee_11ai": 1, "ieee_11k": 0, "ieee_11v": 0},
+    {"hardware_version": "", "serial_number": "x"},
+])
+def test_every_value_v1_accepts_round_trips_through_opcd(opcd_loader, change):
+    values = dr.DeviceValues(**{**GOLDEN_VALUES.__dict__, **change})
+    record = dr.Record(1, dr.UID_SOURCE_IMX93_OCOTP, UID, values)
+    blob = dr.sign_record(record, TEST_KEY)            # v1 이 만들 수 있고
+    assert dr.check(blob, KEYS, DEVICE_UID).status == dr.STATUS_VALID   # 장치가 유효로 보는 값
+    assert opcd_loader(values) == _expected(values)    # 은 opcd 가 그대로 읽는다
+
+
+@pytest.mark.parametrize("change,field", [
+    ({"serial_number": 'SN"0001'}, "sn"),
+    ({"hardware_version": "HW\\1.0"}, "hw"),
+    ({"manufacture_date": datetime.date(1969, 12, 31)}, "mfg"),
+])
+def test_opcd_oracle_detects_what_v1_rejects(opcd_loader, change, field):
+    """양성 대조: v1 이 거부하는 값은 opcd 에서 실제로 깨진다(오라클이 차이를 잡는다)."""
+    values = dr.DeviceValues(**{**GOLDEN_VALUES.__dict__, **change})
+    assert opcd_loader(values)[field] != _expected(values)[field]

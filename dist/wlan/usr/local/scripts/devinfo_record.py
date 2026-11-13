@@ -30,6 +30,12 @@ STATUS_VALID = "valid"
 STATUS_ABSENT = "absent"
 STATUS_INVALID = "invalid"
 STATUS_UNKNOWN_KEY = "unknown-key"
+STATUS_UNDETERMINED = "undetermined"  # 판정 불가: 호출자는 기존 파일을 바꾸지 않는다
+
+# opcd 가 그대로 읽는 범위(wlan-opc/opcd/json_util.c copy_quoted_value 는 첫 '"' 에서
+# 멈추고 이스케이프를 풀지 않는다, inventory.c parse_date 는 1970~9999 년만 받는다).
+STR_FORBIDDEN = frozenset('"\\')
+MIN_YEAR = 1970
 
 JSON_SOURCE_MARKER = "boot1-record"
 
@@ -83,6 +89,8 @@ class CheckResult:
 def _encode_str(name, text):
     if not isinstance(text, str) or not text.isascii() or not text.isprintable():
         raise RecordError(f"{name}: printable ASCII only")
+    if STR_FORBIDDEN & set(text):
+        raise RecordError(f"{name}: '\"' and '\\' are not allowed")
     raw = text.encode("ascii")
     if len(raw) > STR_FIELD_SIZE - 1:
         raise RecordError(f"{name}: at most {STR_FIELD_SIZE - 1} characters")
@@ -109,8 +117,8 @@ def pack_payload(record):
         if getattr(v, name) not in (0, 1) or isinstance(getattr(v, name), bool):
             raise RecordError(f"{name}: 0 or 1")
     for name in ("manufacture_date", "shipment_date"):
-        if not isinstance(getattr(v, name), datetime.date):
-            raise RecordError(f"{name}: date")
+        if not isinstance(getattr(v, name), datetime.date) or getattr(v, name).year < MIN_YEAR:
+            raise RecordError(f"{name}: date from {MIN_YEAR}")
     header = _HEADER.pack(MAGIC, FORMAT_VERSION, record.key_id, record.uid_source, len(record.uid), bytes(3))
     uid = record.uid + bytes(UID_FIELD_SIZE - len(record.uid))
     md, sd = v.manufacture_date, v.shipment_date
@@ -140,12 +148,14 @@ def _decode_str(raw):
     text, _, rest = raw.partition(b"\0")
     if any(rest) or len(text) >= STR_FIELD_SIZE:
         return None
-    if not all(0x20 <= c <= 0x7E for c in text):
+    if not all(0x20 <= c <= 0x7E and chr(c) not in STR_FORBIDDEN for c in text):
         return None
     return text.decode("ascii")
 
 
 def _decode_date(year, month, day):
+    if year < MIN_YEAR:
+        return None
     try:
         return datetime.date(year, month, day)
     except ValueError:
@@ -184,14 +194,14 @@ def _structure(payload):
 def check(blob, public_keys, device_uid):
     """레코드를 판정한다. public_keys: {key_id: 32바이트 공개키}, device_uid: (uid_source, uid).
 
-    판정 순서는 문서의 "판정 순서" 2~8 단계다. 읽기 오류(1단계)는 호출자가 다룬다.
-    cryptography 를 불러오지 못하면 ImportError 를 그대로 낸다(판정 불가).
+    판정 순서는 문서의 "판정 순서" 1~8 단계다. 512 바이트가 아니면(짧게 읽힘) 판정 불가다.
+    cryptography 를 불러오지 못하면 ImportError 를 그대로 낸다(이것도 판정 불가).
     """
     from cryptography.exceptions import InvalidSignature
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
     if len(blob) != RECORD_SIZE:
-        return CheckResult(STATUS_INVALID, "size")
+        return CheckResult(STATUS_UNDETERMINED, "size")
     if blob[:8] != MAGIC:
         return CheckResult(STATUS_ABSENT)
     _magic, version, key_id, _src, _len, _res = _HEADER.unpack_from(blob, 0)

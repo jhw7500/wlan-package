@@ -25,15 +25,16 @@
 | 41 | 1 | ieee_11ai | `0` 또는 `1` |
 | 42 | 1 | ieee_11k | `0` 또는 `1` |
 | 43 | 1 | ieee_11v | `0` 또는 `1` |
-| 44 | 4 | manufacture_date | 연 u16, 월 u8, 일 u8 |
-| 48 | 4 | shipment_date | 연 u16, 월 u8, 일 u8 |
-| 52 | 32 | hardware_version | 출력 가능한 ASCII 최대 31 자, 나머지 `0` |
-| 84 | 32 | serial_number | 출력 가능한 ASCII 최대 31 자, 나머지 `0` |
+| 44 | 4 | manufacture_date | 연 u16, 월 u8, 일 u8 (1970~9999 년의 실제 날짜) |
+| 48 | 4 | shipment_date | 연 u16, 월 u8, 일 u8 (1970~9999 년의 실제 날짜) |
+| 52 | 32 | hardware_version | 출력 가능한 ASCII 에서 `"`·`\` 를 뺀 문자 최대 31 자, 나머지 `0` |
+| 84 | 32 | serial_number | 출력 가능한 ASCII 에서 `"`·`\` 를 뺀 문자 최대 31 자, 나머지 `0` |
 | 116 | 332 | reserved | 모두 `0` |
 | 448 | 64 | signature | 오프셋 0~447 에 대한 Ed25519 서명 |
 
 - 예약 바이트와 패딩도 서명 범위에 들어간다. 나중 버전이 예약 영역에 필드를 더할 수 있도록, v1 은 예약 바이트가 0 이 아니면 무효로 본다.
 - 문자열 필드는 첫 `0` 뒤가 모두 `0` 이어야 한다. 31 자 제한은 opcd 의 32 바이트 C 문자열(`OPC_VERSION_FIELD_LEN`, `OPC_SERIAL_FIELD_LEN`)에 맞춘 것이다.
+- `"`·`\` 와 1970 년 이전 날짜를 받지 않는 것은 opcd 가 읽는 범위에 맞춘 것이다. opcd 의 JSON 문자열 읽기(`wlan-opc/opcd/json_util.c` `copy_quoted_value`)는 첫 `"` 에서 멈추고 이스케이프를 풀지 않으며, 날짜 읽기(`inventory.c` `parse_date`)는 1970~9999 년만 받는다. 시험은 opcd 로더를 실제로 컴파일해, v1 이 허용하는 모든 문자와 날짜 경계가 그대로 읽히는지 확인한다.
 - 날짜와 필드 폭은 opcd `inventory.h` 와 같다(`vendor_code` 32비트, `product_code`·`product_subcode` 16비트, IEEE 플래그 8비트, `opc_date_t`).
 
 ### uid_source
@@ -48,12 +49,12 @@ sysfs `/sys/devices/soc0/serial_number` 는 이 가운데 두 워드만 이은 �
 
 장치는 boot1 의 앞 512 바이트를 읽어 다음 순서로 판정한다. 앞 단계에서 결론이 나면 멈춘다.
 
-1. 512 바이트를 읽지 못하면 **판정 불가**다(읽기 오류). 기존 `device_info.json` 을 바꾸지 않는다.
+1. 512 바이트를 읽지 못하면(읽기 오류, 짧게 읽힘) **판정 불가**다. 기존 `device_info.json` 을 바꾸지 않는다.
 2. magic 이 `CTSDINFO` 가 아니면 **없음**이다(빈 영역 `0x00`·`0xFF` 포함).
 3. format_version 이 `1` 이 아니면 **무효**다.
 4. key_id 가 장치의 공개키 목록에 없으면 **모르는 키**다. 무효와 로그를 구분한다(키 교체 뒤 패키지가 늦은 경우를 가려내기 위해서다).
 5. 서명이 맞지 않으면 **무효**다.
-6. 예약 바이트, uid_len·uid 패딩, IEEE 플래그, 날짜, 문자열 구조가 규칙에 어긋나면 **무효**다.
+6. 예약 바이트, uid_len·uid 패딩, IEEE 플래그, 날짜(1970~9999 년), 문자열 구조(`"`·`\` 금지 포함)가 규칙에 어긋나면 **무효**다.
 7. uid_source 와 uid 가 장치에서 읽은 값과 다르면 **무효**다. 로그에 양쪽 값을 남긴다.
 8. 여기까지 통과하면 **유효**다.
 
@@ -79,7 +80,7 @@ sysfs `/sys/devices/soc0/serial_number` 는 이 가운데 두 워드만 이은 �
 | `ieee_11r`, `ieee_11ai`, `ieee_11k`, `ieee_11v` | 정수 `0`/`1` |
 | `source` | `"boot1-record"`(레코드에서 만든 파일이라는 표식) |
 
-opcd(`wlan-opc/opcd/inventory.c`)와 SNMP(`wifi_snmp_pp.py`)는 이 형식을 이미 읽는다. `source` 키는 둘 다 무시한다.
+opcd(`wlan-opc/opcd/inventory.c`)와 SNMP(`wifi_snmp_pp.py`)는 v1 이 유효로 보는 값 범위에서 이 형식을 그대로 읽는다. `source` 키는 둘 다 무시한다.
 
 ## 키 관리
 
