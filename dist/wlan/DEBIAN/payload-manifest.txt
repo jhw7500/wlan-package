@@ -247,6 +247,7 @@ usr/local/scripts/cap.sh
 usr/local/scripts/change_line.sh
 usr/local/scripts/chk_mmc.sh
 usr/local/scripts/comment_line.sh
+usr/local/scripts/devinfo_record.py
 usr/local/scripts/diag-9098-11ax.sh
 usr/local/scripts/emmc_fdisk.sh
 usr/local/scripts/eth_mac_get.sh

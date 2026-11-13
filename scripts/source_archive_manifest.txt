@@ -325,6 +325,7 @@ dist/wlan/usr/local/scripts/cap.sh
 dist/wlan/usr/local/scripts/change_line.sh
 dist/wlan/usr/local/scripts/chk_mmc.sh
 dist/wlan/usr/local/scripts/comment_line.sh
+dist/wlan/usr/local/scripts/devinfo_record.py
 dist/wlan/usr/local/scripts/diag-9098-11ax.sh
 dist/wlan/usr/local/scripts/emmc_fdisk.sh
 dist/wlan/usr/local/scripts/emmc_test.sh
@@ -350,6 +351,7 @@ dist/wlan/usr/local/scripts/tests/test_admin_ssh_deny.py
 dist/wlan/usr/local/scripts/tests/test_apply_enabled_ntp.py
 dist/wlan/usr/local/scripts/tests/test_apply_enabled_partof_stop.py
 dist/wlan/usr/local/scripts/tests/test_arping_eth0_unmanaged.py
+dist/wlan/usr/local/scripts/tests/test_devinfo_record.py
 dist/wlan/usr/local/scripts/tests/test_fake_hwclock.sh
 dist/wlan/usr/local/scripts/tests/test_ftpcmd_reply_contract.py
 dist/wlan/usr/local/scripts/tests/test_ftpcmd_start_log.py
@@ -561,6 +563,7 @@ dist/wlan/usr/local/wlan-bridge/wbridge/wifi_bridge@.service
 dist/wlan/usr/share/doc/wlan-proc/nxp-imx-firmware/LICENSE.txt
 dist/wlan/usr/share/doc/wlan-proc/nxp-imx-firmware/SCR-imx-firmware.txt
 dist/wlan/usr/share/doc/wlan-proc/nxp-imx-firmware/firmware-source.json
+docs/devinfo_record_format.md
 docs/ftp_quote_protocol.md
 docs/ftp_quote_protocol_distribution.md
 docs/wifi_init_conf.schema.json
