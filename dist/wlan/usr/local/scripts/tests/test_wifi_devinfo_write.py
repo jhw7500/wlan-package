@@ -90,8 +90,9 @@ class Dev:
         return self.root_disk_name
 
     def _flush(self, path):
-        self.calls.append(("flush", self.force_ro.read_text().strip()))
-        if self.corrupt_on_flush:
+        state = self.force_ro.read_text().strip()
+        self.calls.append(("flush", state))
+        if self.corrupt_on_flush and state == "0":     # 쓰기 직후의 되읽기만 어긋나게 한다
             data = bytearray(Path(path).read_bytes())
             data[100] ^= 0xFF
             Path(path).write_bytes(bytes(data))
@@ -155,7 +156,7 @@ def test_same_record_skips_the_write_but_still_applies(dev):
     dev.calls.clear()
     dev.out.clear()
     assert dev.write(blob) == ww.EXIT_OK
-    assert not any(isinstance(c, tuple) and c[0] == "flush" for c in dev.calls)   # 쓰지 않았다
+    assert ("flush", "0") not in dev.calls                                        # 쓰지 않았다
     assert json.loads(dev.info.read_text()) == dr.device_info_json(values())       # 그래도 반영
     assert "opcd" in dev.calls
     assert "result=unchanged" in dev.out
@@ -186,7 +187,7 @@ def test_replace_works_over_a_record_the_device_no_longer_trusts(dev):
 def _untouched(dev, before):
     assert dev.boot1.read_bytes() == before
     assert dev.force_ro.read_text().strip() == "1"
-    assert not any(isinstance(c, tuple) and c[0] == "flush" for c in dev.calls)
+    assert ("flush", "0") not in dev.calls      # force_ro 를 푼 적이 없다(쓰지 않았다)
 
 
 @pytest.mark.parametrize("blob", [
@@ -401,3 +402,139 @@ def test_writer_script_and_test_are_in_the_manifests():
     assert "usr/local/scripts/wifi_devinfo_write.py" in payload
     assert "dist/wlan/usr/local/scripts/wifi_devinfo_write.py" in source
     assert "dist/wlan/usr/local/scripts/tests/test_wifi_devinfo_write.py" in source
+
+
+# --- 독립 검토 지적(39d2d45) -------------------------------------------------------
+
+def test_retry_after_failed_write_reads_the_medium_not_the_cache(dev, monkeypatch):
+    # 첫 실행: pwrite 가 페이지 캐시에는 새 내용을 남기고 EIO 로 실패한다(매체는 옛 내용 그대로).
+    # 재시도는 캐시를 비운 뒤 읽어 "같은 레코드"로 착각하지 않고 다시 써야 한다.
+    blob = record()
+    medium = {"data": dev.boot1.read_bytes()}
+    real_pwrite = os.pwrite
+
+    def cached_then_eio(fd, data, offset):
+        real_pwrite(fd, data, offset)
+        raise OSError(5, "I/O error")
+
+    def drop_cache(path):
+        dev.calls.append(("flush", dev.force_ro.read_text().strip()))
+        if medium["data"] is not None:
+            Path(path).write_bytes(medium["data"])
+
+    def medium_write(fd, data, offset):
+        n = real_pwrite(fd, data, offset)
+        medium["data"] = None          # 이번에는 매체까지 갔다
+        return n
+
+    dev._flush = drop_cache
+    monkeypatch.setattr(os, "pwrite", cached_then_eio)
+    assert dev.write(blob) == ww.EXIT_WRITE_FAILED
+    monkeypatch.setattr(os, "pwrite", medium_write)
+    dev.out.clear()
+    assert dev.write(blob) == ww.EXIT_OK
+    assert "result=written" in dev.out
+    assert dev.head() == blob
+
+
+def test_force_ro_restored_when_clearing_it_fails_midway(dev, monkeypatch):
+    # force_ro=0 을 쓴 뒤 확인이 실패해도 1 로 되돌린다(해제가 try 안에 있어야 한다).
+    real = ww._read_force_ro
+    state = {"first": True}
+
+    def flaky(path):
+        if state["first"]:
+            state["first"] = False
+            raise OSError("sysfs read failed")
+        return real(path)
+
+    monkeypatch.setattr(ww, "_read_force_ro", flaky)
+    assert dev.write(record()) == ww.EXIT_WRITE_FAILED
+    assert dev.force_ro.read_text().strip() == "1"
+
+
+def test_terminating_signals_are_blocked_while_force_ro_is_cleared(dev):
+    seen = {}
+
+    def probe(path):
+        seen["mask"] = signal.pthread_sigmask(signal.SIG_BLOCK, [])
+        dev.calls.append(("flush", dev.force_ro.read_text().strip()))
+
+    dev._flush = probe
+    assert dev.write(record()) == ww.EXIT_OK
+    assert {signal.SIGHUP, signal.SIGTERM} <= set(seen["mask"])
+    assert not {signal.SIGHUP, signal.SIGTERM} & set(signal.pthread_sigmask(signal.SIG_BLOCK, []))
+
+
+def test_unchanged_record_restores_a_force_ro_left_at_0(dev):
+    blob = record()
+    dev.write(blob)
+    dev.force_ro.write_text("0\n")      # 앞 실행이 비정상 종료로 남긴 상태
+    dev.out.clear()
+    assert dev.write(blob) == ww.EXIT_OK
+    assert "result=unchanged" in dev.out
+    assert dev.force_ro.read_text().strip() == "1"
+
+
+def test_opcd_is_restarted_once_after_the_lock_is_released(dev):
+    lock_free = []
+
+    def opcd():
+        fd = os.open(dev.lock, os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock_free.append(True)
+        except BlockingIOError:
+            lock_free.append(False)
+        finally:
+            os.close(fd)
+        return True, 0
+
+    dev._opcd = opcd
+    assert dev.write(record()) == ww.EXIT_OK
+    assert lock_free == [True]
+
+
+def test_broken_output_does_not_skip_the_apply_step(dev):
+    def broken(line):
+        raise BrokenPipeError(32, "Broken pipe")
+
+    rec = dev.root / "record.bin"
+    rec.write_bytes(record())
+    rc = ww.cmd_write(str(rec), False, dev.target(), out=broken, log=broken)
+    assert rc == ww.EXIT_OK
+    assert json.loads(dev.info.read_text()) == dr.device_info_json(values())
+    assert "opcd" in dev.calls
+
+
+def test_unusable_lock_file_is_undetermined(dev):
+    dev.lock = dev.root / "missing-dir" / "wifi_devinfo.lock"
+    before = dev.boot1.read_bytes()
+    assert dev.write(record()) == ww.EXIT_UNDETERMINED
+    _untouched(dev, before)
+
+
+def _fake_sys(tmp_path, *, partition):
+    disk = tmp_path / "sys/devices/platform/soc/mmc0/block/mmcblk0"
+    node = disk / "mmcblk0p2" if partition else disk
+    node.mkdir(parents=True)
+    if partition:
+        (node / "partition").write_text("2\n")
+    link = tmp_path / "sys/dev/block/179:2"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(os.path.relpath(node, link.parent))
+    return str(tmp_path / "sys")
+
+
+def test_root_disk_resolves_a_partition_to_its_disk(tmp_path):
+    assert ww._root_disk(sys_root=_fake_sys(tmp_path, partition=True), st_dev=os.makedev(179, 2)) == "mmcblk0"
+
+
+def test_root_disk_keeps_a_whole_disk_name(tmp_path):
+    assert ww._root_disk(sys_root=_fake_sys(tmp_path, partition=False), st_dev=os.makedev(179, 2)) == "mmcblk0"
+
+
+def test_root_disk_without_sysfs_node_raises(tmp_path):
+    (tmp_path / "sys/dev/block").mkdir(parents=True)
+    with pytest.raises(OSError):
+        ww._root_disk(sys_root=str(tmp_path / "sys"), st_dev=os.makedev(0, 999))

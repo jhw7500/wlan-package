@@ -17,6 +17,7 @@ force_ro 를 건드리지 않는다.
    값과 같은지 확인한 뒤 opcd 가 active 면 try-restart 한다(opcd 는 시작할 때 한 번 읽는다).
 """
 import argparse
+import contextlib
 import dataclasses
 import fcntl
 import json
@@ -48,6 +49,7 @@ BLKFLSBUF = 0x1261  # <linux/fs.h> _IO(0x12, 97): 블록 장치 버퍼 캐시를
 BOOT_PARTITION_1 = 1
 _PARTITION_CONFIG = re.compile(r"\[PARTITION_CONFIG: 0x([0-9a-fA-F]{2})\]")
 _EMPTY = (bytes(dr.RECORD_SIZE), b"\xff" * dr.RECORD_SIZE)
+_TERMINATING = {signal.SIGHUP, signal.SIGTERM}
 
 
 class Stop(Exception):
@@ -58,10 +60,13 @@ class Stop(Exception):
         self.code = code
 
 
-def _root_disk():
-    """루트FS 가 있는 디스크 이름(예: mmcblk0)."""
-    st = os.stat("/")
-    node = os.path.realpath(f"/sys/dev/block/{os.major(st.st_dev)}:{os.minor(st.st_dev)}")
+def _root_disk(sys_root="/sys", st_dev=None):
+    """루트FS 가 있는 디스크 이름(예: mmcblk0). sysfs 노드가 없으면 OSError(확인 불가)."""
+    if st_dev is None:
+        st_dev = os.stat("/").st_dev
+    node = os.path.realpath(os.path.join(sys_root, "dev/block", f"{os.major(st_dev)}:{os.minor(st_dev)}"))
+    if not os.path.isdir(node):
+        raise OSError(f"루트FS 블록 장치의 sysfs 노드가 없다({node})")
     if os.path.exists(os.path.join(node, "partition")):
         node = os.path.dirname(node)
     return os.path.basename(node)
@@ -131,21 +136,37 @@ def _read_head(path):
 
 
 def _write_record(target, blob):
-    _set_force_ro(target.force_ro, "0")
+    # force_ro 를 푼 동안에는 SIGHUP·SIGTERM 을 막아 두었다가, 1 로 되돌린 뒤에 처리한다(SSH 단절,
+    # 두 번째 시그널에도 복원을 건너뛰지 않는다). 해제도 try 안에서 해 확인이 실패해도 되돌린다.
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, _TERMINATING)
     try:
-        fd = os.open(target.record_device, os.O_WRONLY | os.O_SYNC | os.O_CLOEXEC)
         try:
-            written = os.pwrite(fd, blob, 0)
-            if written != len(blob):
-                raise OSError(f"짧게 썼다({written} 바이트)")
-            os.fsync(fd)
+            _set_force_ro(target.force_ro, "0")
+            fd = os.open(target.record_device, os.O_WRONLY | os.O_SYNC | os.O_CLOEXEC)
+            try:
+                written = os.pwrite(fd, blob, 0)
+                if written != len(blob):
+                    raise OSError(f"짧게 썼다({written} 바이트)")
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            target.flush(target.record_device)
+            if _read_head(target.record_device) != blob:
+                raise OSError("되읽은 512 바이트가 쓴 내용과 다르다")
         finally:
-            os.close(fd)
-        target.flush(target.record_device)
-        if _read_head(target.record_device) != blob:
-            raise OSError("되읽은 512 바이트가 쓴 내용과 다르다")
+            _set_force_ro(target.force_ro, "1")
     finally:
-        _set_force_ro(target.force_ro, "1")
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
+def _ensure_force_ro(target, log):
+    """앞 실행이 비정상 종료로 force_ro=0 을 남겼으면 1 로 되돌린다(같은 레코드라 쓰지 않은 경우 포함)."""
+    try:
+        if _read_force_ro(target.force_ro) != "1":
+            log("force_ro 가 0 으로 남아 있어 1 로 되돌린다")
+            _set_force_ro(target.force_ro, "1")
+    except OSError as exc:
+        raise Stop(EXIT_WRITE_FAILED, f"force_ro 를 1 로 되돌리지 못했다: {exc}") from exc
 
 
 def _uid_reader(target):
@@ -181,6 +202,8 @@ def _write_steps(blob, replace, target, out, log):
         raise Stop(EXIT_RECORD_INVALID, f"이 장치에서 유효한 레코드가 아니다: {result.status}{reason}")
     _check_target(target)
     try:
+        # 앞 실행의 실패한 쓰기가 페이지 캐시에 남았을 수 있다: 캐시를 비우고 매체를 읽는다.
+        target.flush(target.record_device)
         current = _read_head(target.record_device)
     except OSError as exc:
         raise Stop(EXIT_UNDETERMINED, f"boot1 을 읽지 못했다: {exc}") from exc
@@ -208,6 +231,7 @@ def _write_steps(blob, replace, target, out, log):
         except OSError as exc:
             raise Stop(EXIT_WRITE_FAILED, f"boot1 기록 실패: {exc}") from exc
         log(f"boot1 에 기록했다({target.record_device})")
+    _ensure_force_ro(target, log)
 
     if wd.run(target.record_device, target.info_path, uid_path=target.uid_path,
               public_keys=target.public_keys, log=log) != 0:
@@ -219,14 +243,20 @@ def _write_steps(blob, replace, target, out, log):
         raise Stop(EXIT_APPLY_FAILED, f"반영한 파일을 읽지 못했다: {exc}") from exc
     if applied != dr.device_info_json(result.record.values):
         raise Stop(EXIT_APPLY_FAILED, f"{target.info_path} 가 레코드 값과 다르다")
-    active, rc = target.opcd()
-    if active and rc != 0:
-        raise Stop(EXIT_APPLY_FAILED, f"opcd 재시작 실패(rc {rc}): GetDeviceInfo 가 이전 값일 수 있다")
-    out(f"result={action}")
-    return EXIT_OK
+    return action
+
+
+def _quiet(fn):
+    def call(line):
+        try:
+            fn(line)
+        except OSError:
+            pass  # SSH 가 끊겨 출력이 실패해도(EPIPE) 기록·반영은 끝까지 한다
+    return call
 
 
 def cmd_write(record_path, replace, target, *, out, log):
+    out, log = _quiet(out), _quiet(log)
     try:
         with open(record_path, "rb") as f:
             blob = f.read(dr.RECORD_SIZE + 1)
@@ -236,11 +266,24 @@ def cmd_write(record_path, replace, target, *, out, log):
     try:
         if len(blob) != dr.RECORD_SIZE:
             raise Stop(EXIT_RECORD_INVALID, f"레코드는 {dr.RECORD_SIZE} 바이트여야 한다")
+        with contextlib.ExitStack() as stack:
+            try:
+                stack.enter_context(wd.locked(target.lock_path, blocking=False))
+            except BlockingIOError as exc:
+                raise Stop(EXIT_BUSY, f"다른 기록·판정이 진행 중이다({target.lock_path})") from exc
+            except OSError as exc:
+                raise Stop(EXIT_UNDETERMINED, f"잠금 파일을 쓸 수 없다({target.lock_path}: {exc})") from exc
+            action = _write_steps(blob, replace, target, out, log)
+        # opcd 재시작은 잠금을 푼 뒤에 한다. wifi_devinfo.service 가 Before=opcd.service 라, 잠금을
+        # 기다리는 서비스 시작 작업이 큐에 있으면 opcd 시작이 그 작업을 기다려 서로 멈출 수 있다.
         try:
-            with wd.locked(target.lock_path, blocking=False):
-                return _write_steps(blob, replace, target, out, log)
-        except BlockingIOError as exc:
-            raise Stop(EXIT_BUSY, f"다른 기록·판정이 진행 중이다({target.lock_path})") from exc
+            active, rc = target.opcd()
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise Stop(EXIT_APPLY_FAILED, f"opcd 재시작을 확인하지 못했다: {exc}") from exc
+        if active and rc != 0:
+            raise Stop(EXIT_APPLY_FAILED, f"opcd 재시작 실패(rc {rc}): GetDeviceInfo 가 이전 값일 수 있다")
+        out(f"result={action}")
+        return EXIT_OK
     except Stop as stop:
         log(str(stop))
         return stop.code

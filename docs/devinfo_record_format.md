@@ -104,13 +104,13 @@ opcd(`wlan-opc/opcd/inventory.c`)와 SNMP(`wifi_snmp_pp.py`)는 v1 이 유효로
   1. 레코드가 이 장치의 공개키·UID 로 유효한지 본다.
   2. 루트FS 디스크가 `mmcblk0` 인지 본다.
   3. `mmc extcsd read /dev/mmcblk0` 의 `PARTITION_CONFIG` 가 정확히 한 번 나오고, 부트 파티션 값(bits 5:3)이 1 인지 본다. 1 은 Boot Partition 1, 곧 `mmcblk0boot0` 이다.
-  4. boot1 의 앞 512 B 를 본다.
+  4. 블록 캐시를 비운 뒤 boot1 의 앞 512 B 를 읽는다. 앞 실행의 실패한 쓰기가 캐시에만 남아 있어도 매체를 기준으로 판단하기 위해서다.
      - 전부 0x00 이거나 전부 0xFF 면 쓴다.
      - 같은 레코드면 쓰지 않는다.
      - magic 이 일치하는 다른 레코드면(판정 결과와 무관) `--replace` 가 있어야 쓰고, 이전 512 B 를 `previous=<hex>` 로 출력한다. 키를 바꾼 뒤 다시 기록하는 경우가 여기에 해당한다.
      - 그 밖이면 거부한다.
-  5. `force_ro` 를 0 으로 바꾼다 → O_SYNC 로 쓴다 → 블록 캐시를 비운다(BLKFLSBUF) → 되읽어 비교한다 → `force_ro` 를 1 로 되돌린다. 마지막 단계는 실패하거나 시그널을 받아도 한다.
-  6. 쓰기를 건너뛰었어도 서비스와 같은 판정으로 `device_info.json` 에 반영하고, 파일이 레코드 값과 같은지 확인한다. 그다음 opcd 가 active 면 try-restart 한다. 끝에 `result=written` 또는 `result=unchanged` 를 출력한다.
+  5. `force_ro` 를 0 으로 바꾼다 → O_SYNC 로 쓴다 → 블록 캐시를 비운다(BLKFLSBUF) → 되읽어 비교한다 → `force_ro` 를 1 로 되돌린다. 이 구간에는 SIGHUP·SIGTERM 을 막아 두었다가 되돌린 뒤에 처리하고, 중간에 실패해도 1 로 되돌린다. 쓰기를 건너뛴 경우에도, 앞 실행이 남긴 `force_ro=0` 이 있으면 1 로 되돌린다.
+  6. 쓰기를 건너뛰었어도 서비스와 같은 판정으로 `device_info.json` 에 반영하고, 파일이 레코드 값과 같은지 확인한다. 잠금을 푼 뒤 opcd 가 active 면 try-restart 한다(잠금을 쥔 채 재시작하면 `Before=opcd.service` 순서 때문에 서비스 시작 작업과 서로 기다릴 수 있다). 끝에 `result=written` 또는 `result=unchanged` 를 출력한다. 출력이 실패해도(SSH 단절) 기록과 반영은 끝까지 한다.
 
 | 종료 코드 | 이름 | 뜻 |
 |---:|---|---|
@@ -122,7 +122,7 @@ opcd(`wlan-opc/opcd/inventory.c`)와 SNMP(`wifi_snmp_pp.py`)는 v1 이 유효로
 | 6 | `EXIT_WRITE_FAILED` | 쓰기, 되읽기, `force_ro` 복원 가운데 하나가 실패했다 |
 | 7 | `EXIT_APPLY_FAILED` | boot1 기록은 끝났지만 `device_info.json` 반영이나 opcd 재시작이 실패했다 |
 | 8 | `EXIT_BUSY` | 다른 기록이나 판정이 잠금을 쥐고 있다 |
-| 9 | `EXIT_UNDETERMINED` | 확인할 수 없다(UID·EXT_CSD·boot1 을 읽지 못함, `mmc`·`cryptography` 없음) |
+| 9 | `EXIT_UNDETERMINED` | 확인할 수 없다(UID·EXT_CSD·boot1·루트FS 장치를 읽지 못함, 잠금 파일을 못 씀, `mmc`·`cryptography` 없음) |
 
 SIGHUP 이나 SIGTERM 으로 멈추면 128 + 시그널 번호로 끝나고, 이때도 `force_ro` 를 1 로 되돌린다. `python3-cryptography` 와 `mmc-utils` 는 패키지 Recommends 다. 없으면 서비스는 "판정 불가"로 두고, 기록 도구는 9 로 끝난다.
 
