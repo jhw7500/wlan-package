@@ -26,6 +26,7 @@ etc/systemd/system/wifi_arping@.service
 etc/systemd/system/wifi_bgscan@.service
 etc/systemd/system/wifi_capture@.service
 etc/systemd/system/wifi_checker@.service
+etc/systemd/system/wifi_devinfo.service
 etc/systemd/system/wifi_event@.service
 etc/systemd/system/wifi_init.service
 etc/systemd/system/wifi_lan_apply.service
@@ -287,6 +288,7 @@ usr/local/scripts/wifi_config.sh
 usr/local/scripts/wifi_config_backup.sh
 usr/local/scripts/wifi_connect_fallback_lib.sh
 usr/local/scripts/wifi_connect_raw.sh
+usr/local/scripts/wifi_devinfo.py
 usr/local/scripts/wifi_eth_peer_find.sh
 usr/local/scripts/wifi_eth_peer_route.sh
 usr/local/scripts/wifi_event.sh
