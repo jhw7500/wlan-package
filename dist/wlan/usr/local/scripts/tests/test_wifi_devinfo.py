@@ -395,9 +395,17 @@ def test_prerm_tears_the_unit_down():
     assert "disable_service_if_enabled wifi_devinfo\n" in text
 
 
-def test_control_depends_on_python3_cryptography():
-    line = next(l for l in (WLAN_ROOT / "DEBIAN/control").read_text().splitlines() if l.startswith("Depends:"))
-    assert "python3-cryptography" in [d.strip() for d in line.split(":", 1)[1].split(",")]
+def _control_field(name):
+    line = next(l for l in (WLAN_ROOT / "DEBIAN/control").read_text().splitlines() if l.startswith(f"{name}:"))
+    return [d.strip() for d in line.split(":", 1)[1].split(",")]
+
+
+def test_control_recommends_python3_cryptography_without_depending_on_it():
+    # Depends 로 두면 이 패키지가 없는 이미지(i.MX8MM 은 미확인)에서 업그레이드가 configure 단계에서
+    # 멈추고(iU), prerm upgrade 가 멈춘 브리지가 다시 올라오지 않는다. 서비스는 라이브러리가 없으면
+    # 판정 불가로 두고 파일을 바꾸지 않는다(test_undetermined_changes_nothing 의 crypto 경우).
+    assert "python3-cryptography" in _control_field("Recommends")
+    assert not any("python3-cryptography" in d for d in _control_field("Depends"))
 
 
 def _block(name):
