@@ -3,9 +3,21 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
-## Unreleased
+## 0.8.7 (2026-11-13)
 
-> 다음 릴리스에 묶일 변경이다. 릴리스 PR이 이 절을 버전 절로 바꾼다.
+> SemVer **patch** — imx93 무선 스택(드라이버 552.p22, 88W9098 FW 17.92.1.p149.159, wpa_supplicant)을 올리고 0.8.6 이후 수정(#456~#482)을 묶는다.
+
+**업그레이드 때 달라지는 것**
+- `wifi log reset`이 전체 초기화로 바뀐다(#462). 회전본·압축본, journald 날짜별 스냅샷, `err/` 파일까지 지운다. 종전처럼 현재 파일만 비우려면 `wifi log clear today`를 쓴다.
+- 패키지가 싣던 `/etc/rsyslog.d/10-udp-out.conf`(전송 줄이 모두 주석)가 빠지고 업그레이드 때 지워진다(#482). wpa.log 원격 전송은 FTP `quote wconfig`의 `LOG_FUNC`·`LOG_SERVER`로 켜며, UDP라 서버나 무선 경로가 끊긴 동안의 줄은 사라진다.
+- postinst가 업그레이드·재설치 때 시간대를 `Asia/Seoul`로 덮어쓰지 않는다(#464). 최초 설치와 공장 초기화만 `Asia/Seoul`로 둔다.
+- **설치 뒤에는 재부팅한다.** 드라이버·FW·wpa_supplicant는 설치 때 파일만 바뀌고, 실행 중인 것은 그대로다. 재부팅하면 칩이 리셋되어 새 FW를 내려받는다. 재부팅 대신 `wifi_init`만 재시작하면 새 드라이버(552.p22)가 아직 돌고 있는 이전 FW(p149.115)에 붙는다. 그러면 FW 초기화에 실패하고(`Firmware Init Failed`, mlan0 없음), `wifi_checker`의 재부팅 정책이 약 1분 뒤 재부팅해 복구한다(보드 실측). 적용은 `/sys/module/moal/srcversion`이 `346707AE542F054C95411FA`이고 `mlanutl mlan0 version`이 `17.92.1.p149.159`를 보이는지로 확인한다.
+
+- **imx93 드라이버 552.p22**(wlan-driver-v2 `21427ad`, SemVer patch): `mlan_imx93.ko`·`moal_imx93.ko`를 543.p18에서 552.p22로 올린다. wlan-driver-v2 PR #122(NXP 552.p22 갱신과 심사 결함 수정)와 #124(수신·TDLS 속도 단위, HE GI·CFP 전력표 응답 수정)가 머지된 `origin/ported` 커밋이다. srcversion은 mlan `85407268EE457EA142491CC`, moal `346707AE542F054C95411FA`이다. `DRIVER_MANIFEST.md`·`DRIVER_COMPONENTS.sha256`을 `scripts/gen_driver_manifest.sh --write`로 다시 만들었다. 출처는 GitHub 정본에서 받은 21427ad 클린 재빌드이고, 재빌드한 두 모듈은 싣는 파일과 바이트까지 같다. `debug/`의 비스트립 모듈도 같은 빌드로 맞췄다(0.8.6까지는 405.p61 사본이 남아 있었다).
+- **`mlanutl_imx93`**: 21427ad의 정본 빌드(`make_for_imx93.sh mlanutl`)로 바꿨다. 0.8.6(220496b1) 대비 소스 변경은 `mlanutl.c`의 세 가지 수정뿐이다: netlink 번호를 읽는 루프가 `fgets` 실패에서 멈추고, 명령 이름을 그 길이만큼만 복사하고, 프레임 헤더 포인터를 버퍼 할당 뒤에 잡는다. 빌드 플래그도 같아 명령 구성은 그대로다.
+- **88W9098 FW 17.92.1.p149.159**: NXP imx-firmware `90b39424`의 v1 이미지 셋을 싣는다. `sd9098_wlan_v1.bin`은 p149.115에서, `sduart9098_combo_v1.bin`은 p149.81에서 p149.159로 바뀐다. `uart9098_bt_v1.bin`은 FP26 17.26.1.p149.81에서 FP92 17.92.1.p149.159로 바뀐다. BT가 꺼져 있으면 WLAN 전용 이미지를, 켜져 있으면 combo 이미지를 읽는다(`wifi.sh`). 보드 시험은 WLAN 전용 경로만 했고 combo·UART BT 이미지는 하지 않았다. 동봉 라이선스는 같은 커밋의 `LICENSE.txt`(v64.2, Vector 소프트웨어 조항 추가)이고 `SCR-imx-firmware.txt`는 그대로다. `firmware-source.json`은 세 이미지의 출처·Git blob·크기·SHA-256·버전을 적는다. 릴리스 게이트의 FW·라이선스·출처 문서 해시 고정값을 맞췄다.
+- **wpa_supplicant·wpa_cli(imx93)**: jhw7500/wpa-supplicant `f24b0fc`(v2.12 기반)로 다시 빌드한 바이너리로 바꿨다. 보드 시험한 빌드와 비교하면 적재 섹션은 build-id만 다르다. `wpa_cli`는 0.8.6과도 build-id만 다르다.
+- **보드 시험**(i.MX93 보드 1, 0.8.6 공식 deb에서 0.8.7 공식 deb로 업그레이드한 뒤 재부팅): 실행 중인 드라이버·FW·wpa_supplicant가 새 것인지 확인했다. 연결·재연결, 로거, radio.log, antcfgnss 검증, rate_adapt, mcstiercfg, txpwrlimit hostcmd 읽기, netmon(552 형식), FTP `quote wconfig`, `ftp_quote_verify` 31/31을 시험했다. 같은 deb를 다시 설치해도 설정 6항목(시간대 포함)이 그대로였다. combo·UART BT 이미지와 i.MX8은 시험하지 않았다.
 
 - **`rate_adapt.interval_ms` 범위**(#461, SemVer patch): `wifi_fw_validate_rate_config`와 `wifi <iface> rate`가 SR 모드(`mode: 1`)의 `interval_ms`를 드라이버가 받는 100~655350 ms(10 ms 배수)로 검증한다. 펌웨어 주기는 10 ms 단위이고 moal `rate_adapt_cfg`는 SR 모드에서 10 미만·0xffff 초과를 거부하는데, 종전 검증은 양수·10 배수만 봐서 `10` 같은 값이 저장·부팅 검증을 통과했고 SET 거부로 임계값까지 섹션 전체가 FW 기본값으로 남았다. 이제 `wifi <iface> rate`는 설정을 바꾸지 않고 허용 범위를 알리며 실패한다. legacy(`mode: 0`)는 드라이버가 임계값·주기를 검사하지도 쓰지도 않으므로 종전 규칙(양수·10 ms 배수)을 그대로 둔다. SR 모드에 이미 범위 밖 값이 저장된 장치는 업그레이드 뒤에도 값이 남지만(postinst `json_merge`는 기존 값을 보존), 부팅 검증이 `invalid/partial rate_adapt section; skip entire section`을 남기고 섹션을 건너뛰어 원인이 로그에 드러난다. 스키마(`minimum: 100`, `maximum: 655350` — SR 기준의 UI 안내로 두 모드에 같이 걸린다), 가이드, Web UI 인계 문서, 템플릿 주석을 고쳤다.
 - **테스트**: `wifi_fw_config_test.sh`에 SR 경계값 시험(10·90·655360 거부, 100·655350 허용), legacy 시험(10·90·655360 허용, 0·105 거부, 주기 10 ms 섹션의 부팅 SET), `wifi mlan0 rate 1 40 65 10` 거부와 `wifi mlan0 rate 0 40 65 10` 저장을 실제로 실행하는 시험을 추가했다.

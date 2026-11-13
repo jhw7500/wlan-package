@@ -1,14 +1,36 @@
 {
-  "component": "NXP 88W9098 SDIO WLAN firmware",
-  "installed_path": "/usr/lib/firmware/cts/sd9098_wlan_v1.bin",
+  "component": "NXP 88W9098 SDIO/UART v1 production firmware",
   "upstream_repository": "https://github.com/nxp-imx/imx-firmware",
-  "upstream_ref": "lf-6.18.20_2.0.0",
-  "upstream_commit": "cc78ca8b1ee28ff741bcc160246f61b008f6c89f",
-  "upstream_path": "FwImage_9098_SD/sd9098_wlan_v1.bin",
-  "git_blob": "3fb819705df1b6cac54ce554951bae19e6f2ddec",
-  "size": 659428,
-  "sha256": "7c3ef6e12d3cfc9bd638d1571ccf6ddd2e96e0ed179ec70664ccb1df0ba29e57",
-  "firmware_version": "17.92.1.p149.115",
+  "upstream_commit": "90b39424a959ef1e26cc7af1f6acce2e236bc8d9",
   "license": "LA_OPT_NXP_Software_License - Production Use; Section 2.3 applies",
-  "scope": "SDIO WLAN-only production firmware. Other selectable PCIe, combo/BT, and manufacturing firmware variants are unchanged and are not claimed as p149.115."
+  "images": [
+    {
+      "installed_path": "/usr/lib/firmware/cts/sd9098_wlan_v1.bin",
+      "upstream_path": "FwImage_9098_SD/sd9098_wlan_v1.bin",
+      "git_blob": "a90900c79ee6b5837e4d4472a16c3625a6e0ff81",
+      "size": 659736,
+      "sha256": "a05ba158efb0262791a471b90c0e0e616316097ccf6e17f6a170778ee4758813",
+      "firmware_version": "17.92.1.p149.159",
+      "role": "SDIO WLAN-only firmware loaded when Bluetooth is disabled"
+    },
+    {
+      "installed_path": "/usr/lib/firmware/cts/sduart9098_combo_v1.bin",
+      "upstream_path": "FwImage_9098_SD/sduart9098_combo_v1.bin",
+      "git_blob": "ce4833baeae55bbf8a0984fb85ef64b57fbd39a4",
+      "size": 906132,
+      "sha256": "2bcc767065522cecf39afd5f5267462a169f300400b339afdb99736484a60b86",
+      "firmware_version": "17.92.1.p149.159",
+      "role": "SDIO WLAN + UART Bluetooth combo firmware selected when Bluetooth is enabled"
+    },
+    {
+      "installed_path": "/usr/lib/firmware/cts/uart9098_bt_v1.bin",
+      "upstream_path": "FwImage_9098_SD/uart9098_bt_v1.bin",
+      "git_blob": "1eecc6875d08b81d236f77822bac1c596d099c9b",
+      "size": 246380,
+      "sha256": "61701120c90f44aff6478550abe6e0d274e34b8532b2d3bc263441764d261c9a",
+      "firmware_version": "17.92.1.p149.159",
+      "role": "UART Bluetooth-only firmware; not selected by this package's WLAN scripts"
+    }
+  ],
+  "scope": "All three images come from the same upstream commit. Board validation covers the SDIO WLAN-only image; the combo and UART Bluetooth images are not board-validated by this package. PCIe, manufacturing, and non-v1 firmware files are unchanged and are not claimed as p149.159."
 }
