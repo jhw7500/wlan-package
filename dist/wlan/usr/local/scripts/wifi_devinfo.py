@@ -44,11 +44,9 @@ def _log(message):
 def _judge(record_path, public_keys, uid_path):
     with open(record_path, "rb") as f:
         blob = f.read(dr.RECORD_SIZE)
-    device_uid = None
-    if len(blob) == dr.RECORD_SIZE and blob[:len(dr.MAGIC)] == dr.MAGIC:
-        # UID 는 레코드가 있을 때만 읽는다(UID 출처가 없는 SoC 도 "없음"을 판정한다).
-        device_uid = dr.read_device_uid(DEVICE_UID_SOURCE, uid_path)
-    return dr.check(blob, public_keys, device_uid)
+    # UID 는 판정 7단계(UID 비교)에 이르렀을 때만 읽는다. UID 를 읽지 못하는 장치도 없음·무효·
+    # 모르는 키는 그대로 판정하고, 서명과 구조가 맞는 레코드만 판정 불가가 된다.
+    return dr.check(blob, public_keys, lambda: dr.read_device_uid(DEVICE_UID_SOURCE, uid_path))
 
 
 def _current(info_path):
@@ -68,6 +66,9 @@ def _is_marked(data):
 
 def _write_atomic(path, data):
     directory = os.path.dirname(path) or "."
+    # 패키지는 /usr/local/opc/etc 를 만들지 않는다(opcd 가 처음 뜰 때 0755 로 만든다). OPC 를 켠 적이
+    # 없거나 purge 뒤 재설치한 장치도 SNMP 가 읽을 파일을 쓰도록 같은 모드로 만든다.
+    os.makedirs(directory, mode=0o755, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=".device_info.", suffix=".tmp", dir=directory)
     try:
         with os.fdopen(fd, "w", encoding="ascii") as f:

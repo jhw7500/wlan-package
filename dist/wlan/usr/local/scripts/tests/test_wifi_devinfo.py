@@ -7,6 +7,7 @@ import datetime
 import json
 import os
 import stat
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -127,6 +128,23 @@ def test_valid_record_replaces_stale_marked_and_manual_files(board):
         assert json.loads(board.info.read_text()) == EXPECTED
 
 
+def test_valid_record_creates_missing_opc_etc_directory(board):
+    # 패키지는 /usr/local/opc/etc 를 만들지 않는다(opcd 가 처음 뜰 때 만든다). OPC 를 켠 적이 없는
+    # 장치나 purge 뒤 재설치한 장치에서도 SNMP 가 읽을 파일을 써야 한다.
+    board.etc.rmdir()
+    board.boot1.write_bytes(record())
+    assert board.run() == 0
+    assert json.loads(board.info.read_text()) == EXPECTED
+
+
+def test_valid_record_creates_missing_parent_directories(board, tmp_path):
+    board.boot1.write_bytes(record())
+    info = tmp_path / "opc" / "etc" / "device_info.json"
+    assert wd.run(str(board.boot1), str(info), uid_path=str(board.nvmem), public_keys=KEYS,
+                  log=board.logs.append) == 0
+    assert json.loads(info.read_text()) == EXPECTED
+
+
 def test_write_failure_keeps_existing_file_and_fails(board, monkeypatch):
     board.boot1.write_bytes(record())
     board.info.write_text(MANUAL)
@@ -204,6 +222,28 @@ def test_uid_mismatch_log_shows_both_values(board):
     board.boot1.write_bytes(record(uid=bytes(16)))
     board.run()
     assert UID.hex() in board.log_text() and bytes(16).hex() in board.log_text()
+
+
+def _resigned(offset, data):
+    payload = bytearray(record()[:dr.SIGNED_SIZE])
+    payload[offset:offset + len(data)] = data
+    return bytes(payload) + TEST_KEY.sign(bytes(payload))
+
+
+@pytest.mark.parametrize("make_blob, label", [
+    (lambda: record(key_id=2), "모르는 서명 키(key_id 2)"),
+    (lambda: _resigned(8, struct.pack("<H", 2)), "레코드 무효(version)"),
+    (_invalid_signature, "레코드 무효(signature)"),
+    (lambda: _resigned(13, b"\x01"), "레코드 무효(reserved)"),
+], ids=["unknown-key", "version", "signature", "structure"])
+def test_records_decided_before_the_uid_step_do_not_need_device_uid(board, make_blob, label):
+    # 판정 순서(문서): 3~6단계에서 결론이 나면 멈춘다. UID 를 읽지 못하는 장치도 이 레코드는 판정한다.
+    board.boot1.write_bytes(make_blob())
+    board.nvmem.unlink()
+    marked_file(board)
+    assert board.run() == 1
+    assert not board.info.exists()
+    assert label in board.log_text()
 
 
 def test_absent_record_does_not_need_device_uid(board):
@@ -367,10 +407,15 @@ def _block(name):
     return text.split(start, 1)[1].split(end, 1)[0]
 
 
-def test_postinst_applies_the_record_after_config_and_before_opcd_restart():
+def test_postinst_applies_the_record_before_anything_starts_opcd():
+    # wifi_services.sh start 는 enable 됐지만 멈춘 opcd 를 띄운다. opcd 는 시작할 때 한 번 읽으므로
+    # 그 전에 반영해야 하고, opcd-upgrade-restart 는 configure 진입 때 active 였던 opcd 만 재시작한다.
     text = POSTINST.read_text()
     block = text.index("  # >>> devinfo-apply\n")
-    assert text.index("  # <<< timesyncd-start\n") < block < text.index("  # >>> opcd-upgrade-restart\n")
+    starts = [i for i in range(len(text)) if text.startswith("/usr/local/scripts/wifi_services.sh start", i)]
+    assert starts and all(block < i for i in starts)
+    assert block < text.index("  # >>> opcd-upgrade-restart\n")
+    assert text.index("install_opcd_unit /usr/local/opc/opcd.service") < block
 
 
 def _run_block(tmp_path, *, device, script_rc):

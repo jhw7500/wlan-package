@@ -196,8 +196,11 @@ def _structure(payload):
 
 
 def check(blob, public_keys, device_uid):
-    """레코드를 판정한다. public_keys: {key_id: 32바이트 공개키}, device_uid: (uid_source, uid).
+    """레코드를 판정한다. public_keys: {key_id: 32바이트 공개키}.
 
+    device_uid 는 (uid_source, uid) 이거나, 그것을 돌려주는 인자 없는 함수다. 함수는 7단계(UID
+    비교)에 이르렀을 때만 부른다. 그래서 장치 UID 를 읽지 못해도 앞 단계에서 결론이 나는 레코드는
+    판정하고, 함수가 낸 예외(OSError 등)는 그대로 올린다(호출자는 "판정 불가"로 처리).
     판정 순서는 문서의 "판정 순서" 1~8 단계다. 512 바이트가 아니면(짧게 읽힘) 판정 불가다.
     cryptography 를 불러오지 못하면 ImportError 를 그대로 낸다(이것도 판정 불가).
     """
@@ -221,6 +224,8 @@ def check(blob, public_keys, device_uid):
     record, reason = _structure(payload)
     if record is None:
         return CheckResult(STATUS_INVALID, reason)
+    if callable(device_uid):
+        device_uid = device_uid()
     want_source, want_uid = device_uid
     if record.uid_source != want_source or record.uid != want_uid:
         return CheckResult(

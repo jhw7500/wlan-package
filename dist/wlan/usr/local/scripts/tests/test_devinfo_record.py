@@ -165,6 +165,40 @@ def test_uid_source_mismatch_is_invalid():
     assert result.reason.startswith("uid-mismatch")
 
 
+def test_check_reads_device_uid_only_at_the_uid_step():
+    calls = []
+
+    def uid():
+        calls.append(1)
+        return DEVICE_UID
+
+    assert dr.check(GOLDEN, KEYS, uid).status == dr.STATUS_VALID
+    assert calls == [1]
+
+    def must_not_read():
+        raise AssertionError("UID read before the UID step")
+
+    flipped = bytearray(GOLDEN)
+    flipped[500] ^= 1
+    for blob, keys, status in [
+        (bytes(512), KEYS, dr.STATUS_ABSENT),
+        (GOLDEN[:100], KEYS, dr.STATUS_UNDETERMINED),
+        (patched(8, struct.pack("<H", 2)), KEYS, dr.STATUS_INVALID),
+        (GOLDEN, {2: TEST_PUB}, dr.STATUS_UNKNOWN_KEY),
+        (bytes(flipped), KEYS, dr.STATUS_INVALID),
+        (patched(13, b"\x01"), KEYS, dr.STATUS_INVALID),
+    ]:
+        assert dr.check(blob, keys, must_not_read).status == status
+
+
+def test_check_propagates_uid_read_errors():
+    def unreadable():
+        raise OSError("uid: short read")
+
+    with pytest.raises(OSError):
+        dr.check(GOLDEN, KEYS, unreadable)
+
+
 def test_missing_cryptography_raises_instead_of_judging(monkeypatch):
     for name in [m for m in sys.modules if m == "cryptography" or m.startswith("cryptography.")]:
         monkeypatch.setitem(sys.modules, name, None)
