@@ -151,7 +151,7 @@ python3 scripts/factory/devinfo_issue.py --host <장치 주소> --key <개인키
    - `vhlctl login`(기본 비밀번호) → `device-info` 로 opcd 의 GetDeviceInfo 응답(스냅샷 `/dev/shm/opcd/device_info.json`)을 받아 11 필드와 result 0 을 본다.
    - opcd 가 `inactive`·`failed` 였으면 잠시 띄웠다가 멈춘다. `activating` 처럼 바뀌는 중이면 건드리지 않고 대조 실패(`opcd_state`)로 둔다.
    - 띄웠던 opcd 는 예외나 SIGHUP·SIGTERM(SSH 단절) 때도 멈춘다. 멈추지 못했으면 아무것도 지우지 않고 대조 실패(`opcd_restore`)로 둔다.
-   - 멈춘 뒤에는 opcd 가 시작하며 만드는 `/usr/local/opc/etc/temp`·`/home/admin/iplist.txt` 가운데 전에 없던 것만 지운다. 그 밖에 새로 생긴 이름은 지우지 않고 결과(`left`)에 남긴다. 예를 들어 opcd 가 받아들이지 않은 `iplist.txt` 를 보관하는 `iplist.txt.rejected` 가 그렇다.
+   - 멈춘 뒤에는 opcd 가 시작하며 만드는 `/usr/local/opc/etc/temp`·`/home/admin/iplist.txt`·`/usr/local/opc/etc/iplist.user.last`(고객 파일과 한 쌍으로 쓰는 기록) 가운데 전에 없던 것만 지운다. 그 밖에 새로 생긴 이름은 지우지 않고 결과(`left`)에 남기며, 도구가 로그로 보여 준다. 예를 들어 opcd 가 받아들이지 않은 `iplist.txt` 를 보관하는 `iplist.txt.rejected` 가 그렇다.
    - `/usr/local/opc/etc/password` 가 있으면 기본 비밀번호로 로그인할 수 없으므로 대조 실패로 본다.
    - 결과는 `verify` 행에 적는다.
 

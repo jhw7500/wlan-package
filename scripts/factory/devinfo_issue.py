@@ -62,8 +62,9 @@ import json, os, shutil, signal, subprocess
 INFO = "/usr/local/opc/etc/device_info.json"
 PASSWORD = "/usr/local/opc/etc/password"
 SNAP = "/dev/shm/opcd/device_info.json"
-# opcd 가 시작하며 만드는 것 가운데 이 스크립트가 지울 수 있는 것(전에 없던 경우만).
-RESIDUE = ("/usr/local/opc/etc/temp", "/home/admin/iplist.txt")
+# opcd 가 시작하며 만드는 것 가운데 이 스크립트가 지울 수 있는 것(전에 없던 경우만). iplist.user.last 는
+# opcd 가 고객 파일(/home/admin/iplist.txt)을 쓸 때 한 쌍으로 쓰는 기록이다(wlan-opc/opcd/handler.c).
+RESIDUE = ("/usr/local/opc/etc/temp", "/home/admin/iplist.txt", "/usr/local/opc/etc/iplist.user.last")
 WATCH = ("/usr/local/opc/etc", "/home/admin")
 VHL = ["/usr/local/opc/bin/vhlctl", "--host", "127.0.0.1", "--port", "50607", "--timeout", "10000"]
 
@@ -460,6 +461,8 @@ def _issue(args, ledger, runner, trusted, log, values, key, key_id, pub_sha):
         bad = _verify(verdict, values)
         if verdict.get("opcd_started"):
             log(f"opcd 를 잠시 띄웠다가 멈췄다(새로 생겨 지운 것: {verdict.get('removed')})")
+        if verdict.get("left"):
+            log(f"대조 중 장치에 새로 생겼지만 지우지 않은 것: {verdict.get('left')} — 장치에서 확인한다")
         ledger.append(dict(base, time_utc=_now(), phase="verify", verify="ok" if not bad else
                            "mismatch:" + "+".join(bad)))
         if bad:

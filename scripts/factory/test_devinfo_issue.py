@@ -469,6 +469,12 @@ def test_ssh_failure_is_a_device_error(env):
     assert not env.ledger.exists() or [r["phase"] for r in env.rows()] == []
 
 
+def test_files_left_on_the_device_are_shown_to_the_operator(tmp_path, monkeypatch):
+    env = Env(tmp_path, monkeypatch, device=FakeDevice(verify_extra={"left": ["/usr/local/opc/etc/iplist.txt"]}))
+    assert env.run() == di.EXIT_OK
+    assert any("/usr/local/opc/etc/iplist.txt" in line for line in env.logs)
+
+
 @pytest.mark.parametrize("override", [
     {"info_override": {"serial_number": "OTHER"}},
     {"snapshot_override": {"shipment_date": "2026-01-01"}},
@@ -515,7 +521,9 @@ case "$1" in
          echo active > "$FAKE_STATE"; mkdir -p "$FAKE_ETC/temp"; echo x > "$FAKE_ETC/temp/f"
          if [ -f "$FAKE_ADMIN/iplist.txt" ] && [ -n "$FAKE_REJECT" ]; then
              mv "$FAKE_ADMIN/iplist.txt" "$FAKE_ADMIN/iplist.txt.rejected"; echo default > "$FAKE_ADMIN/iplist.txt"
-         elif [ ! -f "$FAKE_ADMIN/iplist.txt" ]; then echo default > "$FAKE_ADMIN/iplist.txt"; fi
+             echo default > "$FAKE_ETC/iplist.user.last"
+         elif [ ! -f "$FAKE_ADMIN/iplist.txt" ]; then
+             echo default > "$FAKE_ADMIN/iplist.txt"; echo default > "$FAKE_ETC/iplist.user.last"; fi
          exit 0 ;;
   stop) [ -n "$FAKE_STOP_RC" ] && exit "$FAKE_STOP_RC"; echo inactive > "$FAKE_STATE"; exit 0 ;;
 esac
@@ -553,6 +561,7 @@ class LocalDevice:
                 '"/usr/local/opc/etc/password"': self.etc / "password",
                 '"/usr/local/opc/etc/temp"': self.etc / "temp",
                 '"/home/admin/iplist.txt"': self.admin / "iplist.txt",
+                '"/usr/local/opc/etc/iplist.user.last"': self.etc / "iplist.user.last",
                 '"/dev/shm/opcd/device_info.json"': self.shm / "device_info.json",
                 '"/usr/local/opc/etc"': self.etc, '"/home/admin"': self.admin,
                 '"/usr/local/opc/bin/vhlctl"': self.bin / "vhlctl"}
@@ -588,7 +597,8 @@ def test_verify_starts_a_stopped_opcd_and_removes_only_its_known_residue(tmp_pat
     assert out["opcd_stop_rc"] == 0 and out["opcd_state_after"] == "inactive" and dev.opcd() == "inactive"
     assert sorted(os.listdir(dev.etc)) == ["device_info.json", "keep.conf"]
     assert os.listdir(dev.admin) == ["keep.txt"]
-    assert sorted(out["removed"]) == sorted([str(dev.etc / "temp"), str(dev.admin / "iplist.txt")])
+    assert sorted(out["removed"]) == sorted([str(dev.etc / "temp"), str(dev.admin / "iplist.txt"),
+                                             str(dev.etc / "iplist.user.last")])
     assert out["left"] == []
     assert out["info"] == {"serial_number": "SN-0001"} and out["snapshot"]["serial_number"] == "SN-0001"
     assert out["password_file"] is False and out["device_info_rc"] == 0
@@ -616,6 +626,7 @@ def test_verify_keeps_a_file_opcd_set_aside_and_reports_it(tmp_path):
     assert (dev.admin / "iplist.txt.rejected").read_text() == "customer list"
     assert out["left"] == [str(dev.admin / "iplist.txt.rejected")]
     assert str(dev.admin / "iplist.txt") not in out["removed"]              # 전부터 있던 이름은 지우지 않는다
+    assert str(dev.etc / "iplist.user.last") in out["removed"]
 
 
 @needs_sh
@@ -644,6 +655,7 @@ def test_verify_keeps_files_when_opcd_could_not_be_stopped(tmp_path):
     out = dev.run(FAKE_STOP_RC="1")
     assert out["opcd_stop_rc"] == 1 and out["opcd_state_after"] == "active" and out["removed"] == []
     assert (dev.etc / "temp").exists() and (dev.admin / "iplist.txt").exists()
+    assert (dev.etc / "iplist.user.last").exists()
 
 
 @needs_sh
@@ -666,6 +678,7 @@ def test_verify_restores_opcd_when_interrupted(tmp_path, how):
         out = dev.run(expect_rc=1, FAKE_HUP="1")
     assert dev.opcd() == "inactive" and out["opcd_stop_rc"] == 0
     assert not (dev.etc / "temp").exists() and not (dev.admin / "iplist.txt").exists()
+    assert not (dev.etc / "iplist.user.last").exists()
 
 
 @needs_sh
