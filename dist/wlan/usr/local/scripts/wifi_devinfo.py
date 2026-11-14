@@ -2,8 +2,9 @@
 """부팅 때 eMMC boot1 의 출하 고정값 서명 레코드를 판정해 device_info.json 에 반영한다(#481).
 
 바이트 배치와 판정 순서의 정본은 docs/devinfo_record_format.md, 판정 구현은
-devinfo_record.py 다. 이 스크립트(wifi_devinfo.service)가 device_info.json 의 유일한
-기록 주체이고, 판정이 확정됐을 때만 파일을 바꾼다.
+devinfo_record.py 다. device_info.json 은 이 스크립트의 run() 을 거쳐서만 /run/wifi_devinfo.lock
+을 쥔 채 쓴다. 부팅 서비스(wifi_devinfo.service)와 postinst 는 main() 으로, 기록 도구
+(wifi_devinfo_write.py)는 잠금을 쥐고 run() 을 부른다. 판정이 확정됐을 때만 파일을 바꾼다.
 
 - 유효: 레코드 값으로 파일을 쓴다("source": "boot1-record" 표식). 내용이 같으면 쓰지 않는다.
 - 없음·무효·모르는 키: 표식 있는 파일만 지운다. 표식 없는 수동 파일은 그대로 두고

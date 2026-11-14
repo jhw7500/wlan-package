@@ -84,7 +84,7 @@ opcd(`wlan-opc/opcd/inventory.c`)와 SNMP(`wifi_snmp_pp.py`)는 v1 이 유효로
 
 ## 부팅 검증 서비스
 
-`wifi_devinfo.service`(oneshot, `dist/wlan/usr/local/scripts/wifi_devinfo.py`)가 부팅 때 opcd·snmpd 보다 먼저 판정하고, `device_info.json` 을 쓰는 곳은 이 서비스 하나다. 판정이 확정됐을 때만 파일을 바꾼다.
+`wifi_devinfo.service`(oneshot, `dist/wlan/usr/local/scripts/wifi_devinfo.py`)가 부팅 때 opcd·snmpd 보다 먼저 판정한다. `device_info.json` 은 이 스크립트의 판정(`run()`)을 거쳐서만, `/run/wifi_devinfo.lock` 을 쥔 채 쓴다. 이 판정을 부르는 곳은 부팅 서비스, 설치·업그레이드 때의 postinst, 기록 도구(`wifi_devinfo_write.py write`)다. 판정이 확정됐을 때만 파일을 바꾼다.
 
 | 판정 | `device_info.json` | 종료 코드 |
 |---|---|---:|
