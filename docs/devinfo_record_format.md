@@ -128,9 +128,76 @@ SIGHUP 이나 SIGTERM 으로 멈추면 128 + 시그널 번호로 끝나고, 이�
 
 레코드가 아닌 내용이 boot1 앞에 남으면(찢어진 쓰기 등) 도구는 거부한다. 이때는 앞 512 B 를 백업한 뒤 손으로 비우고 다시 기록한다. 비우는 순서는 `echo 0 > /sys/block/mmcblk0boot1/force_ro`, `dd if=/dev/zero of=/dev/mmcblk0boot1 bs=512 count=1 conv=fsync`, `echo 1 > /sys/block/mmcblk0boot1/force_ro` 다.
 
+## 양산 발급 도구
+
+`scripts/factory/devinfo_issue.py` 는 양산 PC(Windows·Linux)에서 장치 하나에 레코드를 발급한다. 패키지에는 들어가지 않는다. Python 3, `cryptography`, OpenSSH 클라이언트(`ssh`)가 필요하다. 도구는 같은 저장소 트리의 `dist/wlan/usr/local/scripts/devinfo_record.py` 를 상대 경로로 읽으므로, 저장소 체크아웃이나 소스 아카이브를 풀어 둔 상태로 쓴다.
+
+```
+python3 scripts/factory/devinfo_issue.py --host <장치 주소> --key <개인키 PEM> --ledger <원장 CSV> \
+    --serial <시리얼> --hardware-version <HW 버전> --product-code 0x0103 --subcode KR \
+    --manufacture-date <YYYY-MM-DD> --shipment-date <YYYY-MM-DD>
+```
+
+한 번 실행하면 장치 하나를 아래 순서로 처리한다. 장치에는 세 번 연결한다.
+
+1. 입력값을 "값 규칙"과 레코드 형식(문자열 길이·문자, 날짜)으로 검사한다. 시리얼, 하드웨어 버전, 제품 코드, 국가 코드, 두 날짜에는 기본값이 없다. 시리얼과 하드웨어 버전은 비어 있거나 앞뒤에 공백이 있으면 거부한다(배치 파일의 빈 변수 등). `--ieee` 의 기본값은 현행 기종의 `1,0,1,1` 이다. `--subcode` 는 `KR`·`JP`·`CN`·`WW` 또는 16진 값을 받는다.
+2. 개인키(PKCS8 PEM)를 읽는다. 키에 암호가 걸려 있으면 묻는다. 이 키의 공개키로 장치가 믿는 공개키 목록(`devinfo_record.py` 의 `SHIPPING_PUBLIC_KEYS`)에서 key_id 를 찾는다.
+3. 입력값을 보여 주고 확인을 받는다. `--yes` 를 주면 건너뛴다.
+4. 원장 옆에 `<원장>.lock` 을 만든다. 파일이 이미 있으면 멈추므로, 두 발급이 한 원장에 동시에 쓰지 않는다. 원장을 덧붙이기로 열 수 있는지도 이때 확인한다.
+5. [SSH 1] `wifi_devinfo_write.py uid` 로 UID 를 받는다. 레코드에 서명하고, 장치와 같은 판정으로 유효한지 스스로 확인한다. 원장의 중복을 검사한 뒤 `signed` 행을 적는다.
+6. [SSH 2] 레코드를 표준입력으로 보내 `wifi_devinfo_write.py write /dev/stdin` 을 부른다(`--replace` 를 주면 그대로 전한다). 결과는 `result` 행에 적는다.
+7. [SSH 3] 고정 대조 스크립트를 `python3 -` 로 보낸다.
+   - `device_info.json` 이 레코드 값과 같은지 본다.
+   - `vhlctl login`(기본 비밀번호) → `device-info` 로 opcd 의 GetDeviceInfo 응답(스냅샷 `/dev/shm/opcd/device_info.json`)을 받아 11 필드와 result 0 을 본다.
+   - opcd 가 `inactive`·`failed` 였으면 잠시 띄웠다가 멈춘다. `activating` 처럼 바뀌는 중이면 건드리지 않고 대조 실패(`opcd_state`)로 둔다.
+   - 띄웠던 opcd 는 예외나 SIGHUP·SIGTERM(SSH 단절) 때도 멈춘다. 멈추지 못했으면 아무것도 지우지 않고 대조 실패(`opcd_restore`)로 둔다.
+   - 멈춘 뒤에는 opcd 가 시작하며 만드는 `/usr/local/opc/etc/temp`·`/home/admin/iplist.txt`·`/usr/local/opc/etc/iplist.user.last`(고객 파일과 한 쌍으로 쓰는 기록) 가운데 전에 없던 것만 지운다. 그 밖에 새로 생긴 이름은 지우지 않고 결과(`left`)에 남기며, 도구가 로그로 보여 준다. 예를 들어 opcd 가 받아들이지 않은 `iplist.txt` 를 보관하는 `iplist.txt.rejected` 가 그렇다.
+   - `/usr/local/opc/etc/password` 가 있으면 기본 비밀번호로 로그인할 수 없으므로 대조 실패로 본다.
+   - 결과는 `verify` 행에 적는다.
+
+SSH 사용 방식:
+
+- 원격 명령은 위의 고정 문자열 셋뿐이다. 입력값은 명령에 넣지 않고 서명된 레코드로만 보낸다.
+- 호스트 키는 실행마다 새로 만든 임시 known_hosts 에 받는다(`StrictHostKeyChecking=accept-new`). 양산에서는 같은 주소에 장치가 계속 바뀌어, 사용자 known_hosts 를 쓰면 두 번째 장치부터 막히기 때문이다. 시스템 known_hosts 도 보지 않는다(`GlobalKnownHostsFile` 을 같은 임시 디렉터리의 없는 파일로 둔다). 한 실행의 세 연결은 같은 호스트 키여야 한다.
+- 그래서 도구는 각 실행의 첫 연결에 응답한 호스트를 장치로 믿는다. 발급은 PC 와 장치만 있는 격리된 유선 구간에서 한다. 같은 망에서 장치 주소로 응답하는 다른 호스트가 있으면, 그 호스트가 비밀번호를 받고, 자기가 고른 UID 의 유효 레코드도 받는다.
+- 인증은 비밀번호나 `--identity <키 파일>` 이다. 비밀번호는 ssh 가 직접 묻는다. 양산에서는 비밀번호가 다른 호스트로 새지 않도록 `--identity` 를 권한다.
+- 연결을 재사용하지 않으므로(Windows OpenSSH 에는 ControlMaster 가 없다) 비밀번호 인증이면 Windows·Linux 모두 장치마다 비밀번호를 세 번 묻는다. `--identity` 를 쓰면 묻지 않는다.
+
+원장(CSV, UTF-8, 헤더 한 줄)은 덧붙이기만 하며, 행마다 fsync 한다.
+
+- 중복 검사는 `--ledger` 로 준 원장 하나 안에서만 한다. 양산 PC 가 여럿이어도 원장은 하나를 함께 쓴다.
+- 원장은 열어 보기만 하고 Excel 등에서 저장하지 않는다. 저장하면 시리얼의 앞자리 0 이 사라지거나 인코딩이 바뀔 수 있다. BOM 이 붙은 UTF-8 은 그대로 읽는다. 그 밖에 읽을 수 없거나, 열이 다르거나, `signed` 행의 시리얼·UID 열이 그 행 `record_hex` 의 내용과 다르면 아무 장치에도 연결하지 않고 3 으로 멈춘다.
+
+- 행의 단계(`phase`)는 셋이다.
+  - `signed`: 서명이 곧 발급이다.
+  - `result`: 기록 도구의 종료 코드(`device_rc`), `result`, `previous_hex`. 장치가 돌려준 글자는 `result` 가 `written`·`unchanged` 이고 `previous_hex` 가 1024 자리 소문자 hex 일 때만 그대로 적는다. 그 밖은 `invalid` 로 적어, 응답한 호스트가 보낸 글자가 원장(Excel 로 여는 파일)에 들어가지 않게 한다.
+  - `verify`: `ok`, `mismatch:<항목>` 또는 `error:rc <N>`.
+- 열 순서: `time_utc, phase, serial, uid_source, uid, key_id, pubkey_sha256, vendor_code, product_code, product_subcode, ieee_11r, ieee_11ai, ieee_11k, ieee_11v, manufacture_date, shipment_date, hardware_version, record_hex, device_rc, result, previous_hex, verify, reissue_reason, tool_commit, operator, pc, host`.
+- `signed` 행은 장치에 쓰기 전에 적는다. 서명한 레코드가 장치에 들어갔는데 원장에는 없는 상태를 만들지 않기 위해서다.
+- Ed25519 서명은 같은 입력에 늘 같다. 그래서 같은 시리얼·UID·값으로 다시 실행하면 이어서 처리한다(`signed` 행을 다시 적지 않는다). 장치 기록은 끝났는데 PC 쪽이 멈췄을 때 이 방법으로 복구한다. 이어서 하기는 그 시리얼이나 UID 로 한 가장 최근 발급과 같을 때만이다. 재발급으로 대체된 옛 레코드로 되돌리는 것은 다시 `--reissue` 가 필요하다.
+- 원장의 `signed` 행에 시리얼이나 UID 가운데 하나라도 이미 있는데 레코드가 다르면, `--reissue --reason <사유>` 가 있어야 발급한다. 장치 boot1 에 다른 레코드가 있으면 `--replace` 도 준다(없으면 기록 도구가 5 로 거부한다).
+
+| 종료 코드 | 이름 | 뜻 |
+|---:|---|---|
+| 0 | `EXIT_OK` | 기록(또는 같은 레코드 확인)과 대조까지 끝났다 |
+| 2 | `EXIT_INPUT` | 입력값이 값 규칙이나 레코드 형식에 맞지 않거나, 임시 디렉터리 경로에 공백이나 `%` 가 있다. 필수 인자가 빠진 경우와 `--reissue` 에 `--reason` 이 없는 경우도 argparse 가 2 로 끝낸다 |
+| 3 | `EXIT_LEDGER` | 원장이나 잠금 파일을 쓸 수 없거나, 잠금 파일이 이미 있거나, 원장을 읽을 수 없거나 내용이 맞지 않거나, `--reissue` 없이 이미 쓴 시리얼·UID 로 다른 레코드를 만들려 했다 |
+| 4 | `EXIT_KEY` | 개인키를 읽지 못했거나, 장치가 믿는 공개키의 짝이 아니거나, 만든 레코드가 스스로 판정에서 유효하지 않다 |
+| 5 | `EXIT_DEVICE` | ssh 실행·연결, UID 읽기, 장치 기록 가운데 하나가 실패했다. 기록 도구의 종료 코드는 원장의 `device_rc` 에 남는다 |
+| 6 | `EXIT_VERIFY` | `device_info.json` 이나 GetDeviceInfo 응답이 레코드 값과 다르거나, 대조하지 못했다 |
+| 7 | `EXIT_ABORTED` | 확인 질문에 아니라고 답했다 |
+
+Windows 에서 쓸 때:
+
+- Windows 10·11 의 기본 OpenSSH 클라이언트(`ssh.exe`)를 쓴다. PATH 에 없으면 `--ssh` 로 경로를 준다.
+- 임시 디렉터리 경로에 공백이나 `%` 가 있으면 멈춘다. ssh 의 `-o` 값이 공백에서 잘리고 `%` 가 토큰으로 펼쳐지기 때문이다. Windows 사용자 이름에 공백이 있으면 기본 임시 경로에도 공백이 생기므로, `TMP`·`TEMP` 를 공백 없는 경로로 바꾸고 실행한다.
+- `--identity` 키 파일은 작업자 계정만 읽을 수 있게 ACL 을 둔다. 다른 사용자도 읽을 수 있으면 Windows OpenSSH 가 그 키를 쓰지 않는다.
+- 원장 잠금은 파일 생성(`O_EXCL`) 방식이라 Windows 에서도 같게 동작한다. 비정상 종료로 `<원장>.lock` 이 남으면, 다른 발급이 진행 중이 아닌지 확인한 뒤 지운다.
+- 발급 중에 원장을 Excel 로 열어 두면 Excel 이 파일을 잠가 행을 쓰지 못한다(종료 코드 3). 원장을 닫고 같은 값으로 다시 실행하면 이어서 처리한다.
+
 ## 키 관리
 
-- 서명 개인키는 사내에서만 보관하고 저장소와 장치에 두지 않는다. 장치 패키지에는 key_id 별 공개키만 둔다(`wifi_devinfo.py` 의 `SHIPPING_PUBLIC_KEYS`, 현재 key_id `1`).
+- 서명 개인키는 사내에서만 보관하고 저장소와 장치에 두지 않는다. 장치 패키지에는 key_id 별 공개키만 둔다(`devinfo_record.py` 의 `SHIPPING_PUBLIC_KEYS`, 현재 key_id `1`. 장치의 `wifi_devinfo.py` 와 양산 발급 도구가 이 목록을 함께 쓴다).
 - 공개키 목록은 추가만 한다. 이미 쓴 key_id 를 다른 키에 다시 쓰지 않는다.
 - 개인키가 유출되면 해당 key_id 를 패키지에서 빼야 하고, 그 키로 서명한 장치는 모두 새 키로 다시 기록해야 한다.
 - 시험은 시험 전용 키(고정 시드)를 쓴다. 이 키는 장치 패키지의 공개키 목록에 넣지 않는다.
