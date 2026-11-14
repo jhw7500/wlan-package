@@ -30,11 +30,8 @@ DEVICE_UID_SOURCE = dr.UID_SOURCE_IMX93_OCOTP
 # 지우지 않게 한다. run() 은 잠금을 잡지 않는다(기록 도구가 잠금을 쥔 채 run() 을 부른다).
 LOCK_PATH = "/run/wifi_devinfo.lock"
 
-# key_id → Ed25519 공개키(32 B). 추가만 한다. 이미 쓴 key_id 를 다른 키에 쓰지 않는다.
-# 개인키는 사내에서만 보관한다(문서 "키 관리").
-SHIPPING_PUBLIC_KEYS = {
-    1: bytes.fromhex("47c2d7ffaa166db2f8a7c40380fe4765bf26fe0da5817122e470270b10d0bd6d"),
-}
+# 출하 공개키 목록의 정본은 devinfo_record.py 다(양산 PC 도구도 같이 쓴다).
+SHIPPING_PUBLIC_KEYS = dr.SHIPPING_PUBLIC_KEYS
 
 _NOT_VALID_LABEL = {
     dr.STATUS_ABSENT: "레코드 없음",

@@ -39,6 +39,13 @@ MIN_YEAR = 1970
 
 JSON_SOURCE_MARKER = "boot1-record"
 
+# 장치가 믿는 출하 공개키: key_id → Ed25519 공개키(32 B). 추가만 한다. 이미 쓴 key_id 를 다른 키에
+# 쓰지 않는다. 개인키는 사내에서만 보관한다(문서 "키 관리"). 부팅 서비스·기록 도구(장치)와 양산 PC
+# 도구가 같이 쓰므로, Windows 에서도 import 할 수 있는 이 모듈이 정본이다.
+SHIPPING_PUBLIC_KEYS = {
+    1: bytes.fromhex("47c2d7ffaa166db2f8a7c40380fe4765bf26fe0da5817122e470270b10d0bd6d"),
+}
+
 # 사양서 R2 6.2·6.3절 값 규칙(양산 도구가 강제한다).
 R2_VENDOR_CODE = 0x00902CFB
 R2_PRODUCT_CLASSES = frozenset({0x01})          # Bridge A type

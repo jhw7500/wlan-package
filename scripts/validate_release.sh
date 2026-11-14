@@ -326,6 +326,9 @@ PY
     # 아무도 실행하지 않아 그 계약이 조용히 썩는다.
     gate_step "source" "pytest: qa"
     python3 -m pytest scripts/qa -q
+    # 양산 PC 레코드 발급 도구(#481). 패키지 밖이지만 장치 쪽 기록 도구와의 계약을 고정한다.
+    gate_step "source" "pytest: factory"
+    python3 -m pytest scripts/factory -q
 
     local test
     for test in \
