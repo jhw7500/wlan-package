@@ -170,7 +170,7 @@ SSH 사용 방식:
 
 - 행의 단계(`phase`)는 셋이다.
   - `signed`: 서명이 곧 발급이다.
-  - `result`: 기록 도구의 종료 코드(`device_rc`), `result`, `previous_hex`.
+  - `result`: 기록 도구의 종료 코드(`device_rc`), `result`, `previous_hex`. 장치가 돌려준 글자는 `result` 가 `written`·`unchanged` 이고 `previous_hex` 가 1024 자리 소문자 hex 일 때만 그대로 적는다. 그 밖은 `invalid` 로 적어, 응답한 호스트가 보낸 글자가 원장(Excel 로 여는 파일)에 들어가지 않게 한다.
   - `verify`: `ok`, `mismatch:<항목>` 또는 `error:rc <N>`.
 - 열 순서: `time_utc, phase, serial, uid_source, uid, key_id, pubkey_sha256, vendor_code, product_code, product_subcode, ieee_11r, ieee_11ai, ieee_11k, ieee_11v, manufacture_date, shipment_date, hardware_version, record_hex, device_rc, result, previous_hex, verify, reissue_reason, tool_commit, operator, pc, host`.
 - `signed` 행은 장치에 쓰기 전에 적는다. 서명한 레코드가 장치에 들어갔는데 원장에는 없는 상태를 만들지 않기 위해서다.

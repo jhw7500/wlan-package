@@ -371,7 +371,7 @@ def test_a_ledger_changed_by_another_program_stops_the_tool(env, damage):
                               encoding="utf-8")
     second = FakeDevice(uid=UID2)                                             # 같은 시리얼, 다른 장치
     assert env.run(args=args, device=second) == di.EXIT_LEDGER
-    assert second.remotes() in ([], [di.UID_COMMAND])                         # 기록하지 않는다
+    assert second.remotes() == []                                             # 장치에 연결하지 않는다
 
 
 def test_unwritable_ledger_is_refused_before_any_connection(env, tmp_path):
@@ -394,6 +394,18 @@ def test_lock_is_released_after_the_run(env):
 
 
 # --- 장치 기록·대조 실패 ------------------------------------------------------------
+
+def test_device_text_never_reaches_the_ledger_verbatim(env):
+    def runner(argv, input_bytes=None, timeout=None):
+        r = env.device(argv, input_bytes, timeout)
+        if argv[-1].startswith(di.WRITE_COMMAND):                             # 응답한 호스트가 돌려준 글자
+            return Result(r.returncode, b"previous==1+2\nresult=@SUM(1+2)\n", b"")
+        return r
+    env.run(device=runner)
+    row = [r for r in env.rows() if r["phase"] == "result"][0]
+    assert row["result"] == "invalid" and row["previous_hex"] == "invalid"
+    assert not any("@SUM" in line or "=1+2" in line for line in env.logs)
+
 
 def test_device_refusal_is_recorded_and_reported(env):
     env.device.writer_rc = 5

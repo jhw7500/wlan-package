@@ -52,6 +52,7 @@ LEDGER_FIELDS = ["time_utc", "phase", "serial", "uid_source", "uid", "key_id", "
                  "device_rc", "result", "previous_hex", "verify", "reissue_reason", "tool_commit",
                  "operator", "pc", "host"]
 _UID_LINE = re.compile(r"^uid_source=(\d+) uid=([0-9a-f]+)$")
+_PREVIOUS_HEX = re.compile(r"[0-9a-f]{%d}" % (2 * dr.RECORD_SIZE))
 _SNAPSHOT_INT = ("vendor_code", "product_code", "product_subcode", "ieee_11r", "ieee_11ai", "ieee_11k",
                  "ieee_11v")
 _SNAPSHOT_STR = ("manufacture_date", "shipment_date", "hardware_version", "serial_number")
@@ -442,6 +443,9 @@ def _issue(args, ledger, runner, trusted, log, values, key, key_id, pub_sha):
         out = _text(r.stdout)
         result = next((ln.split("=", 1)[1] for ln in out.splitlines() if ln.startswith("result=")), "")
         previous = next((ln.split("=", 1)[1] for ln in out.splitlines() if ln.startswith("previous=")), "")
+        # 장치(응답한 호스트)가 돌려준 글자는 기록 도구의 형식일 때만 원장·로그에 그대로 쓴다.
+        result = result if result in ("", "written", "unchanged") else "invalid"
+        previous = previous if previous == "" or _PREVIOUS_HEX.fullmatch(previous) else "invalid"
         ledger.append(dict(base, time_utc=_now(), phase="result", device_rc=r.returncode, result=result,
                            previous_hex=previous))
         if r.returncode != 0:
@@ -498,6 +502,7 @@ def issue(args, *, runner=None, trusted_keys=None, log=None, confirm=input):
     ledger = Ledger(os.path.abspath(args.ledger))
     try:
         ledger.acquire()
+        ledger.rows()  # 다른 프로그램이 바꾼 원장은 장치에 연결하기 전에 멈춘다(Stop EXIT_LEDGER)
         return _issue(args, ledger, runner, trusted, log, values, key, key_id, pub_sha)
     except Stop as stop:
         log(str(stop))
