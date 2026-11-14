@@ -84,7 +84,7 @@ opcd(`wlan-opc/opcd/inventory.c`)와 SNMP(`wifi_snmp_pp.py`)는 v1 이 유효로
 
 ## 부팅 검증 서비스
 
-`wifi_devinfo.service`(oneshot, `dist/wlan/usr/local/scripts/wifi_devinfo.py`)가 부팅 때 opcd·snmpd 보다 먼저 판정하고, `device_info.json` 을 쓰는 곳은 이 서비스 하나다. 판정이 확정됐을 때만 파일을 바꾼다.
+`wifi_devinfo.service`(oneshot, `dist/wlan/usr/local/scripts/wifi_devinfo.py`)가 부팅 때 opcd·snmpd 보다 먼저 판정한다. `device_info.json` 은 이 스크립트의 판정(`run()`)을 거쳐서만, `/run/wifi_devinfo.lock` 을 쥔 채 쓴다. 이 판정을 부르는 곳은 부팅 서비스, 설치·업그레이드 때의 postinst, 기록 도구(`wifi_devinfo_write.py write`)다. 판정이 확정됐을 때만 파일을 바꾼다.
 
 | 판정 | `device_info.json` | 종료 코드 |
 |---|---|---:|
@@ -93,7 +93,40 @@ opcd(`wlan-opc/opcd/inventory.c`)와 SNMP(`wifi_snmp_pp.py`)는 v1 이 유효로
 | 무효·모르는 키 | 없음과 같이 처리하고, 로그에 판정과 이유(키 번호, 양쪽 UID 등)를 남긴다 | 1 |
 | 판정 불가 | 바꾸지 않는다(읽기 오류, UID 를 읽지 못함, 검증 라이브러리 없음, 그 밖의 예외) | 1 |
 
-UID 는 판정 7단계(UID 비교)에 이르렀을 때만 읽는다. 그래서 UID 를 읽지 못하는 장치도 없음·무효·모르는 키는 그대로 판정하고, 서명과 구조가 맞는 레코드만 판정 불가가 된다. 설치·업그레이드 때는 postinst 가 opcd 를 띄우거나 재시작하기 전에 같은 스크립트를 실행한다.
+서비스는 기록 도구와 같은 잠금(`/run/wifi_devinfo.lock`)을 쥔 채 판정한다. UID 는 판정 7단계(UID 비교)에 이르렀을 때만 읽는다. 그래서 UID 를 읽지 못하는 장치도 없음·무효·모르는 키는 그대로 판정하고, 서명과 구조가 맞는 레코드만 판정 불가가 된다. 설치·업그레이드 때는 postinst 가 opcd 를 띄우거나 재시작하기 전에 같은 스크립트를 실행한다.
+
+## 기록 도구
+
+`dist/wlan/usr/local/scripts/wifi_devinfo_write.py`(root)는 양산 PC 도구가 SSH 로 부른다.
+
+- `uid`: `uid_source=<N> uid=<32자리 소문자 hex>` 한 줄을 출력한다. 부팅 서비스와 같은 UID 출처를 읽는다.
+- `write <레코드 파일> [--replace]`: 부팅 서비스와 같은 잠금을 잡고 아래 순서로 진행한다. 1~4 단계에서 멈추면 boot1 과 `force_ro` 를 건드리지 않는다.
+  1. 레코드가 이 장치의 공개키·UID 로 유효한지 본다.
+  2. 루트FS 디스크가 `mmcblk0` 인지 본다.
+  3. `mmc extcsd read /dev/mmcblk0` 의 `PARTITION_CONFIG` 가 정확히 한 번 나오고, 부트 파티션 값(bits 5:3)이 1 인지 본다. 1 은 Boot Partition 1, 곧 `mmcblk0boot0` 이다.
+  4. 블록 캐시를 비운 뒤 boot1 의 앞 512 B 를 읽는다. 앞 실행의 실패한 쓰기가 캐시에만 남아 있어도 매체를 기준으로 판단하기 위해서다.
+     - 전부 0x00 이거나 전부 0xFF 면 쓴다.
+     - 같은 레코드면 쓰지 않는다.
+     - magic 이 일치하는 다른 레코드면(판정 결과와 무관) `--replace` 가 있어야 쓰고, 이전 512 B 를 `previous=<hex>` 로 출력한다. 키를 바꾼 뒤 다시 기록하는 경우가 여기에 해당한다.
+     - 그 밖이면 거부한다.
+  5. `force_ro` 를 0 으로 바꾼다 → O_SYNC 로 쓴다 → 블록 캐시를 비운다(BLKFLSBUF) → 되읽어 비교한다 → `force_ro` 를 1 로 되돌린다. 이 구간에는 SIGHUP·SIGTERM 을 막아 두었다가 되돌린 뒤에 처리하고, 중간에 실패해도 1 로 되돌린다. 쓰기를 건너뛴 경우에도, 앞 실행이 남긴 `force_ro=0` 이 있으면 1 로 되돌린다.
+  6. 쓰기를 건너뛰었어도 서비스와 같은 판정으로 `device_info.json` 에 반영하고, 파일이 레코드 값과 같은지 확인한다. 잠금을 푼 뒤 opcd 가 active 면 try-restart 한다(잠금을 쥔 채 재시작하면 `Before=opcd.service` 순서 때문에 서비스 시작 작업과 서로 기다릴 수 있다). 끝에 `result=written` 또는 `result=unchanged` 를 출력한다. 출력이 실패해도(SSH 단절) 기록과 반영은 끝까지 한다.
+
+| 종료 코드 | 이름 | 뜻 |
+|---:|---|---|
+| 0 | `EXIT_OK` | 기록했거나 같은 레코드라 그대로 두었고, 반영까지 끝났다 |
+| 2 | `EXIT_USAGE` | 인자가 틀렸거나 레코드 파일을 읽지 못했다 |
+| 3 | `EXIT_RECORD_INVALID` | 레코드가 512 B 가 아니거나 이 장치에서 유효하지 않다(키·서명·UID·구조) |
+| 4 | `EXIT_TARGET_REFUSED` | 대상이 맞지 않다(루트FS 디스크, PARTITION_CONFIG, boot1 의 알 수 없는 내용) |
+| 5 | `EXIT_REPLACE_REQUIRED` | boot1 에 다른 레코드가 있다 |
+| 6 | `EXIT_WRITE_FAILED` | 쓰기, 되읽기, `force_ro` 복원 가운데 하나가 실패했다 |
+| 7 | `EXIT_APPLY_FAILED` | boot1 기록은 끝났지만 `device_info.json` 반영이나 opcd 재시작이 실패했다 |
+| 8 | `EXIT_BUSY` | 다른 기록이나 판정이 잠금을 쥐고 있다 |
+| 9 | `EXIT_UNDETERMINED` | 확인할 수 없다(UID·EXT_CSD·boot1·루트FS 장치를 읽지 못함, 잠금 파일을 못 씀, `mmc`·`cryptography` 없음) |
+
+SIGHUP 이나 SIGTERM 으로 멈추면 128 + 시그널 번호로 끝나고, 이때도 `force_ro` 를 1 로 되돌린다. `python3-cryptography` 와 `mmc-utils` 는 패키지 Recommends 다. 없으면 서비스는 "판정 불가"로 두고, 기록 도구는 9 로 끝난다.
+
+레코드가 아닌 내용이 boot1 앞에 남으면(찢어진 쓰기 등) 도구는 거부한다. 이때는 앞 512 B 를 백업한 뒤 손으로 비우고 다시 기록한다. 비우는 순서는 `echo 0 > /sys/block/mmcblk0boot1/force_ro`, `dd if=/dev/zero of=/dev/mmcblk0boot1 bs=512 count=1 conv=fsync`, `echo 1 > /sys/block/mmcblk0boot1/force_ro` 다.
 
 ## 키 관리
 

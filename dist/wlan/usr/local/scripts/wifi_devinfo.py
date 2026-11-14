@@ -2,8 +2,9 @@
 """부팅 때 eMMC boot1 의 출하 고정값 서명 레코드를 판정해 device_info.json 에 반영한다(#481).
 
 바이트 배치와 판정 순서의 정본은 docs/devinfo_record_format.md, 판정 구현은
-devinfo_record.py 다. 이 스크립트(wifi_devinfo.service)가 device_info.json 의 유일한
-기록 주체이고, 판정이 확정됐을 때만 파일을 바꾼다.
+devinfo_record.py 다. device_info.json 은 이 스크립트의 run() 을 거쳐서만 /run/wifi_devinfo.lock
+을 쥔 채 쓴다. 부팅 서비스(wifi_devinfo.service)와 postinst 는 main() 으로, 기록 도구
+(wifi_devinfo_write.py)는 잠금을 쥐고 run() 을 부른다. 판정이 확정됐을 때만 파일을 바꾼다.
 
 - 유효: 레코드 값으로 파일을 쓴다("source": "boot1-record" 표식). 내용이 같으면 쓰지 않는다.
 - 없음·무효·모르는 키: 표식 있는 파일만 지운다. 표식 없는 수동 파일은 그대로 두고
@@ -13,6 +14,8 @@ devinfo_record.py 다. 이 스크립트(wifi_devinfo.service)가 device_info.jso
 종료 코드는 유효·없음이면 0, 그 밖(무효·모르는 키·판정 불가·기록 실패)이면 1 이다.
 """
 import argparse
+import contextlib
+import fcntl
 import json
 import os
 import sys
@@ -23,6 +26,9 @@ import devinfo_record as dr
 RECORD_DEVICE = "/dev/mmcblk0boot1"
 DEVICE_INFO_PATH = "/usr/local/opc/etc/device_info.json"  # opcd OPC_PATH_DEVICE_INFO
 DEVICE_UID_SOURCE = dr.UID_SOURCE_IMX93_OCOTP
+# 기록 도구(wifi_devinfo_write.py)와 같이 쓰는 잠금. 기록과 판정·반영이 겹쳐 옛 판정이 새 파일을
+# 지우지 않게 한다. run() 은 잠금을 잡지 않는다(기록 도구가 잠금을 쥔 채 run() 을 부른다).
+LOCK_PATH = "/run/wifi_devinfo.lock"
 
 # key_id → Ed25519 공개키(32 B). 추가만 한다. 이미 쓴 key_id 를 다른 키에 쓰지 않는다.
 # 개인키는 사내에서만 보관한다(문서 "키 관리").
@@ -35,6 +41,17 @@ _NOT_VALID_LABEL = {
     dr.STATUS_INVALID: "레코드 무효",
     dr.STATUS_UNKNOWN_KEY: "모르는 서명 키",
 }
+
+
+@contextlib.contextmanager
+def locked(path, blocking=True):
+    """path 에 배타 flock 을 잡는다. blocking=False 면 이미 잡혀 있을 때 BlockingIOError 를 낸다."""
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        yield
+    finally:
+        os.close(fd)
 
 
 def _log(message):
@@ -137,7 +154,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description="eMMC boot1 출하 고정값 서명 레코드를 판정해 device_info.json 에 반영한다(#481).")
     parser.parse_args(argv)
-    return run(RECORD_DEVICE, DEVICE_INFO_PATH, public_keys=SHIPPING_PUBLIC_KEYS)
+    try:
+        with locked(LOCK_PATH):
+            return run(RECORD_DEVICE, DEVICE_INFO_PATH, public_keys=SHIPPING_PUBLIC_KEYS)
+    except OSError as exc:
+        _log(f"판정 불가(잠금 {LOCK_PATH}: {exc}): {DEVICE_INFO_PATH} 를 바꾸지 않는다")
+        return 1
 
 
 if __name__ == "__main__":
