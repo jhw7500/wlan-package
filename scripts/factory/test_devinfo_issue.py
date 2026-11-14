@@ -90,8 +90,10 @@ class FakeDevice:
                     "ieee_11k": self.info["ieee_11k"], "ieee_11v": self.info["ieee_11v"]}
             if self.snapshot_override:
                 snap.update(self.snapshot_override)
-            out = {"info": info, "snapshot": snap, "opcd_was_active": False, "opcd_started": True,
-                   "password_file": False, "device_info_rc": 0, "removed": []}
+            out = {"info": info, "snapshot": snap, "opcd_state": "inactive", "opcd_was_active": False,
+                   "opcd_start_attempted": True, "opcd_started": True, "opcd_stop_rc": 0,
+                   "opcd_state_after": "inactive", "password_file": False, "device_info_rc": 0,
+                   "removed": [], "left": []}
             out.update(self.verify_extra)
             return Result(0, (json.dumps(out) + "\n").encode())
         raise AssertionError(f"unexpected remote command: {remote!r}")
@@ -180,9 +182,21 @@ def test_ssh_uses_a_fresh_known_hosts_file_per_run(env):
 
 
 def test_identity_file_is_passed_only_when_given(env, tmp_path):
+    env.run()
+    argv = env.device.calls[0][0]
+    assert "-i" not in argv and "IdentitiesOnly=yes" not in argv
+    env.device.calls.clear()
     env.run("--identity", str(tmp_path / "id_ed25519"))
     argv = env.device.calls[0][0]
     assert argv[argv.index("-i") + 1] == str(tmp_path / "id_ed25519") and "IdentitiesOnly=yes" in argv
+
+
+def test_system_known_hosts_are_not_consulted(env):
+    env.run()
+    argv = env.device.calls[0][0]
+    user = next(a.split("=", 1)[1] for a in argv if a.startswith("UserKnownHostsFile="))
+    glob = next(a.split("=", 1)[1] for a in argv if a.startswith("GlobalKnownHostsFile="))
+    assert os.path.dirname(glob) == os.path.dirname(user) and glob != user
 
 
 @pytest.mark.parametrize("dirname", ["with space", "pct%dir"])  # ssh -o 값은 공백에서 잘리고 % 는 펼친다
@@ -207,6 +221,10 @@ def test_known_hosts_dir_with_spaces_is_refused(env, monkeypatch, tmp_path, dirn
     ("--subcode", "0x1234"),
     ("--ieee", "1,0,1,2"),
     ("--serial", 'SN"1'),            # opcd 가 못 읽는 문자
+    ("--serial", ""),                # 배치 파일의 빈 변수
+    ("--serial", " SN-0001"),
+    ("--hardware-version", " "),
+    ("--hardware-version", "HW-1.0 "),
     ("--hardware-version", "H" * 32),
     ("--manufacture-date", "1969-12-31"),
     ("--shipment-date", "2026-02-30"),
@@ -295,15 +313,65 @@ def test_reissue_is_required_when_serial_or_uid_was_used(env, change):
     assert env.rows()[before]["reissue_reason"] == "보드 교체"
 
 
+def test_going_back_to_a_superseded_record_needs_reissue(env):
+    assert env.run() == di.EXIT_OK                                           # R1
+    newer = list(ARGS)
+    newer[newer.index("--hardware-version") + 1] = "HW-2.0"
+    assert env.run("--reissue", "--reason", "HW 정정", "--replace", args=newer) == di.EXIT_OK  # R2
+    before = len(env.rows())
+    assert env.run("--replace") == di.EXIT_LEDGER                            # R1 로 되돌리기
+    assert len(env.rows()) == before and env.device.boot1.hex() == env.rows()[-3]["record_hex"]
+    assert env.run("--reissue", "--reason", "되돌림", "--replace") == di.EXIT_OK
+    assert env.rows()[before]["phase"] == "signed" and env.rows()[before]["reissue_reason"] == "되돌림"
+
+
 def test_reissue_needs_a_reason(env):
     with pytest.raises(SystemExit):
         env.run("--reissue")
 
 
 def test_ledger_lock_refuses_a_second_session(env):
-    Path(str(env.ledger) + ".lock").write_text("other session\n")
+    lock = Path(str(env.ledger) + ".lock")
+    lock.write_text("other session\n")
     assert env.run() == di.EXIT_LEDGER
     assert env.device.calls == []
+    assert lock.read_text() == "other session\n"                 # 남의 잠금은 지우지 않는다
+
+
+def _rewrite_ledger(env, edit, encoding="utf-8"):
+    with open(env.ledger, newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    edit(rows)
+    with open(env.ledger, "w", newline="", encoding=encoding) as f:
+        w = csv.DictWriter(f, fieldnames=di.LEDGER_FIELDS)
+        w.writeheader()
+        w.writerows(rows)
+
+
+def test_ledger_saved_with_a_bom_still_works(env):
+    assert env.run() == di.EXIT_OK
+    _rewrite_ledger(env, lambda rows: None, encoding="utf-8-sig")             # Excel "CSV UTF-8"
+    assert env.run() == di.EXIT_OK                                            # 이어서 하기
+    other = list(ARGS)
+    other[other.index("--hardware-version") + 1] = "HW-2.0"
+    assert env.run(args=other) == di.EXIT_LEDGER                              # 중복도 그대로 잡는다
+
+
+@pytest.mark.parametrize("damage", ["leading_zero", "cp949", "header"])
+def test_a_ledger_changed_by_another_program_stops_the_tool(env, damage):
+    args = list(ARGS)
+    args[args.index("--serial") + 1] = "000123"
+    assert env.run(args=args) == di.EXIT_OK
+    if damage == "leading_zero":                                              # Excel 이 숫자로 바꾼 시리얼
+        _rewrite_ledger(env, lambda rows: [r.update(serial="123") for r in rows])
+    elif damage == "cp949":
+        _rewrite_ledger(env, lambda rows: [r.update(operator="작업자") for r in rows], encoding="cp949")
+    else:
+        env.ledger.write_text(env.ledger.read_text(encoding="utf-8").replace("time_utc,", "time,", 1),
+                              encoding="utf-8")
+    second = FakeDevice(uid=UID2)                                             # 같은 시리얼, 다른 장치
+    assert env.run(args=args, device=second) == di.EXIT_LEDGER
+    assert second.remotes() in ([], [di.UID_COMMAND])                         # 기록하지 않는다
 
 
 def test_unwritable_ledger_is_refused_before_any_connection(env, tmp_path):
@@ -408,6 +476,9 @@ def test_ssh_failure_is_a_device_error(env):
     {"snapshot_override": {"result": 1}},
     {"verify_extra": {"password_file": True}},
     {"verify_extra": {"snapshot": {"_error": "FileNotFoundError"}}},
+    {"verify_extra": {"opcd_stop_rc": 1, "opcd_state_after": "active"}},      # 띄운 opcd 를 멈추지 못했다
+    {"verify_extra": {"opcd_state_after": "active"}},
+    {"verify_extra": {"opcd_state": "activating", "opcd_start_attempted": False, "opcd_started": False}},
 ])
 def test_verification_mismatch_fails_and_is_recorded(tmp_path, monkeypatch, override):
     env = Env(tmp_path, monkeypatch, device=FakeDevice(**override))
@@ -439,17 +510,22 @@ def test_verify_script_is_valid_python():
 FAKE_SYSTEMCTL = """#!/bin/sh
 echo "systemctl $*" >> "$FAKE_LOG"
 case "$1" in
-  is-active) [ "$(cat "$FAKE_STATE")" = active ] && exit 0; exit 3 ;;
-  start) echo active > "$FAKE_STATE"; mkdir -p "$FAKE_ETC/temp"; echo x > "$FAKE_ETC/temp/f"
-         echo ip > "$FAKE_ADMIN/iplist.txt"; exit 0 ;;
-  stop) echo inactive > "$FAKE_STATE"; exit 0 ;;
+  is-active) s=$(cat "$FAKE_STATE"); echo "$s"; [ "$s" = active ] && exit 0; exit 3 ;;
+  start) [ -n "$FAKE_START_RC" ] && { echo failed > "$FAKE_STATE"; mkdir -p "$FAKE_ETC/temp"; exit "$FAKE_START_RC"; }
+         echo active > "$FAKE_STATE"; mkdir -p "$FAKE_ETC/temp"; echo x > "$FAKE_ETC/temp/f"
+         if [ -f "$FAKE_ADMIN/iplist.txt" ] && [ -n "$FAKE_REJECT" ]; then
+             mv "$FAKE_ADMIN/iplist.txt" "$FAKE_ADMIN/iplist.txt.rejected"; echo default > "$FAKE_ADMIN/iplist.txt"
+         elif [ ! -f "$FAKE_ADMIN/iplist.txt" ]; then echo default > "$FAKE_ADMIN/iplist.txt"; fi
+         exit 0 ;;
+  stop) [ -n "$FAKE_STOP_RC" ] && exit "$FAKE_STOP_RC"; echo inactive > "$FAKE_STATE"; exit 0 ;;
 esac
 exit 1
 """
 FAKE_VHLCTL = """#!/bin/sh
 echo "vhlctl $*" >> "$FAKE_LOG"
 case " $* " in
-  *" device-info "*) [ -n "$FAKE_NO_SNAP" ] && exit 2
+  *" device-info "*) [ -n "$FAKE_HUP" ] && kill -HUP "$PPID" && sleep 5
+                     [ -n "$FAKE_NO_SNAP" ] && exit 2
                      mkdir -p "$FAKE_SHM"; printf '%s' "$FAKE_SNAP_JSON" > "$FAKE_SHM/device_info.json" ;;
 esac
 exit 0
@@ -457,7 +533,7 @@ exit 0
 
 
 class LocalDevice:
-    def __init__(self, root, opcd_active=False):
+    def __init__(self, root, opcd_state="inactive"):
         self.etc, self.admin, self.shm, self.bin = (root / "opc/etc", root / "home/admin", root / "shm/opcd",
                                                     root / "bin")
         for d in (self.etc, self.admin, self.bin):
@@ -466,7 +542,7 @@ class LocalDevice:
             (self.bin / name).write_text(body)
             (self.bin / name).chmod(0o755)
         self.log, self.state = root / "calls.log", root / "state"
-        self.state.write_text("active\n" if opcd_active else "inactive\n")
+        self.state.write_text(opcd_state + "\n")
         self.env = dict(os.environ, PATH=f"{self.bin}{os.pathsep}{os.environ['PATH']}", FAKE_LOG=str(self.log),
                         FAKE_STATE=str(self.state), FAKE_ETC=str(self.etc), FAKE_ADMIN=str(self.admin),
                         FAKE_SHM=str(self.shm), FAKE_SNAP_JSON=json.dumps({"result": 0, "serial_number": "SN-0001"}))
@@ -475,6 +551,8 @@ class LocalDevice:
         text = di.VERIFY_SCRIPT
         subs = {'"/usr/local/opc/etc/device_info.json"': self.etc / "device_info.json",
                 '"/usr/local/opc/etc/password"': self.etc / "password",
+                '"/usr/local/opc/etc/temp"': self.etc / "temp",
+                '"/home/admin/iplist.txt"': self.admin / "iplist.txt",
                 '"/dev/shm/opcd/device_info.json"': self.shm / "device_info.json",
                 '"/usr/local/opc/etc"': self.etc, '"/home/admin"': self.admin,
                 '"/usr/local/opc/bin/vhlctl"': self.bin / "vhlctl"}
@@ -483,53 +561,116 @@ class LocalDevice:
             text = text.replace(old, json.dumps(str(new)))
         return text
 
-    def run(self, **env):
+    def run(self, expect_rc=0, **env):
         r = subprocess.run([sys.executable, "-"], input=self.script(), capture_output=True, text=True,
-                           env=dict(self.env, **env), check=False)
-        assert r.returncode == 0, r.stderr
+                           env=dict(self.env, **env), check=False, timeout=30)
+        assert r.returncode == expect_rc, r.stderr
         return json.loads(r.stdout.strip().splitlines()[-1])
 
     def calls(self):
         return self.log.read_text().splitlines() if self.log.exists() else []
+
+    def opcd(self):
+        return self.state.read_text().strip()
 
 
 needs_sh = pytest.mark.skipif(os.name == "nt", reason="장치(리눅스)에서 도는 스크립트")
 
 
 @needs_sh
-def test_verify_starts_a_stopped_opcd_and_removes_only_what_appeared(tmp_path):
+def test_verify_starts_a_stopped_opcd_and_removes_only_its_known_residue(tmp_path):
     dev = LocalDevice(tmp_path)
     (dev.etc / "device_info.json").write_text('{"serial_number": "SN-0001"}')
     (dev.etc / "keep.conf").write_text("x")
     (dev.admin / "keep.txt").write_text("x")
     out = dev.run()
-    assert out["opcd_was_active"] is False and out["opcd_started"] is True and out["opcd_stop_rc"] == 0
+    assert out["opcd_state"] == "inactive" and out["opcd_start_attempted"] is True and out["opcd_started"] is True
+    assert out["opcd_stop_rc"] == 0 and out["opcd_state_after"] == "inactive" and dev.opcd() == "inactive"
     assert sorted(os.listdir(dev.etc)) == ["device_info.json", "keep.conf"]
     assert os.listdir(dev.admin) == ["keep.txt"]
     assert sorted(out["removed"]) == sorted([str(dev.etc / "temp"), str(dev.admin / "iplist.txt")])
+    assert out["left"] == []
     assert out["info"] == {"serial_number": "SN-0001"} and out["snapshot"]["serial_number"] == "SN-0001"
     assert out["password_file"] is False and out["device_info_rc"] == 0
     calls = dev.calls()
     assert [c for c in calls if c.startswith("systemctl")] == [
-        "systemctl is-active --quiet opcd.service", "systemctl start opcd.service", "systemctl stop opcd.service"]
+        "systemctl is-active opcd.service", "systemctl start opcd.service", "systemctl stop opcd.service",
+        "systemctl is-active opcd.service"]
     vhl = [c.split()[-1] if "login" not in c else "login" for c in calls if c.startswith("vhlctl")]
     assert vhl == ["login", "device-info", "logout"]
-    assert dev.state.read_text().strip() == "inactive"
+
+
+@needs_sh
+def test_verify_also_starts_an_opcd_that_failed_before(tmp_path):
+    dev = LocalDevice(tmp_path, opcd_state="failed")
+    out = dev.run()
+    assert out["opcd_start_attempted"] is True and out["opcd_started"] is True
+    assert out["snapshot"]["serial_number"] == "SN-0001" and out["opcd_state_after"] == "inactive"
+
+
+@needs_sh
+def test_verify_keeps_a_file_opcd_set_aside_and_reports_it(tmp_path):
+    dev = LocalDevice(tmp_path)
+    (dev.admin / "iplist.txt").write_text("customer list")                  # opcd 가 거부해 .rejected 로 옮긴다
+    out = dev.run(FAKE_REJECT="1")
+    assert (dev.admin / "iplist.txt.rejected").read_text() == "customer list"
+    assert out["left"] == [str(dev.admin / "iplist.txt.rejected")]
+    assert str(dev.admin / "iplist.txt") not in out["removed"]              # 전부터 있던 이름은 지우지 않는다
 
 
 @needs_sh
 def test_verify_leaves_a_running_opcd_and_its_files_alone(tmp_path):
-    dev = LocalDevice(tmp_path, opcd_active=True)
+    dev = LocalDevice(tmp_path, opcd_state="active")
     (dev.admin / "iplist.txt").write_text("ip")
     out = dev.run()
-    assert out["opcd_was_active"] is True and out["opcd_started"] is False and out["removed"] == []
+    assert out["opcd_was_active"] is True and out["opcd_start_attempted"] is False and out["removed"] == []
     assert not any(c.startswith(("systemctl start", "systemctl stop")) for c in dev.calls())
-    assert os.listdir(dev.admin) == ["iplist.txt"] and dev.state.read_text().strip() == "active"
+    assert os.listdir(dev.admin) == ["iplist.txt"] and dev.opcd() == "active"
+
+
+@needs_sh
+@pytest.mark.parametrize("state", ["activating", "deactivating", "reloading"])
+def test_verify_does_not_touch_an_opcd_in_transition(tmp_path, state):
+    dev = LocalDevice(tmp_path, opcd_state=state)
+    out = dev.run()
+    assert out["opcd_state"] == state and out["opcd_start_attempted"] is False
+    assert not any(c.startswith(("systemctl start", "systemctl stop")) for c in dev.calls())
+    assert not any(c.startswith("vhlctl") for c in dev.calls()) and "_error" in out["snapshot"]
+
+
+@needs_sh
+def test_verify_keeps_files_when_opcd_could_not_be_stopped(tmp_path):
+    dev = LocalDevice(tmp_path)
+    out = dev.run(FAKE_STOP_RC="1")
+    assert out["opcd_stop_rc"] == 1 and out["opcd_state_after"] == "active" and out["removed"] == []
+    assert (dev.etc / "temp").exists() and (dev.admin / "iplist.txt").exists()
+
+
+@needs_sh
+def test_verify_restores_opcd_when_the_start_fails(tmp_path):
+    dev = LocalDevice(tmp_path)
+    out = dev.run(FAKE_START_RC="1")
+    assert out["opcd_start_attempted"] is True and out["opcd_started"] is False
+    assert "systemctl stop opcd.service" in dev.calls() and dev.opcd() == "inactive"
+    assert out["removed"] == [str(dev.etc / "temp")]
+
+
+@needs_sh
+@pytest.mark.parametrize("how", ["exception", "sighup"])
+def test_verify_restores_opcd_when_interrupted(tmp_path, how):
+    dev = LocalDevice(tmp_path)
+    if how == "exception":
+        (dev.bin / "vhlctl").unlink()                                       # vhlctl 실행이 예외를 낸다
+        out = dev.run(expect_rc=1)
+    else:
+        out = dev.run(expect_rc=1, FAKE_HUP="1")
+    assert dev.opcd() == "inactive" and out["opcd_stop_rc"] == 0
+    assert not (dev.etc / "temp").exists() and not (dev.admin / "iplist.txt").exists()
 
 
 @needs_sh
 def test_verify_never_reads_a_stale_snapshot(tmp_path):
-    dev = LocalDevice(tmp_path, opcd_active=True)
+    dev = LocalDevice(tmp_path, opcd_state="active")
     dev.shm.mkdir(parents=True)
     (dev.shm / "device_info.json").write_text(json.dumps({"result": 0, "serial_number": "OLD"}))
     out = dev.run(FAKE_NO_SNAP="1")
@@ -538,7 +679,7 @@ def test_verify_never_reads_a_stale_snapshot(tmp_path):
 
 @needs_sh
 def test_verify_reports_a_password_file_and_a_missing_info_file(tmp_path):
-    dev = LocalDevice(tmp_path, opcd_active=True)
+    dev = LocalDevice(tmp_path, opcd_state="active")
     (dev.etc / "password").write_text("secret")
     out = dev.run()
     assert out["password_file"] is True and "_error" in out["info"]

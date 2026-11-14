@@ -58,12 +58,27 @@ _SNAPSHOT_STR = ("manufacture_date", "shipment_date", "hardware_version", "seria
 
 # 장치에서 root 로 도는 대조 스크립트(고정 문자열, 입력값을 넣지 않는다). 결과를 JSON 한 줄로 낸다.
 VERIFY_SCRIPT = r'''
-import json, os, shutil, subprocess
+import json, os, shutil, signal, subprocess
 INFO = "/usr/local/opc/etc/device_info.json"
 PASSWORD = "/usr/local/opc/etc/password"
 SNAP = "/dev/shm/opcd/device_info.json"
+# opcd 가 시작하며 만드는 것 가운데 이 스크립트가 지울 수 있는 것(전에 없던 경우만).
+RESIDUE = ("/usr/local/opc/etc/temp", "/home/admin/iplist.txt")
 WATCH = ("/usr/local/opc/etc", "/home/admin")
 VHL = ["/usr/local/opc/bin/vhlctl", "--host", "127.0.0.1", "--port", "50607", "--timeout", "10000"]
+
+
+class Interrupted(Exception):
+    pass
+
+
+def on_signal(signum, frame):
+    raise Interrupted("signal %d" % signum)
+
+
+def opcd_state():
+    r = subprocess.run(["systemctl", "is-active", "opcd.service"], capture_output=True, text=True)
+    return r.stdout.strip() or "unknown"
 
 
 def load(path):
@@ -81,38 +96,53 @@ def names(d):
         return None
 
 
-out = {"info": load(INFO)}
-active = subprocess.run(["systemctl", "is-active", "--quiet", "opcd.service"]).returncode == 0
-out["opcd_was_active"] = active
-before = {d: names(d) for d in WATCH}
-started = False
-if not active:
-    started = subprocess.run(["systemctl", "start", "opcd.service"]).returncode == 0
-out["opcd_started"] = started
-out["password_file"] = os.path.exists(PASSWORD)
+for s in (signal.SIGHUP, signal.SIGTERM):
+    signal.signal(s, on_signal)
+out = {"info": load(INFO), "password_file": os.path.exists(PASSWORD), "snapshot": {"_error": "not queried"},
+       "device_info_rc": None, "removed": [], "left": []}
+state = opcd_state()
+out["opcd_state"] = state
+out["opcd_was_active"] = state == "active"
+attempt = state in ("inactive", "failed")   # 그 밖(activating 등)은 건드리지 않고 대조 실패로 둔다
+out["opcd_start_attempted"] = attempt
+out["opcd_started"] = False
+before = {p: os.path.lexists(p) for p in RESIDUE}
+seen = {d: names(d) for d in WATCH}
 try:
-    os.unlink(SNAP)
-except FileNotFoundError:
-    pass
-subprocess.run(VHL + ["login", "--password", "MyPassword"], capture_output=True)
-out["device_info_rc"] = subprocess.run(VHL + ["device-info"], capture_output=True).returncode
-out["snapshot"] = load(SNAP)
-subprocess.run(VHL + ["logout"], capture_output=True)
-removed = []
-if started:
-    out["opcd_stop_rc"] = subprocess.run(["systemctl", "stop", "opcd.service"]).returncode
-    for d, was in before.items():
-        if was is None:
-            continue
-        for name in sorted((names(d) or set()) - was):
-            p = os.path.join(d, name)
-            if os.path.isdir(p) and not os.path.islink(p):
-                shutil.rmtree(p)
-            else:
-                os.unlink(p)
-            removed.append(p)
-out["removed"] = removed
-print(json.dumps(out))
+    if attempt:
+        out["opcd_started"] = subprocess.run(["systemctl", "start", "opcd.service"]).returncode == 0
+    if state == "active" or out["opcd_started"]:
+        try:
+            os.unlink(SNAP)
+        except FileNotFoundError:
+            pass
+        subprocess.run(VHL + ["login", "--password", "MyPassword"], capture_output=True)
+        out["device_info_rc"] = subprocess.run(VHL + ["device-info"], capture_output=True).returncode
+        out["snapshot"] = load(SNAP)
+        subprocess.run(VHL + ["logout"], capture_output=True)
+finally:
+    for s in (signal.SIGHUP, signal.SIGTERM):
+        signal.signal(s, signal.SIG_IGN)    # 복원 중에는 멈추지 않는다
+    if attempt:
+        out["opcd_stop_rc"] = subprocess.run(["systemctl", "stop", "opcd.service"]).returncode
+        out["opcd_state_after"] = opcd_state()
+        if out["opcd_stop_rc"] == 0 and out["opcd_state_after"] in ("inactive", "failed"):
+            for p in RESIDUE:
+                if before[p] or not os.path.lexists(p):
+                    continue
+                if os.path.isdir(p) and not os.path.islink(p):
+                    shutil.rmtree(p)
+                else:
+                    os.unlink(p)
+                out["removed"].append(p)
+        for d, was in seen.items():
+            now = names(d) or set()
+            out["left"] += [os.path.join(d, n) for n in sorted(now - (was or set()))
+                            if os.path.join(d, n) not in out["removed"]]
+    try:
+        print(json.dumps(out), flush=True)
+    except OSError:
+        pass
 '''
 
 
@@ -193,6 +223,10 @@ def build_values(args):
         manufacture_date=datetime.date.fromisoformat(args.manufacture_date),
         shipment_date=datetime.date.fromisoformat(args.shipment_date),
         hardware_version=args.hardware_version, serial_number=args.serial)
+    for name in ("serial_number", "hardware_version"):
+        text = getattr(values, name)
+        if not text.strip() or text != text.strip():
+            raise ValueError(f"{name}: 비어 있거나 앞뒤에 공백이 있다({text!r})")
     bad = dr.r2_violations(values)
     if bad:
         raise ValueError("사양서 R2 규칙 밖: " + ", ".join(bad))
@@ -217,6 +251,24 @@ def load_key(path, trusted):
     if not ids:
         raise ValueError("장치가 믿는 공개키 목록에 이 키의 짝이 없다")
     return key, ids[0], hashlib.sha256(pub).hexdigest()
+
+
+def _signed_row_problem(row):
+    """signed 행의 열(serial·uid_source·uid)이 record_hex 의 내용과 다르면 그 이유, 같으면 ""."""
+    try:
+        blob = bytes.fromhex(row.get("record_hex") or "")
+    except ValueError:
+        return "record_hex"
+    if len(blob) != dr.RECORD_SIZE or blob[:len(dr.MAGIC)] != dr.MAGIC:
+        return "record_hex"
+    record, _ = dr._structure(blob[:dr.SIGNED_SIZE])  # 서명 검증 없이 내용만 읽는다(키는 이미 바뀌었을 수 있다)
+    if record is None:
+        return "record_hex"
+    if row.get("serial") != record.values.serial_number:
+        return "serial"
+    if row.get("uid") != record.uid.hex() or row.get("uid_source") != str(record.uid_source):
+        return "uid"
+    return ""
 
 
 class Ledger:
@@ -252,11 +304,26 @@ class Ledger:
             self._locked = False
 
     def rows(self):
+        """원장 행. BOM(Excel "CSV UTF-8")은 받는다. 다른 프로그램이 바꾼 원장은 Stop(EXIT_LEDGER)."""
         try:
-            with open(self.path, newline="", encoding="utf-8") as f:
-                return list(csv.DictReader(f))
+            with open(self.path, newline="", encoding="utf-8-sig") as f:
+                reader = csv.DictReader(f)
+                rows = list(reader)
+                header = reader.fieldnames
         except FileNotFoundError:
             return []
+        except (UnicodeDecodeError, csv.Error) as exc:
+            raise Stop(EXIT_LEDGER, f"원장을 읽을 수 없다({self.path}: {exc}). UTF-8 이 아닌 형식으로 저장된 것 "
+                                    "같다. 원장은 Excel 등에서 저장하지 않는다") from exc
+        if header is None and not rows:
+            return []
+        if header != LEDGER_FIELDS:
+            raise Stop(EXIT_LEDGER, f"원장 열이 이 도구의 열과 다르다({self.path})")
+        for n, row in enumerate(rows, start=2):
+            if row.get("phase") == "signed" and _signed_row_problem(row):
+                raise Stop(EXIT_LEDGER, f"원장 {n}행의 시리얼·UID 가 레코드 내용과 다르다"
+                                        f"({_signed_row_problem(row)}). 원장을 다른 프로그램으로 저장했는지 확인한다")
+        return rows
 
     def append(self, row):
         try:
@@ -278,6 +345,8 @@ class Ledger:
 def _ssh_argv(args, known_hosts, remote):
     argv = [args.ssh, "-T", "-p", str(args.port),
             "-o", f"UserKnownHostsFile={known_hosts}",
+            # 시스템 known_hosts 와 섞지 않는다(만들지 않는 파일을 가리킨다).
+            "-o", f"GlobalKnownHostsFile={known_hosts}.global",
             "-o", "StrictHostKeyChecking=accept-new",
             "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=3"]
     if args.identity:
@@ -292,6 +361,11 @@ def _text(data):
 def _verify(out, values):
     """대조 스크립트 결과에서 어긋난 항목 이름 목록."""
     bad = []
+    if out.get("opcd_state") not in ("active", "inactive", "failed"):
+        bad.append("opcd_state")
+    if out.get("opcd_start_attempted") and (out.get("opcd_stop_rc") != 0
+                                            or out.get("opcd_state_after") not in ("inactive", "failed")):
+        bad.append("opcd_restore")
     if out.get("password_file"):
         bad.append("password_file")
     if out.get("info") != dr.device_info_json(values):
@@ -348,9 +422,11 @@ def _issue(args, ledger, runner, trusted, log, values, key, key_id, pub_sha):
                 "hardware_version": values.hardware_version, "record_hex": blob.hex(),
                 "tool_commit": _tool_commit(), "operator": _operator(), "pc": platform.node(), "host": args.host}
         signed = [row for row in ledger.rows() if row.get("phase") == "signed"]
-        same = [row for row in signed if row["serial"] == values.serial_number and row["uid"] == uid.hex()
-                and row["record_hex"] == blob.hex()]
         used = [row for row in signed if row["serial"] == values.serial_number or row["uid"] == uid.hex()]
+        # 이어서 하기는 이 시리얼·UID 의 가장 최근 발급과 같을 때만이다. 대체된 옛 레코드로 되돌리는 것은 재발급이다.
+        latest = used[-1] if used else None
+        same = (latest is not None and latest["serial"] == values.serial_number and latest["uid"] == uid.hex()
+                and latest["record_hex"] == blob.hex())
         if same:
             log("원장에 같은 시리얼·UID·레코드가 있다: 이어서 한다")
         elif used and not args.reissue:
