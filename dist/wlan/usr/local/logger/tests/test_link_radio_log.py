@@ -1,8 +1,8 @@
-"""#459(b): radio.log(syslog local4) 한 줄 — 직전 줄 이후 비콘 수신·미스 증가분과 운용 채널 사용률.
+"""#459(b)·#494: radio.log(syslog local4) 한 줄 — 비콘 수신·미스 총개수(+직전 줄 이후 증가분)와 운용 채널 사용률.
 
 RadioLog 는 링크 로거가 매 주기(0.9초) 읽는 값으로 radio_log_interval_sec 마다 한 줄을 만든다.
 재연결·로밍(bssid·채널 변경, connected time·survey 누적값 감소)과 카운터 감소는 음수나 과대값
-대신 '-'로 쓰고 기준을 다시 잡는다. 사용률은 opcd(#192)와 같은 규칙으로만 낸다.
+대신 증가분을 '-'(bcn·miss 는 `총개수(-)`)로 쓰고 기준을 다시 잡는다. 카운터가 없으면 '-'다. 사용률은 opcd(#192)와 같은 규칙으로만 낸다.
 """
 import json
 import os
@@ -58,7 +58,7 @@ def test_line_reports_increases_since_previous_line():
     rl, link = wl.RadioLog("mlan0", 5), Link()
     assert link.at(rl, 0.0) is None
     assert [link.at(rl, t) for t in (1.0, 2.0, 3.0, 4.0)] == [None] * 4
-    assert link.at(rl, 5.0, miss=12) == line("+50", "+2", "10%")
+    assert link.at(rl, 5.0, miss=12) == line("1050(+50)", "12(+2)", "10%")
 
 
 def test_next_line_waits_a_full_interval():
@@ -66,7 +66,7 @@ def test_next_line_waits_a_full_interval():
     link.at(rl, 0.0)
     assert link.at(rl, 5.0) is not None
     assert link.at(rl, 9.0) is None
-    assert link.at(rl, 10.0) == line("+50", "+0", "10%")
+    assert link.at(rl, 10.0) == line("1100(+50)", "10(+0)", "10%")
 
 
 def test_zero_interval_turns_the_log_off():
@@ -79,8 +79,8 @@ def test_counter_restart_marks_only_that_counter():
     link.at(rl, 0.0)
     link.at(rl, 2.0, bcn=3)  # beaconReceivedCount 만 0 근처에서 다시 센다
     # 다시 센 값이 줄 시각에 기준(1000)을 넘어도 증가분으로 쓰지 않는다(+100 이 아니라 '-').
-    assert link.at(rl, 5.0, bcn=1100) == line("-", "+0", "10%")
-    assert link.at(rl, 10.0) == line("+50", "+0", "10%")
+    assert link.at(rl, 5.0, bcn=1100) == line("1100(-)", "10(+0)", "10%")
+    assert link.at(rl, 10.0) == line("1150(+50)", "10(+0)", "10%")
 
 
 RECONNECT = {
@@ -97,8 +97,8 @@ def test_reconnect_or_roam_marks_every_value_then_rebaselines(change):
     link.at(rl, 0.0)
     link.at(rl, 2.0, **change)
     v = link.v
-    assert link.at(rl, 5.0) == line("-", "-", "-", bssid=v["bssid"], ch=v["ch"])
-    assert link.at(rl, 10.0) == line("+50", "+0", "10%", bssid=v["bssid"], ch=v["ch"])
+    assert link.at(rl, 5.0) == line("1050(-)", "10(-)", "-", bssid=v["bssid"], ch=v["ch"])
+    assert link.at(rl, 10.0) == line("1100(+50)", "10(+0)", "10%", bssid=v["bssid"], ch=v["ch"])
 
 
 def test_cu_is_dash_when_active_time_disagrees_with_monotonic_time():
@@ -107,14 +107,14 @@ def test_cu_is_dash_when_active_time_disagrees_with_monotonic_time():
     rl, link = wl.RadioLog("mlan0", 5), Link()
     link.at(rl, 0.0)
     link.v["active"] += 2000
-    assert link.at(rl, 5.0) == line("+50", "+0", "-")
+    assert link.at(rl, 5.0) == line("1050(+50)", "10(+0)", "-")
 
 
 def test_cu_saturates_at_100_when_busy_outgrows_active():
     rl, link = wl.RadioLog("mlan0", 5), Link()
     link.at(rl, 0.0)
     link.v["busy"] += 5000
-    assert link.at(rl, 5.0) == line("+50", "+0", "100%")
+    assert link.at(rl, 5.0) == line("1050(+50)", "10(+0)", "100%")
 
 
 def test_missing_inputs_give_dash():
@@ -124,6 +124,14 @@ def test_missing_inputs_give_dash():
         f"mlan0 bssid={BSS} ch=- bw=- bcn=- miss=- cu=-"
 
 
+def test_counter_without_a_baseline_reports_the_total_only():
+    # 연결 뒤 첫 표본에 카운터가 없었으면 증가분을 낼 기준이 없다: 총개수만 쓰고 '(-)'.
+    rl = wl.RadioLog("mlan0", 5)
+    assert rl.sample(0.0, {"address": BSS}, {}, {"error": "x"}, None) is None
+    assert rl.sample(5.0, {"address": BSS}, {},
+                     {"beaconReceivedCount": 37, "beaconMissedCount": 2}, None) == \
+        f"mlan0 bssid={BSS} ch=- bw=- bcn=37(-) miss=2(-) cu=-"
+
 def test_disconnect_reset_starts_a_new_baseline():
     rl, link = wl.RadioLog("mlan0", 5), Link()
     link.at(rl, 0.0)
@@ -131,7 +139,7 @@ def test_disconnect_reset_starts_a_new_baseline():
     rl.reset()  # 끊김: 줄 없이 기준을 버린다
     assert link.at(rl, 3.0, conn=0, bcn=1500, busy=0, active=0) is None
     assert link.at(rl, 7.0) is None
-    assert link.at(rl, 8.0) == line("+50", "+0", "10%")
+    assert link.at(rl, 8.0) == line("1550(+50)", "10(+0)", "10%")
 
 
 @pytest.mark.parametrize("conf, expected", [
@@ -159,13 +167,13 @@ def test_emitter_sends_local4_info_with_radio_tag():
         server.bind(path)
         server.settimeout(5)
         emit = wl._make_radio_emitter(path)
-        emit(line("+50", "+0", "10%"))
+        emit(line("1050(+50)", "10(+0)", "10%"))
         data = server.recv(4096)
     finally:
         server.close()
         os.unlink(path)
         os.rmdir(work)
-    assert data.rstrip(b"\x00") == ("<166>RADIO " + line("+50", "+0", "10%")).encode()
+    assert data.rstrip(b"\x00") == ("<166>RADIO " + line("1050(+50)", "10(+0)", "10%")).encode()
 
 
 class _Stop(Exception):
@@ -231,5 +239,5 @@ def test_main_loop_writes_radio_lines_and_restarts_after_disconnect(tmp_path, mo
     monkeypatch.setattr(mod, "RADIO_EMIT", emitted.append, raising=False)
     with pytest.raises(_Stop):
         mod.main()
-    assert emitted == [f"lo bssid={BSS} ch=36 bw=80 bcn=+50 miss=+0 cu=10%"]
+    assert emitted == [f"lo bssid={BSS} ch=36 bw=80 bcn=1050(+50) miss=10(+0) cu=10%"]
     assert json.loads((logdir / "link.json").read_text())["link"]["address"] == BSS

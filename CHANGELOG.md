@@ -3,6 +3,20 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## Unreleased
+
+> 다음 릴리스에 묶일 변경이다. 릴리스 PR이 이 절을 버전 절로 바꾼다.
+
+- **stat 로그를 `stat.log` 하나로 쓰고 radio.log 의 bcn·miss 를 총개수(+증가분)로 쓴다**(#494, SemVer patch): `wifi_logger_stat.py` 가 같은 줄을 AP별 파일 `stat/<if>/<BSSID 의 : 를 _ 로 바꾼 이름>.log` 와 `stat.log` 에 두 번 쓰던 것을 `stat.log` 하나로 줄였다. 통계 줄에 `MAC:` 이 있어 AP별 줄은 `stat.log` 에서 뽑는다. 통계 줄·`AP changed` 줄·`stat init!!` 줄의 형식과 계산식은 그대로다. AP별 누적(바이트·패킷·평균 속도·시간·`FAIL`·RSSI 최소·최대)은 AP별 파일의 마지막 줄을 되읽는 대신 로거 프로세스 메모리에서 이어 센다. radio.log 는 `bcn=12345(+50) miss=3(+0)` 처럼 그 줄 시점의 드라이버 카운터 값과 직전 줄 이후 증가분을 함께 쓴다. 증가분을 낼 수 없는 구간(재연결·로밍·카운터 감소)은 `bcn=37(-)`, 카운터를 읽지 못하면 종전처럼 `bcn=-` 다.
+- **동작 변경**:
+  - AP별 누적은 로거 재시작·재부팅·업그레이드 때 0 부터 다시 센다(종전에는 AP별 파일에서 되읽었다). `wifi <if> log reset`·`wifi log clear`·`wifi log reset` 은 더 이상 AP별 통계 누적을 초기화하지 않는다. 누적 초기화는 `wifi <if> stat reset` 과 매일 회전이 맡는다.
+  - 매일 회전 플래그가 iface별 `/tmp/wifi_stat_init_f_mlan0`·`_mlan1` 로 바뀌어 mlan0·mlan1 로거 모두에서 현재 AP 와 끊겨 있던 AP 의 누적을 함께 비운다(종전: 플래그를 먼저 본 로거의 현재 AP 만). `wifi <if> stat reset`(MAC 생략)은 그 iface 로거의 AP 전체를 비운다. 끊겨 있는 동안 받은 요청은 다음 연결 때 반영된다. `wifi <if> stat reset <MAC>` 은 MAC 을 소문자로 바꿔 플래그를 만들어 대문자로 주어도 그 AP 에 적용된다.
+  - `wifi <if> log reset mac` 을 없앴다(인자 오류, 종료 코드 2). `wifi <if> log reset` 은 iface 로그만 비운다.
+  - `wifi <if> log reset`·`log cp`·`log extract`·`log compress` 가 성공(일부 파일 없음 포함)하면 0, truncate·복사·추출·압축 실패와 기존 오류 조건에서는 0 이 아닌 값으로 끝난다(종전에는 모든 파일이 있을 때의 성공이 1 이었다). `dist/`·`scripts/`·`wlan-opc/` 에서 이 종료 코드를 보는 호출자는 찾지 못했다.
+  - 업그레이드 때 postinst 가 떠 있는 `wifi_logger_stat@mlan0`·`@mlan1` 을 새 코드로 재시작하고(`try-restart`, 무선 연결과 무관) `stat/mlan0/`·`stat/mlan1/` 의 MAC 형식 이름 파일(`xx_xx_xx_xx_xx_xx.log` 와 `-YYYYMMDD`·`-YYYYMMDD.gz` 회전본)을 지운다. `stat.log`·`snap.log` 와 그 회전본은 남는다. 지운 파일은 되돌릴 수 없지만 같은 줄이 `stat.log` 와 그 회전본에 있다.
+  - radio.log 줄이 카운터 자릿수만큼 길어진다.
+- **테스트**: `logger/tests/test_stat_logger_ap_totals.py` 가 실제 `log_stats()` 루프를 가짜 링크 정보로 돌려 AP별 파일이 생기지 않는 것, A → B → A 에서 A 의 바이트·패킷·시간·`FAIL` 이 이어지는 것, iface 플래그가 현재·끊겨 있던 AP 를 함께 비우고 지워지는 것(다른 iface 플래그는 무시, 끊겨 있는 동안의 요청은 다음 연결 때 반영), MAC 플래그를 소문자로 찾는 것을 고정한다. `scripts/tests/test_wifi_iface_log_stat_reset.py` 는 `log reset` 대상과 `mac` 거절, 네 명령의 성공·일부 없음·실패 종료 코드, `stat reset` 플래그 이름을 실제 `wifi.sh` 로 확인한다. `scripts/tests/test_postinst_stat_ap_log_cleanup.py` 는 postinst 정리가 MAC 형식 이름만 지우는 것과 재시작 → 정리 순서를 본다. `test_link_radio_log.py` 가 `총개수(+증가분)`·`총개수(-)`·`-` 세 경우를 고정한다.
+
 ## 0.8.8 (2026-11-15)
 
 > SemVer **patch** — 출하 고정값 서명 레코드(#481)를 싣는다. 장치가 eMMC boot1 의 Ed25519 서명 레코드를 부팅 때 검증해 `device_info.json`(opcd·SNMP)에 반영하고, 레코드를 기록하는 장치 쪽 도구와 양산 PC 발급 도구(패키지 밖)를 더한다(#489·#490·#491·#492).

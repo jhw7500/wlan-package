@@ -294,6 +294,7 @@ dist/wlan/usr/local/logger/tests/test_runtime_output_english.py
 dist/wlan/usr/local/logger/tests/test_schema_by_board_sync.py
 dist/wlan/usr/local/logger/tests/test_schema_inert_in_mode.py
 dist/wlan/usr/local/logger/tests/test_staged_scan.py
+dist/wlan/usr/local/logger/tests/test_stat_logger_ap_totals.py
 dist/wlan/usr/local/logger/tests/test_supplicant_state.py
 dist/wlan/usr/local/logger/tests/test_wifi_link_monitor_beacons.py
 dist/wlan/usr/local/logger/tests/test_wifi_snmp_logging.py
@@ -369,6 +370,7 @@ dist/wlan/usr/local/scripts/tests/test_opc_radio_apply.py
 dist/wlan/usr/local/scripts/tests/test_opcd_essid_restore_unit.py
 dist/wlan/usr/local/scripts/tests/test_opcd_unit_install.py
 dist/wlan/usr/local/scripts/tests/test_postinst_factory_parent.py
+dist/wlan/usr/local/scripts/tests/test_postinst_stat_ap_log_cleanup.py
 dist/wlan/usr/local/scripts/tests/test_postinst_upgrade_wifi_event.py
 dist/wlan/usr/local/scripts/tests/test_recovery_diagnostic_timeouts.py
 dist/wlan/usr/local/scripts/tests/test_remote_syslog_wpa.py
@@ -389,6 +391,7 @@ dist/wlan/usr/local/scripts/tests/test_wifi_devinfo_write.py
 dist/wlan/usr/local/scripts/tests/test_wifi_eth_peer.sh
 dist/wlan/usr/local/scripts/tests/test_wifi_event_garp.py
 dist/wlan/usr/local/scripts/tests/test_wifi_factory_topology.py
+dist/wlan/usr/local/scripts/tests/test_wifi_iface_log_stat_reset.py
 dist/wlan/usr/local/scripts/tests/test_wifi_init_mac.py
 dist/wlan/usr/local/scripts/tests/test_wifi_log_extract.py
 dist/wlan/usr/local/scripts/tests/test_wifi_log_scope.py

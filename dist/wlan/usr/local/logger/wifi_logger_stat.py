@@ -54,31 +54,6 @@ def load_logger_config(iface):
             _EXTRA_(),
         )
 
-# 새 로그는 timestamp 대괄호를 쓰지 않는다. 기존 누적 로그도 재시작 후 읽을 수 있도록
-# 여는 괄호가 있을 때만 닫는 괄호를 요구해 두 형식을 모두 허용한다.
-# 마지막 패턴은 끝에 부가 정보가 더 있어도 허용한다.
-LOG_LINE_RE = re.compile(r"""
-    ^(?P<timestamp_bracket>\[)?
-        (?P<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})
-    (?(timestamp_bracket)\])\s+
-    MAC:(?P<mac>[0-9A-Fa-f:]+),\s+
-    BW:(?P<bw_val>\d+)\s*(?P<bw_unit>[A-Za-z/]+)?\s*,\s+ 
-    RSSI:(?P<rssi>-?\d+)dBm\(
-        min:(?P<rssi_min>-?\d+)/
-        max:(?P<rssi_max>-?\d+)
-    \),\s+
-    RX:(?P<rx_bytes>\d+)bytes?/(?P<rx_packets>\d+)pkts?/
-       (?P<rx_bps>\d+(?:\.\d+)?)Mb(?:ps|/s)/
-       (?P<rx_avg_bps>\d+(?:\.\d+)?)Mb(?:ps|/s),\s+
-    TX:(?P<tx_bytes>\d+)bytes?/(?P<tx_packets>\d+)pkts?/
-       (?P<tx_bps>\d+(?:\.\d+)?)Mb(?:ps|/s)/
-       (?P<tx_avg_bps>\d+(?:\.\d+)?)Mb(?:ps|/s),\s+
-    FAIL:(?P<tx_fail>\d+),\s+
-    (?:RETRY:(?P<retry_delta>\d+)\((?P<retry_pct>\d+(?:\.\d+)?)%\),\s+)?
-    T:(?P<time>\d+)
-    (?:\s*.*)?$
-""", re.VERBOSE)
-
 def handle_sigterm(signum, frame):
     logger.message('crit', f"[{IFACE}] SIGTERM {signum} received! Cleaning up...", _EXTRA_())
     cleanup()
@@ -94,90 +69,6 @@ def update_avg(count, avg, new_value):
 
     avg += (new_value - avg) / count
     return round(avg, 1)
-
-def get_last_ap_log_values(log_filename, num_lines=10):
-    """AP별 로그 파일에서 최신 로그 데이터를 읽어 파싱"""
-
-    if not os.path.exists(log_filename):
-        logger.message("err", f"[{IFACE}] {log_filename} is not exist", _EXTRA_())
-        return None
-
-    try:
-        with open(log_filename, "rb") as file:
-            file.seek(0, os.SEEK_END)
-            file_size = file.tell()
-
-            # 마지막 4KB 만 읽기(부족하면 파일 크기만큼)
-            read_size = min(4096, file_size)
-            file.seek(file_size - read_size, os.SEEK_SET)
-            chunk = file.read()
-
-        # 바이너리 → 텍스트 라인
-        lines = chunk.splitlines()[-num_lines:]
-        if not lines:
-            logger.message("err", f"[{IFACE}] {log_filename} is empty", _EXTRA_())
-            return None
-
-        # 최신 줄부터 역순 탐색
-        for bline in reversed(lines):
-            line = bline.decode("utf-8", errors="ignore").strip()
-            if not line:
-                continue
-
-            m = LOG_LINE_RE.search(line)  # 라인 내 아무 위치든 매칭(안전)
-            if not m:
-                continue
-
-            g = m.groupdict()
-
-            bw_val = int(g["bw_val"])
-            bw_unit = (g["bw_unit"] or "").lower()
-            bw_mhz = bw_val if "mhz" in bw_unit else None
-
-            # 타입 캐스팅
-            log_data = {
-                "timestamp": g["timestamp"],
-                "mac": g["mac"].lower(),
-                "bw": bw_val,
-                "bw_unit": g["bw_unit"] or "",
-                "bw_mhz": bw_mhz,
-                "rssi": int(g["rssi"]),
-                "rssi_min": int(g["rssi_min"]),
-                "rssi_max": int(g["rssi_max"]),
-                "rx_bytes": int(g["rx_bytes"]),
-                "rx_packets": int(g["rx_packets"]),
-                "rx_bps": float(g["rx_bps"]),
-                "rx_avg_bps": float(g["rx_avg_bps"]),
-                "tx_bytes": int(g["tx_bytes"]),
-                "tx_packets": int(g["tx_packets"]),
-                "tx_bps": float(g["tx_bps"]),
-                "tx_avg_bps": float(g["tx_avg_bps"]),
-                "tx_fail": int(g["tx_fail"]),
-                "time": int(g["time"]),
-            }
-
-            d = log_data
-            #logger.message("info",
-            #      f"[{IFACE}] {d['timestamp']} | {d['mac']} | BW:{d['bw']} | "
-            #      f"RSSI:{d['rssi']}({d['rssi_min']}/{d['rssi_max']}) | "
-            #      f"RX:{d['rx_packets']}/{d['rx_bps']}/{d['rx_avg_bps']} | "
-            #      f"TX:{d['tx_packets']}/{d['tx_bps']}/{d['tx_avg_bps']} | "
-            #      f"FAIL:{d['tx_fail']} T:{d['time']}", _EXTRA_())
-            return log_data
-
-    except Exception as e:
-        logger.message(
-            "err",
-            f"[{IFACE}] log file read error ({log_filename}): {e}",
-            _EXTRA_(),
-        )
-
-    logger.message(
-        "warn",
-        f"[{IFACE}] No valid log found: {log_filename}",
-        _EXTRA_(),
-    )
-    return None
 
 def get_link_info(json_file):
     if not os.path.exists(json_file):
@@ -448,15 +339,8 @@ def log_stats_write(my_stat, wifi_info):
 
     #print(log_entry.strip())
     
-    mac_address = wifi_info['ap_mac'].replace(":", "_")  # File-safe MAC format
-    log_filename = f"{LOG_DIR}/{mac_address}.log"
+    # 줄에 MAC 이 있어 stat.log 만으로 AP 별 줄을 뽑을 수 있다. AP 별 파일은 쓰지 않는다(#494).
     all_log_filename = f"{LOG_DIR}/stat.log"
-    
-    #if wifi_info['essid'] != "Unknown":
-    with open(log_filename, "a") as log_file:
-        log_file.write(log_entry)
-    #else:
-    #    print({wifi_info['essid']})
 
     with open(all_log_filename, "a") as all_log_file:
         all_log_file.write(log_entry)
@@ -496,7 +380,6 @@ def log_stats():
                 continue
             else:
                 ap_mac = wifi_info['ap_mac']
-                mac_address = ap_mac.replace(":", "_")
 
             #if ap_mac == "Not" and current_ap != ap_mac:
                 #logger.message("info", f"prev_ap : {current_ap}, cur_ap : {ap_mac}", _EXTRA_())
@@ -511,7 +394,6 @@ def log_stats():
             continue
 
         #mac_address = ap_mac.replace(":", "_")  # File-safe MAC format        
-        log_filename = f"{LOG_DIR}/{mac_address}.log"
         all_log_filename = f"{LOG_DIR}/stat.log"
 
         # Detect AP change
@@ -525,66 +407,26 @@ def log_stats():
             )
             #logger.message("info", f"[{IFACE}] AP change: {current_ap} -> {ap_mac}", _EXTRA_())
             current_ap = ap_mac
-            #if wifi_info['essid'] != "Unknown":
-            with open(log_filename, "a") as log_file:
-                log_file.write(log_entry)
-
             with open(all_log_filename, "a") as all_log_file:
                 all_log_file.write(log_entry)
 
             # Reset previous AP RX/TX tracking
             prev_stat[ap_mac] = wifi_info
-            
-            if os.path.exists(log_filename):
-                prev_log = get_last_ap_log_values(log_filename)
-                last_stat.setdefault(ap_mac, {"rx_bytes": 0, "rx_packets": 0, "tx_bytes": 0, "tx_packets": 0, "tx_fail": 0, "time": 0, "tx_avg_bps": 0, "rx_avg_bps": 0, "total_bps": 0})
 
-                if prev_log is None:
-                    prev_log = {
-                        "tx_fail": 0,
-                        "rx_bytes": 0,
-                        "rx_packets": 0,
-                        "rx_avg_bps": 0,
-                        "tx_bytes": 0,
-                        "tx_packets": 0,
-                        "tx_avg_bps": 0,
-                        "rssi_min": float("inf"),
-                        "rssi_max": float("-inf"),
-                        "time": 0
-                    }
+            # AP별 누적(바이트·패킷·평균 속도·시간)과 RSSI 최소·최대는 이 프로세스 메모리
+            # (last_stat·signal_levels)에서 이어 센다(#494). 처음 보는 AP 는 0 부터 세고,
+            # 로거가 다시 시작하면 모든 AP 가 0 부터다. FAIL 은 종전 코드와 같이 이 AP 에서
+            # 지금까지 쌓인 값을 기준으로 이번 연결의 tx_fail 을 더한다.
+            last_stat.setdefault(ap_mac, {"rx_bytes": 0, "rx_packets": 0, "tx_bytes": 0, "tx_packets": 0, "tx_fail": 0, "time": 0, "tx_avg_bps": 0, "rx_avg_bps": 0, "total_bps": 0})
+            prev_tx_fail = last_stat[ap_mac]["tx_fail"]
 
-                #prev_retry = prev_log["retry_count"]
-                last_stat[ap_mac]["rx_bytes"] = prev_log["rx_bytes"]
-                last_stat[ap_mac]["rx_packets"] = prev_log["rx_packets"]
-                last_stat[ap_mac]["rx_avg_bps"] = prev_log["rx_avg_bps"]
-                last_stat[ap_mac]["tx_bytes"] = prev_log["tx_bytes"]
-                last_stat[ap_mac]["tx_packets"] = prev_log["tx_packets"]
-                last_stat[ap_mac]["tx_avg_bps"] = prev_log["tx_avg_bps"]
-                last_stat[ap_mac]["time"] = prev_log["time"]
-
-                signal_levels[ap_mac]["min"] = min(signal_levels[ap_mac]["min"], prev_log["rssi_min"])
-                signal_levels[ap_mac]["max"] = max(signal_levels[ap_mac]["max"], prev_log["rssi_max"])
-
-                wifi_info["rssi_min"] = signal_levels[ap_mac]["min"]
-                wifi_info["rssi_max"] = signal_levels[ap_mac]["max"]
-            else:
-                prev_log = {
-                    "tx_fail": 0,
-                    "rx_bytes": 0,
-                    "rx_packets": 0,
-                    "rx_avg_bps": 0,
-                    "tx_bytes": 0,
-                    "tx_packets": 0,
-                    "tx_avg_bps": 0,
-                    "rssi_min": float("inf"),
-                    "rssi_max": float("-inf"),
-                    "time": 0
-                }
-                last_stat.setdefault(ap_mac, {"rx_bytes": 0, "rx_packets": 0, "tx_bytes": 0, "tx_packets": 0, "tx_fail": 0, "time": 0, "tx_avg_bps": 0, "rx_avg_bps": 0, "total_bps": 0})
-
+        # 초기화 요청: wifi_stat_init_f_<iface>(logrotate 매일 회전·`wifi <if> stat reset`)는 이 로거의
+        # AP 전체를, wifi_stat_reset_<소문자 MAC>(`wifi <if> stat reset <MAC>`)은 그 AP 만 비운다.
+        init_flagfile = f"/tmp/wifi_stat_init_f_{IFACE}"
+        mac_flagfile = f"/tmp/wifi_stat_reset_{ap_mac.lower()}"
         cond_time = last_stat[ap_mac]["time"] >= STAT_RESET_INTERVAL
-        cond_flagfile = os.path.exists("/tmp/wifi_stat_init_f")
-        cond_mac_flagfile = os.path.exists(f"/tmp/wifi_stat_reset_{ap_mac}")
+        cond_flagfile = os.path.exists(init_flagfile)
+        cond_mac_flagfile = os.path.exists(mac_flagfile)
         reset_flag = cond_time or cond_flagfile or cond_mac_flagfile
 
         #print(f"current_ap : {current_ap} , ap_mac : {ap_mac}")
@@ -594,8 +436,7 @@ def log_stats():
         #print("tx_throughput:", last_stat[ap_mac]["tx_throughput"])
         #print("rx_throughput:", last_stat[ap_mac]["rx_throughput"])
         #retry_count, tx_frag_count = parse_log(log)
-        last_stat[ap_mac]["tx_fail"] = wifi_info["tx_fail"] + prev_log["tx_fail"]
-        #print(f"{last_stat[ap_mac]['tx_fail']}, {wifi_info['tx_fail']}, {prev_log['tx_fail']}")
+        last_stat[ap_mac]["tx_fail"] = wifi_info["tx_fail"] + prev_tx_fail
         #last_stat[ap_mac]["tx_retry"] = wifi_info["tx_retry"] + prev_retry
         #last_stat[ap_mac]["tx_retry"] = retry_count
         #last_stat[ap_mac]["tx_frame_cnt"] = tx_frag_count
@@ -663,15 +504,10 @@ def log_stats():
                 f"MAC:{ap_mac} stat init!!\n"
             )
             #logger.message("info", f"[{IFACE}] AP change: {current_ap} -> {ap_mac}", _EXTRA_())
-            with open(log_filename, "a") as log_file:
-                log_file.write(log_entry)
-
             with open(all_log_filename, "a") as all_log_file:
                 all_log_file.write(log_entry)
 
-            prev_log["tx_fail"] = 0
-            prev_log["rssi_min"] = 0
-            prev_log["rssi_max"] = 0
+            prev_tx_fail = 0
             last_stat[ap_mac]["tx_bytes"] = 0
             last_stat[ap_mac]["rx_bytes"] = 0
             last_stat[ap_mac]["tx_packets"] = 0
@@ -683,13 +519,17 @@ def log_stats():
             signal_levels[ap_mac]["max"] = -100
 
             if cond_flagfile:
+                # iface 초기화 요청은 끊겨 있던 AP 의 누적도 버린다 — 다시 연결되면 0 부터 센다.
+                for table in (last_stat, prev_stat, signal_levels):
+                    for mac in [k for k in table if k != ap_mac]:
+                        del table[mac]
                 try:
-                    os.remove("/tmp/wifi_stat_init_f")
+                    os.remove(init_flagfile)
                 except FileNotFoundError:
                     pass
             if cond_mac_flagfile:
                 try:
-                    os.remove(f"/tmp/wifi_stat_reset_{ap_mac}")
+                    os.remove(mac_flagfile)
                 except FileNotFoundError:
                     pass
         #'''

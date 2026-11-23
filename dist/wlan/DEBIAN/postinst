@@ -898,6 +898,29 @@ cleanup_retired_roaming_keys() {
   fi
 }
 
+# stat 로거는 AP별 파일(<BSSID 의 : 를 _ 로 바꾼 이름>.log)을 더 쓰지 않는다(#494). stat 블록에
+# create 가 없어 원본이 사라진 회전본은 logrotate 가 지우지 않으므로, mlan0·mlan1 아래 MAC 형식
+# 이름의 원본과 -YYYYMMDD·.gz 회전본만 지운다. 같은 줄이 stat.log 와 그 회전본에 남아 있다.
+# stat.log·snap.log 와 그 회전본, 다른 디렉터리는 건드리지 않는다. 실패해도 설치는 계속한다.
+cleanup_retired_stat_ap_logs() {
+  local base="$1" dir f n=0
+  local re='^([[:xdigit:]]{2}_){5}[[:xdigit:]]{2}\.log(-[[:digit:]]{8}(\.gz)?)?$'
+  for dir in "$base/mlan0" "$base/mlan1"; do
+    [ -d "$dir" ] || continue
+    for f in "$dir"/*; do
+      [ -f "$f" ] || continue
+      [[ "${f##*/}" =~ $re ]] || continue
+      if rm -f -- "$f"; then
+        n=$((n + 1))
+      else
+        logger -p local0.warn "[$tag:$LINENO] [$KEY] failed to remove retired per-AP stat file $f"
+      fi
+    done
+  done
+  [ "$n" -eq 0 ] || logger -p local0.info "[$tag:$LINENO] [$KEY] removed $n retired per-AP stat file(s) under $base"
+  return 0
+}
+
 # mlan1 conf 의 활성 bgscan 은 supplicant 자율 로밍을 발화시켜 외부 roam 데몬과 Roaming
 # notify 경로를 우회한다. 템플릿에서는 제거했지만 cpchk 는 기존 /etc 복사본을 보존하므로,
 # 업그레이드 장비에서도 해당 라인만 표적 제거한다(사용자 관리 필드는 그대로 둔다).
@@ -940,6 +963,17 @@ secure_wpa_conf() {
   migrate_product_antcfg /usr/local/etc/wifi_init_conf.json "$BOARD_TYPE" || exit 1
   normalize_legacy_mcs_tier /usr/local/etc/wifi_init_conf.json || exit 1
   cleanup_retired_roaming_keys /usr/local/etc/wifi_init_conf.json
+
+  # >>> stat-ap-log-cleanup
+  # 업그레이드 때는 옛 stat 로거 프로세스가 아직 돌며 현재 AP 의 파일에 계속 쓴다(prerm upgrade 는
+  # 로거를 내리지 않는다). 지운 파일이 다시 생기지 않도록 떠 있는 wifi_logger_stat@ 만 새 코드로
+  # 재시작한 뒤 지운다. 관측 데몬이라 무선 연결에는 영향이 없고, AP별 누적은 0 부터 다시 센다.
+  if [ -n "${2:-}" ]; then
+    systemctl try-restart wifi_logger_stat@mlan0.service wifi_logger_stat@mlan1.service 2>/dev/null \
+      || logger -p local0.warn "[$tag:$LINENO] [$KEY] wifi_logger_stat@ restart failed; per-AP stat files may reappear until reboot"
+  fi
+  cleanup_retired_stat_ap_logs /var/log/cantops/stat
+  # <<< stat-ap-log-cleanup
 
   # json_merge 이후 감지된 보드 설정을 적용한다 (첫 설치 시에도 정상 동작).
   WIFI_CONF="/usr/local/etc/wifi_init_conf.json"

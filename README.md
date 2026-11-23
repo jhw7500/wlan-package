@@ -271,8 +271,8 @@ wifi log reset               # clear all + delete dated journald snapshots and e
 ```
 
 The target logs are the `/var/log/cantops/` entries of
-`/etc/logrotate.d/logrotate.rsyslog` (globs included, so per-AP MAC logs are
-covered) plus the global `ping.log`. Registering a new log in that file is
+`/etc/logrotate.d/logrotate.rsyslog` (globs included) plus the global
+`ping.log`. Registering a new log in that file is
 enough to make it a target. `dump today` keeps the records whose leading date is
 today's local date, from the current files, the rotated copies named today or
 still written today, and today's journald snapshot, with paths relative to

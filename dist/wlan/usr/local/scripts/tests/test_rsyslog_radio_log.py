@@ -25,7 +25,7 @@ _SPEC.loader.exec_module(_H)
 
 LOG_ROOT = "/var/log/cantops/"
 WIFI_HEAD = 'if re_match($programname, "^wifi_") then {'
-RADIO_MSG = "mlan0 bssid=02:00:00:00:00:01 ch=36 bw=80 bcn=+50 miss=+0 cu=10%"
+RADIO_MSG = "mlan0 bssid=02:00:00:00:00:01 ch=36 bw=80 bcn=1050(+50) miss=10(+0) cu=10%"
 # (시설·등급 PRI, 태그와 본문). 마지막 user 줄은 모든 줄이 처리됐는지 기다리는 표식이다.
 MESSAGES = (
     (166, "RADIO " + RADIO_MSG),                              # local4.info, 링크 로거 형식

@@ -2054,8 +2054,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} cal {0|1|2|none|WlanCalData_ext.conf|*} : persist (인터페이스별)"
     echo "       wifi {0|1|mlan0|mlan1} log {cp [dir]|compress} : 로그 복사/압축(현재 디렉터리)"
     echo "       wifi {0|1|mlan0|mlan1} log extract <start> <end> [dir] : 시간 범위 로그 추출(HH:MM[:SS]는 당일, 전체 날짜·시간은 따옴표 사용)"
-    echo "       wifi {0|1|mlan0|mlan1} log reset : iface 로그 + AP별 MAC 로그 truncate (rsyslog HUP)"
-    echo "       wifi {0|1|mlan0|mlan1} log reset mac : AP별 MAC 로그만 truncate"
+    echo "       wifi {0|1|mlan0|mlan1} log reset : iface 로그 truncate (rsyslog HUP). 통계 누적 초기화는 stat reset"
     echo "       wifi {0|1|mlan0|mlan1} ssid {id} : persist"
     echo "       wifi {0|1|mlan0|mlan1} psk {password} : persist"
     echo "       wifi {0|1|mlan0|mlan1} key {0|1|NONE|WPA-PSK|SAE|OWE|FT-PSK|WPA-EAP|...} : persist (wpa_supplicant 인식 토큰만; 공백구분 다중 지정 가능)"
@@ -2068,7 +2067,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} roam th [2G|5G] [rssi] : 로밍 RSSI 임계값 표시/설정 (persist, SIGHUP 무재시작 반영)"
     echo "       wifi {0|1|mlan0|mlan1} roam diff [dB] : 후보 AP 최소 RSSI 이득 표시/설정 (persist, SIGHUP 무재시작 반영)"
     echo "       wifi {0|1|mlan0|mlan1} roam gate [on|off] : good-signal 리셋 게이트 표시/설정 (delta=2dB, grace=40s 고정)"
-    echo "       wifi {0|1|mlan0|mlan1} stat reset [mac] : reset stat records (all or specific MAC)"
+    echo "       wifi {0|1|mlan0|mlan1} stat reset [mac] : reset stat accumulation of all APs on this iface, or of one AP (MAC, any case); applied at the next connected cycle"
     echo "       wifi {0|1|mlan0|mlan1} stat interval {seconds} : set stat reset interval (persist)"
     echo "       wifi {0|1|mlan0|mlan1} mon [c|compact] [interval] [--summary-lines N] [--roam-display N]"
     echo "       wifi {0|1|mlan0|mlan1} mcs [on|off|reset|ht <7|15> vht <7|8|9> he <7|9|11>] : persist+runtime"
@@ -3867,16 +3866,20 @@ case "$2" in
   stat)
     case "${3:-}" in
       reset)
+        # wifi_logger_stat.py 가 연결된 주기마다 플래그를 보고 처리한 뒤 지운다(끊겨 있으면 다음 연결 때).
+        # iface 플래그는 그 iface 로거의 AP 전체, MAC 플래그는 그 AP 만 비운다. 로거는 소문자 MAC 으로 찾는다.
+        _stat_flag_dir="${WIFI_STAT_FLAG_DIR:-/tmp}"
         TARGET_MAC="${4:-}"
         if [ -n "$TARGET_MAC" ]; then
             if ! [[ "$TARGET_MAC" =~ ^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$ ]]; then
                 echo "Error: invalid MAC address '$TARGET_MAC'" >&2; exit 1
             fi
-            touch "/tmp/wifi_stat_reset_${TARGET_MAC}"
+            TARGET_MAC="${TARGET_MAC,,}"
+            touch "$_stat_flag_dir/wifi_stat_reset_${TARGET_MAC}"
             echo "stat reset requested for MAC $TARGET_MAC on $IFACE"
         else
-            touch /tmp/wifi_stat_init_f
-            echo "stat reset requested for all records on $IFACE"
+            touch "$_stat_flag_dir/wifi_stat_init_f_$IFACE"
+            echo "stat reset requested for all APs on $IFACE"
         fi
         ;;
       interval)
@@ -5671,7 +5674,7 @@ case "$2" in
         echo "Error: log cp/compress/extract/reset supports mlan0/mlan1 only" >&2
         exit 1
     fi
-    LOG_BASE=/var/log/cantops
+    LOG_BASE="${WIFI_LOG_BASE:-/var/log/cantops}"
     # cp/compress/extract 대상: 진단 편의로 전역 로그(cpu/logger/kern/sys/summary)도 함께 수집.
     # (log reset은 iface별 초기화라 전역 제외 — 전역 초기화는 'wifi log reset'이 담당)
     LOG_FILES=(
@@ -5690,15 +5693,19 @@ case "$2" in
     for _lf in "${LOG_FILES[@]}"; do
         if [ -f "$_lf" ]; then EXIST+=("$_lf"); else MISSING+=("$(basename "$_lf")"); fi
     done
+    # 아래 분기는 스크립트 끝(esac)으로 빠져 마지막 명령의 상태가 종료 코드가 된다. 성공(일부 파일
+    # 없음 포함)은 0, 실패는 exit 로 끝낸다 — `[ … ] && echo` 로 끝내면 성공이 1 이 된다(#494).
     case "$3" in
       cp)
         DEST="${4:-${IFACE}_log_$(date +%Y%m%d_%H%M%S)}"
         mkdir -p "$DEST" || { echo "Error: cannot create directory $DEST" >&2; exit 1; }
+        _cp_fail=0
         for _lf in "${EXIST[@]}"; do
-            cp -a "$_lf" "$DEST/" || echo "Warning: copy failed: $_lf" >&2
+            cp -a "$_lf" "$DEST/" || { echo "Warning: copy failed: $_lf" >&2; _cp_fail=1; }
         done
         echo "Copied ${#EXIST[@]} log(s) for $IFACE to $(pwd)/$DEST"
-        [ ${#MISSING[@]} -gt 0 ] && echo "Skipped ${#MISSING[@]} missing: ${MISSING[*]}"
+        if [ ${#MISSING[@]} -gt 0 ]; then echo "Skipped ${#MISSING[@]} missing: ${MISSING[*]}"; fi
+        [ "$_cp_fail" -eq 0 ] || exit 1
         ;;
       extract)
         if [ "$#" -lt 5 ] || [ "$#" -gt 6 ]; then
@@ -5730,7 +5737,7 @@ case "$2" in
         )
         [ -n "${6:-}" ] && _extract_args+=(--output "$6")
         if python3 "$_extract_script" "${_extract_args[@]}" "${EXIST[@]}"; then
-            [ ${#MISSING[@]} -gt 0 ] && echo "Skipped ${#MISSING[@]} missing: ${MISSING[*]}"
+            if [ ${#MISSING[@]} -gt 0 ]; then echo "Skipped ${#MISSING[@]} missing: ${MISSING[*]}"; fi
         else
             exit $?
         fi
@@ -5749,7 +5756,7 @@ case "$2" in
         for _lf in "${EXIST[@]}"; do REL+=("${_lf#"$LOG_BASE"/}"); done
         if tar -czf "$ARCHIVE" -C "$LOG_BASE" "${REL[@]}"; then
             echo "Compressed ${#EXIST[@]} log(s) for $IFACE to $(pwd)/$ARCHIVE"
-            [ ${#MISSING[@]} -gt 0 ] && echo "Skipped ${#MISSING[@]} missing: ${MISSING[*]}"
+            if [ ${#MISSING[@]} -gt 0 ]; then echo "Skipped ${#MISSING[@]} missing: ${MISSING[*]}"; fi
         else
             rm -f "$ARCHIVE"
             echo "Error: tar failed" >&2
@@ -5757,63 +5764,44 @@ case "$2" in
         fi
         ;;
       reset)
-        case "${4:-}" in
-          ""|mac) ;;
-          *)
-            echo "Error: invalid log reset target '$4' (expected: mac)" >&2
+        if [ -n "${4:-}" ]; then
+            echo "Error: invalid log reset target '$4' (log reset takes no argument)" >&2
             exit 2
-            ;;
-        esac
+        fi
 
         # iface 전용 로그는 파일을 유지하고 내용만 비운다.
         # scan/stat은 파이썬 append(재오픈 불필요), wpa/mgmt/ping은 rsyslog omfile이라
         # truncate 후 HUP로 재오픈해야 sparse hole 없이 비워짐(HUP은 연결에 영향 없음).
         # 대상은 logrotate.rsyslog의 iface별 cantops 로그와 동기화.
-        # wifi_logger_stat.py의 AP별 파일명 형식(xx_xx_xx_xx_xx_xx.log)만 별도로 수집한다.
-        _mac_pair='[[:xdigit:]][[:xdigit:]]'
-        _mac_log_pattern="$LOG_BASE/stat/$IFACE/${_mac_pair}_${_mac_pair}_${_mac_pair}_${_mac_pair}_${_mac_pair}_${_mac_pair}.log"
-        MAC_LOG_FILES=()
-        while IFS= read -r _lf; do
-            [ -f "$_lf" ] && MAC_LOG_FILES+=("$_lf")
-        done < <(compgen -G "$_mac_log_pattern" || true)
-
-        if [ "${4:-}" = "mac" ]; then
-            RESET_FILES=("${MAC_LOG_FILES[@]}")
-        else
-            RESET_FILES=(
-                "$LOG_BASE/scan/$IFACE/ap.log"
-                "$LOG_BASE/scan/$IFACE/freq.log"
-                "$LOG_BASE/stat/$IFACE/stat.log"
-                "$LOG_BASE/stat/$IFACE/snap.log"
-                "$LOG_BASE/wpa/$IFACE/wpa.log"
-                "$LOG_BASE/mgmt/$IFACE/mgmt.log"
-                "$LOG_BASE/mgmt/$IFACE/gmgmt.log"
-                "$LOG_BASE/ping/$IFACE/ping.log"
-            )
-            RESET_FILES+=("${MAC_LOG_FILES[@]}")
-        fi
-        _rn=0; _rmiss=()
+        # 통계 누적(AP별)은 로거 메모리에 있어 여기서 비우지 않는다 — 'wifi <if> stat reset'이 맡는다.
+        RESET_FILES=(
+            "$LOG_BASE/scan/$IFACE/ap.log"
+            "$LOG_BASE/scan/$IFACE/freq.log"
+            "$LOG_BASE/stat/$IFACE/stat.log"
+            "$LOG_BASE/stat/$IFACE/snap.log"
+            "$LOG_BASE/wpa/$IFACE/wpa.log"
+            "$LOG_BASE/mgmt/$IFACE/mgmt.log"
+            "$LOG_BASE/mgmt/$IFACE/gmgmt.log"
+            "$LOG_BASE/ping/$IFACE/ping.log"
+        )
+        _rn=0; _rfail=0; _rmiss=()
         for _lf in "${RESET_FILES[@]}"; do
             if [ -f "$_lf" ]; then
-                if : > "$_lf"; then _rn=$((_rn+1)); else echo "Warning: truncate failed: $_lf" >&2; fi
+                if : > "$_lf"; then _rn=$((_rn+1)); else echo "Warning: truncate failed: $_lf" >&2; _rfail=1; fi
             else
                 _rmiss+=("$(basename "$_lf")")
             fi
         done
 
-        if [ "${4:-}" = "mac" ]; then
-            # wifi_logger_stat.py는 매 기록마다 append-open하므로 재시작/HUP이 필요 없다.
-            echo "Reset $_rn AP MAC log(s) for $IFACE"
+        # wpa/mgmt/ping은 rsyslog 소유 → HUP로 재오픈(WiFi 연결엔 영향 없음)
+        if systemctl kill -s HUP rsyslog 2>/dev/null; then
+            echo "Reset $_rn log(s) for $IFACE, rsyslog reopened (HUP)"
         else
-            # wpa/mgmt/ping은 rsyslog 소유 → HUP로 재오픈(WiFi 연결엔 영향 없음)
-            if systemctl kill -s HUP rsyslog 2>/dev/null; then
-                echo "Reset $_rn log(s) for $IFACE, rsyslog reopened (HUP)"
-            else
-                echo "Reset $_rn log(s) for $IFACE"
-                echo "Warning: rsyslog HUP failed — wpa/mgmt/ping may need manual reopen" >&2
-            fi
+            echo "Reset $_rn log(s) for $IFACE"
+            echo "Warning: rsyslog HUP failed — wpa/mgmt/ping may need manual reopen" >&2
         fi
-        [ ${#_rmiss[@]} -gt 0 ] && echo "Skipped ${#_rmiss[@]} missing: ${_rmiss[*]}"
+        if [ ${#_rmiss[@]} -gt 0 ]; then echo "Skipped ${#_rmiss[@]} missing: ${_rmiss[*]}"; fi
+        [ "$_rfail" -eq 0 ] || exit 1
         ;;
       *)
         usage
