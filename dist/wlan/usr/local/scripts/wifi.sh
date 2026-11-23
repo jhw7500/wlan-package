@@ -5706,11 +5706,11 @@ case "$2" in
         mkdir -p "$DEST" || { echo "Error: cannot create directory $DEST" >&2; exit 1; }
         _cp_fail=0
         for _lf in "${EXIST[@]}"; do
-            cp -a "$_lf" "$DEST/" || { echo "Warning: copy failed: $_lf" >&2; _cp_fail=1; }
+            cp -a "$_lf" "$DEST/" || { echo "Warning: copy failed: $_lf" >&2; _cp_fail=$((_cp_fail + 1)); }
         done
-        echo "Copied ${#EXIST[@]} log(s) for $IFACE to $(pwd)/$DEST"
+        echo "Copied $((${#EXIST[@]} - _cp_fail)) log(s) for $IFACE to $(pwd)/$DEST"
         if [ ${#MISSING[@]} -gt 0 ]; then echo "Skipped ${#MISSING[@]} missing: ${MISSING[*]}"; fi
-        [ "$_cp_fail" -eq 0 ] || exit 1
+        if [ "$_cp_fail" -ne 0 ]; then echo "Error: $_cp_fail log(s) failed to copy for $IFACE" >&2; exit 1; fi
         ;;
       extract)
         if [ "$#" -lt 5 ] || [ "$#" -gt 6 ]; then

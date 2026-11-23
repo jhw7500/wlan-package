@@ -188,12 +188,14 @@ for bin in "${WBRIDGE_BINS[@]}"; do
     fi
 done
 
-cp "${BASEDIR}/wlan-bridge/wbridge/README.md" "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/wbridge/" || { echo "Error: Failed to copy README.md"; exit 1; }
-cp "${BASEDIR}/wlan-bridge/wbridge/wifi_bridge@.service" "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/wbridge/" || { echo "Error: Failed to copy wifi_bridge@.service"; exit 1; }
+install -m 0644 "${BASEDIR}/wlan-bridge/wbridge/README.md" "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/wbridge/" || { echo "Error: Failed to copy README.md"; exit 1; }
+install -m 0644 "${BASEDIR}/wlan-bridge/wbridge/wifi_bridge@.service" "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/wbridge/" || { echo "Error: Failed to copy wifi_bridge@.service"; exit 1; }
 
 # Copy wlan-bridge scripts and docs
 cp -a "${BASEDIR}/wlan-bridge/scripts/." "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/scripts/" || { echo "Error: Failed to copy scripts"; exit 1; }
 cp -a "${BASEDIR}/wlan-bridge/docs/." "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/docs/" || { echo "Error: Failed to copy docs"; exit 1; }
+# docs 는 인덱스 모드가 100644 다. 작업 사본 모드(core.fileMode=false 로 안 보임)가 deb 에 실리지 않게 맞춘다(#498).
+find "${BASEDIR}/dist/wlan/usr/local/wlan-bridge/docs" -type f -exec chmod 0644 {} + || { echo "Error: Failed to normalize docs mode"; exit 1; }
 # Thermal state handling is WLAN-package-owned because it consumes the JSON
 # SSoT; keep it alongside the bridge scripts after rebuilding the clean stage.
 cp "${BASEDIR}/dist/wlan/usr/local/scripts/wifi_thermal_state_update.sh" \
