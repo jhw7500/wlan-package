@@ -60,12 +60,12 @@ sysfs `/sys/devices/soc0/serial_number` 는 이 가운데 두 워드만 이은 �
 
 검증 라이브러리(`cryptography`)를 불러오지 못하는 등 예외가 나면 **판정 불가**로 보고 파일을 바꾸지 않는다.
 
-## 값 규칙 (사양서 R2 6.2·6.3절)
+## 값 규칙 (통신 사양서 6.2·6.3절)
 
 장치는 위 구조만 검사한다. 아래 값 규칙은 레코드를 만드는 양산 도구가 강제한다. 그래야 새 기종 코드가 생겨도 장치 패키지를 바꾸지 않아도 된다.
 
 - vendor_code: `0x00902CFB`(IEEE 등록 OUI 90-2C-FB).
-- product_code: 상위 바이트는 제품 분류(`0x01` = Bridge A type), 하위 바이트는 무선 규격(`0x01` = 802.11n, `0x02` = 802.11ac, `0x03` = 802.11ax).
+- product_code: bit15~12 는 제품 분류(`0x1` = Bridge A type), bit11~8 은 무선 규격(`0x1` = 802.11n, `0x2` = 802.11ac, `0x3` = 802.11ax), bit7~0 은 개정 번호(`0x00` = 최초. 통신 인터페이스의 데이터 형식이 달라질 때마다 바꾼다). 현행 값은 `0x1100`·`0x1200`·`0x1300` 이다.
 - product_subcode: 대상 국가 코드 두 글자의 ASCII 값. KR `0x4B52`, JP `0x4A50`, CN `0x434E`, 전 세계 범용(WW) `0x5757`.
 - ieee_11r/ai/k/v: `0x00` 없음, `0x01` 있음. 현행 기종은 `1`/`0`/`1`/`1`.
 
@@ -134,7 +134,7 @@ SIGHUP 이나 SIGTERM 으로 멈추면 128 + 시그널 번호로 끝나고, 이�
 
 ```
 python3 scripts/factory/devinfo_issue.py --host <장치 주소> --key <개인키 PEM> --ledger <원장 CSV> \
-    --serial <시리얼> --hardware-version <HW 버전> --product-code 0x0103 --subcode KR \
+    --serial <시리얼> --hardware-version <HW 버전> --product-code 0x1300 --subcode KR \
     --manufacture-date <YYYY-MM-DD> --shipment-date <YYYY-MM-DD>
 ```
 

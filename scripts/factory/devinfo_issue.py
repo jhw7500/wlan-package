@@ -193,7 +193,7 @@ def parse_args(argv=None):
     p.add_argument("--ledger", required=True, help="발급 원장 CSV(덧붙이기만 한다)")
     p.add_argument("--serial", required=True)
     p.add_argument("--hardware-version", required=True)
-    p.add_argument("--product-code", required=True, help="예: 0x0103")
+    p.add_argument("--product-code", required=True, help="예: 0x1300")
     p.add_argument("--subcode", required=True, help="KR·JP·CN·WW 또는 16진 값")
     p.add_argument("--manufacture-date", required=True, help="YYYY-MM-DD")
     p.add_argument("--shipment-date", required=True, help="YYYY-MM-DD")

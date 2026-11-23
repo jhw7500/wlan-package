@@ -26,7 +26,7 @@ TEST_PUB = TEST_KEY.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
 KEYS = {1: TEST_PUB}
 UID = bytes(range(0x10, 0x20))
 VALUES = dr.DeviceValues(
-    vendor_code=0x00902CFB, product_code=0x0103, product_subcode=0x4A50,
+    vendor_code=0x00902CFB, product_code=0x1300, product_subcode=0x4A50,
     ieee_11r=1, ieee_11ai=0, ieee_11k=1, ieee_11v=1,
     manufacture_date=datetime.date(2026, 11, 1),
     shipment_date=datetime.date(2026, 11, 13),
