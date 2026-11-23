@@ -70,6 +70,6 @@
         compress
         dateext
         postrotate
-                touch /tmp/wifi_stat_init_f
+                touch /tmp/wifi_stat_init_f_mlan0 /tmp/wifi_stat_init_f_mlan1
         endscript
 }

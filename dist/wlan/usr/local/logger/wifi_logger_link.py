@@ -355,11 +355,14 @@ def _connected_seconds(link):
 class RadioLog:
     """radio.log(syslog local4) 한 줄을 만든다(#459). 링크 로거가 매 주기 sample() 을 부른다.
 
-    줄: `<iface> bssid=<bssid> ch=<ch> bw=<MHz> bcn=+N miss=+N cu=N%`. bcn·miss 는 직전 줄 이후
-    beaconReceivedCount·beaconMissedCount 증가분, cu 는 운용 채널 survey 의 Δbusy/Δactive 다.
-    재연결·로밍(bssid·채널 변경, connected time 감소, survey 누적값 감소 — moal 은 연결마다
-    0 부터 센다)이 구간에 끼면 세 값 모두, 카운터 하나가 줄면 그 값만 '-'로 쓰고 다음 줄은
-    새 기준에서 센다. cu 는 opcd(#192)와 같은 규칙으로만 낸다: busy·active·단조 시각이 모두
+    줄: `<iface> bssid=<bssid> ch=<ch> bw=<MHz> bcn=T(+N) miss=T(+N) cu=N%`. bcn·miss 의 T 는
+    그 줄 시점의 beaconReceivedCount·beaconMissedCount 값, N 은 직전 줄 이후 증가분이다. cu 는
+    운용 채널 survey 의 Δbusy/Δactive 다. 재연결·로밍(bssid·채널 변경, connected time 감소,
+    survey 누적값 감소 — moal 은 연결마다 0 부터 센다)이 구간에 끼면 세 값 모두, 카운터 하나가
+    줄면 그 값만 증가분을 내지 않고(bcn·miss 는 `T(-)`, cu 는 '-') 다음 줄은 새 기준에서 센다.
+    카운터를 읽지 못하면 bcn·miss 는 '-'다. beaconReceivedCount 는 재연결·로밍 때 0 부터 다시 세므로(보드 실측)
+    같은 AP 재연결은 connected time 이 없는 보드에서도 bcn 감소로 드러난다. 이때 줄지 않은 miss 는 증가분으로
+    찍힌다. cu 는 opcd(#192)와 같은 규칙으로만 낸다: busy·active·단조 시각이 모두
     늘고 |Δactive − Δmono| ≤ RADIO_CU_CLOCK_SLACK_MS 일 때만, busy 가 active 이상이면 100%.
     연결이 끊긴 동안은 reset() 으로 기준을 버리고 줄을 쓰지 않는다.
     """
@@ -424,17 +427,18 @@ class RadioLog:
                 self._tainted.add(key)
 
     def _format(self, base, cur):
-        def inc(key):
-            if (key in self._tainted or base[key] is None or cur[key] is None
-                    or cur[key] < base[key]):
+        def count(key):
+            if cur[key] is None:
                 return "-"
-            return f"+{cur[key] - base[key]}"
+            if key in self._tainted or base[key] is None or cur[key] < base[key]:
+                return f"{cur[key]}(-)"
+            return f"{cur[key]}(+{cur[key] - base[key]})"
 
         width = re.match(r"\d+", str(cur["width"] or ""))
         channel = cur["channel"] if cur["channel"] is not None else "-"
         return (f"{self.iface} bssid={cur['bssid'] or '-'} ch={channel} "
                 f"bw={width.group(0) if width else '-'} "
-                f"bcn={inc('bcn')} miss={inc('miss')} cu={self._cu(base, cur)}")
+                f"bcn={count('bcn')} miss={count('miss')} cu={self._cu(base, cur)}")
 
     def _cu(self, base, cur):
         if "cu" in self._tainted or any(
