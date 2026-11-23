@@ -109,7 +109,7 @@ def write_pem(path, key=TEST_KEY, password=None):
 
 
 ARGS = ["--host", "192.0.2.10", "--serial", "SN-0001", "--hardware-version", "HW-1.0",
-        "--product-code", "0x0103", "--subcode", "KR",
+        "--product-code", "0x1300", "--subcode", "KR",
         "--manufacture-date", "2026-11-01", "--shipment-date", "2026-11-14", "--yes"]
 
 
@@ -215,8 +215,10 @@ def test_known_hosts_dir_with_spaces_is_refused(env, monkeypatch, tmp_path, dirn
 # --- 입력 검사: 장치에 닿기 전에 멈춘다 ----------------------------------------------
 
 @pytest.mark.parametrize("flag, value", [
-    ("--product-code", "0x0203"),    # 제품 분류 밖
-    ("--product-code", "0x0104"),    # 무선 규격 밖
+    ("--product-code", "0x2300"),    # 제품 분류 밖
+    ("--product-code", "0x1400"),    # 무선 규격 밖
+    ("--product-code", "0x1301"),    # 개정 번호 밖
+    ("--product-code", "0x0103"),    # 종전 형식(#495 이전)
     ("--subcode", "US"),
     ("--subcode", "0x1234"),
     ("--ieee", "1,0,1,2"),

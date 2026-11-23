@@ -7,6 +7,8 @@ wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약�
 
 > 다음 릴리스에 묶일 변경이다. 릴리스 PR이 이 절을 버전 절로 바꾼다.
 
+- **출하 고정값 발급 도구의 Product Code 값 규칙을 새 형식으로 바꾼다**(#495, SemVer patch): Product Code 는 bit15~12 제품 분류(`0x1` = Bridge A type), bit11~8 무선 규격(`0x1` = 802.11n, `0x2` = 802.11ac, `0x3` = 802.11ax), bit7~0 개정 번호(`0x00` = 최초)다. 현행 값은 `0x1100`·`0x1200`·`0x1300` 이다.
+- **동작 변경**: 발급 도구(`scripts/factory/devinfo_issue.py`)가 종전 값 `0x0101`·`0x0102`·`0x0103` 을 입력 오류(종료 코드 2)로 거부한다. 레코드 구조·서명·장치의 읽기 경로는 그대로라, 종전 값으로 기록한 장치는 계속 읽힌다. 새 값을 쓰려면 다시 발급한다. SNMP 의 ProductNumber 는 `product_code` 의 정수 값이라 새 값으로 기록한 장치에서는 따라 바뀐다.
 - **stat 로그를 `stat.log` 하나로 쓰고 radio.log 의 bcn·miss 를 총개수(+증가분)로 쓴다**(#494, SemVer patch): `wifi_logger_stat.py` 가 같은 줄을 AP별 파일 `stat/<if>/<BSSID 의 : 를 _ 로 바꾼 이름>.log` 와 `stat.log` 에 두 번 쓰던 것을 `stat.log` 하나로 줄였다. 통계 줄에 `MAC:` 이 있어 AP별 줄은 `stat.log` 에서 뽑는다. 통계 줄·`AP changed` 줄·`stat init!!` 줄의 형식과 계산식은 그대로다. AP별 누적(바이트·패킷·평균 속도·시간·`FAIL`·RSSI 최소·최대)은 AP별 파일의 마지막 줄을 되읽는 대신 로거 프로세스 메모리에서 이어 센다. radio.log 는 `bcn=12345(+50) miss=3(+0)` 처럼 그 줄 시점의 드라이버 카운터 값과 직전 줄 이후 증가분을 함께 쓴다. 증가분을 낼 수 없는 구간(재연결·로밍·카운터 감소)은 `bcn=37(-)`, 카운터를 읽지 못하면 종전처럼 `bcn=-` 다.
 - **동작 변경**:
   - AP별 누적은 로거 재시작·재부팅·업그레이드 때 0 부터 다시 센다(종전에는 AP별 파일에서 되읽었다). `wifi <if> log reset`·`wifi log clear`·`wifi log reset` 은 더 이상 AP별 통계 누적을 초기화하지 않는다. 누적 초기화는 `wifi <if> stat reset` 과 매일 회전이 맡는다.

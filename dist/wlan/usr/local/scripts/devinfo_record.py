@@ -4,7 +4,7 @@ eMMC boot1 의 512 바이트 레코드를 만들고(양산 도구) 판정한다(
 판정 순서의 정본은 docs/devinfo_record_format.md 다. 이 모듈은 부팅 검증 서비스,
 장치 기록 도구, 양산 PC 도구가 같이 쓴다.
 
-장치는 서명·UID·구조만 검사하고, 사양서 R2 값 규칙(r2_violations)은 레코드를
+장치는 서명·UID·구조만 검사하고, 통신 사양서 값 규칙(r2_violations)은 레코드를
 만드는 쪽이 강제한다. cryptography 는 서명이 필요할 때 불러오므로, 라이브러리가
 없으면 check()·sign_record() 가 ImportError 를 낸다(호출자는 "판정 불가"로 처리).
 """
@@ -46,10 +46,13 @@ SHIPPING_PUBLIC_KEYS = {
     1: bytes.fromhex("47c2d7ffaa166db2f8a7c40380fe4765bf26fe0da5817122e470270b10d0bd6d"),
 }
 
-# 사양서 R2 6.2·6.3절 값 규칙(양산 도구가 강제한다).
+# 통신 사양서 6.2·6.3절 값 규칙(양산 도구가 강제한다).
+# Product Code(#495): bit15~12 제품 분류, bit11~8 무선 규격, bit7~0 개정 번호.
 R2_VENDOR_CODE = 0x00902CFB
-R2_PRODUCT_CLASSES = frozenset({0x01})          # Bridge A type
-R2_WIRELESS_STANDARDS = frozenset({0x01, 0x02, 0x03})  # 802.11n / ac / ax
+R2_PRODUCT_CLASSES = frozenset({0x1})            # Bridge A type
+R2_WIRELESS_STANDARDS = frozenset({0x1, 0x2, 0x3})  # 802.11n / ac / ax
+# 개정 번호: 0x00 = 최초(현행). 통신 인터페이스의 데이터 형식이 달라지면 값을 더한다.
+R2_PRODUCT_REVISIONS = frozenset({0x00})
 R2_SUBCODES = frozenset({0x4B52, 0x4A50, 0x434E, 0x5757})  # KR / JP / CN / WW
 
 _HEADER = struct.Struct("<8sHBBB3s")             # 0..15
@@ -262,12 +265,14 @@ def device_info_json(values):
 
 
 def r2_violations(values):
-    """사양서 R2 6.2·6.3절 값 규칙을 어긴 필드 이름 목록(양산 도구용)."""
+    """통신 사양서 6.2·6.3절 값 규칙을 어긴 필드 이름 목록(양산 도구용)."""
     bad = []
     if values.vendor_code != R2_VENDOR_CODE:
         bad.append("vendor_code")
-    if (values.product_code >> 8 not in R2_PRODUCT_CLASSES
-            or values.product_code & 0xFF not in R2_WIRELESS_STANDARDS):
+    code = values.product_code
+    if (code >> 12 not in R2_PRODUCT_CLASSES
+            or (code >> 8) & 0xF not in R2_WIRELESS_STANDARDS
+            or code & 0xFF not in R2_PRODUCT_REVISIONS):
         bad.append("product_code")
     if values.product_subcode not in R2_SUBCODES:
         bad.append("product_subcode")

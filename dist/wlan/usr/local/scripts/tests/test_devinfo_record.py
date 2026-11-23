@@ -27,16 +27,16 @@ DEVICE_UID = (dr.UID_SOURCE_IMX93_OCOTP, UID)
 
 GOLDEN = bytes.fromhex(
     "43545344494e464f0100010110000000101112131415161718191a1b1c1d1e1f"
-    "fb2c90000301504a01000101ea070b01ea070b0d48572d312e302e3000000000"
+    "fb2c90000013504a01000101ea070b01ea070b0d48572d312e302e3000000000"
     "0000000000000000000000000000000000000000534e2d544553542d30303031"
     + "00" * 352
-    + "9ca8e212b1709a21b842e40597376c8ee3a6dbf35314790a312014e90fcc55fb"
-    "3bc93b925984b7dd03d4b21de3dc8f032c37a5eaf8fe109001f6148c53197b0b"
+    + "b0d3bf6d6096898820966c77c7398f24eb8c757faf71cc08f0a42908789a2383"
+    "1e93f9ed336911a0e189a4316cf728c039cf1b002e9d5a5853646be95a3c3c00"
 )
 
 GOLDEN_VALUES = dr.DeviceValues(
     vendor_code=0x00902CFB,
-    product_code=0x0103,
+    product_code=0x1300,
     product_subcode=0x4A50,
     ieee_11r=1,
     ieee_11ai=0,
@@ -68,7 +68,7 @@ def test_golden_is_512_bytes_with_documented_layout():
     assert len(GOLDEN) == dr.RECORD_SIZE == 512
     assert GOLDEN[0:8] == b"CTSDINFO"
     assert struct.unpack_from("<HBBB", GOLDEN, 8) == (1, 1, 1, 16)
-    assert struct.unpack_from("<IHH", GOLDEN, 32) == (0x00902CFB, 0x0103, 0x4A50)
+    assert struct.unpack_from("<IHH", GOLDEN, 32) == (0x00902CFB, 0x1300, 0x4A50)
     assert tuple(GOLDEN[40:44]) == (1, 0, 1, 1)
     assert struct.unpack_from("<HBB", GOLDEN, 44) == (2026, 11, 1)
     assert struct.unpack_from("<HBB", GOLDEN, 48) == (2026, 11, 13)
@@ -212,7 +212,7 @@ def test_device_info_json_matches_opcd_keys_and_formats():
     doc = dr.device_info_json(GOLDEN_VALUES)
     assert doc == {
         "vendor_code": "0x00902CFB",
-        "product_code": "0x0103",
+        "product_code": "0x1300",
         "product_subcode": "0x4A50",
         "hardware_version": "HW-1.0.0",
         "serial_number": "SN-TEST-0001",
@@ -275,9 +275,13 @@ def test_r2_rules_accept_golden_values():
 
 @pytest.mark.parametrize("change,field", [
     ({"vendor_code": 0x00902CFC}, "vendor_code"),
-    ({"product_code": 0x0203}, "product_code"),
-    ({"product_code": 0x0104}, "product_code"),
-    ({"product_code": 0x0100}, "product_code"),
+    ({"product_code": 0x2300}, "product_code"),  # 제품 분류 밖
+    ({"product_code": 0x1400}, "product_code"),  # 무선 규격 밖
+    ({"product_code": 0x1000}, "product_code"),  # 무선 규격 0
+    ({"product_code": 0x1301}, "product_code"),  # 개정 번호 밖
+    ({"product_code": 0x0101}, "product_code"),  # 종전 형식(#495 이전)
+    ({"product_code": 0x0102}, "product_code"),
+    ({"product_code": 0x0103}, "product_code"),
     ({"product_subcode": 0x5553}, "product_subcode"),  # US
     ({"ieee_11ai": 2}, "ieee_11ai"),
 ])
@@ -287,7 +291,7 @@ def test_r2_rules_reject_values_outside_spec(change, field):
 
 
 @pytest.mark.parametrize("subcode", [0x4B52, 0x4A50, 0x434E, 0x5757])
-@pytest.mark.parametrize("product", [0x0101, 0x0102, 0x0103])
+@pytest.mark.parametrize("product", [0x1100, 0x1200, 0x1300])
 def test_r2_rules_accept_every_listed_code(subcode, product):
     values = dr.DeviceValues(**{**GOLDEN_VALUES.__dict__, "product_code": product, "product_subcode": subcode})
     assert dr.r2_violations(values) == []
