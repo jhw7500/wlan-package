@@ -1,9 +1,12 @@
 """postinst 가 업그레이드 때 옛 stat 로거의 AP별 파일만 지운다(#494).
 
 `cleanup_retired_stat_ap_logs` 본문을 postinst 에서 원문 그대로 꺼내 임시 트리에 돌리고,
-호출 블록(`# >>> stat-ap-log-cleanup`)은 systemctl 스텁으로 돌려 재시작 → 정리 순서를 본다.
+호출 블록(`# >>> stat-ap-log-cleanup`)은 systemctl 스텁으로 돌려 정리만 하는지 본다. 블록이 로거를
+재시작하지 않는 근거(preinst upgrade 의 wifi_logger@ 정지, stat 유닛의 PartOf, 앞선 자식 유닛 복구)도
+원문에서 확인한다.
 """
 import os
+import re
 import stat
 import subprocess
 from pathlib import Path
@@ -114,11 +117,21 @@ def _run_block(tmp_path: Path, *args: str) -> list:
     return Path(env["CALLS"]).read_text().splitlines()
 
 
-def test_upgrade_restarts_running_stat_loggers_before_cleanup(tmp_path):
-    assert _run_block(tmp_path, "configure", "0.8.8") == [
-        "systemctl try-restart wifi_logger_stat@mlan0.service wifi_logger_stat@mlan1.service",
-        "cleanup /var/log/cantops/stat",
-    ]
+def test_upgrade_only_cleans(tmp_path):
+    assert _run_block(tmp_path, "configure", "0.8.8") == ["cleanup /var/log/cantops/stat"]
+
+
+def test_old_stat_logger_is_already_replaced_before_cleanup():
+    # 정리 블록이 재시작하지 않는 근거: preinst upgrade 가 wifi_logger@mlanN 을 멈추면 stat 로거도
+    # PartOf 로 멈추고, postinst 가 정리보다 먼저 자식 유닛을 새 코드로 올린다.
+    preinst = (POSTINST.parent / "preinst").read_text(encoding="utf-8")
+    upgrade = re.search(r"^upgrade\)\n(.*?)^\s*;;", preinst, re.M | re.S)
+    assert upgrade, "preinst 에 upgrade) 분기가 없다"
+    assert "wifi_logger@mlan0" in upgrade.group(1) and "wifi_logger@mlan1" in upgrade.group(1)
+    unit = (POSTINST.parents[1] / "etc/systemd/system/wifi_logger_stat@.service").read_text(encoding="utf-8")
+    assert re.search(r"^PartOf=.*\bwifi_logger@%i\.service\b", unit, re.M)
+    postinst = POSTINST.read_text(encoding="utf-8")
+    assert postinst.index("/usr/local/scripts/wifi_services.sh start") < postinst.index("# >>> stat-ap-log-cleanup")
 
 
 def test_fresh_install_only_cleans(tmp_path):
