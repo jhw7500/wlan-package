@@ -1,8 +1,8 @@
 """#459(b)·#494: radio.log(syslog local4) 한 줄 — 비콘 수신·미스 총개수(+직전 줄 이후 증가분)와 운용 채널 사용률.
 
 RadioLog 는 링크 로거가 매 주기(0.9초) 읽는 값으로 radio_log_interval_sec 마다 한 줄을 만든다.
-재연결·로밍(bssid·채널 변경, connected time·survey 누적값 감소)과 카운터 감소는 음수나 과대값
-대신 증가분을 '-'(bcn·miss 는 `총개수(-)`)로 쓰고 기준을 다시 잡는다. 카운터가 없으면 '-'다. 사용률은 opcd(#192)와 같은 규칙으로만 낸다.
+재연결·로밍(bssid·채널 변경, connected time·survey 누적값·비콘 수신 카운터 감소)과 미스 카운터 감소는
+음수나 과대값 대신 증가분을 '-'(bcn·miss 는 `총개수(-)`)로 쓰고 기준을 다시 잡는다. 카운터가 없으면 '-'다. 사용률은 opcd(#192)와 같은 규칙으로만 낸다.
 """
 import json
 import os
@@ -24,10 +24,11 @@ BSS2 = "02:00:00:00:00:02"
 
 
 class Link:
-    """한 연결의 표본을 만든다: 초당 비콘 10개, active 1000 ms, busy 100 ms(사용률 10%)."""
+    """한 연결의 표본을 만든다: 초당 비콘 10개, active 1000 ms, busy 100 ms(사용률 10%).
+    conn=None 이면 station dump 에 connected time 이 없는 보드(보드 1)다."""
 
-    def __init__(self):
-        self.v = dict(bssid=BSS, ch=36, freq=5180, conn=100, bcn=1000, miss=10,
+    def __init__(self, conn=100):
+        self.v = dict(bssid=BSS, ch=36, freq=5180, conn=conn, bcn=1000, miss=10,
                       busy=1000, active=10000)
         self.t = 0.0
 
@@ -35,14 +36,18 @@ class Link:
         dt = t - self.t
         self.t = t
         v = self.v
-        v["conn"] += int(dt)
+        if v["conn"] is not None:
+            v["conn"] += int(dt)
         v["bcn"] += int(10 * dt)
         v["busy"] += int(100 * dt)
         v["active"] += int(1000 * dt)
         v.update(change)
+        link = {"address": v["bssid"]}
+        if v["conn"] is not None:
+            link["connected_time"] = f"{v['conn']} seconds"
         return rl.sample(
             t,
-            {"address": v["bssid"], "connected_time": f"{v['conn']} seconds"},
+            link,
             {"channel": v["ch"], "freq": v["freq"], "width": "80 MHz"},
             {"beaconReceivedCount": v["bcn"], "beaconMissedCount": v["miss"]},
             {"freq": v["freq"], "active_time_ms": v["active"], "busy_time_ms": v["busy"],
@@ -74,13 +79,34 @@ def test_zero_interval_turns_the_log_off():
     assert [link.at(rl, t) for t in (0.0, 5.0, 10.0, 60.0)] == [None] * 4
 
 
-def test_counter_restart_marks_only_that_counter():
+def test_beacon_counter_restart_marks_every_value():
+    # beaconReceivedCount 는 재연결·로밍 때 0 부터 다시 센다(보드 1 실측) — bcn 이 줄면 재연결로 보고
+    # 그 구간의 bcn·miss·cu 를 모두 증가분 없이 쓴다(#497).
     rl, link = wl.RadioLog("mlan0", 5), Link()
     link.at(rl, 0.0)
     link.at(rl, 2.0, bcn=3)  # beaconReceivedCount 만 0 근처에서 다시 센다
     # 다시 센 값이 줄 시각에 기준(1000)을 넘어도 증가분으로 쓰지 않는다(+100 이 아니라 '-').
-    assert link.at(rl, 5.0, bcn=1100) == line("1100(-)", "10(+0)", "10%")
+    assert link.at(rl, 5.0, bcn=1100) == line("1100(-)", "10(-)", "-")
     assert link.at(rl, 10.0) == line("1150(+50)", "10(+0)", "10%")
+
+
+def test_beacon_counter_restart_without_connected_time_marks_every_value():
+    # 보드 1 은 connected time 이 없어 같은 AP 재연결이 bcn 감소로만 드러난다(#497). 종전에는
+    # 줄지 않은 miss·survey 로 `miss=10(+0) cu=10%` 를 냈다.
+    rl, link = wl.RadioLog("mlan0", 5), Link(conn=None)
+    link.at(rl, 0.0)
+    link.at(rl, 2.0, bcn=3)
+    assert link.at(rl, 5.0) == line("33(-)", "10(-)", "-")
+    assert link.at(rl, 10.0) == line("83(+50)", "10(+0)", "10%")
+
+
+def test_miss_counter_restart_marks_only_miss():
+    rl, link = wl.RadioLog("mlan0", 5), Link(conn=None)
+    link.at(rl, 0.0)
+    link.at(rl, 2.0, miss=3)  # beaconMissedCount 만 다시 센다
+    # 다시 센 값이 줄 시각에 기준(10)을 넘어도 증가분으로 쓰지 않는다(+2 가 아니라 '-').
+    assert link.at(rl, 5.0, miss=12) == line("1050(+50)", "12(-)", "10%")
+    assert link.at(rl, 10.0) == line("1100(+50)", "12(+0)", "10%")
 
 
 RECONNECT = {
