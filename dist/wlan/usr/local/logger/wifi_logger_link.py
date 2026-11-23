@@ -358,11 +358,11 @@ class RadioLog:
     줄: `<iface> bssid=<bssid> ch=<ch> bw=<MHz> bcn=T(+N) miss=T(+N) cu=N%`. bcn·miss 의 T 는
     그 줄 시점의 beaconReceivedCount·beaconMissedCount 값, N 은 직전 줄 이후 증가분이다. cu 는
     운용 채널 survey 의 Δbusy/Δactive 다. 재연결·로밍(bssid·채널 변경, connected time 감소,
-    survey 누적값 감소 — moal 은 연결마다 0 부터 센다)이 구간에 끼면 세 값 모두, 카운터 하나가
-    줄면 그 값만 증가분을 내지 않고(bcn·miss 는 `T(-)`, cu 는 '-') 다음 줄은 새 기준에서 센다.
+    survey 누적값·beaconReceivedCount 감소 — moal 은 연결마다 0 부터 센다)이 구간에 끼면 세 값 모두,
+    beaconMissedCount 만 줄면 miss 만 증가분을 내지 않고(bcn·miss 는 `T(-)`, cu 는 '-') 다음 줄은 새 기준에서 센다.
     카운터를 읽지 못하면 bcn·miss 는 '-'다. beaconReceivedCount 는 재연결·로밍 때 0 부터 다시 세므로(보드 실측)
-    같은 AP 재연결은 connected time 이 없는 보드에서도 bcn 감소로 드러난다. 이때 줄지 않은 miss 는 증가분으로
-    찍힌다. cu 는 opcd(#192)와 같은 규칙으로만 낸다: busy·active·단조 시각이 모두
+    같은 AP 재연결은 connected time 이 없는 보드에서도 bcn 감소로 드러나고, 그 구간의 miss·cu 도 증가분 없이
+    쓴다(#497). cu 는 opcd(#192)와 같은 규칙으로만 낸다: busy·active·단조 시각이 모두
     늘고 |Δactive − Δmono| ≤ RADIO_CU_CLOCK_SLACK_MS 일 때만, busy 가 active 이상이면 100%.
     연결이 끊긴 동안은 reset() 으로 기준을 버리고 줄을 쓰지 않는다.
     """
@@ -419,12 +419,12 @@ class RadioLog:
         def known(key):
             return prev[key] is not None and cur[key] is not None
 
+        # bcn 감소는 재연결이다 — connected time 이 없는 보드에서는 같은 AP 재연결이 이것으로만 드러난다(#497).
         if (any(known(k) and prev[k] != cur[k] for k in ("bssid", "channel", "freq"))
-                or any(known(k) and cur[k] < prev[k] for k in ("conn", "busy", "active"))):
+                or any(known(k) and cur[k] < prev[k] for k in ("conn", "busy", "active", "bcn"))):
             self._tainted |= {"bcn", "miss", "cu"}
-        for key in ("bcn", "miss"):
-            if known(key) and cur[key] < prev[key]:
-                self._tainted.add(key)
+        if known("miss") and cur["miss"] < prev["miss"]:
+            self._tainted.add("miss")
 
     def _format(self, base, cur):
         def count(key):

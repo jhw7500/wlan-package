@@ -18,8 +18,13 @@ KEY = "LOG"
 
 # AP별 Signal Level 최소/최대값 및 RX/TX 저장
 signal_levels = {}
-prev_stat = {}  # AP별 마지막 RX/TX 값 저장
+prev_stat = {}  # AP별 카운터 기준(마지막으로 안 RX/TX·FAIL 드라이버 값)
 last_stat = {}  # AP별 누적된 RX/TX 값 저장
+# 직전 표본 대비 증가분으로 쌓는 드라이버 누적 카운터(#497)
+STAT_COUNTERS = ("tx_fail", "tx_bytes", "tx_packets", "rx_bytes", "rx_packets")
+# 대역폭을 모르는 표본으로 stat 줄을 연달아 건너뛴 횟수 — BW_SKIP_WARN_STREAK 번째에 한 번 경고한다(#497)
+bw_skip_streak = 0
+BW_SKIP_WARN_STREAK = 3
 current_ap = ""  # 현재 연결된 AP
 log_interval = 1  # 로그 주기 (초)
 check_interval = 1  # 체크 주기 (초)
@@ -70,6 +75,14 @@ def update_avg(count, avg, new_value):
     avg += (new_value - avg) / count
     return round(avg, 1)
 
+def _station_counter(station, key):
+    """link.json 의 누적 카운터. 없거나 정수로 읽을 수 없으면 None(모름) — 0 으로 채우면 다음 표본에서
+    카운터 전체가 증가분으로 다시 더해진다(#497)."""
+    try:
+        return int(station[key])
+    except (KeyError, TypeError, ValueError):
+        return None
+
 def get_link_info(json_file):
     if not os.path.exists(json_file):
         logger.message("err", f"[{IFACE}] {json_file} is not exist", _EXTRA_())
@@ -107,12 +120,9 @@ def get_link_info(json_file):
     signal_levels[mac]["min"] = min(signal_levels[mac]["min"], signal)
     signal_levels[mac]["max"] = max(signal_levels[mac]["max"], signal)
 
+    # info·width 가 없으면 대역폭을 모른다(None) — 그런 표본의 stat 줄은 log_stats_write 가 건너뛴다(#497).
     ap_info = data.get("info")
-    if not station:
-        #logger.message("err", f"[{IFACE}] no 'info' field in json", _EXTRA_())
-        return None
-
-    bandwidth = ap_info.get("width", "0 MHz")
+    bandwidth = ap_info.get("width") if isinstance(ap_info, dict) else None
 
     info = {
         "ap_mac": mac,
@@ -120,12 +130,12 @@ def get_link_info(json_file):
         "rssi": signal,
         "rssi_min": signal_levels[mac]["min"],
         "rssi_max": signal_levels[mac]["max"],
-        "tx_fail": int(station.get("tx_failed", 0)),
-        "tx_bytes": int(station.get("tx_bytes", 0)),
-        "tx_packets": int(station.get("tx_packets", 0)),
+        "tx_fail": _station_counter(station, "tx_failed"),
+        "tx_bytes": _station_counter(station, "tx_bytes"),
+        "tx_packets": _station_counter(station, "tx_packets"),
         "tx_bitrate": tx_bitrate,
-        "rx_bytes": int(station.get("rx_bytes", 0)),
-        "rx_packets": int(station.get("rx_packets", 0)),
+        "rx_bytes": _station_counter(station, "rx_bytes"),
+        "rx_packets": _station_counter(station, "rx_packets"),
         "rx_bitrate": rx_bitrate
     }
 
@@ -316,6 +326,22 @@ def parse_log(log):
     return retry_count, tx_frag_count
 
 def log_stats_write(my_stat, wifi_info):
+    global bw_skip_streak
+    # 대역폭을 모르는 표본(info·width 없음, 0 MHz)은 연결 정보가 채워지기 전이라 stat 줄을 쓰지 않는다(#497).
+    # 세 쓰기 경로가 모두 여기를 거친다. 누적·기준·시간은 호출자가 이미 갱신해 그 구간은 다음 줄에 들어간다.
+    width = re.match(r"\s*(\d+)", str(wifi_info.get("bw") or ""))
+    if not width or int(width.group(1)) == 0:
+        bw_skip_streak += 1
+        if bw_skip_streak == BW_SKIP_WARN_STREAK:
+            logger.message(
+                "warn",
+                f"[{IFACE}] stat line skipped {bw_skip_streak} times in a row: "
+                f"bandwidth unknown (bw={wifi_info.get('bw')!r})",
+                _EXTRA_(),
+            )
+        return
+    bw_skip_streak = 0
+
     #tx_retry = my_stat['tx_retry']
 
     #tx_retry_per = round((tx_retry/my_stat['tx_packets'])*100, 2) if my_stat['tx_packets'] else 0
@@ -410,15 +436,14 @@ def log_stats():
             with open(all_log_filename, "a") as all_log_file:
                 all_log_file.write(log_entry)
 
-            # Reset previous AP RX/TX tracking
-            prev_stat[ap_mac] = wifi_info
+            # AP 가 바뀌면 카운터 기준만 이 표본의 드라이버 값으로 다시 잡는다 — 로밍 때 드라이버는
+            # 카운터를 이어 세기도(tx failed) 다시 세기도 한다(#497). 모르는 값(None)은 처음 보일 때 기준이 된다.
+            prev_stat[ap_mac] = {key: wifi_info[key] for key in STAT_COUNTERS}
 
-            # AP별 누적(바이트·패킷·평균 속도·시간)과 RSSI 최소·최대는 이 프로세스 메모리
+            # AP별 누적(바이트·패킷·FAIL·평균 속도·시간)과 RSSI 최소·최대는 이 프로세스 메모리
             # (last_stat·signal_levels)에서 이어 센다(#494). 처음 보는 AP 는 0 부터 세고,
-            # 로거가 다시 시작하면 모든 AP 가 0 부터다. FAIL 은 종전 코드와 같이 이 AP 에서
-            # 지금까지 쌓인 값을 기준으로 이번 연결의 tx_fail 을 더한다.
+            # 로거가 다시 시작하면 모든 AP 가 0 부터다.
             last_stat.setdefault(ap_mac, {"rx_bytes": 0, "rx_packets": 0, "tx_bytes": 0, "tx_packets": 0, "tx_fail": 0, "time": 0, "tx_avg_bps": 0, "rx_avg_bps": 0, "total_bps": 0})
-            prev_tx_fail = last_stat[ap_mac]["tx_fail"]
 
         # 초기화 요청: wifi_stat_init_f_<iface>(logrotate 매일 회전·`wifi <if> stat reset`)는 이 로거의
         # AP 전체를, wifi_stat_reset_<소문자 MAC>(`wifi <if> stat reset <MAC>`)은 그 AP 만 비운다.
@@ -430,26 +455,18 @@ def log_stats():
         reset_flag = cond_time or cond_flagfile or cond_mac_flagfile
 
         #print(f"current_ap : {current_ap} , ap_mac : {ap_mac}")
-        # Update RX/TX stats
-        last_stat[ap_mac]["tx_th"] = wifi_info["tx_bytes"] - prev_stat[ap_mac]["tx_bytes"]
-        last_stat[ap_mac]["rx_th"] = wifi_info["rx_bytes"] - prev_stat[ap_mac]["rx_bytes"]
-        #print("tx_throughput:", last_stat[ap_mac]["tx_throughput"])
-        #print("rx_throughput:", last_stat[ap_mac]["rx_throughput"])
-        #retry_count, tx_frag_count = parse_log(log)
-        last_stat[ap_mac]["tx_fail"] = wifi_info["tx_fail"] + prev_tx_fail
-        #last_stat[ap_mac]["tx_retry"] = wifi_info["tx_retry"] + prev_retry
-        #last_stat[ap_mac]["tx_retry"] = retry_count
-        #last_stat[ap_mac]["tx_frame_cnt"] = tx_frag_count
-        last_stat[ap_mac]["tx_bytes"] += last_stat[ap_mac]["tx_th"]
-        last_stat[ap_mac]["rx_bytes"] += last_stat[ap_mac]["rx_th"]
-        last_stat[ap_mac]["tx_packets"] += (wifi_info["tx_packets"] - prev_stat[ap_mac]["tx_packets"])
-        last_stat[ap_mac]["rx_packets"] += (wifi_info["rx_packets"] - prev_stat[ap_mac]["rx_packets"])
-        
-        #last_stat[ap_mac]["tx_throughput_min"] = min(last_stat[ap_mac]["tx_throughput"], last_stat[ap_mac]["tx_throughput_min"])
-        #last_stat[ap_mac]["tx_th_interval"] += last_stat[ap_mac]["tx_th"]
-        #last_stat[ap_mac]["rx_th_interval"] += last_stat[ap_mac]["rx_th"]
-        # Update previous RX/TX values
-        prev_stat[ap_mac] = wifi_info
+        # Update RX/TX·FAIL stats: 카운터마다 직전 표본 대비 증가분을 더한다(#497). 드라이버 값이 기준보다
+        # 작으면 그 카운터를 다시 센 것(재연결)으로 보고 현재값을 더한다. 드라이버가 카운터마다 다시 세는
+        # 시점이 달라(보드 1 로밍: tx failed·tx 패킷은 이어지고 비콘 카운터는 0 부터) 카운터 하나가 줄었다고 전체를 초기화로 보지 않는다.
+        # 값을 모르면(None) 더하지도 기준을 바꾸지도 않고, 다시 보이면 마지막으로 안 기준과 비교한다.
+        base = prev_stat[ap_mac]
+        for key in STAT_COUNTERS:
+            cur = wifi_info[key]
+            if cur is None:
+                continue
+            if base.get(key) is not None:
+                last_stat[ap_mac][key] += cur - base[key] if cur >= base[key] else cur
+            base[key] = cur
         #print(f"{last_stat[ap_mac]['time']}, {last_stat[ap_mac]['tx_avg_bps']}, {wifi_info['tx_bitrate']}")
         last_stat[ap_mac]['tx_avg_bps'] = update_avg(last_stat[ap_mac]["time"], last_stat[ap_mac]['tx_avg_bps'], wifi_info['tx_bitrate'])
         last_stat[ap_mac]['rx_avg_bps'] = update_avg(last_stat[ap_mac]["time"], last_stat[ap_mac]['rx_avg_bps'], wifi_info['rx_bitrate'])
@@ -507,7 +524,9 @@ def log_stats():
             with open(all_log_filename, "a") as all_log_file:
                 all_log_file.write(log_entry)
 
-            prev_tx_fail = 0
+            # FAIL 도 0 부터 다시 센다(#497). 카운터 기준(prev_stat)은 이번 표본의 드라이버 값 그대로라
+            # 다음 표본은 그 뒤의 증가분만 더한다.
+            last_stat[ap_mac]["tx_fail"] = 0
             last_stat[ap_mac]["tx_bytes"] = 0
             last_stat[ap_mac]["rx_bytes"] = 0
             last_stat[ap_mac]["tx_packets"] = 0
