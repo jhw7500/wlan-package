@@ -124,6 +124,7 @@ def test_log_reset_fails_when_a_truncate_fails(wifi):
 def test_log_cp_exit_codes(wifi):
     full = wifi.run("mlan0", "log", "cp", "all")
     assert full.returncode == 0, full.stderr
+    assert f"Copied {len(COLLECT)} log(s) for mlan0 to" in full.stdout
     assert sorted(p.name for p in (wifi.out / "all").iterdir()) == sorted(Path(r).name for r in COLLECT)
 
     wifi.path("kern.log").unlink()
@@ -141,6 +142,8 @@ def test_log_cp_fails_when_a_copy_fails(wifi):
 
     assert cp.returncode != 0
     assert "Warning: copy failed" in cp.stderr
+    assert "Error: 1 log(s) failed to copy for mlan0" in cp.stderr
+    assert f"Copied {len(COLLECT) - 2} log(s) for mlan0 to" in cp.stdout
     assert "Skipped 1 missing: kern.log" in cp.stdout
 
 
