@@ -3864,6 +3864,11 @@ case "$2" in
     fi
     ;;
   stat)
+    # stat 로거(wifi_logger_stat@)는 mlan0·mlan1 에만 있다 — 다른 iface 의 플래그·설정은 읽는 쪽이 없다.
+    if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
+        echo "Error: stat reset/interval supports mlan0/mlan1 only" >&2
+        exit 1
+    fi
     case "${3:-}" in
       reset)
         # wifi_logger_stat.py 가 연결된 주기마다 플래그를 보고 처리한 뒤 지운다(끊겨 있으면 다음 연결 때).

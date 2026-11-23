@@ -211,3 +211,19 @@ def test_stat_reset_rejects_a_bad_mac(tmp_path):
 
     assert cp.returncode == 1
     assert list(wifi.flags.iterdir()) == []
+
+
+@pytest.mark.parametrize("argv", [["stat", "reset"], ["stat", "reset", "02:00:00:00:00:0a"],
+                                  ["stat", "interval", "60"]])
+def test_stat_commands_reject_an_iface_without_a_stat_logger(tmp_path, argv):
+    wifi = Wifi(tmp_path)
+    conf = tmp_path / "wifi_init_conf.json"
+    conf.write_text('{"eth0": {}}\n')
+    wifi.env["WIFI_INIT_CONF_JSON"] = str(conf)
+
+    cp = wifi.run("eth0", *argv)
+
+    assert cp.returncode == 1
+    assert "stat reset/interval supports mlan0/mlan1 only" in cp.stderr
+    assert list(wifi.flags.iterdir()) == []
+    assert conf.read_text() == '{"eth0": {}}\n'

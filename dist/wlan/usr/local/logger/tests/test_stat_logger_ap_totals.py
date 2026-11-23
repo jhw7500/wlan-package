@@ -145,12 +145,14 @@ def test_writes_only_stat_log_and_continues_ap_totals_across_a_b_a(monkeypatch, 
     assert (last["rx"], last["rx_pkt"], last["fail"], last["t"]) == ("5000", "50", "7", "6")
 
 
-def test_iface_init_flag_resets_current_and_disconnected_aps_once(monkeypatch, tmp_path):
+@pytest.mark.parametrize("iface", ["mlan0", "mlan1"])
+def test_iface_init_flag_resets_current_and_disconnected_aps_once(monkeypatch, tmp_path, iface):
     def flag_on_b(i, flags):
         if i == 6:  # B 연결 중, A 는 끊겨 있다
-            _touch(flags / "wifi_stat_init_f_mlan0")
+            _touch(flags / f"wifi_stat_init_f_{iface}")
 
-    run = run_logger(monkeypatch, tmp_path, [A] * 5 + [B] * 3 + [A] * 2, before=flag_on_b)
+    run = run_logger(monkeypatch, tmp_path, [A] * 5 + [B] * 3 + [A] * 2, iface=iface,
+                     before=flag_on_b)
 
     assert list(run.flags.iterdir()) == []
     inits = [line for line in run.lines if "stat init!!" in line]
@@ -163,14 +165,16 @@ def test_iface_init_flag_resets_current_and_disconnected_aps_once(monkeypatch, t
     assert sorted(os.listdir(run.logdir)) == ["stat.log"]
 
 
-def test_init_flag_of_the_other_iface_is_left_alone(monkeypatch, tmp_path):
+@pytest.mark.parametrize("iface, other", [("mlan0", "mlan1"), ("mlan1", "mlan0")])
+def test_init_flag_of_the_other_iface_is_left_alone(monkeypatch, tmp_path, iface, other):
     def other_flag(i, flags):
         if i == 6:
-            _touch(flags / "wifi_stat_init_f_mlan1")
+            _touch(flags / f"wifi_stat_init_f_{other}")
 
-    run = run_logger(monkeypatch, tmp_path, [A] * 5 + [B] * 3 + [A] * 2, before=other_flag)
+    run = run_logger(monkeypatch, tmp_path, [A] * 5 + [B] * 3 + [A] * 2, iface=iface,
+                     before=other_flag)
 
-    assert [p.name for p in run.flags.iterdir()] == ["wifi_stat_init_f_mlan1"]
+    assert [p.name for p in run.flags.iterdir()] == [f"wifi_stat_init_f_{other}"]
     assert not [line for line in run.lines if "stat init!!" in line]
     assert (run.totals[A]["rx_bytes"], run.totals[B]["rx_bytes"]) == (5000, 2000)
 
@@ -202,3 +206,16 @@ def test_mac_reset_flag_is_looked_up_in_lower_case(monkeypatch, tmp_path, link_m
     assert list(run.flags.iterdir()) == []
     assert [line for line in run.lines if "stat init!!" in line][0].endswith(f"MAC:{link_mac} stat init!!")
     assert (run.totals[link_mac]["rx_bytes"], run.totals[link_mac]["time"]) == (1000, 1)
+
+
+def test_daily_rotation_flags_both_iface_loggers():
+    # 매일 회전(logrotate stat 블록 postrotate)이 로거가 찾는 iface 플래그를 mlan0·mlan1 모두 만든다.
+    conf = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "opt", "wlan", "config",
+                        "logrotate.d", "logrotate.rsyslog")
+    with open(conf, encoding="utf-8") as f:
+        text = f.read()
+    block = re.search(r"/var/log/cantops/stat/mlan0/\*\.log\n.*?\n}", text, re.S).group(0)
+    script = re.search(r"postrotate\n(.*?)\n\s*endscript", block, re.S).group(1)
+    touched = [arg for line in script.splitlines() if line.split()[:1] == ["touch"]
+               for arg in line.split()[1:]]
+    assert touched == ["/tmp/wifi_stat_init_f_mlan0", "/tmp/wifi_stat_init_f_mlan1"]
