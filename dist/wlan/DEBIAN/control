@@ -1,5 +1,5 @@
 Package: wlan-proc
-Version: 0.8.8
+Version: 0.8.9
 Section: net
 Priority: optional
 Architecture: arm64
@@ -82,3 +82,4 @@ Description: WLAN Application
  0.8.6 : wifi_init.sh 가 wbridge.mac_clone_require_peer 의 JSON false 를 반영(#452, jq // 함정 — 종전에는 항상 true)
  0.8.7 : 무선 스택 갱신(imx93 드라이버 552.p22 wlan-driver-v2 21427ad, 88W9098 FW 17.92.1.p149.159, wpa_supplicant f24b0fc)과 0.8.6 이후 수정 묶음(#456~#482: rate_adapt 범위, PartOf 정지, wpa.log·radio.log, wifi log reset 의미 변경, FTP quote wconfig, wpa.log 원격 syslog, pcap-analyzer 4-way 판정)
  0.8.8 : 출하 고정값 서명 레코드(#481) — eMMC boot1 의 Ed25519 서명 레코드를 부팅 때 검증해 device_info.json(opcd·SNMP)에 반영하는 wifi_devinfo 서비스와 boot1 기록 도구(wifi_devinfo_write.py)를 싣고, Recommends 에 python3-cryptography·mmc-utils 를 더한다. 레코드가 없는 기기는 동작이 바뀌지 않는다
+ 0.8.9 : 로거·로그 명령 정리 묶음(#494·#495·#497·#498) — stat 로그를 stat.log 하나로 쓰고 업그레이드 때 AP별 [MAC].log 를 지움, stat 누적을 카운터별 증가분으로 세어 재연결·로밍 뒤 줄지 않게 하고 FAIL 은 로거 시작·초기화 뒤 0 부터, radio.log bcn·miss 총개수(+증가분)와 비콘 감소 재연결 판정, wifi log cp 복사 개수 표시, wlan-bridge README·유닛 0644, 발급 도구 Product Code 새 형식(패키지 밖)

@@ -3,9 +3,15 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
-## Unreleased
+## 0.8.9 (2026-11-24)
 
-> 다음 릴리스에 묶일 변경이다. 릴리스 PR이 이 절을 버전 절로 바꾼다.
+> SemVer **patch** — 로거·로그 명령 정리 묶음(#494·#495·#497·#498). stat 로그를 `stat.log` 하나로 쓰고, stat 누적을 카운터마다 직전 표본 대비 증가분으로 세어 재연결·로밍 뒤에도 줄거나 두 번 더해지지 않게 한다. radio.log 는 bcn·miss 를 총개수(+증가분)로 쓰고 비콘 수신 카운터 감소를 재연결로 본다. `wifi <if> log cp` 가 실제 복사 개수를 알리고, wlan-bridge README·유닛 파일을 0644 로 싣는다. 출하 고정값 발급 도구(패키지 밖)의 Product Code 값 규칙을 새 형식으로 바꾼다.
+
+**업그레이드 때 달라지는 것**
+- postinst 가 `stat/mlan0/`·`stat/mlan1/` 의 AP별 `[MAC].log` 와 그 회전본을 지운다. 되돌릴 수 없다. `stat.log`·`snap.log` 와 그 회전본은 남는다.
+- stat·link 로거가 새 코드로 다시 뜬다. AP별 누적은 0 부터 다시 세고, `FAIL` 은 로거 시작·초기화 뒤의 새 실패만 세어 종전보다 작게 찍힌다. `BW:0 MHz` 줄은 더 나오지 않는다.
+- `wifi <if> log reset mac` 이 없어지고(종료 코드 2), `log reset`·`cp`·`extract`·`compress` 는 성공하면 0 으로 끝난다.
+- 재부팅은 필요 없다(드라이버·FW·wpa_supplicant 변경 없음).
 
 - **stat 누적을 카운터마다 직전 표본 대비 증가분으로 세고, radio.log 는 비콘 수신 카운터 감소를 재연결로 본다**(#497, SemVer patch): `wifi_logger_stat.py` 는 다섯 누적 카운터(tx·rx 바이트·패킷과 `FAIL` 의 드라이버 `tx failed`)를 카운터마다 직전 표본 대비 증가분으로 더한다. 드라이버 값이 직전 값보다 작으면 그 카운터를 드라이버가 다시 센 것(재연결)으로 보고 현재값을 더한다. 카운터 하나가 줄었다고 다른 카운터까지 초기화로 보지 않는다 — 드라이버가 카운터마다 다시 세는 시점이 다르다(보드 1 로밍: `tx failed`·tx 패킷은 이어지고 비콘 수신 카운터는 0 부터 다시 셌다). AP 가 바뀌면 기준만 그 표본의 드라이버 값으로 다시 잡고 AP별 누적은 이어진다(#494). link.json 에 없거나 정수로 읽을 수 없는 카운터는 0 이 아니라 모르는 값으로 보아 더하지도 기준을 바꾸지도 않는다. 대역폭을 모르는 표본(link.json 에 `info`·`width` 가 없거나 `0 MHz`)으로는 stat 줄을 쓰지 않는다(종전: `BW:0 MHz` 줄, `info` 가 없으면 예외). 그 구간의 누적·시간은 다음 줄에 들어가고, 줄을 연달아 3 번 건너뛰면 그 연속마다 한 번 `warn` 로그(`stat line skipped 3 times in a row: bandwidth unknown`)를 남긴다. radio.log 는 비콘 수신 카운터(beaconReceivedCount)가 줄면 재연결로 보고 그 구간의 bcn·miss·cu 를 모두 증가분 없이 쓴다. 미스 카운터만 줄면 종전처럼 miss 만 `(-)` 다. 두 로그의 줄 형식은 그대로다.
 - **동작 변경**:
