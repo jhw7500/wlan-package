@@ -3,6 +3,13 @@
 wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약과 전체 버전 목록은
 `dist/wlan/DEBIAN/control`의 Description 필드를 참조하세요.
 
+## Unreleased
+
+> 다음 릴리스에 묶일 변경이다. 릴리스 PR이 이 절을 버전 절로 바꾼다.
+
+- **imx93 드라이버를 wlan-driver-v2 7ed1efd 로 바꿔 monitor 모드(netmon) radiotap 의 HE GI·형식·대역폭과 LDPC 표시를 바로잡는다**(wlan-driver-v2 #125·PR #126, SemVer patch): netmon 캡처의 radiotap 에서 GI 가 0 이 아닌 HE-SU 프레임이 EXT_SU 형식·106-tone RU 대역폭으로, HE-MU 의 0.8 us 가 3.2 us 로 표시되고, HE·HT 모두 LDPC 표시가 빠지던 것을 고친다. 데이터 경로·`iw` 출력·LL-stats 는 바뀌지 않는다. 바뀌는 payload 는 `opt/wlan/driver/mlan_imx93.ko`·`moal_imx93.ko` 와 `debug/` 사본이고, `mlanutl_imx93`·FW·imx8 모듈은 그대로다(`DRIVER_MANIFEST.md`·`DRIVER_COMPONENTS.sha256` 갱신).
+- **동작 변경**: `dpkg -i` 만으로는 실행 중인 드라이버가 바뀌지 않는다. 새 드라이버는 `wifi_init` 재시작이나 재부팅 때 올라간다. FW 는 0.8.9 와 같아 `wifi_init` 재시작으로 적용해도 된다(시험 보드에서 확인).
+
 ## 0.8.9 (2026-11-24)
 
 > SemVer **patch** — 로거·로그 명령 정리 묶음(#494·#495·#497·#498). stat 로그를 `stat.log` 하나로 쓰고, stat 누적을 카운터마다 직전 표본 대비 증가분으로 세어 재연결·로밍 뒤에도 줄거나 두 번 더해지지 않게 한다. radio.log 는 bcn·miss 를 총개수(+증가분)로 쓰고 비콘 수신 카운터 감소를 재연결로 본다. `wifi <if> log cp` 가 실제 복사 개수를 알리고, wlan-bridge README·유닛 파일을 0644 로 싣는다. 출하 고정값 발급 도구(패키지 밖)의 Product Code 값 규칙을 새 형식으로 바꾼다.
