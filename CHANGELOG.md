@@ -7,6 +7,7 @@ wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약�
 
 > 다음 릴리스에 묶일 변경이다. 릴리스 PR이 이 절을 버전 절로 바꾼다.
 
+- i.MX93에서 `mlanutl_imx93 mlan0 stalinkstate`로 AP와 협상한 802.11 규격, 현재 채널·폭, 최근 송수신 형식을 조회할 수 있다. 새 모듈은 패키지 설치 후 `wifi_init.service`를 재시작하거나 보드를 재부팅하면 적용된다. [출력 필드와 사용 예](docs/stalinkstate.md) · [드라이버 PR #128](https://github.com/jhw7500/wlan-driver-v2/pull/128)
 - **imx93 드라이버를 wlan-driver-v2 7ed1efd 로 바꿔 monitor 모드(netmon) radiotap 의 HE GI·형식·대역폭과 LDPC 표시를 바로잡는다**(wlan-driver-v2 #125·PR #126, SemVer patch): netmon 캡처의 radiotap 에서 GI 가 0 이 아닌 HE-SU 프레임이 EXT_SU 형식·106-tone RU 대역폭으로, HE-MU 의 0.8 us 가 3.2 us 로 표시되고, HE·HT 모두 LDPC 표시가 빠지던 것을 고친다. 데이터 경로·`iw` 출력·LL-stats 는 바뀌지 않는다. 바뀌는 payload 는 `opt/wlan/driver/mlan_imx93.ko`·`moal_imx93.ko` 와 `debug/` 사본이고, `mlanutl_imx93`·FW·imx8 모듈은 그대로다(`DRIVER_MANIFEST.md`·`DRIVER_COMPONENTS.sha256` 갱신).
 - **동작 변경**: `dpkg -i` 만으로는 실행 중인 드라이버가 바뀌지 않는다. 새 드라이버는 `wifi_init` 재시작이나 재부팅 때 올라간다. FW 는 0.8.9 와 같아 `wifi_init` 재시작으로 적용해도 된다(시험 보드에서 확인).
 

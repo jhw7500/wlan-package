@@ -31,6 +31,7 @@ EXACT_PATHS = {
     "docs/devinfo_record_format.md",
     "docs/ftp_quote_protocol.md",
     "docs/ftp_quote_protocol_distribution.md",
+    "docs/stalinkstate.md",
     "docs/wifi_init_conf.schema.json",
     "docs/wifi_init_conf_guide.md",
     "docs/wifi_init_conf_webui_handoff.md",

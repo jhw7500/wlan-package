@@ -574,6 +574,7 @@ dist/wlan/usr/share/doc/wlan-proc/nxp-imx-firmware/firmware-source.json
 docs/devinfo_record_format.md
 docs/ftp_quote_protocol.md
 docs/ftp_quote_protocol_distribution.md
+docs/stalinkstate.md
 docs/wifi_init_conf.schema.json
 docs/wifi_init_conf_guide.md
 docs/wifi_init_conf_webui_handoff.md
@@ -630,6 +631,10 @@ wlan-opc/docs/testing/persistence-outcomes.md
 wlan-opc/opcd/Makefile
 wlan-opc/opcd/chan_encode.c
 wlan-opc/opcd/chan_encode.h
+wlan-opc/opcd/devinfo_cfg.c
+wlan-opc/opcd/devinfo_cfg.h
+wlan-opc/opcd/essid_marker.c
+wlan-opc/opcd/essid_marker.h
 wlan-opc/opcd/fault_probe.c
 wlan-opc/opcd/fault_probe.h
 wlan-opc/opcd/freq_source.c
@@ -642,6 +647,8 @@ wlan-opc/opcd/inventory.c
 wlan-opc/opcd/inventory.h
 wlan-opc/opcd/ip_iface.c
 wlan-opc/opcd/ip_iface.h
+wlan-opc/opcd/iplist_text.c
+wlan-opc/opcd/iplist_text.h
 wlan-opc/opcd/json_util.c
 wlan-opc/opcd/json_util.h
 wlan-opc/opcd/nl80211_parse.c
@@ -662,6 +669,8 @@ wlan-opc/opcd/roam_datagram.c
 wlan-opc/opcd/roam_datagram.h
 wlan-opc/opcd/roam_notify_conf.c
 wlan-opc/opcd/roam_notify_conf.h
+wlan-opc/opcd/route_lookup.c
+wlan-opc/opcd/route_lookup.h
 wlan-opc/opcd/snapshot.c
 wlan-opc/opcd/snapshot.h
 wlan-opc/opcd/store.c
