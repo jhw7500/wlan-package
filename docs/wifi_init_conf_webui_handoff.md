@@ -428,7 +428,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `rate_adapt.high_thresh` | 레이트 적응 high 임계 | int | `65` | 0..100 또는 255 | caution | boot | 0.6.7에서 `70/90`→`40/65`. FW가 정적 pair를 트래픽 2~3초 뒤 `40/65`로 덮어쓰고 그 값이 실사용 상태이므로 기본값을 실제 동작에 맞춘 것이다 — 가이드 §11.5 참조 |
 | `rate_adapt.interval_ms` | 레이트 적응 평가주기(ms) | int | `100` | 100~655350, 10ms 배수 | caution | boot | association 전 SET+GET. 정적 pair 덮어쓰기의 트리거는 association이 아니라 **집계 Tx 트래픽**이다 — 가이드 §11.5 참조. 범위는 SR(`mode` 1) 드라이버 기준이며, legacy(`mode` 0)는 주기를 쓰지 않아 장치 검증이 양수·10ms 배수만 본다 |
 | `radio.mode` | 무선 모드 상한(bandcfg) | enum | (템플릿 없음) | `b`\|`g`\|`a`\|`n`\|`ac`\|`ax`, mlan1 은 `ax` 불가. 키 없음=칩 기본 | caution | boot | `wifi <iface> mode` + `radio-apply` 성공 시 저장되고, 부팅 때 `wifi_init.sh` 가 연결 전에 다시 적용한다(이미 연결돼 있으면 건너뜀). b/g 와 5G 전용 freq_list 조합은 적용을 건너뛴다. `STANDARD`(dev_cap_mask, reboot)와 별개 |
-| `radio.bw` | 대역폭 상한 | enum | (템플릿 없음) | `20`\|`40`\|`80`\|`auto`, 키 없음=AP 따름 | yes | boot | HT/VHT cap(htcapinfo·vhtcfg)으로 적용하며 `80` 과 `auto` 는 같은 cap 이다. `wifi <iface> bw` 는 값을 올려 두기만 하고, `wifi <iface> radio-apply` 가 재결합으로 적용한 뒤 성공하면 저장한다(`default` 는 키를 지운다, 취소는 `radio-discard`). ax 에서 HE 채널 폭은 바뀌지 않는다(§3.10.5a) |
+| `radio.bw` | 대역폭 상한 | enum | (템플릿 없음) | `20`\|`40`\|`80`\|`auto`, 키 없음=AP 따름 | yes | boot | HT/VHT cap(htcapinfo·vhtcfg)으로 적용하며 `80` 과 `auto` 는 같은 cap 이다. `wifi <iface> bw` 는 값을 올려 두기만 하고, `wifi <iface> radio-apply` 가 재결합으로 적용한 뒤 성공하면 저장한다(`default` 는 키를 지운다, 취소는 `radio-discard`). ax 에서 HE 채널 폭은 바뀌지 않는다. ac·ax 에서 `20`·`40` 으로 좁힐 때 `on_connect.commands` 에 `txratecfg`·`ratebitmapcfg` 가 있으면 송신이 무너지므로 먼저 걷어 낸다(§3.10.5a) |
 
 **비고 (antcfg 업그레이드)** — `postinst`는 active 우선 deep merge 뒤 과거 제품 이력
 (구제품 비대칭 계약 `0x0303/0x0101(+verify)`, 그 이전의 `false/empty`, 알려진 physical 1x1
@@ -581,6 +581,7 @@ association proof를 사용한다. 다음 CONNECTED 검증 성공 시 pending/1�
 **한계 (UI 에 그대로 알릴 것)**
 - **MCS 7 밑으로는 제한할 수 없다.** mcstiercfg 단계는 ht `7`/`15`(사실상 NSS 1/2), vht `7`/`8`/`9`, he `7`/`9`/`11` 뿐이고 제품 기본(vht `7`, he `both 7`)이 이미 가장 낮다. imx93 mlan0 은 이 값이 제품 불변식이라 편집 대상도 아니다. 비트맵(`ratemaxcfg`·`ratebitmapcfg`)으로 더 낮추면 대역폭 제한과 겹쳐 송신이 무너질 수 있어 현장에 쓰지 않는다.
 - **ax 에서 대역폭 제한은 HE 채널 폭을 바꾸지 않는다.** `radio.bw` 는 HT·VHT 능력(htcapinfo·vhtcfg)만 바꾸고 HE 능력(`11axcfg`)은 그대로다 — 제품에 `11axcfg` SET 경로가 없다. 보드 송신 폭은 좁아지지만 AP→보드 폭은 AP 판단이라, 랩 시험 1회에서 HE 80 MHz 로 남았다. ax 현장에 적용하기 전에 AP 쪽 station tx bitrate 폭을 확인한다.
+- **대역폭을 좁히기 전에 on_connect 고정 전송률을 걷어 낸다.** ac·ax 에서 대역폭 상한과 고정 MCS(`txratecfg`·`ratebitmapcfg`)가 겹치면 송신이 무너진다(§3.10.6a 금지 조합). 기존 현장 설정의 `mlanN.on_connect.commands` 에 이런 명령이 남아 있을 수 있으므로, UI·Save API 는 ac·ax 인터페이스에서 `radio.bw` 를 `20`·`40` 으로 저장·적용하려 할 때(또는 좁혀진 상태에서 그런 명령을 추가하려 할 때) 거부하거나 경고하고, 먼저 그 항목을 지운 뒤 `wifi_event@<iface>` 를 재시작하게 한다(§3.10.6).
 
 #### 3.10.6 mlanN.on_connect
 
@@ -598,11 +599,12 @@ association proof를 사용한다. 다음 CONNECTED 검증 성공 시 pending/1�
 | 시험 목적 | 명령 | 비고 |
 |---|---|---|
 | MCS 만 고정 | `ratebitmapcfg` 2-word(OFDM 6M 바닥 + HT·VHT·HE word 에 같은 `1<<MCS`) | 드라이버가 Auto 로 판정해 다른 BSS 로밍도 된다 |
-| AP 보다 좁은 대역폭 + MCS, 표준 n | `wifi <iface> mode n` + `wifi <iface> bw 20` + 2-word | |
+| AP 보다 좁은 대역폭 + MCS, 표준 n | `wifi <iface> mode n` + `wifi <iface> bw 20` → `wifi <iface> radio-apply` → 2-word | `mode`·`bw` 는 올려 두기만 하므로 `radio-apply` 로 적용해야 한다. 적용에 성공하면 JSON 에 저장돼 재부팅 뒤에도 남는다 |
 | AP 보다 좁은 대역폭 + MCS, 표준 ac·ax | `txratecfg <format> <index> <nss> <rate_setting>`(예: HE MCS3 20 MHz `3 3 1 0x200`, VHT `2 3 1 0x200`. rate_setting 은 bit2-4 대역폭 0/1/2=20/40/80, bit8 DCM, bit9 LDPC) | 단일 고정 — 아래 로밍 주의 |
 | 레거시 a·g·b | 비트맵 또는 `txratecfg 0 <idx>` | |
 
-- **HT·VHT·HE 단일 고정(`txratecfg`) 상태로는 다른 BSS 로 결합하지 못한다**(드라이버 결합 검사, jhw7500/wlan-driver-v2#129 — 현장 미사용이라 수정하지 않음). BSS 가 하나인 환경에서 시험하거나 로밍·재연결 데몬(`wifi_roam@`, `wifi_bgscan@`, `wifi_checker@`)을 멈추고, 끝나면 `mlanutl <iface> txratecfg 0xff` 로 푼다.
+- **HT·VHT·HE 단일 고정(`txratecfg`) 상태로는 다른 BSS 로 결합하지 못한다**(드라이버 결합 검사, jhw7500/wlan-driver-v2#129 — 현장 미사용이라 수정하지 않음). BSS 가 하나인 환경에서 시험하거나 로밍·재연결 데몬(`wifi_roam@`, `wifi_bgscan@`, `wifi_checker@`)을 멈추고 시험한다.
+- **시험이 끝나면** `on_connect.commands` 에서 고정 전송률 항목을 지우고 `wifi_event@<iface>` 를 재시작한다(시작 때 한 번 읽으므로 남겨 두면 다음 연결 때 고정이 다시 걸린다). 멈춘 `wifi_roam@`·`wifi_bgscan@`·`wifi_checker@` 를 다시 시작하거나 재부팅하고, `mlanutl <iface> txratecfg 0xff` 로 라이브 고정을 푼다. n 모드 시험으로 바꾼 `mode`·`bw` 도 원래 값으로 올려 `radio-apply` 한다(`bw default` 등).
 - **금지 조합**: ac·ax 에서 대역폭 제한(`wifi <iface> bw 20` 등)과 고정 MCS 를 함께 쓰지 않는다. HE `txratecfg` 고정은 LG 1 Mbps 로 무너지고, 2-word 는 6M 바닥이 되며 HE 80 MHz AP 에서는 12~60초 뒤 송신이 멈춰 재연결로만 회복된다. n 모드에서는 정상이다.
 - 11b 속도를 끈 AP 에서 b 를 고정하면 연결은 되지만 1 Mbps 로만 나간다(설정 실패로 드러나지 않는다).
 - 조회 한계: `getdatarate` 는 스캔 뒤 링크 폭(예: 80 MHz)을 보이지만 공중 데이터는 고정한 폭(20 MHz)을 유지한다. DCM 은 보드 조회로 보이지 않는다.
@@ -747,7 +749,7 @@ ChangeIpAddress 가 고르는 IP 주소 리스트(통신 사양서 6.5)는 `wifi
 > 이 문서는 외부 WebUI/Save API의 구현 계약이며 해당 consumer의 통합시험 완료를 뜻하지 않는다.
 
 > **⑧ 고정 전송률·DCM 메뉴를 만들지 말 것 (#505)**
-> 현장 전송 제한은 대역폭 상한(`radio.bw`)과 MCS 상한(`mcs_tier`)뿐이다(§3.10.5a). `txratecfg`·`ratebitmapcfg` 고정과 DCM 은 시험 전용이고(§3.10.6a), 단일 고정 상태에서는 다른 BSS 로 로밍하지 못하며 대역폭 제한과 겹치면 송신이 무너진다. MCS 상한으로는 ac·ax 에서 MCS 7 밑으로 내릴 수 없다는 점도 UI 에 그대로 알린다.
+> 현장 전송 제한은 대역폭 상한(`radio.bw`)과 MCS 상한(`mcs_tier`)뿐이다(§3.10.5a). `txratecfg`·`ratebitmapcfg` 고정과 DCM 은 시험 전용이고(§3.10.6a), 단일 고정 상태에서는 다른 BSS 로 로밍하지 못하며 대역폭 제한과 겹치면 송신이 무너진다. MCS 상한으로는 ac·ax 에서 MCS 7 밑으로 내릴 수 없다는 점도 UI 에 그대로 알린다. 기존 현장 설정의 `on_connect` 에 고정 전송률 명령이 남아 있으면 `radio.bw` 를 `20`·`40` 으로 좁히기 전에 걷어 내야 한다(§3.10.5a).
 
 ---
 

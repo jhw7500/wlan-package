@@ -149,3 +149,35 @@ def test_handoff_documents_radio_keys(key):
     row = _handoff_row(key)
     assert row is not None, f"핸드오프 §3.10.1 에 `{key}` 행이 없다"
     assert row[6] == "boot", row
+
+
+def _section(start_heading):
+    text = HANDOFF.read_text(encoding="utf-8")
+    assert start_heading in text, f"절 {start_heading!r} 가 없다"
+    return text.split(start_heading, 1)[1].split("\n#### ", 1)[0]
+
+
+def test_handoff_radio_bw_warns_on_connect_fixed_rate_conflict():
+    """현장 UI 가 대역폭을 좁힐 때 기존 on_connect 고정 전송률과 겹치면 송신이 무너진다(Tribunal A-R1-001)."""
+    row = " | ".join(_handoff_row("radio.bw"))
+    assert "on_connect" in row and "txratecfg" in row, row
+    sec = _section("#### 3.10.5a ")
+    assert "on_connect" in sec and "wifi_event@" in sec, "§3.10.5a 에 on_connect 정리 규칙이 없다"
+
+
+@pytest.mark.parametrize("iface", IFACES)
+def test_schema_radio_bw_description_warns_on_connect_conflict(iface):
+    desc = _radio_prop(iface, "bw")["description"]
+    assert "on_connect" in desc and "txratecfg" in desc, desc
+
+
+def test_handoff_test_recipes_apply_staged_radio_and_clean_up():
+    """mode·bw 는 올려 두기만 하므로 radio-apply 가 필요하고(Codex P2), 시험이 끝나면 on_connect 항목과
+    wifi_event 까지 되돌려야 고정이 다시 걸리지 않는다(Tribunal A-R1-002)."""
+    sec = _section("#### 3.10.6a ")
+    n_row = [l for l in sec.splitlines() if l.startswith("| AP 보다 좁은 대역폭 + MCS, 표준 n |")]
+    assert len(n_row) == 1, n_row
+    # 명령 칸(둘째 칸)에 적용 단계가 있어야 한다 — 비고 칸의 언급만으로는 절차가 되지 않는다.
+    assert "radio-apply" in _cells(n_row[0])[1], _cells(n_row[0])
+    cleanup = [l for l in sec.splitlines() if "txratecfg 0xff" in l]
+    assert any("on_connect" in l and "wifi_event@" in l for l in cleanup), cleanup

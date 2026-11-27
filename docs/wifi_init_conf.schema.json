@@ -2073,7 +2073,7 @@
                 "80",
                 "auto"
               ],
-              "description": "대역폭 상한(HT/VHT cap: htcapinfo·vhtcfg). 없으면 AP 따름. 80 과 auto 는 같은 cap 이다. ax 에서는 HE 채널 폭(11axcfg)을 바꾸지 않아 AP→보드 폭은 AP 판단이다. 즉시 적용은 `wifi <iface> bw <값>` 뒤 `wifi <iface> radio-apply`(재결합)",
+              "description": "대역폭 상한(HT/VHT cap: htcapinfo·vhtcfg). 없으면 AP 따름. 80 과 auto 는 같은 cap 이다. ax 에서는 HE 채널 폭(11axcfg)을 바꾸지 않아 AP→보드 폭은 AP 판단이다. 즉시 적용은 `wifi <iface> bw <값>` 뒤 `wifi <iface> radio-apply`(재결합). ac·ax 에서 20·40 으로 좁힐 때 on_connect.commands 에 txratecfg·ratebitmapcfg 가 있으면 송신이 무너지므로 먼저 걷어 낸다(인계 문서 §3.10.5a)",
               "x-ui-editable": "yes",
               "x-apply-timing": "boot",
               "x-consumer": "wifi_init.sh, wifi.sh, opc_wlan_apply.sh"
@@ -3125,7 +3125,7 @@
                 "80",
                 "auto"
               ],
-              "description": "대역폭 상한(HT/VHT cap: htcapinfo·vhtcfg). 없으면 AP 따름. 80 과 auto 는 같은 cap 이다. ax 에서는 HE 채널 폭(11axcfg)을 바꾸지 않아 AP→보드 폭은 AP 판단이다. 즉시 적용은 `wifi <iface> bw <값>` 뒤 `wifi <iface> radio-apply`(재결합)",
+              "description": "대역폭 상한(HT/VHT cap: htcapinfo·vhtcfg). 없으면 AP 따름. 80 과 auto 는 같은 cap 이다. ax 에서는 HE 채널 폭(11axcfg)을 바꾸지 않아 AP→보드 폭은 AP 판단이다. 즉시 적용은 `wifi <iface> bw <값>` 뒤 `wifi <iface> radio-apply`(재결합). ac·ax 에서 20·40 으로 좁힐 때 on_connect.commands 에 txratecfg·ratebitmapcfg 가 있으면 송신이 무너지므로 먼저 걷어 낸다(인계 문서 §3.10.5a)",
               "x-ui-editable": "yes",
               "x-apply-timing": "boot",
               "x-consumer": "wifi_init.sh, wifi.sh, opc_wlan_apply.sh"
