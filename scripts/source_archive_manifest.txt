@@ -464,6 +464,7 @@ dist/wlan/usr/local/scripts/wifi_logger_stop.sh
 dist/wlan/usr/local/scripts/wifi_logger_temp.sh
 dist/wlan/usr/local/scripts/wifi_mfg.sh
 dist/wlan/usr/local/scripts/wifi_mgmt_log.sh
+dist/wlan/usr/local/scripts/wifi_nss_antcfg_test.sh
 dist/wlan/usr/local/scripts/wifi_peer_net_reapply.sh
 dist/wlan/usr/local/scripts/wifi_periodic_roam.sh
 dist/wlan/usr/local/scripts/wifi_ping.sh

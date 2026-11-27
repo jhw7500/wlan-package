@@ -342,6 +342,7 @@ PY
         dist/wlan/usr/local/scripts/wifi_fw_config_test.sh \
         dist/wlan/usr/local/scripts/wifi_init_config_test.sh \
         dist/wlan/usr/local/scripts/wifi_link_reset_test.sh \
+        dist/wlan/usr/local/scripts/wifi_nss_antcfg_test.sh \
         dist/wlan/usr/local/scripts/wifi_radio_test.sh \
         dist/wlan/usr/local/scripts/wifi_secret_test.sh \
         dist/wlan/usr/local/scripts/wifi_wpa_conf_writer_test.sh \

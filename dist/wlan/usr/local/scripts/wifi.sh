@@ -156,6 +156,230 @@ safe_tmp_for() {
     mktemp "$1.tmp.XXXXXX"
 }
 
+# ----- nss / antcfg CLI (#504) -----
+# .<iface>.antcfg / .antcfgnss 는 JSON 만 원자 갱신한다. 적용은 다음 wifi_init 시작의
+# association 전 apply·verify 경로(wifi_fw_apply_antcfg / wifi_fw_apply_antcfgnss)가 맡는다.
+# 라이브 SET 은 하지 않는다 — antcfg SET 은 RF_ANTENNA HostCmd 를 발행하고, antcfgnss SET 은
+# 현재 association 을 바꾸지 못한다.
+
+# 실제 SoC 기준 보드 종류(imx93/imx8mm). wifi_init 과 같은 판정(wifi_board_config.sh --detect)을
+# 쓴다. 설치본 /usr/local/bin/wifi 는 심볼릭 링크라 SCRIPT_DIR 에 없으면 설치 경로를 쓴다.
+fwcfg_board_type() {
+    local helper=/usr/local/scripts/wifi_board_config.sh facts
+    [ -x "$SCRIPT_DIR/wifi_board_config.sh" ] && helper="$SCRIPT_DIR/wifi_board_config.sh"
+    facts=$("$helper" --detect 2>/dev/null) || return 1
+    printf '%s\n' "$facts" | sed -n "s/^BOARD_TYPE='\([A-Za-z0-9._-]*\)'\$/\1/p" | grep .
+}
+
+# 후보 JSON 에서 이 섹션만 떼어 imx93 부팅 게이트(wifi_fw_validate_product_scan_profile)를
+# 돌린다. 다른 섹션의 기존 위반과 섞지 않고 "이번 변경이 게이트 대상 키를 켜는가"만 본다 —
+# 대상 키 목록은 lib 한 곳에 둔다. 0=걸림, 1=안 걸림, 2=판정 불가.
+fwcfg_trips_scan_gate() {
+    local candidate="$1" section="$2" board="$3" probe rc
+    probe=$(mktemp) || return 2
+    if ! jq --arg i "$IFACE" --arg s "$section" '{($i): {($s): .[$i][$s]}}' \
+            "$candidate" > "$probe" 2>/dev/null; then
+        rm -f -- "$probe"
+        return 2
+    fi
+    wifi_fw_validate_product_scan_profile "$probe" "$board"
+    rc=$?
+    rm -f -- "$probe"
+    [ "$rc" -ne 0 ] && return 0
+    return 1
+}
+
+# 후보 JSON 을 만들어 wifi_init 과 같은 검증(wifi_fw_validate_<섹션>_config)과 imx93 게이트를
+# 통과할 때만 원자 기록한다. 값 형식 검사는 그 검증 함수가 쓰는 _wifi_fw_is_ant_path /
+# _wifi_fw_is_user_htstream_value 에 맡긴다 — CLI 와 소비자가 같은 판정을 쓴다.
+# $1=섹션(antcfg|antcfgnss) $2=동작(off|enable) $3=jq 필터($i,$v1,$v2) $4,$5=필터 값
+# 0=기록함, 1=거부·실패(JSON 불변). FWCFG_FORCE=1 이면 게이트 대상 키도 기록하고
+# FWCFG_GATE_FORCED=1 로 알린다. off 는 보드·검증·게이트를 보지 않는다(끄는 쪽은 항상 허용).
+fwcfg_update() {
+    local section="$1" action="$2" filter="$3" board="" tmp rc
+    FWCFG_GATE_FORCED=0
+    FWCFG_VERIFY_DROPPED=0
+    if [ "$action" = enable ]; then
+        if ! board=$(fwcfg_board_type); then
+            echo "Error: cannot detect the board (wifi_board_config.sh --detect); $IFACE.$section not changed" >&2
+            return 1
+        fi
+        if [ "$section" = antcfgnss ]; then
+            case "$board" in
+                imx93*) ;;
+                *)
+                    echo "Error: $board has no antcfgnss (user_htstream) ABI; $IFACE.antcfgnss not changed" >&2
+                    return 1
+                    ;;
+            esac
+        fi
+    fi
+    # OPC·라디오 CLI 도 이 파일을 읽고 고쳐 쓴다(FD8 radio-json.lock). 읽기~기록 구간이 겹치면
+    # 한쪽 변경이 사라지므로 같은 잠금을 잡는다(비차단, 프로세스 끝까지 유지).
+    if ! wifi_radio_json_lock_acquire; then
+        exec 8>&-
+        echo "Error: radio JSON transaction busy; $IFACE.$section not changed" >&2
+        return 1
+    fi
+    tmp=$(safe_tmp_for "$WIFI_INIT_CONF_JSON") || return 1
+    if ! jq --arg i "$IFACE" --arg v1 "${4:-}" --arg v2 "${5:-}" "$filter" \
+            "$WIFI_INIT_CONF_JSON" > "$tmp" 2>/dev/null; then
+        rm -f -- "$tmp"
+        echo "Error: cannot update $IFACE.$section in $WIFI_INIT_CONF_JSON; not changed" >&2
+        return 1
+    fi
+    # 이번 기록이 기존 verify 를 지우는가 — 잠금 안에서 기록 전후로 판정한다(안내 출력용).
+    if jq -e --arg i "$IFACE" --arg s "$section" '.[$i][$s] | type == "object" and has("verify")' \
+            "$WIFI_INIT_CONF_JSON" >/dev/null 2>&1 \
+       && ! jq -e --arg i "$IFACE" --arg s "$section" '.[$i][$s] | type == "object" and has("verify")' \
+            "$tmp" >/dev/null 2>&1; then
+        FWCFG_VERIFY_DROPPED=1
+    fi
+    if [ "$action" = enable ]; then
+        if ! "wifi_fw_validate_${section}_config" "$tmp" "$IFACE"; then
+            rm -f -- "$tmp"
+            case "$section" in
+                antcfg) echo "Error: $IFACE.antcfg would be invalid for wifi_init (tx/rx and verify paths: 1..0xFFFF as decimal without a leading zero or 0x hex; rx may be empty); not changed" >&2 ;;
+                *) echo "Error: $IFACE.antcfgnss would be invalid for wifi_init (value: 0x-prefixed hex 0x1..0xFFFF, or 1/2); not changed" >&2 ;;
+            esac
+            return 1
+        fi
+        fwcfg_trips_scan_gate "$tmp" "$section" "$board"
+        rc=$?
+        if [ "$rc" -eq 0 ] && [ "${FWCFG_FORCE:-0}" = 1 ]; then
+            FWCFG_GATE_FORCED=1
+        elif [ "$rc" -eq 0 ]; then
+            rm -f -- "$tmp"
+            echo "Error: enabling $IFACE.$section trips the $board boot scan-profile gate (p149.115 scan wedge); not changed (add --force to write it anyway)" >&2
+            return 1
+        elif [ "$rc" -ne 1 ]; then
+            rm -f -- "$tmp"
+            echo "Error: cannot evaluate the boot scan-profile gate; $IFACE.$section not changed" >&2
+            return 1
+        fi
+    fi
+    if ! safe_install_sync "$tmp" "$WIFI_INIT_CONF_JSON"; then
+        rm -f -- "$tmp"
+        echo "Error: failed to write $WIFI_INIT_CONF_JSON; $IFACE.$section not changed" >&2
+        return 1
+    fi
+    rm -f -- "$tmp"
+    return 0
+}
+
+# wifi_init 이 적용하는(wifi_fw_validate_mcs_config 통과) mcs_tier 의 ht 티어 NSS(ht 7 → 1,
+# 15 → 2). 꺼져 있거나 무효라 wifi_init 이 건너뛰는 섹션이면 출력하지 않는다.
+fwcfg_ht_tier() {
+    wifi_fw_validate_mcs_config "$WIFI_INIT_CONF_JSON" "$IFACE" || return 0
+    case "$(jq -r --arg i "$IFACE" '.[$i].mcs_tier.ht // ""' "$WIFI_INIT_CONF_JSON" 2>/dev/null)" in
+        7) echo 1 ;;
+        15) echo 2 ;;
+    esac
+}
+
+# user_htstream 값의 밴드별 실효 TX NSS 상한 = min(ht 티어, Tx 니블, Rx 니블)(driver-v2#41 실측,
+# docs/wifi_init_conf_guide.md §11.4c). 니블: [15:12]=5G Tx, [11:8]=5G Rx, [7:4]=2.4G Tx,
+# [3:0]=2.4G Rx. $1=검증된 0x 16진 값, $2=ht 티어 NSS(비면 미적용).
+fwcfg_nss_cap() {
+    local v=$(($1)) tier="${2:-}" c5 c2
+    c5=$(((v >> 12) & 15))
+    [ $(((v >> 8) & 15)) -lt "$c5" ] && c5=$(((v >> 8) & 15))
+    c2=$(((v >> 4) & 15))
+    [ $((v & 15)) -lt "$c2" ] && c2=$((v & 15))
+    if [ -n "$tier" ]; then
+        [ "$tier" -lt "$c5" ] && c5=$tier
+        [ "$tier" -lt "$c2" ] && c2=$tier
+    fi
+    echo "5G $c5, 2.4G $c2"
+}
+
+fwcfg_show_nss() {
+    local sec tier live v rc
+    sec=$(jq -c --arg i "$IFACE" \
+        '.[$i].antcfgnss // "(not configured)" | if type == "object" then del(._comment) else . end' \
+        "$WIFI_INIT_CONF_JSON" 2>/dev/null)
+    echo "antcfgnss (JSON $WIFI_INIT_CONF_JSON, $IFACE): $sec"
+    tier=$(fwcfg_ht_tier)
+    echo "mcs_tier (JSON): enabled=$(jq -r --arg i "$IFACE" '.[$i].mcs_tier.enabled // false' "$WIFI_INIT_CONF_JSON" 2>/dev/null) ht=$(jq -r --arg i "$IFACE" '.[$i].mcs_tier.ht // "-"' "$WIFI_INIT_CONF_JSON" 2>/dev/null) -> $(if [ -n "$tier" ]; then echo "ht tier NSS $tier"; else echo "ht tier not applied"; fi)"
+    # wifi_init 의 read-back(wifi_fw_apply_antcfgnss)과 같은 명령·파싱: 인자 없는 antcfg 의 user_htstream=.
+    live=$(mlanutl "$IFACE" antcfg 2>/dev/null \
+        | sed -n 's/.*user_htstream=\(0[xX][0-9A-Fa-f][0-9A-Fa-f]*\).*/\1/p' | tail -1)
+    _wifi_fw_is_user_htstream_value "$live" || live=""
+    echo "user_htstream (live, mlanutl $IFACE antcfg): ${live:-(not available)}"
+    echo "TX NSS cap = min(ht tier, Tx nibble, Rx nibble), per band:"
+    wifi_fw_validate_antcfgnss_config "$WIFI_INIT_CONF_JSON" "$IFACE"
+    rc=$?
+    case "$rc" in
+        0)
+            v=$(jq -r --arg i "$IFACE" '.[$i].antcfgnss.value' "$WIFI_INIT_CONF_JSON")
+            echo "  configured $v (next wifi_init start): $(fwcfg_nss_cap "$v" "$tier")"
+            ;;
+        2) echo "  configured: antcfgnss disabled (driver default host NSS intent)" ;;
+        *) echo "  configured: antcfgnss section invalid (wifi_init skips it)" ;;
+    esac
+    if [ -n "$live" ]; then
+        echo "  live $live: $(fwcfg_nss_cap "$live" "$tier")"
+    else
+        echo "  live: user_htstream not available"
+    fi
+    fwcfg_note_disabled_iface
+}
+
+fwcfg_show_antcfg() {
+    echo "antcfg (JSON $WIFI_INIT_CONF_JSON, $IFACE): $(jq -c --arg i "$IFACE" \
+        '.[$i].antcfg // "(not configured)" | if type == "object" then del(._comment) else . end' \
+        "$WIFI_INIT_CONF_JSON" 2>/dev/null)"
+    echo "--- Live antcfg ($IFACE, read-only GET) ---"
+    mlanutl "$IFACE" antcfg 2>/dev/null || echo "(antcfg not available)"
+    fwcfg_note_disabled_iface
+}
+
+# wifi_init 은 꺼진 인터페이스의 라디오 기본값을 통째로 건너뛴다(apply_iface_radio_defaults).
+# 같은 판정 함수·기본값(설정이 유효하면 키가 없을 때 false — wifi_init.sh IFACE_ENABLED_DEFAULT)으로
+# 확인해, 켤 때까지 적용되지 않는다고 알린다.
+fwcfg_note_disabled_iface() {
+    local default=false
+    wifi_init_conf_status "$WIFI_INIT_CONF_JSON" || default=true
+    [ "$(wifi_init_get_iface_enabled "$IFACE" "$default")" = false ] || return 0
+    echo "Note: $IFACE is disabled (.$IFACE.enabled is not true); wifi_init skips its radio defaults, so this setting is applied only after the interface is enabled"
+}
+
+fwcfg_report_forced() {
+    [ "${FWCFG_GATE_FORCED:-0}" = 1 ] || return 0
+    echo "Warning: --force: $IFACE.$1 is checked by the imx93 boot scan-profile gate; every wifi_init start will log local0.err and record product_scan_profile in /run/wifi/fwcfg_unapplied_mlan0 (shown by 'wifi 0 info')"
+    echo "Warning: the gate guards against physical 1-path antenna settings, a p149.115 scan wedge cofactor (docs/wifi_init_conf_guide.md §11.4b)"
+}
+
+# nss 기록 뒤: 기록값, 적용 시점, ht 7 경고(Tx 니블 2 이상인데 ht 티어가 1), --force 경고.
+fwcfg_report_nss() {
+    local v verify n
+    v=$(jq -r --arg i "$IFACE" '.[$i].antcfgnss.value' "$WIFI_INIT_CONF_JSON")
+    verify=$(jq -r --arg i "$IFACE" '.[$i].antcfgnss.verify.user_htstream // "-"' "$WIFI_INIT_CONF_JSON")
+    echo "antcfgnss updated for $IFACE: enabled=true value=$v verify.user_htstream=$verify"
+    echo "Apply: next wifi_init start (including reboot), before association (antcfgnss SET + antcfg read-back)"
+    fwcfg_note_disabled_iface
+    n=$((v))
+    if [ "$(fwcfg_ht_tier)" = 1 ] && { [ $(((n >> 12) & 15)) -ge 2 ] || [ $(((n >> 4) & 15)) -ge 2 ]; }; then
+        echo "Warning: mcs_tier.ht=7 keeps the effective TX NSS of $IFACE at 1 (Tx nibble >= 2 has no effect); use 'wifi $IFACE mcs ht 15' to allow TX NSS 2"
+    fi
+    fwcfg_report_forced antcfgnss
+}
+
+# antcfg 기록 뒤: 기록값, 적용 시점, verify 제거 안내(fwcfg_update 가 판정), antcfgnss 와의 적용
+# 순서, --force 경고.
+fwcfg_report_antcfg() {
+    echo "antcfg updated for $IFACE: enabled=true tx=$(jq -r --arg i "$IFACE" '.[$i].antcfg.tx' "$WIFI_INIT_CONF_JSON") rx=$(jq -r --arg i "$IFACE" '.[$i].antcfg.rx' "$WIFI_INIT_CONF_JSON")"
+    echo "Apply: next wifi_init start (including reboot), before association (antcfg SET + GET)"
+    fwcfg_note_disabled_iface
+    if [ "${FWCFG_VERIFY_DROPPED:-0}" = 1 ]; then
+        echo "Note: $IFACE.antcfg.verify removed because tx/rx changed (log-only: SET + GET are logged, not compared)"
+    fi
+    if wifi_fw_validate_antcfgnss_config "$WIFI_INIT_CONF_JSON" "$IFACE"; then
+        echo "Note: $IFACE.antcfgnss is also enabled; wifi_init applies antcfg first and then antcfgnss, so user_htstream ends at the antcfgnss value $(jq -r --arg i "$IFACE" '.[$i].antcfgnss.value' "$WIFI_INIT_CONF_JSON")"
+    fi
+    fwcfg_report_forced antcfg
+}
+
 stage_custom_calibration() {
     # 사용자 파일을 /lib/firmware/cts에 원자적으로 반입하고 즉시 정상본을 만든다.
     local src="$1" basename dst tmp
@@ -2071,6 +2295,8 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} stat interval {seconds} : set stat reset interval (persist)"
     echo "       wifi {0|1|mlan0|mlan1} mon [c|compact] [interval] [--summary-lines N] [--roam-display N]"
     echo "       wifi {0|1|mlan0|mlan1} mcs [on|off|reset|ht <7|15> vht <7|8|9> he <7|9|11>] : persist+runtime"
+    echo "       wifi {0|1|mlan0|mlan1} nss [1|2|0xHHHH|on|off] [--force] : 인자 없으면 조회(JSON antcfgnss, live user_htstream, 실효 TX NSS 상한), 그 밖은 persist(다음 wifi_init 시작의 association 전 적용, imx93 전용)"
+    echo "       wifi {0|1|mlan0|mlan1} antcfg [<tx> [<rx>]|on|off] [--force] : 인자 없으면 조회(JSON antcfg, live antcfg GET), 그 밖은 persist(imx93 부팅 게이트 대상 키는 --force 필요)"
     echo "       wifi {0|1|mlan0|mlan1} rate [<mode> <low> <high> <interval_ms>] : configured/live 조회 또는 다음 부팅값 persist"
     echo "       wifi {0|1|mlan0|mlan1} mode [b|g|a|n|ac|ax] : stage (radio-apply 성공 시 persist, mlan1은 ax 불가)"
     echo "       wifi {0|1|mlan0|mlan1} bw [20|40|80|auto|default] : stage (radio-apply 성공 시 persist; default=AP 따라)"
@@ -3561,7 +3787,7 @@ if [ "$IFACE" = mlan0 ] || [ "$IFACE" = mlan1 ]; then
             fi
             ;;
         info|status|mon|'') CHANGE_GUARD=0 ;;
-        mode|bw|rate|mcs|standard|ip)
+        mode|bw|rate|mcs|nss|antcfg|standard|ip)
             case "${3:-}" in ''|get) CHANGE_GUARD=0 ;; esac ;;
         mscan)
             [ "${3:-}" != get ] || CHANGE_GUARD=0 ;;
@@ -5316,6 +5542,85 @@ case "$2" in
         echo "JSON: enabled=true$( [ -n "$MCS_HT" ] && echo " ht=$MCS_HT" )$( [ -n "$MCS_VHT" ] && echo " vht=$MCS_VHT" )$( [ -n "$MCS_HE" ] && echo " he=$MCS_HE" )"
         echo "Apply: next boot before association (SET + mcstiercfg/11axcfg GET verification)"
     fi
+    ;;
+  nss)
+    # #504: 광고 NSS intent(antcfgnss) 조회·설정. SET 은 JSON 만 바꾼다(fwcfg_update 참고).
+    case "$IFACE" in mlan0|mlan1) ;; *) usage ;; esac
+    shift 2
+    FWCFG_FORCE=0
+    if [ "$#" -gt 0 ] && [ "${!#}" = --force ]; then
+        FWCFG_FORCE=1
+        set -- "${@:1:$#-1}"
+    fi
+    [ "$#" -le 1 ] || usage
+    case "${1:-}" in
+        ''|get)
+            [ "$FWCFG_FORCE" = 0 ] || usage
+            fwcfg_show_nss
+            ;;
+        off)
+            fwcfg_update antcfgnss off '.[$i].antcfgnss.enabled = false' || exit 1
+            echo "antcfgnss disabled for $IFACE in $WIFI_INIT_CONF_JSON"
+            echo "Apply: next wifi_init start (including reboot) keeps the driver default host NSS intent"
+            ;;
+        on)
+            fwcfg_update antcfgnss enable '.[$i].antcfgnss.enabled = true' || exit 1
+            fwcfg_report_nss
+            ;;
+        *)
+            case "$1" in
+                1) _nss_value=0x1111 ;;
+                2) _nss_value=0x2222 ;;
+                *) _nss_value="$1" ;;
+            esac
+            fwcfg_update antcfgnss enable '
+                .[$i].antcfgnss.enabled = true
+                | .[$i].antcfgnss.value = $v1
+                | .[$i].antcfgnss.verify.user_htstream = $v1
+            ' "$_nss_value" || exit 1
+            fwcfg_report_nss
+            ;;
+    esac
+    ;;
+  antcfg)
+    # #504: FW Tx/Rx 안테나 경로(antcfg) 조회·설정. SET 은 JSON 만 바꾼다(fwcfg_update 참고).
+    case "$IFACE" in mlan0|mlan1) ;; *) usage ;; esac
+    shift 2
+    FWCFG_FORCE=0
+    if [ "$#" -gt 0 ] && [ "${!#}" = --force ]; then
+        FWCFG_FORCE=1
+        set -- "${@:1:$#-1}"
+    fi
+    case "${1:-}" in
+        ''|get)
+            { [ "$#" -le 1 ] && [ "$FWCFG_FORCE" = 0 ]; } || usage
+            fwcfg_show_antcfg
+            ;;
+        off)
+            [ "$#" -eq 1 ] || usage
+            fwcfg_update antcfg off '.[$i].antcfg.enabled = false' || exit 1
+            echo "antcfg disabled for $IFACE in $WIFI_INIT_CONF_JSON"
+            echo "Apply: next wifi_init start (including reboot) issues no antcfg SET (FW default antenna path)"
+            ;;
+        on)
+            [ "$#" -eq 1 ] || usage
+            fwcfg_update antcfg enable '.[$i].antcfg.enabled = true' || exit 1
+            fwcfg_report_antcfg
+            ;;
+        *)
+            [ "$#" -le 2 ] || usage
+            # 바뀐 tx/rx 에 이전 verify 를 남기면 다음 부팅 GET 비교가 옛 기대값으로 실패한다 — 지우고
+            # log-only 로 둔다(값이 같으면 verify 유지).
+            fwcfg_update antcfg enable '
+                (.[$i].antcfg // {}) as $old
+                | .[$i].antcfg.enabled = true
+                | .[$i].antcfg.tx = $v1
+                | .[$i].antcfg.rx = $v2
+                | if $old.tx != $v1 or $old.rx != $v2 then del(.[$i].antcfg.verify) else . end
+            ' "$1" "${2:-}" || exit 1
+            fwcfg_report_antcfg
+            ;;
+    esac
     ;;
   standard)
     if [[ "$3" == "4" ]] || [[ "$3" == "n" ]] || [[ "$3" == "N" ]]; then
