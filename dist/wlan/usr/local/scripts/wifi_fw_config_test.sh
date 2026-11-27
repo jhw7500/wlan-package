@@ -337,6 +337,42 @@ expect_eq "product antcfg migration is idempotent" \
     "$(jq -S -c . "$WORK/migrated-antcfg-off.json" 2>/dev/null)" \
     "$(jq -S -c . "$WORK/migrated-antcfg-twice.json" 2>/dev/null)"
 
+# 운영자가 정한 antcfgnss(`wifi <iface> nss`, #504)는 패키지 설치·업그레이드가 덮지 않는다.
+# 제품 기본 antcfg(꺼짐·빈 값)가 승격 트리거여도 antcfgnss 에 값이 있으면 그대로 두고,
+# 비어 있을 때만 제품 계약값을 채운다.
+jq '.mlan0.antcfg={enabled:false,tx:"",rx:""}
+    | .mlan0.antcfgnss={enabled:true,value:"0x2222",verify:{user_htstream:"0x2222"}}' \
+    "$CONF" > "$WORK/operator-nss.json"
+wifi_fw_migrate_product_antcfg_json "$WORK/operator-nss.json" \
+    > "$WORK/operator-nss-after.json" 2>/dev/null
+expect_eq "migration keeps an operator antcfgnss value under the default antcfg" \
+    "$(jq -S -c '.mlan0.antcfgnss' "$WORK/operator-nss.json")" \
+    "$(jq -S -c '.mlan0.antcfgnss' "$WORK/operator-nss-after.json" 2>/dev/null)"
+jq '.mlan0.antcfg={enabled:false,tx:"",rx:""}
+    | .mlan0.antcfgnss={enabled:false,value:"0x1111",verify:{user_htstream:"0x1111"}}' \
+    "$CONF" > "$WORK/operator-nss-off.json"
+wifi_fw_migrate_product_antcfg_json "$WORK/operator-nss-off.json" \
+    > "$WORK/operator-nss-off-after.json" 2>/dev/null
+expect_eq "migration keeps an operator-disabled antcfgnss disabled" 'false 0x1111' \
+    "$(jq -r '.mlan0.antcfgnss | "\(.enabled) \(.value)"' "$WORK/operator-nss-off-after.json" 2>/dev/null)"
+jq '.mlan0.antcfg={enabled:false,tx:"",rx:""} | .mlan0.antcfgnss={enabled:false,value:""}' \
+    "$CONF" > "$WORK/empty-nss.json"
+wifi_fw_migrate_product_antcfg_json "$WORK/empty-nss.json" \
+    > "$WORK/empty-nss-after.json" 2>/dev/null
+expect_eq "migration still fills an empty antcfgnss with the product contract" 'true 0x1111 0x1111' \
+    "$(jq -r '.mlan0.antcfgnss | "\(.enabled) \(.value) \(.verify.user_htstream)"' \
+        "$WORK/empty-nss-after.json" 2>/dev/null)"
+# #220 후보 빌드의 0x2121 은 출하 패키지에 들어간 적이 없고(6d061c1), `wifi 0 nss 0x2121` 로
+# 정한 운영자 값과 모양이 같아 구별할 수 없다 — 다른 운영자 값처럼 보존한다.
+jq '.mlan0.antcfg={enabled:false,tx:"",rx:""}
+    | .mlan0.antcfgnss={enabled:true,value:"0x2121",verify:{user_htstream:"0x2121"}}' \
+    "$CONF" > "$WORK/nss-2121.json"
+wifi_fw_migrate_product_antcfg_json "$WORK/nss-2121.json" \
+    > "$WORK/nss-2121-after.json" 2>/dev/null
+expect_eq "migration keeps 0x2121 like any other operator value" 'true 0x2121 0x2121' \
+    "$(jq -r '.mlan0.antcfgnss | "\(.enabled) \(.value) \(.verify.user_htstream)"' \
+        "$WORK/nss-2121-after.json" 2>/dev/null)"
+
 # p149.115/antcfgnss 계약은 현재 imx93 543.p18 조합에만 qualification 됐다.
 # imx8의 505.p14 utility는 user_htstream GET ABI가 없으므로 legacy disabled나
 # 중간 후보 패키지가 주입한 exact product profile을 엄격 verify로 승격하면 안 된다.

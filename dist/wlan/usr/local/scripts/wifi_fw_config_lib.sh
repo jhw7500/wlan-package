@@ -171,7 +171,15 @@ wifi_fw_migrate_product_antcfg_json() {
             # 분기는 재실행에도 같은 결과를 낸다(멱등).
             if is_legacy_disabled($a) or is_legacy_physical_1x1($a) or is_product_request($a)
             then .mlan0.antcfg = (($a + {enabled: false, tx: "", rx: ""}) | del(.verify))
-                 | .mlan0.antcfgnss = ($n + product_nss)
+                 # antcfgnss 는 값이 비어 있을 때만 제품 계약값을 채운다. 값이 있으면
+                 # 운영자가 정한 것(`wifi <iface> nss`, off 포함)이라 설치·업그레이드가
+                 # 덮지 않는다(#504). antcfgnss 가 없던 기기는 병합이 템플릿값(0x1111)을
+                 # 먼저 채우므로 결과가 같다. #220 후보 빌드의 0x2121 은 출하된 적이 없고
+                 # (6d061c1) 운영자 값과 구별할 수 없어 다른 값처럼 그대로 둔다.
+                 | if ($n.value // "") == ""
+                   then .mlan0.antcfgnss = ($n + product_nss)
+                   else .
+                   end
             elif is_product_verify($a.verify)
             then .mlan0.antcfg |= del(.verify)
             else .

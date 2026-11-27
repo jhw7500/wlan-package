@@ -1264,7 +1264,9 @@ FW 기본값으로 남을 수 있으니, 변경 후에는 `mlanutl <iface> antcf
 업그레이드에서는 active JSON 우선 병합 때문에 템플릿 변경만으로 과거 값이 바뀌지 않는다.
 `postinst`가 병합 직후 과거 제품 이력 — 구제품 비대칭 계약 `0x0303/0x0101(+verify)`,
 그 이전의 `enabled=false, tx="", rx=""`, 알려진 physical 1x1 `0x0101` — 만
-**새 계약(antcfg 비움 + antcfgnss `0x1111` 주입)** 으로 멱등 승격한다. 그 밖의 명시적
+**새 계약(antcfg 비움 + antcfgnss `0x1111` 주입)** 으로 멱등 승격한다. antcfgnss 는 값이
+비어 있을 때만 `0x1111` 을 채우고, 이미 값이 있으면(`wifi <iface> nss` 로 정한 값·`off` 포함)
+그대로 둔다. 그 밖의 명시적
 안테나 경로 값은 운영자 설정으로 보고 보존하며 antcfgnss도 주입하지 않는다(이 경우 제품
 불변식 검사에 걸리므로 의도적 커스텀은 불변식까지 이해한 구성이어야 한다). deep merge가
 커스텀 값에 템플릿의 제품용 `verify`를 자동 주입한 경우에는 주입된 계약만 제거해 기존
@@ -1303,6 +1305,29 @@ log-only 동작을 유지한다.
 > 보고할 수 있고 이 기기는 무선이 유일한 접속 경로이므로, 설정 검증 단계에서 거부하고 섹션 전체를
 > 건너뛴다(FW 기본 경로 유지). 범위를 벗어난 값·비16진 문자열도 같다.
 
+**CLI**(`wifi.sh`): 이 섹션만 JSON 에 원자 기록하고 라이브 `mlanutl` SET 은 하지 않는다.
+적용은 다음 `wifi_init` 시작(재부팅 포함)의 association 전 apply·verify 경로다.
+
+```sh
+wifi 0 antcfg               # 조회: JSON antcfg + 인자 없는 mlanutl mlan0 antcfg (읽기 전용 GET, RF_ANTENNA SET 없음)
+wifi 0 antcfg 0x303         # tx 만 (rx 비움 = Tx/Rx 공통), enabled=true
+wifi 0 antcfg 0x303 0x303   # tx rx
+wifi 0 antcfg off           # enabled 만 false (on 은 enabled 만 true)
+```
+
+- 결과 섹션이 `wifi_init` 과 같은 검증(`wifi_fw_validate_antcfg_config`)을 통과할 때만 기록한다.
+  `0`·선행 0 10진·범위 밖·비16진 값과 빈 `tx` 로 켜는 `on` 은 JSON 을 바꾸지 않고 실패한다.
+- tx/rx 가 바뀌면 옛 기대값인 `verify` 를 지워 log-only 로 둔다. 값이 같으면 `verify` 를 유지한다.
+- 같은 인터페이스의 `antcfgnss` 가 켜져 있으면 antcfg → antcfgnss 순서로 적용된다는 안내를 낸다.
+- imx93 에서 부팅 게이트 대상(`mlan0.antcfg`, `mlan1.antcfg`)을 켜는 설정은 `--force` 없이 거부한다.
+  `--force` 로 기록하면 `wifi_init` 이 시작할 때마다 `local0.err` 를 남기고
+  `/run/wifi/fwcfg_unapplied_mlan0` 에 `product_scan_profile` 을 기록한다. `off` 는 항상 허용하고,
+  i.MX8MM 은 게이트 대상이 아니다.
+- 인터페이스가 꺼져 있으면(`.<iface>.enabled` 가 true 가 아님, 템플릿 기본 mlan1) `wifi_init` 이
+  라디오 기본값을 건너뛰므로, 켤 때까지 적용되지 않는다는 안내를 낸다.
+- 설정은 `radio-json.lock` 을 잡고 기록한다. OPC·라디오 CLI 가 같은 파일을 쓰는 중이면
+  JSON 을 바꾸지 않고 실패한다.
+
 ### 11.4c antcfgnss - 광고 NSS intent (user_htstream)
 
 **사용 스크립트**: `wifi_init.sh` → `wifi_fw_config_lib.sh` (antcfg 다음 순서로 적용)
@@ -1310,9 +1335,9 @@ log-only 동작을 유지한다.
 association 전에 `mlanutl <iface> antcfgnss <value>`로 광고 NSS intent(`user_htstream`)를
 직접 기록한다(driver#41, ported b75741f+). **RF_ANTENNA HostCmd를 발행하지 않아 물리
 안테나는 불변**이며, 니블 배치는 `[15:12]`=5G Tx, `[11:8]`=5G Rx, `[7:4]`=2G Tx,
-`[3:0]`=2G Rx다. **imx93 제품값 `0x2121`(양 밴드 Tx2/Rx1)** — OTA 실측으로
+`[3:0]`=2G Rx다. **imx93 제품값 `0x1111`(양 밴드 Tx1/Rx1)** — OTA 실측으로
 **실효 TX NSS = min(`mcstiercfg ht` 티어, Rx니블, Tx니블)** 이 확정됐고(driver#41
-`issuecomment-5503431889`), 제품 구성 `ht 7` + Rx니블 1 이므로 TX NSS1이 보장된다.
+`issuecomment-5503431889`), 제품 구성은 `ht 15` 에 Tx·Rx니블 1 이라 니블이 TX NSS1 을 정한다.
 구 기술 `min(Tx니블, Rx니블)` 은 `ht` 항이 빠져 있어 **다른 값으로 바꿀 때 어긋난다** —
 예: `0x2222`(구 규칙 min=2)도 `ht 7` 이 상한이라 실효 TX NSS1 에 머문다. TX NSS2 가
 필요하면 `mcstiercfg ht 15` 를 함께 풀어야 한다. 실효 RX NSS 는 Rx니블 단독이며 `ht`
@@ -1336,6 +1361,29 @@ read-back이 불가한 드라이버에서는 같은 검증에 걸려 결국 실�
 
 > **⚠️ 순서 제약**: 이후의 `antcfg <mask>` SET과 FW reload는 안테나 마스크로부터
 > intent를 재계산해 이 값을 덮어쓴다. 적용 순서는 항상 antcfg(물리) → antcfgnss(광고)다.
+
+**CLI**(`wifi.sh`): §11.4b `antcfg` 와 같이 JSON 만 원자 기록하고, 적용은 다음 `wifi_init`
+시작의 association 전이다.
+
+```sh
+wifi 0 nss            # 조회: JSON antcfgnss, mcs_tier ht, 라이브 user_htstream, 밴드별 실효 TX NSS 상한
+wifi 0 nss 2          # 양 밴드 Tx2/Rx2 = 0x2222 (value 와 verify.user_htstream 를 함께 기록, enabled=true)
+wifi 0 nss 1          # 0x1111 (imx93 mlan0 제품값)
+wifi 0 nss 0x2121     # 니블 직접 지정 (0x 접두 필수)
+wifi 0 nss off        # enabled 만 false (on 은 enabled 만 true)
+```
+
+- imx93 전용이다. i.MX8MM(505.p14 `mlanutl`)에는 antcfgnss ABI 가 없어 값 설정과 `on` 을
+  거부한다(`off` 는 허용).
+- 결과 섹션이 `wifi_fw_validate_antcfgnss_config` 를 통과할 때만 기록한다. `0x` 없는 값·`0`·
+  5자리 이상 16진은 JSON 을 바꾸지 않고 실패한다.
+- `mcs_tier.enabled=true` 이고 `ht 7` 이면 Tx니블이 2 이상이어도 실효 TX NSS 가 1 에 머문다는
+  경고를 낸다(`wifi 0 mcs ht 15` 로 푼다).
+- `mlan1` 을 켜는 설정은 부팅 게이트 대상이라 `--force` 없이 거부한다(§11.4b 와 같은 동작).
+- 값은 재부팅과 패키지 설치·업그레이드 뒤에도 유지된다. 업그레이드 마이그레이션은 비어 있는
+  antcfgnss 만 제품값으로 채운다(§11.4b).
+- 실효 TX NSS 상한과 `ht 7` 경고에는 `wifi_init` 이 적용하는 `mcs_tier` 만 쓴다. 꺼졌거나
+  무효라 건너뛰는 섹션은 반영하지 않는다.
 
 ### 11.5 rate_adapt - FW Rate Adaptation
 
