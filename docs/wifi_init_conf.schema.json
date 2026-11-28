@@ -2045,6 +2045,41 @@
             }
           }
         },
+        "radio": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "무선 모드·대역폭 상한(#505). `wifi <iface> mode|bw` 로 올린 값을 `wifi <iface> radio-apply` 가 적용에 성공하면 저장하고 부팅 때 wifi_init.sh 가 연결 전에 다시 적용한다. 템플릿에 없는 키다 — 키가 없으면 제한하지 않는다(칩 기본·AP 따름). 해제는 빈 문자열이 아니라 키 삭제(`wifi <iface> bw default` 뒤 radio-apply).",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "b",
+                "g",
+                "a",
+                "n",
+                "ac",
+                "ax"
+              ],
+              "description": "bandcfg 모드 상한. 없으면 칩 기본. mlan1 은 ax 불가. b/g 를 5G 전용 freq_list 와 함께 쓰면 부팅 적용을 건너뛴다. 이미 연결된 상태면 부팅 적용을 건너뛰고 `wifi <iface> radio-apply` 를 안내한다",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh, wifi.sh, opc_wlan_apply.sh"
+            },
+            "bw": {
+              "type": "string",
+              "enum": [
+                "20",
+                "40",
+                "80",
+                "auto"
+              ],
+              "description": "대역폭 상한(HT/VHT cap: htcapinfo·vhtcfg). 없으면 AP 따름. 80 과 auto 는 같은 cap 이다. ax 에서는 HE 채널 폭(11axcfg)을 바꾸지 않아 AP→보드 폭은 AP 판단이다. 즉시 적용은 `wifi <iface> bw <값>` 뒤 `wifi <iface> radio-apply`(재결합). ac·ax 에서 20·40 으로 좁힐 때 on_connect.commands 에 txratecfg·ratebitmapcfg 가 있으면 송신이 무너지므로 먼저 걷어 낸다(인계 문서 §3.10.5a)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh, wifi.sh, opc_wlan_apply.sh"
+            }
+          }
+        },
         "on_connect": {
           "type": "object",
           "additionalProperties": true,
@@ -2055,7 +2090,7 @@
               "default": true,
               "description": "AP 연결/로밍 후 commands 실행 여부. commands가 비면 실질 no-op",
               "x-ui-editable": "yes",
-              "x-apply-timing": "runtime",
+              "x-apply-timing": "daemon-restart",
               "x-consumer": "wifi_event.sh, wifi_apply_enabled.sh"
             },
             "commands": {
@@ -2066,7 +2101,7 @@
               },
               "description": "연결/로밍 직후 순서대로 실행할 shell 명령 배열(실패는 로그만). command injection 위험이므로 내용 검증 필요",
               "x-ui-editable": "caution",
-              "x-apply-timing": "runtime",
+              "x-apply-timing": "daemon-restart",
               "x-consumer": "wifi_event.sh"
             }
           }
@@ -3063,6 +3098,40 @@
             }
           }
         },
+        "radio": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "무선 모드·대역폭 상한(#505). `wifi <iface> mode|bw` 로 올린 값을 `wifi <iface> radio-apply` 가 적용에 성공하면 저장하고 부팅 때 wifi_init.sh 가 연결 전에 다시 적용한다. 템플릿에 없는 키다 — 키가 없으면 제한하지 않는다(칩 기본·AP 따름). 해제는 빈 문자열이 아니라 키 삭제(`wifi <iface> bw default` 뒤 radio-apply).",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "b",
+                "g",
+                "a",
+                "n",
+                "ac"
+              ],
+              "description": "bandcfg 모드 상한. 없으면 칩 기본. mlan1 은 ax 불가. b/g 를 5G 전용 freq_list 와 함께 쓰면 부팅 적용을 건너뛴다. 이미 연결된 상태면 부팅 적용을 건너뛰고 `wifi <iface> radio-apply` 를 안내한다",
+              "x-ui-editable": "caution",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh, wifi.sh, opc_wlan_apply.sh"
+            },
+            "bw": {
+              "type": "string",
+              "enum": [
+                "20",
+                "40",
+                "80",
+                "auto"
+              ],
+              "description": "대역폭 상한(HT/VHT cap: htcapinfo·vhtcfg). 없으면 AP 따름. 80 과 auto 는 같은 cap 이다. ax 에서는 HE 채널 폭(11axcfg)을 바꾸지 않아 AP→보드 폭은 AP 판단이다. 즉시 적용은 `wifi <iface> bw <값>` 뒤 `wifi <iface> radio-apply`(재결합). ac·ax 에서 20·40 으로 좁힐 때 on_connect.commands 에 txratecfg·ratebitmapcfg 가 있으면 송신이 무너지므로 먼저 걷어 낸다(인계 문서 §3.10.5a)",
+              "x-ui-editable": "yes",
+              "x-apply-timing": "boot",
+              "x-consumer": "wifi_init.sh, wifi.sh, opc_wlan_apply.sh"
+            }
+          }
+        },
         "on_connect": {
           "type": "object",
           "additionalProperties": true,
@@ -3073,7 +3142,7 @@
               "default": false,
               "description": "AP 연결/로밍 후 commands 실행 여부. commands가 비면 실질 no-op",
               "x-ui-editable": "yes",
-              "x-apply-timing": "runtime",
+              "x-apply-timing": "daemon-restart",
               "x-consumer": "wifi_event.sh, wifi_apply_enabled.sh"
             },
             "commands": {
@@ -3084,7 +3153,7 @@
               },
               "description": "연결/로밍 직후 순서대로 실행할 shell 명령 배열(실패는 로그만). command injection 위험이므로 내용 검증 필요",
               "x-ui-editable": "caution",
-              "x-apply-timing": "runtime",
+              "x-apply-timing": "daemon-restart",
               "x-consumer": "wifi_event.sh"
             }
           }

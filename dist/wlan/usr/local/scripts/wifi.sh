@@ -2294,7 +2294,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} stat reset [mac] : reset stat accumulation of all APs on this iface, or of one AP (MAC, any case); applied at the next connected cycle"
     echo "       wifi {0|1|mlan0|mlan1} stat interval {seconds} : set stat reset interval (persist)"
     echo "       wifi {0|1|mlan0|mlan1} mon [c|compact] [interval] [--summary-lines N] [--roam-display N]"
-    echo "       wifi {0|1|mlan0|mlan1} mcs [on|off|reset|ht <7|15> vht <7|8|9> he <7|9|11>] : persist+runtime"
+    echo "       wifi {0|1|mlan0|mlan1} mcs [on|off|reset|ht <7|15> vht <7|8|9> he <7|9|11>] : persist (다음 부팅의 연결 전 적용)"
     echo "       wifi {0|1|mlan0|mlan1} nss [1|2|0xHHHH|on|off] [--force] : 인자 없으면 조회(JSON antcfgnss, live user_htstream, 실효 TX NSS 상한), 그 밖은 persist(다음 wifi_init 시작의 association 전 적용, imx93 전용)"
     echo "       wifi {0|1|mlan0|mlan1} antcfg [<tx> [<rx>]|on|off] [--force] : 인자 없으면 조회(JSON antcfg, live antcfg GET), 그 밖은 persist(imx93 부팅 게이트 대상 키는 --force 필요)"
     echo "       wifi {0|1|mlan0|mlan1} rate [<mode> <low> <high> <interval_ms>] : configured/live 조회 또는 다음 부팅값 persist"
@@ -5746,7 +5746,7 @@ case "$2" in
     # staged(pending) radio.mode/radio.bw를 적용하고 성공 시에만 JSON에 commit하는
     # 트랜잭션 시퀀스. 실패 시 적용 전 스냅샷으로 라이브 롤백 + 재연결.
     # mode 변경: disconnect → bandcfg(재시도) → cap → reconfigure → reconnect
-    # bw-only: cap(htcapinfo/vhtcfg) → reassociate  (HE 포함 양방향, 무중단)
+    # bw-only: cap(htcapinfo/vhtcfg) → reassociate  (무중단). HE 능력 폭(11axcfg)은 바꾸지 않아 ax 에서 AP→보드 폭은 AP 판단(#505)
     # → assoc 대기 → commit(또는 bw=default면 radio.bw 삭제)
     # exit: 0=ok 2=usage 3=env 4=bandcfg 5=htcapinfo 6=vhtcfg 7=wpa_cli 8=assoc-timeout 9=json/commit 11=b/g+5G-freq
     if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then

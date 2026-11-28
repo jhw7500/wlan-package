@@ -222,6 +222,11 @@ HANDOFF_UNRESOLVED_ALLOWLIST = {
     # 않는다. 유령/typo 가 아니라 의도된 요약 행이므로 면제한다.
     "antcfg.verify.*",
     "antcfgnss.verify.user_htstream",
+    # #505: `wifi <iface> mode|bw` 가 radio-apply 성공 뒤 저장하고 부팅 때 wifi_init.sh 가
+    # 연결 전에 다시 적용하는 런타임 키다. 템플릿에 넣으면 업그레이드의 json_merge 가 기존
+    # 설정에 값을 주입하므로 의도적으로 뺀다(키 없음 = 제한 없음).
+    "radio.mode",
+    "radio.bw",
 }
 
 

@@ -119,6 +119,13 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 - `bgscan.freq_filter=false`는 deprecated다. 공통 `freq_list`가 있으면 계속 강제한다.
 - `periodic_roam.*`은 deprecated/read-only다. `enabled=true`도 경고 후 강제 off된다.
 
+### 2.2b 전송률·대역폭 제한 계약 (2026-11-27, #505)
+
+- 현장 WebUI 는 **대역폭 상한(`mlanN.radio.bw`)과 MCS 상한(`mlanN.mcs_tier.*`)만** 제공한다. 고정 MCS(`txratecfg`·`ratebitmapcfg`)와 DCM 은 제공하지 않는다 — 시험 전용(§3.10.6a).
+- `mlanN.radio.mode`·`mlanN.radio.bw` 를 정식 키로 문서화했다(§3.10.1). 템플릿에 없는 키라 **키가 없으면 제한하지 않는다**. UI 는 JSON 에 저장한 뒤 재부팅하거나, `wifi <iface> mode|bw` 로 올려 두고 `wifi <iface> radio-apply` 로 즉시 적용한다.
+- MCS 상한으로는 ac·ax 에서 MCS 7 밑으로 내릴 수 없고, ax 의 대역폭 제한은 HE 채널 폭을 바꾸지 않는다(§3.10.5a).
+- `on_connect` 는 `wifi_event` 시작 때 한 번 읽는다 — 적용 시점을 `daemon-restart` 로 바로잡았다(§3.10.6).
+
 ### 2.3 기본값 변동
 
 - **`temperature.*` 임계 전반 상향**:
@@ -420,6 +427,8 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `rate_adapt.low_thresh` | 레이트 적응 low 임계 | int | `40` | 0..100 또는 255 | caution | boot | static은 low<high, dynamic은 low/high 모두 255 |
 | `rate_adapt.high_thresh` | 레이트 적응 high 임계 | int | `65` | 0..100 또는 255 | caution | boot | 0.6.7에서 `70/90`→`40/65`. FW가 정적 pair를 트래픽 2~3초 뒤 `40/65`로 덮어쓰고 그 값이 실사용 상태이므로 기본값을 실제 동작에 맞춘 것이다 — 가이드 §11.5 참조 |
 | `rate_adapt.interval_ms` | 레이트 적응 평가주기(ms) | int | `100` | 100~655350, 10ms 배수 | caution | boot | association 전 SET+GET. 정적 pair 덮어쓰기의 트리거는 association이 아니라 **집계 Tx 트래픽**이다 — 가이드 §11.5 참조. 범위는 SR(`mode` 1) 드라이버 기준이며, legacy(`mode` 0)는 주기를 쓰지 않아 장치 검증이 양수·10ms 배수만 본다 |
+| `radio.mode` | 무선 모드 상한(bandcfg) | enum | (템플릿 없음) | `b`\|`g`\|`a`\|`n`\|`ac`\|`ax`, mlan1 은 `ax` 불가. 키 없음=칩 기본 | caution | boot | `wifi <iface> mode` + `radio-apply` 성공 시 저장되고, 부팅 때 `wifi_init.sh` 가 연결 전에 다시 적용한다(이미 연결돼 있으면 건너뜀). b/g 와 5G 전용 freq_list 조합은 적용을 건너뛴다. `STANDARD`(dev_cap_mask, reboot)와 별개 |
+| `radio.bw` | 대역폭 상한 | enum | (템플릿 없음) | `20`\|`40`\|`80`\|`auto`, 키 없음=AP 따름 | yes | boot | HT/VHT cap(htcapinfo·vhtcfg)으로 적용하며 `80` 과 `auto` 는 같은 cap 이다. `wifi <iface> bw` 는 값을 올려 두기만 하고, `wifi <iface> radio-apply` 가 재결합으로 적용한 뒤 성공하면 저장한다(`default` 는 키를 지운다, 취소는 `radio-discard`). ax 에서 HE 채널 폭은 바뀌지 않는다. ac·ax 에서 `20`·`40` 으로 좁힐 때 `on_connect.commands` 에 `txratecfg`·`ratebitmapcfg` 가 있으면 송신이 무너지므로 먼저 걷어 낸다(§3.10.5a) |
 
 **비고 (antcfg 업그레이드)** — `postinst`는 active 우선 deep merge 뒤 과거 제품 이력
 (구제품 비대칭 계약 `0x0303/0x0101(+verify)`, 그 이전의 `false/empty`, 알려진 physical 1x1
@@ -560,14 +569,46 @@ MCS lock 해제 뒤 `wifi <iface> connect`를 한 번만 요청한다. 이 경�
 association proof를 사용한다. 다음 CONNECTED 검증 성공 시 pending/1회 마커를 제거한다. 실패 시
 반복 재연결이나 reboot 없이 링크와 pending을 유지한다. CLI 수정은 다음 부팅에 적용된다.
 
+#### 3.10.5a 대역폭·MCS 상한 (현장 설정, #505)
+
+현장 WebUI 가 제공하는 전송 제한은 아래 두 가지다. 고정 MCS·DCM 은 제공하지 않는다(§3.10.6a).
+
+| 설정 | 저장 키 | 즉시 적용(CLI) | 재부팅 적용 |
+|---|---|---|---|
+| 대역폭 상한 | `mlanN.radio.bw` (`20`\|`40`\|`80`\|`auto`, 키 없음=AP 따름) | `wifi <iface> bw <값>` 으로 올려 두고 `wifi <iface> radio-apply` — cap 을 바꾸고 재결합한 뒤 성공하면 저장한다. `default` 는 키를 지운다 | `wifi_init.sh` 가 연결 전에 cap 을 다시 건다 |
+| MCS 상한 | `mlanN.mcs_tier.{ht,vht,he}` (§3.10.5) | 없음 — `wifi <iface> mcs ...` 는 JSON 만 바꾼다(연결 중 SET 은 현재 association 을 바꾸지 못한다) | association 전 SET 후 GET 검증 |
+
+**한계 (UI 에 그대로 알릴 것)**
+- **MCS 7 밑으로는 제한할 수 없다.** mcstiercfg 단계는 ht `7`/`15`(사실상 NSS 1/2), vht `7`/`8`/`9`, he `7`/`9`/`11` 뿐이고 제품 기본(vht `7`, he `both 7`)이 이미 가장 낮다. imx93 mlan0 은 이 값이 제품 불변식이라 편집 대상도 아니다. 비트맵(`ratemaxcfg`·`ratebitmapcfg`)으로 더 낮추면 대역폭 제한과 겹쳐 송신이 무너질 수 있어 현장에 쓰지 않는다.
+- **ax 에서 대역폭 제한은 HE 채널 폭을 바꾸지 않는다.** `radio.bw` 는 HT·VHT 능력(htcapinfo·vhtcfg)만 바꾸고 HE 능력(`11axcfg`)은 그대로다 — 제품에 `11axcfg` SET 경로가 없다. 보드 송신 폭은 좁아지지만 AP→보드 폭은 AP 판단이라, 랩 시험 1회에서 HE 80 MHz 로 남았다. ax 현장에 적용하기 전에 AP 쪽 station tx bitrate 폭을 확인한다.
+- **대역폭을 좁히기 전에 on_connect 고정 전송률을 걷어 낸다.** ac·ax 에서 대역폭 상한과 고정 MCS(`txratecfg`·`ratebitmapcfg`)가 겹치면 송신이 무너진다(§3.10.6a 금지 조합). 기존 현장 설정의 `mlanN.on_connect.commands` 에 이런 명령이 남아 있을 수 있으므로, UI·Save API 는 ac·ax 인터페이스에서 `radio.bw` 를 `20`·`40` 으로 저장·적용하려 할 때(또는 좁혀진 상태에서 그런 명령을 추가하려 할 때) 거부하거나 경고하고, 먼저 그 항목을 지운 뒤 `wifi_event@<iface>` 를 재시작하게 한다(§3.10.6).
+
 #### 3.10.6 mlanN.on_connect
 
 | 경로(`mlanN.on_connect.`) | 라벨 | 타입 | 기본값 (mlan0 / mlan1) | 허용값/범위 | UI편집 | 적용시점 | 설명 |
 |---|---|---|---|---|---|---|---|
-| `enabled` | 연결 후 명령 실행 활성화 | bool | `mlan0=true / mlan1=false` | true\|false | yes | runtime | AP 연결/로밍 후 commands 실행 여부 |
-| `commands` | 연결 후 실행 명령 목록 | array | `[]` | shell 명령 문자열 배열 | caution | runtime | 순서대로 실행(실패는 로그만). **command injection 위험** |
+| `enabled` | 연결 후 명령 실행 활성화 | bool | `mlan0=true / mlan1=false` | true\|false | yes | daemon-restart | AP 연결/로밍 후 commands 실행 여부 |
+| `commands` | 연결 후 실행 명령 목록 | array | `[]` | shell 명령 문자열 배열 | caution | daemon-restart | 순서대로 실행(실패는 로그만). **command injection 위험** |
 
-**비고 (on_connect)** — 소비: `wifi_event.sh`(매 connected 이벤트마다 JSON 재읽기). JSON이 group/world-writable이면 `on_connect` 무력화(권한 가드). UI 편집 시 명령 내용 검증 필요.
+**비고 (on_connect)** — 소비: `wifi_event.sh`. 서비스 시작 때 한 번 읽으므로 바꾼 뒤 `wifi_event@<iface>` 를 재시작해야 반영된다. 명령은 `connected to` 이벤트와 시작 시 이미 연결돼 있을 때 실행되고, FW 가 직접 로밍해 `roamed to` 로 알리는 경로에서는 실행되지 않는다. JSON이 group/world-writable이면 `on_connect` 무력화(권한 가드). UI 편집 시 명령 내용 검증 필요.
+
+#### 3.10.6a 시험용 고정 전송률 (현장 미제공, #505)
+
+`txratecfg`·`ratebitmapcfg` 고정은 **시험 전용**이다. WebUI 메뉴로 만들지 않는다. 시험 때는 `on_connect.commands` 나 수동 `mlanutl` 로 건다. 같은 BSS 재결합 뒤 고정이 Auto 로 풀린 관측이 있어, 유지하려면 연결마다 다시 거는 `on_connect` 가 필요하다.
+
+| 시험 목적 | 명령 | 비고 |
+|---|---|---|
+| MCS 만 고정 | `ratebitmapcfg` 2-word(OFDM 6M 바닥 + HT·VHT·HE word 에 같은 `1<<MCS`) | 드라이버가 Auto 로 판정해 다른 BSS 로밍도 된다 |
+| AP 보다 좁은 대역폭 + MCS, 표준 n | `wifi <iface> mode n` + `wifi <iface> bw 20` → `wifi <iface> radio-apply` → 2-word | `mode`·`bw` 는 올려 두기만 하므로 `radio-apply` 로 적용해야 한다. 적용에 성공하면 JSON 에 저장돼 재부팅 뒤에도 남는다 |
+| AP 보다 좁은 대역폭 + MCS, 표준 ac·ax | `txratecfg <format> <index> <nss> <rate_setting>`(예: HE MCS3 20 MHz `3 3 1 0x200`, VHT `2 3 1 0x200`. rate_setting 은 bit2-4 대역폭 0/1/2=20/40/80, bit8 DCM, bit9 LDPC) | 단일 고정 — 아래 로밍 주의 |
+| 레거시 a·g·b | 비트맵 또는 `txratecfg 0 <idx>` | |
+
+- **HT·VHT·HE 단일 고정(`txratecfg`) 상태로는 다른 BSS 로 결합하지 못한다**(드라이버 결합 검사, jhw7500/wlan-driver-v2#129 — 현장 미사용이라 수정하지 않음). BSS 가 하나인 환경에서 시험하거나 로밍·재연결 데몬(`wifi_roam@`, `wifi_bgscan@`, `wifi_checker@`)을 멈추고 시험한다.
+- **시험이 끝나면** `on_connect.commands` 에서 고정 전송률 항목을 지우고 `wifi_event@<iface>` 를 재시작한다(시작 때 한 번 읽으므로 남겨 두면 다음 연결 때 고정이 다시 걸린다). 멈춘 `wifi_roam@`·`wifi_bgscan@`·`wifi_checker@` 를 다시 시작하거나 재부팅하고, `mlanutl <iface> txratecfg 0xff` 로 라이브 고정을 푼다. n 모드 시험으로 바꾼 `mode`·`bw` 도 원래 값으로 올려 `radio-apply` 한다(`bw default` 등).
+- **금지 조합**: ac·ax 에서 대역폭 제한(`wifi <iface> bw 20` 등)과 고정 MCS 를 함께 쓰지 않는다. HE `txratecfg` 고정은 LG 1 Mbps 로 무너지고, 2-word 는 6M 바닥이 되며 HE 80 MHz AP 에서는 12~60초 뒤 송신이 멈춰 재연결로만 회복된다. n 모드에서는 정상이다.
+- 11b 속도를 끈 AP 에서 b 를 고정하면 연결은 되지만 1 Mbps 로만 나간다(설정 실패로 드러나지 않는다).
+- 조회 한계: `getdatarate` 는 스캔 뒤 링크 폭(예: 80 MHz)을 보이지만 공중 데이터는 고정한 폭(20 MHz)을 유지한다. DCM 은 보드 조회로 보이지 않는다.
+- DCM 고정은 시험에서도 피한다. 80 MHz 링크에서 A-MSDU 송신 실패(jhw7500/wlan-driver-v2#130)와 스캔 뒤 송신 불가가 있었고, Auto 는 약전계에서 스스로 DCM 까지 내려간다.
 
 #### 3.10.7 mlanN.checker (연결 감시·복구·재부팅 정책)
 
@@ -663,7 +704,7 @@ ChangeIpAddress 가 고르는 IP 주소 리스트(통신 사양서 6.5)는 `wifi
 | **기본/드라이버** | `global.*`(BOARD_TYPE, BUS_TYPE, BLUETOOTH.enable, MOD_PARA, CAL/TXPWR, STANDARD, DEV_CAP_MASK, ANT_TYPE, tx_work), `mac.*`, `mlanN.{STANDARD, CAL_DATA_CFG, TXPWRLIMIT_PATH, Frequency, net_rx, mgmt_hex_dump_enable, rate_adapt.*}` | 대부분 caution/reboot. MAC·펌웨어·표준은 고급 |
 | **인터페이스 활성화** | `mlanN.enabled`, `global.ping_monitor.enabled`, 각 `*.enabled` 토글 | mlan1 기본 off |
 | **브릿지** | `wbridge.{enabled, bridge_iface, mac_mode, ip_discovery, eth_client_ip, eth_link_wait_sec, eth_sweep_subnet, peer_route.enabled, arp_ignore_always.enabled, engine}`, `wbridge.moal.*`(고급), `wbridge.optimize.*`, `wbridge.link_guard.*` | moal.*/arp_ignore_always는 고급 |
-| **로밍·연결** | `mlanN.roaming.*`, `mlanN.bgscan.*`, `mlanN.mcs_tier.*`, `mlanN.connect_threshold`, `mlanN.connect_fallback.*` | owner/topology는 reboot 표시. connect_fallback은 next-command 표시. `periodic_roam.*`은 deprecated read-only. 고급기능(PREDICTIVE_ROAM)은 "고급 로밍" 하위로 |
+| **로밍·연결** | `mlanN.roaming.*`, `mlanN.bgscan.*`, `mlanN.radio.{mode, bw}`, `mlanN.mcs_tier.*`, `mlanN.connect_threshold`, `mlanN.connect_fallback.*` | owner/topology는 reboot 표시. connect_fallback은 next-command 표시. `periodic_roam.*`은 deprecated read-only. 고급기능(PREDICTIVE_ROAM)은 "고급 로밍" 하위로 |
 | **모니터링·발열** | `temperature.*`, `wbridge.thermal.*`, `mmc.*`, `mcp.*`, `monitor.*`, `logger.*`, `mlanN.logger.*`, `eth0.logger.*`, `mlanN.thermal_mgmt` | 온도 임계·게인은 고급/읽기전용 |
 | **헬스·리부트** | `mlanN.checker.*`, `mlanN.arping.*` | 재부팅 정책 항목(MAX_REBOOT_COUNT 등)은 고급 |
 | **SNMP** | `snmp.enabled`, `snmp.trap.*` | snmp.enabled는 고급(포트 오픈) |
@@ -706,6 +747,9 @@ ChangeIpAddress 가 고르는 IP 주소 리스트(통신 사양서 6.5)는 `wifi
 > identity 보존을 위해 자동 Unicode normalization은 하지 않는다. 제품의
 > `wifi_init_config_lib.sh` 검사는 최종 fail-closed 방어선이지 UI/Save API 검사를 대신하지 않는다.
 > 이 문서는 외부 WebUI/Save API의 구현 계약이며 해당 consumer의 통합시험 완료를 뜻하지 않는다.
+
+> **⑧ 고정 전송률·DCM 메뉴를 만들지 말 것 (#505)**
+> 현장 전송 제한은 대역폭 상한(`radio.bw`)과 MCS 상한(`mcs_tier`)뿐이다(§3.10.5a). `txratecfg`·`ratebitmapcfg` 고정과 DCM 은 시험 전용이고(§3.10.6a), 단일 고정 상태에서는 다른 BSS 로 로밍하지 못하며 대역폭 제한과 겹치면 송신이 무너진다. MCS 상한으로는 ac·ax 에서 MCS 7 밑으로 내릴 수 없다는 점도 UI 에 그대로 알린다. 기존 현장 설정의 `on_connect` 에 고정 전송률 명령이 남아 있으면 `radio.bw` 를 `20`·`40` 으로 좁히기 전에 걷어 내야 한다(§3.10.5a).
 
 ---
 
