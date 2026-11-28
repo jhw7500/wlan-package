@@ -24,9 +24,15 @@ network={
     freq_list=2412
 }
 '''
+# 11axcfg GET 레코드(2026-11-28 보드 1 실측, 5 GHz). 13번째 바이트 = HE PHY cap byte0,
+# 0x04(B2) = 5 GHz 40/80 MHz. bw 20 은 이 비트만 내린다(#510).
+_HE_TOKENS = ("02 ff 00 19 00 23 03 08 00 02 00 00 04 30 72 c9 fd 01 a0 0a 00 3d 00 "
+              "f0 ff f0 ff a1 ff 01").split() + ["00"] * 25
+HE_ORIG = " ".join(_HE_TOKENS)
+HE_B2OFF = " ".join(_HE_TOKENS[:12] + ["00"] + _HE_TOKENS[13:])
 INITIAL_DRIVER = {
     "band": "0x35f", "ht_bg": "0x05c20000", "ht_a": "0x05c20000",
-    "vht_bw": "1", "vht_cap": "0x339b79f2",
+    "vht_bw": "1", "vht_cap": "0x339b79f2", "he": HE_ORIG,
 }
 
 # These fakes model the hardware/process boundary. The real helper does all
@@ -41,6 +47,10 @@ args = sys.argv[1:]
 with (root / "calls.jsonl").open("a") as log:
     log.write(json.dumps([tool, *args]) + "\n")
 failure = os.environ.get("OPC_TEST_FAILURE", "")
+# #510: OPC_TEST_HE_RESTORE=ignore 면 첫 11axcfg SET 뒤의 SET 을 rc 0 으로 무시하고,
+# get-fail 이면 SET 이 두 번 있은 뒤의 GET 을 실패시킨다(복원 확인 시험).
+he_restore = os.environ.get("OPC_TEST_HE_RESTORE", "")
+he_sets = root / "he-sets"
 marker = root / "failure-fired"
 
 def fail_once(condition):
@@ -111,6 +121,33 @@ elif command == "vhtcfg":
         if fail_once(failure == "vhtcfg"):
             sys.exit(1)
         state["vht_bw"], state["vht_cap"] = args[4:6]
+elif command == "11axcfg":
+    if len(args) == 2:
+        if failure == "11axcfg-get":
+            sys.exit(1)
+        if he_restore == "get-fail" and he_sets.exists() and int(he_sets.read_text()) >= 2:
+            sys.exit(1)
+        tokens = state["he"].split()
+        print("11axcfg: len=55")
+        for i in range(0, 55, 16):
+            print(" ".join(tokens[i:i + 16]))
+    else:
+        if fail_once(failure == "11axcfg"):
+            sys.exit(1)
+        count = int(he_sets.read_text()) if he_sets.exists() else 0
+        he_sets.write_text(str(count + 1))
+        if he_restore == "ignore" and count >= 1:
+            sys.exit(0)
+        section, tokens = None, []
+        for line in Path(args[2]).read_text().splitlines():
+            line = line.strip()
+            if line in ("[Band]", "[HECap]"):
+                section = line
+            elif line in ("[/Band]", "[/HECap]"):
+                section = None
+            elif section and line and not line.startswith("#"):
+                tokens.extend(line.split())
+        state["he"] = " ".join(tokens + ["00"] * (55 - len(tokens)))
 else:
     sys.exit(2)
 file.write_text(json.dumps(state))
@@ -156,9 +193,9 @@ class OpcRadioApplyTests(unittest.TestCase):
                         WIFI_SCAN_TRANSITION_LOCK_TIMEOUT="0",
                         OPC_ESSID_MARKER=str(self.marker))
 
-    def run_helper(self, *args, failure=""):
+    def run_helper(self, *args, failure="", extra_env=None):
         return subprocess.run(["sh", str(HELPER), *args],
-                              env=dict(self.env, OPC_TEST_FAILURE=failure),
+                              env=dict(self.env, OPC_TEST_FAILURE=failure, **(extra_env or {})),
                               text=True, capture_output=True, timeout=6)
 
     def calls(self):
@@ -219,7 +256,8 @@ class OpcRadioApplyTests(unittest.TestCase):
             with self.subTest(width=width):
                 result = self.run_helper("mlan0", "freq", "5180", "mode", "ax", "bw", width)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(self.driver(), dict(INITIAL_DRIVER, ht_bg=ht, ht_a=ht, vht_bw=vht))
+                self.assertEqual(self.driver(), dict(INITIAL_DRIVER, ht_bg=ht, ht_a=ht, vht_bw=vht,
+                                                     he=HE_B2OFF if width == "20" else HE_ORIG))
 
     def test_second_interface_applies_only_its_own_settings(self):
         result = self.run_helper("mlan1", "freq", "5200", "mode", "n", "bw", "40")
@@ -228,8 +266,51 @@ class OpcRadioApplyTests(unittest.TestCase):
         self.assertEqual(self.driver(), INITIAL_DRIVER)
         self.assertEqual(json.loads(self.config.read_text())["mlan0"], self.initial_config["mlan0"])
 
+    def test_he_width_limit_is_skipped_when_standard_disables_ax(self):
+        """#510: STANDARD 가 ax 가 아니면 HE 능력을 쓰지 않으므로 11axcfg 를 부르지 않는다."""
+        config = json.loads(self.config.read_text())
+        config["mlan0"]["STANDARD"] = "ac"
+        self.config.write_text(json.dumps(config, indent=2) + "\n")
+        result = self.run_helper("mlan0", "freq", "5180", "mode", "ac", "bw", "20")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.driver()["he"], HE_ORIG)
+        self.assertNotIn("11axcfg", [call[2] for call in self.calls() if call[0] == "mlanutl"])
+
+    def test_unreadable_he_capability_does_not_block_width_limit(self):
+        """#510: 11axcfg GET 이 안 되면 HE 단계만 건너뛰고 HT/VHT 제한은 적용한다."""
+        result = self.run_helper("mlan0", "freq", "5180", "mode", "ax", "bw", "20", failure="11axcfg-get")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.driver(), dict(INITIAL_DRIVER, ht_bg="0x05c00000", ht_a="0x05c00000", vht_bw="0"))
+        # A-R1-001: '해당 없음'과 달리 못 읽은 경우는 stderr 경고로 드러낸다(opcd 가 저널에 남긴다).
+        self.assertIn("11axcfg HE capability unreadable", result.stderr)
+
+    def test_he_warning_that_cannot_be_written_does_not_fail_the_width_limit(self):
+        """#510: 경고를 못 써도(stderr 닫힘) 폭 제한 적용은 성공이다 — 경고 명령의 종료 코드가 반환값이 되면 안 된다."""
+        result = subprocess.run(["sh", str(HELPER), "mlan0", "freq", "5180", "mode", "ax", "bw", "20"],
+                                env=dict(self.env, OPC_TEST_FAILURE="11axcfg-get"), stdout=subprocess.PIPE,
+                                text=True, timeout=6, preexec_fn=lambda: os.close(2))
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(self.driver(), dict(INITIAL_DRIVER, ht_bg="0x05c00000", ht_a="0x05c00000", vht_bw="0"))
+
+    def test_he_restore_that_does_not_take_effect_is_a_rollback_failure(self):
+        """#510 A-R1-001: 복원 SET 이 rc 0 이어도 다시 읽은 B2·HE-MCS 맵이 스냅샷과 다르면 복원 실패다."""
+        result = self.run_helper("mlan0", "freq", "5180", "mode", "ax", "bw", "20", failure="reconfigure",
+                                 extra_env={"OPC_TEST_HE_RESTORE": "ignore"})
+        self.assertEqual(result.returncode, 6, result.stderr)
+        self.assertIn("driver rollback failed", result.stderr)
+        self.assertEqual(self.driver()["he"], HE_B2OFF)
+
+    def test_unverifiable_he_restore_only_warns(self):
+        """#510: 복원 SET 뒤 GET 을 못 읽으면(연결이 끊긴 뒤 등) 확인 불가 — 경고만 남기고 복원 실패로 치지 않는다."""
+        result = self.run_helper("mlan0", "freq", "5180", "mode", "ax", "bw", "20", failure="reconfigure",
+                                 extra_env={"OPC_TEST_HE_RESTORE": "get-fail"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("driver rollback failed", result.stderr)
+        self.assertEqual(self.driver(), INITIAL_DRIVER)
+        self.assertIn("11axcfg (HE capability) restore unverified", result.stderr)
+
     def test_driver_and_config_restore_after_apply_or_persist_failure(self):
-        for failure in ("htcapinfo", "vhtcfg", "reconfigure", "json-install"):
+        for failure in ("htcapinfo", "vhtcfg", "11axcfg", "reconfigure", "json-install"):
             with self.subTest(failure=failure):
                 (self.state / "failure-fired").unlink(missing_ok=True)
                 config_before = self.config.read_bytes()
@@ -279,7 +360,8 @@ class OpcRadioApplyTests(unittest.TestCase):
     def test_missing_vht_readback_still_allows_ht20(self):
         result = self.run_helper("mlan0", "freq", "2412", "mode", "n", "bw", "20", failure="vht-get-empty")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.driver(), dict(INITIAL_DRIVER, band="0x1f", ht_bg="0x05c00000", ht_a="0x05c00000"))
+        self.assertEqual(self.driver(), dict(INITIAL_DRIVER, band="0x1f", ht_bg="0x05c00000", ht_a="0x05c00000",
+                                             he=HE_B2OFF))
 
     def test_shared_json_lock_rejects_another_radio_transaction_before_mutation(self):
         run_dir = Path(self.env["WIFI_RUN_DIR"])
@@ -349,7 +431,8 @@ class OpcRadioApplyTests(unittest.TestCase):
     def test_term_after_commit_keeps_all_new_settings_together(self):
         result = self.run_helper("mlan0", "freq", "5180", "mode", "ac", "bw", "20", failure="term-after-commit")
         self.assertTrue((self.state / "failure-fired").exists(), result.stderr)
-        self.assertEqual(self.driver(), dict(INITIAL_DRIVER, band="0x5f", ht_bg="0x05c00000", ht_a="0x05c00000", vht_bw="0"))
+        self.assertEqual(self.driver(), dict(INITIAL_DRIVER, band="0x5f", ht_bg="0x05c00000", ht_a="0x05c00000", vht_bw="0",
+                                             he=HE_B2OFF))
         self.assertEqual(json.loads(self.config.read_text())["mlan0"]["radio"], {"mode": "ac", "bw": "20"})
         self.assertIn("freq_list=5180", self.profile().read_text())
 

@@ -665,30 +665,45 @@ get_vht_assoc_cap() {
     mlanutl "$1" vhtcfg 2 2 2>/dev/null | awk '/VHT Capabilities Info/ {print $NF; exit}'
 }
 
-# bw에 맞춰 htcapinfo(HT40 enable 비트) + vhtcfg(bwcfg)를 적용.
+# bw에 맞춰 htcapinfo(HT40 enable 비트) + vhtcfg(bwcfg)를 적용하고, mlan0 ax 면
+# 11axcfg HE 5 GHz 40/80 비트(PHY byte0 B2)도 맞춘다(#510).
 # 실기 검증(2026-06-15, 9098): 20=0x05c00000/bwcfg0, 40=0x05c20000/bwcfg0,
 # 80=0x05c20000/bwcfg1 조합이 HE 링크에서 reassociate로 양방향 전환됨.
-# stdout=결과 메시지, return: 0 ok / 2 invalid bw / 5 htcapinfo / 6 vhtcfg
+# stdout=결과 메시지, return: 0 ok / 2 invalid bw / 5 htcapinfo / 6 vhtcfg / 12 11axcfg
 # (6은 VHT cap GET 실패와 vhtcfg SET 실패 둘 다 포함 — 호출자 로그로 구분)
 apply_bw_caps() { # $1 iface, $2 bw
-    local iface="$1" bw="$2" htcap vhtbw vhtcap
+    local iface="$1" bw="$2" htcap vhtbw vhtcap msg he_rc
     htcap=$(wifi_init_bw_to_htcap "$bw")
     vhtbw=$(wifi_init_bw_to_vhtbw "$bw")
     { [ -z "$htcap" ] || [ -z "$vhtbw" ]; } && return 2
     mlanutl "$iface" htcapinfo "$htcap" >/dev/null 2>&1 || return 5
     vhtcap=$(get_vht_assoc_cap "$iface")
     if [ -z "$vhtcap" ]; then
-        # VHT cap GET 불가 + 20/40(bwcfg=0)이면 11N htcapinfo만으로 충분
-        [ "$vhtbw" = "0" ] && {
-            echo "htcapinfo $htcap applied (bw=$bw; VHT cap unavailable, vhtcfg skipped)"
-            return 0
-        }
         # bwcfg=1(80/auto/default)은 VHT cap이 필수인데 GET 실패 — 원인 명시
-        echo "vhtcfg skipped: VHT cap GET failed (bw=$bw needs bwcfg=1)"
-        return 6
+        if [ "$vhtbw" != "0" ]; then
+            echo "vhtcfg skipped: VHT cap GET failed (bw=$bw needs bwcfg=1)"
+            return 6
+        fi
+        # VHT cap GET 불가 + 20/40(bwcfg=0)이면 11N htcapinfo만으로 충분
+        msg="htcapinfo $htcap applied (bw=$bw; VHT cap unavailable, vhtcfg skipped)"
+    else
+        mlanutl "$iface" vhtcfg 2 2 "$vhtbw" "$vhtcap" >/dev/null 2>&1 || return 6
+        msg="htcapinfo $htcap / vhtcfg bwcfg=$vhtbw applied (bw=$bw)"
     fi
-    mlanutl "$iface" vhtcfg 2 2 "$vhtbw" "$vhtcap" >/dev/null 2>&1 || return 6
-    echo "htcapinfo $htcap / vhtcfg bwcfg=$vhtbw applied (bw=$bw)"
+    # HE 능력 폭(11axcfg 5 GHz PHY byte0 B2)도 맞춘다 — 20 이면 AP→보드 폭을 결합 요청의
+    # 운영 모드 통지뿐 아니라 능력 수준에서도 묶는다. 해당 없음(3)은 건너뛰고, 적용 대상인데 HE
+    # 레코드를 못 읽으면(4) HT·VHT 제한은 그대로 두고 메시지·경고만 남긴다 — 실패(12)로 치면
+    # 되던 bw 변경까지 롤백된다(#510).
+    he_rc=0
+    wifi_init_apply_he_bw "$iface" "$bw" || he_rc=$?
+    case "$he_rc" in
+        0) msg="$msg / HE 5G 40/80 bit=$(wifi_init_bw_to_he_b2 "$bw")" ;;
+        3) ;;
+        4) msg="$msg / HE 5G 40/80 bit unchanged (11axcfg unreadable)"
+           logger -p local0.warning "[$tag:$LINENO] [$iface] 11axcfg HE capability unreadable - HE 5G 40/80 bit not changed (bw=$bw)" ;;
+        *) echo "$msg"; echo "11axcfg: HE capability width not applied (bw=$bw)"; return 12 ;;
+    esac
+    echo "$msg"
     return 0
 }
 
@@ -704,6 +719,7 @@ apply_bw_or_exit() { # $1 iface, $2 bw_cap
         2) echo "Error: invalid radio.bw '$R_BW'" >&2; rollback_radio_live "$iface"; exit 2 ;;
         5) echo "Error: htcapinfo failed for $iface" >&2; wifi_wpa_run_child logger -p local0.err "[$tag:$LINENO] [$iface] htcapinfo failed"; rollback_radio_live "$iface"; exit 5 ;;
         6) echo "Error: vhtcfg failed for $iface" >&2; wifi_wpa_run_child logger -p local0.err "[$tag:$LINENO] [$iface] vhtcfg failed"; rollback_radio_live "$iface"; exit 6 ;;
+        12) echo "Error: 11axcfg (HE capability width) failed for $iface" >&2; wifi_wpa_run_child logger -p local0.err "[$tag:$LINENO] [$iface] 11axcfg HE width failed"; rollback_radio_live "$iface"; exit 12 ;;
         *) echo "Error: apply_bw_caps unexpected rc=$rc for $iface" >&2; rollback_radio_live "$iface"; exit 6 ;;
     esac
 }
@@ -2167,10 +2183,11 @@ radio_stage_get() { # $1 iface, $2 key → stdout (없으면 빈값)
 # radio-apply 실패 시 적용 전 스냅샷으로 라이브 설정 복원 + 재연결 (best-effort).
 # SNAP_* 전역은 radio-apply가 disconnect 전에 GET으로 채운다.
 # 스냅샷이 비었거나 복원 호출이 실패하면 부분 롤백 — logger로 추적 가능하게 남긴다.
-# 이 경로는 HT/VHT cap(htcapinfo/vhtcfg)만 변경하므로 HE cap(user_he_cap) 스냅샷은
-# 의도적으로 없음. 향후 11axcfg로 user_he_cap을 직접 SET하는 코드가 추가되면
-# 여기에 HE cap 스냅샷/복원도 추가할 것.
+# HE cap(11axcfg 5 GHz 레코드)은 SNAP_HE 가 있을 때(mlan0·11ax) 적용 전 레코드 전체를
+# 그대로 SET 해 되돌린다 — B2 만 되돌리면 실패한 적용이 남긴 다른 바이트가 남는다. SET 뒤 다시
+# GET 해 B2·HE-MCS 맵이 스냅샷과 다르면 복원 실패, GET 을 못 읽으면 확인 불가로 경고한다(#510).
 rollback_radio_live() { # $1 iface
+    local he_rc
     wifi_wpa_run_child logger -p local0.warning "[$tag:$LINENO] [$1] radio-apply: rolling back to pre-apply settings"
     echo "rolling back to pre-apply settings..." >&2
     if [ -n "${SNAP_BAND:-}" ]; then
@@ -2193,6 +2210,15 @@ rollback_radio_live() { # $1 iface
             wifi_wpa_run_child logger -p local0.warning "[$tag:$LINENO] [$1] rollback: vhtcfg restore failed"
     else
         wifi_wpa_run_child logger -p local0.warning "[$tag:$LINENO] [$1] rollback: vht snapshot incomplete — vhtcfg not restored"
+    fi
+    if [ -n "${SNAP_HE:-}" ]; then
+        he_rc=0
+        wifi_wpa_run_child_call wifi_he_cap_restore "$1" "$SNAP_HE" >/dev/null 2>&1 || he_rc=$?
+        case "$he_rc" in
+            0) ;;
+            2) wifi_wpa_run_child logger -p local0.warning "[$tag:$LINENO] [$1] rollback: 11axcfg (HE capability) restore unverified - GET unreadable after SET" ;;
+            *) wifi_wpa_run_child logger -p local0.warning "[$tag:$LINENO] [$1] rollback: 11axcfg (HE capability) restore failed" ;;
+        esac
     fi
     # reassociate가 reconnect보다 부드럽고 cap 변경 반영이 확실 (실기 검증)
     wifi_wpa_run_child wpa_cli -i "$1" reassociate >/dev/null 2>&1 || wifi_wpa_run_child wpa_cli -i "$1" reconnect >/dev/null 2>&1
@@ -2301,7 +2327,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} mode [b|g|a|n|ac|ax] : stage (radio-apply 성공 시 persist, mlan1은 ax 불가)"
     echo "       wifi {0|1|mlan0|mlan1} bw [20|40|80|auto|default] : stage (radio-apply 성공 시 persist; default=AP 따라)"
     echo "       wifi {0|1|mlan0|mlan1} radio-apply [timeout_s] : runtime (적용 성공 시 commit, 실패 시 라이브 롤백+재연결)"
-    echo "         radio-apply exit: 0=ok 2=usage 3=env 4=bandcfg 5=htcapinfo 6=vhtcfg 7=wpa_cli 8=assoc-timeout 9=json/commit 11=b/g+5G-freq"
+    echo "         radio-apply exit: 0=ok 2=usage 3=env 4=bandcfg 5=htcapinfo 6=vhtcfg 7=wpa_cli 8=assoc-timeout 9=json/commit 11=b/g+5G-freq 12=11axcfg"
     echo "       wifi {0|1|mlan0|mlan1} radio-discard : staged mode/bw 변경 취소"
     echo "       wifi txpwr {0|1|2|3|no|default|low|org|conf_file_name} : persist"
     echo "       wifi cal {0|1|2|None|WlanCalData_ext.conf|WlanCalData_ext_RD.conf|*} : persist"
@@ -5746,9 +5772,9 @@ case "$2" in
     # staged(pending) radio.mode/radio.bw를 적용하고 성공 시에만 JSON에 commit하는
     # 트랜잭션 시퀀스. 실패 시 적용 전 스냅샷으로 라이브 롤백 + 재연결.
     # mode 변경: disconnect → bandcfg(재시도) → cap → reconfigure → reconnect
-    # bw-only: cap(htcapinfo/vhtcfg) → reassociate  (무중단). HE 능력 폭(11axcfg)은 바꾸지 않아 ax 에서 AP→보드 폭은 AP 판단(#505)
+    # bw-only: cap(htcapinfo/vhtcfg, mlan0 ax 는 11axcfg HE 5G 폭 비트까지) → reassociate  (무중단, #510)
     # → assoc 대기 → commit(또는 bw=default면 radio.bw 삭제)
-    # exit: 0=ok 2=usage 3=env 4=bandcfg 5=htcapinfo 6=vhtcfg 7=wpa_cli 8=assoc-timeout 9=json/commit 11=b/g+5G-freq
+    # exit: 0=ok 2=usage 3=env 4=bandcfg 5=htcapinfo 6=vhtcfg 7=wpa_cli 8=assoc-timeout 9=json/commit 11=b/g+5G-freq 12=11axcfg
     if [ "$IFACE" != "mlan0" ] && [ "$IFACE" != "mlan1" ]; then
         echo "Error: radio-apply supports mlan0/mlan1 only" >&2
         exit 2
@@ -5856,6 +5882,8 @@ case "$2" in
         *"Follow BW in VHT"*)     SNAP_VHTBW=1 ;;
         *)                        SNAP_VHTBW="" ;;
     esac
+    # HE 능력(11axcfg) 5 GHz 레코드 — 적용 대상(mlan0·STANDARD ax)일 때만. 롤백은 레코드 전체를 SET(#510)
+    SNAP_HE=$(wifi_wpa_child_call wifi_init_he_bw_snapshot "$IFACE")
 
     # bandcfg(=mode 적용)는 disconnect가 필요하다. mode를 새로 stage했거나,
     # committed mode가 라이브 bandcfg와 달라 재적용이 필요할 때만 disconnect 경로.

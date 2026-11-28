@@ -2073,7 +2073,7 @@
                 "80",
                 "auto"
               ],
-              "description": "대역폭 상한(HT/VHT cap: htcapinfo·vhtcfg). 없으면 AP 따름. 80 과 auto 는 같은 cap 이다. ax 에서는 HE 채널 폭(11axcfg)을 바꾸지 않아 AP→보드 폭은 AP 판단이다. 즉시 적용은 `wifi <iface> bw <값>` 뒤 `wifi <iface> radio-apply`(재결합). ac·ax 에서 20·40 으로 좁힐 때 on_connect.commands 에 txratecfg·ratebitmapcfg 가 있으면 송신이 무너지므로 먼저 걷어 낸다(인계 문서 §3.10.5a)",
+              "description": "대역폭 상한(HT/VHT cap: htcapinfo·vhtcfg). 없으면 AP 따름. 80 과 auto 는 같은 cap 이다. 11ax 가 켜져 있으면(STANDARD 가 n·ac 가 아니면) 20 은 HE 능력의 5 GHz 40/80 MHz 비트(11axcfg PHY byte0 B2)도 내리고 그 밖의 값은 되돌린다. 40 의 AP→보드 폭은 결합 요청의 운영 모드 통지에 맡긴다. 결합 전 HE 능력을 읽지 못하는 드라이버는 부팅 때 이 비트를 내리지 못하고 경고 로그만 남긴다(i.MX8MM 이 그럴 것으로 추정, i.MX93 부팅 경로도 미실측). 즉시 적용은 `wifi <iface> bw <값>` 뒤 `wifi <iface> radio-apply`(재결합). ac·ax 에서 20·40 으로 좁힐 때 on_connect.commands 에 txratecfg·ratebitmapcfg 가 있으면 송신이 무너지므로 먼저 걷어 낸다(인계 문서 §3.10.5a)",
               "x-ui-editable": "yes",
               "x-apply-timing": "boot",
               "x-consumer": "wifi_init.sh, wifi.sh, opc_wlan_apply.sh"
@@ -3125,7 +3125,7 @@
                 "80",
                 "auto"
               ],
-              "description": "대역폭 상한(HT/VHT cap: htcapinfo·vhtcfg). 없으면 AP 따름. 80 과 auto 는 같은 cap 이다. ax 에서는 HE 채널 폭(11axcfg)을 바꾸지 않아 AP→보드 폭은 AP 판단이다. 즉시 적용은 `wifi <iface> bw <값>` 뒤 `wifi <iface> radio-apply`(재결합). ac·ax 에서 20·40 으로 좁힐 때 on_connect.commands 에 txratecfg·ratebitmapcfg 가 있으면 송신이 무너지므로 먼저 걷어 낸다(인계 문서 §3.10.5a)",
+              "description": "대역폭 상한(HT/VHT cap: htcapinfo·vhtcfg). 없으면 AP 따름. 80 과 auto 는 같은 cap 이다. mlan1 은 ax 를 지원하지 않아 HE 능력은 다루지 않는다. 즉시 적용은 `wifi <iface> bw <값>` 뒤 `wifi <iface> radio-apply`(재결합). ac·ax 에서 20·40 으로 좁힐 때 on_connect.commands 에 txratecfg·ratebitmapcfg 가 있으면 송신이 무너지므로 먼저 걷어 낸다(인계 문서 §3.10.5a)",
               "x-ui-editable": "yes",
               "x-apply-timing": "boot",
               "x-consumer": "wifi_init.sh, wifi.sh, opc_wlan_apply.sh"

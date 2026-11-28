@@ -1144,6 +1144,245 @@ else
 fi
 rm -rf "$_sv_tmpd"
 
+# --- HE capability width (11axcfg) helpers (#510) ---
+# 5 GHz HE PHY capability byte0 B2(40/80 MHz)를 bw 에 맞추는 헬퍼. mlanutl 은 상태 파일로
+# GET/SET 을 흉내 낸다: GET 은 실기처럼 헤더 한 줄 뒤 16바이트씩, SET 은 conf 의
+# [Band]·[HECap] 바이트를 읽어 55바이트로 채운다(2026-11-28 보드 1 프로브 출력 형식).
+echo ""
+echo "=== HE capability width helpers (#510) ==="
+
+_he_tmpd=$(mktemp -d)
+export HE_FAKE_DIR="$_he_tmpd"
+_he_orig='02 ff 00 19 00 23 03 08 00 02 00 00 04 30 72 c9 fd 01 a0 0a 00 3d 00 f0 ff f0 ff a1 ff 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00'
+_he_b2off=$(printf '%s\n' "$_he_orig" | awk '{$13 = "00"; print}')
+_he_json_ax='{"mlan0":{"STANDARD":"ax"},"mlan1":{"STANDARD":"ac"},"global":{}}'
+mkdir -p "$_he_tmpd/bin"
+cat > "$_he_tmpd/bin/mlanutl" <<'EOF'
+#!/bin/bash
+st="$HE_FAKE_DIR"
+echo "mlanutl $*" >> "$st/calls"
+[ "${2:-}" = 11axcfg ] || exit 0
+if [ $# -eq 2 ]; then
+    [ -f "$st/get_fail" ] && exit 1
+    echo "11axcfg: len=55"
+    awk '{for (i = 1; i <= NF; i++) printf "%s%s", $i, (i % 16 == 0 || i == NF) ? "\n" : " "}' "$st/he"
+    exit 0
+fi
+[ -f "$st/set_fail" ] && exit 1
+[ -f "$st/set_ignore" ] && exit 0
+awk '/^\[Band\]/ {s = 1; next} /^\[\/Band\]/ {s = 0; next}
+     /^\[HECap\]/ {s = 1; next} /^\[\/HECap\]/ {s = 0; next}
+     s && !/^#/ {for (i = 1; i <= NF; i++) t[n++] = $i}
+     END {while (n < 55) t[n++] = "00"; for (i = 0; i < 55; i++) printf "%s%s", t[i], (i < 54) ? " " : "\n"}' "$3" > "$st/he.new"
+if [ -f "$st/set_corrupt_mcs" ]; then
+    awk '{$24 = "fa"; print}' "$st/he.new" > "$st/he.c" && mv "$st/he.c" "$st/he.new"
+fi
+mv "$st/he.new" "$st/he"
+EOF
+chmod +x "$_he_tmpd/bin/mlanutl"
+_he_saved_path=$PATH
+PATH="$_he_tmpd/bin:$PATH"
+_he_saved_json_set=${WIFI_INIT_CONF_JSON+set}
+_he_saved_json=${WIFI_INIT_CONF_JSON-}
+export WIFI_INIT_CONF_JSON="$_he_tmpd/conf.json"
+
+he_reset() { # [$1 = JSON]
+    printf '%s\n' "$_he_orig" > "$_he_tmpd/he"
+    rm -f "$_he_tmpd/calls" "$_he_tmpd/get_fail" "$_he_tmpd/set_fail" "$_he_tmpd/set_ignore" "$_he_tmpd/set_corrupt_mcs"
+    printf '%s\n' "${1:-$_he_json_ax}" > "$WIFI_INIT_CONF_JSON"
+}
+he_state() { cat "$_he_tmpd/he"; }
+he_b0() { awk '{print $13}' "$_he_tmpd/he"; }
+he_count() { # $1 pattern → 호출 기록에서 일치하는 줄 수
+    local n
+    n=$(grep -c -- "$1" "$_he_tmpd/calls" 2>/dev/null || true)
+    echo "${n:-0}"
+}
+he_edit() { # $1 awk 문 — 상태 레코드를 바꾼다
+    awk "$1" "$_he_tmpd/he" > "$_he_tmpd/he.t" && mv "$_he_tmpd/he.t" "$_he_tmpd/he"
+}
+
+# 매핑: 스키마 bw enum 과 같은 입력만 받는다(20=B2 해제, 그 외=B2 설정).
+for _he_case in 20:0 40:1 80:1 auto:1; do
+    expect_equal "he b2 mapping ${_he_case%%:*}" "$(wifi_init_bw_to_he_b2 "${_he_case%%:*}")" "${_he_case##*:}"
+done
+if wifi_init_bw_to_he_b2 160 >/dev/null 2>&1; then
+    log_fail "he b2 mapping rejects 160"
+else
+    log_pass "he b2 mapping rejects 160"
+fi
+
+# conf: GET 토큰의 TLV 길이(0x19)만큼만 쓰고 PHY byte0 만 바꾼다(출하 conf 와 같은 절 형식).
+_he_conf_expected='[Band]
+02
+[/Band]
+[HECap]
+ff 00
+19 00
+23
+03 08 00 02 00 00
+00 30 72 c9 fd 01 a0 0a 00 3d 00
+f0 ff f0 ff
+a1 ff 01
+[/HECap]'
+expect_equal "he cap conf clears only B2 within the TLV length" "$(wifi_he_cap_conf "$_he_orig" 0)" "$_he_conf_expected"
+expect_equal "he cap conf without a target keeps byte0" "$(wifi_he_cap_conf "$_he_orig" | sed -n '9p')" "04 30 72 c9 fd 01 a0 0a 00 3d 00"
+
+# bw 20 → B2 해제, 나머지(MCS 맵 포함) 보존, SET 1회.
+he_reset
+_rc=0; wifi_init_apply_he_bw mlan0 20 || _rc=$?
+expect_equal "he bw20 applies (rc)" "$_rc" 0
+expect_equal "he bw20 clears B2 and keeps every other byte" "$(he_state)" "$_he_b2off"
+expect_equal "he bw20 issues one SET" "$(he_count 'mlan0 11axcfg /')" 1
+
+# 이미 같으면 SET 하지 않는다.
+: > "$_he_tmpd/calls"
+_rc=0; wifi_init_apply_he_bw mlan0 20 || _rc=$?
+expect_equal "he bw20 again is a no-op (rc)" "$_rc" 0
+expect_equal "he bw20 again issues no SET" "$(he_count 'mlan0 11axcfg /')" 0
+
+# 40/80/auto 는 B2 를 원래 값(1)으로 되돌린다.
+for _bw in 80 40 auto; do
+    he_reset
+    printf '%s\n' "$_he_b2off" > "$_he_tmpd/he"
+    _rc=0; wifi_init_apply_he_bw mlan0 "$_bw" || _rc=$?
+    expect_equal "he bw$_bw restores B2 (rc)" "$_rc" 0
+    expect_equal "he bw$_bw restores the original record" "$(he_state)" "$_he_orig"
+done
+
+# 적용 대상이 아니면 11axcfg 를 부르지 않고 3 을 돌려준다.
+for _he_json in '{"mlan0":{"STANDARD":"ac"},"global":{}}' '{"mlan0":{},"global":{"STANDARD":"n"}}'; do
+    he_reset "$_he_json"
+    _rc=0; wifi_init_apply_he_bw mlan0 20 || _rc=$?
+    expect_equal "he not applicable for $_he_json (rc)" "$_rc" 3
+    expect_equal "he not applicable for $_he_json (no 11axcfg call)" "$(he_count 11axcfg)" 0
+done
+# mlan1 은 STANDARD 가 ax 여도 다루지 않는다(제품에서 ax 미지원) — STANDARD 판정과 따로 본다.
+he_reset '{"mlan0":{"STANDARD":"ax"},"mlan1":{"STANDARD":"ax"},"global":{}}'
+_rc=0; wifi_init_apply_he_bw mlan1 20 || _rc=$?
+expect_equal "he not applicable on mlan1 (rc)" "$_rc" 3
+expect_equal "he not applicable on mlan1 (no 11axcfg call)" "$(he_count 11axcfg)" 0
+
+# STANDARD 가 없거나(칩 최대) ax·6 이면 적용한다(전역 값으로도).
+for _he_json in '{"mlan0":{},"global":{}}' '{"mlan0":{"STANDARD":"6"},"global":{}}' '{"mlan0":{},"global":{"STANDARD":"AX"}}'; do
+    he_reset "$_he_json"
+    _rc=0; wifi_init_apply_he_bw mlan0 20 || _rc=$?
+    expect_equal "he applicable for $_he_json (rc)" "$_rc" 0
+    expect_equal "he applicable for $_he_json (B2 cleared)" "$(he_b0)" 00
+done
+
+# STANDARD 해석은 wifi_init.sh 의 _apply_dev_cap_mask 와 같다(A-R1-002): iface 값이 비면 global,
+# 4·5·6 은 n·ac·ax 별칭, n·ac 만 dev_cap_mask 로 11ax 를 끈다(미지정·잘못된 값은 칩 기본 = 11ax).
+for _he_json in '{"mlan0":{"STANDARD":""},"global":{"STANDARD":"ac"}}' \
+                '{"mlan0":{"STANDARD":"5"},"global":{}}' \
+                '{"mlan0":{"STANDARD":"4"},"global":{"STANDARD":"ax"}}'; do
+    he_reset "$_he_json"
+    _rc=0; wifi_init_apply_he_bw mlan0 20 || _rc=$?
+    expect_equal "he STANDARD rule: not applicable for $_he_json (rc)" "$_rc" 3
+    expect_equal "he STANDARD rule: no 11axcfg for $_he_json" "$(he_count 11axcfg)" 0
+done
+for _he_json in '{"mlan0":{"STANDARD":""},"global":{"STANDARD":"ax"}}' \
+                '{"mlan0":{"STANDARD":"bogus"},"global":{"STANDARD":"ac"}}'; do
+    he_reset "$_he_json"
+    _rc=0; wifi_init_apply_he_bw mlan0 20 || _rc=$?
+    expect_equal "he STANDARD rule: applicable for $_he_json (rc)" "$_rc" 0
+    expect_equal "he STANDARD rule: B2 cleared for $_he_json" "$(he_b0)" 00
+done
+
+# 적용 대상인데 GET 불가·5 GHz HE 레코드가 아니면(결합 전 빈 HE TLV 포함) 못 읽음(4) — 해당 없음(3)과
+# 구분해 호출자가 경고를 남긴다(A-R1-001). SET 은 하지 않는다.
+he_reset; touch "$_he_tmpd/get_fail"
+_rc=0; wifi_init_apply_he_bw mlan0 20 || _rc=$?
+expect_equal "he GET failure is unreadable (rc)" "$_rc" 4
+for _he_bad in '{$1 = "01"; print}' '{$6 = "24"; print}' '{$2 = "fe"; print}' '{NF = 54; print}' \
+               '{for (i = 4; i <= NF; i++) $i = "00"; print}' '{NF = 5; print}'; do
+    he_reset; he_edit "$_he_bad"
+    _rc=0; wifi_init_apply_he_bw mlan0 20 || _rc=$?
+    expect_equal "he invalid record [$_he_bad] is unreadable (rc)" "$_rc" 4
+    expect_equal "he invalid record [$_he_bad] issues no SET" "$(he_count 'mlan0 11axcfg /')" 0
+done
+
+# SET 실패·반영 안 됨·MCS 맵 변경은 실패(1).
+for _he_fault in set_fail set_ignore set_corrupt_mcs; do
+    he_reset; touch "$_he_tmpd/$_he_fault"
+    _rc=0; wifi_init_apply_he_bw mlan0 20 || _rc=$?
+    expect_equal "he $_he_fault fails (rc)" "$_rc" 1
+done
+
+# 스냅샷과 전체 레코드 복원(롤백 경로).
+he_reset
+_he_snap=$(wifi_init_he_bw_snapshot mlan0)
+expect_equal "he snapshot returns the 5 GHz record" "$_he_snap" "$_he_orig"
+printf '%s\n' "$_he_b2off" > "$_he_tmpd/he"
+_rc=0; wifi_he_cap_set mlan0 "$_he_snap" || _rc=$?
+expect_equal "he full-record restore (rc)" "$_rc" 0
+expect_equal "he full-record restore brings back the snapshot" "$(he_state)" "$_he_orig"
+he_reset '{"mlan0":{"STANDARD":"ac"},"global":{}}'
+expect_equal "he snapshot is empty when not applicable" "$(wifi_init_he_bw_snapshot mlan0)" ""
+expect_equal "he snapshot does not call 11axcfg when not applicable" "$(he_count 11axcfg)" 0
+
+# 복원 확인(롤백·OPC 복원, A-R1-001): SET 뒤 GET 의 B2·HE-MCS 맵이 스냅샷과 같으면 0,
+# SET 실패·불일치는 1, SET 뒤 GET 을 못 읽으면 확인 불가 2(호출자는 경고만 남긴다).
+he_reset; printf '%s\n' "$_he_b2off" > "$_he_tmpd/he"
+_rc=0; wifi_he_cap_restore mlan0 "$_he_orig" || _rc=$?
+expect_equal "he restore verified (rc)" "$_rc" 0
+expect_equal "he restore brings back the snapshot" "$(he_state)" "$_he_orig"
+for _he_fault in set_fail set_ignore set_corrupt_mcs; do
+    he_reset; printf '%s\n' "$_he_b2off" > "$_he_tmpd/he"; touch "$_he_tmpd/$_he_fault"
+    _rc=0; wifi_he_cap_restore mlan0 "$_he_orig" || _rc=$?
+    expect_equal "he restore with $_he_fault fails (rc)" "$_rc" 1
+done
+he_reset; printf '%s\n' "$_he_b2off" > "$_he_tmpd/he"; touch "$_he_tmpd/get_fail"
+_rc=0; wifi_he_cap_restore mlan0 "$_he_orig" || _rc=$?
+expect_equal "he restore whose GET fails is unverified (rc)" "$_rc" 2
+expect_equal "he restore whose GET fails still issued the SET" "$(he_state)" "$_he_orig"
+
+# 부팅 경로: wifi_init.sh 의 apply_radio_mode_bw 본문을 그대로 꺼내 실행한다.
+_he_fn=$(awk '/^apply_radio_mode_bw\(\) \{$/ {f = 1} f {print} f && /^\}$/ {exit}' "$WIFI_INIT_SH")
+if [ -z "$_he_fn" ]; then
+    log_fail "boot: apply_radio_mode_bw extracted from wifi_init.sh"
+else
+    eval "$_he_fn"
+    tag=he-test
+    wlan_is_connected() { [ -f "$_he_tmpd/connected" ]; }
+    logger() { printf '%s\n' "$*" >> "$_he_tmpd/log"; }
+    sleep() { :; }
+    he_reset '{"mlan0":{"STANDARD":"ax","radio":{"bw":"20"}},"global":{}}'
+    apply_radio_mode_bw mlan0
+    expect_equal "boot: radio.bw 20 clears HE B2 before association" "$(he_b0)" 00
+    he_reset '{"mlan0":{"STANDARD":"ax","radio":{"bw":"80"}},"global":{}}'
+    printf '%s\n' "$_he_b2off" > "$_he_tmpd/he"
+    apply_radio_mode_bw mlan0
+    expect_equal "boot: radio.bw 80 restores HE B2" "$(he_b0)" 04
+    he_reset '{"mlan0":{"STANDARD":"ax","radio":{}},"global":{}}'
+    apply_radio_mode_bw mlan0
+    expect_equal "boot: no radio.bw leaves 11axcfg alone" "$(he_count 11axcfg)" 0
+    he_reset '{"mlan0":{"STANDARD":"ax","radio":{"bw":"20"}},"global":{}}'
+    touch "$_he_tmpd/connected"
+    apply_radio_mode_bw mlan0
+    rm -f "$_he_tmpd/connected"
+    expect_equal "boot: connected skips 11axcfg" "$(he_count 11axcfg)" 0
+    he_reset '{"mlan0":{"STANDARD":"ax","radio":{"bw":"20"}},"global":{}}'
+    touch "$_he_tmpd/set_fail"
+    _rc=0; apply_radio_mode_bw mlan0 || _rc=$?
+    expect_equal "boot: HE SET failure does not fail the boot step" "$_rc" 0
+    # 결합 전 GET 에 HE 레코드가 없으면(백필 없는 i.MX8MM 드라이버) 조용히 넘기지 않고 warn 을 남긴다.
+    he_reset '{"mlan0":{"STANDARD":"ax","radio":{"bw":"20"}},"global":{}}'
+    touch "$_he_tmpd/get_fail"; : > "$_he_tmpd/log"
+    _rc=0; apply_radio_mode_bw mlan0 || _rc=$?
+    expect_equal "boot: unreadable HE record does not fail the boot step" "$_rc" 0
+    expect_equal "boot: unreadable HE record leaves one warning" "$(grep -c 'local0\.warn .*11axcfg.*unreadable' "$_he_tmpd/log")" 1
+    unset -f wlan_is_connected logger sleep apply_radio_mode_bw
+fi
+
+PATH=$_he_saved_path
+if [ "$_he_saved_json_set" = set ]; then
+    export WIFI_INIT_CONF_JSON="$_he_saved_json"
+else
+    unset WIFI_INIT_CONF_JSON
+fi
+rm -rf "$_he_tmpd"
+
 echo "PASS: $PASS_COUNT"
 echo "FAIL: $FAIL_COUNT"
 
