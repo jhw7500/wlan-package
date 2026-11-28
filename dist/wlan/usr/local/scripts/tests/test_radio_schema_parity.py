@@ -68,13 +68,13 @@ def _radio_prop(iface, key):
 
 def test_boot_mapping_helpers_reject_unknown_values():
     """매핑 함수가 후보를 실제로 거른다는 양성 대조 — 모두 통과하면 아래 비교가 무의미하다."""
-    assert "160" not in _accepted(["wifi_init_bw_to_htcap", "wifi_init_bw_to_vhtbw"], BW_CANDIDATES)
+    assert "160" not in _accepted(["wifi_init_bw_to_htcap", "wifi_init_bw_to_vhtbw", "wifi_init_bw_to_he_b2"], BW_CANDIDATES)
     assert "gac" not in _accepted(["wifi_init_mode_to_bandcfg_mask"], MODE_CANDIDATES)
 
 
 @pytest.mark.parametrize("iface", IFACES)
 def test_schema_bw_enum_matches_boot_mapping(iface):
-    accepted = _accepted(["wifi_init_bw_to_htcap", "wifi_init_bw_to_vhtbw"], BW_CANDIDATES)
+    accepted = _accepted(["wifi_init_bw_to_htcap", "wifi_init_bw_to_vhtbw", "wifi_init_bw_to_he_b2"], BW_CANDIDATES)
     prop = _radio_prop(iface, "bw")
     assert prop["type"] == "string"
     assert set(prop["enum"]) == accepted, (iface, prop["enum"], sorted(accepted))
@@ -181,3 +181,23 @@ def test_handoff_test_recipes_apply_staged_radio_and_clean_up():
     assert "radio-apply" in _cells(n_row[0])[1], _cells(n_row[0])
     cleanup = [l for l in sec.splitlines() if "txratecfg 0xff" in l]
     assert any("on_connect" in l and "wifi_event@" in l for l in cleanup), cleanup
+
+
+@pytest.mark.parametrize("iface", IFACES)
+def test_schema_radio_bw_description_states_he_width_behaviour(iface):
+    """#510: ax 의 bw 20 은 HE 능력 폭도 내린다 — "AP→보드 폭은 AP 판단" 서술은 남기지 않는다."""
+    desc = _radio_prop(iface, "bw")["description"]
+    assert "AP 판단" not in desc, desc
+    if iface == "mlan0":
+        assert "11axcfg" in desc and "운영 모드 통지" in desc, desc
+    else:
+        assert "HE 능력은 다루지 않는다" in desc, desc
+
+
+def test_handoff_radio_bw_documents_he_width_and_its_limit():
+    """#510: radio.bw 행과 §3.10.5a 가 HE 능력 폭 동작, bw 40 의 한계, 2026-11-23 관측을 적는다."""
+    row = " | ".join(_handoff_row("radio.bw"))
+    assert "11axcfg" in row and "AP 판단" not in row, row
+    sec = _section("#### 3.10.5a ")
+    assert "AP 판단" not in sec, "§3.10.5a 에 대체된 서술이 남아 있다"
+    assert "운영 모드 통지" in sec and "11axcfg" in sec and "2026-11-23" in sec

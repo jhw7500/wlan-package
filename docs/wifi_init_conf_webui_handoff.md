@@ -123,7 +123,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 
 - 현장 WebUI 는 **대역폭 상한(`mlanN.radio.bw`)과 MCS 상한(`mlanN.mcs_tier.*`)만** 제공한다. 고정 MCS(`txratecfg`·`ratebitmapcfg`)와 DCM 은 제공하지 않는다 — 시험 전용(§3.10.6a).
 - `mlanN.radio.mode`·`mlanN.radio.bw` 를 정식 키로 문서화했다(§3.10.1). 템플릿에 없는 키라 **키가 없으면 제한하지 않는다**. UI 는 JSON 에 저장한 뒤 재부팅하거나, `wifi <iface> mode|bw` 로 올려 두고 `wifi <iface> radio-apply` 로 즉시 적용한다.
-- MCS 상한으로는 ac·ax 에서 MCS 7 밑으로 내릴 수 없고, ax 의 대역폭 제한은 HE 채널 폭을 바꾸지 않는다(§3.10.5a).
+- MCS 상한으로는 ac·ax 에서 MCS 7 밑으로 내릴 수 없다. ax 에서 `20` 은 HE 능력 폭도 20 MHz 로 내리고, `40` 의 AP→보드 폭은 결합 요청의 운영 모드 통지에 맡긴다(§3.10.5a, #510).
 - `on_connect` 는 `wifi_event` 시작 때 한 번 읽는다 — 적용 시점을 `daemon-restart` 로 바로잡았다(§3.10.6).
 
 ### 2.3 기본값 변동
@@ -428,7 +428,7 @@ postinst의 `json_merge`는 **기존 값 보존** 방식이다. 따라서 이 �
 | `rate_adapt.high_thresh` | 레이트 적응 high 임계 | int | `65` | 0..100 또는 255 | caution | boot | 0.6.7에서 `70/90`→`40/65`. FW가 정적 pair를 트래픽 2~3초 뒤 `40/65`로 덮어쓰고 그 값이 실사용 상태이므로 기본값을 실제 동작에 맞춘 것이다 — 가이드 §11.5 참조 |
 | `rate_adapt.interval_ms` | 레이트 적응 평가주기(ms) | int | `100` | 100~655350, 10ms 배수 | caution | boot | association 전 SET+GET. 정적 pair 덮어쓰기의 트리거는 association이 아니라 **집계 Tx 트래픽**이다 — 가이드 §11.5 참조. 범위는 SR(`mode` 1) 드라이버 기준이며, legacy(`mode` 0)는 주기를 쓰지 않아 장치 검증이 양수·10ms 배수만 본다 |
 | `radio.mode` | 무선 모드 상한(bandcfg) | enum | (템플릿 없음) | `b`\|`g`\|`a`\|`n`\|`ac`\|`ax`, mlan1 은 `ax` 불가. 키 없음=칩 기본 | caution | boot | `wifi <iface> mode` + `radio-apply` 성공 시 저장되고, 부팅 때 `wifi_init.sh` 가 연결 전에 다시 적용한다(이미 연결돼 있으면 건너뜀). b/g 와 5G 전용 freq_list 조합은 적용을 건너뛴다. `STANDARD`(dev_cap_mask, reboot)와 별개 |
-| `radio.bw` | 대역폭 상한 | enum | (템플릿 없음) | `20`\|`40`\|`80`\|`auto`, 키 없음=AP 따름 | yes | boot | HT/VHT cap(htcapinfo·vhtcfg)으로 적용하며 `80` 과 `auto` 는 같은 cap 이다. `wifi <iface> bw` 는 값을 올려 두기만 하고, `wifi <iface> radio-apply` 가 재결합으로 적용한 뒤 성공하면 저장한다(`default` 는 키를 지운다, 취소는 `radio-discard`). ax 에서 HE 채널 폭은 바뀌지 않는다. ac·ax 에서 `20`·`40` 으로 좁힐 때 `on_connect.commands` 에 `txratecfg`·`ratebitmapcfg` 가 있으면 송신이 무너지므로 먼저 걷어 낸다(§3.10.5a) |
+| `radio.bw` | 대역폭 상한 | enum | (템플릿 없음) | `20`\|`40`\|`80`\|`auto`, 키 없음=AP 따름 | yes | boot | HT/VHT cap(htcapinfo·vhtcfg)으로 적용하며 `80` 과 `auto` 는 같은 cap 이다. `wifi <iface> bw` 는 값을 올려 두기만 하고, `wifi <iface> radio-apply` 가 재결합으로 적용한 뒤 성공하면 저장한다(`default` 는 키를 지운다, 취소는 `radio-discard`). mlan0 이 ax 면 `20` 은 HE 능력의 5 GHz 40/80 MHz 비트(`11axcfg` PHY byte0 B2)도 내리고 그 밖의 값은 되돌린다. ac·ax 에서 `20`·`40` 으로 좁힐 때 `on_connect.commands` 에 `txratecfg`·`ratebitmapcfg` 가 있으면 송신이 무너지므로 먼저 걷어 낸다(§3.10.5a) |
 
 **비고 (antcfg 업그레이드)** — `postinst`는 active 우선 deep merge 뒤 과거 제품 이력
 (구제품 비대칭 계약 `0x0303/0x0101(+verify)`, 그 이전의 `false/empty`, 알려진 physical 1x1
@@ -580,7 +580,7 @@ association proof를 사용한다. 다음 CONNECTED 검증 성공 시 pending/1�
 
 **한계 (UI 에 그대로 알릴 것)**
 - **MCS 7 밑으로는 제한할 수 없다.** mcstiercfg 단계는 ht `7`/`15`(사실상 NSS 1/2), vht `7`/`8`/`9`, he `7`/`9`/`11` 뿐이고 제품 기본(vht `7`, he `both 7`)이 이미 가장 낮다. imx93 mlan0 은 이 값이 제품 불변식이라 편집 대상도 아니다. 비트맵(`ratemaxcfg`·`ratebitmapcfg`)으로 더 낮추면 대역폭 제한과 겹쳐 송신이 무너질 수 있어 현장에 쓰지 않는다.
-- **ax 에서 대역폭 제한은 HE 채널 폭을 바꾸지 않는다.** `radio.bw` 는 HT·VHT 능력(htcapinfo·vhtcfg)만 바꾸고 HE 능력(`11axcfg`)은 그대로다 — 제품에 `11axcfg` SET 경로가 없다. 보드 송신 폭은 좁아지지만 AP→보드 폭은 AP 판단이라, 랩 시험 1회에서 HE 80 MHz 로 남았다. ax 현장에 적용하기 전에 AP 쪽 station tx bitrate 폭을 확인한다.
+- **ax 의 AP→보드 폭.** `radio.bw` 는 HT·VHT 능력(htcapinfo·vhtcfg)과 함께, mlan0 이 ax(유효 STANDARD `ax`·`6`·미설정)면 HE 능력의 5 GHz 40/80 MHz 비트(`11axcfg` PHY byte0 B2)를 `20` 에서 내리고 `40`·`80`·`auto`·`default` 에서 되돌린다(HE-MCS 맵은 그대로). 80 MHz HE AP 실측(bw 기본, 2026-11-28): B2 를 내리면 AP→보드가 HE 20 MHz, 되돌리면 HE 80 MHz 였다. `40` 은 HE 능력에 따로 표시할 비트가 없어(B2 = 40·80) AP→보드 폭을 결합 요청의 운영 모드 통지에 맡긴다 — 랩 AP 는 HE 40 MHz 로 좁혔지만 통지를 따르지 않는 AP 는 80 MHz 로 보낼 수 있다(추정, 관측 없음). HT·VHT 만 바꾸던 때 랩 시험 1회(2026-11-23)에서 `20` 뒤에도 AP→보드가 HE 80 MHz 로 남은 적이 있다(조건 차이 미확인).
 - **대역폭을 좁히기 전에 on_connect 고정 전송률을 걷어 낸다.** ac·ax 에서 대역폭 상한과 고정 MCS(`txratecfg`·`ratebitmapcfg`)가 겹치면 송신이 무너진다(§3.10.6a 금지 조합). 기존 현장 설정의 `mlanN.on_connect.commands` 에 이런 명령이 남아 있을 수 있으므로, UI·Save API 는 ac·ax 인터페이스에서 `radio.bw` 를 `20`·`40` 으로 저장·적용하려 할 때(또는 좁혀진 상태에서 그런 명령을 추가하려 할 때) 거부하거나 경고하고, 먼저 그 항목을 지운 뒤 `wifi_event@<iface>` 를 재시작하게 한다(§3.10.6).
 
 #### 3.10.6 mlanN.on_connect

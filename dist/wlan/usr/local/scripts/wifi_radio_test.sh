@@ -12,6 +12,8 @@ export STATE_DIR="$TD/state"
 export CALL_LOG="$TD/calls.log"
 export WIFI_RUN_DIR="$TD/run"
 mkdir -p "$STUB" "$STATE_DIR"
+# 11axcfg GET 기본 레코드(2026-11-28 보드 1 실측, 5 GHz, PHY byte0 0x04 = 40/80 MHz) — #510
+export HE_ORIG='02 ff 00 19 00 23 03 08 00 02 00 00 04 30 72 c9 fd 01 a0 0a 00 3d 00 f0 ff f0 ff a1 ff 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00'
 
 # ---- stubs ----
 cat > "$STUB/mlanutl" <<'EOF'
@@ -55,6 +57,20 @@ case "${2:-}" in
     echo "Data Rate:"
     echo "  TX: "
     echo "    Type: $(cat "$STATE_DIR/datarate_type" 2>/dev/null || echo HE)"
+    exit 0 ;;
+  11axcfg)
+    # GET: 헤더 + 16바이트씩. SET: conf 의 [Band]·[HECap] 바이트를 55바이트로 채워 저장.
+    [ -f "$STATE_DIR/he" ] || echo "$HE_ORIG" > "$STATE_DIR/he"
+    if [ $# -eq 2 ]; then
+      echo "11axcfg: len=55"
+      awk '{for (i = 1; i <= NF; i++) printf "%s%s", $i, (i % 16 == 0 || i == NF) ? "\n" : " "}' "$STATE_DIR/he"
+      exit 0
+    fi
+    [ -f "$STATE_DIR/he_set_fail" ] && exit 1
+    awk '/^\[Band\]/ {s = 1; next} /^\[\/Band\]/ {s = 0; next} /^\[HECap\]/ {s = 1; next} /^\[\/HECap\]/ {s = 0; next}
+         s && !/^#/ {for (i = 1; i <= NF; i++) t[n++] = $i}
+         END {while (n < 55) t[n++] = "00"; for (i = 0; i < 55; i++) printf "%s%s", t[i], (i < 54) ? " " : "\n"}' "$3" > "$STATE_DIR/he.new" \
+      && mv "$STATE_DIR/he.new" "$STATE_DIR/he"
     exit 0 ;;
   *) exit 0 ;;
 esac
@@ -516,6 +532,67 @@ _abort_line=$(grep -n 'abort_scan' "$CALL_LOG" | tail -1 | cut -d: -f1)
 _live_line=$(grep -nE 'mlanutl mlan0 (bandcfg|htcapinfo)|wpa_cli -i mlan0 (disconnect|reassociate)' "$CALL_LOG" | head -1 | cut -d: -f1)
 [ -n "$_abort_line" ] && [ -n "$_live_line" ] && [ "$_abort_line" -lt "$_live_line" ]
 check "T51 radio-apply quiesces native scan before live calls" 0 "$rc" $?
+
+# ===== #510: ax 에서 bw 20 이 HE 5 GHz 폭 비트(PHY byte0 B2)도 내린다 =====
+he_b0() { awk '{print $13}' "$STATE_DIR/he" 2>/dev/null; }
+json_edit() { jq "$1" "$WIFI_INIT_CONF_JSON" > "$WIFI_INIT_CONF_JSON.t" && mv "$WIFI_INIT_CONF_JSON.t" "$WIFI_INIT_CONF_JSON"; }
+
+# T52: STANDARD ax + bw 20 → B2 해제, MCS 맵 보존
+fresh_json
+json_edit '.mlan0.STANDARD = "ax"'
+bash "$WIFI_SH" 0 bw 20 >/dev/null 2>&1
+: > "$CALL_LOG"
+bash "$WIFI_SH" 0 radio-apply 5 >/dev/null 2>&1; rc=$?
+grep -q "mlanutl mlan0 11axcfg /" "$CALL_LOG" && [ "$(he_b0)" = "00" ] && \
+  [ "$(awk '{print $24 $25 $26 $27}' "$STATE_DIR/he")" = "f0fff0ff" ]
+check "T52 ax bw20 → HE B2 cleared, MCS map kept" 0 "$rc" $?
+
+# T53: bw default → B2 원래 값(1) + radio.bw 삭제
+fresh_json
+json_edit '.mlan0.STANDARD = "ax" | .mlan0.radio.bw = "20"'
+printf '%s\n' "$HE_ORIG" | awk '{$13 = "00"; print}' > "$STATE_DIR/he"
+bash "$WIFI_SH" 0 bw default >/dev/null 2>&1
+: > "$CALL_LOG"
+bash "$WIFI_SH" 0 radio-apply 5 >/dev/null 2>&1; rc=$?
+[ "$(he_b0)" = "04" ] && [ "$(jq -r '.mlan0.radio.bw // "DELETED"' "$WIFI_INIT_CONF_JSON")" = "DELETED" ]
+check "T53 bw default → HE B2 restored" 0 "$rc" $?
+
+# T54: STANDARD ac(11ax 비활성) → 11axcfg 를 부르지 않는다
+fresh_json
+json_edit '.mlan0.STANDARD = "ac"'
+bash "$WIFI_SH" 0 bw 20 >/dev/null 2>&1
+: > "$CALL_LOG"
+bash "$WIFI_SH" 0 radio-apply 5 >/dev/null 2>&1; rc=$?
+! grep -q "11axcfg" "$CALL_LOG"
+check "T54 STANDARD ac → no 11axcfg" 0 "$rc" $?
+
+# T55: reassociate 실패 → exit 7 + 적용 전 HE 레코드 전체 복원
+fresh_json
+json_edit '.mlan0.STANDARD = "ax"'
+bash "$WIFI_SH" 0 bw 20 >/dev/null 2>&1
+touch "$STATE_DIR/reassoc_fail"
+: > "$CALL_LOG"
+bash "$WIFI_SH" 0 radio-apply 5 >/dev/null 2>&1; rc=$?
+[ "$(cat "$STATE_DIR/he")" = "$HE_ORIG" ] && [ "$(grep -c 'mlanutl mlan0 11axcfg /' "$CALL_LOG")" -ge 2 ]
+check "T55 reassoc fail → 7 + HE record restored" 7 "$rc" $?
+
+# T56: HE SET 실패 → exit 12 + 롤백(htcapinfo 복원, staged 보존)
+fresh_json
+json_edit '.mlan0.STANDARD = "ax"'
+bash "$WIFI_SH" 0 bw 20 >/dev/null 2>&1
+touch "$STATE_DIR/he_set_fail"
+: > "$CALL_LOG"
+bash "$WIFI_SH" 0 radio-apply 5 >/dev/null 2>&1; rc=$?
+grep -q "htcapinfo 0x05c20000 1" "$CALL_LOG" && [ "$(cat "$STATE_DIR/he")" = "$HE_ORIG" ] && [ -f /tmp/.radio_pending_mlan0.bw ]
+check "T56 HE SET fail → 12 + rollback" 12 "$rc" $?
+
+# T57: mlan1 + bw 20 → 11axcfg 를 부르지 않는다(mlan1 은 ax 미지원)
+fresh_json
+bash "$WIFI_SH" 1 bw 20 >/dev/null 2>&1
+: > "$CALL_LOG"
+bash "$WIFI_SH" 1 radio-apply 5 >/dev/null 2>&1; rc=$?
+! grep -q "11axcfg" "$CALL_LOG"
+check "T57 mlan1 bw20 → no 11axcfg" 0 "$rc" $?
 
 echo ""
 echo "RESULT: PASS=$PASS FAIL=$FAIL"

@@ -982,7 +982,7 @@ apply_iface_thermal_mgmt() {
 # (wifi_init.service OnFailure=emergency reboot 방지) — 실패는 logger로만 남긴다.
 apply_radio_mode_bw() {
     local iface="$1"
-    local mode bw mask htcap vhtbw vhtcap ok i freq_bands
+    local mode bw mask htcap vhtbw vhtcap ok i freq_bands he_rc
 
     [ -f "$WIFI_INIT_CONF_JSON" ] && command -v jq >/dev/null 2>&1 || return 0
 
@@ -1018,6 +1018,9 @@ apply_radio_mode_bw() {
     # HE 연결도 이 cap에서 BW가 파생되며(20=0x05c00000/bwcfg0, 40=0x05c20000/bwcfg0,
     # 80=0x05c20000/bwcfg1), 부팅 disconnected 상태에서 cap 설정 후 wpa_supplicant
     # 첫 assoc이 해당 폭으로 협상된다. OMI 경로는 폐기(NXP FW가 STA BW 미반영).
+    # mlan0 ax 는 11axcfg HE 5 GHz 폭 비트(B2)도 맞춘다(#510) — 결합 전이라 GET 은 호스트 사본이고,
+    # 뒤의 mcstiercfg(GET→수정→SET)도 이 비트를 보존한다(결합 전 GET 은 호스트 사본 백필 — 드라이버
+    # d741f1b 코드 판독, 연결 중 보존은 2026-11-28 실측).
 
     if [ -n "$mode" ]; then
         # 마스크 테이블은 wifi_init_config_lib.sh 단일 정의 사용
@@ -1067,6 +1070,13 @@ apply_radio_mode_bw() {
         else
             logger -p local0.err "[$tag:$LINENO] [$iface] vhtcfg GET failed; skip vht bw (bw=$bw)"
         fi
+        he_rc=0
+        wifi_init_apply_he_bw "$iface" "$bw" || he_rc=$?
+        case "$he_rc" in
+            0) logger -p local0.info "[$tag:$LINENO] [$iface] 11axcfg HE 5G 40/80 bit=$(wifi_init_bw_to_he_b2 "$bw") (bw=$bw)" ;;
+            3) ;;
+            *) logger -p local0.err "[$tag:$LINENO] [$iface] 11axcfg HE width failed (bw=$bw; run 'wifi N radio-apply' to retry)" ;;
+        esac
         logger -p local0.info "[$tag:$LINENO] [$iface] radio bw=$bw (htcapinfo $htcap, vht bwcfg=$vhtbw)"
     fi
 

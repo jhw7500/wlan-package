@@ -706,6 +706,123 @@ wifi_init_bw_to_vhtbw() {
     esac
 }
 
+# 대역폭 → 5 GHz HE PHY capability byte0 B2(40/80 MHz 지원) 목표값 — 위 두 매핑과 같은 입력(#510).
+# HT/VHT cap 만 내리면 AP→보드 폭은 결합 요청의 운영 모드 통지에 맡겨진다. 20 은 HE 능력에서도
+# B2 를 내려 통지를 따르지 않는 AP 에도 20 MHz 를 보장하고, 그 밖의 값은 원래 값(1)으로 둔다.
+# 40 만 따로 광고하는 비트는 없다(B2 = 40·80) — 40 의 AP→보드 폭은 운영 모드 통지에 맡긴다.
+wifi_init_bw_to_he_b2() {
+    case "$1" in
+        20)         echo 0 ;;
+        40|80|auto) echo 1 ;;
+        *)          return 1 ;;
+    esac
+}
+
+# HE 능력 폭은 mlan0 의 11ax 연결에만 쓰인다(mlan1 은 제품에서 ax 미지원). 유효 STANDARD
+# (iface → global)가 ax·6 이거나 비어 있을(칩 최대) 때만 다룬다.
+wifi_init_he_bw_applicable() { # $1 iface
+    local std
+    [ "$1" = mlan0 ] || return 1
+    std=$(jq -r --arg i "$1" '.[$i].STANDARD // .global.STANDARD // "" | tostring | ascii_downcase' \
+        "${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}" 2>/dev/null) || std=""
+    case "$std" in
+        ""|ax|6) return 0 ;;
+        *)       return 1 ;;
+    esac
+}
+
+# awk 공용: 두 자리 hex → 정수. POSIX awk(busybox 포함)에는 strtonum·비트 연산이 없다.
+_WIFI_HE_AWK_HX='function hx(s,   i, v) { v = 0; for (i = 1; i <= length(s); i++) v = v * 16 + index("0123456789abcdef", substr(s, i, 1)) - 1; return v }'
+
+# 11axcfg GET 출력(헤더 한 줄 + hex 16바이트씩) → 55바이트 토큰 한 줄. 5 GHz HE 능력 레코드
+# (band 의 5G 비트, TLV id ff 00, ext id 0x23, TLV 길이가 레코드 안)가 아니면 실패한다.
+# 오프셋(0부터): 0 band, 1–2 TLV id, 3–4 길이(LE), 5 ext id, 6–11 MAC, 12–22 PHY(12 = byte0),
+# 23–26 HE-MCS 맵(Rx·Tx LE). 실측 출력 형식은 2026-11-28 보드 1 프로브(#510).
+wifi_he_cap_parse() { # stdin → stdout 토큰
+    awk "$_WIFI_HE_AWK_HX"'
+        NR > 1 { for (i = 1; i <= NF; i++) t[n++] = tolower($i) }
+        END {
+            if (n != 55) exit 1
+            for (i = 0; i < n; i++) if (t[i] !~ /^[0-9a-f][0-9a-f]$/) exit 1
+            if (int(hx(t[0]) / 2) % 2 != 1) exit 1
+            if (t[1] != "ff" || t[2] != "00" || t[5] != "23") exit 1
+            len = hx(t[3]) + 256 * hx(t[4])
+            if (len < 22 || 5 + len > 55) exit 1
+            for (i = 0; i < n; i++) printf "%s%s", t[i], (i < n - 1) ? " " : "\n"
+        }'
+}
+
+wifi_he_cap_get() { # $1 iface → stdout 토큰
+    local out
+    out=$(mlanutl "$1" 11axcfg 2>/dev/null) || return 1
+    printf '%s\n' "$out" | wifi_he_cap_parse
+}
+
+wifi_he_cap_b2() { # $1 토큰 → 0|1
+    printf '%s\n' "$1" | awk "$_WIFI_HE_AWK_HX"'{ print int(hx($13) / 4) % 2 }'
+}
+
+wifi_he_cap_mcs() { # $1 토큰 → HE-MCS 맵 4바이트
+    printf '%s\n' "$1" | awk '{ print $24, $25, $26, $27 }'
+}
+
+# 토큰 → 11axcfg SET conf(출하 11axcfg.conf 와 같은 절 형식). GET 의 TLV 길이만큼만 쓰고
+# (길이 필드가 드라이버 복사량을 정한다), $2(0|1)가 있으면 PHY byte0 의 B2 만 바꾼다.
+wifi_he_cap_conf() { # $1 토큰 [$2 B2 목표]
+    printf '%s\n' "$1" | awk -v want="${2:-}" "$_WIFI_HE_AWK_HX"'
+        function line(a, b,   i, s) { s = ""; for (i = a; i < b && i < m; i++) s = s (s == "" ? "" : " ") h[i]; if (s != "") print s }
+        {
+            if (NF != 55) exit 1
+            m = 4 + hx($4) + 256 * hx($5)
+            for (i = 0; i < m; i++) h[i] = $(i + 2)
+            if (want != "") {
+                v = hx(h[11]); b = int(v / 4) % 2
+                if (want == 0 && b == 1) v -= 4
+                if (want == 1 && b == 0) v += 4
+                h[11] = sprintf("%02x", v)
+            }
+            print "[Band]"; print $1; print "[/Band]"; print "[HECap]"
+            line(0, 2); line(2, 4); line(4, 5); line(5, 11); line(11, 22); line(22, 26); line(26, m)
+            print "[/HECap]"
+        }'
+}
+
+# 토큰(+ 선택적 B2 목표)으로 11axcfg SET 한다. SET 은 conf 파일만 받는다. 확인은 호출자가 GET 으로 한다.
+wifi_he_cap_set() { # $1 iface $2 토큰 [$3 B2 목표]
+    local conf rc
+    conf=$(mktemp "${TMPDIR:-/tmp}/wifi_he_cap.XXXXXX") || return 1
+    if wifi_he_cap_conf "$2" "${3:-}" > "$conf" && mlanutl "$1" 11axcfg "$conf" >/dev/null 2>&1; then
+        rc=0
+    else
+        rc=1
+    fi
+    rm -f "$conf"
+    return "$rc"
+}
+
+# bw 를 HE 능력 폭(B2)에 맞춘다(#510). 0 = 적용했거나 이미 같음, 3 = 해당 없음(mlan0 아님·
+# STANDARD 가 ax 아님·GET 불가·5 GHz HE 레코드 아님), 1 = 실패. B2 가 다를 때만 GET 바이트로
+# SET 하고, 다시 GET 해 B2 와 HE-MCS 맵(mcs_tier he)이 그대로인지 본다. 2026-11-28 실측: 연결 중
+# GET 은 마지막 SET 을 그대로 보여 주고, 결합·mcstiercfg 도 B2 를 되돌리지 않는다.
+wifi_init_apply_he_bw() { # $1 iface $2 bw
+    local want before after
+    want=$(wifi_init_bw_to_he_b2 "$2") || return 1
+    wifi_init_he_bw_applicable "$1" || return 3
+    before=$(wifi_he_cap_get "$1") || return 3
+    [ "$(wifi_he_cap_b2 "$before")" = "$want" ] && return 0
+    wifi_he_cap_set "$1" "$before" "$want" || return 1
+    after=$(wifi_he_cap_get "$1") || return 1
+    [ "$(wifi_he_cap_b2 "$after")" = "$want" ] || return 1
+    [ "$(wifi_he_cap_mcs "$after")" = "$(wifi_he_cap_mcs "$before")" ] || return 1
+    return 0
+}
+
+# 롤백용 스냅샷: 적용 대상이면 지금의 5 GHz HE 레코드(토큰), 아니면 빈 출력.
+wifi_init_he_bw_snapshot() { # $1 iface
+    wifi_init_he_bw_applicable "$1" || return 0
+    wifi_he_cap_get "$1" || return 0
+}
+
 # wpa_supplicant conf에서 패키지 공통 주파수 목록을 결정한다.
 # 우선순위: 전역 freq_list > 첫 network 블록 freq_list > 첫 블록 legacy scan_freq fallback.
 # 마지막 두 항목은 canonical 형식으로 이행하기 전 배포 conf를 위한 부팅 호환 경로다.
