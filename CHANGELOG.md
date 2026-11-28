@@ -10,7 +10,7 @@ wlan-proc 패키지의 상세 변경 이력입니다. 버전당 한 줄 요약�
 **업그레이드 때 달라지는 것**
 - imx93 드라이버가 7ed1efd 로 바뀐다. `dpkg -i` 만으로는 실행 중인 드라이버가 바뀌지 않고 `wifi_init` 재시작이나 재부팅 때 올라간다. FW 는 0.8.9 와 같다.
 - imx93 마이그레이션이 `mlan0.antcfgnss` 를 값이 비어 있을 때만 제품값 `0x1111` 로 채운다. 운영자가 넣은 값과 `off` 는 그대로 둔다.
-- `mlanN.radio.bw` 가 `20` 인 ax 장치는 다음 `wifi_init` 시작(재부팅 포함)·radio-apply·OPC 적용 때부터 HE 능력의 5 GHz 40/80 MHz 비트도 내린다.
+- mlan0 의 11ax 가 켜진 장치(유효 STANDARD 가 `n`·`ac` 가 아님)에서 `mlan0.radio.bw` 가 `20` 이면 다음 `wifi_init` 시작(재부팅 포함)·radio-apply·OPC 적용 때부터 HE 능력의 5 GHz 40/80 MHz 비트도 내린다. i.MX8MM(505.p14)은 부팅 때 이 비트를 내리지 못하고 경고만 남길 것으로 보며(추정), 연결 중 radio-apply·OPC 로 내린 비트도 재부팅하면 돌아간다(#510 항목의 한계 참고).
 - radio-apply 에 종료 코드 `12`(HE 능력 적용 실패, 롤백함)가 생겼다.
 
 - **imx93 드라이버를 wlan-driver-v2 7ed1efd 로 바꿔 monitor 모드(netmon) radiotap 의 HE GI·형식·대역폭과 LDPC 표시를 바로잡는다**(wlan-driver-v2 #125·PR #126, SemVer patch): netmon 캡처의 radiotap 에서 GI 가 0 이 아닌 HE-SU 프레임이 EXT_SU 형식·106-tone RU 대역폭으로, HE-MU 의 0.8 us 가 3.2 us 로 표시되고, HE·HT 모두 LDPC 표시가 빠지던 것을 고친다. 데이터 경로·`iw` 출력·LL-stats 는 바뀌지 않는다. 바뀌는 payload 는 `opt/wlan/driver/mlan_imx93.ko`·`moal_imx93.ko` 와 `debug/` 사본이고, `mlanutl_imx93`·FW·imx8 모듈은 그대로다(`DRIVER_MANIFEST.md`·`DRIVER_COMPONENTS.sha256` 갱신).
