@@ -16,6 +16,12 @@ mkdir -p "$STUB" "$STATE_DIR"
 export HE_ORIG='02 ff 00 19 00 23 03 08 00 02 00 00 04 30 72 c9 fd 01 a0 0a 00 3d 00 f0 ff f0 ff a1 ff 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00'
 
 # ---- stubs ----
+# logger: 경고 문구를 시험이 확인할 수 있게 $STATE_DIR/logger.log 에 남긴다(#510).
+cat > "$STUB/logger" <<'EOF'
+#!/bin/bash
+echo "logger $*" >> "$STATE_DIR/logger.log"
+EOF
+chmod +x "$STUB/logger"
 cat > "$STUB/mlanutl" <<'EOF'
 #!/bin/bash
 echo "mlanutl $*" >> "$CALL_LOG"
@@ -67,6 +73,9 @@ case "${2:-}" in
       exit 0
     fi
     [ -f "$STATE_DIR/he_set_fail" ] && exit 1
+    # he_set_ignore_after_first: 첫 SET 뒤의 SET 은 rc 0 이지만 반영하지 않는다(복원 확인 시험, #510).
+    if [ -f "$STATE_DIR/he_set_ignore_after_first" ] && [ -f "$STATE_DIR/he_set_done" ]; then exit 0; fi
+    touch "$STATE_DIR/he_set_done"
     awk '/^\[Band\]/ {s = 1; next} /^\[\/Band\]/ {s = 0; next} /^\[HECap\]/ {s = 1; next} /^\[\/HECap\]/ {s = 0; next}
          s && !/^#/ {for (i = 1; i <= NF; i++) t[n++] = $i}
          END {while (n < 55) t[n++] = "00"; for (i = 0; i < 55; i++) printf "%s%s", t[i], (i < 54) ? " " : "\n"}' "$3" > "$STATE_DIR/he.new" \
@@ -593,6 +602,27 @@ bash "$WIFI_SH" 1 bw 20 >/dev/null 2>&1
 bash "$WIFI_SH" 1 radio-apply 5 >/dev/null 2>&1; rc=$?
 ! grep -q "11axcfg" "$CALL_LOG"
 check "T57 mlan1 bw20 → no 11axcfg" 0 "$rc" $?
+
+# T58: ax bw 20 인데 HE 레코드를 못 읽으면(결합 전 빈 HE TLV 등) HT·VHT 만 적용 — rc 0, 출력·로그 경고(#510 A-R1-001)
+fresh_json
+json_edit '.mlan0.STANDARD = "ax"'
+bash "$WIFI_SH" 0 bw 20 >/dev/null 2>&1
+printf '%s\n' "$HE_ORIG" | awk '{for (i = 4; i <= NF; i++) $i = "00"; print}' > "$STATE_DIR/he"
+: > "$CALL_LOG"
+out=$(bash "$WIFI_SH" 0 radio-apply 5 2>&1); rc=$?
+printf '%s\n' "$out" | grep -q '11axcfg unreadable' && grep -q 'htcapinfo 0x05c00000' "$CALL_LOG" \
+  && ! grep -q 'mlanutl mlan0 11axcfg /' "$CALL_LOG" && grep -q 'warning.*11axcfg HE capability unreadable' "$STATE_DIR/logger.log"
+check "T58 ax bw20 + unreadable HE record → 0, HT/VHT applied, warning" 0 "$rc" $?
+
+# T59: 롤백 때 HE 복원 SET 이 반영되지 않으면(다시 읽은 B2 불일치) 경고 — 종료 코드는 원래 실패(7) 그대로(#510 A-R1-001)
+fresh_json
+json_edit '.mlan0.STANDARD = "ax"'
+bash "$WIFI_SH" 0 bw 20 >/dev/null 2>&1
+touch "$STATE_DIR/reassoc_fail" "$STATE_DIR/he_set_ignore_after_first"
+: > "$CALL_LOG"
+bash "$WIFI_SH" 0 radio-apply 5 >/dev/null 2>&1; rc=$?
+grep -qF '11axcfg (HE capability) restore failed' "$STATE_DIR/logger.log" && [ "$(awk '{print $13}' "$STATE_DIR/he")" = 00 ]
+check "T59 rollback HE restore not reflected → warning, 7" 7 "$rc" $?
 
 echo ""
 echo "RESULT: PASS=$PASS FAIL=$FAIL"

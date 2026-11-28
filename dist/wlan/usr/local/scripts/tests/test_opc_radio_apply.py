@@ -47,6 +47,10 @@ args = sys.argv[1:]
 with (root / "calls.jsonl").open("a") as log:
     log.write(json.dumps([tool, *args]) + "\n")
 failure = os.environ.get("OPC_TEST_FAILURE", "")
+# #510: OPC_TEST_HE_RESTORE=ignore 면 첫 11axcfg SET 뒤의 SET 을 rc 0 으로 무시하고,
+# get-fail 이면 SET 이 두 번 있은 뒤의 GET 을 실패시킨다(복원 확인 시험).
+he_restore = os.environ.get("OPC_TEST_HE_RESTORE", "")
+he_sets = root / "he-sets"
 marker = root / "failure-fired"
 
 def fail_once(condition):
@@ -121,6 +125,8 @@ elif command == "11axcfg":
     if len(args) == 2:
         if failure == "11axcfg-get":
             sys.exit(1)
+        if he_restore == "get-fail" and he_sets.exists() and int(he_sets.read_text()) >= 2:
+            sys.exit(1)
         tokens = state["he"].split()
         print("11axcfg: len=55")
         for i in range(0, 55, 16):
@@ -128,6 +134,10 @@ elif command == "11axcfg":
     else:
         if fail_once(failure == "11axcfg"):
             sys.exit(1)
+        count = int(he_sets.read_text()) if he_sets.exists() else 0
+        he_sets.write_text(str(count + 1))
+        if he_restore == "ignore" and count >= 1:
+            sys.exit(0)
         section, tokens = None, []
         for line in Path(args[2]).read_text().splitlines():
             line = line.strip()
@@ -183,9 +193,9 @@ class OpcRadioApplyTests(unittest.TestCase):
                         WIFI_SCAN_TRANSITION_LOCK_TIMEOUT="0",
                         OPC_ESSID_MARKER=str(self.marker))
 
-    def run_helper(self, *args, failure=""):
+    def run_helper(self, *args, failure="", extra_env=None):
         return subprocess.run(["sh", str(HELPER), *args],
-                              env=dict(self.env, OPC_TEST_FAILURE=failure),
+                              env=dict(self.env, OPC_TEST_FAILURE=failure, **(extra_env or {})),
                               text=True, capture_output=True, timeout=6)
 
     def calls(self):
@@ -271,6 +281,33 @@ class OpcRadioApplyTests(unittest.TestCase):
         result = self.run_helper("mlan0", "freq", "5180", "mode", "ax", "bw", "20", failure="11axcfg-get")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.driver(), dict(INITIAL_DRIVER, ht_bg="0x05c00000", ht_a="0x05c00000", vht_bw="0"))
+        # A-R1-001: '해당 없음'과 달리 못 읽은 경우는 stderr 경고로 드러낸다(opcd 가 저널에 남긴다).
+        self.assertIn("11axcfg HE capability unreadable", result.stderr)
+
+    def test_he_warning_that_cannot_be_written_does_not_fail_the_width_limit(self):
+        """#510: 경고를 못 써도(stderr 닫힘) 폭 제한 적용은 성공이다 — 경고 명령의 종료 코드가 반환값이 되면 안 된다."""
+        result = subprocess.run(["sh", str(HELPER), "mlan0", "freq", "5180", "mode", "ax", "bw", "20"],
+                                env=dict(self.env, OPC_TEST_FAILURE="11axcfg-get"), stdout=subprocess.PIPE,
+                                text=True, timeout=6, preexec_fn=lambda: os.close(2))
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(self.driver(), dict(INITIAL_DRIVER, ht_bg="0x05c00000", ht_a="0x05c00000", vht_bw="0"))
+
+    def test_he_restore_that_does_not_take_effect_is_a_rollback_failure(self):
+        """#510 A-R1-001: 복원 SET 이 rc 0 이어도 다시 읽은 B2·HE-MCS 맵이 스냅샷과 다르면 복원 실패다."""
+        result = self.run_helper("mlan0", "freq", "5180", "mode", "ax", "bw", "20", failure="reconfigure",
+                                 extra_env={"OPC_TEST_HE_RESTORE": "ignore"})
+        self.assertEqual(result.returncode, 6, result.stderr)
+        self.assertIn("driver rollback failed", result.stderr)
+        self.assertEqual(self.driver()["he"], HE_B2OFF)
+
+    def test_unverifiable_he_restore_only_warns(self):
+        """#510: 복원 SET 뒤 GET 을 못 읽으면(연결이 끊긴 뒤 등) 확인 불가 — 경고만 남기고 복원 실패로 치지 않는다."""
+        result = self.run_helper("mlan0", "freq", "5180", "mode", "ax", "bw", "20", failure="reconfigure",
+                                 extra_env={"OPC_TEST_HE_RESTORE": "get-fail"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("driver rollback failed", result.stderr)
+        self.assertEqual(self.driver(), INITIAL_DRIVER)
+        self.assertIn("11axcfg (HE capability) restore unverified", result.stderr)
 
     def test_driver_and_config_restore_after_apply_or_persist_failure(self):
         for failure in ("htcapinfo", "vhtcfg", "11axcfg", "reconfigure", "json-install"):

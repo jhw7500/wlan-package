@@ -253,10 +253,17 @@ opc_radio_apply_live() {
         if [ -n "$SNAP_VHT_CAP" ]; then
             wifi_wpa_run_child mlanutl "$IFACE" vhtcfg 2 2 "$VHT_BW" "$SNAP_VHT_CAP" >/dev/null 2>&1 || return 1
         fi
-        # HE 능력 폭(11axcfg 5 GHz PHY byte0 B2) — 해당 없음(3)은 건너뛴다(#510). GET·SET 각 3–5 ms 실측.
+        # HE 능력 폭(11axcfg 5 GHz PHY byte0 B2) — 해당 없음(3)은 건너뛰고, HE 레코드를 못 읽으면(4)
+        # HT·VHT 제한만 두고 stderr 에 경고를 남긴다. opcd 는 helper 의 stderr 를 물려줘 저널에 남기고,
+        # 성공 응답에 경고를 실을 통로는 없다(#510). GET·SET 각 3–5 ms 실측.
         OPC_HE_RC=0
         wifi_wpa_run_child_call wifi_init_apply_he_bw "$IFACE" "$BW" >/dev/null 2>&1 || OPC_HE_RC=$?
-        [ "$OPC_HE_RC" = 0 ] || [ "$OPC_HE_RC" = 3 ] || return 1
+        case "$OPC_HE_RC" in
+            0|3) ;;
+            # 이 case 가 함수의 마지막 명령이라 경고를 못 써도(stderr 닫힘) 적용 결과가 바뀌지 않게 한다.
+            4) echo "opc_wlan_apply: warning: 11axcfg HE capability unreadable for $IFACE - HE 5G 40/80 bit not changed (bw=$BW)" >&2 || : ;;
+            *) return 1 ;;
+        esac
     fi
 }
 
@@ -273,7 +280,14 @@ opc_radio_restore_live() {
             wifi_wpa_run_child mlanutl "$IFACE" vhtcfg 2 2 "$SNAP_VHT_BW" "$SNAP_VHT_CAP" >/dev/null 2>&1 || OPC_RADIO_RESTORE_OK=0
         fi
         if [ -n "$SNAP_HE" ]; then
-            wifi_wpa_run_child_call wifi_he_cap_set "$IFACE" "$SNAP_HE" >/dev/null 2>&1 || OPC_RADIO_RESTORE_OK=0
+            # SET 뒤 GET 확인(#510): 불일치는 복원 실패, 못 읽으면(연결을 끊은 뒤 등) 경고만 남긴다.
+            OPC_HE_RC=0
+            wifi_wpa_run_child_call wifi_he_cap_restore "$IFACE" "$SNAP_HE" >/dev/null 2>&1 || OPC_HE_RC=$?
+            case "$OPC_HE_RC" in
+                0) ;;
+                2) echo "opc_wlan_apply: warning: 11axcfg (HE capability) restore unverified for $IFACE - GET unreadable after SET" >&2 ;;
+                *) OPC_RADIO_RESTORE_OK=0 ;;
+            esac
         fi
     fi
     [ "$OPC_RADIO_RESTORE_OK" = 1 ]

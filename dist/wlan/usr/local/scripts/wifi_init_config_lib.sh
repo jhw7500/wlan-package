@@ -718,16 +718,20 @@ wifi_init_bw_to_he_b2() {
     esac
 }
 
-# HE 능력 폭은 mlan0 의 11ax 연결에만 쓰인다(mlan1 은 제품에서 ax 미지원). 유효 STANDARD
-# (iface → global)가 ax·6 이거나 비어 있을(칩 최대) 때만 다룬다.
+# HE 능력 폭은 mlan0 의 11ax 연결에만 쓰인다(mlan1 은 제품에서 ax 미지원). 유효 STANDARD 는
+# wifi_init.sh 의 _apply_dev_cap_mask 와 같은 STANDARD 해석으로 정한다 — iface 값이 비면 global,
+# 4·5·6 은 n·ac·ax 별칭이고, dev_cap_mask 로 11ax 를 끄는 n·ac 일 때만 다루지 않는다(미지정·잘못된
+# 값은 dev_cap_mask 를 지워 칩 기본 = 11ax 이므로 다룬다). 두 STANDARD 가 모두 빌 때
+# _apply_dev_cap_mask 가 쓰는 global.DEV_CAP_MASK 원시값은 보지 않는다.
 wifi_init_he_bw_applicable() { # $1 iface
     local std
     [ "$1" = mlan0 ] || return 1
-    std=$(jq -r --arg i "$1" '.[$i].STANDARD // .global.STANDARD // "" | tostring | ascii_downcase' \
+    std=$(jq -r --arg i "$1" '(.[$i].STANDARD // "" | tostring) as $s
+        | if $s == "" then (.global.STANDARD // "" | tostring) else $s end | ascii_downcase' \
         "${WIFI_INIT_CONF_JSON:-/usr/local/etc/wifi_init_conf.json}" 2>/dev/null) || std=""
     case "$std" in
-        ""|ax|6) return 0 ;;
-        *)       return 1 ;;
+        n|4|ac|5) return 1 ;;
+        *)        return 0 ;;
     esac
 }
 
@@ -801,14 +805,17 @@ wifi_he_cap_set() { # $1 iface $2 토큰 [$3 B2 목표]
 }
 
 # bw 를 HE 능력 폭(B2)에 맞춘다(#510). 0 = 적용했거나 이미 같음, 3 = 해당 없음(mlan0 아님·
-# STANDARD 가 ax 아님·GET 불가·5 GHz HE 레코드 아님), 1 = 실패. B2 가 다를 때만 GET 바이트로
-# SET 하고, 다시 GET 해 B2 와 HE-MCS 맵(mcs_tier he)이 그대로인지 본다. 2026-11-28 실측: 연결 중
-# GET 은 마지막 SET 을 그대로 보여 주고, 결합·mcstiercfg 도 B2 를 되돌리지 않는다.
+# 유효 STANDARD 가 n·ac), 4 = 적용 대상인데 HE 레코드를 못 읽음(GET 실패·5 GHz HE 레코드 아님 —
+# 결합 전 GET 을 호스트 사본으로 채우는 드라이버 수정 wlan-driver-v2 d741f1b 가 없는 i.MX8MM
+# 505.p14 는 결합 전 GET 의 HE TLV 가 비어 이 값이 된다: 출하 바이너리 판독, 보드 미실측),
+# 1 = 실패. B2 가 다를 때만 GET 바이트로 SET 하고, 다시 GET 해 B2 와 HE-MCS 맵(mcs_tier he)이
+# 그대로인지 본다. 2026-11-28 실측: 연결 중 GET 은 마지막 SET 을 그대로 보여 주고, 결합·
+# mcstiercfg 도 B2 를 되돌리지 않는다.
 wifi_init_apply_he_bw() { # $1 iface $2 bw
     local want before after
     want=$(wifi_init_bw_to_he_b2 "$2") || return 1
     wifi_init_he_bw_applicable "$1" || return 3
-    before=$(wifi_he_cap_get "$1") || return 3
+    before=$(wifi_he_cap_get "$1") || return 4
     [ "$(wifi_he_cap_b2 "$before")" = "$want" ] && return 0
     wifi_he_cap_set "$1" "$before" "$want" || return 1
     after=$(wifi_he_cap_get "$1") || return 1
@@ -821,6 +828,18 @@ wifi_init_apply_he_bw() { # $1 iface $2 bw
 wifi_init_he_bw_snapshot() { # $1 iface
     wifi_init_he_bw_applicable "$1" || return 0
     wifi_he_cap_get "$1" || return 0
+}
+
+# 롤백·복원: 스냅샷 레코드 전체를 SET 하고 다시 GET 해 B2 와 HE-MCS 맵이 스냅샷과 같은지 본다.
+# 0 = 확인됨, 1 = SET 실패·불일치, 2 = 확인 불가(SET 뒤 GET 을 못 읽음 — 연결을 끊은 뒤 등).
+# 호출자는 2 를 복원 실패로 치지 않고 경고만 남긴다(i.MX8MM 의 연결 끊긴 GET 은 확인하지 못했다).
+wifi_he_cap_restore() { # $1 iface $2 스냅샷 토큰
+    local after
+    wifi_he_cap_set "$1" "$2" || return 1
+    after=$(wifi_he_cap_get "$1") || return 2
+    [ "$(wifi_he_cap_b2 "$after")" = "$(wifi_he_cap_b2 "$2")" ] || return 1
+    [ "$(wifi_he_cap_mcs "$after")" = "$(wifi_he_cap_mcs "$2")" ] || return 1
+    return 0
 }
 
 # wpa_supplicant conf에서 패키지 공통 주파수 목록을 결정한다.

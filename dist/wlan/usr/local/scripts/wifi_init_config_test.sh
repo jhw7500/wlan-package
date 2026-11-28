@@ -1271,14 +1271,34 @@ for _he_json in '{"mlan0":{},"global":{}}' '{"mlan0":{"STANDARD":"6"},"global":{
     expect_equal "he applicable for $_he_json (B2 cleared)" "$(he_b0)" 00
 done
 
-# GET 불가·5 GHz HE 레코드가 아니면 해당 없음(3), SET 없음.
+# STANDARD 해석은 wifi_init.sh 의 _apply_dev_cap_mask 와 같다(A-R1-002): iface 값이 비면 global,
+# 4·5·6 은 n·ac·ax 별칭, n·ac 만 dev_cap_mask 로 11ax 를 끈다(미지정·잘못된 값은 칩 기본 = 11ax).
+for _he_json in '{"mlan0":{"STANDARD":""},"global":{"STANDARD":"ac"}}' \
+                '{"mlan0":{"STANDARD":"5"},"global":{}}' \
+                '{"mlan0":{"STANDARD":"4"},"global":{"STANDARD":"ax"}}'; do
+    he_reset "$_he_json"
+    _rc=0; wifi_init_apply_he_bw mlan0 20 || _rc=$?
+    expect_equal "he STANDARD rule: not applicable for $_he_json (rc)" "$_rc" 3
+    expect_equal "he STANDARD rule: no 11axcfg for $_he_json" "$(he_count 11axcfg)" 0
+done
+for _he_json in '{"mlan0":{"STANDARD":""},"global":{"STANDARD":"ax"}}' \
+                '{"mlan0":{"STANDARD":"bogus"},"global":{"STANDARD":"ac"}}'; do
+    he_reset "$_he_json"
+    _rc=0; wifi_init_apply_he_bw mlan0 20 || _rc=$?
+    expect_equal "he STANDARD rule: applicable for $_he_json (rc)" "$_rc" 0
+    expect_equal "he STANDARD rule: B2 cleared for $_he_json" "$(he_b0)" 00
+done
+
+# 적용 대상인데 GET 불가·5 GHz HE 레코드가 아니면(결합 전 빈 HE TLV 포함) 못 읽음(4) — 해당 없음(3)과
+# 구분해 호출자가 경고를 남긴다(A-R1-001). SET 은 하지 않는다.
 he_reset; touch "$_he_tmpd/get_fail"
 _rc=0; wifi_init_apply_he_bw mlan0 20 || _rc=$?
-expect_equal "he GET failure is not applicable (rc)" "$_rc" 3
-for _he_bad in '{$1 = "01"; print}' '{$6 = "24"; print}' '{$2 = "fe"; print}' '{NF = 54; print}'; do
+expect_equal "he GET failure is unreadable (rc)" "$_rc" 4
+for _he_bad in '{$1 = "01"; print}' '{$6 = "24"; print}' '{$2 = "fe"; print}' '{NF = 54; print}' \
+               '{for (i = 4; i <= NF; i++) $i = "00"; print}' '{NF = 5; print}'; do
     he_reset; he_edit "$_he_bad"
     _rc=0; wifi_init_apply_he_bw mlan0 20 || _rc=$?
-    expect_equal "he invalid record [$_he_bad] is not applicable (rc)" "$_rc" 3
+    expect_equal "he invalid record [$_he_bad] is unreadable (rc)" "$_rc" 4
     expect_equal "he invalid record [$_he_bad] issues no SET" "$(he_count 'mlan0 11axcfg /')" 0
 done
 
@@ -1301,6 +1321,22 @@ he_reset '{"mlan0":{"STANDARD":"ac"},"global":{}}'
 expect_equal "he snapshot is empty when not applicable" "$(wifi_init_he_bw_snapshot mlan0)" ""
 expect_equal "he snapshot does not call 11axcfg when not applicable" "$(he_count 11axcfg)" 0
 
+# 복원 확인(롤백·OPC 복원, A-R1-001): SET 뒤 GET 의 B2·HE-MCS 맵이 스냅샷과 같으면 0,
+# SET 실패·불일치는 1, SET 뒤 GET 을 못 읽으면 확인 불가 2(호출자는 경고만 남긴다).
+he_reset; printf '%s\n' "$_he_b2off" > "$_he_tmpd/he"
+_rc=0; wifi_he_cap_restore mlan0 "$_he_orig" || _rc=$?
+expect_equal "he restore verified (rc)" "$_rc" 0
+expect_equal "he restore brings back the snapshot" "$(he_state)" "$_he_orig"
+for _he_fault in set_fail set_ignore set_corrupt_mcs; do
+    he_reset; printf '%s\n' "$_he_b2off" > "$_he_tmpd/he"; touch "$_he_tmpd/$_he_fault"
+    _rc=0; wifi_he_cap_restore mlan0 "$_he_orig" || _rc=$?
+    expect_equal "he restore with $_he_fault fails (rc)" "$_rc" 1
+done
+he_reset; printf '%s\n' "$_he_b2off" > "$_he_tmpd/he"; touch "$_he_tmpd/get_fail"
+_rc=0; wifi_he_cap_restore mlan0 "$_he_orig" || _rc=$?
+expect_equal "he restore whose GET fails is unverified (rc)" "$_rc" 2
+expect_equal "he restore whose GET fails still issued the SET" "$(he_state)" "$_he_orig"
+
 # 부팅 경로: wifi_init.sh 의 apply_radio_mode_bw 본문을 그대로 꺼내 실행한다.
 _he_fn=$(awk '/^apply_radio_mode_bw\(\) \{$/ {f = 1} f {print} f && /^\}$/ {exit}' "$WIFI_INIT_SH")
 if [ -z "$_he_fn" ]; then
@@ -1309,7 +1345,7 @@ else
     eval "$_he_fn"
     tag=he-test
     wlan_is_connected() { [ -f "$_he_tmpd/connected" ]; }
-    logger() { :; }
+    logger() { printf '%s\n' "$*" >> "$_he_tmpd/log"; }
     sleep() { :; }
     he_reset '{"mlan0":{"STANDARD":"ax","radio":{"bw":"20"}},"global":{}}'
     apply_radio_mode_bw mlan0
@@ -1330,6 +1366,12 @@ else
     touch "$_he_tmpd/set_fail"
     _rc=0; apply_radio_mode_bw mlan0 || _rc=$?
     expect_equal "boot: HE SET failure does not fail the boot step" "$_rc" 0
+    # 결합 전 GET 에 HE 레코드가 없으면(백필 없는 i.MX8MM 드라이버) 조용히 넘기지 않고 warn 을 남긴다.
+    he_reset '{"mlan0":{"STANDARD":"ax","radio":{"bw":"20"}},"global":{}}'
+    touch "$_he_tmpd/get_fail"; : > "$_he_tmpd/log"
+    _rc=0; apply_radio_mode_bw mlan0 || _rc=$?
+    expect_equal "boot: unreadable HE record does not fail the boot step" "$_rc" 0
+    expect_equal "boot: unreadable HE record leaves one warning" "$(grep -c 'local0\.warn .*11axcfg.*unreadable' "$_he_tmpd/log")" 1
     unset -f wlan_is_connected logger sleep apply_radio_mode_bw
 fi
 

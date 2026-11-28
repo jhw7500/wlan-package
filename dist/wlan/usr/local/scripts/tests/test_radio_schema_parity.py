@@ -201,3 +201,24 @@ def test_handoff_radio_bw_documents_he_width_and_its_limit():
     sec = _section("#### 3.10.5a ")
     assert "AP 판단" not in sec, "§3.10.5a 에 대체된 서술이 남아 있다"
     assert "운영 모드 통지" in sec and "11axcfg" in sec and "2026-11-23" in sec
+
+
+WIFI_SH = WLAN_ROOT / "usr/local/scripts/wifi.sh"
+
+
+def test_usage_lists_radio_apply_exit_code_12():
+    """#510 A-R1-003: radio-apply 가 HE 능력 적용 실패에 쓰는 종료 코드 12 를 usage 가 알려 준다."""
+    lines = [l for l in WIFI_SH.read_text(encoding="utf-8").splitlines() if "radio-apply exit:" in l]
+    assert lines and all("12=11axcfg" in l for l in lines), lines
+
+
+def test_schema_mlan0_radio_bw_states_boot_limit_without_backfill():
+    """#510 A-R1-001: 결합 전 HE 능력을 못 읽는 드라이버(i.MX8MM)의 부팅 한계를 스키마가 적는다."""
+    desc = _radio_prop("mlan0", "bw")["description"]
+    assert "i.MX8MM" in desc and "경고" in desc, desc
+
+
+def test_handoff_radio_bw_documents_boot_limit_per_driver_family():
+    """#510 A-R1-001: §3.10.5a 가 두 드라이버 계열의 부팅 경로(i.MX8MM 미적용·경고, i.MX93 미실측)를 적는다."""
+    sec = _section("#### 3.10.5a ")
+    assert "i.MX8MM" in sec and "i.MX93" in sec and "경고" in sec

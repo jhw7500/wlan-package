@@ -691,12 +691,16 @@ apply_bw_caps() { # $1 iface, $2 bw
         msg="htcapinfo $htcap / vhtcfg bwcfg=$vhtbw applied (bw=$bw)"
     fi
     # HE 능력 폭(11axcfg 5 GHz PHY byte0 B2)도 맞춘다 — 20 이면 AP→보드 폭을 결합 요청의
-    # 운영 모드 통지뿐 아니라 능력 수준에서도 묶는다. 해당 없음(3)은 건너뛴다(#510).
+    # 운영 모드 통지뿐 아니라 능력 수준에서도 묶는다. 해당 없음(3)은 건너뛰고, 적용 대상인데 HE
+    # 레코드를 못 읽으면(4) HT·VHT 제한은 그대로 두고 메시지·경고만 남긴다 — 실패(12)로 치면
+    # 되던 bw 변경까지 롤백된다(#510).
     he_rc=0
     wifi_init_apply_he_bw "$iface" "$bw" || he_rc=$?
     case "$he_rc" in
         0) msg="$msg / HE 5G 40/80 bit=$(wifi_init_bw_to_he_b2 "$bw")" ;;
         3) ;;
+        4) msg="$msg / HE 5G 40/80 bit unchanged (11axcfg unreadable)"
+           logger -p local0.warning "[$tag:$LINENO] [$iface] 11axcfg HE capability unreadable - HE 5G 40/80 bit not changed (bw=$bw)" ;;
         *) echo "$msg"; echo "11axcfg: HE capability width not applied (bw=$bw)"; return 12 ;;
     esac
     echo "$msg"
@@ -2179,9 +2183,11 @@ radio_stage_get() { # $1 iface, $2 key → stdout (없으면 빈값)
 # radio-apply 실패 시 적용 전 스냅샷으로 라이브 설정 복원 + 재연결 (best-effort).
 # SNAP_* 전역은 radio-apply가 disconnect 전에 GET으로 채운다.
 # 스냅샷이 비었거나 복원 호출이 실패하면 부분 롤백 — logger로 추적 가능하게 남긴다.
-# HE cap(11axcfg 5 GHz 레코드)은 SNAP_HE 가 있을 때(mlan0·STANDARD ax) 적용 전 레코드 전체를
-# 그대로 SET 해 되돌린다 — B2 만 되돌리면 실패한 적용이 남긴 다른 바이트가 남는다(#510).
+# HE cap(11axcfg 5 GHz 레코드)은 SNAP_HE 가 있을 때(mlan0·11ax) 적용 전 레코드 전체를
+# 그대로 SET 해 되돌린다 — B2 만 되돌리면 실패한 적용이 남긴 다른 바이트가 남는다. SET 뒤 다시
+# GET 해 B2·HE-MCS 맵이 스냅샷과 다르면 복원 실패, GET 을 못 읽으면 확인 불가로 경고한다(#510).
 rollback_radio_live() { # $1 iface
+    local he_rc
     wifi_wpa_run_child logger -p local0.warning "[$tag:$LINENO] [$1] radio-apply: rolling back to pre-apply settings"
     echo "rolling back to pre-apply settings..." >&2
     if [ -n "${SNAP_BAND:-}" ]; then
@@ -2206,8 +2212,13 @@ rollback_radio_live() { # $1 iface
         wifi_wpa_run_child logger -p local0.warning "[$tag:$LINENO] [$1] rollback: vht snapshot incomplete — vhtcfg not restored"
     fi
     if [ -n "${SNAP_HE:-}" ]; then
-        wifi_wpa_run_child_call wifi_he_cap_set "$1" "$SNAP_HE" >/dev/null 2>&1 || \
-            wifi_wpa_run_child logger -p local0.warning "[$tag:$LINENO] [$1] rollback: 11axcfg (HE capability) restore failed"
+        he_rc=0
+        wifi_wpa_run_child_call wifi_he_cap_restore "$1" "$SNAP_HE" >/dev/null 2>&1 || he_rc=$?
+        case "$he_rc" in
+            0) ;;
+            2) wifi_wpa_run_child logger -p local0.warning "[$tag:$LINENO] [$1] rollback: 11axcfg (HE capability) restore unverified - GET unreadable after SET" ;;
+            *) wifi_wpa_run_child logger -p local0.warning "[$tag:$LINENO] [$1] rollback: 11axcfg (HE capability) restore failed" ;;
+        esac
     fi
     # reassociate가 reconnect보다 부드럽고 cap 변경 반영이 확실 (실기 검증)
     wifi_wpa_run_child wpa_cli -i "$1" reassociate >/dev/null 2>&1 || wifi_wpa_run_child wpa_cli -i "$1" reconnect >/dev/null 2>&1
@@ -2316,7 +2327,7 @@ usage() {
     echo "       wifi {0|1|mlan0|mlan1} mode [b|g|a|n|ac|ax] : stage (radio-apply 성공 시 persist, mlan1은 ax 불가)"
     echo "       wifi {0|1|mlan0|mlan1} bw [20|40|80|auto|default] : stage (radio-apply 성공 시 persist; default=AP 따라)"
     echo "       wifi {0|1|mlan0|mlan1} radio-apply [timeout_s] : runtime (적용 성공 시 commit, 실패 시 라이브 롤백+재연결)"
-    echo "         radio-apply exit: 0=ok 2=usage 3=env 4=bandcfg 5=htcapinfo 6=vhtcfg 7=wpa_cli 8=assoc-timeout 9=json/commit 11=b/g+5G-freq"
+    echo "         radio-apply exit: 0=ok 2=usage 3=env 4=bandcfg 5=htcapinfo 6=vhtcfg 7=wpa_cli 8=assoc-timeout 9=json/commit 11=b/g+5G-freq 12=11axcfg"
     echo "       wifi {0|1|mlan0|mlan1} radio-discard : staged mode/bw 변경 취소"
     echo "       wifi txpwr {0|1|2|3|no|default|low|org|conf_file_name} : persist"
     echo "       wifi cal {0|1|2|None|WlanCalData_ext.conf|WlanCalData_ext_RD.conf|*} : persist"
